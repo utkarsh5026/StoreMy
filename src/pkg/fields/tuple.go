@@ -1,6 +1,7 @@
 package fields
 
 import (
+	"StoreMy/src/pkg/storage/ids"
 	"fmt"
 	"strings"
 )
@@ -26,8 +27,8 @@ const (
 )
 
 const (
-	IntType Type = iota
-	StringType
+	IntType    Type = iota // Represents an integer filed in a tuple
+	StringType             // Represents a string field in a tuple
 )
 
 type TupleDescription struct {
@@ -72,15 +73,10 @@ func (td *TupleDescription) GetFieldType(idx int) (Type, error) {
 	return td.Types[idx], nil
 }
 
-type RecordID struct {
-	PageID  int
-	TupleNo int
-}
-
 type Tuple struct {
 	description *TupleDescription
 	fields      []Field
-	recordId    RecordID
+	recordId    ids.RecordId
 }
 
 func NewTuple(desc *TupleDescription) *Tuple {
@@ -105,12 +101,12 @@ func (t *Tuple) SetField(i int, f Field) error {
 }
 
 // GetRecordID returns the RecordID of this tuple
-func (t *Tuple) GetRecordID() RecordID {
+func (t *Tuple) GetRecordID() ids.RecordId {
 	return t.recordId
 }
 
 // SetRecordID sets the RecordID of this tuple
-func (t *Tuple) SetRecordID(rid RecordID) {
+func (t *Tuple) SetRecordID(rid ids.RecordId) {
 	t.recordId = rid
 }
 
