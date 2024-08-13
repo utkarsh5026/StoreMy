@@ -1,6 +1,8 @@
-package storage
+package fields
 
-import "strings"
+import (
+	"strings"
+)
 
 type StringField struct {
 	value     string
@@ -92,4 +94,15 @@ func (sf *StringField) GetMaxLength() int {
 
 func (sf *StringField) GetValue() string {
 	return sf.value
+}
+
+func deserializeStringField(bytes []byte, maxLength int) *StringField {
+	value := string(bytes)
+	if len(value) > maxLength {
+		value = value[:maxLength]
+	}
+	return &StringField{
+		value:     value,
+		maxLength: maxLength,
+	}
 }

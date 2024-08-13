@@ -1,4 +1,4 @@
-package storage
+package fields
 
 import (
 	"fmt"
@@ -42,6 +42,7 @@ func NewTupleDescription(types []Type, fields []string) *TupleDescription {
 	}
 }
 
+// NumFields returns the number of fields in the TupleDescription
 func (td *TupleDescription) NumFields() int {
 	return len(td.Fields)
 }
@@ -63,11 +64,12 @@ func (td *TupleDescription) GetFieldName(i int) string {
 // Returns:
 //
 //	Type - the type of the field at the specified index, or -1 if the index is out of range
-func (td *TupleDescription) GetFieldType(idx int) Type {
+//	error - an error if the index is out of range
+func (td *TupleDescription) GetFieldType(idx int) (Type, error) {
 	if idx < 0 || idx >= len(td.Types) {
-		return -1
+		return IntType, fmt.Errorf("index out of range")
 	}
-	return td.Types[idx]
+	return td.Types[idx], nil
 }
 
 type RecordID struct {

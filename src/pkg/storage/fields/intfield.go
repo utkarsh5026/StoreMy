@@ -1,4 +1,4 @@
-package storage
+package fields
 
 import (
 	"encoding/binary"
@@ -78,4 +78,13 @@ func (itf *IntField) Serialize() []byte {
 // GetValue returns the value of the IntField.
 func (itf *IntField) GetValue() int {
 	return itf.value
+}
+
+func deserializeIntField(bytes []byte) (*IntField, error) {
+	if len(bytes) != 4 {
+		return nil, InvalidDataType
+	}
+
+	value := int(binary.BigEndian.Uint32(bytes))
+	return NewIntField(value), nil
 }
