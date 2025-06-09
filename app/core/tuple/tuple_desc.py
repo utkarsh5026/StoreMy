@@ -58,7 +58,7 @@ class TupleDesc:
             raise ValueError(
                 "Cannot lookup field by name - no field names defined")
 
-        # Handle qualified names (e.g., "table.field" -> "field")
+
         if '.' in field_name:
             field_name = field_name.split('.', 1)[1]
 
@@ -98,15 +98,12 @@ class TupleDesc:
         """
         combined_types = td1.field_types + td2.field_types
 
-        # Combine field names if both descriptors have them
         combined_names = None
         if td1.field_names is not None and td2.field_names is not None:
             combined_names = td1.field_names + td2.field_names
         elif td1.field_names is not None:
-            # Only td1 has names - pad td2 with None
             combined_names = td1.field_names + [None] * td2.num_fields()
         elif td2.field_names is not None:
-            # Only td2 has names - pad td1 with None
             combined_names = [None] * td1.num_fields() + td2.field_names
 
         return TupleDesc(combined_types, combined_names)

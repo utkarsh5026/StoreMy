@@ -8,7 +8,7 @@ class Tuple:
     Represents a single row of data in the database.
 
     A Tuple contains:
-    1. TupleDesc: schema defining the structure
+    1. TupleDesc: schema defining structure
     2. List of Fields: the actual data values
     3. Optional RecordId: physical location identifier
 
@@ -82,18 +82,15 @@ class Tuple:
         combined_desc = TupleDesc.combine(tuple1.tuple_desc, tuple2.tuple_desc)
         result = Tuple(combined_desc)
 
-        # Copy fields from tuple1
         for i in range(tuple1.tuple_desc.num_fields()):
             if tuple1.fields[i] is not None:
                 result.set_field(i, tuple1.fields[i])
 
-        # Copy fields from tuple2
         offset = tuple1.tuple_desc.num_fields()
         for i in range(tuple2.tuple_desc.num_fields()):
             if tuple2.fields[i] is not None:
                 result.set_field(offset + i, tuple2.fields[i])
 
-        # Preserve record_id from first tuple
         result.set_record_id(tuple1.get_record_id())
 
         return result
