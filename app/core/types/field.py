@@ -1,6 +1,4 @@
 from abc import ABC, abstractmethod
-import struct
-from typing import Any
 from .type_enum import FieldType
 from .predicate import Predicate
 
