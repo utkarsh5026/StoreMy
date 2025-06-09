@@ -1,4 +1,3 @@
-from typing import Optional
 from ...storage.page import PageId
 
 
