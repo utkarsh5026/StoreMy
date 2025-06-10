@@ -1,13 +1,29 @@
-import threading
-from typing import Dict
-from collections import OrderedDict
 import time
+import threading
+from collections import OrderedDict
+from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
-from .page import Page, PageId
+from ..primitives import TransactionId
+
+if TYPE_CHECKING:
+    from .page import Page
+    from ..primitives import PageId
+
+# Import at runtime what we need
 from .permissions import Permissions
-from ..concurrency.transactions import TransactionId
 from ..concurrency.locks import LockManager
 from ..core.exceptions import DbException
+
+
+@dataclass
+class BufferPoolStats:
+    hits: int = 0
+    misses: int = 0
+    hit_rate: float = 0.0
+    evictions: int = 0
+    disk_reads: int = 0
+    disk_writes: int = 0
 
 
 class BufferPool:
@@ -35,7 +51,7 @@ class BufferPool:
     - Memory management
     """
 
-    # Default number of pages - can be overridden in constructor
+    # The Default number of pages - can be overridden in constructor
     DEFAULT_PAGES = 50
 
     def __init__(self, num_pages: int = DEFAULT_PAGES):
@@ -50,21 +66,14 @@ class BufferPool:
         # LRU cache implementation using OrderedDict
         # Key: PageId, Value: Page
         # Most recently used pages are at the end
-        self._pages: OrderedDict[PageId, Page] = OrderedDict()
+        self._pages: 'OrderedDict[PageId, Page]' = OrderedDict()
         self.lock_manager = LockManager()
         self._lock = threading.RLock()
 
-        # Statistics for monitoring
-        self._stats = {
-            'hits': 0,          # Cache hits
-            'misses': 0,        # Cache misses
-            'evictions': 0,     # Number of evictions
-            'disk_reads': 0,    # Pages read from disk
-            'disk_writes': 0    # Pages written to disk
-        }
+        self._stats = BufferPoolStats()
 
-    def get_page(self, tid: TransactionId, page_id: PageId,
-                 permissions: Permissions) -> Page:
+    def get_page(self, tid: TransactionId, page_id: 'PageId',
+                 permissions: Permissions) -> 'Page':
         """
         Retrieve the specified page with the associated permissions.
 
@@ -106,11 +115,11 @@ class BufferPool:
                     # Cache hit! Move to end (mark as most recently used)
                     page = self._pages.pop(page_id)
                     self._pages[page_id] = page
-                    self._stats['hits'] += 1
+                    self._stats.hits += 1
                     return page
 
                 # Step 3: Cache miss - need to load from disk
-                self._stats['misses'] += 1
+                self._stats.misses += 1
 
                 # Step 4: Make room if buffer pool is full
                 if len(self._pages) >= self.num_pages:
@@ -129,21 +138,16 @@ class BufferPool:
                 self.lock_manager.release_lock(tid, page_id)
                 raise e
 
-    def _load_page_from_disk(self, page_id: PageId) -> Page:
+    def _load_page_from_disk(self, page_id: 'PageId') -> 'Page':
         """
         Load a page from disk using the appropriate DbFile.
-
-        This method:
-        1. Gets the table ID from the page ID
-        2. Looks up the DbFile in the catalog
-        3. Calls DbFile.read_page() to load the data
         """
-        from stormey.database import Database
+        from app.database import Database
 
         table_id = page_id.get_table_id()
         db_file = Database.get_catalog().get_db_file(table_id)
 
-        self._stats['disk_reads'] += 1
+        self._stats.disk_reads += 1
         return db_file.read_page(page_id)
 
     def _evict_page(self) -> None:
@@ -163,7 +167,7 @@ class BufferPool:
             if not page.is_dirty():
                 # Found a clean page - evict it
                 del self._pages[page_id]
-                self._stats['evictions'] += 1
+                self._stats.evictions += 1
                 return
 
         # No clean pages available - all pages are dirty
@@ -174,7 +178,7 @@ class BufferPool:
             "or insufficient buffer pool size."
         )
 
-    def release_page(self, tid: TransactionId, page_id: PageId) -> None:
+    def release_page(self, tid: TransactionId, page_id: 'PageId') -> None:
         """
         Release the lock on a page.
 
@@ -187,7 +191,7 @@ class BufferPool:
         """
         self.lock_manager.release_lock(tid, page_id)
 
-    def holds_lock(self, tid: TransactionId, page_id: PageId) -> bool:
+    def holds_lock(self, tid: TransactionId, page_id: 'PageId') -> bool:
         """
         Return True if the specified transaction has a lock on the specified page.
 
@@ -214,7 +218,7 @@ class BufferPool:
             table_id: The table to add the tuple to
             tuple_data: The tuple to add
         """
-        from stormey.database import Database
+        from app.database import Database
 
         heap_file = Database.get_catalog().get_db_file(table_id)
         heap_file.add_tuple(tid, tuple_data)
@@ -232,7 +236,7 @@ class BufferPool:
             tid: The transaction deleting the tuple
             tuple_data: The tuple to delete
         """
-        from stormey.database import Database
+        from app.database import Database
 
         record_id = tuple_data.get_record_id()
         if record_id is None:
@@ -257,7 +261,7 @@ class BufferPool:
                 if page_id in self._pages:  # Page might have been evicted
                     self._flush_page(page_id)
 
-    def _flush_page(self, page_id: PageId) -> None:
+    def _flush_page(self, page_id: 'PageId') -> None:
         """
         Flush a specific page to disk if it's dirty.
 
@@ -271,7 +275,7 @@ class BufferPool:
 
         if page.is_dirty():
             # Write the page to disk
-            from stormey.database import Database
+            from app.database import Database
 
             table_id = page_id.get_table_id()
             db_file = Database.get_catalog().get_db_file(table_id)
@@ -280,9 +284,9 @@ class BufferPool:
             # Mark page as clean
             page.mark_dirty(False, None)
 
-            self._stats['disk_writes'] += 1
+            self._stats.disk_writes += 1
 
-    def discard_page(self, page_id: PageId) -> None:
+    def discard_page(self, page_id: 'PageId') -> None:
         """
         Remove the specific page from the buffer pool.
 
@@ -332,28 +336,23 @@ class BufferPool:
         # Release all locks held by this transaction
         self.lock_manager.release_all_locks(tid)
 
-    def get_stats(self) -> Dict[str, int]:
+    def get_stats(self) -> BufferPoolStats:
         """
         Get buffer pool statistics for monitoring and debugging.
 
         Returns:
             Dictionary containing hit rate, miss rate, etc.
         """
-        total_requests = self._stats['hits'] + self._stats['misses']
-        hit_rate = self._stats['hits'] / \
+        total_requests = self._stats.hits + self._stats.misses
+        hit_rate = self._stats.hits / \
             total_requests if total_requests > 0 else 0
 
-        return {
-            **self._stats,
-            'total_requests': total_requests,
-            'hit_rate': hit_rate,
-            'current_pages': len(self._pages),
-            'max_pages': self.num_pages
-        }
+        self._stats.hit_rate = hit_rate
+        return self._stats
 
     def __str__(self) -> str:
         """Return a string representation for debugging."""
         stats = self.get_stats()
-        return (f"BufferPool(pages={stats['current_pages']}/{stats['max_pages']}, "
-                f"hit_rate={stats['hit_rate']:.2%}, "
+        return (f"BufferPool(pages={len(self._pages)}/{self.num_pages}, "
+                f"hit_rate={stats.hit_rate:.2%}, "
                 f"dirty_pages={sum(1 for p in self._pages.values() if p.is_dirty())})")

@@ -1,4 +1,4 @@
-from .transaction_id import TransactionId
+from ...primitives import TransactionId
 from app.database import Database
 
 
@@ -72,4 +72,3 @@ class Transaction:
 
             finally:
                 self.started = False
-

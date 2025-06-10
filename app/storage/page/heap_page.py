@@ -1,9 +1,11 @@
 import math
-from typing import List, Optional, Iterator
-from ...core.tuple import Tuple, TupleDesc, RecordId
-from ...concurrency.transactions.transaction_id import TransactionId
+from typing import List, Optional, Iterator, TYPE_CHECKING
+from ...primitives import TransactionId
 from .page import Page
 from .heap_page_id import HeapPageId
+
+if TYPE_CHECKING:
+    from ...core.tuple import Tuple, TupleDesc, RecordId
 
 
 class HeapPage(Page):
@@ -24,7 +26,7 @@ class HeapPage(Page):
     The "+1" accounts for the header bit per slot.
     """
 
-    def __init__(self, page_id: HeapPageId, data: Optional[bytes] = None, tuple_desc: Optional[TupleDesc] = None):
+    def __init__(self, page_id: HeapPageId, data: Optional[bytes] = None, tuple_desc: Optional['TupleDesc'] = None):
         self.page_id = page_id
         self.dirty_transaction: Optional[TransactionId] = None
         self.before_image_data: Optional[bytes] = None
@@ -50,7 +52,7 @@ class HeapPage(Page):
         # Initialize header (all slots empty)
         self.header = bytearray(self.header_size)
 
-        self.tuples: List[Optional[Tuple]] = [None] * self.num_slots
+        self.tuples: List[Optional['Tuple']] = [None] * self.num_slots
 
     def _calculate_num_slots(self) -> int:
         """
@@ -167,7 +169,7 @@ class HeapPage(Page):
         else:
             self.header[byte_index] &= ~bit_mask
 
-    def add_tuple(self, tuple_obj: Tuple) -> None:
+    def add_tuple(self, tuple_obj: 'Tuple') -> None:
         """
         Add a tuple to the first available slot on this page.
 
@@ -197,10 +199,11 @@ class HeapPage(Page):
         self._set_slot_used(empty_slot, True)
 
         # Set the tuple's record ID
+        from ...primitives import RecordId
         record_id = RecordId(self.page_id, empty_slot)
         tuple_obj.set_record_id(record_id)
 
-    def delete_tuple(self, tuple_obj: Tuple) -> None:
+    def delete_tuple(self, tuple_obj: 'Tuple') -> None:
         """
         Remove a tuple from this page.
 
@@ -224,7 +227,7 @@ class HeapPage(Page):
         # Clear the tuple's record ID
         tuple_obj.set_record_id(None)
 
-    def iterator(self) -> Iterator[Tuple]:
+    def iterator(self) -> Iterator['Tuple']:
         """
         Return an iterator over all tuples on this page.
 

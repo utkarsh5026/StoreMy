@@ -18,17 +18,15 @@ class TestBoolField:
 
     def test_init_truthy_values(self):
         """Test initialization with truthy values."""
-        # Non-zero numbers are truthy
         assert BoolField(1).value is True
         assert BoolField(-1).value is True
         assert BoolField(42).value is True
         assert BoolField(3.14).value is True
 
-        # Non-empty strings are truthy
-        assert BoolField("hello").value is True
-        assert BoolField("false").value is True  # String "false" is truthy!
 
-        # Non-empty collections are truthy
+        assert BoolField("hello").value is True
+        assert BoolField("false").value is True
+
         assert BoolField([1, 2, 3]).value is True
         assert BoolField({"key": "value"}).value is True
 
@@ -102,10 +100,8 @@ class TestBoolField:
 
     def test_deserialize_corrupted_data(self):
         """Test deserialization with corrupted data."""
-        # This might not always trigger an error depending on struct implementation
-        # but we test the error handling path
         try:
-            BoolField.deserialize(b'\xFF')  # This might be valid
+            BoolField.deserialize(b'\xFF')
         except ValueError:
             pass  # Expected if struct.unpack fails
 

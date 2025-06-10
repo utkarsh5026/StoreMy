@@ -1,7 +1,6 @@
 from abc import ABC, abstractmethod
 from typing import Optional
-from .page_id import PageId
-from ...concurrency.transactions.transaction_id import TransactionId
+from ...primitives import PageId, TransactionId
 
 
 class Page(ABC):

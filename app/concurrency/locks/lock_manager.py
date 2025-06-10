@@ -1,6 +1,6 @@
 import threading
 from dataclasses import dataclass
-from typing import Dict, Set, Optional
+from typing import Set, Optional
 import collections
 
 from ...concurrency.transactions import TransactionId
@@ -74,10 +74,10 @@ class LockManager:
 
     def __init__(self):
         """Initialize the lock manager."""
-        self.page_locks: dict[PageId, list[Lock]] = collections.defaultdict(list)
+        self.page_locks: dict[PageId, list[Lock]
+                              ] = collections.defaultdict(list)
         self.transaction_pages: dict[TransactionId,
                                      set[PageId]] = collections.defaultdict(set)
-
 
         self._lock = threading.RLock()
 

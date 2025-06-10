@@ -1,4 +1,5 @@
 from typing import TYPE_CHECKING
+from .page_id import PageId
 
 if TYPE_CHECKING:
     from ...storage.page import PageId
@@ -16,7 +17,7 @@ class RecordId:
     It provides a physical address for any tuple in the database.
     """
 
-    def __init__(self, page_id: 'PageId', tuple_number: int):
+    def __init__(self, page_id: PageId, tuple_number: int):
         if tuple_number < 0:
             raise ValueError(
                 f"Tuple number must be non-negative, got {tuple_number}")
@@ -24,7 +25,7 @@ class RecordId:
         self.page_id = page_id
         self.tuple_number = tuple_number
 
-    def get_page_id(self) -> 'PageId':
+    def get_page_id(self) -> PageId:
         """Return the page ID portion of this record ID."""
         return self.page_id
 

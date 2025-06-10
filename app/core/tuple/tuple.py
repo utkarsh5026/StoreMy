@@ -1,4 +1,12 @@
-from ..types import Field, IntField, StringField, FieldType
+from ..types import (
+    Field,
+    IntField,
+    StringField,
+    BoolField,
+    FloatField,
+    DoubleField,
+    FieldType,
+)
 from .tuple_desc import TupleDesc
 from .record_id import RecordId
 
@@ -135,6 +143,12 @@ class Tuple:
                 field = IntField.deserialize(field_data)
             elif field_type == FieldType.STRING:
                 field = StringField.deserialize(field_data)
+            elif field_type == FieldType.BOOLEAN:
+                field = BoolField.deserialize(field_data)
+            elif field_type == FieldType.FLOAT:
+                field = FloatField.deserialize(field_data)
+            elif field_type == FieldType.DOUBLE:
+                field = DoubleField.deserialize(field_data)
             else:
                 raise ValueError(f"Unknown field type: {field_type}")
 
