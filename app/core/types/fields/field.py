@@ -23,6 +23,34 @@ class Field(ABC):
         """
         pass
 
+    @classmethod
+    @abstractmethod
+    def deserialize(cls, data: bytes) -> 'Field':
+        """
+        Create field instance from serialized bytes.
+
+        Args:
+            data: The bytes to deserialize
+
+        Returns:
+            Field instance
+
+        Raises:
+            ValueError: If data is invalid or corrupted
+        """
+        pass
+
+    @classmethod
+    @abstractmethod
+    def get_size(cls) -> int:
+        """
+        Get the fixed size in bytes for this field type.
+
+        Returns:
+            Size in bytes
+        """
+        pass
+
     @abstractmethod
     def get_type(self) -> FieldType:
         """
@@ -41,6 +69,13 @@ class Field(ABC):
     def __str__(self) -> str:
         """
         String representation of the field value.
+        """
+        pass
+
+    @abstractmethod
+    def __repr__(self) -> str:
+        """
+        Unambiguous string representation for debugging.
         """
         pass
 
