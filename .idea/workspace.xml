@@ -5,20 +5,7 @@
   </component>
   <component name="ChangeListManager">
     <list default="true" id="e1ae0b87-b3c0-4220-9290-7c9133dd8700" name="Changes" comment="">
-      <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/app/concurrency/locks/__init__.py" beforeDir="false" afterPath="$PROJECT_DIR$/app/concurrency/locks/__init__.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/app/concurrency/locks/lock_manager.py" beforeDir="false" afterPath="$PROJECT_DIR$/app/concurrency/locks/lock_manager.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/app/concurrency/transactions/__init__.py" beforeDir="false" afterPath="$PROJECT_DIR$/app/concurrency/transactions/__init__.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/app/concurrency/transactions/transaction.py" beforeDir="false" afterPath="$PROJECT_DIR$/app/concurrency/transactions/transaction.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/app/core/tuple/__init__.py" beforeDir="false" afterPath="$PROJECT_DIR$/app/core/tuple/__init__.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/app/core/tuple/record_id.py" beforeDir="false" afterPath="$PROJECT_DIR$/app/core/tuple/record_id.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/app/core/tuple/tuple.py" beforeDir="false" afterPath="$PROJECT_DIR$/app/core/tuple/tuple.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/app/core/types/__init__.py" beforeDir="false" afterPath="$PROJECT_DIR$/app/core/types/__init__.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/app/storage/buffer_pool.py" beforeDir="false" afterPath="$PROJECT_DIR$/app/storage/buffer_pool.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/app/storage/page/__init__.py" beforeDir="false" afterPath="$PROJECT_DIR$/app/storage/page/__init__.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/app/storage/page/heap_page.py" beforeDir="false" afterPath="$PROJECT_DIR$/app/storage/page/heap_page.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/app/storage/page/page.py" beforeDir="false" afterPath="$PROJECT_DIR$/app/storage/page/page.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/tests/test_fields/test_boolean_field.py" beforeDir="false" afterPath="$PROJECT_DIR$/tests/test_fields/test_boolean_field.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/app/primitives/record_id.py" beforeDir="false" afterPath="$PROJECT_DIR$/app/primitives/record_id.py" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
@@ -60,7 +47,7 @@
     "last_opened_file_path": "C:/Users/Utkarsh Priyadarshi/WebstormProjects/StoreMy"
   }
 }]]></component>
-  <component name="RunManager" selected="Python tests.pytest for test_record_id.TestRecordId">
+  <component name="RunManager" selected="Python tests.pytest for test_tuple.TestTuple">
     <configuration name="pytest for test_boolean_field.TestBoolField" type="tests" factoryName="py.test" temporary="true" nameIsGenerated="true">
       <module name="StoreMy" />
       <option name="ENV_FILES" value="" />
@@ -75,23 +62,6 @@
       <option name="_new_parameters" value="&quot;&quot;" />
       <option name="_new_additionalArguments" value="&quot;&quot;" />
       <option name="_new_target" value="&quot;test_boolean_field.TestBoolField&quot;" />
-      <option name="_new_targetType" value="&quot;PYTHON&quot;" />
-      <method v="2" />
-    </configuration>
-    <configuration name="pytest for test_double_field.TestDoubleField" type="tests" factoryName="py.test" temporary="true" nameIsGenerated="true">
-      <module name="StoreMy" />
-      <option name="ENV_FILES" value="" />
-      <option name="INTERPRETER_OPTIONS" value="" />
-      <option name="PARENT_ENVS" value="true" />
-      <option name="SDK_HOME" value="" />
-      <option name="WORKING_DIRECTORY" value="$PROJECT_DIR$/tests/test_fields" />
-      <option name="IS_MODULE_SDK" value="true" />
-      <option name="ADD_CONTENT_ROOTS" value="true" />
-      <option name="ADD_SOURCE_ROOTS" value="true" />
-      <option name="_new_keywords" value="&quot;&quot;" />
-      <option name="_new_parameters" value="&quot;&quot;" />
-      <option name="_new_additionalArguments" value="&quot;&quot;" />
-      <option name="_new_target" value="&quot;test_double_field.TestDoubleField&quot;" />
       <option name="_new_targetType" value="&quot;PYTHON&quot;" />
       <method v="2" />
     </configuration>
@@ -146,13 +116,30 @@
       <option name="_new_targetType" value="&quot;PYTHON&quot;" />
       <method v="2" />
     </configuration>
+    <configuration name="pytest for test_tuple.TestTuple" type="tests" factoryName="py.test" temporary="true" nameIsGenerated="true">
+      <module name="StoreMy" />
+      <option name="ENV_FILES" value="" />
+      <option name="INTERPRETER_OPTIONS" value="" />
+      <option name="PARENT_ENVS" value="true" />
+      <option name="SDK_HOME" value="" />
+      <option name="WORKING_DIRECTORY" value="$PROJECT_DIR$/tests/test_tuple" />
+      <option name="IS_MODULE_SDK" value="true" />
+      <option name="ADD_CONTENT_ROOTS" value="true" />
+      <option name="ADD_SOURCE_ROOTS" value="true" />
+      <option name="_new_keywords" value="&quot;&quot;" />
+      <option name="_new_parameters" value="&quot;&quot;" />
+      <option name="_new_additionalArguments" value="&quot;&quot;" />
+      <option name="_new_target" value="&quot;test_tuple.TestTuple&quot;" />
+      <option name="_new_targetType" value="&quot;PYTHON&quot;" />
+      <method v="2" />
+    </configuration>
     <recent_temporary>
       <list>
+        <item itemvalue="Python tests.pytest for test_tuple.TestTuple" />
         <item itemvalue="Python tests.pytest for test_record_id.TestRecordId" />
         <item itemvalue="Python tests.pytest for test_record_id.TestRecordId.test_init_valid_values" />
         <item itemvalue="Python tests.pytest for test_int_field.TestIntField" />
         <item itemvalue="Python tests.pytest for test_boolean_field.TestBoolField" />
-        <item itemvalue="Python tests.pytest for test_double_field.TestDoubleField" />
       </list>
     </recent_temporary>
   </component>

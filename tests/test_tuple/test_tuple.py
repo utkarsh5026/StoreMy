@@ -1,14 +1,14 @@
 import pytest
-from app.core.tuple.tuple import Tuple
-from app.core.tuple.tuple_desc import TupleDesc
-from app.core.tuple.record_id import RecordId
-from app.core.types.type_enum import FieldType
-from app.core.types.fields.int_field import IntField
-from app.core.types.fields.string_field import StringField
-from app.core.types.fields.boolean_field import BoolField
-from app.core.types.fields.float_field import FloatField
-from app.core.types.fields.double_field import DoubleField
-from app.storage.page.heap_page_id import HeapPageId
+from app.core.tuple import RecordId, Tuple, TupleDesc
+from app.core.types import FieldType
+from app.core.types.fields import (
+    IntField,
+    StringField,
+    BoolField,
+    FloatField,
+    DoubleField
+)
+from app.storage.page import HeapPageId
 
 
 class TestTuple:

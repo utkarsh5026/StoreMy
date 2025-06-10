@@ -120,7 +120,6 @@ class TestRecordId:
         record_id2 = RecordId(page_id2, 5)
         record_id3 = RecordId(page_id1, 6)
 
-        # Different hashes are likely but not guaranteed
         assert hash(record_id1) != hash(record_id2)
         assert hash(record_id1) != hash(record_id3)
 
