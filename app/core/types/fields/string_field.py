@@ -1,4 +1,4 @@
-from app.core.types.field import Field
+from app.core.types.fields.field import Field
 from app.core.types.type_enum import FieldType
 from app.core.types.predicate import Predicate
 import struct

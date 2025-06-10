@@ -7,12 +7,18 @@ class FieldType(Enum):
     """
     INT = "int"
     STRING = "string"
+    BOOLEAN = "boolean"
+    FLOAT = "float"
+    DOUBLE = "double"
 
     def get_length(self) -> int:
+        """Get the length of the field type in bytes."""
+        length_map = {
+            FieldType.INT: 4,
+            FieldType.STRING: 132,
+            FieldType.BOOLEAN: 1,
+            FieldType.FLOAT: 4,
+            FieldType.DOUBLE: 8,
+        }
 
-        if self == FieldType.INT:
-            return 4
-        elif self == FieldType.STRING:
-            return 132  # 4 bytes for length + 128 bytes for string content
-        else:
-            raise ValueError(f"Invalid field type: {self}")
+        return length_map[self]

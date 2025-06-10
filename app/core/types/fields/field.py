@@ -1,6 +1,6 @@
 from abc import ABC, abstractmethod
-from .type_enum import FieldType
-from .predicate import Predicate
+from ..type_enum import FieldType
+from ..predicate import Predicate
 
 
 class Field(ABC):
