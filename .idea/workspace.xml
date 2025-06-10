@@ -5,10 +5,17 @@
   </component>
   <component name="ChangeListManager">
     <list default="true" id="e1ae0b87-b3c0-4220-9290-7c9133dd8700" name="Changes" comment="">
+      <change afterPath="$PROJECT_DIR$/app/catalog/__init__.py" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/app/catalog/catalog.py" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/app/recovery/__init__.py" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/app/recovery/log_file.py" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/app/core/tuple/__init__.py" beforeDir="false" afterPath="$PROJECT_DIR$/app/core/tuple/__init__.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/app/core/tuple/tuple.py" beforeDir="false" afterPath="$PROJECT_DIR$/app/core/tuple/tuple.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/app/core/tuple/tuple_desc.py" beforeDir="false" afterPath="$PROJECT_DIR$/app/core/tuple/tuple_desc.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/app/concurrency/locks/lock_manager.py" beforeDir="false" afterPath="$PROJECT_DIR$/app/concurrency/locks/lock_manager.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/app/concurrency/transactions/__init__.py" beforeDir="false" afterPath="$PROJECT_DIR$/app/concurrency/transactions/__init__.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/app/concurrency/transactions/transaction_id.py" beforeDir="false" afterPath="$PROJECT_DIR$/app/concurrency/transactions/transaction_id.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/app/concurrency/transactions/transactions.py" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/app/storage/file/__init__.py" beforeDir="false" afterPath="$PROJECT_DIR$/app/storage/file/__init__.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/app/storage/page/__init__.py" beforeDir="false" afterPath="$PROJECT_DIR$/app/storage/page/__init__.py" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />

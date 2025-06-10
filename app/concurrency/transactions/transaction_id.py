@@ -1,33 +1,38 @@
 import threading
-from typing import Optional
 
 
 class TransactionId:
     """
-    Unique identifier for a database transaction.
+    TransactionId is a class that contains the identifier of a transaction.
 
-    Each transaction gets a monotonically increasing ID.
-    Thread-safe counter ensures uniqueness across concurrent transactions.
+    Each transaction gets a unique ID used throughout the system
+    for locking, logging, and recovery.
+
+    The ID is generated using an atomic counter to ensure uniqueness
+    across all threads.
     """
 
+    _counter = 0
     _counter_lock = threading.Lock()
-    _next_id = 1
 
-    def __init__(self, id_value: Optional[int] = None):
-        if id_value is not None:
-            self.id = id_value
-        else:
-            with TransactionId._counter_lock:
-                self.id = TransactionId._next_id
-                TransactionId._next_id += 1
+    def __init__(self):
+        """Create a new unique transaction ID."""
+        with TransactionId._counter_lock:
+            TransactionId._counter += 1
+            self.id = TransactionId._counter
 
     def get_id(self) -> int:
+        """Return the unique ID of this transaction."""
         return self.id
 
-    def __eq__(self, other: object) -> bool:
-        return isinstance(other, TransactionId) and self.id == other.id
+    def __eq__(self, other) -> bool:
+        """Check if two transaction IDs are equal."""
+        if not isinstance(other, TransactionId):
+            return False
+        return self.id == other.id
 
     def __hash__(self) -> int:
+        """Return hash code for use in dictionaries and sets."""
         return hash(self.id)
 
     def __str__(self) -> str:
