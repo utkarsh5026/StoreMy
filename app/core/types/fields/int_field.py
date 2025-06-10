@@ -12,7 +12,6 @@ class IntField(Field):
     Range: -2,147,483,648 to 2,147,483,647
     """
 
-    # Define range constants for clarity
     MIN_VALUE = -2**31
     MAX_VALUE = 2**31 - 1
 
@@ -28,7 +27,6 @@ class IntField(Field):
             ValueError: If value is out of range
         """
         if not isinstance(value, int):
-            # Try to convert if it's a numeric type
             if hasattr(value, '__int__'):
                 try:
                     value = int(value)
