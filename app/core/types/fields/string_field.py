@@ -1,6 +1,6 @@
-from .field import Field
-from .type_enum import FieldType
-from .predicate import Predicate
+from app.core.types.field import Field
+from app.core.types.type_enum import FieldType
+from app.core.types.predicate import Predicate
 import struct
 
 
