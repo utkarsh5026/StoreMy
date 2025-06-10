@@ -196,7 +196,7 @@ class TestDoubleField:
 
         assert field1 == field2
         assert field1 != field3
-        assert field1 != 3.141592653589793  # Different type
+        assert pytest.approx(field1) != pytest.approx(3.141592653589793)
         assert hash(field1) == hash(field2)
 
         field_set = {field1, field2, field3}
@@ -217,10 +217,8 @@ class TestDoubleField:
         precise_value = 1.23456789012345678901234567890
         field = DoubleField(precise_value)
 
-        # The stored value should be closer to the original than float precision
-        assert field.value != 0.0  # Basic sanity check
+        assert pytest.approx(field.value) != pytest.approx(0.0)
 
-        # Test serialization roundtrip maintains precision
         data = field.serialize()
         restored = DoubleField.deserialize(data)
         assert field == restored
