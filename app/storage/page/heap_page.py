@@ -5,7 +5,7 @@ from .page import Page
 from .heap_page_id import HeapPageId
 
 if TYPE_CHECKING:
-    from ...core.tuple import Tuple, TupleDesc, RecordId
+    from ...core.tuple import Tuple, TupleDesc
 
 
 class HeapPage(Page):
@@ -32,10 +32,8 @@ class HeapPage(Page):
         self.before_image_data: Optional[bytes] = None
 
         if data is not None:
-            # Deserialize from existing page data
             self._deserialize(data)
         else:
-            # Create new empty page
             if tuple_desc is None:
                 raise ValueError("Must provide tuple_desc for new page")
             self.tuple_desc = tuple_desc
@@ -66,7 +64,7 @@ class HeapPage(Page):
         - +1: one header bit per tuple
         """
         tuple_size = self.tuple_desc.get_size()
-        return (self.PAGE_SIZE * 8) // (tuple_size * 8 + 1)
+        return (self.PAGE_SIZE_IN_BYTES * 8) // (tuple_size * 8 + 1)
 
     def _calculate_header_size(self) -> int:
         """
@@ -114,11 +112,10 @@ class HeapPage(Page):
         restore the page to its before image state.
         """
         if self.before_image_data is None:
-            # No before image saved - return current state
             return self._create_copy()
 
         # Recreate page from saved before image
-        before_page = HeapPage(self.page_id)
+        before_page = HeapPage(self.page_id, tuple_desc=self.tuple_desc)
         before_page._deserialize(self.before_image_data)
         return before_page
 
@@ -130,7 +127,6 @@ class HeapPage(Page):
         """Create a deep copy of this page."""
         copy_page = HeapPage(self.page_id, tuple_desc=self.tuple_desc)
         copy_page.header = self.header.copy()
-        # Shallow copy of list, tuples are immutable
         copy_page.tuples = self.tuples.copy()
         copy_page.dirty_transaction = self.dirty_transaction
         return copy_page
@@ -265,11 +261,11 @@ class HeapPage(Page):
 
         # Pad to PAGE_SIZE
         current_size = len(data)
-        if current_size > self.PAGE_SIZE:
+        if current_size > self.PAGE_SIZE_IN_BYTES:
             raise RuntimeError(
-                f"Page data too large: {current_size} > {self.PAGE_SIZE}")
+                f"Page data too large: {current_size} > {self.PAGE_SIZE_IN_BYTES}")
 
-        padding_size = self.PAGE_SIZE - current_size
+        padding_size = self.PAGE_SIZE_IN_BYTES - current_size
         data.extend(b'\x00' * padding_size)
 
         return bytes(data)
@@ -277,7 +273,7 @@ class HeapPage(Page):
     @staticmethod
     def create_empty_page_data() -> bytes:
         """Create empty page data filled with zeros."""
-        return b'\x00' * HeapPage.PAGE_SIZE
+        return b'\x00' * HeapPage.PAGE_SIZE_IN_BYTES
 
     def __str__(self) -> str:
         used_slots = sum(1 for slot in range(self.num_slots)

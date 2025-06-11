@@ -5,7 +5,7 @@ from ..type_enum import FieldType
 from ..predicate import Predicate
 
 
-class FloatField(Field):
+class FloatField(Field[float]):
     """32-bit floating point field"""
 
     EPSILON = 1e-6
@@ -32,6 +32,10 @@ class FloatField(Field):
 
         if math.isnan(self.value):
             raise ValueError("FloatField does not support NaN values")
+
+    def get_value(self) -> float:
+        """Return the float value stored in this field."""
+        return self.value
 
     def get_type(self) -> FieldType:
         return FieldType.FLOAT

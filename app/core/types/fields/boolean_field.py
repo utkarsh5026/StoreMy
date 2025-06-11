@@ -4,7 +4,7 @@ from ..type_enum import FieldType
 from ..predicate import Predicate
 
 
-class BoolField(Field):
+class BoolField(Field[bool]):
     """
     Field implementation for boolean values.
 
@@ -23,6 +23,10 @@ class BoolField(Field):
         if value is None:
             raise TypeError("BoolField cannot accept None value")
         self.value = bool(value)
+
+    def get_value(self) -> bool:
+        """Return the boolean value stored in this field."""
+        return self.value
 
     def get_type(self) -> FieldType:
         return FieldType.BOOLEAN

@@ -4,7 +4,7 @@ from ..type_enum import FieldType
 from ..predicate import Predicate
 
 
-class IntField(Field):
+class IntField(Field[int]):
     """
     Field implementation for 32-bit signed integers.
 
@@ -41,6 +41,10 @@ class IntField(Field):
                 f"Integer value {value} out of range [{self.MIN_VALUE}, {self.MAX_VALUE}]")
 
         self.value = value
+
+    def get_value(self) -> int:
+        """Return the integer value stored in this field."""
+        return self.value
 
     def get_type(self) -> FieldType:
         return FieldType.INT

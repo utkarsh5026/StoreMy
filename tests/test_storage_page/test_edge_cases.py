@@ -33,7 +33,7 @@ class TestPageEdgeCases:
         assert page.get_num_empty_slots() == page.num_slots - 1
 
     def test_minimum_tuple_size_maximum_slots(self):
-        """Test with smallest possible tuples to maximize slot count."""
+        """Test with the smallest possible tuples to maximize slot count."""
         # Single boolean field is smallest (1 byte)
         min_desc = TupleDesc([FieldType.BOOLEAN])
 
@@ -173,23 +173,20 @@ class TestPageEdgeCases:
         tuple_desc = TupleDesc([FieldType.STRING])
         page = HeapPage(page_id, tuple_desc=tuple_desc)
 
-        # Test with empty string
         empty_tuple = Tuple(tuple_desc)
         empty_tuple.set_field(0, StringField(""))
         page.add_tuple(empty_tuple)
 
-        # Test with very long string (up to field limit)
         max_length = FieldType.STRING.get_length() - 4  # Account for length prefix
         long_string = "x" * max_length
         long_tuple = Tuple(tuple_desc)
         long_tuple.set_field(0, StringField(long_string))
         page.add_tuple(long_tuple)
 
-        # Verify both tuples can be retrieved
         tuples = list(page.iterator())
         assert len(tuples) == 2
 
-        string_values = [t.get_field(0).value for t in tuples]
+        string_values = [t.get_field(0).get_value() for t in tuples]
         assert "" in string_values
         assert long_string in string_values
 

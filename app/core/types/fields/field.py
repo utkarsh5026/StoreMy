@@ -1,9 +1,12 @@
 from abc import ABC, abstractmethod
+from typing import TypeVar, Generic
 from ..type_enum import FieldType
 from ..predicate import Predicate
 
+T = TypeVar('T')
 
-class Field(ABC):
+
+class Field(ABC, Generic[T]):
     """
     Abstract base class for all field types in the database.
 
@@ -15,6 +18,16 @@ class Field(ABC):
     This follows the Template Method pattern - subclasses implement
     specific behavior while the base class defines the interface.
     """
+
+    @abstractmethod
+    def get_value(self) -> T:
+        """
+        Get the value stored in this field.
+
+        Returns:
+            The value of the field with its appropriate type
+        """
+        pass
 
     @abstractmethod
     def serialize(self) -> bytes:

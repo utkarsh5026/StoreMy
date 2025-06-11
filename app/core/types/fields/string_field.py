@@ -4,7 +4,7 @@ from ..predicate import Predicate
 import struct
 
 
-class StringField(Field):
+class StringField(Field[str]):
     """
     Field implementation for fixed-length strings.
 
@@ -56,6 +56,10 @@ class StringField(Field):
 
         self.value = value
         self._encoded = encoded
+
+    def get_value(self) -> str:
+        """Return the string value stored in this field."""
+        return self.value
 
     def get_type(self) -> FieldType:
         return FieldType.STRING
