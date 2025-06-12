@@ -1,4 +1,4 @@
-from ...primitives import PageId
+from app.primitives import PageId
 
 
 class HeapPageId(PageId):

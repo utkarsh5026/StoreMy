@@ -1,6 +1,6 @@
 import pytest
 from app.core.tuple import RecordId
-from app.storage.page.heap_page_id import HeapPageId
+from app.storage.heap.heap_page_id import HeapPageId
 
 
 class TestRecordId:

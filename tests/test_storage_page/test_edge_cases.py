@@ -1,6 +1,5 @@
 import pytest
-from app.storage.page.heap_page import HeapPage
-from app.storage.page.heap_page_id import HeapPageId
+from app.storage.heap import HeapPage, HeapPageId
 from app.core.tuple import Tuple, TupleDesc
 from app.core.types import FieldType
 from app.core.types.fields import IntField, StringField

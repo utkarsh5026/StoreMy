@@ -1,6 +1,6 @@
 from abc import ABC, abstractmethod
 from typing import Optional
-from ...primitives import PageId, TransactionId
+from app.primitives import PageId, TransactionId
 
 
 class Page(ABC):

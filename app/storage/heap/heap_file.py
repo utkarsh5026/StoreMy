@@ -1,14 +1,14 @@
 import os
 from pathlib import Path
 
-from .db_file import DbFile
-from ...storage.page import HeapPage, HeapPageId, Page
-from ...core.exceptions import DbException
-from ...storage.permissions import Permissions
-from ...core.tuple import Tuple, TupleDesc
-from ...concurrency.transactions import TransactionId
-from ...query.iterator import DbIterator
-from ...storage.disk import StorageManager
+from app.storage.interfaces.db_file import DbFile
+from app.storage.page import HeapPage, HeapPageId, Page
+from app.core.exceptions import DbException
+from app.storage.permissions import Permissions
+from app.core.tuple import Tuple, TupleDesc
+from app.concurrency.transactions import TransactionId
+from app.query.iterator import DbIterator
+from app.storage.disk import StorageManager
 
 
 class HeapFile(DbFile):

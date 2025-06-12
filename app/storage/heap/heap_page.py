@@ -1,12 +1,12 @@
 import math
 from typing import Optional, Iterator, TYPE_CHECKING
-from ...primitives import TransactionId
-from .page import Page
-from .heap_page_id import HeapPageId
-from .slots.bitmap_slot import BitmapSlotManager
+from app.primitives import TransactionId
+from app.storage.interfaces.page import Page
+from app.storage.heap.heap_page_id import HeapPageId
+from app.storage.page.slots.bitmap_slot import BitmapSlotManager
 
 if TYPE_CHECKING:
-    from ...core.tuple import Tuple, TupleDesc
+    from app.core.tuple import Tuple, TupleDesc
 
 
 class HeapPage(Page):

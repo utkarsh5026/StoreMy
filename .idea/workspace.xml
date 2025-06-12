@@ -5,12 +5,29 @@
   </component>
   <component name="ChangeListManager">
     <list default="true" id="e1ae0b87-b3c0-4220-9290-7c9133dd8700" name="Changes" comment="">
-      <change afterPath="$PROJECT_DIR$/app/services/__init__.py" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/app/storage/page/slots/__init__.py" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/app/storage/page/slots/bitmap_slot.py" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/app/storage/page/slots/slot_manager.py" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/app/storage/heap/__init__.py" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/app/storage/index/btree/__init__.py" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/app/storage/index/btree/btree_file.py" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/app/storage/index/btree/btree_page.py" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/app/storage/index/hash/__init__.py" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/app/storage/index/hash/hash_file.py" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/app/storage/index/hash/hash_page.py" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/app/storage/index/index_file.py" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/app/storage/index/index_manager.py" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/app/storage/interfaces/__init__.py" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/app/storage/page/heap_page.py" beforeDir="false" afterPath="$PROJECT_DIR$/app/storage/page/heap_page.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/app/storage/file/__init__.py" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/app/storage/file/db_file.py" beforeDir="false" afterPath="$PROJECT_DIR$/app/storage/interfaces/db_file.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/app/storage/file/heap_file.py" beforeDir="false" afterPath="$PROJECT_DIR$/app/storage/heap/heap_file.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/app/storage/page/__init__.py" beforeDir="false" afterPath="$PROJECT_DIR$/app/storage/page/__init__.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/app/storage/page/heap_page.py" beforeDir="false" afterPath="$PROJECT_DIR$/app/storage/heap/heap_page.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/app/storage/page/heap_page_id.py" beforeDir="false" afterPath="$PROJECT_DIR$/app/storage/heap/heap_page_id.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/app/storage/page/page.py" beforeDir="false" afterPath="$PROJECT_DIR$/app/storage/interfaces/page.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/app/storage/page/page_id.py" beforeDir="false" afterPath="$PROJECT_DIR$/app/storage/interfaces/page_id.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/tests/test_storage_page/test_edge_cases.py" beforeDir="false" afterPath="$PROJECT_DIR$/tests/test_storage_page/test_edge_cases.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/tests/test_storage_page/test_heap_page.py" beforeDir="false" afterPath="$PROJECT_DIR$/tests/test_storage_page/test_heap_page.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/tests/test_storage_page/test_page_integration.py" beforeDir="false" afterPath="$PROJECT_DIR$/tests/test_storage_page/test_page_integration.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/tests/test_tuple/test_record_id.py" beforeDir="false" afterPath="$PROJECT_DIR$/tests/test_tuple/test_record_id.py" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
@@ -75,6 +92,8 @@
 }]]></component>
   <component name="RecentsManager">
     <key name="MoveFile.RECENT_KEYS">
+      <recent name="C:\Users\Utkarsh Priyadarshi\WebstormProjects\StoreMy\app\storage\interfaces" />
+      <recent name="C:\Users\Utkarsh Priyadarshi\WebstormProjects\StoreMy\app\storage\heap" />
       <recent name="C:\Users\Utkarsh Priyadarshi\WebstormProjects\StoreMy\tests\test_catalog" />
       <recent name="C:\Users\Utkarsh Priyadarshi\WebstormProjects\StoreMy\app\primitives" />
     </key>

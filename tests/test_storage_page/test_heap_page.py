@@ -1,7 +1,6 @@
 import pytest
 import math
-from app.storage.page.heap_page import HeapPage
-from app.storage.page.heap_page_id import HeapPageId
+from app.storage.heap import HeapPage, HeapPageId
 from app.core.tuple import Tuple, TupleDesc
 from app.core.types import FieldType
 from app.core.types.fields import IntField, StringField, BoolField
@@ -68,13 +67,15 @@ class TestHeapPage:
         # Small tuple: 4 bytes (int)
         small_td = TupleDesc([FieldType.INT])
         small_page = HeapPage(self.page_id, tuple_desc=small_td)
-        expected_small = (HeapPage.PAGE_SIZE_IN_BYTES * 8) // (FieldType.INT.get_length() * 8 + 1)
+        expected_small = (HeapPage.PAGE_SIZE_IN_BYTES *
+                          8) // (FieldType.INT.get_length() * 8 + 1)
         assert small_page.num_slots == expected_small
 
         # Large tuple: 4 + 132 = 136 bytes (int and string)
         large_td = TupleDesc([FieldType.INT, FieldType.STRING])
         large_page = HeapPage(self.page_id, tuple_desc=large_td)
-        expected_large = (HeapPage.PAGE_SIZE_IN_BYTES * 8) // ((FieldType.STRING.get_length() + FieldType.INT.get_length()) * 8 + 1)
+        expected_large = (HeapPage.PAGE_SIZE_IN_BYTES * 8) // (
+            (FieldType.STRING.get_length() + FieldType.INT.get_length()) * 8 + 1)
         assert large_page.num_slots == expected_large
 
         # Very large tuple that fits only a few times

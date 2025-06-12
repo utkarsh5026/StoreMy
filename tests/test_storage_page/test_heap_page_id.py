@@ -1,5 +1,5 @@
 import pytest
-from app.storage.page import HeapPageId
+from app.storage.heap import HeapPageId
 
 
 class TestHeapPageId:
