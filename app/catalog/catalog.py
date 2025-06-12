@@ -1,11 +1,11 @@
 import threading
-from typing import Dict, Iterator
+from typing import Iterator
 from pathlib import Path
 
 from ..storage.file import DbFile, HeapFile
 from ..core.tuple import TupleDesc
 from ..core.exceptions import DbException
-from ..core.types import Type
+from ..core.types.type_enum import FieldType
 
 
 class Catalog:
@@ -25,14 +25,9 @@ class Catalog:
 
     def __init__(self):
         """Create a new, empty catalog."""
-        # Maps table name to DbFile
-        self._name_to_file: Dict[str, DbFile] = {}
-
-        # Maps table ID to DbFile
-        self._id_to_file: Dict[int, DbFile] = {}
-
-        # Maps table ID to primary key field name
-        self._id_to_primary_key: Dict[int, str] = {}
+        self._name_to_file: dict[str, DbFile] = {}
+        self._id_to_file: dict[int, DbFile] = {}
+        self._id_to_primary_key: dict[int, str] = {}
 
         # Thread safety
         self._lock = threading.RLock()
@@ -116,7 +111,7 @@ class Catalog:
             table_id: The table ID
 
         Returns:
-            The primary key field name (may be empty string)
+            The primary key field name (maybe empty string)
         """
         with self._lock:
             return self._id_to_primary_key.get(table_id, "")
@@ -167,7 +162,7 @@ class Catalog:
 
         Example:
         students (id int, name string, age int)
-        courses (id int, title string, credits int)
+        courses (id int, title string, credit int)
 
         Args:
             catalog_file: Path to the catalog file
@@ -219,9 +214,9 @@ class Catalog:
 
             # Convert type string to Type enum
             if field_type_str == 'int':
-                field_types.append(Type.INT_TYPE)
+                field_types.append(FieldType.INT)
             elif field_type_str == 'string':
-                field_types.append(Type.STRING_TYPE)
+                field_types.append(FieldType.STRING)
             else:
                 raise ValueError(f"Unknown type: {field_type_str}")
 
