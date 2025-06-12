@@ -8,5 +8,6 @@ of the system, avoiding circular imports.
 from .transaction_id import TransactionId
 from .page_id import PageId
 from .record_id import RecordId
+from .index_page_id import IndexPageId
 
-__all__ = ["TransactionId", "PageId", "RecordId"]
+__all__ = ["TransactionId", "PageId", "RecordId", "IndexPageId"]
