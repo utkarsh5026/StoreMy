@@ -39,7 +39,6 @@ class HeapPage(Page):
             self.tuple_desc = tuple_desc
             self._initialize_empty_page()
 
-        # Save initial state as before image
         self.set_before_image()
 
     def _initialize_empty_page(self) -> None:

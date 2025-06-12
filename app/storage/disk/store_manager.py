@@ -15,13 +15,11 @@ class StorageManager:
     def __init__(self, data_directory: str = "database_data"):
         self.disk_manager = DiskManager(data_directory)
         self.data_dir = Path(data_directory)
-        self._table_files: Dict[int, str] = {}  # table_id -> file_path
+        self._table_files: dict[int, str] = {}
 
     def create_table_file(self, table_id: int, table_name: str) -> str:
         """Create a new database file for a table"""
         file_path = self.data_dir / f"{table_name}_{table_id}.dat"
-
-        # Create empty file
         file_path.touch()
         self._table_files[table_id] = str(file_path)
 

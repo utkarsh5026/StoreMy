@@ -1,14 +1,14 @@
 import os
-from typing import List
 from pathlib import Path
 
 from .db_file import DbFile
-from ...storage.page import HeapPage, HeapPageId, Page, PageId
+from ...storage.page import HeapPage, HeapPageId, Page
 from ...core.exceptions import DbException
 from ...storage.permissions import Permissions
 from ...core.tuple import Tuple, TupleDesc
 from ...concurrency.transactions import TransactionId
 from ...query.iterator import DbIterator
+from ...storage.disk import StorageManager
 
 
 class HeapFile(DbFile):
@@ -38,6 +38,7 @@ class HeapFile(DbFile):
             tuple_desc: Schema description for tuples in this file
         """
         self.file_path = Path(file_path)
+        self._storage_manager = StorageManager()
         self.tuple_desc = tuple_desc
 
         if not self.file_path.exists():
@@ -74,7 +75,7 @@ class HeapFile(DbFile):
         file_size = self.file_path.stat().st_size
         return (file_size + self.PAGE_SIZE - 1) // self.PAGE_SIZE
 
-    def read_page(self, page_id: PageId) -> Page:
+    def read_page(self, page_id: HeapPageId) -> Page:
         """
         Read the specified page from the disk.
 
@@ -95,7 +96,7 @@ class HeapFile(DbFile):
                 f.seek(file_offset)
                 page_data = f.read(self.PAGE_SIZE)
 
-                # If we read less than PAGE_SIZE bytes, pad with zeros
+                # If we read fewer than PAGE_SIZE bytes, pad with zeros
                 if len(page_data) < self.PAGE_SIZE:
                     page_data += b'\x00' * (self.PAGE_SIZE - len(page_data))
 
@@ -104,7 +105,7 @@ class HeapFile(DbFile):
         except IOError as e:
             raise DbException(f"Failed to read page {page_number}: {e}")
 
-    def write_page(self, page: Page) -> None:
+    def write_page(self, page: HeapPage) -> None:
         """
         Write the specified page to disk.
 
@@ -133,7 +134,7 @@ class HeapFile(DbFile):
         except IOError as e:
             raise DbException(f"Failed to write page {page_number}: {e}")
 
-    def add_tuple(self, tid: 'TransactionId', tuple_data: Tuple) -> list[Page]:
+    def add_tuple(self, tid: 'TransactionId', tuple_data: Tuple) -> list[HeapPage]:
         """
         Add a tuple to the file.
 
@@ -144,7 +145,7 @@ class HeapFile(DbFile):
         4. Mark the page as dirty
         5. Return the modified page(s)
         """
-        from stormey.database import Database
+        from ...database import Database
 
         table_id = self.get_id()
         buffer_pool = Database.get_buffer_pool()
@@ -152,14 +153,14 @@ class HeapFile(DbFile):
         # Try to find a page with space
         for page_num in range(self.num_pages()):
             page_id = HeapPageId(table_id, page_num)
-
-            # First, get page with read-only permission to check space
             page = buffer_pool.get_page(tid, page_id, Permissions.READ_ONLY)
 
-            if page.get_num_empty_slots() > 0:
-                # Get page with write permission for modification
+            if isinstance(page, HeapPage) and page.get_num_empty_slots() > 0:
                 page = buffer_pool.get_page(
                     tid, page_id, Permissions.READ_WRITE)
+
+                if not isinstance(page, HeapPage):
+                    raise TypeError("D")
                 page.add_tuple(tuple_data)
                 page.mark_dirty(True, tid)
                 return [page]
@@ -188,12 +189,12 @@ class HeapFile(DbFile):
         Delete a tuple from the file.
 
         This method:
-        1. Gets the page containing the tuple
-        2. Removes the tuple from the page
+        1. Get the page containing the tuple
+        2. Removes the tuple from page
         3. Marks the page as dirty
         4. Returns the modified page
         """
-        from stormey.database import Database
+        from ...database import Database
 
         record_id = tuple_data.get_record_id()
         if record_id is None:
@@ -219,7 +220,7 @@ class HeapFile(DbFile):
         return HeapFileIterator(tid, self)
 
 
-class HeapFileIterator:
+class HeapFileIterator(DbIterator):
     """
     Iterator for scanning all tuples in a HeapFile.
 
@@ -241,7 +242,7 @@ class HeapFileIterator:
 
     def open(self) -> None:
         """Open the iterator and position it at the first tuple."""
-        from stormey.database import Database
+        from ...database import Database
 
         self.is_open = True
         self.current_page_number = 0
@@ -276,7 +277,7 @@ class HeapFileIterator:
         return next(self.current_page_iterator)
 
     def _current_page_has_next(self) -> bool:
-        """Check if current page has more tuples."""
+        """Check if the current page has more tuples."""
         if self.current_page_iterator is None:
             return False
 
@@ -291,7 +292,7 @@ class HeapFileIterator:
 
     def _advance_to_next_page_with_tuples(self) -> bool:
         """Advance to the next page that contains tuples."""
-        from stormey.database import Database
+        from ...database import Database
 
         buffer_pool = Database.get_buffer_pool()
 
