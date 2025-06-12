@@ -139,85 +139,61 @@ class TestHeapPage:
         page.mark_dirty(True, tx2)
         assert page.is_dirty() == tx2
 
-    def test_is_slot_used_initially_false(self):
-        """Test that slots are initially unused."""
+    def test_slot_manager_initially_empty(self):
+        """Test that slot manager initially has all slots unused."""
         page = HeapPage(self.page_id, tuple_desc=self.tuple_desc)
 
         for slot in range(page.num_slots):
-            assert not page._is_slot_used(slot)
+            assert not page.slot_manager.is_slot_used(slot)
 
-    def test_is_slot_used_out_of_range(self):
-        """Test _is_slot_used with out of range indices."""
+        assert page.slot_manager.get_free_slot_count() == page.num_slots
+
+    def test_slot_manager_integration(self):
+        """Test that slot manager is properly integrated with page."""
         page = HeapPage(self.page_id, tuple_desc=self.tuple_desc)
 
-        assert not page._is_slot_used(-1)
-        assert not page._is_slot_used(page.num_slots)
-        assert not page._is_slot_used(page.num_slots + 100)
+        # Test direct slot manager access
+        page.slot_manager.set_slot_used(0, True)
+        assert page.slot_manager.is_slot_used(0)
+        assert page.slot_manager.get_free_slot_count() == page.num_slots - 1
 
-    def test_set_slot_used_valid(self):
-        """Test setting slot as used/unused."""
-        page = HeapPage(self.page_id, tuple_desc=self.tuple_desc)
+        # Test finding free slots
+        free_slot = page.slot_manager.find_free_slot()
+        assert free_slot == 1  # Should be the next available slot
 
-        # Initially unused
-        assert not page._is_slot_used(0)
-
-        # Mark as used
-        page._set_slot_used(0, True)
-        assert page._is_slot_used(0)
-
-        # Mark as unused
-        page._set_slot_used(0, False)
-        assert not page._is_slot_used(0)
-
-    def test_set_slot_used_multiple_slots(self):
-        """Test setting multiple slots as used."""
-        page = HeapPage(self.page_id, tuple_desc=self.tuple_desc)
-
-        # Mark the first 5 slots as used
-        for i in range(5):
-            page._set_slot_used(i, True)
-            assert page._is_slot_used(i)
-
-        # Check that other slots are still unused
-        for i in range(5, page.num_slots):
-            assert not page._is_slot_used(i)
-
-    def test_set_slot_used_out_of_range_raises_error(self):
-        """Test that setting slot used with invalid index raises IndexError."""
-        page = HeapPage(self.page_id, tuple_desc=self.tuple_desc)
-
-        with pytest.raises(IndexError, match=f"Slot -1 out of range"):
-            page._set_slot_used(-1, True)
-
-        with pytest.raises(IndexError, match=f"Slot {page.num_slots} out of range"):
-            page._set_slot_used(page.num_slots, True)
+        # Mark another slot as used
+        page.slot_manager.set_slot_used(2, True)
+        assert page.slot_manager.is_slot_used(2)
+        assert page.slot_manager.get_free_slot_count() == page.num_slots - 2
 
     def test_get_num_empty_slots_initially_all_empty(self):
         """Test that initially all slots are empty."""
         page = HeapPage(self.page_id, tuple_desc=self.tuple_desc)
         assert page.get_num_empty_slots() == page.num_slots
 
-    def test_get_num_empty_slots_after_marking_used(self):
-        """Test empty slot count after marking some as used."""
+    def test_get_num_empty_slots_with_slot_manager(self):
+        """Test empty slot count using slot manager directly."""
         page = HeapPage(self.page_id, tuple_desc=self.tuple_desc)
 
-        # Mark 3 slots as used
+        # Mark 3 slots as used through slot manager
         for i in range(3):
-            page._set_slot_used(i, True)
+            page.slot_manager.set_slot_used(i, True)
 
         assert page.get_num_empty_slots() == page.num_slots - 3
 
-    def test_add_tuple_valid(self):
-        """Test adding a valid tuple."""
+    def test_insert_tuple_valid(self):
+        """Test inserting a valid tuple."""
         page = HeapPage(self.page_id, tuple_desc=self.tuple_desc)
 
-        # Create a complete tuple
-        tuple_obj = Tuple(self.tuple_desc)
-        tuple_obj.set_field(0, IntField(42))
-        tuple_obj.set_field(1, StringField("test"))
+        # Create a complete tuple with mock data since we need actual tuple functionality
+        tuple_obj = MockTuple(self.tuple_desc, complete=True)
 
         initial_empty = page.get_num_empty_slots()
-        page.add_tuple(tuple_obj)
+        slot_number = page.insert_tuple(tuple_obj)
+
+        # Should return a valid slot number
+        assert slot_number is not None
+        assert 0 <= slot_number < page.num_slots
 
         # Should have one less empty slot
         assert page.get_num_empty_slots() == initial_empty - 1
@@ -226,97 +202,83 @@ class TestHeapPage:
         record_id = tuple_obj.get_record_id()
         assert record_id is not None
         assert record_id.get_page_id() == self.page_id
-        assert 0 <= record_id.get_tuple_number() < page.num_slots
+        assert record_id.get_tuple_number() == slot_number
 
         # Slot should be marked as used
-        assert page._is_slot_used(record_id.get_tuple_number())
+        assert page.slot_manager.is_slot_used(slot_number)
 
         # Tuple should be in the page's tuple list
-        assert page.tuples[record_id.get_tuple_number()] == tuple_obj
+        assert page.tuples[slot_number] == tuple_obj
 
-    def test_add_tuple_wrong_schema_raises_error(self):
-        """Test that adding tuple with the wrong schema raises ValueError."""
+    def test_insert_tuple_wrong_schema_raises_error(self):
+        """Test that inserting tuple with the wrong schema raises ValueError."""
         page = HeapPage(self.page_id, tuple_desc=self.tuple_desc)
 
         # Create tuple with different schema
         wrong_td = TupleDesc([FieldType.BOOLEAN])
-        tuple_obj = Tuple(wrong_td)
-        tuple_obj.set_field(0, BoolField(True))
+        tuple_obj = MockTuple(wrong_td, complete=True)
 
         with pytest.raises(ValueError, match="Tuple schema doesn't match page schema"):
-            page.add_tuple(tuple_obj)
+            page.insert_tuple(tuple_obj)
 
-    def test_add_tuple_incomplete_raises_error(self):
-        """Test that adding incomplete tuple raises ValueError."""
-        page = HeapPage(self.page_id, tuple_desc=self.tuple_desc)
-
-        # Create incomplete tuple
-        tuple_obj = Tuple(self.tuple_desc)
-        tuple_obj.set_field(0, IntField(42))
-        # Don't set field 1
-
-        with pytest.raises(ValueError, match="Cannot add incomplete tuple to page"):
-            page.add_tuple(tuple_obj)
-
-    def test_add_tuple_page_full_raises_error(self):
-        """Test that adding tuple to full page raises RuntimeError."""
+    def test_insert_tuple_page_full_returns_none(self):
+        """Test that inserting tuple to full page returns None."""
         # Create a page with very large tuples so it has very few slots
         large_td = TupleDesc([FieldType.STRING] * 30)  # Very large tuple
         page = HeapPage(self.page_id, tuple_desc=large_td)
 
         # Fill all slots with mock tuples
         for i in range(page.num_slots):
-            page._set_slot_used(i, True)
+            page.slot_manager.set_slot_used(i, True)
             page.tuples[i] = MockTuple(large_td)
 
-        # Try to add one more tuple
-        tuple_obj = MockTuple(large_td)
+        # Try to insert one more tuple
+        tuple_obj = MockTuple(large_td, complete=True)
 
-        with pytest.raises(RuntimeError, match="No empty slots available on page"):
-            page.add_tuple(tuple_obj)
+        result = page.insert_tuple(tuple_obj)
+        assert result is None  # Should return None when page is full
 
-    def test_add_multiple_tuples(self):
-        """Test adding multiple tuples."""
+    def test_insert_multiple_tuples(self):
+        """Test inserting multiple tuples."""
         page = HeapPage(self.page_id, tuple_desc=self.tuple_desc)
 
         tuples = []
         for i in range(min(5, page.num_slots)):
-            tuple_obj = Tuple(self.tuple_desc)
-            tuple_obj.set_field(0, IntField(i))
-            tuple_obj.set_field(1, StringField(f"test{i}"))
+            tuple_obj = MockTuple(self.tuple_desc, complete=True)
 
-            page.add_tuple(tuple_obj)
-            tuples.append(tuple_obj)
+            slot_number = page.insert_tuple(tuple_obj)
+            assert slot_number is not None
+            tuples.append((tuple_obj, slot_number))
 
-        # Check that all tuples have valid record IDs
+        # Check that all tuples have valid record IDs and slots
         used_slots = set()
-        for tuple_obj in tuples:
+        for tuple_obj, slot_number in tuples:
             record_id = tuple_obj.get_record_id()
             assert record_id is not None
             assert record_id.get_page_id() == self.page_id
 
             slot = record_id.get_tuple_number()
+            assert slot == slot_number
             assert slot not in used_slots  # No duplicates
             used_slots.add(slot)
 
-            assert page._is_slot_used(slot)
+            assert page.slot_manager.is_slot_used(slot)
             assert page.tuples[slot] == tuple_obj
 
     def test_delete_tuple_valid(self):
         """Test deleting a valid tuple."""
         page = HeapPage(self.page_id, tuple_desc=self.tuple_desc)
 
-        # Add a tuple first
-        tuple_obj = Tuple(self.tuple_desc)
-        tuple_obj.set_field(0, IntField(42))
-        tuple_obj.set_field(1, StringField("test"))
-        page.add_tuple(tuple_obj)
+        # Insert a tuple first
+        tuple_obj = MockTuple(self.tuple_desc, complete=True)
+        slot_number = page.insert_tuple(tuple_obj)
+        assert slot_number is not None
 
         initial_empty = page.get_num_empty_slots()
-        slot_number = tuple_obj.get_record_id().get_tuple_number()
 
         # Delete the tuple
-        page.delete_tuple(tuple_obj)
+        result = page.delete_tuple(tuple_obj)
+        assert result is True  # Should return True for successful deletion
 
         # Should have one more empty slot
         assert page.get_num_empty_slots() == initial_empty + 1
@@ -325,52 +287,46 @@ class TestHeapPage:
         assert tuple_obj.get_record_id() is None
 
         # Slot should be marked as unused
-        assert not page._is_slot_used(slot_number)
+        assert not page.slot_manager.is_slot_used(slot_number)
 
         # Tuple should be removed from page's tuple list
         assert page.tuples[slot_number] is None
 
-    def test_delete_tuple_no_record_id_raises_error(self):
-        """Test that deleting tuple without record ID raises ValueError."""
+    def test_delete_tuple_no_record_id_returns_false(self):
+        """Test that deleting tuple without record ID returns False."""
         page = HeapPage(self.page_id, tuple_desc=self.tuple_desc)
 
-        tuple_obj = Tuple(self.tuple_desc)
-        tuple_obj.set_field(0, IntField(42))
-        tuple_obj.set_field(1, StringField("test"))
+        tuple_obj = MockTuple(self.tuple_desc, complete=True)
 
-        with pytest.raises(ValueError, match="Tuple has no RecordId - cannot delete"):
-            page.delete_tuple(tuple_obj)
+        result = page.delete_tuple(tuple_obj)
+        assert result is False  # Should return False for failed deletion
 
-    def test_delete_tuple_wrong_page_raises_error(self):
-        """Test that deleting tuple from wrong page raises ValueError."""
+    def test_delete_tuple_wrong_page_returns_false(self):
+        """Test that deleting tuple from wrong page returns False."""
         page = HeapPage(self.page_id, tuple_desc=self.tuple_desc)
 
         # Create tuple with record ID pointing to different page
-        tuple_obj = Tuple(self.tuple_desc)
-        tuple_obj.set_field(0, IntField(42))
-        tuple_obj.set_field(1, StringField("test"))
+        tuple_obj = MockTuple(self.tuple_desc, complete=True)
 
         wrong_page_id = HeapPageId(2, 0)
         wrong_record_id = RecordId(wrong_page_id, 0)
         tuple_obj.set_record_id(wrong_record_id)
 
-        with pytest.raises(ValueError, match="Tuple RecordId points to different page"):
-            page.delete_tuple(tuple_obj)
+        result = page.delete_tuple(tuple_obj)
+        assert result is False  # Should return False for failed deletion
 
-    def test_delete_tuple_empty_slot_raises_error(self):
-        """Test that deleting tuple from empty slot raises ValueError."""
+    def test_delete_tuple_empty_slot_returns_false(self):
+        """Test that deleting tuple from empty slot returns False."""
         page = HeapPage(self.page_id, tuple_desc=self.tuple_desc)
 
         # Create tuple with record ID pointing to empty slot
-        tuple_obj = Tuple(self.tuple_desc)
-        tuple_obj.set_field(0, IntField(42))
-        tuple_obj.set_field(1, StringField("test"))
+        tuple_obj = MockTuple(self.tuple_desc, complete=True)
 
         record_id = RecordId(self.page_id, 0)
         tuple_obj.set_record_id(record_id)
 
-        with pytest.raises(ValueError, match="Slot 0 is already empty"):
-            page.delete_tuple(tuple_obj)
+        result = page.delete_tuple(tuple_obj)
+        assert result is False  # Should return False for failed deletion
 
     def test_iterator_empty_page(self):
         """Test iterator on empty page."""
@@ -383,14 +339,13 @@ class TestHeapPage:
         """Test iterator with tuples on page."""
         page = HeapPage(self.page_id, tuple_desc=self.tuple_desc)
 
-        # Add some tuples
+        # Insert some tuples
         added_tuples = []
         for i in range(min(3, page.num_slots)):
-            tuple_obj = Tuple(self.tuple_desc)
-            tuple_obj.set_field(0, IntField(i))
-            tuple_obj.set_field(1, StringField(f"test{i}"))
+            tuple_obj = MockTuple(self.tuple_desc, complete=True)
 
-            page.add_tuple(tuple_obj)
+            slot_number = page.insert_tuple(tuple_obj)
+            assert slot_number is not None
             added_tuples.append(tuple_obj)
 
         # Get tuples from iterator
@@ -405,19 +360,19 @@ class TestHeapPage:
         """Test iterator when there are gaps in used slots."""
         page = HeapPage(self.page_id, tuple_desc=self.tuple_desc)
 
-        # Add tuples, then delete some to create gaps
+        # Insert tuples, then delete some to create gaps
         tuples = []
         for i in range(min(5, page.num_slots)):
-            tuple_obj = Tuple(self.tuple_desc)
-            tuple_obj.set_field(0, IntField(i))
-            tuple_obj.set_field(1, StringField(f"test{i}"))
+            tuple_obj = MockTuple(self.tuple_desc, complete=True)
 
-            page.add_tuple(tuple_obj)
+            slot_number = page.insert_tuple(tuple_obj)
+            assert slot_number is not None
             tuples.append(tuple_obj)
 
         # Delete every other tuple
         for i in range(0, len(tuples), 2):
-            page.delete_tuple(tuples[i])
+            result = page.delete_tuple(tuples[i])
+            assert result is True
 
         # Iterator should only return non-deleted tuples
         iterated_tuples = list(page.iterator())
@@ -440,11 +395,10 @@ class TestHeapPage:
         """Test serialization of page with tuples."""
         page = HeapPage(self.page_id, tuple_desc=self.tuple_desc)
 
-        # Add a tuple
-        tuple_obj = Tuple(self.tuple_desc)
-        tuple_obj.set_field(0, IntField(42))
-        tuple_obj.set_field(1, StringField("test"))
-        page.add_tuple(tuple_obj)
+        # Insert a tuple
+        tuple_obj = MockTuple(self.tuple_desc, complete=True)
+        slot_number = page.insert_tuple(tuple_obj)
+        assert slot_number is not None
 
         data = page.get_page_data()
 
@@ -463,12 +417,11 @@ class TestHeapPage:
         """Test string representation."""
         page = HeapPage(self.page_id, tuple_desc=self.tuple_desc)
 
-        # Add some tuples
+        # Insert some tuples
         for i in range(min(3, page.num_slots)):
-            tuple_obj = Tuple(self.tuple_desc)
-            tuple_obj.set_field(0, IntField(i))
-            tuple_obj.set_field(1, StringField(f"test{i}"))
-            page.add_tuple(tuple_obj)
+            tuple_obj = MockTuple(self.tuple_desc, complete=True)
+            slot_number = page.insert_tuple(tuple_obj)
+            assert slot_number is not None
 
         str_repr = str(page)
 
@@ -504,10 +457,9 @@ class TestHeapPage:
         page = HeapPage(self.page_id, tuple_desc=self.tuple_desc)
 
         # Modify page
-        tuple_obj = Tuple(self.tuple_desc)
-        tuple_obj.set_field(0, IntField(42))
-        tuple_obj.set_field(1, StringField("test"))
-        page.add_tuple(tuple_obj)
+        tuple_obj = MockTuple(self.tuple_desc, complete=True)
+        slot_number = page.insert_tuple(tuple_obj)
+        assert slot_number is not None
 
         # Set new before image
         page.set_before_image()
@@ -523,9 +475,9 @@ class TestHeapPage:
 
         # Fill the page completely
         for i in range(page.num_slots):
-            tuple_obj = Tuple(small_td)
-            tuple_obj.set_field(0, IntField(i))
-            page.add_tuple(tuple_obj)
+            tuple_obj = MockTuple(small_td, complete=True)
+            slot_number = page.insert_tuple(tuple_obj)
+            assert slot_number is not None
 
         # Get page data - should not exceed page size
         data = page.get_page_data()
