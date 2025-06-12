@@ -1,8 +1,9 @@
 import math
-from typing import List, Optional, Iterator, TYPE_CHECKING
+from typing import Optional, Iterator, TYPE_CHECKING
 from ...primitives import TransactionId
 from .page import Page
 from .heap_page_id import HeapPageId
+from .slots.bitmap_slot import BitmapSlotManager
 
 if TYPE_CHECKING:
     from ...core.tuple import Tuple, TupleDesc
@@ -13,9 +14,9 @@ class HeapPage(Page):
     Implementation of a database page for heap files.
 
     Page Layout:
-    1. Header: bit vector indicating which slots are used
+    1. Slot management (handled by SlotManager)
     2. Tuples: fixed-size slots for tuple data
-    3. Padding: unused space at end of page
+    3. Padding: unused space at the end of page
 
     The number of slots is calculated based on:
     - Page size (4096 bytes)
@@ -44,12 +45,10 @@ class HeapPage(Page):
     def _initialize_empty_page(self) -> None:
         """Initialize an empty page with no tuples."""
         self.num_slots = self._calculate_num_slots()
-        self.header_size = self._calculate_header_size()
 
-        # Initialize header (all slots empty)
-        self.header = bytearray(self.header_size)
-
-        self.tuples: List[Optional['Tuple']] = [None] * self.num_slots
+        # Initialize slot manager instead of raw header
+        self.slot_manager = BitmapSlotManager(self.num_slots)
+        self.tuples: list[Optional['Tuple']] = [None] * self.num_slots
 
     def _calculate_num_slots(self) -> int:
         """
@@ -125,44 +124,28 @@ class HeapPage(Page):
     def _create_copy(self) -> 'HeapPage':
         """Create a deep copy of this page."""
         copy_page = HeapPage(self.page_id, tuple_desc=self.tuple_desc)
-        copy_page.header = self.header.copy()
+        # Copy slot manager state
+        copy_page.slot_manager.bitmap = self.slot_manager.bitmap.copy()
         copy_page.tuples = self.tuples.copy()
         copy_page.dirty_transaction = self.dirty_transaction
         return copy_page
 
     def get_num_empty_slots(self) -> int:
         """Return the number of empty slots on this page."""
-        empty_count = 0
-        for slot in range(self.num_slots):
-            if not self._is_slot_used(slot):
-                empty_count += 1
-        return empty_count
+        return self.slot_manager.get_free_slot_count()
 
     def _is_slot_used(self, slot_number: int) -> bool:
         """Check if a specific slot contains a tuple."""
-        if not (0 <= slot_number < self.num_slots):
-            return False
-
-        byte_index = slot_number // 8
-        bit_offset = slot_number % 8
-        bit_mask = 1 << bit_offset
-
-        return (self.header[byte_index] & bit_mask) != 0
+        return self.slot_manager.is_slot_used(slot_number)
 
     def _set_slot_used(self, slot_number: int, used: bool) -> None:
-        """Mark a slot as used or unused in the header."""
-        if not (0 <= slot_number < self.num_slots):
-            raise IndexError(
-                f"Slot {slot_number} out of range [0, {self.num_slots})")
-
-        byte_index = slot_number // 8
-        bit_offset = slot_number % 8
-        bit_mask = 1 << bit_offset
-
+        """Mark a slot as used or unused."""
         if used:
-            self.header[byte_index] |= bit_mask
+            # This shouldn't be called directly anymore - use allocate_slot instead
+            raise RuntimeError(
+                "Use slot_manager.allocate_slot() instead of _set_slot_used(True)")
         else:
-            self.header[byte_index] &= ~bit_mask
+            self.slot_manager.deallocate_slot(slot_number)
 
     def add_tuple(self, tuple_obj: 'Tuple') -> None:
         """
@@ -170,7 +153,7 @@ class HeapPage(Page):
 
         Raises:
             ValueError: if the tuple schema doesn't match
-            RuntimeError: if no empty slots available
+            RuntimeError: if no empty slots are available
         """
         # Validate tuple schema
         if not self.tuple_desc.equals(tuple_obj.get_tuple_desc()):
@@ -179,19 +162,13 @@ class HeapPage(Page):
         if not tuple_obj.is_complete():
             raise ValueError("Cannot add incomplete tuple to page")
 
-        # Find first empty slot
-        empty_slot = None
-        for slot in range(self.num_slots):
-            if not self._is_slot_used(slot):
-                empty_slot = slot
-                break
-
+        # Use slot manager to allocate a slot
+        empty_slot = self.slot_manager.allocate_slot()
         if empty_slot is None:
             raise RuntimeError("No empty slots available on page")
 
         # Add tuple to slot
         self.tuples[empty_slot] = tuple_obj
-        self._set_slot_used(empty_slot, True)
 
         # Set the tuple's record ID
         from ...primitives import RecordId
@@ -212,12 +189,12 @@ class HeapPage(Page):
             raise ValueError("Tuple RecordId points to different page")
 
         slot_number = record_id.get_tuple_number()
-        if not self._is_slot_used(slot_number):
+        if not self.slot_manager.is_slot_used(slot_number):
             raise ValueError(f"Slot {slot_number} is already empty")
 
-        # Remove tuple and mark slot as empty
+        # Remove tuple and deallocate slot
         self.tuples[slot_number] = None
-        self._set_slot_used(slot_number, False)
+        self.slot_manager.deallocate_slot(slot_number)
 
         # Clear the tuple's record ID
         tuple_obj.set_record_id(None)
@@ -229,7 +206,7 @@ class HeapPage(Page):
         Only returns tuples in used slots.
         """
         for slot in range(self.num_slots):
-            if self._is_slot_used(slot) and self.tuples[slot] is not None:
+            if self.slot_manager.is_slot_used(slot) and self.tuples[slot] is not None:
                 yield self.tuples[slot]
 
     def get_page_data(self) -> bytes:
@@ -237,19 +214,19 @@ class HeapPage(Page):
         Serialize this page to bytes for disk storage.
 
         Format:
-        1. Header bytes (bit vector)
+        1. Slot manager bitmap (header)
         2. Tuple data (serialized tuples in slots)
         3. Padding to reach PAGE_SIZE
         """
         data = bytearray()
 
-        # Add header
-        data.extend(self.header)
+        # Add slot manager bitmap as header
+        data.extend(self.slot_manager.bitmap)
 
         # Add tuple data
         tuple_size = self.tuple_desc.get_size()
         for slot in range(self.num_slots):
-            if self._is_slot_used(slot) and self.tuples[slot] is not None:
+            if self.slot_manager.is_slot_used(slot) and self.tuples[slot] is not None:
                 # Serialize the tuple
                 tuple_data = self.tuples[slot].serialize()
             else:
@@ -275,6 +252,5 @@ class HeapPage(Page):
         return b'\x00' * HeapPage.PAGE_SIZE_IN_BYTES
 
     def __str__(self) -> str:
-        used_slots = sum(1 for slot in range(self.num_slots)
-                         if self._is_slot_used(slot))
+        used_slots = self.num_slots - self.slot_manager.get_free_slot_count()
         return f"HeapPage(id={self.page_id}, slots={used_slots}/{self.num_slots})"

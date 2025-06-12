@@ -234,7 +234,7 @@ class TestHeapPage:
         assert page.tuples[record_id.get_tuple_number()] == tuple_obj
 
     def test_add_tuple_wrong_schema_raises_error(self):
-        """Test that adding tuple with wrong schema raises ValueError."""
+        """Test that adding tuple with the wrong schema raises ValueError."""
         page = HeapPage(self.page_id, tuple_desc=self.tuple_desc)
 
         # Create tuple with different schema
