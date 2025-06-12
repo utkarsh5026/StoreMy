@@ -4,10 +4,12 @@ import time
 from pathlib import Path
 from typing import Dict, Iterator, List, Optional, Set
 
-from ..storage.file import DbFile, HeapFile
-from ..core.tuple import TupleDesc
-from ..core.exceptions import DbException
-from ..core.types import FieldType
+from app.storage.interfaces import DbFile
+from app.storage.heap import HeapFile
+
+from app.core.tuple import TupleDesc
+from app.core.exceptions import DbException
+from app.core.types import FieldType
 from .table_info import TableMetadata, IndexInfo, ConstraintInfo
 from .schema_validator import SchemaValidator
 
@@ -79,11 +81,11 @@ class Catalog:
             table_id = db_file.get_id()
             tuple_desc = db_file.get_tuple_desc()
 
-
             metadata = TableMetadata(
                 table_name=table_name,
                 table_id=table_id,
-                file_path=str(getattr(db_file, 'file_path', f"{table_name}.dat")),
+                file_path=str(
+                    getattr(db_file, 'file_path', f"{table_name}.dat")),
                 tuple_desc=tuple_desc,
                 primary_key_fields=primary_key_fields or [],
                 created_at=time.time(),
@@ -101,10 +103,10 @@ class Catalog:
                 )
                 metadata.add_constraint(pk_constraint)
 
-
             if not self.validator.validate_table_creation(metadata, self._tables):
                 errors = self.validator.get_validation_errors()
-                raise DbException(f"Table creation failed: {'; '.join(errors)}")
+                raise DbException(
+                    f"Table creation failed: {'; '.join(errors)}")
 
             # Add to catalog
             self._tables[table_name] = metadata
@@ -117,7 +119,8 @@ class Catalog:
             # Persist changes
             self._save_catalog()
 
-            print(f"✅ Added table '{table_name}' to catalog with schema {tuple_desc}")
+            print(
+                f"✅ Added table '{table_name}' to catalog with schema {tuple_desc}")
             return metadata
 
     def get_table_id(self, table_name: str) -> int:
@@ -138,7 +141,8 @@ class Catalog:
         """Get tuple descriptor for a table."""
         with self._lock:
             if table_id not in self._table_ids:
-                raise DbException(f"Table with ID {table_id} not found in catalog")
+                raise DbException(
+                    f"Table with ID {table_id} not found in catalog")
             return self._table_ids[table_id].tuple_desc
 
     def get_db_file(self, table_id: int) -> DbFile:
@@ -151,21 +155,24 @@ class Catalog:
                     self._db_files[table_id] = db_file
                     return db_file
                 else:
-                    raise DbException(f"Table with ID {table_id} not found in catalog")
+                    raise DbException(
+                        f"Table with ID {table_id} not found in catalog")
             return self._db_files[table_id]
 
     def get_table_name(self, table_id: int) -> str:
         """Get table name by ID."""
         with self._lock:
             if table_id not in self._table_ids:
-                raise DbException(f"Table with ID {table_id} not found in catalog")
+                raise DbException(
+                    f"Table with ID {table_id} not found in catalog")
             return self._table_ids[table_id].table_name
 
     def get_primary_key_fields(self, table_id: int) -> List[str]:
         """Get primary key fields for a table."""
         with self._lock:
             if table_id not in self._table_ids:
-                raise DbException(f"Table with ID {table_id} not found in catalog")
+                raise DbException(
+                    f"Table with ID {table_id} not found in catalog")
             return self._table_ids[table_id].primary_key_fields.copy()
 
     def table_exists(self, table_name: str) -> bool:
@@ -250,11 +257,13 @@ class Catalog:
             schema_fields = set(metadata.tuple_desc.field_names or [])
             for field_name in field_names:
                 if field_name not in schema_fields:
-                    raise DbException(f"Field '{field_name}' not found in table '{table_name}'")
+                    raise DbException(
+                        f"Field '{field_name}' not found in table '{table_name}'")
 
             # Check index name is unique
             if index_name in metadata.indexes:
-                raise DbException(f"Index '{index_name}' already exists on table '{table_name}'")
+                raise DbException(
+                    f"Index '{index_name}' already exists on table '{table_name}'")
 
             # Create index
             index_info = IndexInfo(
@@ -268,7 +277,8 @@ class Catalog:
             metadata.add_index(index_info)
             self._save_catalog()
 
-            print(f"📊 Added {index_type} index '{index_name}' on {table_name}({', '.join(field_names)})")
+            print(
+                f"📊 Added {index_type} index '{index_name}' on {table_name}({', '.join(field_names)})")
 
     def add_constraint(self, table_name: str, constraint: ConstraintInfo) -> None:
         """Add a constraint to a table."""
@@ -281,7 +291,8 @@ class Catalog:
             # Validate constraint
             if not self.validator.validate_table_creation(metadata, self._tables):
                 errors = self.validator.get_validation_errors()
-                raise DbException(f"Constraint validation failed: {'; '.join(errors)}")
+                raise DbException(
+                    f"Constraint validation failed: {'; '.join(errors)}")
 
             metadata.add_constraint(constraint)
             self._save_catalog()
