@@ -46,6 +46,13 @@ Type check:
 poetry run mypy .
 ```
 
+Generate documentation:
+```bash
+poetry run docs
+```
+
+The documentation will be generated in `docs/_build/html/`. Open `docs/_build/html/index.html` in your browser to view it.
+
 ## Project Structure
 
 ```
