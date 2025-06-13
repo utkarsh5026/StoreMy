@@ -33,11 +33,10 @@ class Lock:
     💎 Immutable to ensure thread safety and proper hashing
 
     Structure:
-    ┌─────────────────┬───────────────────────┐
-    │ 🆔 Transaction  │ Which transaction     │
-    │ 📄 Page         │ Which page locked     │
-    │ 🔒 Lock Type     │ SHARED or EXCLUSIVE    │
-    └─────────────────┴───────────────────────┘
+     🆔 Transaction   Which transaction     
+     📄 Page          Which page locked    
+     🔒 Lock Type      SHARED or EXCLUSIVE    
+
     """
     transaction_id: TransactionId
     page_id: PageId
@@ -57,16 +56,16 @@ class DependencyGraph:
     Graph Structure:
     ┌─────────────────────────────────────────────────────────┐
     │ Nodes: TransactionIds                                   │
-    │ Edges: A → B means "A waits for B"                     │
+    │ Edges: A → B means "A waits for B"                      │
     │                                                         │
     │ Example Deadlock Cycle:                                 │
     │                                                         │
-    │     T1 ──────→ T2                                      │
+    │     T1 ──────→ T2                                       │
     │     ↑           ↓                                       │
-    │     T4 ←────── T3                                      │
+    │     T4 ←────── T3                                       │
     │                                                         │
-    │ T1 waits for T2, T2 waits for T3,                     │
-    │ T3 waits for T4, T4 waits for T1 = 💀 DEADLOCK!       │
+    │ T1 waits for T2, T2 waits for T3,                       │
+    │ T3 waits for T4, T4 waits for T1 = 💀 DEADLOCK!         │
     └─────────────────────────────────────────────────────────┘
     """
 
@@ -84,10 +83,9 @@ class DependencyGraph:
         ➕ Add a dependency: waiter depends on holder ➕
 
         Flow:
-        ┌─────────────┐    waits for    ┌─────────────┐
-        │   Waiter    │ ──────────────→ │   Holder    │
-        │      🕰️      │                 │      🔒      │
-        └─────────────┘                 └─────────────┘
+                        waits for    
+           Waiter     ──────────────→    Holder    
+              🕰️                           🔒   
 
         Args:
             🕰️ waiter: Transaction that is waiting
@@ -104,14 +102,12 @@ class DependencyGraph:
         📞 Called when transaction completes or aborts.
 
         Cleanup Process:
-        ┌─────────────────────────────────────────────────────┐
-        │ 1. Remove as waiter:                                │
-        │    T1 → [T2, T3] becomes ∅                         │
-        │                                                     │
-        │ 2. Remove as holder:                                │
-        │    T2 → [T1, T4] becomes T2 → [T4]                │
-        │    T3 → [T1, T5] becomes T3 → [T5]                │
-        └─────────────────────────────────────────────────────┘
+         1. Remove as waiter:                                
+            T1 → [T2, T3] becomes ∅                         
+
+         2. Remove as holder:                                
+            T2 → [T1, T4] becomes T2 → [T4]                 
+            T3 → [T1, T5] becomes T3 → [T5]                 
         """
         with self._lock:
             # Remove as a waiter
@@ -127,19 +123,17 @@ class DependencyGraph:
         🔍 Detect if there's a cycle in the dependency graph using DFS 🔍
 
         Algorithm Flow:
-        ┌──────────────────────────────────────────────────────┐
-        │ 1. Start DFS from each unvisited node               │
-        │    ┌─────┐                                          │
-        │    │  T1 │ ──→ Check all neighbors                 │
-        │    └─────┘                                          │
-        │                                                     │
-        │ 2. Track visited nodes and recursion stack          │
-        │    Visited: {T1, T2}                               │
-        │    RecStack: {T1} (currently exploring)            │
-        │                                                     │
-        │ 3. If neighbor is in recursion stack = CYCLE! 💀    │
-        │    T1 → T2 → T3 → T1 (back to recursion stack)    │
-        └──────────────────────────────────────────────────────┘
+         1. Start DFS from each unvisited node               
+            ┌─────┐                                          
+            │  T1 │ ──→ Check all neighbors                 
+            └─────┘                                          
+
+         2. Track visited nodes and recursion stack          
+            Visited: {T1, T2}                               
+            RecStack: {T1} (currently exploring)            
+
+         3. If neighbor is in recursion stack = CYCLE! 💀    
+            T1 → T2 → T3 → T1 (back to recursion stack)    
 
         Returns:
             📋 List of transaction IDs forming a cycle, or None if no cycle

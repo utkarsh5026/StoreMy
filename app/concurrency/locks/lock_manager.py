@@ -138,19 +138,19 @@ class LockManager:
         ✅ Check if a lock can be granted without waiting ✅
 
         Lock Compatibility Decision Tree:
-        ┌─────────────────────────────────────────────┐
-        │ 📄 Page has no locks?                       
-        │ ├─ YES ──→ ✅ GRANT                         
-        │ └─ NO ──→ Check compatibility...            
-        │                                             
-        │ 🔒 Requesting EXCLUSIVE?                     
-        │ ├─ YES ──→ ❌ DENY (conflicts with all)     
-        │ └─ NO ──→ Requesting SHARED...              
-        │                                             
-        │ 📖 Any EXCLUSIVE locks exist?               
-        │ ├─ YES ──→ ❌ DENY (SHARED conflicts)       
-        │ └─ NO ──→ ✅ GRANT (SHARED compatible)      
-        └─────────────────────────────────────────────┘
+
+         📄 Page has no locks?                       
+         ├─ YES ──→ ✅ GRANT                         
+         └─ NO ──→ Check compatibility...            
+
+         🔒 Requesting EXCLUSIVE?                     
+         ├─ YES ──→ ❌ DENY (conflicts with all)     
+         └─ NO ──→ Requesting SHARED...              
+
+         📖 Any EXCLUSIVE locks exist?               
+         ├─ YES ──→ ❌ DENY (SHARED conflicts)       
+         └─ NO ──→ ✅ GRANT (SHARED compatible)      
+
         """
         existing_locks = self._page_locks[page_id]
 
@@ -178,19 +178,19 @@ class LockManager:
         ⬆️ Try to upgrade a SHARED lock to EXCLUSIVE ⬆️
 
         Upgrade Conditions:
-        ┌─────────────────────────────────────────────┐
-        │ 🔍 Transaction has SHARED lock?             │
-        │ ├─ NO ──→ ❌ Cannot upgrade                 │
-        │ └─ YES ──→ Check if only lock holder...     │
-        │                                             │
-        │ 👤 Only lock holder on this page?          │
-        │ ├─ YES ──→ ✅ UPGRADE to EXCLUSIVE          │
-        │ └─ NO ──→ ❌ Other SHARED locks exist       │
-        │                                             │
-        │ Example:                                    │
-        │ Page A: [T1:SHARED] ──→ [T1:EXCLUSIVE] ✅   │
-        │ Page B: [T1:SHARED, T2:SHARED] ──→ ❌       │
-        └─────────────────────────────────────────────┘
+
+         🔍 Transaction has SHARED lock?             
+         ├─ NO ──→ ❌ Cannot upgrade                 
+         └─ YES ──→ Check if only lock holder...     
+
+         👤 Only lock holder on this page?          
+         ├─ YES ──→ ✅ UPGRADE to EXCLUSIVE          
+         └─ NO ──→ ❌ Other SHARED locks exist       
+
+          Example:                                    
+          Page A: [T1:SHARED] ──→ [T1:EXCLUSIVE] ✅   
+          Page B: [T1:SHARED, T2:SHARED] ──→ ❌       
+
         """
         existing_locks = self._page_locks[page_id]
 
@@ -210,23 +210,23 @@ class LockManager:
         ⚔️ Handle the case where a lock cannot be granted immediately ⚔️
 
         Conflict Resolution Process:
-        ┌─────────────────────────────────────────────────────┐
-        │ 1. 🕵️ Find who we're waiting for                    │
-        │    Page A: [T2:EXCLUSIVE] ← T1 wants SHARED        │
-        │    Result: T1 waits for T2                         │
-        │                                                     │
-        │ 2. 🕸️ Add dependencies to graph                     │
-        │    T1 ──→ T2 (T1 waits for T2)                    │
-        │                                                     │
-        │ 3. 💀 Check for deadlocks                           │
-        │    T1 → T2 → T3 → T1 = CYCLE DETECTED!            │
-        │                                                     │
-        │ 4. 🎯 Choose victim and abort                       │
-        │    Victim selection: youngest transaction           │
-        │    T1(id:100) vs T2(id:200) → T2 is victim        │
-        │                                                     │
-        │ 5. 🔄 Wait and retry or abort                       │
-        └─────────────────────────────────────────────────────┘
+
+         1. 🕵️ Find who we're waiting for                    
+            Page A: [T2:EXCLUSIVE] ← T1 wants SHARED        
+            Result: T1 waits for T2                         
+
+         2. 🕸️ Add dependencies to graph                     
+            T1 ──→ T2 (T1 waits for T2)                    
+
+         3. 💀 Check for deadlocks                           
+            T1 → T2 → T3 → T1 = CYCLE DETECTED!            
+
+         4. 🎯 Choose victim and abort                       
+            Victim selection: youngest transaction           
+            T1(id:100) vs T2(id:200) → T2 is victim        
+
+         5. 🔄 Wait and retry or abort                       
+
         """
         # Find who we're waiting for
         blocking_transactions = self._find_blocking_transactions(
@@ -261,15 +261,15 @@ class LockManager:
         🚧 Find which transactions are blocking a lock request 🚧
 
         Blocking Logic:
-        ┌─────────────────────────────────────────────────────┐
-        │ 🔒 Requesting EXCLUSIVE?                            │
-        │ ├─ Conflicts with ALL existing locks                │
-        │ └─ Block on: ALL lock holders                       │
-        │                                                     │
-        │ 📖 Requesting SHARED?                               │
-        │ ├─ Conflicts only with EXCLUSIVE locks              │
-        │ └─ Block on: EXCLUSIVE lock holders only            │
-        └─────────────────────────────────────────────────────┘
+
+         🔒 Requesting EXCLUSIVE?                            
+         ├─ Conflicts with ALL existing locks                
+         └─ Block on: ALL lock holders                       
+
+         📖 Requesting SHARED?                               
+         ├─ Conflicts only with EXCLUSIVE locks              
+         └─ Block on: EXCLUSIVE lock holders only            
+
         """
         blocking = set()
 
@@ -289,21 +289,21 @@ class LockManager:
         🎯 Choose which transaction to abort in a deadlock 🎯
 
         Victim Selection Strategy:
-        ┌─────────────────────────────────────────────────────┐
-        │ 🔢 Strategy: Choose highest transaction ID           │
-        │    (youngest transaction = least work done)          │
-        │                                                     │
-        │ Example Deadlock Cycle:                             │
-        │ T1(id:100) → T2(id:150) → T3(id:200) → T1          │
-        │                            ↑                        │
-        │                         VICTIM 🎯                   │
-        │                                                     │
-        │ 💡 Could be enhanced with:                          │
-        │ - Transaction start time                            │
-        │ - Amount of work done                               │
-        │ - Lock count held                                   │
-        │ - Priority level                                    │
-        └─────────────────────────────────────────────────────┘
+
+         🔢 Strategy: Choose highest transaction ID           
+            (youngest transaction = least work done)          
+
+          Example Deadlock Cycle:                             
+          T1(id:100) → T2(id:150) → T3(id:200) → T1          
+                            ↑                        
+                         VICTIM 🎯                   
+
+         💡 Could be enhanced with:                          
+          - Transaction start time                            
+          - Amount of work done                               
+          - Lock count held                                   
+          - Priority level                                    
+
         """
         return max(cycle, key=lambda tid: tid.get_id())
 
@@ -318,16 +318,15 @@ class LockManager:
         🔓 Release a specific lock held by a transaction 🔓
 
         Release Process:
-        ┌─────────────────────────────────────────────────────┐
-        │ 1. 🗑️ Remove from page locks                        │
-        │    Page A: [T1:SHARED, T2:EXCLUSIVE] → [T2:EXCLUSIVE]│
-        │                                                     │
-        │ 2. 🧹 Clean up empty lock lists                     │
-        │    Page B: [T1:SHARED] → [] → DELETE                │
-        │                                                     │
-        │ 3. 📝 Update transaction tracking                    │
-        │    T1 pages: {A, B, C} → {B, C}                    │
-        └─────────────────────────────────────────────────────┘
+
+         1. 🗑️ Remove from page locks                        
+            Page A: [T1:SHARED, T2:EXCLUSIVE] → [T2:EXCLUSIVE]
+
+         2. 🧹 Clean up empty lock lists                     
+            Page B: [T1:SHARED] → [] → DELETE                
+
+         3. 📝 Update transaction tracking                    
+            T1 pages: {A, B, C} → {B, C}                    
 
         Args:
             🆔 tid: Transaction releasing the lock
@@ -357,22 +356,22 @@ class LockManager:
         🔄 This implements the "release phase" of 2PL.
 
         Bulk Release Process:
-        ┌─────────────────────────────────────────────────────┐
-        │ Transaction T1 holds:                               │
-        │ ┌─────────┬─────────┬─────────┬─────────┐           │
-        │ │ Page A  │ Page B  │ Page C  │ Page D  │           │
-        │ │ SHARED  │EXCLUSIVE│ SHARED  │ SHARED  │           │
-        │ └─────────┴─────────┴─────────┴─────────┘           │
-        │                     ↓                               │
-        │ After release_all_locks(T1):                        │
-        │ ┌─────────┬─────────┬─────────┬─────────┐           │
-        │ │ Page A  │ Page B  │ Page C  │ Page D  │           │
-        │ │   []    │   []    │   []    │   []    │           │
-        │ └─────────┴─────────┴─────────┴─────────┘           │
-        │                                                     │
-        │ 🧹 Dependencies cleaned up                          │
-        │ 🚀 Other transactions can now proceed               │
-        └─────────────────────────────────────────────────────┘
+
+          Transaction T1 holds:                               
+          ┌─────────┬─────────┬─────────┬─────────┐           
+          │ Page A  │ Page B  │ Page C  │ Page D  │           
+          │ SHARED  │EXCLUSIVE│ SHARED  │ SHARED  │           
+          └─────────┴─────────┴─────────┴─────────┘           
+                     ↓                               
+          After release_all_locks(T1):                        
+          ┌─────────┬─────────┬─────────┬─────────┐           
+          │ Page A  │ Page B  │ Page C  │ Page D  │           
+          │   []    │   []    │   []    │   []    │           
+          └─────────┴─────────┴─────────┴─────────┘           
+
+         🧹 Dependencies cleaned up                          
+         🚀 Other transactions can now proceed               
+
         """
         with self._lock:
             if tid not in self._transaction_pages:
