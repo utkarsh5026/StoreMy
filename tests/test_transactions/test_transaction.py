@@ -91,17 +91,13 @@ class TestTransaction:
     def test_get_age(self):
         """Test getting transaction age."""
         txn = Transaction()
-
-        # Age should be 0 before starting
         assert txn.get_age() == pytest.approx(0.0)
-
-        # Start transaction and check age
         with patch('app.database.Database.get_log_file'):
             txn.start()
             time.sleep(0.1)
             age = txn.get_age()
             assert age >= 0.1
-            assert age < 1.0  # Should be reasonable
+            assert age < 1.0
 
     def test_record_page_operations(self):
         """Test recording page read and write operations."""
