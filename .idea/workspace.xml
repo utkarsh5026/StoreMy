@@ -5,8 +5,13 @@
   </component>
   <component name="ChangeListManager">
     <list default="true" id="e1ae0b87-b3c0-4220-9290-7c9133dd8700" name="Changes" comment="">
-      <change beforePath="$PROJECT_DIR$/app/concurrency/locks/dependency_manager.py" beforeDir="false" afterPath="$PROJECT_DIR$/app/concurrency/locks/dependency_manager.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/app/concurrency/transactions/transaction_id.py" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/app/query/iterator/seq_scan.py" beforeDir="false" afterPath="$PROJECT_DIR$/app/query/iterator/seq_scan.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/app/storage/heap/heap_file.py" beforeDir="false" afterPath="$PROJECT_DIR$/app/storage/heap/heap_file.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/app/storage/heap/heap_page.py" beforeDir="false" afterPath="$PROJECT_DIR$/app/storage/heap/heap_page.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/app/storage/interfaces/page.py" beforeDir="false" afterPath="$PROJECT_DIR$/app/storage/interfaces/page.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/poetry.lock" beforeDir="false" afterPath="$PROJECT_DIR$/poetry.lock" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/pyproject.toml" beforeDir="false" afterPath="$PROJECT_DIR$/pyproject.toml" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
@@ -35,6 +40,9 @@
   <component name="PropertiesComponent"><![CDATA[{
   "keyToString": {
     "ModuleVcsDetector.initialDetectionPerformed": "true",
+    "Python tests.pytest for test_bitmap_slot.TestBitmapSlotManager.executor": "Run",
+    "Python tests.pytest for test_bitmap_slot.TestBitmapSlotManager.test_find_free_slot_empty_manager.executor": "Run",
+    "Python tests.pytest for test_bitmap_slot.TestBitmapSlotManager.test_set_slot_used_out_of_range_raises_error.executor": "Run",
     "Python tests.pytest for test_boolean_field.TestBoolField.executor": "Run",
     "Python tests.pytest for test_catalog.TestCatalog.executor": "Run",
     "Python tests.pytest for test_dependency_manager.TestDependencyGraph.executor": "Run",
@@ -49,20 +57,28 @@
     "Python tests.pytest for test_edge_cases.TestPageEdgeCases.executor": "Run",
     "Python tests.pytest for test_edge_cases.TestPageEdgeCases.test_transaction_id_edge_cases.executor": "Run",
     "Python tests.pytest for test_heap_page.TestHeapPage.executor": "Run",
+    "Python tests.pytest for test_heap_page.TestHeapPage.test_add_delete_add_reuses_slots.executor": "Run",
     "Python tests.pytest for test_heap_page.TestHeapPage.test_add_tuple_page_full_raises_error.executor": "Run",
     "Python tests.pytest for test_heap_page.TestHeapPage.test_before_image_operations.executor": "Run",
+    "Python tests.pytest for test_heap_page.TestHeapPage.test_calculate_header_size.executor": "Run",
     "Python tests.pytest for test_heap_page.TestHeapPage.test_calculate_num_slots.executor": "Run",
     "Python tests.pytest for test_heap_page.TestHeapPage.test_init_new_page_valid.executor": "Run",
+    "Python tests.pytest for test_heap_page.TestHeapPage.test_init_with_data_not_implemented.executor": "Run",
+    "Python tests.pytest for test_heap_page.TestHeapPage.test_insert_tuple_page_full_returns_none.executor": "Run",
     "Python tests.pytest for test_heap_page_id.TestHeapPageId.executor": "Run",
     "Python tests.pytest for test_heap_page_id.TestHeapPageId.test_init_valid_values.executor": "Run",
     "Python tests.pytest for test_int_field.TestIntField.executor": "Run",
     "Python tests.pytest for test_lock_manager.TestLockManager.executor": "Run",
+    "Python tests.pytest for test_page_integration.TestPageIntegration.test_page_capacity_limits.executor": "Run",
     "Python tests.pytest for test_record_id.TestRecordId.executor": "Run",
     "Python tests.pytest for test_record_id.TestRecordId.test_init_valid_values.executor": "Run",
     "Python tests.pytest for test_schema_validator.TestSchemaValidator.executor": "Run",
     "Python tests.pytest for test_table_info.TestConstraintInfo.executor": "Run",
     "Python tests.pytest for test_table_info.TestIndexInfo.executor": "Run",
     "Python tests.pytest for test_table_info.TestTableMetadata.executor": "Run",
+    "Python tests.pytest for test_transaction.TestTransaction.executor": "Run",
+    "Python tests.pytest for test_transaction.TestTransaction.test_transaction_initialization.executor": "Run",
+    "Python tests.pytest for test_transaction.TestTransaction.test_transaction_start_success.executor": "Run",
     "Python tests.pytest for test_tuple_iterator.TestTupleIterator.executor": "Run",
     "RunOnceActivity.ShowReadmeOnStart": "true",
     "RunOnceActivity.git.unshallow": "true",
@@ -81,99 +97,99 @@
       <recent name="C:\Users\Utkarsh Priyadarshi\WebstormProjects\StoreMy\app\primitives" />
     </key>
   </component>
-  <component name="RunManager" selected="Python tests.pytest for test_lock_manager.TestLockManager">
-    <configuration name="pytest for test_catalog.TestCatalog" type="tests" factoryName="py.test" temporary="true" nameIsGenerated="true">
+  <component name="RunManager" selected="Python tests.pytest for test_page_integration.TestPageIntegration.test_page_capacity_limits">
+    <configuration name="pytest for test_edge_cases.TestPageEdgeCases" type="tests" factoryName="py.test" temporary="true" nameIsGenerated="true">
       <module name="StoreMy" />
       <option name="ENV_FILES" value="" />
       <option name="INTERPRETER_OPTIONS" value="" />
       <option name="PARENT_ENVS" value="true" />
       <option name="SDK_HOME" value="" />
-      <option name="WORKING_DIRECTORY" value="$PROJECT_DIR$/tests/test_catalog" />
+      <option name="WORKING_DIRECTORY" value="$PROJECT_DIR$/tests/test_storage_page" />
       <option name="IS_MODULE_SDK" value="true" />
       <option name="ADD_CONTENT_ROOTS" value="true" />
       <option name="ADD_SOURCE_ROOTS" value="true" />
       <option name="_new_keywords" value="&quot;&quot;" />
       <option name="_new_parameters" value="&quot;&quot;" />
       <option name="_new_additionalArguments" value="&quot;&quot;" />
-      <option name="_new_target" value="&quot;test_catalog.TestCatalog&quot;" />
+      <option name="_new_target" value="&quot;test_edge_cases.TestPageEdgeCases&quot;" />
       <option name="_new_targetType" value="&quot;PYTHON&quot;" />
       <method v="2" />
     </configuration>
-    <configuration name="pytest for test_dependency_manager.TestDependencyGraph" type="tests" factoryName="py.test" temporary="true" nameIsGenerated="true">
+    <configuration name="pytest for test_heap_page.TestHeapPage" type="tests" factoryName="py.test" temporary="true" nameIsGenerated="true">
       <module name="StoreMy" />
       <option name="ENV_FILES" value="" />
       <option name="INTERPRETER_OPTIONS" value="" />
       <option name="PARENT_ENVS" value="true" />
       <option name="SDK_HOME" value="" />
-      <option name="WORKING_DIRECTORY" value="$PROJECT_DIR$/tests/test_locks" />
+      <option name="WORKING_DIRECTORY" value="$PROJECT_DIR$/tests/test_storage_page" />
       <option name="IS_MODULE_SDK" value="true" />
       <option name="ADD_CONTENT_ROOTS" value="true" />
       <option name="ADD_SOURCE_ROOTS" value="true" />
       <option name="_new_keywords" value="&quot;&quot;" />
       <option name="_new_parameters" value="&quot;&quot;" />
       <option name="_new_additionalArguments" value="&quot;&quot;" />
-      <option name="_new_target" value="&quot;test_dependency_manager.TestDependencyGraph&quot;" />
+      <option name="_new_target" value="&quot;test_heap_page.TestHeapPage&quot;" />
       <option name="_new_targetType" value="&quot;PYTHON&quot;" />
       <method v="2" />
     </configuration>
-    <configuration name="pytest for test_dependency_manager.TestLock" type="tests" factoryName="py.test" temporary="true" nameIsGenerated="true">
+    <configuration name="pytest for test_heap_page.TestHeapPage.test_calculate_header_size" type="tests" factoryName="py.test" temporary="true" nameIsGenerated="true">
       <module name="StoreMy" />
       <option name="ENV_FILES" value="" />
       <option name="INTERPRETER_OPTIONS" value="" />
       <option name="PARENT_ENVS" value="true" />
       <option name="SDK_HOME" value="" />
-      <option name="WORKING_DIRECTORY" value="$PROJECT_DIR$/tests/test_locks" />
+      <option name="WORKING_DIRECTORY" value="$PROJECT_DIR$/tests/test_storage_page" />
       <option name="IS_MODULE_SDK" value="true" />
       <option name="ADD_CONTENT_ROOTS" value="true" />
       <option name="ADD_SOURCE_ROOTS" value="true" />
       <option name="_new_keywords" value="&quot;&quot;" />
       <option name="_new_parameters" value="&quot;&quot;" />
       <option name="_new_additionalArguments" value="&quot;&quot;" />
-      <option name="_new_target" value="&quot;test_dependency_manager.TestLock&quot;" />
+      <option name="_new_target" value="&quot;test_heap_page.TestHeapPage.test_calculate_header_size&quot;" />
       <option name="_new_targetType" value="&quot;PYTHON&quot;" />
       <method v="2" />
     </configuration>
-    <configuration name="pytest for test_dependency_manager.TestLockType" type="tests" factoryName="py.test" temporary="true" nameIsGenerated="true">
+    <configuration name="pytest for test_heap_page.TestHeapPage.test_insert_tuple_page_full_returns_none" type="tests" factoryName="py.test" temporary="true" nameIsGenerated="true">
       <module name="StoreMy" />
       <option name="ENV_FILES" value="" />
       <option name="INTERPRETER_OPTIONS" value="" />
       <option name="PARENT_ENVS" value="true" />
       <option name="SDK_HOME" value="" />
-      <option name="WORKING_DIRECTORY" value="$PROJECT_DIR$/tests/test_locks" />
+      <option name="WORKING_DIRECTORY" value="$PROJECT_DIR$/tests/test_storage_page" />
       <option name="IS_MODULE_SDK" value="true" />
       <option name="ADD_CONTENT_ROOTS" value="true" />
       <option name="ADD_SOURCE_ROOTS" value="true" />
       <option name="_new_keywords" value="&quot;&quot;" />
       <option name="_new_parameters" value="&quot;&quot;" />
       <option name="_new_additionalArguments" value="&quot;&quot;" />
-      <option name="_new_target" value="&quot;test_dependency_manager.TestLockType&quot;" />
+      <option name="_new_target" value="&quot;test_heap_page.TestHeapPage.test_insert_tuple_page_full_returns_none&quot;" />
       <option name="_new_targetType" value="&quot;PYTHON&quot;" />
       <method v="2" />
     </configuration>
-    <configuration name="pytest for test_lock_manager.TestLockManager" type="tests" factoryName="py.test" temporary="true" nameIsGenerated="true">
+    <configuration name="pytest for test_page_integration.TestPageIntegration.test_page_capacity_limits" type="tests" factoryName="py.test" temporary="true" nameIsGenerated="true">
       <module name="StoreMy" />
       <option name="ENV_FILES" value="" />
       <option name="INTERPRETER_OPTIONS" value="" />
       <option name="PARENT_ENVS" value="true" />
       <option name="SDK_HOME" value="" />
-      <option name="WORKING_DIRECTORY" value="$PROJECT_DIR$/tests/test_locks" />
+      <option name="WORKING_DIRECTORY" value="$PROJECT_DIR$/tests/test_storage_page" />
       <option name="IS_MODULE_SDK" value="true" />
       <option name="ADD_CONTENT_ROOTS" value="true" />
       <option name="ADD_SOURCE_ROOTS" value="true" />
       <option name="_new_keywords" value="&quot;&quot;" />
       <option name="_new_parameters" value="&quot;&quot;" />
       <option name="_new_additionalArguments" value="&quot;&quot;" />
-      <option name="_new_target" value="&quot;test_lock_manager.TestLockManager&quot;" />
+      <option name="_new_target" value="&quot;test_page_integration.TestPageIntegration.test_page_capacity_limits&quot;" />
       <option name="_new_targetType" value="&quot;PYTHON&quot;" />
       <method v="2" />
     </configuration>
     <recent_temporary>
       <list>
-        <item itemvalue="Python tests.pytest for test_lock_manager.TestLockManager" />
-        <item itemvalue="Python tests.pytest for test_dependency_manager.TestDependencyGraph" />
-        <item itemvalue="Python tests.pytest for test_dependency_manager.TestLock" />
-        <item itemvalue="Python tests.pytest for test_dependency_manager.TestLockType" />
-        <item itemvalue="Python tests.pytest for test_catalog.TestCatalog" />
+        <item itemvalue="Python tests.pytest for test_page_integration.TestPageIntegration.test_page_capacity_limits" />
+        <item itemvalue="Python tests.pytest for test_edge_cases.TestPageEdgeCases" />
+        <item itemvalue="Python tests.pytest for test_heap_page.TestHeapPage" />
+        <item itemvalue="Python tests.pytest for test_heap_page.TestHeapPage.test_insert_tuple_page_full_returns_none" />
+        <item itemvalue="Python tests.pytest for test_heap_page.TestHeapPage.test_calculate_header_size" />
       </list>
     </recent_temporary>
   </component>
@@ -193,15 +209,5 @@
       <updated>1749498425788</updated>
     </task>
     <servers />
-  </component>
-  <component name="XDebuggerManager">
-    <breakpoint-manager>
-      <breakpoints>
-        <line-breakpoint enabled="true" suspend="THREAD" type="python-line">
-          <url>file://$PROJECT_DIR$/tests/test_storage_page/test_heap_page_id.py</url>
-          <option name="timeStamp" value="1" />
-        </line-breakpoint>
-      </breakpoints>
-    </breakpoint-manager>
   </component>
 </project>

@@ -146,7 +146,7 @@ class TestPageIntegration:
             added_tuples.append(tuple_obj)
 
         # Serialize page
-        page_data = page.get_page_data()
+        page_data = page.serialize()
 
         # Verify serialization properties
         assert isinstance(page_data, bytes)
@@ -156,7 +156,7 @@ class TestPageIntegration:
         page.delete_tuple(added_tuples[1])
         page.delete_tuple(added_tuples[3])
 
-        new_page_data = page.get_page_data()
+        new_page_data = page.serialize()
         assert isinstance(new_page_data, bytes)
         assert len(new_page_data) == HeapPage.PAGE_SIZE_IN_BYTES
         assert new_page_data != page_data  # Should be different
@@ -274,7 +274,7 @@ class TestPageIntegration:
         """Test serialization differences between empty and non-empty pages."""
         # Empty page
         empty_page = HeapPage(self.page_id, tuple_desc=self.tuple_desc)
-        empty_data = empty_page.get_page_data()
+        empty_data = empty_page.serialize()
 
         # Page with one tuple
         non_empty_page = HeapPage(self.page_id, tuple_desc=self.tuple_desc)
@@ -282,7 +282,7 @@ class TestPageIntegration:
         tuple_obj.set_field(0, IntField(42))
         tuple_obj.set_field(1, StringField("test"))
         non_empty_page.insert_tuple(tuple_obj)
-        non_empty_data = non_empty_page.get_page_data()
+        non_empty_data = non_empty_page.serialize()
 
         # Both should be same size
         assert len(empty_data) == len(

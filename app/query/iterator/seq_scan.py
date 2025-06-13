@@ -2,7 +2,7 @@ from typing import Optional, TYPE_CHECKING
 from .abstract_iterator import AbstractDbIterator
 
 from ...core.tuple import Tuple, TupleDesc
-from ...concurrency.transactions import TransactionId
+from app.primitives import TransactionId
 
 if TYPE_CHECKING:
     from app.storage.interfaces import DbFile

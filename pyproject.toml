@@ -9,6 +9,7 @@ packages = [{include = "app"}]
 [tool.poetry.dependencies]
 python = "^3.9"
 cachetools = "^6.0.0"
+rich = "^14.0.0"
 
 [tool.poetry.group.dev.dependencies]
 pytest = "^8.4.0"

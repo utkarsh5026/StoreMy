@@ -76,7 +76,7 @@ class HeapFile(DbFile):
         file_size = self.file_path.stat().st_size
         return (file_size + self.PAGE_SIZE - 1) // self.PAGE_SIZE
 
-    def read_page(self, page_id: HeapPageId) -> Page:
+    def read_page(self, page_id: HeapPageId) -> HeapPage:
         """
         Read the specified page from the disk.
 
@@ -101,7 +101,7 @@ class HeapFile(DbFile):
                 if len(page_data) < self.PAGE_SIZE:
                     page_data += b'\x00' * (self.PAGE_SIZE - len(page_data))
 
-                return HeapPage(page_id, page_data)
+                return HeapPage(page_id, page_data, tuple_desc=self.tuple_desc)
 
         except IOError as e:
             raise DbException(f"Failed to read page {page_number}: {e}")
@@ -122,7 +122,7 @@ class HeapFile(DbFile):
         try:
             with open(self.file_path, 'r+b') if self.file_path.exists() else open(self.file_path, 'w+b') as f:
                 f.seek(file_offset)
-                page_data = page.get_page_data()
+                page_data = page.serialize()
 
                 if len(page_data) != self.PAGE_SIZE:
                     raise ValueError(
@@ -146,7 +146,7 @@ class HeapFile(DbFile):
         4. Mark the page as dirty
         5. Return the modified page(s)
         """
-        from ...database import Database
+        from app.database import Database
 
         table_id = self.get_id()
         buffer_pool = Database.get_buffer_pool()

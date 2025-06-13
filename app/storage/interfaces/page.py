@@ -24,12 +24,23 @@ class Page(ABC):
         pass
 
     @abstractmethod
-    def get_page_data(self) -> bytes:
+    def serialize(self) -> bytes:
         """
         Return the raw bytes of this page for writing to disk.
 
         This is the complete page content including headers, data,
         and any padding needed to reach PAGE_SIZE_IN_BYTES bytes.
+        """
+        pass
+
+    @abstractmethod
+    def deserialize(self, data: bytes) -> None:
+        """
+        Deserialize the page from the given bytes.
+        This is the inverse of serialize.
+
+        Args:
+            data: The raw bytes of the page to deserialize.
         """
         pass
 

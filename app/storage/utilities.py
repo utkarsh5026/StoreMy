@@ -83,7 +83,7 @@ def verify_file_integrity(heap_file) -> list[str]:
                 page = heap_file.read_page(page_id)
 
                 # Verify page data
-                if len(page.get_page_data()) != HeapFile.PAGE_SIZE:
+                if len(page.serialize()) != HeapFile.PAGE_SIZE:
                     errors.append(f"Page {page_num}: incorrect size")
 
                 # Try to iterate through tuples

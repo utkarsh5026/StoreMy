@@ -101,7 +101,7 @@ class TestPageEdgeCases:
         page = HeapPage(page_id, tuple_desc=tuple_desc)
 
         # Test empty page serialization
-        empty_data = page.get_page_data()
+        empty_data = page.serialize()
         assert len(empty_data) == HeapPage.PAGE_SIZE_IN_BYTES
 
         # Test with one tuple
@@ -110,13 +110,13 @@ class TestPageEdgeCases:
         tuple_obj.set_field(1, StringField("test"))
         page.insert_tuple(tuple_obj)
 
-        one_tuple_data = page.get_page_data()
+        one_tuple_data = page.serialize()
         assert len(one_tuple_data) == HeapPage.PAGE_SIZE_IN_BYTES
         assert one_tuple_data != empty_data
 
         # Test after deletion
         page.delete_tuple(tuple_obj)
-        after_delete_data = page.get_page_data()
+        after_delete_data = page.serialize()
         assert len(after_delete_data) == HeapPage.PAGE_SIZE_IN_BYTES
         # Note: after_delete_data might not equal empty_data due to header state
 

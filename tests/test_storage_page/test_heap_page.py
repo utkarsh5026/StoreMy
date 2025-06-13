@@ -382,7 +382,7 @@ class TestHeapPage:
         """Test serialization of empty page."""
         page = HeapPage(self.page_id, tuple_desc=self.tuple_desc)
 
-        data = page.get_page_data()
+        data = page.serialize()
 
         assert isinstance(data, bytes)
         assert len(data) == HeapPage.PAGE_SIZE_IN_BYTES
@@ -396,7 +396,7 @@ class TestHeapPage:
         slot_number = page.insert_tuple(tuple_obj)
         assert slot_number is not None
 
-        data = page.get_page_data()
+        data = page.serialize()
 
         assert isinstance(data, bytes)
         assert len(data) == HeapPage.PAGE_SIZE_IN_BYTES
@@ -476,7 +476,7 @@ class TestHeapPage:
             assert slot_number is not None
 
         # Get page data - should not exceed page size
-        data = page.get_page_data()
+        data = page.serialize()
         assert len(data) == HeapPage.PAGE_SIZE_IN_BYTES
 
     def test_edge_case_single_slot_page(self):
