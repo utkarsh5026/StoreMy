@@ -52,6 +52,15 @@ class HeapPage:
 
         self.set_before_image()
 
+
+    @property
+    def header_size(self) -> int:
+        return self._calculate_header_size()
+
+    @property
+    def header(self):
+        return self.slot_manager.bitmap.copy()
+
     def _initialize_empty_page(self) -> None:
         """Initialize an empty page with no tuples."""
         self.num_slots = self._calculate_num_slots()
@@ -60,7 +69,7 @@ class HeapPage:
 
     def _calculate_num_slots(self) -> int:
         """
-        Calculate maximum number of tuple slots on this page.
+        Calculate the maximum number of tuple slots on this page.
 
         Uses SimpleDB formula: floor((PAGE_SIZE * 8) / (tuple_size * 8 + 1))
 

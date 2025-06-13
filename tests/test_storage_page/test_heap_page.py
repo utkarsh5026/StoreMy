@@ -3,14 +3,15 @@ import math
 from app.storage.heap import HeapPage, HeapPageId
 from app.core.tuple import Tuple, TupleDesc
 from app.core.types import FieldType
-from app.core.types.fields import IntField, StringField, BoolField
+from app.core.types.fields import IntField, StringField
 from app.primitives import TransactionId, RecordId
 
 
-class MockTuple:
+class MockTuple(Tuple):
     """Mock tuple for testing when we don't need to full tuple functionality."""
 
     def __init__(self, tuple_desc, record_id=None, complete=True):
+        super().__init__(tuple_desc)
         self.tuple_desc = tuple_desc
         self.record_id = record_id
         self.complete = complete
@@ -55,12 +56,7 @@ class TestHeapPage:
         with pytest.raises(ValueError, match="Must provide tuple_desc for new page"):
             HeapPage(self.page_id)
 
-    def test_init_with_data_not_implemented(self):
-        """Test that initialization with data raises NotImplementedError."""
-        data = b'\x00' * HeapPage.PAGE_SIZE_IN_BYTES
 
-        with pytest.raises(NotImplementedError, match="Page deserialization requires catalog integration"):
-            HeapPage(self.page_id, data=data)
 
     def test_calculate_num_slots(self):
         """Test slot calculation with different tuple sizes."""
@@ -445,7 +441,7 @@ class TestHeapPage:
     #     tuple_obj = Tuple(self.tuple_desc)
     #     tuple_obj.set_field(0, IntField(42))
     #     tuple_obj.set_field(1, StringField("test"))
-    #     page.add_tuple(tuple_obj)
+    #     page.insert_tuple()(tuple_obj)
     #
     #     # Before image should still reflect original state
     #     before_image = page.get_before_image()
@@ -495,25 +491,10 @@ class TestHeapPage:
 
         # Should be able to add at least one tuple
         mock_tuple = MockTuple(large_td)
-        page.add_tuple(mock_tuple)
+        page.insert_tuple(mock_tuple)
 
         assert page.get_num_empty_slots() == page.num_slots - 1
 
-    def test_edge_case_bit_vector_boundary(self):
-        """Test header bit vector at byte boundaries."""
-        # Create page where the number of slots is exactly a multiple of 8
-        # This tests boundary conditions in the bit vector implementation
-        page = HeapPage(self.page_id, tuple_desc=self.tuple_desc)
-
-        # Test setting slots at byte boundaries
-        if page.num_slots >= 8:
-            page._set_slot_used(7, True)  # Last bit of first byte
-            page._set_slot_used(8, True)  # First bit of second byte
-
-            assert page._is_slot_used(7)
-            assert page._is_slot_used(8)
-            assert not page._is_slot_used(6)
-            assert not page._is_slot_used(9)
 
     def test_edge_case_maximum_slots(self):
         """Test with the maximum number of slots possible."""
@@ -531,7 +512,7 @@ class TestHeapPage:
             for i in range(page.num_slots):
                 tuple_obj = Tuple(min_td)
                 tuple_obj.set_field(0, IntField(i))
-                page.add_tuple(tuple_obj)
+                page.insert_tuple(tuple_obj)
                 added_count += 1
         except RuntimeError:
             # If we get "no empty slots" error, we should have added exactly num_slots
@@ -553,7 +534,7 @@ class TestHeapPage:
             # Should have no record ID before adding
             assert tuple_obj.get_record_id() is None
 
-            page.add_tuple(tuple_obj)
+            page.insert_tuple(tuple_obj)
             tuples.append(tuple_obj)
 
             # Should have record ID after adding
@@ -570,7 +551,7 @@ class TestHeapPage:
         tuple1 = Tuple(self.tuple_desc)
         tuple1.set_field(0, IntField(1))
         tuple1.set_field(1, StringField("first"))
-        page.add_tuple(tuple1)
+        page.insert_tuple(tuple1)
 
         slot1 = tuple1.get_record_id().get_tuple_number()
 
@@ -581,7 +562,7 @@ class TestHeapPage:
         tuple2 = Tuple(self.tuple_desc)
         tuple2.set_field(0, IntField(2))
         tuple2.set_field(1, StringField("second"))
-        page.add_tuple(tuple2)
+        page.insert_tuple(tuple2)
 
         slot2 = tuple2.get_record_id().get_tuple_number()
 

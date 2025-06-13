@@ -144,6 +144,7 @@ class TestBitmapSlotManager:
     def test_set_slot_used_out_of_range_raises_error(self):
         """Test that out of range slot raises IndexError."""
         manager = BitmapSlotManager(8)
+        print(manager.num_slots)
 
         with pytest.raises(IndexError, match="Slot 8 out of range \\(max: 7\\)"):
             manager.set_slot_used(8, True)
