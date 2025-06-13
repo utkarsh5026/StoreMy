@@ -289,66 +289,60 @@ class HeapPage(Page):
         All data is packed tightly with no gaps between sections.
 
         Serialization Process:
-        ┌─────────────────────────────────────────────────────┐
-        │ 1. 🗂️ Serialize header bitmap                       │
-        │    Convert BitManager to raw bytes                  │
-        │                                                     │
-        │ 2. 📦 Serialize tuple data                          │
-        │    For each slot:                                   │
-        │    ├─ If occupied: serialize tuple → bytes          │
-        │    └─ If empty: write zeros (tuple_size bytes)     │
-        │                                                     │
-        │ 3. 🔳 Add padding to reach PAGE_SIZE                │
-        │    Fill remaining space with zeros                  │
-        └─────────────────────────────────────────────────────┘
+        ------------------------------------------------------------
+        1. 🗂️ Serialize header bitmap                       
+        Convert BitManager to raw bytes                  
+
+        2. 📦 Serialize tuple data                          
+        For each slot:                                   
+        ├─ If occupied: serialize tuple → bytes          
+        └─ If empty: write zeros (tuple_size bytes)     
+
+        3. 🔳 Add padding to reach PAGE_SIZE                
+        Fill remaining space with zeros                  
 
         Output Format:
-        ┌─────────────────────────────────────────────────────┐
-        │ Byte Layout:                                        │
-        │ ┌─────────┬─────────────────────┬─────────────────┐ │
-        │ │ HEADER  │    TUPLE DATA       │    PADDING      │ │
-        │ │ (bitmap)│   (fixed slots)     │    (zeros)      │ │
-        │ └─────────┴─────────────────────┴─────────────────┘ │
-        │  ↑        ↑                     ↑                   │
-        │  0        header_size           data_end            │
-        │                                                     │
-        │ Size validation:                                    │
-        │ ✅ Total size MUST equal PAGE_SIZE_IN_BYTES (4096)  │
-        └─────────────────────────────────────────────────────┘
+        ------------------------------------------------------------
+        Byte Layout:                                        
+        ┌─────────┬─────────────────────┬─────────────────┐ 
+        │ HEADER  │    TUPLE DATA       │    PADDING      │ 
+        │ (bitmap)│   (fixed slots)     │    (zeros)      │ 
+        └─────────┴─────────────────────┴─────────────────┘ 
+            ↑        ↑                     ↑                   
+            0        header_size           data_end            
+
+        Size validation:                                    
+        ✅ Total size MUST equal PAGE_SIZE_IN_BYTES (4096)  
+        ------------------------------------------------------------
 
         Tuple Slot Handling:
-        ┌─────────────────────────────────────────────────────┐
-        │ Slot 0: [OCCUPIED] → serialize tuple data           │
-        │ Slot 1: [EMPTY   ] → write zeros (tuple_size)      │
-        │ Slot 2: [OCCUPIED] → serialize tuple data           │
-        │ Slot 3: [EMPTY   ] → write zeros (tuple_size)      │
-        │ ...                                                 │
-        └─────────────────────────────────────────────────────┘
+        ------------------------------------------------------------
+        Slot 0: [OCCUPIED] → serialize tuple data           
+        Slot 1: [EMPTY   ] → write zeros (tuple_size)      
+        Slot 2: [OCCUPIED] → serialize tuple data           
+        Slot 3: [EMPTY   ] → write zeros (tuple_size)      
+        ...                                                 
+        ------------------------------------------------------------
 
         Returns:
             💾 Serialized page data ready for disk storage
         """
         data = bytearray()
 
-        # 1. Add header bitmap
         header_data = bytes(self.slot_manager.bitmap)
         data.extend(header_data)
 
-        # 2. Add tuple data
         tuple_size = self.tuple_desc.get_size()
         for slot in range(self.num_slots):
             if self.slot_manager.is_slot_used(slot) and self.tuples[slot] is not None:
-                # Serialize the tuple
                 tuple_data = self.tuples[slot].serialize()
                 if len(tuple_data) != tuple_size:
                     raise RuntimeError(
                         f"Tuple size mismatch: expected {tuple_size}, got {len(tuple_data)}")
                 data.extend(tuple_data)
             else:
-                # Empty slot - fill with zeros
                 data.extend(b'\x00' * tuple_size)
 
-        # 3. Add padding to reach PAGE_SIZE
         current_size = len(data)
         if current_size > self.PAGE_SIZE_IN_BYTES:
             raise RuntimeError(
@@ -433,25 +427,24 @@ class HeapPage(Page):
         the bitmap, but only if the tuple actually belongs to this page.
 
         Deletion Process:
-        ┌─────────────────────────────────────────────────────┐
-        │ 1. 🔍 Validate tuple belongs to this page           │
-        │    Check: record_id.page_id == this.page_id        │
-        │                                                     │
-        │ 2. 📍 Extract slot number from record ID            │
-        │    slot = record_id.tuple_number                    │
-        │                                                     │
-        │ 3. ✅ Verify slot is valid and occupied             │
-        │    0 ≤ slot < num_slots AND bitmap[slot] = 1       │
-        │                                                     │
-        │ 4. 🗑️ Remove tuple from slot                        │
-        │    tuples[slot] = None                             │
-        │                                                     │
-        │ 5. 🗂️ Update bitmap header                          │
-        │    set_slot_used(slot, False)                      │
-        │                                                     │
-        │ 6. 🔗 Clear tuple's record ID                       │
-        │    tuple.record_id = None                          │
-        └─────────────────────────────────────────────────────┘
+        ------------------------------------------------------------
+        1. 🔍 Validate tuple belongs to this page           
+        Check: record_id.page_id == this.page_id        
+
+        2. 📍 Extract slot number from record ID            
+        slot = record_id.tuple_number                    
+
+        3. ✅ Verify slot is valid and occupied             
+        0 ≤ slot < num_slots AND bitmap[slot] = 1       
+
+        4. 🗑️ Remove tuple from slot                        
+        tuples[slot] = None                             
+
+        5. 🗂️ Update bitmap header                          
+        set_slot_used(slot, False)                      
+
+        6. 🔗 Clear tuple's record ID                       
+        tuple.record_id = None                          
 
         Before/After Example:
         ------------------------------------------------------------
@@ -483,11 +476,9 @@ class HeapPage(Page):
         if slot >= self.num_slots or not self.slot_manager.is_slot_used(slot):
             return False
 
-        # Remove tuple
         self.tuples[slot] = None
         self.slot_manager.set_slot_used(slot, False)
 
-        # Clear tuple's record ID
         tuple_obj.set_record_id(None)
 
         return True
@@ -612,19 +603,19 @@ class HeapPage(Page):
         📸 Save current page state as before image for recovery 📸
 
         Recovery Support:
-        ┌─────────────────────────────────────────────────────┐
-        │ 💾 Captures complete page state in bytes            │
-        │ 🔄 Used for transaction rollback                    │
-        │ ⚡ Enables undo operations                           │
-        │ 🛡️ Critical for ACID compliance                     │
-        └─────────────────────────────────────────────────────┘
+        ------------------------------------------------------------
+        💾 Captures complete page state in bytes            
+        🔄 Used for transaction rollback                    
+        ⚡ Enables undo operations                           
+        🛡️ Critical for ACID compliance                     
+        ------------------------------------------------------------
 
         Process:
-        ┌─────────────────────────────────────────────────────┐
-        │ Current Page State → get_page_data() → Raw Bytes    │
-        │                                          ↓          │
-        │                              Store as before_image  │
-        └─────────────────────────────────────────────────────┘
+        ------------------------------------------------------------
+        Current Page State → serialize() → Raw Bytes    
+                                    ↓          
+                        Store as before_image  
+        ------------------------------------------------------------
         """
         self.before_image_data = self.serialize()
 
