@@ -16,13 +16,8 @@ This design breaks down the buffer pool into focused, composable components:
 Each component has a single responsibility and can be tested/modified independently.
 """
 
-import threading
 import time
-from abc import ABC, abstractmethod
-from collections import OrderedDict
-from dataclasses import dataclass
-from typing import Dict, Optional, Any, List, Set, Protocol
-from enum import Enum
+from typing import Dict, Optional, Any
 
 from app.primitives import TransactionId, PageId
 from app.storage.permissions import Permissions
@@ -32,230 +27,9 @@ from .cache_manager import CacheManager
 from .primitives import PageEntry
 from .eviction_policy import EvictionPolicy, LRUEvictionPolicy, LFUEvictionPolicy, ClockEvictionPolicy
 from .page import PageLoader, PageWriter
+from .transactions import LockCoordinator, TransactionCoordinator
+from .stats_collector import StatisticsCollector
 
-
-# ============================================================================
-# 2. Eviction Policy - Pluggable eviction strategies
-# ============================================================================
-
-
-# ============================================================================
-# 5. Lock Coordinator - Lock management integration
-# ============================================================================
-
-class LockCoordinator:
-    """
-    Coordinates page access with the lock manager.
-
-    Responsibilities:
-    - Acquire and release page locks
-    - Handle deadlock detection
-    - Track lock statistics
-    - Coordinate with transaction system
-    """
-
-    def __init__(self, lock_manager: Any):
-        self.lock_manager = lock_manager
-        self._lock_stats = {'locks_acquired': 0,
-                            'locks_denied': 0, 'deadlocks': 0}
-        self._lock = threading.Lock()
-
-    def acquire_page_lock(self, tid: TransactionId, page_id: PageId,
-                          permissions: Permissions) -> bool:
-        """Acquire a lock on a page."""
-        from enhanced_lock_manager import LockType
-
-        # Determine lock type
-        lock_type = LockType.EXCLUSIVE if permissions.is_write() else LockType.SHARED
-
-        try:
-            success = self.lock_manager.acquire_lock(tid, page_id, lock_type)
-
-            with self._lock:
-                if success:
-                    self._lock_stats['locks_acquired'] += 1
-                else:
-                    self._lock_stats['locks_denied'] += 1
-                    # Check if denial was due to deadlock
-                    if self.lock_manager.has_deadlock(tid):
-                        self._lock_stats['deadlocks'] += 1
-
-            return success
-
-        except Exception as e:
-            with self._lock:
-                self._lock_stats['locks_denied'] += 1
-            raise DbException(f"Failed to acquire lock on page {page_id}: {e}")
-
-    def release_page_lock(self, tid: TransactionId, page_id: PageId) -> None:
-        """Release a lock on a page."""
-        try:
-            self.lock_manager.release_lock(tid, page_id)
-        except Exception as e:
-            # Log but don't fail - lock might already be released
-            pass
-
-    def release_all_locks(self, tid: TransactionId) -> None:
-        """Release all locks held by a transaction."""
-        try:
-            self.lock_manager.release_all_locks(tid)
-        except Exception as e:
-            # Log but don't fail
-            pass
-
-    def get_lock_statistics(self) -> Dict[str, Any]:
-        """Get lock statistics."""
-        with self._lock:
-            return self._lock_stats.copy()
-
-
-# ============================================================================
-# 6. Statistics Collector - Performance monitoring
-# ============================================================================
-
-class StatisticsCollector:
-    """
-    Collects and aggregates performance statistics.
-
-    Responsibilities:
-    - Aggregate statistics from all components
-    - Provide performance metrics
-    - Track trends over time
-    - Generate reports
-    """
-
-    def __init__(self):
-        self._operation_times: Dict[str, List[float]] = {}
-        self._counters: Dict[str, int] = {}
-        self._lock = threading.Lock()
-
-    def record_operation(self, operation: str, duration: float) -> None:
-        """Record the duration of an operation."""
-        with self._lock:
-            if operation not in self._operation_times:
-                self._operation_times[operation] = []
-            self._operation_times[operation].append(duration)
-
-            # Keep only recent measurements (last 1000)
-            if len(self._operation_times[operation]) > 1000:
-                self._operation_times[operation] = self._operation_times[operation][-1000:]
-
-    def increment_counter(self, counter: str, amount: int = 1) -> None:
-        """Increment a counter."""
-        with self._lock:
-            self._counters[counter] = self._counters.get(counter, 0) + amount
-
-    def get_aggregate_statistics(self, cache_mgr: CacheManager,
-                                 page_loader: PageLoader, page_writer: PageWriter,
-                                 lock_coord: LockCoordinator) -> Dict[str, Any]:
-        """Get aggregated statistics from all components."""
-        with self._lock:
-            stats = {
-                'cache': cache_mgr.get_statistics().__dict__,
-                'cache_info': cache_mgr.get_cache_info(),
-                'page_loading': page_loader.get_load_statistics(),
-                'page_writing': page_writer.get_write_statistics(),
-                'locking': lock_coord.get_lock_statistics(),
-                'operations': {},
-                'counters': self._counters.copy()
-            }
-
-            # Calculate operation statistics
-            for operation, times in self._operation_times.items():
-                if times:
-                    import statistics
-                    stats['operations'][operation] = {
-                        'count': len(times),
-                        'avg_time': statistics.mean(times),
-                        'min_time': min(times),
-                        'max_time': max(times),
-                        'median_time': statistics.median(times)
-                    }
-
-            return stats
-
-
-# ============================================================================
-# 7. Transaction Coordinator - Transaction management
-# ============================================================================
-
-class TransactionCoordinator:
-    """
-    Coordinates buffer pool operations with transactions.
-
-    Responsibilities:
-    - Track pages accessed by transactions
-    - Handle transaction commit/abort
-    - Coordinate with lock manager
-    - Manage dirty page handling
-    """
-
-    def __init__(self):
-        self._transaction_pages: Dict[TransactionId, Set[PageId]] = {}
-        self._page_transactions: Dict[PageId, Set[TransactionId]] = {}
-        self._lock = threading.Lock()
-
-    def record_page_access(self, tid: TransactionId, page_id: PageId) -> None:
-        """Record that a transaction accessed a page."""
-        with self._lock:
-            if tid not in self._transaction_pages:
-                self._transaction_pages[tid] = set()
-            self._transaction_pages[tid].add(page_id)
-
-            if page_id not in self._page_transactions:
-                self._page_transactions[page_id] = set()
-            self._page_transactions[page_id].add(tid)
-
-    def get_transaction_pages(self, tid: TransactionId) -> Set[PageId]:
-        """Get all pages accessed by a transaction."""
-        with self._lock:
-            return self._transaction_pages.get(tid, set()).copy()
-
-    def get_page_transactions(self, page_id: PageId) -> Set[TransactionId]:
-        """Get all transactions that accessed a page."""
-        with self._lock:
-            return self._page_transactions.get(page_id, set()).copy()
-
-    def handle_transaction_commit(self, tid: TransactionId, cache_mgr: CacheManager,
-                                  page_writer: PageWriter) -> None:
-        """Handle transaction commit - flush dirty pages."""
-        pages = self.get_transaction_pages(tid)
-
-        for page_id in pages:
-            entry = cache_mgr.get(page_id)
-            if entry and entry.page.is_dirty():
-                # Write dirty page to disk
-                page_writer.write_page(entry.page, entry.page_type)
-                entry.page.mark_dirty(False, None)
-
-        self._cleanup_transaction(tid)
-
-    def handle_transaction_abort(self, tid: TransactionId, cache_mgr: CacheManager) -> None:
-        """Handle transaction abort - discard dirty pages."""
-        pages = self.get_transaction_pages(tid)
-
-        for page_id in pages:
-            entry = cache_mgr.get(page_id)
-            if entry and entry.page.is_dirty():
-                # Remove dirty page from cache (discard changes)
-                cache_mgr.remove(page_id)
-
-        self._cleanup_transaction(tid)
-
-    def _cleanup_transaction(self, tid: TransactionId) -> None:
-        """Clean up transaction state."""
-        with self._lock:
-            pages = self._transaction_pages.pop(tid, set())
-            for page_id in pages:
-                if page_id in self._page_transactions:
-                    self._page_transactions[page_id].discard(tid)
-                    if not self._page_transactions[page_id]:
-                        del self._page_transactions[page_id]
-
-
-# ============================================================================
-# 8. Page Type Manager - Page type handling
-# ============================================================================
 
 class PageTypeManager:
     """
@@ -398,7 +172,7 @@ class BufferPool:
 
         victim = self.eviction_policy.select_victim(candidates)
         if victim:
-            page_id, entry = victim
+            page_id, _ = victim
             self.cache_manager.remove(page_id)
             self.statistics_collector.increment_counter('evictions')
 
@@ -458,16 +232,12 @@ class BufferPool:
         self.eviction_policy = policy
 
 
-# ============================================================================
-# Factory for creating configured buffer pools
-# ============================================================================
-
 class BufferPoolFactory:
     """Factory for creating configured buffer pools."""
 
     @staticmethod
     def create_buffer_pool(capacity: int, lock_manager: Any,
-                           eviction_strategy: str = 'lru') -> ModularBufferPool:
+                           eviction_strategy: str = 'lru') -> BufferPool:
         """Create a buffer pool with specified configuration."""
 
         # Create eviction policy
@@ -480,16 +250,16 @@ class BufferPoolFactory:
         else:
             raise ValueError(f"Unknown eviction strategy: {eviction_strategy}")
 
-        return ModularBufferPool(capacity, lock_manager, eviction_policy)
+        return BufferPool(capacity, lock_manager, eviction_policy)
 
     @staticmethod
-    def create_high_performance_buffer_pool(capacity: int, lock_manager: Any) -> ModularBufferPool:
+    def create_high_performance_buffer_pool(capacity: int, lock_manager: Any) -> BufferPool:
         """Create a buffer pool optimized for high performance."""
         # Use LRU with larger capacity
         return BufferPoolFactory.create_buffer_pool(capacity * 2, lock_manager, 'lru')
 
     @staticmethod
-    def create_memory_constrained_buffer_pool(capacity: int, lock_manager: Any) -> ModularBufferPool:
+    def create_memory_constrained_buffer_pool(capacity: int, lock_manager: Any) -> BufferPool:
         """Create a buffer pool optimized for memory-constrained environments."""
         # Use Clock algorithm for better memory efficiency
         return BufferPoolFactory.create_buffer_pool(capacity, lock_manager, 'clock')
