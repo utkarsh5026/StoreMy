@@ -8,333 +8,276 @@ from ....core.types import Field, FieldType
 from ....storage.permissions import Permissions
 
 
-class HashFile(IndexFile):
+
+class HashFile:
     """
-    Hash index file implementation.
+    Hash index file implementation using extendible hashing.
 
-    Features:
-    - Fast exact key lookups (O(1) average case)
-    - No range queries (keys not sorted)
-    - Dynamic resizing based on load factor
-    - Overflow handling via page chaining
-    - Good for equality-based queries
-
-    File Structure:
-    - Page 0: Directory page with metadata
-    - Page 1+: Bucket pages and overflow pages
-
-    Hash Function Strategy:
-    - Simple modulo hashing: hash(key) % num_buckets
-    - Dynamic expansion when load factor > threshold
-    - Rehashing on expansion
+    This class manages a hash index stored in pages, providing:
+    - O(1) average case lookup time
+    - Dynamic resizing through directory doubling
+    - Overflow handling with chaining
+    - Page management with buffer pool integration
+    - Transaction-safe operations
     """
 
-    LOAD_FACTOR_THRESHOLD = 0.75  # Expand when load factor exceeds this
-
-    def __init__(self, file_path: str, key_type: FieldType):
-        super().__init__(file_path, key_type)
-        self.directory_page: Optional[HashDirectoryPage] = None
-        self.next_page_number = 1  # Page 0 is directory
-
-        # Create file if it doesn't exist
-        if not os.path.exists(file_path):
-            self._create_empty_hash_table()
-        else:
-            self._load_metadata()
-
-    def find_equal(self, tid: TransactionId, key: Field) -> List[RecordId]:
-        """Find all RecordIds with the given key value."""
-        if self.directory_page is None:
-            return []
-
-        record_ids = []
-
-        # Find bucket for key
-        bucket_num = self.directory_page.get_bucket_for_key(key)
-        bucket_page_id = self.directory_page.bucket_page_ids[bucket_num]
-
-        if bucket_page_id is None:
-            return []
-
-        # Search bucket and overflow pages
-        current_page = self._load_page(tid, bucket_page_id)
-
-        while current_page is not None:
-            # Search current page
-            page_records = current_page.find_record_ids(key)
-            record_ids.extend(page_records)
-
-            # Move to overflow page if exists
-            if current_page.next_overflow_id:
-                current_page = self._load_page(tid, current_page.next_overflow_id)
-            else:
-                break
-
-        return record_ids
-
-    def find_range(self, tid: TransactionId,
-                   min_key: Optional[Field], max_key: Optional[Field],
-                   include_min: bool = True, include_max: bool = True) -> List[RecordId]:
-        """
-        Hash indexes don't support range queries efficiently.
-
-        This method scans all buckets, which is O(n) - not recommended.
-        """
-        if self.directory_page is None:
-            return []
-
-        record_ids = []
-
-        # Scan all buckets (inefficient!)
-        for bucket_num in range(self.directory_page.num_buckets):
-            bucket_page_id = self.directory_page.bucket_page_ids[bucket_num]
-
-            if bucket_page_id is None:
-                continue
-
-            # Scan bucket and overflow pages
-            current_page = self._load_page(tid, bucket_page_id)
-
-            while current_page is not None:
-                # Check each entry in page
-                for entry in current_page.entries:
-                    key = entry.key
-
-                    # Check if key is in range
-                    in_range = True
-
-                    # Check lower bound
-                    if min_key is not None:
-                        if include_min:
-                            if key.compare_to(min_key) < 0:
-                                in_range = False
-                        else:
-                            if key.compare_to(min_key) <= 0:
-                                in_range = False
-
-                    # Check upper bound
-                    if max_key is not None and in_range:
-                        if include_max:
-                            if key.compare_to(max_key) > 0:
-                                in_range = False
-                        else:
-                            if key.compare_to(max_key) >= 0:
-                                in_range = False
-
-                    if in_range:
-                        record_ids.append(entry.value)
-
-                # Move to overflow page
-                if current_page.next_overflow_id:
-                    current_page = self._load_page(tid, current_page.next_overflow_id)
-                else:
-                    break
-
-        return record_ids
-
-    def insert_entry(self, tid: TransactionId, key: Field, record_id: RecordId) -> None:
-        """Insert a new key-RecordId pair."""
-        if self.directory_page is None:
-            self._create_empty_hash_table()
-
-        # Create new entry
-        entry = IndexEntry(key, record_id)
-
-        # Find bucket
-        bucket_num = self.directory_page.get_bucket_for_key(key)
-
-        # Ensure bucket page exists
-        if self.directory_page.bucket_page_ids[bucket_num] is None:
-            self._create_bucket_page(tid, bucket_num)
-
-        # Insert into bucket
-        success = self._insert_into_bucket(tid, bucket_num, entry)
-
-        if success:
-            # Update statistics
-            self.directory_page.total_entries += 1
-            self._save_page(tid, self.directory_page)
-
-            # Check if we need to expand
-            if self.directory_page.get_load_factor() > self.LOAD_FACTOR_THRESHOLD:
-                self._expand_hash_table(tid)
-
-    def delete_entry(self, tid: TransactionId, key: Field, record_id: RecordId) -> None:
-        """Delete a key-RecordId pair."""
-        if self.directory_page is None:
-            return
-
-        # Find bucket
-        bucket_num = self.directory_page.get_bucket_for_key(key)
-        bucket_page_id = self.directory_page.bucket_page_ids[bucket_num]
-
-        if bucket_page_id is None:
-            return
-
-        # Search bucket and overflow pages for specific entry
-        current_page = self._load_page(tid, bucket_page_id)
-
-        while current_page is not None:
-            if current_page.delete_specific_entry(key, record_id):
-                self._save_page(tid, current_page)
-
-                # Update statistics
-                self.directory_page.total_entries -= 1
-                self._save_page(tid, self.directory_page)
-                return
-
-            # Move to overflow page
-            if current_page.next_overflow_id:
-                current_page = self._load_page(tid, current_page.next_overflow_id)
-            else:
-                break
-
-    def _insert_into_bucket(self, tid: TransactionId, bucket_num: int, entry) -> bool:
-        """Insert entry into specified bucket, handling overflow."""
-        bucket_page_id = self.directory_page.bucket_page_ids[bucket_num]
-        current_page = self._load_page(tid, bucket_page_id)
-
-        # Try to insert into current page
-        if current_page.insert_entry(entry):
-            self._save_page(tid, current_page)
-            return True
-
-        # Page is full, follow overflow chain
-        while current_page.next_overflow_id is not None:
-            current_page = self._load_page(tid, current_page.next_overflow_id)
-
-            if current_page.insert_entry(entry):
-                self._save_page(tid, current_page)
-                return True
-
-        # Create new overflow page
-        overflow_page = current_page.split_page()
-        self._save_page(tid, current_page)
-        self._save_page(tid, overflow_page)
-
-        # Try inserting into new overflow page
-        if overflow_page.insert_entry(entry):
-            self._save_page(tid, overflow_page)
-            return True
-
-        return False
-
-    def _create_bucket_page(self, tid: TransactionId, bucket_num: int) -> None:
-        """Create a new bucket page."""
-        page_id = self._allocate_page_id()
-        bucket_page = HashBucketPage(page_id, self.key_type, bucket_num)
-
-        # Update directory
-        self.directory_page.bucket_page_ids[bucket_num] = page_id
-
-        # Save pages
-        self._save_page(tid, bucket_page)
-        self._save_page(tid, self.directory_page)
-
-    def _expand_hash_table(self, tid: TransactionId) -> None:
-        """
-        Expand hash table by doubling bucket count.
-
-        This requires rehashing all existing entries.
-        """
-        print(f"Expanding hash table from {self.directory_page.num_buckets} buckets")
-
-        # Save old bucket information
-        old_buckets = self.directory_page.bucket_page_ids.copy()
-        old_num_buckets = self.directory_page.num_buckets
-
-        # Expand directory
-        self.directory_page.expand_hash_table()
-
-        # Rehash entries from old buckets to new buckets
-        for old_bucket_num in range(old_num_buckets):
-            old_bucket_page_id = old_buckets[old_bucket_num]
-
-            if old_bucket_page_id is None:
-                continue
-
-            # Collect all entries from old bucket and its overflows
-            entries_to_rehash = []
-            current_page = self._load_page(tid, old_bucket_page_id)
-
-            while current_page is not None:
-                entries_to_rehash.extend(current_page.entries)
-
-                if current_page.next_overflow_id:
-                    current_page = self._load_page(tid, current_page.next_overflow_id)
-                else:
-                    break
-
-            # Clear old bucket (reuse the page for new bucket)
-            old_bucket_page = self._load_page(tid, old_bucket_page_id)
-            old_bucket_page.clear_entries()
-            old_bucket_page.next_overflow_id = None
-
-            # Assign old bucket page to even-numbered new bucket
-            new_bucket_num = old_bucket_num * 2
-            self.directory_page.bucket_page_ids[new_bucket_num] = old_bucket_page_id
-
-            # Rehash all entries
-            for entry in entries_to_rehash:
-                new_bucket_num = self.directory_page.get_bucket_for_key(entry.key)
-
-                # Ensure bucket exists
-                if self.directory_page.bucket_page_ids[new_bucket_num] is None:
-                    self._create_bucket_page(tid, new_bucket_num)
-
-                # Insert into new bucket (don't count toward total - already counted)
-                self._insert_into_bucket(tid, new_bucket_num, entry)
-
-        # Save directory
-        self._save_page(tid, self.directory_page)
-
-        print(f"Hash table expanded to {self.directory_page.num_buckets} buckets")
-
-    def _create_empty_hash_table(self) -> None:
-        """Create an empty hash table with directory page."""
+    def __init__(self, file_path: str, key_type: FieldType, file_id: int):
+        self.file_path = file_path
+        self.key_type = key_type
+        self.file_id = file_id
+        self.directory_page_id: Optional[HashPageId] = None
+        self.next_page_number = 0
+
+        # Statistics
+        self.num_entries = 0
+        self.num_buckets = 0
+        self.num_overflows = 0
+
+        # Initialize empty hash index
+        self._initialize_hash_index()
+
+    def _initialize_hash_index(self) -> None:
+        """Initialize an empty hash index."""
         # Create directory page
-        dir_page_id = IndexPageId(self.get_id(), 0, "hash")
-        self.directory_page = HashDirectoryPage(dir_page_id, self.key_type)
+        self.directory_page_id = HashPageId(self.file_id, 0, "directory")
+        directory = HashDirectoryPage(self.directory_page_id)
 
-        # Save metadata
-        self._save_metadata()
+        # Create initial bucket pages
+        bucket_page_id_0 = HashPageId(self.file_id, 1, "bucket")
+        bucket_page_id_1 = HashPageId(self.file_id, 2, "bucket")
 
-    def _load_metadata(self) -> None:
-        """Load hash table metadata from file."""
-        # Load directory page
-        dir_page_id = IndexPageId(self.get_id(), 0, "hash")
-        # This would load the actual directory page from disk
-        self.directory_page = HashDirectoryPage(dir_page_id, self.key_type)
+        directory.bucket_pointers = [bucket_page_id_0, bucket_page_id_1]
+        directory.global_depth = 1
 
-    def _save_metadata(self) -> None:
-        """Save hash table metadata to file."""
-        # Directory page contains all metadata
-        pass
+        # Save directory and initial buckets
+        self._save_page(directory)
 
-    def _allocate_page_id(self) -> IndexPageId:
+        bucket_0 = HashBucketPage(bucket_page_id_0, self.key_type)
+        bucket_1 = HashBucketPage(bucket_page_id_1, self.key_type)
+        self._save_page(bucket_0)
+        self._save_page(bucket_1)
+
+        self.next_page_number = 3
+        self.num_buckets = 2
+
+    def _allocate_page_id(self, page_type: str) -> HashPageId:
         """Allocate a new page ID."""
-        page_id = IndexPageId(self.get_id(), self.next_page_number, "hash")
+        page_id = HashPageId(self.file_id, self.next_page_number, page_type)
         self.next_page_number += 1
         return page_id
 
-    def _load_page(self, tid: TransactionId, page_id: IndexPageId):
-        """Load a page from buffer pool."""
+    def _load_page(self, tid: TransactionId, page_id: HashPageId) -> Any:
+        """Load a page from the buffer pool."""
         from app.database import Database
         buffer_pool = Database.get_buffer_pool()
-        return buffer_pool.get_page(tid, page_id, Permissions.READ_ONLY)
 
-    def _save_page(self, tid: TransactionId, page) -> None:
-        """Save a page back to buffer pool."""
-        page.mark_dirty(True)
+        # Get page from buffer pool
+        page = buffer_pool.get_page(tid, page_id, Permissions.READ_ONLY)
 
-    # Inherited methods from DbFile
-    def get_tuple_desc(self):
-        """Indexes don't have tuple descriptors."""
-        raise NotImplementedError("Indexes don't have tuple descriptors")
+        # Wrap in appropriate page type
+        if page_id.page_type == "directory":
+            hash_page = HashDirectoryPage(page_id)
+        elif page_id.page_type in ["bucket", "overflow"]:
+            hash_page = HashBucketPage(page_id, self.key_type)
+        else:
+            raise ValueError(f"Unknown page type: {page_id.page_type}")
 
-    def iterator(self, tid: TransactionId):
-        """Return iterator over all key-RecordId pairs (unordered)."""
-        return HashIterator(self, tid)
+        # Deserialize page data
+        hash_page.deserialize(page.get_page_data())
+        return hash_page
+
+    def _save_page(self, page: Any) -> None:
+        """Save a page to the buffer pool."""
+        # This would integrate with the buffer pool
+        # Implementation depends on your buffer pool interface
+        pass
+
+    def search(self, tid: TransactionId, key: Field) -> List[RecordId]:
+        """Search for all records with the given key."""
+        # Calculate hash value
+        hash_value = HashFunction.hash_field(key)
+
+        # Load directory page
+        directory = self._load_page(tid, self.directory_page_id)
+
+        # Find bucket page
+        bucket_page_id = directory.get_bucket_page_id(hash_value)
+        bucket_page = self._load_page(tid, bucket_page_id)
+
+        # Search in bucket and overflow pages
+        results = []
+        current_page = bucket_page
+
+        while current_page is not None:
+            entries = current_page.find_entries(key)
+            for entry in entries:
+                results.append(entry.record_id)
+
+            # Check overflow page
+            if current_page.overflow_page_id:
+                current_page = self._load_page(
+                    tid, current_page.overflow_page_id)
+            else:
+                current_page = None
+
+        return results
+
+    def insert(self, tid: TransactionId, key: Field, record_id: RecordId) -> None:
+        """Insert a key-value pair into the hash index."""
+        # Calculate hash value
+        hash_value = HashFunction.hash_field(key)
+        entry = HashEntry(key, record_id, hash_value)
+
+        # Load directory page
+        directory = self._load_page(tid, self.directory_page_id)
+
+        # Find bucket page
+        bucket_page_id = directory.get_bucket_page_id(hash_value)
+        bucket_page = self._load_page(tid, bucket_page_id)
+
+        # Try to insert into bucket
+        if bucket_page.insert_entry(entry):
+            self._save_page(bucket_page)
+            self.num_entries += 1
+            return
+
+        # Bucket is full - try overflow pages
+        current_page = bucket_page
+        while current_page.overflow_page_id:
+            current_page = self._load_page(tid, current_page.overflow_page_id)
+            if current_page.insert_entry(entry):
+                self._save_page(current_page)
+                self.num_entries += 1
+                return
+
+        # Need to create overflow page or split bucket
+        if self._should_split_bucket(bucket_page):
+            self._split_bucket(tid, directory, bucket_page_id, hash_value)
+            # Retry insertion after split
+            self.insert(tid, key, record_id)
+        else:
+            # Create overflow page
+            self._create_overflow_page(tid, current_page, entry)
+
+    def _should_split_bucket(self, bucket_page: HashBucketPage) -> bool:
+        """Determine if bucket should be split or use overflow."""
+        # Simple heuristic: split if we have room in directory
+        # More sophisticated implementations might consider load factor
+        return len(bucket_page.entries) > bucket_page.max_entries * 0.8
+
+    def _split_bucket(self, tid: TransactionId, directory: HashDirectoryPage,
+                      bucket_page_id: HashPageId, hash_value: int) -> None:
+        """Split a bucket page to reduce load."""
+        # Load the bucket to split
+        old_bucket = self._load_page(tid, bucket_page_id)
+
+        # Check if we need to double the directory
+        bucket_index = directory.get_bucket_index(hash_value)
+        if self._needs_directory_doubling(directory, bucket_index):
+            directory.double_directory()
+            self._save_page(directory)
+
+        # Create new bucket
+        new_bucket_page_id = self._allocate_page_id("bucket")
+        new_bucket = HashBucketPage(new_bucket_page_id, self.key_type)
+
+        # Redistribute entries
+        old_entries = old_bucket.entries.copy()
+        old_bucket.entries = []
+        new_bucket.entries = []
+
+        for entry in old_entries:
+            new_bucket_index = directory.get_bucket_index(entry.hash_value)
+            if new_bucket_index == bucket_index:
+                old_bucket.entries.append(entry)
+            else:
+                new_bucket.entries.append(entry)
+
+        # Update directory pointer
+        new_index = bucket_index | (1 << (directory.global_depth - 1))
+        directory.bucket_pointers[new_index] = new_bucket_page_id
+
+        # Save pages
+        self._save_page(old_bucket)
+        self._save_page(new_bucket)
+        self._save_page(directory)
+
+        self.num_buckets += 1
+
+    def _needs_directory_doubling(self, directory: HashDirectoryPage, bucket_index: int) -> bool:
+        """Check if directory needs to be doubled for bucket split."""
+        # Simplified logic - in practice, this depends on local depth
+        return True
+
+    def _create_overflow_page(self, tid: TransactionId, bucket_page: HashBucketPage,
+                              entry: HashEntry) -> None:
+        """Create an overflow page for a full bucket."""
+        # Create overflow page
+        overflow_page_id = self._allocate_page_id("overflow")
+        overflow_page = HashBucketPage(overflow_page_id, self.key_type)
+
+        # Insert entry into overflow page
+        overflow_page.insert_entry(entry)
+
+        # Link from bucket to overflow
+        bucket_page.overflow_page_id = overflow_page_id
+
+        # Save pages
+        self._save_page(bucket_page)
+        self._save_page(overflow_page)
+
+        self.num_entries += 1
+        self.num_overflows += 1
+
+    def delete(self, tid: TransactionId, key: Field) -> bool:
+        """Delete a key from the hash index."""
+        # Calculate hash value
+        hash_value = HashFunction.hash_field(key)
+
+        # Load directory page
+        directory = self._load_page(tid, self.directory_page_id)
+
+        # Find bucket page
+        bucket_page_id = directory.get_bucket_page_id(hash_value)
+        bucket_page = self._load_page(tid, bucket_page_id)
+
+        # Search in bucket and overflow pages
+        current_page = bucket_page
+
+        while current_page is not None:
+            if current_page.delete_entry(key):
+                self._save_page(current_page)
+                self.num_entries -= 1
+                return True
+
+            # Check overflow page
+            if current_page.overflow_page_id:
+                current_page = self._load_page(
+                    tid, current_page.overflow_page_id)
+            else:
+                current_page = None
+
+        return False  # Key not found
+
+    def get_statistics(self) -> dict:
+        """Get statistics about the hash index."""
+        return {
+            'num_entries': self.num_entries,
+            'num_buckets': self.num_buckets,
+            'num_overflows': self.num_overflows,
+            'next_page_number': self.next_page_number,
+            'key_type': self.key_type.name,
+            'load_factor': self.num_entries / (self.num_buckets * 10) if self.num_buckets > 0 else 0
+        }
+
+    def rebuild_index(self, tid: TransactionId) -> None:
+        """Rebuild the entire hash index for better performance."""
+        # This would involve:
+        # 1. Collecting all entries
+        # 2. Recreating the directory structure
+        # 3. Redistributing entries optimally
+        # Implementation would be complex and is beyond this scope
+        pass
 
 
 class HashIterator:

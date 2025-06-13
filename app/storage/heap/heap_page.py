@@ -88,6 +88,9 @@ class HeapPage(Page):
         self.page_id = page_id
         self.dirty_transaction: Optional['TransactionId'] = None
         self.before_image_data: Optional[bytes] = None
+        self.num_slots = None
+        self.slot_manager : Optional[BitmapSlotManager] = None
+        self.tuples: list[Tuple] = []
 
         if data is not None:
             self.deserialize(data)

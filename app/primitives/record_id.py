@@ -2,7 +2,7 @@ from typing import TYPE_CHECKING
 from .page_id import PageId
 
 if TYPE_CHECKING:
-    from ..storage.page import PageId
+    from ..storage.interfaces import PageId
 
 
 class RecordId:

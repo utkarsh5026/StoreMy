@@ -1,7 +1,9 @@
+import atexit
+import time
 import threading
 from typing import Optional
 
-from .storage.buffer_pool import BufferPool
+from app.storage.buffer_pool.buffer_pool import BufferPool
 from .catalog.catalog import Catalog
 from .recovery.log_file import LogFile
 from .concurrency.transactions import TransactionManager
@@ -184,9 +186,12 @@ class Database:
             buffer_stats = self._buffer_pool.get_stats()
 
             print("\n=== Final Database Statistics ===")
-            print(f"Transactions started: {transaction_stats['transactions_started']}")
-            print(f"Transactions committed: {transaction_stats['transactions_committed']}")
-            print(f"Transactions aborted: {transaction_stats['transactions_aborted']}")
+            print(
+                f"Transactions started: {transaction_stats['transactions_started']}")
+            print(
+                f"Transactions committed: {transaction_stats['transactions_committed']}")
+            print(
+                f"Transactions aborted: {transaction_stats['transactions_aborted']}")
             print(f"Commit rate: {transaction_stats['commit_rate']:.1%}")
             print(f"Buffer pool hit rate: {buffer_stats.hit_rate:.1%}")
             print(f"Total deadlocks: {buffer_stats.deadlocks_detected}")
@@ -245,16 +250,19 @@ class Database:
             # Check buffer pool health
             buffer_stats = self._buffer_pool.get_stats()
             if buffer_stats.hit_rate < 0.8:  # Less than 80% hit rate
-                warnings.append(f"Low buffer pool hit rate: {buffer_stats.hit_rate:.1%}")
+                warnings.append(
+                    f"Low buffer pool hit rate: {buffer_stats.hit_rate:.1%}")
 
             # Check transaction health
             transaction_stats = self._transaction_manager.get_statistics()
             if transaction_stats['abort_rate'] > 0.1:  # More than 10% abort rate
-                warnings.append(f"High transaction abort rate: {transaction_stats['abort_rate']:.1%}")
+                warnings.append(
+                    f"High transaction abort rate: {transaction_stats['abort_rate']:.1%}")
 
             # Check for excessive deadlocks
             if buffer_stats.deadlocks_detected > 100:
-                warnings.append(f"High deadlock count: {buffer_stats.deadlocks_detected}")
+                warnings.append(
+                    f"High deadlock count: {buffer_stats.deadlocks_detected}")
 
             # Determine overall health
             if issues:
@@ -323,8 +331,6 @@ class DatabaseContext:
 
 
 # Module-level initialization
-import time
-import atexit
 
 # Register shutdown handler
 atexit.register(lambda: Database.get_instance().shutdown())
