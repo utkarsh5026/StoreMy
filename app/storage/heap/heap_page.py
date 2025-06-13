@@ -206,7 +206,7 @@ class HeapPage:
         # Find free slot
         slot = self.slot_manager.find_free_slot()
         if slot is None:
-            return None  # Page is full
+            raise RuntimeError("No empty slots available")
 
         # Insert tuple
         self.tuples[slot] = tuple_obj

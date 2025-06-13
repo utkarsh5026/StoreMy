@@ -1,3 +1,5 @@
+import math
+
 import pytest
 from app.storage.heap import HeapPage, HeapPageId
 from app.core.tuple import Tuple, TupleDesc
@@ -13,7 +15,7 @@ class TestPageIntegration:
         """Set up common test data."""
         self.page_id = HeapPageId(1, 0)
         self.tuple_desc = TupleDesc([FieldType.INT, FieldType.STRING])
-        self.transaction_id = TransactionId(1)
+        self.transaction_id = TransactionId()
 
     def test_complex_tuple_operations_workflow(self):
         """Test complex workflow of adding, deleting, and iterating over tuples."""
@@ -25,7 +27,7 @@ class TestPageIntegration:
             tuple_obj = Tuple(self.tuple_desc)
             tuple_obj.set_field(0, IntField(i))
             tuple_obj.set_field(1, StringField(f"value_{i}"))
-            page.add_tuple(tuple_obj)
+            page.insert_tuple(tuple_obj)
             tuples.append(tuple_obj)
 
         # Verify all tuples were added correctly
@@ -52,7 +54,7 @@ class TestPageIntegration:
             tuple_obj = Tuple(self.tuple_desc)
             tuple_obj.set_field(0, IntField(1000 + i))
             tuple_obj.set_field(1, StringField(f"new_value_{i}"))
-            page.add_tuple(tuple_obj)
+            page.insert_tuple(tuple_obj)
             new_tuples.append(tuple_obj)
 
         # Verify total count is correct
@@ -70,7 +72,7 @@ class TestPageIntegration:
         tuple_obj = Tuple(self.tuple_desc)
         tuple_obj.set_field(0, IntField(42))
         tuple_obj.set_field(1, StringField("test"))
-        page.add_tuple(tuple_obj)
+        page.insert_tuple(tuple_obj)
         page.mark_dirty(True, self.transaction_id)
 
         assert page.is_dirty() == self.transaction_id
@@ -79,7 +81,7 @@ class TestPageIntegration:
         page.set_before_image()
 
         # Make more changes with different transaction
-        tx2 = TransactionId(2)
+        tx2 = TransactionId()
         page.delete_tuple(tuple_obj)
         page.mark_dirty(True, tx2)
 
@@ -110,18 +112,18 @@ class TestPageIntegration:
         tuple_obj.set_field(4, DoubleField(2.718281828))
 
         # Add to page
-        page.add_tuple(tuple_obj)
+        page.insert_tuple(tuple_obj)
 
         # Verify it can be retrieved
         retrieved_tuples = list(page.iterator())
         assert len(retrieved_tuples) == 1
 
         retrieved_tuple = retrieved_tuples[0]
-        assert retrieved_tuple.get_field(0).value == 42
-        assert retrieved_tuple.get_field(1).value == "test_string"
-        assert retrieved_tuple.get_field(2).value is True
-        assert retrieved_tuple.get_field(3).value == pytest.approx(3.14)
-        assert retrieved_tuple.get_field(4).value == pytest.approx(2.718281828)
+        assert retrieved_tuple.get_field(0).get_value() == 42
+        assert retrieved_tuple.get_field(1).get_value() == "test_string"
+        assert retrieved_tuple.get_field(2).get_value() is True
+        assert retrieved_tuple.get_field(3).get_value() == pytest.approx(3.14)
+        assert retrieved_tuple.get_field(4).get_value() == pytest.approx(2.718281828)
 
     def test_page_serialization_with_complex_data(self):
         """Test page serialization with complex tuple arrangements."""
@@ -140,7 +142,7 @@ class TestPageIntegration:
             tuple_obj = Tuple(self.tuple_desc)
             tuple_obj.set_field(0, IntField(int_val))
             tuple_obj.set_field(1, StringField(str_val))
-            page.add_tuple(tuple_obj)
+            page.insert_tuple(tuple_obj)
             added_tuples.append(tuple_obj)
 
         # Serialize page
@@ -172,7 +174,7 @@ class TestPageIntegration:
         for i in range(max_slots):
             tuple_obj = Tuple(small_desc)
             tuple_obj.set_field(0, IntField(i))
-            page.add_tuple(tuple_obj)
+            page.insert_tuple(tuple_obj)
             tuples.append(tuple_obj)
 
         # Verify page is full
@@ -183,13 +185,13 @@ class TestPageIntegration:
         overflow_tuple.set_field(0, IntField(9999))
 
         with pytest.raises(RuntimeError, match="No empty slots available"):
-            page.add_tuple(overflow_tuple)
+            page.insert_tuple(overflow_tuple)
 
         # Delete one tuple and verify we can add again
         page.delete_tuple(tuples[0])
         assert page.get_num_empty_slots() == 1
 
-        page.add_tuple(overflow_tuple)
+        page.insert_tuple(overflow_tuple)
         assert page.get_num_empty_slots() == 0
 
     def test_record_id_consistency_across_operations(self):
@@ -202,7 +204,7 @@ class TestPageIntegration:
             tuple_obj = Tuple(self.tuple_desc)
             tuple_obj.set_field(0, IntField(i))
             tuple_obj.set_field(1, StringField(f"test_{i}"))
-            page.add_tuple(tuple_obj)
+            page.insert_tuple(tuple_obj)
 
             record_id = tuple_obj.get_record_id()
             tuples_with_ids.append((tuple_obj, record_id))
@@ -220,12 +222,13 @@ class TestPageIntegration:
             current_id = tuple_obj.get_record_id()
             assert current_id == original_id
             assert current_id.get_page_id() == self.page_id
-            assert page._is_slot_used(current_id.get_tuple_number())
+            assert page.slot_manager.is_slot_used(current_id.get_tuple_number())
             assert page.tuples[current_id.get_tuple_number()] == tuple_obj
 
     def test_bit_vector_stress_test(self):
         """Stress test the bit vector implementation with many operations."""
         page = HeapPage(self.page_id, tuple_desc=self.tuple_desc)
+        slot_manager = page.slot_manager
 
         if page.num_slots < 20:
             pytest.skip("Need at least 20 slots for stress test")
@@ -240,14 +243,14 @@ class TestPageIntegration:
 
         for slot, used in operations:
             if slot < page.num_slots:
-                page._set_slot_used(slot, used)
-                assert page._is_slot_used(slot) == used
+                slot_manager.set_slot_used(slot, used)
+                assert slot_manager.is_slot_used(slot) == used
 
         # Verify final state
         expected_used = {1, 2, 9, 17}
         for slot in range(min(20, page.num_slots)):
             expected = slot in expected_used
-            assert page._is_slot_used(slot) == expected
+            assert slot_manager.is_slot_used(slot) == expected
 
     def test_page_header_size_calculations(self):
         """Test header size calculations for various slot counts."""
@@ -264,7 +267,7 @@ class TestPageIntegration:
         for expected_slots, expected_header_size in test_cases:
             # Create a mock page to test header size calculation
             # We'll use the actual calculation from the implementation
-            actual_header_size = pytest.approx(expected_slots / 8.0)
+            actual_header_size = math.ceil(expected_slots / 8.0)
             assert abs(actual_header_size - expected_header_size) <= 1
 
     def test_empty_vs_non_empty_page_serialization(self):
@@ -278,7 +281,7 @@ class TestPageIntegration:
         tuple_obj = Tuple(self.tuple_desc)
         tuple_obj.set_field(0, IntField(42))
         tuple_obj.set_field(1, StringField("test"))
-        non_empty_page.add_tuple(tuple_obj)
+        non_empty_page.insert_tuple(tuple_obj)
         non_empty_data = non_empty_page.get_page_data()
 
         # Both should be same size
@@ -304,7 +307,7 @@ class TestPageIntegration:
         valid_tuple = Tuple(self.tuple_desc)
         valid_tuple.set_field(0, IntField(42))
         valid_tuple.set_field(1, StringField("test"))
-        page.add_tuple(valid_tuple)
+        page.insert_tuple(valid_tuple)
 
         # Invalid tuples with different schemas
         wrong_schemas = [
@@ -336,4 +339,4 @@ class TestPageIntegration:
                 wrong_tuple.set_field(2, BoolField(True))
 
             with pytest.raises(ValueError, match="Tuple schema doesn't match page schema"):
-                page.add_tuple(wrong_tuple)
+                page.insert_tuple(wrong_tuple)

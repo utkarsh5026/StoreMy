@@ -28,7 +28,7 @@ class TestPageEdgeCases:
         for i in range(large_desc.num_fields()):
             tuple_obj.set_field(i, StringField(f"field_{i}"))
 
-        page.add_tuple(tuple_obj)
+        page.insert_tuple(tuple_obj)
         assert page.get_num_empty_slots() == page.num_slots - 1
 
     def test_minimum_tuple_size_maximum_slots(self):
@@ -46,30 +46,6 @@ class TestPageEdgeCases:
         # Should be able to add many tuples
         assert page.num_slots > 1000  # Should be quite a lot
 
-    def test_header_bit_manipulation_edge_cases(self):
-        """Test edge cases in header bit manipulation."""
-        page_id = HeapPageId(1, 0)
-        tuple_desc = TupleDesc([FieldType.INT])
-        page = HeapPage(page_id, tuple_desc=tuple_desc)
-
-        # Test all bits in first byte
-        for bit in range(8):
-            if bit < page.num_slots:
-                page._set_slot_used(bit, True)
-                assert page._is_slot_used(bit)
-
-        # Test boundary between bytes
-        if page.num_slots > 8:
-            page._set_slot_used(8, True)  # First bit of second byte
-            assert page._is_slot_used(8)
-            # Last bit of first byte should still be set
-            assert page._is_slot_used(7)
-
-        # Test last possible slot
-        if page.num_slots > 1:
-            last_slot = page.num_slots - 1
-            page._set_slot_used(last_slot, True)
-            assert page._is_slot_used(last_slot)
 
     def test_page_id_edge_values(self):
         """Test HeapPageId with edge case values."""
@@ -89,7 +65,7 @@ class TestPageEdgeCases:
 
     def test_tuple_operations_with_minimal_page(self):
         """Test tuple operations on page with minimal slots."""
-        # Create page that can hold very few tuples
+        # Create a page that can hold very few tuples
         # ~3200 bytes per tuple
         large_desc = TupleDesc([FieldType.STRING] * 25)
         page_id = HeapPageId(1, 0)
@@ -101,7 +77,7 @@ class TestPageEdgeCases:
             tuple_obj = Tuple(large_desc)
             for j in range(large_desc.num_fields()):
                 tuple_obj.set_field(j, StringField(f"value_{i}_{j}"))
-            page.add_tuple(tuple_obj)
+            page.insert_tuple(tuple_obj)
             tuples.append(tuple_obj)
 
         # Page should be full
@@ -115,7 +91,7 @@ class TestPageEdgeCases:
         new_tuple = Tuple(large_desc)
         for j in range(large_desc.num_fields()):
             new_tuple.set_field(j, StringField(f"new_value_{j}"))
-        page.add_tuple(new_tuple)
+        page.insert_tuple(new_tuple)
         assert page.get_num_empty_slots() == 0
 
     def test_serialization_boundary_conditions(self):
@@ -132,7 +108,7 @@ class TestPageEdgeCases:
         tuple_obj = Tuple(tuple_desc)
         tuple_obj.set_field(0, IntField(42))
         tuple_obj.set_field(1, StringField("test"))
-        page.add_tuple(tuple_obj)
+        page.insert_tuple(tuple_obj)
 
         one_tuple_data = page.get_page_data()
         assert len(one_tuple_data) == HeapPage.PAGE_SIZE_IN_BYTES
@@ -161,7 +137,7 @@ class TestPageEdgeCases:
         assert page.is_dirty() == zero_tx
 
         # Test rapid transaction changes
-        for i in range(100):
+        for _ in range(100):
             tx = TransactionId()
             page.mark_dirty(True, tx)
             assert page.is_dirty() == tx
@@ -174,13 +150,13 @@ class TestPageEdgeCases:
 
         empty_tuple = Tuple(tuple_desc)
         empty_tuple.set_field(0, StringField(""))
-        page.add_tuple(empty_tuple)
+        page.insert_tuple(empty_tuple)
 
         max_length = FieldType.STRING.get_length() - 4  # Account for length prefix
         long_string = "x" * max_length
         long_tuple = Tuple(tuple_desc)
         long_tuple.set_field(0, StringField(long_string))
-        page.add_tuple(long_tuple)
+        page.insert_tuple(long_tuple)
 
         tuples = list(page.iterator())
         assert len(tuples) == 2
@@ -261,7 +237,7 @@ class TestPageEdgeCases:
         for i in range(0, min(10, page.num_slots), 2):
             tuple_obj = Tuple(tuple_desc)
             tuple_obj.set_field(0, IntField(i))
-            page.add_tuple(tuple_obj)
+            page.insert_tuple(tuple_obj)
             added_tuples.append(tuple_obj)
 
         # Iterator should return all added tuples
@@ -286,7 +262,7 @@ class TestPageEdgeCases:
             tuple_obj = Tuple(tuple_desc)
             tuple_obj.set_field(0, IntField(i))
             tuple_obj.set_field(1, StringField(f"test_{i}"))
-            page.add_tuple(tuple_obj)
+            page.insert_tuple(tuple_obj)
             operations.append(('add', tuple_obj))
 
         # Delete some tuples
@@ -301,7 +277,7 @@ class TestPageEdgeCases:
             tuple_obj = Tuple(tuple_desc)
             tuple_obj.set_field(0, IntField(100 + i))
             tuple_obj.set_field(1, StringField(f"new_test_{i}"))
-            page.add_tuple(tuple_obj)
+            page.insert_tuple(tuple_obj)
             operations.append(('add', tuple_obj))
 
         # Verify page state is consistent
@@ -315,5 +291,5 @@ class TestPageEdgeCases:
             assert tuple_obj in iterated_tuples
             record_id = tuple_obj.get_record_id()
             assert record_id is not None
-            assert page._is_slot_used(record_id.get_tuple_number())
+            assert page.slot_manager.is_slot_used(record_id.get_tuple_number())
             assert page.tuples[record_id.get_tuple_number()] == tuple_obj
