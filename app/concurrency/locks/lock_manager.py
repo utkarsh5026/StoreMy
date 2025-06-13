@@ -6,40 +6,60 @@ from ...primitives import TransactionId, PageId
 from ...core.exceptions import TransactionAbortedException
 from .dependency_manager import DependencyGraph, Lock, LockType
 
+
 class LockManager:
     """
-    Manages locks for concurrency control using Strict Two-Phase Locking.
+    🔐 Manages locks for concurrency control using Strict Two-Phase Locking 🔐
 
-    Key Features:
-    1. Page-level locking (granularity chosen for simplicity)
-    2. Shared (read) and Exclusive (write) locks
-    3. Deadlock detection using dependency graphs
-    4. Lock upgrades (shared -> exclusive)
-    5. Timeout-based deadlock resolution
+    ✨ Key Features:
+    📄 1. Page-level locking (granularity chosen for simplicity)
+    🔒 2. Shared (read) and Exclusive (write) locks
+    💀 3. Deadlock detection using dependency graphs
+    ⬆️ 4. Lock upgrades (shared → exclusive)
+    ⏰ 5. Timeout-based deadlock resolution
 
     Lock Compatibility Matrix:
-              | Shared | Exclusive
-    ----------|--------|----------
-    Shared    |   ✓    |    ✗
-    Exclusive |   ✗    |    ✗
+    ┌─────────────┬─────────┬───────────┐
+    │             │ SHARED  │ EXCLUSIVE │
+    ├─────────────┼─────────┼───────────┤
+    │ SHARED      │    ✅        ❌   
+    │ EXCLUSIVE   │    ❌        ❌     
+    └─────────────┴─────────┴───────────┘
 
-    Implementation Details:
-    - Uses fine-grained locking with separate locks per data structure
-    - Deadlock detection runs periodically and on lock conflicts
-    - Victim selection for deadlock resolution uses transaction age
+    🔄 Two-Phase Locking Protocol:
+
+     Phase 1: GROWING (Acquire locks only) 📈     
+     ┌─────┐ ┌─────┐ ┌─────┐ ┌─────┐              
+     │ T1  │ │ T2  │ │ T3  │ │ ... │              
+     │🔒+   │ │🔒+   │ │🔒+   │ │🔒+   │              
+     └─────┘ └─────┘ └─────┘ └─────┘                       
+
+     Phase 2: SHRINKING (Release locks only) 📉           
+     ┌─────┐ ┌─────┐ ┌─────┐ ┌─────┐                       
+     │ T1  │ │ T2  │ │ T3  │ │ ... │                       
+     │🔓-  │ │🔓-  │ │🔓-  │ │🔓-  │                       
+     └─────┘ └─────┘ └─────┘ └─────┘                       
+
+
+    🏗️ Implementation Details:
+    🔧 - Uses fine-grained locking with separate locks per data structure
+    🔍 - Deadlock detection runs periodically and on lock conflicts
+    🎯 - Victim selection for deadlock resolution uses transaction age
     """
 
     def __init__(self):
         self._page_locks: Dict[PageId, List[Lock]] = defaultdict(list)
 
         # Maps transaction_id -> set of pages locked by transaction
-        self._transaction_pages: Dict[TransactionId, Set[PageId]] = defaultdict(set)
+        self._transaction_pages: Dict[TransactionId,
+                                      Set[PageId]] = defaultdict(set)
 
         # Dependency tracking for deadlock detection
         self._dependency_graph = DependencyGraph()
 
         # Maps transaction_id -> set of transactions it's waiting for
-        self._waiting_for: Dict[TransactionId, Set[TransactionId]] = defaultdict(set)
+        self._waiting_for: Dict[TransactionId,
+                                Set[TransactionId]] = defaultdict(set)
 
         # Thread synchronization
         self._lock = threading.RLock()
@@ -49,25 +69,43 @@ class LockManager:
 
     def acquire_lock(self, tid: TransactionId, page_id: PageId, lock_type: LockType) -> bool:
         """
-        Attempt to acquire a lock on a page.
+        🎯 Attempt to acquire a lock on a page 🎯
 
-        This is the core method that implements 2PL. The algorithm:
-        1. Check if the transaction already holds a compatible lock
-        2. Check if lock can be granted immediately
-        3. If not, add to the dependency graph and wait
-        4. Check for deadlocks periodically while waiting
-        5. Grant lock when possible or abort if deadlocked
+        🔄 This is the core method that implements 2PL. The algorithm:
+
+        Lock Acquisition Flow:
+
+         1. 🔍 Check if transaction already has compatible lock 
+            ┌─────────┐                                       
+            │   T1    │ ──→ Already has EXCLUSIVE? ✅ Done   
+            │ 🔒 Page │ ──→ Has SHARED, want SHARED? ✅ Done 
+            └─────────┘ ──→ Has SHARED, want EXCLUSIVE? ⬆️   
+
+         2. 🚀 Check if lock can be granted immediately        
+            ┌───────────────┐                                       
+            │  Page         │ ──→ No locks? ✅ Grant immediately   
+            │ 📄 Locks      │ ──→ Compatible? ✅ Grant immediately 
+            └───────────────┘ ──→ Conflict? ⏳ Need to wait        
+
+         3. ⏳ Add to dependency graph and wait                
+            T1 ──waits for──→ T2                             
+
+         4. 💀 Check for deadlocks periodically               
+            Cycle detected? Abort victim transaction          
+
+         5. ✅ Grant lock when possible                        
+
 
         Args:
-            tid: Transaction requesting the lock
-            page_id: Page to lock
-            lock_type: Type of lock (SHARED or EXCLUSIVE)
+            🆔 tid: Transaction requesting the lock
+            📄 page_id: Page to lock
+            🔒 lock_type: Type of lock (SHARED or EXCLUSIVE)
 
         Returns:
-            True if lock acquired successfully
+            ✅ True if lock acquired successfully
 
         Raises:
-            TransactionAbortedException: If deadlock detected and this transaction chosen as victim
+            💀 TransactionAbortedException: If deadlock detected and this transaction chosen as victim
         """
         with self._lock:
             # Quick check: does the transaction already hold a sufficient lock?
@@ -89,7 +127,7 @@ class LockManager:
             return self._handle_lock_conflict(tid, page_id, lock_type)
 
     def _get_lock_held_by_transaction(self, tid: TransactionId, page_id: PageId) -> Optional[Lock]:
-        """Find the lock held by a transaction on a specific page."""
+        """🔍 Find the lock held by a transaction on a specific page 🔍"""
         for lock in self._page_locks[page_id]:
             if lock.transaction_id == tid:
                 return lock
@@ -97,11 +135,22 @@ class LockManager:
 
     def _can_acquire_lock(self, tid: TransactionId, page_id: PageId, lock_type: LockType) -> bool:
         """
-        Check if a lock can be granted without waiting.
+        ✅ Check if a lock can be granted without waiting ✅
 
-        Lock Compatibility Rules:
-        - SHARED: Can coexist with other SHARED locks
-        - EXCLUSIVE: Cannot coexist with any other locks
+        Lock Compatibility Decision Tree:
+        ┌─────────────────────────────────────────────┐
+        │ 📄 Page has no locks?                       
+        │ ├─ YES ──→ ✅ GRANT                         
+        │ └─ NO ──→ Check compatibility...            
+        │                                             
+        │ 🔒 Requesting EXCLUSIVE?                     
+        │ ├─ YES ──→ ❌ DENY (conflicts with all)     
+        │ └─ NO ──→ Requesting SHARED...              
+        │                                             
+        │ 📖 Any EXCLUSIVE locks exist?               
+        │ ├─ YES ──→ ❌ DENY (SHARED conflicts)       
+        │ └─ NO ──→ ✅ GRANT (SHARED compatible)      
+        └─────────────────────────────────────────────┘
         """
         existing_locks = self._page_locks[page_id]
 
@@ -119,16 +168,29 @@ class LockManager:
         return True
 
     def _grant_lock(self, tid: TransactionId, page_id: PageId, lock_type: LockType) -> None:
-        """Grant a lock to a transaction."""
+        """🎁 Grant a lock to a transaction 🎁"""
         new_lock = Lock(tid, page_id, lock_type)
         self._page_locks[page_id].append(new_lock)
         self._transaction_pages[tid].add(page_id)
 
     def _try_lock_upgrade(self, tid: TransactionId, page_id: PageId) -> bool:
         """
-        Try to upgrade a SHARED lock to EXCLUSIVE.
+        ⬆️ Try to upgrade a SHARED lock to EXCLUSIVE ⬆️
 
-        This is only possible if the transaction holds the only SHARED lock.
+        Upgrade Conditions:
+        ┌─────────────────────────────────────────────┐
+        │ 🔍 Transaction has SHARED lock?             │
+        │ ├─ NO ──→ ❌ Cannot upgrade                 │
+        │ └─ YES ──→ Check if only lock holder...     │
+        │                                             │
+        │ 👤 Only lock holder on this page?          │
+        │ ├─ YES ──→ ✅ UPGRADE to EXCLUSIVE          │
+        │ └─ NO ──→ ❌ Other SHARED locks exist       │
+        │                                             │
+        │ Example:                                    │
+        │ Page A: [T1:SHARED] ──→ [T1:EXCLUSIVE] ✅   │
+        │ Page B: [T1:SHARED, T2:SHARED] ──→ ❌       │
+        └─────────────────────────────────────────────┘
         """
         existing_locks = self._page_locks[page_id]
 
@@ -137,22 +199,38 @@ class LockManager:
             if (only_lock.transaction_id == tid and
                     only_lock.lock_type == LockType.SHARED):
                 # Upgrade the lock
-                self._page_locks[page_id] = [Lock(tid, page_id, LockType.EXCLUSIVE)]
+                self._page_locks[page_id] = [
+                    Lock(tid, page_id, LockType.EXCLUSIVE)]
                 return True
 
         return False
 
     def _handle_lock_conflict(self, tid: TransactionId, page_id: PageId, lock_type: LockType) -> bool:
         """
-        Handle the case where a lock cannot be granted immediately.
+        ⚔️ Handle the case where a lock cannot be granted immediately ⚔️
 
-        This involves:
-        1. Adding dependencies to the dependency graph
-        2. Checking for deadlocks
-        3. Either waiting or aborting the transaction
+        Conflict Resolution Process:
+        ┌─────────────────────────────────────────────────────┐
+        │ 1. 🕵️ Find who we're waiting for                    │
+        │    Page A: [T2:EXCLUSIVE] ← T1 wants SHARED        │
+        │    Result: T1 waits for T2                         │
+        │                                                     │
+        │ 2. 🕸️ Add dependencies to graph                     │
+        │    T1 ──→ T2 (T1 waits for T2)                    │
+        │                                                     │
+        │ 3. 💀 Check for deadlocks                           │
+        │    T1 → T2 → T3 → T1 = CYCLE DETECTED!            │
+        │                                                     │
+        │ 4. 🎯 Choose victim and abort                       │
+        │    Victim selection: youngest transaction           │
+        │    T1(id:100) vs T2(id:200) → T2 is victim        │
+        │                                                     │
+        │ 5. 🔄 Wait and retry or abort                       │
+        └─────────────────────────────────────────────────────┘
         """
         # Find who we're waiting for
-        blocking_transactions = self._find_blocking_transactions(page_id, lock_type)
+        blocking_transactions = self._find_blocking_transactions(
+            page_id, lock_type)
 
         # Add dependencies
         for blocking_tid in blocking_transactions:
@@ -167,7 +245,8 @@ class LockManager:
             if victim == tid:
                 # We are the victim - clean up and abort
                 self._cleanup_transaction_dependencies(tid)
-                raise TransactionAbortedException(f"Transaction {tid} aborted due to deadlock")
+                raise TransactionAbortedException(
+                    f"Transaction {tid} aborted due to deadlock")
             else:
                 # Someone else is the victim - they will be aborted
                 # We should wait and try again
@@ -178,7 +257,20 @@ class LockManager:
         return False
 
     def _find_blocking_transactions(self, page_id: PageId, lock_type: LockType) -> Set[TransactionId]:
-        """Find which transactions are blocking a lock request."""
+        """
+        🚧 Find which transactions are blocking a lock request 🚧
+
+        Blocking Logic:
+        ┌─────────────────────────────────────────────────────┐
+        │ 🔒 Requesting EXCLUSIVE?                            │
+        │ ├─ Conflicts with ALL existing locks                │
+        │ └─ Block on: ALL lock holders                       │
+        │                                                     │
+        │ 📖 Requesting SHARED?                               │
+        │ ├─ Conflicts only with EXCLUSIVE locks              │
+        │ └─ Block on: EXCLUSIVE lock holders only            │
+        └─────────────────────────────────────────────────────┘
+        """
         blocking = set()
 
         for lock in self._page_locks[page_id]:
@@ -194,27 +286,52 @@ class LockManager:
     @classmethod
     def _choose_deadlock_victim(cls, cycle: List[TransactionId]) -> TransactionId:
         """
-        Choose which transaction to abort in a deadlock.
+        🎯 Choose which transaction to abort in a deadlock 🎯
 
-        Strategy: Choose the transaction with the highest ID (youngest transaction).
-        This is simple but effective - could be enhanced with more sophisticated
-        strategies like choosing the transaction that has done the least work.
+        Victim Selection Strategy:
+        ┌─────────────────────────────────────────────────────┐
+        │ 🔢 Strategy: Choose highest transaction ID           │
+        │    (youngest transaction = least work done)          │
+        │                                                     │
+        │ Example Deadlock Cycle:                             │
+        │ T1(id:100) → T2(id:150) → T3(id:200) → T1          │
+        │                            ↑                        │
+        │                         VICTIM 🎯                   │
+        │                                                     │
+        │ 💡 Could be enhanced with:                          │
+        │ - Transaction start time                            │
+        │ - Amount of work done                               │
+        │ - Lock count held                                   │
+        │ - Priority level                                    │
+        └─────────────────────────────────────────────────────┘
         """
         return max(cycle, key=lambda tid: tid.get_id())
 
     def _cleanup_transaction_dependencies(self, tid: TransactionId) -> None:
-        """Clean up dependency graph entries for a transaction."""
+        """🧹 Clean up dependency graph entries for a transaction 🧹"""
         self._dependency_graph.remove_dependencies_for_transaction(tid)
         if tid in self._waiting_for:
             del self._waiting_for[tid]
 
     def release_lock(self, tid: TransactionId, page_id: PageId) -> None:
         """
-        Release a specific lock held by a transaction.
+        🔓 Release a specific lock held by a transaction 🔓
+
+        Release Process:
+        ┌─────────────────────────────────────────────────────┐
+        │ 1. 🗑️ Remove from page locks                        │
+        │    Page A: [T1:SHARED, T2:EXCLUSIVE] → [T2:EXCLUSIVE]│
+        │                                                     │
+        │ 2. 🧹 Clean up empty lock lists                     │
+        │    Page B: [T1:SHARED] → [] → DELETE                │
+        │                                                     │
+        │ 3. 📝 Update transaction tracking                    │
+        │    T1 pages: {A, B, C} → {B, C}                    │
+        └─────────────────────────────────────────────────────┘
 
         Args:
-            tid: Transaction releasing the lock
-            page_id: Page to unlock
+            🆔 tid: Transaction releasing the lock
+            📄 page_id: Page to unlock
         """
         with self._lock:
             # Remove from page locks
@@ -234,10 +351,28 @@ class LockManager:
 
     def release_all_locks(self, tid: TransactionId) -> None:
         """
-        Release all locks held by a transaction.
+        🔓 Release all locks held by a transaction 🔓
 
-        Called when a transaction commits or aborts.
-        This implements the "release phase" of 2PL.
+        📞 Called when a transaction commits or aborts.
+        🔄 This implements the "release phase" of 2PL.
+
+        Bulk Release Process:
+        ┌─────────────────────────────────────────────────────┐
+        │ Transaction T1 holds:                               │
+        │ ┌─────────┬─────────┬─────────┬─────────┐           │
+        │ │ Page A  │ Page B  │ Page C  │ Page D  │           │
+        │ │ SHARED  │EXCLUSIVE│ SHARED  │ SHARED  │           │
+        │ └─────────┴─────────┴─────────┴─────────┘           │
+        │                     ↓                               │
+        │ After release_all_locks(T1):                        │
+        │ ┌─────────┬─────────┬─────────┬─────────┐           │
+        │ │ Page A  │ Page B  │ Page C  │ Page D  │           │
+        │ │   []    │   []    │   []    │   []    │           │
+        │ └─────────┴─────────┴─────────┴─────────┘           │
+        │                                                     │
+        │ 🧹 Dependencies cleaned up                          │
+        │ 🚀 Other transactions can now proceed               │
+        └─────────────────────────────────────────────────────┘
         """
         with self._lock:
             if tid not in self._transaction_pages:
@@ -253,25 +388,42 @@ class LockManager:
             self._cleanup_transaction_dependencies(tid)
 
     def holds_lock(self, tid: TransactionId, page_id: PageId) -> bool:
-        """Check if a transaction holds any lock on a page."""
+        """❓ Check if a transaction holds any lock on a page ❓"""
         with self._lock:
             return page_id in self._transaction_pages.get(tid, set())
 
     def get_lock_type(self, tid: TransactionId, page_id: PageId) -> Optional[LockType]:
-        """Get the type of lock held by a transaction on a page."""
+        """🔍 Get the type of lock held by a transaction on a page 🔍"""
         with self._lock:
             existing_lock = self._get_lock_held_by_transaction(tid, page_id)
             return existing_lock.lock_type if existing_lock else None
 
     def get_pages_locked_by_transaction(self, tid: TransactionId) -> Optional[Set[PageId]]:
-        """Get all pages locked by a transaction."""
+        """📋 Get all pages locked by a transaction 📋"""
         with self._lock:
             return self._transaction_pages.get(tid, set()).copy()
 
     def get_debug_info(self) -> Dict:
-        """Get debugging information about the current lock state."""
+        """
+        🐛 Get debugging information about the current lock state 🐛
+
+        Debug Information Structure:
+        ┌─────────────────────────────────────────────────────┐
+        │ 📊 Statistics:                                      │
+        │ ├─ 🔒 Total locks across all pages                  │
+        │ ├─ 🆔 Active transactions                           │
+        │ ├─ 📄 Locked pages                                  │
+        │                                                     │
+        │ 🔍 Detailed State:                                  │
+        │ ├─ 📄 page_locks: {page → [locks]}                 │
+        │ ├─ 🆔 transaction_pages: {tid → {pages}}           │
+        │ ├─ 🕸️ dependencies: {waiter → {holders}}           │
+        │ └─ ⏳ waiting_transactions: {tid → {waiting_for}}   │
+        └─────────────────────────────────────────────────────┘
+        """
         with self._lock:
-            total_locks = sum(len(locks) for locks in self._page_locks.values())
+            total_locks = sum(len(locks)
+                              for locks in self._page_locks.values())
 
             return {
                 'total_locks': total_locks,

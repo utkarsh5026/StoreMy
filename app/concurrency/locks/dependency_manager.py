@@ -6,9 +6,21 @@ from enum import Enum
 from ...primitives import TransactionId, PageId
 
 
-
 class LockType(Enum):
-    """Types of locks that can be acquired."""
+    """
+    🔒 Types of locks that can be acquired 🔒
+
+    📖 SHARED: Read lock - multiple transactions can hold simultaneously
+    ✏️ EXCLUSIVE: Write lock - only one transaction can hold at a time
+
+    Lock Compatibility:
+    ┌─────────────┬─────────┬───────────┐
+    │             │ SHARED  │ EXCLUSIVE │
+    ├─────────────┼─────────┼───────────┤
+    │ SHARED      │    ✅    │     ❌    │
+    │ EXCLUSIVE   │    ❌    │     ❌    │
+    └─────────────┴─────────┴───────────┘
+    """
     SHARED = "SHARED"  # Read lock - multiple transactions can hold
     EXCLUSIVE = "EXCLUSIVE"  # Write lock - only one transaction can hold
 
@@ -16,9 +28,16 @@ class LockType(Enum):
 @dataclass(frozen=True)
 class Lock:
     """
-    Represents a lock held by a transaction on a page.
+    🔐 Represents a lock held by a transaction on a page 🔐
 
-    Immutable to ensure thread safety and proper hashing.
+    💎 Immutable to ensure thread safety and proper hashing
+
+    Structure:
+    ┌─────────────────┬───────────────────────┐
+    │ 🆔 Transaction  │ Which transaction     │
+    │ 📄 Page         │ Which page locked     │
+    │ 🔒 Lock Type     │ SHARED or EXCLUSIVE    │
+    └─────────────────┴───────────────────────┘
     """
     transaction_id: TransactionId
     page_id: PageId
@@ -30,14 +49,25 @@ class Lock:
 
 class DependencyGraph:
     """
-    Tracks transaction dependencies for deadlock detection.
+    🕸️ Tracks transaction dependencies for deadlock detection 🕸️
 
-    A dependency exists when Transaction A waits for Transaction B to release a lock.
-    We detect deadlocks by finding cycles in this dependency graph using DFS.
+    ⚠️ A dependency exists when Transaction A waits for Transaction B to release a lock.
+    🔍 We detect deadlocks by finding cycles in this dependency graph using DFS.
 
-    The graph is represented as an adjacency list where:
-    - Nodes are TransactionIds
-    - Edge A -> B means "A waits for B"
+    Graph Structure:
+    ┌─────────────────────────────────────────────────────────┐
+    │ Nodes: TransactionIds                                   │
+    │ Edges: A → B means "A waits for B"                     │
+    │                                                         │
+    │ Example Deadlock Cycle:                                 │
+    │                                                         │
+    │     T1 ──────→ T2                                      │
+    │     ↑           ↓                                       │
+    │     T4 ←────── T3                                      │
+    │                                                         │
+    │ T1 waits for T2, T2 waits for T3,                     │
+    │ T3 waits for T4, T4 waits for T1 = 💀 DEADLOCK!       │
+    └─────────────────────────────────────────────────────────┘
     """
 
     def __init__(self):
@@ -51,11 +81,17 @@ class DependencyGraph:
 
     def add_dependency(self, waiter: TransactionId, holder: TransactionId) -> None:
         """
-        Add a dependency: waiter depends on holder.
+        ➕ Add a dependency: waiter depends on holder ➕
+
+        Flow:
+        ┌─────────────┐    waits for    ┌─────────────┐
+        │   Waiter    │ ──────────────→ │   Holder    │
+        │      🕰️      │                 │      🔒      │
+        └─────────────┘                 └─────────────┘
 
         Args:
-            waiter: Transaction that is waiting
-            holder: Transaction that holds the conflicting lock
+            🕰️ waiter: Transaction that is waiting
+            🔒 holder: Transaction that holds the conflicting lock
         """
         with self._lock:
             if waiter != holder:  # Prevent self-loops
@@ -63,8 +99,19 @@ class DependencyGraph:
 
     def remove_dependencies_for_transaction(self, tid: TransactionId) -> None:
         """
-        Remove all dependencies involving a transaction.
-        Called when transaction completes or aborts.
+        🧹 Remove all dependencies involving a transaction 🧹
+
+        📞 Called when transaction completes or aborts.
+
+        Cleanup Process:
+        ┌─────────────────────────────────────────────────────┐
+        │ 1. Remove as waiter:                                │
+        │    T1 → [T2, T3] becomes ∅                         │
+        │                                                     │
+        │ 2. Remove as holder:                                │
+        │    T2 → [T1, T4] becomes T2 → [T4]                │
+        │    T3 → [T1, T5] becomes T3 → [T5]                │
+        └─────────────────────────────────────────────────────┘
         """
         with self._lock:
             # Remove as a waiter
@@ -77,10 +124,25 @@ class DependencyGraph:
 
     def has_cycle(self) -> Optional[list[TransactionId]]:
         """
-        Detect if there's a cycle in the dependency graph using DFS.
+        🔍 Detect if there's a cycle in the dependency graph using DFS 🔍
+
+        Algorithm Flow:
+        ┌──────────────────────────────────────────────────────┐
+        │ 1. Start DFS from each unvisited node               │
+        │    ┌─────┐                                          │
+        │    │  T1 │ ──→ Check all neighbors                 │
+        │    └─────┘                                          │
+        │                                                     │
+        │ 2. Track visited nodes and recursion stack          │
+        │    Visited: {T1, T2}                               │
+        │    RecStack: {T1} (currently exploring)            │
+        │                                                     │
+        │ 3. If neighbor is in recursion stack = CYCLE! 💀    │
+        │    T1 → T2 → T3 → T1 (back to recursion stack)    │
+        └──────────────────────────────────────────────────────┘
 
         Returns:
-            List of transaction IDs forming a cycle, or None if no cycle
+            📋 List of transaction IDs forming a cycle, or None if no cycle
         """
         with self._lock:
             visited = set()
