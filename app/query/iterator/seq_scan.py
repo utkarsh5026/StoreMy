@@ -1,9 +1,11 @@
-from typing import Optional
+from typing import Optional, TYPE_CHECKING
 from .abstract_iterator import AbstractDbIterator
-from ...storage.file import DbFile
+
 from ...core.tuple import Tuple, TupleDesc
 from ...concurrency.transactions import TransactionId
 
+if TYPE_CHECKING:
+    from app.storage.interfaces import DbFile
 
 class SeqScan(AbstractDbIterator):
     """

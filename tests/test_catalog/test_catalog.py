@@ -1,7 +1,7 @@
 from app.core.exceptions import DbException
 from app.core.types import FieldType
 from app.core.tuple import TupleDesc
-from app.storage.file import DbFile
+from app.storage.interfaces import DbFile
 from app.catalog.table_info import TableMetadata,  ConstraintInfo
 from app.catalog.catalog import Catalog
 import json

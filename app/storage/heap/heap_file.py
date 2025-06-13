@@ -2,7 +2,8 @@ import os
 from pathlib import Path
 
 from app.storage.interfaces.db_file import DbFile
-from app.storage.page import HeapPage, HeapPageId, Page
+from .heap_page import HeapPage, HeapPageId
+from app.storage.interfaces.page import Page
 from app.core.exceptions import DbException
 from app.storage.permissions import Permissions
 from app.core.tuple import Tuple, TupleDesc

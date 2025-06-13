@@ -1,7 +1,7 @@
 from abc import ABC, abstractmethod
 
 from app.core.tuple import Tuple, TupleDesc
-from app.storage.page import Page, PageId
+from .page import Page, PageId
 from app.query.iterator import DbIterator
 from app.concurrency.transactions import TransactionId
 
