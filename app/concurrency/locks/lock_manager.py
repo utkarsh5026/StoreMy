@@ -515,12 +515,6 @@ class LockManager:
         5. ✅ Return success or ❌ timeout/abort
         ------------------------------------------------------------
 
-        Condition Variable Pattern:
-        ------------------------------------------------------------
-        while not condition_met and not timeout:
-            condition.wait(timeout_remaining)
-            # Check condition again after waking up
-        ------------------------------------------------------------
 
         Deadlock Detection Schedule:
         ------------------------------------------------------------

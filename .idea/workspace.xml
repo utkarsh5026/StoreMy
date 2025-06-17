@@ -5,15 +5,10 @@
   </component>
   <component name="ChangeListManager">
     <list default="true" id="e1ae0b87-b3c0-4220-9290-7c9133dd8700" name="Changes" comment="">
-      <change beforePath="$PROJECT_DIR$/.idea/dictionaries/project.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/dictionaries/project.xml" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/app/recovery/exceptions.py" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/app/recovery/log_constants.py" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/app/recovery/log_record.py" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/app/concurrency/transactions/transaction.py" beforeDir="false" afterPath="$PROJECT_DIR$/app/concurrency/transactions/transaction.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/app/concurrency/transactions/transaction_manager.py" beforeDir="false" afterPath="$PROJECT_DIR$/app/concurrency/transactions/transaction_manager.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/app/storage/buffer_pool/buffer_pool.py" beforeDir="false" afterPath="$PROJECT_DIR$/app/storage/buffer_pool/buffer_pool.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/app/storage/buffer_pool/page_handler.py" beforeDir="false" afterPath="$PROJECT_DIR$/app/storage/buffer_pool/page_handler.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/app/storage/buffer_pool/transactions.py" beforeDir="false" afterPath="$PROJECT_DIR$/app/storage/buffer_pool/transactions.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/app/storage/exceptions.py" beforeDir="false" afterPath="$PROJECT_DIR$/app/storage/exceptions.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/tests/test_transactions/test_transaction.py" beforeDir="false" afterPath="$PROJECT_DIR$/tests/test_transactions/test_transaction.py" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
