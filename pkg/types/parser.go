@@ -17,7 +17,7 @@ func ParseField(r io.Reader, fieldType Type) (Field, error) {
 		return parseIntField(r, size)
 
 	case StringType:
-		return parseStringField(r, size)
+		return parseStringField(r)
 
 	default:
 		return nil, fmt.Errorf("unsupported field type: %v", fieldType)
@@ -26,7 +26,7 @@ func ParseField(r io.Reader, fieldType Type) (Field, error) {
 
 func parseIntField(r io.Reader, maxSize uint32) (*IntField, error) {
 	bytes := make([]byte, maxSize)
-	if _, err := r.Read(bytes); err != nil {
+	if _, err := io.ReadFull(r, bytes); err != nil {
 		return nil, err
 	}
 
@@ -34,21 +34,24 @@ func parseIntField(r io.Reader, maxSize uint32) (*IntField, error) {
 	return NewIntField(value), nil
 }
 
-func parseStringField(r io.Reader, maxSize uint32) (*StringField, error) {
+func parseStringField(r io.Reader) (*StringField, error) {
 	lengthBytes := make([]byte, 4)
-	if _, err := r.Read(lengthBytes); err != nil {
+	if _, err := io.ReadFull(r, lengthBytes); err != nil {
 		return nil, err
 	}
 
 	length := int(binary.BigEndian.Uint32(lengthBytes))
-	if length > int(maxSize) {
-		length = int(maxSize)
-	}
 
 	strBytes := make([]byte, length)
-	if _, err := r.Read(strBytes); err != nil {
+	if _, err := io.ReadFull(r, strBytes); err != nil {
 		return nil, err
 	}
 
-	return NewStringField(string(strBytes), int(maxSize)), nil
+	paddingSize := StringMaxSize - length
+	padding := make([]byte, paddingSize)
+	if _, err := io.ReadFull(r, padding); err != nil {
+		return nil, err
+	}
+
+	return NewStringField(string(strBytes), StringMaxSize), nil
 }
