@@ -18,3 +18,14 @@ func (t Type) String() string {
 		return "UNKNOWN_TYPE"
 	}
 }
+
+func (t Type) Size() uint32 {
+	switch t {
+	case IntType:
+		return 4
+	case StringType:
+		return 4 + StringMaxSize // 4 bytes for length + max string size
+	default:
+		return 0
+	}
+}

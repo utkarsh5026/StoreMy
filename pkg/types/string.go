@@ -6,6 +6,10 @@ import (
 	"strings"
 )
 
+const (
+	StringMaxSize = 128
+)
+
 type StringField struct {
 	Value   string
 	MaxSize int
@@ -100,4 +104,8 @@ func (s *StringField) Hash() (uint32, error) {
 		hash = 31*hash + int(c)
 	}
 	return uint32(hash), nil
+}
+
+func (s *StringField) Length() uint32 {
+	return 4 + StringMaxSize
 }
