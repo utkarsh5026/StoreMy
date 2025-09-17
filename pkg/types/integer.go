@@ -77,3 +77,8 @@ func (f *IntField) Equals(other Field) bool {
 func (f *IntField) Hash() (uint32, error) {
 	return uint32(f.Value), nil
 }
+
+// Length returns the length of the integer field in bytes (always 4 bytes for int32)
+func (f *IntField) Length() uint32 {
+	return 4
+}

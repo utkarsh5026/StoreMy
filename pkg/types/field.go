@@ -24,4 +24,8 @@ type Field interface {
 	// Hash computes a hash value for the field.
 	// Returns the hash as a uint32, or an error if hashing fails.
 	Hash() (uint32, error)
+
+	// Length returns the length of the field's data in bytes.
+	// This is useful for serialization and storage purposes.
+	Length() uint32
 }
