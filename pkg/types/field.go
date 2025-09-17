@@ -7,7 +7,7 @@ type Field interface {
 
 	Compare(op Predicate, other Field) (bool, error)
 
-	GetType() Type
+	Type() Type
 
 	String() string
 
