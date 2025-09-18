@@ -186,6 +186,33 @@ func (hp *HeapPage) DeleteTuple(t *tuple.Tuple) error {
 	return nil
 }
 
+// GetTuples returns all tuples on this page (excluding nil entries)
+func (hp *HeapPage) GetTuples() []*tuple.Tuple {
+	hp.mutex.RLock()
+	defer hp.mutex.RUnlock()
+
+	var tuples []*tuple.Tuple
+	for _, t := range hp.tuples {
+		if t != nil {
+			tuples = append(tuples, t)
+		}
+	}
+
+	return tuples
+}
+
+// GetTupleAt returns the tuple at the specified slot index
+func (hp *HeapPage) GetTupleAt(idx int) (*tuple.Tuple, error) {
+	hp.mutex.RLock()
+	defer hp.mutex.RUnlock()
+
+	if idx < 0 || idx >= hp.numSlots {
+		return nil, fmt.Errorf("slot index %d out of bounds", idx)
+	}
+
+	return hp.tuples[idx], nil
+}
+
 // getNumTuples calculates the number of tuples that fit on this page
 // Formula: floor((PageSize * BitsPerByte) / (tupleSize * BitsPerByte + 1))
 // The +1 accounts for the header bit per tuple
