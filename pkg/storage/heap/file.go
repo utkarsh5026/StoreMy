@@ -55,18 +55,10 @@ func (hf *HeapFile) NumPages() (int, error) {
 }
 
 // ReadPage reads the specified page from disk
-func (hf *HeapFile) ReadPage(pid tuple.PageID) (storage.Page, error) {
-	if pid == nil {
-		return nil, fmt.Errorf("page ID cannot be nil")
-	}
-
-	hpid, ok := pid.(*HeapPageID)
-	if !ok {
-		return nil, fmt.Errorf("invalid page ID type for HeapFile")
-	}
-
-	if hpid.GetTableID() != hf.GetID() {
-		return nil, fmt.Errorf("page ID table mismatch")
+func (hf *HeapFile) ReadPage(pageID tuple.PageID) (storage.Page, error) {
+	heapPageID, err := hf.validateAndConvertPageID(pageID)
+	if err != nil {
+		return nil, err
 	}
 
 	hf.mutex.RLock()
@@ -76,17 +68,41 @@ func (hf *HeapFile) ReadPage(pid tuple.PageID) (storage.Page, error) {
 		return nil, fmt.Errorf("file is closed")
 	}
 
-	offset := int64(hpid.PageNo()) * int64(storage.PageSize)
+	return hf.readPageData(heapPageID)
+}
+
+// validateAndConvertPageID validates and converts a PageID to HeapPageID
+func (hf *HeapFile) validateAndConvertPageID(pageID tuple.PageID) (*HeapPageID, error) {
+	if pageID == nil {
+		return nil, fmt.Errorf("page ID cannot be nil")
+	}
+
+	heapPageID, ok := pageID.(*HeapPageID)
+	if !ok {
+		return nil, fmt.Errorf("invalid page ID type for HeapFile")
+	}
+
+	if heapPageID.GetTableID() != hf.GetID() {
+		return nil, fmt.Errorf("page ID table mismatch")
+	}
+
+	return heapPageID, nil
+}
+
+// readPageData reads the actual page data from disk
+func (hf *HeapFile) readPageData(heapPageID *HeapPageID) (storage.Page, error) {
+	offset := int64(heapPageID.PageNo()) * int64(storage.PageSize)
 	pageData := make([]byte, storage.PageSize)
 
-	if _, err := hf.file.ReadAt(pageData, offset); err != nil {
+	_, err := hf.file.ReadAt(pageData, offset)
+	if err != nil {
 		if err == io.EOF {
-			return NewHeapPage(hpid, make([]byte, storage.PageSize), hf.tupleDesc)
+			return NewHeapPage(heapPageID, make([]byte, storage.PageSize), hf.tupleDesc)
 		}
 		return nil, fmt.Errorf("failed to read page data: %v", err)
 	}
 
-	return NewHeapPage(hpid, pageData, hf.tupleDesc)
+	return NewHeapPage(heapPageID, pageData, hf.tupleDesc)
 }
 
 // WritePage writes the given page to disk
