@@ -1,0 +1,15 @@
+{
+  "scripts": {
+    "test": "go test ./... -v",
+    "test:coverage": "go test ./... -cover",
+    "test:watch": "make test-watch",
+    "build": "go build -o bin/storemy ./",
+    "clean": "go clean -testcache",
+    "fmt": "go fmt ./...",
+    "vet": "go vet ./...",
+    "lint": "golangci-lint run",
+    "install:tools": "make install-tools"
+  },
+  "description": "StoreMy project scripts",
+  "note": "Use with: bash -c 'script_name' or create a simple script runner"
+}
