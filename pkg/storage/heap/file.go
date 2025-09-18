@@ -6,6 +6,7 @@ import (
 	"os"
 	"storemy/pkg/storage"
 	"storemy/pkg/tuple"
+	"storemy/pkg/utils"
 	"sync"
 )
 
@@ -21,9 +22,9 @@ func NewHeapFile(filename string, td *tuple.TupleDescription) (*HeapFile, error)
 		return nil, fmt.Errorf("filename cannot be empty")
 	}
 
-	file, err := os.OpenFile(filename, os.O_RDWR|os.O_CREATE, 0644)
+	file, err := utils.OpenFile(filename)
 	if err != nil {
-		return nil, fmt.Errorf("failed to open file %s: %v", filename, err)
+		return nil, err
 	}
 
 	return &HeapFile{
@@ -32,16 +33,13 @@ func NewHeapFile(filename string, td *tuple.TupleDescription) (*HeapFile, error)
 	}, nil
 }
 
+// GetID returns a unique identifier for this file based on its absolute path
 func (hf *HeapFile) GetID() int {
 	if hf.file == nil {
 		return 0
 	}
-	absPath := hf.file.Name()
-	hash := 0
-	for _, c := range absPath {
-		hash = 31*hash + int(c)
-	}
-	return hash
+
+	return utils.HashString(hf.file.Name())
 }
 
 // GetTupleDesc returns the schema of tuples in this file
@@ -104,13 +102,18 @@ func (hf *HeapFile) WritePage(p storage.Page) error {
 		return fmt.Errorf("file is closed")
 	}
 
-	hpid, ok := p.GetID().(*HeapPageID)
+	return hf.writePageToDisk(p)
+}
+
+// writePageToDisk handles the actual writing of page data to disk
+func (hf *HeapFile) writePageToDisk(page storage.Page) error {
+	heapPageID, ok := page.GetID().(*HeapPageID)
 	if !ok {
 		return fmt.Errorf("invalid page ID type for HeapFile")
 	}
 
-	offset := int64(hpid.PageNo()) * storage.PageSize
-	pageData := p.GetPageData()
+	offset := int64(heapPageID.PageNo()) * storage.PageSize
+	pageData := page.GetPageData()
 
 	if _, err := hf.file.WriteAt(pageData, offset); err != nil {
 		return fmt.Errorf("failed to write page data: %v", err)
@@ -123,6 +126,7 @@ func (hf *HeapFile) WritePage(p storage.Page) error {
 	return nil
 }
 
+// Close closes the underlying file
 func (hf *HeapFile) Close() error {
 	hf.mutex.Lock()
 	defer hf.mutex.Unlock()
@@ -217,11 +221,8 @@ func (hf *HeapFile) AddTuple(tid *storage.TransactionID, t *tuple.Tuple) ([]stor
 
 // DeleteTuple removes a tuple from the file
 func (hf *HeapFile) DeleteTuple(tid *storage.TransactionID, t *tuple.Tuple) (storage.Page, error) {
-	if t == nil {
-		return nil, fmt.Errorf("tuple cannot be nil")
-	}
-	if t.RecordID == nil {
-		return nil, fmt.Errorf("tuple has no record ID")
+	if err := hf.validateTupleForDeletion(t); err != nil {
+		return nil, err
 	}
 
 	page, err := hf.ReadPage(t.RecordID.PageID)
@@ -263,4 +264,15 @@ func (hf *HeapFile) numPages() (int, error) {
 		numPages++
 	}
 	return numPages, nil
+}
+
+// validateTupleForDeletion ensures tuple is valid for deletion
+func (hf *HeapFile) validateTupleForDeletion(t *tuple.Tuple) error {
+	if t == nil {
+		return fmt.Errorf("tuple cannot be nil")
+	}
+	if t.RecordID == nil {
+		return fmt.Errorf("tuple has no record ID")
+	}
+	return nil
 }
