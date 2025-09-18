@@ -36,16 +36,8 @@ func (tm *TableManager) AddTable(f storage.DbFile, name, pKey string) error {
 	tableInfo := NewTableInfo(f, name, pKey)
 	tid := f.GetID()
 
-	if t, exists := tm.nameToTable[name]; exists {
-		delete(tm.idToTable, t.GetID())
-	}
-
-	if t, exists := tm.idToTable[tid]; exists {
-		delete(tm.nameToTable, t.Name)
-	}
-
-	tm.nameToTable[name] = tableInfo
-	tm.idToTable[tid] = tableInfo
+	tm.removeExistingTable(name, tid)
+	tm.addTableToMaps(name, tid, tableInfo)
 	return nil
 }
 
@@ -77,23 +69,22 @@ func (tm *TableManager) GetTableName(tableID int) (string, error) {
 
 // GetTupleDesc returns the schema for the table with the specified ID
 func (tm *TableManager) GetTupleDesc(tableID int) (*tuple.TupleDescription, error) {
-	tm.mutex.RLock()
-	defer tm.mutex.RUnlock()
-
-	tableInfo, exists := tm.idToTable[tableID]
-	if !exists {
-		return nil, fmt.Errorf("table with ID %d not found", tableID)
+	tableInfo, err := tm.getTableInfo(tableID)
+	if err != nil {
+		return nil, err
 	}
-
 	return tableInfo.TupleDesc, nil
 }
 
+// Clear removes all tables from the catalog
 func (tm *TableManager) Clear() {
 	tm.mutex.Lock()
 	defer tm.mutex.Unlock()
 
 	for _, tableInfo := range tm.idToTable {
-		tableInfo.File.Close()
+		if tableInfo.File != nil {
+			tableInfo.File.Close()
+		}
 	}
 
 	tm.nameToTable = make(map[string]*TableInfo)
@@ -102,14 +93,10 @@ func (tm *TableManager) Clear() {
 
 // GetDbFile returns the DbFile for the table with the specified ID
 func (tm *TableManager) GetDbFile(tableID int) (storage.DbFile, error) {
-	tm.mutex.RLock()
-	defer tm.mutex.RUnlock()
-
-	ti, exists := tm.idToTable[tableID]
-	if !exists {
-		return nil, fmt.Errorf("table with ID %d not found", tableID)
+	ti, err := tm.getTableInfo(tableID)
+	if err != nil {
+		return nil, err
 	}
-
 	return ti.File, nil
 }
 
@@ -152,4 +139,32 @@ func (tm *TableManager) GetAllTableNames() []string {
 	}
 
 	return names
+}
+
+// removeExistingTable removes any existing table with the same name or ID
+func (tm *TableManager) removeExistingTable(name string, tableID int) {
+	if existingTable, exists := tm.nameToTable[name]; exists {
+		delete(tm.idToTable, existingTable.GetID())
+	}
+	if existingTable, exists := tm.idToTable[tableID]; exists {
+		delete(tm.nameToTable, existingTable.Name)
+	}
+}
+
+// addTableToMaps adds the table to both internal maps
+func (tm *TableManager) addTableToMaps(name string, tableID int, tableInfo *TableInfo) {
+	tm.nameToTable[name] = tableInfo
+	tm.idToTable[tableID] = tableInfo
+}
+
+// getTableInfo is a helper method to get table info by ID
+func (tm *TableManager) getTableInfo(tableID int) (*TableInfo, error) {
+	tm.mutex.RLock()
+	defer tm.mutex.RUnlock()
+
+	tableInfo, exists := tm.idToTable[tableID]
+	if !exists {
+		return nil, fmt.Errorf("table with ID %d not found", tableID)
+	}
+	return tableInfo, nil
 }
