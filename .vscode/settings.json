@@ -1,7 +1,11 @@
 {
     "cSpell.words": [
+        "golangci",
+        "GOPATH",
         "inotify",
         "inotifywait",
-        "storemy"
+        "mitranim",
+        "storemy",
+        "testcache"
     ]
 }
