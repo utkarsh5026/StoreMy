@@ -1,0 +1,201 @@
+package heap
+
+import (
+	"fmt"
+	"io"
+	"os"
+	"storemy/pkg/storage"
+	"storemy/pkg/tuple"
+	"sync"
+)
+
+type HeapFile struct {
+	file      *os.File
+	tupleDesc *tuple.TupleDescription
+	mutex     sync.RWMutex
+}
+
+// NewHeapFile creates a new HeapFile backed by the specified file
+func NewHeapFile(filename string, td *tuple.TupleDescription) (*HeapFile, error) {
+	file, err := os.OpenFile(filename, os.O_RDWR|os.O_CREATE, 0644)
+	if err != nil {
+		return nil, fmt.Errorf("failed to open file %s: %v", filename, err)
+	}
+	return &HeapFile{
+		file:      file,
+		tupleDesc: td,
+	}, nil
+}
+
+func (hf *HeapFile) GetID() int {
+	absPath := hf.file.Name()
+	hash := 0
+	for _, c := range absPath {
+		hash = 31*hash + int(c)
+	}
+	return hash
+}
+
+// GetTupleDesc returns the schema of tuples in this file
+func (hf *HeapFile) GetTupleDesc() *tuple.TupleDescription {
+	return hf.tupleDesc
+}
+
+// NumPages returns the number of pages in this HeapFile
+func (hf *HeapFile) NumPages() (int, error) {
+	hf.mutex.RLock()
+	defer hf.mutex.RUnlock()
+
+	stat, err := hf.file.Stat()
+	if err != nil {
+		return 0, fmt.Errorf("failed to get file stats: %v", err)
+	}
+
+	numPages := int(stat.Size() / int64(storage.PageSize))
+	if stat.Size()%int64(storage.PageSize) != 0 {
+		numPages++
+	}
+	return numPages, nil
+}
+
+// ReadPage reads the specified page from disk
+func (hf *HeapFile) ReadPage(pid tuple.PageID) (storage.Page, error) {
+	hpid, ok := pid.(*HeapPageID)
+	if !ok {
+		return nil, fmt.Errorf("invalid page ID type for HeapFile")
+	}
+
+	if hpid.GetTableID() != hf.GetID() {
+		return nil, fmt.Errorf("page ID table mismatch")
+	}
+
+	hf.mutex.RLock()
+	defer hf.mutex.RUnlock()
+
+	offset := int64(hpid.PageNo()) * int64(storage.PageSize)
+	pageData := make([]byte, storage.PageSize)
+
+	if _, err := hf.file.ReadAt(pageData, offset); err != nil {
+		if err == io.EOF {
+			return NewHeapPage(hpid, make([]byte, storage.PageSize), hf.tupleDesc)
+		}
+		return nil, fmt.Errorf("failed to read page data: %v", err)
+	}
+
+	return NewHeapPage(hpid, pageData, hf.tupleDesc)
+}
+
+func (hf *HeapFile) WritePage(p storage.Page) error {
+	hf.mutex.Lock()
+	defer hf.mutex.Unlock()
+
+	hpid, ok := p.GetID().(*HeapPageID)
+	if !ok {
+		return fmt.Errorf("invalid page ID type for HeapFile")
+	}
+
+	offset := int64(hpid.PageNo()) * storage.PageSize
+	pageData := p.GetPageData()
+
+	if _, err := hf.file.WriteAt(pageData, offset); err != nil {
+		return fmt.Errorf("failed to write page data: %v", err)
+	}
+
+	if err := hf.file.Sync(); err != nil {
+		return fmt.Errorf("failed to sync file: %v", err)
+	}
+
+	return nil
+}
+
+func (hf *HeapFile) Close() error {
+	hf.mutex.Lock()
+	defer hf.mutex.Unlock()
+
+	if hf.file != nil {
+		err := hf.file.Close()
+		hf.file = nil
+		return err
+	}
+
+	return nil
+}
+
+func (hf *HeapFile) AddTuple(tid *storage.TransactionID, t *tuple.Tuple) ([]storage.Page, error) {
+	numPages, err := hf.NumPages()
+	if err != nil {
+		return nil, err
+	}
+
+	for i := 0; i < numPages; i++ {
+		pageID := NewHeapPageID(hf.GetID(), i)
+		page, err := hf.ReadPage(pageID)
+
+		if err != nil {
+			continue
+		}
+
+		heapPage, ok := page.(*HeapPage)
+		if !ok {
+			continue
+		}
+
+		if heapPage.GetNumEmptySlots() > 0 {
+			if err := heapPage.AddTuple(t); err == nil {
+				heapPage.MarkDirty(true, tid)
+				return []storage.Page{heapPage}, nil
+			}
+		}
+	}
+
+	hf.mutex.Lock()
+	defer hf.mutex.Unlock()
+	return hf.addNewPageAndTuple(t)
+}
+
+// DeleteTuple removes a tuple from the file
+func (hf *HeapFile) DeleteTuple(tid *storage.TransactionID, t *tuple.Tuple) (storage.Page, error) {
+	if t.RecordID == nil {
+		return nil, fmt.Errorf("tuple has no record ID")
+	}
+
+	page, err := hf.ReadPage(t.RecordID.PageID)
+	if err != nil {
+		return nil, err
+	}
+
+	heapPage, ok := page.(*HeapPage)
+	if !ok {
+		return nil, fmt.Errorf("invalid page type")
+	}
+
+	if err := heapPage.DeleteTuple(t); err != nil {
+		return nil, err
+	}
+
+	heapPage.MarkDirty(true, tid)
+	return heapPage, nil
+}
+
+func (hf *HeapFile) addNewPageAndTuple(t *tuple.Tuple) ([]storage.Page, error) {
+	currentNumPages, err := hf.NumPages()
+	if err != nil {
+		return nil, err
+	}
+
+	newPageID := NewHeapPageID(hf.GetID(), currentNumPages)
+	newPage, err := NewHeapPage(newPageID, make([]byte, storage.PageSize), hf.tupleDesc)
+	if err != nil {
+		return nil, err
+	}
+
+	if err := newPage.AddTuple(t); err != nil {
+		return nil, err
+	}
+
+	if err := hf.WritePage(newPage); err != nil {
+		return nil, err
+	}
+
+	return []storage.Page{newPage}, nil
+}
