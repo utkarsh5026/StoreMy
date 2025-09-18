@@ -10,7 +10,7 @@ import (
 type Tuple struct {
 	TupleDesc *TupleDescription // Schema of this tuple
 	fields    []types.Field     // The actual field values
-	RecordID  *RecordID         // Where this tuple is stored (can be nil)
+	RecordID  *TupleRecordID    // Where this tuple is stored (can be nil)
 }
 
 // NewTuple creates a new tuple with the given schema

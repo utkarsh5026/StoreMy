@@ -2,27 +2,27 @@ package tuple
 
 import "fmt"
 
-// RecordID represents a reference to a specific tuple on a specific page
-type RecordID struct {
+// TupleRecordID represents a reference to a specific tuple on a specific page
+type TupleRecordID struct {
 	PageID   PageID // The page containing this tuple
 	TupleNum int    // The tuple number within the page
 }
 
-// NewRecordID creates a new RecordID
-func NewRecordID(pageID PageID, tupleNum int) *RecordID {
-	return &RecordID{
+// NewTupleRecordID creates a new TupleRecordID
+func NewTupleRecordID(pageID PageID, tupleNum int) *TupleRecordID {
+	return &TupleRecordID{
 		PageID:   pageID,
 		TupleNum: tupleNum,
 	}
 }
 
-func (rid *RecordID) Equals(other *RecordID) bool {
+func (rid *TupleRecordID) Equals(other *TupleRecordID) bool {
 	if other == nil {
 		return false
 	}
 	return rid.PageID.Equals(other.PageID) && rid.TupleNum == other.TupleNum
 }
 
-func (rid *RecordID) String() string {
-	return fmt.Sprintf("RecordID(page=%s, tuple=%d)", rid.PageID.String(), rid.TupleNum)
+func (rid *TupleRecordID) String() string {
+	return fmt.Sprintf("TupleRecordID(page=%s, tuple=%d)", rid.PageID.String(), rid.TupleNum)
 }
