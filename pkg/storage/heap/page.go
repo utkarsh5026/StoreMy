@@ -127,9 +127,6 @@ func (hp *HeapPage) GetBeforeImage() storage.Page {
 
 // SetBeforeImage copies current content to the before image
 func (hp *HeapPage) SetBeforeImage() {
-	hp.mutex.Lock()
-	defer hp.mutex.Unlock()
-
 	hp.oldData = hp.GetPageData()
 }
 
