@@ -1,0 +1,30 @@
+{
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "label": "Go: Test All",
+            "type": "shell",
+            "command": "go",
+            "args": ["test", "./...", "-v"],
+            "group": "test",
+            "presentation": {
+                "reveal": "always",
+                "panel": "new"
+            },
+            "problemMatcher": ["$go"]
+        },
+        {
+            "label": "Go: Watch Tests",
+            "type": "shell",
+            "command": "make",
+            "args": ["test-watch"],
+            "group": "test",
+            "isBackground": true,
+            "presentation": {
+                "reveal": "always",
+                "panel": "new"
+            },
+            "problemMatcher": ["$go"]
+        },
+    ]
+}
