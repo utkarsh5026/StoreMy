@@ -34,4 +34,6 @@ type DbFile interface {
 	GetID() int
 
 	GetTupleDesc() *tuple.TupleDescription
+
+	Close() error
 }
