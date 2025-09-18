@@ -50,6 +50,5 @@ func (hpid *HeapPageID) String() string {
 
 // HashCode returns a hash code for this heap page ID
 func (hpid *HeapPageID) HashCode() int {
-	// Combine table ID and page number into a single hash
 	return hpid.tableID*1000 + hpid.pageNum
 }

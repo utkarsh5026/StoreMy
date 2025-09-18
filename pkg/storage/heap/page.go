@@ -48,10 +48,10 @@ func NewHeapPage(pid *HeapPageID, data []byte, td *tuple.TupleDescription) (*Hea
 	}
 
 	copy(hp.oldData, data)
-
 	return hp, nil
 }
 
+// Get the number of empty slots in a heap page
 func (hp *HeapPage) GetNumEmptySlots() int {
 	hp.mutex.RLock()
 	defer hp.mutex.RUnlock()
@@ -341,7 +341,6 @@ func readTuple(reader io.Reader, td *tuple.TupleDescription) (*tuple.Tuple, erro
 			return nil, err
 		}
 	}
-
 	return t, nil
 }
 
