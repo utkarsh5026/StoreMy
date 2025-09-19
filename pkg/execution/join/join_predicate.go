@@ -88,14 +88,17 @@ func (jp *JoinPredicate) String() string {
 		jp.field1, jp.op.String(), jp.field2)
 }
 
+// GetOP returns the comparison operation of the join predicate.
 func (jp *JoinPredicate) GetOP() execution.PredicateOp {
 	return jp.op
 }
 
+// GetField1 returns the index of the field in the first tuple used in the join predicate.
 func (jp *JoinPredicate) GetField1() int {
 	return jp.field1
 }
 
+// GetField2 returns the index of the field in the second tuple used in the join predicate.
 func (jp *JoinPredicate) GetField2() int {
 	return jp.field2
 }
