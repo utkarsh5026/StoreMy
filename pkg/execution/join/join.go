@@ -100,11 +100,8 @@ func createCombinedSchema(leftChild, rightChild iterator.DbIterator) (*tuple.Tup
 // For hash joins, it builds the hash table from the right child.
 // For nested loop joins, it positions the left child at the first tuple.
 func (j *Join) Open() error {
-	if err := j.leftChild.Open(); err != nil {
-		return fmt.Errorf("failed to open left child: %v", err)
-	}
-	if err := j.rightChild.Open(); err != nil {
-		return fmt.Errorf("failed to open right child: %v", err)
+	if err := j.openChildren(); err != nil {
+		return err
 	}
 
 	j.mutex.Lock()
@@ -124,23 +121,26 @@ func (j *Join) Open() error {
 	return nil
 }
 
+// openChildren opens both child operators.
+func (j *Join) openChildren() error {
+	if err := j.leftChild.Open(); err != nil {
+		return fmt.Errorf("failed to open left child: %v", err)
+	}
+	if err := j.rightChild.Open(); err != nil {
+		return fmt.Errorf("failed to open right child: %v", err)
+	}
+	return nil
+}
+
 // Rewind resets the join operator to its initial state.
 func (j *Join) Rewind() error {
 	j.mutex.Lock()
 	defer j.mutex.Unlock()
 
-	// Rewind both children
-	if err := j.leftChild.Rewind(); err != nil {
+	if err := j.rewindChildren(); err != nil {
 		return err
 	}
-	if err := j.rightChild.Rewind(); err != nil {
-		return err
-	}
-
-	j.currentMatches = nil
-	j.currentLeft = nil
-	j.matchIndex = -1
-	j.hasCurrentLeft = false
+	j.resetState()
 
 	if j.isHashJoin {
 		// Hash table is already built, just reset left side
@@ -148,7 +148,6 @@ func (j *Join) Rewind() error {
 		j.currentMatches = nil
 		j.matchIndex = -1
 	} else {
-		// Re-initialize nested loop
 		if err := j.initializeNestedLoop(); err != nil {
 			return err
 		}
@@ -158,24 +157,46 @@ func (j *Join) Rewind() error {
 	return nil
 }
 
+// rewindChildren rewinds both child operators.
+func (j *Join) rewindChildren() error {
+	if err := j.leftChild.Rewind(); err != nil {
+		return err
+	}
+	return j.rightChild.Rewind()
+}
+
+// resetState clears common state variables.
+func (j *Join) resetState() {
+	j.currentMatches = nil
+	j.currentLeft = nil
+	j.matchIndex = -1
+	j.hasCurrentLeft = false
+}
+
 // Close releases resources held by the join operator and its children.
 func (j *Join) Close() error {
 	j.mutex.Lock()
 	defer j.mutex.Unlock()
+	j.cleanupResources()
+	j.closeChildren()
+	return j.base.Close()
+}
 
+// cleanupResources clears internal data structures.
+func (j *Join) cleanupResources() {
 	j.hashTable = make(map[string][]*tuple.Tuple)
 	j.currentMatches = nil
 	j.currentLeft = nil
+}
 
-	// Close children
+// closeChildren closes both child operators.
+func (j *Join) closeChildren() {
 	if j.leftChild != nil {
 		j.leftChild.Close()
 	}
 	if j.rightChild != nil {
 		j.rightChild.Close()
 	}
-
-	return j.base.Close()
 }
 
 // GetTupleDesc returns the tuple description for the joined tuples.
