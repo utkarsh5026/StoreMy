@@ -325,28 +325,33 @@ func (j *Join) readNextNestedLoop() (*tuple.Tuple, error) {
 			}
 		}
 
-		hasNextLeft, err := j.leftChild.HasNext()
-		if err != nil {
-			return nil, err
-		}
-
-		if !hasNextLeft {
-			j.hasCurrentLeft = false
-			return nil, nil // No more tuples
-		}
-
-		j.currentLeft, err = j.leftChild.Next()
-		if err != nil {
-			return nil, err
-		}
-
-		j.hasCurrentLeft = j.currentLeft != nil
-		if err := j.rightChild.Rewind(); err != nil {
+		if err := j.advanceToNextLeftTuple(); err != nil {
 			return nil, err
 		}
 	}
 
 	return nil, nil // No more tuples
+}
+
+// advanceToNextLeftTuple moves to the next left tuple and rewinds right child.
+func (j *Join) advanceToNextLeftTuple() error {
+	hasNextLeft, err := j.leftChild.HasNext()
+	if err != nil {
+		return err
+	}
+
+	if !hasNextLeft {
+		j.hasCurrentLeft = false
+		return nil
+	}
+
+	j.currentLeft, err = j.leftChild.Next()
+	if err != nil {
+		return err
+	}
+
+	j.hasCurrentLeft = j.currentLeft != nil
+	return j.rightChild.Rewind()
 }
 
 // readNextHashJoin implements hash join logic for equality predicates.
