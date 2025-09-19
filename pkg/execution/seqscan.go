@@ -119,6 +119,24 @@ func (ss *SequentialScan) Close() error {
 	return ss.base.Close()
 }
 
+// Rewind resets the sequential scan to the beginning of the table.
+// This allows the scan to be re-read from the start.
+//
+// Returns:
+//   - error: Error if the file iterator is not initialized or rewinding fails
+func (ss *SequentialScan) Rewind() error {
+	if ss.fileIter == nil {
+		return fmt.Errorf("file iterator not initialized")
+	}
+
+	if err := ss.fileIter.Rewind(); err != nil {
+		return err
+	}
+
+	ss.base.ClearCache()
+	return nil
+}
+
 // HasNext checks if there are more tuples available in the sequential scan.
 // The scan must be opened before calling this method.
 //
