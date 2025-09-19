@@ -60,7 +60,7 @@ func TestNewJoinPredicate(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			jp, err := NewJoinPredicate(tt.field1, tt.field2, tt.op)
-			
+
 			if tt.expectErr {
 				if err == nil {
 					t.Errorf("expected error but got none")
@@ -93,7 +93,7 @@ func TestNewJoinPredicate(t *testing.T) {
 func TestJoinPredicateGetters(t *testing.T) {
 	field1, field2 := 1, 2
 	op := execution.LessThan
-	
+
 	jp, err := NewJoinPredicate(field1, field2, op)
 	if err != nil {
 		t.Fatalf("failed to create join predicate: %v", err)
@@ -102,11 +102,11 @@ func TestJoinPredicateGetters(t *testing.T) {
 	if jp.GetField1() != field1 {
 		t.Errorf("GetField1() = %d, want %d", jp.GetField1(), field1)
 	}
-	
+
 	if jp.GetField2() != field2 {
 		t.Errorf("GetField2() = %d, want %d", jp.GetField2(), field2)
 	}
-	
+
 	if jp.GetOP() != op {
 		t.Errorf("GetOP() = %v, want %v", jp.GetOP(), op)
 	}
@@ -126,10 +126,10 @@ func TestJoinPredicateString(t *testing.T) {
 }
 
 // Helper function to create a test tuple
-func createTestTuple(fieldTypes []types.Type, values []interface{}) *tuple.Tuple {
+func createTestTuple(fieldTypes []types.Type, values []any) *tuple.Tuple {
 	td, _ := tuple.NewTupleDesc(fieldTypes, nil)
 	tup := tuple.NewTuple(td)
-	
+
 	for i, val := range values {
 		var field types.Field
 		switch v := val.(type) {
@@ -140,7 +140,7 @@ func createTestTuple(fieldTypes []types.Type, values []interface{}) *tuple.Tuple
 		}
 		tup.SetField(i, field)
 	}
-	
+
 	return tup
 }
 
@@ -161,8 +161,8 @@ func TestJoinPredicateFilter(t *testing.T) {
 			field1:     0,
 			field2:     0,
 			op:         execution.Equals,
-			tuple1Data: []interface{}{int32(10)},
-			tuple2Data: []interface{}{int32(10)},
+			tuple1Data: []any{int32(10)},
+			tuple2Data: []any{int32(10)},
 			expected:   true,
 			expectErr:  false,
 		},
@@ -302,7 +302,7 @@ func TestJoinPredicateFilterNilTuples(t *testing.T) {
 		t.Fatalf("failed to create join predicate: %v", err)
 	}
 
-	tuple1 := createTestTuple([]types.Type{types.IntType}, []interface{}{int32(10)})
+	tuple1 := createTestTuple([]types.Type{types.IntType}, []any{int32(10)})
 
 	tests := []struct {
 		name   string
