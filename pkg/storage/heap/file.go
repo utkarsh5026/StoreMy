@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"storemy/pkg/iterator"
 	"storemy/pkg/storage"
 	"storemy/pkg/tuple"
 	"storemy/pkg/utils"
@@ -260,7 +261,7 @@ func (hf *HeapFile) DeleteTuple(tid *storage.TransactionID, t *tuple.Tuple) (sto
 }
 
 // Iterator returns a DbFileIterator for iterating over tuples in this HeapFile
-func (hf *HeapFile) Iterator(tid *storage.TransactionID) storage.DbFileIterator {
+func (hf *HeapFile) Iterator(tid *storage.TransactionID) iterator.DbFileIterator {
 	return NewHeapFileIterator(hf, tid)
 }
 
