@@ -110,3 +110,8 @@ func (it *BaseIterator) MarkOpened() {
 	it.opened = true
 	it.nextTuple = nil
 }
+
+// ClearCache clears any cached next tuple in the iterator.
+func (it *BaseIterator) ClearCache() {
+	it.nextTuple = nil
+}
