@@ -2,6 +2,7 @@ package tables
 
 import (
 	"fmt"
+	"storemy/pkg/iterator"
 	"storemy/pkg/storage"
 	"storemy/pkg/tuple"
 	"storemy/pkg/types"
@@ -45,7 +46,7 @@ func (m *mockDbFile) DeleteTuple(tid *storage.TransactionID, t *tuple.Tuple) (st
 	return nil, nil
 }
 
-func (m *mockDbFile) Iterator(tid *storage.TransactionID) storage.DbFileIterator {
+func (m *mockDbFile) Iterator(tid *storage.TransactionID) iterator.DbFileIterator {
 	return nil
 }
 
@@ -236,7 +237,7 @@ func TestTableManager_AddTable_ErrorCases(t *testing.T) {
 func TestTableManager_AddTable_Replacement(t *testing.T) {
 	t.Run("Replace table by name", func(t *testing.T) {
 		tm := NewTableManager()
-		
+
 		// Add first table
 		dbFile1 := newMockDbFile(1, []types.Type{types.IntType}, []string{"id"})
 		err := tm.AddTable(dbFile1, "users", "id")
@@ -274,7 +275,7 @@ func TestTableManager_AddTable_Replacement(t *testing.T) {
 
 	t.Run("Replace table by ID", func(t *testing.T) {
 		tm := NewTableManager()
-		
+
 		// Add first table
 		dbFile1 := newMockDbFile(1, []types.Type{types.IntType}, []string{"id"})
 		err := tm.AddTable(dbFile1, "table1", "id")
@@ -513,11 +514,11 @@ func TestTableManager_GetDbFile(t *testing.T) {
 
 func TestTableManager_Clear(t *testing.T) {
 	tm := NewTableManager()
-	
+
 	// Add multiple tables
 	dbFile1 := newMockDbFile(1, []types.Type{types.IntType}, []string{"id"})
 	dbFile2 := newMockDbFile(2, []types.Type{types.StringType}, []string{"name"})
-	
+
 	tm.AddTable(dbFile1, "table1", "id")
 	tm.AddTable(dbFile2, "table2", "name")
 
