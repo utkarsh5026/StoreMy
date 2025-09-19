@@ -2,6 +2,7 @@ package execution
 
 import (
 	"fmt"
+	"storemy/pkg/iterator"
 	"storemy/pkg/tuple"
 	"storemy/pkg/types"
 )
@@ -15,7 +16,7 @@ type Project struct {
 	base      *BaseIterator           // Handles the iterator caching logic
 	fieldList []int                   // Which fields to project (e.g., [0, 2, 4])
 	typesList []types.Type            // Types of the projected fields
-	child     DbIterator              // Where we get tuples from
+	child     iterator.DbIterator     // Where we get tuples from
 	tupleDesc *tuple.TupleDescription // Schema of our output tuples
 }
 
@@ -31,7 +32,7 @@ type Project struct {
 // Returns:
 //   - *Project: A new Project instance configured with the specified field projection
 //   - error: An error if validation fails (nil child, mismatched lengths, invalid indices, type mismatches)
-func NewProject(fieldList []int, typesList []types.Type, child DbIterator) (*Project, error) {
+func NewProject(fieldList []int, typesList []types.Type, child iterator.DbIterator) (*Project, error) {
 	if child == nil {
 		return nil, fmt.Errorf("child operator cannot be nil")
 	}

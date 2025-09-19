@@ -2,6 +2,7 @@ package execution
 
 import (
 	"fmt"
+	"storemy/pkg/iterator"
 	"storemy/pkg/tuple"
 )
 
@@ -11,7 +12,7 @@ import (
 type Filter struct {
 	base      *BaseIterator
 	predicate *Predicate
-	child     DbIterator
+	child     iterator.DbIterator
 }
 
 // NewFilter creates a new Filter operator with the specified predicate and child operator.
@@ -25,7 +26,7 @@ type Filter struct {
 // Returns:
 //   - *Filter: A new Filter instance configured with the given predicate and child
 //   - error: An error if either predicate or child is nil
-func NewFilter(predicate *Predicate, child DbIterator) (*Filter, error) {
+func NewFilter(predicate *Predicate, child iterator.DbIterator) (*Filter, error) {
 	if predicate == nil {
 		return nil, fmt.Errorf("predicate cannot be nil")
 	}
