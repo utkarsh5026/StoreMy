@@ -232,18 +232,27 @@ func (j *Join) buildHashTable() error {
 			continue
 		}
 
-		joinField, err := rightTuple.GetField(rightFieldIndex)
-		if err != nil {
-			continue // Skip tuples with invalid fields
+		if err := j.addToHashTable(rightTuple, rightFieldIndex); err != nil {
+			continue
 		}
-		if joinField == nil {
-			continue // Skip tuples with null join fields
-		}
-
-		key := joinField.String()
-		j.hashTable[key] = append(j.hashTable[key], rightTuple)
 	}
 
+	return nil
+}
+
+// addToHashTable adds a tuple to the hash table with the given field as key.
+func (j *Join) addToHashTable(rightTuple *tuple.Tuple, rFieldIdx int) error {
+	joinField, err := rightTuple.GetField(rFieldIdx)
+	if err != nil {
+		return err
+	}
+
+	if joinField == nil {
+		return fmt.Errorf("null join field")
+	}
+
+	key := joinField.String()
+	j.hashTable[key] = append(j.hashTable[key], rightTuple)
 	return nil
 }
 
