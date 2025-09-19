@@ -5,15 +5,6 @@ import (
 	"storemy/pkg/tuple"
 )
 
-type DbIterator interface {
-	Open() error
-	HasNext() (bool, error)
-	Next() (*tuple.Tuple, error)
-	Rewind() error
-	Close() error
-	GetTupleDesc() *tuple.TupleDescription
-}
-
 // ReadNextFunc is the function signature for reading the next tuple from an iterator.
 // Returns:
 //   - *tuple.Tuple: Next tuple from the data source, or nil if no more tuples
