@@ -3,6 +3,7 @@ package join
 import (
 	"fmt"
 	"storemy/pkg/execution"
+	"storemy/pkg/iterator"
 	"storemy/pkg/tuple"
 	"sync"
 )
@@ -13,8 +14,8 @@ import (
 type Join struct {
 	base       *execution.BaseIterator // Handles iterator caching logic
 	predicate  *JoinPredicate          // Join condition
-	leftChild  execution.DbIterator    // Left input operator
-	rightChild execution.DbIterator    // Right input operator
+	leftChild  iterator.DbIterator     // Left input operator
+	rightChild iterator.DbIterator     // Right input operator
 	tupleDesc  *tuple.TupleDescription // Combined schema of output tuples
 
 	// Hash join specific fields (used when predicate is equality)
@@ -31,8 +32,6 @@ type Join struct {
 }
 
 // NewJoin creates a new Join operator with the specified predicate and child operators.
-// It automatically determines whether to use hash join (for equality predicates) or
-// nested loop join (for other predicates).
 //
 // Parameters:
 //   - predicate: The join condition that determines which tuple pairs to combine
@@ -42,19 +41,49 @@ type Join struct {
 // Returns:
 //   - *Join: A new join operator instance
 //   - error: An error if validation fails or tuple descriptors cannot be combined
-func NewJoin(predicate *JoinPredicate, leftChild, rightChild execution.DbIterator) (*Join, error) {
-	if predicate == nil {
-		return nil, fmt.Errorf("join predicate cannot be nil")
-	}
-	if leftChild == nil {
-		return nil, fmt.Errorf("left child operator cannot be nil")
-	}
-	if rightChild == nil {
-		return nil, fmt.Errorf("right child operator cannot be nil")
+func NewJoin(predicate *JoinPredicate, leftChild, rightChild iterator.DbIterator) (*Join, error) {
+	if err := validateInputs(predicate, leftChild, rightChild); err != nil {
+		return nil, err
 	}
 
+	combinedTupleDesc, err := createCombinedSchema(leftChild, rightChild)
+	if err != nil {
+		return nil, err
+	}
+
+	j := &Join{
+		predicate:  predicate,
+		leftChild:  leftChild,
+		rightChild: rightChild,
+		tupleDesc:  combinedTupleDesc,
+		isHashJoin: predicate.GetOP() == execution.Equals,
+		hashTable:  make(map[string][]*tuple.Tuple),
+		matchIndex: -1,
+	}
+
+	j.base = execution.NewBaseIterator(j.readNext)
+	return j, nil
+}
+
+// validateInputs ensures all required inputs are provided and valid.
+func validateInputs(predicate *JoinPredicate, leftChild, rightChild iterator.DbIterator) error {
+	if predicate == nil {
+		return fmt.Errorf("join predicate cannot be nil")
+	}
+	if leftChild == nil {
+		return fmt.Errorf("left child operator cannot be nil")
+	}
+	if rightChild == nil {
+		return fmt.Errorf("right child operator cannot be nil")
+	}
+	return nil
+}
+
+// createCombinedSchema merges tuple descriptors from both children.
+func createCombinedSchema(leftChild, rightChild iterator.DbIterator) (*tuple.TupleDescription, error) {
 	leftTupleDesc := leftChild.GetTupleDesc()
 	rightTupleDesc := rightChild.GetTupleDesc()
+
 	if leftTupleDesc == nil || rightTupleDesc == nil {
 		return nil, fmt.Errorf("child operators must have valid tuple descriptors")
 	}
@@ -64,19 +93,7 @@ func NewJoin(predicate *JoinPredicate, leftChild, rightChild execution.DbIterato
 		return nil, fmt.Errorf("failed to combine tuple descriptors")
 	}
 
-	isHashJoin := predicate.GetOP() == execution.Equals
-	j := &Join{
-		predicate:  predicate,
-		leftChild:  leftChild,
-		rightChild: rightChild,
-		tupleDesc:  combinedTupleDesc,
-		isHashJoin: isHashJoin,
-		hashTable:  make(map[string][]*tuple.Tuple),
-		matchIndex: -1,
-	}
-
-	j.base = execution.NewBaseIterator(j.readNext)
-	return j, nil
+	return combinedTupleDesc, nil
 }
 
 // Open initializes the join operator for execution.
