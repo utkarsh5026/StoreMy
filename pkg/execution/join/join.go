@@ -31,6 +31,12 @@ type Join struct {
 	mutex sync.RWMutex // Protects concurrent access
 }
 
+// joinResult encapsulates the result of a join attempt.
+type joinResult struct {
+	tuple *tuple.Tuple
+	err   error
+}
+
 // NewJoin creates a new Join operator with the specified predicate and child operators.
 //
 // Parameters:
@@ -345,21 +351,34 @@ func (j *Join) readNextNestedLoop() (*tuple.Tuple, error) {
 
 // readNextHashJoin implements hash join logic for equality predicates.
 func (j *Join) readNextHashJoin() (*tuple.Tuple, error) {
-	leftFieldIndex := j.predicate.GetField1()
-
-	if j.currentMatches != nil && j.matchIndex >= 0 && j.matchIndex < len(j.currentMatches) {
-		joinedTuple, err := tuple.CombineTuples(j.currentLeft, j.currentMatches[j.matchIndex])
-		j.matchIndex++
-
-		// If we've exhausted current matches, clear them
-		if j.matchIndex >= len(j.currentMatches) {
-			j.currentMatches = nil
-			j.currentLeft = nil
-			j.matchIndex = -1
-		}
-
-		return joinedTuple, err
+	if result := j.getNextFromCurrentMatches(); result != nil {
+		return result.tuple, result.err
 	}
+
+	return j.findNextMatchingLeftTuple()
+}
+
+// getNextFromCurrentMatches returns the next tuple from current match batch.
+func (j *Join) getNextFromCurrentMatches() *joinResult {
+	if j.currentMatches == nil || j.matchIndex < 0 || j.matchIndex >= len(j.currentMatches) {
+		return nil
+	}
+
+	joinedTuple, err := tuple.CombineTuples(j.currentLeft, j.currentMatches[j.matchIndex])
+	j.matchIndex++
+
+	if j.matchIndex >= len(j.currentMatches) {
+		j.currentMatches = nil
+		j.currentLeft = nil
+		j.matchIndex = -1
+	}
+
+	return &joinResult{joinedTuple, err}
+}
+
+// findNextMatchingLeftTuple finds the next left tuple that has matches in the hash table.
+func (j *Join) findNextMatchingLeftTuple() (*tuple.Tuple, error) {
+	leftFieldIndex := j.predicate.GetField1()
 
 	for {
 		hasNextLeft, err := j.leftChild.HasNext()
@@ -378,28 +397,30 @@ func (j *Join) readNextHashJoin() (*tuple.Tuple, error) {
 			continue
 		}
 
-		// Get join key from left tuple
-		joinField, err := leftTuple.GetField(leftFieldIndex)
-		if err != nil {
-			continue
-		}
-		if joinField == nil {
-			continue
-		}
-
-		key := joinField.String()
-
-		// Look for matches in hash table
-		if matches, exists := j.hashTable[key]; exists && len(matches) > 0 {
-			j.currentLeft = leftTuple
-			j.currentMatches = matches
-			j.matchIndex = 0
-
-			// Return first match
-			joinedTuple, err := tuple.CombineTuples(leftTuple, matches[0])
-			j.matchIndex++
-
-			return joinedTuple, err
+		if result := j.probeHashTable(leftTuple, leftFieldIndex); result != nil {
+			return result.tuple, result.err
 		}
 	}
+}
+
+// probeHashTable checks if a left tuple has matches in the hash table.
+func (j *Join) probeHashTable(leftTuple *tuple.Tuple, fieldIndex int) *joinResult {
+	joinField, err := leftTuple.GetField(fieldIndex)
+	if err != nil || joinField == nil {
+		return nil
+	}
+
+	key := joinField.String()
+	matches, exists := j.hashTable[key]
+	if !exists || len(matches) == 0 {
+		return nil
+	}
+
+	j.currentLeft = leftTuple
+	j.currentMatches = matches
+	j.matchIndex = 0
+
+	joinedTuple, err := tuple.CombineTuples(leftTuple, matches[0])
+	j.matchIndex++
+	return &joinResult{joinedTuple, err}
 }
