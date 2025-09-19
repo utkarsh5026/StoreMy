@@ -3,6 +3,7 @@ package join
 import (
 	"fmt"
 	"storemy/pkg/execution"
+	"storemy/pkg/iterator"
 	"storemy/pkg/tuple"
 	"storemy/pkg/types"
 	"testing"
@@ -110,17 +111,17 @@ func createJoinTestTuple(tupleDesc *tuple.TupleDescription, values []interface{}
 func TestNewJoin(t *testing.T) {
 	leftTupleDesc := createTestTupleDesc([]types.Type{types.IntType}, []string{"id"})
 	rightTupleDesc := createTestTupleDesc([]types.Type{types.IntType}, []string{"id"})
-	
+
 	leftChild := newMockIterator([]*tuple.Tuple{}, leftTupleDesc)
 	rightChild := newMockIterator([]*tuple.Tuple{}, rightTupleDesc)
-	
+
 	predicate, _ := NewJoinPredicate(0, 0, execution.Equals)
 
 	tests := []struct {
 		name        string
 		predicate   *JoinPredicate
-		leftChild   execution.DbIterator
-		rightChild  execution.DbIterator
+		leftChild   iterator.DbIterator
+		rightChild  iterator.DbIterator
 		expectError bool
 	}{
 		{
@@ -156,7 +157,7 @@ func TestNewJoin(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			join, err := NewJoin(tt.predicate, tt.leftChild, tt.rightChild)
-			
+
 			if tt.expectError {
 				if err == nil {
 					t.Errorf("expected error but got none")
@@ -183,22 +184,22 @@ func TestNewJoin(t *testing.T) {
 func TestJoinGetTupleDesc(t *testing.T) {
 	leftTupleDesc := createTestTupleDesc([]types.Type{types.IntType}, []string{"left_id"})
 	rightTupleDesc := createTestTupleDesc([]types.Type{types.StringType}, []string{"right_name"})
-	
+
 	leftChild := newMockIterator([]*tuple.Tuple{}, leftTupleDesc)
 	rightChild := newMockIterator([]*tuple.Tuple{}, rightTupleDesc)
-	
+
 	predicate, _ := NewJoinPredicate(0, 0, execution.Equals)
 	join, err := NewJoin(predicate, leftChild, rightChild)
-	
+
 	if err != nil {
 		t.Fatalf("failed to create join: %v", err)
 	}
-	
+
 	tupleDesc := join.GetTupleDesc()
 	if tupleDesc == nil {
 		t.Errorf("expected non-nil tuple descriptor")
 	}
-	
+
 	// The combined descriptor should have fields from both sides
 	if tupleDesc.NumFields() != 2 {
 		t.Errorf("expected 2 fields, got %d", tupleDesc.NumFields())
@@ -210,36 +211,36 @@ func TestHashJoinBasic(t *testing.T) {
 	// Create test data
 	leftTupleDesc := createTestTupleDesc([]types.Type{types.IntType, types.StringType}, []string{"id", "name"})
 	rightTupleDesc := createTestTupleDesc([]types.Type{types.IntType, types.StringType}, []string{"id", "dept"})
-	
+
 	leftTuples := []*tuple.Tuple{
 		createJoinTestTuple(leftTupleDesc, []interface{}{int32(1), "Alice"}),
 		createJoinTestTuple(leftTupleDesc, []interface{}{int32(2), "Bob"}),
 		createJoinTestTuple(leftTupleDesc, []interface{}{int32(3), "Charlie"}),
 	}
-	
+
 	rightTuples := []*tuple.Tuple{
 		createJoinTestTuple(rightTupleDesc, []interface{}{int32(1), "Engineering"}),
 		createJoinTestTuple(rightTupleDesc, []interface{}{int32(2), "Marketing"}),
 		createJoinTestTuple(rightTupleDesc, []interface{}{int32(4), "Sales"}),
 	}
-	
+
 	leftChild := newMockIterator(leftTuples, leftTupleDesc)
 	rightChild := newMockIterator(rightTuples, rightTupleDesc)
-	
+
 	// Create equality predicate for hash join
 	predicate, _ := NewJoinPredicate(0, 0, execution.Equals)
 	join, err := NewJoin(predicate, leftChild, rightChild)
-	
+
 	if err != nil {
 		t.Fatalf("failed to create join: %v", err)
 	}
-	
+
 	// Open the join
 	if err := join.Open(); err != nil {
 		t.Fatalf("failed to open join: %v", err)
 	}
 	defer join.Close()
-	
+
 	// Collect results
 	var results []*tuple.Tuple
 	for {
@@ -250,19 +251,19 @@ func TestHashJoinBasic(t *testing.T) {
 		if !hasNext {
 			break
 		}
-		
+
 		nextTuple, err := join.Next()
 		if err != nil {
 			t.Fatalf("error getting Next: %v", err)
 		}
 		results = append(results, nextTuple)
 	}
-	
+
 	// Should have 2 matching tuples (id=1 and id=2)
 	if len(results) != 2 {
 		t.Errorf("expected 2 results, got %d", len(results))
 	}
-	
+
 	// Verify the joined tuples have correct number of fields
 	if len(results) > 0 && results[0].TupleDesc.NumFields() != 4 {
 		t.Errorf("expected 4 fields in joined tuple, got %d", results[0].TupleDesc.NumFields())
@@ -274,35 +275,35 @@ func TestNestedLoopJoin(t *testing.T) {
 	// Create test data
 	leftTupleDesc := createTestTupleDesc([]types.Type{types.IntType}, []string{"score"})
 	rightTupleDesc := createTestTupleDesc([]types.Type{types.IntType}, []string{"threshold"})
-	
+
 	leftTuples := []*tuple.Tuple{
 		createJoinTestTuple(leftTupleDesc, []interface{}{int32(85)}),
 		createJoinTestTuple(leftTupleDesc, []interface{}{int32(90)}),
 		createJoinTestTuple(leftTupleDesc, []interface{}{int32(75)}),
 	}
-	
+
 	rightTuples := []*tuple.Tuple{
 		createJoinTestTuple(rightTupleDesc, []interface{}{int32(80)}),
 		createJoinTestTuple(rightTupleDesc, []interface{}{int32(95)}),
 	}
-	
+
 	leftChild := newMockIterator(leftTuples, leftTupleDesc)
 	rightChild := newMockIterator(rightTuples, rightTupleDesc)
-	
+
 	// Create greater than predicate for nested loop join
 	predicate, _ := NewJoinPredicate(0, 0, execution.GreaterThan)
 	join, err := NewJoin(predicate, leftChild, rightChild)
-	
+
 	if err != nil {
 		t.Fatalf("failed to create join: %v", err)
 	}
-	
+
 	// Open the join
 	if err := join.Open(); err != nil {
 		t.Fatalf("failed to open join: %v", err)
 	}
 	defer join.Close()
-	
+
 	// Collect results
 	var results []*tuple.Tuple
 	for {
@@ -313,14 +314,14 @@ func TestNestedLoopJoin(t *testing.T) {
 		if !hasNext {
 			break
 		}
-		
+
 		nextTuple, err := join.Next()
 		if err != nil {
 			t.Fatalf("error getting Next: %v", err)
 		}
 		results = append(results, nextTuple)
 	}
-	
+
 	// Should have 2 results: (85 > 80) and (90 > 80)
 	expectedResults := 2
 	if len(results) != expectedResults {
@@ -332,45 +333,45 @@ func TestNestedLoopJoin(t *testing.T) {
 func TestJoinRewind(t *testing.T) {
 	leftTupleDesc := createTestTupleDesc([]types.Type{types.IntType}, []string{"id"})
 	rightTupleDesc := createTestTupleDesc([]types.Type{types.IntType}, []string{"id"})
-	
+
 	leftTuples := []*tuple.Tuple{
 		createJoinTestTuple(leftTupleDesc, []interface{}{int32(1)}),
 		createJoinTestTuple(leftTupleDesc, []interface{}{int32(2)}),
 	}
-	
+
 	rightTuples := []*tuple.Tuple{
 		createJoinTestTuple(rightTupleDesc, []interface{}{int32(1)}),
 		createJoinTestTuple(rightTupleDesc, []interface{}{int32(2)}),
 	}
-	
+
 	leftChild := newMockIterator(leftTuples, leftTupleDesc)
 	rightChild := newMockIterator(rightTuples, rightTupleDesc)
-	
+
 	predicate, _ := NewJoinPredicate(0, 0, execution.Equals)
 	join, err := NewJoin(predicate, leftChild, rightChild)
-	
+
 	if err != nil {
 		t.Fatalf("failed to create join: %v", err)
 	}
-	
+
 	// Open and consume some results
 	if err := join.Open(); err != nil {
 		t.Fatalf("failed to open join: %v", err)
 	}
 	defer join.Close()
-	
+
 	// Get first result
 	hasNext, _ := join.HasNext()
 	if !hasNext {
 		t.Fatalf("expected at least one result")
 	}
 	join.Next()
-	
+
 	// Rewind and check if we can get results again
 	if err := join.Rewind(); err != nil {
 		t.Fatalf("failed to rewind join: %v", err)
 	}
-	
+
 	// Count results after rewind
 	var count int
 	for {
@@ -381,14 +382,14 @@ func TestJoinRewind(t *testing.T) {
 		if !hasNext {
 			break
 		}
-		
+
 		_, err = join.Next()
 		if err != nil {
 			t.Fatalf("error getting Next after rewind: %v", err)
 		}
 		count++
 	}
-	
+
 	if count != 2 {
 		t.Errorf("expected 2 results after rewind, got %d", count)
 	}
@@ -398,7 +399,7 @@ func TestJoinRewind(t *testing.T) {
 func TestJoinEmptyInputs(t *testing.T) {
 	leftTupleDesc := createTestTupleDesc([]types.Type{types.IntType}, []string{"id"})
 	rightTupleDesc := createTestTupleDesc([]types.Type{types.IntType}, []string{"id"})
-	
+
 	tests := []struct {
 		name        string
 		leftTuples  []*tuple.Tuple
@@ -420,24 +421,24 @@ func TestJoinEmptyInputs(t *testing.T) {
 			rightTuples: []*tuple.Tuple{},
 		},
 	}
-	
+
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			leftChild := newMockIterator(tt.leftTuples, leftTupleDesc)
 			rightChild := newMockIterator(tt.rightTuples, rightTupleDesc)
-			
+
 			predicate, _ := NewJoinPredicate(0, 0, execution.Equals)
 			join, err := NewJoin(predicate, leftChild, rightChild)
-			
+
 			if err != nil {
 				t.Fatalf("failed to create join: %v", err)
 			}
-			
+
 			if err := join.Open(); err != nil {
 				t.Fatalf("failed to open join: %v", err)
 			}
 			defer join.Close()
-			
+
 			// Should have no results
 			hasNext, err := join.HasNext()
 			if err != nil {
@@ -454,33 +455,33 @@ func TestJoinEmptyInputs(t *testing.T) {
 func TestJoinWithNullValues(t *testing.T) {
 	leftTupleDesc := createTestTupleDesc([]types.Type{types.IntType}, []string{"id"})
 	rightTupleDesc := createTestTupleDesc([]types.Type{types.IntType}, []string{"id"})
-	
+
 	// Create tuples with null values (empty tuples)
 	leftTuples := []*tuple.Tuple{
 		createJoinTestTuple(leftTupleDesc, []interface{}{int32(1)}),
 		tuple.NewTuple(leftTupleDesc), // null tuple
 	}
-	
+
 	rightTuples := []*tuple.Tuple{
 		createJoinTestTuple(rightTupleDesc, []interface{}{int32(1)}),
 		tuple.NewTuple(rightTupleDesc), // null tuple
 	}
-	
+
 	leftChild := newMockIterator(leftTuples, leftTupleDesc)
 	rightChild := newMockIterator(rightTuples, rightTupleDesc)
-	
+
 	predicate, _ := NewJoinPredicate(0, 0, execution.Equals)
 	join, err := NewJoin(predicate, leftChild, rightChild)
-	
+
 	if err != nil {
 		t.Fatalf("failed to create join: %v", err)
 	}
-	
+
 	if err := join.Open(); err != nil {
 		t.Fatalf("failed to open join: %v", err)
 	}
 	defer join.Close()
-	
+
 	// Count results - only non-null pairs should match
 	var count int
 	for {
@@ -491,14 +492,14 @@ func TestJoinWithNullValues(t *testing.T) {
 		if !hasNext {
 			break
 		}
-		
+
 		_, err = join.Next()
 		if err != nil {
 			t.Fatalf("error getting Next: %v", err)
 		}
 		count++
 	}
-	
+
 	// Should only match the non-null pair (1, 1)
 	if count != 1 {
 		t.Errorf("expected 1 result with null handling, got %d", count)
@@ -509,20 +510,20 @@ func TestJoinWithNullValues(t *testing.T) {
 func TestJoinErrorHandling(t *testing.T) {
 	leftTupleDesc := createTestTupleDesc([]types.Type{types.IntType}, []string{"id"})
 	rightTupleDesc := createTestTupleDesc([]types.Type{types.IntType}, []string{"id"})
-	
+
 	// Create iterator that fails on open
 	leftChild := newMockIterator([]*tuple.Tuple{}, leftTupleDesc)
 	leftChild.hasError = true
-	
+
 	rightChild := newMockIterator([]*tuple.Tuple{}, rightTupleDesc)
-	
+
 	predicate, _ := NewJoinPredicate(0, 0, execution.Equals)
 	join, err := NewJoin(predicate, leftChild, rightChild)
-	
+
 	if err != nil {
 		t.Fatalf("failed to create join: %v", err)
 	}
-	
+
 	// Opening should fail
 	if err := join.Open(); err == nil {
 		t.Errorf("expected error when opening join with failing child")
@@ -533,26 +534,26 @@ func TestJoinErrorHandling(t *testing.T) {
 func TestJoinClose(t *testing.T) {
 	leftTupleDesc := createTestTupleDesc([]types.Type{types.IntType}, []string{"id"})
 	rightTupleDesc := createTestTupleDesc([]types.Type{types.IntType}, []string{"id"})
-	
+
 	leftChild := newMockIterator([]*tuple.Tuple{}, leftTupleDesc)
 	rightChild := newMockIterator([]*tuple.Tuple{}, rightTupleDesc)
-	
+
 	predicate, _ := NewJoinPredicate(0, 0, execution.Equals)
 	join, err := NewJoin(predicate, leftChild, rightChild)
-	
+
 	if err != nil {
 		t.Fatalf("failed to create join: %v", err)
 	}
-	
+
 	if err := join.Open(); err != nil {
 		t.Fatalf("failed to open join: %v", err)
 	}
-	
+
 	// Close should not error
 	if err := join.Close(); err != nil {
 		t.Errorf("unexpected error when closing join: %v", err)
 	}
-	
+
 	// Operations after close should fail
 	hasNext, err := join.HasNext()
 	if err == nil {
