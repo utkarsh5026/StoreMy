@@ -2,6 +2,7 @@ package execution
 
 import (
 	"fmt"
+	"storemy/pkg/iterator"
 	"storemy/pkg/storage"
 	"storemy/pkg/tables"
 	"storemy/pkg/tuple"
@@ -13,7 +14,7 @@ type SequentialScan struct {
 	base         *BaseIterator
 	tid          *storage.TransactionID
 	tableID      int
-	fileIter     storage.DbFileIterator
+	fileIter     iterator.DbFileIterator
 	tupleDesc    *tuple.TupleDescription
 	tableManager *tables.TableManager
 }

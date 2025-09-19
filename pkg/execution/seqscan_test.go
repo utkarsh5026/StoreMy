@@ -2,6 +2,7 @@ package execution
 
 import (
 	"fmt"
+	"storemy/pkg/iterator"
 	"storemy/pkg/storage"
 	"storemy/pkg/tuple"
 	"storemy/pkg/types"
@@ -111,7 +112,7 @@ func (m *mockDbFile) DeleteTuple(tid *storage.TransactionID, t *tuple.Tuple) (st
 	return nil, fmt.Errorf("not implemented")
 }
 
-func (m *mockDbFile) Iterator(tid *storage.TransactionID) storage.DbFileIterator {
+func (m *mockDbFile) Iterator(tid *storage.TransactionID) iterator.DbFileIterator {
 	if m.hasError {
 		return nil
 	}
@@ -172,12 +173,12 @@ func (m *mockTableManager) GetDbFile(tableID int) (storage.DbFile, error) {
 
 // testSequentialScan is a simplified version for testing that embeds the behavior we want to test
 type testSequentialScan struct {
-	base         *BaseIterator
-	tid          *storage.TransactionID
-	tableID      int
-	fileIter     storage.DbFileIterator
-	tupleDesc    *tuple.TupleDescription
-	mockTM       *mockTableManager
+	base      *BaseIterator
+	tid       *storage.TransactionID
+	tableID   int
+	fileIter  iterator.DbFileIterator
+	tupleDesc *tuple.TupleDescription
+	mockTM    *mockTableManager
 }
 
 func createTestSeqScan(tid *storage.TransactionID, tableID int, tm *mockTableManager, td *tuple.TupleDescription) (*testSequentialScan, error) {
@@ -187,7 +188,7 @@ func createTestSeqScan(tid *storage.TransactionID, tableID int, tm *mockTableMan
 		tupleDesc: td,
 		mockTM:    tm,
 	}
-	
+
 	tss.base = NewBaseIterator(tss.readNext)
 	return tss, nil
 }
@@ -240,7 +241,7 @@ func (tss *testSequentialScan) Close() error {
 	return tss.base.Close()
 }
 
-func (tss *testSequentialScan) HasNext() (bool, error) { return tss.base.HasNext() }
+func (tss *testSequentialScan) HasNext() (bool, error)      { return tss.base.HasNext() }
 func (tss *testSequentialScan) Next() (*tuple.Tuple, error) { return tss.base.Next() }
 
 // Helper functions
@@ -260,17 +261,17 @@ func createSeqScanTestTuple(td *tuple.TupleDescription, id int32, name string) *
 	t := tuple.NewTuple(td)
 	intField := types.NewIntField(id)
 	stringField := types.NewStringField(name, 128)
-	
+
 	err := t.SetField(0, intField)
 	if err != nil {
 		panic(fmt.Sprintf("Failed to set int field: %v", err))
 	}
-	
+
 	err = t.SetField(1, stringField)
 	if err != nil {
 		panic(fmt.Sprintf("Failed to set string field: %v", err))
 	}
-	
+
 	return t
 }
 
@@ -325,7 +326,7 @@ func TestNewSeqScan_NilTableManager(t *testing.T) {
 		tableID:      tableID,
 		tableManager: nil,
 	}
-	
+
 	// Should fail when trying to get tuple desc
 	if ss.tableManager == nil {
 		// This simulates the error condition
@@ -569,13 +570,13 @@ func TestSeqScan_SingleTuple(t *testing.T) {
 func TestSeqScan_MultipleTuples(t *testing.T) {
 	tm := newMockTableManager()
 	td := mustCreateSeqScanTupleDesc()
-	
+
 	tuples := []*tuple.Tuple{
 		createSeqScanTestTuple(td, 1, "first"),
 		createSeqScanTestTuple(td, 2, "second"),
 		createSeqScanTestTuple(td, 3, "third"),
 	}
-	
+
 	dbFile := newMockDbFile(1, td, tuples)
 	tm.addTable(1, dbFile)
 
@@ -592,7 +593,7 @@ func TestSeqScan_MultipleTuples(t *testing.T) {
 	defer seqScan.Close()
 
 	var retrievedTuples []*tuple.Tuple
-	
+
 	// Iterate through all tuples
 	for {
 		hasNext, err := seqScan.HasNext()
