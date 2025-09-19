@@ -87,3 +87,15 @@ func (jp *JoinPredicate) String() string {
 	return fmt.Sprintf("JoinPredicate(field1=%d %s field2=%d)",
 		jp.field1, jp.op.String(), jp.field2)
 }
+
+func (jp *JoinPredicate) GetOP() execution.PredicateOp {
+	return jp.op
+}
+
+func (jp *JoinPredicate) GetField1() int {
+	return jp.field1
+}
+
+func (jp *JoinPredicate) GetField2() int {
+	return jp.field2
+}
