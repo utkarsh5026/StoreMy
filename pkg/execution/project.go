@@ -19,6 +19,18 @@ type Project struct {
 	tupleDesc *tuple.TupleDescription // Schema of our output tuples
 }
 
+// NewProject creates a new Project operator that selects specific columns from the input tuples.
+// It validates that the field indices are valid for the child operator's schema and that
+// the types match the expected types for the projected fields.
+//
+// Parameters:
+//   - fieldList: Indices of fields to project from the child tuples (e.g., [0, 2, 4])
+//   - typesList: Expected types of the projected fields, must match fieldList length
+//   - child: The child operator that provides input tuples (cannot be nil)
+//
+// Returns:
+//   - *Project: A new Project instance configured with the specified field projection
+//   - error: An error if validation fails (nil child, mismatched lengths, invalid indices, type mismatches)
 func NewProject(fieldList []int, typesList []types.Type, child DbIterator) (*Project, error) {
 	if child == nil {
 		return nil, fmt.Errorf("child operator cannot be nil")
@@ -41,20 +53,16 @@ func NewProject(fieldList []int, typesList []types.Type, child DbIterator) (*Pro
 	fieldNames := make([]string, len(fieldList))
 
 	for i, fieldIndex := range fieldList {
-		// Validate that field index is in bounds
 		if fieldIndex < 0 || fieldIndex >= childTupleDesc.NumFields() {
 			return nil, fmt.Errorf("field index %d out of bounds (child has %d fields)",
 				fieldIndex, childTupleDesc.NumFields())
 		}
 
-		// Get the field name from the child schema
 		fieldName, err := childTupleDesc.GetFieldName(fieldIndex)
 		if err != nil {
 			return nil, fmt.Errorf("failed to get field name for index %d: %v", fieldIndex, err)
 		}
 		fieldNames[i] = fieldName
-
-		// Validate that the type matches what we expect
 		expectedType, err := childTupleDesc.TypeAtIndex(fieldIndex)
 		if err != nil {
 			return nil, fmt.Errorf("failed to get type for field %d: %v", fieldIndex, err)
@@ -81,20 +89,33 @@ func NewProject(fieldList []int, typesList []types.Type, child DbIterator) (*Pro
 	return p, nil
 }
 
-// GetTupleDesc returns our projected schema
+// GetTupleDesc returns the tuple description (schema) for tuples produced by this projection.
+//
+// Returns:
+//   - *tuple.TupleDescription: The schema description for the projected output tuples
 func (p *Project) GetTupleDesc() *tuple.TupleDescription {
 	return p.tupleDesc
 }
 
+// Open initializes the Project operator for execution by opening its child operator
+// and marking itself as opened. This method must be called before any iteration operations.
+// The data flow is established from child to this projection operator.
+//
+// Returns:
+//   - error: An error if the child operator fails to open, nil otherwise
 func (p *Project) Open() error {
 	if err := p.child.Open(); err != nil {
 		return fmt.Errorf("failed to open child operator: %v", err)
 	}
-	
+
 	p.base.MarkOpened()
 	return nil
 }
 
+// Close releases resources held by the Project operator and its child operator.
+//
+// Returns:
+//   - error: Always returns nil as cleanup operations don't typically fail
 func (p *Project) Close() error {
 	if p.child != nil {
 		p.child.Close()
@@ -102,6 +123,12 @@ func (p *Project) Close() error {
 	return p.base.Close()
 }
 
+// Rewind resets the Project operator to its initial state, allowing iteration
+// to begin again from the first tuple. This involves rewinding the child operator
+// and clearing any cached state in the base iterator.
+//
+// Returns:
+//   - error: An error if the child operator fails to rewind, nil otherwise
 func (p *Project) Rewind() error {
 	if err := p.child.Rewind(); err != nil {
 		return err
@@ -111,9 +138,31 @@ func (p *Project) Rewind() error {
 	return nil
 }
 
-func (p *Project) HasNext() (bool, error)      { return p.base.HasNext() }
+// HasNext checks if there are more projected tuples available for iteration.
+// This method delegates to the base iterator which handles the caching logic.
+//
+// Returns:
+//   - bool: True if more tuples are available, false otherwise
+//   - error: An error if the check operation fails
+func (p *Project) HasNext() (bool, error) { return p.base.HasNext() }
+
+// Next returns the next projected tuple with only the selected fields.
+// This method delegates to the base iterator which calls readNext internally.
+// Should only be called after HasNext() returns true.
+//
+// Returns:
+//   - *tuple.Tuple: The next tuple with projected fields
+//   - error: An error if the iteration fails or no more tuples are available
 func (p *Project) Next() (*tuple.Tuple, error) { return p.base.Next() }
 
+// readNext is the core projection logic that reads tuples from the child operator
+// and creates new tuples containing only the specified projected fields.
+// This method extracts the requested fields from the child tuple and constructs
+// a new tuple with the projected schema.
+//
+// Returns:
+//   - *tuple.Tuple: The next tuple with only projected fields, or nil if no more tuples
+//   - error: An error if any operation during projection fails
 func (p *Project) readNext() (*tuple.Tuple, error) {
 
 	hasNext, err := p.child.HasNext()
