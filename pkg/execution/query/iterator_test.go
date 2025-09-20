@@ -1,4 +1,4 @@
-package execution
+package query
 
 import (
 	"fmt"
@@ -37,7 +37,7 @@ func TestBaseIterator_MarkOpened(t *testing.T) {
 	}
 
 	iterator := NewBaseIterator(readFunc)
-	
+
 	iterator.MarkOpened()
 
 	if !iterator.opened {
@@ -468,16 +468,16 @@ func createTestTuple(td *tuple.TupleDescription, id int32, name string) *tuple.T
 	t := tuple.NewTuple(td)
 	intField := types.NewIntField(id)
 	stringField := types.NewStringField(name, 128)
-	
+
 	err := t.SetField(0, intField)
 	if err != nil {
 		panic(fmt.Sprintf("Failed to set int field: %v", err))
 	}
-	
+
 	err = t.SetField(1, stringField)
 	if err != nil {
 		panic(fmt.Sprintf("Failed to set string field: %v", err))
 	}
-	
+
 	return t
 }
