@@ -2,7 +2,7 @@ package join
 
 import (
 	"fmt"
-	"storemy/pkg/execution"
+	"storemy/pkg/execution/query"
 	"storemy/pkg/iterator"
 	"storemy/pkg/tuple"
 	"storemy/pkg/types"
@@ -115,7 +115,7 @@ func TestNewJoin(t *testing.T) {
 	leftChild := newMockIterator([]*tuple.Tuple{}, leftTupleDesc)
 	rightChild := newMockIterator([]*tuple.Tuple{}, rightTupleDesc)
 
-	predicate, _ := NewJoinPredicate(0, 0, execution.Equals)
+	predicate, _ := NewJoinPredicate(0, 0, query.Equals)
 
 	tests := []struct {
 		name        string
@@ -188,7 +188,7 @@ func TestJoinGetTupleDesc(t *testing.T) {
 	leftChild := newMockIterator([]*tuple.Tuple{}, leftTupleDesc)
 	rightChild := newMockIterator([]*tuple.Tuple{}, rightTupleDesc)
 
-	predicate, _ := NewJoinPredicate(0, 0, execution.Equals)
+	predicate, _ := NewJoinPredicate(0, 0, query.Equals)
 	join, err := NewJoin(predicate, leftChild, rightChild)
 
 	if err != nil {
@@ -228,7 +228,7 @@ func TestHashJoinBasic(t *testing.T) {
 	rightChild := newMockIterator(rightTuples, rightTupleDesc)
 
 	// Create equality predicate for hash join
-	predicate, _ := NewJoinPredicate(0, 0, execution.Equals)
+	predicate, _ := NewJoinPredicate(0, 0, query.Equals)
 	join, err := NewJoin(predicate, leftChild, rightChild)
 
 	if err != nil {
@@ -291,7 +291,7 @@ func TestNestedLoopJoin(t *testing.T) {
 	rightChild := newMockIterator(rightTuples, rightTupleDesc)
 
 	// Create greater than predicate for nested loop join
-	predicate, _ := NewJoinPredicate(0, 0, execution.GreaterThan)
+	predicate, _ := NewJoinPredicate(0, 0, query.GreaterThan)
 	join, err := NewJoin(predicate, leftChild, rightChild)
 
 	if err != nil {
@@ -347,7 +347,7 @@ func TestJoinRewind(t *testing.T) {
 	leftChild := newMockIterator(leftTuples, leftTupleDesc)
 	rightChild := newMockIterator(rightTuples, rightTupleDesc)
 
-	predicate, _ := NewJoinPredicate(0, 0, execution.Equals)
+	predicate, _ := NewJoinPredicate(0, 0, query.Equals)
 	join, err := NewJoin(predicate, leftChild, rightChild)
 
 	if err != nil {
@@ -427,7 +427,7 @@ func TestJoinEmptyInputs(t *testing.T) {
 			leftChild := newMockIterator(tt.leftTuples, leftTupleDesc)
 			rightChild := newMockIterator(tt.rightTuples, rightTupleDesc)
 
-			predicate, _ := NewJoinPredicate(0, 0, execution.Equals)
+			predicate, _ := NewJoinPredicate(0, 0, query.Equals)
 			join, err := NewJoin(predicate, leftChild, rightChild)
 
 			if err != nil {
@@ -470,7 +470,7 @@ func TestJoinWithNullValues(t *testing.T) {
 	leftChild := newMockIterator(leftTuples, leftTupleDesc)
 	rightChild := newMockIterator(rightTuples, rightTupleDesc)
 
-	predicate, _ := NewJoinPredicate(0, 0, execution.Equals)
+	predicate, _ := NewJoinPredicate(0, 0, query.Equals)
 	join, err := NewJoin(predicate, leftChild, rightChild)
 
 	if err != nil {
@@ -517,7 +517,7 @@ func TestJoinErrorHandling(t *testing.T) {
 
 	rightChild := newMockIterator([]*tuple.Tuple{}, rightTupleDesc)
 
-	predicate, _ := NewJoinPredicate(0, 0, execution.Equals)
+	predicate, _ := NewJoinPredicate(0, 0, query.Equals)
 	join, err := NewJoin(predicate, leftChild, rightChild)
 
 	if err != nil {
@@ -538,7 +538,7 @@ func TestJoinClose(t *testing.T) {
 	leftChild := newMockIterator([]*tuple.Tuple{}, leftTupleDesc)
 	rightChild := newMockIterator([]*tuple.Tuple{}, rightTupleDesc)
 
-	predicate, _ := NewJoinPredicate(0, 0, execution.Equals)
+	predicate, _ := NewJoinPredicate(0, 0, query.Equals)
 	join, err := NewJoin(predicate, leftChild, rightChild)
 
 	if err != nil {

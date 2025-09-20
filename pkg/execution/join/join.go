@@ -2,7 +2,7 @@ package join
 
 import (
 	"fmt"
-	"storemy/pkg/execution"
+	"storemy/pkg/execution/query"
 	"storemy/pkg/iterator"
 	"storemy/pkg/tuple"
 	"sync"
@@ -12,7 +12,7 @@ import (
 // It supports both nested loop joins (for any predicate) and hash joins (for equality predicates).
 // The join operator combines tuples from two child operators that satisfy the join predicate.
 type Join struct {
-	base       *execution.BaseIterator // Handles iterator caching logic
+	base       *query.BaseIterator     // Handles iterator caching logic
 	predicate  *JoinPredicate          // Join condition
 	leftChild  iterator.DbIterator     // Left input operator
 	rightChild iterator.DbIterator     // Right input operator
@@ -62,12 +62,12 @@ func NewJoin(predicate *JoinPredicate, leftChild, rightChild iterator.DbIterator
 		leftChild:  leftChild,
 		rightChild: rightChild,
 		tupleDesc:  combinedTupleDesc,
-		isHashJoin: predicate.GetOP() == execution.Equals,
+		isHashJoin: predicate.GetOP() == query.Equals,
 		hashTable:  make(map[string][]*tuple.Tuple),
 		matchIndex: -1,
 	}
 
-	j.base = execution.NewBaseIterator(j.readNext)
+	j.base = query.NewBaseIterator(j.readNext)
 	return j, nil
 }
 
