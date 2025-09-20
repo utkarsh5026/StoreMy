@@ -2,7 +2,10 @@ package types
 
 import (
 	"bytes"
+	bytes2 "bytes"
+	"encoding/binary"
 	"io"
+	"math"
 	"strings"
 	"testing"
 )
@@ -269,6 +272,153 @@ func TestParseField_EmptyReader_BoolField(t *testing.T) {
 	var buf bytes.Buffer
 
 	_, err := parseBoolField(&buf)
+
+	if err == nil {
+		t.Error("Expected error for empty reader")
+	}
+
+	if err != io.EOF {
+		t.Errorf("Expected EOF error, got: %v", err)
+	}
+}
+
+func TestParseField_Float64Field(t *testing.T) {
+	tests := []struct {
+		name  string
+		value float64
+	}{
+		{"positive value", 42.5},
+		{"negative value", -42.5},
+		{"zero", 0.0},
+		{"very small", 1e-10},
+		{"very large", 1e10},
+		{"max float64", math.MaxFloat64},
+		{"min float64", -math.MaxFloat64},
+		{"positive infinity", math.Inf(1)},
+		{"negative infinity", math.Inf(-1)},
+		{"NaN", math.NaN()},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			original := NewFloat64Field(tt.value)
+
+			var buf bytes.Buffer
+			err := original.Serialize(&buf)
+			if err != nil {
+				t.Fatalf("Failed to serialize: %v", err)
+			}
+
+			parsed, err := ParseField(&buf, FloatType)
+			if err != nil {
+				t.Fatalf("Failed to parse: %v", err)
+			}
+
+			parsedFloat, ok := parsed.(*Float64Field)
+			if !ok {
+				t.Fatalf("Expected *Float64Field, got %T", parsed)
+			}
+
+			// Special handling for NaN since NaN != NaN
+			if math.IsNaN(tt.value) {
+				if !math.IsNaN(parsedFloat.Value) {
+					t.Errorf("Expected NaN, got %v", parsedFloat.Value)
+				}
+			} else if parsedFloat.Value != original.Value {
+				t.Errorf("Expected value %v, got %v", original.Value, parsedFloat.Value)
+			}
+		})
+	}
+}
+
+func TestParseField_RoundTrip_Float64Field(t *testing.T) {
+	tests := []float64{0.0, 42.5, -42.5, 1e-10, 1e10, math.Pi, math.E}
+
+	for _, value := range tests {
+		original := NewFloat64Field(value)
+
+		var buf bytes.Buffer
+		err := original.Serialize(&buf)
+		if err != nil {
+			t.Fatalf("Failed to serialize %v: %v", value, err)
+		}
+
+		parsed, err := ParseField(&buf, FloatType)
+		if err != nil {
+			t.Fatalf("Failed to parse %v: %v", value, err)
+		}
+
+		if !original.Equals(parsed) {
+			t.Errorf("Round trip failed for %v", value)
+		}
+	}
+}
+
+func TestParseFloat64Field_DirectFunction(t *testing.T) {
+	tests := []struct {
+		name     string
+		value    float64
+	}{
+		{"positive value", 42.5},
+		{"negative value", -42.5},
+		{"zero", 0.0},
+		{"max float64", math.MaxFloat64},
+		{"min float64", -math.MaxFloat64},
+		{"smallest positive", math.SmallestNonzeroFloat64},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Create a buffer with the serialized float64
+			bits := math.Float64bits(tt.value)
+			bytes := make([]byte, 8)
+			binary.BigEndian.PutUint64(bytes, bits)
+			buf := bytes2.NewBuffer(bytes)
+
+			field, err := parseFloat64Field(buf, 8)
+			if err != nil {
+				t.Fatalf("Failed to parse: %v", err)
+			}
+
+			if field.Value != tt.value {
+				t.Errorf("Expected value %v, got %v", tt.value, field.Value)
+			}
+		})
+	}
+}
+
+func TestParseField_InsufficientData_Float64Field(t *testing.T) {
+	tests := []struct {
+		name string
+		data []byte
+	}{
+		{"empty buffer", []byte{}},
+		{"partial data 1 byte", []byte{1}},
+		{"partial data 4 bytes", []byte{1, 2, 3, 4}},
+		{"partial data 7 bytes", []byte{1, 2, 3, 4, 5, 6, 7}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			buf := bytes2.NewBuffer(tt.data)
+
+			_, err := ParseField(buf, FloatType)
+
+			if err == nil {
+				t.Error("Expected error for insufficient data")
+			}
+
+			if err != io.EOF && err != io.ErrUnexpectedEOF {
+				t.Errorf("Expected EOF error, got: %v", err)
+			}
+		})
+	}
+}
+
+func TestParseField_EmptyReader_Float64Field(t *testing.T) {
+	var buf bytes.Buffer
+
+	_, err := parseFloat64Field(&buf, 8)
 
 	if err == nil {
 		t.Error("Expected error for empty reader")
