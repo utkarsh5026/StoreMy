@@ -1,7 +1,7 @@
 package join
 
 import (
-	"storemy/pkg/execution"
+	"storemy/pkg/execution/query"
 	"storemy/pkg/tuple"
 	"storemy/pkg/types"
 	"testing"
@@ -17,42 +17,42 @@ func TestNewJoinPredicate(t *testing.T) {
 		name      string
 		field1    int
 		field2    int
-		op        execution.PredicateOp
+		op        query.PredicateOp
 		expectErr bool
 	}{
 		{
 			name:      "valid predicate",
 			field1:    0,
 			field2:    1,
-			op:        execution.Equals,
+			op:        query.Equals,
 			expectErr: false,
 		},
 		{
 			name:      "negative field1",
 			field1:    -1,
 			field2:    0,
-			op:        execution.Equals,
+			op:        query.Equals,
 			expectErr: true,
 		},
 		{
 			name:      "negative field2",
 			field1:    0,
 			field2:    -1,
-			op:        execution.Equals,
+			op:        query.Equals,
 			expectErr: true,
 		},
 		{
 			name:      "both fields negative",
 			field1:    -1,
 			field2:    -2,
-			op:        execution.Equals,
+			op:        query.Equals,
 			expectErr: true,
 		},
 		{
 			name:      "valid predicate with GreaterThan",
 			field1:    2,
 			field2:    3,
-			op:        execution.GreaterThan,
+			op:        query.GreaterThan,
 			expectErr: false,
 		},
 	}
@@ -92,7 +92,7 @@ func TestNewJoinPredicate(t *testing.T) {
 // TestJoinPredicateGetters tests the getter methods
 func TestJoinPredicateGetters(t *testing.T) {
 	field1, field2 := 1, 2
-	op := execution.LessThan
+	op := query.LessThan
 
 	jp, err := NewJoinPredicate(field1, field2, op)
 	if err != nil {
@@ -114,7 +114,7 @@ func TestJoinPredicateGetters(t *testing.T) {
 
 // TestJoinPredicateString tests the string representation
 func TestJoinPredicateString(t *testing.T) {
-	jp, err := NewJoinPredicate(1, 2, execution.Equals)
+	jp, err := NewJoinPredicate(1, 2, query.Equals)
 	if err != nil {
 		t.Fatalf("failed to create join predicate: %v", err)
 	}
@@ -150,7 +150,7 @@ func TestJoinPredicateFilter(t *testing.T) {
 		name       string
 		field1     int
 		field2     int
-		op         execution.PredicateOp
+		op         query.PredicateOp
 		tuple1Data []interface{}
 		tuple2Data []interface{}
 		expected   bool
@@ -160,7 +160,7 @@ func TestJoinPredicateFilter(t *testing.T) {
 			name:       "integers equal",
 			field1:     0,
 			field2:     0,
-			op:         execution.Equals,
+			op:         query.Equals,
 			tuple1Data: []any{int32(10)},
 			tuple2Data: []any{int32(10)},
 			expected:   true,
@@ -170,7 +170,7 @@ func TestJoinPredicateFilter(t *testing.T) {
 			name:       "integers not equal",
 			field1:     0,
 			field2:     0,
-			op:         execution.Equals,
+			op:         query.Equals,
 			tuple1Data: []interface{}{int32(10)},
 			tuple2Data: []interface{}{int32(20)},
 			expected:   false,
@@ -180,7 +180,7 @@ func TestJoinPredicateFilter(t *testing.T) {
 			name:       "integer less than",
 			field1:     0,
 			field2:     0,
-			op:         execution.LessThan,
+			op:         query.LessThan,
 			tuple1Data: []interface{}{int32(5)},
 			tuple2Data: []interface{}{int32(10)},
 			expected:   true,
@@ -190,7 +190,7 @@ func TestJoinPredicateFilter(t *testing.T) {
 			name:       "integer greater than",
 			field1:     0,
 			field2:     0,
-			op:         execution.GreaterThan,
+			op:         query.GreaterThan,
 			tuple1Data: []interface{}{int32(15)},
 			tuple2Data: []interface{}{int32(10)},
 			expected:   true,
@@ -200,7 +200,7 @@ func TestJoinPredicateFilter(t *testing.T) {
 			name:       "string comparison equal",
 			field1:     0,
 			field2:     0,
-			op:         execution.Equals,
+			op:         query.Equals,
 			tuple1Data: []interface{}{"hello"},
 			tuple2Data: []interface{}{"hello"},
 			expected:   true,
@@ -210,7 +210,7 @@ func TestJoinPredicateFilter(t *testing.T) {
 			name:       "string comparison not equal",
 			field1:     0,
 			field2:     0,
-			op:         execution.NotEqual,
+			op:         query.NotEqual,
 			tuple1Data: []interface{}{"hello"},
 			tuple2Data: []interface{}{"world"},
 			expected:   true,
@@ -220,7 +220,7 @@ func TestJoinPredicateFilter(t *testing.T) {
 			name:       "different field indices",
 			field1:     0,
 			field2:     1,
-			op:         execution.Equals,
+			op:         query.Equals,
 			tuple1Data: []interface{}{int32(10), int32(20)},
 			tuple2Data: []interface{}{int32(30), int32(10)},
 			expected:   true,
@@ -230,7 +230,7 @@ func TestJoinPredicateFilter(t *testing.T) {
 			name:       "field index out of bounds - tuple1",
 			field1:     5,
 			field2:     0,
-			op:         execution.Equals,
+			op:         query.Equals,
 			tuple1Data: []interface{}{int32(10)},
 			tuple2Data: []interface{}{int32(10)},
 			expected:   false,
@@ -240,7 +240,7 @@ func TestJoinPredicateFilter(t *testing.T) {
 			name:       "field index out of bounds - tuple2",
 			field1:     0,
 			field2:     5,
-			op:         execution.Equals,
+			op:         query.Equals,
 			tuple1Data: []interface{}{int32(10)},
 			tuple2Data: []interface{}{int32(10)},
 			expected:   false,
@@ -297,7 +297,7 @@ func TestJoinPredicateFilter(t *testing.T) {
 
 // TestJoinPredicateFilterNilTuples tests error handling for nil tuples
 func TestJoinPredicateFilterNilTuples(t *testing.T) {
-	jp, err := NewJoinPredicate(0, 0, execution.Equals)
+	jp, err := NewJoinPredicate(0, 0, query.Equals)
 	if err != nil {
 		t.Fatalf("failed to create join predicate: %v", err)
 	}
@@ -329,7 +329,7 @@ func TestJoinPredicateFilterNilTuples(t *testing.T) {
 
 // TestJoinPredicateFilterNullFields tests handling of null fields
 func TestJoinPredicateFilterNullFields(t *testing.T) {
-	jp, err := NewJoinPredicate(0, 0, execution.Equals)
+	jp, err := NewJoinPredicate(0, 0, query.Equals)
 	if err != nil {
 		t.Fatalf("failed to create join predicate: %v", err)
 	}
@@ -351,25 +351,25 @@ func TestJoinPredicateFilterNullFields(t *testing.T) {
 // TestJoinPredicateAllOperations tests all predicate operations
 func TestJoinPredicateAllOperations(t *testing.T) {
 	operations := []struct {
-		op       execution.PredicateOp
+		op       query.PredicateOp
 		val1     int32
 		val2     int32
 		expected bool
 	}{
-		{execution.Equals, 10, 10, true},
-		{execution.Equals, 10, 20, false},
-		{execution.LessThan, 5, 10, true},
-		{execution.LessThan, 15, 10, false},
-		{execution.GreaterThan, 15, 10, true},
-		{execution.GreaterThan, 5, 10, false},
-		{execution.LessThanOrEqual, 10, 10, true},
-		{execution.LessThanOrEqual, 5, 10, true},
-		{execution.LessThanOrEqual, 15, 10, false},
-		{execution.GreaterThanOrEqual, 10, 10, true},
-		{execution.GreaterThanOrEqual, 15, 10, true},
-		{execution.GreaterThanOrEqual, 5, 10, false},
-		{execution.NotEqual, 10, 20, true},
-		{execution.NotEqual, 10, 10, false},
+		{query.Equals, 10, 10, true},
+		{query.Equals, 10, 20, false},
+		{query.LessThan, 5, 10, true},
+		{query.LessThan, 15, 10, false},
+		{query.GreaterThan, 15, 10, true},
+		{query.GreaterThan, 5, 10, false},
+		{query.LessThanOrEqual, 10, 10, true},
+		{query.LessThanOrEqual, 5, 10, true},
+		{query.LessThanOrEqual, 15, 10, false},
+		{query.GreaterThanOrEqual, 10, 10, true},
+		{query.GreaterThanOrEqual, 15, 10, true},
+		{query.GreaterThanOrEqual, 5, 10, false},
+		{query.NotEqual, 10, 20, true},
+		{query.NotEqual, 10, 10, false},
 	}
 
 	for _, test := range operations {

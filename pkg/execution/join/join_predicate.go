@@ -2,7 +2,7 @@ package join
 
 import (
 	"fmt"
-	"storemy/pkg/execution"
+	"storemy/pkg/execution/query"
 	"storemy/pkg/tuple"
 )
 
@@ -12,9 +12,9 @@ import (
 // The predicate operates on two tuples by comparing a field from the first tuple
 // with a field from the second tuple using the specified comparison operation.
 type JoinPredicate struct {
-	field1 int                   // Field index in the first (left) tuple
-	field2 int                   // Field index in the second (right) tuple
-	op     execution.PredicateOp // The comparison operation to apply
+	field1 int               // Field index in the first (left) tuple
+	field2 int               // Field index in the second (right) tuple
+	op     query.PredicateOp // The comparison operation to apply
 }
 
 // NewJoinPredicate creates a new join predicate for comparing fields between two tuples.
@@ -27,7 +27,7 @@ type JoinPredicate struct {
 // Returns:
 //   - *JoinPredicate: A new join predicate instance
 //   - error: An error if the field indices are negative
-func NewJoinPredicate(field1, field2 int, op execution.PredicateOp) (*JoinPredicate, error) {
+func NewJoinPredicate(field1, field2 int, op query.PredicateOp) (*JoinPredicate, error) {
 	if field1 < 0 {
 		return nil, fmt.Errorf("field1 index cannot be negative: %d", field1)
 	}
@@ -74,7 +74,7 @@ func (jp *JoinPredicate) Filter(t1, t2 *tuple.Tuple) (bool, error) {
 		return false, nil // Null fields don't match
 	}
 
-	typePred, err := execution.GetPredicateFromOp(jp.op)
+	typePred, err := query.GetPredicateFromOp(jp.op)
 	if err != nil {
 		return false, err
 	}
@@ -89,7 +89,7 @@ func (jp *JoinPredicate) String() string {
 }
 
 // GetOP returns the comparison operation of the join predicate.
-func (jp *JoinPredicate) GetOP() execution.PredicateOp {
+func (jp *JoinPredicate) GetOP() query.PredicateOp {
 	return jp.op
 }
 
