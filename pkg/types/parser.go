@@ -19,6 +19,9 @@ func ParseField(r io.Reader, fieldType Type) (Field, error) {
 	case StringType:
 		return parseStringField(r)
 
+	case BoolType:
+		return parseBoolField(r)
+
 	default:
 		return nil, fmt.Errorf("unsupported field type: %v", fieldType)
 	}
@@ -54,4 +57,14 @@ func parseStringField(r io.Reader) (*StringField, error) {
 	}
 
 	return NewStringField(string(strBytes), StringMaxSize), nil
+}
+
+func parseBoolField(r io.Reader) (*BoolField, error) {
+	bytes := make([]byte, 1)
+	if _, err := io.ReadFull(r, bytes); err != nil {
+		return nil, err
+	}
+
+	value := bytes[0] != 0
+	return NewBoolField(value), nil
 }

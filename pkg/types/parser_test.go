@@ -165,6 +165,120 @@ func TestParseField_InsufficientData_StringField(t *testing.T) {
 	}
 }
 
+func TestParseField_BoolField(t *testing.T) {
+	tests := []struct {
+		name  string
+		value bool
+	}{
+		{"true value", true},
+		{"false value", false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			original := NewBoolField(tt.value)
+
+			var buf bytes.Buffer
+			err := original.Serialize(&buf)
+			if err != nil {
+				t.Fatalf("Failed to serialize: %v", err)
+			}
+
+			parsed, err := ParseField(&buf, BoolType)
+			if err != nil {
+				t.Fatalf("Failed to parse: %v", err)
+			}
+
+			parsedBool, ok := parsed.(*BoolField)
+			if !ok {
+				t.Fatalf("Expected *BoolField, got %T", parsed)
+			}
+
+			if parsedBool.Value != original.Value {
+				t.Errorf("Expected value %v, got %v", original.Value, parsedBool.Value)
+			}
+		})
+	}
+}
+
+func TestParseField_RoundTrip_BoolField(t *testing.T) {
+	tests := []bool{true, false}
+
+	for _, value := range tests {
+		original := NewBoolField(value)
+
+		var buf bytes.Buffer
+		err := original.Serialize(&buf)
+		if err != nil {
+			t.Fatalf("Failed to serialize %v: %v", value, err)
+		}
+
+		parsed, err := ParseField(&buf, BoolType)
+		if err != nil {
+			t.Fatalf("Failed to parse %v: %v", value, err)
+		}
+
+		if !original.Equals(parsed) {
+			t.Errorf("Round trip failed for %v", value)
+		}
+	}
+}
+
+func TestParseBoolField_DirectFunction(t *testing.T) {
+	tests := []struct {
+		name     string
+		data     []byte
+		expected bool
+	}{
+		{"zero byte as false", []byte{0}, false},
+		{"one byte as true", []byte{1}, true},
+		{"any non-zero byte as true", []byte{42}, true},
+		{"255 byte as true", []byte{255}, true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			buf := bytes.NewBuffer(tt.data)
+			field, err := parseBoolField(buf)
+			if err != nil {
+				t.Fatalf("Failed to parse: %v", err)
+			}
+
+			if field.Value != tt.expected {
+				t.Errorf("Expected value %v, got %v", tt.expected, field.Value)
+			}
+		})
+	}
+}
+
+func TestParseField_InsufficientData_BoolField(t *testing.T) {
+	var buf bytes.Buffer
+
+	_, err := ParseField(&buf, BoolType)
+
+	if err == nil {
+		t.Error("Expected error for insufficient data")
+	}
+
+	if err != io.EOF {
+		t.Errorf("Expected EOF error, got: %v", err)
+	}
+}
+
+func TestParseField_EmptyReader_BoolField(t *testing.T) {
+	var buf bytes.Buffer
+
+	_, err := parseBoolField(&buf)
+
+	if err == nil {
+		t.Error("Expected error for empty reader")
+	}
+
+	if err != io.EOF {
+		t.Errorf("Expected EOF error, got: %v", err)
+	}
+}
+
 func TestParseField_EmptyReader_IntField(t *testing.T) {
 	var buf bytes.Buffer
 
