@@ -62,16 +62,9 @@ func (ia *IntegerAggregator) Merge(tup *tuple.Tuple) error {
 	ia.mutex.Lock()
 	defer ia.mutex.Unlock()
 
-	var groupKey string
-
-	if ia.groupByField == NoGrouping {
-		groupKey = "NO_GROUPING"
-	} else {
-		groupField, err := tup.GetField(ia.groupByField)
-		if err != nil {
-			return fmt.Errorf("failed to get grouping field: %v", err)
-		}
-		groupKey = groupField.String()
+	groupKey, err := ia.extractGroupKey(tup)
+	if err != nil {
+		return fmt.Errorf("failed to extract group key: %w", err)
 	}
 
 	aggField, err := tup.GetField(ia.aggrField)
@@ -144,4 +137,17 @@ func (ia *IntegerAggregator) initializeGroupIfNeeded(groupKey string) {
 	if ia.op == Avg {
 		ia.groupToCount[groupKey] = 0
 	}
+}
+
+func (ia *IntegerAggregator) extractGroupKey(tup *tuple.Tuple) (string, error) {
+	if ia.groupByField == NoGrouping {
+		return "NO_GROUPING", nil
+	}
+
+	groupField, err := tup.GetField(ia.groupByField)
+	if err != nil {
+		return "", fmt.Errorf("failed to get grouping field: %w", err)
+	}
+
+	return groupField.String(), nil
 }
