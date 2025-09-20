@@ -1,4 +1,4 @@
-package execution
+package query
 
 import (
 	"fmt"
@@ -98,17 +98,17 @@ func createFilterTestTuple(td *tuple.TupleDescription, id int32, name string) *t
 	t := tuple.NewTuple(td)
 	intField := types.NewIntField(id)
 	stringField := types.NewStringField(name, 128)
-	
+
 	err := t.SetField(0, intField)
 	if err != nil {
 		panic(fmt.Sprintf("Failed to set int field: %v", err))
 	}
-	
+
 	err = t.SetField(1, stringField)
 	if err != nil {
 		panic(fmt.Sprintf("Failed to set string field: %v", err))
 	}
-	
+
 	return t
 }
 
@@ -285,13 +285,13 @@ func TestFilter_EmptyInput(t *testing.T) {
 
 func TestFilter_AllTuplesMatch(t *testing.T) {
 	td := mustCreateFilterTupleDesc()
-	
+
 	tuples := []*tuple.Tuple{
 		createFilterTestTuple(td, 5, "first"),
 		createFilterTestTuple(td, 5, "second"),
 		createFilterTestTuple(td, 5, "third"),
 	}
-	
+
 	child := newMockChildIterator(tuples, td)
 	predicate := NewPredicate(0, Equals, types.NewIntField(5)) // id = 5
 
@@ -342,13 +342,13 @@ func TestFilter_AllTuplesMatch(t *testing.T) {
 
 func TestFilter_NoTuplesMatch(t *testing.T) {
 	td := mustCreateFilterTupleDesc()
-	
+
 	tuples := []*tuple.Tuple{
 		createFilterTestTuple(td, 1, "first"),
 		createFilterTestTuple(td, 2, "second"),
 		createFilterTestTuple(td, 3, "third"),
 	}
-	
+
 	child := newMockChildIterator(tuples, td)
 	predicate := NewPredicate(0, Equals, types.NewIntField(99)) // id = 99 (no matches)
 
@@ -374,7 +374,7 @@ func TestFilter_NoTuplesMatch(t *testing.T) {
 
 func TestFilter_SomeTuplesMatch(t *testing.T) {
 	td := mustCreateFilterTupleDesc()
-	
+
 	tuples := []*tuple.Tuple{
 		createFilterTestTuple(td, 1, "first"),
 		createFilterTestTuple(td, 5, "second"),
@@ -382,7 +382,7 @@ func TestFilter_SomeTuplesMatch(t *testing.T) {
 		createFilterTestTuple(td, 5, "fourth"),
 		createFilterTestTuple(td, 7, "fifth"),
 	}
-	
+
 	child := newMockChildIterator(tuples, td)
 	predicate := NewPredicate(0, Equals, types.NewIntField(5)) // id = 5
 
@@ -436,13 +436,13 @@ func TestFilter_SomeTuplesMatch(t *testing.T) {
 
 func TestFilter_LessThanPredicate(t *testing.T) {
 	td := mustCreateFilterTupleDesc()
-	
+
 	tuples := []*tuple.Tuple{
 		createFilterTestTuple(td, 1, "first"),
 		createFilterTestTuple(td, 5, "second"),
 		createFilterTestTuple(td, 10, "third"),
 	}
-	
+
 	child := newMockChildIterator(tuples, td)
 	predicate := NewPredicate(0, LessThan, types.NewIntField(5)) // id < 5
 
@@ -488,13 +488,13 @@ func TestFilter_LessThanPredicate(t *testing.T) {
 
 func TestFilter_GreaterThanPredicate(t *testing.T) {
 	td := mustCreateFilterTupleDesc()
-	
+
 	tuples := []*tuple.Tuple{
 		createFilterTestTuple(td, 1, "first"),
 		createFilterTestTuple(td, 5, "second"),
 		createFilterTestTuple(td, 10, "third"),
 	}
-	
+
 	child := newMockChildIterator(tuples, td)
 	predicate := NewPredicate(0, GreaterThan, types.NewIntField(5)) // id > 5
 
@@ -540,13 +540,13 @@ func TestFilter_GreaterThanPredicate(t *testing.T) {
 
 func TestFilter_StringPredicate(t *testing.T) {
 	td := mustCreateFilterTupleDesc()
-	
+
 	tuples := []*tuple.Tuple{
 		createFilterTestTuple(td, 1, "apple"),
 		createFilterTestTuple(td, 2, "banana"),
 		createFilterTestTuple(td, 3, "apple"),
 	}
-	
+
 	child := newMockChildIterator(tuples, td)
 	predicate := NewPredicate(1, Equals, types.NewStringField("apple", 128)) // name = "apple"
 
@@ -672,7 +672,7 @@ func TestFilter_InvalidFieldIndex(t *testing.T) {
 		createFilterTestTuple(td, 1, "test"),
 	}
 	child := newMockChildIterator(tuples, td)
-	
+
 	// Use invalid field index (schema has fields 0,1 but we use index 5)
 	predicate := NewPredicate(5, Equals, types.NewIntField(1))
 
@@ -702,12 +702,12 @@ func TestFilter_InvalidFieldIndex(t *testing.T) {
 
 func TestFilter_Rewind(t *testing.T) {
 	td := mustCreateFilterTupleDesc()
-	
+
 	tuples := []*tuple.Tuple{
 		createFilterTestTuple(td, 1, "first"),
 		createFilterTestTuple(td, 2, "second"),
 	}
-	
+
 	child := newMockChildIterator(tuples, td)
 	predicate := NewPredicate(0, LessThan, types.NewIntField(3)) // Both tuples match
 
