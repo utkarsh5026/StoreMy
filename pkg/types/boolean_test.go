@@ -1,0 +1,216 @@
+package types
+
+import (
+	"bytes"
+	"testing"
+)
+
+func TestNewBoolField(t *testing.T) {
+	tests := []struct {
+		name  string
+		value bool
+	}{
+		{"true value", true},
+		{"false value", false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			field := NewBoolField(tt.value)
+			if field.Value != tt.value {
+				t.Errorf("Expected value %v, got %v", tt.value, field.Value)
+			}
+		})
+	}
+}
+
+func TestBoolField_Type(t *testing.T) {
+	field := NewBoolField(true)
+	
+	if field.Type() != BoolType {
+		t.Errorf("Expected type %v, got %v", BoolType, field.Type())
+	}
+}
+
+func TestBoolField_String(t *testing.T) {
+	tests := []struct {
+		name     string
+		value    bool
+		expected string
+	}{
+		{"true value", true, "true"},
+		{"false value", false, "false"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			field := NewBoolField(tt.value)
+			if field.String() != tt.expected {
+				t.Errorf("Expected string %s, got %s", tt.expected, field.String())
+			}
+		})
+	}
+}
+
+func TestBoolField_Length(t *testing.T) {
+	field := NewBoolField(true)
+	expected := uint32(1)
+	
+	if field.Length() != expected {
+		t.Errorf("Expected length %d, got %d", expected, field.Length())
+	}
+}
+
+func TestBoolField_Equals(t *testing.T) {
+	fieldTrue1 := NewBoolField(true)
+	fieldTrue2 := NewBoolField(true)
+	fieldFalse := NewBoolField(false)
+	intField := NewIntField(42)
+	
+	if !fieldTrue1.Equals(fieldTrue2) {
+		t.Error("Expected equal fields to return true")
+	}
+	
+	if fieldTrue1.Equals(fieldFalse) {
+		t.Error("Expected different fields to return false")
+	}
+	
+	if fieldTrue1.Equals(intField) {
+		t.Error("Expected comparison with different type to return false")
+	}
+}
+
+func TestBoolField_Hash(t *testing.T) {
+	tests := []struct {
+		name     string
+		value    bool
+		expected uint32
+	}{
+		{"true value", true, 1},
+		{"false value", false, 0},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			field := NewBoolField(tt.value)
+			hash, err := field.Hash()
+			if err != nil {
+				t.Fatalf("Unexpected error: %v", err)
+			}
+			if hash != tt.expected {
+				t.Errorf("Expected hash %d, got %d", tt.expected, hash)
+			}
+		})
+	}
+}
+
+func TestBoolField_Serialize(t *testing.T) {
+	tests := []struct {
+		name     string
+		value    bool
+		expected byte
+	}{
+		{"true value", true, 1},
+		{"false value", false, 0},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			field := NewBoolField(tt.value)
+			var buf bytes.Buffer
+			
+			err := field.Serialize(&buf)
+			if err != nil {
+				t.Fatalf("Unexpected error: %v", err)
+			}
+			
+			if buf.Len() != 1 {
+				t.Errorf("Expected buffer length 1, got %d", buf.Len())
+			}
+			
+			if buf.Bytes()[0] != tt.expected {
+				t.Errorf("Expected byte %d, got %d", tt.expected, buf.Bytes()[0])
+			}
+		})
+	}
+}
+
+func TestBoolField_Compare(t *testing.T) {
+	tests := []struct {
+		name      string
+		field1    *BoolField
+		op        Predicate
+		field2    *BoolField
+		expected  bool
+		expectErr bool
+	}{
+		// Equals tests
+		{"true equals true", NewBoolField(true), Equals, NewBoolField(true), true, false},
+		{"true equals false", NewBoolField(true), Equals, NewBoolField(false), false, false},
+		{"false equals false", NewBoolField(false), Equals, NewBoolField(false), true, false},
+		
+		// NotEqual tests
+		{"true not equal false", NewBoolField(true), NotEqual, NewBoolField(false), true, false},
+		{"true not equal true", NewBoolField(true), NotEqual, NewBoolField(true), false, false},
+		
+		// LessThan tests (false < true)
+		{"false less than true", NewBoolField(false), LessThan, NewBoolField(true), true, false},
+		{"true less than false", NewBoolField(true), LessThan, NewBoolField(false), false, false},
+		{"true less than true", NewBoolField(true), LessThan, NewBoolField(true), false, false},
+		{"false less than false", NewBoolField(false), LessThan, NewBoolField(false), false, false},
+		
+		// GreaterThan tests (true > false)
+		{"true greater than false", NewBoolField(true), GreaterThan, NewBoolField(false), true, false},
+		{"false greater than true", NewBoolField(false), GreaterThan, NewBoolField(true), false, false},
+		{"true greater than true", NewBoolField(true), GreaterThan, NewBoolField(true), false, false},
+		{"false greater than false", NewBoolField(false), GreaterThan, NewBoolField(false), false, false},
+		
+		// LessThanOrEqual tests
+		{"false less than or equal true", NewBoolField(false), LessThanOrEqual, NewBoolField(true), true, false},
+		{"true less than or equal false", NewBoolField(true), LessThanOrEqual, NewBoolField(false), false, false},
+		{"true less than or equal true", NewBoolField(true), LessThanOrEqual, NewBoolField(true), true, false},
+		{"false less than or equal false", NewBoolField(false), LessThanOrEqual, NewBoolField(false), true, false},
+		
+		// GreaterThanOrEqual tests
+		{"true greater than or equal false", NewBoolField(true), GreaterThanOrEqual, NewBoolField(false), true, false},
+		{"false greater than or equal true", NewBoolField(false), GreaterThanOrEqual, NewBoolField(true), false, false},
+		{"true greater than or equal true", NewBoolField(true), GreaterThanOrEqual, NewBoolField(true), true, false},
+		{"false greater than or equal false", NewBoolField(false), GreaterThanOrEqual, NewBoolField(false), true, false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result, err := tt.field1.Compare(tt.op, tt.field2)
+			if tt.expectErr && err == nil {
+				t.Errorf("Expected error but got none")
+			}
+			if !tt.expectErr && err != nil {
+				t.Errorf("Unexpected error: %v", err)
+			}
+			if result != tt.expected {
+				t.Errorf("Expected result %v, got %v", tt.expected, result)
+			}
+		})
+	}
+}
+
+func TestBoolField_Compare_InvalidType(t *testing.T) {
+	boolField := NewBoolField(true)
+	intField := NewIntField(42)
+	
+	_, err := boolField.Compare(Equals, intField)
+	if err == nil {
+		t.Error("Expected error when comparing with different field type")
+	}
+}
+
+func TestBoolField_Compare_UnsupportedPredicate(t *testing.T) {
+	field1 := NewBoolField(true)
+	field2 := NewBoolField(false)
+	
+	// Using an invalid predicate value
+	_, err := field1.Compare(Predicate(999), field2)
+	if err == nil {
+		t.Error("Expected error for unsupported predicate")
+	}
+}
