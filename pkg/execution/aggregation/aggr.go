@@ -19,6 +19,8 @@ const (
 	Sum
 	Avg
 	Count
+	And
+	Or
 )
 
 // String returns a string representation of the aggregation operation
