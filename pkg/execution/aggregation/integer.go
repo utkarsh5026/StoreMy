@@ -3,25 +3,38 @@ package aggregation
 import (
 	"fmt"
 	"math"
+	"storemy/pkg/iterator"
 	"storemy/pkg/tuple"
 	"storemy/pkg/types"
 	"sync"
 )
 
-// IntAggregator handles aggregation over integer fields
+// IntegerAggregator handles aggregation operations over integer fields.
 // It maintains internal state for each group and supports all aggregate operations
+// including MIN, MAX, SUM, AVG, and COUNT. The aggregator is thread-safe and
+// can handle both grouped and non-grouped aggregations.
 type IntegerAggregator struct {
-	groupByField   int
-	groupFieldType types.Type
-	aggrField      int
-	op             AggregateOp
-	groupToAgg     map[string]int32
-	groupToCount   map[string]int32
-	tupleDesc      *tuple.TupleDescription
-	mutex          sync.RWMutex
+	groupByField   int                     // Field index to group by (-1 for no grouping)
+	groupFieldType types.Type              // Type of the grouping field
+	aggrField      int                     // Field index to aggregate
+	op             AggregateOp             // Aggregation operation to perform
+	groupToAgg     map[string]int32        // Maps group keys to aggregate values
+	groupToCount   map[string]int32        // Maps group keys to counts (used for AVG)
+	tupleDesc      *tuple.TupleDescription // Description of output tuples
+	mutex          sync.RWMutex            // Protects concurrent access to maps
 }
 
-// NewIntAggregator creates a new integer aggregator
+// NewIntAggregator creates a new integer aggregator with the specified configuration.
+//
+// Parameters:
+//   - gbField: Field index to group by (use NoGrouping constant for no grouping)
+//   - gbFieldType: Type of the grouping field (ignored if gbField is NoGrouping)
+//   - aField: Field index containing values to aggregate
+//   - op: Aggregation operation to perform (Min, Max, Sum, Avg, Count)
+//
+// Returns:
+//   - *IntegerAggregator: Configured aggregator instance
+//   - error: Error if tuple description creation fails
 func NewIntAggregator(gbField int, gbFieldType types.Type, aField int, op AggregateOp) (*IntegerAggregator, error) {
 	agg := &IntegerAggregator{
 		groupByField:   gbField,
@@ -34,12 +47,19 @@ func NewIntAggregator(gbField int, gbFieldType types.Type, aField int, op Aggreg
 
 	td, err := agg.createTupleDesc()
 	if err != nil {
-		return nil, fmt.Errorf("Error creating IntegerAggregator %v", err)
+		return nil, fmt.Errorf("error creating IntegerAggregator %v", err)
 	}
 	agg.tupleDesc = td
 	return agg, nil
 }
 
+// createTupleDesc creates the tuple description for the aggregator's output.
+// For non-grouped aggregations, returns a single-field tuple with the aggregate result.
+// For grouped aggregations, returns a two-field tuple with the group key and aggregate result.
+//
+// Returns:
+//   - *tuple.TupleDescription: Description of output tuples
+//   - error: Error if tuple description creation fails
 func (ia *IntegerAggregator) createTupleDesc() (*tuple.TupleDescription, error) {
 	if ia.groupByField == NoGrouping {
 		return tuple.NewTupleDesc(
@@ -54,10 +74,23 @@ func (ia *IntegerAggregator) createTupleDesc() (*tuple.TupleDescription, error) 
 	)
 }
 
+// GetTupleDesc returns the tuple description for this aggregator's output.
+//
+// Returns:
+//   - *tuple.TupleDescription: The output tuple description
 func (ia *IntegerAggregator) GetTupleDesc() *tuple.TupleDescription {
 	return ia.tupleDesc
 }
 
+// Merge processes a single tuple and updates the aggregation state.
+// The tuple is processed by extracting the group key and aggregate value,
+// then updating the internal aggregation maps accordingly.
+//
+// Parameters:
+//   - tup: The tuple to process and merge into the aggregation
+//
+// Returns:
+//   - error: Error if tuple processing fails (invalid fields, type mismatches, etc.)
 func (ia *IntegerAggregator) Merge(tup *tuple.Tuple) error {
 	ia.mutex.Lock()
 	defer ia.mutex.Unlock()
@@ -82,6 +115,10 @@ func (ia *IntegerAggregator) Merge(tup *tuple.Tuple) error {
 	return ia.updateAggregate(groupKey, aggValue)
 }
 
+// getInitValue returns the appropriate initial value for the aggregation operation.
+//
+// Returns:
+//   - int32: The initial value for the current aggregation operation
 func (ia *IntegerAggregator) getInitValue() int32 {
 	switch ia.op {
 	case Min:
@@ -95,6 +132,14 @@ func (ia *IntegerAggregator) getInitValue() int32 {
 	}
 }
 
+// updateAggregate updates the aggregate value for a specific group with a new value.
+//
+// Parameters:
+//   - groupKey: The group identifier
+//   - aggValue: The new value to incorporate into the aggregate
+//
+// Returns:
+//   - error: Error if the operation is unsupported
 func (ia *IntegerAggregator) updateAggregate(groupKey string, aggValue int32) error {
 	currentAgg := ia.groupToAgg[groupKey]
 
@@ -127,6 +172,11 @@ func (ia *IntegerAggregator) updateAggregate(groupKey string, aggValue int32) er
 }
 
 // initializeGroupIfNeeded initializes a new group with default values if it doesn't exist.
+// This ensures that each group starts with the appropriate initial value for the
+// aggregation operation. For AVG operations, it also initializes the count to 0.
+//
+// Parameters:
+//   - groupKey: The group identifier to initialize
 func (ia *IntegerAggregator) initializeGroupIfNeeded(groupKey string) {
 	if _, exists := ia.groupToAgg[groupKey]; exists {
 		return
@@ -139,6 +189,17 @@ func (ia *IntegerAggregator) initializeGroupIfNeeded(groupKey string) {
 	}
 }
 
+// extractGroupKey extracts the grouping key from a tuple.
+// For non-grouped aggregations (groupByField == NoGrouping), returns a constant key.
+// For grouped aggregations, extracts the value from the specified grouping field
+// and converts it to a string representation.
+//
+// Parameters:
+//   - tup: The tuple to extract the group key from
+//
+// Returns:
+//   - string: The group key as a string
+//   - error: Error if the grouping field cannot be accessed
 func (ia *IntegerAggregator) extractGroupKey(tup *tuple.Tuple) (string, error) {
 	if ia.groupByField == NoGrouping {
 		return "NO_GROUPING", nil
@@ -150,4 +211,161 @@ func (ia *IntegerAggregator) extractGroupKey(tup *tuple.Tuple) (string, error) {
 	}
 
 	return groupField.String(), nil
+}
+
+// Iterator returns a DbIterator over the aggregation results.
+// The iterator yields tuples containing either (aggregateValue) for non-grouped
+// aggregations or (groupValue, aggregateValue) for grouped aggregations.
+//
+// Returns:
+//   - iterator.DbIterator: Iterator over the aggregation results
+func (ia *IntegerAggregator) Iterator() iterator.DbIterator {
+	return NewIntAggregatorIterator(ia)
+}
+
+type IntAggregatorIterator struct {
+	aggregator    *IntegerAggregator
+	tupleDesc     *tuple.TupleDescription
+	groups        []string
+	currentIdx    int
+	opened        bool
+	nextTuple     *tuple.Tuple // Cache for hasNext/next pattern
+	hasNextCalled bool
+}
+
+func NewIntAggregatorIterator(agg *IntegerAggregator) *IntAggregatorIterator {
+	return &IntAggregatorIterator{
+		aggregator: agg,
+		tupleDesc:  agg.GetTupleDesc(),
+		currentIdx: 0,
+		opened:     false,
+	}
+}
+
+func (iter *IntAggregatorIterator) GetTupleDesc() *tuple.TupleDescription {
+	return iter.tupleDesc
+}
+
+// Close releases resources and marks the iterator as closed
+func (iter *IntAggregatorIterator) Close() error {
+	iter.opened = false
+	iter.aggregator = nil
+	iter.groups = nil
+	iter.nextTuple = nil
+	iter.hasNextCalled = false
+	return nil
+}
+
+func (iter *IntAggregatorIterator) Rewind() error {
+	if !iter.opened {
+		return fmt.Errorf("iterator not opened")
+	}
+
+	iter.currentIdx = 0
+	iter.nextTuple = nil
+	iter.hasNextCalled = false
+	return nil
+}
+
+func (iter *IntAggregatorIterator) Open() error {
+	if iter.opened {
+		return fmt.Errorf("iterator already opened")
+	}
+
+	iter.aggregator.mutex.RLock()
+	defer iter.aggregator.mutex.RUnlock()
+
+	iter.groups = make([]string, 0, len(iter.aggregator.groupToAgg))
+	for groupKey := range iter.aggregator.groupToAgg {
+		iter.groups = append(iter.groups, groupKey)
+	}
+
+	iter.currentIdx = 0
+	iter.opened = true
+	iter.nextTuple = nil
+	iter.hasNextCalled = false
+
+	return nil
+}
+
+func (iter *IntAggregatorIterator) HasNext() (bool, error) {
+	if !iter.opened {
+		return false, fmt.Errorf("iterator not opened")
+	}
+
+	if !iter.hasNextCalled {
+		var err error
+		iter.nextTuple, err = iter.readNext()
+		if err != nil {
+			return false, fmt.Errorf("error reading next tuple: %v", err)
+		}
+		iter.hasNextCalled = true
+	}
+
+	return iter.nextTuple != nil, nil
+}
+
+func (iter *IntAggregatorIterator) readNext() (*tuple.Tuple, error) {
+	if iter.currentIdx >= len(iter.groups) {
+		return nil, nil // No more tuples
+	}
+
+	iter.aggregator.mutex.RLock()
+	defer iter.aggregator.mutex.RUnlock()
+
+	groupKey := iter.groups[iter.currentIdx]
+	iter.currentIdx++
+
+	aggValue := iter.aggregator.groupToAgg[groupKey]
+
+	if iter.aggregator.op == Avg {
+		count := iter.aggregator.groupToCount[groupKey]
+		if count > 0 {
+			aggValue = aggValue / count
+		}
+	}
+
+	resultTuple := tuple.NewTuple(iter.tupleDesc)
+	if iter.aggregator.groupByField == NoGrouping {
+		if err := resultTuple.SetField(0, types.NewIntField(aggValue)); err != nil {
+			return nil, fmt.Errorf("failed to set aggregate field: %v", err)
+		}
+		return resultTuple, nil
+	}
+
+	groupField := types.NewStringField(groupKey, len(groupKey))
+	if err := resultTuple.SetField(0, groupField); err != nil {
+		return nil, fmt.Errorf("failed to set group field: %v", err)
+	}
+	if err := resultTuple.SetField(1, types.NewIntField(aggValue)); err != nil {
+		return nil, fmt.Errorf("failed to set aggregate field: %v", err)
+	}
+
+	return resultTuple, nil
+}
+
+func (iter *IntAggregatorIterator) Next() (*tuple.Tuple, error) {
+	if !iter.opened {
+		return nil, fmt.Errorf("iterator not opened")
+	}
+
+	if !iter.hasNextCalled {
+		hasNext, err := iter.HasNext()
+		if err != nil {
+			return nil, err
+		}
+		if !hasNext {
+			return nil, fmt.Errorf("no more tuples available")
+		}
+	}
+
+	result := iter.nextTuple
+	iter.nextTuple = nil
+	iter.hasNextCalled = false
+
+	if result == nil {
+		return nil, fmt.Errorf("no more tuples available")
+	}
+
+	return result, nil
 }
