@@ -625,6 +625,36 @@ func TestGeneralIteratorInterface_BoolAggregator(t *testing.T) {
 	})
 }
 
+func TestGeneralIteratorInterface_StringAggregator(t *testing.T) {
+	testGeneralIteratorInterface(t, func() (Aggregator, *tuple.TupleDescription, []*tuple.Tuple) {
+		agg, _ := NewStringAggregator(0, types.StringType, 1, Min)
+		
+		td, _ := tuple.NewTupleDesc(
+			[]types.Type{types.StringType, types.StringType},
+			[]string{"group", "value"},
+		)
+
+		testData := []struct {
+			group string
+			value string
+		}{
+			{"A", "apple"},
+			{"B", "zebra"},
+			{"A", "banana"},
+		}
+
+		var tuples []*tuple.Tuple
+		for _, data := range testData {
+			tup := tuple.NewTuple(td)
+			tup.SetField(0, types.NewStringField(data.group, len(data.group)))
+			tup.SetField(1, types.NewStringField(data.value, len(data.value)))
+			tuples = append(tuples, tup)
+		}
+
+		return agg, td, tuples
+	})
+}
+
 func testGeneralIteratorInterface(t *testing.T, setupFunc func() (Aggregator, *tuple.TupleDescription, []*tuple.Tuple)) {
 	agg, _, tuples := setupFunc()
 
@@ -791,6 +821,14 @@ func TestIteratorInterface_ConsistentBehavior(t *testing.T) {
 				return agg, td
 			},
 		},
+		{
+			name: "StringAggregator",
+			factory: func() (Aggregator, *tuple.TupleDescription) {
+				agg, _ := NewStringAggregator(NoGrouping, types.StringType, 0, Count)
+				td, _ := tuple.NewTupleDesc([]types.Type{types.StringType}, []string{"value"})
+				return agg, td
+			},
+		},
 	}
 
 	for _, iterType := range iteratorTypes {
@@ -802,8 +840,10 @@ func TestIteratorInterface_ConsistentBehavior(t *testing.T) {
 				tup := tuple.NewTuple(td)
 				if iterType.name == "IntegerAggregator" {
 					tup.SetField(0, types.NewIntField(int32(i+1)))
-				} else {
+				} else if iterType.name == "BooleanAggregator" {
 					tup.SetField(0, types.NewBoolField(true))
+				} else {
+					tup.SetField(0, types.NewStringField("test", 4))
 				}
 				agg.Merge(tup)
 			}
