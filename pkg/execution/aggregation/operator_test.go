@@ -248,6 +248,191 @@ func TestAggregateOperator_UnsupportedFieldType(t *testing.T) {
 	}
 }
 
+func TestAggregateOperator_BooleanAggregation_WithGrouping(t *testing.T) {
+	// Create tuple desc with boolean field
+	td, _ := tuple.NewTupleDesc(
+		[]types.Type{types.StringType, types.BoolType},
+		[]string{"group", "value"},
+	)
+
+	// Create test data
+	testData := []struct {
+		group string
+		value bool
+	}{
+		{"A", true},
+		{"B", false},
+		{"A", true},
+		{"C", true},
+		{"B", true},
+		{"A", false}, // A: true AND true AND false = false
+	}
+
+	var tuples []*tuple.Tuple
+	for _, data := range testData {
+		tup := tuple.NewTuple(td)
+		tup.SetField(0, types.NewStringField(data.group, len(data.group)))
+		tup.SetField(1, types.NewBoolField(data.value))
+		tuples = append(tuples, tup)
+	}
+
+	source := newMockIterator(tuples, td)
+
+	op, err := NewAggregateOperator(source, 1, 0, And)
+	if err != nil {
+		t.Fatalf("Failed to create operator: %v", err)
+	}
+
+	err = op.Open()
+	if err != nil {
+		t.Fatalf("Failed to open operator: %v", err)
+	}
+	defer op.Close()
+
+	// Expected results: A=false, B=false, C=true
+	expectedResults := map[string]bool{
+		"A": false, // true AND true AND false = false
+		"B": false, // false AND true = false
+		"C": true,  // true
+	}
+
+	results := make(map[string]bool)
+	for {
+		hasNext, err := op.HasNext()
+		if err != nil {
+			t.Fatalf("Error checking HasNext: %v", err)
+		}
+		if !hasNext {
+			break
+		}
+
+		result, err := op.Next()
+		if err != nil {
+			t.Fatalf("Error getting next result: %v", err)
+		}
+
+		groupField, err := result.GetField(0)
+		if err != nil {
+			t.Fatalf("Failed to get group field: %v", err)
+		}
+		valueField, err := result.GetField(1)
+		if err != nil {
+			t.Fatalf("Failed to get value field: %v", err)
+		}
+
+		groupStr := groupField.String()
+		boolField, ok := valueField.(*types.BoolField)
+		if !ok {
+			t.Fatal("Value field is not a boolean")
+		}
+
+		results[groupStr] = boolField.Value
+	}
+
+	if len(results) != len(expectedResults) {
+		t.Errorf("Expected %d groups, got %d", len(expectedResults), len(results))
+	}
+
+	for group, expectedResult := range expectedResults {
+		if actualResult, exists := results[group]; !exists {
+			t.Errorf("Missing group %s", group)
+		} else if actualResult != expectedResult {
+			t.Errorf("Group %s: expected %v, got %v", group, expectedResult, actualResult)
+		}
+	}
+}
+
+func TestAggregateOperator_BooleanAggregation_NoGrouping(t *testing.T) {
+	// Create tuple desc with boolean field
+	td, _ := tuple.NewTupleDesc(
+		[]types.Type{types.BoolType},
+		[]string{"value"},
+	)
+
+	tests := []struct {
+		op       AggregateOp
+		values   []bool
+		expected interface{}
+	}{
+		{And, []bool{true, true, true}, true},
+		{And, []bool{true, false, true}, false},
+		{Or, []bool{false, false, false}, false},
+		{Or, []bool{false, true, false}, true},
+		{Sum, []bool{true, false, true, true}, int32(3)}, // count of true values
+		{Count, []bool{true, false, true, false, true}, int32(5)}, // total count
+	}
+
+	for _, test := range tests {
+		t.Run(test.op.String()+"_Boolean", func(t *testing.T) {
+			// Create test tuples
+			var tuples []*tuple.Tuple
+			for _, value := range test.values {
+				tup := tuple.NewTuple(td)
+				tup.SetField(0, types.NewBoolField(value))
+				tuples = append(tuples, tup)
+			}
+
+			source := newMockIterator(tuples, td)
+			op, err := NewAggregateOperator(source, 0, NoGrouping, test.op)
+			if err != nil {
+				t.Fatalf("Failed to create operator: %v", err)
+			}
+
+			err = op.Open()
+			if err != nil {
+				t.Fatalf("Failed to open operator: %v", err)
+			}
+			defer op.Close()
+
+			hasNext, err := op.HasNext()
+			if err != nil {
+				t.Fatalf("Error checking HasNext: %v", err)
+			}
+			if !hasNext {
+				t.Fatal("Expected at least one result")
+			}
+
+			result, err := op.Next()
+			if err != nil {
+				t.Fatalf("Failed to get result: %v", err)
+			}
+
+			field, err := result.GetField(0)
+			if err != nil {
+				t.Fatalf("Failed to get result field: %v", err)
+			}
+
+			switch expectedVal := test.expected.(type) {
+			case bool:
+				boolField, ok := field.(*types.BoolField)
+				if !ok {
+					t.Fatal("Result field is not a boolean")
+				}
+				if boolField.Value != expectedVal {
+					t.Errorf("Expected %v, got %v", expectedVal, boolField.Value)
+				}
+			case int32:
+				intField, ok := field.(*types.IntField)
+				if !ok {
+					t.Fatal("Result field is not an integer")
+				}
+				if intField.Value != expectedVal {
+					t.Errorf("Expected %d, got %d", expectedVal, intField.Value)
+				}
+			}
+
+			// Should have no more results
+			hasNext, err = op.HasNext()
+			if err != nil {
+				t.Fatalf("Error checking HasNext: %v", err)
+			}
+			if hasNext {
+				t.Error("Expected no more results")
+			}
+		})
+	}
+}
+
 func TestAggregateOperator_Lifecycle(t *testing.T) {
 	td := createTestTupleDesc()
 	tuples := createTestTuples()
