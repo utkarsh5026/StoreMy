@@ -8,17 +8,30 @@ import (
 	"sync"
 )
 
+// BooleanAggregator performs aggregation operations on boolean fields.
+// It supports Count, And, Or, and Sum operations with optional grouping.
 type BooleanAggregator struct {
-	gbField      int                     // Index of grouping field
+	gbField      int                     // Index of grouping field (-1 for no grouping)
 	gbFieldType  types.Type              // Type of grouping field
 	aField       int                     // Index of field to aggregate
-	op           AggregateOp             // Aggregation operation
-	groupToAgg   map[string]interface{}  // Maps group value to aggregate result (bool or int32)
-	groupToCount map[string]int32        // Maps group value to count (for AVG)
+	op           AggregateOp             // Aggregation operation (Count, And, Or, Sum)
+	groupToAgg   map[string]any          // Maps group value to aggregate result (bool or int32)
+	groupToCount map[string]int32        // Maps group value to count (for AVG operations)
 	tupleDesc    *tuple.TupleDescription // Description of result tuples
-	mutex        sync.RWMutex            // Protects concurrent access
+	mutex        sync.RWMutex            // Protects concurrent access to aggregation state
 }
 
+// NewBooleanAggregator creates a new boolean aggregator with the specified parameters.
+//
+// Parameters:
+//   - gbField: Index of the grouping field (use NoGrouping for no grouping)
+//   - gbFieldType: Type of the grouping field
+//   - aField: Index of the field to aggregate (must be boolean type)
+//   - op: Aggregation operation (Count, And, Or, Sum)
+//
+// Returns:
+//   - *BooleanAggregator: The created aggregator
+//   - error: Error if the operation is not supported
 func NewBooleanAggregator(gbField int, gbFieldType types.Type, aField int, op AggregateOp) (*BooleanAggregator, error) {
 	switch op {
 	case Count, And, Or, Sum:
@@ -44,7 +57,12 @@ func NewBooleanAggregator(gbField int, gbFieldType types.Type, aField int, op Ag
 	return agg, nil
 }
 
-// getInitValue returns the initial value for different boolean operations
+// getInitValue returns the initial value for different boolean operations.
+//
+// Returns:
+//   - true for And operation (identity element for AND)
+//   - false for Or operation (identity element for OR)
+//   - 0 for Count and Sum operations
 func (ba *BooleanAggregator) getInitValue() any {
 	switch ba.op {
 	case And:
@@ -58,6 +76,13 @@ func (ba *BooleanAggregator) getInitValue() any {
 	}
 }
 
+// createTupleDesc creates the tuple description for the aggregation result.
+// The result contains either one field (aggregate result) or two fields
+// (grouping field + aggregate result) depending on whether grouping is used.
+//
+// Returns:
+//   - *tuple.TupleDescription: Description of result tuples
+//   - error: Error if tuple description creation fails
 func (ba *BooleanAggregator) createTupleDesc() (*tuple.TupleDescription, error) {
 	var resultType types.Type
 	switch ba.op {
@@ -83,15 +108,25 @@ func (ba *BooleanAggregator) createTupleDesc() (*tuple.TupleDescription, error) 
 
 }
 
+// GetTupleDesc returns the tuple description for the aggregation result.
+//
+// Returns:
+//   - *tuple.TupleDescription: Description of result tuples
 func (ba *BooleanAggregator) GetTupleDesc() *tuple.TupleDescription {
 	return ba.tupleDesc
 }
 
+// Merge processes a single tuple and updates the aggregation state.
+//
+// Parameters:
+//   - tup: The tuple to process and merge into the aggregation
+//
+// Returns:
+//   - error: Error if tuple processing fails (e.g., field access errors, type mismatches)
 func (ba *BooleanAggregator) Merge(tup *tuple.Tuple) error {
 	ba.mutex.Lock()
 	defer ba.mutex.Unlock()
 
-	// Extract group value
 	var groupKey string
 	if ba.gbField == NoGrouping {
 		groupKey = "NO_GROUPING"
@@ -103,7 +138,6 @@ func (ba *BooleanAggregator) Merge(tup *tuple.Tuple) error {
 		groupKey = groupField.String()
 	}
 
-	// Extract aggregate field value
 	aggField, err := tup.GetField(ba.aField)
 	if err != nil {
 		return fmt.Errorf("failed to get aggregate field: %v", err)
@@ -116,13 +150,11 @@ func (ba *BooleanAggregator) Merge(tup *tuple.Tuple) error {
 
 	aggValue := boolField.Value
 
-	// Initialize group if not exists
 	if _, exists := ba.groupToAgg[groupKey]; !exists {
 		ba.groupToAgg[groupKey] = ba.getInitValue()
 		ba.groupToCount[groupKey] = 0
 	}
 
-	// Update aggregate value based on operation
 	switch ba.op {
 	case And:
 		currentVal := ba.groupToAgg[groupKey].(bool)
@@ -135,7 +167,6 @@ func (ba *BooleanAggregator) Merge(tup *tuple.Tuple) error {
 		if aggValue {
 			ba.groupToAgg[groupKey] = currentVal + 1
 		}
-		// else add 0 (false)
 	case Count:
 		currentVal := ba.groupToAgg[groupKey].(int32)
 		ba.groupToAgg[groupKey] = currentVal + 1
@@ -147,10 +178,18 @@ func (ba *BooleanAggregator) Merge(tup *tuple.Tuple) error {
 	return nil
 }
 
+// Iterator returns a database iterator for the aggregation results.
+//
+// Returns:
+//   - iterator.DbIterator: Iterator that yields result tuples
 func (ba *BooleanAggregator) Iterator() iterator.DbIterator {
 	return NewAggregatorIterator(ba)
 }
 
+// GetGroups returns all group keys that have been processed.
+//
+// Returns:
+//   - []string: Slice of group keys
 func (ba *BooleanAggregator) GetGroups() []string {
 	groups := make([]string, 0, len(ba.groupToAgg))
 	for groupKey := range ba.groupToAgg {
@@ -159,6 +198,14 @@ func (ba *BooleanAggregator) GetGroups() []string {
 	return groups
 }
 
+// GetAggregateValue returns the aggregate value for a specific group.
+//
+// Parameters:
+//   - groupKey: The group key to get the aggregate value for
+//
+// Returns:
+//   - types.Field: The aggregate value as a field (BoolField for And/Or, IntField for Count/Sum)
+//   - error: Error if the group key doesn't exist or value type is unexpected
 func (ba *BooleanAggregator) GetAggregateValue(groupKey string) (types.Field, error) {
 	aggValue := ba.groupToAgg[groupKey]
 	switch v := aggValue.(type) {
@@ -171,14 +218,20 @@ func (ba *BooleanAggregator) GetAggregateValue(groupKey string) (types.Field, er
 	}
 }
 
+// GetGroupingField returns the index of the grouping field.
+//
+// Returns:
+//   - int: Index of the grouping field (NoGrouping if no grouping is used)
 func (ba *BooleanAggregator) GetGroupingField() int {
 	return ba.gbField
 }
 
+// RLock acquires a read lock on the aggregator's mutex.
 func (ba *BooleanAggregator) RLock() {
 	ba.mutex.RLock()
 }
 
+// RUnlock releases a read lock on the aggregator's mutex.
 func (ba *BooleanAggregator) RUnlock() {
 	ba.mutex.RUnlock()
 }
