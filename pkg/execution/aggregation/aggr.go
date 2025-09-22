@@ -36,6 +36,10 @@ func (op AggregateOp) String() string {
 		return "AVG"
 	case Count:
 		return "COUNT"
+	case And:
+		return "AND"
+	case Or:
+		return "OR"
 	default:
 		return "UNKNOWN"
 	}
