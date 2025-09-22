@@ -2,6 +2,7 @@ package aggregation
 
 import (
 	"fmt"
+	"storemy/pkg/iterator"
 	"storemy/pkg/tuple"
 	"storemy/pkg/types"
 	"sync"
@@ -144,4 +145,40 @@ func (ba *BooleanAggregator) Merge(tup *tuple.Tuple) error {
 
 	ba.groupToCount[groupKey]++
 	return nil
+}
+
+func (ba *BooleanAggregator) Iterator() iterator.DbIterator {
+	return NewAggregatorIterator(ba)
+}
+
+func (ba *BooleanAggregator) GetGroups() []string {
+	groups := make([]string, 0, len(ba.groupToAgg))
+	for groupKey := range ba.groupToAgg {
+		groups = append(groups, groupKey)
+	}
+	return groups
+}
+
+func (ba *BooleanAggregator) GetAggregateValue(groupKey string) (types.Field, error) {
+	aggValue := ba.groupToAgg[groupKey]
+	switch v := aggValue.(type) {
+	case bool:
+		return types.NewBoolField(v), nil
+	case int32:
+		return types.NewIntField(v), nil
+	default:
+		return nil, fmt.Errorf("unexpected aggregate value type: %T", v)
+	}
+}
+
+func (ba *BooleanAggregator) GetGroupingField() int {
+	return ba.gbField
+}
+
+func (ba *BooleanAggregator) RLock() {
+	ba.mutex.RLock()
+}
+
+func (ba *BooleanAggregator) RUnlock() {
+	ba.mutex.RUnlock()
 }
