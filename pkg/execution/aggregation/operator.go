@@ -61,6 +61,9 @@ func NewAggregateOperator(source iterator.DbIterator, aField, gField int, op Agg
 
 	case types.BoolType:
 		aggOp.aggregator, _ = NewBooleanAggregator(gField, gbFieldType, aField, op)
+
+	case types.StringType:
+		aggOp.aggregator, _ = NewStringAggregator(gField, gbFieldType, aField, op)
 	default:
 		return nil, fmt.Errorf("unsupported field type for aggregation: %v", aggFieldType)
 	}
