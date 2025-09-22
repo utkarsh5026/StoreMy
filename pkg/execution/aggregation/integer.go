@@ -214,158 +214,42 @@ func (ia *IntegerAggregator) extractGroupKey(tup *tuple.Tuple) (string, error) {
 }
 
 // Iterator returns a DbIterator over the aggregation results.
-// The iterator yields tuples containing either (aggregateValue) for non-grouped
-// aggregations or (groupValue, aggregateValue) for grouped aggregations.
 //
 // Returns:
 //   - iterator.DbIterator: Iterator over the aggregation results
 func (ia *IntegerAggregator) Iterator() iterator.DbIterator {
-	return NewIntAggregatorIterator(ia)
+	return NewAggregatorIterator(ia)
 }
 
-type IntAggregatorIterator struct {
-	aggregator    *IntegerAggregator
-	tupleDesc     *tuple.TupleDescription
-	groups        []string
-	currentIdx    int
-	opened        bool
-	nextTuple     *tuple.Tuple // Cache for hasNext/next pattern
-	hasNextCalled bool
+func (ia *IntegerAggregator) RLock() {
+	ia.mutex.RLock()
 }
 
-func NewIntAggregatorIterator(agg *IntegerAggregator) *IntAggregatorIterator {
-	return &IntAggregatorIterator{
-		aggregator: agg,
-		tupleDesc:  agg.GetTupleDesc(),
-		currentIdx: 0,
-		opened:     false,
+func (ia *IntegerAggregator) RUnlock() {
+	ia.mutex.RUnlock()
+}
+
+func (ia *IntegerAggregator) GetGroupingField() int {
+	return ia.groupByField
+}
+
+func (ia *IntegerAggregator) GetGroups() []string {
+	groups := make([]string, 0, len(ia.groupToAgg))
+	for groupKey := range ia.groupToAgg {
+		groups = append(groups, groupKey)
 	}
+	return groups
 }
 
-func (iter *IntAggregatorIterator) GetTupleDesc() *tuple.TupleDescription {
-	return iter.tupleDesc
-}
+func (ia *IntegerAggregator) GetAggregateValue(groupKey string) (types.Field, error) {
+	aggValue := ia.groupToAgg[groupKey]
 
-// Close releases resources and marks the iterator as closed
-func (iter *IntAggregatorIterator) Close() error {
-	iter.opened = false
-	iter.aggregator = nil
-	iter.groups = nil
-	iter.nextTuple = nil
-	iter.hasNextCalled = false
-	return nil
-}
-
-func (iter *IntAggregatorIterator) Rewind() error {
-	if !iter.opened {
-		return fmt.Errorf("iterator not opened")
-	}
-
-	iter.currentIdx = 0
-	iter.nextTuple = nil
-	iter.hasNextCalled = false
-	return nil
-}
-
-func (iter *IntAggregatorIterator) Open() error {
-	if iter.opened {
-		return fmt.Errorf("iterator already opened")
-	}
-
-	iter.aggregator.mutex.RLock()
-	defer iter.aggregator.mutex.RUnlock()
-
-	iter.groups = make([]string, 0, len(iter.aggregator.groupToAgg))
-	for groupKey := range iter.aggregator.groupToAgg {
-		iter.groups = append(iter.groups, groupKey)
-	}
-
-	iter.currentIdx = 0
-	iter.opened = true
-	iter.nextTuple = nil
-	iter.hasNextCalled = false
-
-	return nil
-}
-
-func (iter *IntAggregatorIterator) HasNext() (bool, error) {
-	if !iter.opened {
-		return false, fmt.Errorf("iterator not opened")
-	}
-
-	if !iter.hasNextCalled {
-		var err error
-		iter.nextTuple, err = iter.readNext()
-		if err != nil {
-			return false, fmt.Errorf("error reading next tuple: %v", err)
-		}
-		iter.hasNextCalled = true
-	}
-
-	return iter.nextTuple != nil, nil
-}
-
-func (iter *IntAggregatorIterator) readNext() (*tuple.Tuple, error) {
-	if iter.currentIdx >= len(iter.groups) {
-		return nil, nil // No more tuples
-	}
-
-	iter.aggregator.mutex.RLock()
-	defer iter.aggregator.mutex.RUnlock()
-
-	groupKey := iter.groups[iter.currentIdx]
-	iter.currentIdx++
-
-	aggValue := iter.aggregator.groupToAgg[groupKey]
-
-	if iter.aggregator.op == Avg {
-		count := iter.aggregator.groupToCount[groupKey]
+	if ia.op == Avg {
+		count := ia.groupToCount[groupKey]
 		if count > 0 {
 			aggValue = aggValue / count
 		}
 	}
 
-	resultTuple := tuple.NewTuple(iter.tupleDesc)
-	if iter.aggregator.groupByField == NoGrouping {
-		if err := resultTuple.SetField(0, types.NewIntField(aggValue)); err != nil {
-			return nil, fmt.Errorf("failed to set aggregate field: %v", err)
-		}
-		return resultTuple, nil
-	}
-
-	groupField := types.NewStringField(groupKey, len(groupKey))
-	if err := resultTuple.SetField(0, groupField); err != nil {
-		return nil, fmt.Errorf("failed to set group field: %v", err)
-	}
-	if err := resultTuple.SetField(1, types.NewIntField(aggValue)); err != nil {
-		return nil, fmt.Errorf("failed to set aggregate field: %v", err)
-	}
-
-	return resultTuple, nil
-}
-
-func (iter *IntAggregatorIterator) Next() (*tuple.Tuple, error) {
-	if !iter.opened {
-		return nil, fmt.Errorf("iterator not opened")
-	}
-
-	if !iter.hasNextCalled {
-		hasNext, err := iter.HasNext()
-		if err != nil {
-			return nil, err
-		}
-		if !hasNext {
-			return nil, fmt.Errorf("no more tuples available")
-		}
-	}
-
-	result := iter.nextTuple
-	iter.nextTuple = nil
-	iter.hasNextCalled = false
-
-	if result == nil {
-		return nil, fmt.Errorf("no more tuples available")
-	}
-
-	return result, nil
+	return types.NewIntField(aggValue), nil
 }
