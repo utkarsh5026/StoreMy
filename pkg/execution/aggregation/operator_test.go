@@ -227,7 +227,29 @@ func TestNewAggregateOperator(t *testing.T) {
 }
 
 func TestAggregateOperator_UnsupportedFieldType(t *testing.T) {
-	// Create tuple desc with unsupported field type
+	// Create tuple desc with float field type (not supported)
+	td, _ := tuple.NewTupleDesc(
+		[]types.Type{types.StringType, types.FloatType},
+		[]string{"group", "value"},
+	)
+
+	tup := tuple.NewTuple(td)
+	tup.SetField(0, types.NewStringField("A", 1))
+	tup.SetField(1, types.NewFloat64Field(3.14))
+
+	source := newMockIterator([]*tuple.Tuple{tup}, td)
+
+	_, err := NewAggregateOperator(source, 1, 0, Sum)
+	if err == nil {
+		t.Error("Expected error for unsupported field type")
+	}
+	if err.Error() != "unsupported field type for aggregation: FLOAT_TYPE" {
+		t.Errorf("Expected unsupported field type error, got: %v", err)
+	}
+}
+
+func TestAggregateOperator_StringUnsupportedOperation(t *testing.T) {
+	// Create tuple desc with string field type but unsupported operation
 	td, _ := tuple.NewTupleDesc(
 		[]types.Type{types.StringType, types.StringType},
 		[]string{"group", "text"},
@@ -241,10 +263,7 @@ func TestAggregateOperator_UnsupportedFieldType(t *testing.T) {
 
 	_, err := NewAggregateOperator(source, 1, 0, Sum)
 	if err == nil {
-		t.Error("Expected error for unsupported field type")
-	}
-	if err.Error() != "unsupported field type for aggregation: STRING_TYPE" {
-		t.Errorf("Expected unsupported field type error, got: %v", err)
+		t.Error("Expected error for unsupported string operation")
 	}
 }
 
@@ -410,6 +429,188 @@ func TestAggregateOperator_BooleanAggregation_NoGrouping(t *testing.T) {
 				}
 				if boolField.Value != expectedVal {
 					t.Errorf("Expected %v, got %v", expectedVal, boolField.Value)
+				}
+			case int32:
+				intField, ok := field.(*types.IntField)
+				if !ok {
+					t.Fatal("Result field is not an integer")
+				}
+				if intField.Value != expectedVal {
+					t.Errorf("Expected %d, got %d", expectedVal, intField.Value)
+				}
+			}
+
+			// Should have no more results
+			hasNext, err = op.HasNext()
+			if err != nil {
+				t.Fatalf("Error checking HasNext: %v", err)
+			}
+			if hasNext {
+				t.Error("Expected no more results")
+			}
+		})
+	}
+}
+
+func TestAggregateOperator_StringAggregation_WithGrouping(t *testing.T) {
+	// Create tuple desc with string field
+	td, _ := tuple.NewTupleDesc(
+		[]types.Type{types.StringType, types.StringType},
+		[]string{"group", "value"},
+	)
+
+	// Create test data
+	testData := []struct {
+		group string
+		value string
+	}{
+		{"fruits", "apple"},
+		{"colors", "red"},
+		{"fruits", "banana"},
+		{"animals", "zebra"},
+		{"colors", "blue"},
+		{"fruits", "cherry"}, // fruits: min("apple", "banana", "cherry") = "apple"
+	}
+
+	var tuples []*tuple.Tuple
+	for _, data := range testData {
+		tup := tuple.NewTuple(td)
+		tup.SetField(0, types.NewStringField(data.group, len(data.group)))
+		tup.SetField(1, types.NewStringField(data.value, len(data.value)))
+		tuples = append(tuples, tup)
+	}
+
+	source := newMockIterator(tuples, td)
+
+	op, err := NewAggregateOperator(source, 1, 0, Min)
+	if err != nil {
+		t.Fatalf("Failed to create operator: %v", err)
+	}
+
+	err = op.Open()
+	if err != nil {
+		t.Fatalf("Failed to open operator: %v", err)
+	}
+	defer op.Close()
+
+	// Expected results
+	expectedResults := map[string]string{
+		"fruits":  "apple", // min("apple", "banana", "cherry") = "apple"
+		"colors":  "blue",  // min("red", "blue") = "blue"
+		"animals": "zebra", // min("zebra") = "zebra"
+	}
+
+	results := make(map[string]string)
+	for {
+		hasNext, err := op.HasNext()
+		if err != nil {
+			t.Fatalf("Error checking HasNext: %v", err)
+		}
+		if !hasNext {
+			break
+		}
+
+		result, err := op.Next()
+		if err != nil {
+			t.Fatalf("Error getting next result: %v", err)
+		}
+
+		groupField, err := result.GetField(0)
+		if err != nil {
+			t.Fatalf("Failed to get group field: %v", err)
+		}
+		valueField, err := result.GetField(1)
+		if err != nil {
+			t.Fatalf("Failed to get value field: %v", err)
+		}
+
+		groupStr := groupField.String()
+		stringField, ok := valueField.(*types.StringField)
+		if !ok {
+			t.Fatal("Value field is not a string")
+		}
+
+		results[groupStr] = stringField.Value
+	}
+
+	if len(results) != len(expectedResults) {
+		t.Errorf("Expected %d groups, got %d", len(expectedResults), len(results))
+	}
+
+	for group, expectedResult := range expectedResults {
+		if actualResult, exists := results[group]; !exists {
+			t.Errorf("Missing group %s", group)
+		} else if actualResult != expectedResult {
+			t.Errorf("Group %s: expected %v, got %v", group, expectedResult, actualResult)
+		}
+	}
+}
+
+func TestAggregateOperator_StringAggregation_NoGrouping(t *testing.T) {
+	// Create tuple desc with string field
+	td, _ := tuple.NewTupleDesc(
+		[]types.Type{types.StringType},
+		[]string{"value"},
+	)
+
+	tests := []struct {
+		op       AggregateOp
+		values   []string
+		expected interface{}
+	}{
+		{Count, []string{"apple", "banana", "cherry"}, int32(3)},
+		{Min, []string{"zebra", "apple", "banana"}, "apple"},
+		{Max, []string{"zebra", "apple", "banana"}, "zebra"},
+	}
+
+	for _, test := range tests {
+		t.Run(test.op.String()+"_String", func(t *testing.T) {
+			// Create test tuples
+			var tuples []*tuple.Tuple
+			for _, value := range test.values {
+				tup := tuple.NewTuple(td)
+				tup.SetField(0, types.NewStringField(value, len(value)))
+				tuples = append(tuples, tup)
+			}
+
+			source := newMockIterator(tuples, td)
+			op, err := NewAggregateOperator(source, 0, NoGrouping, test.op)
+			if err != nil {
+				t.Fatalf("Failed to create operator: %v", err)
+			}
+
+			err = op.Open()
+			if err != nil {
+				t.Fatalf("Failed to open operator: %v", err)
+			}
+			defer op.Close()
+
+			hasNext, err := op.HasNext()
+			if err != nil {
+				t.Fatalf("Error checking HasNext: %v", err)
+			}
+			if !hasNext {
+				t.Fatal("Expected at least one result")
+			}
+
+			result, err := op.Next()
+			if err != nil {
+				t.Fatalf("Failed to get result: %v", err)
+			}
+
+			field, err := result.GetField(0)
+			if err != nil {
+				t.Fatalf("Failed to get result field: %v", err)
+			}
+
+			switch expectedVal := test.expected.(type) {
+			case string:
+				stringField, ok := field.(*types.StringField)
+				if !ok {
+					t.Fatal("Result field is not a string")
+				}
+				if stringField.Value != expectedVal {
+					t.Errorf("Expected %v, got %v", expectedVal, stringField.Value)
 				}
 			case int32:
 				intField, ok := field.(*types.IntField)
