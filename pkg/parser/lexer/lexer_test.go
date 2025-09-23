@@ -1,4 +1,4 @@
-package parser
+package lexer
 
 import (
 	"testing"
@@ -7,7 +7,7 @@ import (
 func TestNewLexer(t *testing.T) {
 	input := "  select * from table  "
 	lexer := NewLexer(input)
-	
+
 	if lexer.input != "SELECT * FROM TABLE" {
 		t.Errorf("Expected input to be trimmed and uppercase, got %s", lexer.input)
 	}
@@ -488,7 +488,7 @@ func TestLexerComplexSQL(t *testing.T) {
 func TestLexerEmptyInput(t *testing.T) {
 	lexer := NewLexer("")
 	token := lexer.NextToken()
-	
+
 	if token.Type != EOF {
 		t.Errorf("Expected EOF token, got %d", token.Type)
 	}
@@ -504,7 +504,7 @@ func TestLexerUnterminatedString(t *testing.T) {
 	input := "'unterminated"
 	lexer := NewLexer(input)
 	token := lexer.NextToken()
-	
+
 	if token.Type != STRING {
 		t.Errorf("Expected STRING token, got %d", token.Type)
 	}
