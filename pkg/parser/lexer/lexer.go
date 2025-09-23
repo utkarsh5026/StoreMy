@@ -20,6 +20,12 @@ func NewLexer(input string) *Lexer {
 	}
 }
 
+func (l *Lexer) SetPos(pos int) {
+	if pos >= 0 && pos < l.length {
+		l.pos = pos
+	}
+}
+
 func (l *Lexer) NextToken() Token {
 	l.skipWhitespace()
 
