@@ -52,7 +52,7 @@ func (p *Parser) parseInsertStatement(lexer *Lexer) (*statements.InsertStatement
 
 	token = lexer.NextToken()
 	if token.Type == LPAREN {
-		fields, err := p.parseFieldList(lexer)
+		fields, err := parseFieldList(lexer)
 		if err != nil {
 			return nil, err
 		}
@@ -161,29 +161,6 @@ func (p *Parser) parseCreateStatement(lexer *Lexer) (*statements.CreateStatement
 	return stmt, nil
 }
 
-func parseValueList(lexer *Lexer) ([]types.Field, error) {
-	values := make([]types.Field, 0)
-
-	for {
-		value, err := parseValue(lexer)
-		if err != nil {
-			return nil, err
-		}
-		values = append(values, value)
-
-		token := lexer.NextToken()
-		if token.Type == COMMA {
-			continue
-		} else if token.Type == RPAREN {
-			break
-		} else {
-			return nil, fmt.Errorf("expected ',' or ')', got %s", token.Value)
-		}
-	}
-
-	return values, nil
-}
-
 func (p *Parser) parseInsertValues(lexer *Lexer, stmt *statements.InsertStatement) (*statements.InsertStatement, error) {
 	for {
 		token := lexer.NextToken()
@@ -210,7 +187,7 @@ func (p *Parser) parseInsertValues(lexer *Lexer, stmt *statements.InsertStatemen
 	return stmt, nil
 }
 
-func (p *Parser) parseFieldList(lexer *Lexer) ([]string, error) {
+func parseFieldList(lexer *Lexer) ([]string, error) {
 	fields := make([]string, 0)
 	for {
 		token := lexer.NextToken()
@@ -288,4 +265,27 @@ func readPrimaryKey(lexer *Lexer, stmt *statements.CreateStatement) error {
 		return fmt.Errorf("expected ')' after PRIMARY KEY field, got %s", token.Value)
 	}
 	return nil
+}
+
+func parseValueList(lexer *Lexer) ([]types.Field, error) {
+	values := make([]types.Field, 0)
+
+	for {
+		value, err := parseValue(lexer)
+		if err != nil {
+			return nil, err
+		}
+		values = append(values, value)
+
+		token := lexer.NextToken()
+		if token.Type == COMMA {
+			continue
+		} else if token.Type == RPAREN {
+			break
+		} else {
+			return nil, fmt.Errorf("expected ',' or ')', got %s", token.Value)
+		}
+	}
+
+	return values, nil
 }
