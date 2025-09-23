@@ -3,6 +3,7 @@ package parser
 import (
 	"errors"
 	"fmt"
+	"storemy/pkg/parser/plan"
 	"storemy/pkg/parser/statements"
 	"storemy/pkg/types"
 	"strconv"
@@ -25,6 +26,8 @@ func (p *Parser) ParseStatement(sql string) (statements.Statement, error) {
 		return p.parseInsertStatement(lexer)
 	case CREATE:
 		return p.parseCreateStatement(lexer)
+	case DELETE:
+		return parseDeleteStatement(lexer)
 	default:
 		return nil, fmt.Errorf("unsupported statement type: %s", token.Value)
 	}
@@ -161,6 +164,44 @@ func (p *Parser) parseCreateStatement(lexer *Lexer) (*statements.CreateStatement
 	return stmt, nil
 }
 
+func parseDeleteStatement(lexer *Lexer) (*statements.DeleteStatement, error) {
+	token := lexer.NextToken()
+	if token.Type != DELETE {
+		return nil, fmt.Errorf("expected DELETE, got %s", token.Value)
+	}
+
+	token = lexer.NextToken()
+	if token.Type != FROM {
+		return nil, fmt.Errorf("expected FROM, got %s", token.Value)
+	}
+
+	token = lexer.NextToken()
+	if token.Type != IDENTIFIER {
+		return nil, fmt.Errorf("expected table name, got %s", token.Value)
+	}
+
+	tableName := token.Value
+	alias := tableName
+
+	token = lexer.NextToken()
+	if token.Type == IDENTIFIER {
+		alias = token.Value
+		token = lexer.NextToken()
+	}
+
+	statement := statements.NewDeleteStatement(tableName, alias)
+	if token.Type == WHERE {
+		filter, err := parseWhereCondition(lexer)
+		if err != nil {
+			return nil, err
+		}
+		statement.SetWhereClause(filter)
+	} else {
+		lexer.pos = token.Position // Put it back
+	}
+	return statement, nil
+}
+
 func (p *Parser) parseInsertValues(lexer *Lexer, stmt *statements.InsertStatement) (*statements.InsertStatement, error) {
 	for {
 		token := lexer.NextToken()
@@ -288,4 +329,52 @@ func parseValueList(lexer *Lexer) ([]types.Field, error) {
 	}
 
 	return values, nil
+}
+
+func parseWhereCondition(lexer *Lexer) (*plan.FilterNode, error) {
+	token := lexer.NextToken()
+	if token.Type != IDENTIFIER {
+		return nil, fmt.Errorf("expected field name in WHERE, got %s", token.Value)
+	}
+	fieldName := token.Value
+
+	token = lexer.NextToken()
+	if token.Type != OPERATOR {
+		return nil, fmt.Errorf("expected operator in WHERE, got %s", token.Value)
+	}
+
+	pred, err := parseOperator(token.Value)
+	if err != nil {
+		return nil, err
+	}
+
+	token = lexer.NextToken()
+	var constant string
+	switch token.Type {
+	case STRING, INT:
+		constant = token.Value
+	default:
+		return nil, fmt.Errorf("expected value in WHERE, got %s", token.Value)
+	}
+
+	return plan.NewFilterNode("", fieldName, pred, constant), nil
+}
+
+func parseOperator(op string) (types.Predicate, error) {
+	switch op {
+	case "=":
+		return types.Equals, nil
+	case ">":
+		return types.GreaterThan, nil
+	case "<":
+		return types.LessThan, nil
+	case ">=":
+		return types.GreaterThanOrEqual, nil
+	case "<=":
+		return types.LessThanOrEqual, nil
+	case "!=", "<>":
+		return types.NotEqual, nil
+	default:
+		return types.Equals, fmt.Errorf("unknown operator: %s", op)
+	}
 }
