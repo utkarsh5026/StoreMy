@@ -227,24 +227,19 @@ func TestNewAggregateOperator(t *testing.T) {
 }
 
 func TestAggregateOperator_UnsupportedFieldType(t *testing.T) {
-	// Create tuple desc with float field type (not supported)
-	td, _ := tuple.NewTupleDesc(
-		[]types.Type{types.StringType, types.FloatType},
-		[]string{"group", "value"},
-	)
+	// Create tuple desc with an invalid field type (use a type value that doesn't exist)
+	td := &tuple.TupleDescription{
+		Types:      []types.Type{types.Type(999)}, // Invalid type
+		FieldNames: []string{"value"},
+	}
 
 	tup := tuple.NewTuple(td)
-	tup.SetField(0, types.NewStringField("A", 1))
-	tup.SetField(1, types.NewFloat64Field(3.14))
 
 	source := newMockIterator([]*tuple.Tuple{tup}, td)
 
-	_, err := NewAggregateOperator(source, 1, 0, Sum)
+	_, err := NewAggregateOperator(source, 0, NoGrouping, Sum)
 	if err == nil {
 		t.Error("Expected error for unsupported field type")
-	}
-	if err.Error() != "unsupported field type for aggregation: FLOAT_TYPE" {
-		t.Errorf("Expected unsupported field type error, got: %v", err)
 	}
 }
 
@@ -631,6 +626,211 @@ func TestAggregateOperator_StringAggregation_NoGrouping(t *testing.T) {
 				t.Error("Expected no more results")
 			}
 		})
+	}
+}
+
+func TestAggregateOperator_FloatAggregation_WithGrouping(t *testing.T) {
+	// Create tuple desc with float field
+	td, _ := tuple.NewTupleDesc(
+		[]types.Type{types.StringType, types.FloatType},
+		[]string{"group", "value"},
+	)
+
+	// Create test data
+	testData := []struct {
+		group string
+		value float64
+	}{
+		{"numbers", 5.5},
+		{"scores", 85.0},
+		{"numbers", 2.3},
+		{"temps", 98.6},
+		{"scores", 92.5},
+		{"numbers", 7.8}, // numbers: min(5.5, 2.3, 7.8) = 2.3
+		{"temps", 101.2}, // temps: min(98.6, 101.2) = 98.6
+	}
+
+	var tuples []*tuple.Tuple
+	for _, data := range testData {
+		tup := tuple.NewTuple(td)
+		tup.SetField(0, types.NewStringField(data.group, len(data.group)))
+		tup.SetField(1, types.NewFloat64Field(data.value))
+		tuples = append(tuples, tup)
+	}
+
+	source := newMockIterator(tuples, td)
+
+	op, err := NewAggregateOperator(source, 1, 0, Min)
+	if err != nil {
+		t.Fatalf("Failed to create operator: %v", err)
+	}
+
+	err = op.Open()
+	if err != nil {
+		t.Fatalf("Failed to open operator: %v", err)
+	}
+	defer op.Close()
+
+	// Expected results
+	expectedResults := map[string]float64{
+		"numbers": 2.3,  // min(5.5, 2.3, 7.8) = 2.3
+		"scores":  85.0, // min(85.0, 92.5) = 85.0
+		"temps":   98.6, // min(98.6, 101.2) = 98.6
+	}
+
+	results := make(map[string]float64)
+	for {
+		hasNext, err := op.HasNext()
+		if err != nil {
+			t.Fatalf("Error checking HasNext: %v", err)
+		}
+		if !hasNext {
+			break
+		}
+
+		result, err := op.Next()
+		if err != nil {
+			t.Fatalf("Error getting next result: %v", err)
+		}
+
+		groupField, err := result.GetField(0)
+		if err != nil {
+			t.Fatalf("Failed to get group field: %v", err)
+		}
+		valueField, err := result.GetField(1)
+		if err != nil {
+			t.Fatalf("Failed to get value field: %v", err)
+		}
+
+		groupStr := groupField.String()
+		floatField, ok := valueField.(*types.Float64Field)
+		if !ok {
+			t.Fatal("Value field is not a float")
+		}
+
+		results[groupStr] = floatField.Value
+	}
+
+	if len(results) != len(expectedResults) {
+		t.Errorf("Expected %d groups, got %d", len(expectedResults), len(results))
+	}
+
+	for group, expectedResult := range expectedResults {
+		if actualResult, exists := results[group]; !exists {
+			t.Errorf("Missing group %s", group)
+		} else if actualResult != expectedResult {
+			t.Errorf("Group %s: expected %v, got %v", group, expectedResult, actualResult)
+		}
+	}
+}
+
+func TestAggregateOperator_FloatAggregation_NoGrouping(t *testing.T) {
+	// Create tuple desc with float field
+	td, _ := tuple.NewTupleDesc(
+		[]types.Type{types.FloatType},
+		[]string{"value"},
+	)
+
+	tests := []struct {
+		op       AggregateOp
+		values   []float64
+		expected interface{}
+	}{
+		{Count, []float64{1.5, 2.5, 3.5}, int32(3)},
+		{Min, []float64{5.5, 1.2, 3.8}, 1.2},
+		{Max, []float64{5.5, 1.2, 3.8}, 5.5},
+		{Sum, []float64{1.5, 2.5, 3.0}, 7.0},
+		{Avg, []float64{2.0, 4.0, 6.0}, 4.0},
+	}
+
+	for _, test := range tests {
+		t.Run(test.op.String()+"_Float", func(t *testing.T) {
+			// Create test tuples
+			var tuples []*tuple.Tuple
+			for _, value := range test.values {
+				tup := tuple.NewTuple(td)
+				tup.SetField(0, types.NewFloat64Field(value))
+				tuples = append(tuples, tup)
+			}
+
+			source := newMockIterator(tuples, td)
+			op, err := NewAggregateOperator(source, 0, NoGrouping, test.op)
+			if err != nil {
+				t.Fatalf("Failed to create operator: %v", err)
+			}
+
+			err = op.Open()
+			if err != nil {
+				t.Fatalf("Failed to open operator: %v", err)
+			}
+			defer op.Close()
+
+			hasNext, err := op.HasNext()
+			if err != nil {
+				t.Fatalf("Error checking HasNext: %v", err)
+			}
+			if !hasNext {
+				t.Fatal("Expected at least one result")
+			}
+
+			result, err := op.Next()
+			if err != nil {
+				t.Fatalf("Failed to get result: %v", err)
+			}
+
+			field, err := result.GetField(0)
+			if err != nil {
+				t.Fatalf("Failed to get result field: %v", err)
+			}
+
+			switch expectedVal := test.expected.(type) {
+			case float64:
+				floatField, ok := field.(*types.Float64Field)
+				if !ok {
+					t.Fatal("Result field is not a float")
+				}
+				if floatField.Value != expectedVal {
+					t.Errorf("Expected %v, got %v", expectedVal, floatField.Value)
+				}
+			case int32:
+				intField, ok := field.(*types.IntField)
+				if !ok {
+					t.Fatal("Result field is not an integer")
+				}
+				if intField.Value != expectedVal {
+					t.Errorf("Expected %d, got %d", expectedVal, intField.Value)
+				}
+			}
+
+			// Should have no more results
+			hasNext, err = op.HasNext()
+			if err != nil {
+				t.Fatalf("Error checking HasNext: %v", err)
+			}
+			if hasNext {
+				t.Error("Expected no more results")
+			}
+		})
+	}
+}
+
+func TestAggregateOperator_FloatUnsupportedOperation(t *testing.T) {
+	td, _ := tuple.NewTupleDesc(
+		[]types.Type{types.FloatType},
+		[]string{"value"},
+	)
+
+	// Create test tuple
+	tup := tuple.NewTuple(td)
+	tup.SetField(0, types.NewFloat64Field(1.0))
+	tuples := []*tuple.Tuple{tup}
+
+	source := newMockIterator(tuples, td)
+
+	// Try to create operator with unsupported operation for float (And)
+	_, err := NewAggregateOperator(source, 0, NoGrouping, And)
+	if err == nil {
+		t.Error("Expected error for unsupported float operation And, got none")
 	}
 }
 
