@@ -23,6 +23,8 @@ func (p *Parser) ParseStatement(sql string) (statements.Statement, error) {
 	switch token.Type {
 	case INSERT:
 		return p.parseInsertStatement(lexer)
+	case CREATE:
+		return p.parseCreateStatement(lexer)
 	default:
 		return nil, fmt.Errorf("unsupported statement type: %s", token.Value)
 	}
@@ -65,11 +67,105 @@ func (p *Parser) parseInsertStatement(lexer *Lexer) (*statements.InsertStatement
 	}
 }
 
-func (p *Parser) parseValueList(lexer *Lexer) ([]types.Field, error) {
+func (p *Parser) parseCreateStatement(lexer *Lexer) (*statements.CreateStatement, error) {
+	// CREATE TABLE [IF NOT EXISTS] table_name (field_def1, field_def2, ..., [PRIMARY KEY (field)])
+	token := lexer.NextToken()
+	if token.Type != CREATE {
+		return nil, fmt.Errorf("expected CREATE, got %s", token.Value)
+	}
+
+	token = lexer.NextToken()
+	if token.Type != TABLE {
+		return nil, fmt.Errorf("expected TABLE, got %s", token.Value)
+	}
+
+	ifNotExists := false
+	token = lexer.NextToken()
+	if token.Type == IF {
+		token = lexer.NextToken()
+		if token.Type != NOT {
+			return nil, fmt.Errorf("expected NOT after IF, got %s", token.Value)
+		}
+		token = lexer.NextToken()
+		if token.Type != EXISTS {
+			return nil, fmt.Errorf("expected EXISTS after NOT, got %s", token.Value)
+		}
+		ifNotExists = true
+		token = lexer.NextToken()
+	}
+
+	if token.Type != IDENTIFIER {
+		return nil, fmt.Errorf("expected table name, got %s", token.Value)
+	}
+
+	tableName := token.Value
+	stmt := statements.NewCreateStatement(tableName, ifNotExists)
+
+	token = lexer.NextToken()
+	if token.Type != LPAREN {
+		return nil, fmt.Errorf("expected '(', got %s", token.Value)
+	}
+
+	for {
+		token = lexer.NextToken()
+
+		if token.Type == PRIMARY {
+			if err := readPrimaryKey(lexer, stmt); err != nil {
+				return nil, err
+			}
+		} else if token.Type == IDENTIFIER {
+			fieldName := token.Value
+
+			token = lexer.NextToken()
+			fieldType, err := parseDataType(token)
+			if err != nil {
+				return nil, err
+			}
+
+			notNull := false
+			var defaultValue types.Field
+
+			for {
+				token = lexer.NextToken()
+				if token.Type == NOT {
+					token = lexer.NextToken()
+					if token.Type == NULL {
+						notNull = true
+					} else {
+						return nil, fmt.Errorf("expected NULL after NOT, got %s", token.Value)
+					}
+				} else if token.Type == DEFAULT {
+					defaultValue, err = parseValue(lexer)
+					if err != nil {
+						return nil, err
+					}
+				} else {
+					lexer.pos = token.Position // Put it back
+					break
+				}
+			}
+
+			stmt.AddField(fieldName, fieldType, notNull, defaultValue)
+		}
+
+		token = lexer.NextToken()
+		if token.Type == COMMA {
+			continue
+		} else if token.Type == RPAREN {
+			break
+		} else {
+			return nil, fmt.Errorf("expected ',' or ')', got %s", token.Value)
+		}
+	}
+
+	return stmt, nil
+}
+
+func parseValueList(lexer *Lexer) ([]types.Field, error) {
 	values := make([]types.Field, 0)
 
 	for {
-		value, err := p.parseValue(lexer)
+		value, err := parseValue(lexer)
 		if err != nil {
 			return nil, err
 		}
@@ -95,7 +191,7 @@ func (p *Parser) parseInsertValues(lexer *Lexer, stmt *statements.InsertStatemen
 			return nil, fmt.Errorf("expected '(', got %s", token.Value)
 		}
 
-		values, err := p.parseValueList(lexer)
+		values, err := parseValueList(lexer)
 		if err != nil {
 			return nil, err
 		}
@@ -136,7 +232,7 @@ func (p *Parser) parseFieldList(lexer *Lexer) ([]string, error) {
 	return fields, nil
 }
 
-func (p *Parser) parseValue(lexer *Lexer) (types.Field, error) {
+func parseValue(lexer *Lexer) (types.Field, error) {
 	token := lexer.NextToken()
 
 	switch token.Type {
@@ -153,4 +249,43 @@ func (p *Parser) parseValue(lexer *Lexer) (types.Field, error) {
 	default:
 		return nil, fmt.Errorf("expected value, got %s", token.Value)
 	}
+}
+
+func parseDataType(token Token) (types.Type, error) {
+	switch token.Type {
+	case INT:
+		return types.IntType, nil
+	case VARCHAR, TEXT:
+		return types.StringType, nil
+	case BOOLEAN:
+		return types.BoolType, nil
+	case FLOAT:
+		return types.FloatType, nil
+	default:
+		return 0, fmt.Errorf("unknown data type: %s", token.Value)
+	}
+}
+
+func readPrimaryKey(lexer *Lexer, stmt *statements.CreateStatement) error {
+	token := lexer.NextToken()
+	if token.Type != KEY {
+		return fmt.Errorf("expected KEY after PRIMARY, got %s", token.Value)
+	}
+
+	token = lexer.NextToken()
+	if token.Type != LPAREN {
+		return fmt.Errorf("expected '(' after PRIMARY KEY, got %s", token.Value)
+	}
+
+	token = lexer.NextToken()
+	if token.Type != IDENTIFIER {
+		return fmt.Errorf("expected field name in PRIMARY KEY, got %s", token.Value)
+	}
+
+	stmt.SetPrimaryKey(token.Value)
+	token = lexer.NextToken()
+	if token.Type != RPAREN {
+		return fmt.Errorf("expected ')' after PRIMARY KEY field, got %s", token.Value)
+	}
+	return nil
 }
