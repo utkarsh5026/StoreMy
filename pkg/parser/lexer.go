@@ -12,10 +12,11 @@ type Lexer struct {
 }
 
 func NewLexer(input string) *Lexer {
+	processedInput := strings.ToUpper(strings.TrimSpace(input))
 	return &Lexer{
-		input:  strings.ToUpper(strings.TrimSpace(input)),
+		input:  processedInput,
 		pos:    0,
-		length: len(input),
+		length: len(processedInput),
 	}
 }
 
