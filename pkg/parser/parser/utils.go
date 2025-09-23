@@ -32,3 +32,22 @@ func parseValue(l *lexer.Lexer) (types.Field, error) {
 		return nil, fmt.Errorf("expected value, got %s", token.Value)
 	}
 }
+
+func parseOperator(op string) (types.Predicate, error) {
+	switch op {
+	case "=":
+		return types.Equals, nil
+	case ">":
+		return types.GreaterThan, nil
+	case "<":
+		return types.LessThan, nil
+	case ">=":
+		return types.GreaterThanOrEqual, nil
+	case "<=":
+		return types.LessThanOrEqual, nil
+	case "!=", "<>":
+		return types.NotEqual, nil
+	default:
+		return types.Equals, fmt.Errorf("unknown operator: %s", op)
+	}
+}
