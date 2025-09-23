@@ -5,7 +5,6 @@ import (
 	"storemy/pkg/parser/lexer"
 	"storemy/pkg/parser/statements"
 	"storemy/pkg/types"
-	"strconv"
 )
 
 func parseInsertStatement(l *lexer.Lexer) (*statements.InsertStatement, error) {
@@ -93,21 +92,24 @@ func parseValueList(l *lexer.Lexer) ([]types.Field, error) {
 	return values, nil
 }
 
-func parseValue(l *lexer.Lexer) (types.Field, error) {
-	token := l.NextToken()
-
-	switch token.Type {
-	case lexer.STRING:
-		return types.NewStringField(token.Value, types.StringMaxSize), nil
-	case lexer.INT:
-		value, err := strconv.Atoi(token.Value)
-		if err != nil {
-			return nil, fmt.Errorf("invalid integer value: %s", token.Value)
+func parseFieldList(l *lexer.Lexer) ([]string, error) {
+	fields := make([]string, 0)
+	for {
+		token := l.NextToken()
+		if token.Type != lexer.IDENTIFIER {
+			return nil, fmt.Errorf("expected field name, got %s", token.Value)
 		}
-		return types.NewIntField(int32(value)), nil
-	case lexer.NULL:
-		return nil, nil // NULL value
-	default:
-		return nil, fmt.Errorf("expected value, got %s", token.Value)
+
+		fields = append(fields, token.Value)
+		token = l.NextToken()
+		if token.Type == lexer.COMMA {
+			continue
+		} else if token.Type == lexer.RPAREN {
+			break
+		} else {
+			return nil, fmt.Errorf("expected comma or right parenthesis, got %s", token.Value)
+		}
 	}
+
+	return fields, nil
 }
