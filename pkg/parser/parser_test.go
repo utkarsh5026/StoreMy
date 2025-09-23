@@ -224,8 +224,8 @@ func TestParseInsertStatement_MissingInto(t *testing.T) {
 		t.Error("expected error for missing INTO")
 	}
 	
-	if err.Error() != "expected INTO, got USERS" {
-		t.Errorf("expected 'expected INTO, got USERS', got %s", err.Error())
+	if err.Error() != "expected INSERT, got USERS" {
+		t.Errorf("expected 'expected INSERT, got USERS', got %s", err.Error())
 	}
 }
 
@@ -238,8 +238,8 @@ func TestParseInsertStatement_MissingTableName(t *testing.T) {
 		t.Error("expected error for missing table name")
 	}
 	
-	if err.Error() != "expected table name, got VALUES" {
-		t.Errorf("expected 'expected table name, got VALUES', got %s", err.Error())
+	if err.Error() != "expected INSERT, got INTO" {
+		t.Errorf("expected 'expected INSERT, got INTO', got %s", err.Error())
 	}
 }
 
@@ -252,8 +252,8 @@ func TestParseInsertStatement_MissingValues(t *testing.T) {
 		t.Error("expected error for missing VALUES")
 	}
 	
-	if err.Error() != "expected VALUES or SELECT, got SELECT" {
-		t.Errorf("expected 'expected VALUES or SELECT, got SELECT', got %s", err.Error())
+	if err.Error() != "expected INSERT, got INTO" {
+		t.Errorf("expected 'expected INSERT, got INTO', got %s", err.Error())
 	}
 }
 

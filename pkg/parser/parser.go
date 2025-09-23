@@ -18,6 +18,8 @@ func (p *Parser) ParseStatement(sql string) (statements.Statement, error) {
 		return nil, errors.New("empty statement")
 	}
 
+	lexer.pos = 0
+
 	switch token.Type {
 	case INSERT:
 		return p.parseInsertStatement(lexer)
@@ -29,6 +31,11 @@ func (p *Parser) ParseStatement(sql string) (statements.Statement, error) {
 
 func (p *Parser) parseInsertStatement(lexer *Lexer) (*statements.InsertStatement, error) {
 	token := lexer.NextToken()
+	if token.Type != INSERT {
+		return nil, fmt.Errorf("expected INSERT, got %s", token.Value)
+	}
+
+	token = lexer.NextToken()
 	if token.Type != INTO {
 		return nil, fmt.Errorf("expected INTO, got %s", token.Value)
 	}
