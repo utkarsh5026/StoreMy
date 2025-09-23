@@ -9,18 +9,18 @@ import (
 
 func parseDeleteStatement(l *lexer.Lexer) (*statements.DeleteStatement, error) {
 	token := l.NextToken()
-	if token.Type != lexer.DELETE {
-		return nil, fmt.Errorf("expected DELETE, got %s", token.Value)
+	if err := expectToken(token, lexer.DELETE); err != nil {
+		return nil, err
 	}
 
 	token = l.NextToken()
-	if token.Type != lexer.FROM {
-		return nil, fmt.Errorf("expected FROM, got %s", token.Value)
+	if err := expectToken(token, lexer.FROM); err != nil {
+		return nil, err
 	}
 
 	token = l.NextToken()
-	if token.Type != lexer.IDENTIFIER {
-		return nil, fmt.Errorf("expected table name, got %s", token.Value)
+	if err := expectToken(token, lexer.IDENTIFIER); err != nil {
+		return nil, err
 	}
 
 	tableName := token.Value
