@@ -10,18 +10,18 @@ import (
 
 func parseInsertStatement(l *lexer.Lexer) (*statements.InsertStatement, error) {
 	token := l.NextToken()
-	if token.Type != lexer.INSERT {
-		return nil, fmt.Errorf("expected INSERT, got %s", token.Value)
+	if err := expectToken(token, lexer.INSERT); err != nil {
+		return nil, err
 	}
 
 	token = l.NextToken()
-	if token.Type != lexer.INTO {
-		return nil, fmt.Errorf("expected INTO, got %s", token.Value)
+	if err := expectToken(token, lexer.INTO); err != nil {
+		return nil, err
 	}
 
 	token = l.NextToken()
-	if token.Type != lexer.IDENTIFIER {
-		return nil, fmt.Errorf("expected table name, got %s", token.Value)
+	if err := expectToken(token, lexer.IDENTIFIER); err != nil {
+		return nil, err
 	}
 
 	tableName := token.Value
@@ -47,8 +47,8 @@ func parseInsertStatement(l *lexer.Lexer) (*statements.InsertStatement, error) {
 func parseInsertValues(l *lexer.Lexer, stmt *statements.InsertStatement) (*statements.InsertStatement, error) {
 	for {
 		token := l.NextToken()
-		if token.Type != lexer.LPAREN {
-			return nil, fmt.Errorf("expected '(', got %s", token.Value)
+		if err := expectToken(token, lexer.LPAREN); err != nil {
+			return nil, err
 		}
 
 		values, err := parseValueList(l)
