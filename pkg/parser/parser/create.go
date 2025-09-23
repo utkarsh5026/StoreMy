@@ -125,3 +125,18 @@ func readPrimaryKey(l *lexer.Lexer, stmt *statements.CreateStatement) error {
 	}
 	return nil
 }
+
+func parseDataType(token lexer.Token) (types.Type, error) {
+	switch token.Type {
+	case lexer.INT:
+		return types.IntType, nil
+	case lexer.VARCHAR, lexer.TEXT:
+		return types.StringType, nil
+	case lexer.BOOLEAN:
+		return types.BoolType, nil
+	case lexer.FLOAT:
+		return types.FloatType, nil
+	default:
+		return 0, fmt.Errorf("unknown data type: %s", token.Value)
+	}
+}
