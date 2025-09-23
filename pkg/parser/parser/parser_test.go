@@ -263,11 +263,10 @@ func TestParseValueList_MissingCommaOrParen(t *testing.T) {
 }
 
 func TestParseInsertValues_MissingLeftParen(t *testing.T) {
-	parser := &Parser{}
 	lexer := NewLexer("'john', 25)")
 	stmt := statements.NewInsertStatement("users")
 
-	_, err := parser.parseInsertValues(lexer, stmt)
+	_, err := parseInsertValues(lexer, stmt)
 	if err == nil {
 		t.Error("expected error for missing left parenthesis")
 	}
@@ -477,10 +476,9 @@ func TestParseDataType_InvalidType(t *testing.T) {
 // CREATE TABLE error handling tests
 
 func TestParseCreateStatement_MissingTable(t *testing.T) {
-	parser := &Parser{}
 	lexer := NewLexer("users (id INT)")
 
-	_, err := parser.parseCreateStatement(lexer)
+	_, err := parseCreateStatement(lexer)
 	if err == nil {
 		t.Error("expected error for missing TABLE")
 	}
@@ -491,10 +489,9 @@ func TestParseCreateStatement_MissingTable(t *testing.T) {
 }
 
 func TestParseCreateStatement_MissingTableName(t *testing.T) {
-	parser := &Parser{}
 	lexer := NewLexer("TABLE (id INT)")
 
-	_, err := parser.parseCreateStatement(lexer)
+	_, err := parseCreateStatement(lexer)
 	if err == nil {
 		t.Error("expected error for missing table name")
 	}
@@ -505,10 +502,9 @@ func TestParseCreateStatement_MissingTableName(t *testing.T) {
 }
 
 func TestParseCreateStatement_MissingLeftParen(t *testing.T) {
-	parser := &Parser{}
 	lexer := NewLexer("TABLE users id INT)")
 
-	_, err := parser.parseCreateStatement(lexer)
+	_, err := parseCreateStatement(lexer)
 	if err == nil {
 		t.Error("expected error for missing left parenthesis")
 	}
@@ -519,10 +515,9 @@ func TestParseCreateStatement_MissingLeftParen(t *testing.T) {
 }
 
 func TestParseCreateStatement_InvalidIfNotExists(t *testing.T) {
-	parser := &Parser{}
 	lexer := NewLexer("TABLE IF EXISTS users (id INT)")
 
-	_, err := parser.parseCreateStatement(lexer)
+	_, err := parseCreateStatement(lexer)
 	if err == nil {
 		t.Error("expected error for invalid IF NOT EXISTS")
 	}
