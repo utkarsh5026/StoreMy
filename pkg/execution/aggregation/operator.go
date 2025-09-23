@@ -7,22 +7,36 @@ import (
 	"storemy/pkg/types"
 )
 
-// AggregateOperator is the main aggregation operator that computes aggregates
-// It uses composition to manage iteration state and delegates to the underlying aggregator
+// AggregateOperator is the main aggregation operator that computes aggregates over tuples.
+//
+// The operator follows a two-phase execution model:
+// 1. Open phase: Consumes all input tuples and builds aggregation state
+// 2. Iteration phase: Returns computed aggregate results
 type AggregateOperator struct {
-	source        iterator.DbIterator     // Source of tuples
-	aField        int                     // Field to aggregate
-	gField        int                     // Grouping field
-	op            AggregateOp             // Aggregation operation
-	aggregator    Aggregator              // Underlying aggregator
-	aggIterator   iterator.DbIterator     // Iterator over results
-	tupleDesc     *tuple.TupleDescription // Result tuple description
-	opened        bool
-	nextTuple     *tuple.Tuple // Cache for hasNext/next pattern
-	hasNextCalled bool
+	source        iterator.DbIterator     // Source iterator providing input tuples
+	aField        int                     // Index of the field to aggregate on
+	gField        int                     // Index of the grouping field (NoGrouping if no grouping)
+	op            AggregateOp             // Type of aggregation operation to perform
+	aggregator    Aggregator              // Type-specific aggregator that computes results
+	aggIterator   iterator.DbIterator     // Iterator over computed aggregate results
+	tupleDesc     *tuple.TupleDescription // Schema description of result tuples
+	opened        bool                    // Tracks whether the operator has been opened
+	nextTuple     *tuple.Tuple            // Cached tuple for hasNext/next pattern
+	hasNextCalled bool                    // Tracks if hasNext was called before next
 }
 
-// NewAggregateOperator creates a new aggregate operator using composition
+// NewAggregateOperator creates a new aggregate operator with the specified configuration.
+// The operator will aggregate values from aField, optionally grouping by gField.
+//
+// Parameters:
+//   - source: The source iterator providing input tuples (must not be nil)
+//   - aField: Index of the field to aggregate (must be valid field index)
+//   - gField: Index of the grouping field, or NoGrouping for no grouping
+//   - op: The aggregation operation to perform (COUNT, SUM, AVG, MIN, MAX)
+//
+// Returns:
+//   - *AggregateOperator: Configured aggregate operator ready for use
+//   - error: Error if parameters are invalid or aggregator creation fails
 func NewAggregateOperator(source iterator.DbIterator, aField, gField int, op AggregateOp) (*AggregateOperator, error) {
 	if source == nil {
 		return nil, fmt.Errorf("source iterator cannot be nil")
@@ -92,6 +106,14 @@ func NewAggregateOperator(source iterator.DbIterator, aField, gField int, op Agg
 	return aggOp, nil
 }
 
+// Close releases all resources associated with the aggregate operator.
+// This includes closing the source iterator, aggregate result iterator,
+// and resetting internal state.
+//
+// Returns:
+//   - error: Always returns nil, but maintains interface compatibility
+//
+// Note: Close can be called multiple times safely
 func (agg *AggregateOperator) Close() error {
 	if agg.source != nil {
 		agg.source.Close()
@@ -107,10 +129,21 @@ func (agg *AggregateOperator) Close() error {
 	return nil
 }
 
+// GetTupleDesc returns the schema description of the result tuples.
+//
+// Returns:
+//   - *tuple.TupleDescription: Schema of result tuples
 func (agg *AggregateOperator) GetTupleDesc() *tuple.TupleDescription {
 	return agg.tupleDesc
 }
 
+// Rewind resets the aggregate result iterator to the beginning.
+// This allows re-reading the aggregate results without recomputing them.
+//
+// Returns:
+//   - error: Error if operator is not opened or rewind fails
+//
+// Note: Rewind does not recompute aggregates, only resets result iteration
 func (agg *AggregateOperator) Rewind() error {
 	if !agg.opened {
 		return fmt.Errorf("aggregate operator not opened")
@@ -126,6 +159,15 @@ func (agg *AggregateOperator) Rewind() error {
 	return nil
 }
 
+// Open initializes the aggregate operator and computes all aggregate results.
+// This method:
+// 1. Opens the source iterator
+// 2. Consumes all input tuples and feeds them to the aggregator
+// 3. Creates an iterator over the computed results
+// 4. Prepares the operator for result iteration
+//
+// Returns:
+//   - error: Error if operator is already opened, source fails, or aggregation fails
 func (agg *AggregateOperator) Open() error {
 	if agg.opened {
 		return fmt.Errorf("aggregate operator already opened")
@@ -166,6 +208,12 @@ func (agg *AggregateOperator) Open() error {
 	return nil
 }
 
+// HasNext checks if there are more aggregate result tuples available.
+// Uses internal caching to support the hasNext/next pattern efficiently.
+//
+// Returns:
+//   - bool: True if more tuples are available, false otherwise
+//   - error: Error if operator is not opened or reading fails
 func (agg *AggregateOperator) HasNext() (bool, error) {
 	if !agg.opened {
 		return false, fmt.Errorf("aggregate operator not opened")
@@ -183,12 +231,18 @@ func (agg *AggregateOperator) HasNext() (bool, error) {
 	return agg.nextTuple != nil, nil
 }
 
+// Next returns the next aggregate result tuple.
+// Must be called after HasNext() returns true, or will automatically
+// check for tuple availability.
+//
+// Returns:
+//   - *tuple.Tuple: Next aggregate result tuple
+//   - error: Error if operator not opened, no tuples available, or reading fails
 func (agg *AggregateOperator) Next() (*tuple.Tuple, error) {
 	if !agg.opened {
 		return nil, fmt.Errorf("aggregate operator not opened")
 	}
 
-	// If hasNext hasn't been called, call it to cache the next tuple
 	if !agg.hasNextCalled {
 		hasNext, err := agg.HasNext()
 		if err != nil {
@@ -199,7 +253,6 @@ func (agg *AggregateOperator) Next() (*tuple.Tuple, error) {
 		}
 	}
 
-	// Return the cached tuple and reset the cache
 	result := agg.nextTuple
 	agg.nextTuple = nil
 	agg.hasNextCalled = false
@@ -211,6 +264,12 @@ func (agg *AggregateOperator) Next() (*tuple.Tuple, error) {
 	return result, nil
 }
 
+// readNext is an internal helper method that reads the next tuple from
+// the aggregate result iterator.
+//
+// Returns:
+//   - *tuple.Tuple: Next tuple from aggregate iterator, or nil if no more tuples
+//   - error: Error if reading from aggregate iterator fails
 func (agg *AggregateOperator) readNext() (*tuple.Tuple, error) {
 	if agg.aggIterator == nil {
 		return nil, nil
