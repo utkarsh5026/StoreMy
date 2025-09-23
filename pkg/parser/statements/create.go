@@ -69,3 +69,12 @@ func (cts *CreateStatement) String() string {
 
 	return sb.String()
 }
+
+func (cts *CreateStatement) AddField(name string, fieldType types.Type, notNull bool, defaultValue types.Field) {
+	cts.Fields = append(cts.Fields, FieldDefinition{
+		Name:         name,
+		Type:         fieldType,
+		NotNull:      notNull,
+		DefaultValue: defaultValue,
+	})
+}
