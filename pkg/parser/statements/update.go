@@ -10,7 +10,7 @@ import (
 type UpdateStatement struct {
 	TableName   string
 	Alias       string
-	SetClauses  []*SetClause
+	SetClauses  []SetClause
 	WhereClause *plan.FilterNode
 }
 
@@ -23,12 +23,12 @@ func NewUpdateStatement(tableName, alias string) *UpdateStatement {
 	return &UpdateStatement{
 		TableName:  tableName,
 		Alias:      alias,
-		SetClauses: make([]*SetClause, 0),
+		SetClauses: make([]SetClause, 0),
 	}
 }
 
 func (us *UpdateStatement) AddSetClause(fieldName string, value types.Field) {
-	us.SetClauses = append(us.SetClauses, &SetClause{
+	us.SetClauses = append(us.SetClauses, SetClause{
 		FieldName: fieldName,
 		Value:     value,
 	})
