@@ -23,31 +23,8 @@ func parseUpdateStatement(l *lexer.Lexer) (*statements.UpdateStatement, error) {
 	}
 
 	stmt := statements.NewUpdateStatement(tableName, alias)
-	for {
-		token = l.NextToken()
-		if err := expectToken(token, lexer.IDENTIFIER); err != nil {
-			return nil, err
-		}
-		fieldName := token.Value
-
-		token = l.NextToken()
-		if token.Type != lexer.OPERATOR || token.Value != "=" {
-			return nil, fmt.Errorf("expected '=', got %s", token.Value)
-		}
-
-		value, err := parseValue(l)
-		if err != nil {
-			return nil, err
-		}
-
-		stmt.AddSetClause(fieldName, value)
-		token = l.NextToken()
-		if token.Type == lexer.COMMA {
-			continue
-		} else {
-			l.SetPos(token.Position) // Put it back
-			break
-		}
+	if err := parseSetClauses(l, stmt); err != nil {
+		return nil, err
 	}
 
 	if err := parseOptionalWhereClause(l, stmt); err != nil {
@@ -85,6 +62,36 @@ func parseOptionalWhereClause(l *lexer.Lexer, stmt *statements.UpdateStatement) 
 		stmt.SetWhereClause(filter)
 	} else {
 		l.SetPos(token.Position)
+	}
+	return nil
+}
+
+func parseSetClauses(l *lexer.Lexer, stmt *statements.UpdateStatement) error {
+	for {
+		token := l.NextToken()
+		if err := expectToken(token, lexer.IDENTIFIER); err != nil {
+			return err
+		}
+		fieldName := token.Value
+
+		token = l.NextToken()
+		if token.Type != lexer.OPERATOR || token.Value != "=" {
+			return fmt.Errorf("expected '=', got %s", token.Value)
+		}
+
+		value, err := parseValue(l)
+		if err != nil {
+			return err
+		}
+
+		stmt.AddSetClause(fieldName, value)
+		token = l.NextToken()
+		if token.Type == lexer.COMMA {
+			continue
+		}
+
+		l.SetPos(token.Position) // Put token back
+		break
 	}
 	return nil
 }
