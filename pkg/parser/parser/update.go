@@ -12,20 +12,12 @@ func parseUpdateStatement(l *lexer.Lexer) (*statements.UpdateStatement, error) {
 		return nil, err
 	}
 
-	token = l.NextToken()
-	if err := expectToken(token, lexer.IDENTIFIER); err != nil {
+	tableName, alias, err := parseTableWithAlias(l)
+	if err != nil {
 		return nil, err
 	}
 
-	tableName := token.Value
-	alias := tableName
-
 	token = l.NextToken()
-	if token.Type == lexer.IDENTIFIER {
-		alias = token.Value
-		token = l.NextToken()
-	}
-
 	if err := expectToken(token, lexer.SET); err != nil {
 		return nil, err
 	}
@@ -70,4 +62,23 @@ func parseUpdateStatement(l *lexer.Lexer) (*statements.UpdateStatement, error) {
 	}
 
 	return stmt, nil
+}
+
+func parseTableWithAlias(l *lexer.Lexer) (tableName, alias string, err error) {
+	token := l.NextToken()
+	if err := expectToken(token, lexer.IDENTIFIER); err != nil {
+		return "", "", err
+	}
+
+	tableName = token.Value
+	alias = tableName
+
+	token = l.NextToken()
+	if token.Type == lexer.IDENTIFIER {
+		alias = token.Value
+	} else {
+		l.SetPos(token.Position)
+	}
+
+	return tableName, alias, nil
 }
