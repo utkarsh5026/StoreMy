@@ -50,17 +50,9 @@ func parseUpdateStatement(l *lexer.Lexer) (*statements.UpdateStatement, error) {
 		}
 	}
 
-	token = l.NextToken()
-	if token.Type == lexer.WHERE {
-		filter, err := parseWhereCondition(l)
-		if err != nil {
-			return nil, err
-		}
-		stmt.SetWhereClause(filter)
-	} else {
-		l.SetPos(token.Position)
+	if err := parseOptionalWhereClause(l, stmt); err != nil {
+		return nil, err
 	}
-
 	return stmt, nil
 }
 
@@ -81,4 +73,18 @@ func parseTableWithAlias(l *lexer.Lexer) (tableName, alias string, err error) {
 	}
 
 	return tableName, alias, nil
+}
+
+func parseOptionalWhereClause(l *lexer.Lexer, stmt *statements.UpdateStatement) error {
+	token := l.NextToken()
+	if token.Type == lexer.WHERE {
+		filter, err := parseWhereCondition(l)
+		if err != nil {
+			return err
+		}
+		stmt.SetWhereClause(filter)
+	} else {
+		l.SetPos(token.Position)
+	}
+	return nil
 }
