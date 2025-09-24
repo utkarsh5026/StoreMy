@@ -26,6 +26,8 @@ func (p *Parser) ParseStatement(sql string) (statements.Statement, error) {
 		return parseCreateStatement(l)
 	case lexer.DELETE:
 		return parseDeleteStatement(l)
+	case lexer.UPDATE:
+		return parseUpdateStatement(l)
 	default:
 		return nil, fmt.Errorf("unsupported statement type: %s", token.Value)
 	}
