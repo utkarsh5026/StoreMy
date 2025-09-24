@@ -7,6 +7,8 @@ import (
 	"strconv"
 )
 
+// expectToken validates that the given token matches the expected token type.
+// Returns an error if the token type doesn't match the expected type.
 func expectToken(t lexer.Token, expected lexer.TokenType) error {
 	if t.Type != expected {
 		return fmt.Errorf("expected %s, got %s", expected.String(), t.Value)
@@ -14,6 +16,9 @@ func expectToken(t lexer.Token, expected lexer.TokenType) error {
 	return nil
 }
 
+// parseValue parses the next token from the lexer and converts it to a Field type.
+// Supports STRING, INT, and NULL token types.
+// Returns the parsed Field or nil for NULL values, along with any parsing errors.
 func parseValue(l *lexer.Lexer) (types.Field, error) {
 	token := l.NextToken()
 
@@ -33,6 +38,9 @@ func parseValue(l *lexer.Lexer) (types.Field, error) {
 	}
 }
 
+// parseOperator converts a string operator into a Predicate type.
+// Supports standard comparison operators: =, >, <, >=, <=, !=, <>
+// Returns the corresponding Predicate constant and any parsing errors.
 func parseOperator(op string) (types.Predicate, error) {
 	switch op {
 	case "=":
