@@ -17,16 +17,6 @@ type JoinPredicate struct {
 	op     query.PredicateOp // The comparison operation to apply
 }
 
-// NewJoinPredicate creates a new join predicate for comparing fields between two tuples.
-//
-// Parameters:
-//   - field1: Index of the field in the first tuple to compare
-//   - field2: Index of the field in the second tuple to compare
-//   - op: The comparison operation (e.g., Equals, LessThan, etc.)
-//
-// Returns:
-//   - *JoinPredicate: A new join predicate instance
-//   - error: An error if the field indices are negative
 func NewJoinPredicate(field1, field2 int, op query.PredicateOp) (*JoinPredicate, error) {
 	if field1 < 0 {
 		return nil, fmt.Errorf("field1 index cannot be negative: %d", field1)
@@ -44,17 +34,6 @@ func NewJoinPredicate(field1, field2 int, op query.PredicateOp) (*JoinPredicate,
 
 // Filter evaluates the join predicate against two tuples.
 // It extracts the specified fields from each tuple and compares them using the predicate operation.
-//
-// The comparison is performed by calling the Compare method on the field from the first tuple,
-// passing the field from the second tuple as the comparison target.
-//
-// Parameters:
-//   - t1: The first (left) tuple in the join comparison
-//   - t2: The second (right) tuple in the join comparison
-//
-// Returns:
-//   - bool: True if the tuples satisfy the join predicate, false otherwise
-//   - error: An error if field extraction fails or comparison cannot be performed
 func (jp *JoinPredicate) Filter(t1, t2 *tuple.Tuple) (bool, error) {
 	if t1 == nil || t2 == nil {
 		return false, fmt.Errorf("tuples cannot be nil")
