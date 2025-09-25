@@ -37,7 +37,7 @@ func NewCreateTablePlan(
 	}
 }
 
-func (p *CreateTablePlan) Execute() (*DDLResult, error) {
+func (p *CreateTablePlan) Execute() (any, error) {
 	if p.Statement.IfNotExists && p.tableManager.TableExists(p.Statement.TableName) {
 		return &DDLResult{
 			Success: true,
