@@ -3,7 +3,8 @@ package heap
 import (
 	"os"
 	"path/filepath"
-	"storemy/pkg/storage"
+	"storemy/pkg/storage/page"
+	"storemy/pkg/transaction"
 	"storemy/pkg/tuple"
 	"storemy/pkg/types"
 	"sync"
@@ -170,7 +171,7 @@ func TestHeapFile_NumPages(t *testing.T) {
 	}
 
 	testTuple := createTestTupleForTest(td, 1, "Alice")
-	tid := storage.NewTransactionID()
+	tid := transaction.NewTransactionID()
 	_, err = hf.AddTuple(tid, testTuple)
 	if err != nil {
 		t.Fatalf("Failed to add tuple: %v", err)
@@ -261,7 +262,7 @@ func TestHeapFile_AddTuple(t *testing.T) {
 	}
 	defer hf.Close()
 
-	tid := storage.NewTransactionID()
+	tid := transaction.NewTransactionID()
 
 	testTuple := createTestTupleForTest(td, 1, "Alice")
 	pages, err := hf.AddTuple(tid, testTuple)
@@ -316,7 +317,7 @@ func TestHeapFile_DeleteTuple(t *testing.T) {
 	}
 	defer hf.Close()
 
-	tid := storage.NewTransactionID()
+	tid := transaction.NewTransactionID()
 
 	testTuple := createTestTupleForTest(td, 1, "Alice")
 	_, err = hf.AddTuple(tid, testTuple)
@@ -400,7 +401,7 @@ func TestHeapFile_PersistenceAcrossReopen(t *testing.T) {
 		t.Fatalf("Failed to create HeapFile: %v", err)
 	}
 
-	tid := storage.NewTransactionID()
+	tid := transaction.NewTransactionID()
 	testTuple := createTestTupleForTest(td, 1, "Alice")
 	_, err = hf1.AddTuple(tid, testTuple)
 	if err != nil {
@@ -460,7 +461,7 @@ func TestHeapFile_DeadlockFix(t *testing.T) {
 	}
 	defer hf.Close()
 
-	tid := storage.NewTransactionID()
+	tid := transaction.NewTransactionID()
 	testTuple := createTestTupleForTest(td, 1, "Alice")
 
 	// This should not deadlock
@@ -492,7 +493,7 @@ func TestHeapFile_ConcurrentAccess(t *testing.T) {
 	}
 	defer hf.Close()
 
-	tid := storage.NewTransactionID()
+	tid := transaction.NewTransactionID()
 
 	numGoroutines := 10
 	done := make(chan bool, numGoroutines)
@@ -563,7 +564,7 @@ func TestHeapFile_ConcurrencyStress(t *testing.T) {
 		wg.Add(1)
 		go func(workerID int) {
 			defer wg.Done()
-			tid := storage.NewTransactionID()
+			tid := transaction.NewTransactionID()
 
 			for j := 0; j < operationsPerWorker; j++ {
 				// Mix of operations
@@ -613,7 +614,7 @@ func TestHeapFile_InvalidOperations(t *testing.T) {
 		t.Fatalf("Failed to create HeapFile: %v", err)
 	}
 
-	tid := storage.NewTransactionID()
+	tid := transaction.NewTransactionID()
 
 	// Test with nil tuple
 	t.Run("AddTuple with nil tuple", func(t *testing.T) {
@@ -679,7 +680,7 @@ func TestHeapFile_ErrorHandling(t *testing.T) {
 
 	hf.Close()
 
-	tid := storage.NewTransactionID()
+	tid := transaction.NewTransactionID()
 	testTuple := createTestTupleForTest(td, 1, "Alice")
 
 	_, err = hf.AddTuple(tid, testTuple)
@@ -738,7 +739,7 @@ func TestHeapFile_EdgeCases(t *testing.T) {
 		}
 		defer hf.Close()
 
-		tid := storage.NewTransactionID()
+		tid := transaction.NewTransactionID()
 		largeTuple := tuple.NewTuple(td)
 		// Create a very large string (might exceed page capacity)
 		largeString := make([]byte, 5000) // Much larger than typical page capacity
@@ -815,7 +816,7 @@ func TestHeapFile_PageBoundaries(t *testing.T) {
 	}
 	defer hf.Close()
 
-	tid := storage.NewTransactionID()
+	tid := transaction.NewTransactionID()
 
 	// Calculate how many tuples fit in one page
 	pageID := NewHeapPageID(hf.GetID(), 0)
@@ -885,7 +886,7 @@ func TestHeapFile_LargeFile(t *testing.T) {
 	}
 	defer hf.Close()
 
-	tid := storage.NewTransactionID()
+	tid := transaction.NewTransactionID()
 	numTuples := 1000
 
 	start := time.Now()
@@ -914,7 +915,7 @@ func TestHeapFile_LargeFile(t *testing.T) {
 		t.Errorf("Failed to stat file: %v", err)
 	}
 
-	expectedSize := int64(numPages) * int64(storage.PageSize)
+	expectedSize := int64(numPages) * int64(page.PageSize)
 	if stat.Size() != expectedSize {
 		t.Errorf("Expected file size %d, got %d", expectedSize, stat.Size())
 	}
@@ -935,7 +936,7 @@ func TestHeapFile_MemoryUsage(t *testing.T) {
 	}
 	defer hf.Close()
 
-	tid := storage.NewTransactionID()
+	tid := transaction.NewTransactionID()
 
 	// Add many tuples and check memory doesn't grow unbounded
 	numTuples := 10000
@@ -972,7 +973,7 @@ func TestHeapFile_IteratorConsistency(t *testing.T) {
 	}
 	defer hf.Close()
 
-	tid := storage.NewTransactionID()
+	tid := transaction.NewTransactionID()
 
 	// Add some tuples
 	numTuples := 100
@@ -1075,7 +1076,7 @@ func BenchmarkHeapFile_AddTuple(b *testing.B) {
 	}
 	defer hf.Close()
 
-	tid := storage.NewTransactionID()
+	tid := transaction.NewTransactionID()
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
@@ -1099,7 +1100,7 @@ func BenchmarkHeapFile_NumPages(b *testing.B) {
 	defer hf.Close()
 
 	// Add some tuples first
-	tid := storage.NewTransactionID()
+	tid := transaction.NewTransactionID()
 	for i := 0; i < 1000; i++ {
 		tuple := createTestTupleForTest(td, int32(i), "BenchmarkUser")
 		hf.AddTuple(tid, tuple)
