@@ -7,13 +7,9 @@ import (
 	"testing"
 )
 
-
 // CREATE TABLE statement tests
-
 func TestParseStatement_BasicCreateTable(t *testing.T) {
-	parser := &Parser{}
-
-	stmt, err := parser.ParseStatement("CREATE TABLE users (id INT, name VARCHAR)")
+	stmt, err := ParseStatement("CREATE TABLE users (id INT, name VARCHAR)")
 	if err != nil {
 		t.Fatalf("unexpected error: %s", err.Error())
 	}
@@ -49,9 +45,7 @@ func TestParseStatement_BasicCreateTable(t *testing.T) {
 }
 
 func TestParseStatement_CreateTableIfNotExists(t *testing.T) {
-	parser := &Parser{}
-
-	stmt, err := parser.ParseStatement("CREATE TABLE IF NOT EXISTS users (id INT)")
+	stmt, err := ParseStatement("CREATE TABLE IF NOT EXISTS users (id INT)")
 	if err != nil {
 		t.Fatalf("unexpected error: %s", err.Error())
 	}
@@ -71,9 +65,7 @@ func TestParseStatement_CreateTableIfNotExists(t *testing.T) {
 }
 
 func TestParseStatement_CreateTableWithNotNull(t *testing.T) {
-	parser := &Parser{}
-
-	stmt, err := parser.ParseStatement("CREATE TABLE users (id INT NOT NULL, name VARCHAR)")
+	stmt, err := ParseStatement("CREATE TABLE users (id INT NOT NULL, name VARCHAR)")
 	if err != nil {
 		t.Fatalf("unexpected error: %s", err.Error())
 	}
@@ -93,9 +85,7 @@ func TestParseStatement_CreateTableWithNotNull(t *testing.T) {
 }
 
 func TestParseStatement_CreateTableWithDefault(t *testing.T) {
-	parser := &Parser{}
-
-	stmt, err := parser.ParseStatement("CREATE TABLE users (id INT DEFAULT 0, name VARCHAR DEFAULT 'unknown')")
+	stmt, err := ParseStatement("CREATE TABLE users (id INT DEFAULT 0, name VARCHAR DEFAULT 'unknown')")
 	if err != nil {
 		t.Fatalf("unexpected error: %s", err.Error())
 	}
@@ -129,9 +119,7 @@ func TestParseStatement_CreateTableWithDefault(t *testing.T) {
 }
 
 func TestParseStatement_CreateTableWithPrimaryKey(t *testing.T) {
-	parser := &Parser{}
-
-	stmt, err := parser.ParseStatement("CREATE TABLE users (id INT, name VARCHAR, PRIMARY KEY (id))")
+	stmt, err := ParseStatement("CREATE TABLE users (id INT, name VARCHAR, PRIMARY KEY (id))")
 	if err != nil {
 		t.Fatalf("unexpected error: %s", err.Error())
 	}
@@ -147,9 +135,7 @@ func TestParseStatement_CreateTableWithPrimaryKey(t *testing.T) {
 }
 
 func TestParseStatement_CreateTableAllDataTypes(t *testing.T) {
-	parser := &Parser{}
-
-	stmt, err := parser.ParseStatement("CREATE TABLE test (id INT, name TEXT, active BOOLEAN, price FLOAT)")
+	stmt, err := ParseStatement("CREATE TABLE test (id INT, name TEXT, active BOOLEAN, price FLOAT)")
 	if err != nil {
 		t.Fatalf("unexpected error: %s", err.Error())
 	}
