@@ -19,17 +19,6 @@ type SequentialScan struct {
 	tableManager *tables.TableManager
 }
 
-// NewSeqScan creates a new sequential scan operator for the specified table.
-// It initializes the operator but does not open the underlying file iterator.
-//
-// Parameters:
-//   - tid: Transaction ID for the scan operation
-//   - tableID: Unique identifier of the table to scan
-//   - tm: Table manager instance for accessing table metadata and files
-//
-// Returns:
-//   - *SequentialScan: New sequential scan operator instance
-//   - error: Error if table manager is nil or tuple description cannot be retrieved
 func NewSeqScan(tid *storage.TransactionID, tableID int, tm *tables.TableManager) (*SequentialScan, error) {
 	if tm == nil {
 		return nil, fmt.Errorf("tm cannot be nil")
@@ -51,11 +40,6 @@ func NewSeqScan(tid *storage.TransactionID, tableID int, tm *tables.TableManager
 	return ss, nil
 }
 
-// Open initializes the sequential scan by opening the underlying database file iterator.
-// This method must be called before attempting to read tuples from the scan.
-//
-// Returns:
-//   - error: Error if the database file cannot be accessed or the iterator cannot be opened
 func (ss *SequentialScan) Open() error {
 	dbFile, err := ss.tableManager.GetDbFile(ss.tableID)
 	if err != nil {
@@ -75,12 +59,6 @@ func (ss *SequentialScan) Open() error {
 	return nil
 }
 
-// readNext is an internal method that reads the next tuple from the file iterator.
-// This method is used by the BaseIterator to implement the iterator pattern.
-//
-// Returns:
-//   - *tuple.Tuple: Next tuple from the scan, or nil if no more tuples are available
-//   - error: Error if the file iterator is not initialized or reading fails
 func (ss *SequentialScan) readNext() (*tuple.Tuple, error) {
 	if ss.fileIter == nil {
 		return nil, fmt.Errorf("file iterator not initialized")
@@ -98,20 +76,10 @@ func (ss *SequentialScan) readNext() (*tuple.Tuple, error) {
 	return ss.fileIter.Next()
 }
 
-// GetTupleDesc returns the tuple description for the table being scanned.
-// The tuple description contains metadata about the columns and their types.
-//
-// Returns:
-//   - *tuple.TupleDescription: Tuple description for the scanned table
 func (ss *SequentialScan) GetTupleDesc() *tuple.TupleDescription {
 	return ss.tupleDesc
 }
 
-// Close releases resources associated with the sequential scan.
-// It closes the underlying file iterator and marks the base iterator as closed.
-//
-// Returns:
-//   - error: Error if closing the base iterator fails
 func (ss *SequentialScan) Close() error {
 	if ss.fileIter != nil {
 		ss.fileIter.Close()
@@ -120,11 +88,6 @@ func (ss *SequentialScan) Close() error {
 	return ss.base.Close()
 }
 
-// Rewind resets the sequential scan to the beginning of the table.
-// This allows the scan to be re-read from the start.
-//
-// Returns:
-//   - error: Error if the file iterator is not initialized or rewinding fails
 func (ss *SequentialScan) Rewind() error {
 	if ss.fileIter == nil {
 		return fmt.Errorf("file iterator not initialized")
@@ -138,18 +101,6 @@ func (ss *SequentialScan) Rewind() error {
 	return nil
 }
 
-// HasNext checks if there are more tuples available in the sequential scan.
-// The scan must be opened before calling this method.
-//
-// Returns:
-//   - bool: True if more tuples are available, false otherwise
-//   - error: Error if the scan is not opened or checking fails
 func (ss *SequentialScan) HasNext() (bool, error) { return ss.base.HasNext() }
 
-// Next returns the next tuple from the sequential scan and advances the iterator.
-// The scan must be opened before calling this method.
-//
-// Returns:
-//   - *tuple.Tuple: Next tuple from the scan
-//   - error: Error if the scan is not opened, no more tuples are available, or reading fails
 func (ss *SequentialScan) Next() (*tuple.Tuple, error) { return ss.base.Next() }
