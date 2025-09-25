@@ -1,4 +1,4 @@
-package storage
+package page
 
 import (
 	"storemy/pkg/tuple"
