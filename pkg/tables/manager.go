@@ -2,8 +2,10 @@ package tables
 
 import (
 	"fmt"
+	"sort"
 	"storemy/pkg/storage/page"
 	"storemy/pkg/tuple"
+	"strings"
 	"sync"
 )
 
@@ -21,7 +23,6 @@ func NewTableManager() *TableManager {
 	}
 }
 
-// AddTable adds a new table to the catalog, replacing any existing table with the same name or ID
 func (tm *TableManager) AddTable(f page.DbFile, name, pKey string) error {
 	if f == nil {
 		return fmt.Errorf("file cannot be nil")
@@ -41,7 +42,6 @@ func (tm *TableManager) AddTable(f page.DbFile, name, pKey string) error {
 	return nil
 }
 
-// GetTableID returns the ID of the table with the specified name
 func (tm *TableManager) GetTableID(name string) (int, error) {
 	tm.mutex.RLock()
 	defer tm.mutex.RUnlock()
@@ -54,7 +54,6 @@ func (tm *TableManager) GetTableID(name string) (int, error) {
 	return tableInfo.GetID(), nil
 }
 
-// GetTableName returns the name of the table with the specified ID
 func (tm *TableManager) GetTableName(tableID int) (string, error) {
 	tm.mutex.RLock()
 	defer tm.mutex.RUnlock()
@@ -67,7 +66,26 @@ func (tm *TableManager) GetTableName(tableID int) (string, error) {
 	return tableInfo.Name, nil
 }
 
-// GetTupleDesc returns the schema for the table with the specified ID
+func (tm *TableManager) RemoveTable(name string) error {
+	tm.mutex.Lock()
+	defer tm.mutex.Unlock()
+
+	tableInfo, exists := tm.nameToTable[name]
+	if !exists {
+		return fmt.Errorf("table '%s' not found", name)
+	}
+
+	if tableInfo.File != nil {
+		if err := tableInfo.File.Close(); err != nil {
+			fmt.Printf("Warning: failed to close file for table '%s': %v\n", name, err)
+		}
+	}
+
+	delete(tm.nameToTable, name)
+	delete(tm.idToTable, tableInfo.GetID())
+	return nil
+}
+
 func (tm *TableManager) GetTupleDesc(tableID int) (*tuple.TupleDescription, error) {
 	tableInfo, err := tm.getTableInfo(tableID)
 	if err != nil {
@@ -76,14 +94,15 @@ func (tm *TableManager) GetTupleDesc(tableID int) (*tuple.TupleDescription, erro
 	return tableInfo.TupleDesc, nil
 }
 
-// Clear removes all tables from the catalog
 func (tm *TableManager) Clear() {
 	tm.mutex.Lock()
 	defer tm.mutex.Unlock()
 
 	for _, tableInfo := range tm.idToTable {
 		if tableInfo.File != nil {
-			tableInfo.File.Close()
+			if err := tableInfo.File.Close(); err != nil {
+				fmt.Printf("Warning: failed to close file for table '%s': %v\n", tableInfo.Name, err)
+			}
 		}
 	}
 
@@ -91,7 +110,6 @@ func (tm *TableManager) Clear() {
 	tm.idToTable = make(map[int]*TableInfo)
 }
 
-// GetDbFile returns the DbFile for the table with the specified ID
 func (tm *TableManager) GetDbFile(tableID int) (page.DbFile, error) {
 	ti, err := tm.getTableInfo(tableID)
 	if err != nil {
@@ -100,7 +118,6 @@ func (tm *TableManager) GetDbFile(tableID int) (page.DbFile, error) {
 	return ti.File, nil
 }
 
-// ValidateIntegrity performs basic integrity checks on the catalog
 func (tm *TableManager) ValidateIntegrity() error {
 	tm.mutex.RLock()
 	defer tm.mutex.RUnlock()
@@ -128,7 +145,27 @@ func (tm *TableManager) ValidateIntegrity() error {
 	return nil
 }
 
-// GetAllTableNames returns a slice of all table names in the catalog
+func (tm *TableManager) String() string {
+	tm.mutex.RLock()
+	defer tm.mutex.RUnlock()
+
+	var builder strings.Builder
+	builder.WriteString(fmt.Sprintf("TableManager(tables=%d):\n", len(tm.nameToTable)))
+
+	names := make([]string, 0, len(tm.nameToTable))
+	for name := range tm.nameToTable {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+
+	for _, name := range names {
+		table := tm.nameToTable[name]
+		builder.WriteString(fmt.Sprintf("  %s\n", table.String()))
+	}
+
+	return builder.String()
+}
+
 func (tm *TableManager) GetAllTableNames() []string {
 	tm.mutex.RLock()
 	defer tm.mutex.RUnlock()
@@ -141,7 +178,6 @@ func (tm *TableManager) GetAllTableNames() []string {
 	return names
 }
 
-// removeExistingTable removes any existing table with the same name or ID
 func (tm *TableManager) removeExistingTable(name string, tableID int) {
 	if existingTable, exists := tm.nameToTable[name]; exists {
 		delete(tm.idToTable, existingTable.GetID())
@@ -151,13 +187,11 @@ func (tm *TableManager) removeExistingTable(name string, tableID int) {
 	}
 }
 
-// addTableToMaps adds the table to both internal maps
 func (tm *TableManager) addTableToMaps(name string, tableID int, tableInfo *TableInfo) {
 	tm.nameToTable[name] = tableInfo
 	tm.idToTable[tableID] = tableInfo
 }
 
-// getTableInfo is a helper method to get table info by ID
 func (tm *TableManager) getTableInfo(tableID int) (*TableInfo, error) {
 	tm.mutex.RLock()
 	defer tm.mutex.RUnlock()
@@ -175,4 +209,31 @@ func (tm *TableManager) TableExists(name string) bool {
 
 	_, exists := tm.nameToTable[name]
 	return exists
+}
+
+func (tm *TableManager) RenameTable(oldName, newName string) error {
+	if oldName == "" || newName == "" {
+		return fmt.Errorf("table names cannot be empty")
+	}
+	if strings.TrimSpace(newName) != newName {
+		return fmt.Errorf("new table name cannot have leading or trailing whitespace")
+	}
+
+	tm.mutex.Lock()
+	defer tm.mutex.Unlock()
+
+	tableInfo, exists := tm.nameToTable[oldName]
+	if !exists {
+		return fmt.Errorf("table '%s' not found", oldName)
+	}
+
+	if _, exists := tm.nameToTable[newName]; exists {
+		return fmt.Errorf("table '%s' already exists", newName)
+	}
+
+	tableInfo.Name = newName
+	delete(tm.nameToTable, oldName)
+	tm.nameToTable[newName] = tableInfo
+
+	return nil
 }
