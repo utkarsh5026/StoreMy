@@ -3,7 +3,8 @@ package heap
 import (
 	"fmt"
 	"path/filepath"
-	"storemy/pkg/storage"
+	"storemy/pkg/storage/page"
+	"storemy/pkg/transaction"
 	"storemy/pkg/tuple"
 	"storemy/pkg/types"
 	"testing"
@@ -12,7 +13,7 @@ import (
 func TestNewHeapPageIterator(t *testing.T) {
 	pageID := NewHeapPageID(1, 2)
 	td := mustCreateTupleDesc()
-	data := make([]byte, storage.PageSize)
+	data := make([]byte, page.PageSize)
 
 	hp, err := NewHeapPage(pageID, data, td)
 	if err != nil {
@@ -45,7 +46,7 @@ func TestNewHeapPageIterator(t *testing.T) {
 func TestHeapPageIterator_Open(t *testing.T) {
 	pageID := NewHeapPageID(1, 2)
 	td := mustCreateTupleDesc()
-	data := make([]byte, storage.PageSize)
+	data := make([]byte, page.PageSize)
 
 	hp, err := NewHeapPage(pageID, data, td)
 	if err != nil {
@@ -84,7 +85,7 @@ func TestHeapPageIterator_Open(t *testing.T) {
 func TestHeapPageIterator_HasNext(t *testing.T) {
 	pageID := NewHeapPageID(1, 2)
 	td := mustCreateTupleDesc()
-	data := make([]byte, storage.PageSize)
+	data := make([]byte, page.PageSize)
 
 	hp, err := NewHeapPage(pageID, data, td)
 	if err != nil {
@@ -92,8 +93,8 @@ func TestHeapPageIterator_HasNext(t *testing.T) {
 	}
 
 	tests := []struct {
-		name           string
-		setupFunc      func() *HeapPageIterator
+		name            string
+		setupFunc       func() *HeapPageIterator
 		expectedHasNext bool
 	}{
 		{
@@ -130,7 +131,7 @@ func TestHeapPageIterator_HasNext(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			hp, _ = NewHeapPage(pageID, make([]byte, storage.PageSize), td)
+			hp, _ = NewHeapPage(pageID, make([]byte, page.PageSize), td)
 			iterator := tt.setupFunc()
 
 			hasNext, err := iterator.HasNext()
@@ -148,7 +149,7 @@ func TestHeapPageIterator_HasNext(t *testing.T) {
 func TestHeapPageIterator_Next(t *testing.T) {
 	pageID := NewHeapPageID(1, 2)
 	td := mustCreateTupleDesc()
-	data := make([]byte, storage.PageSize)
+	data := make([]byte, page.PageSize)
 
 	hp, err := NewHeapPage(pageID, data, td)
 	if err != nil {
@@ -221,7 +222,7 @@ func TestHeapPageIterator_Next(t *testing.T) {
 func TestHeapPageIterator_NextEmptyPage(t *testing.T) {
 	pageID := NewHeapPageID(1, 2)
 	td := mustCreateTupleDesc()
-	data := make([]byte, storage.PageSize)
+	data := make([]byte, page.PageSize)
 
 	hp, err := NewHeapPage(pageID, data, td)
 	if err != nil {
@@ -243,7 +244,7 @@ func TestHeapPageIterator_NextEmptyPage(t *testing.T) {
 func TestHeapPageIterator_Rewind(t *testing.T) {
 	pageID := NewHeapPageID(1, 2)
 	td := mustCreateTupleDesc()
-	data := make([]byte, storage.PageSize)
+	data := make([]byte, page.PageSize)
 
 	hp, err := NewHeapPage(pageID, data, td)
 	if err != nil {
@@ -335,7 +336,7 @@ func TestHeapPageIterator_Rewind(t *testing.T) {
 func TestHeapPageIterator_Close(t *testing.T) {
 	pageID := NewHeapPageID(1, 2)
 	td := mustCreateTupleDesc()
-	data := make([]byte, storage.PageSize)
+	data := make([]byte, page.PageSize)
 
 	hp, err := NewHeapPage(pageID, data, td)
 	if err != nil {
@@ -375,7 +376,7 @@ func TestHeapPageIterator_Close(t *testing.T) {
 func TestHeapPageIterator_IterateTwice(t *testing.T) {
 	pageID := NewHeapPageID(1, 2)
 	td := mustCreateTupleDesc()
-	data := make([]byte, storage.PageSize)
+	data := make([]byte, page.PageSize)
 
 	hp, err := NewHeapPage(pageID, data, td)
 	if err != nil {
@@ -463,7 +464,7 @@ func TestHeapPageIterator_IterateTwice(t *testing.T) {
 func TestHeapPageIterator_ModifiedPageAfterOpen(t *testing.T) {
 	pageID := NewHeapPageID(1, 2)
 	td := mustCreateTupleDesc()
-	data := make([]byte, storage.PageSize)
+	data := make([]byte, page.PageSize)
 
 	hp, err := NewHeapPage(pageID, data, td)
 	if err != nil {
@@ -517,7 +518,7 @@ func TestHeapPageIterator_ModifiedPageAfterOpen(t *testing.T) {
 func TestHeapPageIterator_OpenMultipleTimes(t *testing.T) {
 	pageID := NewHeapPageID(1, 2)
 	td := mustCreateTupleDesc()
-	data := make([]byte, storage.PageSize)
+	data := make([]byte, page.PageSize)
 
 	hp, err := NewHeapPage(pageID, data, td)
 	if err != nil {
@@ -577,7 +578,7 @@ func TestHeapPageIterator_OpenMultipleTimes(t *testing.T) {
 func TestHeapPageIterator_TupleOrder(t *testing.T) {
 	pageID := NewHeapPageID(1, 2)
 	td := mustCreateTupleDesc()
-	data := make([]byte, storage.PageSize)
+	data := make([]byte, page.PageSize)
 
 	hp, err := NewHeapPage(pageID, data, td)
 	if err != nil {
@@ -681,7 +682,7 @@ func TestNewHeapFileIterator(t *testing.T) {
 	}
 	defer hf.Close()
 
-	tid := &storage.TransactionID{}
+	tid := &transaction.TransactionID{}
 	iterator := NewHeapFileIterator(hf, tid)
 
 	if iterator == nil {
@@ -720,7 +721,7 @@ func TestHeapFileIterator_Open(t *testing.T) {
 	}
 	defer hf.Close()
 
-	tid := &storage.TransactionID{}
+	tid := &transaction.TransactionID{}
 	iterator := NewHeapFileIterator(hf, tid)
 
 	err = iterator.Open()
@@ -750,7 +751,7 @@ func TestHeapFileIterator_Close(t *testing.T) {
 	}
 	defer hf.Close()
 
-	tid := &storage.TransactionID{}
+	tid := &transaction.TransactionID{}
 	iterator := NewHeapFileIterator(hf, tid)
 
 	err = iterator.Open()
@@ -783,7 +784,7 @@ func TestHeapFileIterator_EmptyFile(t *testing.T) {
 	}
 	defer hf.Close()
 
-	tid := &storage.TransactionID{}
+	tid := &transaction.TransactionID{}
 	iterator := NewHeapFileIterator(hf, tid)
 
 	err = iterator.Open()
@@ -818,7 +819,7 @@ func TestHeapFileIterator_HasNextNotOpened(t *testing.T) {
 	}
 	defer hf.Close()
 
-	tid := &storage.TransactionID{}
+	tid := &transaction.TransactionID{}
 	iterator := NewHeapFileIterator(hf, tid)
 
 	_, err = iterator.HasNext()
@@ -838,7 +839,7 @@ func TestHeapFileIterator_NextNotOpened(t *testing.T) {
 	}
 	defer hf.Close()
 
-	tid := &storage.TransactionID{}
+	tid := &transaction.TransactionID{}
 	iterator := NewHeapFileIterator(hf, tid)
 
 	_, err = iterator.Next()
@@ -863,17 +864,17 @@ func TestHeapFileIterator_SinglePageWithTuples(t *testing.T) {
 	tuple3 := createTestTuple(td, 3, "Charlie")
 
 	pageID := NewHeapPageID(hf.GetID(), 0)
-	page, err := hf.ReadPage(pageID)
+	p, err := hf.ReadPage(pageID)
 	if err != nil {
-		page, err = NewHeapPage(pageID, make([]byte, storage.PageSize), td)
+		p, err = NewHeapPage(pageID, make([]byte, page.PageSize), td)
 		if err != nil {
 			t.Fatalf("Failed to create page: %v", err)
 		}
 	}
 
-	heapPage, ok := page.(*HeapPage)
+	heapPage, ok := p.(*HeapPage)
 	if !ok {
-		t.Fatalf("Expected HeapPage, got %T", page)
+		t.Fatalf("Expected HeapPage, got %T", p)
 	}
 
 	err = heapPage.AddTuple(tuple1)
@@ -896,7 +897,7 @@ func TestHeapFileIterator_SinglePageWithTuples(t *testing.T) {
 		t.Fatalf("Failed to write page: %v", err)
 	}
 
-	tid := &storage.TransactionID{}
+	tid := &transaction.TransactionID{}
 	iterator := NewHeapFileIterator(hf, tid)
 
 	err = iterator.Open()
@@ -963,7 +964,7 @@ func TestHeapFileIterator_MultiplePagesWithTuples(t *testing.T) {
 	tupleID := 1
 	for pageNum := 0; pageNum < numPages; pageNum++ {
 		pageID := NewHeapPageID(hf.GetID(), pageNum)
-		page, err := NewHeapPage(pageID, make([]byte, storage.PageSize), td)
+		page, err := NewHeapPage(pageID, make([]byte, page.PageSize), td)
 		if err != nil {
 			t.Fatalf("Failed to create page %d: %v", pageNum, err)
 		}
@@ -983,7 +984,7 @@ func TestHeapFileIterator_MultiplePagesWithTuples(t *testing.T) {
 		}
 	}
 
-	tid := &storage.TransactionID{}
+	tid := &transaction.TransactionID{}
 	iterator := NewHeapFileIterator(hf, tid)
 
 	err = iterator.Open()
@@ -1061,7 +1062,7 @@ func TestHeapFileIterator_Rewind(t *testing.T) {
 	tuple2 := createTestTuple(td, 2, "Bob")
 
 	pageID := NewHeapPageID(hf.GetID(), 0)
-	page, err := NewHeapPage(pageID, make([]byte, storage.PageSize), td)
+	page, err := NewHeapPage(pageID, make([]byte, page.PageSize), td)
 	if err != nil {
 		t.Fatalf("Failed to create page: %v", err)
 	}
@@ -1081,7 +1082,7 @@ func TestHeapFileIterator_Rewind(t *testing.T) {
 		t.Fatalf("Failed to write page: %v", err)
 	}
 
-	tid := &storage.TransactionID{}
+	tid := &transaction.TransactionID{}
 	iterator := NewHeapFileIterator(hf, tid)
 
 	err = iterator.Open()
@@ -1160,19 +1161,19 @@ func TestHeapFileIterator_SkipEmptyPages(t *testing.T) {
 
 	// Create a page with tuples first
 	pageID0 := NewHeapPageID(hf.GetID(), 0)
-	page0, err := NewHeapPage(pageID0, make([]byte, storage.PageSize), td)
+	page0, err := NewHeapPage(pageID0, make([]byte, page.PageSize), td)
 	if err != nil {
 		t.Fatalf("Failed to create page 0: %v", err)
 	}
 
 	tuple1 := createTestTuple(td, 1, "Alice")
 	tuple2 := createTestTuple(td, 2, "Bob")
-	
+
 	err = page0.AddTuple(tuple1)
 	if err != nil {
 		t.Fatalf("Failed to add tuple1: %v", err)
 	}
-	
+
 	err = page0.AddTuple(tuple2)
 	if err != nil {
 		t.Fatalf("Failed to add tuple2: %v", err)
@@ -1183,7 +1184,7 @@ func TestHeapFileIterator_SkipEmptyPages(t *testing.T) {
 		t.Fatalf("Failed to write page 0: %v", err)
 	}
 
-	tid := &storage.TransactionID{}
+	tid := &transaction.TransactionID{}
 	iterator := NewHeapFileIterator(hf, tid)
 
 	err = iterator.Open()
@@ -1223,5 +1224,3 @@ func TestHeapFileIterator_SkipEmptyPages(t *testing.T) {
 		t.Errorf("Expected to iterate over 2 tuples, got %d", actualCount)
 	}
 }
-
-
