@@ -3,8 +3,8 @@ package query
 import (
 	"fmt"
 	"storemy/pkg/iterator"
-	"storemy/pkg/storage"
 	"storemy/pkg/tables"
+	"storemy/pkg/transaction"
 	"storemy/pkg/tuple"
 )
 
@@ -12,14 +12,14 @@ import (
 // It provides an iterator interface for reading tuples from a database file sequentially.
 type SequentialScan struct {
 	base         *BaseIterator
-	tid          *storage.TransactionID
+	tid          *transaction.TransactionID
 	tableID      int
 	fileIter     iterator.DbFileIterator
 	tupleDesc    *tuple.TupleDescription
 	tableManager *tables.TableManager
 }
 
-func NewSeqScan(tid *storage.TransactionID, tableID int, tm *tables.TableManager) (*SequentialScan, error) {
+func NewSeqScan(tid *transaction.TransactionID, tableID int, tm *tables.TableManager) (*SequentialScan, error) {
 	if tm == nil {
 		return nil, fmt.Errorf("tm cannot be nil")
 	}
