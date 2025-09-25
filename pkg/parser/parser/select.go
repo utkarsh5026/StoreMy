@@ -39,35 +39,40 @@ func parseSelect(l *lexer.Lexer, p *plan.SelectPlan) error {
 			break
 		}
 
-		if token.Type == lexer.IDENTIFIER {
-			nextToken := l.NextToken()
-			if nextToken.Type == lexer.LPAREN {
-				aggOp := token.Value
-				fieldToken := l.NextToken()
-				if err := expectToken(fieldToken, lexer.IDENTIFIER); err != nil {
-					return fmt.Errorf("expected field name in aggregate function")
-				}
-
-				parenToken := l.NextToken()
-				if err := expectToken(parenToken, lexer.RPAREN); err != nil {
-					return fmt.Errorf("expected closing parenthesis in aggregate function")
-				}
-				p.AddProjectField(fieldToken.Value, aggOp)
-			} else {
-				l.SetPos(nextToken.Position)
-				p.AddProjectField(token.Value, "")
-			}
+		if err := expectToken(token, lexer.IDENTIFIER); err != nil {
+			return fmt.Errorf("expected field name, got %s", token.Value)
 		}
 
-		commaToken := l.NextToken()
-		if commaToken.Type == lexer.COMMA {
-			continue
-		} else {
-			l.SetPos(commaToken.Position)
-			break
+		if err := parseSelectField(l, p, token); err != nil {
+			return err
+		}
+
+		if !consumeCommaIfPresent(l) {
+			return nil
 		}
 	}
 
+	return nil
+}
+
+func parseSelectField(l *lexer.Lexer, p *plan.SelectPlan, fieldToken lexer.Token) error {
+	nextToken := l.NextToken()
+	if nextToken.Type == lexer.LPAREN {
+		aggOp := fieldToken.Value
+		fieldToken := l.NextToken()
+		if err := expectToken(fieldToken, lexer.IDENTIFIER); err != nil {
+			return fmt.Errorf("expected field name in aggregate function")
+		}
+
+		parenToken := l.NextToken()
+		if err := expectToken(parenToken, lexer.RPAREN); err != nil {
+			return fmt.Errorf("expected closing parenthesis in aggregate function")
+		}
+		p.AddProjectField(fieldToken.Value, aggOp)
+	} else {
+		l.SetPos(nextToken.Position)
+		p.AddProjectField(fieldToken.Value, "")
+	}
 	return nil
 }
 
@@ -144,17 +149,10 @@ func parseFrom(l *lexer.Lexer, p *plan.SelectPlan) error {
 		}
 
 		p.AddScan(tableName, alias)
-
-		nextToken := l.NextToken()
-		if nextToken.Type == lexer.COMMA {
-			continue
-		} else {
-			l.SetPos(nextToken.Position)
-			break
+		if !consumeCommaIfPresent(l) {
+			return nil
 		}
 	}
-
-	return nil
 }
 
 func parseWhere(l *lexer.Lexer, p *plan.SelectPlan) error {
@@ -209,4 +207,14 @@ func parseConditions(l *lexer.Lexer, p *plan.SelectPlan) error {
 	}
 
 	return nil
+}
+
+func consumeCommaIfPresent(l *lexer.Lexer) bool {
+	token := l.NextToken()
+	if token.Type == lexer.COMMA {
+		return true
+	}
+
+	l.SetPos(token.Position)
+	return false
 }
