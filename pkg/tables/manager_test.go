@@ -3,7 +3,8 @@ package tables
 import (
 	"fmt"
 	"storemy/pkg/iterator"
-	"storemy/pkg/storage"
+	"storemy/pkg/storage/page"
+	"storemy/pkg/transaction"
 	"storemy/pkg/tuple"
 	"storemy/pkg/types"
 	"sync"
@@ -30,23 +31,23 @@ func newMockDbFile(id int, fieldTypes []types.Type, fieldNames []string) *mockDb
 	}
 }
 
-func (m *mockDbFile) ReadPage(pid tuple.PageID) (storage.Page, error) {
+func (m *mockDbFile) ReadPage(pid tuple.PageID) (page.Page, error) {
 	return nil, nil
 }
 
-func (m *mockDbFile) WritePage(p storage.Page) error {
+func (m *mockDbFile) WritePage(p page.Page) error {
 	return nil
 }
 
-func (m *mockDbFile) AddTuple(tid *storage.TransactionID, t *tuple.Tuple) ([]storage.Page, error) {
+func (m *mockDbFile) AddTuple(tid *transaction.TransactionID, t *tuple.Tuple) ([]page.Page, error) {
 	return nil, nil
 }
 
-func (m *mockDbFile) DeleteTuple(tid *storage.TransactionID, t *tuple.Tuple) (storage.Page, error) {
+func (m *mockDbFile) DeleteTuple(tid *transaction.TransactionID, t *tuple.Tuple) (page.Page, error) {
 	return nil, nil
 }
 
-func (m *mockDbFile) Iterator(tid *storage.TransactionID) iterator.DbFileIterator {
+func (m *mockDbFile) Iterator(tid *transaction.TransactionID) iterator.DbFileIterator {
 	return nil
 }
 
@@ -98,14 +99,14 @@ func TestNewTableManager(t *testing.T) {
 func TestTableManager_AddTable_ValidCases(t *testing.T) {
 	tests := []struct {
 		name        string
-		setupFunc   func() (*TableManager, storage.DbFile)
+		setupFunc   func() (*TableManager, page.DbFile)
 		tableName   string
 		primaryKey  string
 		shouldError bool
 	}{
 		{
 			name: "Add first table",
-			setupFunc: func() (*TableManager, storage.DbFile) {
+			setupFunc: func() (*TableManager, page.DbFile) {
 				tm := NewTableManager()
 				dbFile := newMockDbFile(1, []types.Type{types.IntType, types.StringType}, []string{"id", "name"})
 				return tm, dbFile
@@ -116,7 +117,7 @@ func TestTableManager_AddTable_ValidCases(t *testing.T) {
 		},
 		{
 			name: "Add table with empty primary key",
-			setupFunc: func() (*TableManager, storage.DbFile) {
+			setupFunc: func() (*TableManager, page.DbFile) {
 				tm := NewTableManager()
 				dbFile := newMockDbFile(2, []types.Type{types.StringType}, []string{"data"})
 				return tm, dbFile
@@ -127,7 +128,7 @@ func TestTableManager_AddTable_ValidCases(t *testing.T) {
 		},
 		{
 			name: "Add multiple different tables",
-			setupFunc: func() (*TableManager, storage.DbFile) {
+			setupFunc: func() (*TableManager, page.DbFile) {
 				tm := NewTableManager()
 				dbFile1 := newMockDbFile(1, []types.Type{types.IntType}, []string{"id"})
 				tm.AddTable(dbFile1, "table1", "id")
@@ -194,12 +195,12 @@ func TestTableManager_AddTable_ValidCases(t *testing.T) {
 func TestTableManager_AddTable_ErrorCases(t *testing.T) {
 	tests := []struct {
 		name        string
-		setupFunc   func() (*TableManager, storage.DbFile, string, string)
+		setupFunc   func() (*TableManager, page.DbFile, string, string)
 		expectedErr string
 	}{
 		{
 			name: "Nil DbFile",
-			setupFunc: func() (*TableManager, storage.DbFile, string, string) {
+			setupFunc: func() (*TableManager, page.DbFile, string, string) {
 				tm := NewTableManager()
 				return tm, nil, "test_table", "id"
 			},
@@ -207,7 +208,7 @@ func TestTableManager_AddTable_ErrorCases(t *testing.T) {
 		},
 		{
 			name: "Empty table name",
-			setupFunc: func() (*TableManager, storage.DbFile, string, string) {
+			setupFunc: func() (*TableManager, page.DbFile, string, string) {
 				tm := NewTableManager()
 				dbFile := newMockDbFile(1, []types.Type{types.IntType}, []string{"id"})
 				return tm, dbFile, "", "id"
