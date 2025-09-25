@@ -168,3 +168,11 @@ func (tm *TableManager) getTableInfo(tableID int) (*TableInfo, error) {
 	}
 	return tableInfo, nil
 }
+
+func (tm *TableManager) TableExists(name string) bool {
+	tm.mutex.RLock()
+	defer tm.mutex.RUnlock()
+
+	_, exists := tm.nameToTable[name]
+	return exists
+}
