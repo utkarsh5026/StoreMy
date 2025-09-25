@@ -10,9 +10,7 @@ func NewLexer(s string) *lexer.Lexer {
 }
 
 func TestParseStatement_EmptyStatement(t *testing.T) {
-	parser := &Parser{}
-
-	_, err := parser.ParseStatement("")
+	_, err := ParseStatement("")
 	if err == nil {
 		t.Error("expected error for empty statement")
 	}
@@ -23,9 +21,7 @@ func TestParseStatement_EmptyStatement(t *testing.T) {
 }
 
 func TestParseStatement_UnsupportedStatement(t *testing.T) {
-	parser := &Parser{}
-
-	_, err := parser.ParseStatement("SELECT * FROM users")
+	_, err := ParseStatement("SELECT * FROM users")
 	if err == nil {
 		t.Error("expected error for unsupported statement")
 	}
