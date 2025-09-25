@@ -49,16 +49,9 @@ func (p *CreateTablePlan) Execute() (any, error) {
 		return nil, fmt.Errorf("table %s already exists", p.Statement.TableName)
 	}
 
-	fieldNames := make([]string, 0, len(p.Statement.Fields))
-	fieldTypes := make([]types.Type, 0, len(p.Statement.Fields))
-	for _, field := range p.Statement.Fields {
-		fieldNames = append(fieldNames, field.Name)
-		fieldTypes = append(fieldTypes, field.Type)
-	}
-
-	tupleDesc, err := tuple.NewTupleDesc(fieldTypes, fieldNames)
+	tupleDesc, err := p.buildTupleDescriptor()
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to build tuple descriptor: %v", err)
 	}
 
 	fileName := fmt.Sprintf("data/%s.dat", p.Statement.TableName)
@@ -75,4 +68,17 @@ func (p *CreateTablePlan) Execute() (any, error) {
 		Success: true,
 		Message: fmt.Sprintf("Table %s created successfully", p.Statement.TableName),
 	}, nil
+}
+
+func (p *CreateTablePlan) buildTupleDescriptor() (*tuple.TupleDescription, error) {
+	fieldCount := len(p.Statement.Fields)
+	fieldNames := make([]string, 0, fieldCount)
+	fieldTypes := make([]types.Type, 0, fieldCount)
+
+	for _, field := range p.Statement.Fields {
+		fieldNames = append(fieldNames, field.Name)
+		fieldTypes = append(fieldTypes, field.Type)
+	}
+
+	return tuple.NewTupleDesc(fieldTypes, fieldNames)
 }
