@@ -9,24 +9,19 @@ import (
 
 func parseSelectStatement(l *lexer.Lexer) (*statements.SelectStatement, error) {
 	p := plan.NewSelectPlan()
-	if err := parseSelect(l, p); err != nil {
-		return nil, err
+
+	parseFuncs := []func(*lexer.Lexer, *plan.SelectPlan) error{
+		parseSelect,
+		parseFrom,
+		parseWhere,
+		parseGroupBy,
+		parseOrderBy,
 	}
 
-	if err := parseFrom(l, p); err != nil {
-		return nil, err
-	}
-
-	if err := parseGroupBy(l, p); err != nil {
-		return nil, err
-	}
-
-	if err := parseWhere(l, p); err != nil {
-		return nil, err
-	}
-
-	if err := parseOrderBy(l, p); err != nil {
-		return nil, err
+	for _, parseFunc := range parseFuncs {
+		if err := parseFunc(l, p); err != nil {
+			return nil, err
+		}
 	}
 
 	return statements.NewSelectStatement(p), nil
