@@ -5,13 +5,10 @@ import (
 	"testing"
 )
 
-
 // DELETE statement tests
 
 func TestParseStatement_BasicDelete(t *testing.T) {
-	parser := &Parser{}
-
-	stmt, err := parser.ParseStatement("DELETE FROM users")
+	stmt, err := ParseStatement("DELETE FROM users")
 	if err != nil {
 		t.Fatalf("unexpected error: %s", err.Error())
 	}
@@ -35,9 +32,7 @@ func TestParseStatement_BasicDelete(t *testing.T) {
 }
 
 func TestParseStatement_DeleteWithAlias(t *testing.T) {
-	parser := &Parser{}
-
-	stmt, err := parser.ParseStatement("DELETE FROM users u")
+	stmt, err := ParseStatement("DELETE FROM users u")
 	if err != nil {
 		t.Fatalf("unexpected error: %s", err.Error())
 	}
@@ -57,9 +52,7 @@ func TestParseStatement_DeleteWithAlias(t *testing.T) {
 }
 
 func TestParseStatement_DeleteWithWhereClause(t *testing.T) {
-	parser := &Parser{}
-
-	stmt, err := parser.ParseStatement("DELETE FROM users WHERE id = 1")
+	stmt, err := ParseStatement("DELETE FROM users WHERE id = 1")
 	if err != nil {
 		t.Fatalf("unexpected error: %s", err.Error())
 	}
@@ -79,9 +72,7 @@ func TestParseStatement_DeleteWithWhereClause(t *testing.T) {
 }
 
 func TestParseStatement_DeleteWithAliasAndWhere(t *testing.T) {
-	parser := &Parser{}
-
-	stmt, err := parser.ParseStatement("DELETE FROM users u WHERE u.id = 1")
+	stmt, err := ParseStatement("DELETE FROM users u WHERE u.id = 1")
 	if err != nil {
 		t.Fatalf("unexpected error: %s", err.Error())
 	}
@@ -105,7 +96,6 @@ func TestParseStatement_DeleteWithAliasAndWhere(t *testing.T) {
 }
 
 // DELETE statement error handling tests
-
 func TestParseDeleteStatement_MissingFrom(t *testing.T) {
 	lexer := NewLexer("users")
 
