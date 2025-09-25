@@ -51,13 +51,12 @@ func (p *CreateTablePlan) Execute() (any, error) {
 
 	tupleDesc, err := p.buildTupleDescriptor()
 	if err != nil {
-		return nil, fmt.Errorf("failed to build tuple descriptor: %v", err)
+		return nil, err
 	}
 
-	fileName := fmt.Sprintf("data/%s.dat", p.Statement.TableName)
-	heapFile, err := heap.NewHeapFile(fileName, tupleDesc)
+	heapFile, err := p.createHeapFile(tupleDesc)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create heap file: %v", err)
+		return nil, err
 	}
 
 	if err := p.tableManager.AddTable(heapFile, p.Statement.TableName, p.Statement.PrimaryKey); err != nil {
@@ -80,5 +79,19 @@ func (p *CreateTablePlan) buildTupleDescriptor() (*tuple.TupleDescription, error
 		fieldTypes = append(fieldTypes, field.Type)
 	}
 
-	return tuple.NewTupleDesc(fieldTypes, fieldNames)
+	tupleDesc, err := tuple.NewTupleDesc(fieldTypes, fieldNames)
+	if err != nil {
+		return nil, fmt.Errorf("failed to build tuple descriptor: %v", err)
+	}
+
+	return tupleDesc, nil
+}
+
+func (p *CreateTablePlan) createHeapFile(tupleDesc *tuple.TupleDescription) (*heap.HeapFile, error) {
+	fileName := fmt.Sprintf("data/%s.dat", p.Statement.TableName)
+	heapFile, err := heap.NewHeapFile(fileName, tupleDesc)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create heap file: %v", err)
+	}
+	return heapFile, nil
 }
