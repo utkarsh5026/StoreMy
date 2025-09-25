@@ -106,3 +106,43 @@ func (sp *SelectPlan) AddFilter(field string, pred types.Predicate, constant str
 	sp.filters = append(sp.filters, filter)
 	return nil
 }
+
+func (sp *SelectPlan) SelectList() []*SelectListNode {
+	return sp.selectList
+}
+
+func (sp *SelectPlan) Tables() []*ScanNode {
+	return sp.tables
+}
+
+func (sp *SelectPlan) Filters() []*FilterNode {
+	return sp.filters
+}
+
+func (sp *SelectPlan) HasAgg() bool {
+	return sp.hasAgg
+}
+
+func (sp *SelectPlan) AggOp() string {
+	return sp.aggOp
+}
+
+func (sp *SelectPlan) AggField() string {
+	return sp.aggField
+}
+
+func (sp *SelectPlan) GroupByField() string {
+	return sp.groupByField
+}
+
+func (sp *SelectPlan) HasOrderBy() bool {
+	return sp.hasOrderBy
+}
+
+func (sp *SelectPlan) OrderByField() string {
+	return sp.orderByField
+}
+
+func (sp *SelectPlan) OrderByAsc() bool {
+	return sp.orderByAsc
+}
