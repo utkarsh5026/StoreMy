@@ -7,10 +7,7 @@ import (
 	"storemy/pkg/parser/statements"
 )
 
-type Parser struct {
-}
-
-func (p *Parser) ParseStatement(sql string) (statements.Statement, error) {
+func ParseStatement(sql string) (statements.Statement, error) {
 	l := lexer.NewLexer(sql)
 	token := l.NextToken()
 	if token.Type == lexer.EOF {
