@@ -2,7 +2,8 @@ package heap
 
 import (
 	"bytes"
-	"storemy/pkg/storage"
+	"storemy/pkg/storage/page"
+	"storemy/pkg/transaction"
 	"storemy/pkg/tuple"
 	"storemy/pkg/types"
 	"testing"
@@ -11,7 +12,7 @@ import (
 func TestNewHeapPage(t *testing.T) {
 	pageID := NewHeapPageID(1, 2)
 	td := mustCreateTupleDesc()
-	validData := make([]byte, storage.PageSize)
+	validData := make([]byte, page.PageSize)
 
 	tests := []struct {
 		name          string
@@ -30,14 +31,14 @@ func TestNewHeapPage(t *testing.T) {
 		{
 			name:          "Invalid data size - too small",
 			pageID:        pageID,
-			data:          make([]byte, storage.PageSize-1),
+			data:          make([]byte, page.PageSize-1),
 			tupleDesc:     td,
 			expectedError: true,
 		},
 		{
 			name:          "Invalid data size - too large",
 			pageID:        pageID,
-			data:          make([]byte, storage.PageSize+1),
+			data:          make([]byte, page.PageSize+1),
 			tupleDesc:     td,
 			expectedError: true,
 		},
@@ -90,8 +91,8 @@ func TestNewHeapPage(t *testing.T) {
 				t.Errorf("Expected tuples slice length %d, got %d", hp.numSlots, len(hp.tuples))
 			}
 
-			if len(hp.oldData) != storage.PageSize {
-				t.Errorf("Expected oldData size %d, got %d", storage.PageSize, len(hp.oldData))
+			if len(hp.oldData) != page.PageSize {
+				t.Errorf("Expected oldData size %d, got %d", page.PageSize, len(hp.oldData))
 			}
 		})
 	}
@@ -100,7 +101,7 @@ func TestNewHeapPage(t *testing.T) {
 func TestHeapPage_GetID(t *testing.T) {
 	pageID := NewHeapPageID(5, 10)
 	td := mustCreateTupleDesc()
-	data := make([]byte, storage.PageSize)
+	data := make([]byte, page.PageSize)
 
 	hp, err := NewHeapPage(pageID, data, td)
 	if err != nil {
@@ -116,7 +117,7 @@ func TestHeapPage_GetID(t *testing.T) {
 func TestHeapPage_IsDirty_MarkDirty(t *testing.T) {
 	pageID := NewHeapPageID(1, 2)
 	td := mustCreateTupleDesc()
-	data := make([]byte, storage.PageSize)
+	data := make([]byte, page.PageSize)
 
 	hp, err := NewHeapPage(pageID, data, td)
 	if err != nil {
@@ -127,7 +128,7 @@ func TestHeapPage_IsDirty_MarkDirty(t *testing.T) {
 		t.Errorf("Expected clean page, but got dirty transaction: %v", hp.IsDirty())
 	}
 
-	tid := &storage.TransactionID{}
+	tid := &transaction.TransactionID{}
 	hp.MarkDirty(true, tid)
 
 	if hp.IsDirty() != tid {
@@ -143,7 +144,7 @@ func TestHeapPage_IsDirty_MarkDirty(t *testing.T) {
 func TestHeapPage_GetNumEmptySlots(t *testing.T) {
 	pageID := NewHeapPageID(1, 2)
 	td := mustCreateTupleDesc()
-	data := make([]byte, storage.PageSize)
+	data := make([]byte, page.PageSize)
 
 	hp, err := NewHeapPage(pageID, data, td)
 	if err != nil {
@@ -180,7 +181,7 @@ func TestHeapPage_GetNumEmptySlots(t *testing.T) {
 func TestHeapPage_AddTuple(t *testing.T) {
 	pageID := NewHeapPageID(1, 2)
 	td := mustCreateTupleDesc()
-	data := make([]byte, storage.PageSize)
+	data := make([]byte, page.PageSize)
 
 	hp, err := NewHeapPage(pageID, data, td)
 	if err != nil {
@@ -248,7 +249,7 @@ func TestHeapPage_AddTuple(t *testing.T) {
 func TestHeapPage_DeleteTuple(t *testing.T) {
 	pageID := NewHeapPageID(1, 2)
 	td := mustCreateTupleDesc()
-	data := make([]byte, storage.PageSize)
+	data := make([]byte, page.PageSize)
 
 	hp, err := NewHeapPage(pageID, data, td)
 	if err != nil {
@@ -337,7 +338,7 @@ func TestHeapPage_DeleteTuple(t *testing.T) {
 func TestHeapPage_GetTuples(t *testing.T) {
 	pageID := NewHeapPageID(1, 2)
 	td := mustCreateTupleDesc()
-	data := make([]byte, storage.PageSize)
+	data := make([]byte, page.PageSize)
 
 	hp, err := NewHeapPage(pageID, data, td)
 	if err != nil {
@@ -387,7 +388,7 @@ func TestHeapPage_GetTuples(t *testing.T) {
 func TestHeapPage_GetTupleAt(t *testing.T) {
 	pageID := NewHeapPageID(1, 2)
 	td := mustCreateTupleDesc()
-	data := make([]byte, storage.PageSize)
+	data := make([]byte, page.PageSize)
 
 	hp, err := NewHeapPage(pageID, data, td)
 	if err != nil {
@@ -460,7 +461,7 @@ func TestHeapPage_GetTupleAt(t *testing.T) {
 func TestHeapPage_GetPageData(t *testing.T) {
 	pageID := NewHeapPageID(1, 2)
 	td := mustCreateTupleDesc()
-	data := make([]byte, storage.PageSize)
+	data := make([]byte, page.PageSize)
 
 	hp, err := NewHeapPage(pageID, data, td)
 	if err != nil {
@@ -468,8 +469,8 @@ func TestHeapPage_GetPageData(t *testing.T) {
 	}
 
 	pageData := hp.GetPageData()
-	if len(pageData) != storage.PageSize {
-		t.Errorf("Expected page data size %d, got %d", storage.PageSize, len(pageData))
+	if len(pageData) != page.PageSize {
+		t.Errorf("Expected page data size %d, got %d", page.PageSize, len(pageData))
 	}
 
 	tuple1 := createTestTuple(td, 1, "Alice")
@@ -479,8 +480,8 @@ func TestHeapPage_GetPageData(t *testing.T) {
 	}
 
 	pageDataWithTuple := hp.GetPageData()
-	if len(pageDataWithTuple) != storage.PageSize {
-		t.Errorf("Expected page data size %d after adding tuple, got %d", storage.PageSize, len(pageDataWithTuple))
+	if len(pageDataWithTuple) != page.PageSize {
+		t.Errorf("Expected page data size %d after adding tuple, got %d", page.PageSize, len(pageDataWithTuple))
 	}
 
 	if bytes.Equal(pageData, pageDataWithTuple) {
@@ -491,7 +492,7 @@ func TestHeapPage_GetPageData(t *testing.T) {
 func TestHeapPage_GetBeforeImage_SetBeforeImage(t *testing.T) {
 	pageID := NewHeapPageID(1, 2)
 	td := mustCreateTupleDesc()
-	data := make([]byte, storage.PageSize)
+	data := make([]byte, page.PageSize)
 
 	hp, err := NewHeapPage(pageID, data, td)
 	if err != nil {
@@ -525,7 +526,7 @@ func TestHeapPage_GetBeforeImage_SetBeforeImage(t *testing.T) {
 func TestHeapPage_AddTuple_FillPage(t *testing.T) {
 	pageID := NewHeapPageID(1, 2)
 	td := mustCreateTupleDesc()
-	data := make([]byte, storage.PageSize)
+	data := make([]byte, page.PageSize)
 
 	hp, err := NewHeapPage(pageID, data, td)
 	if err != nil {
@@ -555,7 +556,7 @@ func TestHeapPage_AddTuple_FillPage(t *testing.T) {
 func TestHeapPage_DeleteTuple_AlreadyEmpty(t *testing.T) {
 	pageID := NewHeapPageID(1, 2)
 	td := mustCreateTupleDesc()
-	data := make([]byte, storage.PageSize)
+	data := make([]byte, page.PageSize)
 
 	hp, err := NewHeapPage(pageID, data, td)
 	if err != nil {
@@ -582,7 +583,7 @@ func TestHeapPage_DeleteTuple_AlreadyEmpty(t *testing.T) {
 func TestHeapPage_ConcurrentAccess(t *testing.T) {
 	pageID := NewHeapPageID(1, 2)
 	td := mustCreateTupleDesc()
-	data := make([]byte, storage.PageSize)
+	data := make([]byte, page.PageSize)
 
 	hp, err := NewHeapPage(pageID, data, td)
 	if err != nil {
