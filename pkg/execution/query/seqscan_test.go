@@ -3,7 +3,8 @@ package query
 import (
 	"fmt"
 	"storemy/pkg/iterator"
-	"storemy/pkg/storage"
+	"storemy/pkg/storage/page"
+	"storemy/pkg/transaction"
 	"storemy/pkg/tuple"
 	"storemy/pkg/types"
 	"testing"
@@ -18,7 +19,7 @@ import (
 // Interface for table manager to match what SequentialScan expects
 type tableManagerInterface interface {
 	GetTupleDesc(tableID int) (*tuple.TupleDescription, error)
-	GetDbFile(tableID int) (storage.DbFile, error)
+	GetDbFile(tableID int) (page.DbFile, error)
 }
 
 type mockDbFileIterator struct {
@@ -96,23 +97,23 @@ func newMockDbFile(id int, td *tuple.TupleDescription, tuples []*tuple.Tuple) *m
 	}
 }
 
-func (m *mockDbFile) ReadPage(pid tuple.PageID) (storage.Page, error) {
+func (m *mockDbFile) ReadPage(pid tuple.PageID) (page.Page, error) {
 	return nil, fmt.Errorf("not implemented")
 }
 
-func (m *mockDbFile) WritePage(p storage.Page) error {
+func (m *mockDbFile) WritePage(p page.Page) error {
 	return fmt.Errorf("not implemented")
 }
 
-func (m *mockDbFile) AddTuple(tid *storage.TransactionID, t *tuple.Tuple) ([]storage.Page, error) {
+func (m *mockDbFile) AddTuple(tid *transaction.TransactionID, t *tuple.Tuple) ([]page.Page, error) {
 	return nil, fmt.Errorf("not implemented")
 }
 
-func (m *mockDbFile) DeleteTuple(tid *storage.TransactionID, t *tuple.Tuple) (storage.Page, error) {
+func (m *mockDbFile) DeleteTuple(tid *transaction.TransactionID, t *tuple.Tuple) (page.Page, error) {
 	return nil, fmt.Errorf("not implemented")
 }
 
-func (m *mockDbFile) Iterator(tid *storage.TransactionID) iterator.DbFileIterator {
+func (m *mockDbFile) Iterator(tid *transaction.TransactionID) iterator.DbFileIterator {
 	if m.hasError {
 		return nil
 	}
@@ -157,7 +158,7 @@ func (m *mockTableManager) GetTupleDesc(tableID int) (*tuple.TupleDescription, e
 	return table.GetTupleDesc(), nil
 }
 
-func (m *mockTableManager) GetDbFile(tableID int) (storage.DbFile, error) {
+func (m *mockTableManager) GetDbFile(tableID int) (page.DbFile, error) {
 	if m.hasError {
 		return nil, fmt.Errorf("mock table manager error")
 	}
@@ -174,14 +175,14 @@ func (m *mockTableManager) GetDbFile(tableID int) (storage.DbFile, error) {
 // testSequentialScan is a simplified version for testing that embeds the behavior we want to test
 type testSequentialScan struct {
 	base      *BaseIterator
-	tid       *storage.TransactionID
+	tid       *transaction.TransactionID
 	tableID   int
 	fileIter  iterator.DbFileIterator
 	tupleDesc *tuple.TupleDescription
 	mockTM    *mockTableManager
 }
 
-func createTestSeqScan(tid *storage.TransactionID, tableID int, tm *mockTableManager, td *tuple.TupleDescription) (*testSequentialScan, error) {
+func createTestSeqScan(tid *transaction.TransactionID, tableID int, tm *mockTableManager, td *tuple.TupleDescription) (*testSequentialScan, error) {
 	tss := &testSequentialScan{
 		tid:       tid,
 		tableID:   tableID,
@@ -283,7 +284,7 @@ func TestNewSeqScan(t *testing.T) {
 	dbFile := newMockDbFile(1, td, []*tuple.Tuple{})
 	tm.addTable(1, dbFile)
 
-	tid := &storage.TransactionID{}
+	tid := &transaction.TransactionID{}
 	tableID := 1
 
 	seqScan, err := createTestSeqScan(tid, tableID, tm, td)
@@ -317,7 +318,7 @@ func TestNewSeqScan(t *testing.T) {
 }
 
 func TestNewSeqScan_NilTableManager(t *testing.T) {
-	tid := &storage.TransactionID{}
+	tid := &transaction.TransactionID{}
 	tableID := 1
 
 	// Test creating with nil table manager should fail
@@ -351,7 +352,7 @@ func TestSeqScan_Open(t *testing.T) {
 	dbFile := newMockDbFile(1, td, []*tuple.Tuple{})
 	tm.addTable(1, dbFile)
 
-	tid := &storage.TransactionID{}
+	tid := &transaction.TransactionID{}
 	seqScan, err := createTestSeqScan(tid, 1, tm, td)
 	if err != nil {
 		t.Fatalf("Failed to create sequential scan: %v", err)
@@ -373,7 +374,7 @@ func TestSeqScan_Open_TableNotFound(t *testing.T) {
 	dbFile := newMockDbFile(1, td, []*tuple.Tuple{})
 	tm.addTable(1, dbFile)
 
-	tid := &storage.TransactionID{}
+	tid := &transaction.TransactionID{}
 	seqScan, err := createTestSeqScan(tid, 1, tm, td)
 	if err != nil {
 		t.Fatalf("Failed to create sequential scan: %v", err)
@@ -395,7 +396,7 @@ func TestSeqScan_Open_IteratorError(t *testing.T) {
 	dbFile.hasError = true // Force iterator creation to return nil
 	tm.addTable(1, dbFile)
 
-	tid := &storage.TransactionID{}
+	tid := &transaction.TransactionID{}
 	seqScan, err := createTestSeqScan(tid, 1, tm, td)
 	if err != nil {
 		t.Fatalf("Failed to create sequential scan: %v", err)
@@ -414,7 +415,7 @@ func TestSeqScan_Open_IteratorOpenError(t *testing.T) {
 	dbFile.iterator.hasError = true // Force iterator Open to fail
 	tm.addTable(1, dbFile)
 
-	tid := &storage.TransactionID{}
+	tid := &transaction.TransactionID{}
 	seqScan, err := createTestSeqScan(tid, 1, tm, td)
 	if err != nil {
 		t.Fatalf("Failed to create sequential scan: %v", err)
@@ -432,7 +433,7 @@ func TestSeqScan_GetTupleDesc(t *testing.T) {
 	dbFile := newMockDbFile(1, td, []*tuple.Tuple{})
 	tm.addTable(1, dbFile)
 
-	tid := &storage.TransactionID{}
+	tid := &transaction.TransactionID{}
 	seqScan, err := createTestSeqScan(tid, 1, tm, td)
 	if err != nil {
 		t.Fatalf("Failed to create sequential scan: %v", err)
@@ -450,7 +451,7 @@ func TestSeqScan_HasNext_NotOpened(t *testing.T) {
 	dbFile := newMockDbFile(1, td, []*tuple.Tuple{})
 	tm.addTable(1, dbFile)
 
-	tid := &storage.TransactionID{}
+	tid := &transaction.TransactionID{}
 	seqScan, err := createTestSeqScan(tid, 1, tm, td)
 	if err != nil {
 		t.Fatalf("Failed to create sequential scan: %v", err)
@@ -471,7 +472,7 @@ func TestSeqScan_Next_NotOpened(t *testing.T) {
 	dbFile := newMockDbFile(1, td, []*tuple.Tuple{})
 	tm.addTable(1, dbFile)
 
-	tid := &storage.TransactionID{}
+	tid := &transaction.TransactionID{}
 	seqScan, err := createTestSeqScan(tid, 1, tm, td)
 	if err != nil {
 		t.Fatalf("Failed to create sequential scan: %v", err)
@@ -492,7 +493,7 @@ func TestSeqScan_EmptyTable(t *testing.T) {
 	dbFile := newMockDbFile(1, td, []*tuple.Tuple{}) // Empty table
 	tm.addTable(1, dbFile)
 
-	tid := &storage.TransactionID{}
+	tid := &transaction.TransactionID{}
 	seqScan, err := createTestSeqScan(tid, 1, tm, td)
 	if err != nil {
 		t.Fatalf("Failed to create sequential scan: %v", err)
@@ -528,7 +529,7 @@ func TestSeqScan_SingleTuple(t *testing.T) {
 	dbFile := newMockDbFile(1, td, []*tuple.Tuple{testTuple})
 	tm.addTable(1, dbFile)
 
-	tid := &storage.TransactionID{}
+	tid := &transaction.TransactionID{}
 	seqScan, err := createTestSeqScan(tid, 1, tm, td)
 	if err != nil {
 		t.Fatalf("Failed to create sequential scan: %v", err)
@@ -580,7 +581,7 @@ func TestSeqScan_MultipleTuples(t *testing.T) {
 	dbFile := newMockDbFile(1, td, tuples)
 	tm.addTable(1, dbFile)
 
-	tid := &storage.TransactionID{}
+	tid := &transaction.TransactionID{}
 	seqScan, err := createTestSeqScan(tid, 1, tm, td)
 	if err != nil {
 		t.Fatalf("Failed to create sequential scan: %v", err)
@@ -636,7 +637,7 @@ func TestSeqScan_Close(t *testing.T) {
 	dbFile := newMockDbFile(1, td, []*tuple.Tuple{testTuple})
 	tm.addTable(1, dbFile)
 
-	tid := &storage.TransactionID{}
+	tid := &transaction.TransactionID{}
 	seqScan, err := createTestSeqScan(tid, 1, tm, td)
 	if err != nil {
 		t.Fatalf("Failed to create sequential scan: %v", err)
@@ -671,7 +672,7 @@ func TestSeqScan_IteratorError(t *testing.T) {
 	dbFile.iterator.hasError = true // Force iterator to return errors
 	tm.addTable(1, dbFile)
 
-	tid := &storage.TransactionID{}
+	tid := &transaction.TransactionID{}
 	seqScan, err := createTestSeqScan(tid, 1, tm, td)
 	if err != nil {
 		t.Fatalf("Failed to create sequential scan: %v", err)
@@ -691,7 +692,7 @@ func TestSeqScan_ReadNext_IteratorNotInitialized(t *testing.T) {
 	dbFile := newMockDbFile(1, td, []*tuple.Tuple{})
 	tm.addTable(1, dbFile)
 
-	tid := &storage.TransactionID{}
+	tid := &transaction.TransactionID{}
 	seqScan, err := createTestSeqScan(tid, 1, tm, td)
 	if err != nil {
 		t.Fatalf("Failed to create sequential scan: %v", err)
