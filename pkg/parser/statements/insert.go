@@ -6,10 +6,11 @@ import (
 	"strings"
 )
 
+// InsertStatement represents a SQL INSERT statement with table name, field names, and values.
 type InsertStatement struct {
-	TableName string
-	Fields    []string
-	Values    [][]types.Field
+	TableName string          // The target table name for the INSERT operation
+	Fields    []string        // Column names to insert data into
+	Values    [][]types.Field // Rows of values to be inserted, each row contains fields matching the Fields slice
 }
 
 func NewInsertStatement(tableName string) *InsertStatement {
