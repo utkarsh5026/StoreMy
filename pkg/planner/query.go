@@ -3,9 +3,8 @@ package planner
 import (
 	"fmt"
 	"storemy/pkg/concurrency/transaction"
+	"storemy/pkg/memory"
 	"storemy/pkg/parser/statements"
-	"storemy/pkg/storage/page"
-	"storemy/pkg/tables"
 )
 
 type Plan interface {
@@ -13,11 +12,11 @@ type Plan interface {
 }
 
 type QueryPlanner struct {
-	tableManager *tables.TableManager
-	pageStore    *page.PageStore
+	tableManager *memory.TableManager
+	pageStore    *memory.PageStore
 }
 
-func NewQueryPlanner(t *tables.TableManager, ps *page.PageStore) *QueryPlanner {
+func NewQueryPlanner(t *memory.TableManager, ps *memory.PageStore) *QueryPlanner {
 	return &QueryPlanner{
 		tableManager: t,
 		pageStore:    ps,
