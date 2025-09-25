@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"storemy/pkg/concurrency/transaction"
 	"storemy/pkg/iterator"
-	"storemy/pkg/tables"
+	"storemy/pkg/memory"
 	"storemy/pkg/tuple"
 )
 
@@ -16,10 +16,10 @@ type SequentialScan struct {
 	tableID      int
 	fileIter     iterator.DbFileIterator
 	tupleDesc    *tuple.TupleDescription
-	tableManager *tables.TableManager
+	tableManager *memory.TableManager
 }
 
-func NewSeqScan(tid *transaction.TransactionID, tableID int, tm *tables.TableManager) (*SequentialScan, error) {
+func NewSeqScan(tid *transaction.TransactionID, tableID int, tm *memory.TableManager) (*SequentialScan, error) {
 	if tm == nil {
 		return nil, fmt.Errorf("tm cannot be nil")
 	}
