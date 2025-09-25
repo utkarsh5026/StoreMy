@@ -6,6 +6,8 @@ import (
 	"storemy/pkg/parser/statements"
 )
 
+// parseUpdateStatement parses a SQL UPDATE statement from the lexer.
+// It expects the format: UPDATE table_name [alias] SET column1=value1, column2=value2, ... [WHERE condition]
 func parseUpdateStatement(l *lexer.Lexer) (*statements.UpdateStatement, error) {
 	token := l.NextToken()
 	if err := expectToken(token, lexer.UPDATE); err != nil {
@@ -33,6 +35,8 @@ func parseUpdateStatement(l *lexer.Lexer) (*statements.UpdateStatement, error) {
 	return stmt, nil
 }
 
+// parseTableWithAlias parses a table name and optional alias from the lexer.
+// Supports formats: "table_name" or "table_name alias_name"
 func parseTableWithAlias(l *lexer.Lexer) (tableName, alias string, err error) {
 	token := l.NextToken()
 	if err := expectToken(token, lexer.IDENTIFIER); err != nil {
@@ -52,6 +56,9 @@ func parseTableWithAlias(l *lexer.Lexer) (tableName, alias string, err error) {
 	return tableName, alias, nil
 }
 
+// parseOptionalWhereClause parses an optional WHERE clause for an UPDATE statement.
+// If a WHERE token is found, it parses the condition and adds it to the statement.
+// If no WHERE clause is present, the token is put back and no error is returned.
 func parseOptionalWhereClause(l *lexer.Lexer, stmt *statements.UpdateStatement) error {
 	token := l.NextToken()
 	if token.Type == lexer.WHERE {
@@ -66,6 +73,9 @@ func parseOptionalWhereClause(l *lexer.Lexer, stmt *statements.UpdateStatement) 
 	return nil
 }
 
+// parseSetClauses parses one or more SET clauses in an UPDATE statement.
+// Expects the format: column1=value1, column2=value2, ...
+// Each clause must be a column name followed by '=' and a value.
 func parseSetClauses(l *lexer.Lexer, stmt *statements.UpdateStatement) error {
 	for {
 		token := l.NextToken()
@@ -90,7 +100,7 @@ func parseSetClauses(l *lexer.Lexer, stmt *statements.UpdateStatement) error {
 			continue
 		}
 
-		l.SetPos(token.Position) // Put token back
+		l.SetPos(token.Position)
 		break
 	}
 	return nil
