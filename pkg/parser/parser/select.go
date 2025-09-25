@@ -5,6 +5,7 @@ import (
 	"storemy/pkg/parser/lexer"
 	"storemy/pkg/parser/plan"
 	"storemy/pkg/parser/statements"
+	"strings"
 )
 
 func parseSelectStatement(l *lexer.Lexer) (*statements.SelectStatement, error) {
@@ -34,6 +35,7 @@ func parseSelect(l *lexer.Lexer, p *plan.SelectPlan) error {
 	}
 
 	for {
+		token = l.NextToken()
 		if token.Type == lexer.FROM {
 			l.SetPos(token.Position)
 			break
@@ -48,7 +50,7 @@ func parseSelect(l *lexer.Lexer, p *plan.SelectPlan) error {
 		}
 
 		if !consumeCommaIfPresent(l) {
-			return nil
+			break
 		}
 	}
 
@@ -58,7 +60,7 @@ func parseSelect(l *lexer.Lexer, p *plan.SelectPlan) error {
 func parseSelectField(l *lexer.Lexer, p *plan.SelectPlan, fieldToken lexer.Token) error {
 	nextToken := l.NextToken()
 	if nextToken.Type == lexer.LPAREN {
-		aggOp := fieldToken.Value
+		aggOp := strings.ToUpper(fieldToken.Value)
 		fieldToken := l.NextToken()
 		if err := expectToken(fieldToken, lexer.IDENTIFIER); err != nil {
 			return fmt.Errorf("expected field name in aggregate function")
@@ -68,10 +70,10 @@ func parseSelectField(l *lexer.Lexer, p *plan.SelectPlan, fieldToken lexer.Token
 		if err := expectToken(parenToken, lexer.RPAREN); err != nil {
 			return fmt.Errorf("expected closing parenthesis in aggregate function")
 		}
-		p.AddProjectField(fieldToken.Value, aggOp)
+		p.AddProjectField(strings.ToUpper(fieldToken.Value), aggOp)
 	} else {
 		l.SetPos(nextToken.Position)
-		p.AddProjectField(fieldToken.Value, "")
+		p.AddProjectField(strings.ToUpper(fieldToken.Value), "")
 	}
 	return nil
 }
@@ -93,7 +95,7 @@ func parseGroupBy(l *lexer.Lexer, p *plan.SelectPlan) error {
 		return fmt.Errorf("expected field name in GROUP BY, got %s", fieldToken.Value)
 	}
 
-	p.SetGroupBy(fieldToken.Value)
+	p.SetGroupBy(strings.ToUpper(fieldToken.Value))
 	return nil
 }
 
@@ -122,7 +124,7 @@ func parseOrderBy(l *lexer.Lexer, p *plan.SelectPlan) error {
 		l.SetPos(dirToken.Position)
 	}
 
-	p.AddOrderBy(fieldToken.Value, ascending)
+	p.AddOrderBy(strings.ToUpper(fieldToken.Value), ascending)
 	return nil
 }
 
@@ -149,12 +151,12 @@ func parseTable(l *lexer.Lexer, p *plan.SelectPlan) error {
 		return fmt.Errorf("expected table name, got %s", tableToken.Value)
 	}
 
-	tableName := tableToken.Value
+	tableName := strings.ToUpper(tableToken.Value)
 	alias := tableName
 
 	aliasToken := l.NextToken()
 	if aliasToken.Type == lexer.IDENTIFIER {
-		alias = aliasToken.Value
+		alias = strings.ToUpper(aliasToken.Value)
 	} else {
 		l.SetPos(aliasToken.Position)
 	}
@@ -201,7 +203,7 @@ func parseConditions(l *lexer.Lexer, p *plan.SelectPlan) error {
 			return err
 		}
 
-		if err := p.AddFilter(fieldToken.Value, pred, value); err != nil {
+		if err := p.AddFilter(strings.ToUpper(fieldToken.Value), pred, value); err != nil {
 			return err
 		}
 

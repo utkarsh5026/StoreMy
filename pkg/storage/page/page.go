@@ -1,7 +1,7 @@
 package page
 
 import (
-	"storemy/pkg/transaction"
+	"storemy/pkg/concurrency/transaction"
 	"storemy/pkg/tuple"
 )
 
