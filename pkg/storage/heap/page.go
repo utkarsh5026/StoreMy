@@ -4,7 +4,8 @@ import (
 	"bytes"
 	"fmt"
 	"io"
-	"storemy/pkg/storage"
+	"storemy/pkg/storage/page"
+	"storemy/pkg/transaction"
 	"storemy/pkg/tuple"
 	"storemy/pkg/types"
 	"sync"
@@ -17,25 +18,25 @@ const (
 // HeapPage stores pages of HeapFiles and implements the Page interface
 // It manages tuples within a single page using a header bitmap to track occupied slots
 type HeapPage struct {
-	pageID    *HeapPageID             // ID of this page
-	tupleDesc *tuple.TupleDescription // Schema of tuples on this page
-	header    []byte                  // Bitmap indicating which slots are occupied
-	tuples    []*tuple.Tuple          // Array of tuples (nil means empty slot)
-	numSlots  int                     // Total number of tuple slots on this page
-	dirtier   *storage.TransactionID  // Transaction that dirtied this page
-	oldData   []byte                  // Before image for recovery
-	mutex     sync.RWMutex            // Protects concurrent access
+	pageID    *HeapPageID                // ID of this page
+	tupleDesc *tuple.TupleDescription    // Schema of tuples on this page
+	header    []byte                     // Bitmap indicating which slots are occupied
+	tuples    []*tuple.Tuple             // Array of tuples (nil means empty slot)
+	numSlots  int                        // Total number of tuple slots on this page
+	dirtier   *transaction.TransactionID // Transaction that dirtied this page
+	oldData   []byte                     // Before image for recovery
+	mutex     sync.RWMutex               // Protects concurrent access
 }
 
 func NewHeapPage(pid *HeapPageID, data []byte, td *tuple.TupleDescription) (*HeapPage, error) {
-	if len(data) != storage.PageSize {
-		return nil, fmt.Errorf("invalid page data size: expected %d, got %d", storage.PageSize, len(data))
+	if len(data) != page.PageSize {
+		return nil, fmt.Errorf("invalid page data size: expected %d, got %d", page.PageSize, len(data))
 	}
 
 	hp := &HeapPage{
 		pageID:    pid,
 		tupleDesc: td,
-		oldData:   make([]byte, storage.PageSize),
+		oldData:   make([]byte, page.PageSize),
 	}
 
 	hp.numSlots = hp.getNumTuples()
@@ -64,14 +65,14 @@ func (hp *HeapPage) GetID() tuple.PageID {
 }
 
 // IsDirty returns the transaction that last dirtied this page, or nil if clean
-func (hp *HeapPage) IsDirty() *storage.TransactionID {
+func (hp *HeapPage) IsDirty() *transaction.TransactionID {
 	hp.mutex.RLock()
 	defer hp.mutex.RUnlock()
 	return hp.dirtier
 }
 
 // MarkDirty marks this page as dirty/clean and records the transaction
-func (hp *HeapPage) MarkDirty(dirty bool, tid *storage.TransactionID) {
+func (hp *HeapPage) MarkDirty(dirty bool, tid *transaction.TransactionID) {
 	hp.mutex.Lock()
 	defer hp.mutex.Unlock()
 
@@ -108,7 +109,7 @@ func (hp *HeapPage) GetPageData() []byte {
 	}
 
 	currentSize := buffer.Len()
-	padding := storage.PageSize - currentSize
+	padding := page.PageSize - currentSize
 	if padding > 0 {
 		buffer.Write(make([]byte, padding))
 	}
@@ -117,7 +118,7 @@ func (hp *HeapPage) GetPageData() []byte {
 }
 
 // GetBeforeImage returns a page with the before image data
-func (hp *HeapPage) GetBeforeImage() storage.Page {
+func (hp *HeapPage) GetBeforeImage() page.Page {
 	hp.mutex.RLock()
 	defer hp.mutex.RUnlock()
 
@@ -215,7 +216,7 @@ func (hp *HeapPage) GetTupleAt(idx int) (*tuple.Tuple, error) {
 // The +1 accounts for the header bit per tuple
 func (hp *HeapPage) getNumTuples() int {
 	tupleSize := hp.tupleDesc.GetSize()
-	return int((storage.PageSize * BitsPerByte)) / int((tupleSize*BitsPerByte + 1))
+	return int((page.PageSize * BitsPerByte)) / int((tupleSize*BitsPerByte + 1))
 }
 
 // getHeaderSize calculates the number of bytes needed for the header bitmap
