@@ -6,13 +6,10 @@ import (
 	"testing"
 )
 
-
 // INSERT statement tests
 
 func TestParseStatement_BasicInsert(t *testing.T) {
-	parser := &Parser{}
-
-	stmt, err := parser.ParseStatement("INSERT INTO users VALUES ('john', 25)")
+	stmt, err := ParseStatement("INSERT INTO users VALUES ('john', 25)")
 	if err != nil {
 		t.Fatalf("unexpected error: %s", err.Error())
 	}
@@ -36,9 +33,7 @@ func TestParseStatement_BasicInsert(t *testing.T) {
 }
 
 func TestParseStatement_InsertWithFields(t *testing.T) {
-	parser := &Parser{}
-
-	stmt, err := parser.ParseStatement("INSERT INTO users (name, age) VALUES ('john', 25)")
+	stmt, err := ParseStatement("INSERT INTO users (name, age) VALUES ('john', 25)")
 	if err != nil {
 		t.Fatalf("unexpected error: %s", err.Error())
 	}
@@ -65,9 +60,7 @@ func TestParseStatement_InsertWithFields(t *testing.T) {
 }
 
 func TestParseStatement_InsertMultipleValues(t *testing.T) {
-	parser := &Parser{}
-
-	stmt, err := parser.ParseStatement("INSERT INTO users VALUES ('john', 25), ('jane', 30)")
+	stmt, err := ParseStatement("INSERT INTO users VALUES ('john', 25), ('jane', 30)")
 	if err != nil {
 		t.Fatalf("unexpected error: %s", err.Error())
 	}
