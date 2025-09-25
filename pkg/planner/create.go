@@ -4,16 +4,16 @@ import (
 	"fmt"
 
 	"storemy/pkg/concurrency/transaction"
+	"storemy/pkg/memory"
 	"storemy/pkg/parser/statements"
 	"storemy/pkg/storage/heap"
-	"storemy/pkg/tables"
 	"storemy/pkg/tuple"
 	"storemy/pkg/types"
 )
 
 type CreateTablePlan struct {
 	Statement    *statements.CreateStatement
-	tableManager *tables.TableManager
+	tableManager *memory.TableManager
 	tid          *transaction.TransactionID
 }
 
@@ -28,7 +28,7 @@ func (r *DDLResult) String() string {
 
 func NewCreateTablePlan(
 	stmt *statements.CreateStatement,
-	t *tables.TableManager,
+	t *memory.TableManager,
 	tid *transaction.TransactionID) *CreateTablePlan {
 	return &CreateTablePlan{
 		Statement:    stmt,
