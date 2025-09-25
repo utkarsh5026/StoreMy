@@ -618,16 +618,6 @@ func TestHeapPage_ConcurrentAccess(t *testing.T) {
 	}
 }
 
-func mustCreateTupleDesc() *tuple.TupleDescription {
-	types := []types.Type{types.IntType, types.StringType}
-	fields := []string{"id", "name"}
-	td, err := tuple.NewTupleDesc(types, fields)
-	if err != nil {
-		panic(err)
-	}
-	return td
-}
-
 func mustCreateTupleDesc2() *tuple.TupleDescription {
 	types := []types.Type{types.StringType, types.StringType, types.IntType}
 	fields := []string{"first", "last", "age"}
@@ -636,11 +626,4 @@ func mustCreateTupleDesc2() *tuple.TupleDescription {
 		panic(err)
 	}
 	return td
-}
-
-func createTestTuple(td *tuple.TupleDescription, id int32, name string) *tuple.Tuple {
-	t := tuple.NewTuple(td)
-	t.SetField(0, types.NewIntField(id))
-	t.SetField(1, types.NewStringField(name, 128))
-	return t
 }
