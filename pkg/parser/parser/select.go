@@ -133,26 +133,34 @@ func parseFrom(l *lexer.Lexer, p *plan.SelectPlan) error {
 	}
 
 	for {
-		tableToken := l.NextToken()
-		if err := expectToken(tableToken, lexer.IDENTIFIER); err != nil {
-			return fmt.Errorf("expected table name, got %s", tableToken.Value)
+		if err := parseTable(l, p); err != nil {
+			return err
 		}
 
-		tableName := tableToken.Value
-		alias := tableName // Default alias is table name
-
-		aliasToken := l.NextToken()
-		if aliasToken.Type == lexer.IDENTIFIER {
-			alias = aliasToken.Value
-		} else {
-			l.SetPos(aliasToken.Position)
-		}
-
-		p.AddScan(tableName, alias)
 		if !consumeCommaIfPresent(l) {
 			return nil
 		}
 	}
+}
+
+func parseTable(l *lexer.Lexer, p *plan.SelectPlan) error {
+	tableToken := l.NextToken()
+	if err := expectToken(tableToken, lexer.IDENTIFIER); err != nil {
+		return fmt.Errorf("expected table name, got %s", tableToken.Value)
+	}
+
+	tableName := tableToken.Value
+	alias := tableName
+
+	aliasToken := l.NextToken()
+	if aliasToken.Type == lexer.IDENTIFIER {
+		alias = aliasToken.Value
+	} else {
+		l.SetPos(aliasToken.Position)
+	}
+
+	p.AddScan(tableName, alias)
+	return nil
 }
 
 func parseWhere(l *lexer.Lexer, p *plan.SelectPlan) error {
