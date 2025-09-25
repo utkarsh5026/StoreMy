@@ -750,6 +750,306 @@ func TestTableManager_ConcurrentOperations(t *testing.T) {
 	}
 }
 
+func TestTableManager_TableExists(t *testing.T) {
+	tm := NewTableManager()
+	
+	// Test with empty manager
+	if tm.TableExists("non_existing") {
+		t.Error("TableExists should return false for non-existing table in empty manager")
+	}
+	
+	// Add a table
+	dbFile := newMockDbFile(1, []types.Type{types.IntType}, []string{"id"})
+	err := tm.AddTable(dbFile, "users", "id")
+	if err != nil {
+		t.Fatalf("Failed to add table: %v", err)
+	}
+	
+	tests := []struct {
+		name      string
+		tableName string
+		expected  bool
+	}{
+		{
+			name:      "Existing table",
+			tableName: "users",
+			expected:  true,
+		},
+		{
+			name:      "Non-existing table",
+			tableName: "products",
+			expected:  false,
+		},
+		{
+			name:      "Empty table name",
+			tableName: "",
+			expected:  false,
+		},
+		{
+			name:      "Case sensitive - different case",
+			tableName: "USERS",
+			expected:  false,
+		},
+		{
+			name:      "Table name with spaces",
+			tableName: " users ",
+			expected:  false,
+		},
+	}
+	
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := tm.TableExists(tt.tableName)
+			if result != tt.expected {
+				t.Errorf("TableExists(%q) = %v, expected %v", tt.tableName, result, tt.expected)
+			}
+		})
+	}
+	
+	// Test after removing table
+	err = tm.RemoveTable("users")
+	if err != nil {
+		t.Fatalf("Failed to remove table: %v", err)
+	}
+	
+	if tm.TableExists("users") {
+		t.Error("TableExists should return false after table is removed")
+	}
+}
+
+func TestTableManager_RenameTable(t *testing.T) {
+	tests := []struct {
+		name          string
+		setupFunc     func() *TableManager
+		oldName       string
+		newName       string
+		expectedError bool
+		errorContains string
+	}{
+		{
+			name: "Successful rename",
+			setupFunc: func() *TableManager {
+				tm := NewTableManager()
+				dbFile := newMockDbFile(1, []types.Type{types.IntType}, []string{"id"})
+				tm.AddTable(dbFile, "old_table", "id")
+				return tm
+			},
+			oldName:       "old_table",
+			newName:       "new_table",
+			expectedError: false,
+		},
+		{
+			name: "Empty old name",
+			setupFunc: func() *TableManager {
+				return NewTableManager()
+			},
+			oldName:       "",
+			newName:       "new_table",
+			expectedError: true,
+			errorContains: "table names cannot be empty",
+		},
+		{
+			name: "Empty new name",
+			setupFunc: func() *TableManager {
+				tm := NewTableManager()
+				dbFile := newMockDbFile(1, []types.Type{types.IntType}, []string{"id"})
+				tm.AddTable(dbFile, "old_table", "id")
+				return tm
+			},
+			oldName:       "old_table",
+			newName:       "",
+			expectedError: true,
+			errorContains: "table names cannot be empty",
+		},
+		{
+			name: "New name with leading whitespace",
+			setupFunc: func() *TableManager {
+				tm := NewTableManager()
+				dbFile := newMockDbFile(1, []types.Type{types.IntType}, []string{"id"})
+				tm.AddTable(dbFile, "old_table", "id")
+				return tm
+			},
+			oldName:       "old_table",
+			newName:       " new_table",
+			expectedError: true,
+			errorContains: "new table name cannot have leading or trailing whitespace",
+		},
+		{
+			name: "New name with trailing whitespace",
+			setupFunc: func() *TableManager {
+				tm := NewTableManager()
+				dbFile := newMockDbFile(1, []types.Type{types.IntType}, []string{"id"})
+				tm.AddTable(dbFile, "old_table", "id")
+				return tm
+			},
+			oldName:       "old_table",
+			newName:       "new_table ",
+			expectedError: true,
+			errorContains: "new table name cannot have leading or trailing whitespace",
+		},
+		{
+			name: "Old table does not exist",
+			setupFunc: func() *TableManager {
+				return NewTableManager()
+			},
+			oldName:       "non_existing",
+			newName:       "new_table",
+			expectedError: true,
+			errorContains: "table 'non_existing' not found",
+		},
+		{
+			name: "New name already exists",
+			setupFunc: func() *TableManager {
+				tm := NewTableManager()
+				dbFile1 := newMockDbFile(1, []types.Type{types.IntType}, []string{"id"})
+				dbFile2 := newMockDbFile(2, []types.Type{types.StringType}, []string{"name"})
+				tm.AddTable(dbFile1, "table1", "id")
+				tm.AddTable(dbFile2, "table2", "name")
+				return tm
+			},
+			oldName:       "table1",
+			newName:       "table2",
+			expectedError: true,
+			errorContains: "table 'table2' already exists",
+		},
+	}
+	
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tm := tt.setupFunc()
+			
+			err := tm.RenameTable(tt.oldName, tt.newName)
+			
+			if tt.expectedError {
+				if err == nil {
+					t.Errorf("Expected error but got none")
+					return
+				}
+				if tt.errorContains != "" && !containsString(err.Error(), tt.errorContains) {
+					t.Errorf("Expected error containing %q, got %q", tt.errorContains, err.Error())
+				}
+				return
+			}
+			
+			if err != nil {
+				t.Errorf("Unexpected error: %v", err)
+				return
+			}
+			
+			// Verify the rename was successful
+			if !tm.TableExists(tt.newName) {
+				t.Errorf("New table name %s should exist after rename", tt.newName)
+			}
+			
+			if tm.TableExists(tt.oldName) {
+				t.Errorf("Old table name %s should not exist after rename", tt.oldName)
+			}
+			
+			// Verify table info was updated correctly
+			tableInfo, exists := tm.nameToTable[tt.newName]
+			if !exists {
+				t.Errorf("Table info not found for new name %s", tt.newName)
+				return
+			}
+			
+			if tableInfo.Name != tt.newName {
+				t.Errorf("Table info name should be updated to %s, got %s", tt.newName, tableInfo.Name)
+			}
+			
+			// Verify ID mapping is still correct
+			tableID := tableInfo.GetID()
+			tableInfoByID, exists := tm.idToTable[tableID]
+			if !exists {
+				t.Errorf("Table info not found by ID %d after rename", tableID)
+				return
+			}
+			
+			if tableInfoByID != tableInfo {
+				t.Error("Table info reference mismatch between name and ID maps after rename")
+			}
+		})
+	}
+}
+
+func TestTableManager_RenameTable_IntegrityPreserved(t *testing.T) {
+	tm := NewTableManager()
+	
+	// Add multiple tables
+	dbFile1 := newMockDbFile(1, []types.Type{types.IntType}, []string{"id"})
+	dbFile2 := newMockDbFile(2, []types.Type{types.StringType}, []string{"name"})
+	tm.AddTable(dbFile1, "users", "id")
+	tm.AddTable(dbFile2, "products", "name")
+	
+	// Rename one table
+	err := tm.RenameTable("users", "customers")
+	if err != nil {
+		t.Fatalf("Failed to rename table: %v", err)
+	}
+	
+	// Verify integrity is maintained
+	err = tm.ValidateIntegrity()
+	if err != nil {
+		t.Errorf("Integrity validation failed after rename: %v", err)
+	}
+	
+	// Verify all expected tables exist
+	expectedTables := []string{"customers", "products"}
+	allNames := tm.GetAllTableNames()
+	
+	if len(allNames) != len(expectedTables) {
+		t.Errorf("Expected %d tables, got %d", len(expectedTables), len(allNames))
+	}
+	
+	nameMap := make(map[string]bool)
+	for _, name := range allNames {
+		nameMap[name] = true
+	}
+	
+	for _, expected := range expectedTables {
+		if !nameMap[expected] {
+			t.Errorf("Expected table %s not found after rename", expected)
+		}
+	}
+}
+
+func TestTableManager_TableExists_ConcurrentAccess(t *testing.T) {
+	tm := NewTableManager()
+	
+	// Add a table
+	dbFile := newMockDbFile(1, []types.Type{types.IntType}, []string{"id"})
+	err := tm.AddTable(dbFile, "concurrent_test", "id")
+	if err != nil {
+		t.Fatalf("Failed to add table: %v", err)
+	}
+	
+	numGoroutines := 50
+	numChecksPerGoroutine := 100
+	
+	var wg sync.WaitGroup
+	wg.Add(numGoroutines)
+	
+	// Run concurrent TableExists checks
+	for i := 0; i < numGoroutines; i++ {
+		go func() {
+			defer wg.Done()
+			
+			for j := 0; j < numChecksPerGoroutine; j++ {
+				// Check existing table
+				if !tm.TableExists("concurrent_test") {
+					t.Errorf("TableExists should return true for existing table")
+				}
+				
+				// Check non-existing table
+				if tm.TableExists("non_existing") {
+					t.Errorf("TableExists should return false for non-existing table")
+				}
+			}
+		}()
+	}
+	
+	wg.Wait()
+}
+
 // Helper function to check if a string contains a substring
 func containsString(s, substr string) bool {
 	return len(s) >= len(substr) && (s == substr || (len(s) > len(substr) && containsSubstring(s, substr)))
