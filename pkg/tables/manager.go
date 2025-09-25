@@ -2,7 +2,7 @@ package tables
 
 import (
 	"fmt"
-	"storemy/pkg/storage"
+	"storemy/pkg/storage/page"
 	"storemy/pkg/tuple"
 	"sync"
 )
@@ -22,7 +22,7 @@ func NewTableManager() *TableManager {
 }
 
 // AddTable adds a new table to the catalog, replacing any existing table with the same name or ID
-func (tm *TableManager) AddTable(f storage.DbFile, name, pKey string) error {
+func (tm *TableManager) AddTable(f page.DbFile, name, pKey string) error {
 	if f == nil {
 		return fmt.Errorf("file cannot be nil")
 	}
@@ -92,7 +92,7 @@ func (tm *TableManager) Clear() {
 }
 
 // GetDbFile returns the DbFile for the table with the specified ID
-func (tm *TableManager) GetDbFile(tableID int) (storage.DbFile, error) {
+func (tm *TableManager) GetDbFile(tableID int) (page.DbFile, error) {
 	ti, err := tm.getTableInfo(tableID)
 	if err != nil {
 		return nil, err

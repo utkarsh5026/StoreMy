@@ -2,20 +2,20 @@ package tables
 
 import (
 	"fmt"
-	"storemy/pkg/storage"
+	"storemy/pkg/storage/page"
 	"storemy/pkg/tuple"
 )
 
 // TableInfo holds metadata about a table
 type TableInfo struct {
-	File       storage.DbFile          // The file storing the table data
+	File       page.DbFile             // The file storing the table data
 	Name       string                  // The table name
 	PrimaryKey string                  // Primary key field name
 	TupleDesc  *tuple.TupleDescription // Schema of the table
 }
 
 // NewTableInfo creates a new table info instance
-func NewTableInfo(file storage.DbFile, name, primaryKey string) *TableInfo {
+func NewTableInfo(file page.DbFile, name, primaryKey string) *TableInfo {
 	return &TableInfo{
 		File:       file,
 		Name:       name,
