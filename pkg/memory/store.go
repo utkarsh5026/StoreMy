@@ -92,3 +92,17 @@ func (p *PageStore) DeleteTuple(tid *transaction.TransactionID, t *tuple.Tuple) 
 
 	return nil
 }
+
+func (p *PageStore) UpdateTuple(tid *transaction.TransactionID, oldTuple *tuple.Tuple, newTuple *tuple.Tuple) error {
+	if err := p.DeleteTuple(tid, oldTuple); err != nil {
+		return fmt.Errorf("failed to delete old tuple: %v", err)
+	}
+
+	tableID := oldTuple.RecordID.PageID.GetTableID()
+	if err := p.InsertTuple(tid, tableID, newTuple); err != nil {
+		p.InsertTuple(tid, tableID, oldTuple)
+		return fmt.Errorf("failed to insert updated tuple: %v", err)
+	}
+
+	return nil
+}
