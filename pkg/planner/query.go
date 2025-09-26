@@ -27,6 +27,10 @@ func (qp *QueryPlanner) Plan(stmt statements.Statement, tid *transaction.Transac
 	switch s := stmt.(type) {
 	case *statements.CreateStatement:
 		return NewCreateTablePlan(s, qp.tableManager, tid), nil
+	case *statements.InsertStatement:
+		return NewInsertPlan(s, qp.pageStore, tid, qp.tableManager), nil
+	case *statements.DeleteStatement:
+		return NewDeletePlan(s, qp.pageStore, tid, qp.tableManager), nil
 	default:
 		return nil, fmt.Errorf("unsupported statement type: %T", stmt)
 	}
