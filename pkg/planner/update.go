@@ -38,34 +38,19 @@ func (p *UpdatePlan) Execute() (any, error) {
 		return nil, err
 	}
 
-	scanOp, err := query.NewSeqScan(p.tid, tableID, p.tableManager)
+	queryPlan, err := p.buildQueryPlan(tableID)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create table scan: %v", err)
+		return nil, err
 	}
 
-	var currentOp iterator.DbIterator = scanOp
-
-	if p.statement.WhereClause != nil {
-		predicate, err := buildPredicateFromFilterNode(p.statement.WhereClause, scanOp.GetTupleDesc())
-		if err != nil {
-			return nil, fmt.Errorf("failed to build WHERE predicate: %v", err)
-		}
-
-		filterOp, err := query.NewFilter(predicate, currentOp)
-		if err != nil {
-			return nil, fmt.Errorf("failed to create filter: %v", err)
-		}
-		currentOp = filterOp
-	}
-
-	if err := currentOp.Open(); err != nil {
+	if err := queryPlan.Open(); err != nil {
 		return nil, fmt.Errorf("failed to open update query: %v", err)
 	}
-	defer currentOp.Close()
+	defer queryPlan.Close()
 
 	tuplesToUpdate := make([]*tuple.Tuple, 0)
 	for {
-		hasNext, err := currentOp.HasNext()
+		hasNext, err := queryPlan.HasNext()
 		if err != nil {
 			return nil, fmt.Errorf("error during update scan: %v", err)
 		}
@@ -73,7 +58,7 @@ func (p *UpdatePlan) Execute() (any, error) {
 			break
 		}
 
-		t, err := currentOp.Next()
+		t, err := queryPlan.Next()
 		if err != nil {
 			return nil, fmt.Errorf("error fetching tuple to update: %v", err)
 		}
@@ -141,4 +126,29 @@ func (p *UpdatePlan) findFieldIndex(fieldName string, tupleDesc *tuple.TupleDesc
 		}
 	}
 	return -1, fmt.Errorf("column %s not found", fieldName)
+}
+
+// buildQueryPlan creates the query execution plan for finding rows to update
+func (p *UpdatePlan) buildQueryPlan(tableID int) (iterator.DbIterator, error) {
+	scanOp, err := query.NewSeqScan(p.tid, tableID, p.tableManager)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create table scan: %v", err)
+	}
+
+	var currentOp iterator.DbIterator = scanOp
+	where := p.statement.WhereClause
+	if where != nil {
+		predicate, err := buildPredicateFromFilterNode(where, scanOp.GetTupleDesc())
+		if err != nil {
+			return nil, fmt.Errorf("failed to build WHERE predicate: %v", err)
+		}
+
+		filterOp, err := query.NewFilter(predicate, currentOp)
+		if err != nil {
+			return nil, fmt.Errorf("failed to create filter: %v", err)
+		}
+		currentOp = filterOp
+	}
+
+	return currentOp, nil
 }
