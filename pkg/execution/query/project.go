@@ -26,24 +26,11 @@ type Project struct {
 
 // NewProject creates a new Project operator that selects specific fields from input tuples.
 func NewProject(fieldList []int, typesList []types.Type, child iterator.DbIterator) (*Project, error) {
-	if child == nil {
-		return nil, fmt.Errorf("child operator cannot be nil")
-	}
-
-	if len(fieldList) != len(typesList) {
-		return nil, fmt.Errorf("field list length (%d) must match types list length (%d)",
-			len(fieldList), len(typesList))
-	}
-
-	if len(fieldList) == 0 {
-		return nil, fmt.Errorf("must project at least one field")
+	if err := validateProjectInputs(fieldList, typesList, child); err != nil {
+		return nil, err
 	}
 
 	childTupleDesc := child.GetTupleDesc()
-	if childTupleDesc == nil {
-		return nil, fmt.Errorf("child operator has nil tuple descriptor")
-	}
-
 	fieldNames := make([]string, len(fieldList))
 	for i, fieldIndex := range fieldList {
 		if fieldIndex < 0 || fieldIndex >= childTupleDesc.NumFields() {
@@ -167,4 +154,26 @@ func (p *Project) readNext() (*tuple.Tuple, error) {
 
 	projectedTuple.RecordID = childTuple.RecordID
 	return projectedTuple, nil
+}
+
+// validateProjectInputs performs basic validation of constructor parameters
+func validateProjectInputs(fieldList []int, typesList []types.Type, child iterator.DbIterator) error {
+	if child == nil {
+		return fmt.Errorf("child operator cannot be nil")
+	}
+
+	if len(fieldList) != len(typesList) {
+		return fmt.Errorf("field list length (%d) must match types list length (%d)",
+			len(fieldList), len(typesList))
+	}
+
+	if len(fieldList) == 0 {
+		return fmt.Errorf("must project at least one field")
+	}
+
+	if child.GetTupleDesc() == nil {
+		return fmt.Errorf("child operator has nil tuple descriptor")
+	}
+
+	return nil
 }
