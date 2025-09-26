@@ -193,6 +193,12 @@ func (hf *HeapFile) AddTuple(tid *transaction.TransactionID, t *tuple.Tuple) ([]
 		if heapPage.GetNumEmptySlots() > 0 {
 			if err := heapPage.AddTuple(t); err == nil {
 				heapPage.MarkDirty(true, tid)
+				
+				// Write the modified page back to disk
+				if err := hf.WritePage(heapPage); err != nil {
+					return nil, fmt.Errorf("failed to write modified page: %v", err)
+				}
+				
 				return []page.Page{heapPage}, nil
 			}
 		}
