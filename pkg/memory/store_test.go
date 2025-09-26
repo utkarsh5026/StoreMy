@@ -8,6 +8,7 @@ import (
 	"storemy/pkg/storage/page"
 	"storemy/pkg/tuple"
 	"storemy/pkg/types"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -201,7 +202,9 @@ func TestNewPageStore(t *testing.T) {
 		t.Error("tableManager should be set correctly")
 	}
 
-	// Note: numPages field doesn't exist in the current implementation
+	if ps.numPages <= 0 {
+		t.Error("numPages should be set to a positive value")
+	}
 
 	if len(ps.pageCache) != 0 {
 		t.Errorf("pageCache should be empty, got %d entries", len(ps.pageCache))
@@ -1553,4 +1556,457 @@ func TestPageStore_FlushAllPages_WriteFailure(t *testing.T) {
 	
 	// In a real implementation, you would create a mock that fails WritePage
 	// and verify that FlushAllPages returns the error appropriately
+}
+
+// Tests for GetPage method
+func TestPageStore_GetPage_Success(t *testing.T) {
+	tm := NewTableManager()
+	ps := NewPageStore(tm)
+	
+	// Create and add a mock table
+	dbFile := newMockDbFileForPageStore(1, []types.Type{types.IntType}, []string{"id"})
+	err := tm.AddTable(dbFile, "test_table", "id")
+	if err != nil {
+		t.Fatalf("Failed to add table: %v", err)
+	}
+
+	tid := transaction.NewTransactionID()
+	pageID := heap.NewHeapPageID(1, 0)
+
+	// Test GetPage with ReadOnly permission
+	page, err := ps.GetPage(tid, pageID, ReadOnly)
+	if err != nil {
+		t.Errorf("GetPage failed: %v", err)
+	}
+	if page == nil {
+		t.Error("Expected page to be returned, got nil")
+	}
+	if page.GetID() != pageID {
+		t.Errorf("Expected page ID %v, got %v", pageID, page.GetID())
+	}
+
+	// Verify page was cached
+	if len(ps.pageCache) != 1 {
+		t.Errorf("Expected 1 page in cache, got %d", len(ps.pageCache))
+	}
+
+	// Verify transaction tracking
+	txInfo, exists := ps.transactions[tid]
+	if !exists {
+		t.Error("Expected transaction to be tracked")
+	}
+	if _, locked := txInfo.lockedPages[pageID]; !locked {
+		t.Error("Expected page to be locked by transaction")
+	}
+	if txInfo.lockedPages[pageID] != ReadOnly {
+		t.Errorf("Expected ReadOnly permission, got %v", txInfo.lockedPages[pageID])
+	}
+}
+
+func TestPageStore_GetPage_CacheHit(t *testing.T) {
+	tm := NewTableManager()
+	ps := NewPageStore(tm)
+	
+	// Create and add a mock table
+	dbFile := newMockDbFileForPageStore(1, []types.Type{types.IntType}, []string{"id"})
+	err := tm.AddTable(dbFile, "test_table", "id")
+	if err != nil {
+		t.Fatalf("Failed to add table: %v", err)
+	}
+
+	tid := transaction.NewTransactionID()
+	pageID := heap.NewHeapPageID(1, 0)
+
+	// First call - should load from disk
+	page1, err := ps.GetPage(tid, pageID, ReadOnly)
+	if err != nil {
+		t.Fatalf("First GetPage failed: %v", err)
+	}
+
+	// Second call - should hit cache
+	page2, err := ps.GetPage(tid, pageID, ReadWrite)
+	if err != nil {
+		t.Errorf("Second GetPage failed: %v", err)
+	}
+
+	// Should be the same page instance
+	if page1.GetID() != page2.GetID() {
+		t.Error("Expected same page ID from cache hit")
+	}
+
+	// Verify cache size didn't grow
+	if len(ps.pageCache) != 1 {
+		t.Errorf("Expected 1 page in cache after cache hit, got %d", len(ps.pageCache))
+	}
+
+	// Verify permission was updated in transaction info
+	txInfo := ps.transactions[tid]
+	if txInfo.lockedPages[pageID] != ReadWrite {
+		t.Errorf("Expected permission to be updated to ReadWrite, got %v", txInfo.lockedPages[pageID])
+	}
+}
+
+func TestPageStore_GetPage_TableNotFound(t *testing.T) {
+	tm := NewTableManager()
+	ps := NewPageStore(tm)
+
+	tid := transaction.NewTransactionID()
+	pageID := heap.NewHeapPageID(999, 0) // Non-existent table
+
+	// Test with non-existent table
+	page, err := ps.GetPage(tid, pageID, ReadOnly)
+	if err == nil {
+		t.Error("Expected error for non-existent table")
+	}
+	if page != nil {
+		t.Error("Expected nil page for non-existent table")
+	}
+
+	expectedErrPrefix := "table with ID 999 not found"
+	if !contains(err.Error(), expectedErrPrefix) {
+		t.Errorf("Expected error containing %q, got %q", expectedErrPrefix, err.Error())
+	}
+}
+
+func TestPageStore_GetPage_ReadPageFailure(t *testing.T) {
+	// This test would require a mock that can simulate read failures
+	// For now, we'll test the basic structure
+	tm := NewTableManager()
+	ps := NewPageStore(tm)
+	
+	// Create and add a mock table
+	dbFile := newMockDbFileForPageStore(1, []types.Type{types.IntType}, []string{"id"})
+	err := tm.AddTable(dbFile, "test_table", "id")
+	if err != nil {
+		t.Fatalf("Failed to add table: %v", err)
+	}
+
+	tid := transaction.NewTransactionID()
+	pageID := heap.NewHeapPageID(1, 0)
+
+	// With our current mock, this should succeed
+	page, err := ps.GetPage(tid, pageID, ReadOnly)
+	if err != nil {
+		t.Errorf("GetPage failed unexpectedly: %v", err)
+	}
+	if page == nil {
+		t.Error("Expected page to be returned")
+	}
+}
+
+func TestPageStore_GetPage_PermissionTypes(t *testing.T) {
+	tm := NewTableManager()
+	ps := NewPageStore(tm)
+	
+	// Create and add a mock table
+	dbFile := newMockDbFileForPageStore(1, []types.Type{types.IntType}, []string{"id"})
+	err := tm.AddTable(dbFile, "test_table", "id")
+	if err != nil {
+		t.Fatalf("Failed to add table: %v", err)
+	}
+
+	pageID := heap.NewHeapPageID(1, 0)
+
+	tests := []struct {
+		name       string
+		permission Permissions
+	}{
+		{"ReadOnly", ReadOnly},
+		{"ReadWrite", ReadWrite},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tid := transaction.NewTransactionID()
+			
+			page, err := ps.GetPage(tid, pageID, tt.permission)
+			if err != nil {
+				t.Errorf("GetPage failed for %s permission: %v", tt.name, err)
+			}
+			if page == nil {
+				t.Errorf("Expected page for %s permission", tt.name)
+			}
+
+			// Verify transaction tracking
+			txInfo := ps.transactions[tid]
+			if txInfo.lockedPages[pageID] != tt.permission {
+				t.Errorf("Expected %s permission, got %v", tt.name, txInfo.lockedPages[pageID])
+			}
+		})
+	}
+}
+
+func TestPageStore_GetPage_MultipleTransactions(t *testing.T) {
+	tm := NewTableManager()
+	ps := NewPageStore(tm)
+	
+	// Create and add a mock table
+	dbFile := newMockDbFileForPageStore(1, []types.Type{types.IntType}, []string{"id"})
+	err := tm.AddTable(dbFile, "test_table", "id")
+	if err != nil {
+		t.Fatalf("Failed to add table: %v", err)
+	}
+
+	pageID1 := heap.NewHeapPageID(1, 0)
+	pageID2 := heap.NewHeapPageID(1, 1)
+
+	// Create multiple transactions
+	tid1 := transaction.NewTransactionID()
+	tid2 := transaction.NewTransactionID()
+
+	// First transaction accesses page 1
+	page1, err := ps.GetPage(tid1, pageID1, ReadOnly)
+	if err != nil {
+		t.Fatalf("GetPage failed for transaction 1: %v", err)
+	}
+	if page1 == nil {
+		t.Fatal("Expected page for transaction 1")
+	}
+
+	// Second transaction accesses page 2
+	page2, err := ps.GetPage(tid2, pageID2, ReadWrite)
+	if err != nil {
+		t.Fatalf("GetPage failed for transaction 2: %v", err)
+	}
+	if page2 == nil {
+		t.Fatal("Expected page for transaction 2")
+	}
+
+	// Verify both transactions are tracked
+	if len(ps.transactions) != 2 {
+		t.Errorf("Expected 2 transactions, got %d", len(ps.transactions))
+	}
+
+	// Verify transaction 1 info
+	txInfo1 := ps.transactions[tid1]
+	if txInfo1.lockedPages[pageID1] != ReadOnly {
+		t.Error("Transaction 1 should have ReadOnly lock on page 1")
+	}
+
+	// Verify transaction 2 info
+	txInfo2 := ps.transactions[tid2]
+	if txInfo2.lockedPages[pageID2] != ReadWrite {
+		t.Error("Transaction 2 should have ReadWrite lock on page 2")
+	}
+}
+
+func TestPageStore_GetPage_AccessOrder(t *testing.T) {
+	tm := NewTableManager()
+	ps := NewPageStore(tm)
+	
+	// Create and add a mock table
+	dbFile := newMockDbFileForPageStore(1, []types.Type{types.IntType}, []string{"id"})
+	err := tm.AddTable(dbFile, "test_table", "id")
+	if err != nil {
+		t.Fatalf("Failed to add table: %v", err)
+	}
+
+	tid := transaction.NewTransactionID()
+	pageID1 := heap.NewHeapPageID(1, 0)
+	pageID2 := heap.NewHeapPageID(1, 1)
+
+	// Access first page
+	_, err = ps.GetPage(tid, pageID1, ReadOnly)
+	if err != nil {
+		t.Fatalf("GetPage failed for page 1: %v", err)
+	}
+
+	// Access second page
+	_, err = ps.GetPage(tid, pageID2, ReadOnly)
+	if err != nil {
+		t.Fatalf("GetPage failed for page 2: %v", err)
+	}
+
+	// Verify access order
+	if len(ps.accessOrder) != 2 {
+		t.Errorf("Expected 2 pages in access order, got %d", len(ps.accessOrder))
+	}
+	if ps.accessOrder[0] != pageID1 {
+		t.Errorf("Expected first page to be %v, got %v", pageID1, ps.accessOrder[0])
+	}
+	if ps.accessOrder[1] != pageID2 {
+		t.Errorf("Expected second page to be %v, got %v", pageID2, ps.accessOrder[1])
+	}
+
+	// Access first page again (should move to end)
+	_, err = ps.GetPage(tid, pageID1, ReadOnly)
+	if err != nil {
+		t.Fatalf("GetPage failed for page 1 (second access): %v", err)
+	}
+
+	// Verify access order updated
+	if len(ps.accessOrder) != 2 {
+		t.Errorf("Expected 2 pages in access order after reaccess, got %d", len(ps.accessOrder))
+	}
+	if ps.accessOrder[0] != pageID2 {
+		t.Errorf("Expected first page to be %v after reaccess, got %v", pageID2, ps.accessOrder[0])
+	}
+	if ps.accessOrder[1] != pageID1 {
+		t.Errorf("Expected second page to be %v after reaccess, got %v", pageID1, ps.accessOrder[1])
+	}
+}
+
+func TestPageStore_GetPage_ConcurrentAccess(t *testing.T) {
+	tm := NewTableManager()
+	ps := NewPageStore(tm)
+	
+	// Create and add mock tables
+	numTables := 3
+	for i := 1; i <= numTables; i++ {
+		dbFile := newMockDbFileForPageStore(i, []types.Type{types.IntType}, []string{"id"})
+		err := tm.AddTable(dbFile, fmt.Sprintf("table_%d", i), "id")
+		if err != nil {
+			t.Fatalf("Failed to add table %d: %v", i, err)
+		}
+	}
+
+	numGoroutines := 20
+	numAccessesPerGoroutine := 50
+
+	var wg sync.WaitGroup
+	wg.Add(numGoroutines)
+
+	// Run concurrent GetPage calls
+	for i := 0; i < numGoroutines; i++ {
+		go func(goroutineID int) {
+			defer wg.Done()
+
+			for j := 0; j < numAccessesPerGoroutine; j++ {
+				tid := transaction.NewTransactionID()
+				tableID := (j % numTables) + 1
+				pageNum := j % 10 // Reuse some page numbers to test cache hits
+				pageID := heap.NewHeapPageID(tableID, pageNum)
+				permission := ReadOnly
+				if j%2 == 0 {
+					permission = ReadWrite
+				}
+
+				page, err := ps.GetPage(tid, pageID, permission)
+				if err != nil {
+					t.Errorf("GetPage failed for goroutine %d, iteration %d: %v", goroutineID, j, err)
+					continue
+				}
+				if page == nil {
+					t.Errorf("Expected page for goroutine %d, iteration %d", goroutineID, j)
+				}
+			}
+		}(i)
+	}
+
+	wg.Wait()
+
+	// Verify final state
+	if len(ps.pageCache) == 0 {
+		t.Error("Expected pages in cache after concurrent access")
+	}
+	if len(ps.transactions) == 0 {
+		t.Error("Expected transactions to be tracked")
+	}
+
+	// All pages should be accessible without error
+	for pageID := range ps.pageCache {
+		if ps.pageCache[pageID] == nil {
+			t.Errorf("Found nil page in cache for ID %v", pageID)
+		}
+	}
+}
+
+func TestPageStore_GetPage_TransactionInfoCreation(t *testing.T) {
+	tm := NewTableManager()
+	ps := NewPageStore(tm)
+	
+	// Create and add a mock table
+	dbFile := newMockDbFileForPageStore(1, []types.Type{types.IntType}, []string{"id"})
+	err := tm.AddTable(dbFile, "test_table", "id")
+	if err != nil {
+		t.Fatalf("Failed to add table: %v", err)
+	}
+
+	tid := transaction.NewTransactionID()
+	pageID := heap.NewHeapPageID(1, 0)
+
+	// Verify transaction doesn't exist initially
+	if _, exists := ps.transactions[tid]; exists {
+		t.Error("Transaction should not exist initially")
+	}
+
+	// Access page - should create transaction info
+	page, err := ps.GetPage(tid, pageID, ReadWrite)
+	if err != nil {
+		t.Fatalf("GetPage failed: %v", err)
+	}
+	if page == nil {
+		t.Fatal("Expected page to be returned")
+	}
+
+	// Verify transaction info was created
+	txInfo, exists := ps.transactions[tid]
+	if !exists {
+		t.Fatal("Expected transaction info to be created")
+	}
+
+	// Verify transaction info fields
+	if txInfo.startTime.IsZero() {
+		t.Error("Expected start time to be set")
+	}
+	if txInfo.dirtyPages == nil {
+		t.Error("Expected dirty pages map to be initialized")
+	}
+	if txInfo.lockedPages == nil {
+		t.Error("Expected locked pages map to be initialized")
+	}
+	if txInfo.lockedPages[pageID] != ReadWrite {
+		t.Errorf("Expected ReadWrite permission, got %v", txInfo.lockedPages[pageID])
+	}
+}
+
+func TestPageStore_GetPage_EdgeCases(t *testing.T) {
+	t.Run("Nil TransactionID", func(t *testing.T) {
+		tm := NewTableManager()
+		ps := NewPageStore(tm)
+		
+		dbFile := newMockDbFileForPageStore(1, []types.Type{types.IntType}, []string{"id"})
+		err := tm.AddTable(dbFile, "test_table", "id")
+		if err != nil {
+			t.Fatalf("Failed to add table: %v", err)
+		}
+
+		pageID := heap.NewHeapPageID(1, 0)
+
+		// Test with nil transaction ID
+		page, err := ps.GetPage(nil, pageID, ReadOnly)
+		// This should not panic - behavior depends on implementation
+		_ = page
+		_ = err
+	})
+
+	t.Run("Zero PageID", func(t *testing.T) {
+		tm := NewTableManager()
+		ps := NewPageStore(tm)
+		
+		dbFile := newMockDbFileForPageStore(0, []types.Type{types.IntType}, []string{"id"})
+		err := tm.AddTable(dbFile, "test_table", "id")
+		if err != nil {
+			t.Fatalf("Failed to add table: %v", err)
+		}
+
+		tid := transaction.NewTransactionID()
+		pageID := heap.NewHeapPageID(0, 0)
+
+		page, err := ps.GetPage(tid, pageID, ReadOnly)
+		if err != nil {
+			t.Errorf("GetPage failed for zero table ID: %v", err)
+		}
+		if page != nil && page.GetID() != pageID {
+			t.Errorf("Expected page ID %v, got %v", pageID, page.GetID())
+		}
+	})
+}
+
+// Helper function to check if a string contains a substring
+func contains(s, substr string) bool {
+	return len(s) >= len(substr) && (s == substr || 
+		(len(s) > len(substr) && 
+		(s[:len(substr)] == substr || s[len(s)-len(substr):] == substr || 
+		strings.Contains(s, substr))))
 }
