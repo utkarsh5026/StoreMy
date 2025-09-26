@@ -115,32 +115,9 @@ func (p *InsertPlan) insertTuples(tableID int, tupleDesc *tuple.TupleDescription
 			return 0, err
 		}
 
-		newTuple := tuple.NewTuple(tupleDesc)
-		if fieldMapping != nil {
-			for i, value := range values {
-				if err := newTuple.SetField(fieldMapping[i], value); err != nil {
-					return insertedCount, fmt.Errorf("failed to set field: %v", err)
-				}
-			}
-
-			for i := 0; i < tupleDesc.NumFields(); i++ {
-				isSet := false
-				for _, mappedIndex := range fieldMapping {
-					if mappedIndex == i {
-						isSet = true
-						break
-					}
-				}
-				if !isSet {
-					newTuple.SetField(i, nil)
-				}
-			}
-		} else {
-			for i, value := range values {
-				if err := newTuple.SetField(i, value); err != nil {
-					return 0, fmt.Errorf("failed to set field: %v", err)
-				}
-			}
+		newTuple, err := p.createTuple(values, tupleDesc, fieldMapping)
+		if err != nil {
+			return 0, err
 		}
 
 		if err := p.pageStore.InsertTuple(p.tid, tableID, newTuple); err != nil {
@@ -166,4 +143,36 @@ func (p *InsertPlan) validateValueCount(values []types.Field, tupleDesc *tuple.T
 	}
 
 	return nil
+}
+
+func (p *InsertPlan) createTuple(values []types.Field, tupleDesc *tuple.TupleDescription, fieldMapping []int) (*tuple.Tuple, error) {
+	newTuple := tuple.NewTuple(tupleDesc)
+	if fieldMapping != nil {
+		for i, value := range values {
+			if err := newTuple.SetField(fieldMapping[i], value); err != nil {
+				return nil, fmt.Errorf("failed to set field: %v", err)
+			}
+		}
+
+		for i := 0; i < tupleDesc.NumFields(); i++ {
+			isSet := false
+			for _, mappedIndex := range fieldMapping {
+				if mappedIndex == i {
+					isSet = true
+					break
+				}
+			}
+			if !isSet {
+				return nil, fmt.Errorf("missing value for field index %d", i)
+			}
+		}
+		return newTuple, nil
+	}
+
+	for i, value := range values {
+		if err := newTuple.SetField(i, value); err != nil {
+			return nil, fmt.Errorf("failed to set field: %v", err)
+		}
+	}
+	return newTuple, nil
 }
