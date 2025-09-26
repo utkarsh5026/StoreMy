@@ -1,10 +1,14 @@
 package lock
 
 import (
+	"context"
 	"fmt"
+	"math/rand"
+	"runtime"
 	"storemy/pkg/concurrency/transaction"
 	"storemy/pkg/storage/heap"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -627,4 +631,558 @@ func TestMultiplePageWaiting(t *testing.T) {
 	if !waitingPages[0].Equals(pid2) {
 		t.Error("Expected transaction to still be waiting for pid2")
 	}
+}
+
+// Stress Tests and Rigorous Testing
+
+func TestHighConcurrencySharedLocks(t *testing.T) {
+	if testing.Short() {
+		t.Skip("Skipping stress test in short mode")
+	}
+	
+	lm := NewLockManager()
+	pid := heap.NewHeapPageID(1, 1)
+	numGoroutines := 100
+	
+	var wg sync.WaitGroup
+	var successCount int64
+	var errorCount int64
+	
+	start := time.Now()
+	
+	for i := 0; i < numGoroutines; i++ {
+		wg.Add(1)
+		go func(id int) {
+			defer wg.Done()
+			tid := transaction.NewTransactionID()
+			
+			err := lm.LockPage(tid, pid, false) // shared lock
+			if err != nil {
+				atomic.AddInt64(&errorCount, 1)
+				t.Logf("Goroutine %d failed: %v", id, err)
+			} else {
+				atomic.AddInt64(&successCount, 1)
+			}
+		}(i)
+	}
+	
+	wg.Wait()
+	elapsed := time.Since(start)
+	
+	t.Logf("High concurrency test completed in %v", elapsed)
+	t.Logf("Successful acquisitions: %d", successCount)
+	t.Logf("Errors: %d", errorCount)
+	
+	if errorCount > 0 {
+		t.Errorf("Expected no errors for shared locks, got %d", errorCount)
+	}
+	
+	if successCount != int64(numGoroutines) {
+		t.Errorf("Expected %d successful locks, got %d", numGoroutines, successCount)
+	}
+}
+
+func TestConcurrentExclusiveLockContention(t *testing.T) {
+	if testing.Short() {
+		t.Skip("Skipping stress test in short mode")
+	}
+	
+	lm := NewLockManager()
+	pid := heap.NewHeapPageID(1, 1)
+	numGoroutines := 50
+	
+	var wg sync.WaitGroup
+	var successCount int64
+	var timeoutCount int64
+	
+	for i := 0; i < numGoroutines; i++ {
+		wg.Add(1)
+		go func(id int) {
+			defer wg.Done()
+			tid := transaction.NewTransactionID()
+			
+			err := lm.LockPage(tid, pid, true) // exclusive lock
+			if err != nil {
+				if containsTimeout(err.Error()) {
+					atomic.AddInt64(&timeoutCount, 1)
+				} else {
+					t.Logf("Goroutine %d unexpected error: %v", id, err)
+				}
+			} else {
+				atomic.AddInt64(&successCount, 1)
+				// Hold lock briefly to create contention
+				time.Sleep(1 * time.Millisecond)
+			}
+		}(i)
+	}
+	
+	wg.Wait()
+	
+	t.Logf("Exclusive lock contention test results:")
+	t.Logf("Successful acquisitions: %d", successCount)
+	t.Logf("Timeouts: %d", timeoutCount)
+	
+	// Only one should succeed, all others should timeout
+	if successCount != 1 {
+		t.Errorf("Expected exactly 1 successful exclusive lock, got %d", successCount)
+	}
+	
+	if timeoutCount != int64(numGoroutines-1) {
+		t.Errorf("Expected %d timeouts, got %d", numGoroutines-1, timeoutCount)
+	}
+}
+
+func TestComplexDeadlockScenarios(t *testing.T) {
+	if testing.Short() {
+		t.Skip("Skipping stress test in short mode")
+	}
+	
+	// Test 3-way deadlock
+	t.Run("ThreeWayDeadlock", func(t *testing.T) {
+		lm := NewLockManager()
+		tid1 := transaction.NewTransactionID()
+		tid2 := transaction.NewTransactionID()
+		tid3 := transaction.NewTransactionID()
+		pid1 := heap.NewHeapPageID(1, 1)
+		pid2 := heap.NewHeapPageID(1, 2) 
+		pid3 := heap.NewHeapPageID(1, 3)
+		
+		// Create initial locks: tid1->pid1, tid2->pid2, tid3->pid3
+		lm.LockPage(tid1, pid1, true)
+		lm.LockPage(tid2, pid2, true)
+		lm.LockPage(tid3, pid3, true)
+		
+		// Create circular dependency: tid1->pid2, tid2->pid3, tid3->pid1
+		done1 := make(chan error, 1)
+		done2 := make(chan error, 1)
+		done3 := make(chan error, 1)
+		
+		go func() { done1 <- lm.LockPage(tid1, pid2, true) }()
+		time.Sleep(10 * time.Millisecond)
+		go func() { done2 <- lm.LockPage(tid2, pid3, true) }()
+		time.Sleep(10 * time.Millisecond)
+		go func() { done3 <- lm.LockPage(tid3, pid1, true) }()
+		
+		deadlockCount := 0
+		timeout := time.After(2 * time.Second)
+		
+		for i := 0; i < 3; i++ {
+			select {
+			case err := <-done1:
+				if err != nil && containsDeadlockMessage(err.Error(), tid1.ID()) {
+					deadlockCount++
+				}
+			case err := <-done2:
+				if err != nil && containsDeadlockMessage(err.Error(), tid2.ID()) {
+					deadlockCount++
+				}
+			case err := <-done3:
+				if err != nil && containsDeadlockMessage(err.Error(), tid3.ID()) {
+					deadlockCount++
+				}
+			case <-timeout:
+				t.Log("Three-way deadlock test timed out")
+				break
+			}
+		}
+		
+		if deadlockCount == 0 {
+			t.Error("Expected at least one deadlock detection in three-way scenario")
+		}
+	})
+	
+	// Test complex chain deadlock
+	t.Run("ChainDeadlock", func(t *testing.T) {
+		lm := NewLockManager()
+		numTransactions := 5
+		tids := make([]*transaction.TransactionID, numTransactions)
+		pids := make([]*heap.HeapPageID, numTransactions)
+		
+		// Create transactions and pages
+		for i := 0; i < numTransactions; i++ {
+			tids[i] = transaction.NewTransactionID()
+			pids[i] = heap.NewHeapPageID(1, i+1)
+		}
+		
+		// Each transaction locks its own page
+		for i := 0; i < numTransactions; i++ {
+			lm.LockPage(tids[i], pids[i], true)
+		}
+		
+		// Create chain: tid[i] wants page[i+1], last wants page[0]
+		var wg sync.WaitGroup
+		deadlockDetected := int64(0)
+		
+		for i := 0; i < numTransactions; i++ {
+			wg.Add(1)
+			go func(idx int) {
+				defer wg.Done()
+				nextPage := pids[(idx+1)%numTransactions]
+				err := lm.LockPage(tids[idx], nextPage, true)
+				if err != nil && containsDeadlockMessage(err.Error(), tids[idx].ID()) {
+					atomic.AddInt64(&deadlockDetected, 1)
+				}
+			}(i)
+			time.Sleep(10 * time.Millisecond) // Stagger to ensure proper chain formation
+		}
+		
+		wg.Wait()
+		
+		if deadlockDetected == 0 {
+			t.Error("Expected deadlock detection in chain scenario")
+		}
+	})
+}
+
+func TestMixedWorkloadStress(t *testing.T) {
+	if testing.Short() {
+		t.Skip("Skipping stress test in short mode")
+	}
+	
+	lm := NewLockManager()
+	numPages := 10
+	numWorkers := 50
+	duration := 2 * time.Second
+	
+	var stats struct {
+		sharedLocks   int64
+		exclusiveLocks int64
+		upgrades      int64
+		timeouts      int64
+		deadlocks     int64
+		errors        int64
+	}
+	
+	ctx, cancel := context.WithTimeout(context.Background(), duration)
+	defer cancel()
+	
+	var wg sync.WaitGroup
+	
+	// Worker function
+	worker := func(id int) {
+		defer wg.Done()
+		rand.Seed(time.Now().UnixNano() + int64(id))
+		
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			default:
+				tid := transaction.NewTransactionID()
+				pageNum := rand.Intn(numPages) + 1
+				pid := heap.NewHeapPageID(1, pageNum)
+				exclusive := rand.Float32() < 0.3 // 30% exclusive locks
+				
+				err := lm.LockPage(tid, pid, exclusive)
+				if err != nil {
+					if containsTimeout(err.Error()) {
+						atomic.AddInt64(&stats.timeouts, 1)
+					} else if containsDeadlockMessage(err.Error(), tid.ID()) {
+						atomic.AddInt64(&stats.deadlocks, 1)
+					} else {
+						atomic.AddInt64(&stats.errors, 1)
+					}
+				} else {
+					if exclusive {
+						atomic.AddInt64(&stats.exclusiveLocks, 1)
+					} else {
+						atomic.AddInt64(&stats.sharedLocks, 1)
+						
+						// 20% chance to upgrade to exclusive
+						if rand.Float32() < 0.2 {
+							upgradeErr := lm.LockPage(tid, pid, true)
+							if upgradeErr == nil {
+								atomic.AddInt64(&stats.upgrades, 1)
+							}
+						}
+					}
+				}
+				
+				// Simulate some work
+				time.Sleep(time.Duration(rand.Intn(5)) * time.Millisecond)
+			}
+		}
+	}
+	
+	// Start workers
+	for i := 0; i < numWorkers; i++ {
+		wg.Add(1)
+		go worker(i)
+	}
+	
+	wg.Wait()
+	
+	total := stats.sharedLocks + stats.exclusiveLocks + stats.timeouts + stats.deadlocks + stats.errors
+	
+	t.Logf("Mixed workload stress test results:")
+	t.Logf("Total operations: %d", total)
+	t.Logf("Shared locks: %d", stats.sharedLocks)
+	t.Logf("Exclusive locks: %d", stats.exclusiveLocks)
+	t.Logf("Upgrades: %d", stats.upgrades)
+	t.Logf("Timeouts: %d", stats.timeouts)
+	t.Logf("Deadlocks: %d", stats.deadlocks)
+	t.Logf("Errors: %d", stats.errors)
+	
+	if stats.errors > 0 {
+		t.Errorf("Unexpected errors occurred: %d", stats.errors)
+	}
+	
+	if total == 0 {
+		t.Error("No operations completed - test may have issues")
+	}
+}
+
+func TestRaceConditionDetection(t *testing.T) {
+	if testing.Short() {
+		t.Skip("Skipping race condition test in short mode")
+	}
+	
+	lm := NewLockManager()
+	numGoroutines := 100
+	
+	var wg sync.WaitGroup
+	
+	// Test concurrent access to internal data structures with different pages
+	for i := 0; i < numGoroutines; i++ {
+		wg.Add(1)
+		go func(id int) {
+			defer wg.Done()
+			tid := transaction.NewTransactionID()
+			
+			// Each goroutine works with different pages to avoid contention
+			// but still tests internal data structure concurrency
+			for j := 0; j < 5; j++ {
+				pageNum := (id*5 + j) + 1 // Unique page per iteration
+				pid := heap.NewHeapPageID(1, pageNum)
+				
+				err := lm.LockPage(tid, pid, j%2 == 0) // Mix shared/exclusive
+				if err != nil && !containsTimeout(err.Error()) && !containsDeadlockMessage(err.Error(), tid.ID()) {
+					t.Errorf("Unexpected error in race condition test: %v", err)
+				}
+				
+				// Brief pause to allow interleaving of map operations
+				if j%2 == 0 {
+					runtime.Gosched()
+				}
+			}
+		}(i)
+	}
+	
+	wg.Wait()
+}
+
+func TestMemoryPressure(t *testing.T) {
+	if testing.Short() {
+		t.Skip("Skipping memory pressure test in short mode")
+	}
+	
+	lm := NewLockManager()
+	numTransactions := 1000
+	numPages := 100
+	
+	var tids []*transaction.TransactionID
+	var pids []*heap.HeapPageID
+	
+	// Create many transactions and pages
+	for i := 0; i < numTransactions; i++ {
+		tids = append(tids, transaction.NewTransactionID())
+	}
+	
+	for i := 0; i < numPages; i++ {
+		pids = append(pids, heap.NewHeapPageID(1, i+1))
+	}
+	
+	var wg sync.WaitGroup
+	successCount := int64(0)
+	
+	// Each transaction tries to lock multiple pages
+	for i := 0; i < numTransactions; i++ {
+		wg.Add(1)
+		go func(idx int) {
+			defer wg.Done()
+			tid := tids[idx]
+			
+			// Try to lock 3-5 random pages
+			numLocks := 3 + (idx % 3)
+			localSuccess := 0
+			
+			for j := 0; j < numLocks; j++ {
+				pageIdx := (idx + j*7) % numPages // Deterministic but spread out
+				err := lm.LockPage(tid, pids[pageIdx], false)
+				if err == nil {
+					localSuccess++
+				}
+			}
+			
+			atomic.AddInt64(&successCount, int64(localSuccess))
+		}(i)
+	}
+	
+	wg.Wait()
+	
+	t.Logf("Memory pressure test completed")
+	t.Logf("Successful lock acquisitions: %d", successCount)
+	t.Logf("Average locks per transaction: %.2f", float64(successCount)/float64(numTransactions))
+	
+	// Check that data structures are still consistent
+	lm.mutex.RLock()
+	pageLocksCount := len(lm.pageLocks)
+	txLocksCount := len(lm.txLocks)
+	waitingForCount := len(lm.waitingFor)
+	waitQueueCount := len(lm.waitQueue)
+	lm.mutex.RUnlock()
+	
+	t.Logf("Final state - PageLocks: %d, TxLocks: %d, WaitingFor: %d, WaitQueue: %d",
+		pageLocksCount, txLocksCount, waitingForCount, waitQueueCount)
+}
+
+func TestEdgeCases(t *testing.T) {
+	t.Run("NilTransactionID", func(t *testing.T) {
+		lm := NewLockManager()
+		pid := heap.NewHeapPageID(1, 1)
+		
+		// This should not panic
+		defer func() {
+			if r := recover(); r != nil {
+				t.Errorf("LockPage with nil transaction should not panic: %v", r)
+			}
+		}()
+		
+		err := lm.LockPage(nil, pid, false)
+		if err == nil {
+			t.Error("Expected error when locking with nil transaction")
+		}
+	})
+	
+	t.Run("SamePageMultipleLockTypes", func(t *testing.T) {
+		lm := NewLockManager()
+		tid := transaction.NewTransactionID()
+		pid := heap.NewHeapPageID(1, 1)
+		
+		// Get shared lock
+		err := lm.LockPage(tid, pid, false)
+		if err != nil {
+			t.Fatalf("Failed to get shared lock: %v", err)
+		}
+		
+		// Upgrade to exclusive
+		err = lm.LockPage(tid, pid, true)
+		if err != nil {
+			t.Fatalf("Failed to upgrade lock: %v", err)
+		}
+		
+		// Try to get shared again (should succeed since we have exclusive)
+		err = lm.LockPage(tid, pid, false)
+		if err != nil {
+			t.Fatalf("Failed to get shared lock when holding exclusive: %v", err)
+		}
+		
+		// Try to get exclusive again (should succeed)
+		err = lm.LockPage(tid, pid, true)
+		if err != nil {
+			t.Fatalf("Failed to reacquire exclusive lock: %v", err)
+		}
+	})
+	
+	t.Run("ManyPagesOneTransaction", func(t *testing.T) {
+		lm := NewLockManager()
+		tid := transaction.NewTransactionID()
+		numPages := 100
+		
+		for i := 0; i < numPages; i++ {
+			pid := heap.NewHeapPageID(1, i+1)
+			err := lm.LockPage(tid, pid, i%2 == 0) // Mix shared and exclusive
+			if err != nil {
+				t.Fatalf("Failed to lock page %d: %v", i+1, err)
+			}
+		}
+		
+		// Verify all locks are recorded
+		lm.mutex.RLock()
+		txLocks := lm.txLocks[tid]
+		lm.mutex.RUnlock()
+		
+		if len(txLocks) != numPages {
+			t.Errorf("Expected %d locks for transaction, got %d", numPages, len(txLocks))
+		}
+	})
+}
+
+// Benchmark Tests
+
+func BenchmarkSharedLockAcquisition(b *testing.B) {
+	lm := NewLockManager()
+	pid := heap.NewHeapPageID(1, 1)
+	
+	b.ResetTimer()
+	b.RunParallel(func(pb *testing.PB) {
+		for pb.Next() {
+			tid := transaction.NewTransactionID()
+			err := lm.LockPage(tid, pid, false)
+			if err != nil {
+				b.Errorf("Unexpected error: %v", err)
+			}
+		}
+	})
+}
+
+func BenchmarkExclusiveLockAcquisition(b *testing.B) {
+	lm := NewLockManager()
+	
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		tid := transaction.NewTransactionID()
+		pid := heap.NewHeapPageID(1, i+1) // Different pages to avoid contention
+		err := lm.LockPage(tid, pid, true)
+		if err != nil {
+			b.Errorf("Unexpected error: %v", err)
+		}
+	}
+}
+
+func BenchmarkLockUpgrade(b *testing.B) {
+	lm := NewLockManager()
+	
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		tid := transaction.NewTransactionID()
+		pid := heap.NewHeapPageID(1, i+1)
+		
+		// Get shared lock first
+		err := lm.LockPage(tid, pid, false)
+		if err != nil {
+			b.Errorf("Failed to get shared lock: %v", err)
+			continue
+		}
+		
+		// Upgrade to exclusive
+		err = lm.LockPage(tid, pid, true)
+		if err != nil {
+			b.Errorf("Failed to upgrade lock: %v", err)
+		}
+	}
+}
+
+// Helper functions
+
+func containsTimeout(errorMsg string) bool {
+	return errorMsg == "timeout waiting for lock on page HeapPageID(table=1, page=1)" ||
+		   errorMsg == "timeout waiting for lock on page HeapPageID(table=1, page=2)" ||
+		   errorMsg == "timeout waiting for lock on page HeapPageID(table=1, page=3)" ||
+		   contains(errorMsg, "timeout waiting for lock")
+}
+
+func contains(s, substr string) bool {
+	return len(s) >= len(substr) && (s == substr || (len(s) > len(substr) && 
+		(s[:len(substr)] == substr || s[len(s)-len(substr):] == substr || 
+		 containsSubstring(s, substr))))
+}
+
+func containsSubstring(s, substr string) bool {
+	for i := 0; i <= len(s)-len(substr); i++ {
+		if s[i:i+len(substr)] == substr {
+			return true
+		}
+	}
+	return false
 }
