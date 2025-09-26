@@ -25,6 +25,9 @@ type InsertPlan struct {
 	tid          *transaction.TransactionID
 }
 
+// NewInsertPlan creates a new InsertPlan instance with the provided components.
+// This constructor initializes the plan with all necessary dependencies for
+// executing INSERT operations within a transactional context.
 func NewInsertPlan(
 	stmt *statements.InsertStatement,
 	ps *memory.PageStore,
@@ -38,6 +41,12 @@ func NewInsertPlan(
 	}
 }
 
+// Execute performs the INSERT operation by processing the statement and inserting
+// all specified tuples into the target table. It validates the data, creates
+// tuples according to the table schema, and coordinates with the storage layer.
+//
+// Returns a DMLResult containing the number of inserted rows and a success message,
+// or an error if the operation fails at any stage.
 func (p *InsertPlan) Execute() (any, error) {
 	tableId, err := p.getTableID()
 	if err != nil {
@@ -65,6 +74,7 @@ func (p *InsertPlan) Execute() (any, error) {
 	}, nil
 }
 
+// getTableID resolves the table name from the INSERT statement to its internal ID.
 func (p *InsertPlan) getTableID() (int, error) {
 	tableName := p.statement.TableName
 	tableID, err := p.tableManager.GetTableID(tableName)
@@ -74,6 +84,7 @@ func (p *InsertPlan) getTableID() (int, error) {
 	return tableID, nil
 }
 
+// getTupleDesc retrieves the schema definition (tuple description) for the target table.
 func (p *InsertPlan) getTupleDesc() (*tuple.TupleDescription, error) {
 	tableName := p.statement.TableName
 	tableID, err := p.tableManager.GetTableID(tableName)
@@ -89,6 +100,9 @@ func (p *InsertPlan) getTupleDesc() (*tuple.TupleDescription, error) {
 	return tupleDesc, nil
 }
 
+// createFieldMapping builds a mapping between the specified field names in the INSERT
+// statement and their corresponding indices in the table schema. This allows for
+// INSERT statements with explicit field lists (e.g., INSERT INTO table (col1, col3) VALUES (...)).
 func (p *InsertPlan) createFieldMapping(tupleDesc *tuple.TupleDescription) ([]int, error) {
 	if len(p.statement.Fields) == 0 {
 		return nil, nil
@@ -105,6 +119,9 @@ func (p *InsertPlan) createFieldMapping(tupleDesc *tuple.TupleDescription) ([]in
 	return fieldMapping, nil
 }
 
+// insertTuples processes each set of values in the INSERT statement, creating and
+// inserting tuples into the specified table. It validates value counts, creates
+// tuples according to the schema, and uses the page store for persistent storage.
 func (p *InsertPlan) insertTuples(tableID int, tupleDesc *tuple.TupleDescription, fieldMapping []int) (int, error) {
 	insertedCount := 0
 	for _, values := range p.statement.Values {
@@ -127,6 +144,9 @@ func (p *InsertPlan) insertTuples(tableID int, tupleDesc *tuple.TupleDescription
 	return insertedCount, nil
 }
 
+// validateValueCount ensures that the number of values provided matches the expected
+// number of fields, either from the explicit field list or the complete table schema.
+// This prevents runtime errors during tuple creation.
 func (p *InsertPlan) validateValueCount(values []types.Field, tupleDesc *tuple.TupleDescription, fieldMapping []int) error {
 	var expectedCount int
 	if fieldMapping != nil {
@@ -142,6 +162,9 @@ func (p *InsertPlan) validateValueCount(values []types.Field, tupleDesc *tuple.T
 	return nil
 }
 
+// createTuple constructs a new tuple from the provided values according to the table schema.
+// It handles both explicit field mappings (for partial inserts) and full row inserts.
+// For explicit mappings, it validates that all required fields are provided.
 func (p *InsertPlan) createTuple(values []types.Field, tupleDesc *tuple.TupleDescription, fieldMapping []int) (*tuple.Tuple, error) {
 	newTuple := tuple.NewTuple(tupleDesc)
 	if fieldMapping != nil {
@@ -167,6 +190,7 @@ func (p *InsertPlan) createTuple(values []types.Field, tupleDesc *tuple.TupleDes
 	return newTuple, nil
 }
 
+// findFieldIndex locates the schema index for a given field name.
 func (p *InsertPlan) findFieldIndex(fieldName string, tupleDesc *tuple.TupleDescription) (int, error) {
 	for i := 0; i < tupleDesc.NumFields(); i++ {
 		name, _ := tupleDesc.GetFieldName(i)
@@ -177,6 +201,7 @@ func (p *InsertPlan) findFieldIndex(fieldName string, tupleDesc *tuple.TupleDesc
 	return -1, fmt.Errorf("column %s not found in table %s", fieldName, p.statement.TableName)
 }
 
+// isFieldMapped checks whether a specific field index is included in the field mapping.
 func isFieldMapped(fieldIndex int, fieldMapping []int) bool {
 	for _, mappedIndex := range fieldMapping {
 		if mappedIndex == fieldIndex {
