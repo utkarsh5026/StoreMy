@@ -48,23 +48,9 @@ func (p *UpdatePlan) Execute() (any, error) {
 		return nil, err
 	}
 
-	for _, oldTuple := range tuplesToUpdate {
-		newTuple := tuple.NewTuple(tupleDesc)
-
-		for i := 0; i < tupleDesc.NumFields(); i++ {
-			field, _ := oldTuple.GetField(i)
-			newTuple.SetField(i, field)
-		}
-
-		for fieldIndex, newValue := range updateMap {
-			if err := newTuple.SetField(fieldIndex, newValue); err != nil {
-				return nil, fmt.Errorf("failed to set updated field: %v", err)
-			}
-		}
-
-		if err := p.pageStore.UpdateTuple(p.tid, oldTuple, newTuple); err != nil {
-			return nil, fmt.Errorf("failed to update tuple: %v", err)
-		}
+	err = p.updateTuples(tuplesToUpdate, tupleDesc, updateMap)
+	if err != nil {
+		return nil, err
 	}
 
 	return &DMLResult{
@@ -165,4 +151,29 @@ func (p *UpdatePlan) collectTuplesToUpdate(queryPlan iterator.DbIterator) ([]*tu
 	}
 
 	return tuplesToUpdate, nil
+}
+
+// updateTuples applies updates to all collected tuples
+// UPDATE is implemented as DELETE + INSERT at the storage layer
+func (p *UpdatePlan) updateTuples(tuplesToUpdate []*tuple.Tuple, tupleDesc *tuple.TupleDescription, updateMap map[int]types.Field) error {
+	for _, oldTuple := range tuplesToUpdate {
+		newTuple := tuple.NewTuple(tupleDesc)
+
+		for i := 0; i < tupleDesc.NumFields(); i++ {
+			field, _ := oldTuple.GetField(i)
+			newTuple.SetField(i, field)
+		}
+
+		for fieldIndex, newValue := range updateMap {
+			if err := newTuple.SetField(fieldIndex, newValue); err != nil {
+				return fmt.Errorf("failed to set updated field: %v", err)
+			}
+		}
+
+		if err := p.pageStore.UpdateTuple(p.tid, oldTuple, newTuple); err != nil {
+			return fmt.Errorf("failed to update tuple: %v", err)
+		}
+	}
+
+	return nil
 }
