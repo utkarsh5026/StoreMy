@@ -48,8 +48,8 @@ func (dg *DependencyGraph) RemoveTransaction(tid *transaction.TransactionID) {
 }
 
 func (dg *DependencyGraph) HasCycle() bool {
-	dg.mutex.RLock()
-	defer dg.mutex.RUnlock()
+	dg.mutex.Lock()
+	defer dg.mutex.Unlock()
 
 	if dg.cacheValid {
 		return dg.lastResult
