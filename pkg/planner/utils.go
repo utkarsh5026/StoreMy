@@ -25,15 +25,29 @@ func buildPredicateFromFilterNode(filter *plan.FilterNode, tupleDesc *tuple.Tupl
 	fieldType, _ := tupleDesc.TypeAtIndex(fieldIndex)
 	var constantField types.Field
 
-	if fieldType == types.IntType {
+	switch fieldType {
+	case types.IntType:
 		var intVal int32
 		fmt.Sscanf(filter.Constant, "%d", &intVal)
 		constantField = types.NewIntField(intVal)
-	} else {
+	case types.BoolType:
+		var boolVal bool
+		if filter.Constant == "true" {
+			boolVal = true
+		} else {
+			boolVal = false
+		}
+		constantField = types.NewBoolField(boolVal)
+	case types.FloatType:
+		var floatVal float64
+		fmt.Sscanf(filter.Constant, "%f", &floatVal)
+		constantField = types.NewFloat64Field(floatVal)
+	case types.StringType:
 		constantField = types.NewStringField(filter.Constant, types.StringMaxSize)
+	default:
+		return nil, fmt.Errorf("unsupported field type: %v", fieldType)
 	}
 
-	// Convert predicate type
 	var op query.PredicateOp
 	switch filter.Predicate {
 	case types.Equals:
