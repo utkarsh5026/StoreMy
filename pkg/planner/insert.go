@@ -152,14 +152,7 @@ func (p *InsertPlan) createTuple(values []types.Field, tupleDesc *tuple.TupleDes
 		}
 
 		for i := 0; i < tupleDesc.NumFields(); i++ {
-			isSet := false
-			for _, mappedIndex := range fieldMapping {
-				if mappedIndex == i {
-					isSet = true
-					break
-				}
-			}
-			if !isSet {
+			if !isFieldMapped(i, fieldMapping) {
 				return nil, fmt.Errorf("missing value for field index %d", i)
 			}
 		}
@@ -182,4 +175,13 @@ func (p *InsertPlan) findFieldIndex(fieldName string, tupleDesc *tuple.TupleDesc
 		}
 	}
 	return -1, fmt.Errorf("column %s not found in table %s", fieldName, p.statement.TableName)
+}
+
+func isFieldMapped(fieldIndex int, fieldMapping []int) bool {
+	for _, mappedIndex := range fieldMapping {
+		if mappedIndex == fieldIndex {
+			return true
+		}
+	}
+	return false
 }
