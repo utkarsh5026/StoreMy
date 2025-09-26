@@ -371,7 +371,7 @@ func TestCreateTablePlan_Execute_ComplexTable(t *testing.T) {
 	os.Mkdir("data", 0755)
 
 	defaultInt := &types.IntField{Value: 1}
-	defaultString := &types.StringField{Value: "default"}
+	defaultString := types.NewStringField("default", types.StringMaxSize)
 	defaultBool := &types.BoolField{Value: true}
 	defaultFloat := &types.Float64Field{Value: 0.0}
 
