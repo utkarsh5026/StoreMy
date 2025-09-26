@@ -106,3 +106,48 @@ func (p *PageStore) UpdateTuple(tid *transaction.TransactionID, oldTuple *tuple.
 
 	return nil
 }
+
+func (p *PageStore) FlushAllPages() error {
+	p.mutex.RLock()
+	pids := make([]tuple.PageID, 0, len(p.pageCache))
+	for pid := range p.pageCache {
+		pids = append(pids, pid)
+	}
+	p.mutex.RUnlock()
+
+	for _, pid := range pids {
+		if err := p.flushPage(pid); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+func (p *PageStore) flushPage(pid tuple.PageID) error {
+	p.mutex.RLock()
+	page, exists := p.pageCache[pid]
+	p.mutex.RUnlock()
+
+	if !exists {
+		return nil
+	}
+
+	if page.IsDirty() != nil {
+		dbFile, err := p.tableManager.GetDbFile(pid.GetTableID())
+		if err != nil {
+			return fmt.Errorf("table for page %v not found %v", pid, err)
+		}
+
+		if err := dbFile.WritePage(page); err != nil {
+			return fmt.Errorf("failed to write page to disk: %v", err)
+		}
+
+		page.MarkDirty(false, nil)
+		p.mutex.Lock()
+		p.pageCache[pid] = page
+		p.mutex.Unlock()
+	}
+
+	return nil
+}
