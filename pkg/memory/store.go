@@ -23,7 +23,6 @@ type TransactionInfo struct {
 }
 
 type PageStore struct {
-	numPages     int
 	pageCache    map[tuple.PageID]page.Page
 	tableManager *TableManager
 	mutex        sync.RWMutex
@@ -60,5 +59,36 @@ func (p *PageStore) InsertTuple(tid *transaction.TransactionID, tableID int, t *
 			txInfo.dirtyPages[page.GetID()] = true
 		}
 	}
+	return nil
+}
+
+func (p *PageStore) DeleteTuple(tid *transaction.TransactionID, t *tuple.Tuple) error {
+	if t == nil {
+		return fmt.Errorf("tuple cannot be nil")
+	}
+	if t.RecordID == nil {
+		return fmt.Errorf("tuple has no record ID")
+	}
+
+	tableID := t.RecordID.PageID.GetTableID()
+	dbFile, err := p.tableManager.GetDbFile(tableID)
+	if err != nil {
+		return fmt.Errorf("table with ID %d not found", tableID)
+	}
+
+	modifiedPage, err := dbFile.DeleteTuple(tid, t)
+	if err != nil {
+		return fmt.Errorf("failed to delete tuple: %v", err)
+	}
+
+	modifiedPage.MarkDirty(true, tid)
+	p.mutex.Lock()
+	defer p.mutex.Unlock()
+
+	p.pageCache[modifiedPage.GetID()] = modifiedPage
+	if txInfo, exists := p.transactions[tid]; exists {
+		txInfo.dirtyPages[modifiedPage.GetID()] = true
+	}
+
 	return nil
 }
