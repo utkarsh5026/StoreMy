@@ -43,26 +43,9 @@ func (p *UpdatePlan) Execute() (any, error) {
 		return nil, err
 	}
 
-	if err := queryPlan.Open(); err != nil {
-		return nil, fmt.Errorf("failed to open update query: %v", err)
-	}
-	defer queryPlan.Close()
-
-	tuplesToUpdate := make([]*tuple.Tuple, 0)
-	for {
-		hasNext, err := queryPlan.HasNext()
-		if err != nil {
-			return nil, fmt.Errorf("error during update scan: %v", err)
-		}
-		if !hasNext {
-			break
-		}
-
-		t, err := queryPlan.Next()
-		if err != nil {
-			return nil, fmt.Errorf("error fetching tuple to update: %v", err)
-		}
-		tuplesToUpdate = append(tuplesToUpdate, t)
+	tuplesToUpdate, err := p.collectTuplesToUpdate(queryPlan)
+	if err != nil {
+		return nil, err
 	}
 
 	for _, oldTuple := range tuplesToUpdate {
@@ -151,4 +134,35 @@ func (p *UpdatePlan) buildQueryPlan(tableID int) (iterator.DbIterator, error) {
 	}
 
 	return currentOp, nil
+}
+
+// collectTuplesToUpdate finds all tuples that match the update criteria
+// This is done in a separate phase to avoid iterator invalidation issues
+func (p *UpdatePlan) collectTuplesToUpdate(queryPlan iterator.DbIterator) ([]*tuple.Tuple, error) {
+	if err := queryPlan.Open(); err != nil {
+		return nil, fmt.Errorf("failed to open update query: %v", err)
+	}
+	defer queryPlan.Close()
+
+	var tuplesToUpdate []*tuple.Tuple
+
+	for {
+		hasNext, err := queryPlan.HasNext()
+		if err != nil {
+			return nil, fmt.Errorf("error during update scan: %v", err)
+		}
+
+		if !hasNext {
+			break
+		}
+
+		tuple, err := queryPlan.Next()
+		if err != nil {
+			return nil, fmt.Errorf("error fetching tuple to update: %v", err)
+		}
+
+		tuplesToUpdate = append(tuplesToUpdate, tuple)
+	}
+
+	return tuplesToUpdate, nil
 }
