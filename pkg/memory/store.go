@@ -22,11 +22,14 @@ type TransactionInfo struct {
 	lockedPages map[tuple.PageID]Permissions
 }
 
+// PageStore manages an in-memory cache of database pages and handles transaction-aware page operations.
+// It serves as the main interface between the database engine and the underlying storage layer,
+// providing ACID compliance through transaction tracking and page lifecycle management.
 type PageStore struct {
-	pageCache    map[tuple.PageID]page.Page
-	tableManager *TableManager
-	mutex        sync.RWMutex
-	transactions map[*transaction.TransactionID]*TransactionInfo
+	pageCache    map[tuple.PageID]page.Page                      // In-memory cache of database pages
+	tableManager *TableManager                                   // Manager for database tables and files
+	mutex        sync.RWMutex                                    // Protects concurrent access to the page cache
+	transactions map[*transaction.TransactionID]*TransactionInfo // Active transaction metadata
 }
 
 func NewPageStore(tm *TableManager) *PageStore {
