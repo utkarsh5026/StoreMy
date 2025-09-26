@@ -31,3 +31,11 @@ func NewLock(tid *transaction.TransactionID, lockType LockType) *Lock {
 		GrantTime: time.Now(),
 	}
 }
+
+func NewLockRequest(tid *transaction.TransactionID, lockType LockType) *LockRequest {
+	return &LockRequest{
+		TID:      tid,
+		LockType: lockType,
+		Chan:     make(chan bool, 1),
+	}
+}
