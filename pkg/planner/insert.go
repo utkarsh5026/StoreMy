@@ -14,6 +14,10 @@ type DMLResult struct {
 	Message      string
 }
 
+func (d *DMLResult) String() string {
+	return fmt.Sprintf("%d row(s) affected: %s", d.RowsAffected, d.Message)
+}
+
 type InsertPlan struct {
 	statement    *statements.InsertStatement
 	pageStore    *memory.PageStore
