@@ -23,3 +23,11 @@ type LockRequest struct {
 	LockType LockType
 	Chan     chan bool // Channel to signal when lock is granted
 }
+
+func NewLock(tid *transaction.TransactionID, lockType LockType) *Lock {
+	return &Lock{
+		TID:       tid,
+		LockType:  lockType,
+		GrantTime: time.Now(),
+	}
+}
