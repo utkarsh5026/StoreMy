@@ -28,6 +28,10 @@ func NewLockManager() *LockManager {
 }
 
 func (lm *LockManager) LockPage(tid *transaction.TransactionID, pid tuple.PageID, exclusive bool) error {
+	if tid == nil {
+		return fmt.Errorf("transaction ID cannot be nil")
+	}
+
 	lockType := SharedLock
 	if exclusive {
 		lockType = ExclusiveLock
@@ -145,30 +149,18 @@ func (lm *LockManager) canGrantLock(tid *transaction.TransactionID, pid tuple.Pa
 }
 
 func (lm *LockManager) grantLock(tid *transaction.TransactionID, pid tuple.PageID, lockType LockType) {
-	// Create new lock
-	lock := &Lock{
-		TID:       tid,
-		LockType:  lockType,
-		GrantTime: time.Now(),
-	}
-
-	// Add to page locks
+	lock := NewLock(tid, lockType)
 	lm.pageLocks[pid] = append(lm.pageLocks[pid], lock)
 
-	// Add to transaction locks
 	if lm.txLocks[tid] == nil {
 		lm.txLocks[tid] = make(map[tuple.PageID]LockType)
 	}
 	lm.txLocks[tid][pid] = lockType
-
-	// Remove from waiting list
 	delete(lm.waitingFor, tid)
 }
 
 func (lm *LockManager) canUpgradeLock(tid *transaction.TransactionID, pid tuple.PageID) bool {
 	locks := lm.pageLocks[pid]
-
-	// Can upgrade if we're the only one holding a lock on this page
 	for _, lock := range locks {
 		if lock.TID != tid {
 			return false
@@ -185,38 +177,28 @@ func (lm *LockManager) upgradeLock(tid *transaction.TransactionID, pid tuple.Pag
 		}
 	}
 
-	// Update transaction's lock record
 	lm.txLocks[tid][pid] = ExclusiveLock
 }
 
 func (lm *LockManager) addToWaitQueue(tid *transaction.TransactionID, pid tuple.PageID, lockType LockType) {
-	// Check if already in wait queue for this page
 	if queue, exists := lm.waitQueue[pid]; exists {
 		for _, req := range queue {
 			if req.TID == tid {
-				return // Already waiting for this page
+				return
 			}
 		}
 	}
 
-	// Check if already waiting for this page
 	if waitingPages, exists := lm.waitingFor[tid]; exists {
 		for _, waitingPid := range waitingPages {
 			if pid.Equals(waitingPid) {
-				return // Already waiting for this page
+				return
 			}
 		}
 	}
 
-	request := &LockRequest{
-		TID:      tid,
-		LockType: lockType,
-		Chan:     make(chan bool, 1),
-	}
-
+	request := NewLockRequest(tid, lockType)
 	lm.waitQueue[pid] = append(lm.waitQueue[pid], request)
-
-	// Track what this transaction is waiting for
 	lm.waitingFor[tid] = append(lm.waitingFor[tid], pid)
 }
 
@@ -259,9 +241,7 @@ func (lm *LockManager) updateDependencies(tid *transaction.TransactionID, pid tu
 			continue
 		}
 
-		// Add dependency based on lock compatibility
 		if lockType == ExclusiveLock || lock.LockType == ExclusiveLock {
-			// tid is waiting for lock.TID
 			lm.depGraph.AddEdge(tid, lock.TID)
 		}
 	}
