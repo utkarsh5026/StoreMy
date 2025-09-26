@@ -31,27 +31,9 @@ func NewProject(fieldList []int, typesList []types.Type, child iterator.DbIterat
 	}
 
 	childTupleDesc := child.GetTupleDesc()
-	fieldNames := make([]string, len(fieldList))
-	for i, fieldIndex := range fieldList {
-		if fieldIndex < 0 || fieldIndex >= childTupleDesc.NumFields() {
-			return nil, fmt.Errorf("field index %d out of bounds (child has %d fields)",
-				fieldIndex, childTupleDesc.NumFields())
-		}
-
-		fieldName, err := childTupleDesc.GetFieldName(fieldIndex)
-		if err != nil {
-			return nil, fmt.Errorf("failed to get field name for index %d: %v", fieldIndex, err)
-		}
-		fieldNames[i] = fieldName
-
-		expectedType, err := childTupleDesc.TypeAtIndex(fieldIndex)
-		if err != nil {
-			return nil, fmt.Errorf("failed to get type for field %d: %v", fieldIndex, err)
-		}
-		if expectedType != typesList[i] {
-			return nil, fmt.Errorf("type mismatch for field %d: expected %v, got %v",
-				fieldIndex, expectedType, typesList[i])
-		}
+	fieldNames, err := validateAndExtractFieldNames(fieldList, typesList, childTupleDesc)
+	if err != nil {
+		return nil, err
 	}
 
 	tupleDesc, err := tuple.NewTupleDesc(typesList, fieldNames)
@@ -173,6 +155,49 @@ func validateProjectInputs(fieldList []int, typesList []types.Type, child iterat
 
 	if child.GetTupleDesc() == nil {
 		return fmt.Errorf("child operator has nil tuple descriptor")
+	}
+
+	return nil
+}
+
+// validateAndExtractFieldNames validates field indices and extracts corresponding field names
+func validateAndExtractFieldNames(fieldList []int, typesList []types.Type,
+	childTupleDesc *tuple.TupleDescription) ([]string, error) {
+
+	fieldNames := make([]string, len(fieldList))
+
+	for i, fieldIndex := range fieldList {
+		if fieldIndex < 0 || fieldIndex >= childTupleDesc.NumFields() {
+			return nil, fmt.Errorf("field index %d out of bounds (child has %d fields)",
+				fieldIndex, childTupleDesc.NumFields())
+		}
+
+		fieldName, err := childTupleDesc.GetFieldName(fieldIndex)
+		if err != nil {
+			return nil, fmt.Errorf("failed to get field name for index %d: %v", fieldIndex, err)
+		}
+		fieldNames[i] = fieldName
+
+		if err := validateFieldType(fieldIndex, typesList[i], childTupleDesc); err != nil {
+			return nil, err
+		}
+	}
+
+	return fieldNames, nil
+}
+
+// validateFieldType checks that the expected type matches the child schema
+func validateFieldType(fieldIndex int, expectedType types.Type,
+	childTupleDesc *tuple.TupleDescription) error {
+
+	actualType, err := childTupleDesc.TypeAtIndex(fieldIndex)
+	if err != nil {
+		return fmt.Errorf("failed to get type for field %d: %v", fieldIndex, err)
+	}
+
+	if actualType != expectedType {
+		return fmt.Errorf("type mismatch for field %d: expected %v, got %v",
+			fieldIndex, expectedType, actualType)
 	}
 
 	return nil
