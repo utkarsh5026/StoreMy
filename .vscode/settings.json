@@ -5,6 +5,7 @@
         "inotify",
         "inotifywait",
         "mitranim",
+        "pids",
         "storemy",
         "testcache"
     ]
