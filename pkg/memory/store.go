@@ -42,6 +42,7 @@ type PageStore struct {
 // The PageStore will use the TableManager to access database files and manage table operations.
 func NewPageStore(tm *TableManager) *PageStore {
 	return &PageStore{
+		numPages:     50, // Default buffer pool size
 		pageCache:    make(map[tuple.PageID]page.Page),
 		transactions: make(map[*transaction.TransactionID]*TransactionInfo),
 		accessOrder:  make([]tuple.PageID, 0),
