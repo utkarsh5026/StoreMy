@@ -89,7 +89,7 @@ func TestInsertPlan_Execute_SingleRow(t *testing.T) {
 	stmt := statements.NewInsertStatement("test_table")
 	values := []types.Field{
 		&types.IntField{Value: 1},
-		&types.StringField{Value: "John"},
+		types.NewStringField("John", types.StringMaxSize),
 		&types.BoolField{Value: true},
 		&types.Float64Field{Value: 99.99},
 	}
@@ -135,7 +135,7 @@ func TestInsertPlan_Execute_MultipleRows(t *testing.T) {
 	
 	values1 := []types.Field{
 		&types.IntField{Value: 1},
-		&types.StringField{Value: "John"},
+		types.NewStringField("John", types.StringMaxSize),
 		&types.BoolField{Value: true},
 		&types.Float64Field{Value: 99.99},
 	}
@@ -143,7 +143,7 @@ func TestInsertPlan_Execute_MultipleRows(t *testing.T) {
 
 	values2 := []types.Field{
 		&types.IntField{Value: 2},
-		&types.StringField{Value: "Jane"},
+		types.NewStringField("Jane", types.StringMaxSize),
 		&types.BoolField{Value: false},
 		&types.Float64Field{Value: 149.99},
 	}
@@ -186,7 +186,7 @@ func TestInsertPlan_Execute_WithSpecificFields(t *testing.T) {
 	
 	values := []types.Field{
 		&types.IntField{Value: 1},
-		&types.StringField{Value: "John"},
+		types.NewStringField("John", types.StringMaxSize),
 		&types.BoolField{Value: true},
 		&types.Float64Field{Value: 99.99},
 	}
@@ -258,7 +258,7 @@ func TestInsertPlan_Execute_Error_ValueCountMismatch(t *testing.T) {
 	stmt := statements.NewInsertStatement("test_table")
 	values := []types.Field{
 		&types.IntField{Value: 1},
-		&types.StringField{Value: "John"},
+		types.NewStringField("John", types.StringMaxSize),
 	}
 	stmt.AddValues(values)
 
@@ -299,7 +299,7 @@ func TestInsertPlan_Execute_Error_InvalidFieldName(t *testing.T) {
 	
 	values := []types.Field{
 		&types.IntField{Value: 1},
-		&types.StringField{Value: "John"},
+		types.NewStringField("John", types.StringMaxSize),
 	}
 	stmt.AddValues(values)
 
@@ -595,7 +595,7 @@ func TestInsertPlan_validateValueCount(t *testing.T) {
 
 	values := []types.Field{
 		&types.IntField{Value: 1},
-		&types.StringField{Value: "John"},
+		types.NewStringField("John", types.StringMaxSize),
 		&types.BoolField{Value: true},
 		&types.Float64Field{Value: 99.99},
 	}
@@ -608,7 +608,7 @@ func TestInsertPlan_validateValueCount(t *testing.T) {
 	fieldMapping := []int{0, 1}
 	values2 := []types.Field{
 		&types.IntField{Value: 1},
-		&types.StringField{Value: "John"},
+		types.NewStringField("John", types.StringMaxSize),
 	}
 
 	err = plan.validateValueCount(values2, tupleDesc, fieldMapping)
