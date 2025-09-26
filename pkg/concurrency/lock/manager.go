@@ -63,6 +63,7 @@ func (lm *LockManager) alreadyHasLock(tid *transaction.TransactionID, pid tuple.
 }
 
 func (lm *LockManager) acquireLock(tid *transaction.TransactionID, pid tuple.PageID, lockType LockType) error {
+	const maxRetryDelay = 100 * time.Millisecond
 	maxRetries := 1000
 	retryDelay := time.Millisecond
 
@@ -102,13 +103,8 @@ func (lm *LockManager) acquireLock(tid *transaction.TransactionID, pid tuple.Pag
 		}
 
 		lm.mutex.Unlock()
-
-		// Wait with exponential backoff
-		delay := retryDelay * time.Duration(1<<uint(min(attempt/10, 10)))
-		if delay > 100*time.Millisecond {
-			delay = 100 * time.Millisecond
-		}
-		time.Sleep(delay)
+		retryDelay := lm.calculateRetryDelay(attempt, retryDelay, maxRetryDelay)
+		time.Sleep(retryDelay)
 	}
 
 	return fmt.Errorf("timeout waiting for lock on page %v", pid)
@@ -245,6 +241,17 @@ func (lm *LockManager) updateDependencies(tid *transaction.TransactionID, pid tu
 			lm.depGraph.AddEdge(tid, lock.TID)
 		}
 	}
+}
+
+func (lm *LockManager) calculateRetryDelay(attemptNumber int, baseDelay, maxDelay time.Duration) time.Duration {
+	exponentialFactor := min(attemptNumber/10, 10)
+	delay := baseDelay * time.Duration(1<<uint(exponentialFactor))
+
+	if delay > maxDelay {
+		delay = maxDelay
+	}
+
+	return delay
 }
 
 func min(a, b int) int {
