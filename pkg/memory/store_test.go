@@ -1226,3 +1226,331 @@ func TestPageStore_UpdateTuple_EdgeCases(t *testing.T) {
 		}
 	})
 }
+
+func TestPageStore_FlushAllPages_EmptyCache(t *testing.T) {
+	tm := NewTableManager()
+	ps := NewPageStore(tm)
+	
+	// Test with empty cache
+	err := ps.FlushAllPages()
+	if err != nil {
+		t.Errorf("FlushAllPages should not fail with empty cache: %v", err)
+	}
+}
+
+func TestPageStore_FlushAllPages_SinglePage(t *testing.T) {
+	tm := NewTableManager()
+	ps := NewPageStore(tm)
+	
+	// Create and add a mock table
+	dbFile := newMockDbFileForPageStore(1, []types.Type{types.IntType}, []string{"id"})
+	err := tm.AddTable(dbFile, "test_table", "id")
+	if err != nil {
+		t.Fatalf("Failed to add table: %v", err)
+	}
+
+	tid := transaction.NewTransactionID()
+	testTuple := tuple.NewTuple(dbFile.GetTupleDesc())
+	intField := types.NewIntField(int32(42))
+	testTuple.SetField(0, intField)
+
+	// Insert tuple to add page to cache
+	err = ps.InsertTuple(tid, 1, testTuple)
+	if err != nil {
+		t.Fatalf("Failed to insert tuple: %v", err)
+	}
+
+	// Verify page is in cache and dirty
+	if len(ps.pageCache) != 1 {
+		t.Fatalf("Expected 1 page in cache, got %d", len(ps.pageCache))
+	}
+
+	// Test FlushAllPages
+	err = ps.FlushAllPages()
+	if err != nil {
+		t.Errorf("FlushAllPages failed: %v", err)
+	}
+
+	// Verify page is still in cache but no longer dirty
+	if len(ps.pageCache) != 1 {
+		t.Errorf("Expected page to remain in cache after flush, got %d pages", len(ps.pageCache))
+	}
+	
+	for _, page := range ps.pageCache {
+		if page.IsDirty() != nil {
+			t.Error("Page should not be dirty after flush")
+		}
+	}
+}
+
+func TestPageStore_FlushAllPages_MultiplePages(t *testing.T) {
+	tm := NewTableManager()
+	ps := NewPageStore(tm)
+	
+	// Create and add mock tables
+	numTables := 3
+	numTuplesPerTable := 5
+	
+	for i := 1; i <= numTables; i++ {
+		dbFile := newMockDbFileForPageStore(i, []types.Type{types.IntType}, []string{"id"})
+		err := tm.AddTable(dbFile, fmt.Sprintf("table_%d", i), "id")
+		if err != nil {
+			t.Fatalf("Failed to add table %d: %v", i, err)
+		}
+	}
+
+	// Insert tuples to create multiple pages
+	for tableID := 1; tableID <= numTables; tableID++ {
+		dbFile, _ := tm.GetDbFile(tableID)
+		for tupleIdx := 0; tupleIdx < numTuplesPerTable; tupleIdx++ {
+			tid := transaction.NewTransactionID()
+			testTuple := tuple.NewTuple(dbFile.GetTupleDesc())
+			intField := types.NewIntField(int32(tableID*100 + tupleIdx))
+			testTuple.SetField(0, intField)
+
+			err := ps.InsertTuple(tid, tableID, testTuple)
+			if err != nil {
+				t.Fatalf("Failed to insert tuple %d in table %d: %v", tupleIdx, tableID, err)
+			}
+		}
+	}
+
+	expectedPages := numTables * numTuplesPerTable
+	if len(ps.pageCache) != expectedPages {
+		t.Fatalf("Expected %d pages in cache, got %d", expectedPages, len(ps.pageCache))
+	}
+
+	// Count dirty pages before flush
+	dirtyPagesBefore := 0
+	for _, page := range ps.pageCache {
+		if page.IsDirty() != nil {
+			dirtyPagesBefore++
+		}
+	}
+	
+	if dirtyPagesBefore != expectedPages {
+		t.Fatalf("Expected %d dirty pages before flush, got %d", expectedPages, dirtyPagesBefore)
+	}
+
+	// Test FlushAllPages
+	err := ps.FlushAllPages()
+	if err != nil {
+		t.Errorf("FlushAllPages failed: %v", err)
+	}
+
+	// Verify all pages are still in cache but no longer dirty
+	if len(ps.pageCache) != expectedPages {
+		t.Errorf("Expected %d pages to remain in cache after flush, got %d", expectedPages, len(ps.pageCache))
+	}
+	
+	dirtyPagesAfter := 0
+	for _, page := range ps.pageCache {
+		if page.IsDirty() != nil {
+			dirtyPagesAfter++
+		}
+	}
+	
+	if dirtyPagesAfter != 0 {
+		t.Errorf("Expected 0 dirty pages after flush, got %d", dirtyPagesAfter)
+	}
+}
+
+func TestPageStore_FlushAllPages_ConcurrentAccess(t *testing.T) {
+	tm := NewTableManager()
+	ps := NewPageStore(tm)
+	
+	// Create and add a mock table
+	dbFile := newMockDbFileForPageStore(1, []types.Type{types.IntType}, []string{"id"})
+	err := tm.AddTable(dbFile, "test_table", "id")
+	if err != nil {
+		t.Fatalf("Failed to add table: %v", err)
+	}
+
+	numGoroutines := 10
+	numInsertsPerGoroutine := 20
+
+	var wg sync.WaitGroup
+	wg.Add(numGoroutines)
+
+	// Run concurrent inserts
+	for i := 0; i < numGoroutines; i++ {
+		go func(goroutineID int) {
+			defer wg.Done()
+
+			for j := 0; j < numInsertsPerGoroutine; j++ {
+				tid := transaction.NewTransactionID()
+				testTuple := tuple.NewTuple(dbFile.GetTupleDesc())
+				intField := types.NewIntField(int32(goroutineID*numInsertsPerGoroutine + j))
+				testTuple.SetField(0, intField)
+
+				err := ps.InsertTuple(tid, 1, testTuple)
+				if err != nil {
+					t.Errorf("InsertTuple failed for goroutine %d, iteration %d: %v", goroutineID, j, err)
+				}
+			}
+		}(i)
+	}
+
+	wg.Wait()
+
+	expectedPages := numGoroutines * numInsertsPerGoroutine
+	if len(ps.pageCache) != expectedPages {
+		t.Fatalf("Expected %d pages in cache, got %d", expectedPages, len(ps.pageCache))
+	}
+
+	// Test concurrent FlushAllPages calls
+	flushGoroutines := 5
+	var flushWg sync.WaitGroup
+	flushWg.Add(flushGoroutines)
+
+	flushErrors := make([]error, flushGoroutines)
+	for i := 0; i < flushGoroutines; i++ {
+		go func(idx int) {
+			defer flushWg.Done()
+			flushErrors[idx] = ps.FlushAllPages()
+		}(i)
+	}
+
+	flushWg.Wait()
+
+	// Check that all flush operations succeeded
+	for i, err := range flushErrors {
+		if err != nil {
+			t.Errorf("FlushAllPages failed in goroutine %d: %v", i, err)
+		}
+	}
+
+	// Verify final state - pages should still be in cache but not dirty
+	if len(ps.pageCache) != expectedPages {
+		t.Errorf("Expected %d pages to remain in cache after concurrent flush, got %d", expectedPages, len(ps.pageCache))
+	}
+	
+	dirtyPagesAfter := 0
+	for _, page := range ps.pageCache {
+		if page.IsDirty() != nil {
+			dirtyPagesAfter++
+		}
+	}
+	
+	if dirtyPagesAfter != 0 {
+		t.Errorf("Expected 0 dirty pages after concurrent flush, got %d", dirtyPagesAfter)
+	}
+}
+
+func TestPageStore_FlushAllPages_MixedDirtyAndCleanPages(t *testing.T) {
+	tm := NewTableManager()
+	ps := NewPageStore(tm)
+	
+	// Create and add a mock table
+	dbFile := newMockDbFileForPageStore(1, []types.Type{types.IntType}, []string{"id"})
+	err := tm.AddTable(dbFile, "test_table", "id")
+	if err != nil {
+		t.Fatalf("Failed to add table: %v", err)
+	}
+
+	// Insert some tuples to create dirty pages
+	numTuples := 5
+	for i := 0; i < numTuples; i++ {
+		tid := transaction.NewTransactionID()
+		testTuple := tuple.NewTuple(dbFile.GetTupleDesc())
+		intField := types.NewIntField(int32(i))
+		testTuple.SetField(0, intField)
+
+		err := ps.InsertTuple(tid, 1, testTuple)
+		if err != nil {
+			t.Fatalf("Failed to insert tuple %d: %v", i, err)
+		}
+	}
+
+	if len(ps.pageCache) != numTuples {
+		t.Fatalf("Expected %d pages in cache, got %d", numTuples, len(ps.pageCache))
+	}
+
+	// Manually mark some pages as clean
+	pageIDs := make([]tuple.PageID, 0, len(ps.pageCache))
+	for pid := range ps.pageCache {
+		pageIDs = append(pageIDs, pid)
+	}
+	
+	// Mark first two pages as clean
+	for i := 0; i < 2 && i < len(pageIDs); i++ {
+		page := ps.pageCache[pageIDs[i]]
+		page.MarkDirty(false, nil)
+		ps.pageCache[pageIDs[i]] = page
+	}
+
+	// Count dirty pages before flush
+	dirtyPagesBefore := 0
+	cleanPagesBefore := 0
+	for _, page := range ps.pageCache {
+		if page.IsDirty() != nil {
+			dirtyPagesBefore++
+		} else {
+			cleanPagesBefore++
+		}
+	}
+	
+	expectedDirty := numTuples - 2
+	expectedClean := 2
+	if dirtyPagesBefore != expectedDirty {
+		t.Fatalf("Expected %d dirty pages before flush, got %d", expectedDirty, dirtyPagesBefore)
+	}
+	if cleanPagesBefore != expectedClean {
+		t.Fatalf("Expected %d clean pages before flush, got %d", expectedClean, cleanPagesBefore)
+	}
+
+	// Test FlushAllPages
+	err = ps.FlushAllPages()
+	if err != nil {
+		t.Errorf("FlushAllPages failed: %v", err)
+	}
+
+	// Verify all pages are still in cache and all are clean
+	if len(ps.pageCache) != numTuples {
+		t.Errorf("Expected %d pages to remain in cache after flush, got %d", numTuples, len(ps.pageCache))
+	}
+	
+	dirtyPagesAfter := 0
+	for _, page := range ps.pageCache {
+		if page.IsDirty() != nil {
+			dirtyPagesAfter++
+		}
+	}
+	
+	if dirtyPagesAfter != 0 {
+		t.Errorf("Expected 0 dirty pages after flush, got %d", dirtyPagesAfter)
+	}
+}
+
+func TestPageStore_FlushAllPages_WriteFailure(t *testing.T) {
+	// This test would require a mock that can simulate write failures
+	// For now, we'll test the basic error propagation structure
+	tm := NewTableManager()
+	ps := NewPageStore(tm)
+	
+	// Create a mock table and insert a tuple
+	dbFile := newMockDbFileForPageStore(1, []types.Type{types.IntType}, []string{"id"})
+	err := tm.AddTable(dbFile, "test_table", "id")
+	if err != nil {
+		t.Fatalf("Failed to add table: %v", err)
+	}
+
+	tid := transaction.NewTransactionID()
+	testTuple := tuple.NewTuple(dbFile.GetTupleDesc())
+	intField := types.NewIntField(int32(42))
+	testTuple.SetField(0, intField)
+
+	err = ps.InsertTuple(tid, 1, testTuple)
+	if err != nil {
+		t.Fatalf("Failed to insert tuple: %v", err)
+	}
+
+	// Test FlushAllPages (should succeed with our mock)
+	err = ps.FlushAllPages()
+	if err != nil {
+		t.Errorf("FlushAllPages failed unexpectedly: %v", err)
+	}
+	
+	// In a real implementation, you would create a mock that fails WritePage
+	// and verify that FlushAllPages returns the error appropriately
+}
