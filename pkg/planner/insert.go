@@ -6,6 +6,7 @@ import (
 	"storemy/pkg/memory"
 	"storemy/pkg/parser/statements"
 	"storemy/pkg/tuple"
+	"storemy/pkg/types"
 )
 
 type DMLResult struct {
@@ -110,16 +111,8 @@ func (p *InsertPlan) createFieldMapping(tupleDesc *tuple.TupleDescription) ([]in
 func (p *InsertPlan) insertTuples(tableID int, tupleDesc *tuple.TupleDescription, fieldMapping []int) (int, error) {
 	insertedCount := 0
 	for _, values := range p.statement.Values {
-		if fieldMapping != nil {
-			if len(values) != len(fieldMapping) {
-				return insertedCount, fmt.Errorf("value count mismatch: expected %d, got %d",
-					len(fieldMapping), len(values))
-			}
-		} else {
-			if len(values) != tupleDesc.NumFields() {
-				return insertedCount, fmt.Errorf("value count mismatch: expected %d, got %d",
-					tupleDesc.NumFields(), len(values))
-			}
+		if err := p.validateValueCount(values, tupleDesc, fieldMapping); err != nil {
+			return 0, err
 		}
 
 		newTuple := tuple.NewTuple(tupleDesc)
@@ -130,8 +123,6 @@ func (p *InsertPlan) insertTuples(tableID int, tupleDesc *tuple.TupleDescription
 				}
 			}
 
-			// Fill in any missing fields with defaults
-			// This is important for partial inserts
 			for i := 0; i < tupleDesc.NumFields(); i++ {
 				isSet := false
 				for _, mappedIndex := range fieldMapping {
@@ -141,25 +132,38 @@ func (p *InsertPlan) insertTuples(tableID int, tupleDesc *tuple.TupleDescription
 					}
 				}
 				if !isSet {
-					// Set to NULL or default value
-					// For now, we'll use NULL (nil)
 					newTuple.SetField(i, nil)
 				}
 			}
 		} else {
 			for i, value := range values {
 				if err := newTuple.SetField(i, value); err != nil {
-					return insertedCount, fmt.Errorf("failed to set field: %v", err)
+					return 0, fmt.Errorf("failed to set field: %v", err)
 				}
 			}
 		}
 
 		if err := p.pageStore.InsertTuple(p.tid, tableID, newTuple); err != nil {
-			return insertedCount, fmt.Errorf("failed to insert tuple: %v", err)
+			return 0, fmt.Errorf("failed to insert tuple: %v", err)
 		}
 
 		insertedCount++
 	}
 
 	return insertedCount, nil
+}
+
+func (p *InsertPlan) validateValueCount(values []types.Field, tupleDesc *tuple.TupleDescription, fieldMapping []int) error {
+	var expectedCount int
+	if fieldMapping != nil {
+		expectedCount = len(fieldMapping)
+	} else {
+		expectedCount = tupleDesc.NumFields()
+	}
+
+	if len(values) != expectedCount {
+		return fmt.Errorf("value count mismatch: expected %d, got %d", expectedCount, len(values))
+	}
+
+	return nil
 }
