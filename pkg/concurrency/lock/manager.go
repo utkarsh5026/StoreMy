@@ -9,21 +9,21 @@ import (
 )
 
 type LockManager struct {
-	pageLocks  map[tuple.PageID][]*Lock                                 // Page -> list of locks
-	txLocks    map[*transaction.TransactionID]map[tuple.PageID]LockType // Transaction -> pages it has locked
-	waitingFor map[*transaction.TransactionID][]tuple.PageID            // Transaction -> pages it's waiting for
-	depGraph   *DependencyGraph
-	mutex      sync.RWMutex
-	waitQueue  map[tuple.PageID][]*LockRequest // Page -> waiting transactions
+	pageLocks        map[tuple.PageID][]*Lock                                 // Page -> list of locks
+	transactionLocks map[*transaction.TransactionID]map[tuple.PageID]LockType // Transaction -> pages it has locked
+	waitingFor       map[*transaction.TransactionID][]tuple.PageID            // Transaction -> pages it's waiting for
+	depGraph         *DependencyGraph
+	mutex            sync.RWMutex
+	waitQueue        map[tuple.PageID][]*LockRequest // Page -> waiting transactions
 }
 
 func NewLockManager() *LockManager {
 	return &LockManager{
-		pageLocks:  make(map[tuple.PageID][]*Lock),
-		txLocks:    make(map[*transaction.TransactionID]map[tuple.PageID]LockType),
-		waitingFor: make(map[*transaction.TransactionID][]tuple.PageID),
-		depGraph:   NewDependencyGraph(),
-		waitQueue:  make(map[tuple.PageID][]*LockRequest),
+		pageLocks:        make(map[tuple.PageID][]*Lock),
+		transactionLocks: make(map[*transaction.TransactionID]map[tuple.PageID]LockType),
+		waitingFor:       make(map[*transaction.TransactionID][]tuple.PageID),
+		depGraph:         NewDependencyGraph(),
+		waitQueue:        make(map[tuple.PageID][]*LockRequest),
 	}
 }
 
@@ -44,25 +44,28 @@ func (lm *LockManager) LockPage(tid *transaction.TransactionID, pid tuple.PageID
 	}
 	lm.mutex.RUnlock()
 
-	return lm.acquireLock(tid, pid, lockType)
+	return lm.attemptToAcquireLock(tid, pid, lockType)
 }
 
-func (lm *LockManager) alreadyHasLock(tid *transaction.TransactionID, pid tuple.PageID, lockType LockType) bool {
-	if txPages, exists := lm.txLocks[tid]; exists {
-		if currentLock, hasPage := txPages[pid]; hasPage {
-			if currentLock == ExclusiveLock {
-				return true
-			}
-
-			if currentLock == SharedLock && lockType == SharedLock {
-				return true
-			}
-		}
+func (lm *LockManager) alreadyHasLock(tid *transaction.TransactionID, pageID tuple.PageID, reqLockType LockType) bool {
+	transactionPages, transactionExists := lm.transactionLocks[tid]
+	if !transactionExists {
+		return false
 	}
-	return false
+
+	currentLockType, pageIsLocked := transactionPages[pageID]
+	if !pageIsLocked {
+		return false
+	}
+
+	if currentLockType == ExclusiveLock {
+		return true
+	}
+
+	return currentLockType == SharedLock && reqLockType == SharedLock
 }
 
-func (lm *LockManager) acquireLock(tid *transaction.TransactionID, pid tuple.PageID, lockType LockType) error {
+func (lm *LockManager) attemptToAcquireLock(tid *transaction.TransactionID, pid tuple.PageID, lockType LockType) error {
 	const maxRetryDelay = 100 * time.Millisecond
 	maxRetries := 1000
 	retryDelay := time.Millisecond
@@ -75,8 +78,7 @@ func (lm *LockManager) acquireLock(tid *transaction.TransactionID, pid tuple.Pag
 			return nil
 		}
 
-		// Try to upgrade lock if we have a shared lock and need exclusive
-		if lockType == ExclusiveLock && lm.hasLock(tid, pid, SharedLock) {
+		if lockType == ExclusiveLock && lm.transactionHoldsLockType(tid, pid, SharedLock) {
 			if lm.canUpgradeLock(tid, pid) {
 				lm.upgradeLock(tid, pid)
 				lm.mutex.Unlock()
@@ -84,7 +86,7 @@ func (lm *LockManager) acquireLock(tid *transaction.TransactionID, pid tuple.Pag
 			}
 		}
 
-		if lm.canGrantLock(tid, pid, lockType) {
+		if lm.canGrantLockImmediately(tid, pid, lockType) {
 			lm.grantLock(tid, pid, lockType)
 			lm.depGraph.RemoveTransaction(tid)
 			lm.mutex.Unlock()
@@ -95,7 +97,6 @@ func (lm *LockManager) acquireLock(tid *transaction.TransactionID, pid tuple.Pag
 		lm.updateDependencies(tid, pid, lockType)
 
 		if lm.depGraph.HasCycle() {
-			// Remove from wait queue and dependencies
 			lm.removeFromWaitQueue(tid, pid)
 			lm.depGraph.RemoveTransaction(tid)
 			lm.mutex.Unlock()
@@ -103,15 +104,15 @@ func (lm *LockManager) acquireLock(tid *transaction.TransactionID, pid tuple.Pag
 		}
 
 		lm.mutex.Unlock()
-		retryDelay := lm.calculateRetryDelay(attempt, retryDelay, maxRetryDelay)
-		time.Sleep(retryDelay)
+		currentDelay := lm.calculateRetryDelay(attempt, retryDelay, maxRetryDelay)
+		time.Sleep(currentDelay)
 	}
 
 	return fmt.Errorf("timeout waiting for lock on page %v", pid)
 }
 
-func (lm *LockManager) hasLock(tid *transaction.TransactionID, pid tuple.PageID, lockType LockType) bool {
-	if txPages, exists := lm.txLocks[tid]; exists {
+func (lm *LockManager) transactionHoldsLockType(tid *transaction.TransactionID, pid tuple.PageID, lockType LockType) bool {
+	if txPages, exists := lm.transactionLocks[tid]; exists {
 		if currentLock, hasPage := txPages[pid]; hasPage {
 			return currentLock == lockType
 		}
@@ -119,14 +120,13 @@ func (lm *LockManager) hasLock(tid *transaction.TransactionID, pid tuple.PageID,
 	return false
 }
 
-func (lm *LockManager) canGrantLock(tid *transaction.TransactionID, pid tuple.PageID, lockType LockType) bool {
+func (lm *LockManager) canGrantLockImmediately(tid *transaction.TransactionID, pid tuple.PageID, lockType LockType) bool {
 	locks, exists := lm.pageLocks[pid]
 	if !exists || len(locks) == 0 {
-		return true // No locks on this page
+		return true
 	}
 
 	if lockType == ExclusiveLock {
-		// Exclusive lock requires no other locks (except if we already have one)
 		for _, lock := range locks {
 			if lock.TID != tid {
 				return false
@@ -135,7 +135,6 @@ func (lm *LockManager) canGrantLock(tid *transaction.TransactionID, pid tuple.Pa
 		return true
 	}
 
-	// Shared lock can coexist with other shared locks
 	for _, lock := range locks {
 		if lock.TID != tid && lock.LockType == ExclusiveLock {
 			return false
@@ -148,10 +147,10 @@ func (lm *LockManager) grantLock(tid *transaction.TransactionID, pid tuple.PageI
 	lock := NewLock(tid, lockType)
 	lm.pageLocks[pid] = append(lm.pageLocks[pid], lock)
 
-	if lm.txLocks[tid] == nil {
-		lm.txLocks[tid] = make(map[tuple.PageID]LockType)
+	if lm.transactionLocks[tid] == nil {
+		lm.transactionLocks[tid] = make(map[tuple.PageID]LockType)
 	}
-	lm.txLocks[tid][pid] = lockType
+	lm.transactionLocks[tid][pid] = lockType
 	delete(lm.waitingFor, tid)
 }
 
@@ -173,7 +172,7 @@ func (lm *LockManager) upgradeLock(tid *transaction.TransactionID, pid tuple.Pag
 		}
 	}
 
-	lm.txLocks[tid][pid] = ExclusiveLock
+	lm.transactionLocks[tid][pid] = ExclusiveLock
 }
 
 func (lm *LockManager) addToWaitQueue(tid *transaction.TransactionID, pid tuple.PageID, lockType LockType) {
@@ -213,7 +212,6 @@ func (lm *LockManager) removeFromWaitQueue(tid *transaction.TransactionID, pid t
 		}
 	}
 
-	// Remove this specific page from waiting list
 	if waitingPages, exists := lm.waitingFor[tid]; exists {
 		newWaitingPages := make([]tuple.PageID, 0)
 		for _, waitingPid := range waitingPages {
@@ -252,6 +250,112 @@ func (lm *LockManager) calculateRetryDelay(attemptNumber int, baseDelay, maxDela
 	}
 
 	return delay
+}
+
+// UnlockPage releases a lock on a page
+func (lm *LockManager) UnlockPage(tid *transaction.TransactionID, pid tuple.PageID) {
+	lm.mutex.Lock()
+	defer lm.mutex.Unlock()
+
+	if locks, exists := lm.pageLocks[pid]; exists {
+		newLocks := make([]*Lock, 0)
+		for _, lock := range locks {
+			if lock.TID != tid {
+				newLocks = append(newLocks, lock)
+			}
+		}
+		if len(newLocks) > 0 {
+			lm.pageLocks[pid] = newLocks
+		} else {
+			delete(lm.pageLocks, pid)
+		}
+	}
+
+	if txPages, exists := lm.transactionLocks[tid]; exists {
+		delete(txPages, pid)
+		if len(txPages) == 0 {
+			delete(lm.transactionLocks, tid)
+		}
+	}
+
+	lm.depGraph.RemoveTransaction(tid)
+	lm.processWaitQueue(pid)
+}
+
+func (lm *LockManager) processWaitQueue(pid tuple.PageID) {
+	queue, exists := lm.waitQueue[pid]
+	if !exists || len(queue) == 0 {
+		return
+	}
+
+	remaining := make([]*LockRequest, 0)
+	for _, request := range queue {
+		if lm.canGrantLockImmediately(request.TID, pid, request.LockType) {
+			lm.grantLock(request.TID, pid, request.LockType)
+			if request.Chan != nil {
+				select {
+				case request.Chan <- true:
+				default:
+					// Channel is full or closed, but we don't block
+				}
+			}
+		} else {
+			remaining = append(remaining, request)
+		}
+	}
+
+	if len(remaining) > 0 {
+		lm.waitQueue[pid] = remaining
+	} else {
+		delete(lm.waitQueue, pid)
+	}
+}
+
+func (lm *LockManager) IsPageLocked(pid tuple.PageID) bool {
+	lm.mutex.RLock()
+	defer lm.mutex.RUnlock()
+
+	locks, exists := lm.pageLocks[pid]
+	return exists && len(locks) > 0
+}
+
+func (lm *LockManager) UnlockAllPages(tid *transaction.TransactionID) {
+	lm.mutex.Lock()
+	defer lm.mutex.Unlock()
+
+	txPages, exists := lm.transactionLocks[tid]
+	if !exists {
+		return
+	}
+
+	pagesToUnlock := make([]tuple.PageID, 0)
+	for pid := range txPages {
+		pagesToUnlock = append(pagesToUnlock, pid)
+	}
+
+	for _, pid := range pagesToUnlock {
+		if locks, exists := lm.pageLocks[pid]; exists {
+			newLocks := make([]*Lock, 0)
+			for _, lock := range locks {
+				if lock.TID != tid {
+					newLocks = append(newLocks, lock)
+				}
+			}
+			if len(newLocks) > 0 {
+				lm.pageLocks[pid] = newLocks
+			} else {
+				delete(lm.pageLocks, pid)
+			}
+		}
+	}
+
+	delete(lm.transactionLocks, tid)
+	lm.depGraph.RemoveTransaction(tid)
+	delete(lm.waitingFor, tid)
+
+	for _, pid := range pagesToUnlock {
+		lm.processWaitQueue(pid)
+	}
 }
 
 func min(a, b int) int {
