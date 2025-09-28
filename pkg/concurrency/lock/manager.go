@@ -492,24 +492,37 @@ func (lm *LockManager) UnlockAllPages(tid *transaction.TransactionID) {
 	lm.mutex.Lock()
 	defer lm.mutex.Unlock()
 
+	pagesToProcess := lm.releaseAllLocks(tid)
+	delete(lm.transactionLocks, tid)
+	lm.depGraph.RemoveTransaction(tid)
+	delete(lm.waitingFor, tid)
+
+	for _, pid := range pagesToProcess {
+		lm.processWaitQueue(pid)
+	}
+}
+
+// releaseAllLocks releases all locks held by transaction and returns affected pages.
+func (lm *LockManager) releaseAllLocks(tid *transaction.TransactionID) []tuple.PageID {
 	txPages, exists := lm.transactionLocks[tid]
 	if !exists {
-		return
+		return nil
 	}
 
-	pagesToUnlock := make([]tuple.PageID, 0)
+	pagesToProcess := make([]tuple.PageID, 0, len(txPages))
 	for pid := range txPages {
-		pagesToUnlock = append(pagesToUnlock, pid)
+		pagesToProcess = append(pagesToProcess, pid)
 	}
 
-	for _, pid := range pagesToUnlock {
+	for _, pid := range pagesToProcess {
 		if locks, exists := lm.pageLocks[pid]; exists {
-			newLocks := make([]*Lock, 0)
+			newLocks := make([]*Lock, 0, len(locks))
 			for _, lock := range locks {
 				if lock.TID != tid {
 					newLocks = append(newLocks, lock)
 				}
 			}
+
 			if len(newLocks) > 0 {
 				lm.pageLocks[pid] = newLocks
 			} else {
@@ -519,13 +532,7 @@ func (lm *LockManager) UnlockAllPages(tid *transaction.TransactionID) {
 	}
 
 	delete(lm.transactionLocks, tid)
-	lm.depGraph.RemoveTransaction(tid)
-	delete(lm.waitingFor, tid)
-
-	// Process wait queues for all affected pages
-	for _, pid := range pagesToUnlock {
-		lm.processWaitQueue(pid)
-	}
+	return pagesToProcess
 }
 
 // min returns the smaller of two integers.
