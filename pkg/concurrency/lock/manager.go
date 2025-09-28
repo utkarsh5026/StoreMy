@@ -405,31 +405,34 @@ func (lm *LockManager) UnlockPage(tid *transaction.TransactionID, pid tuple.Page
 	lm.mutex.Lock()
 	defer lm.mutex.Unlock()
 
-	// Remove lock from page's lock list
-	if locks, exists := lm.pageLocks[pid]; exists {
-		newLocks := make([]*Lock, 0)
+	lm.releaseLock(tid, pid)
+	lm.depGraph.RemoveTransaction(tid)
+	lm.processWaitQueue(pid)
+}
+
+// releaseLock releases a specific lock held by transaction.
+func (lm *LockManager) releaseLock(tid *transaction.TransactionID, pageId tuple.PageID) {
+	if locks, exists := lm.pageLocks[pageId]; exists {
+		newLocks := make([]*Lock, 0, len(locks))
 		for _, lock := range locks {
 			if lock.TID != tid {
 				newLocks = append(newLocks, lock)
 			}
 		}
+
 		if len(newLocks) > 0 {
-			lm.pageLocks[pid] = newLocks
+			lm.pageLocks[pageId] = newLocks
 		} else {
-			delete(lm.pageLocks, pid)
+			delete(lm.pageLocks, pageId)
 		}
 	}
 
-	// Remove page from transaction's lock map
 	if txPages, exists := lm.transactionLocks[tid]; exists {
-		delete(txPages, pid)
+		delete(txPages, pageId)
 		if len(txPages) == 0 {
 			delete(lm.transactionLocks, tid)
 		}
 	}
-
-	lm.depGraph.RemoveTransaction(tid)
-	lm.processWaitQueue(pid)
 }
 
 // processWaitQueue processes pending lock requests for a page after a lock is released.
