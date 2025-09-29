@@ -12,12 +12,6 @@ import (
 // It provides deadlock detection, lock upgrade capabilities, and maintains
 // transaction dependencies through a dependency graph.
 type LockManager struct {
-	// pageLocks maps each page ID to the list of locks currently held on that page
-	pageLocks map[tuple.PageID][]*Lock
-
-	// transactionLocks maps each transaction to the pages it has locked and their lock types
-	transactionLocks map[*transaction.TransactionID]map[tuple.PageID]LockType
-
 	// depGraph maintains the dependency relationships between transactions for deadlock detection
 	depGraph *DependencyGraph
 
@@ -25,16 +19,16 @@ type LockManager struct {
 	mutex sync.RWMutex
 
 	waitQueue *WaitQueue
+	lockTable *LockTable
 }
 
 // NewLockManager creates and initializes a new LockManager instance.
 // All internal maps and the dependency graph are initialized as empty.
 func NewLockManager() *LockManager {
 	return &LockManager{
-		pageLocks:        make(map[tuple.PageID][]*Lock),
-		transactionLocks: make(map[*transaction.TransactionID]map[tuple.PageID]LockType),
-		depGraph:         NewDependencyGraph(),
-		waitQueue:        NewWaitQueue(),
+		depGraph:  NewDependencyGraph(),
+		waitQueue: NewWaitQueue(),
+		lockTable: NewLockTable(),
 	}
 }
 
@@ -64,44 +58,13 @@ func (lm *LockManager) LockPage(tid *transaction.TransactionID, pid tuple.PageID
 	}
 
 	lm.mutex.RLock()
-	if lm.alreadyHasLock(tid, pid, lockType) {
+	if lm.lockTable.HasSufficientLock(tid, pid, lockType) {
 		lm.mutex.RUnlock()
 		return nil
 	}
 	lm.mutex.RUnlock()
 
 	return lm.attemptToAcquireLock(tid, pid, lockType)
-}
-
-// alreadyHasLock checks if the transaction already holds a sufficient lock on the page.
-// A transaction has a sufficient lock if:
-// - It holds an exclusive lock (covers all cases)
-// - It holds a shared lock and only needs a shared lock
-//
-// Parameters:
-//   - tid: The transaction to check
-//   - pageID: The page to check
-//   - reqLockType: The type of lock being requested
-//
-// Returns:
-//   - bool: true if the transaction already has a sufficient lock
-func (lm *LockManager) alreadyHasLock(tid *transaction.TransactionID, pageID tuple.PageID, reqLockType LockType) bool {
-	transactionPages, transactionExists := lm.transactionLocks[tid]
-	if !transactionExists {
-		return false
-	}
-
-	currentLockType, pageIsLocked := transactionPages[pageID]
-	if !pageIsLocked {
-		return false
-	}
-
-	// Exclusive lock covers everything
-	if currentLockType == ExclusiveLock {
-		return true
-	}
-
-	return currentLockType == SharedLock && reqLockType == SharedLock
 }
 
 // attemptToAcquireLock implements the main lock acquisition logic with retry and deadlock detection.
@@ -129,15 +92,14 @@ func (lm *LockManager) attemptToAcquireLock(tid *transaction.TransactionID, pid 
 	for attempt := 0; attempt < maxRetries; attempt++ {
 		lm.mutex.Lock()
 
-		// Double-check after acquiring lock
-		if lm.alreadyHasLock(tid, pid, lockType) {
+		if lm.lockTable.HasSufficientLock(tid, pid, lockType) {
 			lm.mutex.Unlock()
 			return nil
 		}
 
-		if lockType == ExclusiveLock && lm.transactionHoldsLockType(tid, pid, SharedLock) {
+		if lockType == ExclusiveLock && lm.lockTable.HasLockType(tid, pid, SharedLock) {
 			if lm.canUpgradeLock(tid, pid) {
-				lm.upgradeLock(tid, pid)
+				lm.lockTable.UpgradeLock(tid, pid)
 				lm.mutex.Unlock()
 				return nil
 			}
@@ -168,24 +130,6 @@ func (lm *LockManager) attemptToAcquireLock(tid *transaction.TransactionID, pid 
 	return fmt.Errorf("timeout waiting for lock on page %v", pid)
 }
 
-// transactionHoldsLockType checks if a transaction holds a specific type of lock on a page.
-//
-// Parameters:
-//   - tid: The transaction to check
-//   - pid: The page to check
-//   - lockType: The specific lock type to look for
-//
-// Returns:
-//   - bool: true if the transaction holds the specified lock type on the page
-func (lm *LockManager) transactionHoldsLockType(tid *transaction.TransactionID, pid tuple.PageID, lockType LockType) bool {
-	if txPages, exists := lm.transactionLocks[tid]; exists {
-		if currentLock, hasPage := txPages[pid]; hasPage {
-			return currentLock == lockType
-		}
-	}
-	return false
-}
-
 // canGrantLockImmediately determines if a lock can be granted without waiting.
 //
 // Lock compatibility rules:
@@ -201,8 +145,8 @@ func (lm *LockManager) transactionHoldsLockType(tid *transaction.TransactionID, 
 // Returns:
 //   - bool: true if the lock can be granted immediately
 func (lm *LockManager) canGrantLockImmediately(tid *transaction.TransactionID, pid tuple.PageID, lockType LockType) bool {
-	locks, exists := lm.pageLocks[pid]
-	if !exists || len(locks) == 0 {
+	locks := lm.lockTable.GetPageLocks(pid)
+	if len(locks) == 0 {
 		return true
 	}
 
@@ -230,13 +174,7 @@ func (lm *LockManager) canGrantLockImmediately(tid *transaction.TransactionID, p
 //   - pid: The page being locked
 //   - lockType: The type of lock being granted
 func (lm *LockManager) grantLock(tid *transaction.TransactionID, pid tuple.PageID, lockType LockType) {
-	lock := NewLock(tid, lockType)
-	lm.pageLocks[pid] = append(lm.pageLocks[pid], lock)
-
-	if lm.transactionLocks[tid] == nil {
-		lm.transactionLocks[tid] = make(map[tuple.PageID]LockType)
-	}
-	lm.transactionLocks[tid][pid] = lockType
+	lm.lockTable.AddLock(tid, pid, lockType)
 	lm.waitQueue.Remove(tid, pid)
 }
 
@@ -250,30 +188,13 @@ func (lm *LockManager) grantLock(tid *transaction.TransactionID, pid tuple.PageI
 // Returns:
 //   - bool: true if the lock can be upgraded
 func (lm *LockManager) canUpgradeLock(tid *transaction.TransactionID, pid tuple.PageID) bool {
-	locks := lm.pageLocks[pid]
+	locks := lm.lockTable.GetPageLocks(pid)
 	for _, lock := range locks {
 		if lock.TID != tid {
 			return false
 		}
 	}
 	return true
-}
-
-// upgradeLock upgrades a shared lock to an exclusive lock for the given transaction.
-// Assumes canUpgradeLock has already been checked.
-//
-// Parameters:
-//   - tid: The transaction upgrading the lock
-//   - pid: The page whose lock is being upgraded
-func (lm *LockManager) upgradeLock(tid *transaction.TransactionID, pid tuple.PageID) {
-	for _, lock := range lm.pageLocks[pid] {
-		if lock.TID == tid {
-			lock.LockType = ExclusiveLock
-			break
-		}
-	}
-
-	lm.transactionLocks[tid][pid] = ExclusiveLock
 }
 
 // updateDependencies updates the dependency graph based on lock conflicts.
@@ -288,7 +209,7 @@ func (lm *LockManager) upgradeLock(tid *transaction.TransactionID, pid tuple.Pag
 //   - pid: The page being requested
 //   - lockType: The type of lock being requested
 func (lm *LockManager) updateDependencies(tid *transaction.TransactionID, pid tuple.PageID, lockType LockType) {
-	locks := lm.pageLocks[pid]
+	locks := lm.lockTable.GetPageLocks(pid)
 
 	for _, lock := range locks {
 		if lock.TID == tid {
@@ -334,34 +255,9 @@ func (lm *LockManager) UnlockPage(tid *transaction.TransactionID, pid tuple.Page
 	lm.mutex.Lock()
 	defer lm.mutex.Unlock()
 
-	lm.releaseLock(tid, pid)
+	lm.lockTable.ReleaseLock(tid, pid)
 	lm.depGraph.RemoveTransaction(tid)
 	lm.processWaitQueue(pid)
-}
-
-// releaseLock releases a specific lock held by transaction.
-func (lm *LockManager) releaseLock(tid *transaction.TransactionID, pageId tuple.PageID) {
-	if locks, exists := lm.pageLocks[pageId]; exists {
-		newLocks := make([]*Lock, 0, len(locks))
-		for _, lock := range locks {
-			if lock.TID != tid {
-				newLocks = append(newLocks, lock)
-			}
-		}
-
-		if len(newLocks) > 0 {
-			lm.pageLocks[pageId] = newLocks
-		} else {
-			delete(lm.pageLocks, pageId)
-		}
-	}
-
-	if txPages, exists := lm.transactionLocks[tid]; exists {
-		delete(txPages, pageId)
-		if len(txPages) == 0 {
-			delete(lm.transactionLocks, tid)
-		}
-	}
 }
 
 // processWaitQueue processes pending lock requests for a page after a lock is released.
@@ -395,18 +291,11 @@ func (lm *LockManager) processWaitQueue(pid tuple.PageID) {
 }
 
 // IsPageLocked checks if any locks are currently held on a page.
-//
-// Parameters:
-//   - pid: The page to check
-//
-// Returns:
-//   - bool: true if the page has any locks, false otherwise
 func (lm *LockManager) IsPageLocked(pid tuple.PageID) bool {
 	lm.mutex.RLock()
 	defer lm.mutex.RUnlock()
 
-	locks, exists := lm.pageLocks[pid]
-	return exists && len(locks) > 0
+	return lm.lockTable.IsPageLocked(pid)
 }
 
 // UnlockAllPages releases all locks held by a transaction.
@@ -419,47 +308,13 @@ func (lm *LockManager) UnlockAllPages(tid *transaction.TransactionID) {
 	lm.mutex.Lock()
 	defer lm.mutex.Unlock()
 
-	pagesToProcess := lm.releaseAllLocks(tid)
-	delete(lm.transactionLocks, tid)
+	pagesToProcess := lm.lockTable.ReleaseAllLocks(tid)
 	lm.depGraph.RemoveTransaction(tid)
 	lm.waitQueue.RemoveTransaction(tid)
 
 	for _, pid := range pagesToProcess {
 		lm.processWaitQueue(pid)
 	}
-}
-
-// releaseAllLocks releases all locks held by transaction and returns affected pages.
-func (lm *LockManager) releaseAllLocks(tid *transaction.TransactionID) []tuple.PageID {
-	txPages, exists := lm.transactionLocks[tid]
-	if !exists {
-		return nil
-	}
-
-	pagesToProcess := make([]tuple.PageID, 0, len(txPages))
-	for pid := range txPages {
-		pagesToProcess = append(pagesToProcess, pid)
-	}
-
-	for _, pid := range pagesToProcess {
-		if locks, exists := lm.pageLocks[pid]; exists {
-			newLocks := make([]*Lock, 0, len(locks))
-			for _, lock := range locks {
-				if lock.TID != tid {
-					newLocks = append(newLocks, lock)
-				}
-			}
-
-			if len(newLocks) > 0 {
-				lm.pageLocks[pid] = newLocks
-			} else {
-				delete(lm.pageLocks, pid)
-			}
-		}
-	}
-
-	delete(lm.transactionLocks, tid)
-	return pagesToProcess
 }
 
 // min returns the smaller of two integers.
