@@ -39,6 +39,21 @@ func (wq *WaitQueue) Remove(tid *transaction.TransactionID, pid tuple.PageID) {
 	wq.removeFromTransactionQueue(tid, pid)
 }
 
+func (wq *WaitQueue) RemoveTransaction(tid *transaction.TransactionID) {
+	waitingPages, exists := wq.transactionWaiting[tid]
+	if !exists {
+		return
+	}
+
+	for _, pid := range waitingPages {
+		wq.Remove(tid, pid)
+	}
+}
+
+func (wq *WaitQueue) GetRequests(pid tuple.PageID) []*LockRequest {
+	return wq.pageWaitQueue[pid]
+}
+
 func (wq *WaitQueue) removeFromPageQueue(tid *transaction.TransactionID, pid tuple.PageID) {
 	requestQueue, exists := wq.pageWaitQueue[pid]
 	if !exists {
@@ -85,17 +100,6 @@ func (wq *WaitQueue) filterTransactionQueue(waitingPages []tuple.PageID, pid tup
 		}
 	}
 	return newWaitingPages
-}
-
-func (wq *WaitQueue) RemoveTransaction(tid *transaction.TransactionID) {
-	waitingPages, exists := wq.transactionWaiting[tid]
-	if !exists {
-		return
-	}
-
-	for _, pid := range waitingPages {
-		wq.Remove(tid, pid)
-	}
 }
 
 func (wq *WaitQueue) alreadyInPageQueue(tid *transaction.TransactionID, pid tuple.PageID) bool {
