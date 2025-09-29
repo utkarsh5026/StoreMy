@@ -12,12 +12,8 @@ import (
 // It provides deadlock detection, lock upgrade capabilities, and maintains
 // transaction dependencies through a dependency graph.
 type LockManager struct {
-	// depGraph maintains the dependency relationships between transactions for deadlock detection
-	depGraph *DependencyGraph
-
-	// mutex provides thread-safe access to all internal data structures
-	mutex sync.RWMutex
-
+	depGraph  *DependencyGraph
+	mutex     sync.RWMutex
 	waitQueue *WaitQueue
 	lockTable *LockTable
 }
@@ -136,14 +132,6 @@ func (lm *LockManager) attemptToAcquireLock(tid *transaction.TransactionID, pid 
 // - Multiple shared locks can coexist
 // - Exclusive locks cannot coexist with any other locks
 // - A transaction can always upgrade its own locks
-//
-// Parameters:
-//   - tid: The requesting transaction
-//   - pid: The page to lock
-//   - lockType: The type of lock requested
-//
-// Returns:
-//   - bool: true if the lock can be granted immediately
 func (lm *LockManager) canGrantLockImmediately(tid *transaction.TransactionID, pid tuple.PageID, lockType LockType) bool {
 	locks := lm.lockTable.GetPageLocks(pid)
 	if len(locks) == 0 {
@@ -168,11 +156,6 @@ func (lm *LockManager) canGrantLockImmediately(tid *transaction.TransactionID, p
 }
 
 // grantLock grants a lock to a transaction and updates all relevant data structures.
-//
-// Parameters:
-//   - tid: The transaction to grant the lock to
-//   - pid: The page being locked
-//   - lockType: The type of lock being granted
 func (lm *LockManager) grantLock(tid *transaction.TransactionID, pid tuple.PageID, lockType LockType) {
 	lm.lockTable.AddLock(tid, pid, lockType)
 	lm.waitQueue.Remove(tid, pid)
@@ -180,13 +163,6 @@ func (lm *LockManager) grantLock(tid *transaction.TransactionID, pid tuple.PageI
 
 // canUpgradeLock checks if a lock can be upgraded from shared to exclusive.
 // A lock can be upgraded only if the transaction is the sole holder of locks on the page.
-//
-// Parameters:
-//   - tid: The transaction attempting the upgrade
-//   - pid: The page whose lock is being upgraded
-//
-// Returns:
-//   - bool: true if the lock can be upgraded
 func (lm *LockManager) canUpgradeLock(tid *transaction.TransactionID, pid tuple.PageID) bool {
 	locks := lm.lockTable.GetPageLocks(pid)
 	for _, lock := range locks {
@@ -203,11 +179,6 @@ func (lm *LockManager) canUpgradeLock(tid *transaction.TransactionID, pid tuple.
 // Dependency rules:
 // - Exclusive lock request creates dependency on all lock holders
 // - Shared lock request creates dependency only on exclusive lock holders
-//
-// Parameters:
-//   - tid: The waiting transaction
-//   - pid: The page being requested
-//   - lockType: The type of lock being requested
 func (lm *LockManager) updateDependencies(tid *transaction.TransactionID, pid tuple.PageID, lockType LockType) {
 	locks := lm.lockTable.GetPageLocks(pid)
 
@@ -224,14 +195,6 @@ func (lm *LockManager) updateDependencies(tid *transaction.TransactionID, pid tu
 
 // calculateRetryDelay computes the delay for the next retry attempt using exponential backoff.
 // The delay increases exponentially but is capped at maxDelay to prevent excessive waiting.
-//
-// Parameters:
-//   - attemptNumber: The current attempt number (0-based)
-//   - baseDelay: The base delay for the first retry
-//   - maxDelay: The maximum allowed delay
-//
-// Returns:
-//   - time.Duration: The calculated delay for this attempt
 func (lm *LockManager) calculateRetryDelay(attemptNumber int, baseDelay, maxDelay time.Duration) time.Duration {
 	// Use more gradual exponential backoff: every 5 attempts instead of 10
 	// Cap the exponential factor at 5 to prevent excessive delays
@@ -247,10 +210,6 @@ func (lm *LockManager) calculateRetryDelay(attemptNumber int, baseDelay, maxDela
 
 // UnlockPage releases a specific lock held by a transaction on a page.
 // Processes the wait queue after releasing the lock to grant pending requests.
-//
-// Parameters:
-//   - tid: The transaction releasing the lock
-//   - pid: The page to unlock
 func (lm *LockManager) UnlockPage(tid *transaction.TransactionID, pid tuple.PageID) {
 	lm.mutex.Lock()
 	defer lm.mutex.Unlock()
@@ -262,9 +221,6 @@ func (lm *LockManager) UnlockPage(tid *transaction.TransactionID, pid tuple.Page
 
 // processWaitQueue processes pending lock requests for a page after a lock is released.
 // Grants locks to waiting transactions in FIFO order when possible.
-//
-// Parameters:
-//   - pid: The page whose wait queue should be processed
 func (lm *LockManager) processWaitQueue(pid tuple.PageID) {
 	requests := lm.waitQueue.GetRequests(pid)
 	if len(requests) == 0 {
@@ -301,9 +257,6 @@ func (lm *LockManager) IsPageLocked(pid tuple.PageID) bool {
 // UnlockAllPages releases all locks held by a transaction.
 // This is typically called during transaction commit or abort.
 // Processes wait queues for all affected pages after releasing locks.
-//
-// Parameters:
-//   - tid: The transaction whose locks should be released
 func (lm *LockManager) UnlockAllPages(tid *transaction.TransactionID) {
 	lm.mutex.Lock()
 	defer lm.mutex.Unlock()
