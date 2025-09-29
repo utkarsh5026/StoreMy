@@ -12,19 +12,25 @@ import (
 // It provides deadlock detection, lock upgrade capabilities, and maintains
 // transaction dependencies through a dependency graph.
 type LockManager struct {
-	depGraph  *DependencyGraph
-	mutex     sync.RWMutex
-	waitQueue *WaitQueue
-	lockTable *LockTable
+	depGraph    *DependencyGraph
+	mutex       sync.RWMutex
+	waitQueue   *WaitQueue
+	lockTable   *LockTable
+	lockGrantor *LockGrantor
 }
 
 // NewLockManager creates and initializes a new LockManager instance.
 // All internal maps and the dependency graph are initialized as empty.
 func NewLockManager() *LockManager {
+	lockTable := NewLockTable()
+	waitQueue := NewWaitQueue()
+	depGraph := NewDependencyGraph()
+
 	return &LockManager{
-		depGraph:  NewDependencyGraph(),
-		waitQueue: NewWaitQueue(),
-		lockTable: NewLockTable(),
+		depGraph:    depGraph,
+		waitQueue:   waitQueue,
+		lockTable:   lockTable,
+		lockGrantor: NewLockGrantor(lockTable, waitQueue, depGraph),
 	}
 }
 
@@ -94,15 +100,15 @@ func (lm *LockManager) attemptToAcquireLock(tid *transaction.TransactionID, pid 
 		}
 
 		if lockType == ExclusiveLock && lm.lockTable.HasLockType(tid, pid, SharedLock) {
-			if lm.canUpgradeLock(tid, pid) {
+			if lm.lockGrantor.CanUpgradeLock(tid, pid) {
 				lm.lockTable.UpgradeLock(tid, pid)
 				lm.mutex.Unlock()
 				return nil
 			}
 		}
 
-		if lm.canGrantLockImmediately(tid, pid, lockType) {
-			lm.grantLock(tid, pid, lockType)
+		if lm.lockGrantor.CanGrantImmediately(tid, pid, lockType) {
+			lm.lockGrantor.GrantLock(tid, pid, lockType)
 			lm.depGraph.RemoveTransaction(tid)
 			lm.mutex.Unlock()
 			return nil
@@ -124,53 +130,6 @@ func (lm *LockManager) attemptToAcquireLock(tid *transaction.TransactionID, pid 
 	}
 
 	return fmt.Errorf("timeout waiting for lock on page %v", pid)
-}
-
-// canGrantLockImmediately determines if a lock can be granted without waiting.
-//
-// Lock compatibility rules:
-// - Multiple shared locks can coexist
-// - Exclusive locks cannot coexist with any other locks
-// - A transaction can always upgrade its own locks
-func (lm *LockManager) canGrantLockImmediately(tid *transaction.TransactionID, pid tuple.PageID, lockType LockType) bool {
-	locks := lm.lockTable.GetPageLocks(pid)
-	if len(locks) == 0 {
-		return true
-	}
-
-	if lockType == ExclusiveLock {
-		for _, lock := range locks {
-			if lock.TID != tid {
-				return false
-			}
-		}
-		return true
-	}
-
-	for _, lock := range locks {
-		if lock.TID != tid && lock.LockType == ExclusiveLock {
-			return false
-		}
-	}
-	return true
-}
-
-// grantLock grants a lock to a transaction and updates all relevant data structures.
-func (lm *LockManager) grantLock(tid *transaction.TransactionID, pid tuple.PageID, lockType LockType) {
-	lm.lockTable.AddLock(tid, pid, lockType)
-	lm.waitQueue.Remove(tid, pid)
-}
-
-// canUpgradeLock checks if a lock can be upgraded from shared to exclusive.
-// A lock can be upgraded only if the transaction is the sole holder of locks on the page.
-func (lm *LockManager) canUpgradeLock(tid *transaction.TransactionID, pid tuple.PageID) bool {
-	locks := lm.lockTable.GetPageLocks(pid)
-	for _, lock := range locks {
-		if lock.TID != tid {
-			return false
-		}
-	}
-	return true
 }
 
 // updateDependencies updates the dependency graph based on lock conflicts.
@@ -228,8 +187,8 @@ func (lm *LockManager) processWaitQueue(pid tuple.PageID) {
 	}
 	grantedRequests := make([]*LockRequest, 0)
 	for _, request := range requests {
-		if lm.canGrantLockImmediately(request.TID, pid, request.LockType) {
-			lm.grantLock(request.TID, pid, request.LockType)
+		if lm.lockGrantor.CanGrantImmediately(request.TID, pid, request.LockType) {
+			lm.lockGrantor.GrantLock(request.TID, pid, request.LockType)
 			grantedRequests = append(grantedRequests, request)
 			if request.Chan != nil {
 				select {
