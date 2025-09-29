@@ -18,6 +18,14 @@ func NewLockTable() *LockTable {
 	}
 }
 
+func (lt *LockTable) GetPageLockTable() map[tuple.PageID][]*Lock {
+	return lt.pageLocks
+}
+
+func (lt *LockTable) GetTransactionLockTable() map[*transaction.TransactionID]map[tuple.PageID]LockType {
+	return lt.transactionLocks
+}
+
 // HasSufficientLock checks if the transaction already holds a sufficient lock on the page.
 func (lt *LockTable) HasSufficientLock(tid *transaction.TransactionID, pageID tuple.PageID, reqLockType LockType) bool {
 	transactionPages, exists := lt.transactionLocks[tid]
