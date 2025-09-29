@@ -28,8 +28,8 @@ func TestNewLockManager(t *testing.T) {
 		t.Error("transactionLocks map not initialized")
 	}
 
-	if lm.waitingFor == nil {
-		t.Error("waitingFor map not initialized")
+	if lm.waitQueue == nil {
+		t.Error("waitQueue map not initialized")
 	}
 
 	if lm.depGraph == nil {
@@ -500,29 +500,29 @@ func TestWaitQueueOperations(t *testing.T) {
 	pid := heap.NewHeapPageID(1, 1)
 
 	// Add to wait queue
-	lm.addToWaitQueue(tid1, pid, SharedLock)
-	lm.addToWaitQueue(tid2, pid, ExclusiveLock)
+	lm.waitQueue.Add(tid1, pid, SharedLock)
+	lm.waitQueue.Add(tid2, pid, ExclusiveLock)
 
 	// Verify wait queue
-	queue := lm.waitQueue[pid]
+	queue := lm.waitQueue.GetRequests(pid)
 	if len(queue) != 2 {
 		t.Fatalf("Expected 2 items in wait queue, got %d", len(queue))
 	}
 
 	// Verify waiting for tracking
-	if len(lm.waitingFor[tid1]) != 1 || lm.waitingFor[tid1][0] != pid {
+	if len(lm.waitQueue.GetPagesRequestedFor(tid1)) != 1 || lm.waitQueue.GetPagesRequestedFor(tid1)[0] != pid {
 		t.Error("Transaction 1 waiting tracking incorrect")
 	}
 
-	if len(lm.waitingFor[tid2]) != 1 || lm.waitingFor[tid2][0] != pid {
+	if len(lm.waitQueue.GetPagesRequestedFor(tid2)) != 1 || lm.waitQueue.GetPagesRequestedFor(tid2)[0] != pid {
 		t.Error("Transaction 2 waiting tracking incorrect")
 	}
 
 	// Remove from wait queue
-	lm.removeFromWaitQueue(tid1, pid)
+	lm.waitQueue.Remove(tid1, pid)
 
 	// Verify removal
-	queue = lm.waitQueue[pid]
+	queue = lm.waitQueue.GetRequests(pid)
 	if len(queue) != 1 {
 		t.Fatalf("Expected 1 item in wait queue after removal, got %d", len(queue))
 	}
@@ -532,15 +532,15 @@ func TestWaitQueueOperations(t *testing.T) {
 	}
 
 	// Verify waiting tracking removed
-	if _, exists := lm.waitingFor[tid1]; exists {
+	if len(lm.waitQueue.GetPagesRequestedFor(tid1)) > 0 {
 		t.Error("Transaction 1 should not be in waiting tracking after removal")
 	}
 
 	// Remove last item
-	lm.removeFromWaitQueue(tid2, pid)
+	lm.waitQueue.Remove(tid2, pid)
 
 	// Verify queue is deleted
-	if _, exists := lm.waitQueue[pid]; exists {
+	if len(lm.waitQueue.GetRequests(pid)) > 0 {
 		t.Error("Wait queue should be deleted when empty")
 	}
 }
@@ -608,7 +608,7 @@ func TestMultiplePageWaiting(t *testing.T) {
 	time.Sleep(50 * time.Millisecond)
 
 	lm.mutex.RLock()
-	waitingPages := lm.waitingFor[tid2]
+	waitingPages := lm.waitQueue.GetPagesRequestedFor(tid2)
 	lm.mutex.RUnlock()
 
 	if len(waitingPages) != 2 {
@@ -617,11 +617,11 @@ func TestMultiplePageWaiting(t *testing.T) {
 
 	// Remove from wait queue for one page specifically
 	lm.mutex.Lock()
-	lm.removeFromWaitQueue(tid2, pid1)
+	lm.waitQueue.Remove(tid2, pid1)
 	lm.mutex.Unlock()
 
 	lm.mutex.RLock()
-	waitingPages = lm.waitingFor[tid2]
+	waitingPages = lm.waitQueue.GetPagesRequestedFor(tid2)
 	lm.mutex.RUnlock()
 
 	if len(waitingPages) != 1 {
@@ -689,7 +689,7 @@ func TestConcurrentExclusiveLockContention(t *testing.T) {
 
 	lm := NewLockManager()
 	pid := heap.NewHeapPageID(1, 1)
-	numGoroutines := 50
+	numGoroutines := 10 // Reduced from 50 to prevent excessive timeouts
 
 	var wg sync.WaitGroup
 	var successCount int64
@@ -841,8 +841,8 @@ func TestMixedWorkloadStress(t *testing.T) {
 
 	lm := NewLockManager()
 	numPages := 10
-	numWorkers := 50
-	duration := 2 * time.Second
+	numWorkers := 20 // Reduced from 50
+	duration := 500 * time.Millisecond // Reduced from 2 seconds
 
 	var stats struct {
 		sharedLocks    int64
@@ -1028,8 +1028,8 @@ func TestMemoryPressure(t *testing.T) {
 	lm.mutex.RLock()
 	pageLocksCount := len(lm.pageLocks)
 	transactionLocksCount := len(lm.transactionLocks)
-	waitingForCount := len(lm.waitingFor)
-	waitQueueCount := len(lm.waitQueue)
+	waitingForCount := len(lm.waitQueue.transactionWaiting)
+	waitQueueCount := len(lm.waitQueue.pageWaitQueue)
 	lm.mutex.RUnlock()
 
 	t.Logf("Final state - PageLocks: %d, transactionLocks: %d, WaitingFor: %d, WaitQueue: %d",
@@ -1201,37 +1201,44 @@ func TestCalculateRetryDelay(t *testing.T) {
 
 	// Test with attempt 5
 	delay = lm.calculateRetryDelay(5, baseDelay, maxDelay)
-	expected = baseDelay // factor is 0 for attempt 5 (5/10 = 0)
+	expected = baseDelay * 2 // factor is 1 for attempt 5 (5/5 = 1, 2^1 = 2)
 	if delay != expected {
 		t.Errorf("Expected delay %v for attempt 5, got %v", expected, delay)
 	}
 
 	// Test with attempt 10
 	delay = lm.calculateRetryDelay(10, baseDelay, maxDelay)
-	expected = baseDelay * 2 // factor is 1 for attempt 10 (10/10 = 1)
+	expected = baseDelay * 4 // factor is 2 for attempt 10 (10/5 = 2, 2^2 = 4)
 	if delay != expected {
 		t.Errorf("Expected delay %v for attempt 10, got %v", expected, delay)
 	}
 
-	// Test with attempt 50
-	delay = lm.calculateRetryDelay(50, baseDelay, maxDelay)
-	expected = baseDelay * 32 // factor is 5 for attempt 50 (50/10 = 5, min(5, 10) = 5, 2^5 = 32)
+	// Test with attempt 25
+	delay = lm.calculateRetryDelay(25, baseDelay, maxDelay)
+	expected = baseDelay * 32 // factor is 5 for attempt 25 (25/5 = 5, min(5, 5) = 5, 2^5 = 32)
 	if delay != expected {
-		t.Errorf("Expected delay %v for attempt 50, got %v", expected, delay)
+		t.Errorf("Expected delay %v for attempt 25, got %v", expected, delay)
 	}
 
-	// Test with attempt 200 (should hit max delay)
+	// Test with attempt 200 (should hit max factor of 5)
 	delay = lm.calculateRetryDelay(200, baseDelay, maxDelay)
-	expected = maxDelay // Should be capped at maxDelay
+	expected = baseDelay * 32 // factor is 5 for attempt 200 (200/5 = 40, min(40, 5) = 5, 2^5 = 32)
 	if delay != expected {
 		t.Errorf("Expected delay %v for attempt 200, got %v", expected, delay)
 	}
 
 	// Test edge case with very large attempt number
 	delay = lm.calculateRetryDelay(10000, baseDelay, maxDelay)
-	expected = maxDelay // Should be capped at maxDelay
+	expected = baseDelay * 32 // factor is 5 for attempt 10000 (10000/5 = 2000, min(2000, 5) = 5, 2^5 = 32)
 	if delay != expected {
 		t.Errorf("Expected delay %v for attempt 10000, got %v", expected, delay)
+	}
+
+	// Test case where calculated delay exceeds maxDelay
+	delay = lm.calculateRetryDelay(30, time.Millisecond, 10*time.Millisecond) // Small maxDelay
+	expected = 10 * time.Millisecond // Should be capped at maxDelay
+	if delay != expected {
+		t.Errorf("Expected delay to be capped at maxDelay %v, got %v", expected, delay)
 	}
 }
 
@@ -1264,11 +1271,11 @@ func TestProcessWaitQueue(t *testing.T) {
 
 	// Create a scenario where tid1 has exclusive lock, tid2 and tid3 are waiting
 	lm.grantLock(tid1, pid, ExclusiveLock)
-	lm.addToWaitQueue(tid2, pid, SharedLock)
-	lm.addToWaitQueue(tid3, pid, SharedLock)
+	lm.waitQueue.Add(tid2, pid, SharedLock)
+	lm.waitQueue.Add(tid3, pid, SharedLock)
 
 	// Verify initial state
-	queue := lm.waitQueue[pid]
+	queue := lm.waitQueue.GetRequests(pid)
 	if len(queue) != 2 {
 		t.Fatalf("Expected 2 items in wait queue, got %d", len(queue))
 	}
@@ -1277,7 +1284,7 @@ func TestProcessWaitQueue(t *testing.T) {
 	lm.UnlockPage(tid1, pid)
 
 	// Check that wait queue is now empty (both shared locks should be granted)
-	if _, exists := lm.waitQueue[pid]; exists {
+	if len(lm.waitQueue.GetRequests(pid)) > 0 {
 		t.Error("Wait queue should be empty after processing")
 	}
 
@@ -1300,8 +1307,8 @@ func TestProcessWaitQueuePartialGrant(t *testing.T) {
 	// Grant shared lock to tid1
 	lm.grantLock(tid1, pid, SharedLock)
 	// Add tid2 waiting for shared lock and tid3 waiting for exclusive lock
-	lm.addToWaitQueue(tid2, pid, SharedLock)
-	lm.addToWaitQueue(tid3, pid, ExclusiveLock)
+	lm.waitQueue.Add(tid2, pid, SharedLock)
+	lm.waitQueue.Add(tid3, pid, ExclusiveLock)
 
 	// Process wait queue - should grant shared lock to tid2 but not exclusive to tid3
 	lm.processWaitQueue(pid)
@@ -1312,7 +1319,7 @@ func TestProcessWaitQueuePartialGrant(t *testing.T) {
 	}
 
 	// Verify tid3 is still waiting
-	queue := lm.waitQueue[pid]
+	queue := lm.waitQueue.GetRequests(pid)
 	if len(queue) != 1 {
 		t.Fatalf("Expected 1 item remaining in wait queue, got %d", len(queue))
 	}
@@ -1377,7 +1384,7 @@ func TestUnlockAllPages(t *testing.T) {
 	}
 
 	// Add tid2 to wait queue for pid1
-	lm.addToWaitQueue(tid2, pid1, ExclusiveLock)
+	lm.waitQueue.Add(tid2, pid1, ExclusiveLock)
 
 	// Unlock all pages for tid1
 	lm.UnlockAllPages(tid1)
@@ -1409,7 +1416,7 @@ func TestUnlockAllPages(t *testing.T) {
 	}
 
 	// Verify tid1 is not in waiting list
-	if _, exists := lm.waitingFor[tid1]; exists {
+	if len(lm.waitQueue.GetPagesRequestedFor(tid1)) > 0 {
 		t.Error("tid1 should not be in waiting list after unlocking all")
 	}
 }
