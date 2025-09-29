@@ -35,33 +35,56 @@ func (wq *WaitQueue) Add(tid *transaction.TransactionID, pid tuple.PageID, lockT
 }
 
 func (wq *WaitQueue) Remove(tid *transaction.TransactionID, pid tuple.PageID) {
-	if requestQueue, exists := wq.pageWaitQueue[pid]; exists {
-		newQueue := make([]*LockRequest, 0)
-		for _, req := range requestQueue {
-			if req.TID != tid {
-				newQueue = append(newQueue, req)
-			}
-		}
-		if len(newQueue) > 0 {
-			wq.pageWaitQueue[pid] = newQueue
-		} else {
-			delete(wq.pageWaitQueue, pid)
-		}
+	wq.removeFromPageQueue(tid, pid)
+	wq.removeFromTransactionQueue(tid, pid)
+}
+
+func (wq *WaitQueue) removeFromPageQueue(tid *transaction.TransactionID, pid tuple.PageID) {
+	requestQueue, exists := wq.pageWaitQueue[pid]
+	if !exists {
+		return
 	}
 
-	if waitingPages, exists := wq.transactionWaiting[tid]; exists {
-		newWaitingPages := make([]tuple.PageID, 0)
-		for _, waitingPid := range waitingPages {
-			if !pid.Equals(waitingPid) {
-				newWaitingPages = append(newWaitingPages, waitingPid)
-			}
-		}
-		if len(newWaitingPages) > 0 {
-			wq.transactionWaiting[tid] = newWaitingPages
-		} else {
-			delete(wq.transactionWaiting, tid)
+	newQueue := wq.filterPageQueue(requestQueue, tid)
+	if len(newQueue) > 0 {
+		wq.pageWaitQueue[pid] = newQueue
+	} else {
+		delete(wq.pageWaitQueue, pid)
+	}
+}
+
+func (wq *WaitQueue) filterPageQueue(requestQueue []*LockRequest, tid *transaction.TransactionID) []*LockRequest {
+	newQueue := make([]*LockRequest, 0)
+	for _, req := range requestQueue {
+		if req.TID != tid {
+			newQueue = append(newQueue, req)
 		}
 	}
+	return newQueue
+}
+
+func (wq *WaitQueue) removeFromTransactionQueue(tid *transaction.TransactionID, pid tuple.PageID) {
+	waitingPages, exists := wq.transactionWaiting[tid]
+	if !exists {
+		return
+	}
+
+	newWaitingPages := wq.filterTransactionQueue(waitingPages, pid)
+	if len(newWaitingPages) > 0 {
+		wq.transactionWaiting[tid] = newWaitingPages
+	} else {
+		delete(wq.transactionWaiting, tid)
+	}
+}
+
+func (wq *WaitQueue) filterTransactionQueue(waitingPages []tuple.PageID, pid tuple.PageID) []tuple.PageID {
+	newWaitingPages := make([]tuple.PageID, 0)
+	for _, waitingPid := range waitingPages {
+		if !pid.Equals(waitingPid) {
+			newWaitingPages = append(newWaitingPages, waitingPid)
+		}
+	}
+	return newWaitingPages
 }
 
 func (wq *WaitQueue) RemoveTransaction(tid *transaction.TransactionID) {
