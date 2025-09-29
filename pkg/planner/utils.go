@@ -10,48 +10,14 @@ import (
 )
 
 func buildPredicateFromFilterNode(filter *plan.FilterNode, tupleDesc *tuple.TupleDescription) (*query.Predicate, error) {
-	fieldName := filter.Field
-	if dotIndex := strings.LastIndex(filter.Field, "."); dotIndex != -1 {
-		fieldName = filter.Field[dotIndex+1:]
+	fieldIndex, err := findFieldIndex(filter.Field, tupleDesc)
+	if err != nil {
+		return nil, err
 	}
 
-	fieldIndex := -1
-	for i := 0; i < tupleDesc.NumFields(); i++ {
-		name, _ := tupleDesc.GetFieldName(i)
-		if name == fieldName {
-			fieldIndex = i
-			break
-		}
-	}
-
-	if fieldIndex == -1 {
-		return nil, fmt.Errorf("field %s not found", filter.Field)
-	}
-
-	fieldType, _ := tupleDesc.TypeAtIndex(fieldIndex)
-	var constantField types.Field
-
-	switch fieldType {
-	case types.IntType:
-		var intVal int32
-		fmt.Sscanf(filter.Constant, "%d", &intVal)
-		constantField = types.NewIntField(intVal)
-	case types.BoolType:
-		var boolVal bool
-		if filter.Constant == "true" {
-			boolVal = true
-		} else {
-			boolVal = false
-		}
-		constantField = types.NewBoolField(boolVal)
-	case types.FloatType:
-		var floatVal float64
-		fmt.Sscanf(filter.Constant, "%f", &floatVal)
-		constantField = types.NewFloat64Field(floatVal)
-	case types.StringType:
-		constantField = types.NewStringField(filter.Constant, types.StringMaxSize)
-	default:
-		return nil, fmt.Errorf("unsupported field type: %v", fieldType)
+	constantField, err := createConstantField(filter.Constant, tupleDesc, fieldIndex)
+	if err != nil {
+		return nil, err
 	}
 
 	op, err := getPredicateOperation(filter.Predicate)
@@ -60,6 +26,44 @@ func buildPredicateFromFilterNode(filter *plan.FilterNode, tupleDesc *tuple.Tupl
 	}
 
 	return query.NewPredicate(fieldIndex, op, constantField), nil
+}
+
+func findFieldIndex(fieldPath string, tupleDesc *tuple.TupleDescription) (int, error) {
+	fieldName := fieldPath
+	if dotIndex := strings.LastIndex(fieldPath, "."); dotIndex != -1 {
+		fieldName = fieldPath[dotIndex+1:]
+	}
+
+	for i := 0; i < tupleDesc.NumFields(); i++ {
+		name, _ := tupleDesc.GetFieldName(i)
+		if name == fieldName {
+			return i, nil
+		}
+	}
+
+	return -1, fmt.Errorf("field %s not found", fieldPath)
+}
+
+func createConstantField(constantValue string, tupleDesc *tuple.TupleDescription, fieldIndex int) (types.Field, error) {
+	fieldType, _ := tupleDesc.TypeAtIndex(fieldIndex)
+
+	switch fieldType {
+	case types.IntType:
+		var intVal int32
+		fmt.Sscanf(constantValue, "%d", &intVal)
+		return types.NewIntField(intVal), nil
+	case types.BoolType:
+		boolVal := constantValue == "true"
+		return types.NewBoolField(boolVal), nil
+	case types.FloatType:
+		var floatVal float64
+		fmt.Sscanf(constantValue, "%f", &floatVal)
+		return types.NewFloat64Field(floatVal), nil
+	case types.StringType:
+		return types.NewStringField(constantValue, types.StringMaxSize), nil
+	default:
+		return nil, fmt.Errorf("unsupported field type: %v", fieldType)
+	}
 }
 
 func getPredicateOperation(predicate types.Predicate) (query.PredicateOp, error) {
