@@ -8,7 +8,9 @@ import (
 	"storemy/pkg/tuple"
 	"storemy/pkg/types"
 	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 )
 
 // mockDbFile implements storage.DbFile for testing
@@ -1062,4 +1064,695 @@ func containsSubstring(s, substr string) bool {
 		}
 	}
 	return false
+}
+
+func TestTableManager_HighVolumeConcurrentOperations(t *testing.T) {
+	tm := NewTableManager()
+	numGoroutines := 100
+	numOperationsPerGoroutine := 1000
+	
+	var wg sync.WaitGroup
+	var addErrors, getErrors, removeErrors int32
+	
+	wg.Add(numGoroutines * 3)
+	
+	// Concurrent adds
+	for i := 0; i < numGoroutines; i++ {
+		go func(goroutineID int) {
+			defer wg.Done()
+			for j := 0; j < numOperationsPerGoroutine; j++ {
+				tableName := fmt.Sprintf("table_%d_%d", goroutineID, j)
+				tableID := goroutineID*numOperationsPerGoroutine + j + 1
+				dbFile := newMockDbFile(tableID, []types.Type{types.IntType}, []string{"id"})
+				
+				if err := tm.AddTable(dbFile, tableName, "id"); err != nil {
+					atomic.AddInt32(&addErrors, 1)
+				}
+			}
+		}(i)
+	}
+	
+	// Concurrent gets
+	for i := 0; i < numGoroutines; i++ {
+		go func(goroutineID int) {
+			defer wg.Done()
+			for j := 0; j < numOperationsPerGoroutine; j++ {
+				tableName := fmt.Sprintf("table_%d_%d", goroutineID, j)
+				if _, err := tm.GetTableID(tableName); err != nil {
+					atomic.AddInt32(&getErrors, 1)
+				}
+				tm.TableExists(tableName)
+				tm.GetAllTableNames()
+			}
+		}(i)
+	}
+	
+	// Concurrent removes (for some tables)
+	for i := 0; i < numGoroutines; i++ {
+		go func(goroutineID int) {
+			defer wg.Done()
+			for j := 0; j < numOperationsPerGoroutine/10; j++ {
+				tableName := fmt.Sprintf("table_%d_%d", goroutineID, j*10)
+				if err := tm.RemoveTable(tableName); err != nil {
+					atomic.AddInt32(&removeErrors, 1)
+				}
+			}
+		}(i)
+	}
+	
+	wg.Wait()
+	
+	// Verify integrity after all operations
+	if err := tm.ValidateIntegrity(); err != nil {
+		t.Errorf("Integrity validation failed after high-volume operations: %v", err)
+	}
+	
+	t.Logf("Operations completed - Add errors: %d, Get errors: %d, Remove errors: %d", 
+		addErrors, getErrors, removeErrors)
+}
+
+func TestTableManager_ConcurrentRenameOperations(t *testing.T) {
+	tm := NewTableManager()
+	numTables := 100
+	
+	// Add initial tables
+	for i := 0; i < numTables; i++ {
+		dbFile := newMockDbFile(i+1, []types.Type{types.IntType}, []string{"id"})
+		err := tm.AddTable(dbFile, fmt.Sprintf("table_%d", i), "id")
+		if err != nil {
+			t.Fatalf("Failed to add initial table %d: %v", i, err)
+		}
+	}
+	
+	var wg sync.WaitGroup
+	var renameErrors int32
+	
+	// Concurrent renames
+	for i := 0; i < numTables; i++ {
+		wg.Add(1)
+		go func(tableNum int) {
+			defer wg.Done()
+			oldName := fmt.Sprintf("table_%d", tableNum)
+			newName := fmt.Sprintf("renamed_table_%d", tableNum)
+			
+			if err := tm.RenameTable(oldName, newName); err != nil {
+				atomic.AddInt32(&renameErrors, 1)
+			}
+		}(i)
+	}
+	
+	wg.Wait()
+	
+	// Verify all tables were renamed correctly
+	allNames := tm.GetAllTableNames()
+	renamedCount := 0
+	for _, name := range allNames {
+		if len(name) >= 14 && name[:14] == "renamed_table_" {
+			renamedCount++
+		}
+	}
+	
+	expectedRenamed := numTables - int(renameErrors)
+	if renamedCount != expectedRenamed {
+		t.Errorf("Expected %d renamed tables, got %d (rename errors: %d)", 
+			expectedRenamed, renamedCount, renameErrors)
+	}
+	
+	if err := tm.ValidateIntegrity(); err != nil {
+		t.Errorf("Integrity validation failed after concurrent renames: %v", err)
+	}
+}
+
+func TestTableManager_MemoryPressureScenario(t *testing.T) {
+	tm := NewTableManager()
+	numTables := 10000
+	
+	// Add many tables to simulate memory pressure
+	for i := 0; i < numTables; i++ {
+		tableName := fmt.Sprintf("memory_test_table_%d", i)
+		dbFile := newMockDbFile(i+1, []types.Type{types.IntType, types.StringType, types.FloatType}, 
+			[]string{"id", "name", "value"})
+		
+		err := tm.AddTable(dbFile, tableName, "id")
+		if err != nil {
+			t.Fatalf("Failed to add table %d: %v", i, err)
+		}
+		
+		// Periodically verify integrity during the process
+		if i%1000 == 0 {
+			if err := tm.ValidateIntegrity(); err != nil {
+				t.Errorf("Integrity validation failed at table %d: %v", i, err)
+			}
+		}
+	}
+	
+	// Verify all tables exist and are accessible
+	allNames := tm.GetAllTableNames()
+	if len(allNames) != numTables {
+		t.Errorf("Expected %d tables, got %d", numTables, len(allNames))
+	}
+	
+	// Test random access patterns
+	for i := 0; i < 1000; i++ {
+		tableNum := i * (numTables / 1000)
+		tableName := fmt.Sprintf("memory_test_table_%d", tableNum)
+		
+		if !tm.TableExists(tableName) {
+			t.Errorf("Table %s should exist but doesn't", tableName)
+		}
+		
+		tableID, err := tm.GetTableID(tableName)
+		if err != nil {
+			t.Errorf("Failed to get table ID for %s: %v", tableName, err)
+		}
+		
+		if tableID != tableNum+1 {
+			t.Errorf("Expected table ID %d, got %d", tableNum+1, tableID)
+		}
+	}
+	
+	// Clear all and verify memory is properly cleaned
+	tm.Clear()
+	
+	if len(tm.GetAllTableNames()) != 0 {
+		t.Error("Expected empty table manager after Clear()")
+	}
+}
+
+type errorDbFile struct {
+	*mockDbFile
+	closeError bool
+}
+
+func (e *errorDbFile) Close() error {
+	if e.closeError {
+		return fmt.Errorf("simulated close error")
+	}
+	return e.mockDbFile.Close()
+}
+
+func TestTableManager_ErrorHandlingDuringFileOperations(t *testing.T) {
+	tm := NewTableManager()
+	
+	// Test with file that errors on close
+	errorFile := &errorDbFile{
+		mockDbFile: newMockDbFile(1, []types.Type{types.IntType}, []string{"id"}),
+		closeError: true,
+	}
+	
+	err := tm.AddTable(errorFile, "error_table", "id")
+	if err != nil {
+		t.Fatalf("Failed to add table with error file: %v", err)
+	}
+	
+	// Remove table - should handle close error gracefully
+	err = tm.RemoveTable("error_table")
+	if err != nil {
+		t.Errorf("RemoveTable should succeed even with close error: %v", err)
+	}
+	
+	// Verify table was removed despite close error
+	if tm.TableExists("error_table") {
+		t.Error("Table should be removed even if close failed")
+	}
+	
+	// Test Clear with error files
+	errorFile2 := &errorDbFile{
+		mockDbFile: newMockDbFile(2, []types.Type{types.IntType}, []string{"id"}),
+		closeError: true,
+	}
+	
+	tm.AddTable(errorFile2, "error_table2", "id")
+	tm.Clear() // Should handle close errors gracefully
+	
+	if len(tm.GetAllTableNames()) != 0 {
+		t.Error("Clear should remove all tables even with close errors")
+	}
+}
+
+func TestTableManager_PropertyBasedScenarios(t *testing.T) {
+	// Test that adding and immediately removing maintains empty state
+	for i := 0; i < 100; i++ {
+		tm := NewTableManager()
+		tableName := fmt.Sprintf("prop_test_%d", i)
+		dbFile := newMockDbFile(i+1, []types.Type{types.IntType}, []string{"id"})
+		
+		// Add then immediately remove
+		err := tm.AddTable(dbFile, tableName, "id")
+		if err != nil {
+			t.Fatalf("Failed to add table: %v", err)
+		}
+		
+		err = tm.RemoveTable(tableName)
+		if err != nil {
+			t.Fatalf("Failed to remove table: %v", err)
+		}
+		
+		// Verify empty state
+		if len(tm.GetAllTableNames()) != 0 {
+			t.Error("TableManager should be empty after add-remove cycle")
+		}
+		
+		if err := tm.ValidateIntegrity(); err != nil {
+			t.Errorf("Integrity validation failed: %v", err)
+		}
+	}
+}
+
+func TestTableManager_RenameTablePreservesReferences(t *testing.T) {
+	tm := NewTableManager()
+	dbFile := newMockDbFile(42, []types.Type{types.IntType, types.StringType}, []string{"id", "name"})
+	
+	err := tm.AddTable(dbFile, "original", "id")
+	if err != nil {
+		t.Fatalf("Failed to add table: %v", err)
+	}
+	
+	// Get original references
+	originalTableInfo, _ := tm.nameToTable["original"]
+	originalTupleDesc, err := tm.GetTupleDesc(42)
+	if err != nil {
+		t.Fatalf("Failed to get tuple desc: %v", err)
+	}
+	originalDbFile, err := tm.GetDbFile(42)
+	if err != nil {
+		t.Fatalf("Failed to get db file: %v", err)
+	}
+	
+	// Rename
+	err = tm.RenameTable("original", "renamed")
+	if err != nil {
+		t.Fatalf("Failed to rename table: %v", err)
+	}
+	
+	// Verify all references are preserved
+	renamedTableInfo, exists := tm.nameToTable["renamed"]
+	if !exists {
+		t.Fatal("Renamed table not found")
+	}
+	
+	if renamedTableInfo != originalTableInfo {
+		t.Error("Table info reference should be preserved after rename")
+	}
+	
+	newTupleDesc, err := tm.GetTupleDesc(42)
+	if err != nil {
+		t.Fatalf("Failed to get tuple desc after rename: %v", err)
+	}
+	
+	if newTupleDesc != originalTupleDesc {
+		t.Error("TupleDesc reference should be preserved after rename")
+	}
+	
+	newDbFile, err := tm.GetDbFile(42)
+	if err != nil {
+		t.Fatalf("Failed to get db file after rename: %v", err)
+	}
+	
+	if newDbFile != originalDbFile {
+		t.Error("DbFile reference should be preserved after rename")
+	}
+}
+
+func TestTableManager_ConcurrentAddRemoveCycles(t *testing.T) {
+	tm := NewTableManager()
+	numCycles := 1000
+	numGoroutines := 10
+	
+	var wg sync.WaitGroup
+	wg.Add(numGoroutines)
+	
+	for g := 0; g < numGoroutines; g++ {
+		go func(goroutineID int) {
+			defer wg.Done()
+			
+			for i := 0; i < numCycles; i++ {
+				tableName := fmt.Sprintf("cycle_table_%d_%d", goroutineID, i)
+				tableID := goroutineID*numCycles + i + 1
+				
+				// Add table
+				dbFile := newMockDbFile(tableID, []types.Type{types.IntType}, []string{"id"})
+				err := tm.AddTable(dbFile, tableName, "id")
+				if err != nil {
+					t.Errorf("Failed to add table %s: %v", tableName, err)
+					continue
+				}
+				
+				// Verify it exists
+				if !tm.TableExists(tableName) {
+					t.Errorf("Table %s should exist after adding", tableName)
+				}
+				
+				// Remove table
+				err = tm.RemoveTable(tableName)
+				if err != nil {
+					t.Errorf("Failed to remove table %s: %v", tableName, err)
+				}
+				
+				// Verify it's gone
+				if tm.TableExists(tableName) {
+					t.Errorf("Table %s should not exist after removal", tableName)
+				}
+			}
+		}(g)
+	}
+	
+	wg.Wait()
+	
+	// Verify final state is clean
+	if len(tm.GetAllTableNames()) != 0 {
+		t.Errorf("Expected empty manager after all cycles, got %d tables", len(tm.GetAllTableNames()))
+	}
+	
+	if err := tm.ValidateIntegrity(); err != nil {
+		t.Errorf("Integrity validation failed after cycles: %v", err)
+	}
+}
+
+func TestTableManager_StressTestWithRandomOperations(t *testing.T) {
+	tm := NewTableManager()
+	numOperations := 10000
+	maxTables := 1000
+	
+	tableNames := make(map[string]bool)
+	tableCounter := 0
+	
+	for i := 0; i < numOperations; i++ {
+		operation := i % 4
+		
+		switch operation {
+		case 0: // Add table
+			if len(tableNames) < maxTables {
+				tableName := fmt.Sprintf("stress_table_%d", tableCounter)
+				tableCounter++
+				dbFile := newMockDbFile(tableCounter, []types.Type{types.IntType}, []string{"id"})
+				
+				err := tm.AddTable(dbFile, tableName, "id")
+				if err == nil {
+					tableNames[tableName] = true
+				}
+			}
+			
+		case 1: // Remove table
+			if len(tableNames) > 0 {
+				// Pick a random table to remove
+				for tableName := range tableNames {
+					err := tm.RemoveTable(tableName)
+					if err == nil {
+						delete(tableNames, tableName)
+					}
+					break
+				}
+			}
+			
+		case 2: // Check existence
+			for tableName := range tableNames {
+				if !tm.TableExists(tableName) {
+					t.Errorf("Table %s should exist but doesn't", tableName)
+				}
+				break
+			}
+			
+		case 3: // Get all names
+			allNames := tm.GetAllTableNames()
+			if len(allNames) != len(tableNames) {
+				t.Errorf("Expected %d tables, got %d", len(tableNames), len(allNames))
+			}
+		}
+		
+		// Periodically validate integrity
+		if i%1000 == 0 {
+			if err := tm.ValidateIntegrity(); err != nil {
+				t.Errorf("Integrity validation failed at operation %d: %v", i, err)
+			}
+		}
+	}
+	
+	// Final integrity check
+	if err := tm.ValidateIntegrity(); err != nil {
+		t.Errorf("Final integrity validation failed: %v", err)
+	}
+}
+
+func TestTableManager_ExtremeEdgeCases(t *testing.T) {
+	t.Run("Table with very long name", func(t *testing.T) {
+		tm := NewTableManager()
+		longName := string(make([]byte, 10000))
+		for i := range longName {
+			longName = longName[:i] + "a" + longName[i+1:]
+		}
+		
+		dbFile := newMockDbFile(1, []types.Type{types.IntType}, []string{"id"})
+		err := tm.AddTable(dbFile, longName, "id")
+		if err != nil {
+			t.Fatalf("Failed to add table with long name: %v", err)
+		}
+		
+		if !tm.TableExists(longName) {
+			t.Error("Table with long name should exist")
+		}
+	})
+	
+	t.Run("Many tables with similar names", func(t *testing.T) {
+		tm := NewTableManager()
+		basePrefix := "similar_table_name_"
+		numTables := 1000
+		
+		for i := 0; i < numTables; i++ {
+			tableName := fmt.Sprintf("%s%d", basePrefix, i)
+			dbFile := newMockDbFile(i+1, []types.Type{types.IntType}, []string{"id"})
+			
+			err := tm.AddTable(dbFile, tableName, "id")
+			if err != nil {
+				t.Fatalf("Failed to add table %s: %v", tableName, err)
+			}
+		}
+		
+		// Verify all tables exist
+		for i := 0; i < numTables; i++ {
+			tableName := fmt.Sprintf("%s%d", basePrefix, i)
+			if !tm.TableExists(tableName) {
+				t.Errorf("Table %s should exist", tableName)
+			}
+		}
+	})
+	
+	t.Run("Table operations with nil fields", func(t *testing.T) {
+		tm := NewTableManager()
+		
+		// Test GetTableID with empty string
+		_, err := tm.GetTableID("")
+		if err == nil {
+			t.Error("GetTableID with empty string should return error")
+		}
+		
+		// Test RenameTable with same name
+		dbFile := newMockDbFile(1, []types.Type{types.IntType}, []string{"id"})
+		tm.AddTable(dbFile, "test", "id")
+		
+		err = tm.RenameTable("test", "test")
+		if err == nil {
+			t.Error("RenameTable with same name should return error")
+		}
+	})
+}
+
+func TestTableManager_RaceConditionDetection(t *testing.T) {
+	tm := NewTableManager()
+	numGoroutines := 50
+	duration := 2 * time.Second
+	
+	var operations int64
+	done := make(chan struct{})
+	
+	// Start timer
+	go func() {
+		time.Sleep(duration)
+		close(done)
+	}()
+	
+	var wg sync.WaitGroup
+	
+	// Concurrent operations that could cause race conditions
+	for i := 0; i < numGoroutines; i++ {
+		wg.Add(1)
+		go func(goroutineID int) {
+			defer wg.Done()
+			
+			tableCounter := 0
+			for {
+				select {
+				case <-done:
+					return
+				default:
+					// Rapid add/remove cycles
+					tableName := fmt.Sprintf("race_table_%d_%d", goroutineID, tableCounter)
+					tableID := goroutineID*10000 + tableCounter + 1
+					tableCounter++
+					
+					dbFile := newMockDbFile(tableID, []types.Type{types.IntType}, []string{"id"})
+					tm.AddTable(dbFile, tableName, "id")
+					tm.TableExists(tableName)
+					tm.GetAllTableNames()
+					tm.RemoveTable(tableName)
+					
+					atomic.AddInt64(&operations, 1)
+				}
+			}
+		}(i)
+	}
+	
+	wg.Wait()
+	
+	// Verify final state integrity
+	if err := tm.ValidateIntegrity(); err != nil {
+		t.Errorf("Race condition detected - integrity validation failed: %v", err)
+	}
+	
+	t.Logf("Completed %d operations in %v without race conditions", operations, duration)
+}
+
+func TestTableManager_DeepRecursiveOperations(t *testing.T) {
+	tm := NewTableManager()
+	depth := 1000
+	
+	// Create a chain of operations that could cause stack overflow
+	for i := 0; i < depth; i++ {
+		tableName := fmt.Sprintf("deep_table_%d", i)
+		dbFile := newMockDbFile(i+1, []types.Type{types.IntType}, []string{"id"})
+		
+		err := tm.AddTable(dbFile, tableName, "id")
+		if err != nil {
+			t.Fatalf("Failed at depth %d: %v", i, err)
+		}
+		
+		// Verify each addition
+		if !tm.TableExists(tableName) {
+			t.Fatalf("Table should exist at depth %d", i)
+		}
+		
+		// Test operations at each level
+		if i%100 == 0 {
+			allNames := tm.GetAllTableNames()
+			if len(allNames) != i+1 {
+				t.Errorf("Expected %d tables at depth %d, got %d", i+1, i, len(allNames))
+			}
+		}
+	}
+	
+	// Remove all in reverse order
+	for i := depth - 1; i >= 0; i-- {
+		tableName := fmt.Sprintf("deep_table_%d", i)
+		err := tm.RemoveTable(tableName)
+		if err != nil {
+			t.Fatalf("Failed to remove at depth %d: %v", i, err)
+		}
+	}
+	
+	if len(tm.GetAllTableNames()) != 0 {
+		t.Error("All tables should be removed after deep operations")
+	}
+}
+
+func BenchmarkTableManager_AddTable(b *testing.B) {
+	tm := NewTableManager()
+	
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		tableName := fmt.Sprintf("bench_table_%d", i)
+		dbFile := newMockDbFile(i+1, []types.Type{types.IntType}, []string{"id"})
+		tm.AddTable(dbFile, tableName, "id")
+	}
+}
+
+func BenchmarkTableManager_GetTableID(b *testing.B) {
+	tm := NewTableManager()
+	numTables := 10000
+	
+	// Setup tables
+	for i := 0; i < numTables; i++ {
+		tableName := fmt.Sprintf("bench_table_%d", i)
+		dbFile := newMockDbFile(i+1, []types.Type{types.IntType}, []string{"id"})
+		tm.AddTable(dbFile, tableName, "id")
+	}
+	
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		tableName := fmt.Sprintf("bench_table_%d", i%numTables)
+		tm.GetTableID(tableName)
+	}
+}
+
+func BenchmarkTableManager_TableExists(b *testing.B) {
+	tm := NewTableManager()
+	numTables := 10000
+	
+	// Setup tables
+	for i := 0; i < numTables; i++ {
+		tableName := fmt.Sprintf("bench_table_%d", i)
+		dbFile := newMockDbFile(i+1, []types.Type{types.IntType}, []string{"id"})
+		tm.AddTable(dbFile, tableName, "id")
+	}
+	
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		tableName := fmt.Sprintf("bench_table_%d", i%numTables)
+		tm.TableExists(tableName)
+	}
+}
+
+func BenchmarkTableManager_GetAllTableNames(b *testing.B) {
+	tm := NewTableManager()
+	numTables := 1000
+	
+	// Setup tables
+	for i := 0; i < numTables; i++ {
+		tableName := fmt.Sprintf("bench_table_%d", i)
+		dbFile := newMockDbFile(i+1, []types.Type{types.IntType}, []string{"id"})
+		tm.AddTable(dbFile, tableName, "id")
+	}
+	
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		tm.GetAllTableNames()
+	}
+}
+
+func BenchmarkTableManager_ConcurrentAccess(b *testing.B) {
+	tm := NewTableManager()
+	numTables := 1000
+	
+	// Setup tables
+	for i := 0; i < numTables; i++ {
+		tableName := fmt.Sprintf("bench_table_%d", i)
+		dbFile := newMockDbFile(i+1, []types.Type{types.IntType}, []string{"id"})
+		tm.AddTable(dbFile, tableName, "id")
+	}
+	
+	b.ResetTimer()
+	b.RunParallel(func(pb *testing.PB) {
+		counter := 0
+		for pb.Next() {
+			tableName := fmt.Sprintf("bench_table_%d", counter%numTables)
+			tm.TableExists(tableName)
+			counter++
+		}
+	})
+}
+
+func BenchmarkTableManager_ValidateIntegrity(b *testing.B) {
+	tm := NewTableManager()
+	numTables := 1000
+	
+	// Setup tables
+	for i := 0; i < numTables; i++ {
+		tableName := fmt.Sprintf("bench_table_%d", i)
+		dbFile := newMockDbFile(i+1, []types.Type{types.IntType}, []string{"id"})
+		tm.AddTable(dbFile, tableName, "id")
+	}
+	
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		tm.ValidateIntegrity()
+	}
 }
