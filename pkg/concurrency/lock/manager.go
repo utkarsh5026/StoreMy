@@ -18,17 +18,13 @@ type LockManager struct {
 	// transactionLocks maps each transaction to the pages it has locked and their lock types
 	transactionLocks map[*transaction.TransactionID]map[tuple.PageID]LockType
 
-	// waitingFor maps each transaction to the pages it's currently waiting to lock
-	waitingFor map[*transaction.TransactionID][]tuple.PageID
-
 	// depGraph maintains the dependency relationships between transactions for deadlock detection
 	depGraph *DependencyGraph
 
 	// mutex provides thread-safe access to all internal data structures
 	mutex sync.RWMutex
 
-	// waitQueue maps each page to the queue of transactions waiting to acquire locks on it
-	waitQueue map[tuple.PageID][]*LockRequest
+	waitQueue *WaitQueue
 }
 
 // NewLockManager creates and initializes a new LockManager instance.
@@ -37,9 +33,8 @@ func NewLockManager() *LockManager {
 	return &LockManager{
 		pageLocks:        make(map[tuple.PageID][]*Lock),
 		transactionLocks: make(map[*transaction.TransactionID]map[tuple.PageID]LockType),
-		waitingFor:       make(map[*transaction.TransactionID][]tuple.PageID),
 		depGraph:         NewDependencyGraph(),
-		waitQueue:        make(map[tuple.PageID][]*LockRequest),
+		waitQueue:        NewWaitQueue(),
 	}
 }
 
@@ -127,8 +122,8 @@ func (lm *LockManager) alreadyHasLock(tid *transaction.TransactionID, pageID tup
 // Returns:
 //   - error: nil on success, error on deadlock or timeout
 func (lm *LockManager) attemptToAcquireLock(tid *transaction.TransactionID, pid tuple.PageID, lockType LockType) error {
-	const maxRetryDelay = 100 * time.Millisecond
-	maxRetries := 1000
+	const maxRetryDelay = 50 * time.Millisecond
+	maxRetries := 100
 	retryDelay := time.Millisecond
 
 	for attempt := 0; attempt < maxRetries; attempt++ {
@@ -140,7 +135,6 @@ func (lm *LockManager) attemptToAcquireLock(tid *transaction.TransactionID, pid 
 			return nil
 		}
 
-		// Handle lock upgrade (shared -> exclusive)
 		if lockType == ExclusiveLock && lm.transactionHoldsLockType(tid, pid, SharedLock) {
 			if lm.canUpgradeLock(tid, pid) {
 				lm.upgradeLock(tid, pid)
@@ -149,7 +143,6 @@ func (lm *LockManager) attemptToAcquireLock(tid *transaction.TransactionID, pid 
 			}
 		}
 
-		// Try to grant lock immediately
 		if lm.canGrantLockImmediately(tid, pid, lockType) {
 			lm.grantLock(tid, pid, lockType)
 			lm.depGraph.RemoveTransaction(tid)
@@ -157,12 +150,11 @@ func (lm *LockManager) attemptToAcquireLock(tid *transaction.TransactionID, pid 
 			return nil
 		}
 
-		// Add to wait queue and check for deadlocks
-		lm.addToWaitQueue(tid, pid, lockType)
+		lm.waitQueue.Add(tid, pid, lockType)
 		lm.updateDependencies(tid, pid, lockType)
 
 		if lm.depGraph.HasCycle() {
-			lm.removeFromWaitQueue(tid, pid)
+			lm.waitQueue.Remove(tid, pid)
 			lm.depGraph.RemoveTransaction(tid)
 			lm.mutex.Unlock()
 			return fmt.Errorf("deadlock detected for transaction %d", tid.ID())
@@ -245,7 +237,7 @@ func (lm *LockManager) grantLock(tid *transaction.TransactionID, pid tuple.PageI
 		lm.transactionLocks[tid] = make(map[tuple.PageID]LockType)
 	}
 	lm.transactionLocks[tid][pid] = lockType
-	delete(lm.waitingFor, tid)
+	lm.waitQueue.Remove(tid, pid)
 }
 
 // canUpgradeLock checks if a lock can be upgraded from shared to exclusive.
@@ -284,71 +276,6 @@ func (lm *LockManager) upgradeLock(tid *transaction.TransactionID, pid tuple.Pag
 	lm.transactionLocks[tid][pid] = ExclusiveLock
 }
 
-// addToWaitQueue adds a transaction to the wait queue for a page.
-// Prevents duplicate entries in both the wait queue and waiting list.
-//
-// Parameters:
-//   - tid: The transaction to add to the wait queue
-//   - pid: The page the transaction is waiting for
-//   - lockType: The type of lock being requested
-func (lm *LockManager) addToWaitQueue(tid *transaction.TransactionID, pid tuple.PageID, lockType LockType) {
-	if queue, exists := lm.waitQueue[pid]; exists {
-		for _, req := range queue {
-			if req.TID == tid {
-				return
-			}
-		}
-	}
-
-	if waitingPages, exists := lm.waitingFor[tid]; exists {
-		for _, waitingPid := range waitingPages {
-			if pid.Equals(waitingPid) {
-				return
-			}
-		}
-	}
-
-	request := NewLockRequest(tid, lockType)
-	lm.waitQueue[pid] = append(lm.waitQueue[pid], request)
-	lm.waitingFor[tid] = append(lm.waitingFor[tid], pid)
-}
-
-// removeFromWaitQueue removes a transaction from the wait queue for a specific page.
-// Cleans up both the wait queue and the transaction's waiting list.
-//
-// Parameters:
-//   - tid: The transaction to remove
-//   - pid: The page to remove the transaction from
-func (lm *LockManager) removeFromWaitQueue(tid *transaction.TransactionID, pid tuple.PageID) {
-	if queue, exists := lm.waitQueue[pid]; exists {
-		newQueue := make([]*LockRequest, 0)
-		for _, req := range queue {
-			if req.TID != tid {
-				newQueue = append(newQueue, req)
-			}
-		}
-		if len(newQueue) > 0 {
-			lm.waitQueue[pid] = newQueue
-		} else {
-			delete(lm.waitQueue, pid)
-		}
-	}
-
-	if waitingPages, exists := lm.waitingFor[tid]; exists {
-		newWaitingPages := make([]tuple.PageID, 0)
-		for _, waitingPid := range waitingPages {
-			if !pid.Equals(waitingPid) {
-				newWaitingPages = append(newWaitingPages, waitingPid)
-			}
-		}
-		if len(newWaitingPages) > 0 {
-			lm.waitingFor[tid] = newWaitingPages
-		} else {
-			delete(lm.waitingFor, tid)
-		}
-	}
-}
-
 // updateDependencies updates the dependency graph based on lock conflicts.
 // Creates edges from waiting transactions to lock holders when conflicts exist.
 //
@@ -385,7 +312,9 @@ func (lm *LockManager) updateDependencies(tid *transaction.TransactionID, pid tu
 // Returns:
 //   - time.Duration: The calculated delay for this attempt
 func (lm *LockManager) calculateRetryDelay(attemptNumber int, baseDelay, maxDelay time.Duration) time.Duration {
-	exponentialFactor := min(attemptNumber/10, 10)
+	// Use more gradual exponential backoff: every 5 attempts instead of 10
+	// Cap the exponential factor at 5 to prevent excessive delays
+	exponentialFactor := min(attemptNumber/5, 5)
 	delay := baseDelay * time.Duration(1<<uint(exponentialFactor))
 
 	if delay > maxDelay {
@@ -441,16 +370,15 @@ func (lm *LockManager) releaseLock(tid *transaction.TransactionID, pageId tuple.
 // Parameters:
 //   - pid: The page whose wait queue should be processed
 func (lm *LockManager) processWaitQueue(pid tuple.PageID) {
-	queue, exists := lm.waitQueue[pid]
-	if !exists || len(queue) == 0 {
+	requests := lm.waitQueue.GetRequests(pid)
+	if len(requests) == 0 {
 		return
 	}
-
-	remaining := make([]*LockRequest, 0)
-	for _, request := range queue {
+	grantedRequests := make([]*LockRequest, 0)
+	for _, request := range requests {
 		if lm.canGrantLockImmediately(request.TID, pid, request.LockType) {
 			lm.grantLock(request.TID, pid, request.LockType)
-			// Signal waiting transaction if channel exists
+			grantedRequests = append(grantedRequests, request)
 			if request.Chan != nil {
 				select {
 				case request.Chan <- true:
@@ -458,15 +386,11 @@ func (lm *LockManager) processWaitQueue(pid tuple.PageID) {
 					// Channel is full or closed, but we don't block
 				}
 			}
-		} else {
-			remaining = append(remaining, request)
 		}
 	}
 
-	if len(remaining) > 0 {
-		lm.waitQueue[pid] = remaining
-	} else {
-		delete(lm.waitQueue, pid)
+	for _, request := range grantedRequests {
+		lm.waitQueue.Remove(request.TID, pid)
 	}
 }
 
@@ -498,7 +422,7 @@ func (lm *LockManager) UnlockAllPages(tid *transaction.TransactionID) {
 	pagesToProcess := lm.releaseAllLocks(tid)
 	delete(lm.transactionLocks, tid)
 	lm.depGraph.RemoveTransaction(tid)
-	delete(lm.waitingFor, tid)
+	lm.waitQueue.RemoveTransaction(tid)
 
 	for _, pid := range pagesToProcess {
 		lm.processWaitQueue(pid)
