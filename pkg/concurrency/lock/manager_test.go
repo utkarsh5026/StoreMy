@@ -405,29 +405,29 @@ func TestCanGrantLock(t *testing.T) {
 	pid := heap.NewHeapPageID(1, 1)
 
 	// Empty page - should grant any lock
-	if !lm.canGrantLockImmediately(tid1, pid, SharedLock) {
+	if !lm.lockGrantor.CanGrantImmediately(tid1, pid, SharedLock) {
 		t.Error("Should grant shared lock on empty page")
 	}
 
-	if !lm.canGrantLockImmediately(tid1, pid, ExclusiveLock) {
+	if !lm.lockGrantor.CanGrantImmediately(tid1, pid, ExclusiveLock) {
 		t.Error("Should grant exclusive lock on empty page")
 	}
 
 	// Add shared lock
-	lm.grantLock(tid1, pid, SharedLock)
+	lm.lockGrantor.GrantLock(tid1, pid, SharedLock)
 
 	// Should grant another shared lock
-	if !lm.canGrantLockImmediately(tid2, pid, SharedLock) {
+	if !lm.lockGrantor.CanGrantImmediately(tid2, pid, SharedLock) {
 		t.Error("Should grant shared lock when shared lock exists")
 	}
 
 	// Should not grant exclusive lock
-	if lm.canGrantLockImmediately(tid2, pid, ExclusiveLock) {
+	if lm.lockGrantor.CanGrantImmediately(tid2, pid, ExclusiveLock) {
 		t.Error("Should not grant exclusive lock when shared lock exists")
 	}
 
 	// Same transaction should be able to get exclusive lock
-	if !lm.canGrantLockImmediately(tid1, pid, ExclusiveLock) {
+	if !lm.lockGrantor.CanGrantImmediately(tid1, pid, ExclusiveLock) {
 		t.Error("Should allow same transaction to upgrade to exclusive")
 	}
 }
@@ -439,16 +439,16 @@ func TestCanUpgradeLock(t *testing.T) {
 	pid := heap.NewHeapPageID(1, 1)
 
 	// Single shared lock - should be able to upgrade
-	lm.grantLock(tid1, pid, SharedLock)
-	if !lm.canUpgradeLock(tid1, pid) {
+	lm.lockGrantor.GrantLock(tid1, pid, SharedLock)
+	if !lm.lockGrantor.CanUpgradeLock(tid1, pid) {
 		t.Error("Should be able to upgrade when holding only lock")
 	}
 
 	// Add another shared lock
-	lm.grantLock(tid2, pid, SharedLock)
+	lm.lockGrantor.GrantLock(tid2, pid, SharedLock)
 
 	// Should not be able to upgrade now
-	if lm.canUpgradeLock(tid1, pid) {
+	if lm.lockGrantor.CanUpgradeLock(tid1, pid) {
 		t.Error("Should not be able to upgrade when other locks exist")
 	}
 }
@@ -468,7 +468,7 @@ func TestHasLock(t *testing.T) {
 	}
 
 	// Grant shared lock
-	lm.grantLock(tid, pid, SharedLock)
+	lm.lockGrantor.GrantLock(tid, pid, SharedLock)
 
 	if !lm.lockTable.HasSufficientLock(tid, pid, SharedLock) {
 		t.Error("Should have shared lock after granting")
@@ -546,8 +546,8 @@ func TestUpdateDependencies(t *testing.T) {
 	pid := heap.NewHeapPageID(1, 1)
 
 	// Grant some locks
-	lm.grantLock(tid1, pid, SharedLock)
-	lm.grantLock(tid2, pid, SharedLock)
+	lm.lockGrantor.GrantLock(tid1, pid, SharedLock)
+	lm.lockGrantor.GrantLock(tid2, pid, SharedLock)
 
 	// tid3 wants exclusive lock - should create dependencies
 	lm.updateDependencies(tid3, pid, ExclusiveLock)
@@ -560,7 +560,7 @@ func TestUpdateDependencies(t *testing.T) {
 
 	// Grant exclusive lock to tid1, then tid2 wants exclusive
 	lm = NewLockManager() // Reset
-	lm.grantLock(tid1, pid, ExclusiveLock)
+	lm.lockGrantor.GrantLock(tid1, pid, ExclusiveLock)
 	lm.updateDependencies(tid2, pid, ExclusiveLock)
 
 	// Verify dependency
@@ -1162,7 +1162,6 @@ func containsTimeout(errorMsg string) bool {
 	return strings.Contains(errorMsg, "timeout waiting for lock")
 }
 
-
 func TestCalculateRetryDelay(t *testing.T) {
 	lm := NewLockManager()
 	baseDelay := time.Millisecond
@@ -1246,7 +1245,7 @@ func TestProcessWaitQueue(t *testing.T) {
 	pid := heap.NewHeapPageID(1, 1)
 
 	// Create a scenario where tid1 has exclusive lock, tid2 and tid3 are waiting
-	lm.grantLock(tid1, pid, ExclusiveLock)
+	lm.lockGrantor.GrantLock(tid1, pid, ExclusiveLock)
 	lm.waitQueue.Add(tid2, pid, SharedLock)
 	lm.waitQueue.Add(tid3, pid, SharedLock)
 
@@ -1281,7 +1280,7 @@ func TestProcessWaitQueuePartialGrant(t *testing.T) {
 	pid := heap.NewHeapPageID(1, 1)
 
 	// Grant shared lock to tid1
-	lm.grantLock(tid1, pid, SharedLock)
+	lm.lockGrantor.GrantLock(tid1, pid, SharedLock)
 	// Add tid2 waiting for shared lock and tid3 waiting for exclusive lock
 	lm.waitQueue.Add(tid2, pid, SharedLock)
 	lm.waitQueue.Add(tid3, pid, ExclusiveLock)
@@ -1315,7 +1314,7 @@ func TestIsPageLockedAdvanced(t *testing.T) {
 	}
 
 	// Grant a shared lock
-	lm.grantLock(tid, pid, SharedLock)
+	lm.lockGrantor.GrantLock(tid, pid, SharedLock)
 	if !lm.IsPageLocked(pid) {
 		t.Error("Page should be locked after granting lock")
 	}
@@ -1327,7 +1326,7 @@ func TestIsPageLockedAdvanced(t *testing.T) {
 	}
 
 	// Test with exclusive lock
-	lm.grantLock(tid, pid, ExclusiveLock)
+	lm.lockGrantor.GrantLock(tid, pid, ExclusiveLock)
 	if !lm.IsPageLocked(pid) {
 		t.Error("Page should be locked with exclusive lock")
 	}
@@ -1347,12 +1346,12 @@ func TestUnlockAllPages(t *testing.T) {
 	pid3 := heap.NewHeapPageID(1, 3)
 
 	// Grant multiple locks to tid1
-	lm.grantLock(tid1, pid1, SharedLock)
-	lm.grantLock(tid1, pid2, ExclusiveLock)
-	lm.grantLock(tid1, pid3, SharedLock)
+	lm.lockGrantor.GrantLock(tid1, pid1, SharedLock)
+	lm.lockGrantor.GrantLock(tid1, pid2, ExclusiveLock)
+	lm.lockGrantor.GrantLock(tid1, pid3, SharedLock)
 
 	// Grant a lock to tid2 on pid3 (shared with tid1)
-	lm.grantLock(tid2, pid3, SharedLock)
+	lm.lockGrantor.GrantLock(tid2, pid3, SharedLock)
 
 	// Verify initial state
 	if !lm.IsPageLocked(pid1) || !lm.IsPageLocked(pid2) || !lm.IsPageLocked(pid3) {
@@ -1417,8 +1416,8 @@ func TestUnlockPageDetailed(t *testing.T) {
 	pid := heap.NewHeapPageID(1, 1)
 
 	// Grant locks to both transactions
-	lm.grantLock(tid1, pid, SharedLock)
-	lm.grantLock(tid2, pid, SharedLock)
+	lm.lockGrantor.GrantLock(tid1, pid, SharedLock)
+	lm.lockGrantor.GrantLock(tid2, pid, SharedLock)
 
 	// Verify both locks exist
 	locks := lm.lockTable.GetPageLocks(pid)
