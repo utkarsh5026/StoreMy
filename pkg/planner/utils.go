@@ -6,13 +6,19 @@ import (
 	"storemy/pkg/parser/plan"
 	"storemy/pkg/tuple"
 	"storemy/pkg/types"
+	"strings"
 )
 
 func buildPredicateFromFilterNode(filter *plan.FilterNode, tupleDesc *tuple.TupleDescription) (*query.Predicate, error) {
+	fieldName := filter.Field
+	if dotIndex := strings.LastIndex(filter.Field, "."); dotIndex != -1 {
+		fieldName = filter.Field[dotIndex+1:]
+	}
+
 	fieldIndex := -1
 	for i := 0; i < tupleDesc.NumFields(); i++ {
 		name, _ := tupleDesc.GetFieldName(i)
-		if name == filter.Field {
+		if name == fieldName {
 			fieldIndex = i
 			break
 		}
@@ -48,23 +54,28 @@ func buildPredicateFromFilterNode(filter *plan.FilterNode, tupleDesc *tuple.Tupl
 		return nil, fmt.Errorf("unsupported field type: %v", fieldType)
 	}
 
-	var op query.PredicateOp
-	switch filter.Predicate {
-	case types.Equals:
-		op = query.Equals
-	case types.LessThan:
-		op = query.LessThan
-	case types.GreaterThan:
-		op = query.GreaterThan
-	case types.LessThanOrEqual:
-		op = query.LessThanOrEqual
-	case types.GreaterThanOrEqual:
-		op = query.GreaterThanOrEqual
-	case types.NotEqual:
-		op = query.NotEqual
-	default:
-		return nil, fmt.Errorf("unsupported predicate type")
+	op, err := getPredicateOperation(filter.Predicate)
+	if err != nil {
+		return nil, err
 	}
 
 	return query.NewPredicate(fieldIndex, op, constantField), nil
+}
+
+func getPredicateOperation(predicate types.Predicate) (query.PredicateOp, error) {
+	predicateMap := map[types.Predicate]query.PredicateOp{
+		types.Equals:             query.Equals,
+		types.LessThan:           query.LessThan,
+		types.GreaterThan:        query.GreaterThan,
+		types.LessThanOrEqual:    query.LessThanOrEqual,
+		types.GreaterThanOrEqual: query.GreaterThanOrEqual,
+		types.NotEqual:           query.NotEqual,
+	}
+
+	op, exists := predicateMap[predicate]
+	if !exists {
+		return 0, fmt.Errorf("unsupported predicate type: %v", predicate)
+	}
+
+	return op, nil
 }
