@@ -56,3 +56,27 @@ type DbIterator interface {
 	//   - *tuple.TupleDescription: schema description of tuples produced by this iterator
 	GetTupleDesc() *tuple.TupleDescription
 }
+
+func LoadAllTuples(iter DbIterator) ([]*tuple.Tuple, error) {
+	tuples := make([]*tuple.Tuple, 0)
+
+	for {
+		hasNext, err := iter.HasNext()
+		if err != nil {
+			return nil, err
+		}
+		if !hasNext {
+			break
+		}
+
+		t, err := iter.Next()
+		if err != nil {
+			return nil, err
+		}
+		if t != nil {
+			tuples = append(tuples, t)
+		}
+	}
+
+	return tuples, nil
+}
