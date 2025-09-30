@@ -80,3 +80,23 @@ func LoadAllTuples(iter DbIterator) ([]*tuple.Tuple, error) {
 
 	return tuples, nil
 }
+
+func CountAllTuples(iter DbIterator) (int, error) {
+	count := 0
+	for {
+		hasNext, err := iter.HasNext()
+		if err != nil {
+			return 0, err
+		}
+		if !hasNext {
+			break
+		}
+
+		_, err = iter.Next()
+		if err != nil {
+			return 0, err
+		}
+		count++
+	}
+	return count, nil
+}
