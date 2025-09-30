@@ -1,4 +1,3 @@
-// Package memory provides in-memory management of database tables and their metadata.
 package memory
 
 import (
@@ -20,7 +19,6 @@ type TableManager struct {
 }
 
 // NewTableManager creates a new empty TableManager instance.
-// Returns a pointer to the initialized TableManager.
 func NewTableManager() *TableManager {
 	return &TableManager{
 		nameToTable: make(map[string]*TableInfo),
@@ -30,13 +28,6 @@ func NewTableManager() *TableManager {
 
 // AddTable adds a new table to the catalog with the specified database file, name, and primary key.
 // If a table with the same name or ID already exists, it will be replaced.
-//
-// Parameters:
-//   - f: The database file associated with the table (cannot be nil)
-//   - name: The name of the table (cannot be empty)
-//   - pKey: The primary key field name for the table
-//
-// Returns an error if the file is nil or the table name is empty.
 func (tm *TableManager) AddTable(f page.DbFile, name, pKey string) error {
 	if f == nil {
 		return fmt.Errorf("file cannot be nil")
@@ -57,29 +48,19 @@ func (tm *TableManager) AddTable(f page.DbFile, name, pKey string) error {
 }
 
 // GetTableID retrieves the unique identifier for a table given its name.
-//
-// Parameters:
-//   - name: The name of the table to look up
-//
-// Returns the table ID and nil error if found, or 0 and an error if the table doesn't exist.
-func (tm *TableManager) GetTableID(name string) (int, error) {
+func (tm *TableManager) GetTableID(tableName string) (int, error) {
 	tm.mutex.RLock()
 	defer tm.mutex.RUnlock()
 
-	tableInfo, exists := tm.nameToTable[name]
+	tableInfo, exists := tm.nameToTable[tableName]
 	if !exists {
-		return 0, fmt.Errorf("table '%s' not found", name)
+		return 0, fmt.Errorf("table '%s' not found", tableName)
 	}
 
 	return tableInfo.GetID(), nil
 }
 
 // GetTableName retrieves the name of a table given its unique identifier.
-//
-// Parameters:
-//   - tableID: The unique identifier of the table
-//
-// Returns the table name and nil error if found, or empty string and an error if the table doesn't exist.
 func (tm *TableManager) GetTableName(tableID int) (string, error) {
 	tm.mutex.RLock()
 	defer tm.mutex.RUnlock()
@@ -94,11 +75,6 @@ func (tm *TableManager) GetTableName(tableID int) (string, error) {
 
 // RemoveTable removes a table from the catalog and closes its associated database file.
 // This operation is irreversible and will close the underlying file handle.
-//
-// Parameters:
-//   - name: The name of the table to remove
-//
-// Returns an error if the table is not found. File closure errors are logged as warnings.
 func (tm *TableManager) RemoveTable(name string) error {
 	tm.mutex.Lock()
 	defer tm.mutex.Unlock()
@@ -120,11 +96,6 @@ func (tm *TableManager) RemoveTable(name string) error {
 }
 
 // GetTupleDesc retrieves the tuple description (schema) for a table given its ID.
-//
-// Parameters:
-//   - tableID: The unique identifier of the table
-//
-// Returns the TupleDescription and nil error if found, or nil and an error if the table doesn't exist.
 func (tm *TableManager) GetTupleDesc(tableID int) (*tuple.TupleDescription, error) {
 	tableInfo, err := tm.getTableInfo(tableID)
 	if err != nil {
@@ -152,11 +123,6 @@ func (tm *TableManager) Clear() {
 }
 
 // GetDbFile retrieves the database file associated with a table given its ID.
-//
-// Parameters:
-//   - tableID: The unique identifier of the table
-//
-// Returns the DbFile interface and nil error if found, or nil and an error if the table doesn't exist.
 func (tm *TableManager) GetDbFile(tableID int) (page.DbFile, error) {
 	ti, err := tm.getTableInfo(tableID)
 	if err != nil {
@@ -223,8 +189,6 @@ func (tm *TableManager) String() string {
 
 // GetAllTableNames returns a slice containing the names of all tables in the catalog.
 // The returned slice is a copy and can be safely modified without affecting the catalog.
-//
-// Returns a slice of table names. The slice will be empty if no tables are managed.
 func (tm *TableManager) GetAllTableNames() []string {
 	tm.mutex.RLock()
 	defer tm.mutex.RUnlock()
@@ -281,10 +245,6 @@ func (tm *TableManager) TableExists(name string) bool {
 
 // RenameTable changes the name of an existing table in the catalog.
 // The operation maintains all other table metadata and file associations.
-//
-// Parameters:
-//   - oldName: The current name of the table
-//   - newName: The desired new name for the table (must not have leading/trailing whitespace)
 func (tm *TableManager) RenameTable(oldName, newName string) error {
 	if oldName == "" || newName == "" {
 		return fmt.Errorf("table names cannot be empty")
