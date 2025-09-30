@@ -159,16 +159,21 @@ func (smj *SortMergeJoin) EstimateCost() float64 {
 		return 1000000
 	}
 
-	sortCost := 0.0
+	totalCost := 0.0
+
 	if !smj.stats.LeftSorted {
-		sortCost += float64(smj.stats.LeftSize) * 2 * logBase2(float64(smj.stats.LeftSize))
+		leftSize := float64(smj.stats.LeftSize)
+		totalCost += leftSize * 2 * logBase2(leftSize)
 	}
+
 	if !smj.stats.RightSorted {
-		sortCost += float64(smj.stats.RightSize) * 2 * logBase2(float64(smj.stats.RightSize))
+		rightSize := float64(smj.stats.RightSize)
+		totalCost += rightSize * 2 * logBase2(rightSize)
 	}
 
 	mergeCost := float64(smj.stats.LeftSize + smj.stats.RightSize)
-	return sortCost + mergeCost
+	totalCost += mergeCost
+	return totalCost
 }
 
 func (smj *SortMergeJoin) SupportsPredicateType(predicate *JoinPredicate) bool {
