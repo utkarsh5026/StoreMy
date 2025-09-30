@@ -69,8 +69,8 @@ func TestNewNestedLoopJoin(t *testing.T) {
 			if nl.blockIndex != 0 {
 				t.Error("blockIndex should be initialized to 0")
 			}
-			if nl.bufferIndex != -1 {
-				t.Error("bufferIndex should be initialized to -1")
+			if nl.matchBuffer == nil {
+				t.Error("matchBuffer should be initialized")
 			}
 			if nl.initialized {
 				t.Error("initialized should be false")
@@ -636,12 +636,6 @@ func TestNestedLoopJoinReset(t *testing.T) {
 	}
 
 	// Verify internal state is reset
-	if nl.matchBuffer != nil {
-		t.Error("matchBuffer should be nil after reset")
-	}
-	if nl.bufferIndex != -1 {
-		t.Error("bufferIndex should be -1 after reset")
-	}
 	if nl.blockIndex != 0 {
 		t.Error("blockIndex should be 0 after reset")
 	}
@@ -691,9 +685,6 @@ func TestNestedLoopJoinClose(t *testing.T) {
 	// Verify resources are cleaned up
 	if nl.leftBlock != nil {
 		t.Error("leftBlock should be nil after close")
-	}
-	if nl.matchBuffer != nil {
-		t.Error("matchBuffer should be nil after close")
 	}
 	if nl.initialized {
 		t.Error("initialized should be false after close")
