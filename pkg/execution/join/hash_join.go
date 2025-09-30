@@ -18,15 +18,14 @@ import (
 // Time complexity: O(|R| + |S|) where R and S are the input relations
 // Space complexity: O(|S|) for the hash table storage
 type HashJoin struct {
-	leftChild      iterator.DbIterator       // Left input relation (outer)
-	rightChild     iterator.DbIterator       // Right input relation (inner, used for hash table)
-	predicate      *JoinPredicate            // Join condition (must be equality)
-	hashTable      map[string][]*tuple.Tuple // Hash table: join key -> matching right tuples
-	currentMatches []*tuple.Tuple            // Current set of right tuples matching current left tuple
-	currentLeft    *tuple.Tuple              // Current left tuple being processed
-	matchIndex     int                       // Index into currentMatches for iteration
-	initialized    bool                      // Whether hash table has been built
-	stats          *JoinStatistics           // Statistics for cost estimation
+	leftChild   iterator.DbIterator       // Left input relation (outer)
+	rightChild  iterator.DbIterator       // Right input relation (inner, used for hash table)
+	predicate   *JoinPredicate            // Join condition (must be equality)
+	hashTable   map[string][]*tuple.Tuple // Hash table: join key -> matching right tuples
+	matchBuffer *JoinMatchBuffer          // Buffer for managing matched tuples
+	currentLeft *tuple.Tuple              // Current left tuple being processed
+	initialized bool                      // Whether hash table has been built
+	stats       *JoinStatistics           // Statistics for cost estimation
 }
 
 // NewHashJoin creates a new hash join operator.
@@ -36,7 +35,7 @@ func NewHashJoin(left, right iterator.DbIterator, pred *JoinPredicate, stats *Jo
 		rightChild:  right,
 		predicate:   pred,
 		hashTable:   make(map[string][]*tuple.Tuple),
-		matchIndex:  -1,
+		matchBuffer: NewJoinMatchBuffer(),
 		stats:       stats,
 		initialized: false,
 	}
@@ -46,7 +45,7 @@ func NewHashJoin(left, right iterator.DbIterator, pred *JoinPredicate, stats *Jo
 // This includes clearing the hash table and resetting all state variables.
 func (hj *HashJoin) Close() error {
 	hj.hashTable = make(map[string][]*tuple.Tuple)
-	hj.currentMatches = nil
+	hj.matchBuffer.Reset()
 	hj.currentLeft = nil
 	hj.initialized = false
 	return nil
@@ -59,7 +58,7 @@ func (hj *HashJoin) Next() (*tuple.Tuple, error) {
 		return nil, fmt.Errorf("hash join not initialized")
 	}
 
-	if hj.hasCurrentMatches() {
+	if hj.matchBuffer.HasNext() {
 		return hj.getNextMatch()
 	}
 
@@ -69,9 +68,8 @@ func (hj *HashJoin) Next() (*tuple.Tuple, error) {
 // Reset rewinds the hash join to the beginning, allowing re-iteration.
 // The hash table is preserved, only the iteration state is reset.
 func (hj *HashJoin) Reset() error {
-	hj.currentMatches = nil
+	hj.matchBuffer.Reset()
 	hj.currentLeft = nil
-	hj.matchIndex = -1
 
 	return hj.leftChild.Rewind()
 }
@@ -114,24 +112,15 @@ func (hj *HashJoin) SupportsPredicateType(predicate *JoinPredicate) bool {
 	return predicate.GetOP() == query.Equals
 }
 
-// hasCurrentMatches checks if there are remaining matches for the current left tuple.
-func (hj *HashJoin) hasCurrentMatches() bool {
-	return hj.currentMatches != nil &&
-		hj.matchIndex >= 0 &&
-		hj.matchIndex < len(hj.currentMatches)
-}
-
 // getNextMatch returns the next match for the current left tuple.
 // Advances the match index and clears state when all matches are exhausted.
 func (hj *HashJoin) getNextMatch() (*tuple.Tuple, error) {
-	result, err := tuple.CombineTuples(hj.currentLeft, hj.currentMatches[hj.matchIndex])
-	hj.matchIndex++
+	rightTuple := hj.matchBuffer.Next()
+	result, err := tuple.CombineTuples(hj.currentLeft, rightTuple)
 
-	// Clear current matches if we've returned them all
-	if hj.matchIndex >= len(hj.currentMatches) {
-		hj.currentMatches = nil
+	// Clear current left if we've returned all matches
+	if !hj.matchBuffer.HasNext() {
 		hj.currentLeft = nil
-		hj.matchIndex = -1
 	}
 
 	return result, err
@@ -194,13 +183,15 @@ func (hj *HashJoin) findMatches(key string) []*tuple.Tuple {
 }
 
 // setupMatches prepares the iteration state for a left tuple with matches.
-// Sets up currentLeft, currentMatches, and returns the first joined result.
+// Sets up currentLeft, matchBuffer, and returns the first joined result.
 func (hj *HashJoin) setupMatches(leftTuple *tuple.Tuple, matches []*tuple.Tuple) (*tuple.Tuple, error) {
 	hj.currentLeft = leftTuple
-	hj.currentMatches = matches
-	hj.matchIndex = 1 // We'll return index 0 now, next call starts at 1
+	firstRight := hj.matchBuffer.SetMatches(matches)
+	if firstRight == nil {
+		return nil, nil
+	}
 
-	return tuple.CombineTuples(leftTuple, matches[0])
+	return tuple.CombineTuples(leftTuple, firstRight)
 }
 
 // buildHashTable constructs the hash table by reading all tuples from the right child.
