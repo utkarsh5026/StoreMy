@@ -45,8 +45,8 @@ func TestNewHashJoin(t *testing.T) {
 	if hj.hashTable == nil {
 		t.Error("hash table should be initialized")
 	}
-	if hj.matchIndex != -1 {
-		t.Error("matchIndex should be initialized to -1")
+	if hj.matchBuffer == nil {
+		t.Error("matchBuffer should be initialized")
 	}
 	if hj.initialized {
 		t.Error("initialized should be false")
@@ -535,14 +535,8 @@ func TestHashJoinReset(t *testing.T) {
 	}
 
 	// Verify internal state is reset
-	if hj.currentMatches != nil {
-		t.Error("currentMatches should be nil after reset")
-	}
 	if hj.currentLeft != nil {
 		t.Error("currentLeft should be nil after reset")
-	}
-	if hj.matchIndex != -1 {
-		t.Error("matchIndex should be -1 after reset")
 	}
 
 	// Should be able to iterate again
@@ -590,9 +584,6 @@ func TestHashJoinClose(t *testing.T) {
 	// Verify resources are cleaned up
 	if len(hj.hashTable) != 0 {
 		t.Error("hash table should be empty after close")
-	}
-	if hj.currentMatches != nil {
-		t.Error("currentMatches should be nil after close")
 	}
 	if hj.currentLeft != nil {
 		t.Error("currentLeft should be nil after close")
