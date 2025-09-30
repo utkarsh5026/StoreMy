@@ -43,10 +43,8 @@ func (nl *NestedLoopJoin) Next() (*tuple.Tuple, error) {
 		return nil, fmt.Errorf("block nested loop join not initialized")
 	}
 
-	if nl.bufferIndex >= 0 && nl.bufferIndex < len(nl.matchBuffer) {
-		result := nl.matchBuffer[nl.bufferIndex]
-		nl.bufferIndex++
-		return result, nil
+	if nl.hasBufferedResults() {
+		return nl.getNextBufferedResult(), nil
 	}
 
 	nl.matchBuffer = make([]*tuple.Tuple, 0)
@@ -193,4 +191,14 @@ func (nl *NestedLoopJoin) Reset() error {
 	}
 
 	return nl.loadNextBlock()
+}
+
+func (nl *NestedLoopJoin) hasBufferedResults() bool {
+	return nl.bufferIndex >= 0 && nl.bufferIndex < len(nl.matchBuffer)
+}
+
+func (nl *NestedLoopJoin) getNextBufferedResult() *tuple.Tuple {
+	result := nl.matchBuffer[nl.bufferIndex]
+	nl.bufferIndex++
+	return result
 }
