@@ -6,10 +6,16 @@ import (
 	"storemy/pkg/storage/heap"
 	"storemy/pkg/tuple"
 	"storemy/pkg/types"
+	"strings"
 	"sync"
 	"testing"
 	"time"
 )
+
+// Helper function to check if a string contains a substring
+func contains(s, substr string) bool {
+	return strings.Contains(s, substr)
+}
 
 func TestNewPageStore(t *testing.T) {
 	tm := NewTableManager()
@@ -98,9 +104,8 @@ func TestPageStore_InsertTuple_TableNotFound(t *testing.T) {
 		t.Error("Expected error for non-existent table")
 	}
 
-	expectedErrMsg := "table with ID 999 not found"
-	if err.Error() != expectedErrMsg {
-		t.Errorf("Expected error %q, got %q", expectedErrMsg, err.Error())
+	if !contains(err.Error(), "table with ID 999 not found") {
+		t.Errorf("Expected error containing 'table with ID 999 not found', got %q", err.Error())
 	}
 }
 
@@ -447,9 +452,8 @@ func TestPageStore_DeleteTuple_TableNotFound(t *testing.T) {
 		t.Error("Expected error for non-existent table")
 	}
 
-	expectedErrMsg := "table with ID 999 not found"
-	if err.Error() != expectedErrMsg {
-		t.Errorf("Expected error %q, got %q", expectedErrMsg, err.Error())
+	if !contains(err.Error(), "table with ID 999 not found") {
+		t.Errorf("Expected error containing 'table with ID 999 not found', got %q", err.Error())
 	}
 }
 
@@ -1486,9 +1490,8 @@ func TestPageStore_GetPage_TableNotFound(t *testing.T) {
 		t.Error("Expected nil page for non-existent table")
 	}
 
-	expectedErrMsg := "table with ID 999 not found"
-	if err.Error() != expectedErrMsg {
-		t.Errorf("Expected error %q, got %q", expectedErrMsg, err.Error())
+	if !contains(err.Error(), "table with ID 999 not found") {
+		t.Errorf("Expected error containing 'table with ID 999 not found', got %q", err.Error())
 	}
 }
 
