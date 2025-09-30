@@ -11,8 +11,6 @@ import (
 // PageCache defines the interface for caching database pages in memory.
 // It is responsible ONLY for storing and retrieving pages in memory.
 // It knows nothing about transactions, locks, or durability.
-//
-// Implementations should be thread-safe and handle concurrent access properly.
 type PageCache interface {
 	// Get retrieves a page from the cache by its page ID.
 	// Returns the page and true if found, or nil page and false if not found.
@@ -38,49 +36,78 @@ type PageCache interface {
 	GetAll() []tuple.PageID
 }
 
+// node represents a single node in the doubly linked list
+type node struct {
+	pid  tuple.PageID
+	page page.Page
+	prev *node
+	next *node
+}
+
 // LRUPageCache implements an LRU (Least Recently Used) eviction policy for the page cache.
-// This implementation maintains a single responsibility: maintain an ordered cache with LRU eviction.
+// This implementation uses a doubly linked list combined with a hash map to achieve O(1)
+// operations for all cache operations.
 //
 // The cache is thread-safe and uses a read-write mutex to allow concurrent reads
-// while ensuring exclusive access for writes. Pages are tracked in both a map for
-// O(1) access and a slice for maintaining LRU order.
+// while ensuring exclusive access for writes.
 //
 // When the cache reaches maximum capacity, attempting to add new pages will return an error
 // rather than automatically evicting the least recently used page.
 type LRUPageCache struct {
-	maxSize     int                        // Maximum number of pages the cache can hold
-	cache       map[tuple.PageID]page.Page // Map for O(1) page lookup
-	accessOrder []tuple.PageID             // Slice tracking access order, most recently used at the end
-	mutex       sync.RWMutex               // Read-write mutex for thread safety
+	maxSize int                    // Maximum number of pages the cache can hold
+	cache   map[tuple.PageID]*node // Map for O(1) page lookup
+	head    *node                  // Dummy head node (most recently used end)
+	tail    *node                  // Dummy tail node (least recently used end)
+	mutex   sync.RWMutex           // Read-write mutex for thread safety
 }
 
 // NewLRUPageCache creates a new LRU page cache with the specified maximum size.
 func NewLRUPageCache(maxSize int) *LRUPageCache {
+	// Create dummy head and tail nodes
+	head := &node{}
+	tail := &node{}
+	head.next = tail
+	tail.prev = head
+
 	return &LRUPageCache{
-		maxSize:     maxSize,
-		cache:       make(map[tuple.PageID]page.Page),
-		accessOrder: make([]tuple.PageID, 0, maxSize),
+		maxSize: maxSize,
+		cache:   make(map[tuple.PageID]*node),
+		head:    head,
+		tail:    tail,
 	}
 }
 
+// addToFront adds a node right after the head (marks as most recently used) - O(1)
+func (c *LRUPageCache) addToFront(n *node) {
+	n.prev = c.head
+	n.next = c.head.next
+	c.head.next.prev = n
+	c.head.next = n
+}
+
+// removeNode removes a node from the linked list - O(1)
+func (c *LRUPageCache) removeNode(n *node) {
+	n.prev.next = n.next
+	n.next.prev = n.prev
+}
+
+// moveToFront moves an existing node to the front (marks as most recently used) - O(1)
+func (c *LRUPageCache) moveToFront(n *node) {
+	c.removeNode(n)
+	c.addToFront(n)
+}
+
 // Get retrieves a page from the cache by its page ID.
-// If the page is found, it is marked as recently used by updating the access order.
-//
-// Parameters:
-//   - pid: The page ID to look up.
-//
-// Returns:
-//   - page.Page: The cached page if found, nil otherwise.
-//   - bool: true if the page was found, false otherwise.
+// If the page is found, it is marked as recently used by moving it to the front.
 func (c *LRUPageCache) Get(pid tuple.PageID) (page.Page, bool) {
 	c.mutex.Lock()
 	defer c.mutex.Unlock()
 
-	p, exists := c.cache[pid]
-	if exists {
-		c.updateAccessOrder(pid)
+	if n, exists := c.cache[pid]; exists {
+		c.moveToFront(n)
+		return n.page, true
 	}
-	return p, exists
+	return nil, false
 }
 
 // Put stores a page in the cache with the given page ID.
@@ -90,9 +117,9 @@ func (c *LRUPageCache) Put(pid tuple.PageID, p page.Page) error {
 	c.mutex.Lock()
 	defer c.mutex.Unlock()
 
-	if _, exists := c.cache[pid]; exists {
-		c.cache[pid] = p
-		c.updateAccessOrder(pid)
+	if n, exists := c.cache[pid]; exists {
+		n.page = p
+		c.moveToFront(n)
 		return nil
 	}
 
@@ -100,8 +127,12 @@ func (c *LRUPageCache) Put(pid tuple.PageID, p page.Page) error {
 		return fmt.Errorf("cache full, cannot add page")
 	}
 
-	c.cache[pid] = p
-	c.accessOrder = append(c.accessOrder, pid)
+	newNode := &node{
+		pid:  pid,
+		page: p,
+	}
+	c.cache[pid] = newNode
+	c.addToFront(newNode)
 	return nil
 }
 
@@ -111,8 +142,10 @@ func (c *LRUPageCache) Remove(pid tuple.PageID) {
 	c.mutex.Lock()
 	defer c.mutex.Unlock()
 
-	delete(c.cache, pid)
-	c.removeFromAccessOrder(pid)
+	if n, exists := c.cache[pid]; exists {
+		delete(c.cache, pid)
+		c.removeNode(n)
+	}
 }
 
 // Size returns the current number of pages stored in the cache.
@@ -128,41 +161,23 @@ func (c *LRUPageCache) Clear() {
 	c.mutex.Lock()
 	defer c.mutex.Unlock()
 
-	c.cache = make(map[tuple.PageID]page.Page)
-	c.accessOrder = make([]tuple.PageID, 0, c.maxSize)
+	c.cache = make(map[tuple.PageID]*node)
+	c.head.next = c.tail
+	c.tail.prev = c.head
 }
 
 // GetAll returns a slice containing all page IDs currently stored in the cache.
-// The page IDs are returned in LRU order (least recently used first),
-// making it suitable for eviction algorithms that prioritize removing old pages.
+// The page IDs are returned in LRU order (least recently used first).
 func (c *LRUPageCache) GetAll() []tuple.PageID {
 	c.mutex.RLock()
 	defer c.mutex.RUnlock()
-	pids := make([]tuple.PageID, len(c.accessOrder))
-	copy(pids, c.accessOrder)
+
+	pids := make([]tuple.PageID, 0, len(c.cache))
+	current := c.tail.prev
+	for current != c.head {
+		pids = append(pids, current.pid)
+		current = current.prev
+	}
+
 	return pids
-}
-
-// updateAccessOrder moves the given page ID to the end of the access order slice,
-// marking it as the most recently used page. If the page ID doesn't exist in the
-// access order, it is simply appended.
-func (c *LRUPageCache) updateAccessOrder(pid tuple.PageID) {
-	for i, pageID := range c.accessOrder {
-		if pageID.Equals(pid) {
-			c.accessOrder = append(c.accessOrder[:i], c.accessOrder[i+1:]...)
-			break
-		}
-	}
-	c.accessOrder = append(c.accessOrder, pid)
-}
-
-// removeFromAccessOrder removes the given page ID from the access order slice.
-// If the page ID doesn't exist in the access order, this method does nothing.
-func (c *LRUPageCache) removeFromAccessOrder(pid tuple.PageID) {
-	for i, pageID := range c.accessOrder {
-		if pageID.Equals(pid) {
-			c.accessOrder = append(c.accessOrder[:i], c.accessOrder[i+1:]...)
-			return
-		}
-	}
 }
