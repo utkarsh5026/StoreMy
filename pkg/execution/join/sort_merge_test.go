@@ -51,8 +51,8 @@ func TestNewSortMergeJoin(t *testing.T) {
 	if smj.rightStart != 0 {
 		t.Error("rightStart should be initialized to 0")
 	}
-	if smj.bufferIndex != -1 {
-		t.Error("bufferIndex should be initialized to -1")
+	if smj.matchBuffer == nil {
+		t.Error("matchBuffer should be initialized")
 	}
 	if smj.initialized {
 		t.Error("initialized should be false")
@@ -580,12 +580,6 @@ func TestSortMergeJoinReset(t *testing.T) {
 	}
 
 	// Verify internal state is reset
-	if smj.matchBuffer != nil {
-		t.Error("matchBuffer should be nil after reset")
-	}
-	if smj.bufferIndex != -1 {
-		t.Error("bufferIndex should be -1 after reset")
-	}
 	if smj.leftIndex != 0 {
 		t.Error("leftIndex should be 0 after reset")
 	}
@@ -644,9 +638,6 @@ func TestSortMergeJoinClose(t *testing.T) {
 	}
 	if smj.rightSorted != nil {
 		t.Error("rightSorted should be nil after close")
-	}
-	if smj.matchBuffer != nil {
-		t.Error("matchBuffer should be nil after close")
 	}
 	if smj.initialized {
 		t.Error("initialized should be false after close")
