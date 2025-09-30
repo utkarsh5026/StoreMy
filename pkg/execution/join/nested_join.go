@@ -71,40 +71,9 @@ func (nl *NestedLoopJoin) Next() (*tuple.Tuple, error) {
 				return nil, err
 			}
 		}
-		hasNext, err := nl.rightChild.HasNext()
-		if err != nil {
+
+		if err := nl.processNextRightTuple(); err != nil {
 			return nil, err
-		}
-
-		if !hasNext {
-			nl.blockIndex = len(nl.leftBlock)
-			if err := nl.rightChild.Rewind(); err != nil {
-				return nil, err
-			}
-			continue
-		}
-
-		rightTuple, err := nl.rightChild.Next()
-		if err != nil {
-			return nil, err
-		}
-
-		if rightTuple == nil {
-			continue
-		}
-
-		for i := nl.blockIndex; i < len(nl.leftBlock); i++ {
-			matches, err := nl.predicate.Filter(nl.leftBlock[i], rightTuple)
-			if err != nil {
-				continue
-			}
-
-			if matches {
-				joined, err := tuple.CombineTuples(nl.leftBlock[i], rightTuple)
-				if err == nil {
-					nl.matchBuffer = append(nl.matchBuffer, joined)
-				}
-			}
 		}
 
 		if len(nl.matchBuffer) > 0 {
@@ -201,4 +170,56 @@ func (nl *NestedLoopJoin) getNextBufferedResult() *tuple.Tuple {
 	result := nl.matchBuffer[nl.bufferIndex]
 	nl.bufferIndex++
 	return result
+}
+
+// processNextRightTuple gets next right tuple and finds matches with current block
+func (nl *NestedLoopJoin) processNextRightTuple() error {
+	hasNext, err := nl.rightChild.HasNext()
+	if err != nil {
+		return err
+	}
+
+	if !hasNext {
+		nl.blockIndex = len(nl.leftBlock)
+		return nl.rightChild.Rewind()
+	}
+
+	rightTuple, err := nl.rightChild.Next()
+	if err != nil {
+		return err
+	}
+	if rightTuple == nil {
+		return nil
+	}
+
+	return nl.findMatchesInCurrentBlock(rightTuple)
+}
+
+func (nl *NestedLoopJoin) findMatchesInCurrentBlock(rightTuple *tuple.Tuple) error {
+	for i := nl.blockIndex; i < len(nl.leftBlock); i++ {
+		leftTuple := nl.leftBlock[i]
+
+		matches, err := nl.predicate.Filter(leftTuple, rightTuple)
+		if err != nil {
+			continue
+		}
+
+		if matches {
+			if err := nl.addMatchToBuffer(leftTuple, rightTuple); err != nil {
+				continue
+			}
+		}
+	}
+
+	return nil
+}
+
+func (nl *NestedLoopJoin) addMatchToBuffer(leftTuple, rightTuple *tuple.Tuple) error {
+	joinedTuple, err := tuple.CombineTuples(leftTuple, rightTuple)
+	if err != nil {
+		return err
+	}
+
+	nl.matchBuffer = append(nl.matchBuffer, joinedTuple)
+	return nil
 }
