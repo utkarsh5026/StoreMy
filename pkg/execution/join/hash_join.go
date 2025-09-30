@@ -45,16 +45,7 @@ func (hj *HashJoin) Next() (*tuple.Tuple, error) {
 	}
 
 	if hj.hasCurrentMatches() {
-		result, err := tuple.CombineTuples(hj.currentLeft, hj.currentMatches[hj.matchIndex])
-		hj.matchIndex++
-
-		if hj.matchIndex >= len(hj.currentMatches) {
-			hj.currentMatches = nil
-			hj.currentLeft = nil
-			hj.matchIndex = -1
-		}
-
-		return result, err
+		return hj.getNextMatch()
 	}
 
 	return hj.findNextJoinedTuple()
@@ -100,6 +91,20 @@ func (hj *HashJoin) hasCurrentMatches() bool {
 	return hj.currentMatches != nil &&
 		hj.matchIndex >= 0 &&
 		hj.matchIndex < len(hj.currentMatches)
+}
+
+func (hj *HashJoin) getNextMatch() (*tuple.Tuple, error) {
+	result, err := tuple.CombineTuples(hj.currentLeft, hj.currentMatches[hj.matchIndex])
+	hj.matchIndex++
+
+	// Clear current matches if we've returned them all
+	if hj.matchIndex >= len(hj.currentMatches) {
+		hj.currentMatches = nil
+		hj.currentLeft = nil
+		hj.matchIndex = -1
+	}
+
+	return result, err
 }
 
 // findNextJoinedTuple finds the next left tuple that has matching right tuples
