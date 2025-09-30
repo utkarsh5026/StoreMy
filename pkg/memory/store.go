@@ -10,6 +10,10 @@ import (
 	"time"
 )
 
+const (
+	MaxPageCount = 50
+)
+
 // Permissions represents the access level for database operations
 type Permissions int
 
@@ -31,23 +35,19 @@ type TransactionInfo struct {
 // It serves as the main interface between the database engine and the underlying storage layer,
 // providing ACID compliance through transaction tracking and page lifecycle management.
 type PageStore struct {
-	numPages     int
-	pageCache    map[tuple.PageID]page.Page                      // In-memory cache of database pages
-	tableManager *TableManager                                   // Manager for database tables and files
-	mutex        sync.RWMutex                                    // Protects concurrent access to the page cache
-	transactions map[*transaction.TransactionID]*TransactionInfo // Active transaction metadata
-	accessOrder  []tuple.PageID                                  // For LRU eviction
-	lockManager  *lock.LockManager                               // Manages locks for pages
+	tableManager *TableManager
+	mutex        sync.RWMutex
+	transactions map[*transaction.TransactionID]*TransactionInfo
+	lockManager  *lock.LockManager
+	cache        PageCache
 }
 
 // NewPageStore creates and initializes a new PageStore instance with the given TableManager.
 // The PageStore will use the TableManager to access database files and manage table operations.
 func NewPageStore(tm *TableManager) *PageStore {
 	return &PageStore{
-		numPages:     50, // Default buffer pool size
-		pageCache:    make(map[tuple.PageID]page.Page),
+		cache:        NewLRUPageCache(MaxPageCount),
 		transactions: make(map[*transaction.TransactionID]*TransactionInfo),
-		accessOrder:  make([]tuple.PageID, 0),
 		lockManager:  lock.NewLockManager(),
 		tableManager: tm,
 	}
@@ -64,12 +64,11 @@ func (p *PageStore) GetPage(tid *transaction.TransactionID, pid tuple.PageID, pe
 	p.mutex.Lock()
 	defer p.mutex.Unlock()
 
-	if page, exists := p.pageCache[pid]; exists {
-		p.updateAccessOrder(pid)
+	if page, exists := p.cache.Get(pid); exists {
 		return page, nil
 	}
 
-	if len(p.pageCache) >= p.numPages {
+	if p.cache.Size() >= MaxPageCount {
 		if err := p.evictPage(); err != nil {
 			return nil, fmt.Errorf("buffer pool full, cannot evict: %v", err)
 		}
@@ -85,8 +84,10 @@ func (p *PageStore) GetPage(tid *transaction.TransactionID, pid tuple.PageID, pe
 		return nil, fmt.Errorf("failed to read page from disk: %v", err)
 	}
 
-	p.pageCache[pid] = page
-	p.accessOrder = append(p.accessOrder, pid)
+	if err := p.cache.Put(pid, page); err != nil {
+		return nil, fmt.Errorf("failed to add page to cache: %v", err)
+	}
+
 	return page, nil
 }
 
@@ -105,37 +106,25 @@ func (p *PageStore) trackPageAccess(tid *transaction.TransactionID, pid tuple.Pa
 	p.transactions[tid].lockedPages[pid] = perm
 }
 
-func (p *PageStore) updateAccessOrder(pid tuple.PageID) {
-	// Move accessed page to end (most recently used)
-	for i, pageID := range p.accessOrder {
-		if pageID == pid {
-			p.accessOrder = append(p.accessOrder[:i], p.accessOrder[i+1:]...)
-			p.accessOrder = append(p.accessOrder, pid)
-			break
-		}
-	}
-}
-
 // evictPage implements NO-STEAL policy
 // We never evict dirty pages to simplify recovery
 func (p *PageStore) evictPage() error {
-	// Find a clean (not dirty) page that is not locked
-	for i := 0; i < len(p.accessOrder); i++ {
-		pid := p.accessOrder[i]
-		page := p.pageCache[pid]
+	allPages := p.cache.GetAll()
 
-		// Check if page is dirty (NO-STEAL policy)
+	for _, pid := range allPages {
+		page, exists := p.cache.Get(pid)
+		if !exists {
+			continue
+		}
+
 		if page.IsDirty() != nil {
 			continue
 		}
 
-		// // Check if page is locked
-		// if p.lockManager.IsPageLocked(pid) {
-		// 	continue
-		// }
-
-		delete(p.pageCache, pid)
-		p.accessOrder = append(p.accessOrder[:i], p.accessOrder[i+1:]...)
+		if p.lockManager.IsPageLocked(pid) {
+			continue
+		}
+		p.cache.Remove(pid)
 		return nil
 	}
 
@@ -160,7 +149,7 @@ func (p *PageStore) InsertTuple(tid *transaction.TransactionID, tableID int, t *
 
 	for _, page := range modifiedPages {
 		page.MarkDirty(true, tid)
-		p.pageCache[page.GetID()] = page
+		p.cache.Put(page.GetID(), page)
 
 		if txInfo, exists := p.transactions[tid]; exists {
 			txInfo.dirtyPages[page.GetID()] = true
@@ -195,7 +184,7 @@ func (p *PageStore) DeleteTuple(tid *transaction.TransactionID, t *tuple.Tuple) 
 	p.mutex.Lock()
 	defer p.mutex.Unlock()
 
-	p.pageCache[modifiedPage.GetID()] = modifiedPage
+	p.cache.Put(modifiedPage.GetID(), modifiedPage)
 	if txInfo, exists := p.transactions[tid]; exists {
 		txInfo.dirtyPages[modifiedPage.GetID()] = true
 	}
@@ -227,15 +216,13 @@ func (p *PageStore) UpdateTuple(tid *transaction.TransactionID, oldTuple *tuple.
 // Returns an error if any page write operation fails.
 func (p *PageStore) FlushAllPages() error {
 	p.mutex.RLock()
-	pids := make([]tuple.PageID, 0, len(p.pageCache))
-	for pid := range p.pageCache {
-		pids = append(pids, pid)
-	}
+	pids := make([]tuple.PageID, 0, p.cache.Size())
+	pids = append(pids, p.cache.GetAll()...)
 	p.mutex.RUnlock()
 
 	for _, pid := range pids {
 		if err := p.flushPage(pid); err != nil {
-			return err
+			return fmt.Errorf("failed to flush page %v: %v", pid, err)
 		}
 	}
 
@@ -266,7 +253,6 @@ func (p *PageStore) CommitTransaction(tid *transaction.TransactionID) error {
 		return fmt.Errorf("transaction ID cannot be nil")
 	}
 
-	// PHASE 1: Collect dirty pages under lock
 	p.mutex.Lock()
 	txInfo, exists := p.transactions[tid]
 	if !exists {
@@ -275,46 +261,32 @@ func (p *PageStore) CommitTransaction(tid *transaction.TransactionID) error {
 		return nil
 	}
 
-	// Copy dirty page IDs so we can release the lock
 	dirtyPageIDs := make([]tuple.PageID, 0, len(txInfo.dirtyPages))
 	for pid := range txInfo.dirtyPages {
 		dirtyPageIDs = append(dirtyPageIDs, pid)
 	}
-	p.mutex.Unlock() // ✅ Release lock before I/O operations
+	// Set before images before flushing
+	for _, pid := range dirtyPageIDs {
+		page, exists := p.cache.Get(pid)
+		if exists {
+			page.SetBeforeImage()
+			p.cache.Put(pid, page)
+		}
+	}
+	p.mutex.Unlock()
 
-	// PHASE 2: Flush dirty pages to disk (WITHOUT holding the main lock)
-	// This allows other transactions to continue while we do I/O
 	for _, pid := range dirtyPageIDs {
 		if err := p.flushPage(pid); err != nil {
 			return fmt.Errorf("commit failed: unable to flush page %v: %v (transaction must be aborted)", pid, err)
 		}
 	}
 
-	// PHASE 3: Update page states under lock
 	p.mutex.Lock()
-	for _, pid := range dirtyPageIDs {
-		page, exists := p.pageCache[pid]
-		if !exists {
-			continue
-		}
 
-		// Set new baseline for future aborts
-		page.SetBeforeImage()
-
-		// Mark page as clean
-		page.MarkDirty(false, nil)
-
-		// Update cache
-		p.pageCache[pid] = page
-	}
-
-	// Remove transaction from tracking
 	delete(p.transactions, tid)
-	p.mutex.Unlock() // ✅ Release lock before releasing page locks
+	p.mutex.Unlock()
 
-	// PHASE 4: Release all locks (allows waiting transactions to proceed)
 	p.lockManager.UnlockAllPages(tid)
-
 	return nil
 }
 
@@ -341,18 +313,16 @@ func (p *PageStore) AbortTransaction(tid *transaction.TransactionID) error {
 		return fmt.Errorf("transaction ID cannot be nil")
 	}
 
-	// PHASE 1: Get transaction metadata
 	p.mutex.Lock()
 	txInfo, exists := p.transactions[tid]
 	if !exists {
-		p.mutex.Unlock() // ✅ Unlock before releasing locks
+		p.mutex.Unlock()
 		p.lockManager.UnlockAllPages(tid)
 		return nil
 	}
 
-	// PHASE 2: Restore all dirty pages to their before-image state
 	for pid := range txInfo.dirtyPages {
-		page, pageExists := p.pageCache[pid]
+		page, pageExists := p.cache.Get(pid)
 		if !pageExists {
 			continue
 		}
@@ -361,34 +331,18 @@ func (p *PageStore) AbortTransaction(tid *transaction.TransactionID) error {
 		if beforeImage == nil {
 			fmt.Printf("Warning: no before-image for page %v during abort of transaction %v\n",
 				pid, tid)
-			delete(p.pageCache, pid)
-			p.removeFromAccessOrder(pid)
+			p.cache.Remove(pid)
 			continue
 		}
 
-		// Replace dirty page with clean before-image
-		p.pageCache[pid] = beforeImage
-		p.updateAccessOrder(pid)
+		p.cache.Put(pid, beforeImage)
 	}
 
-	// PHASE 3: Clean up transaction metadata
 	delete(p.transactions, tid)
-	p.mutex.Unlock() // ✅ Unlock BEFORE releasing page locks
-
-	// PHASE 4: Release all locks
+	p.mutex.Unlock()
 	p.lockManager.UnlockAllPages(tid)
 
 	return nil
-}
-
-// Helper method to remove a page from the access order list
-func (p *PageStore) removeFromAccessOrder(pid tuple.PageID) {
-	for i, pageID := range p.accessOrder {
-		if pageID.Equals(pid) {
-			p.accessOrder = append(p.accessOrder[:i], p.accessOrder[i+1:]...)
-			return
-		}
-	}
 }
 
 // flushPage writes a specific page to disk if it has been modified (is dirty).
@@ -397,33 +351,34 @@ func (p *PageStore) removeFromAccessOrder(pid tuple.PageID) {
 //
 // Returns an error if the page write fails, or nil if the page doesn't exist or isn't dirty.
 func (p *PageStore) flushPage(pid tuple.PageID) error {
-	// Read the page under lock
 	p.mutex.RLock()
-	page, exists := p.pageCache[pid]
+	page, exists := p.cache.Get(pid)
 	p.mutex.RUnlock()
 
 	if !exists {
 		return nil
 	}
 
-	// Check if dirty (no lock needed for read-only check)
 	if page.IsDirty() == nil {
 		return nil
 	}
 
-	// Get database file
 	dbFile, err := p.tableManager.GetDbFile(pid.GetTableID())
 	if err != nil {
 		return fmt.Errorf("table for page %v not found: %v", pid, err)
 	}
 
-	// Write to disk (I/O operation - no locks held)
 	if err := dbFile.WritePage(page); err != nil {
 		return fmt.Errorf("failed to write page to disk: %v", err)
 	}
 
-	// Note: We don't mark the page as clean here anymore
-	// The caller (CommitTransaction) will do that under the proper lock
+	// Mark page as clean after successful write
+	page.MarkDirty(false, nil)
+	
+	// Update the page in cache to reflect the clean state
+	p.mutex.Lock()
+	p.cache.Put(pid, page)
+	p.mutex.Unlock()
 
 	return nil
 }
