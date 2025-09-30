@@ -145,6 +145,14 @@ func (p *PageStore) InsertTuple(tid *transaction.TransactionID, tableID int, t *
 	p.mutex.Lock()
 	defer p.mutex.Unlock()
 
+	if _, exists := p.transactions[tid]; !exists {
+		p.transactions[tid] = &TransactionInfo{
+			startTime:   time.Now(),
+			dirtyPages:  make(map[tuple.PageID]bool),
+			lockedPages: make(map[tuple.PageID]Permissions),
+		}
+	}
+
 	for _, page := range modifiedPages {
 		page.MarkDirty(true, tid)
 		p.cache.Put(page.GetID(), page)
@@ -181,6 +189,14 @@ func (p *PageStore) DeleteTuple(tid *transaction.TransactionID, t *tuple.Tuple) 
 	modifiedPage.MarkDirty(true, tid)
 	p.mutex.Lock()
 	defer p.mutex.Unlock()
+
+	if _, exists := p.transactions[tid]; !exists {
+		p.transactions[tid] = &TransactionInfo{
+			startTime:   time.Now(),
+			dirtyPages:  make(map[tuple.PageID]bool),
+			lockedPages: make(map[tuple.PageID]Permissions),
+		}
+	}
 
 	p.cache.Put(modifiedPage.GetID(), modifiedPage)
 	if txInfo, exists := p.transactions[tid]; exists {
