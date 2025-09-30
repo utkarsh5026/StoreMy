@@ -2896,8 +2896,8 @@ func TestPageStore_LockManagerIntegration_ConcurrentTransactions(t *testing.T) {
 				ps.CommitTransaction(tid)
 			} else {
 				for _, pid := range ps.cache.GetAll() {
-		page, _ := ps.cache.Get(pid)
-					if page.IsDirty() == tid {
+					page, exists := ps.cache.Get(pid)
+					if exists && page != nil && page.IsDirty() == tid {
 						page.SetBeforeImage()
 					}
 				}
@@ -2960,29 +2960,29 @@ func TestPageStore_LockManagerIntegration_TransactionIsolation(t *testing.T) {
 		txInfo.dirtyPages[pageID] = true
 	}
 
-	page2, err := ps.GetPage(tid2, pageID, ReadOnly)
-	if err != nil {
-		t.Fatalf("Transaction 2 failed to get page: %v", err)
+	// Transaction 2 should fail to get ReadOnly lock while tid1 holds ReadWrite lock
+	_, err = ps.GetPage(tid2, pageID, ReadOnly)
+	if err == nil {
+		t.Fatal("Expected transaction 2 to fail due to lock conflict with exclusive lock")
 	}
-	if page2 == nil {
-		t.Fatal("Expected page for transaction 2")
+	// Verify the error is about lock timeout/conflict
+	if !strings.Contains(err.Error(), "timeout waiting for lock") {
+		t.Errorf("Expected timeout error, got: %v", err)
 	}
 
 	txInfo1 := ps.transactions[tid1]
-	txInfo2 := ps.transactions[tid2]
 
 	if len(txInfo1.lockedPages) == 0 {
 		t.Error("Transaction 1 should have locked pages")
-	}
-	if len(txInfo2.lockedPages) == 0 {
-		t.Error("Transaction 2 should have locked pages")
 	}
 
 	if txInfo1.lockedPages[pageID] != ReadWrite {
 		t.Errorf("Transaction 1 should have ReadWrite lock, got %v", txInfo1.lockedPages[pageID])
 	}
-	if txInfo2.lockedPages[pageID] != ReadOnly {
-		t.Errorf("Transaction 2 should have ReadOnly lock, got %v", txInfo2.lockedPages[pageID])
+
+	// Transaction 2 should not exist or have no locked pages since it failed to acquire lock
+	if txInfo2, exists := ps.transactions[tid2]; exists && len(txInfo2.lockedPages) > 0 {
+		t.Error("Transaction 2 should not have any locked pages since it failed to acquire lock")
 	}
 
 	err = ps.CommitTransaction(tid1)
