@@ -1,0 +1,251 @@
+// pkg/execution/join/sort_merge_join.go
+package join
+
+import (
+	"fmt"
+	"sort"
+	"storemy/pkg/execution/query"
+	"storemy/pkg/iterator"
+	"storemy/pkg/tuple"
+	"storemy/pkg/types"
+)
+
+// SortMergeJoin implements the sort-merge join algorithm
+// Efficient for equality joins when data is pre-sorted or when sorting cost is acceptable
+type SortMergeJoin struct {
+	leftChild   iterator.DbIterator
+	rightChild  iterator.DbIterator
+	predicate   *JoinPredicate
+	leftSorted  []*tuple.Tuple
+	rightSorted []*tuple.Tuple
+	leftIndex   int
+	rightIndex  int
+	rightStart  int // For handling duplicates
+	initialized bool
+	stats       *JoinStatistics
+	matchBuffer []*tuple.Tuple
+	bufferIndex int
+}
+
+func NewSortMergeJoin(left, right iterator.DbIterator, pred *JoinPredicate, stats *JoinStatistics) *SortMergeJoin {
+	return &SortMergeJoin{
+		leftChild:   left,
+		rightChild:  right,
+		predicate:   pred,
+		stats:       stats,
+		leftIndex:   0,
+		rightIndex:  0,
+		rightStart:  0,
+		bufferIndex: -1,
+	}
+}
+
+func (smj *SortMergeJoin) Initialize() error {
+	if smj.initialized {
+		return nil
+	}
+
+	if err := smj.loadAndSortLeft(); err != nil {
+		return err
+	}
+
+	if err := smj.loadAndSortRight(); err != nil {
+		return err
+	}
+
+	smj.initialized = true
+	return nil
+}
+
+func (smj *SortMergeJoin) loadAndSortLeft() error {
+	smj.leftSorted = make([]*tuple.Tuple, 0)
+
+	for {
+		hasNext, err := smj.leftChild.HasNext()
+		if err != nil {
+			return err
+		}
+		if !hasNext {
+			break
+		}
+
+		t, err := smj.leftChild.Next()
+		if err != nil {
+			return err
+		}
+		if t != nil {
+			smj.leftSorted = append(smj.leftSorted, t)
+		}
+	}
+
+	fieldIndex := smj.predicate.GetField1()
+	sort.Slice(smj.leftSorted, func(i, j int) bool {
+		field1, _ := smj.leftSorted[i].GetField(fieldIndex)
+		field2, _ := smj.leftSorted[j].GetField(fieldIndex)
+		if field1 == nil || field2 == nil {
+			return false
+		}
+		result, _ := field1.Compare(types.LessThan, field2)
+		return result
+	})
+
+	return nil
+}
+
+func (smj *SortMergeJoin) loadAndSortRight() error {
+	smj.rightSorted = make([]*tuple.Tuple, 0)
+
+	for {
+		hasNext, err := smj.rightChild.HasNext()
+		if err != nil {
+			return err
+		}
+		if !hasNext {
+			break
+		}
+
+		t, err := smj.rightChild.Next()
+		if err != nil {
+			return err
+		}
+		if t != nil {
+			smj.rightSorted = append(smj.rightSorted, t)
+		}
+	}
+
+	// Sort by join field
+	fieldIndex := smj.predicate.GetField2()
+	sort.Slice(smj.rightSorted, func(i, j int) bool {
+		field1, _ := smj.rightSorted[i].GetField(fieldIndex)
+		field2, _ := smj.rightSorted[j].GetField(fieldIndex)
+		if field1 == nil || field2 == nil {
+			return false
+		}
+		result, _ := field1.Compare(types.LessThan, field2)
+		return result
+	})
+
+	return nil
+}
+
+func (smj *SortMergeJoin) Next() (*tuple.Tuple, error) {
+	if !smj.initialized {
+		return nil, fmt.Errorf("sort-merge join not initialized")
+	}
+
+	if smj.bufferIndex >= 0 && smj.bufferIndex < len(smj.matchBuffer) {
+		result := smj.matchBuffer[smj.bufferIndex]
+		smj.bufferIndex++
+		return result, nil
+	}
+
+	smj.matchBuffer = nil
+	smj.bufferIndex = -1
+
+	for smj.leftIndex < len(smj.leftSorted) && smj.rightIndex < len(smj.rightSorted) {
+		leftTuple := smj.leftSorted[smj.leftIndex]
+		rightTuple := smj.rightSorted[smj.rightIndex]
+
+		leftField, err := leftTuple.GetField(smj.predicate.GetField1())
+		if err != nil || leftField == nil {
+			smj.leftIndex++
+			continue
+		}
+
+		rightField, err := rightTuple.GetField(smj.predicate.GetField2())
+		if err != nil || rightField == nil {
+			smj.rightIndex++
+			continue
+		}
+
+		equals, _ := leftField.Compare(types.Equals, rightField)
+		less, _ := leftField.Compare(types.LessThan, rightField)
+
+		if equals {
+			smj.matchBuffer = make([]*tuple.Tuple, 0)
+
+			rightStart := smj.rightIndex
+			for smj.rightIndex < len(smj.rightSorted) {
+				rt := smj.rightSorted[smj.rightIndex]
+				rf, _ := rt.GetField(smj.predicate.GetField2())
+				if rf != nil {
+					eq, _ := leftField.Compare(types.Equals, rf)
+					if !eq {
+						break
+					}
+					joined, err := tuple.CombineTuples(leftTuple, rt)
+					if err == nil {
+						smj.matchBuffer = append(smj.matchBuffer, joined)
+					}
+				}
+				smj.rightIndex++
+			}
+
+			smj.rightIndex = rightStart
+			smj.leftIndex++
+			if len(smj.matchBuffer) > 0 {
+				smj.bufferIndex = 1
+				return smj.matchBuffer[0], nil
+			}
+		} else if less {
+			smj.leftIndex++
+		} else {
+			smj.rightIndex++
+		}
+	}
+
+	return nil, nil
+}
+
+func (smj *SortMergeJoin) Reset() error {
+	smj.leftIndex = 0
+	smj.rightIndex = 0
+	smj.rightStart = 0
+	smj.matchBuffer = nil
+	smj.bufferIndex = -1
+	return nil
+}
+
+func (smj *SortMergeJoin) Close() error {
+	smj.leftSorted = nil
+	smj.rightSorted = nil
+	smj.matchBuffer = nil
+	smj.initialized = false
+	return nil
+}
+
+func (smj *SortMergeJoin) EstimateCost() float64 {
+	if smj.stats == nil {
+		return 1000000
+	}
+
+	sortCost := 0.0
+	if !smj.stats.LeftSorted {
+		sortCost += float64(smj.stats.LeftSize) * 2 * logBase2(float64(smj.stats.LeftSize))
+	}
+	if !smj.stats.RightSorted {
+		sortCost += float64(smj.stats.RightSize) * 2 * logBase2(float64(smj.stats.RightSize))
+	}
+
+	mergeCost := float64(smj.stats.LeftSize + smj.stats.RightSize)
+	return sortCost + mergeCost
+}
+
+func (smj *SortMergeJoin) SupportsPredicateType(predicate *JoinPredicate) bool {
+	op := predicate.GetOP()
+	return op == query.Equals || op == query.LessThan ||
+		op == query.LessThanOrEqual || op == query.GreaterThan ||
+		op == query.GreaterThanOrEqual
+}
+
+func logBase2(n float64) float64 {
+	if n <= 1 {
+		return 0
+	}
+	result := 0.0
+	for n > 1 {
+		n /= 2
+		result++
+	}
+	return result
+}
