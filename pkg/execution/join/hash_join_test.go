@@ -66,17 +66,17 @@ func TestHashJoinInitialize(t *testing.T) {
 			leftTuples: []*tuple.Tuple{
 				createJoinTestTuple(
 					createTestTupleDesc([]types.Type{types.IntType}, []string{"id"}),
-					[]interface{}{int32(1)},
+					[]any{int32(1)},
 				),
 			},
 			rightTuples: []*tuple.Tuple{
 				createJoinTestTuple(
 					createTestTupleDesc([]types.Type{types.IntType}, []string{"id"}),
-					[]interface{}{int32(1)},
+					[]any{int32(1)},
 				),
 				createJoinTestTuple(
 					createTestTupleDesc([]types.Type{types.IntType}, []string{"id"}),
-					[]interface{}{int32(2)},
+					[]any{int32(2)},
 				),
 			},
 			expectedSize: 2,
@@ -86,7 +86,7 @@ func TestHashJoinInitialize(t *testing.T) {
 			leftTuples: []*tuple.Tuple{
 				createJoinTestTuple(
 					createTestTupleDesc([]types.Type{types.IntType}, []string{"id"}),
-					[]interface{}{int32(1)},
+					[]any{int32(1)},
 				),
 			},
 			rightTuples:  []*tuple.Tuple{},
@@ -97,17 +97,17 @@ func TestHashJoinInitialize(t *testing.T) {
 			leftTuples: []*tuple.Tuple{
 				createJoinTestTuple(
 					createTestTupleDesc([]types.Type{types.IntType}, []string{"id"}),
-					[]interface{}{int32(1)},
+					[]any{int32(1)},
 				),
 			},
 			rightTuples: []*tuple.Tuple{
 				createJoinTestTuple(
 					createTestTupleDesc([]types.Type{types.IntType}, []string{"id"}),
-					[]interface{}{int32(1)},
+					[]any{int32(1)},
 				),
 				createJoinTestTuple(
 					createTestTupleDesc([]types.Type{types.IntType}, []string{"id"}),
-					[]interface{}{int32(1)},
+					[]any{int32(1)},
 				),
 			},
 			expectedSize: 1, // Same key, both tuples should be in the list
@@ -147,7 +147,7 @@ func TestHashJoinInitialize(t *testing.T) {
 func TestHashJoinInitializeIdempotent(t *testing.T) {
 	rightTupleDesc := createTestTupleDesc([]types.Type{types.IntType}, []string{"id"})
 	rightTuples := []*tuple.Tuple{
-		createJoinTestTuple(rightTupleDesc, []interface{}{int32(1)}),
+		createJoinTestTuple(rightTupleDesc, []any{int32(1)}),
 	}
 
 	leftChild := newMockIterator([]*tuple.Tuple{}, rightTupleDesc)
@@ -181,15 +181,15 @@ func TestHashJoinNext(t *testing.T) {
 	rightTupleDesc := createTestTupleDesc([]types.Type{types.IntType, types.StringType}, []string{"id", "dept"})
 
 	leftTuples := []*tuple.Tuple{
-		createJoinTestTuple(leftTupleDesc, []interface{}{int32(1), "Alice"}),
-		createJoinTestTuple(leftTupleDesc, []interface{}{int32(2), "Bob"}),
-		createJoinTestTuple(leftTupleDesc, []interface{}{int32(3), "Charlie"}),
+		createJoinTestTuple(leftTupleDesc, []any{int32(1), "Alice"}),
+		createJoinTestTuple(leftTupleDesc, []any{int32(2), "Bob"}),
+		createJoinTestTuple(leftTupleDesc, []any{int32(3), "Charlie"}),
 	}
 
 	rightTuples := []*tuple.Tuple{
-		createJoinTestTuple(rightTupleDesc, []interface{}{int32(1), "Engineering"}),
-		createJoinTestTuple(rightTupleDesc, []interface{}{int32(2), "Marketing"}),
-		createJoinTestTuple(rightTupleDesc, []interface{}{int32(4), "Sales"}),
+		createJoinTestTuple(rightTupleDesc, []any{int32(1), "Engineering"}),
+		createJoinTestTuple(rightTupleDesc, []any{int32(2), "Marketing"}),
+		createJoinTestTuple(rightTupleDesc, []any{int32(4), "Sales"}),
 	}
 
 	leftChild := newMockIterator(leftTuples, leftTupleDesc)
@@ -254,13 +254,13 @@ func TestHashJoinMultipleMatches(t *testing.T) {
 
 	// One department with multiple employees
 	leftTuples := []*tuple.Tuple{
-		createJoinTestTuple(leftTupleDesc, []interface{}{int32(1), "Alice"}),
-		createJoinTestTuple(leftTupleDesc, []interface{}{int32(1), "Bob"}),
-		createJoinTestTuple(leftTupleDesc, []interface{}{int32(1), "Charlie"}),
+		createJoinTestTuple(leftTupleDesc, []any{int32(1), "Alice"}),
+		createJoinTestTuple(leftTupleDesc, []any{int32(1), "Bob"}),
+		createJoinTestTuple(leftTupleDesc, []any{int32(1), "Charlie"}),
 	}
 
 	rightTuples := []*tuple.Tuple{
-		createJoinTestTuple(rightTupleDesc, []interface{}{int32(1), "Engineering"}),
+		createJoinTestTuple(rightTupleDesc, []any{int32(1), "Engineering"}),
 	}
 
 	leftChild := newMockIterator(leftTuples, leftTupleDesc)
@@ -302,13 +302,13 @@ func TestHashJoinManyToMany(t *testing.T) {
 
 	// Multiple tuples with same key on both sides
 	leftTuples := []*tuple.Tuple{
-		createJoinTestTuple(leftTupleDesc, []interface{}{int32(1), "L1"}),
-		createJoinTestTuple(leftTupleDesc, []interface{}{int32(1), "L2"}),
+		createJoinTestTuple(leftTupleDesc, []any{int32(1), "L1"}),
+		createJoinTestTuple(leftTupleDesc, []any{int32(1), "L2"}),
 	}
 
 	rightTuples := []*tuple.Tuple{
-		createJoinTestTuple(rightTupleDesc, []interface{}{int32(1), "R1"}),
-		createJoinTestTuple(rightTupleDesc, []interface{}{int32(1), "R2"}),
+		createJoinTestTuple(rightTupleDesc, []any{int32(1), "R1"}),
+		createJoinTestTuple(rightTupleDesc, []any{int32(1), "R2"}),
 	}
 
 	leftChild := newMockIterator(leftTuples, leftTupleDesc)
@@ -349,13 +349,13 @@ func TestHashJoinNoMatches(t *testing.T) {
 	rightTupleDesc := createTestTupleDesc([]types.Type{types.IntType}, []string{"id"})
 
 	leftTuples := []*tuple.Tuple{
-		createJoinTestTuple(leftTupleDesc, []interface{}{int32(1)}),
-		createJoinTestTuple(leftTupleDesc, []interface{}{int32(2)}),
+		createJoinTestTuple(leftTupleDesc, []any{int32(1)}),
+		createJoinTestTuple(leftTupleDesc, []any{int32(2)}),
 	}
 
 	rightTuples := []*tuple.Tuple{
-		createJoinTestTuple(rightTupleDesc, []interface{}{int32(3)}),
-		createJoinTestTuple(rightTupleDesc, []interface{}{int32(4)}),
+		createJoinTestTuple(rightTupleDesc, []any{int32(3)}),
+		createJoinTestTuple(rightTupleDesc, []any{int32(4)}),
 	}
 
 	leftChild := newMockIterator(leftTuples, leftTupleDesc)
@@ -399,7 +399,7 @@ func TestHashJoinEmptyInputs(t *testing.T) {
 			rightTuples: []*tuple.Tuple{
 				createJoinTestTuple(
 					createTestTupleDesc([]types.Type{types.IntType}, []string{"id"}),
-					[]interface{}{int32(1)},
+					[]any{int32(1)},
 				),
 			},
 		},
@@ -408,7 +408,7 @@ func TestHashJoinEmptyInputs(t *testing.T) {
 			leftTuples: []*tuple.Tuple{
 				createJoinTestTuple(
 					createTestTupleDesc([]types.Type{types.IntType}, []string{"id"}),
-					[]interface{}{int32(1)},
+					[]any{int32(1)},
 				),
 			},
 			rightTuples: []*tuple.Tuple{},
@@ -450,12 +450,12 @@ func TestHashJoinWithNullFields(t *testing.T) {
 	rightTupleDesc := createTestTupleDesc([]types.Type{types.IntType, types.StringType}, []string{"id", "dept"})
 
 	leftTuples := []*tuple.Tuple{
-		createJoinTestTuple(leftTupleDesc, []interface{}{int32(1), "Alice"}),
+		createJoinTestTuple(leftTupleDesc, []any{int32(1), "Alice"}),
 		tuple.NewTuple(leftTupleDesc), // Tuple with null fields
 	}
 
 	rightTuples := []*tuple.Tuple{
-		createJoinTestTuple(rightTupleDesc, []interface{}{int32(1), "Engineering"}),
+		createJoinTestTuple(rightTupleDesc, []any{int32(1), "Engineering"}),
 		tuple.NewTuple(rightTupleDesc), // Tuple with null fields
 	}
 
@@ -497,13 +497,13 @@ func TestHashJoinReset(t *testing.T) {
 	rightTupleDesc := createTestTupleDesc([]types.Type{types.IntType}, []string{"id"})
 
 	leftTuples := []*tuple.Tuple{
-		createJoinTestTuple(leftTupleDesc, []interface{}{int32(1)}),
-		createJoinTestTuple(leftTupleDesc, []interface{}{int32(2)}),
+		createJoinTestTuple(leftTupleDesc, []any{int32(1)}),
+		createJoinTestTuple(leftTupleDesc, []any{int32(2)}),
 	}
 
 	rightTuples := []*tuple.Tuple{
-		createJoinTestTuple(rightTupleDesc, []interface{}{int32(1)}),
-		createJoinTestTuple(rightTupleDesc, []interface{}{int32(2)}),
+		createJoinTestTuple(rightTupleDesc, []any{int32(1)}),
+		createJoinTestTuple(rightTupleDesc, []any{int32(2)}),
 	}
 
 	leftChild := newMockIterator(leftTuples, leftTupleDesc)
@@ -718,13 +718,13 @@ func TestHashJoinStringKeys(t *testing.T) {
 	rightTupleDesc := createTestTupleDesc([]types.Type{types.StringType, types.StringType}, []string{"name", "city"})
 
 	leftTuples := []*tuple.Tuple{
-		createJoinTestTuple(leftTupleDesc, []interface{}{"Alice", int32(30)}),
-		createJoinTestTuple(leftTupleDesc, []interface{}{"Bob", int32(25)}),
+		createJoinTestTuple(leftTupleDesc, []any{"Alice", int32(30)}),
+		createJoinTestTuple(leftTupleDesc, []any{"Bob", int32(25)}),
 	}
 
 	rightTuples := []*tuple.Tuple{
-		createJoinTestTuple(rightTupleDesc, []interface{}{"Alice", "NYC"}),
-		createJoinTestTuple(rightTupleDesc, []interface{}{"Charlie", "LA"}),
+		createJoinTestTuple(rightTupleDesc, []any{"Alice", "NYC"}),
+		createJoinTestTuple(rightTupleDesc, []any{"Charlie", "LA"}),
 	}
 
 	leftChild := newMockIterator(leftTuples, leftTupleDesc)
@@ -784,7 +784,7 @@ func TestHashJoinErrorHandling(t *testing.T) {
 		rightTupleDesc := createTestTupleDesc([]types.Type{types.IntType}, []string{"id"})
 
 		rightTuples := []*tuple.Tuple{
-			createJoinTestTuple(rightTupleDesc, []interface{}{int32(1)}),
+			createJoinTestTuple(rightTupleDesc, []any{int32(1)}),
 		}
 
 		leftChild := newMockIterator([]*tuple.Tuple{}, leftTupleDesc)
