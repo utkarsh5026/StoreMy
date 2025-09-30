@@ -73,42 +73,27 @@ func GetStatistics(left, right iterator.DbIterator) (*JoinStatistics, error) {
 		Selectivity:      0.1, // Default selectivity
 	}
 
-	for {
-		hasNext, err := left.HasNext()
-		if err != nil {
-			return nil, err
-		}
-		if !hasNext {
-			break
-		}
-
-		_, err = left.Next()
-		if err != nil {
-			return nil, err
-		}
-		stats.LeftCardinality++
+	leftCount, err := iterator.CountAllTuples(left)
+	if err != nil {
+		return nil, err
 	}
-	left.Rewind()
+	stats.LeftCardinality = leftCount
 
-	for {
-		hasNext, err := right.HasNext()
-		if err != nil {
-			return nil, err
-		}
-		if !hasNext {
-			break
-		}
-
-		_, err = right.Next()
-		if err != nil {
-			return nil, err
-		}
-		stats.RightCardinality++
+	if err := left.Rewind(); err != nil {
+		return nil, err
 	}
-	right.Rewind()
+
+	rightCount, err := iterator.CountAllTuples(right)
+	if err != nil {
+		return nil, err
+	}
+	stats.RightCardinality = rightCount
+
+	if err := right.Rewind(); err != nil {
+		return nil, err
+	}
 
 	stats.LeftSize = (stats.LeftCardinality + 99) / 100
 	stats.RightSize = (stats.RightCardinality + 99) / 100
-
 	return stats, nil
 }
