@@ -22,8 +22,7 @@ type SortMergeJoin struct {
 	rightStart  int // For handling duplicates
 	initialized bool
 	stats       *JoinStatistics
-	matchBuffer []*tuple.Tuple
-	bufferIndex int
+	matchBuffer *JoinMatchBuffer
 }
 
 func NewSortMergeJoin(left, right iterator.DbIterator, pred *JoinPredicate, stats *JoinStatistics) *SortMergeJoin {
@@ -35,7 +34,7 @@ func NewSortMergeJoin(left, right iterator.DbIterator, pred *JoinPredicate, stat
 		leftIndex:   0,
 		rightIndex:  0,
 		rightStart:  0,
-		bufferIndex: -1,
+		matchBuffer: NewJoinMatchBuffer(),
 	}
 }
 
@@ -81,14 +80,11 @@ func (smj *SortMergeJoin) Next() (*tuple.Tuple, error) {
 		return nil, fmt.Errorf("sort-merge join not initialized")
 	}
 
-	if smj.bufferIndex >= 0 && smj.bufferIndex < len(smj.matchBuffer) {
-		result := smj.matchBuffer[smj.bufferIndex]
-		smj.bufferIndex++
-		return result, nil
+	if smj.matchBuffer.HasNext() {
+		return smj.matchBuffer.Next(), nil
 	}
 
-	smj.matchBuffer = nil
-	smj.bufferIndex = -1
+	smj.matchBuffer.StartNew()
 
 	for smj.leftIndex < len(smj.leftSorted) && smj.rightIndex < len(smj.rightSorted) {
 		leftTuple := smj.leftSorted[smj.leftIndex]
@@ -110,8 +106,6 @@ func (smj *SortMergeJoin) Next() (*tuple.Tuple, error) {
 		less, _ := leftField.Compare(types.LessThan, rightField)
 
 		if equals {
-			smj.matchBuffer = make([]*tuple.Tuple, 0)
-
 			rightStart := smj.rightIndex
 			for smj.rightIndex < len(smj.rightSorted) {
 				rt := smj.rightSorted[smj.rightIndex]
@@ -123,7 +117,7 @@ func (smj *SortMergeJoin) Next() (*tuple.Tuple, error) {
 					}
 					joined, err := tuple.CombineTuples(leftTuple, rt)
 					if err == nil {
-						smj.matchBuffer = append(smj.matchBuffer, joined)
+						smj.matchBuffer.Add(joined)
 					}
 				}
 				smj.rightIndex++
@@ -131,9 +125,8 @@ func (smj *SortMergeJoin) Next() (*tuple.Tuple, error) {
 
 			smj.rightIndex = rightStart
 			smj.leftIndex++
-			if len(smj.matchBuffer) > 0 {
-				smj.bufferIndex = 1
-				return smj.matchBuffer[0], nil
+			if result := smj.matchBuffer.GetFirstAndAdvance(); result != nil {
+				return result, nil
 			}
 		} else if less {
 			smj.leftIndex++
@@ -149,15 +142,14 @@ func (smj *SortMergeJoin) Reset() error {
 	smj.leftIndex = 0
 	smj.rightIndex = 0
 	smj.rightStart = 0
-	smj.matchBuffer = nil
-	smj.bufferIndex = -1
+	smj.matchBuffer.Reset()
 	return nil
 }
 
 func (smj *SortMergeJoin) Close() error {
 	smj.leftSorted = nil
 	smj.rightSorted = nil
-	smj.matchBuffer = nil
+	smj.matchBuffer.Reset()
 	smj.initialized = false
 	return nil
 }
