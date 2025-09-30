@@ -73,32 +73,8 @@ func (hj *HashJoin) Initialize() error {
 		return nil
 	}
 
-	rightFieldIndex := hj.predicate.GetField2()
-
-	for {
-		hasNext, err := hj.rightChild.HasNext()
-		if err != nil {
-			return err
-		}
-		if !hasNext {
-			break
-		}
-
-		rightTuple, err := hj.rightChild.Next()
-		if err != nil {
-			return err
-		}
-		if rightTuple == nil {
-			continue
-		}
-
-		field, err := rightTuple.GetField(rightFieldIndex)
-		if err != nil || field == nil {
-			continue
-		}
-
-		key := field.String()
-		hj.hashTable[key] = append(hj.hashTable[key], rightTuple)
+	if err := hj.buildHashTable(); err != nil {
+		return fmt.Errorf("failed to build hash table: %w", err)
 	}
 
 	hj.initialized = true
@@ -166,14 +142,6 @@ func (hj *HashJoin) getNextLeftTuple() (*tuple.Tuple, error) {
 	return hj.leftChild.Next()
 }
 
-func extractJoinKey(t *tuple.Tuple, fieldIndex int) (string, error) {
-	field, err := t.GetField(fieldIndex)
-	if err != nil || field == nil {
-		return "", fmt.Errorf("invalid join key")
-	}
-	return field.String(), nil
-}
-
 func (hj *HashJoin) findMatches(key string) []*tuple.Tuple {
 	matches, exists := hj.hashTable[key]
 	if !exists {
@@ -188,4 +156,51 @@ func (hj *HashJoin) setupMatches(leftTuple *tuple.Tuple, matches []*tuple.Tuple)
 	hj.matchIndex = 1 // We'll return index 0 now, next call starts at 1
 
 	return tuple.CombineTuples(leftTuple, matches[0])
+}
+
+func (hj *HashJoin) buildHashTable() error {
+	rightFieldIndex := hj.predicate.GetField2()
+
+	for {
+		hasNext, err := hj.rightChild.HasNext()
+		if err != nil {
+			return err
+		}
+		if !hasNext {
+			break
+		}
+
+		rightTuple, err := hj.rightChild.Next()
+		if err != nil {
+			return err
+		}
+		if rightTuple == nil {
+			continue
+		}
+
+		if err := hj.addToHashTable(rightTuple, rightFieldIndex); err != nil {
+			continue
+		}
+	}
+
+	return nil
+}
+
+// addToHashTable adds a tuple to the hash table with the given field as key
+func (hj *HashJoin) addToHashTable(rightTuple *tuple.Tuple, fieldIndex int) error {
+	joinKey, err := extractJoinKey(rightTuple, fieldIndex)
+	if err != nil {
+		return err
+	}
+
+	hj.hashTable[joinKey] = append(hj.hashTable[joinKey], rightTuple)
+	return nil
+}
+
+func extractJoinKey(t *tuple.Tuple, fieldIndex int) (string, error) {
+	field, err := t.GetField(fieldIndex)
+	if err != nil || field == nil {
+		return "", fmt.Errorf("invalid join key")
+	}
+	return field.String(), nil
 }
