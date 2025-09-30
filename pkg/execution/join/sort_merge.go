@@ -63,54 +63,36 @@ func (smj *SortMergeJoin) loadAndSortLeft() error {
 	}
 
 	smj.leftSorted = tuples
-	fieldIndex := smj.predicate.GetField1()
-	sort.Slice(smj.leftSorted, func(i, j int) bool {
-		field1, _ := smj.leftSorted[i].GetField(fieldIndex)
-		field2, _ := smj.leftSorted[j].GetField(fieldIndex)
-		if field1 == nil || field2 == nil {
-			return false
-		}
-		result, _ := field1.Compare(types.LessThan, field2)
-		return result
-	})
-
-	return nil
+	return smj.sortTuples(smj.leftSorted, smj.predicate.GetField1())
 }
 
 func (smj *SortMergeJoin) loadAndSortRight() error {
-	smj.rightSorted = make([]*tuple.Tuple, 0)
-
-	for {
-		hasNext, err := smj.rightChild.HasNext()
-		if err != nil {
-			return err
-		}
-		if !hasNext {
-			break
-		}
-
-		t, err := smj.rightChild.Next()
-		if err != nil {
-			return err
-		}
-		if t != nil {
-			smj.rightSorted = append(smj.rightSorted, t)
-		}
+	tuples, err := iterator.LoadAllTuples(smj.rightChild)
+	if err != nil {
+		return err
 	}
 
-	// Sort by join field
-	fieldIndex := smj.predicate.GetField2()
-	sort.Slice(smj.rightSorted, func(i, j int) bool {
-		field1, _ := smj.rightSorted[i].GetField(fieldIndex)
-		field2, _ := smj.rightSorted[j].GetField(fieldIndex)
-		if field1 == nil || field2 == nil {
-			return false
-		}
-		result, _ := field1.Compare(types.LessThan, field2)
-		return result
-	})
+	smj.rightSorted = tuples
+	return smj.sortTuples(smj.rightSorted, smj.predicate.GetField2())
+}
 
+func (smj *SortMergeJoin) sortTuples(tuples []*tuple.Tuple, fieldIndex int) error {
+	sort.Slice(tuples, func(i, j int) bool {
+		return smj.isLessThan(tuples[i], tuples[j], fieldIndex)
+	})
 	return nil
+}
+
+func (smj *SortMergeJoin) isLessThan(t1, t2 *tuple.Tuple, fieldIndex int) bool {
+	field1, err1 := t1.GetField(fieldIndex)
+	field2, err2 := t2.GetField(fieldIndex)
+
+	if err1 != nil || err2 != nil || field1 == nil || field2 == nil {
+		return false
+	}
+
+	result, err := field1.Compare(types.LessThan, field2)
+	return err == nil && result
 }
 
 func (smj *SortMergeJoin) Next() (*tuple.Tuple, error) {
