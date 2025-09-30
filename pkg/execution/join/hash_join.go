@@ -210,24 +210,13 @@ func (hj *HashJoin) setupMatches(leftTuple *tuple.Tuple, matches []*tuple.Tuple)
 // duplicate keys (multiple tuples with the same join key value).
 func (hj *HashJoin) buildHashTable() error {
 	rightFieldIndex := hj.predicate.GetField2()
+	rightTuples, err := iterator.LoadAllTuples(hj.rightChild)
 
-	for {
-		hasNext, err := hj.rightChild.HasNext()
-		if err != nil {
-			return err
-		}
-		if !hasNext {
-			break
-		}
+	if err != nil {
+		return err
+	}
 
-		rightTuple, err := hj.rightChild.Next()
-		if err != nil {
-			return err
-		}
-		if rightTuple == nil {
-			continue
-		}
-
+	for _, rightTuple := range rightTuples {
 		if err := hj.addToHashTable(rightTuple, rightFieldIndex); err != nil {
 			continue
 		}
