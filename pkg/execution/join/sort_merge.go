@@ -1,4 +1,3 @@
-// pkg/execution/join/sort_merge_join.go
 package join
 
 import (
@@ -58,26 +57,12 @@ func (smj *SortMergeJoin) Initialize() error {
 }
 
 func (smj *SortMergeJoin) loadAndSortLeft() error {
-	smj.leftSorted = make([]*tuple.Tuple, 0)
-
-	for {
-		hasNext, err := smj.leftChild.HasNext()
-		if err != nil {
-			return err
-		}
-		if !hasNext {
-			break
-		}
-
-		t, err := smj.leftChild.Next()
-		if err != nil {
-			return err
-		}
-		if t != nil {
-			smj.leftSorted = append(smj.leftSorted, t)
-		}
+	tuples, err := iterator.LoadAllTuples(smj.leftChild)
+	if err != nil {
+		return err
 	}
 
+	smj.leftSorted = tuples
 	fieldIndex := smj.predicate.GetField1()
 	sort.Slice(smj.leftSorted, func(i, j int) bool {
 		field1, _ := smj.leftSorted[i].GetField(fieldIndex)
