@@ -63,7 +63,7 @@ func (smj *SortMergeJoin) loadAndSortLeft() error {
 	}
 
 	smj.leftSorted = tuples
-	return smj.sortTuples(smj.leftSorted, smj.predicate.GetField1())
+	return sortTuples(smj.leftSorted, smj.predicate.GetField1())
 }
 
 func (smj *SortMergeJoin) loadAndSortRight() error {
@@ -73,26 +73,7 @@ func (smj *SortMergeJoin) loadAndSortRight() error {
 	}
 
 	smj.rightSorted = tuples
-	return smj.sortTuples(smj.rightSorted, smj.predicate.GetField2())
-}
-
-func (smj *SortMergeJoin) sortTuples(tuples []*tuple.Tuple, fieldIndex int) error {
-	sort.Slice(tuples, func(i, j int) bool {
-		return smj.isLessThan(tuples[i], tuples[j], fieldIndex)
-	})
-	return nil
-}
-
-func (smj *SortMergeJoin) isLessThan(t1, t2 *tuple.Tuple, fieldIndex int) bool {
-	field1, err1 := t1.GetField(fieldIndex)
-	field2, err2 := t2.GetField(fieldIndex)
-
-	if err1 != nil || err2 != nil || field1 == nil || field2 == nil {
-		return false
-	}
-
-	result, err := field1.Compare(types.LessThan, field2)
-	return err == nil && result
+	return sortTuples(smj.rightSorted, smj.predicate.GetField2())
 }
 
 func (smj *SortMergeJoin) Next() (*tuple.Tuple, error) {
@@ -215,4 +196,23 @@ func logBase2(n float64) float64 {
 		result++
 	}
 	return result
+}
+
+func sortTuples(tuples []*tuple.Tuple, fieldIndex int) error {
+	sort.Slice(tuples, func(i, j int) bool {
+		return isLessThan(tuples[i], tuples[j], fieldIndex)
+	})
+	return nil
+}
+
+func isLessThan(t1, t2 *tuple.Tuple, fieldIndex int) bool {
+	field1, err1 := t1.GetField(fieldIndex)
+	field2, err2 := t2.GetField(fieldIndex)
+
+	if err1 != nil || err2 != nil || field1 == nil || field2 == nil {
+		return false
+	}
+
+	result, err := field1.Compare(types.LessThan, field2)
+	return err == nil && result
 }
