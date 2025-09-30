@@ -133,16 +133,13 @@ func (c *LRUPageCache) Clear() {
 }
 
 // GetAll returns a slice containing all page IDs currently stored in the cache.
-// The order of page IDs in the returned slice is not guaranteed and may vary
-// between calls.
+// The page IDs are returned in LRU order (least recently used first),
+// making it suitable for eviction algorithms that prioritize removing old pages.
 func (c *LRUPageCache) GetAll() []tuple.PageID {
 	c.mutex.RLock()
 	defer c.mutex.RUnlock()
-
-	pids := make([]tuple.PageID, 0, len(c.cache))
-	for pid := range c.cache {
-		pids = append(pids, pid)
-	}
+	pids := make([]tuple.PageID, len(c.accessOrder))
+	copy(pids, c.accessOrder)
 	return pids
 }
 
