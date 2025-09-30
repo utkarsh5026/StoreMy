@@ -57,44 +57,7 @@ func (hj *HashJoin) Next() (*tuple.Tuple, error) {
 		return result, err
 	}
 
-	leftFieldIndex := hj.predicate.GetField1()
-	for {
-		hasNext, err := hj.leftChild.HasNext()
-		if err != nil {
-			return nil, err
-		}
-		if !hasNext {
-			return nil, nil
-		}
-
-		leftTuple, err := hj.leftChild.Next()
-		if err != nil {
-			return nil, err
-		}
-		if leftTuple == nil {
-			continue
-		}
-
-		field, err := leftTuple.GetField(leftFieldIndex)
-		if err != nil || field == nil {
-			continue
-		}
-
-		key := field.String()
-		matches, exists := hj.hashTable[key]
-		if !exists || len(matches) == 0 {
-			continue
-		}
-
-		// Found matches, buffer them
-		hj.currentLeft = leftTuple
-		hj.currentMatches = matches
-		hj.matchIndex = 0
-
-		result, err := tuple.CombineTuples(leftTuple, matches[0])
-		hj.matchIndex++
-		return result, err
-	}
+	return hj.findNextJoinedTuple()
 }
 
 func (hj *HashJoin) Reset() error {
@@ -161,4 +124,68 @@ func (hj *HashJoin) hasCurrentMatches() bool {
 	return hj.currentMatches != nil &&
 		hj.matchIndex >= 0 &&
 		hj.matchIndex < len(hj.currentMatches)
+}
+
+// findNextJoinedTuple finds the next left tuple that has matching right tuples
+func (hj *HashJoin) findNextJoinedTuple() (*tuple.Tuple, error) {
+	leftFieldIndex := hj.predicate.GetField1()
+
+	for {
+		leftTuple, err := hj.getNextLeftTuple()
+		if err != nil {
+			return nil, err
+		}
+		if leftTuple == nil {
+			return nil, nil
+		}
+
+		joinKey, err := extractJoinKey(leftTuple, leftFieldIndex)
+		if err != nil {
+			continue
+		}
+
+		matches := hj.findMatches(joinKey)
+		if len(matches) == 0 {
+			continue // No matches, try next left tuple
+		}
+
+		return hj.setupMatches(leftTuple, matches)
+	}
+}
+
+// getNextLeftTuple retrieves the next tuple from the left child
+func (hj *HashJoin) getNextLeftTuple() (*tuple.Tuple, error) {
+	hasNext, err := hj.leftChild.HasNext()
+	if err != nil {
+		return nil, err
+	}
+	if !hasNext {
+		return nil, nil
+	}
+
+	return hj.leftChild.Next()
+}
+
+func extractJoinKey(t *tuple.Tuple, fieldIndex int) (string, error) {
+	field, err := t.GetField(fieldIndex)
+	if err != nil || field == nil {
+		return "", fmt.Errorf("invalid join key")
+	}
+	return field.String(), nil
+}
+
+func (hj *HashJoin) findMatches(key string) []*tuple.Tuple {
+	matches, exists := hj.hashTable[key]
+	if !exists {
+		return nil
+	}
+	return matches
+}
+
+func (hj *HashJoin) setupMatches(leftTuple *tuple.Tuple, matches []*tuple.Tuple) (*tuple.Tuple, error) {
+	hj.currentLeft = leftTuple
+	hj.currentMatches = matches
+	hj.matchIndex = 1 // We'll return index 0 now, next call starts at 1
+
+	return tuple.CombineTuples(leftTuple, matches[0])
 }
