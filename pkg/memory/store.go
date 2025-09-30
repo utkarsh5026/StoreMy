@@ -18,9 +18,7 @@ const (
 type Permissions int
 
 const (
-	// ReadOnly permission allows only read operations
 	ReadOnly Permissions = iota
-	// ReadWrite permission allows both read and write operations
 	ReadWrite
 )
 
@@ -371,11 +369,8 @@ func (p *PageStore) flushPage(pid tuple.PageID) error {
 	if err := dbFile.WritePage(page); err != nil {
 		return fmt.Errorf("failed to write page to disk: %v", err)
 	}
-
-	// Mark page as clean after successful write
 	page.MarkDirty(false, nil)
-	
-	// Update the page in cache to reflect the clean state
+
 	p.mutex.Lock()
 	p.cache.Put(pid, page)
 	p.mutex.Unlock()
