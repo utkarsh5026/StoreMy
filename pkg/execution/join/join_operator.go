@@ -12,18 +12,16 @@ import (
 // It abstracts the underlying join algorithm and provides automatic algorithm selection
 // based on data characteristics and available resources.
 type JoinOperator struct {
-	base *query.BaseIterator // Handles common iterator operations (caching, state management)
+	base       *query.BaseIterator
+	leftChild  iterator.DbIterator
+	rightChild iterator.DbIterator
+	predicate  *JoinPredicate
+	tupleDesc  *tuple.TupleDescription
+	algorithm  JoinAlgorithm
+	strategy   *JoinStrategy
 
-	leftChild  iterator.DbIterator // Left (outer) relation
-	rightChild iterator.DbIterator // Right (inner) relation
-
-	predicate *JoinPredicate          // Join condition (e.g., R.id = S.id)
-	tupleDesc *tuple.TupleDescription // Schema of the result tuples
-	algorithm JoinAlgorithm           // Selected join algorithm implementation
-	strategy  *JoinStrategy           // Algorithm selection strategy
-
-	initialized bool         // Whether the operator has been opened and initialized
-	mutex       sync.RWMutex // Protects concurrent access to operator state
+	initialized bool
+	mutex       sync.RWMutex
 }
 
 // NewJoinOperator creates a new join operator with automatic algorithm selection.
