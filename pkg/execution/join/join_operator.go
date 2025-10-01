@@ -36,7 +36,7 @@ func NewJoinOperator(predicate *JoinPredicate, leftChild, rightChild iterator.Db
 		return nil, fmt.Errorf("failed to create result schema: %w", err)
 	}
 
-	jo := &JoinOperator{
+	j := &JoinOperator{
 		leftChild:   leftChild,
 		rightChild:  rightChild,
 		predicate:   predicate,
@@ -44,8 +44,8 @@ func NewJoinOperator(predicate *JoinPredicate, leftChild, rightChild iterator.Db
 		initialized: false,
 	}
 
-	jo.base = query.NewBaseIterator(jo.readNext)
-	return jo, nil
+	j.base = query.NewBaseIterator(j.readNext)
+	return j, nil
 }
 
 // Open initializes the join operator and selects the optimal join algorithm.
@@ -55,39 +55,39 @@ func NewJoinOperator(predicate *JoinPredicate, leftChild, rightChild iterator.Db
 //  2. Gathers statistics about the input relations
 //  3. Uses JoinStrategy to select the best algorithm
 //  4. Initializes the selected algorithm
-func (jo *JoinOperator) Open() error {
-	jo.mutex.Lock()
-	defer jo.mutex.Unlock()
+func (j *JoinOperator) Open() error {
+	j.mutex.Lock()
+	defer j.mutex.Unlock()
 
-	if jo.initialized {
+	if j.initialized {
 		return nil
 	}
 
-	if err := jo.openChildOperators(); err != nil {
+	if err := j.openChildOperators(); err != nil {
 		return err
 	}
 
-	stats, err := jo.gatherStatistics()
+	stats, err := j.gatherStatistics()
 	if err != nil {
-		stats = jo.getDefaultStatistics()
+		stats = j.getDefaultStatistics()
 	}
 
-	if err := jo.selectAndInitializeAlgorithm(stats); err != nil {
+	if err := j.selectAndInitializeAlgorithm(stats); err != nil {
 		return err
 	}
 
-	jo.initialized = true
-	jo.base.MarkOpened()
+	j.initialized = true
+	j.base.MarkOpened()
 	return nil
 }
 
 // openChildOperators opens both left and right child operators
-func (jo *JoinOperator) openChildOperators() error {
-	if err := jo.leftChild.Open(); err != nil {
+func (j *JoinOperator) openChildOperators() error {
+	if err := j.leftChild.Open(); err != nil {
 		return fmt.Errorf("failed to open left child: %w", err)
 	}
 
-	if err := jo.rightChild.Open(); err != nil {
+	if err := j.rightChild.Open(); err != nil {
 		return fmt.Errorf("failed to open right child: %w", err)
 	}
 
@@ -95,12 +95,12 @@ func (jo *JoinOperator) openChildOperators() error {
 }
 
 // gatherStatistics collects statistics about the input relations
-func (jo *JoinOperator) gatherStatistics() (*JoinStatistics, error) {
-	return GetStatistics(jo.leftChild, jo.rightChild)
+func (j *JoinOperator) gatherStatistics() (*JoinStatistics, error) {
+	return GetStatistics(j.leftChild, j.rightChild)
 }
 
 // getDefaultStatistics provides fallback statistics when gathering fails
-func (jo *JoinOperator) getDefaultStatistics() *JoinStatistics {
+func (j *JoinOperator) getDefaultStatistics() *JoinStatistics {
 	return &JoinStatistics{
 		LeftCardinality:  1000, // Assume moderate cardinality
 		RightCardinality: 1000,
@@ -112,16 +112,16 @@ func (jo *JoinOperator) getDefaultStatistics() *JoinStatistics {
 }
 
 // selectAndInitializeAlgorithm chooses and sets up the optimal join algorithm
-func (jo *JoinOperator) selectAndInitializeAlgorithm(stats *JoinStatistics) error {
-	jo.strategy = NewJoinStrategy(jo.leftChild, jo.rightChild, jo.predicate, stats)
+func (j *JoinOperator) selectAndInitializeAlgorithm(stats *JoinStatistics) error {
+	j.strategy = NewJoinStrategy(j.leftChild, j.rightChild, j.predicate, stats)
 
-	algorithm, err := jo.strategy.SelectBestAlgorithm(jo.predicate)
+	algorithm, err := j.strategy.SelectBestAlgorithm(j.predicate)
 	if err != nil {
 		return fmt.Errorf("failed to select join algorithm: %w", err)
 	}
-	jo.algorithm = algorithm
+	j.algorithm = algorithm
 
-	if err := jo.algorithm.Initialize(); err != nil {
+	if err := j.algorithm.Initialize(); err != nil {
 		return fmt.Errorf("failed to initialize join algorithm: %w", err)
 	}
 	return nil
@@ -133,15 +133,15 @@ func (jo *JoinOperator) selectAndInitializeAlgorithm(stats *JoinStatistics) erro
 // Returns:
 //   - Next joined tuple, or nil when no more tuples exist
 //   - Error if the operator is not initialized or algorithm fails
-func (jo *JoinOperator) readNext() (*tuple.Tuple, error) {
-	jo.mutex.RLock()
-	defer jo.mutex.RUnlock()
+func (j *JoinOperator) readNext() (*tuple.Tuple, error) {
+	j.mutex.RLock()
+	defer j.mutex.RUnlock()
 
-	if !jo.initialized {
+	if !j.initialized {
 		return nil, fmt.Errorf("join operator not initialized - call Open() first")
 	}
 
-	return jo.algorithm.Next()
+	return j.algorithm.Next()
 }
 
 // Rewind resets the join operator to start iteration from the beginning.
@@ -150,23 +150,23 @@ func (jo *JoinOperator) readNext() (*tuple.Tuple, error) {
 //  1. Rewinds both child operators
 //  2. Resets the join algorithm state
 //  3. Clears any cached results
-func (jo *JoinOperator) Rewind() error {
-	jo.mutex.Lock()
-	defer jo.mutex.Unlock()
+func (j *JoinOperator) Rewind() error {
+	j.mutex.Lock()
+	defer j.mutex.Unlock()
 
-	if err := jo.leftChild.Rewind(); err != nil {
+	if err := j.leftChild.Rewind(); err != nil {
 		return fmt.Errorf("failed to rewind left child: %w", err)
 	}
 
-	if err := jo.rightChild.Rewind(); err != nil {
+	if err := j.rightChild.Rewind(); err != nil {
 		return fmt.Errorf("failed to rewind right child: %w", err)
 	}
 
-	if err := jo.algorithm.Reset(); err != nil {
+	if err := j.algorithm.Reset(); err != nil {
 		return fmt.Errorf("failed to reset join algorithm: %w", err)
 	}
 
-	jo.base.ClearCache()
+	j.base.ClearCache()
 	return nil
 }
 
@@ -177,39 +177,39 @@ func (jo *JoinOperator) Rewind() error {
 //  2. Closes the join algorithm (freeing memory, hash tables, etc.)
 //  3. Closes the base iterator
 //  4. Marks the operator as uninitialized
-func (jo *JoinOperator) Close() error {
-	jo.mutex.Lock()
-	defer jo.mutex.Unlock()
+func (j *JoinOperator) Close() error {
+	j.mutex.Lock()
+	defer j.mutex.Unlock()
 
-	if jo.leftChild != nil {
-		jo.leftChild.Close()
+	if j.leftChild != nil {
+		j.leftChild.Close()
 	}
 
-	if jo.rightChild != nil {
-		jo.rightChild.Close()
+	if j.rightChild != nil {
+		j.rightChild.Close()
 	}
 
-	if jo.algorithm != nil {
-		jo.algorithm.Close()
+	if j.algorithm != nil {
+		j.algorithm.Close()
 	}
 
-	jo.initialized = false
-	return jo.base.Close()
+	j.initialized = false
+	return j.base.Close()
 }
 
 // GetTupleDesc returns the schema description of the result tuples.
-func (jo *JoinOperator) GetTupleDesc() *tuple.TupleDescription {
-	return jo.tupleDesc
+func (j *JoinOperator) GetTupleDesc() *tuple.TupleDescription {
+	return j.tupleDesc
 }
 
 // HasNext checks if more joined tuples are available.
-func (jo *JoinOperator) HasNext() (bool, error) {
-	return jo.base.HasNext()
+func (j *JoinOperator) HasNext() (bool, error) {
+	return j.base.HasNext()
 }
 
 // Next returns the next joined tuple from the join operation.
-func (jo *JoinOperator) Next() (*tuple.Tuple, error) {
-	return jo.base.Next()
+func (j *JoinOperator) Next() (*tuple.Tuple, error) {
+	return j.base.Next()
 }
 
 // validateInputs checks that all required inputs are valid.
