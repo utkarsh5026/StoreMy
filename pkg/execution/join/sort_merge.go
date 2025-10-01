@@ -9,6 +9,13 @@ import (
 	"storemy/pkg/types"
 )
 
+// Comparison result constants for better readability
+const (
+	ComparisonEqual        = "equal"
+	ComparisonLeftSmaller  = "leftSmaller"
+	ComparisonRightSmaller = "rightSmaller"
+)
+
 // SortMergeJoin implements the sort-merge join algorithm
 // Efficient for equality joins when data is pre-sorted or when sorting cost is acceptable
 type SortMergeJoin struct {
@@ -87,50 +94,27 @@ func (smj *SortMergeJoin) Next() (*tuple.Tuple, error) {
 	smj.matchBuffer.StartNew()
 
 	for smj.leftIndex < len(smj.leftSorted) && smj.rightIndex < len(smj.rightSorted) {
-		leftTuple := smj.leftSorted[smj.leftIndex]
-		rightTuple := smj.rightSorted[smj.rightIndex]
-
-		leftField, err := leftTuple.GetField(smj.predicate.GetField1())
-		if err != nil || leftField == nil {
+		comparison, err := smj.compareCurrentTuples()
+		if err != nil {
 			smj.leftIndex++
 			continue
 		}
 
-		rightField, err := rightTuple.GetField(smj.predicate.GetField2())
-		if err != nil || rightField == nil {
-			smj.rightIndex++
-			continue
-		}
-
-		equals, _ := leftField.Compare(types.Equals, rightField)
-		less, _ := leftField.Compare(types.LessThan, rightField)
-
-		if equals {
-			rightStart := smj.rightIndex
-			for smj.rightIndex < len(smj.rightSorted) {
-				rt := smj.rightSorted[smj.rightIndex]
-				rf, _ := rt.GetField(smj.predicate.GetField2())
-				if rf != nil {
-					eq, _ := leftField.Compare(types.Equals, rf)
-					if !eq {
-						break
-					}
-					joined, err := tuple.CombineTuples(leftTuple, rt)
-					if err == nil {
-						smj.matchBuffer.Add(joined)
-					}
-				}
-				smj.rightIndex++
+		switch comparison {
+		case ComparisonEqual:
+			if err := smj.processEqualKeys(); err != nil {
+				return nil, err
 			}
 
-			smj.rightIndex = rightStart
-			smj.leftIndex++
+			// Return first match if any were found
 			if result := smj.matchBuffer.GetFirstAndAdvance(); result != nil {
 				return result, nil
 			}
-		} else if less {
+
+		case ComparisonLeftSmaller:
 			smj.leftIndex++
-		} else {
+
+		case ComparisonRightSmaller:
 			smj.rightIndex++
 		}
 	}
@@ -212,4 +196,74 @@ func isLessThan(t1, t2 *tuple.Tuple, fieldIndex int) bool {
 
 	result, err := field1.Compare(types.LessThan, field2)
 	return err == nil && result
+}
+
+func (smj *SortMergeJoin) compareCurrentTuples() (string, error) {
+	leftTuple := smj.leftSorted[smj.leftIndex]
+	rightTuple := smj.rightSorted[smj.rightIndex]
+
+	leftField, err := leftTuple.GetField(smj.predicate.GetField1())
+	if err != nil || leftField == nil {
+		return "", fmt.Errorf("invalid left field")
+	}
+
+	rightField, err := rightTuple.GetField(smj.predicate.GetField2())
+	if err != nil || rightField == nil {
+		return "", fmt.Errorf("invalid right field")
+	}
+
+	equals, err := leftField.Compare(types.Equals, rightField)
+	if err != nil {
+		return "", err
+	}
+	if equals {
+		return ComparisonEqual, nil
+	}
+
+	less, err := leftField.Compare(types.LessThan, rightField)
+	if err != nil {
+		return "", err
+	}
+
+	if less {
+		return ComparisonLeftSmaller, nil
+	}
+
+	return ComparisonRightSmaller, nil
+}
+
+// processEqualKeys handles all tuples with equal join keys
+//
+// When keys are equal, we need to find all tuples on both sides with the same key
+// and create the cross product of matches. This handles duplicate keys correctly.
+func (smj *SortMergeJoin) processEqualKeys() error {
+	leftTuple := smj.leftSorted[smj.leftIndex]
+	leftField, _ := leftTuple.GetField(smj.predicate.GetField1())
+
+	rightStart := smj.rightIndex
+
+	for smj.rightIndex < len(smj.rightSorted) {
+		rightTuple := smj.rightSorted[smj.rightIndex]
+		rightField, err := rightTuple.GetField(smj.predicate.GetField2())
+		if err != nil || rightField == nil {
+			smj.rightIndex++
+			continue
+		}
+
+		equals, err := leftField.Compare(types.Equals, rightField)
+		if err != nil || !equals {
+			break
+		}
+
+		joinedTuple, err := tuple.CombineTuples(leftTuple, rightTuple)
+		if err == nil {
+			smj.matchBuffer.Add(joinedTuple)
+		}
+
+		smj.rightIndex++
+	}
+
+	smj.rightIndex = rightStart
+	smj.leftIndex++
+	return nil
 }
