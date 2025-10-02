@@ -2,6 +2,10 @@ package join
 
 import "storemy/pkg/tuple"
 
+const (
+	DefaultHighCost = 1e6 // Arbitrary high cost for unsupported scenarios
+)
+
 // JoinAlgorithm defines the interface for all join implementations
 type JoinAlgorithm interface {
 	// Initialize prepares the join algorithm for execution
