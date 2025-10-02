@@ -8,6 +8,7 @@
         "inotifywait",
         "lipgloss",
         "mitranim",
+        "mydb",
         "pgdn",
         "pgdown",
         "pgup",
