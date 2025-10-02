@@ -9,15 +9,26 @@ import (
 	"storemy/pkg/types"
 )
 
-// Comparison result constants for better readability
 const (
 	ComparisonEqual        = "equal"
 	ComparisonLeftSmaller  = "leftSmaller"
 	ComparisonRightSmaller = "rightSmaller"
 )
 
-// SortMergeJoin implements the sort-merge join algorithm
-// Efficient for equality joins when data is pre-sorted or when sorting cost is acceptable
+// SortMergeJoin implements the sort-merge join algorithm.
+//
+// This join algorithm is particularly efficient for equality joins when:
+// - Data is already sorted on join keys
+// - The cost of sorting is acceptable relative to the join operation
+// - Memory is sufficient to hold sorted data
+//
+// The algorithm works in three phases:
+// 1. Sort both input relations by their join keys
+// 2. Merge the sorted relations by advancing pointers
+// 3. Handle duplicate keys by creating cross products
+//
+// Time Complexity: O(n log n + m log m + n + m) where n, m are input sizes
+// Space Complexity: O(n + m) for storing sorted tuples
 type SortMergeJoin struct {
 	leftChild   iterator.DbIterator
 	rightChild  iterator.DbIterator
@@ -26,12 +37,13 @@ type SortMergeJoin struct {
 	rightSorted []*tuple.Tuple
 	leftIndex   int
 	rightIndex  int
-	rightStart  int // For handling duplicates
+	rightStart  int
 	initialized bool
 	stats       *JoinStatistics
 	matchBuffer *JoinMatchBuffer
 }
 
+// NewSortMergeJoin creates a new sort-merge join operator.
 func NewSortMergeJoin(left, right iterator.DbIterator, pred *JoinPredicate, stats *JoinStatistics) *SortMergeJoin {
 	return &SortMergeJoin{
 		leftChild:   left,
@@ -45,6 +57,12 @@ func NewSortMergeJoin(left, right iterator.DbIterator, pred *JoinPredicate, stat
 	}
 }
 
+// Initialize prepares the sort-merge join for execution.
+//
+// This method must be called before Next() can be used. It performs:
+// 1. Loading all tuples from both input iterators
+// 2. Sorting both relations by their respective join keys
+// 3. Setting up internal state for the merge phase
 func (s *SortMergeJoin) Initialize() error {
 	if s.initialized {
 		return nil
@@ -62,6 +80,7 @@ func (s *SortMergeJoin) Initialize() error {
 	return nil
 }
 
+// loadAndSortLeft loads all tuples from the left iterator and sorts them by the join key.
 func (s *SortMergeJoin) loadAndSortLeft() error {
 	tuples, err := iterator.LoadAllTuples(s.leftChild)
 	if err != nil {
@@ -72,6 +91,7 @@ func (s *SortMergeJoin) loadAndSortLeft() error {
 	return sortTuples(s.leftSorted, s.predicate.GetField1())
 }
 
+// loadAndSortRight loads all tuples from the right iterator and sorts them by the join key.
 func (s *SortMergeJoin) loadAndSortRight() error {
 	tuples, err := iterator.LoadAllTuples(s.rightChild)
 	if err != nil {
@@ -82,6 +102,13 @@ func (s *SortMergeJoin) loadAndSortRight() error {
 	return sortTuples(s.rightSorted, s.predicate.GetField2())
 }
 
+// Next returns the next joined tuple from the sort-merge join.
+//
+// The algorithm maintains two pointers (leftIndex, rightIndex) that traverse
+// the sorted relations. For each comparison:
+// - If keys are equal: process all matching tuples (handle duplicates)
+// - If left key < right key: advance left pointer
+// - If right key < left key: advance right pointer
 func (s *SortMergeJoin) Next() (*tuple.Tuple, error) {
 	if !s.initialized {
 		return nil, fmt.Errorf("sort-merge join not initialized")
@@ -121,6 +148,7 @@ func (s *SortMergeJoin) Next() (*tuple.Tuple, error) {
 	return nil, nil
 }
 
+// Reset resets the join to its initial state, allowing it to be re-executed.
 func (s *SortMergeJoin) Reset() error {
 	s.leftIndex = 0
 	s.rightIndex = 0
@@ -129,6 +157,7 @@ func (s *SortMergeJoin) Reset() error {
 	return nil
 }
 
+// Close releases all resources used by the sort-merge join.
 func (s *SortMergeJoin) Close() error {
 	s.leftSorted = nil
 	s.rightSorted = nil
@@ -137,21 +166,29 @@ func (s *SortMergeJoin) Close() error {
 	return nil
 }
 
+// EstimateCost estimates the cost of executing this sort-merge join.
+//
+// The cost model includes:
+// - Sorting cost: O(n log n) for each unsorted relation
+// - Merge cost: O(n + m) for the merge phase
+//
+// Returns:
+//   - float64: Estimated cost in abstract units
 func (s *SortMergeJoin) EstimateCost() float64 {
 	if s.stats == nil {
-		return 1000000
+		return DefaultHighCost
 	}
 
 	totalCost := 0.0
 
 	if !s.stats.LeftSorted {
 		leftSize := float64(s.stats.LeftSize)
-		totalCost += leftSize * 2 * logBase2(leftSize)
+		totalCost += leftSize * 2 * logBase2(leftSize) // 2 * n * log(n) for sorting
 	}
 
 	if !s.stats.RightSorted {
 		rightSize := float64(s.stats.RightSize)
-		totalCost += rightSize * 2 * logBase2(rightSize)
+		totalCost += rightSize * 2 * logBase2(rightSize) // 2 * m * log(m) for sorting
 	}
 
 	mergeCost := float64(s.stats.LeftSize + s.stats.RightSize)
@@ -159,6 +196,9 @@ func (s *SortMergeJoin) EstimateCost() float64 {
 	return totalCost
 }
 
+// SupportsPredicateType checks if the sort-merge join supports the given predicate type.
+//
+// Sort-merge join supports all comparison operators because it works on sorted data.
 func (s *SortMergeJoin) SupportsPredicateType(predicate *JoinPredicate) bool {
 	op := predicate.GetOP()
 	return op == query.Equals || op == query.LessThan ||
@@ -166,6 +206,7 @@ func (s *SortMergeJoin) SupportsPredicateType(predicate *JoinPredicate) bool {
 		op == query.GreaterThanOrEqual
 }
 
+// logBase2 computes the base-2 logarithm of n using integer arithmetic.
 func logBase2(n float64) float64 {
 	if n <= 1 {
 		return 0
@@ -178,6 +219,7 @@ func logBase2(n float64) float64 {
 	return result
 }
 
+// sortTuples sorts a slice of tuples by the specified field index.
 func sortTuples(tuples []*tuple.Tuple, fieldIndex int) error {
 	sort.Slice(tuples, func(i, j int) bool {
 		return isLessThan(tuples[i], tuples[j], fieldIndex)
@@ -185,6 +227,7 @@ func sortTuples(tuples []*tuple.Tuple, fieldIndex int) error {
 	return nil
 }
 
+// isLessThan compares two tuples by a specific field to determine ordering.
 func isLessThan(t1, t2 *tuple.Tuple, fieldIndex int) bool {
 	field1, err1 := t1.GetField(fieldIndex)
 	field2, err2 := t2.GetField(fieldIndex)
@@ -197,6 +240,7 @@ func isLessThan(t1, t2 *tuple.Tuple, fieldIndex int) bool {
 	return err == nil && result
 }
 
+// compareCurrentTuples compares the current tuples pointed to by leftIndex and rightIndex.
 func (s *SortMergeJoin) compareCurrentTuples() (string, error) {
 	leftTuple := s.leftSorted[s.leftIndex]
 	rightTuple := s.rightSorted[s.rightIndex]
@@ -231,10 +275,18 @@ func (s *SortMergeJoin) compareCurrentTuples() (string, error) {
 	return ComparisonRightSmaller, nil
 }
 
-// processEqualKeys handles all tuples with equal join keys
+// processEqualKeys handles all tuples with equal join keys.
 //
 // When keys are equal, we need to find all tuples on both sides with the same key
-// and create the cross product of matches. This handles duplicate keys correctly.
+// and create the cross product of matches. This correctly handles duplicate keys
+// by ensuring all combinations are generated.
+//
+// Algorithm:
+// 1. Fix the current left tuple
+// 2. Find all right tuples with the same key
+// 3. Create joined tuples for all combinations
+// 4. Buffer all results for subsequent Next() calls
+// 5. Advance to next left tuple
 func (s *SortMergeJoin) processEqualKeys() error {
 	leftTuple := s.leftSorted[s.leftIndex]
 	leftField, _ := leftTuple.GetField(s.predicate.GetField1())
