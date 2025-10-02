@@ -254,9 +254,9 @@ func (s *SortMergeJoin) processEqualKeys() error {
 			break
 		}
 
-		joinedTuple, err := tuple.CombineTuples(leftTuple, rightTuple)
+		combined, err := tuple.CombineTuples(leftTuple, rightTuple)
 		if err == nil {
-			s.matchBuffer.Add(joinedTuple)
+			s.matchBuffer.Add(combined)
 		}
 
 		s.rightIndex++
