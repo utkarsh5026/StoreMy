@@ -101,15 +101,7 @@ func (w *WAL) LogUpdate(tid *transaction.TransactionID,
 		return 0, fmt.Errorf("transaction %v not found in active transactions", tid)
 	}
 
-	record := &LogRecord{
-		Type:        UpdateRecord,
-		TID:         tid,
-		PrevLSN:     txnInfo.LastLSN,
-		PageID:      pageID,
-		BeforeImage: beforeImage,
-		AfterImage:  afterImage,
-		Timestamp:   time.Now(),
-	}
+	record := NewLogRecord(UpdateRecord, tid, pageID, beforeImage, afterImage, txnInfo.LastLSN)
 
 	lsn, err := w.writeRecord(record)
 	if err != nil {
@@ -118,6 +110,33 @@ func (w *WAL) LogUpdate(tid *transaction.TransactionID,
 
 	txnInfo.LastLSN = lsn
 
+	if _, exists := w.dirtyPages[pageID]; !exists {
+		w.dirtyPages[pageID] = lsn
+	}
+
+	return lsn, nil
+}
+
+// LogInsert logs a tuple insertion
+// Only needs after image - there's nothing to undo to (tuple didn't exist)
+// During recovery, we REDO the insert by applying the after image
+func (w *WAL) LogInsert(tid *transaction.TransactionID, pageID tuple.PageID, afterImage []byte) (LSN, error) {
+	w.mutex.Lock()
+	defer w.mutex.Unlock()
+
+	txnInfo, exists := w.activeTxns[tid]
+	if !exists {
+		return 0, fmt.Errorf("transaction %v not found in active transactions", tid)
+	}
+
+	record := NewLogRecord(InsertRecord, tid, pageID, nil, afterImage, txnInfo.LastLSN)
+
+	lsn, err := w.writeRecord(record)
+	if err != nil {
+		return 0, err
+	}
+
+	txnInfo.LastLSN = lsn
 	if _, exists := w.dirtyPages[pageID]; !exists {
 		w.dirtyPages[pageID] = lsn
 	}
