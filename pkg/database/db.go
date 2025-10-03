@@ -170,7 +170,7 @@ func (db *Database) formatSelectResult(result *planner.QueryResult) QueryResult 
 
 	numFields := result.TupleDesc.NumFields()
 	columns := make([]string, numFields)
-	for i := 0; i < numFields; i++ {
+	for i := range numFields {
 		name, _ := result.TupleDesc.GetFieldName(i)
 		if name == "" {
 			name = fmt.Sprintf("col_%d", i)
@@ -181,7 +181,7 @@ func (db *Database) formatSelectResult(result *planner.QueryResult) QueryResult 
 	rows := make([][]string, 0, len(result.Tuples))
 	for _, tuple := range result.Tuples {
 		row := make([]string, numFields)
-		for i := 0; i < numFields; i++ {
+		for i := range numFields {
 			field, err := tuple.GetField(i)
 			if err != nil || field == nil {
 				row[i] = "NULL"
