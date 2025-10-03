@@ -1,6 +1,7 @@
 package log
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"storemy/pkg/concurrency/transaction"
@@ -436,5 +437,556 @@ func TestWALPersistence(t *testing.T) {
 	// Check that LSN was restored
 	if wal2.currentLSN != expectedLSN {
 		t.Errorf("expected currentLSN to be %d after reopen, got %d", expectedLSN, wal2.currentLSN)
+	}
+}
+
+func TestLogInsert(t *testing.T) {
+	wal, _, cleanup := createTestWAL(t)
+	defer cleanup()
+
+	tid := transaction.NewTransactionID()
+	_, err := wal.LogBegin(tid)
+	if err != nil {
+		t.Fatalf("LogBegin failed: %v", err)
+	}
+
+	pageID := &mockPageID{tableID: 1, pageNo: 100}
+	afterImage := []byte("new tuple data")
+
+	lsn, err := wal.LogInsert(tid, pageID, afterImage)
+	if err != nil {
+		t.Fatalf("LogInsert failed: %v", err)
+	}
+
+	if lsn == FirstLSN {
+		t.Error("expected LSN to be different from FirstLSN")
+	}
+
+	// Check transaction info was updated
+	txnInfo := wal.activeTxns[tid]
+	if txnInfo.LastLSN != lsn {
+		t.Errorf("expected LastLSN to be %d, got %d", lsn, txnInfo.LastLSN)
+	}
+
+	// Check dirty page tracking
+	recLSN, exists := wal.dirtyPages[pageID]
+	if !exists {
+		t.Fatal("page not found in dirtyPages")
+	}
+
+	if recLSN != lsn {
+		t.Errorf("expected recLSN to be %d, got %d", lsn, recLSN)
+	}
+}
+
+func TestLogInsertWithoutBegin(t *testing.T) {
+	wal, _, cleanup := createTestWAL(t)
+	defer cleanup()
+
+	tid := transaction.NewTransactionID()
+	pageID := &mockPageID{tableID: 1, pageNo: 100}
+
+	_, err := wal.LogInsert(tid, pageID, []byte("new tuple"))
+	if err == nil {
+		t.Fatal("expected error when logging insert without begin")
+	}
+}
+
+func TestLogDelete(t *testing.T) {
+	wal, _, cleanup := createTestWAL(t)
+	defer cleanup()
+
+	tid := transaction.NewTransactionID()
+	_, err := wal.LogBegin(tid)
+	if err != nil {
+		t.Fatalf("LogBegin failed: %v", err)
+	}
+
+	pageID := &mockPageID{tableID: 1, pageNo: 100}
+	beforeImage := []byte("deleted tuple data")
+
+	lsn, err := wal.LogDelete(tid, pageID, beforeImage)
+	if err != nil {
+		t.Fatalf("LogDelete failed: %v", err)
+	}
+
+	if lsn == FirstLSN {
+		t.Error("expected LSN to be different from FirstLSN")
+	}
+
+	// Check transaction info was updated
+	txnInfo := wal.activeTxns[tid]
+	if txnInfo.LastLSN != lsn {
+		t.Errorf("expected LastLSN to be %d, got %d", lsn, txnInfo.LastLSN)
+	}
+
+	// Check dirty page tracking
+	recLSN, exists := wal.dirtyPages[pageID]
+	if !exists {
+		t.Fatal("page not found in dirtyPages")
+	}
+
+	if recLSN != lsn {
+		t.Errorf("expected recLSN to be %d, got %d", lsn, recLSN)
+	}
+}
+
+func TestLogDeleteWithoutBegin(t *testing.T) {
+	wal, _, cleanup := createTestWAL(t)
+	defer cleanup()
+
+	tid := transaction.NewTransactionID()
+	pageID := &mockPageID{tableID: 1, pageNo: 100}
+
+	_, err := wal.LogDelete(tid, pageID, []byte("deleted tuple"))
+	if err == nil {
+		t.Fatal("expected error when logging delete without begin")
+	}
+}
+
+func TestMixedOperations(t *testing.T) {
+	wal, _, cleanup := createTestWAL(t)
+	defer cleanup()
+
+	tid := transaction.NewTransactionID()
+	firstLSN, err := wal.LogBegin(tid)
+	if err != nil {
+		t.Fatalf("LogBegin failed: %v", err)
+	}
+
+	// Log insert
+	pageID1 := &mockPageID{tableID: 1, pageNo: 100}
+	insertLSN, err := wal.LogInsert(tid, pageID1, []byte("inserted tuple"))
+	if err != nil {
+		t.Fatalf("LogInsert failed: %v", err)
+	}
+
+	// Log update
+	pageID2 := &mockPageID{tableID: 1, pageNo: 101}
+	updateLSN, err := wal.LogUpdate(tid, pageID2, []byte("before"), []byte("after"))
+	if err != nil {
+		t.Fatalf("LogUpdate failed: %v", err)
+	}
+
+	// Log delete
+	pageID3 := &mockPageID{tableID: 1, pageNo: 102}
+	deleteLSN, err := wal.LogDelete(tid, pageID3, []byte("deleted tuple"))
+	if err != nil {
+		t.Fatalf("LogDelete failed: %v", err)
+	}
+
+	// Verify LSNs are increasing
+	if insertLSN <= firstLSN {
+		t.Error("expected insert LSN to be greater than begin LSN")
+	}
+
+	if updateLSN <= insertLSN {
+		t.Error("expected update LSN to be greater than insert LSN")
+	}
+
+	if deleteLSN <= updateLSN {
+		t.Error("expected delete LSN to be greater than update LSN")
+	}
+
+	// Verify transaction info
+	txnInfo := wal.activeTxns[tid]
+	if txnInfo.FirstLSN != firstLSN {
+		t.Errorf("expected FirstLSN to be %d, got %d", firstLSN, txnInfo.FirstLSN)
+	}
+
+	if txnInfo.LastLSN != deleteLSN {
+		t.Errorf("expected LastLSN to be %d, got %d", deleteLSN, txnInfo.LastLSN)
+	}
+
+	// Verify all pages are tracked as dirty
+	if len(wal.dirtyPages) != 3 {
+		t.Errorf("expected 3 dirty pages, got %d", len(wal.dirtyPages))
+	}
+}
+
+func TestMultipleInsertsAndDeletes(t *testing.T) {
+	wal, _, cleanup := createTestWAL(t)
+	defer cleanup()
+
+	tid := transaction.NewTransactionID()
+	_, err := wal.LogBegin(tid)
+	if err != nil {
+		t.Fatalf("LogBegin failed: %v", err)
+	}
+
+	// Log multiple inserts
+	insertLSNs := make([]LSN, 3)
+	for i := 0; i < 3; i++ {
+		pageID := &mockPageID{tableID: 1, pageNo: 100 + i}
+		lsn, err := wal.LogInsert(tid, pageID, []byte(fmt.Sprintf("insert %d", i)))
+		if err != nil {
+			t.Fatalf("LogInsert %d failed: %v", i, err)
+		}
+		insertLSNs[i] = lsn
+	}
+
+	// Log multiple deletes
+	deleteLSNs := make([]LSN, 3)
+	for i := 0; i < 3; i++ {
+		pageID := &mockPageID{tableID: 1, pageNo: 200 + i}
+		lsn, err := wal.LogDelete(tid, pageID, []byte(fmt.Sprintf("delete %d", i)))
+		if err != nil {
+			t.Fatalf("LogDelete %d failed: %v", i, err)
+		}
+		deleteLSNs[i] = lsn
+	}
+
+	// Verify LSNs are strictly increasing
+	for i := 1; i < len(insertLSNs); i++ {
+		if insertLSNs[i] <= insertLSNs[i-1] {
+			t.Errorf("expected insert LSN[%d] (%d) > LSN[%d] (%d)", i, insertLSNs[i], i-1, insertLSNs[i-1])
+		}
+	}
+
+	if deleteLSNs[0] <= insertLSNs[len(insertLSNs)-1] {
+		t.Error("expected delete LSNs to be greater than insert LSNs")
+	}
+
+	for i := 1; i < len(deleteLSNs); i++ {
+		if deleteLSNs[i] <= deleteLSNs[i-1] {
+			t.Errorf("expected delete LSN[%d] (%d) > LSN[%d] (%d)", i, deleteLSNs[i], i-1, deleteLSNs[i-1])
+		}
+	}
+
+	// Verify all pages are tracked
+	if len(wal.dirtyPages) != 6 {
+		t.Errorf("expected 6 dirty pages, got %d", len(wal.dirtyPages))
+	}
+}
+
+func TestLogCommit(t *testing.T) {
+	wal, _, cleanup := createTestWAL(t)
+	defer cleanup()
+
+	tid := transaction.NewTransactionID()
+	beginLSN, err := wal.LogBegin(tid)
+	if err != nil {
+		t.Fatalf("LogBegin failed: %v", err)
+	}
+
+	// Perform some operations
+	pageID := &mockPageID{tableID: 1, pageNo: 100}
+	_, err = wal.LogUpdate(tid, pageID, []byte("before"), []byte("after"))
+	if err != nil {
+		t.Fatalf("LogUpdate failed: %v", err)
+	}
+
+	// Commit the transaction
+	commitLSN, err := wal.LogCommit(tid)
+	if err != nil {
+		t.Fatalf("LogCommit failed: %v", err)
+	}
+
+	if commitLSN <= beginLSN {
+		t.Error("expected commit LSN to be greater than begin LSN")
+	}
+
+	// Verify transaction is removed from active transactions
+	if _, exists := wal.activeTxns[tid]; exists {
+		t.Error("transaction should be removed from activeTxns after commit")
+	}
+
+	// Verify log was forced to disk
+	if wal.flushedLSN < commitLSN {
+		t.Errorf("expected flushedLSN (%d) to be at least commitLSN (%d)", wal.flushedLSN, commitLSN)
+	}
+}
+
+func TestLogCommitWithoutBegin(t *testing.T) {
+	wal, _, cleanup := createTestWAL(t)
+	defer cleanup()
+
+	tid := transaction.NewTransactionID()
+
+	_, err := wal.LogCommit(tid)
+	if err == nil {
+		t.Fatal("expected error when committing without begin")
+	}
+}
+
+func TestLogCommitEmptyTransaction(t *testing.T) {
+	wal, _, cleanup := createTestWAL(t)
+	defer cleanup()
+
+	tid := transaction.NewTransactionID()
+	_, err := wal.LogBegin(tid)
+	if err != nil {
+		t.Fatalf("LogBegin failed: %v", err)
+	}
+
+	// Commit without any operations
+	commitLSN, err := wal.LogCommit(tid)
+	if err != nil {
+		t.Fatalf("LogCommit failed: %v", err)
+	}
+
+	if commitLSN == FirstLSN {
+		t.Error("expected valid commit LSN")
+	}
+
+	// Verify transaction is removed
+	if _, exists := wal.activeTxns[tid]; exists {
+		t.Error("transaction should be removed from activeTxns after commit")
+	}
+}
+
+func TestLogAbort(t *testing.T) {
+	wal, _, cleanup := createTestWAL(t)
+	defer cleanup()
+
+	tid := transaction.NewTransactionID()
+	beginLSN, err := wal.LogBegin(tid)
+	if err != nil {
+		t.Fatalf("LogBegin failed: %v", err)
+	}
+
+	// Perform some operations
+	pageID := &mockPageID{tableID: 1, pageNo: 100}
+	updateLSN, err := wal.LogUpdate(tid, pageID, []byte("before"), []byte("after"))
+	if err != nil {
+		t.Fatalf("LogUpdate failed: %v", err)
+	}
+
+	// Abort the transaction
+	abortLSN, err := wal.LogAbort(tid)
+	if err != nil {
+		t.Fatalf("LogAbort failed: %v", err)
+	}
+
+	if abortLSN <= beginLSN {
+		t.Error("expected abort LSN to be greater than begin LSN")
+	}
+
+	// Verify transaction info is updated
+	txnInfo := wal.activeTxns[tid]
+	if txnInfo.LastLSN != abortLSN {
+		t.Errorf("expected LastLSN to be %d, got %d", abortLSN, txnInfo.LastLSN)
+	}
+
+	// Verify UndoNextLSN is set (for undo processing)
+	if txnInfo.UndoNextLSN != abortLSN {
+		t.Errorf("expected UndoNextLSN to be %d, got %d", abortLSN, txnInfo.UndoNextLSN)
+	}
+
+	// Transaction should still be in active transactions (until undo is complete)
+	if _, exists := wal.activeTxns[tid]; !exists {
+		t.Error("transaction should still be in activeTxns after abort (undo pending)")
+	}
+
+	// Verify LSN ordering
+	if !(beginLSN < updateLSN && updateLSN < abortLSN) {
+		t.Error("expected LSNs to be in order: begin < update < abort")
+	}
+}
+
+func TestLogAbortWithoutBegin(t *testing.T) {
+	wal, _, cleanup := createTestWAL(t)
+	defer cleanup()
+
+	tid := transaction.NewTransactionID()
+
+	_, err := wal.LogAbort(tid)
+	if err == nil {
+		t.Fatal("expected error when aborting without begin")
+	}
+}
+
+func TestLogAbortEmptyTransaction(t *testing.T) {
+	wal, _, cleanup := createTestWAL(t)
+	defer cleanup()
+
+	tid := transaction.NewTransactionID()
+	beginLSN, err := wal.LogBegin(tid)
+	if err != nil {
+		t.Fatalf("LogBegin failed: %v", err)
+	}
+
+	// Abort without any operations
+	abortLSN, err := wal.LogAbort(tid)
+	if err != nil {
+		t.Fatalf("LogAbort failed: %v", err)
+	}
+
+	if abortLSN <= beginLSN {
+		t.Error("expected abort LSN to be greater than begin LSN")
+	}
+
+	// Transaction should still be tracked for undo
+	txnInfo := wal.activeTxns[tid]
+	if txnInfo.UndoNextLSN != abortLSN {
+		t.Errorf("expected UndoNextLSN to be set to %d", abortLSN)
+	}
+}
+
+func TestClose(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "wal_test_*")
+	if err != nil {
+		t.Fatalf("failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	logPath := filepath.Join(tmpDir, "test.wal")
+	wal, err := NewWAL(logPath, 4096)
+	if err != nil {
+		t.Fatalf("failed to create WAL: %v", err)
+	}
+
+	tid := transaction.NewTransactionID()
+	_, err = wal.LogBegin(tid)
+	if err != nil {
+		t.Fatalf("LogBegin failed: %v", err)
+	}
+
+	// Close the WAL
+	err = wal.Close()
+	if err != nil {
+		t.Fatalf("Close failed: %v", err)
+	}
+
+	// Verify buffer was flushed
+	if wal.flushedLSN != wal.currentLSN {
+		t.Error("expected buffer to be flushed during close")
+	}
+}
+
+func TestCloseFlushesBuffer(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "wal_test_*")
+	if err != nil {
+		t.Fatalf("failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	logPath := filepath.Join(tmpDir, "test.wal")
+	wal, err := NewWAL(logPath, 4096)
+	if err != nil {
+		t.Fatalf("failed to create WAL: %v", err)
+	}
+
+	tid := transaction.NewTransactionID()
+	_, err = wal.LogBegin(tid)
+	if err != nil {
+		t.Fatalf("LogBegin failed: %v", err)
+	}
+
+	// Log some updates
+	for i := 0; i < 5; i++ {
+		pageID := &mockPageID{tableID: 1, pageNo: i}
+		_, err = wal.LogUpdate(tid, pageID, []byte("before"), []byte("after"))
+		if err != nil {
+			t.Fatalf("LogUpdate %d failed: %v", i, err)
+		}
+	}
+
+	expectedLSN := wal.currentLSN
+
+	// Close should flush all buffered data
+	err = wal.Close()
+	if err != nil {
+		t.Fatalf("Close failed: %v", err)
+	}
+
+	if wal.flushedLSN != expectedLSN {
+		t.Errorf("expected flushedLSN to be %d after close, got %d", expectedLSN, wal.flushedLSN)
+	}
+}
+
+func TestCommitAndAbortSequence(t *testing.T) {
+	wal, _, cleanup := createTestWAL(t)
+	defer cleanup()
+
+	// Transaction 1: commit
+	tid1 := transaction.NewTransactionID()
+	_, err := wal.LogBegin(tid1)
+	if err != nil {
+		t.Fatalf("LogBegin tid1 failed: %v", err)
+	}
+
+	pageID1 := &mockPageID{tableID: 1, pageNo: 1}
+	_, err = wal.LogUpdate(tid1, pageID1, []byte("before1"), []byte("after1"))
+	if err != nil {
+		t.Fatalf("LogUpdate tid1 failed: %v", err)
+	}
+
+	commitLSN, err := wal.LogCommit(tid1)
+	if err != nil {
+		t.Fatalf("LogCommit tid1 failed: %v", err)
+	}
+
+	// Transaction 2: abort
+	tid2 := transaction.NewTransactionID()
+	_, err = wal.LogBegin(tid2)
+	if err != nil {
+		t.Fatalf("LogBegin tid2 failed: %v", err)
+	}
+
+	pageID2 := &mockPageID{tableID: 1, pageNo: 2}
+	_, err = wal.LogUpdate(tid2, pageID2, []byte("before2"), []byte("after2"))
+	if err != nil {
+		t.Fatalf("LogUpdate tid2 failed: %v", err)
+	}
+
+	abortLSN, err := wal.LogAbort(tid2)
+	if err != nil {
+		t.Fatalf("LogAbort tid2 failed: %v", err)
+	}
+
+	// Verify tid1 is removed after commit
+	if _, exists := wal.activeTxns[tid1]; exists {
+		t.Error("tid1 should be removed after commit")
+	}
+
+	// Verify tid2 is still tracked after abort
+	if _, exists := wal.activeTxns[tid2]; !exists {
+		t.Error("tid2 should still be tracked after abort")
+	}
+
+	// Verify LSN ordering
+	if abortLSN <= commitLSN {
+		t.Error("expected abort LSN to be greater than commit LSN")
+	}
+}
+
+func TestMultipleCommits(t *testing.T) {
+	wal, _, cleanup := createTestWAL(t)
+	defer cleanup()
+
+	numTxns := 5
+	commitLSNs := make([]LSN, numTxns)
+
+	for i := 0; i < numTxns; i++ {
+		tid := transaction.NewTransactionID()
+		_, err := wal.LogBegin(tid)
+		if err != nil {
+			t.Fatalf("LogBegin %d failed: %v", i, err)
+		}
+
+		pageID := &mockPageID{tableID: 1, pageNo: i}
+		_, err = wal.LogUpdate(tid, pageID, []byte("before"), []byte("after"))
+		if err != nil {
+			t.Fatalf("LogUpdate %d failed: %v", i, err)
+		}
+
+		lsn, err := wal.LogCommit(tid)
+		if err != nil {
+			t.Fatalf("LogCommit %d failed: %v", i, err)
+		}
+		commitLSNs[i] = lsn
+	}
+
+	// Verify all transactions are removed
+	if len(wal.activeTxns) != 0 {
+		t.Errorf("expected no active transactions, got %d", len(wal.activeTxns))
+	}
+
+	// Verify LSNs are increasing
+	for i := 1; i < len(commitLSNs); i++ {
+		if commitLSNs[i] <= commitLSNs[i-1] {
+			t.Errorf("expected commit LSN[%d] (%d) > LSN[%d] (%d)", i, commitLSNs[i], i-1, commitLSNs[i-1])
+		}
 	}
 }
