@@ -1,7 +1,8 @@
 {
   "permissions": {
     "allow": [
-      "Bash(go run:*)"
+      "Bash(go run:*)",
+      "Bash(go test:*)"
     ],
     "deny": [],
     "ask": []
