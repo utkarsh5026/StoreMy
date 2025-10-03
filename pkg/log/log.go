@@ -35,16 +35,12 @@ type LogRecord struct {
 	TID     *transaction.TransactionID // Transaction that created this record
 	PrevLSN LSN                        // Previous LSN for this transaction (for backward scanning)
 
-	// For data modification records
 	PageID      tuple.PageID // Affected page
 	BeforeImage []byte       // Page state before modification (for UNDO)
 	AfterImage  []byte       // Page state after modification (for REDO)
 
-	// For CLR records
 	UndoNextLSN LSN // Next record to undo (for CLR records)
-
-	// Timestamp for debugging and analysis
-	Timestamp time.Time
+	Timestamp   time.Time
 }
 
 // TransactionLogInfo tracks logging information for a transaction
@@ -52,4 +48,16 @@ type TransactionLogInfo struct {
 	FirstLSN    LSN // First log record for this transaction
 	LastLSN     LSN // Most recent log record
 	UndoNextLSN LSN // Next record to undo during rollback
+}
+
+func NewLogRecord(logType LogRecordType, tid *transaction.TransactionID, pageId tuple.PageID, beforeImage, afterImage []byte, prevLSN LSN) *LogRecord {
+	return &LogRecord{
+		Type:        logType,
+		TID:         tid,
+		PageID:      pageId,
+		BeforeImage: beforeImage,
+		AfterImage:  afterImage,
+		Timestamp:   time.Now(),
+		PrevLSN:     prevLSN,
+	}
 }
