@@ -23,34 +23,27 @@ type Configuration struct {
 }
 
 func main() {
-	// Parse command-line arguments
 	config := parseArguments()
-
-	// Show splash screen
 	showSplashScreen()
 
-	// Initialize the database database
 	db, err := initializeDatabase(config)
 	if err != nil {
 		log.Fatalf("Failed to initialize database: %v", err)
 	}
 	defer db.Close()
 
-	// Run demo mode if requested
 	if config.DemoMode {
 		if err := runDemoMode(db); err != nil {
 			log.Fatalf("Demo mode failed: %v", err)
 		}
 	}
 
-	// Import data if specified
 	if config.ImportFile != "" {
 		if err := importData(db, config.ImportFile); err != nil {
 			log.Fatalf("Failed to import data: %v", err)
 		}
 	}
 
-	// Start the interactive terminal UI
 	if err := startInteractiveMode(db); err != nil {
 		log.Fatalf("Failed to start UI: %v", err)
 	}
