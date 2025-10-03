@@ -70,8 +70,4 @@ var (
 			Border(lipgloss.NormalBorder()).
 			BorderForeground(bgLight).
 			Padding(1)
-
-	helpStyle = lipgloss.NewStyle().
-			Foreground(textMuted).
-			Italic(true)
 )
