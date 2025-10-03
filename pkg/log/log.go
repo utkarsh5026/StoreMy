@@ -10,21 +10,17 @@ import (
 type LogRecordType uint8
 
 const (
-	// Transaction control records
 	BeginRecord  LogRecordType = iota // Transaction start
 	CommitRecord                      // Transaction commit
 	AbortRecord                       // Transaction abort
 
-	// Data modification records
 	UpdateRecord // Page update (contains before and after images)
 	InsertRecord // Tuple insertion
 	DeleteRecord // Tuple deletion
 
-	// Checkpoint records for recovery optimization
 	CheckpointBegin // Start of checkpoint
 	CheckpointEnd   // End of checkpoint
 
-	// Compensation Log Record for undo operations
 	CLRRecord // Used during rollback
 )
 
@@ -49,4 +45,11 @@ type LogRecord struct {
 
 	// Timestamp for debugging and analysis
 	Timestamp time.Time
+}
+
+// TransactionLogInfo tracks logging information for a transaction
+type TransactionLogInfo struct {
+	FirstLSN    LSN // First log record for this transaction
+	LastLSN     LSN // Most recent log record
+	UndoNextLSN LSN // Next record to undo during rollback
 }
