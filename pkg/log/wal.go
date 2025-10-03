@@ -4,6 +4,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"io"
+	"maps"
 	"os"
 	"storemy/pkg/concurrency/transaction"
 	"storemy/pkg/tuple"
@@ -21,17 +22,13 @@ type WAL struct {
 	currentLSN LSN      // Current position in log
 	flushedLSN LSN      // Last LSN written to disk
 
-	// Transaction tracking
 	activeTxns map[*transaction.TransactionID]*TransactionLogInfo // Active transactions
 
-	// Page tracking for recovery
 	dirtyPages map[tuple.PageID]LSN // Dirty pages and their recLSN
 
-	// Synchronization
 	mutex     sync.RWMutex // Protects WAL structures
 	flushCond *sync.Cond   // For coordinating flushes
 
-	// Configuration
 	bufferSize   int    // Size of write buffer
 	writeBuffer  []byte // Buffer for batching writes
 	bufferOffset int    // Current position in buffer
@@ -88,11 +85,80 @@ func (w *WAL) LogBegin(tid *transaction.TransactionID) (LSN, error) {
 	return lsn, nil
 }
 
+// CRITICAL: This must FORCE the log to disk before returning (durability guarantee)
+// After this returns successfully, the transaction is durable even if system crashes
+func (w *WAL) LogCommit(tid *transaction.TransactionID) (LSN, error) {
+	w.mutex.Lock()
+
+	txnInfo, exists := w.activeTxns[tid]
+	if !exists {
+		w.mutex.Unlock()
+		return 0, fmt.Errorf("transaction %v not found in active transactions", tid)
+	}
+
+	record := NewLogRecord(CommitRecord, tid, nil, nil, nil, txnInfo.LastLSN)
+
+	lsn, err := w.writeRecord(record)
+	if err != nil {
+		w.mutex.Unlock()
+		return 0, err
+	}
+
+	txnInfo.LastLSN = lsn
+	w.mutex.Unlock()
+
+	if err := w.Force(lsn); err != nil {
+		return 0, fmt.Errorf("failed to force commit record to disk: %v", err)
+	}
+
+	w.mutex.Lock()
+	delete(w.activeTxns, tid)
+	w.mutex.Unlock()
+	return lsn, nil
+}
+
+// LogAbort logs a transaction abort
+// This initiates the undo process for the transaction
+func (w *WAL) LogAbort(tid *transaction.TransactionID) (LSN, error) {
+	w.mutex.Lock()
+	defer w.mutex.Unlock()
+
+	txnInfo, exists := w.activeTxns[tid]
+	if !exists {
+		return 0, fmt.Errorf("transaction %v not found in active transactions", tid)
+	}
+
+	record := NewLogRecord(AbortRecord, tid, nil, nil, nil, txnInfo.LastLSN)
+	lsn, err := w.writeRecord(record)
+	if err != nil {
+		return 0, err
+	}
+
+	txnInfo.LastLSN = lsn
+	txnInfo.UndoNextLSN = txnInfo.LastLSN
+	return lsn, nil
+}
+
+// Close closes the WAL gracefully
+// Flushes any remaining buffered data and closes the file
+func (w *WAL) Close() error {
+	w.mutex.Lock()
+	defer w.mutex.Unlock()
+
+	if err := w.flushBuffer(); err != nil {
+		return fmt.Errorf("failed to flush buffer during close: %v", err)
+	}
+
+	if err := w.file.Close(); err != nil {
+		return fmt.Errorf("failed to close WAL file: %v", err)
+	}
+
+	return nil
+}
+
 // LogUpdate logs a page update with before and after images
 // This is called BEFORE the page is actually modified in memory
-func (w *WAL) LogUpdate(tid *transaction.TransactionID,
-	pageID tuple.PageID,
-	beforeImage, afterImage []byte) (LSN, error) {
+func (w *WAL) LogUpdate(tid *transaction.TransactionID, pageID tuple.PageID, beforeImage, afterImage []byte) (LSN, error) {
 	w.mutex.Lock()
 	defer w.mutex.Unlock()
 
@@ -142,6 +208,72 @@ func (w *WAL) LogInsert(tid *transaction.TransactionID, pageID tuple.PageID, aft
 	}
 
 	return lsn, nil
+}
+
+// LogDelete logs a tuple deletion
+// Only needs before image - this is what we restore during UNDO
+// During recovery, REDO means "ensure tuple is deleted" (no-op if already gone)
+func (w *WAL) LogDelete(tid *transaction.TransactionID, pageID tuple.PageID, beforeImage []byte) (LSN, error) {
+	w.mutex.Lock()
+	defer w.mutex.Unlock()
+
+	txnInfo, exists := w.activeTxns[tid]
+	if !exists {
+		return 0, fmt.Errorf("transaction %v not found in active transactions", tid)
+	}
+
+	record := NewLogRecord(DeleteRecord, tid, pageID, beforeImage, nil, txnInfo.LastLSN)
+
+	lsn, err := w.writeRecord(record)
+	if err != nil {
+		return 0, err
+	}
+
+	txnInfo.LastLSN = lsn
+
+	if _, exists := w.dirtyPages[pageID]; !exists {
+		w.dirtyPages[pageID] = lsn
+	}
+
+	return lsn, nil
+}
+
+// GetDirtyPages returns a copy of the dirty page table
+// Used during checkpointing
+func (w *WAL) GetDirtyPages() map[tuple.PageID]LSN {
+	w.mutex.RLock()
+	defer w.mutex.RUnlock()
+
+	pages := make(map[tuple.PageID]LSN, len(w.dirtyPages))
+	maps.Copy(pages, w.dirtyPages)
+	return pages
+}
+
+// GetActiveTransactions returns a list of active transaction IDs
+// Used during checkpointing
+func (w *WAL) GetActiveTransactions() []*transaction.TransactionID {
+	w.mutex.RLock()
+	defer w.mutex.RUnlock()
+
+	txns := make([]*transaction.TransactionID, 0, len(w.activeTxns))
+	for tid := range w.activeTxns {
+		txns = append(txns, tid)
+	}
+	return txns
+}
+
+// GetLastLSN returns the last LSN for a transaction
+// Used for building PrevLSN chains
+func (w *WAL) GetLastLSN(tid *transaction.TransactionID) (LSN, error) {
+	w.mutex.RLock()
+	defer w.mutex.RUnlock()
+
+	txnInfo, exists := w.activeTxns[tid]
+	if !exists {
+		return 0, fmt.Errorf("transaction %v not found", tid)
+	}
+
+	return txnInfo.LastLSN, nil
 }
 
 func (w *WAL) writeRecord(record *LogRecord) (LSN, error) {
