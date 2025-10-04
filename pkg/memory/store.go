@@ -136,20 +136,24 @@ func (p *PageStore) evictPage() error {
 
 // InsertTuple adds a new tuple to the specified table within the given transaction context.
 func (p *PageStore) InsertTuple(tid *transaction.TransactionID, tableID int, t *tuple.Tuple) error {
-	return p.performDataOperation(InsertOperation, tid, tableID, t, nil)
+	return p.performDataOperation(InsertOperation, tid, tableID, t)
 }
 
 // DeleteTuple removes a tuple from its table within the given transaction context.
 func (p *PageStore) DeleteTuple(tid *transaction.TransactionID, t *tuple.Tuple) error {
+	if t == nil {
+		return fmt.Errorf("tuple cannot be nil")
+	}
+
 	if t.RecordID == nil {
 		return fmt.Errorf("tuple must have a valid record ID")
 	}
 
 	tableID := t.RecordID.PageID.GetTableID()
-	return p.performDataOperation(DeleteOperation, tid, tableID, t, nil)
+	return p.performDataOperation(DeleteOperation, tid, tableID, t)
 }
 
-func (p *PageStore) performDataOperation(operation OperationType, tid *transaction.TransactionID, tableID int, t *tuple.Tuple, beforeImage []byte) error {
+func (p *PageStore) performDataOperation(operation OperationType, tid *transaction.TransactionID, tableID int, t *tuple.Tuple) error {
 	if err := p.txManager.EnsureBegun(tid); err != nil {
 		return err
 	}
@@ -162,7 +166,7 @@ func (p *PageStore) performDataOperation(operation OperationType, tid *transacti
 	var modifiedPages []page.Page
 	switch operation {
 	case InsertOperation:
-		modifiedPages, err = p.handleInsert(tid, tableID, t, dbFile)
+		modifiedPages, err = p.handleInsert(tid, t, dbFile)
 
 	case DeleteOperation:
 		modifiedPages, err = p.handleDelete(tid, t, dbFile)
@@ -179,7 +183,7 @@ func (p *PageStore) performDataOperation(operation OperationType, tid *transacti
 	return nil
 }
 
-func (p *PageStore) handleInsert(tid *transaction.TransactionID, tableID int, t *tuple.Tuple, dbFile page.DbFile) ([]page.Page, error) {
+func (p *PageStore) handleInsert(tid *transaction.TransactionID, t *tuple.Tuple, dbFile page.DbFile) ([]page.Page, error) {
 	modifiedPages, err := dbFile.AddTuple(tid, t)
 	if err != nil {
 		return nil, fmt.Errorf("failed to add tuple: %v", err)
@@ -276,10 +280,10 @@ func (p *PageStore) finalizeTransaction(tid *transaction.TransactionID, operatio
 	var err error
 	switch operation {
 	case CommitOperation:
-		err = p.handleCommit(tid, dirtyPageIDs)
+		err = p.handleCommit(dirtyPageIDs)
 
 	case AbortOperation:
-		err = p.handleAbort(tid, dirtyPageIDs)
+		err = p.handleAbort(dirtyPageIDs)
 
 	default:
 		return fmt.Errorf("unknown operation: %s", operation.String())
@@ -294,7 +298,7 @@ func (p *PageStore) finalizeTransaction(tid *transaction.TransactionID, operatio
 	return nil
 }
 
-func (p *PageStore) handleCommit(tid *transaction.TransactionID, dirtyPageIDs []tuple.PageID) error {
+func (p *PageStore) handleCommit(dirtyPageIDs []tuple.PageID) error {
 	p.mutex.Lock()
 	for _, pid := range dirtyPageIDs {
 		if page, exists := p.cache.Get(pid); exists {
@@ -312,7 +316,7 @@ func (p *PageStore) handleCommit(tid *transaction.TransactionID, dirtyPageIDs []
 	return nil
 }
 
-func (p *PageStore) handleAbort(tid *transaction.TransactionID, dirtyPageIDs []tuple.PageID) error {
+func (p *PageStore) handleAbort(dirtyPageIDs []tuple.PageID) error {
 	p.mutex.Lock()
 	defer p.mutex.Unlock()
 
@@ -420,4 +424,10 @@ func (p *PageStore) getDbFile(tableID int) (page.DbFile, error) {
 		return nil, fmt.Errorf("table with ID %d not found: %v", tableID, err)
 	}
 	return dbFile, nil
+}
+
+// ensureTransactionBegun ensures that a transaction's BEGIN record has been logged to the WAL.
+// This is a helper method for tests to directly ensure a transaction has begun.
+func (p *PageStore) ensureTransactionBegun(tid *transaction.TransactionID) error {
+	return p.txManager.EnsureBegun(tid)
 }
