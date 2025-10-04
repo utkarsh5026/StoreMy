@@ -1,7 +1,6 @@
 package log
 
 import (
-	"encoding/binary"
 	"fmt"
 	"io"
 	"maps"
@@ -277,7 +276,7 @@ func (w *WAL) GetLastLSN(tid *transaction.TransactionID) (LSN, error) {
 }
 
 func (w *WAL) writeRecord(record *LogRecord) (LSN, error) {
-	data, err := w.serializeRecord(record)
+	data, err := SerializeLogRecord(record)
 	if err != nil {
 		return 0, err
 	}
@@ -333,78 +332,4 @@ func (w *WAL) flushBuffer() error {
 	w.flushCond.Broadcast()
 
 	return nil
-}
-
-// serializeRecord converts a LogRecord to bytes
-func (w *WAL) serializeRecord(record *LogRecord) ([]byte, error) {
-	// Format: [RecordSize][Type][TID][PrevLSN][Timestamp][Type-specific data]
-
-	baseSize := 4 + 1 + 8 + 8 + 8 // Size + Type + TID + PrevLSN + Timestamp
-	dataSize := 0
-
-	switch record.Type {
-	case UpdateRecord, InsertRecord, DeleteRecord:
-		dataSize = 8
-		if record.BeforeImage != nil {
-			dataSize += 4 + len(record.BeforeImage)
-		}
-		if record.AfterImage != nil {
-			dataSize += 4 + len(record.AfterImage)
-		}
-	case CLRRecord:
-		dataSize = 8 // UndoNextLSN
-	}
-
-	totalSize := baseSize + dataSize
-	buf := make([]byte, totalSize)
-	offset := 0
-
-	binary.BigEndian.PutUint32(buf[offset:], uint32(totalSize))
-	offset += 4
-
-	buf[offset] = byte(record.Type)
-	offset++
-
-	tid := uint64(0) // Convert your TransactionID to uint64
-	if record.TID != nil {
-		// You'll need to implement a method to get numeric ID from TransactionID
-		tid = uint64(record.TID.ID())
-	}
-	binary.BigEndian.PutUint64(buf[offset:], tid)
-	offset += 8
-
-	binary.BigEndian.PutUint64(buf[offset:], uint64(record.PrevLSN))
-	offset += 8
-
-	binary.BigEndian.PutUint64(buf[offset:], uint64(record.Timestamp.Unix()))
-	offset += 8
-
-	switch record.Type {
-	case UpdateRecord, InsertRecord, DeleteRecord:
-		// Write PageID (you'll need to serialize your PageID type)
-		// This is a simplified version
-		pageIDBytes := record.PageID.Serialize()
-		for _, b := range pageIDBytes {
-			binary.BigEndian.PutUint32(buf[offset:], uint32(b))
-			offset += 4
-		}
-
-		// Write before image if present
-		if record.BeforeImage != nil {
-			binary.BigEndian.PutUint32(buf[offset:], uint32(len(record.BeforeImage)))
-			offset += 4
-			copy(buf[offset:], record.BeforeImage)
-			offset += len(record.BeforeImage)
-		}
-
-		// Write after image if present
-		if record.AfterImage != nil {
-			binary.BigEndian.PutUint32(buf[offset:], uint32(len(record.AfterImage)))
-			offset += 4
-			copy(buf[offset:], record.AfterImage)
-			offset += len(record.AfterImage)
-		}
-	}
-
-	return buf, nil
 }
