@@ -30,19 +30,6 @@ func executePlan(t *testing.T, plan *CreateTablePlan) (*DDLResult, error) {
 	return result, nil
 }
 
-// Helper function to register cleanup for table files
-func cleanupTable(t *testing.T, tableManager *memory.TableManager, tableName string) {
-	t.Helper()
-	t.Cleanup(func() {
-		tableID, err := tableManager.GetTableID(tableName)
-		if err == nil {
-			if dbFile, err := tableManager.GetDbFile(tableID); err == nil {
-				dbFile.Close()
-			}
-		}
-	})
-}
-
 func TestNewCreateTablePlan(t *testing.T) {
 	stmt := statements.NewCreateStatement("users", false)
 	stmt.AddField("id", types.IntType, true, nil)
