@@ -17,6 +17,14 @@ func NewTransactionID() *TransactionID {
 	}
 }
 
+// NewTransactionIDFromValue creates a TransactionID with a specific ID value.
+// This is primarily used for deserialization purposes.
+func NewTransactionIDFromValue(id int64) *TransactionID {
+	return &TransactionID{
+		id: id,
+	}
+}
+
 func (tid *TransactionID) ID() int64 {
 	return tid.id
 }
