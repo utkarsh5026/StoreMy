@@ -61,14 +61,14 @@ type PageStore struct {
 }
 
 // NewPageStore creates and initializes a new PageStore instance
-func NewPageStore(tm *TableManager, wal *log.WAL) (*PageStore, error) {
+func NewPageStore(tm *TableManager, wal *log.WAL) *PageStore {
 	return &PageStore{
 		cache:        NewLRUPageCache(MaxPageCount),
 		txManager:    NewTransactionManager(wal),
 		lockManager:  lock.NewLockManager(),
 		tableManager: tm,
 		wal:          wal,
-	}, nil
+	}
 }
 
 // GetPage retrieves a page with specified permissions for a transaction
