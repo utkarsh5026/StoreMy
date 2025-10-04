@@ -9,20 +9,25 @@ import (
 	"time"
 )
 
-// TransactionInfo holds metadata about an active transaction
+// TransactionInfo holds metadata about an active transaction.
+// It tracks the transaction's lifecycle, dirty pages, and locked resources.
 type TransactionInfo struct {
-	startTime   time.Time
-	dirtyPages  map[tuple.PageID]bool
-	lockedPages map[tuple.PageID]Permissions
-	hasBegun    bool // Whether BEGIN has been logged to WAL
+	startTime   time.Time                    // When the transaction was created
+	dirtyPages  map[tuple.PageID]bool        // Pages modified by this transaction
+	lockedPages map[tuple.PageID]Permissions // Pages locked by this transaction with their permission levels
+	hasBegun    bool                         // Whether BEGIN has been logged to WAL
 }
 
+// TransactionManager manages the lifecycle and metadata of active transactions.
+// It provides thread-safe access to transaction information and integrates
+// with the Write-Ahead Log (WAL) for durability guarantees.
 type TransactionManager struct {
-	transactions map[*transaction.TransactionID]*TransactionInfo
-	wal          *log.WAL
-	mutex        sync.RWMutex
+	transactions map[*transaction.TransactionID]*TransactionInfo // Active transaction metadata
+	wal          *log.WAL                                        // Write-Ahead Log for transaction logging
+	mutex        sync.RWMutex                                    // Protects concurrent access to transactions map
 }
 
+// NewTransactionManager creates a new TransactionManager instance.
 func NewTransactionManager(wal *log.WAL) *TransactionManager {
 	return &TransactionManager{
 		transactions: make(map[*transaction.TransactionID]*TransactionInfo),
@@ -30,6 +35,7 @@ func NewTransactionManager(wal *log.WAL) *TransactionManager {
 	}
 }
 
+// GetOrCreate retrieves existing transaction info or creates new info for the given transaction ID.
 func (tm *TransactionManager) GetOrCreate(tid *transaction.TransactionID) *TransactionInfo {
 	tm.mutex.Lock()
 	defer tm.mutex.Unlock()
@@ -44,6 +50,8 @@ func (tm *TransactionManager) GetOrCreate(tid *transaction.TransactionID) *Trans
 	return tm.transactions[tid]
 }
 
+// EnsureBegun ensures that a transaction's BEGIN record has been logged to the WAL.
+// This method is idempotent - it won't log BEGIN multiple times for the same transaction.
 func (tm *TransactionManager) EnsureBegun(tid *transaction.TransactionID) error {
 	txInfo := tm.GetOrCreate(tid)
 	if txInfo.hasBegun {
@@ -60,12 +68,17 @@ func (tm *TransactionManager) EnsureBegun(tid *transaction.TransactionID) error 
 	return nil
 }
 
+// Remove removes a transaction's metadata from the manager.
+// This should be called when a transaction commits or aborts to clean up resources.
 func (tm *TransactionManager) Remove(tid *transaction.TransactionID) {
 	tm.mutex.Lock()
 	delete(tm.transactions, tid)
 	tm.mutex.Unlock()
 }
 
+// GetDirtyPages returns a list of all pages that have been modified by the given transaction.
+// This is used during transaction commit/abort to determine which pages need to be flushed
+// or rolled back.
 func (tm *TransactionManager) GetDirtyPages(tid *transaction.TransactionID) []tuple.PageID {
 	tm.mutex.Lock()
 	defer tm.mutex.Unlock()
