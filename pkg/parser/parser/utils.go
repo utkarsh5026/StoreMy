@@ -2,6 +2,7 @@ package parser
 
 import (
 	"fmt"
+	"slices"
 	"storemy/pkg/parser/lexer"
 	"storemy/pkg/types"
 	"strconv"
@@ -87,4 +88,12 @@ func parseTableWithAlias(l *lexer.Lexer) (tableName, alias string, err error) {
 	}
 
 	return tableName, alias, nil
+}
+
+func parseValueWithType(l *lexer.Lexer, acceptedTypes ...lexer.TokenType) (string, error) {
+	token := l.NextToken()
+	if slices.Contains(acceptedTypes, token.Type) {
+		return token.Value, nil
+	}
+	return "", fmt.Errorf("expected value of type %v, got %s", acceptedTypes, token.Value)
 }
