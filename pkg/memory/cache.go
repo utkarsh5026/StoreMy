@@ -1,7 +1,7 @@
-// Package memory provides in-memory caching implementations for database pages.
 package memory
 
 import (
+	"container/list"
 	"fmt"
 	"storemy/pkg/storage/page"
 	"storemy/pkg/tuple"
@@ -36,65 +36,29 @@ type PageCache interface {
 	GetAll() []tuple.PageID
 }
 
-// node represents a single node in the doubly linked list
-type node struct {
+// cacheEntry represents a cache entry containing the page ID and page data
+type cacheEntry struct {
 	pid  tuple.PageID
 	page page.Page
-	prev *node
-	next *node
 }
 
 // LRUPageCache implements an LRU (Least Recently Used) eviction policy for the page cache.
-// This implementation uses a doubly linked list combined with a hash map to achieve O(1)
-// operations for all cache operations.
-//
-// The cache is thread-safe and uses a read-write mutex to allow concurrent reads
-// while ensuring exclusive access for writes.
-//
-// When the cache reaches maximum capacity, attempting to add new pages will return an error
-// rather than automatically evicting the least recently used page.
+// This implementation uses Go's built-in container/list (doubly linked list) combined with
+// a hash map to achieve O(1) operations for all cache operations.
 type LRUPageCache struct {
-	maxSize int                    // Maximum number of pages the cache can hold
-	cache   map[tuple.PageID]*node // Map for O(1) page lookup
-	head    *node                  // Dummy head node (most recently used end)
-	tail    *node                  // Dummy tail node (least recently used end)
-	mutex   sync.RWMutex           // Read-write mutex for thread safety
+	maxSize int
+	cache   map[tuple.PageID]*list.Element
+	lru     *list.List
+	mutex   sync.RWMutex
 }
 
 // NewLRUPageCache creates a new LRU page cache with the specified maximum size.
 func NewLRUPageCache(maxSize int) *LRUPageCache {
-	// Create dummy head and tail nodes
-	head := &node{}
-	tail := &node{}
-	head.next = tail
-	tail.prev = head
-
 	return &LRUPageCache{
 		maxSize: maxSize,
-		cache:   make(map[tuple.PageID]*node),
-		head:    head,
-		tail:    tail,
+		cache:   make(map[tuple.PageID]*list.Element),
+		lru:     list.New(),
 	}
-}
-
-// addToFront adds a node right after the head (marks as most recently used) - O(1)
-func (c *LRUPageCache) addToFront(n *node) {
-	n.prev = c.head
-	n.next = c.head.next
-	c.head.next.prev = n
-	c.head.next = n
-}
-
-// removeNode removes a node from the linked list - O(1)
-func (c *LRUPageCache) removeNode(n *node) {
-	n.prev.next = n.next
-	n.next.prev = n.prev
-}
-
-// moveToFront moves an existing node to the front (marks as most recently used) - O(1)
-func (c *LRUPageCache) moveToFront(n *node) {
-	c.removeNode(n)
-	c.addToFront(n)
 }
 
 // Get retrieves a page from the cache by its page ID.
@@ -103,9 +67,10 @@ func (c *LRUPageCache) Get(pid tuple.PageID) (page.Page, bool) {
 	c.mutex.Lock()
 	defer c.mutex.Unlock()
 
-	if n, exists := c.cache[pid]; exists {
-		c.moveToFront(n)
-		return n.page, true
+	if elem, exists := c.cache[pid]; exists {
+		c.lru.MoveToFront(elem)
+		entry := elem.Value.(*cacheEntry)
+		return entry.page, true
 	}
 	return nil, false
 }
@@ -117,9 +82,10 @@ func (c *LRUPageCache) Put(pid tuple.PageID, p page.Page) error {
 	c.mutex.Lock()
 	defer c.mutex.Unlock()
 
-	if n, exists := c.cache[pid]; exists {
-		n.page = p
-		c.moveToFront(n)
+	if elem, exists := c.cache[pid]; exists {
+		entry := elem.Value.(*cacheEntry)
+		entry.page = p
+		c.lru.MoveToFront(elem)
 		return nil
 	}
 
@@ -127,12 +93,13 @@ func (c *LRUPageCache) Put(pid tuple.PageID, p page.Page) error {
 		return fmt.Errorf("cache full, cannot add page")
 	}
 
-	newNode := &node{
+	entry := &cacheEntry{
 		pid:  pid,
 		page: p,
 	}
-	c.cache[pid] = newNode
-	c.addToFront(newNode)
+
+	elem := c.lru.PushFront(entry)
+	c.cache[pid] = elem
 	return nil
 }
 
@@ -142,9 +109,9 @@ func (c *LRUPageCache) Remove(pid tuple.PageID) {
 	c.mutex.Lock()
 	defer c.mutex.Unlock()
 
-	if n, exists := c.cache[pid]; exists {
+	if elem, exists := c.cache[pid]; exists {
 		delete(c.cache, pid)
-		c.removeNode(n)
+		c.lru.Remove(elem)
 	}
 }
 
@@ -161,9 +128,8 @@ func (c *LRUPageCache) Clear() {
 	c.mutex.Lock()
 	defer c.mutex.Unlock()
 
-	c.cache = make(map[tuple.PageID]*node)
-	c.head.next = c.tail
-	c.tail.prev = c.head
+	c.cache = make(map[tuple.PageID]*list.Element)
+	c.lru.Init()
 }
 
 // GetAll returns a slice containing all page IDs currently stored in the cache.
@@ -173,10 +139,9 @@ func (c *LRUPageCache) GetAll() []tuple.PageID {
 	defer c.mutex.RUnlock()
 
 	pids := make([]tuple.PageID, 0, len(c.cache))
-	current := c.tail.prev
-	for current != c.head {
-		pids = append(pids, current.pid)
-		current = current.prev
+	for elem := c.lru.Back(); elem != nil; elem = elem.Prev() {
+		entry := elem.Value.(*cacheEntry)
+		pids = append(pids, entry.pid)
 	}
 
 	return pids
