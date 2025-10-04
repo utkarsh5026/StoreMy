@@ -88,8 +88,8 @@ func (agg *AggregateOperator) GetTupleDesc() *tuple.TupleDescription {
 // Rewind resets the aggregate result iterator to the beginning.
 // This allows re-reading the aggregate results without recomputing them.
 func (agg *AggregateOperator) Rewind() error {
-	if !agg.opened {
-		return fmt.Errorf("aggregate operator not opened")
+	if err := agg.ensureOpened(); err != nil {
+		return err
 	}
 
 	agg.nextTuple = nil
@@ -154,8 +154,8 @@ func (agg *AggregateOperator) Open() error {
 // HasNext checks if there are more aggregate result tuples available.
 // Uses internal caching to support the hasNext/next pattern efficiently.
 func (agg *AggregateOperator) HasNext() (bool, error) {
-	if !agg.opened {
-		return false, fmt.Errorf("aggregate operator not opened")
+	if err := agg.ensureOpened(); err != nil {
+		return false, err
 	}
 
 	if !agg.hasNextCalled {
@@ -174,8 +174,8 @@ func (agg *AggregateOperator) HasNext() (bool, error) {
 // Must be called after HasNext() returns true, or will automatically
 // check for tuple availability.
 func (agg *AggregateOperator) Next() (*tuple.Tuple, error) {
-	if !agg.opened {
-		return nil, fmt.Errorf("aggregate operator not opened")
+	if err := agg.ensureOpened(); err != nil {
+		return nil, err
 	}
 
 	if !agg.hasNextCalled {
@@ -215,6 +215,14 @@ func (agg *AggregateOperator) readNext() (*tuple.Tuple, error) {
 	}
 
 	return agg.aggIterator.Next()
+}
+
+// ensureOpened checks if the operator is opened and returns an error if not
+func (agg *AggregateOperator) ensureOpened() error {
+	if !agg.opened {
+		return fmt.Errorf("aggregate operator not opened")
+	}
+	return nil
 }
 
 // validateInputs validates the constructor parameters
