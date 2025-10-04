@@ -132,7 +132,7 @@ func TestSelectPlan_Execute_SelectAll(t *testing.T) {
 	os.Mkdir("data", 0755)
 
 	tableManager := memory.NewTableManager()
-	pageStore := memory.NewPageStore(tableManager)
+	pageStore := memory.NewPageStore(tableManager, createWal(t))
 	tid := transaction.NewTransactionID()
 
 	createSelectTestTable(t, tableManager, tid)
@@ -176,7 +176,7 @@ func TestSelectPlan_Execute_WithProjection(t *testing.T) {
 	os.Mkdir("data", 0755)
 
 	tableManager := memory.NewTableManager()
-	pageStore := memory.NewPageStore(tableManager)
+	pageStore := memory.NewPageStore(tableManager, createWal(t))
 	tid := transaction.NewTransactionID()
 
 	createSelectTestTable(t, tableManager, tid)
@@ -229,7 +229,7 @@ func TestSelectPlan_Execute_WithFilter(t *testing.T) {
 	os.Mkdir("data", 0755)
 
 	tableManager := memory.NewTableManager()
-	pageStore := memory.NewPageStore(tableManager)
+	pageStore := memory.NewPageStore(tableManager, createWal(t))
 	tid := transaction.NewTransactionID()
 
 	createSelectTestTable(t, tableManager, tid)
@@ -267,7 +267,7 @@ func TestSelectPlan_Execute_WithFilterAndProjection(t *testing.T) {
 	os.Mkdir("data", 0755)
 
 	tableManager := memory.NewTableManager()
-	pageStore := memory.NewPageStore(tableManager)
+	pageStore := memory.NewPageStore(tableManager, createWal(t))
 	tid := transaction.NewTransactionID()
 
 	createSelectTestTable(t, tableManager, tid)
@@ -315,7 +315,7 @@ func TestSelectPlan_Execute_Error_NoTables(t *testing.T) {
 	os.Mkdir("data", 0755)
 
 	tableManager := memory.NewTableManager()
-	pageStore := memory.NewPageStore(tableManager)
+	pageStore := memory.NewPageStore(tableManager, createWal(t))
 	tid := transaction.NewTransactionID()
 
 	selectPlan := plan.NewSelectPlan()
@@ -348,7 +348,7 @@ func TestSelectPlan_Execute_Error_TableNotFound(t *testing.T) {
 	os.Mkdir("data", 0755)
 
 	tableManager := memory.NewTableManager()
-	pageStore := memory.NewPageStore(tableManager)
+	pageStore := memory.NewPageStore(tableManager, createWal(t))
 	tid := transaction.NewTransactionID()
 
 	selectPlan := plan.NewSelectPlan()
@@ -382,7 +382,7 @@ func TestSelectPlan_Execute_Error_InvalidFilterField(t *testing.T) {
 	os.Mkdir("data", 0755)
 
 	tableManager := memory.NewTableManager()
-	pageStore := memory.NewPageStore(tableManager)
+	pageStore := memory.NewPageStore(tableManager, createWal(t))
 	tid := transaction.NewTransactionID()
 
 	createSelectTestTable(t, tableManager, tid)
@@ -420,7 +420,7 @@ func TestSelectPlan_Execute_Error_InvalidSelectField(t *testing.T) {
 	os.Mkdir("data", 0755)
 
 	tableManager := memory.NewTableManager()
-	pageStore := memory.NewPageStore(tableManager)
+	pageStore := memory.NewPageStore(tableManager, createWal(t))
 	tid := transaction.NewTransactionID()
 
 	createSelectTestTable(t, tableManager, tid)
@@ -458,7 +458,7 @@ func TestSelectPlan_Execute_EmptyTableWithFilters(t *testing.T) {
 	os.Mkdir("data", 0755)
 
 	tableManager := memory.NewTableManager()
-	pageStore := memory.NewPageStore(tableManager)
+	pageStore := memory.NewPageStore(tableManager, createWal(t))
 	tid := transaction.NewTransactionID()
 
 	createSelectTestTable(t, tableManager, tid)
@@ -495,7 +495,7 @@ func TestSelectPlan_Execute_MultipleFilters(t *testing.T) {
 	os.Mkdir("data", 0755)
 
 	tableManager := memory.NewTableManager()
-	pageStore := memory.NewPageStore(tableManager)
+	pageStore := memory.NewPageStore(tableManager, createWal(t))
 	tid := transaction.NewTransactionID()
 
 	createSelectTestTable(t, tableManager, tid)
@@ -533,7 +533,7 @@ func TestSelectPlan_Execute_StringFilter(t *testing.T) {
 	os.Mkdir("data", 0755)
 
 	tableManager := memory.NewTableManager()
-	pageStore := memory.NewPageStore(tableManager)
+	pageStore := memory.NewPageStore(tableManager, createWal(t))
 	tid := transaction.NewTransactionID()
 
 	createSelectTestTable(t, tableManager, tid)
@@ -571,7 +571,7 @@ func TestSelectPlan_Execute_IntegerFilter(t *testing.T) {
 	os.Mkdir("data", 0755)
 
 	tableManager := memory.NewTableManager()
-	pageStore := memory.NewPageStore(tableManager)
+	pageStore := memory.NewPageStore(tableManager, createWal(t))
 	tid := transaction.NewTransactionID()
 
 	createSelectTestTable(t, tableManager, tid)
@@ -609,7 +609,7 @@ func TestSelectPlan_Execute_FloatFilter(t *testing.T) {
 	os.Mkdir("data", 0755)
 
 	tableManager := memory.NewTableManager()
-	pageStore := memory.NewPageStore(tableManager)
+	pageStore := memory.NewPageStore(tableManager, createWal(t))
 	tid := transaction.NewTransactionID()
 
 	createSelectTestTable(t, tableManager, tid)
@@ -647,7 +647,7 @@ func TestQueryResult_Values(t *testing.T) {
 	os.Mkdir("data", 0755)
 
 	tableManager := memory.NewTableManager()
-	pageStore := memory.NewPageStore(tableManager)
+	pageStore := memory.NewPageStore(tableManager, createWal(t))
 	tid := transaction.NewTransactionID()
 
 	createSelectTestTable(t, tableManager, tid)

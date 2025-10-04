@@ -2,13 +2,31 @@ package planner
 
 import (
 	"os"
+	"path/filepath"
 	"storemy/pkg/concurrency/transaction"
+	"storemy/pkg/log"
 	"storemy/pkg/memory"
 	"storemy/pkg/parser/plan"
 	"storemy/pkg/parser/statements"
 	"storemy/pkg/types"
 	"testing"
 )
+
+func createWal(t *testing.T) *log.WAL {
+	t.Helper()
+
+	tmpDir, err := os.MkdirTemp("", "wal_test_*")
+	if err != nil {
+		t.Fatalf("failed to create temp dir: %v", err)
+	}
+
+	logPath := filepath.Join(tmpDir, "test.wal")
+	wal, err := log.NewWAL(logPath, 4096)
+	if err != nil {
+		t.Fatalf("failed to create WAL: %v", err)
+	}
+	return wal
+}
 
 func executeUpdatePlan(t *testing.T, plan *UpdatePlan) (*DMLResult, error) {
 	resultAny, err := plan.Execute()
@@ -122,7 +140,7 @@ func TestUpdatePlan_Execute_UpdateSingleField(t *testing.T) {
 	os.Mkdir("data", 0755)
 
 	tableManager := memory.NewTableManager()
-	pageStore := memory.NewPageStore(tableManager)
+	pageStore := memory.NewPageStore(tableManager, createWal(t))
 	tid := transaction.NewTransactionID()
 
 	createUpdateTestTable(t, tableManager, tid)
@@ -165,7 +183,7 @@ func TestUpdatePlan_Execute_UpdateMultipleFields(t *testing.T) {
 	os.Mkdir("data", 0755)
 
 	tableManager := memory.NewTableManager()
-	pageStore := memory.NewPageStore(tableManager)
+	pageStore := memory.NewPageStore(tableManager, createWal(t))
 	tid := transaction.NewTransactionID()
 
 	createUpdateTestTable(t, tableManager, tid)
@@ -210,7 +228,7 @@ func TestUpdatePlan_Execute_UpdateMultipleRows(t *testing.T) {
 	os.Mkdir("data", 0755)
 
 	tableManager := memory.NewTableManager()
-	pageStore := memory.NewPageStore(tableManager)
+	pageStore := memory.NewPageStore(tableManager, createWal(t))
 	tid := transaction.NewTransactionID()
 
 	createUpdateTestTable(t, tableManager, tid)
@@ -253,7 +271,7 @@ func TestUpdatePlan_Execute_UpdateAllRows(t *testing.T) {
 	os.Mkdir("data", 0755)
 
 	tableManager := memory.NewTableManager()
-	pageStore := memory.NewPageStore(tableManager)
+	pageStore := memory.NewPageStore(tableManager, createWal(t))
 	tid := transaction.NewTransactionID()
 
 	createUpdateTestTable(t, tableManager, tid)
@@ -293,7 +311,7 @@ func TestUpdatePlan_Execute_UpdateWithIntegerFilter(t *testing.T) {
 	os.Mkdir("data", 0755)
 
 	tableManager := memory.NewTableManager()
-	pageStore := memory.NewPageStore(tableManager)
+	pageStore := memory.NewPageStore(tableManager, createWal(t))
 	tid := transaction.NewTransactionID()
 
 	createUpdateTestTable(t, tableManager, tid)
@@ -331,7 +349,7 @@ func TestUpdatePlan_Execute_UpdateWithFloatFilter(t *testing.T) {
 	os.Mkdir("data", 0755)
 
 	tableManager := memory.NewTableManager()
-	pageStore := memory.NewPageStore(tableManager)
+	pageStore := memory.NewPageStore(tableManager, createWal(t))
 	tid := transaction.NewTransactionID()
 
 	createUpdateTestTable(t, tableManager, tid)
@@ -369,7 +387,7 @@ func TestUpdatePlan_Execute_NoMatchingRows(t *testing.T) {
 	os.Mkdir("data", 0755)
 
 	tableManager := memory.NewTableManager()
-	pageStore := memory.NewPageStore(tableManager)
+	pageStore := memory.NewPageStore(tableManager, createWal(t))
 	tid := transaction.NewTransactionID()
 
 	createUpdateTestTable(t, tableManager, tid)
@@ -412,7 +430,7 @@ func TestUpdatePlan_Execute_Error_TableNotFound(t *testing.T) {
 	os.Mkdir("data", 0755)
 
 	tableManager := memory.NewTableManager()
-	pageStore := memory.NewPageStore(tableManager)
+	pageStore := memory.NewPageStore(tableManager, createWal(t))
 	tid := transaction.NewTransactionID()
 
 	stmt := statements.NewUpdateStatement("nonexistent_table", "nonexistent_table")
@@ -445,7 +463,7 @@ func TestUpdatePlan_Execute_Error_InvalidField(t *testing.T) {
 	os.Mkdir("data", 0755)
 
 	tableManager := memory.NewTableManager()
-	pageStore := memory.NewPageStore(tableManager)
+	pageStore := memory.NewPageStore(tableManager, createWal(t))
 	tid := transaction.NewTransactionID()
 
 	createUpdateTestTable(t, tableManager, tid)
@@ -480,7 +498,7 @@ func TestUpdatePlan_Execute_Error_InvalidWhereField(t *testing.T) {
 	os.Mkdir("data", 0755)
 
 	tableManager := memory.NewTableManager()
-	pageStore := memory.NewPageStore(tableManager)
+	pageStore := memory.NewPageStore(tableManager, createWal(t))
 	tid := transaction.NewTransactionID()
 
 	createUpdateTestTable(t, tableManager, tid)
@@ -518,7 +536,7 @@ func TestUpdatePlan_Execute_EmptyTable(t *testing.T) {
 	os.Mkdir("data", 0755)
 
 	tableManager := memory.NewTableManager()
-	pageStore := memory.NewPageStore(tableManager)
+	pageStore := memory.NewPageStore(tableManager, createWal(t))
 	tid := transaction.NewTransactionID()
 
 	createUpdateTestTable(t, tableManager, tid)
@@ -557,7 +575,7 @@ func TestUpdatePlan_getTableMetadata(t *testing.T) {
 	os.Mkdir("data", 0755)
 
 	tableManager := memory.NewTableManager()
-	pageStore := memory.NewPageStore(tableManager)
+	pageStore := memory.NewPageStore(tableManager, createWal(t))
 	tid := transaction.NewTransactionID()
 
 	createUpdateTestTable(t, tableManager, tid)
@@ -594,7 +612,7 @@ func TestUpdatePlan_findFieldIndex(t *testing.T) {
 	os.Mkdir("data", 0755)
 
 	tableManager := memory.NewTableManager()
-	pageStore := memory.NewPageStore(tableManager)
+	pageStore := memory.NewPageStore(tableManager, createWal(t))
 	tid := transaction.NewTransactionID()
 
 	createUpdateTestTable(t, tableManager, tid)
@@ -648,7 +666,7 @@ func TestUpdatePlan_buildUpdateMap(t *testing.T) {
 	os.Mkdir("data", 0755)
 
 	tableManager := memory.NewTableManager()
-	pageStore := memory.NewPageStore(tableManager)
+	pageStore := memory.NewPageStore(tableManager, createWal(t))
 	tid := transaction.NewTransactionID()
 
 	createUpdateTestTable(t, tableManager, tid)

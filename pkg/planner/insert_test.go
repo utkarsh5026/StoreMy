@@ -81,7 +81,7 @@ func TestInsertPlan_Execute_SingleRow(t *testing.T) {
 	os.Mkdir("data", 0755)
 
 	tableManager := memory.NewTableManager()
-	pageStore := memory.NewPageStore(tableManager)
+	pageStore := memory.NewPageStore(tableManager, createWal(t))
 	tid := transaction.NewTransactionID()
 
 	createTestTable(t, tableManager, tid)
@@ -126,13 +126,13 @@ func TestInsertPlan_Execute_MultipleRows(t *testing.T) {
 	os.Mkdir("data", 0755)
 
 	tableManager := memory.NewTableManager()
-	pageStore := memory.NewPageStore(tableManager)
+	pageStore := memory.NewPageStore(tableManager, createWal(t))
 	tid := transaction.NewTransactionID()
 
 	createTestTable(t, tableManager, tid)
 
 	stmt := statements.NewInsertStatement("test_table")
-	
+
 	values1 := []types.Field{
 		&types.IntField{Value: 1},
 		types.NewStringField("John", types.StringMaxSize),
@@ -176,14 +176,14 @@ func TestInsertPlan_Execute_WithSpecificFields(t *testing.T) {
 	os.Mkdir("data", 0755)
 
 	tableManager := memory.NewTableManager()
-	pageStore := memory.NewPageStore(tableManager)
+	pageStore := memory.NewPageStore(tableManager, createWal(t))
 	tid := transaction.NewTransactionID()
 
 	createTestTable(t, tableManager, tid)
 
 	stmt := statements.NewInsertStatement("test_table")
 	stmt.AddFieldNames([]string{"id", "name", "active", "price"})
-	
+
 	values := []types.Field{
 		&types.IntField{Value: 1},
 		types.NewStringField("John", types.StringMaxSize),
@@ -214,7 +214,7 @@ func TestInsertPlan_Execute_Error_TableNotFound(t *testing.T) {
 	os.Mkdir("data", 0755)
 
 	tableManager := memory.NewTableManager()
-	pageStore := memory.NewPageStore(tableManager)
+	pageStore := memory.NewPageStore(tableManager, createWal(t))
 	tid := transaction.NewTransactionID()
 
 	stmt := statements.NewInsertStatement("nonexistent_table")
@@ -250,7 +250,7 @@ func TestInsertPlan_Execute_Error_ValueCountMismatch(t *testing.T) {
 	os.Mkdir("data", 0755)
 
 	tableManager := memory.NewTableManager()
-	pageStore := memory.NewPageStore(tableManager)
+	pageStore := memory.NewPageStore(tableManager, createWal(t))
 	tid := transaction.NewTransactionID()
 
 	createTestTable(t, tableManager, tid)
@@ -289,14 +289,14 @@ func TestInsertPlan_Execute_Error_InvalidFieldName(t *testing.T) {
 	os.Mkdir("data", 0755)
 
 	tableManager := memory.NewTableManager()
-	pageStore := memory.NewPageStore(tableManager)
+	pageStore := memory.NewPageStore(tableManager, createWal(t))
 	tid := transaction.NewTransactionID()
 
 	createTestTable(t, tableManager, tid)
 
 	stmt := statements.NewInsertStatement("test_table")
 	stmt.AddFieldNames([]string{"id", "invalid_field"})
-	
+
 	values := []types.Field{
 		&types.IntField{Value: 1},
 		types.NewStringField("John", types.StringMaxSize),
@@ -330,14 +330,14 @@ func TestInsertPlan_Execute_Error_ValueCountMismatchWithFields(t *testing.T) {
 	os.Mkdir("data", 0755)
 
 	tableManager := memory.NewTableManager()
-	pageStore := memory.NewPageStore(tableManager)
+	pageStore := memory.NewPageStore(tableManager, createWal(t))
 	tid := transaction.NewTransactionID()
 
 	createTestTable(t, tableManager, tid)
 
 	stmt := statements.NewInsertStatement("test_table")
 	stmt.AddFieldNames([]string{"id", "name"})
-	
+
 	values := []types.Field{
 		&types.IntField{Value: 1},
 	}
@@ -370,14 +370,14 @@ func TestInsertPlan_Execute_Error_MissingValueForField(t *testing.T) {
 	os.Mkdir("data", 0755)
 
 	tableManager := memory.NewTableManager()
-	pageStore := memory.NewPageStore(tableManager)
+	pageStore := memory.NewPageStore(tableManager, createWal(t))
 	tid := transaction.NewTransactionID()
 
 	createTestTable(t, tableManager, tid)
 
 	stmt := statements.NewInsertStatement("test_table")
 	stmt.AddFieldNames([]string{"id", "price"})
-	
+
 	values := []types.Field{
 		&types.IntField{Value: 1},
 		&types.Float64Field{Value: 99.99},
@@ -410,7 +410,7 @@ func TestInsertPlan_Execute_EmptyValues(t *testing.T) {
 	os.Mkdir("data", 0755)
 
 	tableManager := memory.NewTableManager()
-	pageStore := memory.NewPageStore(tableManager)
+	pageStore := memory.NewPageStore(tableManager, createWal(t))
 	tid := transaction.NewTransactionID()
 
 	createTestTable(t, tableManager, tid)
@@ -444,7 +444,7 @@ func TestInsertPlan_getTableID(t *testing.T) {
 	os.Mkdir("data", 0755)
 
 	tableManager := memory.NewTableManager()
-	pageStore := memory.NewPageStore(tableManager)
+	pageStore := memory.NewPageStore(tableManager, createWal(t))
 	tid := transaction.NewTransactionID()
 
 	createTestTable(t, tableManager, tid)
@@ -473,7 +473,7 @@ func TestInsertPlan_getTupleDesc(t *testing.T) {
 	os.Mkdir("data", 0755)
 
 	tableManager := memory.NewTableManager()
-	pageStore := memory.NewPageStore(tableManager)
+	pageStore := memory.NewPageStore(tableManager, createWal(t))
 	tid := transaction.NewTransactionID()
 
 	createTestTable(t, tableManager, tid)
@@ -505,7 +505,7 @@ func TestInsertPlan_createFieldMapping(t *testing.T) {
 	os.Mkdir("data", 0755)
 
 	tableManager := memory.NewTableManager()
-	pageStore := memory.NewPageStore(tableManager)
+	pageStore := memory.NewPageStore(tableManager, createWal(t))
 	tid := transaction.NewTransactionID()
 
 	createTestTable(t, tableManager, tid)
@@ -547,7 +547,7 @@ func TestInsertPlan_createFieldMapping_EmptyFields(t *testing.T) {
 	os.Mkdir("data", 0755)
 
 	tableManager := memory.NewTableManager()
-	pageStore := memory.NewPageStore(tableManager)
+	pageStore := memory.NewPageStore(tableManager, createWal(t))
 	tid := transaction.NewTransactionID()
 
 	createTestTable(t, tableManager, tid)
@@ -580,7 +580,7 @@ func TestInsertPlan_validateValueCount(t *testing.T) {
 	os.Mkdir("data", 0755)
 
 	tableManager := memory.NewTableManager()
-	pageStore := memory.NewPageStore(tableManager)
+	pageStore := memory.NewPageStore(tableManager, createWal(t))
 	tid := transaction.NewTransactionID()
 
 	createTestTable(t, tableManager, tid)
