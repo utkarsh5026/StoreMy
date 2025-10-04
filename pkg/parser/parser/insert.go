@@ -8,25 +8,18 @@ import (
 )
 
 func parseInsertStatement(l *lexer.Lexer) (*statements.InsertStatement, error) {
-	token := l.NextToken()
-	if err := expectToken(token, lexer.INSERT); err != nil {
+	if err := expectTokenSequence(l, lexer.INSERT, lexer.INTO); err != nil {
 		return nil, err
 	}
 
-	token = l.NextToken()
-	if err := expectToken(token, lexer.INTO); err != nil {
+	tableName, _, err := parseTableWithAlias(l)
+	if err != nil {
 		return nil, err
 	}
 
-	token = l.NextToken()
-	if err := expectToken(token, lexer.IDENTIFIER); err != nil {
-		return nil, err
-	}
-
-	tableName := token.Value
 	statement := statements.NewInsertStatement(tableName)
 
-	token = l.NextToken()
+	token := l.NextToken()
 	if token.Type == lexer.LPAREN {
 		fields, err := parseFieldList(l)
 		if err != nil {
@@ -70,46 +63,19 @@ func parseInsertValues(l *lexer.Lexer, stmt *statements.InsertStatement) (*state
 }
 
 func parseValueList(l *lexer.Lexer) ([]types.Field, error) {
-	values := make([]types.Field, 0)
-
-	for {
-		value, err := parseValue(l)
-		if err != nil {
-			return nil, err
-		}
-		values = append(values, value)
-
-		token := l.NextToken()
-		if token.Type == lexer.COMMA {
-			continue
-		} else if token.Type == lexer.RPAREN {
-			break
-		} else {
-			return nil, fmt.Errorf("expected ',' or ')', got %s", token.Value)
-		}
-	}
-
-	return values, nil
+	return parseDelimitedList(l, parseValue, lexer.COMMA, lexer.RPAREN)
 }
 
 func parseFieldList(l *lexer.Lexer) ([]string, error) {
-	fields := make([]string, 0)
-	for {
-		token := l.NextToken()
-		if token.Type != lexer.IDENTIFIER {
-			return nil, fmt.Errorf("expected field name, got %s", token.Value)
-		}
-
-		fields = append(fields, token.Value)
-		token = l.NextToken()
-		if token.Type == lexer.COMMA {
-			continue
-		} else if token.Type == lexer.RPAREN {
-			break
-		} else {
-			return nil, fmt.Errorf("expected comma or right parenthesis, got %s", token.Value)
-		}
-	}
-
-	return fields, nil
+	return parseDelimitedList(l,
+		func(l *lexer.Lexer) (string, error) {
+			token := l.NextToken()
+			if err := expectToken(token, lexer.IDENTIFIER); err != nil {
+				return "", err
+			}
+			return token.Value, nil
+		},
+		lexer.COMMA,
+		lexer.RPAREN,
+	)
 }
