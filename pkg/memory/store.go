@@ -61,12 +61,7 @@ type PageStore struct {
 }
 
 // NewPageStore creates and initializes a new PageStore instance
-func NewPageStore(tm *TableManager, walPath string, bufferSize int) (*PageStore, error) {
-	wal, err := log.NewWAL(walPath, bufferSize)
-	if err != nil {
-		return nil, fmt.Errorf("failed to initialize WAL: %v", err)
-	}
-
+func NewPageStore(tm *TableManager, wal *log.WAL) (*PageStore, error) {
 	return &PageStore{
 		cache:        NewLRUPageCache(MaxPageCount),
 		txManager:    NewTransactionManager(wal),
