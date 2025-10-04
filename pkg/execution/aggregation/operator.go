@@ -28,23 +28,11 @@ type AggregateOperator struct {
 // NewAggregateOperator creates a new aggregate operator with the specified configuration.
 // The operator will aggregate values from aggregateField, optionally grouping by groupByField.
 func NewAggregateOperator(source iterator.DbIterator, aggregateField, groupByField int, op AggregateOp) (*AggregateOperator, error) {
-	if source == nil {
-		return nil, fmt.Errorf("source iterator cannot be nil")
+	if err := validateInputs(source, aggregateField, groupByField); err != nil {
+		return nil, err
 	}
 
 	sourceDesc := source.GetTupleDesc()
-	if sourceDesc == nil {
-		return nil, fmt.Errorf("source tuple description cannot be nil")
-	}
-
-	if aggregateField < 0 || aggregateField >= len(sourceDesc.Types) {
-		return nil, fmt.Errorf("invalid aggregate field index: %d", aggregateField)
-	}
-
-	if groupByField != NoGrouping && (groupByField < 0 || groupByField >= len(sourceDesc.Types)) {
-		return nil, fmt.Errorf("invalid group field index: %d", groupByField)
-	}
-
 	aggOp := &AggregateOperator{
 		source:         source,
 		aggregateField: aggregateField,
@@ -59,37 +47,10 @@ func NewAggregateOperator(source iterator.DbIterator, aggregateField, groupByFie
 		gbFieldType = sourceDesc.Types[groupByField]
 	}
 
-	switch aggFieldType {
-	case types.IntType:
-		var err error
-		aggOp.aggregator, err = NewIntAggregator(groupByField, gbFieldType, aggregateField, op)
-		if err != nil {
-			return nil, err
-		}
-
-	case types.BoolType:
-		var err error
-		aggOp.aggregator, err = NewBooleanAggregator(groupByField, gbFieldType, aggregateField, op)
-		if err != nil {
-			return nil, err
-		}
-
-	case types.StringType:
-		var err error
-		aggOp.aggregator, err = NewStringAggregator(groupByField, gbFieldType, aggregateField, op)
-		if err != nil {
-			return nil, err
-		}
-
-	case types.FloatType:
-		var err error
-		aggOp.aggregator, err = NewFloatAggregator(groupByField, gbFieldType, aggregateField, op)
-		if err != nil {
-			return nil, err
-		}
-
-	default:
-		return nil, fmt.Errorf("unsupported field type for aggregation: %v", aggFieldType)
+	var err error
+	aggOp.aggregator, err = createAggregator(aggFieldType, groupByField, gbFieldType, aggregateField, op)
+	if err != nil {
+		return nil, err
 	}
 
 	aggOp.tupleDesc = aggOp.aggregator.GetTupleDesc()
@@ -254,4 +215,41 @@ func (agg *AggregateOperator) readNext() (*tuple.Tuple, error) {
 	}
 
 	return agg.aggIterator.Next()
+}
+
+// validateInputs validates the constructor parameters
+func validateInputs(source iterator.DbIterator, aggregateField, groupByField int) error {
+	if source == nil {
+		return fmt.Errorf("source iterator cannot be nil")
+	}
+
+	sourceDesc := source.GetTupleDesc()
+	if sourceDesc == nil {
+		return fmt.Errorf("source tuple description cannot be nil")
+	}
+
+	if aggregateField < 0 || aggregateField >= len(sourceDesc.Types) {
+		return fmt.Errorf("invalid aggregate field index: %d", aggregateField)
+	}
+
+	if groupByField != NoGrouping && (groupByField < 0 || groupByField >= len(sourceDesc.Types)) {
+		return fmt.Errorf("invalid group field index: %d", groupByField)
+	}
+
+	return nil
+}
+
+func createAggregator(fieldType types.Type, groupByField int, gbFieldType types.Type, aggregateField int, op AggregateOp) (Aggregator, error) {
+	switch fieldType {
+	case types.IntType:
+		return NewIntAggregator(groupByField, gbFieldType, aggregateField, op)
+	case types.BoolType:
+		return NewBooleanAggregator(groupByField, gbFieldType, aggregateField, op)
+	case types.StringType:
+		return NewStringAggregator(groupByField, gbFieldType, aggregateField, op)
+	case types.FloatType:
+		return NewFloatAggregator(groupByField, gbFieldType, aggregateField, op)
+	default:
+		return nil, fmt.Errorf("unsupported field type for aggregation: %v", fieldType)
+	}
 }
