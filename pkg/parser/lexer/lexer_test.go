@@ -224,6 +224,66 @@ func TestLexerPunctuation(t *testing.T) {
 	}
 }
 
+func TestLexerAsterisk(t *testing.T) {
+	tests := []struct {
+		input    string
+		expected []Token
+	}{
+		{
+			input: "*",
+			expected: []Token{
+				{Type: ASTERISK, Value: "*", Position: 0},
+				{Type: EOF, Value: "", Position: 1},
+			},
+		},
+		{
+			input: "SELECT * FROM",
+			expected: []Token{
+				{Type: SELECT, Value: "SELECT", Position: 0},
+				{Type: ASTERISK, Value: "*", Position: 7},
+				{Type: FROM, Value: "FROM", Position: 9},
+				{Type: EOF, Value: "", Position: 13},
+			},
+		},
+		{
+			input: "SELECT*FROM",
+			expected: []Token{
+				{Type: SELECT, Value: "SELECT", Position: 0},
+				{Type: ASTERISK, Value: "*", Position: 6},
+				{Type: FROM, Value: "FROM", Position: 7},
+				{Type: EOF, Value: "", Position: 11},
+			},
+		},
+		{
+			input: "SELECT * , name FROM",
+			expected: []Token{
+				{Type: SELECT, Value: "SELECT", Position: 0},
+				{Type: ASTERISK, Value: "*", Position: 7},
+				{Type: COMMA, Value: ",", Position: 9},
+				{Type: IDENTIFIER, Value: "NAME", Position: 11},
+				{Type: FROM, Value: "FROM", Position: 16},
+				{Type: EOF, Value: "", Position: 20},
+			},
+		},
+	}
+
+	for _, test := range tests {
+		lexer := NewLexer(test.input)
+		for i, expected := range test.expected {
+			token := lexer.NextToken()
+			if token.Type != expected.Type {
+				t.Errorf("Test %s, token %d: expected type %s (%d), got %s (%d)", test.input, i, expected.Type.String(), expected.Type, token.Type.String(), token.Type)
+			}
+			if token.Value != expected.Value {
+				t.Errorf("Test %s, token %d: expected value %s, got %s", test.input, i, expected.Value, token.Value)
+			}
+			if token.Position != expected.Position {
+				t.Errorf("Test %s, token %d: expected position %d, got %d", test.input, i, expected.Position, token.Position)
+			}
+		}
+	}
+}
+
 func TestLexerOperators(t *testing.T) {
 	tests := []struct {
 		input    string
@@ -482,6 +542,76 @@ func TestLexerComplexSQL(t *testing.T) {
 		if token.Position != expectedToken.Position {
 			t.Errorf("Token %d: expected position %d, got %d", i, expectedToken.Position, token.Position)
 		}
+	}
+}
+
+func TestLexerSelectStarQueries(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    string
+		expected []Token
+	}{
+		{
+			name:  "Simple SELECT * FROM",
+			input: "SELECT * FROM users",
+			expected: []Token{
+				{Type: SELECT, Value: "SELECT", Position: 0},
+				{Type: ASTERISK, Value: "*", Position: 7},
+				{Type: FROM, Value: "FROM", Position: 9},
+				{Type: IDENTIFIER, Value: "USERS", Position: 14},
+				{Type: EOF, Value: "", Position: 19},
+			},
+		},
+		{
+			name:  "SELECT * with JOIN",
+			input: "SELECT * FROM users JOIN orders ON users.id = orders.user_id",
+			expected: []Token{
+				{Type: SELECT, Value: "SELECT", Position: 0},
+				{Type: ASTERISK, Value: "*", Position: 7},
+				{Type: FROM, Value: "FROM", Position: 9},
+				{Type: IDENTIFIER, Value: "USERS", Position: 14},
+				{Type: JOIN, Value: "JOIN", Position: 20},
+				{Type: IDENTIFIER, Value: "ORDERS", Position: 25},
+				{Type: ON, Value: "ON", Position: 32},
+				{Type: IDENTIFIER, Value: "USERS.ID", Position: 35},
+				{Type: OPERATOR, Value: "=", Position: 44},
+				{Type: IDENTIFIER, Value: "ORDERS.USER_ID", Position: 46},
+				{Type: EOF, Value: "", Position: 60},
+			},
+		},
+		{
+			name:  "SELECT * with WHERE",
+			input: "SELECT * FROM users WHERE id > 10",
+			expected: []Token{
+				{Type: SELECT, Value: "SELECT", Position: 0},
+				{Type: ASTERISK, Value: "*", Position: 7},
+				{Type: FROM, Value: "FROM", Position: 9},
+				{Type: IDENTIFIER, Value: "USERS", Position: 14},
+				{Type: WHERE, Value: "WHERE", Position: 20},
+				{Type: IDENTIFIER, Value: "ID", Position: 26},
+				{Type: OPERATOR, Value: ">", Position: 29},
+				{Type: INT, Value: "10", Position: 31},
+				{Type: EOF, Value: "", Position: 33},
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			lexer := NewLexer(test.input)
+			for i, expectedToken := range test.expected {
+				token := lexer.NextToken()
+				if token.Type != expectedToken.Type {
+					t.Errorf("Token %d: expected type %s (%d), got %s (%d)", i, expectedToken.Type.String(), expectedToken.Type, token.Type.String(), token.Type)
+				}
+				if token.Value != expectedToken.Value {
+					t.Errorf("Token %d: expected value %s, got %s", i, expectedToken.Value, token.Value)
+				}
+				if token.Position != expectedToken.Position {
+					t.Errorf("Token %d: expected position %d, got %d", i, expectedToken.Position, token.Position)
+				}
+			}
+		})
 	}
 }
 
