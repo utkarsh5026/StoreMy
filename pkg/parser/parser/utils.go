@@ -59,3 +59,32 @@ func parseOperator(op string) (types.Predicate, error) {
 		return types.Equals, fmt.Errorf("unknown operator: %s", op)
 	}
 }
+
+func expectTokenSequence(l *lexer.Lexer, expectedTypes ...lexer.TokenType) error {
+	for _, expectedType := range expectedTypes {
+		token := l.NextToken()
+		if err := expectToken(token, expectedType); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func parseTableWithAlias(l *lexer.Lexer) (tableName, alias string, err error) {
+	token := l.NextToken()
+	if err := expectToken(token, lexer.IDENTIFIER); err != nil {
+		return "", "", err
+	}
+
+	tableName = token.Value
+	alias = tableName
+
+	nextToken := l.NextToken()
+	if nextToken.Type == lexer.IDENTIFIER {
+		alias = nextToken.Value
+	} else {
+		l.SetPos(nextToken.Position)
+	}
+
+	return tableName, alias, nil
+}
