@@ -282,8 +282,8 @@ func TestReadPrimaryKey_MissingFieldName(t *testing.T) {
 		t.Error("expected error for missing field name")
 	}
 
-	if err.Error() != "expected IDENTIFIER, got )" {
-		t.Errorf("expected 'expected IDENTIFIER, got )', got %s", err.Error())
+	if err.Error() != "expected field name in PRIMARY KEY: expected value of type [IDENTIFIER], got )" {
+		t.Errorf("expected 'expected field name in PRIMARY KEY: expected value of type [IDENTIFIER], got )', got %s", err.Error())
 	}
 }
 
