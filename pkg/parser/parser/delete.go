@@ -7,6 +7,8 @@ import (
 	"storemy/pkg/parser/statements"
 )
 
+// parseDeleteStatement parses a DELETE SQL statement from the lexer tokens.
+// It expects the format: DELETE FROM table_name [alias] [WHERE condition]
 func parseDeleteStatement(l *lexer.Lexer) (*statements.DeleteStatement, error) {
 	if err := expectTokenSequence(l, lexer.DELETE, lexer.FROM); err != nil {
 		return nil, err
@@ -18,7 +20,6 @@ func parseDeleteStatement(l *lexer.Lexer) (*statements.DeleteStatement, error) {
 	}
 
 	statement := statements.NewDeleteStatement(tableName, alias)
-
 	token := l.NextToken()
 	if token.Type == lexer.WHERE {
 		filter, err := parseWhereCondition(l)
@@ -33,6 +34,9 @@ func parseDeleteStatement(l *lexer.Lexer) (*statements.DeleteStatement, error) {
 	return statement, nil
 }
 
+// parseWhereCondition parses a WHERE clause condition for filtering records.
+// It expects the format: field_name operator value
+// Currently supports simple conditions with a single field, operator, and constant value.
 func parseWhereCondition(l *lexer.Lexer) (*plan.FilterNode, error) {
 	fieldName, err := parseValueWithType(l, lexer.IDENTIFIER)
 	if err != nil {
