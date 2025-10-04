@@ -17,6 +17,7 @@ import (
 
 type Configuration struct {
 	DatabaseName string
+	LogPath      string
 	DataDir      string
 	DemoMode     bool
 	ImportFile   string
@@ -104,7 +105,7 @@ func initializeDatabase(config Configuration) (*database.Database, error) {
 		return nil, fmt.Errorf("failed to create data directory: %v", err)
 	}
 
-	db, err := database.NewDatabase(config.DatabaseName, config.DataDir)
+	db, err := database.NewDatabase(config.DatabaseName, config.DataDir, config.LogPath)
 	if err != nil {
 		return nil, err
 	}
