@@ -8,7 +8,6 @@ import (
 	"storemy/pkg/concurrency/transaction"
 	"storemy/pkg/tuple"
 	"sync"
-	"time"
 )
 
 const (
@@ -55,13 +54,7 @@ func (w *WAL) LogBegin(tid *transaction.TransactionID) (LSN, error) {
 	w.mutex.Lock()
 	defer w.mutex.Unlock()
 
-	record := &LogRecord{
-		Type:      BeginRecord,
-		TID:       tid,
-		PrevLSN:   FirstLSN,
-		Timestamp: time.Now(),
-	}
-
+	record := NewLogRecord(BeginRecord, tid, nil, nil, nil, FirstLSN)
 	lsn, err := w.writeRecord(record)
 	if err != nil {
 		return 0, err
@@ -79,10 +72,10 @@ func (w *WAL) LogBegin(tid *transaction.TransactionID) (LSN, error) {
 func (w *WAL) LogCommit(tid *transaction.TransactionID) (LSN, error) {
 	w.mutex.Lock()
 
-	txnInfo, exists := w.activeTxns[tid]
-	if !exists {
+	txnInfo, err := w.getTransactionInfo(tid)
+	if err != nil {
 		w.mutex.Unlock()
-		return 0, fmt.Errorf("transaction %v not found in active transactions", tid)
+		return 0, err
 	}
 
 	record := NewLogRecord(CommitRecord, tid, nil, nil, nil, txnInfo.LastLSN)
@@ -112,9 +105,9 @@ func (w *WAL) LogAbort(tid *transaction.TransactionID) (LSN, error) {
 	w.mutex.Lock()
 	defer w.mutex.Unlock()
 
-	txnInfo, exists := w.activeTxns[tid]
-	if !exists {
-		return 0, fmt.Errorf("transaction %v not found in active transactions", tid)
+	txnInfo, err := w.getTransactionInfo(tid)
+	if err != nil {
+		return 0, err
 	}
 
 	record := NewLogRecord(AbortRecord, tid, nil, nil, nil, txnInfo.LastLSN)
@@ -151,9 +144,9 @@ func (w *WAL) LogUpdate(tid *transaction.TransactionID, pageID tuple.PageID, bef
 	w.mutex.Lock()
 	defer w.mutex.Unlock()
 
-	txnInfo, exists := w.activeTxns[tid]
-	if !exists {
-		return 0, fmt.Errorf("transaction %v not found in active transactions", tid)
+	txnInfo, err := w.getTransactionInfo(tid)
+	if err != nil {
+		return FirstLSN, err
 	}
 
 	record := NewLogRecord(UpdateRecord, tid, pageID, beforeImage, afterImage, txnInfo.LastLSN)
@@ -179,9 +172,9 @@ func (w *WAL) LogInsert(tid *transaction.TransactionID, pageID tuple.PageID, aft
 	w.mutex.Lock()
 	defer w.mutex.Unlock()
 
-	txnInfo, exists := w.activeTxns[tid]
-	if !exists {
-		return 0, fmt.Errorf("transaction %v not found in active transactions", tid)
+	txnInfo, err := w.getTransactionInfo(tid)
+	if err != nil {
+		return FirstLSN, err
 	}
 
 	record := NewLogRecord(InsertRecord, tid, pageID, nil, afterImage, txnInfo.LastLSN)
@@ -206,9 +199,9 @@ func (w *WAL) LogDelete(tid *transaction.TransactionID, pageID tuple.PageID, bef
 	w.mutex.Lock()
 	defer w.mutex.Unlock()
 
-	txnInfo, exists := w.activeTxns[tid]
-	if !exists {
-		return 0, fmt.Errorf("transaction %v not found in active transactions", tid)
+	txnInfo, err := w.getTransactionInfo(tid)
+	if err != nil {
+		return FirstLSN, err
 	}
 
 	record := NewLogRecord(DeleteRecord, tid, pageID, beforeImage, nil, txnInfo.LastLSN)
@@ -281,4 +274,12 @@ func (w *WAL) Force(lsn LSN) error {
 	defer w.mutex.Unlock()
 
 	return w.writer.Force(lsn)
+}
+
+func (w *WAL) getTransactionInfo(tid *transaction.TransactionID) (*TransactionLogInfo, error) {
+	txnInfo, exists := w.activeTxns[tid]
+	if !exists {
+		return nil, fmt.Errorf("transaction %v not found in active transactions", tid)
+	}
+	return txnInfo, nil
 }
