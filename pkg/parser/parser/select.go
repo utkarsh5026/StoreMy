@@ -34,8 +34,16 @@ func parseSelect(l *lexer.Lexer, p *plan.SelectPlan) error {
 		return err
 	}
 
+	token = l.NextToken()
+
+	// Check for SELECT *
+	if token.Type == lexer.ASTERISK {
+		p.SetSelectAll(true)
+		return nil
+	}
+
+	// Otherwise, parse individual fields
 	for {
-		token = l.NextToken()
 		if token.Type == lexer.FROM {
 			l.SetPos(token.Position)
 			break
@@ -52,6 +60,8 @@ func parseSelect(l *lexer.Lexer, p *plan.SelectPlan) error {
 		if !consumeCommaIfPresent(l) {
 			break
 		}
+
+		token = l.NextToken()
 	}
 
 	return nil
@@ -134,15 +144,123 @@ func parseFrom(l *lexer.Lexer, p *plan.SelectPlan) error {
 		return err
 	}
 
+	// Parse first table
+	if err := parseTable(l, p); err != nil {
+		return err
+	}
+
+	// Parse JOIN clauses or comma-separated tables
 	for {
-		if err := parseTable(l, p); err != nil {
-			return err
+		token := l.NextToken()
+
+		if token.Type == lexer.COMMA {
+			// Legacy comma-separated tables (cross join)
+			if err := parseTable(l, p); err != nil {
+				return err
+			}
+			continue
 		}
 
-		if !consumeCommaIfPresent(l) {
-			return nil
+		if token.Type == lexer.INNER || token.Type == lexer.LEFT || token.Type == lexer.RIGHT || token.Type == lexer.JOIN {
+			// Handle JOIN
+			if err := parseJoin(l, p, token); err != nil {
+				return err
+			}
+			continue
 		}
+
+		// No more tables or joins
+		l.SetPos(token.Position)
+		return nil
 	}
+}
+
+func parseJoin(l *lexer.Lexer, p *plan.SelectPlan, firstToken lexer.Token) error {
+	// Determine join type
+	joinType := plan.InnerJoin // default
+
+	if firstToken.Type == lexer.INNER {
+		// Expect JOIN token
+		joinToken := l.NextToken()
+		if err := expectToken(joinToken, lexer.JOIN); err != nil {
+			return fmt.Errorf("expected JOIN after INNER, got %s", joinToken.Value)
+		}
+		joinType = plan.InnerJoin
+	} else if firstToken.Type == lexer.LEFT {
+		// Expect optional OUTER, then JOIN
+		nextToken := l.NextToken()
+		if nextToken.Type == lexer.OUTER {
+			nextToken = l.NextToken()
+		}
+		if err := expectToken(nextToken, lexer.JOIN); err != nil {
+			return fmt.Errorf("expected JOIN after LEFT, got %s", nextToken.Value)
+		}
+		joinType = plan.LeftJoin
+	} else if firstToken.Type == lexer.RIGHT {
+		// Expect optional OUTER, then JOIN
+		nextToken := l.NextToken()
+		if nextToken.Type == lexer.OUTER {
+			nextToken = l.NextToken()
+		}
+		if err := expectToken(nextToken, lexer.JOIN); err != nil {
+			return fmt.Errorf("expected JOIN after RIGHT, got %s", nextToken.Value)
+		}
+		joinType = plan.RightJoin
+	}
+	// else firstToken.Type == lexer.JOIN, already consumed
+
+	// Parse table name and optional alias
+	tableToken := l.NextToken()
+	if err := expectToken(tableToken, lexer.IDENTIFIER); err != nil {
+		return fmt.Errorf("expected table name in JOIN, got %s", tableToken.Value)
+	}
+
+	tableName := strings.ToUpper(tableToken.Value)
+	alias := tableName
+
+	// Check for table alias
+	aliasToken := l.NextToken()
+	if aliasToken.Type == lexer.IDENTIFIER {
+		alias = strings.ToUpper(aliasToken.Value)
+	} else {
+		l.SetPos(aliasToken.Position)
+	}
+
+	rightTable := plan.NewScanNode(tableName, alias)
+
+	// Expect ON keyword
+	onToken := l.NextToken()
+	if err := expectToken(onToken, lexer.ON); err != nil {
+		return fmt.Errorf("expected ON in JOIN clause, got %s", onToken.Value)
+	}
+
+	// Parse join condition: table1.field1 = table2.field2
+	leftFieldToken := l.NextToken()
+	if err := expectToken(leftFieldToken, lexer.IDENTIFIER); err != nil {
+		return fmt.Errorf("expected left field in JOIN condition, got %s", leftFieldToken.Value)
+	}
+
+	opToken := l.NextToken()
+	if err := expectToken(opToken, lexer.OPERATOR); err != nil {
+		return fmt.Errorf("expected operator in JOIN condition, got %s", opToken.Value)
+	}
+
+	rightFieldToken := l.NextToken()
+	if err := expectToken(rightFieldToken, lexer.IDENTIFIER); err != nil {
+		return fmt.Errorf("expected right field in JOIN condition, got %s", rightFieldToken.Value)
+	}
+
+	// Parse the operator
+	predicate, err := parseOperator(opToken.Value)
+	if err != nil {
+		return err
+	}
+
+	leftField := strings.ToUpper(leftFieldToken.Value)
+	rightField := strings.ToUpper(rightFieldToken.Value)
+
+	p.AddJoin(rightTable, joinType, leftField, rightField, predicate)
+	return nil
 }
 
 func parseTable(l *lexer.Lexer, p *plan.SelectPlan) error {
