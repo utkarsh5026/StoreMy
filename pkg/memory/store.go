@@ -218,11 +218,16 @@ func (p *PageStore) handleDelete(tid *transaction.TransactionID, t *tuple.Tuple,
 
 // UpdateTuple replaces an existing tuple with a new version within the given transaction.
 func (p *PageStore) UpdateTuple(tid *transaction.TransactionID, oldTuple *tuple.Tuple, newTuple *tuple.Tuple) error {
+	if oldTuple.RecordID == nil {
+		return fmt.Errorf("old tuple has no RecordID")
+	}
+
+	tableID := oldTuple.RecordID.PageID.GetTableID()
+
 	if err := p.DeleteTuple(tid, oldTuple); err != nil {
 		return fmt.Errorf("failed to delete old tuple: %v", err)
 	}
 
-	tableID := oldTuple.RecordID.PageID.GetTableID()
 	if err := p.InsertTuple(tid, tableID, newTuple); err != nil {
 		p.InsertTuple(tid, tableID, oldTuple)
 		return fmt.Errorf("failed to insert updated tuple: %v", err)
