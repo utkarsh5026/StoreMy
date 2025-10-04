@@ -130,7 +130,6 @@ func (p *PageStore) evictPage() error {
 }
 
 // InsertTuple adds a new tuple to the specified table within the given transaction context.
-// It handles page allocation, marks modified pages as dirty, and updates transaction metadata.
 func (p *PageStore) InsertTuple(tid *transaction.TransactionID, tableID int, t *tuple.Tuple) error {
 	dbFile, err := p.tableManager.GetDbFile(tableID)
 	if err != nil {
@@ -142,25 +141,12 @@ func (p *PageStore) InsertTuple(tid *transaction.TransactionID, tableID int, t *
 		return fmt.Errorf("failed to add tuple: %v", err)
 	}
 
-	p.mutex.Lock()
-	defer p.mutex.Unlock()
-
-	p.ensureTransactionExists(tid)
-
-	for _, page := range modifiedPages {
-		page.MarkDirty(true, tid)
-		p.cache.Put(page.GetID(), page)
-
-		if txInfo, exists := p.transactions[tid]; exists {
-			txInfo.dirtyPages[page.GetID()] = true
-		}
-	}
+	p.markPagesAsDirty(tid, modifiedPages)
 	return nil
 }
 
 // DeleteTuple removes a tuple from its table within the given transaction context.
 // The tuple must have a valid RecordID indicating its location in the database.
-// Modified pages are marked as dirty and tracked for the transaction.
 func (p *PageStore) DeleteTuple(tid *transaction.TransactionID, t *tuple.Tuple) error {
 	if t == nil {
 		return fmt.Errorf("tuple cannot be nil")
@@ -180,17 +166,7 @@ func (p *PageStore) DeleteTuple(tid *transaction.TransactionID, t *tuple.Tuple) 
 		return fmt.Errorf("failed to delete tuple: %v", err)
 	}
 
-	modifiedPage.MarkDirty(true, tid)
-	p.mutex.Lock()
-	defer p.mutex.Unlock()
-
-	p.ensureTransactionExists(tid)
-
-	p.cache.Put(modifiedPage.GetID(), modifiedPage)
-	if txInfo, exists := p.transactions[tid]; exists {
-		txInfo.dirtyPages[modifiedPage.GetID()] = true
-	}
-
+	p.markPagesAsDirty(tid, []page.Page{modifiedPage})
 	return nil
 }
 
@@ -214,8 +190,6 @@ func (p *PageStore) UpdateTuple(tid *transaction.TransactionID, oldTuple *tuple.
 // FlushAllPages writes all dirty pages in the cache to persistent storage.
 // This operation ensures data durability by synchronizing the in-memory cache
 // with the underlying database files. Pages are unmarked as dirty after successful writes.
-//
-// Returns an error if any page write operation fails.
 func (p *PageStore) FlushAllPages() error {
 	p.mutex.RLock()
 	pids := make([]tuple.PageID, 0, p.cache.Size())
@@ -382,12 +356,30 @@ func (p *PageStore) flushPage(pid tuple.PageID) error {
 	return nil
 }
 
-func (p *PageStore) ensureTransactionExists(tid *transaction.TransactionID) {
+// getOrCreateTransaction ensures a transaction exists and returns its info
+func (p *PageStore) getOrCreateTransaction(tid *transaction.TransactionID) *TransactionInfo {
+	p.mutex.Lock()
+	defer p.mutex.Unlock()
+
 	if _, exists := p.transactions[tid]; !exists {
 		p.transactions[tid] = &TransactionInfo{
 			startTime:   time.Now(),
 			dirtyPages:  make(map[tuple.PageID]bool),
 			lockedPages: make(map[tuple.PageID]Permissions),
 		}
+	}
+	return p.transactions[tid]
+}
+
+func (p *PageStore) markPagesAsDirty(tid *transaction.TransactionID, pages []page.Page) {
+	txInfo := p.getOrCreateTransaction(tid)
+
+	p.mutex.Lock()
+	defer p.mutex.Unlock()
+
+	for _, pg := range pages {
+		pg.MarkDirty(true, tid)
+		p.cache.Put(pg.GetID(), pg)
+		txInfo.dirtyPages[pg.GetID()] = true
 	}
 }
