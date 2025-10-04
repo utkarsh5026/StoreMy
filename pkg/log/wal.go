@@ -141,83 +141,21 @@ func (w *WAL) Close() error {
 // LogUpdate logs a page update with before and after images
 // This is called BEFORE the page is actually modified in memory
 func (w *WAL) LogUpdate(tid *transaction.TransactionID, pageID tuple.PageID, beforeImage, afterImage []byte) (LSN, error) {
-	w.mutex.Lock()
-	defer w.mutex.Unlock()
-
-	txnInfo, err := w.getTransactionInfo(tid)
-	if err != nil {
-		return FirstLSN, err
-	}
-
-	record := NewLogRecord(UpdateRecord, tid, pageID, beforeImage, afterImage, txnInfo.LastLSN)
-
-	lsn, err := w.writeRecord(record)
-	if err != nil {
-		return 0, err
-	}
-
-	txnInfo.LastLSN = lsn
-
-	if _, exists := w.dirtyPages[pageID]; !exists {
-		w.dirtyPages[pageID] = lsn
-	}
-
-	return lsn, nil
+	return w.logDataOperation(UpdateRecord, tid, pageID, beforeImage, afterImage)
 }
 
 // LogInsert logs a tuple insertion
 // Only needs after image - there's nothing to undo to (tuple didn't exist)
 // During recovery, we REDO the insert by applying the after image
 func (w *WAL) LogInsert(tid *transaction.TransactionID, pageID tuple.PageID, afterImage []byte) (LSN, error) {
-	w.mutex.Lock()
-	defer w.mutex.Unlock()
-
-	txnInfo, err := w.getTransactionInfo(tid)
-	if err != nil {
-		return FirstLSN, err
-	}
-
-	record := NewLogRecord(InsertRecord, tid, pageID, nil, afterImage, txnInfo.LastLSN)
-
-	lsn, err := w.writeRecord(record)
-	if err != nil {
-		return 0, err
-	}
-
-	txnInfo.LastLSN = lsn
-	if _, exists := w.dirtyPages[pageID]; !exists {
-		w.dirtyPages[pageID] = lsn
-	}
-
-	return lsn, nil
+	return w.logDataOperation(InsertRecord, tid, pageID, nil, afterImage)
 }
 
 // LogDelete logs a tuple deletion
 // Only needs before image - this is what we restore during UNDO
 // During recovery, REDO means "ensure tuple is deleted" (no-op if already gone)
 func (w *WAL) LogDelete(tid *transaction.TransactionID, pageID tuple.PageID, beforeImage []byte) (LSN, error) {
-	w.mutex.Lock()
-	defer w.mutex.Unlock()
-
-	txnInfo, err := w.getTransactionInfo(tid)
-	if err != nil {
-		return FirstLSN, err
-	}
-
-	record := NewLogRecord(DeleteRecord, tid, pageID, beforeImage, nil, txnInfo.LastLSN)
-
-	lsn, err := w.writeRecord(record)
-	if err != nil {
-		return 0, err
-	}
-
-	txnInfo.LastLSN = lsn
-
-	if _, exists := w.dirtyPages[pageID]; !exists {
-		w.dirtyPages[pageID] = lsn
-	}
-
-	return lsn, nil
+	return w.logDataOperation(DeleteRecord, tid, pageID, beforeImage, nil)
 }
 
 // GetDirtyPages returns a copy of the dirty page table
@@ -282,4 +220,30 @@ func (w *WAL) getTransactionInfo(tid *transaction.TransactionID) (*TransactionLo
 		return nil, fmt.Errorf("transaction %v not found in active transactions", tid)
 	}
 	return txnInfo, nil
+}
+
+// logDataOperation is a helper for logging data operations (insert, update, delete)
+func (w *WAL) logDataOperation(recordType LogRecordType, tid *transaction.TransactionID, pageID tuple.PageID, beforeImage, afterImage []byte) (LSN, error) {
+	w.mutex.Lock()
+	defer w.mutex.Unlock()
+
+	txnInfo, err := w.getTransactionInfo(tid)
+	if err != nil {
+		return FirstLSN, err
+	}
+
+	record := NewLogRecord(recordType, tid, pageID, beforeImage, afterImage, txnInfo.LastLSN)
+
+	lsn, err := w.writeRecord(record)
+	if err != nil {
+		return 0, err
+	}
+
+	txnInfo.LastLSN = lsn
+
+	if _, exists := w.dirtyPages[pageID]; !exists {
+		w.dirtyPages[pageID] = lsn
+	}
+
+	return lsn, nil
 }
