@@ -98,27 +98,17 @@ func parseIfNotExists(l *lexer.Lexer) (bool, error) {
 }
 
 func readPrimaryKey(l *lexer.Lexer, stmt *statements.CreateStatement) error {
-	token := l.NextToken()
-	if err := expectToken(token, lexer.KEY); err != nil {
+	if err := expectTokenSequence(l, lexer.KEY, lexer.LPAREN); err != nil {
 		return err
 	}
 
-	token = l.NextToken()
-	if err := expectToken(token, lexer.LPAREN); err != nil {
-		return err
+	fieldName, err := parseValueWithType(l, lexer.IDENTIFIER)
+	if err != nil {
+		return fmt.Errorf("expected field name in PRIMARY KEY: %w", err)
 	}
 
-	token = l.NextToken()
-	if err := expectToken(token, lexer.IDENTIFIER); err != nil {
-		return err
-	}
-
-	stmt.SetPrimaryKey(token.Value)
-	token = l.NextToken()
-	if err := expectToken(token, lexer.RPAREN); err != nil {
-		return err
-	}
-	return nil
+	stmt.SetPrimaryKey(fieldName)
+	return expectTokenSequence(l, lexer.RPAREN)
 }
 
 func parseDataType(token lexer.Token) (types.Type, error) {
