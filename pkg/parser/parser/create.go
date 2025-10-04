@@ -7,11 +7,14 @@ import (
 	"storemy/pkg/types"
 )
 
+// fieldConstraints represents the constraints that can be applied to a table field
 type fieldConstraints struct {
 	NotNull      bool
 	DefaultValue types.Field
 }
 
+// parseCreateStatement parses a CREATE TABLE SQL statement from the lexer tokens.
+// It expects the format: CREATE TABLE [IF NOT EXISTS] table_name (field_definitions...)
 func parseCreateStatement(l *lexer.Lexer) (*statements.CreateStatement, error) {
 	if err := expectTokenSequence(l, lexer.CREATE, lexer.TABLE); err != nil {
 		return nil, err
@@ -28,7 +31,6 @@ func parseCreateStatement(l *lexer.Lexer) (*statements.CreateStatement, error) {
 	}
 
 	stmt := statements.NewCreateStatement(tableName, ifNotExists)
-
 	if err := expectTokenSequence(l, lexer.LPAREN); err != nil {
 		return nil, err
 	}
@@ -40,6 +42,9 @@ func parseCreateStatement(l *lexer.Lexer) (*statements.CreateStatement, error) {
 	return stmt, nil
 }
 
+// parseIfNotExists checks for the optional "IF NOT EXISTS" clause in CREATE TABLE.
+// Returns true if the clause is present, false otherwise.
+// If IF is present but not followed by NOT EXISTS, returns an error.
 func parseIfNotExists(l *lexer.Lexer) (bool, error) {
 	token := l.NextToken()
 	if token.Type != lexer.IF {
@@ -54,6 +59,9 @@ func parseIfNotExists(l *lexer.Lexer) (bool, error) {
 	return true, nil
 }
 
+// readPrimaryKey parses a PRIMARY KEY constraint definition.
+// Expects format: PRIMARY KEY (field_name)
+// Sets the primary key field in the CREATE statement.
 func readPrimaryKey(l *lexer.Lexer, stmt *statements.CreateStatement) error {
 	if err := expectTokenSequence(l, lexer.KEY, lexer.LPAREN); err != nil {
 		return err
@@ -68,21 +76,27 @@ func readPrimaryKey(l *lexer.Lexer, stmt *statements.CreateStatement) error {
 	return expectTokenSequence(l, lexer.RPAREN)
 }
 
+// parseTableDefinition parses the content inside parentheses of CREATE TABLE.
+// Handles field definitions and table constraints like PRIMARY KEY.
+// Continues until closing parenthesis is found, expecting comma-separated definitions.
 func parseTableDefinition(l *lexer.Lexer, stmt *statements.CreateStatement) error {
 	for {
 		token := l.NextToken()
+		var err error
 
 		switch token.Type {
 		case lexer.PRIMARY:
-			if err := readPrimaryKey(l, stmt); err != nil {
-				return err
-			}
+			err = readPrimaryKey(l, stmt)
+
 		case lexer.IDENTIFIER:
-			if err := parseFieldDefinition(l, stmt, token.Value); err != nil {
-				return err
-			}
+			err = parseFieldDefinition(l, stmt, token.Value)
+
 		default:
 			return fmt.Errorf("expected field definition or PRIMARY KEY, got %s", token.Value)
+		}
+
+		if err != nil {
+			return err
 		}
 
 		token = l.NextToken()
@@ -97,6 +111,9 @@ func parseTableDefinition(l *lexer.Lexer, stmt *statements.CreateStatement) erro
 	return nil
 }
 
+// parseFieldDefinition parses a single field definition within CREATE TABLE.
+// Format: field_name data_type [constraints...]
+// Adds the parsed field to the CREATE statement with its type and constraints.
 func parseFieldDefinition(l *lexer.Lexer, stmt *statements.CreateStatement, fieldName string) error {
 	token := l.NextToken()
 	fieldType, err := parseDataType(token)
@@ -113,6 +130,9 @@ func parseFieldDefinition(l *lexer.Lexer, stmt *statements.CreateStatement, fiel
 	return nil
 }
 
+// parseFieldConstraints parses optional constraints for a field definition.
+// Handles NOT NULL and DEFAULT value constraints.
+// Returns when no more recognized constraint tokens are found.
 func parseFieldConstraints(l *lexer.Lexer) (*fieldConstraints, error) {
 	constraints := &fieldConstraints{}
 
@@ -132,12 +152,14 @@ func parseFieldConstraints(l *lexer.Lexer) (*fieldConstraints, error) {
 			}
 			constraints.DefaultValue = defaultValue
 		default:
-			l.SetPos(token.Position) // Put it back
+			l.SetPos(token.Position)
 			return constraints, nil
 		}
 	}
 }
 
+// parseDataType converts a lexer token to the corresponding data type.
+// Supports INT, VARCHAR, TEXT, BOOLEAN, and FLOAT types.
 func parseDataType(token lexer.Token) (types.Type, error) {
 	switch token.Type {
 	case lexer.INT:
