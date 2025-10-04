@@ -2,14 +2,12 @@ package lock
 
 import (
 	"fmt"
+	"slices"
 	"storemy/pkg/concurrency/transaction"
 	"storemy/pkg/tuple"
 )
 
 // WaitQueue implements a two-way mapping system for managing lock request queues in a database system.
-// It tracks which transactions are waiting for locks on specific pages and which pages
-// each transaction is waiting for. This dual indexing allows for fast lookups in both directions
-// and is essential for deadlock detection and lock management.
 //
 // The WaitQueue maintains two critical data structures:
 //   - pageWaitQueue: A map from PageID to an ordered slice of LockRequest pointers, representing
@@ -18,8 +16,8 @@ import (
 //   - transactionWaiting: A reverse index mapping each TransactionID to all PageIDs it's currently
 //     waiting for. This enables efficient transaction cleanup and deadlock cycle detection.
 type WaitQueue struct {
-	pageWaitQueue      map[tuple.PageID][]*LockRequest               // Page -> Queue of waiting transactions
-	transactionWaiting map[*transaction.TransactionID][]tuple.PageID // Transaction -> Pages it's waiting for
+	pageWaitQueue      map[tuple.PageID][]*LockRequest
+	transactionWaiting map[*transaction.TransactionID][]tuple.PageID
 }
 
 // NewWaitQueue creates and initializes a new WaitQueue instance with empty internal maps.
@@ -31,9 +29,6 @@ func NewWaitQueue() *WaitQueue {
 }
 
 // Add enqueues a transaction's lock request for a specific page, maintaining FIFO ordering.
-// This method performs duplicate checking to ensure a transaction doesn't get added multiple
-// times for the same page, which would corrupt the queue semantics and potentially cause
-// deadlocks or inconsistent lock granting.
 //
 // The method updates both internal data structures atomically (from the caller's perspective):
 // 1. Adds the lock request to the end of the page's wait queue (FIFO)
@@ -111,8 +106,6 @@ func (wq *WaitQueue) removeFromPageQueue(tid *transaction.TransactionID, pid tup
 }
 
 // filterPageQueue creates a new queue slice excluding all requests from the specified transaction.
-// This helper method ensures that FIFO ordering is preserved for all remaining transactions
-// while efficiently removing the target transaction's requests.
 func (wq *WaitQueue) filterPageQueue(requestQueue []*LockRequest, tid *transaction.TransactionID) []*LockRequest {
 	newQueue := make([]*LockRequest, 0)
 	for _, req := range requestQueue {
@@ -147,16 +140,16 @@ func (wq *WaitQueue) removeFromTransactionQueue(tid *transaction.TransactionID, 
 func (wq *WaitQueue) filterTransactionQueue(waitingPages []tuple.PageID, pid tuple.PageID) []tuple.PageID {
 	newWaitingPages := make([]tuple.PageID, 0)
 	for _, waitingPid := range waitingPages {
-		if !pid.Equals(waitingPid) {
-			newWaitingPages = append(newWaitingPages, waitingPid)
+		if pid.Equals(waitingPid) {
+			continue
 		}
+		newWaitingPages = append(newWaitingPages, waitingPid)
 	}
 	return newWaitingPages
 }
 
 // alreadyInPageQueue checks if a transaction already has a pending lock request in the
-// specified page's wait queue. This is used to prevent duplicate requests which could
-// corrupt the queue semantics and cause incorrect lock granting behavior.
+// specified page's wait queue.
 func (wq *WaitQueue) alreadyInPageQueue(tid *transaction.TransactionID, pid tuple.PageID) bool {
 	queue, exists := wq.pageWaitQueue[pid]
 	if !exists {
@@ -172,18 +165,12 @@ func (wq *WaitQueue) alreadyInPageQueue(tid *transaction.TransactionID, pid tupl
 }
 
 // isInTransactionQueue checks if a transaction is already recorded as waiting for the
-// specified page in the reverse index. This provides a consistency check against the
-// transactionWaiting map and helps detect data structure corruption or race conditions.
+// specified page in the reverse index.
 func (wq *WaitQueue) isInTransactionQueue(tid *transaction.TransactionID, pid tuple.PageID) bool {
 	waitingPages, exists := wq.transactionWaiting[tid]
 	if !exists {
 		return false
 	}
 
-	for _, waitingPid := range waitingPages {
-		if pid.Equals(waitingPid) {
-			return true
-		}
-	}
-	return false
+	return slices.ContainsFunc(waitingPages, pid.Equals)
 }
