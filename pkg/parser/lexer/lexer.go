@@ -132,6 +132,14 @@ func (l *Lexer) readIdentifier(start int) Token {
 		return createToken(WHERE, value, start)
 	case "JOIN":
 		return createToken(JOIN, value, start)
+	case "INNER":
+		return createToken(INNER, value, start)
+	case "LEFT":
+		return createToken(LEFT, value, start)
+	case "RIGHT":
+		return createToken(RIGHT, value, start)
+	case "OUTER":
+		return createToken(OUTER, value, start)
 	case "ON":
 		return createToken(ON, value, start)
 	case "GROUP":
