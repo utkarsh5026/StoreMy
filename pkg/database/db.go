@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"storemy/pkg/concurrency/transaction"
+	"storemy/pkg/log"
 	"storemy/pkg/memory"
 	"storemy/pkg/parser/parser"
 	"storemy/pkg/parser/statements"
@@ -60,12 +61,12 @@ func NewDatabase(name, dataDir, logDir string) (*Database, error) {
 	}
 
 	tableManager := memory.NewTableManager()
-	pageStore, err := memory.NewPageStore(tableManager, logDir, 8192)
-
+	wal, err := log.NewWAL(logDir, 8192)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create page store: %v", err)
+		return nil, fmt.Errorf("failed to initialize WAL: %v", err)
 	}
 
+	pageStore := memory.NewPageStore(tableManager, wal)
 	queryPlanner := planner.NewQueryPlanner(tableManager, pageStore)
 
 	db := &Database{
