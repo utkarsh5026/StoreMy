@@ -8,31 +8,18 @@ import (
 )
 
 func parseDeleteStatement(l *lexer.Lexer) (*statements.DeleteStatement, error) {
-	token := l.NextToken()
-	if err := expectToken(token, lexer.DELETE); err != nil {
+	if err := expectTokenSequence(l, lexer.DELETE, lexer.FROM); err != nil {
 		return nil, err
 	}
 
-	token = l.NextToken()
-	if err := expectToken(token, lexer.FROM); err != nil {
+	tableName, alias, err := parseTableWithAlias(l)
+	if err != nil {
 		return nil, err
-	}
-
-	token = l.NextToken()
-	if err := expectToken(token, lexer.IDENTIFIER); err != nil {
-		return nil, err
-	}
-
-	tableName := token.Value
-	alias := tableName
-
-	token = l.NextToken()
-	if token.Type == lexer.IDENTIFIER {
-		alias = token.Value
-		token = l.NextToken()
 	}
 
 	statement := statements.NewDeleteStatement(tableName, alias)
+
+	token := l.NextToken()
 	if token.Type == lexer.WHERE {
 		filter, err := parseWhereCondition(l)
 		if err != nil {
@@ -40,8 +27,9 @@ func parseDeleteStatement(l *lexer.Lexer) (*statements.DeleteStatement, error) {
 		}
 		statement.SetWhereClause(filter)
 	} else {
-		l.SetPos(token.Position) // Put it back
+		l.SetPos(token.Position)
 	}
+
 	return statement, nil
 }
 
