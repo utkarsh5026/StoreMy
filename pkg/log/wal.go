@@ -17,20 +17,12 @@ const (
 
 // WAL manages the write-ahead log
 type WAL struct {
-	file       *os.File // The log file
-	currentLSN LSN      // Current position in log
-	flushedLSN LSN      // Last LSN written to disk
-
-	activeTxns map[*transaction.TransactionID]*TransactionLogInfo // Active transactions
-
-	dirtyPages map[tuple.PageID]LSN // Dirty pages and their recLSN
-
-	mutex     sync.RWMutex // Protects WAL structures
-	flushCond *sync.Cond   // For coordinating flushes
-
-	bufferSize   int    // Size of write buffer
-	writeBuffer  []byte // Buffer for batching writes
-	bufferOffset int    // Current position in buffer
+	file       *os.File
+	activeTxns map[*transaction.TransactionID]*TransactionLogInfo
+	dirtyPages map[tuple.PageID]LSN
+	mutex      sync.RWMutex
+	flushCond  *sync.Cond
+	writer     *LogWriter
 }
 
 // NewWAL creates a new WAL instance
@@ -46,15 +38,13 @@ func NewWAL(logPath string, bufferSize int) (*WAL, error) {
 		return nil, fmt.Errorf("failed to seek to end of WAL: %v", err)
 	}
 
+	writer := NewLogWriter(file, bufferSize, LSN(pos), LSN(pos))
+
 	w := &WAL{
-		file:         file,
-		currentLSN:   LSN(pos),
-		flushedLSN:   LSN(pos),
-		activeTxns:   make(map[*transaction.TransactionID]*TransactionLogInfo),
-		dirtyPages:   make(map[tuple.PageID]LSN),
-		bufferSize:   bufferSize,
-		writeBuffer:  make([]byte, bufferSize),
-		bufferOffset: 0,
+		file:       file,
+		writer:     writer,
+		activeTxns: make(map[*transaction.TransactionID]*TransactionLogInfo),
+		dirtyPages: make(map[tuple.PageID]LSN),
 	}
 
 	w.flushCond = sync.NewCond(&w.mutex)
@@ -144,8 +134,8 @@ func (w *WAL) Close() error {
 	w.mutex.Lock()
 	defer w.mutex.Unlock()
 
-	if err := w.flushBuffer(); err != nil {
-		return fmt.Errorf("failed to flush buffer during close: %v", err)
+	if err := w.writer.Close(); err != nil {
+		return fmt.Errorf("failed to close WAL writer: %v", err)
 	}
 
 	if err := w.file.Close(); err != nil {
@@ -281,18 +271,7 @@ func (w *WAL) writeRecord(record *LogRecord) (LSN, error) {
 		return 0, err
 	}
 
-	record.LSN = w.currentLSN
-	if w.bufferOffset+len(data) > w.bufferSize {
-		if err := w.flushBuffer(); err != nil {
-			return 0, err
-		}
-	}
-
-	copy(w.writeBuffer[w.bufferOffset:], data)
-	w.bufferOffset += len(data)
-
-	w.currentLSN += LSN(len(data))
-	return record.LSN, nil
+	return w.writer.Write(data)
 }
 
 // Force ensures all log records up to the given LSN are on disk
@@ -301,35 +280,5 @@ func (w *WAL) Force(lsn LSN) error {
 	w.mutex.Lock()
 	defer w.mutex.Unlock()
 
-	if lsn < w.currentLSN && w.flushedLSN >= w.currentLSN {
-		return nil
-	}
-
-	if w.currentLSN > w.flushedLSN {
-		return w.flushBuffer()
-	}
-
-	return nil
-}
-
-// flushBuffer writes buffered log records to disk
-func (w *WAL) flushBuffer() error {
-	if w.bufferOffset == 0 {
-		return nil
-	}
-
-	n, err := w.file.Write(w.writeBuffer[:w.bufferOffset])
-	if err != nil {
-		return fmt.Errorf("failed to write WAL buffer: %v", err)
-	}
-
-	if n != w.bufferOffset {
-		return fmt.Errorf("partial write to WAL: wrote %d of %d bytes", n, w.bufferOffset)
-	}
-
-	w.flushedLSN = w.currentLSN
-	w.bufferOffset = 0
-	w.flushCond.Broadcast()
-
-	return nil
+	return w.writer.Force(lsn)
 }
