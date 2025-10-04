@@ -12,19 +12,6 @@ import (
 // buildPredicateFromFilterNode constructs a query predicate from a filter node in the execution plan.
 // It takes a filter node containing field name, predicate type, and constant value, along with
 // tuple description for type information, and returns a fully constructed predicate for query execution.
-//
-// Parameters:
-//   - filter: FilterNode containing the filter criteria (field, predicate type, constant value)
-//   - tupleDesc: TupleDescription providing schema information for field lookup and type validation
-//
-// Returns:
-//   - *query.Predicate: A predicate object ready for query execution
-//   - error: Any error encountered during predicate construction
-//
-// Example:
-//
-//	filter := &plan.FilterNode{Field: "age", Predicate: types.GreaterThan, Constant: "18"}
-//	predicate, err := buildPredicateFromFilterNode(filter, tupleDesc)
 func buildPredicateFromFilterNode(filter *plan.FilterNode, tupleDesc *tuple.TupleDescription) (*query.Predicate, error) {
 	fieldIndex, err := findFieldIndex(filter.Field, tupleDesc)
 	if err != nil {
