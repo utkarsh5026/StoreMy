@@ -58,6 +58,7 @@ const (
 	SEMICOLON
 	LPAREN
 	RPAREN
+	ASTERISK
 
 	INVALID
 	EOF
@@ -165,6 +166,8 @@ func (t TokenType) String() string {
 		return "LPAREN"
 	case RPAREN:
 		return "RPAREN"
+	case ASTERISK:
+		return "ASTERISK"
 	case INVALID:
 		return "INVALID"
 	case EOF:
