@@ -8,42 +8,23 @@ import (
 )
 
 func parseCreateStatement(l *lexer.Lexer) (*statements.CreateStatement, error) {
-	// CREATE TABLE [IF NOT EXISTS] table_name (field_def1, field_def2, ..., [PRIMARY KEY (field)])
-	token := l.NextToken()
-	if err := expectToken(token, lexer.CREATE); err != nil {
+	if err := expectTokenSequence(l, lexer.CREATE, lexer.TABLE); err != nil {
 		return nil, err
 	}
 
-	token = l.NextToken()
-	if err := expectToken(token, lexer.TABLE); err != nil {
+	ifNotExists, err := parseIfNotExists(l)
+	if err != nil {
 		return nil, err
 	}
 
-	ifNotExists := false
-	token = l.NextToken()
-	if token.Type == lexer.IF {
-		token = l.NextToken()
-		if err := expectToken(token, lexer.NOT); err != nil {
-			return nil, err
-		}
-
-		token = l.NextToken()
-		if err := expectToken(token, lexer.EXISTS); err != nil {
-			return nil, err
-		}
-
-		ifNotExists = true
-		token = l.NextToken()
+	tableName, err := parseValueWithType(l, lexer.IDENTIFIER)
+	if err != nil {
+		return nil, fmt.Errorf("expected table name: %w", err)
 	}
 
-	if err := expectToken(token, lexer.IDENTIFIER); err != nil {
-		return nil, err
-	}
-
-	tableName := token.Value
 	stmt := statements.NewCreateStatement(tableName, ifNotExists)
 
-	token = l.NextToken()
+	token := l.NextToken()
 	if token.Type != lexer.LPAREN {
 		return nil, fmt.Errorf("expected '(', got %s", token.Value)
 	}
@@ -100,6 +81,20 @@ func parseCreateStatement(l *lexer.Lexer) (*statements.CreateStatement, error) {
 	}
 
 	return stmt, nil
+}
+
+func parseIfNotExists(l *lexer.Lexer) (bool, error) {
+	token := l.NextToken()
+	if token.Type != lexer.IF {
+		l.SetPos(token.Position)
+		return false, nil
+	}
+
+	if err := expectTokenSequence(l, lexer.NOT, lexer.EXISTS); err != nil {
+		return false, err
+	}
+
+	return true, nil
 }
 
 func readPrimaryKey(l *lexer.Lexer, stmt *statements.CreateStatement) error {
