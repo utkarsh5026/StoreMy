@@ -29,14 +29,29 @@ func NewLogWriter(writer io.WriterAt, bufferSize int, current, flushed LSN) *Log
 // Write appends data to the buffer and returns the LSN
 // This is where we implement the actual buffering strategy
 func (w *LogWriter) Write(data []byte) (LSN, error) {
+	assignedLSN := w.currentLSN
+
+	if len(data) > w.bufferSize {
+
+		if err := w.flush(); err != nil {
+			return 0, err
+		}
+
+		_, err := w.writer.WriteAt(data, int64(w.flushedLSN))
+		if err != nil {
+			return 0, err
+		}
+
+		w.flushedLSN += LSN(len(data))
+		w.currentLSN += LSN(len(data))
+		return assignedLSN, nil
+	}
+
 	if w.bufferOffset+len(data) > w.bufferSize {
 		if err := w.flush(); err != nil {
 			return 0, err
 		}
 	}
-
-	assignedLSN := w.currentLSN
-
 	copy(w.buffer[w.bufferOffset:], data)
 	w.bufferOffset += len(data)
 	w.currentLSN += LSN(len(data))
