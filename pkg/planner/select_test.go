@@ -51,6 +51,9 @@ func createSelectTestTable(t *testing.T, tableManager *memory.TableManager, tid 
 	if err != nil {
 		t.Fatalf("Failed to create test table: %v", err)
 	}
+
+	// Register cleanup to close table file
+	cleanupTable(t, tableManager, "users")
 }
 
 func insertSelectTestData(t *testing.T, tableManager *memory.TableManager, pageStore *memory.PageStore, tid *transaction.TransactionID) {
