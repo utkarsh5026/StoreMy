@@ -35,27 +35,6 @@ func parseUpdateStatement(l *lexer.Lexer) (*statements.UpdateStatement, error) {
 	return stmt, nil
 }
 
-// parseTableWithAlias parses a table name and optional alias from the lexer.
-// Supports formats: "table_name" or "table_name alias_name"
-func parseTableWithAlias(l *lexer.Lexer) (tableName, alias string, err error) {
-	token := l.NextToken()
-	if err := expectToken(token, lexer.IDENTIFIER); err != nil {
-		return "", "", err
-	}
-
-	tableName = token.Value
-	alias = tableName
-
-	token = l.NextToken()
-	if token.Type == lexer.IDENTIFIER {
-		alias = token.Value
-	} else {
-		l.SetPos(token.Position)
-	}
-
-	return tableName, alias, nil
-}
-
 // parseOptionalWhereClause parses an optional WHERE clause for an UPDATE statement.
 // If a WHERE token is found, it parses the condition and adds it to the statement.
 // If no WHERE clause is present, the token is put back and no error is returned.
