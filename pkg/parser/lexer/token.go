@@ -17,6 +17,10 @@ const (
 	FROM
 	WHERE
 	JOIN
+	INNER
+	LEFT
+	RIGHT
+	OUTER
 	ON
 	GROUP
 	ORDER
@@ -89,6 +93,14 @@ func (t TokenType) String() string {
 		return "WHERE"
 	case JOIN:
 		return "JOIN"
+	case INNER:
+		return "INNER"
+	case LEFT:
+		return "LEFT"
+	case RIGHT:
+		return "RIGHT"
+	case OUTER:
+		return "OUTER"
 	case ON:
 		return "ON"
 	case GROUP:
