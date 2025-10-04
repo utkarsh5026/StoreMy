@@ -23,16 +23,43 @@ const (
 	ReadWrite
 )
 
+type OperationType uint8
+
+const (
+	InsertOperation OperationType = iota
+	DeleteOperation
+	UpdateOperation
+	CommitOperation
+	AbortOperation
+)
+
+func (o OperationType) String() string {
+	switch o {
+	case InsertOperation:
+		return "INSERT"
+	case DeleteOperation:
+		return "DELETE"
+	case UpdateOperation:
+		return "UPDATE"
+	case CommitOperation:
+		return "COMMIT"
+	case AbortOperation:
+		return "ABORT"
+	}
+	return "UNKNOWN"
+}
+
 // PageStore manages an in-memory cache of database pages and handles transaction-aware page operations.
 // It serves as the main interface between the database engine and the underlying storage layer,
 // providing ACID compliance through transaction tracking and page lifecycle management.
 type PageStore struct {
 	tableManager *TableManager
 	mutex        sync.RWMutex
-	transactions map[*transaction.TransactionID]*TransactionInfo
-	lockManager  *lock.LockManager
-	cache        PageCache
-	wal          *log.WAL // Write-Ahead Log for durability and recovery
+	// transactions map[*transaction.TransactionID]*TransactionInfo
+	lockManager *lock.LockManager
+	cache       PageCache
+	wal         *log.WAL // Write-Ahead Log for durability and recovery
+	txManager   *TransactionManager
 }
 
 // NewPageStore creates and initializes a new PageStore instance with the given TableManager and WAL.
@@ -47,7 +74,7 @@ func NewPageStore(tm *TableManager, walPath string, bufferSize int) (*PageStore,
 
 	return &PageStore{
 		cache:        NewLRUPageCache(MaxPageCount),
-		transactions: make(map[*transaction.TransactionID]*TransactionInfo),
+		txManager:    NewTransactionManager(wal),
 		lockManager:  lock.NewLockManager(),
 		tableManager: tm,
 		wal:          wal,
@@ -108,27 +135,6 @@ func (p *PageStore) trackPageAccess(tid *transaction.TransactionID, pid tuple.Pa
 	p.transactions[tid].lockedPages[pid] = perm
 }
 
-// ensureTransactionBegun ensures that a BEGIN record has been logged for this transaction.
-// This must be called before any data operation (insert/update/delete) is logged.
-// Returns an error if the BEGIN record cannot be written to the WAL.
-func (p *PageStore) ensureTransactionBegun(tid *transaction.TransactionID) error {
-	txInfo := p.getOrCreateTransaction(tid)
-
-	if txInfo.hasBegun {
-		return nil
-	}
-
-	if _, err := p.wal.LogBegin(tid); err != nil {
-		return fmt.Errorf("failed to log transaction BEGIN: %v", err)
-	}
-
-	p.mutex.Lock()
-	txInfo.hasBegun = true
-	p.mutex.Unlock()
-
-	return nil
-}
-
 // evictPage implements NO-STEAL policy
 // We never evict dirty pages to simplify recovery
 func (p *PageStore) evictPage() error {
@@ -161,30 +167,8 @@ func (p *PageStore) evictPage() error {
 // 3. Perform the actual insertion
 // 4. Mark pages as dirty
 func (p *PageStore) InsertTuple(tid *transaction.TransactionID, tableID int, t *tuple.Tuple) error {
-	if err := p.ensureTransactionBegun(tid); err != nil {
-		return err
-	}
+	return p.performDataOperation(InsertOperation, tid, tableID, t, nil)
 
-	dbFile, err := p.tableManager.GetDbFile(tableID)
-	if err != nil {
-		return fmt.Errorf("table with ID %d not found", tableID)
-	}
-
-	modifiedPages, err := dbFile.AddTuple(tid, t)
-	if err != nil {
-		return fmt.Errorf("failed to add tuple: %v", err)
-	}
-
-	for _, pg := range modifiedPages {
-		pageID := pg.GetID()
-		afterImage := pg.GetPageData()
-		if _, err := p.wal.LogInsert(tid, pageID, afterImage); err != nil {
-			return fmt.Errorf("failed to log INSERT to WAL: %v", err)
-		}
-	}
-
-	p.markPagesAsDirty(tid, modifiedPages)
-	return nil
 }
 
 // DeleteTuple removes a tuple from its table within the given transaction context.
@@ -196,41 +180,58 @@ func (p *PageStore) InsertTuple(tid *transaction.TransactionID, tableID int, t *
 // 4. Perform the actual deletion
 // 5. Mark pages as dirty
 func (p *PageStore) DeleteTuple(tid *transaction.TransactionID, t *tuple.Tuple) error {
-	if t == nil {
-		return fmt.Errorf("tuple cannot be nil")
-	}
 	if t.RecordID == nil {
-		return fmt.Errorf("tuple has no record ID")
-	}
-
-	if err := p.ensureTransactionBegun(tid); err != nil {
-		return err
+		return fmt.Errorf("tuple must have a valid record ID")
 	}
 
 	tableID := t.RecordID.PageID.GetTableID()
+	return p.performDataOperation(DeleteOperation, tid, tableID, t, nil)
+}
+
+func (p *PageStore) performDataOperation(operation OperationType, tid *transaction.TransactionID, tableID int, t *tuple.Tuple, beforeImage []byte) error {
+	if err := p.txManager.EnsureBegun(tid); err != nil {
+		return err
+	}
+
 	dbFile, err := p.tableManager.GetDbFile(tableID)
 	if err != nil {
-		return fmt.Errorf("table with ID %d not found", tableID)
+		return fmt.Errorf("table with ID %d not found: %v", tableID, err)
 	}
 
-	pageID := t.RecordID.PageID
-	pg, err := p.GetPage(tid, pageID, ReadWrite)
-	if err != nil {
-		return fmt.Errorf("failed to get page for delete: %v", err)
+	var modifiedPages []page.Page
+	switch operation {
+	case InsertOperation:
+		modifiedPages, err = dbFile.AddTuple(tid, t)
+		if err != nil {
+			return fmt.Errorf("failed to add tuple: %v", err)
+		}
+
+		for _, pg := range modifiedPages {
+			if err := p.logOperation(InsertOperation, tid, pg.GetID(), pg.GetPageData()); err != nil {
+				return err
+			}
+		}
+
+	case DeleteOperation:
+		pageID := t.RecordID.PageID
+		pg, err := p.GetPage(tid, pageID, ReadWrite)
+		if err != nil {
+			return fmt.Errorf("failed to get page for delete: %v", err)
+		}
+
+		if err := p.logOperation(DeleteOperation, tid, pageID, pg.GetPageData()); err != nil {
+			return err
+		}
+
+		modifiedPage, err := dbFile.DeleteTuple(tid, t)
+		if err != nil {
+			return fmt.Errorf("failed to delete tuple: %v", err)
+		}
+		modifiedPages = []page.Page{modifiedPage}
 	}
 
-	beforeImage := pg.GetPageData()
+	p.markPagesAsDirty(tid, modifiedPages)
 
-	if _, err := p.wal.LogDelete(tid, pageID, beforeImage); err != nil {
-		return fmt.Errorf("failed to log DELETE to WAL: %v", err)
-	}
-
-	modifiedPage, err := dbFile.DeleteTuple(tid, t)
-	if err != nil {
-		return fmt.Errorf("failed to delete tuple: %v", err)
-	}
-
-	p.markPagesAsDirty(tid, []page.Page{modifiedPage})
 	return nil
 }
 
@@ -246,10 +247,6 @@ func (p *PageStore) DeleteTuple(tid *transaction.TransactionID, t *tuple.Tuple) 
 // Note: This is implemented as delete followed by insert, so the individual operations
 // will log their own records. In a more optimized implementation, we'd log a single UPDATE.
 func (p *PageStore) UpdateTuple(tid *transaction.TransactionID, oldTuple *tuple.Tuple, newTuple *tuple.Tuple) error {
-	if err := p.ensureTransactionBegun(tid); err != nil {
-		return err
-	}
-
 	if err := p.DeleteTuple(tid, oldTuple); err != nil {
 		return fmt.Errorf("failed to delete old tuple: %v", err)
 	}
@@ -345,7 +342,7 @@ func (p *PageStore) CommitTransaction(tid *transaction.TransactionID) error {
 	}
 
 	p.mutex.Lock()
-	delete(p.transactions, tid)
+	p.txManager.Remove(tid)
 	p.mutex.Unlock()
 
 	p.lockManager.UnlockAllPages(tid)
@@ -410,7 +407,7 @@ func (p *PageStore) AbortTransaction(tid *transaction.TransactionID) error {
 		p.cache.Put(pid, beforeImage)
 	}
 
-	delete(p.transactions, tid)
+	p.txManager.Remove(tid)
 	p.mutex.Unlock()
 	p.lockManager.UnlockAllPages(tid)
 
@@ -452,23 +449,8 @@ func (p *PageStore) flushPage(pid tuple.PageID) error {
 	return nil
 }
 
-// getOrCreateTransaction ensures a transaction exists and returns its info
-func (p *PageStore) getOrCreateTransaction(tid *transaction.TransactionID) *TransactionInfo {
-	p.mutex.Lock()
-	defer p.mutex.Unlock()
-
-	if _, exists := p.transactions[tid]; !exists {
-		p.transactions[tid] = &TransactionInfo{
-			startTime:   time.Now(),
-			dirtyPages:  make(map[tuple.PageID]bool),
-			lockedPages: make(map[tuple.PageID]Permissions),
-		}
-	}
-	return p.transactions[tid]
-}
-
 func (p *PageStore) markPagesAsDirty(tid *transaction.TransactionID, pages []page.Page) {
-	txInfo := p.getOrCreateTransaction(tid)
+	txInfo := p.txManager.GetOrCreate(tid)
 
 	p.mutex.Lock()
 	defer p.mutex.Unlock()
@@ -482,13 +464,6 @@ func (p *PageStore) markPagesAsDirty(tid *transaction.TransactionID, pages []pag
 
 // Close gracefully shuts down the PageStore, flushing all pending data and closing the WAL.
 // This method should be called when the database is shutting down.
-//
-// Shutdown Process:
-// 1. Flush all dirty pages to disk
-// 2. Close the WAL (flushes buffered log records and closes file)
-//
-// Returns:
-//   - error: nil on successful shutdown, or error if flush or WAL close fails
 func (p *PageStore) Close() error {
 	if err := p.FlushAllPages(); err != nil {
 		return fmt.Errorf("failed to flush pages during shutdown: %v", err)
@@ -498,5 +473,26 @@ func (p *PageStore) Close() error {
 		return fmt.Errorf("failed to close WAL: %v", err)
 	}
 
+	return nil
+}
+
+func (p *PageStore) logOperation(operation OperationType, tid *transaction.TransactionID, pageID tuple.PageID, data []byte) error {
+	var err error
+	switch operation {
+	case InsertOperation:
+		_, err = p.wal.LogInsert(tid, pageID, data)
+	case DeleteOperation:
+		_, err = p.wal.LogDelete(tid, pageID, data)
+	case CommitOperation:
+		_, err = p.wal.LogCommit(tid)
+	case AbortOperation:
+		_, err = p.wal.LogAbort(tid)
+	default:
+		return fmt.Errorf("unknown operation: %s", operation)
+	}
+
+	if err != nil {
+		return fmt.Errorf("failed to log %s to WAL: %v", operation, err)
+	}
 	return nil
 }
