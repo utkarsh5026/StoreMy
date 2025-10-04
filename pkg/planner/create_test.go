@@ -30,6 +30,19 @@ func executePlan(t *testing.T, plan *CreateTablePlan) (*DDLResult, error) {
 	return result, nil
 }
 
+// Helper function to register cleanup for table files
+func cleanupTable(t *testing.T, tableManager *memory.TableManager, tableName string) {
+	t.Helper()
+	t.Cleanup(func() {
+		tableID, err := tableManager.GetTableID(tableName)
+		if err == nil {
+			if dbFile, err := tableManager.GetDbFile(tableID); err == nil {
+				dbFile.Close()
+			}
+		}
+	})
+}
+
 func TestNewCreateTablePlan(t *testing.T) {
 	stmt := statements.NewCreateStatement("users", false)
 	stmt.AddField("id", types.IntType, true, nil)
@@ -95,6 +108,8 @@ func TestCreateTablePlan_Execute_BasicSuccess(t *testing.T) {
 	if !tableManager.TableExists("users") {
 		t.Error("Table was not added to table manager")
 	}
+
+	cleanupTable(t, tableManager, "users")
 }
 
 func TestCreateTablePlan_Execute_WithPrimaryKey(t *testing.T) {
@@ -128,6 +143,8 @@ func TestCreateTablePlan_Execute_WithPrimaryKey(t *testing.T) {
 	if !tableManager.TableExists("products") {
 		t.Error("Table was not added to table manager")
 	}
+
+	cleanupTable(t, tableManager, "products")
 }
 
 func TestCreateTablePlan_Execute_AllFieldTypes(t *testing.T) {
@@ -162,6 +179,8 @@ func TestCreateTablePlan_Execute_AllFieldTypes(t *testing.T) {
 	if !tableManager.TableExists("test_types") {
 		t.Error("Table was not added to table manager")
 	}
+
+	cleanupTable(t, tableManager, "test_types")
 }
 
 func TestCreateTablePlan_Execute_IfNotExists_TableDoesNotExist(t *testing.T) {
@@ -198,6 +217,8 @@ func TestCreateTablePlan_Execute_IfNotExists_TableDoesNotExist(t *testing.T) {
 	if !tableManager.TableExists("users") {
 		t.Error("Table was not added to table manager")
 	}
+
+	cleanupTable(t, tableManager, "users")
 }
 
 func TestCreateTablePlan_Execute_IfNotExists_TableExists(t *testing.T) {
@@ -239,6 +260,8 @@ func TestCreateTablePlan_Execute_IfNotExists_TableExists(t *testing.T) {
 	if result.Message != expectedMessage {
 		t.Errorf("Expected message %q, got %q", expectedMessage, result.Message)
 	}
+
+	cleanupTable(t, tableManager, "users")
 }
 
 func TestCreateTablePlan_Execute_Error_TableAlreadyExists(t *testing.T) {
@@ -279,6 +302,8 @@ func TestCreateTablePlan_Execute_Error_TableAlreadyExists(t *testing.T) {
 	if err.Error() != expectedError {
 		t.Errorf("Expected error %q, got %q", expectedError, err.Error())
 	}
+
+	cleanupTable(t, tableManager, "users")
 }
 
 func TestCreateTablePlan_Execute_Error_EmptyFields(t *testing.T) {
@@ -414,6 +439,8 @@ func TestCreateTablePlan_Execute_ComplexTable(t *testing.T) {
 	if tupleDesc.NumFields() != 4 {
 		t.Errorf("Expected 4 fields, got %d", tupleDesc.NumFields())
 	}
+
+	cleanupTable(t, tableManager, "complex_table")
 }
 
 func TestCreateTablePlan_Execute_FileCreation(t *testing.T) {
@@ -446,6 +473,8 @@ func TestCreateTablePlan_Execute_FileCreation(t *testing.T) {
 	if _, err := os.Stat(expectedFileName); os.IsNotExist(err) {
 		t.Errorf("Expected file %s to be created", expectedFileName)
 	}
+
+	cleanupTable(t, tableManager, "file_test")
 }
 
 func TestDDLResult_String(t *testing.T) {
