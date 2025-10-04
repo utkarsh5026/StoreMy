@@ -54,8 +54,7 @@ func (w *WAL) LogBegin(tid *transaction.TransactionID) (LSN, error) {
 	w.mutex.Lock()
 	defer w.mutex.Unlock()
 
-	record := NewLogRecord(BeginRecord, tid, nil, nil, nil, FirstLSN)
-	lsn, err := w.writeRecord(record)
+	lsn, err := w.logTransactionOperation(BeginRecord, tid, FirstLSN)
 	if err != nil {
 		return 0, err
 	}
@@ -78,9 +77,7 @@ func (w *WAL) LogCommit(tid *transaction.TransactionID) (LSN, error) {
 		return 0, err
 	}
 
-	record := NewLogRecord(CommitRecord, tid, nil, nil, nil, txnInfo.LastLSN)
-
-	lsn, err := w.writeRecord(record)
+	lsn, err := w.logTransactionOperation(CommitRecord, tid, txnInfo.LastLSN)
 	if err != nil {
 		w.mutex.Unlock()
 		return 0, err
@@ -110,8 +107,7 @@ func (w *WAL) LogAbort(tid *transaction.TransactionID) (LSN, error) {
 		return 0, err
 	}
 
-	record := NewLogRecord(AbortRecord, tid, nil, nil, nil, txnInfo.LastLSN)
-	lsn, err := w.writeRecord(record)
+	lsn, err := w.logTransactionOperation(AbortRecord, tid, txnInfo.LastLSN)
 	if err != nil {
 		return 0, err
 	}
@@ -246,4 +242,9 @@ func (w *WAL) logDataOperation(recordType LogRecordType, tid *transaction.Transa
 	}
 
 	return lsn, nil
+}
+
+func (w *WAL) logTransactionOperation(recordType LogRecordType, tid *transaction.TransactionID, prevLSN LSN) (LSN, error) {
+	record := NewLogRecord(recordType, tid, nil, nil, nil, prevLSN)
+	return w.writeRecord(record)
 }
