@@ -24,13 +24,6 @@ const (
 // Type-specific data varies based on record type:
 //   - UpdateRecord/InsertRecord/DeleteRecord: PageID + BeforeImage + AfterImage
 //   - CLRRecord: PageID + UndoNextLSN + AfterImage
-//
-// Parameters:
-//   - record: The LogRecord to serialize
-//
-// Returns:
-//   - []byte: The serialized binary data
-//   - error: Any serialization error encountered
 func SerializeLogRecord(record *LogRecord) ([]byte, error) {
 	var buf bytes.Buffer
 
@@ -96,7 +89,6 @@ func serializeCLR(buf *bytes.Buffer, record *LogRecord) error {
 }
 
 // serializePageID serializes a PageID by calling its Serialize() method.
-// The PageID is expected to return a slice of integers that are converted to uint32.
 func serializePageID(buf *bytes.Buffer, pageID interface{ Serialize() []int }) error {
 	if pageID == nil {
 		return nil
