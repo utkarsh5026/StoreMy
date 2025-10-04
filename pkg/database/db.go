@@ -53,14 +53,19 @@ type DatabaseInfo struct {
 	ErrorCount        int64
 }
 
-func NewDatabase(name string, dataDir string) (*Database, error) {
+func NewDatabase(name string, dataDir string, logDir string) (*Database, error) {
 	fullPath := filepath.Join(dataDir, name)
 	if err := os.MkdirAll(fullPath, 0755); err != nil {
 		return nil, fmt.Errorf("failed to create data directory: %v", err)
 	}
 
 	tableManager := memory.NewTableManager()
-	pageStore := memory.NewPageStore(tableManager)
+	pageStore, err := memory.NewPageStore(tableManager, logDir, 8192)
+
+	if err != nil {
+		return nil, fmt.Errorf("failed to create page store: %v", err)
+	}
+
 	queryPlanner := planner.NewQueryPlanner(tableManager, pageStore)
 
 	db := &Database{
