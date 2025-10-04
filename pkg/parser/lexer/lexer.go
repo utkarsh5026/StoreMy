@@ -53,6 +53,9 @@ func (l *Lexer) NextToken() Token {
 	case ch == ')':
 		l.pos++
 		return createToken(RPAREN, ")", start)
+	case ch == '*':
+		l.pos++
+		return createToken(ASTERISK, "*", start)
 	case ch == '=' || ch == '<' || ch == '>' || ch == '!':
 		return l.readOperator(start)
 	case ch == '\'' || ch == '"':
