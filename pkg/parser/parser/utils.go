@@ -97,3 +97,44 @@ func parseValueWithType(l *lexer.Lexer, acceptedTypes ...lexer.TokenType) (strin
 	}
 	return "", fmt.Errorf("expected value of type %v, got %s", acceptedTypes, token.Value)
 }
+
+// Common list parsing pattern
+func parseDelimitedList[T any](
+	l *lexer.Lexer,
+	parseItem func(*lexer.Lexer) (T, error),
+	delimiter lexer.TokenType,
+	terminator lexer.TokenType,
+) ([]T, error) {
+	var items []T
+
+	for {
+		item, err := parseItem(l)
+		if err != nil {
+			return nil, err
+		}
+		items = append(items, item)
+
+		token := l.NextToken()
+		if token.Type == delimiter {
+			continue
+		} else if token.Type == terminator {
+			break
+		} else {
+			return nil, fmt.Errorf("expected '%s' or '%s', got %s",
+				getTokenName(delimiter), getTokenName(terminator), token.Value)
+		}
+	}
+
+	return items, nil
+}
+
+func getTokenName(tokenType lexer.TokenType) string {
+	switch tokenType {
+	case lexer.COMMA:
+		return ","
+	case lexer.RPAREN:
+		return ")"
+	default:
+		return string(rune(tokenType))
+	}
+}
