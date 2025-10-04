@@ -34,29 +34,24 @@ func parseDeleteStatement(l *lexer.Lexer) (*statements.DeleteStatement, error) {
 }
 
 func parseWhereCondition(l *lexer.Lexer) (*plan.FilterNode, error) {
-	token := l.NextToken()
-	if token.Type != lexer.IDENTIFIER {
-		return nil, fmt.Errorf("expected field name in WHERE, got %s", token.Value)
-	}
-	fieldName := token.Value
-
-	token = l.NextToken()
-	if token.Type != lexer.OPERATOR {
-		return nil, fmt.Errorf("expected operator in WHERE, got %s", token.Value)
+	fieldName, err := parseValueWithType(l, lexer.IDENTIFIER)
+	if err != nil {
+		return nil, fmt.Errorf("expected field name in WHERE: %w", err)
 	}
 
-	pred, err := parseOperator(token.Value)
+	opValue, err := parseValueWithType(l, lexer.OPERATOR)
+	if err != nil {
+		return nil, fmt.Errorf("expected operator in WHERE: %w", err)
+	}
+
+	pred, err := parseOperator(opValue)
 	if err != nil {
 		return nil, err
 	}
 
-	token = l.NextToken()
-	var constant string
-	switch token.Type {
-	case lexer.STRING, lexer.INT:
-		constant = token.Value
-	default:
-		return nil, fmt.Errorf("expected value in WHERE, got %s", token.Value)
+	constant, err := parseValueWithType(l, lexer.STRING, lexer.INT)
+	if err != nil {
+		return nil, fmt.Errorf("expected value in WHERE: %w", err)
 	}
 
 	return plan.NewFilterNode("", fieldName, pred, constant), nil
