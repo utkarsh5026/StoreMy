@@ -3,39 +3,53 @@ package log
 import (
 	"bytes"
 	"encoding/binary"
+	"fmt"
 )
 
-// Size of the serialized log record in bytes
 const (
-	RecordSize    = 4
-	TypeSize      = 1
-	TIDSize       = 8
-	PrevLSNSize   = 8
-	TimestampSize = 8
+	RecordSize    = 4 // Size field: total record size in bytes (uint32)
+	TypeSize      = 1 // Type field: log record type (byte)
+	TIDSize       = 8 // Transaction ID field (uint64)
+	PrevLSNSize   = 8 // Previous LSN field (uint64)
+	TimestampSize = 8 // Timestamp field (uint64, Unix timestamp)
 )
 
-// Use binary encoding for compact representation
-// Format: [Size][Type][TID][PrevLSN][Timestamp][Type-specific data]
+// SerializeLogRecord converts a LogRecord struct into a compact binary representation.
+// The serialization format uses big-endian byte ordering for cross-platform compatibility.
+//
+// Binary format structure:
+//
+//	[Size:4][Type:1][TID:8][PrevLSN:8][Timestamp:8][Type-specific data]
+//
+// Type-specific data varies based on record type:
+//   - UpdateRecord/InsertRecord/DeleteRecord: PageID + BeforeImage + AfterImage
+//   - CLRRecord: PageID + UndoNextLSN + AfterImage
+//
+// Parameters:
+//   - record: The LogRecord to serialize
+//
+// Returns:
+//   - []byte: The serialized binary data
+//   - error: Any serialization error encountered
 func SerializeLogRecord(record *LogRecord) ([]byte, error) {
 	var buf bytes.Buffer
-
-	if err := buf.WriteByte(byte(record.Type)); err != nil {
-		return nil, err
-	}
 
 	tidVal := uint64(0)
 	if record.TID != nil {
 		tidVal = uint64(record.TID.ID())
 	}
-	if err := binary.Write(&buf, binary.BigEndian, tidVal); err != nil {
-		return nil, err
+
+	writes := []any{
+		byte(record.Type),
+		tidVal,
+		uint64(record.PrevLSN),
+		uint64(record.Timestamp.Unix()),
 	}
 
-	if err := binary.Write(&buf, binary.BigEndian, uint64(record.PrevLSN)); err != nil {
-		return nil, err
-	}
-	if err := binary.Write(&buf, binary.BigEndian, uint64(record.Timestamp.Unix())); err != nil {
-		return nil, err
+	for _, v := range writes {
+		if err := binary.Write(&buf, binary.BigEndian, v); err != nil {
+			return nil, fmt.Errorf("failed to write base field: %w", err)
+		}
 	}
 
 	switch record.Type {
@@ -57,64 +71,60 @@ func SerializeLogRecord(record *LogRecord) ([]byte, error) {
 	return result, nil
 }
 
+// serializeDataModification serializes data modification records (Insert, Update, Delete).
+// These records contain a PageID, BeforeImage (for updates/deletes), and AfterImage.
 func serializeDataModification(buf *bytes.Buffer, record *LogRecord) error {
-	if record.PageID != nil {
-		pageIDBytes := record.PageID.Serialize()
-		for _, b := range pageIDBytes {
-			if err := binary.Write(buf, binary.BigEndian, uint32(b)); err != nil {
-				return err
-			}
-		}
+	if err := serializePageID(buf, record.PageID); err != nil {
+		return err
 	}
-
 	if err := serializeImage(buf, record.BeforeImage); err != nil {
 		return err
 	}
-	if err := serializeImage(buf, record.AfterImage); err != nil {
-		return err
-	}
-	return nil
+	return serializeImage(buf, record.AfterImage)
 }
 
+// serializeCLR serializes Compensation Log Records (CLR).
+// CLRs are used during transaction rollback and contain PageID, UndoNextLSN, and AfterImage.
 func serializeCLR(buf *bytes.Buffer, record *LogRecord) error {
-	if record.PageID != nil {
-		pageIDBytes := record.PageID.Serialize()
-		for _, b := range pageIDBytes {
-			if err := binary.Write(buf, binary.BigEndian, uint32(b)); err != nil {
-				return err
-			}
-		}
-	}
-
-	if err := binary.Write(buf, binary.BigEndian, uint64(record.UndoNextLSN)); err != nil {
+	if err := serializePageID(buf, record.PageID); err != nil {
 		return err
 	}
-	if record.AfterImage != nil {
-		if err := binary.Write(buf, binary.BigEndian, uint32(len(record.AfterImage))); err != nil {
-			return err
-		}
-		if _, err := buf.Write(record.AfterImage); err != nil {
-			return err
-		}
-	} else {
-		if err := binary.Write(buf, binary.BigEndian, uint32(0)); err != nil {
-			return err
+	if err := binary.Write(buf, binary.BigEndian, uint64(record.UndoNextLSN)); err != nil {
+		return fmt.Errorf("failed to write UndoNextLSN: %w", err)
+	}
+	return serializeImage(buf, record.AfterImage)
+}
+
+// serializePageID serializes a PageID by calling its Serialize() method.
+// The PageID is expected to return a slice of integers that are converted to uint32.
+func serializePageID(buf *bytes.Buffer, pageID interface{ Serialize() []int }) error {
+	if pageID == nil {
+		return nil
+	}
+	for _, b := range pageID.Serialize() {
+		if err := binary.Write(buf, binary.BigEndian, uint32(b)); err != nil {
+			return fmt.Errorf("failed to write PageID: %w", err)
 		}
 	}
 	return nil
 }
 
+// serializeImage serializes a byte slice image (BeforeImage or AfterImage).
+// The format is: [length:4][data:length] where length is uint32.
+// If the image is nil, only a zero length is written.
 func serializeImage(buf *bytes.Buffer, image []byte) error {
+	length := uint32(0)
 	if image != nil {
-		if err := binary.Write(buf, binary.BigEndian, uint32(len(image))); err != nil {
-			return err
-		}
+		length = uint32(len(image))
+	}
+
+	if err := binary.Write(buf, binary.BigEndian, length); err != nil {
+		return fmt.Errorf("failed to write image length: %w", err)
+	}
+
+	if image != nil {
 		if _, err := buf.Write(image); err != nil {
-			return err
-		}
-	} else {
-		if err := binary.Write(buf, binary.BigEndian, uint32(0)); err != nil {
-			return err
+			return fmt.Errorf("failed to write image data: %w", err)
 		}
 	}
 	return nil
