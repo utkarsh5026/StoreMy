@@ -2,31 +2,13 @@ package planner
 
 import (
 	"os"
-	"path/filepath"
 	"storemy/pkg/concurrency/transaction"
-	"storemy/pkg/log"
 	"storemy/pkg/memory"
 	"storemy/pkg/parser/plan"
 	"storemy/pkg/parser/statements"
 	"storemy/pkg/types"
 	"testing"
 )
-
-func createWal(t *testing.T) *log.WAL {
-	t.Helper()
-
-	tmpDir, err := os.MkdirTemp("", "wal_test_*")
-	if err != nil {
-		t.Fatalf("failed to create temp dir: %v", err)
-	}
-
-	logPath := filepath.Join(tmpDir, "test.wal")
-	wal, err := log.NewWAL(logPath, 4096)
-	if err != nil {
-		t.Fatalf("failed to create WAL: %v", err)
-	}
-	return wal
-}
 
 func executeUpdatePlan(t *testing.T, plan *UpdatePlan) (*DMLResult, error) {
 	resultAny, err := plan.Execute()
@@ -60,6 +42,9 @@ func createUpdateTestTable(t *testing.T, tableManager *memory.TableManager, tid 
 	if err != nil {
 		t.Fatalf("Failed to create test table: %v", err)
 	}
+
+	// Register cleanup to close table file
+	cleanupTable(t, tableManager, "users")
 }
 
 func insertUpdateTestData(t *testing.T, tableManager *memory.TableManager, pageStore *memory.PageStore, tid *transaction.TransactionID) {
