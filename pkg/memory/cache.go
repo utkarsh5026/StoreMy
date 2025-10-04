@@ -12,27 +12,16 @@ import (
 // It is responsible ONLY for storing and retrieving pages in memory.
 // It knows nothing about transactions, locks, or durability.
 type PageCache interface {
-	// Get retrieves a page from the cache by its page ID.
-	// Returns the page and true if found, or nil page and false if not found.
 	Get(pid tuple.PageID) (page.Page, bool)
 
-	// Put stores a page in the cache with the given page ID.
-	// Returns an error if the page cannot be stored (e.g., cache is full).
-	// If the page already exists, it should be updated.
 	Put(pid tuple.PageID, p page.Page) error
 
-	// Remove removes a page from the cache by its page ID.
-	// Does nothing if the page doesn't exist.
 	Remove(pid tuple.PageID)
 
-	// Size returns the current number of pages in the cache.
 	Size() int
 
-	// Clear removes all pages from the cache.
 	Clear()
 
-	// GetAll returns a slice of all page IDs currently in the cache.
-	// The order of page IDs is not guaranteed.
 	GetAll() []tuple.PageID
 }
 
