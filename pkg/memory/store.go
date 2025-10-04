@@ -167,38 +167,54 @@ func (p *PageStore) performDataOperation(operation OperationType, tid *transacti
 	var modifiedPages []page.Page
 	switch operation {
 	case InsertOperation:
-		modifiedPages, err = dbFile.AddTuple(tid, t)
-		if err != nil {
-			return fmt.Errorf("failed to add tuple: %v", err)
-		}
-
-		for _, pg := range modifiedPages {
-			if err := p.logOperation(InsertOperation, tid, pg.GetID(), pg.GetPageData()); err != nil {
-				return err
-			}
-		}
+		modifiedPages, err = p.handleInsert(tid, tableID, t, dbFile)
 
 	case DeleteOperation:
-		pageID := t.RecordID.PageID
-		pg, err := p.GetPage(tid, pageID, ReadWrite)
-		if err != nil {
-			return fmt.Errorf("failed to get page for delete: %v", err)
-		}
+		modifiedPages, err = p.handleDelete(tid, t, dbFile)
 
-		if err := p.logOperation(DeleteOperation, tid, pageID, pg.GetPageData()); err != nil {
-			return err
-		}
+	default:
+		return fmt.Errorf("unsupported operation: %s", operation.String())
+	}
 
-		modifiedPage, err := dbFile.DeleteTuple(tid, t)
-		if err != nil {
-			return fmt.Errorf("failed to delete tuple: %v", err)
-		}
-		modifiedPages = []page.Page{modifiedPage}
+	if err != nil {
+		return err
 	}
 
 	p.markPagesAsDirty(tid, modifiedPages)
-
 	return nil
+}
+
+func (p *PageStore) handleInsert(tid *transaction.TransactionID, tableID int, t *tuple.Tuple, dbFile page.DbFile) ([]page.Page, error) {
+	modifiedPages, err := dbFile.AddTuple(tid, t)
+	if err != nil {
+		return nil, fmt.Errorf("failed to add tuple: %v", err)
+	}
+
+	for _, pg := range modifiedPages {
+		if err := p.logOperation(InsertOperation, tid, pg.GetID(), pg.GetPageData()); err != nil {
+			return nil, err
+		}
+	}
+	return modifiedPages, nil
+}
+
+func (p *PageStore) handleDelete(tid *transaction.TransactionID, t *tuple.Tuple, dbFile page.DbFile) ([]page.Page, error) {
+	pageID := t.RecordID.PageID
+	pg, err := p.GetPage(tid, pageID, ReadWrite)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get page for delete: %v", err)
+	}
+
+	if err := p.logOperation(DeleteOperation, tid, pageID, pg.GetPageData()); err != nil {
+		return nil, err
+	}
+
+	modifiedPage, err := dbFile.DeleteTuple(tid, t)
+	if err != nil {
+		return nil, fmt.Errorf("failed to delete tuple: %v", err)
+	}
+
+	return []page.Page{modifiedPage}, nil
 }
 
 // UpdateTuple replaces an existing tuple with a new version within the given transaction.
