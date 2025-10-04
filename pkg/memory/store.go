@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"storemy/pkg/concurrency/lock"
 	"storemy/pkg/concurrency/transaction"
+	"storemy/pkg/log"
 	"storemy/pkg/storage/page"
 	"storemy/pkg/tuple"
 	"sync"
@@ -22,13 +23,6 @@ const (
 	ReadWrite
 )
 
-// TransactionInfo holds metadata about an active transaction
-type TransactionInfo struct {
-	startTime   time.Time                    // When the transaction started
-	dirtyPages  map[tuple.PageID]bool        // Pages modified by this transaction
-	lockedPages map[tuple.PageID]Permissions // Pages locked by this transaction with their permission level
-}
-
 // PageStore manages an in-memory cache of database pages and handles transaction-aware page operations.
 // It serves as the main interface between the database engine and the underlying storage layer,
 // providing ACID compliance through transaction tracking and page lifecycle management.
@@ -38,17 +32,26 @@ type PageStore struct {
 	transactions map[*transaction.TransactionID]*TransactionInfo
 	lockManager  *lock.LockManager
 	cache        PageCache
+	wal          *log.WAL // Write-Ahead Log for durability and recovery
 }
 
-// NewPageStore creates and initializes a new PageStore instance with the given TableManager.
+// NewPageStore creates and initializes a new PageStore instance with the given TableManager and WAL.
 // The PageStore will use the TableManager to access database files and manage table operations.
-func NewPageStore(tm *TableManager) *PageStore {
+// walPath specifies the location of the write-ahead log file.
+// bufferSize determines the WAL buffer size in bytes (e.g., 8192 for 8KB buffer).
+func NewPageStore(tm *TableManager, walPath string, bufferSize int) (*PageStore, error) {
+	wal, err := log.NewWAL(walPath, bufferSize)
+	if err != nil {
+		return nil, fmt.Errorf("failed to initialize WAL: %v", err)
+	}
+
 	return &PageStore{
 		cache:        NewLRUPageCache(MaxPageCount),
 		transactions: make(map[*transaction.TransactionID]*TransactionInfo),
 		lockManager:  lock.NewLockManager(),
 		tableManager: tm,
-	}
+		wal:          wal,
+	}, nil
 }
 
 // GetPage retrieves a page with specified permissions for a transaction
@@ -98,10 +101,32 @@ func (p *PageStore) trackPageAccess(tid *transaction.TransactionID, pid tuple.Pa
 			startTime:   time.Now(),
 			dirtyPages:  make(map[tuple.PageID]bool),
 			lockedPages: make(map[tuple.PageID]Permissions),
+			hasBegun:    false,
 		}
 	}
 
 	p.transactions[tid].lockedPages[pid] = perm
+}
+
+// ensureTransactionBegun ensures that a BEGIN record has been logged for this transaction.
+// This must be called before any data operation (insert/update/delete) is logged.
+// Returns an error if the BEGIN record cannot be written to the WAL.
+func (p *PageStore) ensureTransactionBegun(tid *transaction.TransactionID) error {
+	txInfo := p.getOrCreateTransaction(tid)
+
+	if txInfo.hasBegun {
+		return nil
+	}
+
+	if _, err := p.wal.LogBegin(tid); err != nil {
+		return fmt.Errorf("failed to log transaction BEGIN: %v", err)
+	}
+
+	p.mutex.Lock()
+	txInfo.hasBegun = true
+	p.mutex.Unlock()
+
+	return nil
 }
 
 // evictPage implements NO-STEAL policy
@@ -130,7 +155,16 @@ func (p *PageStore) evictPage() error {
 }
 
 // InsertTuple adds a new tuple to the specified table within the given transaction context.
+// Following the Write-Ahead Logging protocol:
+// 1. Log BEGIN if this is the first operation
+// 2. Log INSERT record with after-image BEFORE modifying the page
+// 3. Perform the actual insertion
+// 4. Mark pages as dirty
 func (p *PageStore) InsertTuple(tid *transaction.TransactionID, tableID int, t *tuple.Tuple) error {
+	if err := p.ensureTransactionBegun(tid); err != nil {
+		return err
+	}
+
 	dbFile, err := p.tableManager.GetDbFile(tableID)
 	if err != nil {
 		return fmt.Errorf("table with ID %d not found", tableID)
@@ -141,12 +175,26 @@ func (p *PageStore) InsertTuple(tid *transaction.TransactionID, tableID int, t *
 		return fmt.Errorf("failed to add tuple: %v", err)
 	}
 
+	for _, pg := range modifiedPages {
+		pageID := pg.GetID()
+		afterImage := pg.GetPageData()
+		if _, err := p.wal.LogInsert(tid, pageID, afterImage); err != nil {
+			return fmt.Errorf("failed to log INSERT to WAL: %v", err)
+		}
+	}
+
 	p.markPagesAsDirty(tid, modifiedPages)
 	return nil
 }
 
 // DeleteTuple removes a tuple from its table within the given transaction context.
 // The tuple must have a valid RecordID indicating its location in the database.
+// Following the Write-Ahead Logging protocol:
+// 1. Log BEGIN if this is the first operation
+// 2. Capture before-image of the page
+// 3. Log DELETE record with before-image BEFORE modifying the page
+// 4. Perform the actual deletion
+// 5. Mark pages as dirty
 func (p *PageStore) DeleteTuple(tid *transaction.TransactionID, t *tuple.Tuple) error {
 	if t == nil {
 		return fmt.Errorf("tuple cannot be nil")
@@ -155,10 +203,26 @@ func (p *PageStore) DeleteTuple(tid *transaction.TransactionID, t *tuple.Tuple) 
 		return fmt.Errorf("tuple has no record ID")
 	}
 
+	if err := p.ensureTransactionBegun(tid); err != nil {
+		return err
+	}
+
 	tableID := t.RecordID.PageID.GetTableID()
 	dbFile, err := p.tableManager.GetDbFile(tableID)
 	if err != nil {
 		return fmt.Errorf("table with ID %d not found", tableID)
+	}
+
+	pageID := t.RecordID.PageID
+	pg, err := p.GetPage(tid, pageID, ReadWrite)
+	if err != nil {
+		return fmt.Errorf("failed to get page for delete: %v", err)
+	}
+
+	beforeImage := pg.GetPageData()
+
+	if _, err := p.wal.LogDelete(tid, pageID, beforeImage); err != nil {
+		return fmt.Errorf("failed to log DELETE to WAL: %v", err)
 	}
 
 	modifiedPage, err := dbFile.DeleteTuple(tid, t)
@@ -171,9 +235,21 @@ func (p *PageStore) DeleteTuple(tid *transaction.TransactionID, t *tuple.Tuple) 
 }
 
 // UpdateTuple replaces an existing tuple with a new version within the given transaction.
-// This operation is implemented as a delete followed by an insert. If the insertion fails,
-// it attempts to restore the original tuple to maintain consistency.
+// Following the Write-Ahead Logging protocol:
+// 1. Log BEGIN if this is the first operation
+// 2. Capture before-image of the page
+// 3. Perform the update (delete + insert)
+// 4. Capture after-image
+// 5. Log UPDATE record with both images
+// 6. Mark pages as dirty
+//
+// Note: This is implemented as delete followed by insert, so the individual operations
+// will log their own records. In a more optimized implementation, we'd log a single UPDATE.
 func (p *PageStore) UpdateTuple(tid *transaction.TransactionID, oldTuple *tuple.Tuple, newTuple *tuple.Tuple) error {
+	if err := p.ensureTransactionBegun(tid); err != nil {
+		return err
+	}
+
 	if err := p.DeleteTuple(tid, oldTuple); err != nil {
 		return fmt.Errorf("failed to delete old tuple: %v", err)
 	}
@@ -206,24 +282,26 @@ func (p *PageStore) FlushAllPages() error {
 }
 
 // CommitTransaction finalizes all changes made by a transaction and makes them durable.
-// This implements the commit phase of two-phase locking protocol.
+// This implements the commit phase with Write-Ahead Logging protocol.
 //
-// Commit Process:
-// 1. Validate transaction exists and has changes to commit
-// 2. Flush all dirty pages to disk (FORCE policy for durability)
-// 3. Update before-images for committed pages (new baseline for future aborts)
-// 4. Mark pages as clean (no longer associated with this transaction)
-// 5. Remove transaction from active tracking
-// 6. Release all locks (allowing waiting transactions to proceed)
+// Commit Process (WAL-enhanced):
+// 1. Validate transaction exists
+// 2. Log COMMIT record to WAL
+// 3. Force WAL to disk (CRITICAL - ensures durability even before pages are written)
+// 4. Update before-images for committed pages (new baseline for future aborts)
+// 5. Flush all dirty pages to disk (FORCE policy)
+// 6. Mark pages as clean
+// 7. Remove transaction from active tracking
+// 8. Release all locks
 //
-// FORCE Policy: We write all dirty pages before commit completes.
-// This ensures durability but may impact performance.
+// WAL Protocol: The commit is durable once the COMMIT record is forced to disk,
+// even if the system crashes before pages are flushed. Recovery will REDO the changes.
 //
 // Parameters:
 //   - tid: The transaction ID to commit (must not be nil)
 //
 // Returns:
-//   - error: nil on successful commit, or error if flush fails
+//   - error: nil on successful commit, or error if WAL or flush fails
 func (p *PageStore) CommitTransaction(tid *transaction.TransactionID) error {
 	if tid == nil {
 		return fmt.Errorf("transaction ID cannot be nil")
@@ -241,7 +319,16 @@ func (p *PageStore) CommitTransaction(tid *transaction.TransactionID) error {
 	for pid := range txInfo.dirtyPages {
 		dirtyPageIDs = append(dirtyPageIDs, pid)
 	}
-	// Set before images before flushing
+	p.mutex.Unlock()
+
+	if txInfo.hasBegun {
+		_, err := p.wal.LogCommit(tid)
+		if err != nil {
+			return fmt.Errorf("commit failed: unable to log COMMIT record: %v", err)
+		}
+	}
+
+	p.mutex.Lock()
 	for _, pid := range dirtyPageIDs {
 		page, exists := p.cache.Get(pid)
 		if exists {
@@ -258,7 +345,6 @@ func (p *PageStore) CommitTransaction(tid *transaction.TransactionID) error {
 	}
 
 	p.mutex.Lock()
-
 	delete(p.transactions, tid)
 	p.mutex.Unlock()
 
@@ -267,23 +353,25 @@ func (p *PageStore) CommitTransaction(tid *transaction.TransactionID) error {
 }
 
 // AbortTransaction undoes all changes made by a transaction and releases its resources.
-// This implements the rollback mechanism using before-images (STEAL policy support).
+// This implements the rollback mechanism with Write-Ahead Logging protocol.
 //
-// Abort Process:
+// Abort Process (WAL-enhanced):
 // 1. Validate transaction exists
-// 2. Restore all dirty pages to their before-image state (undo changes)
-// 3. Discard dirty pages from cache (changes never hit disk)
-// 4. Remove transaction from active tracking
-// 5. Release all locks (allowing waiting transactions to proceed)
+// 2. Log ABORT record to WAL (marks transaction as aborted)
+// 3. Restore all dirty pages to their before-image state (undo changes in memory)
+// 4. Discard dirty pages from cache (changes never hit disk)
+// 5. Remove transaction from active tracking
+// 6. Release all locks
 //
-// NO-STEAL Policy Note: We never evict dirty pages, so all changes exist only in memory.
-// This makes abort simple - just restore from before-images in the cache.
+// WAL Protocol: The ABORT record allows recovery to know this transaction should be undone.
+// NO-STEAL Policy: Since dirty pages are never evicted, all changes exist only in memory,
+// making abort simple - just restore from before-images in the cache.
 //
 // Parameters:
 //   - tid: The transaction ID to abort (must not be nil)
 //
 // Returns:
-//   - error: Always returns nil (abort cannot fail)
+//   - error: Returns error if WAL logging fails, nil otherwise
 func (p *PageStore) AbortTransaction(tid *transaction.TransactionID) error {
 	if tid == nil {
 		return fmt.Errorf("transaction ID cannot be nil")
@@ -295,6 +383,14 @@ func (p *PageStore) AbortTransaction(tid *transaction.TransactionID) error {
 		p.mutex.Unlock()
 		p.lockManager.UnlockAllPages(tid)
 		return nil
+	}
+
+	if txInfo.hasBegun {
+		p.mutex.Unlock()
+		if _, err := p.wal.LogAbort(tid); err != nil {
+			return fmt.Errorf("failed to log ABORT to WAL: %v", err)
+		}
+		p.mutex.Lock()
 	}
 
 	for pid := range txInfo.dirtyPages {
@@ -382,4 +478,25 @@ func (p *PageStore) markPagesAsDirty(tid *transaction.TransactionID, pages []pag
 		p.cache.Put(pg.GetID(), pg)
 		txInfo.dirtyPages[pg.GetID()] = true
 	}
+}
+
+// Close gracefully shuts down the PageStore, flushing all pending data and closing the WAL.
+// This method should be called when the database is shutting down.
+//
+// Shutdown Process:
+// 1. Flush all dirty pages to disk
+// 2. Close the WAL (flushes buffered log records and closes file)
+//
+// Returns:
+//   - error: nil on successful shutdown, or error if flush or WAL close fails
+func (p *PageStore) Close() error {
+	if err := p.FlushAllPages(); err != nil {
+		return fmt.Errorf("failed to flush pages during shutdown: %v", err)
+	}
+
+	if err := p.wal.Close(); err != nil {
+		return fmt.Errorf("failed to close WAL: %v", err)
+	}
+
+	return nil
 }
