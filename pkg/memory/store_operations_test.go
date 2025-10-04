@@ -2,7 +2,9 @@ package memory
 
 import (
 	"fmt"
+	"path/filepath"
 	"storemy/pkg/concurrency/transaction"
+	"storemy/pkg/log"
 	"storemy/pkg/storage/heap"
 	"storemy/pkg/tuple"
 	"storemy/pkg/types"
@@ -17,9 +19,26 @@ func contains(s, substr string) bool {
 	return strings.Contains(s, substr)
 }
 
-func TestNewPageStore(t *testing.T) {
+func createPgStore(t *testing.T) *PageStore {
 	tm := NewTableManager()
-	ps := NewPageStore(tm)
+	tempDir := t.TempDir()
+	walPath := filepath.Join(tempDir, "test.wal")
+
+	wal, err := log.NewWAL(walPath, 8192)
+	if err != nil {
+		t.Fatalf("Failed to create WAL: %v", err)
+	}
+
+	ps := NewPageStore(tm, wal)
+	return ps
+}
+
+func TestNewPageStore(t *testing.T) {
+	ps := createPgStore(t)
+	if ps == nil {
+		t.Fatalf("Failed to create PageStore")
+	}
+	defer ps.Close()
 
 	if ps == nil {
 		t.Fatal("NewPageStore returned nil")
@@ -29,33 +48,39 @@ func TestNewPageStore(t *testing.T) {
 		t.Error("cache should be initialized")
 	}
 
-	if ps.transactions == nil {
-		t.Error("transactions should be initialized")
+	if ps.txManager == nil {
+		t.Error("txManager should be initialized")
 	}
 
-	if ps.tableManager != tm {
+	if ps.tableManager == nil {
 		t.Error("tableManager should be set correctly")
 	}
 
-	// Cache is properly initialized - no need to check internal fields
-
 	if ps.cache.Size() != 0 {
 		t.Errorf("cache should be empty, got %d entries", ps.cache.Size())
-	}
-
-	if len(ps.transactions) != 0 {
-		t.Errorf("transactions should be empty, got %d entries", len(ps.transactions))
 	}
 }
 
 func TestPageStore_InsertTuple_Success(t *testing.T) {
 	// Setup
 	tm := NewTableManager()
-	ps := NewPageStore(tm)
+	tempDir := t.TempDir()
+	walPath := filepath.Join(tempDir, "test.wal")
+
+	wal, err := log.NewWAL(walPath, 8192)
+	if err != nil {
+		t.Fatalf("Failed to create WAL: %v", err)
+	}
+
+	ps := NewPageStore(tm, wal)
+	defer ps.Close()
 
 	// Create and add a mock table
-	dbFile := newMockDbFileForPageStore(1, []types.Type{types.IntType, types.StringType}, []string{"id", "name"})
-	err := tm.AddTable(dbFile, "test_table", "id")
+	dbFile := newMockDbFileForPageStore(1,
+		[]types.Type{types.IntType, types.StringType},
+		[]string{"id", "name"})
+
+	err = tm.AddTable(dbFile, "test_table", "id")
 	if err != nil {
 		t.Fatalf("Failed to add table: %v", err)
 	}
@@ -81,8 +106,11 @@ func TestPageStore_InsertTuple_Success(t *testing.T) {
 }
 
 func TestPageStore_InsertTuple_TableNotFound(t *testing.T) {
-	tm := NewTableManager()
-	ps := NewPageStore(tm)
+	ps := createPgStore(t)
+	if ps == nil {
+		t.Fatalf("Failed to create PageStore")
+	}
+	defer ps.Close()
 
 	tid := transaction.NewTransactionID()
 
@@ -112,22 +140,26 @@ func TestPageStore_InsertTuple_TableNotFound(t *testing.T) {
 func TestPageStore_InsertTuple_WithTransactionTracking(t *testing.T) {
 	// Setup
 	tm := NewTableManager()
-	ps := NewPageStore(tm)
+	tempDir := t.TempDir()
+	walPath := filepath.Join(tempDir, "test.wal")
+
+	wal, err := log.NewWAL(walPath, 8192)
+	if err != nil {
+		t.Fatalf("Failed to create WAL: %v", err)
+	}
+
+	ps := NewPageStore(tm, wal)
+	defer ps.Close()
 
 	// Create and add a mock table
 	dbFile := newMockDbFileForPageStore(1, []types.Type{types.IntType}, []string{"id"})
-	err := tm.AddTable(dbFile, "test_table", "id")
+	err = tm.AddTable(dbFile, "test_table", "id")
 	if err != nil {
 		t.Fatalf("Failed to add table: %v", err)
 	}
 
-	// Create transaction and add to transaction map
+	// Create transaction
 	tid := transaction.NewTransactionID()
-	ps.transactions[tid] = &TransactionInfo{
-		startTime:   time.Now(),
-		dirtyPages:  make(map[tuple.PageID]bool),
-		lockedPages: make(map[tuple.PageID]Permissions),
-	}
 
 	// Create tuple
 	testTuple := tuple.NewTuple(dbFile.GetTupleDesc())
@@ -141,13 +173,13 @@ func TestPageStore_InsertTuple_WithTransactionTracking(t *testing.T) {
 	}
 
 	// Verify transaction info was updated
-	txInfo := ps.transactions[tid]
-	if len(txInfo.dirtyPages) == 0 {
+	dirtyPages := ps.txManager.GetDirtyPages(tid)
+	if len(dirtyPages) == 0 {
 		t.Error("Expected dirty pages to be tracked")
 	}
 
 	// Verify the page exists and is marked dirty
-	for pageID := range txInfo.dirtyPages {
+	for _, pageID := range dirtyPages {
 		cachedPage, exists := ps.cache.Get(pageID)
 		if !exists {
 			t.Errorf("Page %v should be in cache", pageID)
@@ -163,23 +195,27 @@ func TestPageStore_InsertTuple_WithTransactionTracking(t *testing.T) {
 func TestPageStore_InsertTuple_MultiplePages(t *testing.T) {
 	// Setup
 	tm := NewTableManager()
-	ps := NewPageStore(tm)
+	tempDir := t.TempDir()
+	walPath := filepath.Join(tempDir, "test.wal")
+
+	wal, err := log.NewWAL(walPath, 8192)
+	if err != nil {
+		t.Fatalf("Failed to create WAL: %v", err)
+	}
+
+	ps := NewPageStore(tm, wal)
+	defer ps.Close()
 
 	// Create mock file that returns multiple pages
 	dbFile := newMockDbFileForPageStore(1, []types.Type{types.IntType}, []string{"id"})
 
-	err := tm.AddTable(dbFile, "test_table", "id")
+	err = tm.AddTable(dbFile, "test_table", "id")
 	if err != nil {
 		t.Fatalf("Failed to add table: %v", err)
 	}
 
 	// Create transaction
 	tid := transaction.NewTransactionID()
-	ps.transactions[tid] = &TransactionInfo{
-		startTime:   time.Now(),
-		dirtyPages:  make(map[tuple.PageID]bool),
-		lockedPages: make(map[tuple.PageID]Permissions),
-	}
 
 	// Create tuple
 	testTuple := tuple.NewTuple(dbFile.GetTupleDesc())
@@ -197,16 +233,25 @@ func TestPageStore_InsertTuple_MultiplePages(t *testing.T) {
 		t.Errorf("Expected 1 page in cache, got %d", ps.cache.Size())
 	}
 
-	txInfo := ps.transactions[tid]
-	if len(txInfo.dirtyPages) != 1 {
-		t.Errorf("Expected 1 dirty page tracked, got %d", len(txInfo.dirtyPages))
+	dirtyPages := ps.txManager.GetDirtyPages(tid)
+	if len(dirtyPages) != 1 {
+		t.Errorf("Expected 1 dirty page tracked, got %d", len(dirtyPages))
 	}
 }
 
 func TestPageStore_InsertTuple_ConcurrentAccess(t *testing.T) {
 	// Setup
 	tm := NewTableManager()
-	ps := NewPageStore(tm)
+	tempDir := t.TempDir()
+	walPath := filepath.Join(tempDir, "test.wal")
+
+	wal, err := log.NewWAL(walPath, 8192)
+	if err != nil {
+		t.Fatalf("Failed to create WAL: %v", err)
+	}
+
+	ps := NewPageStore(tm, wal)
+	defer ps.Close()
 
 	// Create and add mock tables
 	for i := 1; i <= 3; i++ {
@@ -314,10 +359,19 @@ func TestPageStore_Permissions(t *testing.T) {
 func TestPageStore_EdgeCases(t *testing.T) {
 	t.Run("Nil TransactionID", func(t *testing.T) {
 		tm := NewTableManager()
-		ps := NewPageStore(tm)
+		tempDir := t.TempDir()
+		walPath := filepath.Join(tempDir, "test.wal")
+
+		wal, err := log.NewWAL(walPath, 8192)
+		if err != nil {
+			t.Fatalf("Failed to create WAL: %v", err)
+		}
+
+		ps := NewPageStore(tm, wal)
+		defer ps.Close()
 
 		dbFile := newMockDbFileForPageStore(1, []types.Type{types.IntType}, []string{"id"})
-		err := tm.AddTable(dbFile, "test_table", "id")
+		err = tm.AddTable(dbFile, "test_table", "id")
 		if err != nil {
 			t.Fatalf("Failed to add table: %v", err)
 		}
@@ -334,10 +388,19 @@ func TestPageStore_EdgeCases(t *testing.T) {
 
 	t.Run("Nil Tuple", func(t *testing.T) {
 		tm := NewTableManager()
-		ps := NewPageStore(tm)
+		tempDir := t.TempDir()
+		walPath := filepath.Join(tempDir, "test.wal")
+
+		wal, err := log.NewWAL(walPath, 8192)
+		if err != nil {
+			t.Fatalf("Failed to create WAL: %v", err)
+		}
+
+		ps := NewPageStore(tm, wal)
+		defer ps.Close()
 
 		dbFile := newMockDbFileForPageStore(1, []types.Type{types.IntType}, []string{"id"})
-		err := tm.AddTable(dbFile, "test_table", "id")
+		err = tm.AddTable(dbFile, "test_table", "id")
 		if err != nil {
 			t.Fatalf("Failed to add table: %v", err)
 		}
@@ -353,11 +416,20 @@ func TestPageStore_EdgeCases(t *testing.T) {
 func TestPageStore_DeleteTuple_Success(t *testing.T) {
 	// Setup
 	tm := NewTableManager()
-	ps := NewPageStore(tm)
+	tempDir := t.TempDir()
+	walPath := filepath.Join(tempDir, "test.wal")
+
+	wal, err := log.NewWAL(walPath, 8192)
+	if err != nil {
+		t.Fatalf("Failed to create WAL: %v", err)
+	}
+
+	ps := NewPageStore(tm, wal)
+	defer ps.Close()
 
 	// Create and add a mock table
 	dbFile := newMockDbFileForPageStore(1, []types.Type{types.IntType, types.StringType}, []string{"id", "name"})
-	err := tm.AddTable(dbFile, "test_table", "id")
+	err = tm.AddTable(dbFile, "test_table", "id")
 	if err != nil {
 		t.Fatalf("Failed to add table: %v", err)
 	}
@@ -392,7 +464,16 @@ func TestPageStore_DeleteTuple_Success(t *testing.T) {
 
 func TestPageStore_DeleteTuple_NoRecordID(t *testing.T) {
 	tm := NewTableManager()
-	ps := NewPageStore(tm)
+	tempDir := t.TempDir()
+	walPath := filepath.Join(tempDir, "test.wal")
+
+	wal, err := log.NewWAL(walPath, 8192)
+	if err != nil {
+		t.Fatalf("Failed to create WAL: %v", err)
+	}
+
+	ps := NewPageStore(tm, wal)
+	defer ps.Close()
 
 	tid := transaction.NewTransactionID()
 
@@ -422,7 +503,16 @@ func TestPageStore_DeleteTuple_NoRecordID(t *testing.T) {
 
 func TestPageStore_DeleteTuple_TableNotFound(t *testing.T) {
 	tm := NewTableManager()
-	ps := NewPageStore(tm)
+	tempDir := t.TempDir()
+	walPath := filepath.Join(tempDir, "test.wal")
+
+	wal, err := log.NewWAL(walPath, 8192)
+	if err != nil {
+		t.Fatalf("Failed to create WAL: %v", err)
+	}
+
+	ps := NewPageStore(tm, wal)
+	defer ps.Close()
 
 	tid := transaction.NewTransactionID()
 
@@ -460,22 +550,26 @@ func TestPageStore_DeleteTuple_TableNotFound(t *testing.T) {
 func TestPageStore_DeleteTuple_WithTransactionTracking(t *testing.T) {
 	// Setup
 	tm := NewTableManager()
-	ps := NewPageStore(tm)
+	tempDir := t.TempDir()
+	walPath := filepath.Join(tempDir, "test.wal")
+
+	wal, err := log.NewWAL(walPath, 8192)
+	if err != nil {
+		t.Fatalf("Failed to create WAL: %v", err)
+	}
+
+	ps := NewPageStore(tm, wal)
+	defer ps.Close()
 
 	// Create and add a mock table
 	dbFile := newMockDbFileForPageStore(1, []types.Type{types.IntType}, []string{"id"})
-	err := tm.AddTable(dbFile, "test_table", "id")
+	err = tm.AddTable(dbFile, "test_table", "id")
 	if err != nil {
 		t.Fatalf("Failed to add table: %v", err)
 	}
 
-	// Create transaction and add to transaction map
+	// Create transaction
 	tid := transaction.NewTransactionID()
-	ps.transactions[tid] = &TransactionInfo{
-		startTime:   time.Now(),
-		dirtyPages:  make(map[tuple.PageID]bool),
-		lockedPages: make(map[tuple.PageID]Permissions),
-	}
 
 	// Create tuple with RecordID
 	testTuple := tuple.NewTuple(dbFile.GetTupleDesc())
@@ -496,13 +590,13 @@ func TestPageStore_DeleteTuple_WithTransactionTracking(t *testing.T) {
 	}
 
 	// Verify transaction info was updated
-	txInfo := ps.transactions[tid]
-	if len(txInfo.dirtyPages) == 0 {
+	dirtyPages := ps.txManager.GetDirtyPages(tid)
+	if len(dirtyPages) == 0 {
 		t.Error("Expected dirty pages to be tracked")
 	}
 
 	// Verify the page exists and is marked dirty
-	for pageID := range txInfo.dirtyPages {
+	for _, pageID := range dirtyPages {
 		cachedPage, exists := ps.cache.Get(pageID)
 		if !exists {
 			t.Errorf("Page %v should be in cache", pageID)
@@ -518,7 +612,16 @@ func TestPageStore_DeleteTuple_WithTransactionTracking(t *testing.T) {
 func TestPageStore_DeleteTuple_ConcurrentAccess(t *testing.T) {
 	// Setup
 	tm := NewTableManager()
-	ps := NewPageStore(tm)
+	tempDir := t.TempDir()
+	walPath := filepath.Join(tempDir, "test.wal")
+
+	wal, err := log.NewWAL(walPath, 8192)
+	if err != nil {
+		t.Fatalf("Failed to create WAL: %v", err)
+	}
+
+	ps := NewPageStore(tm, wal)
+	defer ps.Close()
 
 	// Create and add mock tables
 	for i := 1; i <= 3; i++ {
@@ -579,10 +682,19 @@ func TestPageStore_DeleteTuple_ConcurrentAccess(t *testing.T) {
 func TestPageStore_DeleteTuple_EdgeCases(t *testing.T) {
 	t.Run("Nil TransactionID", func(t *testing.T) {
 		tm := NewTableManager()
-		ps := NewPageStore(tm)
+		tempDir := t.TempDir()
+		walPath := filepath.Join(tempDir, "test.wal")
+
+		wal, err := log.NewWAL(walPath, 8192)
+		if err != nil {
+			t.Fatalf("Failed to create WAL: %v", err)
+		}
+
+		ps := NewPageStore(tm, wal)
+		defer ps.Close()
 
 		dbFile := newMockDbFileForPageStore(1, []types.Type{types.IntType}, []string{"id"})
-		err := tm.AddTable(dbFile, "test_table", "id")
+		err = tm.AddTable(dbFile, "test_table", "id")
 		if err != nil {
 			t.Fatalf("Failed to add table: %v", err)
 		}
@@ -606,12 +718,21 @@ func TestPageStore_DeleteTuple_EdgeCases(t *testing.T) {
 
 	t.Run("Nil Tuple", func(t *testing.T) {
 		tm := NewTableManager()
-		ps := NewPageStore(tm)
+		tempDir := t.TempDir()
+		walPath := filepath.Join(tempDir, "test.wal")
+
+		wal, err := log.NewWAL(walPath, 8192)
+		if err != nil {
+			t.Fatalf("Failed to create WAL: %v", err)
+		}
+
+		ps := NewPageStore(tm, wal)
+		defer ps.Close()
 
 		tid := transaction.NewTransactionID()
 
 		// Test with nil tuple
-		err := ps.DeleteTuple(tid, nil)
+		err = ps.DeleteTuple(tid, nil)
 		// This should not panic, but will likely error due to nil pointer
 		if err == nil {
 			t.Error("Expected error for nil tuple")
@@ -621,11 +742,20 @@ func TestPageStore_DeleteTuple_EdgeCases(t *testing.T) {
 
 func TestPageStore_MemoryLeaks(t *testing.T) {
 	tm := NewTableManager()
-	ps := NewPageStore(tm)
+	tempDir := t.TempDir()
+	walPath := filepath.Join(tempDir, "test.wal")
+
+	wal, err := log.NewWAL(walPath, 8192)
+	if err != nil {
+		t.Fatalf("Failed to create WAL: %v", err)
+	}
+
+	ps := NewPageStore(tm, wal)
+	defer ps.Close()
 
 	// Create and add a mock table
 	dbFile := newMockDbFileForPageStore(1, []types.Type{types.IntType}, []string{"id"})
-	err := tm.AddTable(dbFile, "test_table", "id")
+	err = tm.AddTable(dbFile, "test_table", "id")
 	if err != nil {
 		t.Fatalf("Failed to add table: %v", err)
 	}
@@ -658,11 +788,20 @@ func TestPageStore_MemoryLeaks(t *testing.T) {
 func TestPageStore_UpdateTuple_Success(t *testing.T) {
 	// Setup
 	tm := NewTableManager()
-	ps := NewPageStore(tm)
+	tempDir := t.TempDir()
+	walPath := filepath.Join(tempDir, "test.wal")
+
+	wal, err := log.NewWAL(walPath, 8192)
+	if err != nil {
+		t.Fatalf("Failed to create WAL: %v", err)
+	}
+
+	ps := NewPageStore(tm, wal)
+	defer ps.Close()
 
 	// Create and add a mock table
 	dbFile := newMockDbFileForPageStore(1, []types.Type{types.IntType, types.StringType}, []string{"id", "name"})
-	err := tm.AddTable(dbFile, "test_table", "id")
+	err = tm.AddTable(dbFile, "test_table", "id")
 	if err != nil {
 		t.Fatalf("Failed to add table: %v", err)
 	}
@@ -705,7 +844,16 @@ func TestPageStore_UpdateTuple_Success(t *testing.T) {
 
 func TestPageStore_UpdateTuple_DeleteFails(t *testing.T) {
 	tm := NewTableManager()
-	ps := NewPageStore(tm)
+	tempDir := t.TempDir()
+	walPath := filepath.Join(tempDir, "test.wal")
+
+	wal, err := log.NewWAL(walPath, 8192)
+	if err != nil {
+		t.Fatalf("Failed to create WAL: %v", err)
+	}
+
+	ps := NewPageStore(tm, wal)
+	defer ps.Close()
 
 	tid := transaction.NewTransactionID()
 
@@ -743,11 +891,20 @@ func TestPageStore_UpdateTuple_InsertFails_Rollback(t *testing.T) {
 	// This test is more complex to set up since we need to make insert fail
 	// after delete succeeds, and verify rollback behavior
 	tm := NewTableManager()
-	ps := NewPageStore(tm)
+	tempDir := t.TempDir()
+	walPath := filepath.Join(tempDir, "test.wal")
+
+	wal, err := log.NewWAL(walPath, 8192)
+	if err != nil {
+		t.Fatalf("Failed to create WAL: %v", err)
+	}
+
+	ps := NewPageStore(tm, wal)
+	defer ps.Close()
 
 	// Create a mock table
 	dbFile := newMockDbFileForPageStore(1, []types.Type{types.IntType}, []string{"id"})
-	err := tm.AddTable(dbFile, "test_table", "id")
+	err = tm.AddTable(dbFile, "test_table", "id")
 	if err != nil {
 		t.Fatalf("Failed to add table: %v", err)
 	}
@@ -776,7 +933,15 @@ func TestPageStore_UpdateTuple_InsertFails_Rollback(t *testing.T) {
 
 	// First, remove the table we just added to cause insert to fail
 	tm = NewTableManager() // Reset table manager
-	ps = NewPageStore(tm)  // Reset page store
+	tempDir = t.TempDir()
+	walPath = filepath.Join(tempDir, "test2.wal")
+
+	wal, err = log.NewWAL(walPath, 8192)
+	if err != nil {
+		t.Fatalf("Failed to create second WAL: %v", err)
+	}
+
+	ps = NewPageStore(tm, wal) // Reset page store
 
 	// Add the table back
 	err = tm.AddTable(dbFile, "test_table", "id")
@@ -803,22 +968,26 @@ func TestPageStore_UpdateTuple_InsertFails_Rollback(t *testing.T) {
 func TestPageStore_UpdateTuple_WithTransactionTracking(t *testing.T) {
 	// Setup
 	tm := NewTableManager()
-	ps := NewPageStore(tm)
+	tempDir := t.TempDir()
+	walPath := filepath.Join(tempDir, "test.wal")
+
+	wal, err := log.NewWAL(walPath, 8192)
+	if err != nil {
+		t.Fatalf("Failed to create WAL: %v", err)
+	}
+
+	ps := NewPageStore(tm, wal)
+	defer ps.Close()
 
 	// Create and add a mock table
 	dbFile := newMockDbFileForPageStore(1, []types.Type{types.IntType}, []string{"id"})
-	err := tm.AddTable(dbFile, "test_table", "id")
+	err = tm.AddTable(dbFile, "test_table", "id")
 	if err != nil {
 		t.Fatalf("Failed to add table: %v", err)
 	}
 
-	// Create transaction and add to transaction map
+	// Create transaction
 	tid := transaction.NewTransactionID()
-	ps.transactions[tid] = &TransactionInfo{
-		startTime:   time.Now(),
-		dirtyPages:  make(map[tuple.PageID]bool),
-		lockedPages: make(map[tuple.PageID]Permissions),
-	}
 
 	// Create old tuple with RecordID
 	oldTuple := tuple.NewTuple(dbFile.GetTupleDesc())
@@ -844,13 +1013,13 @@ func TestPageStore_UpdateTuple_WithTransactionTracking(t *testing.T) {
 	}
 
 	// Verify transaction info was updated
-	txInfo := ps.transactions[tid]
-	if len(txInfo.dirtyPages) == 0 {
+	dirtyPages := ps.txManager.GetDirtyPages(tid)
+	if len(dirtyPages) == 0 {
 		t.Error("Expected dirty pages to be tracked")
 	}
 
 	// Verify pages exist and are marked dirty
-	for pageID := range txInfo.dirtyPages {
+	for _, pageID := range dirtyPages {
 		cachedPage, exists := ps.cache.Get(pageID)
 		if !exists {
 			t.Errorf("Page %v should be in cache", pageID)
@@ -866,7 +1035,16 @@ func TestPageStore_UpdateTuple_WithTransactionTracking(t *testing.T) {
 func TestPageStore_UpdateTuple_ConcurrentAccess(t *testing.T) {
 	// Setup
 	tm := NewTableManager()
-	ps := NewPageStore(tm)
+	tempDir := t.TempDir()
+	walPath := filepath.Join(tempDir, "test.wal")
+
+	wal, err := log.NewWAL(walPath, 8192)
+	if err != nil {
+		t.Fatalf("Failed to create WAL: %v", err)
+	}
+
+	ps := NewPageStore(tm, wal)
+	defer ps.Close()
 
 	// Create and add mock tables
 	for i := 1; i <= 3; i++ {
@@ -933,10 +1111,19 @@ func TestPageStore_UpdateTuple_ConcurrentAccess(t *testing.T) {
 func TestPageStore_UpdateTuple_EdgeCases(t *testing.T) {
 	t.Run("Nil TransactionID", func(t *testing.T) {
 		tm := NewTableManager()
-		ps := NewPageStore(tm)
+		tempDir := t.TempDir()
+		walPath := filepath.Join(tempDir, "test.wal")
+
+		wal, err := log.NewWAL(walPath, 8192)
+		if err != nil {
+			t.Fatalf("Failed to create WAL: %v", err)
+		}
+
+		ps := NewPageStore(tm, wal)
+		defer ps.Close()
 
 		dbFile := newMockDbFileForPageStore(1, []types.Type{types.IntType}, []string{"id"})
-		err := tm.AddTable(dbFile, "test_table", "id")
+		err = tm.AddTable(dbFile, "test_table", "id")
 		if err != nil {
 			t.Fatalf("Failed to add table: %v", err)
 		}
@@ -966,10 +1153,19 @@ func TestPageStore_UpdateTuple_EdgeCases(t *testing.T) {
 
 	t.Run("Nil Old Tuple", func(t *testing.T) {
 		tm := NewTableManager()
-		ps := NewPageStore(tm)
+		tempDir := t.TempDir()
+		walPath := filepath.Join(tempDir, "test.wal")
+
+		wal, err := log.NewWAL(walPath, 8192)
+		if err != nil {
+			t.Fatalf("Failed to create WAL: %v", err)
+		}
+
+		ps := NewPageStore(tm, wal)
+		defer ps.Close()
 
 		dbFile := newMockDbFileForPageStore(1, []types.Type{types.IntType}, []string{"id"})
-		err := tm.AddTable(dbFile, "test_table", "id")
+		err = tm.AddTable(dbFile, "test_table", "id")
 		if err != nil {
 			t.Fatalf("Failed to add table: %v", err)
 		}
@@ -990,10 +1186,19 @@ func TestPageStore_UpdateTuple_EdgeCases(t *testing.T) {
 
 	t.Run("Nil New Tuple", func(t *testing.T) {
 		tm := NewTableManager()
-		ps := NewPageStore(tm)
+		tempDir := t.TempDir()
+		walPath := filepath.Join(tempDir, "test.wal")
+
+		wal, err := log.NewWAL(walPath, 8192)
+		if err != nil {
+			t.Fatalf("Failed to create WAL: %v", err)
+		}
+
+		ps := NewPageStore(tm, wal)
+		defer ps.Close()
 
 		dbFile := newMockDbFileForPageStore(1, []types.Type{types.IntType}, []string{"id"})
-		err := tm.AddTable(dbFile, "test_table", "id")
+		err = tm.AddTable(dbFile, "test_table", "id")
 		if err != nil {
 			t.Fatalf("Failed to add table: %v", err)
 		}
@@ -1021,10 +1226,19 @@ func TestPageStore_UpdateTuple_EdgeCases(t *testing.T) {
 
 	t.Run("Same Old and New Tuple", func(t *testing.T) {
 		tm := NewTableManager()
-		ps := NewPageStore(tm)
+		tempDir := t.TempDir()
+		walPath := filepath.Join(tempDir, "test.wal")
+
+		wal, err := log.NewWAL(walPath, 8192)
+		if err != nil {
+			t.Fatalf("Failed to create WAL: %v", err)
+		}
+
+		ps := NewPageStore(tm, wal)
+		defer ps.Close()
 
 		dbFile := newMockDbFileForPageStore(1, []types.Type{types.IntType}, []string{"id"})
-		err := tm.AddTable(dbFile, "test_table", "id")
+		err = tm.AddTable(dbFile, "test_table", "id")
 		if err != nil {
 			t.Fatalf("Failed to add table: %v", err)
 		}
@@ -1053,10 +1267,19 @@ func TestPageStore_UpdateTuple_EdgeCases(t *testing.T) {
 
 func TestPageStore_FlushAllPages_EmptyCache(t *testing.T) {
 	tm := NewTableManager()
-	ps := NewPageStore(tm)
+	tempDir := t.TempDir()
+	walPath := filepath.Join(tempDir, "test.wal")
+
+	wal, err := log.NewWAL(walPath, 8192)
+	if err != nil {
+		t.Fatalf("Failed to create WAL: %v", err)
+	}
+
+	ps := NewPageStore(tm, wal)
+	defer ps.Close()
 
 	// Test with empty cache
-	err := ps.FlushAllPages()
+	err = ps.FlushAllPages()
 	if err != nil {
 		t.Errorf("FlushAllPages should not fail with empty cache: %v", err)
 	}
@@ -1064,11 +1287,20 @@ func TestPageStore_FlushAllPages_EmptyCache(t *testing.T) {
 
 func TestPageStore_FlushAllPages_SinglePage(t *testing.T) {
 	tm := NewTableManager()
-	ps := NewPageStore(tm)
+	tempDir := t.TempDir()
+	walPath := filepath.Join(tempDir, "test.wal")
+
+	wal, err := log.NewWAL(walPath, 8192)
+	if err != nil {
+		t.Fatalf("Failed to create WAL: %v", err)
+	}
+
+	ps := NewPageStore(tm, wal)
+	defer ps.Close()
 
 	// Create and add a mock table
 	dbFile := newMockDbFileForPageStore(1, []types.Type{types.IntType}, []string{"id"})
-	err := tm.AddTable(dbFile, "test_table", "id")
+	err = tm.AddTable(dbFile, "test_table", "id")
 	if err != nil {
 		t.Fatalf("Failed to add table: %v", err)
 	}
@@ -1110,7 +1342,16 @@ func TestPageStore_FlushAllPages_SinglePage(t *testing.T) {
 
 func TestPageStore_FlushAllPages_MultiplePages(t *testing.T) {
 	tm := NewTableManager()
-	ps := NewPageStore(tm)
+	tempDir := t.TempDir()
+	walPath := filepath.Join(tempDir, "test.wal")
+
+	wal, err := log.NewWAL(walPath, 8192)
+	if err != nil {
+		t.Fatalf("Failed to create WAL: %v", err)
+	}
+
+	ps := NewPageStore(tm, wal)
+	defer ps.Close()
 
 	// Create and add mock tables
 	numTables := 3
@@ -1159,7 +1400,7 @@ func TestPageStore_FlushAllPages_MultiplePages(t *testing.T) {
 	}
 
 	// Test FlushAllPages
-	err := ps.FlushAllPages()
+	err = ps.FlushAllPages()
 	if err != nil {
 		t.Errorf("FlushAllPages failed: %v", err)
 	}
@@ -1184,11 +1425,20 @@ func TestPageStore_FlushAllPages_MultiplePages(t *testing.T) {
 
 func TestPageStore_FlushAllPages_ConcurrentAccess(t *testing.T) {
 	tm := NewTableManager()
-	ps := NewPageStore(tm)
+	tempDir := t.TempDir()
+	walPath := filepath.Join(tempDir, "test.wal")
+
+	wal, err := log.NewWAL(walPath, 8192)
+	if err != nil {
+		t.Fatalf("Failed to create WAL: %v", err)
+	}
+
+	ps := NewPageStore(tm, wal)
+	defer ps.Close()
 
 	// Create and add a mock table
 	dbFile := newMockDbFileForPageStore(1, []types.Type{types.IntType}, []string{"id"})
-	err := tm.AddTable(dbFile, "test_table", "id")
+	err = tm.AddTable(dbFile, "test_table", "id")
 	if err != nil {
 		t.Fatalf("Failed to add table: %v", err)
 	}
@@ -1268,11 +1518,20 @@ func TestPageStore_FlushAllPages_ConcurrentAccess(t *testing.T) {
 
 func TestPageStore_FlushAllPages_MixedDirtyAndCleanPages(t *testing.T) {
 	tm := NewTableManager()
-	ps := NewPageStore(tm)
+	tempDir := t.TempDir()
+	walPath := filepath.Join(tempDir, "test.wal")
+
+	wal, err := log.NewWAL(walPath, 8192)
+	if err != nil {
+		t.Fatalf("Failed to create WAL: %v", err)
+	}
+
+	ps := NewPageStore(tm, wal)
+	defer ps.Close()
 
 	// Create and add a mock table
 	dbFile := newMockDbFileForPageStore(1, []types.Type{types.IntType}, []string{"id"})
-	err := tm.AddTable(dbFile, "test_table", "id")
+	err = tm.AddTable(dbFile, "test_table", "id")
 	if err != nil {
 		t.Fatalf("Failed to add table: %v", err)
 	}
@@ -1357,11 +1616,20 @@ func TestPageStore_FlushAllPages_WriteFailure(t *testing.T) {
 	// This test would require a mock that can simulate write failures
 	// For now, we'll test the basic error propagation structure
 	tm := NewTableManager()
-	ps := NewPageStore(tm)
+	tempDir := t.TempDir()
+	walPath := filepath.Join(tempDir, "test.wal")
+
+	wal, err := log.NewWAL(walPath, 8192)
+	if err != nil {
+		t.Fatalf("Failed to create WAL: %v", err)
+	}
+
+	ps := NewPageStore(tm, wal)
+	defer ps.Close()
 
 	// Create a mock table and insert a tuple
 	dbFile := newMockDbFileForPageStore(1, []types.Type{types.IntType}, []string{"id"})
-	err := tm.AddTable(dbFile, "test_table", "id")
+	err = tm.AddTable(dbFile, "test_table", "id")
 	if err != nil {
 		t.Fatalf("Failed to add table: %v", err)
 	}
@@ -1389,11 +1657,20 @@ func TestPageStore_FlushAllPages_WriteFailure(t *testing.T) {
 // Tests for GetPage method
 func TestPageStore_GetPage_Success(t *testing.T) {
 	tm := NewTableManager()
-	ps := NewPageStore(tm)
+	tempDir := t.TempDir()
+	walPath := filepath.Join(tempDir, "test.wal")
+
+	wal, err := log.NewWAL(walPath, 8192)
+	if err != nil {
+		t.Fatalf("Failed to create WAL: %v", err)
+	}
+
+	ps := NewPageStore(tm, wal)
+	defer ps.Close()
 
 	// Create and add a mock table
 	dbFile := newMockDbFileForPageStore(1, []types.Type{types.IntType}, []string{"id"})
-	err := tm.AddTable(dbFile, "test_table", "id")
+	err = tm.AddTable(dbFile, "test_table", "id")
 	if err != nil {
 		t.Fatalf("Failed to add table: %v", err)
 	}
@@ -1419,25 +1696,33 @@ func TestPageStore_GetPage_Success(t *testing.T) {
 	}
 
 	// Verify transaction tracking
-	txInfo, exists := ps.transactions[tid]
-	if !exists {
-		t.Error("Expected transaction to be tracked")
+	txInfo := ps.txManager.GetOrCreate(tid)
+	if len(txInfo.lockedPages) == 0 {
+		t.Error("Expected transaction to have locked pages")
 	}
-	if _, locked := txInfo.lockedPages[pageID]; !locked {
+	if perm, locked := txInfo.lockedPages[pageID]; !locked {
 		t.Error("Expected page to be locked by transaction")
-	}
-	if txInfo.lockedPages[pageID] != ReadOnly {
-		t.Errorf("Expected ReadOnly permission, got %v", txInfo.lockedPages[pageID])
+	} else if perm != ReadOnly {
+		t.Errorf("Expected ReadOnly permission, got %v", perm)
 	}
 }
 
 func TestPageStore_GetPage_CacheHit(t *testing.T) {
 	tm := NewTableManager()
-	ps := NewPageStore(tm)
+	tempDir := t.TempDir()
+	walPath := filepath.Join(tempDir, "test.wal")
+
+	wal, err := log.NewWAL(walPath, 8192)
+	if err != nil {
+		t.Fatalf("Failed to create WAL: %v", err)
+	}
+
+	ps := NewPageStore(tm, wal)
+	defer ps.Close()
 
 	// Create and add a mock table
 	dbFile := newMockDbFileForPageStore(1, []types.Type{types.IntType}, []string{"id"})
-	err := tm.AddTable(dbFile, "test_table", "id")
+	err = tm.AddTable(dbFile, "test_table", "id")
 	if err != nil {
 		t.Fatalf("Failed to add table: %v", err)
 	}
@@ -1468,7 +1753,7 @@ func TestPageStore_GetPage_CacheHit(t *testing.T) {
 	}
 
 	// Verify permission was updated in transaction info
-	txInfo := ps.transactions[tid]
+	txInfo := ps.txManager.GetOrCreate(tid)
 	if txInfo.lockedPages[pageID] != ReadWrite {
 		t.Errorf("Expected permission to be updated to ReadWrite, got %v", txInfo.lockedPages[pageID])
 	}
@@ -1476,7 +1761,16 @@ func TestPageStore_GetPage_CacheHit(t *testing.T) {
 
 func TestPageStore_GetPage_TableNotFound(t *testing.T) {
 	tm := NewTableManager()
-	ps := NewPageStore(tm)
+	tempDir := t.TempDir()
+	walPath := filepath.Join(tempDir, "test.wal")
+
+	wal, err := log.NewWAL(walPath, 8192)
+	if err != nil {
+		t.Fatalf("Failed to create WAL: %v", err)
+	}
+
+	ps := NewPageStore(tm, wal)
+	defer ps.Close()
 
 	tid := transaction.NewTransactionID()
 	pageID := heap.NewHeapPageID(999, 0) // Non-existent table
@@ -1499,11 +1793,20 @@ func TestPageStore_GetPage_ReadPageFailure(t *testing.T) {
 	// This test would require a mock that can simulate read failures
 	// For now, we'll test the basic structure
 	tm := NewTableManager()
-	ps := NewPageStore(tm)
+	tempDir := t.TempDir()
+	walPath := filepath.Join(tempDir, "test.wal")
+
+	wal, err := log.NewWAL(walPath, 8192)
+	if err != nil {
+		t.Fatalf("Failed to create WAL: %v", err)
+	}
+
+	ps := NewPageStore(tm, wal)
+	defer ps.Close()
 
 	// Create and add a mock table
 	dbFile := newMockDbFileForPageStore(1, []types.Type{types.IntType}, []string{"id"})
-	err := tm.AddTable(dbFile, "test_table", "id")
+	err = tm.AddTable(dbFile, "test_table", "id")
 	if err != nil {
 		t.Fatalf("Failed to add table: %v", err)
 	}
@@ -1523,11 +1826,20 @@ func TestPageStore_GetPage_ReadPageFailure(t *testing.T) {
 
 func TestPageStore_GetPage_PermissionTypes(t *testing.T) {
 	tm := NewTableManager()
-	ps := NewPageStore(tm)
+	tempDir := t.TempDir()
+	walPath := filepath.Join(tempDir, "test.wal")
+
+	wal, err := log.NewWAL(walPath, 8192)
+	if err != nil {
+		t.Fatalf("Failed to create WAL: %v", err)
+	}
+
+	ps := NewPageStore(tm, wal)
+	defer ps.Close()
 
 	// Create and add a mock table
 	dbFile := newMockDbFileForPageStore(1, []types.Type{types.IntType}, []string{"id"})
-	err := tm.AddTable(dbFile, "test_table", "id")
+	err = tm.AddTable(dbFile, "test_table", "id")
 	if err != nil {
 		t.Fatalf("Failed to add table: %v", err)
 	}
@@ -1556,7 +1868,7 @@ func TestPageStore_GetPage_PermissionTypes(t *testing.T) {
 			}
 
 			// Verify transaction tracking
-			txInfo := ps.transactions[tid]
+			txInfo := ps.txManager.GetOrCreate(tid)
 			if txInfo.lockedPages[pageID] != tt.permission {
 				t.Errorf("Expected %s permission, got %v", tt.name, txInfo.lockedPages[pageID])
 			}
@@ -1566,11 +1878,20 @@ func TestPageStore_GetPage_PermissionTypes(t *testing.T) {
 
 func TestPageStore_GetPage_MultipleTransactions(t *testing.T) {
 	tm := NewTableManager()
-	ps := NewPageStore(tm)
+	tempDir := t.TempDir()
+	walPath := filepath.Join(tempDir, "test.wal")
+
+	wal, err := log.NewWAL(walPath, 8192)
+	if err != nil {
+		t.Fatalf("Failed to create WAL: %v", err)
+	}
+
+	ps := NewPageStore(tm, wal)
+	defer ps.Close()
 
 	// Create and add a mock table
 	dbFile := newMockDbFileForPageStore(1, []types.Type{types.IntType}, []string{"id"})
-	err := tm.AddTable(dbFile, "test_table", "id")
+	err = tm.AddTable(dbFile, "test_table", "id")
 	if err != nil {
 		t.Fatalf("Failed to add table: %v", err)
 	}
@@ -1601,18 +1922,21 @@ func TestPageStore_GetPage_MultipleTransactions(t *testing.T) {
 	}
 
 	// Verify both transactions are tracked
-	if len(ps.transactions) != 2 {
-		t.Errorf("Expected 2 transactions, got %d", len(ps.transactions))
+	ps.txManager.mutex.RLock()
+	numTransactions := len(ps.txManager.transactions)
+	ps.txManager.mutex.RUnlock()
+	if numTransactions != 2 {
+		t.Errorf("Expected 2 transactions, got %d", numTransactions)
 	}
 
 	// Verify transaction 1 info
-	txInfo1 := ps.transactions[tid1]
+	txInfo1 := ps.txManager.GetOrCreate(tid1)
 	if txInfo1.lockedPages[pageID1] != ReadOnly {
 		t.Error("Transaction 1 should have ReadOnly lock on page 1")
 	}
 
 	// Verify transaction 2 info
-	txInfo2 := ps.transactions[tid2]
+	txInfo2 := ps.txManager.GetOrCreate(tid2)
 	if txInfo2.lockedPages[pageID2] != ReadWrite {
 		t.Error("Transaction 2 should have ReadWrite lock on page 2")
 	}
@@ -1620,11 +1944,20 @@ func TestPageStore_GetPage_MultipleTransactions(t *testing.T) {
 
 func TestPageStore_GetPage_AccessOrder(t *testing.T) {
 	tm := NewTableManager()
-	ps := NewPageStore(tm)
+	tempDir := t.TempDir()
+	walPath := filepath.Join(tempDir, "test.wal")
+
+	wal, err := log.NewWAL(walPath, 8192)
+	if err != nil {
+		t.Fatalf("Failed to create WAL: %v", err)
+	}
+
+	ps := NewPageStore(tm, wal)
+	defer ps.Close()
 
 	// Create and add a mock table
 	dbFile := newMockDbFileForPageStore(1, []types.Type{types.IntType}, []string{"id"})
-	err := tm.AddTable(dbFile, "test_table", "id")
+	err = tm.AddTable(dbFile, "test_table", "id")
 	if err != nil {
 		t.Fatalf("Failed to add table: %v", err)
 	}
@@ -1678,7 +2011,16 @@ func TestPageStore_GetPage_AccessOrder(t *testing.T) {
 
 func TestPageStore_GetPage_ConcurrentAccess(t *testing.T) {
 	tm := NewTableManager()
-	ps := NewPageStore(tm)
+	tempDir := t.TempDir()
+	walPath := filepath.Join(tempDir, "test.wal")
+
+	wal, err := log.NewWAL(walPath, 8192)
+	if err != nil {
+		t.Fatalf("Failed to create WAL: %v", err)
+	}
+
+	ps := NewPageStore(tm, wal)
+	defer ps.Close()
 
 	// Create and add mock tables
 	numTables := 3
@@ -1733,8 +2075,11 @@ func TestPageStore_GetPage_ConcurrentAccess(t *testing.T) {
 		t.Error("Expected pages in cache after concurrent access")
 	}
 	// Transactions should be cleaned up after commits
-	if len(ps.transactions) != 0 {
-		t.Errorf("Expected no active transactions after cleanup, got %d", len(ps.transactions))
+	ps.txManager.mutex.RLock()
+	numTransactions := len(ps.txManager.transactions)
+	ps.txManager.mutex.RUnlock()
+	if numTransactions != 0 {
+		t.Errorf("Expected no active transactions after cleanup, got %d", numTransactions)
 	}
 
 	// All pages should be accessible without error
@@ -1747,11 +2092,20 @@ func TestPageStore_GetPage_ConcurrentAccess(t *testing.T) {
 
 func TestPageStore_GetPage_TransactionInfoCreation(t *testing.T) {
 	tm := NewTableManager()
-	ps := NewPageStore(tm)
+	tempDir := t.TempDir()
+	walPath := filepath.Join(tempDir, "test.wal")
+
+	wal, err := log.NewWAL(walPath, 8192)
+	if err != nil {
+		t.Fatalf("Failed to create WAL: %v", err)
+	}
+
+	ps := NewPageStore(tm, wal)
+	defer ps.Close()
 
 	// Create and add a mock table
 	dbFile := newMockDbFileForPageStore(1, []types.Type{types.IntType}, []string{"id"})
-	err := tm.AddTable(dbFile, "test_table", "id")
+	err = tm.AddTable(dbFile, "test_table", "id")
 	if err != nil {
 		t.Fatalf("Failed to add table: %v", err)
 	}
@@ -1760,7 +2114,10 @@ func TestPageStore_GetPage_TransactionInfoCreation(t *testing.T) {
 	pageID := heap.NewHeapPageID(1, 0)
 
 	// Verify transaction doesn't exist initially
-	if _, exists := ps.transactions[tid]; exists {
+	ps.txManager.mutex.RLock()
+	_, exists := ps.txManager.transactions[tid]
+	ps.txManager.mutex.RUnlock()
+	if exists {
 		t.Error("Transaction should not exist initially")
 	}
 
@@ -1774,18 +2131,23 @@ func TestPageStore_GetPage_TransactionInfoCreation(t *testing.T) {
 	}
 
 	// Verify transaction info was created
-	txInfo, exists := ps.transactions[tid]
+	ps.txManager.mutex.RLock()
+	_, exists = ps.txManager.transactions[tid]
+	ps.txManager.mutex.RUnlock()
 	if !exists {
 		t.Fatal("Expected transaction info to be created")
 	}
 
 	// Verify transaction info fields
+	txInfo := ps.txManager.GetOrCreate(tid)
 	if txInfo.startTime.IsZero() {
 		t.Error("Expected start time to be set")
 	}
+
 	if txInfo.dirtyPages == nil {
 		t.Error("Expected dirty pages map to be initialized")
 	}
+
 	if txInfo.lockedPages == nil {
 		t.Error("Expected locked pages map to be initialized")
 	}
@@ -1797,10 +2159,19 @@ func TestPageStore_GetPage_TransactionInfoCreation(t *testing.T) {
 func TestPageStore_GetPage_EdgeCases(t *testing.T) {
 	t.Run("Nil TransactionID", func(t *testing.T) {
 		tm := NewTableManager()
-		ps := NewPageStore(tm)
+		tempDir := t.TempDir()
+		walPath := filepath.Join(tempDir, "test.wal")
+
+		wal, err := log.NewWAL(walPath, 8192)
+		if err != nil {
+			t.Fatalf("Failed to create WAL: %v", err)
+		}
+
+		ps := NewPageStore(tm, wal)
+		defer ps.Close()
 
 		dbFile := newMockDbFileForPageStore(1, []types.Type{types.IntType}, []string{"id"})
-		err := tm.AddTable(dbFile, "test_table", "id")
+		err = tm.AddTable(dbFile, "test_table", "id")
 		if err != nil {
 			t.Fatalf("Failed to add table: %v", err)
 		}
@@ -1816,10 +2187,19 @@ func TestPageStore_GetPage_EdgeCases(t *testing.T) {
 
 	t.Run("Zero PageID", func(t *testing.T) {
 		tm := NewTableManager()
-		ps := NewPageStore(tm)
+		tempDir := t.TempDir()
+		walPath := filepath.Join(tempDir, "test.wal")
+
+		wal, err := log.NewWAL(walPath, 8192)
+		if err != nil {
+			t.Fatalf("Failed to create WAL: %v", err)
+		}
+
+		ps := NewPageStore(tm, wal)
+		defer ps.Close()
 
 		dbFile := newMockDbFileForPageStore(0, []types.Type{types.IntType}, []string{"id"})
-		err := tm.AddTable(dbFile, "test_table", "id")
+		err = tm.AddTable(dbFile, "test_table", "id")
 		if err != nil {
 			t.Fatalf("Failed to add table: %v", err)
 		}
