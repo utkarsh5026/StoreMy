@@ -29,12 +29,8 @@ func TestNewLRUPageCache(t *testing.T) {
 		t.Error("Cache map not initialized")
 	}
 
-	if cache.head == nil || cache.tail == nil {
-		t.Error("Head or tail not initialized")
-	}
-
-	if cache.head.next != cache.tail || cache.tail.prev != cache.head {
-		t.Error("Head and tail not properly linked")
+	if cache.lru == nil {
+		t.Error("LRU list not initialized")
 	}
 }
 
