@@ -41,6 +41,9 @@ func createTestTable(t *testing.T, tableManager *memory.TableManager, tid *trans
 	if err != nil {
 		t.Fatalf("Failed to create test table: %v", err)
 	}
+
+	// Register cleanup to close table file
+	cleanupTable(t, tableManager, "test_table")
 }
 
 func TestNewInsertPlan(t *testing.T) {
