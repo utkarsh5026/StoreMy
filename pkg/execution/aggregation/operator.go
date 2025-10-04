@@ -13,31 +13,21 @@ import (
 // 1. Open phase: Consumes all input tuples and builds aggregation state
 // 2. Iteration phase: Returns computed aggregate results
 type AggregateOperator struct {
-	source        iterator.DbIterator     // Source iterator providing input tuples
-	aField        int                     // Index of the field to aggregate on
-	gField        int                     // Index of the grouping field (NoGrouping if no grouping)
-	op            AggregateOp             // Type of aggregation operation to perform
-	aggregator    Aggregator              // Type-specific aggregator that computes results
-	aggIterator   iterator.DbIterator     // Iterator over computed aggregate results
-	tupleDesc     *tuple.TupleDescription // Schema description of result tuples
-	opened        bool                    // Tracks whether the operator has been opened
-	nextTuple     *tuple.Tuple            // Cached tuple for hasNext/next pattern
-	hasNextCalled bool                    // Tracks if hasNext was called before next
+	source         iterator.DbIterator
+	aggregateField int
+	groupByField   int
+	op             AggregateOp
+	aggregator     Aggregator
+	aggIterator    iterator.DbIterator
+	tupleDesc      *tuple.TupleDescription
+	opened         bool
+	nextTuple      *tuple.Tuple
+	hasNextCalled  bool
 }
 
 // NewAggregateOperator creates a new aggregate operator with the specified configuration.
-// The operator will aggregate values from aField, optionally grouping by gField.
-//
-// Parameters:
-//   - source: The source iterator providing input tuples (must not be nil)
-//   - aField: Index of the field to aggregate (must be valid field index)
-//   - gField: Index of the grouping field, or NoGrouping for no grouping
-//   - op: The aggregation operation to perform (COUNT, SUM, AVG, MIN, MAX)
-//
-// Returns:
-//   - *AggregateOperator: Configured aggregate operator ready for use
-//   - error: Error if parameters are invalid or aggregator creation fails
-func NewAggregateOperator(source iterator.DbIterator, aField, gField int, op AggregateOp) (*AggregateOperator, error) {
+// The operator will aggregate values from aggregateField, optionally grouping by groupByField.
+func NewAggregateOperator(source iterator.DbIterator, aggregateField, groupByField int, op AggregateOp) (*AggregateOperator, error) {
 	if source == nil {
 		return nil, fmt.Errorf("source iterator cannot be nil")
 	}
@@ -47,53 +37,53 @@ func NewAggregateOperator(source iterator.DbIterator, aField, gField int, op Agg
 		return nil, fmt.Errorf("source tuple description cannot be nil")
 	}
 
-	if aField < 0 || aField >= len(sourceDesc.Types) {
-		return nil, fmt.Errorf("invalid aggregate field index: %d", aField)
+	if aggregateField < 0 || aggregateField >= len(sourceDesc.Types) {
+		return nil, fmt.Errorf("invalid aggregate field index: %d", aggregateField)
 	}
 
-	if gField != NoGrouping && (gField < 0 || gField >= len(sourceDesc.Types)) {
-		return nil, fmt.Errorf("invalid group field index: %d", gField)
+	if groupByField != NoGrouping && (groupByField < 0 || groupByField >= len(sourceDesc.Types)) {
+		return nil, fmt.Errorf("invalid group field index: %d", groupByField)
 	}
 
 	aggOp := &AggregateOperator{
-		source: source,
-		aField: aField,
-		gField: gField,
-		op:     op,
-		opened: false,
+		source:         source,
+		aggregateField: aggregateField,
+		groupByField:   groupByField,
+		op:             op,
+		opened:         false,
 	}
 
-	aggFieldType := sourceDesc.Types[aField]
+	aggFieldType := sourceDesc.Types[aggregateField]
 	var gbFieldType types.Type
-	if gField != NoGrouping {
-		gbFieldType = sourceDesc.Types[gField]
+	if groupByField != NoGrouping {
+		gbFieldType = sourceDesc.Types[groupByField]
 	}
 
 	switch aggFieldType {
 	case types.IntType:
 		var err error
-		aggOp.aggregator, err = NewIntAggregator(gField, gbFieldType, aField, op)
+		aggOp.aggregator, err = NewIntAggregator(groupByField, gbFieldType, aggregateField, op)
 		if err != nil {
 			return nil, err
 		}
 
 	case types.BoolType:
 		var err error
-		aggOp.aggregator, err = NewBooleanAggregator(gField, gbFieldType, aField, op)
+		aggOp.aggregator, err = NewBooleanAggregator(groupByField, gbFieldType, aggregateField, op)
 		if err != nil {
 			return nil, err
 		}
 
 	case types.StringType:
 		var err error
-		aggOp.aggregator, err = NewStringAggregator(gField, gbFieldType, aField, op)
+		aggOp.aggregator, err = NewStringAggregator(groupByField, gbFieldType, aggregateField, op)
 		if err != nil {
 			return nil, err
 		}
 
 	case types.FloatType:
 		var err error
-		aggOp.aggregator, err = NewFloatAggregator(gField, gbFieldType, aField, op)
+		aggOp.aggregator, err = NewFloatAggregator(groupByField, gbFieldType, aggregateField, op)
 		if err != nil {
 			return nil, err
 		}
@@ -130,20 +120,12 @@ func (agg *AggregateOperator) Close() error {
 }
 
 // GetTupleDesc returns the schema description of the result tuples.
-//
-// Returns:
-//   - *tuple.TupleDescription: Schema of result tuples
 func (agg *AggregateOperator) GetTupleDesc() *tuple.TupleDescription {
 	return agg.tupleDesc
 }
 
 // Rewind resets the aggregate result iterator to the beginning.
 // This allows re-reading the aggregate results without recomputing them.
-//
-// Returns:
-//   - error: Error if operator is not opened or rewind fails
-//
-// Note: Rewind does not recompute aggregates, only resets result iteration
 func (agg *AggregateOperator) Rewind() error {
 	if !agg.opened {
 		return fmt.Errorf("aggregate operator not opened")
@@ -210,10 +192,6 @@ func (agg *AggregateOperator) Open() error {
 
 // HasNext checks if there are more aggregate result tuples available.
 // Uses internal caching to support the hasNext/next pattern efficiently.
-//
-// Returns:
-//   - bool: True if more tuples are available, false otherwise
-//   - error: Error if operator is not opened or reading fails
 func (agg *AggregateOperator) HasNext() (bool, error) {
 	if !agg.opened {
 		return false, fmt.Errorf("aggregate operator not opened")
@@ -234,10 +212,6 @@ func (agg *AggregateOperator) HasNext() (bool, error) {
 // Next returns the next aggregate result tuple.
 // Must be called after HasNext() returns true, or will automatically
 // check for tuple availability.
-//
-// Returns:
-//   - *tuple.Tuple: Next aggregate result tuple
-//   - error: Error if operator not opened, no tuples available, or reading fails
 func (agg *AggregateOperator) Next() (*tuple.Tuple, error) {
 	if !agg.opened {
 		return nil, fmt.Errorf("aggregate operator not opened")
@@ -266,10 +240,6 @@ func (agg *AggregateOperator) Next() (*tuple.Tuple, error) {
 
 // readNext is an internal helper method that reads the next tuple from
 // the aggregate result iterator.
-//
-// Returns:
-//   - *tuple.Tuple: Next tuple from aggregate iterator, or nil if no more tuples
-//   - error: Error if reading from aggregate iterator fails
 func (agg *AggregateOperator) readNext() (*tuple.Tuple, error) {
 	if agg.aggIterator == nil {
 		return nil, nil
