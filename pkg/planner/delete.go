@@ -17,22 +17,13 @@ import (
 // - Tuple collection and deletion
 // - Transaction management
 type DeletePlan struct {
-	statement    *statements.DeleteStatement // Parsed DELETE statement
-	pageStore    *memory.PageStore           // Storage manager for tuple operations
-	tableManager *memory.TableManager        // Manager for table metadata
-	tid          *transaction.TransactionID  // Transaction context for the operation
+	statement    *statements.DeleteStatement
+	pageStore    *memory.PageStore
+	tableManager *memory.TableManager
+	tid          *transaction.TransactionID
 }
 
-// NewDeletePlan creates a new DELETE execution plan.
-//
-// Parameters:
-//   - stmt: Parsed DELETE statement containing table name and WHERE clause
-//   - ps: PageStore instance for tuple storage operations
-//   - tid: Transaction ID for ACID compliance
-//   - tm: TableManager for table metadata operations
-//
-// Returns:
-//   - *DeletePlan: New delete plan instance ready for execution
+// NewDeletePlan creates a new DELETE execution plan
 func NewDeletePlan(
 	stmt *statements.DeleteStatement,
 	ps *memory.PageStore,
@@ -51,10 +42,6 @@ func NewDeletePlan(
 // 2. Build query plan with optional WHERE filtering
 // 3. Collect all tuples matching the criteria
 // 4. Delete the collected tuples
-//
-// Returns:
-//   - any: DMLResult containing affected row count and success message
-//   - error: nil on success, error describing failure reason
 func (p *DeletePlan) Execute() (any, error) {
 	tableID, err := p.getTableID()
 	if err != nil {
@@ -83,10 +70,6 @@ func (p *DeletePlan) Execute() (any, error) {
 }
 
 // getTableID resolves the table name from the DELETE statement to its internal table ID.
-//
-// Returns:
-//   - int: Table ID for the specified table
-//   - error: nil on success, error if table doesn't exist
 func (p *DeletePlan) getTableID() (int, error) {
 	tableName := p.statement.TableName
 	tableID, err := p.tableManager.GetTableID(tableName)
