@@ -133,6 +133,11 @@ func (m *mockDbFileForPageStore) AddTuple(tid *transaction.TransactionID, t *tup
 	newPage := newMockPage(pageID)
 	newPage.MarkDirty(true, tid)
 
+	// Set the RecordID on the tuple so tests can use it (if tuple is not nil)
+	if t != nil {
+		t.RecordID = tuple.NewTupleRecordID(pageID, 0) // Mock assigns tuple to slot 0
+	}
+
 	m.pages[pageID] = newPage
 	return []page.Page{newPage}, nil
 }
