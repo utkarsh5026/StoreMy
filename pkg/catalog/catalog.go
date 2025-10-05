@@ -16,14 +16,20 @@ const (
 	CatalogColumnsFileName = "catalog_columns.dat"
 )
 
+// SystemCatalog manages database metadata including table and column definitions.
+// It maintains two system tables:
+//   - CATALOG_TABLES: stores table metadata (ID, name, file path, primary key)
+//   - CATALOG_COLUMNS: stores column metadata (table ID, name, type, position, is_primary)
 type SystemCatalog struct {
 	store          *memory.PageStore
 	tableManager   *memory.TableManager
 	loader         *SchemaLoader
-	tablesTableID  int // Actual ID of CATALOG_TABLES
-	columnsTableID int // Actual ID of CATALOG_COLUMNS
+	tablesTableID  int
+	columnsTableID int
 }
 
+// NewSystemCatalog creates a new system catalog instance.
+// The catalog must be initialized via Initialize() before use.
 func NewSystemCatalog(ps *memory.PageStore, tm *memory.TableManager) *SystemCatalog {
 	sc := &SystemCatalog{
 		store:        ps,
@@ -34,6 +40,9 @@ func NewSystemCatalog(ps *memory.PageStore, tm *memory.TableManager) *SystemCata
 	return sc
 }
 
+// Initialize creates the system catalog tables (CATALOG_TABLES and CATALOG_COLUMNS)
+// and registers them with the table manager. This must be called before any other
+// catalog operations.
 func (sc *SystemCatalog) Initialize(dataDir string) error {
 	tid := transaction.NewTransactionID()
 	defer sc.store.CommitTransaction(tid)
@@ -53,6 +62,8 @@ func (sc *SystemCatalog) Initialize(dataDir string) error {
 	return nil
 }
 
+// createCatalogTable creates a heap file for a system catalog table and registers it
+// with the table manager. This is an internal helper for Initialize().
 func (sc *SystemCatalog) createCatalogTable(dataDir, fileName, tableName, primaryKey string, schema *tuple.TupleDescription) (int, error) {
 	f, err := heap.NewHeapFile(
 		fmt.Sprintf("%s/%s", dataDir, fileName),
@@ -69,8 +80,8 @@ func (sc *SystemCatalog) createCatalogTable(dataDir, fileName, tableName, primar
 	return f.GetID(), nil
 }
 
-// RegisterTable adds a table to the system catalog
-// The tableID parameter should be the actual heap file ID
+// RegisterTable adds a new table to the system catalog.
+// It inserts metadata into CATALOG_TABLES and column definitions into CATALOG_COLUMNS.
 func (sc *SystemCatalog) RegisterTable(tid *transaction.TransactionID, tableID int, tableName, filePath, primaryKey string, fields []FieldMetadata,
 ) error {
 	tup := createTablesTuple(tableID, tableName, filePath, primaryKey)
@@ -88,6 +99,8 @@ func (sc *SystemCatalog) RegisterTable(tid *transaction.TransactionID, tableID i
 	return nil
 }
 
+// createTablesTuple creates a tuple for insertion into CATALOG_TABLES.
+// Schema: (table_id INT, table_name STRING, file_path STRING, primary_key STRING)
 func createTablesTuple(tableID int, tableName, filePath, primaryKey string) *tuple.Tuple {
 	t := tuple.NewTuple(GetTablesSchema())
 	t.SetField(0, types.NewIntField(int32(tableID)))
@@ -97,6 +110,8 @@ func createTablesTuple(tableID int, tableName, filePath, primaryKey string) *tup
 	return t
 }
 
+// createColumnsTuple creates a tuple for insertion into CATALOG_COLUMNS.
+// Schema: (table_id INT, column_name STRING, column_type INT, position INT, is_primary BOOL)
 func createColumnsTuple(tableID int, colName string, colType types.Type, position int, isPrimary bool) *tuple.Tuple {
 	t := tuple.NewTuple(GetColumnsSchema())
 	t.SetField(0, types.NewIntField(int32(tableID)))
@@ -112,6 +127,10 @@ type FieldMetadata struct {
 	Type types.Type
 }
 
+// LoadTables reads all table metadata from CATALOG_TABLES, reconstructs their schemas
+// from CATALOG_COLUMNS, opens their heap files, and registers them with the table manager.
+//
+// This is called during database startup to restore all user tables.
 func (sc *SystemCatalog) LoadTables(dataDir string) error {
 	tid := transaction.NewTransactionID()
 	defer sc.store.CommitTransaction(tid)
@@ -137,7 +156,8 @@ func (sc *SystemCatalog) LoadTables(dataDir string) error {
 	})
 }
 
-// GetTableID returns the ID for a table name, or -1 if not found
+// GetTableID looks up the heap file ID for a table by name.
+// Returns -1 and an error if the table is not found in the catalog.
 func (sc *SystemCatalog) GetTableID(tid *transaction.TransactionID, tableName string) (int, error) {
 	var result int = -1
 
@@ -161,14 +181,10 @@ func (sc *SystemCatalog) GetTableID(tid *transaction.TransactionID, tableName st
 	return -1, fmt.Errorf("table %s not found in catalog", tableName)
 }
 
-func (sc *SystemCatalog) GetTablesTableID() int {
-	return sc.tablesTableID
-}
-
-func (sc *SystemCatalog) GetColumnsTableID() int {
-	return sc.columnsTableID
-}
-
+// iterateTable scans all tuples in a table and applies a processing function to each.
+// This is used internally for catalog queries like LoadTables() and GetTableID().
+//
+// The processFunc can return an error to stop iteration early.
 func (sc *SystemCatalog) iterateTable(tableID int, tid *transaction.TransactionID, processFunc func(*tuple.Tuple) error) error {
 	file, err := sc.tableManager.GetDbFile(tableID)
 	if err != nil {
@@ -200,6 +216,7 @@ func (sc *SystemCatalog) iterateTable(tableID int, tid *transaction.TransactionI
 	return nil
 }
 
+// parseTableMetadata extracts table metadata fields from a CATALOG_TABLES tuple
 func parseTableMetadata(tableTuple *tuple.Tuple) (tableID int, tableName, filePath string) {
 	return getIntField(tableTuple, 0),
 		getStringField(tableTuple, 1),
