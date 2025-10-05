@@ -23,6 +23,15 @@ type SelectPlan struct {
 	statement    *statements.SelectStatement
 }
 
+func NewSelectPlan(stmt *statements.SelectStatement, tm *memory.TableManager, ps *memory.PageStore, tid *transaction.TransactionID) *SelectPlan {
+	return &SelectPlan{
+		tableManager: tm,
+		pageStore:    ps,
+		tid:          tid,
+		statement:    stmt,
+	}
+}
+
 func (p *SelectPlan) Execute() (any, error) {
 	tables := p.statement.Plan.Tables()
 	if len(tables) == 0 {
