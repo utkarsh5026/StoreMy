@@ -30,8 +30,8 @@ func setupTestCatalog(t *testing.T) (*SystemCatalog, string, func()) {
 		t.Fatalf("failed to create WAL: %v", err)
 	}
 
-	pageStore := memory.NewPageStore(tableManager, wal)
-	catalog := NewSystemCatalog(pageStore, tableManager)
+	store := memory.NewPageStore(tableManager, wal)
+	catalog := NewSystemCatalog(store, tableManager)
 
 	// Initialize catalog
 	if err := catalog.Initialize(tempDir); err != nil {
@@ -39,7 +39,7 @@ func setupTestCatalog(t *testing.T) (*SystemCatalog, string, func()) {
 	}
 
 	cleanup := func() {
-		pageStore.Close()
+		store.Close()
 		os.RemoveAll(tempDir)
 	}
 
@@ -90,17 +90,17 @@ func TestNewSystemCatalog(t *testing.T) {
 	tableManager := memory.NewTableManager()
 	walPath := filepath.Join(t.TempDir(), "test.wal")
 	wal, _ := log.NewWAL(walPath, 8192)
-	pageStore := memory.NewPageStore(tableManager, wal)
-	defer pageStore.Close()
+	store := memory.NewPageStore(tableManager, wal)
+	defer store.Close()
 
-	catalog := NewSystemCatalog(pageStore, tableManager)
+	catalog := NewSystemCatalog(store, tableManager)
 
 	if catalog == nil {
 		t.Fatal("expected non-nil catalog")
 	}
 
-	if catalog.pageStore != pageStore {
-		t.Error("pageStore not set correctly")
+	if catalog.store != store {
+		t.Error("store not set correctly")
 	}
 
 	if catalog.tableManager != tableManager {
@@ -155,7 +155,7 @@ func TestSystemCatalog_RegisterTable_Simple(t *testing.T) {
 	defer cleanup()
 
 	tid := transaction.NewTransactionID()
-	defer catalog.pageStore.CommitTransaction(tid)
+	defer catalog.store.CommitTransaction(tid)
 
 	fields := []FieldMetadata{
 		{Name: "id", Type: types.IntType},
@@ -170,7 +170,7 @@ func TestSystemCatalog_RegisterTable_MultipleTables(t *testing.T) {
 	defer cleanup()
 
 	tid := transaction.NewTransactionID()
-	defer catalog.pageStore.CommitTransaction(tid)
+	defer catalog.store.CommitTransaction(tid)
 
 	// Register first table
 	fields1 := []FieldMetadata{
@@ -207,7 +207,7 @@ func TestSystemCatalog_LoadTables(t *testing.T) {
 	}
 
 	tableID := registerTestTable(t, catalog, tid, tempDir, "customers", "id", fields)
-	catalog.pageStore.CommitTransaction(tid)
+	catalog.store.CommitTransaction(tid)
 
 	// Create a new catalog instance (simulating restart)
 	tableManager2 := memory.NewTableManager()
@@ -307,7 +307,7 @@ func TestSystemCatalog_LoadTables_Multiple(t *testing.T) {
 	for _, table := range tables {
 		tid := transaction.NewTransactionID()
 		registerTestTable(t, catalog, tid, tempDir, table.name, table.pk, table.fields)
-		catalog.pageStore.CommitTransaction(tid)
+		catalog.store.CommitTransaction(tid)
 	}
 
 	// Create new catalog and load
@@ -348,11 +348,11 @@ func TestSystemCatalog_GetTableID(t *testing.T) {
 	}
 
 	expectedID := registerTestTable(t, catalog, tid, tempDir, "test_table", "id", fields)
-	catalog.pageStore.CommitTransaction(tid)
+	catalog.store.CommitTransaction(tid)
 
 	// Get table ID from catalog
 	tid2 := transaction.NewTransactionID()
-	defer catalog.pageStore.CommitTransaction(tid2)
+	defer catalog.store.CommitTransaction(tid2)
 
 	tableID, err := catalog.GetTableID(tid2, "test_table")
 	if err != nil {
@@ -370,7 +370,7 @@ func TestSystemCatalog_GetTableID_NotFound(t *testing.T) {
 	defer cleanup()
 
 	tid := transaction.NewTransactionID()
-	defer catalog.pageStore.CommitTransaction(tid)
+	defer catalog.store.CommitTransaction(tid)
 
 	_, err := catalog.GetTableID(tid, "nonexistent_table")
 	if err == nil {
@@ -383,7 +383,7 @@ func TestSystemCatalog_RegisterTable_WithBoolField(t *testing.T) {
 	defer cleanup()
 
 	tid := transaction.NewTransactionID()
-	defer catalog.pageStore.CommitTransaction(tid)
+	defer catalog.store.CommitTransaction(tid)
 
 	fields := []FieldMetadata{
 		{Name: "id", Type: types.IntType},
@@ -449,7 +449,7 @@ func TestSystemCatalog_PrimaryKeyPreserved(t *testing.T) {
 	}
 
 	registerTestTable(t, catalog, tid, tempDir, "players", "user_id", fields)
-	catalog.pageStore.CommitTransaction(tid)
+	catalog.store.CommitTransaction(tid)
 
 	// Load in new catalog
 	tableManager2 := memory.NewTableManager()
@@ -479,7 +479,7 @@ func TestSystemCatalog_SequentialTableIDs(t *testing.T) {
 	defer cleanup()
 
 	tid := transaction.NewTransactionID()
-	defer catalog.pageStore.CommitTransaction(tid)
+	defer catalog.store.CommitTransaction(tid)
 
 	fields := []FieldMetadata{
 		{Name: "id", Type: types.IntType},
