@@ -177,11 +177,6 @@ func (db *Database) GetTables() []string {
 	return db.tableManager.GetAllTableNames()
 }
 
-// GetCatalog returns the system catalog instance
-func (db *Database) GetCatalog() *catalog.SystemCatalog {
-	return db.catalog
-}
-
 // GetStatistics returns current database statistics
 func (db *Database) GetStatistics() DatabaseInfo {
 	db.stats.mutex.RLock()
