@@ -110,7 +110,7 @@ func TestCreateTablePlan_Execute_WithPrimaryKey(t *testing.T) {
 	stmt := statements.NewCreateStatement("products", false)
 	stmt.AddField("id", types.IntType, true, nil)
 	stmt.AddField("name", types.StringType, false, nil)
-	stmt.SetPrimaryKey("id")
+	stmt.PrimaryKey = "id"
 
 	tableManager := memory.NewTableManager()
 	tid := transaction.NewTransactionID()
@@ -392,7 +392,7 @@ func TestCreateTablePlan_Execute_ComplexTable(t *testing.T) {
 	stmt.AddField("name", types.StringType, true, defaultString)
 	stmt.AddField("active", types.BoolType, false, defaultBool)
 	stmt.AddField("price", types.FloatType, false, defaultFloat)
-	stmt.SetPrimaryKey("id")
+	stmt.PrimaryKey = "id"
 
 	tableManager := memory.NewTableManager()
 	tid := transaction.NewTransactionID()
