@@ -4,6 +4,7 @@
         "catalogdb",
         "charmbracelet",
         "checkpointing",
+        "closedb",
         "concurrentdb",
         "golangci",
         "GOPATH",
