@@ -249,34 +249,25 @@ func (sc *SystemCatalog) loadTableSchema(tid *transaction.TransactionID, tableID
 
 // GetTableID returns the ID for a table name, or -1 if not found
 func (sc *SystemCatalog) GetTableID(tid *transaction.TransactionID, tableName string) (int, error) {
-	tablesFile, err := sc.tableManager.GetDbFile(sc.tablesTableID)
+	var result int = -1
+
+	err := sc.iterateTable(sc.tablesTableID, tid, func(tableTuple *tuple.Tuple) error {
+		tableID := getIntField(tableTuple, 0)
+		name := getStringField(tableTuple, 1)
+
+		if name == tableName {
+			result = tableID
+			return fmt.Errorf("found") // Use error to break iteration
+		}
+		return nil
+	})
+
+	if err != nil && err.Error() == "found" {
+		return result, nil
+	}
+
 	if err != nil {
-		return -1, fmt.Errorf("failed to get CATALOG_TABLES file: %v", err)
-	}
-
-	iterator := tablesFile.Iterator(tid)
-	if err := iterator.Open(); err != nil {
-		return -1, fmt.Errorf("failed to open iterator: %v", err)
-	}
-	defer iterator.Close()
-
-	for {
-		hasNext, err := iterator.HasNext()
-		if err != nil || !hasNext {
-			break
-		}
-
-		tableTuple, err := iterator.Next()
-		if err != nil || tableTuple == nil {
-			break
-		}
-
-		tableID, _ := tableTuple.GetField(0)
-		name, _ := tableTuple.GetField(1)
-
-		if name.String() == tableName {
-			return int(tableID.(*types.IntField).Value), nil
-		}
+		return -1, err
 	}
 
 	return -1, fmt.Errorf("table %s not found in catalog", tableName)
@@ -290,4 +281,45 @@ func (sc *SystemCatalog) GetTablesTableID() int {
 // GetColumnsTableID returns the actual table ID for CATALOG_COLUMNS
 func (sc *SystemCatalog) GetColumnsTableID() int {
 	return sc.columnsTableID
+}
+
+func (sc *SystemCatalog) iterateTable(tableID int, tid *transaction.TransactionID, processFunc func(*tuple.Tuple) error) error {
+	dbFile, err := sc.tableManager.GetDbFile(tableID)
+	if err != nil {
+		return fmt.Errorf("failed to get table file: %w", err)
+	}
+
+	iterator := dbFile.Iterator(tid)
+	if err := iterator.Open(); err != nil {
+		return fmt.Errorf("failed to open iterator: %w", err)
+	}
+	defer iterator.Close()
+
+	for {
+		hasNext, err := iterator.HasNext()
+		if err != nil || !hasNext {
+			break
+		}
+
+		tup, err := iterator.Next()
+		if err != nil || tup == nil {
+			break
+		}
+
+		if err := processFunc(tup); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+func getIntField(tup *tuple.Tuple, index int) int {
+	field, _ := tup.GetField(index)
+	return int(field.(*types.IntField).Value)
+}
+
+func getStringField(tup *tuple.Tuple, index int) string {
+	field, _ := tup.GetField(index)
+	return field.String()
 }
