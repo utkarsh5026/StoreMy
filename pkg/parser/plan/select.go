@@ -7,64 +7,47 @@ import (
 	"strings"
 )
 
-type SelectListNode struct {
-	FieldName string // Field name (may be qualified: table.field)
-	AggOp     string // Aggregation operation (SUM, COUNT, etc.) or empty string
-}
-
-func NewSelectListNode(fieldName, aggOp string) *SelectListNode {
-	return &SelectListNode{
-		FieldName: fieldName,
-		AggOp:     aggOp,
-	}
-}
-
-func (sln *SelectListNode) String() string {
-	if sln.AggOp != "" {
-		return fmt.Sprintf("%s(%s)", sln.AggOp, sln.FieldName)
-	}
-	return sln.FieldName
-}
-
-type ScanNode struct {
-	TableName string // Name of the table in the catalog
-	Alias     string // Table alias (e.g., "u" for "users u")
-}
-
-func NewScanNode(tableName, alias string) *ScanNode {
-	return &ScanNode{
-		TableName: tableName,
-		Alias:     alias,
-	}
-}
-
-func (sn *ScanNode) String() string {
-	return fmt.Sprintf("Scan[table=%s, alias=%s]", sn.TableName, sn.Alias)
-}
-
+// SelectPlan represents the execution plan for a SELECT query.
+// It contains all the parsed components of a SELECT statement including
+// projections, filters, joins, aggregations, and ordering.
 type SelectPlan struct {
-	groupByField string // GROUP BY field (only one supported)
+	selectList []*SelectListNode // SELECT clause items
+	selectAll  bool              // Whether SELECT * is used
+
+	tables []*ScanNode // All table scans
+	joins  []*JoinNode // JOIN clauses
+
+	filters []*FilterNode // All WHERE conditions
+
 	hasAgg       bool   // Whether query has aggregation
 	aggOp        string // Aggregation operation
 	aggField     string // Field being aggregated
-	hasOrderBy   bool   // Whether query has ORDER BY
-	orderByAsc   bool   // ORDER BY direction
-	orderByField string // ORDER BY field
-	query        string // Original SQL query string
+	groupByField string // GROUP BY field (only one supported)
 
-	filters    []*FilterNode     // All WHERE conditions
-	selectList []*SelectListNode // SELECT clause items
-	tables     []*ScanNode       // All table scans
+	// Ordering
+	hasOrderBy   bool   // Whether query has ORDER BY
+	orderByField string // ORDER BY field
+	orderByAsc   bool   // ORDER BY direction
+
+	// Metadata
+	query string // Original SQL query string
 }
 
+// NewSelectPlan creates a new SelectPlan with default values.
 func NewSelectPlan() *SelectPlan {
-	return &SelectPlan{}
+	return &SelectPlan{
+		selectList: make([]*SelectListNode, 0),
+		tables:     make([]*ScanNode, 0),
+		joins:      make([]*JoinNode, 0),
+		filters:    make([]*FilterNode, 0),
+	}
 }
 
 func (sp *SelectPlan) String() string {
 	return sp.query
 }
 
+// AddProjectField adds a field to the SELECT clause, with optional aggregation.
 func (sp *SelectPlan) AddProjectField(fieldName, aggOp string) error {
 	selectNode := NewSelectListNode(fieldName, aggOp)
 	sp.selectList = append(sp.selectList, selectNode)
@@ -78,22 +61,26 @@ func (sp *SelectPlan) AddProjectField(fieldName, aggOp string) error {
 	return nil
 }
 
+// SetGroupBy sets the GROUP BY field for the query.
 func (sp *SelectPlan) SetGroupBy(fieldName string) {
 	sp.groupByField = fieldName
 }
 
+// AddOrderBy adds an ORDER BY clause to the query.
 func (sp *SelectPlan) AddOrderBy(field string, ascending bool) {
 	sp.hasOrderBy = true
 	sp.orderByField = field
 	sp.orderByAsc = ascending
 }
 
+// AddScan adds a table scan to the FROM clause.
 func (sp *SelectPlan) AddScan(tableName string, alias string) {
 	fmt.Printf("Added scan of table %s\n", alias)
 	scan := NewScanNode(tableName, alias)
 	sp.tables = append(sp.tables, scan)
 }
 
+// AddFilter adds a WHERE clause filter condition.
 func (sp *SelectPlan) AddFilter(field string, pred types.Predicate, constant string) error {
 	parts := strings.Split(field, ".")
 	if len(parts) != 2 {
@@ -107,12 +94,31 @@ func (sp *SelectPlan) AddFilter(field string, pred types.Predicate, constant str
 	return nil
 }
 
+// AddJoin adds a JOIN clause to the query.
+func (sp *SelectPlan) AddJoin(rightTable *ScanNode, joinType JoinType, leftField, rightField string, predicate types.Predicate) {
+	join := NewJoinNode(rightTable, joinType, leftField, rightField, predicate)
+	sp.joins = append(sp.joins, join)
+	fmt.Printf("Added join: %s\n", join.String())
+}
+
 func (sp *SelectPlan) SelectList() []*SelectListNode {
 	return sp.selectList
 }
 
+func (sp *SelectPlan) SelectAll() bool {
+	return sp.selectAll
+}
+
+func (sp *SelectPlan) SetSelectAll(selectAll bool) {
+	sp.selectAll = selectAll
+}
+
 func (sp *SelectPlan) Tables() []*ScanNode {
 	return sp.tables
+}
+
+func (sp *SelectPlan) Joins() []*JoinNode {
+	return sp.joins
 }
 
 func (sp *SelectPlan) Filters() []*FilterNode {
