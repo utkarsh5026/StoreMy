@@ -75,6 +75,7 @@ func NewDatabase(name, dataDir, logDir string) (*Database, error) {
 
 	pageStore := memory.NewPageStore(tableManager, wal)
 	queryPlanner := planner.NewQueryPlanner(tableManager, pageStore)
+	queryPlanner.SetDataDir(fullPath)
 
 	systemCatalog := catalog.NewSystemCatalog(pageStore, tableManager)
 
@@ -96,28 +97,32 @@ func NewDatabase(name, dataDir, logDir string) (*Database, error) {
 }
 
 func (db *Database) ExecuteQuery(query string) (QueryResult, error) {
+	var err error
+	tid := transaction.NewTransactionID()
+	defer db.cleanupTransaction(tid, &err)
+
 	stmt, err := parser.ParseStatement(query)
 	if err != nil {
 		db.recordError()
 		return QueryResult{}, fmt.Errorf("parse error: %v", err)
 	}
 
-	tid := transaction.NewTransactionID()
-	defer db.cleanupTransaction(tid, &err)
-
-	plan, err := db.queryPlanner.Plan(stmt, tid)
+	var plan planner.Plan
+	plan, err = db.queryPlanner.Plan(stmt, tid)
 	if err != nil {
 		db.recordError()
 		return QueryResult{}, fmt.Errorf("planning error: %v", err)
 	}
 
-	result, err := db.executePlan(plan, stmt)
+	var result QueryResult
+	result, err = db.executePlan(plan, stmt)
 	if err != nil {
 		db.recordError()
 		return QueryResult{}, fmt.Errorf("execution error: %v", err)
 	}
 
-	if err := db.pageStore.CommitTransaction(tid); err != nil {
+	err = db.pageStore.CommitTransaction(tid)
+	if err != nil {
 		db.recordError()
 		return QueryResult{}, fmt.Errorf("commit error: %v", err)
 	}
@@ -175,17 +180,25 @@ func (db *Database) GetTables() []string {
 	return db.tableManager.GetAllTableNames()
 }
 
-// GetStatistics returns current database statistics
+// GetStatistics returns current database statistics (counts only user tables)
 func (db *Database) GetStatistics() DatabaseInfo {
 	db.stats.mutex.RLock()
 	defer db.stats.mutex.RUnlock()
 
-	tables := db.GetTables()
+	allTables := db.GetTables()
+	userTables := make([]string, 0, len(allTables))
+
+	for _, table := range allTables {
+		if len(table) >= 8 && table[:8] == "CATALOG_" {
+			continue
+		}
+		userTables = append(userTables, table)
+	}
 
 	return DatabaseInfo{
 		Name:              db.name,
-		Tables:            tables,
-		TableCount:        len(tables),
+		Tables:            userTables,
+		TableCount:        len(userTables),
 		QueriesExecuted:   db.stats.QueriesExecuted,
 		TransactionsCount: db.stats.TransactionsCount,
 		ErrorCount:        db.stats.ErrorCount,
