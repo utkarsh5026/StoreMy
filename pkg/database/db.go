@@ -24,6 +24,7 @@ type Database struct {
 	pageStore    *memory.PageStore
 	queryPlanner *planner.QueryPlanner
 	catalog      *catalog.SystemCatalog
+	formatter    *ResultFormatter
 
 	name    string
 	dataDir string
@@ -82,6 +83,7 @@ func NewDatabase(name, dataDir, logDir string) (*Database, error) {
 		pageStore:    pageStore,
 		queryPlanner: queryPlanner,
 		catalog:      systemCatalog,
+		formatter:    NewResultFormatter(),
 		name:         name,
 		dataDir:      fullPath,
 		stats:        &DatabaseStats{},
@@ -166,94 +168,7 @@ func (db *Database) executePlan(plan planner.Plan, stmt statements.Statement) (Q
 		return QueryResult{}, err
 	}
 
-	switch stmt.GetType() {
-	case statements.Select:
-		if queryResult, ok := rawResult.(*planner.QueryResult); ok {
-			return db.formatSelectResult(queryResult), nil
-		}
-
-	case statements.Insert, statements.Update, statements.Delete:
-		if dmlResult, ok := rawResult.(*planner.DMLResult); ok {
-			return db.formatDMLResult(dmlResult, stmt.GetType()), nil
-		}
-
-	case statements.CreateTable, statements.DropTable:
-		if ddlResult, ok := rawResult.(*planner.DDLResult); ok {
-			return db.formatDDLResult(ddlResult), nil
-		}
-	}
-
-	return QueryResult{
-		Success: true,
-		Message: "Query executed successfully",
-	}, nil
-}
-
-// formatSelectResult converts query results to our standard format
-func (db *Database) formatSelectResult(result *planner.QueryResult) QueryResult {
-	if result == nil || result.TupleDesc == nil {
-		return QueryResult{
-			Success: true,
-			Message: "Query returned no results",
-			Rows:    [][]string{},
-		}
-	}
-
-	numFields := result.TupleDesc.NumFields()
-	columns := make([]string, numFields)
-	for i := range numFields {
-		name, _ := result.TupleDesc.GetFieldName(i)
-		if name == "" {
-			name = fmt.Sprintf("col_%d", i)
-		}
-		columns[i] = name
-	}
-
-	rows := make([][]string, 0, len(result.Tuples))
-	for _, tuple := range result.Tuples {
-		row := make([]string, numFields)
-		for i := range numFields {
-			field, err := tuple.GetField(i)
-			if err != nil || field == nil {
-				row[i] = "NULL"
-			} else {
-				row[i] = field.String()
-			}
-		}
-		rows = append(rows, row)
-	}
-
-	return QueryResult{
-		Success: true,
-		Columns: columns,
-		Rows:    rows,
-		Message: fmt.Sprintf("%d row(s) returned", len(rows)),
-	}
-}
-
-func (db *Database) formatDMLResult(result *planner.DMLResult, stmtType statements.StatementType) QueryResult {
-	action := ""
-	switch stmtType {
-	case statements.Insert:
-		action = "inserted"
-	case statements.Update:
-		action = "updated"
-	case statements.Delete:
-		action = "deleted"
-	}
-
-	return QueryResult{
-		Success:      true,
-		RowsAffected: result.RowsAffected,
-		Message:      fmt.Sprintf("%d row(s) %s", result.RowsAffected, action),
-	}
-}
-
-func (db *Database) formatDDLResult(result *planner.DDLResult) QueryResult {
-	return QueryResult{
-		Success: result.Success,
-		Message: result.Message,
-	}
+	return db.formatter.Format(rawResult, stmt)
 }
 
 // GetTables returns a list of all tables in the database
