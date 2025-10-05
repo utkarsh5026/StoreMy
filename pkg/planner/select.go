@@ -55,35 +55,38 @@ func (p *SelectPlan) Execute() (any, error) {
 		currentOp = filterOp
 	}
 
-	selectFields := p.statement.Plan.SelectList()
-	if len(selectFields) > 0 {
-		fieldIndices := make([]int, 0, len(selectFields))
-		fieldTypes := make([]types.Type, 0, len(selectFields))
+	// If SELECT * is used, skip projection
+	if !p.statement.Plan.SelectAll() {
+		selectFields := p.statement.Plan.SelectList()
+		if len(selectFields) > 0 {
+			fieldIndices := make([]int, 0, len(selectFields))
+			fieldTypes := make([]types.Type, 0, len(selectFields))
 
-		tupleDesc := currentOp.GetTupleDesc()
+			tupleDesc := currentOp.GetTupleDesc()
 
-		for _, field := range selectFields {
-			found := false
-			for i := 0; i < tupleDesc.NumFields(); i++ {
-				name, _ := tupleDesc.GetFieldName(i)
-				if name == field.FieldName {
-					fieldIndices = append(fieldIndices, i)
-					fieldType, _ := tupleDesc.TypeAtIndex(i)
-					fieldTypes = append(fieldTypes, fieldType)
-					found = true
-					break
+			for _, field := range selectFields {
+				found := false
+				for i := 0; i < tupleDesc.NumFields(); i++ {
+					name, _ := tupleDesc.GetFieldName(i)
+					if name == field.FieldName {
+						fieldIndices = append(fieldIndices, i)
+						fieldType, _ := tupleDesc.TypeAtIndex(i)
+						fieldTypes = append(fieldTypes, fieldType)
+						found = true
+						break
+					}
+				}
+				if !found {
+					return nil, fmt.Errorf("column %s not found", field.FieldName)
 				}
 			}
-			if !found {
-				return nil, fmt.Errorf("column %s not found", field.FieldName)
-			}
-		}
 
-		projectOp, err := query.NewProject(fieldIndices, fieldTypes, currentOp)
-		if err != nil {
-			return nil, fmt.Errorf("failed to create projection: %v", err)
+			projectOp, err := query.NewProject(fieldIndices, fieldTypes, currentOp)
+			if err != nil {
+				return nil, fmt.Errorf("failed to create projection: %v", err)
+			}
+			currentOp = projectOp
 		}
-		currentOp = projectOp
 	}
 
 	if err := currentOp.Open(); err != nil {
