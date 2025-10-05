@@ -1,8 +1,10 @@
 {
     "cSpell.words": [
         "bubbletea",
+        "catalogdb",
         "charmbracelet",
         "checkpointing",
+        "concurrentdb",
         "golangci",
         "GOPATH",
         "inotify",
@@ -11,13 +13,16 @@
         "lsns",
         "mitranim",
         "mydb",
+        "permdb",
         "pgdn",
         "pgdown",
         "pgup",
         "pids",
         "reaccess",
+        "statsdb",
         "storemy",
         "testcache",
+        "testdb",
         "tids",
         "Txns",
         "unflushed"
