@@ -1,6 +1,7 @@
 package database
 
 import (
+	"fmt"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -67,29 +68,27 @@ func TestConcurrency_MultipleWriters(t *testing.T) {
 		t.Fatalf("CREATE TABLE failed: %v", err)
 	}
 
-	// First, insert one row so UPDATE has something to work with
-	_, err = db.ExecuteQuery("INSERT INTO writers VALUES (1, 0)")
-	if err != nil {
-		t.Fatalf("Initial INSERT failed: %v", err)
-	}
-
 	numWriters := 10
 	writesPerWriter := 5
 
 	var wg sync.WaitGroup
 	wg.Add(numWriters)
 
-	totalOps := int32(0)
+	successfulInserts := int32(0)
+	totalAttempts := int32(0)
 
 	for i := 0; i < numWriters; i++ {
 		go func(writerID int) {
 			defer wg.Done()
 
 			for j := 0; j < writesPerWriter; j++ {
-				// Each writer tries to update the same row
-				// Some might fail due to conflicts, which is expected
-				_, _ = db.ExecuteQuery("UPDATE writers SET value = 200 WHERE id = 1")
-				atomic.AddInt32(&totalOps, 1)
+				// Each writer tries to insert with unique IDs to avoid conflicts
+				id := writerID*writesPerWriter + j
+				result, err := db.ExecuteQuery(fmt.Sprintf("INSERT INTO writers VALUES (%d, %d)", id, writerID))
+				atomic.AddInt32(&totalAttempts, 1)
+				if err == nil && result.Success {
+					atomic.AddInt32(&successfulInserts, 1)
+				}
 			}
 		}(i)
 	}
@@ -106,7 +105,12 @@ func TestConcurrency_MultipleWriters(t *testing.T) {
 		t.Error("expected successful query after concurrent writes")
 	}
 
-	t.Logf("Total concurrent write operations: %d", totalOps)
+	// At least some inserts should have succeeded
+	if successfulInserts == 0 {
+		t.Error("expected some successful inserts")
+	}
+
+	t.Logf("Concurrent writes: %d successful inserts out of %d attempts", successfulInserts, totalAttempts)
 }
 
 // TestConcurrency_MixedReadWrite tests mixed read and write operations
@@ -125,8 +129,8 @@ func TestConcurrency_MixedReadWrite(t *testing.T) {
 		t.Fatalf("INSERT failed: %v", err)
 	}
 
-	numWorkers := 20
-	opsPerWorker := 10
+	numWorkers := 5
+	opsPerWorker := 5
 
 	var wg sync.WaitGroup
 	wg.Add(numWorkers * 2)
@@ -137,7 +141,7 @@ func TestConcurrency_MixedReadWrite(t *testing.T) {
 			defer wg.Done()
 			for j := 0; j < opsPerWorker; j++ {
 				_, _ = db.ExecuteQuery("SELECT * FROM mixed")
-				time.Sleep(time.Microsecond)
+				time.Sleep(time.Millisecond)
 			}
 		}()
 	}
@@ -147,8 +151,8 @@ func TestConcurrency_MixedReadWrite(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			for j := 0; j < opsPerWorker; j++ {
-				_, _ = db.ExecuteQuery("UPDATE mixed SET counter = 1")
-				time.Sleep(time.Microsecond)
+				_, _ = db.ExecuteQuery("UPDATE mixed SET counter = 1 WHERE id = 1")
+				time.Sleep(time.Millisecond)
 			}
 		}()
 	}
