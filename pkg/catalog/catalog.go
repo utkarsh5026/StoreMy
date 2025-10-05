@@ -112,55 +112,31 @@ type FieldMetadata struct {
 	Type types.Type
 }
 
-// LoadTables reads all table metadata from the catalog and registers them with TableManager
 func (sc *SystemCatalog) LoadTables(dataDir string) error {
 	tid := transaction.NewTransactionID()
 	defer sc.pageStore.CommitTransaction(tid)
 
-	tablesFile, err := sc.tableManager.GetDbFile(sc.tablesTableID)
-	if err != nil {
-		return fmt.Errorf("failed to get CATALOG_TABLES file: %v", err)
-	}
+	return sc.iterateTable(sc.tablesTableID, tid, func(tableTuple *tuple.Tuple) error {
+		tableID := getIntField(tableTuple, 0)
+		tableName := getStringField(tableTuple, 1)
+		filePath := getStringField(tableTuple, 2)
 
-	iterator := tablesFile.Iterator(tid)
-	if err := iterator.Open(); err != nil {
-		return fmt.Errorf("failed to open iterator: %v", err)
-	}
-	defer iterator.Close()
-
-	for {
-		hasNext, err := iterator.HasNext()
-		if err != nil || !hasNext {
-			break
-		}
-
-		tableTuple, err := iterator.Next()
-		if err != nil || tableTuple == nil {
-			break
-		}
-
-		tableID, _ := tableTuple.GetField(0)
-		tableName, _ := tableTuple.GetField(1)
-		filePath, _ := tableTuple.GetField(2)
-
-		// Load column metadata for this table
-		schema, pk, err := sc.loadTableSchema(tid, int(tableID.(*types.IntField).Value))
+		schema, pk, err := sc.loadTableSchema(tid, tableID)
 		if err != nil {
-			return fmt.Errorf("failed to load schema for table %s: %v", tableName.String(), err)
+			return fmt.Errorf("failed to load schema for table %s: %w", tableName, err)
 		}
 
-		// Create heap file and register with TableManager
-		heapFile, err := heap.NewHeapFile(filePath.String(), schema)
+		heapFile, err := heap.NewHeapFile(filePath, schema)
 		if err != nil {
-			return fmt.Errorf("failed to open heap file for %s: %v", tableName.String(), err)
+			return fmt.Errorf("failed to open heap file for %s: %w", tableName, err)
 		}
 
-		if err := sc.tableManager.AddTable(heapFile, tableName.String(), pk); err != nil {
-			return fmt.Errorf("failed to add table %s: %v", tableName.String(), err)
+		if err := sc.tableManager.AddTable(heapFile, tableName, pk); err != nil {
+			return fmt.Errorf("failed to add table %s: %w", tableName, err)
 		}
-	}
 
-	return nil
+		return nil
+	})
 }
 
 // loadTableSchema reads column metadata for a specific table
