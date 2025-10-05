@@ -33,7 +33,22 @@ func (st StatementType) String() string {
 	}
 }
 
+// IsDML returns true if the statement type is a DML operation (INSERT, UPDATE, DELETE, SELECT)
+func (st StatementType) IsDML() bool {
+	return st == Select || st == Insert || st == Update || st == Delete
+}
+
+// IsDDL returns true if the statement type is a DDL operation (CREATE, DROP)
+func (st StatementType) IsDDL() bool {
+	return st == CreateTable || st == DropTable
+}
+
+// Statement is the interface that all SQL statements must implement
 type Statement interface {
+	// GetType returns the type of the statement
 	GetType() StatementType
+	// String returns a string representation of the statement
 	String() string
+	// Validate checks if the statement is valid and returns an error if not
+	Validate() error
 }
