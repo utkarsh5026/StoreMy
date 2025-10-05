@@ -39,11 +39,8 @@ const (
 )
 
 // DBError represents a structured database error with rich context information.
-// It implements the standard Go error interface while providing additional
-// metadata for debugging, error recovery, and user-friendly error messages.
 type DBError struct {
 	// Code is a unique identifier for this error type (e.g., "DEADLOCK_DETECTED", "PAGE_CORRUPTED").
-	// Error codes should be stable across versions to enable programmatic error handling.
 	Code string
 
 	// Category classifies the error for appropriate handling strategy.
@@ -78,8 +75,7 @@ type DBError struct {
 }
 
 // New creates a new DBError with the specified code, category, and message.
-// The stack trace is automatically captured for debugging purposes.
-func New(code string, category ErrorCategory, message string) *DBError {
+func New(category ErrorCategory, code, message string) *DBError {
 	err := &DBError{
 		Code:     code,
 		Category: category,
@@ -128,9 +124,7 @@ func captureStack() []uintptr {
 	return pcs[0:n]
 }
 
-// Error implements the standard Go error interface, returning a formatted
-// error string that includes the error code, message, details, context,
-// and underlying cause information.
+// Error implements the standard Go error interface
 //
 // The format follows the pattern:
 // [ERROR_CODE] Message: Detail (operation: Operation, component: Component) caused by: underlying error
@@ -165,8 +159,6 @@ func (e *DBError) Unwrap() error {
 }
 
 // FormatStack returns a human-readable stack trace for debugging purposes.
-// The stack trace shows the call chain from where the error was created,
-// including function names, file paths, and line numbers.
 func (e *DBError) FormatStack() string {
 	if len(e.Stack) == 0 {
 		return ""
@@ -177,9 +169,9 @@ func (e *DBError) FormatStack() string {
 
 	b.WriteString("Stack trace:\n")
 	for {
-		frame, more := frames.Next()
+		f, more := frames.Next()
 		b.WriteString(fmt.Sprintf("  %s\n    %s:%d\n",
-			frame.Function, frame.File, frame.Line))
+			f.Function, f.File, f.Line))
 		if !more {
 			break
 		}
