@@ -24,7 +24,6 @@ type Database struct {
 	pageStore    *memory.PageStore
 	queryPlanner *planner.QueryPlanner
 	catalog      *catalog.SystemCatalog
-	formatter    *ResultFormatter
 
 	name    string
 	dataDir string
@@ -83,7 +82,6 @@ func NewDatabase(name, dataDir, logDir string) (*Database, error) {
 		pageStore:    pageStore,
 		queryPlanner: queryPlanner,
 		catalog:      systemCatalog,
-		formatter:    NewResultFormatter(),
 		name:         name,
 		dataDir:      fullPath,
 		stats:        &DatabaseStats{},
@@ -168,7 +166,7 @@ func (db *Database) executePlan(plan planner.Plan, stmt statements.Statement) (Q
 		return QueryResult{}, err
 	}
 
-	return db.formatter.Format(rawResult, stmt)
+	return formatResult(rawResult, stmt)
 }
 
 // GetTables returns a list of all tables in the database

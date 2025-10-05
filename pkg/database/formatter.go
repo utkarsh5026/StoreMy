@@ -6,29 +6,21 @@ import (
 	"storemy/pkg/planner"
 )
 
-// ResultFormatter handles formatting of query execution results
-type ResultFormatter struct{}
-
-// NewResultFormatter creates a new instance of ResultFormatter
-func NewResultFormatter() *ResultFormatter {
-	return &ResultFormatter{}
-}
-
-func (f *ResultFormatter) Format(rawResult any, stmt statements.Statement) (QueryResult, error) {
+func formatResult(rawResult any, stmt statements.Statement) (QueryResult, error) {
 	switch stmt.GetType() {
 	case statements.Select:
 		if queryResult, ok := rawResult.(*planner.QueryResult); ok {
-			return f.FormatSelect(queryResult), nil
+			return formatSelect(queryResult), nil
 		}
 
 	case statements.Insert, statements.Update, statements.Delete:
 		if dmlResult, ok := rawResult.(*planner.DMLResult); ok {
-			return f.FormatDML(dmlResult, stmt.GetType()), nil
+			return formatDML(dmlResult, stmt.GetType()), nil
 		}
 
 	case statements.CreateTable, statements.DropTable:
 		if ddlResult, ok := rawResult.(*planner.DDLResult); ok {
-			return f.FormatDDL(ddlResult), nil
+			return formatDDL(ddlResult), nil
 		}
 	}
 
@@ -38,8 +30,8 @@ func (f *ResultFormatter) Format(rawResult any, stmt statements.Statement) (Quer
 	}, nil
 }
 
-// FormatSelect converts SELECT query results to standard format
-func (f *ResultFormatter) FormatSelect(result *planner.QueryResult) QueryResult {
+// formatSelect converts SELECT query results to standard format
+func formatSelect(result *planner.QueryResult) QueryResult {
 	if result == nil || result.TupleDesc == nil {
 		return QueryResult{
 			Success: true,
@@ -81,7 +73,7 @@ func (f *ResultFormatter) FormatSelect(result *planner.QueryResult) QueryResult 
 }
 
 // FormatDML converts DML (INSERT/UPDATE/DELETE) results to standard format
-func (f *ResultFormatter) FormatDML(result *planner.DMLResult, stmtType statements.StatementType) QueryResult {
+func formatDML(result *planner.DMLResult, stmtType statements.StatementType) QueryResult {
 	action := ""
 	switch stmtType {
 	case statements.Insert:
@@ -100,7 +92,7 @@ func (f *ResultFormatter) FormatDML(result *planner.DMLResult, stmtType statemen
 }
 
 // FormatDDL converts DDL (CREATE/DROP TABLE) results to standard format
-func (f *ResultFormatter) FormatDDL(result *planner.DDLResult) QueryResult {
+func formatDDL(result *planner.DDLResult) QueryResult {
 	return QueryResult{
 		Success: result.Success,
 		Message: result.Message,
