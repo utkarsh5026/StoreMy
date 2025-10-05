@@ -38,7 +38,7 @@ func createAndPopulateTestTable(t *testing.T, tableManager *memory.TableManager,
 	createStmt.AddField("active", types.BoolType, false, nil)
 	createStmt.AddField("price", types.FloatType, false, nil)
 
-	createPlan := NewCreateTablePlan(createStmt, tableManager, tid)
+	createPlan := NewCreateTablePlan(createStmt, tableManager, tid, "")
 	_, err := createPlan.Execute()
 	if err != nil {
 		t.Fatalf("Failed to create test table: %v", err)
@@ -408,7 +408,7 @@ func TestDeletePlan_Execute_EmptyTable(t *testing.T) {
 	createStmt.AddField("id", types.IntType, false, nil)
 	createStmt.AddField("name", types.StringType, false, nil)
 
-	createPlan := NewCreateTablePlan(createStmt, tableManager, tid)
+	createPlan := NewCreateTablePlan(createStmt, tableManager, tid, "")
 	_, err := createPlan.Execute()
 	if err != nil {
 		t.Fatalf("Failed to create test table: %v", err)
