@@ -6,40 +6,79 @@ import (
 	"strings"
 )
 
-// ErrorCategory helps classify errors for handling
+// ErrorCategory classifies errors by their nature and appropriate handling strategy.
+// This classification helps determine whether an error should trigger retries,
+// user notifications, or system alerts.
 type ErrorCategory int
 
 const (
-	// User errors - fixable by changing input
+	// ErrCategoryUser represents errors caused by invalid user input or operations.
+	// Examples: invalid SQL syntax, constraint violations, permission denied.
+	// These errors are typically fixable by modifying the user's request.
 	ErrCategoryUser ErrorCategory = iota
-	// Transient errors - retry might succeed
+
+	// ErrCategoryTransient represents temporary errors that might succeed on retry.
+	// Examples: lock timeouts, network interruptions, temporary resource exhaustion.
+	// Clients should implement exponential backoff retry logic for these errors.
 	ErrCategoryTransient
-	// System errors - need administrator intervention
+
+	// ErrCategorySystem represents errors requiring administrator intervention.
+	// Examples: disk full, configuration errors, missing files, permission issues.
+	// These errors typically cannot be resolved by retrying or changing user input.
 	ErrCategorySystem
-	// Data errors - possible corruption
+
+	// ErrCategoryData represents errors related to data corruption or integrity.
+	// Examples: checksum failures, invalid page formats, corrupted indexes.
+	// These errors may require database repair or recovery procedures.
 	ErrCategoryData
-	// Concurrency errors - transaction conflicts
+
+	// ErrCategoryConcurrency represents errors from concurrent transaction conflicts.
+	// Examples: deadlocks, serialization failures, lock conflicts.
+	// These errors are often resolved by transaction retry with proper backoff.
 	ErrCategoryConcurrency
 )
 
+// DBError represents a structured database error with rich context information.
+// It implements the standard Go error interface while providing additional
+// metadata for debugging, error recovery, and user-friendly error messages.
 type DBError struct {
-	Code     string
+	// Code is a unique identifier for this error type (e.g., "DEADLOCK_DETECTED", "PAGE_CORRUPTED").
+	// Error codes should be stable across versions to enable programmatic error handling.
+	Code string
+
+	// Category classifies the error for appropriate handling strategy.
 	Category ErrorCategory
-	Message  string
-	Detail   string // Additional context
-	Hint     string // Suggestion for fixing
 
-	// Context about where error occurred
-	Operation string // e.g., "InsertTuple", "SeqScan"
-	Component string // e.g., "PageStore", "LockManager"
+	// Message is a human-readable description of what went wrong.
+	Message string
 
-	// Error chain
+	// Detail provides additional context about the specific error instance.
+	// Example: "Table 'users' already exists" where Message might be "Relation already exists".
+	Detail string
+
+	// Hint suggests how the user might fix or work around this error.
+	// Example: "Try using CREATE TABLE IF NOT EXISTS instead".
+	Hint string
+
+	// Operation identifies the database operation that was being performed when the error occurred.
+	// Examples: "InsertTuple", "SeqScan", "CreateTable", "AcquireLock".
+	Operation string
+
+	// Component identifies the system component where the error originated.
+	// Examples: "PageStore", "LockManager", "QueryPlanner", "HeapPage".
+	Component string
+
+	// Cause is the underlying error that triggered this database error.
+	// This enables error chaining while preserving the original error context.
 	Cause error
 
-	// Stack trace (only in debug mode)
+	// Stack contains the call stack where this error was created.
+	// Used for debugging and is automatically captured in New() and Wrap().
 	Stack []uintptr
 }
 
+// New creates a new DBError with the specified code, category, and message.
+// The stack trace is automatically captured for debugging purposes.
 func New(code string, category ErrorCategory, message string) *DBError {
 	err := &DBError{
 		Code:     code,
@@ -50,7 +89,9 @@ func New(code string, category ErrorCategory, message string) *DBError {
 	return err
 }
 
-// Wrap wraps an existing error with database context
+// Wrap wraps an existing error with database-specific context information.
+// If the error is already a DBError, it enriches the existing error with
+// operation and component context (only if not already set).
 func Wrap(err error, code string, operation, component string) *DBError {
 	if err == nil {
 		return nil
@@ -77,6 +118,9 @@ func Wrap(err error, code string, operation, component string) *DBError {
 	}
 }
 
+// captureStack captures the current call stack for debugging purposes.
+// It skips the first 3 frames to exclude captureStack, New/Wrap, and the
+// immediate caller, focusing on the actual error origin.
 func captureStack() []uintptr {
 	const depth = 32
 	var pcs [depth]uintptr
@@ -84,6 +128,12 @@ func captureStack() []uintptr {
 	return pcs[0:n]
 }
 
+// Error implements the standard Go error interface, returning a formatted
+// error string that includes the error code, message, details, context,
+// and underlying cause information.
+//
+// The format follows the pattern:
+// [ERROR_CODE] Message: Detail (operation: Operation, component: Component) caused by: underlying error
 func (e *DBError) Error() string {
 	var b strings.Builder
 
@@ -108,11 +158,15 @@ func (e *DBError) Error() string {
 	return b.String()
 }
 
+// Unwrap returns the underlying cause error, enabling error chain traversal
+// with Go's standard error handling functions like errors.Is and errors.As.
 func (e *DBError) Unwrap() error {
 	return e.Cause
 }
 
-// FormatStack returns formatted stack trace
+// FormatStack returns a human-readable stack trace for debugging purposes.
+// The stack trace shows the call chain from where the error was created,
+// including function names, file paths, and line numbers.
 func (e *DBError) FormatStack() string {
 	if len(e.Stack) == 0 {
 		return ""
