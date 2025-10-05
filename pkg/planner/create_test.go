@@ -37,7 +37,7 @@ func TestNewCreateTablePlan(t *testing.T) {
 	tableManager := memory.NewTableManager()
 	tid := transaction.NewTransactionID()
 
-	plan := NewCreateTablePlan(stmt, tableManager, tid)
+	plan := NewCreateTablePlan(stmt, tableManager, tid, "")
 
 	if plan == nil {
 		t.Fatal("NewCreateTablePlan returned nil")
@@ -71,7 +71,7 @@ func TestCreateTablePlan_Execute_BasicSuccess(t *testing.T) {
 	tableManager := memory.NewTableManager()
 	tid := transaction.NewTransactionID()
 
-	plan := NewCreateTablePlan(stmt, tableManager, tid)
+	plan := NewCreateTablePlan(stmt, tableManager, tid, "")
 
 	result, err := executePlan(t, plan)
 
@@ -115,7 +115,7 @@ func TestCreateTablePlan_Execute_WithPrimaryKey(t *testing.T) {
 	tableManager := memory.NewTableManager()
 	tid := transaction.NewTransactionID()
 
-	plan := NewCreateTablePlan(stmt, tableManager, tid)
+	plan := NewCreateTablePlan(stmt, tableManager, tid, "")
 
 	result, err := executePlan(t, plan)
 
@@ -151,7 +151,7 @@ func TestCreateTablePlan_Execute_AllFieldTypes(t *testing.T) {
 	tableManager := memory.NewTableManager()
 	tid := transaction.NewTransactionID()
 
-	plan := NewCreateTablePlan(stmt, tableManager, tid)
+	plan := NewCreateTablePlan(stmt, tableManager, tid, "")
 
 	result, err := executePlan(t, plan)
 
@@ -184,7 +184,7 @@ func TestCreateTablePlan_Execute_IfNotExists_TableDoesNotExist(t *testing.T) {
 	tableManager := memory.NewTableManager()
 	tid := transaction.NewTransactionID()
 
-	plan := NewCreateTablePlan(stmt, tableManager, tid)
+	plan := NewCreateTablePlan(stmt, tableManager, tid, "")
 
 	result, err := executePlan(t, plan)
 
@@ -221,7 +221,7 @@ func TestCreateTablePlan_Execute_IfNotExists_TableExists(t *testing.T) {
 
 	existingStmt := statements.NewCreateStatement("users", false)
 	existingStmt.AddField("id", types.IntType, true, nil)
-	existingPlan := NewCreateTablePlan(existingStmt, tableManager, tid)
+	existingPlan := NewCreateTablePlan(existingStmt, tableManager, tid, "")
 	_, err := existingPlan.Execute()
 	if err != nil {
 		t.Fatalf("Failed to create existing table: %v", err)
@@ -231,7 +231,7 @@ func TestCreateTablePlan_Execute_IfNotExists_TableExists(t *testing.T) {
 	stmt.AddField("id", types.IntType, true, nil)
 	stmt.AddField("name", types.StringType, false, nil)
 
-	plan := NewCreateTablePlan(stmt, tableManager, tid)
+	plan := NewCreateTablePlan(stmt, tableManager, tid, "")
 
 	result, err := executePlan(t, plan)
 
@@ -264,7 +264,7 @@ func TestCreateTablePlan_Execute_Error_TableAlreadyExists(t *testing.T) {
 
 	existingStmt := statements.NewCreateStatement("users", false)
 	existingStmt.AddField("id", types.IntType, true, nil)
-	existingPlan := NewCreateTablePlan(existingStmt, tableManager, tid)
+	existingPlan := NewCreateTablePlan(existingStmt, tableManager, tid, "")
 	_, err := existingPlan.Execute()
 	if err != nil {
 		t.Fatalf("Failed to create existing table: %v", err)
@@ -273,7 +273,7 @@ func TestCreateTablePlan_Execute_Error_TableAlreadyExists(t *testing.T) {
 	stmt := statements.NewCreateStatement("users", false)
 	stmt.AddField("id", types.IntType, true, nil)
 
-	plan := NewCreateTablePlan(stmt, tableManager, tid)
+	plan := NewCreateTablePlan(stmt, tableManager, tid, "")
 
 	result, err := executePlan(t, plan)
 
@@ -306,7 +306,7 @@ func TestCreateTablePlan_Execute_Error_EmptyFields(t *testing.T) {
 	tableManager := memory.NewTableManager()
 	tid := transaction.NewTransactionID()
 
-	plan := NewCreateTablePlan(stmt, tableManager, tid)
+	plan := NewCreateTablePlan(stmt, tableManager, tid, "")
 
 	result, err := plan.Execute()
 
@@ -332,7 +332,7 @@ func TestCreateTablePlan_Execute_Error_InvalidFieldType(t *testing.T) {
 	tableManager := memory.NewTableManager()
 	tid := transaction.NewTransactionID()
 
-	plan := NewCreateTablePlan(stmt, tableManager, tid)
+	plan := NewCreateTablePlan(stmt, tableManager, tid, "")
 
 	result, err := plan.Execute()
 
@@ -357,7 +357,7 @@ func TestCreateTablePlan_Execute_Error_DataDirectoryMissing(t *testing.T) {
 	tableManager := memory.NewTableManager()
 	tid := transaction.NewTransactionID()
 
-	plan := NewCreateTablePlan(stmt, tableManager, tid)
+	plan := NewCreateTablePlan(stmt, tableManager, tid, "")
 
 	result, err := plan.Execute()
 
@@ -397,7 +397,7 @@ func TestCreateTablePlan_Execute_ComplexTable(t *testing.T) {
 	tableManager := memory.NewTableManager()
 	tid := transaction.NewTransactionID()
 
-	plan := NewCreateTablePlan(stmt, tableManager, tid)
+	plan := NewCreateTablePlan(stmt, tableManager, tid, "")
 
 	result, err := executePlan(t, plan)
 
@@ -444,7 +444,7 @@ func TestCreateTablePlan_Execute_FileCreation(t *testing.T) {
 	tableManager := memory.NewTableManager()
 	tid := transaction.NewTransactionID()
 
-	plan := NewCreateTablePlan(stmt, tableManager, tid)
+	plan := NewCreateTablePlan(stmt, tableManager, tid, "")
 
 	result, err := executePlan(t, plan)
 
