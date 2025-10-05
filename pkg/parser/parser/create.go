@@ -72,7 +72,7 @@ func readPrimaryKey(l *lexer.Lexer, stmt *statements.CreateStatement) error {
 		return fmt.Errorf("expected field name in PRIMARY KEY: %w", err)
 	}
 
-	stmt.SetPrimaryKey(fieldName)
+	stmt.PrimaryKey = fieldName
 	return expectTokenSequence(l, lexer.RPAREN)
 }
 
