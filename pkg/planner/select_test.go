@@ -10,15 +10,6 @@ import (
 	"testing"
 )
 
-func NewSelectPlan(stmt *statements.SelectStatement, tm *memory.TableManager, ps *memory.PageStore, tid *transaction.TransactionID) *SelectPlan {
-	return &SelectPlan{
-		tableManager: tm,
-		pageStore:    ps,
-		tid:          tid,
-		statement:    stmt,
-	}
-}
-
 func executeSelectPlan(t *testing.T, plan *SelectPlan) (*QueryResult, error) {
 	resultAny, err := plan.Execute()
 	if err != nil {
@@ -46,7 +37,7 @@ func createSelectTestTable(t *testing.T, tableManager *memory.TableManager, tid 
 	stmt.AddField("active", types.BoolType, false, nil)
 	stmt.AddField("salary", types.FloatType, false, nil)
 
-	createPlan := NewCreateTablePlan(stmt, tableManager, tid)
+	createPlan := NewCreateTablePlan(stmt, tableManager, tid, "")
 	_, err := createPlan.Execute()
 	if err != nil {
 		t.Fatalf("Failed to create test table: %v", err)
