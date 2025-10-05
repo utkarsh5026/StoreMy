@@ -166,8 +166,25 @@ func TestDatabase_GetTables_Empty(t *testing.T) {
 	defer db.Close()
 
 	tables := db.GetTables()
-	if len(tables) != 0 {
-		t.Errorf("expected 0 tables, got %d", len(tables))
+	// Should have exactly 2 catalog tables (CATALOG_TABLES and CATALOG_COLUMNS)
+	if len(tables) != 2 {
+		t.Errorf("expected 2 catalog tables, got %d", len(tables))
+	}
+
+	// Verify they are the catalog tables
+	hasCatalogTables := false
+	hasCatalogColumns := false
+	for _, table := range tables {
+		if table == "CATALOG_TABLES" {
+			hasCatalogTables = true
+		}
+		if table == "CATALOG_COLUMNS" {
+			hasCatalogColumns = true
+		}
+	}
+
+	if !hasCatalogTables || !hasCatalogColumns {
+		t.Error("expected CATALOG_TABLES and CATALOG_COLUMNS to exist")
 	}
 }
 
@@ -218,8 +235,9 @@ func TestDatabase_LoadExistingTables_NoCatalogFile(t *testing.T) {
 	defer db.Close()
 
 	tables := db.GetTables()
-	if len(tables) != 0 {
-		t.Errorf("expected 0 tables, got %d", len(tables))
+	// Should have exactly 2 catalog tables (CATALOG_TABLES and CATALOG_COLUMNS)
+	if len(tables) != 2 {
+		t.Errorf("expected 2 catalog tables, got %d", len(tables))
 	}
 }
 
