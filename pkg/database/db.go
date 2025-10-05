@@ -24,6 +24,7 @@ type Database struct {
 	pageStore    *memory.PageStore
 	queryPlanner *planner.QueryPlanner
 	catalog      *catalog.SystemCatalog
+	wal          *log.WAL
 
 	name    string
 	dataDir string
@@ -82,6 +83,7 @@ func NewDatabase(name, dataDir, logDir string) (*Database, error) {
 		pageStore:    pageStore,
 		queryPlanner: queryPlanner,
 		catalog:      systemCatalog,
+		wal:          wal,
 		name:         name,
 		dataDir:      fullPath,
 		stats:        &DatabaseStats{},
@@ -126,17 +128,13 @@ func (db *Database) ExecuteQuery(query string) (QueryResult, error) {
 
 // loadExistingTables loads table metadata from disk
 func (db *Database) loadExistingTables() error {
-	catalogTablesPath := filepath.Join(db.dataDir, CatalogTablesFile)
-
-	if _, err := os.Stat(catalogTablesPath); os.IsNotExist(err) {
-		if err := db.catalog.Initialize(db.dataDir); err != nil {
-			return fmt.Errorf("failed to initialize catalog: %v", err)
-		}
-		return nil
-	}
-
 	if err := db.catalog.Initialize(db.dataDir); err != nil {
 		return fmt.Errorf("failed to initialize catalog: %v", err)
+	}
+
+	catalogTablesPath := filepath.Join(db.dataDir, CatalogTablesFile)
+	if _, err := os.Stat(catalogTablesPath); os.IsNotExist(err) {
+		return nil
 	}
 
 	if err := db.catalog.LoadTables(db.dataDir); err != nil {
@@ -196,7 +194,10 @@ func (db *Database) GetStatistics() DatabaseInfo {
 
 func (db *Database) cleanupTransaction(tid *transaction.TransactionID, err *error) {
 	if *err != nil {
-		db.pageStore.AbortTransaction(tid)
+		if abortErr := db.pageStore.AbortTransaction(tid); abortErr != nil {
+			// Log abort error but don't override the original error
+			fmt.Printf("failed to abort transaction: %v\n", abortErr)
+		}
 	}
 	db.stats.mutex.Lock()
 	db.stats.TransactionsCount++
@@ -209,6 +210,10 @@ func (db *Database) Close() error {
 
 	if err := db.pageStore.FlushAllPages(); err != nil {
 		return fmt.Errorf("failed to flush pages: %v", err)
+	}
+
+	if err := db.wal.Close(); err != nil {
+		return fmt.Errorf("failed to close WAL: %v", err)
 	}
 
 	db.tableManager.Clear()
