@@ -17,26 +17,26 @@ const (
 )
 
 type SystemCatalog struct {
-	pageStore      *memory.PageStore
+	store          *memory.PageStore
 	tableManager   *memory.TableManager
-	schemaLoader   *SchemaLoader
+	loader         *SchemaLoader
 	tablesTableID  int // Actual ID of CATALOG_TABLES
 	columnsTableID int // Actual ID of CATALOG_COLUMNS
 }
 
 func NewSystemCatalog(ps *memory.PageStore, tm *memory.TableManager) *SystemCatalog {
 	sc := &SystemCatalog{
-		pageStore:    ps,
+		store:        ps,
 		tableManager: tm,
 	}
 
-	sc.schemaLoader = NewSchemaLoader(0, sc.iterateTable)
+	sc.loader = NewSchemaLoader(0, sc.iterateTable)
 	return sc
 }
 
 func (sc *SystemCatalog) Initialize(dataDir string) error {
 	tid := transaction.NewTransactionID()
-	defer sc.pageStore.CommitTransaction(tid)
+	defer sc.store.CommitTransaction(tid)
 
 	var err error
 	sc.tablesTableID, err = sc.createCatalogTable(dataDir, CatalogTableFileName, CatalogTable, "table_id", GetTablesSchema())
@@ -49,11 +49,12 @@ func (sc *SystemCatalog) Initialize(dataDir string) error {
 		return fmt.Errorf("failed to create columns catalog: %w", err)
 	}
 
+	sc.loader.columnsTableID = sc.columnsTableID
 	return nil
 }
 
 func (sc *SystemCatalog) createCatalogTable(dataDir, fileName, tableName, primaryKey string, schema *tuple.TupleDescription) (int, error) {
-	heapFile, err := heap.NewHeapFile(
+	f, err := heap.NewHeapFile(
 		fmt.Sprintf("%s/%s", dataDir, fileName),
 		schema,
 	)
@@ -61,32 +62,25 @@ func (sc *SystemCatalog) createCatalogTable(dataDir, fileName, tableName, primar
 		return 0, err
 	}
 
-	if err := sc.tableManager.AddTable(heapFile, tableName, primaryKey); err != nil {
+	if err := sc.tableManager.AddTable(f, tableName, primaryKey); err != nil {
 		return 0, err
 	}
 
-	return heapFile.GetID(), nil
+	return f.GetID(), nil
 }
 
 // RegisterTable adds a table to the system catalog
 // The tableID parameter should be the actual heap file ID
-func (sc *SystemCatalog) RegisterTable(
-	tid *transaction.TransactionID,
-	tableID int,
-	tableName string,
-	filePath string,
-	primaryKey string,
-	fields []FieldMetadata,
+func (sc *SystemCatalog) RegisterTable(tid *transaction.TransactionID, tableID int, tableName, filePath, primaryKey string, fields []FieldMetadata,
 ) error {
-
-	tablesTuple := createTablesTuple(tableID, tableName, filePath, primaryKey)
-	if err := sc.pageStore.InsertTuple(tid, sc.tablesTableID, tablesTuple); err != nil {
+	tup := createTablesTuple(tableID, tableName, filePath, primaryKey)
+	if err := sc.store.InsertTuple(tid, sc.tablesTableID, tup); err != nil {
 		return fmt.Errorf("failed to insert table metadata: %w", err)
 	}
 
-	for pos, field := range fields {
-		columnsTuple := createColumnsTuple(tableID, field.Name, field.Type, pos, field.Name == primaryKey)
-		if err := sc.pageStore.InsertTuple(tid, sc.columnsTableID, columnsTuple); err != nil {
+	for pos, f := range fields {
+		tup = createColumnsTuple(tableID, f.Name, f.Type, pos, f.Name == primaryKey)
+		if err := sc.store.InsertTuple(tid, sc.columnsTableID, tup); err != nil {
 			return fmt.Errorf("failed to insert column metadata: %w", err)
 		}
 	}
@@ -95,22 +89,22 @@ func (sc *SystemCatalog) RegisterTable(
 }
 
 func createTablesTuple(tableID int, tableName, filePath, primaryKey string) *tuple.Tuple {
-	tablesTuple := tuple.NewTuple(GetTablesSchema())
-	tablesTuple.SetField(0, types.NewIntField(int32(tableID)))
-	tablesTuple.SetField(1, types.NewStringField(tableName, types.StringMaxSize))
-	tablesTuple.SetField(2, types.NewStringField(filePath, types.StringMaxSize))
-	tablesTuple.SetField(3, types.NewStringField(primaryKey, types.StringMaxSize))
-	return tablesTuple
+	t := tuple.NewTuple(GetTablesSchema())
+	t.SetField(0, types.NewIntField(int32(tableID)))
+	t.SetField(1, types.NewStringField(tableName, types.StringMaxSize))
+	t.SetField(2, types.NewStringField(filePath, types.StringMaxSize))
+	t.SetField(3, types.NewStringField(primaryKey, types.StringMaxSize))
+	return t
 }
 
 func createColumnsTuple(tableID int, colName string, colType types.Type, position int, isPrimary bool) *tuple.Tuple {
-	columnsTuple := tuple.NewTuple(GetColumnsSchema())
-	columnsTuple.SetField(0, types.NewIntField(int32(tableID)))
-	columnsTuple.SetField(1, types.NewStringField(colName, types.StringMaxSize))
-	columnsTuple.SetField(2, types.NewIntField(int32(colType)))
-	columnsTuple.SetField(3, types.NewIntField(int32(position)))
-	columnsTuple.SetField(4, types.NewBoolField(isPrimary))
-	return columnsTuple
+	t := tuple.NewTuple(GetColumnsSchema())
+	t.SetField(0, types.NewIntField(int32(tableID)))
+	t.SetField(1, types.NewStringField(colName, types.StringMaxSize))
+	t.SetField(2, types.NewIntField(int32(colType)))
+	t.SetField(3, types.NewIntField(int32(position)))
+	t.SetField(4, types.NewBoolField(isPrimary))
+	return t
 }
 
 type FieldMetadata struct {
@@ -120,23 +114,23 @@ type FieldMetadata struct {
 
 func (sc *SystemCatalog) LoadTables(dataDir string) error {
 	tid := transaction.NewTransactionID()
-	defer sc.pageStore.CommitTransaction(tid)
+	defer sc.store.CommitTransaction(tid)
 
 	return sc.iterateTable(sc.tablesTableID, tid, func(tableTuple *tuple.Tuple) error {
-		tableID, tableName, filePath := parseTableMetadata(tableTuple)
+		tableID, name, filePath := parseTableMetadata(tableTuple)
 
-		tupleSchema, pk, err := sc.schemaLoader.LoadTableSchema(tid, tableID)
+		schema, pk, err := sc.loader.LoadTableSchema(tid, tableID)
 		if err != nil {
-			return fmt.Errorf("failed to load schema for table %s: %w", tableName, err)
+			return fmt.Errorf("failed to load schema for table %s: %w", name, err)
 		}
 
-		heapFile, err := heap.NewHeapFile(filePath, tupleSchema)
+		f, err := heap.NewHeapFile(filePath, schema)
 		if err != nil {
-			return fmt.Errorf("failed to open heap file for %s: %w", tableName, err)
+			return fmt.Errorf("failed to open heap file for %s: %w", name, err)
 		}
 
-		if err := sc.tableManager.AddTable(heapFile, tableName, pk); err != nil {
-			return fmt.Errorf("failed to add table %s: %w", tableName, err)
+		if err := sc.tableManager.AddTable(f, name, pk); err != nil {
+			return fmt.Errorf("failed to add table %s: %w", name, err)
 		}
 
 		return nil
@@ -167,35 +161,33 @@ func (sc *SystemCatalog) GetTableID(tid *transaction.TransactionID, tableName st
 	return -1, fmt.Errorf("table %s not found in catalog", tableName)
 }
 
-// GetTablesTableID returns the actual table ID for CATALOG_TABLES
 func (sc *SystemCatalog) GetTablesTableID() int {
 	return sc.tablesTableID
 }
 
-// GetColumnsTableID returns the actual table ID for CATALOG_COLUMNS
 func (sc *SystemCatalog) GetColumnsTableID() int {
 	return sc.columnsTableID
 }
 
 func (sc *SystemCatalog) iterateTable(tableID int, tid *transaction.TransactionID, processFunc func(*tuple.Tuple) error) error {
-	dbFile, err := sc.tableManager.GetDbFile(tableID)
+	file, err := sc.tableManager.GetDbFile(tableID)
 	if err != nil {
 		return fmt.Errorf("failed to get table file: %w", err)
 	}
 
-	iterator := dbFile.Iterator(tid)
-	if err := iterator.Open(); err != nil {
-		return fmt.Errorf("failed to open iterator: %w", err)
+	iter := file.Iterator(tid)
+	if err := iter.Open(); err != nil {
+		return fmt.Errorf("failed to open iter: %w", err)
 	}
-	defer iterator.Close()
+	defer iter.Close()
 
 	for {
-		hasNext, err := iterator.HasNext()
+		hasNext, err := iter.HasNext()
 		if err != nil || !hasNext {
 			break
 		}
 
-		tup, err := iterator.Next()
+		tup, err := iter.Next()
 		if err != nil || tup == nil {
 			break
 		}
