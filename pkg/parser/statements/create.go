@@ -6,6 +6,7 @@ import (
 	"strings"
 )
 
+// FieldDefinition represents a column definition in a CREATE TABLE statement
 type FieldDefinition struct {
 	Name         string
 	Type         types.Type
@@ -13,29 +14,101 @@ type FieldDefinition struct {
 	DefaultValue types.Field
 }
 
+// CreateStatement represents a SQL CREATE TABLE statement
 type CreateStatement struct {
+	BaseStatement
 	TableName   string
 	Fields      []FieldDefinition
 	PrimaryKey  string
 	IfNotExists bool
 }
 
+// NewCreateStatement creates a new CREATE TABLE statement
 func NewCreateStatement(tableName string, ifNotExists bool) *CreateStatement {
 	return &CreateStatement{
-		TableName:   tableName,
-		IfNotExists: ifNotExists,
-		Fields:      make([]FieldDefinition, 0),
+		BaseStatement: NewBaseStatement(CreateTable),
+		TableName:     tableName,
+		IfNotExists:   ifNotExists,
+		Fields:        make([]FieldDefinition, 0),
 	}
 }
 
+// SetPrimaryKey sets the primary key field name
 func (cts *CreateStatement) SetPrimaryKey(fieldName string) {
 	cts.PrimaryKey = fieldName
 }
 
-func (cts *CreateStatement) GetType() StatementType {
-	return CreateTable
+// GetPrimaryKey returns the primary key field name
+func (cts *CreateStatement) GetPrimaryKey() string {
+	return cts.PrimaryKey
 }
 
+// HasPrimaryKey returns true if a primary key is defined
+func (cts *CreateStatement) HasPrimaryKey() bool {
+	return cts.PrimaryKey != ""
+}
+
+// GetTableName returns the table name
+func (cts *CreateStatement) GetTableName() string {
+	return cts.TableName
+}
+
+// GetFields returns all field definitions
+func (cts *CreateStatement) GetFields() []FieldDefinition {
+	return cts.Fields
+}
+
+// FieldCount returns the number of fields
+func (cts *CreateStatement) FieldCount() int {
+	return len(cts.Fields)
+}
+
+// AddField adds a field definition to the CREATE TABLE statement
+func (cts *CreateStatement) AddField(name string, fieldType types.Type, notNull bool, defaultValue types.Field) {
+	cts.Fields = append(cts.Fields, FieldDefinition{
+		Name:         name,
+		Type:         fieldType,
+		NotNull:      notNull,
+		DefaultValue: defaultValue,
+	})
+}
+
+func (cts *CreateStatement) Validate() error {
+	if cts.TableName == "" {
+		return NewValidationError(CreateTable, "TableName", "table name cannot be empty")
+	}
+
+	if len(cts.Fields) == 0 {
+		return NewValidationError(CreateTable, "Fields", "at least one field is required")
+	}
+
+	fieldNames := make(map[string]bool)
+	for i, field := range cts.Fields {
+		if field.Name == "" {
+			return NewValidationError(CreateTable, fmt.Sprintf("Fields[%d].Name", i), "field name cannot be empty")
+		}
+
+		if field.Type.String() == "" {
+			return NewValidationError(CreateTable, fmt.Sprintf("Fields[%d].Type", i), "field type cannot be empty")
+		}
+
+		if fieldNames[field.Name] {
+			return NewValidationError(CreateTable, fmt.Sprintf("Fields[%d].Name", i), fmt.Sprintf("duplicate field name: %s", field.Name))
+		}
+
+		fieldNames[field.Name] = true
+	}
+
+	if cts.PrimaryKey != "" {
+		if !fieldNames[cts.PrimaryKey] {
+			return NewValidationError(CreateTable, "PrimaryKey", fmt.Sprintf("primary key field '%s' does not exist", cts.PrimaryKey))
+		}
+	}
+
+	return nil
+}
+
+// String returns a string representation of the CREATE TABLE statement
 func (cts *CreateStatement) String() string {
 	var sb strings.Builder
 	sb.WriteString("CREATE TABLE ")
@@ -61,20 +134,11 @@ func (cts *CreateStatement) String() string {
 		}
 	}
 
-	if cts.PrimaryKey != "" {
+	if cts.HasPrimaryKey() {
 		sb.WriteString(fmt.Sprintf(",\n  PRIMARY KEY (%s)", cts.PrimaryKey))
 	}
 
 	sb.WriteString("\n)")
 
 	return sb.String()
-}
-
-func (cts *CreateStatement) AddField(name string, fieldType types.Type, notNull bool, defaultValue types.Field) {
-	cts.Fields = append(cts.Fields, FieldDefinition{
-		Name:         name,
-		Type:         fieldType,
-		NotNull:      notNull,
-		DefaultValue: defaultValue,
-	})
 }
