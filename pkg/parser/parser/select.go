@@ -310,7 +310,7 @@ func parseConditions(l *lexer.Lexer, p *plan.SelectPlan) error {
 		var value string
 
 		switch valueToken.Type {
-		case lexer.STRING, lexer.BOOLEAN, lexer.INT:
+		case lexer.STRING, lexer.BOOLEAN, lexer.INT, lexer.IDENTIFIER:
 			value = valueToken.Value
 		default:
 			return fmt.Errorf("expected value, got %s", valueToken.Value)
@@ -321,7 +321,7 @@ func parseConditions(l *lexer.Lexer, p *plan.SelectPlan) error {
 			return err
 		}
 
-		if err := p.AddFilter(strings.ToUpper(fieldToken.Value), pred, value); err != nil {
+		if err := p.AddFilter(strings.ToUpper(fieldToken.Value), pred, strings.ToUpper(value)); err != nil {
 			return err
 		}
 
