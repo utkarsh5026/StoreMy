@@ -36,7 +36,7 @@ func createTestTable(t *testing.T, tableManager *memory.TableManager, tid *trans
 	stmt.AddField("active", types.BoolType, false, nil)
 	stmt.AddField("price", types.FloatType, false, nil)
 
-	createPlan := NewCreateTablePlan(stmt, tableManager, tid)
+	createPlan := NewCreateTablePlan(stmt, tableManager, tid, "")
 	_, err := createPlan.Execute()
 	if err != nil {
 		t.Fatalf("Failed to create test table: %v", err)
