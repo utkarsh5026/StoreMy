@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"storemy/pkg/catalog"
 	"storemy/pkg/concurrency/transaction"
 	"storemy/pkg/log"
 	"storemy/pkg/memory"
@@ -13,11 +14,16 @@ import (
 	"sync"
 )
 
+const (
+	CatalogTablesFile = "catalog_tables.dat"
+)
+
 // Database represents the main database engine that coordinates all components
 type Database struct {
 	tableManager *memory.TableManager
 	pageStore    *memory.PageStore
 	queryPlanner *planner.QueryPlanner
+	catalog      *catalog.SystemCatalog
 
 	name    string
 	dataDir string
@@ -69,10 +75,13 @@ func NewDatabase(name, dataDir, logDir string) (*Database, error) {
 	pageStore := memory.NewPageStore(tableManager, wal)
 	queryPlanner := planner.NewQueryPlanner(tableManager, pageStore)
 
+	systemCatalog := catalog.NewSystemCatalog(pageStore, tableManager)
+
 	db := &Database{
 		tableManager: tableManager,
 		pageStore:    pageStore,
 		queryPlanner: queryPlanner,
+		catalog:      systemCatalog,
 		name:         name,
 		dataDir:      fullPath,
 		stats:        &DatabaseStats{},
@@ -117,7 +126,23 @@ func (db *Database) ExecuteQuery(query string) (QueryResult, error) {
 
 // loadExistingTables loads table metadata from disk
 func (db *Database) loadExistingTables() error {
-	// For now, we'll start with an empty database
+	catalogTablesPath := filepath.Join(db.dataDir, CatalogTablesFile)
+
+	if _, err := os.Stat(catalogTablesPath); os.IsNotExist(err) {
+		if err := db.catalog.Initialize(db.dataDir); err != nil {
+			return fmt.Errorf("failed to initialize catalog: %v", err)
+		}
+		return nil
+	}
+
+	if err := db.catalog.Initialize(db.dataDir); err != nil {
+		return fmt.Errorf("failed to initialize catalog: %v", err)
+	}
+
+	if err := db.catalog.LoadTables(db.dataDir); err != nil {
+		return fmt.Errorf("failed to load tables from catalog: %v", err)
+	}
+
 	return nil
 }
 
@@ -237,6 +262,11 @@ func (db *Database) GetTables() []string {
 	defer db.mutex.RUnlock()
 
 	return db.tableManager.GetAllTableNames()
+}
+
+// GetCatalog returns the system catalog instance
+func (db *Database) GetCatalog() *catalog.SystemCatalog {
+	return db.catalog
 }
 
 // GetStatistics returns current database statistics
