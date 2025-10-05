@@ -14,6 +14,13 @@ const (
 	ColumnsTable = "CATALOG_COLUMNS"
 )
 
+type columnInfo struct {
+	name      string
+	fieldType types.Type
+	position  int
+	isPrimary bool
+}
+
 type SystemCatalog struct {
 	pageStore      *memory.PageStore
 	tableManager   *memory.TableManager
@@ -141,53 +148,20 @@ func (sc *SystemCatalog) LoadTables(dataDir string) error {
 
 // loadTableSchema reads column metadata for a specific table
 func (sc *SystemCatalog) loadTableSchema(tid *transaction.TransactionID, tableID int) (*tuple.TupleDescription, string, error) {
-	columnsFile, err := sc.tableManager.GetDbFile(sc.columnsTableID)
-	if err != nil {
-		return nil, "", fmt.Errorf("failed to get CATALOG_COLUMNS file: %v", err)
-	}
-
-	iterator := columnsFile.Iterator(tid)
-	if err := iterator.Open(); err != nil {
-		return nil, "", fmt.Errorf("failed to open iterator: %v", err)
-	}
-	defer iterator.Close()
-
-	type columnInfo struct {
-		name      string
-		fieldType types.Type
-		position  int
-		isPrimary bool
-	}
-
 	var columns []columnInfo
 	primaryKey := ""
 
-	for {
-		hasNext, err := iterator.HasNext()
-		if err != nil || !hasNext {
-			break
+	err := sc.iterateTable(sc.columnsTableID, tid, func(columnTuple *tuple.Tuple) error {
+		colTableID := getIntField(columnTuple, 0)
+		if colTableID != tableID {
+			return nil // Skip columns for other tables
 		}
-
-		columnTuple, err := iterator.Next()
-		if err != nil || columnTuple == nil {
-			break
-		}
-
-		colTableID, _ := columnTuple.GetField(0)
-		if int(colTableID.(*types.IntField).Value) != tableID {
-			continue
-		}
-
-		colName, _ := columnTuple.GetField(1)
-		colType, _ := columnTuple.GetField(2)
-		colPos, _ := columnTuple.GetField(3)
-		isPrimary, _ := columnTuple.GetField(4)
 
 		col := columnInfo{
-			name:      colName.String(),
-			fieldType: types.Type(colType.(*types.IntField).Value),
-			position:  int(colPos.(*types.IntField).Value),
-			isPrimary: isPrimary.(*types.BoolField).Value,
+			name:      getStringField(columnTuple, 1),
+			fieldType: types.Type(getIntField(columnTuple, 2)),
+			position:  getIntField(columnTuple, 3),
+			isPrimary: getBoolField(columnTuple, 4),
 		}
 
 		if col.isPrimary {
@@ -195,32 +169,18 @@ func (sc *SystemCatalog) loadTableSchema(tid *transaction.TransactionID, tableID
 		}
 
 		columns = append(columns, col)
+		return nil
+	})
+
+	if err != nil {
+		return nil, "", err
 	}
 
 	if len(columns) == 0 {
 		return nil, "", fmt.Errorf("no columns found for table %d", tableID)
 	}
 
-	// Sort by position
-	sortedColumns := make([]columnInfo, len(columns))
-	for _, col := range columns {
-		sortedColumns[col.position] = col
-	}
-
-	// Build TupleDesc
-	fieldTypes := make([]types.Type, len(sortedColumns))
-	fieldNames := make([]string, len(sortedColumns))
-	for i, col := range sortedColumns {
-		fieldTypes[i] = col.fieldType
-		fieldNames[i] = col.name
-	}
-
-	schema, err := tuple.NewTupleDesc(fieldTypes, fieldNames)
-	if err != nil {
-		return nil, "", fmt.Errorf("failed to create tuple desc: %v", err)
-	}
-
-	return schema, primaryKey, nil
+	return sc.buildTupleDescription(columns), primaryKey, nil
 }
 
 // GetTableID returns the ID for a table name, or -1 if not found
@@ -298,4 +258,27 @@ func getIntField(tup *tuple.Tuple, index int) int {
 func getStringField(tup *tuple.Tuple, index int) string {
 	field, _ := tup.GetField(index)
 	return field.String()
+}
+
+func getBoolField(tup *tuple.Tuple, index int) bool {
+	field, _ := tup.GetField(index)
+	return field.(*types.BoolField).Value
+}
+
+func (sc *SystemCatalog) buildTupleDescription(columns []columnInfo) *tuple.TupleDescription {
+	// Sort by position
+	sortedColumns := make([]columnInfo, len(columns))
+	for _, col := range columns {
+		sortedColumns[col.position] = col
+	}
+
+	fieldTypes := make([]types.Type, len(sortedColumns))
+	fieldNames := make([]string, len(sortedColumns))
+	for i, col := range sortedColumns {
+		fieldTypes[i] = col.fieldType
+		fieldNames[i] = col.name
+	}
+
+	schema, _ := tuple.NewTupleDesc(fieldTypes, fieldNames)
+	return schema
 }
