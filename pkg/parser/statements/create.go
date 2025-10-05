@@ -33,31 +33,6 @@ func NewCreateStatement(tableName string, ifNotExists bool) *CreateStatement {
 	}
 }
 
-// SetPrimaryKey sets the primary key field name
-func (cts *CreateStatement) SetPrimaryKey(fieldName string) {
-	cts.PrimaryKey = fieldName
-}
-
-// GetPrimaryKey returns the primary key field name
-func (cts *CreateStatement) GetPrimaryKey() string {
-	return cts.PrimaryKey
-}
-
-// HasPrimaryKey returns true if a primary key is defined
-func (cts *CreateStatement) HasPrimaryKey() bool {
-	return cts.PrimaryKey != ""
-}
-
-// GetTableName returns the table name
-func (cts *CreateStatement) GetTableName() string {
-	return cts.TableName
-}
-
-// GetFields returns all field definitions
-func (cts *CreateStatement) GetFields() []FieldDefinition {
-	return cts.Fields
-}
-
 // FieldCount returns the number of fields
 func (cts *CreateStatement) FieldCount() int {
 	return len(cts.Fields)
@@ -134,7 +109,7 @@ func (cts *CreateStatement) String() string {
 		}
 	}
 
-	if cts.HasPrimaryKey() {
+	if cts.PrimaryKey != "" {
 		sb.WriteString(fmt.Sprintf(",\n  PRIMARY KEY (%s)", cts.PrimaryKey))
 	}
 
