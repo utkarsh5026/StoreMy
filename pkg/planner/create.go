@@ -15,6 +15,7 @@ type CreateTablePlan struct {
 	Statement    *statements.CreateStatement
 	tableManager *memory.TableManager
 	tid          *transaction.TransactionID
+	dataDir      string
 }
 
 type DDLResult struct {
@@ -29,11 +30,13 @@ func (r *DDLResult) String() string {
 func NewCreateTablePlan(
 	stmt *statements.CreateStatement,
 	t *memory.TableManager,
-	tid *transaction.TransactionID) *CreateTablePlan {
+	tid *transaction.TransactionID,
+	dataDir string) *CreateTablePlan {
 	return &CreateTablePlan{
 		Statement:    stmt,
 		tableManager: t,
 		tid:          tid,
+		dataDir:      dataDir,
 	}
 }
 
@@ -88,7 +91,12 @@ func (p *CreateTablePlan) buildTupleDescriptor() (*tuple.TupleDescription, error
 }
 
 func (p *CreateTablePlan) createHeapFile(tupleDesc *tuple.TupleDescription) (*heap.HeapFile, error) {
-	fileName := fmt.Sprintf("data/%s.dat", p.Statement.TableName)
+	var fileName string
+	if p.dataDir != "" {
+		fileName = fmt.Sprintf("%s/%s.dat", p.dataDir, p.Statement.TableName)
+	} else {
+		fileName = fmt.Sprintf("data/%s.dat", p.Statement.TableName)
+	}
 	heapFile, err := heap.NewHeapFile(fileName, tupleDesc)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create heap file: %v", err)
