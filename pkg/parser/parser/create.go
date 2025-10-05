@@ -11,6 +11,7 @@ import (
 type fieldConstraints struct {
 	NotNull      bool
 	DefaultValue types.Field
+	PrimaryKey   bool
 }
 
 // parseCreateStatement parses a CREATE TABLE SQL statement from the lexer tokens.
@@ -127,11 +128,17 @@ func parseFieldDefinition(l *lexer.Lexer, stmt *statements.CreateStatement, fiel
 	}
 
 	stmt.AddField(fieldName, fieldType, constraints.NotNull, constraints.DefaultValue)
+
+	// If this field has inline PRIMARY KEY constraint, set it
+	if constraints.PrimaryKey {
+		stmt.PrimaryKey = fieldName
+	}
+
 	return nil
 }
 
 // parseFieldConstraints parses optional constraints for a field definition.
-// Handles NOT NULL and DEFAULT value constraints.
+// Handles NOT NULL, DEFAULT value, and PRIMARY KEY constraints.
 // Returns when no more recognized constraint tokens are found.
 func parseFieldConstraints(l *lexer.Lexer) (*fieldConstraints, error) {
 	constraints := &fieldConstraints{}
@@ -151,6 +158,13 @@ func parseFieldConstraints(l *lexer.Lexer) (*fieldConstraints, error) {
 				return nil, err
 			}
 			constraints.DefaultValue = defaultValue
+		case lexer.PRIMARY:
+			// Handle inline PRIMARY KEY constraint
+			nextToken := l.NextToken()
+			if nextToken.Type != lexer.KEY {
+				return nil, fmt.Errorf("expected KEY after PRIMARY, got %s", nextToken.Value)
+			}
+			constraints.PrimaryKey = true
 		default:
 			l.SetPos(token.Position)
 			return constraints, nil
