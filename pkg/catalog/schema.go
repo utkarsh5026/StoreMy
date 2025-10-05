@@ -8,11 +8,14 @@ import (
 )
 
 const (
-	TablesTableID  = 0
+	// TablesTableID is the reserved heap file ID for the CATALOG_TABLES system table
+	TablesTableID = 0
+	// ColumnsTableID is the reserved heap file ID for the CATALOG_COLUMNS system table
 	ColumnsTableID = 1
 )
 
-// GetTablesSchema returns the schema for the system tables catalog
+// GetTablesSchema returns the schema for the CATALOG_TABLES system table.
+// Schema: (table_id INT, table_name STRING, file_path STRING, primary_key STRING)
 func GetTablesSchema() *tuple.TupleDescription {
 	types := []types.Type{
 		types.IntType,
@@ -32,7 +35,8 @@ func GetTablesSchema() *tuple.TupleDescription {
 	return desc
 }
 
-// GetColumnsSchema returns the schema for the system columns catalog
+// GetColumnsSchema returns the schema for the CATALOG_COLUMNS system table.
+// Schema: (table_id INT, column_name STRING, type_id INT, position INT, is_primary_key BOOL)
 func GetColumnsSchema() *tuple.TupleDescription {
 	types := []types.Type{
 		types.IntType,
@@ -54,6 +58,8 @@ func GetColumnsSchema() *tuple.TupleDescription {
 	return desc
 }
 
+// ColumnInfo represents metadata for a single column during schema reconstruction.
+// Used internally by SchemaLoader to build TupleDescription from catalog data.
 type ColumnInfo struct {
 	name      string
 	fieldType types.Type
@@ -63,7 +69,8 @@ type ColumnInfo struct {
 
 type IterFunc = func(int, *transaction.TransactionID, func(*tuple.Tuple) error) error
 
-// SchemaLoader handles loading and parsing schema information
+// SchemaLoader reconstructs table schemas from the system catalog.
+// It queries CATALOG_COLUMNS to build TupleDescription objects during database startup.
 type SchemaLoader struct {
 	columnsTableID int
 	iterateFunc    IterFunc
@@ -76,6 +83,9 @@ func NewSchemaLoader(columnsTableID int, iterateFunc IterFunc) *SchemaLoader {
 	}
 }
 
+// LoadTableSchema reconstructs the schema for a table from CATALOG_COLUMNS.
+// It scans all column metadata for the given tableID, sorts by position,
+// and builds a TupleDescription.
 func (sl *SchemaLoader) LoadTableSchema(tid *transaction.TransactionID, tableID int) (*tuple.TupleDescription, string, error) {
 	columns, primaryKey, err := sl.loadColumnMetadata(tid, tableID)
 	if err != nil {
@@ -90,6 +100,8 @@ func (sl *SchemaLoader) LoadTableSchema(tid *transaction.TransactionID, tableID 
 	return tupleDesc, primaryKey, nil
 }
 
+// buildTupleDescription converts sorted ColumnInfo slice into a TupleDescription.
+// Columns are sorted by their position field to ensure correct tuple layout.
 func buildTupleDescription(columns []ColumnInfo) *tuple.TupleDescription {
 	sortedColumns := make([]ColumnInfo, len(columns))
 	for _, col := range columns {
@@ -107,6 +119,8 @@ func buildTupleDescription(columns []ColumnInfo) *tuple.TupleDescription {
 	return schema
 }
 
+// loadColumnMetadata queries CATALOG_COLUMNS for all columns belonging to tableID.
+// It filters rows by table_id and collects ColumnInfo for each matching column.
 func (sl *SchemaLoader) loadColumnMetadata(tid *transaction.TransactionID, tableID int) ([]ColumnInfo, string, error) {
 	var columns []ColumnInfo
 	primaryKey := ""
