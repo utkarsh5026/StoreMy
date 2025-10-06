@@ -13,7 +13,7 @@ import (
 // It takes a filter node containing field name, predicate type, and constant value, along with
 // tuple description for type information, and returns a fully constructed predicate for query execution.
 func buildPredicateFromFilterNode(filter *plan.FilterNode, tupleDesc *tuple.TupleDescription) (*query.Predicate, error) {
-	fieldIndex, err := findFieldIndex(filter.Field, tupleDesc)
+	fieldIndex, err := locateField(filter.Field, tupleDesc)
 	if err != nil {
 		return nil, err
 	}
@@ -31,28 +31,18 @@ func buildPredicateFromFilterNode(filter *plan.FilterNode, tupleDesc *tuple.Tupl
 	return query.NewPredicate(fieldIndex, op, constantField), nil
 }
 
-// findFieldIndex locates the index of a field within the tuple description by name.
+// locateField locates the index of a field within the tuple description by name.
 // It supports both simple field names and dotted field paths (e.g., "table.field").
 // For dotted paths, it extracts the field name after the last dot.
-func findFieldIndex(fieldPath string, tupleDesc *tuple.TupleDescription) (int, error) {
+func locateField(fieldPath string, tupleDesc *tuple.TupleDescription) (int, error) {
 	fieldName := fieldPath
 	if dotIndex := strings.LastIndex(fieldPath, "."); dotIndex != -1 {
 		fieldName = fieldPath[dotIndex+1:]
 	}
-
-	for i := 0; i < tupleDesc.NumFields(); i++ {
-		name, _ := tupleDesc.GetFieldName(i)
-		if name == fieldName {
-			return i, nil
-		}
-	}
-
-	return -1, fmt.Errorf("field %s not found", fieldPath)
+	return findFieldIndex(fieldName, tupleDesc)
 }
 
 // createConstantField converts a string constant value to the appropriate typed field
-// based on the field type at the specified index in the tuple description.
-// Supports conversion to int, bool, float, and string field types.
 func createConstantField(constantValue string, tupleDesc *tuple.TupleDescription, fieldIndex int) (types.Field, error) {
 	fieldType, _ := tupleDesc.TypeAtIndex(fieldIndex)
 
@@ -76,7 +66,6 @@ func createConstantField(constantValue string, tupleDesc *tuple.TupleDescription
 }
 
 // getPredicateOperation maps a predicate type to its corresponding query operation.
-// Uses a lookup map for efficient and maintainable predicate type conversion.
 func getPredicateOperation(predicate types.Predicate) (query.PredicateOp, error) {
 	predicateMap := map[types.Predicate]query.PredicateOp{
 		types.Equals:             query.Equals,
