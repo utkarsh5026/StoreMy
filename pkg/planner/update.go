@@ -5,25 +5,23 @@ import (
 	"storemy/pkg/concurrency/transaction"
 	"storemy/pkg/execution/query"
 	"storemy/pkg/iterator"
-	"storemy/pkg/memory"
 	"storemy/pkg/parser/statements"
+	"storemy/pkg/registry"
 	"storemy/pkg/tuple"
 	"storemy/pkg/types"
 )
 
 type UpdatePlan struct {
-	statement    *statements.UpdateStatement
-	tableManager *memory.TableManager
-	pageStore    *memory.PageStore
-	tid          *transaction.TransactionID
+	statement *statements.UpdateStatement
+	ctx       *registry.DatabaseContext
+	tid       *transaction.TransactionID
 }
 
-func NewUpdatePlan(statement *statements.UpdateStatement, tableManager *memory.TableManager, pageStore *memory.PageStore, tid *transaction.TransactionID) *UpdatePlan {
+func NewUpdatePlan(statement *statements.UpdateStatement, tid *transaction.TransactionID, ctx *registry.DatabaseContext) *UpdatePlan {
 	return &UpdatePlan{
-		statement:    statement,
-		tableManager: tableManager,
-		pageStore:    pageStore,
-		tid:          tid,
+		statement: statement,
+		ctx:       ctx,
+		tid:       tid,
 	}
 }
 
@@ -60,12 +58,12 @@ func (p *UpdatePlan) Execute() (any, error) {
 }
 
 func (p *UpdatePlan) getTableMetadata() (int, *tuple.TupleDescription, error) {
-	tableID, err := p.tableManager.GetTableID(p.statement.TableName)
+	tableID, err := p.ctx.TableManager().GetTableID(p.statement.TableName)
 	if err != nil {
 		return 0, nil, fmt.Errorf("table %s not found", p.statement.TableName)
 	}
 
-	tupleDesc, err := p.tableManager.GetTupleDesc(tableID)
+	tupleDesc, err := p.ctx.TableManager().GetTupleDesc(tableID)
 	if err != nil {
 		return 0, nil, fmt.Errorf("failed to get table schema: %v", err)
 	}
@@ -99,7 +97,7 @@ func (p *UpdatePlan) findFieldIndex(fieldName string, tupleDesc *tuple.TupleDesc
 
 // buildQueryPlan creates the query execution plan for finding rows to update
 func (p *UpdatePlan) buildQueryPlan(tableID int) (iterator.DbIterator, error) {
-	scanOp, err := query.NewSeqScan(p.tid, tableID, p.tableManager)
+	scanOp, err := query.NewSeqScan(p.tid, tableID, p.ctx.TableManager())
 	if err != nil {
 		return nil, fmt.Errorf("failed to create table scan: %v", err)
 	}
@@ -170,7 +168,7 @@ func (p *UpdatePlan) updateTuples(tuplesToUpdate []*tuple.Tuple, tupleDesc *tupl
 			}
 		}
 
-		if err := p.pageStore.UpdateTuple(p.tid, oldTuple, newTuple); err != nil {
+		if err := p.ctx.PageStore().UpdateTuple(p.tid, oldTuple, newTuple); err != nil {
 			return fmt.Errorf("failed to update tuple: %v", err)
 		}
 	}
