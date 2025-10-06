@@ -5,35 +5,27 @@ import (
 	"storemy/pkg/concurrency/transaction"
 	"storemy/pkg/execution/query"
 	"storemy/pkg/iterator"
-	"storemy/pkg/memory"
 	"storemy/pkg/parser/statements"
+	"storemy/pkg/registry"
 	"storemy/pkg/tuple"
 )
 
 // DeletePlan implements the execution plan for DELETE statements.
-// It handles the complete lifecycle of a delete operation including:
-// - Table identification and validation
-// - Query plan construction with optional WHERE filtering
-// - Tuple collection and deletion
-// - Transaction management
 type DeletePlan struct {
-	statement    *statements.DeleteStatement
-	pageStore    *memory.PageStore
-	tableManager *memory.TableManager
-	tid          *transaction.TransactionID
+	statement *statements.DeleteStatement
+	ctx       *registry.DatabaseContext
+	tid       *transaction.TransactionID
 }
 
 // NewDeletePlan creates a new DELETE execution plan
 func NewDeletePlan(
 	stmt *statements.DeleteStatement,
-	ps *memory.PageStore,
 	tid *transaction.TransactionID,
-	tm *memory.TableManager) *DeletePlan {
+	ctx *registry.DatabaseContext) *DeletePlan {
 	return &DeletePlan{
-		statement:    stmt,
-		pageStore:    ps,
-		tableManager: tm,
-		tid:          tid,
+		statement: stmt,
+		tid:       tid,
+		ctx:       ctx,
 	}
 }
 
@@ -72,7 +64,7 @@ func (p *DeletePlan) Execute() (any, error) {
 // getTableID resolves the table name from the DELETE statement to its internal table ID.
 func (p *DeletePlan) getTableID() (int, error) {
 	tableName := p.statement.TableName
-	tableID, err := p.tableManager.GetTableID(tableName)
+	tableID, err := p.ctx.TableManager().GetTableID(tableName)
 	if err != nil {
 		return 0, fmt.Errorf("table %s not found", tableName)
 	}
@@ -81,7 +73,7 @@ func (p *DeletePlan) getTableID() (int, error) {
 
 // createTableScan creates a sequential scan iterator for the target table.
 func (p *DeletePlan) createTableScan(tableID int) (iterator.DbIterator, error) {
-	scanOp, err := query.NewSeqScan(p.tid, tableID, p.tableManager)
+	scanOp, err := query.NewSeqScan(p.tid, tableID, p.ctx.TableManager())
 	if err != nil {
 		return nil, fmt.Errorf("failed to create table scan: %v", err)
 	}
@@ -138,7 +130,7 @@ func collectTuplesToDelete(queryPlan iterator.DbIterator) ([]*tuple.Tuple, error
 // deleteTuples performs the actual deletion of collected tuples.
 func (p *DeletePlan) deleteTuples(tuplesToDelete []*tuple.Tuple) error {
 	for i, tupleToDelete := range tuplesToDelete {
-		if err := p.pageStore.DeleteTuple(p.tid, tupleToDelete); err != nil {
+		if err := p.ctx.PageStore().DeleteTuple(p.tid, tupleToDelete); err != nil {
 			return fmt.Errorf("failed to delete tuple %d: %v", i+1, err)
 		}
 	}
