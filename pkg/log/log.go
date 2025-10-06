@@ -10,18 +10,18 @@ import (
 type LogRecordType uint8
 
 const (
-	BeginRecord  LogRecordType = iota // Transaction start
-	CommitRecord                      // Transaction commit
-	AbortRecord                       // Transaction abort
+	BeginRecord LogRecordType = iota
+	CommitRecord
+	AbortRecord
 
-	UpdateRecord // Page update (contains before and after images)
-	InsertRecord // Tuple insertion
-	DeleteRecord // Tuple deletion
+	UpdateRecord
+	InsertRecord
+	DeleteRecord
 
-	CheckpointBegin // Start of checkpoint
-	CheckpointEnd   // End of checkpoint
+	CheckpointBegin
+	CheckpointEnd
 
-	CLRRecord // Used during rollback
+	CLRRecord
 )
 
 // LSN (Log Sequence Number) uniquely identifies each log record
@@ -30,10 +30,10 @@ type LSN uint64
 
 // LogRecord represents a single entry in the WAL
 type LogRecord struct {
-	LSN     LSN                        // Unique identifier for this record
-	Type    LogRecordType              // Type of operation
-	TID     *transaction.TransactionID // Transaction that created this record
-	PrevLSN LSN                        // Previous LSN for this transaction (for backward scanning)
+	LSN     LSN // Unique identifier for this record
+	Type    LogRecordType
+	TID     *transaction.TransactionID
+	PrevLSN LSN
 
 	PageID      tuple.PageID // Affected page
 	BeforeImage []byte       // Page state before modification (for UNDO)
@@ -45,9 +45,9 @@ type LogRecord struct {
 
 // TransactionLogInfo tracks logging information for a transaction
 type TransactionLogInfo struct {
-	FirstLSN    LSN // First log record for this transaction
-	LastLSN     LSN // Most recent log record
-	UndoNextLSN LSN // Next record to undo during rollback
+	FirstLSN    LSN
+	LastLSN     LSN
+	UndoNextLSN LSN
 }
 
 func NewLogRecord(logType LogRecordType, tid *transaction.TransactionID, pageId tuple.PageID, beforeImage, afterImage []byte, prevLSN LSN) *LogRecord {
