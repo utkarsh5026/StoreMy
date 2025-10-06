@@ -8,8 +8,8 @@ import (
 // ScanNode represents a table scan in the query plan.
 // It contains the table name and optional alias for identification.
 type ScanNode struct {
-	TableName string // Name of the table in the catalog
-	Alias     string // Table alias (e.g., "u" for "users u")
+	TableName string
+	Alias     string
 }
 
 // NewScanNode creates a new table scan node with the given table name and alias.
@@ -52,11 +52,11 @@ func (jt JoinType) String() string {
 // JoinNode represents a join operation between two tables.
 // It specifies the join type, tables involved, and join condition.
 type JoinNode struct {
-	RightTable *ScanNode      // Table to join
-	JoinType   JoinType       // Type of join
-	LeftField  string         // Left join field (table.field)
-	RightField string         // Right join field (table.field)
-	Predicate  types.Predicate // Join condition predicate
+	RightTable *ScanNode
+	JoinType   JoinType
+	LeftField  string
+	RightField string
+	Predicate  types.Predicate
 }
 
 // NewJoinNode creates a new join node with the specified parameters.
@@ -77,10 +77,10 @@ func (jn *JoinNode) String() string {
 // FilterNode represents a WHERE clause filter condition.
 // It specifies which field to filter, the comparison operator, and the constant value.
 type FilterNode struct {
-	Table     string          // Table alias the filter applies to
-	Field     string          // Field name being filtered
-	Predicate types.Predicate // Comparison operator
-	Constant  string          // Constant value to compare against
+	Table     string
+	Field     string
+	Predicate types.Predicate
+	Constant  string
 }
 
 // NewFilterNode creates a new filter node with the specified parameters.
@@ -100,8 +100,8 @@ func (fn *FilterNode) String() string {
 // SelectListNode represents a field or expression in the SELECT clause.
 // It can be a simple field or an aggregated field (e.g., COUNT, SUM).
 type SelectListNode struct {
-	FieldName string // Field name (may be qualified: table.field)
-	AggOp     string // Aggregation operation (SUM, COUNT, etc.) or empty string
+	FieldName string
+	AggOp     string
 }
 
 // NewSelectListNode creates a new select list node for a field with optional aggregation.

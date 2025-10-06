@@ -11,26 +11,24 @@ import (
 // It contains all the parsed components of a SELECT statement including
 // projections, filters, joins, aggregations, and ordering.
 type SelectPlan struct {
-	selectList []*SelectListNode // SELECT clause items
-	selectAll  bool              // Whether SELECT * is used
+	selectList []*SelectListNode
+	selectAll  bool
 
-	tables []*ScanNode // All table scans
-	joins  []*JoinNode // JOIN clauses
+	tables []*ScanNode
+	joins  []*JoinNode
 
-	filters []*FilterNode // All WHERE conditions
+	filters []*FilterNode
 
-	hasAgg       bool   // Whether query has aggregation
-	aggOp        string // Aggregation operation
-	aggField     string // Field being aggregated
-	groupByField string // GROUP BY field (only one supported)
+	hasAgg       bool
+	aggOp        string
+	aggField     string
+	groupByField string
 
-	// Ordering
-	hasOrderBy   bool   // Whether query has ORDER BY
-	orderByField string // ORDER BY field
-	orderByAsc   bool   // ORDER BY direction
+	hasOrderBy   bool
+	orderByField string
+	orderByAsc   bool
 
-	// Metadata
-	query string // Original SQL query string
+	query string
 }
 
 // NewSelectPlan creates a new SelectPlan with default values.
