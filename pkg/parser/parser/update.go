@@ -9,8 +9,7 @@ import (
 // parseUpdateStatement parses a SQL UPDATE statement from the lexer.
 // It expects the format: UPDATE table_name [alias] SET column1=value1, column2=value2, ... [WHERE condition]
 func parseUpdateStatement(l *lexer.Lexer) (*statements.UpdateStatement, error) {
-	token := l.NextToken()
-	if err := expectToken(token, lexer.UPDATE); err != nil {
+	if err := expectTokenSequence(l, lexer.UPDATE); err != nil {
 		return nil, err
 	}
 
@@ -19,8 +18,7 @@ func parseUpdateStatement(l *lexer.Lexer) (*statements.UpdateStatement, error) {
 		return nil, err
 	}
 
-	token = l.NextToken()
-	if err := expectToken(token, lexer.SET); err != nil {
+	if err := expectTokenSequence(l, lexer.SET); err != nil {
 		return nil, err
 	}
 
@@ -57,15 +55,18 @@ func parseOptionalWhereClause(l *lexer.Lexer, stmt *statements.UpdateStatement) 
 // Each clause must be a column name followed by '=' and a value.
 func parseSetClauses(l *lexer.Lexer, stmt *statements.UpdateStatement) error {
 	for {
-		token := l.NextToken()
-		if err := expectToken(token, lexer.IDENTIFIER); err != nil {
-			return err
+		fieldName, err := parseValueWithType(l, lexer.IDENTIFIER)
+		if err != nil {
+			return fmt.Errorf("expected field name in SET: %w", err)
 		}
-		fieldName := token.Value
 
-		token = l.NextToken()
-		if token.Type != lexer.OPERATOR || token.Value != "=" {
-			return fmt.Errorf("expected '=', got %s", token.Value)
+		opValue, err := parseValueWithType(l, lexer.OPERATOR)
+		if err != nil {
+			return fmt.Errorf("expected operator in SET: %w", err)
+		}
+
+		if opValue != "=" {
+			return fmt.Errorf("expected '=', got %s", opValue)
 		}
 
 		value, err := parseValue(l)
@@ -74,7 +75,7 @@ func parseSetClauses(l *lexer.Lexer, stmt *statements.UpdateStatement) error {
 		}
 
 		stmt.AddSetClause(fieldName, value)
-		token = l.NextToken()
+		token := l.NextToken()
 		if token.Type == lexer.COMMA {
 			continue
 		}
