@@ -104,9 +104,8 @@ func parseGroupBy(l *lexer.Lexer, p *plan.SelectPlan) error {
 		return nil
 	}
 
-	by := l.NextToken()
-	if err := expectToken(by, lexer.BY); err != nil {
-		return fmt.Errorf("expected BY after GROUP, got %s", by.Value)
+	if err := expectTokenSequence(l, lexer.BY); err != nil {
+		return fmt.Errorf("expected BY after GROUP, got %s", err)
 	}
 
 	fieldToken := l.NextToken()
@@ -125,9 +124,8 @@ func parseOrderBy(l *lexer.Lexer, p *plan.SelectPlan) error {
 		return nil
 	}
 
-	by := l.NextToken()
-	if err := expectToken(by, lexer.BY); err != nil {
-		return fmt.Errorf("expected BY after ORDER, got %s", by.Value)
+	if err := expectTokenSequence(l, lexer.BY); err != nil {
+		return fmt.Errorf("expected BY after ORDER, got %s", err)
 	}
 
 	fieldToken := l.NextToken()
@@ -148,39 +146,30 @@ func parseOrderBy(l *lexer.Lexer, p *plan.SelectPlan) error {
 }
 
 func parseFrom(l *lexer.Lexer, p *plan.SelectPlan) error {
-	token := l.NextToken()
-	if err := expectToken(token, lexer.FROM); err != nil {
+	if err := expectTokenSequence(l, lexer.FROM); err != nil {
 		return err
 	}
 
-	// Parse first table
 	if err := parseTable(l, p); err != nil {
 		return err
 	}
 
-	// Parse JOIN clauses or comma-separated tables
 	for {
 		token := l.NextToken()
-
-		if token.Type == lexer.COMMA {
+		switch token.Type {
+		case lexer.COMMA:
 			// Legacy comma-separated tables (cross join)
 			if err := parseTable(l, p); err != nil {
 				return err
 			}
-			continue
-		}
-
-		if token.Type == lexer.INNER || token.Type == lexer.LEFT || token.Type == lexer.RIGHT || token.Type == lexer.JOIN {
-			// Handle JOIN
+		case lexer.INNER, lexer.LEFT, lexer.RIGHT, lexer.JOIN:
 			if err := parseJoin(l, p, token); err != nil {
 				return err
 			}
-			continue
+		default:
+			l.SetPos(token.Position)
+			return nil
 		}
-
-		// No more tables or joins
-		l.SetPos(token.Position)
-		return nil
 	}
 }
 
