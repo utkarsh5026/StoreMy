@@ -370,7 +370,7 @@ func TestDeletePlan_Execute_Error_InvalidField(t *testing.T) {
 		t.Fatal("Expected error when field does not exist")
 	}
 
-	expectedError := "failed to build WHERE predicate: field invalid_field not found"
+	expectedError := "failed to build WHERE predicate: column invalid_field not found"
 	if err.Error() != expectedError {
 		t.Errorf("Expected error %q, got %q", expectedError, err.Error())
 	}
@@ -468,8 +468,8 @@ func TestDeletePlan_getTableID_Error(t *testing.T) {
 		t.Fatal("Expected error when table does not exist")
 	}
 
-	if tableID != 0 {
-		t.Errorf("Expected table ID 0, got %d", tableID)
+	if tableID != -1 {
+		t.Errorf("Expected table ID -1, got %d", tableID)
 	}
 
 	expectedError := "table nonexistent_table not found"

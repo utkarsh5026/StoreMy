@@ -63,12 +63,11 @@ func (p *DeletePlan) Execute() (any, error) {
 
 // getTableID resolves the table name from the DELETE statement to its internal table ID.
 func (p *DeletePlan) getTableID() (int, error) {
-	tableName := p.statement.TableName
-	tableID, err := p.ctx.TableManager().GetTableID(tableName)
+	metadata, err := resolveTableMetadata(p.statement.TableName, p.ctx)
 	if err != nil {
-		return 0, fmt.Errorf("table %s not found", tableName)
+		return -1, err
 	}
-	return tableID, nil
+	return metadata.TableID, nil
 }
 
 // createTableScan creates a sequential scan iterator for the target table.
