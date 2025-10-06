@@ -29,20 +29,16 @@ func parseSelectStatement(l *lexer.Lexer) (*statements.SelectStatement, error) {
 }
 
 func parseSelect(l *lexer.Lexer, p *plan.SelectPlan) error {
-	token := l.NextToken()
-	if err := expectToken(token, lexer.SELECT); err != nil {
+	if err := expectTokenSequence(l, lexer.SELECT); err != nil {
 		return err
 	}
 
-	token = l.NextToken()
-
-	// Check for SELECT *
+	token := l.NextToken()
 	if token.Type == lexer.ASTERISK {
 		p.SetSelectAll(true)
 		return nil
 	}
 
-	// Otherwise, parse individual fields
 	for {
 		if token.Type == lexer.FROM {
 			l.SetPos(token.Position)
