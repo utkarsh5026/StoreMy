@@ -88,7 +88,7 @@ func createAndPopulateTestTable(t *testing.T, ctx *registry.DatabaseContext, tid
 
 func TestNewDeletePlan(t *testing.T) {
 	stmt := statements.NewDeleteStatement("test_table", "")
-	ctx := createTestContext("")
+	ctx := createTestContextWithCleanup(t, "")
 	tid := transaction.NewTransactionID()
 
 	plan := NewDeletePlan(stmt, tid, ctx)
@@ -114,7 +114,7 @@ func TestDeletePlan_Execute_DeleteAll(t *testing.T) {
 
 	os.Mkdir("data", 0755)
 
-	ctx := createTestContext("")
+	ctx := createTestContextWithCleanup(t, "")
 	tid := transaction.NewTransactionID()
 
 	createAndPopulateTestTable(t, ctx, tid)
@@ -150,7 +150,7 @@ func TestDeletePlan_Execute_WithWhereClause(t *testing.T) {
 
 	os.Mkdir("data", 0755)
 
-	ctx := createTestContext("")
+	ctx := createTestContextWithCleanup(t, "")
 	tid := transaction.NewTransactionID()
 
 	createAndPopulateTestTable(t, ctx, tid)
@@ -190,7 +190,7 @@ func TestDeletePlan_Execute_WithWhereClause_MultipleRows(t *testing.T) {
 
 	os.Mkdir("data", 0755)
 
-	ctx := createTestContext("")
+	ctx := createTestContextWithCleanup(t, "")
 	tid := transaction.NewTransactionID()
 
 	createAndPopulateTestTable(t, ctx, tid)
@@ -231,7 +231,7 @@ func TestDeletePlan_Execute_WithWhereClause_NoMatch(t *testing.T) {
 
 	os.Mkdir("data", 0755)
 
-	ctx := createTestContext("")
+	ctx := createTestContextWithCleanup(t, "")
 	tid := transaction.NewTransactionID()
 
 	createAndPopulateTestTable(t, ctx, tid)
@@ -272,7 +272,7 @@ func TestDeletePlan_Execute_WithWhereClause_GreaterThan(t *testing.T) {
 
 	os.Mkdir("data", 0755)
 
-	ctx := createTestContext("")
+	ctx := createTestContextWithCleanup(t, "")
 	tid := transaction.NewTransactionID()
 
 	createAndPopulateTestTable(t, ctx, tid)
@@ -313,7 +313,7 @@ func TestDeletePlan_Execute_Error_TableNotFound(t *testing.T) {
 
 	os.Mkdir("data", 0755)
 
-	ctx := createTestContext("")
+	ctx := createTestContextWithCleanup(t, "")
 	tid := transaction.NewTransactionID()
 
 	stmt := statements.NewDeleteStatement("nonexistent_table", "")
@@ -343,7 +343,7 @@ func TestDeletePlan_Execute_Error_InvalidField(t *testing.T) {
 
 	os.Mkdir("data", 0755)
 
-	ctx := createTestContext("")
+	ctx := createTestContextWithCleanup(t, "")
 	tid := transaction.NewTransactionID()
 
 	createAndPopulateTestTable(t, ctx, tid)
@@ -384,7 +384,7 @@ func TestDeletePlan_Execute_EmptyTable(t *testing.T) {
 
 	os.Mkdir("data", 0755)
 
-	ctx := createTestContext("")
+	ctx := createTestContextWithCleanup(t, "")
 	tid := transaction.NewTransactionID()
 
 	// Create table but don't populate it
@@ -428,7 +428,7 @@ func TestDeletePlan_getTableID(t *testing.T) {
 
 	os.Mkdir("data", 0755)
 
-	ctx := createTestContext("")
+	ctx := createTestContextWithCleanup(t, "")
 	tid := transaction.NewTransactionID()
 
 	createAndPopulateTestTable(t, ctx, tid)
@@ -456,7 +456,7 @@ func TestDeletePlan_getTableID_Error(t *testing.T) {
 
 	os.Mkdir("data", 0755)
 
-	ctx := createTestContext("")
+	ctx := createTestContextWithCleanup(t, "")
 	tid := transaction.NewTransactionID()
 
 	stmt := statements.NewDeleteStatement("nonexistent_table", "")
@@ -486,7 +486,7 @@ func TestDeletePlan_createTableScan(t *testing.T) {
 
 	os.Mkdir("data", 0755)
 
-	ctx := createTestContext("")
+	ctx := createTestContextWithCleanup(t, "")
 	tid := transaction.NewTransactionID()
 
 	createAndPopulateTestTable(t, ctx, tid)
@@ -525,7 +525,7 @@ func TestDeletePlan_addWhereFilter(t *testing.T) {
 
 	os.Mkdir("data", 0755)
 
-	ctx := createTestContext("")
+	ctx := createTestContextWithCleanup(t, "")
 	tid := transaction.NewTransactionID()
 
 	createAndPopulateTestTable(t, ctx, tid)
@@ -576,7 +576,7 @@ func TestDeletePlan_collectTuplesToDelete(t *testing.T) {
 
 	os.Mkdir("data", 0755)
 
-	ctx := createTestContext("")
+	ctx := createTestContextWithCleanup(t, "")
 	tid := transaction.NewTransactionID()
 
 	createAndPopulateTestTable(t, ctx, tid)
@@ -620,7 +620,7 @@ func TestDeletePlan_createQuery_NoWhere(t *testing.T) {
 
 	os.Mkdir("data", 0755)
 
-	ctx := createTestContext("")
+	ctx := createTestContextWithCleanup(t, "")
 	tid := transaction.NewTransactionID()
 
 	createAndPopulateTestTable(t, ctx, tid)
@@ -659,7 +659,7 @@ func TestDeletePlan_createQuery_WithWhere(t *testing.T) {
 
 	os.Mkdir("data", 0755)
 
-	ctx := createTestContext("")
+	ctx := createTestContextWithCleanup(t, "")
 	tid := transaction.NewTransactionID()
 
 	createAndPopulateTestTable(t, ctx, tid)
