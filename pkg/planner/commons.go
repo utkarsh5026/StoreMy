@@ -10,13 +10,13 @@ import (
 	"storemy/pkg/tuple"
 )
 
-// TableMetadata holds resolved table information
 type tableMetadata struct {
 	TableID   int
 	TupleDesc *tuple.TupleDescription
 }
 
-// resolveTableMetadata gets table ID and schema in one call
+// resolveTableMetadata retrieves table ID and schema in a single operation.
+// This is the primary table lookup method used by all planner components.
 func resolveTableMetadata(tableName string, ctx *registry.DatabaseContext) (*tableMetadata, error) {
 	tableID, err := ctx.TableManager().GetTableID(tableName)
 	if err != nil {
@@ -34,6 +34,8 @@ func resolveTableMetadata(tableName string, ctx *registry.DatabaseContext) (*tab
 	}, nil
 }
 
+// resolveTableID converts a table name to its internal numeric identifier.
+// Convenience wrapper around resolveTableMetadata when only the ID is needed.
 func resolveTableID(tableName string, ctx *registry.DatabaseContext) (int, error) {
 	md, err := resolveTableMetadata(tableName, ctx)
 	if err != nil {
@@ -43,7 +45,8 @@ func resolveTableID(tableName string, ctx *registry.DatabaseContext) (int, error
 	return md.TableID, nil
 }
 
-// FindFieldIndex locates a field by name in the tuple descriptor
+// findFieldIndex locates a field by name in the tuple descriptor.
+// Performs case-sensitive linear search through the schema definition.
 func findFieldIndex(fieldName string, tupleDesc *tuple.TupleDescription) (int, error) {
 	for i := 0; i < tupleDesc.NumFields(); i++ {
 		name, _ := tupleDesc.GetFieldName(i)
@@ -54,7 +57,8 @@ func findFieldIndex(fieldName string, tupleDesc *tuple.TupleDescription) (int, e
 	return -1, fmt.Errorf("column %s not found", fieldName)
 }
 
-// CollectAllTuples executes an iterator and collects all results
+// collectAllTuples executes an iterator and materializes all results into memory.
+// This is used by operators that require full result sets (e.g., ORDER BY, aggregation).
 func collectAllTuples(it iterator.DbIterator) ([]*tuple.Tuple, error) {
 	if err := it.Open(); err != nil {
 		return nil, fmt.Errorf("failed to open iterator: %v", err)
@@ -84,6 +88,12 @@ func collectAllTuples(it iterator.DbIterator) ([]*tuple.Tuple, error) {
 	return tuples, nil
 }
 
+// buildScanWithFilter constructs a scan operator with optional WHERE clause filtering.
+// This is the foundation for all SELECT query execution plans.
+//
+// Query execution pipeline:
+//  1. SeqScan - reads pages via page-level locks (see LockManager)
+//  2. Filter (optional) - applies WHERE predicates
 func buildScanWithFilter(
 	tid *transaction.TransactionID,
 	tableID int,
