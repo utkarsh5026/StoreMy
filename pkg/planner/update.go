@@ -3,8 +3,6 @@ package planner
 import (
 	"fmt"
 	"storemy/pkg/concurrency/transaction"
-	"storemy/pkg/execution/query"
-	"storemy/pkg/iterator"
 	"storemy/pkg/parser/statements"
 	"storemy/pkg/registry"
 	"storemy/pkg/tuple"
@@ -26,27 +24,27 @@ func NewUpdatePlan(statement *statements.UpdateStatement, tid *transaction.Trans
 }
 
 func (p *UpdatePlan) Execute() (any, error) {
-	tableID, tupleDesc, err := p.getTableMetadata()
+	md, err := resolveTableMetadata(p.statement.TableName, p.ctx)
 	if err != nil {
 		return nil, err
 	}
 
-	updateMap, err := p.buildUpdateMap(tupleDesc)
+	updateMap, err := p.buildUpdateMap(md.TupleDesc)
 	if err != nil {
 		return nil, err
 	}
 
-	queryPlan, err := p.buildQueryPlan(tableID)
+	queryPlan, err := buildScanWithFilter(p.tid, md.TableID, p.statement.WhereClause, p.ctx)
 	if err != nil {
 		return nil, err
 	}
 
-	tuplesToUpdate, err := p.collectTuplesToUpdate(queryPlan)
+	tuplesToUpdate, err := collectAllTuples(queryPlan)
 	if err != nil {
 		return nil, err
 	}
 
-	err = p.updateTuples(tuplesToUpdate, tupleDesc, updateMap)
+	err = p.updateTuples(tuplesToUpdate, md.TupleDesc, updateMap)
 	if err != nil {
 		return nil, err
 	}
@@ -57,118 +55,40 @@ func (p *UpdatePlan) Execute() (any, error) {
 	}, nil
 }
 
-func (p *UpdatePlan) getTableMetadata() (int, *tuple.TupleDescription, error) {
-	tableID, err := p.ctx.TableManager().GetTableID(p.statement.TableName)
-	if err != nil {
-		return 0, nil, fmt.Errorf("table %s not found", p.statement.TableName)
-	}
-
-	tupleDesc, err := p.ctx.TableManager().GetTupleDesc(tableID)
-	if err != nil {
-		return 0, nil, fmt.Errorf("failed to get table schema: %v", err)
-	}
-	return tableID, tupleDesc, nil
-}
-
 func (p *UpdatePlan) buildUpdateMap(tupleDesc *tuple.TupleDescription) (map[int]types.Field, error) {
 	updateMap := make(map[int]types.Field)
 
-	for _, setClause := range p.statement.SetClauses {
-		fieldIndex, err := p.findFieldIndex(setClause.FieldName, tupleDesc)
+	for _, cl := range p.statement.SetClauses {
+		i, err := findFieldIndex(cl.FieldName, tupleDesc)
 		if err != nil {
 			return nil, err
 		}
-		updateMap[fieldIndex] = setClause.Value
+		updateMap[i] = cl.Value
 	}
 
 	return updateMap, nil
 }
 
-func (p *UpdatePlan) findFieldIndex(fieldName string, tupleDesc *tuple.TupleDescription) (int, error) {
-	fieldCount := tupleDesc.NumFields()
-	for i := 0; i < fieldCount; i++ {
-		name, _ := tupleDesc.GetFieldName(i)
-		if name == fieldName {
-			return i, nil
-		}
-	}
-	return -1, fmt.Errorf("column %s not found", fieldName)
-}
-
-// buildQueryPlan creates the query execution plan for finding rows to update
-func (p *UpdatePlan) buildQueryPlan(tableID int) (iterator.DbIterator, error) {
-	scanOp, err := query.NewSeqScan(p.tid, tableID, p.ctx.TableManager())
-	if err != nil {
-		return nil, fmt.Errorf("failed to create table scan: %v", err)
-	}
-
-	var currentOp iterator.DbIterator = scanOp
-	where := p.statement.WhereClause
-	if where != nil {
-		predicate, err := buildPredicateFromFilterNode(where, scanOp.GetTupleDesc())
-		if err != nil {
-			return nil, fmt.Errorf("failed to build WHERE predicate: %v", err)
-		}
-
-		filterOp, err := query.NewFilter(predicate, currentOp)
-		if err != nil {
-			return nil, fmt.Errorf("failed to create filter: %v", err)
-		}
-		currentOp = filterOp
-	}
-
-	return currentOp, nil
-}
-
-// collectTuplesToUpdate finds all tuples that match the update criteria
-// This is done in a separate phase to avoid iterator invalidation issues
-func (p *UpdatePlan) collectTuplesToUpdate(queryPlan iterator.DbIterator) ([]*tuple.Tuple, error) {
-	if err := queryPlan.Open(); err != nil {
-		return nil, fmt.Errorf("failed to open update query: %v", err)
-	}
-	defer queryPlan.Close()
-
-	var tuplesToUpdate []*tuple.Tuple
-
-	for {
-		hasNext, err := queryPlan.HasNext()
-		if err != nil {
-			return nil, fmt.Errorf("error during update scan: %v", err)
-		}
-
-		if !hasNext {
-			break
-		}
-
-		tuple, err := queryPlan.Next()
-		if err != nil {
-			return nil, fmt.Errorf("error fetching tuple to update: %v", err)
-		}
-
-		tuplesToUpdate = append(tuplesToUpdate, tuple)
-	}
-
-	return tuplesToUpdate, nil
-}
-
 // updateTuples applies updates to all collected tuples
 // UPDATE is implemented as DELETE + INSERT at the storage layer
-func (p *UpdatePlan) updateTuples(tuplesToUpdate []*tuple.Tuple, tupleDesc *tuple.TupleDescription, updateMap map[int]types.Field) error {
-	for _, oldTuple := range tuplesToUpdate {
-		newTuple := tuple.NewTuple(tupleDesc)
+func (p *UpdatePlan) updateTuples(tuples []*tuple.Tuple, tupleDesc *tuple.TupleDescription, updateMap map[int]types.Field) error {
+	fieldCnt := tupleDesc.NumFields()
 
-		for i := 0; i < tupleDesc.NumFields(); i++ {
-			field, _ := oldTuple.GetField(i)
-			newTuple.SetField(i, field)
+	for _, old := range tuples {
+		newTup := tuple.NewTuple(tupleDesc)
+
+		for i := range fieldCnt {
+			field, _ := old.GetField(i)
+			newTup.SetField(i, field)
 		}
 
-		for fieldIndex, newValue := range updateMap {
-			if err := newTuple.SetField(fieldIndex, newValue); err != nil {
+		for i, newValue := range updateMap {
+			if err := newTup.SetField(i, newValue); err != nil {
 				return fmt.Errorf("failed to set updated field: %v", err)
 			}
 		}
 
-		if err := p.ctx.PageStore().UpdateTuple(p.tid, oldTuple, newTuple); err != nil {
+		if err := p.ctx.PageStore().UpdateTuple(p.tid, old, newTup); err != nil {
 			return fmt.Errorf("failed to update tuple: %v", err)
 		}
 	}
