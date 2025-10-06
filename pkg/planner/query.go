@@ -3,8 +3,8 @@ package planner
 import (
 	"fmt"
 	"storemy/pkg/concurrency/transaction"
-	"storemy/pkg/memory"
 	"storemy/pkg/parser/statements"
+	"storemy/pkg/registry"
 )
 
 type Plan interface {
@@ -12,35 +12,30 @@ type Plan interface {
 }
 
 type QueryPlanner struct {
-	tableManager *memory.TableManager
-	pageStore    *memory.PageStore
-	dataDir      string
+	ctx *registry.DatabaseContext
 }
 
-func NewQueryPlanner(t *memory.TableManager, ps *memory.PageStore) *QueryPlanner {
+func NewQueryPlanner(ctx *registry.DatabaseContext) *QueryPlanner {
 	return &QueryPlanner{
-		tableManager: t,
-		pageStore:    ps,
-		dataDir:      "",
+		ctx: ctx,
 	}
 }
 
-func (qp *QueryPlanner) SetDataDir(dataDir string) {
-	qp.dataDir = dataDir
-}
-
 func (qp *QueryPlanner) Plan(stmt statements.Statement, tid *transaction.TransactionID) (Plan, error) {
+	store := qp.ctx.PageStore()
+	tableMgr := qp.ctx.TableManager()
+
 	switch s := stmt.(type) {
 	case *statements.CreateStatement:
-		return NewCreateTablePlan(s, qp.tableManager, tid, qp.dataDir), nil
+		return NewCreateTablePlan(s, qp.ctx, tid), nil
 	case *statements.InsertStatement:
-		return NewInsertPlan(s, qp.pageStore, tid, qp.tableManager), nil
+		return NewInsertPlan(s, store, tid, tableMgr), nil
 	case *statements.DeleteStatement:
-		return NewDeletePlan(s, qp.pageStore, tid, qp.tableManager), nil
+		return NewDeletePlan(s, store, tid, tableMgr), nil
 	case *statements.SelectStatement:
-		return NewSelectPlan(s, qp.tableManager, qp.pageStore, tid), nil
+		return NewSelectPlan(s, tableMgr, store, tid), nil
 	case *statements.UpdateStatement:
-		return NewUpdatePlan(s, qp.tableManager, qp.pageStore, tid), nil
+		return NewUpdatePlan(s, tableMgr, store, tid), nil
 	default:
 		return nil, fmt.Errorf("unsupported statement type: %T", stmt)
 	}
