@@ -409,7 +409,7 @@ func TestSelectPlan_Execute_Error_InvalidFilterField(t *testing.T) {
 		t.Fatal("Expected error when filter field does not exist")
 	}
 
-	expectedError := "failed to build WHERE predicate: field users.invalid_field not found"
+	expectedError := "failed to build WHERE predicate: column invalid_field not found"
 	if err.Error() != expectedError {
 		t.Errorf("Expected error %q, got %q", expectedError, err.Error())
 	}

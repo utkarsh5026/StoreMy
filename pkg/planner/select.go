@@ -37,12 +37,12 @@ func (p *SelectPlan) Execute() (any, error) {
 	}
 
 	firstTable := tables[0]
-	tableID, err := p.ctx.TableManager().GetTableID(firstTable.TableName)
+	metadata, err := resolveTableMetadata(firstTable.TableName, p.ctx)
 	if err != nil {
-		return nil, fmt.Errorf("table %s not found", firstTable.TableName)
+		return nil, err
 	}
 
-	scanOp, err := query.NewSeqScan(p.tid, tableID, p.ctx.TableManager())
+	scanOp, err := query.NewSeqScan(p.tid, metadata.TableID, p.ctx.TableManager())
 	if err != nil {
 		return nil, fmt.Errorf("failed to create table scan: %v", err)
 	}
@@ -50,16 +50,16 @@ func (p *SelectPlan) Execute() (any, error) {
 	var currentOp iterator.DbIterator = scanOp
 	filters := p.statement.Plan.Filters()
 	if len(filters) > 0 {
-		predicate, err := buildPredicateFromFilterNode(filters[0], scanOp.GetTupleDesc())
+		currentOp, err = buildScanWithFilter(p.tid, metadata.TableID, filters[0], p.ctx)
 		if err != nil {
-			return nil, fmt.Errorf("failed to build WHERE predicate: %v", err)
+			return nil, err
 		}
-
-		filterOp, err := query.NewFilter(predicate, currentOp)
+	} else {
+		// No filter - just scan
+		currentOp, err = buildScanWithFilter(p.tid, metadata.TableID, nil, p.ctx)
 		if err != nil {
-			return nil, fmt.Errorf("failed to create filter: %v", err)
+			return nil, err
 		}
-		currentOp = filterOp
 	}
 
 	// If SELECT * is used, skip projection
