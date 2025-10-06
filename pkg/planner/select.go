@@ -184,34 +184,23 @@ func (p *SelectPlan) buildJoinRightSide(joinNode *plan.JoinNode) (iterator.DbIte
 }
 
 // buildJoinPredicate constructs a JoinPredicate from a JoinNode
-func (p *SelectPlan) buildJoinPredicate(joinNode *plan.JoinNode, leftOp, rightOp iterator.DbIterator) (*join.JoinPredicate, error) {
-	leftTupleDesc := leftOp.GetTupleDesc()
-	rightTupleDesc := rightOp.GetTupleDesc()
-
-	leftFieldName := extractFieldName(joinNode.LeftField)
-	leftFieldIndex, err := findFieldIndex(leftFieldName, leftTupleDesc)
+func (p *SelectPlan) buildJoinPredicate(node *plan.JoinNode, l, r iterator.DbIterator) (*join.JoinPredicate, error) {
+	li, err := getJoinFieldIndex(node.LeftField, l.GetTupleDesc())
 	if err != nil {
-		return nil, fmt.Errorf("left join field %s not found: %w", joinNode.LeftField, err)
+		return nil, err
 	}
 
-	rightFieldName := extractFieldName(joinNode.RightField)
-	rightFieldIndex, err := findFieldIndex(rightFieldName, rightTupleDesc)
+	ri, err := getJoinFieldIndex(node.RightField, r.GetTupleDesc())
 	if err != nil {
-		return nil, fmt.Errorf("right join field %s not found: %w", joinNode.RightField, err)
+		return nil, err
 	}
 
-	predicateOp, err := getPredicateOperation(joinNode.Predicate)
+	predicateOp, err := getPredicateOperation(node.Predicate)
 	if err != nil {
 		return nil, fmt.Errorf("failed to convert predicate: %w", err)
 	}
 
-	return join.NewJoinPredicate(leftFieldIndex, rightFieldIndex, predicateOp)
-}
-
-// extractFieldName extracts the field name from a qualified name (e.g., "table.field" -> "field")
-func extractFieldName(qualifiedName string) string {
-	parts := strings.Split(qualifiedName, ".")
-	return parts[len(parts)-1]
+	return join.NewJoinPredicate(li, ri, predicateOp)
 }
 
 // applyAggregationIfNeeded applies aggregation to the input operator if the query has aggregations
@@ -220,10 +209,10 @@ func (p *SelectPlan) applyAggregationIfNeeded(input iterator.DbIterator) (iterat
 		return input, nil
 	}
 
-	tupleDesc := input.GetTupleDesc()
+	td := input.GetTupleDesc()
 
 	aggFieldName := extractFieldName(p.statement.Plan.AggField())
-	aggFieldIndex, err := findFieldIndex(aggFieldName, tupleDesc)
+	aggFieldIndex, err := findFieldIndex(aggFieldName, td)
 	if err != nil {
 		return nil, fmt.Errorf("aggregate field %s not found: %w", p.statement.Plan.AggField(), err)
 	}
@@ -231,13 +220,13 @@ func (p *SelectPlan) applyAggregationIfNeeded(input iterator.DbIterator) (iterat
 	groupByIndex := aggregation.NoGrouping
 	if p.statement.Plan.GroupByField() != "" {
 		groupByFieldName := extractFieldName(p.statement.Plan.GroupByField())
-		groupByIndex, err = findFieldIndex(groupByFieldName, tupleDesc)
+		groupByIndex, err = findFieldIndex(groupByFieldName, td)
 		if err != nil {
 			return nil, fmt.Errorf("group by field %s not found: %w", p.statement.Plan.GroupByField(), err)
 		}
 	}
 
-	aggOp, err := p.parseAggregateOp(p.statement.Plan.AggOp())
+	aggOp, err := parseAggregateOp(p.statement.Plan.AggOp())
 	if err != nil {
 		return nil, err
 	}
@@ -251,7 +240,7 @@ func (p *SelectPlan) applyAggregationIfNeeded(input iterator.DbIterator) (iterat
 }
 
 // parseAggregateOp converts an aggregate operation string to AggregateOp type
-func (p *SelectPlan) parseAggregateOp(opStr string) (aggregation.AggregateOp, error) {
+func parseAggregateOp(opStr string) (aggregation.AggregateOp, error) {
 	switch strings.ToUpper(opStr) {
 	case "MIN":
 		return aggregation.Min, nil
@@ -270,4 +259,20 @@ func (p *SelectPlan) parseAggregateOp(opStr string) (aggregation.AggregateOp, er
 	default:
 		return 0, fmt.Errorf("unsupported aggregate operation: %s", opStr)
 	}
+}
+
+func getJoinFieldIndex(fieldName string, td *tuple.TupleDescription) (int, error) {
+	name := extractFieldName(fieldName)
+	idx, err := findFieldIndex(name, td)
+	if err != nil {
+		return -1, fmt.Errorf("join field %s not found: %w", fieldName, err)
+	}
+
+	return idx, nil
+}
+
+// extractFieldName extracts the field name from a qualified name (e.g., "table.field" -> "field")
+func extractFieldName(qualifiedName string) string {
+	parts := strings.Split(qualifiedName, ".")
+	return parts[len(parts)-1]
 }
