@@ -10,6 +10,32 @@ import (
 	"testing"
 )
 
+func setupSelectTest(t *testing.T) (*registry.DatabaseContext, *transaction.TransactionID, func()) {
+	dataDir := t.TempDir()
+	oldDir, _ := os.Getwd()
+	os.Chdir(dataDir)
+
+	cleanup := func() {
+		os.Chdir(oldDir)
+	}
+
+	os.Mkdir("data", 0755)
+
+	ctx := createTestContextWithCleanup(t, "")
+	tid := transaction.NewTransactionID()
+
+	return ctx, tid, cleanup
+}
+
+func setupSelectTestWithData(t *testing.T) (*registry.DatabaseContext, *transaction.TransactionID, func()) {
+	ctx, tid, cleanup := setupSelectTest(t)
+
+	createSelectTestTable(t, ctx, tid)
+	insertSelectTestData(t, ctx, tid)
+
+	return ctx, tid, cleanup
+}
+
 func executeSelectPlan(t *testing.T, plan *SelectPlan) (*QueryResult, error) {
 	resultAny, err := plan.Execute()
 	if err != nil {
@@ -90,7 +116,7 @@ func insertSelectTestData(t *testing.T, ctx *registry.DatabaseContext, tid *tran
 func TestNewSelectPlan(t *testing.T) {
 	selectPlan := plan.NewSelectPlan()
 	stmt := statements.NewSelectStatement(selectPlan)
-	ctx := createTestContext("")
+	ctx := createTestContextWithCleanup(t, "")
 	tid := transaction.NewTransactionID()
 
 	plan := NewSelectPlan(stmt, tid, ctx)
@@ -116,7 +142,7 @@ func TestSelectPlan_Execute_SelectAll(t *testing.T) {
 
 	os.Mkdir("data", 0755)
 
-	ctx := createTestContext("")
+	ctx := createTestContextWithCleanup(t, "")
 	tid := transaction.NewTransactionID()
 
 	createSelectTestTable(t, ctx, tid)
@@ -159,7 +185,7 @@ func TestSelectPlan_Execute_WithProjection(t *testing.T) {
 
 	os.Mkdir("data", 0755)
 
-	ctx := createTestContext("")
+	ctx := createTestContextWithCleanup(t, "")
 	tid := transaction.NewTransactionID()
 
 	createSelectTestTable(t, ctx, tid)
@@ -211,7 +237,7 @@ func TestSelectPlan_Execute_WithFilter(t *testing.T) {
 
 	os.Mkdir("data", 0755)
 
-	ctx := createTestContext("")
+	ctx := createTestContextWithCleanup(t, "")
 	tid := transaction.NewTransactionID()
 
 	createSelectTestTable(t, ctx, tid)
@@ -248,7 +274,7 @@ func TestSelectPlan_Execute_WithFilterAndProjection(t *testing.T) {
 
 	os.Mkdir("data", 0755)
 
-	ctx := createTestContext("")
+	ctx := createTestContextWithCleanup(t, "")
 	tid := transaction.NewTransactionID()
 
 	createSelectTestTable(t, ctx, tid)
@@ -295,7 +321,7 @@ func TestSelectPlan_Execute_Error_NoTables(t *testing.T) {
 
 	os.Mkdir("data", 0755)
 
-	ctx := createTestContext("")
+	ctx := createTestContextWithCleanup(t, "")
 	tid := transaction.NewTransactionID()
 
 	selectPlan := plan.NewSelectPlan()
@@ -327,7 +353,7 @@ func TestSelectPlan_Execute_Error_TableNotFound(t *testing.T) {
 
 	os.Mkdir("data", 0755)
 
-	ctx := createTestContext("")
+	ctx := createTestContextWithCleanup(t, "")
 	tid := transaction.NewTransactionID()
 
 	selectPlan := plan.NewSelectPlan()
@@ -360,7 +386,7 @@ func TestSelectPlan_Execute_Error_InvalidFilterField(t *testing.T) {
 
 	os.Mkdir("data", 0755)
 
-	ctx := createTestContext("")
+	ctx := createTestContextWithCleanup(t, "")
 	tid := transaction.NewTransactionID()
 
 	createSelectTestTable(t, ctx, tid)
@@ -397,7 +423,7 @@ func TestSelectPlan_Execute_Error_InvalidSelectField(t *testing.T) {
 
 	os.Mkdir("data", 0755)
 
-	ctx := createTestContext("")
+	ctx := createTestContextWithCleanup(t, "")
 	tid := transaction.NewTransactionID()
 
 	createSelectTestTable(t, ctx, tid)
@@ -434,7 +460,7 @@ func TestSelectPlan_Execute_EmptyTableWithFilters(t *testing.T) {
 
 	os.Mkdir("data", 0755)
 
-	ctx := createTestContext("")
+	ctx := createTestContextWithCleanup(t, "")
 	tid := transaction.NewTransactionID()
 
 	createSelectTestTable(t, ctx, tid)
@@ -470,7 +496,7 @@ func TestSelectPlan_Execute_MultipleFilters(t *testing.T) {
 
 	os.Mkdir("data", 0755)
 
-	ctx := createTestContext("")
+	ctx := createTestContextWithCleanup(t, "")
 	tid := transaction.NewTransactionID()
 
 	createSelectTestTable(t, ctx, tid)
@@ -507,7 +533,7 @@ func TestSelectPlan_Execute_StringFilter(t *testing.T) {
 
 	os.Mkdir("data", 0755)
 
-	ctx := createTestContext("")
+	ctx := createTestContextWithCleanup(t, "")
 	tid := transaction.NewTransactionID()
 
 	createSelectTestTable(t, ctx, tid)
@@ -544,7 +570,7 @@ func TestSelectPlan_Execute_IntegerFilter(t *testing.T) {
 
 	os.Mkdir("data", 0755)
 
-	ctx := createTestContext("")
+	ctx := createTestContextWithCleanup(t, "")
 	tid := transaction.NewTransactionID()
 
 	createSelectTestTable(t, ctx, tid)
@@ -581,7 +607,7 @@ func TestSelectPlan_Execute_FloatFilter(t *testing.T) {
 
 	os.Mkdir("data", 0755)
 
-	ctx := createTestContext("")
+	ctx := createTestContextWithCleanup(t, "")
 	tid := transaction.NewTransactionID()
 
 	createSelectTestTable(t, ctx, tid)
@@ -618,7 +644,7 @@ func TestQueryResult_Values(t *testing.T) {
 
 	os.Mkdir("data", 0755)
 
-	ctx := createTestContext("")
+	ctx := createTestContextWithCleanup(t, "")
 	tid := transaction.NewTransactionID()
 
 	createSelectTestTable(t, ctx, tid)
