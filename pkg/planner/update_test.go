@@ -3,9 +3,9 @@ package planner
 import (
 	"os"
 	"storemy/pkg/concurrency/transaction"
-	"storemy/pkg/memory"
 	"storemy/pkg/parser/plan"
 	"storemy/pkg/parser/statements"
+	"storemy/pkg/registry"
 	"storemy/pkg/types"
 	"testing"
 )
@@ -28,7 +28,7 @@ func executeUpdatePlan(t *testing.T, plan *UpdatePlan) (*DMLResult, error) {
 	return result, nil
 }
 
-func createUpdateTestTable(t *testing.T, tableManager *memory.TableManager, tid *transaction.TransactionID) {
+func createUpdateTestTable(t *testing.T, ctx *registry.DatabaseContext, tid *transaction.TransactionID) {
 	stmt := statements.NewCreateStatement("users", false)
 	stmt.AddField("id", types.IntType, false, nil)
 	stmt.AddField("name", types.StringType, false, nil)
@@ -37,17 +37,17 @@ func createUpdateTestTable(t *testing.T, tableManager *memory.TableManager, tid 
 	stmt.AddField("active", types.BoolType, false, nil)
 	stmt.AddField("salary", types.FloatType, false, nil)
 
-	createPlan := NewCreateTablePlan(stmt, tableManager, tid, "")
+	createPlan := NewCreateTablePlan(stmt, ctx, tid)
 	_, err := createPlan.Execute()
 	if err != nil {
 		t.Fatalf("Failed to create test table: %v", err)
 	}
 
 	// Register cleanup to close table file
-	cleanupTable(t, tableManager, "users")
+	cleanupTable(t, ctx.TableManager(), "users")
 }
 
-func insertUpdateTestData(t *testing.T, tableManager *memory.TableManager, pageStore *memory.PageStore, tid *transaction.TransactionID) {
+func insertUpdateTestData(t *testing.T, ctx *registry.DatabaseContext, tid *transaction.TransactionID) {
 	insertStmt := statements.NewInsertStatement("users")
 
 	values1 := []types.Field{
@@ -80,7 +80,7 @@ func insertUpdateTestData(t *testing.T, tableManager *memory.TableManager, pageS
 	}
 	insertStmt.AddValues(values3)
 
-	insertPlan := NewInsertPlan(insertStmt, pageStore, tid, tableManager)
+	insertPlan := NewInsertPlan(insertStmt, tid, ctx)
 	_, err := insertPlan.Execute()
 	if err != nil {
 		t.Fatalf("Failed to insert test data: %v", err)
@@ -89,11 +89,10 @@ func insertUpdateTestData(t *testing.T, tableManager *memory.TableManager, pageS
 
 func TestNewUpdatePlan(t *testing.T) {
 	stmt := statements.NewUpdateStatement("users", "users")
-	tableManager := memory.NewTableManager()
-	pageStore := &memory.PageStore{}
+	ctx := createTestContext("")
 	tid := transaction.NewTransactionID()
 
-	plan := NewUpdatePlan(stmt, tableManager, pageStore, tid)
+	plan := NewUpdatePlan(stmt, tid, ctx)
 
 	if plan == nil {
 		t.Fatal("NewUpdatePlan returned nil")
@@ -102,15 +101,6 @@ func TestNewUpdatePlan(t *testing.T) {
 	if plan.statement != stmt {
 		t.Error("Statement not properly assigned")
 	}
-
-	if plan.tableManager != tableManager {
-		t.Error("TableManager not properly assigned")
-	}
-
-	if plan.pageStore != pageStore {
-		t.Error("PageStore not properly assigned")
-	}
-
 	if plan.tid != tid {
 		t.Error("TransactionID not properly assigned")
 	}
@@ -124,12 +114,11 @@ func TestUpdatePlan_Execute_UpdateSingleField(t *testing.T) {
 
 	os.Mkdir("data", 0755)
 
-	tableManager := memory.NewTableManager()
-	pageStore := memory.NewPageStore(tableManager, createWal(t))
+	ctx := createTestContext("")
 	tid := transaction.NewTransactionID()
 
-	createUpdateTestTable(t, tableManager, tid)
-	insertUpdateTestData(t, tableManager, pageStore, tid)
+	createUpdateTestTable(t, ctx, tid)
+	insertUpdateTestData(t, ctx, tid)
 
 	stmt := statements.NewUpdateStatement("users", "users")
 	stmt.AddSetClause("name", types.NewStringField("Updated Name", types.StringMaxSize))
@@ -137,7 +126,7 @@ func TestUpdatePlan_Execute_UpdateSingleField(t *testing.T) {
 	filter := plan.NewFilterNode("users", "users.id", types.Equals, "1")
 	stmt.SetWhereClause(filter)
 
-	updatePlan := NewUpdatePlan(stmt, tableManager, pageStore, tid)
+	updatePlan := NewUpdatePlan(stmt, tid, ctx)
 
 	result, err := executeUpdatePlan(t, updatePlan)
 
@@ -167,12 +156,11 @@ func TestUpdatePlan_Execute_UpdateMultipleFields(t *testing.T) {
 
 	os.Mkdir("data", 0755)
 
-	tableManager := memory.NewTableManager()
-	pageStore := memory.NewPageStore(tableManager, createWal(t))
+	ctx := createTestContext("")
 	tid := transaction.NewTransactionID()
 
-	createUpdateTestTable(t, tableManager, tid)
-	insertUpdateTestData(t, tableManager, pageStore, tid)
+	createUpdateTestTable(t, ctx, tid)
+	insertUpdateTestData(t, ctx, tid)
 
 	stmt := statements.NewUpdateStatement("users", "users")
 	stmt.AddSetClause("name", types.NewStringField("Updated Name", types.StringMaxSize))
@@ -182,8 +170,7 @@ func TestUpdatePlan_Execute_UpdateMultipleFields(t *testing.T) {
 	filter := plan.NewFilterNode("users", "users.id", types.Equals, "1")
 	stmt.SetWhereClause(filter)
 
-	updatePlan := NewUpdatePlan(stmt, tableManager, pageStore, tid)
-
+	updatePlan := NewUpdatePlan(stmt, tid, ctx)
 	result, err := executeUpdatePlan(t, updatePlan)
 
 	if err != nil {
@@ -212,12 +199,11 @@ func TestUpdatePlan_Execute_UpdateMultipleRows(t *testing.T) {
 
 	os.Mkdir("data", 0755)
 
-	tableManager := memory.NewTableManager()
-	pageStore := memory.NewPageStore(tableManager, createWal(t))
+	ctx := createTestContext("")
 	tid := transaction.NewTransactionID()
 
-	createUpdateTestTable(t, tableManager, tid)
-	insertUpdateTestData(t, tableManager, pageStore, tid)
+	createUpdateTestTable(t, ctx, tid)
+	insertUpdateTestData(t, ctx, tid)
 
 	stmt := statements.NewUpdateStatement("users", "users")
 	stmt.AddSetClause("active", &types.BoolField{Value: false})
@@ -225,7 +211,7 @@ func TestUpdatePlan_Execute_UpdateMultipleRows(t *testing.T) {
 	filter := plan.NewFilterNode("users", "users.active", types.Equals, "true")
 	stmt.SetWhereClause(filter)
 
-	updatePlan := NewUpdatePlan(stmt, tableManager, pageStore, tid)
+	updatePlan := NewUpdatePlan(stmt, tid, ctx)
 
 	result, err := executeUpdatePlan(t, updatePlan)
 
@@ -255,17 +241,16 @@ func TestUpdatePlan_Execute_UpdateAllRows(t *testing.T) {
 
 	os.Mkdir("data", 0755)
 
-	tableManager := memory.NewTableManager()
-	pageStore := memory.NewPageStore(tableManager, createWal(t))
+	ctx := createTestContext("")
 	tid := transaction.NewTransactionID()
 
-	createUpdateTestTable(t, tableManager, tid)
-	insertUpdateTestData(t, tableManager, pageStore, tid)
+	createUpdateTestTable(t, ctx, tid)
+	insertUpdateTestData(t, ctx, tid)
 
 	stmt := statements.NewUpdateStatement("users", "users")
 	stmt.AddSetClause("email", types.NewStringField("updated@example.com", types.StringMaxSize))
 
-	updatePlan := NewUpdatePlan(stmt, tableManager, pageStore, tid)
+	updatePlan := NewUpdatePlan(stmt, tid, ctx)
 
 	result, err := executeUpdatePlan(t, updatePlan)
 
@@ -295,12 +280,11 @@ func TestUpdatePlan_Execute_UpdateWithIntegerFilter(t *testing.T) {
 
 	os.Mkdir("data", 0755)
 
-	tableManager := memory.NewTableManager()
-	pageStore := memory.NewPageStore(tableManager, createWal(t))
+	ctx := createTestContext("")
 	tid := transaction.NewTransactionID()
 
-	createUpdateTestTable(t, tableManager, tid)
-	insertUpdateTestData(t, tableManager, pageStore, tid)
+	createUpdateTestTable(t, ctx, tid)
+	insertUpdateTestData(t, ctx, tid)
 
 	stmt := statements.NewUpdateStatement("users", "users")
 	stmt.AddSetClause("salary", &types.Float64Field{Value: 80000.0})
@@ -308,7 +292,7 @@ func TestUpdatePlan_Execute_UpdateWithIntegerFilter(t *testing.T) {
 	filter := plan.NewFilterNode("users", "users.age", types.GreaterThan, "30")
 	stmt.SetWhereClause(filter)
 
-	updatePlan := NewUpdatePlan(stmt, tableManager, pageStore, tid)
+	updatePlan := NewUpdatePlan(stmt, tid, ctx)
 
 	result, err := executeUpdatePlan(t, updatePlan)
 
@@ -333,12 +317,11 @@ func TestUpdatePlan_Execute_UpdateWithFloatFilter(t *testing.T) {
 
 	os.Mkdir("data", 0755)
 
-	tableManager := memory.NewTableManager()
-	pageStore := memory.NewPageStore(tableManager, createWal(t))
+	ctx := createTestContext("")
 	tid := transaction.NewTransactionID()
 
-	createUpdateTestTable(t, tableManager, tid)
-	insertUpdateTestData(t, tableManager, pageStore, tid)
+	createUpdateTestTable(t, ctx, tid)
+	insertUpdateTestData(t, ctx, tid)
 
 	stmt := statements.NewUpdateStatement("users", "users")
 	stmt.AddSetClause("active", &types.BoolField{Value: true})
@@ -346,7 +329,7 @@ func TestUpdatePlan_Execute_UpdateWithFloatFilter(t *testing.T) {
 	filter := plan.NewFilterNode("users", "users.salary", types.LessThan, "65000.0")
 	stmt.SetWhereClause(filter)
 
-	updatePlan := NewUpdatePlan(stmt, tableManager, pageStore, tid)
+	updatePlan := NewUpdatePlan(stmt, tid, ctx)
 
 	result, err := executeUpdatePlan(t, updatePlan)
 
@@ -371,12 +354,11 @@ func TestUpdatePlan_Execute_NoMatchingRows(t *testing.T) {
 
 	os.Mkdir("data", 0755)
 
-	tableManager := memory.NewTableManager()
-	pageStore := memory.NewPageStore(tableManager, createWal(t))
+	ctx := createTestContext("")
 	tid := transaction.NewTransactionID()
 
-	createUpdateTestTable(t, tableManager, tid)
-	insertUpdateTestData(t, tableManager, pageStore, tid)
+	createUpdateTestTable(t, ctx, tid)
+	insertUpdateTestData(t, ctx, tid)
 
 	stmt := statements.NewUpdateStatement("users", "users")
 	stmt.AddSetClause("name", types.NewStringField("No Match", types.StringMaxSize))
@@ -384,7 +366,7 @@ func TestUpdatePlan_Execute_NoMatchingRows(t *testing.T) {
 	filter := plan.NewFilterNode("users", "users.age", types.GreaterThan, "100")
 	stmt.SetWhereClause(filter)
 
-	updatePlan := NewUpdatePlan(stmt, tableManager, pageStore, tid)
+	updatePlan := NewUpdatePlan(stmt, tid, ctx)
 
 	result, err := executeUpdatePlan(t, updatePlan)
 
@@ -414,14 +396,13 @@ func TestUpdatePlan_Execute_Error_TableNotFound(t *testing.T) {
 
 	os.Mkdir("data", 0755)
 
-	tableManager := memory.NewTableManager()
-	pageStore := memory.NewPageStore(tableManager, createWal(t))
+	ctx := createTestContext("")
 	tid := transaction.NewTransactionID()
 
 	stmt := statements.NewUpdateStatement("nonexistent_table", "nonexistent_table")
 	stmt.AddSetClause("name", types.NewStringField("Test", types.StringMaxSize))
 
-	updatePlan := NewUpdatePlan(stmt, tableManager, pageStore, tid)
+	updatePlan := NewUpdatePlan(stmt, tid, ctx)
 
 	result, err := executeUpdatePlan(t, updatePlan)
 
@@ -447,16 +428,15 @@ func TestUpdatePlan_Execute_Error_InvalidField(t *testing.T) {
 
 	os.Mkdir("data", 0755)
 
-	tableManager := memory.NewTableManager()
-	pageStore := memory.NewPageStore(tableManager, createWal(t))
+	ctx := createTestContext("")
 	tid := transaction.NewTransactionID()
 
-	createUpdateTestTable(t, tableManager, tid)
+	createUpdateTestTable(t, ctx, tid)
 
 	stmt := statements.NewUpdateStatement("users", "users")
 	stmt.AddSetClause("invalid_field", types.NewStringField("Test", types.StringMaxSize))
 
-	updatePlan := NewUpdatePlan(stmt, tableManager, pageStore, tid)
+	updatePlan := NewUpdatePlan(stmt, tid, ctx)
 
 	result, err := executeUpdatePlan(t, updatePlan)
 
@@ -482,11 +462,10 @@ func TestUpdatePlan_Execute_Error_InvalidWhereField(t *testing.T) {
 
 	os.Mkdir("data", 0755)
 
-	tableManager := memory.NewTableManager()
-	pageStore := memory.NewPageStore(tableManager, createWal(t))
+	ctx := createTestContext("")
 	tid := transaction.NewTransactionID()
 
-	createUpdateTestTable(t, tableManager, tid)
+	createUpdateTestTable(t, ctx, tid)
 
 	stmt := statements.NewUpdateStatement("users", "users")
 	stmt.AddSetClause("name", types.NewStringField("Test", types.StringMaxSize))
@@ -494,7 +473,7 @@ func TestUpdatePlan_Execute_Error_InvalidWhereField(t *testing.T) {
 	filter := plan.NewFilterNode("users", "users.invalid_field", types.Equals, "value")
 	stmt.SetWhereClause(filter)
 
-	updatePlan := NewUpdatePlan(stmt, tableManager, pageStore, tid)
+	updatePlan := NewUpdatePlan(stmt, tid, ctx)
 
 	result, err := executeUpdatePlan(t, updatePlan)
 
@@ -520,16 +499,15 @@ func TestUpdatePlan_Execute_EmptyTable(t *testing.T) {
 
 	os.Mkdir("data", 0755)
 
-	tableManager := memory.NewTableManager()
-	pageStore := memory.NewPageStore(tableManager, createWal(t))
+	ctx := createTestContext("")
 	tid := transaction.NewTransactionID()
 
-	createUpdateTestTable(t, tableManager, tid)
+	createUpdateTestTable(t, ctx, tid)
 
 	stmt := statements.NewUpdateStatement("users", "users")
 	stmt.AddSetClause("name", types.NewStringField("Test", types.StringMaxSize))
 
-	updatePlan := NewUpdatePlan(stmt, tableManager, pageStore, tid)
+	updatePlan := NewUpdatePlan(stmt, tid, ctx)
 
 	result, err := executeUpdatePlan(t, updatePlan)
 
@@ -559,14 +537,13 @@ func TestUpdatePlan_getTableMetadata(t *testing.T) {
 
 	os.Mkdir("data", 0755)
 
-	tableManager := memory.NewTableManager()
-	pageStore := memory.NewPageStore(tableManager, createWal(t))
+	ctx := createTestContext("")
 	tid := transaction.NewTransactionID()
 
-	createUpdateTestTable(t, tableManager, tid)
+	createUpdateTestTable(t, ctx, tid)
 
 	stmt := statements.NewUpdateStatement("users", "users")
-	updatePlan := NewUpdatePlan(stmt, tableManager, pageStore, tid)
+	updatePlan := NewUpdatePlan(stmt, tid, ctx)
 
 	tableID, tupleDesc, err := updatePlan.getTableMetadata()
 
@@ -574,7 +551,7 @@ func TestUpdatePlan_getTableMetadata(t *testing.T) {
 		t.Fatalf("getTableMetadata failed: %v", err)
 	}
 
-	expectedTableID, _ := tableManager.GetTableID("users")
+	expectedTableID, _ := ctx.TableManager().GetTableID("users")
 	if tableID != expectedTableID {
 		t.Errorf("Expected table ID %d, got %d", expectedTableID, tableID)
 	}
@@ -596,14 +573,13 @@ func TestUpdatePlan_findFieldIndex(t *testing.T) {
 
 	os.Mkdir("data", 0755)
 
-	tableManager := memory.NewTableManager()
-	pageStore := memory.NewPageStore(tableManager, createWal(t))
+	ctx := createTestContext("")
 	tid := transaction.NewTransactionID()
 
-	createUpdateTestTable(t, tableManager, tid)
+	createUpdateTestTable(t, ctx, tid)
 
 	stmt := statements.NewUpdateStatement("users", "users")
-	updatePlan := NewUpdatePlan(stmt, tableManager, pageStore, tid)
+	updatePlan := NewUpdatePlan(stmt, tid, ctx)
 
 	_, tupleDesc, err := updatePlan.getTableMetadata()
 	if err != nil {
@@ -650,17 +626,16 @@ func TestUpdatePlan_buildUpdateMap(t *testing.T) {
 
 	os.Mkdir("data", 0755)
 
-	tableManager := memory.NewTableManager()
-	pageStore := memory.NewPageStore(tableManager, createWal(t))
+	ctx := createTestContext("")
 	tid := transaction.NewTransactionID()
 
-	createUpdateTestTable(t, tableManager, tid)
+	createUpdateTestTable(t, ctx, tid)
 
 	stmt := statements.NewUpdateStatement("users", "users")
 	stmt.AddSetClause("name", types.NewStringField("New Name", types.StringMaxSize))
 	stmt.AddSetClause("age", &types.IntField{Value: 99})
 
-	updatePlan := NewUpdatePlan(stmt, tableManager, pageStore, tid)
+	updatePlan := NewUpdatePlan(stmt, tid, ctx)
 
 	_, tupleDesc, err := updatePlan.getTableMetadata()
 	if err != nil {
