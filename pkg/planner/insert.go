@@ -3,8 +3,8 @@ package planner
 import (
 	"fmt"
 	"storemy/pkg/concurrency/transaction"
-	"storemy/pkg/memory"
 	"storemy/pkg/parser/statements"
+	"storemy/pkg/registry"
 	"storemy/pkg/tuple"
 	"storemy/pkg/types"
 )
@@ -19,10 +19,9 @@ func (d *DMLResult) String() string {
 }
 
 type InsertPlan struct {
-	statement    *statements.InsertStatement
-	pageStore    *memory.PageStore
-	tableManager *memory.TableManager
-	tid          *transaction.TransactionID
+	statement *statements.InsertStatement
+	ctx       *registry.DatabaseContext
+	tid       *transaction.TransactionID
 }
 
 // NewInsertPlan creates a new InsertPlan instance with the provided components.
@@ -30,14 +29,12 @@ type InsertPlan struct {
 // executing INSERT operations within a transactional context.
 func NewInsertPlan(
 	stmt *statements.InsertStatement,
-	ps *memory.PageStore,
 	tid *transaction.TransactionID,
-	tm *memory.TableManager) *InsertPlan {
+	ctx *registry.DatabaseContext) *InsertPlan {
 	return &InsertPlan{
-		statement:    stmt,
-		pageStore:    ps,
-		tableManager: tm,
-		tid:          tid,
+		statement: stmt,
+		ctx:       ctx,
+		tid:       tid,
 	}
 }
 
@@ -77,7 +74,7 @@ func (p *InsertPlan) Execute() (any, error) {
 // getTableID resolves the table name from the INSERT statement to its internal ID.
 func (p *InsertPlan) getTableID() (int, error) {
 	tableName := p.statement.TableName
-	tableID, err := p.tableManager.GetTableID(tableName)
+	tableID, err := p.ctx.TableManager().GetTableID(tableName)
 	if err != nil {
 		return 0, fmt.Errorf("table %s not found", tableName)
 	}
@@ -87,12 +84,12 @@ func (p *InsertPlan) getTableID() (int, error) {
 // getTupleDesc retrieves the schema definition (tuple description) for the target table.
 func (p *InsertPlan) getTupleDesc() (*tuple.TupleDescription, error) {
 	tableName := p.statement.TableName
-	tableID, err := p.tableManager.GetTableID(tableName)
+	tableID, err := p.ctx.TableManager().GetTableID(tableName)
 	if err != nil {
 		return nil, fmt.Errorf("table %s not found", tableName)
 	}
 
-	tupleDesc, err := p.tableManager.GetTupleDesc(tableID)
+	tupleDesc, err := p.ctx.TableManager().GetTupleDesc(tableID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get schema for table %s", tableName)
 	}
@@ -134,7 +131,7 @@ func (p *InsertPlan) insertTuples(tableID int, tupleDesc *tuple.TupleDescription
 			return 0, err
 		}
 
-		if err := p.pageStore.InsertTuple(p.tid, tableID, newTuple); err != nil {
+		if err := p.ctx.PageStore().InsertTuple(p.tid, tableID, newTuple); err != nil {
 			return 0, fmt.Errorf("failed to insert tuple: %v", err)
 		}
 
