@@ -22,38 +22,42 @@ func cleanupTable(t *testing.T, tableManager *memory.TableManager, tableName str
 	})
 }
 
-func createWal(t *testing.T) *log.WAL {
-	t.Helper()
+// Helper function to create a test database context with cleanup registration
+func createTestContextWithCleanup(t *testing.T, dataDir string) *registry.DatabaseContext {
+	tm := memory.NewTableManager()
 
-	tmpDir, err := os.MkdirTemp("", "wal_test_*")
+	tmpDir, err := os.MkdirTemp("", "test_wal_*")
 	if err != nil {
-		t.Fatalf("failed to create temp dir: %v", err)
+		if t != nil {
+			t.Fatalf("failed to create temp dir for WAL: %v", err)
+		}
+		panic(err)
 	}
 
-	logPath := filepath.Join(tmpDir, "test.wal")
-	wal, err := log.NewWAL(logPath, 4096)
+	walPath := filepath.Join(tmpDir, "test.wal")
+	wal, err := log.NewWAL(walPath, 8192)
 	if err != nil {
-		t.Fatalf("failed to create WAL: %v", err)
-	}
-
-	t.Cleanup(func() {
-		wal.Close()
 		os.RemoveAll(tmpDir)
-	})
+		if t != nil {
+			t.Fatalf("failed to create WAL: %v", err)
+		}
+		panic(err)
+	}
 
-	return wal
-}
+	if t != nil {
+		t.Cleanup(func() {
+			if wal != nil {
+				wal.Close()
+			}
+			os.RemoveAll(tmpDir)
+		})
+	}
 
-// Helper function to create a test database context
-func createTestContext(dataDir string) *registry.DatabaseContext {
-	tableManager := memory.NewTableManager()
-	wal, _ := log.NewWAL("", 8192) // Empty log dir for tests
-	pageStore := memory.NewPageStore(tableManager, wal)
-
+	pageStore := memory.NewPageStore(tm, wal)
 	return registry.NewDatabaseContext(
-		tableManager,
+		tm,
 		pageStore,
-		nil, // catalog not needed for most tests
+		nil,
 		wal,
 		dataDir,
 	)
