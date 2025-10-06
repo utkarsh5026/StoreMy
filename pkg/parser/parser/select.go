@@ -202,58 +202,44 @@ func parseJoin(l *lexer.Lexer, p *plan.SelectPlan, firstToken lexer.Token) error
 }
 
 func parseJoinType(l *lexer.Lexer, first lexer.Token) (plan.JoinType, error) {
-	joinType := plan.InnerJoin // default
+	joinType := plan.InnerJoin
+	var err error
 
 	switch first.Type {
 	case lexer.INNER:
-		t := l.NextToken()
-		if err := expectToken(t, lexer.JOIN); err != nil {
-			return joinType, fmt.Errorf("expected JOIN after INNER, got %s", t.Value)
-		}
-		joinType = plan.InnerJoin
+		err = expectTokenSequence(l, lexer.JOIN)
 
 	case lexer.LEFT:
-		t := l.NextToken()
-		if t.Type == lexer.OUTER {
-			t = l.NextToken()
-		}
-
-		if err := expectToken(t, lexer.JOIN); err != nil {
-			return joinType, fmt.Errorf("expected JOIN after LEFT, got %s", t.Value)
-		}
 		joinType = plan.LeftJoin
+		err = parseOptionalOuterJoin(l)
 
 	case lexer.RIGHT:
-		t := l.NextToken()
-		if t.Type == lexer.OUTER {
-			t = l.NextToken()
-		}
-
-		if err := expectToken(t, lexer.JOIN); err != nil {
-			return joinType, fmt.Errorf("expected JOIN after RIGHT, got %s", t.Value)
-		}
 		joinType = plan.RightJoin
+		err = parseOptionalOuterJoin(l)
+
 	}
 
-	return joinType, nil
+	return joinType, err
+}
+
+// parseOptionalOuterJoin consumes optional OUTER keyword followed by required JOIN
+func parseOptionalOuterJoin(l *lexer.Lexer) error {
+	t := l.NextToken()
+	if t.Type == lexer.OUTER {
+		t = l.NextToken()
+	}
+
+	if err := expectToken(t, lexer.JOIN); err != nil {
+		return fmt.Errorf("expected JOIN: %w", err)
+	}
+	return nil
 }
 
 func parseTable(l *lexer.Lexer, p *plan.SelectPlan) error {
-	tableToken := l.NextToken()
-	if err := expectToken(tableToken, lexer.IDENTIFIER); err != nil {
-		return fmt.Errorf("expected table name, got %s", tableToken.Value)
+	tableName, alias, err := parseTableWithAlias(l)
+	if err != nil {
+		return err
 	}
-
-	tableName := strings.ToUpper(tableToken.Value)
-	alias := tableName
-
-	aliasToken := l.NextToken()
-	if aliasToken.Type == lexer.IDENTIFIER {
-		alias = strings.ToUpper(aliasToken.Value)
-	} else {
-		l.SetPos(aliasToken.Position)
-	}
-
 	p.AddScan(tableName, alias)
 	return nil
 }
