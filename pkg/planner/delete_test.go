@@ -3,9 +3,9 @@ package planner
 import (
 	"os"
 	"storemy/pkg/concurrency/transaction"
-	"storemy/pkg/memory"
 	"storemy/pkg/parser/plan"
 	"storemy/pkg/parser/statements"
+	"storemy/pkg/registry"
 	"storemy/pkg/types"
 	"testing"
 )
@@ -30,7 +30,7 @@ func executeDeletePlan(t *testing.T, plan *DeletePlan) (*DMLResult, error) {
 }
 
 // Helper function to create and populate a test table with sample data
-func createAndPopulateTestTable(t *testing.T, tableManager *memory.TableManager, pageStore *memory.PageStore, tid *transaction.TransactionID) {
+func createAndPopulateTestTable(t *testing.T, ctx *registry.DatabaseContext, tid *transaction.TransactionID) {
 	// Create table
 	createStmt := statements.NewCreateStatement("test_table", false)
 	createStmt.AddField("id", types.IntType, false, nil)
@@ -38,7 +38,9 @@ func createAndPopulateTestTable(t *testing.T, tableManager *memory.TableManager,
 	createStmt.AddField("active", types.BoolType, false, nil)
 	createStmt.AddField("price", types.FloatType, false, nil)
 
-	createPlan := NewCreateTablePlan(createStmt, tableManager, tid, "")
+	tableManager := ctx.TableManager()
+
+	createPlan := NewCreateTablePlan(createStmt, ctx, tid)
 	_, err := createPlan.Execute()
 	if err != nil {
 		t.Fatalf("Failed to create test table: %v", err)
@@ -74,7 +76,7 @@ func createAndPopulateTestTable(t *testing.T, tableManager *memory.TableManager,
 	}
 	insertStmt.AddValues(values3)
 
-	insertPlan := NewInsertPlan(insertStmt, pageStore, tid, tableManager)
+	insertPlan := NewInsertPlan(insertStmt, tid, ctx)
 	_, err = insertPlan.Execute()
 	if err != nil {
 		t.Fatalf("Failed to populate test table: %v", err)
@@ -86,11 +88,10 @@ func createAndPopulateTestTable(t *testing.T, tableManager *memory.TableManager,
 
 func TestNewDeletePlan(t *testing.T) {
 	stmt := statements.NewDeleteStatement("test_table", "")
-	pageStore := &memory.PageStore{}
-	tableManager := memory.NewTableManager()
+	ctx := createTestContext("")
 	tid := transaction.NewTransactionID()
 
-	plan := NewDeletePlan(stmt, pageStore, tid, tableManager)
+	plan := NewDeletePlan(stmt, tid, ctx)
 
 	if plan == nil {
 		t.Fatal("NewDeletePlan returned nil")
@@ -98,14 +99,6 @@ func TestNewDeletePlan(t *testing.T) {
 
 	if plan.statement != stmt {
 		t.Error("Statement not properly assigned")
-	}
-
-	if plan.pageStore != pageStore {
-		t.Error("PageStore not properly assigned")
-	}
-
-	if plan.tableManager != tableManager {
-		t.Error("TableManager not properly assigned")
 	}
 
 	if plan.tid != tid {
@@ -121,14 +114,13 @@ func TestDeletePlan_Execute_DeleteAll(t *testing.T) {
 
 	os.Mkdir("data", 0755)
 
-	tableManager := memory.NewTableManager()
-	pageStore := memory.NewPageStore(tableManager, createWal(t))
+	ctx := createTestContext("")
 	tid := transaction.NewTransactionID()
 
-	createAndPopulateTestTable(t, tableManager, pageStore, tid)
+	createAndPopulateTestTable(t, ctx, tid)
 
 	stmt := statements.NewDeleteStatement("test_table", "")
-	plan := NewDeletePlan(stmt, pageStore, tid, tableManager)
+	plan := NewDeletePlan(stmt, tid, ctx)
 
 	result, err := executeDeletePlan(t, plan)
 
@@ -158,11 +150,10 @@ func TestDeletePlan_Execute_WithWhereClause(t *testing.T) {
 
 	os.Mkdir("data", 0755)
 
-	tableManager := memory.NewTableManager()
-	pageStore := memory.NewPageStore(tableManager, createWal(t))
+	ctx := createTestContext("")
 	tid := transaction.NewTransactionID()
 
-	createAndPopulateTestTable(t, tableManager, pageStore, tid)
+	createAndPopulateTestTable(t, ctx, tid)
 
 	// DELETE FROM test_table WHERE id = 2
 	whereClause := &plan.FilterNode{
@@ -174,8 +165,7 @@ func TestDeletePlan_Execute_WithWhereClause(t *testing.T) {
 	stmt := statements.NewDeleteStatement("test_table", "")
 	stmt.SetWhereClause(whereClause)
 
-	plan := NewDeletePlan(stmt, pageStore, tid, tableManager)
-
+	plan := NewDeletePlan(stmt, tid, ctx)
 	result, err := executeDeletePlan(t, plan)
 
 	if err != nil {
@@ -200,11 +190,10 @@ func TestDeletePlan_Execute_WithWhereClause_MultipleRows(t *testing.T) {
 
 	os.Mkdir("data", 0755)
 
-	tableManager := memory.NewTableManager()
-	pageStore := memory.NewPageStore(tableManager, createWal(t))
+	ctx := createTestContext("")
 	tid := transaction.NewTransactionID()
 
-	createAndPopulateTestTable(t, tableManager, pageStore, tid)
+	createAndPopulateTestTable(t, ctx, tid)
 
 	// DELETE FROM test_table WHERE active = true
 	whereClause := &plan.FilterNode{
@@ -216,7 +205,7 @@ func TestDeletePlan_Execute_WithWhereClause_MultipleRows(t *testing.T) {
 	stmt := statements.NewDeleteStatement("test_table", "")
 	stmt.SetWhereClause(whereClause)
 
-	plan := NewDeletePlan(stmt, pageStore, tid, tableManager)
+	plan := NewDeletePlan(stmt, tid, ctx)
 
 	result, err := executeDeletePlan(t, plan)
 
@@ -242,11 +231,10 @@ func TestDeletePlan_Execute_WithWhereClause_NoMatch(t *testing.T) {
 
 	os.Mkdir("data", 0755)
 
-	tableManager := memory.NewTableManager()
-	pageStore := memory.NewPageStore(tableManager, createWal(t))
+	ctx := createTestContext("")
 	tid := transaction.NewTransactionID()
 
-	createAndPopulateTestTable(t, tableManager, pageStore, tid)
+	createAndPopulateTestTable(t, ctx, tid)
 
 	// DELETE FROM test_table WHERE id = 999 (no match)
 	whereClause := &plan.FilterNode{
@@ -258,7 +246,7 @@ func TestDeletePlan_Execute_WithWhereClause_NoMatch(t *testing.T) {
 	stmt := statements.NewDeleteStatement("test_table", "")
 	stmt.SetWhereClause(whereClause)
 
-	plan := NewDeletePlan(stmt, pageStore, tid, tableManager)
+	plan := NewDeletePlan(stmt, tid, ctx)
 
 	result, err := executeDeletePlan(t, plan)
 
@@ -284,11 +272,10 @@ func TestDeletePlan_Execute_WithWhereClause_GreaterThan(t *testing.T) {
 
 	os.Mkdir("data", 0755)
 
-	tableManager := memory.NewTableManager()
-	pageStore := memory.NewPageStore(tableManager, createWal(t))
+	ctx := createTestContext("")
 	tid := transaction.NewTransactionID()
 
-	createAndPopulateTestTable(t, tableManager, pageStore, tid)
+	createAndPopulateTestTable(t, ctx, tid)
 
 	// DELETE FROM test_table WHERE id > 1
 	whereClause := &plan.FilterNode{
@@ -300,7 +287,7 @@ func TestDeletePlan_Execute_WithWhereClause_GreaterThan(t *testing.T) {
 	stmt := statements.NewDeleteStatement("test_table", "")
 	stmt.SetWhereClause(whereClause)
 
-	plan := NewDeletePlan(stmt, pageStore, tid, tableManager)
+	plan := NewDeletePlan(stmt, tid, ctx)
 
 	result, err := executeDeletePlan(t, plan)
 
@@ -326,12 +313,11 @@ func TestDeletePlan_Execute_Error_TableNotFound(t *testing.T) {
 
 	os.Mkdir("data", 0755)
 
-	tableManager := memory.NewTableManager()
-	pageStore := memory.NewPageStore(tableManager, createWal(t))
+	ctx := createTestContext("")
 	tid := transaction.NewTransactionID()
 
 	stmt := statements.NewDeleteStatement("nonexistent_table", "")
-	plan := NewDeletePlan(stmt, pageStore, tid, tableManager)
+	plan := NewDeletePlan(stmt, tid, ctx)
 
 	result, err := executeDeletePlan(t, plan)
 
@@ -357,11 +343,10 @@ func TestDeletePlan_Execute_Error_InvalidField(t *testing.T) {
 
 	os.Mkdir("data", 0755)
 
-	tableManager := memory.NewTableManager()
-	pageStore := memory.NewPageStore(tableManager, createWal(t))
+	ctx := createTestContext("")
 	tid := transaction.NewTransactionID()
 
-	createAndPopulateTestTable(t, tableManager, pageStore, tid)
+	createAndPopulateTestTable(t, ctx, tid)
 
 	// DELETE FROM test_table WHERE invalid_field = 'value'
 	whereClause := &plan.FilterNode{
@@ -373,7 +358,7 @@ func TestDeletePlan_Execute_Error_InvalidField(t *testing.T) {
 	stmt := statements.NewDeleteStatement("test_table", "")
 	stmt.SetWhereClause(whereClause)
 
-	plan := NewDeletePlan(stmt, pageStore, tid, tableManager)
+	plan := NewDeletePlan(stmt, tid, ctx)
 
 	result, err := executeDeletePlan(t, plan)
 
@@ -399,8 +384,7 @@ func TestDeletePlan_Execute_EmptyTable(t *testing.T) {
 
 	os.Mkdir("data", 0755)
 
-	tableManager := memory.NewTableManager()
-	pageStore := memory.NewPageStore(tableManager, createWal(t))
+	ctx := createTestContext("")
 	tid := transaction.NewTransactionID()
 
 	// Create table but don't populate it
@@ -408,17 +392,17 @@ func TestDeletePlan_Execute_EmptyTable(t *testing.T) {
 	createStmt.AddField("id", types.IntType, false, nil)
 	createStmt.AddField("name", types.StringType, false, nil)
 
-	createPlan := NewCreateTablePlan(createStmt, tableManager, tid, "")
+	createPlan := NewCreateTablePlan(createStmt, ctx, tid)
 	_, err := createPlan.Execute()
 	if err != nil {
 		t.Fatalf("Failed to create test table: %v", err)
 	}
 
 	// Register cleanup to close table file
-	cleanupTable(t, tableManager, "test_table")
+	cleanupTable(t, ctx.TableManager(), "test_table")
 
 	stmt := statements.NewDeleteStatement("test_table", "")
-	plan := NewDeletePlan(stmt, pageStore, tid, tableManager)
+	plan := NewDeletePlan(stmt, tid, ctx)
 
 	result, err := executeDeletePlan(t, plan)
 
@@ -444,14 +428,13 @@ func TestDeletePlan_getTableID(t *testing.T) {
 
 	os.Mkdir("data", 0755)
 
-	tableManager := memory.NewTableManager()
-	pageStore := memory.NewPageStore(tableManager, createWal(t))
+	ctx := createTestContext("")
 	tid := transaction.NewTransactionID()
 
-	createAndPopulateTestTable(t, tableManager, pageStore, tid)
+	createAndPopulateTestTable(t, ctx, tid)
 
 	stmt := statements.NewDeleteStatement("test_table", "")
-	plan := NewDeletePlan(stmt, pageStore, tid, tableManager)
+	plan := NewDeletePlan(stmt, tid, ctx)
 
 	tableID, err := plan.getTableID()
 
@@ -459,7 +442,7 @@ func TestDeletePlan_getTableID(t *testing.T) {
 		t.Fatalf("getTableID failed: %v", err)
 	}
 
-	expectedTableID, _ := tableManager.GetTableID("test_table")
+	expectedTableID, _ := ctx.TableManager().GetTableID("test_table")
 	if tableID != expectedTableID {
 		t.Errorf("Expected table ID %d, got %d", expectedTableID, tableID)
 	}
@@ -473,12 +456,11 @@ func TestDeletePlan_getTableID_Error(t *testing.T) {
 
 	os.Mkdir("data", 0755)
 
-	tableManager := memory.NewTableManager()
-	pageStore := memory.NewPageStore(tableManager, createWal(t))
+	ctx := createTestContext("")
 	tid := transaction.NewTransactionID()
 
 	stmt := statements.NewDeleteStatement("nonexistent_table", "")
-	plan := NewDeletePlan(stmt, pageStore, tid, tableManager)
+	plan := NewDeletePlan(stmt, tid, ctx)
 
 	tableID, err := plan.getTableID()
 
@@ -504,14 +486,13 @@ func TestDeletePlan_createTableScan(t *testing.T) {
 
 	os.Mkdir("data", 0755)
 
-	tableManager := memory.NewTableManager()
-	pageStore := memory.NewPageStore(tableManager, createWal(t))
+	ctx := createTestContext("")
 	tid := transaction.NewTransactionID()
 
-	createAndPopulateTestTable(t, tableManager, pageStore, tid)
+	createAndPopulateTestTable(t, ctx, tid)
 
 	stmt := statements.NewDeleteStatement("test_table", "")
-	plan := NewDeletePlan(stmt, pageStore, tid, tableManager)
+	plan := NewDeletePlan(stmt, tid, ctx)
 
 	tableID, err := plan.getTableID()
 	if err != nil {
@@ -544,11 +525,10 @@ func TestDeletePlan_addWhereFilter(t *testing.T) {
 
 	os.Mkdir("data", 0755)
 
-	tableManager := memory.NewTableManager()
-	pageStore := memory.NewPageStore(tableManager, createWal(t))
+	ctx := createTestContext("")
 	tid := transaction.NewTransactionID()
 
-	createAndPopulateTestTable(t, tableManager, pageStore, tid)
+	createAndPopulateTestTable(t, ctx, tid)
 
 	whereClause := &plan.FilterNode{
 		Field:     "id",
@@ -558,7 +538,7 @@ func TestDeletePlan_addWhereFilter(t *testing.T) {
 
 	stmt := statements.NewDeleteStatement("test_table", "")
 	stmt.SetWhereClause(whereClause)
-	plan := NewDeletePlan(stmt, pageStore, tid, tableManager)
+	plan := NewDeletePlan(stmt, tid, ctx)
 
 	tableID, err := plan.getTableID()
 	if err != nil {
@@ -596,14 +576,13 @@ func TestDeletePlan_collectTuplesToDelete(t *testing.T) {
 
 	os.Mkdir("data", 0755)
 
-	tableManager := memory.NewTableManager()
-	pageStore := memory.NewPageStore(tableManager, createWal(t))
+	ctx := createTestContext("")
 	tid := transaction.NewTransactionID()
 
-	createAndPopulateTestTable(t, tableManager, pageStore, tid)
+	createAndPopulateTestTable(t, ctx, tid)
 
 	stmt := statements.NewDeleteStatement("test_table", "")
-	plan := NewDeletePlan(stmt, pageStore, tid, tableManager)
+	plan := NewDeletePlan(stmt, tid, ctx)
 
 	tableID, err := plan.getTableID()
 	if err != nil {
@@ -641,14 +620,13 @@ func TestDeletePlan_createQuery_NoWhere(t *testing.T) {
 
 	os.Mkdir("data", 0755)
 
-	tableManager := memory.NewTableManager()
-	pageStore := memory.NewPageStore(tableManager, createWal(t))
+	ctx := createTestContext("")
 	tid := transaction.NewTransactionID()
 
-	createAndPopulateTestTable(t, tableManager, pageStore, tid)
+	createAndPopulateTestTable(t, ctx, tid)
 
 	stmt := statements.NewDeleteStatement("test_table", "")
-	plan := NewDeletePlan(stmt, pageStore, tid, tableManager)
+	plan := NewDeletePlan(stmt, tid, ctx)
 
 	tableID, err := plan.getTableID()
 	if err != nil {
@@ -681,11 +659,10 @@ func TestDeletePlan_createQuery_WithWhere(t *testing.T) {
 
 	os.Mkdir("data", 0755)
 
-	tableManager := memory.NewTableManager()
-	pageStore := memory.NewPageStore(tableManager, createWal(t))
+	ctx := createTestContext("")
 	tid := transaction.NewTransactionID()
 
-	createAndPopulateTestTable(t, tableManager, pageStore, tid)
+	createAndPopulateTestTable(t, ctx, tid)
 
 	whereClause := &plan.FilterNode{
 		Field:     "id",
@@ -695,7 +672,7 @@ func TestDeletePlan_createQuery_WithWhere(t *testing.T) {
 
 	stmt := statements.NewDeleteStatement("test_table", "")
 	stmt.SetWhereClause(whereClause)
-	plan := NewDeletePlan(stmt, pageStore, tid, tableManager)
+	plan := NewDeletePlan(stmt, tid, ctx)
 
 	tableID, err := plan.getTableID()
 	if err != nil {
