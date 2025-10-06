@@ -15,6 +15,14 @@ type joinCondition struct {
 	predicate  types.Predicate
 }
 
+// parseSelectStatement is the main entry point for parsing SELECT statements.
+// It orchestrates the parsing of all SELECT clauses in order: SELECT, FROM, WHERE, GROUP BY, ORDER BY.
+//
+// Grammar:
+//
+//	SELECT [* | field_list] FROM table_list [WHERE conditions] [GROUP BY field] [ORDER BY field [ASC|DESC]]
+//
+// Returns a SelectStatement ready for execution planning, or an error if parsing fails.
 func parseSelectStatement(l *lexer.Lexer) (*statements.SelectStatement, error) {
 	p := plan.NewSelectPlan()
 
@@ -35,6 +43,13 @@ func parseSelectStatement(l *lexer.Lexer) (*statements.SelectStatement, error) {
 	return statements.NewSelectStatement(p), nil
 }
 
+// parseSelect parses the SELECT clause, handling both SELECT * and explicit field lists.
+// Also handles aggregate functions like COUNT(field), SUM(field), etc.
+//
+// Grammar:
+//
+//	SELECT * | field [, field]*
+//	field = IDENTIFIER | AGGREGATE_FUNC(IDENTIFIER)
 func parseSelect(l *lexer.Lexer, p *plan.SelectPlan) error {
 	if err := expectTokenSequence(l, lexer.SELECT); err != nil {
 		return err
@@ -49,6 +64,8 @@ func parseSelect(l *lexer.Lexer, p *plan.SelectPlan) error {
 	return parseSelectFieldList(l, p, token)
 }
 
+// parseSelectFieldList processes a comma-separated list of fields in the SELECT clause.
+// Stops when it encounters the FROM keyword.
 func parseSelectFieldList(l *lexer.Lexer, p *plan.SelectPlan, firstToken lexer.Token) error {
 	token := firstToken
 
@@ -76,6 +93,8 @@ func parseSelectFieldList(l *lexer.Lexer, p *plan.SelectPlan, firstToken lexer.T
 	return nil
 }
 
+// parseSelectField handles a single field in the SELECT clause.
+// Distinguishes between regular fields (NAME) and aggregate functions (COUNT(ID)).
 func parseSelectField(l *lexer.Lexer, p *plan.SelectPlan, fieldToken lexer.Token) error {
 	nextToken := l.NextToken()
 	if nextToken.Type == lexer.LPAREN {
@@ -87,6 +106,14 @@ func parseSelectField(l *lexer.Lexer, p *plan.SelectPlan, fieldToken lexer.Token
 	return nil
 }
 
+// parseAggregateFunction parses aggregate function calls in SELECT clause.
+//
+// Grammar:
+//
+//	AGGREGATE_FUNC(IDENTIFIER)
+//
+// Supported functions: COUNT, SUM, AVG, MIN, MAX
+// Example: COUNT(ID) → adds projection with field "ID" and aggregation operator "COUNT"
 func parseAggregateFunction(l *lexer.Lexer, p *plan.SelectPlan, funcToken lexer.Token) error {
 	aggOp := strings.ToUpper(funcToken.Value)
 
@@ -104,6 +131,14 @@ func parseAggregateFunction(l *lexer.Lexer, p *plan.SelectPlan, funcToken lexer.
 	return nil
 }
 
+// parseGroupBy parses the optional GROUP BY clause.
+//
+// Grammar:
+//
+//	[GROUP BY field]
+//
+// Example: GROUP BY DEPARTMENT
+// Currently supports grouping by a single field only.
 func parseGroupBy(l *lexer.Lexer, p *plan.SelectPlan) error {
 	token := l.NextToken()
 	if token.Type != lexer.GROUP {
@@ -124,6 +159,14 @@ func parseGroupBy(l *lexer.Lexer, p *plan.SelectPlan) error {
 	return nil
 }
 
+// parseOrderBy parses the optional ORDER BY clause.
+//
+// Grammar:
+//
+//	[ORDER BY field [ASC|DESC]]
+//
+// Example: ORDER BY AGE DESC
+// Defaults to ascending if no direction specified.
 func parseOrderBy(l *lexer.Lexer, p *plan.SelectPlan) error {
 	token := l.NextToken()
 	if token.Type != lexer.ORDER {
@@ -152,6 +195,18 @@ func parseOrderBy(l *lexer.Lexer, p *plan.SelectPlan) error {
 	return nil
 }
 
+// parseFrom parses the FROM clause including table references and JOIN operations.
+//
+// Grammar:
+//
+//	FROM table [, table]* | table [JOIN table ON condition]*
+//
+// Supports:
+//   - Comma-separated tables (cross join): FROM users, orders
+//   - Explicit JOINs: FROM users INNER JOIN orders ON users.id = orders.user_id
+//   - LEFT/RIGHT OUTER JOINs
+//
+// Tables can have aliases: FROM users u, orders o
 func parseFrom(l *lexer.Lexer, p *plan.SelectPlan) error {
 	if err := expectTokenSequence(l, lexer.FROM); err != nil {
 		return err
@@ -180,6 +235,17 @@ func parseFrom(l *lexer.Lexer, p *plan.SelectPlan) error {
 	}
 }
 
+// parseJoin parses a JOIN clause including the join type, table, and condition.
+//
+// Grammar:
+//
+//	[INNER|LEFT|RIGHT] [OUTER] JOIN table [alias] ON field = field
+//
+// Examples:
+//
+//	INNER JOIN orders ON users.id = orders.user_id
+//	LEFT OUTER JOIN departments d ON e.dept_id = d.id
+//	RIGHT JOIN products p ON o.product_id = p.id
 func parseJoin(l *lexer.Lexer, p *plan.SelectPlan, firstToken lexer.Token) error {
 	joinType, err := parseJoinType(l, firstToken)
 	if err != nil {
@@ -201,6 +267,9 @@ func parseJoin(l *lexer.Lexer, p *plan.SelectPlan, firstToken lexer.Token) error
 	return nil
 }
 
+// parseJoinType determines the type of JOIN operation.
+// Handles INNER JOIN, LEFT [OUTER] JOIN, RIGHT [OUTER] JOIN.
+// Returns the corresponding JoinType enum value.
 func parseJoinType(l *lexer.Lexer, first lexer.Token) (plan.JoinType, error) {
 	joinType := plan.InnerJoin
 	var err error
@@ -222,7 +291,8 @@ func parseJoinType(l *lexer.Lexer, first lexer.Token) (plan.JoinType, error) {
 	return joinType, err
 }
 
-// parseOptionalOuterJoin consumes optional OUTER keyword followed by required JOIN
+// parseOptionalOuterJoin consumes the optional OUTER keyword followed by required JOIN keyword.
+// Handles syntax: [OUTER] JOIN
 func parseOptionalOuterJoin(l *lexer.Lexer) error {
 	t := l.NextToken()
 	if t.Type == lexer.OUTER {
@@ -235,6 +305,7 @@ func parseOptionalOuterJoin(l *lexer.Lexer) error {
 	return nil
 }
 
+// parseTable parses a single table reference with optional alias.
 func parseTable(l *lexer.Lexer, p *plan.SelectPlan) error {
 	tableName, alias, err := parseTableWithAlias(l)
 	if err != nil {
@@ -244,6 +315,19 @@ func parseTable(l *lexer.Lexer, p *plan.SelectPlan) error {
 	return nil
 }
 
+// parseWhere parses the optional WHERE clause containing filter conditions.
+//
+// Grammar:
+//
+//	[WHERE condition [AND condition]*]
+//	condition = field OPERATOR value
+//
+// Examples:
+//
+//	WHERE AGE > 18
+//	WHERE NAME = 'John' AND STATUS = 'ACTIVE'
+//
+// Supports operators: =, !=, <, >, <=, >=
 func parseWhere(l *lexer.Lexer, p *plan.SelectPlan) error {
 	token := l.NextToken()
 	if token.Type != lexer.WHERE {
@@ -254,6 +338,14 @@ func parseWhere(l *lexer.Lexer, p *plan.SelectPlan) error {
 	return parseConditions(l, p)
 }
 
+// parseJoinCondition parses the ON clause of a JOIN statement.
+//
+// Grammar:
+//
+//	ON field OPERATOR field
+//
+// Example: ON users.id = orders.user_id
+// Returns a joinCondition with left field, right field, and comparison predicate.
 func parseJoinCondition(l *lexer.Lexer) (*joinCondition, error) {
 	if err := expectTokenSequence(l, lexer.ON); err != nil {
 		return nil, fmt.Errorf("expected ON in JOIN clause: %w", err)
@@ -287,6 +379,11 @@ func parseJoinCondition(l *lexer.Lexer) (*joinCondition, error) {
 	return cond, nil
 }
 
+// parseConditions parses a sequence of filter conditions connected by AND.
+// Each condition follows the pattern: field OPERATOR value
+//
+// Stops when encountering a token that's not part of a condition (e.g., GROUP, ORDER, EOF).
+// All field names and values are normalized to uppercase.
 func parseConditions(l *lexer.Lexer, p *plan.SelectPlan) error {
 	for {
 		fieldToken := l.NextToken()
@@ -331,6 +428,7 @@ func parseConditions(l *lexer.Lexer, p *plan.SelectPlan) error {
 	return nil
 }
 
+// consumeCommaIfPresent checks if the next token is a comma and consumes it.
 func consumeCommaIfPresent(l *lexer.Lexer) bool {
 	token := l.NextToken()
 	if token.Type == lexer.COMMA {
