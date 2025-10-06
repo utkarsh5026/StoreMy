@@ -5,8 +5,15 @@ import (
 	"storemy/pkg/parser/lexer"
 	"storemy/pkg/parser/plan"
 	"storemy/pkg/parser/statements"
+	"storemy/pkg/types"
 	"strings"
 )
+
+type joinCondition struct {
+	leftField  string
+	rightField string
+	predicate  types.Predicate
+}
 
 func parseSelectStatement(l *lexer.Lexer) (*statements.SelectStatement, error) {
 	p := plan.NewSelectPlan()
@@ -185,39 +192,12 @@ func parseJoin(l *lexer.Lexer, p *plan.SelectPlan, firstToken lexer.Token) error
 	}
 
 	rightTable := plan.NewScanNode(tableName, alias)
-
-	// Expect ON keyword
-	onToken := l.NextToken()
-	if err := expectToken(onToken, lexer.ON); err != nil {
-		return fmt.Errorf("expected ON in JOIN clause, got %s", onToken.Value)
-	}
-
-	// Parse join condition: table1.field1 = table2.field2
-	leftFieldToken := l.NextToken()
-	if err := expectToken(leftFieldToken, lexer.IDENTIFIER); err != nil {
-		return fmt.Errorf("expected left field in JOIN condition, got %s", leftFieldToken.Value)
-	}
-
-	opToken := l.NextToken()
-	if err := expectToken(opToken, lexer.OPERATOR); err != nil {
-		return fmt.Errorf("expected operator in JOIN condition, got %s", opToken.Value)
-	}
-
-	rightFieldToken := l.NextToken()
-	if err := expectToken(rightFieldToken, lexer.IDENTIFIER); err != nil {
-		return fmt.Errorf("expected right field in JOIN condition, got %s", rightFieldToken.Value)
-	}
-
-	// Parse the operator
-	predicate, err := parseOperator(opToken.Value)
+	cond, err := parseJoinCondition(l)
 	if err != nil {
 		return err
 	}
 
-	leftField := strings.ToUpper(leftFieldToken.Value)
-	rightField := strings.ToUpper(rightFieldToken.Value)
-
-	p.AddJoin(rightTable, joinType, leftField, rightField, predicate)
+	p.AddJoin(rightTable, joinType, cond.leftField, cond.rightField, cond.predicate)
 	return nil
 }
 
@@ -226,29 +206,31 @@ func parseJoinType(l *lexer.Lexer, first lexer.Token) (plan.JoinType, error) {
 
 	switch first.Type {
 	case lexer.INNER:
-		joinToken := l.NextToken()
-		if err := expectToken(joinToken, lexer.JOIN); err != nil {
-			return joinType, fmt.Errorf("expected JOIN after INNER, got %s", joinToken.Value)
+		t := l.NextToken()
+		if err := expectToken(t, lexer.JOIN); err != nil {
+			return joinType, fmt.Errorf("expected JOIN after INNER, got %s", t.Value)
 		}
 		joinType = plan.InnerJoin
 
 	case lexer.LEFT:
-		nextToken := l.NextToken()
-		if nextToken.Type == lexer.OUTER {
-			nextToken = l.NextToken()
+		t := l.NextToken()
+		if t.Type == lexer.OUTER {
+			t = l.NextToken()
 		}
-		if err := expectToken(nextToken, lexer.JOIN); err != nil {
-			return joinType, fmt.Errorf("expected JOIN after LEFT, got %s", nextToken.Value)
+
+		if err := expectToken(t, lexer.JOIN); err != nil {
+			return joinType, fmt.Errorf("expected JOIN after LEFT, got %s", t.Value)
 		}
 		joinType = plan.LeftJoin
 
 	case lexer.RIGHT:
-		nextToken := l.NextToken()
-		if nextToken.Type == lexer.OUTER {
-			nextToken = l.NextToken()
+		t := l.NextToken()
+		if t.Type == lexer.OUTER {
+			t = l.NextToken()
 		}
-		if err := expectToken(nextToken, lexer.JOIN); err != nil {
-			return joinType, fmt.Errorf("expected JOIN after RIGHT, got %s", nextToken.Value)
+
+		if err := expectToken(t, lexer.JOIN); err != nil {
+			return joinType, fmt.Errorf("expected JOIN after RIGHT, got %s", t.Value)
 		}
 		joinType = plan.RightJoin
 	}
@@ -284,6 +266,39 @@ func parseWhere(l *lexer.Lexer, p *plan.SelectPlan) error {
 	}
 
 	return parseConditions(l, p)
+}
+
+func parseJoinCondition(l *lexer.Lexer) (*joinCondition, error) {
+	if err := expectTokenSequence(l, lexer.ON); err != nil {
+		return nil, fmt.Errorf("expected ON in JOIN clause: %w", err)
+	}
+
+	leftFieldToken := l.NextToken()
+	if err := expectToken(leftFieldToken, lexer.IDENTIFIER); err != nil {
+		return nil, fmt.Errorf("expected left field in JOIN condition, got %s", leftFieldToken.Value)
+	}
+
+	opToken := l.NextToken()
+	if err := expectToken(opToken, lexer.OPERATOR); err != nil {
+		return nil, fmt.Errorf("expected operator in JOIN condition, got %s", opToken.Value)
+	}
+
+	rightFieldToken := l.NextToken()
+	if err := expectToken(rightFieldToken, lexer.IDENTIFIER); err != nil {
+		return nil, fmt.Errorf("expected right field in JOIN condition, got %s", rightFieldToken.Value)
+	}
+
+	predicate, err := parseOperator(opToken.Value)
+	if err != nil {
+		return nil, err
+	}
+
+	cond := &joinCondition{
+		leftField:  strings.ToUpper(leftFieldToken.Value),
+		rightField: strings.ToUpper(rightFieldToken.Value),
+		predicate:  predicate}
+
+	return cond, nil
 }
 
 func parseConditions(l *lexer.Lexer, p *plan.SelectPlan) error {
