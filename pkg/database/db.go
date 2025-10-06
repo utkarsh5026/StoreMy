@@ -11,6 +11,7 @@ import (
 	"storemy/pkg/parser/parser"
 	"storemy/pkg/parser/statements"
 	"storemy/pkg/planner"
+	"storemy/pkg/registry"
 	"sync"
 )
 
@@ -74,10 +75,11 @@ func NewDatabase(name, dataDir, logDir string) (*Database, error) {
 	}
 
 	pageStore := memory.NewPageStore(tableManager, wal)
-	queryPlanner := planner.NewQueryPlanner(tableManager, pageStore)
-	queryPlanner.SetDataDir(fullPath)
-
 	systemCatalog := catalog.NewSystemCatalog(pageStore, tableManager)
+
+	ctx := registry.NewDatabaseContext(tableManager, pageStore, systemCatalog, wal, fullPath)
+
+	queryPlanner := planner.NewQueryPlanner(ctx)
 
 	db := &Database{
 		tableManager: tableManager,
