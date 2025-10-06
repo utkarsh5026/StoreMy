@@ -39,6 +39,12 @@ func parseSelect(l *lexer.Lexer, p *plan.SelectPlan) error {
 		return nil
 	}
 
+	return parseSelectFieldList(l, p, token)
+}
+
+func parseSelectFieldList(l *lexer.Lexer, p *plan.SelectPlan, firstToken lexer.Token) error {
+	token := firstToken
+
 	for {
 		if token.Type == lexer.FROM {
 			l.SetPos(token.Position)
@@ -66,21 +72,28 @@ func parseSelect(l *lexer.Lexer, p *plan.SelectPlan) error {
 func parseSelectField(l *lexer.Lexer, p *plan.SelectPlan, fieldToken lexer.Token) error {
 	nextToken := l.NextToken()
 	if nextToken.Type == lexer.LPAREN {
-		aggOp := strings.ToUpper(fieldToken.Value)
-		fieldToken := l.NextToken()
-		if err := expectToken(fieldToken, lexer.IDENTIFIER); err != nil {
-			return fmt.Errorf("expected field name in aggregate function")
-		}
-
-		parenToken := l.NextToken()
-		if err := expectToken(parenToken, lexer.RPAREN); err != nil {
-			return fmt.Errorf("expected closing parenthesis in aggregate function")
-		}
-		p.AddProjectField(strings.ToUpper(fieldToken.Value), aggOp)
-	} else {
-		l.SetPos(nextToken.Position)
-		p.AddProjectField(strings.ToUpper(fieldToken.Value), "")
+		return parseAggregateFunction(l, p, fieldToken)
 	}
+
+	l.SetPos(nextToken.Position)
+	p.AddProjectField(strings.ToUpper(fieldToken.Value), "")
+	return nil
+}
+
+func parseAggregateFunction(l *lexer.Lexer, p *plan.SelectPlan, funcToken lexer.Token) error {
+	aggOp := strings.ToUpper(funcToken.Value)
+
+	fieldToken := l.NextToken()
+	if err := expectToken(fieldToken, lexer.IDENTIFIER); err != nil {
+		return fmt.Errorf("expected field name in aggregate function")
+	}
+
+	parenToken := l.NextToken()
+	if err := expectToken(parenToken, lexer.RPAREN); err != nil {
+		return fmt.Errorf("expected closing parenthesis in aggregate function")
+	}
+
+	p.AddProjectField(strings.ToUpper(fieldToken.Value), aggOp)
 	return nil
 }
 
