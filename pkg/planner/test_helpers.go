@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"storemy/pkg/log"
 	"storemy/pkg/memory"
+	"storemy/pkg/registry"
 	"testing"
 )
 
@@ -41,4 +42,19 @@ func createWal(t *testing.T) *log.WAL {
 	})
 
 	return wal
+}
+
+// Helper function to create a test database context
+func createTestContext(dataDir string) *registry.DatabaseContext {
+	tableManager := memory.NewTableManager()
+	wal, _ := log.NewWAL("", 8192) // Empty log dir for tests
+	pageStore := memory.NewPageStore(tableManager, wal)
+
+	return registry.NewDatabaseContext(
+		tableManager,
+		pageStore,
+		nil, // catalog not needed for most tests
+		wal,
+		dataDir,
+	)
 }
