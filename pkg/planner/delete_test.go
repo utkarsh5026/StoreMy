@@ -594,10 +594,10 @@ func TestDeletePlan_collectTuplesToDelete(t *testing.T) {
 		t.Fatalf("createQuery failed: %v", err)
 	}
 
-	tuplesToDelete, err := collectTuplesToDelete(query)
+	tuplesToDelete, err := collectAllTuples(query)
 
 	if err != nil {
-		t.Fatalf("collectTuplesToDelete failed: %v", err)
+		t.Fatalf("collectAllTuples failed: %v", err)
 	}
 
 	if len(tuplesToDelete) != 3 {
