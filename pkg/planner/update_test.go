@@ -485,7 +485,7 @@ func TestUpdatePlan_Execute_Error_InvalidWhereField(t *testing.T) {
 		t.Fatal("Expected error when WHERE field does not exist")
 	}
 
-	expectedError := "failed to build WHERE predicate: field users.invalid_field not found"
+	expectedError := "failed to build WHERE predicate: column invalid_field not found"
 	if err.Error() != expectedError {
 		t.Errorf("Expected error %q, got %q", expectedError, err.Error())
 	}
@@ -543,9 +543,10 @@ func TestUpdatePlan_getTableMetadata(t *testing.T) {
 	createUpdateTestTable(t, ctx, tid)
 
 	stmt := statements.NewUpdateStatement("users", "users")
-	updatePlan := NewUpdatePlan(stmt, tid, ctx)
 
-	tableID, tupleDesc, err := updatePlan.getTableMetadata()
+	md, err := resolveTableMetadata(stmt.TableName, ctx)
+	tableID := md.TableID
+	tupleDesc := md.TupleDesc
 
 	if err != nil {
 		t.Fatalf("getTableMetadata failed: %v", err)
@@ -579,9 +580,8 @@ func TestUpdatePlan_findFieldIndex(t *testing.T) {
 	createUpdateTestTable(t, ctx, tid)
 
 	stmt := statements.NewUpdateStatement("users", "users")
-	updatePlan := NewUpdatePlan(stmt, tid, ctx)
 
-	_, tupleDesc, err := updatePlan.getTableMetadata()
+	md, err := resolveTableMetadata(stmt.TableName, ctx)
 	if err != nil {
 		t.Fatalf("getTableMetadata failed: %v", err)
 	}
@@ -601,7 +601,7 @@ func TestUpdatePlan_findFieldIndex(t *testing.T) {
 	}
 
 	for _, test := range tests {
-		index, err := updatePlan.findFieldIndex(test.fieldName, tupleDesc)
+		index, err := findFieldIndex(test.fieldName, md.TupleDesc)
 
 		if test.expectError {
 			if err == nil {
@@ -637,12 +637,12 @@ func TestUpdatePlan_buildUpdateMap(t *testing.T) {
 
 	updatePlan := NewUpdatePlan(stmt, tid, ctx)
 
-	_, tupleDesc, err := updatePlan.getTableMetadata()
+	md, err := resolveTableMetadata(stmt.TableName, ctx)
 	if err != nil {
 		t.Fatalf("getTableMetadata failed: %v", err)
 	}
 
-	updateMap, err := updatePlan.buildUpdateMap(tupleDesc)
+	updateMap, err := updatePlan.buildUpdateMap(md.TupleDesc)
 
 	if err != nil {
 		t.Fatalf("buildUpdateMap failed: %v", err)
