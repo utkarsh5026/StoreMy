@@ -2,7 +2,10 @@ package planner
 
 import (
 	"fmt"
+	"storemy/pkg/concurrency/transaction"
+	"storemy/pkg/execution/query"
 	"storemy/pkg/iterator"
+	"storemy/pkg/parser/plan"
 	"storemy/pkg/registry"
 	"storemy/pkg/tuple"
 )
@@ -29,6 +32,15 @@ func resolveTableMetadata(tableName string, ctx *registry.DatabaseContext) (*tab
 		TableID:   tableID,
 		TupleDesc: tupleDesc,
 	}, nil
+}
+
+func resolveTableID(tableName string, ctx *registry.DatabaseContext) (int, error) {
+	md, err := resolveTableMetadata(tableName, ctx)
+	if err != nil {
+		return -1, err
+	}
+
+	return md.TableID, nil
 }
 
 // FindFieldIndex locates a field by name in the tuple descriptor
@@ -70,4 +82,32 @@ func collectAllTuples(it iterator.DbIterator) ([]*tuple.Tuple, error) {
 	}
 
 	return tuples, nil
+}
+
+func buildScanWithFilter(
+	tid *transaction.TransactionID,
+	tableID int,
+	whereClause *plan.FilterNode,
+	ctx *registry.DatabaseContext,
+) (iterator.DbIterator, error) {
+	scanOp, err := query.NewSeqScan(tid, tableID, ctx.TableManager())
+	if err != nil {
+		return nil, fmt.Errorf("failed to create table scan: %v", err)
+	}
+
+	if whereClause == nil {
+		return scanOp, nil
+	}
+
+	predicate, err := buildPredicateFromFilterNode(whereClause, scanOp.GetTupleDesc())
+	if err != nil {
+		return nil, fmt.Errorf("failed to build WHERE predicate: %v", err)
+	}
+
+	filterOp, err := query.NewFilter(predicate, scanOp)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create filter: %v", err)
+	}
+
+	return filterOp, nil
 }
