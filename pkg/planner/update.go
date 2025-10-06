@@ -72,26 +72,39 @@ func (p *UpdatePlan) buildUpdateMap(tupleDesc *tuple.TupleDescription) (map[int]
 // updateTuples applies updates to all collected tuples
 // UPDATE is implemented as DELETE + INSERT at the storage layer
 func (p *UpdatePlan) updateTuples(tuples []*tuple.Tuple, tupleDesc *tuple.TupleDescription, updateMap map[int]types.Field) error {
-	fieldCnt := tupleDesc.NumFields()
-
 	for _, old := range tuples {
-		newTup := tuple.NewTuple(tupleDesc)
-
-		for i := range fieldCnt {
-			field, _ := old.GetField(i)
-			newTup.SetField(i, field)
+		newTup, err := buildUpdatedTuple(old, tupleDesc, updateMap)
+		if err != nil {
+			return err
 		}
-
-		for i, newValue := range updateMap {
-			if err := newTup.SetField(i, newValue); err != nil {
-				return fmt.Errorf("failed to set updated field: %v", err)
-			}
-		}
-
 		if err := p.ctx.PageStore().UpdateTuple(p.tid, old, newTup); err != nil {
 			return fmt.Errorf("failed to update tuple: %v", err)
 		}
 	}
 
 	return nil
+}
+
+func buildUpdatedTuple(old *tuple.Tuple, tupleDesc *tuple.TupleDescription, updateMap map[int]types.Field) (*tuple.Tuple, error) {
+	fieldCnt := tupleDesc.NumFields()
+	newTup := tuple.NewTuple(tupleDesc)
+
+	for i := range fieldCnt {
+		field, err := old.GetField(i)
+		if err != nil {
+			return nil, fmt.Errorf("failed to get field %d from old tuple: %w", i, err)
+		}
+
+		if err := newTup.SetField(i, field); err != nil {
+			return nil, fmt.Errorf("failed to copy field %d: %w", i, err)
+		}
+	}
+
+	for i, newValue := range updateMap {
+		if err := newTup.SetField(i, newValue); err != nil {
+			return nil, fmt.Errorf("failed to set updated field %d: %w", i, err)
+		}
+	}
+
+	return newTup, nil
 }
