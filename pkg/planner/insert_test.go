@@ -303,7 +303,7 @@ func TestInsertPlan_Execute_Error_InvalidFieldName(t *testing.T) {
 		t.Fatal("Expected error when field name is invalid")
 	}
 
-	expectedError := "column invalid_field not found in table test_table"
+	expectedError := "column invalid_field not found"
 	if err.Error() != expectedError {
 		t.Errorf("Expected error %q, got %q", expectedError, err.Error())
 	}
@@ -434,9 +434,8 @@ func TestInsertPlan_getTableID(t *testing.T) {
 	createTestTable(t, ctx, tid)
 
 	stmt := statements.NewInsertStatement("test_table")
-	plan := NewInsertPlan(stmt, tid, ctx)
 
-	tableID, err := plan.getTableID()
+	tableID, err := resolveTableID(stmt.TableName, ctx)
 
 	if err != nil {
 		t.Fatalf("getTableID failed: %v", err)
@@ -462,9 +461,9 @@ func TestInsertPlan_getTupleDesc(t *testing.T) {
 	createTestTable(t, ctx, tid)
 
 	stmt := statements.NewInsertStatement("test_table")
-	plan := NewInsertPlan(stmt, tid, ctx)
 
-	tupleDesc, err := plan.getTupleDesc()
+	md, err := resolveTableMetadata(stmt.TableName, ctx)
+	tupleDesc := md.TupleDesc
 
 	if err != nil {
 		t.Fatalf("getTupleDesc failed: %v", err)
@@ -496,7 +495,8 @@ func TestInsertPlan_createFieldMapping(t *testing.T) {
 	stmt.AddFieldNames([]string{"name", "id"})
 	plan := NewInsertPlan(stmt, tid, ctx)
 
-	tupleDesc, err := plan.getTupleDesc()
+	md, err := resolveTableMetadata(stmt.TableName, ctx)
+	tupleDesc := md.TupleDesc
 	if err != nil {
 		t.Fatalf("getTupleDesc failed: %v", err)
 	}
@@ -536,7 +536,8 @@ func TestInsertPlan_createFieldMapping_EmptyFields(t *testing.T) {
 	stmt := statements.NewInsertStatement("test_table")
 	plan := NewInsertPlan(stmt, tid, ctx)
 
-	tupleDesc, err := plan.getTupleDesc()
+	md, err := resolveTableMetadata(stmt.TableName, ctx)
+	tupleDesc := md.TupleDesc
 	if err != nil {
 		t.Fatalf("getTupleDesc failed: %v", err)
 	}
@@ -566,9 +567,9 @@ func TestInsertPlan_validateValueCount(t *testing.T) {
 	createTestTable(t, ctx, tid)
 
 	stmt := statements.NewInsertStatement("test_table")
-	plan := NewInsertPlan(stmt, tid, ctx)
 
-	tupleDesc, err := plan.getTupleDesc()
+	md, err := resolveTableMetadata(stmt.TableName, ctx)
+	tupleDesc := md.TupleDesc
 	if err != nil {
 		t.Fatalf("getTupleDesc failed: %v", err)
 	}
@@ -580,7 +581,7 @@ func TestInsertPlan_validateValueCount(t *testing.T) {
 		&types.Float64Field{Value: 99.99},
 	}
 
-	err = plan.validateValueCount(values, tupleDesc, nil)
+	err = validateValueCount(values, tupleDesc, nil)
 	if err != nil {
 		t.Errorf("validateValueCount failed: %v", err)
 	}
@@ -591,7 +592,7 @@ func TestInsertPlan_validateValueCount(t *testing.T) {
 		types.NewStringField("John", types.StringMaxSize),
 	}
 
-	err = plan.validateValueCount(values2, tupleDesc, fieldMapping)
+	err = validateValueCount(values2, tupleDesc, fieldMapping)
 	if err != nil {
 		t.Errorf("validateValueCount with field mapping failed: %v", err)
 	}
