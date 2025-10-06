@@ -5,8 +5,8 @@ import (
 	"storemy/pkg/concurrency/transaction"
 	"storemy/pkg/execution/query"
 	"storemy/pkg/iterator"
-	"storemy/pkg/memory"
 	"storemy/pkg/parser/statements"
+	"storemy/pkg/registry"
 	"storemy/pkg/tuple"
 	"storemy/pkg/types"
 )
@@ -17,18 +17,16 @@ type QueryResult struct {
 }
 
 type SelectPlan struct {
-	tableManager *memory.TableManager
-	pageStore    *memory.PageStore
-	tid          *transaction.TransactionID
-	statement    *statements.SelectStatement
+	ctx       *registry.DatabaseContext
+	tid       *transaction.TransactionID
+	statement *statements.SelectStatement
 }
 
-func NewSelectPlan(stmt *statements.SelectStatement, tm *memory.TableManager, ps *memory.PageStore, tid *transaction.TransactionID) *SelectPlan {
+func NewSelectPlan(stmt *statements.SelectStatement, tid *transaction.TransactionID, ctx *registry.DatabaseContext) *SelectPlan {
 	return &SelectPlan{
-		tableManager: tm,
-		pageStore:    ps,
-		tid:          tid,
-		statement:    stmt,
+		ctx:       ctx,
+		tid:       tid,
+		statement: stmt,
 	}
 }
 
@@ -39,12 +37,12 @@ func (p *SelectPlan) Execute() (any, error) {
 	}
 
 	firstTable := tables[0]
-	tableID, err := p.tableManager.GetTableID(firstTable.TableName)
+	tableID, err := p.ctx.TableManager().GetTableID(firstTable.TableName)
 	if err != nil {
 		return nil, fmt.Errorf("table %s not found", firstTable.TableName)
 	}
 
-	scanOp, err := query.NewSeqScan(p.tid, tableID, p.tableManager)
+	scanOp, err := query.NewSeqScan(p.tid, tableID, p.ctx.TableManager())
 	if err != nil {
 		return nil, fmt.Errorf("failed to create table scan: %v", err)
 	}
