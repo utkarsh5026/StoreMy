@@ -3,9 +3,9 @@ package planner
 import (
 	"os"
 	"storemy/pkg/concurrency/transaction"
-	"storemy/pkg/memory"
 	"storemy/pkg/parser/plan"
 	"storemy/pkg/parser/statements"
+	"storemy/pkg/registry"
 	"storemy/pkg/types"
 	"testing"
 )
@@ -28,7 +28,7 @@ func executeSelectPlan(t *testing.T, plan *SelectPlan) (*QueryResult, error) {
 	return result, nil
 }
 
-func createSelectTestTable(t *testing.T, tableManager *memory.TableManager, tid *transaction.TransactionID) {
+func createSelectTestTable(t *testing.T, ctx *registry.DatabaseContext, tid *transaction.TransactionID) {
 	stmt := statements.NewCreateStatement("users", false)
 	stmt.AddField("id", types.IntType, false, nil)
 	stmt.AddField("name", types.StringType, false, nil)
@@ -37,17 +37,17 @@ func createSelectTestTable(t *testing.T, tableManager *memory.TableManager, tid 
 	stmt.AddField("active", types.BoolType, false, nil)
 	stmt.AddField("salary", types.FloatType, false, nil)
 
-	createPlan := NewCreateTablePlan(stmt, tableManager, tid, "")
+	createPlan := NewCreateTablePlan(stmt, ctx, tid)
 	_, err := createPlan.Execute()
 	if err != nil {
 		t.Fatalf("Failed to create test table: %v", err)
 	}
 
 	// Register cleanup to close table file
-	cleanupTable(t, tableManager, "users")
+	cleanupTable(t, ctx.TableManager(), "users")
 }
 
-func insertSelectTestData(t *testing.T, tableManager *memory.TableManager, pageStore *memory.PageStore, tid *transaction.TransactionID) {
+func insertSelectTestData(t *testing.T, ctx *registry.DatabaseContext, tid *transaction.TransactionID) {
 	insertStmt := statements.NewInsertStatement("users")
 
 	values1 := []types.Field{
@@ -80,7 +80,7 @@ func insertSelectTestData(t *testing.T, tableManager *memory.TableManager, pageS
 	}
 	insertStmt.AddValues(values3)
 
-	insertPlan := NewInsertPlan(insertStmt, pageStore, tid, tableManager)
+	insertPlan := NewInsertPlan(insertStmt, tid, ctx)
 	_, err := insertPlan.Execute()
 	if err != nil {
 		t.Fatalf("Failed to insert test data: %v", err)
@@ -90,11 +90,10 @@ func insertSelectTestData(t *testing.T, tableManager *memory.TableManager, pageS
 func TestNewSelectPlan(t *testing.T) {
 	selectPlan := plan.NewSelectPlan()
 	stmt := statements.NewSelectStatement(selectPlan)
-	tableManager := memory.NewTableManager()
-	pageStore := &memory.PageStore{}
+	ctx := createTestContext("")
 	tid := transaction.NewTransactionID()
 
-	plan := NewSelectPlan(stmt, tableManager, pageStore, tid)
+	plan := NewSelectPlan(stmt, tid, ctx)
 
 	if plan == nil {
 		t.Fatal("NewSelectPlan returned nil")
@@ -102,14 +101,6 @@ func TestNewSelectPlan(t *testing.T) {
 
 	if plan.statement != stmt {
 		t.Error("Statement not properly assigned")
-	}
-
-	if plan.tableManager != tableManager {
-		t.Error("TableManager not properly assigned")
-	}
-
-	if plan.pageStore != pageStore {
-		t.Error("PageStore not properly assigned")
 	}
 
 	if plan.tid != tid {
@@ -125,18 +116,17 @@ func TestSelectPlan_Execute_SelectAll(t *testing.T) {
 
 	os.Mkdir("data", 0755)
 
-	tableManager := memory.NewTableManager()
-	pageStore := memory.NewPageStore(tableManager, createWal(t))
+	ctx := createTestContext("")
 	tid := transaction.NewTransactionID()
 
-	createSelectTestTable(t, tableManager, tid)
-	insertSelectTestData(t, tableManager, pageStore, tid)
+	createSelectTestTable(t, ctx, tid)
+	insertSelectTestData(t, ctx, tid)
 
 	selectPlan := plan.NewSelectPlan()
 	selectPlan.AddScan("users", "users")
 	stmt := statements.NewSelectStatement(selectPlan)
 
-	planInstance := NewSelectPlan(stmt, tableManager, pageStore, tid)
+	planInstance := NewSelectPlan(stmt, tid, ctx)
 
 	result, err := executeSelectPlan(t, planInstance)
 
@@ -169,12 +159,11 @@ func TestSelectPlan_Execute_WithProjection(t *testing.T) {
 
 	os.Mkdir("data", 0755)
 
-	tableManager := memory.NewTableManager()
-	pageStore := memory.NewPageStore(tableManager, createWal(t))
+	ctx := createTestContext("")
 	tid := transaction.NewTransactionID()
 
-	createSelectTestTable(t, tableManager, tid)
-	insertSelectTestData(t, tableManager, pageStore, tid)
+	createSelectTestTable(t, ctx, tid)
+	insertSelectTestData(t, ctx, tid)
 
 	selectPlan := plan.NewSelectPlan()
 	selectPlan.AddScan("users", "users")
@@ -183,7 +172,7 @@ func TestSelectPlan_Execute_WithProjection(t *testing.T) {
 	selectPlan.AddProjectField("name", "")
 	selectPlan.AddProjectField("email", "")
 
-	planInstance := NewSelectPlan(stmt, tableManager, pageStore, tid)
+	planInstance := NewSelectPlan(stmt, tid, ctx)
 
 	result, err := executeSelectPlan(t, planInstance)
 
@@ -222,12 +211,11 @@ func TestSelectPlan_Execute_WithFilter(t *testing.T) {
 
 	os.Mkdir("data", 0755)
 
-	tableManager := memory.NewTableManager()
-	pageStore := memory.NewPageStore(tableManager, createWal(t))
+	ctx := createTestContext("")
 	tid := transaction.NewTransactionID()
 
-	createSelectTestTable(t, tableManager, tid)
-	insertSelectTestData(t, tableManager, pageStore, tid)
+	createSelectTestTable(t, ctx, tid)
+	insertSelectTestData(t, ctx, tid)
 
 	selectPlan := plan.NewSelectPlan()
 	selectPlan.AddScan("users", "users")
@@ -235,7 +223,7 @@ func TestSelectPlan_Execute_WithFilter(t *testing.T) {
 
 	selectPlan.AddFilter("users.active", types.Equals, "true")
 
-	planInstance := NewSelectPlan(stmt, tableManager, pageStore, tid)
+	planInstance := NewSelectPlan(stmt, tid, ctx)
 
 	result, err := executeSelectPlan(t, planInstance)
 
@@ -260,12 +248,11 @@ func TestSelectPlan_Execute_WithFilterAndProjection(t *testing.T) {
 
 	os.Mkdir("data", 0755)
 
-	tableManager := memory.NewTableManager()
-	pageStore := memory.NewPageStore(tableManager, createWal(t))
+	ctx := createTestContext("")
 	tid := transaction.NewTransactionID()
 
-	createSelectTestTable(t, tableManager, tid)
-	insertSelectTestData(t, tableManager, pageStore, tid)
+	createSelectTestTable(t, ctx, tid)
+	insertSelectTestData(t, ctx, tid)
 
 	selectPlan := plan.NewSelectPlan()
 	selectPlan.AddScan("users", "users")
@@ -274,7 +261,7 @@ func TestSelectPlan_Execute_WithFilterAndProjection(t *testing.T) {
 	selectPlan.AddFilter("users.age", types.GreaterThan, "30")
 	selectPlan.AddProjectField("name", "")
 
-	planInstance := NewSelectPlan(stmt, tableManager, pageStore, tid)
+	planInstance := NewSelectPlan(stmt, tid, ctx)
 
 	result, err := executeSelectPlan(t, planInstance)
 
@@ -308,14 +295,13 @@ func TestSelectPlan_Execute_Error_NoTables(t *testing.T) {
 
 	os.Mkdir("data", 0755)
 
-	tableManager := memory.NewTableManager()
-	pageStore := memory.NewPageStore(tableManager, createWal(t))
+	ctx := createTestContext("")
 	tid := transaction.NewTransactionID()
 
 	selectPlan := plan.NewSelectPlan()
 	stmt := statements.NewSelectStatement(selectPlan)
 
-	planInstance := NewSelectPlan(stmt, tableManager, pageStore, tid)
+	planInstance := NewSelectPlan(stmt, tid, ctx)
 
 	result, err := executeSelectPlan(t, planInstance)
 
@@ -341,15 +327,14 @@ func TestSelectPlan_Execute_Error_TableNotFound(t *testing.T) {
 
 	os.Mkdir("data", 0755)
 
-	tableManager := memory.NewTableManager()
-	pageStore := memory.NewPageStore(tableManager, createWal(t))
+	ctx := createTestContext("")
 	tid := transaction.NewTransactionID()
 
 	selectPlan := plan.NewSelectPlan()
 	selectPlan.AddScan("nonexistent_table", "nonexistent_table")
 	stmt := statements.NewSelectStatement(selectPlan)
 
-	planInstance := NewSelectPlan(stmt, tableManager, pageStore, tid)
+	planInstance := NewSelectPlan(stmt, tid, ctx)
 
 	result, err := executeSelectPlan(t, planInstance)
 
@@ -375,11 +360,10 @@ func TestSelectPlan_Execute_Error_InvalidFilterField(t *testing.T) {
 
 	os.Mkdir("data", 0755)
 
-	tableManager := memory.NewTableManager()
-	pageStore := memory.NewPageStore(tableManager, createWal(t))
+	ctx := createTestContext("")
 	tid := transaction.NewTransactionID()
 
-	createSelectTestTable(t, tableManager, tid)
+	createSelectTestTable(t, ctx, tid)
 
 	selectPlan := plan.NewSelectPlan()
 	selectPlan.AddScan("users", "users")
@@ -387,7 +371,7 @@ func TestSelectPlan_Execute_Error_InvalidFilterField(t *testing.T) {
 
 	selectPlan.AddFilter("users.invalid_field", types.Equals, "value")
 
-	planInstance := NewSelectPlan(stmt, tableManager, pageStore, tid)
+	planInstance := NewSelectPlan(stmt, tid, ctx)
 
 	result, err := executeSelectPlan(t, planInstance)
 
@@ -413,11 +397,10 @@ func TestSelectPlan_Execute_Error_InvalidSelectField(t *testing.T) {
 
 	os.Mkdir("data", 0755)
 
-	tableManager := memory.NewTableManager()
-	pageStore := memory.NewPageStore(tableManager, createWal(t))
+	ctx := createTestContext("")
 	tid := transaction.NewTransactionID()
 
-	createSelectTestTable(t, tableManager, tid)
+	createSelectTestTable(t, ctx, tid)
 
 	selectPlan := plan.NewSelectPlan()
 	selectPlan.AddScan("users", "users")
@@ -425,7 +408,7 @@ func TestSelectPlan_Execute_Error_InvalidSelectField(t *testing.T) {
 
 	selectPlan.AddProjectField("invalid_field", "")
 
-	planInstance := NewSelectPlan(stmt, tableManager, pageStore, tid)
+	planInstance := NewSelectPlan(stmt, tid, ctx)
 
 	result, err := executeSelectPlan(t, planInstance)
 
@@ -451,11 +434,10 @@ func TestSelectPlan_Execute_EmptyTableWithFilters(t *testing.T) {
 
 	os.Mkdir("data", 0755)
 
-	tableManager := memory.NewTableManager()
-	pageStore := memory.NewPageStore(tableManager, createWal(t))
+	ctx := createTestContext("")
 	tid := transaction.NewTransactionID()
 
-	createSelectTestTable(t, tableManager, tid)
+	createSelectTestTable(t, ctx, tid)
 
 	selectPlan := plan.NewSelectPlan()
 	selectPlan.AddScan("users", "users")
@@ -463,7 +445,7 @@ func TestSelectPlan_Execute_EmptyTableWithFilters(t *testing.T) {
 
 	selectPlan.AddFilter("users.active", types.Equals, "true")
 
-	planInstance := NewSelectPlan(stmt, tableManager, pageStore, tid)
+	planInstance := NewSelectPlan(stmt, tid, ctx)
 
 	result, err := executeSelectPlan(t, planInstance)
 
@@ -488,12 +470,11 @@ func TestSelectPlan_Execute_MultipleFilters(t *testing.T) {
 
 	os.Mkdir("data", 0755)
 
-	tableManager := memory.NewTableManager()
-	pageStore := memory.NewPageStore(tableManager, createWal(t))
+	ctx := createTestContext("")
 	tid := transaction.NewTransactionID()
 
-	createSelectTestTable(t, tableManager, tid)
-	insertSelectTestData(t, tableManager, pageStore, tid)
+	createSelectTestTable(t, ctx, tid)
+	insertSelectTestData(t, ctx, tid)
 
 	selectPlan := plan.NewSelectPlan()
 	selectPlan.AddScan("users", "users")
@@ -501,7 +482,7 @@ func TestSelectPlan_Execute_MultipleFilters(t *testing.T) {
 
 	selectPlan.AddFilter("users.active", types.Equals, "true")
 
-	planInstance := NewSelectPlan(stmt, tableManager, pageStore, tid)
+	planInstance := NewSelectPlan(stmt, tid, ctx)
 
 	result, err := executeSelectPlan(t, planInstance)
 
@@ -526,12 +507,11 @@ func TestSelectPlan_Execute_StringFilter(t *testing.T) {
 
 	os.Mkdir("data", 0755)
 
-	tableManager := memory.NewTableManager()
-	pageStore := memory.NewPageStore(tableManager, createWal(t))
+	ctx := createTestContext("")
 	tid := transaction.NewTransactionID()
 
-	createSelectTestTable(t, tableManager, tid)
-	insertSelectTestData(t, tableManager, pageStore, tid)
+	createSelectTestTable(t, ctx, tid)
+	insertSelectTestData(t, ctx, tid)
 
 	selectPlan := plan.NewSelectPlan()
 	selectPlan.AddScan("users", "users")
@@ -539,7 +519,7 @@ func TestSelectPlan_Execute_StringFilter(t *testing.T) {
 
 	selectPlan.AddFilter("users.name", types.Equals, "John Doe")
 
-	planInstance := NewSelectPlan(stmt, tableManager, pageStore, tid)
+	planInstance := NewSelectPlan(stmt, tid, ctx)
 
 	result, err := executeSelectPlan(t, planInstance)
 
@@ -564,12 +544,11 @@ func TestSelectPlan_Execute_IntegerFilter(t *testing.T) {
 
 	os.Mkdir("data", 0755)
 
-	tableManager := memory.NewTableManager()
-	pageStore := memory.NewPageStore(tableManager, createWal(t))
+	ctx := createTestContext("")
 	tid := transaction.NewTransactionID()
 
-	createSelectTestTable(t, tableManager, tid)
-	insertSelectTestData(t, tableManager, pageStore, tid)
+	createSelectTestTable(t, ctx, tid)
+	insertSelectTestData(t, ctx, tid)
 
 	selectPlan := plan.NewSelectPlan()
 	selectPlan.AddScan("users", "users")
@@ -577,7 +556,7 @@ func TestSelectPlan_Execute_IntegerFilter(t *testing.T) {
 
 	selectPlan.AddFilter("users.age", types.LessThan, "30")
 
-	planInstance := NewSelectPlan(stmt, tableManager, pageStore, tid)
+	planInstance := NewSelectPlan(stmt, tid, ctx)
 
 	result, err := executeSelectPlan(t, planInstance)
 
@@ -602,12 +581,11 @@ func TestSelectPlan_Execute_FloatFilter(t *testing.T) {
 
 	os.Mkdir("data", 0755)
 
-	tableManager := memory.NewTableManager()
-	pageStore := memory.NewPageStore(tableManager, createWal(t))
+	ctx := createTestContext("")
 	tid := transaction.NewTransactionID()
 
-	createSelectTestTable(t, tableManager, tid)
-	insertSelectTestData(t, tableManager, pageStore, tid)
+	createSelectTestTable(t, ctx, tid)
+	insertSelectTestData(t, ctx, tid)
 
 	selectPlan := plan.NewSelectPlan()
 	selectPlan.AddScan("users", "users")
@@ -615,7 +593,7 @@ func TestSelectPlan_Execute_FloatFilter(t *testing.T) {
 
 	selectPlan.AddFilter("users.salary", types.GreaterThanOrEqual, "60000.0")
 
-	planInstance := NewSelectPlan(stmt, tableManager, pageStore, tid)
+	planInstance := NewSelectPlan(stmt, tid, ctx)
 
 	result, err := executeSelectPlan(t, planInstance)
 
@@ -640,18 +618,17 @@ func TestQueryResult_Values(t *testing.T) {
 
 	os.Mkdir("data", 0755)
 
-	tableManager := memory.NewTableManager()
-	pageStore := memory.NewPageStore(tableManager, createWal(t))
+	ctx := createTestContext("")
 	tid := transaction.NewTransactionID()
 
-	createSelectTestTable(t, tableManager, tid)
-	insertSelectTestData(t, tableManager, pageStore, tid)
+	createSelectTestTable(t, ctx, tid)
+	insertSelectTestData(t, ctx, tid)
 
 	selectPlan := plan.NewSelectPlan()
 	selectPlan.AddScan("users", "users")
 	stmt := statements.NewSelectStatement(selectPlan)
 
-	planInstance := NewSelectPlan(stmt, tableManager, pageStore, tid)
+	planInstance := NewSelectPlan(stmt, tid, ctx)
 
 	result, err := executeSelectPlan(t, planInstance)
 
