@@ -436,12 +436,13 @@ func TestDeletePlan_getTableID(t *testing.T) {
 	stmt := statements.NewDeleteStatement("test_table", "")
 	plan := NewDeletePlan(stmt, tid, ctx)
 
-	tableID, err := plan.getTableID()
+	md, err := resolveTableMetadata(plan.statement.TableName, plan.ctx)
 
 	if err != nil {
 		t.Fatalf("getTableID failed: %v", err)
 	}
 
+	tableID := md.TableID
 	expectedTableID, _ := ctx.TableManager().GetTableID("test_table")
 	if tableID != expectedTableID {
 		t.Errorf("Expected table ID %d, got %d", expectedTableID, tableID)
@@ -462,7 +463,7 @@ func TestDeletePlan_getTableID_Error(t *testing.T) {
 	stmt := statements.NewDeleteStatement("nonexistent_table", "")
 	plan := NewDeletePlan(stmt, tid, ctx)
 
-	tableID, err := plan.getTableID()
+	tableID, err := resolveTableID(plan.statement.TableName, plan.ctx)
 
 	if err == nil {
 		t.Fatal("Expected error when table does not exist")
@@ -494,12 +495,12 @@ func TestDeletePlan_createTableScan(t *testing.T) {
 	stmt := statements.NewDeleteStatement("test_table", "")
 	plan := NewDeletePlan(stmt, tid, ctx)
 
-	tableID, err := plan.getTableID()
+	tableID, err := resolveTableID(plan.statement.TableName, plan.ctx)
 	if err != nil {
 		t.Fatalf("getTableID failed: %v", err)
 	}
 
-	scanOp, err := plan.createTableScan(tableID)
+	scanOp, err := buildScanWithFilter(tid, tableID, nil, ctx)
 
 	if err != nil {
 		t.Fatalf("createTableScan failed: %v", err)
@@ -540,17 +541,12 @@ func TestDeletePlan_addWhereFilter(t *testing.T) {
 	stmt.SetWhereClause(whereClause)
 	plan := NewDeletePlan(stmt, tid, ctx)
 
-	tableID, err := plan.getTableID()
+	tableID, err := resolveTableID(plan.statement.TableName, plan.ctx)
 	if err != nil {
 		t.Fatalf("getTableID failed: %v", err)
 	}
 
-	scanOp, err := plan.createTableScan(tableID)
-	if err != nil {
-		t.Fatalf("createTableScan failed: %v", err)
-	}
-
-	filterOp, err := plan.addWhereFilter(scanOp)
+	filterOp, err := buildScanWithFilter(tid, tableID, whereClause, ctx)
 
 	if err != nil {
 		t.Fatalf("addWhereFilter failed: %v", err)
@@ -584,12 +580,12 @@ func TestDeletePlan_collectTuplesToDelete(t *testing.T) {
 	stmt := statements.NewDeleteStatement("test_table", "")
 	plan := NewDeletePlan(stmt, tid, ctx)
 
-	tableID, err := plan.getTableID()
+	tableID, err := resolveTableID(plan.statement.TableName, plan.ctx)
 	if err != nil {
 		t.Fatalf("getTableID failed: %v", err)
 	}
 
-	query, err := plan.createQuery(tableID)
+	query, err := buildScanWithFilter(tid, tableID, nil, ctx)
 	if err != nil {
 		t.Fatalf("createQuery failed: %v", err)
 	}
@@ -628,12 +624,12 @@ func TestDeletePlan_createQuery_NoWhere(t *testing.T) {
 	stmt := statements.NewDeleteStatement("test_table", "")
 	plan := NewDeletePlan(stmt, tid, ctx)
 
-	tableID, err := plan.getTableID()
+	tableID, err := resolveTableID(plan.statement.TableName, plan.ctx)
 	if err != nil {
 		t.Fatalf("getTableID failed: %v", err)
 	}
 
-	query, err := plan.createQuery(tableID)
+	query, err := buildScanWithFilter(tid, tableID, nil, ctx)
 
 	if err != nil {
 		t.Fatalf("createQuery failed: %v", err)
@@ -674,12 +670,12 @@ func TestDeletePlan_createQuery_WithWhere(t *testing.T) {
 	stmt.SetWhereClause(whereClause)
 	plan := NewDeletePlan(stmt, tid, ctx)
 
-	tableID, err := plan.getTableID()
+	tableID, err := resolveTableID(plan.statement.TableName, plan.ctx)
 	if err != nil {
 		t.Fatalf("getTableID failed: %v", err)
 	}
 
-	query, err := plan.createQuery(tableID)
+	query, err := buildScanWithFilter(tid, tableID, whereClause, ctx)
 
 	if err != nil {
 		t.Fatalf("createQuery failed: %v", err)
