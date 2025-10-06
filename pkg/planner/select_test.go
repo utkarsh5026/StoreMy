@@ -135,18 +135,8 @@ func TestNewSelectPlan(t *testing.T) {
 }
 
 func TestSelectPlan_Execute_SelectAll(t *testing.T) {
-	dataDir := t.TempDir()
-	oldDir, _ := os.Getwd()
-	os.Chdir(dataDir)
-	defer os.Chdir(oldDir)
-
-	os.Mkdir("data", 0755)
-
-	ctx := createTestContextWithCleanup(t, "")
-	tid := transaction.NewTransactionID()
-
-	createSelectTestTable(t, ctx, tid)
-	insertSelectTestData(t, ctx, tid)
+	ctx, tid, cleanup := setupSelectTestWithData(t)
+	defer cleanup() // Always clean up resources
 
 	selectPlan := plan.NewSelectPlan()
 	selectPlan.AddScan("users", "users")
@@ -178,18 +168,8 @@ func TestSelectPlan_Execute_SelectAll(t *testing.T) {
 }
 
 func TestSelectPlan_Execute_WithProjection(t *testing.T) {
-	dataDir := t.TempDir()
-	oldDir, _ := os.Getwd()
-	os.Chdir(dataDir)
-	defer os.Chdir(oldDir)
-
-	os.Mkdir("data", 0755)
-
-	ctx := createTestContextWithCleanup(t, "")
-	tid := transaction.NewTransactionID()
-
-	createSelectTestTable(t, ctx, tid)
-	insertSelectTestData(t, ctx, tid)
+	ctx, tid, cleanup := setupSelectTestWithData(t)
+	defer cleanup() // Always clean up resources
 
 	selectPlan := plan.NewSelectPlan()
 	selectPlan.AddScan("users", "users")
@@ -230,18 +210,8 @@ func TestSelectPlan_Execute_WithProjection(t *testing.T) {
 }
 
 func TestSelectPlan_Execute_WithFilter(t *testing.T) {
-	dataDir := t.TempDir()
-	oldDir, _ := os.Getwd()
-	os.Chdir(dataDir)
-	defer os.Chdir(oldDir)
-
-	os.Mkdir("data", 0755)
-
-	ctx := createTestContextWithCleanup(t, "")
-	tid := transaction.NewTransactionID()
-
-	createSelectTestTable(t, ctx, tid)
-	insertSelectTestData(t, ctx, tid)
+	ctx, tid, cleanup := setupSelectTestWithData(t)
+	defer cleanup() // Always clean up resources
 
 	selectPlan := plan.NewSelectPlan()
 	selectPlan.AddScan("users", "users")
@@ -267,18 +237,8 @@ func TestSelectPlan_Execute_WithFilter(t *testing.T) {
 }
 
 func TestSelectPlan_Execute_WithFilterAndProjection(t *testing.T) {
-	dataDir := t.TempDir()
-	oldDir, _ := os.Getwd()
-	os.Chdir(dataDir)
-	defer os.Chdir(oldDir)
-
-	os.Mkdir("data", 0755)
-
-	ctx := createTestContextWithCleanup(t, "")
-	tid := transaction.NewTransactionID()
-
-	createSelectTestTable(t, ctx, tid)
-	insertSelectTestData(t, ctx, tid)
+	ctx, tid, cleanup := setupSelectTestWithData(t)
+	defer cleanup() // Always clean up resources
 
 	selectPlan := plan.NewSelectPlan()
 	selectPlan.AddScan("users", "users")
@@ -346,15 +306,8 @@ func TestSelectPlan_Execute_Error_NoTables(t *testing.T) {
 }
 
 func TestSelectPlan_Execute_Error_TableNotFound(t *testing.T) {
-	dataDir := t.TempDir()
-	oldDir, _ := os.Getwd()
-	os.Chdir(dataDir)
-	defer os.Chdir(oldDir)
-
-	os.Mkdir("data", 0755)
-
-	ctx := createTestContextWithCleanup(t, "")
-	tid := transaction.NewTransactionID()
+	ctx, tid, cleanup := setupSelectTest(t)
+	defer cleanup() // Always clean up resources
 
 	selectPlan := plan.NewSelectPlan()
 	selectPlan.AddScan("nonexistent_table", "nonexistent_table")
@@ -379,15 +332,8 @@ func TestSelectPlan_Execute_Error_TableNotFound(t *testing.T) {
 }
 
 func TestSelectPlan_Execute_Error_InvalidFilterField(t *testing.T) {
-	dataDir := t.TempDir()
-	oldDir, _ := os.Getwd()
-	os.Chdir(dataDir)
-	defer os.Chdir(oldDir)
-
-	os.Mkdir("data", 0755)
-
-	ctx := createTestContextWithCleanup(t, "")
-	tid := transaction.NewTransactionID()
+	ctx, tid, cleanup := setupSelectTest(t)
+	defer cleanup() // Always clean up resources
 
 	createSelectTestTable(t, ctx, tid)
 
@@ -416,16 +362,8 @@ func TestSelectPlan_Execute_Error_InvalidFilterField(t *testing.T) {
 }
 
 func TestSelectPlan_Execute_Error_InvalidSelectField(t *testing.T) {
-	dataDir := t.TempDir()
-	oldDir, _ := os.Getwd()
-	os.Chdir(dataDir)
-	defer os.Chdir(oldDir)
-
-	os.Mkdir("data", 0755)
-
-	ctx := createTestContextWithCleanup(t, "")
-	tid := transaction.NewTransactionID()
-
+	ctx, tid, cleanup := setupSelectTest(t)
+	defer cleanup() // Always clean up resources
 	createSelectTestTable(t, ctx, tid)
 
 	selectPlan := plan.NewSelectPlan()
@@ -453,16 +391,8 @@ func TestSelectPlan_Execute_Error_InvalidSelectField(t *testing.T) {
 }
 
 func TestSelectPlan_Execute_EmptyTableWithFilters(t *testing.T) {
-	dataDir := t.TempDir()
-	oldDir, _ := os.Getwd()
-	os.Chdir(dataDir)
-	defer os.Chdir(oldDir)
-
-	os.Mkdir("data", 0755)
-
-	ctx := createTestContextWithCleanup(t, "")
-	tid := transaction.NewTransactionID()
-
+	ctx, tid, cleanup := setupSelectTest(t)
+	defer cleanup() // Always clean up resources
 	createSelectTestTable(t, ctx, tid)
 
 	selectPlan := plan.NewSelectPlan()
@@ -489,15 +419,8 @@ func TestSelectPlan_Execute_EmptyTableWithFilters(t *testing.T) {
 }
 
 func TestSelectPlan_Execute_MultipleFilters(t *testing.T) {
-	dataDir := t.TempDir()
-	oldDir, _ := os.Getwd()
-	os.Chdir(dataDir)
-	defer os.Chdir(oldDir)
-
-	os.Mkdir("data", 0755)
-
-	ctx := createTestContextWithCleanup(t, "")
-	tid := transaction.NewTransactionID()
+	ctx, tid, cleanup := setupSelectTest(t)
+	defer cleanup() // Always clean up resources
 
 	createSelectTestTable(t, ctx, tid)
 	insertSelectTestData(t, ctx, tid)
@@ -526,15 +449,8 @@ func TestSelectPlan_Execute_MultipleFilters(t *testing.T) {
 }
 
 func TestSelectPlan_Execute_StringFilter(t *testing.T) {
-	dataDir := t.TempDir()
-	oldDir, _ := os.Getwd()
-	os.Chdir(dataDir)
-	defer os.Chdir(oldDir)
-
-	os.Mkdir("data", 0755)
-
-	ctx := createTestContextWithCleanup(t, "")
-	tid := transaction.NewTransactionID()
+	ctx, tid, cleanup := setupSelectTest(t)
+	defer cleanup() // Always clean up resources
 
 	createSelectTestTable(t, ctx, tid)
 	insertSelectTestData(t, ctx, tid)
@@ -563,18 +479,8 @@ func TestSelectPlan_Execute_StringFilter(t *testing.T) {
 }
 
 func TestSelectPlan_Execute_IntegerFilter(t *testing.T) {
-	dataDir := t.TempDir()
-	oldDir, _ := os.Getwd()
-	os.Chdir(dataDir)
-	defer os.Chdir(oldDir)
-
-	os.Mkdir("data", 0755)
-
-	ctx := createTestContextWithCleanup(t, "")
-	tid := transaction.NewTransactionID()
-
-	createSelectTestTable(t, ctx, tid)
-	insertSelectTestData(t, ctx, tid)
+	ctx, tid, cleanup := setupSelectTestWithData(t)
+	defer cleanup() // Always clean up resources
 
 	selectPlan := plan.NewSelectPlan()
 	selectPlan.AddScan("users", "users")
@@ -600,18 +506,8 @@ func TestSelectPlan_Execute_IntegerFilter(t *testing.T) {
 }
 
 func TestSelectPlan_Execute_FloatFilter(t *testing.T) {
-	dataDir := t.TempDir()
-	oldDir, _ := os.Getwd()
-	os.Chdir(dataDir)
-	defer os.Chdir(oldDir)
-
-	os.Mkdir("data", 0755)
-
-	ctx := createTestContextWithCleanup(t, "")
-	tid := transaction.NewTransactionID()
-
-	createSelectTestTable(t, ctx, tid)
-	insertSelectTestData(t, ctx, tid)
+	ctx, tid, cleanup := setupSelectTestWithData(t)
+	defer cleanup() // Always clean up resources
 
 	selectPlan := plan.NewSelectPlan()
 	selectPlan.AddScan("users", "users")
@@ -637,18 +533,8 @@ func TestSelectPlan_Execute_FloatFilter(t *testing.T) {
 }
 
 func TestQueryResult_Values(t *testing.T) {
-	dataDir := t.TempDir()
-	oldDir, _ := os.Getwd()
-	os.Chdir(dataDir)
-	defer os.Chdir(oldDir)
-
-	os.Mkdir("data", 0755)
-
-	ctx := createTestContextWithCleanup(t, "")
-	tid := transaction.NewTransactionID()
-
-	createSelectTestTable(t, ctx, tid)
-	insertSelectTestData(t, ctx, tid)
+	ctx, tid, cleanup := setupSelectTestWithData(t)
+	defer cleanup() // Always clean up resources
 
 	selectPlan := plan.NewSelectPlan()
 	selectPlan.AddScan("users", "users")
