@@ -45,7 +45,7 @@ func (p *DeletePlan) Execute() (any, error) {
 		return nil, err
 	}
 
-	tuplesToDelete, err := collectTuplesToDelete(query)
+	tuplesToDelete, err := collectAllTuples(query)
 	if err != nil {
 		return nil, err
 	}
@@ -92,38 +92,6 @@ func (p *DeletePlan) addWhereFilter(scanOp iterator.DbIterator) (iterator.DbIter
 	}
 
 	return filterOp, nil
-}
-
-// collectTuplesToDelete executes the query plan and collects all tuples that match the criteria.
-// This approach ensures we have all target tuples before beginning deletion to avoid
-// iterator invalidation during modification.
-func collectTuplesToDelete(queryPlan iterator.DbIterator) ([]*tuple.Tuple, error) {
-	if err := queryPlan.Open(); err != nil {
-		return nil, fmt.Errorf("failed to open delete query: %v", err)
-	}
-	defer queryPlan.Close()
-
-	var tuplesToDelete []*tuple.Tuple
-
-	for {
-		hasNext, err := queryPlan.HasNext()
-		if err != nil {
-			return nil, fmt.Errorf("error during delete scan: %v", err)
-		}
-
-		if !hasNext {
-			break
-		}
-
-		tuple, err := queryPlan.Next()
-		if err != nil {
-			return nil, fmt.Errorf("error fetching tuple to delete: %v", err)
-		}
-
-		tuplesToDelete = append(tuplesToDelete, tuple)
-	}
-
-	return tuplesToDelete, nil
 }
 
 // deleteTuples performs the actual deletion of collected tuples.
