@@ -5,7 +5,6 @@ import (
 	"os"
 	"path/filepath"
 	"storemy/pkg/concurrency/transaction"
-	"storemy/pkg/memory"
 	"storemy/pkg/parser/statements"
 	"storemy/pkg/types"
 	"testing"
@@ -34,10 +33,10 @@ func TestNewCreateTablePlan(t *testing.T) {
 	stmt := statements.NewCreateStatement("users", false)
 	stmt.AddField("id", types.IntType, true, nil)
 
-	tableManager := memory.NewTableManager()
+	ctx := createTestContextWithCleanup(t, "")
 	tid := transaction.NewTransactionID()
 
-	plan := NewCreateTablePlan(stmt, tableManager, tid, "")
+	plan := NewCreateTablePlan(stmt, ctx, tid)
 
 	if plan == nil {
 		t.Fatal("NewCreateTablePlan returned nil")
@@ -47,8 +46,8 @@ func TestNewCreateTablePlan(t *testing.T) {
 		t.Error("Statement not properly assigned")
 	}
 
-	if plan.tableManager != tableManager {
-		t.Error("TableManager not properly assigned")
+	if plan.ctx != ctx {
+		t.Error("Context not properly assigned")
 	}
 
 	if plan.tid != tid {
@@ -68,10 +67,10 @@ func TestCreateTablePlan_Execute_BasicSuccess(t *testing.T) {
 	stmt.AddField("id", types.IntType, true, nil)
 	stmt.AddField("name", types.StringType, false, nil)
 
-	tableManager := memory.NewTableManager()
+	ctx := createTestContextWithCleanup(t, dataDir)
 	tid := transaction.NewTransactionID()
 
-	plan := NewCreateTablePlan(stmt, tableManager, tid, "")
+	plan := NewCreateTablePlan(stmt, ctx, tid)
 
 	result, err := executePlan(t, plan)
 
@@ -92,11 +91,11 @@ func TestCreateTablePlan_Execute_BasicSuccess(t *testing.T) {
 		t.Errorf("Expected message %q, got %q", expectedMessage, result.Message)
 	}
 
-	if !tableManager.TableExists("users") {
+	if !ctx.TableManager().TableExists("users") {
 		t.Error("Table was not added to table manager")
 	}
 
-	cleanupTable(t, tableManager, "users")
+	cleanupTable(t, ctx.TableManager(), "users")
 }
 
 func TestCreateTablePlan_Execute_WithPrimaryKey(t *testing.T) {
@@ -112,10 +111,10 @@ func TestCreateTablePlan_Execute_WithPrimaryKey(t *testing.T) {
 	stmt.AddField("name", types.StringType, false, nil)
 	stmt.PrimaryKey = "id"
 
-	tableManager := memory.NewTableManager()
+	ctx := createTestContextWithCleanup(t, dataDir)
 	tid := transaction.NewTransactionID()
 
-	plan := NewCreateTablePlan(stmt, tableManager, tid, "")
+	plan := NewCreateTablePlan(stmt, ctx, tid)
 
 	result, err := executePlan(t, plan)
 
@@ -127,11 +126,11 @@ func TestCreateTablePlan_Execute_WithPrimaryKey(t *testing.T) {
 		t.Error("Expected success to be true")
 	}
 
-	if !tableManager.TableExists("products") {
+	if !ctx.TableManager().TableExists("products") {
 		t.Error("Table was not added to table manager")
 	}
 
-	cleanupTable(t, tableManager, "products")
+	cleanupTable(t, ctx.TableManager(), "products")
 }
 
 func TestCreateTablePlan_Execute_AllFieldTypes(t *testing.T) {
@@ -148,10 +147,10 @@ func TestCreateTablePlan_Execute_AllFieldTypes(t *testing.T) {
 	stmt.AddField("active", types.BoolType, false, nil)
 	stmt.AddField("price", types.FloatType, false, nil)
 
-	tableManager := memory.NewTableManager()
+	ctx := createTestContextWithCleanup(t, dataDir)
 	tid := transaction.NewTransactionID()
 
-	plan := NewCreateTablePlan(stmt, tableManager, tid, "")
+	plan := NewCreateTablePlan(stmt, ctx, tid)
 
 	result, err := executePlan(t, plan)
 
@@ -163,11 +162,11 @@ func TestCreateTablePlan_Execute_AllFieldTypes(t *testing.T) {
 		t.Error("Expected success to be true")
 	}
 
-	if !tableManager.TableExists("test_types") {
+	if !ctx.TableManager().TableExists("test_types") {
 		t.Error("Table was not added to table manager")
 	}
 
-	cleanupTable(t, tableManager, "test_types")
+	cleanupTable(t, ctx.TableManager(), "test_types")
 }
 
 func TestCreateTablePlan_Execute_IfNotExists_TableDoesNotExist(t *testing.T) {
@@ -181,10 +180,10 @@ func TestCreateTablePlan_Execute_IfNotExists_TableDoesNotExist(t *testing.T) {
 	stmt := statements.NewCreateStatement("users", true)
 	stmt.AddField("id", types.IntType, true, nil)
 
-	tableManager := memory.NewTableManager()
+	ctx := createTestContextWithCleanup(t, dataDir)
 	tid := transaction.NewTransactionID()
 
-	plan := NewCreateTablePlan(stmt, tableManager, tid, "")
+	plan := NewCreateTablePlan(stmt, ctx, tid)
 
 	result, err := executePlan(t, plan)
 
@@ -201,11 +200,11 @@ func TestCreateTablePlan_Execute_IfNotExists_TableDoesNotExist(t *testing.T) {
 		t.Errorf("Expected message %q, got %q", expectedMessage, result.Message)
 	}
 
-	if !tableManager.TableExists("users") {
+	if !ctx.TableManager().TableExists("users") {
 		t.Error("Table was not added to table manager")
 	}
 
-	cleanupTable(t, tableManager, "users")
+	cleanupTable(t, ctx.TableManager(), "users")
 }
 
 func TestCreateTablePlan_Execute_IfNotExists_TableExists(t *testing.T) {
@@ -216,12 +215,12 @@ func TestCreateTablePlan_Execute_IfNotExists_TableExists(t *testing.T) {
 
 	os.Mkdir("data", 0755)
 
-	tableManager := memory.NewTableManager()
+	ctx := createTestContextWithCleanup(t, dataDir)
 	tid := transaction.NewTransactionID()
 
 	existingStmt := statements.NewCreateStatement("users", false)
 	existingStmt.AddField("id", types.IntType, true, nil)
-	existingPlan := NewCreateTablePlan(existingStmt, tableManager, tid, "")
+	existingPlan := NewCreateTablePlan(existingStmt, ctx, tid)
 	_, err := existingPlan.Execute()
 	if err != nil {
 		t.Fatalf("Failed to create existing table: %v", err)
@@ -231,7 +230,7 @@ func TestCreateTablePlan_Execute_IfNotExists_TableExists(t *testing.T) {
 	stmt.AddField("id", types.IntType, true, nil)
 	stmt.AddField("name", types.StringType, false, nil)
 
-	plan := NewCreateTablePlan(stmt, tableManager, tid, "")
+	plan := NewCreateTablePlan(stmt, ctx, tid)
 
 	result, err := executePlan(t, plan)
 
@@ -248,7 +247,7 @@ func TestCreateTablePlan_Execute_IfNotExists_TableExists(t *testing.T) {
 		t.Errorf("Expected message %q, got %q", expectedMessage, result.Message)
 	}
 
-	cleanupTable(t, tableManager, "users")
+	cleanupTable(t, ctx.TableManager(), "users")
 }
 
 func TestCreateTablePlan_Execute_Error_TableAlreadyExists(t *testing.T) {
@@ -259,12 +258,12 @@ func TestCreateTablePlan_Execute_Error_TableAlreadyExists(t *testing.T) {
 
 	os.Mkdir("data", 0755)
 
-	tableManager := memory.NewTableManager()
+	ctx := createTestContextWithCleanup(t, dataDir)
 	tid := transaction.NewTransactionID()
 
 	existingStmt := statements.NewCreateStatement("users", false)
 	existingStmt.AddField("id", types.IntType, true, nil)
-	existingPlan := NewCreateTablePlan(existingStmt, tableManager, tid, "")
+	existingPlan := NewCreateTablePlan(existingStmt, ctx, tid)
 	_, err := existingPlan.Execute()
 	if err != nil {
 		t.Fatalf("Failed to create existing table: %v", err)
@@ -273,7 +272,7 @@ func TestCreateTablePlan_Execute_Error_TableAlreadyExists(t *testing.T) {
 	stmt := statements.NewCreateStatement("users", false)
 	stmt.AddField("id", types.IntType, true, nil)
 
-	plan := NewCreateTablePlan(stmt, tableManager, tid, "")
+	plan := NewCreateTablePlan(stmt, ctx, tid)
 
 	result, err := executePlan(t, plan)
 
@@ -290,7 +289,7 @@ func TestCreateTablePlan_Execute_Error_TableAlreadyExists(t *testing.T) {
 		t.Errorf("Expected error %q, got %q", expectedError, err.Error())
 	}
 
-	cleanupTable(t, tableManager, "users")
+	cleanupTable(t, ctx.TableManager(), "users")
 }
 
 func TestCreateTablePlan_Execute_Error_EmptyFields(t *testing.T) {
@@ -303,10 +302,10 @@ func TestCreateTablePlan_Execute_Error_EmptyFields(t *testing.T) {
 
 	stmt := statements.NewCreateStatement("empty_table", false)
 
-	tableManager := memory.NewTableManager()
+	ctx := createTestContextWithCleanup(t, dataDir)
 	tid := transaction.NewTransactionID()
 
-	plan := NewCreateTablePlan(stmt, tableManager, tid, "")
+	plan := NewCreateTablePlan(stmt, ctx, tid)
 
 	result, err := plan.Execute()
 
@@ -329,10 +328,10 @@ func TestCreateTablePlan_Execute_Error_InvalidFieldType(t *testing.T) {
 
 	stmt := statements.NewCreateStatement("invalid_table", false)
 
-	tableManager := memory.NewTableManager()
+	ctx := createTestContextWithCleanup(t, dataDir)
 	tid := transaction.NewTransactionID()
 
-	plan := NewCreateTablePlan(stmt, tableManager, tid, "")
+	plan := NewCreateTablePlan(stmt, ctx, tid)
 
 	result, err := plan.Execute()
 
@@ -351,13 +350,15 @@ func TestCreateTablePlan_Execute_Error_DataDirectoryMissing(t *testing.T) {
 	os.Chdir(dataDir)
 	defer os.Chdir(oldDir)
 
+	// Don't create the data directory - test expects error when default "data" dir doesn't exist
 	stmt := statements.NewCreateStatement("users", false)
 	stmt.AddField("id", types.IntType, true, nil)
 
-	tableManager := memory.NewTableManager()
+	// Pass empty string for dataDir to force use of "data/" directory
+	ctx := createTestContextWithCleanup(t, "")
 	tid := transaction.NewTransactionID()
 
-	plan := NewCreateTablePlan(stmt, tableManager, tid, "")
+	plan := NewCreateTablePlan(stmt, ctx, tid)
 
 	result, err := plan.Execute()
 
@@ -394,10 +395,10 @@ func TestCreateTablePlan_Execute_ComplexTable(t *testing.T) {
 	stmt.AddField("price", types.FloatType, false, defaultFloat)
 	stmt.PrimaryKey = "id"
 
-	tableManager := memory.NewTableManager()
+	ctx := createTestContextWithCleanup(t, dataDir)
 	tid := transaction.NewTransactionID()
 
-	plan := NewCreateTablePlan(stmt, tableManager, tid, "")
+	plan := NewCreateTablePlan(stmt, ctx, tid)
 
 	result, err := executePlan(t, plan)
 
@@ -409,16 +410,16 @@ func TestCreateTablePlan_Execute_ComplexTable(t *testing.T) {
 		t.Error("Expected success to be true")
 	}
 
-	if !tableManager.TableExists("complex_table") {
+	if !ctx.TableManager().TableExists("complex_table") {
 		t.Error("Table was not added to table manager")
 	}
 
-	tableID, err := tableManager.GetTableID("complex_table")
+	tableID, err := ctx.TableManager().GetTableID("complex_table")
 	if err != nil {
 		t.Fatalf("Failed to get table ID: %v", err)
 	}
 
-	tupleDesc, err := tableManager.GetTupleDesc(tableID)
+	tupleDesc, err := ctx.TableManager().GetTupleDesc(tableID)
 	if err != nil {
 		t.Fatalf("Failed to get tuple description: %v", err)
 	}
@@ -427,7 +428,7 @@ func TestCreateTablePlan_Execute_ComplexTable(t *testing.T) {
 		t.Errorf("Expected 4 fields, got %d", tupleDesc.NumFields())
 	}
 
-	cleanupTable(t, tableManager, "complex_table")
+	cleanupTable(t, ctx.TableManager(), "complex_table")
 }
 
 func TestCreateTablePlan_Execute_FileCreation(t *testing.T) {
@@ -441,10 +442,11 @@ func TestCreateTablePlan_Execute_FileCreation(t *testing.T) {
 	stmt := statements.NewCreateStatement("file_test", false)
 	stmt.AddField("id", types.IntType, true, nil)
 
-	tableManager := memory.NewTableManager()
+	// Pass empty string to use default "data/" directory
+	ctx := createTestContextWithCleanup(t, "")
 	tid := transaction.NewTransactionID()
 
-	plan := NewCreateTablePlan(stmt, tableManager, tid, "")
+	plan := NewCreateTablePlan(stmt, ctx, tid)
 
 	result, err := executePlan(t, plan)
 
@@ -461,7 +463,7 @@ func TestCreateTablePlan_Execute_FileCreation(t *testing.T) {
 		t.Errorf("Expected file %s to be created", expectedFileName)
 	}
 
-	cleanupTable(t, tableManager, "file_test")
+	cleanupTable(t, ctx.TableManager(), "file_test")
 }
 
 func TestDDLResult_String(t *testing.T) {
