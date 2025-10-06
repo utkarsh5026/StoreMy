@@ -22,20 +22,17 @@ func NewQueryPlanner(ctx *registry.DatabaseContext) *QueryPlanner {
 }
 
 func (qp *QueryPlanner) Plan(stmt statements.Statement, tid *transaction.TransactionID) (Plan, error) {
-	store := qp.ctx.PageStore()
-	tableMgr := qp.ctx.TableManager()
-
 	switch s := stmt.(type) {
 	case *statements.CreateStatement:
 		return NewCreateTablePlan(s, qp.ctx, tid), nil
 	case *statements.InsertStatement:
-		return NewInsertPlan(s, store, tid, tableMgr), nil
+		return NewInsertPlan(s, tid, qp.ctx), nil
 	case *statements.DeleteStatement:
-		return NewDeletePlan(s, store, tid, tableMgr), nil
+		return NewDeletePlan(s, tid, qp.ctx), nil
 	case *statements.SelectStatement:
-		return NewSelectPlan(s, tableMgr, store, tid), nil
+		return NewSelectPlan(s, tid, qp.ctx), nil
 	case *statements.UpdateStatement:
-		return NewUpdatePlan(s, tableMgr, store, tid), nil
+		return NewUpdatePlan(s, tid, qp.ctx), nil
 	default:
 		return nil, fmt.Errorf("unsupported statement type: %T", stmt)
 	}
