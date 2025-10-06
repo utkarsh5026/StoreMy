@@ -174,54 +174,14 @@ func parseFrom(l *lexer.Lexer, p *plan.SelectPlan) error {
 }
 
 func parseJoin(l *lexer.Lexer, p *plan.SelectPlan, firstToken lexer.Token) error {
-	// Determine join type
-	joinType := plan.InnerJoin // default
-
-	if firstToken.Type == lexer.INNER {
-		// Expect JOIN token
-		joinToken := l.NextToken()
-		if err := expectToken(joinToken, lexer.JOIN); err != nil {
-			return fmt.Errorf("expected JOIN after INNER, got %s", joinToken.Value)
-		}
-		joinType = plan.InnerJoin
-	} else if firstToken.Type == lexer.LEFT {
-		// Expect optional OUTER, then JOIN
-		nextToken := l.NextToken()
-		if nextToken.Type == lexer.OUTER {
-			nextToken = l.NextToken()
-		}
-		if err := expectToken(nextToken, lexer.JOIN); err != nil {
-			return fmt.Errorf("expected JOIN after LEFT, got %s", nextToken.Value)
-		}
-		joinType = plan.LeftJoin
-	} else if firstToken.Type == lexer.RIGHT {
-		// Expect optional OUTER, then JOIN
-		nextToken := l.NextToken()
-		if nextToken.Type == lexer.OUTER {
-			nextToken = l.NextToken()
-		}
-		if err := expectToken(nextToken, lexer.JOIN); err != nil {
-			return fmt.Errorf("expected JOIN after RIGHT, got %s", nextToken.Value)
-		}
-		joinType = plan.RightJoin
-	}
-	// else firstToken.Type == lexer.JOIN, already consumed
-
-	// Parse table name and optional alias
-	tableToken := l.NextToken()
-	if err := expectToken(tableToken, lexer.IDENTIFIER); err != nil {
-		return fmt.Errorf("expected table name in JOIN, got %s", tableToken.Value)
+	joinType, err := parseJoinType(l, firstToken)
+	if err != nil {
+		return err
 	}
 
-	tableName := strings.ToUpper(tableToken.Value)
-	alias := tableName
-
-	// Check for table alias
-	aliasToken := l.NextToken()
-	if aliasToken.Type == lexer.IDENTIFIER {
-		alias = strings.ToUpper(aliasToken.Value)
-	} else {
-		l.SetPos(aliasToken.Position)
+	tableName, alias, err := parseTableWithAlias(l)
+	if err != nil {
+		return fmt.Errorf("error parsing JOIN table: %w", err)
 	}
 
 	rightTable := plan.NewScanNode(tableName, alias)
@@ -259,6 +219,41 @@ func parseJoin(l *lexer.Lexer, p *plan.SelectPlan, firstToken lexer.Token) error
 
 	p.AddJoin(rightTable, joinType, leftField, rightField, predicate)
 	return nil
+}
+
+func parseJoinType(l *lexer.Lexer, first lexer.Token) (plan.JoinType, error) {
+	joinType := plan.InnerJoin // default
+
+	switch first.Type {
+	case lexer.INNER:
+		joinToken := l.NextToken()
+		if err := expectToken(joinToken, lexer.JOIN); err != nil {
+			return joinType, fmt.Errorf("expected JOIN after INNER, got %s", joinToken.Value)
+		}
+		joinType = plan.InnerJoin
+
+	case lexer.LEFT:
+		nextToken := l.NextToken()
+		if nextToken.Type == lexer.OUTER {
+			nextToken = l.NextToken()
+		}
+		if err := expectToken(nextToken, lexer.JOIN); err != nil {
+			return joinType, fmt.Errorf("expected JOIN after LEFT, got %s", nextToken.Value)
+		}
+		joinType = plan.LeftJoin
+
+	case lexer.RIGHT:
+		nextToken := l.NextToken()
+		if nextToken.Type == lexer.OUTER {
+			nextToken = l.NextToken()
+		}
+		if err := expectToken(nextToken, lexer.JOIN); err != nil {
+			return joinType, fmt.Errorf("expected JOIN after RIGHT, got %s", nextToken.Value)
+		}
+		joinType = plan.RightJoin
+	}
+
+	return joinType, nil
 }
 
 func parseTable(l *lexer.Lexer, p *plan.SelectPlan) error {
