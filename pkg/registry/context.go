@@ -1,4 +1,4 @@
-package context
+package registry
 
 import (
 	"storemy/pkg/catalog"
