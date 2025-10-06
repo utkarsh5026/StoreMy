@@ -5,6 +5,7 @@ import (
 	"storemy/pkg/concurrency/transaction"
 	"storemy/pkg/execution/query"
 	"storemy/pkg/iterator"
+	"storemy/pkg/parser/plan"
 	"storemy/pkg/parser/statements"
 	"storemy/pkg/registry"
 	"storemy/pkg/tuple"
@@ -55,7 +56,6 @@ func (p *SelectPlan) Execute() (any, error) {
 			return nil, err
 		}
 	} else {
-		// No filter - just scan
 		currentOp, err = buildScanWithFilter(p.tid, metadata.TableID, nil, p.ctx)
 		if err != nil {
 			return nil, err
@@ -66,60 +66,44 @@ func (p *SelectPlan) Execute() (any, error) {
 	if !p.statement.Plan.SelectAll() {
 		selectFields := p.statement.Plan.SelectList()
 		if len(selectFields) > 0 {
-			fieldIndices := make([]int, 0, len(selectFields))
-			fieldTypes := make([]types.Type, 0, len(selectFields))
-
-			tupleDesc := currentOp.GetTupleDesc()
-
-			for _, field := range selectFields {
-				found := false
-				for i := 0; i < tupleDesc.NumFields(); i++ {
-					name, _ := tupleDesc.GetFieldName(i)
-					if name == field.FieldName {
-						fieldIndices = append(fieldIndices, i)
-						fieldType, _ := tupleDesc.TypeAtIndex(i)
-						fieldTypes = append(fieldTypes, fieldType)
-						found = true
-						break
-					}
-				}
-				if !found {
-					return nil, fmt.Errorf("column %s not found", field.FieldName)
-				}
-			}
-
-			projectOp, err := query.NewProject(fieldIndices, fieldTypes, currentOp)
+			currentOp, err = p.buildProjection(currentOp, selectFields)
 			if err != nil {
-				return nil, fmt.Errorf("failed to create projection: %v", err)
+				return nil, err
 			}
-			currentOp = projectOp
 		}
 	}
 
-	if err := currentOp.Open(); err != nil {
-		return nil, fmt.Errorf("failed to open query: %v", err)
-	}
-	defer currentOp.Close()
-
-	results := make([]*tuple.Tuple, 0)
-	for {
-		hasNext, err := currentOp.HasNext()
-		if err != nil {
-			return nil, fmt.Errorf("error during query execution: %v", err)
-		}
-		if !hasNext {
-			break
-		}
-
-		t, err := currentOp.Next()
-		if err != nil {
-			return nil, fmt.Errorf("error fetching tuple: %v", err)
-		}
-		results = append(results, t)
+	results, err := collectAllTuples(currentOp)
+	if err != nil {
+		return nil, err
 	}
 
 	return &QueryResult{
 		TupleDesc: currentOp.GetTupleDesc(),
 		Tuples:    results,
 	}, nil
+}
+
+func (p *SelectPlan) buildProjection(input iterator.DbIterator, selectFields []*plan.SelectListNode) (iterator.DbIterator, error) {
+	fieldIndices := make([]int, 0, len(selectFields))
+	fieldTypes := make([]types.Type, 0, len(selectFields))
+	tupleDesc := input.GetTupleDesc()
+
+	for _, field := range selectFields {
+		idx, err := findFieldIndex(field.FieldName, tupleDesc)
+		if err != nil {
+			return nil, err
+		}
+
+		fieldIndices = append(fieldIndices, idx)
+		fieldType, _ := tupleDesc.TypeAtIndex(idx)
+		fieldTypes = append(fieldTypes, fieldType)
+	}
+
+	pr, err := query.NewProject(fieldIndices, fieldTypes, input)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create projection: %v", err)
+	}
+
+	return pr, nil
 }
