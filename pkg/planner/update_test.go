@@ -89,7 +89,7 @@ func insertUpdateTestData(t *testing.T, ctx *registry.DatabaseContext, tid *tran
 
 func TestNewUpdatePlan(t *testing.T) {
 	stmt := statements.NewUpdateStatement("users", "users")
-	ctx := createTestContext("")
+	ctx := createTestContextWithCleanup(t, "")
 	tid := transaction.NewTransactionID()
 
 	plan := NewUpdatePlan(stmt, tid, ctx)
@@ -114,7 +114,7 @@ func TestUpdatePlan_Execute_UpdateSingleField(t *testing.T) {
 
 	os.Mkdir("data", 0755)
 
-	ctx := createTestContext("")
+	ctx := createTestContextWithCleanup(t, "")
 	tid := transaction.NewTransactionID()
 
 	createUpdateTestTable(t, ctx, tid)
@@ -156,7 +156,7 @@ func TestUpdatePlan_Execute_UpdateMultipleFields(t *testing.T) {
 
 	os.Mkdir("data", 0755)
 
-	ctx := createTestContext("")
+	ctx := createTestContextWithCleanup(t, "")
 	tid := transaction.NewTransactionID()
 
 	createUpdateTestTable(t, ctx, tid)
@@ -199,7 +199,7 @@ func TestUpdatePlan_Execute_UpdateMultipleRows(t *testing.T) {
 
 	os.Mkdir("data", 0755)
 
-	ctx := createTestContext("")
+	ctx := createTestContextWithCleanup(t, "")
 	tid := transaction.NewTransactionID()
 
 	createUpdateTestTable(t, ctx, tid)
@@ -241,7 +241,7 @@ func TestUpdatePlan_Execute_UpdateAllRows(t *testing.T) {
 
 	os.Mkdir("data", 0755)
 
-	ctx := createTestContext("")
+	ctx := createTestContextWithCleanup(t, "")
 	tid := transaction.NewTransactionID()
 
 	createUpdateTestTable(t, ctx, tid)
@@ -280,7 +280,7 @@ func TestUpdatePlan_Execute_UpdateWithIntegerFilter(t *testing.T) {
 
 	os.Mkdir("data", 0755)
 
-	ctx := createTestContext("")
+	ctx := createTestContextWithCleanup(t, "")
 	tid := transaction.NewTransactionID()
 
 	createUpdateTestTable(t, ctx, tid)
@@ -317,7 +317,7 @@ func TestUpdatePlan_Execute_UpdateWithFloatFilter(t *testing.T) {
 
 	os.Mkdir("data", 0755)
 
-	ctx := createTestContext("")
+	ctx := createTestContextWithCleanup(t, "")
 	tid := transaction.NewTransactionID()
 
 	createUpdateTestTable(t, ctx, tid)
@@ -354,7 +354,7 @@ func TestUpdatePlan_Execute_NoMatchingRows(t *testing.T) {
 
 	os.Mkdir("data", 0755)
 
-	ctx := createTestContext("")
+	ctx := createTestContextWithCleanup(t, "")
 	tid := transaction.NewTransactionID()
 
 	createUpdateTestTable(t, ctx, tid)
@@ -396,7 +396,7 @@ func TestUpdatePlan_Execute_Error_TableNotFound(t *testing.T) {
 
 	os.Mkdir("data", 0755)
 
-	ctx := createTestContext("")
+	ctx := createTestContextWithCleanup(t, "")
 	tid := transaction.NewTransactionID()
 
 	stmt := statements.NewUpdateStatement("nonexistent_table", "nonexistent_table")
@@ -428,7 +428,7 @@ func TestUpdatePlan_Execute_Error_InvalidField(t *testing.T) {
 
 	os.Mkdir("data", 0755)
 
-	ctx := createTestContext("")
+	ctx := createTestContextWithCleanup(t, "")
 	tid := transaction.NewTransactionID()
 
 	createUpdateTestTable(t, ctx, tid)
@@ -462,7 +462,7 @@ func TestUpdatePlan_Execute_Error_InvalidWhereField(t *testing.T) {
 
 	os.Mkdir("data", 0755)
 
-	ctx := createTestContext("")
+	ctx := createTestContextWithCleanup(t, "")
 	tid := transaction.NewTransactionID()
 
 	createUpdateTestTable(t, ctx, tid)
@@ -499,7 +499,7 @@ func TestUpdatePlan_Execute_EmptyTable(t *testing.T) {
 
 	os.Mkdir("data", 0755)
 
-	ctx := createTestContext("")
+	ctx := createTestContextWithCleanup(t, "")
 	tid := transaction.NewTransactionID()
 
 	createUpdateTestTable(t, ctx, tid)
@@ -537,7 +537,7 @@ func TestUpdatePlan_getTableMetadata(t *testing.T) {
 
 	os.Mkdir("data", 0755)
 
-	ctx := createTestContext("")
+	ctx := createTestContextWithCleanup(t, "")
 	tid := transaction.NewTransactionID()
 
 	createUpdateTestTable(t, ctx, tid)
@@ -573,7 +573,7 @@ func TestUpdatePlan_findFieldIndex(t *testing.T) {
 
 	os.Mkdir("data", 0755)
 
-	ctx := createTestContext("")
+	ctx := createTestContextWithCleanup(t, "")
 	tid := transaction.NewTransactionID()
 
 	createUpdateTestTable(t, ctx, tid)
@@ -626,7 +626,7 @@ func TestUpdatePlan_buildUpdateMap(t *testing.T) {
 
 	os.Mkdir("data", 0755)
 
-	ctx := createTestContext("")
+	ctx := createTestContextWithCleanup(t, "")
 	tid := transaction.NewTransactionID()
 
 	createUpdateTestTable(t, ctx, tid)
