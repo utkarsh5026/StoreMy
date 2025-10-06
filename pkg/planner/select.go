@@ -32,45 +32,14 @@ func NewSelectPlan(stmt *statements.SelectStatement, tid *transaction.Transactio
 }
 
 func (p *SelectPlan) Execute() (any, error) {
-	tables := p.statement.Plan.Tables()
-	if len(tables) == 0 {
-		return nil, fmt.Errorf("SELECT requires at least one table in FROM clause")
-	}
-
-	firstTable := tables[0]
-	metadata, err := resolveTableMetadata(firstTable.TableName, p.ctx)
+	currentOp, err := p.buildScanOperator()
 	if err != nil {
 		return nil, err
 	}
 
-	scanOp, err := query.NewSeqScan(p.tid, metadata.TableID, p.ctx.TableManager())
+	currentOp, err = p.applyProjectionIfNeeded(currentOp)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create table scan: %v", err)
-	}
-
-	var currentOp iterator.DbIterator = scanOp
-	filters := p.statement.Plan.Filters()
-	if len(filters) > 0 {
-		currentOp, err = buildScanWithFilter(p.tid, metadata.TableID, filters[0], p.ctx)
-		if err != nil {
-			return nil, err
-		}
-	} else {
-		currentOp, err = buildScanWithFilter(p.tid, metadata.TableID, nil, p.ctx)
-		if err != nil {
-			return nil, err
-		}
-	}
-
-	// If SELECT * is used, skip projection
-	if !p.statement.Plan.SelectAll() {
-		selectFields := p.statement.Plan.SelectList()
-		if len(selectFields) > 0 {
-			currentOp, err = p.buildProjection(currentOp, selectFields)
-			if err != nil {
-				return nil, err
-			}
-		}
+		return nil, err
 	}
 
 	results, err := collectAllTuples(currentOp)
@@ -82,6 +51,51 @@ func (p *SelectPlan) Execute() (any, error) {
 		TupleDesc: currentOp.GetTupleDesc(),
 		Tuples:    results,
 	}, nil
+}
+
+// buildScanOperator creates the base scan operator with optional filters
+func (p *SelectPlan) buildScanOperator() (iterator.DbIterator, error) {
+	tables := p.statement.Plan.Tables()
+	if len(tables) == 0 {
+		return nil, fmt.Errorf("SELECT requires at least one table in FROM clause")
+	}
+
+	firstTable := tables[0]
+	metadata, err := resolveTableMetadata(firstTable.TableName, p.ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	var filter *plan.FilterNode
+	filters := p.statement.Plan.Filters()
+	if len(filters) > 0 {
+		filter = filters[0]
+	}
+
+	scanOp, err := buildScanWithFilter(p.tid, metadata.TableID, filter, p.ctx)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create table scan: %w", err)
+	}
+
+	return scanOp, nil
+}
+
+func (p *SelectPlan) applyProjectionIfNeeded(input iterator.DbIterator) (iterator.DbIterator, error) {
+	if p.statement.Plan.SelectAll() {
+		return input, nil
+	}
+
+	selectFields := p.statement.Plan.SelectList()
+	if len(selectFields) == 0 {
+		return input, nil
+	}
+
+	projectionOp, err := p.buildProjection(input, selectFields)
+	if err != nil {
+		return nil, err
+	}
+
+	return projectionOp, nil
 }
 
 func (p *SelectPlan) buildProjection(input iterator.DbIterator, selectFields []*plan.SelectListNode) (iterator.DbIterator, error) {
