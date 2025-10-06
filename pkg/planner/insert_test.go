@@ -3,8 +3,8 @@ package planner
 import (
 	"os"
 	"storemy/pkg/concurrency/transaction"
-	"storemy/pkg/memory"
 	"storemy/pkg/parser/statements"
+	"storemy/pkg/registry"
 	"storemy/pkg/types"
 	"testing"
 )
@@ -29,30 +29,29 @@ func executeInsertPlan(t *testing.T, plan *InsertPlan) (*DMLResult, error) {
 }
 
 // Helper function to create a test table
-func createTestTable(t *testing.T, tableManager *memory.TableManager, tid *transaction.TransactionID) {
+func createTestTable(t *testing.T, ctx *registry.DatabaseContext, tid *transaction.TransactionID) {
 	stmt := statements.NewCreateStatement("test_table", false)
 	stmt.AddField("id", types.IntType, false, nil)
 	stmt.AddField("name", types.StringType, false, nil)
 	stmt.AddField("active", types.BoolType, false, nil)
 	stmt.AddField("price", types.FloatType, false, nil)
 
-	createPlan := NewCreateTablePlan(stmt, tableManager, tid, "")
+	createPlan := NewCreateTablePlan(stmt, ctx, tid)
 	_, err := createPlan.Execute()
 	if err != nil {
 		t.Fatalf("Failed to create test table: %v", err)
 	}
 
 	// Register cleanup to close table file
-	cleanupTable(t, tableManager, "test_table")
+	cleanupTable(t, ctx.TableManager(), "test_table")
 }
 
 func TestNewInsertPlan(t *testing.T) {
 	stmt := statements.NewInsertStatement("test_table")
-	pageStore := &memory.PageStore{}
-	tableManager := memory.NewTableManager()
+	ctx := createTestContext("")
 	tid := transaction.NewTransactionID()
 
-	plan := NewInsertPlan(stmt, pageStore, tid, tableManager)
+	plan := NewInsertPlan(stmt, tid, ctx)
 
 	if plan == nil {
 		t.Fatal("NewInsertPlan returned nil")
@@ -60,14 +59,6 @@ func TestNewInsertPlan(t *testing.T) {
 
 	if plan.statement != stmt {
 		t.Error("Statement not properly assigned")
-	}
-
-	if plan.pageStore != pageStore {
-		t.Error("PageStore not properly assigned")
-	}
-
-	if plan.tableManager != tableManager {
-		t.Error("TableManager not properly assigned")
 	}
 
 	if plan.tid != tid {
@@ -83,11 +74,10 @@ func TestInsertPlan_Execute_SingleRow(t *testing.T) {
 
 	os.Mkdir("data", 0755)
 
-	tableManager := memory.NewTableManager()
-	pageStore := memory.NewPageStore(tableManager, createWal(t))
+	ctx := createTestContext("")
 	tid := transaction.NewTransactionID()
 
-	createTestTable(t, tableManager, tid)
+	createTestTable(t, ctx, tid)
 
 	stmt := statements.NewInsertStatement("test_table")
 	values := []types.Field{
@@ -98,7 +88,7 @@ func TestInsertPlan_Execute_SingleRow(t *testing.T) {
 	}
 	stmt.AddValues(values)
 
-	plan := NewInsertPlan(stmt, pageStore, tid, tableManager)
+	plan := NewInsertPlan(stmt, tid, ctx)
 
 	result, err := executeInsertPlan(t, plan)
 
@@ -128,11 +118,10 @@ func TestInsertPlan_Execute_MultipleRows(t *testing.T) {
 
 	os.Mkdir("data", 0755)
 
-	tableManager := memory.NewTableManager()
-	pageStore := memory.NewPageStore(tableManager, createWal(t))
+	ctx := createTestContext("")
 	tid := transaction.NewTransactionID()
 
-	createTestTable(t, tableManager, tid)
+	createTestTable(t, ctx, tid)
 
 	stmt := statements.NewInsertStatement("test_table")
 
@@ -152,7 +141,7 @@ func TestInsertPlan_Execute_MultipleRows(t *testing.T) {
 	}
 	stmt.AddValues(values2)
 
-	plan := NewInsertPlan(stmt, pageStore, tid, tableManager)
+	plan := NewInsertPlan(stmt, tid, ctx)
 
 	result, err := executeInsertPlan(t, plan)
 
@@ -178,11 +167,10 @@ func TestInsertPlan_Execute_WithSpecificFields(t *testing.T) {
 
 	os.Mkdir("data", 0755)
 
-	tableManager := memory.NewTableManager()
-	pageStore := memory.NewPageStore(tableManager, createWal(t))
+	ctx := createTestContext("")
 	tid := transaction.NewTransactionID()
 
-	createTestTable(t, tableManager, tid)
+	createTestTable(t, ctx, tid)
 
 	stmt := statements.NewInsertStatement("test_table")
 	stmt.AddFieldNames([]string{"id", "name", "active", "price"})
@@ -195,7 +183,7 @@ func TestInsertPlan_Execute_WithSpecificFields(t *testing.T) {
 	}
 	stmt.AddValues(values)
 
-	plan := NewInsertPlan(stmt, pageStore, tid, tableManager)
+	plan := NewInsertPlan(stmt, tid, ctx)
 
 	result, err := executeInsertPlan(t, plan)
 
@@ -216,8 +204,7 @@ func TestInsertPlan_Execute_Error_TableNotFound(t *testing.T) {
 
 	os.Mkdir("data", 0755)
 
-	tableManager := memory.NewTableManager()
-	pageStore := memory.NewPageStore(tableManager, createWal(t))
+	ctx := createTestContext("")
 	tid := transaction.NewTransactionID()
 
 	stmt := statements.NewInsertStatement("nonexistent_table")
@@ -226,7 +213,7 @@ func TestInsertPlan_Execute_Error_TableNotFound(t *testing.T) {
 	}
 	stmt.AddValues(values)
 
-	plan := NewInsertPlan(stmt, pageStore, tid, tableManager)
+	plan := NewInsertPlan(stmt, tid, ctx)
 
 	result, err := executeInsertPlan(t, plan)
 
@@ -252,11 +239,10 @@ func TestInsertPlan_Execute_Error_ValueCountMismatch(t *testing.T) {
 
 	os.Mkdir("data", 0755)
 
-	tableManager := memory.NewTableManager()
-	pageStore := memory.NewPageStore(tableManager, createWal(t))
+	ctx := createTestContext("")
 	tid := transaction.NewTransactionID()
 
-	createTestTable(t, tableManager, tid)
+	createTestTable(t, ctx, tid)
 
 	stmt := statements.NewInsertStatement("test_table")
 	values := []types.Field{
@@ -265,7 +251,7 @@ func TestInsertPlan_Execute_Error_ValueCountMismatch(t *testing.T) {
 	}
 	stmt.AddValues(values)
 
-	plan := NewInsertPlan(stmt, pageStore, tid, tableManager)
+	plan := NewInsertPlan(stmt, tid, ctx)
 
 	result, err := executeInsertPlan(t, plan)
 
@@ -291,11 +277,10 @@ func TestInsertPlan_Execute_Error_InvalidFieldName(t *testing.T) {
 
 	os.Mkdir("data", 0755)
 
-	tableManager := memory.NewTableManager()
-	pageStore := memory.NewPageStore(tableManager, createWal(t))
+	ctx := createTestContext("")
 	tid := transaction.NewTransactionID()
 
-	createTestTable(t, tableManager, tid)
+	createTestTable(t, ctx, tid)
 
 	stmt := statements.NewInsertStatement("test_table")
 	stmt.AddFieldNames([]string{"id", "invalid_field"})
@@ -306,7 +291,7 @@ func TestInsertPlan_Execute_Error_InvalidFieldName(t *testing.T) {
 	}
 	stmt.AddValues(values)
 
-	plan := NewInsertPlan(stmt, pageStore, tid, tableManager)
+	plan := NewInsertPlan(stmt, tid, ctx)
 
 	result, err := executeInsertPlan(t, plan)
 
@@ -332,11 +317,10 @@ func TestInsertPlan_Execute_Error_ValueCountMismatchWithFields(t *testing.T) {
 
 	os.Mkdir("data", 0755)
 
-	tableManager := memory.NewTableManager()
-	pageStore := memory.NewPageStore(tableManager, createWal(t))
+	ctx := createTestContext("")
 	tid := transaction.NewTransactionID()
 
-	createTestTable(t, tableManager, tid)
+	createTestTable(t, ctx, tid)
 
 	stmt := statements.NewInsertStatement("test_table")
 	stmt.AddFieldNames([]string{"id", "name"})
@@ -346,7 +330,7 @@ func TestInsertPlan_Execute_Error_ValueCountMismatchWithFields(t *testing.T) {
 	}
 	stmt.AddValues(values)
 
-	plan := NewInsertPlan(stmt, pageStore, tid, tableManager)
+	plan := NewInsertPlan(stmt, tid, ctx)
 
 	result, err := executeInsertPlan(t, plan)
 
@@ -372,11 +356,10 @@ func TestInsertPlan_Execute_Error_MissingValueForField(t *testing.T) {
 
 	os.Mkdir("data", 0755)
 
-	tableManager := memory.NewTableManager()
-	pageStore := memory.NewPageStore(tableManager, createWal(t))
+	ctx := createTestContext("")
 	tid := transaction.NewTransactionID()
 
-	createTestTable(t, tableManager, tid)
+	createTestTable(t, ctx, tid)
 
 	stmt := statements.NewInsertStatement("test_table")
 	stmt.AddFieldNames([]string{"id", "price"})
@@ -387,7 +370,7 @@ func TestInsertPlan_Execute_Error_MissingValueForField(t *testing.T) {
 	}
 	stmt.AddValues(values)
 
-	plan := NewInsertPlan(stmt, pageStore, tid, tableManager)
+	plan := NewInsertPlan(stmt, tid, ctx)
 
 	result, err := executeInsertPlan(t, plan)
 
@@ -412,15 +395,14 @@ func TestInsertPlan_Execute_EmptyValues(t *testing.T) {
 
 	os.Mkdir("data", 0755)
 
-	tableManager := memory.NewTableManager()
-	pageStore := memory.NewPageStore(tableManager, createWal(t))
+	ctx := createTestContext("")
 	tid := transaction.NewTransactionID()
 
-	createTestTable(t, tableManager, tid)
+	createTestTable(t, ctx, tid)
 
 	stmt := statements.NewInsertStatement("test_table")
 
-	plan := NewInsertPlan(stmt, pageStore, tid, tableManager)
+	plan := NewInsertPlan(stmt, tid, ctx)
 
 	result, err := executeInsertPlan(t, plan)
 
@@ -446,14 +428,13 @@ func TestInsertPlan_getTableID(t *testing.T) {
 
 	os.Mkdir("data", 0755)
 
-	tableManager := memory.NewTableManager()
-	pageStore := memory.NewPageStore(tableManager, createWal(t))
+	ctx := createTestContext("")
 	tid := transaction.NewTransactionID()
 
-	createTestTable(t, tableManager, tid)
+	createTestTable(t, ctx, tid)
 
 	stmt := statements.NewInsertStatement("test_table")
-	plan := NewInsertPlan(stmt, pageStore, tid, tableManager)
+	plan := NewInsertPlan(stmt, tid, ctx)
 
 	tableID, err := plan.getTableID()
 
@@ -461,7 +442,7 @@ func TestInsertPlan_getTableID(t *testing.T) {
 		t.Fatalf("getTableID failed: %v", err)
 	}
 
-	expectedTableID, _ := tableManager.GetTableID("test_table")
+	expectedTableID, _ := ctx.TableManager().GetTableID("test_table")
 	if tableID != expectedTableID {
 		t.Errorf("Expected table ID %d, got %d", expectedTableID, tableID)
 	}
@@ -475,14 +456,13 @@ func TestInsertPlan_getTupleDesc(t *testing.T) {
 
 	os.Mkdir("data", 0755)
 
-	tableManager := memory.NewTableManager()
-	pageStore := memory.NewPageStore(tableManager, createWal(t))
+	ctx := createTestContext("")
 	tid := transaction.NewTransactionID()
 
-	createTestTable(t, tableManager, tid)
+	createTestTable(t, ctx, tid)
 
 	stmt := statements.NewInsertStatement("test_table")
-	plan := NewInsertPlan(stmt, pageStore, tid, tableManager)
+	plan := NewInsertPlan(stmt, tid, ctx)
 
 	tupleDesc, err := plan.getTupleDesc()
 
@@ -507,15 +487,14 @@ func TestInsertPlan_createFieldMapping(t *testing.T) {
 
 	os.Mkdir("data", 0755)
 
-	tableManager := memory.NewTableManager()
-	pageStore := memory.NewPageStore(tableManager, createWal(t))
+	ctx := createTestContext("")
 	tid := transaction.NewTransactionID()
 
-	createTestTable(t, tableManager, tid)
+	createTestTable(t, ctx, tid)
 
 	stmt := statements.NewInsertStatement("test_table")
 	stmt.AddFieldNames([]string{"name", "id"})
-	plan := NewInsertPlan(stmt, pageStore, tid, tableManager)
+	plan := NewInsertPlan(stmt, tid, ctx)
 
 	tupleDesc, err := plan.getTupleDesc()
 	if err != nil {
@@ -549,14 +528,13 @@ func TestInsertPlan_createFieldMapping_EmptyFields(t *testing.T) {
 
 	os.Mkdir("data", 0755)
 
-	tableManager := memory.NewTableManager()
-	pageStore := memory.NewPageStore(tableManager, createWal(t))
+	ctx := createTestContext("")
 	tid := transaction.NewTransactionID()
 
-	createTestTable(t, tableManager, tid)
+	createTestTable(t, ctx, tid)
 
 	stmt := statements.NewInsertStatement("test_table")
-	plan := NewInsertPlan(stmt, pageStore, tid, tableManager)
+	plan := NewInsertPlan(stmt, tid, ctx)
 
 	tupleDesc, err := plan.getTupleDesc()
 	if err != nil {
@@ -582,14 +560,13 @@ func TestInsertPlan_validateValueCount(t *testing.T) {
 
 	os.Mkdir("data", 0755)
 
-	tableManager := memory.NewTableManager()
-	pageStore := memory.NewPageStore(tableManager, createWal(t))
+	ctx := createTestContext("")
 	tid := transaction.NewTransactionID()
 
-	createTestTable(t, tableManager, tid)
+	createTestTable(t, ctx, tid)
 
 	stmt := statements.NewInsertStatement("test_table")
-	plan := NewInsertPlan(stmt, pageStore, tid, tableManager)
+	plan := NewInsertPlan(stmt, tid, ctx)
 
 	tupleDesc, err := plan.getTupleDesc()
 	if err != nil {
