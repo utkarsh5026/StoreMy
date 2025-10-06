@@ -98,7 +98,7 @@ func (p *InsertPlan) insertTuples(tableID int, tupleDesc *tuple.TupleDescription
 			return 0, err
 		}
 
-		newTuple, err := p.createTuple(values, tupleDesc, fieldMapping)
+		newTuple, err := createTuple(values, tupleDesc, fieldMapping)
 		if err != nil {
 			return 0, err
 		}
@@ -134,20 +134,17 @@ func validateValueCount(values []types.Field, tupleDesc *tuple.TupleDescription,
 // createTuple constructs a new tuple from the provided values according to the table schema.
 // It handles both explicit field mappings (for partial inserts) and full row inserts.
 // For explicit mappings, it validates that all required fields are provided.
-func (p *InsertPlan) createTuple(values []types.Field, tupleDesc *tuple.TupleDescription, fieldMapping []int) (*tuple.Tuple, error) {
+func createTuple(values []types.Field, tupleDesc *tuple.TupleDescription, fieldMapping []int) (*tuple.Tuple, error) {
 	newTuple := tuple.NewTuple(tupleDesc)
 	if fieldMapping != nil {
-		for i, value := range values {
-			if err := newTuple.SetField(fieldMapping[i], value); err != nil {
-				return nil, fmt.Errorf("failed to set field: %v", err)
-			}
+		if err := setMappedFields(newTuple, values, fieldMapping); err != nil {
+			return nil, err
 		}
 
-		for i := 0; i < tupleDesc.NumFields(); i++ {
-			if !slices.Contains(fieldMapping, i) {
-				return nil, fmt.Errorf("missing value for field index %d", i)
-			}
+		if err := validateAllFieldsSet(tupleDesc, fieldMapping); err != nil {
+			return nil, err
 		}
+
 		return newTuple, nil
 	}
 
@@ -157,4 +154,26 @@ func (p *InsertPlan) createTuple(values []types.Field, tupleDesc *tuple.TupleDes
 		}
 	}
 	return newTuple, nil
+}
+
+// setMappedFields sets tuple fields using an explicit field mapping.
+// Used when INSERT statement specifies a subset of columns.
+func setMappedFields(tup *tuple.Tuple, values []types.Field, fieldMapping []int) error {
+	for i, value := range values {
+		if err := tup.SetField(fieldMapping[i], value); err != nil {
+			return fmt.Errorf("failed to set field at index %d: %w", fieldMapping[i], err)
+		}
+	}
+	return nil
+}
+
+// validateAllFieldsSet ensures all table fields have values when using explicit field mapping.
+// Prevents NULL values in fields not included in the INSERT field list.
+func validateAllFieldsSet(tupleDesc *tuple.TupleDescription, fieldMapping []int) error {
+	for i := 0; i < tupleDesc.NumFields(); i++ {
+		if !slices.Contains(fieldMapping, i) {
+			return fmt.Errorf("missing value for field index %d", i)
+		}
+	}
+	return nil
 }
