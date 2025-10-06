@@ -3,19 +3,19 @@ package planner
 import (
 	"fmt"
 
+	"storemy/pkg/catalog"
 	"storemy/pkg/concurrency/transaction"
-	"storemy/pkg/memory"
 	"storemy/pkg/parser/statements"
+	"storemy/pkg/registry"
 	"storemy/pkg/storage/heap"
 	"storemy/pkg/tuple"
 	"storemy/pkg/types"
 )
 
 type CreateTablePlan struct {
-	Statement    *statements.CreateStatement
-	tableManager *memory.TableManager
-	tid          *transaction.TransactionID
-	dataDir      string
+	Statement *statements.CreateStatement
+	ctx       *registry.DatabaseContext
+	tid       *transaction.TransactionID
 }
 
 type DDLResult struct {
@@ -29,26 +29,28 @@ func (r *DDLResult) String() string {
 
 func NewCreateTablePlan(
 	stmt *statements.CreateStatement,
-	t *memory.TableManager,
+	ctx *registry.DatabaseContext,
 	tid *transaction.TransactionID,
-	dataDir string) *CreateTablePlan {
+) *CreateTablePlan {
 	return &CreateTablePlan{
-		Statement:    stmt,
-		tableManager: t,
-		tid:          tid,
-		dataDir:      dataDir,
+		Statement: stmt,
+		ctx:       ctx,
+		tid:       tid,
 	}
 }
 
 func (p *CreateTablePlan) Execute() (any, error) {
-	if p.Statement.IfNotExists && p.tableManager.TableExists(p.Statement.TableName) {
+	tableManager := p.ctx.TableManager()
+	tableCatalog := p.ctx.Catalog()
+
+	if p.Statement.IfNotExists && tableManager.TableExists(p.Statement.TableName) {
 		return &DDLResult{
 			Success: true,
 			Message: fmt.Sprintf("Table %s already exists (IF NOT EXISTS)", p.Statement.TableName),
 		}, nil
 	}
 
-	if p.tableManager.TableExists(p.Statement.TableName) {
+	if tableManager.TableExists(p.Statement.TableName) {
 		return nil, fmt.Errorf("table %s already exists", p.Statement.TableName)
 	}
 
@@ -57,13 +59,35 @@ func (p *CreateTablePlan) Execute() (any, error) {
 		return nil, err
 	}
 
-	heapFile, err := p.createHeapFile(tupleDesc)
+	heapFile, fileName, err := p.createHeapFile(tupleDesc)
 	if err != nil {
 		return nil, err
 	}
 
-	if err := p.tableManager.AddTable(heapFile, p.Statement.TableName, p.Statement.PrimaryKey); err != nil {
+	if err := tableManager.AddTable(heapFile, p.Statement.TableName, p.Statement.PrimaryKey); err != nil {
 		return nil, err
+	}
+
+	if tableCatalog != nil {
+		fieldMetadata := make([]catalog.FieldMetadata, len(p.Statement.Fields))
+		for i, field := range p.Statement.Fields {
+			fieldMetadata[i] = catalog.FieldMetadata{
+				Name: field.Name,
+				Type: field.Type,
+			}
+		}
+
+		err = tableCatalog.RegisterTable(
+			p.tid,
+			heapFile.GetID(),
+			p.Statement.TableName,
+			fileName,
+			p.Statement.PrimaryKey,
+			fieldMetadata,
+		)
+		if err != nil {
+			return nil, fmt.Errorf("failed to register table in catalog: %v", err)
+		}
 	}
 
 	return &DDLResult{
@@ -90,16 +114,16 @@ func (p *CreateTablePlan) buildTupleDescriptor() (*tuple.TupleDescription, error
 	return tupleDesc, nil
 }
 
-func (p *CreateTablePlan) createHeapFile(tupleDesc *tuple.TupleDescription) (*heap.HeapFile, error) {
+func (p *CreateTablePlan) createHeapFile(tupleDesc *tuple.TupleDescription) (*heap.HeapFile, string, error) {
 	var fileName string
-	if p.dataDir != "" {
-		fileName = fmt.Sprintf("%s/%s.dat", p.dataDir, p.Statement.TableName)
+	if p.ctx.DataDir() != "" {
+		fileName = fmt.Sprintf("%s/%s.dat", p.ctx.DataDir(), p.Statement.TableName)
 	} else {
 		fileName = fmt.Sprintf("data/%s.dat", p.Statement.TableName)
 	}
 	heapFile, err := heap.NewHeapFile(fileName, tupleDesc)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create heap file: %v", err)
+		return nil, "", fmt.Errorf("failed to create heap file: %v", err)
 	}
-	return heapFile, nil
+	return heapFile, fileName, nil
 }
