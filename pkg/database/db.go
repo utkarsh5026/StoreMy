@@ -26,6 +26,7 @@ type Database struct {
 	queryPlanner *planner.QueryPlanner
 	catalog      *catalog.SystemCatalog
 	wal          *log.WAL
+	txRegistry   *transaction.TransactionRegistry
 
 	name    string
 	dataDir string
@@ -80,12 +81,14 @@ func NewDatabase(name, dataDir, logDir string) (*Database, error) {
 	ctx := registry.NewDatabaseContext(tableManager, pageStore, systemCatalog, wal, fullPath)
 
 	queryPlanner := planner.NewQueryPlanner(ctx)
+	txRegistry := transaction.NewTransactionRegistry(wal)
 
 	db := &Database{
 		tableManager: tableManager,
 		pageStore:    pageStore,
 		queryPlanner: queryPlanner,
 		catalog:      systemCatalog,
+		txRegistry:   txRegistry,
 		wal:          wal,
 		name:         name,
 		dataDir:      fullPath,
@@ -100,8 +103,12 @@ func NewDatabase(name, dataDir, logDir string) (*Database, error) {
 
 func (db *Database) ExecuteQuery(query string) (QueryResult, error) {
 	var err error
-	tid := transaction.NewTransactionID()
-	defer db.cleanupTransaction(tid, &err)
+	var res QueryResult
+	tx, err := db.txRegistry.Begin()
+	if err != nil {
+		return res, err
+	}
+	defer db.cleanupTransaction(tx, &err)
 
 	stmt, err := parser.ParseStatement(query)
 	if err != nil {
@@ -110,7 +117,7 @@ func (db *Database) ExecuteQuery(query string) (QueryResult, error) {
 	}
 
 	var plan planner.Plan
-	plan, err = db.queryPlanner.Plan(stmt, tid)
+	plan, err = db.queryPlanner.Plan(stmt, tx)
 	if err != nil {
 		db.recordError()
 		return QueryResult{}, fmt.Errorf("planning error: %v", err)
@@ -123,7 +130,7 @@ func (db *Database) ExecuteQuery(query string) (QueryResult, error) {
 		return QueryResult{}, fmt.Errorf("execution error: %v", err)
 	}
 
-	err = db.pageStore.CommitTransaction(tid)
+	err = db.pageStore.CommitTransaction(tx)
 	if err != nil {
 		db.recordError()
 		return QueryResult{}, fmt.Errorf("commit error: %v", err)
@@ -207,9 +214,9 @@ func (db *Database) GetStatistics() DatabaseInfo {
 	}
 }
 
-func (db *Database) cleanupTransaction(tid *transaction.TransactionID, err *error) {
+func (db *Database) cleanupTransaction(tx *transaction.TransactionContext, err *error) {
 	if *err != nil {
-		if abortErr := db.pageStore.AbortTransaction(tid); abortErr != nil {
+		if abortErr := db.pageStore.AbortTransaction(tx); abortErr != nil {
 			// Log abort error but don't override the original error
 			fmt.Printf("failed to abort transaction: %v\n", abortErr)
 		}
