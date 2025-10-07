@@ -369,26 +369,26 @@ func TestTransactionContext_Statistics(t *testing.T) {
 
 	stats := ctx.GetStatistics()
 
-	if stats["pages_read"] != 1 {
-		t.Errorf("Expected pages_read to be 1, got %d", stats["pages_read"])
+	if stats.PagesRead != 1 {
+		t.Errorf("Expected pages_read to be 1, got %d", stats.PagesRead)
 	}
-	if stats["pages_written"] != 1 {
-		t.Errorf("Expected pages_written to be 1, got %d", stats["pages_written"])
+	if stats.PagesWritten != 1 {
+		t.Errorf("Expected pages_written to be 1, got %d", stats.PagesWritten)
 	}
-	if stats["tuples_read"] != 2 {
-		t.Errorf("Expected tuples_read to be 2, got %d", stats["tuples_read"])
+	if stats.TuplesRead != 2 {
+		t.Errorf("Expected tuples_read to be 2, got %d", stats.TuplesRead)
 	}
-	if stats["tuples_written"] != 1 {
-		t.Errorf("Expected tuples_written to be 1, got %d", stats["tuples_written"])
+	if stats.TuplesWritten != 1 {
+		t.Errorf("Expected tuples_written to be 1, got %d", stats.TuplesWritten)
 	}
-	if stats["tuples_deleted"] != 1 {
-		t.Errorf("Expected tuples_deleted to be 1, got %d", stats["tuples_deleted"])
+	if stats.TuplesDeleted != 1 {
+		t.Errorf("Expected tuples_deleted to be 1, got %d", stats.TuplesDeleted)
 	}
-	if stats["locked_pages"] != 1 {
-		t.Errorf("Expected locked_pages to be 1, got %d", stats["locked_pages"])
+	if stats.LockedPages != 1 {
+		t.Errorf("Expected locked_pages to be 1, got %d", stats.LockedPages)
 	}
-	if stats["dirty_pages"] != 1 {
-		t.Errorf("Expected dirty_pages to be 1, got %d", stats["dirty_pages"])
+	if stats.LockedPages != 1 {
+		t.Errorf("Expected dirty_pages to be 1, got %d", stats.LockedPages)
 	}
 }
 
@@ -470,11 +470,11 @@ func TestTransactionContext_Concurrency(t *testing.T) {
 	stats := ctx.GetStatistics()
 	expectedTuples := goroutines * operationsPerGoroutine
 
-	if stats["tuples_read"] != expectedTuples {
-		t.Errorf("Expected tuples_read to be %d, got %d", expectedTuples, stats["tuples_read"])
+	if stats.TuplesRead != expectedTuples {
+		t.Errorf("Expected tuples_read to be %d, got %d", expectedTuples, stats.TuplesRead)
 	}
-	if stats["tuples_written"] != expectedTuples {
-		t.Errorf("Expected tuples_written to be %d, got %d", expectedTuples, stats["tuples_written"])
+	if stats.TuplesWritten != expectedTuples {
+		t.Errorf("Expected tuples_written to be %d, got %d", expectedTuples, stats.TuplesWritten)
 	}
 }
 
