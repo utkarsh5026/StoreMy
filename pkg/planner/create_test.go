@@ -98,12 +98,7 @@ func TestCreateTablePlan_Execute_BasicSuccess(t *testing.T) {
 }
 
 func TestCreateTablePlan_Execute_WithPrimaryKey(t *testing.T) {
-	dataDir := t.TempDir()
-	oldDir, _ := os.Getwd()
-	os.Chdir(dataDir)
-	defer os.Chdir(oldDir)
-
-	os.Mkdir("data", 0755)
+	dataDir := setupTestDataDir(t)
 
 	stmt := statements.NewCreateStatement("products", false)
 	stmt.AddField("id", types.IntType, true, nil)
@@ -133,12 +128,7 @@ func TestCreateTablePlan_Execute_WithPrimaryKey(t *testing.T) {
 }
 
 func TestCreateTablePlan_Execute_AllFieldTypes(t *testing.T) {
-	dataDir := t.TempDir()
-	oldDir, _ := os.Getwd()
-	os.Chdir(dataDir)
-	defer os.Chdir(oldDir)
-
-	os.Mkdir("data", 0755)
+	dataDir := setupTestDataDir(t)
 
 	stmt := statements.NewCreateStatement("test_types", false)
 	stmt.AddField("id", types.IntType, true, nil)
@@ -169,12 +159,7 @@ func TestCreateTablePlan_Execute_AllFieldTypes(t *testing.T) {
 }
 
 func TestCreateTablePlan_Execute_IfNotExists_TableDoesNotExist(t *testing.T) {
-	dataDir := t.TempDir()
-	oldDir, _ := os.Getwd()
-	os.Chdir(dataDir)
-	defer os.Chdir(oldDir)
-
-	os.Mkdir("data", 0755)
+	dataDir := setupTestDataDir(t)
 
 	stmt := statements.NewCreateStatement("users", true)
 	stmt.AddField("id", types.IntType, true, nil)
@@ -207,12 +192,7 @@ func TestCreateTablePlan_Execute_IfNotExists_TableDoesNotExist(t *testing.T) {
 }
 
 func TestCreateTablePlan_Execute_IfNotExists_TableExists(t *testing.T) {
-	dataDir := t.TempDir()
-	oldDir, _ := os.Getwd()
-	os.Chdir(dataDir)
-	defer os.Chdir(oldDir)
-
-	os.Mkdir("data", 0755)
+	dataDir := setupTestDataDir(t)
 
 	ctx := createTestContextWithCleanup(t, dataDir)
 	transCtx := createTransactionContext(t)
@@ -250,12 +230,7 @@ func TestCreateTablePlan_Execute_IfNotExists_TableExists(t *testing.T) {
 }
 
 func TestCreateTablePlan_Execute_Error_TableAlreadyExists(t *testing.T) {
-	dataDir := t.TempDir()
-	oldDir, _ := os.Getwd()
-	os.Chdir(dataDir)
-	defer os.Chdir(oldDir)
-
-	os.Mkdir("data", 0755)
+	dataDir := setupTestDataDir(t)
 
 	ctx := createTestContextWithCleanup(t, dataDir)
 	transCtx := createTransactionContext(t)
@@ -292,12 +267,7 @@ func TestCreateTablePlan_Execute_Error_TableAlreadyExists(t *testing.T) {
 }
 
 func TestCreateTablePlan_Execute_Error_EmptyFields(t *testing.T) {
-	dataDir := t.TempDir()
-	oldDir, _ := os.Getwd()
-	os.Chdir(dataDir)
-	defer os.Chdir(oldDir)
-
-	os.Mkdir("data", 0755)
+	dataDir := setupTestDataDir(t)
 
 	stmt := statements.NewCreateStatement("empty_table", false)
 
@@ -318,12 +288,7 @@ func TestCreateTablePlan_Execute_Error_EmptyFields(t *testing.T) {
 }
 
 func TestCreateTablePlan_Execute_Error_InvalidFieldType(t *testing.T) {
-	dataDir := t.TempDir()
-	oldDir, _ := os.Getwd()
-	os.Chdir(dataDir)
-	defer os.Chdir(oldDir)
-
-	os.Mkdir("data", 0755)
+	dataDir := setupTestDataDir(t)
 
 	stmt := statements.NewCreateStatement("invalid_table", false)
 
@@ -375,12 +340,7 @@ func TestCreateTablePlan_Execute_Error_DataDirectoryMissing(t *testing.T) {
 }
 
 func TestCreateTablePlan_Execute_ComplexTable(t *testing.T) {
-	dataDir := t.TempDir()
-	oldDir, _ := os.Getwd()
-	os.Chdir(dataDir)
-	defer os.Chdir(oldDir)
-
-	os.Mkdir("data", 0755)
+	dataDir := setupTestDataDir(t)
 
 	defaultInt := &types.IntField{Value: 1}
 	defaultString := types.NewStringField("default", types.StringMaxSize)
@@ -431,12 +391,7 @@ func TestCreateTablePlan_Execute_ComplexTable(t *testing.T) {
 }
 
 func TestCreateTablePlan_Execute_FileCreation(t *testing.T) {
-	dataDir := t.TempDir()
-	oldDir, _ := os.Getwd()
-	os.Chdir(dataDir)
-	defer os.Chdir(oldDir)
-
-	os.Mkdir("data", 0755)
+	setupTestDataDir(t)
 
 	stmt := statements.NewCreateStatement("file_test", false)
 	stmt.AddField("id", types.IntType, true, nil)
