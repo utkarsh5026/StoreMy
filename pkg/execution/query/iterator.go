@@ -22,12 +22,6 @@ type BaseIterator struct {
 
 // NewBaseIterator creates a new base iterator with the given readNext function.
 // The iterator starts in a closed state and must be opened before use.
-//
-// Parameters:
-//   - readNextFunc: Function that will be called to read tuples from the underlying data source
-//
-// Returns:
-//   - *BaseIterator: New base iterator instance ready to be opened and used
 func NewBaseIterator(readNextFunc ReadNextFunc) *BaseIterator {
 	return &BaseIterator{
 		readNextFunc: readNextFunc,
@@ -36,10 +30,6 @@ func NewBaseIterator(readNextFunc ReadNextFunc) *BaseIterator {
 
 // HasNext checks if there is a next tuple available without consuming it.
 // This method implements lookahead by caching the next tuple if not already cached.
-//
-// Returns:
-//   - bool: True if a next tuple is available, false if end of data is reached
-//   - error: Error if the iterator is not opened or if reading the next tuple fails
 func (it *BaseIterator) HasNext() (bool, error) {
 	if !it.opened {
 		return false, fmt.Errorf("iterator not opened")
@@ -59,10 +49,6 @@ func (it *BaseIterator) HasNext() (bool, error) {
 // If a tuple was previously cached by HasNext(), it returns that tuple and clears the cache.
 // Otherwise, it reads the next tuple from the underlying source.
 // The iterator must be opened before calling this method.
-//
-// Returns:
-//   - *tuple.Tuple: Next tuple from the iterator
-//   - error: Error if the iterator is not opened, no more tuples are available, or reading fails
 func (it *BaseIterator) Next() (*tuple.Tuple, error) {
 	if !it.opened {
 		return nil, fmt.Errorf("iterator not opened")
@@ -87,9 +73,6 @@ func (it *BaseIterator) Next() (*tuple.Tuple, error) {
 // Close releases resources associated with the iterator and marks it as closed.
 // After closing, the iterator cannot be used until it is reopened.
 // This method clears any cached tuples and resets the iterator state.
-//
-// Returns:
-//   - error: Always returns nil for the base iterator implementation
 func (it *BaseIterator) Close() error {
 	it.nextTuple = nil
 	it.opened = false
