@@ -81,14 +81,13 @@ func NewDatabase(name, dataDir, logDir string) (*Database, error) {
 	ctx := registry.NewDatabaseContext(tableManager, pageStore, systemCatalog, wal, fullPath)
 
 	queryPlanner := planner.NewQueryPlanner(ctx)
-	txRegistry := transaction.NewTransactionRegistry(wal)
 
 	db := &Database{
 		tableManager: tableManager,
 		pageStore:    pageStore,
 		queryPlanner: queryPlanner,
 		catalog:      systemCatalog,
-		txRegistry:   txRegistry,
+		txRegistry:   ctx.TransactionRegistry(),
 		wal:          wal,
 		name:         name,
 		dataDir:      fullPath,
@@ -142,7 +141,12 @@ func (db *Database) ExecuteQuery(query string) (QueryResult, error) {
 
 // loadExistingTables loads table metadata from disk
 func (db *Database) loadExistingTables() error {
-	if err := db.catalog.Initialize(db.dataDir); err != nil {
+	tx, err := db.txRegistry.Begin()
+	if err != nil {
+		return fmt.Errorf("failed to begin transaction for catalog initialization: %v", err)
+	}
+
+	if err := db.catalog.Initialize(tx, db.dataDir); err != nil {
 		return fmt.Errorf("failed to initialize catalog: %v", err)
 	}
 
@@ -151,7 +155,12 @@ func (db *Database) loadExistingTables() error {
 		return nil
 	}
 
-	if err := db.catalog.LoadTables(db.dataDir); err != nil {
+	tx2, err := db.txRegistry.Begin()
+	if err != nil {
+		return fmt.Errorf("failed to begin transaction for loading tables: %v", err)
+	}
+
+	if err := db.catalog.LoadTables(tx2, db.dataDir); err != nil {
 		return fmt.Errorf("failed to load tables from catalog: %v", err)
 	}
 
