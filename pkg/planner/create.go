@@ -4,8 +4,8 @@ import (
 	"fmt"
 
 	"storemy/pkg/catalog"
+	"storemy/pkg/concurrency/transaction"
 	"storemy/pkg/parser/statements"
-	"storemy/pkg/primitives"
 	"storemy/pkg/registry"
 	"storemy/pkg/storage/heap"
 	"storemy/pkg/tuple"
@@ -13,9 +13,9 @@ import (
 )
 
 type CreateTablePlan struct {
-	Statement *statements.CreateStatement
-	ctx       *registry.DatabaseContext
-	tid       *primitives.TransactionID
+	Statement      *statements.CreateStatement
+	ctx            *registry.DatabaseContext
+	transactionCtx *transaction.TransactionContext
 }
 
 type DDLResult struct {
@@ -30,12 +30,12 @@ func (r *DDLResult) String() string {
 func NewCreateTablePlan(
 	stmt *statements.CreateStatement,
 	ctx *registry.DatabaseContext,
-	tid *primitives.TransactionID,
+	transactionCtx *transaction.TransactionContext,
 ) *CreateTablePlan {
 	return &CreateTablePlan{
-		Statement: stmt,
-		ctx:       ctx,
-		tid:       tid,
+		Statement:      stmt,
+		ctx:            ctx,
+		transactionCtx: transactionCtx,
 	}
 }
 
@@ -78,7 +78,7 @@ func (p *CreateTablePlan) Execute() (any, error) {
 		}
 
 		err = tableCatalog.RegisterTable(
-			p.tid,
+			p.transactionCtx.ID,
 			heapFile.GetID(),
 			p.Statement.TableName,
 			fileName,
