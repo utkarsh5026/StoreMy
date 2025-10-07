@@ -2,15 +2,15 @@ package planner
 
 import (
 	"os"
+	"storemy/pkg/concurrency/transaction"
 	"storemy/pkg/parser/plan"
 	"storemy/pkg/parser/statements"
-	"storemy/pkg/primitives"
 	"storemy/pkg/registry"
 	"storemy/pkg/types"
 	"testing"
 )
 
-func setupSelectTest(t *testing.T) (*registry.DatabaseContext, *primitives.TransactionID, func()) {
+func setupSelectTest(t *testing.T) (*registry.DatabaseContext, *transaction.TransactionContext, func()) {
 	dataDir := t.TempDir()
 	oldDir, _ := os.Getwd()
 	os.Chdir(dataDir)
@@ -22,18 +22,18 @@ func setupSelectTest(t *testing.T) (*registry.DatabaseContext, *primitives.Trans
 	os.Mkdir("data", 0755)
 
 	ctx := createTestContextWithCleanup(t, "")
-	tid := primitives.NewTransactionID()
+	tx := createTransactionContext(t)
 
-	return ctx, tid, cleanup
+	return ctx, tx, cleanup
 }
 
-func setupSelectTestWithData(t *testing.T) (*registry.DatabaseContext, *primitives.TransactionID, func()) {
-	ctx, tid, cleanup := setupSelectTest(t)
+func setupSelectTestWithData(t *testing.T) (*registry.DatabaseContext, *transaction.TransactionContext, func()) {
+	ctx, tx, cleanup := setupSelectTest(t)
 
-	createSelectTestTable(t, ctx, tid)
-	insertSelectTestData(t, ctx, tid)
+	createSelectTestTable(t, ctx, tx)
+	insertSelectTestData(t, ctx, tx)
 
-	return ctx, tid, cleanup
+	return ctx, tx, cleanup
 }
 
 func executeSelectPlan(t *testing.T, plan *SelectPlan) (*SelectQueryResult, error) {
@@ -54,7 +54,7 @@ func executeSelectPlan(t *testing.T, plan *SelectPlan) (*SelectQueryResult, erro
 	return result, nil
 }
 
-func createSelectTestTable(t *testing.T, ctx *registry.DatabaseContext, tid *primitives.TransactionID) {
+func createSelectTestTable(t *testing.T, ctx *registry.DatabaseContext, tx *transaction.TransactionContext) {
 	stmt := statements.NewCreateStatement("users", false)
 	stmt.AddField("id", types.IntType, false, nil)
 	stmt.AddField("name", types.StringType, false, nil)
@@ -63,7 +63,7 @@ func createSelectTestTable(t *testing.T, ctx *registry.DatabaseContext, tid *pri
 	stmt.AddField("active", types.BoolType, false, nil)
 	stmt.AddField("salary", types.FloatType, false, nil)
 
-	createPlan := NewCreateTablePlan(stmt, ctx, tid)
+	createPlan := NewCreateTablePlan(stmt, ctx, tx)
 	_, err := createPlan.Execute()
 	if err != nil {
 		t.Fatalf("Failed to create test table: %v", err)
@@ -73,7 +73,7 @@ func createSelectTestTable(t *testing.T, ctx *registry.DatabaseContext, tid *pri
 	cleanupTable(t, ctx.TableManager(), "users")
 }
 
-func insertSelectTestData(t *testing.T, ctx *registry.DatabaseContext, tid *primitives.TransactionID) {
+func insertSelectTestData(t *testing.T, ctx *registry.DatabaseContext, tx *transaction.TransactionContext) {
 	insertStmt := statements.NewInsertStatement("users")
 
 	values1 := []types.Field{
@@ -106,7 +106,7 @@ func insertSelectTestData(t *testing.T, ctx *registry.DatabaseContext, tid *prim
 	}
 	insertStmt.AddValues(values3)
 
-	insertPlan := NewInsertPlan(insertStmt, tid, ctx)
+	insertPlan := NewInsertPlan(insertStmt, tx, ctx)
 	_, err := insertPlan.Execute()
 	if err != nil {
 		t.Fatalf("Failed to insert test data: %v", err)
@@ -117,9 +117,9 @@ func TestNewSelectPlan(t *testing.T) {
 	selectPlan := plan.NewSelectPlan()
 	stmt := statements.NewSelectStatement(selectPlan)
 	ctx := createTestContextWithCleanup(t, "")
-	tid := primitives.NewTransactionID()
+	tx := createTransactionContext(t)
 
-	plan := NewSelectPlan(stmt, tid, ctx)
+	plan := NewSelectPlan(stmt, tx, ctx)
 
 	if plan == nil {
 		t.Fatal("NewSelectPlan returned nil")
@@ -129,20 +129,20 @@ func TestNewSelectPlan(t *testing.T) {
 		t.Error("Statement not properly assigned")
 	}
 
-	if plan.tid != tid {
+	if plan.tx != tx {
 		t.Error("TransactionID not properly assigned")
 	}
 }
 
 func TestSelectPlan_Execute_SelectAll(t *testing.T) {
-	ctx, tid, cleanup := setupSelectTestWithData(t)
+	ctx, tx, cleanup := setupSelectTestWithData(t)
 	defer cleanup() // Always clean up resources
 
 	selectPlan := plan.NewSelectPlan()
 	selectPlan.AddScan("users", "users")
 	stmt := statements.NewSelectStatement(selectPlan)
 
-	planInstance := NewSelectPlan(stmt, tid, ctx)
+	planInstance := NewSelectPlan(stmt, tx, ctx)
 
 	result, err := executeSelectPlan(t, planInstance)
 
@@ -168,7 +168,7 @@ func TestSelectPlan_Execute_SelectAll(t *testing.T) {
 }
 
 func TestSelectPlan_Execute_WithProjection(t *testing.T) {
-	ctx, tid, cleanup := setupSelectTestWithData(t)
+	ctx, tx, cleanup := setupSelectTestWithData(t)
 	defer cleanup() // Always clean up resources
 
 	selectPlan := plan.NewSelectPlan()
@@ -178,7 +178,7 @@ func TestSelectPlan_Execute_WithProjection(t *testing.T) {
 	selectPlan.AddProjectField("name", "")
 	selectPlan.AddProjectField("email", "")
 
-	planInstance := NewSelectPlan(stmt, tid, ctx)
+	planInstance := NewSelectPlan(stmt, tx, ctx)
 
 	result, err := executeSelectPlan(t, planInstance)
 
@@ -210,7 +210,7 @@ func TestSelectPlan_Execute_WithProjection(t *testing.T) {
 }
 
 func TestSelectPlan_Execute_WithFilter(t *testing.T) {
-	ctx, tid, cleanup := setupSelectTestWithData(t)
+	ctx, tx, cleanup := setupSelectTestWithData(t)
 	defer cleanup() // Always clean up resources
 
 	selectPlan := plan.NewSelectPlan()
@@ -219,7 +219,7 @@ func TestSelectPlan_Execute_WithFilter(t *testing.T) {
 
 	selectPlan.AddFilter("users.active", types.Equals, "true")
 
-	planInstance := NewSelectPlan(stmt, tid, ctx)
+	planInstance := NewSelectPlan(stmt, tx, ctx)
 
 	result, err := executeSelectPlan(t, planInstance)
 
@@ -237,7 +237,7 @@ func TestSelectPlan_Execute_WithFilter(t *testing.T) {
 }
 
 func TestSelectPlan_Execute_WithFilterAndProjection(t *testing.T) {
-	ctx, tid, cleanup := setupSelectTestWithData(t)
+	ctx, tx, cleanup := setupSelectTestWithData(t)
 	defer cleanup() // Always clean up resources
 
 	selectPlan := plan.NewSelectPlan()
@@ -247,7 +247,7 @@ func TestSelectPlan_Execute_WithFilterAndProjection(t *testing.T) {
 	selectPlan.AddFilter("users.age", types.GreaterThan, "30")
 	selectPlan.AddProjectField("name", "")
 
-	planInstance := NewSelectPlan(stmt, tid, ctx)
+	planInstance := NewSelectPlan(stmt, tx, ctx)
 
 	result, err := executeSelectPlan(t, planInstance)
 
@@ -282,12 +282,12 @@ func TestSelectPlan_Execute_Error_NoTables(t *testing.T) {
 	os.Mkdir("data", 0755)
 
 	ctx := createTestContextWithCleanup(t, "")
-	tid := primitives.NewTransactionID()
+	tx := createTransactionContext(t)
 
 	selectPlan := plan.NewSelectPlan()
 	stmt := statements.NewSelectStatement(selectPlan)
 
-	planInstance := NewSelectPlan(stmt, tid, ctx)
+	planInstance := NewSelectPlan(stmt, tx, ctx)
 
 	result, err := executeSelectPlan(t, planInstance)
 
@@ -306,14 +306,14 @@ func TestSelectPlan_Execute_Error_NoTables(t *testing.T) {
 }
 
 func TestSelectPlan_Execute_Error_TableNotFound(t *testing.T) {
-	ctx, tid, cleanup := setupSelectTest(t)
+	ctx, tx, cleanup := setupSelectTest(t)
 	defer cleanup() // Always clean up resources
 
 	selectPlan := plan.NewSelectPlan()
 	selectPlan.AddScan("nonexistent_table", "nonexistent_table")
 	stmt := statements.NewSelectStatement(selectPlan)
 
-	planInstance := NewSelectPlan(stmt, tid, ctx)
+	planInstance := NewSelectPlan(stmt, tx, ctx)
 
 	result, err := executeSelectPlan(t, planInstance)
 
@@ -332,10 +332,10 @@ func TestSelectPlan_Execute_Error_TableNotFound(t *testing.T) {
 }
 
 func TestSelectPlan_Execute_Error_InvalidFilterField(t *testing.T) {
-	ctx, tid, cleanup := setupSelectTest(t)
+	ctx, tx, cleanup := setupSelectTest(t)
 	defer cleanup() // Always clean up resources
 
-	createSelectTestTable(t, ctx, tid)
+	createSelectTestTable(t, ctx, tx)
 
 	selectPlan := plan.NewSelectPlan()
 	selectPlan.AddScan("users", "users")
@@ -343,7 +343,7 @@ func TestSelectPlan_Execute_Error_InvalidFilterField(t *testing.T) {
 
 	selectPlan.AddFilter("users.invalid_field", types.Equals, "value")
 
-	planInstance := NewSelectPlan(stmt, tid, ctx)
+	planInstance := NewSelectPlan(stmt, tx, ctx)
 
 	result, err := executeSelectPlan(t, planInstance)
 
@@ -362,9 +362,9 @@ func TestSelectPlan_Execute_Error_InvalidFilterField(t *testing.T) {
 }
 
 func TestSelectPlan_Execute_Error_InvalidSelectField(t *testing.T) {
-	ctx, tid, cleanup := setupSelectTest(t)
+	ctx, tx, cleanup := setupSelectTest(t)
 	defer cleanup() // Always clean up resources
-	createSelectTestTable(t, ctx, tid)
+	createSelectTestTable(t, ctx, tx)
 
 	selectPlan := plan.NewSelectPlan()
 	selectPlan.AddScan("users", "users")
@@ -372,7 +372,7 @@ func TestSelectPlan_Execute_Error_InvalidSelectField(t *testing.T) {
 
 	selectPlan.AddProjectField("invalid_field", "")
 
-	planInstance := NewSelectPlan(stmt, tid, ctx)
+	planInstance := NewSelectPlan(stmt, tx, ctx)
 
 	result, err := executeSelectPlan(t, planInstance)
 
@@ -391,9 +391,9 @@ func TestSelectPlan_Execute_Error_InvalidSelectField(t *testing.T) {
 }
 
 func TestSelectPlan_Execute_EmptyTableWithFilters(t *testing.T) {
-	ctx, tid, cleanup := setupSelectTest(t)
+	ctx, tx, cleanup := setupSelectTest(t)
 	defer cleanup() // Always clean up resources
-	createSelectTestTable(t, ctx, tid)
+	createSelectTestTable(t, ctx, tx)
 
 	selectPlan := plan.NewSelectPlan()
 	selectPlan.AddScan("users", "users")
@@ -401,7 +401,7 @@ func TestSelectPlan_Execute_EmptyTableWithFilters(t *testing.T) {
 
 	selectPlan.AddFilter("users.active", types.Equals, "true")
 
-	planInstance := NewSelectPlan(stmt, tid, ctx)
+	planInstance := NewSelectPlan(stmt, tx, ctx)
 
 	result, err := executeSelectPlan(t, planInstance)
 
@@ -419,11 +419,11 @@ func TestSelectPlan_Execute_EmptyTableWithFilters(t *testing.T) {
 }
 
 func TestSelectPlan_Execute_MultipleFilters(t *testing.T) {
-	ctx, tid, cleanup := setupSelectTest(t)
+	ctx, tx, cleanup := setupSelectTest(t)
 	defer cleanup() // Always clean up resources
 
-	createSelectTestTable(t, ctx, tid)
-	insertSelectTestData(t, ctx, tid)
+	createSelectTestTable(t, ctx, tx)
+	insertSelectTestData(t, ctx, tx)
 
 	selectPlan := plan.NewSelectPlan()
 	selectPlan.AddScan("users", "users")
@@ -431,7 +431,7 @@ func TestSelectPlan_Execute_MultipleFilters(t *testing.T) {
 
 	selectPlan.AddFilter("users.active", types.Equals, "true")
 
-	planInstance := NewSelectPlan(stmt, tid, ctx)
+	planInstance := NewSelectPlan(stmt, tx, ctx)
 
 	result, err := executeSelectPlan(t, planInstance)
 
@@ -449,11 +449,11 @@ func TestSelectPlan_Execute_MultipleFilters(t *testing.T) {
 }
 
 func TestSelectPlan_Execute_StringFilter(t *testing.T) {
-	ctx, tid, cleanup := setupSelectTest(t)
+	ctx, tx, cleanup := setupSelectTest(t)
 	defer cleanup() // Always clean up resources
 
-	createSelectTestTable(t, ctx, tid)
-	insertSelectTestData(t, ctx, tid)
+	createSelectTestTable(t, ctx, tx)
+	insertSelectTestData(t, ctx, tx)
 
 	selectPlan := plan.NewSelectPlan()
 	selectPlan.AddScan("users", "users")
@@ -461,7 +461,7 @@ func TestSelectPlan_Execute_StringFilter(t *testing.T) {
 
 	selectPlan.AddFilter("users.name", types.Equals, "John Doe")
 
-	planInstance := NewSelectPlan(stmt, tid, ctx)
+	planInstance := NewSelectPlan(stmt, tx, ctx)
 
 	result, err := executeSelectPlan(t, planInstance)
 
@@ -479,7 +479,7 @@ func TestSelectPlan_Execute_StringFilter(t *testing.T) {
 }
 
 func TestSelectPlan_Execute_IntegerFilter(t *testing.T) {
-	ctx, tid, cleanup := setupSelectTestWithData(t)
+	ctx, tx, cleanup := setupSelectTestWithData(t)
 	defer cleanup() // Always clean up resources
 
 	selectPlan := plan.NewSelectPlan()
@@ -488,7 +488,7 @@ func TestSelectPlan_Execute_IntegerFilter(t *testing.T) {
 
 	selectPlan.AddFilter("users.age", types.LessThan, "30")
 
-	planInstance := NewSelectPlan(stmt, tid, ctx)
+	planInstance := NewSelectPlan(stmt, tx, ctx)
 
 	result, err := executeSelectPlan(t, planInstance)
 
@@ -506,7 +506,7 @@ func TestSelectPlan_Execute_IntegerFilter(t *testing.T) {
 }
 
 func TestSelectPlan_Execute_FloatFilter(t *testing.T) {
-	ctx, tid, cleanup := setupSelectTestWithData(t)
+	ctx, tx, cleanup := setupSelectTestWithData(t)
 	defer cleanup() // Always clean up resources
 
 	selectPlan := plan.NewSelectPlan()
@@ -515,7 +515,7 @@ func TestSelectPlan_Execute_FloatFilter(t *testing.T) {
 
 	selectPlan.AddFilter("users.salary", types.GreaterThanOrEqual, "60000.0")
 
-	planInstance := NewSelectPlan(stmt, tid, ctx)
+	planInstance := NewSelectPlan(stmt, tx, ctx)
 
 	result, err := executeSelectPlan(t, planInstance)
 
@@ -533,14 +533,14 @@ func TestSelectPlan_Execute_FloatFilter(t *testing.T) {
 }
 
 func TestSelectQueryResult_Values(t *testing.T) {
-	ctx, tid, cleanup := setupSelectTestWithData(t)
+	ctx, tx, cleanup := setupSelectTestWithData(t)
 	defer cleanup() // Always clean up resources
 
 	selectPlan := plan.NewSelectPlan()
 	selectPlan.AddScan("users", "users")
 	stmt := statements.NewSelectStatement(selectPlan)
 
-	planInstance := NewSelectPlan(stmt, tid, ctx)
+	planInstance := NewSelectPlan(stmt, tx, ctx)
 
 	result, err := executeSelectPlan(t, planInstance)
 
@@ -565,23 +565,23 @@ func TestSelectQueryResult_Values(t *testing.T) {
 
 // Helper functions for join and aggregation tests
 
-func setupJoinTestWithData(t *testing.T) (*registry.DatabaseContext, *primitives.TransactionID, func()) {
-	ctx, tid, cleanup := setupSelectTest(t)
+func setupJoinTestWithData(t *testing.T) (*registry.DatabaseContext, *transaction.TransactionContext, func()) {
+	ctx, tx, cleanup := setupSelectTest(t)
 
-	createJoinTestTables(t, ctx, tid)
-	insertJoinTestData(t, ctx, tid)
+	createJoinTestTables(t, ctx, tx)
+	insertJoinTestData(t, ctx, tx)
 
-	return ctx, tid, cleanup
+	return ctx, tx, cleanup
 }
 
-func createJoinTestTables(t *testing.T, ctx *registry.DatabaseContext, tid *primitives.TransactionID) {
+func createJoinTestTables(t *testing.T, ctx *registry.DatabaseContext, tx *transaction.TransactionContext) {
 	// Create users table
 	usersStmt := statements.NewCreateStatement("users", false)
 	usersStmt.AddField("id", types.IntType, false, nil)
 	usersStmt.AddField("name", types.StringType, false, nil)
 	usersStmt.AddField("dept_id", types.IntType, false, nil)
 
-	usersPlan := NewCreateTablePlan(usersStmt, ctx, tid)
+	usersPlan := NewCreateTablePlan(usersStmt, ctx, tx)
 	_, err := usersPlan.Execute()
 	if err != nil {
 		t.Fatalf("Failed to create users table: %v", err)
@@ -593,7 +593,7 @@ func createJoinTestTables(t *testing.T, ctx *registry.DatabaseContext, tid *prim
 	deptsStmt.AddField("id", types.IntType, false, nil)
 	deptsStmt.AddField("dept_name", types.StringType, false, nil)
 
-	deptsPlan := NewCreateTablePlan(deptsStmt, ctx, tid)
+	deptsPlan := NewCreateTablePlan(deptsStmt, ctx, tx)
 	_, err = deptsPlan.Execute()
 	if err != nil {
 		t.Fatalf("Failed to create departments table: %v", err)
@@ -601,7 +601,7 @@ func createJoinTestTables(t *testing.T, ctx *registry.DatabaseContext, tid *prim
 	cleanupTable(t, ctx.TableManager(), "departments")
 }
 
-func insertJoinTestData(t *testing.T, ctx *registry.DatabaseContext, tid *primitives.TransactionID) {
+func insertJoinTestData(t *testing.T, ctx *registry.DatabaseContext, tx *transaction.TransactionContext) {
 	// Insert users
 	usersStmt := statements.NewInsertStatement("users")
 	usersStmt.AddValues([]types.Field{
@@ -620,7 +620,7 @@ func insertJoinTestData(t *testing.T, ctx *registry.DatabaseContext, tid *primit
 		&types.IntField{Value: 10},
 	})
 
-	usersPlan := NewInsertPlan(usersStmt, tid, ctx)
+	usersPlan := NewInsertPlan(usersStmt, tx, ctx)
 	_, err := usersPlan.Execute()
 	if err != nil {
 		t.Fatalf("Failed to insert users: %v", err)
@@ -637,7 +637,7 @@ func insertJoinTestData(t *testing.T, ctx *registry.DatabaseContext, tid *primit
 		types.NewStringField("Sales", types.StringMaxSize),
 	})
 
-	deptsPlan := NewInsertPlan(deptsStmt, tid, ctx)
+	deptsPlan := NewInsertPlan(deptsStmt, tx, ctx)
 	_, err = deptsPlan.Execute()
 	if err != nil {
 		t.Fatalf("Failed to insert departments: %v", err)
@@ -647,7 +647,7 @@ func insertJoinTestData(t *testing.T, ctx *registry.DatabaseContext, tid *primit
 // Join Tests
 
 func TestSelectPlan_Execute_SimpleJoin(t *testing.T) {
-	ctx, tid, cleanup := setupJoinTestWithData(t)
+	ctx, tx, cleanup := setupJoinTestWithData(t)
 	defer cleanup()
 
 	selectPlan := plan.NewSelectPlan()
@@ -657,7 +657,7 @@ func TestSelectPlan_Execute_SimpleJoin(t *testing.T) {
 	selectPlan.AddJoin(deptScan, plan.InnerJoin, "u.dept_id", "d.id", types.Equals)
 
 	stmt := statements.NewSelectStatement(selectPlan)
-	planInstance := NewSelectPlan(stmt, tid, ctx)
+	planInstance := NewSelectPlan(stmt, tx, ctx)
 
 	result, err := executeSelectPlan(t, planInstance)
 
@@ -681,7 +681,7 @@ func TestSelectPlan_Execute_SimpleJoin(t *testing.T) {
 }
 
 func TestSelectPlan_Execute_JoinWithProjection(t *testing.T) {
-	ctx, tid, cleanup := setupJoinTestWithData(t)
+	ctx, tx, cleanup := setupJoinTestWithData(t)
 	defer cleanup()
 
 	selectPlan := plan.NewSelectPlan()
@@ -694,7 +694,7 @@ func TestSelectPlan_Execute_JoinWithProjection(t *testing.T) {
 	selectPlan.AddProjectField("dept_name", "")
 
 	stmt := statements.NewSelectStatement(selectPlan)
-	planInstance := NewSelectPlan(stmt, tid, ctx)
+	planInstance := NewSelectPlan(stmt, tx, ctx)
 
 	result, err := executeSelectPlan(t, planInstance)
 
@@ -719,7 +719,7 @@ func TestSelectPlan_Execute_JoinWithProjection(t *testing.T) {
 // Aggregation Tests
 
 func TestSelectPlan_Execute_AggregationCount(t *testing.T) {
-	ctx, tid, cleanup := setupSelectTestWithData(t)
+	ctx, tx, cleanup := setupSelectTestWithData(t)
 	defer cleanup()
 
 	selectPlan := plan.NewSelectPlan()
@@ -727,7 +727,7 @@ func TestSelectPlan_Execute_AggregationCount(t *testing.T) {
 	selectPlan.AddProjectField("id", "COUNT")
 
 	stmt := statements.NewSelectStatement(selectPlan)
-	planInstance := NewSelectPlan(stmt, tid, ctx)
+	planInstance := NewSelectPlan(stmt, tx, ctx)
 
 	result, err := executeSelectPlan(t, planInstance)
 
@@ -763,7 +763,7 @@ func TestSelectPlan_Execute_AggregationCount(t *testing.T) {
 }
 
 func TestSelectPlan_Execute_AggregationSum(t *testing.T) {
-	ctx, tid, cleanup := setupSelectTestWithData(t)
+	ctx, tx, cleanup := setupSelectTestWithData(t)
 	defer cleanup()
 
 	selectPlan := plan.NewSelectPlan()
@@ -771,7 +771,7 @@ func TestSelectPlan_Execute_AggregationSum(t *testing.T) {
 	selectPlan.AddProjectField("age", "SUM")
 
 	stmt := statements.NewSelectStatement(selectPlan)
-	planInstance := NewSelectPlan(stmt, tid, ctx)
+	planInstance := NewSelectPlan(stmt, tx, ctx)
 
 	result, err := executeSelectPlan(t, planInstance)
 
@@ -806,7 +806,7 @@ func TestSelectPlan_Execute_AggregationSum(t *testing.T) {
 }
 
 func TestSelectPlan_Execute_AggregationWithGroupBy(t *testing.T) {
-	ctx, tid, cleanup := setupSelectTestWithData(t)
+	ctx, tx, cleanup := setupSelectTestWithData(t)
 	defer cleanup()
 
 	selectPlan := plan.NewSelectPlan()
@@ -815,7 +815,7 @@ func TestSelectPlan_Execute_AggregationWithGroupBy(t *testing.T) {
 	selectPlan.SetGroupBy("name")
 
 	stmt := statements.NewSelectStatement(selectPlan)
-	planInstance := NewSelectPlan(stmt, tid, ctx)
+	planInstance := NewSelectPlan(stmt, tx, ctx)
 
 	result, err := executeSelectPlan(t, planInstance)
 
@@ -839,7 +839,7 @@ func TestSelectPlan_Execute_AggregationWithGroupBy(t *testing.T) {
 }
 
 func TestSelectPlan_Execute_AggregationMax(t *testing.T) {
-	ctx, tid, cleanup := setupSelectTestWithData(t)
+	ctx, tx, cleanup := setupSelectTestWithData(t)
 	defer cleanup()
 
 	selectPlan := plan.NewSelectPlan()
@@ -847,7 +847,7 @@ func TestSelectPlan_Execute_AggregationMax(t *testing.T) {
 	selectPlan.AddProjectField("salary", "MAX")
 
 	stmt := statements.NewSelectStatement(selectPlan)
-	planInstance := NewSelectPlan(stmt, tid, ctx)
+	planInstance := NewSelectPlan(stmt, tx, ctx)
 
 	result, err := executeSelectPlan(t, planInstance)
 
@@ -882,7 +882,7 @@ func TestSelectPlan_Execute_AggregationMax(t *testing.T) {
 }
 
 func TestSelectPlan_Execute_AggregationMin(t *testing.T) {
-	ctx, tid, cleanup := setupSelectTestWithData(t)
+	ctx, tx, cleanup := setupSelectTestWithData(t)
 	defer cleanup()
 
 	selectPlan := plan.NewSelectPlan()
@@ -890,7 +890,7 @@ func TestSelectPlan_Execute_AggregationMin(t *testing.T) {
 	selectPlan.AddProjectField("age", "MIN")
 
 	stmt := statements.NewSelectStatement(selectPlan)
-	planInstance := NewSelectPlan(stmt, tid, ctx)
+	planInstance := NewSelectPlan(stmt, tx, ctx)
 
 	result, err := executeSelectPlan(t, planInstance)
 
@@ -925,7 +925,7 @@ func TestSelectPlan_Execute_AggregationMin(t *testing.T) {
 }
 
 func TestSelectPlan_Execute_AggregationAvg(t *testing.T) {
-	ctx, tid, cleanup := setupSelectTestWithData(t)
+	ctx, tx, cleanup := setupSelectTestWithData(t)
 	defer cleanup()
 
 	selectPlan := plan.NewSelectPlan()
@@ -933,7 +933,7 @@ func TestSelectPlan_Execute_AggregationAvg(t *testing.T) {
 	selectPlan.AddProjectField("age", "AVG")
 
 	stmt := statements.NewSelectStatement(selectPlan)
-	planInstance := NewSelectPlan(stmt, tid, ctx)
+	planInstance := NewSelectPlan(stmt, tx, ctx)
 
 	result, err := executeSelectPlan(t, planInstance)
 
