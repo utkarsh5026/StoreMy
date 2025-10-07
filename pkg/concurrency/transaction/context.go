@@ -275,6 +275,13 @@ func (tc *TransactionContext) RecordTupleDelete() {
 	tc.tuplesDeleted++
 }
 
+func (tc *TransactionContext) GetPagePermission(pageId tuple.PageID) (perm Permissions, exists bool) {
+	tc.mutex.RLock()
+	defer tc.mutex.RUnlock()
+	perm, exists = tc.lockedPages[pageId]
+	return
+}
+
 // GetStatistics returns a snapshot of transaction statistics
 func (tc *TransactionContext) GetStatistics() TransactionStats {
 	tc.mutex.RLock()
