@@ -12,15 +12,11 @@ import (
 // exactly which columns should appear in the result set.
 //
 // Conceptually: SELECT col1, col3, col5 FROM table
-//
-// Project takes tuples with N fields and outputs tuples with M fields (where M <= N),
-// effectively creating a new schema with only the requested columns while preserving
-// the original tuple ordering and record identifiers.
 type Project struct {
 	base           *BaseIterator
 	projectedCols  []int
 	projectedTypes []types.Type
-	source         iterator.DbIterator
+	source         *sourceOperator
 	tupleDesc      *tuple.TupleDescription
 }
 
@@ -41,10 +37,15 @@ func NewProject(projectedCols []int, projectedTypes []types.Type, source iterato
 		return nil, fmt.Errorf("failed to create output tuple desc: %v", err)
 	}
 
+	sourceOp, err := NewSourceOperator(source)
+	if err != nil {
+		return nil, err
+	}
+
 	p := &Project{
 		projectedCols:  projectedCols,
 		projectedTypes: projectedTypes,
-		source:         source,
+		source:         sourceOp,
 		tupleDesc:      tupleDesc,
 	}
 
@@ -83,9 +84,8 @@ func (p *Project) GetTupleDesc() *tuple.TupleDescription {
 // Open initializes the Project operator for iteration by opening its source operator.
 func (p *Project) Open() error {
 	if err := p.source.Open(); err != nil {
-		return fmt.Errorf("failed to open source operator: %v", err)
+		return err
 	}
-
 	p.base.MarkOpened()
 	return nil
 }
@@ -123,27 +123,14 @@ func (p *Project) Next() (*tuple.Tuple, error) {
 // It reads the next tuple from the source operator and creates a new tuple
 // containing only the projected fields in the specified order.
 func (p *Project) readNext() (*tuple.Tuple, error) {
-	hasNext, err := p.source.HasNext()
-	if err != nil {
-		return nil, fmt.Errorf("error checking if source has next: %v", err)
-	}
-
-	if !hasNext {
-		return nil, nil // No more tuples
-	}
-
-	childTuple, err := p.source.Next()
-	if err != nil {
-		return nil, fmt.Errorf("error getting next tuple from source: %v", err)
-	}
-
-	if childTuple == nil {
-		return nil, nil
+	t, err := p.source.FetchNext()
+	if err != nil || t == nil {
+		return t, err
 	}
 
 	projectedTuple := tuple.NewTuple(p.tupleDesc)
 	for i, fieldIndex := range p.projectedCols {
-		field, err := childTuple.GetField(fieldIndex)
+		field, err := t.GetField(fieldIndex)
 		if err != nil {
 			return nil, fmt.Errorf("failed to get field %d from source tuple: %v", fieldIndex, err)
 		}
@@ -153,7 +140,7 @@ func (p *Project) readNext() (*tuple.Tuple, error) {
 		}
 	}
 
-	projectedTuple.RecordID = childTuple.RecordID
+	projectedTuple.RecordID = t.RecordID
 	return projectedTuple, nil
 }
 
