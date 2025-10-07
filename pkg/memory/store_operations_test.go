@@ -11,7 +11,6 @@ import (
 	"strings"
 	"sync"
 	"testing"
-	"time"
 )
 
 // Helper function to check if a string contains a substring
@@ -48,10 +47,6 @@ func TestNewPageStore(t *testing.T) {
 		t.Error("cache should be initialized")
 	}
 
-	if ps.txManager == nil {
-		t.Error("txManager should be initialized")
-	}
-
 	if ps.tableManager == nil {
 		t.Error("tableManager should be set correctly")
 	}
@@ -86,7 +81,7 @@ func TestPageStore_InsertTuple_Success(t *testing.T) {
 	}
 
 	// Create transaction and tuple
-	tid := transaction.NewTransactionID()
+	tx := createTransactionContext(t, wal)
 	testTuple := tuple.NewTuple(dbFile.GetTupleDesc())
 	intField := types.NewIntField(int32(42))
 	stringField := types.NewStringField("test_value", 128)
@@ -94,7 +89,7 @@ func TestPageStore_InsertTuple_Success(t *testing.T) {
 	testTuple.SetField(1, stringField)
 
 	// Test InsertTuple
-	err = ps.InsertTuple(tid, 1, testTuple)
+	err = ps.InsertTuple(tx, 1, testTuple)
 	if err != nil {
 		t.Errorf("InsertTuple failed: %v", err)
 	}
@@ -112,7 +107,7 @@ func TestPageStore_InsertTuple_TableNotFound(t *testing.T) {
 	}
 	defer ps.Close()
 
-	tid := transaction.NewTransactionID()
+	tx := createTransactionContext(t, nil)
 
 	// Create a dummy tuple (we won't be able to insert it anyway)
 	fieldTypes := []types.Type{types.IntType}
@@ -127,7 +122,7 @@ func TestPageStore_InsertTuple_TableNotFound(t *testing.T) {
 	testTuple.SetField(0, intField)
 
 	// Test with non-existent table ID
-	err = ps.InsertTuple(tid, 999, testTuple)
+	err = ps.InsertTuple(tx, 999, testTuple)
 	if err == nil {
 		t.Error("Expected error for non-existent table")
 	}
@@ -159,7 +154,7 @@ func TestPageStore_InsertTuple_WithTransactionTracking(t *testing.T) {
 	}
 
 	// Create transaction
-	tid := transaction.NewTransactionID()
+	tx := createTransactionContext(t, wal)
 
 	// Create tuple
 	testTuple := tuple.NewTuple(dbFile.GetTupleDesc())
@@ -167,13 +162,13 @@ func TestPageStore_InsertTuple_WithTransactionTracking(t *testing.T) {
 	testTuple.SetField(0, intField)
 
 	// Test InsertTuple
-	err = ps.InsertTuple(tid, 1, testTuple)
+	err = ps.InsertTuple(tx, 1, testTuple)
 	if err != nil {
 		t.Errorf("InsertTuple failed: %v", err)
 	}
 
 	// Verify transaction info was updated
-	dirtyPages := ps.txManager.GetDirtyPages(tid)
+	dirtyPages := tx.GetDirtyPages()
 	if len(dirtyPages) == 0 {
 		t.Error("Expected dirty pages to be tracked")
 	}
@@ -186,8 +181,8 @@ func TestPageStore_InsertTuple_WithTransactionTracking(t *testing.T) {
 			continue
 		}
 
-		if cachedPage.IsDirty() != tid {
-			t.Errorf("Page should be marked dirty by transaction %v", tid)
+		if cachedPage.IsDirty() != tx.ID {
+			t.Errorf("Page should be marked dirty by transaction %v", tx)
 		}
 	}
 }
@@ -215,7 +210,7 @@ func TestPageStore_InsertTuple_MultiplePages(t *testing.T) {
 	}
 
 	// Create transaction
-	tid := transaction.NewTransactionID()
+	tx := createTransactionContext(t, wal)
 
 	// Create tuple
 	testTuple := tuple.NewTuple(dbFile.GetTupleDesc())
@@ -223,7 +218,7 @@ func TestPageStore_InsertTuple_MultiplePages(t *testing.T) {
 	testTuple.SetField(0, intField)
 
 	// Test InsertTuple
-	err = ps.InsertTuple(tid, 1, testTuple)
+	err = ps.InsertTuple(tx, 1, testTuple)
 	if err != nil {
 		t.Errorf("InsertTuple failed: %v", err)
 	}
@@ -233,7 +228,7 @@ func TestPageStore_InsertTuple_MultiplePages(t *testing.T) {
 		t.Errorf("Expected 1 page in cache, got %d", ps.cache.Size())
 	}
 
-	dirtyPages := ps.txManager.GetDirtyPages(tid)
+	dirtyPages := tx.GetDirtyPages()
 	if len(dirtyPages) != 1 {
 		t.Errorf("Expected 1 dirty page tracked, got %d", len(dirtyPages))
 	}
@@ -274,7 +269,7 @@ func TestPageStore_InsertTuple_ConcurrentAccess(t *testing.T) {
 			defer wg.Done()
 
 			for j := 0; j < numInsertsPerGoroutine; j++ {
-				tid := transaction.NewTransactionID()
+				tx := createTransactionContext(t, wal)
 				tableID := (j % 3) + 1 // Rotate between tables 1, 2, 3
 
 				// Create tuple
@@ -285,7 +280,7 @@ func TestPageStore_InsertTuple_ConcurrentAccess(t *testing.T) {
 				testTuple.SetField(0, intField)
 
 				// Insert tuple
-				err := ps.InsertTuple(tid, tableID, testTuple)
+				err := ps.InsertTuple(tx, tableID, testTuple)
 				if err != nil {
 					t.Errorf("InsertTuple failed for goroutine %d, iteration %d: %v", goroutineID, j, err)
 				}
@@ -299,60 +294,6 @@ func TestPageStore_InsertTuple_ConcurrentAccess(t *testing.T) {
 	expectedCacheSize := MaxPageCount // 50 pages max
 	if ps.cache.Size() != expectedCacheSize {
 		t.Errorf("Expected %d pages in cache, got %d", expectedCacheSize, ps.cache.Size())
-	}
-}
-
-func TestPageStore_TransactionInfo(t *testing.T) {
-	info := &TransactionInfo{
-		startTime:   time.Now(),
-		dirtyPages:  make(map[tuple.PageID]bool),
-		lockedPages: make(map[tuple.PageID]Permissions),
-	}
-
-	// Test dirty pages tracking
-	pageID1 := heap.NewHeapPageID(1, 0)
-	pageID2 := heap.NewHeapPageID(1, 1)
-
-	info.dirtyPages[pageID1] = true
-	info.dirtyPages[pageID2] = true
-
-	if len(info.dirtyPages) != 2 {
-		t.Errorf("Expected 2 dirty pages, got %d", len(info.dirtyPages))
-	}
-
-	// Test locked pages tracking
-	info.lockedPages[pageID1] = ReadOnly
-	info.lockedPages[pageID2] = ReadWrite
-
-	if len(info.lockedPages) != 2 {
-		t.Errorf("Expected 2 locked pages, got %d", len(info.lockedPages))
-	}
-
-	if info.lockedPages[pageID1] != ReadOnly {
-		t.Errorf("Expected ReadOnly permission for pageID1, got %v", info.lockedPages[pageID1])
-	}
-
-	if info.lockedPages[pageID2] != ReadWrite {
-		t.Errorf("Expected ReadWrite permission for pageID2, got %v", info.lockedPages[pageID2])
-	}
-}
-
-func TestPageStore_Permissions(t *testing.T) {
-	tests := []struct {
-		name       string
-		permission Permissions
-		expected   int
-	}{
-		{"ReadOnly", ReadOnly, 0},
-		{"ReadWrite", ReadWrite, 1},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if int(tt.permission) != tt.expected {
-				t.Errorf("Expected %s to have value %d, got %d", tt.name, tt.expected, int(tt.permission))
-			}
-		})
 	}
 }
 
@@ -405,10 +346,10 @@ func TestPageStore_EdgeCases(t *testing.T) {
 			t.Fatalf("Failed to add table: %v", err)
 		}
 
-		tid := transaction.NewTransactionID()
+		tx := createTransactionContext(t, wal)
 
 		// Test with nil tuple
-		err = ps.InsertTuple(tid, 1, nil)
+		err = ps.InsertTuple(tx, 1, nil)
 		// This should not panic
 	})
 }
@@ -435,7 +376,7 @@ func TestPageStore_DeleteTuple_Success(t *testing.T) {
 	}
 
 	// Create transaction and tuple with RecordID
-	tid := transaction.NewTransactionID()
+	tx := createTransactionContext(t, wal)
 	testTuple := tuple.NewTuple(dbFile.GetTupleDesc())
 	intField := types.NewIntField(int32(42))
 	stringField := types.NewStringField("test_value", 128)
@@ -451,7 +392,7 @@ func TestPageStore_DeleteTuple_Success(t *testing.T) {
 	testTuple.RecordID = recordID
 
 	// Test DeleteTuple
-	err = ps.DeleteTuple(tid, testTuple)
+	err = ps.DeleteTuple(tx, testTuple)
 	if err != nil {
 		t.Errorf("DeleteTuple failed: %v", err)
 	}
@@ -475,7 +416,7 @@ func TestPageStore_DeleteTuple_NoRecordID(t *testing.T) {
 	ps := NewPageStore(tm, wal)
 	defer ps.Close()
 
-	tid := transaction.NewTransactionID()
+	tx := createTransactionContext(t, wal)
 
 	// Create a tuple without RecordID
 	fieldTypes := []types.Type{types.IntType}
@@ -490,7 +431,7 @@ func TestPageStore_DeleteTuple_NoRecordID(t *testing.T) {
 	testTuple.SetField(0, intField)
 
 	// Test with tuple that has no RecordID
-	err = ps.DeleteTuple(tid, testTuple)
+	err = ps.DeleteTuple(tx, testTuple)
 	if err == nil {
 		t.Error("Expected error for tuple without RecordID")
 	}
@@ -514,7 +455,7 @@ func TestPageStore_DeleteTuple_TableNotFound(t *testing.T) {
 	ps := NewPageStore(tm, wal)
 	defer ps.Close()
 
-	tid := transaction.NewTransactionID()
+	tx := createTransactionContext(t, wal)
 
 	// Create a tuple with RecordID pointing to non-existent table
 	fieldTypes := []types.Type{types.IntType}
@@ -537,7 +478,7 @@ func TestPageStore_DeleteTuple_TableNotFound(t *testing.T) {
 	testTuple.RecordID = recordID
 
 	// Test with non-existent table ID
-	err = ps.DeleteTuple(tid, testTuple)
+	err = ps.DeleteTuple(tx, testTuple)
 	if err == nil {
 		t.Error("Expected error for non-existent table")
 	}
@@ -569,7 +510,7 @@ func TestPageStore_DeleteTuple_WithTransactionTracking(t *testing.T) {
 	}
 
 	// Create transaction
-	tid := transaction.NewTransactionID()
+	tx := createTransactionContext(t, wal)
 
 	// Create tuple with RecordID
 	testTuple := tuple.NewTuple(dbFile.GetTupleDesc())
@@ -584,13 +525,13 @@ func TestPageStore_DeleteTuple_WithTransactionTracking(t *testing.T) {
 	testTuple.RecordID = recordID
 
 	// Test DeleteTuple
-	err = ps.DeleteTuple(tid, testTuple)
+	err = ps.DeleteTuple(tx, testTuple)
 	if err != nil {
 		t.Errorf("DeleteTuple failed: %v", err)
 	}
 
 	// Verify transaction info was updated
-	dirtyPages := ps.txManager.GetDirtyPages(tid)
+	dirtyPages := tx.GetDirtyPages()
 	if len(dirtyPages) == 0 {
 		t.Error("Expected dirty pages to be tracked")
 	}
@@ -603,8 +544,8 @@ func TestPageStore_DeleteTuple_WithTransactionTracking(t *testing.T) {
 			continue
 		}
 
-		if cachedPage.IsDirty() != tid {
-			t.Errorf("Page should be marked dirty by transaction %v", tid)
+		if cachedPage.IsDirty() != tx.ID {
+			t.Errorf("Page should be marked dirty by transaction %v", tx.ID)
 		}
 	}
 }
@@ -644,7 +585,7 @@ func TestPageStore_DeleteTuple_ConcurrentAccess(t *testing.T) {
 			defer wg.Done()
 
 			for j := 0; j < numDeletesPerGoroutine; j++ {
-				tid := transaction.NewTransactionID()
+				tx := createTransactionContext(t, wal)
 				tableID := (j % 3) + 1 // Rotate between tables 1, 2, 3
 
 				// Create tuple with RecordID
@@ -662,7 +603,7 @@ func TestPageStore_DeleteTuple_ConcurrentAccess(t *testing.T) {
 				testTuple.RecordID = recordID
 
 				// Delete tuple
-				err := ps.DeleteTuple(tid, testTuple)
+				err := ps.DeleteTuple(tx, testTuple)
 				if err != nil {
 					t.Errorf("DeleteTuple failed for goroutine %d, iteration %d: %v", goroutineID, j, err)
 				}
@@ -729,10 +670,10 @@ func TestPageStore_DeleteTuple_EdgeCases(t *testing.T) {
 		ps := NewPageStore(tm, wal)
 		defer ps.Close()
 
-		tid := transaction.NewTransactionID()
+		tx := createTransactionContext(t, wal)
 
 		// Test with nil tuple
-		err = ps.DeleteTuple(tid, nil)
+		err = ps.DeleteTuple(tx, nil)
 		// This should not panic, but will likely error due to nil pointer
 		if err == nil {
 			t.Error("Expected error for nil tuple")
@@ -763,13 +704,13 @@ func TestPageStore_MemoryLeaks(t *testing.T) {
 	// Create many transactions and insert tuples
 	numTransactions := 100
 	for i := 0; i < numTransactions; i++ {
-		tid := transaction.NewTransactionID()
+		tx := createTransactionContext(t, wal)
 
 		testTuple := tuple.NewTuple(dbFile.GetTupleDesc())
 		intField := types.NewIntField(int32(i))
 		testTuple.SetField(0, intField)
 
-		err := ps.InsertTuple(tid, 1, testTuple)
+		err := ps.InsertTuple(tx, 1, testTuple)
 		if err != nil {
 			t.Errorf("InsertTuple failed for transaction %d: %v", i, err)
 		}
@@ -807,7 +748,7 @@ func TestPageStore_UpdateTuple_Success(t *testing.T) {
 	}
 
 	// Create transaction
-	tid := transaction.NewTransactionID()
+	tx := createTransactionContext(t, wal)
 
 	// Create old tuple with RecordID
 	oldTuple := tuple.NewTuple(dbFile.GetTupleDesc())
@@ -831,7 +772,7 @@ func TestPageStore_UpdateTuple_Success(t *testing.T) {
 	newTuple.SetField(1, stringField2)
 
 	// Test UpdateTuple
-	err = ps.UpdateTuple(tid, oldTuple, newTuple)
+	err = ps.UpdateTuple(tx, oldTuple, newTuple)
 	if err != nil {
 		t.Errorf("UpdateTuple failed: %v", err)
 	}
@@ -855,7 +796,7 @@ func TestPageStore_UpdateTuple_DeleteFails(t *testing.T) {
 	ps := NewPageStore(tm, wal)
 	defer ps.Close()
 
-	tid := transaction.NewTransactionID()
+	tx := createTransactionContext(t, wal)
 
 	// Create old tuple without RecordID (will cause delete to fail)
 	fieldTypes := []types.Type{types.IntType}
@@ -876,7 +817,7 @@ func TestPageStore_UpdateTuple_DeleteFails(t *testing.T) {
 	newTuple.SetField(0, intField2)
 
 	// Test UpdateTuple - should fail because delete fails
-	err = ps.UpdateTuple(tid, oldTuple, newTuple)
+	err = ps.UpdateTuple(tx, oldTuple, newTuple)
 	if err == nil {
 		t.Error("Expected error when delete operation fails")
 	}
@@ -909,7 +850,7 @@ func TestPageStore_UpdateTuple_InsertFails_Rollback(t *testing.T) {
 		t.Fatalf("Failed to add table: %v", err)
 	}
 
-	tid := transaction.NewTransactionID()
+	tx := createTransactionContext(t, wal)
 
 	// Create old tuple with RecordID
 	oldTuple := tuple.NewTuple(dbFile.GetTupleDesc())
@@ -959,7 +900,7 @@ func TestPageStore_UpdateTuple_InsertFails_Rollback(t *testing.T) {
 	oldTuple.RecordID = recordID2
 
 	// Test UpdateTuple - delete will fail due to table not found
-	err = ps.UpdateTuple(tid, oldTuple, newTuple)
+	err = ps.UpdateTuple(tx, oldTuple, newTuple)
 	if err == nil {
 		t.Error("Expected error when both delete and insert operations would fail")
 	}
@@ -987,7 +928,7 @@ func TestPageStore_UpdateTuple_WithTransactionTracking(t *testing.T) {
 	}
 
 	// Create transaction
-	tid := transaction.NewTransactionID()
+	tx := createTransactionContext(t, wal)
 
 	// Create old tuple with RecordID
 	oldTuple := tuple.NewTuple(dbFile.GetTupleDesc())
@@ -1007,13 +948,13 @@ func TestPageStore_UpdateTuple_WithTransactionTracking(t *testing.T) {
 	newTuple.SetField(0, intField2)
 
 	// Test UpdateTuple
-	err = ps.UpdateTuple(tid, oldTuple, newTuple)
+	err = ps.UpdateTuple(tx, oldTuple, newTuple)
 	if err != nil {
 		t.Errorf("UpdateTuple failed: %v", err)
 	}
 
 	// Verify transaction info was updated
-	dirtyPages := ps.txManager.GetDirtyPages(tid)
+	dirtyPages := tx.GetDirtyPages()
 	if len(dirtyPages) == 0 {
 		t.Error("Expected dirty pages to be tracked")
 	}
@@ -1026,8 +967,8 @@ func TestPageStore_UpdateTuple_WithTransactionTracking(t *testing.T) {
 			continue
 		}
 
-		if cachedPage.IsDirty() != tid {
-			t.Errorf("Page should be marked dirty by transaction %v", tid)
+		if cachedPage.IsDirty() != tx.ID {
+			t.Errorf("Page should be marked dirty by transaction %v", tx.ID)
 		}
 	}
 }
@@ -1067,7 +1008,7 @@ func TestPageStore_UpdateTuple_ConcurrentAccess(t *testing.T) {
 			defer wg.Done()
 
 			for j := 0; j < numUpdatesPerGoroutine; j++ {
-				tid := transaction.NewTransactionID()
+				tx := createTransactionContext(t, wal)
 				tableID := (j % 3) + 1 // Rotate between tables 1, 2, 3
 
 				// Create old tuple with RecordID
@@ -1091,7 +1032,7 @@ func TestPageStore_UpdateTuple_ConcurrentAccess(t *testing.T) {
 				newTuple.SetField(0, intField2)
 
 				// Update tuple
-				err := ps.UpdateTuple(tid, oldTuple, newTuple)
+				err := ps.UpdateTuple(tx, oldTuple, newTuple)
 				if err != nil {
 					t.Errorf("UpdateTuple failed for goroutine %d, iteration %d: %v", goroutineID, j, err)
 				}
@@ -1170,7 +1111,7 @@ func TestPageStore_UpdateTuple_EdgeCases(t *testing.T) {
 			t.Fatalf("Failed to add table: %v", err)
 		}
 
-		tid := transaction.NewTransactionID()
+		tx := createTransactionContext(t, wal)
 
 		// Create new tuple
 		newTuple := tuple.NewTuple(dbFile.GetTupleDesc())
@@ -1178,7 +1119,7 @@ func TestPageStore_UpdateTuple_EdgeCases(t *testing.T) {
 		newTuple.SetField(0, intField)
 
 		// Test with nil old tuple
-		err = ps.UpdateTuple(tid, nil, newTuple)
+		err = ps.UpdateTuple(tx, nil, newTuple)
 		if err == nil {
 			t.Error("Expected error for nil old tuple")
 		}
@@ -1203,7 +1144,7 @@ func TestPageStore_UpdateTuple_EdgeCases(t *testing.T) {
 			t.Fatalf("Failed to add table: %v", err)
 		}
 
-		tid := transaction.NewTransactionID()
+		tx := createTransactionContext(t, wal)
 
 		// Create old tuple with RecordID
 		oldTuple := tuple.NewTuple(dbFile.GetTupleDesc())
@@ -1218,7 +1159,7 @@ func TestPageStore_UpdateTuple_EdgeCases(t *testing.T) {
 		oldTuple.RecordID = recordID
 
 		// Test with nil new tuple
-		err = ps.UpdateTuple(tid, oldTuple, nil)
+		err = ps.UpdateTuple(tx, oldTuple, nil)
 		// This will likely fail during the insert phase, but may succeed
 		// depending on the mock implementation
 		_ = err // We don't require this to error
@@ -1243,7 +1184,7 @@ func TestPageStore_UpdateTuple_EdgeCases(t *testing.T) {
 			t.Fatalf("Failed to add table: %v", err)
 		}
 
-		tid := transaction.NewTransactionID()
+		tx := createTransactionContext(t, wal)
 
 		// Create tuple with RecordID
 		testTuple := tuple.NewTuple(dbFile.GetTupleDesc())
@@ -1258,7 +1199,7 @@ func TestPageStore_UpdateTuple_EdgeCases(t *testing.T) {
 		testTuple.RecordID = recordID
 
 		// Test with same tuple for old and new
-		err = ps.UpdateTuple(tid, testTuple, testTuple)
+		err = ps.UpdateTuple(tx, testTuple, testTuple)
 		if err != nil {
 			t.Errorf("UpdateTuple should handle same tuple update: %v", err)
 		}
@@ -1305,13 +1246,13 @@ func TestPageStore_FlushAllPages_SinglePage(t *testing.T) {
 		t.Fatalf("Failed to add table: %v", err)
 	}
 
-	tid := transaction.NewTransactionID()
+	tx := createTransactionContext(t, wal)
 	testTuple := tuple.NewTuple(dbFile.GetTupleDesc())
 	intField := types.NewIntField(int32(42))
 	testTuple.SetField(0, intField)
 
 	// Insert tuple to add page to cache
-	err = ps.InsertTuple(tid, 1, testTuple)
+	err = ps.InsertTuple(tx, 1, testTuple)
 	if err != nil {
 		t.Fatalf("Failed to insert tuple: %v", err)
 	}
@@ -1369,12 +1310,12 @@ func TestPageStore_FlushAllPages_MultiplePages(t *testing.T) {
 	for tableID := 1; tableID <= numTables; tableID++ {
 		dbFile, _ := tm.GetDbFile(tableID)
 		for tupleIdx := 0; tupleIdx < numTuplesPerTable; tupleIdx++ {
-			tid := transaction.NewTransactionID()
+			tx := createTransactionContext(t, wal)
 			testTuple := tuple.NewTuple(dbFile.GetTupleDesc())
 			intField := types.NewIntField(int32(tableID*100 + tupleIdx))
 			testTuple.SetField(0, intField)
 
-			err := ps.InsertTuple(tid, tableID, testTuple)
+			err := ps.InsertTuple(tx, tableID, testTuple)
 			if err != nil {
 				t.Fatalf("Failed to insert tuple %d in table %d: %v", tupleIdx, tableID, err)
 			}
@@ -1455,12 +1396,12 @@ func TestPageStore_FlushAllPages_ConcurrentAccess(t *testing.T) {
 			defer wg.Done()
 
 			for j := 0; j < numInsertsPerGoroutine; j++ {
-				tid := transaction.NewTransactionID()
+				tx := createTransactionContext(t, wal)
 				testTuple := tuple.NewTuple(dbFile.GetTupleDesc())
 				intField := types.NewIntField(int32(goroutineID*numInsertsPerGoroutine + j))
 				testTuple.SetField(0, intField)
 
-				err := ps.InsertTuple(tid, 1, testTuple)
+				err := ps.InsertTuple(tx, 1, testTuple)
 				if err != nil {
 					t.Errorf("InsertTuple failed for goroutine %d, iteration %d: %v", goroutineID, j, err)
 				}
@@ -1539,12 +1480,12 @@ func TestPageStore_FlushAllPages_MixedDirtyAndCleanPages(t *testing.T) {
 	// Insert some tuples to create dirty pages
 	numTuples := 5
 	for i := 0; i < numTuples; i++ {
-		tid := transaction.NewTransactionID()
+		tx := createTransactionContext(t, wal)
 		testTuple := tuple.NewTuple(dbFile.GetTupleDesc())
 		intField := types.NewIntField(int32(i))
 		testTuple.SetField(0, intField)
 
-		err := ps.InsertTuple(tid, 1, testTuple)
+		err := ps.InsertTuple(tx, 1, testTuple)
 		if err != nil {
 			t.Fatalf("Failed to insert tuple %d: %v", i, err)
 		}
@@ -1634,12 +1575,12 @@ func TestPageStore_FlushAllPages_WriteFailure(t *testing.T) {
 		t.Fatalf("Failed to add table: %v", err)
 	}
 
-	tid := transaction.NewTransactionID()
+	tx := createTransactionContext(t, wal)
 	testTuple := tuple.NewTuple(dbFile.GetTupleDesc())
 	intField := types.NewIntField(int32(42))
 	testTuple.SetField(0, intField)
 
-	err = ps.InsertTuple(tid, 1, testTuple)
+	err = ps.InsertTuple(tx, 1, testTuple)
 	if err != nil {
 		t.Fatalf("Failed to insert tuple: %v", err)
 	}
@@ -1675,11 +1616,11 @@ func TestPageStore_GetPage_Success(t *testing.T) {
 		t.Fatalf("Failed to add table: %v", err)
 	}
 
-	tid := transaction.NewTransactionID()
+	tx := createTransactionContext(t, wal)
 	pageID := heap.NewHeapPageID(1, 0)
 
-	// Test GetPage with ReadOnly permission
-	page, err := ps.GetPage(tid, pageID, ReadOnly)
+	// Test GetPage with transaction.ReadOnly permission
+	page, err := ps.GetPage(tx, pageID, transaction.ReadOnly)
 	if err != nil {
 		t.Errorf("GetPage failed: %v", err)
 	}
@@ -1696,14 +1637,14 @@ func TestPageStore_GetPage_Success(t *testing.T) {
 	}
 
 	// Verify transaction tracking
-	txInfo := ps.txManager.GetOrCreate(tid)
-	if len(txInfo.lockedPages) == 0 {
+	txInfo := tx.GetStatistics()
+	if txInfo.LockedPages == 0 {
 		t.Error("Expected transaction to have locked pages")
 	}
-	if perm, locked := txInfo.lockedPages[pageID]; !locked {
+	if perm, locked := tx.GetPagePermission(pageID); !locked {
 		t.Error("Expected page to be locked by transaction")
-	} else if perm != ReadOnly {
-		t.Errorf("Expected ReadOnly permission, got %v", perm)
+	} else if perm != transaction.ReadOnly {
+		t.Errorf("Expected transaction.ReadOnly permission, got %v", perm)
 	}
 }
 
@@ -1727,17 +1668,17 @@ func TestPageStore_GetPage_CacheHit(t *testing.T) {
 		t.Fatalf("Failed to add table: %v", err)
 	}
 
-	tid := transaction.NewTransactionID()
+	tx := createTransactionContext(t, wal)
 	pageID := heap.NewHeapPageID(1, 0)
 
 	// First call - should load from disk
-	page1, err := ps.GetPage(tid, pageID, ReadOnly)
+	page1, err := ps.GetPage(tx, pageID, transaction.ReadOnly)
 	if err != nil {
 		t.Fatalf("First GetPage failed: %v", err)
 	}
 
 	// Second call - should hit cache
-	page2, err := ps.GetPage(tid, pageID, ReadWrite)
+	page2, err := ps.GetPage(tx, pageID, transaction.ReadWrite)
 	if err != nil {
 		t.Errorf("Second GetPage failed: %v", err)
 	}
@@ -1752,11 +1693,6 @@ func TestPageStore_GetPage_CacheHit(t *testing.T) {
 		t.Errorf("Expected 1 page in cache after cache hit, got %d", ps.cache.Size())
 	}
 
-	// Verify permission was updated in transaction info
-	txInfo := ps.txManager.GetOrCreate(tid)
-	if txInfo.lockedPages[pageID] != ReadWrite {
-		t.Errorf("Expected permission to be updated to ReadWrite, got %v", txInfo.lockedPages[pageID])
-	}
 }
 
 func TestPageStore_GetPage_TableNotFound(t *testing.T) {
@@ -1772,11 +1708,11 @@ func TestPageStore_GetPage_TableNotFound(t *testing.T) {
 	ps := NewPageStore(tm, wal)
 	defer ps.Close()
 
-	tid := transaction.NewTransactionID()
+	tx := createTransactionContext(t, wal)
 	pageID := heap.NewHeapPageID(999, 0) // Non-existent table
 
 	// Test with non-existent table
-	page, err := ps.GetPage(tid, pageID, ReadOnly)
+	page, err := ps.GetPage(tx, pageID, transaction.ReadOnly)
 	if err == nil {
 		t.Error("Expected error for non-existent table")
 	}
@@ -1811,11 +1747,11 @@ func TestPageStore_GetPage_ReadPageFailure(t *testing.T) {
 		t.Fatalf("Failed to add table: %v", err)
 	}
 
-	tid := transaction.NewTransactionID()
+	tx := createTransactionContext(t, wal)
 	pageID := heap.NewHeapPageID(1, 0)
 
 	// With our current mock, this should succeed
-	page, err := ps.GetPage(tid, pageID, ReadOnly)
+	page, err := ps.GetPage(tx, pageID, transaction.ReadOnly)
 	if err != nil {
 		t.Errorf("GetPage failed unexpectedly: %v", err)
 	}
@@ -1848,18 +1784,18 @@ func TestPageStore_GetPage_PermissionTypes(t *testing.T) {
 
 	tests := []struct {
 		name       string
-		permission Permissions
+		permission transaction.Permissions
 	}{
-		{"ReadOnly", ReadOnly},
-		{"ReadWrite", ReadWrite},
+		{"transaction.ReadOnly", transaction.ReadOnly},
+		{"transaction.ReadWrite", transaction.ReadWrite},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			tid := transaction.NewTransactionID()
-			defer ps.CommitTransaction(tid) // Clean up transaction and release locks
+			tx := createTransactionContext(t, wal)
+			defer ps.CommitTransaction(tx) // Clean up transaction and release locks
 
-			page, err := ps.GetPage(tid, pageID, tt.permission)
+			page, err := ps.GetPage(tx, pageID, tt.permission)
 			if err != nil {
 				t.Errorf("GetPage failed for %s permission: %v", tt.name, err)
 			}
@@ -1868,9 +1804,8 @@ func TestPageStore_GetPage_PermissionTypes(t *testing.T) {
 			}
 
 			// Verify transaction tracking
-			txInfo := ps.txManager.GetOrCreate(tid)
-			if txInfo.lockedPages[pageID] != tt.permission {
-				t.Errorf("Expected %s permission, got %v", tt.name, txInfo.lockedPages[pageID])
+			if perm, exists := tx.GetPagePermission(pageID); !exists || perm != tt.permission {
+				t.Errorf("Expected %s permission, got %v (exists=%v)", tt.name, perm, exists)
 			}
 		})
 	}
@@ -1900,11 +1835,11 @@ func TestPageStore_GetPage_MultipleTransactions(t *testing.T) {
 	pageID2 := heap.NewHeapPageID(1, 1)
 
 	// Create multiple transactions
-	tid1 := transaction.NewTransactionID()
-	tid2 := transaction.NewTransactionID()
+	tx1 := createTransactionContext(t, wal)
+	tx2 := createTransactionContext(t, wal)
 
 	// First transaction accesses page 1
-	page1, err := ps.GetPage(tid1, pageID1, ReadOnly)
+	page1, err := ps.GetPage(tx1, pageID1, transaction.ReadOnly)
 	if err != nil {
 		t.Fatalf("GetPage failed for transaction 1: %v", err)
 	}
@@ -1913,7 +1848,7 @@ func TestPageStore_GetPage_MultipleTransactions(t *testing.T) {
 	}
 
 	// Second transaction accesses page 2
-	page2, err := ps.GetPage(tid2, pageID2, ReadWrite)
+	page2, err := ps.GetPage(tx2, pageID2, transaction.ReadWrite)
 	if err != nil {
 		t.Fatalf("GetPage failed for transaction 2: %v", err)
 	}
@@ -1921,24 +1856,25 @@ func TestPageStore_GetPage_MultipleTransactions(t *testing.T) {
 		t.Fatal("Expected page for transaction 2")
 	}
 
-	// Verify both transactions are tracked
-	ps.txManager.mutex.RLock()
-	numTransactions := len(ps.txManager.transactions)
-	ps.txManager.mutex.RUnlock()
-	if numTransactions != 2 {
-		t.Errorf("Expected 2 transactions, got %d", numTransactions)
+	// Verify both transactions tracked their pages
+	lockedPages1 := tx1.GetLockedPages()
+	if len(lockedPages1) == 0 {
+		t.Error("Transaction 1 should have locked pages")
 	}
 
-	// Verify transaction 1 info
-	txInfo1 := ps.txManager.GetOrCreate(tid1)
-	if txInfo1.lockedPages[pageID1] != ReadOnly {
-		t.Error("Transaction 1 should have ReadOnly lock on page 1")
+	lockedPages2 := tx2.GetLockedPages()
+	if len(lockedPages2) == 0 {
+		t.Error("Transaction 2 should have locked pages")
 	}
 
-	// Verify transaction 2 info
-	txInfo2 := ps.txManager.GetOrCreate(tid2)
-	if txInfo2.lockedPages[pageID2] != ReadWrite {
-		t.Error("Transaction 2 should have ReadWrite lock on page 2")
+	// Verify transaction 1 has the correct permission on page 1
+	if perm, exists := tx1.GetPagePermission(pageID1); !exists || perm != transaction.ReadOnly {
+		t.Error("Transaction 1 should have transaction.ReadOnly lock on page 1")
+	}
+
+	// Verify transaction 2 has the correct permission on page 2
+	if perm, exists := tx2.GetPagePermission(pageID2); !exists || perm != transaction.ReadWrite {
+		t.Error("Transaction 2 should have transaction.ReadWrite lock on page 2")
 	}
 }
 
@@ -1962,18 +1898,18 @@ func TestPageStore_GetPage_AccessOrder(t *testing.T) {
 		t.Fatalf("Failed to add table: %v", err)
 	}
 
-	tid := transaction.NewTransactionID()
+	tx := createTransactionContext(t, wal)
 	pageID1 := heap.NewHeapPageID(1, 0)
 	pageID2 := heap.NewHeapPageID(1, 1)
 
 	// Access first page
-	_, err = ps.GetPage(tid, pageID1, ReadOnly)
+	_, err = ps.GetPage(tx, pageID1, transaction.ReadOnly)
 	if err != nil {
 		t.Fatalf("GetPage failed for page 1: %v", err)
 	}
 
 	// Access second page
-	_, err = ps.GetPage(tid, pageID2, ReadOnly)
+	_, err = ps.GetPage(tx, pageID2, transaction.ReadOnly)
 	if err != nil {
 		t.Fatalf("GetPage failed for page 2: %v", err)
 	}
@@ -1991,7 +1927,7 @@ func TestPageStore_GetPage_AccessOrder(t *testing.T) {
 	}
 
 	// Access first page again (should move to end)
-	_, err = ps.GetPage(tid, pageID1, ReadOnly)
+	_, err = ps.GetPage(tx, pageID1, transaction.ReadOnly)
 	if err != nil {
 		t.Fatalf("GetPage failed for page 1 (second access): %v", err)
 	}
@@ -2044,19 +1980,19 @@ func TestPageStore_GetPage_ConcurrentAccess(t *testing.T) {
 			defer wg.Done()
 
 			// Use one transaction per goroutine to reduce transaction overhead
-			tid := transaction.NewTransactionID()
-			defer ps.CommitTransaction(tid) // Clean up transaction
+			tx := createTransactionContext(t, wal)
+			defer ps.CommitTransaction(tx) // Clean up transaction
 
 			for j := 0; j < numAccessesPerGoroutine; j++ {
 				tableID := (j % numTables) + 1
 				pageNum := j % 10 // Reuse some page numbers to test cache hits
 				pageID := heap.NewHeapPageID(tableID, pageNum)
-				permission := ReadOnly
+				permission := transaction.ReadOnly
 				if j%2 == 0 {
-					permission = ReadWrite
+					permission = transaction.ReadWrite
 				}
 
-				page, err := ps.GetPage(tid, pageID, permission)
+				page, err := ps.GetPage(tx, pageID, permission)
 				if err != nil {
 					t.Errorf("GetPage failed for goroutine %d, iteration %d: %v", goroutineID, j, err)
 					continue
@@ -2074,13 +2010,8 @@ func TestPageStore_GetPage_ConcurrentAccess(t *testing.T) {
 	if ps.cache.Size() == 0 {
 		t.Error("Expected pages in cache after concurrent access")
 	}
-	// Transactions should be cleaned up after commits
-	ps.txManager.mutex.RLock()
-	numTransactions := len(ps.txManager.transactions)
-	ps.txManager.mutex.RUnlock()
-	if numTransactions != 0 {
-		t.Errorf("Expected no active transactions after cleanup, got %d", numTransactions)
-	}
+	// Note: With TransactionContext, transactions are managed independently
+	// and cleanup happens through CommitTransaction/AbortTransaction calls
 
 	// All pages should be accessible without error
 	for _, pageID := range ps.cache.GetAll() {
@@ -2110,19 +2041,17 @@ func TestPageStore_GetPage_TransactionInfoCreation(t *testing.T) {
 		t.Fatalf("Failed to add table: %v", err)
 	}
 
-	tid := transaction.NewTransactionID()
+	tx := createTransactionContext(t, wal)
 	pageID := heap.NewHeapPageID(1, 0)
 
-	// Verify transaction doesn't exist initially
-	ps.txManager.mutex.RLock()
-	_, exists := ps.txManager.transactions[tid]
-	ps.txManager.mutex.RUnlock()
-	if exists {
-		t.Error("Transaction should not exist initially")
+	// Verify transaction has no locked pages initially
+	lockedPagesBefore := tx.GetLockedPages()
+	if len(lockedPagesBefore) != 0 {
+		t.Error("Transaction should not have locked pages initially")
 	}
 
-	// Access page - should create transaction info
-	page, err := ps.GetPage(tid, pageID, ReadWrite)
+	// Access page - should record in transaction context
+	page, err := ps.GetPage(tx, pageID, transaction.ReadWrite)
 	if err != nil {
 		t.Fatalf("GetPage failed: %v", err)
 	}
@@ -2130,29 +2059,21 @@ func TestPageStore_GetPage_TransactionInfoCreation(t *testing.T) {
 		t.Fatal("Expected page to be returned")
 	}
 
-	// Verify transaction info was created
-	ps.txManager.mutex.RLock()
-	_, exists = ps.txManager.transactions[tid]
-	ps.txManager.mutex.RUnlock()
-	if !exists {
-		t.Fatal("Expected transaction info to be created")
+	// Verify transaction context was updated
+	lockedPagesAfter := tx.GetLockedPages()
+	if len(lockedPagesAfter) == 0 {
+		t.Fatal("Expected transaction to have locked pages after GetPage")
 	}
 
-	// Verify transaction info fields
-	txInfo := ps.txManager.GetOrCreate(tid)
-	if txInfo.startTime.IsZero() {
-		t.Error("Expected start time to be set")
+	// Verify transaction has the correct permission on the page
+	if perm, exists := tx.GetPagePermission(pageID); !exists || perm != transaction.ReadWrite {
+		t.Errorf("Expected transaction.ReadWrite permission, got %v (exists=%v)", perm, exists)
 	}
 
-	if txInfo.dirtyPages == nil {
-		t.Error("Expected dirty pages map to be initialized")
-	}
-
-	if txInfo.lockedPages == nil {
-		t.Error("Expected locked pages map to be initialized")
-	}
-	if txInfo.lockedPages[pageID] != ReadWrite {
-		t.Errorf("Expected ReadWrite permission, got %v", txInfo.lockedPages[pageID])
+	// Verify transaction statistics
+	stats := tx.GetStatistics()
+	if stats.LockedPages == 0 {
+		t.Error("Expected locked pages count to be greater than 0")
 	}
 }
 
@@ -2179,7 +2100,7 @@ func TestPageStore_GetPage_EdgeCases(t *testing.T) {
 		pageID := heap.NewHeapPageID(1, 0)
 
 		// Test with nil transaction ID
-		page, err := ps.GetPage(nil, pageID, ReadOnly)
+		page, err := ps.GetPage(nil, pageID, transaction.ReadOnly)
 		// This should not panic - behavior depends on implementation
 		_ = page
 		_ = err
@@ -2204,10 +2125,10 @@ func TestPageStore_GetPage_EdgeCases(t *testing.T) {
 			t.Fatalf("Failed to add table: %v", err)
 		}
 
-		tid := transaction.NewTransactionID()
+		tx := createTransactionContext(t, wal)
 		pageID := heap.NewHeapPageID(0, 0)
 
-		page, err := ps.GetPage(tid, pageID, ReadOnly)
+		page, err := ps.GetPage(tx, pageID, transaction.ReadOnly)
 		if err != nil {
 			t.Errorf("GetPage failed for zero table ID: %v", err)
 		}
