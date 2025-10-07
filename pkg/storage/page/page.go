@@ -1,7 +1,7 @@
 package page
 
 import (
-	"storemy/pkg/concurrency/transaction"
+	"storemy/pkg/primitives"
 	"storemy/pkg/tuple"
 )
 
@@ -17,10 +17,10 @@ type Page interface {
 	GetID() tuple.PageID
 
 	// IsDirty returns the transaction ID that last dirtied this page, or nil if clean
-	IsDirty() *transaction.TransactionID
+	IsDirty() *primitives.TransactionID
 
 	// MarkDirty sets the dirty state of this page
-	MarkDirty(dirty bool, tid *transaction.TransactionID)
+	MarkDirty(dirty bool, tid *primitives.TransactionID)
 
 	// GetPageData returns a byte array representing the contents of this page
 	// Used to serialize this page to disk
