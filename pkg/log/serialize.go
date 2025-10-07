@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"storemy/pkg/primitives"
+	"storemy/pkg/storage/heap"
 	"time"
 )
 
@@ -264,42 +265,7 @@ func deserializePageID(buf *bytes.Reader) (primitives.PageID, error) {
 		return nil, fmt.Errorf("failed to read PageID pageNo: %w", err)
 	}
 
-	return &pageIDImpl{
-		tableID: int(tableID),
-		pageNo:  int(pageNo),
-	}, nil
-}
-
-type pageIDImpl struct {
-	tableID int
-	pageNo  int
-}
-
-func (p *pageIDImpl) GetTableID() int {
-	return p.tableID
-}
-
-func (p *pageIDImpl) PageNo() int {
-	return p.pageNo
-}
-
-func (p *pageIDImpl) Serialize() []int {
-	return []int{p.tableID, p.pageNo}
-}
-
-func (p *pageIDImpl) Equals(other primitives.PageID) bool {
-	if other == nil {
-		return false
-	}
-	return p.tableID == other.GetTableID() && p.pageNo == other.PageNo()
-}
-
-func (p *pageIDImpl) String() string {
-	return fmt.Sprintf("PageID{tableID: %d, pageNo: %d}", p.tableID, p.pageNo)
-}
-
-func (p *pageIDImpl) HashCode() int {
-	return p.tableID*31 + p.pageNo
+	return heap.NewHeapPageID(int(tableID), int(pageNo)), nil
 }
 
 // deserializeImage deserializes a byte slice image (BeforeImage or AfterImage).
