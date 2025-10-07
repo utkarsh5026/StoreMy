@@ -2,7 +2,7 @@ package heap
 
 import (
 	"bytes"
-	"storemy/pkg/concurrency/transaction"
+	"storemy/pkg/primitives"
 	"storemy/pkg/storage/page"
 	"storemy/pkg/tuple"
 	"storemy/pkg/types"
@@ -128,7 +128,7 @@ func TestHeapPage_IsDirty_MarkDirty(t *testing.T) {
 		t.Errorf("Expected clean page, but got dirty transaction: %v", hp.IsDirty())
 	}
 
-	tid := &transaction.TransactionID{}
+	tid := &primitives.TransactionID{}
 	hp.MarkDirty(true, tid)
 
 	if hp.IsDirty() != tid {

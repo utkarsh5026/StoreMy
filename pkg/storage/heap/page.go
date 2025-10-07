@@ -4,7 +4,7 @@ import (
 	"bytes"
 	"fmt"
 	"io"
-	"storemy/pkg/concurrency/transaction"
+	"storemy/pkg/primitives"
 	"storemy/pkg/storage/page"
 	"storemy/pkg/tuple"
 	"storemy/pkg/types"
@@ -18,14 +18,14 @@ const (
 // HeapPage stores pages of HeapFiles and implements the Page interface
 // It manages tuples within a single page using a header bitmap to track occupied slots
 type HeapPage struct {
-	pageID    *HeapPageID                // ID of this page
-	tupleDesc *tuple.TupleDescription    // Schema of tuples on this page
-	header    []byte                     // Bitmap indicating which slots are occupied
-	tuples    []*tuple.Tuple             // Array of tuples (nil means empty slot)
-	numSlots  int                        // Total number of tuple slots on this page
-	dirtier   *transaction.TransactionID // Transaction that dirtied this page
-	oldData   []byte                     // Before image for recovery
-	mutex     sync.RWMutex               // Protects concurrent access
+	pageID    *HeapPageID               // ID of this page
+	tupleDesc *tuple.TupleDescription   // Schema of tuples on this page
+	header    []byte                    // Bitmap indicating which slots are occupied
+	tuples    []*tuple.Tuple            // Array of tuples (nil means empty slot)
+	numSlots  int                       // Total number of tuple slots on this page
+	dirtier   *primitives.TransactionID // Transaction that dirtied this page
+	oldData   []byte                    // Before image for recovery
+	mutex     sync.RWMutex              // Protects concurrent access
 }
 
 func NewHeapPage(pid *HeapPageID, data []byte, td *tuple.TupleDescription) (*HeapPage, error) {
@@ -65,14 +65,14 @@ func (hp *HeapPage) GetID() tuple.PageID {
 }
 
 // IsDirty returns the transaction that last dirtied this page, or nil if clean
-func (hp *HeapPage) IsDirty() *transaction.TransactionID {
+func (hp *HeapPage) IsDirty() *primitives.TransactionID {
 	hp.mutex.RLock()
 	defer hp.mutex.RUnlock()
 	return hp.dirtier
 }
 
 // MarkDirty marks this page as dirty/clean and records the transaction
-func (hp *HeapPage) MarkDirty(dirty bool, tid *transaction.TransactionID) {
+func (hp *HeapPage) MarkDirty(dirty bool, tid *primitives.TransactionID) {
 	hp.mutex.Lock()
 	defer hp.mutex.Unlock()
 
