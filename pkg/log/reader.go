@@ -40,12 +40,18 @@ func (lr *LogReader) ReadNext() (*LogRecord, error) {
 		return nil, err
 	}
 
-	recordBuf, err := readRecordBytes(lr.file, int64(recordSize), lr.offset+RecordSize)
+	// Read the record data (excluding the size header we already read)
+	recordBuf, err := readRecordBytes(lr.file, int64(recordSize-RecordSize), lr.offset+RecordSize)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read record bytes at offset %d: %w", lr.offset, err)
 	}
 
-	record, err := DeserializeLogRecord(recordBuf)
+	// Prepend the size header for deserialization
+	fullRecord := make([]byte, recordSize)
+	binary.BigEndian.PutUint32(fullRecord[0:RecordSize], recordSize)
+	copy(fullRecord[RecordSize:], recordBuf)
+
+	record, err := DeserializeLogRecord(fullRecord)
 	if err != nil {
 		return nil, fmt.Errorf("failed to deserialize record at offset %d: %w", lr.offset, err)
 	}
