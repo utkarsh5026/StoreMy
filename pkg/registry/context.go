@@ -2,6 +2,7 @@ package registry
 
 import (
 	"storemy/pkg/catalog"
+	"storemy/pkg/concurrency/transaction"
 	"storemy/pkg/log"
 	"storemy/pkg/memory"
 )
@@ -12,6 +13,7 @@ type DatabaseContext struct {
 	tableManager *memory.TableManager
 	pageStore    *memory.PageStore
 	catalog      *catalog.SystemCatalog
+	txRegistry   *transaction.TransactionRegistry
 	wal          *log.WAL
 	dataDir      string
 }
@@ -28,6 +30,7 @@ func NewDatabaseContext(
 		tableManager: tableManager,
 		pageStore:    pageStore,
 		catalog:      catalog,
+		txRegistry:   transaction.NewTransactionRegistry(wal),
 		wal:          wal,
 		dataDir:      dataDir,
 	}
@@ -51,4 +54,8 @@ func (ctx *DatabaseContext) WAL() *log.WAL {
 
 func (ctx *DatabaseContext) DataDir() string {
 	return ctx.dataDir
+}
+
+func (ctx *DatabaseContext) TransactionRegistry() *transaction.TransactionRegistry {
+	return ctx.txRegistry
 }
