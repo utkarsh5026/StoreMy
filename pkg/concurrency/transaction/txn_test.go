@@ -1,9 +1,9 @@
-package registry
+package transaction
 
 import (
 	"path/filepath"
-	"storemy/pkg/concurrency/transaction"
 	"storemy/pkg/log"
+	"storemy/pkg/primitives"
 	"storemy/pkg/tuple"
 	"sync"
 	"testing"
@@ -16,11 +16,11 @@ type mockPageID struct {
 	pageNo  int
 }
 
-func (m *mockPageID) GetTableID() int     { return m.tableID }
-func (m *mockPageID) PageNo() int         { return m.pageNo }
-func (m *mockPageID) Serialize() []int    { return []int{m.tableID, m.pageNo} }
-func (m *mockPageID) String() string      { return "mockPageID" }
-func (m *mockPageID) HashCode() int       { return m.tableID*31 + m.pageNo }
+func (m *mockPageID) GetTableID() int  { return m.tableID }
+func (m *mockPageID) PageNo() int      { return m.pageNo }
+func (m *mockPageID) Serialize() []int { return []int{m.tableID, m.pageNo} }
+func (m *mockPageID) String() string   { return "mockPageID" }
+func (m *mockPageID) HashCode() int    { return m.tableID*31 + m.pageNo }
 func (m *mockPageID) Equals(other tuple.PageID) bool {
 	if other == nil {
 		return false
@@ -65,7 +65,7 @@ func TestTransactionStatus_String(t *testing.T) {
 
 // TestNewTransactionContext tests creating a new transaction context
 func TestNewTransactionContext(t *testing.T) {
-	tid := transaction.NewTransactionID()
+	tid := primitives.NewTransactionID()
 	ctx := NewTransactionContext(tid)
 
 	if ctx == nil {
@@ -111,7 +111,7 @@ func TestNewTransactionContext(t *testing.T) {
 
 // TestTransactionContext_IsActive tests the IsActive method
 func TestTransactionContext_IsActive(t *testing.T) {
-	tid := transaction.NewTransactionID()
+	tid := primitives.NewTransactionID()
 	ctx := NewTransactionContext(tid)
 
 	if !ctx.IsActive() {
@@ -131,7 +131,7 @@ func TestTransactionContext_IsActive(t *testing.T) {
 
 // TestTransactionContext_SetStatus tests the SetStatus method
 func TestTransactionContext_SetStatus(t *testing.T) {
-	tid := transaction.NewTransactionID()
+	tid := primitives.NewTransactionID()
 	ctx := NewTransactionContext(tid)
 
 	statuses := []TransactionStatus{
@@ -159,7 +159,7 @@ func TestTransactionContext_SetStatus(t *testing.T) {
 
 // TestTransactionContext_RecordPageAccess tests page access recording
 func TestTransactionContext_RecordPageAccess(t *testing.T) {
-	tid := transaction.NewTransactionID()
+	tid := primitives.NewTransactionID()
 	ctx := NewTransactionContext(tid)
 
 	pid1 := &mockPageID{tableID: 1, pageNo: 1}
@@ -202,7 +202,7 @@ func TestTransactionContext_RecordPageAccess(t *testing.T) {
 
 // TestTransactionContext_MarkPageDirty tests marking pages as dirty
 func TestTransactionContext_MarkPageDirty(t *testing.T) {
-	tid := transaction.NewTransactionID()
+	tid := primitives.NewTransactionID()
 	ctx := NewTransactionContext(tid)
 
 	pid1 := &mockPageID{tableID: 1, pageNo: 1}
@@ -241,7 +241,7 @@ func TestTransactionContext_MarkPageDirty(t *testing.T) {
 
 // TestTransactionContext_WaitingFor tests the waiting for functionality
 func TestTransactionContext_WaitingFor(t *testing.T) {
-	tid := transaction.NewTransactionID()
+	tid := primitives.NewTransactionID()
 	ctx := NewTransactionContext(tid)
 
 	pid1 := &mockPageID{tableID: 1, pageNo: 1}
@@ -282,7 +282,7 @@ func TestTransactionContext_WaitingFor(t *testing.T) {
 
 // TestTransactionContext_LSNTracking tests LSN tracking
 func TestTransactionContext_LSNTracking(t *testing.T) {
-	tid := transaction.NewTransactionID()
+	tid := primitives.NewTransactionID()
 	ctx := NewTransactionContext(tid)
 
 	if ctx.GetFirstLSN() != 0 {
@@ -293,7 +293,7 @@ func TestTransactionContext_LSNTracking(t *testing.T) {
 	}
 
 	// Update LSN
-	ctx.UpdateLSN(log.LSN(100))
+	ctx.UpdateLSN(primitives.LSN(100))
 	if ctx.GetFirstLSN() != 100 {
 		t.Errorf("Expected firstLSN to be 100, got %d", ctx.GetFirstLSN())
 	}
@@ -302,7 +302,7 @@ func TestTransactionContext_LSNTracking(t *testing.T) {
 	}
 
 	// Update LSN again
-	ctx.UpdateLSN(log.LSN(200))
+	ctx.UpdateLSN(primitives.LSN(200))
 	if ctx.GetFirstLSN() != 100 {
 		t.Errorf("Expected firstLSN to remain 100, got %d", ctx.GetFirstLSN())
 	}
@@ -316,7 +316,7 @@ func TestTransactionContext_EnsureBegunInWAL(t *testing.T) {
 	wal, _ := createTestWAL(t)
 	defer wal.Close()
 
-	tid := transaction.NewTransactionID()
+	tid := primitives.NewTransactionID()
 	ctx := NewTransactionContext(tid)
 
 	if ctx.begunInWAL {
@@ -336,7 +336,7 @@ func TestTransactionContext_EnsureBegunInWAL(t *testing.T) {
 	firstLSN := ctx.GetFirstLSN()
 	lastLSN := ctx.GetLastLSN()
 
-	// FirstLSN can be 0 (log.FirstLSN), which is valid
+	// FirstLSN can be 0 (primitives.FirstLSN), which is valid
 	if firstLSN != lastLSN {
 		t.Error("Expected firstLSN and lastLSN to be equal after begin")
 	}
@@ -354,7 +354,7 @@ func TestTransactionContext_EnsureBegunInWAL(t *testing.T) {
 
 // TestTransactionContext_Statistics tests statistics tracking
 func TestTransactionContext_Statistics(t *testing.T) {
-	tid := transaction.NewTransactionID()
+	tid := primitives.NewTransactionID()
 	ctx := NewTransactionContext(tid)
 
 	pid := &mockPageID{tableID: 1, pageNo: 1}
@@ -394,7 +394,7 @@ func TestTransactionContext_Statistics(t *testing.T) {
 
 // TestTransactionContext_Duration tests duration calculation
 func TestTransactionContext_Duration(t *testing.T) {
-	tid := transaction.NewTransactionID()
+	tid := primitives.NewTransactionID()
 	ctx := NewTransactionContext(tid)
 
 	// Duration for active transaction
@@ -418,7 +418,7 @@ func TestTransactionContext_Duration(t *testing.T) {
 
 // TestTransactionContext_String tests string representation
 func TestTransactionContext_String(t *testing.T) {
-	tid := transaction.NewTransactionID()
+	tid := primitives.NewTransactionID()
 	ctx := NewTransactionContext(tid)
 
 	pid := &mockPageID{tableID: 1, pageNo: 1}
@@ -438,7 +438,7 @@ func TestTransactionContext_String(t *testing.T) {
 
 // TestTransactionContext_Concurrency tests concurrent access to transaction context
 func TestTransactionContext_Concurrency(t *testing.T) {
-	tid := transaction.NewTransactionID()
+	tid := primitives.NewTransactionID()
 	ctx := NewTransactionContext(tid)
 
 	const goroutines = 10
@@ -561,7 +561,7 @@ func TestTransactionRegistry_Get(t *testing.T) {
 	}
 
 	// Get non-existent transaction
-	fakeTID := transaction.NewTransactionID()
+	fakeTID := primitives.NewTransactionID()
 	_, err = registry.Get(fakeTID)
 	if err == nil {
 		t.Error("Expected error when getting non-existent transaction")
@@ -575,7 +575,7 @@ func TestTransactionRegistry_GetOrCreate(t *testing.T) {
 
 	registry := NewTransactionRegistry(wal)
 
-	tid := transaction.NewTransactionID()
+	tid := primitives.NewTransactionID()
 
 	// First call should create
 	ctx1 := registry.GetOrCreate(tid)
@@ -598,7 +598,7 @@ func TestTransactionRegistry_GetOrCreate(t *testing.T) {
 	}
 
 	// Different TID should create new
-	tid2 := transaction.NewTransactionID()
+	tid2 := primitives.NewTransactionID()
 	ctx3 := registry.GetOrCreate(tid2)
 	if ctx3 == ctx1 {
 		t.Error("Expected different context for different TID")
@@ -632,7 +632,7 @@ func TestTransactionRegistry_Remove(t *testing.T) {
 	}
 
 	// Removing non-existent transaction should not crash
-	registry.Remove(transaction.NewTransactionID())
+	registry.Remove(primitives.NewTransactionID())
 }
 
 // TestTransactionRegistry_GetActive tests getting active transactions
@@ -676,7 +676,7 @@ func TestTransactionRegistry_GetAllTransactionIDs(t *testing.T) {
 	registry := NewTransactionRegistry(wal)
 
 	expectedCount := 5
-	createdIDs := make(map[*transaction.TransactionID]bool)
+	createdIDs := make(map[*primitives.TransactionID]bool)
 
 	for i := 0; i < expectedCount; i++ {
 		ctx, _ := registry.Begin()
@@ -806,7 +806,7 @@ func TestTransactionRegistry_MultipleBeginCommitRemove(t *testing.T) {
 
 // TestTransactionContext_DirtyPagesIndependence tests that GetDirtyPages returns a copy
 func TestTransactionContext_DirtyPagesIndependence(t *testing.T) {
-	tid := transaction.NewTransactionID()
+	tid := primitives.NewTransactionID()
 	ctx := NewTransactionContext(tid)
 
 	pid1 := &mockPageID{tableID: 1, pageNo: 1}
@@ -837,7 +837,7 @@ func TestTransactionContext_DirtyPagesIndependence(t *testing.T) {
 
 // TestTransactionContext_LockedPagesIndependence tests that GetLockedPages returns a copy
 func TestTransactionContext_LockedPagesIndependence(t *testing.T) {
-	tid := transaction.NewTransactionID()
+	tid := primitives.NewTransactionID()
 	ctx := NewTransactionContext(tid)
 
 	pid1 := &mockPageID{tableID: 1, pageNo: 1}
@@ -863,7 +863,7 @@ func TestTransactionContext_LockedPagesIndependence(t *testing.T) {
 
 // TestTransactionContext_WaitingForIndependence tests that GetWaitingFor returns a copy
 func TestTransactionContext_WaitingForIndependence(t *testing.T) {
-	tid := transaction.NewTransactionID()
+	tid := primitives.NewTransactionID()
 	ctx := NewTransactionContext(tid)
 
 	pid1 := &mockPageID{tableID: 1, pageNo: 1}
