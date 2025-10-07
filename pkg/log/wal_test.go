@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"storemy/pkg/concurrency/transaction"
+	"storemy/pkg/primitives"
 	"storemy/pkg/tuple"
 	"testing"
 )
@@ -100,7 +101,7 @@ func TestLogBegin(t *testing.T) {
 	}
 
 	if lsn != FirstLSN {
-		t.Errorf("expected first LSN to be %d, got %d", FirstLSN, lsn)
+		t.Errorf("expected first primitives.LSN to be %d, got %d", FirstLSN, lsn)
 	}
 
 	// Check that transaction is tracked
@@ -138,7 +139,7 @@ func TestLogUpdate(t *testing.T) {
 	}
 
 	if lsn == FirstLSN {
-		t.Error("expected LSN to be different from FirstLSN")
+		t.Error("expected primitives.LSN to be different from FirstLSN")
 	}
 
 	// Check transaction info was updated
@@ -182,7 +183,7 @@ func TestMultipleUpdates(t *testing.T) {
 	}
 
 	// Log multiple updates
-	lsns := make([]LSN, 3)
+	lsns := make([]primitives.LSN, 3)
 	for i := 0; i < 3; i++ {
 		pageID := &mockPageID{tableID: 1, pageNo: 100 + i}
 		lsn, err := wal.LogUpdate(tid, pageID, []byte("before"), []byte("after"))
@@ -194,16 +195,16 @@ func TestMultipleUpdates(t *testing.T) {
 
 	// Verify LSNs are increasing
 	if lsns[0] <= firstLSN {
-		t.Error("expected LSN to increase")
+		t.Error("expected primitives.LSN to increase")
 	}
 
 	for i := 1; i < len(lsns); i++ {
 		if lsns[i] <= lsns[i-1] {
-			t.Errorf("expected LSN[%d] (%d) > LSN[%d] (%d)", i, lsns[i], i-1, lsns[i-1])
+			t.Errorf("expected primitives.LSN[%d] (%d) > primitives.LSN[%d] (%d)", i, lsns[i], i-1, lsns[i-1])
 		}
 	}
 
-	// Verify last LSN in transaction info
+	// Verify last primitives.LSN in transaction info
 	txnInfo := wal.activeTxns[tid]
 	if txnInfo.LastLSN != lsns[len(lsns)-1] {
 		t.Errorf("expected LastLSN to be %d, got %d", lsns[len(lsns)-1], txnInfo.LastLSN)
@@ -414,7 +415,7 @@ func TestWALPersistence(t *testing.T) {
 	}
 	defer wal2.file.Close()
 
-	// Check that LSN was restored
+	// Check that primitives.LSN was restored
 	if wal2.writer.CurrentLSN() != expectedLSN {
 		t.Errorf("expected currentLSN to be %d after reopen, got %d", expectedLSN, wal2.writer.CurrentLSN())
 	}
@@ -439,7 +440,7 @@ func TestLogInsert(t *testing.T) {
 	}
 
 	if lsn == FirstLSN {
-		t.Error("expected LSN to be different from FirstLSN")
+		t.Error("expected primitives.LSN to be different from FirstLSN")
 	}
 
 	// Check transaction info was updated
@@ -491,7 +492,7 @@ func TestLogDelete(t *testing.T) {
 	}
 
 	if lsn == FirstLSN {
-		t.Error("expected LSN to be different from FirstLSN")
+		t.Error("expected primitives.LSN to be different from FirstLSN")
 	}
 
 	// Check transaction info was updated
@@ -557,15 +558,15 @@ func TestMixedOperations(t *testing.T) {
 
 	// Verify LSNs are increasing
 	if insertLSN <= firstLSN {
-		t.Error("expected insert LSN to be greater than begin LSN")
+		t.Error("expected insert primitives.LSN to be greater than begin primitives.LSN")
 	}
 
 	if updateLSN <= insertLSN {
-		t.Error("expected update LSN to be greater than insert LSN")
+		t.Error("expected update primitives.LSN to be greater than insert primitives.LSN")
 	}
 
 	if deleteLSN <= updateLSN {
-		t.Error("expected delete LSN to be greater than update LSN")
+		t.Error("expected delete primitives.LSN to be greater than update primitives.LSN")
 	}
 
 	// Verify transaction info
@@ -595,7 +596,7 @@ func TestMultipleInsertsAndDeletes(t *testing.T) {
 	}
 
 	// Log multiple inserts
-	insertLSNs := make([]LSN, 3)
+	insertLSNs := make([]primitives.LSN, 3)
 	for i := 0; i < 3; i++ {
 		pageID := &mockPageID{tableID: 1, pageNo: 100 + i}
 		lsn, err := wal.LogInsert(tid, pageID, []byte(fmt.Sprintf("insert %d", i)))
@@ -606,7 +607,7 @@ func TestMultipleInsertsAndDeletes(t *testing.T) {
 	}
 
 	// Log multiple deletes
-	deleteLSNs := make([]LSN, 3)
+	deleteLSNs := make([]primitives.LSN, 3)
 	for i := 0; i < 3; i++ {
 		pageID := &mockPageID{tableID: 1, pageNo: 200 + i}
 		lsn, err := wal.LogDelete(tid, pageID, []byte(fmt.Sprintf("delete %d", i)))
@@ -619,7 +620,7 @@ func TestMultipleInsertsAndDeletes(t *testing.T) {
 	// Verify LSNs are strictly increasing
 	for i := 1; i < len(insertLSNs); i++ {
 		if insertLSNs[i] <= insertLSNs[i-1] {
-			t.Errorf("expected insert LSN[%d] (%d) > LSN[%d] (%d)", i, insertLSNs[i], i-1, insertLSNs[i-1])
+			t.Errorf("expected insert primitives.LSN[%d] (%d) > primitives.LSN[%d] (%d)", i, insertLSNs[i], i-1, insertLSNs[i-1])
 		}
 	}
 
@@ -629,7 +630,7 @@ func TestMultipleInsertsAndDeletes(t *testing.T) {
 
 	for i := 1; i < len(deleteLSNs); i++ {
 		if deleteLSNs[i] <= deleteLSNs[i-1] {
-			t.Errorf("expected delete LSN[%d] (%d) > LSN[%d] (%d)", i, deleteLSNs[i], i-1, deleteLSNs[i-1])
+			t.Errorf("expected delete primitives.LSN[%d] (%d) > primitives.LSN[%d] (%d)", i, deleteLSNs[i], i-1, deleteLSNs[i-1])
 		}
 	}
 
@@ -663,7 +664,7 @@ func TestLogCommit(t *testing.T) {
 	}
 
 	if commitLSN <= beginLSN {
-		t.Error("expected commit LSN to be greater than begin LSN")
+		t.Error("expected commit primitives.LSN to be greater than begin primitives.LSN")
 	}
 
 	// Verify transaction is removed from active transactions
@@ -703,7 +704,7 @@ func TestLogCommitEmptyTransaction(t *testing.T) {
 	}
 
 	if commitLSN == FirstLSN {
-		t.Error("expected valid commit LSN")
+		t.Error("expected valid commit primitives.LSN")
 	}
 
 	// Verify transaction is removed
@@ -736,7 +737,7 @@ func TestLogAbort(t *testing.T) {
 	}
 
 	if abortLSN <= beginLSN {
-		t.Error("expected abort LSN to be greater than begin LSN")
+		t.Error("expected abort primitives.LSN to be greater than begin primitives.LSN")
 	}
 
 	// Verify transaction info is updated
@@ -755,7 +756,7 @@ func TestLogAbort(t *testing.T) {
 		t.Error("transaction should still be in activeTxns after abort (undo pending)")
 	}
 
-	// Verify LSN ordering
+	// Verify primitives.LSN ordering
 	if !(beginLSN < updateLSN && updateLSN < abortLSN) {
 		t.Error("expected LSNs to be in order: begin < update < abort")
 	}
@@ -790,7 +791,7 @@ func TestLogAbortEmptyTransaction(t *testing.T) {
 	}
 
 	if abortLSN <= beginLSN {
-		t.Error("expected abort LSN to be greater than begin LSN")
+		t.Error("expected abort primitives.LSN to be greater than begin primitives.LSN")
 	}
 
 	// Transaction should still be tracked for undo
@@ -919,9 +920,9 @@ func TestCommitAndAbortSequence(t *testing.T) {
 		t.Error("tid2 should still be tracked after abort")
 	}
 
-	// Verify LSN ordering
+	// Verify primitives.LSN ordering
 	if abortLSN <= commitLSN {
-		t.Error("expected abort LSN to be greater than commit LSN")
+		t.Error("expected abort primitives.LSN to be greater than commit primitives.LSN")
 	}
 }
 
@@ -930,7 +931,7 @@ func TestMultipleCommits(t *testing.T) {
 	defer cleanup()
 
 	numTxns := 5
-	commitLSNs := make([]LSN, numTxns)
+	commitLSNs := make([]primitives.LSN, numTxns)
 
 	for i := 0; i < numTxns; i++ {
 		tid := transaction.NewTransactionID()
@@ -960,7 +961,7 @@ func TestMultipleCommits(t *testing.T) {
 	// Verify LSNs are increasing
 	for i := 1; i < len(commitLSNs); i++ {
 		if commitLSNs[i] <= commitLSNs[i-1] {
-			t.Errorf("expected commit LSN[%d] (%d) > LSN[%d] (%d)", i, commitLSNs[i], i-1, commitLSNs[i-1])
+			t.Errorf("expected commit primitives.LSN[%d] (%d) > primitives.LSN[%d] (%d)", i, commitLSNs[i], i-1, commitLSNs[i-1])
 		}
 	}
 }

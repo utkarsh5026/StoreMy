@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"storemy/pkg/concurrency/transaction"
+	"storemy/pkg/primitives"
 	"sync"
 	"testing"
 	"time"
@@ -267,7 +268,7 @@ func TestMultiplePagesPerTransaction(t *testing.T) {
 	pageID := &mockPageID{tableID: 1, pageNo: 1}
 
 	// Update same page multiple times
-	lsns := make([]LSN, 5)
+	lsns := make([]primitives.LSN, 5)
 	for i := 0; i < 5; i++ {
 		lsn, err := wal.LogUpdate(tid, pageID, []byte(fmt.Sprintf("v%d", i)), []byte(fmt.Sprintf("v%d", i+1)))
 		if err != nil {
