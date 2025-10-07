@@ -3,11 +3,25 @@ package planner
 import (
 	"os"
 	"path/filepath"
+	"storemy/pkg/concurrency/transaction"
 	"storemy/pkg/log"
 	"storemy/pkg/memory"
 	"storemy/pkg/registry"
 	"testing"
 )
+
+func createTransactionContext(t *testing.T) *transaction.TransactionContext {
+	t.Helper()
+
+	rg := transaction.NewTransactionRegistry(nil)
+	ctx, err := rg.Begin()
+
+	if err != nil {
+		t.Fatalf("Error creating transaction Context")
+	}
+
+	return ctx
+}
 
 // cleanupTable registers cleanup for table files to ensure proper resource cleanup on Windows
 func cleanupTable(t *testing.T, tableManager *memory.TableManager, tableName string) {
