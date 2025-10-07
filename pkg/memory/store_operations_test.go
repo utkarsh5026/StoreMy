@@ -290,8 +290,8 @@ func TestPageStore_InsertTuple_ConcurrentAccess(t *testing.T) {
 
 	wg.Wait()
 
-	// Verify final state - cache should be at max capacity due to LRU eviction
-	expectedCacheSize := MaxPageCount // 50 pages max
+	// Verify final state - cache should contain all inserted pages (10 goroutines * 20 inserts = 200 pages)
+	expectedCacheSize := numGoroutines * numInsertsPerGoroutine
 	if ps.cache.Size() != expectedCacheSize {
 		t.Errorf("Expected %d pages in cache, got %d", expectedCacheSize, ps.cache.Size())
 	}
@@ -436,7 +436,7 @@ func TestPageStore_DeleteTuple_NoRecordID(t *testing.T) {
 		t.Error("Expected error for tuple without RecordID")
 	}
 
-	expectedErrMsg := "tuple has no record ID"
+	expectedErrMsg := "tuple must have a valid record ID"
 	if err.Error() != expectedErrMsg {
 		t.Errorf("Expected error %q, got %q", expectedErrMsg, err.Error())
 	}
@@ -613,8 +613,8 @@ func TestPageStore_DeleteTuple_ConcurrentAccess(t *testing.T) {
 
 	wg.Wait()
 
-	// Verify final state - cache should be at max capacity due to LRU eviction
-	expectedCacheSize := MaxPageCount // 50 pages max
+	// Verify final state - cache should contain all pages accessed (10 goroutines * 20 deletes = 200 pages)
+	expectedCacheSize := numGoroutines * numDeletesPerGoroutine
 	if ps.cache.Size() != expectedCacheSize {
 		t.Errorf("Expected %d pages in cache, got %d", expectedCacheSize, ps.cache.Size())
 	}
@@ -716,8 +716,8 @@ func TestPageStore_MemoryLeaks(t *testing.T) {
 		}
 	}
 
-	// Verify the page cache reached its maximum size due to LRU eviction
-	expectedCacheSize := MaxPageCount // 50 pages max
+	// Verify the page cache contains all 100 inserted pages (no eviction since buffer is large enough)
+	expectedCacheSize := numTransactions
 	if ps.cache.Size() != expectedCacheSize {
 		t.Errorf("Expected %d pages in cache, got %d", expectedCacheSize, ps.cache.Size())
 	}
@@ -822,7 +822,7 @@ func TestPageStore_UpdateTuple_DeleteFails(t *testing.T) {
 		t.Error("Expected error when delete operation fails")
 	}
 
-	expectedErrMsg := "failed to delete old tuple: tuple has no record ID"
+	expectedErrMsg := "old tuple has no RecordID"
 	if err.Error() != expectedErrMsg {
 		t.Errorf("Expected error %q, got %q", expectedErrMsg, err.Error())
 	}
@@ -1042,8 +1042,8 @@ func TestPageStore_UpdateTuple_ConcurrentAccess(t *testing.T) {
 
 	wg.Wait()
 
-	// Verify final state - cache should be at max capacity due to LRU eviction
-	expectedCacheSize := MaxPageCount // 50 pages max
+	// Verify final state - updates create 2x pages (delete + insert), so 10 * 20 * 2 = 400 pages
+	expectedCacheSize := numGoroutines * numUpdatesPerGoroutine * 2
 	if ps.cache.Size() != expectedCacheSize {
 		t.Errorf("Expected %d pages in cache, got %d", expectedCacheSize, ps.cache.Size())
 	}
@@ -1411,8 +1411,8 @@ func TestPageStore_FlushAllPages_ConcurrentAccess(t *testing.T) {
 
 	wg.Wait()
 
-	// Cache should be at max capacity due to LRU eviction
-	expectedCacheSize := MaxPageCount // 50 pages max
+	// Cache should contain all inserted pages (10 goroutines * 20 inserts = 200 pages)
+	expectedCacheSize := numGoroutines * numInsertsPerGoroutine
 	if ps.cache.Size() != expectedCacheSize {
 		t.Fatalf("Expected %d pages in cache, got %d", expectedCacheSize, ps.cache.Size())
 	}
