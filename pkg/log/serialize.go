@@ -28,6 +28,13 @@ const (
 // Type-specific data varies based on record type:
 //   - UpdateRecord/InsertRecord/DeleteRecord: PageID + BeforeImage + AfterImage
 //   - CLRRecord: PageID + UndoNextLSN + AfterImage
+//   - BeginRecord/CommitRecord/AbortRecord: No additional data
+//   - CheckpointBegin/CheckpointEnd: No additional data (checkpoint records handled separately)
+//
+// The Size field at the start includes the entire record length for efficient log scanning.
+// PrevLSN creates a linked list of records per transaction, crucial for ARIES rollback.
+//
+// Returns serialized byte slice, or error if serialization fails.
 func SerializeLogRecord(record *LogRecord) ([]byte, error) {
 	var buf bytes.Buffer
 
@@ -194,6 +201,12 @@ func DeserializeLogRecord(data []byte) (*LogRecord, error) {
 }
 
 // deserializeDataModification deserializes data modification records (Insert, Update, Delete).
+// Reconstructs the PageID, BeforeImage, and AfterImage fields from binary format.
+//
+// This is critical for ARIES recovery phases:
+//   - Analysis phase: Identifies which pages were modified
+//   - Redo phase: Applies AfterImage to reconstruct database state
+//   - Undo phase: Applies BeforeImage to rollback incomplete transactions
 func deserializeDataModification(buf *bytes.Reader, record *LogRecord) error {
 	pageID, err := deserializePageID(buf)
 	if err != nil {
