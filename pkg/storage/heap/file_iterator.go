@@ -2,21 +2,21 @@ package heap
 
 import (
 	"fmt"
-	"storemy/pkg/concurrency/transaction"
+	"storemy/pkg/primitives"
 	"storemy/pkg/tuple"
 )
 
 // HeapFileIterator provides iteration over all tuples in a HeapFile
 type HeapFileIterator struct {
 	file        *HeapFile
-	tid         *transaction.TransactionID
+	tid         *primitives.TransactionID
 	currentPage int
 	pageIter    *HeapPageIterator
 	isOpen      bool
 }
 
 // NewHeapFileIterator creates a new iterator for the given HeapFile
-func NewHeapFileIterator(file *HeapFile, tid *transaction.TransactionID) *HeapFileIterator {
+func NewHeapFileIterator(file *HeapFile, tid *primitives.TransactionID) *HeapFileIterator {
 	return &HeapFileIterator{
 		file:        file,
 		tid:         tid,

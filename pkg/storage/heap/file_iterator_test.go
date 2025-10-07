@@ -3,7 +3,7 @@ package heap
 import (
 	"fmt"
 	"path/filepath"
-	"storemy/pkg/concurrency/transaction"
+	"storemy/pkg/primitives"
 	"storemy/pkg/storage/page"
 	"storemy/pkg/tuple"
 	"storemy/pkg/types"
@@ -21,7 +21,7 @@ func TestNewHeapFileIterator(t *testing.T) {
 	}
 	defer hf.Close()
 
-	tid := &transaction.TransactionID{}
+	tid := &primitives.TransactionID{}
 	iterator := NewHeapFileIterator(hf, tid)
 
 	if iterator == nil {
@@ -60,7 +60,7 @@ func TestHeapFileIterator_Open(t *testing.T) {
 	}
 	defer hf.Close()
 
-	tid := &transaction.TransactionID{}
+	tid := &primitives.TransactionID{}
 	iterator := NewHeapFileIterator(hf, tid)
 
 	err = iterator.Open()
@@ -90,7 +90,7 @@ func TestHeapFileIterator_Close(t *testing.T) {
 	}
 	defer hf.Close()
 
-	tid := &transaction.TransactionID{}
+	tid := &primitives.TransactionID{}
 	iterator := NewHeapFileIterator(hf, tid)
 
 	err = iterator.Open()
@@ -123,7 +123,7 @@ func TestHeapFileIterator_EmptyFile(t *testing.T) {
 	}
 	defer hf.Close()
 
-	tid := &transaction.TransactionID{}
+	tid := &primitives.TransactionID{}
 	iterator := NewHeapFileIterator(hf, tid)
 
 	err = iterator.Open()
@@ -158,7 +158,7 @@ func TestHeapFileIterator_HasNextNotOpened(t *testing.T) {
 	}
 	defer hf.Close()
 
-	tid := &transaction.TransactionID{}
+	tid := &primitives.TransactionID{}
 	iterator := NewHeapFileIterator(hf, tid)
 
 	_, err = iterator.HasNext()
@@ -178,7 +178,7 @@ func TestHeapFileIterator_NextNotOpened(t *testing.T) {
 	}
 	defer hf.Close()
 
-	tid := &transaction.TransactionID{}
+	tid := &primitives.TransactionID{}
 	iterator := NewHeapFileIterator(hf, tid)
 
 	_, err = iterator.Next()
@@ -236,7 +236,7 @@ func TestHeapFileIterator_SinglePageWithTuples(t *testing.T) {
 		t.Fatalf("Failed to write page: %v", err)
 	}
 
-	tid := &transaction.TransactionID{}
+	tid := &primitives.TransactionID{}
 	iterator := NewHeapFileIterator(hf, tid)
 
 	err = iterator.Open()
@@ -323,7 +323,7 @@ func TestHeapFileIterator_MultiplePagesWithTuples(t *testing.T) {
 		}
 	}
 
-	tid := &transaction.TransactionID{}
+	tid := &primitives.TransactionID{}
 	iterator := NewHeapFileIterator(hf, tid)
 
 	err = iterator.Open()
@@ -421,7 +421,7 @@ func TestHeapFileIterator_Rewind(t *testing.T) {
 		t.Fatalf("Failed to write page: %v", err)
 	}
 
-	tid := &transaction.TransactionID{}
+	tid := &primitives.TransactionID{}
 	iterator := NewHeapFileIterator(hf, tid)
 
 	err = iterator.Open()
@@ -523,7 +523,7 @@ func TestHeapFileIterator_SkipEmptyPages(t *testing.T) {
 		t.Fatalf("Failed to write page 0: %v", err)
 	}
 
-	tid := &transaction.TransactionID{}
+	tid := &primitives.TransactionID{}
 	iterator := NewHeapFileIterator(hf, tid)
 
 	err = iterator.Open()
