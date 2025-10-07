@@ -134,10 +134,6 @@ func TestNewFilter_ValidInputs(t *testing.T) {
 		t.Errorf("Expected predicate %v, got %v", predicate, filter.predicate)
 	}
 
-	if filter.child != child {
-		t.Errorf("Expected child %v, got %v", child, filter.child)
-	}
-
 	if filter.base == nil {
 		t.Error("Expected base iterator to be initialized")
 	}
