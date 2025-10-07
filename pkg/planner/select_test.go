@@ -36,7 +36,7 @@ func setupSelectTestWithData(t *testing.T) (*registry.DatabaseContext, *transact
 	return ctx, tid, cleanup
 }
 
-func executeSelectPlan(t *testing.T, plan *SelectPlan) (*QueryResult, error) {
+func executeSelectPlan(t *testing.T, plan *SelectPlan) (*SelectQueryResult, error) {
 	resultAny, err := plan.Execute()
 	if err != nil {
 		return nil, err
@@ -46,9 +46,9 @@ func executeSelectPlan(t *testing.T, plan *SelectPlan) (*QueryResult, error) {
 		return nil, nil
 	}
 
-	result, ok := resultAny.(*QueryResult)
+	result, ok := resultAny.(*SelectQueryResult)
 	if !ok {
-		t.Fatalf("Result is not a QueryResult, got %T", resultAny)
+		t.Fatalf("Result is not a SelectQueryResult, got %T", resultAny)
 	}
 
 	return result, nil
@@ -532,7 +532,7 @@ func TestSelectPlan_Execute_FloatFilter(t *testing.T) {
 	}
 }
 
-func TestQueryResult_Values(t *testing.T) {
+func TestSelectQueryResult_Values(t *testing.T) {
 	ctx, tid, cleanup := setupSelectTestWithData(t)
 	defer cleanup() // Always clean up resources
 
