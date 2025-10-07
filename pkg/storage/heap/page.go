@@ -12,22 +12,31 @@ import (
 )
 
 const (
+	// BitsPerByte is the number of bits in a byte (8)
 	BitsPerByte = 8
 )
 
-// HeapPage stores pages of HeapFiles and implements the Page interface
-// It manages tuples within a single page using a header bitmap to track occupied slots
+// HeapPage represents a single page in a heap file and implements the page.Page interface.
+// It uses a slotted page structure with a bitmap header to track occupied tuple slots.
+//
+// Page Layout:
+//   - Header (variable size): Bitmap tracking which slots contain tuples (1 bit per slot)
+//   - Tuple data (remainder): Fixed-size slots for tuples, some may be empty
+//   - Padding: Zero-filled bytes to reach PageSize
 type HeapPage struct {
-	pageID    *HeapPageID               // ID of this page
-	tupleDesc *tuple.TupleDescription   // Schema of tuples on this page
-	header    []byte                    // Bitmap indicating which slots are occupied
-	tuples    []*tuple.Tuple            // Array of tuples (nil means empty slot)
-	numSlots  int                       // Total number of tuple slots on this page
-	dirtier   *primitives.TransactionID // Transaction that dirtied this page
-	oldData   []byte                    // Before image for recovery
-	mutex     sync.RWMutex              // Protects concurrent access
+	pageID    *HeapPageID
+	tupleDesc *tuple.TupleDescription
+	header    []byte
+	tuples    []*tuple.Tuple
+	numSlots  int
+	dirtier   *primitives.TransactionID
+	oldData   []byte
+	mutex     sync.RWMutex
 }
 
+// NewHeapPage creates a new HeapPage by deserializing raw page data.
+// It calculates the optimal number of slots based on tuple size and initializes
+// the header bitmap and tuple array from the provided data.
 func NewHeapPage(pid *HeapPageID, data []byte, td *tuple.TupleDescription) (*HeapPage, error) {
 	if len(data) != page.PageSize {
 		return nil, fmt.Errorf("invalid page data size: expected %d, got %d", page.PageSize, len(data))
@@ -52,26 +61,40 @@ func NewHeapPage(pid *HeapPageID, data []byte, td *tuple.TupleDescription) (*Hea
 	return hp, nil
 }
 
-// Get the number of empty slots in a heap page
+// GetNumEmptySlots returns the count of unoccupied tuple slots on this page.
+// This is useful for determining if the page has capacity for insertions.
+//
+// Returns:
+//   - int: Number of empty slots available for new tuples
 func (hp *HeapPage) GetNumEmptySlots() int {
 	hp.mutex.RLock()
 	defer hp.mutex.RUnlock()
 	return hp.getNumEmptySlots()
 }
 
-// GetID returns the PageID associated with this page
+// GetID returns the unique page identifier for this heap page.
+// Implements the page.Page interface.
+//
+// Returns:
+//   - primitives.PageID: The HeapPageID cast to PageID interface
 func (hp *HeapPage) GetID() primitives.PageID {
 	return hp.pageID
 }
 
-// IsDirty returns the transaction that last dirtied this page, or nil if clean
+// IsDirty returns the transaction that last modified this page.
+// A nil return indicates the page is clean (not modified in current transaction).
+// Implements the page.Page interface.
+//
+// Returns:
+//   - *primitives.TransactionID: Transaction that dirtied the page, or nil if clean
 func (hp *HeapPage) IsDirty() *primitives.TransactionID {
 	hp.mutex.RLock()
 	defer hp.mutex.RUnlock()
 	return hp.dirtier
 }
 
-// MarkDirty marks this page as dirty/clean and records the transaction
+// MarkDirty marks this page as dirty or clean for a specific transaction.
+// This is typically called by the buffer pool when a page is modified or flushed.
 func (hp *HeapPage) MarkDirty(dirty bool, tid *primitives.TransactionID) {
 	hp.mutex.Lock()
 	defer hp.mutex.Unlock()
@@ -83,7 +106,9 @@ func (hp *HeapPage) MarkDirty(dirty bool, tid *primitives.TransactionID) {
 	}
 }
 
-// GetPageData generates a byte array representing the contents of this page
+// GetPageData serializes the entire page into a byte array suitable for disk storage.
+// The returned data includes the header bitmap, all tuple data (including empty slots),
+// and padding to reach page.PageSize.
 func (hp *HeapPage) GetPageData() []byte {
 	hp.mutex.RLock()
 	defer hp.mutex.RUnlock()
@@ -91,6 +116,7 @@ func (hp *HeapPage) GetPageData() []byte {
 	var buffer bytes.Buffer
 
 	buffer.Write(hp.header)
+
 	tupleSize := hp.tupleDesc.GetSize()
 	for i := 0; i < hp.numSlots; i++ {
 		if hp.tuples[i] == nil {
@@ -117,7 +143,8 @@ func (hp *HeapPage) GetPageData() []byte {
 	return buffer.Bytes()
 }
 
-// GetBeforeImage returns a page with the before image data
+// GetBeforeImage returns a page containing the state before the current transaction's modifications.
+// This is used for rollback operations in transaction management.
 func (hp *HeapPage) GetBeforeImage() page.Page {
 	hp.mutex.RLock()
 	defer hp.mutex.RUnlock()
@@ -126,12 +153,31 @@ func (hp *HeapPage) GetBeforeImage() page.Page {
 	return beforePage
 }
 
-// SetBeforeImage copies current content to the before image
+// SetBeforeImage captures the current page state as the before-image.
+// This should be called before the first modification in a transaction to enable rollback.
+//
+// Usage:
+//   - Call once at the beginning of a transaction before any modifications
+//   - Typically invoked by the buffer pool or transaction manager
 func (hp *HeapPage) SetBeforeImage() {
 	hp.oldData = hp.GetPageData()
 }
 
-// AddTuple adds a tuple to this page
+// AddTuple inserts a tuple into the first available empty slot on this page.
+// The tuple's RecordID is set to identify its location on this page.
+//
+// Thread-safe: Uses write lock for concurrent access.
+//
+// Parameters:
+//   - t: Tuple to insert (must have matching schema)
+//
+// Returns:
+//   - error: If schema mismatch, page full, or slot allocation fails
+//
+// Errors:
+//   - Schema mismatch between tuple and page
+//   - No empty slots available
+//   - Internal error finding empty slot
 func (hp *HeapPage) AddTuple(t *tuple.Tuple) error {
 	hp.mutex.Lock()
 	defer hp.mutex.Unlock()
@@ -155,7 +201,8 @@ func (hp *HeapPage) AddTuple(t *tuple.Tuple) error {
 	return nil
 }
 
-// DeleteTuple removes a tuple from this page
+// DeleteTuple removes a tuple from this page by clearing its slot in the header bitmap.
+// The tuple's RecordID is set to nil after successful deletion.
 func (hp *HeapPage) DeleteTuple(t *tuple.Tuple) error {
 	hp.mutex.Lock()
 	defer hp.mutex.Unlock()
@@ -184,7 +231,8 @@ func (hp *HeapPage) DeleteTuple(t *tuple.Tuple) error {
 	return nil
 }
 
-// GetTuples returns all tuples on this page (excluding nil entries)
+// GetTuples returns all non-empty tuples stored on this page.
+// Empty slots (marked as unused in header) are excluded from the result.
 func (hp *HeapPage) GetTuples() []*tuple.Tuple {
 	hp.mutex.RLock()
 	defer hp.mutex.RUnlock()
@@ -199,7 +247,7 @@ func (hp *HeapPage) GetTuples() []*tuple.Tuple {
 	return tuples
 }
 
-// GetTupleAt returns the tuple at the specified slot index
+// GetTupleAt returns the tuple at the specified slot index, or nil if the slot is empty.
 func (hp *HeapPage) GetTupleAt(idx int) (*tuple.Tuple, error) {
 	hp.mutex.RLock()
 	defer hp.mutex.RUnlock()
@@ -211,16 +259,26 @@ func (hp *HeapPage) GetTupleAt(idx int) (*tuple.Tuple, error) {
 	return hp.tuples[idx], nil
 }
 
-// getNumTuples calculates the number of tuples that fit on this page
+// getNumTuples calculates the maximum number of tuple slots that fit on a page.
+// This accounts for both tuple data size and the header bitmap overhead.
+//
 // Formula: floor((PageSize * BitsPerByte) / (tupleSize * BitsPerByte + 1))
-// The +1 accounts for the header bit per tuple
+//   - The +1 accounts for the header bit required per tuple slot
+//
+// Returns:
+//   - int: Maximum number of tuple slots for this page's schema
 func (hp *HeapPage) getNumTuples() int {
 	tupleSize := hp.tupleDesc.GetSize()
 	return int((page.PageSize * BitsPerByte)) / int((tupleSize*BitsPerByte + 1))
 }
 
-// getHeaderSize calculates the number of bytes needed for the header bitmap
+// getHeaderSize calculates the number of bytes needed for the header bitmap.
+// One bit is required per tuple slot to track occupancy.
+//
 // Formula: ceiling(numTuples / 8)
+//
+// Returns:
+//   - int: Size in bytes of the header bitmap
 func (hp *HeapPage) getHeaderSize() int {
 	numTuples := hp.getNumTuples()
 	headerBytes := numTuples / BitsPerByte
@@ -230,7 +288,8 @@ func (hp *HeapPage) getHeaderSize() int {
 	return headerBytes
 }
 
-// parsePageData parses the raw page data into header and tuples
+// parsePageData deserializes raw page bytes into the header bitmap and tuple array.
+// Called during page initialization to reconstruct page state from disk.
 func (hp *HeapPage) parsePageData(data []byte) error {
 	reader := bytes.NewReader(data)
 
@@ -251,7 +310,7 @@ func (hp *HeapPage) parsePageData(data []byte) error {
 			continue
 		}
 
-		tup := make([]byte, tupleSize)
+		tup := emptyTuple(tupleSize)
 		if _, err := reader.Read(tup); err != nil {
 			return err
 		}
@@ -260,7 +319,8 @@ func (hp *HeapPage) parsePageData(data []byte) error {
 	return nil
 }
 
-// getNumEmptySlots internal implementation without locking
+// getNumEmptySlots internal implementation that counts unoccupied slots.
+// Must be called with lock already held (does not acquire lock).
 func (hp *HeapPage) getNumEmptySlots() int {
 	usedSlots := 0
 
@@ -273,14 +333,14 @@ func (hp *HeapPage) getNumEmptySlots() int {
 	return hp.numSlots - usedSlots
 }
 
-// isSlotUsed checks if a slot is occupied using the header bitmap
-func (hp *HeapPage) isSlotUsed(slotIndex int) bool {
-	if slotIndex < 0 || slotIndex >= hp.numSlots {
+// isSlotUsed checks if a slot is marked as occupied in the header bitmap.
+func (hp *HeapPage) isSlotUsed(idx int) bool {
+	if idx < 0 || idx >= hp.numSlots {
 		return false
 	}
 
-	byteIndex := slotIndex / BitsPerByte
-	bitOffset := slotIndex % BitsPerByte
+	byteIndex := idx / BitsPerByte
+	bitOffset := idx % BitsPerByte
 
 	if byteIndex >= len(hp.header) {
 		return false
@@ -290,14 +350,14 @@ func (hp *HeapPage) isSlotUsed(slotIndex int) bool {
 	return (hp.header[byteIndex] & bitMask) != 0
 }
 
-// setSlot sets or clears a slot in the header bitmap
-func (hp *HeapPage) setSlot(slotIndex int, used bool) {
-	if slotIndex < 0 || slotIndex >= hp.numSlots {
+// setSlot sets or clears a bit in the header bitmap to mark slot occupancy.
+func (hp *HeapPage) setSlot(idx int, used bool) {
+	if idx < 0 || idx >= hp.numSlots {
 		return
 	}
 
-	byteIndex := slotIndex / 8
-	bitOffset := slotIndex % 8
+	byteIndex := idx / 8
+	bitOffset := idx % 8
 
 	if byteIndex >= len(hp.header) {
 		return
@@ -306,12 +366,11 @@ func (hp *HeapPage) setSlot(slotIndex int, used bool) {
 	if used {
 		hp.header[byteIndex] |= byte(1 << bitOffset)
 	} else {
-		// Clear the bit
 		hp.header[byteIndex] &^= byte(1 << bitOffset)
 	}
 }
 
-// findFirstEmptySlot finds the first available slot index
+// findFirstEmptySlot scans the header bitmap for the first unoccupied slot.
 func (hp *HeapPage) findFirstEmptySlot() int {
 	for i := 0; i < hp.numSlots; i++ {
 		if !hp.isSlotUsed(i) {
@@ -321,6 +380,16 @@ func (hp *HeapPage) findFirstEmptySlot() int {
 	return -1
 }
 
+// readTuple deserializes a single tuple from a byte stream.
+// Used during page parsing to reconstruct tuples from disk.
+//
+// Parameters:
+//   - reader: Byte stream positioned at start of tuple data
+//   - td: Schema descriptor for the tuple
+//
+// Returns:
+//   - *tuple.Tuple: Parsed tuple with all fields populated
+//   - error: If field parsing fails or reader encounters error
 func readTuple(reader io.Reader, td *tuple.TupleDescription) (*tuple.Tuple, error) {
 	t := tuple.NewTuple(td)
 
@@ -342,6 +411,8 @@ func readTuple(reader io.Reader, td *tuple.TupleDescription) (*tuple.Tuple, erro
 	return t, nil
 }
 
+// emptyTuple creates a zero-filled byte slice representing an empty tuple slot.
+// Used when serializing pages to ensure consistent size for empty slots.
 func emptyTuple(size uint32) []byte {
 	return make([]byte, size)
 }
