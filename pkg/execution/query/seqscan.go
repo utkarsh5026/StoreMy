@@ -2,9 +2,9 @@ package query
 
 import (
 	"fmt"
-	"storemy/pkg/concurrency/transaction"
 	"storemy/pkg/iterator"
 	"storemy/pkg/memory"
+	"storemy/pkg/primitives"
 	"storemy/pkg/tuple"
 )
 
@@ -16,7 +16,7 @@ import (
 // making it suitable for operations that need to examine every tuple in a table.
 type SequentialScan struct {
 	base         *BaseIterator
-	tid          *transaction.TransactionID
+	tid          *primitives.TransactionID
 	tableID      int
 	fileIter     iterator.DbFileIterator
 	tupleDesc    *tuple.TupleDescription
@@ -25,7 +25,7 @@ type SequentialScan struct {
 
 // NewSeqScan creates a new SequentialScan operator for the specified table within a transaction context.
 // It initializes the scan operator with the necessary metadata and prepares it for iteration.
-func NewSeqScan(tid *transaction.TransactionID, tableID int, tm *memory.TableManager) (*SequentialScan, error) {
+func NewSeqScan(tid *primitives.TransactionID, tableID int, tm *memory.TableManager) (*SequentialScan, error) {
 	if tm == nil {
 		return nil, fmt.Errorf("tm cannot be nil")
 	}
