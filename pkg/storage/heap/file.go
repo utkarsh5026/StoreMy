@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"storemy/pkg/concurrency/transaction"
 	"storemy/pkg/iterator"
+	"storemy/pkg/primitives"
 	"storemy/pkg/storage/page"
 	"storemy/pkg/tuple"
 	"storemy/pkg/utils"
@@ -158,7 +158,7 @@ func (hf *HeapFile) Close() error {
 	return nil
 }
 
-func (hf *HeapFile) AddTuple(tid *transaction.TransactionID, t *tuple.Tuple) ([]page.Page, error) {
+func (hf *HeapFile) AddTuple(tid *primitives.TransactionID, t *tuple.Tuple) ([]page.Page, error) {
 	if t == nil {
 		return nil, fmt.Errorf("tuple cannot be nil")
 	}
@@ -193,12 +193,12 @@ func (hf *HeapFile) AddTuple(tid *transaction.TransactionID, t *tuple.Tuple) ([]
 		if heapPage.GetNumEmptySlots() > 0 {
 			if err := heapPage.AddTuple(t); err == nil {
 				heapPage.MarkDirty(true, tid)
-				
+
 				// Write the modified page back to disk
 				if err := hf.WritePage(heapPage); err != nil {
 					return nil, fmt.Errorf("failed to write modified page: %v", err)
 				}
-				
+
 				return []page.Page{heapPage}, nil
 			}
 		}
@@ -241,7 +241,7 @@ func (hf *HeapFile) AddTuple(tid *transaction.TransactionID, t *tuple.Tuple) ([]
 }
 
 // DeleteTuple removes a tuple from the file
-func (hf *HeapFile) DeleteTuple(tid *transaction.TransactionID, t *tuple.Tuple) (page.Page, error) {
+func (hf *HeapFile) DeleteTuple(tid *primitives.TransactionID, t *tuple.Tuple) (page.Page, error) {
 	if err := hf.validateTupleForDeletion(t); err != nil {
 		return nil, err
 	}
@@ -265,7 +265,7 @@ func (hf *HeapFile) DeleteTuple(tid *transaction.TransactionID, t *tuple.Tuple) 
 }
 
 // Iterator returns a DbFileIterator for iterating over tuples in this HeapFile
-func (hf *HeapFile) Iterator(tid *transaction.TransactionID) iterator.DbFileIterator {
+func (hf *HeapFile) Iterator(tid *primitives.TransactionID) iterator.DbFileIterator {
 	return NewHeapFileIterator(hf, tid)
 }
 
