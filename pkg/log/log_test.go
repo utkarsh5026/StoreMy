@@ -2,6 +2,7 @@ package log
 
 import (
 	"storemy/pkg/concurrency/transaction"
+	"storemy/pkg/primitives"
 	"storemy/pkg/tuple"
 	"testing"
 	"time"
@@ -42,7 +43,7 @@ func TestNewLogRecord(t *testing.T) {
 	pageID := &mockPageIDForLog{tableID: 1, pageNo: 42}
 	beforeImage := []byte("before")
 	afterImage := []byte("after")
-	prevLSN := LSN(100)
+	prevLSN := primitives.LSN(100)
 
 	record := NewLogRecord(UpdateRecord, tid, pageID, beforeImage, afterImage, prevLSN)
 
@@ -111,7 +112,7 @@ func TestNewLogRecord_BeginRecord(t *testing.T) {
 
 func TestNewLogRecord_CommitRecord(t *testing.T) {
 	tid := transaction.NewTransactionID()
-	prevLSN := LSN(500)
+	prevLSN := primitives.LSN(500)
 	record := NewLogRecord(CommitRecord, tid, nil, nil, nil, prevLSN)
 
 	if record.Type != CommitRecord {
@@ -125,7 +126,7 @@ func TestNewLogRecord_CommitRecord(t *testing.T) {
 
 func TestNewLogRecord_AbortRecord(t *testing.T) {
 	tid := transaction.NewTransactionID()
-	prevLSN := LSN(300)
+	prevLSN := primitives.LSN(300)
 	record := NewLogRecord(AbortRecord, tid, nil, nil, nil, prevLSN)
 
 	if record.Type != AbortRecord {
@@ -141,7 +142,7 @@ func TestNewLogRecord_InsertRecord(t *testing.T) {
 	tid := transaction.NewTransactionID()
 	pageID := &mockPageIDForLog{tableID: 5, pageNo: 10}
 	afterImage := []byte("new_data")
-	prevLSN := LSN(200)
+	prevLSN := primitives.LSN(200)
 
 	record := NewLogRecord(InsertRecord, tid, pageID, nil, afterImage, prevLSN)
 
@@ -170,7 +171,7 @@ func TestNewLogRecord_DeleteRecord(t *testing.T) {
 	tid := transaction.NewTransactionID()
 	pageID := &mockPageIDForLog{tableID: 3, pageNo: 7}
 	beforeImage := []byte("deleted_data")
-	prevLSN := LSN(400)
+	prevLSN := primitives.LSN(400)
 
 	record := NewLogRecord(DeleteRecord, tid, pageID, beforeImage, nil, prevLSN)
 
@@ -192,7 +193,7 @@ func TestNewLogRecord_UpdateRecord(t *testing.T) {
 	pageID := &mockPageIDForLog{tableID: 2, pageNo: 15}
 	beforeImage := []byte("old_value")
 	afterImage := []byte("new_value")
-	prevLSN := LSN(600)
+	prevLSN := primitives.LSN(600)
 
 	record := NewLogRecord(UpdateRecord, tid, pageID, beforeImage, afterImage, prevLSN)
 
@@ -234,7 +235,7 @@ func TestNewLogRecord_CLRRecord(t *testing.T) {
 	tid := transaction.NewTransactionID()
 	pageID := &mockPageIDForLog{tableID: 1, pageNo: 5}
 	beforeImage := []byte("undo_data")
-	prevLSN := LSN(700)
+	prevLSN := primitives.LSN(700)
 
 	record := NewLogRecord(CLRRecord, tid, pageID, beforeImage, nil, prevLSN)
 
@@ -250,9 +251,9 @@ func TestNewLogRecord_CLRRecord(t *testing.T) {
 
 func TestTransactionLogInfo_Initialization(t *testing.T) {
 	info := &TransactionLogInfo{
-		FirstLSN:    LSN(100),
-		LastLSN:     LSN(500),
-		UndoNextLSN: LSN(450),
+		FirstLSN:    primitives.LSN(100),
+		LastLSN:     primitives.LSN(500),
+		UndoNextLSN: primitives.LSN(450),
 	}
 
 	if info.FirstLSN != 100 {
@@ -285,20 +286,20 @@ func TestTransactionLogInfo_EmptyTransaction(t *testing.T) {
 }
 
 func TestLSN_Ordering(t *testing.T) {
-	lsn1 := LSN(100)
-	lsn2 := LSN(200)
-	lsn3 := LSN(300)
+	lsn1 := primitives.LSN(100)
+	lsn2 := primitives.LSN(200)
+	lsn3 := primitives.LSN(300)
 
 	if lsn1 >= lsn2 {
-		t.Error("expected LSN 100 to be less than LSN 200")
+		t.Error("expected primitives.LSN 100 to be less than primitives.LSN 200")
 	}
 
 	if lsn2 >= lsn3 {
-		t.Error("expected LSN 200 to be less than LSN 300")
+		t.Error("expected primitives.LSN 200 to be less than primitives.LSN 300")
 	}
 
 	if lsn1 >= lsn3 {
-		t.Error("expected LSN 100 to be less than LSN 300")
+		t.Error("expected primitives.LSN 100 to be less than primitives.LSN 300")
 	}
 }
 
@@ -307,10 +308,10 @@ func TestLSN_FirstLSN(t *testing.T) {
 		t.Errorf("expected FirstLSN to be 0, got %d", FirstLSN)
 	}
 
-	// FirstLSN should be less than any valid LSN
-	validLSN := LSN(1)
+	// FirstLSN should be less than any valid primitives.LSN
+	validLSN := primitives.LSN(1)
 	if FirstLSN >= validLSN {
-		t.Error("expected FirstLSN to be less than any valid LSN")
+		t.Error("expected FirstLSN to be less than any valid primitives.LSN")
 	}
 }
 
@@ -352,7 +353,7 @@ func TestNewLogRecord_LargeImages(t *testing.T) {
 		afterImage[i] = byte((i + 1) % 256)
 	}
 
-	record := NewLogRecord(UpdateRecord, tid, pageID, beforeImage, afterImage, LSN(100))
+	record := NewLogRecord(UpdateRecord, tid, pageID, beforeImage, afterImage, primitives.LSN(100))
 
 	if len(record.BeforeImage) != 8192 {
 		t.Errorf("expected BeforeImage length to be 8192, got %d", len(record.BeforeImage))
@@ -383,7 +384,7 @@ func TestNewLogRecord_EmptyImages(t *testing.T) {
 	beforeImage := []byte{}
 	afterImage := []byte{}
 
-	record := NewLogRecord(UpdateRecord, tid, pageID, beforeImage, afterImage, LSN(50))
+	record := NewLogRecord(UpdateRecord, tid, pageID, beforeImage, afterImage, primitives.LSN(50))
 
 	if record.BeforeImage == nil {
 		t.Error("expected BeforeImage to be non-nil")
@@ -404,7 +405,7 @@ func TestNewLogRecord_EmptyImages(t *testing.T) {
 
 func TestLogRecord_UndoNextLSN(t *testing.T) {
 	tid := transaction.NewTransactionID()
-	record := NewLogRecord(CLRRecord, tid, nil, nil, nil, LSN(100))
+	record := NewLogRecord(CLRRecord, tid, nil, nil, nil, primitives.LSN(100))
 
 	// Initially UndoNextLSN should be zero
 	if record.UndoNextLSN != 0 {
@@ -412,7 +413,7 @@ func TestLogRecord_UndoNextLSN(t *testing.T) {
 	}
 
 	// Set UndoNextLSN for CLR
-	record.UndoNextLSN = LSN(50)
+	record.UndoNextLSN = primitives.LSN(50)
 
 	if record.UndoNextLSN != 50 {
 		t.Errorf("expected UndoNextLSN to be 50, got %d", record.UndoNextLSN)
@@ -428,8 +429,8 @@ func TestLogRecord_LSNField(t *testing.T) {
 		t.Errorf("expected initial LSN to be 0, got %d", record.LSN)
 	}
 
-	// LSN is typically set by the WAL when the record is written
-	record.LSN = LSN(42)
+	// primitives.LSN is typically set by the WAL when the record is written
+	record.LSN = primitives.LSN(42)
 
 	if record.LSN != 42 {
 		t.Errorf("expected LSN to be 42, got %d", record.LSN)
