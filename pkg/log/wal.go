@@ -6,19 +6,20 @@ import (
 	"maps"
 	"os"
 	"storemy/pkg/concurrency/transaction"
+	"storemy/pkg/primitives"
 	"storemy/pkg/tuple"
 	"sync"
 )
 
 const (
-	FirstLSN LSN = 0
+	FirstLSN primitives.LSN = 0
 )
 
 // WAL manages the write-ahead log
 type WAL struct {
 	file       *os.File
 	activeTxns map[*transaction.TransactionID]*TransactionLogInfo
-	dirtyPages map[tuple.PageID]LSN
+	dirtyPages map[tuple.PageID]primitives.LSN
 	mutex      sync.RWMutex
 	flushCond  *sync.Cond
 	writer     *LogWriter
@@ -37,20 +38,20 @@ func NewWAL(logPath string, bufferSize int) (*WAL, error) {
 		return nil, fmt.Errorf("failed to seek to end of WAL: %v", err)
 	}
 
-	writer := NewLogWriter(file, bufferSize, LSN(pos), LSN(pos))
+	writer := NewLogWriter(file, bufferSize, primitives.LSN(pos), primitives.LSN(pos))
 
 	w := &WAL{
 		file:       file,
 		writer:     writer,
 		activeTxns: make(map[*transaction.TransactionID]*TransactionLogInfo),
-		dirtyPages: make(map[tuple.PageID]LSN),
+		dirtyPages: make(map[tuple.PageID]primitives.LSN),
 	}
 
 	w.flushCond = sync.NewCond(&w.mutex)
 	return w, nil
 }
 
-func (w *WAL) LogBegin(tid *transaction.TransactionID) (LSN, error) {
+func (w *WAL) LogBegin(tid *transaction.TransactionID) (primitives.LSN, error) {
 	w.mutex.Lock()
 	defer w.mutex.Unlock()
 
@@ -68,7 +69,7 @@ func (w *WAL) LogBegin(tid *transaction.TransactionID) (LSN, error) {
 
 // CRITICAL: This must FORCE the log to disk before returning (durability guarantee)
 // After this returns successfully, the transaction is durable even if system crashes
-func (w *WAL) LogCommit(tid *transaction.TransactionID) (LSN, error) {
+func (w *WAL) LogCommit(tid *transaction.TransactionID) (primitives.LSN, error) {
 	w.mutex.Lock()
 
 	txnInfo, err := w.getTransactionInfo(tid)
@@ -98,7 +99,7 @@ func (w *WAL) LogCommit(tid *transaction.TransactionID) (LSN, error) {
 
 // LogAbort logs a transaction abort
 // This initiates the undo process for the transaction
-func (w *WAL) LogAbort(tid *transaction.TransactionID) (LSN, error) {
+func (w *WAL) LogAbort(tid *transaction.TransactionID) (primitives.LSN, error) {
 	w.mutex.Lock()
 	defer w.mutex.Unlock()
 
@@ -136,31 +137,31 @@ func (w *WAL) Close() error {
 
 // LogUpdate logs a page update with before and after images
 // This is called BEFORE the page is actually modified in memory
-func (w *WAL) LogUpdate(tid *transaction.TransactionID, pageID tuple.PageID, beforeImage, afterImage []byte) (LSN, error) {
+func (w *WAL) LogUpdate(tid *transaction.TransactionID, pageID tuple.PageID, beforeImage, afterImage []byte) (primitives.LSN, error) {
 	return w.logDataOperation(UpdateRecord, tid, pageID, beforeImage, afterImage)
 }
 
 // LogInsert logs a tuple insertion
 // Only needs after image - there's nothing to undo to (tuple didn't exist)
 // During recovery, we REDO the insert by applying the after image
-func (w *WAL) LogInsert(tid *transaction.TransactionID, pageID tuple.PageID, afterImage []byte) (LSN, error) {
+func (w *WAL) LogInsert(tid *transaction.TransactionID, pageID tuple.PageID, afterImage []byte) (primitives.LSN, error) {
 	return w.logDataOperation(InsertRecord, tid, pageID, nil, afterImage)
 }
 
 // LogDelete logs a tuple deletion
 // Only needs before image - this is what we restore during UNDO
 // During recovery, REDO means "ensure tuple is deleted" (no-op if already gone)
-func (w *WAL) LogDelete(tid *transaction.TransactionID, pageID tuple.PageID, beforeImage []byte) (LSN, error) {
+func (w *WAL) LogDelete(tid *transaction.TransactionID, pageID tuple.PageID, beforeImage []byte) (primitives.LSN, error) {
 	return w.logDataOperation(DeleteRecord, tid, pageID, beforeImage, nil)
 }
 
 // GetDirtyPages returns a copy of the dirty page table
 // Used during checkpointing
-func (w *WAL) GetDirtyPages() map[tuple.PageID]LSN {
+func (w *WAL) GetDirtyPages() map[tuple.PageID]primitives.LSN {
 	w.mutex.RLock()
 	defer w.mutex.RUnlock()
 
-	pages := make(map[tuple.PageID]LSN, len(w.dirtyPages))
+	pages := make(map[tuple.PageID]primitives.LSN, len(w.dirtyPages))
 	maps.Copy(pages, w.dirtyPages)
 	return pages
 }
@@ -178,9 +179,9 @@ func (w *WAL) GetActiveTransactions() []*transaction.TransactionID {
 	return txns
 }
 
-// GetLastLSN returns the last LSN for a transaction
+// GetLastLSN returns the last primitives.LSN for a transaction
 // Used for building PrevLSN chains
-func (w *WAL) GetLastLSN(tid *transaction.TransactionID) (LSN, error) {
+func (w *WAL) GetLastLSN(tid *transaction.TransactionID) (primitives.LSN, error) {
 	w.mutex.RLock()
 	defer w.mutex.RUnlock()
 
@@ -192,7 +193,7 @@ func (w *WAL) GetLastLSN(tid *transaction.TransactionID) (LSN, error) {
 	return txnInfo.LastLSN, nil
 }
 
-func (w *WAL) writeRecord(record *LogRecord) (LSN, error) {
+func (w *WAL) writeRecord(record *LogRecord) (primitives.LSN, error) {
 	data, err := SerializeLogRecord(record)
 	if err != nil {
 		return 0, err
@@ -201,9 +202,9 @@ func (w *WAL) writeRecord(record *LogRecord) (LSN, error) {
 	return w.writer.Write(data)
 }
 
-// Force ensures all log records up to the given LSN are on disk
+// Force ensures all log records up to the given primitives.LSN are on disk
 // This is called during commit to ensure durability
-func (w *WAL) Force(lsn LSN) error {
+func (w *WAL) Force(lsn primitives.LSN) error {
 	w.mutex.Lock()
 	defer w.mutex.Unlock()
 
@@ -219,7 +220,7 @@ func (w *WAL) getTransactionInfo(tid *transaction.TransactionID) (*TransactionLo
 }
 
 // logDataOperation is a helper for logging data operations (insert, update, delete)
-func (w *WAL) logDataOperation(recordType LogRecordType, tid *transaction.TransactionID, pageID tuple.PageID, beforeImage, afterImage []byte) (LSN, error) {
+func (w *WAL) logDataOperation(recordType LogRecordType, tid *transaction.TransactionID, pageID tuple.PageID, beforeImage, afterImage []byte) (primitives.LSN, error) {
 	w.mutex.Lock()
 	defer w.mutex.Unlock()
 
@@ -244,7 +245,7 @@ func (w *WAL) logDataOperation(recordType LogRecordType, tid *transaction.Transa
 	return lsn, nil
 }
 
-func (w *WAL) logTransactionOperation(recordType LogRecordType, tid *transaction.TransactionID, prevLSN LSN) (LSN, error) {
+func (w *WAL) logTransactionOperation(recordType LogRecordType, tid *transaction.TransactionID, prevLSN primitives.LSN) (primitives.LSN, error) {
 	record := NewLogRecord(recordType, tid, nil, nil, nil, prevLSN)
 	return w.writeRecord(record)
 }
