@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"storemy/pkg/concurrency/transaction"
 	"storemy/pkg/parser/statements"
+	"storemy/pkg/primitives"
 	"storemy/pkg/types"
 	"testing"
 )
@@ -34,7 +34,7 @@ func TestNewCreateTablePlan(t *testing.T) {
 	stmt.AddField("id", types.IntType, true, nil)
 
 	ctx := createTestContextWithCleanup(t, "")
-	tid := transaction.NewTransactionID()
+	tid := primitives.NewTransactionID()
 
 	plan := NewCreateTablePlan(stmt, ctx, tid)
 
@@ -68,7 +68,7 @@ func TestCreateTablePlan_Execute_BasicSuccess(t *testing.T) {
 	stmt.AddField("name", types.StringType, false, nil)
 
 	ctx := createTestContextWithCleanup(t, dataDir)
-	tid := transaction.NewTransactionID()
+	tid := primitives.NewTransactionID()
 
 	plan := NewCreateTablePlan(stmt, ctx, tid)
 
@@ -112,7 +112,7 @@ func TestCreateTablePlan_Execute_WithPrimaryKey(t *testing.T) {
 	stmt.PrimaryKey = "id"
 
 	ctx := createTestContextWithCleanup(t, dataDir)
-	tid := transaction.NewTransactionID()
+	tid := primitives.NewTransactionID()
 
 	plan := NewCreateTablePlan(stmt, ctx, tid)
 
@@ -148,7 +148,7 @@ func TestCreateTablePlan_Execute_AllFieldTypes(t *testing.T) {
 	stmt.AddField("price", types.FloatType, false, nil)
 
 	ctx := createTestContextWithCleanup(t, dataDir)
-	tid := transaction.NewTransactionID()
+	tid := primitives.NewTransactionID()
 
 	plan := NewCreateTablePlan(stmt, ctx, tid)
 
@@ -181,7 +181,7 @@ func TestCreateTablePlan_Execute_IfNotExists_TableDoesNotExist(t *testing.T) {
 	stmt.AddField("id", types.IntType, true, nil)
 
 	ctx := createTestContextWithCleanup(t, dataDir)
-	tid := transaction.NewTransactionID()
+	tid := primitives.NewTransactionID()
 
 	plan := NewCreateTablePlan(stmt, ctx, tid)
 
@@ -216,7 +216,7 @@ func TestCreateTablePlan_Execute_IfNotExists_TableExists(t *testing.T) {
 	os.Mkdir("data", 0755)
 
 	ctx := createTestContextWithCleanup(t, dataDir)
-	tid := transaction.NewTransactionID()
+	tid := primitives.NewTransactionID()
 
 	existingStmt := statements.NewCreateStatement("users", false)
 	existingStmt.AddField("id", types.IntType, true, nil)
@@ -259,7 +259,7 @@ func TestCreateTablePlan_Execute_Error_TableAlreadyExists(t *testing.T) {
 	os.Mkdir("data", 0755)
 
 	ctx := createTestContextWithCleanup(t, dataDir)
-	tid := transaction.NewTransactionID()
+	tid := primitives.NewTransactionID()
 
 	existingStmt := statements.NewCreateStatement("users", false)
 	existingStmt.AddField("id", types.IntType, true, nil)
@@ -303,7 +303,7 @@ func TestCreateTablePlan_Execute_Error_EmptyFields(t *testing.T) {
 	stmt := statements.NewCreateStatement("empty_table", false)
 
 	ctx := createTestContextWithCleanup(t, dataDir)
-	tid := transaction.NewTransactionID()
+	tid := primitives.NewTransactionID()
 
 	plan := NewCreateTablePlan(stmt, ctx, tid)
 
@@ -329,7 +329,7 @@ func TestCreateTablePlan_Execute_Error_InvalidFieldType(t *testing.T) {
 	stmt := statements.NewCreateStatement("invalid_table", false)
 
 	ctx := createTestContextWithCleanup(t, dataDir)
-	tid := transaction.NewTransactionID()
+	tid := primitives.NewTransactionID()
 
 	plan := NewCreateTablePlan(stmt, ctx, tid)
 
@@ -356,7 +356,7 @@ func TestCreateTablePlan_Execute_Error_DataDirectoryMissing(t *testing.T) {
 
 	// Pass empty string for dataDir to force use of "data/" directory
 	ctx := createTestContextWithCleanup(t, "")
-	tid := transaction.NewTransactionID()
+	tid := primitives.NewTransactionID()
 
 	plan := NewCreateTablePlan(stmt, ctx, tid)
 
@@ -396,7 +396,7 @@ func TestCreateTablePlan_Execute_ComplexTable(t *testing.T) {
 	stmt.PrimaryKey = "id"
 
 	ctx := createTestContextWithCleanup(t, dataDir)
-	tid := transaction.NewTransactionID()
+	tid := primitives.NewTransactionID()
 
 	plan := NewCreateTablePlan(stmt, ctx, tid)
 
@@ -444,7 +444,7 @@ func TestCreateTablePlan_Execute_FileCreation(t *testing.T) {
 
 	// Pass empty string to use default "data/" directory
 	ctx := createTestContextWithCleanup(t, "")
-	tid := transaction.NewTransactionID()
+	tid := primitives.NewTransactionID()
 
 	plan := NewCreateTablePlan(stmt, ctx, tid)
 

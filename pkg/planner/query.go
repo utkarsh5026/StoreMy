@@ -2,8 +2,8 @@ package planner
 
 import (
 	"fmt"
-	"storemy/pkg/concurrency/transaction"
 	"storemy/pkg/parser/statements"
+	"storemy/pkg/primitives"
 	"storemy/pkg/registry"
 )
 
@@ -21,7 +21,7 @@ func NewQueryPlanner(ctx *registry.DatabaseContext) *QueryPlanner {
 	}
 }
 
-func (qp *QueryPlanner) Plan(stmt statements.Statement, tid *transaction.TransactionID) (Plan, error) {
+func (qp *QueryPlanner) Plan(stmt statements.Statement, tid *primitives.TransactionID) (Plan, error) {
 	switch s := stmt.(type) {
 	case *statements.CreateStatement:
 		return NewCreateTablePlan(s, qp.ctx, tid), nil

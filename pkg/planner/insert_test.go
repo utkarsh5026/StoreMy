@@ -2,8 +2,8 @@ package planner
 
 import (
 	"os"
-	"storemy/pkg/concurrency/transaction"
 	"storemy/pkg/parser/statements"
+	"storemy/pkg/primitives"
 	"storemy/pkg/registry"
 	"storemy/pkg/types"
 	"testing"
@@ -29,7 +29,7 @@ func executeInsertPlan(t *testing.T, plan *InsertPlan) (*DMLResult, error) {
 }
 
 // Helper function to create a test table
-func createTestTable(t *testing.T, ctx *registry.DatabaseContext, tid *transaction.TransactionID) {
+func createTestTable(t *testing.T, ctx *registry.DatabaseContext, tid *primitives.TransactionID) {
 	stmt := statements.NewCreateStatement("test_table", false)
 	stmt.AddField("id", types.IntType, false, nil)
 	stmt.AddField("name", types.StringType, false, nil)
@@ -49,7 +49,7 @@ func createTestTable(t *testing.T, ctx *registry.DatabaseContext, tid *transacti
 func TestNewInsertPlan(t *testing.T) {
 	stmt := statements.NewInsertStatement("test_table")
 	ctx := createTestContextWithCleanup(t, "")
-	tid := transaction.NewTransactionID()
+	tid := primitives.NewTransactionID()
 
 	plan := NewInsertPlan(stmt, tid, ctx)
 
@@ -75,7 +75,7 @@ func TestInsertPlan_Execute_SingleRow(t *testing.T) {
 	os.Mkdir("data", 0755)
 
 	ctx := createTestContextWithCleanup(t, "")
-	tid := transaction.NewTransactionID()
+	tid := primitives.NewTransactionID()
 
 	createTestTable(t, ctx, tid)
 
@@ -119,7 +119,7 @@ func TestInsertPlan_Execute_MultipleRows(t *testing.T) {
 	os.Mkdir("data", 0755)
 
 	ctx := createTestContextWithCleanup(t, "")
-	tid := transaction.NewTransactionID()
+	tid := primitives.NewTransactionID()
 
 	createTestTable(t, ctx, tid)
 
@@ -168,7 +168,7 @@ func TestInsertPlan_Execute_WithSpecificFields(t *testing.T) {
 	os.Mkdir("data", 0755)
 
 	ctx := createTestContextWithCleanup(t, "")
-	tid := transaction.NewTransactionID()
+	tid := primitives.NewTransactionID()
 
 	createTestTable(t, ctx, tid)
 
@@ -205,7 +205,7 @@ func TestInsertPlan_Execute_Error_TableNotFound(t *testing.T) {
 	os.Mkdir("data", 0755)
 
 	ctx := createTestContextWithCleanup(t, "")
-	tid := transaction.NewTransactionID()
+	tid := primitives.NewTransactionID()
 
 	stmt := statements.NewInsertStatement("nonexistent_table")
 	values := []types.Field{
@@ -240,7 +240,7 @@ func TestInsertPlan_Execute_Error_ValueCountMismatch(t *testing.T) {
 	os.Mkdir("data", 0755)
 
 	ctx := createTestContextWithCleanup(t, "")
-	tid := transaction.NewTransactionID()
+	tid := primitives.NewTransactionID()
 
 	createTestTable(t, ctx, tid)
 
@@ -278,7 +278,7 @@ func TestInsertPlan_Execute_Error_InvalidFieldName(t *testing.T) {
 	os.Mkdir("data", 0755)
 
 	ctx := createTestContextWithCleanup(t, "")
-	tid := transaction.NewTransactionID()
+	tid := primitives.NewTransactionID()
 
 	createTestTable(t, ctx, tid)
 
@@ -318,7 +318,7 @@ func TestInsertPlan_Execute_Error_ValueCountMismatchWithFields(t *testing.T) {
 	os.Mkdir("data", 0755)
 
 	ctx := createTestContextWithCleanup(t, "")
-	tid := transaction.NewTransactionID()
+	tid := primitives.NewTransactionID()
 
 	createTestTable(t, ctx, tid)
 
@@ -357,7 +357,7 @@ func TestInsertPlan_Execute_Error_MissingValueForField(t *testing.T) {
 	os.Mkdir("data", 0755)
 
 	ctx := createTestContextWithCleanup(t, "")
-	tid := transaction.NewTransactionID()
+	tid := primitives.NewTransactionID()
 
 	createTestTable(t, ctx, tid)
 
@@ -396,7 +396,7 @@ func TestInsertPlan_Execute_EmptyValues(t *testing.T) {
 	os.Mkdir("data", 0755)
 
 	ctx := createTestContextWithCleanup(t, "")
-	tid := transaction.NewTransactionID()
+	tid := primitives.NewTransactionID()
 
 	createTestTable(t, ctx, tid)
 
@@ -429,7 +429,7 @@ func TestInsertPlan_getTableID(t *testing.T) {
 	os.Mkdir("data", 0755)
 
 	ctx := createTestContextWithCleanup(t, "")
-	tid := transaction.NewTransactionID()
+	tid := primitives.NewTransactionID()
 
 	createTestTable(t, ctx, tid)
 
@@ -456,7 +456,7 @@ func TestInsertPlan_getTupleDesc(t *testing.T) {
 	os.Mkdir("data", 0755)
 
 	ctx := createTestContextWithCleanup(t, "")
-	tid := transaction.NewTransactionID()
+	tid := primitives.NewTransactionID()
 
 	createTestTable(t, ctx, tid)
 
@@ -487,7 +487,7 @@ func TestInsertPlan_createFieldMapping(t *testing.T) {
 	os.Mkdir("data", 0755)
 
 	ctx := createTestContextWithCleanup(t, "")
-	tid := transaction.NewTransactionID()
+	tid := primitives.NewTransactionID()
 
 	createTestTable(t, ctx, tid)
 
@@ -529,7 +529,7 @@ func TestInsertPlan_createFieldMapping_EmptyFields(t *testing.T) {
 	os.Mkdir("data", 0755)
 
 	ctx := createTestContextWithCleanup(t, "")
-	tid := transaction.NewTransactionID()
+	tid := primitives.NewTransactionID()
 
 	createTestTable(t, ctx, tid)
 
@@ -562,7 +562,7 @@ func TestInsertPlan_validateValueCount(t *testing.T) {
 	os.Mkdir("data", 0755)
 
 	ctx := createTestContextWithCleanup(t, "")
-	tid := transaction.NewTransactionID()
+	tid := primitives.NewTransactionID()
 
 	createTestTable(t, ctx, tid)
 

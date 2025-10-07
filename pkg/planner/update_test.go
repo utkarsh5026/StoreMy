@@ -2,9 +2,9 @@ package planner
 
 import (
 	"os"
-	"storemy/pkg/concurrency/transaction"
 	"storemy/pkg/parser/plan"
 	"storemy/pkg/parser/statements"
+	"storemy/pkg/primitives"
 	"storemy/pkg/registry"
 	"storemy/pkg/types"
 	"testing"
@@ -28,7 +28,7 @@ func executeUpdatePlan(t *testing.T, plan *UpdatePlan) (*DMLResult, error) {
 	return result, nil
 }
 
-func createUpdateTestTable(t *testing.T, ctx *registry.DatabaseContext, tid *transaction.TransactionID) {
+func createUpdateTestTable(t *testing.T, ctx *registry.DatabaseContext, tid *primitives.TransactionID) {
 	stmt := statements.NewCreateStatement("users", false)
 	stmt.AddField("id", types.IntType, false, nil)
 	stmt.AddField("name", types.StringType, false, nil)
@@ -47,7 +47,7 @@ func createUpdateTestTable(t *testing.T, ctx *registry.DatabaseContext, tid *tra
 	cleanupTable(t, ctx.TableManager(), "users")
 }
 
-func insertUpdateTestData(t *testing.T, ctx *registry.DatabaseContext, tid *transaction.TransactionID) {
+func insertUpdateTestData(t *testing.T, ctx *registry.DatabaseContext, tid *primitives.TransactionID) {
 	insertStmt := statements.NewInsertStatement("users")
 
 	values1 := []types.Field{
@@ -90,7 +90,7 @@ func insertUpdateTestData(t *testing.T, ctx *registry.DatabaseContext, tid *tran
 func TestNewUpdatePlan(t *testing.T) {
 	stmt := statements.NewUpdateStatement("users", "users")
 	ctx := createTestContextWithCleanup(t, "")
-	tid := transaction.NewTransactionID()
+	tid := primitives.NewTransactionID()
 
 	plan := NewUpdatePlan(stmt, tid, ctx)
 
@@ -115,7 +115,7 @@ func TestUpdatePlan_Execute_UpdateSingleField(t *testing.T) {
 	os.Mkdir("data", 0755)
 
 	ctx := createTestContextWithCleanup(t, "")
-	tid := transaction.NewTransactionID()
+	tid := primitives.NewTransactionID()
 
 	createUpdateTestTable(t, ctx, tid)
 	insertUpdateTestData(t, ctx, tid)
@@ -157,7 +157,7 @@ func TestUpdatePlan_Execute_UpdateMultipleFields(t *testing.T) {
 	os.Mkdir("data", 0755)
 
 	ctx := createTestContextWithCleanup(t, "")
-	tid := transaction.NewTransactionID()
+	tid := primitives.NewTransactionID()
 
 	createUpdateTestTable(t, ctx, tid)
 	insertUpdateTestData(t, ctx, tid)
@@ -200,7 +200,7 @@ func TestUpdatePlan_Execute_UpdateMultipleRows(t *testing.T) {
 	os.Mkdir("data", 0755)
 
 	ctx := createTestContextWithCleanup(t, "")
-	tid := transaction.NewTransactionID()
+	tid := primitives.NewTransactionID()
 
 	createUpdateTestTable(t, ctx, tid)
 	insertUpdateTestData(t, ctx, tid)
@@ -242,7 +242,7 @@ func TestUpdatePlan_Execute_UpdateAllRows(t *testing.T) {
 	os.Mkdir("data", 0755)
 
 	ctx := createTestContextWithCleanup(t, "")
-	tid := transaction.NewTransactionID()
+	tid := primitives.NewTransactionID()
 
 	createUpdateTestTable(t, ctx, tid)
 	insertUpdateTestData(t, ctx, tid)
@@ -281,7 +281,7 @@ func TestUpdatePlan_Execute_UpdateWithIntegerFilter(t *testing.T) {
 	os.Mkdir("data", 0755)
 
 	ctx := createTestContextWithCleanup(t, "")
-	tid := transaction.NewTransactionID()
+	tid := primitives.NewTransactionID()
 
 	createUpdateTestTable(t, ctx, tid)
 	insertUpdateTestData(t, ctx, tid)
@@ -318,7 +318,7 @@ func TestUpdatePlan_Execute_UpdateWithFloatFilter(t *testing.T) {
 	os.Mkdir("data", 0755)
 
 	ctx := createTestContextWithCleanup(t, "")
-	tid := transaction.NewTransactionID()
+	tid := primitives.NewTransactionID()
 
 	createUpdateTestTable(t, ctx, tid)
 	insertUpdateTestData(t, ctx, tid)
@@ -355,7 +355,7 @@ func TestUpdatePlan_Execute_NoMatchingRows(t *testing.T) {
 	os.Mkdir("data", 0755)
 
 	ctx := createTestContextWithCleanup(t, "")
-	tid := transaction.NewTransactionID()
+	tid := primitives.NewTransactionID()
 
 	createUpdateTestTable(t, ctx, tid)
 	insertUpdateTestData(t, ctx, tid)
@@ -397,7 +397,7 @@ func TestUpdatePlan_Execute_Error_TableNotFound(t *testing.T) {
 	os.Mkdir("data", 0755)
 
 	ctx := createTestContextWithCleanup(t, "")
-	tid := transaction.NewTransactionID()
+	tid := primitives.NewTransactionID()
 
 	stmt := statements.NewUpdateStatement("nonexistent_table", "nonexistent_table")
 	stmt.AddSetClause("name", types.NewStringField("Test", types.StringMaxSize))
@@ -429,7 +429,7 @@ func TestUpdatePlan_Execute_Error_InvalidField(t *testing.T) {
 	os.Mkdir("data", 0755)
 
 	ctx := createTestContextWithCleanup(t, "")
-	tid := transaction.NewTransactionID()
+	tid := primitives.NewTransactionID()
 
 	createUpdateTestTable(t, ctx, tid)
 
@@ -463,7 +463,7 @@ func TestUpdatePlan_Execute_Error_InvalidWhereField(t *testing.T) {
 	os.Mkdir("data", 0755)
 
 	ctx := createTestContextWithCleanup(t, "")
-	tid := transaction.NewTransactionID()
+	tid := primitives.NewTransactionID()
 
 	createUpdateTestTable(t, ctx, tid)
 
@@ -500,7 +500,7 @@ func TestUpdatePlan_Execute_EmptyTable(t *testing.T) {
 	os.Mkdir("data", 0755)
 
 	ctx := createTestContextWithCleanup(t, "")
-	tid := transaction.NewTransactionID()
+	tid := primitives.NewTransactionID()
 
 	createUpdateTestTable(t, ctx, tid)
 
@@ -538,7 +538,7 @@ func TestUpdatePlan_getTableMetadata(t *testing.T) {
 	os.Mkdir("data", 0755)
 
 	ctx := createTestContextWithCleanup(t, "")
-	tid := transaction.NewTransactionID()
+	tid := primitives.NewTransactionID()
 
 	createUpdateTestTable(t, ctx, tid)
 
@@ -575,7 +575,7 @@ func TestUpdatePlan_findFieldIndex(t *testing.T) {
 	os.Mkdir("data", 0755)
 
 	ctx := createTestContextWithCleanup(t, "")
-	tid := transaction.NewTransactionID()
+	tid := primitives.NewTransactionID()
 
 	createUpdateTestTable(t, ctx, tid)
 
@@ -627,7 +627,7 @@ func TestUpdatePlan_buildUpdateMap(t *testing.T) {
 	os.Mkdir("data", 0755)
 
 	ctx := createTestContextWithCleanup(t, "")
-	tid := transaction.NewTransactionID()
+	tid := primitives.NewTransactionID()
 
 	createUpdateTestTable(t, ctx, tid)
 

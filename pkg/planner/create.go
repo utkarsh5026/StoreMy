@@ -4,8 +4,8 @@ import (
 	"fmt"
 
 	"storemy/pkg/catalog"
-	"storemy/pkg/concurrency/transaction"
 	"storemy/pkg/parser/statements"
+	"storemy/pkg/primitives"
 	"storemy/pkg/registry"
 	"storemy/pkg/storage/heap"
 	"storemy/pkg/tuple"
@@ -15,7 +15,7 @@ import (
 type CreateTablePlan struct {
 	Statement *statements.CreateStatement
 	ctx       *registry.DatabaseContext
-	tid       *transaction.TransactionID
+	tid       *primitives.TransactionID
 }
 
 type DDLResult struct {
@@ -30,7 +30,7 @@ func (r *DDLResult) String() string {
 func NewCreateTablePlan(
 	stmt *statements.CreateStatement,
 	ctx *registry.DatabaseContext,
-	tid *transaction.TransactionID,
+	tid *primitives.TransactionID,
 ) *CreateTablePlan {
 	return &CreateTablePlan{
 		Statement: stmt,

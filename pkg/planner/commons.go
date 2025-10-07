@@ -2,10 +2,10 @@ package planner
 
 import (
 	"fmt"
-	"storemy/pkg/concurrency/transaction"
 	"storemy/pkg/execution/query"
 	"storemy/pkg/iterator"
 	"storemy/pkg/parser/plan"
+	"storemy/pkg/primitives"
 	"storemy/pkg/registry"
 	"storemy/pkg/tuple"
 )
@@ -95,7 +95,7 @@ func collectAllTuples(it iterator.DbIterator) ([]*tuple.Tuple, error) {
 //  1. SeqScan - reads pages via page-level locks (see LockManager)
 //  2. Filter (optional) - applies WHERE predicates
 func buildScanWithFilter(
-	tid *transaction.TransactionID,
+	tid *primitives.TransactionID,
 	tableID int,
 	whereClause *plan.FilterNode,
 	ctx *registry.DatabaseContext,

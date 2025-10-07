@@ -2,15 +2,15 @@ package planner
 
 import (
 	"os"
-	"storemy/pkg/concurrency/transaction"
 	"storemy/pkg/parser/plan"
 	"storemy/pkg/parser/statements"
+	"storemy/pkg/primitives"
 	"storemy/pkg/registry"
 	"storemy/pkg/types"
 	"testing"
 )
 
-func setupSelectTest(t *testing.T) (*registry.DatabaseContext, *transaction.TransactionID, func()) {
+func setupSelectTest(t *testing.T) (*registry.DatabaseContext, *primitives.TransactionID, func()) {
 	dataDir := t.TempDir()
 	oldDir, _ := os.Getwd()
 	os.Chdir(dataDir)
@@ -22,12 +22,12 @@ func setupSelectTest(t *testing.T) (*registry.DatabaseContext, *transaction.Tran
 	os.Mkdir("data", 0755)
 
 	ctx := createTestContextWithCleanup(t, "")
-	tid := transaction.NewTransactionID()
+	tid := primitives.NewTransactionID()
 
 	return ctx, tid, cleanup
 }
 
-func setupSelectTestWithData(t *testing.T) (*registry.DatabaseContext, *transaction.TransactionID, func()) {
+func setupSelectTestWithData(t *testing.T) (*registry.DatabaseContext, *primitives.TransactionID, func()) {
 	ctx, tid, cleanup := setupSelectTest(t)
 
 	createSelectTestTable(t, ctx, tid)
@@ -54,7 +54,7 @@ func executeSelectPlan(t *testing.T, plan *SelectPlan) (*SelectQueryResult, erro
 	return result, nil
 }
 
-func createSelectTestTable(t *testing.T, ctx *registry.DatabaseContext, tid *transaction.TransactionID) {
+func createSelectTestTable(t *testing.T, ctx *registry.DatabaseContext, tid *primitives.TransactionID) {
 	stmt := statements.NewCreateStatement("users", false)
 	stmt.AddField("id", types.IntType, false, nil)
 	stmt.AddField("name", types.StringType, false, nil)
@@ -73,7 +73,7 @@ func createSelectTestTable(t *testing.T, ctx *registry.DatabaseContext, tid *tra
 	cleanupTable(t, ctx.TableManager(), "users")
 }
 
-func insertSelectTestData(t *testing.T, ctx *registry.DatabaseContext, tid *transaction.TransactionID) {
+func insertSelectTestData(t *testing.T, ctx *registry.DatabaseContext, tid *primitives.TransactionID) {
 	insertStmt := statements.NewInsertStatement("users")
 
 	values1 := []types.Field{
@@ -117,7 +117,7 @@ func TestNewSelectPlan(t *testing.T) {
 	selectPlan := plan.NewSelectPlan()
 	stmt := statements.NewSelectStatement(selectPlan)
 	ctx := createTestContextWithCleanup(t, "")
-	tid := transaction.NewTransactionID()
+	tid := primitives.NewTransactionID()
 
 	plan := NewSelectPlan(stmt, tid, ctx)
 
@@ -282,7 +282,7 @@ func TestSelectPlan_Execute_Error_NoTables(t *testing.T) {
 	os.Mkdir("data", 0755)
 
 	ctx := createTestContextWithCleanup(t, "")
-	tid := transaction.NewTransactionID()
+	tid := primitives.NewTransactionID()
 
 	selectPlan := plan.NewSelectPlan()
 	stmt := statements.NewSelectStatement(selectPlan)
@@ -565,7 +565,7 @@ func TestSelectQueryResult_Values(t *testing.T) {
 
 // Helper functions for join and aggregation tests
 
-func setupJoinTestWithData(t *testing.T) (*registry.DatabaseContext, *transaction.TransactionID, func()) {
+func setupJoinTestWithData(t *testing.T) (*registry.DatabaseContext, *primitives.TransactionID, func()) {
 	ctx, tid, cleanup := setupSelectTest(t)
 
 	createJoinTestTables(t, ctx, tid)
@@ -574,7 +574,7 @@ func setupJoinTestWithData(t *testing.T) (*registry.DatabaseContext, *transactio
 	return ctx, tid, cleanup
 }
 
-func createJoinTestTables(t *testing.T, ctx *registry.DatabaseContext, tid *transaction.TransactionID) {
+func createJoinTestTables(t *testing.T, ctx *registry.DatabaseContext, tid *primitives.TransactionID) {
 	// Create users table
 	usersStmt := statements.NewCreateStatement("users", false)
 	usersStmt.AddField("id", types.IntType, false, nil)
@@ -601,7 +601,7 @@ func createJoinTestTables(t *testing.T, ctx *registry.DatabaseContext, tid *tran
 	cleanupTable(t, ctx.TableManager(), "departments")
 }
 
-func insertJoinTestData(t *testing.T, ctx *registry.DatabaseContext, tid *transaction.TransactionID) {
+func insertJoinTestData(t *testing.T, ctx *registry.DatabaseContext, tid *primitives.TransactionID) {
 	// Insert users
 	usersStmt := statements.NewInsertStatement("users")
 	usersStmt.AddValues([]types.Field{
