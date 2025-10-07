@@ -68,10 +68,10 @@ func TestNewProject_ValidInputs(t *testing.T) {
 	td := mustCreateProjectTupleDesc()
 	child := newMockChildIterator([]*tuple.Tuple{}, td)
 
-	fieldList := []int{0, 2}
+	projectedCols := []int{0, 2}
 	typesList := []types.Type{types.IntType, types.IntType}
 
-	project, err := NewProject(fieldList, typesList, child)
+	project, err := NewProject(projectedCols, typesList, child)
 	if err != nil {
 		t.Fatalf("NewProject returned error: %v", err)
 	}
@@ -80,17 +80,17 @@ func TestNewProject_ValidInputs(t *testing.T) {
 		t.Fatal("NewProject returned nil")
 	}
 
-	if len(project.fieldList) != len(fieldList) {
-		t.Errorf("Expected fieldList length %d, got %d", len(fieldList), len(project.fieldList))
+	if len(project.projectedCols) != len(projectedCols) {
+		t.Errorf("Expected projectedCols length %d, got %d", len(projectedCols), len(project.projectedCols))
 	}
 
-	for i, expected := range fieldList {
-		if project.fieldList[i] != expected {
-			t.Errorf("Expected fieldList[%d] = %d, got %d", i, expected, project.fieldList[i])
+	for i, expected := range projectedCols {
+		if project.projectedCols[i] != expected {
+			t.Errorf("Expected projectedCols[%d] = %d, got %d", i, expected, project.projectedCols[i])
 		}
 	}
 
-	if project.child == nil {
+	if project.source == nil {
 		t.Error("Expected child to be set")
 	}
 
@@ -104,10 +104,10 @@ func TestNewProject_ValidInputs(t *testing.T) {
 }
 
 func TestNewProject_NilChild(t *testing.T) {
-	fieldList := []int{0, 1}
+	projectedCols := []int{0, 1}
 	typesList := []types.Type{types.IntType, types.StringType}
 
-	project, err := NewProject(fieldList, typesList, nil)
+	project, err := NewProject(projectedCols, typesList, nil)
 	if err == nil {
 		t.Error("Expected error when child is nil")
 	}
@@ -120,15 +120,15 @@ func TestNewProject_FieldTypesLengthMismatch(t *testing.T) {
 	td := mustCreateProjectTupleDesc()
 	child := newMockChildIterator([]*tuple.Tuple{}, td)
 
-	fieldList := []int{0, 1}
+	projectedCols := []int{0, 1}
 	typesList := []types.Type{types.IntType}
 
-	project, err := NewProject(fieldList, typesList, child)
+	project, err := NewProject(projectedCols, typesList, child)
 	if err == nil {
-		t.Error("Expected error when fieldList and typesList lengths don't match")
+		t.Error("Expected error when projectedCols and typesList lengths don't match")
 	}
 	if project != nil {
-		t.Error("Expected nil project when fieldList and typesList lengths don't match")
+		t.Error("Expected nil project when projectedCols and typesList lengths don't match")
 	}
 }
 
@@ -136,15 +136,15 @@ func TestNewProject_EmptyFieldList(t *testing.T) {
 	td := mustCreateProjectTupleDesc()
 	child := newMockChildIterator([]*tuple.Tuple{}, td)
 
-	fieldList := []int{}
+	projectedCols := []int{}
 	typesList := []types.Type{}
 
-	project, err := NewProject(fieldList, typesList, child)
+	project, err := NewProject(projectedCols, typesList, child)
 	if err == nil {
-		t.Error("Expected error when fieldList is empty")
+		t.Error("Expected error when projectedCols is empty")
 	}
 	if project != nil {
-		t.Error("Expected nil project when fieldList is empty")
+		t.Error("Expected nil project when projectedCols is empty")
 	}
 }
 
@@ -154,10 +154,10 @@ func TestNewProject_NilChildTupleDesc(t *testing.T) {
 		td:     nil,
 	}
 
-	fieldList := []int{0}
+	projectedCols := []int{0}
 	typesList := []types.Type{types.IntType}
 
-	project, err := NewProject(fieldList, typesList, child)
+	project, err := NewProject(projectedCols, typesList, child)
 	if err == nil {
 		t.Error("Expected error when child has nil tuple descriptor")
 	}
@@ -170,10 +170,10 @@ func TestNewProject_FieldIndexOutOfBounds(t *testing.T) {
 	td := mustCreateProjectTupleDesc()
 	child := newMockChildIterator([]*tuple.Tuple{}, td)
 
-	fieldList := []int{0, 10}
+	projectedCols := []int{0, 10}
 	typesList := []types.Type{types.IntType, types.IntType}
 
-	project, err := NewProject(fieldList, typesList, child)
+	project, err := NewProject(projectedCols, typesList, child)
 	if err == nil {
 		t.Error("Expected error when field index is out of bounds")
 	}
@@ -186,10 +186,10 @@ func TestNewProject_NegativeFieldIndex(t *testing.T) {
 	td := mustCreateProjectTupleDesc()
 	child := newMockChildIterator([]*tuple.Tuple{}, td)
 
-	fieldList := []int{-1, 1}
+	projectedCols := []int{-1, 1}
 	typesList := []types.Type{types.IntType, types.StringType}
 
-	project, err := NewProject(fieldList, typesList, child)
+	project, err := NewProject(projectedCols, typesList, child)
 	if err == nil {
 		t.Error("Expected error when field index is negative")
 	}
@@ -202,10 +202,10 @@ func TestNewProject_TypeMismatch(t *testing.T) {
 	td := mustCreateProjectTupleDesc()
 	child := newMockChildIterator([]*tuple.Tuple{}, td)
 
-	fieldList := []int{0, 1}
+	projectedCols := []int{0, 1}
 	typesList := []types.Type{types.StringType, types.IntType}
 
-	project, err := NewProject(fieldList, typesList, child)
+	project, err := NewProject(projectedCols, typesList, child)
 	if err == nil {
 		t.Error("Expected error when types don't match child schema")
 	}
@@ -222,10 +222,10 @@ func TestProject_GetTupleDesc(t *testing.T) {
 	td := mustCreateProjectTupleDesc()
 	child := newMockChildIterator([]*tuple.Tuple{}, td)
 
-	fieldList := []int{0, 2}
+	projectedCols := []int{0, 2}
 	typesList := []types.Type{types.IntType, types.IntType}
 
-	project, err := NewProject(fieldList, typesList, child)
+	project, err := NewProject(projectedCols, typesList, child)
 	if err != nil {
 		t.Fatalf("NewProject failed: %v", err)
 	}
@@ -264,10 +264,10 @@ func TestProject_EmptyInput(t *testing.T) {
 	td := mustCreateProjectTupleDesc()
 	child := newMockChildIterator([]*tuple.Tuple{}, td)
 
-	fieldList := []int{0, 1}
+	projectedCols := []int{0, 1}
 	typesList := []types.Type{types.IntType, types.StringType}
 
-	project, err := NewProject(fieldList, typesList, child)
+	project, err := NewProject(projectedCols, typesList, child)
 	if err != nil {
 		t.Fatalf("NewProject failed: %v", err)
 	}
@@ -297,10 +297,10 @@ func TestProject_SingleFieldProjection(t *testing.T) {
 
 	child := newMockChildIterator(tuples, td)
 
-	fieldList := []int{1}
+	projectedCols := []int{1}
 	typesList := []types.Type{types.StringType}
 
-	project, err := NewProject(fieldList, typesList, child)
+	project, err := NewProject(projectedCols, typesList, child)
 	if err != nil {
 		t.Fatalf("NewProject failed: %v", err)
 	}
@@ -363,10 +363,10 @@ func TestProject_MultipleFieldProjection(t *testing.T) {
 
 	child := newMockChildIterator(tuples, td)
 
-	fieldList := []int{0, 2}
+	projectedCols := []int{0, 2}
 	typesList := []types.Type{types.IntType, types.IntType}
 
-	project, err := NewProject(fieldList, typesList, child)
+	project, err := NewProject(projectedCols, typesList, child)
 	if err != nil {
 		t.Fatalf("NewProject failed: %v", err)
 	}
@@ -440,10 +440,10 @@ func TestProject_ReorderedFields(t *testing.T) {
 
 	child := newMockChildIterator(tuples, td)
 
-	fieldList := []int{3, 0, 1}
+	projectedCols := []int{3, 0, 1}
 	typesList := []types.Type{types.StringType, types.IntType, types.StringType}
 
-	project, err := NewProject(fieldList, typesList, child)
+	project, err := NewProject(projectedCols, typesList, child)
 	if err != nil {
 		t.Fatalf("NewProject failed: %v", err)
 	}
@@ -517,10 +517,10 @@ func TestProject_RecordIDPreserved(t *testing.T) {
 	tuples := []*tuple.Tuple{testTuple}
 	child := newMockChildIterator(tuples, td)
 
-	fieldList := []int{0}
+	projectedCols := []int{0}
 	typesList := []types.Type{types.IntType}
 
-	project, err := NewProject(fieldList, typesList, child)
+	project, err := NewProject(projectedCols, typesList, child)
 	if err != nil {
 		t.Fatalf("NewProject failed: %v", err)
 	}
@@ -564,10 +564,10 @@ func TestProject_Close(t *testing.T) {
 	td := mustCreateProjectTupleDesc()
 	child := newMockChildIterator([]*tuple.Tuple{}, td)
 
-	fieldList := []int{0, 1}
+	projectedCols := []int{0, 1}
 	typesList := []types.Type{types.IntType, types.StringType}
 
-	project, err := NewProject(fieldList, typesList, child)
+	project, err := NewProject(projectedCols, typesList, child)
 	if err != nil {
 		t.Fatalf("NewProject failed: %v", err)
 	}
@@ -592,10 +592,10 @@ func TestProject_Rewind(t *testing.T) {
 
 	child := newMockChildIterator(tuples, td)
 
-	fieldList := []int{0}
+	projectedCols := []int{0}
 	typesList := []types.Type{types.IntType}
 
-	project, err := NewProject(fieldList, typesList, child)
+	project, err := NewProject(projectedCols, typesList, child)
 	if err != nil {
 		t.Fatalf("NewProject failed: %v", err)
 	}
@@ -679,10 +679,10 @@ func TestProject_Rewind_ChildError(t *testing.T) {
 	td := mustCreateProjectTupleDesc()
 	child := newMockChildIterator([]*tuple.Tuple{}, td)
 
-	fieldList := []int{0}
+	projectedCols := []int{0}
 	typesList := []types.Type{types.IntType}
 
-	project, err := NewProject(fieldList, typesList, child)
+	project, err := NewProject(projectedCols, typesList, child)
 	if err != nil {
 		t.Fatalf("NewProject failed: %v", err)
 	}
@@ -703,10 +703,10 @@ func TestProject_ChildError_HasNext(t *testing.T) {
 	td := mustCreateProjectTupleDesc()
 	child := newMockChildIterator([]*tuple.Tuple{}, td)
 
-	fieldList := []int{0}
+	projectedCols := []int{0}
 	typesList := []types.Type{types.IntType}
 
-	project, err := NewProject(fieldList, typesList, child)
+	project, err := NewProject(projectedCols, typesList, child)
 	if err != nil {
 		t.Fatalf("NewProject failed: %v", err)
 	}
@@ -729,10 +729,10 @@ func TestProject_ChildError_Next(t *testing.T) {
 	}
 	child := newMockChildIterator(tuples, td)
 
-	fieldList := []int{0}
+	projectedCols := []int{0}
 	typesList := []types.Type{types.IntType}
 
-	project, err := NewProject(fieldList, typesList, child)
+	project, err := NewProject(projectedCols, typesList, child)
 	if err != nil {
 		t.Fatalf("NewProject failed: %v", err)
 	}

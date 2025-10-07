@@ -17,39 +17,61 @@ import (
 // effectively creating a new schema with only the requested columns while preserving
 // the original tuple ordering and record identifiers.
 type Project struct {
-	base      *BaseIterator           // Handles the iterator caching and state management logic
-	fieldList []int                   // Indices of fields to project from input tuples (e.g., [0, 2, 4])
-	typesList []types.Type            // Data types of the projected fields in output order
-	child     iterator.DbIterator     // Source iterator providing input tuples to project
-	tupleDesc *tuple.TupleDescription // Schema definition for output tuples after projection
+	base           *BaseIterator
+	projectedCols  []int
+	projectedTypes []types.Type
+	source         iterator.DbIterator
+	tupleDesc      *tuple.TupleDescription
 }
 
 // NewProject creates a new Project operator that selects specific fields from input tuples.
-func NewProject(fieldList []int, typesList []types.Type, child iterator.DbIterator) (*Project, error) {
-	if err := validateProjectInputs(fieldList, typesList, child); err != nil {
+func NewProject(projectedCols []int, projectedTypes []types.Type, source iterator.DbIterator) (*Project, error) {
+	if err := validateProjectInputs(projectedCols, projectedTypes, source); err != nil {
 		return nil, err
 	}
 
-	childTupleDesc := child.GetTupleDesc()
-	fieldNames, err := validateAndExtractFieldNames(fieldList, typesList, childTupleDesc)
+	childTupleDesc := source.GetTupleDesc()
+	fieldNames, err := validateAndExtractFieldNames(projectedCols, projectedTypes, childTupleDesc)
 	if err != nil {
 		return nil, err
 	}
 
-	tupleDesc, err := tuple.NewTupleDesc(typesList, fieldNames)
+	tupleDesc, err := tuple.NewTupleDesc(projectedTypes, fieldNames)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create output tuple desc: %v", err)
 	}
 
 	p := &Project{
-		fieldList: fieldList,
-		typesList: typesList,
-		child:     child,
-		tupleDesc: tupleDesc,
+		projectedCols:  projectedCols,
+		projectedTypes: projectedTypes,
+		source:         source,
+		tupleDesc:      tupleDesc,
 	}
 
 	p.base = NewBaseIterator(p.readNext)
 	return p, nil
+}
+
+// validateProjectInputs performs basic validation of constructor parameters
+func validateProjectInputs(projectedCols []int, projectedTypes []types.Type, source iterator.DbIterator) error {
+	if source == nil {
+		return fmt.Errorf("source operator cannot be nil")
+	}
+
+	if len(projectedCols) != len(projectedTypes) {
+		return fmt.Errorf("field list length (%d) must match types list length (%d)",
+			len(projectedCols), len(projectedTypes))
+	}
+
+	if len(projectedCols) == 0 {
+		return fmt.Errorf("must project at least one field")
+	}
+
+	if source.GetTupleDesc() == nil {
+		return fmt.Errorf("source operator has nil tuple descriptor")
+	}
+
+	return nil
 }
 
 // GetTupleDesc returns the tuple description (schema) for tuples produced by this projection.
@@ -58,31 +80,28 @@ func (p *Project) GetTupleDesc() *tuple.TupleDescription {
 	return p.tupleDesc
 }
 
-// Open initializes the Project operator for iteration by opening its child operator.
-// This method must be called before any iteration operations can be performed.
+// Open initializes the Project operator for iteration by opening its source operator.
 func (p *Project) Open() error {
-	if err := p.child.Open(); err != nil {
-		return fmt.Errorf("failed to open child operator: %v", err)
+	if err := p.source.Open(); err != nil {
+		return fmt.Errorf("failed to open source operator: %v", err)
 	}
 
 	p.base.MarkOpened()
 	return nil
 }
 
-// Close releases resources associated with the Project operator by closing its child
+// Close releases resources associated with the Project operator by closing its source
 // operator and performing cleanup.
 func (p *Project) Close() error {
-	if p.child != nil {
-		p.child.Close()
+	if p.source != nil {
+		p.source.Close()
 	}
 	return p.base.Close()
 }
 
 // Rewind resets the Project operator to the beginning of its result set.
-// This allows the projection to be re-executed from the start, which is useful
-// for operations that need to scan the projected results multiple times.
 func (p *Project) Rewind() error {
-	if err := p.child.Rewind(); err != nil {
+	if err := p.source.Rewind(); err != nil {
 		return err
 	}
 
@@ -101,21 +120,21 @@ func (p *Project) Next() (*tuple.Tuple, error) {
 }
 
 // readNext is the internal method that implements the projection logic.
-// It reads the next tuple from the child operator and creates a new tuple
+// It reads the next tuple from the source operator and creates a new tuple
 // containing only the projected fields in the specified order.
 func (p *Project) readNext() (*tuple.Tuple, error) {
-	hasNext, err := p.child.HasNext()
+	hasNext, err := p.source.HasNext()
 	if err != nil {
-		return nil, fmt.Errorf("error checking if child has next: %v", err)
+		return nil, fmt.Errorf("error checking if source has next: %v", err)
 	}
 
 	if !hasNext {
 		return nil, nil // No more tuples
 	}
 
-	childTuple, err := p.child.Next()
+	childTuple, err := p.source.Next()
 	if err != nil {
-		return nil, fmt.Errorf("error getting next tuple from child: %v", err)
+		return nil, fmt.Errorf("error getting next tuple from source: %v", err)
 	}
 
 	if childTuple == nil {
@@ -123,10 +142,10 @@ func (p *Project) readNext() (*tuple.Tuple, error) {
 	}
 
 	projectedTuple := tuple.NewTuple(p.tupleDesc)
-	for i, fieldIndex := range p.fieldList {
+	for i, fieldIndex := range p.projectedCols {
 		field, err := childTuple.GetField(fieldIndex)
 		if err != nil {
-			return nil, fmt.Errorf("failed to get field %d from child tuple: %v", fieldIndex, err)
+			return nil, fmt.Errorf("failed to get field %d from source tuple: %v", fieldIndex, err)
 		}
 
 		if err := projectedTuple.SetField(i, field); err != nil {
@@ -138,47 +157,24 @@ func (p *Project) readNext() (*tuple.Tuple, error) {
 	return projectedTuple, nil
 }
 
-// validateProjectInputs performs basic validation of constructor parameters
-func validateProjectInputs(fieldList []int, typesList []types.Type, child iterator.DbIterator) error {
-	if child == nil {
-		return fmt.Errorf("child operator cannot be nil")
-	}
-
-	if len(fieldList) != len(typesList) {
-		return fmt.Errorf("field list length (%d) must match types list length (%d)",
-			len(fieldList), len(typesList))
-	}
-
-	if len(fieldList) == 0 {
-		return fmt.Errorf("must project at least one field")
-	}
-
-	if child.GetTupleDesc() == nil {
-		return fmt.Errorf("child operator has nil tuple descriptor")
-	}
-
-	return nil
-}
-
 // validateAndExtractFieldNames validates field indices and extracts corresponding field names
-func validateAndExtractFieldNames(fieldList []int, typesList []types.Type,
-	childTupleDesc *tuple.TupleDescription) ([]string, error) {
+func validateAndExtractFieldNames(cols []int, types []types.Type,
+	td *tuple.TupleDescription) ([]string, error) {
+	fieldNames := make([]string, len(cols))
 
-	fieldNames := make([]string, len(fieldList))
-
-	for i, fieldIndex := range fieldList {
-		if fieldIndex < 0 || fieldIndex >= childTupleDesc.NumFields() {
-			return nil, fmt.Errorf("field index %d out of bounds (child has %d fields)",
-				fieldIndex, childTupleDesc.NumFields())
+	for i, fieldIndex := range cols {
+		if fieldIndex < 0 || fieldIndex >= td.NumFields() {
+			return nil, fmt.Errorf("field index %d out of bounds (source has %d fields)",
+				fieldIndex, td.NumFields())
 		}
 
-		fieldName, err := childTupleDesc.GetFieldName(fieldIndex)
+		fieldName, err := td.GetFieldName(fieldIndex)
 		if err != nil {
 			return nil, fmt.Errorf("failed to get field name for index %d: %v", fieldIndex, err)
 		}
 		fieldNames[i] = fieldName
 
-		if err := validateFieldType(fieldIndex, typesList[i], childTupleDesc); err != nil {
+		if err := validateFieldType(fieldIndex, types[i], td); err != nil {
 			return nil, err
 		}
 	}
@@ -186,18 +182,17 @@ func validateAndExtractFieldNames(fieldList []int, typesList []types.Type,
 	return fieldNames, nil
 }
 
-// validateFieldType checks that the expected type matches the child schema
-func validateFieldType(fieldIndex int, expectedType types.Type,
-	childTupleDesc *tuple.TupleDescription) error {
+// validateFieldType checks that the expected type matches the source schema
+func validateFieldType(idx int, expected types.Type, td *tuple.TupleDescription) error {
 
-	actualType, err := childTupleDesc.TypeAtIndex(fieldIndex)
+	actual, err := td.TypeAtIndex(idx)
 	if err != nil {
-		return fmt.Errorf("failed to get type for field %d: %v", fieldIndex, err)
+		return fmt.Errorf("failed to get type for field %d: %v", idx, err)
 	}
 
-	if actualType != expectedType {
+	if actual != expected {
 		return fmt.Errorf("type mismatch for field %d: expected %v, got %v",
-			fieldIndex, expectedType, actualType)
+			idx, expected, actual)
 	}
 
 	return nil
