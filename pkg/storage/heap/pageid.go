@@ -36,11 +36,10 @@ func (hpid *HeapPageID) Serialize() []int {
 
 // Equals checks if two heap page IDs are equal
 func (hpid *HeapPageID) Equals(other primitives.PageID) bool {
-	otherHeap, ok := other.(*HeapPageID)
-	if !ok {
+	if other == nil {
 		return false
 	}
-	return hpid.tableID == otherHeap.tableID && hpid.pageNum == otherHeap.pageNum
+	return hpid.tableID == other.GetTableID() && hpid.pageNum == other.PageNo()
 }
 
 // String returns a string representation of this heap page ID
