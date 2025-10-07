@@ -1,7 +1,7 @@
 package lock
 
 import (
-	"storemy/pkg/concurrency/transaction"
+	"storemy/pkg/primitives"
 	"sync"
 	"testing"
 )
@@ -24,12 +24,12 @@ func TestNewDependencyGraph(t *testing.T) {
 
 func TestAddEdge(t *testing.T) {
 	dg := NewDependencyGraph()
-	tid1 := transaction.NewTransactionID()
-	tid2 := transaction.NewTransactionID()
+	tid1 := primitives.NewTransactionID()
+	tid2 := primitives.NewTransactionID()
 
 	// Test adding first edge
 	dg.AddEdge(tid1, tid2)
-	
+
 	if len(dg.edges) != 1 {
 		t.Errorf("Expected 1 waiter, got %d", len(dg.edges))
 	}
@@ -44,9 +44,9 @@ func TestAddEdge(t *testing.T) {
 	}
 
 	// Test adding second edge from same waiter
-	tid3 := transaction.NewTransactionID()
+	tid3 := primitives.NewTransactionID()
 	dg.AddEdge(tid1, tid3)
-	
+
 	if len(dg.edges[tid1]) != 2 {
 		t.Errorf("Expected 2 holders for tid1, got %d", len(dg.edges[tid1]))
 	}
@@ -63,9 +63,9 @@ func TestAddEdge(t *testing.T) {
 
 func TestRemoveTransaction(t *testing.T) {
 	dg := NewDependencyGraph()
-	tid1 := transaction.NewTransactionID()
-	tid2 := transaction.NewTransactionID()
-	tid3 := transaction.NewTransactionID()
+	tid1 := primitives.NewTransactionID()
+	tid2 := primitives.NewTransactionID()
+	tid3 := primitives.NewTransactionID()
 
 	// Setup: tid1 -> tid2, tid2 -> tid3, tid3 -> tid1
 	dg.AddEdge(tid1, tid2)
@@ -94,14 +94,14 @@ func TestRemoveTransaction(t *testing.T) {
 
 func TestHasCycleSimple(t *testing.T) {
 	dg := NewDependencyGraph()
-	
+
 	// No cycle initially
 	if dg.HasCycle() {
 		t.Error("Empty graph should not have cycle")
 	}
 
-	tid1 := transaction.NewTransactionID()
-	tid2 := transaction.NewTransactionID()
+	tid1 := primitives.NewTransactionID()
+	tid2 := primitives.NewTransactionID()
 
 	// Add single edge: tid1 -> tid2
 	dg.AddEdge(tid1, tid2)
@@ -118,16 +118,16 @@ func TestHasCycleSimple(t *testing.T) {
 
 func TestHasCycleComplex(t *testing.T) {
 	dg := NewDependencyGraph()
-	tid1 := transaction.NewTransactionID()
-	tid2 := transaction.NewTransactionID()
-	tid3 := transaction.NewTransactionID()
-	tid4 := transaction.NewTransactionID()
+	tid1 := primitives.NewTransactionID()
+	tid2 := primitives.NewTransactionID()
+	tid3 := primitives.NewTransactionID()
+	tid4 := primitives.NewTransactionID()
 
 	// Create chain: tid1 -> tid2 -> tid3 -> tid4
 	dg.AddEdge(tid1, tid2)
 	dg.AddEdge(tid2, tid3)
 	dg.AddEdge(tid3, tid4)
-	
+
 	if dg.HasCycle() {
 		t.Error("Chain should not have cycle")
 	}
@@ -147,8 +147,8 @@ func TestHasCycleComplex(t *testing.T) {
 
 func TestHasCycleCache(t *testing.T) {
 	dg := NewDependencyGraph()
-	tid1 := transaction.NewTransactionID()
-	tid2 := transaction.NewTransactionID()
+	tid1 := primitives.NewTransactionID()
+	tid2 := primitives.NewTransactionID()
 
 	// First call should set cache
 	result1 := dg.HasCycle()
@@ -174,16 +174,16 @@ func TestHasCycleCache(t *testing.T) {
 
 func TestGetWaitingTransactions(t *testing.T) {
 	dg := NewDependencyGraph()
-	
+
 	// Empty graph
 	waiters := dg.GetWaitingTransactions()
 	if len(waiters) != 0 {
 		t.Error("Empty graph should have no waiters")
 	}
 
-	tid1 := transaction.NewTransactionID()
-	tid2 := transaction.NewTransactionID()
-	tid3 := transaction.NewTransactionID()
+	tid1 := primitives.NewTransactionID()
+	tid2 := primitives.NewTransactionID()
+	tid3 := primitives.NewTransactionID()
 
 	// Add edges: tid1 -> tid2, tid3 -> tid1
 	dg.AddEdge(tid1, tid2)
@@ -195,7 +195,7 @@ func TestGetWaitingTransactions(t *testing.T) {
 	}
 
 	// Check that both tid1 and tid3 are in waiters
-	waiterMap := make(map[*transaction.TransactionID]bool)
+	waiterMap := make(map[*primitives.TransactionID]bool)
 	for _, w := range waiters {
 		waiterMap[w] = true
 	}
@@ -213,11 +213,11 @@ func TestGetWaitingTransactions(t *testing.T) {
 func TestConcurrentAccess(t *testing.T) {
 	dg := NewDependencyGraph()
 	var wg sync.WaitGroup
-	
+
 	// Create multiple transactions
-	transactions := make([]*transaction.TransactionID, 10)
+	transactions := make([]*primitives.TransactionID, 10)
 	for i := range transactions {
-		transactions[i] = transaction.NewTransactionID()
+		transactions[i] = primitives.NewTransactionID()
 	}
 
 	// Concurrent edge additions
@@ -262,11 +262,11 @@ func TestConcurrentAccess(t *testing.T) {
 
 func TestSelfLoop(t *testing.T) {
 	dg := NewDependencyGraph()
-	tid1 := transaction.NewTransactionID()
+	tid1 := primitives.NewTransactionID()
 
 	// Add self-loop
 	dg.AddEdge(tid1, tid1)
-	
+
 	if !dg.HasCycle() {
 		t.Error("Self-loop should create cycle")
 	}
@@ -274,16 +274,16 @@ func TestSelfLoop(t *testing.T) {
 
 func TestMultipleDisconnectedCycles(t *testing.T) {
 	dg := NewDependencyGraph()
-	
+
 	// First cycle: tid1 -> tid2 -> tid1
-	tid1 := transaction.NewTransactionID()
-	tid2 := transaction.NewTransactionID()
+	tid1 := primitives.NewTransactionID()
+	tid2 := primitives.NewTransactionID()
 	dg.AddEdge(tid1, tid2)
 	dg.AddEdge(tid2, tid1)
 
 	// Second cycle: tid3 -> tid4 -> tid3
-	tid3 := transaction.NewTransactionID()
-	tid4 := transaction.NewTransactionID()
+	tid3 := primitives.NewTransactionID()
+	tid4 := primitives.NewTransactionID()
 	dg.AddEdge(tid3, tid4)
 	dg.AddEdge(tid4, tid3)
 
@@ -310,11 +310,11 @@ func TestMultipleDisconnectedCycles(t *testing.T) {
 
 func TestLargeGraph(t *testing.T) {
 	dg := NewDependencyGraph()
-	transactions := make([]*transaction.TransactionID, 100)
-	
+	transactions := make([]*primitives.TransactionID, 100)
+
 	// Create 100 transactions
 	for i := range transactions {
-		transactions[i] = transaction.NewTransactionID()
+		transactions[i] = primitives.NewTransactionID()
 	}
 
 	// Create a long chain
@@ -343,9 +343,9 @@ func TestLargeGraph(t *testing.T) {
 
 func TestEmptyHoldersCleanup(t *testing.T) {
 	dg := NewDependencyGraph()
-	tid1 := transaction.NewTransactionID()
-	tid2 := transaction.NewTransactionID()
-	tid3 := transaction.NewTransactionID()
+	tid1 := primitives.NewTransactionID()
+	tid2 := primitives.NewTransactionID()
+	tid3 := primitives.NewTransactionID()
 
 	// Setup: tid1 -> tid2, tid1 -> tid3
 	dg.AddEdge(tid1, tid2)
@@ -359,7 +359,7 @@ func TestEmptyHoldersCleanup(t *testing.T) {
 		t.Errorf("Expected 1 holder for tid1, got %d", len(dg.edges[tid1]))
 	}
 
-	// Remove tid3 
+	// Remove tid3
 	dg.RemoveTransaction(tid3)
 
 	// tid1 should be removed completely since it has no holders

@@ -1,7 +1,7 @@
 package lock
 
 import (
-	"storemy/pkg/concurrency/transaction"
+	"storemy/pkg/primitives"
 	"sync"
 )
 
@@ -13,29 +13,29 @@ import (
 // that indicate deadlocks. When a cycle is detected, one of the transactions in the
 // cycle must be aborted to break the deadlock.
 type DependencyGraph struct {
-	edges      map[*transaction.TransactionID]map[*transaction.TransactionID]bool // Adjacency list representation of the graph
-	mutex      sync.RWMutex                                                       // Protects concurrent access to the graph
-	cacheValid bool                                                               // Track if cycle cache is valid
-	lastResult bool                                                               // Cache the last cycle detection result
+	edges      map[*primitives.TransactionID]map[*primitives.TransactionID]bool // Adjacency list representation of the graph
+	mutex      sync.RWMutex                                                     // Protects concurrent access to the graph
+	cacheValid bool                                                             // Track if cycle cache is valid
+	lastResult bool                                                             // Cache the last cycle detection result
 }
 
 // NewDependencyGraph creates and initializes a new dependency graph for deadlock detection.
 func NewDependencyGraph() *DependencyGraph {
 	return &DependencyGraph{
-		edges:      make(map[*transaction.TransactionID]map[*transaction.TransactionID]bool),
+		edges:      make(map[*primitives.TransactionID]map[*primitives.TransactionID]bool),
 		cacheValid: false,
 	}
 }
 
 // AddEdge creates a wait-for relationship in the dependency graph.
 // This indicates that the waiter transaction is blocked waiting for a resource
-// held by the holder transaction.
-func (dg *DependencyGraph) AddEdge(waiter, holder *transaction.TransactionID) {
+// held by the holder primitives.
+func (dg *DependencyGraph) AddEdge(waiter, holder *primitives.TransactionID) {
 	dg.mutex.Lock()
 	defer dg.mutex.Unlock()
 
 	if dg.edges[waiter] == nil {
-		dg.edges[waiter] = make(map[*transaction.TransactionID]bool)
+		dg.edges[waiter] = make(map[*primitives.TransactionID]bool)
 	}
 	dg.edges[waiter][holder] = true
 	dg.cacheValid = false
@@ -43,8 +43,8 @@ func (dg *DependencyGraph) AddEdge(waiter, holder *transaction.TransactionID) {
 
 // RemoveTransaction completely removes a transaction from the dependency graph.
 // This removes all edges where the transaction appears as either a waiter or holder,
-// effectively cleaning up all wait-for relationships involving the transaction.
-func (dg *DependencyGraph) RemoveTransaction(tid *transaction.TransactionID) {
+// effectively cleaning up all wait-for relationships involving the primitives.
+func (dg *DependencyGraph) RemoveTransaction(tid *primitives.TransactionID) {
 	dg.mutex.Lock()
 	defer dg.mutex.Unlock()
 
@@ -74,8 +74,8 @@ func (dg *DependencyGraph) HasCycle() bool {
 		return dg.lastResult
 	}
 
-	visited := make(map[*transaction.TransactionID]bool)
-	recStack := make(map[*transaction.TransactionID]bool)
+	visited := make(map[*primitives.TransactionID]bool)
+	recStack := make(map[*primitives.TransactionID]bool)
 
 	for tid := range dg.edges {
 		if !visited[tid] {
@@ -95,7 +95,7 @@ func (dg *DependencyGraph) HasCycle() bool {
 // hasCycleDFS performs depth-first search to detect cycles in the dependency graph.
 // It uses a recursion stack to track the current path and detect back edges,
 // which indicate cycles.
-func (dg *DependencyGraph) hasCycleDFS(tid *transaction.TransactionID, visited, recStack map[*transaction.TransactionID]bool) bool {
+func (dg *DependencyGraph) hasCycleDFS(tid *primitives.TransactionID, visited, recStack map[*primitives.TransactionID]bool) bool {
 	visited[tid] = true
 	recStack[tid] = true
 
@@ -118,11 +118,11 @@ func (dg *DependencyGraph) hasCycleDFS(tid *transaction.TransactionID, visited, 
 // GetWaitingTransactions returns a list of all transactions that are currently
 // waiting for resources held by other transactions. These are the transactions
 // that have outgoing edges in the dependency graph.
-func (dg *DependencyGraph) GetWaitingTransactions() []*transaction.TransactionID {
+func (dg *DependencyGraph) GetWaitingTransactions() []*primitives.TransactionID {
 	dg.mutex.RLock()
 	defer dg.mutex.RUnlock()
 
-	var waiters []*transaction.TransactionID
+	var waiters []*primitives.TransactionID
 	for tid := range dg.edges {
 		waiters = append(waiters, tid)
 	}

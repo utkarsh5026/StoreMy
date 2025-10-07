@@ -1,7 +1,7 @@
 package lock
 
 import (
-	"storemy/pkg/concurrency/transaction"
+	"storemy/pkg/primitives"
 	"storemy/pkg/storage/heap"
 	"testing"
 )
@@ -32,7 +32,7 @@ func TestNewLockGrantor(t *testing.T) {
 
 func TestCanGrantImmediately_EmptyPage(t *testing.T) {
 	lg := setupLockGrantor()
-	tid := transaction.NewTransactionID()
+	tid := primitives.NewTransactionID()
 	pid := heap.NewHeapPageID(1, 1)
 
 	// Empty page should allow any lock
@@ -47,8 +47,8 @@ func TestCanGrantImmediately_EmptyPage(t *testing.T) {
 
 func TestCanGrantImmediately_SharedLockScenarios(t *testing.T) {
 	lg := setupLockGrantor()
-	tid1 := transaction.NewTransactionID()
-	tid2 := transaction.NewTransactionID()
+	tid1 := primitives.NewTransactionID()
+	tid2 := primitives.NewTransactionID()
 	pid := heap.NewHeapPageID(1, 1)
 
 	// Grant a shared lock to tid1
@@ -72,8 +72,8 @@ func TestCanGrantImmediately_SharedLockScenarios(t *testing.T) {
 
 func TestCanGrantImmediately_ExclusiveLockScenarios(t *testing.T) {
 	lg := setupLockGrantor()
-	tid1 := transaction.NewTransactionID()
-	tid2 := transaction.NewTransactionID()
+	tid1 := primitives.NewTransactionID()
+	tid2 := primitives.NewTransactionID()
 	pid := heap.NewHeapPageID(1, 1)
 
 	// Grant an exclusive lock to tid1
@@ -100,9 +100,9 @@ func TestCanGrantImmediately_ExclusiveLockScenarios(t *testing.T) {
 
 func TestCanGrantImmediately_MultipleSharedLocks(t *testing.T) {
 	lg := setupLockGrantor()
-	tid1 := transaction.NewTransactionID()
-	tid2 := transaction.NewTransactionID()
-	tid3 := transaction.NewTransactionID()
+	tid1 := primitives.NewTransactionID()
+	tid2 := primitives.NewTransactionID()
+	tid3 := primitives.NewTransactionID()
 	pid := heap.NewHeapPageID(1, 1)
 
 	// Grant shared locks to tid1 and tid2
@@ -127,7 +127,7 @@ func TestCanGrantImmediately_MultipleSharedLocks(t *testing.T) {
 
 func TestGrantLock_BasicFunctionality(t *testing.T) {
 	lg := setupLockGrantor()
-	tid := transaction.NewTransactionID()
+	tid := primitives.NewTransactionID()
 	pid := heap.NewHeapPageID(1, 1)
 
 	// Grant a shared lock
@@ -161,7 +161,7 @@ func TestGrantLock_BasicFunctionality(t *testing.T) {
 
 func TestGrantLock_RemovesFromWaitQueue(t *testing.T) {
 	lg := setupLockGrantor()
-	tid := transaction.NewTransactionID()
+	tid := primitives.NewTransactionID()
 	pid := heap.NewHeapPageID(1, 1)
 
 	// Add transaction to wait queue
@@ -191,7 +191,7 @@ func TestGrantLock_RemovesFromWaitQueue(t *testing.T) {
 
 func TestGrantLock_ExclusiveLock(t *testing.T) {
 	lg := setupLockGrantor()
-	tid := transaction.NewTransactionID()
+	tid := primitives.NewTransactionID()
 	pid := heap.NewHeapPageID(1, 1)
 
 	// Grant an exclusive lock
@@ -210,7 +210,7 @@ func TestGrantLock_ExclusiveLock(t *testing.T) {
 
 func TestGrantLock_LockUpgrade(t *testing.T) {
 	lg := setupLockGrantor()
-	tid := transaction.NewTransactionID()
+	tid := primitives.NewTransactionID()
 	pid := heap.NewHeapPageID(1, 1)
 
 	// First grant shared lock
@@ -250,7 +250,7 @@ func TestGrantLock_LockUpgrade(t *testing.T) {
 
 func TestCanUpgradeLock_ValidUpgrade(t *testing.T) {
 	lg := setupLockGrantor()
-	tid := transaction.NewTransactionID()
+	tid := primitives.NewTransactionID()
 	pid := heap.NewHeapPageID(1, 1)
 
 	// Grant shared lock
@@ -264,7 +264,7 @@ func TestCanUpgradeLock_ValidUpgrade(t *testing.T) {
 
 func TestCanUpgradeLock_NoLock(t *testing.T) {
 	lg := setupLockGrantor()
-	tid := transaction.NewTransactionID()
+	tid := primitives.NewTransactionID()
 	pid := heap.NewHeapPageID(1, 1)
 
 	// Should not be able to upgrade without holding a lock
@@ -275,7 +275,7 @@ func TestCanUpgradeLock_NoLock(t *testing.T) {
 
 func TestCanUpgradeLock_ExclusiveLock(t *testing.T) {
 	lg := setupLockGrantor()
-	tid := transaction.NewTransactionID()
+	tid := primitives.NewTransactionID()
 	pid := heap.NewHeapPageID(1, 1)
 
 	// Grant exclusive lock
@@ -289,8 +289,8 @@ func TestCanUpgradeLock_ExclusiveLock(t *testing.T) {
 
 func TestCanUpgradeLock_OtherSharedLocks(t *testing.T) {
 	lg := setupLockGrantor()
-	tid1 := transaction.NewTransactionID()
-	tid2 := transaction.NewTransactionID()
+	tid1 := primitives.NewTransactionID()
+	tid2 := primitives.NewTransactionID()
 	pid := heap.NewHeapPageID(1, 1)
 
 	// Grant shared locks to both transactions
@@ -310,8 +310,8 @@ func TestCanUpgradeLock_OtherSharedLocks(t *testing.T) {
 
 func TestCanUpgradeLock_AfterOtherRelease(t *testing.T) {
 	lg := setupLockGrantor()
-	tid1 := transaction.NewTransactionID()
-	tid2 := transaction.NewTransactionID()
+	tid1 := primitives.NewTransactionID()
+	tid2 := primitives.NewTransactionID()
 	pid := heap.NewHeapPageID(1, 1)
 
 	// Grant shared locks to both transactions
@@ -337,11 +337,11 @@ func TestSequentialGranting(t *testing.T) {
 	pid := heap.NewHeapPageID(1, 1)
 	numTransactions := 10
 
-	var tids []*transaction.TransactionID
+	var tids []*primitives.TransactionID
 
 	// Grant shared locks to multiple transactions sequentially
 	for i := 0; i < numTransactions; i++ {
-		tid := transaction.NewTransactionID()
+		tid := primitives.NewTransactionID()
 		tids = append(tids, tid)
 		lg.GrantLock(tid, pid, SharedLock)
 	}
@@ -370,8 +370,8 @@ func TestSequentialGranting(t *testing.T) {
 func TestComplexScenarios(t *testing.T) {
 	t.Run("GrantAfterWaiting", func(t *testing.T) {
 		lg := setupLockGrantor()
-		tid1 := transaction.NewTransactionID()
-		tid2 := transaction.NewTransactionID()
+		tid1 := primitives.NewTransactionID()
+		tid2 := primitives.NewTransactionID()
 		pid := heap.NewHeapPageID(1, 1)
 
 		// tid1 gets exclusive lock
@@ -408,7 +408,7 @@ func TestComplexScenarios(t *testing.T) {
 
 	t.Run("MultipleUpgrades", func(t *testing.T) {
 		lg := setupLockGrantor()
-		tid := transaction.NewTransactionID()
+		tid := primitives.NewTransactionID()
 		pid1 := heap.NewHeapPageID(1, 1)
 		pid2 := heap.NewHeapPageID(1, 2)
 
@@ -441,9 +441,9 @@ func TestComplexScenarios(t *testing.T) {
 
 	t.Run("WaitQueueInteraction", func(t *testing.T) {
 		lg := setupLockGrantor()
-		tid1 := transaction.NewTransactionID()
-		tid2 := transaction.NewTransactionID()
-		tid3 := transaction.NewTransactionID()
+		tid1 := primitives.NewTransactionID()
+		tid2 := primitives.NewTransactionID()
+		tid3 := primitives.NewTransactionID()
 		pid := heap.NewHeapPageID(1, 1)
 
 		// Add transactions to wait queue for different lock types
@@ -479,7 +479,7 @@ func TestComplexScenarios(t *testing.T) {
 func TestLockGrantorEdgeCases(t *testing.T) {
 	t.Run("GrantWithoutWaitQueueEntry", func(t *testing.T) {
 		lg := setupLockGrantor()
-		tid := transaction.NewTransactionID()
+		tid := primitives.NewTransactionID()
 		pid := heap.NewHeapPageID(1, 1)
 
 		// Grant lock without adding to wait queue first (should not error)
@@ -493,7 +493,7 @@ func TestLockGrantorEdgeCases(t *testing.T) {
 
 	t.Run("CanUpgradeWithEmptyPage", func(t *testing.T) {
 		lg := setupLockGrantor()
-		tid := transaction.NewTransactionID()
+		tid := primitives.NewTransactionID()
 		pid := heap.NewHeapPageID(1, 1)
 
 		// Should not be able to upgrade on empty page
@@ -504,7 +504,7 @@ func TestLockGrantorEdgeCases(t *testing.T) {
 
 	t.Run("CanGrantWithSameTransactionMultipleLocks", func(t *testing.T) {
 		lg := setupLockGrantor()
-		tid := transaction.NewTransactionID()
+		tid := primitives.NewTransactionID()
 		pid := heap.NewHeapPageID(1, 1)
 
 		// Grant shared lock

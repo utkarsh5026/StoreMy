@@ -3,7 +3,7 @@ package lock
 import (
 	"fmt"
 	"slices"
-	"storemy/pkg/concurrency/transaction"
+	"storemy/pkg/primitives"
 	"storemy/pkg/tuple"
 )
 
@@ -17,14 +17,14 @@ import (
 //     waiting for. This enables efficient transaction cleanup and deadlock cycle detection.
 type WaitQueue struct {
 	pageWaitQueue      map[tuple.PageID][]*LockRequest
-	transactionWaiting map[*transaction.TransactionID][]tuple.PageID
+	transactionWaiting map[*primitives.TransactionID][]tuple.PageID
 }
 
 // NewWaitQueue creates and initializes a new WaitQueue instance with empty internal maps.
 func NewWaitQueue() *WaitQueue {
 	return &WaitQueue{
 		pageWaitQueue:      make(map[tuple.PageID][]*LockRequest),
-		transactionWaiting: make(map[*transaction.TransactionID][]tuple.PageID),
+		transactionWaiting: make(map[*primitives.TransactionID][]tuple.PageID),
 	}
 }
 
@@ -33,7 +33,7 @@ func NewWaitQueue() *WaitQueue {
 // The method updates both internal data structures atomically (from the caller's perspective):
 // 1. Adds the lock request to the end of the page's wait queue (FIFO)
 // 2. Records that this transaction is now waiting for this page
-func (wq *WaitQueue) Add(tid *transaction.TransactionID, pid tuple.PageID, lockType LockType) error {
+func (wq *WaitQueue) Add(tid *primitives.TransactionID, pid tuple.PageID, lockType LockType) error {
 	if wq.alreadyInPageQueue(tid, pid) {
 		return fmt.Errorf("already in the Page queue")
 	}
@@ -53,7 +53,7 @@ func (wq *WaitQueue) Add(tid *transaction.TransactionID, pid tuple.PageID, lockT
 // 1. A transaction successfully acquires the lock it was waiting for
 // 2. A transaction is aborted and needs to release its pending requests
 // 3. Lock timeout occurs and the request needs to be cancelled
-func (wq *WaitQueue) Remove(tid *transaction.TransactionID, pid tuple.PageID) {
+func (wq *WaitQueue) Remove(tid *primitives.TransactionID, pid tuple.PageID) {
 	wq.removeFromPageQueue(tid, pid)
 	wq.removeFromTransactionQueue(tid, pid)
 }
@@ -64,7 +64,7 @@ func (wq *WaitQueue) Remove(tid *transaction.TransactionID, pid tuple.PageID) {
 // 2. Transaction commit - clean up any remaining requests (shouldn't happen in normal flow)
 // 3. Deadlock resolution - victim transaction needs complete cleanup
 // 4. Transaction timeout - remove all pending requests
-func (wq *WaitQueue) RemoveTransaction(tid *transaction.TransactionID) {
+func (wq *WaitQueue) RemoveTransaction(tid *primitives.TransactionID) {
 	waitingPages, exists := wq.transactionWaiting[tid]
 	if !exists {
 		return
@@ -84,14 +84,14 @@ func (wq *WaitQueue) GetRequests(pid tuple.PageID) []*LockRequest {
 
 // GetPagesRequestedFor returns all pages that a specific transaction is currently waiting
 // to acquire locks on.
-func (wq *WaitQueue) GetPagesRequestedFor(tid *transaction.TransactionID) []tuple.PageID {
+func (wq *WaitQueue) GetPagesRequestedFor(tid *primitives.TransactionID) []tuple.PageID {
 	return wq.transactionWaiting[tid]
 }
 
 // removeFromPageQueue removes a specific transaction from a page's wait queue while preserving
 // FIFO ordering for remaining requests. This is an internal helper method that handles the
 // page-side cleanup when a transaction's request is cancelled or fulfilled.
-func (wq *WaitQueue) removeFromPageQueue(tid *transaction.TransactionID, pid tuple.PageID) {
+func (wq *WaitQueue) removeFromPageQueue(tid *primitives.TransactionID, pid tuple.PageID) {
 	requestQueue, exists := wq.pageWaitQueue[pid]
 	if !exists {
 		return
@@ -105,8 +105,8 @@ func (wq *WaitQueue) removeFromPageQueue(tid *transaction.TransactionID, pid tup
 	}
 }
 
-// filterPageQueue creates a new queue slice excluding all requests from the specified transaction.
-func (wq *WaitQueue) filterPageQueue(requestQueue []*LockRequest, tid *transaction.TransactionID) []*LockRequest {
+// filterPageQueue creates a new queue slice excluding all requests from the specified primitives.
+func (wq *WaitQueue) filterPageQueue(requestQueue []*LockRequest, tid *primitives.TransactionID) []*LockRequest {
 	newQueue := make([]*LockRequest, 0)
 	for _, req := range requestQueue {
 		if req.TID != tid {
@@ -120,7 +120,7 @@ func (wq *WaitQueue) filterPageQueue(requestQueue []*LockRequest, tid *transacti
 // which is the reverse-index side of the queue removal operation. This method maintains
 // the consistency of the transactionWaiting map by either updating the page list or
 // removing the transaction entry entirely if it's no longer waiting for any pages.
-func (wq *WaitQueue) removeFromTransactionQueue(tid *transaction.TransactionID, pid tuple.PageID) {
+func (wq *WaitQueue) removeFromTransactionQueue(tid *primitives.TransactionID, pid tuple.PageID) {
 	waitingPages, exists := wq.transactionWaiting[tid]
 	if !exists {
 		return
@@ -150,7 +150,7 @@ func (wq *WaitQueue) filterTransactionQueue(waitingPages []tuple.PageID, pid tup
 
 // alreadyInPageQueue checks if a transaction already has a pending lock request in the
 // specified page's wait queue.
-func (wq *WaitQueue) alreadyInPageQueue(tid *transaction.TransactionID, pid tuple.PageID) bool {
+func (wq *WaitQueue) alreadyInPageQueue(tid *primitives.TransactionID, pid tuple.PageID) bool {
 	queue, exists := wq.pageWaitQueue[pid]
 	if !exists {
 		return false
@@ -166,7 +166,7 @@ func (wq *WaitQueue) alreadyInPageQueue(tid *transaction.TransactionID, pid tupl
 
 // isInTransactionQueue checks if a transaction is already recorded as waiting for the
 // specified page in the reverse index.
-func (wq *WaitQueue) isInTransactionQueue(tid *transaction.TransactionID, pid tuple.PageID) bool {
+func (wq *WaitQueue) isInTransactionQueue(tid *primitives.TransactionID, pid tuple.PageID) bool {
 	waitingPages, exists := wq.transactionWaiting[tid]
 	if !exists {
 		return false

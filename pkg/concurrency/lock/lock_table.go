@@ -1,7 +1,7 @@
 package lock
 
 import (
-	"storemy/pkg/concurrency/transaction"
+	"storemy/pkg/primitives"
 	"storemy/pkg/tuple"
 )
 
@@ -11,7 +11,7 @@ import (
 // 2. Finding all locks held by a specific transaction (for cleanup and deadlock detection)
 type LockTable struct {
 	pageLocks        map[tuple.PageID][]*Lock
-	transactionLocks map[*transaction.TransactionID]map[tuple.PageID]LockType
+	transactionLocks map[*primitives.TransactionID]map[tuple.PageID]LockType
 }
 
 // NewLockTable creates and initializes a new LockTable instance with empty internal maps.
@@ -20,7 +20,7 @@ type LockTable struct {
 func NewLockTable() *LockTable {
 	return &LockTable{
 		pageLocks:        make(map[tuple.PageID][]*Lock),
-		transactionLocks: make(map[*transaction.TransactionID]map[tuple.PageID]LockType),
+		transactionLocks: make(map[*primitives.TransactionID]map[tuple.PageID]LockType),
 	}
 }
 
@@ -30,7 +30,7 @@ func (lt *LockTable) GetPageLockTable() map[tuple.PageID][]*Lock {
 }
 
 // GetTransactionLockTable returns the internal transaction-to-locks mapping for read-only access.
-func (lt *LockTable) GetTransactionLockTable() map[*transaction.TransactionID]map[tuple.PageID]LockType {
+func (lt *LockTable) GetTransactionLockTable() map[*primitives.TransactionID]map[tuple.PageID]LockType {
 	return lt.transactionLocks
 }
 
@@ -40,7 +40,7 @@ func (lt *LockTable) GetTransactionLockTable() map[*transaction.TransactionID]ma
 // 1. If the transaction holds an exclusive lock, it's sufficient for any request
 // 2. If the transaction holds a shared lock, it's sufficient only for shared lock requests
 // 3. If the transaction holds no lock, the request is not sufficient
-func (lt *LockTable) HasSufficientLock(tid *transaction.TransactionID, pageID tuple.PageID, reqLockType LockType) bool {
+func (lt *LockTable) HasSufficientLock(tid *primitives.TransactionID, pageID tuple.PageID, reqLockType LockType) bool {
 	transactionPages, exists := lt.transactionLocks[tid]
 	if !exists {
 		return false
@@ -61,7 +61,7 @@ func (lt *LockTable) HasSufficientLock(tid *transaction.TransactionID, pageID tu
 // HasLockType checks if a transaction holds a specific type of lock on a specific page.
 // This method provides exact lock type matching, unlike HasSufficientLock which checks
 // compatibility.
-func (lt *LockTable) HasLockType(tid *transaction.TransactionID, pid tuple.PageID, lockType LockType) bool {
+func (lt *LockTable) HasLockType(tid *primitives.TransactionID, pid tuple.PageID, lockType LockType) bool {
 	if txPages, exists := lt.transactionLocks[tid]; exists {
 		if currentLock, hasPage := txPages[pid]; hasPage {
 			return currentLock == lockType
@@ -77,7 +77,7 @@ func (lt *LockTable) GetPageLocks(pid tuple.PageID) []*Lock {
 // AddLock grants a new lock to a transaction on a specific page and updates both
 // internal data structures atomically. This method assumes that compatibility
 // checking has already been performed by the caller (typically the lock manager).
-func (lt *LockTable) AddLock(tid *transaction.TransactionID, pid tuple.PageID, lockType LockType) {
+func (lt *LockTable) AddLock(tid *primitives.TransactionID, pid tuple.PageID, lockType LockType) {
 	lock := NewLock(tid, lockType)
 	lt.pageLocks[pid] = append(lt.pageLocks[pid], lock)
 
@@ -96,7 +96,7 @@ func (lt *LockTable) IsPageLocked(pid tuple.PageID) bool {
 }
 
 // UpgradeLock promotes a transaction's shared lock to an exclusive lock on the specified page.
-func (lt *LockTable) UpgradeLock(tid *transaction.TransactionID, pid tuple.PageID) {
+func (lt *LockTable) UpgradeLock(tid *primitives.TransactionID, pid tuple.PageID) {
 	for _, lock := range lt.pageLocks[pid] {
 		if lock.TID == tid {
 			lock.LockType = ExclusiveLock
@@ -109,8 +109,8 @@ func (lt *LockTable) UpgradeLock(tid *transaction.TransactionID, pid tuple.PageI
 
 // ReleaseAllLocks removes all locks held by a specific transaction and returns the list
 // of affected pages. This method is typically called during transaction commit or abort
-// to clean up all resources held by the transaction.
-func (lt *LockTable) ReleaseAllLocks(tid *transaction.TransactionID) []tuple.PageID {
+// to clean up all resources held by the primitives.
+func (lt *LockTable) ReleaseAllLocks(tid *primitives.TransactionID) []tuple.PageID {
 	txPages, exists := lt.transactionLocks[tid]
 	if !exists {
 		return nil
@@ -144,9 +144,9 @@ func (lt *LockTable) ReleaseAllLocks(tid *transaction.TransactionID) []tuple.Pag
 
 // ReleaseLock removes a specific lock held by a transaction on a specific page.
 // This method provides fine-grained lock release, unlike ReleaseAllLocks which
-// removes all locks for a transaction. It's useful for early lock release
+// removes all locks for a primitives. It's useful for early lock release
 // optimizations and selective lock management.
-func (lt *LockTable) ReleaseLock(tid *transaction.TransactionID, pageID tuple.PageID) {
+func (lt *LockTable) ReleaseLock(tid *primitives.TransactionID, pageID tuple.PageID) {
 	if locks, exists := lt.pageLocks[pageID]; exists {
 		newLocks := make([]*Lock, 0, len(locks))
 		for _, lock := range locks {

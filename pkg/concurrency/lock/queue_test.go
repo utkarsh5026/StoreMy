@@ -1,7 +1,7 @@
 package lock
 
 import (
-	"storemy/pkg/concurrency/transaction"
+	"storemy/pkg/primitives"
 	"storemy/pkg/storage/heap"
 	"storemy/pkg/tuple"
 	"sync"
@@ -35,7 +35,7 @@ func TestNewWaitQueue(t *testing.T) {
 
 func TestWaitQueueAdd(t *testing.T) {
 	wq := NewWaitQueue()
-	tid := transaction.NewTransactionID()
+	tid := primitives.NewTransactionID()
 	pid := heap.NewHeapPageID(1, 1)
 
 	// Test adding first request
@@ -71,9 +71,9 @@ func TestWaitQueueAdd(t *testing.T) {
 
 func TestWaitQueueAddMultiple(t *testing.T) {
 	wq := NewWaitQueue()
-	tid1 := transaction.NewTransactionID()
-	tid2 := transaction.NewTransactionID()
-	tid3 := transaction.NewTransactionID()
+	tid1 := primitives.NewTransactionID()
+	tid2 := primitives.NewTransactionID()
+	tid3 := primitives.NewTransactionID()
 	pid := heap.NewHeapPageID(1, 1)
 
 	// Add multiple transactions to same page queue
@@ -111,7 +111,7 @@ func TestWaitQueueAddMultiple(t *testing.T) {
 	}
 
 	// Verify each transaction is tracked
-	for _, tid := range []*transaction.TransactionID{tid1, tid2, tid3} {
+	for _, tid := range []*primitives.TransactionID{tid1, tid2, tid3} {
 		waitingPages := wq.GetPagesRequestedFor(tid)
 		if len(waitingPages) != 1 {
 			t.Errorf("Transaction %d should be waiting for 1 page, got %d", tid.ID(), len(waitingPages))
@@ -121,7 +121,7 @@ func TestWaitQueueAddMultiple(t *testing.T) {
 
 func TestWaitQueueAddDuplicatePrevention(t *testing.T) {
 	wq := NewWaitQueue()
-	tid := transaction.NewTransactionID()
+	tid := primitives.NewTransactionID()
 	pid := heap.NewHeapPageID(1, 1)
 
 	// Add first request
@@ -150,7 +150,7 @@ func TestWaitQueueAddDuplicatePrevention(t *testing.T) {
 
 func TestWaitQueueAddMultiplePages(t *testing.T) {
 	wq := NewWaitQueue()
-	tid := transaction.NewTransactionID()
+	tid := primitives.NewTransactionID()
 	pid1 := heap.NewHeapPageID(1, 1)
 	pid2 := heap.NewHeapPageID(1, 2)
 	pid3 := heap.NewHeapPageID(1, 3)
@@ -191,9 +191,9 @@ func TestWaitQueueAddMultiplePages(t *testing.T) {
 
 func TestWaitQueueRemove(t *testing.T) {
 	wq := NewWaitQueue()
-	tid1 := transaction.NewTransactionID()
-	tid2 := transaction.NewTransactionID()
-	tid3 := transaction.NewTransactionID()
+	tid1 := primitives.NewTransactionID()
+	tid2 := primitives.NewTransactionID()
+	tid3 := primitives.NewTransactionID()
 	pid := heap.NewHeapPageID(1, 1)
 
 	// Add multiple requests
@@ -225,7 +225,7 @@ func TestWaitQueueRemove(t *testing.T) {
 	}
 
 	// Verify tid1 and tid3 still tracked
-	for _, tid := range []*transaction.TransactionID{tid1, tid3} {
+	for _, tid := range []*primitives.TransactionID{tid1, tid3} {
 		waitingPages := wq.GetPagesRequestedFor(tid)
 		if len(waitingPages) != 1 {
 			t.Errorf("Transaction %d should still be waiting for 1 page", tid.ID())
@@ -235,7 +235,7 @@ func TestWaitQueueRemove(t *testing.T) {
 
 func TestWaitQueueRemoveLastRequest(t *testing.T) {
 	wq := NewWaitQueue()
-	tid := transaction.NewTransactionID()
+	tid := primitives.NewTransactionID()
 	pid := heap.NewHeapPageID(1, 1)
 
 	// Add single request
@@ -267,14 +267,14 @@ func TestWaitQueueRemoveLastRequest(t *testing.T) {
 
 func TestWaitQueueRemoveNonExistent(t *testing.T) {
 	wq := NewWaitQueue()
-	tid := transaction.NewTransactionID()
+	tid := primitives.NewTransactionID()
 	pid := heap.NewHeapPageID(1, 1)
 
 	// Try to remove from empty queue - should not panic
 	wq.Remove(tid, pid)
 
 	// Add a different transaction
-	tid2 := transaction.NewTransactionID()
+	tid2 := primitives.NewTransactionID()
 	wq.Add(tid2, pid, SharedLock)
 
 	// Try to remove non-existent transaction - should not affect existing one
@@ -288,7 +288,7 @@ func TestWaitQueueRemoveNonExistent(t *testing.T) {
 
 func TestWaitQueueRemoveTransaction(t *testing.T) {
 	wq := NewWaitQueue()
-	tid := transaction.NewTransactionID()
+	tid := primitives.NewTransactionID()
 	pid1 := heap.NewHeapPageID(1, 1)
 	pid2 := heap.NewHeapPageID(1, 2)
 	pid3 := heap.NewHeapPageID(1, 3)
@@ -299,7 +299,7 @@ func TestWaitQueueRemoveTransaction(t *testing.T) {
 	wq.Add(tid, pid3, SharedLock)
 
 	// Add other transactions to same pages
-	tid2 := transaction.NewTransactionID()
+	tid2 := primitives.NewTransactionID()
 	wq.Add(tid2, pid1, SharedLock)
 	wq.Add(tid2, pid2, SharedLock)
 
@@ -337,13 +337,13 @@ func TestWaitQueueRemoveTransaction(t *testing.T) {
 
 func TestWaitQueueRemoveTransactionNonExistent(t *testing.T) {
 	wq := NewWaitQueue()
-	tid := transaction.NewTransactionID()
+	tid := primitives.NewTransactionID()
 
 	// Remove non-existent transaction - should not panic
 	wq.RemoveTransaction(tid)
 
 	// Add some transactions
-	tid2 := transaction.NewTransactionID()
+	tid2 := primitives.NewTransactionID()
 	pid := heap.NewHeapPageID(1, 1)
 	wq.Add(tid2, pid, SharedLock)
 
@@ -367,8 +367,8 @@ func TestWaitQueueGetRequests(t *testing.T) {
 	}
 
 	// Add requests and verify order
-	tid1 := transaction.NewTransactionID()
-	tid2 := transaction.NewTransactionID()
+	tid1 := primitives.NewTransactionID()
+	tid2 := primitives.NewTransactionID()
 	wq.Add(tid1, pid, SharedLock)
 	wq.Add(tid2, pid, ExclusiveLock)
 
@@ -388,7 +388,7 @@ func TestWaitQueueGetRequests(t *testing.T) {
 
 func TestWaitQueueGetPagesRequestedFor(t *testing.T) {
 	wq := NewWaitQueue()
-	tid := transaction.NewTransactionID()
+	tid := primitives.NewTransactionID()
 
 	// Non-existent transaction
 	pages := wq.GetPagesRequestedFor(tid)
@@ -425,8 +425,8 @@ func TestWaitQueueGetPagesRequestedFor(t *testing.T) {
 
 func TestWaitQueueConsistency(t *testing.T) {
 	wq := NewWaitQueue()
-	tid1 := transaction.NewTransactionID()
-	tid2 := transaction.NewTransactionID()
+	tid1 := primitives.NewTransactionID()
+	tid2 := primitives.NewTransactionID()
 	pid1 := heap.NewHeapPageID(1, 1)
 	pid2 := heap.NewHeapPageID(1, 2)
 
@@ -485,7 +485,7 @@ func TestWaitQueueWithExternalSynchronization(t *testing.T) {
 		wg.Add(1)
 		go func(id int) {
 			defer wg.Done()
-			tid := transaction.NewTransactionID()
+			tid := primitives.NewTransactionID()
 
 			for j := 0; j < numOperationsPerGoroutine; j++ {
 				pid := heap.NewHeapPageID(1, (id*numOperationsPerGoroutine+j)%5+1) // Use pages 1-5
@@ -494,7 +494,7 @@ func TestWaitQueueWithExternalSynchronization(t *testing.T) {
 				mutex.Lock()
 				err := wq.Add(tid, pid, SharedLock)
 				mutex.Unlock()
-				
+
 				if err != nil {
 					// Might fail due to duplicates, which is expected
 					continue
@@ -531,12 +531,12 @@ func TestWaitQueueStressTest(t *testing.T) {
 	numTransactions := 100
 	numPages := 10
 
-	var transactions []*transaction.TransactionID
+	var transactions []*primitives.TransactionID
 	var pages []tuple.PageID
 
 	// Create transactions and pages
 	for i := 0; i < numTransactions; i++ {
-		transactions = append(transactions, transaction.NewTransactionID())
+		transactions = append(transactions, primitives.NewTransactionID())
 	}
 
 	for i := 0; i < numPages; i++ {
@@ -594,8 +594,8 @@ func TestWaitQueueStressTest(t *testing.T) {
 
 func TestWaitQueueLockTypePreservation(t *testing.T) {
 	wq := NewWaitQueue()
-	tid1 := transaction.NewTransactionID()
-	tid2 := transaction.NewTransactionID()
+	tid1 := primitives.NewTransactionID()
+	tid2 := primitives.NewTransactionID()
 	pid := heap.NewHeapPageID(1, 1)
 
 	// Add requests with different lock types
@@ -627,11 +627,11 @@ func TestWaitQueueLockTypePreservation(t *testing.T) {
 func TestWaitQueueFIFOOrdering(t *testing.T) {
 	wq := NewWaitQueue()
 	pid := heap.NewHeapPageID(1, 1)
-	var transactions []*transaction.TransactionID
+	var transactions []*primitives.TransactionID
 
 	// Add multiple transactions
 	for i := 0; i < 5; i++ {
-		tid := transaction.NewTransactionID()
+		tid := primitives.NewTransactionID()
 		transactions = append(transactions, tid)
 		err := wq.Add(tid, pid, SharedLock)
 		if err != nil {
@@ -659,7 +659,7 @@ func TestWaitQueueFIFOOrdering(t *testing.T) {
 		t.Fatalf("Expected 4 requests after removal, got %d", len(requests))
 	}
 
-	expectedOrder := []*transaction.TransactionID{
+	expectedOrder := []*primitives.TransactionID{
 		transactions[0], transactions[1], transactions[3], transactions[4],
 	}
 

@@ -1,7 +1,7 @@
 package lock
 
 import (
-	"storemy/pkg/concurrency/transaction"
+	"storemy/pkg/primitives"
 	"time"
 )
 
@@ -13,18 +13,18 @@ const (
 )
 
 type Lock struct {
-	TID       *transaction.TransactionID
+	TID       *primitives.TransactionID
 	LockType  LockType
 	GrantTime time.Time
 }
 
 type LockRequest struct {
-	TID      *transaction.TransactionID
+	TID      *primitives.TransactionID
 	LockType LockType
 	Chan     chan bool // Channel to signal when lock is granted
 }
 
-func NewLock(tid *transaction.TransactionID, lockType LockType) *Lock {
+func NewLock(tid *primitives.TransactionID, lockType LockType) *Lock {
 	return &Lock{
 		TID:       tid,
 		LockType:  lockType,
@@ -32,7 +32,7 @@ func NewLock(tid *transaction.TransactionID, lockType LockType) *Lock {
 	}
 }
 
-func NewLockRequest(tid *transaction.TransactionID, lockType LockType) *LockRequest {
+func NewLockRequest(tid *primitives.TransactionID, lockType LockType) *LockRequest {
 	return &LockRequest{
 		TID:      tid,
 		LockType: lockType,

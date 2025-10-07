@@ -2,7 +2,7 @@ package lock
 
 import (
 	"fmt"
-	"storemy/pkg/concurrency/transaction"
+	"storemy/pkg/primitives"
 	"storemy/pkg/tuple"
 	"sync"
 	"time"
@@ -34,7 +34,7 @@ func NewLockManager() *LockManager {
 	}
 }
 
-// LockPage attempts to acquire a lock on the specified page for the given transaction.
+// LockPage attempts to acquire a lock on the specified page for the given primitives.
 // The method handles lock upgrades, deadlock detection, and retry logic with exponential backoff.
 //
 // Parameters:
@@ -49,7 +49,7 @@ func NewLockManager() *LockManager {
 //   - Transaction ID is nil
 //   - Deadlock detected
 //   - Timeout waiting for lock (after 1000 attempts)
-func (lm *LockManager) LockPage(tid *transaction.TransactionID, pid tuple.PageID, exclusive bool) error {
+func (lm *LockManager) LockPage(tid *primitives.TransactionID, pid tuple.PageID, exclusive bool) error {
 	if tid == nil {
 		return fmt.Errorf("transaction ID cannot be nil")
 	}
@@ -86,7 +86,7 @@ func (lm *LockManager) LockPage(tid *transaction.TransactionID, pid tuple.PageID
 //
 // Returns:
 //   - error: nil on success, error on deadlock or timeout
-func (lm *LockManager) attemptToAcquireLock(tid *transaction.TransactionID, pid tuple.PageID, lockType LockType) error {
+func (lm *LockManager) attemptToAcquireLock(tid *primitives.TransactionID, pid tuple.PageID, lockType LockType) error {
 	const maxRetryDelay = 50 * time.Millisecond
 	maxRetries := 100
 	retryDelay := time.Millisecond
@@ -138,7 +138,7 @@ func (lm *LockManager) attemptToAcquireLock(tid *transaction.TransactionID, pid 
 // Dependency rules:
 // - Exclusive lock request creates dependency on all lock holders
 // - Shared lock request creates dependency only on exclusive lock holders
-func (lm *LockManager) updateDependencies(tid *transaction.TransactionID, pid tuple.PageID, lockType LockType) {
+func (lm *LockManager) updateDependencies(tid *primitives.TransactionID, pid tuple.PageID, lockType LockType) {
 	locks := lm.lockTable.GetPageLocks(pid)
 
 	for _, lock := range locks {
@@ -169,7 +169,7 @@ func (lm *LockManager) calculateRetryDelay(attemptNumber int, baseDelay, maxDela
 
 // UnlockPage releases a specific lock held by a transaction on a page.
 // Processes the wait queue after releasing the lock to grant pending requests.
-func (lm *LockManager) UnlockPage(tid *transaction.TransactionID, pid tuple.PageID) {
+func (lm *LockManager) UnlockPage(tid *primitives.TransactionID, pid tuple.PageID) {
 	lm.mutex.Lock()
 	defer lm.mutex.Unlock()
 
@@ -213,10 +213,10 @@ func (lm *LockManager) IsPageLocked(pid tuple.PageID) bool {
 	return lm.lockTable.IsPageLocked(pid)
 }
 
-// UnlockAllPages releases all locks held by a transaction.
+// UnlockAllPages releases all locks held by a primitives.
 // This is typically called during transaction commit or abort.
 // Processes wait queues for all affected pages after releasing locks.
-func (lm *LockManager) UnlockAllPages(tid *transaction.TransactionID) {
+func (lm *LockManager) UnlockAllPages(tid *primitives.TransactionID) {
 	lm.mutex.Lock()
 	defer lm.mutex.Unlock()
 

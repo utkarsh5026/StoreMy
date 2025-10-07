@@ -1,7 +1,7 @@
 package lock
 
 import (
-	"storemy/pkg/concurrency/transaction"
+	"storemy/pkg/primitives"
 	"storemy/pkg/storage/heap"
 	"testing"
 )
@@ -24,7 +24,7 @@ func TestNewLockTable(t *testing.T) {
 
 func TestAddLock(t *testing.T) {
 	lt := NewLockTable()
-	tid := transaction.NewTransactionID()
+	tid := primitives.NewTransactionID()
 	pid := heap.NewHeapPageID(1, 1)
 
 	// Add shared lock
@@ -54,8 +54,8 @@ func TestAddLock(t *testing.T) {
 
 func TestAddMultipleLocks(t *testing.T) {
 	lt := NewLockTable()
-	tid1 := transaction.NewTransactionID()
-	tid2 := transaction.NewTransactionID()
+	tid1 := primitives.NewTransactionID()
+	tid2 := primitives.NewTransactionID()
 	pid := heap.NewHeapPageID(1, 1)
 
 	// Add two shared locks on same page
@@ -80,7 +80,7 @@ func TestAddMultipleLocks(t *testing.T) {
 
 func TestHasSufficientLock(t *testing.T) {
 	lt := NewLockTable()
-	tid := transaction.NewTransactionID()
+	tid := primitives.NewTransactionID()
 	pid := heap.NewHeapPageID(1, 1)
 
 	// No lock exists
@@ -115,7 +115,7 @@ func TestHasSufficientLock(t *testing.T) {
 
 func TestHasLockType(t *testing.T) {
 	lt := NewLockTable()
-	tid := transaction.NewTransactionID()
+	tid := primitives.NewTransactionID()
 	pid := heap.NewHeapPageID(1, 1)
 
 	// No lock exists
@@ -150,7 +150,7 @@ func TestHasLockType(t *testing.T) {
 
 func TestIsPageLocked(t *testing.T) {
 	lt := NewLockTable()
-	tid := transaction.NewTransactionID()
+	tid := primitives.NewTransactionID()
 	pid := heap.NewHeapPageID(1, 1)
 
 	// Page not locked initially
@@ -177,7 +177,7 @@ func TestIsPageLocked(t *testing.T) {
 
 func TestUpgradeLock(t *testing.T) {
 	lt := NewLockTable()
-	tid := transaction.NewTransactionID()
+	tid := primitives.NewTransactionID()
 	pid := heap.NewHeapPageID(1, 1)
 
 	// Add shared lock
@@ -204,8 +204,8 @@ func TestUpgradeLock(t *testing.T) {
 
 func TestReleaseLock(t *testing.T) {
 	lt := NewLockTable()
-	tid1 := transaction.NewTransactionID()
-	tid2 := transaction.NewTransactionID()
+	tid1 := primitives.NewTransactionID()
+	tid2 := primitives.NewTransactionID()
 	pid := heap.NewHeapPageID(1, 1)
 
 	// Add two locks
@@ -255,7 +255,7 @@ func TestReleaseLock(t *testing.T) {
 
 func TestReleaseAllLocks(t *testing.T) {
 	lt := NewLockTable()
-	tid := transaction.NewTransactionID()
+	tid := primitives.NewTransactionID()
 	pid1 := heap.NewHeapPageID(1, 1)
 	pid2 := heap.NewHeapPageID(1, 2)
 	pid3 := heap.NewHeapPageID(2, 1)
@@ -290,7 +290,7 @@ func TestReleaseAllLocks(t *testing.T) {
 	}
 
 	// Test releasing locks for non-existent transaction
-	nonExistentTid := transaction.NewTransactionID()
+	nonExistentTid := primitives.NewTransactionID()
 	affectedPages = lt.ReleaseAllLocks(nonExistentTid)
 	if affectedPages != nil {
 		t.Error("Should return nil for non-existent transaction")
@@ -299,8 +299,8 @@ func TestReleaseAllLocks(t *testing.T) {
 
 func TestReleaseAllLocksWithMultipleTransactions(t *testing.T) {
 	lt := NewLockTable()
-	tid1 := transaction.NewTransactionID()
-	tid2 := transaction.NewTransactionID()
+	tid1 := primitives.NewTransactionID()
+	tid2 := primitives.NewTransactionID()
 	pid := heap.NewHeapPageID(1, 1)
 
 	// Add locks from both transactions
@@ -351,7 +351,7 @@ func TestGetPageLocks(t *testing.T) {
 	}
 
 	// Add lock and verify
-	tid := transaction.NewTransactionID()
+	tid := primitives.NewTransactionID()
 	lt.AddLock(tid, pid, SharedLock)
 
 	locks = lt.GetPageLocks(pid)
@@ -384,7 +384,7 @@ func TestGetters(t *testing.T) {
 	}
 
 	// Add some locks and verify tables are populated
-	tid := transaction.NewTransactionID()
+	tid := primitives.NewTransactionID()
 	pid := heap.NewHeapPageID(1, 1)
 	lt.AddLock(tid, pid, SharedLock)
 
