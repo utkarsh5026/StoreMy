@@ -2,19 +2,20 @@ package log
 
 import (
 	"io"
+	"storemy/pkg/primitives"
 )
 
 type LogWriter struct {
-	writer       io.WriterAt // Underlying writer (usually a file)
-	currentLSN   LSN         // Next LSN to assign
-	flushedLSN   LSN         // Last LSN guaranteed on disk
-	buffer       []byte      // Write buffer
-	bufferOffset int         // Current position in buffer
-	bufferSize   int         // Maximum buffer size
+	writer       io.WriterAt    // Underlying writer (usually a file)
+	currentLSN   primitives.LSN // Next primitives.LSN to assign
+	flushedLSN   primitives.LSN // Last primitives.LSN guaranteed on disk
+	buffer       []byte         // Write buffer
+	bufferOffset int            // Current position in buffer
+	bufferSize   int            // Maximum buffer size
 }
 
 // NewLogWriter creates a new LogWriter with the given underlying writer and buffer size
-func NewLogWriter(writer io.WriterAt, bufferSize int, current, flushed LSN) *LogWriter {
+func NewLogWriter(writer io.WriterAt, bufferSize int, current, flushed primitives.LSN) *LogWriter {
 	return &LogWriter{
 		writer:       writer,
 		bufferSize:   bufferSize,
@@ -26,9 +27,9 @@ func NewLogWriter(writer io.WriterAt, bufferSize int, current, flushed LSN) *Log
 
 }
 
-// Write appends data to the buffer and returns the LSN
+// Write appends data to the buffer and returns the primitives.LSN
 // This is where we implement the actual buffering strategy
-func (w *LogWriter) Write(data []byte) (LSN, error) {
+func (w *LogWriter) Write(data []byte) (primitives.LSN, error) {
 	assignedLSN := w.currentLSN
 
 	if len(data) > w.bufferSize {
@@ -42,8 +43,8 @@ func (w *LogWriter) Write(data []byte) (LSN, error) {
 			return 0, err
 		}
 
-		w.flushedLSN += LSN(len(data))
-		w.currentLSN += LSN(len(data))
+		w.flushedLSN += primitives.LSN(len(data))
+		w.currentLSN += primitives.LSN(len(data))
 		return assignedLSN, nil
 	}
 
@@ -54,14 +55,14 @@ func (w *LogWriter) Write(data []byte) (LSN, error) {
 	}
 	copy(w.buffer[w.bufferOffset:], data)
 	w.bufferOffset += len(data)
-	w.currentLSN += LSN(len(data))
+	w.currentLSN += primitives.LSN(len(data))
 
 	return assignedLSN, nil
 }
 
-// Force ensures data is on disk up to the given LSN
+// Force ensures data is on disk up to the given primitives.LSN
 // This is called during commit to guarantee durability
-func (w *LogWriter) Force(lsn LSN) error {
+func (w *LogWriter) Force(lsn primitives.LSN) error {
 	if w.flushedLSN >= lsn {
 		return nil
 	}
@@ -86,7 +87,7 @@ func (w *LogWriter) flush() error {
 	return nil
 }
 
-func (w *LogWriter) CurrentLSN() LSN {
+func (w *LogWriter) CurrentLSN() primitives.LSN {
 	return w.currentLSN
 }
 
