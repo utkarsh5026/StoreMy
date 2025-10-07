@@ -2,8 +2,8 @@ package planner
 
 import (
 	"fmt"
+	"storemy/pkg/concurrency/transaction"
 	"storemy/pkg/parser/statements"
-	"storemy/pkg/primitives"
 	"storemy/pkg/registry"
 	"storemy/pkg/tuple"
 )
@@ -12,17 +12,17 @@ import (
 type DeletePlan struct {
 	statement *statements.DeleteStatement
 	ctx       *registry.DatabaseContext
-	tid       *primitives.TransactionID
+	tx        *transaction.TransactionContext
 }
 
 // NewDeletePlan creates a new DELETE execution plan
 func NewDeletePlan(
 	stmt *statements.DeleteStatement,
-	tid *primitives.TransactionID,
+	tx *transaction.TransactionContext,
 	ctx *registry.DatabaseContext) *DeletePlan {
 	return &DeletePlan{
 		statement: stmt,
-		tid:       tid,
+		tx:        tx,
 		ctx:       ctx,
 	}
 }
@@ -38,7 +38,7 @@ func (p *DeletePlan) Execute() (any, error) {
 		return nil, err
 	}
 
-	query, err := buildScanWithFilter(p.tid, tableID, p.statement.WhereClause, p.ctx)
+	query, err := buildScanWithFilter(p.tx.ID, tableID, p.statement.WhereClause, p.ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -62,7 +62,7 @@ func (p *DeletePlan) Execute() (any, error) {
 // deleteTuples performs the actual deletion of collected tuples.
 func (p *DeletePlan) deleteTuples(tuplesToDelete []*tuple.Tuple) error {
 	for i, tupleToDelete := range tuplesToDelete {
-		if err := p.ctx.PageStore().DeleteTuple(p.tid, tupleToDelete); err != nil {
+		if err := p.ctx.PageStore().DeleteTuple(p.tx, tupleToDelete); err != nil {
 			return fmt.Errorf("failed to delete tuple %d: %v", i+1, err)
 		}
 	}
