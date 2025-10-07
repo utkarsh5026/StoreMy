@@ -5,7 +5,6 @@ import (
 	"os"
 	"path/filepath"
 	"storemy/pkg/parser/statements"
-	"storemy/pkg/primitives"
 	"storemy/pkg/types"
 	"testing"
 )
@@ -34,9 +33,9 @@ func TestNewCreateTablePlan(t *testing.T) {
 	stmt.AddField("id", types.IntType, true, nil)
 
 	ctx := createTestContextWithCleanup(t, "")
-	tid := primitives.NewTransactionID()
+	transCtx := createTransactionContext(t)
 
-	plan := NewCreateTablePlan(stmt, ctx, tid)
+	plan := NewCreateTablePlan(stmt, ctx, transCtx)
 
 	if plan == nil {
 		t.Fatal("NewCreateTablePlan returned nil")
@@ -50,7 +49,7 @@ func TestNewCreateTablePlan(t *testing.T) {
 		t.Error("Context not properly assigned")
 	}
 
-	if plan.tid != tid {
+	if plan.transactionCtx != transCtx {
 		t.Error("TransactionID not properly assigned")
 	}
 }
@@ -68,9 +67,9 @@ func TestCreateTablePlan_Execute_BasicSuccess(t *testing.T) {
 	stmt.AddField("name", types.StringType, false, nil)
 
 	ctx := createTestContextWithCleanup(t, dataDir)
-	tid := primitives.NewTransactionID()
+	transCtx := createTransactionContext(t)
 
-	plan := NewCreateTablePlan(stmt, ctx, tid)
+	plan := NewCreateTablePlan(stmt, ctx, transCtx)
 
 	result, err := executePlan(t, plan)
 
@@ -112,9 +111,9 @@ func TestCreateTablePlan_Execute_WithPrimaryKey(t *testing.T) {
 	stmt.PrimaryKey = "id"
 
 	ctx := createTestContextWithCleanup(t, dataDir)
-	tid := primitives.NewTransactionID()
+	transCtx := createTransactionContext(t)
 
-	plan := NewCreateTablePlan(stmt, ctx, tid)
+	plan := NewCreateTablePlan(stmt, ctx, transCtx)
 
 	result, err := executePlan(t, plan)
 
@@ -148,9 +147,9 @@ func TestCreateTablePlan_Execute_AllFieldTypes(t *testing.T) {
 	stmt.AddField("price", types.FloatType, false, nil)
 
 	ctx := createTestContextWithCleanup(t, dataDir)
-	tid := primitives.NewTransactionID()
+	transCtx := createTransactionContext(t)
 
-	plan := NewCreateTablePlan(stmt, ctx, tid)
+	plan := NewCreateTablePlan(stmt, ctx, transCtx)
 
 	result, err := executePlan(t, plan)
 
@@ -181,9 +180,9 @@ func TestCreateTablePlan_Execute_IfNotExists_TableDoesNotExist(t *testing.T) {
 	stmt.AddField("id", types.IntType, true, nil)
 
 	ctx := createTestContextWithCleanup(t, dataDir)
-	tid := primitives.NewTransactionID()
+	transCtx := createTransactionContext(t)
 
-	plan := NewCreateTablePlan(stmt, ctx, tid)
+	plan := NewCreateTablePlan(stmt, ctx, transCtx)
 
 	result, err := executePlan(t, plan)
 
@@ -216,11 +215,11 @@ func TestCreateTablePlan_Execute_IfNotExists_TableExists(t *testing.T) {
 	os.Mkdir("data", 0755)
 
 	ctx := createTestContextWithCleanup(t, dataDir)
-	tid := primitives.NewTransactionID()
+	transCtx := createTransactionContext(t)
 
 	existingStmt := statements.NewCreateStatement("users", false)
 	existingStmt.AddField("id", types.IntType, true, nil)
-	existingPlan := NewCreateTablePlan(existingStmt, ctx, tid)
+	existingPlan := NewCreateTablePlan(existingStmt, ctx, transCtx)
 	_, err := existingPlan.Execute()
 	if err != nil {
 		t.Fatalf("Failed to create existing table: %v", err)
@@ -230,7 +229,7 @@ func TestCreateTablePlan_Execute_IfNotExists_TableExists(t *testing.T) {
 	stmt.AddField("id", types.IntType, true, nil)
 	stmt.AddField("name", types.StringType, false, nil)
 
-	plan := NewCreateTablePlan(stmt, ctx, tid)
+	plan := NewCreateTablePlan(stmt, ctx, transCtx)
 
 	result, err := executePlan(t, plan)
 
@@ -259,11 +258,11 @@ func TestCreateTablePlan_Execute_Error_TableAlreadyExists(t *testing.T) {
 	os.Mkdir("data", 0755)
 
 	ctx := createTestContextWithCleanup(t, dataDir)
-	tid := primitives.NewTransactionID()
+	transCtx := createTransactionContext(t)
 
 	existingStmt := statements.NewCreateStatement("users", false)
 	existingStmt.AddField("id", types.IntType, true, nil)
-	existingPlan := NewCreateTablePlan(existingStmt, ctx, tid)
+	existingPlan := NewCreateTablePlan(existingStmt, ctx, transCtx)
 	_, err := existingPlan.Execute()
 	if err != nil {
 		t.Fatalf("Failed to create existing table: %v", err)
@@ -272,7 +271,7 @@ func TestCreateTablePlan_Execute_Error_TableAlreadyExists(t *testing.T) {
 	stmt := statements.NewCreateStatement("users", false)
 	stmt.AddField("id", types.IntType, true, nil)
 
-	plan := NewCreateTablePlan(stmt, ctx, tid)
+	plan := NewCreateTablePlan(stmt, ctx, transCtx)
 
 	result, err := executePlan(t, plan)
 
@@ -303,9 +302,9 @@ func TestCreateTablePlan_Execute_Error_EmptyFields(t *testing.T) {
 	stmt := statements.NewCreateStatement("empty_table", false)
 
 	ctx := createTestContextWithCleanup(t, dataDir)
-	tid := primitives.NewTransactionID()
+	transCtx := createTransactionContext(t)
 
-	plan := NewCreateTablePlan(stmt, ctx, tid)
+	plan := NewCreateTablePlan(stmt, ctx, transCtx)
 
 	result, err := plan.Execute()
 
@@ -329,9 +328,9 @@ func TestCreateTablePlan_Execute_Error_InvalidFieldType(t *testing.T) {
 	stmt := statements.NewCreateStatement("invalid_table", false)
 
 	ctx := createTestContextWithCleanup(t, dataDir)
-	tid := primitives.NewTransactionID()
+	transCtx := createTransactionContext(t)
 
-	plan := NewCreateTablePlan(stmt, ctx, tid)
+	plan := NewCreateTablePlan(stmt, ctx, transCtx)
 
 	result, err := plan.Execute()
 
@@ -356,9 +355,9 @@ func TestCreateTablePlan_Execute_Error_DataDirectoryMissing(t *testing.T) {
 
 	// Pass empty string for dataDir to force use of "data/" directory
 	ctx := createTestContextWithCleanup(t, "")
-	tid := primitives.NewTransactionID()
+	transCtx := createTransactionContext(t)
 
-	plan := NewCreateTablePlan(stmt, ctx, tid)
+	plan := NewCreateTablePlan(stmt, ctx, transCtx)
 
 	result, err := plan.Execute()
 
@@ -396,9 +395,9 @@ func TestCreateTablePlan_Execute_ComplexTable(t *testing.T) {
 	stmt.PrimaryKey = "id"
 
 	ctx := createTestContextWithCleanup(t, dataDir)
-	tid := primitives.NewTransactionID()
+	transCtx := createTransactionContext(t)
 
-	plan := NewCreateTablePlan(stmt, ctx, tid)
+	plan := NewCreateTablePlan(stmt, ctx, transCtx)
 
 	result, err := executePlan(t, plan)
 
@@ -444,9 +443,9 @@ func TestCreateTablePlan_Execute_FileCreation(t *testing.T) {
 
 	// Pass empty string to use default "data/" directory
 	ctx := createTestContextWithCleanup(t, "")
-	tid := primitives.NewTransactionID()
+	transCtx := createTransactionContext(t)
 
-	plan := NewCreateTablePlan(stmt, ctx, tid)
+	plan := NewCreateTablePlan(stmt, ctx, transCtx)
 
 	result, err := executePlan(t, plan)
 
