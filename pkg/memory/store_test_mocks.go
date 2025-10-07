@@ -2,13 +2,16 @@ package memory
 
 import (
 	"fmt"
+	"storemy/pkg/concurrency/transaction"
 	"storemy/pkg/iterator"
+	"storemy/pkg/log"
 	"storemy/pkg/primitives"
 	"storemy/pkg/storage/heap"
 	"storemy/pkg/storage/page"
 	"storemy/pkg/tuple"
 	"storemy/pkg/types"
 	"sync"
+	"testing"
 )
 
 // mockPage implements page.Page interface for testing
@@ -182,4 +185,17 @@ func (m *mockDbFileForPageStore) Close() error {
 
 func (m *mockDbFileForPageStore) IsClosed() bool {
 	return false
+}
+
+func createTransactionContext(t *testing.T, wal *log.WAL) *transaction.TransactionContext {
+	t.Helper()
+
+	rg := transaction.NewTransactionRegistry(wal)
+	ctx, err := rg.Begin()
+
+	if err != nil {
+		t.Fatalf("Error creating transaction Context")
+	}
+
+	return ctx
 }
