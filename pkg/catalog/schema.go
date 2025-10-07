@@ -2,7 +2,7 @@ package catalog
 
 import (
 	"fmt"
-	"storemy/pkg/concurrency/transaction"
+	"storemy/pkg/primitives"
 	"storemy/pkg/tuple"
 	"storemy/pkg/types"
 )
@@ -67,7 +67,7 @@ type ColumnInfo struct {
 	isPrimary bool
 }
 
-type IterFunc = func(int, *transaction.TransactionID, func(*tuple.Tuple) error) error
+type IterFunc = func(int, *primitives.TransactionID, func(*tuple.Tuple) error) error
 
 // SchemaLoader reconstructs table schemas from the system catalog.
 // It queries CATALOG_COLUMNS to build TupleDescription objects during database startup.
@@ -86,7 +86,7 @@ func NewSchemaLoader(columnsTableID int, iterateFunc IterFunc) *SchemaLoader {
 // LoadTableSchema reconstructs the schema for a table from CATALOG_COLUMNS.
 // It scans all column metadata for the given tableID, sorts by position,
 // and builds a TupleDescription.
-func (sl *SchemaLoader) LoadTableSchema(tid *transaction.TransactionID, tableID int) (*tuple.TupleDescription, string, error) {
+func (sl *SchemaLoader) LoadTableSchema(tid *primitives.TransactionID, tableID int) (*tuple.TupleDescription, string, error) {
 	columns, primaryKey, err := sl.loadColumnMetadata(tid, tableID)
 	if err != nil {
 		return nil, "", err
@@ -121,7 +121,7 @@ func buildTupleDescription(columns []ColumnInfo) *tuple.TupleDescription {
 
 // loadColumnMetadata queries CATALOG_COLUMNS for all columns belonging to tableID.
 // It filters rows by table_id and collects ColumnInfo for each matching column.
-func (sl *SchemaLoader) loadColumnMetadata(tid *transaction.TransactionID, tableID int) ([]ColumnInfo, string, error) {
+func (sl *SchemaLoader) loadColumnMetadata(tid *primitives.TransactionID, tableID int) ([]ColumnInfo, string, error) {
 	var columns []ColumnInfo
 	primaryKey := ""
 

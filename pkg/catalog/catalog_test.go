@@ -3,9 +3,9 @@ package catalog
 import (
 	"os"
 	"path/filepath"
-	"storemy/pkg/concurrency/transaction"
 	"storemy/pkg/log"
 	"storemy/pkg/memory"
+	"storemy/pkg/primitives"
 	"storemy/pkg/storage/heap"
 	"storemy/pkg/tuple"
 	"storemy/pkg/types"
@@ -50,7 +50,7 @@ func setupTestCatalog(t *testing.T) (*SystemCatalog, string, func()) {
 func registerTestTable(
 	t *testing.T,
 	catalog *SystemCatalog,
-	tid *transaction.TransactionID,
+	tid *primitives.TransactionID,
 	tempDir, tableName, primaryKey string,
 	fields []FieldMetadata,
 ) int {
@@ -154,7 +154,7 @@ func TestSystemCatalog_RegisterTable_Simple(t *testing.T) {
 	catalog, tempDir, cleanup := setupTestCatalog(t)
 	defer cleanup()
 
-	tid := transaction.NewTransactionID()
+	tid := primitives.NewTransactionID()
 	defer catalog.store.CommitTransaction(tid)
 
 	fields := []FieldMetadata{
@@ -169,7 +169,7 @@ func TestSystemCatalog_RegisterTable_MultipleTables(t *testing.T) {
 	catalog, tempDir, cleanup := setupTestCatalog(t)
 	defer cleanup()
 
-	tid := transaction.NewTransactionID()
+	tid := primitives.NewTransactionID()
 	defer catalog.store.CommitTransaction(tid)
 
 	// Register first table
@@ -199,7 +199,7 @@ func TestSystemCatalog_LoadTables(t *testing.T) {
 	defer cleanup()
 
 	// Register a table
-	tid := transaction.NewTransactionID()
+	tid := primitives.NewTransactionID()
 	fields := []FieldMetadata{
 		{Name: "id", Type: types.IntType},
 		{Name: "email", Type: types.StringType},
@@ -305,7 +305,7 @@ func TestSystemCatalog_LoadTables_Multiple(t *testing.T) {
 
 	// Register each table in its own transaction to ensure proper isolation
 	for _, table := range tables {
-		tid := transaction.NewTransactionID()
+		tid := primitives.NewTransactionID()
 		registerTestTable(t, catalog, tid, tempDir, table.name, table.pk, table.fields)
 		catalog.store.CommitTransaction(tid)
 	}
@@ -341,7 +341,7 @@ func TestSystemCatalog_GetTableID(t *testing.T) {
 	defer cleanup()
 
 	// Register a table
-	tid := transaction.NewTransactionID()
+	tid := primitives.NewTransactionID()
 	fields := []FieldMetadata{
 		{Name: "id", Type: types.IntType},
 		{Name: "data", Type: types.StringType},
@@ -351,7 +351,7 @@ func TestSystemCatalog_GetTableID(t *testing.T) {
 	catalog.store.CommitTransaction(tid)
 
 	// Get table ID from catalog
-	tid2 := transaction.NewTransactionID()
+	tid2 := primitives.NewTransactionID()
 	defer catalog.store.CommitTransaction(tid2)
 
 	tableID, err := catalog.GetTableID(tid2, "test_table")
@@ -369,7 +369,7 @@ func TestSystemCatalog_GetTableID_NotFound(t *testing.T) {
 	catalog, _, cleanup := setupTestCatalog(t)
 	defer cleanup()
 
-	tid := transaction.NewTransactionID()
+	tid := primitives.NewTransactionID()
 	defer catalog.store.CommitTransaction(tid)
 
 	_, err := catalog.GetTableID(tid, "nonexistent_table")
@@ -382,7 +382,7 @@ func TestSystemCatalog_RegisterTable_WithBoolField(t *testing.T) {
 	catalog, tempDir, cleanup := setupTestCatalog(t)
 	defer cleanup()
 
-	tid := transaction.NewTransactionID()
+	tid := primitives.NewTransactionID()
 	defer catalog.store.CommitTransaction(tid)
 
 	fields := []FieldMetadata{
@@ -440,7 +440,7 @@ func TestSystemCatalog_PrimaryKeyPreserved(t *testing.T) {
 	catalog, tempDir, cleanup := setupTestCatalog(t)
 	defer cleanup()
 
-	tid := transaction.NewTransactionID()
+	tid := primitives.NewTransactionID()
 
 	fields := []FieldMetadata{
 		{Name: "user_id", Type: types.IntType},
@@ -478,7 +478,7 @@ func TestSystemCatalog_SequentialTableIDs(t *testing.T) {
 	catalog, tempDir, cleanup := setupTestCatalog(t)
 	defer cleanup()
 
-	tid := transaction.NewTransactionID()
+	tid := primitives.NewTransactionID()
 	defer catalog.store.CommitTransaction(tid)
 
 	fields := []FieldMetadata{

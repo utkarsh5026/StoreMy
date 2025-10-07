@@ -2,8 +2,8 @@ package catalog
 
 import (
 	"fmt"
-	"storemy/pkg/concurrency/transaction"
 	"storemy/pkg/memory"
+	"storemy/pkg/primitives"
 	"storemy/pkg/storage/heap"
 	"storemy/pkg/tuple"
 	"storemy/pkg/types"
@@ -44,7 +44,7 @@ func NewSystemCatalog(ps *memory.PageStore, tm *memory.TableManager) *SystemCata
 // and registers them with the table manager. This must be called before any other
 // catalog operations.
 func (sc *SystemCatalog) Initialize(dataDir string) error {
-	tid := transaction.NewTransactionID()
+	tid := primitives.NewTransactionID()
 	defer sc.store.CommitTransaction(tid)
 
 	var err error
@@ -82,7 +82,7 @@ func (sc *SystemCatalog) createCatalogTable(dataDir, fileName, tableName, primar
 
 // RegisterTable adds a new table to the system catalog.
 // It inserts metadata into CATALOG_TABLES and column definitions into CATALOG_COLUMNS.
-func (sc *SystemCatalog) RegisterTable(tid *transaction.TransactionID, tableID int, tableName, filePath, primaryKey string, fields []FieldMetadata,
+func (sc *SystemCatalog) RegisterTable(tid *primitives.TransactionID, tableID int, tableName, filePath, primaryKey string, fields []FieldMetadata,
 ) error {
 	tup := createTablesTuple(tableID, tableName, filePath, primaryKey)
 	if err := sc.store.InsertTuple(tid, sc.tablesTableID, tup); err != nil {
@@ -132,7 +132,7 @@ type FieldMetadata struct {
 //
 // This is called during database startup to restore all user tables.
 func (sc *SystemCatalog) LoadTables(dataDir string) error {
-	tid := transaction.NewTransactionID()
+	tid := primitives.NewTransactionID()
 	defer sc.store.CommitTransaction(tid)
 
 	return sc.iterateTable(sc.tablesTableID, tid, func(tableTuple *tuple.Tuple) error {
@@ -158,7 +158,7 @@ func (sc *SystemCatalog) LoadTables(dataDir string) error {
 
 // GetTableID looks up the heap file ID for a table by name.
 // Returns -1 and an error if the table is not found in the catalog.
-func (sc *SystemCatalog) GetTableID(tid *transaction.TransactionID, tableName string) (int, error) {
+func (sc *SystemCatalog) GetTableID(tid *primitives.TransactionID, tableName string) (int, error) {
 	var result int = -1
 
 	err := sc.iterateTable(sc.tablesTableID, tid, func(tableTuple *tuple.Tuple) error {
@@ -185,7 +185,7 @@ func (sc *SystemCatalog) GetTableID(tid *transaction.TransactionID, tableName st
 // This is used internally for catalog queries like LoadTables() and GetTableID().
 //
 // The processFunc can return an error to stop iteration early.
-func (sc *SystemCatalog) iterateTable(tableID int, tid *transaction.TransactionID, processFunc func(*tuple.Tuple) error) error {
+func (sc *SystemCatalog) iterateTable(tableID int, tid *primitives.TransactionID, processFunc func(*tuple.Tuple) error) error {
 	file, err := sc.tableManager.GetDbFile(tableID)
 	if err != nil {
 		return fmt.Errorf("failed to get table file: %w", err)
