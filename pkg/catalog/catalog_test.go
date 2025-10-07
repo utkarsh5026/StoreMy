@@ -3,6 +3,7 @@ package catalog
 import (
 	"os"
 	"path/filepath"
+	"storemy/pkg/concurrency/transaction"
 	"storemy/pkg/log"
 	"storemy/pkg/memory"
 	"storemy/pkg/primitives"
@@ -12,7 +13,7 @@ import (
 	"testing"
 )
 
-func setupTestCatalog(t *testing.T) (*SystemCatalog, string, func()) {
+func setupTestCatalog(t *testing.T) (*SystemCatalog, *transaction.TransactionRegistry, string, func()) {
 	t.Helper()
 
 	// Create temp directories
@@ -31,10 +32,16 @@ func setupTestCatalog(t *testing.T) (*SystemCatalog, string, func()) {
 	}
 
 	store := memory.NewPageStore(tableManager, wal)
+
+	txRegistry := transaction.NewTransactionRegistry(wal)
 	catalog := NewSystemCatalog(store, tableManager)
 
-	// Initialize catalog
-	if err := catalog.Initialize(tempDir); err != nil {
+	// Initialize catalog with a transaction
+	tx, err := txRegistry.Begin()
+	if err != nil {
+		t.Fatalf("failed to begin transaction: %v", err)
+	}
+	if err := catalog.Initialize(tx, tempDir); err != nil {
 		t.Fatalf("failed to initialize catalog: %v", err)
 	}
 
@@ -43,14 +50,14 @@ func setupTestCatalog(t *testing.T) (*SystemCatalog, string, func()) {
 		os.RemoveAll(tempDir)
 	}
 
-	return catalog, tempDir, cleanup
+	return catalog, txRegistry, tempDir, cleanup
 }
 
 // Helper to register a table with catalog
 func registerTestTable(
 	t *testing.T,
 	catalog *SystemCatalog,
-	tid *primitives.TransactionID,
+	tx *transaction.TransactionContext,
 	tempDir, tableName, primaryKey string,
 	fields []FieldMetadata,
 ) int {
@@ -78,7 +85,7 @@ func registerTestTable(
 
 	tableID := heapFile.GetID()
 
-	err = catalog.RegisterTable(tid, tableID, tableName, filePath, primaryKey, fields)
+	err = catalog.RegisterTable(tx, tableID, tableName, filePath, primaryKey, fields)
 	if err != nil {
 		t.Fatalf("RegisterTable failed: %v", err)
 	}
@@ -109,7 +116,7 @@ func TestNewSystemCatalog(t *testing.T) {
 }
 
 func TestSystemCatalog_Initialize(t *testing.T) {
-	catalog, tempDir, cleanup := setupTestCatalog(t)
+	catalog, _, tempDir, cleanup := setupTestCatalog(t)
 	defer cleanup()
 
 	// Verify catalog tables exist in TableManager
@@ -151,26 +158,32 @@ func TestSystemCatalog_Initialize(t *testing.T) {
 }
 
 func TestSystemCatalog_RegisterTable_Simple(t *testing.T) {
-	catalog, tempDir, cleanup := setupTestCatalog(t)
+	catalog, txRegistry, tempDir, cleanup := setupTestCatalog(t)
 	defer cleanup()
 
-	tid := primitives.NewTransactionID()
-	defer catalog.store.CommitTransaction(tid)
+	tx, err := txRegistry.Begin()
+	if err != nil {
+		t.Fatalf("failed to begin transaction: %v", err)
+	}
+	defer catalog.store.CommitTransaction(tx)
 
 	fields := []FieldMetadata{
 		{Name: "id", Type: types.IntType},
 		{Name: "name", Type: types.StringType},
 	}
 
-	registerTestTable(t, catalog, tid, tempDir, "users", "id", fields)
+	registerTestTable(t, catalog, tx, tempDir, "users", "id", fields)
 }
 
 func TestSystemCatalog_RegisterTable_MultipleTables(t *testing.T) {
-	catalog, tempDir, cleanup := setupTestCatalog(t)
+	catalog, txRegistry, tempDir, cleanup := setupTestCatalog(t)
 	defer cleanup()
 
-	tid := primitives.NewTransactionID()
-	defer catalog.store.CommitTransaction(tid)
+	tx, err := txRegistry.Begin()
+	if err != nil {
+		t.Fatalf("failed to begin transaction: %v", err)
+	}
+	defer catalog.store.CommitTransaction(tx)
 
 	// Register first table
 	fields1 := []FieldMetadata{
@@ -178,7 +191,7 @@ func TestSystemCatalog_RegisterTable_MultipleTables(t *testing.T) {
 		{Name: "name", Type: types.StringType},
 	}
 
-	tableID1 := registerTestTable(t, catalog, tid, tempDir, "users", "id", fields1)
+	tableID1 := registerTestTable(t, catalog, tx, tempDir, "users", "id", fields1)
 
 	// Register second table
 	fields2 := []FieldMetadata{
@@ -187,7 +200,7 @@ func TestSystemCatalog_RegisterTable_MultipleTables(t *testing.T) {
 		{Name: "description", Type: types.StringType},
 	}
 
-	tableID2 := registerTestTable(t, catalog, tid, tempDir, "products", "product_id", fields2)
+	tableID2 := registerTestTable(t, catalog, tx, tempDir, "products", "product_id", fields2)
 
 	if tableID1 == tableID2 {
 		t.Error("table IDs should be different")
@@ -195,32 +208,44 @@ func TestSystemCatalog_RegisterTable_MultipleTables(t *testing.T) {
 }
 
 func TestSystemCatalog_LoadTables(t *testing.T) {
-	catalog, tempDir, cleanup := setupTestCatalog(t)
+	catalog, txRegistry, tempDir, cleanup := setupTestCatalog(t)
 	defer cleanup()
 
 	// Register a table
-	tid := primitives.NewTransactionID()
+	tx, err := txRegistry.Begin()
+	if err != nil {
+		t.Fatalf("failed to begin transaction: %v", err)
+	}
 	fields := []FieldMetadata{
 		{Name: "id", Type: types.IntType},
 		{Name: "email", Type: types.StringType},
 		{Name: "age", Type: types.IntType},
 	}
 
-	tableID := registerTestTable(t, catalog, tid, tempDir, "customers", "id", fields)
-	catalog.store.CommitTransaction(tid)
+	tableID := registerTestTable(t, catalog, tx, tempDir, "customers", "id", fields)
+	catalog.store.CommitTransaction(tx)
 
 	// Create a new catalog instance (simulating restart)
 	tableManager2 := memory.NewTableManager()
 	wal2, _ := log.NewWAL(filepath.Join(tempDir, "wal2.log"), 8192)
 	pageStore2 := memory.NewPageStore(tableManager2, wal2)
+	txRegistry2 := transaction.NewTransactionRegistry(wal2)
 	catalog2 := NewSystemCatalog(pageStore2, tableManager2)
 
 	// Initialize and load tables
-	if err := catalog2.Initialize(tempDir); err != nil {
+	tx2, err := txRegistry2.Begin()
+	if err != nil {
+		t.Fatalf("failed to begin transaction: %v", err)
+	}
+	if err := catalog2.Initialize(tx2, tempDir); err != nil {
 		t.Fatalf("Initialize failed: %v", err)
 	}
 
-	if err := catalog2.LoadTables(tempDir); err != nil {
+	tx3, err := txRegistry2.Begin()
+	if err != nil {
+		t.Fatalf("failed to begin transaction: %v", err)
+	}
+	if err := catalog2.LoadTables(tx3, tempDir); err != nil {
 		t.Fatalf("LoadTables failed: %v", err)
 	}
 
@@ -267,7 +292,7 @@ func TestSystemCatalog_LoadTables(t *testing.T) {
 }
 
 func TestSystemCatalog_LoadTables_Multiple(t *testing.T) {
-	catalog, tempDir, cleanup := setupTestCatalog(t)
+	catalog, txRegistry, tempDir, cleanup := setupTestCatalog(t)
 	defer cleanup()
 
 	// Register multiple tables
@@ -305,24 +330,36 @@ func TestSystemCatalog_LoadTables_Multiple(t *testing.T) {
 
 	// Register each table in its own transaction to ensure proper isolation
 	for _, table := range tables {
-		tid := primitives.NewTransactionID()
-		registerTestTable(t, catalog, tid, tempDir, table.name, table.pk, table.fields)
-		catalog.store.CommitTransaction(tid)
+		tx, err := txRegistry.Begin()
+		if err != nil {
+			t.Fatalf("failed to begin transaction: %v", err)
+		}
+		registerTestTable(t, catalog, tx, tempDir, table.name, table.pk, table.fields)
+		catalog.store.CommitTransaction(tx)
 	}
 
 	// Create new catalog and load
 	tableManager2 := memory.NewTableManager()
 	wal2, _ := log.NewWAL(filepath.Join(tempDir, "wal2.log"), 8192)
 	pageStore2 := memory.NewPageStore(tableManager2, wal2)
+	txRegistry2 := transaction.NewTransactionRegistry(wal2)
 	catalog2 := NewSystemCatalog(pageStore2, tableManager2)
 
 	// Initialize must be called to set up system catalog tables
-	if err := catalog2.Initialize(tempDir); err != nil {
+	tx2, err := txRegistry2.Begin()
+	if err != nil {
+		t.Fatalf("failed to begin transaction: %v", err)
+	}
+	if err := catalog2.Initialize(tx2, tempDir); err != nil {
 		t.Fatalf("Initialize failed: %v", err)
 	}
 
 	// Load user tables from the catalog
-	if err := catalog2.LoadTables(tempDir); err != nil {
+	tx3, err := txRegistry2.Begin()
+	if err != nil {
+		t.Fatalf("failed to begin transaction: %v", err)
+	}
+	if err := catalog2.LoadTables(tx3, tempDir); err != nil {
 		t.Fatalf("LoadTables failed: %v", err)
 	}
 
@@ -337,22 +374,24 @@ func TestSystemCatalog_LoadTables_Multiple(t *testing.T) {
 }
 
 func TestSystemCatalog_GetTableID(t *testing.T) {
-	catalog, tempDir, cleanup := setupTestCatalog(t)
+	catalog, txRegistry, tempDir, cleanup := setupTestCatalog(t)
 	defer cleanup()
 
 	// Register a table
-	tid := primitives.NewTransactionID()
+	tx, err := txRegistry.Begin()
+	if err != nil {
+		t.Fatalf("failed to begin transaction: %v", err)
+	}
 	fields := []FieldMetadata{
 		{Name: "id", Type: types.IntType},
 		{Name: "data", Type: types.StringType},
 	}
 
-	expectedID := registerTestTable(t, catalog, tid, tempDir, "test_table", "id", fields)
-	catalog.store.CommitTransaction(tid)
+	expectedID := registerTestTable(t, catalog, tx, tempDir, "test_table", "id", fields)
+	catalog.store.CommitTransaction(tx)
 
 	// Get table ID from catalog
 	tid2 := primitives.NewTransactionID()
-	defer catalog.store.CommitTransaction(tid2)
 
 	tableID, err := catalog.GetTableID(tid2, "test_table")
 	if err != nil {
@@ -366,11 +405,10 @@ func TestSystemCatalog_GetTableID(t *testing.T) {
 }
 
 func TestSystemCatalog_GetTableID_NotFound(t *testing.T) {
-	catalog, _, cleanup := setupTestCatalog(t)
+	catalog, _, _, cleanup := setupTestCatalog(t)
 	defer cleanup()
 
 	tid := primitives.NewTransactionID()
-	defer catalog.store.CommitTransaction(tid)
 
 	_, err := catalog.GetTableID(tid, "nonexistent_table")
 	if err == nil {
@@ -379,11 +417,14 @@ func TestSystemCatalog_GetTableID_NotFound(t *testing.T) {
 }
 
 func TestSystemCatalog_RegisterTable_WithBoolField(t *testing.T) {
-	catalog, tempDir, cleanup := setupTestCatalog(t)
+	catalog, txRegistry, tempDir, cleanup := setupTestCatalog(t)
 	defer cleanup()
 
-	tid := primitives.NewTransactionID()
-	defer catalog.store.CommitTransaction(tid)
+	tx, err := txRegistry.Begin()
+	if err != nil {
+		t.Fatalf("failed to begin transaction: %v", err)
+	}
+	defer catalog.store.CommitTransaction(tx)
 
 	fields := []FieldMetadata{
 		{Name: "id", Type: types.IntType},
@@ -391,19 +432,28 @@ func TestSystemCatalog_RegisterTable_WithBoolField(t *testing.T) {
 		{Name: "name", Type: types.StringType},
 	}
 
-	tableID := registerTestTable(t, catalog, tid, tempDir, "flags", "id", fields)
+	tableID := registerTestTable(t, catalog, tx, tempDir, "flags", "id", fields)
 
 	// Load in new catalog
 	tableManager2 := memory.NewTableManager()
 	wal2, _ := log.NewWAL(filepath.Join(tempDir, "wal2.log"), 8192)
 	pageStore2 := memory.NewPageStore(tableManager2, wal2)
+	txRegistry2 := transaction.NewTransactionRegistry(wal2)
 	catalog2 := NewSystemCatalog(pageStore2, tableManager2)
 
-	if err := catalog2.Initialize(tempDir); err != nil {
+	tx2, err := txRegistry2.Begin()
+	if err != nil {
+		t.Fatalf("failed to begin transaction: %v", err)
+	}
+	if err := catalog2.Initialize(tx2, tempDir); err != nil {
 		t.Fatalf("Initialize failed: %v", err)
 	}
 
-	if err := catalog2.LoadTables(tempDir); err != nil {
+	tx3, err := txRegistry2.Begin()
+	if err != nil {
+		t.Fatalf("failed to begin transaction: %v", err)
+	}
+	if err := catalog2.LoadTables(tx3, tempDir); err != nil {
 		t.Fatalf("LoadTables failed: %v", err)
 	}
 
@@ -426,21 +476,28 @@ func TestSystemCatalog_RegisterTable_WithBoolField(t *testing.T) {
 }
 
 func TestSystemCatalog_LoadTables_EmptyCatalog(t *testing.T) {
-	catalog, tempDir, cleanup := setupTestCatalog(t)
+	catalog, txRegistry, tempDir, cleanup := setupTestCatalog(t)
 	defer cleanup()
 
 	// Don't register any tables, just try to load
-	err := catalog.LoadTables(tempDir)
+	tx, err := txRegistry.Begin()
+	if err != nil {
+		t.Fatalf("failed to begin transaction: %v", err)
+	}
+	err = catalog.LoadTables(tx, tempDir)
 	if err != nil {
 		t.Errorf("LoadTables should succeed with empty catalog: %v", err)
 	}
 }
 
 func TestSystemCatalog_PrimaryKeyPreserved(t *testing.T) {
-	catalog, tempDir, cleanup := setupTestCatalog(t)
+	catalog, txRegistry, tempDir, cleanup := setupTestCatalog(t)
 	defer cleanup()
 
-	tid := primitives.NewTransactionID()
+	tx, err := txRegistry.Begin()
+	if err != nil {
+		t.Fatalf("failed to begin transaction: %v", err)
+	}
 
 	fields := []FieldMetadata{
 		{Name: "user_id", Type: types.IntType},
@@ -448,20 +505,29 @@ func TestSystemCatalog_PrimaryKeyPreserved(t *testing.T) {
 		{Name: "score", Type: types.IntType},
 	}
 
-	registerTestTable(t, catalog, tid, tempDir, "players", "user_id", fields)
-	catalog.store.CommitTransaction(tid)
+	registerTestTable(t, catalog, tx, tempDir, "players", "user_id", fields)
+	catalog.store.CommitTransaction(tx)
 
 	// Load in new catalog
 	tableManager2 := memory.NewTableManager()
 	wal2, _ := log.NewWAL(filepath.Join(tempDir, "wal2.log"), 8192)
 	pageStore2 := memory.NewPageStore(tableManager2, wal2)
+	txRegistry2 := transaction.NewTransactionRegistry(wal2)
 	catalog2 := NewSystemCatalog(pageStore2, tableManager2)
 
-	if err := catalog2.Initialize(tempDir); err != nil {
+	tx2, err := txRegistry2.Begin()
+	if err != nil {
+		t.Fatalf("failed to begin transaction: %v", err)
+	}
+	if err := catalog2.Initialize(tx2, tempDir); err != nil {
 		t.Fatalf("Initialize failed: %v", err)
 	}
 
-	if err := catalog2.LoadTables(tempDir); err != nil {
+	tx3, err := txRegistry2.Begin()
+	if err != nil {
+		t.Fatalf("failed to begin transaction: %v", err)
+	}
+	if err := catalog2.LoadTables(tx3, tempDir); err != nil {
 		t.Fatalf("LoadTables failed: %v", err)
 	}
 
@@ -475,11 +541,14 @@ func TestSystemCatalog_PrimaryKeyPreserved(t *testing.T) {
 }
 
 func TestSystemCatalog_SequentialTableIDs(t *testing.T) {
-	catalog, tempDir, cleanup := setupTestCatalog(t)
+	catalog, txRegistry, tempDir, cleanup := setupTestCatalog(t)
 	defer cleanup()
 
-	tid := primitives.NewTransactionID()
-	defer catalog.store.CommitTransaction(tid)
+	tx, err := txRegistry.Begin()
+	if err != nil {
+		t.Fatalf("failed to begin transaction: %v", err)
+	}
+	defer catalog.store.CommitTransaction(tx)
 
 	fields := []FieldMetadata{
 		{Name: "id", Type: types.IntType},
@@ -487,7 +556,7 @@ func TestSystemCatalog_SequentialTableIDs(t *testing.T) {
 
 	var ids []int
 	for i := 0; i < 5; i++ {
-		id := registerTestTable(t, catalog, tid, tempDir, "table_"+string(rune('A'+i)), "id", fields)
+		id := registerTestTable(t, catalog, tx, tempDir, "table_"+string(rune('A'+i)), "id", fields)
 		ids = append(ids, id)
 	}
 
