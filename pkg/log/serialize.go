@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"storemy/pkg/concurrency/transaction"
+	"storemy/pkg/primitives"
 	"storemy/pkg/tuple"
 	"time"
 )
@@ -175,7 +176,7 @@ func DeserializeLogRecord(data []byte) (*LogRecord, error) {
 	if err := binary.Read(buf, binary.BigEndian, &prevLSN); err != nil {
 		return nil, fmt.Errorf("failed to read PrevLSN: %w", err)
 	}
-	record.PrevLSN = LSN(prevLSN)
+	record.PrevLSN = primitives.LSN(prevLSN)
 
 	var timestamp uint64
 	if err := binary.Read(buf, binary.BigEndian, &timestamp); err != nil {
@@ -241,7 +242,7 @@ func deserializeCLR(buf *bytes.Reader, record *LogRecord) error {
 	if err := binary.Read(buf, binary.BigEndian, &undoNextLSN); err != nil {
 		return fmt.Errorf("failed to read UndoNextLSN: %w", err)
 	}
-	record.UndoNextLSN = LSN(undoNextLSN)
+	record.UndoNextLSN = primitives.LSN(undoNextLSN)
 
 	afterImage, err := deserializeImage(buf)
 	if err != nil {
