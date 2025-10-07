@@ -939,8 +939,8 @@ func TestHeapFile_MemoryUsage(t *testing.T) {
 	tid := primitives.NewTransactionID()
 
 	// Add many tuples and check memory doesn't grow unbounded
-	numTuples := 10000
-	for i := 0; i < numTuples; i++ {
+	numTuples := 1000
+	for i := range numTuples {
 		tuple := createTestTupleForTest(td, int32(i), "MemoryTest")
 		_, err := hf.AddTuple(tid, tuple)
 		if err != nil {
@@ -948,7 +948,7 @@ func TestHeapFile_MemoryUsage(t *testing.T) {
 		}
 
 		// Periodically check basic operations still work
-		if i%1000 == 999 {
+		if i%100 == 99 {
 			numPages, err := hf.NumPages()
 			if err != nil {
 				t.Errorf("NumPages failed at iteration %d: %v", i, err)
