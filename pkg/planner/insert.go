@@ -3,8 +3,8 @@ package planner
 import (
 	"fmt"
 	"slices"
+	"storemy/pkg/concurrency/transaction"
 	"storemy/pkg/parser/statements"
-	"storemy/pkg/primitives"
 	"storemy/pkg/registry"
 	"storemy/pkg/tuple"
 	"storemy/pkg/types"
@@ -20,9 +20,9 @@ func (d *DMLResult) String() string {
 }
 
 type InsertPlan struct {
-	statement *statements.InsertStatement
-	ctx       *registry.DatabaseContext
-	tid       *primitives.TransactionID
+	statement      *statements.InsertStatement
+	ctx            *registry.DatabaseContext
+	transactionCtx *transaction.TransactionContext
 }
 
 // NewInsertPlan creates a new InsertPlan instance with the provided components.
@@ -30,21 +30,18 @@ type InsertPlan struct {
 // executing INSERT operations within a transactional context.
 func NewInsertPlan(
 	stmt *statements.InsertStatement,
-	tid *primitives.TransactionID,
+	transactionCtx *transaction.TransactionContext,
 	ctx *registry.DatabaseContext) *InsertPlan {
 	return &InsertPlan{
-		statement: stmt,
-		ctx:       ctx,
-		tid:       tid,
+		statement:      stmt,
+		ctx:            ctx,
+		transactionCtx: transactionCtx,
 	}
 }
 
 // Execute performs the INSERT operation by processing the statement and inserting
 // all specified tuples into the target table. It validates the data, creates
 // tuples according to the table schema, and coordinates with the storage layer.
-//
-// Returns a DMLResult containing the number of inserted rows and a success message,
-// or an error if the operation fails at any stage.
 func (p *InsertPlan) Execute() (any, error) {
 	md, err := resolveTableMetadata(p.statement.TableName, p.ctx)
 	if err != nil {
@@ -103,7 +100,7 @@ func (p *InsertPlan) insertTuples(tableID int, tupleDesc *tuple.TupleDescription
 			return 0, err
 		}
 
-		if err := p.ctx.PageStore().InsertTuple(p.tid, tableID, newTuple); err != nil {
+		if err := p.ctx.PageStore().InsertTuple(p.transactionCtx, tableID, newTuple); err != nil {
 			return 0, fmt.Errorf("failed to insert tuple: %v", err)
 		}
 
@@ -117,15 +114,15 @@ func (p *InsertPlan) insertTuples(tableID int, tupleDesc *tuple.TupleDescription
 // number of fields, either from the explicit field list or the complete table schema.
 // This prevents runtime errors during tuple creation.
 func validateValueCount(values []types.Field, tupleDesc *tuple.TupleDescription, fieldMapping []int) error {
-	var expectedCount int
+	var expected int
 	if fieldMapping != nil {
-		expectedCount = len(fieldMapping)
+		expected = len(fieldMapping)
 	} else {
-		expectedCount = tupleDesc.NumFields()
+		expected = tupleDesc.NumFields()
 	}
 
-	if len(values) != expectedCount {
-		return fmt.Errorf("value count mismatch: expected %d, got %d", expectedCount, len(values))
+	if len(values) != expected {
+		return fmt.Errorf("value count mismatch: expected %d, got %d", expected, len(values))
 	}
 
 	return nil
