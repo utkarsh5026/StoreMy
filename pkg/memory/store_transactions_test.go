@@ -98,7 +98,7 @@ func TestPageStore_CommitTransaction_NilTransactionID(t *testing.T) {
 		t.Error("Expected error for nil transaction ID")
 	}
 
-	expectedErr := "transaction ID cannot be nil"
+	expectedErr := "transaction context cannot be nil"
 	if err.Error() != expectedErr {
 		t.Errorf("Expected error %q, got %q", expectedErr, err.Error())
 	}
@@ -336,6 +336,7 @@ func TestPageStore_CommitTransaction_WithGetPageAccess(t *testing.T) {
 	// With TransactionContext, transaction info is tracked in the context itself
 	_ = tid // txInfo is now accessed via tid directly
 	// Transaction context tracks dirty pages automatically
+	tid.MarkPageDirty(pageID)
 
 	err = ps.CommitTransaction(tid)
 	if err != nil {
@@ -384,6 +385,7 @@ func TestPageStore_AbortTransaction_Success(t *testing.T) {
 	// With TransactionContext, transaction info is tracked in the context itself
 	_ = tid // txInfo is now accessed via tid directly
 	// Transaction context tracks dirty pages automatically
+	tid.MarkPageDirty(pageID)
 
 	if page.IsDirty() != tid.ID {
 		t.Error("Page should be dirty before abort")
@@ -411,7 +413,7 @@ func TestPageStore_AbortTransaction_NilTransactionID(t *testing.T) {
 		t.Error("Expected error for nil transaction ID")
 	}
 
-	expectedErr := "transaction ID cannot be nil"
+	expectedErr := "transaction context cannot be nil"
 	if err.Error() != expectedErr {
 		t.Errorf("Expected error %q, got %q", expectedErr, err.Error())
 	}
@@ -668,6 +670,7 @@ func TestPageStore_AbortTransaction_RestoresBeforeImage(t *testing.T) {
 	// With TransactionContext, transaction info is tracked in the context itself
 	_ = tid // txInfo is now accessed via tid directly
 	// Transaction context tracks dirty pages automatically
+	tid.MarkPageDirty(pageID)
 
 	beforeImageData := page.GetBeforeImage().GetPageData()
 	for i, b := range originalData {
@@ -723,6 +726,7 @@ func TestPageStore_AbortTransaction_WithGetPageAccess(t *testing.T) {
 	// With TransactionContext, transaction info is tracked in the context itself
 	_ = tid // txInfo is now accessed via tid directly
 	// Transaction context tracks dirty pages automatically
+	tid.MarkPageDirty(pageID)
 
 	err = ps.AbortTransaction(tid)
 	if err != nil {
@@ -1144,6 +1148,7 @@ func TestPageStore_WAL_AbortLogged(t *testing.T) {
 	// With TransactionContext, transaction info is tracked in the context itself
 	_ = tid // txInfo is now accessed via tid directly
 	// Transaction context tracks dirty pages automatically
+	tid.MarkPageDirty(pageID)
 
 	// Actually log BEGIN to WAL so abort can work
 	err = ps.ensureTransactionBegun(tid)
