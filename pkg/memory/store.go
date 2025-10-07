@@ -12,7 +12,7 @@ import (
 )
 
 const (
-	MaxPageCount = 50
+	MaxPageCount = 1000
 )
 
 type OperationType uint8
