@@ -68,31 +68,29 @@ func CombineTuples(t1, t2 *Tuple) (*Tuple, error) {
 	newTupleDesc := Combine(t1.TupleDesc, t2.TupleDesc)
 	newTuple := NewTuple(newTupleDesc)
 
-	fieldIndex := 0
-	for i := 0; i < t1.TupleDesc.NumFields(); i++ {
-		field, err := t1.GetField(i)
-		if err != nil {
-			return nil, err
-		}
-		if field != nil {
-			if err := newTuple.SetField(fieldIndex, field); err != nil {
-				return nil, err
-			}
-		}
-		fieldIndex++
+	if err := t1.copyFieldsTo(newTuple, 0); err != nil {
+		return nil, err
 	}
 
-	for i := 0; i < t2.TupleDesc.NumFields(); i++ {
-		field, err := t2.GetField(i)
+	if err := t2.copyFieldsTo(newTuple, t1.TupleDesc.NumFields()); err != nil {
+		return nil, err
+	}
+
+	return newTuple, nil
+}
+
+// copyFieldsTo copies all fields from this tuple to target starting at startIndex
+func (t *Tuple) copyFieldsTo(target *Tuple, startIndex int) error {
+	for i := 0; i < t.TupleDesc.NumFields(); i++ {
+		field, err := t.GetField(i)
 		if err != nil {
-			return nil, err
+			return err
 		}
 		if field != nil {
-			if err := newTuple.SetField(fieldIndex, field); err != nil {
-				return nil, err
+			if err := target.SetField(startIndex+i, field); err != nil {
+				return err
 			}
 		}
-		fieldIndex++
 	}
-	return newTuple, nil
+	return nil
 }
