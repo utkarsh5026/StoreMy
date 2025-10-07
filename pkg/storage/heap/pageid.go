@@ -2,7 +2,7 @@ package heap
 
 import (
 	"fmt"
-	"storemy/pkg/tuple"
+	"storemy/pkg/primitives"
 )
 
 // HeapPageID represents a unique identifier for a heap page
@@ -35,7 +35,7 @@ func (hpid *HeapPageID) Serialize() []int {
 }
 
 // Equals checks if two heap page IDs are equal
-func (hpid *HeapPageID) Equals(other tuple.PageID) bool {
+func (hpid *HeapPageID) Equals(other primitives.PageID) bool {
 	otherHeap, ok := other.(*HeapPageID)
 	if !ok {
 		return false

@@ -5,7 +5,6 @@ import (
 	"encoding/binary"
 	"fmt"
 	"storemy/pkg/primitives"
-	"storemy/pkg/tuple"
 	"testing"
 	"time"
 )
@@ -28,7 +27,7 @@ func (m *MockPageID) Serialize() []int {
 	return []int{m.tableID, m.pageNo}
 }
 
-func (m *MockPageID) Equals(other tuple.PageID) bool {
+func (m *MockPageID) Equals(other primitives.PageID) bool {
 	return m.tableID == other.GetTableID() && m.pageNo == other.PageNo()
 }
 

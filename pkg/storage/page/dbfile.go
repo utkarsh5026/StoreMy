@@ -13,7 +13,7 @@ type DbFile interface {
 	// ReadPage retrieves a specific page from the database file by its page ID.
 	// The page contains multiple tuples and metadata about the stored data.
 	// Returns the requested page or an error if the page cannot be read.
-	ReadPage(pid tuple.PageID) (Page, error)
+	ReadPage(pid primitives.PageID) (Page, error)
 
 	// WritePage persists a page to the database file.
 	// The page will be written to its designated location based on its page ID.

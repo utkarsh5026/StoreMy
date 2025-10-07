@@ -3,7 +3,6 @@ package lock
 import (
 	"storemy/pkg/primitives"
 	"storemy/pkg/storage/heap"
-	"storemy/pkg/tuple"
 	"sync"
 	"testing"
 )
@@ -178,7 +177,7 @@ func TestWaitQueueAddMultiplePages(t *testing.T) {
 	}
 
 	// Verify each page has the transaction in its queue
-	for _, pid := range []tuple.PageID{pid1, pid2, pid3} {
+	for _, pid := range []primitives.PageID{pid1, pid2, pid3} {
 		requests := wq.GetRequests(pid)
 		if len(requests) != 1 {
 			t.Errorf("Expected 1 request for page %v, got %d", pid, len(requests))
@@ -313,7 +312,7 @@ func TestWaitQueueRemoveTransaction(t *testing.T) {
 	}
 
 	// Verify transaction removed from all page queues
-	for _, pid := range []tuple.PageID{pid1, pid2, pid3} {
+	for _, pid := range []primitives.PageID{pid1, pid2, pid3} {
 		requests := wq.GetRequests(pid)
 		for _, req := range requests {
 			if req.TID == tid {
@@ -532,7 +531,7 @@ func TestWaitQueueStressTest(t *testing.T) {
 	numPages := 10
 
 	var transactions []*primitives.TransactionID
-	var pages []tuple.PageID
+	var pages []primitives.PageID
 
 	// Create transactions and pages
 	for i := 0; i < numTransactions; i++ {

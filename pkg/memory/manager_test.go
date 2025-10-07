@@ -33,7 +33,7 @@ func newMockDbFile(id int, fieldTypes []types.Type, fieldNames []string) *mockDb
 	}
 }
 
-func (m *mockDbFile) ReadPage(pid tuple.PageID) (page.Page, error) {
+func (m *mockDbFile) ReadPage(pid primitives.PageID) (page.Page, error) {
 	return nil, nil
 }
 

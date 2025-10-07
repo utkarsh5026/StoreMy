@@ -3,7 +3,6 @@ package lock
 import (
 	"fmt"
 	"storemy/pkg/primitives"
-	"storemy/pkg/tuple"
 	"sync"
 	"time"
 )
@@ -49,7 +48,7 @@ func NewLockManager() *LockManager {
 //   - Transaction ID is nil
 //   - Deadlock detected
 //   - Timeout waiting for lock (after 1000 attempts)
-func (lm *LockManager) LockPage(tid *primitives.TransactionID, pid tuple.PageID, exclusive bool) error {
+func (lm *LockManager) LockPage(tid *primitives.TransactionID, pid primitives.PageID, exclusive bool) error {
 	if tid == nil {
 		return fmt.Errorf("transaction ID cannot be nil")
 	}
@@ -86,7 +85,7 @@ func (lm *LockManager) LockPage(tid *primitives.TransactionID, pid tuple.PageID,
 //
 // Returns:
 //   - error: nil on success, error on deadlock or timeout
-func (lm *LockManager) attemptToAcquireLock(tid *primitives.TransactionID, pid tuple.PageID, lockType LockType) error {
+func (lm *LockManager) attemptToAcquireLock(tid *primitives.TransactionID, pid primitives.PageID, lockType LockType) error {
 	const maxRetryDelay = 50 * time.Millisecond
 	maxRetries := 100
 	retryDelay := time.Millisecond
@@ -138,7 +137,7 @@ func (lm *LockManager) attemptToAcquireLock(tid *primitives.TransactionID, pid t
 // Dependency rules:
 // - Exclusive lock request creates dependency on all lock holders
 // - Shared lock request creates dependency only on exclusive lock holders
-func (lm *LockManager) updateDependencies(tid *primitives.TransactionID, pid tuple.PageID, lockType LockType) {
+func (lm *LockManager) updateDependencies(tid *primitives.TransactionID, pid primitives.PageID, lockType LockType) {
 	locks := lm.lockTable.GetPageLocks(pid)
 
 	for _, lock := range locks {
@@ -169,7 +168,7 @@ func (lm *LockManager) calculateRetryDelay(attemptNumber int, baseDelay, maxDela
 
 // UnlockPage releases a specific lock held by a transaction on a page.
 // Processes the wait queue after releasing the lock to grant pending requests.
-func (lm *LockManager) UnlockPage(tid *primitives.TransactionID, pid tuple.PageID) {
+func (lm *LockManager) UnlockPage(tid *primitives.TransactionID, pid primitives.PageID) {
 	lm.mutex.Lock()
 	defer lm.mutex.Unlock()
 
@@ -180,7 +179,7 @@ func (lm *LockManager) UnlockPage(tid *primitives.TransactionID, pid tuple.PageI
 
 // processWaitQueue processes pending lock requests for a page after a lock is released.
 // Grants locks to waiting transactions in FIFO order when possible.
-func (lm *LockManager) processWaitQueue(pid tuple.PageID) {
+func (lm *LockManager) processWaitQueue(pid primitives.PageID) {
 	requests := lm.waitQueue.GetRequests(pid)
 	if len(requests) == 0 {
 		return
@@ -206,7 +205,7 @@ func (lm *LockManager) processWaitQueue(pid tuple.PageID) {
 }
 
 // IsPageLocked checks if any locks are currently held on a page.
-func (lm *LockManager) IsPageLocked(pid tuple.PageID) bool {
+func (lm *LockManager) IsPageLocked(pid primitives.PageID) bool {
 	lm.mutex.RLock()
 	defer lm.mutex.RUnlock()
 

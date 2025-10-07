@@ -1,15 +1,18 @@
 package tuple
 
-import "fmt"
+import (
+	"fmt"
+	"storemy/pkg/primitives"
+)
 
 // TupleRecordID represents a reference to a specific tuple on a specific page
 type TupleRecordID struct {
-	PageID   PageID // The page containing this tuple
-	TupleNum int    // The tuple number within the page
+	PageID   primitives.PageID // The page containing this tuple
+	TupleNum int               // The tuple number within the page
 }
 
 // NewTupleRecordID creates a new TupleRecordID
-func NewTupleRecordID(pageID PageID, tupleNum int) *TupleRecordID {
+func NewTupleRecordID(pageID primitives.PageID, tupleNum int) *TupleRecordID {
 	return &TupleRecordID{
 		PageID:   pageID,
 		TupleNum: tupleNum,

@@ -2,8 +2,8 @@ package memory
 
 import (
 	"fmt"
+	"storemy/pkg/primitives"
 	"storemy/pkg/storage/heap"
-	"storemy/pkg/tuple"
 	"sync"
 	"testing"
 )
@@ -167,7 +167,7 @@ func TestLRUPageCache_Clear(t *testing.T) {
 	cache := NewLRUPageCache(5)
 
 	// Store page IDs so we can reuse them
-	pids := make([]tuple.PageID, 3)
+	pids := make([]primitives.PageID, 3)
 
 	// Add multiple pages
 	for i := 1; i <= 3; i++ {
@@ -205,7 +205,7 @@ func TestLRUPageCache_Size(t *testing.T) {
 	}
 
 	// Store page IDs so we can reuse them
-	pids := make([]tuple.PageID, 3)
+	pids := make([]primitives.PageID, 3)
 
 	// Add pages and verify size
 	for i := 1; i <= 3; i++ {
@@ -403,7 +403,7 @@ func TestLRUPageCache_ConcurrentRemove(t *testing.T) {
 	cache := NewLRUPageCache(100)
 
 	// Store page IDs so we can reuse them
-	pids := make([]tuple.PageID, 50)
+	pids := make([]primitives.PageID, 50)
 
 	// Pre-populate cache
 	for i := 0; i < 50; i++ {
@@ -471,7 +471,7 @@ func TestLRUPageCache_MultipleTablePages(t *testing.T) {
 	cache := NewLRUPageCache(10)
 
 	// Store page IDs so we can reuse them
-	pids := make(map[string]tuple.PageID)
+	pids := make(map[string]primitives.PageID)
 
 	// Add pages from different tables
 	for table := 1; table <= 3; table++ {

@@ -60,7 +60,7 @@ func (hp *HeapPage) GetNumEmptySlots() int {
 }
 
 // GetID returns the PageID associated with this page
-func (hp *HeapPage) GetID() tuple.PageID {
+func (hp *HeapPage) GetID() primitives.PageID {
 	return hp.pageID
 }
 

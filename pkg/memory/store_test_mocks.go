@@ -16,7 +16,7 @@ import (
 
 // mockPage implements page.Page interface for testing
 type mockPage struct {
-	id        tuple.PageID
+	id        primitives.PageID
 	dirty     bool
 	dirtyTid  *primitives.TransactionID
 	data      []byte
@@ -24,14 +24,14 @@ type mockPage struct {
 	mutex     sync.RWMutex
 }
 
-func newMockPage(pageID tuple.PageID) *mockPage {
+func newMockPage(pageID primitives.PageID) *mockPage {
 	return &mockPage{
 		id:   pageID,
 		data: make([]byte, page.PageSize),
 	}
 }
 
-func (m *mockPage) GetID() tuple.PageID {
+func (m *mockPage) GetID() primitives.PageID {
 	return m.id
 }
 
@@ -84,7 +84,7 @@ func (m *mockPage) SetBeforeImage() {
 type mockDbFileForPageStore struct {
 	id        int
 	tupleDesc *tuple.TupleDescription
-	pages     map[tuple.PageID]*mockPage
+	pages     map[primitives.PageID]*mockPage
 	mutex     sync.RWMutex
 }
 
@@ -96,11 +96,11 @@ func newMockDbFileForPageStore(id int, fieldTypes []types.Type, fieldNames []str
 	return &mockDbFileForPageStore{
 		id:        id,
 		tupleDesc: td,
-		pages:     make(map[tuple.PageID]*mockPage),
+		pages:     make(map[primitives.PageID]*mockPage),
 	}
 }
 
-func (m *mockDbFileForPageStore) ReadPage(pid tuple.PageID) (page.Page, error) {
+func (m *mockDbFileForPageStore) ReadPage(pid primitives.PageID) (page.Page, error) {
 	m.mutex.RLock()
 	defer m.mutex.RUnlock()
 

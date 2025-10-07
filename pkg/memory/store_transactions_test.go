@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"storemy/pkg/concurrency/transaction"
 	"storemy/pkg/log"
+	"storemy/pkg/primitives"
 	"storemy/pkg/storage/heap"
 	"storemy/pkg/tuple"
 	"storemy/pkg/types"
@@ -61,7 +62,7 @@ func TestPageStore_CommitTransaction_Success(t *testing.T) {
 		t.Fatalf("Expected 1 page in cache, got %d", ps.cache.Size())
 	}
 
-	var pageID tuple.PageID
+	var pageID primitives.PageID
 	for _, pid := range ps.cache.GetAll() {
 		pageID = pid
 		break
@@ -518,7 +519,7 @@ func TestPageStore_AbortTransaction_NoBeforeImage(t *testing.T) {
 		t.Fatalf("Failed to insert tuple: %v", err)
 	}
 
-	var pageID tuple.PageID
+	var pageID primitives.PageID
 	for _, pid := range ps.cache.GetAll() {
 		pageID = pid
 		break

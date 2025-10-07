@@ -4,13 +4,12 @@ import (
 	"path/filepath"
 	"storemy/pkg/log"
 	"storemy/pkg/primitives"
-	"storemy/pkg/tuple"
 	"sync"
 	"testing"
 	"time"
 )
 
-// mockPageID implements tuple.PageID for testing
+// mockPageID implements primitives.PageID for testing
 type mockPageID struct {
 	tableID int
 	pageNo  int
@@ -21,7 +20,7 @@ func (m *mockPageID) PageNo() int      { return m.pageNo }
 func (m *mockPageID) Serialize() []int { return []int{m.tableID, m.pageNo} }
 func (m *mockPageID) String() string   { return "mockPageID" }
 func (m *mockPageID) HashCode() int    { return m.tableID*31 + m.pageNo }
-func (m *mockPageID) Equals(other tuple.PageID) bool {
+func (m *mockPageID) Equals(other primitives.PageID) bool {
 	if other == nil {
 		return false
 	}

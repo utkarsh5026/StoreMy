@@ -57,7 +57,7 @@ func (hf *HeapFile) NumPages() (int, error) {
 }
 
 // ReadPage reads the specified page from disk
-func (hf *HeapFile) ReadPage(pageID tuple.PageID) (page.Page, error) {
+func (hf *HeapFile) ReadPage(pageID primitives.PageID) (page.Page, error) {
 	heapPageID, err := hf.validateAndConvertPageID(pageID)
 	if err != nil {
 		return nil, err
@@ -74,7 +74,7 @@ func (hf *HeapFile) ReadPage(pageID tuple.PageID) (page.Page, error) {
 }
 
 // validateAndConvertPageID validates and converts a PageID to HeapPageID
-func (hf *HeapFile) validateAndConvertPageID(pageID tuple.PageID) (*HeapPageID, error) {
+func (hf *HeapFile) validateAndConvertPageID(pageID primitives.PageID) (*HeapPageID, error) {
 	if pageID == nil {
 		return nil, fmt.Errorf("page ID cannot be nil")
 	}

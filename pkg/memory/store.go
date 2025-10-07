@@ -64,7 +64,7 @@ func NewPageStore(tm *TableManager, wal *log.WAL) *PageStore {
 
 // GetPage retrieves a page with specified permissions for a transaction
 // This is the main entry point for all page access in the database
-func (p *PageStore) GetPage(ctx *transaction.TransactionContext, pid tuple.PageID, perm transaction.Permissions) (page.Page, error) {
+func (p *PageStore) GetPage(ctx *transaction.TransactionContext, pid primitives.PageID, perm transaction.Permissions) (page.Page, error) {
 	if ctx == nil {
 		return nil, fmt.Errorf("transaction context cannot be nil")
 	}
@@ -245,7 +245,7 @@ func (p *PageStore) UpdateTuple(ctx *transaction.TransactionContext, oldTuple *t
 // with the underlying database files. Pages are unmarked as dirty after successful writes.
 func (p *PageStore) FlushAllPages() error {
 	p.mutex.RLock()
-	pids := make([]tuple.PageID, 0, p.cache.Size())
+	pids := make([]primitives.PageID, 0, p.cache.Size())
 	pids = append(pids, p.cache.GetAll()...)
 	p.mutex.RUnlock()
 
@@ -305,7 +305,7 @@ func (p *PageStore) finalizeTransaction(ctx *transaction.TransactionContext, ope
 	return nil
 }
 
-func (p *PageStore) handleCommit(dirtyPageIDs []tuple.PageID) error {
+func (p *PageStore) handleCommit(dirtyPageIDs []primitives.PageID) error {
 	p.mutex.Lock()
 	for _, pid := range dirtyPageIDs {
 		if page, exists := p.cache.Get(pid); exists {
@@ -323,7 +323,7 @@ func (p *PageStore) handleCommit(dirtyPageIDs []tuple.PageID) error {
 	return nil
 }
 
-func (p *PageStore) handleAbort(dirtyPageIDs []tuple.PageID) error {
+func (p *PageStore) handleAbort(dirtyPageIDs []primitives.PageID) error {
 	p.mutex.Lock()
 	defer p.mutex.Unlock()
 
@@ -347,7 +347,7 @@ func (p *PageStore) handleAbort(dirtyPageIDs []tuple.PageID) error {
 // The page is unmarked as dirty after a successful write operation.
 //
 // Returns an error if the page write fails, or nil if the page doesn't exist or isn't dirty.
-func (p *PageStore) flushPage(pid tuple.PageID) error {
+func (p *PageStore) flushPage(pid primitives.PageID) error {
 	p.mutex.RLock()
 	page, exists := p.cache.Get(pid)
 	p.mutex.RUnlock()
@@ -402,7 +402,7 @@ func (p *PageStore) Close() error {
 	return nil
 }
 
-func (p *PageStore) logOperation(operation OperationType, tid *primitives.TransactionID, pageID tuple.PageID, data []byte) error {
+func (p *PageStore) logOperation(operation OperationType, tid *primitives.TransactionID, pageID primitives.PageID, data []byte) error {
 	var err error
 	switch operation {
 	case InsertOperation:

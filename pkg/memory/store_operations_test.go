@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"storemy/pkg/concurrency/transaction"
 	"storemy/pkg/log"
+	"storemy/pkg/primitives"
 	"storemy/pkg/storage/heap"
 	"storemy/pkg/tuple"
 	"storemy/pkg/types"
@@ -1496,7 +1497,7 @@ func TestPageStore_FlushAllPages_MixedDirtyAndCleanPages(t *testing.T) {
 	}
 
 	// Manually mark some pages as clean
-	pageIDs := make([]tuple.PageID, 0, ps.cache.Size())
+	pageIDs := make([]primitives.PageID, 0, ps.cache.Size())
 	for _, pid := range ps.cache.GetAll() {
 		pageIDs = append(pageIDs, pid)
 	}

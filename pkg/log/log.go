@@ -2,7 +2,6 @@ package log
 
 import (
 	"storemy/pkg/primitives"
-	"storemy/pkg/tuple"
 	"time"
 )
 
@@ -31,9 +30,9 @@ type LogRecord struct {
 	TID     *primitives.TransactionID
 	PrevLSN primitives.LSN
 
-	PageID      tuple.PageID // Affected page
-	BeforeImage []byte       // Page state before modification (for UNDO)
-	AfterImage  []byte       // Page state after modification (for REDO)
+	PageID      primitives.PageID // Affected page
+	BeforeImage []byte            // Page state before modification (for UNDO)
+	AfterImage  []byte            // Page state after modification (for REDO)
 
 	UndoNextLSN primitives.LSN // Next record to undo (for CLR records)
 	Timestamp   time.Time
@@ -46,7 +45,7 @@ type TransactionLogInfo struct {
 	UndoNextLSN primitives.LSN
 }
 
-func NewLogRecord(logType LogRecordType, tid *primitives.TransactionID, pageId tuple.PageID, beforeImage, afterImage []byte, prevLSN primitives.LSN) *LogRecord {
+func NewLogRecord(logType LogRecordType, tid *primitives.TransactionID, pageId primitives.PageID, beforeImage, afterImage []byte, prevLSN primitives.LSN) *LogRecord {
 	return &LogRecord{
 		Type:        logType,
 		TID:         tid,

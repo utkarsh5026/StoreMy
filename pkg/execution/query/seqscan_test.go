@@ -97,7 +97,7 @@ func newMockDbFile(id int, td *tuple.TupleDescription, tuples []*tuple.Tuple) *m
 	}
 }
 
-func (m *mockDbFile) ReadPage(pid tuple.PageID) (page.Page, error) {
+func (m *mockDbFile) ReadPage(pid primitives.PageID) (page.Page, error) {
 	return nil, fmt.Errorf("not implemented")
 }
 

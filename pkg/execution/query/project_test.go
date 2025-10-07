@@ -2,6 +2,7 @@ package query
 
 import (
 	"fmt"
+	"storemy/pkg/primitives"
 	"storemy/pkg/tuple"
 	"storemy/pkg/types"
 	"testing"
@@ -16,12 +17,12 @@ type mockPageID struct {
 	pageID int
 }
 
-func (m *mockPageID) GetTableID() int                { return 0 }
-func (m *mockPageID) PageNo() int                    { return m.pageID }
-func (m *mockPageID) Serialize() []int               { return []int{m.pageID} }
-func (m *mockPageID) Equals(other tuple.PageID) bool { return other.PageNo() == m.pageID }
-func (m *mockPageID) String() string                 { return fmt.Sprintf("Page(%d)", m.pageID) }
-func (m *mockPageID) HashCode() int                  { return m.pageID }
+func (m *mockPageID) GetTableID() int                     { return 0 }
+func (m *mockPageID) PageNo() int                         { return m.pageID }
+func (m *mockPageID) Serialize() []int                    { return []int{m.pageID} }
+func (m *mockPageID) Equals(other primitives.PageID) bool { return other.PageNo() == m.pageID }
+func (m *mockPageID) String() string                      { return fmt.Sprintf("Page(%d)", m.pageID) }
+func (m *mockPageID) HashCode() int                       { return m.pageID }
 
 func mustCreateProjectTupleDesc() *tuple.TupleDescription {
 	td, err := tuple.NewTupleDesc(

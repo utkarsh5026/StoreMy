@@ -6,7 +6,6 @@ import (
 	"slices"
 	"storemy/pkg/log"
 	"storemy/pkg/primitives"
-	"storemy/pkg/tuple"
 	"sync"
 	"time"
 )
@@ -71,9 +70,9 @@ type TransactionContext struct {
 
 	// Page access tracking
 	// Maps PageID to the permission level requested (ReadOnly or ReadWrite)
-	lockedPages map[tuple.PageID]Permissions
+	lockedPages map[primitives.PageID]Permissions
 	// Set of pages this transaction has modified
-	dirtyPages map[tuple.PageID]bool
+	dirtyPages map[primitives.PageID]bool
 
 	// Write-Ahead Logging state
 	// First log record written by this transaction
@@ -87,7 +86,7 @@ type TransactionContext struct {
 
 	// Deadlock detection
 	// Pages this transaction is currently waiting to acquire
-	waitingFor []tuple.PageID
+	waitingFor []primitives.PageID
 
 	// Statistics
 	pagesRead     int
@@ -102,9 +101,9 @@ func NewTransactionContext(tid *primitives.TransactionID) *TransactionContext {
 		ID:          tid,
 		status:      TxActive,
 		startTime:   time.Now(),
-		lockedPages: make(map[tuple.PageID]Permissions),
-		dirtyPages:  make(map[tuple.PageID]bool),
-		waitingFor:  make([]tuple.PageID, 0),
+		lockedPages: make(map[primitives.PageID]Permissions),
+		dirtyPages:  make(map[primitives.PageID]bool),
+		waitingFor:  make([]primitives.PageID, 0),
 		firstLSN:    0,
 		lastLSN:     0,
 		undoNextLSN: 0,
@@ -136,7 +135,7 @@ func (tc *TransactionContext) SetStatus(status TransactionStatus) {
 }
 
 // RecordPageAccess records that this transaction has accessed a page
-func (tc *TransactionContext) RecordPageAccess(pid tuple.PageID, perm Permissions) {
+func (tc *TransactionContext) RecordPageAccess(pid primitives.PageID, perm Permissions) {
 	tc.mutex.Lock()
 	defer tc.mutex.Unlock()
 
@@ -153,7 +152,7 @@ func (tc *TransactionContext) RecordPageAccess(pid tuple.PageID, perm Permission
 }
 
 // MarkPageDirty marks a page as dirty (modified) by this transaction
-func (tc *TransactionContext) MarkPageDirty(pid tuple.PageID) {
+func (tc *TransactionContext) MarkPageDirty(pid primitives.PageID) {
 	tc.mutex.Lock()
 	defer tc.mutex.Unlock()
 
@@ -164,32 +163,32 @@ func (tc *TransactionContext) MarkPageDirty(pid tuple.PageID) {
 }
 
 // GetDirtyPages returns a copy of all dirty pages
-func (tc *TransactionContext) GetDirtyPages() []tuple.PageID {
+func (tc *TransactionContext) GetDirtyPages() []primitives.PageID {
 	tc.mutex.RLock()
 	defer tc.mutex.RUnlock()
 	return slices.Collect(maps.Keys(tc.dirtyPages))
 }
 
 // GetLockedPages returns a copy of all locked pages
-func (tc *TransactionContext) GetLockedPages() []tuple.PageID {
+func (tc *TransactionContext) GetLockedPages() []primitives.PageID {
 	tc.mutex.RLock()
 	defer tc.mutex.RUnlock()
 	return slices.Collect(maps.Keys(tc.lockedPages))
 }
 
 // AddWaitingFor records that this transaction is waiting for a page
-func (tc *TransactionContext) AddWaitingFor(pid tuple.PageID) {
+func (tc *TransactionContext) AddWaitingFor(pid primitives.PageID) {
 	tc.mutex.Lock()
 	defer tc.mutex.Unlock()
 	tc.waitingFor = append(tc.waitingFor, pid)
 }
 
 // RemoveWaitingFor removes a page from the waiting list
-func (tc *TransactionContext) RemoveWaitingFor(pid tuple.PageID) {
+func (tc *TransactionContext) RemoveWaitingFor(pid primitives.PageID) {
 	tc.mutex.Lock()
 	defer tc.mutex.Unlock()
 
-	filtered := make([]tuple.PageID, 0, len(tc.waitingFor))
+	filtered := make([]primitives.PageID, 0, len(tc.waitingFor))
 	for _, p := range tc.waitingFor {
 		if !p.Equals(pid) {
 			filtered = append(filtered, p)
@@ -198,11 +197,11 @@ func (tc *TransactionContext) RemoveWaitingFor(pid tuple.PageID) {
 	tc.waitingFor = filtered
 }
 
-func (tc *TransactionContext) GetWaitingFor() []tuple.PageID {
+func (tc *TransactionContext) GetWaitingFor() []primitives.PageID {
 	tc.mutex.RLock()
 	defer tc.mutex.RUnlock()
 
-	waiting := make([]tuple.PageID, len(tc.waitingFor))
+	waiting := make([]primitives.PageID, len(tc.waitingFor))
 	copy(waiting, tc.waitingFor)
 	return waiting
 }
@@ -275,7 +274,7 @@ func (tc *TransactionContext) RecordTupleDelete() {
 	tc.tuplesDeleted++
 }
 
-func (tc *TransactionContext) GetPagePermission(pageId tuple.PageID) (perm Permissions, exists bool) {
+func (tc *TransactionContext) GetPagePermission(pageId primitives.PageID) (perm Permissions, exists bool) {
 	tc.mutex.RLock()
 	defer tc.mutex.RUnlock()
 	perm, exists = tc.lockedPages[pageId]

@@ -2,7 +2,6 @@ package lock
 
 import (
 	"storemy/pkg/primitives"
-	"storemy/pkg/tuple"
 )
 
 type LockGrantor struct {
@@ -21,7 +20,7 @@ func NewLockGrantor(lockTable *LockTable, waitQueue *WaitQueue, depGraph *Depend
 }
 
 // CanGrantImmediately determines if a lock can be granted without waiting.
-func (lg *LockGrantor) CanGrantImmediately(tid *primitives.TransactionID, pid tuple.PageID, lockType LockType) bool {
+func (lg *LockGrantor) CanGrantImmediately(tid *primitives.TransactionID, pid primitives.PageID, lockType LockType) bool {
 	locks := lg.lockTable.GetPageLocks(pid)
 	if len(locks) == 0 {
 		return true
@@ -45,13 +44,13 @@ func (lg *LockGrantor) CanGrantImmediately(tid *primitives.TransactionID, pid tu
 }
 
 // GrantLock grants a lock to a primitives.
-func (lg *LockGrantor) GrantLock(tid *primitives.TransactionID, pid tuple.PageID, lockType LockType) {
+func (lg *LockGrantor) GrantLock(tid *primitives.TransactionID, pid primitives.PageID, lockType LockType) {
 	lg.lockTable.AddLock(tid, pid, lockType)
 	lg.waitQueue.Remove(tid, pid)
 }
 
 // CanUpgradeLock checks if a lock can be upgraded from shared to exclusive.
-func (lg *LockGrantor) CanUpgradeLock(tid *primitives.TransactionID, pid tuple.PageID) bool {
+func (lg *LockGrantor) CanUpgradeLock(tid *primitives.TransactionID, pid primitives.PageID) bool {
 	if !lg.lockTable.HasLockType(tid, pid, SharedLock) {
 		return false
 	}

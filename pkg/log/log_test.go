@@ -2,12 +2,11 @@ package log
 
 import (
 	"storemy/pkg/primitives"
-	"storemy/pkg/tuple"
 	"testing"
 	"time"
 )
 
-// mockPageIDForLog implements tuple.PageID for testing
+// mockPageIDForLog implements primitives.PageID for testing
 type mockPageIDForLog struct {
 	tableID int
 	pageNo  int
@@ -21,7 +20,7 @@ func (m *mockPageIDForLog) PageNo() int {
 	return m.pageNo
 }
 
-func (m *mockPageIDForLog) Equals(other tuple.PageID) bool {
+func (m *mockPageIDForLog) Equals(other primitives.PageID) bool {
 	return m.GetTableID() == other.GetTableID() && m.PageNo() == other.PageNo()
 }
 

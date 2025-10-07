@@ -5,7 +5,6 @@ import (
 	"os"
 	"path/filepath"
 	"storemy/pkg/primitives"
-	"storemy/pkg/tuple"
 	"testing"
 )
 
@@ -27,7 +26,7 @@ func (m *mockPageID) Serialize() []int {
 	return []int{m.tableID, m.pageNo}
 }
 
-func (m *mockPageID) Equals(other tuple.PageID) bool {
+func (m *mockPageID) Equals(other primitives.PageID) bool {
 	if otherMock, ok := other.(*mockPageID); ok {
 		return m.tableID == otherMock.tableID && m.pageNo == otherMock.pageNo
 	}

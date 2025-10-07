@@ -1,6 +1,7 @@
 package tuple
 
 import (
+	"storemy/pkg/primitives"
 	"storemy/pkg/types"
 	"testing"
 )
@@ -471,7 +472,7 @@ func (m *mockPageID) Serialize() []int {
 	return []int{m.tableID, m.pageNo}
 }
 
-func (m *mockPageID) Equals(other PageID) bool {
+func (m *mockPageID) Equals(other primitives.PageID) bool {
 	if other == nil {
 		return false
 	}

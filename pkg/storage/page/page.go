@@ -2,7 +2,6 @@ package page
 
 import (
 	"storemy/pkg/primitives"
-	"storemy/pkg/tuple"
 )
 
 const (
@@ -14,7 +13,7 @@ const (
 // Pages may be "dirty", indicating they have been modified since last written to disk
 type Page interface {
 	// GetID returns the ID of this page
-	GetID() tuple.PageID
+	GetID() primitives.PageID
 
 	// IsDirty returns the transaction ID that last dirtied this page, or nil if clean
 	IsDirty() *primitives.TransactionID

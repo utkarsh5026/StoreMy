@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"io"
 	"storemy/pkg/primitives"
-	"storemy/pkg/tuple"
 	"time"
 )
 
@@ -254,7 +253,7 @@ func deserializeCLR(buf *bytes.Reader, record *LogRecord) error {
 
 // deserializePageID deserializes a PageID from the buffer.
 // PageID is serialized as two uint32 values: tableID and pageNo.
-func deserializePageID(buf *bytes.Reader) (tuple.PageID, error) {
+func deserializePageID(buf *bytes.Reader) (primitives.PageID, error) {
 	var tableID, pageNo uint32
 
 	if err := binary.Read(buf, binary.BigEndian, &tableID); err != nil {
@@ -288,7 +287,7 @@ func (p *pageIDImpl) Serialize() []int {
 	return []int{p.tableID, p.pageNo}
 }
 
-func (p *pageIDImpl) Equals(other tuple.PageID) bool {
+func (p *pageIDImpl) Equals(other primitives.PageID) bool {
 	if other == nil {
 		return false
 	}

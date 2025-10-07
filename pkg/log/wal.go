@@ -6,7 +6,6 @@ import (
 	"maps"
 	"os"
 	"storemy/pkg/primitives"
-	"storemy/pkg/tuple"
 	"sync"
 )
 
@@ -18,7 +17,7 @@ const (
 type WAL struct {
 	file       *os.File
 	activeTxns map[*primitives.TransactionID]*TransactionLogInfo
-	dirtyPages map[tuple.PageID]primitives.LSN
+	dirtyPages map[primitives.PageID]primitives.LSN
 	mutex      sync.RWMutex
 	flushCond  *sync.Cond
 	writer     *LogWriter
@@ -43,7 +42,7 @@ func NewWAL(logPath string, bufferSize int) (*WAL, error) {
 		file:       file,
 		writer:     writer,
 		activeTxns: make(map[*primitives.TransactionID]*TransactionLogInfo),
-		dirtyPages: make(map[tuple.PageID]primitives.LSN),
+		dirtyPages: make(map[primitives.PageID]primitives.LSN),
 	}
 
 	w.flushCond = sync.NewCond(&w.mutex)
@@ -136,31 +135,31 @@ func (w *WAL) Close() error {
 
 // LogUpdate logs a page update with before and after images
 // This is called BEFORE the page is actually modified in memory
-func (w *WAL) LogUpdate(tid *primitives.TransactionID, pageID tuple.PageID, beforeImage, afterImage []byte) (primitives.LSN, error) {
+func (w *WAL) LogUpdate(tid *primitives.TransactionID, pageID primitives.PageID, beforeImage, afterImage []byte) (primitives.LSN, error) {
 	return w.logDataOperation(UpdateRecord, tid, pageID, beforeImage, afterImage)
 }
 
 // LogInsert logs a tuple insertion
 // Only needs after image - there's nothing to undo to (tuple didn't exist)
 // During recovery, we REDO the insert by applying the after image
-func (w *WAL) LogInsert(tid *primitives.TransactionID, pageID tuple.PageID, afterImage []byte) (primitives.LSN, error) {
+func (w *WAL) LogInsert(tid *primitives.TransactionID, pageID primitives.PageID, afterImage []byte) (primitives.LSN, error) {
 	return w.logDataOperation(InsertRecord, tid, pageID, nil, afterImage)
 }
 
 // LogDelete logs a tuple deletion
 // Only needs before image - this is what we restore during UNDO
 // During recovery, REDO means "ensure tuple is deleted" (no-op if already gone)
-func (w *WAL) LogDelete(tid *primitives.TransactionID, pageID tuple.PageID, beforeImage []byte) (primitives.LSN, error) {
+func (w *WAL) LogDelete(tid *primitives.TransactionID, pageID primitives.PageID, beforeImage []byte) (primitives.LSN, error) {
 	return w.logDataOperation(DeleteRecord, tid, pageID, beforeImage, nil)
 }
 
 // GetDirtyPages returns a copy of the dirty page table
 // Used during checkpointing
-func (w *WAL) GetDirtyPages() map[tuple.PageID]primitives.LSN {
+func (w *WAL) GetDirtyPages() map[primitives.PageID]primitives.LSN {
 	w.mutex.RLock()
 	defer w.mutex.RUnlock()
 
-	pages := make(map[tuple.PageID]primitives.LSN, len(w.dirtyPages))
+	pages := make(map[primitives.PageID]primitives.LSN, len(w.dirtyPages))
 	maps.Copy(pages, w.dirtyPages)
 	return pages
 }
@@ -219,7 +218,7 @@ func (w *WAL) getTransactionInfo(tid *primitives.TransactionID) (*TransactionLog
 }
 
 // logDataOperation is a helper for logging data operations (insert, update, delete)
-func (w *WAL) logDataOperation(recordType LogRecordType, tid *primitives.TransactionID, pageID tuple.PageID, beforeImage, afterImage []byte) (primitives.LSN, error) {
+func (w *WAL) logDataOperation(recordType LogRecordType, tid *primitives.TransactionID, pageID primitives.PageID, beforeImage, afterImage []byte) (primitives.LSN, error) {
 	w.mutex.Lock()
 	defer w.mutex.Unlock()
 
