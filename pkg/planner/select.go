@@ -2,13 +2,13 @@ package planner
 
 import (
 	"fmt"
+	"storemy/pkg/concurrency/transaction"
 	"storemy/pkg/execution/aggregation"
 	"storemy/pkg/execution/join"
 	"storemy/pkg/execution/query"
 	"storemy/pkg/iterator"
 	"storemy/pkg/parser/plan"
 	"storemy/pkg/parser/statements"
-	"storemy/pkg/primitives"
 	"storemy/pkg/registry"
 	"storemy/pkg/tuple"
 	"storemy/pkg/types"
@@ -25,15 +25,15 @@ type SelectQueryResult struct {
 // that follows the iterator pattern for query execution.
 type SelectPlan struct {
 	ctx       *registry.DatabaseContext
-	tid       *primitives.TransactionID
+	tx        *transaction.TransactionContext
 	statement *statements.SelectStatement
 }
 
 // NewSelectPlan creates a new SELECT query execution plan.
-func NewSelectPlan(stmt *statements.SelectStatement, tid *primitives.TransactionID, ctx *registry.DatabaseContext) *SelectPlan {
+func NewSelectPlan(stmt *statements.SelectStatement, tx *transaction.TransactionContext, ctx *registry.DatabaseContext) *SelectPlan {
 	return &SelectPlan{
 		ctx:       ctx,
-		tid:       tid,
+		tx:        tx,
 		statement: stmt,
 	}
 }
@@ -109,7 +109,7 @@ func (p *SelectPlan) buildScanOperator() (iterator.DbIterator, error) {
 		filter = filters[0]
 	}
 
-	scanOp, err := buildScanWithFilter(p.tid, metadata.TableID, filter, p.ctx)
+	scanOp, err := buildScanWithFilter(p.tx.ID, metadata.TableID, filter, p.ctx)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create table scan: %w", err)
 	}
@@ -216,7 +216,7 @@ func (p *SelectPlan) buildJoinRightSide(joinNode *plan.JoinNode) (iterator.DbIte
 		return nil, err
 	}
 
-	scanOp, err := query.NewSeqScan(p.tid, md.TableID, p.ctx.TableManager())
+	scanOp, err := query.NewSeqScan(p.tx.ID, md.TableID, p.ctx.TableManager())
 	if err != nil {
 		return nil, fmt.Errorf("failed to create scan for table %s: %w", table.TableName, err)
 	}
