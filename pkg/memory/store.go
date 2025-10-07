@@ -65,6 +65,10 @@ func NewPageStore(tm *TableManager, wal *log.WAL) *PageStore {
 // GetPage retrieves a page with specified permissions for a transaction
 // This is the main entry point for all page access in the database
 func (p *PageStore) GetPage(ctx *transaction.TransactionContext, pid tuple.PageID, perm transaction.Permissions) (page.Page, error) {
+	if ctx == nil {
+		return nil, fmt.Errorf("transaction context cannot be nil")
+	}
+
 	tid := ctx.ID
 	if err := p.lockManager.LockPage(tid, pid, perm == transaction.ReadWrite); err != nil {
 		return nil, fmt.Errorf("failed to acquire lock: %v", err)
@@ -146,6 +150,10 @@ func (p *PageStore) DeleteTuple(ctx *transaction.TransactionContext, t *tuple.Tu
 }
 
 func (p *PageStore) performDataOperation(operation OperationType, ctx *transaction.TransactionContext, tableID int, t *tuple.Tuple) error {
+	if ctx == nil {
+		return fmt.Errorf("transaction context cannot be nil")
+	}
+
 	if err := ctx.EnsureBegunInWAL(p.wal); err != nil {
 		return err
 	}
@@ -210,6 +218,10 @@ func (p *PageStore) handleDelete(ctx *transaction.TransactionContext, t *tuple.T
 
 // UpdateTuple replaces an existing tuple with a new version within the given transaction.
 func (p *PageStore) UpdateTuple(ctx *transaction.TransactionContext, oldTuple *tuple.Tuple, newTuple *tuple.Tuple) error {
+	if oldTuple == nil {
+		return fmt.Errorf("old tuple cannot be nil")
+	}
+
 	if oldTuple.RecordID == nil {
 		return fmt.Errorf("old tuple has no RecordID")
 	}
