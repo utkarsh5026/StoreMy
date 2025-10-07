@@ -9,7 +9,7 @@ import (
 func formatResult(rawResult any, stmt statements.Statement) (QueryResult, error) {
 	switch stmt.GetType() {
 	case statements.Select:
-		if queryResult, ok := rawResult.(*planner.QueryResult); ok {
+		if queryResult, ok := rawResult.(*planner.SelectQueryResult); ok {
 			return formatSelect(queryResult), nil
 		}
 
@@ -31,7 +31,7 @@ func formatResult(rawResult any, stmt statements.Statement) (QueryResult, error)
 }
 
 // formatSelect converts SELECT query results to standard format
-func formatSelect(result *planner.QueryResult) QueryResult {
+func formatSelect(result *planner.SelectQueryResult) QueryResult {
 	if result == nil || result.TupleDesc == nil {
 		return QueryResult{
 			Success: true,

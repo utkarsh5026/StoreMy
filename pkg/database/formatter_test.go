@@ -29,7 +29,7 @@ func TestFormatResult_Select(t *testing.T) {
 	tuple2.SetField(1, types.NewStringField("Bob", 255))
 
 	// Create QueryResult
-	queryResult := &planner.QueryResult{
+	queryResult := &planner.SelectQueryResult{
 		TupleDesc: td,
 		Tuples:    []*tuple.Tuple{tuple1, tuple2},
 	}
@@ -86,7 +86,7 @@ func TestFormatResult_Select(t *testing.T) {
 // TestFormatResult_SelectEmpty tests formatting of empty SELECT results
 func TestFormatResult_SelectEmpty(t *testing.T) {
 	// Create empty QueryResult
-	queryResult := &planner.QueryResult{
+	queryResult := &planner.SelectQueryResult{
 		TupleDesc: nil,
 		Tuples:    []*tuple.Tuple{},
 	}
@@ -126,7 +126,7 @@ func TestFormatResult_SelectNullValues(t *testing.T) {
 	tup.SetField(0, types.NewIntField(1))
 	// Leave field 1 as nil (NULL)
 
-	queryResult := &planner.QueryResult{
+	queryResult := &planner.SelectQueryResult{
 		TupleDesc: td,
 		Tuples:    []*tuple.Tuple{tup},
 	}
@@ -343,7 +343,7 @@ func TestFormatSelect_ColumnNames(t *testing.T) {
 				t.Fatalf("failed to create tuple desc: %v", err)
 			}
 
-			queryResult := &planner.QueryResult{
+			queryResult := &planner.SelectQueryResult{
 				TupleDesc: td,
 				Tuples:    []*tuple.Tuple{},
 			}
@@ -379,7 +379,7 @@ func TestFormatSelect_DifferentTypes(t *testing.T) {
 	tup.SetField(2, types.NewBoolField(true))
 	tup.SetField(3, types.NewIntField(314)) // Using int instead of float
 
-	queryResult := &planner.QueryResult{
+	queryResult := &planner.SelectQueryResult{
 		TupleDesc: td,
 		Tuples:    []*tuple.Tuple{tup},
 	}
@@ -560,7 +560,7 @@ func TestFormatSelect_LargeResultSet(t *testing.T) {
 		tuples[i] = tup
 	}
 
-	queryResult := &planner.QueryResult{
+	queryResult := &planner.SelectQueryResult{
 		TupleDesc: td,
 		Tuples:    tuples,
 	}
@@ -597,7 +597,7 @@ func TestFormatSelect_ManyColumns(t *testing.T) {
 		tup.SetField(i, types.NewIntField(int32(i)))
 	}
 
-	queryResult := &planner.QueryResult{
+	queryResult := &planner.SelectQueryResult{
 		TupleDesc: td,
 		Tuples:    []*tuple.Tuple{tup},
 	}
