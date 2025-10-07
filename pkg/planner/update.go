@@ -2,8 +2,8 @@ package planner
 
 import (
 	"fmt"
+	"storemy/pkg/concurrency/transaction"
 	"storemy/pkg/parser/statements"
-	"storemy/pkg/primitives"
 	"storemy/pkg/registry"
 	"storemy/pkg/tuple"
 	"storemy/pkg/types"
@@ -12,14 +12,14 @@ import (
 type UpdatePlan struct {
 	statement *statements.UpdateStatement
 	ctx       *registry.DatabaseContext
-	tid       *primitives.TransactionID
+	tx        *transaction.TransactionContext
 }
 
-func NewUpdatePlan(statement *statements.UpdateStatement, tid *primitives.TransactionID, ctx *registry.DatabaseContext) *UpdatePlan {
+func NewUpdatePlan(statement *statements.UpdateStatement, tx *transaction.TransactionContext, ctx *registry.DatabaseContext) *UpdatePlan {
 	return &UpdatePlan{
 		statement: statement,
 		ctx:       ctx,
-		tid:       tid,
+		tx:        tx,
 	}
 }
 
@@ -34,7 +34,7 @@ func (p *UpdatePlan) Execute() (any, error) {
 		return nil, err
 	}
 
-	queryPlan, err := buildScanWithFilter(p.tid, md.TableID, p.statement.WhereClause, p.ctx)
+	queryPlan, err := buildScanWithFilter(p.tx.ID, md.TableID, p.statement.WhereClause, p.ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -77,7 +77,7 @@ func (p *UpdatePlan) updateTuples(tuples []*tuple.Tuple, tupleDesc *tuple.TupleD
 		if err != nil {
 			return err
 		}
-		if err := p.ctx.PageStore().UpdateTuple(p.tid, old, newTup); err != nil {
+		if err := p.ctx.PageStore().UpdateTuple(p.tx, old, newTup); err != nil {
 			return fmt.Errorf("failed to update tuple: %v", err)
 		}
 	}

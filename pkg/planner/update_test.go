@@ -2,13 +2,33 @@ package planner
 
 import (
 	"os"
+	"storemy/pkg/concurrency/transaction"
 	"storemy/pkg/parser/plan"
 	"storemy/pkg/parser/statements"
-	"storemy/pkg/primitives"
 	"storemy/pkg/registry"
 	"storemy/pkg/types"
 	"testing"
 )
+
+func setupUpdateTest(t *testing.T) (*registry.DatabaseContext, *transaction.TransactionContext, func()) {
+	dataDir := t.TempDir()
+	oldDir, _ := os.Getwd()
+	os.Chdir(dataDir)
+
+	os.Mkdir("data", 0755)
+
+	ctx := createTestContextWithCleanup(t, "")
+	tx := createTransactionContext(t)
+
+	createUpdateTestTable(t, ctx, tx)
+	insertUpdateTestData(t, ctx, tx)
+
+	cleanup := func() {
+		os.Chdir(oldDir)
+	}
+
+	return ctx, tx, cleanup
+}
 
 func executeUpdatePlan(t *testing.T, plan *UpdatePlan) (*DMLResult, error) {
 	resultAny, err := plan.Execute()
@@ -28,7 +48,7 @@ func executeUpdatePlan(t *testing.T, plan *UpdatePlan) (*DMLResult, error) {
 	return result, nil
 }
 
-func createUpdateTestTable(t *testing.T, ctx *registry.DatabaseContext, tid *primitives.TransactionID) {
+func createUpdateTestTable(t *testing.T, ctx *registry.DatabaseContext, tx *transaction.TransactionContext) {
 	stmt := statements.NewCreateStatement("users", false)
 	stmt.AddField("id", types.IntType, false, nil)
 	stmt.AddField("name", types.StringType, false, nil)
@@ -37,7 +57,7 @@ func createUpdateTestTable(t *testing.T, ctx *registry.DatabaseContext, tid *pri
 	stmt.AddField("active", types.BoolType, false, nil)
 	stmt.AddField("salary", types.FloatType, false, nil)
 
-	createPlan := NewCreateTablePlan(stmt, ctx, tid)
+	createPlan := NewCreateTablePlan(stmt, ctx, tx)
 	_, err := createPlan.Execute()
 	if err != nil {
 		t.Fatalf("Failed to create test table: %v", err)
@@ -47,7 +67,7 @@ func createUpdateTestTable(t *testing.T, ctx *registry.DatabaseContext, tid *pri
 	cleanupTable(t, ctx.TableManager(), "users")
 }
 
-func insertUpdateTestData(t *testing.T, ctx *registry.DatabaseContext, tid *primitives.TransactionID) {
+func insertUpdateTestData(t *testing.T, ctx *registry.DatabaseContext, tx *transaction.TransactionContext) {
 	insertStmt := statements.NewInsertStatement("users")
 
 	values1 := []types.Field{
@@ -80,7 +100,7 @@ func insertUpdateTestData(t *testing.T, ctx *registry.DatabaseContext, tid *prim
 	}
 	insertStmt.AddValues(values3)
 
-	insertPlan := NewInsertPlan(insertStmt, tid, ctx)
+	insertPlan := NewInsertPlan(insertStmt, tx, ctx)
 	_, err := insertPlan.Execute()
 	if err != nil {
 		t.Fatalf("Failed to insert test data: %v", err)
@@ -90,9 +110,9 @@ func insertUpdateTestData(t *testing.T, ctx *registry.DatabaseContext, tid *prim
 func TestNewUpdatePlan(t *testing.T) {
 	stmt := statements.NewUpdateStatement("users", "users")
 	ctx := createTestContextWithCleanup(t, "")
-	tid := primitives.NewTransactionID()
+	tx := createTransactionContext(t)
 
-	plan := NewUpdatePlan(stmt, tid, ctx)
+	plan := NewUpdatePlan(stmt, tx, ctx)
 
 	if plan == nil {
 		t.Fatal("NewUpdatePlan returned nil")
@@ -101,24 +121,14 @@ func TestNewUpdatePlan(t *testing.T) {
 	if plan.statement != stmt {
 		t.Error("Statement not properly assigned")
 	}
-	if plan.tid != tid {
+	if plan.tx != tx {
 		t.Error("TransactionID not properly assigned")
 	}
 }
 
 func TestUpdatePlan_Execute_UpdateSingleField(t *testing.T) {
-	dataDir := t.TempDir()
-	oldDir, _ := os.Getwd()
-	os.Chdir(dataDir)
-	defer os.Chdir(oldDir)
-
-	os.Mkdir("data", 0755)
-
-	ctx := createTestContextWithCleanup(t, "")
-	tid := primitives.NewTransactionID()
-
-	createUpdateTestTable(t, ctx, tid)
-	insertUpdateTestData(t, ctx, tid)
+	ctx, tx, cleanup := setupUpdateTest(t)
+	defer cleanup()
 
 	stmt := statements.NewUpdateStatement("users", "users")
 	stmt.AddSetClause("name", types.NewStringField("Updated Name", types.StringMaxSize))
@@ -126,7 +136,7 @@ func TestUpdatePlan_Execute_UpdateSingleField(t *testing.T) {
 	filter := plan.NewFilterNode("users", "users.id", types.Equals, "1")
 	stmt.SetWhereClause(filter)
 
-	updatePlan := NewUpdatePlan(stmt, tid, ctx)
+	updatePlan := NewUpdatePlan(stmt, tx, ctx)
 
 	result, err := executeUpdatePlan(t, updatePlan)
 
@@ -149,18 +159,8 @@ func TestUpdatePlan_Execute_UpdateSingleField(t *testing.T) {
 }
 
 func TestUpdatePlan_Execute_UpdateMultipleFields(t *testing.T) {
-	dataDir := t.TempDir()
-	oldDir, _ := os.Getwd()
-	os.Chdir(dataDir)
-	defer os.Chdir(oldDir)
-
-	os.Mkdir("data", 0755)
-
-	ctx := createTestContextWithCleanup(t, "")
-	tid := primitives.NewTransactionID()
-
-	createUpdateTestTable(t, ctx, tid)
-	insertUpdateTestData(t, ctx, tid)
+	ctx, tx, cleanup := setupUpdateTest(t)
+	defer cleanup()
 
 	stmt := statements.NewUpdateStatement("users", "users")
 	stmt.AddSetClause("name", types.NewStringField("Updated Name", types.StringMaxSize))
@@ -170,7 +170,7 @@ func TestUpdatePlan_Execute_UpdateMultipleFields(t *testing.T) {
 	filter := plan.NewFilterNode("users", "users.id", types.Equals, "1")
 	stmt.SetWhereClause(filter)
 
-	updatePlan := NewUpdatePlan(stmt, tid, ctx)
+	updatePlan := NewUpdatePlan(stmt, tx, ctx)
 	result, err := executeUpdatePlan(t, updatePlan)
 
 	if err != nil {
@@ -192,18 +192,8 @@ func TestUpdatePlan_Execute_UpdateMultipleFields(t *testing.T) {
 }
 
 func TestUpdatePlan_Execute_UpdateMultipleRows(t *testing.T) {
-	dataDir := t.TempDir()
-	oldDir, _ := os.Getwd()
-	os.Chdir(dataDir)
-	defer os.Chdir(oldDir)
-
-	os.Mkdir("data", 0755)
-
-	ctx := createTestContextWithCleanup(t, "")
-	tid := primitives.NewTransactionID()
-
-	createUpdateTestTable(t, ctx, tid)
-	insertUpdateTestData(t, ctx, tid)
+	ctx, tx, cleanup := setupUpdateTest(t)
+	defer cleanup()
 
 	stmt := statements.NewUpdateStatement("users", "users")
 	stmt.AddSetClause("active", &types.BoolField{Value: false})
@@ -211,7 +201,7 @@ func TestUpdatePlan_Execute_UpdateMultipleRows(t *testing.T) {
 	filter := plan.NewFilterNode("users", "users.active", types.Equals, "true")
 	stmt.SetWhereClause(filter)
 
-	updatePlan := NewUpdatePlan(stmt, tid, ctx)
+	updatePlan := NewUpdatePlan(stmt, tx, ctx)
 
 	result, err := executeUpdatePlan(t, updatePlan)
 
@@ -234,23 +224,13 @@ func TestUpdatePlan_Execute_UpdateMultipleRows(t *testing.T) {
 }
 
 func TestUpdatePlan_Execute_UpdateAllRows(t *testing.T) {
-	dataDir := t.TempDir()
-	oldDir, _ := os.Getwd()
-	os.Chdir(dataDir)
-	defer os.Chdir(oldDir)
-
-	os.Mkdir("data", 0755)
-
-	ctx := createTestContextWithCleanup(t, "")
-	tid := primitives.NewTransactionID()
-
-	createUpdateTestTable(t, ctx, tid)
-	insertUpdateTestData(t, ctx, tid)
+	ctx, tx, cleanup := setupUpdateTest(t)
+	defer cleanup()
 
 	stmt := statements.NewUpdateStatement("users", "users")
 	stmt.AddSetClause("email", types.NewStringField("updated@example.com", types.StringMaxSize))
 
-	updatePlan := NewUpdatePlan(stmt, tid, ctx)
+	updatePlan := NewUpdatePlan(stmt, tx, ctx)
 
 	result, err := executeUpdatePlan(t, updatePlan)
 
@@ -281,10 +261,10 @@ func TestUpdatePlan_Execute_UpdateWithIntegerFilter(t *testing.T) {
 	os.Mkdir("data", 0755)
 
 	ctx := createTestContextWithCleanup(t, "")
-	tid := primitives.NewTransactionID()
+	tx := createTransactionContext(t)
 
-	createUpdateTestTable(t, ctx, tid)
-	insertUpdateTestData(t, ctx, tid)
+	createUpdateTestTable(t, ctx, tx)
+	insertUpdateTestData(t, ctx, tx)
 
 	stmt := statements.NewUpdateStatement("users", "users")
 	stmt.AddSetClause("salary", &types.Float64Field{Value: 80000.0})
@@ -292,7 +272,7 @@ func TestUpdatePlan_Execute_UpdateWithIntegerFilter(t *testing.T) {
 	filter := plan.NewFilterNode("users", "users.age", types.GreaterThan, "30")
 	stmt.SetWhereClause(filter)
 
-	updatePlan := NewUpdatePlan(stmt, tid, ctx)
+	updatePlan := NewUpdatePlan(stmt, tx, ctx)
 
 	result, err := executeUpdatePlan(t, updatePlan)
 
@@ -318,10 +298,10 @@ func TestUpdatePlan_Execute_UpdateWithFloatFilter(t *testing.T) {
 	os.Mkdir("data", 0755)
 
 	ctx := createTestContextWithCleanup(t, "")
-	tid := primitives.NewTransactionID()
+	tx := createTransactionContext(t)
 
-	createUpdateTestTable(t, ctx, tid)
-	insertUpdateTestData(t, ctx, tid)
+	createUpdateTestTable(t, ctx, tx)
+	insertUpdateTestData(t, ctx, tx)
 
 	stmt := statements.NewUpdateStatement("users", "users")
 	stmt.AddSetClause("active", &types.BoolField{Value: true})
@@ -329,7 +309,7 @@ func TestUpdatePlan_Execute_UpdateWithFloatFilter(t *testing.T) {
 	filter := plan.NewFilterNode("users", "users.salary", types.LessThan, "65000.0")
 	stmt.SetWhereClause(filter)
 
-	updatePlan := NewUpdatePlan(stmt, tid, ctx)
+	updatePlan := NewUpdatePlan(stmt, tx, ctx)
 
 	result, err := executeUpdatePlan(t, updatePlan)
 
@@ -355,10 +335,10 @@ func TestUpdatePlan_Execute_NoMatchingRows(t *testing.T) {
 	os.Mkdir("data", 0755)
 
 	ctx := createTestContextWithCleanup(t, "")
-	tid := primitives.NewTransactionID()
+	tx := createTransactionContext(t)
 
-	createUpdateTestTable(t, ctx, tid)
-	insertUpdateTestData(t, ctx, tid)
+	createUpdateTestTable(t, ctx, tx)
+	insertUpdateTestData(t, ctx, tx)
 
 	stmt := statements.NewUpdateStatement("users", "users")
 	stmt.AddSetClause("name", types.NewStringField("No Match", types.StringMaxSize))
@@ -366,7 +346,7 @@ func TestUpdatePlan_Execute_NoMatchingRows(t *testing.T) {
 	filter := plan.NewFilterNode("users", "users.age", types.GreaterThan, "100")
 	stmt.SetWhereClause(filter)
 
-	updatePlan := NewUpdatePlan(stmt, tid, ctx)
+	updatePlan := NewUpdatePlan(stmt, tx, ctx)
 
 	result, err := executeUpdatePlan(t, updatePlan)
 
@@ -397,12 +377,12 @@ func TestUpdatePlan_Execute_Error_TableNotFound(t *testing.T) {
 	os.Mkdir("data", 0755)
 
 	ctx := createTestContextWithCleanup(t, "")
-	tid := primitives.NewTransactionID()
+	tx := createTransactionContext(t)
 
 	stmt := statements.NewUpdateStatement("nonexistent_table", "nonexistent_table")
 	stmt.AddSetClause("name", types.NewStringField("Test", types.StringMaxSize))
 
-	updatePlan := NewUpdatePlan(stmt, tid, ctx)
+	updatePlan := NewUpdatePlan(stmt, tx, ctx)
 
 	result, err := executeUpdatePlan(t, updatePlan)
 
@@ -429,14 +409,14 @@ func TestUpdatePlan_Execute_Error_InvalidField(t *testing.T) {
 	os.Mkdir("data", 0755)
 
 	ctx := createTestContextWithCleanup(t, "")
-	tid := primitives.NewTransactionID()
+	tx := createTransactionContext(t)
 
-	createUpdateTestTable(t, ctx, tid)
+	createUpdateTestTable(t, ctx, tx)
 
 	stmt := statements.NewUpdateStatement("users", "users")
 	stmt.AddSetClause("invalid_field", types.NewStringField("Test", types.StringMaxSize))
 
-	updatePlan := NewUpdatePlan(stmt, tid, ctx)
+	updatePlan := NewUpdatePlan(stmt, tx, ctx)
 
 	result, err := executeUpdatePlan(t, updatePlan)
 
@@ -463,9 +443,9 @@ func TestUpdatePlan_Execute_Error_InvalidWhereField(t *testing.T) {
 	os.Mkdir("data", 0755)
 
 	ctx := createTestContextWithCleanup(t, "")
-	tid := primitives.NewTransactionID()
+	tx := createTransactionContext(t)
 
-	createUpdateTestTable(t, ctx, tid)
+	createUpdateTestTable(t, ctx, tx)
 
 	stmt := statements.NewUpdateStatement("users", "users")
 	stmt.AddSetClause("name", types.NewStringField("Test", types.StringMaxSize))
@@ -473,7 +453,7 @@ func TestUpdatePlan_Execute_Error_InvalidWhereField(t *testing.T) {
 	filter := plan.NewFilterNode("users", "users.invalid_field", types.Equals, "value")
 	stmt.SetWhereClause(filter)
 
-	updatePlan := NewUpdatePlan(stmt, tid, ctx)
+	updatePlan := NewUpdatePlan(stmt, tx, ctx)
 
 	result, err := executeUpdatePlan(t, updatePlan)
 
@@ -500,14 +480,14 @@ func TestUpdatePlan_Execute_EmptyTable(t *testing.T) {
 	os.Mkdir("data", 0755)
 
 	ctx := createTestContextWithCleanup(t, "")
-	tid := primitives.NewTransactionID()
+	tx := createTransactionContext(t)
 
-	createUpdateTestTable(t, ctx, tid)
+	createUpdateTestTable(t, ctx, tx)
 
 	stmt := statements.NewUpdateStatement("users", "users")
 	stmt.AddSetClause("name", types.NewStringField("Test", types.StringMaxSize))
 
-	updatePlan := NewUpdatePlan(stmt, tid, ctx)
+	updatePlan := NewUpdatePlan(stmt, tx, ctx)
 
 	result, err := executeUpdatePlan(t, updatePlan)
 
@@ -538,9 +518,9 @@ func TestUpdatePlan_getTableMetadata(t *testing.T) {
 	os.Mkdir("data", 0755)
 
 	ctx := createTestContextWithCleanup(t, "")
-	tid := primitives.NewTransactionID()
+	tx := createTransactionContext(t)
 
-	createUpdateTestTable(t, ctx, tid)
+	createUpdateTestTable(t, ctx, tx)
 
 	stmt := statements.NewUpdateStatement("users", "users")
 
@@ -575,9 +555,9 @@ func TestUpdatePlan_findFieldIndex(t *testing.T) {
 	os.Mkdir("data", 0755)
 
 	ctx := createTestContextWithCleanup(t, "")
-	tid := primitives.NewTransactionID()
+	tx := createTransactionContext(t)
 
-	createUpdateTestTable(t, ctx, tid)
+	createUpdateTestTable(t, ctx, tx)
 
 	stmt := statements.NewUpdateStatement("users", "users")
 
@@ -627,15 +607,15 @@ func TestUpdatePlan_buildUpdateMap(t *testing.T) {
 	os.Mkdir("data", 0755)
 
 	ctx := createTestContextWithCleanup(t, "")
-	tid := primitives.NewTransactionID()
+	tx := createTransactionContext(t)
 
-	createUpdateTestTable(t, ctx, tid)
+	createUpdateTestTable(t, ctx, tx)
 
 	stmt := statements.NewUpdateStatement("users", "users")
 	stmt.AddSetClause("name", types.NewStringField("New Name", types.StringMaxSize))
 	stmt.AddSetClause("age", &types.IntField{Value: 99})
 
-	updatePlan := NewUpdatePlan(stmt, tid, ctx)
+	updatePlan := NewUpdatePlan(stmt, tx, ctx)
 
 	md, err := resolveTableMetadata(stmt.TableName, ctx)
 	if err != nil {
