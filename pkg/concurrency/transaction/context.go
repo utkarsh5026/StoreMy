@@ -47,6 +47,16 @@ func (ts TransactionStatus) String() string {
 	}
 }
 
+type TransactionStats struct {
+	PagesRead     int
+	PagesWritten  int
+	TuplesRead    int
+	TuplesWritten int
+	TuplesDeleted int
+	LockedPages   int
+	DirtyPages    int
+}
+
 // TransactionContext encapsulates all state for a single transaction.
 // This is the single source of truth for everything a transaction has done.
 type TransactionContext struct {
@@ -266,18 +276,18 @@ func (tc *TransactionContext) RecordTupleDelete() {
 }
 
 // GetStatistics returns a snapshot of transaction statistics
-func (tc *TransactionContext) GetStatistics() map[string]int {
+func (tc *TransactionContext) GetStatistics() TransactionStats {
 	tc.mutex.RLock()
 	defer tc.mutex.RUnlock()
 
-	return map[string]int{
-		"pages_read":     tc.pagesRead,
-		"pages_written":  tc.pagesWritten,
-		"tuples_read":    tc.tuplesRead,
-		"tuples_written": tc.tuplesWritten,
-		"tuples_deleted": tc.tuplesDeleted,
-		"locked_pages":   len(tc.lockedPages),
-		"dirty_pages":    len(tc.dirtyPages),
+	return TransactionStats{
+		PagesRead:     tc.pagesRead,
+		PagesWritten:  tc.pagesWritten,
+		TuplesRead:    tc.tuplesRead,
+		TuplesWritten: tc.tuplesWritten,
+		TuplesDeleted: tc.tuplesDeleted,
+		LockedPages:   len(tc.lockedPages),
+		DirtyPages:    len(tc.dirtyPages),
 	}
 }
 
