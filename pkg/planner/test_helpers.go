@@ -76,3 +76,23 @@ func createTestContextWithCleanup(t *testing.T, dataDir string) *registry.Databa
 		dataDir,
 	)
 }
+
+// Add this helper function near the top of the file after imports
+func setupTestDataDir(t *testing.T) string {
+	t.Helper()
+	dataDir := t.TempDir()
+	oldDir, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Failed to get working directory: %v", err)
+	}
+	if err := os.Chdir(dataDir); err != nil {
+		t.Fatalf("Failed to change to temp directory: %v", err)
+	}
+	t.Cleanup(func() { os.Chdir(oldDir) })
+
+	if err := os.Mkdir("data", 0755); err != nil {
+		t.Fatalf("Failed to create data directory: %v", err)
+	}
+
+	return dataDir
+}
