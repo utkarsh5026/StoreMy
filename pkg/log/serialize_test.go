@@ -4,7 +4,7 @@ import (
 	"bytes"
 	"encoding/binary"
 	"fmt"
-	"storemy/pkg/concurrency/transaction"
+	"storemy/pkg/primitives"
 	"storemy/pkg/tuple"
 	"testing"
 	"time"
@@ -41,7 +41,7 @@ func (m *MockPageID) String() string {
 }
 
 func TestSerializeLogRecord_BeginRecord(t *testing.T) {
-	tid := transaction.NewTransactionID()
+	tid := primitives.NewTransactionID()
 	record := &LogRecord{
 		Type:      BeginRecord,
 		TID:       tid,
@@ -73,7 +73,7 @@ func TestSerializeLogRecord_BeginRecord(t *testing.T) {
 }
 
 func TestSerializeLogRecord_UpdateRecord(t *testing.T) {
-	tid := transaction.NewTransactionID()
+	tid := primitives.NewTransactionID()
 	pageID := &MockPageID{tableID: 1, pageNo: 100}
 	beforeImage := []byte("before")
 	afterImage := []byte("after")
@@ -118,7 +118,7 @@ func TestSerializeLogRecord_UpdateRecord(t *testing.T) {
 }
 
 func TestSerializeLogRecord_InsertRecord(t *testing.T) {
-	tid := transaction.NewTransactionID()
+	tid := primitives.NewTransactionID()
 	pageID := &MockPageID{tableID: 2, pageNo: 200}
 	afterImage := []byte("new data")
 
@@ -149,7 +149,7 @@ func TestSerializeLogRecord_InsertRecord(t *testing.T) {
 }
 
 func TestSerializeLogRecord_DeleteRecord(t *testing.T) {
-	tid := transaction.NewTransactionID()
+	tid := primitives.NewTransactionID()
 	pageID := &MockPageID{tableID: 3, pageNo: 300}
 	beforeImage := []byte("old data")
 
@@ -180,7 +180,7 @@ func TestSerializeLogRecord_DeleteRecord(t *testing.T) {
 }
 
 func TestSerializeLogRecord_CLRRecord(t *testing.T) {
-	tid := transaction.NewTransactionID()
+	tid := primitives.NewTransactionID()
 	pageID := &MockPageID{tableID: 4, pageNo: 400}
 	afterImage := []byte("compensated data")
 
@@ -232,7 +232,7 @@ func TestSerializeLogRecord_NilTID(t *testing.T) {
 }
 
 func TestSerializeLogRecord_NilImages(t *testing.T) {
-	tid := transaction.NewTransactionID()
+	tid := primitives.NewTransactionID()
 	pageID := &MockPageID{tableID: 5, pageNo: 500}
 
 	record := &LogRecord{
@@ -258,7 +258,7 @@ func TestSerializeLogRecord_NilImages(t *testing.T) {
 }
 
 func TestSerializeLogRecord_LargeImages(t *testing.T) {
-	tid := transaction.NewTransactionID()
+	tid := primitives.NewTransactionID()
 	pageID := &MockPageID{tableID: 6, pageNo: 600}
 	largeImage := bytes.Repeat([]byte("x"), 10000)
 
@@ -289,7 +289,7 @@ func TestSerializeLogRecord_LargeImages(t *testing.T) {
 }
 
 func TestSerializeLogRecord_CommitRecord(t *testing.T) {
-	tid := transaction.NewTransactionID()
+	tid := primitives.NewTransactionID()
 
 	record := &LogRecord{
 		Type:      CommitRecord,
@@ -310,7 +310,7 @@ func TestSerializeLogRecord_CommitRecord(t *testing.T) {
 }
 
 func TestSerializeLogRecord_AbortRecord(t *testing.T) {
-	tid := transaction.NewTransactionID()
+	tid := primitives.NewTransactionID()
 
 	record := &LogRecord{
 		Type:      AbortRecord,
@@ -414,7 +414,7 @@ func TestSerializeCLR(t *testing.T) {
 // ========== DESERIALIZATION TESTS ==========
 
 func TestDeserializeLogRecord_BeginRecord(t *testing.T) {
-	tid := transaction.NewTransactionID()
+	tid := primitives.NewTransactionID()
 	original := &LogRecord{
 		Type:      BeginRecord,
 		TID:       tid,
@@ -447,7 +447,7 @@ func TestDeserializeLogRecord_BeginRecord(t *testing.T) {
 }
 
 func TestDeserializeLogRecord_UpdateRecord(t *testing.T) {
-	tid := transaction.NewTransactionID()
+	tid := primitives.NewTransactionID()
 	pageID := &MockPageID{tableID: 1, pageNo: 100}
 	beforeImage := []byte("before data")
 	afterImage := []byte("after data")
@@ -490,7 +490,7 @@ func TestDeserializeLogRecord_UpdateRecord(t *testing.T) {
 }
 
 func TestDeserializeLogRecord_InsertRecord(t *testing.T) {
-	tid := transaction.NewTransactionID()
+	tid := primitives.NewTransactionID()
 	pageID := &MockPageID{tableID: 2, pageNo: 200}
 	afterImage := []byte("new inserted data")
 
@@ -525,7 +525,7 @@ func TestDeserializeLogRecord_InsertRecord(t *testing.T) {
 }
 
 func TestDeserializeLogRecord_DeleteRecord(t *testing.T) {
-	tid := transaction.NewTransactionID()
+	tid := primitives.NewTransactionID()
 	pageID := &MockPageID{tableID: 3, pageNo: 300}
 	beforeImage := []byte("deleted data")
 
@@ -557,7 +557,7 @@ func TestDeserializeLogRecord_DeleteRecord(t *testing.T) {
 }
 
 func TestDeserializeLogRecord_CLRRecord(t *testing.T) {
-	tid := transaction.NewTransactionID()
+	tid := primitives.NewTransactionID()
 	pageID := &MockPageID{tableID: 4, pageNo: 400}
 	afterImage := []byte("compensated data")
 
@@ -593,7 +593,7 @@ func TestDeserializeLogRecord_CLRRecord(t *testing.T) {
 }
 
 func TestDeserializeLogRecord_CommitRecord(t *testing.T) {
-	tid := transaction.NewTransactionID()
+	tid := primitives.NewTransactionID()
 	original := &LogRecord{
 		Type:      CommitRecord,
 		TID:       tid,
@@ -617,7 +617,7 @@ func TestDeserializeLogRecord_CommitRecord(t *testing.T) {
 }
 
 func TestDeserializeLogRecord_AbortRecord(t *testing.T) {
-	tid := transaction.NewTransactionID()
+	tid := primitives.NewTransactionID()
 	original := &LogRecord{
 		Type:      AbortRecord,
 		TID:       tid,
@@ -664,7 +664,7 @@ func TestDeserializeLogRecord_NilTID(t *testing.T) {
 }
 
 func TestDeserializeLogRecord_NilImages(t *testing.T) {
-	tid := transaction.NewTransactionID()
+	tid := primitives.NewTransactionID()
 	pageID := &MockPageID{tableID: 5, pageNo: 500}
 
 	original := &LogRecord{
@@ -696,7 +696,7 @@ func TestDeserializeLogRecord_NilImages(t *testing.T) {
 }
 
 func TestDeserializeLogRecord_LargeImages(t *testing.T) {
-	tid := transaction.NewTransactionID()
+	tid := primitives.NewTransactionID()
 	pageID := &MockPageID{tableID: 6, pageNo: 600}
 	largeImage := bytes.Repeat([]byte("x"), 10000)
 
@@ -771,7 +771,7 @@ func TestDeserializeLogRecord_RoundTrip(t *testing.T) {
 			name: "Begin",
 			record: &LogRecord{
 				Type:      BeginRecord,
-				TID:       transaction.NewTransactionID(),
+				TID:       primitives.NewTransactionID(),
 				PrevLSN:   0,
 				Timestamp: time.Unix(1234567890, 0),
 			},
@@ -780,7 +780,7 @@ func TestDeserializeLogRecord_RoundTrip(t *testing.T) {
 			name: "Update",
 			record: &LogRecord{
 				Type:        UpdateRecord,
-				TID:         transaction.NewTransactionID(),
+				TID:         primitives.NewTransactionID(),
 				PrevLSN:     10,
 				Timestamp:   time.Unix(1234567890, 0),
 				PageID:      &MockPageID{tableID: 1, pageNo: 100},
@@ -792,7 +792,7 @@ func TestDeserializeLogRecord_RoundTrip(t *testing.T) {
 			name: "Insert",
 			record: &LogRecord{
 				Type:       InsertRecord,
-				TID:        transaction.NewTransactionID(),
+				TID:        primitives.NewTransactionID(),
 				PrevLSN:    20,
 				Timestamp:  time.Unix(1234567890, 0),
 				PageID:     &MockPageID{tableID: 2, pageNo: 200},
@@ -803,7 +803,7 @@ func TestDeserializeLogRecord_RoundTrip(t *testing.T) {
 			name: "Delete",
 			record: &LogRecord{
 				Type:        DeleteRecord,
-				TID:         transaction.NewTransactionID(),
+				TID:         primitives.NewTransactionID(),
 				PrevLSN:     30,
 				Timestamp:   time.Unix(1234567890, 0),
 				PageID:      &MockPageID{tableID: 3, pageNo: 300},
@@ -814,7 +814,7 @@ func TestDeserializeLogRecord_RoundTrip(t *testing.T) {
 			name: "CLR",
 			record: &LogRecord{
 				Type:        CLRRecord,
-				TID:         transaction.NewTransactionID(),
+				TID:         primitives.NewTransactionID(),
 				PrevLSN:     40,
 				Timestamp:   time.Unix(1234567890, 0),
 				PageID:      &MockPageID{tableID: 4, pageNo: 400},
@@ -826,7 +826,7 @@ func TestDeserializeLogRecord_RoundTrip(t *testing.T) {
 			name: "Commit",
 			record: &LogRecord{
 				Type:      CommitRecord,
-				TID:       transaction.NewTransactionID(),
+				TID:       primitives.NewTransactionID(),
 				PrevLSN:   50,
 				Timestamp: time.Unix(1234567890, 0),
 			},
@@ -835,7 +835,7 @@ func TestDeserializeLogRecord_RoundTrip(t *testing.T) {
 			name: "Abort",
 			record: &LogRecord{
 				Type:      AbortRecord,
-				TID:       transaction.NewTransactionID(),
+				TID:       primitives.NewTransactionID(),
 				PrevLSN:   60,
 				Timestamp: time.Unix(1234567890, 0),
 			},

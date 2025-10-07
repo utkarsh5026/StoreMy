@@ -1,7 +1,6 @@
 package log
 
 import (
-	"storemy/pkg/concurrency/transaction"
 	"storemy/pkg/primitives"
 	"storemy/pkg/tuple"
 	"testing"
@@ -39,7 +38,7 @@ func (m *mockPageIDForLog) String() string {
 }
 
 func TestNewLogRecord(t *testing.T) {
-	tid := transaction.NewTransactionID()
+	tid := primitives.NewTransactionID()
 	pageID := &mockPageIDForLog{tableID: 1, pageNo: 42}
 	beforeImage := []byte("before")
 	afterImage := []byte("after")
@@ -86,7 +85,7 @@ func TestNewLogRecord(t *testing.T) {
 }
 
 func TestNewLogRecord_BeginRecord(t *testing.T) {
-	tid := transaction.NewTransactionID()
+	tid := primitives.NewTransactionID()
 	record := NewLogRecord(BeginRecord, tid, nil, nil, nil, FirstLSN)
 
 	if record.Type != BeginRecord {
@@ -111,7 +110,7 @@ func TestNewLogRecord_BeginRecord(t *testing.T) {
 }
 
 func TestNewLogRecord_CommitRecord(t *testing.T) {
-	tid := transaction.NewTransactionID()
+	tid := primitives.NewTransactionID()
 	prevLSN := primitives.LSN(500)
 	record := NewLogRecord(CommitRecord, tid, nil, nil, nil, prevLSN)
 
@@ -125,7 +124,7 @@ func TestNewLogRecord_CommitRecord(t *testing.T) {
 }
 
 func TestNewLogRecord_AbortRecord(t *testing.T) {
-	tid := transaction.NewTransactionID()
+	tid := primitives.NewTransactionID()
 	prevLSN := primitives.LSN(300)
 	record := NewLogRecord(AbortRecord, tid, nil, nil, nil, prevLSN)
 
@@ -139,7 +138,7 @@ func TestNewLogRecord_AbortRecord(t *testing.T) {
 }
 
 func TestNewLogRecord_InsertRecord(t *testing.T) {
-	tid := transaction.NewTransactionID()
+	tid := primitives.NewTransactionID()
 	pageID := &mockPageIDForLog{tableID: 5, pageNo: 10}
 	afterImage := []byte("new_data")
 	prevLSN := primitives.LSN(200)
@@ -168,7 +167,7 @@ func TestNewLogRecord_InsertRecord(t *testing.T) {
 }
 
 func TestNewLogRecord_DeleteRecord(t *testing.T) {
-	tid := transaction.NewTransactionID()
+	tid := primitives.NewTransactionID()
 	pageID := &mockPageIDForLog{tableID: 3, pageNo: 7}
 	beforeImage := []byte("deleted_data")
 	prevLSN := primitives.LSN(400)
@@ -189,7 +188,7 @@ func TestNewLogRecord_DeleteRecord(t *testing.T) {
 }
 
 func TestNewLogRecord_UpdateRecord(t *testing.T) {
-	tid := transaction.NewTransactionID()
+	tid := primitives.NewTransactionID()
 	pageID := &mockPageIDForLog{tableID: 2, pageNo: 15}
 	beforeImage := []byte("old_value")
 	afterImage := []byte("new_value")
@@ -232,7 +231,7 @@ func TestNewLogRecord_NilTransaction(t *testing.T) {
 }
 
 func TestNewLogRecord_CLRRecord(t *testing.T) {
-	tid := transaction.NewTransactionID()
+	tid := primitives.NewTransactionID()
 	pageID := &mockPageIDForLog{tableID: 1, pageNo: 5}
 	beforeImage := []byte("undo_data")
 	prevLSN := primitives.LSN(700)
@@ -341,7 +340,7 @@ func TestLogRecordType_Values(t *testing.T) {
 }
 
 func TestNewLogRecord_LargeImages(t *testing.T) {
-	tid := transaction.NewTransactionID()
+	tid := primitives.NewTransactionID()
 	pageID := &mockPageIDForLog{tableID: 1, pageNo: 1}
 
 	// Create large images (simulating a full page)
@@ -377,7 +376,7 @@ func TestNewLogRecord_LargeImages(t *testing.T) {
 }
 
 func TestNewLogRecord_EmptyImages(t *testing.T) {
-	tid := transaction.NewTransactionID()
+	tid := primitives.NewTransactionID()
 	pageID := &mockPageIDForLog{tableID: 1, pageNo: 1}
 
 	// Create empty but non-nil slices
@@ -404,7 +403,7 @@ func TestNewLogRecord_EmptyImages(t *testing.T) {
 }
 
 func TestLogRecord_UndoNextLSN(t *testing.T) {
-	tid := transaction.NewTransactionID()
+	tid := primitives.NewTransactionID()
 	record := NewLogRecord(CLRRecord, tid, nil, nil, nil, primitives.LSN(100))
 
 	// Initially UndoNextLSN should be zero
@@ -421,7 +420,7 @@ func TestLogRecord_UndoNextLSN(t *testing.T) {
 }
 
 func TestLogRecord_LSNField(t *testing.T) {
-	tid := transaction.NewTransactionID()
+	tid := primitives.NewTransactionID()
 	record := NewLogRecord(BeginRecord, tid, nil, nil, nil, FirstLSN)
 
 	// Initially LSN should be zero (not set)
@@ -441,7 +440,7 @@ func TestNewLogRecord_TimestampAccuracy(t *testing.T) {
 	before := time.Now()
 	time.Sleep(1 * time.Millisecond) // Small delay to ensure timestamp is after 'before'
 
-	tid := transaction.NewTransactionID()
+	tid := primitives.NewTransactionID()
 	record := NewLogRecord(BeginRecord, tid, nil, nil, nil, FirstLSN)
 
 	time.Sleep(1 * time.Millisecond) // Small delay to ensure timestamp is before 'after'

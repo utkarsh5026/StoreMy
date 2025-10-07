@@ -1,7 +1,6 @@
 package log
 
 import (
-	"storemy/pkg/concurrency/transaction"
 	"storemy/pkg/primitives"
 	"storemy/pkg/tuple"
 	"time"
@@ -29,7 +28,7 @@ const (
 type LogRecord struct {
 	LSN     primitives.LSN // Unique identifier for this record
 	Type    LogRecordType
-	TID     *transaction.TransactionID
+	TID     *primitives.TransactionID
 	PrevLSN primitives.LSN
 
 	PageID      tuple.PageID // Affected page
@@ -47,7 +46,7 @@ type TransactionLogInfo struct {
 	UndoNextLSN primitives.LSN
 }
 
-func NewLogRecord(logType LogRecordType, tid *transaction.TransactionID, pageId tuple.PageID, beforeImage, afterImage []byte, prevLSN primitives.LSN) *LogRecord {
+func NewLogRecord(logType LogRecordType, tid *primitives.TransactionID, pageId tuple.PageID, beforeImage, afterImage []byte, prevLSN primitives.LSN) *LogRecord {
 	return &LogRecord{
 		Type:        logType,
 		TID:         tid,

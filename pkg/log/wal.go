@@ -5,7 +5,6 @@ import (
 	"io"
 	"maps"
 	"os"
-	"storemy/pkg/concurrency/transaction"
 	"storemy/pkg/primitives"
 	"storemy/pkg/tuple"
 	"sync"
@@ -18,7 +17,7 @@ const (
 // WAL manages the write-ahead log
 type WAL struct {
 	file       *os.File
-	activeTxns map[*transaction.TransactionID]*TransactionLogInfo
+	activeTxns map[*primitives.TransactionID]*TransactionLogInfo
 	dirtyPages map[tuple.PageID]primitives.LSN
 	mutex      sync.RWMutex
 	flushCond  *sync.Cond
@@ -43,7 +42,7 @@ func NewWAL(logPath string, bufferSize int) (*WAL, error) {
 	w := &WAL{
 		file:       file,
 		writer:     writer,
-		activeTxns: make(map[*transaction.TransactionID]*TransactionLogInfo),
+		activeTxns: make(map[*primitives.TransactionID]*TransactionLogInfo),
 		dirtyPages: make(map[tuple.PageID]primitives.LSN),
 	}
 
@@ -51,7 +50,7 @@ func NewWAL(logPath string, bufferSize int) (*WAL, error) {
 	return w, nil
 }
 
-func (w *WAL) LogBegin(tid *transaction.TransactionID) (primitives.LSN, error) {
+func (w *WAL) LogBegin(tid *primitives.TransactionID) (primitives.LSN, error) {
 	w.mutex.Lock()
 	defer w.mutex.Unlock()
 
@@ -69,7 +68,7 @@ func (w *WAL) LogBegin(tid *transaction.TransactionID) (primitives.LSN, error) {
 
 // CRITICAL: This must FORCE the log to disk before returning (durability guarantee)
 // After this returns successfully, the transaction is durable even if system crashes
-func (w *WAL) LogCommit(tid *transaction.TransactionID) (primitives.LSN, error) {
+func (w *WAL) LogCommit(tid *primitives.TransactionID) (primitives.LSN, error) {
 	w.mutex.Lock()
 
 	txnInfo, err := w.getTransactionInfo(tid)
@@ -99,7 +98,7 @@ func (w *WAL) LogCommit(tid *transaction.TransactionID) (primitives.LSN, error) 
 
 // LogAbort logs a transaction abort
 // This initiates the undo process for the transaction
-func (w *WAL) LogAbort(tid *transaction.TransactionID) (primitives.LSN, error) {
+func (w *WAL) LogAbort(tid *primitives.TransactionID) (primitives.LSN, error) {
 	w.mutex.Lock()
 	defer w.mutex.Unlock()
 
@@ -137,21 +136,21 @@ func (w *WAL) Close() error {
 
 // LogUpdate logs a page update with before and after images
 // This is called BEFORE the page is actually modified in memory
-func (w *WAL) LogUpdate(tid *transaction.TransactionID, pageID tuple.PageID, beforeImage, afterImage []byte) (primitives.LSN, error) {
+func (w *WAL) LogUpdate(tid *primitives.TransactionID, pageID tuple.PageID, beforeImage, afterImage []byte) (primitives.LSN, error) {
 	return w.logDataOperation(UpdateRecord, tid, pageID, beforeImage, afterImage)
 }
 
 // LogInsert logs a tuple insertion
 // Only needs after image - there's nothing to undo to (tuple didn't exist)
 // During recovery, we REDO the insert by applying the after image
-func (w *WAL) LogInsert(tid *transaction.TransactionID, pageID tuple.PageID, afterImage []byte) (primitives.LSN, error) {
+func (w *WAL) LogInsert(tid *primitives.TransactionID, pageID tuple.PageID, afterImage []byte) (primitives.LSN, error) {
 	return w.logDataOperation(InsertRecord, tid, pageID, nil, afterImage)
 }
 
 // LogDelete logs a tuple deletion
 // Only needs before image - this is what we restore during UNDO
 // During recovery, REDO means "ensure tuple is deleted" (no-op if already gone)
-func (w *WAL) LogDelete(tid *transaction.TransactionID, pageID tuple.PageID, beforeImage []byte) (primitives.LSN, error) {
+func (w *WAL) LogDelete(tid *primitives.TransactionID, pageID tuple.PageID, beforeImage []byte) (primitives.LSN, error) {
 	return w.logDataOperation(DeleteRecord, tid, pageID, beforeImage, nil)
 }
 
@@ -168,11 +167,11 @@ func (w *WAL) GetDirtyPages() map[tuple.PageID]primitives.LSN {
 
 // GetActiveTransactions returns a list of active transaction IDs
 // Used during checkpointing
-func (w *WAL) GetActiveTransactions() []*transaction.TransactionID {
+func (w *WAL) GetActiveTransactions() []*primitives.TransactionID {
 	w.mutex.RLock()
 	defer w.mutex.RUnlock()
 
-	txns := make([]*transaction.TransactionID, 0, len(w.activeTxns))
+	txns := make([]*primitives.TransactionID, 0, len(w.activeTxns))
 	for tid := range w.activeTxns {
 		txns = append(txns, tid)
 	}
@@ -181,7 +180,7 @@ func (w *WAL) GetActiveTransactions() []*transaction.TransactionID {
 
 // GetLastLSN returns the last primitives.LSN for a transaction
 // Used for building PrevLSN chains
-func (w *WAL) GetLastLSN(tid *transaction.TransactionID) (primitives.LSN, error) {
+func (w *WAL) GetLastLSN(tid *primitives.TransactionID) (primitives.LSN, error) {
 	w.mutex.RLock()
 	defer w.mutex.RUnlock()
 
@@ -211,7 +210,7 @@ func (w *WAL) Force(lsn primitives.LSN) error {
 	return w.writer.Force(lsn)
 }
 
-func (w *WAL) getTransactionInfo(tid *transaction.TransactionID) (*TransactionLogInfo, error) {
+func (w *WAL) getTransactionInfo(tid *primitives.TransactionID) (*TransactionLogInfo, error) {
 	txnInfo, exists := w.activeTxns[tid]
 	if !exists {
 		return nil, fmt.Errorf("transaction %v not found in active transactions", tid)
@@ -220,7 +219,7 @@ func (w *WAL) getTransactionInfo(tid *transaction.TransactionID) (*TransactionLo
 }
 
 // logDataOperation is a helper for logging data operations (insert, update, delete)
-func (w *WAL) logDataOperation(recordType LogRecordType, tid *transaction.TransactionID, pageID tuple.PageID, beforeImage, afterImage []byte) (primitives.LSN, error) {
+func (w *WAL) logDataOperation(recordType LogRecordType, tid *primitives.TransactionID, pageID tuple.PageID, beforeImage, afterImage []byte) (primitives.LSN, error) {
 	w.mutex.Lock()
 	defer w.mutex.Unlock()
 
@@ -245,7 +244,7 @@ func (w *WAL) logDataOperation(recordType LogRecordType, tid *transaction.Transa
 	return lsn, nil
 }
 
-func (w *WAL) logTransactionOperation(recordType LogRecordType, tid *transaction.TransactionID, prevLSN primitives.LSN) (primitives.LSN, error) {
+func (w *WAL) logTransactionOperation(recordType LogRecordType, tid *primitives.TransactionID, prevLSN primitives.LSN) (primitives.LSN, error) {
 	record := NewLogRecord(recordType, tid, nil, nil, nil, prevLSN)
 	return w.writeRecord(record)
 }

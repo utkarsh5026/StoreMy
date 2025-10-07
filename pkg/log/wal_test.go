@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"storemy/pkg/concurrency/transaction"
 	"storemy/pkg/primitives"
 	"storemy/pkg/tuple"
 	"testing"
@@ -93,7 +92,7 @@ func TestLogBegin(t *testing.T) {
 	wal, _, cleanup := createTestWAL(t)
 	defer cleanup()
 
-	tid := transaction.NewTransactionID()
+	tid := primitives.NewTransactionID()
 	lsn, err := wal.LogBegin(tid)
 
 	if err != nil {
@@ -123,7 +122,7 @@ func TestLogUpdate(t *testing.T) {
 	wal, _, cleanup := createTestWAL(t)
 	defer cleanup()
 
-	tid := transaction.NewTransactionID()
+	tid := primitives.NewTransactionID()
 	_, err := wal.LogBegin(tid)
 	if err != nil {
 		t.Fatalf("LogBegin failed: %v", err)
@@ -163,7 +162,7 @@ func TestLogUpdateWithoutBegin(t *testing.T) {
 	wal, _, cleanup := createTestWAL(t)
 	defer cleanup()
 
-	tid := transaction.NewTransactionID()
+	tid := primitives.NewTransactionID()
 	pageID := &mockPageID{tableID: 1, pageNo: 100}
 
 	_, err := wal.LogUpdate(tid, pageID, []byte("before"), []byte("after"))
@@ -176,7 +175,7 @@ func TestMultipleUpdates(t *testing.T) {
 	wal, _, cleanup := createTestWAL(t)
 	defer cleanup()
 
-	tid := transaction.NewTransactionID()
+	tid := primitives.NewTransactionID()
 	firstLSN, err := wal.LogBegin(tid)
 	if err != nil {
 		t.Fatalf("LogBegin failed: %v", err)
@@ -215,7 +214,7 @@ func TestForce(t *testing.T) {
 	wal, _, cleanup := createTestWAL(t)
 	defer cleanup()
 
-	tid := transaction.NewTransactionID()
+	tid := primitives.NewTransactionID()
 	lsn, err := wal.LogBegin(tid)
 	if err != nil {
 		t.Fatalf("LogBegin failed: %v", err)
@@ -236,7 +235,7 @@ func TestForceIdempotent(t *testing.T) {
 	wal, _, cleanup := createTestWAL(t)
 	defer cleanup()
 
-	tid := transaction.NewTransactionID()
+	tid := primitives.NewTransactionID()
 	lsn, err := wal.LogBegin(tid)
 	if err != nil {
 		t.Fatalf("LogBegin failed: %v", err)
@@ -270,7 +269,7 @@ func TestBufferFlushing(t *testing.T) {
 	}
 	defer wal.file.Close()
 
-	tid := transaction.NewTransactionID()
+	tid := primitives.NewTransactionID()
 	_, err = wal.LogBegin(tid)
 	if err != nil {
 		t.Fatalf("LogBegin failed: %v", err)
@@ -300,8 +299,8 @@ func TestConcurrentTransactions(t *testing.T) {
 	wal, _, cleanup := createTestWAL(t)
 	defer cleanup()
 
-	tid1 := transaction.NewTransactionID()
-	tid2 := transaction.NewTransactionID()
+	tid1 := primitives.NewTransactionID()
+	tid2 := primitives.NewTransactionID()
 
 	lsn1, err := wal.LogBegin(tid1)
 	if err != nil {
@@ -348,7 +347,7 @@ func TestDirtyPageTracking(t *testing.T) {
 	wal, _, cleanup := createTestWAL(t)
 	defer cleanup()
 
-	tid := transaction.NewTransactionID()
+	tid := primitives.NewTransactionID()
 	_, err := wal.LogBegin(tid)
 	if err != nil {
 		t.Fatalf("LogBegin failed: %v", err)
@@ -394,7 +393,7 @@ func TestWALPersistence(t *testing.T) {
 		t.Fatalf("failed to create WAL: %v", err)
 	}
 
-	tid := transaction.NewTransactionID()
+	tid := primitives.NewTransactionID()
 	lsn, err := wal.LogBegin(tid)
 	if err != nil {
 		t.Fatalf("LogBegin failed: %v", err)
@@ -425,7 +424,7 @@ func TestLogInsert(t *testing.T) {
 	wal, _, cleanup := createTestWAL(t)
 	defer cleanup()
 
-	tid := transaction.NewTransactionID()
+	tid := primitives.NewTransactionID()
 	_, err := wal.LogBegin(tid)
 	if err != nil {
 		t.Fatalf("LogBegin failed: %v", err)
@@ -464,7 +463,7 @@ func TestLogInsertWithoutBegin(t *testing.T) {
 	wal, _, cleanup := createTestWAL(t)
 	defer cleanup()
 
-	tid := transaction.NewTransactionID()
+	tid := primitives.NewTransactionID()
 	pageID := &mockPageID{tableID: 1, pageNo: 100}
 
 	_, err := wal.LogInsert(tid, pageID, []byte("new tuple"))
@@ -477,7 +476,7 @@ func TestLogDelete(t *testing.T) {
 	wal, _, cleanup := createTestWAL(t)
 	defer cleanup()
 
-	tid := transaction.NewTransactionID()
+	tid := primitives.NewTransactionID()
 	_, err := wal.LogBegin(tid)
 	if err != nil {
 		t.Fatalf("LogBegin failed: %v", err)
@@ -516,7 +515,7 @@ func TestLogDeleteWithoutBegin(t *testing.T) {
 	wal, _, cleanup := createTestWAL(t)
 	defer cleanup()
 
-	tid := transaction.NewTransactionID()
+	tid := primitives.NewTransactionID()
 	pageID := &mockPageID{tableID: 1, pageNo: 100}
 
 	_, err := wal.LogDelete(tid, pageID, []byte("deleted tuple"))
@@ -529,7 +528,7 @@ func TestMixedOperations(t *testing.T) {
 	wal, _, cleanup := createTestWAL(t)
 	defer cleanup()
 
-	tid := transaction.NewTransactionID()
+	tid := primitives.NewTransactionID()
 	firstLSN, err := wal.LogBegin(tid)
 	if err != nil {
 		t.Fatalf("LogBegin failed: %v", err)
@@ -589,7 +588,7 @@ func TestMultipleInsertsAndDeletes(t *testing.T) {
 	wal, _, cleanup := createTestWAL(t)
 	defer cleanup()
 
-	tid := transaction.NewTransactionID()
+	tid := primitives.NewTransactionID()
 	_, err := wal.LogBegin(tid)
 	if err != nil {
 		t.Fatalf("LogBegin failed: %v", err)
@@ -644,7 +643,7 @@ func TestLogCommit(t *testing.T) {
 	wal, _, cleanup := createTestWAL(t)
 	defer cleanup()
 
-	tid := transaction.NewTransactionID()
+	tid := primitives.NewTransactionID()
 	beginLSN, err := wal.LogBegin(tid)
 	if err != nil {
 		t.Fatalf("LogBegin failed: %v", err)
@@ -679,7 +678,7 @@ func TestLogCommitWithoutBegin(t *testing.T) {
 	wal, _, cleanup := createTestWAL(t)
 	defer cleanup()
 
-	tid := transaction.NewTransactionID()
+	tid := primitives.NewTransactionID()
 
 	_, err := wal.LogCommit(tid)
 	if err == nil {
@@ -691,7 +690,7 @@ func TestLogCommitEmptyTransaction(t *testing.T) {
 	wal, _, cleanup := createTestWAL(t)
 	defer cleanup()
 
-	tid := transaction.NewTransactionID()
+	tid := primitives.NewTransactionID()
 	_, err := wal.LogBegin(tid)
 	if err != nil {
 		t.Fatalf("LogBegin failed: %v", err)
@@ -717,7 +716,7 @@ func TestLogAbort(t *testing.T) {
 	wal, _, cleanup := createTestWAL(t)
 	defer cleanup()
 
-	tid := transaction.NewTransactionID()
+	tid := primitives.NewTransactionID()
 	beginLSN, err := wal.LogBegin(tid)
 	if err != nil {
 		t.Fatalf("LogBegin failed: %v", err)
@@ -766,7 +765,7 @@ func TestLogAbortWithoutBegin(t *testing.T) {
 	wal, _, cleanup := createTestWAL(t)
 	defer cleanup()
 
-	tid := transaction.NewTransactionID()
+	tid := primitives.NewTransactionID()
 
 	_, err := wal.LogAbort(tid)
 	if err == nil {
@@ -778,7 +777,7 @@ func TestLogAbortEmptyTransaction(t *testing.T) {
 	wal, _, cleanup := createTestWAL(t)
 	defer cleanup()
 
-	tid := transaction.NewTransactionID()
+	tid := primitives.NewTransactionID()
 	beginLSN, err := wal.LogBegin(tid)
 	if err != nil {
 		t.Fatalf("LogBegin failed: %v", err)
@@ -814,7 +813,7 @@ func TestClose(t *testing.T) {
 		t.Fatalf("failed to create WAL: %v", err)
 	}
 
-	tid := transaction.NewTransactionID()
+	tid := primitives.NewTransactionID()
 	_, err = wal.LogBegin(tid)
 	if err != nil {
 		t.Fatalf("LogBegin failed: %v", err)
@@ -842,7 +841,7 @@ func TestCloseFlushesBuffer(t *testing.T) {
 		t.Fatalf("failed to create WAL: %v", err)
 	}
 
-	tid := transaction.NewTransactionID()
+	tid := primitives.NewTransactionID()
 	_, err = wal.LogBegin(tid)
 	if err != nil {
 		t.Fatalf("LogBegin failed: %v", err)
@@ -875,7 +874,7 @@ func TestCommitAndAbortSequence(t *testing.T) {
 	defer cleanup()
 
 	// Transaction 1: commit
-	tid1 := transaction.NewTransactionID()
+	tid1 := primitives.NewTransactionID()
 	_, err := wal.LogBegin(tid1)
 	if err != nil {
 		t.Fatalf("LogBegin tid1 failed: %v", err)
@@ -893,7 +892,7 @@ func TestCommitAndAbortSequence(t *testing.T) {
 	}
 
 	// Transaction 2: abort
-	tid2 := transaction.NewTransactionID()
+	tid2 := primitives.NewTransactionID()
 	_, err = wal.LogBegin(tid2)
 	if err != nil {
 		t.Fatalf("LogBegin tid2 failed: %v", err)
@@ -934,7 +933,7 @@ func TestMultipleCommits(t *testing.T) {
 	commitLSNs := make([]primitives.LSN, numTxns)
 
 	for i := 0; i < numTxns; i++ {
-		tid := transaction.NewTransactionID()
+		tid := primitives.NewTransactionID()
 		_, err := wal.LogBegin(tid)
 		if err != nil {
 			t.Fatalf("LogBegin %d failed: %v", i, err)

@@ -5,7 +5,6 @@ import (
 	"encoding/binary"
 	"fmt"
 	"io"
-	"storemy/pkg/concurrency/transaction"
 	"storemy/pkg/primitives"
 	"storemy/pkg/tuple"
 	"time"
@@ -169,7 +168,7 @@ func DeserializeLogRecord(data []byte) (*LogRecord, error) {
 		return nil, fmt.Errorf("failed to read transaction ID: %w", err)
 	}
 	if tidVal != 0 {
-		record.TID = transaction.NewTransactionIDFromValue(int64(tidVal))
+		record.TID = primitives.NewTransactionIDFromValue(int64(tidVal))
 	}
 
 	var prevLSN uint64

@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"storemy/pkg/concurrency/transaction"
 	"storemy/pkg/primitives"
 	"sync"
 	"testing"
@@ -16,7 +15,7 @@ func TestCompleteTransactionLifecycle(t *testing.T) {
 	wal, _, cleanup := createTestWAL(t)
 	defer cleanup()
 
-	tid := transaction.NewTransactionID()
+	tid := primitives.NewTransactionID()
 
 	// Begin
 	beginLSN, err := wal.LogBegin(tid)
@@ -73,9 +72,9 @@ func TestInterleavedTransactions(t *testing.T) {
 	defer cleanup()
 
 	// Start 3 transactions
-	tid1 := transaction.NewTransactionID()
-	tid2 := transaction.NewTransactionID()
-	tid3 := transaction.NewTransactionID()
+	tid1 := primitives.NewTransactionID()
+	tid2 := primitives.NewTransactionID()
+	tid3 := primitives.NewTransactionID()
 
 	_, err := wal.LogBegin(tid1)
 	if err != nil {
@@ -165,7 +164,7 @@ func TestConcurrentWrites(t *testing.T) {
 		go func(routineID int) {
 			defer wg.Done()
 
-			tid := transaction.NewTransactionID()
+			tid := primitives.NewTransactionID()
 			_, err := wal.LogBegin(tid)
 			if err != nil {
 				errors <- fmt.Errorf("goroutine %d: LogBegin failed: %v", routineID, err)
@@ -214,7 +213,7 @@ func TestLargeTransaction(t *testing.T) {
 	wal, _, cleanup := createTestWAL(t)
 	defer cleanup()
 
-	tid := transaction.NewTransactionID()
+	tid := primitives.NewTransactionID()
 	_, err := wal.LogBegin(tid)
 	if err != nil {
 		t.Fatalf("LogBegin failed: %v", err)
@@ -259,7 +258,7 @@ func TestMultiplePagesPerTransaction(t *testing.T) {
 	wal, _, cleanup := createTestWAL(t)
 	defer cleanup()
 
-	tid := transaction.NewTransactionID()
+	tid := primitives.NewTransactionID()
 	_, err := wal.LogBegin(tid)
 	if err != nil {
 		t.Fatalf("LogBegin failed: %v", err)
@@ -316,7 +315,7 @@ func TestBufferOverflow(t *testing.T) {
 	}
 	defer wal.file.Close()
 
-	tid := transaction.NewTransactionID()
+	tid := primitives.NewTransactionID()
 	_, err = wal.LogBegin(tid)
 	if err != nil {
 		t.Fatalf("LogBegin failed: %v", err)
@@ -345,7 +344,7 @@ func TestGetDirtyPages(t *testing.T) {
 	wal, _, cleanup := createTestWAL(t)
 	defer cleanup()
 
-	tid := transaction.NewTransactionID()
+	tid := primitives.NewTransactionID()
 	_, err := wal.LogBegin(tid)
 	if err != nil {
 		t.Fatalf("LogBegin failed: %v", err)
@@ -394,10 +393,10 @@ func TestGetActiveTransactions(t *testing.T) {
 
 	// Start multiple transactions
 	numTxns := 5
-	tids := make([]*transaction.TransactionID, numTxns)
+	tids := make([]*primitives.TransactionID, numTxns)
 
 	for i := 0; i < numTxns; i++ {
-		tid := transaction.NewTransactionID()
+		tid := primitives.NewTransactionID()
 		_, err := wal.LogBegin(tid)
 		if err != nil {
 			t.Fatalf("LogBegin %d failed: %v", i, err)
@@ -414,7 +413,7 @@ func TestGetActiveTransactions(t *testing.T) {
 	}
 
 	// Verify all transactions are present
-	txnMap := make(map[*transaction.TransactionID]bool)
+	txnMap := make(map[*primitives.TransactionID]bool)
 	for _, tid := range activeTxns {
 		txnMap[tid] = true
 	}
@@ -442,7 +441,7 @@ func TestTransactionChaining(t *testing.T) {
 	wal, _, cleanup := createTestWAL(t)
 	defer cleanup()
 
-	tid := transaction.NewTransactionID()
+	tid := primitives.NewTransactionID()
 	beginLSN, err := wal.LogBegin(tid)
 	if err != nil {
 		t.Fatalf("LogBegin failed: %v", err)
@@ -480,7 +479,7 @@ func TestForceIdempotency(t *testing.T) {
 	wal, _, cleanup := createTestWAL(t)
 	defer cleanup()
 
-	tid := transaction.NewTransactionID()
+	tid := primitives.NewTransactionID()
 	lsn, err := wal.LogBegin(tid)
 	if err != nil {
 		t.Fatalf("LogBegin failed: %v", err)
@@ -502,7 +501,7 @@ func TestAbortPreservesTransactionInfo(t *testing.T) {
 	wal, _, cleanup := createTestWAL(t)
 	defer cleanup()
 
-	tid := transaction.NewTransactionID()
+	tid := primitives.NewTransactionID()
 	beginLSN, err := wal.LogBegin(tid)
 	if err != nil {
 		t.Fatalf("LogBegin failed: %v", err)
@@ -564,7 +563,7 @@ func TestStressTest(t *testing.T) {
 			defer wg.Done()
 
 			for j := 0; j < 10; j++ {
-				tid := transaction.NewTransactionID()
+				tid := primitives.NewTransactionID()
 				_, err := wal.LogBegin(tid)
 				if err != nil {
 					errors <- err
@@ -640,7 +639,7 @@ func TestPersistenceAfterCommit(t *testing.T) {
 
 	numTxns := 10
 	for i := 0; i < numTxns; i++ {
-		tid := transaction.NewTransactionID()
+		tid := primitives.NewTransactionID()
 		_, err := wal.LogBegin(tid)
 		if err != nil {
 			t.Fatalf("LogBegin %d failed: %v", i, err)
