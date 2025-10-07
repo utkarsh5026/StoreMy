@@ -2,6 +2,7 @@ package catalog
 
 import (
 	"fmt"
+	"storemy/pkg/concurrency/transaction"
 	"storemy/pkg/memory"
 	"storemy/pkg/primitives"
 	"storemy/pkg/storage/heap"
@@ -43,9 +44,8 @@ func NewSystemCatalog(ps *memory.PageStore, tm *memory.TableManager) *SystemCata
 // Initialize creates the system catalog tables (CATALOG_TABLES and CATALOG_COLUMNS)
 // and registers them with the table manager. This must be called before any other
 // catalog operations.
-func (sc *SystemCatalog) Initialize(dataDir string) error {
-	tid := primitives.NewTransactionID()
-	defer sc.store.CommitTransaction(tid)
+func (sc *SystemCatalog) Initialize(ctx *transaction.TransactionContext, dataDir string) error {
+	defer sc.store.CommitTransaction(ctx)
 
 	var err error
 	sc.tablesTableID, err = sc.createCatalogTable(dataDir, CatalogTableFileName, CatalogTable, "table_id", GetTablesSchema())
@@ -82,16 +82,16 @@ func (sc *SystemCatalog) createCatalogTable(dataDir, fileName, tableName, primar
 
 // RegisterTable adds a new table to the system catalog.
 // It inserts metadata into CATALOG_TABLES and column definitions into CATALOG_COLUMNS.
-func (sc *SystemCatalog) RegisterTable(tid *primitives.TransactionID, tableID int, tableName, filePath, primaryKey string, fields []FieldMetadata,
+func (sc *SystemCatalog) RegisterTable(tx *transaction.TransactionContext, tableID int, tableName, filePath, primaryKey string, fields []FieldMetadata,
 ) error {
 	tup := createTablesTuple(tableID, tableName, filePath, primaryKey)
-	if err := sc.store.InsertTuple(tid, sc.tablesTableID, tup); err != nil {
+	if err := sc.store.InsertTuple(tx, sc.tablesTableID, tup); err != nil {
 		return fmt.Errorf("failed to insert table metadata: %w", err)
 	}
 
 	for pos, f := range fields {
 		tup = createColumnsTuple(tableID, f.Name, f.Type, pos, f.Name == primaryKey)
-		if err := sc.store.InsertTuple(tid, sc.columnsTableID, tup); err != nil {
+		if err := sc.store.InsertTuple(tx, sc.columnsTableID, tup); err != nil {
 			return fmt.Errorf("failed to insert column metadata: %w", err)
 		}
 	}
@@ -131,14 +131,13 @@ type FieldMetadata struct {
 // from CATALOG_COLUMNS, opens their heap files, and registers them with the table manager.
 //
 // This is called during database startup to restore all user tables.
-func (sc *SystemCatalog) LoadTables(dataDir string) error {
-	tid := primitives.NewTransactionID()
-	defer sc.store.CommitTransaction(tid)
+func (sc *SystemCatalog) LoadTables(tx *transaction.TransactionContext, dataDir string) error {
+	defer sc.store.CommitTransaction(tx)
 
-	return sc.iterateTable(sc.tablesTableID, tid, func(tableTuple *tuple.Tuple) error {
+	return sc.iterateTable(sc.tablesTableID, tx.ID, func(tableTuple *tuple.Tuple) error {
 		tableID, name, filePath := parseTableMetadata(tableTuple)
 
-		schema, pk, err := sc.loader.LoadTableSchema(tid, tableID)
+		schema, pk, err := sc.loader.LoadTableSchema(tx.ID, tableID)
 		if err != nil {
 			return fmt.Errorf("failed to load schema for table %s: %w", name, err)
 		}
