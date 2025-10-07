@@ -2,8 +2,8 @@ package memory
 
 import (
 	"fmt"
-	"storemy/pkg/concurrency/transaction"
 	"storemy/pkg/iterator"
+	"storemy/pkg/primitives"
 	"storemy/pkg/storage/heap"
 	"storemy/pkg/storage/page"
 	"storemy/pkg/tuple"
@@ -15,7 +15,7 @@ import (
 type mockPage struct {
 	id        tuple.PageID
 	dirty     bool
-	dirtyTid  *transaction.TransactionID
+	dirtyTid  *primitives.TransactionID
 	data      []byte
 	beforeImg page.Page
 	mutex     sync.RWMutex
@@ -32,7 +32,7 @@ func (m *mockPage) GetID() tuple.PageID {
 	return m.id
 }
 
-func (m *mockPage) IsDirty() *transaction.TransactionID {
+func (m *mockPage) IsDirty() *primitives.TransactionID {
 	m.mutex.RLock()
 	defer m.mutex.RUnlock()
 	if m.dirty {
@@ -41,7 +41,7 @@ func (m *mockPage) IsDirty() *transaction.TransactionID {
 	return nil
 }
 
-func (m *mockPage) MarkDirty(dirty bool, tid *transaction.TransactionID) {
+func (m *mockPage) MarkDirty(dirty bool, tid *primitives.TransactionID) {
 	m.mutex.Lock()
 	defer m.mutex.Unlock()
 	m.dirty = dirty
@@ -124,7 +124,7 @@ func (m *mockDbFileForPageStore) WritePage(p page.Page) error {
 	return nil
 }
 
-func (m *mockDbFileForPageStore) AddTuple(tid *transaction.TransactionID, t *tuple.Tuple) ([]page.Page, error) {
+func (m *mockDbFileForPageStore) AddTuple(tid *primitives.TransactionID, t *tuple.Tuple) ([]page.Page, error) {
 	m.mutex.Lock()
 	defer m.mutex.Unlock()
 
@@ -142,7 +142,7 @@ func (m *mockDbFileForPageStore) AddTuple(tid *transaction.TransactionID, t *tup
 	return []page.Page{newPage}, nil
 }
 
-func (m *mockDbFileForPageStore) DeleteTuple(tid *transaction.TransactionID, t *tuple.Tuple) (page.Page, error) {
+func (m *mockDbFileForPageStore) DeleteTuple(tid *primitives.TransactionID, t *tuple.Tuple) (page.Page, error) {
 	m.mutex.Lock()
 	defer m.mutex.Unlock()
 
@@ -164,7 +164,7 @@ func (m *mockDbFileForPageStore) DeleteTuple(tid *transaction.TransactionID, t *
 	return nil, fmt.Errorf("tuple has no record ID")
 }
 
-func (m *mockDbFileForPageStore) Iterator(tid *transaction.TransactionID) iterator.DbFileIterator {
+func (m *mockDbFileForPageStore) Iterator(tid *primitives.TransactionID) iterator.DbFileIterator {
 	return nil
 }
 
