@@ -78,7 +78,7 @@ func (p *CreateTablePlan) Execute() (any, error) {
 		}
 
 		err = tableCatalog.RegisterTable(
-			p.transactionCtx.ID,
+			p.transactionCtx,
 			heapFile.GetID(),
 			p.Statement.TableName,
 			fileName,
