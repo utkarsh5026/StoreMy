@@ -2,6 +2,8 @@ package transaction
 
 import (
 	"fmt"
+	"maps"
+	"slices"
 	"storemy/pkg/log"
 	"storemy/pkg/primitives"
 	"sync"
@@ -74,13 +76,9 @@ func (tr *TransactionRegistry) GetActive() []*TransactionContext {
 	tr.mutex.RLock()
 	defer tr.mutex.RUnlock()
 
-	active := make([]*TransactionContext, 0)
-	for _, ctx := range tr.contexts {
-		if ctx.IsActive() {
-			active = append(active, ctx)
-		}
-	}
-	return active
+	return slices.DeleteFunc(slices.Collect(maps.Values(tr.contexts)), func(ctx *TransactionContext) bool {
+		return !ctx.IsActive()
+	})
 }
 
 // Count returns the number of registered transactions
@@ -94,10 +92,5 @@ func (tr *TransactionRegistry) Count() int {
 func (tr *TransactionRegistry) GetAllTransactionIDs() []*primitives.TransactionID {
 	tr.mutex.RLock()
 	defer tr.mutex.RUnlock()
-
-	tids := make([]*primitives.TransactionID, 0, len(tr.contexts))
-	for tid := range tr.contexts {
-		tids = append(tids, tid)
-	}
-	return tids
+	return slices.Collect(maps.Keys(tr.contexts))
 }
