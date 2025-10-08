@@ -2,7 +2,7 @@ package plan
 
 import (
 	"fmt"
-	"storemy/pkg/types"
+	"storemy/pkg/primitives"
 )
 
 // ScanNode represents a table scan in the query plan.
@@ -56,11 +56,11 @@ type JoinNode struct {
 	JoinType   JoinType
 	LeftField  string
 	RightField string
-	Predicate  types.Predicate
+	Predicate  primitives.Predicate
 }
 
 // NewJoinNode creates a new join node with the specified parameters.
-func NewJoinNode(rightTable *ScanNode, joinType JoinType, leftField, rightField string, predicate types.Predicate) *JoinNode {
+func NewJoinNode(rightTable *ScanNode, joinType JoinType, leftField, rightField string, predicate primitives.Predicate) *JoinNode {
 	return &JoinNode{
 		RightTable: rightTable,
 		JoinType:   joinType,
@@ -79,12 +79,12 @@ func (jn *JoinNode) String() string {
 type FilterNode struct {
 	Table     string
 	Field     string
-	Predicate types.Predicate
+	Predicate primitives.Predicate
 	Constant  string
 }
 
 // NewFilterNode creates a new filter node with the specified parameters.
-func NewFilterNode(table, field string, predicate types.Predicate, constant string) *FilterNode {
+func NewFilterNode(table, field string, predicate primitives.Predicate, constant string) *FilterNode {
 	return &FilterNode{
 		Table:     table,
 		Field:     field,

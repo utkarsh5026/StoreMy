@@ -3,7 +3,7 @@ package plan
 import (
 	"errors"
 	"fmt"
-	"storemy/pkg/types"
+	"storemy/pkg/primitives"
 	"strings"
 )
 
@@ -79,7 +79,7 @@ func (sp *SelectPlan) AddScan(tableName string, alias string) {
 }
 
 // AddFilter adds a WHERE clause filter condition.
-func (sp *SelectPlan) AddFilter(field string, pred types.Predicate, constant string) error {
+func (sp *SelectPlan) AddFilter(field string, pred primitives.Predicate, constant string) error {
 	parts := strings.Split(field, ".")
 	if len(parts) != 2 {
 		return errors.New("field name must be fully qualified for filters")
@@ -93,7 +93,7 @@ func (sp *SelectPlan) AddFilter(field string, pred types.Predicate, constant str
 }
 
 // AddJoin adds a JOIN clause to the query.
-func (sp *SelectPlan) AddJoin(rightTable *ScanNode, joinType JoinType, leftField, rightField string, predicate types.Predicate) {
+func (sp *SelectPlan) AddJoin(rightTable *ScanNode, joinType JoinType, leftField, rightField string, predicate primitives.Predicate) {
 	join := NewJoinNode(rightTable, joinType, leftField, rightField, predicate)
 	sp.joins = append(sp.joins, join)
 	fmt.Printf("Added join: %s\n", join.String())

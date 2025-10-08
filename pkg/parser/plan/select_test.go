@@ -1,7 +1,7 @@
 package plan
 
 import (
-	"storemy/pkg/types"
+	"storemy/pkg/primitives"
 	"testing"
 )
 
@@ -156,28 +156,28 @@ func TestSelectPlan_AddFilter(t *testing.T) {
 	tests := []struct {
 		name      string
 		field     string
-		predicate types.Predicate
+		predicate primitives.Predicate
 		constant  string
 		wantErr   bool
 	}{
 		{
 			name:      "Valid qualified field",
 			field:     "users.id",
-			predicate: types.Equals,
+			predicate: primitives.Equals,
 			constant:  "1",
 			wantErr:   false,
 		},
 		{
 			name:      "Invalid unqualified field",
 			field:     "id",
-			predicate: types.Equals,
+			predicate: primitives.Equals,
 			constant:  "1",
 			wantErr:   true,
 		},
 		{
 			name:      "Valid complex field",
 			field:     "orders.total",
-			predicate: types.GreaterThan,
+			predicate: primitives.GreaterThan,
 			constant:  "100.50",
 			wantErr:   false,
 		},
@@ -203,7 +203,7 @@ func TestSelectPlan_AddJoin(t *testing.T) {
 	plan := NewSelectPlan()
 
 	rightTable := NewScanNode("orders", "o")
-	plan.AddJoin(rightTable, InnerJoin, "users.id", "orders.user_id", types.Equals)
+	plan.AddJoin(rightTable, InnerJoin, "users.id", "orders.user_id", primitives.Equals)
 
 	if len(plan.joins) != 1 {
 		t.Errorf("joins length = %d, want 1", len(plan.joins))
@@ -298,9 +298,9 @@ func TestSelectPlan_Accessors(t *testing.T) {
 	// Add data
 	plan.AddProjectField("users.name", "")
 	plan.AddScan("users", "u")
-	plan.AddFilter("users.id", types.Equals, "1")
+	plan.AddFilter("users.id", primitives.Equals, "1")
 	rightTable := NewScanNode("orders", "o")
-	plan.AddJoin(rightTable, InnerJoin, "users.id", "orders.user_id", types.Equals)
+	plan.AddJoin(rightTable, InnerJoin, "users.id", "orders.user_id", primitives.Equals)
 	plan.SetGroupBy("users.age")
 	plan.AddOrderBy("users.name", true)
 	plan.SetSelectAll(false)
@@ -373,8 +373,8 @@ func TestSelectPlan_ComplexQuery(t *testing.T) {
 	plan.AddProjectField("orders.total", "AVG")
 	plan.AddScan("users", "u")
 	rightTable := NewScanNode("orders", "o")
-	plan.AddJoin(rightTable, InnerJoin, "users.id", "orders.user_id", types.Equals)
-	plan.AddFilter("users.active", types.Equals, "true")
+	plan.AddJoin(rightTable, InnerJoin, "users.id", "orders.user_id", primitives.Equals)
+	plan.AddFilter("users.active", primitives.Equals, "true")
 	plan.SetGroupBy("users.name")
 	plan.AddOrderBy("users.name", true)
 

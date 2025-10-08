@@ -1,7 +1,7 @@
 package plan
 
 import (
-	"storemy/pkg/types"
+	"storemy/pkg/primitives"
 	"testing"
 )
 
@@ -81,7 +81,7 @@ func TestJoinNode(t *testing.T) {
 		joinType   JoinType
 		leftField  string
 		rightField string
-		predicate  types.Predicate
+		predicate  primitives.Predicate
 		wantStr    string
 	}{
 		{
@@ -90,7 +90,7 @@ func TestJoinNode(t *testing.T) {
 			joinType:   InnerJoin,
 			leftField:  "users.id",
 			rightField: "orders.user_id",
-			predicate:  types.Equals,
+			predicate:  primitives.Equals,
 			wantStr:    "INNER JOIN orders ON users.id = orders.user_id",
 		},
 		{
@@ -99,7 +99,7 @@ func TestJoinNode(t *testing.T) {
 			joinType:   LeftJoin,
 			leftField:  "orders.product_id",
 			rightField: "products.id",
-			predicate:  types.Equals,
+			predicate:  primitives.Equals,
 			wantStr:    "LEFT JOIN products ON orders.product_id = products.id",
 		},
 		{
@@ -108,7 +108,7 @@ func TestJoinNode(t *testing.T) {
 			joinType:   RightJoin,
 			leftField:  "products.category_id",
 			rightField: "categories.id",
-			predicate:  types.Equals,
+			predicate:  primitives.Equals,
 			wantStr:    "RIGHT JOIN categories ON products.category_id = categories.id",
 		},
 	}
@@ -145,7 +145,7 @@ func TestFilterNode(t *testing.T) {
 		name      string
 		table     string
 		field     string
-		predicate types.Predicate
+		predicate primitives.Predicate
 		constant  string
 		wantStr   string
 	}{
@@ -153,7 +153,7 @@ func TestFilterNode(t *testing.T) {
 			name:      "Equals filter",
 			table:     "u",
 			field:     "u.id",
-			predicate: types.Equals,
+			predicate: primitives.Equals,
 			constant:  "1",
 			wantStr:   "Filter[u.u.id = 1]",
 		},
@@ -161,7 +161,7 @@ func TestFilterNode(t *testing.T) {
 			name:      "Greater than filter",
 			table:     "users",
 			field:     "users.age",
-			predicate: types.GreaterThan,
+			predicate: primitives.GreaterThan,
 			constant:  "25",
 			wantStr:   "Filter[users.users.age > 25]",
 		},
@@ -169,7 +169,7 @@ func TestFilterNode(t *testing.T) {
 			name:      "String comparison",
 			table:     "u",
 			field:     "u.name",
-			predicate: types.Equals,
+			predicate: primitives.Equals,
 			constant:  "John",
 			wantStr:   "Filter[u.u.name = John]",
 		},
@@ -177,7 +177,7 @@ func TestFilterNode(t *testing.T) {
 			name:      "Less than or equal",
 			table:     "products",
 			field:     "products.price",
-			predicate: types.LessThanOrEqual,
+			predicate: primitives.LessThanOrEqual,
 			constant:  "100.50",
 			wantStr:   "Filter[products.products.price <= 100.50]",
 		},
@@ -185,7 +185,7 @@ func TestFilterNode(t *testing.T) {
 			name:      "Not equal filter",
 			table:     "users",
 			field:     "users.status",
-			predicate: types.NotEqual,
+			predicate: primitives.NotEqual,
 			constant:  "inactive",
 			wantStr:   "Filter[users.users.status != inactive]",
 		},
@@ -193,7 +193,7 @@ func TestFilterNode(t *testing.T) {
 			name:      "Greater than or equal",
 			table:     "orders",
 			field:     "orders.amount",
-			predicate: types.GreaterThanOrEqual,
+			predicate: primitives.GreaterThanOrEqual,
 			constant:  "1000",
 			wantStr:   "Filter[orders.orders.amount >= 1000]",
 		},
