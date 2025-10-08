@@ -1,4 +1,4 @@
-package types
+package primitives
 
 type Predicate int
 
