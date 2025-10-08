@@ -1,6 +1,6 @@
 # Makefile for StoreMy project
 
-.PHONY: test test-tables test-all test-watch test-watch-tables clean install-tools
+.PHONY: test test-tables test-all test-watch test-watch-tables clean install-tools examples
 
 # Run all tests
 test:
@@ -60,6 +60,10 @@ lint:
 # Run all checks
 check: fmt vet test
 
+# Run WAL examples
+examples:
+	go run pkg/examples/main.go
+
 # Help
 help:
 	@echo "Available targets:"
@@ -75,4 +79,5 @@ help:
 	@echo "  vet               - Vet code"
 	@echo "  lint              - Run linter"
 	@echo "  check             - Run fmt, vet, and test"
+	@echo "  examples          - Run WAL transaction examples"
 	@echo "  help              - Show this help"
