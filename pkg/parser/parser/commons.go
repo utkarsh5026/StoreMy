@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"slices"
 	"storemy/pkg/parser/lexer"
+	"storemy/pkg/primitives"
 	"storemy/pkg/types"
 	"strconv"
 )
@@ -39,22 +40,22 @@ func parseValue(l *lexer.Lexer) (types.Field, error) {
 
 // parseOperator converts a string operator into a Predicate type.
 // Supports standard comparison operators: =, >, <, >=, <=, !=, <>
-func parseOperator(op string) (types.Predicate, error) {
+func parseOperator(op string) (primitives.Predicate, error) {
 	switch op {
 	case "=":
-		return types.Equals, nil
+		return primitives.Equals, nil
 	case ">":
-		return types.GreaterThan, nil
+		return primitives.GreaterThan, nil
 	case "<":
-		return types.LessThan, nil
+		return primitives.LessThan, nil
 	case ">=":
-		return types.GreaterThanOrEqual, nil
+		return primitives.GreaterThanOrEqual, nil
 	case "<=":
-		return types.LessThanOrEqual, nil
+		return primitives.LessThanOrEqual, nil
 	case "!=", "<>":
-		return types.NotEqual, nil
+		return primitives.NotEqual, nil
 	default:
-		return types.Equals, fmt.Errorf("unknown operator: %s", op)
+		return primitives.Equals, fmt.Errorf("unknown operator: %s", op)
 	}
 }
 
