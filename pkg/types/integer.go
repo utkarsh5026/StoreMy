@@ -3,6 +3,7 @@ package types
 import (
 	"encoding/binary"
 	"io"
+	"storemy/pkg/primitives"
 	"strconv"
 )
 
@@ -24,29 +25,29 @@ func (f *IntField) Serialize(w io.Writer) error {
 }
 
 // Compare compares this integer field with another field based on the given predicate
-func (f *IntField) Compare(op Predicate, other Field) (bool, error) {
+func (f *IntField) Compare(op primitives.Predicate, other Field) (bool, error) {
 	otherIntField, ok := other.(*IntField)
 	if !ok {
 		return false, nil
 	}
 
 	switch op {
-	case Equals:
+	case primitives.Equals:
 		return f.Value == otherIntField.Value, nil
 
-	case LessThan:
+	case primitives.LessThan:
 		return f.Value < otherIntField.Value, nil
 
-	case GreaterThan:
+	case primitives.GreaterThan:
 		return f.Value > otherIntField.Value, nil
 
-	case LessThanOrEqual:
+	case primitives.LessThanOrEqual:
 		return f.Value <= otherIntField.Value, nil
 
-	case GreaterThanOrEqual:
+	case primitives.GreaterThanOrEqual:
 		return f.Value >= otherIntField.Value, nil
 
-	case NotEqual:
+	case primitives.NotEqual:
 		return f.Value != otherIntField.Value, nil
 
 	default:
