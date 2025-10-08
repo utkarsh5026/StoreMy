@@ -5,14 +5,14 @@ import (
 	"storemy/pkg/parser/lexer"
 	"storemy/pkg/parser/plan"
 	"storemy/pkg/parser/statements"
-	"storemy/pkg/types"
+	"storemy/pkg/primitives"
 	"strings"
 )
 
 type joinCondition struct {
 	leftField  string
 	rightField string
-	predicate  types.Predicate
+	predicate  primitives.Predicate
 }
 
 // parseSelectStatement is the main entry point for parsing SELECT statements.
