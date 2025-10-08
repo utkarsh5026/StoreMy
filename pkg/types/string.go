@@ -94,10 +94,7 @@ func (s *StringField) Compare(op primitives.Predicate, other Field) (bool, error
 // Returns:
 //   - error: An error if any write operation fails, nil otherwise
 func (s *StringField) Serialize(w io.Writer) error {
-	length := len(s.Value)
-	if length > s.MaxSize {
-		length = s.MaxSize
-	}
+	length := min(len(s.Value), s.MaxSize)
 
 	lengthBytes := make([]byte, 4)
 	binary.BigEndian.PutUint32(lengthBytes, uint32(length))
