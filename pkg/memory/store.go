@@ -41,6 +41,11 @@ func (o OperationType) String() string {
 	return "UNKNOWN"
 }
 
+// StatsRecorder interface for recording table modifications (to avoid circular dependency)
+type StatsRecorder interface {
+	RecordModification(tableID int)
+}
+
 // PageStore manages an in-memory cache of database pages and handles transaction-aware page operations.
 // It serves as the main interface between the database engine and the underlying storage layer,
 // providing ACID compliance through transaction tracking and page lifecycle management.
@@ -50,6 +55,7 @@ type PageStore struct {
 	lockManager  *lock.LockManager
 	cache        PageCache
 	wal          *log.WAL
+	statsManager StatsRecorder
 }
 
 // NewPageStore creates and initializes a new PageStore instance
@@ -59,7 +65,14 @@ func NewPageStore(tm *TableManager, wal *log.WAL) *PageStore {
 		lockManager:  lock.NewLockManager(),
 		tableManager: tm,
 		wal:          wal,
+		statsManager: nil, // Can be set later via SetStatsManager
 	}
+}
+
+// SetStatsManager sets the statistics manager for tracking table modifications
+// This allows the PageStore to automatically record modifications for statistics updates
+func (p *PageStore) SetStatsManager(sm StatsRecorder) {
+	p.statsManager = sm
 }
 
 // GetPage retrieves a page with specified permissions for a transaction
@@ -123,6 +136,7 @@ func (p *PageStore) evictPage() error {
 		if p.lockManager.IsPageLocked(pid) {
 			continue
 		}
+
 		p.cache.Remove(pid)
 		return nil
 	}
@@ -180,6 +194,11 @@ func (p *PageStore) performDataOperation(operation OperationType, ctx *transacti
 	}
 
 	p.markPagesAsDirty(ctx, modifiedPages)
+
+	if p.statsManager != nil {
+		p.statsManager.RecordModification(tableID)
+	}
+
 	return nil
 }
 
