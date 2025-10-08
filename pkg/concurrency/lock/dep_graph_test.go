@@ -155,7 +155,7 @@ func TestHasCycleCache(t *testing.T) {
 	if !dg.cacheValid {
 		t.Error("Cache should be valid after first HasCycle call")
 	}
-	if dg.lastResult != result1 {
+	if dg.wasCycleLastTime != result1 {
 		t.Error("Cached result should match returned result")
 	}
 

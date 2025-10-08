@@ -1,6 +1,8 @@
 package lock
 
 import (
+	"maps"
+	"slices"
 	"storemy/pkg/primitives"
 	"sync"
 )
@@ -13,10 +15,10 @@ import (
 // that indicate deadlocks. When a cycle is detected, one of the transactions in the
 // cycle must be aborted to break the deadlock.
 type DependencyGraph struct {
-	edges      map[*primitives.TransactionID]map[*primitives.TransactionID]bool // Adjacency list representation of the graph
-	mutex      sync.RWMutex                                                     // Protects concurrent access to the graph
-	cacheValid bool                                                             // Track if cycle cache is valid
-	lastResult bool                                                             // Cache the last cycle detection result
+	edges            map[*primitives.TransactionID]map[*primitives.TransactionID]bool
+	mutex            sync.RWMutex
+	cacheValid       bool
+	wasCycleLastTime bool
 }
 
 // NewDependencyGraph creates and initializes a new dependency graph for deadlock detection.
@@ -71,38 +73,40 @@ func (dg *DependencyGraph) HasCycle() bool {
 	defer dg.mutex.Unlock()
 
 	if dg.cacheValid {
-		return dg.lastResult
+		return dg.wasCycleLastTime
 	}
 
 	visited := make(map[*primitives.TransactionID]bool)
 	recStack := make(map[*primitives.TransactionID]bool)
 
 	for tid := range dg.edges {
-		if !visited[tid] {
-			if dg.hasCycleDFS(tid, visited, recStack) {
-				dg.lastResult = true
-				dg.cacheValid = true
-				return true
-			}
+		if visited[tid] {
+			continue
+		}
+
+		if dg.detectCycleDFS(tid, visited, recStack) {
+			dg.wasCycleLastTime = true
+			dg.cacheValid = true
+			return true
 		}
 	}
 
-	dg.lastResult = false
+	dg.wasCycleLastTime = false
 	dg.cacheValid = true
 	return false
 }
 
-// hasCycleDFS performs depth-first search to detect cycles in the dependency graph.
+// detectCycleDFS performs depth-first search to detect cycles in the dependency graph.
 // It uses a recursion stack to track the current path and detect back edges,
 // which indicate cycles.
-func (dg *DependencyGraph) hasCycleDFS(tid *primitives.TransactionID, visited, recStack map[*primitives.TransactionID]bool) bool {
+func (dg *DependencyGraph) detectCycleDFS(tid *primitives.TransactionID, visited, recStack map[*primitives.TransactionID]bool) bool {
 	visited[tid] = true
 	recStack[tid] = true
 
 	if neighbors, exists := dg.edges[tid]; exists {
 		for neighbor := range neighbors {
 			if !visited[neighbor] {
-				if dg.hasCycleDFS(neighbor, visited, recStack) {
+				if dg.detectCycleDFS(neighbor, visited, recStack) {
 					return true
 				}
 			} else if recStack[neighbor] {
@@ -122,9 +126,5 @@ func (dg *DependencyGraph) GetWaitingTransactions() []*primitives.TransactionID 
 	dg.mutex.RLock()
 	defer dg.mutex.RUnlock()
 
-	var waiters []*primitives.TransactionID
-	for tid := range dg.edges {
-		waiters = append(waiters, tid)
-	}
-	return waiters
+	return slices.Collect(maps.Keys(dg.edges))
 }
