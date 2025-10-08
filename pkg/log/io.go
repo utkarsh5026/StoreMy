@@ -6,12 +6,12 @@ import (
 )
 
 type LogWriter struct {
-	writer       io.WriterAt    // Underlying writer (usually a file)
-	currentLSN   primitives.LSN // Next primitives.LSN to assign
-	flushedLSN   primitives.LSN // Last primitives.LSN guaranteed on disk
-	buffer       []byte         // Write buffer
-	bufferOffset int            // Current position in buffer
-	bufferSize   int            // Maximum buffer size
+	writer       io.WriterAt
+	currentLSN   primitives.LSN
+	flushedLSN   primitives.LSN
+	buffer       []byte
+	bufferOffset int
+	bufferSize   int
 }
 
 // NewLogWriter creates a new LogWriter with the given underlying writer and buffer size
@@ -43,8 +43,9 @@ func (w *LogWriter) Write(data []byte) (primitives.LSN, error) {
 			return 0, err
 		}
 
-		w.flushedLSN += primitives.LSN(len(data))
-		w.currentLSN += primitives.LSN(len(data))
+		bytesWritten := primitives.LSN(len(data))
+		w.flushedLSN += bytesWritten
+		w.currentLSN += bytesWritten
 		return assignedLSN, nil
 	}
 
