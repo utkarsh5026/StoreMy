@@ -2,6 +2,7 @@ package catalog
 
 import (
 	"fmt"
+	"slices"
 	"storemy/pkg/primitives"
 	"storemy/pkg/tuple"
 	"storemy/pkg/types"
@@ -103,14 +104,14 @@ func (sl *SchemaLoader) LoadTableSchema(tid *primitives.TransactionID, tableID i
 // buildTupleDescription converts sorted ColumnInfo slice into a TupleDescription.
 // Columns are sorted by their position field to ensure correct tuple layout.
 func buildTupleDescription(columns []ColumnInfo) *tuple.TupleDescription {
-	sortedColumns := make([]ColumnInfo, len(columns))
-	for _, col := range columns {
-		sortedColumns[col.position] = col
-	}
+	sortedCols := slices.Clone(columns)
+	slices.SortFunc(sortedCols, func(a, b ColumnInfo) int {
+		return a.position - b.position
+	})
 
-	fieldTypes := make([]types.Type, len(sortedColumns))
-	fieldNames := make([]string, len(sortedColumns))
-	for i, col := range sortedColumns {
+	fieldTypes := make([]types.Type, len(sortedCols))
+	fieldNames := make([]string, len(sortedCols))
+	for i, col := range sortedCols {
 		fieldTypes[i] = col.fieldType
 		fieldNames[i] = col.name
 	}
