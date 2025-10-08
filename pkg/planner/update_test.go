@@ -5,6 +5,7 @@ import (
 	"storemy/pkg/concurrency/transaction"
 	"storemy/pkg/parser/plan"
 	"storemy/pkg/parser/statements"
+	"storemy/pkg/primitives"
 	"storemy/pkg/registry"
 	"storemy/pkg/types"
 	"testing"
@@ -133,7 +134,7 @@ func TestUpdatePlan_Execute_UpdateSingleField(t *testing.T) {
 	stmt := statements.NewUpdateStatement("users", "users")
 	stmt.AddSetClause("name", types.NewStringField("Updated Name", types.StringMaxSize))
 
-	filter := plan.NewFilterNode("users", "users.id", types.Equals, "1")
+	filter := plan.NewFilterNode("users", "users.id", primitives.Equals, "1")
 	stmt.SetWhereClause(filter)
 
 	updatePlan := NewUpdatePlan(stmt, tx, ctx)
@@ -167,7 +168,7 @@ func TestUpdatePlan_Execute_UpdateMultipleFields(t *testing.T) {
 	stmt.AddSetClause("age", &types.IntField{Value: 26})
 	stmt.AddSetClause("salary", &types.Float64Field{Value: 55000.0})
 
-	filter := plan.NewFilterNode("users", "users.id", types.Equals, "1")
+	filter := plan.NewFilterNode("users", "users.id", primitives.Equals, "1")
 	stmt.SetWhereClause(filter)
 
 	updatePlan := NewUpdatePlan(stmt, tx, ctx)
@@ -198,7 +199,7 @@ func TestUpdatePlan_Execute_UpdateMultipleRows(t *testing.T) {
 	stmt := statements.NewUpdateStatement("users", "users")
 	stmt.AddSetClause("active", &types.BoolField{Value: false})
 
-	filter := plan.NewFilterNode("users", "users.active", types.Equals, "true")
+	filter := plan.NewFilterNode("users", "users.active", primitives.Equals, "true")
 	stmt.SetWhereClause(filter)
 
 	updatePlan := NewUpdatePlan(stmt, tx, ctx)
@@ -269,7 +270,7 @@ func TestUpdatePlan_Execute_UpdateWithIntegerFilter(t *testing.T) {
 	stmt := statements.NewUpdateStatement("users", "users")
 	stmt.AddSetClause("salary", &types.Float64Field{Value: 80000.0})
 
-	filter := plan.NewFilterNode("users", "users.age", types.GreaterThan, "30")
+	filter := plan.NewFilterNode("users", "users.age", primitives.GreaterThan, "30")
 	stmt.SetWhereClause(filter)
 
 	updatePlan := NewUpdatePlan(stmt, tx, ctx)
@@ -306,7 +307,7 @@ func TestUpdatePlan_Execute_UpdateWithFloatFilter(t *testing.T) {
 	stmt := statements.NewUpdateStatement("users", "users")
 	stmt.AddSetClause("active", &types.BoolField{Value: true})
 
-	filter := plan.NewFilterNode("users", "users.salary", types.LessThan, "65000.0")
+	filter := plan.NewFilterNode("users", "users.salary", primitives.LessThan, "65000.0")
 	stmt.SetWhereClause(filter)
 
 	updatePlan := NewUpdatePlan(stmt, tx, ctx)
@@ -343,7 +344,7 @@ func TestUpdatePlan_Execute_NoMatchingRows(t *testing.T) {
 	stmt := statements.NewUpdateStatement("users", "users")
 	stmt.AddSetClause("name", types.NewStringField("No Match", types.StringMaxSize))
 
-	filter := plan.NewFilterNode("users", "users.age", types.GreaterThan, "100")
+	filter := plan.NewFilterNode("users", "users.age", primitives.GreaterThan, "100")
 	stmt.SetWhereClause(filter)
 
 	updatePlan := NewUpdatePlan(stmt, tx, ctx)
@@ -450,7 +451,7 @@ func TestUpdatePlan_Execute_Error_InvalidWhereField(t *testing.T) {
 	stmt := statements.NewUpdateStatement("users", "users")
 	stmt.AddSetClause("name", types.NewStringField("Test", types.StringMaxSize))
 
-	filter := plan.NewFilterNode("users", "users.invalid_field", types.Equals, "value")
+	filter := plan.NewFilterNode("users", "users.invalid_field", primitives.Equals, "value")
 	stmt.SetWhereClause(filter)
 
 	updatePlan := NewUpdatePlan(stmt, tx, ctx)
@@ -661,7 +662,7 @@ func TestUpdateStatement_String(t *testing.T) {
 	stmt.AddSetClause("name", types.NewStringField("John", types.StringMaxSize))
 	stmt.AddSetClause("age", &types.IntField{Value: 30})
 
-	filter := plan.NewFilterNode("u", "u.id", types.Equals, "1")
+	filter := plan.NewFilterNode("u", "u.id", primitives.Equals, "1")
 	stmt.SetWhereClause(filter)
 
 	str := stmt.String()

@@ -5,6 +5,7 @@ import (
 	"storemy/pkg/concurrency/transaction"
 	"storemy/pkg/parser/plan"
 	"storemy/pkg/parser/statements"
+	"storemy/pkg/primitives"
 	"storemy/pkg/registry"
 	"storemy/pkg/types"
 	"testing"
@@ -158,7 +159,7 @@ func TestDeletePlan_Execute_WithWhereClause(t *testing.T) {
 	// DELETE FROM test_table WHERE id = 2
 	whereClause := &plan.FilterNode{
 		Field:     "id",
-		Predicate: types.Equals,
+		Predicate: primitives.Equals,
 		Constant:  "2",
 	}
 
@@ -198,7 +199,7 @@ func TestDeletePlan_Execute_WithWhereClause_MultipleRows(t *testing.T) {
 	// DELETE FROM test_table WHERE active = true
 	whereClause := &plan.FilterNode{
 		Field:     "active",
-		Predicate: types.Equals,
+		Predicate: primitives.Equals,
 		Constant:  "true",
 	}
 
@@ -239,7 +240,7 @@ func TestDeletePlan_Execute_WithWhereClause_NoMatch(t *testing.T) {
 	// DELETE FROM test_table WHERE id = 999 (no match)
 	whereClause := &plan.FilterNode{
 		Field:     "id",
-		Predicate: types.Equals,
+		Predicate: primitives.Equals,
 		Constant:  "999",
 	}
 
@@ -280,7 +281,7 @@ func TestDeletePlan_Execute_WithWhereClause_GreaterThan(t *testing.T) {
 	// DELETE FROM test_table WHERE id > 1
 	whereClause := &plan.FilterNode{
 		Field:     "id",
-		Predicate: types.GreaterThan,
+		Predicate: primitives.GreaterThan,
 		Constant:  "1",
 	}
 
@@ -351,7 +352,7 @@ func TestDeletePlan_Execute_Error_InvalidField(t *testing.T) {
 	// DELETE FROM test_table WHERE invalid_field = 'value'
 	whereClause := &plan.FilterNode{
 		Field:     "invalid_field",
-		Predicate: types.Equals,
+		Predicate: primitives.Equals,
 		Constant:  "value",
 	}
 
@@ -533,7 +534,7 @@ func TestDeletePlan_addWhereFilter(t *testing.T) {
 
 	whereClause := &plan.FilterNode{
 		Field:     "id",
-		Predicate: types.Equals,
+		Predicate: primitives.Equals,
 		Constant:  "1",
 	}
 
@@ -662,7 +663,7 @@ func TestDeletePlan_createQuery_WithWhere(t *testing.T) {
 
 	whereClause := &plan.FilterNode{
 		Field:     "id",
-		Predicate: types.Equals,
+		Predicate: primitives.Equals,
 		Constant:  "2",
 	}
 

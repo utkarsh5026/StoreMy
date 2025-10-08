@@ -5,6 +5,7 @@ import (
 	"storemy/pkg/concurrency/transaction"
 	"storemy/pkg/parser/plan"
 	"storemy/pkg/parser/statements"
+	"storemy/pkg/primitives"
 	"storemy/pkg/registry"
 	"storemy/pkg/types"
 	"testing"
@@ -217,7 +218,7 @@ func TestSelectPlan_Execute_WithFilter(t *testing.T) {
 	selectPlan.AddScan("users", "users")
 	stmt := statements.NewSelectStatement(selectPlan)
 
-	selectPlan.AddFilter("users.active", types.Equals, "true")
+	selectPlan.AddFilter("users.active", primitives.Equals, "true")
 
 	planInstance := NewSelectPlan(stmt, tx, ctx)
 
@@ -244,7 +245,7 @@ func TestSelectPlan_Execute_WithFilterAndProjection(t *testing.T) {
 	selectPlan.AddScan("users", "users")
 	stmt := statements.NewSelectStatement(selectPlan)
 
-	selectPlan.AddFilter("users.age", types.GreaterThan, "30")
+	selectPlan.AddFilter("users.age", primitives.GreaterThan, "30")
 	selectPlan.AddProjectField("name", "")
 
 	planInstance := NewSelectPlan(stmt, tx, ctx)
@@ -341,7 +342,7 @@ func TestSelectPlan_Execute_Error_InvalidFilterField(t *testing.T) {
 	selectPlan.AddScan("users", "users")
 	stmt := statements.NewSelectStatement(selectPlan)
 
-	selectPlan.AddFilter("users.invalid_field", types.Equals, "value")
+	selectPlan.AddFilter("users.invalid_field", primitives.Equals, "value")
 
 	planInstance := NewSelectPlan(stmt, tx, ctx)
 
@@ -399,7 +400,7 @@ func TestSelectPlan_Execute_EmptyTableWithFilters(t *testing.T) {
 	selectPlan.AddScan("users", "users")
 	stmt := statements.NewSelectStatement(selectPlan)
 
-	selectPlan.AddFilter("users.active", types.Equals, "true")
+	selectPlan.AddFilter("users.active", primitives.Equals, "true")
 
 	planInstance := NewSelectPlan(stmt, tx, ctx)
 
@@ -429,7 +430,7 @@ func TestSelectPlan_Execute_MultipleFilters(t *testing.T) {
 	selectPlan.AddScan("users", "users")
 	stmt := statements.NewSelectStatement(selectPlan)
 
-	selectPlan.AddFilter("users.active", types.Equals, "true")
+	selectPlan.AddFilter("users.active", primitives.Equals, "true")
 
 	planInstance := NewSelectPlan(stmt, tx, ctx)
 
@@ -459,7 +460,7 @@ func TestSelectPlan_Execute_StringFilter(t *testing.T) {
 	selectPlan.AddScan("users", "users")
 	stmt := statements.NewSelectStatement(selectPlan)
 
-	selectPlan.AddFilter("users.name", types.Equals, "John Doe")
+	selectPlan.AddFilter("users.name", primitives.Equals, "John Doe")
 
 	planInstance := NewSelectPlan(stmt, tx, ctx)
 
@@ -486,7 +487,7 @@ func TestSelectPlan_Execute_IntegerFilter(t *testing.T) {
 	selectPlan.AddScan("users", "users")
 	stmt := statements.NewSelectStatement(selectPlan)
 
-	selectPlan.AddFilter("users.age", types.LessThan, "30")
+	selectPlan.AddFilter("users.age", primitives.LessThan, "30")
 
 	planInstance := NewSelectPlan(stmt, tx, ctx)
 
@@ -513,7 +514,7 @@ func TestSelectPlan_Execute_FloatFilter(t *testing.T) {
 	selectPlan.AddScan("users", "users")
 	stmt := statements.NewSelectStatement(selectPlan)
 
-	selectPlan.AddFilter("users.salary", types.GreaterThanOrEqual, "60000.0")
+	selectPlan.AddFilter("users.salary", primitives.GreaterThanOrEqual, "60000.0")
 
 	planInstance := NewSelectPlan(stmt, tx, ctx)
 
@@ -654,7 +655,7 @@ func TestSelectPlan_Execute_SimpleJoin(t *testing.T) {
 	selectPlan.AddScan("users", "u")
 
 	deptScan := plan.NewScanNode("departments", "d")
-	selectPlan.AddJoin(deptScan, plan.InnerJoin, "u.dept_id", "d.id", types.Equals)
+	selectPlan.AddJoin(deptScan, plan.InnerJoin, "u.dept_id", "d.id", primitives.Equals)
 
 	stmt := statements.NewSelectStatement(selectPlan)
 	planInstance := NewSelectPlan(stmt, tx, ctx)
@@ -688,7 +689,7 @@ func TestSelectPlan_Execute_JoinWithProjection(t *testing.T) {
 	selectPlan.AddScan("users", "u")
 
 	deptScan := plan.NewScanNode("departments", "d")
-	selectPlan.AddJoin(deptScan, plan.InnerJoin, "u.dept_id", "d.id", types.Equals)
+	selectPlan.AddJoin(deptScan, plan.InnerJoin, "u.dept_id", "d.id", primitives.Equals)
 
 	selectPlan.AddProjectField("name", "")
 	selectPlan.AddProjectField("dept_name", "")

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"storemy/pkg/execution/query"
 	"storemy/pkg/parser/plan"
+	"storemy/pkg/primitives"
 	"storemy/pkg/tuple"
 	"storemy/pkg/types"
 	"strings"
@@ -66,14 +67,14 @@ func createConstantField(constantValue string, tupleDesc *tuple.TupleDescription
 }
 
 // getPredicateOperation maps a predicate type to its corresponding query operation.
-func getPredicateOperation(predicate types.Predicate) (query.PredicateOp, error) {
-	predicateMap := map[types.Predicate]query.PredicateOp{
-		types.Equals:             query.Equals,
-		types.LessThan:           query.LessThan,
-		types.GreaterThan:        query.GreaterThan,
-		types.LessThanOrEqual:    query.LessThanOrEqual,
-		types.GreaterThanOrEqual: query.GreaterThanOrEqual,
-		types.NotEqual:           query.NotEqual,
+func getPredicateOperation(predicate primitives.Predicate) (query.PredicateOp, error) {
+	predicateMap := map[primitives.Predicate]query.PredicateOp{
+		primitives.Equals:             query.Equals,
+		primitives.LessThan:           query.LessThan,
+		primitives.GreaterThan:        query.GreaterThan,
+		primitives.LessThanOrEqual:    query.LessThanOrEqual,
+		primitives.GreaterThanOrEqual: query.GreaterThanOrEqual,
+		primitives.NotEqual:           query.NotEqual,
 	}
 
 	op, exists := predicateMap[predicate]
