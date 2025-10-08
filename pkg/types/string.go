@@ -3,6 +3,7 @@ package types
 import (
 	"encoding/binary"
 	"io"
+	"storemy/pkg/primitives"
 	"strings"
 )
 
@@ -47,7 +48,7 @@ func NewStringField(value string, maxSize int) *StringField {
 // Returns:
 //   - bool: The result of the comparison operation
 //   - error: An error if the other field is not a StringField or if comparison fails
-func (s *StringField) Compare(op Predicate, other Field) (bool, error) {
+func (s *StringField) Compare(op primitives.Predicate, other Field) (bool, error) {
 	otherStringField, ok := other.(*StringField)
 	if !ok {
 		return false, nil
@@ -56,25 +57,25 @@ func (s *StringField) Compare(op Predicate, other Field) (bool, error) {
 	cmp := strings.Compare(s.Value, otherStringField.Value)
 
 	switch op {
-	case Equals:
+	case primitives.Equals:
 		return cmp == 0, nil
 
-	case LessThan:
+	case primitives.LessThan:
 		return cmp < 0, nil
 
-	case GreaterThan:
+	case primitives.GreaterThan:
 		return cmp > 0, nil
 
-	case LessThanOrEqual:
+	case primitives.LessThanOrEqual:
 		return cmp <= 0, nil
 
-	case GreaterThanOrEqual:
+	case primitives.GreaterThanOrEqual:
 		return cmp >= 0, nil
 
-	case NotEqual:
+	case primitives.NotEqual:
 		return cmp != 0, nil
 
-	case Like:
+	case primitives.Like:
 		return strings.Contains(s.Value, otherStringField.Value), nil
 	default:
 		return false, nil
