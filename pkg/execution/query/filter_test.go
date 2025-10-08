@@ -2,6 +2,7 @@ package query
 
 import (
 	"fmt"
+	"storemy/pkg/primitives"
 	"storemy/pkg/tuple"
 	"storemy/pkg/types"
 	"testing"
@@ -119,7 +120,7 @@ func createFilterTestTuple(td *tuple.TupleDescription, id int32, name string) *t
 func TestNewFilter_ValidInputs(t *testing.T) {
 	td := mustCreateFilterTupleDesc()
 	child := newMockChildIterator([]*tuple.Tuple{}, td)
-	predicate := NewPredicate(0, Equals, types.NewIntField(1))
+	predicate := NewPredicate(0, primitives.Equals, types.NewIntField(1))
 
 	filter, err := NewFilter(predicate, child)
 	if err != nil {
@@ -153,7 +154,7 @@ func TestNewFilter_NilPredicate(t *testing.T) {
 }
 
 func TestNewFilter_NilChild(t *testing.T) {
-	predicate := NewPredicate(0, Equals, types.NewIntField(1))
+	predicate := NewPredicate(0, primitives.Equals, types.NewIntField(1))
 
 	filter, err := NewFilter(predicate, nil)
 	if err == nil {
@@ -171,7 +172,7 @@ func TestNewFilter_NilChild(t *testing.T) {
 func TestFilter_Open_Success(t *testing.T) {
 	td := mustCreateFilterTupleDesc()
 	child := newMockChildIterator([]*tuple.Tuple{}, td)
-	predicate := NewPredicate(0, Equals, types.NewIntField(1))
+	predicate := NewPredicate(0, primitives.Equals, types.NewIntField(1))
 
 	filter, err := NewFilter(predicate, child)
 	if err != nil {
@@ -192,7 +193,7 @@ func TestFilter_Open_ChildError(t *testing.T) {
 	td := mustCreateFilterTupleDesc()
 	child := newMockChildIterator([]*tuple.Tuple{}, td)
 	child.hasError = true
-	predicate := NewPredicate(0, Equals, types.NewIntField(1))
+	predicate := NewPredicate(0, primitives.Equals, types.NewIntField(1))
 
 	filter, err := NewFilter(predicate, child)
 	if err != nil {
@@ -208,7 +209,7 @@ func TestFilter_Open_ChildError(t *testing.T) {
 func TestFilter_Close(t *testing.T) {
 	td := mustCreateFilterTupleDesc()
 	child := newMockChildIterator([]*tuple.Tuple{}, td)
-	predicate := NewPredicate(0, Equals, types.NewIntField(1))
+	predicate := NewPredicate(0, primitives.Equals, types.NewIntField(1))
 
 	filter, err := NewFilter(predicate, child)
 	if err != nil {
@@ -237,7 +238,7 @@ func TestFilter_Close(t *testing.T) {
 func TestFilter_GetTupleDesc(t *testing.T) {
 	td := mustCreateFilterTupleDesc()
 	child := newMockChildIterator([]*tuple.Tuple{}, td)
-	predicate := NewPredicate(0, Equals, types.NewIntField(1))
+	predicate := NewPredicate(0, primitives.Equals, types.NewIntField(1))
 
 	filter, err := NewFilter(predicate, child)
 	if err != nil {
@@ -257,7 +258,7 @@ func TestFilter_GetTupleDesc(t *testing.T) {
 func TestFilter_EmptyInput(t *testing.T) {
 	td := mustCreateFilterTupleDesc()
 	child := newMockChildIterator([]*tuple.Tuple{}, td)
-	predicate := NewPredicate(0, Equals, types.NewIntField(1))
+	predicate := NewPredicate(0, primitives.Equals, types.NewIntField(1))
 
 	filter, err := NewFilter(predicate, child)
 	if err != nil {
@@ -289,7 +290,7 @@ func TestFilter_AllTuplesMatch(t *testing.T) {
 	}
 
 	child := newMockChildIterator(tuples, td)
-	predicate := NewPredicate(0, Equals, types.NewIntField(5)) // id = 5
+	predicate := NewPredicate(0, primitives.Equals, types.NewIntField(5)) // id = 5
 
 	filter, err := NewFilter(predicate, child)
 	if err != nil {
@@ -346,7 +347,7 @@ func TestFilter_NoTuplesMatch(t *testing.T) {
 	}
 
 	child := newMockChildIterator(tuples, td)
-	predicate := NewPredicate(0, Equals, types.NewIntField(99)) // id = 99 (no matches)
+	predicate := NewPredicate(0, primitives.Equals, types.NewIntField(99)) // id = 99 (no matches)
 
 	filter, err := NewFilter(predicate, child)
 	if err != nil {
@@ -380,7 +381,7 @@ func TestFilter_SomeTuplesMatch(t *testing.T) {
 	}
 
 	child := newMockChildIterator(tuples, td)
-	predicate := NewPredicate(0, Equals, types.NewIntField(5)) // id = 5
+	predicate := NewPredicate(0, primitives.Equals, types.NewIntField(5)) // id = 5
 
 	filter, err := NewFilter(predicate, child)
 	if err != nil {
@@ -440,7 +441,7 @@ func TestFilter_LessThanPredicate(t *testing.T) {
 	}
 
 	child := newMockChildIterator(tuples, td)
-	predicate := NewPredicate(0, LessThan, types.NewIntField(5)) // id < 5
+	predicate := NewPredicate(0, primitives.LessThan, types.NewIntField(5)) // id < 5
 
 	filter, err := NewFilter(predicate, child)
 	if err != nil {
@@ -492,7 +493,7 @@ func TestFilter_GreaterThanPredicate(t *testing.T) {
 	}
 
 	child := newMockChildIterator(tuples, td)
-	predicate := NewPredicate(0, GreaterThan, types.NewIntField(5)) // id > 5
+	predicate := NewPredicate(0, primitives.GreaterThan, types.NewIntField(5)) // id > 5
 
 	filter, err := NewFilter(predicate, child)
 	if err != nil {
@@ -544,7 +545,7 @@ func TestFilter_StringPredicate(t *testing.T) {
 	}
 
 	child := newMockChildIterator(tuples, td)
-	predicate := NewPredicate(1, Equals, types.NewStringField("apple", 128)) // name = "apple"
+	predicate := NewPredicate(1, primitives.Equals, types.NewStringField("apple", 128)) // name = "apple"
 
 	filter, err := NewFilter(predicate, child)
 	if err != nil {
@@ -596,7 +597,7 @@ func TestFilter_StringPredicate(t *testing.T) {
 func TestFilter_HasNext_NotOpened(t *testing.T) {
 	td := mustCreateFilterTupleDesc()
 	child := newMockChildIterator([]*tuple.Tuple{}, td)
-	predicate := NewPredicate(0, Equals, types.NewIntField(1))
+	predicate := NewPredicate(0, primitives.Equals, types.NewIntField(1))
 
 	filter, err := NewFilter(predicate, child)
 	if err != nil {
@@ -615,7 +616,7 @@ func TestFilter_HasNext_NotOpened(t *testing.T) {
 func TestFilter_Next_NotOpened(t *testing.T) {
 	td := mustCreateFilterTupleDesc()
 	child := newMockChildIterator([]*tuple.Tuple{}, td)
-	predicate := NewPredicate(0, Equals, types.NewIntField(1))
+	predicate := NewPredicate(0, primitives.Equals, types.NewIntField(1))
 
 	filter, err := NewFilter(predicate, child)
 	if err != nil {
@@ -637,7 +638,7 @@ func TestFilter_ChildIteratorError(t *testing.T) {
 		createFilterTestTuple(td, 1, "test"),
 	}
 	child := newMockChildIterator(tuples, td)
-	predicate := NewPredicate(0, Equals, types.NewIntField(1))
+	predicate := NewPredicate(0, primitives.Equals, types.NewIntField(1))
 
 	filter, err := NewFilter(predicate, child)
 	if err != nil {
@@ -670,7 +671,7 @@ func TestFilter_InvalidFieldIndex(t *testing.T) {
 	child := newMockChildIterator(tuples, td)
 
 	// Use invalid field index (schema has fields 0,1 but we use index 5)
-	predicate := NewPredicate(5, Equals, types.NewIntField(1))
+	predicate := NewPredicate(5, primitives.Equals, types.NewIntField(1))
 
 	filter, err := NewFilter(predicate, child)
 	if err != nil {
@@ -705,7 +706,7 @@ func TestFilter_Rewind(t *testing.T) {
 	}
 
 	child := newMockChildIterator(tuples, td)
-	predicate := NewPredicate(0, LessThan, types.NewIntField(3)) // Both tuples match
+	predicate := NewPredicate(0, primitives.LessThan, types.NewIntField(3)) // Both tuples match
 
 	filter, err := NewFilter(predicate, child)
 	if err != nil {
@@ -786,7 +787,7 @@ func TestFilter_Rewind(t *testing.T) {
 func TestFilter_Rewind_ChildError(t *testing.T) {
 	td := mustCreateFilterTupleDesc()
 	child := newMockChildIterator([]*tuple.Tuple{}, td)
-	predicate := NewPredicate(0, Equals, types.NewIntField(1))
+	predicate := NewPredicate(0, primitives.Equals, types.NewIntField(1))
 
 	filter, err := NewFilter(predicate, child)
 	if err != nil {
