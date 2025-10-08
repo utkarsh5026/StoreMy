@@ -4,6 +4,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"io"
+	"storemy/pkg/primitives"
 )
 
 // BoolField represents a boolean field type in the database.
@@ -50,24 +51,24 @@ func (b *BoolField) Serialize(w io.Writer) error {
 // Returns:
 //   - bool: The result of the comparison operation
 //   - error: An error if the other field is not a BoolField or if an unsupported predicate is used
-func (b *BoolField) Compare(op Predicate, other Field) (bool, error) {
+func (b *BoolField) Compare(op primitives.Predicate, other Field) (bool, error) {
 	a, ok := other.(*BoolField)
 	if !ok {
 		return false, fmt.Errorf("cannot compare BoolField with %T", other)
 	}
 
 	switch op {
-	case Equals:
+	case primitives.Equals:
 		return b.Value == a.Value, nil
-	case NotEqual:
+	case primitives.NotEqual:
 		return b.Value != a.Value, nil
-	case LessThan:
+	case primitives.LessThan:
 		return !b.Value && a.Value, nil
-	case GreaterThan:
+	case primitives.GreaterThan:
 		return b.Value && !a.Value, nil
-	case LessThanOrEqual:
+	case primitives.LessThanOrEqual:
 		return !b.Value || a.Value, nil
-	case GreaterThanOrEqual:
+	case primitives.GreaterThanOrEqual:
 		return b.Value || !a.Value, nil
 	default:
 		return false, fmt.Errorf("unsupported predicate for BoolField: %v", op)
