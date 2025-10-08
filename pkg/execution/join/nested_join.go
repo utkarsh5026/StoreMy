@@ -23,15 +23,10 @@ import (
 // Time complexity: O(|R| * |S| / B) where B is the block size
 // Space complexity: O(B) for the left block buffer
 type NestedLoopJoin struct {
-	leftChild   iterator.DbIterator
-	rightChild  iterator.DbIterator
-	predicate   *JoinPredicate
-	leftBlock   []*tuple.Tuple
-	blockSize   int
-	blockIndex  int
-	initialized bool
-	stats       *JoinStatistics
-	matchBuffer *JoinMatchBuffer
+	BaseJoin
+	leftBlock  []*tuple.Tuple
+	blockSize  int
+	blockIndex int
 }
 
 // NewNestedLoopJoin creates a new block nested loop join operator.
@@ -40,19 +35,9 @@ type NestedLoopJoin struct {
 //
 // Returns a new NestedLoopJoin instance ready for initialization.
 func NewNestedLoopJoin(left, right iterator.DbIterator, pred *JoinPredicate, stats *JoinStatistics) *NestedLoopJoin {
-	blockSize := 100 // Default block size
-	if stats != nil && stats.MemorySize > 0 {
-		blockSize = stats.MemorySize * 100 // Assume 100 tuples per page
-	}
-
 	return &NestedLoopJoin{
-		leftChild:   left,
-		rightChild:  right,
-		predicate:   pred,
-		blockSize:   blockSize,
-		blockIndex:  0,
-		stats:       stats,
-		matchBuffer: NewJoinMatchBuffer(),
+		BaseJoin:  NewBaseJoin(left, right, pred, stats),
+		blockSize: calculateDefaultBlockSize(stats),
 	}
 }
 
@@ -64,39 +49,26 @@ func NewNestedLoopJoin(left, right iterator.DbIterator, pred *JoinPredicate, sta
 // 2. Block processing: Processes all tuples in the current left block
 // 3. Block loading: Loads new left blocks when current block is exhausted
 func (nl *NestedLoopJoin) Next() (*tuple.Tuple, error) {
-	if !nl.initialized {
+	if !nl.IsInitialized() {
 		return nil, fmt.Errorf("block nested loop join not initialized")
 	}
 
-	if nl.matchBuffer.HasNext() {
-		return nl.matchBuffer.Next(), nil
+	if match := nl.GetMatchFromBuffer(); match != nil {
+		return match, nil
 	}
 
 	nl.matchBuffer.StartNew()
 
 	for {
-		if nl.blockIndex >= len(nl.leftBlock) {
-			hasMore, err := nl.leftChild.HasNext()
-			if err != nil {
-				return nil, err
-			}
-			if !hasMore {
-				return nil, nil
-			}
-
-			if err := nl.loadNextBlock(); err != nil {
-				return nil, err
-			}
-			if len(nl.leftBlock) == 0 {
-				return nil, nil
-			}
-
-			if err := nl.rightChild.Rewind(); err != nil {
-				return nil, err
-			}
+		if err := nl.ensureBlockLoaded(); err != nil {
+			return nil, err
 		}
 
-		if err := nl.processNextRightTuple(); err != nil {
+		if len(nl.leftBlock) == 0 {
+			return nil, nil
+		}
+
+		if err := nl.processNextRight(); err != nil {
 			return nil, err
 		}
 
@@ -104,6 +76,29 @@ func (nl *NestedLoopJoin) Next() (*tuple.Tuple, error) {
 			return result, nil
 		}
 	}
+}
+
+// ensureBlockLoaded ensures a valid block is loaded.
+func (nl *NestedLoopJoin) ensureBlockLoaded() error {
+	if nl.blockIndex < len(nl.leftBlock) {
+		return nil
+	}
+
+	hasMore, err := nl.leftChild.HasNext()
+	if err != nil {
+		return err
+	}
+
+	if !hasMore {
+		nl.leftBlock = nil
+		return nil
+	}
+
+	if err := nl.loadNextBlock(); err != nil {
+		return err
+	}
+
+	return nl.rightChild.Rewind()
 }
 
 // Initialize prepares the block nested loop join for execution.
@@ -115,7 +110,7 @@ func (nl *NestedLoopJoin) Next() (*tuple.Tuple, error) {
 //
 // Returns error if the first block cannot be loaded.
 func (nl *NestedLoopJoin) Initialize() error {
-	if nl.initialized {
+	if nl.IsInitialized() {
 		return nil
 	}
 
@@ -123,7 +118,7 @@ func (nl *NestedLoopJoin) Initialize() error {
 		return err
 	}
 
-	nl.initialized = true
+	nl.SetInitialized()
 	return nil
 }
 
@@ -135,8 +130,6 @@ func (nl *NestedLoopJoin) Initialize() error {
 // 1. Clears the current left block
 // 2. Reads up to blockSize tuples from the left iterator
 // 3. Resets the block index to 0
-//
-// Returns error if reading from the left iterator fails.
 func (nl *NestedLoopJoin) loadNextBlock() error {
 	nl.leftBlock = make([]*tuple.Tuple, 0, nl.blockSize)
 	nl.blockIndex = 0
@@ -167,9 +160,7 @@ func (nl *NestedLoopJoin) loadNextBlock() error {
 // resetting all state variables.
 func (nl *NestedLoopJoin) Close() error {
 	nl.leftBlock = nil
-	nl.matchBuffer.Reset()
-	nl.initialized = false
-	return nil
+	return nl.BaseJoin.Close()
 }
 
 // EstimateCost returns the estimated cost of executing this block nested loop join.
@@ -179,25 +170,13 @@ func (nl *NestedLoopJoin) Close() error {
 //   - |R| is the size of the left relation
 //   - |S| is the size of the right relation
 //   - BlockSize is the number of tuples per block
-//
-// This represents:
-//   - |R|: Cost of reading the left relation once
-//   - (|R| / BlockSize): Number of blocks in the left relation
-//   - * |S|: Right relation is scanned once per left block
-//
-// Returns a high default cost if no statistics are available.
 func (nl *NestedLoopJoin) EstimateCost() float64 {
 	if nl.stats == nil {
-		return 1000000
+		return DefaultHighCost
 	}
 
-	// Cost = |R| + (|R| / BlockSize) * |S|
-	numBlocks := float64(nl.stats.LeftSize) / float64(nl.blockSize)
-	if numBlocks < 1 {
-		numBlocks = 1
-	}
-
-	return float64(nl.stats.LeftSize) + numBlocks*float64(nl.stats.RightSize)
+	numBlocks := max(1, nl.stats.LeftSize/nl.blockSize)
+	return float64(nl.stats.LeftSize + numBlocks*nl.stats.RightSize)
 }
 
 // SupportsPredicateType checks if this nested loop join can handle the given predicate.
@@ -207,22 +186,13 @@ func (nl *NestedLoopJoin) SupportsPredicateType(predicate *JoinPredicate) bool {
 
 // Reset rewinds the nested loop join to the beginning, allowing re-iteration.
 // This resets all iteration state and reloads the first left block.
-//
-// The method:
-// 1. Resets block and buffer indices
-// 2. Clears the match buffer
-// 3. Rewinds both child iterators
-// 4. Reloads the first left block
-//
-// Returns error if rewinding child iterators or loading the first block fails.
 func (nl *NestedLoopJoin) Reset() error {
 	nl.blockIndex = 0
-	nl.matchBuffer.Reset()
+	nl.ResetCommon()
 
 	if err := nl.leftChild.Rewind(); err != nil {
 		return err
 	}
-
 	if err := nl.rightChild.Rewind(); err != nil {
 		return err
 	}
@@ -230,7 +200,7 @@ func (nl *NestedLoopJoin) Reset() error {
 	return nl.loadNextBlock()
 }
 
-// processNextRightTuple gets the next tuple from the right iterator and
+// processNextRight gets the next tuple from the right iterator and
 // finds all matches with the current left block.
 //
 // The method handles two scenarios:
@@ -239,9 +209,7 @@ func (nl *NestedLoopJoin) Reset() error {
 //
 // When a right tuple is found, it's compared against all tuples in the
 // current left block, and matches are added to the match buffer.
-//
-// Returns error if iterator operations fail.
-func (nl *NestedLoopJoin) processNextRightTuple() error {
+func (nl *NestedLoopJoin) processNextRight() error {
 	hasNext, err := nl.rightChild.HasNext()
 	if err != nil {
 		return err
@@ -253,50 +221,45 @@ func (nl *NestedLoopJoin) processNextRightTuple() error {
 	}
 
 	rightTuple, err := nl.rightChild.Next()
-	if err != nil {
+	if err != nil || rightTuple == nil {
 		return err
 	}
-	if rightTuple == nil {
-		return nil
-	}
 
-	return nl.findMatchesInCurrentBlock(rightTuple)
-}
-
-// findMatchesInCurrentBlock compares a right tuple against all tuples
-// in the current left block and adds matches to the match buffer.
-//
-// For each left tuple in the current block:
-// 1. Applies the join predicate to test for a match
-// 2. If the predicate succeeds, combines the tuples and adds to buffer
-// 3. Continues processing even if individual predicate evaluations fail
-func (nl *NestedLoopJoin) findMatchesInCurrentBlock(rightTuple *tuple.Tuple) error {
-	for i := nl.blockIndex; i < len(nl.leftBlock); i++ {
-		leftTuple := nl.leftBlock[i]
-
-		matches, err := nl.predicate.Filter(leftTuple, rightTuple)
-		if err != nil {
+	for i := 0; i < len(nl.leftBlock); i++ {
+		leftTup := nl.leftBlock[i]
+		matches, err := nl.predicate.Filter(leftTup, rightTuple)
+		if err != nil || !matches {
 			continue
 		}
 
-		if matches {
-			if err := nl.addMatchToBuffer(leftTuple, rightTuple); err != nil {
-				continue
-			}
+		if err := combineAndBuffer(nl.matchBuffer, leftTup, rightTuple); err != nil {
+			continue
 		}
 	}
 
 	return nil
 }
 
-// addMatchToBuffer combines two matching tuples and adds the result
-// to the match buffer for later retrieval.
-func (nl *NestedLoopJoin) addMatchToBuffer(leftTuple, rightTuple *tuple.Tuple) error {
-	joinedTuple, err := tuple.CombineTuples(leftTuple, rightTuple)
+// CalculateDefaultBlockSize determines optimal block size based on available memory.
+func calculateDefaultBlockSize(stats *JoinStatistics) int {
+	const (
+		defaultBlockSize = 100
+		tuplesPerPage    = 100
+	)
+
+	if stats == nil || stats.MemorySize <= 0 {
+		return defaultBlockSize
+	}
+
+	return stats.MemorySize * tuplesPerPage
+}
+
+// CombineAndBuffer combines matching tuples and adds to buffer.
+func combineAndBuffer(buffer *JoinMatchBuffer, left, right *tuple.Tuple) error {
+	combined, err := tuple.CombineTuples(left, right)
 	if err != nil {
 		return err
 	}
-
-	nl.matchBuffer.Add(joinedTuple)
+	buffer.Add(combined)
 	return nil
 }
