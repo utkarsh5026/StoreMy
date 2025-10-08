@@ -9,9 +9,11 @@ import (
 // WaitQueue implements a two-way mapping system for managing lock request queues in a database system.
 //
 // The WaitQueue maintains two critical data structures:
+//
 //   - pageWaitQueue: A map from PageID to an ordered slice of LockRequest pointers, representing
 //     the FIFO queue of transactions waiting to acquire locks on each page. The order matters
 //     as it determines which transaction gets the lock next when it becomes available.
+//
 //   - transactionWaiting: A reverse index mapping each TransactionID to all PageIDs it's currently
 //     waiting for. This enables efficient transaction cleanup and deadlock cycle detection.
 type WaitQueue struct {
@@ -49,6 +51,7 @@ func (wq *WaitQueue) Add(tid *primitives.TransactionID, pid primitives.PageID, l
 
 // RemoveRequest atomically removes a single lock request for a specific (transaction, page) pair
 // from both internal data structures. This method is typically called when:
+//
 // 1. A transaction successfully acquires the lock it was waiting for
 // 2. A specific lock request times out
 // 3. A transaction voluntarily cancels a specific lock request
@@ -58,6 +61,7 @@ func (wq *WaitQueue) RemoveRequest(tid *primitives.TransactionID, pid primitives
 }
 
 // RemoveAllForTransaction completely removes a transaction from all wait queues it's participating in.
+//
 // This is a comprehensive cleanup operation typically performed during:
 // 1. Transaction abort - release all pending lock requests
 // 2. Transaction commit - clean up any remaining requests (shouldn't happen in normal flow)
@@ -86,8 +90,7 @@ func (wq *WaitQueue) GetPagesRequestedFor(tid *primitives.TransactionID) []primi
 }
 
 // removeFromPageQueue removes a specific transaction from a page's wait queue while preserving
-// FIFO ordering for remaining requests. This is an internal helper method that handles the
-// page-side cleanup when a transaction's request is cancelled or fulfilled.
+// FIFO ordering for remaining requests.
 func (wq *WaitQueue) removeFromPageQueue(tid *primitives.TransactionID, pid primitives.PageID) {
 	requestQueue, exists := wq.pageWaitQueue[pid]
 	if !exists {
