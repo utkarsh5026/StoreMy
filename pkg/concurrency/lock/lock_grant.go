@@ -46,7 +46,7 @@ func (lg *LockGrantor) CanGrantImmediately(tid *primitives.TransactionID, pid pr
 // GrantLock grants a lock to a primitives.
 func (lg *LockGrantor) GrantLock(tid *primitives.TransactionID, pid primitives.PageID, lockType LockType) {
 	lg.lockTable.AddLock(tid, pid, lockType)
-	lg.waitQueue.Remove(tid, pid)
+	lg.waitQueue.RemoveRequest(tid, pid)
 }
 
 // CanUpgradeLock checks if a lock can be upgraded from shared to exclusive.

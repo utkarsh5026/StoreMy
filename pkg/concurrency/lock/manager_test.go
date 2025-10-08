@@ -511,8 +511,8 @@ func TestWaitQueueOperations(t *testing.T) {
 		t.Error("Transaction 2 waiting tracking incorrect")
 	}
 
-	// Remove from wait queue
-	lm.waitQueue.Remove(tid1, pid)
+	// RemoveRequest from wait queue
+	lm.waitQueue.RemoveRequest(tid1, pid)
 
 	// Verify removal
 	queue = lm.waitQueue.GetRequests(pid)
@@ -529,8 +529,8 @@ func TestWaitQueueOperations(t *testing.T) {
 		t.Error("Transaction 1 should not be in waiting tracking after removal")
 	}
 
-	// Remove last item
-	lm.waitQueue.Remove(tid2, pid)
+	// RemoveRequest last item
+	lm.waitQueue.RemoveRequest(tid2, pid)
 
 	// Verify queue is deleted
 	if len(lm.waitQueue.GetRequests(pid)) > 0 {
@@ -608,9 +608,9 @@ func TestMultiplePageWaiting(t *testing.T) {
 		t.Errorf("Expected transaction to be waiting for 2 pages, got %d", len(waitingPages))
 	}
 
-	// Remove from wait queue for one page specifically
+	// RemoveRequest from wait queue for one page specifically
 	lm.mutex.Lock()
-	lm.waitQueue.Remove(tid2, pid1)
+	lm.waitQueue.RemoveRequest(tid2, pid1)
 	lm.mutex.Unlock()
 
 	lm.mutex.RLock()
@@ -1255,7 +1255,7 @@ func TestProcessWaitQueue(t *testing.T) {
 		t.Fatalf("Expected 2 items in wait queue, got %d", len(queue))
 	}
 
-	// Remove tid1's exclusive lock (should allow shared locks to be granted)
+	// RemoveRequest tid1's exclusive lock (should allow shared locks to be granted)
 	lm.UnlockPage(tid1, pid)
 
 	// Check that wait queue is now empty (both shared locks should be granted)
@@ -1319,7 +1319,7 @@ func TestIsPageLockedAdvanced(t *testing.T) {
 		t.Error("Page should be locked after granting lock")
 	}
 
-	// Remove the lock
+	// RemoveRequest the lock
 	lm.UnlockPage(tid, pid)
 	if lm.IsPageLocked(pid) {
 		t.Error("Page should not be locked after removing lock")

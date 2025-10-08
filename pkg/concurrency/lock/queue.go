@@ -47,30 +47,30 @@ func (wq *WaitQueue) Add(tid *primitives.TransactionID, pid primitives.PageID, l
 	return nil
 }
 
-// Remove atomically removes a transaction's lock request for a specific page from both
-// internal data structures. This method is typically called when:
+// RemoveRequest atomically removes a single lock request for a specific (transaction, page) pair
+// from both internal data structures. This method is typically called when:
 // 1. A transaction successfully acquires the lock it was waiting for
-// 2. A transaction is aborted and needs to release its pending requests
-// 3. Lock timeout occurs and the request needs to be cancelled
-func (wq *WaitQueue) Remove(tid *primitives.TransactionID, pid primitives.PageID) {
+// 2. A specific lock request times out
+// 3. A transaction voluntarily cancels a specific lock request
+func (wq *WaitQueue) RemoveRequest(tid *primitives.TransactionID, pid primitives.PageID) {
 	wq.removeFromPageQueue(tid, pid)
 	wq.removeFromTransactionQueue(tid, pid)
 }
 
-// RemoveTransaction completely removes a transaction from all wait queues it's participating in.
+// RemoveAllForTransaction completely removes a transaction from all wait queues it's participating in.
 // This is a comprehensive cleanup operation typically performed during:
-// 1. Transaction abort - need to release all pending lock requests
+// 1. Transaction abort - release all pending lock requests
 // 2. Transaction commit - clean up any remaining requests (shouldn't happen in normal flow)
 // 3. Deadlock resolution - victim transaction needs complete cleanup
 // 4. Transaction timeout - remove all pending requests
-func (wq *WaitQueue) RemoveTransaction(tid *primitives.TransactionID) {
+func (wq *WaitQueue) RemoveAllForTransaction(tid *primitives.TransactionID) {
 	waitingPages, exists := wq.transactionWaiting[tid]
 	if !exists {
 		return
 	}
 
 	for _, pid := range waitingPages {
-		wq.Remove(tid, pid)
+		wq.RemoveRequest(tid, pid)
 	}
 }
 

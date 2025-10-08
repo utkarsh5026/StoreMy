@@ -117,7 +117,7 @@ func (lm *LockManager) attemptToAcquireLock(tid *primitives.TransactionID, pid p
 		lm.updateDependencies(tid, pid, lockType)
 
 		if lm.depGraph.HasCycle() {
-			lm.waitQueue.Remove(tid, pid)
+			lm.waitQueue.RemoveRequest(tid, pid)
 			lm.depGraph.RemoveTransaction(tid)
 			lm.mutex.Unlock()
 			return fmt.Errorf("deadlock detected for transaction %d", tid.ID())
@@ -200,7 +200,7 @@ func (lm *LockManager) processWaitQueue(pid primitives.PageID) {
 	}
 
 	for _, request := range grantedRequests {
-		lm.waitQueue.Remove(request.TID, pid)
+		lm.waitQueue.RemoveRequest(request.TID, pid)
 	}
 }
 
@@ -221,7 +221,7 @@ func (lm *LockManager) UnlockAllPages(tid *primitives.TransactionID) {
 
 	pagesToProcess := lm.lockTable.ReleaseAllLocks(tid)
 	lm.depGraph.RemoveTransaction(tid)
-	lm.waitQueue.RemoveTransaction(tid)
+	lm.waitQueue.RemoveAllForTransaction(tid)
 
 	for _, pid := range pagesToProcess {
 		lm.processWaitQueue(pid)

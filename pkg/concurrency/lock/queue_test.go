@@ -200,8 +200,8 @@ func TestWaitQueueRemove(t *testing.T) {
 	wq.Add(tid2, pid, ExclusiveLock)
 	wq.Add(tid3, pid, SharedLock)
 
-	// Remove middle transaction
-	wq.Remove(tid2, pid)
+	// RemoveRequest middle transaction
+	wq.RemoveRequest(tid2, pid)
 
 	// Verify removal
 	requests := wq.GetRequests(pid)
@@ -240,8 +240,8 @@ func TestWaitQueueRemoveLastRequest(t *testing.T) {
 	// Add single request
 	wq.Add(tid, pid, SharedLock)
 
-	// Remove it
-	wq.Remove(tid, pid)
+	// RemoveRequest it
+	wq.RemoveRequest(tid, pid)
 
 	// Verify complete cleanup
 	requests := wq.GetRequests(pid)
@@ -270,14 +270,14 @@ func TestWaitQueueRemoveNonExistent(t *testing.T) {
 	pid := heap.NewHeapPageID(1, 1)
 
 	// Try to remove from empty queue - should not panic
-	wq.Remove(tid, pid)
+	wq.RemoveRequest(tid, pid)
 
 	// Add a different transaction
 	tid2 := primitives.NewTransactionID()
 	wq.Add(tid2, pid, SharedLock)
 
 	// Try to remove non-existent transaction - should not affect existing one
-	wq.Remove(tid, pid)
+	wq.RemoveRequest(tid, pid)
 
 	requests := wq.GetRequests(pid)
 	if len(requests) != 1 {
@@ -302,13 +302,13 @@ func TestWaitQueueRemoveTransaction(t *testing.T) {
 	wq.Add(tid2, pid1, SharedLock)
 	wq.Add(tid2, pid2, SharedLock)
 
-	// Remove entire transaction
-	wq.RemoveTransaction(tid)
+	// RemoveRequest entire transaction
+	wq.RemoveAllForTransaction(tid)
 
 	// Verify transaction completely removed
 	waitingPages := wq.GetPagesRequestedFor(tid)
 	if len(waitingPages) != 0 {
-		t.Error("Transaction should not be waiting for any pages after RemoveTransaction")
+		t.Error("Transaction should not be waiting for any pages after RemoveAllForTransaction")
 	}
 
 	// Verify transaction removed from all page queues
@@ -338,16 +338,16 @@ func TestWaitQueueRemoveTransactionNonExistent(t *testing.T) {
 	wq := NewWaitQueue()
 	tid := primitives.NewTransactionID()
 
-	// Remove non-existent transaction - should not panic
-	wq.RemoveTransaction(tid)
+	// RemoveRequest non-existent transaction - should not panic
+	wq.RemoveAllForTransaction(tid)
 
 	// Add some transactions
 	tid2 := primitives.NewTransactionID()
 	pid := heap.NewHeapPageID(1, 1)
 	wq.Add(tid2, pid, SharedLock)
 
-	// Remove non-existent transaction - should not affect existing ones
-	wq.RemoveTransaction(tid)
+	// RemoveRequest non-existent transaction - should not affect existing ones
+	wq.RemoveAllForTransaction(tid)
 
 	requests := wq.GetRequests(pid)
 	if len(requests) != 1 {
@@ -501,7 +501,7 @@ func TestWaitQueueWithExternalSynchronization(t *testing.T) {
 
 				// Immediately remove it with synchronization
 				mutex.Lock()
-				wq.Remove(tid, pid)
+				wq.RemoveRequest(tid, pid)
 				mutex.Unlock()
 			}
 		}(i)
@@ -565,9 +565,9 @@ func TestWaitQueueStressTest(t *testing.T) {
 		t.Errorf("Expected %d total requests, got %d", expectedRequests, totalRequests)
 	}
 
-	// Remove half the transactions
+	// RemoveRequest half the transactions
 	for i := 0; i < numTransactions/2; i++ {
-		wq.RemoveTransaction(transactions[i])
+		wq.RemoveAllForTransaction(transactions[i])
 	}
 
 	// Verify removals
@@ -650,8 +650,8 @@ func TestWaitQueueFIFOOrdering(t *testing.T) {
 		}
 	}
 
-	// Remove middle transaction and verify ordering is preserved
-	wq.Remove(transactions[2], pid)
+	// RemoveRequest middle transaction and verify ordering is preserved
+	wq.RemoveRequest(transactions[2], pid)
 
 	requests = wq.GetRequests(pid)
 	if len(requests) != 4 {
