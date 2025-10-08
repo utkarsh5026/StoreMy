@@ -35,20 +35,18 @@ func NewLogReader(logPath string) (*LogReader, error) {
 // ReadNext reads the next log record from the file
 // Returns nil when EOF is reached
 func (lr *LogReader) ReadNext() (*LogRecord, error) {
-	recordSize, err := readHeader(lr.file, lr.offset)
+	recLen, err := readHeader(lr.file, lr.offset)
 	if err != nil {
 		return nil, err
 	}
 
-	// Read the record data (excluding the size header we already read)
-	recordBuf, err := readRecordBytes(lr.file, int64(recordSize-RecordSize), lr.offset+RecordSize)
+	recordBuf, err := readRecordBytes(lr.file, int64(recLen-RecordSize), lr.offset+RecordSize)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read record bytes at offset %d: %w", lr.offset, err)
 	}
 
-	// Prepend the size header for deserialization
-	fullRecord := make([]byte, recordSize)
-	binary.BigEndian.PutUint32(fullRecord[0:RecordSize], recordSize)
+	fullRecord := make([]byte, recLen)
+	binary.BigEndian.PutUint32(fullRecord[0:RecordSize], recLen)
 	copy(fullRecord[RecordSize:], recordBuf)
 
 	record, err := DeserializeLogRecord(fullRecord)
@@ -57,7 +55,7 @@ func (lr *LogReader) ReadNext() (*LogRecord, error) {
 	}
 
 	record.LSN = primitives.LSN(lr.offset)
-	lr.offset += int64(recordSize)
+	lr.offset += int64(recLen)
 	return record, nil
 }
 
