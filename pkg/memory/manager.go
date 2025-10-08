@@ -2,7 +2,8 @@ package memory
 
 import (
 	"fmt"
-	"sort"
+	"maps"
+	"slices"
 	"storemy/pkg/storage/page"
 	"storemy/pkg/tuple"
 	"strings"
@@ -118,8 +119,8 @@ func (tm *TableManager) Clear() {
 		}
 	}
 
-	tm.nameToTable = make(map[string]*TableInfo)
-	tm.idToTable = make(map[int]*TableInfo)
+	clear(tm.nameToTable)
+	clear(tm.idToTable)
 }
 
 // GetDbFile retrieves the database file associated with a table given its ID.
@@ -173,11 +174,7 @@ func (tm *TableManager) String() string {
 	var builder strings.Builder
 	builder.WriteString(fmt.Sprintf("TableManager(tables=%d):\n", len(tm.nameToTable)))
 
-	names := make([]string, 0, len(tm.nameToTable))
-	for name := range tm.nameToTable {
-		names = append(names, name)
-	}
-	sort.Strings(names)
+	names := slices.Sorted(maps.Keys(tm.nameToTable))
 
 	for _, name := range names {
 		table := tm.nameToTable[name]
@@ -192,13 +189,7 @@ func (tm *TableManager) String() string {
 func (tm *TableManager) GetAllTableNames() []string {
 	tm.mutex.RLock()
 	defer tm.mutex.RUnlock()
-
-	names := make([]string, 0, len(tm.nameToTable))
-	for name := range tm.nameToTable {
-		names = append(names, name)
-	}
-
-	return names
+	return slices.Collect(maps.Keys(tm.nameToTable))
 }
 
 // removeExistingTable removes any existing table with the given name or ID from both maps.
