@@ -90,7 +90,7 @@ func (lm *LockManager) attemptToAcquireLock(tid *primitives.TransactionID, pid p
 	maxRetries := 100
 	retryDelay := time.Millisecond
 
-	for attempt := 0; attempt < maxRetries; attempt++ {
+	for attempt := range maxRetries {
 		lm.mutex.Lock()
 
 		if lm.lockTable.HasSufficientLock(tid, pid, lockType) {
@@ -157,11 +157,7 @@ func (lm *LockManager) calculateRetryDelay(attemptNumber int, baseDelay, maxDela
 	// Use more gradual exponential backoff: every 5 attempts instead of 10
 	// Cap the exponential factor at 5 to prevent excessive delays
 	exponentialFactor := min(attemptNumber/5, 5)
-	delay := baseDelay * time.Duration(1<<uint(exponentialFactor))
-
-	if delay > maxDelay {
-		delay = maxDelay
-	}
+	delay := min(baseDelay*time.Duration(1<<uint(exponentialFactor)), maxDelay)
 
 	return delay
 }
