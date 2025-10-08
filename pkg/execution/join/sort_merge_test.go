@@ -48,9 +48,7 @@ func TestNewSortMergeJoin(t *testing.T) {
 	if smj.rightIndex != 0 {
 		t.Error("rightIndex should be initialized to 0")
 	}
-	if smj.rightStart != 0 {
-		t.Error("rightStart should be initialized to 0")
-	}
+
 	if smj.matchBuffer == nil {
 		t.Error("matchBuffer should be initialized")
 	}
@@ -586,9 +584,6 @@ func TestSortMergeJoinReset(t *testing.T) {
 	if smj.rightIndex != 0 {
 		t.Error("rightIndex should be 0 after reset")
 	}
-	if smj.rightStart != 0 {
-		t.Error("rightStart should be 0 after reset")
-	}
 
 	// Should be able to iterate again
 	var count int
@@ -908,28 +903,5 @@ func TestSortMergeJoinBufferMatches(t *testing.T) {
 	}
 	if result2 == nil {
 		t.Fatal("expected second result from buffer")
-	}
-}
-
-// TestLogBase2 tests the logBase2 helper function
-func TestLogBase2(t *testing.T) {
-	tests := []struct {
-		input    float64
-		expected float64
-	}{
-		{0, 0},
-		{1, 0},
-		{2, 1},
-		{4, 2},
-		{8, 3},
-		{16, 4},
-		{32, 5},
-	}
-
-	for _, tt := range tests {
-		result := logBase2(tt.input)
-		if result != tt.expected {
-			t.Errorf("logBase2(%f) = %f, expected %f", tt.input, result, tt.expected)
-		}
 	}
 }
