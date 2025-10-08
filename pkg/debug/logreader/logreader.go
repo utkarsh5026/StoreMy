@@ -165,23 +165,16 @@ func (m model) renderListView() string {
 	header := ui.HeaderStyle.Render(fmt.Sprintf(" Total Records: %d ", m.totalRecords))
 	b.WriteString(header + "\n\n")
 
-	// Calculate visible range
 	visibleStart := max(0, m.cursor-10)
 	visibleEnd := min(len(m.records), visibleStart+20)
-
 	for i := visibleStart; i < visibleEnd; i++ {
 		record := m.records[i]
-
-		// Build record line
 		recordLine := m.formatRecordLine(record, i)
-
-		// Apply selection style
 		if i == m.cursor {
 			recordLine = ui.SelectedItemStyle.Render("▶ " + recordLine)
 		} else {
 			recordLine = ui.ItemStyle.Render("  " + recordLine)
 		}
-
 		b.WriteString(recordLine + "\n")
 	}
 
