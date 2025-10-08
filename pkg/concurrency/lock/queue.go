@@ -75,16 +75,14 @@ func (wq *WaitQueue) RemoveTransaction(tid *primitives.TransactionID) {
 }
 
 // GetRequests returns an ordered slice of all lock requests waiting for the specified page.
-// The returned slice maintains FIFO ordering where the first element is the next transaction
-// in line to receive the lock when it becomes available.
 func (wq *WaitQueue) GetRequests(pid primitives.PageID) []*LockRequest {
-	return wq.pageWaitQueue[pid]
+	return slices.Clone(wq.pageWaitQueue[pid])
 }
 
 // GetPagesRequestedFor returns all pages that a specific transaction is currently waiting
 // to acquire locks on.
 func (wq *WaitQueue) GetPagesRequestedFor(tid *primitives.TransactionID) []primitives.PageID {
-	return wq.transactionWaiting[tid]
+	return slices.Clone(wq.transactionWaiting[tid])
 }
 
 // removeFromPageQueue removes a specific transaction from a page's wait queue while preserving
@@ -96,23 +94,10 @@ func (wq *WaitQueue) removeFromPageQueue(tid *primitives.TransactionID, pid prim
 		return
 	}
 
-	newQueue := wq.filterPageQueue(requestQueue, tid)
-	if len(newQueue) > 0 {
-		wq.pageWaitQueue[pid] = newQueue
-	} else {
-		delete(wq.pageWaitQueue, pid) // Clean up empty queue
-	}
-}
-
-// filterPageQueue creates a new queue slice excluding all requests from the specified primitives.
-func (wq *WaitQueue) filterPageQueue(requestQueue []*LockRequest, tid *primitives.TransactionID) []*LockRequest {
-	newQueue := make([]*LockRequest, 0)
-	for _, req := range requestQueue {
-		if req.TID != tid {
-			newQueue = append(newQueue, req)
-		}
-	}
-	return newQueue
+	newQueue := slices.DeleteFunc(slices.Clone(requestQueue), func(req *LockRequest) bool {
+		return req.TID == tid
+	})
+	updateOrDelete(wq.pageWaitQueue, pid, newQueue)
 }
 
 // removeFromTransactionQueue removes a specific page from a transaction's waiting list,
@@ -120,31 +105,13 @@ func (wq *WaitQueue) filterPageQueue(requestQueue []*LockRequest, tid *primitive
 // the consistency of the transactionWaiting map by either updating the page list or
 // removing the transaction entry entirely if it's no longer waiting for any pages.
 func (wq *WaitQueue) removeFromTransactionQueue(tid *primitives.TransactionID, pid primitives.PageID) {
-	waitingPages, exists := wq.transactionWaiting[tid]
+	pages, exists := wq.transactionWaiting[tid]
 	if !exists {
 		return
 	}
 
-	newWaitingPages := wq.filterTransactionQueue(waitingPages, pid)
-	if len(newWaitingPages) > 0 {
-		wq.transactionWaiting[tid] = newWaitingPages
-	} else {
-		delete(wq.transactionWaiting, tid)
-	}
-}
-
-// filterTransactionQueue creates a new page list excluding the specified page from
-// a transaction's waiting list. This maintains the order in which the transaction
-// requested locks on the remaining pages.
-func (wq *WaitQueue) filterTransactionQueue(waitingPages []primitives.PageID, pid primitives.PageID) []primitives.PageID {
-	newWaitingPages := make([]primitives.PageID, 0)
-	for _, waitingPid := range waitingPages {
-		if pid.Equals(waitingPid) {
-			continue
-		}
-		newWaitingPages = append(newWaitingPages, waitingPid)
-	}
-	return newWaitingPages
+	updated := slices.DeleteFunc(slices.Clone(pages), pid.Equals)
+	updateOrDelete(wq.transactionWaiting, tid, updated)
 }
 
 // alreadyInPageQueue checks if a transaction already has a pending lock request in the
@@ -155,12 +122,9 @@ func (wq *WaitQueue) alreadyInPageQueue(tid *primitives.TransactionID, pid primi
 		return false
 	}
 
-	for _, req := range queue {
-		if req.TID == tid {
-			return true
-		}
-	}
-	return false
+	return slices.ContainsFunc(queue, func(req *LockRequest) bool {
+		return req.TID == tid
+	})
 }
 
 // isInTransactionQueue checks if a transaction is already recorded as waiting for the
@@ -172,4 +136,14 @@ func (wq *WaitQueue) isInTransactionQueue(tid *primitives.TransactionID, pid pri
 	}
 
 	return slices.ContainsFunc(waitingPages, pid.Equals)
+}
+
+// updateOrDelete updates the map with the new slice, or deletes the key if the slice is empty.
+// This maintains map cleanliness by avoiding storage of empty slices.
+func updateOrDelete[K comparable, V any](m map[K][]V, key K, newSlice []V) {
+	if len(newSlice) > 0 {
+		m[key] = newSlice
+	} else {
+		delete(m, key)
+	}
 }
