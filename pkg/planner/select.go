@@ -246,12 +246,7 @@ func (p *SelectPlan) buildJoinPredicate(node *plan.JoinNode, l, r iterator.DbIte
 		return nil, err
 	}
 
-	predicateOp, err := getPredicateOperation(node.Predicate)
-	if err != nil {
-		return nil, fmt.Errorf("failed to convert predicate: %w", err)
-	}
-
-	return join.NewJoinPredicate(li, ri, predicateOp)
+	return join.NewJoinPredicate(li, ri, node.Predicate)
 }
 
 // applyAggregationIfNeeded applies aggregation/GROUP BY to the input operator.

@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"storemy/pkg/execution/query"
 	"storemy/pkg/parser/plan"
-	"storemy/pkg/primitives"
 	"storemy/pkg/tuple"
 	"storemy/pkg/types"
 	"strings"
@@ -24,12 +23,7 @@ func buildPredicateFromFilterNode(filter *plan.FilterNode, tupleDesc *tuple.Tupl
 		return nil, err
 	}
 
-	op, err := getPredicateOperation(filter.Predicate)
-	if err != nil {
-		return nil, err
-	}
-
-	return query.NewPredicate(fieldIndex, op, constantField), nil
+	return query.NewPredicate(fieldIndex, filter.Predicate, constantField), nil
 }
 
 // locateField locates the index of a field within the tuple description by name.
@@ -64,23 +58,4 @@ func createConstantField(constantValue string, tupleDesc *tuple.TupleDescription
 	default:
 		return nil, fmt.Errorf("unsupported field type: %v", fieldType)
 	}
-}
-
-// getPredicateOperation maps a predicate type to its corresponding query operation.
-func getPredicateOperation(predicate primitives.Predicate) (query.PredicateOp, error) {
-	predicateMap := map[primitives.Predicate]query.PredicateOp{
-		primitives.Equals:             query.Equals,
-		primitives.LessThan:           query.LessThan,
-		primitives.GreaterThan:        query.GreaterThan,
-		primitives.LessThanOrEqual:    query.LessThanOrEqual,
-		primitives.GreaterThanOrEqual: query.GreaterThanOrEqual,
-		primitives.NotEqual:           query.NotEqual,
-	}
-
-	op, exists := predicateMap[predicate]
-	if !exists {
-		return 0, fmt.Errorf("unsupported predicate type: %v", predicate)
-	}
-
-	return op, nil
 }
