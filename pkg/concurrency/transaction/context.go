@@ -187,23 +187,14 @@ func (tc *TransactionContext) AddWaitingFor(pid primitives.PageID) {
 func (tc *TransactionContext) RemoveWaitingFor(pid primitives.PageID) {
 	tc.mutex.Lock()
 	defer tc.mutex.Unlock()
-
-	filtered := make([]primitives.PageID, 0, len(tc.waitingFor))
-	for _, p := range tc.waitingFor {
-		if !p.Equals(pid) {
-			filtered = append(filtered, p)
-		}
-	}
-	tc.waitingFor = filtered
+	tc.waitingFor = slices.DeleteFunc(tc.waitingFor, pid.Equals)
 }
 
 func (tc *TransactionContext) GetWaitingFor() []primitives.PageID {
 	tc.mutex.RLock()
 	defer tc.mutex.RUnlock()
 
-	waiting := make([]primitives.PageID, len(tc.waitingFor))
-	copy(waiting, tc.waitingFor)
-	return waiting
+	return slices.Clone(tc.waitingFor)
 }
 
 // EnsureBegunInWAL ensures a BEGIN record has been written
