@@ -2,8 +2,8 @@ package join
 
 import (
 	"fmt"
-	"storemy/pkg/execution/query"
 	"storemy/pkg/iterator"
+	"storemy/pkg/primitives"
 	"storemy/pkg/tuple"
 )
 
@@ -109,7 +109,7 @@ func (hj *HashJoin) EstimateCost() float64 {
 // SupportsPredicateType checks if this hash join can handle the given predicate.
 // Hash joins only support equality predicates.
 func (hj *HashJoin) SupportsPredicateType(predicate *JoinPredicate) bool {
-	return predicate.GetOP() == query.Equals
+	return predicate.GetOP() == primitives.Equals
 }
 
 // getNextMatch returns the next match for the current left tuple.
