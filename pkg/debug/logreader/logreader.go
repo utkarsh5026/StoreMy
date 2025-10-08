@@ -324,13 +324,6 @@ func (m model) renderStatusBar() string {
 	return ui.StatusBarStyle.Render(fmt.Sprintf(" List View | Position: %s | %s ", position, m.logPath))
 }
 
-func max(a, b int) int {
-	if a > b {
-		return a
-	}
-	return b
-}
-
 func main() {
 	if len(os.Args) < 2 {
 		fmt.Println("Usage: logreader <path-to-log-file>")
