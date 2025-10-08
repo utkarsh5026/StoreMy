@@ -1,6 +1,8 @@
 package lock
 
 import (
+	"maps"
+	"slices"
 	"storemy/pkg/primitives"
 )
 
@@ -70,7 +72,7 @@ func (lt *LockTable) HasLockType(tid *primitives.TransactionID, pid primitives.P
 }
 
 func (lt *LockTable) GetPageLocks(pid primitives.PageID) []*Lock {
-	return lt.pageLocks[pid]
+	return slices.Clone(lt.pageLocks[pid])
 }
 
 // AddLock grants a new lock to a transaction on a specific page and updates both
@@ -115,25 +117,14 @@ func (lt *LockTable) ReleaseAllLocks(tid *primitives.TransactionID) []primitives
 		return nil
 	}
 
-	affectedPages := make([]primitives.PageID, 0, len(txPages))
-	for pid := range txPages {
-		affectedPages = append(affectedPages, pid)
-	}
+	affectedPages := slices.Collect(maps.Keys(txPages))
 
 	for _, pid := range affectedPages {
 		if locks, exists := lt.pageLocks[pid]; exists {
-			newLocks := make([]*Lock, 0, len(locks))
-			for _, lock := range locks {
-				if lock.TID != tid {
-					newLocks = append(newLocks, lock)
-				}
-			}
-
-			if len(newLocks) > 0 {
-				lt.pageLocks[pid] = newLocks
-			} else {
-				delete(lt.pageLocks, pid)
-			}
+			updated := slices.DeleteFunc(slices.Clone(locks), func(l *Lock) bool {
+				return l.TID == tid
+			})
+			updateOrDelete(lt.pageLocks, pid, updated)
 		}
 	}
 
@@ -147,18 +138,11 @@ func (lt *LockTable) ReleaseAllLocks(tid *primitives.TransactionID) []primitives
 // optimizations and selective lock management.
 func (lt *LockTable) ReleaseLock(tid *primitives.TransactionID, pageID primitives.PageID) {
 	if locks, exists := lt.pageLocks[pageID]; exists {
-		newLocks := make([]*Lock, 0, len(locks))
-		for _, lock := range locks {
-			if lock.TID != tid {
-				newLocks = append(newLocks, lock)
-			}
-		}
+		newLocks := slices.DeleteFunc(slices.Clone(locks), func(l *Lock) bool {
+			return l.TID == tid
+		})
 
-		if len(newLocks) > 0 {
-			lt.pageLocks[pageID] = newLocks
-		} else {
-			delete(lt.pageLocks, pageID)
-		}
+		updateOrDelete(lt.pageLocks, pageID, newLocks)
 	}
 
 	if txPages, exists := lt.transactionLocks[tid]; exists {

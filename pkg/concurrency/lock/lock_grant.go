@@ -38,12 +38,12 @@ func (lg *LockGrantor) CanGrantImmediately(tid *primitives.TransactionID, pid pr
 		return true
 	}
 
-	return !slices.ContainsFunc(locks, func(lock *Lock) bool {
-		return lock.TID != tid && lock.LockType == ExclusiveLock
+	return !slices.ContainsFunc(locks, func(l *Lock) bool {
+		return l.TID != tid && l.LockType == ExclusiveLock
 	})
 }
 
-// GrantLock grants a lock to a primitives.
+// GrantLock grants a lock to a transaction and removes its wait queue entry.
 func (lg *LockGrantor) GrantLock(tid *primitives.TransactionID, pid primitives.PageID, lockType LockType) {
 	lg.lockTable.AddLock(tid, pid, lockType)
 	lg.waitQueue.RemoveRequest(tid, pid)
@@ -58,7 +58,7 @@ func (lg *LockGrantor) CanUpgradeLock(tid *primitives.TransactionID, pid primiti
 	}
 
 	locks := lg.lockTable.GetPageLocks(pid)
-	return !slices.ContainsFunc(locks, func(lock *Lock) bool {
-		return lock.TID != tid
+	return !slices.ContainsFunc(locks, func(l *Lock) bool {
+		return l.TID != tid
 	})
 }
