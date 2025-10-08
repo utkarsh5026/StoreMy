@@ -1,6 +1,7 @@
 package join
 
 import (
+	"errors"
 	"fmt"
 	"storemy/pkg/execution/query"
 	"storemy/pkg/iterator"
@@ -179,20 +180,33 @@ func (j *JoinOperator) Close() error {
 	j.mutex.Lock()
 	defer j.mutex.Unlock()
 
+	var errs []error
+
 	if j.leftChild != nil {
-		j.leftChild.Close()
+		if err := j.leftChild.Close(); err != nil {
+			errs = append(errs, fmt.Errorf("left child close: %w", err))
+		}
 	}
 
 	if j.rightChild != nil {
-		j.rightChild.Close()
+		if err := j.rightChild.Close(); err != nil {
+			errs = append(errs, fmt.Errorf("right child close: %w", err))
+		}
 	}
 
 	if j.algorithm != nil {
-		j.algorithm.Close()
+		if err := j.algorithm.Close(); err != nil {
+			errs = append(errs, fmt.Errorf("algorithm close: %w", err))
+		}
+	}
+
+	if err := j.base.Close(); err != nil {
+		errs = append(errs, fmt.Errorf("base iterator close: %w", err))
 	}
 
 	j.initialized = false
-	return j.base.Close()
+
+	return errors.Join(errs...)
 }
 
 // GetTupleDesc returns the schema description of the result tuples.
