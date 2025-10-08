@@ -142,27 +142,3 @@ func extractJoinKey(t *tuple.Tuple, fieldIndex int) (string, error) {
 	}
 	return field.String(), nil
 }
-
-// CalculateDefaultBlockSize determines optimal block size based on available memory.
-func calculateDefaultBlockSize(stats *JoinStatistics) int {
-	const (
-		defaultBlockSize = 100
-		tuplesPerPage    = 100
-	)
-
-	if stats == nil || stats.MemorySize <= 0 {
-		return defaultBlockSize
-	}
-
-	return stats.MemorySize * tuplesPerPage
-}
-
-// CombineAndBuffer combines matching tuples and adds to buffer.
-func combineAndBuffer(buffer *JoinMatchBuffer, left, right *tuple.Tuple) error {
-	combined, err := tuple.CombineTuples(left, right)
-	if err != nil {
-		return err
-	}
-	buffer.Add(combined)
-	return nil
-}
