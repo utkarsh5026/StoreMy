@@ -3,6 +3,7 @@ package types
 import (
 	"bytes"
 	"math"
+	"storemy/pkg/primitives"
 	"testing"
 )
 
@@ -33,7 +34,7 @@ func TestNewFloat64Field(t *testing.T) {
 
 func TestFloat64Field_Type(t *testing.T) {
 	field := NewFloat64Field(42.5)
-	
+
 	if field.Type() != FloatType {
 		t.Errorf("Expected type %v, got %v", FloatType, field.Type())
 	}
@@ -66,7 +67,7 @@ func TestFloat64Field_String(t *testing.T) {
 func TestFloat64Field_Length(t *testing.T) {
 	field := NewFloat64Field(42.5)
 	expected := uint32(8)
-	
+
 	if field.Length() != expected {
 		t.Errorf("Expected length %d, got %d", expected, field.Length())
 	}
@@ -86,8 +87,8 @@ func TestFloat64Field_Equals(t *testing.T) {
 		{"negative values", NewFloat64Field(-42.5), NewFloat64Field(-42.5), true},
 		{"zero equality", NewFloat64Field(0.0), NewFloat64Field(0.0), true},
 		{"different type", NewFloat64Field(42.5), NewIntField(42), false},
-		{"NaN values", NewFloat64Field(math.NaN()), NewFloat64Field(math.NaN()), false}, // NaN != NaN
-		{"positive infinity", NewFloat64Field(math.Inf(1)), NewFloat64Field(math.Inf(1)), false}, // Inf - Inf = NaN, which is not < epsilon
+		{"NaN values", NewFloat64Field(math.NaN()), NewFloat64Field(math.NaN()), false},            // NaN != NaN
+		{"positive infinity", NewFloat64Field(math.Inf(1)), NewFloat64Field(math.Inf(1)), false},   // Inf - Inf = NaN, which is not < epsilon
 		{"negative infinity", NewFloat64Field(math.Inf(-1)), NewFloat64Field(math.Inf(-1)), false}, // -Inf - -Inf = NaN, which is not < epsilon
 	}
 
@@ -103,8 +104,8 @@ func TestFloat64Field_Equals(t *testing.T) {
 
 func TestFloat64Field_Hash(t *testing.T) {
 	tests := []struct {
-		name   string
-		value  float64
+		name  string
+		value float64
 	}{
 		{"positive value", 42.5},
 		{"negative value", -42.5},
@@ -120,27 +121,27 @@ func TestFloat64Field_Hash(t *testing.T) {
 			if err != nil {
 				t.Fatalf("Unexpected error: %v", err)
 			}
-			
+
 			// Verify same values produce same hash
 			field2 := NewFloat64Field(tt.value)
 			hash2, err := field2.Hash()
 			if err != nil {
 				t.Fatalf("Unexpected error: %v", err)
 			}
-			
+
 			if hash != hash2 {
 				t.Errorf("Same values should produce same hash: %d != %d", hash, hash2)
 			}
 		})
 	}
-	
+
 	// Test that different values produce different hashes (most of the time)
 	field1 := NewFloat64Field(42.5)
 	field2 := NewFloat64Field(43.5)
-	
+
 	hash1, _ := field1.Hash()
 	hash2, _ := field2.Hash()
-	
+
 	if hash1 == hash2 {
 		t.Errorf("Different values should generally produce different hashes")
 	}
@@ -165,12 +166,12 @@ func TestFloat64Field_Serialize(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			field := NewFloat64Field(tt.value)
 			var buf bytes.Buffer
-			
+
 			err := field.Serialize(&buf)
 			if err != nil {
 				t.Fatalf("Unexpected error: %v", err)
 			}
-			
+
 			if buf.Len() != 8 {
 				t.Errorf("Expected buffer length 8, got %d", buf.Len())
 			}
@@ -182,47 +183,47 @@ func TestFloat64Field_Compare(t *testing.T) {
 	tests := []struct {
 		name      string
 		field1    *Float64Field
-		op        Predicate
+		op        primitives.Predicate
 		field2    *Float64Field
 		expected  bool
 		expectErr bool
 	}{
 		// Equals tests
-		{"equals same", NewFloat64Field(42.5), Equals, NewFloat64Field(42.5), true, false},
-		{"equals different", NewFloat64Field(42.5), Equals, NewFloat64Field(43.5), false, false},
-		{"equals within epsilon", NewFloat64Field(1.0), Equals, NewFloat64Field(1.0 + 1e-10), true, false},
-		{"equals outside epsilon", NewFloat64Field(1.0), Equals, NewFloat64Field(1.0 + 1e-8), false, false},
-		
+		{"equals same", NewFloat64Field(42.5), primitives.Equals, NewFloat64Field(42.5), true, false},
+		{"equals different", NewFloat64Field(42.5), primitives.Equals, NewFloat64Field(43.5), false, false},
+		{"equals within epsilon", NewFloat64Field(1.0), primitives.Equals, NewFloat64Field(1.0 + 1e-10), true, false},
+		{"equals outside epsilon", NewFloat64Field(1.0), primitives.Equals, NewFloat64Field(1.0 + 1e-8), false, false},
+
 		// NotEqual tests
-		{"not equal different", NewFloat64Field(42.5), NotEqual, NewFloat64Field(43.5), true, false},
-		{"not equal same", NewFloat64Field(42.5), NotEqual, NewFloat64Field(42.5), false, false},
-		{"not equal within epsilon", NewFloat64Field(1.0), NotEqual, NewFloat64Field(1.0 + 1e-10), false, false},
-		{"not equal outside epsilon", NewFloat64Field(1.0), NotEqual, NewFloat64Field(1.0 + 1e-8), true, false},
-		
+		{"not equal different", NewFloat64Field(42.5), primitives.NotEqual, NewFloat64Field(43.5), true, false},
+		{"not equal same", NewFloat64Field(42.5), primitives.NotEqual, NewFloat64Field(42.5), false, false},
+		{"not equal within epsilon", NewFloat64Field(1.0), primitives.NotEqual, NewFloat64Field(1.0 + 1e-10), false, false},
+		{"not equal outside epsilon", NewFloat64Field(1.0), primitives.NotEqual, NewFloat64Field(1.0 + 1e-8), true, false},
+
 		// LessThan tests
-		{"less than true", NewFloat64Field(42.5), LessThan, NewFloat64Field(43.5), true, false},
-		{"less than false", NewFloat64Field(43.5), LessThan, NewFloat64Field(42.5), false, false},
-		{"less than equal", NewFloat64Field(42.5), LessThan, NewFloat64Field(42.5), false, false},
-		{"negative less than", NewFloat64Field(-43.5), LessThan, NewFloat64Field(-42.5), true, false},
-		
+		{"less than true", NewFloat64Field(42.5), primitives.LessThan, NewFloat64Field(43.5), true, false},
+		{"less than false", NewFloat64Field(43.5), primitives.LessThan, NewFloat64Field(42.5), false, false},
+		{"less than equal", NewFloat64Field(42.5), primitives.LessThan, NewFloat64Field(42.5), false, false},
+		{"negative less than", NewFloat64Field(-43.5), primitives.LessThan, NewFloat64Field(-42.5), true, false},
+
 		// GreaterThan tests
-		{"greater than true", NewFloat64Field(43.5), GreaterThan, NewFloat64Field(42.5), true, false},
-		{"greater than false", NewFloat64Field(42.5), GreaterThan, NewFloat64Field(43.5), false, false},
-		{"greater than equal", NewFloat64Field(42.5), GreaterThan, NewFloat64Field(42.5), false, false},
-		
+		{"greater than true", NewFloat64Field(43.5), primitives.GreaterThan, NewFloat64Field(42.5), true, false},
+		{"greater than false", NewFloat64Field(42.5), primitives.GreaterThan, NewFloat64Field(43.5), false, false},
+		{"greater than equal", NewFloat64Field(42.5), primitives.GreaterThan, NewFloat64Field(42.5), false, false},
+
 		// LessThanOrEqual tests
-		{"less than or equal less", NewFloat64Field(42.5), LessThanOrEqual, NewFloat64Field(43.5), true, false},
-		{"less than or equal equal", NewFloat64Field(42.5), LessThanOrEqual, NewFloat64Field(42.5), true, false},
-		{"less than or equal greater", NewFloat64Field(43.5), LessThanOrEqual, NewFloat64Field(42.5), false, false},
-		
+		{"less than or equal less", NewFloat64Field(42.5), primitives.LessThanOrEqual, NewFloat64Field(43.5), true, false},
+		{"less than or equal equal", NewFloat64Field(42.5), primitives.LessThanOrEqual, NewFloat64Field(42.5), true, false},
+		{"less than or equal greater", NewFloat64Field(43.5), primitives.LessThanOrEqual, NewFloat64Field(42.5), false, false},
+
 		// GreaterThanOrEqual tests
-		{"greater than or equal greater", NewFloat64Field(43.5), GreaterThanOrEqual, NewFloat64Field(42.5), true, false},
-		{"greater than or equal equal", NewFloat64Field(42.5), GreaterThanOrEqual, NewFloat64Field(42.5), true, false},
-		{"greater than or equal less", NewFloat64Field(42.5), GreaterThanOrEqual, NewFloat64Field(43.5), false, false},
-		
+		{"greater than or equal greater", NewFloat64Field(43.5), primitives.GreaterThanOrEqual, NewFloat64Field(42.5), true, false},
+		{"greater than or equal equal", NewFloat64Field(42.5), primitives.GreaterThanOrEqual, NewFloat64Field(42.5), true, false},
+		{"greater than or equal less", NewFloat64Field(42.5), primitives.GreaterThanOrEqual, NewFloat64Field(43.5), false, false},
+
 		// Special values tests
-		{"infinity greater than max", NewFloat64Field(math.Inf(1)), GreaterThan, NewFloat64Field(math.MaxFloat64), true, false},
-		{"negative infinity less than min", NewFloat64Field(math.Inf(-1)), LessThan, NewFloat64Field(-math.MaxFloat64), true, false},
+		{"infinity greater than max", NewFloat64Field(math.Inf(1)), primitives.GreaterThan, NewFloat64Field(math.MaxFloat64), true, false},
+		{"negative infinity less than min", NewFloat64Field(math.Inf(-1)), primitives.LessThan, NewFloat64Field(-math.MaxFloat64), true, false},
 	}
 
 	for _, tt := range tests {
@@ -243,23 +244,23 @@ func TestFloat64Field_Compare(t *testing.T) {
 
 func TestFloat64Field_Compare_CrossType(t *testing.T) {
 	tests := []struct {
-		name      string
-		floatVal  float64
-		op        Predicate
-		intVal    int32
-		expected  bool
+		name     string
+		floatVal float64
+		op       primitives.Predicate
+		intVal   int32
+		expected bool
 	}{
-		{"float equals int", 42.0, Equals, 42, true},
-		{"float not equals int decimal", 42.5, Equals, 42, false},
-		{"float less than int", 41.9, LessThan, 42, true},
-		{"float greater than int", 42.1, GreaterThan, 42, true},
+		{"float equals int", 42.0, primitives.Equals, 42, true},
+		{"float not equals int decimal", 42.5, primitives.Equals, 42, false},
+		{"float less than int", 41.9, primitives.LessThan, 42, true},
+		{"float greater than int", 42.1, primitives.GreaterThan, 42, true},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			floatField := NewFloat64Field(tt.floatVal)
 			intField := NewIntField(tt.intVal)
-			
+
 			result, err := floatField.Compare(tt.op, intField)
 			if err != nil {
 				t.Errorf("Unexpected error: %v", err)
@@ -274,8 +275,8 @@ func TestFloat64Field_Compare_CrossType(t *testing.T) {
 func TestFloat64Field_Compare_InvalidType(t *testing.T) {
 	floatField := NewFloat64Field(42.5)
 	stringField := NewStringField("test", 10)
-	
-	_, err := floatField.Compare(Equals, stringField)
+
+	_, err := floatField.Compare(primitives.Equals, stringField)
 	if err == nil {
 		t.Error("Expected error when comparing with string field")
 	}
@@ -284,9 +285,9 @@ func TestFloat64Field_Compare_InvalidType(t *testing.T) {
 func TestFloat64Field_Compare_UnsupportedPredicate(t *testing.T) {
 	field1 := NewFloat64Field(42.5)
 	field2 := NewFloat64Field(43.5)
-	
+
 	// Using an invalid predicate value
-	_, err := field1.Compare(Predicate(999), field2)
+	_, err := field1.Compare(primitives.Predicate(999), field2)
 	if err == nil {
 		t.Error("Expected error for unsupported predicate")
 	}
@@ -296,16 +297,16 @@ func TestFloat64Field_Compare_NaN(t *testing.T) {
 	tests := []struct {
 		name     string
 		field1   *Float64Field
-		op       Predicate
+		op       primitives.Predicate
 		field2   *Float64Field
 		expected bool
 	}{
-		{"NaN equals NaN", NewFloat64Field(math.NaN()), Equals, NewFloat64Field(math.NaN()), false},
-		{"NaN not equals NaN", NewFloat64Field(math.NaN()), NotEqual, NewFloat64Field(math.NaN()), false}, // NaN - NaN = NaN, and NaN is not >= epsilon
-		{"NaN less than value", NewFloat64Field(math.NaN()), LessThan, NewFloat64Field(42.5), false},
-		{"value less than NaN", NewFloat64Field(42.5), LessThan, NewFloat64Field(math.NaN()), false},
-		{"NaN greater than value", NewFloat64Field(math.NaN()), GreaterThan, NewFloat64Field(42.5), false},
-		{"value greater than NaN", NewFloat64Field(42.5), GreaterThan, NewFloat64Field(math.NaN()), false},
+		{"NaN equals NaN", NewFloat64Field(math.NaN()), primitives.Equals, NewFloat64Field(math.NaN()), false},
+		{"NaN not equals NaN", NewFloat64Field(math.NaN()), primitives.NotEqual, NewFloat64Field(math.NaN()), false}, // NaN - NaN = NaN, and NaN is not >= epsilon
+		{"NaN less than value", NewFloat64Field(math.NaN()), primitives.LessThan, NewFloat64Field(42.5), false},
+		{"value less than NaN", NewFloat64Field(42.5), primitives.LessThan, NewFloat64Field(math.NaN()), false},
+		{"NaN greater than value", NewFloat64Field(math.NaN()), primitives.GreaterThan, NewFloat64Field(42.5), false},
+		{"value greater than NaN", NewFloat64Field(42.5), primitives.GreaterThan, NewFloat64Field(math.NaN()), false},
 	}
 
 	for _, tt := range tests {

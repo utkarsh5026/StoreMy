@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"math"
+	"storemy/pkg/primitives"
 	"strconv"
 )
 
@@ -27,7 +28,7 @@ func (f *Float64Field) Serialize(w io.Writer) error {
 	return err
 }
 
-func (f *Float64Field) Compare(op Predicate, other Field) (bool, error) {
+func (f *Float64Field) Compare(op primitives.Predicate, other Field) (bool, error) {
 	otherFloat64Field, ok := other.(*Float64Field)
 	if !ok {
 		// Handle cross-type comparison with IntField
@@ -41,19 +42,19 @@ func (f *Float64Field) Compare(op Predicate, other Field) (bool, error) {
 	return f.compareFloat64Values(op, otherFloat64Field.Value)
 }
 
-func (f *Float64Field) compareFloat64Values(op Predicate, other float64) (bool, error) {
+func (f *Float64Field) compareFloat64Values(op primitives.Predicate, other float64) (bool, error) {
 	switch op {
-	case Equals:
+	case primitives.Equals:
 		return math.Abs(f.Value-other) < epsilon, nil
-	case LessThan:
+	case primitives.LessThan:
 		return f.Value < other, nil
-	case GreaterThan:
+	case primitives.GreaterThan:
 		return f.Value > other, nil
-	case LessThanOrEqual:
+	case primitives.LessThanOrEqual:
 		return f.Value <= other, nil
-	case GreaterThanOrEqual:
+	case primitives.GreaterThanOrEqual:
 		return f.Value >= other, nil
-	case NotEqual:
+	case primitives.NotEqual:
 		return math.Abs(f.Value-other) >= epsilon, nil
 	default:
 		return false, fmt.Errorf("unsupported predicate for Float64Field: %v", op)
