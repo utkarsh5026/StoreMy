@@ -3,10 +3,9 @@ package join
 import (
 	"fmt"
 	"sort"
-	"storemy/pkg/execution/query"
 	"storemy/pkg/iterator"
+	"storemy/pkg/primitives"
 	"storemy/pkg/tuple"
-	"storemy/pkg/types"
 )
 
 const (
@@ -201,9 +200,9 @@ func (s *SortMergeJoin) EstimateCost() float64 {
 // Sort-merge join supports all comparison operators because it works on sorted data.
 func (s *SortMergeJoin) SupportsPredicateType(predicate *JoinPredicate) bool {
 	op := predicate.GetOP()
-	return op == query.Equals || op == query.LessThan ||
-		op == query.LessThanOrEqual || op == query.GreaterThan ||
-		op == query.GreaterThanOrEqual
+	return op == primitives.Equals || op == primitives.LessThan ||
+		op == primitives.LessThanOrEqual || op == primitives.GreaterThan ||
+		op == primitives.GreaterThanOrEqual
 }
 
 // logBase2 computes the base-2 logarithm of n using integer arithmetic.
@@ -236,7 +235,7 @@ func isLessThan(t1, t2 *tuple.Tuple, fieldIndex int) bool {
 		return false
 	}
 
-	result, err := field1.Compare(types.LessThan, field2)
+	result, err := field1.Compare(primitives.LessThan, field2)
 	return err == nil && result
 }
 
@@ -255,7 +254,7 @@ func (s *SortMergeJoin) compareCurrentTuples() (string, error) {
 		return "", fmt.Errorf("invalid right field")
 	}
 
-	equals, err := leftField.Compare(types.Equals, rightField)
+	equals, err := leftField.Compare(primitives.Equals, rightField)
 	if err != nil {
 		return "", err
 	}
@@ -263,7 +262,7 @@ func (s *SortMergeJoin) compareCurrentTuples() (string, error) {
 		return ComparisonEqual, nil
 	}
 
-	less, err := leftField.Compare(types.LessThan, rightField)
+	less, err := leftField.Compare(primitives.LessThan, rightField)
 	if err != nil {
 		return "", err
 	}
@@ -301,7 +300,7 @@ func (s *SortMergeJoin) processEqualKeys() error {
 			continue
 		}
 
-		equals, err := leftField.Compare(types.Equals, rightField)
+		equals, err := leftField.Compare(primitives.Equals, rightField)
 		if err != nil || !equals {
 			break
 		}

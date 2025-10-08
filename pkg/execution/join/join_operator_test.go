@@ -2,7 +2,7 @@ package join
 
 import (
 	"fmt"
-	"storemy/pkg/execution/query"
+	"storemy/pkg/primitives"
 	"storemy/pkg/tuple"
 	"storemy/pkg/types"
 	"testing"
@@ -17,7 +17,7 @@ func TestNewJoinOperator(t *testing.T) {
 	rightChild := newMockIterator([]*tuple.Tuple{}, rightTupleDesc)
 
 	t.Run("valid join operator", func(t *testing.T) {
-		predicate, _ := NewJoinPredicate(0, 0, query.Equals)
+		predicate, _ := NewJoinPredicate(0, 0, primitives.Equals)
 		jo, err := NewJoinOperator(predicate, leftChild, rightChild)
 
 		if err != nil {
@@ -53,7 +53,7 @@ func TestNewJoinOperator(t *testing.T) {
 		left := newMockIterator([]*tuple.Tuple{}, leftDesc)
 		right := newMockIterator([]*tuple.Tuple{}, rightDesc)
 
-		predicate, _ := NewJoinPredicate(0, 0, query.Equals)
+		predicate, _ := NewJoinPredicate(0, 0, primitives.Equals)
 		jo, err := NewJoinOperator(predicate, left, right)
 
 		if err != nil {
@@ -130,7 +130,7 @@ func TestJoinOperatorOpen(t *testing.T) {
 				rightChild.hasError = true
 			}
 
-			predicate, _ := NewJoinPredicate(0, 0, query.Equals)
+			predicate, _ := NewJoinPredicate(0, 0, primitives.Equals)
 			jo, err := NewJoinOperator(predicate, leftChild, rightChild)
 			if err != nil {
 				t.Fatalf("failed to create join operator: %v", err)
@@ -168,7 +168,7 @@ func TestJoinOperatorOpenIdempotent(t *testing.T) {
 	leftChild := newMockIterator([]*tuple.Tuple{}, tupleDesc)
 	rightChild := newMockIterator([]*tuple.Tuple{}, tupleDesc)
 
-	predicate, _ := NewJoinPredicate(0, 0, query.Equals)
+	predicate, _ := NewJoinPredicate(0, 0, primitives.Equals)
 	jo, err := NewJoinOperator(predicate, leftChild, rightChild)
 	if err != nil {
 		t.Fatalf("failed to create join operator: %v", err)
@@ -204,7 +204,7 @@ func TestJoinOperatorIteratorMethods(t *testing.T) {
 	leftChild := newMockIterator(leftTuples, tupleDesc)
 	rightChild := newMockIterator(rightTuples, tupleDesc)
 
-	predicate, _ := NewJoinPredicate(0, 0, query.Equals)
+	predicate, _ := NewJoinPredicate(0, 0, primitives.Equals)
 	jo, err := NewJoinOperator(predicate, leftChild, rightChild)
 	if err != nil {
 		t.Fatalf("failed to create join operator: %v", err)
@@ -255,7 +255,7 @@ func TestJoinOperatorIteratorBeforeOpen(t *testing.T) {
 	leftChild := newMockIterator([]*tuple.Tuple{}, tupleDesc)
 	rightChild := newMockIterator([]*tuple.Tuple{}, tupleDesc)
 
-	predicate, _ := NewJoinPredicate(0, 0, query.Equals)
+	predicate, _ := NewJoinPredicate(0, 0, primitives.Equals)
 	jo, err := NewJoinOperator(predicate, leftChild, rightChild)
 	if err != nil {
 		t.Fatalf("failed to create join operator: %v", err)
@@ -285,7 +285,7 @@ func TestJoinOperatorRewind(t *testing.T) {
 	leftChild := newMockIterator(leftTuples, tupleDesc)
 	rightChild := newMockIterator(rightTuples, tupleDesc)
 
-	predicate, _ := NewJoinPredicate(0, 0, query.Equals)
+	predicate, _ := NewJoinPredicate(0, 0, primitives.Equals)
 	jo, err := NewJoinOperator(predicate, leftChild, rightChild)
 	if err != nil {
 		t.Fatalf("failed to create join operator: %v", err)
@@ -338,7 +338,7 @@ func TestJoinOperatorClose(t *testing.T) {
 	leftChild := newMockIterator([]*tuple.Tuple{}, tupleDesc)
 	rightChild := newMockIterator([]*tuple.Tuple{}, tupleDesc)
 
-	predicate, _ := NewJoinPredicate(0, 0, query.Equals)
+	predicate, _ := NewJoinPredicate(0, 0, primitives.Equals)
 	jo, err := NewJoinOperator(predicate, leftChild, rightChild)
 	if err != nil {
 		t.Fatalf("failed to create join operator: %v", err)
@@ -371,7 +371,7 @@ func TestJoinOperatorCloseWithoutOpen(t *testing.T) {
 	leftChild := newMockIterator([]*tuple.Tuple{}, tupleDesc)
 	rightChild := newMockIterator([]*tuple.Tuple{}, tupleDesc)
 
-	predicate, _ := NewJoinPredicate(0, 0, query.Equals)
+	predicate, _ := NewJoinPredicate(0, 0, primitives.Equals)
 	jo, err := NewJoinOperator(predicate, leftChild, rightChild)
 	if err != nil {
 		t.Fatalf("failed to create join operator: %v", err)
@@ -388,7 +388,7 @@ func TestValidateInputs(t *testing.T) {
 	tupleDesc := createTestTupleDesc([]types.Type{types.IntType}, []string{"id"})
 	leftChild := newMockIterator([]*tuple.Tuple{}, tupleDesc)
 	rightChild := newMockIterator([]*tuple.Tuple{}, tupleDesc)
-	predicate, _ := NewJoinPredicate(0, 0, query.Equals)
+	predicate, _ := NewJoinPredicate(0, 0, primitives.Equals)
 
 	t.Run("valid inputs", func(t *testing.T) {
 		err := validateInputs(predicate, leftChild, rightChild)
@@ -422,12 +422,12 @@ func TestValidateInputs(t *testing.T) {
 // TestCreateCombinedSchema tests the schema combination helper
 func TestCreateCombinedSchema(t *testing.T) {
 	tests := []struct {
-		name          string
-		leftTypes     []types.Type
-		leftNames     []string
-		rightTypes    []types.Type
-		rightNames    []string
-		expectError   bool
+		name           string
+		leftTypes      []types.Type
+		leftNames      []string
+		rightTypes     []types.Type
+		rightNames     []string
+		expectError    bool
 		expectedFields int
 	}{
 		{
@@ -487,7 +487,7 @@ func TestJoinOperatorGetTupleDesc(t *testing.T) {
 	leftChild := newMockIterator([]*tuple.Tuple{}, leftTupleDesc)
 	rightChild := newMockIterator([]*tuple.Tuple{}, rightTupleDesc)
 
-	predicate, _ := NewJoinPredicate(0, 0, query.Equals)
+	predicate, _ := NewJoinPredicate(0, 0, primitives.Equals)
 	jo, err := NewJoinOperator(predicate, leftChild, rightChild)
 	if err != nil {
 		t.Fatalf("failed to create join operator: %v", err)
@@ -520,13 +520,13 @@ func TestJoinOperatorWithDifferentPredicates(t *testing.T) {
 
 	predicateTypes := []struct {
 		name string
-		op   query.PredicateOp
+		op   primitives.Predicate
 	}{
-		{"equals", query.Equals},
-		{"less than", query.LessThan},
-		{"greater than", query.GreaterThan},
-		{"less than or equals", query.LessThanOrEqual},
-		{"greater than or equals", query.GreaterThanOrEqual},
+		{"equals", primitives.Equals},
+		{"less than", primitives.LessThan},
+		{"greater than", primitives.GreaterThan},
+		{"less than or equals", primitives.LessThanOrEqual},
+		{"greater than or equals", primitives.GreaterThanOrEqual},
 	}
 
 	for _, pt := range predicateTypes {
@@ -587,7 +587,7 @@ func TestJoinOperatorConcurrency(t *testing.T) {
 	leftChild := newMockIterator(leftTuples, tupleDesc)
 	rightChild := newMockIterator(rightTuples, tupleDesc)
 
-	predicate, _ := NewJoinPredicate(0, 0, query.Equals)
+	predicate, _ := NewJoinPredicate(0, 0, primitives.Equals)
 	jo, err := NewJoinOperator(predicate, leftChild, rightChild)
 	if err != nil {
 		t.Fatalf("failed to create join operator: %v", err)
@@ -626,7 +626,7 @@ func TestJoinOperatorEmptyResults(t *testing.T) {
 	leftChild := newMockIterator(leftTuples, tupleDesc)
 	rightChild := newMockIterator(rightTuples, tupleDesc)
 
-	predicate, _ := NewJoinPredicate(0, 0, query.Equals)
+	predicate, _ := NewJoinPredicate(0, 0, primitives.Equals)
 	jo, err := NewJoinOperator(predicate, leftChild, rightChild)
 	if err != nil {
 		t.Fatalf("failed to create join operator: %v", err)
@@ -667,7 +667,7 @@ func TestJoinOperatorRewindFailure(t *testing.T) {
 	}
 	rightChild := newMockIterator([]*tuple.Tuple{}, tupleDesc)
 
-	predicate, _ := NewJoinPredicate(0, 0, query.Equals)
+	predicate, _ := NewJoinPredicate(0, 0, primitives.Equals)
 	jo, err := NewJoinOperator(predicate, leftChild, rightChild)
 	if err != nil {
 		t.Fatalf("failed to create join operator: %v", err)

@@ -1,7 +1,7 @@
 package join
 
 import (
-	"storemy/pkg/execution/query"
+	"storemy/pkg/primitives"
 	"storemy/pkg/tuple"
 	"storemy/pkg/types"
 	"testing"
@@ -64,7 +64,7 @@ func TestNewJoinStrategy(t *testing.T) {
 			tupleDesc := createTestTupleDesc([]types.Type{types.IntType}, []string{"id"})
 			left := newMockIterator([]*tuple.Tuple{}, tupleDesc)
 			right := newMockIterator([]*tuple.Tuple{}, tupleDesc)
-			pred, _ := NewJoinPredicate(0, 0, query.Equals)
+			pred, _ := NewJoinPredicate(0, 0, primitives.Equals)
 
 			strategy := NewJoinStrategy(left, right, pred, tt.stats)
 
@@ -154,7 +154,7 @@ func TestSelectBestAlgorithm(t *testing.T) {
 				stats:      &JoinStatistics{},
 			}
 
-			pred, _ := NewJoinPredicate(0, 0, query.Equals)
+			pred, _ := NewJoinPredicate(0, 0, primitives.Equals)
 
 			alg, err := strategy.SelectBestAlgorithm(pred)
 

@@ -1,7 +1,7 @@
 package join
 
 import (
-	"storemy/pkg/execution/query"
+	"storemy/pkg/primitives"
 	"storemy/pkg/tuple"
 	"storemy/pkg/types"
 	"testing"
@@ -19,7 +19,7 @@ func TestNewHashJoin(t *testing.T) {
 	leftChild := newMockIterator([]*tuple.Tuple{}, leftTupleDesc)
 	rightChild := newMockIterator([]*tuple.Tuple{}, rightTupleDesc)
 
-	predicate, _ := NewJoinPredicate(0, 0, query.Equals)
+	predicate, _ := NewJoinPredicate(0, 0, primitives.Equals)
 	stats := &JoinStatistics{
 		LeftSize:  10,
 		RightSize: 20,
@@ -124,7 +124,7 @@ func TestHashJoinInitialize(t *testing.T) {
 			leftChild.Open()
 			rightChild.Open()
 
-			predicate, _ := NewJoinPredicate(0, 0, query.Equals)
+			predicate, _ := NewJoinPredicate(0, 0, primitives.Equals)
 			hj := NewHashJoin(leftChild, rightChild, predicate, nil)
 
 			err := hj.Initialize()
@@ -155,7 +155,7 @@ func TestHashJoinInitializeIdempotent(t *testing.T) {
 	leftChild.Open()
 	rightChild.Open()
 
-	predicate, _ := NewJoinPredicate(0, 0, query.Equals)
+	predicate, _ := NewJoinPredicate(0, 0, primitives.Equals)
 	hj := NewHashJoin(leftChild, rightChild, predicate, nil)
 
 	// First initialization
@@ -197,7 +197,7 @@ func TestHashJoinNext(t *testing.T) {
 	leftChild.Open()
 	rightChild.Open()
 
-	predicate, _ := NewJoinPredicate(0, 0, query.Equals)
+	predicate, _ := NewJoinPredicate(0, 0, primitives.Equals)
 	hj := NewHashJoin(leftChild, rightChild, predicate, nil)
 
 	err := hj.Initialize()
@@ -237,7 +237,7 @@ func TestHashJoinNextBeforeInitialize(t *testing.T) {
 	leftChild := newMockIterator([]*tuple.Tuple{}, leftTupleDesc)
 	rightChild := newMockIterator([]*tuple.Tuple{}, rightTupleDesc)
 
-	predicate, _ := NewJoinPredicate(0, 0, query.Equals)
+	predicate, _ := NewJoinPredicate(0, 0, primitives.Equals)
 	hj := NewHashJoin(leftChild, rightChild, predicate, nil)
 
 	// Try to call Next without Initialize
@@ -268,7 +268,7 @@ func TestHashJoinMultipleMatches(t *testing.T) {
 	leftChild.Open()
 	rightChild.Open()
 
-	predicate, _ := NewJoinPredicate(0, 0, query.Equals)
+	predicate, _ := NewJoinPredicate(0, 0, primitives.Equals)
 	hj := NewHashJoin(leftChild, rightChild, predicate, nil)
 
 	err := hj.Initialize()
@@ -316,7 +316,7 @@ func TestHashJoinManyToMany(t *testing.T) {
 	leftChild.Open()
 	rightChild.Open()
 
-	predicate, _ := NewJoinPredicate(0, 0, query.Equals)
+	predicate, _ := NewJoinPredicate(0, 0, primitives.Equals)
 	hj := NewHashJoin(leftChild, rightChild, predicate, nil)
 
 	err := hj.Initialize()
@@ -363,7 +363,7 @@ func TestHashJoinNoMatches(t *testing.T) {
 	leftChild.Open()
 	rightChild.Open()
 
-	predicate, _ := NewJoinPredicate(0, 0, query.Equals)
+	predicate, _ := NewJoinPredicate(0, 0, primitives.Equals)
 	hj := NewHashJoin(leftChild, rightChild, predicate, nil)
 
 	err := hj.Initialize()
@@ -425,7 +425,7 @@ func TestHashJoinEmptyInputs(t *testing.T) {
 			leftChild.Open()
 			rightChild.Open()
 
-			predicate, _ := NewJoinPredicate(0, 0, query.Equals)
+			predicate, _ := NewJoinPredicate(0, 0, primitives.Equals)
 			hj := NewHashJoin(leftChild, rightChild, predicate, nil)
 
 			err := hj.Initialize()
@@ -464,7 +464,7 @@ func TestHashJoinWithNullFields(t *testing.T) {
 	leftChild.Open()
 	rightChild.Open()
 
-	predicate, _ := NewJoinPredicate(0, 0, query.Equals)
+	predicate, _ := NewJoinPredicate(0, 0, primitives.Equals)
 	hj := NewHashJoin(leftChild, rightChild, predicate, nil)
 
 	err := hj.Initialize()
@@ -511,7 +511,7 @@ func TestHashJoinReset(t *testing.T) {
 	leftChild.Open()
 	rightChild.Open()
 
-	predicate, _ := NewJoinPredicate(0, 0, query.Equals)
+	predicate, _ := NewJoinPredicate(0, 0, primitives.Equals)
 	hj := NewHashJoin(leftChild, rightChild, predicate, nil)
 
 	err := hj.Initialize()
@@ -567,7 +567,7 @@ func TestHashJoinClose(t *testing.T) {
 	leftChild.Open()
 	rightChild.Open()
 
-	predicate, _ := NewJoinPredicate(0, 0, query.Equals)
+	predicate, _ := NewJoinPredicate(0, 0, primitives.Equals)
 	hj := NewHashJoin(leftChild, rightChild, predicate, nil)
 
 	err := hj.Initialize()
@@ -601,7 +601,7 @@ func TestHashJoinEstimateCost(t *testing.T) {
 	leftChild := newMockIterator([]*tuple.Tuple{}, leftTupleDesc)
 	rightChild := newMockIterator([]*tuple.Tuple{}, rightTupleDesc)
 
-	predicate, _ := NewJoinPredicate(0, 0, query.Equals)
+	predicate, _ := NewJoinPredicate(0, 0, primitives.Equals)
 
 	tests := []struct {
 		name         string
@@ -651,42 +651,42 @@ func TestHashJoinSupportsPredicateType(t *testing.T) {
 	leftChild := newMockIterator([]*tuple.Tuple{}, leftTupleDesc)
 	rightChild := newMockIterator([]*tuple.Tuple{}, rightTupleDesc)
 
-	predicate, _ := NewJoinPredicate(0, 0, query.Equals)
+	predicate, _ := NewJoinPredicate(0, 0, primitives.Equals)
 	hj := NewHashJoin(leftChild, rightChild, predicate, nil)
 
 	tests := []struct {
 		name           string
-		op             query.PredicateOp
+		op             primitives.Predicate
 		expectedResult bool
 	}{
 		{
 			name:           "supports equals",
-			op:             query.Equals,
+			op:             primitives.Equals,
 			expectedResult: true,
 		},
 		{
 			name:           "does not support less than",
-			op:             query.LessThan,
+			op:             primitives.LessThan,
 			expectedResult: false,
 		},
 		{
 			name:           "does not support greater than",
-			op:             query.GreaterThan,
+			op:             primitives.GreaterThan,
 			expectedResult: false,
 		},
 		{
 			name:           "does not support not equals",
-			op:             query.NotEqual,
+			op:             primitives.NotEqual,
 			expectedResult: false,
 		},
 		{
 			name:           "does not support less than or equals",
-			op:             query.LessThanOrEqual,
+			op:             primitives.LessThanOrEqual,
 			expectedResult: false,
 		},
 		{
 			name:           "does not support greater than or equals",
-			op:             query.GreaterThanOrEqual,
+			op:             primitives.GreaterThanOrEqual,
 			expectedResult: false,
 		},
 	}
@@ -723,7 +723,7 @@ func TestHashJoinStringKeys(t *testing.T) {
 	leftChild.Open()
 	rightChild.Open()
 
-	predicate, _ := NewJoinPredicate(0, 0, query.Equals)
+	predicate, _ := NewJoinPredicate(0, 0, primitives.Equals)
 	hj := NewHashJoin(leftChild, rightChild, predicate, nil)
 
 	err := hj.Initialize()
@@ -761,7 +761,7 @@ func TestHashJoinErrorHandling(t *testing.T) {
 		rightChild.hasError = true
 		rightChild.Open()
 
-		predicate, _ := NewJoinPredicate(0, 0, query.Equals)
+		predicate, _ := NewJoinPredicate(0, 0, primitives.Equals)
 		hj := NewHashJoin(leftChild, rightChild, predicate, nil)
 
 		err := hj.Initialize()
@@ -784,7 +784,7 @@ func TestHashJoinErrorHandling(t *testing.T) {
 		leftChild.Open()
 		rightChild.Open()
 
-		predicate, _ := NewJoinPredicate(0, 0, query.Equals)
+		predicate, _ := NewJoinPredicate(0, 0, primitives.Equals)
 		hj := NewHashJoin(leftChild, rightChild, predicate, nil)
 
 		err := hj.Initialize()
