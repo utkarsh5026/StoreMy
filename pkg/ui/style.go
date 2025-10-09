@@ -1,16 +1,20 @@
 package ui
 
 import (
+	"storemy/pkg/ui/base"
+
 	"github.com/charmbracelet/lipgloss"
 )
 
 var (
+	// Use base color palette
+	palette = base.DarkPalette
+
 	// Primary colors
-	primaryColor   = lipgloss.Color("#7C3AED") // Purple
-	secondaryColor = lipgloss.Color("#06B6D4") // Cyan
-	accentColor    = lipgloss.Color("#10B981") // Emerald
-	warningColor   = lipgloss.Color("#F59E0B") // Amber
-	errorColor     = lipgloss.Color("#EF4444") // Red
+	primaryColor   = palette.Primary
+	secondaryColor = palette.Secondary
+	accentColor    = palette.Accent
+	errorColor     = palette.Error
 
 	// Background gradients
 	bgDark   = lipgloss.Color("#0F172A")
@@ -20,7 +24,7 @@ var (
 	// Text colors
 	textPrimary   = lipgloss.Color("#F8FAFC")
 	textSecondary = lipgloss.Color("#CBD5E1")
-	textMuted     = lipgloss.Color("#94A3B8")
+	textMuted     = palette.Muted
 )
 
 // Styles for different UI components
