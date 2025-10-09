@@ -3,8 +3,14 @@ package database
 import (
 	"fmt"
 	"path/filepath"
+	"strings"
 	"testing"
 )
+
+// toUpperTable converts table name to uppercase (how they're stored in TableManager)
+func toUpperTable(name string) string {
+	return strings.ToUpper(name)
+}
 
 // TestDatabase_StatisticsAutoTracking verifies end-to-end automatic statistics tracking
 func TestDatabase_StatisticsAutoTracking(t *testing.T) {
@@ -54,22 +60,29 @@ func TestDatabase_StatisticsAutoTracking(t *testing.T) {
 	}
 
 	// Verify modifications were tracked
-	tx, _ := db.txRegistry.Begin()
-	tableID, _ := db.catalog.GetTableID(tx.ID, "users")
+	// Note: We use TableManager to get the table ID because CREATE TABLE registers
+	// tables in TableManager, not in SystemCatalog's CATALOG_TABLES
+
+	// Note: Table names are stored in uppercase in TableManager
+	tableID, err := db.tableManager.GetTableID("USERS")
+	if err != nil {
+		t.Fatalf("Failed to get table ID for 'USERS': %v", err)
+	}
+
 	modCount := db.statsManager.GetModificationCount(tableID)
 
 	if modCount < insertCount {
-		t.Errorf("Expected at least %d modifications tracked, got %d", insertCount, modCount)
+		t.Errorf("Expected at least %d modifications tracked, got %d (tableID=%d)", insertCount, modCount, tableID)
 	}
 
 	// Force statistics update
-	err = db.UpdateTableStatistics("users")
+	err = db.UpdateTableStatistics("USERS")
 	if err != nil {
 		t.Fatalf("Failed to update statistics: %v", err)
 	}
 
 	// Retrieve and verify statistics
-	stats, err := db.GetTableStatistics("users")
+	stats, err := db.GetTableStatistics("USERS")
 	if err != nil {
 		t.Fatalf("Failed to get statistics: %v", err)
 	}
@@ -113,28 +126,43 @@ func TestDatabase_StatisticsAfterDelete(t *testing.T) {
 	// Create table and insert data
 	db.ExecuteQuery("CREATE TABLE test_table (id INT, value STRING)")
 
+	insertCount := 0
 	for i := 1; i <= 10; i++ {
 		query := fmt.Sprintf("INSERT INTO test_table VALUES (%d, 'value%d')", i, i)
-		db.ExecuteQuery(query)
+		result, err := db.ExecuteQuery(query)
+		if err != nil {
+			t.Logf("INSERT %d failed: %v", i, err)
+		} else if result.Success {
+			insertCount++
+		}
 	}
+	t.Logf("Successfully inserted %d rows", insertCount)
 
-	// Update statistics
-	db.UpdateTableStatistics("test_table")
+	// Update statistics (table names are uppercase)
+	db.UpdateTableStatistics("TEST_TABLE")
 
 	// Get initial statistics
-	initialStats, _ := db.GetTableStatistics("test_table")
+	initialStats, _ := db.GetTableStatistics("TEST_TABLE")
 	if initialStats.Cardinality != 10 {
 		t.Errorf("Expected initial cardinality 10, got %d", initialStats.Cardinality)
 	}
 
 	// Delete some rows
-	db.ExecuteQuery("DELETE FROM test_table WHERE id <= 5")
+	deleteResult, err := db.ExecuteQuery("DELETE FROM test_table WHERE id <= 5")
+	if err != nil {
+		t.Fatalf("DELETE failed: %v", err)
+	}
+	t.Logf("DELETE result: %s (rows affected: %d)", deleteResult.Message, deleteResult.RowsAffected)
+
+	// Query to count remaining rows
+	selectResult, _ := db.ExecuteQuery("SELECT * FROM test_table")
+	t.Logf("Rows returned by SELECT after DELETE: %d", len(selectResult.Rows))
 
 	// Update statistics again
-	db.UpdateTableStatistics("test_table")
+	db.UpdateTableStatistics("TEST_TABLE")
 
 	// Get updated statistics
-	updatedStats, _ := db.GetTableStatistics("test_table")
+	updatedStats, _ := db.GetTableStatistics("TEST_TABLE")
 
 	// Cardinality should decrease
 	if updatedStats.Cardinality >= initialStats.Cardinality {
@@ -180,11 +208,11 @@ func TestDatabase_StatisticsMultipleTables(t *testing.T) {
 			db.ExecuteQuery(insertQuery)
 		}
 
-		// Update statistics
-		db.UpdateTableStatistics(table.name)
+		// Update statistics (use uppercase table name)
+		db.UpdateTableStatistics(toUpperTable(table.name))
 
 		// Verify statistics
-		stats, err := db.GetTableStatistics(table.name)
+		stats, err := db.GetTableStatistics(toUpperTable(table.name))
 		if err != nil {
 			t.Errorf("Failed to get statistics for %s: %v", table.name, err)
 			continue
@@ -217,9 +245,11 @@ func TestDatabase_StatisticsThresholdBehavior(t *testing.T) {
 	// Create table
 	db.ExecuteQuery("CREATE TABLE threshold_test (id INT, value STRING)")
 
-	// Get table ID
-	tx, _ := db.txRegistry.Begin()
-	tableID, _ := db.catalog.GetTableID(tx.ID, "threshold_test")
+	// Get table ID (use uppercase)
+	tableID, err := db.tableManager.GetTableID(toUpperTable("threshold_test"))
+	if err != nil {
+		t.Fatalf("Failed to get table ID: %v", err)
+	}
 
 	// Insert below threshold
 	for i := 1; i <= 5; i++ {
@@ -243,7 +273,7 @@ func TestDatabase_StatisticsThresholdBehavior(t *testing.T) {
 	// Should trigger update
 	if !db.statsManager.ShouldUpdateStatistics(tableID) {
 		// Force initial update if needed
-		db.UpdateTableStatistics("threshold_test")
+		db.UpdateTableStatistics(toUpperTable("threshold_test"))
 	}
 
 	t.Log("Threshold behavior verified: updates triggered correctly")
@@ -302,14 +332,14 @@ func TestDatabase_StatisticsAfterBulkInsert(t *testing.T) {
 		}
 	}
 
-	// Update statistics
-	err = db.UpdateTableStatistics("bulk_test")
+	// Update statistics (use uppercase)
+	err = db.UpdateTableStatistics(toUpperTable("bulk_test"))
 	if err != nil {
 		t.Fatalf("Failed to update statistics after bulk insert: %v", err)
 	}
 
 	// Verify statistics
-	stats, err := db.GetTableStatistics("bulk_test")
+	stats, err := db.GetTableStatistics(toUpperTable("bulk_test"))
 	if err != nil {
 		t.Fatalf("Failed to get statistics: %v", err)
 	}
