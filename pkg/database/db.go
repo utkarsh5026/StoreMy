@@ -22,10 +22,9 @@ const (
 
 // Database represents the main database engine that coordinates all components
 type Database struct {
-	tableManager *memory.TableManager
+	catalogMgr   *catalog.CatalogManager
 	pageStore    *memory.PageStore
 	queryPlanner *planner.QueryPlanner
-	catalog      *catalog.SystemCatalog
 	wal          *log.WAL
 	txRegistry   *transaction.TransactionRegistry
 	statsManager *catalog.StatisticsManager
@@ -78,22 +77,21 @@ func NewDatabase(name, dataDir, logDir string) (*Database, error) {
 	}
 
 	pageStore := memory.NewPageStore(tableManager, wal)
-	systemCatalog := catalog.NewSystemCatalog(pageStore, tableManager)
+	catalogMgr := catalog.NewCatalogManager(pageStore, tableManager)
 
-	ctx := registry.NewDatabaseContext(tableManager, pageStore, systemCatalog, wal, fullPath)
+	ctx := registry.NewDatabaseContext(tableManager, pageStore, catalogMgr.GetSystemCatalog(), catalogMgr, wal, fullPath)
 
 	db := &Database{
-		tableManager: tableManager,
-		pageStore:    pageStore,
-		catalog:      systemCatalog,
-		txRegistry:   ctx.TransactionRegistry(),
-		wal:          wal,
-		name:         name,
-		dataDir:      fullPath,
-		stats:        &DatabaseStats{},
+		catalogMgr: catalogMgr,
+		pageStore:  pageStore,
+		txRegistry: ctx.TransactionRegistry(),
+		wal:        wal,
+		name:       name,
+		dataDir:    fullPath,
+		stats:      &DatabaseStats{},
 	}
 
-	statsManager := catalog.NewStatisticsManager(systemCatalog, db)
+	statsManager := catalog.NewStatisticsManager(catalogMgr.GetSystemCatalog(), db)
 	pageStore.SetStatsManager(statsManager)
 	db.statsManager = statsManager
 
@@ -154,7 +152,7 @@ func (db *Database) loadExistingTables() error {
 		return fmt.Errorf("failed to begin transaction for catalog initialization: %v", err)
 	}
 
-	if err := db.catalog.Initialize(tx, db.dataDir); err != nil {
+	if err := db.catalogMgr.Initialize(tx, db.dataDir); err != nil {
 		return fmt.Errorf("failed to initialize catalog: %v", err)
 	}
 
@@ -168,7 +166,7 @@ func (db *Database) loadExistingTables() error {
 		return fmt.Errorf("failed to begin transaction for loading tables: %v", err)
 	}
 
-	if err := db.catalog.LoadTables(tx2, db.dataDir); err != nil {
+	if err := db.catalogMgr.LoadAllTables(tx2, db.dataDir); err != nil {
 		return fmt.Errorf("failed to load tables from catalog: %v", err)
 	}
 
@@ -203,7 +201,7 @@ func (db *Database) GetTables() []string {
 	db.mutex.RLock()
 	defer db.mutex.RUnlock()
 
-	return db.tableManager.GetAllTableNames()
+	return db.catalogMgr.ListAllTables()
 }
 
 // GetStatistics returns current database statistics (counts only user tables)
@@ -252,12 +250,12 @@ func (db *Database) UpdateTableStatistics(tableName string) error {
 	}
 	defer db.cleanupTransaction(tx, &err)
 
-	tableID, err := db.tableManager.GetTableID(tableName)
+	tableID, err := db.catalogMgr.GetTableID(tx.ID, tableName)
 	if err != nil {
 		return fmt.Errorf("table not found: %v", err)
 	}
 
-	if err := db.statsManager.ForceUpdate(tx, tableID); err != nil {
+	if err := db.catalogMgr.UpdateTableStatistics(tx, tableID); err != nil {
 		return fmt.Errorf("failed to update statistics: %v", err)
 	}
 
@@ -276,12 +274,12 @@ func (db *Database) GetTableStatistics(tableName string) (*catalog.TableStatisti
 		}
 	}()
 
-	tableID, err := db.tableManager.GetTableID(tableName)
+	tableID, err := db.catalogMgr.GetTableID(tx.ID, tableName)
 	if err != nil {
 		return nil, fmt.Errorf("table not found: %v", err)
 	}
 
-	stats, err := db.catalog.GetTableStatistics(tx.ID, tableID)
+	stats, err := db.catalogMgr.GetTableStatistics(tx.ID, tableID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get statistics: %v", err)
 	}
@@ -315,6 +313,6 @@ func (db *Database) Close() error {
 		return fmt.Errorf("failed to close WAL: %v", err)
 	}
 
-	db.tableManager.Clear()
+	db.catalogMgr.GetTableManager().Clear()
 	return nil
 }
