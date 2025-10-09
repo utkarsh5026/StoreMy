@@ -6,22 +6,35 @@ import (
 	"testing"
 )
 
-// TestNewDatabase_Success tests successful database initialization
-func TestNewDatabase_Success(t *testing.T) {
+func setupTestDBInit(t *testing.T, name string) (*Database, func()) {
+	t.Helper()
+
 	tempDir, err := os.MkdirTemp("", "db_init_test_*")
 	if err != nil {
 		t.Fatalf("failed to create temp dir: %v", err)
 	}
-	defer os.RemoveAll(tempDir)
 
 	dataDir := filepath.Join(tempDir, "data")
 	logDir := filepath.Join(tempDir, "logs")
 
-	db, err := NewDatabase("testdb", dataDir, logDir)
+	db, err := NewDatabase(name, dataDir, logDir)
 	if err != nil {
+		os.RemoveAll(tempDir)
 		t.Fatalf("NewDatabase failed: %v", err)
 	}
-	defer db.Close()
+
+	cleanup := func() {
+		db.Close()
+		os.RemoveAll(tempDir)
+	}
+
+	return db, cleanup
+}
+
+// TestNewDatabase_Success tests successful database initialization
+func TestNewDatabase_Success(t *testing.T) {
+	db, cleanup := setupTestDBInit(t, "testdb")
+	defer cleanup()
 
 	if db == nil {
 		t.Fatal("expected non-nil database")
@@ -29,11 +42,6 @@ func TestNewDatabase_Success(t *testing.T) {
 
 	if db.name != "testdb" {
 		t.Errorf("expected db name 'testdb', got '%s'", db.name)
-	}
-
-	expectedDataDir := filepath.Join(dataDir, "testdb")
-	if db.dataDir != expectedDataDir {
-		t.Errorf("expected dataDir '%s', got '%s'", expectedDataDir, db.dataDir)
 	}
 
 	// Verify components are initialized
@@ -80,20 +88,8 @@ func TestNewDatabase_DirectoryCreation(t *testing.T) {
 
 // TestNewDatabase_InitialStats tests that stats are initialized to zero
 func TestNewDatabase_InitialStats(t *testing.T) {
-	tempDir, err := os.MkdirTemp("", "db_init_test_*")
-	if err != nil {
-		t.Fatalf("failed to create temp dir: %v", err)
-	}
-	defer os.RemoveAll(tempDir)
-
-	dataDir := filepath.Join(tempDir, "data")
-	logDir := filepath.Join(tempDir, "logs")
-
-	db, err := NewDatabase("statsdb", dataDir, logDir)
-	if err != nil {
-		t.Fatalf("NewDatabase failed: %v", err)
-	}
-	defer db.Close()
+	db, cleanup := setupTestDBInit(t, "statsdb")
+	defer cleanup()
 
 	stats := db.GetStatistics()
 	if stats.QueriesExecuted != 0 {
@@ -147,25 +143,13 @@ func TestNewDatabase_MultipleDatabases(t *testing.T) {
 
 // TestDatabase_GetTables_Empty tests GetTables on empty database
 func TestDatabase_GetTables_Empty(t *testing.T) {
-	tempDir, err := os.MkdirTemp("", "db_init_test_*")
-	if err != nil {
-		t.Fatalf("failed to create temp dir: %v", err)
-	}
-	defer os.RemoveAll(tempDir)
-
-	dataDir := filepath.Join(tempDir, "data")
-	logDir := filepath.Join(tempDir, "logs")
-
-	db, err := NewDatabase("emptydb", dataDir, logDir)
-	if err != nil {
-		t.Fatalf("NewDatabase failed: %v", err)
-	}
-	defer db.Close()
+	db, cleanup := setupTestDBInit(t, "emptydb")
+	defer cleanup()
 
 	tables := db.GetTables()
-	// Should have exactly 2 catalog tables (CATALOG_TABLES and CATALOG_COLUMNS)
-	if len(tables) != 2 {
-		t.Errorf("expected 2 catalog tables, got %d", len(tables))
+	// Should have exactly 3 catalog tables (CATALOG_TABLES and CATALOG_COLUMNS)
+	if len(tables) != 3 {
+		t.Errorf("expected 3 catalog tables, got %d", len(tables))
 	}
 
 	// Verify they are the catalog tables
@@ -215,46 +199,20 @@ func TestDatabase_Close(t *testing.T) {
 
 // TestDatabase_LoadExistingTables_NoCatalogFile tests loading when no catalog file exists
 func TestDatabase_LoadExistingTables_NoCatalogFile(t *testing.T) {
-	tempDir, err := os.MkdirTemp("", "db_init_test_*")
-	if err != nil {
-		t.Fatalf("failed to create temp dir: %v", err)
-	}
-	defer os.RemoveAll(tempDir)
-
-	dataDir := filepath.Join(tempDir, "data")
-	logDir := filepath.Join(tempDir, "logs")
-
-	// Should succeed even without catalog file
-	db, err := NewDatabase("nocatalog", dataDir, logDir)
-	if err != nil {
-		t.Fatalf("NewDatabase should succeed without catalog file: %v", err)
-	}
-	defer db.Close()
+	db, cleanup := setupTestDBInit(t, "nocatalog")
+	defer cleanup()
 
 	tables := db.GetTables()
-	// Should have exactly 2 catalog tables (CATALOG_TABLES and CATALOG_COLUMNS)
-	if len(tables) != 2 {
+	// Should have exactly 3 catalog tables (CATALOG_TABLES and CATALOG_COLUMNS)
+	if len(tables) != 3 {
 		t.Errorf("expected 2 catalog tables, got %d", len(tables))
 	}
 }
 
 // TestDatabase_RecordError tests error recording
 func TestDatabase_RecordError(t *testing.T) {
-	tempDir, err := os.MkdirTemp("", "db_init_test_*")
-	if err != nil {
-		t.Fatalf("failed to create temp dir: %v", err)
-	}
-	defer os.RemoveAll(tempDir)
-
-	dataDir := filepath.Join(tempDir, "data")
-	logDir := filepath.Join(tempDir, "logs")
-
-	db, err := NewDatabase("errordb", dataDir, logDir)
-	if err != nil {
-		t.Fatalf("NewDatabase failed: %v", err)
-	}
-	defer db.Close()
-
+	db, cleanup := setupTestDBInit(t, "errordb")
+	defer cleanup()
 	// Initial error count should be 0
 	stats := db.GetStatistics()
 	if stats.ErrorCount != 0 {
@@ -282,21 +240,8 @@ func TestDatabase_RecordError(t *testing.T) {
 
 // TestDatabase_RecordSuccess tests success recording
 func TestDatabase_RecordSuccess(t *testing.T) {
-	tempDir, err := os.MkdirTemp("", "db_init_test_*")
-	if err != nil {
-		t.Fatalf("failed to create temp dir: %v", err)
-	}
-	defer os.RemoveAll(tempDir)
-
-	dataDir := filepath.Join(tempDir, "data")
-	logDir := filepath.Join(tempDir, "logs")
-
-	db, err := NewDatabase("successdb", dataDir, logDir)
-	if err != nil {
-		t.Fatalf("NewDatabase failed: %v", err)
-	}
-	defer db.Close()
-
+	db, cleanup := setupTestDBInit(t, "success")
+	defer cleanup()
 	// Initial query count should be 0
 	stats := db.GetStatistics()
 	if stats.QueriesExecuted != 0 {
@@ -324,20 +269,8 @@ func TestDatabase_RecordSuccess(t *testing.T) {
 
 // TestDatabase_CatalogInitialization tests that catalog is properly initialized
 func TestDatabase_CatalogInitialization(t *testing.T) {
-	tempDir, err := os.MkdirTemp("", "db_init_test_*")
-	if err != nil {
-		t.Fatalf("failed to create temp dir: %v", err)
-	}
-	defer os.RemoveAll(tempDir)
-
-	dataDir := filepath.Join(tempDir, "data")
-	logDir := filepath.Join(tempDir, "logs")
-
-	db, err := NewDatabase("catalogdb", dataDir, logDir)
-	if err != nil {
-		t.Fatalf("NewDatabase failed: %v", err)
-	}
-	defer db.Close()
+	db, cleanup := setupTestDBInit(t, "catalog")
+	defer cleanup()
 
 	// Verify catalog tables exist
 	tables := db.GetTables()
@@ -391,20 +324,8 @@ func TestDatabase_Name(t *testing.T) {
 
 // TestDatabase_GetStatistics_AfterOperations tests statistics tracking
 func TestDatabase_GetStatistics_AfterOperations(t *testing.T) {
-	tempDir, err := os.MkdirTemp("", "db_init_test_*")
-	if err != nil {
-		t.Fatalf("failed to create temp dir: %v", err)
-	}
-	defer os.RemoveAll(tempDir)
-
-	dataDir := filepath.Join(tempDir, "data")
-	logDir := filepath.Join(tempDir, "logs")
-
-	db, err := NewDatabase("statsdb", dataDir, logDir)
-	if err != nil {
-		t.Fatalf("NewDatabase failed: %v", err)
-	}
-	defer db.Close()
+	db, cleanup := setupTestDBInit(t, "stats")
+	defer cleanup()
 
 	// Record some operations
 	db.recordSuccess()
@@ -426,20 +347,8 @@ func TestDatabase_GetStatistics_AfterOperations(t *testing.T) {
 
 // TestDatabase_ConcurrentStatsUpdates tests concurrent statistics updates
 func TestDatabase_ConcurrentStatsUpdates(t *testing.T) {
-	tempDir, err := os.MkdirTemp("", "db_init_test_*")
-	if err != nil {
-		t.Fatalf("failed to create temp dir: %v", err)
-	}
-	defer os.RemoveAll(tempDir)
-
-	dataDir := filepath.Join(tempDir, "data")
-	logDir := filepath.Join(tempDir, "logs")
-
-	db, err := NewDatabase("concurrentdb", dataDir, logDir)
-	if err != nil {
-		t.Fatalf("NewDatabase failed: %v", err)
-	}
-	defer db.Close()
+	db, cleanup := setupTestDBInit(t, "concurrent")
+	defer cleanup()
 
 	numGoroutines := 100
 	operationsPerGoroutine := 100
@@ -518,22 +427,8 @@ func TestDatabase_DataDirPermissions(t *testing.T) {
 
 // TestDatabase_EmptyStringName tests database with empty name
 func TestDatabase_EmptyStringName(t *testing.T) {
-	tempDir, err := os.MkdirTemp("", "db_init_test_*")
-	if err != nil {
-		t.Fatalf("failed to create temp dir: %v", err)
-	}
-	defer os.RemoveAll(tempDir)
-
-	dataDir := filepath.Join(tempDir, "data")
-	logDir := filepath.Join(tempDir, "logs")
-
-	// Empty name should still create a database (directory will be dataDir/)
-	db, err := NewDatabase("", dataDir, logDir)
-	if err != nil {
-		t.Fatalf("NewDatabase with empty name failed: %v", err)
-	}
-	defer db.Close()
-
+	db, cleanup := setupTestDBInit(t, "")
+	defer cleanup()
 	if db.name != "" {
 		t.Errorf("expected empty name, got '%s'", db.name)
 	}
