@@ -1,7 +1,6 @@
 package catalog
 
 import (
-	"os"
 	"path/filepath"
 	"storemy/pkg/concurrency/transaction"
 	"storemy/pkg/log"
@@ -33,6 +32,8 @@ func TestStatisticsIntegration_AutomaticTracking(t *testing.T) {
 	walPath := filepath.Join(tempDir, "test.wal")
 
 	tm := memory.NewTableManager()
+	defer tm.Clear() // Close all table files
+
 	wal, err := log.NewWAL(walPath, 8192)
 	if err != nil {
 		t.Fatalf("Failed to create WAL: %v", err)
@@ -63,7 +64,7 @@ func TestStatisticsIntegration_AutomaticTracking(t *testing.T) {
 	tableID := createTestTable(t, tm, catalog, txRegistry, tempDir, "test_table")
 
 	// Insert tuples - should be automatically tracked
-	for i := 0; i < 5; i++ {
+	for i := range 5 {
 		tx, err := txRegistry.Begin()
 		if err != nil {
 			t.Fatalf("Failed to begin transaction: %v", err)
@@ -116,8 +117,6 @@ func TestStatisticsIntegration_AutomaticTracking(t *testing.T) {
 	if stats.AvgTupleSize == 0 {
 		t.Error("Expected non-zero average tuple size")
 	}
-
-	store.Close()
 }
 
 // TestStatisticsIntegration_UpdateAfterThreshold verifies stats update after threshold
@@ -127,6 +126,8 @@ func TestStatisticsIntegration_UpdateAfterThreshold(t *testing.T) {
 	walPath := filepath.Join(tempDir, "test.wal")
 
 	tm := memory.NewTableManager()
+	defer tm.Clear() // Close all table files
+
 	wal, err := log.NewWAL(walPath, 8192)
 	if err != nil {
 		t.Fatalf("Failed to create WAL: %v", err)
@@ -165,9 +166,9 @@ func TestStatisticsIntegration_UpdateAfterThreshold(t *testing.T) {
 		store.CommitTransaction(tx)
 	}
 
-	// Should NOT trigger update yet
+	// Should NOT trigger update yet (only 2 modifications, threshold is 3)
 	if statsManager.ShouldUpdateStatistics(tableID) {
-		// First time always returns true, so force an update
+		// First time always returns true because never updated, so force an update to establish baseline
 		tx, err := txRegistry.Begin()
 		if err != nil {
 			t.Fatalf("Failed to begin transaction: %v", err)
@@ -176,21 +177,21 @@ func TestStatisticsIntegration_UpdateAfterThreshold(t *testing.T) {
 		store.CommitTransaction(tx)
 	}
 
-	// Insert one more to reach threshold
-	tx2, err := txRegistry.Begin()
-	if err != nil {
-		t.Fatalf("Failed to begin transaction: %v", err)
+	// Insert 3 more tuples to reach threshold (counter was reset to 0 by ForceUpdate)
+	for i := 2; i < 5; i++ {
+		tx, err := txRegistry.Begin()
+		if err != nil {
+			t.Fatalf("Failed to begin transaction: %v", err)
+		}
+		tup := createTestTuple(i, "test")
+		store.InsertTuple(tx, tableID, tup)
+		store.CommitTransaction(tx)
 	}
-	tup := createTestTuple(2, "test")
-	store.InsertTuple(tx2, tableID, tup)
-	store.CommitTransaction(tx2)
 
-	// Now should trigger update
+	// Now should trigger update (3 modifications since last update)
 	if !statsManager.ShouldUpdateStatistics(tableID) {
-		t.Error("Expected statistics update to be triggered after threshold")
+		t.Errorf("Expected statistics update to be triggered after threshold, mod count: %d", statsManager.GetModificationCount(tableID))
 	}
-
-	store.Close()
 }
 
 // TestStatisticsIntegration_DeleteTracking verifies delete operations are tracked
@@ -200,6 +201,8 @@ func TestStatisticsIntegration_DeleteTracking(t *testing.T) {
 	walPath := filepath.Join(tempDir, "test.wal")
 
 	tm := memory.NewTableManager()
+	defer tm.Clear() // Close all table files
+
 	wal, err := log.NewWAL(walPath, 8192)
 	if err != nil {
 		t.Fatalf("Failed to create WAL: %v", err)
@@ -266,8 +269,6 @@ func TestStatisticsIntegration_DeleteTracking(t *testing.T) {
 	if modCount != 2 { // 1 insert + 1 delete
 		t.Errorf("Expected 2 modifications (insert + delete), got %d", modCount)
 	}
-
-	store.Close()
 }
 
 // Helper functions
@@ -315,9 +316,4 @@ func createTestTuple(id int, name string) *tuple.Tuple {
 	tup.SetField(0, types.NewIntField(int32(id)))
 	tup.SetField(1, types.NewStringField(name, types.StringMaxSize))
 	return tup
-}
-
-// Cleanup function
-func cleanup(path string) {
-	os.RemoveAll(path)
 }
