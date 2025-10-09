@@ -13,6 +13,7 @@ import (
 	"storemy/pkg/planner"
 	"storemy/pkg/registry"
 	"sync"
+	"time"
 )
 
 const (
@@ -79,25 +80,27 @@ func NewDatabase(name, dataDir, logDir string) (*Database, error) {
 	pageStore := memory.NewPageStore(tableManager, wal)
 	systemCatalog := catalog.NewSystemCatalog(pageStore, tableManager)
 
-	statsManager := catalog.NewStatisticsManager(systemCatalog)
-	pageStore.SetStatsManager(statsManager)
-
 	ctx := registry.NewDatabaseContext(tableManager, pageStore, systemCatalog, wal, fullPath)
-
-	queryPlanner := planner.NewQueryPlanner(ctx)
 
 	db := &Database{
 		tableManager: tableManager,
 		pageStore:    pageStore,
-		queryPlanner: queryPlanner,
 		catalog:      systemCatalog,
 		txRegistry:   ctx.TransactionRegistry(),
 		wal:          wal,
-		statsManager: statsManager,
 		name:         name,
 		dataDir:      fullPath,
 		stats:        &DatabaseStats{},
 	}
+
+	statsManager := catalog.NewStatisticsManager(systemCatalog, db)
+	pageStore.SetStatsManager(statsManager)
+	db.statsManager = statsManager
+
+	queryPlanner := planner.NewQueryPlanner(ctx)
+	db.queryPlanner = queryPlanner
+
+	statsManager.StartBackgroundUpdater(30 * time.Second)
 
 	if err := db.loadExistingTables(); err != nil {
 		return nil, fmt.Errorf("failed to load existing tables: %v", err)
@@ -286,9 +289,23 @@ func (db *Database) GetTableStatistics(tableName string) (*catalog.TableStatisti
 	return stats, nil
 }
 
+// BeginTransaction starts a new transaction
+func (db *Database) BeginTransaction() (*transaction.TransactionContext, error) {
+	return db.txRegistry.Begin()
+}
+
+// CommitTransaction commits a transaction
+func (db *Database) CommitTransaction(tx *transaction.TransactionContext) error {
+	return db.pageStore.CommitTransaction(tx)
+}
+
 func (db *Database) Close() error {
 	db.mutex.Lock()
 	defer db.mutex.Unlock()
+
+	if db.statsManager != nil {
+		db.statsManager.Stop()
+	}
 
 	if err := db.pageStore.FlushAllPages(); err != nil {
 		return fmt.Errorf("failed to flush pages: %v", err)
