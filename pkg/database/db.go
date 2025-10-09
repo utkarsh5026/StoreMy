@@ -252,7 +252,7 @@ func (db *Database) UpdateTableStatistics(tableName string) error {
 	}
 	defer db.cleanupTransaction(tx, &err)
 
-	tableID, err := db.catalog.GetTableID(tx.ID, tableName)
+	tableID, err := db.tableManager.GetTableID(tableName)
 	if err != nil {
 		return fmt.Errorf("table not found: %v", err)
 	}
@@ -276,7 +276,7 @@ func (db *Database) GetTableStatistics(tableName string) (*catalog.TableStatisti
 		}
 	}()
 
-	tableID, err := db.catalog.GetTableID(tx.ID, tableName)
+	tableID, err := db.tableManager.GetTableID(tableName)
 	if err != nil {
 		return nil, fmt.Errorf("table not found: %v", err)
 	}
