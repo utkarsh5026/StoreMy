@@ -1,7 +1,6 @@
 package planner
 
 import (
-	"os"
 	"storemy/pkg/concurrency/transaction"
 	"storemy/pkg/parser/plan"
 	"storemy/pkg/parser/statements"
@@ -10,6 +9,14 @@ import (
 	"storemy/pkg/types"
 	"testing"
 )
+
+func setupDeleteTest(t *testing.T) (string, *registry.DatabaseContext, *transaction.TransactionContext) {
+	dataDir := setupTestDataDir(t)
+	ctx := createTestContextWithCleanup(t, dataDir)
+	tx := createTransactionContext(t)
+
+	return dataDir, ctx, tx
+}
 
 // Helper function to execute delete plan and cast result to DMLResult
 func executeDeletePlan(t *testing.T, plan *DeletePlan) (*DMLResult, error) {
@@ -88,9 +95,8 @@ func createAndPopulateTestTable(t *testing.T, ctx *registry.DatabaseContext, tx 
 }
 
 func TestNewDeletePlan(t *testing.T) {
+	_, ctx, tx := setupDeleteTest(t)
 	stmt := statements.NewDeleteStatement("test_table", "")
-	ctx := createTestContextWithCleanup(t, "")
-	tx := createTransactionContext(t)
 
 	plan := NewDeletePlan(stmt, tx, ctx)
 
@@ -108,14 +114,8 @@ func TestNewDeletePlan(t *testing.T) {
 }
 
 func TestDeletePlan_Execute_DeleteAll(t *testing.T) {
-	dataDir := t.TempDir()
-	oldDir, _ := os.Getwd()
-	os.Chdir(dataDir)
-	defer os.Chdir(oldDir)
-
-	os.Mkdir("data", 0755)
-
-	ctx := createTestContextWithCleanup(t, "")
+	dataDir := setupTestDataDir(t)
+	ctx := createTestContextWithCleanup(t, dataDir)
 	tx := createTransactionContext(t)
 
 	createAndPopulateTestTable(t, ctx, tx)
@@ -144,16 +144,7 @@ func TestDeletePlan_Execute_DeleteAll(t *testing.T) {
 }
 
 func TestDeletePlan_Execute_WithWhereClause(t *testing.T) {
-	dataDir := t.TempDir()
-	oldDir, _ := os.Getwd()
-	os.Chdir(dataDir)
-	defer os.Chdir(oldDir)
-
-	os.Mkdir("data", 0755)
-
-	ctx := createTestContextWithCleanup(t, "")
-	tx := createTransactionContext(t)
-
+	_, ctx, tx := setupDeleteTest(t)
 	createAndPopulateTestTable(t, ctx, tx)
 
 	// DELETE FROM test_table WHERE id = 2
@@ -184,16 +175,7 @@ func TestDeletePlan_Execute_WithWhereClause(t *testing.T) {
 }
 
 func TestDeletePlan_Execute_WithWhereClause_MultipleRows(t *testing.T) {
-	dataDir := t.TempDir()
-	oldDir, _ := os.Getwd()
-	os.Chdir(dataDir)
-	defer os.Chdir(oldDir)
-
-	os.Mkdir("data", 0755)
-
-	ctx := createTestContextWithCleanup(t, "")
-	tx := createTransactionContext(t)
-
+	_, ctx, tx := setupDeleteTest(t)
 	createAndPopulateTestTable(t, ctx, tx)
 
 	// DELETE FROM test_table WHERE active = true
@@ -225,16 +207,7 @@ func TestDeletePlan_Execute_WithWhereClause_MultipleRows(t *testing.T) {
 }
 
 func TestDeletePlan_Execute_WithWhereClause_NoMatch(t *testing.T) {
-	dataDir := t.TempDir()
-	oldDir, _ := os.Getwd()
-	os.Chdir(dataDir)
-	defer os.Chdir(oldDir)
-
-	os.Mkdir("data", 0755)
-
-	ctx := createTestContextWithCleanup(t, "")
-	tx := createTransactionContext(t)
-
+	_, ctx, tx := setupDeleteTest(t)
 	createAndPopulateTestTable(t, ctx, tx)
 
 	// DELETE FROM test_table WHERE id = 999 (no match)
@@ -266,16 +239,7 @@ func TestDeletePlan_Execute_WithWhereClause_NoMatch(t *testing.T) {
 }
 
 func TestDeletePlan_Execute_WithWhereClause_GreaterThan(t *testing.T) {
-	dataDir := t.TempDir()
-	oldDir, _ := os.Getwd()
-	os.Chdir(dataDir)
-	defer os.Chdir(oldDir)
-
-	os.Mkdir("data", 0755)
-
-	ctx := createTestContextWithCleanup(t, "")
-	tx := createTransactionContext(t)
-
+	_, ctx, tx := setupDeleteTest(t)
 	createAndPopulateTestTable(t, ctx, tx)
 
 	// DELETE FROM test_table WHERE id > 1
@@ -307,15 +271,7 @@ func TestDeletePlan_Execute_WithWhereClause_GreaterThan(t *testing.T) {
 }
 
 func TestDeletePlan_Execute_Error_TableNotFound(t *testing.T) {
-	dataDir := t.TempDir()
-	oldDir, _ := os.Getwd()
-	os.Chdir(dataDir)
-	defer os.Chdir(oldDir)
-
-	os.Mkdir("data", 0755)
-
-	ctx := createTestContextWithCleanup(t, "")
-	tx := createTransactionContext(t)
+	_, ctx, tx := setupDeleteTest(t)
 
 	stmt := statements.NewDeleteStatement("nonexistent_table", "")
 	plan := NewDeletePlan(stmt, tx, ctx)
@@ -337,16 +293,7 @@ func TestDeletePlan_Execute_Error_TableNotFound(t *testing.T) {
 }
 
 func TestDeletePlan_Execute_Error_InvalidField(t *testing.T) {
-	dataDir := t.TempDir()
-	oldDir, _ := os.Getwd()
-	os.Chdir(dataDir)
-	defer os.Chdir(oldDir)
-
-	os.Mkdir("data", 0755)
-
-	ctx := createTestContextWithCleanup(t, "")
-	tx := createTransactionContext(t)
-
+	_, ctx, tx := setupDeleteTest(t)
 	createAndPopulateTestTable(t, ctx, tx)
 
 	// DELETE FROM test_table WHERE invalid_field = 'value'
@@ -378,16 +325,7 @@ func TestDeletePlan_Execute_Error_InvalidField(t *testing.T) {
 }
 
 func TestDeletePlan_Execute_EmptyTable(t *testing.T) {
-	dataDir := t.TempDir()
-	oldDir, _ := os.Getwd()
-	os.Chdir(dataDir)
-	defer os.Chdir(oldDir)
-
-	os.Mkdir("data", 0755)
-
-	ctx := createTestContextWithCleanup(t, "")
-	tx := createTransactionContext(t)
-
+	_, ctx, tx := setupDeleteTest(t)
 	// Create table but don't populate it
 	createStmt := statements.NewCreateStatement("test_table", false)
 	createStmt.AddField("id", types.IntType, false, nil)
@@ -422,16 +360,7 @@ func TestDeletePlan_Execute_EmptyTable(t *testing.T) {
 }
 
 func TestDeletePlan_getTableID(t *testing.T) {
-	dataDir := t.TempDir()
-	oldDir, _ := os.Getwd()
-	os.Chdir(dataDir)
-	defer os.Chdir(oldDir)
-
-	os.Mkdir("data", 0755)
-
-	ctx := createTestContextWithCleanup(t, "")
-	tx := createTransactionContext(t)
-
+	_, ctx, tx := setupDeleteTest(t)
 	createAndPopulateTestTable(t, ctx, tx)
 
 	stmt := statements.NewDeleteStatement("test_table", "")
@@ -451,16 +380,7 @@ func TestDeletePlan_getTableID(t *testing.T) {
 }
 
 func TestDeletePlan_getTableID_Error(t *testing.T) {
-	dataDir := t.TempDir()
-	oldDir, _ := os.Getwd()
-	os.Chdir(dataDir)
-	defer os.Chdir(oldDir)
-
-	os.Mkdir("data", 0755)
-
-	ctx := createTestContextWithCleanup(t, "")
-	tx := createTransactionContext(t)
-
+	_, ctx, tx := setupDeleteTest(t)
 	stmt := statements.NewDeleteStatement("nonexistent_table", "")
 	plan := NewDeletePlan(stmt, tx, ctx)
 
@@ -481,16 +401,7 @@ func TestDeletePlan_getTableID_Error(t *testing.T) {
 }
 
 func TestDeletePlan_createTableScan(t *testing.T) {
-	dataDir := t.TempDir()
-	oldDir, _ := os.Getwd()
-	os.Chdir(dataDir)
-	defer os.Chdir(oldDir)
-
-	os.Mkdir("data", 0755)
-
-	ctx := createTestContextWithCleanup(t, "")
-	tx := createTransactionContext(t)
-
+	_, ctx, tx := setupDeleteTest(t)
 	createAndPopulateTestTable(t, ctx, tx)
 
 	stmt := statements.NewDeleteStatement("test_table", "")
@@ -520,16 +431,7 @@ func TestDeletePlan_createTableScan(t *testing.T) {
 }
 
 func TestDeletePlan_addWhereFilter(t *testing.T) {
-	dataDir := t.TempDir()
-	oldDir, _ := os.Getwd()
-	os.Chdir(dataDir)
-	defer os.Chdir(oldDir)
-
-	os.Mkdir("data", 0755)
-
-	ctx := createTestContextWithCleanup(t, "")
-	tx := createTransactionContext(t)
-
+	_, ctx, tx := setupDeleteTest(t)
 	createAndPopulateTestTable(t, ctx, tx)
 
 	whereClause := &plan.FilterNode{
@@ -566,16 +468,7 @@ func TestDeletePlan_addWhereFilter(t *testing.T) {
 }
 
 func TestDeletePlan_collectTuplesToDelete(t *testing.T) {
-	dataDir := t.TempDir()
-	oldDir, _ := os.Getwd()
-	os.Chdir(dataDir)
-	defer os.Chdir(oldDir)
-
-	os.Mkdir("data", 0755)
-
-	ctx := createTestContextWithCleanup(t, "")
-	tx := createTransactionContext(t)
-
+	_, ctx, tx := setupDeleteTest(t)
 	createAndPopulateTestTable(t, ctx, tx)
 
 	stmt := statements.NewDeleteStatement("test_table", "")
@@ -610,16 +503,7 @@ func TestDeletePlan_collectTuplesToDelete(t *testing.T) {
 }
 
 func TestDeletePlan_createQuery_NoWhere(t *testing.T) {
-	dataDir := t.TempDir()
-	oldDir, _ := os.Getwd()
-	os.Chdir(dataDir)
-	defer os.Chdir(oldDir)
-
-	os.Mkdir("data", 0755)
-
-	ctx := createTestContextWithCleanup(t, "")
-	tx := createTransactionContext(t)
-
+	_, ctx, tx := setupDeleteTest(t)
 	createAndPopulateTestTable(t, ctx, tx)
 
 	stmt := statements.NewDeleteStatement("test_table", "")
@@ -649,16 +533,7 @@ func TestDeletePlan_createQuery_NoWhere(t *testing.T) {
 }
 
 func TestDeletePlan_createQuery_WithWhere(t *testing.T) {
-	dataDir := t.TempDir()
-	oldDir, _ := os.Getwd()
-	os.Chdir(dataDir)
-	defer os.Chdir(oldDir)
-
-	os.Mkdir("data", 0755)
-
-	ctx := createTestContextWithCleanup(t, "")
-	tx := createTransactionContext(t)
-
+	_, ctx, tx := setupDeleteTest(t)
 	createAndPopulateTestTable(t, ctx, tx)
 
 	whereClause := &plan.FilterNode{
