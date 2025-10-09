@@ -68,14 +68,11 @@ func (sc *SystemCatalog) UpdateTableStatistics(tx *transaction.TransactionContex
 		return fmt.Errorf("failed to collect statistics for table %d: %w", tableID, err)
 	}
 
-	// Check if statistics already exist for this table
 	existingStats, err := sc.GetTableStatistics(tx.ID, tableID)
 	if err == nil && existingStats != nil {
-		// Update existing statistics
 		return sc.updateExistingStatistics(tx, tableID, stats)
 	}
 
-	// Insert new statistics
 	return sc.insertNewStatistics(tx, stats)
 }
 
@@ -83,7 +80,12 @@ func (sc *SystemCatalog) UpdateTableStatistics(tx *transaction.TransactionContex
 func (sc *SystemCatalog) collectTableStatistics(tid *primitives.TransactionID, tableID int) (*TableStatistics, error) {
 	file, err := sc.tableManager.GetDbFile(tableID)
 	if err != nil {
-		return nil, fmt.Errorf("failed to get table file: %w", err)
+		return &TableStatistics{
+			TableID:     tableID,
+			Cardinality: 0,
+			PageCount:   0,
+			LastUpdated: time.Now(),
+		}, nil
 	}
 
 	pageCount := 0
@@ -113,12 +115,18 @@ func (sc *SystemCatalog) collectTableStatistics(tid *primitives.TransactionID, t
 
 	for {
 		hasNext, err := iter.HasNext()
-		if err != nil || !hasNext {
+		if err != nil {
+			break
+		}
+		if !hasNext {
 			break
 		}
 
 		tup, err := iter.Next()
-		if err != nil || tup == nil {
+		if err != nil {
+			break
+		}
+		if tup == nil {
 			break
 		}
 
@@ -145,9 +153,12 @@ func (sc *SystemCatalog) collectTableStatistics(tid *primitives.TransactionID, t
 func (sc *SystemCatalog) GetTableStatistics(tid *primitives.TransactionID, tableID int) (*TableStatistics, error) {
 	var result *TableStatistics
 
+	// Convert tableID to int32 for comparison since it's stored as int32
+	tableIDInt32 := int(int32(tableID))
+
 	err := sc.iterateTable(sc.statisticsTableID, tid, func(statsTuple *tuple.Tuple) error {
 		storedTableID := getIntField(statsTuple, 0)
-		if storedTableID == tableID {
+		if storedTableID == tableIDInt32 {
 			result = &TableStatistics{
 				TableID:        storedTableID,
 				Cardinality:    getIntField(statsTuple, 1),
@@ -201,12 +212,16 @@ func (sc *SystemCatalog) deleteTableStatistics(tx *transaction.TransactionContex
 		return fmt.Errorf("failed to get statistics table: %w", err)
 	}
 
+	tableIDInt32 := int(int32(tableID))
+
 	iter := file.Iterator(tx.ID)
 	if err := iter.Open(); err != nil {
 		return fmt.Errorf("failed to open iterator: %w", err)
 	}
 	defer iter.Close()
 
+	// Collect tuples to delete (can't delete while iterating)
+	var tuplesToDelete []*tuple.Tuple
 	for {
 		hasNext, err := iter.HasNext()
 		if err != nil || !hasNext {
@@ -218,10 +233,15 @@ func (sc *SystemCatalog) deleteTableStatistics(tx *transaction.TransactionContex
 			break
 		}
 
-		if getIntField(tup, 0) == tableID {
-			if err := sc.store.DeleteTuple(tx, tup); err != nil {
-				return fmt.Errorf("failed to delete statistics tuple: %w", err)
-			}
+		storedTableID := getIntField(tup, 0)
+		if storedTableID == tableIDInt32 {
+			tuplesToDelete = append(tuplesToDelete, tup)
+		}
+	}
+
+	for _, tup := range tuplesToDelete {
+		if err := sc.store.DeleteTuple(tx, tup); err != nil {
+			return fmt.Errorf("failed to delete statistics tuple: %w", err)
 		}
 	}
 
