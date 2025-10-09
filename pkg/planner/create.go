@@ -36,6 +36,14 @@ func NewCreateTablePlan(
 	}
 }
 
+// Execute performs the CREATE TABLE operation within the current transaction.
+//
+// Execution steps:
+//  1. Validates table doesn't already exist (respects IF NOT EXISTS clause)
+//  2. Transforms parsed field definitions into catalog metadata
+//  3. Generates heap file name based on table name
+//  4. Creates table entry in catalog with schema and primary key
+//  5. Initializes backing heap file in the data directory
 func (p *CreateTablePlan) Execute() (any, error) {
 	catalogMgr := p.ctx.CatalogManager()
 	if catalogMgr.TableExists(p.transactionCtx.ID, p.Statement.TableName) {
