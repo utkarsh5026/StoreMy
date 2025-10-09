@@ -47,8 +47,10 @@ func createTestTable(t *testing.T, ctx *registry.DatabaseContext, tx *transactio
 }
 
 func TestNewInsertPlan(t *testing.T) {
+	dataDir := setupTestDataDir(t)
+
 	stmt := statements.NewInsertStatement("test_table")
-	ctx := createTestContextWithCleanup(t, "")
+	ctx := createTestContextWithCleanup(t, dataDir)
 	transCtx := createTransactionContext(t)
 
 	plan := NewInsertPlan(stmt, transCtx, ctx)
@@ -74,7 +76,7 @@ func TestInsertPlan_Execute_SingleRow(t *testing.T) {
 
 	os.Mkdir("data", 0755)
 
-	ctx := createTestContextWithCleanup(t, "")
+	ctx := createTestContextWithCleanup(t, dataDir)
 	transCtx := createTransactionContext(t)
 
 	createTestTable(t, ctx, transCtx)
@@ -118,7 +120,7 @@ func TestInsertPlan_Execute_MultipleRows(t *testing.T) {
 
 	os.Mkdir("data", 0755)
 
-	ctx := createTestContextWithCleanup(t, "")
+	ctx := createTestContextWithCleanup(t, dataDir)
 	transCtx := createTransactionContext(t)
 
 	createTestTable(t, ctx, transCtx)
@@ -167,7 +169,7 @@ func TestInsertPlan_Execute_WithSpecificFields(t *testing.T) {
 
 	os.Mkdir("data", 0755)
 
-	ctx := createTestContextWithCleanup(t, "")
+	ctx := createTestContextWithCleanup(t, dataDir)
 	transCtx := createTransactionContext(t)
 
 	createTestTable(t, ctx, transCtx)
@@ -204,7 +206,7 @@ func TestInsertPlan_Execute_Error_TableNotFound(t *testing.T) {
 
 	os.Mkdir("data", 0755)
 
-	ctx := createTestContextWithCleanup(t, "")
+	ctx := createTestContextWithCleanup(t, dataDir)
 	transCtx := createTransactionContext(t)
 
 	stmt := statements.NewInsertStatement("nonexistent_table")
@@ -239,7 +241,7 @@ func TestInsertPlan_Execute_Error_ValueCountMismatch(t *testing.T) {
 
 	os.Mkdir("data", 0755)
 
-	ctx := createTestContextWithCleanup(t, "")
+	ctx := createTestContextWithCleanup(t, dataDir)
 	transCtx := createTransactionContext(t)
 
 	createTestTable(t, ctx, transCtx)
@@ -277,7 +279,7 @@ func TestInsertPlan_Execute_Error_InvalidFieldName(t *testing.T) {
 
 	os.Mkdir("data", 0755)
 
-	ctx := createTestContextWithCleanup(t, "")
+	ctx := createTestContextWithCleanup(t, dataDir)
 	transCtx := createTransactionContext(t)
 
 	createTestTable(t, ctx, transCtx)
@@ -317,7 +319,7 @@ func TestInsertPlan_Execute_Error_ValueCountMismatchWithFields(t *testing.T) {
 
 	os.Mkdir("data", 0755)
 
-	ctx := createTestContextWithCleanup(t, "")
+	ctx := createTestContextWithCleanup(t, dataDir)
 	transCtx := createTransactionContext(t)
 
 	createTestTable(t, ctx, transCtx)
@@ -356,7 +358,7 @@ func TestInsertPlan_Execute_Error_MissingValueForField(t *testing.T) {
 
 	os.Mkdir("data", 0755)
 
-	ctx := createTestContextWithCleanup(t, "")
+	ctx := createTestContextWithCleanup(t, dataDir)
 	transCtx := createTransactionContext(t)
 
 	createTestTable(t, ctx, transCtx)
@@ -395,7 +397,7 @@ func TestInsertPlan_Execute_EmptyValues(t *testing.T) {
 
 	os.Mkdir("data", 0755)
 
-	ctx := createTestContextWithCleanup(t, "")
+	ctx := createTestContextWithCleanup(t, dataDir)
 	transCtx := createTransactionContext(t)
 
 	createTestTable(t, ctx, transCtx)
@@ -428,7 +430,7 @@ func TestInsertPlan_getTableID(t *testing.T) {
 
 	os.Mkdir("data", 0755)
 
-	ctx := createTestContextWithCleanup(t, "")
+	ctx := createTestContextWithCleanup(t, dataDir)
 	transCtx := createTransactionContext(t)
 
 	createTestTable(t, ctx, transCtx)
@@ -455,7 +457,7 @@ func TestInsertPlan_getTupleDesc(t *testing.T) {
 
 	os.Mkdir("data", 0755)
 
-	ctx := createTestContextWithCleanup(t, "")
+	ctx := createTestContextWithCleanup(t, dataDir)
 	transCtx := createTransactionContext(t)
 
 	createTestTable(t, ctx, transCtx)
@@ -486,7 +488,7 @@ func TestInsertPlan_createFieldMapping(t *testing.T) {
 
 	os.Mkdir("data", 0755)
 
-	ctx := createTestContextWithCleanup(t, "")
+	ctx := createTestContextWithCleanup(t, dataDir)
 	transCtx := createTransactionContext(t)
 
 	createTestTable(t, ctx, transCtx)
@@ -528,7 +530,7 @@ func TestInsertPlan_createFieldMapping_EmptyFields(t *testing.T) {
 
 	os.Mkdir("data", 0755)
 
-	ctx := createTestContextWithCleanup(t, "")
+	ctx := createTestContextWithCleanup(t, dataDir)
 	transCtx := createTransactionContext(t)
 
 	createTestTable(t, ctx, transCtx)
@@ -561,7 +563,7 @@ func TestInsertPlan_validateValueCount(t *testing.T) {
 
 	os.Mkdir("data", 0755)
 
-	ctx := createTestContextWithCleanup(t, "")
+	ctx := createTestContextWithCleanup(t, dataDir)
 	transCtx := createTransactionContext(t)
 
 	createTestTable(t, ctx, transCtx)
