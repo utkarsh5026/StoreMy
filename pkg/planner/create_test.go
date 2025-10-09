@@ -29,10 +29,12 @@ func executePlan(t *testing.T, plan *CreateTablePlan) (*DDLResult, error) {
 }
 
 func TestNewCreateTablePlan(t *testing.T) {
+	dataDir := setupTestDataDir(t)
+
 	stmt := statements.NewCreateStatement("users", false)
 	stmt.AddField("id", types.IntType, true, nil)
 
-	ctx := createTestContextWithCleanup(t, "")
+	ctx := createTestContextWithCleanup(t, dataDir)
 	transCtx := createTransactionContext(t)
 
 	plan := NewCreateTablePlan(stmt, ctx, transCtx)
@@ -55,13 +57,7 @@ func TestNewCreateTablePlan(t *testing.T) {
 }
 
 func TestCreateTablePlan_Execute_BasicSuccess(t *testing.T) {
-	dataDir := t.TempDir()
-	oldDir, _ := os.Getwd()
-	os.Chdir(dataDir)
-	defer os.Chdir(oldDir)
-
-	os.Mkdir("data", 0755)
-
+	dataDir := setupTestDataDir(t)
 	stmt := statements.NewCreateStatement("users", false)
 	stmt.AddField("id", types.IntType, true, nil)
 	stmt.AddField("name", types.StringType, false, nil)
@@ -334,8 +330,8 @@ func TestCreateTablePlan_Execute_Error_DataDirectoryMissing(t *testing.T) {
 		t.Fatal("Expected error when data directory does not exist")
 	}
 
-	if err.Error()[:22] != "failed to create heap " {
-		t.Errorf("Expected error to start with 'failed to create heap ', got %q", err.Error())
+	if err.Error()[:22] != "failed to create table" {
+		t.Errorf("Expected error to start with 'failed to create table', got %q", err.Error())
 	}
 }
 
@@ -391,13 +387,13 @@ func TestCreateTablePlan_Execute_ComplexTable(t *testing.T) {
 }
 
 func TestCreateTablePlan_Execute_FileCreation(t *testing.T) {
-	setupTestDataDir(t)
+	dataDir := setupTestDataDir(t)
 
 	stmt := statements.NewCreateStatement("file_test", false)
 	stmt.AddField("id", types.IntType, true, nil)
 
-	// Pass empty string to use default "data/" directory
-	ctx := createTestContextWithCleanup(t, "")
+	// Use proper data directory
+	ctx := createTestContextWithCleanup(t, dataDir)
 	transCtx := createTransactionContext(t)
 
 	plan := NewCreateTablePlan(stmt, ctx, transCtx)
@@ -412,7 +408,7 @@ func TestCreateTablePlan_Execute_FileCreation(t *testing.T) {
 		t.Error("Expected success to be true")
 	}
 
-	expectedFileName := filepath.Join("data", "file_test.dat")
+	expectedFileName := filepath.Join(dataDir, "file_test.dat")
 	if _, err := os.Stat(expectedFileName); os.IsNotExist(err) {
 		t.Errorf("Expected file %s to be created", expectedFileName)
 	}
