@@ -3,6 +3,7 @@ package planner
 import (
 	"os"
 	"path/filepath"
+	"storemy/pkg/catalog"
 	"storemy/pkg/concurrency/transaction"
 	"storemy/pkg/log"
 	"storemy/pkg/memory"
@@ -58,8 +59,19 @@ func createTestContextWithCleanup(t *testing.T, dataDir string) *registry.Databa
 		panic(err)
 	}
 
+	pageStore := memory.NewPageStore(tm, wal)
+	catalogMgr := catalog.NewCatalogManager(pageStore, tm)
+	txRegistry := transaction.NewTransactionRegistry(wal)
+	tx, err := txRegistry.Begin()
+	if err == nil {
+		_ = catalogMgr.Initialize(tx, dataDir)
+	}
+
 	if t != nil {
 		t.Cleanup(func() {
+			if tm != nil {
+				tm.Clear()
+			}
 			if wal != nil {
 				wal.Close()
 			}
@@ -67,11 +79,11 @@ func createTestContextWithCleanup(t *testing.T, dataDir string) *registry.Databa
 		})
 	}
 
-	pageStore := memory.NewPageStore(tm, wal)
 	return registry.NewDatabaseContext(
 		tm,
 		pageStore,
-		nil,
+		catalogMgr.GetSystemCatalog(),
+		catalogMgr,
 		wal,
 		dataDir,
 	)
