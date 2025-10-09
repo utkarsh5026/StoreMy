@@ -22,7 +22,7 @@ func setupSelectTest(t *testing.T) (*registry.DatabaseContext, *transaction.Tran
 
 	os.Mkdir("data", 0755)
 
-	ctx := createTestContextWithCleanup(t, "")
+	ctx := createTestContextWithCleanup(t, dataDir)
 	tx := createTransactionContext(t)
 
 	return ctx, tx, cleanup
