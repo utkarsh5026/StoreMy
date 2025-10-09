@@ -27,6 +27,7 @@ type Database struct {
 	catalog      *catalog.SystemCatalog
 	wal          *log.WAL
 	txRegistry   *transaction.TransactionRegistry
+	statsManager *catalog.StatisticsManager
 
 	name    string
 	dataDir string
@@ -78,6 +79,9 @@ func NewDatabase(name, dataDir, logDir string) (*Database, error) {
 	pageStore := memory.NewPageStore(tableManager, wal)
 	systemCatalog := catalog.NewSystemCatalog(pageStore, tableManager)
 
+	statsManager := catalog.NewStatisticsManager(systemCatalog)
+	pageStore.SetStatsManager(statsManager)
+
 	ctx := registry.NewDatabaseContext(tableManager, pageStore, systemCatalog, wal, fullPath)
 
 	queryPlanner := planner.NewQueryPlanner(ctx)
@@ -89,6 +93,7 @@ func NewDatabase(name, dataDir, logDir string) (*Database, error) {
 		catalog:      systemCatalog,
 		txRegistry:   ctx.TransactionRegistry(),
 		wal:          wal,
+		statsManager: statsManager,
 		name:         name,
 		dataDir:      fullPath,
 		stats:        &DatabaseStats{},
@@ -233,6 +238,52 @@ func (db *Database) cleanupTransaction(tx *transaction.TransactionContext, err *
 	db.stats.mutex.Lock()
 	db.stats.TransactionsCount++
 	db.stats.mutex.Unlock()
+}
+
+// UpdateTableStatistics manually triggers a statistics update for a table
+// This is useful for forcing an update after bulk operations
+func (db *Database) UpdateTableStatistics(tableName string) error {
+	tx, err := db.txRegistry.Begin()
+	if err != nil {
+		return fmt.Errorf("failed to begin transaction: %v", err)
+	}
+	defer db.cleanupTransaction(tx, &err)
+
+	tableID, err := db.catalog.GetTableID(tx.ID, tableName)
+	if err != nil {
+		return fmt.Errorf("table not found: %v", err)
+	}
+
+	if err := db.statsManager.ForceUpdate(tx, tableID); err != nil {
+		return fmt.Errorf("failed to update statistics: %v", err)
+	}
+
+	return db.pageStore.CommitTransaction(tx)
+}
+
+// GetTableStatistics returns statistics for a specific table
+func (db *Database) GetTableStatistics(tableName string) (*catalog.TableStatistics, error) {
+	tx, err := db.txRegistry.Begin()
+	if err != nil {
+		return nil, fmt.Errorf("failed to begin transaction: %v", err)
+	}
+	defer func() {
+		if err != nil {
+			db.pageStore.AbortTransaction(tx)
+		}
+	}()
+
+	tableID, err := db.catalog.GetTableID(tx.ID, tableName)
+	if err != nil {
+		return nil, fmt.Errorf("table not found: %v", err)
+	}
+
+	stats, err := db.catalog.GetTableStatistics(tx.ID, tableID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get statistics: %v", err)
+	}
+
+	return stats, nil
 }
 
 func (db *Database) Close() error {
