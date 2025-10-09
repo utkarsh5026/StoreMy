@@ -13,6 +13,7 @@ type DatabaseContext struct {
 	tableManager *memory.TableManager
 	pageStore    *memory.PageStore
 	catalog      *catalog.SystemCatalog
+	catalogMgr   *catalog.CatalogManager
 	txRegistry   *transaction.TransactionRegistry
 	wal          *log.WAL
 	dataDir      string
@@ -23,6 +24,7 @@ func NewDatabaseContext(
 	tableManager *memory.TableManager,
 	pageStore *memory.PageStore,
 	catalog *catalog.SystemCatalog,
+	catalogMgr *catalog.CatalogManager,
 	wal *log.WAL,
 	dataDir string,
 ) *DatabaseContext {
@@ -30,6 +32,7 @@ func NewDatabaseContext(
 		tableManager: tableManager,
 		pageStore:    pageStore,
 		catalog:      catalog,
+		catalogMgr:   catalogMgr,
 		txRegistry:   transaction.NewTransactionRegistry(wal),
 		wal:          wal,
 		dataDir:      dataDir,
@@ -58,4 +61,8 @@ func (ctx *DatabaseContext) DataDir() string {
 
 func (ctx *DatabaseContext) TransactionRegistry() *transaction.TransactionRegistry {
 	return ctx.txRegistry
+}
+
+func (ctx *DatabaseContext) CatalogManager() *catalog.CatalogManager {
+	return ctx.catalogMgr
 }
