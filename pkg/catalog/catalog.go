@@ -18,15 +18,17 @@ const (
 )
 
 // SystemCatalog manages database metadata including table and column definitions.
-// It maintains two system tables:
+// It maintains three system tables:
 //   - CATALOG_TABLES: stores table metadata (ID, name, file path, primary key)
 //   - CATALOG_COLUMNS: stores column metadata (table ID, name, type, position, is_primary)
+//   - CATALOG_STATISTICS: stores table statistics for query optimization
 type SystemCatalog struct {
-	store          *memory.PageStore
-	tableManager   *memory.TableManager
-	loader         *SchemaLoader
-	tablesTableID  int
-	columnsTableID int
+	store             *memory.PageStore
+	tableManager      *memory.TableManager
+	loader            *SchemaLoader
+	tablesTableID     int
+	columnsTableID    int
+	statisticsTableID int
 }
 
 // NewSystemCatalog creates a new system catalog instance.
@@ -41,7 +43,7 @@ func NewSystemCatalog(ps *memory.PageStore, tm *memory.TableManager) *SystemCata
 	return sc
 }
 
-// Initialize creates the system catalog tables (CATALOG_TABLES and CATALOG_COLUMNS)
+// Initialize creates the system catalog tables (CATALOG_TABLES, CATALOG_COLUMNS, and CATALOG_STATISTICS)
 // and registers them with the table manager. This must be called before any other
 // catalog operations.
 func (sc *SystemCatalog) Initialize(ctx *transaction.TransactionContext, dataDir string) error {
@@ -56,6 +58,11 @@ func (sc *SystemCatalog) Initialize(ctx *transaction.TransactionContext, dataDir
 	sc.columnsTableID, err = sc.createCatalogTable(dataDir, CatalogColumnsFileName, ColumnsTable, "", GetColumnsSchema())
 	if err != nil {
 		return fmt.Errorf("failed to create columns catalog: %w", err)
+	}
+
+	sc.statisticsTableID, err = sc.createCatalogTable(dataDir, CatalogStatisticsFileName, StatisticsTable, "table_id", GetStatisticsSchema())
+	if err != nil {
+		return fmt.Errorf("failed to create statistics catalog: %w", err)
 	}
 
 	sc.loader.columnsTableID = sc.columnsTableID
@@ -81,7 +88,8 @@ func (sc *SystemCatalog) createCatalogTable(dataDir, fileName, tableName, primar
 }
 
 // RegisterTable adds a new table to the system catalog.
-// It inserts metadata into CATALOG_TABLES and column definitions into CATALOG_COLUMNS.
+// It inserts metadata into CATALOG_TABLES, column definitions into CATALOG_COLUMNS,
+// and initializes statistics in CATALOG_STATISTICS.
 func (sc *SystemCatalog) RegisterTable(tx *transaction.TransactionContext, tableID int, tableName, filePath, primaryKey string, fields []FieldMetadata,
 ) error {
 	tup := createTablesTuple(tableID, tableName, filePath, primaryKey)
@@ -96,6 +104,8 @@ func (sc *SystemCatalog) RegisterTable(tx *transaction.TransactionContext, table
 		}
 	}
 
+	// Note: Statistics are not initialized here automatically.
+	// Call UpdateTableStatistics explicitly after populating the table with data.
 	return nil
 }
 
@@ -220,4 +230,19 @@ func parseTableMetadata(tableTuple *tuple.Tuple) (tableID int, tableName, filePa
 	return getIntField(tableTuple, 0),
 		getStringField(tableTuple, 1),
 		getStringField(tableTuple, 2)
+}
+
+// GetTablesTableID returns the table ID for CATALOG_TABLES
+func (sc *SystemCatalog) GetTablesTableID() int {
+	return sc.tablesTableID
+}
+
+// GetColumnsTableID returns the table ID for CATALOG_COLUMNS
+func (sc *SystemCatalog) GetColumnsTableID() int {
+	return sc.columnsTableID
+}
+
+// GetStatisticsTableID returns the table ID for CATALOG_STATISTICS
+func (sc *SystemCatalog) GetStatisticsTableID() int {
+	return sc.statisticsTableID
 }
