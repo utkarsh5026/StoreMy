@@ -18,7 +18,7 @@ func setupUpdateTest(t *testing.T) (*registry.DatabaseContext, *transaction.Tran
 
 	os.Mkdir("data", 0755)
 
-	ctx := createTestContextWithCleanup(t, "")
+	ctx := createTestContextWithCleanup(t, dataDir)
 	tx := createTransactionContext(t)
 
 	createUpdateTestTable(t, ctx, tx)
@@ -254,14 +254,8 @@ func TestUpdatePlan_Execute_UpdateAllRows(t *testing.T) {
 }
 
 func TestUpdatePlan_Execute_UpdateWithIntegerFilter(t *testing.T) {
-	dataDir := t.TempDir()
-	oldDir, _ := os.Getwd()
-	os.Chdir(dataDir)
-	defer os.Chdir(oldDir)
-
-	os.Mkdir("data", 0755)
-
-	ctx := createTestContextWithCleanup(t, "")
+	dataDir := setupTestDataDir(t)
+	ctx := createTestContextWithCleanup(t, dataDir)
 	tx := createTransactionContext(t)
 
 	createUpdateTestTable(t, ctx, tx)
@@ -291,14 +285,8 @@ func TestUpdatePlan_Execute_UpdateWithIntegerFilter(t *testing.T) {
 }
 
 func TestUpdatePlan_Execute_UpdateWithFloatFilter(t *testing.T) {
-	dataDir := t.TempDir()
-	oldDir, _ := os.Getwd()
-	os.Chdir(dataDir)
-	defer os.Chdir(oldDir)
-
-	os.Mkdir("data", 0755)
-
-	ctx := createTestContextWithCleanup(t, "")
+	dataDir := setupTestDataDir(t)
+	ctx := createTestContextWithCleanup(t, dataDir)
 	tx := createTransactionContext(t)
 
 	createUpdateTestTable(t, ctx, tx)
@@ -328,14 +316,8 @@ func TestUpdatePlan_Execute_UpdateWithFloatFilter(t *testing.T) {
 }
 
 func TestUpdatePlan_Execute_NoMatchingRows(t *testing.T) {
-	dataDir := t.TempDir()
-	oldDir, _ := os.Getwd()
-	os.Chdir(dataDir)
-	defer os.Chdir(oldDir)
-
-	os.Mkdir("data", 0755)
-
-	ctx := createTestContextWithCleanup(t, "")
+	dataDir := setupTestDataDir(t)
+	ctx := createTestContextWithCleanup(t, dataDir)
 	tx := createTransactionContext(t)
 
 	createUpdateTestTable(t, ctx, tx)
@@ -370,14 +352,8 @@ func TestUpdatePlan_Execute_NoMatchingRows(t *testing.T) {
 }
 
 func TestUpdatePlan_Execute_Error_TableNotFound(t *testing.T) {
-	dataDir := t.TempDir()
-	oldDir, _ := os.Getwd()
-	os.Chdir(dataDir)
-	defer os.Chdir(oldDir)
-
-	os.Mkdir("data", 0755)
-
-	ctx := createTestContextWithCleanup(t, "")
+	dataDir := setupTestDataDir(t)
+	ctx := createTestContextWithCleanup(t, dataDir)
 	tx := createTransactionContext(t)
 
 	stmt := statements.NewUpdateStatement("nonexistent_table", "nonexistent_table")
@@ -402,14 +378,8 @@ func TestUpdatePlan_Execute_Error_TableNotFound(t *testing.T) {
 }
 
 func TestUpdatePlan_Execute_Error_InvalidField(t *testing.T) {
-	dataDir := t.TempDir()
-	oldDir, _ := os.Getwd()
-	os.Chdir(dataDir)
-	defer os.Chdir(oldDir)
-
-	os.Mkdir("data", 0755)
-
-	ctx := createTestContextWithCleanup(t, "")
+	dataDir := setupTestDataDir(t)
+	ctx := createTestContextWithCleanup(t, dataDir)
 	tx := createTransactionContext(t)
 
 	createUpdateTestTable(t, ctx, tx)
@@ -436,14 +406,9 @@ func TestUpdatePlan_Execute_Error_InvalidField(t *testing.T) {
 }
 
 func TestUpdatePlan_Execute_Error_InvalidWhereField(t *testing.T) {
-	dataDir := t.TempDir()
-	oldDir, _ := os.Getwd()
-	os.Chdir(dataDir)
-	defer os.Chdir(oldDir)
+	dataDir := setupTestDataDir(t)
 
-	os.Mkdir("data", 0755)
-
-	ctx := createTestContextWithCleanup(t, "")
+	ctx := createTestContextWithCleanup(t, dataDir)
 	tx := createTransactionContext(t)
 
 	createUpdateTestTable(t, ctx, tx)
@@ -473,14 +438,9 @@ func TestUpdatePlan_Execute_Error_InvalidWhereField(t *testing.T) {
 }
 
 func TestUpdatePlan_Execute_EmptyTable(t *testing.T) {
-	dataDir := t.TempDir()
-	oldDir, _ := os.Getwd()
-	os.Chdir(dataDir)
-	defer os.Chdir(oldDir)
+	dataDir := setupTestDataDir(t)
 
-	os.Mkdir("data", 0755)
-
-	ctx := createTestContextWithCleanup(t, "")
+	ctx := createTestContextWithCleanup(t, dataDir)
 	tx := createTransactionContext(t)
 
 	createUpdateTestTable(t, ctx, tx)
@@ -511,14 +471,9 @@ func TestUpdatePlan_Execute_EmptyTable(t *testing.T) {
 }
 
 func TestUpdatePlan_getTableMetadata(t *testing.T) {
-	dataDir := t.TempDir()
-	oldDir, _ := os.Getwd()
-	os.Chdir(dataDir)
-	defer os.Chdir(oldDir)
+	dataDir := setupTestDataDir(t)
 
-	os.Mkdir("data", 0755)
-
-	ctx := createTestContextWithCleanup(t, "")
+	ctx := createTestContextWithCleanup(t, dataDir)
 	tx := createTransactionContext(t)
 
 	createUpdateTestTable(t, ctx, tx)
@@ -548,14 +503,8 @@ func TestUpdatePlan_getTableMetadata(t *testing.T) {
 }
 
 func TestUpdatePlan_findFieldIndex(t *testing.T) {
-	dataDir := t.TempDir()
-	oldDir, _ := os.Getwd()
-	os.Chdir(dataDir)
-	defer os.Chdir(oldDir)
-
-	os.Mkdir("data", 0755)
-
-	ctx := createTestContextWithCleanup(t, "")
+	dataDir := setupTestDataDir(t)
+	ctx := createTestContextWithCleanup(t, dataDir)
 	tx := createTransactionContext(t)
 
 	createUpdateTestTable(t, ctx, tx)
@@ -600,14 +549,9 @@ func TestUpdatePlan_findFieldIndex(t *testing.T) {
 }
 
 func TestUpdatePlan_buildUpdateMap(t *testing.T) {
-	dataDir := t.TempDir()
-	oldDir, _ := os.Getwd()
-	os.Chdir(dataDir)
-	defer os.Chdir(oldDir)
+	dataDir := setupTestDataDir(t)
 
-	os.Mkdir("data", 0755)
-
-	ctx := createTestContextWithCleanup(t, "")
+	ctx := createTestContextWithCleanup(t, dataDir)
 	tx := createTransactionContext(t)
 
 	createUpdateTestTable(t, ctx, tx)
