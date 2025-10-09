@@ -37,17 +37,14 @@ func TestNewDatabase_Success(t *testing.T) {
 	}
 
 	// Verify components are initialized
-	if db.tableManager == nil {
-		t.Error("tableManager should be initialized")
+	if db.catalogMgr == nil {
+		t.Error("catalogMgr should be initialized")
 	}
 	if db.pageStore == nil {
 		t.Error("pageStore should be initialized")
 	}
 	if db.queryPlanner == nil {
 		t.Error("queryPlanner should be initialized")
-	}
-	if db.catalog == nil {
-		t.Error("catalog should be initialized")
 	}
 	if db.wal == nil {
 		t.Error("wal should be initialized")
