@@ -168,8 +168,10 @@ func (s *SortMergeJoin) SupportsPredicateType(predicate *JoinPredicate) bool {
 
 // compareCurrentTuples compares the current tuples pointed to by leftIndex and rightIndex.
 func (s *SortMergeJoin) compareCurrentTuples() (int, error) {
-	eq, err := compareTuples(s.leftSorted[s.leftIndex], s.rightSorted[s.rightIndex],
-		s.predicate.GetField1(), s.predicate.GetField2(), primitives.Equals)
+	left, right := s.leftSorted[s.leftIndex], s.rightSorted[s.rightIndex]
+	lf, rf := s.predicate.GetField1(), s.predicate.GetField2()
+
+	eq, err := compareTuples(left, right, lf, rf, primitives.Equals)
 	if err != nil {
 		return 0, err
 	}
@@ -177,8 +179,7 @@ func (s *SortMergeJoin) compareCurrentTuples() (int, error) {
 		return 0, nil
 	}
 
-	lt, err := compareTuples(s.leftSorted[s.leftIndex], s.rightSorted[s.rightIndex],
-		s.predicate.GetField1(), s.predicate.GetField2(), primitives.LessThan)
+	lt, err := compareTuples(left, right, lf, rf, primitives.LessThan)
 	if err != nil {
 		return 0, err
 	}
@@ -208,19 +209,19 @@ func (s *SortMergeJoin) processEqualKeys() error {
 	rightStart := s.rightIndex
 
 	for s.rightIndex < len(s.rightSorted) {
-		rightTuple := s.rightSorted[s.rightIndex]
-		rightField, err := rightTuple.GetField(s.predicate.GetField2())
-		if err != nil || rightField == nil {
+		rt := s.rightSorted[s.rightIndex]
+		rf, err := rt.GetField(s.predicate.GetField2())
+		if err != nil || rf == nil {
 			s.rightIndex++
 			continue
 		}
 
-		equals, err := leftField.Compare(primitives.Equals, rightField)
+		equals, err := leftField.Compare(primitives.Equals, rf)
 		if err != nil || !equals {
 			break
 		}
 
-		combined, err := tuple.CombineTuples(leftTuple, rightTuple)
+		combined, err := tuple.CombineTuples(leftTuple, rt)
 		if err == nil {
 			s.matchBuffer.Add(combined)
 		}
