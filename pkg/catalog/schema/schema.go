@@ -18,6 +18,39 @@ type ColumnMetadata struct {
 	TableID       int        // Table this column belongs to
 }
 
+// NewColumnMetadata creates a new ColumnMetadata instance.
+func NewColumnMetadata(name string, fieldType types.Type, position, tableID int, isPrimary, isAutoInc bool) (*ColumnMetadata, error) {
+	if name == "" {
+		return nil, fmt.Errorf("column name cannot be empty")
+	}
+
+	if !types.IsValidType(fieldType) {
+		return nil, fmt.Errorf("field type cannot be nil for column '%s'", name)
+	}
+
+	if position < 0 {
+		return nil, fmt.Errorf("column position must be non-negative, got %d for column '%s'", position, name)
+	}
+
+	if tableID < 0 {
+		return nil, fmt.Errorf("table ID must be non-negative, got %d for column '%s'", tableID, name)
+	}
+
+	if isAutoInc {
+		if fieldType != types.IntType {
+			return nil, fmt.Errorf("auto-increment column '%s' must be of type INT, got %s", name, fieldType.String())
+		}
+	}
+	return &ColumnMetadata{
+		Name:      name,
+		FieldType: fieldType,
+		Position:  position,
+		IsPrimary: isPrimary,
+		IsAutoInc: isAutoInc,
+		TableID:   tableID,
+	}, nil
+}
+
 // Schema represents a complete table schema with metadata and helper methods.
 // It provides a rich interface for working with table structures beyond just field types.
 type Schema struct {
