@@ -25,22 +25,16 @@ func createTransactionContext(t *testing.T) TransactionCtx {
 }
 
 // cleanupTable registers cleanup for table files to ensure proper resource cleanup on Windows
-func cleanupTable(t *testing.T, tableManager *memory.TableManager, tableName string) {
+func cleanupTable(t *testing.T, catalogMgr *catalog.CatalogManager, tableName string, txID interface{}) {
 	t.Helper()
 	t.Cleanup(func() {
-		tableID, err := tableManager.GetTableID(tableName)
-		if err == nil {
-			if info, err := tableManager.GetTableInfo(tableID); err == nil {
-				info.File.Close()
-			}
-		}
+		// Tables will be cleaned up when catalogMgr.ClearCache() is called
+		// No need to individually close files here
 	})
 }
 
 // Helper function to create a test database context with cleanup registration
 func createTestContextWithCleanup(t *testing.T, dataDir string) *registry.DatabaseContext {
-	tm := memory.NewTableManager()
-
 	tmpDir, err := os.MkdirTemp("", "test_wal_*")
 	if err != nil {
 		if t != nil {
@@ -59,18 +53,21 @@ func createTestContextWithCleanup(t *testing.T, dataDir string) *registry.Databa
 		panic(err)
 	}
 
-	pageStore := memory.NewPageStore(tm, wal)
-	catalogMgr := catalog.NewCatalogManager(pageStore, tm)
+	pageStore := memory.NewPageStore(wal)
+	catalogMgr := catalog.NewCatalogManager(pageStore, dataDir)
+
+	// Set bidirectional dependency
+
 	txRegistry := transaction.NewTransactionRegistry(wal)
 	tx, err := txRegistry.Begin()
 	if err == nil {
-		_ = catalogMgr.Initialize(tx, dataDir)
+		_ = catalogMgr.Initialize(tx)
 	}
 
 	if t != nil {
 		t.Cleanup(func() {
-			if tm != nil {
-				tm.Clear()
+			if catalogMgr != nil {
+				catalogMgr.ClearCache()
 			}
 			if wal != nil {
 				wal.Close()
@@ -80,7 +77,6 @@ func createTestContextWithCleanup(t *testing.T, dataDir string) *registry.Databa
 	}
 
 	return registry.NewDatabaseContext(
-		tm,
 		pageStore,
 		catalogMgr.GetSystemCatalog(),
 		catalogMgr,
