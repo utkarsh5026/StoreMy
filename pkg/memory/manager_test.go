@@ -2,6 +2,7 @@ package memory
 
 import (
 	"fmt"
+	"storemy/pkg/catalog/schema"
 	"storemy/pkg/iterator"
 	"storemy/pkg/primitives"
 	"storemy/pkg/storage/page"
@@ -74,6 +75,29 @@ func (m *mockDbFile) IsClosed() bool {
 	return m.closed
 }
 
+// Helper function to create a schema for testing
+func createTestSchema(tableID int, tableName string, td *tuple.TupleDescription, primaryKey string) *schema.Schema {
+	columns := make([]schema.ColumnMetadata, len(td.Types))
+	for i, ft := range td.Types {
+		fieldName := ""
+		if i < len(td.FieldNames) {
+			fieldName = td.FieldNames[i]
+		}
+		isPrimary := fieldName == primaryKey
+		col, err := schema.NewColumnMetadata(fieldName, ft, i, tableID, isPrimary, false)
+		if err != nil {
+			panic(fmt.Sprintf("Failed to create column metadata: %v", err))
+		}
+		columns[i] = *col
+	}
+
+	s, err := schema.NewSchema(tableID, tableName, columns)
+	if err != nil {
+		panic(fmt.Sprintf("Failed to create schema: %v", err))
+	}
+	return s
+}
+
 func TestNewTableManager(t *testing.T) {
 	tm := NewTableManager()
 
@@ -133,7 +157,8 @@ func TestTableManager_AddTable_ValidCases(t *testing.T) {
 			setupFunc: func() (*TableManager, page.DbFile) {
 				tm := NewTableManager()
 				dbFile1 := newMockDbFile(1, []types.Type{types.IntType}, []string{"id"})
-				tm.AddTable(dbFile1, "table1", "id")
+				s1 := createTestSchema(1, "table1", dbFile1.GetTupleDesc(), "id")
+				tm.AddTable(dbFile1, s1)
 				dbFile2 := newMockDbFile(2, []types.Type{types.StringType}, []string{"name"})
 				return tm, dbFile2
 			},
@@ -147,7 +172,8 @@ func TestTableManager_AddTable_ValidCases(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			tm, dbFile := tt.setupFunc()
 
-			err := tm.AddTable(dbFile, tt.tableName, tt.primaryKey)
+			s := createTestSchema(dbFile.GetID(), tt.tableName, dbFile.GetTupleDesc(), tt.primaryKey)
+			err := tm.AddTable(dbFile, s)
 
 			if tt.shouldError {
 				if err == nil {
@@ -168,12 +194,12 @@ func TestTableManager_AddTable_ValidCases(t *testing.T) {
 				return
 			}
 
-			if tableInfo.Name != tt.tableName {
-				t.Errorf("Expected table name %s, got %s", tt.tableName, tableInfo.Name)
+			if tableInfo.Schema.TableName != tt.tableName {
+				t.Errorf("Expected table name %s, got %s", tt.tableName, tableInfo.Schema.TableName)
 			}
 
-			if tableInfo.PrimaryKey != tt.primaryKey {
-				t.Errorf("Expected primary key %s, got %s", tt.primaryKey, tableInfo.PrimaryKey)
+			if tableInfo.Schema.PrimaryKey != tt.primaryKey {
+				t.Errorf("Expected primary key %s, got %s", tt.primaryKey, tableInfo.Schema.PrimaryKey)
 			}
 
 			if tableInfo.File != dbFile {
@@ -209,6 +235,15 @@ func TestTableManager_AddTable_ErrorCases(t *testing.T) {
 			expectedErr: "file cannot be nil",
 		},
 		{
+			name: "Nil schema",
+			setupFunc: func() (*TableManager, page.DbFile, string, string) {
+				tm := NewTableManager()
+				dbFile := newMockDbFile(1, []types.Type{types.IntType}, []string{"id"})
+				return tm, dbFile, "test_table", "id"
+			},
+			expectedErr: "schema cannot be nil",
+		},
+		{
 			name: "Empty table name",
 			setupFunc: func() (*TableManager, page.DbFile, string, string) {
 				tm := NewTableManager()
@@ -223,7 +258,15 @@ func TestTableManager_AddTable_ErrorCases(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			tm, dbFile, tableName, primaryKey := tt.setupFunc()
 
-			err := tm.AddTable(dbFile, tableName, primaryKey)
+			var err error
+			if dbFile == nil {
+				err = tm.AddTable(nil, nil)
+			} else if tt.expectedErr == "schema cannot be nil" {
+				err = tm.AddTable(dbFile, nil)
+			} else {
+				s := createTestSchema(dbFile.GetID(), tableName, dbFile.GetTupleDesc(), primaryKey)
+				err = tm.AddTable(dbFile, s)
+			}
 
 			if err == nil {
 				t.Errorf("Expected error but got none")
@@ -243,14 +286,16 @@ func TestTableManager_AddTable_Replacement(t *testing.T) {
 
 		// Add first table
 		dbFile1 := newMockDbFile(1, []types.Type{types.IntType}, []string{"id"})
-		err := tm.AddTable(dbFile1, "users", "id")
+		s1 := createTestSchema(1, "users", dbFile1.GetTupleDesc(), "id")
+		err := tm.AddTable(dbFile1, s1)
 		if err != nil {
 			t.Fatalf("Failed to add first table: %v", err)
 		}
 
 		// Replace with new table (same name, different ID)
 		dbFile2 := newMockDbFile(2, []types.Type{types.StringType}, []string{"name"})
-		err = tm.AddTable(dbFile2, "users", "name")
+		s2 := createTestSchema(2, "users", dbFile2.GetTupleDesc(), "name")
+		err = tm.AddTable(dbFile2, s2)
 		if err != nil {
 			t.Fatalf("Failed to replace table: %v", err)
 		}
@@ -281,14 +326,16 @@ func TestTableManager_AddTable_Replacement(t *testing.T) {
 
 		// Add first table
 		dbFile1 := newMockDbFile(1, []types.Type{types.IntType}, []string{"id"})
-		err := tm.AddTable(dbFile1, "table1", "id")
+		s1 := createTestSchema(1, "table1", dbFile1.GetTupleDesc(), "id")
+		err := tm.AddTable(dbFile1, s1)
 		if err != nil {
 			t.Fatalf("Failed to add first table: %v", err)
 		}
 
 		// Replace with new table (same ID, different name)
 		dbFile2 := newMockDbFile(1, []types.Type{types.StringType}, []string{"name"})
-		err = tm.AddTable(dbFile2, "table2", "name")
+		s2 := createTestSchema(1, "table2", dbFile2.GetTupleDesc(), "name")
+		err = tm.AddTable(dbFile2, s2)
 		if err != nil {
 			t.Fatalf("Failed to replace table: %v", err)
 		}
@@ -299,8 +346,8 @@ func TestTableManager_AddTable_Replacement(t *testing.T) {
 			t.Fatal("Table with ID 1 not found after replacement")
 		}
 
-		if tableInfo.Name != "table2" {
-			t.Errorf("Expected table name 'table2', got %s", tableInfo.Name)
+		if tableInfo.Schema.TableName != "table2" {
+			t.Errorf("Expected table name 'table2', got %s", tableInfo.Schema.TableName)
 		}
 
 		// Verify old name is removed from nameToTable
@@ -318,7 +365,8 @@ func TestTableManager_AddTable_Replacement(t *testing.T) {
 func TestTableManager_GetTableID(t *testing.T) {
 	tm := NewTableManager()
 	dbFile := newMockDbFile(42, []types.Type{types.IntType}, []string{"id"})
-	tm.AddTable(dbFile, "test_table", "id")
+	s := createTestSchema(42, "test_table", dbFile.GetTupleDesc(), "id")
+	tm.AddTable(dbFile, s)
 
 	tests := []struct {
 		name          string
@@ -370,7 +418,8 @@ func TestTableManager_GetTableID(t *testing.T) {
 func TestTableManager_GetTableName(t *testing.T) {
 	tm := NewTableManager()
 	dbFile := newMockDbFile(42, []types.Type{types.IntType}, []string{"id"})
-	tm.AddTable(dbFile, "test_table", "id")
+	s := createTestSchema(dbFile.GetID(), "test_table", dbFile.GetTupleDesc(), "id")
+	tm.AddTable(dbFile, s)
 
 	tests := []struct {
 		name          string
@@ -398,7 +447,7 @@ func TestTableManager_GetTableName(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			name, err := tm.GetTableName(tt.tableID)
+			tableInfo, err := tm.GetTableInfo(tt.tableID)
 
 			if tt.expectedError {
 				if err == nil {
@@ -412,8 +461,8 @@ func TestTableManager_GetTableName(t *testing.T) {
 				return
 			}
 
-			if name != tt.expectedName {
-				t.Errorf("Expected name %s, got %s", tt.expectedName, name)
+			if tableInfo.Schema.TableName != tt.expectedName {
+				t.Errorf("Expected name %s, got %s", tt.expectedName, tableInfo.Schema.TableName)
 			}
 		})
 	}
@@ -424,7 +473,8 @@ func TestTableManager_GetTupleDesc(t *testing.T) {
 	fieldTypes := []types.Type{types.IntType, types.StringType}
 	fieldNames := []string{"id", "name"}
 	dbFile := newMockDbFile(42, fieldTypes, fieldNames)
-	tm.AddTable(dbFile, "test_table", "id")
+	s := createTestSchema(dbFile.GetID(), "test_table", dbFile.GetTupleDesc(), "id")
+	tm.AddTable(dbFile, s)
 
 	tests := []struct {
 		name          string
@@ -473,7 +523,8 @@ func TestTableManager_GetTupleDesc(t *testing.T) {
 func TestTableManager_GetDbFile(t *testing.T) {
 	tm := NewTableManager()
 	dbFile := newMockDbFile(42, []types.Type{types.IntType}, []string{"id"})
-	tm.AddTable(dbFile, "test_table", "id")
+	s := createTestSchema(dbFile.GetID(), "test_table", dbFile.GetTupleDesc(), "id")
+	tm.AddTable(dbFile, s)
 
 	tests := []struct {
 		name          string
@@ -522,8 +573,10 @@ func TestTableManager_Clear(t *testing.T) {
 	dbFile1 := newMockDbFile(1, []types.Type{types.IntType}, []string{"id"})
 	dbFile2 := newMockDbFile(2, []types.Type{types.StringType}, []string{"name"})
 
-	tm.AddTable(dbFile1, "table1", "id")
-	tm.AddTable(dbFile2, "table2", "name")
+	s1 := createTestSchema(dbFile1.GetID(), "table1", dbFile1.GetTupleDesc(), "id")
+	tm.AddTable(dbFile1, s1)
+	s2 := createTestSchema(dbFile2.GetID(), "table2", dbFile2.GetTupleDesc(), "name")
+	tm.AddTable(dbFile2, s2)
 
 	// Verify tables are added
 	if len(tm.nameToTable) != 2 {
@@ -572,7 +625,8 @@ func TestTableManager_ValidateIntegrity(t *testing.T) {
 			setupFunc: func() *TableManager {
 				tm := NewTableManager()
 				dbFile := newMockDbFile(1, []types.Type{types.IntType}, []string{"id"})
-				tm.AddTable(dbFile, "table1", "id")
+				s := createTestSchema(dbFile.GetID(), "table1", dbFile.GetTupleDesc(), "id")
+				tm.AddTable(dbFile, s)
 				return tm
 			},
 			expectedError: false,
@@ -583,8 +637,10 @@ func TestTableManager_ValidateIntegrity(t *testing.T) {
 				tm := NewTableManager()
 				dbFile1 := newMockDbFile(1, []types.Type{types.IntType}, []string{"id"})
 				dbFile2 := newMockDbFile(2, []types.Type{types.StringType}, []string{"name"})
-				tm.AddTable(dbFile1, "table1", "id")
-				tm.AddTable(dbFile2, "table2", "name")
+				s1 := createTestSchema(dbFile1.GetID(), "table1", dbFile1.GetTupleDesc(), "id")
+				tm.AddTable(dbFile1, s1)
+				s2 := createTestSchema(dbFile2.GetID(), "table2", dbFile2.GetTupleDesc(), "name")
+				tm.AddTable(dbFile2, s2)
 				return tm
 			},
 			expectedError: false,
@@ -594,7 +650,8 @@ func TestTableManager_ValidateIntegrity(t *testing.T) {
 			setupFunc: func() *TableManager {
 				tm := NewTableManager()
 				dbFile := newMockDbFile(1, []types.Type{types.IntType}, []string{"id"})
-				tm.AddTable(dbFile, "table1", "id")
+				s := createTestSchema(dbFile.GetID(), "table1", dbFile.GetTupleDesc(), "id")
+				tm.AddTable(dbFile, s)
 				// Manually corrupt the maps to create size mismatch
 				delete(tm.idToTable, 1)
 				return tm
@@ -646,7 +703,8 @@ func TestTableManager_GetAllTableNames(t *testing.T) {
 			setupFunc: func() *TableManager {
 				tm := NewTableManager()
 				dbFile := newMockDbFile(1, []types.Type{types.IntType}, []string{"id"})
-				tm.AddTable(dbFile, "users", "id")
+				s := createTestSchema(dbFile.GetID(), "users", dbFile.GetTupleDesc(), "id")
+				tm.AddTable(dbFile, s)
 				return tm
 			},
 			expectedNames: []string{"users"},
@@ -658,9 +716,12 @@ func TestTableManager_GetAllTableNames(t *testing.T) {
 				dbFile1 := newMockDbFile(1, []types.Type{types.IntType}, []string{"id"})
 				dbFile2 := newMockDbFile(2, []types.Type{types.StringType}, []string{"name"})
 				dbFile3 := newMockDbFile(3, []types.Type{types.IntType}, []string{"age"})
-				tm.AddTable(dbFile1, "users", "id")
-				tm.AddTable(dbFile2, "products", "name")
-				tm.AddTable(dbFile3, "orders", "age")
+				s1 := createTestSchema(dbFile1.GetID(), "users", dbFile1.GetTupleDesc(), "id")
+				tm.AddTable(dbFile1, s1)
+				s2 := createTestSchema(dbFile2.GetID(), "products", dbFile2.GetTupleDesc(), "name")
+				tm.AddTable(dbFile2, s2)
+				s3 := createTestSchema(dbFile3.GetID(), "orders", dbFile3.GetTupleDesc(), "age")
+				tm.AddTable(dbFile3, s3)
 				return tm
 			},
 			expectedNames: []string{"users", "products", "orders"},
@@ -712,7 +773,8 @@ func TestTableManager_ConcurrentOperations(t *testing.T) {
 
 				// Add table
 				dbFile := newMockDbFile(tableID, []types.Type{types.IntType}, []string{"id"})
-				err := tm.AddTable(dbFile, tableName, "id")
+				s := createTestSchema(dbFile.GetID(), tableName, dbFile.GetTupleDesc(), "id")
+				err := tm.AddTable(dbFile, s)
 				if err != nil {
 					t.Errorf("Failed to add table %s: %v", tableName, err)
 					continue
@@ -762,7 +824,8 @@ func TestTableManager_TableExists(t *testing.T) {
 
 	// Add a table
 	dbFile := newMockDbFile(1, []types.Type{types.IntType}, []string{"id"})
-	err := tm.AddTable(dbFile, "users", "id")
+	s := createTestSchema(dbFile.GetID(), "users", dbFile.GetTupleDesc(), "id")
+	err := tm.AddTable(dbFile, s)
 	if err != nil {
 		t.Fatalf("Failed to add table: %v", err)
 	}
@@ -833,7 +896,8 @@ func TestTableManager_RenameTable(t *testing.T) {
 			setupFunc: func() *TableManager {
 				tm := NewTableManager()
 				dbFile := newMockDbFile(1, []types.Type{types.IntType}, []string{"id"})
-				tm.AddTable(dbFile, "old_table", "id")
+				s := createTestSchema(dbFile.GetID(), "old_table", dbFile.GetTupleDesc(), "id")
+				tm.AddTable(dbFile, s)
 				return tm
 			},
 			oldName:       "old_table",
@@ -855,7 +919,8 @@ func TestTableManager_RenameTable(t *testing.T) {
 			setupFunc: func() *TableManager {
 				tm := NewTableManager()
 				dbFile := newMockDbFile(1, []types.Type{types.IntType}, []string{"id"})
-				tm.AddTable(dbFile, "old_table", "id")
+				s := createTestSchema(dbFile.GetID(), "old_table", dbFile.GetTupleDesc(), "id")
+				tm.AddTable(dbFile, s)
 				return tm
 			},
 			oldName:       "old_table",
@@ -868,7 +933,8 @@ func TestTableManager_RenameTable(t *testing.T) {
 			setupFunc: func() *TableManager {
 				tm := NewTableManager()
 				dbFile := newMockDbFile(1, []types.Type{types.IntType}, []string{"id"})
-				tm.AddTable(dbFile, "old_table", "id")
+				s := createTestSchema(dbFile.GetID(), "old_table", dbFile.GetTupleDesc(), "id")
+				tm.AddTable(dbFile, s)
 				return tm
 			},
 			oldName:       "old_table",
@@ -881,7 +947,8 @@ func TestTableManager_RenameTable(t *testing.T) {
 			setupFunc: func() *TableManager {
 				tm := NewTableManager()
 				dbFile := newMockDbFile(1, []types.Type{types.IntType}, []string{"id"})
-				tm.AddTable(dbFile, "old_table", "id")
+				s := createTestSchema(dbFile.GetID(), "old_table", dbFile.GetTupleDesc(), "id")
+				tm.AddTable(dbFile, s)
 				return tm
 			},
 			oldName:       "old_table",
@@ -905,8 +972,10 @@ func TestTableManager_RenameTable(t *testing.T) {
 				tm := NewTableManager()
 				dbFile1 := newMockDbFile(1, []types.Type{types.IntType}, []string{"id"})
 				dbFile2 := newMockDbFile(2, []types.Type{types.StringType}, []string{"name"})
-				tm.AddTable(dbFile1, "table1", "id")
-				tm.AddTable(dbFile2, "table2", "name")
+				s1 := createTestSchema(dbFile1.GetID(), "table1", dbFile1.GetTupleDesc(), "id")
+				tm.AddTable(dbFile1, s1)
+				s2 := createTestSchema(dbFile2.GetID(), "table2", dbFile2.GetTupleDesc(), "name")
+				tm.AddTable(dbFile2, s2)
 				return tm
 			},
 			oldName:       "table1",
@@ -954,8 +1023,8 @@ func TestTableManager_RenameTable(t *testing.T) {
 				return
 			}
 
-			if tableInfo.Name != tt.newName {
-				t.Errorf("Table info name should be updated to %s, got %s", tt.newName, tableInfo.Name)
+			if tableInfo.Schema.TableName != tt.newName {
+				t.Errorf("Table info name should be updated to %s, got %s", tt.newName, tableInfo.Schema.TableName)
 			}
 
 			// Verify ID mapping is still correct
@@ -979,8 +1048,10 @@ func TestTableManager_RenameTable_IntegrityPreserved(t *testing.T) {
 	// Add multiple tables
 	dbFile1 := newMockDbFile(1, []types.Type{types.IntType}, []string{"id"})
 	dbFile2 := newMockDbFile(2, []types.Type{types.StringType}, []string{"name"})
-	tm.AddTable(dbFile1, "users", "id")
-	tm.AddTable(dbFile2, "products", "name")
+	s1 := createTestSchema(dbFile1.GetID(), "users", dbFile1.GetTupleDesc(), "id")
+	tm.AddTable(dbFile1, s1)
+	s2 := createTestSchema(dbFile2.GetID(), "products", dbFile2.GetTupleDesc(), "name")
+	tm.AddTable(dbFile2, s2)
 
 	// Rename one table
 	err := tm.RenameTable("users", "customers")
@@ -1019,7 +1090,8 @@ func TestTableManager_TableExists_ConcurrentAccess(t *testing.T) {
 
 	// Add a table
 	dbFile := newMockDbFile(1, []types.Type{types.IntType}, []string{"id"})
-	err := tm.AddTable(dbFile, "concurrent_test", "id")
+	s := createTestSchema(dbFile.GetID(), "concurrent_test", dbFile.GetTupleDesc(), "id")
+	err := tm.AddTable(dbFile, s)
 	if err != nil {
 		t.Fatalf("Failed to add table: %v", err)
 	}
@@ -1085,7 +1157,8 @@ func TestTableManager_HighVolumeConcurrentOperations(t *testing.T) {
 				tableID := goroutineID*numOperationsPerGoroutine + j + 1
 				dbFile := newMockDbFile(tableID, []types.Type{types.IntType}, []string{"id"})
 
-				if err := tm.AddTable(dbFile, tableName, "id"); err != nil {
+				s := createTestSchema(dbFile.GetID(), tableName, dbFile.GetTupleDesc(), "id")
+				if err := tm.AddTable(dbFile, s); err != nil {
 					atomic.AddInt32(&addErrors, 1)
 				}
 			}
@@ -1138,7 +1211,9 @@ func TestTableManager_ConcurrentRenameOperations(t *testing.T) {
 	// Add initial tables
 	for i := 0; i < numTables; i++ {
 		dbFile := newMockDbFile(i+1, []types.Type{types.IntType}, []string{"id"})
-		err := tm.AddTable(dbFile, fmt.Sprintf("table_%d", i), "id")
+		tableName := fmt.Sprintf("table_%d", i)
+		s := createTestSchema(dbFile.GetID(), tableName, dbFile.GetTupleDesc(), "id")
+		err := tm.AddTable(dbFile, s)
 		if err != nil {
 			t.Fatalf("Failed to add initial table %d: %v", i, err)
 		}
@@ -1193,7 +1268,8 @@ func TestTableManager_MemoryPressureScenario(t *testing.T) {
 		dbFile := newMockDbFile(i+1, []types.Type{types.IntType, types.StringType, types.FloatType},
 			[]string{"id", "name", "value"})
 
-		err := tm.AddTable(dbFile, tableName, "id")
+		s := createTestSchema(dbFile.GetID(), tableName, dbFile.GetTupleDesc(), "id")
+		err := tm.AddTable(dbFile, s)
 		if err != nil {
 			t.Fatalf("Failed to add table %d: %v", i, err)
 		}
@@ -1260,7 +1336,8 @@ func TestTableManager_ErrorHandlingDuringFileOperations(t *testing.T) {
 		closeError: true,
 	}
 
-	err := tm.AddTable(errorFile, "error_table", "id")
+	s := createTestSchema(errorFile.GetID(), "error_table", errorFile.GetTupleDesc(), "id")
+	err := tm.AddTable(errorFile, s)
 	if err != nil {
 		t.Fatalf("Failed to add table with error file: %v", err)
 	}
@@ -1282,7 +1359,8 @@ func TestTableManager_ErrorHandlingDuringFileOperations(t *testing.T) {
 		closeError: true,
 	}
 
-	tm.AddTable(errorFile2, "error_table2", "id")
+	s2 := createTestSchema(errorFile2.GetID(), "error_table2", errorFile2.GetTupleDesc(), "id")
+	tm.AddTable(errorFile2, s2)
 	tm.Clear() // Should handle close errors gracefully
 
 	if len(tm.GetAllTableNames()) != 0 {
@@ -1298,7 +1376,8 @@ func TestTableManager_PropertyBasedScenarios(t *testing.T) {
 		dbFile := newMockDbFile(i+1, []types.Type{types.IntType}, []string{"id"})
 
 		// Add then immediately remove
-		err := tm.AddTable(dbFile, tableName, "id")
+		s := createTestSchema(dbFile.GetID(), tableName, dbFile.GetTupleDesc(), "id")
+		err := tm.AddTable(dbFile, s)
 		if err != nil {
 			t.Fatalf("Failed to add table: %v", err)
 		}
@@ -1323,7 +1402,8 @@ func TestTableManager_RenameTablePreservesReferences(t *testing.T) {
 	tm := NewTableManager()
 	dbFile := newMockDbFile(42, []types.Type{types.IntType, types.StringType}, []string{"id", "name"})
 
-	err := tm.AddTable(dbFile, "original", "id")
+	s := createTestSchema(dbFile.GetID(), "original", dbFile.GetTupleDesc(), "id")
+	err := tm.AddTable(dbFile, s)
 	if err != nil {
 		t.Fatalf("Failed to add table: %v", err)
 	}
@@ -1392,7 +1472,8 @@ func TestTableManager_ConcurrentAddRemoveCycles(t *testing.T) {
 
 				// Add table
 				dbFile := newMockDbFile(tableID, []types.Type{types.IntType}, []string{"id"})
-				err := tm.AddTable(dbFile, tableName, "id")
+				s := createTestSchema(dbFile.GetID(), tableName, dbFile.GetTupleDesc(), "id")
+				err := tm.AddTable(dbFile, s)
 				if err != nil {
 					t.Errorf("Failed to add table %s: %v", tableName, err)
 					continue
@@ -1447,7 +1528,8 @@ func TestTableManager_StressTestWithRandomOperations(t *testing.T) {
 				tableCounter++
 				dbFile := newMockDbFile(tableCounter, []types.Type{types.IntType}, []string{"id"})
 
-				err := tm.AddTable(dbFile, tableName, "id")
+				s := createTestSchema(dbFile.GetID(), tableName, dbFile.GetTupleDesc(), "id")
+				err := tm.AddTable(dbFile, s)
 				if err == nil {
 					tableNames[tableName] = true
 				}
@@ -1503,7 +1585,8 @@ func TestTableManager_ExtremeEdgeCases(t *testing.T) {
 		}
 
 		dbFile := newMockDbFile(1, []types.Type{types.IntType}, []string{"id"})
-		err := tm.AddTable(dbFile, longName, "id")
+		s := createTestSchema(dbFile.GetID(), longName, dbFile.GetTupleDesc(), "id")
+		err := tm.AddTable(dbFile, s)
 		if err != nil {
 			t.Fatalf("Failed to add table with long name: %v", err)
 		}
@@ -1522,7 +1605,8 @@ func TestTableManager_ExtremeEdgeCases(t *testing.T) {
 			tableName := fmt.Sprintf("%s%d", basePrefix, i)
 			dbFile := newMockDbFile(i+1, []types.Type{types.IntType}, []string{"id"})
 
-			err := tm.AddTable(dbFile, tableName, "id")
+			s := createTestSchema(dbFile.GetID(), tableName, dbFile.GetTupleDesc(), "id")
+			err := tm.AddTable(dbFile, s)
 			if err != nil {
 				t.Fatalf("Failed to add table %s: %v", tableName, err)
 			}
@@ -1548,7 +1632,8 @@ func TestTableManager_ExtremeEdgeCases(t *testing.T) {
 
 		// Test RenameTable with same name
 		dbFile := newMockDbFile(1, []types.Type{types.IntType}, []string{"id"})
-		tm.AddTable(dbFile, "test", "id")
+		s := createTestSchema(dbFile.GetID(), "test", dbFile.GetTupleDesc(), "id")
+		tm.AddTable(dbFile, s)
 
 		err = tm.RenameTable("test", "test")
 		if err == nil {
@@ -1591,7 +1676,8 @@ func TestTableManager_RaceConditionDetection(t *testing.T) {
 					tableCounter++
 
 					dbFile := newMockDbFile(tableID, []types.Type{types.IntType}, []string{"id"})
-					tm.AddTable(dbFile, tableName, "id")
+					s := createTestSchema(dbFile.GetID(), tableName, dbFile.GetTupleDesc(), "id")
+					tm.AddTable(dbFile, s)
 					tm.TableExists(tableName)
 					tm.GetAllTableNames()
 					tm.RemoveTable(tableName)
@@ -1621,7 +1707,8 @@ func TestTableManager_DeepRecursiveOperations(t *testing.T) {
 		tableName := fmt.Sprintf("deep_table_%d", i)
 		dbFile := newMockDbFile(i+1, []types.Type{types.IntType}, []string{"id"})
 
-		err := tm.AddTable(dbFile, tableName, "id")
+		s := createTestSchema(dbFile.GetID(), tableName, dbFile.GetTupleDesc(), "id")
+		err := tm.AddTable(dbFile, s)
 		if err != nil {
 			t.Fatalf("Failed at depth %d: %v", i, err)
 		}
@@ -1661,7 +1748,8 @@ func BenchmarkTableManager_AddTable(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		tableName := fmt.Sprintf("bench_table_%d", i)
 		dbFile := newMockDbFile(i+1, []types.Type{types.IntType}, []string{"id"})
-		tm.AddTable(dbFile, tableName, "id")
+		s := createTestSchema(dbFile.GetID(), tableName, dbFile.GetTupleDesc(), "id")
+		tm.AddTable(dbFile, s)
 	}
 }
 
@@ -1673,7 +1761,8 @@ func BenchmarkTableManager_GetTableID(b *testing.B) {
 	for i := 0; i < numTables; i++ {
 		tableName := fmt.Sprintf("bench_table_%d", i)
 		dbFile := newMockDbFile(i+1, []types.Type{types.IntType}, []string{"id"})
-		tm.AddTable(dbFile, tableName, "id")
+		s := createTestSchema(dbFile.GetID(), tableName, dbFile.GetTupleDesc(), "id")
+		tm.AddTable(dbFile, s)
 	}
 
 	b.ResetTimer()
@@ -1691,7 +1780,8 @@ func BenchmarkTableManager_TableExists(b *testing.B) {
 	for i := 0; i < numTables; i++ {
 		tableName := fmt.Sprintf("bench_table_%d", i)
 		dbFile := newMockDbFile(i+1, []types.Type{types.IntType}, []string{"id"})
-		tm.AddTable(dbFile, tableName, "id")
+		s := createTestSchema(dbFile.GetID(), tableName, dbFile.GetTupleDesc(), "id")
+		tm.AddTable(dbFile, s)
 	}
 
 	b.ResetTimer()
@@ -1709,7 +1799,8 @@ func BenchmarkTableManager_GetAllTableNames(b *testing.B) {
 	for i := 0; i < numTables; i++ {
 		tableName := fmt.Sprintf("bench_table_%d", i)
 		dbFile := newMockDbFile(i+1, []types.Type{types.IntType}, []string{"id"})
-		tm.AddTable(dbFile, tableName, "id")
+		s := createTestSchema(dbFile.GetID(), tableName, dbFile.GetTupleDesc(), "id")
+		tm.AddTable(dbFile, s)
 	}
 
 	b.ResetTimer()
@@ -1726,7 +1817,8 @@ func BenchmarkTableManager_ConcurrentAccess(b *testing.B) {
 	for i := 0; i < numTables; i++ {
 		tableName := fmt.Sprintf("bench_table_%d", i)
 		dbFile := newMockDbFile(i+1, []types.Type{types.IntType}, []string{"id"})
-		tm.AddTable(dbFile, tableName, "id")
+		s := createTestSchema(dbFile.GetID(), tableName, dbFile.GetTupleDesc(), "id")
+		tm.AddTable(dbFile, s)
 	}
 
 	b.ResetTimer()
@@ -1748,7 +1840,8 @@ func BenchmarkTableManager_ValidateIntegrity(b *testing.B) {
 	for i := 0; i < numTables; i++ {
 		tableName := fmt.Sprintf("bench_table_%d", i)
 		dbFile := newMockDbFile(i+1, []types.Type{types.IntType}, []string{"id"})
-		tm.AddTable(dbFile, tableName, "id")
+		s := createTestSchema(dbFile.GetID(), tableName, dbFile.GetTupleDesc(), "id")
+		tm.AddTable(dbFile, s)
 	}
 
 	b.ResetTimer()
