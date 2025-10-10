@@ -582,7 +582,7 @@ func TestInsertPlan_validateValueCount(t *testing.T) {
 		&types.Float64Field{Value: 99.99},
 	}
 
-	err = validateValueCount(values, tupleDesc, nil)
+	err = validateValueCount(values, tupleDesc, nil, nil)
 	if err != nil {
 		t.Errorf("validateValueCount failed: %v", err)
 	}
@@ -593,7 +593,7 @@ func TestInsertPlan_validateValueCount(t *testing.T) {
 		types.NewStringField("John", types.StringMaxSize),
 	}
 
-	err = validateValueCount(values2, tupleDesc, fieldMapping)
+	err = validateValueCount(values2, tupleDesc, fieldMapping, nil)
 	if err != nil {
 		t.Errorf("validateValueCount with field mapping failed: %v", err)
 	}
