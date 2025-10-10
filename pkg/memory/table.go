@@ -50,10 +50,14 @@ func NewTableManager() *TableManager {
 // AddTable adds a new table to the catalog with the specified database file, name, and schema.
 // If a table with the same name or ID already exists, it will be replaced.
 func (tm *TableManager) AddTable(f page.DbFile, schema *schema.Schema) error {
-	name := schema.TableName
 	if f == nil {
 		return fmt.Errorf("file cannot be nil")
 	}
+	if schema == nil {
+		return fmt.Errorf("schema cannot be nil")
+	}
+
+	name := schema.TableName
 	if name == "" {
 		return fmt.Errorf("table name cannot be empty")
 	}
