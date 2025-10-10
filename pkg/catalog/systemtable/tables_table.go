@@ -44,3 +44,12 @@ func (tt *TablesTable) FileName() string {
 func (tt *TablesTable) PrimaryKey() string {
 	return "table_id"
 }
+
+func (tt *TablesTable) CreateTuple(tableID int, tableName, filePath, primaryKey string) *tuple.Tuple {
+	t := tuple.NewTuple(tt.Schema())
+	t.SetField(0, types.NewIntField(int64(tableID)))
+	t.SetField(1, types.NewStringField(tableName, types.StringMaxSize))
+	t.SetField(2, types.NewStringField(filePath, types.StringMaxSize))
+	t.SetField(3, types.NewStringField(primaryKey, types.StringMaxSize))
+	return t
+}

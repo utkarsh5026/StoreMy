@@ -49,3 +49,15 @@ func (ct *ColumnsTable) FileName() string {
 func (ct *ColumnsTable) PrimaryKey() string {
 	return ""
 }
+
+func (ct *ColumnsTable) CreateTuple(tableID int64, colName string, colType types.Type, position int64, isPrimary bool, isAutoInc bool) *tuple.Tuple {
+	t := tuple.NewTuple(ct.Schema())
+	t.SetField(0, types.NewIntField(tableID))
+	t.SetField(1, types.NewStringField(colName, types.StringMaxSize))
+	t.SetField(2, types.NewIntField(int64(colType)))
+	t.SetField(3, types.NewIntField(position))
+	t.SetField(4, types.NewBoolField(isPrimary))
+	t.SetField(5, types.NewBoolField(isAutoInc))
+	t.SetField(6, types.NewIntField(1)) // Start auto-increment at 1
+	return t
+}
