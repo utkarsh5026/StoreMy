@@ -30,7 +30,7 @@ func NewSeqScan(tid *primitives.TransactionID, tableID int, tm *memory.TableMana
 		return nil, fmt.Errorf("tm cannot be nil")
 	}
 
-	tupleDesc, err := tm.GetTupleDesc(tableID)
+	info, err := tm.GetTableInfo(tableID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get tuple desc for table %d: %v", tableID, err)
 	}
@@ -38,7 +38,7 @@ func NewSeqScan(tid *primitives.TransactionID, tableID int, tm *memory.TableMana
 	ss := &SequentialScan{
 		tid:          tid,
 		tableID:      tableID,
-		tupleDesc:    tupleDesc,
+		tupleDesc:    info.Schema.TupleDesc,
 		tableManager: tm,
 	}
 
@@ -54,12 +54,12 @@ func NewSeqScan(tid *primitives.TransactionID, tableID int, tm *memory.TableMana
 //
 // Returns an error if the database file cannot be accessed or the iterator fails to open.
 func (ss *SequentialScan) Open() error {
-	dbFile, err := ss.tableManager.GetDbFile(ss.tableID)
+	info, err := ss.tableManager.GetTableInfo(ss.tableID)
 	if err != nil {
 		return fmt.Errorf("failed to get db file for table %d: %v", ss.tableID, err)
 	}
 
-	ss.fileIter = dbFile.Iterator(ss.tid)
+	ss.fileIter = info.File.Iterator(ss.tid)
 	if ss.fileIter == nil {
 		return fmt.Errorf("failed to create file iterator")
 	}
