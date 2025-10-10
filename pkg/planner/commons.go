@@ -17,28 +17,28 @@ type tableMetadata struct {
 
 // resolveTableMetadata retrieves table ID and schema in a single operation.
 // This is the primary table lookup method used by all planner components.
-func resolveTableMetadata(tableName string, ctx DbContext) (*tableMetadata, error) {
-	tm := ctx.TableManager()
-	tableID, err := tm.GetTableID(tableName)
+func resolveTableMetadata(tableName string, tid TID, ctx DbContext) (*tableMetadata, error) {
+	catalogMgr := ctx.CatalogManager()
+	tableID, err := catalogMgr.GetTableID(tid, tableName)
 	if err != nil {
 		return nil, fmt.Errorf("table %s not found", tableName)
 	}
 
-	info, err := tm.GetTableInfo(tableID)
+	tupleDesc, err := catalogMgr.GetTableSchema(tid, tableID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get schema for table %s: %v", tableName, err)
 	}
 
 	return &tableMetadata{
 		TableID:   tableID,
-		TupleDesc: info.Schema.TupleDesc,
+		TupleDesc: tupleDesc,
 	}, nil
 }
 
 // resolveTableID converts a table name to its internal numeric identifier.
 // Convenience wrapper around resolveTableMetadata when only the ID is needed.
-func resolveTableID(tableName string, ctx DbContext) (int, error) {
-	md, err := resolveTableMetadata(tableName, ctx)
+func resolveTableID(tableName string, tid TID, ctx DbContext) (int, error) {
+	md, err := resolveTableMetadata(tableName, tid, ctx)
 	if err != nil {
 		return -1, err
 	}
@@ -66,7 +66,7 @@ func collectAllTuples(it DbIterator) ([]*tuple.Tuple, error) {
 //  2. Filter (optional) - applies WHERE predicates
 func buildScanWithFilter(tid TID, tableID int, whereClause *plan.FilterNode, ctx DbContext,
 ) (DbIterator, error) {
-	scanOp, err := query.NewSeqScan(tid, tableID, ctx.TableManager())
+	scanOp, err := query.NewSeqScan(tid, tableID, ctx.CatalogManager())
 	if err != nil {
 		return nil, fmt.Errorf("failed to create table scan: %v", err)
 	}
