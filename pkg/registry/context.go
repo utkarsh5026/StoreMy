@@ -10,18 +10,16 @@ import (
 // DatabaseContext holds all shared components that are needed across the database system.
 // This provides a single source of truth and avoids passing multiple dependencies everywhere.
 type DatabaseContext struct {
-	tableManager *memory.TableManager
-	pageStore    *memory.PageStore
-	catalog      *catalog.SystemCatalog
-	catalogMgr   *catalog.CatalogManager
-	txRegistry   *transaction.TransactionRegistry
-	wal          *log.WAL
-	dataDir      string
+	pageStore  *memory.PageStore
+	catalog    *catalog.SystemCatalog
+	catalogMgr *catalog.CatalogManager
+	txRegistry *transaction.TransactionRegistry
+	wal        *log.WAL
+	dataDir    string
 }
 
 // NewDatabaseContext creates a new database context with all required components
 func NewDatabaseContext(
-	tableManager *memory.TableManager,
 	pageStore *memory.PageStore,
 	catalog *catalog.SystemCatalog,
 	catalogMgr *catalog.CatalogManager,
@@ -29,18 +27,13 @@ func NewDatabaseContext(
 	dataDir string,
 ) *DatabaseContext {
 	return &DatabaseContext{
-		tableManager: tableManager,
-		pageStore:    pageStore,
-		catalog:      catalog,
-		catalogMgr:   catalogMgr,
-		txRegistry:   transaction.NewTransactionRegistry(wal),
-		wal:          wal,
-		dataDir:      dataDir,
+		pageStore:  pageStore,
+		catalog:    catalog,
+		catalogMgr: catalogMgr,
+		txRegistry: transaction.NewTransactionRegistry(wal),
+		wal:        wal,
+		dataDir:    dataDir,
 	}
-}
-
-func (ctx *DatabaseContext) TableManager() *memory.TableManager {
-	return ctx.tableManager
 }
 
 func (ctx *DatabaseContext) PageStore() *memory.PageStore {
