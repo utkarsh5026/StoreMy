@@ -146,16 +146,18 @@ func (hj *HashJoin) setupMatches(leftTuple *tuple.Tuple, matches []*tuple.Tuple)
 //
 // The hash table maps string join keys to slices of tuples, allowing for
 // duplicate keys (multiple tuples with the same join key value).
-func (hj *HashJoin) buildHashTable() error {
-	rightFieldIndex := hj.predicate.GetField2()
-	rightTuples, err := iterator.LoadAllTuples(hj.rightChild)
+func (h *HashJoin) buildHashTable() error {
+	rightFieldIndex := h.predicate.GetField2()
+	rightTuples, err := iterator.Map(h.rightChild, func(t *tuple.Tuple) (*tuple.Tuple, error) {
+		return t, nil
+	})
 
 	if err != nil {
 		return err
 	}
 
 	for _, rightTuple := range rightTuples {
-		if err := hj.addToHashTable(rightTuple, rightFieldIndex); err != nil {
+		if err := h.addToHashTable(rightTuple, rightFieldIndex); err != nil {
 			continue
 		}
 	}

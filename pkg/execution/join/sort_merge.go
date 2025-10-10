@@ -235,7 +235,9 @@ func (s *SortMergeJoin) processEqualKeys() error {
 
 // LoadAndSort loads all tuples from an iterator and sorts by field index.
 func loadAndSort(iter iterator.DbIterator, fieldIndex int) ([]*tuple.Tuple, error) {
-	tuples, err := iterator.LoadAllTuples(iter)
+	tuples, err := iterator.Map(iter, func(t *tuple.Tuple) (*tuple.Tuple, error) {
+		return t, nil
+	})
 	if err != nil {
 		return nil, err
 	}
