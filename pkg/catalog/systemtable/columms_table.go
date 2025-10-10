@@ -75,12 +75,25 @@ func (ct *ColumnsTable) CreateTuple(tableID int64, colName string, colType types
 	return t
 }
 
-func (ct *ColumnsTable) Parse(t *tuple.Tuple) (*ColumnInfo, error) {
-	if t.TupleDesc.NumFields() != 7 {
-		return nil, fmt.Errorf("invalid tuple: expected 7 fields, got %d", t.TupleDesc.NumFields())
+func (ct *ColumnsTable) GetTableID(t *tuple.Tuple) (int, error) {
+	if t.TupleDesc.NumFields() != 9 {
+		return 0, fmt.Errorf("invalid tuple: expected 9 fields, got %d", t.TupleDesc.NumFields())
 	}
 
 	tableID := getIntField(t, 0)
+	if tableID <= 0 {
+		return 0, fmt.Errorf("invalid table_id %d: must be positive", tableID)
+	}
+
+	return tableID, nil
+}
+
+func (ct *ColumnsTable) Parse(t *tuple.Tuple) (*ColumnInfo, error) {
+	tableID, err := ct.GetTableID(t)
+	if err != nil {
+		return nil, err
+	}
+
 	name := getStringField(t, 1)
 	typeID := getIntField(t, 2)
 	position := getIntField(t, 3)
