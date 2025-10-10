@@ -95,7 +95,7 @@ func (p *SelectPlan) buildScanOperator() (DbIterator, error) {
 	}
 
 	firstTable := tables[0]
-	metadata, err := resolveTableMetadata(firstTable.TableName, p.ctx)
+	metadata, err := resolveTableMetadata(firstTable.TableName, p.tx.ID, p.ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -208,12 +208,12 @@ func (p *SelectPlan) applyJoinsIfNeeded(input DbIterator) (DbIterator, error) {
 // Each join's right side is a fresh scan of a table (no filter optimization currently).
 func (p *SelectPlan) buildJoinRightSide(joinNode *plan.JoinNode) (DbIterator, error) {
 	table := joinNode.RightTable
-	md, err := resolveTableMetadata(table.TableName, p.ctx)
+	md, err := resolveTableMetadata(table.TableName, p.tx.ID, p.ctx)
 	if err != nil {
 		return nil, err
 	}
 
-	scanOp, err := query.NewSeqScan(p.tx.ID, md.TableID, p.ctx.TableManager())
+	scanOp, err := query.NewSeqScan(p.tx.ID, md.TableID, p.ctx.CatalogManager())
 	if err != nil {
 		return nil, fmt.Errorf("failed to create scan for table %s: %w", table.TableName, err)
 	}
