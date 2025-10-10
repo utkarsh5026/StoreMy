@@ -53,15 +53,16 @@ func (sc *SystemCatalog) Initialize(ctx *transaction.TransactionContext, dataDir
 	}
 
 	for _, table := range systemTables {
+		sch := table.Schema()
 		f, err := heap.NewHeapFile(
 			filepath.Join(dataDir, table.FileName()),
-			table.Schema(),
+			sch.TupleDesc,
 		)
 		if err != nil {
 			return fmt.Errorf("failed to initialize %s: %w", table.TableName(), err)
 		}
 
-		if err := sc.tableManager.AddTable(f, table.TableName(), table.PrimaryKey()); err != nil {
+		if err := sc.tableManager.AddTable(f, sch); err != nil {
 			return fmt.Errorf("failed to register %s: %w", table.TableName(), err)
 		}
 
@@ -147,7 +148,7 @@ func (sc *SystemCatalog) LoadTables(tx *transaction.TransactionContext, dataDir 
 			return fmt.Errorf("failed to open heap file for %s: %w", table.TableName, err)
 		}
 
-		if err := sc.tableManager.AddTable(f, table.TableName, sch.PrimaryKey); err != nil {
+		if err := sc.tableManager.AddTable(f, sch); err != nil {
 			return fmt.Errorf("failed to add table %s: %w", table.TableName, err)
 		}
 
