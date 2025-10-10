@@ -447,15 +447,15 @@ func (p *PageStore) logOperation(operation OperationType, tid *primitives.Transa
 }
 
 func (p *PageStore) getDbFile(tableID int) (page.DbFile, error) {
-	dbFile, err := p.tableManager.GetDbFile(tableID)
+	info, err := p.tableManager.GetTableInfo(tableID)
 	if err != nil {
 		return nil, fmt.Errorf("table with ID %d not found: %v", tableID, err)
 	}
-	return dbFile, nil
+	return info.File, nil
 }
 
-// ensureTransactionBegun ensures that a transaction's BEGIN record has been logged to the WAL.
-// This is a helper method for tests to directly ensure a transaction has begun.
-func (p *PageStore) ensureTransactionBegun(ctx *transaction.TransactionContext) error {
-	return ctx.EnsureBegunInWAL(p.wal)
-}
+// // ensureTransactionBegun ensures that a transaction's BEGIN record has been logged to the WAL.
+// // This is a helper method for tests to directly ensure a transaction has begun.
+// func (p *PageStore) ensureTransactionBegun(ctx *transaction.TransactionContext) error {
+// 	return ctx.EnsureBegunInWAL(p.wal)
+// }
