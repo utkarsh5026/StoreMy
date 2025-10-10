@@ -39,17 +39,19 @@ type Schema struct {
 
 // NewSchema creates a new Schema from column metadata.
 func NewSchema(tableID int, tableName string, columns []ColumnMetadata) (*Schema, error) {
+	if tableID < 0 {
+		return nil, fmt.Errorf("invalid table_id %d: must be positive", tableID)
+	}
+
 	if len(columns) == 0 {
 		return nil, fmt.Errorf("schema must have at least one column")
 	}
 
-	// Sort columns by position
 	sortedCols := slices.Clone(columns)
 	slices.SortFunc(sortedCols, func(a, b ColumnMetadata) int {
 		return a.Position - b.Position
 	})
 
-	// Build TupleDescription
 	fieldTypes := make([]types.Type, len(sortedCols))
 	fieldNames := make([]string, len(sortedCols))
 	fieldNameToIndex := make(map[string]int, len(sortedCols))
