@@ -7,7 +7,7 @@ import (
 )
 
 func TestNewIntField(t *testing.T) {
-	value := int32(42)
+	value := int64(42)
 	field := NewIntField(value)
 
 	if field.Value != value {
@@ -34,7 +34,7 @@ func TestIntField_String(t *testing.T) {
 
 func TestIntField_Length(t *testing.T) {
 	field := NewIntField(42)
-	expected := uint32(4)
+	expected := uint32(8)
 
 	if field.Length() != expected {
 		t.Errorf("Expected length %d, got %d", expected, field.Length())
@@ -82,8 +82,8 @@ func TestIntField_Serialize(t *testing.T) {
 		t.Errorf("Unexpected error: %v", err)
 	}
 
-	if buf.Len() != 4 {
-		t.Errorf("Expected 4 bytes, got %d", buf.Len())
+	if buf.Len() != 8 {
+		t.Errorf("Expected 8 bytes, got %d", buf.Len())
 	}
 }
 

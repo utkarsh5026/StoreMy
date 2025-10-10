@@ -247,7 +247,7 @@ func TestFloat64Field_Compare_CrossType(t *testing.T) {
 		name     string
 		floatVal float64
 		op       primitives.Predicate
-		intVal   int32
+		intVal   int64
 		expected bool
 	}{
 		{"float equals int", 42.0, primitives.Equals, 42, true},

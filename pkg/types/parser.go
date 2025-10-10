@@ -57,7 +57,7 @@ func parseIntField(r io.Reader, maxSize uint32) (*IntField, error) {
 		return nil, err
 	}
 
-	value := int32(binary.BigEndian.Uint32(bytes))
+	value := int64(binary.BigEndian.Uint32(bytes))
 	return NewIntField(value), nil
 }
 

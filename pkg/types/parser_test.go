@@ -63,7 +63,7 @@ func TestParseField_StringField(t *testing.T) {
 }
 
 func TestParseField_RoundTrip_IntField(t *testing.T) {
-	tests := []int32{0, 42, -42, 2147483647, -2147483648}
+	tests := []int64{0, 42, -42, 2147483647, -2147483648}
 
 	for _, value := range tests {
 		original := NewIntField(value)
@@ -356,8 +356,8 @@ func TestParseField_RoundTrip_Float64Field(t *testing.T) {
 
 func TestParseFloat64Field_DirectFunction(t *testing.T) {
 	tests := []struct {
-		name     string
-		value    float64
+		name  string
+		value float64
 	}{
 		{"positive value", 42.5},
 		{"negative value", -42.5},
@@ -458,7 +458,7 @@ func TestParseField_EmptyReader_StringField(t *testing.T) {
 }
 
 func TestParseIntField_MaxValues(t *testing.T) {
-	tests := []int32{2147483647, -2147483648}
+	tests := []int64{2147483647, -2147483648}
 
 	for _, value := range tests {
 		original := NewIntField(value)
