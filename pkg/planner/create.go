@@ -3,7 +3,7 @@ package planner
 import (
 	"fmt"
 
-	"storemy/pkg/catalog"
+	"storemy/pkg/catalog/schema"
 	"storemy/pkg/parser/statements"
 )
 
@@ -38,10 +38,9 @@ func NewCreateTablePlan(
 //
 // Execution steps:
 //  1. Validates table doesn't already exist (respects IF NOT EXISTS clause)
-//  2. Transforms parsed field definitions into catalog metadata
-//  3. Generates heap file name based on table name
-//  4. Creates table entry in catalog with schema and primary key
-//  5. Initializes backing heap file in the data directory
+//  2. Transforms parsed field definitions into schema metadata
+//  3. Creates table entry in catalog with schema
+//  4. CatalogManager handles file path generation and persistence
 func (p *CreateTablePlan) Execute() (any, error) {
 	catalogMgr := p.ctx.CatalogManager()
 	if catalogMgr.TableExists(p.transactionCtx.ID, p.Statement.TableName) {
@@ -54,25 +53,12 @@ func (p *CreateTablePlan) Execute() (any, error) {
 		return nil, fmt.Errorf("table %s already exists", p.Statement.TableName)
 	}
 
-	fieldMetadata := make([]catalog.FieldMetadata, len(p.Statement.Fields))
-	for i, field := range p.Statement.Fields {
-		fieldMetadata[i] = catalog.FieldMetadata{
-			Name:      field.Name,
-			Type:      field.Type,
-			IsAutoInc: field.AutoIncrement,
-		}
+	tableSchema, err := p.makeTableSchema()
+	if err != nil {
+		return nil, err
 	}
 
-	filename := p.Statement.TableName + ".dat"
-
-	_, err := catalogMgr.CreateTable(
-		p.transactionCtx,
-		p.Statement.TableName,
-		filename,
-		p.Statement.PrimaryKey,
-		fieldMetadata,
-		p.ctx.DataDir(),
-	)
+	_, err = catalogMgr.CreateTable(p.transactionCtx, tableSchema)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create table: %v", err)
 	}
@@ -81,4 +67,26 @@ func (p *CreateTablePlan) Execute() (any, error) {
 		Success: true,
 		Message: fmt.Sprintf("Table %s created successfully", p.Statement.TableName),
 	}, nil
+}
+
+func (p *CreateTablePlan) makeTableSchema() (*schema.Schema, error) {
+	columns := make([]schema.ColumnMetadata, len(p.Statement.Fields))
+	for i, field := range p.Statement.Fields {
+		isPrimary := field.Name == p.Statement.PrimaryKey
+		columns[i] = schema.ColumnMetadata{
+			Name:      field.Name,
+			FieldType: field.Type,
+			Position:  i,
+			IsPrimary: isPrimary,
+			IsAutoInc: field.AutoIncrement,
+			TableID:   0, // Will be set by CatalogManager
+		}
+	}
+
+	tableSchema, err := schema.NewSchema(0, p.Statement.TableName, columns)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create schema: %v", err)
+	}
+	tableSchema.PrimaryKey = p.Statement.PrimaryKey
+	return tableSchema, nil
 }
