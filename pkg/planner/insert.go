@@ -3,6 +3,7 @@ package planner
 import (
 	"fmt"
 	"slices"
+	"storemy/pkg/catalog"
 	"storemy/pkg/parser/statements"
 	"storemy/pkg/tuple"
 	"storemy/pkg/types"
@@ -51,7 +52,13 @@ func (p *InsertPlan) Execute() (any, error) {
 		return nil, err
 	}
 
-	insertedCount, err := p.insertTuples(md.TableID, md.TupleDesc, mapping)
+	// Check for auto-increment column
+	autoIncInfo, err := p.ctx.CatalogManager().GetAutoIncrementColumn(p.transactionCtx.ID, md.TableID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get auto-increment info: %v", err)
+	}
+
+	insertedCount, err := p.insertTuples(md.TableID, md.TupleDesc, mapping, autoIncInfo)
 	if err != nil {
 		return nil, err
 	}
@@ -86,20 +93,29 @@ func (p *InsertPlan) createFieldMapping(td *tuple.TupleDescription) ([]int, erro
 // insertTuples processes each set of values in the INSERT statement, creating and
 // inserting tuples into the specified table. It validates value counts, creates
 // tuples according to the schema, and uses the page store for persistent storage.
-func (p *InsertPlan) insertTuples(tableID int, tupleDesc *tuple.TupleDescription, fieldMapping []int) (int, error) {
+func (p *InsertPlan) insertTuples(tableID int, tupleDesc *tuple.TupleDescription, fieldMapping []int, autoIncInfo *catalog.AutoIncrementInfo) (int, error) {
 	insertedCount := 0
 	for _, values := range p.statement.Values {
-		if err := validateValueCount(values, tupleDesc, fieldMapping); err != nil {
+		if err := validateValueCount(values, tupleDesc, fieldMapping, autoIncInfo); err != nil {
 			return 0, err
 		}
 
-		newTuple, err := createTuple(values, tupleDesc, fieldMapping)
+		newTuple, err := createTuple(values, tupleDesc, fieldMapping, autoIncInfo)
 		if err != nil {
 			return 0, err
 		}
 
 		if err := p.ctx.PageStore().InsertTuple(p.transactionCtx, tableID, newTuple); err != nil {
 			return 0, fmt.Errorf("failed to insert tuple: %v", err)
+		}
+
+		// Update auto-increment counter if column is auto-incremented
+		if autoIncInfo != nil {
+			newValue := autoIncInfo.NextValue + 1
+			if err := p.ctx.CatalogManager().IncrementAutoIncrementValue(p.transactionCtx, tableID, autoIncInfo.ColumnName, newValue); err != nil {
+				return 0, fmt.Errorf("failed to update auto-increment value: %v", err)
+			}
+			autoIncInfo.NextValue = newValue
 		}
 
 		insertedCount++
@@ -111,12 +127,17 @@ func (p *InsertPlan) insertTuples(tableID int, tupleDesc *tuple.TupleDescription
 // validateValueCount ensures that the number of values provided matches the expected
 // number of fields, either from the explicit field list or the complete table schema.
 // This prevents runtime errors during tuple creation.
-func validateValueCount(values []types.Field, tupleDesc *tuple.TupleDescription, fieldMapping []int) error {
+// If auto-increment column exists and is not in the field mapping, we expect one fewer value.
+func validateValueCount(values []types.Field, tupleDesc *tuple.TupleDescription, fieldMapping []int, autoIncInfo *catalog.AutoIncrementInfo) error {
 	var expected int
 	if fieldMapping != nil {
 		expected = len(fieldMapping)
 	} else {
 		expected = tupleDesc.NumFields()
+		// If no field mapping and auto-increment exists, user can omit auto-increment field
+		if autoIncInfo != nil {
+			expected--
+		}
 	}
 
 	if len(values) != expected {
@@ -129,25 +150,50 @@ func validateValueCount(values []types.Field, tupleDesc *tuple.TupleDescription,
 // createTuple constructs a new tuple from the provided values according to the table schema.
 // It handles both explicit field mappings (for partial inserts) and full row inserts.
 // For explicit mappings, it validates that all required fields are provided.
-func createTuple(values []types.Field, tupleDesc *tuple.TupleDescription, fieldMapping []int) (*tuple.Tuple, error) {
+// If auto-increment info is provided, it automatically fills the auto-increment column.
+func createTuple(values []types.Field, tupleDesc *tuple.TupleDescription, fieldMapping []int, autoIncInfo *catalog.AutoIncrementInfo) (*tuple.Tuple, error) {
 	newTuple := tuple.NewTuple(tupleDesc)
+
 	if fieldMapping != nil {
 		if err := setMappedFields(newTuple, values, fieldMapping); err != nil {
 			return nil, err
 		}
 
-		if err := validateAllFieldsSet(tupleDesc, fieldMapping); err != nil {
+		// Set auto-increment value if not provided in field mapping
+		if autoIncInfo != nil && !slices.Contains(fieldMapping, autoIncInfo.ColumnIndex) {
+			if err := newTuple.SetField(autoIncInfo.ColumnIndex, types.NewIntField(int64(autoIncInfo.NextValue))); err != nil {
+				return nil, fmt.Errorf("failed to set auto-increment field: %v", err)
+			}
+		}
+
+		if err := validateAllFieldsSet(tupleDesc, fieldMapping, autoIncInfo); err != nil {
 			return nil, err
 		}
 
 		return newTuple, nil
 	}
 
-	for i, value := range values {
-		if err := newTuple.SetField(i, value); err != nil {
+	// No field mapping - insert all values in order
+	valueIndex := 0
+	for i := 0; i < tupleDesc.NumFields(); i++ {
+		// Skip auto-increment column if present - it will be filled automatically
+		if autoIncInfo != nil && i == autoIncInfo.ColumnIndex {
+			if err := newTuple.SetField(i, types.NewIntField(int64(autoIncInfo.NextValue))); err != nil {
+				return nil, fmt.Errorf("failed to set auto-increment field: %v", err)
+			}
+			continue
+		}
+
+		if valueIndex >= len(values) {
+			return nil, fmt.Errorf("not enough values provided")
+		}
+
+		if err := newTuple.SetField(i, values[valueIndex]); err != nil {
 			return nil, fmt.Errorf("failed to set field: %v", err)
 		}
+		valueIndex++
 	}
+
 	return newTuple, nil
 }
 
@@ -164,8 +210,14 @@ func setMappedFields(tup *tuple.Tuple, values []types.Field, fieldMapping []int)
 
 // validateAllFieldsSet ensures all table fields have values when using explicit field mapping.
 // Prevents NULL values in fields not included in the INSERT field list.
-func validateAllFieldsSet(tupleDesc *tuple.TupleDescription, fieldMapping []int) error {
+// Auto-increment columns are exempt from this check as they are auto-filled.
+func validateAllFieldsSet(tupleDesc *tuple.TupleDescription, fieldMapping []int, autoIncInfo *catalog.AutoIncrementInfo) error {
 	for i := 0; i < tupleDesc.NumFields(); i++ {
+		// Skip auto-increment column - it's automatically filled
+		if autoIncInfo != nil && i == autoIncInfo.ColumnIndex {
+			continue
+		}
+
 		if !slices.Contains(fieldMapping, i) {
 			return fmt.Errorf("missing value for field index %d", i)
 		}
