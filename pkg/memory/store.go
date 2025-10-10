@@ -6,6 +6,7 @@ import (
 	"storemy/pkg/concurrency/transaction"
 	"storemy/pkg/log"
 	"storemy/pkg/primitives"
+	"storemy/pkg/storage/heap"
 	"storemy/pkg/storage/page"
 	"storemy/pkg/tuple"
 	"sync"
@@ -183,7 +184,7 @@ func (p *PageStore) performDataOperation(operation OperationType, ctx *transacti
 		modifiedPages, err = p.handleInsert(ctx, t, dbFile)
 
 	case DeleteOperation:
-		modifiedPages, err = p.handleDelete(ctx, t, dbFile)
+		modifiedPages, err = p.handleDelete(ctx, t)
 
 	default:
 		return fmt.Errorf("unsupported operation: %s", operation.String())
@@ -216,7 +217,7 @@ func (p *PageStore) handleInsert(ctx *transaction.TransactionContext, t *tuple.T
 	return modifiedPages, nil
 }
 
-func (p *PageStore) handleDelete(ctx *transaction.TransactionContext, t *tuple.Tuple, dbFile page.DbFile) ([]page.Page, error) {
+func (p *PageStore) handleDelete(ctx *transaction.TransactionContext, t *tuple.Tuple) ([]page.Page, error) {
 	pageID := t.RecordID.PageID
 	pg, err := p.GetPage(ctx, pageID, transaction.ReadWrite)
 	if err != nil {
@@ -227,12 +228,15 @@ func (p *PageStore) handleDelete(ctx *transaction.TransactionContext, t *tuple.T
 		return nil, err
 	}
 
-	modifiedPage, err := dbFile.DeleteTuple(ctx.ID, t)
-	if err != nil {
-		return nil, fmt.Errorf("failed to delete tuple: %v", err)
+	if heapPage, ok := pg.(*heap.HeapPage); ok {
+		if err := heapPage.DeleteTuple(t); err != nil {
+			return nil, fmt.Errorf("failed to delete tuple: %v", err)
+		}
+		heapPage.MarkDirty(true, ctx.ID)
+		return []page.Page{pg}, nil
 	}
 
-	return []page.Page{modifiedPage}, nil
+	return nil, fmt.Errorf("expecting the pageType to be of heapage")
 }
 
 // UpdateTuple replaces an existing tuple with a new version within the given transaction.
