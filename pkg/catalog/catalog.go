@@ -7,7 +7,6 @@ import (
 	"storemy/pkg/catalog/systemtable"
 	"storemy/pkg/concurrency/transaction"
 	"storemy/pkg/iterator"
-	"storemy/pkg/memory"
 	"storemy/pkg/primitives"
 	"storemy/pkg/storage/heap"
 	"storemy/pkg/tuple"
@@ -20,8 +19,8 @@ import (
 //   - CATALOG_COLUMNS: stores column metadata (table ID, name, type, position, is_primary)
 //   - CATALOG_STATISTICS: stores table statistics for query optimization
 type SystemCatalog struct {
-	store             *memory.PageStore
-	tableManager      *memory.TableManager
+	store             PageStoreInterface
+	cache             *tableCache
 	loader            *SchemaLoader
 	tablesTableID     int
 	columnsTableID    int
@@ -30,10 +29,10 @@ type SystemCatalog struct {
 
 // NewSystemCatalog creates a new system catalog instance.
 // The catalog must be initialized via Initialize() before use.
-func NewSystemCatalog(ps *memory.PageStore, tm *memory.TableManager) *SystemCatalog {
+func NewSystemCatalog(ps PageStoreInterface, cache *tableCache) *SystemCatalog {
 	sc := &SystemCatalog{
-		store:        ps,
-		tableManager: tm,
+		store: ps,
+		cache: cache,
 	}
 
 	sc.loader = NewSchemaLoader(0, sc.iterateTable)
@@ -62,7 +61,7 @@ func (sc *SystemCatalog) Initialize(ctx *transaction.TransactionContext, dataDir
 			return fmt.Errorf("failed to initialize %s: %w", table.TableName(), err)
 		}
 
-		if err := sc.tableManager.AddTable(f, sch); err != nil {
+		if err := sc.cache.addTable(f, sch); err != nil {
 			return fmt.Errorf("failed to register %s: %w", table.TableName(), err)
 		}
 
@@ -90,6 +89,10 @@ func (sc *SystemCatalog) setSystemTableID(tableName string, tableID int) {
 // and initializes statistics in CATALOG_STATISTICS.
 func (sc *SystemCatalog) RegisterTable(tx *transaction.TransactionContext, tableID int, tableName, filePath, primaryKey string, fields []FieldMetadata,
 ) error {
+	tablesFile, err := sc.cache.GetDbFile(sc.tablesTableID)
+	if err != nil {
+		return err
+	}
 	tm := systemtable.TableMetadata{
 		TableName:     tableName,
 		TableID:       tableID,
@@ -97,21 +100,22 @@ func (sc *SystemCatalog) RegisterTable(tx *transaction.TransactionContext, table
 		PrimaryKeyCol: primaryKey,
 	}
 	tup := systemtable.Tables.CreateTuple(tm)
-	if err := sc.store.InsertTuple(tx, sc.tablesTableID, tup); err != nil {
+	if err := sc.store.InsertTuple(tx, tablesFile, tup); err != nil {
 		return fmt.Errorf("failed to insert table metadata: %w", err)
 	}
 
+	colFile, err := sc.cache.GetDbFile(sc.columnsTableID)
+	if err != nil {
+		return err
+	}
+
 	for pos, f := range fields {
-		col := schema.ColumnMetadata{
-			TableID:   tableID,
-			Name:      f.Name,
-			FieldType: f.Type,
-			Position:  pos,
-			IsPrimary: f.Name == primaryKey,
-			IsAutoInc: f.IsAutoInc,
+		col, err := schema.NewColumnMetadata(f.Name, f.Type, pos, tableID, f.Name == primaryKey, f.IsAutoInc)
+		if err != nil {
+			return fmt.Errorf("error creating column metdata %v", err)
 		}
-		tup = systemtable.Columns.CreateTuple(col)
-		if err := sc.store.InsertTuple(tx, sc.columnsTableID, tup); err != nil {
+		tup = systemtable.Columns.CreateTuple(*col)
+		if err := sc.store.InsertTuple(tx, colFile, tup); err != nil {
 			return fmt.Errorf("failed to insert column metadata: %w", err)
 		}
 	}
@@ -148,7 +152,7 @@ func (sc *SystemCatalog) LoadTables(tx *transaction.TransactionContext, dataDir 
 			return fmt.Errorf("failed to open heap file for %s: %w", table.TableName, err)
 		}
 
-		if err := sc.tableManager.AddTable(f, sch); err != nil {
+		if err := sc.cache.addTable(f, sch); err != nil {
 			return fmt.Errorf("failed to add table %s: %w", table.TableName, err)
 		}
 
@@ -189,7 +193,7 @@ func (sc *SystemCatalog) GetTableID(tid *primitives.TransactionID, tableName str
 //
 // The processFunc can return an error to stop iteration early.
 func (sc *SystemCatalog) iterateTable(tableID int, tid *primitives.TransactionID, processFunc func(*tuple.Tuple) error) error {
-	file, err := sc.tableManager.GetDbFile(tableID)
+	file, err := sc.cache.GetDbFile(tableID)
 	if err != nil {
 		return fmt.Errorf("failed to get table file: %w", err)
 	}
@@ -270,7 +274,7 @@ func (sc *SystemCatalog) GetAutoIncrementColumn(tid *primitives.TransactionID, t
 
 // IncrementAutoIncrementValue updates the next auto-increment value for a column
 func (sc *SystemCatalog) IncrementAutoIncrementValue(tx *transaction.TransactionContext, tableID int, columnName string, newValue int) error {
-	file, err := sc.tableManager.GetDbFile(sc.columnsTableID)
+	file, err := sc.cache.GetDbFile(sc.columnsTableID)
 	if err != nil {
 		return fmt.Errorf("failed to get columns table: %w", err)
 	}
@@ -302,11 +306,11 @@ func (sc *SystemCatalog) IncrementAutoIncrementValue(tx *transaction.Transaction
 	newTuple := systemtable.Columns.CreateTuple(col)
 	newTuple.SetField(6, types.NewIntField(int64(newValue)))
 
-	if err := sc.store.DeleteTuple(tx, match.Tuple); err != nil {
+	if err := sc.store.DeleteTuple(tx, file, match.Tuple); err != nil {
 		return fmt.Errorf("failed to delete old tuple: %w", err)
 	}
 
-	if err := sc.store.InsertTuple(tx, sc.columnsTableID, newTuple); err != nil {
+	if err := sc.store.InsertTuple(tx, file, newTuple); err != nil {
 		return fmt.Errorf("failed to insert updated tuple: %w", err)
 	}
 
