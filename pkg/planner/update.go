@@ -44,7 +44,7 @@ func (p *UpdatePlan) Execute() (any, error) {
 		return nil, err
 	}
 
-	err = p.updateTuples(tuplesToUpdate, md.TupleDesc, updateMap)
+	err = p.updateTuples(tuplesToUpdate, updateMap)
 	if err != nil {
 		return nil, err
 	}
@@ -57,7 +57,6 @@ func (p *UpdatePlan) Execute() (any, error) {
 
 func (p *UpdatePlan) buildUpdateMap(tupleDesc *tuple.TupleDescription) (map[int]types.Field, error) {
 	updateMap := make(map[int]types.Field)
-
 	for _, cl := range p.statement.SetClauses {
 		i, err := findFieldIndex(cl.FieldName, tupleDesc)
 		if err != nil {
@@ -65,15 +64,14 @@ func (p *UpdatePlan) buildUpdateMap(tupleDesc *tuple.TupleDescription) (map[int]
 		}
 		updateMap[i] = cl.Value
 	}
-
 	return updateMap, nil
 }
 
 // updateTuples applies updates to all collected tuples
 // UPDATE is implemented as DELETE + INSERT at the storage layer
-func (p *UpdatePlan) updateTuples(tuples []*tuple.Tuple, tupleDesc *tuple.TupleDescription, updateMap map[int]types.Field) error {
+func (p *UpdatePlan) updateTuples(tuples []*tuple.Tuple, updateMap map[int]types.Field) error {
 	for _, old := range tuples {
-		newTup, err := buildUpdatedTuple(old, tupleDesc, updateMap)
+		newTup, err := old.WithUpdatedFields(updateMap)
 		if err != nil {
 			return err
 		}
@@ -83,28 +81,4 @@ func (p *UpdatePlan) updateTuples(tuples []*tuple.Tuple, tupleDesc *tuple.TupleD
 	}
 
 	return nil
-}
-
-func buildUpdatedTuple(old *tuple.Tuple, tupleDesc *tuple.TupleDescription, updateMap map[int]types.Field) (*tuple.Tuple, error) {
-	fieldCnt := tupleDesc.NumFields()
-	newTup := tuple.NewTuple(tupleDesc)
-
-	for i := range fieldCnt {
-		field, err := old.GetField(i)
-		if err != nil {
-			return nil, fmt.Errorf("failed to get field %d from old tuple: %w", i, err)
-		}
-
-		if err := newTup.SetField(i, field); err != nil {
-			return nil, fmt.Errorf("failed to copy field %d: %w", i, err)
-		}
-	}
-
-	for i, newValue := range updateMap {
-		if err := newTup.SetField(i, newValue); err != nil {
-			return nil, fmt.Errorf("failed to set updated field %d: %w", i, err)
-		}
-	}
-
-	return newTup, nil
 }

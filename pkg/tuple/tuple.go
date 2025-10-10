@@ -94,3 +94,39 @@ func (t *Tuple) copyFieldsTo(target *Tuple, startIndex int) error {
 	}
 	return nil
 }
+
+// Clone creates a deep copy of this tuple with all field values
+func (t *Tuple) Clone() (*Tuple, error) {
+	newTup := NewTuple(t.TupleDesc)
+
+	for i := range t.TupleDesc.NumFields() {
+		field, err := t.GetField(i)
+		if err != nil {
+			return nil, fmt.Errorf("failed to get field %d: %w", i, err)
+		}
+
+		if err := newTup.SetField(i, field); err != nil {
+			return nil, fmt.Errorf("failed to copy field %d: %w", i, err)
+		}
+	}
+
+	return newTup, nil
+}
+
+// WithUpdatedFields returns a new tuple with specified fields updated.
+// The original tuple remains unchanged (immutable operation).
+// fieldUpdates maps field index to new field value.
+func (t *Tuple) WithUpdatedFields(fieldUpdates map[int]types.Field) (*Tuple, error) {
+	newTup, err := t.Clone()
+	if err != nil {
+		return nil, fmt.Errorf("failed to clone tuple: %w", err)
+	}
+
+	for fieldIdx, newValue := range fieldUpdates {
+		if err := newTup.SetField(fieldIdx, newValue); err != nil {
+			return nil, fmt.Errorf("failed to update field %d: %w", fieldIdx, err)
+		}
+	}
+
+	return newTup, nil
+}
