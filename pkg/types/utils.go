@@ -7,7 +7,7 @@ import (
 func CreateFieldFromConstant(t Type, constant string) (Field, error) {
 	switch t {
 	case IntType:
-		var intVal int32
+		var intVal int64
 		fmt.Sscanf(constant, "%d", &intVal)
 		return NewIntField(intVal), nil
 
