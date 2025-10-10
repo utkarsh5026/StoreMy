@@ -28,7 +28,7 @@ func (t Type) String() string {
 func (t Type) Size() uint32 {
 	switch t {
 	case IntType:
-		return 4
+		return 8
 	case FloatType:
 		return 8
 	case StringType:

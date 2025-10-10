@@ -458,7 +458,7 @@ func TestParseField_EmptyReader_StringField(t *testing.T) {
 }
 
 func TestParseIntField_MaxValues(t *testing.T) {
-	tests := []int64{2147483647, -2147483648}
+	tests := []int64{2147483647, -2147483648, 9223372036854775807, -9223372036854775808}
 
 	for _, value := range tests {
 		original := NewIntField(value)
@@ -469,7 +469,7 @@ func TestParseIntField_MaxValues(t *testing.T) {
 			t.Fatalf("Failed to serialize %d: %v", value, err)
 		}
 
-		parsed, err := parseIntField(&buf, 4)
+		parsed, err := parseIntField(&buf, 8)
 		if err != nil {
 			t.Fatalf("Failed to parse %d: %v", value, err)
 		}
