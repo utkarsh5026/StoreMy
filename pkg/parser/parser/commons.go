@@ -26,11 +26,11 @@ func parseValue(l *lexer.Lexer) (types.Field, error) {
 	case lexer.STRING:
 		return types.NewStringField(token.Value, types.StringMaxSize), nil
 	case lexer.INT:
-		value, err := strconv.Atoi(token.Value)
+		value, err := strconv.ParseInt(token.Value, 10, 64)
 		if err != nil {
 			return nil, fmt.Errorf("invalid integer value: %s", token.Value)
 		}
-		return types.NewIntField(int32(value)), nil
+		return types.NewIntField(value), nil
 	case lexer.NULL:
 		return nil, nil // NULL value
 	default:
