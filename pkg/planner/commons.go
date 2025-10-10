@@ -18,19 +18,20 @@ type tableMetadata struct {
 // resolveTableMetadata retrieves table ID and schema in a single operation.
 // This is the primary table lookup method used by all planner components.
 func resolveTableMetadata(tableName string, ctx DbContext) (*tableMetadata, error) {
-	tableID, err := ctx.TableManager().GetTableID(tableName)
+	tm := ctx.TableManager()
+	tableID, err := tm.GetTableID(tableName)
 	if err != nil {
 		return nil, fmt.Errorf("table %s not found", tableName)
 	}
 
-	tupleDesc, err := ctx.TableManager().GetTupleDesc(tableID)
+	info, err := tm.GetTableInfo(tableID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get schema for table %s: %v", tableName, err)
 	}
 
 	return &tableMetadata{
 		TableID:   tableID,
-		TupleDesc: tupleDesc,
+		TupleDesc: info.Schema.TupleDesc,
 	}, nil
 }
 

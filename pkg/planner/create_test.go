@@ -374,13 +374,14 @@ func TestCreateTablePlan_Execute_ComplexTable(t *testing.T) {
 		t.Fatalf("Failed to get table ID: %v", err)
 	}
 
-	tupleDesc, err := ctx.TableManager().GetTupleDesc(tableID)
+	info, err := ctx.TableManager().GetTableInfo(tableID)
 	if err != nil {
 		t.Fatalf("Failed to get tuple description: %v", err)
 	}
 
-	if tupleDesc.NumFields() != 4 {
-		t.Errorf("Expected 4 fields, got %d", tupleDesc.NumFields())
+	td := info.Schema.TupleDesc
+	if td.NumFields() != 4 {
+		t.Errorf("Expected 4 fields, got %d", td.NumFields())
 	}
 
 	cleanupTable(t, ctx.TableManager(), "complex_table")
