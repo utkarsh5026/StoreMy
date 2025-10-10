@@ -31,7 +31,7 @@ func NewDeletePlan(
 // 3. Collect all tuples matching the criteria
 // 4. Delete the collected tuples
 func (p *DeletePlan) Execute() (any, error) {
-	tableID, err := resolveTableID(p.statement.TableName, p.ctx)
+	tableID, err := resolveTableID(p.statement.TableName, p.tx.ID, p.ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -46,7 +46,7 @@ func (p *DeletePlan) Execute() (any, error) {
 		return nil, err
 	}
 
-	err = p.deleteTuples(tuplesToDelete)
+	err = p.deleteTuples(tuplesToDelete, tableID)
 	if err != nil {
 		return nil, err
 	}
@@ -58,9 +58,15 @@ func (p *DeletePlan) Execute() (any, error) {
 }
 
 // deleteTuples performs the actual deletion of collected tuples.
-func (p *DeletePlan) deleteTuples(tuplesToDelete []*tuple.Tuple) error {
+func (p *DeletePlan) deleteTuples(tuplesToDelete []*tuple.Tuple, tableID int) error {
+	ctm := p.ctx.CatalogManager()
+	dbFile, err := ctm.GetTableFile(tableID)
+	if err != nil {
+		return err
+	}
+
 	for i, tupleToDelete := range tuplesToDelete {
-		if err := p.ctx.PageStore().DeleteTuple(p.tx, tupleToDelete); err != nil {
+		if err := p.ctx.PageStore().DeleteTuple(p.tx, dbFile, tableID, tupleToDelete); err != nil {
 			return fmt.Errorf("failed to delete tuple %d: %v", i+1, err)
 		}
 	}
