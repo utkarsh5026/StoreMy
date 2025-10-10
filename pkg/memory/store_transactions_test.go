@@ -50,7 +50,7 @@ func TestPageStore_CommitTransaction_Success(t *testing.T) {
 
 	tid := createTransactionContext(t, ps.wal)
 	testTuple := tuple.NewTuple(dbFile.GetTupleDesc())
-	intField := types.NewIntField(int32(42))
+	intField := types.NewIntField(int64(42))
 	testTuple.SetField(0, intField)
 
 	err = ps.InsertTuple(tid, 1, testTuple)
@@ -137,7 +137,7 @@ func TestPageStore_CommitTransaction_MultiplePages(t *testing.T) {
 		dbFile, _ := tm.GetDbFile(tableID)
 		for i := 0; i < numTuplesPerTable; i++ {
 			testTuple := tuple.NewTuple(dbFile.GetTupleDesc())
-			intField := types.NewIntField(int32(tableID*100 + i))
+			intField := types.NewIntField(int64(tableID*100 + i))
 			testTuple.SetField(0, intField)
 
 			err := ps.InsertTuple(tid, tableID, testTuple)
@@ -204,7 +204,7 @@ func TestPageStore_CommitTransaction_FlushFailure(t *testing.T) {
 
 	tid := createTransactionContext(t, ps.wal)
 	testTuple := tuple.NewTuple(dbFile.GetTupleDesc())
-	intField := types.NewIntField(int32(42))
+	intField := types.NewIntField(int64(42))
 	testTuple.SetField(0, intField)
 
 	err = ps.InsertTuple(tid, 1, testTuple)
@@ -249,7 +249,7 @@ func TestPageStore_CommitTransaction_ConcurrentCommits(t *testing.T) {
 				tableID := (j % numTables) + 1
 				dbFile, _ := tm.GetDbFile(tableID)
 				testTuple := tuple.NewTuple(dbFile.GetTupleDesc())
-				intField := types.NewIntField(int32(goroutineID*100 + j))
+				intField := types.NewIntField(int64(goroutineID*100 + j))
 				testTuple.SetField(0, intField)
 
 				err := ps.InsertTuple(tid, tableID, testTuple)
@@ -452,7 +452,7 @@ func TestPageStore_AbortTransaction_MultiplePages(t *testing.T) {
 		dbFile, _ := tm.GetDbFile(tableID)
 		for i := 0; i < numTuplesPerTable; i++ {
 			testTuple := tuple.NewTuple(dbFile.GetTupleDesc())
-			intField := types.NewIntField(int32(tableID*100 + i))
+			intField := types.NewIntField(int64(tableID*100 + i))
 			testTuple.SetField(0, intField)
 
 			err := ps.InsertTuple(tid, tableID, testTuple)
@@ -511,7 +511,7 @@ func TestPageStore_AbortTransaction_NoBeforeImage(t *testing.T) {
 
 	tid := createTransactionContext(t, ps.wal)
 	testTuple := tuple.NewTuple(dbFile.GetTupleDesc())
-	intField := types.NewIntField(int32(42))
+	intField := types.NewIntField(int64(42))
 	testTuple.SetField(0, intField)
 
 	err = ps.InsertTuple(tid, 1, testTuple)
@@ -582,7 +582,7 @@ func TestPageStore_AbortTransaction_ConcurrentAborts(t *testing.T) {
 				tableID := (j % numTables) + 1
 				dbFile, _ := tm.GetDbFile(tableID)
 				testTuple := tuple.NewTuple(dbFile.GetTupleDesc())
-				intField := types.NewIntField(int32(goroutineID*100 + j))
+				intField := types.NewIntField(int64(goroutineID*100 + j))
 				testTuple.SetField(0, intField)
 
 				err := ps.InsertTuple(tid, tableID, testTuple)
@@ -1059,7 +1059,7 @@ func TestPageStore_WAL_TransactionBeginLogged(t *testing.T) {
 
 	tid := createTransactionContext(t, ps.wal)
 	testTuple := tuple.NewTuple(dbFile.GetTupleDesc())
-	intField := types.NewIntField(int32(42))
+	intField := types.NewIntField(int64(42))
 	testTuple.SetField(0, intField)
 
 	// First operation should log BEGIN
@@ -1078,7 +1078,7 @@ func TestPageStore_WAL_TransactionBeginLogged(t *testing.T) {
 
 	// Second operation should NOT log another BEGIN
 	testTuple2 := tuple.NewTuple(dbFile.GetTupleDesc())
-	testTuple2.SetField(0, types.NewIntField(int32(43)))
+	testTuple2.SetField(0, types.NewIntField(int64(43)))
 	err = ps.InsertTuple(tid, 1, testTuple2)
 	if err != nil {
 		t.Fatalf("Failed to insert second tuple: %v", err)
@@ -1099,7 +1099,7 @@ func TestPageStore_WAL_CommitLoggedAndForced(t *testing.T) {
 
 	tid := createTransactionContext(t, ps.wal)
 	testTuple := tuple.NewTuple(dbFile.GetTupleDesc())
-	testTuple.SetField(0, types.NewIntField(int32(42)))
+	testTuple.SetField(0, types.NewIntField(int64(42)))
 
 	err = ps.InsertTuple(tid, 1, testTuple)
 	if err != nil {
@@ -1185,7 +1185,7 @@ func TestPageStore_WAL_InsertOperationLogged(t *testing.T) {
 
 	tid := createTransactionContext(t, ps.wal)
 	testTuple := tuple.NewTuple(dbFile.GetTupleDesc())
-	testTuple.SetField(0, types.NewIntField(int32(100)))
+	testTuple.SetField(0, types.NewIntField(int64(100)))
 
 	// Insert should log to WAL
 	err = ps.InsertTuple(tid, 1, testTuple)
@@ -1214,7 +1214,7 @@ func TestPageStore_WAL_DeleteOperationLogged(t *testing.T) {
 
 	tid := createTransactionContext(t, ps.wal)
 	testTuple := tuple.NewTuple(dbFile.GetTupleDesc())
-	testTuple.SetField(0, types.NewIntField(int32(200)))
+	testTuple.SetField(0, types.NewIntField(int64(200)))
 
 	// Insert first
 	err = ps.InsertTuple(tid, 1, testTuple)
@@ -1248,7 +1248,7 @@ func TestPageStore_WAL_UpdateOperationLogged(t *testing.T) {
 
 	tid := createTransactionContext(t, ps.wal)
 	oldTuple := tuple.NewTuple(dbFile.GetTupleDesc())
-	oldTuple.SetField(0, types.NewIntField(int32(300)))
+	oldTuple.SetField(0, types.NewIntField(int64(300)))
 
 	// Insert first
 	err = ps.InsertTuple(tid, 1, oldTuple)
@@ -1261,7 +1261,7 @@ func TestPageStore_WAL_UpdateOperationLogged(t *testing.T) {
 	}
 
 	newTuple := tuple.NewTuple(dbFile.GetTupleDesc())
-	newTuple.SetField(0, types.NewIntField(int32(301)))
+	newTuple.SetField(0, types.NewIntField(int64(301)))
 
 	// Update should log to WAL (as DELETE + INSERT)
 	err = ps.UpdateTuple(tid, oldTuple, newTuple)
@@ -1292,7 +1292,7 @@ func TestPageStore_WAL_CloseFlushesAndClosesWAL(t *testing.T) {
 
 	tid := createTransactionContext(t, ps.wal)
 	testTuple := tuple.NewTuple(dbFile.GetTupleDesc())
-	testTuple.SetField(0, types.NewIntField(int32(400)))
+	testTuple.SetField(0, types.NewIntField(int64(400)))
 
 	err = ps.InsertTuple(tid, 1, testTuple)
 	if err != nil {
@@ -1359,7 +1359,7 @@ func TestPageStore_WAL_ConcurrentTransactionsWALConsistency(t *testing.T) {
 				tableID := (j % numTables) + 1
 				dbFile, _ := tm.GetDbFile(tableID)
 				testTuple := tuple.NewTuple(dbFile.GetTupleDesc())
-				testTuple.SetField(0, types.NewIntField(int32(goroutineID*1000+j)))
+				testTuple.SetField(0, types.NewIntField(int64(goroutineID*1000+j)))
 
 				err := ps.InsertTuple(tid, tableID, testTuple)
 				if err != nil {

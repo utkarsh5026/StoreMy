@@ -84,7 +84,7 @@ func TestPageStore_InsertTuple_Success(t *testing.T) {
 	// Create transaction and tuple
 	tx := createTransactionContext(t, wal)
 	testTuple := tuple.NewTuple(dbFile.GetTupleDesc())
-	intField := types.NewIntField(int32(42))
+	intField := types.NewIntField(int64(42))
 	stringField := types.NewStringField("test_value", 128)
 	testTuple.SetField(0, intField)
 	testTuple.SetField(1, stringField)
@@ -119,7 +119,7 @@ func TestPageStore_InsertTuple_TableNotFound(t *testing.T) {
 	}
 
 	testTuple := tuple.NewTuple(td)
-	intField := types.NewIntField(int32(42))
+	intField := types.NewIntField(int64(42))
 	testTuple.SetField(0, intField)
 
 	// Test with non-existent table ID
@@ -159,7 +159,7 @@ func TestPageStore_InsertTuple_WithTransactionTracking(t *testing.T) {
 
 	// Create tuple
 	testTuple := tuple.NewTuple(dbFile.GetTupleDesc())
-	intField := types.NewIntField(int32(42))
+	intField := types.NewIntField(int64(42))
 	testTuple.SetField(0, intField)
 
 	// Test InsertTuple
@@ -215,7 +215,7 @@ func TestPageStore_InsertTuple_MultiplePages(t *testing.T) {
 
 	// Create tuple
 	testTuple := tuple.NewTuple(dbFile.GetTupleDesc())
-	intField := types.NewIntField(int32(42))
+	intField := types.NewIntField(int64(42))
 	testTuple.SetField(0, intField)
 
 	// Test InsertTuple
@@ -277,7 +277,7 @@ func TestPageStore_InsertTuple_ConcurrentAccess(t *testing.T) {
 				tupleValue := goroutineID*numInsertsPerGoroutine + j
 				dbFile, _ := tm.GetDbFile(tableID)
 				testTuple := tuple.NewTuple(dbFile.GetTupleDesc())
-				intField := types.NewIntField(int32(tupleValue))
+				intField := types.NewIntField(int64(tupleValue))
 				testTuple.SetField(0, intField)
 
 				// Insert tuple
@@ -319,7 +319,7 @@ func TestPageStore_EdgeCases(t *testing.T) {
 		}
 
 		testTuple := tuple.NewTuple(dbFile.GetTupleDesc())
-		intField := types.NewIntField(int32(42))
+		intField := types.NewIntField(int64(42))
 		testTuple.SetField(0, intField)
 
 		// Test with nil transaction ID
@@ -379,7 +379,7 @@ func TestPageStore_DeleteTuple_Success(t *testing.T) {
 	// Create transaction and tuple with RecordID
 	tx := createTransactionContext(t, wal)
 	testTuple := tuple.NewTuple(dbFile.GetTupleDesc())
-	intField := types.NewIntField(int32(42))
+	intField := types.NewIntField(int64(42))
 	stringField := types.NewStringField("test_value", 128)
 	testTuple.SetField(0, intField)
 	testTuple.SetField(1, stringField)
@@ -428,7 +428,7 @@ func TestPageStore_DeleteTuple_NoRecordID(t *testing.T) {
 	}
 
 	testTuple := tuple.NewTuple(td)
-	intField := types.NewIntField(int32(42))
+	intField := types.NewIntField(int64(42))
 	testTuple.SetField(0, intField)
 
 	// Test with tuple that has no RecordID
@@ -467,7 +467,7 @@ func TestPageStore_DeleteTuple_TableNotFound(t *testing.T) {
 	}
 
 	testTuple := tuple.NewTuple(td)
-	intField := types.NewIntField(int32(42))
+	intField := types.NewIntField(int64(42))
 	testTuple.SetField(0, intField)
 
 	// Set up RecordID with non-existent table ID
@@ -515,7 +515,7 @@ func TestPageStore_DeleteTuple_WithTransactionTracking(t *testing.T) {
 
 	// Create tuple with RecordID
 	testTuple := tuple.NewTuple(dbFile.GetTupleDesc())
-	intField := types.NewIntField(int32(42))
+	intField := types.NewIntField(int64(42))
 	testTuple.SetField(0, intField)
 
 	pageID := heap.NewHeapPageID(1, 0)
@@ -593,7 +593,7 @@ func TestPageStore_DeleteTuple_ConcurrentAccess(t *testing.T) {
 				dbFile, _ := tm.GetDbFile(tableID)
 				tupleValue := goroutineID*numDeletesPerGoroutine + j
 				testTuple := tuple.NewTuple(dbFile.GetTupleDesc())
-				intField := types.NewIntField(int32(tupleValue))
+				intField := types.NewIntField(int64(tupleValue))
 				testTuple.SetField(0, intField)
 
 				pageID := heap.NewHeapPageID(tableID, j)
@@ -642,7 +642,7 @@ func TestPageStore_DeleteTuple_EdgeCases(t *testing.T) {
 		}
 
 		testTuple := tuple.NewTuple(dbFile.GetTupleDesc())
-		intField := types.NewIntField(int32(42))
+		intField := types.NewIntField(int64(42))
 		testTuple.SetField(0, intField)
 
 		pageID := heap.NewHeapPageID(1, 0)
@@ -708,7 +708,7 @@ func TestPageStore_MemoryLeaks(t *testing.T) {
 		tx := createTransactionContext(t, wal)
 
 		testTuple := tuple.NewTuple(dbFile.GetTupleDesc())
-		intField := types.NewIntField(int32(i))
+		intField := types.NewIntField(int64(i))
 		testTuple.SetField(0, intField)
 
 		err := ps.InsertTuple(tx, 1, testTuple)
@@ -753,7 +753,7 @@ func TestPageStore_UpdateTuple_Success(t *testing.T) {
 
 	// Create old tuple with RecordID
 	oldTuple := tuple.NewTuple(dbFile.GetTupleDesc())
-	intField1 := types.NewIntField(int32(42))
+	intField1 := types.NewIntField(int64(42))
 	stringField1 := types.NewStringField("old_value", 128)
 	oldTuple.SetField(0, intField1)
 	oldTuple.SetField(1, stringField1)
@@ -767,7 +767,7 @@ func TestPageStore_UpdateTuple_Success(t *testing.T) {
 
 	// Create new tuple
 	newTuple := tuple.NewTuple(dbFile.GetTupleDesc())
-	intField2 := types.NewIntField(int32(42))
+	intField2 := types.NewIntField(int64(42))
 	stringField2 := types.NewStringField("new_value", 128)
 	newTuple.SetField(0, intField2)
 	newTuple.SetField(1, stringField2)
@@ -808,13 +808,13 @@ func TestPageStore_UpdateTuple_DeleteFails(t *testing.T) {
 	}
 
 	oldTuple := tuple.NewTuple(td)
-	intField1 := types.NewIntField(int32(42))
+	intField1 := types.NewIntField(int64(42))
 	oldTuple.SetField(0, intField1)
 	// Note: oldTuple.RecordID is nil, which will cause delete to fail
 
 	// Create new tuple
 	newTuple := tuple.NewTuple(td)
-	intField2 := types.NewIntField(int32(84))
+	intField2 := types.NewIntField(int64(84))
 	newTuple.SetField(0, intField2)
 
 	// Test UpdateTuple - should fail because delete fails
@@ -855,7 +855,7 @@ func TestPageStore_UpdateTuple_InsertFails_Rollback(t *testing.T) {
 
 	// Create old tuple with RecordID
 	oldTuple := tuple.NewTuple(dbFile.GetTupleDesc())
-	intField1 := types.NewIntField(int32(42))
+	intField1 := types.NewIntField(int64(42))
 	oldTuple.SetField(0, intField1)
 
 	pageID := heap.NewHeapPageID(1, 0)
@@ -867,7 +867,7 @@ func TestPageStore_UpdateTuple_InsertFails_Rollback(t *testing.T) {
 
 	// Create new tuple
 	newTuple := tuple.NewTuple(dbFile.GetTupleDesc())
-	intField2 := types.NewIntField(int32(84))
+	intField2 := types.NewIntField(int64(84))
 	newTuple.SetField(0, intField2)
 
 	// For this test, we'll test with a non-existent table to force insert to fail
@@ -933,7 +933,7 @@ func TestPageStore_UpdateTuple_WithTransactionTracking(t *testing.T) {
 
 	// Create old tuple with RecordID
 	oldTuple := tuple.NewTuple(dbFile.GetTupleDesc())
-	intField1 := types.NewIntField(int32(42))
+	intField1 := types.NewIntField(int64(42))
 	oldTuple.SetField(0, intField1)
 
 	pageID := heap.NewHeapPageID(1, 0)
@@ -945,7 +945,7 @@ func TestPageStore_UpdateTuple_WithTransactionTracking(t *testing.T) {
 
 	// Create new tuple
 	newTuple := tuple.NewTuple(dbFile.GetTupleDesc())
-	intField2 := types.NewIntField(int32(84))
+	intField2 := types.NewIntField(int64(84))
 	newTuple.SetField(0, intField2)
 
 	// Test UpdateTuple
@@ -1016,7 +1016,7 @@ func TestPageStore_UpdateTuple_ConcurrentAccess(t *testing.T) {
 				dbFile, _ := tm.GetDbFile(tableID)
 				oldValue := goroutineID*numUpdatesPerGoroutine + j
 				oldTuple := tuple.NewTuple(dbFile.GetTupleDesc())
-				intField1 := types.NewIntField(int32(oldValue))
+				intField1 := types.NewIntField(int64(oldValue))
 				oldTuple.SetField(0, intField1)
 
 				pageID := heap.NewHeapPageID(tableID, j)
@@ -1029,7 +1029,7 @@ func TestPageStore_UpdateTuple_ConcurrentAccess(t *testing.T) {
 				// Create new tuple
 				newValue := oldValue + 1000
 				newTuple := tuple.NewTuple(dbFile.GetTupleDesc())
-				intField2 := types.NewIntField(int32(newValue))
+				intField2 := types.NewIntField(int64(newValue))
 				newTuple.SetField(0, intField2)
 
 				// Update tuple
@@ -1072,7 +1072,7 @@ func TestPageStore_UpdateTuple_EdgeCases(t *testing.T) {
 
 		// Create old tuple with RecordID
 		oldTuple := tuple.NewTuple(dbFile.GetTupleDesc())
-		intField1 := types.NewIntField(int32(42))
+		intField1 := types.NewIntField(int64(42))
 		oldTuple.SetField(0, intField1)
 
 		pageID := heap.NewHeapPageID(1, 0)
@@ -1084,7 +1084,7 @@ func TestPageStore_UpdateTuple_EdgeCases(t *testing.T) {
 
 		// Create new tuple
 		newTuple := tuple.NewTuple(dbFile.GetTupleDesc())
-		intField2 := types.NewIntField(int32(84))
+		intField2 := types.NewIntField(int64(84))
 		newTuple.SetField(0, intField2)
 
 		// Test with nil transaction ID
@@ -1116,7 +1116,7 @@ func TestPageStore_UpdateTuple_EdgeCases(t *testing.T) {
 
 		// Create new tuple
 		newTuple := tuple.NewTuple(dbFile.GetTupleDesc())
-		intField := types.NewIntField(int32(84))
+		intField := types.NewIntField(int64(84))
 		newTuple.SetField(0, intField)
 
 		// Test with nil old tuple
@@ -1149,7 +1149,7 @@ func TestPageStore_UpdateTuple_EdgeCases(t *testing.T) {
 
 		// Create old tuple with RecordID
 		oldTuple := tuple.NewTuple(dbFile.GetTupleDesc())
-		intField := types.NewIntField(int32(42))
+		intField := types.NewIntField(int64(42))
 		oldTuple.SetField(0, intField)
 
 		pageID := heap.NewHeapPageID(1, 0)
@@ -1189,7 +1189,7 @@ func TestPageStore_UpdateTuple_EdgeCases(t *testing.T) {
 
 		// Create tuple with RecordID
 		testTuple := tuple.NewTuple(dbFile.GetTupleDesc())
-		intField := types.NewIntField(int32(42))
+		intField := types.NewIntField(int64(42))
 		testTuple.SetField(0, intField)
 
 		pageID := heap.NewHeapPageID(1, 0)
@@ -1249,7 +1249,7 @@ func TestPageStore_FlushAllPages_SinglePage(t *testing.T) {
 
 	tx := createTransactionContext(t, wal)
 	testTuple := tuple.NewTuple(dbFile.GetTupleDesc())
-	intField := types.NewIntField(int32(42))
+	intField := types.NewIntField(int64(42))
 	testTuple.SetField(0, intField)
 
 	// Insert tuple to add page to cache
@@ -1313,7 +1313,7 @@ func TestPageStore_FlushAllPages_MultiplePages(t *testing.T) {
 		for tupleIdx := 0; tupleIdx < numTuplesPerTable; tupleIdx++ {
 			tx := createTransactionContext(t, wal)
 			testTuple := tuple.NewTuple(dbFile.GetTupleDesc())
-			intField := types.NewIntField(int32(tableID*100 + tupleIdx))
+			intField := types.NewIntField(int64(tableID*100 + tupleIdx))
 			testTuple.SetField(0, intField)
 
 			err := ps.InsertTuple(tx, tableID, testTuple)
@@ -1399,7 +1399,7 @@ func TestPageStore_FlushAllPages_ConcurrentAccess(t *testing.T) {
 			for j := 0; j < numInsertsPerGoroutine; j++ {
 				tx := createTransactionContext(t, wal)
 				testTuple := tuple.NewTuple(dbFile.GetTupleDesc())
-				intField := types.NewIntField(int32(goroutineID*numInsertsPerGoroutine + j))
+				intField := types.NewIntField(int64(goroutineID*numInsertsPerGoroutine + j))
 				testTuple.SetField(0, intField)
 
 				err := ps.InsertTuple(tx, 1, testTuple)
@@ -1483,7 +1483,7 @@ func TestPageStore_FlushAllPages_MixedDirtyAndCleanPages(t *testing.T) {
 	for i := 0; i < numTuples; i++ {
 		tx := createTransactionContext(t, wal)
 		testTuple := tuple.NewTuple(dbFile.GetTupleDesc())
-		intField := types.NewIntField(int32(i))
+		intField := types.NewIntField(int64(i))
 		testTuple.SetField(0, intField)
 
 		err := ps.InsertTuple(tx, 1, testTuple)
@@ -1578,7 +1578,7 @@ func TestPageStore_FlushAllPages_WriteFailure(t *testing.T) {
 
 	tx := createTransactionContext(t, wal)
 	testTuple := tuple.NewTuple(dbFile.GetTupleDesc())
-	intField := types.NewIntField(int32(42))
+	intField := types.NewIntField(int64(42))
 	testTuple.SetField(0, intField)
 
 	err = ps.InsertTuple(tx, 1, testTuple)
