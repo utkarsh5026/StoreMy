@@ -6,6 +6,7 @@ import (
 	"slices"
 	"storemy/pkg/catalog/schema"
 	"storemy/pkg/storage/page"
+	"storemy/pkg/tuple"
 	"strings"
 	"sync"
 )
@@ -79,6 +80,28 @@ func (tm *TableManager) GetTableID(tableName string) (int, error) {
 	}
 
 	return tableInfo.GetID(), nil
+}
+
+func (tm *TableManager) GetTupleDesc(tableId int) (*tuple.TupleDescription, error) {
+	tm.mutex.RLock()
+	defer tm.mutex.RUnlock()
+
+	info, exists := tm.idToTable[tableId]
+	if !exists {
+		return nil, fmt.Errorf("table with ID %d not found", tableId)
+	}
+	return info.Schema.TupleDesc, nil
+}
+
+func (tm *TableManager) GetDbFile(tableId int) (page.DbFile, error) {
+	tm.mutex.RLock()
+	defer tm.mutex.RUnlock()
+
+	info, exists := tm.idToTable[tableId]
+	if !exists {
+		return nil, fmt.Errorf("table with ID %d not found", tableId)
+	}
+	return info.File, nil
 }
 
 // RemoveTable removes a table from the catalog and closes its associated database file.
