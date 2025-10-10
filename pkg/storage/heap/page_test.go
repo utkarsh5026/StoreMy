@@ -535,7 +535,7 @@ func TestHeapPage_AddTuple_FillPage(t *testing.T) {
 
 	maxTuples := hp.numSlots
 	for i := 0; i < maxTuples; i++ {
-		tuple := createTestTuple(td, int32(i), "User")
+		tuple := createTestTuple(td, int64(i), "User")
 		err := hp.AddTuple(tuple)
 		if err != nil {
 			t.Fatalf("Failed to add tuple %d: %v", i, err)
@@ -546,7 +546,7 @@ func TestHeapPage_AddTuple_FillPage(t *testing.T) {
 		t.Errorf("Expected 0 empty slots after filling page, got %d", hp.GetNumEmptySlots())
 	}
 
-	overflowTuple := createTestTuple(td, int32(maxTuples), "Overflow")
+	overflowTuple := createTestTuple(td, int64(maxTuples), "Overflow")
 	err = hp.AddTuple(overflowTuple)
 	if err == nil {
 		t.Errorf("Expected error when adding tuple to full page")

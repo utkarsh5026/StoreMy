@@ -289,7 +289,7 @@ func TestHeapFile_AddTuple(t *testing.T) {
 
 	// Add many tuples to test page creation
 	for i := 0; i < 100; i++ {
-		tuple := createTestTupleForTest(td, int32(i+2), "User")
+		tuple := createTestTupleForTest(td, int64(i+2), "User")
 		_, err := hf.AddTuple(tid, tuple)
 		if err != nil {
 			t.Errorf("Failed to add tuple %d: %v", i, err)
@@ -503,7 +503,7 @@ func TestHeapFile_ConcurrentAccess(t *testing.T) {
 		go func(id int) {
 			defer func() { done <- true }()
 
-			tuple := createTestTupleForTest(td, int32(id), "ConcurrentUser")
+			tuple := createTestTupleForTest(td, int64(id), "ConcurrentUser")
 			_, err := hf.AddTuple(tid, tuple)
 			if err != nil {
 				errors <- err
@@ -570,7 +570,7 @@ func TestHeapFile_ConcurrencyStress(t *testing.T) {
 				// Mix of operations
 				switch j % 4 {
 				case 0, 1: // Add tuples (more frequent)
-					tuple := createTestTupleForTest(td, int32(workerID*1000+j), "Worker")
+					tuple := createTestTupleForTest(td, int64(workerID*1000+j), "Worker")
 					_, err := hf.AddTuple(tid, tuple)
 					if err != nil {
 						errors <- err
@@ -835,7 +835,7 @@ func TestHeapFile_PageBoundaries(t *testing.T) {
 
 	// Fill exactly one page
 	for i := 0; i < maxTuplesPerPage; i++ {
-		tuple := createTestTupleForTest(td, int32(i), "BoundaryTest")
+		tuple := createTestTupleForTest(td, int64(i), "BoundaryTest")
 		_, err := hf.AddTuple(tid, tuple)
 		if err != nil {
 			t.Fatalf("Failed to add tuple %d: %v", i, err)
@@ -852,7 +852,7 @@ func TestHeapFile_PageBoundaries(t *testing.T) {
 	}
 
 	// Add one more tuple - may or may not create second page depending on capacity calculations
-	tuple := createTestTupleForTest(td, int32(maxTuplesPerPage), "SecondPage")
+	tuple := createTestTupleForTest(td, int64(maxTuplesPerPage), "SecondPage")
 	_, err = hf.AddTuple(tid, tuple)
 	if err != nil {
 		t.Fatalf("Failed to add additional tuple: %v", err)
@@ -891,7 +891,7 @@ func TestHeapFile_LargeFile(t *testing.T) {
 
 	start := time.Now()
 	for i := 0; i < numTuples; i++ {
-		tuple := createTestTupleForTest(td, int32(i), "LargeFileUser")
+		tuple := createTestTupleForTest(td, int64(i), "LargeFileUser")
 		_, err := hf.AddTuple(tid, tuple)
 		if err != nil {
 			t.Fatalf("Failed to add tuple %d: %v", i, err)
@@ -941,7 +941,7 @@ func TestHeapFile_MemoryUsage(t *testing.T) {
 	// Add many tuples and check memory doesn't grow unbounded
 	numTuples := 1000
 	for i := range numTuples {
-		tuple := createTestTupleForTest(td, int32(i), "MemoryTest")
+		tuple := createTestTupleForTest(td, int64(i), "MemoryTest")
 		_, err := hf.AddTuple(tid, tuple)
 		if err != nil {
 			t.Fatalf("Failed to add tuple %d: %v", i, err)
@@ -979,7 +979,7 @@ func TestHeapFile_IteratorConsistency(t *testing.T) {
 	numTuples := 100
 	addedTuples := make([]*tuple.Tuple, numTuples)
 	for i := 0; i < numTuples; i++ {
-		tuple := createTestTupleForTest(td, int32(i), "IteratorTest")
+		tuple := createTestTupleForTest(td, int64(i), "IteratorTest")
 		addedTuples[i] = tuple
 		pages, err := hf.AddTuple(tid, tuple)
 		if err != nil {
@@ -1080,7 +1080,7 @@ func BenchmarkHeapFile_AddTuple(b *testing.B) {
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		tuple := createTestTupleForTest(td, int32(i), "BenchmarkUser")
+		tuple := createTestTupleForTest(td, int64(i), "BenchmarkUser")
 		_, err := hf.AddTuple(tid, tuple)
 		if err != nil {
 			b.Fatalf("Failed to add tuple: %v", err)
@@ -1102,7 +1102,7 @@ func BenchmarkHeapFile_NumPages(b *testing.B) {
 	// Add some tuples first
 	tid := primitives.NewTransactionID()
 	for i := 0; i < 1000; i++ {
-		tuple := createTestTupleForTest(td, int32(i), "BenchmarkUser")
+		tuple := createTestTupleForTest(td, int64(i), "BenchmarkUser")
 		hf.AddTuple(tid, tuple)
 	}
 
@@ -1129,7 +1129,7 @@ func mustCreateTupleDescForTest() *tuple.TupleDescription {
 	return td
 }
 
-func createTestTupleForTest(td *tuple.TupleDescription, id int32, name string) *tuple.Tuple {
+func createTestTupleForTest(td *tuple.TupleDescription, id int64, name string) *tuple.Tuple {
 	t := tuple.NewTuple(td)
 	t.SetField(0, types.NewIntField(id))
 	t.SetField(1, types.NewStringField(name, 128))

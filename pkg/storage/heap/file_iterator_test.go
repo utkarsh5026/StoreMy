@@ -309,7 +309,7 @@ func TestHeapFileIterator_MultiplePagesWithTuples(t *testing.T) {
 		}
 
 		for tupleNum := 0; tupleNum < tuplesPerPage; tupleNum++ {
-			tuple := createTestTuple(td, int32(tupleID), fmt.Sprintf("User%d", tupleID))
+			tuple := createTestTuple(td, int64(tupleID), fmt.Sprintf("User%d", tupleID))
 			err = page.AddTuple(tuple)
 			if err != nil {
 				t.Fatalf("Failed to add tuple %d to page %d: %v", tupleID, pageNum, err)
@@ -333,7 +333,7 @@ func TestHeapFileIterator_MultiplePagesWithTuples(t *testing.T) {
 	defer iterator.Close()
 
 	actualCount := 0
-	seenIDs := make(map[int32]bool)
+	seenIDs := make(map[int64]bool)
 
 	for {
 		hasNext, err := iterator.HasNext()

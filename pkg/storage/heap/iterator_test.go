@@ -15,7 +15,7 @@ func mustCreateTupleDesc() *tuple.TupleDescription {
 	return td
 }
 
-func createTestTuple(td *tuple.TupleDescription, id int32, name string) *tuple.Tuple {
+func createTestTuple(td *tuple.TupleDescription, id int64, name string) *tuple.Tuple {
 	t := tuple.NewTuple(td)
 	t.SetField(0, types.NewIntField(id))
 	t.SetField(1, types.NewStringField(name, 128))

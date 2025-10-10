@@ -582,7 +582,7 @@ func TestHeapPageIterator_TupleOrder(t *testing.T) {
 		t.Fatalf("Failed to create HeapPage: %v", err)
 	}
 
-	expectedValues := []int32{10, 20, 30}
+	expectedValues := []int64{10, 20, 30}
 	expectedNames := []string{"First", "Second", "Third"}
 
 	for i, val := range expectedValues {
@@ -599,7 +599,7 @@ func TestHeapPageIterator_TupleOrder(t *testing.T) {
 		t.Fatalf("Failed to open iterator: %v", err)
 	}
 
-	actualValues := []int32{}
+	actualValues := []int64{}
 	actualNames := []string{}
 
 	for {
