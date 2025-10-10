@@ -3,6 +3,7 @@ package join
 import (
 	"fmt"
 	"storemy/pkg/iterator"
+	"storemy/pkg/tuple"
 )
 
 // JoinStrategy selects the best join algorithm based on statistics and predicate type
@@ -73,7 +74,7 @@ func GetStatistics(left, right iterator.DbIterator) (*JoinStatistics, error) {
 		Selectivity:      0.1, // Default selectivity
 	}
 
-	leftCount, err := iterator.CountAllTuples(left)
+	leftCount, err := countTuples(left)
 	if err != nil {
 		return nil, err
 	}
@@ -83,7 +84,7 @@ func GetStatistics(left, right iterator.DbIterator) (*JoinStatistics, error) {
 		return nil, err
 	}
 
-	rightCount, err := iterator.CountAllTuples(right)
+	rightCount, err := countTuples(right)
 	if err != nil {
 		return nil, err
 	}
@@ -96,4 +97,10 @@ func GetStatistics(left, right iterator.DbIterator) (*JoinStatistics, error) {
 	stats.LeftSize = (stats.LeftCardinality + 99) / 100
 	stats.RightSize = (stats.RightCardinality + 99) / 100
 	return stats, nil
+}
+
+func countTuples(iter iterator.DbIterator) (int, error) {
+	return iterator.Reduce(iter, 0, func(i int, t *tuple.Tuple) (int, error) {
+		return i + 1, nil
+	})
 }
