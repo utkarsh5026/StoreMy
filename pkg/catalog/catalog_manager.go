@@ -2,6 +2,7 @@ package catalog
 
 import (
 	"fmt"
+	"storemy/pkg/catalog/systemtable"
 	"storemy/pkg/concurrency/transaction"
 	"storemy/pkg/memory"
 	"storemy/pkg/primitives"
@@ -149,7 +150,7 @@ func (cm *CatalogManager) deleteCatalogEntry(tx *transaction.TransactionContext,
 	defer iter.Close()
 
 	var tuplesToDelete []*tuple.Tuple
-	matchValueInt32 := int32(matchValue)
+	matchValueInt32 := int64(matchValue)
 
 	for {
 		hasNext, err := iter.HasNext()
@@ -370,8 +371,15 @@ func (cm *CatalogManager) RenameTable(tx *transaction.TransactionContext, oldNam
 		return fmt.Errorf("failed to delete old catalog entry: %w", err)
 	}
 
+	tm := systemtable.TableMetadata{
+		TableName:     newName,
+		TableID:       tableID,
+		FilePath:      filePath,
+		PrimaryKeyCol: primaryKey,
+	}
+
 	// Insert new entry with updated name
-	tup := createTablesTuple(tableID, newName, filePath, primaryKey)
+	tup := systemtable.Tables.CreateTuple(tm)
 	if err := cm.store.InsertTuple(tx, cm.catalog.GetTablesTableID(), tup); err != nil {
 		// Rollback everything
 		cm.tableManager.RenameTable(newName, oldName)
@@ -467,4 +475,15 @@ func (cm *CatalogManager) ValidateIntegrity(tid *primitives.TransactionID) error
 	}
 
 	return nil
+}
+
+// GetAutoIncrementColumn retrieves auto-increment column information for a table.
+// Returns nil if the table has no auto-increment column.
+func (cm *CatalogManager) GetAutoIncrementColumn(tid *primitives.TransactionID, tableID int) (*AutoIncrementInfo, error) {
+	return cm.catalog.GetAutoIncrementColumn(tid, tableID)
+}
+
+// IncrementAutoIncrementValue updates the next auto-increment value for a table's auto-increment column.
+func (cm *CatalogManager) IncrementAutoIncrementValue(tx *transaction.TransactionContext, tableID int, columnName string, newValue int) error {
+	return cm.catalog.IncrementAutoIncrementValue(tx, tableID, columnName, newValue)
 }
