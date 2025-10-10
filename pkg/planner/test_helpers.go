@@ -11,7 +11,7 @@ import (
 	"testing"
 )
 
-func createTransactionContext(t *testing.T) *transaction.TransactionContext {
+func createTransactionContext(t *testing.T) TransactionCtx {
 	t.Helper()
 
 	rg := transaction.NewTransactionRegistry(nil)

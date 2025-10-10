@@ -2,7 +2,6 @@ package planner
 
 import (
 	"fmt"
-	"storemy/pkg/concurrency/transaction"
 	"storemy/pkg/execution/aggregation"
 	"storemy/pkg/execution/join"
 	"storemy/pkg/execution/query"
@@ -24,12 +23,12 @@ type SelectQueryResult struct {
 // that follows the iterator pattern for query execution.
 type SelectPlan struct {
 	ctx       DbContext
-	tx        *transaction.TransactionContext
+	tx        TransactionCtx
 	statement *statements.SelectStatement
 }
 
 // NewSelectPlan creates a new SELECT query execution plan.
-func NewSelectPlan(stmt *statements.SelectStatement, tx *transaction.TransactionContext, ctx DbContext) *SelectPlan {
+func NewSelectPlan(stmt *statements.SelectStatement, tx TransactionCtx, ctx DbContext) *SelectPlan {
 	return &SelectPlan{
 		ctx:       ctx,
 		tx:        tx,

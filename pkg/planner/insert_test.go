@@ -2,7 +2,6 @@ package planner
 
 import (
 	"os"
-	"storemy/pkg/concurrency/transaction"
 	"storemy/pkg/parser/statements"
 	"storemy/pkg/registry"
 	"storemy/pkg/types"
@@ -29,7 +28,7 @@ func executeInsertPlan(t *testing.T, plan *InsertPlan) (*DMLResult, error) {
 }
 
 // Helper function to create a test table
-func createTestTable(t *testing.T, ctx *registry.DatabaseContext, tx *transaction.TransactionContext) {
+func createTestTable(t *testing.T, ctx *registry.DatabaseContext, tx TransactionCtx) {
 	stmt := statements.NewCreateStatement("test_table", false)
 	stmt.AddField("id", types.IntType, false, nil)
 	stmt.AddField("name", types.StringType, false, nil)

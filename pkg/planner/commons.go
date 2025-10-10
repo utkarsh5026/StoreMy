@@ -5,17 +5,10 @@ import (
 	"storemy/pkg/execution/query"
 	"storemy/pkg/iterator"
 	"storemy/pkg/parser/plan"
-	"storemy/pkg/primitives"
-	"storemy/pkg/registry"
 	"storemy/pkg/tuple"
 	"storemy/pkg/types"
 	"strings"
 )
-
-type DbIterator = iterator.DbIterator
-type TID = *primitives.TransactionID
-type DbContext = *registry.DatabaseContext
-type TupleDesc = *tuple.TupleDescription
 
 type tableMetadata struct {
 	TableID   int

@@ -2,7 +2,6 @@ package planner
 
 import (
 	"fmt"
-	"storemy/pkg/concurrency/transaction"
 	"storemy/pkg/parser/statements"
 	"storemy/pkg/tuple"
 	"storemy/pkg/types"
@@ -11,10 +10,10 @@ import (
 type UpdatePlan struct {
 	statement *statements.UpdateStatement
 	ctx       DbContext
-	tx        *transaction.TransactionContext
+	tx        TransactionCtx
 }
 
-func NewUpdatePlan(statement *statements.UpdateStatement, tx *transaction.TransactionContext, ctx DbContext) *UpdatePlan {
+func NewUpdatePlan(statement *statements.UpdateStatement, tx TransactionCtx, ctx DbContext) *UpdatePlan {
 	return &UpdatePlan{
 		statement: statement,
 		ctx:       ctx,

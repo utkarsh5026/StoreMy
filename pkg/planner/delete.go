@@ -2,7 +2,6 @@ package planner
 
 import (
 	"fmt"
-	"storemy/pkg/concurrency/transaction"
 	"storemy/pkg/parser/statements"
 	"storemy/pkg/tuple"
 )
@@ -11,13 +10,13 @@ import (
 type DeletePlan struct {
 	statement *statements.DeleteStatement
 	ctx       DbContext
-	tx        *transaction.TransactionContext
+	tx        TransactionCtx
 }
 
 // NewDeletePlan creates a new DELETE execution plan
 func NewDeletePlan(
 	stmt *statements.DeleteStatement,
-	tx *transaction.TransactionContext,
+	tx TransactionCtx,
 	ctx DbContext) *DeletePlan {
 	return &DeletePlan{
 		statement: stmt,

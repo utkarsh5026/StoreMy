@@ -4,14 +4,13 @@ import (
 	"fmt"
 
 	"storemy/pkg/catalog"
-	"storemy/pkg/concurrency/transaction"
 	"storemy/pkg/parser/statements"
 )
 
 type CreateTablePlan struct {
 	Statement      *statements.CreateStatement
 	ctx            DbContext
-	transactionCtx *transaction.TransactionContext
+	transactionCtx TransactionCtx
 }
 
 type DDLResult struct {
@@ -26,7 +25,7 @@ func (r *DDLResult) String() string {
 func NewCreateTablePlan(
 	stmt *statements.CreateStatement,
 	ctx DbContext,
-	transactionCtx *transaction.TransactionContext,
+	transactionCtx TransactionCtx,
 ) *CreateTablePlan {
 	return &CreateTablePlan{
 		Statement:      stmt,

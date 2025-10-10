@@ -1,7 +1,6 @@
 package planner
 
 import (
-	"storemy/pkg/concurrency/transaction"
 	"storemy/pkg/parser/plan"
 	"storemy/pkg/parser/statements"
 	"storemy/pkg/primitives"
@@ -10,7 +9,7 @@ import (
 	"testing"
 )
 
-func setupDeleteTest(t *testing.T) (string, *registry.DatabaseContext, *transaction.TransactionContext) {
+func setupDeleteTest(t *testing.T) (string, *registry.DatabaseContext, TransactionCtx) {
 	dataDir := setupTestDataDir(t)
 	ctx := createTestContextWithCleanup(t, dataDir)
 	tx := createTransactionContext(t)
@@ -38,7 +37,7 @@ func executeDeletePlan(t *testing.T, plan *DeletePlan) (*DMLResult, error) {
 }
 
 // Helper function to create and populate a test table with sample data
-func createAndPopulateTestTable(t *testing.T, ctx *registry.DatabaseContext, tx *transaction.TransactionContext) {
+func createAndPopulateTestTable(t *testing.T, ctx *registry.DatabaseContext, tx TransactionCtx) {
 	// Create table
 	createStmt := statements.NewCreateStatement("test_table", false)
 	createStmt.AddField("id", types.IntType, false, nil)

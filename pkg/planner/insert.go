@@ -3,7 +3,6 @@ package planner
 import (
 	"fmt"
 	"slices"
-	"storemy/pkg/concurrency/transaction"
 	"storemy/pkg/parser/statements"
 	"storemy/pkg/tuple"
 	"storemy/pkg/types"
@@ -21,7 +20,7 @@ func (d *DMLResult) String() string {
 type InsertPlan struct {
 	statement      *statements.InsertStatement
 	ctx            DbContext
-	transactionCtx *transaction.TransactionContext
+	transactionCtx TransactionCtx
 }
 
 // NewInsertPlan creates a new InsertPlan instance with the provided components.
@@ -29,7 +28,7 @@ type InsertPlan struct {
 // executing INSERT operations within a transactional context.
 func NewInsertPlan(
 	stmt *statements.InsertStatement,
-	transactionCtx *transaction.TransactionContext,
+	transactionCtx TransactionCtx,
 	ctx DbContext) *InsertPlan {
 	return &InsertPlan{
 		statement:      stmt,

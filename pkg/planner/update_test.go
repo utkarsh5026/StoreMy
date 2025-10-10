@@ -2,7 +2,6 @@ package planner
 
 import (
 	"os"
-	"storemy/pkg/concurrency/transaction"
 	"storemy/pkg/parser/plan"
 	"storemy/pkg/parser/statements"
 	"storemy/pkg/primitives"
@@ -11,7 +10,7 @@ import (
 	"testing"
 )
 
-func setupUpdateTest(t *testing.T) (*registry.DatabaseContext, *transaction.TransactionContext, func()) {
+func setupUpdateTest(t *testing.T) (*registry.DatabaseContext, TransactionCtx, func()) {
 	dataDir := t.TempDir()
 	oldDir, _ := os.Getwd()
 	os.Chdir(dataDir)
@@ -49,7 +48,7 @@ func executeUpdatePlan(t *testing.T, plan *UpdatePlan) (*DMLResult, error) {
 	return result, nil
 }
 
-func createUpdateTestTable(t *testing.T, ctx *registry.DatabaseContext, tx *transaction.TransactionContext) {
+func createUpdateTestTable(t *testing.T, ctx *registry.DatabaseContext, tx TransactionCtx) {
 	stmt := statements.NewCreateStatement("users", false)
 	stmt.AddField("id", types.IntType, false, nil)
 	stmt.AddField("name", types.StringType, false, nil)
@@ -68,7 +67,7 @@ func createUpdateTestTable(t *testing.T, ctx *registry.DatabaseContext, tx *tran
 	cleanupTable(t, ctx.TableManager(), "users")
 }
 
-func insertUpdateTestData(t *testing.T, ctx *registry.DatabaseContext, tx *transaction.TransactionContext) {
+func insertUpdateTestData(t *testing.T, ctx *registry.DatabaseContext, tx TransactionCtx) {
 	insertStmt := statements.NewInsertStatement("users")
 
 	values1 := []types.Field{
