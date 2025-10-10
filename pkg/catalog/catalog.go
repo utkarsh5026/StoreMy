@@ -2,19 +2,13 @@ package catalog
 
 import (
 	"fmt"
+	"storemy/pkg/catalog/systemtable"
 	"storemy/pkg/concurrency/transaction"
 	"storemy/pkg/memory"
 	"storemy/pkg/primitives"
 	"storemy/pkg/storage/heap"
 	"storemy/pkg/tuple"
 	"storemy/pkg/types"
-)
-
-const (
-	CatalogTable           = "CATALOG_TABLES"
-	ColumnsTable           = "CATALOG_COLUMNS"
-	CatalogTableFileName   = "catalog_tables.dat"
-	CatalogColumnsFileName = "catalog_columns.dat"
 )
 
 // SystemCatalog manages database metadata including table and column definitions.
@@ -49,20 +43,26 @@ func NewSystemCatalog(ps *memory.PageStore, tm *memory.TableManager) *SystemCata
 func (sc *SystemCatalog) Initialize(ctx *transaction.TransactionContext, dataDir string) error {
 	defer sc.store.CommitTransaction(ctx)
 
-	var err error
-	sc.tablesTableID, err = sc.createCatalogTable(dataDir, CatalogTableFileName, CatalogTable, "table_id", GetTablesSchema())
-	if err != nil {
-		return fmt.Errorf("failed to create tables catalog: %w", err)
+	systemTables := []systemtable.SystemTable{
+		systemtable.Tables,
+		systemtable.Columns,
+		systemtable.Stats,
 	}
 
-	sc.columnsTableID, err = sc.createCatalogTable(dataDir, CatalogColumnsFileName, ColumnsTable, "", GetColumnsSchema())
-	if err != nil {
-		return fmt.Errorf("failed to create columns catalog: %w", err)
-	}
+	for _, table := range systemTables {
+		tableID, err := sc.createSystemTables(dataDir, table)
+		if err != nil {
+			return fmt.Errorf("failed to create %s catalog: %w", table.TableName(), err)
+		}
 
-	sc.statisticsTableID, err = sc.createCatalogTable(dataDir, CatalogStatisticsFileName, StatisticsTable, "table_id", GetStatisticsSchema())
-	if err != nil {
-		return fmt.Errorf("failed to create statistics catalog: %w", err)
+		switch table.TableName() {
+		case systemtable.Tables.TableName():
+			sc.tablesTableID = tableID
+		case systemtable.Columns.TableName():
+			sc.columnsTableID = tableID
+		case systemtable.Stats.TableName():
+			sc.statisticsTableID = tableID
+		}
 	}
 
 	sc.loader.columnsTableID = sc.columnsTableID
@@ -71,16 +71,16 @@ func (sc *SystemCatalog) Initialize(ctx *transaction.TransactionContext, dataDir
 
 // createCatalogTable creates a heap file for a system catalog table and registers it
 // with the table manager. This is an internal helper for Initialize().
-func (sc *SystemCatalog) createCatalogTable(dataDir, fileName, tableName, primaryKey string, schema *tuple.TupleDescription) (int, error) {
+func (sc *SystemCatalog) createSystemTables(dataDir string, table systemtable.SystemTable) (int, error) {
 	f, err := heap.NewHeapFile(
-		fmt.Sprintf("%s/%s", dataDir, fileName),
-		schema,
+		fmt.Sprintf("%s/%s", dataDir, table.FileName()),
+		table.Schema(),
 	)
 	if err != nil {
 		return 0, err
 	}
 
-	if err := sc.tableManager.AddTable(f, tableName, primaryKey); err != nil {
+	if err := sc.tableManager.AddTable(f, table.TableName(), table.PrimaryKey()); err != nil {
 		return 0, err
 	}
 
@@ -92,13 +92,13 @@ func (sc *SystemCatalog) createCatalogTable(dataDir, fileName, tableName, primar
 // and initializes statistics in CATALOG_STATISTICS.
 func (sc *SystemCatalog) RegisterTable(tx *transaction.TransactionContext, tableID int, tableName, filePath, primaryKey string, fields []FieldMetadata,
 ) error {
-	tup := createTablesTuple(tableID, tableName, filePath, primaryKey)
+	tup := systemtable.Tables.CreateTuple(tableID, tableName, filePath, primaryKey)
 	if err := sc.store.InsertTuple(tx, sc.tablesTableID, tup); err != nil {
 		return fmt.Errorf("failed to insert table metadata: %w", err)
 	}
 
 	for pos, f := range fields {
-		tup = createColumnsTuple(tableID, f.Name, f.Type, pos, f.Name == primaryKey)
+		tup = systemtable.Columns.CreateTuple(int64(tableID), f.Name, f.Type, int64(pos), f.Name == primaryKey, f.IsAutoInc)
 		if err := sc.store.InsertTuple(tx, sc.columnsTableID, tup); err != nil {
 			return fmt.Errorf("failed to insert column metadata: %w", err)
 		}
@@ -109,32 +109,10 @@ func (sc *SystemCatalog) RegisterTable(tx *transaction.TransactionContext, table
 	return nil
 }
 
-// createTablesTuple creates a tuple for insertion into CATALOG_TABLES.
-// Schema: (table_id INT, table_name STRING, file_path STRING, primary_key STRING)
-func createTablesTuple(tableID int, tableName, filePath, primaryKey string) *tuple.Tuple {
-	t := tuple.NewTuple(GetTablesSchema())
-	t.SetField(0, types.NewIntField(int32(tableID)))
-	t.SetField(1, types.NewStringField(tableName, types.StringMaxSize))
-	t.SetField(2, types.NewStringField(filePath, types.StringMaxSize))
-	t.SetField(3, types.NewStringField(primaryKey, types.StringMaxSize))
-	return t
-}
-
-// createColumnsTuple creates a tuple for insertion into CATALOG_COLUMNS.
-// Schema: (table_id INT, column_name STRING, column_type INT, position INT, is_primary BOOL)
-func createColumnsTuple(tableID int, colName string, colType types.Type, position int, isPrimary bool) *tuple.Tuple {
-	t := tuple.NewTuple(GetColumnsSchema())
-	t.SetField(0, types.NewIntField(int32(tableID)))
-	t.SetField(1, types.NewStringField(colName, types.StringMaxSize))
-	t.SetField(2, types.NewIntField(int32(colType)))
-	t.SetField(3, types.NewIntField(int32(position)))
-	t.SetField(4, types.NewBoolField(isPrimary))
-	return t
-}
-
 type FieldMetadata struct {
-	Name string
-	Type types.Type
+	Name      string
+	Type      types.Type
+	IsAutoInc bool
 }
 
 // LoadTables reads all table metadata from CATALOG_TABLES, reconstructs their schemas
@@ -245,4 +223,119 @@ func (sc *SystemCatalog) GetColumnsTableID() int {
 // GetStatisticsTableID returns the table ID for CATALOG_STATISTICS
 func (sc *SystemCatalog) GetStatisticsTableID() int {
 	return sc.statisticsTableID
+}
+
+// AutoIncrementInfo represents auto-increment metadata for a column
+type AutoIncrementInfo struct {
+	ColumnName  string
+	ColumnIndex int
+	NextValue   int
+}
+
+// GetAutoIncrementColumn retrieves auto-increment column info for a table
+// Returns nil if the table has no auto-increment column
+// Note: Due to MVCC, there may be multiple versions of the same column tuple.
+// We return the one with the highest next_auto_value (most recent).
+func (sc *SystemCatalog) GetAutoIncrementColumn(tid *primitives.TransactionID, tableID int) (*AutoIncrementInfo, error) {
+	var result *AutoIncrementInfo
+
+	err := sc.iterateTable(sc.columnsTableID, tid, func(columnTuple *tuple.Tuple) error {
+		colTableID, err := systemtable.Columns.GetTableID(columnTuple)
+		if err != nil {
+			return err
+		}
+
+		if colTableID != tableID {
+			return nil
+		}
+
+		col, err := systemtable.Columns.Parse(columnTuple)
+		if err != nil {
+			return err
+		}
+
+		if !col.IsAutoInc {
+			return nil
+		}
+
+		if result == nil || col.NextAutoValue > result.NextValue {
+			result = &AutoIncrementInfo{
+				ColumnName:  getStringField(columnTuple, 1),
+				ColumnIndex: getIntField(columnTuple, 3),
+				NextValue:   col.NextAutoValue,
+			}
+		}
+		return nil
+	})
+
+	if err != nil {
+		return nil, err
+	}
+
+	return result, nil
+}
+
+// IncrementAutoIncrementValue updates the next auto-increment value for a column
+func (sc *SystemCatalog) IncrementAutoIncrementValue(tx *transaction.TransactionContext, tableID int, columnName string, newValue int) error {
+	file, err := sc.tableManager.GetDbFile(sc.columnsTableID)
+	if err != nil {
+		return fmt.Errorf("failed to get columns table: %w", err)
+	}
+
+	iter := file.Iterator(tx.ID)
+	if err := iter.Open(); err != nil {
+		return fmt.Errorf("failed to open iterator: %w", err)
+	}
+	defer iter.Close()
+
+	var oldTuple *tuple.Tuple
+	var colType types.Type
+	var position int
+	var isPrimary bool
+	var isAutoInc bool
+	maxValue := -1
+
+	for {
+		hasNext, err := iter.HasNext()
+		if err != nil || !hasNext {
+			break
+		}
+
+		tup, err := iter.Next()
+		if err != nil || tup == nil {
+			break
+		}
+
+		colTableID := getIntField(tup, 0)
+		colName := getStringField(tup, 1)
+
+		if colTableID == tableID && colName == columnName {
+			currentValue := getIntField(tup, 6)
+			if currentValue > maxValue {
+				oldTuple = tup
+				colType = types.Type(getIntField(tup, 2))
+				position = getIntField(tup, 3)
+				isPrimary = getBoolField(tup, 4)
+				isAutoInc = getBoolField(tup, 5)
+				maxValue = currentValue
+			}
+		}
+	}
+
+	if oldTuple == nil {
+		return fmt.Errorf("auto-increment column %s not found for table %d", columnName, tableID)
+	}
+
+	newTuple := systemtable.Columns.CreateTuple(int64(tableID), columnName, colType, int64(position), isPrimary, isAutoInc)
+	newTuple.SetField(6, types.NewIntField(int64(newValue)))
+
+	if err := sc.store.DeleteTuple(tx, oldTuple); err != nil {
+		return fmt.Errorf("failed to delete old tuple: %w", err)
+	}
+
+	if err := sc.store.InsertTuple(tx, sc.columnsTableID, newTuple); err != nil {
+		return fmt.Errorf("failed to insert updated tuple: %w", err)
+	}
+
+	return nil
 }
