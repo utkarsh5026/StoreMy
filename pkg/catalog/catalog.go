@@ -92,7 +92,13 @@ func (sc *SystemCatalog) createSystemTables(dataDir string, table systemtable.Sy
 // and initializes statistics in CATALOG_STATISTICS.
 func (sc *SystemCatalog) RegisterTable(tx *transaction.TransactionContext, tableID int, tableName, filePath, primaryKey string, fields []FieldMetadata,
 ) error {
-	tup := systemtable.Tables.CreateTuple(tableID, tableName, filePath, primaryKey)
+	tm := systemtable.TableMetadata{
+		TableName:     tableName,
+		TableID:       tableID,
+		FilePath:      filePath,
+		PrimaryKeyCol: primaryKey,
+	}
+	tup := systemtable.Tables.CreateTuple(tm)
 	if err := sc.store.InsertTuple(tx, sc.tablesTableID, tup); err != nil {
 		return fmt.Errorf("failed to insert table metadata: %w", err)
 	}
@@ -104,8 +110,6 @@ func (sc *SystemCatalog) RegisterTable(tx *transaction.TransactionContext, table
 		}
 	}
 
-	// Note: Statistics are not initialized here automatically.
-	// Call UpdateTableStatistics explicitly after populating the table with data.
 	return nil
 }
 
@@ -123,20 +127,23 @@ func (sc *SystemCatalog) LoadTables(tx *transaction.TransactionContext, dataDir 
 	defer sc.store.CommitTransaction(tx)
 
 	return sc.iterateTable(sc.tablesTableID, tx.ID, func(tableTuple *tuple.Tuple) error {
-		tableID, name, filePath := parseTableMetadata(tableTuple)
-
-		schema, pk, err := sc.loader.LoadTableSchema(tx.ID, tableID)
+		table, err := systemtable.Tables.Parse(tableTuple)
 		if err != nil {
-			return fmt.Errorf("failed to load schema for table %s: %w", name, err)
+			return err
 		}
 
-		f, err := heap.NewHeapFile(filePath, schema)
+		schema, pk, err := sc.loader.LoadTableSchema(tx.ID, table.TableID)
 		if err != nil {
-			return fmt.Errorf("failed to open heap file for %s: %w", name, err)
+			return fmt.Errorf("failed to load schema for table %s: %w", table.TableName, err)
 		}
 
-		if err := sc.tableManager.AddTable(f, name, pk); err != nil {
-			return fmt.Errorf("failed to add table %s: %w", name, err)
+		f, err := heap.NewHeapFile(table.FilePath, schema)
+		if err != nil {
+			return fmt.Errorf("failed to open heap file for %s: %w", table.TableName, err)
+		}
+
+		if err := sc.tableManager.AddTable(f, table.TableName, pk); err != nil {
+			return fmt.Errorf("failed to add table %s: %w", table.TableName, err)
 		}
 
 		return nil
@@ -149,11 +156,14 @@ func (sc *SystemCatalog) GetTableID(tid *primitives.TransactionID, tableName str
 	var result int = -1
 
 	err := sc.iterateTable(sc.tablesTableID, tid, func(tableTuple *tuple.Tuple) error {
-		tableID, name, _ := parseTableMetadata(tableTuple)
+		table, err := systemtable.Tables.Parse(tableTuple)
+		if err != nil {
+			return err
+		}
 
-		if name == tableName {
-			result = tableID
-			return fmt.Errorf("found") // Use error to break iteration
+		if table.TableName == tableName {
+			result = table.TableID
+			return fmt.Errorf("found")
 		}
 		return nil
 	})
@@ -201,13 +211,6 @@ func (sc *SystemCatalog) iterateTable(tableID int, tid *primitives.TransactionID
 	}
 
 	return nil
-}
-
-// parseTableMetadata extracts table metadata fields from a CATALOG_TABLES tuple
-func parseTableMetadata(tableTuple *tuple.Tuple) (tableID int, tableName, filePath string) {
-	return getIntField(tableTuple, 0),
-		getStringField(tableTuple, 1),
-		getStringField(tableTuple, 2)
 }
 
 // GetTablesTableID returns the table ID for CATALOG_TABLES
