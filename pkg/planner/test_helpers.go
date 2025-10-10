@@ -30,8 +30,8 @@ func cleanupTable(t *testing.T, tableManager *memory.TableManager, tableName str
 	t.Cleanup(func() {
 		tableID, err := tableManager.GetTableID(tableName)
 		if err == nil {
-			if dbFile, err := tableManager.GetDbFile(tableID); err == nil {
-				dbFile.Close()
+			if info, err := tableManager.GetTableInfo(tableID); err == nil {
+				info.File.Close()
 			}
 		}
 	})
