@@ -4,18 +4,17 @@ import (
 	"fmt"
 	"storemy/pkg/concurrency/transaction"
 	"storemy/pkg/parser/statements"
-	"storemy/pkg/registry"
 	"storemy/pkg/tuple"
 	"storemy/pkg/types"
 )
 
 type UpdatePlan struct {
 	statement *statements.UpdateStatement
-	ctx       *registry.DatabaseContext
+	ctx       DbContext
 	tx        *transaction.TransactionContext
 }
 
-func NewUpdatePlan(statement *statements.UpdateStatement, tx *transaction.TransactionContext, ctx *registry.DatabaseContext) *UpdatePlan {
+func NewUpdatePlan(statement *statements.UpdateStatement, tx *transaction.TransactionContext, ctx DbContext) *UpdatePlan {
 	return &UpdatePlan{
 		statement: statement,
 		ctx:       ctx,
@@ -66,10 +65,10 @@ func (p *UpdatePlan) Execute() (any, error) {
 // Validates that all referenced fields exist in the table schema.
 //
 // Returns a map of field_index → new_field_value for efficient updates.
-func (p *UpdatePlan) buildUpdateMap(tupleDesc *tuple.TupleDescription) (map[int]types.Field, error) {
+func (p *UpdatePlan) buildUpdateMap(tupleDesc TupleDesc) (map[int]types.Field, error) {
 	updateMap := make(map[int]types.Field)
 	for _, cl := range p.statement.SetClauses {
-		i, err := findFieldIndex(cl.FieldName, tupleDesc)
+		i, err := tupleDesc.FindFieldIndex(cl.FieldName)
 		if err != nil {
 			return nil, err
 		}

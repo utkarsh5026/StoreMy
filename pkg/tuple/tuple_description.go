@@ -116,6 +116,18 @@ func (td *TupleDescription) String() string {
 	return strings.Join(parts, ",")
 }
 
+// findFieldIndex locates a field by name in the tuple descriptor.
+// Performs case-sensitive linear search through the schema definition.
+func (td *TupleDescription) FindFieldIndex(fieldName string) (int, error) {
+	for i := 0; i < td.NumFields(); i++ {
+		name, _ := td.GetFieldName(i)
+		if name == fieldName {
+			return i, nil
+		}
+	}
+	return -1, fmt.Errorf("column %s not found", fieldName)
+}
+
 // Combine merges two TupleDescriptions into one
 func Combine(td1, td2 *TupleDescription) *TupleDescription {
 	if td1 == nil && td2 == nil {
