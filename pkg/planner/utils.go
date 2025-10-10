@@ -1,7 +1,6 @@
 package planner
 
 import (
-	"fmt"
 	"storemy/pkg/execution/query"
 	"storemy/pkg/parser/plan"
 	"storemy/pkg/tuple"
@@ -40,22 +39,5 @@ func locateField(fieldPath string, tupleDesc *tuple.TupleDescription) (int, erro
 // createConstantField converts a string constant value to the appropriate typed field
 func createConstantField(constantValue string, tupleDesc *tuple.TupleDescription, fieldIndex int) (types.Field, error) {
 	fieldType, _ := tupleDesc.TypeAtIndex(fieldIndex)
-
-	switch fieldType {
-	case types.IntType:
-		var intVal int32
-		fmt.Sscanf(constantValue, "%d", &intVal)
-		return types.NewIntField(intVal), nil
-	case types.BoolType:
-		boolVal := constantValue == "true"
-		return types.NewBoolField(boolVal), nil
-	case types.FloatType:
-		var floatVal float64
-		fmt.Sscanf(constantValue, "%f", &floatVal)
-		return types.NewFloat64Field(floatVal), nil
-	case types.StringType:
-		return types.NewStringField(constantValue, types.StringMaxSize), nil
-	default:
-		return nil, fmt.Errorf("unsupported field type: %v", fieldType)
-	}
+	return types.CreateFieldFromConstant(fieldType, constantValue)
 }
