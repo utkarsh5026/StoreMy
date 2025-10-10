@@ -9,9 +9,10 @@ import (
 
 // fieldConstraints represents the constraints that can be applied to a table field
 type fieldConstraints struct {
-	NotNull      bool
-	DefaultValue types.Field
-	PrimaryKey   bool
+	NotNull       bool
+	DefaultValue  types.Field
+	PrimaryKey    bool
+	AutoIncrement bool
 }
 
 // parseCreateStatement parses a CREATE TABLE SQL statement from the lexer tokens.
@@ -127,9 +128,8 @@ func parseFieldDefinition(l *lexer.Lexer, stmt *statements.CreateStatement, fiel
 		return err
 	}
 
-	stmt.AddField(fieldName, fieldType, constraints.NotNull, constraints.DefaultValue)
+	stmt.AddFieldWithAutoInc(fieldName, fieldType, constraints.NotNull, constraints.DefaultValue, constraints.AutoIncrement)
 
-	// If this field has inline PRIMARY KEY constraint, set it
 	if constraints.PrimaryKey {
 		stmt.PrimaryKey = fieldName
 	}
@@ -138,7 +138,7 @@ func parseFieldDefinition(l *lexer.Lexer, stmt *statements.CreateStatement, fiel
 }
 
 // parseFieldConstraints parses optional constraints for a field definition.
-// Handles NOT NULL, DEFAULT value, and PRIMARY KEY constraints.
+// Handles NOT NULL, DEFAULT value, PRIMARY KEY, and AUTO_INCREMENT constraints.
 // Returns when no more recognized constraint tokens are found.
 func parseFieldConstraints(l *lexer.Lexer) (*fieldConstraints, error) {
 	constraints := &fieldConstraints{}
@@ -147,6 +147,8 @@ func parseFieldConstraints(l *lexer.Lexer) (*fieldConstraints, error) {
 		token := l.NextToken()
 
 		switch token.Type {
+		case lexer.AUTO_INCREMENT:
+			constraints.AutoIncrement = true
 		case lexer.NOT:
 			if err := expectTokenSequence(l, lexer.NULL); err != nil {
 				return nil, err
