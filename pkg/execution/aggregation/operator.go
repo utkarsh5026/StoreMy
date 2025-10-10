@@ -120,24 +120,12 @@ func (agg *AggregateOperator) Open() error {
 		return fmt.Errorf("failed to open source iterator: %v", err)
 	}
 
-	for {
-		hasNext, err := agg.source.HasNext()
-		if err != nil {
-			return fmt.Errorf("error checking child iterator: %v", err)
-		}
-		if !hasNext {
-			break
-		}
-
-		tup, err := agg.source.Next()
-		if err != nil {
-			return fmt.Errorf("error reading from child iterator: %v", err)
-		}
-
-		if err := agg.aggregator.Merge(tup); err != nil {
+	iterator.ForEach(agg.source, func(t *tuple.Tuple) error {
+		if err := agg.aggregator.Merge(t); err != nil {
 			return fmt.Errorf("error merging tuple: %v", err)
 		}
-	}
+		return nil
+	})
 
 	agg.aggIterator = agg.aggregator.Iterator()
 	if err := agg.aggIterator.Open(); err != nil {
