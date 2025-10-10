@@ -317,24 +317,6 @@ func TestNewSeqScan(t *testing.T) {
 	}
 }
 
-func TestNewSeqScan_NilTableManager(t *testing.T) {
-	tid := &primitives.TransactionID{}
-	tableID := 1
-
-	// Test creating with nil table manager should fail
-	ss := &SequentialScan{
-		tid:          tid,
-		tableID:      tableID,
-		tableManager: nil,
-	}
-
-	// Should fail when trying to get tuple desc
-	if ss.tableManager == nil {
-		// This simulates the error condition
-		t.Log("Table manager is nil as expected")
-	}
-}
-
 func TestNewSeqScan_TableNotFound(t *testing.T) {
 	tm := newMockTableManager()
 	tableID := 999 // Non-existent table
