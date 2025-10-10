@@ -5,6 +5,8 @@ import (
 	"storemy/pkg/catalog/systemtable"
 	"storemy/pkg/concurrency/transaction"
 	"storemy/pkg/primitives"
+	"storemy/pkg/storage/heap"
+	"storemy/pkg/storage/page"
 	"storemy/pkg/tuple"
 	"time"
 )
@@ -30,21 +32,12 @@ func (sc *SystemCatalog) UpdateTableStatistics(tx *transaction.TransactionContex
 func (sc *SystemCatalog) collectTableStatistics(tid *primitives.TransactionID, tableID int) (*TableStatistics, error) {
 	file, err := sc.tableManager.GetDbFile(tableID)
 	if err != nil {
-		return &TableStatistics{
-			TableID:     tableID,
-			Cardinality: 0,
-			PageCount:   0,
-			LastUpdated: time.Now(),
-		}, nil
+		return nil, err
 	}
 
-	pageCount := 0
-	if hf, ok := file.(interface{ NumPages() (int, error) }); ok {
-		pc, err := hf.NumPages()
-		if err != nil {
-			return nil, fmt.Errorf("failed to get page count: %w", err)
-		}
-		pageCount = pc
+	pageCount, err := getHeapPageCount(file)
+	if err != nil {
+		return nil, err
 	}
 
 	stats := &TableStatistics{
@@ -57,38 +50,24 @@ func (sc *SystemCatalog) collectTableStatistics(tid *primitives.TransactionID, t
 	totalSize := 0
 	distinctMap := make(map[string]bool)
 
-	iter := file.Iterator(tid)
-	if err := iter.Open(); err != nil {
-		return nil, fmt.Errorf("failed to open iterator: %w", err)
-	}
-	defer iter.Close()
-
-	for {
-		hasNext, err := iter.HasNext()
-		if err != nil {
-			break
-		}
-		if !hasNext {
-			break
-		}
-
-		tup, err := iter.Next()
-		if err != nil {
-			break
-		}
-		if tup == nil {
-			break
-		}
-
+	err = sc.iterateTable(sc.statisticsTableID, tid, func(t *tuple.Tuple) error {
 		stats.Cardinality++
-		totalSize += int(tup.TupleDesc.GetSize())
+		td := t.TupleDesc
+		totalSize += int(td.GetSize())
 
-		if tup.TupleDesc.NumFields() > 0 {
-			field, err := tup.GetField(0)
-			if err == nil && field != nil {
-				distinctMap[field.String()] = true
-			}
+		if td.NumFields() == 0 {
+			return nil
 		}
+
+		field, err := t.GetField(0)
+		if err == nil && field != nil {
+			distinctMap[field.String()] = true
+		}
+		return nil
+	})
+
+	if err != nil {
+		return nil, err
 	}
 
 	if stats.Cardinality > 0 {
@@ -102,7 +81,6 @@ func (sc *SystemCatalog) collectTableStatistics(tid *primitives.TransactionID, t
 // GetTableStatistics retrieves statistics for a given table
 func (sc *SystemCatalog) GetTableStatistics(tid *primitives.TransactionID, tableID int) (*TableStatistics, error) {
 	var result *TableStatistics
-	tableIDInt32 := int(int64(tableID))
 
 	err := sc.iterateTable(sc.statisticsTableID, tid, func(statsTuple *tuple.Tuple) error {
 		storedTableID, err := systemtable.Stats.GetTableID(statsTuple)
@@ -110,14 +88,15 @@ func (sc *SystemCatalog) GetTableStatistics(tid *primitives.TransactionID, table
 			return err
 		}
 
-		if storedTableID == tableIDInt32 {
-			result, err = systemtable.Stats.Parse(statsTuple)
-			if err != nil {
-				return err
-			}
-			return fmt.Errorf("found")
+		if storedTableID != tableID {
+			return nil
 		}
-		return nil
+
+		result, err = systemtable.Stats.Parse(statsTuple)
+		if err != nil {
+			return err
+		}
+		return fmt.Errorf("found")
 	})
 
 	if err != nil && err.Error() == "found" {
@@ -149,38 +128,22 @@ func (sc *SystemCatalog) updateExistingStatistics(tx *transaction.TransactionCon
 
 // deleteTableStatistics removes statistics for a table
 func (sc *SystemCatalog) deleteTableStatistics(tx *transaction.TransactionContext, tableID int) error {
-	file, err := sc.tableManager.GetDbFile(sc.statisticsTableID)
-	if err != nil {
-		return fmt.Errorf("failed to get statistics table: %w", err)
-	}
-
-	tableIDInt32 := int(int64(tableID))
-
-	iter := file.Iterator(tx.ID)
-	if err := iter.Open(); err != nil {
-		return fmt.Errorf("failed to open iterator: %w", err)
-	}
-	defer iter.Close()
-
 	var tuplesToDelete []*tuple.Tuple
-	for {
-		hasNext, err := iter.HasNext()
-		if err != nil || !hasNext {
-			break
-		}
-
-		tup, err := iter.Next()
-		if err != nil || tup == nil {
-			break
-		}
-
-		storedTableID, err := systemtable.Stats.GetTableID(tup)
+	err := sc.iterateTable(sc.statisticsTableID, tx.ID, func(t *tuple.Tuple) error {
+		storedTableID, err := systemtable.Stats.GetTableID(t)
 		if err != nil {
-			break
+			return err
 		}
-		if storedTableID == tableIDInt32 {
-			tuplesToDelete = append(tuplesToDelete, tup)
+
+		if storedTableID == tableID {
+			tuplesToDelete = append(tuplesToDelete, t)
 		}
+
+		return nil
+	})
+
+	if err != nil {
+		return fmt.Errorf("failed to collect statistics tuples: %w", err)
 	}
 
 	for _, tup := range tuplesToDelete {
@@ -190,4 +153,16 @@ func (sc *SystemCatalog) deleteTableStatistics(tx *transaction.TransactionContex
 	}
 
 	return nil
+}
+
+func getHeapPageCount(file page.DbFile) (int, error) {
+	pageCount := 0
+	if hf, ok := file.(*heap.HeapFile); ok {
+		pc, err := hf.NumPages()
+		if err != nil {
+			return -1, fmt.Errorf("failed to get page count: %w", err)
+		}
+		pageCount = pc
+	}
+	return pageCount, nil
 }
