@@ -320,7 +320,7 @@ func TestCombineTuples(t *testing.T) {
 					field, _ := result.GetField(i)
 
 					switch v := expected.(type) {
-					case int32:
+					case int64:
 						intField, ok := field.(*types.IntField)
 						if !ok || intField.Value != v {
 							t.Errorf("Expected field %d to be IntField with value %d, got %v", i, v, field)
