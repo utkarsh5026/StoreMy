@@ -555,7 +555,7 @@ func TestFormatSelect_LargeResultSet(t *testing.T) {
 	tuples := make([]*tuple.Tuple, 1000)
 	for i := 0; i < 1000; i++ {
 		tup := tuple.NewTuple(td)
-		tup.SetField(0, types.NewIntField(int32(i)))
+		tup.SetField(0, types.NewIntField(int64(i)))
 		tup.SetField(1, types.NewStringField("name", 255))
 		tuples[i] = tup
 	}
@@ -594,7 +594,7 @@ func TestFormatSelect_ManyColumns(t *testing.T) {
 
 	tup := tuple.NewTuple(td)
 	for i := 0; i < numCols; i++ {
-		tup.SetField(i, types.NewIntField(int32(i)))
+		tup.SetField(i, types.NewIntField(int64(i)))
 	}
 
 	queryResult := &planner.SelectQueryResult{
