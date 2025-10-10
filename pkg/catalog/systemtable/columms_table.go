@@ -2,6 +2,7 @@ package systemtable
 
 import (
 	"fmt"
+	"storemy/pkg/iterator"
 	"storemy/pkg/tuple"
 	"storemy/pkg/types"
 )
@@ -72,8 +73,8 @@ func (ct *ColumnsTable) CreateTuple(tableID int64, colName string, colType types
 }
 
 func (ct *ColumnsTable) GetTableID(t *tuple.Tuple) (int, error) {
-	if t.TupleDesc.NumFields() != 9 {
-		return 0, fmt.Errorf("invalid tuple: expected 9 fields, got %d", t.TupleDesc.NumFields())
+	if t.TupleDesc.NumFields() != 7 {
+		return 0, fmt.Errorf("invalid tuple: expected 7 fields, got %d", t.TupleDesc.NumFields())
 	}
 
 	tableID := getIntField(t, 0)
@@ -131,4 +132,66 @@ func (ct *ColumnsTable) Parse(t *tuple.Tuple) (*ColumnInfo, error) {
 	}
 
 	return col, nil
+}
+
+// UpdateAutoIncrementValue creates a new tuple with updated auto-increment value
+func (ct *ColumnsTable) UpdateAutoIncrementValue(oldTuple *tuple.Tuple, newValue int) *tuple.Tuple {
+	newTuple := tuple.NewTuple(ct.Schema())
+	// Copy all fields except next_auto_value
+	for i := range 6 {
+		field, _ := oldTuple.GetField(i)
+		newTuple.SetField(i, field)
+	}
+	// Set the new auto-increment value
+	newTuple.SetField(6, types.NewIntField(int64(newValue)))
+	return newTuple
+}
+
+// ColumnMatch represents the result of finding an auto-increment column
+type ColumnMatch struct {
+	Tuple        *tuple.Tuple
+	ColumnType   types.Type
+	Position     int
+	IsPrimary    bool
+	IsAutoInc    bool
+	CurrentValue int
+}
+
+// FindLatestAutoIncrementColumn finds the latest version (highest next_auto_value) of an auto-increment column
+// This is MVCC-aware and handles multiple versions of the same column
+func (ct *ColumnsTable) FindLatestAutoIncrementColumn(iter iterator.TupleIterator, tableID int, columnName string) (*ColumnMatch, error) {
+	var result *ColumnMatch
+	maxValue := -1
+
+	for {
+		hasNext, err := iter.HasNext()
+		if err != nil || !hasNext {
+			break
+		}
+
+		tup, err := iter.Next()
+		if err != nil || tup == nil {
+			break
+		}
+
+		colTableID := getIntField(tup, 0)
+		colName := getStringField(tup, 1)
+
+		if colTableID == tableID && colName == columnName {
+			currentValue := getIntField(tup, 6)
+			if currentValue > maxValue {
+				result = &ColumnMatch{
+					Tuple:        tup,
+					ColumnType:   types.Type(getIntField(tup, 2)),
+					Position:     getIntField(tup, 3),
+					IsPrimary:    getBoolField(tup, 4),
+					IsAutoInc:    getBoolField(tup, 5),
+					CurrentValue: currentValue,
+				}
+				maxValue = currentValue
+			}
+		}
+	}
+
+	return result, nil
 }
