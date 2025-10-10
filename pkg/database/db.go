@@ -77,7 +77,7 @@ func NewDatabase(name, dataDir, logDir string) (*Database, error) {
 	}
 
 	pageStore := memory.NewPageStore(tableManager, wal)
-	catalogMgr := catalog.NewCatalogManager(pageStore, tableManager)
+	catalogMgr := catalog.NewCatalogManager(pageStore, tableManager, dataDir)
 
 	ctx := registry.NewDatabaseContext(tableManager, pageStore, catalogMgr.GetSystemCatalog(), catalogMgr, wal, fullPath)
 
@@ -152,7 +152,7 @@ func (db *Database) loadExistingTables() error {
 		return fmt.Errorf("failed to begin transaction for catalog initialization: %v", err)
 	}
 
-	if err := db.catalogMgr.Initialize(tx, db.dataDir); err != nil {
+	if err := db.catalogMgr.Initialize(tx); err != nil {
 		return fmt.Errorf("failed to initialize catalog: %v", err)
 	}
 
@@ -166,7 +166,7 @@ func (db *Database) loadExistingTables() error {
 		return fmt.Errorf("failed to begin transaction for loading tables: %v", err)
 	}
 
-	if err := db.catalogMgr.LoadAllTables(tx2, db.dataDir); err != nil {
+	if err := db.catalogMgr.LoadAllTables(tx2); err != nil {
 		return fmt.Errorf("failed to load tables from catalog: %v", err)
 	}
 

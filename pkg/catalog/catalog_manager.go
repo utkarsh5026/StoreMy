@@ -2,6 +2,7 @@ package catalog
 
 import (
 	"fmt"
+	"storemy/pkg/catalog/schema"
 	"storemy/pkg/catalog/systemtable"
 	"storemy/pkg/concurrency/transaction"
 	"storemy/pkg/memory"
@@ -25,76 +26,86 @@ type CatalogManager struct {
 	catalog      *SystemCatalog
 	tableManager *memory.TableManager
 	store        *memory.PageStore
+	dataDir      string
 }
 
 // NewCatalogManager creates a new CatalogManager instance.
-func NewCatalogManager(ps *memory.PageStore, tm *memory.TableManager) *CatalogManager {
+// dataDir is the base directory where table files will be stored.
+func NewCatalogManager(ps *memory.PageStore, tm *memory.TableManager, dataDir string) *CatalogManager {
 	return &CatalogManager{
 		catalog:      NewSystemCatalog(ps, tm),
 		tableManager: tm,
 		store:        ps,
+		dataDir:      dataDir,
 	}
 }
 
 // Initialize initializes the system catalog tables (CATALOG_TABLES, CATALOG_COLUMNS, CATALOG_STATISTICS).
 // This must be called once during database initialization before any other operations.
-func (cm *CatalogManager) Initialize(ctx *transaction.TransactionContext, dataDir string) error {
-	return cm.catalog.Initialize(ctx, dataDir)
+func (cm *CatalogManager) Initialize(ctx *transaction.TransactionContext) error {
+	return cm.catalog.Initialize(ctx, cm.dataDir)
 }
 
 // LoadAllTables loads all user tables from disk into memory during database startup.
 // This reads CATALOG_TABLES, reconstructs schemas from CATALOG_COLUMNS,
 // opens heap files, and registers everything with the TableManager.
-func (cm *CatalogManager) LoadAllTables(tx *transaction.TransactionContext, dataDir string) error {
-	return cm.catalog.LoadTables(tx, dataDir)
+func (cm *CatalogManager) LoadAllTables(tx *transaction.TransactionContext) error {
+	return cm.catalog.LoadTables(tx, cm.dataDir)
 }
 
 // CreateTable creates a new table with complete disk + cache registration.
 // Steps:
-//  1. Creates a new heap file on disk
+//  1. Creates a new heap file on disk (path determined by CatalogManager)
 //  2. Registers table metadata in CATALOG_TABLES
 //  3. Registers column definitions in CATALOG_COLUMNS
 //  4. Adds table to in-memory TableManager
 //
 // This is a complete, atomic operation - the table is fully usable after this call.
+// The schema parameter should have TableID set to 0; it will be updated with the actual file ID.
 func (cm *CatalogManager) CreateTable(
 	tx *transaction.TransactionContext,
-	tableName string,
-	filePath string,
-	primaryKey string,
-	fields []FieldMetadata,
-	dataDir string,
+	tableSchema *schema.Schema,
 ) (tableID int, err error) {
-	// Build schema from field metadata
-	fieldTypes := make([]types.Type, len(fields))
-	fieldNames := make([]string, len(fields))
-	for i, f := range fields {
-		fieldTypes[i] = f.Type
-		fieldNames[i] = f.Name
+	if tableSchema == nil {
+		return 0, fmt.Errorf("schema cannot be nil")
 	}
 
-	schema, err := tuple.NewTupleDesc(fieldTypes, fieldNames)
-	if err != nil {
-		return 0, fmt.Errorf("failed to create tuple description: %w", err)
-	}
+	// Generate file path (CatalogManager decides storage location)
+	fileName := tableSchema.TableName + ".dat"
+	fullPath := fmt.Sprintf("%s/%s", cm.dataDir, fileName)
 
 	// Create heap file on disk
-	fullPath := fmt.Sprintf("%s/%s", dataDir, filePath)
-	heapFile, err := heap.NewHeapFile(fullPath, schema)
+	heapFile, err := heap.NewHeapFile(fullPath, tableSchema.TupleDesc)
 	if err != nil {
 		return 0, fmt.Errorf("failed to create heap file: %w", err)
 	}
 
 	tableID = heapFile.GetID()
 
+	// Update schema with actual table ID
+	tableSchema.TableID = tableID
+	for i := range tableSchema.Columns {
+		tableSchema.Columns[i].TableID = tableID
+	}
+
+	// Convert schema to FieldMetadata for catalog registration
+	fields := make([]FieldMetadata, len(tableSchema.Columns))
+	for i, col := range tableSchema.Columns {
+		fields[i] = FieldMetadata{
+			Name:      col.Name,
+			Type:      col.FieldType,
+			IsAutoInc: col.IsAutoInc,
+		}
+	}
+
 	// Register in persistent catalog (CATALOG_TABLES + CATALOG_COLUMNS)
-	if err := cm.catalog.RegisterTable(tx, tableID, tableName, fullPath, primaryKey, fields); err != nil {
+	if err := cm.catalog.RegisterTable(tx, tableID, tableSchema.TableName, fullPath, tableSchema.PrimaryKey, fields); err != nil {
 		heapFile.Close()
 		return 0, fmt.Errorf("failed to register table in catalog: %w", err)
 	}
 
 	// Add to runtime TableManager cache
-	if err := cm.tableManager.AddTable(heapFile, tableName, primaryKey); err != nil {
+	if err := cm.tableManager.AddTable(heapFile, tableSchema); err != nil {
 		return 0, fmt.Errorf("failed to add table to manager: %w", err)
 	}
 
@@ -196,14 +207,14 @@ func (cm *CatalogManager) GetTableID(tid *primitives.TransactionID, tableName st
 // GetTableName retrieves the table name for a given table ID.
 // Checks in-memory TableManager first (O(1)), falls back to disk scan if not found.
 func (cm *CatalogManager) GetTableName(tid *primitives.TransactionID, tableID int) (string, error) {
-	if name, err := cm.tableManager.GetTableName(tableID); err == nil {
-		return name, nil
+	if info, err := cm.tableManager.GetTableInfo(tableID); err == nil {
+		return info.Schema.TableName, nil
 	}
 
 	// Slow path: scan catalog on disk (requires custom implementation)
 	// SystemCatalog doesn't have GetTableName, so we need to iterate
 	var result string
-	tableIDInt32 := int(int32(tableID))
+	tableIDInt32 := int(int64(tableID))
 
 	err := cm.catalog.iterateTable(cm.catalog.GetTablesTableID(), tid, func(tup *tuple.Tuple) error {
 		storedID := getIntField(tup, 0)
@@ -231,8 +242,11 @@ func (cm *CatalogManager) GetTableSchema(tid *primitives.TransactionID, tableID 
 		return schema, nil
 	}
 
-	schema, _, err := cm.catalog.loader.LoadTableSchema(tid, tableID)
-	return schema, err
+	schemaObj, err := cm.catalog.loader.LoadTableSchema(tid, tableID)
+	if err != nil {
+		return nil, err
+	}
+	return schemaObj.TupleDesc, nil
 }
 
 // GetTableFile retrieves the DbFile for a table from the in-memory cache.
@@ -391,7 +405,7 @@ func (cm *CatalogManager) RenameTable(tx *transaction.TransactionContext, oldNam
 
 // LoadTable loads a specific table from disk into memory by name.
 // Useful for lazy loading tables on demand rather than loading all tables at startup.
-func (cm *CatalogManager) LoadTable(tid *primitives.TransactionID, tableName string, dataDir string) error {
+func (cm *CatalogManager) LoadTable(tid *primitives.TransactionID, tableName string) error {
 	// Check if already loaded
 	if cm.tableManager.TableExists(tableName) {
 		return nil // Already loaded
@@ -417,26 +431,32 @@ func (cm *CatalogManager) LoadTable(tid *primitives.TransactionID, tableName str
 	}
 
 	// Load schema
-	schema, pk, err := cm.catalog.loader.LoadTableSchema(tid, tableID)
+	schemaObj, err := cm.catalog.loader.LoadTableSchema(tid, tableID)
 	if err != nil {
 		return fmt.Errorf("failed to load schema: %w", err)
 	}
 
 	// Open heap file
-	heapFile, err := heap.NewHeapFile(filePath, schema)
+	heapFile, err := heap.NewHeapFile(filePath, schemaObj.TupleDesc)
 	if err != nil {
 		return fmt.Errorf("failed to open heap file: %w", err)
 	}
 
-	// Add to TableManager
-	if err := cm.tableManager.AddTable(heapFile, tableName, pk); err != nil {
-		heapFile.Close()
-		return fmt.Errorf("failed to add table to manager: %w", err)
-	}
-
 	// Use loaded primary key if not in catalog metadata
 	if primaryKey == "" {
-		primaryKey = pk
+		primaryKey = schemaObj.PrimaryKey
+	}
+
+	// Update schemaObj with the correct table name (in case it was different)
+	schemaObj.TableName = tableName
+	if schemaObj.PrimaryKey == "" {
+		schemaObj.PrimaryKey = primaryKey
+	}
+
+	// Add to TableManager
+	if err := cm.tableManager.AddTable(heapFile, schemaObj); err != nil {
+		heapFile.Close()
+		return fmt.Errorf("failed to add table to manager: %w", err)
 	}
 
 	return nil
