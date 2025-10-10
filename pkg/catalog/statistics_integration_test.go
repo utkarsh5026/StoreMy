@@ -313,7 +313,7 @@ func createTestTuple(id int, name string) *tuple.Tuple {
 		[]string{"id", "name"},
 	)
 	tup := tuple.NewTuple(schema)
-	tup.SetField(0, types.NewIntField(int32(id)))
+	tup.SetField(0, types.NewIntField(int64(id)))
 	tup.SetField(1, types.NewStringField(name, types.StringMaxSize))
 	return tup
 }
