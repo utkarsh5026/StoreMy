@@ -5,6 +5,13 @@ import (
 	"storemy/pkg/types"
 )
 
+type TableMetadata struct {
+	TableID       int
+	TableName     string
+	FilePath      string
+	PrimaryKeyCol string
+}
+
 type TablesTable struct {
 }
 
@@ -45,11 +52,11 @@ func (tt *TablesTable) PrimaryKey() string {
 	return "table_id"
 }
 
-func (tt *TablesTable) CreateTuple(tableID int, tableName, filePath, primaryKey string) *tuple.Tuple {
+func (tt *TablesTable) CreateTuple(tm TableMetadata) *tuple.Tuple {
 	t := tuple.NewTuple(tt.Schema())
-	t.SetField(0, types.NewIntField(int64(tableID)))
-	t.SetField(1, types.NewStringField(tableName, types.StringMaxSize))
-	t.SetField(2, types.NewStringField(filePath, types.StringMaxSize))
-	t.SetField(3, types.NewStringField(primaryKey, types.StringMaxSize))
+	t.SetField(0, types.NewIntField(int64(tm.TableID)))
+	t.SetField(1, types.NewStringField(tm.TableName, types.StringMaxSize))
+	t.SetField(2, types.NewStringField(tm.FilePath, types.StringMaxSize))
+	t.SetField(3, types.NewStringField(tm.PrimaryKeyCol, types.StringMaxSize))
 	return t
 }
