@@ -8,6 +8,8 @@ import (
 	"storemy/pkg/primitives"
 	"storemy/pkg/registry"
 	"storemy/pkg/tuple"
+	"storemy/pkg/types"
+	"strings"
 )
 
 type tableMetadata struct {
@@ -64,28 +66,9 @@ func collectAllTuples(it iterator.DbIterator) ([]*tuple.Tuple, error) {
 		return nil, fmt.Errorf("failed to open iterator: %v", err)
 	}
 	defer it.Close()
-
-	var tuples []*tuple.Tuple
-
-	for {
-		hasNext, err := it.HasNext()
-		if err != nil {
-			return nil, fmt.Errorf("error during iteration: %v", err)
-		}
-
-		if !hasNext {
-			break
-		}
-
-		t, err := it.Next()
-		if err != nil {
-			return nil, fmt.Errorf("error fetching tuple: %v", err)
-		}
-
-		tuples = append(tuples, t)
-	}
-
-	return tuples, nil
+	return iterator.Map(it, func(t *tuple.Tuple) (*tuple.Tuple, error) {
+		return t, nil
+	})
 }
 
 // buildScanWithFilter constructs a scan operator with optional WHERE clause filtering.
@@ -120,4 +103,27 @@ func buildScanWithFilter(
 	}
 
 	return filterOp, nil
+}
+
+// buildPredicateFromFilterNode constructs a query predicate from a filter node in the execution plan.
+// It takes a filter node containing field name, predicate type, and constant value, along with
+// tuple description for type information, and returns a fully constructed predicate for query execution.
+func buildPredicateFromFilterNode(filter *plan.FilterNode, tupleDesc *tuple.TupleDescription) (*query.Predicate, error) {
+	fieldName := filter.Field
+	if dotIndex := strings.LastIndex(fieldName, "."); dotIndex != -1 {
+		fieldName = fieldName[dotIndex+1:]
+	}
+
+	fieldIndex, err := findFieldIndex(fieldName, tupleDesc)
+	if err != nil {
+		return nil, err
+	}
+
+	fieldType, _ := tupleDesc.TypeAtIndex(fieldIndex)
+	constantField, err := types.CreateFieldFromConstant(fieldType, filter.Constant)
+	if err != nil {
+		return nil, err
+	}
+
+	return query.NewPredicate(fieldIndex, filter.Predicate, constantField), nil
 }
