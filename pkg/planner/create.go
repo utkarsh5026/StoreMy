@@ -57,8 +57,9 @@ func (p *CreateTablePlan) Execute() (any, error) {
 	fieldMetadata := make([]catalog.FieldMetadata, len(p.Statement.Fields))
 	for i, field := range p.Statement.Fields {
 		fieldMetadata[i] = catalog.FieldMetadata{
-			Name: field.Name,
-			Type: field.Type,
+			Name:      field.Name,
+			Type:      field.Type,
+			IsAutoInc: field.AutoIncrement,
 		}
 	}
 
