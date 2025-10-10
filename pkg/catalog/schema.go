@@ -3,70 +3,11 @@ package catalog
 import (
 	"fmt"
 	"slices"
+	"storemy/pkg/catalog/systemtable"
 	"storemy/pkg/primitives"
 	"storemy/pkg/tuple"
 	"storemy/pkg/types"
 )
-
-const (
-	// TablesTableID is the reserved heap file ID for the CATALOG_TABLES system table
-	TablesTableID = 0
-	// ColumnsTableID is the reserved heap file ID for the CATALOG_COLUMNS system table
-	ColumnsTableID = 1
-)
-
-// GetTablesSchema returns the schema for the CATALOG_TABLES system table.
-// Schema: (table_id INT, table_name STRING, file_path STRING, primary_key STRING)
-func GetTablesSchema() *tuple.TupleDescription {
-	types := []types.Type{
-		types.IntType,
-		types.StringType,
-		types.StringType,
-		types.StringType,
-	}
-
-	names := []string{
-		"table_id",
-		"table_name",
-		"file_path",
-		"primary_key",
-	}
-
-	desc, _ := tuple.NewTupleDesc(types, names)
-	return desc
-}
-
-// GetColumnsSchema returns the schema for the CATALOG_COLUMNS system table.
-// Schema: (table_id INT, column_name STRING, type_id INT, position INT, is_primary_key BOOL)
-func GetColumnsSchema() *tuple.TupleDescription {
-	types := []types.Type{
-		types.IntType,
-		types.StringType,
-		types.IntType,
-		types.IntType,
-		types.BoolType,
-	}
-
-	names := []string{
-		"table_id",
-		"column_name",
-		"type_id",
-		"position",
-		"is_primary_key",
-	}
-
-	desc, _ := tuple.NewTupleDesc(types, names)
-	return desc
-}
-
-// ColumnInfo represents metadata for a single column during schema reconstruction.
-// Used internally by SchemaLoader to build TupleDescription from catalog data.
-type ColumnInfo struct {
-	name      string
-	fieldType types.Type
-	position  int
-	isPrimary bool
-}
 
 type IterFunc = func(int, *primitives.TransactionID, func(*tuple.Tuple) error) error
 
@@ -103,17 +44,17 @@ func (sl *SchemaLoader) LoadTableSchema(tid *primitives.TransactionID, tableID i
 
 // buildTupleDescription converts sorted ColumnInfo slice into a TupleDescription.
 // Columns are sorted by their position field to ensure correct tuple layout.
-func buildTupleDescription(columns []ColumnInfo) *tuple.TupleDescription {
+func buildTupleDescription(columns []systemtable.ColumnInfo) *tuple.TupleDescription {
 	sortedCols := slices.Clone(columns)
-	slices.SortFunc(sortedCols, func(a, b ColumnInfo) int {
-		return a.position - b.position
+	slices.SortFunc(sortedCols, func(a, b systemtable.ColumnInfo) int {
+		return a.Position - b.Position
 	})
 
 	fieldTypes := make([]types.Type, len(sortedCols))
 	fieldNames := make([]string, len(sortedCols))
 	for i, col := range sortedCols {
-		fieldTypes[i] = col.fieldType
-		fieldNames[i] = col.name
+		fieldTypes[i] = col.FieldType
+		fieldNames[i] = col.Name
 	}
 
 	schema, _ := tuple.NewTupleDesc(fieldTypes, fieldNames)
@@ -122,28 +63,21 @@ func buildTupleDescription(columns []ColumnInfo) *tuple.TupleDescription {
 
 // loadColumnMetadata queries CATALOG_COLUMNS for all columns belonging to tableID.
 // It filters rows by table_id and collects ColumnInfo for each matching column.
-func (sl *SchemaLoader) loadColumnMetadata(tid *primitives.TransactionID, tableID int) ([]ColumnInfo, string, error) {
-	var columns []ColumnInfo
+func (sl *SchemaLoader) loadColumnMetadata(tid *primitives.TransactionID, tableID int) ([]systemtable.ColumnInfo, string, error) {
+	var columns []systemtable.ColumnInfo
 	primaryKey := ""
 
 	err := sl.iterateFunc(sl.columnsTableID, tid, func(columnTuple *tuple.Tuple) error {
-		colTableID := getIntField(columnTuple, 0)
-		if colTableID != tableID {
-			return nil // Skip columns for other tables
+		col, err := systemtable.Columns.Parse(columnTuple)
+		if err != nil {
+			return fmt.Errorf("failed to parse column tuple: %v", err)
 		}
 
-		col := ColumnInfo{
-			name:      getStringField(columnTuple, 1),
-			fieldType: types.Type(getIntField(columnTuple, 2)),
-			position:  getIntField(columnTuple, 3),
-			isPrimary: getBoolField(columnTuple, 4),
+		if col.IsPrimary {
+			primaryKey = col.Name
 		}
 
-		if col.isPrimary {
-			primaryKey = col.name
-		}
-
-		columns = append(columns, col)
+		columns = append(columns, *col)
 		return nil
 	})
 
