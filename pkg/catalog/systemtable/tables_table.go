@@ -1,6 +1,7 @@
 package systemtable
 
 import (
+	"fmt"
 	"storemy/pkg/tuple"
 	"storemy/pkg/types"
 )
@@ -59,4 +60,34 @@ func (tt *TablesTable) CreateTuple(tm TableMetadata) *tuple.Tuple {
 	t.SetField(2, types.NewStringField(tm.FilePath, types.StringMaxSize))
 	t.SetField(3, types.NewStringField(tm.PrimaryKeyCol, types.StringMaxSize))
 	return t
+}
+
+func (tt *TablesTable) Parse(t *tuple.Tuple) (*TableMetadata, error) {
+	if t.TupleDesc.NumFields() != 4 {
+		return nil, fmt.Errorf("invalid tuple: expected 4 fields, got %d", t.TupleDesc.NumFields())
+	}
+
+	tableID := getIntField(t, 0)
+	tableName := getStringField(t, 1)
+	filePath := getStringField(t, 2)
+	primaryKey := getStringField(t, 3)
+
+	if tableID <= 0 {
+		return nil, fmt.Errorf("invalid table_id %d: must be positive", tableID)
+	}
+
+	if tableName == "" {
+		return nil, fmt.Errorf("table_name cannot be empty")
+	}
+
+	if filePath == "" {
+		return nil, fmt.Errorf("file_path cannot be empty")
+	}
+
+	return &TableMetadata{
+		TableID:       tableID,
+		TableName:     tableName,
+		FilePath:      filePath,
+		PrimaryKeyCol: primaryKey,
+	}, nil
 }
