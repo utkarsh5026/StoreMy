@@ -296,3 +296,159 @@ func TestReadPrimaryKey_MissingRightParen(t *testing.T) {
 		t.Error("expected error for missing right parenthesis")
 	}
 }
+
+// AUTO_INCREMENT tests
+func TestParseStatement_CreateTableWithAutoIncrement(t *testing.T) {
+	stmt, err := ParseStatement("CREATE TABLE users (id INT AUTO_INCREMENT PRIMARY KEY, name VARCHAR)")
+	if err != nil {
+		t.Fatalf("unexpected error: %s", err.Error())
+	}
+
+	createStmt, ok := stmt.(*statements.CreateStatement)
+	if !ok {
+		t.Fatal("expected CreateStatement")
+	}
+
+	if createStmt.TableName != "USERS" {
+		t.Errorf("expected table name 'USERS', got %s", createStmt.TableName)
+	}
+
+	if len(createStmt.Fields) != 2 {
+		t.Errorf("expected 2 fields, got %d", len(createStmt.Fields))
+	}
+
+	if !createStmt.Fields[0].AutoIncrement {
+		t.Error("expected first field to have AUTO_INCREMENT")
+	}
+
+	if createStmt.Fields[0].Type != types.IntType {
+		t.Errorf("expected first field type IntType, got %v", createStmt.Fields[0].Type)
+	}
+
+	if createStmt.PrimaryKey != "ID" {
+		t.Errorf("expected primary key 'ID', got %s", createStmt.PrimaryKey)
+	}
+
+	if createStmt.Fields[1].AutoIncrement {
+		t.Error("expected second field to not have AUTO_INCREMENT")
+	}
+}
+
+func TestParseStatement_CreateTableAutoIncrementNotNull(t *testing.T) {
+	stmt, err := ParseStatement("CREATE TABLE products (id INT AUTO_INCREMENT NOT NULL, name VARCHAR)")
+	if err != nil {
+		t.Fatalf("unexpected error: %s", err.Error())
+	}
+
+	createStmt, ok := stmt.(*statements.CreateStatement)
+	if !ok {
+		t.Fatal("expected CreateStatement")
+	}
+
+	if !createStmt.Fields[0].AutoIncrement {
+		t.Error("expected first field to have AUTO_INCREMENT")
+	}
+
+	if !createStmt.Fields[0].NotNull {
+		t.Error("expected first field to be NOT NULL")
+	}
+}
+
+func TestParseStatement_CreateTableAutoIncrementMultipleConstraints(t *testing.T) {
+	stmt, err := ParseStatement("CREATE TABLE orders (order_id INT AUTO_INCREMENT PRIMARY KEY, customer VARCHAR NOT NULL, total FLOAT)")
+	if err != nil {
+		t.Fatalf("unexpected error: %s", err.Error())
+	}
+
+	createStmt, ok := stmt.(*statements.CreateStatement)
+	if !ok {
+		t.Fatal("expected CreateStatement")
+	}
+
+	if !createStmt.Fields[0].AutoIncrement {
+		t.Error("expected first field to have AUTO_INCREMENT")
+	}
+
+	if createStmt.PrimaryKey != "ORDER_ID" {
+		t.Errorf("expected primary key 'ORDER_ID', got %s", createStmt.PrimaryKey)
+	}
+
+	if !createStmt.Fields[1].NotNull {
+		t.Error("expected customer field to be NOT NULL")
+	}
+}
+
+func TestCreateStatementValidation_MultipleAutoIncrement(t *testing.T) {
+	stmt, err := ParseStatement("CREATE TABLE test (id1 INT AUTO_INCREMENT, id2 INT AUTO_INCREMENT)")
+	if err != nil {
+		t.Fatalf("unexpected parse error: %s", err.Error())
+	}
+
+	createStmt, ok := stmt.(*statements.CreateStatement)
+	if !ok {
+		t.Fatal("expected CreateStatement")
+	}
+
+	err = createStmt.Validate()
+	if err == nil {
+		t.Error("expected validation error for multiple AUTO_INCREMENT columns")
+	}
+
+	expectedMsg := "table can have only one auto-increment column"
+	if !contains(err.Error(), expectedMsg) {
+		t.Errorf("expected error to contain '%s', got: %s", expectedMsg, err.Error())
+	}
+}
+
+func TestCreateStatementValidation_AutoIncrementNonInt(t *testing.T) {
+	stmt, err := ParseStatement("CREATE TABLE test (id VARCHAR AUTO_INCREMENT)")
+	if err != nil {
+		t.Fatalf("unexpected parse error: %s", err.Error())
+	}
+
+	createStmt, ok := stmt.(*statements.CreateStatement)
+	if !ok {
+		t.Fatal("expected CreateStatement")
+	}
+
+	err = createStmt.Validate()
+	if err == nil {
+		t.Error("expected validation error for non-INT AUTO_INCREMENT column")
+	}
+}
+
+func TestCreateStatementString_WithAutoIncrement(t *testing.T) {
+	stmt, err := ParseStatement("CREATE TABLE users (id INT AUTO_INCREMENT PRIMARY KEY, name VARCHAR)")
+	if err != nil {
+		t.Fatalf("unexpected error: %s", err.Error())
+	}
+
+	createStmt, ok := stmt.(*statements.CreateStatement)
+	if !ok {
+		t.Fatal("expected CreateStatement")
+	}
+
+	str := createStmt.String()
+	if str == "" {
+		t.Error("expected non-empty string representation")
+	}
+
+	// Verify AUTO_INCREMENT is in the string representation
+	expectedSubstr := "AUTO_INCREMENT"
+	if !contains(str, expectedSubstr) {
+		t.Errorf("expected string to contain '%s', got: %s", expectedSubstr, str)
+	}
+}
+
+func contains(s, substr string) bool {
+	return len(s) >= len(substr) && (s == substr || len(s) > len(substr) && containsHelper(s, substr))
+}
+
+func containsHelper(s, substr string) bool {
+	for i := 0; i <= len(s)-len(substr); i++ {
+		if s[i:i+len(substr)] == substr {
+			return true
+		}
+	}
+	return false
+}
