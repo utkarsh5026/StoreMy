@@ -2,22 +2,11 @@ package systemtable
 
 import (
 	"fmt"
+	"storemy/pkg/catalog/schema"
 	"storemy/pkg/iterator"
 	"storemy/pkg/tuple"
 	"storemy/pkg/types"
 )
-
-// ColumnInfo represents metadata for a single column during schema reconstruction.
-// Used internally by SchemaLoader to build TupleDescription from catalog data.
-type ColumnInfo struct {
-	TableID       int
-	Name          string
-	FieldType     types.Type
-	Position      int
-	IsPrimary     bool
-	IsAutoInc     bool
-	NextAutoValue int
-}
 
 type ColumnsTable struct{}
 
@@ -60,14 +49,14 @@ func (ct *ColumnsTable) PrimaryKey() string {
 	return ""
 }
 
-func (ct *ColumnsTable) CreateTuple(tableID int64, colName string, colType types.Type, position int64, isPrimary bool, isAutoInc bool) *tuple.Tuple {
+func (ct *ColumnsTable) CreateTuple(col schema.ColumnMetadata) *tuple.Tuple {
 	t := tuple.NewTuple(ct.Schema())
-	t.SetField(0, types.NewIntField(tableID))
-	t.SetField(1, types.NewStringField(colName, types.StringMaxSize))
-	t.SetField(2, types.NewIntField(int64(colType)))
-	t.SetField(3, types.NewIntField(position))
-	t.SetField(4, types.NewBoolField(isPrimary))
-	t.SetField(5, types.NewBoolField(isAutoInc))
+	t.SetField(0, types.NewIntField(int64(col.TableID)))
+	t.SetField(1, types.NewStringField(col.Name, types.StringMaxSize))
+	t.SetField(2, types.NewIntField(int64(col.FieldType)))
+	t.SetField(3, types.NewIntField(int64(col.Position)))
+	t.SetField(4, types.NewBoolField(col.IsPrimary))
+	t.SetField(5, types.NewBoolField(col.IsAutoInc))
 	t.SetField(6, types.NewIntField(1)) // Start auto-increment at 1
 	return t
 }
@@ -85,7 +74,7 @@ func (ct *ColumnsTable) GetTableID(t *tuple.Tuple) (int, error) {
 	return tableID, nil
 }
 
-func (ct *ColumnsTable) Parse(t *tuple.Tuple) (*ColumnInfo, error) {
+func (ct *ColumnsTable) Parse(t *tuple.Tuple) (*schema.ColumnMetadata, error) {
 	tableID, err := ct.GetTableID(t)
 	if err != nil {
 		return nil, err
@@ -121,7 +110,7 @@ func (ct *ColumnsTable) Parse(t *tuple.Tuple) (*ColumnInfo, error) {
 		}
 	}
 
-	col := &ColumnInfo{
+	col := &schema.ColumnMetadata{
 		Name:          name,
 		FieldType:     fieldType,
 		Position:      position,
@@ -137,12 +126,10 @@ func (ct *ColumnsTable) Parse(t *tuple.Tuple) (*ColumnInfo, error) {
 // UpdateAutoIncrementValue creates a new tuple with updated auto-increment value
 func (ct *ColumnsTable) UpdateAutoIncrementValue(oldTuple *tuple.Tuple, newValue int) *tuple.Tuple {
 	newTuple := tuple.NewTuple(ct.Schema())
-	// Copy all fields except next_auto_value
 	for i := range 6 {
 		field, _ := oldTuple.GetField(i)
 		newTuple.SetField(i, field)
 	}
-	// Set the new auto-increment value
 	newTuple.SetField(6, types.NewIntField(int64(newValue)))
 	return newTuple
 }

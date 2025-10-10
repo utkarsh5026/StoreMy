@@ -3,6 +3,7 @@ package catalog
 import (
 	"fmt"
 	"path/filepath"
+	"storemy/pkg/catalog/schema"
 	"storemy/pkg/catalog/systemtable"
 	"storemy/pkg/concurrency/transaction"
 	"storemy/pkg/iterator"
@@ -100,7 +101,15 @@ func (sc *SystemCatalog) RegisterTable(tx *transaction.TransactionContext, table
 	}
 
 	for pos, f := range fields {
-		tup = systemtable.Columns.CreateTuple(int64(tableID), f.Name, f.Type, int64(pos), f.Name == primaryKey, f.IsAutoInc)
+		col := schema.ColumnMetadata{
+			TableID:   tableID,
+			Name:      f.Name,
+			FieldType: f.Type,
+			Position:  pos,
+			IsPrimary: f.Name == primaryKey,
+			IsAutoInc: f.IsAutoInc,
+		}
+		tup = systemtable.Columns.CreateTuple(col)
 		if err := sc.store.InsertTuple(tx, sc.columnsTableID, tup); err != nil {
 			return fmt.Errorf("failed to insert column metadata: %w", err)
 		}
@@ -128,17 +137,17 @@ func (sc *SystemCatalog) LoadTables(tx *transaction.TransactionContext, dataDir 
 			return err
 		}
 
-		schema, pk, err := sc.loader.LoadTableSchema(tx.ID, table.TableID)
+		sch, err := sc.loader.LoadTableSchema(tx.ID, table.TableID)
 		if err != nil {
 			return fmt.Errorf("failed to load schema for table %s: %w", table.TableName, err)
 		}
 
-		f, err := heap.NewHeapFile(table.FilePath, schema)
+		f, err := heap.NewHeapFile(table.FilePath, sch.TupleDesc)
 		if err != nil {
 			return fmt.Errorf("failed to open heap file for %s: %w", table.TableName, err)
 		}
 
-		if err := sc.tableManager.AddTable(f, table.TableName, pk); err != nil {
+		if err := sc.tableManager.AddTable(f, table.TableName, sch.PrimaryKey); err != nil {
 			return fmt.Errorf("failed to add table %s: %w", table.TableName, err)
 		}
 
@@ -281,8 +290,15 @@ func (sc *SystemCatalog) IncrementAutoIncrementValue(tx *transaction.Transaction
 		return fmt.Errorf("auto-increment column %s not found for table %d", columnName, tableID)
 	}
 
-	// Create new tuple with updated value
-	newTuple := systemtable.Columns.CreateTuple(int64(tableID), columnName, match.ColumnType, int64(match.Position), match.IsPrimary, match.IsAutoInc)
+	col := schema.ColumnMetadata{
+		TableID:   tableID,
+		Name:      columnName,
+		FieldType: match.ColumnType,
+		Position:  match.Position,
+		IsPrimary: match.IsPrimary,
+		IsAutoInc: match.IsAutoInc,
+	}
+	newTuple := systemtable.Columns.CreateTuple(col)
 	newTuple.SetField(6, types.NewIntField(int64(newValue)))
 
 	if err := sc.store.DeleteTuple(tx, match.Tuple); err != nil {
