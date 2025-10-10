@@ -8,10 +8,11 @@ import (
 
 // FieldDefinition represents a column definition in a CREATE TABLE statement
 type FieldDefinition struct {
-	Name         string
-	Type         types.Type
-	NotNull      bool
-	DefaultValue types.Field
+	Name          string
+	Type          types.Type
+	NotNull       bool
+	DefaultValue  types.Field
+	AutoIncrement bool
 }
 
 // CreateStatement represents a SQL CREATE TABLE statement
@@ -41,10 +42,22 @@ func (cts *CreateStatement) FieldCount() int {
 // AddField adds a field definition to the CREATE TABLE statement
 func (cts *CreateStatement) AddField(name string, fieldType types.Type, notNull bool, defaultValue types.Field) {
 	cts.Fields = append(cts.Fields, FieldDefinition{
-		Name:         name,
-		Type:         fieldType,
-		NotNull:      notNull,
-		DefaultValue: defaultValue,
+		Name:          name,
+		Type:          fieldType,
+		NotNull:       notNull,
+		DefaultValue:  defaultValue,
+		AutoIncrement: false,
+	})
+}
+
+// AddFieldWithAutoInc adds a field definition with auto-increment to the CREATE TABLE statement
+func (cts *CreateStatement) AddFieldWithAutoInc(name string, fieldType types.Type, notNull bool, defaultValue types.Field, autoInc bool) {
+	cts.Fields = append(cts.Fields, FieldDefinition{
+		Name:          name,
+		Type:          fieldType,
+		NotNull:       notNull,
+		DefaultValue:  defaultValue,
+		AutoIncrement: autoInc,
 	})
 }
 
@@ -80,6 +93,28 @@ func (cts *CreateStatement) Validate() error {
 		}
 	}
 
+	autoIncCount := 0
+	var autoIncField *FieldDefinition
+	for i := range cts.Fields {
+		if cts.Fields[i].AutoIncrement {
+			autoIncCount++
+			autoIncField = &cts.Fields[i]
+
+			if cts.Fields[i].Type != types.IntType {
+				return NewValidationError(CreateTable, fmt.Sprintf("Fields[%d].AutoIncrement", i), "auto-increment column must be of type INT")
+			}
+		}
+	}
+
+	if autoIncCount > 1 {
+		return NewValidationError(CreateTable, "AutoIncrement", "table can have only one auto-increment column")
+	}
+
+	if autoIncCount == 1 && cts.PrimaryKey != "" && autoIncField.Name != cts.PrimaryKey {
+		// This is allowed but not recommended - could add a warning system later
+		fmt.Println("Warning: AUTO_INCREMENT should be on the primary key only")
+	}
+
 	return nil
 }
 
@@ -99,6 +134,10 @@ func (cts *CreateStatement) String() string {
 			sb.WriteString(",\n")
 		}
 		sb.WriteString(fmt.Sprintf("  %s %s", field.Name, field.Type.String()))
+
+		if field.AutoIncrement {
+			sb.WriteString(" AUTO_INCREMENT")
+		}
 
 		if field.NotNull {
 			sb.WriteString(" NOT NULL")
