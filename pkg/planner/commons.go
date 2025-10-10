@@ -12,6 +12,11 @@ import (
 	"strings"
 )
 
+type DbIterator = iterator.DbIterator
+type TID = *primitives.TransactionID
+type DbContext = *registry.DatabaseContext
+type TupleDesc = *tuple.TupleDescription
+
 type tableMetadata struct {
 	TableID   int
 	TupleDesc *tuple.TupleDescription
@@ -19,7 +24,7 @@ type tableMetadata struct {
 
 // resolveTableMetadata retrieves table ID and schema in a single operation.
 // This is the primary table lookup method used by all planner components.
-func resolveTableMetadata(tableName string, ctx *registry.DatabaseContext) (*tableMetadata, error) {
+func resolveTableMetadata(tableName string, ctx DbContext) (*tableMetadata, error) {
 	tableID, err := ctx.TableManager().GetTableID(tableName)
 	if err != nil {
 		return nil, fmt.Errorf("table %s not found", tableName)
@@ -38,7 +43,7 @@ func resolveTableMetadata(tableName string, ctx *registry.DatabaseContext) (*tab
 
 // resolveTableID converts a table name to its internal numeric identifier.
 // Convenience wrapper around resolveTableMetadata when only the ID is needed.
-func resolveTableID(tableName string, ctx *registry.DatabaseContext) (int, error) {
+func resolveTableID(tableName string, ctx DbContext) (int, error) {
 	md, err := resolveTableMetadata(tableName, ctx)
 	if err != nil {
 		return -1, err
@@ -47,21 +52,9 @@ func resolveTableID(tableName string, ctx *registry.DatabaseContext) (int, error
 	return md.TableID, nil
 }
 
-// findFieldIndex locates a field by name in the tuple descriptor.
-// Performs case-sensitive linear search through the schema definition.
-func findFieldIndex(fieldName string, tupleDesc *tuple.TupleDescription) (int, error) {
-	for i := 0; i < tupleDesc.NumFields(); i++ {
-		name, _ := tupleDesc.GetFieldName(i)
-		if name == fieldName {
-			return i, nil
-		}
-	}
-	return -1, fmt.Errorf("column %s not found", fieldName)
-}
-
 // collectAllTuples executes an iterator and materializes all results into memory.
 // This is used by operators that require full result sets (e.g., ORDER BY, aggregation).
-func collectAllTuples(it iterator.DbIterator) ([]*tuple.Tuple, error) {
+func collectAllTuples(it DbIterator) ([]*tuple.Tuple, error) {
 	if err := it.Open(); err != nil {
 		return nil, fmt.Errorf("failed to open iterator: %v", err)
 	}
@@ -77,12 +70,8 @@ func collectAllTuples(it iterator.DbIterator) ([]*tuple.Tuple, error) {
 // Query execution pipeline:
 //  1. SeqScan - reads pages via page-level locks (see LockManager)
 //  2. Filter (optional) - applies WHERE predicates
-func buildScanWithFilter(
-	tid *primitives.TransactionID,
-	tableID int,
-	whereClause *plan.FilterNode,
-	ctx *registry.DatabaseContext,
-) (iterator.DbIterator, error) {
+func buildScanWithFilter(tid TID, tableID int, whereClause *plan.FilterNode, ctx DbContext,
+) (DbIterator, error) {
 	scanOp, err := query.NewSeqScan(tid, tableID, ctx.TableManager())
 	if err != nil {
 		return nil, fmt.Errorf("failed to create table scan: %v", err)
@@ -108,18 +97,18 @@ func buildScanWithFilter(
 // buildPredicateFromFilterNode constructs a query predicate from a filter node in the execution plan.
 // It takes a filter node containing field name, predicate type, and constant value, along with
 // tuple description for type information, and returns a fully constructed predicate for query execution.
-func buildPredicateFromFilterNode(filter *plan.FilterNode, tupleDesc *tuple.TupleDescription) (*query.Predicate, error) {
+func buildPredicateFromFilterNode(filter *plan.FilterNode, td TupleDesc) (*query.Predicate, error) {
 	fieldName := filter.Field
 	if dotIndex := strings.LastIndex(fieldName, "."); dotIndex != -1 {
 		fieldName = fieldName[dotIndex+1:]
 	}
 
-	fieldIndex, err := findFieldIndex(fieldName, tupleDesc)
+	fieldIndex, err := td.FindFieldIndex(fieldName)
 	if err != nil {
 		return nil, err
 	}
 
-	fieldType, _ := tupleDesc.TypeAtIndex(fieldIndex)
+	fieldType, _ := td.TypeAtIndex(fieldIndex)
 	constantField, err := types.CreateFieldFromConstant(fieldType, filter.Constant)
 	if err != nil {
 		return nil, err

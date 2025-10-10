@@ -531,7 +531,7 @@ func TestUpdatePlan_findFieldIndex(t *testing.T) {
 	}
 
 	for _, test := range tests {
-		index, err := findFieldIndex(test.fieldName, md.TupleDesc)
+		index, err := md.TupleDesc.FindFieldIndex(test.fieldName)
 
 		if test.expectError {
 			if err == nil {

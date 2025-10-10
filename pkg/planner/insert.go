@@ -5,7 +5,6 @@ import (
 	"slices"
 	"storemy/pkg/concurrency/transaction"
 	"storemy/pkg/parser/statements"
-	"storemy/pkg/registry"
 	"storemy/pkg/tuple"
 	"storemy/pkg/types"
 )
@@ -21,7 +20,7 @@ func (d *DMLResult) String() string {
 
 type InsertPlan struct {
 	statement      *statements.InsertStatement
-	ctx            *registry.DatabaseContext
+	ctx            DbContext
 	transactionCtx *transaction.TransactionContext
 }
 
@@ -31,7 +30,7 @@ type InsertPlan struct {
 func NewInsertPlan(
 	stmt *statements.InsertStatement,
 	transactionCtx *transaction.TransactionContext,
-	ctx *registry.DatabaseContext) *InsertPlan {
+	ctx DbContext) *InsertPlan {
 	return &InsertPlan{
 		statement:      stmt,
 		ctx:            ctx,
@@ -75,7 +74,7 @@ func (p *InsertPlan) createFieldMapping(td *tuple.TupleDescription) ([]int, erro
 	fieldNames := p.statement.Fields
 	mapping := make([]int, len(fieldNames))
 	for i, field := range fieldNames {
-		fieldIndex, err := findFieldIndex(field, td)
+		fieldIndex, err := td.FindFieldIndex(field)
 		if err != nil {
 			return nil, err
 		}

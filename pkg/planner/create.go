@@ -6,12 +6,11 @@ import (
 	"storemy/pkg/catalog"
 	"storemy/pkg/concurrency/transaction"
 	"storemy/pkg/parser/statements"
-	"storemy/pkg/registry"
 )
 
 type CreateTablePlan struct {
 	Statement      *statements.CreateStatement
-	ctx            *registry.DatabaseContext
+	ctx            DbContext
 	transactionCtx *transaction.TransactionContext
 }
 
@@ -26,7 +25,7 @@ func (r *DDLResult) String() string {
 
 func NewCreateTablePlan(
 	stmt *statements.CreateStatement,
-	ctx *registry.DatabaseContext,
+	ctx DbContext,
 	transactionCtx *transaction.TransactionContext,
 ) *CreateTablePlan {
 	return &CreateTablePlan{

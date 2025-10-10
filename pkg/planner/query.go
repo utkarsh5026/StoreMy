@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"storemy/pkg/concurrency/transaction"
 	"storemy/pkg/parser/statements"
-	"storemy/pkg/registry"
 )
 
 type Plan interface {
@@ -12,10 +11,10 @@ type Plan interface {
 }
 
 type QueryPlanner struct {
-	ctx *registry.DatabaseContext
+	ctx DbContext
 }
 
-func NewQueryPlanner(ctx *registry.DatabaseContext) *QueryPlanner {
+func NewQueryPlanner(ctx DbContext) *QueryPlanner {
 	return &QueryPlanner{
 		ctx: ctx,
 	}

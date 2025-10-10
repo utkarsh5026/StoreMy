@@ -4,14 +4,13 @@ import (
 	"fmt"
 	"storemy/pkg/concurrency/transaction"
 	"storemy/pkg/parser/statements"
-	"storemy/pkg/registry"
 	"storemy/pkg/tuple"
 )
 
 // DeletePlan implements the execution plan for DELETE statements.
 type DeletePlan struct {
 	statement *statements.DeleteStatement
-	ctx       *registry.DatabaseContext
+	ctx       DbContext
 	tx        *transaction.TransactionContext
 }
 
@@ -19,7 +18,7 @@ type DeletePlan struct {
 func NewDeletePlan(
 	stmt *statements.DeleteStatement,
 	tx *transaction.TransactionContext,
-	ctx *registry.DatabaseContext) *DeletePlan {
+	ctx DbContext) *DeletePlan {
 	return &DeletePlan{
 		statement: stmt,
 		tx:        tx,

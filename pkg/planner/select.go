@@ -9,7 +9,6 @@ import (
 	"storemy/pkg/iterator"
 	"storemy/pkg/parser/plan"
 	"storemy/pkg/parser/statements"
-	"storemy/pkg/registry"
 	"storemy/pkg/tuple"
 	"storemy/pkg/types"
 	"strings"
@@ -24,13 +23,13 @@ type SelectQueryResult struct {
 // Implements the Planner → Executor pipeline by building an operator tree
 // that follows the iterator pattern for query execution.
 type SelectPlan struct {
-	ctx       *registry.DatabaseContext
+	ctx       DbContext
 	tx        *transaction.TransactionContext
 	statement *statements.SelectStatement
 }
 
 // NewSelectPlan creates a new SELECT query execution plan.
-func NewSelectPlan(stmt *statements.SelectStatement, tx *transaction.TransactionContext, ctx *registry.DatabaseContext) *SelectPlan {
+func NewSelectPlan(stmt *statements.SelectStatement, tx *transaction.TransactionContext, ctx DbContext) *SelectPlan {
 	return &SelectPlan{
 		ctx:       ctx,
 		tx:        tx,
@@ -145,7 +144,7 @@ func buildProjection(input iterator.DbIterator, selectFields []*plan.SelectListN
 	tupleDesc := input.GetTupleDesc()
 
 	for _, field := range selectFields {
-		idx, err := findFieldIndex(field.FieldName, tupleDesc)
+		idx, err := tupleDesc.FindFieldIndex(field.FieldName)
 		if err != nil {
 			return nil, err
 		}
@@ -273,7 +272,7 @@ func (p *SelectPlan) applyAggregationIfNeeded(input iterator.DbIterator) (iterat
 	td := input.GetTupleDesc()
 
 	aggFieldName := extractFieldName(p.statement.Plan.AggField())
-	aggFieldIndex, err := findFieldIndex(aggFieldName, td)
+	aggFieldIndex, err := td.FindFieldIndex(aggFieldName)
 	if err != nil {
 		return nil, fmt.Errorf("aggregate field %s not found: %w", p.statement.Plan.AggField(), err)
 	}
@@ -281,7 +280,7 @@ func (p *SelectPlan) applyAggregationIfNeeded(input iterator.DbIterator) (iterat
 	groupByIndex := aggregation.NoGrouping
 	if p.statement.Plan.GroupByField() != "" {
 		groupByFieldName := extractFieldName(p.statement.Plan.GroupByField())
-		groupByIndex, err = findFieldIndex(groupByFieldName, td)
+		groupByIndex, err = td.FindFieldIndex(groupByFieldName)
 		if err != nil {
 			return nil, fmt.Errorf("group by field %s not found: %w", p.statement.Plan.GroupByField(), err)
 		}
@@ -326,7 +325,7 @@ func parseAggregateOp(opStr string) (aggregation.AggregateOp, error) {
 // Handles qualified names (table.field) by extracting just the field part.
 func getJoinFieldIndex(fieldName string, td *tuple.TupleDescription) (int, error) {
 	name := extractFieldName(fieldName)
-	idx, err := findFieldIndex(name, td)
+	idx, err := td.FindFieldIndex(name)
 	if err != nil {
 		return -1, fmt.Errorf("join field %s not found: %w", fieldName, err)
 	}
