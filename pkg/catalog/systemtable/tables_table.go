@@ -49,6 +49,10 @@ func (tt *TablesTable) PrimaryKey() string {
 	return "table_id"
 }
 
+func (tt *TablesTable) GetNumFields() int {
+	return 4
+}
+
 func (tt *TablesTable) CreateTuple(tm TableMetadata) *tuple.Tuple {
 	t := tuple.NewTuple(tt.Schema())
 	t.SetField(0, types.NewIntField(int64(tm.TableID)))
@@ -59,7 +63,7 @@ func (tt *TablesTable) CreateTuple(tm TableMetadata) *tuple.Tuple {
 }
 
 func (tt *TablesTable) Parse(t *tuple.Tuple) (*TableMetadata, error) {
-	if t.TupleDesc.NumFields() != 4 {
+	if t.TupleDesc.NumFields() != tt.GetNumFields() {
 		return nil, fmt.Errorf("invalid tuple: expected 4 fields, got %d", t.TupleDesc.NumFields())
 	}
 
