@@ -39,17 +39,13 @@ type DbIterator interface {
 	GetTupleDesc() *tuple.TupleDescription
 }
 
-// ForEach applies a processing function to each tuple in the iterator.
-// The iteration stops early if processFunc returns an error.
-// The iterator must be opened before calling this method.
-//
-// Example:
-//
-//	err := iterator.ForEach(iter, func(t *tuple.Tuple) error {
-//	    fmt.Println(t)
-//	    return nil
-//	})
-func ForEach(iter DbIterator, processFunc func(*tuple.Tuple) error) error {
+// iterate is a helper function that encapsulates the common iteration pattern.
+// It handles HasNext/Next logic and skips nil tuples automatically.
+// The processFunc receives each tuple and can control iteration flow:
+// - Return (false, nil) to stop iteration early
+// - Return (true, nil) to continue
+// - Return (_, error) to stop with error
+func iterate(iter DbIterator, processFunc func(*tuple.Tuple) (continueLooping bool, err error)) error {
 	for {
 		hasNext, err := iter.HasNext()
 		if err != nil {
@@ -67,186 +63,100 @@ func ForEach(iter DbIterator, processFunc func(*tuple.Tuple) error) error {
 			continue
 		}
 
-		if err := processFunc(tup); err != nil {
+		shouldContinue, err := processFunc(tup)
+		if err != nil {
 			return err
+		}
+		if !shouldContinue {
+			break
 		}
 	}
 
 	return nil
 }
 
+// ForEach applies a processing function to each tuple in the iterator.
+// The iteration stops early if processFunc returns an error.
+// The iterator must be opened before calling this method.
+func ForEach(iter DbIterator, processFunc func(*tuple.Tuple) error) error {
+	return iterate(iter, func(tup *tuple.Tuple) (bool, error) {
+		err := processFunc(tup)
+		return true, err
+	})
+}
+
 // Filter returns all tuples that satisfy the predicate function.
 // The predicate should return true for tuples to include.
-//
-// Example:
-//
-//	filtered, err := iterator.Filter(iter, func(t *tuple.Tuple) (bool, error) {
-//	    field, _ := t.GetField(0)
-//	    return field.(*types.IntField).Value > 10, nil
-//	})
 func Filter(iter DbIterator, predicate func(*tuple.Tuple) (bool, error)) ([]*tuple.Tuple, error) {
 	var results []*tuple.Tuple
 
-	for {
-		hasNext, err := iter.HasNext()
-		if err != nil {
-			return nil, err
-		}
-		if !hasNext {
-			break
-		}
-
-		tup, err := iter.Next()
-		if err != nil {
-			return nil, err
-		}
-		if tup == nil {
-			continue
-		}
-
+	err := iterate(iter, func(tup *tuple.Tuple) (bool, error) {
 		matches, err := predicate(tup)
 		if err != nil {
-			return nil, err
+			return false, err
 		}
 		if matches {
 			results = append(results, tup)
 		}
-	}
+		return true, nil
+	})
 
-	return results, nil
+	return results, err
 }
 
 // Map transforms each tuple using the provided function and returns the results.
 // Nil tuples returned by the transform function are excluded from the results.
-//
-// Example:
-//
-//	transformed, err := iterator.Map(iter, func(t *tuple.Tuple) (*tuple.Tuple, error) {
-//	    // Create new tuple with modified values
-//	    return newTuple, nil
-//	})
 func Map(iter DbIterator, transform func(*tuple.Tuple) (*tuple.Tuple, error)) ([]*tuple.Tuple, error) {
 	var results []*tuple.Tuple
 
-	for {
-		hasNext, err := iter.HasNext()
-		if err != nil {
-			return nil, err
-		}
-		if !hasNext {
-			break
-		}
-
-		tup, err := iter.Next()
-		if err != nil {
-			return nil, err
-		}
-		if tup == nil {
-			continue
-		}
-
+	err := iterate(iter, func(tup *tuple.Tuple) (bool, error) {
 		transformed, err := transform(tup)
 		if err != nil {
-			return nil, err
+			return false, err
 		}
 		if transformed != nil {
 			results = append(results, transformed)
 		}
-	}
+		return true, nil
+	})
 
-	return results, nil
+	return results, err
 }
 
 // Take returns up to n tuples from the iterator.
 // If the iterator has fewer than n tuples, all available tuples are returned.
-//
-// Example:
-//
-//	first10, err := iterator.Take(iter, 10)
 func Take(iter DbIterator, n int) ([]*tuple.Tuple, error) {
 	tuples := make([]*tuple.Tuple, 0, n)
 
-	for range n {
-		hasNext, err := iter.HasNext()
-		if err != nil {
-			return nil, err
-		}
-		if !hasNext {
-			break
-		}
+	err := iterate(iter, func(tup *tuple.Tuple) (bool, error) {
+		tuples = append(tuples, tup)
+		return len(tuples) < n, nil
+	})
 
-		tup, err := iter.Next()
-		if err != nil {
-			return nil, err
-		}
-		if tup != nil {
-			tuples = append(tuples, tup)
-		}
-	}
-
-	return tuples, nil
+	return tuples, err
 }
 
 // Skip consumes and discards n tuples from the iterator.
 // Returns an error if the iterator fails before skipping n tuples.
 // Returns nil if the iterator exhausts before n tuples are skipped.
-//
-// Example:
-//
-//	err := iterator.Skip(iter, 5) // Skip first 5 tuples
 func Skip(iter DbIterator, n int) error {
-	for range n {
-		hasNext, err := iter.HasNext()
-		if err != nil {
-			return err
-		}
-		if !hasNext {
-			break
-		}
-
-		_, err = iter.Next()
-		if err != nil {
-			return err
-		}
-	}
-
-	return nil
+	count := 0
+	return iterate(iter, func(tup *tuple.Tuple) (bool, error) {
+		count++
+		return count < n, nil
+	})
 }
 
 // Reduce accumulates a value by applying a function to each tuple.
 // The accumulator function receives the current accumulated value and the next tuple.
-//
-// Example:
-//
-//	sum, err := iterator.Reduce(iter, 0, func(acc int, t *tuple.Tuple) (int, error) {
-//	    field, _ := t.GetField(0)
-//	    return acc + int(field.(*types.IntField).Value), nil
-//	})
 func Reduce[T any](iter DbIterator, initial T, accumulator func(T, *tuple.Tuple) (T, error)) (T, error) {
 	result := initial
 
-	for {
-		hasNext, err := iter.HasNext()
-		if err != nil {
-			return result, err
-		}
-		if !hasNext {
-			break
-		}
-
-		tup, err := iter.Next()
-		if err != nil {
-			return result, err
-		}
-		if tup == nil {
-			continue
-		}
-
+	err := iterate(iter, func(tup *tuple.Tuple) (bool, error) {
+		var err error
 		result, err = accumulator(result, tup)
-		if err != nil {
-			return result, err
-		}
-	}
+		return true, err
+	})
 
-	return result, nil
+	return result, err
 }
