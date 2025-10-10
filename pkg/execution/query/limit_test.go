@@ -18,7 +18,7 @@ func mustCreateLimitTupleDesc() *tuple.TupleDescription {
 	return td
 }
 
-func createLimitTestTuple(td *tuple.TupleDescription, id int32) *tuple.Tuple {
+func createLimitTestTuple(td *tuple.TupleDescription, id int64) *tuple.Tuple {
 	t := tuple.NewTuple(td)
 	intField := types.NewIntField(id)
 
@@ -88,7 +88,7 @@ func TestNewLimitOperator(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			op, err := NewLimitOperator(tt.child, tt.limit, tt.offset)
-			
+
 			if tt.expectErr {
 				if err == nil {
 					t.Errorf("Expected error but got none")
@@ -121,7 +121,7 @@ func TestNewLimitOperator(t *testing.T) {
 
 func TestLimitOperatorOpen(t *testing.T) {
 	td := mustCreateLimitTupleDesc()
-	
+
 	tuples := []*tuple.Tuple{
 		createLimitTestTuple(td, 1),
 		createLimitTestTuple(td, 2),
@@ -133,12 +133,12 @@ func TestLimitOperatorOpen(t *testing.T) {
 	t.Run("Open with offset 0", func(t *testing.T) {
 		child := newMockChildIterator(tuples, td)
 		op, _ := NewLimitOperator(child, 3, 0)
-		
+
 		err := op.Open()
 		if err != nil {
 			t.Errorf("Unexpected error: %v", err)
 		}
-		
+
 		if op.count != 0 {
 			t.Errorf("Expected count 0 after open, got %d", op.count)
 		}
@@ -150,12 +150,12 @@ func TestLimitOperatorOpen(t *testing.T) {
 	t.Run("Open with offset 2", func(t *testing.T) {
 		child := newMockChildIterator(tuples, td)
 		op, _ := NewLimitOperator(child, 2, 2)
-		
+
 		err := op.Open()
 		if err != nil {
 			t.Errorf("Unexpected error: %v", err)
 		}
-		
+
 		if op.count != 0 {
 			t.Errorf("Expected count 0 after open, got %d", op.count)
 		}
@@ -167,12 +167,12 @@ func TestLimitOperatorOpen(t *testing.T) {
 	t.Run("Open with offset larger than available tuples", func(t *testing.T) {
 		child := newMockChildIterator(tuples, td)
 		op, _ := NewLimitOperator(child, 2, 10)
-		
+
 		err := op.Open()
 		if err != nil {
 			t.Errorf("Unexpected error: %v", err)
 		}
-		
+
 		if child.index != 4 {
 			t.Errorf("Expected child index 4 after consuming all tuples, got %d", child.index)
 		}
@@ -182,7 +182,7 @@ func TestLimitOperatorOpen(t *testing.T) {
 		child := newMockChildIterator(tuples, td)
 		child.hasError = true
 		op, _ := NewLimitOperator(child, 2, 0)
-		
+
 		err := op.Open()
 		if err == nil {
 			t.Error("Expected error when child open fails")
@@ -192,7 +192,7 @@ func TestLimitOperatorOpen(t *testing.T) {
 
 func TestLimitOperatorIteration(t *testing.T) {
 	td := mustCreateLimitTupleDesc()
-	
+
 	tuples := []*tuple.Tuple{
 		createLimitTestTuple(td, 1),
 		createLimitTestTuple(td, 2),
@@ -205,7 +205,7 @@ func TestLimitOperatorIteration(t *testing.T) {
 		child := newMockChildIterator(tuples, td)
 		op, _ := NewLimitOperator(child, 3, 0)
 		op.Open()
-		
+
 		count := 0
 		for {
 			hasNext, err := op.HasNext()
@@ -216,14 +216,14 @@ func TestLimitOperatorIteration(t *testing.T) {
 			if !hasNext {
 				break
 			}
-			
+
 			tup, err := op.Next()
 			if err != nil {
 				t.Errorf("Unexpected error in Next: %v", err)
 				break
 			}
-			
-			expectedValue := int32(count + 1)
+
+			expectedValue := int64(count + 1)
 			field, _ := tup.GetField(0)
 			actualValue := field.(*types.IntField).Value
 			if actualValue != expectedValue {
@@ -231,7 +231,7 @@ func TestLimitOperatorIteration(t *testing.T) {
 			}
 			count++
 		}
-		
+
 		if count != 3 {
 			t.Errorf("Expected 3 tuples, got %d", count)
 		}
@@ -241,9 +241,9 @@ func TestLimitOperatorIteration(t *testing.T) {
 		child := newMockChildIterator(tuples, td)
 		op, _ := NewLimitOperator(child, 2, 2)
 		op.Open()
-		
+
 		count := 0
-		expectedValues := []int32{3, 4}
+		expectedValues := []int64{3, 4}
 		for {
 			hasNext, err := op.HasNext()
 			if err != nil {
@@ -253,13 +253,13 @@ func TestLimitOperatorIteration(t *testing.T) {
 			if !hasNext {
 				break
 			}
-			
+
 			tup, err := op.Next()
 			if err != nil {
 				t.Errorf("Unexpected error in Next: %v", err)
 				break
 			}
-			
+
 			expectedValue := expectedValues[count]
 			field, _ := tup.GetField(0)
 			actualValue := field.(*types.IntField).Value
@@ -268,7 +268,7 @@ func TestLimitOperatorIteration(t *testing.T) {
 			}
 			count++
 		}
-		
+
 		if count != 2 {
 			t.Errorf("Expected 2 tuples, got %d", count)
 		}
@@ -278,7 +278,7 @@ func TestLimitOperatorIteration(t *testing.T) {
 		child := newMockChildIterator(tuples, td)
 		op, _ := NewLimitOperator(child, 10, 0)
 		op.Open()
-		
+
 		count := 0
 		for {
 			hasNext, err := op.HasNext()
@@ -289,7 +289,7 @@ func TestLimitOperatorIteration(t *testing.T) {
 			if !hasNext {
 				break
 			}
-			
+
 			_, err = op.Next()
 			if err != nil {
 				t.Errorf("Unexpected error in Next: %v", err)
@@ -297,7 +297,7 @@ func TestLimitOperatorIteration(t *testing.T) {
 			}
 			count++
 		}
-		
+
 		if count != 5 {
 			t.Errorf("Expected 5 tuples (all available), got %d", count)
 		}
@@ -306,7 +306,7 @@ func TestLimitOperatorIteration(t *testing.T) {
 
 func TestLimitOperatorRewind(t *testing.T) {
 	td := mustCreateLimitTupleDesc()
-	
+
 	tuples := []*tuple.Tuple{
 		createLimitTestTuple(td, 1),
 		createLimitTestTuple(td, 2),
@@ -319,25 +319,25 @@ func TestLimitOperatorRewind(t *testing.T) {
 		child := newMockChildIterator(tuples, td)
 		op, _ := NewLimitOperator(child, 3, 1)
 		op.Open()
-		
+
 		op.Next()
-		
+
 		err := op.Rewind()
 		if err != nil {
 			t.Errorf("Unexpected error in Rewind: %v", err)
 		}
-		
+
 		if op.count != 0 {
 			t.Errorf("Expected count 0 after rewind, got %d", op.count)
 		}
-		
+
 		hasNext, _ := op.HasNext()
 		if !hasNext {
 			t.Error("Expected HasNext to return true after rewind")
 		}
-		
+
 		tup, _ := op.Next()
-		expectedValue := int32(2)
+		expectedValue := int64(2)
 		field, _ := tup.GetField(0)
 		actualValue := field.(*types.IntField).Value
 		if actualValue != expectedValue {
@@ -349,7 +349,7 @@ func TestLimitOperatorRewind(t *testing.T) {
 		child := newMockChildIterator(tuples, td)
 		op, _ := NewLimitOperator(child, 3, 0)
 		op.Open()
-		
+
 		child.hasError = true
 		err := op.Rewind()
 		if err == nil {
@@ -360,11 +360,11 @@ func TestLimitOperatorRewind(t *testing.T) {
 
 func TestLimitOperatorErrorHandling(t *testing.T) {
 	td := mustCreateLimitTupleDesc()
-	
+
 	t.Run("HasNext without open", func(t *testing.T) {
 		child := newMockChildIterator([]*tuple.Tuple{}, td)
 		op, _ := NewLimitOperator(child, 3, 0)
-		
+
 		_, err := op.HasNext()
 		if err == nil {
 			t.Error("Expected error when calling HasNext without opening")
@@ -374,7 +374,7 @@ func TestLimitOperatorErrorHandling(t *testing.T) {
 	t.Run("Next without open", func(t *testing.T) {
 		child := newMockChildIterator([]*tuple.Tuple{}, td)
 		op, _ := NewLimitOperator(child, 3, 0)
-		
+
 		_, err := op.Next()
 		if err == nil {
 			t.Error("Expected error when calling Next without opening")
@@ -384,7 +384,7 @@ func TestLimitOperatorErrorHandling(t *testing.T) {
 	t.Run("GetTupleDesc", func(t *testing.T) {
 		child := newMockChildIterator([]*tuple.Tuple{}, td)
 		op, _ := NewLimitOperator(child, 3, 0)
-		
+
 		result := op.GetTupleDesc()
 		if result != td {
 			t.Error("GetTupleDesc should return child's tuple description")
@@ -395,12 +395,12 @@ func TestLimitOperatorErrorHandling(t *testing.T) {
 		child := newMockChildIterator([]*tuple.Tuple{}, td)
 		op, _ := NewLimitOperator(child, 3, 0)
 		op.Open()
-		
+
 		err := op.Close()
 		if err != nil {
 			t.Errorf("Unexpected error in Close: %v", err)
 		}
-		
+
 		if child.isOpen {
 			t.Error("Child iterator should be closed")
 		}
@@ -409,7 +409,7 @@ func TestLimitOperatorErrorHandling(t *testing.T) {
 
 func TestLimitOperatorEdgeCases(t *testing.T) {
 	td := mustCreateLimitTupleDesc()
-	
+
 	t.Run("Zero limit", func(t *testing.T) {
 		tuples := []*tuple.Tuple{
 			createLimitTestTuple(td, 1),
@@ -417,7 +417,7 @@ func TestLimitOperatorEdgeCases(t *testing.T) {
 		child := newMockChildIterator(tuples, td)
 		op, _ := NewLimitOperator(child, 0, 0)
 		op.Open()
-		
+
 		hasNext, _ := op.HasNext()
 		if hasNext {
 			t.Error("Expected no tuples with zero limit")
@@ -428,7 +428,7 @@ func TestLimitOperatorEdgeCases(t *testing.T) {
 		child := newMockChildIterator([]*tuple.Tuple{}, td)
 		op, _ := NewLimitOperator(child, 5, 0)
 		op.Open()
-		
+
 		hasNext, _ := op.HasNext()
 		if hasNext {
 			t.Error("Expected no tuples from empty child iterator")

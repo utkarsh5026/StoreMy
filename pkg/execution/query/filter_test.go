@@ -97,7 +97,7 @@ func mustCreateFilterTupleDesc() *tuple.TupleDescription {
 
 func createFilterTestTuple(td *tuple.TupleDescription, id int32, name string) *tuple.Tuple {
 	t := tuple.NewTuple(td)
-	intField := types.NewIntField(id)
+	intField := types.NewIntField(int64(id))
 	stringField := types.NewStringField(name, 128)
 
 	err := t.SetField(0, intField)

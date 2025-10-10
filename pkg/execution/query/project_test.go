@@ -35,7 +35,7 @@ func mustCreateProjectTupleDesc() *tuple.TupleDescription {
 	return td
 }
 
-func createProjectTestTuple(td *tuple.TupleDescription, id int32, name string, age int32, email string) *tuple.Tuple {
+func createProjectTestTuple(td *tuple.TupleDescription, id int64, name string, age int64, email string) *tuple.Tuple {
 	t := tuple.NewTuple(td)
 
 	err := t.SetField(0, types.NewIntField(id))
