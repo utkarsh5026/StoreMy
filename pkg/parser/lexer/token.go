@@ -13,6 +13,7 @@ const (
 	KEY
 	DEFAULT
 	NULL
+	AUTO_INCREMENT
 	SELECT
 	FROM
 	WHERE
@@ -86,6 +87,8 @@ func (t TokenType) String() string {
 		return "DEFAULT"
 	case NULL:
 		return "NULL"
+	case AUTO_INCREMENT:
+		return "AUTO_INCREMENT"
 	case SELECT:
 		return "SELECT"
 	case FROM:

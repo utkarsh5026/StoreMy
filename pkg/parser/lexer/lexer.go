@@ -180,6 +180,8 @@ func (l *Lexer) readIdentifier(start int) Token {
 		return createToken(DEFAULT, value, start)
 	case "NULL":
 		return createToken(NULL, value, start)
+	case "AUTO_INCREMENT":
+		return createToken(AUTO_INCREMENT, value, start)
 
 	case "INSERT":
 		return createToken(INSERT, value, start)
