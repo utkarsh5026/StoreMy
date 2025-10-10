@@ -70,16 +70,15 @@ func NewDatabase(name, dataDir, logDir string) (*Database, error) {
 		return nil, fmt.Errorf("failed to create data directory: %v", err)
 	}
 
-	tableManager := memory.NewTableManager()
 	wal, err := log.NewWAL(logDir, 8192)
 	if err != nil {
 		return nil, fmt.Errorf("failed to initialize WAL: %v", err)
 	}
 
-	pageStore := memory.NewPageStore(tableManager, wal)
-	catalogMgr := catalog.NewCatalogManager(pageStore, tableManager, dataDir)
+	pageStore := memory.NewPageStore(wal)
+	catalogMgr := catalog.NewCatalogManager(pageStore, dataDir)
 
-	ctx := registry.NewDatabaseContext(tableManager, pageStore, catalogMgr.GetSystemCatalog(), catalogMgr, wal, fullPath)
+	ctx := registry.NewDatabaseContext(pageStore, catalogMgr.GetSystemCatalog(), catalogMgr, wal, fullPath)
 
 	db := &Database{
 		catalogMgr: catalogMgr,
@@ -313,6 +312,6 @@ func (db *Database) Close() error {
 		return fmt.Errorf("failed to close WAL: %v", err)
 	}
 
-	db.catalogMgr.GetTableManager().Clear()
+	db.catalogMgr.ClearCache()
 	return nil
 }
