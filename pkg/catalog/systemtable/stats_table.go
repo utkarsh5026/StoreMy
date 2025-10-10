@@ -65,10 +65,6 @@ func (st *StatsTable) PrimaryKey() string {
 	return "table_id"
 }
 
-func (st *StatsTable) ID() int {
-	return 3
-}
-
 func (st *StatsTable) GetTableID(t *tuple.Tuple) (int, error) {
 	if t.TupleDesc.NumFields() != 9 {
 		return 0, fmt.Errorf("invalid tuple: expected 9 fields, got %d", t.TupleDesc.NumFields())

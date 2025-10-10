@@ -37,10 +37,6 @@ func (tt *TablesTable) Schema() *tuple.TupleDescription {
 	return desc
 }
 
-func (tt *TablesTable) ID() int {
-	return TablesTableID
-}
-
 func (tt *TablesTable) TableName() string {
 	return "CATALOG_TABLES"
 }
