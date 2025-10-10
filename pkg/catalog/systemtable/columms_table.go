@@ -12,29 +12,32 @@ type ColumnsTable struct{}
 
 // Schema returns the schema for the CATALOG_COLUMNS system table.
 // Schema: (table_id INT, column_name STRING, type_id INT, position INT, is_primary_key BOOL, is_auto_increment BOOL, next_auto_value INT)
-func (ct *ColumnsTable) Schema() *tuple.TupleDescription {
-	types := []types.Type{
-		types.IntType,
-		types.StringType,
-		types.IntType,
-		types.IntType,
-		types.BoolType,
-		types.BoolType,
-		types.IntType,
-	}
+func (ct *ColumnsTable) Schema() *schema.Schema {
+	columns := make([]schema.ColumnMetadata, 0, 7)
 
-	names := []string{
-		"table_id",
-		"column_name",
-		"type_id",
-		"position",
-		"is_primary_key",
-		"is_auto_increment",
-		"next_auto_value",
-	}
+	col0, _ := schema.NewColumnMetadata("table_id", types.IntType, 0, SystemTableColumnsID, false, false)
+	columns = append(columns, *col0)
 
-	desc, _ := tuple.NewTupleDesc(types, names)
-	return desc
+	col1, _ := schema.NewColumnMetadata("column_name", types.StringType, 1, SystemTableColumnsID, false, false)
+	columns = append(columns, *col1)
+
+	col2, _ := schema.NewColumnMetadata("type_id", types.IntType, 2, SystemTableColumnsID, false, false)
+	columns = append(columns, *col2)
+
+	col3, _ := schema.NewColumnMetadata("position", types.IntType, 3, SystemTableColumnsID, false, false)
+	columns = append(columns, *col3)
+
+	col4, _ := schema.NewColumnMetadata("is_primary_key", types.BoolType, 4, SystemTableColumnsID, false, false)
+	columns = append(columns, *col4)
+
+	col5, _ := schema.NewColumnMetadata("is_auto_increment", types.BoolType, 5, SystemTableColumnsID, false, false)
+	columns = append(columns, *col5)
+
+	col6, _ := schema.NewColumnMetadata("next_auto_value", types.IntType, 6, SystemTableColumnsID, false, false)
+	columns = append(columns, *col6)
+
+	sch, _ := schema.NewSchema(SystemTableColumnsID, ct.TableName(), columns)
+	return sch
 }
 
 func (ct *ColumnsTable) TableName() string {
@@ -50,7 +53,7 @@ func (ct *ColumnsTable) PrimaryKey() string {
 }
 
 func (ct *ColumnsTable) CreateTuple(col schema.ColumnMetadata) *tuple.Tuple {
-	t := tuple.NewTuple(ct.Schema())
+	t := tuple.NewTuple(ct.Schema().TupleDesc)
 	t.SetField(0, types.NewIntField(int64(col.TableID)))
 	t.SetField(1, types.NewStringField(col.Name, types.StringMaxSize))
 	t.SetField(2, types.NewIntField(int64(col.FieldType)))
@@ -125,7 +128,7 @@ func (ct *ColumnsTable) Parse(t *tuple.Tuple) (*schema.ColumnMetadata, error) {
 
 // UpdateAutoIncrementValue creates a new tuple with updated auto-increment value
 func (ct *ColumnsTable) UpdateAutoIncrementValue(oldTuple *tuple.Tuple, newValue int) *tuple.Tuple {
-	newTuple := tuple.NewTuple(ct.Schema())
+	newTuple := tuple.NewTuple(ct.Schema().TupleDesc)
 	for i := range 6 {
 		field, _ := oldTuple.GetField(i)
 		newTuple.SetField(i, field)

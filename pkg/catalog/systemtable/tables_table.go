@@ -2,6 +2,7 @@ package systemtable
 
 import (
 	"fmt"
+	"storemy/pkg/catalog/schema"
 	"storemy/pkg/tuple"
 	"storemy/pkg/types"
 )
@@ -18,23 +19,23 @@ type TablesTable struct {
 
 // Schema returns the schema for the CATALOG_TABLES system table.
 // Schema: (table_id INT, table_name STRING, file_path STRING, primary_key STRING)
-func (tt *TablesTable) Schema() *tuple.TupleDescription {
-	types := []types.Type{
-		types.IntType,
-		types.StringType,
-		types.StringType,
-		types.StringType,
-	}
+func (tt *TablesTable) Schema() *schema.Schema {
+	columns := make([]schema.ColumnMetadata, 0, 4)
 
-	names := []string{
-		"table_id",
-		"table_name",
-		"file_path",
-		"primary_key",
-	}
+	col0, _ := schema.NewColumnMetadata("table_id", types.IntType, 0, SystemTableTablesID, true, false)
+	columns = append(columns, *col0)
 
-	desc, _ := tuple.NewTupleDesc(types, names)
-	return desc
+	col1, _ := schema.NewColumnMetadata("table_name", types.StringType, 1, SystemTableTablesID, false, false)
+	columns = append(columns, *col1)
+
+	col2, _ := schema.NewColumnMetadata("file_path", types.StringType, 2, SystemTableTablesID, false, false)
+	columns = append(columns, *col2)
+
+	col3, _ := schema.NewColumnMetadata("primary_key", types.StringType, 3, SystemTableTablesID, false, false)
+	columns = append(columns, *col3)
+
+	sch, _ := schema.NewSchema(SystemTableTablesID, tt.TableName(), columns)
+	return sch
 }
 
 func (tt *TablesTable) TableName() string {
@@ -54,7 +55,7 @@ func (tt *TablesTable) GetNumFields() int {
 }
 
 func (tt *TablesTable) CreateTuple(tm TableMetadata) *tuple.Tuple {
-	t := tuple.NewTuple(tt.Schema())
+	t := tuple.NewTuple(tt.Schema().TupleDesc)
 	t.SetField(0, types.NewIntField(int64(tm.TableID)))
 	t.SetField(1, types.NewStringField(tm.TableName, types.StringMaxSize))
 	t.SetField(2, types.NewStringField(tm.FilePath, types.StringMaxSize))

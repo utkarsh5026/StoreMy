@@ -1,6 +1,14 @@
 package systemtable
 
-import "storemy/pkg/tuple"
+import (
+	"storemy/pkg/catalog/schema"
+)
+
+const (
+	SystemTableTablesID     = 1
+	SystemTableColumnsID    = 2
+	SystemTableStatisticsID = 3
+)
 
 var (
 	Tables  = &TablesTable{}
@@ -9,7 +17,7 @@ var (
 )
 
 type SystemTable interface {
-	Schema() *tuple.TupleDescription
+	Schema() *schema.Schema
 	TableName() string
 	FileName() string
 	PrimaryKey() string

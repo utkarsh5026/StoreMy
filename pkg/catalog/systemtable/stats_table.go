@@ -2,6 +2,7 @@ package systemtable
 
 import (
 	"fmt"
+	"storemy/pkg/catalog/schema"
 	"storemy/pkg/tuple"
 	"storemy/pkg/types"
 	"time"
@@ -24,33 +25,38 @@ type StatsTable struct {
 }
 
 // Schema returns the schema for the CATALOG_STATS system table.
-func (st *StatsTable) Schema() *tuple.TupleDescription {
-	fieldTypes := []types.Type{
-		types.IntType,    // table_id
-		types.IntType,    // cardinality
-		types.IntType,    // page_count
-		types.IntType,    // avg_tuple_size
-		types.IntType,    // last_updated (Unix timestamp as int32)
-		types.IntType,    // distinct_values
-		types.IntType,    // null_count
-		types.StringType, // min_value
-		types.StringType, // max_value
-	}
+func (st *StatsTable) Schema() *schema.Schema {
+	columns := make([]schema.ColumnMetadata, 0, 9)
 
-	fieldNames := []string{
-		"table_id",
-		"cardinality",
-		"page_count",
-		"avg_tuple_size",
-		"last_updated",
-		"distinct_values",
-		"null_count",
-		"min_value",
-		"max_value",
-	}
+	col0, _ := schema.NewColumnMetadata("table_id", types.IntType, 0, SystemTableStatisticsID, true, false)
+	columns = append(columns, *col0)
 
-	desc, _ := tuple.NewTupleDesc(fieldTypes, fieldNames)
-	return desc
+	col1, _ := schema.NewColumnMetadata("cardinality", types.IntType, 1, SystemTableStatisticsID, false, false)
+	columns = append(columns, *col1)
+
+	col2, _ := schema.NewColumnMetadata("page_count", types.IntType, 2, SystemTableStatisticsID, false, false)
+	columns = append(columns, *col2)
+
+	col3, _ := schema.NewColumnMetadata("avg_tuple_size", types.IntType, 3, SystemTableStatisticsID, false, false)
+	columns = append(columns, *col3)
+
+	col4, _ := schema.NewColumnMetadata("last_updated", types.IntType, 4, SystemTableStatisticsID, false, false)
+	columns = append(columns, *col4)
+
+	col5, _ := schema.NewColumnMetadata("distinct_values", types.IntType, 5, SystemTableStatisticsID, false, false)
+	columns = append(columns, *col5)
+
+	col6, _ := schema.NewColumnMetadata("null_count", types.IntType, 6, SystemTableStatisticsID, false, false)
+	columns = append(columns, *col6)
+
+	col7, _ := schema.NewColumnMetadata("min_value", types.StringType, 7, SystemTableStatisticsID, false, false)
+	columns = append(columns, *col7)
+
+	col8, _ := schema.NewColumnMetadata("max_value", types.StringType, 8, SystemTableStatisticsID, false, false)
+	columns = append(columns, *col8)
+
+	sch, _ := schema.NewSchema(SystemTableStatisticsID, st.TableName(), columns)
+	return sch
 }
 
 func (st *StatsTable) FileName() string {
@@ -141,7 +147,7 @@ func (st *StatsTable) Parse(t *tuple.Tuple) (*TableStatistics, error) {
 
 // createStatisticsTuple creates a tuple for the statistics table
 func (st *StatsTable) CreateTuple(stats *TableStatistics) *tuple.Tuple {
-	t := tuple.NewTuple(st.Schema())
+	t := tuple.NewTuple(st.Schema().TupleDesc)
 	t.SetField(0, types.NewIntField(int64(stats.TableID)))
 	t.SetField(1, types.NewIntField(int64(stats.Cardinality)))
 	t.SetField(2, types.NewIntField(int64(stats.PageCount)))
