@@ -76,7 +76,8 @@ func TestPageStore_InsertTuple_Success(t *testing.T) {
 		[]types.Type{types.IntType, types.StringType},
 		[]string{"id", "name"})
 
-	err = tm.AddTable(dbFile, "test_table", "id")
+	s := createTestSchema(dbFile.GetID(), "test_table", dbFile.GetTupleDesc(), "id")
+	err = tm.AddTable(dbFile, s)
 	if err != nil {
 		t.Fatalf("Failed to add table: %v", err)
 	}
@@ -149,7 +150,8 @@ func TestPageStore_InsertTuple_WithTransactionTracking(t *testing.T) {
 
 	// Create and add a mock table
 	dbFile := newMockDbFileForPageStore(1, []types.Type{types.IntType}, []string{"id"})
-	err = tm.AddTable(dbFile, "test_table", "id")
+	s := createTestSchema(dbFile.GetID(), "test_table", dbFile.GetTupleDesc(), "id")
+	err = tm.AddTable(dbFile, s)
 	if err != nil {
 		t.Fatalf("Failed to add table: %v", err)
 	}
@@ -205,7 +207,8 @@ func TestPageStore_InsertTuple_MultiplePages(t *testing.T) {
 	// Create mock file that returns multiple pages
 	dbFile := newMockDbFileForPageStore(1, []types.Type{types.IntType}, []string{"id"})
 
-	err = tm.AddTable(dbFile, "test_table", "id")
+	s := createTestSchema(dbFile.GetID(), "test_table", dbFile.GetTupleDesc(), "id")
+	err = tm.AddTable(dbFile, s)
 	if err != nil {
 		t.Fatalf("Failed to add table: %v", err)
 	}
@@ -252,7 +255,9 @@ func TestPageStore_InsertTuple_ConcurrentAccess(t *testing.T) {
 	// Create and add mock tables
 	for i := 1; i <= 3; i++ {
 		dbFile := newMockDbFileForPageStore(i, []types.Type{types.IntType}, []string{"id"})
-		err := tm.AddTable(dbFile, fmt.Sprintf("table_%d", i), "id")
+		tableName := fmt.Sprintf("table_%d", i)
+		s := createTestSchema(dbFile.GetID(), tableName, dbFile.GetTupleDesc(), "id")
+		err := tm.AddTable(dbFile, s)
 		if err != nil {
 			t.Fatalf("Failed to add table %d: %v", i, err)
 		}
@@ -313,7 +318,8 @@ func TestPageStore_EdgeCases(t *testing.T) {
 		defer ps.Close()
 
 		dbFile := newMockDbFileForPageStore(1, []types.Type{types.IntType}, []string{"id"})
-		err = tm.AddTable(dbFile, "test_table", "id")
+		s := createTestSchema(dbFile.GetID(), "test_table", dbFile.GetTupleDesc(), "id")
+		err = tm.AddTable(dbFile, s)
 		if err != nil {
 			t.Fatalf("Failed to add table: %v", err)
 		}
@@ -342,7 +348,8 @@ func TestPageStore_EdgeCases(t *testing.T) {
 		defer ps.Close()
 
 		dbFile := newMockDbFileForPageStore(1, []types.Type{types.IntType}, []string{"id"})
-		err = tm.AddTable(dbFile, "test_table", "id")
+		s := createTestSchema(dbFile.GetID(), "test_table", dbFile.GetTupleDesc(), "id")
+		err = tm.AddTable(dbFile, s)
 		if err != nil {
 			t.Fatalf("Failed to add table: %v", err)
 		}
@@ -371,7 +378,8 @@ func TestPageStore_DeleteTuple_Success(t *testing.T) {
 
 	// Create and add a mock table
 	dbFile := newMockDbFileForPageStore(1, []types.Type{types.IntType, types.StringType}, []string{"id", "name"})
-	err = tm.AddTable(dbFile, "test_table", "id")
+	s := createTestSchema(dbFile.GetID(), "test_table", dbFile.GetTupleDesc(), "id")
+	err = tm.AddTable(dbFile, s)
 	if err != nil {
 		t.Fatalf("Failed to add table: %v", err)
 	}
@@ -505,7 +513,8 @@ func TestPageStore_DeleteTuple_WithTransactionTracking(t *testing.T) {
 
 	// Create and add a mock table
 	dbFile := newMockDbFileForPageStore(1, []types.Type{types.IntType}, []string{"id"})
-	err = tm.AddTable(dbFile, "test_table", "id")
+	s := createTestSchema(dbFile.GetID(), "test_table", dbFile.GetTupleDesc(), "id")
+	err = tm.AddTable(dbFile, s)
 	if err != nil {
 		t.Fatalf("Failed to add table: %v", err)
 	}
@@ -568,7 +577,9 @@ func TestPageStore_DeleteTuple_ConcurrentAccess(t *testing.T) {
 	// Create and add mock tables
 	for i := 1; i <= 3; i++ {
 		dbFile := newMockDbFileForPageStore(i, []types.Type{types.IntType}, []string{"id"})
-		err := tm.AddTable(dbFile, fmt.Sprintf("table_%d", i), "id")
+		tableName := fmt.Sprintf("table_%d", i)
+		s := createTestSchema(dbFile.GetID(), tableName, dbFile.GetTupleDesc(), "id")
+		err := tm.AddTable(dbFile, s)
 		if err != nil {
 			t.Fatalf("Failed to add table %d: %v", i, err)
 		}
@@ -636,7 +647,8 @@ func TestPageStore_DeleteTuple_EdgeCases(t *testing.T) {
 		defer ps.Close()
 
 		dbFile := newMockDbFileForPageStore(1, []types.Type{types.IntType}, []string{"id"})
-		err = tm.AddTable(dbFile, "test_table", "id")
+		s := createTestSchema(dbFile.GetID(), "test_table", dbFile.GetTupleDesc(), "id")
+		err = tm.AddTable(dbFile, s)
 		if err != nil {
 			t.Fatalf("Failed to add table: %v", err)
 		}
@@ -697,7 +709,8 @@ func TestPageStore_MemoryLeaks(t *testing.T) {
 
 	// Create and add a mock table
 	dbFile := newMockDbFileForPageStore(1, []types.Type{types.IntType}, []string{"id"})
-	err = tm.AddTable(dbFile, "test_table", "id")
+	s := createTestSchema(dbFile.GetID(), "test_table", dbFile.GetTupleDesc(), "id")
+	err = tm.AddTable(dbFile, s)
 	if err != nil {
 		t.Fatalf("Failed to add table: %v", err)
 	}
@@ -743,7 +756,8 @@ func TestPageStore_UpdateTuple_Success(t *testing.T) {
 
 	// Create and add a mock table
 	dbFile := newMockDbFileForPageStore(1, []types.Type{types.IntType, types.StringType}, []string{"id", "name"})
-	err = tm.AddTable(dbFile, "test_table", "id")
+	s := createTestSchema(dbFile.GetID(), "test_table", dbFile.GetTupleDesc(), "id")
+	err = tm.AddTable(dbFile, s)
 	if err != nil {
 		t.Fatalf("Failed to add table: %v", err)
 	}
@@ -846,7 +860,8 @@ func TestPageStore_UpdateTuple_InsertFails_Rollback(t *testing.T) {
 
 	// Create a mock table
 	dbFile := newMockDbFileForPageStore(1, []types.Type{types.IntType}, []string{"id"})
-	err = tm.AddTable(dbFile, "test_table", "id")
+	s := createTestSchema(dbFile.GetID(), "test_table", dbFile.GetTupleDesc(), "id")
+	err = tm.AddTable(dbFile, s)
 	if err != nil {
 		t.Fatalf("Failed to add table: %v", err)
 	}
@@ -886,7 +901,8 @@ func TestPageStore_UpdateTuple_InsertFails_Rollback(t *testing.T) {
 	ps = NewPageStore(tm, wal) // Reset page store
 
 	// Add the table back
-	err = tm.AddTable(dbFile, "test_table", "id")
+	s = createTestSchema(dbFile.GetID(), "test_table", dbFile.GetTupleDesc(), "id")
+	err = tm.AddTable(dbFile, s)
 	if err != nil {
 		t.Fatalf("Failed to add table: %v", err)
 	}
@@ -923,7 +939,8 @@ func TestPageStore_UpdateTuple_WithTransactionTracking(t *testing.T) {
 
 	// Create and add a mock table
 	dbFile := newMockDbFileForPageStore(1, []types.Type{types.IntType}, []string{"id"})
-	err = tm.AddTable(dbFile, "test_table", "id")
+	s := createTestSchema(dbFile.GetID(), "test_table", dbFile.GetTupleDesc(), "id")
+	err = tm.AddTable(dbFile, s)
 	if err != nil {
 		t.Fatalf("Failed to add table: %v", err)
 	}
@@ -991,7 +1008,9 @@ func TestPageStore_UpdateTuple_ConcurrentAccess(t *testing.T) {
 	// Create and add mock tables
 	for i := 1; i <= 3; i++ {
 		dbFile := newMockDbFileForPageStore(i, []types.Type{types.IntType}, []string{"id"})
-		err := tm.AddTable(dbFile, fmt.Sprintf("table_%d", i), "id")
+		tableName := fmt.Sprintf("table_%d", i)
+		s := createTestSchema(dbFile.GetID(), tableName, dbFile.GetTupleDesc(), "id")
+		err := tm.AddTable(dbFile, s)
 		if err != nil {
 			t.Fatalf("Failed to add table %d: %v", i, err)
 		}
@@ -1065,7 +1084,8 @@ func TestPageStore_UpdateTuple_EdgeCases(t *testing.T) {
 		defer ps.Close()
 
 		dbFile := newMockDbFileForPageStore(1, []types.Type{types.IntType}, []string{"id"})
-		err = tm.AddTable(dbFile, "test_table", "id")
+		s := createTestSchema(dbFile.GetID(), "test_table", dbFile.GetTupleDesc(), "id")
+		err = tm.AddTable(dbFile, s)
 		if err != nil {
 			t.Fatalf("Failed to add table: %v", err)
 		}
@@ -1107,7 +1127,8 @@ func TestPageStore_UpdateTuple_EdgeCases(t *testing.T) {
 		defer ps.Close()
 
 		dbFile := newMockDbFileForPageStore(1, []types.Type{types.IntType}, []string{"id"})
-		err = tm.AddTable(dbFile, "test_table", "id")
+		s := createTestSchema(dbFile.GetID(), "test_table", dbFile.GetTupleDesc(), "id")
+		err = tm.AddTable(dbFile, s)
 		if err != nil {
 			t.Fatalf("Failed to add table: %v", err)
 		}
@@ -1140,7 +1161,8 @@ func TestPageStore_UpdateTuple_EdgeCases(t *testing.T) {
 		defer ps.Close()
 
 		dbFile := newMockDbFileForPageStore(1, []types.Type{types.IntType}, []string{"id"})
-		err = tm.AddTable(dbFile, "test_table", "id")
+		s := createTestSchema(dbFile.GetID(), "test_table", dbFile.GetTupleDesc(), "id")
+		err = tm.AddTable(dbFile, s)
 		if err != nil {
 			t.Fatalf("Failed to add table: %v", err)
 		}
@@ -1180,7 +1202,8 @@ func TestPageStore_UpdateTuple_EdgeCases(t *testing.T) {
 		defer ps.Close()
 
 		dbFile := newMockDbFileForPageStore(1, []types.Type{types.IntType}, []string{"id"})
-		err = tm.AddTable(dbFile, "test_table", "id")
+		s := createTestSchema(dbFile.GetID(), "test_table", dbFile.GetTupleDesc(), "id")
+		err = tm.AddTable(dbFile, s)
 		if err != nil {
 			t.Fatalf("Failed to add table: %v", err)
 		}
@@ -1242,7 +1265,8 @@ func TestPageStore_FlushAllPages_SinglePage(t *testing.T) {
 
 	// Create and add a mock table
 	dbFile := newMockDbFileForPageStore(1, []types.Type{types.IntType}, []string{"id"})
-	err = tm.AddTable(dbFile, "test_table", "id")
+	s := createTestSchema(dbFile.GetID(), "test_table", dbFile.GetTupleDesc(), "id")
+	err = tm.AddTable(dbFile, s)
 	if err != nil {
 		t.Fatalf("Failed to add table: %v", err)
 	}
@@ -1301,7 +1325,9 @@ func TestPageStore_FlushAllPages_MultiplePages(t *testing.T) {
 
 	for i := 1; i <= numTables; i++ {
 		dbFile := newMockDbFileForPageStore(i, []types.Type{types.IntType}, []string{"id"})
-		err := tm.AddTable(dbFile, fmt.Sprintf("table_%d", i), "id")
+		tableName := fmt.Sprintf("table_%d", i)
+		s := createTestSchema(dbFile.GetID(), tableName, dbFile.GetTupleDesc(), "id")
+		err := tm.AddTable(dbFile, s)
 		if err != nil {
 			t.Fatalf("Failed to add table %d: %v", i, err)
 		}
@@ -1380,7 +1406,8 @@ func TestPageStore_FlushAllPages_ConcurrentAccess(t *testing.T) {
 
 	// Create and add a mock table
 	dbFile := newMockDbFileForPageStore(1, []types.Type{types.IntType}, []string{"id"})
-	err = tm.AddTable(dbFile, "test_table", "id")
+	s := createTestSchema(dbFile.GetID(), "test_table", dbFile.GetTupleDesc(), "id")
+	err = tm.AddTable(dbFile, s)
 	if err != nil {
 		t.Fatalf("Failed to add table: %v", err)
 	}
@@ -1473,7 +1500,8 @@ func TestPageStore_FlushAllPages_MixedDirtyAndCleanPages(t *testing.T) {
 
 	// Create and add a mock table
 	dbFile := newMockDbFileForPageStore(1, []types.Type{types.IntType}, []string{"id"})
-	err = tm.AddTable(dbFile, "test_table", "id")
+	s := createTestSchema(dbFile.GetID(), "test_table", dbFile.GetTupleDesc(), "id")
+	err = tm.AddTable(dbFile, s)
 	if err != nil {
 		t.Fatalf("Failed to add table: %v", err)
 	}
@@ -1571,7 +1599,8 @@ func TestPageStore_FlushAllPages_WriteFailure(t *testing.T) {
 
 	// Create a mock table and insert a tuple
 	dbFile := newMockDbFileForPageStore(1, []types.Type{types.IntType}, []string{"id"})
-	err = tm.AddTable(dbFile, "test_table", "id")
+	s := createTestSchema(dbFile.GetID(), "test_table", dbFile.GetTupleDesc(), "id")
+	err = tm.AddTable(dbFile, s)
 	if err != nil {
 		t.Fatalf("Failed to add table: %v", err)
 	}
@@ -1612,7 +1641,8 @@ func TestPageStore_GetPage_Success(t *testing.T) {
 
 	// Create and add a mock table
 	dbFile := newMockDbFileForPageStore(1, []types.Type{types.IntType}, []string{"id"})
-	err = tm.AddTable(dbFile, "test_table", "id")
+	s := createTestSchema(dbFile.GetID(), "test_table", dbFile.GetTupleDesc(), "id")
+	err = tm.AddTable(dbFile, s)
 	if err != nil {
 		t.Fatalf("Failed to add table: %v", err)
 	}
@@ -1664,7 +1694,8 @@ func TestPageStore_GetPage_CacheHit(t *testing.T) {
 
 	// Create and add a mock table
 	dbFile := newMockDbFileForPageStore(1, []types.Type{types.IntType}, []string{"id"})
-	err = tm.AddTable(dbFile, "test_table", "id")
+	s := createTestSchema(dbFile.GetID(), "test_table", dbFile.GetTupleDesc(), "id")
+	err = tm.AddTable(dbFile, s)
 	if err != nil {
 		t.Fatalf("Failed to add table: %v", err)
 	}
@@ -1743,7 +1774,8 @@ func TestPageStore_GetPage_ReadPageFailure(t *testing.T) {
 
 	// Create and add a mock table
 	dbFile := newMockDbFileForPageStore(1, []types.Type{types.IntType}, []string{"id"})
-	err = tm.AddTable(dbFile, "test_table", "id")
+	s := createTestSchema(dbFile.GetID(), "test_table", dbFile.GetTupleDesc(), "id")
+	err = tm.AddTable(dbFile, s)
 	if err != nil {
 		t.Fatalf("Failed to add table: %v", err)
 	}
@@ -1776,7 +1808,8 @@ func TestPageStore_GetPage_PermissionTypes(t *testing.T) {
 
 	// Create and add a mock table
 	dbFile := newMockDbFileForPageStore(1, []types.Type{types.IntType}, []string{"id"})
-	err = tm.AddTable(dbFile, "test_table", "id")
+	s := createTestSchema(dbFile.GetID(), "test_table", dbFile.GetTupleDesc(), "id")
+	err = tm.AddTable(dbFile, s)
 	if err != nil {
 		t.Fatalf("Failed to add table: %v", err)
 	}
@@ -1827,7 +1860,8 @@ func TestPageStore_GetPage_MultipleTransactions(t *testing.T) {
 
 	// Create and add a mock table
 	dbFile := newMockDbFileForPageStore(1, []types.Type{types.IntType}, []string{"id"})
-	err = tm.AddTable(dbFile, "test_table", "id")
+	s := createTestSchema(dbFile.GetID(), "test_table", dbFile.GetTupleDesc(), "id")
+	err = tm.AddTable(dbFile, s)
 	if err != nil {
 		t.Fatalf("Failed to add table: %v", err)
 	}
@@ -1894,7 +1928,8 @@ func TestPageStore_GetPage_AccessOrder(t *testing.T) {
 
 	// Create and add a mock table
 	dbFile := newMockDbFileForPageStore(1, []types.Type{types.IntType}, []string{"id"})
-	err = tm.AddTable(dbFile, "test_table", "id")
+	s := createTestSchema(dbFile.GetID(), "test_table", dbFile.GetTupleDesc(), "id")
+	err = tm.AddTable(dbFile, s)
 	if err != nil {
 		t.Fatalf("Failed to add table: %v", err)
 	}
@@ -1963,7 +1998,9 @@ func TestPageStore_GetPage_ConcurrentAccess(t *testing.T) {
 	numTables := 3
 	for i := 1; i <= numTables; i++ {
 		dbFile := newMockDbFileForPageStore(i, []types.Type{types.IntType}, []string{"id"})
-		err := tm.AddTable(dbFile, fmt.Sprintf("table_%d", i), "id")
+		tableName := fmt.Sprintf("table_%d", i)
+		s := createTestSchema(dbFile.GetID(), tableName, dbFile.GetTupleDesc(), "id")
+		err := tm.AddTable(dbFile, s)
 		if err != nil {
 			t.Fatalf("Failed to add table %d: %v", i, err)
 		}
@@ -2037,7 +2074,8 @@ func TestPageStore_GetPage_TransactionInfoCreation(t *testing.T) {
 
 	// Create and add a mock table
 	dbFile := newMockDbFileForPageStore(1, []types.Type{types.IntType}, []string{"id"})
-	err = tm.AddTable(dbFile, "test_table", "id")
+	s := createTestSchema(dbFile.GetID(), "test_table", dbFile.GetTupleDesc(), "id")
+	err = tm.AddTable(dbFile, s)
 	if err != nil {
 		t.Fatalf("Failed to add table: %v", err)
 	}
@@ -2093,7 +2131,8 @@ func TestPageStore_GetPage_EdgeCases(t *testing.T) {
 		defer ps.Close()
 
 		dbFile := newMockDbFileForPageStore(1, []types.Type{types.IntType}, []string{"id"})
-		err = tm.AddTable(dbFile, "test_table", "id")
+		s := createTestSchema(dbFile.GetID(), "test_table", dbFile.GetTupleDesc(), "id")
+		err = tm.AddTable(dbFile, s)
 		if err != nil {
 			t.Fatalf("Failed to add table: %v", err)
 		}
@@ -2121,7 +2160,8 @@ func TestPageStore_GetPage_EdgeCases(t *testing.T) {
 		defer ps.Close()
 
 		dbFile := newMockDbFileForPageStore(0, []types.Type{types.IntType}, []string{"id"})
-		err = tm.AddTable(dbFile, "test_table", "id")
+		s := createTestSchema(dbFile.GetID(), "test_table", dbFile.GetTupleDesc(), "id")
+		err = tm.AddTable(dbFile, s)
 		if err != nil {
 			t.Fatalf("Failed to add table: %v", err)
 		}
