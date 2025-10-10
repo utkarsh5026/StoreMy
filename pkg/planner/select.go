@@ -5,7 +5,6 @@ import (
 	"storemy/pkg/execution/aggregation"
 	"storemy/pkg/execution/join"
 	"storemy/pkg/execution/query"
-	"storemy/pkg/iterator"
 	"storemy/pkg/parser/plan"
 	"storemy/pkg/parser/statements"
 	"storemy/pkg/tuple"
@@ -89,7 +88,7 @@ func (p *SelectPlan) Execute() (any, error) {
 //
 // Returns DbIterator ready to produce tuples from base table.
 // Errors if table doesn't exist or scan creation fails.
-func (p *SelectPlan) buildScanOperator() (iterator.DbIterator, error) {
+func (p *SelectPlan) buildScanOperator() (DbIterator, error) {
 	tables := p.statement.Plan.Tables()
 	if len(tables) == 0 {
 		return nil, fmt.Errorf("SELECT requires at least one table in FROM clause")
@@ -117,7 +116,7 @@ func (p *SelectPlan) buildScanOperator() (iterator.DbIterator, error) {
 
 // applyProjectionIfNeeded applies the SELECT clause projection if not SELECT *.
 // Skipped if query has aggregation (aggregation defines output schema instead).
-func (p *SelectPlan) applyProjectionIfNeeded(input iterator.DbIterator) (iterator.DbIterator, error) {
+func (p *SelectPlan) applyProjectionIfNeeded(input DbIterator) (DbIterator, error) {
 	if p.statement.Plan.SelectAll() {
 		return input, nil
 	}
@@ -137,7 +136,7 @@ func (p *SelectPlan) applyProjectionIfNeeded(input iterator.DbIterator) (iterato
 //  1. For each field in SELECT list, find its index in input schema
 //  2. Extract field type from input schema
 //  3. Create Project operator with field indices and types
-func buildProjection(input iterator.DbIterator, selectFields []*plan.SelectListNode) (iterator.DbIterator, error) {
+func buildProjection(input DbIterator, selectFields []*plan.SelectListNode) (DbIterator, error) {
 	fieldIndices := make([]int, 0, len(selectFields))
 	fieldTypes := make([]types.Type, 0, len(selectFields))
 	tupleDesc := input.GetTupleDesc()
@@ -176,7 +175,7 @@ func buildProjection(input iterator.DbIterator, selectFields []*plan.SelectListN
 //
 //	FROM users u JOIN orders o ON u.id = o.user_id JOIN products p ON o.product_id = p.id
 //	→ (users JOIN orders) JOIN products
-func (p *SelectPlan) applyJoinsIfNeeded(input iterator.DbIterator) (iterator.DbIterator, error) {
+func (p *SelectPlan) applyJoinsIfNeeded(input DbIterator) (DbIterator, error) {
 	joins := p.statement.Plan.Joins()
 	if len(joins) == 0 {
 		return input, nil
@@ -207,7 +206,7 @@ func (p *SelectPlan) applyJoinsIfNeeded(input iterator.DbIterator) (iterator.DbI
 
 // buildJoinRightSide creates a scan operator for the right side of a JOIN.
 // Each join's right side is a fresh scan of a table (no filter optimization currently).
-func (p *SelectPlan) buildJoinRightSide(joinNode *plan.JoinNode) (iterator.DbIterator, error) {
+func (p *SelectPlan) buildJoinRightSide(joinNode *plan.JoinNode) (DbIterator, error) {
 	table := joinNode.RightTable
 	md, err := resolveTableMetadata(table.TableName, p.ctx)
 	if err != nil {
@@ -233,7 +232,7 @@ func (p *SelectPlan) buildJoinRightSide(joinNode *plan.JoinNode) (iterator.DbIte
 // Example: ON users.id = orders.user_id
 //
 //	→ leftIndex=0 (users.id at position 0), rightIndex=2 (orders.user_id at position 2)
-func (p *SelectPlan) buildJoinPredicate(node *plan.JoinNode, l, r iterator.DbIterator) (*join.JoinPredicate, error) {
+func (p *SelectPlan) buildJoinPredicate(node *plan.JoinNode, l, r DbIterator) (*join.JoinPredicate, error) {
 	li, err := getJoinFieldIndex(node.LeftField, l.GetTupleDesc())
 	if err != nil {
 		return nil, err
@@ -263,7 +262,7 @@ func (p *SelectPlan) buildJoinPredicate(node *plan.JoinNode, l, r iterator.DbIte
 //	→ Groups by dept field, counts id field per group
 //
 // Returns AggregateOperator, or input unchanged if no aggregation.
-func (p *SelectPlan) applyAggregationIfNeeded(input iterator.DbIterator) (iterator.DbIterator, error) {
+func (p *SelectPlan) applyAggregationIfNeeded(input DbIterator) (DbIterator, error) {
 	if !p.statement.Plan.HasAgg() {
 		return input, nil
 	}
