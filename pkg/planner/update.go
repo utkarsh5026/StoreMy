@@ -29,7 +29,7 @@ func NewUpdatePlan(statement *statements.UpdateStatement, tx TransactionCtx, ctx
 // Returns a DMLResult with the count of modified rows.
 // All operations are atomic within the transaction - failures trigger rollback.
 func (p *UpdatePlan) Execute() (any, error) {
-	md, err := resolveTableMetadata(p.statement.TableName, p.ctx)
+	md, err := resolveTableMetadata(p.statement.TableName, p.tx.ID, p.ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -49,7 +49,7 @@ func (p *UpdatePlan) Execute() (any, error) {
 		return nil, err
 	}
 
-	err = p.updateTuples(tuplesToUpdate, updateMap)
+	err = p.updateTuples(tuplesToUpdate, updateMap, md.TableID)
 	if err != nil {
 		return nil, err
 	}
@@ -78,14 +78,20 @@ func (p *UpdatePlan) buildUpdateMap(tupleDesc TupleDesc) (map[int]types.Field, e
 
 // updateTuples applies updates to all collected tuples
 // UPDATE is implemented as DELETE + INSERT at the storage layer
-func (p *UpdatePlan) updateTuples(tuples []*tuple.Tuple, updateMap map[int]types.Field) error {
+func (p *UpdatePlan) updateTuples(tuples []*tuple.Tuple, updateMap map[int]types.Field, tableID int) error {
 	store := p.ctx.PageStore()
+	ctm := p.ctx.CatalogManager()
+
+	file, err := ctm.GetTableFile(tableID)
+	if err != nil {
+		return err
+	}
 	for _, old := range tuples {
 		newTup, err := old.WithUpdatedFields(updateMap)
 		if err != nil {
 			return err
 		}
-		if err := store.UpdateTuple(p.tx, old, newTup); err != nil {
+		if err := store.UpdateTuple(p.tx, file, old, newTup); err != nil {
 			return fmt.Errorf("failed to update tuple: %v", err)
 		}
 	}
