@@ -26,3 +26,8 @@ func CreateFieldFromConstant(t Type, constant string) (Field, error) {
 		return nil, fmt.Errorf("unsupported field type: %v", t)
 	}
 }
+
+func IsValidType(t Type) bool {
+	return t == IntType || t == StringType ||
+		t == BoolType || t == FloatType
+}
