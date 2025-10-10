@@ -77,7 +77,7 @@ func TestNewBooleanAggregator(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			agg, err := NewBooleanAggregator(tt.gbField, tt.gbFieldType, tt.aField, tt.op)
-			
+
 			if tt.expectError && err == nil {
 				t.Error("Expected error but got none")
 			}
@@ -103,9 +103,9 @@ func TestBooleanAggregator_NoGrouping_Operations(t *testing.T) {
 		{Or, []bool{false, false, false}, false},
 		{Or, []bool{false, true, false}, true},
 		{Or, []bool{true, true, true}, true},
-		{Sum, []bool{true, false, true, true}, int32(3)}, // count of true values
-		{Sum, []bool{false, false, false}, int32(0)},
-		{Count, []bool{true, false, true, false, true}, int32(5)}, // total count
+		{Sum, []bool{true, false, true, true}, int64(3)}, // count of true values
+		{Sum, []bool{false, false, false}, int64(0)},
+		{Count, []bool{true, false, true, false, true}, int64(5)}, // total count
 	}
 
 	for _, op := range operations {
@@ -167,7 +167,7 @@ func TestBooleanAggregator_NoGrouping_Operations(t *testing.T) {
 				if boolField.Value != expectedVal {
 					t.Errorf("Expected %v, got %v", expectedVal, boolField.Value)
 				}
-			case int32:
+			case int64:
 				intField, ok := field.(*types.IntField)
 				if !ok {
 					t.Fatal("Result field is not an integer")
@@ -406,7 +406,7 @@ func TestBooleanAggregator_SumOperation(t *testing.T) {
 	}{
 		{"A", true},
 		{"A", false},
-		{"A", true},  // A: 2 true values
+		{"A", true}, // A: 2 true values
 		{"B", false},
 		{"B", false}, // B: 0 true values
 		{"C", true},  // C: 1 true value
@@ -429,7 +429,7 @@ func TestBooleanAggregator_SumOperation(t *testing.T) {
 		}
 	}
 
-	expectedSums := map[string]int32{
+	expectedSums := map[string]int64{
 		"A": 2, // 2 true values
 		"B": 0, // 0 true values
 		"C": 1, // 1 true value
@@ -442,7 +442,7 @@ func TestBooleanAggregator_SumOperation(t *testing.T) {
 	}
 	defer iter.Close()
 
-	results := make(map[string]int32)
+	results := make(map[string]int64)
 	for {
 		hasNext, err := iter.HasNext()
 		if err != nil {
@@ -692,7 +692,7 @@ func TestBooleanAggregator_Concurrent(t *testing.T) {
 	for i := 0; i < numGoroutines; i++ {
 		go func(goroutineID int) {
 			defer wg.Done()
-			
+
 			for j := 0; j < valuesPerGoroutine; j++ {
 				tup := tuple.NewTuple(td)
 				group := "group1"
@@ -747,7 +747,7 @@ func TestBooleanAggregator_Concurrent(t *testing.T) {
 		t.Fatal("Value field is not an integer")
 	}
 
-	expected := int32(numGoroutines * valuesPerGoroutine)
+	expected := int64(numGoroutines * valuesPerGoroutine)
 	if intField.Value != expected {
 		t.Errorf("Expected sum %d, got %d", expected, intField.Value)
 	}
@@ -1330,14 +1330,14 @@ func TestBooleanAggregatorIterator_FieldTypes_Verification(t *testing.T) {
 			op:           Sum,
 			values:       []bool{true, false, true},
 			expectedType: "int",
-			expectedVal:  int32(2),
+			expectedVal:  int64(2),
 		},
 		{
 			name:         "Count_operation_int_result",
 			op:           Count,
 			values:       []bool{true, false, true},
 			expectedType: "int",
-			expectedVal:  int32(3),
+			expectedVal:  int64(3),
 		},
 	}
 
@@ -1406,7 +1406,7 @@ func TestBooleanAggregatorIterator_FieldTypes_Verification(t *testing.T) {
 				if !ok {
 					t.Fatalf("Expected IntField, got %T", field)
 				}
-				expectedInt := test.expectedVal.(int32)
+				expectedInt := test.expectedVal.(int64)
 				if intField.Value != expectedInt {
 					t.Errorf("Expected %d, got %d", expectedInt, intField.Value)
 				}

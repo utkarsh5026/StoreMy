@@ -7,15 +7,15 @@ import (
 
 // BooleanCalculator handles boolean-specific aggregation logic
 type BooleanCalculator struct {
-	groupToAgg   map[string]any   // bool for AND/OR, int32 for COUNT/SUM
-	groupToCount map[string]int32 // for count tracking
+	groupToAgg   map[string]any   // bool for AND/OR, int64 for COUNT/SUM
+	groupToCount map[string]int64 // for count tracking
 	op           AggregateOp
 }
 
 func NewBooleanCalculator(op AggregateOp) *BooleanCalculator {
 	return &BooleanCalculator{
 		groupToAgg:   make(map[string]any),
-		groupToCount: make(map[string]int32),
+		groupToCount: make(map[string]int64),
 		op:           op,
 	}
 }
@@ -47,7 +47,7 @@ func (bc *BooleanCalculator) InitializeGroup(groupKey string) {
 	case Or:
 		bc.groupToAgg[groupKey] = false
 	case Count, Sum:
-		bc.groupToAgg[groupKey] = int32(0)
+		bc.groupToAgg[groupKey] = int64(0)
 	}
 	bc.groupToCount[groupKey] = 0
 }
@@ -68,12 +68,12 @@ func (bc *BooleanCalculator) UpdateAggregate(groupKey string, fieldValue types.F
 		currentVal := bc.groupToAgg[groupKey].(bool)
 		bc.groupToAgg[groupKey] = currentVal || value
 	case Sum:
-		currentVal := bc.groupToAgg[groupKey].(int32)
+		currentVal := bc.groupToAgg[groupKey].(int64)
 		if value {
 			bc.groupToAgg[groupKey] = currentVal + 1
 		}
 	case Count:
-		currentVal := bc.groupToAgg[groupKey].(int32)
+		currentVal := bc.groupToAgg[groupKey].(int64)
 		bc.groupToAgg[groupKey] = currentVal + 1
 	}
 
@@ -87,7 +87,7 @@ func (bc *BooleanCalculator) GetFinalValue(groupKey string) (types.Field, error)
 	switch v := aggValue.(type) {
 	case bool:
 		return types.NewBoolField(v), nil
-	case int32:
+	case int64:
 		return types.NewIntField(v), nil
 	default:
 		return nil, fmt.Errorf("unexpected aggregate value type: %T", v)

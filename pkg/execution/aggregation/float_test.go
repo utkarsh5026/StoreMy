@@ -82,8 +82,8 @@ func TestFloatAggregator_NoGrouping_Operations(t *testing.T) {
 		values   []float64
 		expected interface{}
 	}{
-		{Count, []float64{1.5, 2.5, 3.5}, int32(3)},
-		{Count, []float64{10.0, 20.0}, int32(2)},
+		{Count, []float64{1.5, 2.5, 3.5}, int64(3)},
+		{Count, []float64{10.0, 20.0}, int64(2)},
 		{Min, []float64{5.5, 1.2, 3.8}, 1.2},
 		{Min, []float64{-10.5, -5.2, -8.1}, -10.5},
 		{Min, []float64{100.0, 50.0, 75.0}, 50.0},
@@ -164,7 +164,7 @@ func TestFloatAggregator_NoGrouping_Operations(t *testing.T) {
 				if math.Abs(floatField.Value-expectedVal) > 1e-9 {
 					t.Errorf("Expected %v, got %v", expectedVal, floatField.Value)
 				}
-			case int32:
+			case int64:
 				intField, ok := field.(*types.IntField)
 				if !ok {
 					t.Fatal("Result field is not an integer")
@@ -534,7 +534,7 @@ func TestFloatAggregator_CountOperation(t *testing.T) {
 		}
 	}
 
-	expectedResults := map[string]int32{
+	expectedResults := map[string]int64{
 		"A": 3, // count = 3
 		"B": 2, // count = 2
 	}
@@ -546,7 +546,7 @@ func TestFloatAggregator_CountOperation(t *testing.T) {
 	}
 	defer iter.Close()
 
-	results := make(map[string]int32)
+	results := make(map[string]int64)
 	for {
 		hasNext, err := iter.HasNext()
 		if err != nil {

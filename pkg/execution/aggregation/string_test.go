@@ -77,7 +77,7 @@ func TestNewStringAggregator(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			agg, err := NewStringAggregator(tt.gbField, tt.gbFieldType, tt.aField, tt.op)
-			
+
 			if tt.expectError && err == nil {
 				t.Error("Expected error but got none")
 			}
@@ -97,9 +97,9 @@ func TestStringAggregator_NoGrouping_Operations(t *testing.T) {
 		values   []string
 		expected interface{}
 	}{
-		{Count, []string{"apple", "banana", "cherry"}, int32(3)},
-		{Count, []string{"hello", "world"}, int32(2)},
-		{Count, []string{}, int32(0)}, // empty case handled by iterator
+		{Count, []string{"apple", "banana", "cherry"}, int64(3)},
+		{Count, []string{"hello", "world"}, int64(2)},
+		{Count, []string{}, int64(0)}, // empty case handled by iterator
 		{Min, []string{"zebra", "apple", "banana"}, "apple"},
 		{Min, []string{"charlie", "alpha", "beta"}, "alpha"},
 		{Min, []string{"z", "a", "m"}, "a"},
@@ -112,7 +112,7 @@ func TestStringAggregator_NoGrouping_Operations(t *testing.T) {
 		if len(op.values) == 0 {
 			continue // Skip empty test for now
 		}
-		
+
 		t.Run(op.op.String()+"_NoGrouping", func(t *testing.T) {
 			agg, err := NewStringAggregator(NoGrouping, types.StringType, 0, op.op)
 			if err != nil {
@@ -171,7 +171,7 @@ func TestStringAggregator_NoGrouping_Operations(t *testing.T) {
 				if stringField.Value != expectedVal {
 					t.Errorf("Expected %v, got %v", expectedVal, stringField.Value)
 				}
-			case int32:
+			case int64:
 				intField, ok := field.(*types.IntField)
 				if !ok {
 					t.Fatal("Result field is not an integer")
@@ -237,9 +237,9 @@ func TestStringAggregator_WithGrouping(t *testing.T) {
 	}
 
 	expectedResults := map[string]string{
-		"fruits":  "apple",  // min("apple", "banana", "cherry") = "apple"
-		"colors":  "blue",   // min("red", "blue") = "blue"
-		"animals": "ant",    // min("zebra", "ant") = "ant"
+		"fruits":  "apple", // min("apple", "banana", "cherry") = "apple"
+		"colors":  "blue",  // min("red", "blue") = "blue"
+		"animals": "ant",   // min("zebra", "ant") = "ant"
 	}
 
 	iter := agg.Iterator()
@@ -413,7 +413,7 @@ func TestStringAggregator_CountOperation(t *testing.T) {
 		{"A", "banana"},
 		{"A", "cherry"}, // A: 3 items
 		{"B", "dog"},
-		{"B", "cat"}, // B: 2 items
+		{"B", "cat"},  // B: 2 items
 		{"C", "fish"}, // C: 1 item
 	}
 
@@ -434,7 +434,7 @@ func TestStringAggregator_CountOperation(t *testing.T) {
 		}
 	}
 
-	expectedCounts := map[string]int32{
+	expectedCounts := map[string]int64{
 		"A": 3, // 3 items
 		"B": 2, // 2 items
 		"C": 1, // 1 item
@@ -447,7 +447,7 @@ func TestStringAggregator_CountOperation(t *testing.T) {
 	}
 	defer iter.Close()
 
-	results := make(map[string]int32)
+	results := make(map[string]int64)
 	for {
 		hasNext, err := iter.HasNext()
 		if err != nil {
@@ -757,7 +757,7 @@ func TestStringAggregator_Concurrent(t *testing.T) {
 	for i := 0; i < numGoroutines; i++ {
 		go func(goroutineID int) {
 			defer wg.Done()
-			
+
 			for j := 0; j < valuesPerGoroutine; j++ {
 				tup := tuple.NewTuple(td)
 				group := "group1"
@@ -812,7 +812,7 @@ func TestStringAggregator_Concurrent(t *testing.T) {
 		t.Fatal("Value field is not an integer")
 	}
 
-	expected := int32(numGoroutines * valuesPerGoroutine)
+	expected := int64(numGoroutines * valuesPerGoroutine)
 	if intField.Value != expected {
 		t.Errorf("Expected count %d, got %d", expected, intField.Value)
 	}
@@ -923,7 +923,7 @@ func TestStringAggregator_TupleDesc(t *testing.T) {
 func TestStringAggregator_LexicographicOrdering(t *testing.T) {
 	t.Run("case sensitive ordering", func(t *testing.T) {
 		values := []string{"apple", "Apple", "APPLE", "zebra", "Zebra"}
-		
+
 		// Test Min
 		agg, err := NewStringAggregator(NoGrouping, types.StringType, 0, Min)
 		if err != nil {

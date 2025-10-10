@@ -97,7 +97,7 @@ func createTestTuples() []*tuple.Tuple {
 
 	testData := []struct {
 		group string
-		value int32
+		value int64
 	}{
 		{"A", 10},
 		{"B", 20},
@@ -372,8 +372,8 @@ func TestAggregateOperator_BooleanAggregation_NoGrouping(t *testing.T) {
 		{And, []bool{true, false, true}, false},
 		{Or, []bool{false, false, false}, false},
 		{Or, []bool{false, true, false}, true},
-		{Sum, []bool{true, false, true, true}, int32(3)}, // count of true values
-		{Count, []bool{true, false, true, false, true}, int32(5)}, // total count
+		{Sum, []bool{true, false, true, true}, int64(3)},          // count of true values
+		{Count, []bool{true, false, true, false, true}, int64(5)}, // total count
 	}
 
 	for _, test := range tests {
@@ -425,7 +425,7 @@ func TestAggregateOperator_BooleanAggregation_NoGrouping(t *testing.T) {
 				if boolField.Value != expectedVal {
 					t.Errorf("Expected %v, got %v", expectedVal, boolField.Value)
 				}
-			case int32:
+			case int64:
 				intField, ok := field.(*types.IntField)
 				if !ok {
 					t.Fatal("Result field is not an integer")
@@ -553,7 +553,7 @@ func TestAggregateOperator_StringAggregation_NoGrouping(t *testing.T) {
 		values   []string
 		expected interface{}
 	}{
-		{Count, []string{"apple", "banana", "cherry"}, int32(3)},
+		{Count, []string{"apple", "banana", "cherry"}, int64(3)},
 		{Min, []string{"zebra", "apple", "banana"}, "apple"},
 		{Max, []string{"zebra", "apple", "banana"}, "zebra"},
 	}
@@ -607,7 +607,7 @@ func TestAggregateOperator_StringAggregation_NoGrouping(t *testing.T) {
 				if stringField.Value != expectedVal {
 					t.Errorf("Expected %v, got %v", expectedVal, stringField.Value)
 				}
-			case int32:
+			case int64:
 				intField, ok := field.(*types.IntField)
 				if !ok {
 					t.Fatal("Result field is not an integer")
@@ -736,7 +736,7 @@ func TestAggregateOperator_FloatAggregation_NoGrouping(t *testing.T) {
 		values   []float64
 		expected interface{}
 	}{
-		{Count, []float64{1.5, 2.5, 3.5}, int32(3)},
+		{Count, []float64{1.5, 2.5, 3.5}, int64(3)},
 		{Min, []float64{5.5, 1.2, 3.8}, 1.2},
 		{Max, []float64{5.5, 1.2, 3.8}, 5.5},
 		{Sum, []float64{1.5, 2.5, 3.0}, 7.0},
@@ -792,7 +792,7 @@ func TestAggregateOperator_FloatAggregation_NoGrouping(t *testing.T) {
 				if floatField.Value != expectedVal {
 					t.Errorf("Expected %v, got %v", expectedVal, floatField.Value)
 				}
-			case int32:
+			case int64:
 				intField, ok := field.(*types.IntField)
 				if !ok {
 					t.Fatal("Result field is not an integer")
@@ -939,13 +939,13 @@ func TestAggregateOperator_Aggregation_WithGrouping(t *testing.T) {
 	defer op.Close()
 
 	// Expected sums: A=30 (10+15+5), B=45 (20+25), C=30
-	expectedSums := map[string]int32{
+	expectedSums := map[string]int64{
 		"A": 30,
 		"B": 45,
 		"C": 30,
 	}
 
-	results := make(map[string]int32)
+	results := make(map[string]int64)
 	for {
 		hasNext, err := op.HasNext()
 		if err != nil {
@@ -997,10 +997,10 @@ func TestAggregateOperator_Aggregation_NoGrouping(t *testing.T) {
 
 	tests := []struct {
 		op       AggregateOp
-		expected int32
+		expected int64
 	}{
 		{Min, 5},   // minimum value
-		{Max, 30},  // maximum value  
+		{Max, 30},  // maximum value
 		{Sum, 105}, // 10+20+15+30+25+5
 		{Avg, 17},  // 105/6 = 17 (integer division)
 		{Count, 6}, // 6 tuples

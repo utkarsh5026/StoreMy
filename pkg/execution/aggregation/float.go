@@ -9,14 +9,14 @@ import (
 // FloatCalculator handles float-specific aggregation logic
 type FloatCalculator struct {
 	groupToAgg   map[string]float64
-	groupToCount map[string]int32
+	groupToCount map[string]int64
 	op           AggregateOp
 }
 
 func NewFloatCalculator(op AggregateOp) *FloatCalculator {
 	return &FloatCalculator{
 		groupToAgg:   make(map[string]float64),
-		groupToCount: make(map[string]int32),
+		groupToCount: make(map[string]int64),
 		op:           op,
 	}
 }
@@ -92,7 +92,7 @@ func (fc *FloatCalculator) GetFinalValue(groupKey string) (types.Field, error) {
 	}
 
 	if fc.op == Count {
-		return types.NewIntField(int32(aggValue)), nil
+		return types.NewIntField(int64(aggValue)), nil
 	}
 	return types.NewFloat64Field(aggValue), nil
 }

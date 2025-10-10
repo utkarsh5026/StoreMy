@@ -8,15 +8,15 @@ import (
 
 // IntCalculator handles integer-specific aggregation logic
 type IntCalculator struct {
-	groupToAgg   map[string]int32 // Maps group value to aggregate result
-	groupToCount map[string]int32 // Maps group value to count (for AVG)
+	groupToAgg   map[string]int64 // Maps group value to aggregate result
+	groupToCount map[string]int64 // Maps group value to count (for AVG)
 	op           AggregateOp      // Store operation for context
 }
 
 func NewIntCalculator(op AggregateOp) *IntCalculator {
 	calc := &IntCalculator{
-		groupToAgg:   make(map[string]int32),
-		groupToCount: make(map[string]int32),
+		groupToAgg:   make(map[string]int64),
+		groupToCount: make(map[string]int64),
 		op:           op,
 	}
 	return calc

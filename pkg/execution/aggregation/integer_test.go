@@ -37,7 +37,7 @@ func TestNewIntAggregator(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			agg, err := NewIntAggregator(tt.gbField, tt.gbFieldType, tt.aField, tt.op)
-			
+
 			if tt.expectError && err == nil {
 				t.Error("Expected error but got none")
 			}
@@ -54,14 +54,14 @@ func TestNewIntAggregator(t *testing.T) {
 func TestIntegerAggregator_NoGrouping_Operations(t *testing.T) {
 	operations := []struct {
 		op       AggregateOp
-		values   []int32
-		expected int32
+		values   []int64
+		expected int64
 	}{
-		{Min, []int32{5, 2, 8, 1, 9}, 1},
-		{Max, []int32{5, 2, 8, 1, 9}, 9},
-		{Sum, []int32{5, 2, 8, 1, 9}, 25},
-		{Avg, []int32{10, 20, 30}, 20},
-		{Count, []int32{5, 2, 8, 1, 9}, 5},
+		{Min, []int64{5, 2, 8, 1, 9}, 1},
+		{Max, []int64{5, 2, 8, 1, 9}, 9},
+		{Sum, []int64{5, 2, 8, 1, 9}, 25},
+		{Avg, []int64{10, 20, 30}, 20},
+		{Count, []int64{5, 2, 8, 1, 9}, 5},
 	}
 
 	for _, op := range operations {
@@ -150,7 +150,7 @@ func TestIntegerAggregator_WithGrouping(t *testing.T) {
 
 	testData := []struct {
 		group string
-		value int32
+		value int64
 	}{
 		{"A", 10},
 		{"B", 20},
@@ -177,7 +177,7 @@ func TestIntegerAggregator_WithGrouping(t *testing.T) {
 		}
 	}
 
-	expectedSums := map[string]int32{
+	expectedSums := map[string]int64{
 		"A": 30, // 10 + 15 + 5
 		"B": 45, // 20 + 25
 		"C": 30, // 30
@@ -190,7 +190,7 @@ func TestIntegerAggregator_WithGrouping(t *testing.T) {
 	}
 	defer iter.Close()
 
-	results := make(map[string]int32)
+	results := make(map[string]int64)
 	for {
 		hasNext, err := iter.HasNext()
 		if err != nil {
@@ -252,7 +252,7 @@ func TestIntegerAggregator_Average(t *testing.T) {
 
 	testData := []struct {
 		group string
-		value int32
+		value int64
 	}{
 		{"A", 10},
 		{"A", 20},
@@ -278,7 +278,7 @@ func TestIntegerAggregator_Average(t *testing.T) {
 		}
 	}
 
-	expectedAvgs := map[string]int32{
+	expectedAvgs := map[string]int64{
 		"A": 20, // (10 + 20 + 30) / 3
 		"B": 10, // (5 + 15) / 2
 	}
@@ -290,7 +290,7 @@ func TestIntegerAggregator_Average(t *testing.T) {
 	}
 	defer iter.Close()
 
-	results := make(map[string]int32)
+	results := make(map[string]int64)
 	for {
 		hasNext, err := iter.HasNext()
 		if err != nil {
@@ -521,11 +521,11 @@ func TestIntegerAggregator_Concurrent(t *testing.T) {
 	for i := 0; i < numGoroutines; i++ {
 		go func(goroutineID int) {
 			defer wg.Done()
-			
+
 			for j := 0; j < valuesPerGoroutine; j++ {
 				tup := tuple.NewTuple(td)
 				group := "group1"
-				value := int32(1)
+				value := int64(1)
 
 				err := tup.SetField(0, types.NewStringField(group, len(group)))
 				if err != nil {
@@ -576,7 +576,7 @@ func TestIntegerAggregator_Concurrent(t *testing.T) {
 		t.Fatal("Value field is not an integer")
 	}
 
-	expected := int32(numGoroutines * valuesPerGoroutine)
+	expected := int64(numGoroutines * valuesPerGoroutine)
 	if intField.Value != expected {
 		t.Errorf("Expected sum %d, got %d", expected, intField.Value)
 	}

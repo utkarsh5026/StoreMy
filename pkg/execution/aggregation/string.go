@@ -102,7 +102,7 @@ func (sc *StringCalculator) GetFinalValue(groupKey string) (types.Field, error) 
 	switch v := aggValue.(type) {
 	case string:
 		return types.NewStringField(v, len(v)), nil
-	case int32:
+	case int64:
 		return types.NewIntField(v), nil
 	default:
 		return nil, fmt.Errorf("unexpected aggregate value type: %T", v)

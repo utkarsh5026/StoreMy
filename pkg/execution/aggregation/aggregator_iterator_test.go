@@ -18,7 +18,7 @@ func TestAggregatorIterator_IntegerAggregator_NoGrouping(t *testing.T) {
 		t.Fatalf("Failed to create tuple description: %v", err)
 	}
 
-	values := []int32{10, 20, 30}
+	values := []int64{10, 20, 30}
 	for _, value := range values {
 		tup := tuple.NewTuple(td)
 		err := tup.SetField(0, types.NewIntField(value))
@@ -143,7 +143,7 @@ func TestAggregatorIterator_IntegerAggregator_WithGrouping(t *testing.T) {
 
 	testData := []struct {
 		group string
-		value int32
+		value int64
 	}{
 		{"A", 10},
 		{"B", 20},
@@ -176,7 +176,7 @@ func TestAggregatorIterator_IntegerAggregator_WithGrouping(t *testing.T) {
 	defer iter.Close()
 
 	// Collect all results
-	results := make(map[string]int32)
+	results := make(map[string]int64)
 	for {
 		hasNext, err := iter.HasNext()
 		if err != nil {
@@ -210,7 +210,7 @@ func TestAggregatorIterator_IntegerAggregator_WithGrouping(t *testing.T) {
 	}
 
 	// Verify expected results
-	expectedResults := map[string]int32{
+	expectedResults := map[string]int64{
 		"A": 25, // 10 + 15
 		"B": 45, // 20 + 25
 		"C": 30, // 30
@@ -327,7 +327,7 @@ func TestAggregatorIterator_Operations_Multiple_Iterations(t *testing.T) {
 
 	testData := []struct {
 		group string
-		value int32
+		value int64
 	}{
 		{"A", 10},
 		{"B", 20},
@@ -568,7 +568,7 @@ func TestAggregatorIterator_Multiple_HasNext_Calls(t *testing.T) {
 func TestGeneralIteratorInterface_IntAggregator(t *testing.T) {
 	testGeneralIteratorInterface(t, func() (Aggregator, *tuple.TupleDescription, []*tuple.Tuple) {
 		agg, _ := NewIntAggregator(0, types.StringType, 1, Max)
-		
+
 		td, _ := tuple.NewTupleDesc(
 			[]types.Type{types.StringType, types.IntType},
 			[]string{"group", "value"},
@@ -576,7 +576,7 @@ func TestGeneralIteratorInterface_IntAggregator(t *testing.T) {
 
 		testData := []struct {
 			group string
-			value int32
+			value int64
 		}{
 			{"A", 10},
 			{"B", 20},
@@ -598,7 +598,7 @@ func TestGeneralIteratorInterface_IntAggregator(t *testing.T) {
 func TestGeneralIteratorInterface_BoolAggregator(t *testing.T) {
 	testGeneralIteratorInterface(t, func() (Aggregator, *tuple.TupleDescription, []*tuple.Tuple) {
 		agg, _ := NewBooleanAggregator(0, types.StringType, 1, And)
-		
+
 		td, _ := tuple.NewTupleDesc(
 			[]types.Type{types.StringType, types.BoolType},
 			[]string{"group", "value"},
@@ -628,7 +628,7 @@ func TestGeneralIteratorInterface_BoolAggregator(t *testing.T) {
 func TestGeneralIteratorInterface_StringAggregator(t *testing.T) {
 	testGeneralIteratorInterface(t, func() (Aggregator, *tuple.TupleDescription, []*tuple.Tuple) {
 		agg, _ := NewStringAggregator(0, types.StringType, 1, Min)
-		
+
 		td, _ := tuple.NewTupleDesc(
 			[]types.Type{types.StringType, types.StringType},
 			[]string{"group", "value"},
@@ -839,7 +839,7 @@ func TestIteratorInterface_ConsistentBehavior(t *testing.T) {
 			for i := 0; i < 3; i++ {
 				tup := tuple.NewTuple(td)
 				if iterType.name == "IntegerAggregator" {
-					tup.SetField(0, types.NewIntField(int32(i+1)))
+					tup.SetField(0, types.NewIntField(int64(i+1)))
 				} else if iterType.name == "BooleanAggregator" {
 					tup.SetField(0, types.NewBoolField(true))
 				} else {

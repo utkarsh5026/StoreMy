@@ -26,7 +26,7 @@ func createBenchmarkTuples(count int) ([]*tuple.Tuple, *tuple.TupleDescription) 
 		tup := tuple.NewTuple(td)
 		group := groups[i%len(groups)]
 		tup.SetField(0, types.NewStringField(group, len(group)))
-		tup.SetField(1, types.NewIntField(int32(i%100)))
+		tup.SetField(1, types.NewIntField(int64(i%100)))
 		tuples = append(tuples, tup)
 	}
 
