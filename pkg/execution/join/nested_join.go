@@ -123,41 +123,19 @@ func (nl *NestedLoopJoin) Initialize() error {
 }
 
 // loadNextBlock reads the next block of tuples from the left iterator.
-// The block size is determined by the blockSize field, which can be
-// configured based on available memory.
-//
-// This method:
-// 1. Clears the current left block
-// 2. Reads up to blockSize tuples from the left iterator
-// 3. Resets the block index to 0
+// The block size is determined by the blockSize field
 func (nl *NestedLoopJoin) loadNextBlock() error {
-	nl.leftBlock = make([]*tuple.Tuple, 0, nl.blockSize)
 	nl.blockIndex = 0
 
-	for i := 0; i < nl.blockSize; i++ {
-		hasNext, err := nl.leftChild.HasNext()
-		if err != nil {
-			return err
-		}
-		if !hasNext {
-			break
-		}
-
-		t, err := nl.leftChild.Next()
-		if err != nil {
-			return err
-		}
-		if t != nil {
-			nl.leftBlock = append(nl.leftBlock, t)
-		}
+	tuples, err := iterator.Take(nl.leftChild, nl.blockSize)
+	if err != nil {
+		return err
 	}
-
+	nl.leftBlock = tuples
 	return nil
 }
 
 // Close releases all resources held by the nested loop join operator.
-// This includes clearing the left block buffer, match buffer, and
-// resetting all state variables.
 func (nl *NestedLoopJoin) Close() error {
 	nl.leftBlock = nil
 	return nl.BaseJoin.Close()
