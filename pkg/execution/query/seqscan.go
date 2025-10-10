@@ -3,10 +3,16 @@ package query
 import (
 	"fmt"
 	"storemy/pkg/iterator"
-	"storemy/pkg/memory"
 	"storemy/pkg/primitives"
+	"storemy/pkg/storage/page"
 	"storemy/pkg/tuple"
 )
+
+// TableInfoProvider interface for getting table information (to avoid direct dependency on catalog)
+type TableInfoProvider interface {
+	GetTableFile(tableID int) (page.DbFile, error)
+	GetTableSchema(tid *primitives.TransactionID, tableID int) (*tuple.TupleDescription, error)
+}
 
 // SequentialScan implements a sequential scan operator that iterates through all tuples in a table.
 // It provides an iterator interface for reading tuples from a database file sequentially.
@@ -15,31 +21,31 @@ import (
 // for table scans in query execution. It reads all tuples from a table in storage order,
 // making it suitable for operations that need to examine every tuple in a table.
 type SequentialScan struct {
-	base         *BaseIterator
-	tid          *primitives.TransactionID
-	tableID      int
-	fileIter     iterator.DbFileIterator
-	tupleDesc    *tuple.TupleDescription
-	tableManager *memory.TableManager
+	base              *BaseIterator
+	tid               *primitives.TransactionID
+	tableID           int
+	fileIter          iterator.DbFileIterator
+	tupleDesc         *tuple.TupleDescription
+	tableInfoProvider TableInfoProvider
 }
 
 // NewSeqScan creates a new SequentialScan operator for the specified table within a transaction context.
 // It initializes the scan operator with the necessary metadata and prepares it for iteration.
-func NewSeqScan(tid *primitives.TransactionID, tableID int, tm *memory.TableManager) (*SequentialScan, error) {
-	if tm == nil {
-		return nil, fmt.Errorf("tm cannot be nil")
+func NewSeqScan(tid *primitives.TransactionID, tableID int, provider TableInfoProvider) (*SequentialScan, error) {
+	if provider == nil {
+		return nil, fmt.Errorf("table info provider cannot be nil")
 	}
 
-	info, err := tm.GetTableInfo(tableID)
+	tupleDesc, err := provider.GetTableSchema(tid, tableID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get tuple desc for table %d: %v", tableID, err)
 	}
 
 	ss := &SequentialScan{
-		tid:          tid,
-		tableID:      tableID,
-		tupleDesc:    info.Schema.TupleDesc,
-		tableManager: tm,
+		tid:               tid,
+		tableID:           tableID,
+		tupleDesc:         tupleDesc,
+		tableInfoProvider: provider,
 	}
 
 	ss.base = NewBaseIterator(ss.readNext)
@@ -54,12 +60,12 @@ func NewSeqScan(tid *primitives.TransactionID, tableID int, tm *memory.TableMana
 //
 // Returns an error if the database file cannot be accessed or the iterator fails to open.
 func (ss *SequentialScan) Open() error {
-	info, err := ss.tableManager.GetTableInfo(ss.tableID)
+	file, err := ss.tableInfoProvider.GetTableFile(ss.tableID)
 	if err != nil {
 		return fmt.Errorf("failed to get db file for table %d: %v", ss.tableID, err)
 	}
 
-	ss.fileIter = info.File.Iterator(ss.tid)
+	ss.fileIter = file.Iterator(ss.tid)
 	if ss.fileIter == nil {
 		return fmt.Errorf("failed to create file iterator")
 	}
