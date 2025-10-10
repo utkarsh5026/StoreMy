@@ -133,7 +133,7 @@ func createTestTuple(fieldTypes []types.Type, values []any) *tuple.Tuple {
 	for i, val := range values {
 		var field types.Field
 		switch v := val.(type) {
-		case int32:
+		case int64:
 			field = types.NewIntField(v)
 		case string:
 			field = types.NewStringField(v, types.StringMaxSize)
