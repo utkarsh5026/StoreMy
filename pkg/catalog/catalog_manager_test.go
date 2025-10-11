@@ -24,7 +24,7 @@ type testSetup struct {
 	tempDir    string
 	catalogMgr *CatalogManager
 	txRegistry *transaction.TransactionRegistry
-	tm         *memory.TableManager
+	tm         *tableCache
 	store      *memory.PageStore
 	wal        *log.WAL
 	t          *testing.T
@@ -35,7 +35,7 @@ func setupTest(t *testing.T) *testSetup {
 	tempDir := t.TempDir()
 	walPath := filepath.Join(tempDir, "test.wal")
 
-	tm := memory.NewTableManager()
+	tm := newTableCache()
 	wal, err := log.NewWAL(walPath, 8192)
 	if err != nil {
 		t.Fatalf("Failed to create WAL: %v", err)
@@ -58,7 +58,7 @@ func setupTest(t *testing.T) *testSetup {
 
 // cleanup closes all resources
 func (s *testSetup) cleanup() {
-	s.tm.Clear()
+	s.tm.clear()
 	s.wal.Close()
 }
 
