@@ -6,9 +6,7 @@ import (
 	"storemy/pkg/concurrency/transaction"
 	"storemy/pkg/log"
 	"storemy/pkg/primitives"
-	"storemy/pkg/storage/heap"
 	"storemy/pkg/storage/page"
-	"storemy/pkg/tuple"
 	"sync"
 )
 
@@ -153,119 +151,6 @@ func (p *PageStore) evictPage() error {
 	}
 
 	return fmt.Errorf("all pages are dirty or locked, cannot evict (NO-STEAL policy)")
-}
-
-// InsertTuple adds a new tuple to the specified table within the given transaction context.
-func (p *PageStore) InsertTuple(ctx *transaction.TransactionContext, dbFile page.DbFile, t *tuple.Tuple) error {
-	tableID := dbFile.GetID()
-	return p.performDataOperation(InsertOperation, ctx, dbFile, tableID, t)
-}
-
-// DeleteTuple removes a tuple from its table within the given transaction context.
-func (p *PageStore) DeleteTuple(ctx *transaction.TransactionContext, dbFile page.DbFile, t *tuple.Tuple) error {
-	if t == nil {
-		return fmt.Errorf("tuple cannot be nil")
-	}
-
-	if t.RecordID == nil {
-		return fmt.Errorf("tuple must have a valid record ID")
-	}
-
-	tableID := dbFile.GetID()
-	return p.performDataOperation(DeleteOperation, ctx, dbFile, tableID, t)
-}
-
-func (p *PageStore) performDataOperation(operation OperationType, ctx *transaction.TransactionContext, dbFile page.DbFile, tableID int, t *tuple.Tuple) error {
-	if ctx == nil {
-		return fmt.Errorf("transaction context cannot be nil")
-	}
-
-	if err := ctx.EnsureBegunInWAL(p.wal); err != nil {
-		return err
-	}
-
-	var modifiedPages []page.Page
-	var err error
-	switch operation {
-	case InsertOperation:
-		modifiedPages, err = p.handleInsert(ctx, t, dbFile)
-
-	case DeleteOperation:
-		modifiedPages, err = p.handleDelete(ctx, dbFile, t)
-
-	default:
-		return fmt.Errorf("unsupported operation: %s", operation.String())
-	}
-
-	if err != nil {
-		return err
-	}
-
-	p.markPagesAsDirty(ctx, modifiedPages)
-
-	if p.statsManager != nil {
-		p.statsManager.RecordModification(tableID)
-	}
-
-	return nil
-}
-
-func (p *PageStore) handleInsert(ctx *transaction.TransactionContext, t *tuple.Tuple, dbFile page.DbFile) ([]page.Page, error) {
-	modifiedPages, err := dbFile.AddTuple(ctx.ID, t)
-	if err != nil {
-		return nil, fmt.Errorf("failed to add tuple: %v", err)
-	}
-
-	for _, pg := range modifiedPages {
-		if err := p.logOperation(InsertOperation, ctx.ID, pg.GetID(), pg.GetPageData()); err != nil {
-			return nil, err
-		}
-	}
-	return modifiedPages, nil
-}
-
-func (p *PageStore) handleDelete(ctx *transaction.TransactionContext, dbFile page.DbFile, t *tuple.Tuple) ([]page.Page, error) {
-	pageID := t.RecordID.PageID
-	pg, err := p.GetPage(ctx, dbFile, pageID, transaction.ReadWrite)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get page for delete: %v", err)
-	}
-
-	if err := p.logOperation(DeleteOperation, ctx.ID, pageID, pg.GetPageData()); err != nil {
-		return nil, err
-	}
-
-	if heapPage, ok := pg.(*heap.HeapPage); ok {
-		if err := heapPage.DeleteTuple(t); err != nil {
-			return nil, fmt.Errorf("failed to delete tuple: %v", err)
-		}
-		heapPage.MarkDirty(true, ctx.ID)
-		return []page.Page{pg}, nil
-	}
-
-	return nil, fmt.Errorf("expecting the pageType to be of heapage")
-}
-
-// UpdateTuple replaces an existing tuple with a new version within the given transaction.
-func (p *PageStore) UpdateTuple(ctx *transaction.TransactionContext, dbFile page.DbFile, oldTuple *tuple.Tuple, newTuple *tuple.Tuple) error {
-	if oldTuple == nil {
-		return fmt.Errorf("old tuple cannot be nil")
-	}
-
-	if oldTuple.RecordID == nil {
-		return fmt.Errorf("old tuple has no RecordID")
-	}
-
-	if err := p.DeleteTuple(ctx, dbFile, oldTuple); err != nil {
-		return fmt.Errorf("failed to delete old tuple: %v", err)
-	}
-
-	if err := p.InsertTuple(ctx, dbFile, newTuple); err != nil {
-		p.InsertTuple(ctx, dbFile, oldTuple)
-		return fmt.Errorf("failed to insert updated tuple: %v", err)
-	}
-
-	return nil
 }
 
 // FlushAllPages writes all dirty pages to persistent storage.
