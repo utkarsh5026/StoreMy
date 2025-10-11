@@ -2,6 +2,7 @@ package catalog
 
 import (
 	"path/filepath"
+	"storemy/pkg/catalog/schema"
 	"storemy/pkg/concurrency/transaction"
 	"storemy/pkg/log"
 	"storemy/pkg/memory"
@@ -40,8 +41,9 @@ func TestStatisticsIntegration_AutomaticTracking(t *testing.T) {
 	}
 	defer wal.Close()
 
-	store := memory.NewPageStore(tm, wal)
-	catalog := NewSystemCatalog(store, tm)
+	store := memory.NewPageStore(wal)
+	cache := newTableCache()
+	catalog := NewSystemCatalog(store, cache)
 	txRegistry := transaction.NewTransactionRegistry(wal)
 
 	// Initialize catalog
@@ -64,6 +66,11 @@ func TestStatisticsIntegration_AutomaticTracking(t *testing.T) {
 	tableID := createTestTable(t, tm, catalog, txRegistry, tempDir, "test_table")
 
 	// Insert tuples - should be automatically tracked
+	dbFile, err := cache.GetDbFile(tableID)
+	if err != nil {
+		t.Fatalf("Failed to get dbFile: %v", err)
+	}
+
 	for i := range 5 {
 		tx, err := txRegistry.Begin()
 		if err != nil {
@@ -71,7 +78,7 @@ func TestStatisticsIntegration_AutomaticTracking(t *testing.T) {
 		}
 
 		tup := createTestTuple(i, "test")
-		if err := store.InsertTuple(tx, tableID, tup); err != nil {
+		if err := store.InsertTuple(tx, dbFile, tup); err != nil {
 			t.Fatalf("Failed to insert tuple: %v", err)
 		}
 		store.CommitTransaction(tx)
@@ -134,8 +141,9 @@ func TestStatisticsIntegration_UpdateAfterThreshold(t *testing.T) {
 	}
 	defer wal.Close()
 
-	store := memory.NewPageStore(tm, wal)
-	catalog := NewSystemCatalog(store, tm)
+	store := memory.NewPageStore(wal)
+	cache := newTableCache()
+	catalog := NewSystemCatalog(store, cache)
 	txRegistry := transaction.NewTransactionRegistry(wal)
 
 	tx, err := txRegistry.Begin()
@@ -155,6 +163,12 @@ func TestStatisticsIntegration_UpdateAfterThreshold(t *testing.T) {
 
 	tableID := createTestTable(t, tm, catalog, txRegistry, tempDir, "test_table2")
 
+	// Get dbFile for inserting tuples
+	dbFile, err := cache.GetDbFile(tableID)
+	if err != nil {
+		t.Fatalf("Failed to get dbFile: %v", err)
+	}
+
 	// Insert below threshold
 	for i := 0; i < 2; i++ {
 		tx, err := txRegistry.Begin()
@@ -162,7 +176,7 @@ func TestStatisticsIntegration_UpdateAfterThreshold(t *testing.T) {
 			t.Fatalf("Failed to begin transaction: %v", err)
 		}
 		tup := createTestTuple(i, "test")
-		store.InsertTuple(tx, tableID, tup)
+		store.InsertTuple(tx, dbFile, tup)
 		store.CommitTransaction(tx)
 	}
 
@@ -184,7 +198,7 @@ func TestStatisticsIntegration_UpdateAfterThreshold(t *testing.T) {
 			t.Fatalf("Failed to begin transaction: %v", err)
 		}
 		tup := createTestTuple(i, "test")
-		store.InsertTuple(tx, tableID, tup)
+		store.InsertTuple(tx, dbFile, tup)
 		store.CommitTransaction(tx)
 	}
 
@@ -209,8 +223,9 @@ func TestStatisticsIntegration_DeleteTracking(t *testing.T) {
 	}
 	defer wal.Close()
 
-	store := memory.NewPageStore(tm, wal)
-	catalog := NewSystemCatalog(store, tm)
+	store := memory.NewPageStore(wal)
+	cache := newTableCache()
+	catalog := NewSystemCatalog(store, cache)
 	txRegistry := transaction.NewTransactionRegistry(wal)
 
 	tx, err := txRegistry.Begin()
@@ -228,19 +243,24 @@ func TestStatisticsIntegration_DeleteTracking(t *testing.T) {
 
 	tableID := createTestTable(t, tm, catalog, txRegistry, tempDir, "test_table3")
 
+	// Get dbFile for operations
+	file, err := cache.GetDbFile(tableID)
+	if err != nil {
+		t.Fatalf("Failed to get dbFile: %v", err)
+	}
+
 	// Insert a tuple
 	tx2, err := txRegistry.Begin()
 	if err != nil {
 		t.Fatalf("Failed to begin transaction: %v", err)
 	}
 	tup := createTestTuple(1, "test")
-	if err := store.InsertTuple(tx2, tableID, tup); err != nil {
+	if err := store.InsertTuple(tx2, file, tup); err != nil {
 		t.Fatalf("Failed to insert tuple: %v", err)
 	}
 	store.CommitTransaction(tx2)
 
 	// Get the tuple back to delete it
-	file, _ := tm.GetDbFile(tableID)
 	tx2Read, err := txRegistry.Begin()
 	if err != nil {
 		t.Fatalf("Failed to begin transaction: %v", err)
@@ -256,7 +276,7 @@ func TestStatisticsIntegration_DeleteTracking(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to begin transaction: %v", err)
 	}
-	if err := store.DeleteTuple(tx3, tupToDelete); err != nil {
+	if err := store.DeleteTuple(tx3, file, tupToDelete); err != nil {
 		t.Fatalf("Failed to delete tuple: %v", err)
 	}
 	store.CommitTransaction(tx3)
@@ -274,7 +294,7 @@ func TestStatisticsIntegration_DeleteTracking(t *testing.T) {
 // Helper functions
 
 func createTestTable(t *testing.T, tm *memory.TableManager, catalog *SystemCatalog, txRegistry *transaction.TransactionRegistry, dataDir, tableName string) int {
-	schema, err := tuple.NewTupleDesc(
+	tupleDesc, err := tuple.NewTupleDesc(
 		[]types.Type{types.IntType, types.StringType},
 		[]string{"id", "name"},
 	)
@@ -283,12 +303,22 @@ func createTestTable(t *testing.T, tm *memory.TableManager, catalog *SystemCatal
 	}
 
 	filePath := filepath.Join(dataDir, tableName+".dat")
-	f, err := heap.NewHeapFile(filePath, schema)
+	f, err := heap.NewHeapFile(filePath, tupleDesc)
 	if err != nil {
 		t.Fatalf("Failed to create heap file: %v", err)
 	}
 
-	if err := tm.AddTable(f, tableName, "id"); err != nil {
+	// Create schema for TableManager
+	columns := []schema.ColumnMetadata{
+		{Name: "id", FieldType: types.IntType, Position: 0, IsPrimary: true, TableID: f.GetID()},
+		{Name: "name", FieldType: types.StringType, Position: 1, IsPrimary: false, TableID: f.GetID()},
+	}
+	tableSchema, err := schema.NewSchema(f.GetID(), tableName, columns)
+	if err != nil {
+		t.Fatalf("Failed to create schema: %v", err)
+	}
+
+	if err := tm.AddTable(f, tableSchema); err != nil {
 		t.Fatalf("Failed to add table: %v", err)
 	}
 
@@ -296,10 +326,7 @@ func createTestTable(t *testing.T, tm *memory.TableManager, catalog *SystemCatal
 	if err != nil {
 		t.Fatalf("Failed to begin transaction: %v", err)
 	}
-	if err := catalog.RegisterTable(tx, f.GetID(), tableName, filePath, "id", []FieldMetadata{
-		{Name: "id", Type: types.IntType},
-		{Name: "name", Type: types.StringType},
-	}); err != nil {
+	if err := catalog.RegisterTable(tx, tableSchema, filePath); err != nil {
 		t.Fatalf("Failed to register table: %v", err)
 	}
 	catalog.store.CommitTransaction(tx)

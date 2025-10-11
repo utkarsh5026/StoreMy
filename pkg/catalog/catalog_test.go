@@ -6,12 +6,14 @@ import (
 	"storemy/pkg/concurrency/transaction"
 	"storemy/pkg/log"
 	"storemy/pkg/memory"
-	"storemy/pkg/primitives"
 	"storemy/pkg/storage/heap"
 	"storemy/pkg/tuple"
 	"storemy/pkg/types"
 	"testing"
 )
+
+// Note: FieldMetadata is already defined in catalog_manager_test.go
+// We don't need to redefine it here since they're in the same package
 
 func setupTestCatalog(t *testing.T) (*SystemCatalog, *transaction.TransactionRegistry, string, func()) {
 	t.Helper()
@@ -25,16 +27,16 @@ func setupTestCatalog(t *testing.T) (*SystemCatalog, *transaction.TransactionReg
 	logPath := filepath.Join(tempDir, "wal.log")
 
 	// Setup components
-	tableManager := memory.NewTableManager()
 	wal, err := log.NewWAL(logPath, 8192)
 	if err != nil {
 		t.Fatalf("failed to create WAL: %v", err)
 	}
 
-	store := memory.NewPageStore(tableManager, wal)
+	store := memory.NewPageStore(wal)
 
 	txRegistry := transaction.NewTransactionRegistry(wal)
-	catalog := NewSystemCatalog(store, tableManager)
+	cache := newTableCache()
+	catalog := NewSystemCatalog(store, cache)
 
 	// Initialize catalog with a transaction
 	tx, err := txRegistry.Begin()
@@ -73,19 +75,26 @@ func registerTestTable(
 		fieldNames[i] = f.Name
 	}
 
-	schema, err := tuple.NewTupleDesc(fieldTypes, fieldNames)
+	tupleDesc, err := tuple.NewTupleDesc(fieldTypes, fieldNames)
 	if err != nil {
 		t.Fatalf("failed to create schema: %v", err)
 	}
 
-	heapFile, err := heap.NewHeapFile(filePath, schema)
+	heapFile, err := heap.NewHeapFile(filePath, tupleDesc)
 	if err != nil {
 		t.Fatalf("failed to create heap file: %v", err)
 	}
 
 	tableID := heapFile.GetID()
 
-	err = catalog.RegisterTable(tx, tableID, tableName, filePath, primaryKey, fields)
+	// Build schema.Schema for RegisterTable
+	tableSchema := createTestSchema(tableName, primaryKey, fields)
+	tableSchema.TableID = tableID
+	for i := range tableSchema.Columns {
+		tableSchema.Columns[i].TableID = tableID
+	}
+
+	err = catalog.RegisterTable(tx, tableSchema, filePath)
 	if err != nil {
 		t.Fatalf("RegisterTable failed: %v", err)
 	}
@@ -94,13 +103,13 @@ func registerTestTable(
 }
 
 func TestNewSystemCatalog(t *testing.T) {
-	tableManager := memory.NewTableManager()
 	walPath := filepath.Join(t.TempDir(), "test.wal")
 	wal, _ := log.NewWAL(walPath, 8192)
-	store := memory.NewPageStore(tableManager, wal)
+	store := memory.NewPageStore(wal)
 	defer store.Close()
 
-	catalog := NewSystemCatalog(store, tableManager)
+	cache := newTableCache()
+	catalog := NewSystemCatalog(store, cache)
 
 	if catalog == nil {
 		t.Fatal("expected non-nil catalog")
@@ -110,8 +119,8 @@ func TestNewSystemCatalog(t *testing.T) {
 		t.Error("store not set correctly")
 	}
 
-	if catalog.tableManager != tableManager {
-		t.Error("tableManager not set correctly")
+	if catalog.cache != cache {
+		t.Error("cache not set correctly")
 	}
 }
 
@@ -119,12 +128,12 @@ func TestSystemCatalog_Initialize(t *testing.T) {
 	catalog, _, tempDir, cleanup := setupTestCatalog(t)
 	defer cleanup()
 
-	// Verify catalog tables exist in TableManager
-	if !catalog.tableManager.TableExists("CATALOG_TABLES") {
+	// Verify catalog tables exist in cache
+	if !catalog.cache.TableExists("CATALOG_TABLES") {
 		t.Error("CATALOG_TABLES not found")
 	}
 
-	if !catalog.tableManager.TableExists("CATALOG_COLUMNS") {
+	if !catalog.cache.TableExists("CATALOG_COLUMNS") {
 		t.Error("CATALOG_COLUMNS not found")
 	}
 
@@ -140,20 +149,20 @@ func TestSystemCatalog_Initialize(t *testing.T) {
 	}
 
 	// Verify table IDs are set
-	tablesID, err := catalog.tableManager.GetTableID("CATALOG_TABLES")
+	tablesID, err := catalog.cache.getTableID("CATALOG_TABLES")
 	if err != nil {
 		t.Fatalf("failed to get CATALOG_TABLES ID: %v", err)
 	}
-	if tablesID != catalog.tablesTableID {
-		t.Errorf("expected CATALOG_TABLES ID=%d, got %d", catalog.tablesTableID, tablesID)
+	if tablesID != catalog.TablesTableID {
+		t.Errorf("expected CATALOG_TABLES ID=%d, got %d", catalog.TablesTableID, tablesID)
 	}
 
-	columnsID, err := catalog.tableManager.GetTableID("CATALOG_COLUMNS")
+	columnsID, err := catalog.cache.getTableID("CATALOG_COLUMNS")
 	if err != nil {
 		t.Fatalf("failed to get CATALOG_COLUMNS ID: %v", err)
 	}
-	if columnsID != catalog.columnsTableID {
-		t.Errorf("expected CATALOG_COLUMNS ID=%d, got %d", catalog.columnsTableID, columnsID)
+	if columnsID != catalog.ColumnsTableID {
+		t.Errorf("expected CATALOG_COLUMNS ID=%d, got %d", catalog.ColumnsTableID, columnsID)
 	}
 }
 
@@ -226,11 +235,11 @@ func TestSystemCatalog_LoadTables(t *testing.T) {
 	catalog.store.CommitTransaction(tx)
 
 	// Create a new catalog instance (simulating restart)
-	tableManager2 := memory.NewTableManager()
 	wal2, _ := log.NewWAL(filepath.Join(tempDir, "wal2.log"), 8192)
-	pageStore2 := memory.NewPageStore(tableManager2, wal2)
+	pageStore2 := memory.NewPageStore(wal2)
 	txRegistry2 := transaction.NewTransactionRegistry(wal2)
-	catalog2 := NewSystemCatalog(pageStore2, tableManager2)
+	cache2 := newTableCache()
+	catalog2 := NewSystemCatalog(pageStore2, cache2)
 
 	// Initialize and load tables
 	tx2, err := txRegistry2.Begin()
@@ -250,24 +259,26 @@ func TestSystemCatalog_LoadTables(t *testing.T) {
 	}
 
 	// Verify table was loaded
-	if !tableManager2.TableExists("customers") {
+	if !cache2.TableExists("customers") {
 		t.Error("customers table not loaded")
 	}
 
 	// Verify schema was loaded correctly
-	schema, err := tableManager2.GetTupleDesc(tableID)
+	tableInfo, err := cache2.GetTableInfo(tableID)
 	if err != nil {
-		t.Fatalf("failed to get tuple desc: %v", err)
+		t.Fatalf("failed to get table info: %v", err)
 	}
 
-	if schema.NumFields() != 3 {
-		t.Errorf("expected 3 fields, got %d", schema.NumFields())
+	if tableInfo.Schema.TupleDesc.NumFields() != 3 {
+		t.Errorf("expected 3 fields, got %d", tableInfo.Schema.TupleDesc.NumFields())
 	}
+
+	tupleDesc := tableInfo.Schema.TupleDesc
 
 	// Verify field names
 	expectedNames := []string{"id", "email", "age"}
 	for i, expected := range expectedNames {
-		name, err := schema.GetFieldName(i)
+		name, err := tupleDesc.GetFieldName(i)
 		if err != nil {
 			t.Errorf("failed to get field name %d: %v", i, err)
 		}
@@ -279,7 +290,7 @@ func TestSystemCatalog_LoadTables(t *testing.T) {
 	// Verify field types
 	expectedTypes := []types.Type{types.IntType, types.StringType, types.IntType}
 	for i, expected := range expectedTypes {
-		fieldType, err := schema.TypeAtIndex(i)
+		fieldType, err := tupleDesc.TypeAtIndex(i)
 		if err != nil {
 			t.Errorf("failed to get field type %d: %v", i, err)
 		}
@@ -339,11 +350,11 @@ func TestSystemCatalog_LoadTables_Multiple(t *testing.T) {
 	}
 
 	// Create new catalog and load
-	tableManager2 := memory.NewTableManager()
 	wal2, _ := log.NewWAL(filepath.Join(tempDir, "wal2.log"), 8192)
-	pageStore2 := memory.NewPageStore(tableManager2, wal2)
+	pageStore2 := memory.NewPageStore(wal2)
 	txRegistry2 := transaction.NewTransactionRegistry(wal2)
-	catalog2 := NewSystemCatalog(pageStore2, tableManager2)
+	cache2 := newTableCache()
+	catalog2 := NewSystemCatalog(pageStore2, cache2)
 
 	// Initialize must be called to set up system catalog tables
 	tx2, err := txRegistry2.Begin()
@@ -365,7 +376,7 @@ func TestSystemCatalog_LoadTables_Multiple(t *testing.T) {
 
 	// Verify all tables loaded
 	for _, table := range tables {
-		if !tableManager2.TableExists(table.name) {
+		if !cache2.TableExists(table.name) {
 			t.Errorf("table %s not loaded", table.name)
 		}
 	}
@@ -390,12 +401,10 @@ func TestSystemCatalog_GetTableID(t *testing.T) {
 	expectedID := registerTestTable(t, catalog, tx, tempDir, "test_table", "id", fields)
 	catalog.store.CommitTransaction(tx)
 
-	// Get table ID from catalog
-	tid2 := primitives.NewTransactionID()
-
-	tableID, err := catalog.GetTableID(tid2, "test_table")
+	// Get table ID from cache
+	tableID, err := catalog.cache.getTableID("test_table")
 	if err != nil {
-		t.Fatalf("GetTableID failed: %v", err)
+		t.Fatalf("getTableID failed: %v", err)
 	}
 
 	// The catalog stores table IDs as int32, so we need to compare truncated values
@@ -408,9 +417,7 @@ func TestSystemCatalog_GetTableID_NotFound(t *testing.T) {
 	catalog, _, _, cleanup := setupTestCatalog(t)
 	defer cleanup()
 
-	tid := primitives.NewTransactionID()
-
-	_, err := catalog.GetTableID(tid, "nonexistent_table")
+	_, err := catalog.cache.getTableID("nonexistent_table")
 	if err == nil {
 		t.Error("expected error for non-existent table")
 	}
@@ -435,11 +442,11 @@ func TestSystemCatalog_RegisterTable_WithBoolField(t *testing.T) {
 	tableID := registerTestTable(t, catalog, tx, tempDir, "flags", "id", fields)
 
 	// Load in new catalog
-	tableManager2 := memory.NewTableManager()
 	wal2, _ := log.NewWAL(filepath.Join(tempDir, "wal2.log"), 8192)
-	pageStore2 := memory.NewPageStore(tableManager2, wal2)
+	pageStore2 := memory.NewPageStore(wal2)
 	txRegistry2 := transaction.NewTransactionRegistry(wal2)
-	catalog2 := NewSystemCatalog(pageStore2, tableManager2)
+	cache2 := newTableCache()
+	catalog2 := NewSystemCatalog(pageStore2, cache2)
 
 	tx2, err := txRegistry2.Begin()
 	if err != nil {
@@ -458,10 +465,11 @@ func TestSystemCatalog_RegisterTable_WithBoolField(t *testing.T) {
 	}
 
 	// Verify bool field type preserved
-	schema, err := tableManager2.GetTupleDesc(tableID)
+	tableInfo, err := cache2.GetTableInfo(tableID)
 	if err != nil {
-		t.Fatalf("failed to get schema: %v", err)
+		t.Fatalf("failed to get table info: %v", err)
 	}
+	schema := tableInfo.Schema.TupleDesc
 
 	fieldType, err := schema.TypeAtIndex(1)
 	if err != nil {
@@ -509,11 +517,11 @@ func TestSystemCatalog_PrimaryKeyPreserved(t *testing.T) {
 	catalog.store.CommitTransaction(tx)
 
 	// Load in new catalog
-	tableManager2 := memory.NewTableManager()
 	wal2, _ := log.NewWAL(filepath.Join(tempDir, "wal2.log"), 8192)
-	pageStore2 := memory.NewPageStore(tableManager2, wal2)
+	pageStore2 := memory.NewPageStore(wal2)
 	txRegistry2 := transaction.NewTransactionRegistry(wal2)
-	catalog2 := NewSystemCatalog(pageStore2, tableManager2)
+	cache2 := newTableCache()
+	catalog2 := NewSystemCatalog(pageStore2, cache2)
 
 	tx2, err := txRegistry2.Begin()
 	if err != nil {
@@ -533,7 +541,7 @@ func TestSystemCatalog_PrimaryKeyPreserved(t *testing.T) {
 
 	// Verify primary key is preserved (would need to check TableInfo if exposed)
 	// For now, just verify the table loaded successfully
-	if !tableManager2.TableExists("players") {
+	if !cache2.TableExists("players") {
 		t.Error("players table not loaded")
 	}
 

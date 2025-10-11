@@ -67,6 +67,9 @@ func (sc *SystemCatalog) Initialize(ctx *transaction.TransactionContext, dataDir
 		}
 
 		sc.setSystemTableID(table.TableName(), f.GetID())
+
+		// Register the DbFile with PageStore for flush operations
+		sc.store.RegisterDbFile(f.GetID(), f)
 	}
 
 	sc.loader.columnsTableID = sc.ColumnsTableID
@@ -146,6 +149,7 @@ func (sc *SystemCatalog) LoadTables(tx *transaction.TransactionContext, dataDir 
 			return fmt.Errorf("failed to add table %s: %w", table.TableName, err)
 		}
 
+		sc.store.RegisterDbFile(table.TableID, f)
 		return nil
 	})
 }
@@ -361,10 +365,6 @@ func (sc *SystemCatalog) findTableMetadata(tid *primitives.TransactionID, pred f
 	}
 
 	return nil, fmt.Errorf("table not found in catalog")
-}
-
-func (sc *SystemCatalog) getAllTableIDS() []int {
-	return []int{sc.TablesTableID, sc.ColumnsTableID, sc.StatisticsTableID}
 }
 
 func (sc *SystemCatalog) GetAllTables(tid *primitives.TransactionID) ([]*systemtable.TableMetadata, error) {
