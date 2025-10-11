@@ -21,6 +21,8 @@ func ParseStatement(sql string) (statements.Statement, error) {
 		return parseInsertStatement(l)
 	case lexer.CREATE:
 		return parseCreateStatement(l)
+	case lexer.DROP:
+		return parseDropStatement(l)
 	case lexer.DELETE:
 		return parseDeleteStatement(l)
 	case lexer.UPDATE:
