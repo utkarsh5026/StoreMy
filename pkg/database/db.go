@@ -11,6 +11,7 @@ import (
 	"storemy/pkg/parser/parser"
 	"storemy/pkg/parser/statements"
 	"storemy/pkg/planner"
+	"storemy/pkg/primitives"
 	"storemy/pkg/registry"
 	"sync"
 	"time"
@@ -78,7 +79,7 @@ func NewDatabase(name, dataDir, logDir string) (*Database, error) {
 	pageStore := memory.NewPageStore(wal)
 	catalogMgr := catalog.NewCatalogManager(pageStore, dataDir)
 
-	ctx := registry.NewDatabaseContext(pageStore, catalogMgr.GetSystemCatalog(), catalogMgr, wal, fullPath)
+	ctx := registry.NewDatabaseContext(pageStore, catalogMgr, wal, fullPath)
 
 	db := &Database{
 		catalogMgr: catalogMgr,
@@ -90,7 +91,7 @@ func NewDatabase(name, dataDir, logDir string) (*Database, error) {
 		stats:      &DatabaseStats{},
 	}
 
-	statsManager := catalog.NewStatisticsManager(catalogMgr.GetSystemCatalog(), db)
+	statsManager := catalog.NewStatisticsManager(catalogMgr, db)
 	pageStore.SetStatsManager(statsManager)
 	db.statsManager = statsManager
 
@@ -200,7 +201,8 @@ func (db *Database) GetTables() []string {
 	db.mutex.RLock()
 	defer db.mutex.RUnlock()
 
-	return db.catalogMgr.ListAllTables()
+	names, _ := db.catalogMgr.ListAllTables(primitives.NewTransactionID(), true)
+	return names
 }
 
 // GetStatistics returns current database statistics (counts only user tables)
