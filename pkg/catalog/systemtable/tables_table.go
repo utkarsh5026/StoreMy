@@ -63,6 +63,17 @@ func (tt *TablesTable) CreateTuple(tm TableMetadata) *tuple.Tuple {
 	return t
 }
 
+func (tt *TablesTable) GetID(t *tuple.Tuple) (int, error) {
+	if t.TupleDesc.NumFields() != tt.GetNumFields() {
+		return -1, fmt.Errorf("invalid tuple: expected 4 fields, got %d", t.TupleDesc.NumFields())
+	}
+	return getIntField(t, 0), nil
+}
+
+func (tt *TablesTable) TableIDIndex() int {
+	return 0
+}
+
 func (tt *TablesTable) Parse(t *tuple.Tuple) (*TableMetadata, error) {
 	if t.TupleDesc.NumFields() != tt.GetNumFields() {
 		return nil, fmt.Errorf("invalid tuple: expected 4 fields, got %d", t.TupleDesc.NumFields())

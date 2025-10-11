@@ -52,6 +52,10 @@ func (ct *ColumnsTable) PrimaryKey() string {
 	return ""
 }
 
+func (ct *ColumnsTable) TableIDIndex() int {
+	return 0
+}
+
 func (ct *ColumnsTable) CreateTuple(col schema.ColumnMetadata) *tuple.Tuple {
 	t := tuple.NewTuple(ct.Schema().TupleDesc)
 	t.SetField(0, types.NewIntField(int64(col.TableID)))
