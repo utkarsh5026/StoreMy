@@ -2,6 +2,7 @@ package query
 
 import (
 	"fmt"
+	"storemy/pkg/catalog/schema"
 	"storemy/pkg/iterator"
 	"storemy/pkg/primitives"
 	"storemy/pkg/storage/page"
@@ -11,7 +12,7 @@ import (
 // TableInfoProvider interface for getting table information (to avoid direct dependency on catalog)
 type TableInfoProvider interface {
 	GetTableFile(tableID int) (page.DbFile, error)
-	GetTableSchema(tid *primitives.TransactionID, tableID int) (*tuple.TupleDescription, error)
+	GetTableSchema(tid *primitives.TransactionID, tableID int) (*schema.Schema, error)
 }
 
 // SequentialScan implements a sequential scan operator that iterates through all tuples in a table.
@@ -36,7 +37,7 @@ func NewSeqScan(tid *primitives.TransactionID, tableID int, provider TableInfoPr
 		return nil, fmt.Errorf("table info provider cannot be nil")
 	}
 
-	tupleDesc, err := provider.GetTableSchema(tid, tableID)
+	sch, err := provider.GetTableSchema(tid, tableID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get tuple desc for table %d: %v", tableID, err)
 	}
@@ -44,7 +45,7 @@ func NewSeqScan(tid *primitives.TransactionID, tableID int, provider TableInfoPr
 	ss := &SequentialScan{
 		tid:               tid,
 		tableID:           tableID,
-		tupleDesc:         tupleDesc,
+		tupleDesc:         sch.TupleDesc,
 		tableInfoProvider: provider,
 	}
 

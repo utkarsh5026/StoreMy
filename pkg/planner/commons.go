@@ -24,14 +24,14 @@ func resolveTableMetadata(tableName string, tid TID, ctx DbContext) (*tableMetad
 		return nil, fmt.Errorf("table %s not found", tableName)
 	}
 
-	tupleDesc, err := catalogMgr.GetTableSchema(tid, tableID)
+	sch, err := catalogMgr.GetTableSchema(tid, tableID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get schema for table %s: %v", tableName, err)
 	}
 
 	return &tableMetadata{
 		TableID:   tableID,
-		TupleDesc: tupleDesc,
+		TupleDesc: sch.TupleDesc,
 	}, nil
 }
 
