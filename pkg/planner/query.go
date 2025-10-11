@@ -23,6 +23,8 @@ func (qp *QueryPlanner) Plan(stmt statements.Statement, tx TransactionCtx) (Plan
 	switch s := stmt.(type) {
 	case *statements.CreateStatement:
 		return NewCreateTablePlan(s, qp.ctx, tx), nil
+	case *statements.DropStatement:
+		return NewDropTablePlan(s, qp.ctx, tx), nil
 	case *statements.InsertStatement:
 		return NewInsertPlan(s, tx, qp.ctx), nil
 	case *statements.DeleteStatement:
