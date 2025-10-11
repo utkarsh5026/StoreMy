@@ -2,18 +2,17 @@ package catalog
 
 import (
 	"fmt"
+	"path/filepath"
 	"storemy/pkg/catalog/schema"
 	"storemy/pkg/catalog/systemtable"
 	"storemy/pkg/concurrency/transaction"
-	"storemy/pkg/memory"
 	"storemy/pkg/primitives"
 	"storemy/pkg/storage/heap"
 	"storemy/pkg/storage/page"
 	"storemy/pkg/tuple"
-	"storemy/pkg/types"
 )
 
-// CatalogManager coordinates between the persistent SystemCatalog and the runtime TableManager.
+// CatalogManager coordinates between the persistent SystemCatalog and the in-memory tableCache.
 // It provides high-level, complete operations that handle both disk persistence and in-memory caching,
 // eliminating the need to manage both components separately throughout the codebase.
 //
@@ -22,21 +21,33 @@ import (
 //   - Clear semantics: Method names clearly indicate what happens (Create/Drop/Load)
 //   - Transaction aware: All mutations require explicit transaction context
 //   - Cache-first reads: Performance optimization by checking memory before disk
+//   - Encapsulation: tableCache is private - all access must go through CatalogManager
 type CatalogManager struct {
-	catalog      *SystemCatalog
-	tableManager *memory.TableManager
-	store        *memory.PageStore
-	dataDir      string
+	catalog    *SystemCatalog
+	tableCache *tableCache
+	store      PageStoreInterface
+	dataDir    string
+}
+
+// PageStoreInterface defines the minimal interface that CatalogManager needs from PageStore
+// This avoids circular dependencies and tight coupling
+type PageStoreInterface interface {
+	DeleteTuple(tx *transaction.TransactionContext, dbFile page.DbFile, tup *tuple.Tuple) error
+	InsertTuple(tx *transaction.TransactionContext, dbFile page.DbFile, tup *tuple.Tuple) error
+	CommitTransaction(tx *transaction.TransactionContext) error
+	RegisterDbFile(tableID int, dbFile page.DbFile)
+	UnregisterDbFile(tableID int)
 }
 
 // NewCatalogManager creates a new CatalogManager instance.
 // dataDir is the base directory where table files will be stored.
-func NewCatalogManager(ps *memory.PageStore, tm *memory.TableManager, dataDir string) *CatalogManager {
+func NewCatalogManager(ps PageStoreInterface, dataDir string) *CatalogManager {
+	cache := newTableCache()
 	return &CatalogManager{
-		catalog:      NewSystemCatalog(ps, tm),
-		tableManager: tm,
-		store:        ps,
-		dataDir:      dataDir,
+		catalog:    NewSystemCatalog(ps, cache),
+		tableCache: cache,
+		store:      ps,
+		dataDir:    dataDir,
 	}
 }
 
@@ -70,247 +81,125 @@ func (cm *CatalogManager) CreateTable(
 		return 0, fmt.Errorf("schema cannot be nil")
 	}
 
-	// Generate file path (CatalogManager decides storage location)
 	fileName := tableSchema.TableName + ".dat"
-	fullPath := fmt.Sprintf("%s/%s", cm.dataDir, fileName)
+	fullPath := filepath.Join(cm.dataDir, fileName)
 
-	// Create heap file on disk
 	heapFile, err := heap.NewHeapFile(fullPath, tableSchema.TupleDesc)
 	if err != nil {
 		return 0, fmt.Errorf("failed to create heap file: %w", err)
 	}
 
 	tableID = heapFile.GetID()
-
-	// Update schema with actual table ID
 	tableSchema.TableID = tableID
 	for i := range tableSchema.Columns {
 		tableSchema.Columns[i].TableID = tableID
 	}
 
-	// Convert schema to FieldMetadata for catalog registration
-	fields := make([]FieldMetadata, len(tableSchema.Columns))
-	for i, col := range tableSchema.Columns {
-		fields[i] = FieldMetadata{
-			Name:      col.Name,
-			Type:      col.FieldType,
-			IsAutoInc: col.IsAutoInc,
-		}
-	}
-
-	// Register in persistent catalog (CATALOG_TABLES + CATALOG_COLUMNS)
-	if err := cm.catalog.RegisterTable(tx, tableID, tableSchema.TableName, fullPath, tableSchema.PrimaryKey, fields); err != nil {
+	if err := cm.catalog.RegisterTable(tx, tableSchema, fullPath); err != nil {
 		heapFile.Close()
 		return 0, fmt.Errorf("failed to register table in catalog: %w", err)
 	}
 
-	// Add to runtime TableManager cache
-	if err := cm.tableManager.AddTable(heapFile, tableSchema); err != nil {
-		return 0, fmt.Errorf("failed to add table to manager: %w", err)
+	if err := cm.tableCache.AddTable(heapFile, tableSchema); err != nil {
+		return 0, fmt.Errorf("failed to add table to cache: %w", err)
 	}
+
+	// Register the DbFile with the PageStore for flush operations
+	cm.store.RegisterDbFile(tableID, heapFile)
 
 	return tableID, nil
 }
 
 // DropTable completely removes a table from both disk catalog and memory cache.
-// Steps:
-//  1. Removes from in-memory TableManager (closes file handle)
-//  2. Deletes metadata from CATALOG_TABLES
-//  3. Deletes column definitions from CATALOG_COLUMNS
-//  4. Deletes statistics from CATALOG_STATISTICS
-//
-// Note: This does NOT delete the physical heap file itself, only the catalog metadata.
 func (cm *CatalogManager) DropTable(tx *transaction.TransactionContext, tableName string) error {
 	tableID, err := cm.GetTableID(tx.ID, tableName)
 	if err != nil {
 		return fmt.Errorf("table %s not found: %w", tableName, err)
 	}
 
-	if err := cm.tableManager.RemoveTable(tableName); err != nil {
-		// Log warning but continue - table might not be loaded in memory
-		fmt.Printf("Warning: failed to remove table from manager: %v\n", err)
+	if err := cm.tableCache.removeTable(tableName); err != nil {
+		fmt.Printf("Warning: failed to remove table from cache: %v\n", err)
 	}
 
-	// Delete from CATALOG_TABLES
-	if err := cm.deleteCatalogEntry(tx, cm.catalog.GetTablesTableID(), 0, tableID); err != nil {
-		return fmt.Errorf("failed to delete from CATALOG_TABLES: %w", err)
-	}
+	// Unregister the DbFile from PageStore
+	cm.store.UnregisterDbFile(tableID)
 
-	// Delete from CATALOG_COLUMNS (all columns for this table)
-	if err := cm.deleteCatalogEntry(tx, cm.catalog.GetColumnsTableID(), 0, tableID); err != nil {
-		return fmt.Errorf("failed to delete from CATALOG_COLUMNS: %w", err)
-	}
-
-	// Delete from CATALOG_STATISTICS if exists
-	_ = cm.deleteCatalogEntry(tx, cm.catalog.GetStatisticsTableID(), 0, tableID)
-
-	return nil
-}
-
-// deleteCatalogEntry is a helper to delete tuples from catalog tables by matching a field value
-func (cm *CatalogManager) deleteCatalogEntry(tx *transaction.TransactionContext, catalogTableID, fieldIndex, matchValue int) error {
-	file, err := cm.tableManager.GetDbFile(catalogTableID)
-	if err != nil {
-		return err
-	}
-
-	iter := file.Iterator(tx.ID)
-	if err := iter.Open(); err != nil {
-		return err
-	}
-	defer iter.Close()
-
-	var tuplesToDelete []*tuple.Tuple
-	matchValueInt32 := int64(matchValue)
-
-	for {
-		hasNext, err := iter.HasNext()
-		if err != nil || !hasNext {
-			break
-		}
-
-		tup, err := iter.Next()
-		if err != nil || tup == nil {
-			break
-		}
-
-		field, err := tup.GetField(fieldIndex)
-		if err != nil {
-			continue
-		}
-
-		if intField, ok := field.(*types.IntField); ok {
-			if intField.Value == matchValueInt32 {
-				tuplesToDelete = append(tuplesToDelete, tup)
-			}
-		}
-	}
-
-	for _, tup := range tuplesToDelete {
-		if err := cm.store.DeleteTuple(tx, tup); err != nil {
-			return err
-		}
-	}
-
-	return nil
+	return cm.catalog.DeleteCatalogEntry(tx, tableID)
 }
 
 // GetTableID retrieves the table ID for a given table name.
-// Checks in-memory TableManager first (O(1)), falls back to disk scan if not found.
+// Checks in-memory cache first (O(1)), falls back to disk scan if not found.
 func (cm *CatalogManager) GetTableID(tid *primitives.TransactionID, tableName string) (int, error) {
-	if id, err := cm.tableManager.GetTableID(tableName); err == nil {
+	if id, err := cm.tableCache.getTableID(tableName); err == nil {
 		return id, nil
 	}
-	return cm.catalog.GetTableID(tid, tableName)
+
+	if md, err := cm.catalog.GetTableMetadataByName(tid, tableName); err == nil {
+		return md.TableID, nil
+	}
+
+	return -1, fmt.Errorf("table %s not found", tableName)
 }
 
 // GetTableName retrieves the table name for a given table ID.
-// Checks in-memory TableManager first (O(1)), falls back to disk scan if not found.
+// Checks in-memory cache first (O(1)), falls back to disk scan if not found.
 func (cm *CatalogManager) GetTableName(tid *primitives.TransactionID, tableID int) (string, error) {
-	if info, err := cm.tableManager.GetTableInfo(tableID); err == nil {
+	if info, err := cm.tableCache.GetTableInfo(tableID); err == nil {
 		return info.Schema.TableName, nil
 	}
 
-	// Slow path: scan catalog on disk (requires custom implementation)
-	// SystemCatalog doesn't have GetTableName, so we need to iterate
-	var result string
-	tableIDInt32 := int(int64(tableID))
-
-	err := cm.catalog.iterateTable(cm.catalog.GetTablesTableID(), tid, func(tup *tuple.Tuple) error {
-		storedID := getIntField(tup, 0)
-		if storedID == tableIDInt32 {
-			result = getStringField(tup, 1)
-			return fmt.Errorf("found") // Break iteration
-		}
-		return nil
-	})
-
-	if err != nil && err.Error() == "found" {
-		return result, nil
-	}
-	if err != nil {
-		return "", err
+	if md, err := cm.catalog.GetTableMetadataByID(tid, tableID); err == nil {
+		return md.TableName, nil
 	}
 
 	return "", fmt.Errorf("table with ID %d not found", tableID)
 }
 
-// GetTableSchema retrieves the schema (TupleDescription) for a table.
+// GetTableSchema retrieves the schema for a table.
 // First checks in-memory cache, then loads from disk if necessary.
-func (cm *CatalogManager) GetTableSchema(tid *primitives.TransactionID, tableID int) (*tuple.TupleDescription, error) {
-	if schema, err := cm.tableManager.GetTupleDesc(tableID); err == nil {
-		return schema, nil
+func (cm *CatalogManager) GetTableSchema(tid *primitives.TransactionID, tableID int) (*schema.Schema, error) {
+	if info, err := cm.tableCache.GetTableInfo(tableID); err == nil {
+		return info.Schema, nil
 	}
 
-	schemaObj, err := cm.catalog.loader.LoadTableSchema(tid, tableID)
+	schema, err := cm.catalog.loader.LoadTableSchema(tid, tableID)
 	if err != nil {
 		return nil, err
 	}
-	return schemaObj.TupleDesc, nil
+	return schema, nil
 }
 
 // GetTableFile retrieves the DbFile for a table from the in-memory cache.
 // Returns an error if the table is not loaded in memory.
 func (cm *CatalogManager) GetTableFile(tableID int) (page.DbFile, error) {
-	return cm.tableManager.GetDbFile(tableID)
+	return cm.tableCache.GetDbFile(tableID)
 }
 
 // TableExists checks if a table exists by name.
 // Checks memory first, then disk catalog.
 func (cm *CatalogManager) TableExists(tid *primitives.TransactionID, tableName string) bool {
-	// Check memory
-	if cm.tableManager.TableExists(tableName) {
+	if cm.tableCache.TableExists(tableName) {
 		return true
 	}
-
-	// Check disk
-	_, err := cm.catalog.GetTableID(tid, tableName)
+	_, err := cm.catalog.GetTableMetadataByName(tid, tableName)
 	return err == nil
-}
-
-// GetPrimaryKey retrieves the primary key field name for a table from disk catalog.
-func (cm *CatalogManager) GetPrimaryKey(tid *primitives.TransactionID, tableID int) (string, error) {
-	var primaryKey string
-	tableIDInt32 := int(int32(tableID))
-
-	err := cm.catalog.iterateTable(cm.catalog.GetTablesTableID(), tid, func(tup *tuple.Tuple) error {
-		storedID := getIntField(tup, 0)
-		if storedID == tableIDInt32 {
-			primaryKey = getStringField(tup, 3) // primary_key is field 3
-			return fmt.Errorf("found")
-		}
-		return nil
-	})
-
-	if err != nil && err.Error() == "found" {
-		return primaryKey, nil
-	}
-	if err != nil {
-		return "", err
-	}
-
-	return "", fmt.Errorf("table with ID %d not found", tableID)
-}
-
-// ListAllTables returns all table names from the in-memory cache.
-// For a complete list including tables not loaded in memory, use ListAllTablesFromDisk.
-func (cm *CatalogManager) ListAllTables() []string {
-	return cm.tableManager.GetAllTableNames()
 }
 
 // ListAllTablesFromDisk scans CATALOG_TABLES and returns all table names.
 // This is slower than ListAllTables but includes tables not currently loaded in memory.
-func (cm *CatalogManager) ListAllTablesFromDisk(tid *primitives.TransactionID) ([]string, error) {
-	var tableNames []string
+func (cm *CatalogManager) ListAllTables(tid *primitives.TransactionID, refreshFromDisk bool) ([]string, error) {
+	if !refreshFromDisk {
+		return cm.tableCache.GetAllTableNames(), nil
+	}
 
-	err := cm.catalog.iterateTable(cm.catalog.GetTablesTableID(), tid, func(tup *tuple.Tuple) error {
-		name := getStringField(tup, 1)
-		tableNames = append(tableNames, name)
-		return nil
-	})
-
+	tables, err := cm.catalog.GetAllTables(tid)
 	if err != nil {
 		return nil, err
+	}
+
+	var tableNames []string
+	for _, table := range tables {
+		tableNames = append(tableNames, table.TableName)
 	}
 
 	return tableNames, nil
@@ -320,11 +209,6 @@ func (cm *CatalogManager) ListAllTablesFromDisk(tid *primitives.TransactionID) (
 // This scans the table, computes cardinality/page count/etc., and stores in CATALOG_STATISTICS.
 func (cm *CatalogManager) UpdateTableStatistics(tx *transaction.TransactionContext, tableID int) error {
 	return cm.catalog.UpdateTableStatistics(tx, tableID)
-}
-
-// GetTableStatistics retrieves statistics for a table from disk.
-func (cm *CatalogManager) GetTableStatistics(tid *primitives.TransactionID, tableID int) (*TableStatistics, error) {
-	return cm.catalog.GetTableStatistics(tid, tableID)
 }
 
 // RefreshStatistics updates statistics for a table and returns the updated stats.
@@ -341,62 +225,41 @@ func (cm *CatalogManager) RefreshStatistics(tx *transaction.TransactionContext, 
 //  1. Renames in TableManager (in-memory)
 //  2. Updates CATALOG_TABLES entry on disk
 func (cm *CatalogManager) RenameTable(tx *transaction.TransactionContext, oldName, newName string) error {
-	// Check if new name already exists
 	if cm.TableExists(tx.ID, newName) {
 		return fmt.Errorf("table %s already exists", newName)
 	}
 
-	// Get table ID first
 	tableID, err := cm.GetTableID(tx.ID, oldName)
 	if err != nil {
 		return fmt.Errorf("table %s not found: %w", oldName, err)
 	}
 
-	// Rename in memory
-	if err := cm.tableManager.RenameTable(oldName, newName); err != nil {
+	if err := cm.tableCache.RenameTable(oldName, newName); err != nil {
 		return fmt.Errorf("failed to rename in memory: %w", err)
 	}
 
-	// Update disk catalog - delete old entry and insert new one
-	// Get full table metadata
-	var filePath, primaryKey string
-	tableIDInt32 := int(int32(tableID))
-
-	err = cm.catalog.iterateTable(cm.catalog.GetTablesTableID(), tx.ID, func(tup *tuple.Tuple) error {
-		storedID := getIntField(tup, 0)
-		if storedID == tableIDInt32 {
-			filePath = getStringField(tup, 2)
-			primaryKey = getStringField(tup, 3)
-			return fmt.Errorf("found")
-		}
-		return nil
-	})
-
-	if err == nil || err.Error() != "found" {
-		// Rollback memory change
-		cm.tableManager.RenameTable(newName, oldName)
+	tm, err := cm.catalog.GetTableMetadataByID(tx.ID, tableID)
+	if err != nil {
+		cm.tableCache.RenameTable(newName, oldName)
 		return fmt.Errorf("failed to find table metadata: %w", err)
 	}
 
-	// Delete old entry from CATALOG_TABLES
-	if err := cm.deleteCatalogEntry(tx, cm.catalog.GetTablesTableID(), 0, tableID); err != nil {
-		// Rollback memory change
-		cm.tableManager.RenameTable(newName, oldName)
+	if err := cm.catalog.DeleteTableFromSysTable(tx, tableID, cm.catalog.TablesTableID); err != nil {
+		cm.tableCache.RenameTable(newName, oldName)
 		return fmt.Errorf("failed to delete old catalog entry: %w", err)
 	}
 
-	tm := systemtable.TableMetadata{
-		TableName:     newName,
-		TableID:       tableID,
-		FilePath:      filePath,
-		PrimaryKeyCol: primaryKey,
+	tup := systemtable.Tables.CreateTuple(*tm)
+
+	// Get the DbFile for the tables catalog
+	tablesFile, err := cm.tableCache.GetDbFile(cm.catalog.TablesTableID)
+	if err != nil {
+		cm.tableCache.RenameTable(newName, oldName)
+		return fmt.Errorf("failed to get tables catalog file: %w", err)
 	}
 
-	// Insert new entry with updated name
-	tup := systemtable.Tables.CreateTuple(tm)
-	if err := cm.store.InsertTuple(tx, cm.catalog.GetTablesTableID(), tup); err != nil {
-		// Rollback everything
-		cm.tableManager.RenameTable(newName, oldName)
+	if err := cm.store.InsertTuple(tx, tablesFile, tup); err != nil {
+		cm.tableCache.RenameTable(newName, oldName)
 		return fmt.Errorf("failed to insert new catalog entry: %w", err)
 	}
 
@@ -406,95 +269,55 @@ func (cm *CatalogManager) RenameTable(tx *transaction.TransactionContext, oldNam
 // LoadTable loads a specific table from disk into memory by name.
 // Useful for lazy loading tables on demand rather than loading all tables at startup.
 func (cm *CatalogManager) LoadTable(tid *primitives.TransactionID, tableName string) error {
-	// Check if already loaded
-	if cm.tableManager.TableExists(tableName) {
-		return nil // Already loaded
-	}
-
-	// Find table in catalog
-	var tableID int
-	var filePath, primaryKey string
-
-	err := cm.catalog.iterateTable(cm.catalog.GetTablesTableID(), tid, func(tup *tuple.Tuple) error {
-		name := getStringField(tup, 1)
-		if name == tableName {
-			tableID = getIntField(tup, 0)
-			filePath = getStringField(tup, 2)
-			primaryKey = getStringField(tup, 3)
-			return fmt.Errorf("found")
-		}
+	if cm.tableCache.TableExists(tableName) {
 		return nil
-	})
-
-	if err == nil || err.Error() != "found" {
-		return fmt.Errorf("table %s not found in catalog", tableName)
 	}
 
-	// Load schema
-	schemaObj, err := cm.catalog.loader.LoadTableSchema(tid, tableID)
+	tm, err := cm.catalog.GetTableMetadataByName(tid, tableName)
+	if err != nil {
+		return fmt.Errorf("failed to get table metadata: %w", err)
+	}
+
+	sch, err := cm.catalog.loader.LoadTableSchema(tid, tm.TableID)
 	if err != nil {
 		return fmt.Errorf("failed to load schema: %w", err)
 	}
 
-	// Open heap file
-	heapFile, err := heap.NewHeapFile(filePath, schemaObj.TupleDesc)
+	heapFile, err := heap.NewHeapFile(tm.FilePath, sch.TupleDesc)
 	if err != nil {
 		return fmt.Errorf("failed to open heap file: %w", err)
 	}
 
-	// Use loaded primary key if not in catalog metadata
-	if primaryKey == "" {
-		primaryKey = schemaObj.PrimaryKey
-	}
-
-	// Update schemaObj with the correct table name (in case it was different)
-	schemaObj.TableName = tableName
-	if schemaObj.PrimaryKey == "" {
-		schemaObj.PrimaryKey = primaryKey
-	}
-
-	// Add to TableManager
-	if err := cm.tableManager.AddTable(heapFile, schemaObj); err != nil {
+	if err := cm.tableCache.AddTable(heapFile, sch); err != nil {
 		heapFile.Close()
-		return fmt.Errorf("failed to add table to manager: %w", err)
+		return fmt.Errorf("failed to add table to cache: %w", err)
 	}
+
+	// Register the DbFile with the PageStore for flush operations
+	cm.store.RegisterDbFile(tm.TableID, heapFile)
 
 	return nil
-}
-
-// UnloadTable removes a table from memory but keeps it in the disk catalog.
-// This is useful for memory management with large numbers of tables.
-func (cm *CatalogManager) UnloadTable(tableName string) error {
-	return cm.tableManager.RemoveTable(tableName)
-}
-
-// GetSystemCatalog returns the underlying SystemCatalog for advanced operations.
-// Use this sparingly - most operations should go through CatalogManager methods.
-func (cm *CatalogManager) GetSystemCatalog() *SystemCatalog {
-	return cm.catalog
-}
-
-// GetTableManager returns the underlying TableManager for advanced operations.
-// Use this sparingly - most operations should go through CatalogManager methods.
-func (cm *CatalogManager) GetTableManager() *memory.TableManager {
-	return cm.tableManager
 }
 
 // ValidateIntegrity checks consistency between memory and disk catalog.
 // Returns an error if any inconsistencies are found.
 func (cm *CatalogManager) ValidateIntegrity(tid *primitives.TransactionID) error {
-	if err := cm.tableManager.ValidateIntegrity(); err != nil {
-		return fmt.Errorf("table manager integrity error: %w", err)
+	if err := cm.tableCache.validateIntegrity(); err != nil {
+		return fmt.Errorf("cache integrity error: %w", err)
 	}
 
-	memoryTables := cm.tableManager.GetAllTableNames()
-	for _, tableName := range memoryTables {
-		if _, err := cm.catalog.GetTableID(tid, tableName); err != nil {
-			return fmt.Errorf("table %s exists in memory but not in disk catalog", tableName)
+	names := cm.tableCache.GetAllTableNames()
+	for _, n := range names {
+		if _, err := cm.catalog.GetTableMetadataByName(tid, n); err != nil {
+			return fmt.Errorf("table %s exists in memory but not in disk catalog", n)
 		}
 	}
-
 	return nil
+}
+
+// ClearCache removes all tables from memory cache (useful for shutdown)
+func (cm *CatalogManager) ClearCache() {
+	cm.tableCache.clear()
 }
 
 // GetAutoIncrementColumn retrieves auto-increment column information for a table.
@@ -506,4 +329,20 @@ func (cm *CatalogManager) GetAutoIncrementColumn(tid *primitives.TransactionID, 
 // IncrementAutoIncrementValue updates the next auto-increment value for a table's auto-increment column.
 func (cm *CatalogManager) IncrementAutoIncrementValue(tx *transaction.TransactionContext, tableID int, columnName string, newValue int) error {
 	return cm.catalog.IncrementAutoIncrementValue(tx, tableID, columnName, newValue)
+}
+
+// GetTableStatisticsWithCache retrieves statistics, using cache when available.
+// Falls back to disk if not cached, then caches the result.
+func (cm *CatalogManager) GetTableStatistics(tid *primitives.TransactionID, tableID int) (*TableStatistics, error) {
+	if stats, found := cm.tableCache.getCachedStatistics(tableID); found {
+		return stats, nil
+	}
+
+	stats, err := cm.catalog.GetTableStatistics(tid, tableID)
+	if err != nil {
+		return nil, err
+	}
+
+	_ = cm.tableCache.setCachedStatistics(tableID, stats)
+	return stats, nil
 }
