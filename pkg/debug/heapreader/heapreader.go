@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"storemy/pkg/catalog"
+	"storemy/pkg/catalog/systemtable"
 	"storemy/pkg/concurrency/transaction"
 	"storemy/pkg/debug/ui"
 	"storemy/pkg/memory"
@@ -29,6 +30,12 @@ var heapKeys = heapKeyMap{
 	NavigationKeyMap: ui.NavigationKeys,
 }
 
+var (
+	statsTable  = systemtable.Stats.TableName()
+	colsTable   = systemtable.Columns.TableName()
+	tablesTable = systemtable.Tables.TableName()
+)
+
 type tableInfo struct {
 	tableID    int
 	tableName  string
@@ -38,9 +45,8 @@ type tableInfo struct {
 }
 
 type heapModel struct {
-	catalog       *catalog.SystemCatalog
+	catalog       *catalog.CatalogManager
 	store         *memory.PageStore
-	tableManager  *memory.TableManager
 	currentView   string // "menu", "table_data", "page_view"
 	cursor        int
 	scrollOffset  int
@@ -71,37 +77,37 @@ func (m heapModel) Init() tea.Cmd {
 }
 
 type heapInitMsg struct {
-	catalog      *catalog.SystemCatalog
-	store        *memory.PageStore
-	tableManager *memory.TableManager
-	tables       []tableInfo
-	err          error
+	catalog *catalog.CatalogManager
+	store   *memory.PageStore
+	tables  []tableInfo
+	err     error
 }
 
 func initializeHeapReader(dataDir string) tea.Cmd {
 	return func() tea.Msg {
-		tm := memory.NewTableManager()
-		store := memory.NewPageStore(tm, nil) // No WAL for reading
-		cat := catalog.NewSystemCatalog(store, tm)
+		store := memory.NewPageStore(nil) // No WAL for reading
+		cat := catalog.NewCatalogManager(store, dataDir)
 
 		tx := transaction.NewTransactionContext(primitives.NewTransactionID())
-		if err := cat.Initialize(tx, dataDir); err != nil {
+		if err := cat.Initialize(tx); err != nil {
 			return heapInitMsg{err: err}
 		}
 
-		if err := cat.LoadTables(transaction.NewTransactionContext(primitives.NewTransactionID()), dataDir); err != nil {
+		if err := cat.LoadAllTables(transaction.NewTransactionContext(primitives.NewTransactionID())); err != nil {
 			return heapInitMsg{err: err}
 		}
 
-		// Collect all user tables (non-catalog tables)
+		tid := primitives.NewTransactionID()
+
+		// Collect all user tables (non-catalog tables
 		var tables []tableInfo
-		catalogTableID := cat.GetTablesTableID()
-		columnsTableID := cat.GetColumnsTableID()
-		statsTableID := cat.GetStatisticsTableID()
+		catalogTableID, _ := cat.GetTableID(tid, tablesTable)
+		columnsTableID, _ := cat.GetTableID(tid, colsTable)
+		statsTableID, _ := cat.GetTableID(tid, statsTable)
 
-		allTableNames := tm.GetAllTableNames()
+		allTableNames, _ := cat.ListAllTables(tid, true)
 		for _, name := range allTableNames {
-			tableID, err := tm.GetTableID(name)
+			tableID, err := cat.GetTableID(tid, name)
 			if err != nil {
 				continue
 			}
@@ -111,7 +117,7 @@ func initializeHeapReader(dataDir string) tea.Cmd {
 				continue
 			}
 
-			file, err := tm.GetDbFile(tableID)
+			file, err := cat.GetTableFile(tableID)
 			if err != nil {
 				continue
 			}
@@ -128,10 +134,9 @@ func initializeHeapReader(dataDir string) tea.Cmd {
 		}
 
 		return heapInitMsg{
-			catalog:      cat,
-			store:        store,
-			tableManager: tm,
-			tables:       tables,
+			catalog: cat,
+			store:   store,
+			tables:  tables,
 		}
 	}
 }
@@ -143,9 +148,9 @@ type tableDataLoadedMsg struct {
 	err       error
 }
 
-func loadTableData(tableManager *memory.TableManager, tableInfo *tableInfo) tea.Cmd {
+func loadTableData(cat *catalog.CatalogManager, tableInfo *tableInfo) tea.Cmd {
 	return func() tea.Msg {
-		file, err := tableManager.GetDbFile(tableInfo.tableID)
+		file, err := cat.GetTableFile(tableInfo.tableID)
 		if err != nil {
 			return tableDataLoadedMsg{err: err}
 		}
@@ -210,9 +215,9 @@ type pageDataLoadedMsg struct {
 	err    error
 }
 
-func loadPageData(tableManager *memory.TableManager, tableID int, pageNo int) tea.Cmd {
+func loadPageData(cat *catalog.CatalogManager, tableID int, pageNo int) tea.Cmd {
 	return func() tea.Msg {
-		file, err := tableManager.GetDbFile(tableID)
+		file, err := cat.GetTableFile(tableID)
 		if err != nil {
 			return pageDataLoadedMsg{err: err}
 		}
@@ -286,7 +291,6 @@ func (m heapModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.catalog = msg.catalog
 		m.store = msg.store
-		m.tableManager = msg.tableManager
 		m.tables = msg.tables
 		if len(m.tables) == 0 {
 			m.currentView = "no_tables"
@@ -340,7 +344,7 @@ func (m heapModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			case key.Matches(msg, heapKeys.Select):
 				if m.cursor < len(m.tables) {
 					m.selectedTable = &m.tables[m.cursor]
-					return m, loadTableData(m.tableManager, m.selectedTable)
+					return m, loadTableData(m.catalog, m.selectedTable)
 				}
 			}
 
@@ -366,20 +370,20 @@ func (m heapModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			case key.Matches(msg, heapKeys.NextPage):
 				if m.currentPage < m.totalPages-1 {
 					m.currentPage++
-					return m, loadPageData(m.tableManager, m.selectedTable.tableID, m.currentPage)
+					return m, loadPageData(m.catalog, m.selectedTable.tableID, m.currentPage)
 				}
 			case key.Matches(msg, heapKeys.PrevPage):
 				if m.currentPage > 0 {
 					m.currentPage--
-					return m, loadPageData(m.tableManager, m.selectedTable.tableID, m.currentPage)
+					return m, loadPageData(m.catalog, m.selectedTable.tableID, m.currentPage)
 				}
 			case key.Matches(msg, heapKeys.FirstPage):
 				m.currentPage = 0
-				return m, loadPageData(m.tableManager, m.selectedTable.tableID, m.currentPage)
+				return m, loadPageData(m.catalog, m.selectedTable.tableID, m.currentPage)
 			case key.Matches(msg, heapKeys.LastPage):
 				if m.totalPages > 0 {
 					m.currentPage = m.totalPages - 1
-					return m, loadPageData(m.tableManager, m.selectedTable.tableID, m.currentPage)
+					return m, loadPageData(m.catalog, m.selectedTable.tableID, m.currentPage)
 				}
 			case key.Matches(msg, heapKeys.Left):
 				if m.scrollOffset > 0 {
@@ -578,20 +582,6 @@ func padString(s string, width int) string {
 		return s
 	}
 	return s + strings.Repeat(" ", width-len(s))
-}
-
-func max(a, b int) int {
-	if a > b {
-		return a
-	}
-	return b
-}
-
-func min(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
 }
 
 func main() {
