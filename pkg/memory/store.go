@@ -51,23 +51,38 @@ type StatsRecorder interface {
 // It serves as the main interface between the database engine and the underlying storage layer,
 // providing ACID compliance through transaction tracking and page lifecycle management.
 type PageStore struct {
-	tableManager *TableManager
 	mutex        sync.RWMutex
 	lockManager  *lock.LockManager
 	cache        PageCache
 	wal          *log.WAL
 	statsManager StatsRecorder
+	dbFiles      map[int]page.DbFile // tableID -> DbFile mapping
 }
 
 // NewPageStore creates and initializes a new PageStore instance
-func NewPageStore(tm *TableManager, wal *log.WAL) *PageStore {
+func NewPageStore(wal *log.WAL) *PageStore {
 	return &PageStore{
 		cache:        NewLRUPageCache(MaxPageCount),
 		lockManager:  lock.NewLockManager(),
-		tableManager: tm,
 		wal:          wal,
 		statsManager: nil, // Can be set later via SetStatsManager
+		dbFiles:      make(map[int]page.DbFile),
 	}
+}
+
+// RegisterDbFile registers a DbFile for a specific table ID
+// This allows PageStore to look up DbFiles when needed for flushing pages
+func (p *PageStore) RegisterDbFile(tableID int, dbFile page.DbFile) {
+	p.mutex.Lock()
+	defer p.mutex.Unlock()
+	p.dbFiles[tableID] = dbFile
+}
+
+// UnregisterDbFile removes a DbFile registration for a specific table ID
+func (p *PageStore) UnregisterDbFile(tableID int) {
+	p.mutex.Lock()
+	defer p.mutex.Unlock()
+	delete(p.dbFiles, tableID)
 }
 
 // SetStatsManager sets the statistics manager for tracking table modifications
@@ -78,7 +93,7 @@ func (p *PageStore) SetStatsManager(sm StatsRecorder) {
 
 // GetPage retrieves a page with specified permissions for a transaction
 // This is the main entry point for all page access in the database
-func (p *PageStore) GetPage(ctx *transaction.TransactionContext, pid primitives.PageID, perm transaction.Permissions) (page.Page, error) {
+func (p *PageStore) GetPage(ctx *transaction.TransactionContext, dbFile page.DbFile, pid primitives.PageID, perm transaction.Permissions) (page.Page, error) {
 	if ctx == nil {
 		return nil, fmt.Errorf("transaction context cannot be nil")
 	}
@@ -100,11 +115,6 @@ func (p *PageStore) GetPage(ctx *transaction.TransactionContext, pid primitives.
 		if err := p.evictPage(); err != nil {
 			return nil, fmt.Errorf("buffer pool full, cannot evict: %v", err)
 		}
-	}
-
-	dbFile, err := p.getDbFile(pid.GetTableID())
-	if err != nil {
-		return nil, err
 	}
 
 	page, err := dbFile.ReadPage(pid)
@@ -146,12 +156,13 @@ func (p *PageStore) evictPage() error {
 }
 
 // InsertTuple adds a new tuple to the specified table within the given transaction context.
-func (p *PageStore) InsertTuple(ctx *transaction.TransactionContext, tableID int, t *tuple.Tuple) error {
-	return p.performDataOperation(InsertOperation, ctx, tableID, t)
+func (p *PageStore) InsertTuple(ctx *transaction.TransactionContext, dbFile page.DbFile, t *tuple.Tuple) error {
+	tableID := dbFile.GetID()
+	return p.performDataOperation(InsertOperation, ctx, dbFile, tableID, t)
 }
 
 // DeleteTuple removes a tuple from its table within the given transaction context.
-func (p *PageStore) DeleteTuple(ctx *transaction.TransactionContext, t *tuple.Tuple) error {
+func (p *PageStore) DeleteTuple(ctx *transaction.TransactionContext, dbFile page.DbFile, t *tuple.Tuple) error {
 	if t == nil {
 		return fmt.Errorf("tuple cannot be nil")
 	}
@@ -160,11 +171,11 @@ func (p *PageStore) DeleteTuple(ctx *transaction.TransactionContext, t *tuple.Tu
 		return fmt.Errorf("tuple must have a valid record ID")
 	}
 
-	tableID := t.RecordID.PageID.GetTableID()
-	return p.performDataOperation(DeleteOperation, ctx, tableID, t)
+	tableID := dbFile.GetID()
+	return p.performDataOperation(DeleteOperation, ctx, dbFile, tableID, t)
 }
 
-func (p *PageStore) performDataOperation(operation OperationType, ctx *transaction.TransactionContext, tableID int, t *tuple.Tuple) error {
+func (p *PageStore) performDataOperation(operation OperationType, ctx *transaction.TransactionContext, dbFile page.DbFile, tableID int, t *tuple.Tuple) error {
 	if ctx == nil {
 		return fmt.Errorf("transaction context cannot be nil")
 	}
@@ -173,18 +184,14 @@ func (p *PageStore) performDataOperation(operation OperationType, ctx *transacti
 		return err
 	}
 
-	dbFile, err := p.getDbFile(tableID)
-	if err != nil {
-		return err
-	}
-
 	var modifiedPages []page.Page
+	var err error
 	switch operation {
 	case InsertOperation:
 		modifiedPages, err = p.handleInsert(ctx, t, dbFile)
 
 	case DeleteOperation:
-		modifiedPages, err = p.handleDelete(ctx, t)
+		modifiedPages, err = p.handleDelete(ctx, dbFile, t)
 
 	default:
 		return fmt.Errorf("unsupported operation: %s", operation.String())
@@ -217,9 +224,9 @@ func (p *PageStore) handleInsert(ctx *transaction.TransactionContext, t *tuple.T
 	return modifiedPages, nil
 }
 
-func (p *PageStore) handleDelete(ctx *transaction.TransactionContext, t *tuple.Tuple) ([]page.Page, error) {
+func (p *PageStore) handleDelete(ctx *transaction.TransactionContext, dbFile page.DbFile, t *tuple.Tuple) ([]page.Page, error) {
 	pageID := t.RecordID.PageID
-	pg, err := p.GetPage(ctx, pageID, transaction.ReadWrite)
+	pg, err := p.GetPage(ctx, dbFile, pageID, transaction.ReadWrite)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get page for delete: %v", err)
 	}
@@ -240,7 +247,7 @@ func (p *PageStore) handleDelete(ctx *transaction.TransactionContext, t *tuple.T
 }
 
 // UpdateTuple replaces an existing tuple with a new version within the given transaction.
-func (p *PageStore) UpdateTuple(ctx *transaction.TransactionContext, oldTuple *tuple.Tuple, newTuple *tuple.Tuple) error {
+func (p *PageStore) UpdateTuple(ctx *transaction.TransactionContext, dbFile page.DbFile, oldTuple *tuple.Tuple, newTuple *tuple.Tuple) error {
 	if oldTuple == nil {
 		return fmt.Errorf("old tuple cannot be nil")
 	}
@@ -249,21 +256,19 @@ func (p *PageStore) UpdateTuple(ctx *transaction.TransactionContext, oldTuple *t
 		return fmt.Errorf("old tuple has no RecordID")
 	}
 
-	tableID := oldTuple.RecordID.PageID.GetTableID()
-
-	if err := p.DeleteTuple(ctx, oldTuple); err != nil {
+	if err := p.DeleteTuple(ctx, dbFile, oldTuple); err != nil {
 		return fmt.Errorf("failed to delete old tuple: %v", err)
 	}
 
-	if err := p.InsertTuple(ctx, tableID, newTuple); err != nil {
-		p.InsertTuple(ctx, tableID, oldTuple)
+	if err := p.InsertTuple(ctx, dbFile, newTuple); err != nil {
+		p.InsertTuple(ctx, dbFile, oldTuple)
 		return fmt.Errorf("failed to insert updated tuple: %v", err)
 	}
 
 	return nil
 }
 
-// FlushAllPages writes all dirty pages in the cache to persistent storage.
+// FlushAllPages writes all dirty pages to persistent storage.
 // This operation ensures data durability by synchronizing the in-memory cache
 // with the underlying database files. Pages are unmarked as dirty after successful writes.
 func (p *PageStore) FlushAllPages() error {
@@ -273,7 +278,11 @@ func (p *PageStore) FlushAllPages() error {
 	p.mutex.RUnlock()
 
 	for _, pid := range pids {
-		if err := p.flushPage(pid); err != nil {
+		dbFile, err := p.getDbFileForPage(pid)
+		if err != nil {
+			return fmt.Errorf("failed to get dbFile for page %v: %v", pid, err)
+		}
+		if err := p.flushPage(dbFile, pid); err != nil {
 			return fmt.Errorf("failed to flush page %v: %v", pid, err)
 		}
 	}
@@ -339,7 +348,11 @@ func (p *PageStore) handleCommit(dirtyPageIDs []primitives.PageID) error {
 	p.mutex.Unlock()
 
 	for _, pid := range dirtyPageIDs {
-		if err := p.flushPage(pid); err != nil {
+		dbFile, err := p.getDbFileForPage(pid)
+		if err != nil {
+			return fmt.Errorf("commit failed: unable to get dbFile for page %v: %v", pid, err)
+		}
+		if err := p.flushPage(dbFile, pid); err != nil {
 			return fmt.Errorf("commit failed: unable to flush page %v: %v", pid, err)
 		}
 	}
@@ -369,8 +382,10 @@ func (p *PageStore) handleAbort(dirtyPageIDs []primitives.PageID) error {
 // This is an internal helper method used by FlushAllPages and other flush operations.
 // The page is unmarked as dirty after a successful write operation.
 //
+// NOTE: flushPage requires the dbFile to be passed externally since PageStore no longer
+// maintains table metadata. The caller (typically CatalogManager) must provide the appropriate DbFile.
 // Returns an error if the page write fails, or nil if the page doesn't exist or isn't dirty.
-func (p *PageStore) flushPage(pid primitives.PageID) error {
+func (p *PageStore) flushPage(dbFile page.DbFile, pid primitives.PageID) error {
 	p.mutex.RLock()
 	page, exists := p.cache.Get(pid)
 	p.mutex.RUnlock()
@@ -381,11 +396,6 @@ func (p *PageStore) flushPage(pid primitives.PageID) error {
 
 	if page.IsDirty() == nil {
 		return nil
-	}
-
-	dbFile, err := p.getDbFile(pid.GetTableID())
-	if err != nil {
-		return err
 	}
 
 	if err := dbFile.WritePage(page); err != nil {
@@ -446,16 +456,23 @@ func (p *PageStore) logOperation(operation OperationType, tid *primitives.Transa
 	return nil
 }
 
-func (p *PageStore) getDbFile(tableID int) (page.DbFile, error) {
-	info, err := p.tableManager.GetTableInfo(tableID)
-	if err != nil {
-		return nil, fmt.Errorf("table with ID %d not found: %v", tableID, err)
+// getDbFileForPage retrieves the DbFile for a given page ID
+// This is used internally for operations like flushing that need the DbFile
+func (p *PageStore) getDbFileForPage(pageID primitives.PageID) (page.DbFile, error) {
+	tableID := pageID.GetTableID()
+	p.mutex.RLock()
+	dbFile, exists := p.dbFiles[tableID]
+	p.mutex.RUnlock()
+
+	if !exists {
+		return nil, fmt.Errorf("no DbFile registered for table %d", tableID)
 	}
-	return info.File, nil
+
+	return dbFile, nil
 }
 
-// // ensureTransactionBegun ensures that a transaction's BEGIN record has been logged to the WAL.
-// // This is a helper method for tests to directly ensure a transaction has begun.
-// func (p *PageStore) ensureTransactionBegun(ctx *transaction.TransactionContext) error {
-// 	return ctx.EnsureBegunInWAL(p.wal)
-// }
+// ensureTransactionBegun ensures that a transaction's BEGIN record has been logged to the WAL.
+// This is a helper method for tests to directly ensure a transaction has begun.
+func (p *PageStore) ensureTransactionBegun(ctx *transaction.TransactionContext) error {
+	return ctx.EnsureBegunInWAL(p.wal)
+}
