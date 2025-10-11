@@ -7,7 +7,6 @@ import (
 	"slices"
 	"storemy/pkg/catalog/schema"
 	"storemy/pkg/storage/page"
-	"storemy/pkg/tuple"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -53,12 +52,11 @@ func DefaultCacheTTL() cacheTTLConfig {
 
 // cacheMetrics tracks cache performance for observability
 type cacheMetrics struct {
-	hits          atomic.Int64
-	misses        atomic.Int64
-	statsHits     atomic.Int64
-	statsMisses   atomic.Int64
-	evictions     atomic.Int64
-	columnLookups atomic.Int64
+	hits        atomic.Int64
+	misses      atomic.Int64
+	statsHits   atomic.Int64
+	statsMisses atomic.Int64
+	evictions   atomic.Int64
 }
 
 // tableCache is an internal in-memory cache for table metadata.
@@ -91,17 +89,6 @@ func newTableCache() *tableCache {
 		idToTable:   make(map[int]*tableInfo),
 		lruList:     list.New(),
 		maxSize:     0, // Unlimited by default
-		ttl:         DefaultCacheTTL(),
-	}
-}
-
-// newTableCacheWithLimit creates a cache with a maximum size limit
-func newTableCacheWithLimit(maxSize int) *tableCache {
-	return &tableCache{
-		nameToTable: make(map[string]*tableInfo),
-		idToTable:   make(map[int]*tableInfo),
-		lruList:     list.New(),
-		maxSize:     maxSize,
 		ttl:         DefaultCacheTTL(),
 	}
 }
@@ -156,24 +143,6 @@ func (tc *tableCache) getTableID(tableName string) (int, error) {
 	tc.markAsUsed(info)
 
 	return info.GetFileID(), nil
-}
-
-// getTupleDesc retrieves the tuple description for a table by ID.
-// Updates LRU position on access.
-func (tc *tableCache) getTupleDesc(tableId int) (*tuple.TupleDescription, error) {
-	tc.mutex.Lock()
-	defer tc.mutex.Unlock()
-
-	info, exists := tc.idToTable[tableId]
-	if !exists {
-		tc.metrics.misses.Add(1)
-		return nil, fmt.Errorf("table with ID %d not found", tableId)
-	}
-
-	tc.metrics.hits.Add(1)
-	tc.markAsUsed(info)
-
-	return info.Schema.TupleDesc, nil
 }
 
 // getDbFile retrieves the database file for a table by ID.
@@ -436,19 +405,4 @@ func (tc *tableCache) setCachedStatistics(tableID int, stats *TableStatistics) e
 	info.Stats = stats
 	info.StatsExpiry = time.Now().Add(tc.ttl.StatsTTL)
 	return nil
-}
-
-// invalidateStatistics removes cached statistics for a table.
-// This should be called when table data changes (INSERT, UPDATE, DELETE).
-func (tc *tableCache) invalidateStatistics(tableID int) {
-	tc.mutex.Lock()
-	defer tc.mutex.Unlock()
-
-	info, exists := tc.idToTable[tableID]
-	if !exists {
-		return
-	}
-
-	info.Stats = nil
-	info.StatsExpiry = time.Time{}
 }
