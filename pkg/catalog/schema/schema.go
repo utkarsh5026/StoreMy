@@ -54,20 +54,19 @@ func NewColumnMetadata(name string, fieldType types.Type, position, tableID int,
 // Schema represents a complete table schema with metadata and helper methods.
 // It provides a rich interface for working with table structures beyond just field types.
 type Schema struct {
-	// Core schema information
-	TupleDesc *tuple.TupleDescription // Underlying tuple structure
-	TableID   int                     // Table identifier
-	TableName string                  // Human-readable table name
+	TupleDesc *tuple.TupleDescription
+	TableID   int
+	TableName string
 
 	// Primary key metadata
-	PrimaryKey      string // Primary key column name (empty if no primary key)
-	PrimaryKeyIndex int    // Field index of primary key (-1 if no primary key)
+	PrimaryKey      string
+	PrimaryKeyIndex int
 
 	// Column metadata
-	Columns []ColumnMetadata // Detailed metadata for each column
+	Columns []ColumnMetadata
 
 	// Fast lookup indices
-	fieldNameToIndex map[string]int // Map from field name to field index
+	fieldNameToIndex map[string]int
 }
 
 // NewSchema creates a new Schema from column metadata.
