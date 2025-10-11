@@ -135,23 +135,37 @@ func (sc *SystemCatalog) LoadTables(tx *transaction.TransactionContext, dataDir 
 			return err
 		}
 
-		sch, err := sc.loader.LoadTableSchema(tx.ID, table.TableID)
-		if err != nil {
-			return fmt.Errorf("failed to load schema for table %s: %w", table.TableName, err)
+		if err := sc.LoadTable(tx.ID, table.TableName); err != nil {
+			return fmt.Errorf("error loading the table %s: %v", table.TableName, err)
 		}
 
-		f, err := heap.NewHeapFile(table.FilePath, sch.TupleDesc)
-		if err != nil {
-			return fmt.Errorf("failed to open heap file for %s: %w", table.TableName, err)
-		}
-
-		if err := sc.cache.AddTable(f, sch); err != nil {
-			return fmt.Errorf("failed to add table %s: %w", table.TableName, err)
-		}
-
-		sc.store.RegisterDbFile(table.TableID, f)
 		return nil
 	})
+}
+
+func (sc *SystemCatalog) LoadTable(tid *primitives.TransactionID, tableName string) error {
+	tm, err := sc.GetTableMetadataByName(tid, tableName)
+	if err != nil {
+		return fmt.Errorf("failed to get table metadata: %w", err)
+	}
+
+	sch, err := sc.loader.LoadTableSchema(tid, tm.TableID)
+	if err != nil {
+		return fmt.Errorf("failed to load schema: %w", err)
+	}
+
+	heapFile, err := heap.NewHeapFile(tm.FilePath, sch.TupleDesc)
+	if err != nil {
+		return fmt.Errorf("failed to open heap file: %w", err)
+	}
+
+	if err := sc.cache.AddTable(heapFile, sch); err != nil {
+		heapFile.Close()
+		return fmt.Errorf("failed to add table to cache: %w", err)
+	}
+
+	sc.store.RegisterDbFile(tm.TableID, heapFile)
+	return nil
 }
 
 func (sc *SystemCatalog) DeleteCatalogEntry(tx *transaction.TransactionContext, tableID int) error {
