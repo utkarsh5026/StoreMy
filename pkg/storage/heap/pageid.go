@@ -7,8 +7,7 @@ import (
 
 // HeapPageID represents a unique identifier for a heap page
 type HeapPageID struct {
-	tableID int // The table this page belongs to
-	pageNum int // The page number within the table
+	tableID, pageNum int
 }
 
 // NewHeapPageID creates a new heap page ID
