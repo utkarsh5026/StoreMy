@@ -5,10 +5,12 @@ import (
 	"encoding/binary"
 	"fmt"
 	"io"
+	"slices"
 	"storemy/pkg/primitives"
 	"storemy/pkg/storage/page"
 	"storemy/pkg/tuple"
 	"storemy/pkg/types"
+	"storemy/pkg/utils/functools"
 )
 
 const (
@@ -38,6 +40,13 @@ type HashPage struct {
 type HashEntry struct {
 	Key types.Field
 	RID *tuple.TupleRecordID
+}
+
+func NewHashEntry(key types.Field, rid *tuple.TupleRecordID) *HashEntry {
+	return &HashEntry{
+		Key: key,
+		RID: rid,
+	}
 }
 
 func (he *HashEntry) Equals(other *HashEntry) bool {
@@ -148,7 +157,7 @@ func (hp *HashPage) SetOverflowPage(pageNum int) {
 
 // GetEntries returns all entries in this page
 func (hp *HashPage) GetEntries() []*HashEntry {
-	return hp.entries
+	return slices.Clone(hp.entries)
 }
 
 // AddEntry adds a new entry to the page
@@ -163,13 +172,9 @@ func (hp *HashPage) AddEntry(entry *HashEntry) error {
 
 // RemoveEntry removes an entry from the page
 func (hp *HashPage) RemoveEntry(e *HashEntry) error {
-	deleteIdx := -1
-	for i, entry := range hp.entries {
-		if entry.Equals(e) {
-			deleteIdx = i
-			break
-		}
-	}
+	deleteIdx := slices.IndexFunc(hp.entries, func(entry *HashEntry) bool {
+		return entry.Equals(e)
+	})
 
 	if deleteIdx == -1 {
 		return fmt.Errorf("entry not found")
@@ -182,13 +187,13 @@ func (hp *HashPage) RemoveEntry(e *HashEntry) error {
 
 // FindEntries finds all entries with the given key
 func (hp *HashPage) FindEntries(key types.Field) []*tuple.TupleRecordID {
-	var results []*tuple.TupleRecordID
-	for _, entry := range hp.entries {
-		if entry.Key.Equals(key) {
-			results = append(results, entry.RID)
-		}
-	}
-	return results
+	matchEntries := functools.Filter(hp.entries, func(e *HashEntry) bool {
+		return e.Key.Equals(key)
+	})
+
+	return functools.Map(matchEntries, func(e *HashEntry) *tuple.TupleRecordID {
+		return e.RID
+	})
 }
 
 // serializeEntry writes an entry to the buffer
