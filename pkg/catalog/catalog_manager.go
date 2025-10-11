@@ -101,12 +101,14 @@ func (cm *CatalogManager) CreateTable(
 	}
 
 	if err := cm.tableCache.AddTable(heapFile, tableSchema); err != nil {
+		if deleteErr := cm.catalog.DeleteCatalogEntry(tx, tableID); deleteErr != nil {
+			fmt.Printf("Warning: failed to rollback catalog entry after cache failure: %v\n", deleteErr)
+		}
+		heapFile.Close()
 		return 0, fmt.Errorf("failed to add table to cache: %w", err)
 	}
 
-	// Register the DbFile with the PageStore for flush operations
 	cm.store.RegisterDbFile(tableID, heapFile)
-
 	return tableID, nil
 }
 
@@ -117,14 +119,15 @@ func (cm *CatalogManager) DropTable(tx *transaction.TransactionContext, tableNam
 		return fmt.Errorf("table %s not found: %w", tableName, err)
 	}
 
+	cm.store.UnregisterDbFile(tableID)
+	if err := cm.catalog.DeleteCatalogEntry(tx, tableID); err != nil {
+		return fmt.Errorf("failed to delete catalog entry: %w", err)
+	}
+
 	if err := cm.tableCache.removeTable(tableName); err != nil {
 		fmt.Printf("Warning: failed to remove table from cache: %v\n", err)
 	}
-
-	// Unregister the DbFile from PageStore
-	cm.store.UnregisterDbFile(tableID)
-
-	return cm.catalog.DeleteCatalogEntry(tx, tableID)
+	return nil
 }
 
 // GetTableID retrieves the table ID for a given table name.
@@ -249,9 +252,9 @@ func (cm *CatalogManager) RenameTable(tx *transaction.TransactionContext, oldNam
 		return fmt.Errorf("failed to delete old catalog entry: %w", err)
 	}
 
+	tm.TableName = newName
 	tup := systemtable.Tables.CreateTuple(*tm)
 
-	// Get the DbFile for the tables catalog
 	tablesFile, err := cm.tableCache.GetDbFile(cm.catalog.TablesTableID)
 	if err != nil {
 		cm.tableCache.RenameTable(newName, oldName)
@@ -272,31 +275,7 @@ func (cm *CatalogManager) LoadTable(tid *primitives.TransactionID, tableName str
 	if cm.tableCache.TableExists(tableName) {
 		return nil
 	}
-
-	tm, err := cm.catalog.GetTableMetadataByName(tid, tableName)
-	if err != nil {
-		return fmt.Errorf("failed to get table metadata: %w", err)
-	}
-
-	sch, err := cm.catalog.loader.LoadTableSchema(tid, tm.TableID)
-	if err != nil {
-		return fmt.Errorf("failed to load schema: %w", err)
-	}
-
-	heapFile, err := heap.NewHeapFile(tm.FilePath, sch.TupleDesc)
-	if err != nil {
-		return fmt.Errorf("failed to open heap file: %w", err)
-	}
-
-	if err := cm.tableCache.AddTable(heapFile, sch); err != nil {
-		heapFile.Close()
-		return fmt.Errorf("failed to add table to cache: %w", err)
-	}
-
-	// Register the DbFile with the PageStore for flush operations
-	cm.store.RegisterDbFile(tm.TableID, heapFile)
-
-	return nil
+	return cm.catalog.LoadTable(tid, tableName)
 }
 
 // ValidateIntegrity checks consistency between memory and disk catalog.
@@ -317,6 +296,13 @@ func (cm *CatalogManager) ValidateIntegrity(tid *primitives.TransactionID) error
 
 // ClearCache removes all tables from memory cache (useful for shutdown)
 func (cm *CatalogManager) ClearCache() {
+	tableNames := cm.tableCache.GetAllTableNames()
+	for _, name := range tableNames {
+		if tableID, err := cm.tableCache.getTableID(name); err == nil {
+			cm.store.UnregisterDbFile(tableID)
+		}
+	}
+
 	cm.tableCache.clear()
 }
 
