@@ -42,7 +42,7 @@ func NewInsertPlan(
 // all specified tuples into the target table. It validates the data, creates
 // tuples according to the table schema, and coordinates with the storage layer.
 func (p *InsertPlan) Execute() (any, error) {
-	md, err := resolveTableMetadata(p.statement.TableName, p.ctx)
+	md, err := resolveTableMetadata(p.statement.TableName, p.transactionCtx.ID, p.ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -94,6 +94,12 @@ func (p *InsertPlan) createFieldMapping(td *tuple.TupleDescription) ([]int, erro
 // inserting tuples into the specified table. It validates value counts, creates
 // tuples according to the schema, and uses the page store for persistent storage.
 func (p *InsertPlan) insertTuples(tableID int, tupleDesc *tuple.TupleDescription, fieldMapping []int, autoIncInfo *catalog.AutoIncrementInfo) (int, error) {
+	// Get the DbFile for the table
+	dbFile, err := p.ctx.CatalogManager().GetTableFile(tableID)
+	if err != nil {
+		return 0, fmt.Errorf("failed to get table file: %v", err)
+	}
+
 	insertedCount := 0
 	for _, values := range p.statement.Values {
 		if err := validateValueCount(values, tupleDesc, fieldMapping, autoIncInfo); err != nil {
@@ -105,7 +111,7 @@ func (p *InsertPlan) insertTuples(tableID int, tupleDesc *tuple.TupleDescription
 			return 0, err
 		}
 
-		if err := p.ctx.PageStore().InsertTuple(p.transactionCtx, tableID, newTuple); err != nil {
+		if err := p.ctx.PageStore().InsertTuple(p.transactionCtx, dbFile, newTuple); err != nil {
 			return 0, fmt.Errorf("failed to insert tuple: %v", err)
 		}
 
