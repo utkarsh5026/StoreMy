@@ -11,6 +11,7 @@ import (
 	"storemy/pkg/storage/heap"
 	"storemy/pkg/tuple"
 	"storemy/pkg/types"
+	"strings"
 )
 
 // SystemCatalog manages database metadata including table and column definitions.
@@ -61,7 +62,7 @@ func (sc *SystemCatalog) Initialize(ctx *transaction.TransactionContext, dataDir
 			return fmt.Errorf("failed to initialize %s: %w", table.TableName(), err)
 		}
 
-		if err := sc.cache.addTable(f, sch); err != nil {
+		if err := sc.cache.AddTable(f, sch); err != nil {
 			return fmt.Errorf("failed to register %s: %w", table.TableName(), err)
 		}
 
@@ -87,17 +88,16 @@ func (sc *SystemCatalog) setSystemTableID(tableName string, tableID int) {
 // RegisterTable adds a new table to the system catalog.
 // It inserts metadata into CATALOG_TABLES, column definitions into CATALOG_COLUMNS,
 // and initializes statistics in CATALOG_STATISTICS.
-func (sc *SystemCatalog) RegisterTable(tx *transaction.TransactionContext, tableID int, tableName, filePath, primaryKey string, fields []FieldMetadata,
-) error {
+func (sc *SystemCatalog) RegisterTable(tx *transaction.TransactionContext, sch *schema.Schema, filepath string) error {
 	tablesFile, err := sc.cache.GetDbFile(sc.tablesTableID)
 	if err != nil {
 		return err
 	}
 	tm := systemtable.TableMetadata{
-		TableName:     tableName,
-		TableID:       tableID,
-		FilePath:      filePath,
-		PrimaryKeyCol: primaryKey,
+		TableName:     sch.TableName,
+		TableID:       sch.TableID,
+		FilePath:      filepath,
+		PrimaryKeyCol: sch.PrimaryKey,
 	}
 	tup := systemtable.Tables.CreateTuple(tm)
 	if err := sc.store.InsertTuple(tx, tablesFile, tup); err != nil {
@@ -109,24 +109,14 @@ func (sc *SystemCatalog) RegisterTable(tx *transaction.TransactionContext, table
 		return err
 	}
 
-	for pos, f := range fields {
-		col, err := schema.NewColumnMetadata(f.Name, f.Type, pos, tableID, f.Name == primaryKey, f.IsAutoInc)
-		if err != nil {
-			return fmt.Errorf("error creating column metdata %v", err)
-		}
-		tup = systemtable.Columns.CreateTuple(*col)
+	for _, col := range sch.Columns {
+		tup = systemtable.Columns.CreateTuple(col)
 		if err := sc.store.InsertTuple(tx, colFile, tup); err != nil {
 			return fmt.Errorf("failed to insert column metadata: %w", err)
 		}
 	}
 
 	return nil
-}
-
-type FieldMetadata struct {
-	Name      string
-	Type      types.Type
-	IsAutoInc bool
 }
 
 // LoadTables reads all table metadata from CATALOG_TABLES, reconstructs their schemas
@@ -152,7 +142,7 @@ func (sc *SystemCatalog) LoadTables(tx *transaction.TransactionContext, dataDir 
 			return fmt.Errorf("failed to open heap file for %s: %w", table.TableName, err)
 		}
 
-		if err := sc.cache.addTable(f, sch); err != nil {
+		if err := sc.cache.AddTable(f, sch); err != nil {
 			return fmt.Errorf("failed to add table %s: %w", table.TableName, err)
 		}
 
@@ -162,30 +152,16 @@ func (sc *SystemCatalog) LoadTables(tx *transaction.TransactionContext, dataDir 
 
 // GetTableID looks up the heap file ID for a table by name.
 // Returns -1 and an error if the table is not found in the catalog.
-func (sc *SystemCatalog) GetTableID(tid *primitives.TransactionID, tableName string) (int, error) {
-	var result int = -1
-
-	err := sc.iterateTable(sc.tablesTableID, tid, func(tableTuple *tuple.Tuple) error {
-		table, err := systemtable.Tables.Parse(tableTuple)
-		if err != nil {
-			return err
-		}
-
-		if table.TableName == tableName {
-			result = table.TableID
-			return fmt.Errorf("found")
-		}
-		return nil
+func (sc *SystemCatalog) GetTableMetadataByID(tid *primitives.TransactionID, tableID int) (*systemtable.TableMetadata, error) {
+	return sc.findTableMetadata(tid, func(tm *systemtable.TableMetadata) bool {
+		return tm.TableID == tableID
 	})
+}
 
-	if err != nil && err.Error() == "found" {
-		return result, nil
-	}
-	if err != nil {
-		return -1, err
-	}
-
-	return -1, fmt.Errorf("table %s not found in catalog", tableName)
+func (sc *SystemCatalog) GetTableMetadataByName(tid *primitives.TransactionID, tableName string) (*systemtable.TableMetadata, error) {
+	return sc.findTableMetadata(tid, func(tm *systemtable.TableMetadata) bool {
+		return strings.EqualFold(tm.TableName, tableName)
+	})
 }
 
 // iterateTable scans all tuples in a table and applies a processing function to each.
@@ -315,4 +291,31 @@ func (sc *SystemCatalog) IncrementAutoIncrementValue(tx *transaction.Transaction
 	}
 
 	return nil
+}
+
+func (sc *SystemCatalog) findTableMetadata(tid *primitives.TransactionID, pred func(tm *systemtable.TableMetadata) bool) (*systemtable.TableMetadata, error) {
+	var result *systemtable.TableMetadata
+
+	err := sc.iterateTable(sc.tablesTableID, tid, func(tableTuple *tuple.Tuple) error {
+		table, err := systemtable.Tables.Parse(tableTuple)
+		if err != nil {
+			return err
+		}
+
+		if pred(table) {
+			result = table
+			return fmt.Errorf("found")
+		}
+
+		return nil
+	})
+
+	if err != nil && err.Error() == "found" {
+		return result, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+
+	return nil, fmt.Errorf("table not found in catalog")
 }
