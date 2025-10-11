@@ -150,6 +150,54 @@ func (sc *SystemCatalog) LoadTables(tx *transaction.TransactionContext, dataDir 
 	})
 }
 
+func (sc *SystemCatalog) DeleteCatalogEntry(tx *transaction.TransactionContext, tableID int) error {
+	sysTableIDs := []int{sc.tablesTableID, sc.columnsTableID, sc.statisticsTableID}
+	for _, id := range sysTableIDs {
+		tableInfo, err := sc.cache.GetTableInfo(id)
+		if err != nil {
+			return err
+		}
+
+		syst, _ := sc.getSysTable(id)
+		var tuplesToDelete []*tuple.Tuple
+
+		sc.iterateTable(id, tx.ID, func(t *tuple.Tuple) error {
+			field, err := t.GetField(syst.TableIDIndex())
+			if err != nil {
+				return err
+			}
+
+			if intField, ok := field.(*types.IntField); ok {
+				if intField.Value == int64(tableID) {
+					tuplesToDelete = append(tuplesToDelete, t)
+				}
+			}
+
+			return nil
+		})
+
+		for _, tup := range tuplesToDelete {
+			if err := sc.store.DeleteTuple(tx, tableInfo.File, tup); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func (sc *SystemCatalog) getSysTable(id int) (systemtable.SystemTable, error) {
+	switch id {
+	case sc.tablesTableID:
+		return systemtable.Tables, nil
+	case sc.columnsTableID:
+		return systemtable.Columns, nil
+	case sc.statisticsTableID:
+		return systemtable.Stats, nil
+	default:
+		return nil, fmt.Errorf("unknown system table ID: %d", id)
+	}
+}
+
 // GetTableID looks up the heap file ID for a table by name.
 // Returns -1 and an error if the table is not found in the catalog.
 func (sc *SystemCatalog) GetTableMetadataByID(tid *primitives.TransactionID, tableID int) (*systemtable.TableMetadata, error) {
@@ -181,21 +229,6 @@ func (sc *SystemCatalog) iterateTable(tableID int, tid *primitives.TransactionID
 	defer iter.Close()
 
 	return iterator.ForEach(iter, processFunc)
-}
-
-// GetTablesTableID returns the table ID for CATALOG_TABLES
-func (sc *SystemCatalog) GetTablesTableID() int {
-	return sc.tablesTableID
-}
-
-// GetColumnsTableID returns the table ID for CATALOG_COLUMNS
-func (sc *SystemCatalog) GetColumnsTableID() int {
-	return sc.columnsTableID
-}
-
-// GetStatisticsTableID returns the table ID for CATALOG_STATISTICS
-func (sc *SystemCatalog) GetStatisticsTableID() int {
-	return sc.statisticsTableID
 }
 
 // AutoIncrementInfo represents auto-increment metadata for a column
@@ -318,4 +351,8 @@ func (sc *SystemCatalog) findTableMetadata(tid *primitives.TransactionID, pred f
 	}
 
 	return nil, fmt.Errorf("table not found in catalog")
+}
+
+func (sc *SystemCatalog) getAllTableIDS() []int {
+	return []int{sc.tablesTableID, sc.columnsTableID, sc.statisticsTableID}
 }
