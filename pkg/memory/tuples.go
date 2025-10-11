@@ -129,8 +129,10 @@ func (p *PageStore) performDataOperation(operation OperationType, ctx *transacti
 
 // handleInsert executes the insert operation and logs it to WAL.
 // This helper:
-//   - Delegates to heap file's AddTuple (which handles page selection/splitting)
-//   - Logs each modified page to WAL (multiple pages if tuple is large)
+//   - Finds a page with available space (or allocates a new one)
+//   - Acquires exclusive lock on the page through GetPage
+//   - Logs page state to WAL before modification
+//   - Inserts tuple into the page
 //   - Returns all modified pages for dirty tracking
 //
 // Parameters:
@@ -142,17 +144,142 @@ func (p *PageStore) performDataOperation(operation OperationType, ctx *transacti
 //   - modifiedPages: All pages changed by the insert (for dirty tracking)
 //   - error: If insert or WAL logging fails
 func (p *PageStore) handleInsert(ctx *transaction.TransactionContext, t *tuple.Tuple, dbFile page.DbFile) ([]page.Page, error) {
-	modifiedPages, err := dbFile.AddTuple(ctx.ID, t)
-	if err != nil {
-		return nil, fmt.Errorf("failed to add tuple: %v", err)
+	heapFile, ok := dbFile.(*heap.HeapFile)
+	if !ok {
+		return nil, fmt.Errorf("dbFile must be a HeapFile for tuple insertion")
 	}
 
-	for _, pg := range modifiedPages {
-		if err := p.logOperation(InsertOperation, ctx.ID, pg.GetID(), pg.GetPageData()); err != nil {
-			return nil, err
+	if heapFile.GetTupleDesc() != nil && !t.TupleDesc.Equals(heapFile.GetTupleDesc()) {
+		return nil, fmt.Errorf("tuple schema does not match file schema")
+	}
+
+	modifiedPages, inserted, err := p.tryInsertIntoExistingPages(ctx, t, heapFile)
+	if err != nil {
+		return nil, err
+	}
+	if inserted {
+		return modifiedPages, nil
+	}
+
+	return p.insertIntoNewPage(ctx, t, heapFile)
+}
+
+// insertIntoNewPage allocates a new page at the end of the heap file and inserts the tuple.
+// This is called when no existing page has sufficient free space for the insertion.
+//
+// The function follows this sequence:
+//  1. Determine next page number (current page count)
+//  2. Create new HeapPage with fresh page buffer
+//  3. Add tuple to the new page
+//  4. Write page to disk through heap file
+//  5. Log operation to WAL for durability
+//  6. Mark page as dirty in transaction context
+//
+// WAL Ordering: The page is written to disk BEFORE WAL logging. This is safe because:
+//   - The page is not yet reachable through normal queries (beyond current file bounds)
+//   - WAL record makes the page "officially" part of the table
+//   - On recovery, pages without WAL records are ignored
+//
+// Parameters:
+//   - ctx: Transaction context for tracking modifications
+//   - t: Tuple to insert into the new page
+//   - heapFile: Heap file to extend with new page
+//
+// Returns:
+//   - []page.Page: Single-element array containing the newly created page
+//   - error: If page creation, tuple insertion, disk write, or WAL logging fails
+func (p *PageStore) insertIntoNewPage(ctx *transaction.TransactionContext, t *tuple.Tuple, heapFile *heap.HeapFile) ([]page.Page, error) {
+	numPages, err := heapFile.NumPages()
+	if err != nil {
+		return nil, fmt.Errorf("failed to get number of pages: %v", err)
+	}
+
+	newPageID := heap.NewHeapPageID(heapFile.GetID(), numPages)
+	newPage, err := heap.NewHeapPage(newPageID, make([]byte, page.PageSize), heapFile.GetTupleDesc())
+	if err != nil {
+		return nil, fmt.Errorf("failed to create new page: %v", err)
+	}
+
+	if err := newPage.AddTuple(t); err != nil {
+		return nil, fmt.Errorf("failed to add tuple to new page: %v", err)
+	}
+
+	if err := heapFile.WritePage(newPage); err != nil {
+		return nil, fmt.Errorf("failed to write new page: %v", err)
+	}
+
+	if err := p.logOperation(InsertOperation, ctx.ID, newPageID, newPage.GetPageData()); err != nil {
+		return nil, err
+	}
+
+	newPage.MarkDirty(true, ctx.ID)
+	return []page.Page{newPage}, nil
+}
+
+// tryInsertIntoExistingPages attempts to insert a tuple into any existing page with free space.
+// This scans all pages in the heap file sequentially, looking for the first page with at least
+// one empty slot that can accommodate the tuple.
+//
+// The function follows this sequence for each page:
+//  1. Construct page ID for current page number
+//  2. Acquire exclusive lock via GetPage (ReadWrite mode)
+//  3. Check if page has empty slots (bitmap-based check)
+//  4. Log operation to WAL with before-image
+//  5. Attempt tuple insertion
+//  6. Mark page dirty if insertion succeeds
+//  7. Return immediately on first successful insertion
+//
+// Concurrency Behavior:
+//   - Page-level locks prevent concurrent modifications to the same page
+//   - Multiple transactions can insert into different pages simultaneously
+//   - Lock acquisition may fail (deadlock, timeout) - these pages are skipped
+//   - First-fit strategy: returns first suitable page, not most optimal
+//
+// Performance Considerations:
+//   - O(n) scan of all pages in worst case (no free space found)
+//   - No free space tracking - future optimization opportunity
+//   - Lock contention possible on popular pages
+//
+// Parameters:
+//   - ctx: Transaction context for lock acquisition and dirty tracking
+//   - t: Tuple to insert
+//   - heapFile: Heap file containing the pages to scan
+//
+// Returns:
+//   - []page.Page: Single-element array with the page where tuple was inserted (if successful)
+//   - bool: true if insertion succeeded, false if no suitable page found
+//   - error: Only for critical failures (WAL logging errors). Lock failures are silently skipped.
+func (p *PageStore) tryInsertIntoExistingPages(ctx *transaction.TransactionContext, t *tuple.Tuple, heapFile *heap.HeapFile) ([]page.Page, bool, error) {
+	numPages, err := heapFile.NumPages()
+	if err != nil {
+		return nil, false, fmt.Errorf("failed to get number of pages: %v", err)
+	}
+
+	for i := range numPages {
+		pageID := heap.NewHeapPageID(heapFile.GetID(), i)
+		pg, err := p.GetPage(ctx, heapFile, pageID, transaction.ReadWrite)
+		if err != nil {
+			continue
+		}
+
+		heapPage, ok := pg.(*heap.HeapPage)
+		if !ok {
+			continue
+		}
+
+		if heapPage.GetNumEmptySlots() > 0 {
+			if err := p.logOperation(InsertOperation, ctx.ID, pageID, heapPage.GetPageData()); err != nil {
+				return nil, false, err
+			}
+
+			if err := heapPage.AddTuple(t); err == nil {
+				heapPage.MarkDirty(true, ctx.ID)
+				return []page.Page{heapPage}, true, nil
+			}
 		}
 	}
-	return modifiedPages, nil
+
+	return nil, false, nil // No suitable page found
 }
 
 // handleDelete executes the delete operation and logs it to WAL.
