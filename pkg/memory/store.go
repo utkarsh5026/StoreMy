@@ -47,7 +47,18 @@ type StatsRecorder interface {
 
 // PageStore manages an in-memory cache of database pages and handles transaction-aware page operations.
 // It serves as the main interface between the database engine and the underlying storage layer,
-// providing ACID compliance through transaction tracking and page lifecycle management.
+// providing ACID compliance through:
+//   - Page-level locking via LockManager (2PL protocol)
+//   - Write-Ahead Logging (WAL) for durability and recovery
+//   - NO-STEAL buffer policy (dirty pages never evicted before commit)
+//   - FORCE policy at commit (all dirty pages flushed to disk)
+//   - MVCC support through before-images for transaction rollback
+//
+// The PageStore coordinates with:
+//   - LockManager: Ensures serializable isolation through page locks
+//   - WAL: Records all modifications for crash recovery
+//   - PageCache: LRU cache for minimizing disk I/O
+//   - DbFiles: Actual heap file access for page read/write
 type PageStore struct {
 	mutex        sync.RWMutex
 	lockManager  *lock.LockManager
@@ -89,8 +100,31 @@ func (p *PageStore) SetStatsManager(sm StatsRecorder) {
 	p.statsManager = sm
 }
 
-// GetPage retrieves a page with specified permissions for a transaction
-// This is the main entry point for all page access in the database
+// GetPage retrieves a page with specified permissions for a transaction.
+// This is the main entry point for all page access in the database, enforcing:
+//   - Lock acquisition through LockManager (shared for READ, exclusive for READ_WRITE)
+//   - Page loading from disk if not in cache
+//   - LRU eviction when cache is full (respecting NO-STEAL policy)
+//   - Transaction tracking of accessed pages for commit/abort
+//
+// Lock Protocol:
+//   - ReadOnly: Acquires shared lock (allows concurrent reads)
+//   - ReadWrite: Acquires exclusive lock (blocks all other access)
+//   - Deadlock detection via dependency graph in LockManager
+//
+// Parameters:
+//   - ctx: Transaction context (must not be nil)
+//   - dbFile: Heap file containing the requested page
+//   - pid: Page identifier (contains table ID and page number)
+//   - perm: Access permissions (ReadOnly or ReadWrite)
+//
+// Returns the requested page or an error if:
+//   - Transaction context is nil
+//   - Lock acquisition fails (deadlock or timeout)
+//   - Cache is full and eviction fails (all pages dirty or locked)
+//   - Disk read fails for page not in cache
+//
+// Thread-safe: Acquires appropriate locks via LockManager and mutex.
 func (p *PageStore) GetPage(ctx *transaction.TransactionContext, dbFile page.DbFile, pid primitives.PageID, perm transaction.Permissions) (page.Page, error) {
 	if ctx == nil {
 		return nil, fmt.Errorf("transaction context cannot be nil")
@@ -127,8 +161,23 @@ func (p *PageStore) GetPage(ctx *transaction.TransactionContext, dbFile page.DbF
 	return page, nil
 }
 
-// evictPage implements NO-STEAL policy
-// We never evict dirty pages to simplify recovery
+// evictPage implements NO-STEAL buffer management policy.
+// This policy never evicts dirty pages - only clean pages that have been flushed
+// to disk are eligible for eviction. This simplifies recovery at the cost of potentially
+// blocking transactions when the buffer pool is full of dirty pages.
+//
+// Eviction algorithm:
+//  1. Scan all cached pages
+//  2. Skip dirty pages (modified but not committed)
+//  3. Skip locked pages (currently in use by transactions)
+//  4. Evict first clean, unlocked page found
+//
+// Returns an error if no pages can be evicted (all are dirty or locked).
+// This forces transactions to commit or abort to free up buffer space.
+//
+// Called by GetPage when cache is at MaxPageCount capacity.
+//
+// Note: Caller must hold p.mutex lock.
 func (p *PageStore) evictPage() error {
 	allPages := p.cache.GetAll()
 
@@ -156,6 +205,21 @@ func (p *PageStore) evictPage() error {
 // FlushAllPages writes all dirty pages to persistent storage.
 // This operation ensures data durability by synchronizing the in-memory cache
 // with the underlying database files. Pages are unmarked as dirty after successful writes.
+//
+// Used during:
+//   - Database shutdown (ensure all changes persisted)
+//   - Checkpoint operations (reduce recovery time)
+//   - Manual flush commands
+//
+// Flush Order:
+//   - No specific ordering (all dirty pages flushed)
+//   - WAL must be synced before this call (enforced by caller)
+//   - FORCE policy at commit ensures consistency
+//
+// Returns an error if any page write fails. Some pages may be flushed before
+// the error occurs, leaving the cache in a partially flushed state.
+//
+// Thread-safe: Acquires read lock to snapshot page IDs, then processes each page.
 func (p *PageStore) FlushAllPages() error {
 	p.mutex.RLock()
 	pids := make([]primitives.PageID, 0, p.cache.Size())
@@ -176,12 +240,26 @@ func (p *PageStore) FlushAllPages() error {
 }
 
 // flushPage writes a specific page to disk if it has been modified (is dirty).
-// This is an internal helper method used by FlushAllPages and other flush operations.
+// This is an internal helper method used by FlushAllPages and commit processing.
 // The page is unmarked as dirty after a successful write operation.
 //
-// NOTE: flushPage requires the dbFile to be passed externally since PageStore no longer
-// maintains table metadata. The caller (typically CatalogManager) must provide the appropriate DbFile.
-// Returns an error if the page write fails, or nil if the page doesn't exist or isn't dirty.
+// Algorithm:
+//  1. Check if page exists in cache
+//  2. Skip if page is not dirty
+//  3. Write page data to heap file
+//  4. Unmark dirty flag
+//  5. Update cached copy
+//
+// Parameters:
+//   - dbFile: Heap file to write the page to (must match page's table ID)
+//   - pid: Page identifier to flush
+//
+// Returns:
+//   - nil if page doesn't exist or isn't dirty (no-op)
+//   - error if disk write fails
+//
+// Note: Caller must ensure dbFile matches the page's table.
+// Thread-safe: Acquires locks for cache access and page updates.
 func (p *PageStore) flushPage(dbFile page.DbFile, pid primitives.PageID) error {
 	p.mutex.RLock()
 	page, exists := p.cache.Get(pid)
@@ -207,6 +285,19 @@ func (p *PageStore) flushPage(dbFile page.DbFile, pid primitives.PageID) error {
 	return nil
 }
 
+// markPagesAsDirty updates the dirty status for all pages modified by an operation.
+// This helper:
+//  1. Marks each page as dirty with transaction ID
+//  2. Updates cached copy
+//  3. Records page in transaction's write set
+//
+// This ensures proper tracking for commit/abort processing and lock management.
+//
+// Parameters:
+//   - ctx: Transaction context that modified the pages
+//   - pages: All pages that were modified
+//
+// Note: Caller must hold p.mutex lock if needed (currently acquires internally).
 func (p *PageStore) markPagesAsDirty(ctx *transaction.TransactionContext, pages []page.Page) {
 	p.mutex.Lock()
 	defer p.mutex.Unlock()
@@ -219,7 +310,19 @@ func (p *PageStore) markPagesAsDirty(ctx *transaction.TransactionContext, pages 
 }
 
 // Close gracefully shuts down the PageStore, flushing all pending data and closing the WAL.
-// This method should be called when the database is shutting down.
+// This method should be called when the database is shutting down to ensure:
+//   - All dirty pages are written to disk (durability)
+//   - WAL is properly closed and synced
+//   - No data loss on clean shutdown
+//
+// Shutdown sequence:
+//  1. Flush all dirty pages from cache
+//  2. Close WAL (sync and close file)
+//
+// Returns an error if flushing or WAL closure fails. This may leave the database
+// in an inconsistent state requiring recovery on restart.
+//
+// Note: All active transactions should be committed or aborted before calling Close.
 func (p *PageStore) Close() error {
 	if err := p.FlushAllPages(); err != nil {
 		return fmt.Errorf("failed to flush pages during shutdown: %v", err)
@@ -232,6 +335,23 @@ func (p *PageStore) Close() error {
 	return nil
 }
 
+// logOperation writes an operation record to the Write-Ahead Log.
+// This enforces the WAL protocol: log records must be written before page modifications.
+//
+// Record types:
+//   - INSERT: Records new tuple data with page ID
+//   - DELETE: Records before-image with page ID for UNDO
+//   - COMMIT: Records transaction commit decision
+//   - ABORT: Records transaction abort decision
+//
+// Parameters:
+//   - operation: Type of operation to log
+//   - tid: Transaction ID performing the operation
+//   - pageID: Page affected (nil for COMMIT/ABORT)
+//   - data: Page or tuple data (nil for COMMIT/ABORT)
+//
+// Returns an error if WAL write fails. This is a critical error that should
+// cause the operation to be aborted.
 func (p *PageStore) logOperation(operation OperationType, tid *primitives.TransactionID, pageID primitives.PageID, data []byte) error {
 	var err error
 	switch operation {
@@ -266,10 +386,4 @@ func (p *PageStore) getDbFileForPage(pageID primitives.PageID) (page.DbFile, err
 	}
 
 	return dbFile, nil
-}
-
-// ensureTransactionBegun ensures that a transaction's BEGIN record has been logged to the WAL.
-// This is a helper method for tests to directly ensure a transaction has begun.
-func (p *PageStore) ensureTransactionBegun(ctx *transaction.TransactionContext) error {
-	return ctx.EnsureBegunInWAL(p.wal)
 }
