@@ -20,16 +20,6 @@ type DbFile interface {
 	// Returns an error if the write operation fails.
 	WritePage(p Page) error
 
-	// AddTuple inserts a new tuple into the database file within the given transaction context.
-	// The tuple will be placed on an appropriate page with available space.
-	// Returns a slice of pages that were modified during the insertion and an error if the operation fails.
-	AddTuple(tid *primitives.TransactionID, t *tuple.Tuple) ([]Page, error)
-
-	// DeleteTuple removes the specified tuple from the database file within the given transaction context.
-	// The tuple must exist in the file for the operation to succeed.
-	// Returns the page that was modified during deletion and an error if the operation fails.
-	DeleteTuple(tid *primitives.TransactionID, t *tuple.Tuple) (Page, error)
-
 	// Iterator creates and returns a new iterator for traversing all tuples in the database file
 	// within the context of the specified primitives. The iterator allows sequential access
 	// to each tuple, respecting the visibility and access control of the primitives.
