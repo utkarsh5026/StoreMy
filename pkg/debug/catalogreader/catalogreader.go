@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"storemy/pkg/catalog"
+	"storemy/pkg/catalog/systemtable"
 	"storemy/pkg/concurrency/transaction"
 	"storemy/pkg/debug/ui"
 	"storemy/pkg/memory"
@@ -17,12 +18,16 @@ import (
 	"github.com/charmbracelet/lipgloss"
 )
 
-var catalogKeys = ui.CommonKeys
+var (
+	catalogKeys = ui.CommonKeys
+	statsTable  = systemtable.Stats.TableName()
+	colsTable   = systemtable.Columns.TableName()
+	tablesTable = systemtable.Tables.TableName()
+)
 
 type catalogModel struct {
-	catalog       *catalog.SystemCatalog
+	catalog       *catalog.CatalogManager
 	store         *memory.PageStore
-	tableManager  *memory.TableManager
 	currentView   string // "menu", "tables", "columns", "statistics"
 	cursor        int
 	viewport      viewport.Model
@@ -46,31 +51,28 @@ func (m catalogModel) Init() tea.Cmd {
 }
 
 type catalogInitMsg struct {
-	catalog      *catalog.SystemCatalog
-	store        *memory.PageStore
-	tableManager *memory.TableManager
-	err          error
+	catalog *catalog.CatalogManager
+	store   *memory.PageStore
+	err     error
 }
 
 func initializeCatalog(dataDir string) tea.Cmd {
 	return func() tea.Msg {
-		tm := memory.NewTableManager()
-		store := memory.NewPageStore(tm, nil) // No WAL for reading
-		cat := catalog.NewSystemCatalog(store, tm)
+		store := memory.NewPageStore(nil) // No WAL for reading
+		cat := catalog.NewCatalogManager(store, dataDir)
 
 		tx := transaction.NewTransactionContext(primitives.NewTransactionID())
-		if err := cat.Initialize(tx, dataDir); err != nil {
+		if err := cat.Initialize(tx); err != nil {
 			return catalogInitMsg{err: err}
 		}
 
-		if err := cat.LoadTables(transaction.NewTransactionContext(primitives.NewTransactionID()), dataDir); err != nil {
+		if err := cat.LoadAllTables(transaction.NewTransactionContext(primitives.NewTransactionID())); err != nil {
 			return catalogInitMsg{err: err}
 		}
 
 		return catalogInitMsg{
-			catalog:      cat,
-			store:        store,
-			tableManager: tm,
+			catalog: cat,
+			store:   store,
 		}
 	}
 }
@@ -81,28 +83,20 @@ type tableLoadedMsg struct {
 	err     error
 }
 
-func loadTableData(cat *catalog.SystemCatalog, tableManager *memory.TableManager, tableName string) tea.Cmd {
+func loadTableData(cat *catalog.CatalogManager, tableName string) tea.Cmd {
 	return func() tea.Msg {
-		var tableID int
 		var err error
-
-		switch tableName {
-		case catalog.CatalogTable:
-			tableID = cat.GetTablesTableID()
-		case catalog.ColumnsTable:
-			tableID = cat.GetColumnsTableID()
-		case catalog.StatisticsTable:
-			tableID = cat.GetStatisticsTableID()
-		default:
-			return tableLoadedMsg{err: fmt.Errorf("unknown table: %s", tableName)}
+		tid := primitives.NewTransactionID()
+		tableID, err := cat.GetTableID(tid, tableName)
+		if err != nil {
+			return tableLoadedMsg{err: err}
 		}
-
-		file, err := tableManager.GetDbFile(tableID)
+		file, err := cat.GetTableFile(tableID)
 		if err != nil {
 			return tableLoadedMsg{err: err}
 		}
 
-		iter := file.Iterator(primitives.NewTransactionID())
+		iter := file.Iterator(tid)
 		if err := iter.Open(); err != nil {
 			return tableLoadedMsg{err: err}
 		}
@@ -167,7 +161,6 @@ func (m catalogModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.catalog = msg.catalog
 		m.store = msg.store
-		m.tableManager = msg.tableManager
 		return m, nil
 
 	case tableLoadedMsg:
@@ -204,12 +197,12 @@ func (m catalogModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				if m.catalog == nil {
 					return m, nil
 				}
-				tables := []string{catalog.CatalogTable, catalog.ColumnsTable, catalog.StatisticsTable}
+				tables := []string{tablesTable, colsTable, statsTable}
 				m.currentView = tables[m.cursor]
-				return m, loadTableData(m.catalog, m.tableManager, m.currentView)
+				return m, loadTableData(m.catalog, m.currentView)
 			}
 
-		case catalog.CatalogTable, catalog.ColumnsTable, catalog.StatisticsTable:
+		case tablesTable, colsTable, statsTable:
 			switch {
 			case key.Matches(msg, catalogKeys.Quit):
 				return m, tea.Quit
@@ -253,7 +246,7 @@ func (m catalogModel) View() string {
 	switch m.currentView {
 	case "menu":
 		b.WriteString(m.renderMenu())
-	case catalog.CatalogTable, catalog.ColumnsTable, catalog.StatisticsTable:
+	case tablesTable, colsTable, statsTable:
 		b.WriteString(m.renderTableView())
 	}
 
