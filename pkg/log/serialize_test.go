@@ -332,8 +332,9 @@ func TestSerializeLogRecord_AbortRecord(t *testing.T) {
 func TestSerializeImage_NonNilImage(t *testing.T) {
 	var buf bytes.Buffer
 	image := []byte("test image")
+	l := LogRecord{}
 
-	serializeImage(&buf, image)
+	l.serializeImage(&buf, image)
 
 	data := buf.Bytes()
 
@@ -352,7 +353,8 @@ func TestSerializeImage_NonNilImage(t *testing.T) {
 func TestSerializeImage_NilImage(t *testing.T) {
 	var buf bytes.Buffer
 
-	serializeImage(&buf, nil)
+	l := LogRecord{}
+	l.serializeImage(&buf, nil)
 
 	data := buf.Bytes()
 
@@ -379,7 +381,7 @@ func TestSerializeDataModification(t *testing.T) {
 		AfterImage:  afterImage,
 	}
 
-	serializeDataModification(&buf, record)
+	record.serializeDataModification(&buf)
 
 	data := buf.Bytes()
 
@@ -400,7 +402,7 @@ func TestSerializeCLR(t *testing.T) {
 		AfterImage:  afterImage,
 	}
 
-	serializeCLR(&buf, record)
+	record.serializeCLR(&buf)
 
 	data := buf.Bytes()
 
