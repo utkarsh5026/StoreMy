@@ -43,6 +43,13 @@ func NewSystemCatalog(ps PageStoreInterface, cache *tableCache) *SystemCatalog {
 // Initialize creates or loads the system catalog tables (CATALOG_TABLES, CATALOG_COLUMNS, and CATALOG_STATISTICS)
 // and registers them with the table manager. This must be called before any other catalog operations.
 // Works for both new and existing databases - heap.NewHeapFile handles both creation and loading.
+//
+// Parameters:
+//   - ctx: Transaction context for all catalog initialization operations
+//   - dataDir: Directory path where system catalog heap files will be stored/loaded
+//
+// Returns an error if any system table cannot be created, loaded, or registered.
+// On success, the catalog is ready for use and the transaction is committed.
 func (sc *SystemCatalog) Initialize(ctx *transaction.TransactionContext, dataDir string) error {
 	defer sc.store.CommitTransaction(ctx)
 
@@ -76,7 +83,12 @@ func (sc *SystemCatalog) Initialize(ctx *transaction.TransactionContext, dataDir
 	return nil
 }
 
-// setSystemTableID sets the appropriate system table ID based on table name
+// setSystemTableID sets the appropriate system table ID field based on table name.
+// This is called during initialization to track the IDs of the three system catalog tables.
+//
+// Parameters:
+//   - tableName: Name of the system table (CATALOG_TABLES, CATALOG_COLUMNS, or CATALOG_STATISTICS)
+//   - tableID: Heap file ID assigned to this system table
 func (sc *SystemCatalog) setSystemTableID(tableName string, tableID int) {
 	switch tableName {
 	case systemtable.Tables.TableName():
@@ -88,9 +100,18 @@ func (sc *SystemCatalog) setSystemTableID(tableName string, tableID int) {
 	}
 }
 
-// RegisterTable adds a new table to the system catalog.
+// RegisterTable adds a new user table to the system catalog.
 // It inserts metadata into CATALOG_TABLES, column definitions into CATALOG_COLUMNS,
 // and initializes statistics in CATALOG_STATISTICS.
+//
+// This operation is transactional - all catalog updates occur within the provided transaction.
+//
+// Parameters:
+//   - tx: Transaction context for catalog updates
+//   - sch: Schema definition containing table name, columns, primary key, and table ID
+//   - filepath: Path to the heap file for this table
+//
+// Returns an error if table or column metadata cannot be inserted into the catalog.
 func (sc *SystemCatalog) RegisterTable(tx *transaction.TransactionContext, sch *schema.Schema, filepath string) error {
 	tablesFile, err := sc.cache.GetDbFile(sc.TablesTableID)
 	if err != nil {
@@ -125,7 +146,15 @@ func (sc *SystemCatalog) RegisterTable(tx *transaction.TransactionContext, sch *
 // LoadTables reads all table metadata from CATALOG_TABLES, reconstructs their schemas
 // from CATALOG_COLUMNS, opens their heap files, and registers them with the table manager.
 //
-// This is called during database startup to restore all user tables.
+// This is called during database startup to restore all user tables into memory.
+// The transaction is committed after all tables are successfully loaded.
+//
+// Parameters:
+//   - tx: Transaction context for reading catalog metadata
+//   - dataDir: Base directory where table heap files are stored
+//
+// Returns an error if any table cannot be loaded. The database may be in a partial state
+// if this fails, requiring recovery or manual intervention.
 func (sc *SystemCatalog) LoadTables(tx *transaction.TransactionContext, dataDir string) error {
 	defer sc.store.CommitTransaction(tx)
 
@@ -143,6 +172,17 @@ func (sc *SystemCatalog) LoadTables(tx *transaction.TransactionContext, dataDir 
 	})
 }
 
+// LoadTable loads a single table into the cache by reconstructing its schema from the catalog,
+// opening its heap file, and registering it with the page store.
+//
+// This is used both during startup (via LoadTables) and for on-demand table loading.
+//
+// Parameters:
+//   - tid: Transaction ID for reading catalog metadata
+//   - tableName: Name of the table to load
+//
+// Returns an error if the table metadata cannot be retrieved, schema cannot be loaded,
+// heap file cannot be opened, or registration fails.
 func (sc *SystemCatalog) LoadTable(tid *primitives.TransactionID, tableName string) error {
 	tm, err := sc.GetTableMetadataByName(tid, tableName)
 	if err != nil {
@@ -168,6 +208,17 @@ func (sc *SystemCatalog) LoadTable(tid *primitives.TransactionID, tableName stri
 	return nil
 }
 
+// DeleteCatalogEntry removes all catalog metadata for a table, including entries in
+// CATALOG_TABLES, CATALOG_COLUMNS, and CATALOG_STATISTICS.
+//
+// This is typically called as part of a DROP TABLE operation. Note that this only removes
+// catalog entries - the heap file itself must be deleted separately.
+//
+// Parameters:
+//   - tx: Transaction context for catalog deletions
+//   - tableID: ID of the table whose catalog entries should be removed
+//
+// Returns an error if any system table deletion fails.
 func (sc *SystemCatalog) DeleteCatalogEntry(tx *transaction.TransactionContext, tableID int) error {
 	sysTableIDs := []int{sc.TablesTableID, sc.ColumnsTableID, sc.StatisticsTableID}
 	for _, id := range sysTableIDs {
@@ -178,6 +229,18 @@ func (sc *SystemCatalog) DeleteCatalogEntry(tx *transaction.TransactionContext, 
 	return nil
 }
 
+// DeleteTableFromSysTable removes all entries for a specific table from a given system table.
+// This is a helper function used by DeleteCatalogEntry to clean up catalog metadata.
+//
+// Due to MVCC, there may be multiple versions of tuples for the same table. This function
+// deletes all matching tuples.
+//
+// Parameters:
+//   - tx: Transaction context for deletions
+//   - tableID: ID of the table to remove entries for
+//   - sysTableID: ID of the system table to delete from (CATALOG_TABLES, CATALOG_COLUMNS, or CATALOG_STATISTICS)
+//
+// Returns an error if tuples cannot be deleted from the system table.
 func (sc *SystemCatalog) DeleteTableFromSysTable(tx *transaction.TransactionContext, tableID, sysTableID int) error {
 	tableInfo, err := sc.cache.GetTableInfo(sysTableID)
 	if err != nil {
@@ -213,6 +276,13 @@ func (sc *SystemCatalog) DeleteTableFromSysTable(tx *transaction.TransactionCont
 	return nil
 }
 
+// getSysTable returns the SystemTable interface for a given system table ID.
+// This is used to access system table-specific methods like TableIDIndex().
+//
+// Parameters:
+//   - id: System table ID (TablesTableID, ColumnsTableID, or StatisticsTableID)
+//
+// Returns the corresponding SystemTable interface or an error if the ID is invalid.
 func (sc *SystemCatalog) getSysTable(id int) (systemtable.SystemTable, error) {
 	switch id {
 	case sc.TablesTableID:
@@ -226,14 +296,29 @@ func (sc *SystemCatalog) getSysTable(id int) (systemtable.SystemTable, error) {
 	}
 }
 
-// GetTableID looks up the heap file ID for a table by name.
-// Returns -1 and an error if the table is not found in the catalog.
+// GetTableMetadataByID retrieves complete table metadata from CATALOG_TABLES by table ID.
+//
+// Parameters:
+//   - tid: Transaction ID for reading catalog
+//   - tableID: Heap file ID of the table
+//
+// Returns TableMetadata containing table name, file path, and primary key column,
+// or an error if the table is not found.
 func (sc *SystemCatalog) GetTableMetadataByID(tid *primitives.TransactionID, tableID int) (*systemtable.TableMetadata, error) {
 	return sc.findTableMetadata(tid, func(tm *systemtable.TableMetadata) bool {
 		return tm.TableID == tableID
 	})
 }
 
+// GetTableMetadataByName retrieves complete table metadata from CATALOG_TABLES by table name.
+// Table name matching is case-insensitive.
+//
+// Parameters:
+//   - tid: Transaction ID for reading catalog
+//   - tableName: Name of the table to look up
+//
+// Returns TableMetadata containing table ID, file path, and primary key column,
+// or an error if the table is not found.
 func (sc *SystemCatalog) GetTableMetadataByName(tid *primitives.TransactionID, tableName string) (*systemtable.TableMetadata, error) {
 	return sc.findTableMetadata(tid, func(tm *systemtable.TableMetadata) bool {
 		return strings.EqualFold(tm.TableName, tableName)
@@ -241,9 +326,18 @@ func (sc *SystemCatalog) GetTableMetadataByName(tid *primitives.TransactionID, t
 }
 
 // iterateTable scans all tuples in a table and applies a processing function to each.
-// This is used internally for catalog queries like LoadTables() and GetTableID().
+// This is the core primitive for catalog queries, used internally by methods like
+// LoadTables(), GetTableMetadataByName(), and GetAutoIncrementColumn().
 //
-// The processFunc can return an error to stop iteration early.
+// The iterator follows proper concurrency protocols - all page accesses go through
+// the lock manager using the provided transaction ID.
+//
+// Parameters:
+//   - tableID: ID of the table to scan
+//   - tid: Transaction ID for locking and MVCC visibility
+//   - processFunc: Function to apply to each tuple. Return an error to stop iteration early.
+//
+// Returns an error if the iterator cannot be opened or if processFunc returns an error.
 func (sc *SystemCatalog) iterateTable(tableID int, tid *primitives.TransactionID, processFunc func(*tuple.Tuple) error) error {
 	file, err := sc.cache.GetDbFile(tableID)
 	if err != nil {
@@ -259,101 +353,14 @@ func (sc *SystemCatalog) iterateTable(tableID int, tid *primitives.TransactionID
 	return iterator.ForEach(iter, processFunc)
 }
 
-// AutoIncrementInfo represents auto-increment metadata for a column
-type AutoIncrementInfo struct {
-	ColumnName  string
-	ColumnIndex int
-	NextValue   int
-}
-
-// GetAutoIncrementColumn retrieves auto-increment column info for a table
-// Returns nil if the table has no auto-increment column
-// Note: Due to MVCC, there may be multiple versions of the same column tuple.
-// We return the one with the highest next_auto_value (most recent).
-func (sc *SystemCatalog) GetAutoIncrementColumn(tid *primitives.TransactionID, tableID int) (*AutoIncrementInfo, error) {
-	var result *AutoIncrementInfo
-
-	err := sc.iterateTable(sc.ColumnsTableID, tid, func(columnTuple *tuple.Tuple) error {
-		colTableID, err := systemtable.Columns.GetTableID(columnTuple)
-		if err != nil {
-			return err
-		}
-
-		if colTableID != tableID {
-			return nil
-		}
-
-		col, err := systemtable.Columns.Parse(columnTuple)
-		if err != nil {
-			return err
-		}
-
-		if !col.IsAutoInc {
-			return nil
-		}
-
-		if result == nil || col.NextAutoValue > result.NextValue {
-			result = &AutoIncrementInfo{
-				ColumnName:  getStringField(columnTuple, 1),
-				ColumnIndex: getIntField(columnTuple, 3),
-				NextValue:   col.NextAutoValue,
-			}
-		}
-		return nil
-	})
-
-	if err != nil {
-		return nil, err
-	}
-
-	return result, nil
-}
-
-// IncrementAutoIncrementValue updates the next auto-increment value for a column
-func (sc *SystemCatalog) IncrementAutoIncrementValue(tx *transaction.TransactionContext, tableID int, columnName string, newValue int) error {
-	file, err := sc.cache.GetDbFile(sc.ColumnsTableID)
-	if err != nil {
-		return fmt.Errorf("failed to get columns table: %w", err)
-	}
-
-	iter := file.Iterator(tx.ID)
-	if err := iter.Open(); err != nil {
-		return fmt.Errorf("failed to open iterator: %w", err)
-	}
-	defer iter.Close()
-
-	// Use system table method to find latest version (MVCC-aware)
-	match, err := systemtable.Columns.FindLatestAutoIncrementColumn(iter, tableID, columnName)
-	if err != nil {
-		return fmt.Errorf("failed to find auto-increment column: %w", err)
-	}
-
-	if match == nil {
-		return fmt.Errorf("auto-increment column %s not found for table %d", columnName, tableID)
-	}
-
-	col := schema.ColumnMetadata{
-		TableID:   tableID,
-		Name:      columnName,
-		FieldType: match.ColumnType,
-		Position:  match.Position,
-		IsPrimary: match.IsPrimary,
-		IsAutoInc: match.IsAutoInc,
-	}
-	newTuple := systemtable.Columns.CreateTuple(col)
-	newTuple.SetField(6, types.NewIntField(int64(newValue)))
-
-	if err := sc.store.DeleteTuple(tx, file, match.Tuple); err != nil {
-		return fmt.Errorf("failed to delete old tuple: %w", err)
-	}
-
-	if err := sc.store.InsertTuple(tx, file, newTuple); err != nil {
-		return fmt.Errorf("failed to insert updated tuple: %w", err)
-	}
-
-	return nil
-}
-
+// findTableMetadata is a generic helper for searching CATALOG_TABLES with a custom predicate.
+// Used by GetTableMetadataByID and GetTableMetadataByName to avoid code duplication.
+//
+// Parameters:
+//   - tid: Transaction ID for reading catalog
+//   - pred: Predicate function that returns true when the desired table is found
+//
+// Returns the matching TableMetadata or an error if not found or if catalog access fails.
 func (sc *SystemCatalog) findTableMetadata(tid *primitives.TransactionID, pred func(tm *systemtable.TableMetadata) bool) (*systemtable.TableMetadata, error) {
 	var result *systemtable.TableMetadata
 
@@ -381,6 +388,16 @@ func (sc *SystemCatalog) findTableMetadata(tid *primitives.TransactionID, pred f
 	return nil, fmt.Errorf("table not found in catalog")
 }
 
+// GetAllTables retrieves metadata for all tables registered in the catalog.
+// This includes both user tables and system catalog tables.
+//
+// Used by commands like SHOW TABLES and for query planning operations that need
+// to enumerate available tables.
+//
+// Parameters:
+//   - tid: Transaction ID for reading catalog
+//
+// Returns a slice of TableMetadata for all tables, or an error if the catalog cannot be read.
 func (sc *SystemCatalog) GetAllTables(tid *primitives.TransactionID) ([]*systemtable.TableMetadata, error) {
 	var tables []*systemtable.TableMetadata
 	err := sc.iterateTable(sc.TablesTableID, tid, func(tup *tuple.Tuple) error {
