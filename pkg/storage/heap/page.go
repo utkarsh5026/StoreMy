@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"fmt"
 	"io"
+	"math/bits"
 	"storemy/pkg/primitives"
 	"storemy/pkg/storage/page"
 	"storemy/pkg/tuple"
@@ -24,14 +25,13 @@ const (
 //   - Tuple data (remainder): Fixed-size slots for tuples, some may be empty
 //   - Padding: Zero-filled bytes to reach PageSize
 type HeapPage struct {
-	pageID    *HeapPageID
-	tupleDesc *tuple.TupleDescription
-	header    []byte
-	tuples    []*tuple.Tuple
-	numSlots  int
-	dirtier   *primitives.TransactionID
-	oldData   []byte
-	mutex     sync.RWMutex
+	pageID          *HeapPageID
+	tupleDesc       *tuple.TupleDescription
+	tuples          []*tuple.Tuple
+	numSlots        int
+	dirtier         *primitives.TransactionID
+	header, oldData []byte
+	mutex           sync.RWMutex
 }
 
 // NewHeapPage creates a new HeapPage by deserializing raw page data.
@@ -112,32 +112,30 @@ func (hp *HeapPage) MarkDirty(dirty bool, tid *primitives.TransactionID) {
 func (hp *HeapPage) GetPageData() []byte {
 	hp.mutex.RLock()
 	defer hp.mutex.RUnlock()
-
-	var buffer bytes.Buffer
+	buffer := bytes.NewBuffer(make([]byte, 0, page.PageSize))
 
 	buffer.Write(hp.header)
-
 	tupleSize := hp.tupleDesc.GetSize()
+	emptySlot := make([]byte, tupleSize)
+
 	for i := 0; i < hp.numSlots; i++ {
 		if hp.tuples[i] == nil {
-			buffer.Write(emptyTuple(tupleSize))
+			buffer.Write(emptySlot)
 			continue
 		}
 
 		for j := 0; j < hp.tupleDesc.NumFields(); j++ {
 			field, err := hp.tuples[i].GetField(j)
 			if err != nil {
-				buffer.Write(emptyTuple(tupleSize))
+				buffer.Write(emptySlot)
 				break
 			}
-			field.Serialize(&buffer)
+			field.Serialize(buffer)
 		}
 	}
 
-	currentSize := buffer.Len()
-	padding := page.PageSize - currentSize
-	if padding > 0 {
-		buffer.Write(make([]byte, padding))
+	if buffer.Len() < page.PageSize {
+		buffer.Write(make([]byte, page.PageSize-buffer.Len()))
 	}
 
 	return buffer.Bytes()
@@ -237,7 +235,7 @@ func (hp *HeapPage) GetTuples() []*tuple.Tuple {
 	hp.mutex.RLock()
 	defer hp.mutex.RUnlock()
 
-	var tuples []*tuple.Tuple
+	tuples := make([]*tuple.Tuple, 0, hp.numSlots-hp.getNumEmptySlots())
 	for _, t := range hp.tuples {
 		if t != nil {
 			tuples = append(tuples, t)
@@ -323,13 +321,9 @@ func (hp *HeapPage) parsePageData(data []byte) error {
 // Must be called with lock already held (does not acquire lock).
 func (hp *HeapPage) getNumEmptySlots() int {
 	usedSlots := 0
-
-	for i := 0; i < hp.numSlots; i++ {
-		if hp.isSlotUsed(i) {
-			usedSlots++
-		}
+	for _, b := range hp.header {
+		usedSlots += bits.OnesCount8(b)
 	}
-
 	return hp.numSlots - usedSlots
 }
 
@@ -363,10 +357,11 @@ func (hp *HeapPage) setSlot(idx int, used bool) {
 		return
 	}
 
+	mask := byte(1 << bitOffset)
 	if used {
-		hp.header[byteIndex] |= byte(1 << bitOffset)
+		hp.header[byteIndex] |= mask
 	} else {
-		hp.header[byteIndex] &^= byte(1 << bitOffset)
+		hp.header[byteIndex] &^= mask
 	}
 }
 
