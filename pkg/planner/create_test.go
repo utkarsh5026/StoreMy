@@ -86,11 +86,11 @@ func TestCreateTablePlan_Execute_BasicSuccess(t *testing.T) {
 		t.Errorf("Expected message %q, got %q", expectedMessage, result.Message)
 	}
 
-	if !ctx.TableManager().TableExists("users") {
-		t.Error("Table was not added to table manager")
+	if !ctx.CatalogManager().TableExists(transCtx.ID, "users") {
+		t.Error("Table was not added to catalog")
 	}
 
-	cleanupTable(t, ctx.TableManager(), "users")
+	cleanupTable(t, ctx.CatalogManager(), "users", transCtx.ID)
 }
 
 func TestCreateTablePlan_Execute_WithPrimaryKey(t *testing.T) {
@@ -116,11 +116,11 @@ func TestCreateTablePlan_Execute_WithPrimaryKey(t *testing.T) {
 		t.Error("Expected success to be true")
 	}
 
-	if !ctx.TableManager().TableExists("products") {
-		t.Error("Table was not added to table manager")
+	if !ctx.CatalogManager().TableExists(transCtx.ID, "products") {
+		t.Error("Table was not added to catalog")
 	}
 
-	cleanupTable(t, ctx.TableManager(), "products")
+	cleanupTable(t, ctx.CatalogManager(), "products", transCtx.ID)
 }
 
 func TestCreateTablePlan_Execute_AllFieldTypes(t *testing.T) {
@@ -147,11 +147,11 @@ func TestCreateTablePlan_Execute_AllFieldTypes(t *testing.T) {
 		t.Error("Expected success to be true")
 	}
 
-	if !ctx.TableManager().TableExists("test_types") {
-		t.Error("Table was not added to table manager")
+	if !ctx.CatalogManager().TableExists(transCtx.ID, "test_types") {
+		t.Error("Table was not added to catalog")
 	}
 
-	cleanupTable(t, ctx.TableManager(), "test_types")
+	cleanupTable(t, ctx.CatalogManager(), "test_types", transCtx.ID)
 }
 
 func TestCreateTablePlan_Execute_IfNotExists_TableDoesNotExist(t *testing.T) {
@@ -180,11 +180,11 @@ func TestCreateTablePlan_Execute_IfNotExists_TableDoesNotExist(t *testing.T) {
 		t.Errorf("Expected message %q, got %q", expectedMessage, result.Message)
 	}
 
-	if !ctx.TableManager().TableExists("users") {
-		t.Error("Table was not added to table manager")
+	if !ctx.CatalogManager().TableExists(transCtx.ID, "users") {
+		t.Error("Table was not added to catalog")
 	}
 
-	cleanupTable(t, ctx.TableManager(), "users")
+	cleanupTable(t, ctx.CatalogManager(), "users", transCtx.ID)
 }
 
 func TestCreateTablePlan_Execute_IfNotExists_TableExists(t *testing.T) {
@@ -222,7 +222,7 @@ func TestCreateTablePlan_Execute_IfNotExists_TableExists(t *testing.T) {
 		t.Errorf("Expected message %q, got %q", expectedMessage, result.Message)
 	}
 
-	cleanupTable(t, ctx.TableManager(), "users")
+	cleanupTable(t, ctx.CatalogManager(), "users", transCtx.ID)
 }
 
 func TestCreateTablePlan_Execute_Error_TableAlreadyExists(t *testing.T) {
@@ -259,7 +259,7 @@ func TestCreateTablePlan_Execute_Error_TableAlreadyExists(t *testing.T) {
 		t.Errorf("Expected error %q, got %q", expectedError, err.Error())
 	}
 
-	cleanupTable(t, ctx.TableManager(), "users")
+	cleanupTable(t, ctx.CatalogManager(), "users", transCtx.ID)
 }
 
 func TestCreateTablePlan_Execute_Error_EmptyFields(t *testing.T) {
@@ -365,26 +365,26 @@ func TestCreateTablePlan_Execute_ComplexTable(t *testing.T) {
 		t.Error("Expected success to be true")
 	}
 
-	if !ctx.TableManager().TableExists("complex_table") {
-		t.Error("Table was not added to table manager")
+	if !ctx.CatalogManager().TableExists(transCtx.ID, "complex_table") {
+		t.Error("Table was not added to catalog")
 	}
 
-	tableID, err := ctx.TableManager().GetTableID("complex_table")
+	tableID, err := ctx.CatalogManager().GetTableID(transCtx.ID, "complex_table")
 	if err != nil {
 		t.Fatalf("Failed to get table ID: %v", err)
 	}
 
-	info, err := ctx.TableManager().GetTableInfo(tableID)
+	schema, err := ctx.CatalogManager().GetTableSchema(transCtx.ID, tableID)
 	if err != nil {
-		t.Fatalf("Failed to get tuple description: %v", err)
+		t.Fatalf("Failed to get table schema: %v", err)
 	}
 
-	td := info.Schema.TupleDesc
+	td := schema.TupleDesc
 	if td.NumFields() != 4 {
 		t.Errorf("Expected 4 fields, got %d", td.NumFields())
 	}
 
-	cleanupTable(t, ctx.TableManager(), "complex_table")
+	cleanupTable(t, ctx.CatalogManager(), "complex_table", transCtx.ID)
 }
 
 func TestCreateTablePlan_Execute_FileCreation(t *testing.T) {
@@ -414,7 +414,7 @@ func TestCreateTablePlan_Execute_FileCreation(t *testing.T) {
 		t.Errorf("Expected file %s to be created", expectedFileName)
 	}
 
-	cleanupTable(t, ctx.TableManager(), "file_test")
+	cleanupTable(t, ctx.CatalogManager(), "file_test", transCtx.ID)
 }
 
 func TestDDLResult_String(t *testing.T) {

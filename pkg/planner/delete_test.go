@@ -45,13 +45,14 @@ func createAndPopulateTestTable(t *testing.T, ctx *registry.DatabaseContext, tx 
 	createStmt.AddField("active", types.BoolType, false, nil)
 	createStmt.AddField("price", types.FloatType, false, nil)
 
-	tableManager := ctx.TableManager()
-
 	createPlan := NewCreateTablePlan(createStmt, ctx, tx)
 	_, err := createPlan.Execute()
 	if err != nil {
 		t.Fatalf("Failed to create test table: %v", err)
 	}
+
+	// Register cleanup to close table file
+	cleanupTable(t, ctx.CatalogManager(), "test_table", tx.ID)
 
 	// Insert test data
 	insertStmt := statements.NewInsertStatement("test_table")
@@ -88,9 +89,6 @@ func createAndPopulateTestTable(t *testing.T, ctx *registry.DatabaseContext, tx 
 	if err != nil {
 		t.Fatalf("Failed to populate test table: %v", err)
 	}
-
-	// Register cleanup to close table file
-	cleanupTable(t, tableManager, "test_table")
 }
 
 func TestNewDeletePlan(t *testing.T) {
@@ -337,7 +335,7 @@ func TestDeletePlan_Execute_EmptyTable(t *testing.T) {
 	}
 
 	// Register cleanup to close table file
-	cleanupTable(t, ctx.TableManager(), "test_table")
+	cleanupTable(t, ctx.CatalogManager(), "test_table", tx.ID)
 
 	stmt := statements.NewDeleteStatement("test_table", "")
 	plan := NewDeletePlan(stmt, tx, ctx)
@@ -365,14 +363,14 @@ func TestDeletePlan_getTableID(t *testing.T) {
 	stmt := statements.NewDeleteStatement("test_table", "")
 	plan := NewDeletePlan(stmt, tx, ctx)
 
-	md, err := resolveTableMetadata(plan.statement.TableName, plan.ctx)
+	md, err := resolveTableMetadata(plan.statement.TableName, plan.tx.ID, plan.ctx)
 
 	if err != nil {
 		t.Fatalf("getTableID failed: %v", err)
 	}
 
 	tableID := md.TableID
-	expectedTableID, _ := ctx.TableManager().GetTableID("test_table")
+	expectedTableID, _ := ctx.CatalogManager().GetTableID(tx.ID, "test_table")
 	if tableID != expectedTableID {
 		t.Errorf("Expected table ID %d, got %d", expectedTableID, tableID)
 	}
@@ -383,7 +381,7 @@ func TestDeletePlan_getTableID_Error(t *testing.T) {
 	stmt := statements.NewDeleteStatement("nonexistent_table", "")
 	plan := NewDeletePlan(stmt, tx, ctx)
 
-	tableID, err := resolveTableID(plan.statement.TableName, plan.ctx)
+	tableID, err := resolveTableID(plan.statement.TableName, plan.tx.ID, plan.ctx)
 
 	if err == nil {
 		t.Fatal("Expected error when table does not exist")
@@ -406,7 +404,7 @@ func TestDeletePlan_createTableScan(t *testing.T) {
 	stmt := statements.NewDeleteStatement("test_table", "")
 	plan := NewDeletePlan(stmt, tx, ctx)
 
-	tableID, err := resolveTableID(plan.statement.TableName, plan.ctx)
+	tableID, err := resolveTableID(plan.statement.TableName, plan.tx.ID, plan.ctx)
 	if err != nil {
 		t.Fatalf("getTableID failed: %v", err)
 	}
@@ -443,7 +441,7 @@ func TestDeletePlan_addWhereFilter(t *testing.T) {
 	stmt.SetWhereClause(whereClause)
 	plan := NewDeletePlan(stmt, tx, ctx)
 
-	tableID, err := resolveTableID(plan.statement.TableName, plan.ctx)
+	tableID, err := resolveTableID(plan.statement.TableName, plan.tx.ID, plan.ctx)
 	if err != nil {
 		t.Fatalf("getTableID failed: %v", err)
 	}
@@ -473,7 +471,7 @@ func TestDeletePlan_collectTuplesToDelete(t *testing.T) {
 	stmt := statements.NewDeleteStatement("test_table", "")
 	plan := NewDeletePlan(stmt, tx, ctx)
 
-	tableID, err := resolveTableID(plan.statement.TableName, plan.ctx)
+	tableID, err := resolveTableID(plan.statement.TableName, plan.tx.ID, plan.ctx)
 	if err != nil {
 		t.Fatalf("getTableID failed: %v", err)
 	}
@@ -508,7 +506,7 @@ func TestDeletePlan_createQuery_NoWhere(t *testing.T) {
 	stmt := statements.NewDeleteStatement("test_table", "")
 	plan := NewDeletePlan(stmt, tx, ctx)
 
-	tableID, err := resolveTableID(plan.statement.TableName, plan.ctx)
+	tableID, err := resolveTableID(plan.statement.TableName, plan.tx.ID, plan.ctx)
 	if err != nil {
 		t.Fatalf("getTableID failed: %v", err)
 	}
@@ -545,7 +543,7 @@ func TestDeletePlan_createQuery_WithWhere(t *testing.T) {
 	stmt.SetWhereClause(whereClause)
 	plan := NewDeletePlan(stmt, tx, ctx)
 
-	tableID, err := resolveTableID(plan.statement.TableName, plan.ctx)
+	tableID, err := resolveTableID(plan.statement.TableName, plan.tx.ID, plan.ctx)
 	if err != nil {
 		t.Fatalf("getTableID failed: %v", err)
 	}

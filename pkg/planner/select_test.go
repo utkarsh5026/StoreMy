@@ -71,7 +71,7 @@ func createSelectTestTable(t *testing.T, ctx *registry.DatabaseContext, tx *tran
 	}
 
 	// Register cleanup to close table file
-	cleanupTable(t, ctx.TableManager(), "users")
+	cleanupTable(t, ctx.CatalogManager(), "users", tx.ID)
 }
 
 func insertSelectTestData(t *testing.T, ctx *registry.DatabaseContext, tx *transaction.TransactionContext) {
@@ -587,7 +587,7 @@ func createJoinTestTables(t *testing.T, ctx *registry.DatabaseContext, tx *trans
 	if err != nil {
 		t.Fatalf("Failed to create users table: %v", err)
 	}
-	cleanupTable(t, ctx.TableManager(), "users")
+	cleanupTable(t, ctx.CatalogManager(), "users", tx.ID)
 
 	// Create departments table
 	deptsStmt := statements.NewCreateStatement("departments", false)
@@ -599,7 +599,7 @@ func createJoinTestTables(t *testing.T, ctx *registry.DatabaseContext, tx *trans
 	if err != nil {
 		t.Fatalf("Failed to create departments table: %v", err)
 	}
-	cleanupTable(t, ctx.TableManager(), "departments")
+	cleanupTable(t, ctx.CatalogManager(), "departments", tx.ID)
 }
 
 func insertJoinTestData(t *testing.T, ctx *registry.DatabaseContext, tx *transaction.TransactionContext) {

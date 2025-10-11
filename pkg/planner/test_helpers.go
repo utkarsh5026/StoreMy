@@ -78,7 +78,6 @@ func createTestContextWithCleanup(t *testing.T, dataDir string) *registry.Databa
 
 	return registry.NewDatabaseContext(
 		pageStore,
-		catalogMgr.GetSystemCatalog(),
 		catalogMgr,
 		wal,
 		dataDir,
