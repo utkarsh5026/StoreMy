@@ -23,9 +23,9 @@ type SystemCatalog struct {
 	store             PageStoreInterface
 	cache             *tableCache
 	loader            *SchemaLoader
-	tablesTableID     int
-	columnsTableID    int
-	statisticsTableID int
+	TablesTableID     int
+	ColumnsTableID    int
+	StatisticsTableID int
 }
 
 // NewSystemCatalog creates a new system catalog instance.
@@ -69,7 +69,7 @@ func (sc *SystemCatalog) Initialize(ctx *transaction.TransactionContext, dataDir
 		sc.setSystemTableID(table.TableName(), f.GetID())
 	}
 
-	sc.loader.columnsTableID = sc.columnsTableID
+	sc.loader.columnsTableID = sc.ColumnsTableID
 	return nil
 }
 
@@ -77,11 +77,11 @@ func (sc *SystemCatalog) Initialize(ctx *transaction.TransactionContext, dataDir
 func (sc *SystemCatalog) setSystemTableID(tableName string, tableID int) {
 	switch tableName {
 	case systemtable.Tables.TableName():
-		sc.tablesTableID = tableID
+		sc.TablesTableID = tableID
 	case systemtable.Columns.TableName():
-		sc.columnsTableID = tableID
+		sc.ColumnsTableID = tableID
 	case systemtable.Stats.TableName():
-		sc.statisticsTableID = tableID
+		sc.StatisticsTableID = tableID
 	}
 }
 
@@ -89,7 +89,7 @@ func (sc *SystemCatalog) setSystemTableID(tableName string, tableID int) {
 // It inserts metadata into CATALOG_TABLES, column definitions into CATALOG_COLUMNS,
 // and initializes statistics in CATALOG_STATISTICS.
 func (sc *SystemCatalog) RegisterTable(tx *transaction.TransactionContext, sch *schema.Schema, filepath string) error {
-	tablesFile, err := sc.cache.GetDbFile(sc.tablesTableID)
+	tablesFile, err := sc.cache.GetDbFile(sc.TablesTableID)
 	if err != nil {
 		return err
 	}
@@ -104,7 +104,7 @@ func (sc *SystemCatalog) RegisterTable(tx *transaction.TransactionContext, sch *
 		return fmt.Errorf("failed to insert table metadata: %w", err)
 	}
 
-	colFile, err := sc.cache.GetDbFile(sc.columnsTableID)
+	colFile, err := sc.cache.GetDbFile(sc.ColumnsTableID)
 	if err != nil {
 		return err
 	}
@@ -126,7 +126,7 @@ func (sc *SystemCatalog) RegisterTable(tx *transaction.TransactionContext, sch *
 func (sc *SystemCatalog) LoadTables(tx *transaction.TransactionContext, dataDir string) error {
 	defer sc.store.CommitTransaction(tx)
 
-	return sc.iterateTable(sc.tablesTableID, tx.ID, func(tableTuple *tuple.Tuple) error {
+	return sc.iterateTable(sc.TablesTableID, tx.ID, func(tableTuple *tuple.Tuple) error {
 		table, err := systemtable.Tables.Parse(tableTuple)
 		if err != nil {
 			return err
@@ -151,35 +151,45 @@ func (sc *SystemCatalog) LoadTables(tx *transaction.TransactionContext, dataDir 
 }
 
 func (sc *SystemCatalog) DeleteCatalogEntry(tx *transaction.TransactionContext, tableID int) error {
-	sysTableIDs := []int{sc.tablesTableID, sc.columnsTableID, sc.statisticsTableID}
+	sysTableIDs := []int{sc.TablesTableID, sc.ColumnsTableID, sc.StatisticsTableID}
 	for _, id := range sysTableIDs {
-		tableInfo, err := sc.cache.GetTableInfo(id)
+		if err := sc.DeleteTableFromSysTable(tx, tableID, id); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (sc *SystemCatalog) DeleteTableFromSysTable(tx *transaction.TransactionContext, tableID, sysTableID int) error {
+	tableInfo, err := sc.cache.GetTableInfo(sysTableID)
+	if err != nil {
+		return err
+	}
+
+	syst, err := sc.getSysTable(sysTableID)
+	if err != nil {
+		return nil
+	}
+	var tuplesToDelete []*tuple.Tuple
+
+	sc.iterateTable(sysTableID, tx.ID, func(t *tuple.Tuple) error {
+		field, err := t.GetField(syst.TableIDIndex())
 		if err != nil {
 			return err
 		}
 
-		syst, _ := sc.getSysTable(id)
-		var tuplesToDelete []*tuple.Tuple
-
-		sc.iterateTable(id, tx.ID, func(t *tuple.Tuple) error {
-			field, err := t.GetField(syst.TableIDIndex())
-			if err != nil {
-				return err
+		if intField, ok := field.(*types.IntField); ok {
+			if intField.Value == int64(tableID) {
+				tuplesToDelete = append(tuplesToDelete, t)
 			}
+		}
 
-			if intField, ok := field.(*types.IntField); ok {
-				if intField.Value == int64(tableID) {
-					tuplesToDelete = append(tuplesToDelete, t)
-				}
-			}
+		return nil
+	})
 
-			return nil
-		})
-
-		for _, tup := range tuplesToDelete {
-			if err := sc.store.DeleteTuple(tx, tableInfo.File, tup); err != nil {
-				return err
-			}
+	for _, tup := range tuplesToDelete {
+		if err := sc.store.DeleteTuple(tx, tableInfo.File, tup); err != nil {
+			return err
 		}
 	}
 	return nil
@@ -187,11 +197,11 @@ func (sc *SystemCatalog) DeleteCatalogEntry(tx *transaction.TransactionContext, 
 
 func (sc *SystemCatalog) getSysTable(id int) (systemtable.SystemTable, error) {
 	switch id {
-	case sc.tablesTableID:
+	case sc.TablesTableID:
 		return systemtable.Tables, nil
-	case sc.columnsTableID:
+	case sc.ColumnsTableID:
 		return systemtable.Columns, nil
-	case sc.statisticsTableID:
+	case sc.StatisticsTableID:
 		return systemtable.Stats, nil
 	default:
 		return nil, fmt.Errorf("unknown system table ID: %d", id)
@@ -245,7 +255,7 @@ type AutoIncrementInfo struct {
 func (sc *SystemCatalog) GetAutoIncrementColumn(tid *primitives.TransactionID, tableID int) (*AutoIncrementInfo, error) {
 	var result *AutoIncrementInfo
 
-	err := sc.iterateTable(sc.columnsTableID, tid, func(columnTuple *tuple.Tuple) error {
+	err := sc.iterateTable(sc.ColumnsTableID, tid, func(columnTuple *tuple.Tuple) error {
 		colTableID, err := systemtable.Columns.GetTableID(columnTuple)
 		if err != nil {
 			return err
@@ -283,7 +293,7 @@ func (sc *SystemCatalog) GetAutoIncrementColumn(tid *primitives.TransactionID, t
 
 // IncrementAutoIncrementValue updates the next auto-increment value for a column
 func (sc *SystemCatalog) IncrementAutoIncrementValue(tx *transaction.TransactionContext, tableID int, columnName string, newValue int) error {
-	file, err := sc.cache.GetDbFile(sc.columnsTableID)
+	file, err := sc.cache.GetDbFile(sc.ColumnsTableID)
 	if err != nil {
 		return fmt.Errorf("failed to get columns table: %w", err)
 	}
@@ -329,7 +339,7 @@ func (sc *SystemCatalog) IncrementAutoIncrementValue(tx *transaction.Transaction
 func (sc *SystemCatalog) findTableMetadata(tid *primitives.TransactionID, pred func(tm *systemtable.TableMetadata) bool) (*systemtable.TableMetadata, error) {
 	var result *systemtable.TableMetadata
 
-	err := sc.iterateTable(sc.tablesTableID, tid, func(tableTuple *tuple.Tuple) error {
+	err := sc.iterateTable(sc.TablesTableID, tid, func(tableTuple *tuple.Tuple) error {
 		table, err := systemtable.Tables.Parse(tableTuple)
 		if err != nil {
 			return err
@@ -354,5 +364,21 @@ func (sc *SystemCatalog) findTableMetadata(tid *primitives.TransactionID, pred f
 }
 
 func (sc *SystemCatalog) getAllTableIDS() []int {
-	return []int{sc.tablesTableID, sc.columnsTableID, sc.statisticsTableID}
+	return []int{sc.TablesTableID, sc.ColumnsTableID, sc.StatisticsTableID}
+}
+
+func (sc *SystemCatalog) GetAllTables(tid *primitives.TransactionID) ([]*systemtable.TableMetadata, error) {
+	var tables []*systemtable.TableMetadata
+	err := sc.iterateTable(sc.TablesTableID, tid, func(tup *tuple.Tuple) error {
+		tm, err := systemtable.Tables.Parse(tup)
+		if err != nil {
+			return err
+		}
+		tables = append(tables, tm)
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return tables, nil
 }
