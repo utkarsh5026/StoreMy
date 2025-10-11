@@ -109,7 +109,7 @@ func newTableCacheWithLimit(maxSize int) *tableCache {
 // addTable adds a new table to the cache with the specified database file and schema.
 // If a table with the same name or ID already exists, it will be replaced.
 // Implements LRU eviction if maxSize is configured and cache is full.
-func (tc *tableCache) addTable(f page.DbFile, schema *schema.Schema) error {
+func (tc *tableCache) AddTable(f page.DbFile, schema *schema.Schema) error {
 	if f == nil {
 		return fmt.Errorf("file cannot be nil")
 	}
@@ -178,7 +178,7 @@ func (tc *tableCache) getTupleDesc(tableId int) (*tuple.TupleDescription, error)
 
 // getDbFile retrieves the database file for a table by ID.
 // Updates LRU position on access.
-func (tc *tableCache) getDbFile(tableId int) (page.DbFile, error) {
+func (tc *tableCache) GetDbFile(tableId int) (page.DbFile, error) {
 	tc.mutex.Lock()
 	defer tc.mutex.Unlock()
 
@@ -274,7 +274,7 @@ func (tc *tableCache) validateIntegrity() error {
 
 // getAllTableNames returns a slice containing the names of all tables in the cache.
 // The returned slice is a copy and can be safely modified without affecting the cache.
-func (tc *tableCache) getAllTableNames() []string {
+func (tc *tableCache) GetAllTableNames() []string {
 	tc.mutex.RLock()
 	defer tc.mutex.RUnlock()
 	return slices.Collect(maps.Keys(tc.nameToTable))
@@ -302,7 +302,7 @@ func (tc *tableCache) addTableToMaps(name string, tableID int, info *tableInfo) 
 }
 
 // tableExists checks whether a table with the given name exists in the cache.
-func (tc *tableCache) tableExists(name string) bool {
+func (tc *tableCache) TableExists(name string) bool {
 	tc.mutex.RLock()
 	defer tc.mutex.RUnlock()
 
@@ -312,7 +312,7 @@ func (tc *tableCache) tableExists(name string) bool {
 
 // getTableInfo retrieves the full table info for a table by ID.
 // Updates LRU position on access.
-func (tc *tableCache) getTableInfo(tableID int) (*tableInfo, error) {
+func (tc *tableCache) GetTableInfo(tableID int) (*tableInfo, error) {
 	tc.mutex.Lock()
 	defer tc.mutex.Unlock()
 
@@ -324,13 +324,12 @@ func (tc *tableCache) getTableInfo(tableID int) (*tableInfo, error) {
 
 	tc.metrics.hits.Add(1)
 	tc.markAsUsed(info)
-
 	return info, nil
 }
 
 // renameTable changes the name of an existing table in the cache.
 // The operation maintains all other table metadata and file associations.
-func (tc *tableCache) renameTable(oldName, newName string) error {
+func (tc *tableCache) RenameTable(oldName, newName string) error {
 	if oldName == "" || newName == "" {
 		return fmt.Errorf("table names cannot be empty")
 	}
@@ -354,4 +353,102 @@ func (tc *tableCache) renameTable(oldName, newName string) error {
 	delete(tc.nameToTable, oldName)
 	tc.nameToTable[newName] = info
 	return nil
+}
+
+// evictLRU removes the least recently used table from the cache.
+// Must be called with write lock held.
+func (tc *tableCache) evictLRU() {
+	if tc.lruList.Len() == 0 {
+		return
+	}
+
+	elem := tc.lruList.Back()
+	if elem == nil {
+		return
+	}
+
+	tableID := elem.Value.(int)
+	info, exists := tc.idToTable[tableID]
+	if !exists {
+		tc.lruList.Remove(elem)
+		return
+	}
+
+	// Close the file if it exists
+	if info.File != nil {
+		if err := info.File.Close(); err != nil {
+			fmt.Printf("Warning: failed to close file during eviction for table '%s': %v\n", info.Schema.TableName, err)
+		}
+	}
+
+	// Remove from all maps
+	delete(tc.nameToTable, info.Schema.TableName)
+	delete(tc.idToTable, tableID)
+	tc.lruList.Remove(elem)
+
+	tc.metrics.evictions.Add(1)
+}
+
+// markAsUsed updates the LRU position for a table, marking it as recently accessed.
+// Must be called with write lock held.
+func (tc *tableCache) markAsUsed(info *tableInfo) {
+	if info.lruElement != nil {
+		tc.lruList.MoveToFront(info.lruElement)
+	}
+	info.LastAccessed = time.Now()
+}
+
+// Statistics Caching Methods
+// These methods handle caching of table statistics
+
+// getCachedStatistics retrieves cached statistics for a table if available and not expired.
+// Returns nil if not cached or expired.
+func (tc *tableCache) getCachedStatistics(tableID int) (*TableStatistics, bool) {
+	tc.mutex.RLock()
+	defer tc.mutex.RUnlock()
+
+	info, exists := tc.idToTable[tableID]
+	if !exists {
+		return nil, false
+	}
+
+	// Check if statistics are cached and not expired
+	if info.Stats == nil || time.Now().After(info.StatsExpiry) {
+		tc.metrics.statsMisses.Add(1)
+		return nil, false
+	}
+
+	tc.metrics.statsHits.Add(1)
+	return info.Stats, true
+}
+
+// setCachedStatistics stores statistics in the cache with TTL.
+// Must be called after acquiring write lock or during table addition.
+func (tc *tableCache) setCachedStatistics(tableID int, stats *TableStatistics) error {
+	tc.mutex.Lock()
+	defer tc.mutex.Unlock()
+
+	info, exists := tc.idToTable[tableID]
+	if !exists {
+		return fmt.Errorf("table with ID %d not found", tableID)
+	}
+
+	info.Stats = stats
+	info.StatsExpiry = time.Now().Add(tc.ttl.StatsTTL)
+	return nil
+}
+
+// invalidateStatistics removes cached statistics for a table.
+// This should be called when table data changes (INSERT, UPDATE, DELETE).
+func (tc *tableCache) invalidateStatistics(tableID int) {
+	tc.mutex.Lock()
+	defer tc.mutex.Unlock()
+
+	info, exists := tc.idToTable[tableID]
+	if !exists {
+		return
+	}
+
+	info.Stats = nil
+	info.StatsExpiry = time.Time{}
 }
