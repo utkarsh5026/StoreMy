@@ -23,12 +23,12 @@ type StatisticsManager struct {
 }
 
 // NewStatisticsManager creates a new statistics manager
-func NewStatisticsManager(catalog *SystemCatalog, db interface {
+func NewStatisticsManager(catalog *CatalogManager, db interface {
 	BeginTransaction() (*transaction.TransactionContext, error)
 	CommitTransaction(tx *transaction.TransactionContext) error
 }) *StatisticsManager {
 	return &StatisticsManager{
-		catalog:           catalog,
+		catalog:           catalog.catalog,
 		db:                db,
 		lastUpdate:        make(map[int]time.Time),
 		modificationCount: make(map[int]int),

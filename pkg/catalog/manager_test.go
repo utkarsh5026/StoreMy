@@ -42,14 +42,6 @@ func (m *mockDbFile) WritePage(p page.Page) error {
 	return nil
 }
 
-func (m *mockDbFile) AddTuple(tid *primitives.TransactionID, t *tuple.Tuple) ([]page.Page, error) {
-	return nil, nil
-}
-
-func (m *mockDbFile) DeleteTuple(tid *primitives.TransactionID, t *tuple.Tuple) (page.Page, error) {
-	return nil, nil
-}
-
 func (m *mockDbFile) Iterator(tid *primitives.TransactionID) iterator.DbFileIterator {
 	return nil
 }
