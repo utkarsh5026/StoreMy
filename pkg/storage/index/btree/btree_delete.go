@@ -116,46 +116,27 @@ func (bt *BTree) handleUnderflow(tid *primitives.TransactionID, page *BTreePage)
 // redistributeFromLeft borrows an entry from left sibling
 func (bt *BTree) redistributeFromLeft(tid *primitives.TransactionID, left, current, parent *BTreePage, pageIdx int) error {
 	if current.IsLeafPage() {
-		return bt.redistributeLeafFromLeft(tid, left, current, parent, pageIdx)
+		leftLastIdx := left.numEntries - 1
+		deleted := deleteFromPage(left, leftLastIdx, left.entries, tid)
+
+		insertAtBegin(current, current.entries, *deleted, tid)
+
+		parent.children[pageIdx].Key = (*deleted).Key
+		parent.MarkDirty(true, tid)
+
+		return bt.writePages(left, current, parent)
 	}
 
-	return bt.redistributeInternalFromLeft(tid, left, current, parent, pageIdx)
-}
-
-func (bt *BTree) redistributeLeafFromLeft(tid *primitives.TransactionID, left, current, parent *BTreePage, pageIdx int) error {
-	leftLastIdx := left.numEntries - 1
-	movedEntry := left.entries[leftLastIdx]
-
-	left.entries = left.entries[:leftLastIdx]
-	left.numEntries--
-	left.MarkDirty(true, tid)
-
-	current.entries = append([]*index.IndexEntry{movedEntry}, current.entries...)
-	current.numEntries++
-	current.MarkDirty(true, tid)
-
-	parent.children[pageIdx].Key = movedEntry.Key
-	parent.MarkDirty(true, tid)
-
-	return bt.writePages(left, current, parent)
-}
-
-func (bt *BTree) redistributeInternalFromLeft(tid *primitives.TransactionID, left, current, parent *BTreePage, pageIdx int) error {
 	last := left.numEntries
-	moved := left.children[last]
-	left.children = left.children[:last]
-	left.numEntries--
-	left.MarkDirty(true, tid)
+	moved := deleteFromPage(left, last, left.children, tid)
 
-	ch := newBtreeChildPtr(nil, moved.ChildPID)
+	ch := newBtreeChildPtr(nil, (*moved).ChildPID)
 	if len(current.children) > 0 {
 		current.children[0].Key = parent.children[pageIdx].Key
 	}
-	current.children = append([]*BTreeChildPtr{ch}, current.children...)
-	current.numEntries++
-	current.MarkDirty(true, tid)
+	insertAtEnd(current, current.children, ch, tid)
 
-	parent.children[pageIdx].Key = moved.Key
+	parent.children[pageIdx].Key = (*moved).Key
 	parent.MarkDirty(true, tid)
 
 	return bt.writePages(left, current, parent)
@@ -166,42 +147,25 @@ func (bt *BTree) redistributeFromRight(tid *primitives.TransactionID, current, r
 	rightStart := 0
 
 	if current.IsLeafPage() {
-		movedEntry := right.entries[rightStart]
-		right.entries = right.entries[rightStart+1:]
-		right.numEntries--
-		right.MarkDirty(true, tid)
-
-		current.entries = append(current.entries, movedEntry)
-		current.numEntries++
-		current.MarkDirty(true, tid)
+		deleted := deleteFromPage(right, rightStart, right.entries, tid)
+		insertAtEnd(current, current.entries, *deleted, tid)
 
 		parent.children[pageIdx+1].Key = right.entries[rightStart].Key
 		parent.MarkDirty(true, tid)
-
-		bt.file.WritePage(current)
-		bt.file.WritePage(right)
-		return bt.file.WritePage(parent)
+		return bt.writePages(current, right, parent)
 	}
 
-	movedChild := right.children[rightStart]
-	right.children = right.children[rightStart+1:]
-	right.numEntries--
-	right.MarkDirty(true, tid)
+	deleted := deleteFromPage(right, rightStart, right.children, tid)
 
-	newChild := newBtreeChildPtr(parent.children[pageIdx+1].Key, movedChild.ChildPID)
-	current.children = append(current.children, newChild)
-	current.numEntries++
-	current.MarkDirty(true, tid)
+	ch := newBtreeChildPtr(parent.children[pageIdx+1].Key, (*deleted).ChildPID)
+	insertAtEnd(current, current.children, ch, tid)
 
 	if len(right.children) > 0 {
 		parent.children[pageIdx+1].Key = right.children[0].Key
 		right.children[0].Key = nil
 	}
 	parent.MarkDirty(true, tid)
-
-	bt.file.WritePage(current)
-	bt.file.WritePage(right)
-	return bt.file.WritePage(parent)
+	return bt.writePages(parent, current, parent)
 }
 
 // mergeWithLeft merges current page with left sibling
@@ -302,4 +266,54 @@ func (bt *BTree) writePages(pages ...*BTreePage) error {
 		}
 	}
 	return nil
+}
+
+func deleteFromPage[T any](p *BTreePage, idx int, s []T, tid *primitives.TransactionID) *T {
+	if idx < 0 || idx >= len(s) {
+		return nil
+	}
+
+	deleted := s[idx]
+	newSlice := slices.Delete(s, idx, idx+1)
+
+	switch any(newSlice).(type) {
+	case []*index.IndexEntry:
+		p.entries = any(newSlice).([]*index.IndexEntry)
+	case []*BTreeChildPtr:
+		p.children = any(newSlice).([]*BTreeChildPtr)
+	}
+
+	p.numEntries--
+	p.MarkDirty(true, tid)
+
+	return &deleted
+}
+
+// insertIntoPage inserts an element at the specified index (0 = beginning, len = end)
+func insertIntoPage[T any](p *BTreePage, idx int, s []T, elem T, tid *primitives.TransactionID) error {
+	if idx < 0 || idx > len(s) {
+		return fmt.Errorf("invalid index %d for inserting element", idx)
+	}
+
+	newSlice := slices.Insert(s, idx, elem)
+
+	switch any(newSlice).(type) {
+	case []*index.IndexEntry:
+		p.entries = any(newSlice).([]*index.IndexEntry)
+	case []*BTreeChildPtr:
+		p.children = any(newSlice).([]*BTreeChildPtr)
+	}
+
+	p.numEntries++
+	p.MarkDirty(true, tid)
+
+	return nil
+}
+
+func insertAtBegin[T any](p *BTreePage, s []T, elem T, tid *primitives.TransactionID) error {
+	return insertIntoPage(p, 0, s, elem, tid)
+}
+
+func insertAtEnd[T any](p *BTreePage, s []T, elem T, tid *primitives.TransactionID) error {
+	return insertIntoPage(p, len(s), s, elem, tid)
 }
