@@ -14,12 +14,10 @@ import (
 
 // BTreeFile represents a persistent B+Tree index file
 type BTreeFile struct {
-	file      *os.File
-	keyType   types.Type
-	indexID   int
-	numPages  int
-	mutex     sync.RWMutex
-	pageCache map[int]*BTreePage // Simple in-memory cache
+	file              *os.File
+	keyType           types.Type
+	indexID, numPages int
+	mutex             sync.RWMutex
 }
 
 // NewBTreeFile creates or opens a B+Tree index file
@@ -42,11 +40,10 @@ func NewBTreeFile(filename string, keyType types.Type) (*BTreeFile, error) {
 	numPages := int(fileInfo.Size() / int64(page.PageSize))
 
 	bf := &BTreeFile{
-		file:      file,
-		keyType:   keyType,
-		indexID:   utils.HashString(file.Name()),
-		numPages:  numPages,
-		pageCache: make(map[int]*BTreePage),
+		file:     file,
+		keyType:  keyType,
+		indexID:  utils.HashString(file.Name()),
+		numPages: numPages,
 	}
 
 	return bf, nil
@@ -79,47 +76,25 @@ func (bf *BTreeFile) ReadPage(tid *primitives.TransactionID, pageID *BTreePageID
 		return nil, fmt.Errorf("page ID index mismatch")
 	}
 
-	bf.mutex.RLock()
-
-	// Check cache first
-	if cachedPage, ok := bf.pageCache[pageID.PageNo()]; ok {
-		bf.mutex.RUnlock()
-		return cachedPage, nil
-	}
-	bf.mutex.RUnlock()
-
 	bf.mutex.Lock()
 	defer bf.mutex.Unlock()
 
-	// Double-check cache after acquiring write lock
-	if cachedPage, ok := bf.pageCache[pageID.PageNo()]; ok {
-		return cachedPage, nil
-	}
-
-	// Read from disk
 	offset := int64(pageID.PageNo()) * int64(page.PageSize)
 	pageData := make([]byte, page.PageSize)
 
 	_, err := bf.file.ReadAt(pageData, offset)
 	if err != nil {
 		if err == io.EOF {
-			// Page doesn't exist yet, create new leaf page
 			newPage := NewBTreeLeafPage(pageID, bf.keyType, -1)
-			bf.pageCache[pageID.PageNo()] = newPage
 			return newPage, nil
 		}
 		return nil, fmt.Errorf("failed to read page data: %w", err)
 	}
 
-	// Deserialize page
 	btreePage, err := DeserializeBTreePage(pageData, pageID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to deserialize page: %w", err)
 	}
-
-	// Cache the page
-	bf.pageCache[pageID.PageNo()] = btreePage
-
 	return btreePage, nil
 }
 
@@ -145,7 +120,6 @@ func (bf *BTreeFile) WritePage(p *BTreePage) error {
 	}
 
 	// Update cache
-	bf.pageCache[pageID.PageNo()] = p
 
 	// Update num pages if necessary
 	if pageID.PageNo() >= bf.numPages {
@@ -198,41 +172,8 @@ func (bf *BTreeFile) Close() error {
 	if bf.file != nil {
 		err := bf.file.Close()
 		bf.file = nil
-		bf.pageCache = nil
 		return err
 	}
 
 	return nil
-}
-
-// FlushCache writes all dirty pages to disk and clears the cache
-func (bf *BTreeFile) FlushCache() error {
-	bf.mutex.Lock()
-	defer bf.mutex.Unlock()
-
-	for _, p := range bf.pageCache {
-		if p.isDirty {
-			offset := int64(p.pageID.PageNo()) * int64(page.PageSize)
-			pageData := p.GetPageData()
-
-			if _, err := bf.file.WriteAt(pageData, offset); err != nil {
-				return fmt.Errorf("failed to write page %v: %w", p.pageID, err)
-			}
-
-			p.isDirty = false
-		}
-	}
-
-	if err := bf.file.Sync(); err != nil {
-		return fmt.Errorf("failed to sync file: %w", err)
-	}
-
-	return nil
-}
-
-// ClearCache removes all pages from the cache
-func (bf *BTreeFile) ClearCache() {
-	bf.mutex.Lock()
-	defer bf.mutex.Unlock()
-	bf.pageCache = make(map[int]*BTreePage)
 }
