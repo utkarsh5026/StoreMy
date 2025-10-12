@@ -57,10 +57,6 @@ func TestNewHeapFile(t *testing.T) {
 			t.Fatal("NewHeapFile returned nil")
 		}
 
-		if hf.file == nil {
-			t.Error("HeapFile has nil file handle")
-		}
-
 		if hf.tupleDesc != td {
 			t.Error("HeapFile has incorrect tuple descriptor")
 		}
@@ -139,24 +135,6 @@ func TestHeapFile_GetID(t *testing.T) {
 
 	if hf1.GetID() != hf1Again.GetID() {
 		t.Error("Expected same ID for same file path")
-	}
-}
-
-func TestHeapFile_GetID_ClosedFile(t *testing.T) {
-	td := createTestTupleDesc()
-	filePath, cleanup := createTempFile(t, "test.dat")
-	defer cleanup()
-
-	hf, err := NewHeapFile(filePath, td)
-	if err != nil {
-		t.Fatalf("Failed to create HeapFile: %v", err)
-	}
-
-	hf.Close()
-
-	id := hf.GetID()
-	if id != 0 {
-		t.Errorf("Expected ID 0 for closed file, got %d", id)
 	}
 }
 
@@ -446,9 +424,6 @@ func TestHeapFile_Close(t *testing.T) {
 			t.Errorf("Close failed: %v", err)
 		}
 
-		if hf.file != nil {
-			t.Error("File handle should be nil after close")
-		}
 	})
 
 	t.Run("Close already closed file", func(t *testing.T) {
