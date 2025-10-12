@@ -3,6 +3,7 @@ package hash
 import (
 	"path/filepath"
 	"storemy/pkg/primitives"
+	"storemy/pkg/storage/index"
 	"storemy/pkg/tuple"
 	"storemy/pkg/types"
 	"testing"
@@ -275,14 +276,14 @@ func TestHashPage_Serialization(t *testing.T) {
 	page := NewHashPage(pageID, 0, types.IntType)
 
 	// Add some entries
-	entry1 := &HashEntry{
+	entry1 := &index.IndexEntry{
 		Key: types.NewIntField(100),
 		RID: &tuple.TupleRecordID{
 			PageID:   NewHashPageID(1, 0),
 			TupleNum: 0,
 		},
 	}
-	entry2 := &HashEntry{
+	entry2 := &index.IndexEntry{
 		Key: types.NewIntField(200),
 		RID: &tuple.TupleRecordID{
 			PageID:   NewHashPageID(1, 0),

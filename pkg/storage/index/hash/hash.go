@@ -92,7 +92,7 @@ func (hi *HashIndex) Insert(tid TID, key Field, rid RecID) error {
 		return fmt.Errorf("failed to get bucket page: %w", err)
 	}
 
-	entry := NewHashEntry(key, rid)
+	entry := index.NewIndexEntry(key, rid)
 
 	currentPage := bucketPage
 	for currentPage.IsFull() {
@@ -209,7 +209,7 @@ func (hi *HashIndex) Delete(tid TID, key Field, rid RecID) error {
 		return fmt.Errorf("failed to get bucket page: %w", err)
 	}
 
-	entry := NewHashEntry(key, rid)
+	entry := index.NewIndexEntry(key, rid)
 	err = hi.traverseOverflowChain(tid, bucketPage, func(hp *HashPage) error {
 		if err := hp.RemoveEntry(entry); err == nil {
 			hp.MarkDirty(true, tid)
