@@ -203,18 +203,8 @@ func (hi *HashIndex) RangeSearch(tid TID, startKey, endKey Field) ([]RecID, erro
 			continue
 		}
 
-		currentPage := bucketPage
-		visitedPages := make(map[int]bool)
-		maxPages := 1000
-
-		for currentPage != nil && len(visitedPages) < maxPages {
-			pageNum := currentPage.pageID.PageNo()
-			if visitedPages[pageNum] {
-				break
-			}
-			visitedPages[pageNum] = true
-
-			for _, entry := range currentPage.GetEntries() {
+		err = hi.traverseOverflowChain(tid, bucketPage, func(hp *HashPage) error {
+			for _, entry := range hp.GetEntries() {
 				geStart, _ := entry.Key.Compare(primitives.GreaterThanOrEqual, startKey)
 				leEnd, _ := entry.Key.Compare(primitives.LessThanOrEqual, endKey)
 
@@ -222,21 +212,11 @@ func (hi *HashIndex) RangeSearch(tid TID, startKey, endKey Field) ([]RecID, erro
 					results = append(results, entry.RID)
 				}
 			}
+			return nil
+		})
 
-			if currentPage.GetOverflowPage() == -1 {
-				break
-			}
-
-			overflowPageNum := currentPage.GetOverflowPage()
-			if overflowPageNum >= hi.file.NumPages() {
-				break
-			}
-
-			overflowPageID := NewHashPageID(hi.file.GetID(), overflowPageNum)
-			currentPage, err = hi.file.ReadPage(tid, overflowPageID)
-			if err != nil {
-				return nil, fmt.Errorf("failed to read overflow page: %w", err)
-			}
+		if err != nil {
+			return nil, fmt.Errorf("error during overflow chain traversal: %w", err)
 		}
 	}
 
