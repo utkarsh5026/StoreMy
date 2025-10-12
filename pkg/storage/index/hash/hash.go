@@ -1,6 +1,7 @@
 package hash
 
 import (
+	"errors"
 	"fmt"
 	"hash/fnv"
 	"storemy/pkg/primitives"
@@ -12,6 +13,10 @@ import (
 // Constants for overflow chain traversal safety
 const (
 	maxOverflowPages = 1000 // Prevent infinite loops in corrupted chains
+)
+
+var (
+	errSuccess = errors.New("success")
 )
 
 type TID = *primitives.TransactionID
@@ -90,6 +95,10 @@ func (hi *HashIndex) createAndLinkOverflowPage(tid TID, bucketNum int, parentPag
 func (hi *HashIndex) readOverflowPage(tid TID, parentPage *HashPage) (*HashPage, error) {
 	overflowPageNum := parentPage.GetOverflowPage()
 
+	if overflowPageNum == NoOverFlowPage {
+		return nil, fmt.Errorf("no overflow page for this hash page")
+	}
+
 	// Validate overflow page number
 	if overflowPageNum >= hi.file.NumPages() {
 		return nil, fmt.Errorf("invalid overflow page number %d (max: %d)",
@@ -120,48 +129,38 @@ func (hi *HashIndex) Delete(tid TID, key Field, rid RecID) error {
 		return err
 	}
 
-	bucketNum := hi.hashKey(key)
-	bucketPage, err := hi.file.GetBucketPage(tid, bucketNum)
+	bucketPage, err := hi.getBucketPage(tid, key)
 	if err != nil {
 		return fmt.Errorf("failed to get bucket page: %w", err)
 	}
 
-	currentPage := bucketPage
-	visitedPages := make(map[int]bool)
 	entry := NewHashEntry(key, rid)
-	for currentPage != nil && len(visitedPages) < maxOverflowPages {
-		pageNum := currentPage.pageID.PageNo()
-		if visitedPages[pageNum] {
-			break
-		}
-		visitedPages[pageNum] = true
+	err = hi.traverseOverflowChain(tid, bucketPage, func(hp *HashPage) error {
+		if err := hp.RemoveEntry(entry); err == nil {
+			hp.MarkDirty(true, tid)
 
-		err := currentPage.RemoveEntry(entry)
-		if err == nil {
-			currentPage.MarkDirty(true, tid)
-			return hi.file.WritePage(currentPage)
+			if writeErr := hi.file.WritePage(hp); writeErr != nil {
+				return writeErr
+			}
+			return errSuccess
 		}
+		return nil
+	})
 
-		currentPage, err = hi.readOverflowPage(tid, currentPage)
-		if err != nil {
-			return fmt.Errorf("failed to read overflow page: %w", err)
-		}
+	if errors.Is(err, errSuccess) {
+		return nil
 	}
 
-	return fmt.Errorf("entry not found")
+	return err
 }
 
 // Search finds all tuple locations for a given key
 func (hi *HashIndex) Search(tid TID, key Field) ([]RecID, error) {
-	if key.Type() != hi.keyType {
-		return nil, fmt.Errorf("key type mismatch: expected %v, got %v", hi.keyType, key.Type())
+	if err := hi.validateKeyType(key); err != nil {
+		return nil, err
 	}
 
-	// Hash the key to get bucket number
-	bucketNum := hi.hashKey(key)
-
-	// Get the bucket page
-	bucketPage, err := hi.file.GetBucketPage(tid, bucketNum)
+	bucketPage, err := hi.getBucketPage(tid, key)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get bucket page: %w", err)
 	}
@@ -329,5 +328,39 @@ func (hi *HashIndex) validateKeyType(key Field) error {
 	if key.Type() != hi.keyType {
 		return fmt.Errorf("key type mismatch: expected %v, got %v", hi.keyType, key.Type())
 	}
+	return nil
+}
+
+func (hi *HashIndex) getBucketPage(tid TID, key Field) (*HashPage, error) {
+	bucketNum := hi.hashKey(key)
+	bucketPage, err := hi.file.GetBucketPage(tid, bucketNum)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get bucket page: %w", err)
+	}
+	return bucketPage, nil
+}
+
+func (hi *HashIndex) traverseOverflowChain(tid TID, startPage *HashPage, f func(*HashPage) error) error {
+	var err error
+	currentPage := startPage
+	visited := make(map[int]bool)
+
+	for currentPage != nil && len(visited) < maxOverflowPages {
+		pageNum := currentPage.pageID.PageNo()
+		if visited[pageNum] {
+			break
+		}
+		visited[pageNum] = true
+
+		if err := f(currentPage); err != nil {
+			return fmt.Errorf("failed to apply function to overflow page %d: %w", pageNum, err)
+		}
+
+		currentPage, err = hi.readOverflowPage(tid, currentPage)
+		if err != nil {
+			return fmt.Errorf("failed to read overflow page: %w", err)
+		}
+	}
+
 	return nil
 }
