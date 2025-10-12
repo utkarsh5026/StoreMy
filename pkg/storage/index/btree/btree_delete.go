@@ -197,3 +197,94 @@ func (bt *BTree) redistributeFromRight(tid *primitives.TransactionID, current, r
 	bt.file.WritePage(right)
 	return bt.file.WritePage(parent)
 }
+
+// mergeWithLeft merges current page with left sibling
+func (bt *BTree) mergeWithLeft(tid *primitives.TransactionID, leftSibling, page, parentPage *BTreePage, pageIdx int) error {
+	if page.IsLeafPage() {
+		leftSibling.entries = append(leftSibling.entries, page.entries...)
+		leftSibling.numEntries += page.numEntries
+		leftSibling.nextLeaf = page.nextLeaf
+		leftSibling.MarkDirty(true, tid)
+
+		// Update next leaf's prev pointer
+		if page.nextLeaf != -1 {
+			nextPageID := NewBTreePageID(bt.indexID, page.nextLeaf)
+			nextPage, err := bt.file.ReadPage(tid, nextPageID)
+			if err == nil {
+				nextPage.prevLeaf = leftSibling.pageID.PageNo()
+				nextPage.MarkDirty(true, tid)
+				bt.file.WritePage(nextPage)
+			}
+		}
+
+		bt.file.WritePage(leftSibling)
+	} else {
+		separatorKey := parentPage.children[pageIdx].Key
+		if len(page.children) > 0 {
+			page.children[0].Key = separatorKey
+		}
+		leftSibling.children = append(leftSibling.children, page.children...)
+		leftSibling.numEntries += page.numEntries
+		leftSibling.MarkDirty(true, tid)
+		bt.file.WritePage(leftSibling)
+	}
+
+	// Remove pointer to merged page from parent
+	parentPage.children = append(parentPage.children[:pageIdx], parentPage.children[pageIdx+1:]...)
+	parentPage.numEntries--
+	parentPage.MarkDirty(true, tid)
+	bt.file.WritePage(parentPage)
+
+	// Check parent for underflow
+	minEntries := maxEntriesPerPage / 2
+	if parentPage.numEntries < minEntries && parentPage.parentPage != -1 {
+		return bt.handleUnderflow(tid, parentPage)
+	}
+
+	return nil
+}
+
+func (bt *BTree) mergeWithRight(tid *primitives.TransactionID, page, rightSibling, parentPage *BTreePage, pageIdx int) error {
+	if page.IsLeafPage() {
+		page.entries = append(page.entries, rightSibling.entries...)
+		page.numEntries += rightSibling.numEntries
+		page.nextLeaf = rightSibling.nextLeaf
+		page.MarkDirty(true, tid)
+
+		if rightSibling.nextLeaf != -1 {
+			nextPageID := NewBTreePageID(bt.indexID, rightSibling.nextLeaf)
+			nextPage, err := bt.file.ReadPage(tid, nextPageID)
+			if err == nil {
+				nextPage.prevLeaf = page.pageID.PageNo()
+				nextPage.MarkDirty(true, tid)
+				bt.file.WritePage(nextPage)
+			}
+		}
+
+		bt.file.WritePage(page)
+	} else {
+		// Internal page merge - include separator from parent
+		separatorKey := parentPage.children[pageIdx+1].Key
+		if len(rightSibling.children) > 0 {
+			rightSibling.children[0].Key = separatorKey
+		}
+		page.children = append(page.children, rightSibling.children...)
+		page.numEntries += rightSibling.numEntries
+		page.MarkDirty(true, tid)
+		bt.file.WritePage(page)
+	}
+
+	// Remove pointer to merged page from parent
+	parentPage.children = append(parentPage.children[:pageIdx+1], parentPage.children[pageIdx+2:]...)
+	parentPage.numEntries--
+	parentPage.MarkDirty(true, tid)
+	bt.file.WritePage(parentPage)
+
+	// Check parent for underflow
+	minEntries := maxEntriesPerPage / 2
+	if parentPage.numEntries < minEntries && parentPage.parentPage != -1 {
+		return bt.handleUnderflow(tid, parentPage)
+	}
+
+	return nil
+}
