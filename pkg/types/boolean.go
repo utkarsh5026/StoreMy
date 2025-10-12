@@ -3,6 +3,7 @@ package types
 import (
 	"encoding/binary"
 	"fmt"
+	"hash/fnv"
 	"io"
 	"storemy/pkg/primitives"
 )
@@ -112,10 +113,13 @@ func (b *BoolField) Equals(other Field) bool {
 //   - uint32: 1 if the value is true, 0 if false
 //   - error: Always returns nil for boolean fields
 func (b *BoolField) Hash() (uint32, error) {
+	h := fnv.New32a()
 	if b.Value {
-		return 1, nil
+		h.Write([]byte{1})
+	} else {
+		h.Write([]byte{0})
 	}
-	return 0, nil
+	return h.Sum32(), nil
 }
 
 // Length returns the serialized size of this boolean field in bytes.

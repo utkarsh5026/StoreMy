@@ -2,6 +2,7 @@ package types
 
 import (
 	"encoding/binary"
+	"hash/fnv"
 	"io"
 	"storemy/pkg/primitives"
 	"strconv"
@@ -76,8 +77,14 @@ func (f *IntField) Equals(other Field) bool {
 
 // Hash returns a hash code for this integer field
 func (f *IntField) Hash() (uint32, error) {
-	// Use upper 32 bits XOR lower 32 bits for hash
-	return uint32(f.Value>>32) ^ uint32(f.Value), nil
+	h := fnv.New32a()
+	value := f.Value
+	bytes := make([]byte, 8)
+	for i := range 8 {
+		bytes[i] = byte(value >> (8 * i))
+	}
+	h.Write(bytes)
+	return h.Sum32(), nil
 }
 
 // Length returns the length of the integer field in bytes (always 8 bytes for int64)

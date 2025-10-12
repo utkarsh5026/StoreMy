@@ -3,6 +3,7 @@ package types
 import (
 	"encoding/binary"
 	"fmt"
+	"hash/fnv"
 	"io"
 	"math"
 	"storemy/pkg/primitives"
@@ -79,8 +80,14 @@ func (f *Float64Field) Equals(other Field) bool {
 }
 
 func (f *Float64Field) Hash() (uint32, error) {
-	bits := math.Float64bits(f.Value)
-	return uint32(bits ^ (bits >> 32)), nil
+	h := fnv.New32a()
+	bytes := make([]byte, 8)
+	bits := uint64(f.Value)
+	for i := range 8 {
+		bytes[i] = byte(bits >> (8 * i))
+	}
+	h.Write(bytes)
+	return h.Sum32(), nil
 }
 
 func (f *Float64Field) Length() uint32 {

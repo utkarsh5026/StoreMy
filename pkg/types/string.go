@@ -2,6 +2,7 @@ package types
 
 import (
 	"encoding/binary"
+	"hash/fnv"
 	"io"
 	"storemy/pkg/primitives"
 	"strings"
@@ -142,11 +143,9 @@ func (s *StringField) Equals(other Field) bool {
 //   - uint32: The computed hash value for the string
 //   - error: Always returns nil for string fields
 func (s *StringField) Hash() (uint32, error) {
-	hash := 0
-	for _, c := range s.Value {
-		hash = 31*hash + int(c)
-	}
-	return uint32(hash), nil
+	h := fnv.New32a()
+	h.Write([]byte(s.Value))
+	return h.Sum32(), nil
 }
 
 // Length returns the total serialized size of this string field in bytes.
