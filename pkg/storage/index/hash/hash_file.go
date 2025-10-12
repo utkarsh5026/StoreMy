@@ -35,8 +35,7 @@ type HashFile struct {
 	keyType                       types.Type
 	indexID, numPages, numBuckets int
 	mutex                         sync.RWMutex
-	pageCache                     map[int]*HashPage // Maps page number to cached HashPage
-	bucketPageID                  map[int]int       // Maps bucket number to primary page number
+	bucketPageID                  map[int]int // Maps bucket number to primary page number
 }
 
 // NewHashFile creates or opens a hash index file at the specified path.
@@ -82,7 +81,6 @@ func NewHashFile(filename string, keyType types.Type, numBuckets int) (*HashFile
 		indexID:      utils.HashString(file.Name()),
 		numPages:     numPages,
 		numBuckets:   numBuckets,
-		pageCache:    make(map[int]*HashPage),
 		bucketPageID: make(map[int]int),
 	}
 
@@ -151,20 +149,8 @@ func (hf *HashFile) ReadPage(tid *primitives.TransactionID, pageID *HashPageID) 
 		return nil, fmt.Errorf("page ID index mismatch")
 	}
 
-	hf.mutex.RLock()
-
-	if cachedPage, ok := hf.pageCache[pageID.PageNo()]; ok {
-		hf.mutex.RUnlock()
-		return cachedPage, nil
-	}
-	hf.mutex.RUnlock()
-
 	hf.mutex.Lock()
 	defer hf.mutex.Unlock()
-
-	if cachedPage, ok := hf.pageCache[pageID.PageNo()]; ok {
-		return cachedPage, nil
-	}
 
 	offset := int64(pageID.PageNo()) * int64(page.PageSize)
 	pageData := make([]byte, page.PageSize)
@@ -174,7 +160,6 @@ func (hf *HashFile) ReadPage(tid *primitives.TransactionID, pageID *HashPageID) 
 		if err == io.EOF {
 			bucketNum := pageID.PageNo()
 			newPage := NewHashPage(pageID, bucketNum, hf.keyType)
-			hf.pageCache[pageID.PageNo()] = newPage
 			return newPage, nil
 		}
 		return nil, fmt.Errorf("failed to read page data: %w", err)
@@ -185,7 +170,6 @@ func (hf *HashFile) ReadPage(tid *primitives.TransactionID, pageID *HashPageID) 
 		return nil, fmt.Errorf("failed to deserialize page: %w", err)
 	}
 
-	hf.pageCache[pageID.PageNo()] = hashPage
 	return hashPage, nil
 }
 
@@ -222,7 +206,6 @@ func (hf *HashFile) WritePage(p *HashPage) error {
 		return fmt.Errorf("failed to sync file: %w", err)
 	}
 
-	hf.pageCache[pageID.PageNo()] = p
 	if pageID.PageNo() >= hf.numPages {
 		hf.numPages = pageID.PageNo() + 1
 	}
@@ -317,60 +300,8 @@ func (hf *HashFile) Close() error {
 	if hf.file != nil {
 		err := hf.file.Close()
 		hf.file = nil
-		hf.pageCache = nil
 		return err
 	}
 
 	return nil
-}
-
-// FlushCache writes all dirty pages to disk and clears their dirty flags.
-// This ensures all in-memory modifications are persisted.
-// Does not clear the cache - pages remain in memory for future access.
-//
-// Returns:
-//   - error: Error if any page write or fsync fails
-//
-// Use Case:
-//   - Called during transaction commit
-//   - Called during checkpoint operations
-//   - Called before shutdown to ensure durability
-func (hf *HashFile) FlushCache() error {
-	hf.mutex.Lock()
-	defer hf.mutex.Unlock()
-
-	for _, p := range hf.pageCache {
-		if p.isDirty {
-			offset := int64(p.pageID.PageNo()) * int64(page.PageSize)
-			pageData := p.GetPageData()
-
-			if _, err := hf.file.WriteAt(pageData, offset); err != nil {
-				return fmt.Errorf("failed to write page %v: %w", p.pageID, err)
-			}
-
-			p.isDirty = false
-		}
-	}
-
-	if err := hf.file.Sync(); err != nil {
-		return fmt.Errorf("failed to sync file: %w", err)
-	}
-
-	return nil
-}
-
-// ClearCache removes all pages from the in-memory cache.
-// This forces subsequent reads to fetch pages from disk.
-//
-// Warning: Any dirty pages not flushed will lose their modifications.
-// Always call FlushCache() before ClearCache() if durability is required.
-//
-// Use Case:
-//   - Memory pressure management
-//   - Testing scenarios
-//   - After FlushCache() to free memory
-func (hf *HashFile) ClearCache() {
-	hf.mutex.Lock()
-	defer hf.mutex.Unlock()
-	hf.pageCache = make(map[int]*HashPage)
 }
