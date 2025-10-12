@@ -167,40 +167,14 @@ func (hi *HashIndex) Search(tid TID, key Field) ([]RecID, error) {
 
 	var results []*tuple.TupleRecordID
 
-	// Search through bucket and overflow pages
-	currentPage := bucketPage
-	visitedPages := make(map[int]bool)
-	maxPages := 1000 // Safety limit to prevent infinite loops
-
-	for currentPage != nil && len(visitedPages) < maxPages {
-		pageNum := currentPage.pageID.PageNo()
-
-		// Detect infinite loop
-		if visitedPages[pageNum] {
-			break
-		}
-		visitedPages[pageNum] = true
-
-		// Find entries in current page
-		entries := currentPage.FindEntries(key)
+	err = hi.traverseOverflowChain(tid, bucketPage, func(hp *HashPage) error {
+		entries := hp.FindEntries(key)
 		results = append(results, entries...)
+		return nil
+	})
 
-		// Check overflow page
-		if currentPage.GetOverflowPage() == -1 {
-			break
-		}
-
-		overflowPageNum := currentPage.GetOverflowPage()
-		// Check if overflow page exists in file
-		if overflowPageNum >= hi.file.NumPages() {
-			break
-		}
-
-		overflowPageID := NewHashPageID(hi.file.GetID(), overflowPageNum)
-		currentPage, err = hi.file.ReadPage(tid, overflowPageID)
-		if err != nil {
-			return nil, fmt.Errorf("failed to read overflow page: %w", err)
-		}
+	if err != nil {
+		return nil, fmt.Errorf("error during overflow chain traversal: %w", err)
 	}
 
 	return results, nil
