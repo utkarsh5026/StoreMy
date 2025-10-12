@@ -53,6 +53,10 @@ type BTreeChildPtr struct {
 	ChildPID *BTreePageID // Child page ID
 }
 
+func newBtreeChildPtr(key types.Field, childPID *BTreePageID) *BTreeChildPtr {
+	return &BTreeChildPtr{Key: key, ChildPID: childPID}
+}
+
 // NewBTreeLeafPage creates a new leaf page
 func NewBTreeLeafPage(pageID *BTreePageID, keyType types.Type, parentPage int) *BTreePage {
 	return &BTreePage{
