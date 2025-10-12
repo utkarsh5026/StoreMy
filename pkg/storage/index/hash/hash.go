@@ -310,6 +310,10 @@ func (hi *HashIndex) traverseOverflowChain(tid TID, startPage *HashPage, f func(
 			return fmt.Errorf("failed to apply function to overflow page %d: %w", pageNum, err)
 		}
 
+		if currentPage.GetOverflowPage() == NoOverFlowPage {
+			break
+		}
+
 		currentPage, err = hi.readOverflowPage(tid, currentPage)
 		if err != nil {
 			return fmt.Errorf("failed to read overflow page: %w", err)
