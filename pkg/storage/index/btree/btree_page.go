@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"storemy/pkg/primitives"
+	"storemy/pkg/storage/index"
 	"storemy/pkg/storage/page"
 	"storemy/pkg/tuple"
 	"storemy/pkg/types"
@@ -15,6 +16,7 @@ const (
 	// Page type constants
 	pageTypeInternal byte = 0x01
 	pageTypeLeaf     byte = 0x02
+	noLeaf                = -1
 
 	// Page header size (in bytes)
 	// 1 byte: page type
@@ -33,24 +35,16 @@ const (
 // BTreePage represents a page in a B+Tree index
 // It can be either an internal node or a leaf node
 type BTreePage struct {
-	pageID      *BTreePageID
-	pageType    byte
-	parentPage  int // -1 if root
-	numEntries  int
-	nextLeaf    int // For leaf pages only, -1 otherwise
-	prevLeaf    int // For leaf pages only, -1 otherwise
+	pageID                                     *BTreePageID
+	pageType                                   byte
+	parentPage, numEntries, nextLeaf, prevLeaf int // -1 if root
+
 	keyType     types.Type
-	entries     []*BTreeEntry    // For leaf pages
-	children    []*BTreeChildPtr // For internal pages
+	entries     []*index.IndexEntry // For leaf pages
+	children    []*BTreeChildPtr    // For internal pages
 	isDirty     bool
 	dirtyTxn    *primitives.TransactionID
 	beforeImage []byte
-}
-
-// BTreeEntry represents a key-value pair in a leaf node
-type BTreeEntry struct {
-	Key types.Field
-	RID *tuple.TupleRecordID
 }
 
 // BTreeChildPtr represents a child pointer in an internal node
@@ -66,12 +60,12 @@ func NewBTreeLeafPage(pageID *BTreePageID, keyType types.Type, parentPage int) *
 		pageType:   pageTypeLeaf,
 		parentPage: parentPage,
 		numEntries: 0,
-		nextLeaf:   -1,
-		prevLeaf:   -1,
+		nextLeaf:   noLeaf,
+		prevLeaf:   noLeaf,
 		keyType:    keyType,
-		entries:    make([]*BTreeEntry, 0, maxEntriesPerPage),
+		entries:    make([]*index.IndexEntry, 0, maxEntriesPerPage),
 		children:   nil,
-		isDirty:    true,
+		isDirty:    false,
 	}
 }
 
@@ -82,12 +76,12 @@ func NewBTreeInternalPage(pageID *BTreePageID, keyType types.Type, parentPage in
 		pageType:   pageTypeInternal,
 		parentPage: parentPage,
 		numEntries: 0,
-		nextLeaf:   -1,
-		prevLeaf:   -1,
+		nextLeaf:   noLeaf,
+		prevLeaf:   noLeaf,
 		keyType:    keyType,
 		entries:    nil,
 		children:   make([]*BTreeChildPtr, 0, maxEntriesPerPage+1),
-		isDirty:    true,
+		isDirty:    false,
 	}
 }
 
@@ -117,7 +111,6 @@ func (p *BTreePage) MarkDirty(dirty bool, tid *primitives.TransactionID) {
 func (p *BTreePage) GetPageData() []byte {
 	buf := new(bytes.Buffer)
 
-	// Write header
 	buf.WriteByte(p.pageType)
 	binary.Write(buf, binary.BigEndian, int32(p.parentPage))
 	binary.Write(buf, binary.BigEndian, int32(p.numEntries))
@@ -125,10 +118,8 @@ func (p *BTreePage) GetPageData() []byte {
 	binary.Write(buf, binary.BigEndian, int32(p.prevLeaf))
 
 	if p.IsLeafPage() {
-		// Write leaf entries
 		for _, entry := range p.entries {
 			if err := p.serializeEntry(buf, entry); err != nil {
-				// In production, handle error properly
 				panic(fmt.Sprintf("failed to serialize entry: %v", err))
 			}
 		}
@@ -146,7 +137,6 @@ func (p *BTreePage) GetPageData() []byte {
 		}
 	}
 
-	// Pad to page size
 	data := buf.Bytes()
 	if len(data) < page.PageSize {
 		padding := make([]byte, page.PageSize-len(data))
@@ -162,7 +152,6 @@ func (p *BTreePage) GetBeforeImage() page.Page {
 		return nil
 	}
 
-	// Deserialize the before image into a new page
 	beforePage, err := DeserializeBTreePage(p.beforeImage, p.pageID)
 	if err != nil {
 		return nil
@@ -196,17 +185,15 @@ func (p *BTreePage) GetNumEntries() int {
 }
 
 // serializeEntry writes an entry to the buffer
-func (p *BTreePage) serializeEntry(w io.Writer, entry *BTreeEntry) error {
+func (p *BTreePage) serializeEntry(w io.Writer, entry *index.IndexEntry) error {
 	if err := p.serializeField(w, entry.Key); err != nil {
 		return err
 	}
 
-	// Serialize RecordID (tableID + pageNum + tupleNum)
 	rid := entry.RID
 	binary.Write(w, binary.BigEndian, int32(rid.PageID.GetTableID()))
 	binary.Write(w, binary.BigEndian, int32(rid.PageID.PageNo()))
 	binary.Write(w, binary.BigEndian, int32(rid.TupleNum))
-
 	return nil
 }
 
@@ -227,7 +214,6 @@ func DeserializeBTreePage(data []byte, pageID *BTreePageID) (*BTreePage, error) 
 
 	buf := bytes.NewReader(data)
 
-	// Read header
 	pageType, _ := buf.ReadByte()
 
 	var parentPage, numEntries, nextLeaf, prevLeaf int32
@@ -248,7 +234,7 @@ func DeserializeBTreePage(data []byte, pageID *BTreePageID) (*BTreePage, error) 
 
 	// Deserialize entries/children based on page type
 	if pageType == pageTypeLeaf {
-		page.entries = make([]*BTreeEntry, 0, numEntries)
+		page.entries = make([]*index.IndexEntry, 0, numEntries)
 		for i := 0; i < int(numEntries); i++ {
 			entry, err := deserializeEntry(buf)
 			if err != nil {
@@ -292,7 +278,7 @@ func DeserializeBTreePage(data []byte, pageID *BTreePageID) (*BTreePage, error) 
 }
 
 // deserializeEntry reads an entry from the buffer
-func deserializeEntry(r *bytes.Reader) (*BTreeEntry, error) {
+func deserializeEntry(r *bytes.Reader) (*index.IndexEntry, error) {
 	key, err := deserializeField(r)
 	if err != nil {
 		return nil, err
@@ -303,9 +289,6 @@ func deserializeEntry(r *bytes.Reader) (*BTreeEntry, error) {
 	binary.Read(r, binary.BigEndian, &pageNum)
 	binary.Read(r, binary.BigEndian, &tupleNum)
 
-	// Create appropriate PageID implementation
-	// Note: We need to determine the actual PageID type based on context
-	// For now, we'll create a BTreePageID as a placeholder
 	pageID := NewBTreePageID(int(tableID), int(pageNum))
 
 	rid := &tuple.TupleRecordID{
@@ -313,54 +296,19 @@ func deserializeEntry(r *bytes.Reader) (*BTreeEntry, error) {
 		TupleNum: int(tupleNum),
 	}
 
-	return &BTreeEntry{
+	return &index.IndexEntry{
 		Key: key,
 		RID: rid,
 	}, nil
 }
 
 // deserializeField reads a field from the buffer
+// This reads the field type byte first, then delegates to types.ParseField for consistency
 func deserializeField(r *bytes.Reader) (types.Field, error) {
 	fieldTypeByte, err := r.ReadByte()
 	if err != nil {
 		return nil, err
 	}
 	fieldType := types.Type(fieldTypeByte)
-
-	switch fieldType {
-	case types.IntType:
-		var value uint64
-		if err := binary.Read(r, binary.BigEndian, &value); err != nil {
-			return nil, err
-		}
-		return types.NewIntField(int64(value)), nil
-
-	case types.StringType:
-		var length uint32
-		if err := binary.Read(r, binary.BigEndian, &length); err != nil {
-			return nil, err
-		}
-		strBytes := make([]byte, length)
-		if _, err := r.Read(strBytes); err != nil {
-			return nil, err
-		}
-		return types.NewStringField(string(strBytes), types.StringMaxSize), nil
-
-	case types.BoolType:
-		var value byte
-		if value, err = r.ReadByte(); err != nil {
-			return nil, err
-		}
-		return types.NewBoolField(value != 0), nil
-
-	case types.FloatType:
-		var value uint64
-		if err := binary.Read(r, binary.BigEndian, &value); err != nil {
-			return nil, err
-		}
-		return types.NewFloat64Field(float64(value)), nil
-
-	default:
-		return nil, fmt.Errorf("unknown field type: %d", fieldType)
-	}
+	return types.ParseField(r, fieldType)
 }
