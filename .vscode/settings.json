@@ -1,12 +1,15 @@
 {
     "cSpell.words": [
+        "bpid",
         "bubbletea",
         "catalogdb",
+        "catalogreader",
         "charmbracelet",
         "checkpointing",
         "CKPT",
         "closedb",
         "concurrentdb",
+        "functools",
         "golangci",
         "GOPATH",
         "heapage",
@@ -18,6 +21,7 @@
         "mitranim",
         "MVCC",
         "mydb",
+        "pageid",
         "permdb",
         "pgdn",
         "pgdown",
@@ -30,6 +34,7 @@
         "testcache",
         "testdb",
         "tids",
+        "tndata",
         "Txns",
         "unflushed"
     ]
