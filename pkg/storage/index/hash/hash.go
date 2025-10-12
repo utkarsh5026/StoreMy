@@ -32,8 +32,8 @@ func NewHashIndex(indexID int, keyType types.Type, file *HashFile) *HashIndex {
 
 // Insert adds a key-value pair to the hash index
 func (hi *HashIndex) Insert(tid TID, key Field, rid RecID) error {
-	if key.Type() != hi.keyType {
-		return fmt.Errorf("key type mismatch: expected %v, got %v", hi.keyType, key.Type())
+	if err := hi.validateKeyType(key); err != nil {
+		return err
 	}
 
 	bucketNum := hi.hashKey(key)
@@ -47,24 +47,15 @@ func (hi *HashIndex) Insert(tid TID, key Field, rid RecID) error {
 	currentPage := bucketPage
 	for currentPage.IsFull() {
 		if currentPage.GetOverflowPage() == -1 {
-			overflowPage, err := hi.file.AllocatePage(tid, bucketNum)
+			currentPage, err = hi.createAndLinkOverflowPage(tid, bucketNum, currentPage)
 			if err != nil {
-				return fmt.Errorf("failed to allocate overflow page: %w", err)
+				return fmt.Errorf("failed to create and link overflow page: %w", err)
 			}
-			currentPage.SetOverflowPage(overflowPage.pageID.PageNo())
-			currentPage.MarkDirty(true, tid)
-			if err := hi.file.WritePage(currentPage); err != nil {
-				return fmt.Errorf("failed to write page with overflow pointer: %w", err)
-			}
-			currentPage = overflowPage
 			break
-		} else {
-			overflowPageID := NewHashPageID(hi.file.GetID(), currentPage.GetOverflowPage())
-			overflowPage, err := hi.file.ReadPage(tid, overflowPageID)
-			if err != nil {
-				return fmt.Errorf("failed to read overflow page: %w", err)
-			}
-			currentPage = overflowPage
+		}
+		currentPage, err = hi.readOverflowPage(tid, currentPage)
+		if err != nil {
+			return fmt.Errorf("failed to read overflow page: %w", err)
 		}
 	}
 
@@ -72,8 +63,50 @@ func (hi *HashIndex) Insert(tid TID, key Field, rid RecID) error {
 		return fmt.Errorf("failed to add entry: %w", err)
 	}
 
-	currentPage.MarkDirty(true, tid)
-	return hi.file.WritePage(currentPage)
+	return hi.markAndWritePage(currentPage, tid)
+}
+
+func (hi *HashIndex) createAndLinkOverflowPage(tid TID, bucketNum int, parentPage *HashPage) (*HashPage, error) {
+	overflowPage, err := hi.file.AllocatePage(tid, bucketNum)
+	if err != nil {
+		return nil, fmt.Errorf("failed to allocate overflow page: %w", err)
+	}
+
+	// Link parent to new overflow
+	parentPage.SetOverflowPage(overflowPage.pageID.PageNo())
+	if err := hi.markAndWritePage(parentPage, tid); err != nil {
+		return nil, fmt.Errorf("failed to write parent page with overflow link: %w", err)
+	}
+
+	return overflowPage, nil
+}
+
+// readOverflowPage safely reads an overflow page with validation.
+func (hi *HashIndex) readOverflowPage(tid TID, parentPage *HashPage) (*HashPage, error) {
+	overflowPageNum := parentPage.GetOverflowPage()
+
+	// Validate overflow page number
+	if overflowPageNum >= hi.file.NumPages() {
+		return nil, fmt.Errorf("invalid overflow page number %d (max: %d)",
+			overflowPageNum, hi.file.NumPages())
+	}
+
+	overflowPageID := NewHashPageID(hi.file.GetID(), overflowPageNum)
+	page, err := hi.file.ReadPage(tid, overflowPageID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read overflow page %d: %w", overflowPageNum, err)
+	}
+
+	return page, nil
+}
+
+// markAndWritePage marks a page as dirty and writes it to disk.
+func (hi *HashIndex) markAndWritePage(page *HashPage, tid TID) error {
+	page.MarkDirty(true, tid)
+	if err := hi.file.WritePage(page); err != nil {
+		return fmt.Errorf("failed to write page: %w", err)
+	}
+	return nil
 }
 
 // Delete removes a key-value pair from the hash index
@@ -297,4 +330,11 @@ func (hi *HashIndex) hashKey(key types.Field) int {
 	}
 
 	return int(h.Sum32()) % hi.numBuckets
+}
+
+func (hi *HashIndex) validateKeyType(key Field) error {
+	if key.Type() != hi.keyType {
+		return fmt.Errorf("key type mismatch: expected %v, got %v", hi.keyType, key.Type())
+	}
+	return nil
 }
