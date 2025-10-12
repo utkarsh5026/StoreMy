@@ -42,26 +42,6 @@ func (bf *BaseFile) GetFile() *os.File {
 	return bf.file
 }
 
-// Lock acquires a write lock on the file
-func (bf *BaseFile) Lock() {
-	bf.mutex.Lock()
-}
-
-// Unlock releases the write lock
-func (bf *BaseFile) Unlock() {
-	bf.mutex.Unlock()
-}
-
-// RLock acquires a read lock on the file
-func (bf *BaseFile) RLock() {
-	bf.mutex.RLock()
-}
-
-// RUnlock releases the read lock
-func (bf *BaseFile) RUnlock() {
-	bf.mutex.RUnlock()
-}
-
 // NumPages returns the total number of pages in this file
 func (bf *BaseFile) NumPages() (int, error) {
 	bf.mutex.RLock()
