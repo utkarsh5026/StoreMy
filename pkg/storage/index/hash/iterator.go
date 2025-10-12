@@ -102,7 +102,7 @@ func (it *HashFileIterator) advanceToNextEntry() (bool, error) {
 			// Mark as visited before reading
 			visitedPages[overflowPageNum] = true
 
-			pageID := NewHashPageID(it.file.indexID, overflowPageNum)
+			pageID := NewHashPageID(it.file.GetID(), overflowPageNum)
 			nextPage, err := it.file.ReadPage(it.tid, pageID)
 			if err != nil {
 				return false, fmt.Errorf("failed to read overflow page: %w", err)
