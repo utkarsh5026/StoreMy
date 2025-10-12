@@ -3,12 +3,10 @@ package hash
 import (
 	"fmt"
 	"io"
-	"os"
 	"storemy/pkg/iterator"
 	"storemy/pkg/primitives"
 	"storemy/pkg/storage/page"
 	"storemy/pkg/types"
-	"storemy/pkg/utils"
 	"sync"
 )
 
@@ -25,17 +23,12 @@ const (
 //   - Each bucket maps to a primary page number (initially bucket i → page i)
 //   - Overflow pages are allocated sequentially as buckets fill up
 //   - Pages are cached in memory for performance
-//
-// Thread Safety:
-// HashFile uses a RWMutex to protect concurrent access to its internal state.
-// Read operations (NumPages, GetNumBuckets) acquire read locks, while modifications
-// (WritePage, AllocatePage) acquire write locks.
 type HashFile struct {
-	file                          *os.File
-	keyType                       types.Type
-	indexID, numPages, numBuckets int
-	mutex                         sync.RWMutex
-	bucketPageID                  map[int]int // Maps bucket number to primary page number
+	*page.BaseFile
+	keyType              types.Type
+	numPages, numBuckets int
+	mutex                sync.RWMutex
+	bucketPageID         map[int]int // Maps bucket number to primary page number
 }
 
 // NewHashFile creates or opens a hash index file at the specified path.
@@ -50,10 +43,6 @@ type HashFile struct {
 // Returns:
 //   - *HashFile: The opened or created hash file
 //   - error: Error if file operations fail or invalid parameters provided
-//
-// Example:
-//
-//	hf, err := NewHashFile("students.idx", types.IntType, 256)
 func NewHashFile(filename string, keyType types.Type, numBuckets int) (*HashFile, error) {
 	if filename == "" {
 		return nil, fmt.Errorf("filename cannot be empty")
@@ -63,22 +52,20 @@ func NewHashFile(filename string, keyType types.Type, numBuckets int) (*HashFile
 		numBuckets = DefaultBuckets
 	}
 
-	file, err := utils.OpenFile(filename)
+	baseFile, err := page.NewBaseFile(filename)
 	if err != nil {
-		return nil, fmt.Errorf("failed to open file: %w", err)
+		return nil, fmt.Errorf("failed to create base file: %w", err)
 	}
 
-	fileInfo, err := file.Stat()
+	numPages, err := baseFile.NumPages()
 	if err != nil {
-		return nil, fmt.Errorf("failed to stat file: %w", err)
+		baseFile.Close()
+		return nil, fmt.Errorf("failed to get page count: %w", err)
 	}
-
-	numPages := int(fileInfo.Size() / int64(page.PageSize))
 
 	hf := &HashFile{
-		file:         file,
+		BaseFile:     baseFile,
 		keyType:      keyType,
-		indexID:      utils.HashString(file.Name()),
 		numPages:     numPages,
 		numBuckets:   numBuckets,
 		bucketPageID: make(map[int]int),
@@ -91,13 +78,6 @@ func NewHashFile(filename string, keyType types.Type, numBuckets int) (*HashFile
 	}
 
 	return hf, nil
-}
-
-// GetID returns the unique identifier for this index file.
-// The ID is computed by hashing the file name and is used to identify
-// pages belonging to this index.
-func (hf *HashFile) GetID() int {
-	return hf.indexID
 }
 
 // GetKeyType returns the type of keys stored in this index.
@@ -125,7 +105,6 @@ func (hf *HashFile) GetNumBuckets() int {
 }
 
 // ReadPage reads a hash page from disk or returns it from cache.
-// Uses double-checked locking pattern for efficient cache access.
 //
 // Parameters:
 //   - tid: Transaction ID for concurrency control
@@ -134,28 +113,16 @@ func (hf *HashFile) GetNumBuckets() int {
 // Returns:
 //   - *HashPage: The requested page (from cache or disk)
 //   - error: Error if page ID is invalid or I/O fails
-//
-// Behavior:
-//   - First checks cache with read lock for fast path
-//   - Acquires write lock if page not in cache
-//   - Creates new empty page if file read returns EOF
-//   - Deserializes page data and adds to cache
 func (hf *HashFile) ReadPage(tid *primitives.TransactionID, pageID *HashPageID) (*HashPage, error) {
 	if pageID == nil {
 		return nil, fmt.Errorf("page ID cannot be nil")
 	}
 
-	if pageID.GetTableID() != hf.indexID {
+	if pageID.GetTableID() != hf.GetID() {
 		return nil, fmt.Errorf("page ID index mismatch")
 	}
 
-	hf.mutex.Lock()
-	defer hf.mutex.Unlock()
-
-	offset := int64(pageID.PageNo()) * int64(page.PageSize)
-	pageData := make([]byte, page.PageSize)
-
-	_, err := hf.file.ReadAt(pageData, offset)
+	pageData, err := hf.ReadPageData(pageID.PageNo())
 	if err != nil {
 		if err == io.EOF {
 			bucketNum := pageID.PageNo()
@@ -181,34 +148,23 @@ func (hf *HashFile) ReadPage(tid *primitives.TransactionID, pageID *HashPageID) 
 //
 // Returns:
 //   - error: Error if page is nil, write fails, or sync fails
-//
-// Side Effects:
-//   - Updates page cache with the written page
-//   - Extends numPages if this is a new page beyond current file size
-//   - Calls fsync to ensure durability
 func (hf *HashFile) WritePage(p *HashPage) error {
 	if p == nil {
 		return fmt.Errorf("page cannot be nil")
 	}
 
-	hf.mutex.Lock()
-	defer hf.mutex.Unlock()
-
 	pageID := p.pageID
-	offset := int64(pageID.PageNo()) * int64(page.PageSize)
 	pageData := p.GetPageData()
 
-	if _, err := hf.file.WriteAt(pageData, offset); err != nil {
-		return fmt.Errorf("failed to write page data: %w", err)
+	if err := hf.WritePageData(pageID.PageNo(), pageData); err != nil {
+		return fmt.Errorf("failed to write page: %w", err)
 	}
 
-	if err := hf.file.Sync(); err != nil {
-		return fmt.Errorf("failed to sync file: %w", err)
-	}
-
+	hf.mutex.Lock()
 	if pageID.PageNo() >= hf.numPages {
 		hf.numPages = pageID.PageNo() + 1
 	}
+	hf.mutex.Unlock()
 
 	return nil
 }
@@ -223,18 +179,13 @@ func (hf *HashFile) WritePage(p *HashPage) error {
 // Returns:
 //   - *HashPage: The newly allocated page
 //   - error: Error if write operation fails
-//
-// Side Effects:
-//   - Increments numPages counter
-//   - Writes the new page to disk immediately
-//   - Marks page as dirty with the given transaction ID
 func (hf *HashFile) AllocatePage(tid *primitives.TransactionID, bucketNum int) (*HashPage, error) {
 	hf.mutex.Lock()
 	pageNum := hf.numPages
 	hf.numPages++
 	hf.mutex.Unlock()
 
-	pageID := NewHashPageID(hf.indexID, pageNum)
+	pageID := NewHashPageID(hf.GetID(), pageNum)
 	newPage := NewHashPage(pageID, bucketNum, hf.keyType)
 	newPage.MarkDirty(true, tid)
 
@@ -261,7 +212,7 @@ func (hf *HashFile) GetBucketPage(tid *primitives.TransactionID, bucketNum int) 
 	}
 
 	pageNum := hf.bucketPageID[bucketNum]
-	pageID := NewHashPageID(hf.indexID, pageNum)
+	pageID := NewHashPageID(hf.GetID(), pageNum)
 	return hf.ReadPage(tid, pageID)
 }
 
@@ -281,27 +232,4 @@ func (hf *HashFile) Iterator(tid *primitives.TransactionID) iterator.DbFileItera
 		currentPage:   nil,
 		currentPos:    0,
 	}
-}
-
-// Close closes the underlying file and releases resources.
-// After closing, the HashFile should not be used.
-//
-// Returns:
-//   - error: Error if file close fails
-//
-// Side Effects:
-//   - Closes the file handle
-//   - Clears the page cache
-//   - Sets file pointer to nil
-func (hf *HashFile) Close() error {
-	hf.mutex.Lock()
-	defer hf.mutex.Unlock()
-
-	if hf.file != nil {
-		err := hf.file.Close()
-		hf.file = nil
-		return err
-	}
-
-	return nil
 }
