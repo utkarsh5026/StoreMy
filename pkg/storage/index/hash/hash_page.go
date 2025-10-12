@@ -7,6 +7,7 @@ import (
 	"io"
 	"slices"
 	"storemy/pkg/primitives"
+	"storemy/pkg/storage/index"
 	"storemy/pkg/storage/page"
 	"storemy/pkg/tuple"
 	"storemy/pkg/types"
@@ -36,7 +37,7 @@ const (
 //
 // Layout:
 //   - Header (12 bytes): bucket number, entry count, overflow pointer
-//   - Entries: Variable-length serialized HashEntry records
+//   - Entries: Variable-length serialized index.IndexEntry records
 //   - Padding: Zeroes to fill page to PageSize
 //
 // Concurrency:
@@ -49,48 +50,10 @@ type HashPage struct {
 	numEntries   int                       // Current number of entries stored
 	overflowPage int                       // Page number of overflow page (-1 if none)
 	keyType      types.Type                // Type of keys stored (IntType, StringType, etc.)
-	entries      []*HashEntry              // Actual hash entries in this page
+	entries      []*index.IndexEntry       // Actual hash entries in this page
 	isDirty      bool                      // True if page modified since load
 	dirtyTxn     *primitives.TransactionID // Transaction that dirtied this page
 	beforeImage  []byte                    // Serialized page state before modifications
-}
-
-// HashEntry represents a single key-value pair in a hash bucket.
-// Maps an index key to a tuple location in the heap file.
-//
-// Structure:
-//   - Key: The indexed field value (can be Int, String, Bool, or Float)
-//   - RID: Record ID pointing to the tuple in the heap file
-type HashEntry struct {
-	Key Field
-	RID RecID
-}
-
-// NewHashEntry creates a new hash entry with the given key and tuple location.
-//
-// Parameters:
-//   - key: Field value to index
-//   - rid: Tuple record ID pointing to the actual data
-//
-// Returns a new HashEntry ready to be inserted into a hash page.
-func NewHashEntry(key Field, rid RecID) *HashEntry {
-	return &HashEntry{
-		Key: key,
-		RID: rid,
-	}
-}
-
-// Equals checks if this hash entry is identical to another.
-// Compares both the key value and the tuple location.
-//
-// Parameters:
-//   - other: HashEntry to compare against
-//
-// Returns true if both key and RID match exactly.
-func (he *HashEntry) Equals(other *HashEntry) bool {
-	return he.Key.Equals(other.Key) &&
-		he.RID.PageID.Equals(other.RID.PageID) &&
-		he.RID.TupleNum == other.RID.TupleNum
 }
 
 // NewHashPage creates a new hash bucket page with no entries.
@@ -109,7 +72,7 @@ func NewHashPage(pageID *HashPageID, bucketNum int, keyType types.Type) *HashPag
 		numEntries:   0,
 		overflowPage: NoOverFlowPage,
 		keyType:      keyType,
-		entries:      make([]*HashEntry, 0, maxHashEntriesPerPage),
+		entries:      make([]*index.IndexEntry, 0, maxHashEntriesPerPage),
 		isDirty:      true,
 	}
 }
@@ -246,14 +209,14 @@ func (hp *HashPage) SetOverflowPage(pageNum int) {
 
 // GetEntries returns a copy of all hash entries in this page.
 // Returns a cloned slice to prevent external modification.
-func (hp *HashPage) GetEntries() []*HashEntry {
+func (hp *HashPage) GetEntries() []*index.IndexEntry {
 	return slices.Clone(hp.entries)
 }
 
 // AddEntry inserts a new hash entry into this page.
 //
 // Parameters:
-//   - entry: HashEntry to add (key-value pair)
+//   - entry: index.IndexEntry to add (key-value pair)
 //
 // Returns error if:
 //   - Page is full (numEntries >= maxHashEntriesPerPage)
@@ -262,7 +225,7 @@ func (hp *HashPage) GetEntries() []*HashEntry {
 //   - Appends entry to entries slice
 //   - Increments numEntries counter
 //   - Does not check for duplicates
-func (hp *HashPage) AddEntry(entry *HashEntry) error {
+func (hp *HashPage) AddEntry(entry *index.IndexEntry) error {
 	if hp.IsFull() {
 		return fmt.Errorf("page is full")
 	}
@@ -275,7 +238,7 @@ func (hp *HashPage) AddEntry(entry *HashEntry) error {
 // Searches for exact match on both key and RID.
 //
 // Parameters:
-//   - e: HashEntry to remove (must match exactly)
+//   - e: index.IndexEntry to remove (must match exactly)
 //
 // Returns error if:
 //   - Entry not found in this page
@@ -284,8 +247,8 @@ func (hp *HashPage) AddEntry(entry *HashEntry) error {
 //   - Finds first matching entry
 //   - Removes from slice
 //   - Decrements numEntries counter
-func (hp *HashPage) RemoveEntry(e *HashEntry) error {
-	deleteIdx := slices.IndexFunc(hp.entries, func(entry *HashEntry) bool {
+func (hp *HashPage) RemoveEntry(e *index.IndexEntry) error {
+	deleteIdx := slices.IndexFunc(hp.entries, func(entry *index.IndexEntry) bool {
 		return entry.Equals(e)
 	})
 
@@ -310,11 +273,11 @@ func (hp *HashPage) RemoveEntry(e *HashEntry) error {
 //
 // Note: Hash indexes can contain duplicate keys with different RIDs.
 func (hp *HashPage) FindEntries(key types.Field) []*tuple.TupleRecordID {
-	matchEntries := functools.Filter(hp.entries, func(e *HashEntry) bool {
+	matchEntries := functools.Filter(hp.entries, func(e *index.IndexEntry) bool {
 		return e.Key.Equals(key)
 	})
 
-	return functools.Map(matchEntries, func(e *HashEntry) *tuple.TupleRecordID {
+	return functools.Map(matchEntries, func(e *index.IndexEntry) *tuple.TupleRecordID {
 		return e.RID
 	})
 }
@@ -330,10 +293,10 @@ func (hp *HashPage) FindEntries(key types.Field) []*tuple.TupleRecordID {
 //
 // Parameters:
 //   - w: Writer to serialize to
-//   - entry: HashEntry to serialize
+//   - entry: index.IndexEntry to serialize
 //
 // Returns error if serialization fails.
-func (hp *HashPage) serializeEntry(w io.Writer, entry *HashEntry) error {
+func (hp *HashPage) serializeEntry(w io.Writer, entry *index.IndexEntry) error {
 	if err := hp.serializeField(w, entry.Key); err != nil {
 		return err
 	}
@@ -397,7 +360,7 @@ func DeserializeHashPage(data []byte, pageID *HashPageID) (*HashPage, error) {
 		bucketNum:    int(bucketNum),
 		numEntries:   int(numEntries),
 		overflowPage: int(overflowPage),
-		entries:      make([]*HashEntry, 0, numEntries),
+		entries:      make([]*index.IndexEntry, 0, numEntries),
 		isDirty:      false,
 	}
 
@@ -428,9 +391,9 @@ func DeserializeHashPage(data []byte, pageID *HashPageID) (*HashPage, error) {
 //   - r: Reader to deserialize from
 //
 // Returns:
-//   - Reconstructed HashEntry
+//   - Reconstructed index.IndexEntry
 //   - Error if read fails or format is invalid
-func deserializeHashEntry(r *bytes.Reader) (*HashEntry, error) {
+func deserializeHashEntry(r *bytes.Reader) (*index.IndexEntry, error) {
 	key, err := deserializeField(r)
 	if err != nil {
 		return nil, err
@@ -444,7 +407,7 @@ func deserializeHashEntry(r *bytes.Reader) (*HashEntry, error) {
 	pageID := NewHashPageID(int(tableID), int(pageNum))
 	rid := tuple.NewTupleRecordID(pageID, int(tupleNum))
 
-	return NewHashEntry(key, rid), nil
+	return index.NewIndexEntry(key, rid), nil
 }
 
 // deserializeField reads a field value from the byte stream.
