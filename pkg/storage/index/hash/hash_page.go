@@ -14,6 +14,10 @@ import (
 )
 
 const (
+	NoOverFlowPage = -1
+)
+
+const (
 	// Page header size (in bytes)
 	// 4 bytes: bucket number
 	// 4 bytes: number of entries
