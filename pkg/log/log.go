@@ -43,9 +43,7 @@ type LogRecord struct {
 
 // TransactionLogInfo tracks logging information for a transaction
 type TransactionLogInfo struct {
-	FirstLSN    primitives.LSN
-	LastLSN     primitives.LSN
-	UndoNextLSN primitives.LSN
+	FirstLSN, LastLSN, UndoNextLSN primitives.LSN
 }
 
 func NewLogRecord(logType LogRecordType, tid *primitives.TransactionID, pageId primitives.PageID, beforeImage, afterImage []byte, prevLSN primitives.LSN) *LogRecord {
