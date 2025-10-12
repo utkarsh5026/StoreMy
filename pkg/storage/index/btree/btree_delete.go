@@ -45,9 +45,7 @@ func (bt *BTree) deleteFromLeaf(tid *primitives.TransactionID, leaf *BTreePage, 
 // handleUnderflow handles page underflow after deletion
 func (bt *BTree) handleUnderflow(tid *primitives.TransactionID, page *BTreePage) error {
 	if page.parentPage == -1 {
-		// Root page - only collapse if it's internal with one child
 		if page.IsInternalPage() && page.numEntries == 0 && len(page.children) == 1 {
-			// Make the only child the new root
 			childPID := page.children[0].ChildPID
 			childPage, err := bt.file.ReadPage(tid, childPID)
 			if err != nil {
@@ -68,20 +66,14 @@ func (bt *BTree) handleUnderflow(tid *primitives.TransactionID, page *BTreePage)
 		return err
 	}
 
-	// Find this page's position in parent
-	childIdx := -1
-	for i, child := range parentPage.children {
-		if child.ChildPID.Equals(page.pageID) {
-			childIdx = i
-			break
-		}
-	}
+	childIdx := slices.IndexFunc(parentPage.children, func(pp *BTreeChildPtr) bool {
+		return pp.ChildPID.Equals(page.pageID)
+	})
 
 	if childIdx == -1 {
 		return fmt.Errorf("page not found in parent")
 	}
 
-	// Try to borrow from left sibling
 	if childIdx > 0 {
 		leftSiblingPID := parentPage.children[childIdx-1].ChildPID
 		leftSibling, err := bt.file.ReadPage(tid, leftSiblingPID)
@@ -160,5 +152,48 @@ func (bt *BTree) redistributeFromLeft(tid *primitives.TransactionID, left, curre
 
 	bt.file.WritePage(left)
 	bt.file.WritePage(current)
+	return bt.file.WritePage(parent)
+}
+
+// redistributeFromRight borrows an entry from right sibling
+func (bt *BTree) redistributeFromRight(tid *primitives.TransactionID, current, right, parent *BTreePage, pageIdx int) error {
+	rightStart := 0
+
+	if current.IsLeafPage() {
+		movedEntry := right.entries[rightStart]
+		right.entries = right.entries[rightStart+1:]
+		right.numEntries--
+		right.MarkDirty(true, tid)
+
+		current.entries = append(current.entries, movedEntry)
+		current.numEntries++
+		current.MarkDirty(true, tid)
+
+		parent.children[pageIdx+1].Key = right.entries[rightStart].Key
+		parent.MarkDirty(true, tid)
+
+		bt.file.WritePage(current)
+		bt.file.WritePage(right)
+		return bt.file.WritePage(parent)
+	}
+
+	movedChild := right.children[rightStart]
+	right.children = right.children[rightStart+1:]
+	right.numEntries--
+	right.MarkDirty(true, tid)
+
+	newChild := newBtreeChildPtr(parent.children[pageIdx+1].Key, movedChild.ChildPID)
+	current.children = append(current.children, newChild)
+	current.numEntries++
+	current.MarkDirty(true, tid)
+
+	if len(right.children) > 0 {
+		parent.children[pageIdx+1].Key = right.children[0].Key
+		right.children[0].Key = nil
+	}
+	parent.MarkDirty(true, tid)
+
+	bt.file.WritePage(current)
+	bt.file.WritePage(right)
 	return bt.file.WritePage(parent)
 }
