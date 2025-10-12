@@ -116,43 +116,49 @@ func (bt *BTree) handleUnderflow(tid *primitives.TransactionID, page *BTreePage)
 // redistributeFromLeft borrows an entry from left sibling
 func (bt *BTree) redistributeFromLeft(tid *primitives.TransactionID, left, current, parent *BTreePage, pageIdx int) error {
 	if current.IsLeafPage() {
-		leftLastIdx := left.numEntries - 1
-		movedEntry := left.entries[leftLastIdx]
-		left.entries = left.entries[:leftLastIdx]
-		left.numEntries--
-		left.MarkDirty(true, tid)
-
-		current.entries = append([]*index.IndexEntry{movedEntry}, current.entries...)
-		current.numEntries++
-		current.MarkDirty(true, tid)
-
-		parent.children[pageIdx].Key = movedEntry.Key
-		parent.MarkDirty(true, tid)
-
-		bt.file.WritePage(left)
-		bt.file.WritePage(current)
-		return bt.file.WritePage(parent)
+		return bt.redistributeLeafFromLeft(tid, left, current, parent, pageIdx)
 	}
 
-	movedChild := left.children[left.numEntries]
-	left.children = left.children[:left.numEntries]
+	return bt.redistributeInternalFromLeft(tid, left, current, parent, pageIdx)
+}
+
+func (bt *BTree) redistributeLeafFromLeft(tid *primitives.TransactionID, left, current, parent *BTreePage, pageIdx int) error {
+	leftLastIdx := left.numEntries - 1
+	movedEntry := left.entries[leftLastIdx]
+
+	left.entries = left.entries[:leftLastIdx]
 	left.numEntries--
 	left.MarkDirty(true, tid)
 
-	newFirstChild := &BTreeChildPtr{Key: nil, ChildPID: movedChild.ChildPID}
-	if len(current.children) > 0 {
-		current.children[0].Key = parent.children[pageIdx].Key
-	}
-	current.children = append([]*BTreeChildPtr{newFirstChild}, current.children...)
+	current.entries = append([]*index.IndexEntry{movedEntry}, current.entries...)
 	current.numEntries++
 	current.MarkDirty(true, tid)
 
-	parent.children[pageIdx].Key = movedChild.Key
+	parent.children[pageIdx].Key = movedEntry.Key
 	parent.MarkDirty(true, tid)
 
-	bt.file.WritePage(left)
-	bt.file.WritePage(current)
-	return bt.file.WritePage(parent)
+	return bt.writePages(left, current, parent)
+}
+
+func (bt *BTree) redistributeInternalFromLeft(tid *primitives.TransactionID, left, current, parent *BTreePage, pageIdx int) error {
+	last := left.numEntries
+	moved := left.children[last]
+	left.children = left.children[:last]
+	left.numEntries--
+	left.MarkDirty(true, tid)
+
+	ch := newBtreeChildPtr(nil, moved.ChildPID)
+	if len(current.children) > 0 {
+		current.children[0].Key = parent.children[pageIdx].Key
+	}
+	current.children = append([]*BTreeChildPtr{ch}, current.children...)
+	current.numEntries++
+	current.MarkDirty(true, tid)
+
+	parent.children[pageIdx].Key = moved.Key
+	parent.MarkDirty(true, tid)
+
+	return bt.writePages(left, current, parent)
 }
 
 // redistributeFromRight borrows an entry from right sibling
@@ -286,5 +292,14 @@ func (bt *BTree) mergeWithRight(tid *primitives.TransactionID, page, rightSiblin
 		return bt.handleUnderflow(tid, parentPage)
 	}
 
+	return nil
+}
+
+func (bt *BTree) writePages(pages ...*BTreePage) error {
+	for _, page := range pages {
+		if err := bt.file.WritePage(page); err != nil {
+			return err
+		}
+	}
 	return nil
 }
