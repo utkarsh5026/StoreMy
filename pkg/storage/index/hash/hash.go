@@ -9,6 +9,11 @@ import (
 	"storemy/pkg/types"
 )
 
+// Constants for overflow chain traversal safety
+const (
+	maxOverflowPages = 1000 // Prevent infinite loops in corrupted chains
+)
+
 type TID = *primitives.TransactionID
 type RecID = *tuple.TupleRecordID
 type Field = types.Field
@@ -111,12 +116,11 @@ func (hi *HashIndex) markAndWritePage(page *HashPage, tid TID) error {
 
 // Delete removes a key-value pair from the hash index
 func (hi *HashIndex) Delete(tid TID, key Field, rid RecID) error {
-	if key.Type() != hi.keyType {
-		return fmt.Errorf("key type mismatch: expected %v, got %v", hi.keyType, key.Type())
+	if err := hi.validateKeyType(key); err != nil {
+		return err
 	}
 
 	bucketNum := hi.hashKey(key)
-
 	bucketPage, err := hi.file.GetBucketPage(tid, bucketNum)
 	if err != nil {
 		return fmt.Errorf("failed to get bucket page: %w", err)
@@ -124,32 +128,21 @@ func (hi *HashIndex) Delete(tid TID, key Field, rid RecID) error {
 
 	currentPage := bucketPage
 	visitedPages := make(map[int]bool)
-	maxPages := 1000
-
-	for currentPage != nil && len(visitedPages) < maxPages {
+	entry := NewHashEntry(key, rid)
+	for currentPage != nil && len(visitedPages) < maxOverflowPages {
 		pageNum := currentPage.pageID.PageNo()
 		if visitedPages[pageNum] {
 			break
 		}
 		visitedPages[pageNum] = true
 
-		err := currentPage.RemoveEntry(NewHashEntry(key, rid))
+		err := currentPage.RemoveEntry(entry)
 		if err == nil {
 			currentPage.MarkDirty(true, tid)
 			return hi.file.WritePage(currentPage)
 		}
 
-		if currentPage.GetOverflowPage() == -1 {
-			break
-		}
-
-		overflowPageNum := currentPage.GetOverflowPage()
-		if overflowPageNum >= hi.file.NumPages() {
-			break
-		}
-
-		overflowPageID := NewHashPageID(hi.file.GetID(), overflowPageNum)
-		currentPage, err = hi.file.ReadPage(tid, overflowPageID)
+		currentPage, err = hi.readOverflowPage(tid, currentPage)
 		if err != nil {
 			return fmt.Errorf("failed to read overflow page: %w", err)
 		}
