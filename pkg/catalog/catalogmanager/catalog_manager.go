@@ -38,16 +38,6 @@ type CatalogManager struct {
 	dataDir    string
 }
 
-// PageStoreInterface defines the minimal interface that CatalogManager needs from PageStore
-// This avoids circular dependencies and tight coupling
-// type PageStoreInterface interface {
-// 	DeleteTuple(tx *transaction.TransactionContext, dbFile page.DbFile, tup *tuple.Tuple) error
-// 	InsertTuple(tx *transaction.TransactionContext, dbFile page.DbFile, tup *tuple.Tuple) error
-// 	CommitTransaction(tx *transaction.TransactionContext) error
-// 	RegisterDbFile(tableID int, dbFile page.DbFile)
-// 	UnregisterDbFile(tableID int)
-// }
-
 // NewCatalogManager creates a new CatalogManager instance.
 // dataDir is the base directory where table files will be stored.
 func NewCatalogManager(ps *memory.PageStore, dataDir string) *CatalogManager {
@@ -122,7 +112,7 @@ func (cm *CatalogManager) CreateTable(
 }
 
 // DropTable completely removes a table from both disk catalog and memory cache.
-func (cm *CatalogManager) DropTable(tx *transaction.TransactionContext, tableName string) error {
+func (cm *CatalogManager) DropTable(tx TxContext, tableName string) error {
 	tableID, err := cm.GetTableID(tx.ID, tableName)
 	if err != nil {
 		return fmt.Errorf("table %s not found: %w", tableName, err)
@@ -141,7 +131,7 @@ func (cm *CatalogManager) DropTable(tx *transaction.TransactionContext, tableNam
 
 // GetTableID retrieves the table ID for a given table name.
 // Checks in-memory cache first (O(1)), falls back to disk scan if not found.
-func (cm *CatalogManager) GetTableID(tid *primitives.TransactionID, tableName string) (int, error) {
+func (cm *CatalogManager) GetTableID(tid TID, tableName string) (int, error) {
 	if id, err := cm.tableCache.GetTableID(tableName); err == nil {
 		return id, nil
 	}
@@ -155,7 +145,7 @@ func (cm *CatalogManager) GetTableID(tid *primitives.TransactionID, tableName st
 
 // GetTableName retrieves the table name for a given table ID.
 // Checks in-memory cache first (O(1)), falls back to disk scan if not found.
-func (cm *CatalogManager) GetTableName(tid *primitives.TransactionID, tableID int) (string, error) {
+func (cm *CatalogManager) GetTableName(tid TID, tableID int) (string, error) {
 	if info, err := cm.tableCache.GetTableInfo(tableID); err == nil {
 		return info.Schema.TableName, nil
 	}
@@ -169,7 +159,7 @@ func (cm *CatalogManager) GetTableName(tid *primitives.TransactionID, tableID in
 
 // GetTableSchema retrieves the schema for a table.
 // First checks in-memory cache, then loads from disk if necessary.
-func (cm *CatalogManager) GetTableSchema(tid *primitives.TransactionID, tableID int) (*schema.Schema, error) {
+func (cm *CatalogManager) GetTableSchema(tid TID, tableID int) (*schema.Schema, error) {
 	if info, err := cm.tableCache.GetTableInfo(tableID); err == nil {
 		return info.Schema, nil
 	}
@@ -189,7 +179,7 @@ func (cm *CatalogManager) GetTableFile(tableID int) (page.DbFile, error) {
 
 // TableExists checks if a table exists by name.
 // Checks memory first, then disk catalog.
-func (cm *CatalogManager) TableExists(tid *primitives.TransactionID, tableName string) bool {
+func (cm *CatalogManager) TableExists(tid TID, tableName string) bool {
 	if cm.tableCache.TableExists(tableName) {
 		return true
 	}
@@ -199,7 +189,7 @@ func (cm *CatalogManager) TableExists(tid *primitives.TransactionID, tableName s
 
 // ListAllTablesFromDisk scans CATALOG_TABLES and returns all table names.
 // This is slower than ListAllTables but includes tables not currently loaded in memory.
-func (cm *CatalogManager) ListAllTables(tid *primitives.TransactionID, refreshFromDisk bool) ([]string, error) {
+func (cm *CatalogManager) ListAllTables(tid TID, refreshFromDisk bool) ([]string, error) {
 	if !refreshFromDisk {
 		return cm.tableCache.GetAllTableNames(), nil
 	}
@@ -219,13 +209,13 @@ func (cm *CatalogManager) ListAllTables(tid *primitives.TransactionID, refreshFr
 
 // UpdateTableStatistics collects statistics for a table and updates both disk and cache.
 // This scans the table, computes cardinality/page count/etc., and stores in CATALOG_STATISTICS.
-func (cm *CatalogManager) UpdateTableStatistics(tx *transaction.TransactionContext, tableID int) error {
+func (cm *CatalogManager) UpdateTableStatistics(tx TxContext, tableID int) error {
 	return cm.catalog.UpdateTableStatistics(tx, tableID)
 }
 
 // RefreshStatistics updates statistics for a table and returns the updated stats.
 // This is a convenience method that combines update + get.
-func (cm *CatalogManager) RefreshStatistics(tx *transaction.TransactionContext, tableID int) (*TableStatistics, error) {
+func (cm *CatalogManager) RefreshStatistics(tx TxContext, tableID int) (*TableStatistics, error) {
 	if err := cm.UpdateTableStatistics(tx, tableID); err != nil {
 		return nil, err
 	}
@@ -236,7 +226,7 @@ func (cm *CatalogManager) RefreshStatistics(tx *transaction.TransactionContext, 
 // Steps:
 //  1. Renames in TableManager (in-memory)
 //  2. Updates CATALOG_TABLES entry on disk
-func (cm *CatalogManager) RenameTable(tx *transaction.TransactionContext, oldName, newName string) error {
+func (cm *CatalogManager) RenameTable(tx TxContext, oldName, newName string) error {
 	if cm.TableExists(tx.ID, newName) {
 		return fmt.Errorf("table %s already exists", newName)
 	}
@@ -280,7 +270,7 @@ func (cm *CatalogManager) RenameTable(tx *transaction.TransactionContext, oldNam
 
 // LoadTable loads a specific table from disk into memory by name.
 // Useful for lazy loading tables on demand rather than loading all tables at startup.
-func (cm *CatalogManager) LoadTable(tid *primitives.TransactionID, tableName string) error {
+func (cm *CatalogManager) LoadTable(tid TID, tableName string) error {
 	if cm.tableCache.TableExists(tableName) {
 		return nil
 	}
@@ -289,7 +279,7 @@ func (cm *CatalogManager) LoadTable(tid *primitives.TransactionID, tableName str
 
 // ValidateIntegrity checks consistency between memory and disk catalog.
 // Returns an error if any inconsistencies are found.
-func (cm *CatalogManager) ValidateIntegrity(tid *primitives.TransactionID) error {
+func (cm *CatalogManager) ValidateIntegrity(tid TID) error {
 	if err := cm.tableCache.ValidateIntegrity(); err != nil {
 		return fmt.Errorf("cache integrity error: %w", err)
 	}
@@ -317,18 +307,18 @@ func (cm *CatalogManager) ClearCache() {
 
 // GetAutoIncrementColumn retrieves auto-increment column information for a table.
 // Returns nil if the table has no auto-increment column.
-func (cm *CatalogManager) GetAutoIncrementColumn(tid *primitives.TransactionID, tableID int) (AutoIncrementInfo, error) {
+func (cm *CatalogManager) GetAutoIncrementColumn(tid TID, tableID int) (AutoIncrementInfo, error) {
 	return cm.catalog.GetAutoIncrementColumn(tid, tableID)
 }
 
 // IncrementAutoIncrementValue updates the next auto-increment value for a table's auto-increment column.
-func (cm *CatalogManager) IncrementAutoIncrementValue(tx *transaction.TransactionContext, tableID int, columnName string, newValue int) error {
+func (cm *CatalogManager) IncrementAutoIncrementValue(tx TxContext, tableID int, columnName string, newValue int) error {
 	return cm.catalog.IncrementAutoIncrementValue(tx, tableID, columnName, newValue)
 }
 
 // GetTableStatisticsWithCache retrieves statistics, using cache when available.
 // Falls back to disk if not cached, then caches the result.
-func (cm *CatalogManager) GetTableStatistics(tid *primitives.TransactionID, tableID int) (*TableStatistics, error) {
+func (cm *CatalogManager) GetTableStatistics(tid TID, tableID int) (*TableStatistics, error) {
 	if stats, found := cm.tableCache.GetCachedStatistics(tableID); found {
 		return stats, nil
 	}
@@ -341,10 +331,6 @@ func (cm *CatalogManager) GetTableStatistics(tid *primitives.TransactionID, tabl
 	_ = cm.tableCache.SetCachedStatistics(tableID, stats)
 	return stats, nil
 }
-
-// ============================================================================
-// Index Management Methods
-// ============================================================================
 
 // CreateIndex creates a new index and registers it in the catalog.
 // Steps:
@@ -417,7 +403,6 @@ func (cm *CatalogManager) CreateIndex(
 //  2. Removes index metadata from CATALOG_INDEXES
 //  3. Returns the file path for deletion
 func (cm *CatalogManager) DropIndex(tx TxContext, indexName string) (filePath string, err error) {
-
 	metadata, err := cm.GetIndexByName(tx.ID, indexName)
 	if err != nil {
 		return "", fmt.Errorf("index %s not found: %w", indexName, err)
@@ -426,22 +411,21 @@ func (cm *CatalogManager) DropIndex(tx TxContext, indexName string) (filePath st
 	if err := cm.catalog.DeleteIndexFromCatalog(tx, metadata.IndexID); err != nil {
 		return "", fmt.Errorf("failed to remove index from catalog: %w", err)
 	}
-
 	return metadata.FilePath, nil
 }
 
 // GetIndexesByTable returns all indexes for a given table.
-func (cm *CatalogManager) GetIndexesByTable(tid *primitives.TransactionID, tableID int) ([]*systemtable.IndexMetadata, error) {
+func (cm *CatalogManager) GetIndexesByTable(tid TID, tableID int) ([]*systemtable.IndexMetadata, error) {
 	return cm.catalog.GetIndexesByTable(tid, tableID)
 }
 
 // GetIndexByName retrieves index metadata by index name.
-func (cm *CatalogManager) GetIndexByName(tid *primitives.TransactionID, indexName string) (*systemtable.IndexMetadata, error) {
+func (cm *CatalogManager) GetIndexByName(tid TID, indexName string) (*systemtable.IndexMetadata, error) {
 	return cm.catalog.GetIndexByName(tid, indexName)
 }
 
 // IndexExists checks if an index with the given name exists.
-func (cm *CatalogManager) IndexExists(tid *primitives.TransactionID, indexName string) bool {
+func (cm *CatalogManager) IndexExists(tid TID, indexName string) bool {
 	_, err := cm.GetIndexByName(tid, indexName)
 	return err == nil
 }
