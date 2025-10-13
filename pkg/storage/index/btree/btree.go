@@ -18,11 +18,17 @@ type BTree struct {
 
 // NewBTree creates a new B+Tree index
 func NewBTree(indexID int, keyType types.Type, file *BTreeFile) *BTree {
-	return &BTree{
+	bt := &BTree{
 		indexID: indexID,
 		keyType: keyType,
 		file:    file,
 	}
+
+	if file.NumPages() > 0 {
+		bt.rootPageID = NewBTreePageID(indexID, 0)
+	}
+
+	return bt
 }
 
 // Insert adds a key-value pair to the B+Tree
@@ -31,30 +37,26 @@ func (bt *BTree) Insert(tid *primitives.TransactionID, key types.Field, rid *tup
 		return fmt.Errorf("key type mismatch: expected %v, got %v", bt.keyType, key.Type())
 	}
 
-	// Get or create root page
+	entry := index.NewIndexEntry(key, rid)
 	rootPage, err := bt.getRootPage(tid)
 	if err != nil {
 		return fmt.Errorf("failed to get root page: %w", err)
 	}
 
-	// If root is empty, insert directly
 	if rootPage.GetNumEntries() == 0 && rootPage.IsLeafPage() {
-		return bt.insertIntoLeaf(tid, rootPage, key, rid)
+		return bt.insertIntoLeaf(tid, rootPage, entry)
 	}
 
-	// Find the appropriate leaf page
 	leafPage, err := bt.findLeafPage(tid, rootPage, key)
 	if err != nil {
 		return fmt.Errorf("failed to find leaf page: %w", err)
 	}
 
-	// Check if leaf is full - if so, split it
 	if leafPage.IsFull() {
 		return bt.insertAndSplit(tid, leafPage, key, rid)
 	}
 
-	// Insert into leaf
-	return bt.insertIntoLeaf(tid, leafPage, key, rid)
+	return bt.insertIntoLeaf(tid, leafPage, entry)
 }
 
 // Delete removes a key-value pair from the B+Tree
@@ -68,14 +70,13 @@ func (bt *BTree) Delete(tid *primitives.TransactionID, key types.Field, rid *tup
 		return fmt.Errorf("failed to get root page: %w", err)
 	}
 
-	// Find the leaf page containing the key
+	entry := index.NewIndexEntry(key, rid)
 	leafPage, err := bt.findLeafPage(tid, rootPage, key)
 	if err != nil {
 		return fmt.Errorf("failed to find leaf page: %w", err)
 	}
 
-	// Find and remove the entry
-	return bt.deleteFromLeaf(tid, leafPage, key, rid)
+	return bt.deleteFromLeaf(tid, leafPage, entry)
 }
 
 // Search finds all tuple locations for a given key
@@ -181,21 +182,19 @@ func (bt *BTree) Close() error {
 
 // getRootPage retrieves the root page of the B+Tree
 func (bt *BTree) getRootPage(tid *primitives.TransactionID) (*BTreePage, error) {
-	if bt.rootPageID == nil {
-		// Create initial root page (leaf)
-		bt.rootPageID = NewBTreePageID(bt.indexID, 0)
-		rootPage := NewBTreeLeafPage(bt.rootPageID, bt.keyType, -1)
-		rootPage.MarkDirty(true, tid)
-		bt.file.WritePage(rootPage)
-		return rootPage, nil
+	if bt.rootPageID != nil {
+		return bt.file.ReadPage(tid, bt.rootPageID)
 	}
 
-	return bt.file.ReadPage(tid, bt.rootPageID)
+	bt.rootPageID = NewBTreePageID(bt.indexID, 0)
+	root := NewBTreeLeafPage(bt.rootPageID, bt.keyType, -1)
+	root.MarkDirty(true, tid)
+	bt.file.WritePage(root)
+	return root, nil
 }
 
 // findLeafPage navigates from root to the leaf page that should contain the key
 func (bt *BTree) findLeafPage(tid *primitives.TransactionID, currentPage *BTreePage, key types.Field) (*BTreePage, error) {
-	// If we're at a leaf, we're done
 	if currentPage.IsLeafPage() {
 		return currentPage, nil
 	}
@@ -227,7 +226,6 @@ func (bt *BTree) findChildPointer(internalPage *BTreePage, key types.Field) *BTr
 	// children[i] contains keys >= children[i].Key and < children[i+1].Key
 	for i := len(internalPage.children) - 1; i >= 1; i-- {
 		childPtr := internalPage.children[i]
-		// If key >= childPtr.Key, go to this child
 		if ge, _ := key.Compare(primitives.GreaterThanOrEqual, childPtr.Key); ge {
 			return childPtr.ChildPID
 		}
@@ -235,63 +233,6 @@ func (bt *BTree) findChildPointer(internalPage *BTreePage, key types.Field) *BTr
 
 	// Key is less than all separator keys, go to first child
 	return internalPage.children[0].ChildPID
-}
-
-// insertIntoLeaf inserts a key-value pair into a leaf page (assumes space is available)
-func (bt *BTree) insertIntoLeaf(tid *primitives.TransactionID, leafPage *BTreePage, key types.Field, rid *tuple.TupleRecordID) error {
-	insertPos := 0
-	for i, entry := range leafPage.entries {
-		if lt, _ := key.Compare(primitives.LessThan, entry.Key); lt {
-			insertPos = i
-			break
-		}
-		insertPos = i + 1
-	}
-
-	// Create new entry
-	newEntry := &BTreeEntry{
-		Key: key,
-		RID: rid,
-	}
-
-	// Insert at position
-	leafPage.entries = append(leafPage.entries[:insertPos],
-		append([]*BTreeEntry{newEntry}, leafPage.entries[insertPos:]...)...)
-	leafPage.numEntries++
-	leafPage.MarkDirty(true, tid)
-
-	// Write back to file
-	return bt.file.WritePage(leafPage)
-}
-
-// deleteFromLeaf removes a key-value pair from a leaf page
-func (bt *BTree) deleteFromLeaf(tid *primitives.TransactionID, leafPage *BTreePage, key types.Field, rid *tuple.TupleRecordID) error {
-	// Find the entry to delete
-	deleteIdx := -1
-	for i, entry := range leafPage.entries {
-		if entry.Key.Equals(key) && entry.RID.PageID.Equals(rid.PageID) && entry.RID.TupleNum == rid.TupleNum {
-			deleteIdx = i
-			break
-		}
-	}
-
-	if deleteIdx == -1 {
-		return fmt.Errorf("entry not found")
-	}
-
-	// Remove the entry
-	leafPage.entries = append(leafPage.entries[:deleteIdx], leafPage.entries[deleteIdx+1:]...)
-	leafPage.numEntries--
-	leafPage.MarkDirty(true, tid)
-
-	// Write back to file
-	return bt.file.WritePage(leafPage)
-}
-
-// insertAndSplit handles insertion when the leaf page is full
-// This method delegates to insertAndSplitLeaf in btree_split.go
-func (bt *BTree) insertAndSplit(tid *primitives.TransactionID, leafPage *BTreePage, key types.Field, rid *tuple.TupleRecordID) error {
-	return bt.insertAndSplitLeaf(tid, leafPage, key, rid)
 }
 
 // compareKeys compares two keys and returns -1, 0, or 1
@@ -303,4 +244,28 @@ func compareKeys(k1, k2 types.Field) int {
 		return -1
 	}
 	return 1
+}
+
+// updateParentKey updates the separator key in the parent after first key changes
+func (bt *BTree) updateParentKey(tid *primitives.TransactionID, childPage *BTreePage, newKey types.Field) error {
+	if childPage.parentPage == -1 {
+		return nil // Root has no parent
+	}
+
+	parentPageID := NewBTreePageID(bt.indexID, childPage.parentPage)
+	parentPage, err := bt.file.ReadPage(tid, parentPageID)
+	if err != nil {
+		return fmt.Errorf("failed to read parent page: %w", err)
+	}
+
+	// Find the child pointer and update its key
+	for i := 1; i < len(parentPage.children); i++ {
+		if parentPage.children[i].ChildPID.Equals(childPage.pageID) {
+			parentPage.children[i].Key = newKey
+			parentPage.MarkDirty(true, tid)
+			return bt.file.WritePage(parentPage)
+		}
+	}
+
+	return fmt.Errorf("child not found in parent")
 }
