@@ -18,10 +18,7 @@ func (bt *BTree) deleteFromLeaf(tid *primitives.TransactionID, leaf *BTreePage, 
 	}
 
 	wasFirstKey := (deleteIdx == 0 && leaf.numEntries > 1)
-
-	leaf.entries = append(leaf.entries[:deleteIdx], leaf.entries[deleteIdx+1:]...)
-	leaf.numEntries--
-	leaf.MarkDirty(true, tid)
+	deleteFromPage(leaf, deleteIdx, leaf.entries, tid)
 
 	if err := bt.file.WritePage(leaf); err != nil {
 		return err
@@ -169,93 +166,52 @@ func (bt *BTree) redistributeFromRight(tid *primitives.TransactionID, current, r
 }
 
 // mergeWithLeft merges current page with left sibling
-func (bt *BTree) mergeWithLeft(tid *primitives.TransactionID, leftSibling, page, parentPage *BTreePage, pageIdx int) error {
-	if page.IsLeafPage() {
-		leftSibling.entries = append(leftSibling.entries, page.entries...)
-		leftSibling.numEntries += page.numEntries
-		leftSibling.nextLeaf = page.nextLeaf
-		leftSibling.MarkDirty(true, tid)
-
-		// Update next leaf's prev pointer
-		if page.nextLeaf != -1 {
-			nextPageID := NewBTreePageID(bt.indexID, page.nextLeaf)
-			nextPage, err := bt.file.ReadPage(tid, nextPageID)
-			if err == nil {
-				nextPage.prevLeaf = leftSibling.pageID.PageNo()
-				nextPage.MarkDirty(true, tid)
-				bt.file.WritePage(nextPage)
-			}
-		}
-
-		bt.file.WritePage(leftSibling)
-	} else {
-		separatorKey := parentPage.children[pageIdx].Key
-		if len(page.children) > 0 {
-			page.children[0].Key = separatorKey
-		}
-		leftSibling.children = append(leftSibling.children, page.children...)
-		leftSibling.numEntries += page.numEntries
-		leftSibling.MarkDirty(true, tid)
-		bt.file.WritePage(leftSibling)
-	}
-
-	// Remove pointer to merged page from parent
-	parentPage.children = append(parentPage.children[:pageIdx], parentPage.children[pageIdx+1:]...)
-	parentPage.numEntries--
-	parentPage.MarkDirty(true, tid)
-	bt.file.WritePage(parentPage)
-
-	// Check parent for underflow
-	minEntries := maxEntriesPerPage / 2
-	if parentPage.numEntries < minEntries && parentPage.parentPage != -1 {
-		return bt.handleUnderflow(tid, parentPage)
-	}
-
-	return nil
+func (bt *BTree) mergeWithLeft(tid *primitives.TransactionID, leftSibling, current, parent *BTreePage, pageIdx int) error {
+	return bt.mergePages(tid, leftSibling, current, parent, pageIdx, pageIdx)
 }
 
+// mergeWithRight merges current page with right sibling
 func (bt *BTree) mergeWithRight(tid *primitives.TransactionID, page, rightSibling, parentPage *BTreePage, pageIdx int) error {
-	if page.IsLeafPage() {
-		page.entries = append(page.entries, rightSibling.entries...)
-		page.numEntries += rightSibling.numEntries
-		page.nextLeaf = rightSibling.nextLeaf
-		page.MarkDirty(true, tid)
+	return bt.mergePages(tid, page, rightSibling, parentPage, pageIdx, pageIdx+1)
+}
 
-		if rightSibling.nextLeaf != -1 {
-			nextPageID := NewBTreePageID(bt.indexID, rightSibling.nextLeaf)
+// mergePages merges right page into left page
+func (bt *BTree) mergePages(tid *primitives.TransactionID, left, right, parent *BTreePage, childIdxToDelete int, separatorIdx int) error {
+	if left.IsLeafPage() {
+		left.entries = append(left.entries, right.entries...)
+		left.numEntries += right.numEntries
+		left.nextLeaf = right.nextLeaf
+		left.MarkDirty(true, tid)
+
+		if right.nextLeaf != -1 {
+			nextPageID := NewBTreePageID(bt.indexID, right.nextLeaf)
 			nextPage, err := bt.file.ReadPage(tid, nextPageID)
 			if err == nil {
-				nextPage.prevLeaf = page.pageID.PageNo()
+				nextPage.prevLeaf = left.pageID.PageNo()
 				nextPage.MarkDirty(true, tid)
 				bt.file.WritePage(nextPage)
 			}
 		}
 
-		bt.file.WritePage(page)
+		bt.file.WritePage(left)
 	} else {
-		// Internal page merge - include separator from parent
-		separatorKey := parentPage.children[pageIdx+1].Key
-		if len(rightSibling.children) > 0 {
-			rightSibling.children[0].Key = separatorKey
+		separatorKey := parent.children[separatorIdx].Key
+		if len(right.children) > 0 {
+			right.children[0].Key = separatorKey
 		}
-		page.children = append(page.children, rightSibling.children...)
-		page.numEntries += rightSibling.numEntries
-		page.MarkDirty(true, tid)
-		bt.file.WritePage(page)
+		left.children = append(left.children, right.children...)
+		left.numEntries += right.numEntries
+		left.MarkDirty(true, tid)
+		bt.file.WritePage(left)
 	}
 
-	// Remove pointer to merged page from parent
-	parentPage.children = append(parentPage.children[:pageIdx+1], parentPage.children[pageIdx+2:]...)
-	parentPage.numEntries--
-	parentPage.MarkDirty(true, tid)
-	bt.file.WritePage(parentPage)
+	deleteFromPage(parent, childIdxToDelete, parent.children, tid)
+	bt.file.WritePage(parent)
 
-	// Check parent for underflow
 	minEntries := maxEntriesPerPage / 2
-	if parentPage.numEntries < minEntries && parentPage.parentPage != -1 {
-		return bt.handleUnderflow(tid, parentPage)
+	if parent.numEntries < minEntries && parent.parentPage != -1 {
+		return bt.handleUnderflow(tid, parent)
 	}
-
 	return nil
 }
 
