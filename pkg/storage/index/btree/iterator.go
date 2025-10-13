@@ -24,7 +24,7 @@ func (it *BTreeFileIterator) Open() error {
 		return nil
 	}
 
-	rootPageID := NewBTreePageID(it.file.GetID(), 0)
+	rootPageID := NewBTreePageID(it.file.indexID, 0)
 	rootPage, err := it.file.ReadPage(it.tid, rootPageID)
 	if err != nil {
 		return fmt.Errorf("failed to read root page: %w", err)
@@ -79,7 +79,7 @@ func (it *BTreeFileIterator) Next() (*tuple.Tuple, error) {
 			return nil, fmt.Errorf("no more entries")
 		}
 
-		nextPageID := NewBTreePageID(it.file.GetID(), it.currentLeaf.nextLeaf)
+		nextPageID := NewBTreePageID(it.file.indexID, it.currentLeaf.nextLeaf)
 		nextLeaf, err := it.file.ReadPage(it.tid, nextPageID)
 		if err != nil {
 			return nil, fmt.Errorf("failed to read next leaf: %w", err)
