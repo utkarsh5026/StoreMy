@@ -176,6 +176,14 @@ func (l *Lexer) readIdentifier(start int) Token {
 		return createToken(PRIMARY, value, start)
 	case "KEY":
 		return createToken(KEY, value, start)
+	case "INDEX":
+		return createToken(INDEX, value, start)
+	case "USING":
+		return createToken(USING, value, start)
+	case "HASH":
+		return createToken(HASH, value, start)
+	case "BTREE":
+		return createToken(BTREE, value, start)
 	case "DEFAULT":
 		return createToken(DEFAULT, value, start)
 	case "NULL":
