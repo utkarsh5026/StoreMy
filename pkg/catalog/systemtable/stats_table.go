@@ -26,37 +26,17 @@ type StatsTable struct {
 
 // Schema returns the schema for the CATALOG_STATS system table.
 func (st *StatsTable) Schema() *schema.Schema {
-	columns := make([]schema.ColumnMetadata, 0, 9)
-
-	col0, _ := schema.NewColumnMetadata("table_id", types.IntType, 0, SystemTableStatisticsID, true, false)
-	columns = append(columns, *col0)
-
-	col1, _ := schema.NewColumnMetadata("cardinality", types.IntType, 1, SystemTableStatisticsID, false, false)
-	columns = append(columns, *col1)
-
-	col2, _ := schema.NewColumnMetadata("page_count", types.IntType, 2, SystemTableStatisticsID, false, false)
-	columns = append(columns, *col2)
-
-	col3, _ := schema.NewColumnMetadata("avg_tuple_size", types.IntType, 3, SystemTableStatisticsID, false, false)
-	columns = append(columns, *col3)
-
-	col4, _ := schema.NewColumnMetadata("last_updated", types.IntType, 4, SystemTableStatisticsID, false, false)
-	columns = append(columns, *col4)
-
-	col5, _ := schema.NewColumnMetadata("distinct_values", types.IntType, 5, SystemTableStatisticsID, false, false)
-	columns = append(columns, *col5)
-
-	col6, _ := schema.NewColumnMetadata("null_count", types.IntType, 6, SystemTableStatisticsID, false, false)
-	columns = append(columns, *col6)
-
-	col7, _ := schema.NewColumnMetadata("min_value", types.StringType, 7, SystemTableStatisticsID, false, false)
-	columns = append(columns, *col7)
-
-	col8, _ := schema.NewColumnMetadata("max_value", types.StringType, 8, SystemTableStatisticsID, false, false)
-	columns = append(columns, *col8)
-
-	sch, _ := schema.NewSchema(SystemTableStatisticsID, st.TableName(), columns)
-	return sch
+	return schema.NewSchemaBuilder(InvalidTableID, st.TableName()).
+		AddPrimaryKey("table_id", types.IntType).
+		AddColumn("cardinality", types.IntType).
+		AddColumn("page_count", types.IntType).
+		AddColumn("avg_tuple_size", types.IntType).
+		AddColumn("last_updated", types.IntType).
+		AddColumn("distinct_values", types.IntType).
+		AddColumn("null_count", types.IntType).
+		AddColumn("min_value", types.StringType).
+		AddColumn("max_value", types.StringType).
+		Build()
 }
 
 func (st *StatsTable) FileName() string {

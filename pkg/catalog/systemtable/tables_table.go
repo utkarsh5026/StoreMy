@@ -20,22 +20,12 @@ type TablesTable struct {
 // Schema returns the schema for the CATALOG_TABLES system table.
 // Schema: (table_id INT, table_name STRING, file_path STRING, primary_key STRING)
 func (tt *TablesTable) Schema() *schema.Schema {
-	columns := make([]schema.ColumnMetadata, 0, 4)
-
-	col0, _ := schema.NewColumnMetadata("table_id", types.IntType, 0, SystemTableTablesID, true, false)
-	columns = append(columns, *col0)
-
-	col1, _ := schema.NewColumnMetadata("table_name", types.StringType, 1, SystemTableTablesID, false, false)
-	columns = append(columns, *col1)
-
-	col2, _ := schema.NewColumnMetadata("file_path", types.StringType, 2, SystemTableTablesID, false, false)
-	columns = append(columns, *col2)
-
-	col3, _ := schema.NewColumnMetadata("primary_key", types.StringType, 3, SystemTableTablesID, false, false)
-	columns = append(columns, *col3)
-
-	sch, _ := schema.NewSchema(SystemTableTablesID, tt.TableName(), columns)
-	return sch
+	return schema.NewSchemaBuilder(InvalidTableID, tt.TableName()).
+		AddPrimaryKey("table_id", types.IntType).
+		AddColumn("table_name", types.StringType).
+		AddColumn("file_path", types.StringType).
+		AddColumn("primary_key", types.StringType).
+		Build()
 }
 
 func (tt *TablesTable) TableName() string {
