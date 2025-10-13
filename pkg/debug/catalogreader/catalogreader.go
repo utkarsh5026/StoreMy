@@ -3,7 +3,7 @@ package main
 import (
 	"fmt"
 	"os"
-	"storemy/pkg/catalog"
+	"storemy/pkg/catalog/catalogmanager"
 	"storemy/pkg/catalog/systemtable"
 	"storemy/pkg/concurrency/transaction"
 	"storemy/pkg/debug/ui"
@@ -26,7 +26,7 @@ var (
 )
 
 type catalogModel struct {
-	catalog       *catalog.CatalogManager
+	catalog       *catalogmanager.CatalogManager
 	store         *memory.PageStore
 	currentView   string // "menu", "tables", "columns", "statistics"
 	cursor        int
@@ -51,7 +51,7 @@ func (m catalogModel) Init() tea.Cmd {
 }
 
 type catalogInitMsg struct {
-	catalog *catalog.CatalogManager
+	catalog *catalogmanager.CatalogManager
 	store   *memory.PageStore
 	err     error
 }
@@ -59,7 +59,7 @@ type catalogInitMsg struct {
 func initializeCatalog(dataDir string) tea.Cmd {
 	return func() tea.Msg {
 		store := memory.NewPageStore(nil) // No WAL for reading
-		cat := catalog.NewCatalogManager(store, dataDir)
+		cat := catalogmanager.NewCatalogManager(store, dataDir)
 
 		tx := transaction.NewTransactionContext(primitives.NewTransactionID())
 		if err := cat.Initialize(tx); err != nil {
@@ -83,7 +83,7 @@ type tableLoadedMsg struct {
 	err     error
 }
 
-func loadTableData(cat *catalog.CatalogManager, tableName string) tea.Cmd {
+func loadTableData(cat *catalogmanager.CatalogManager, tableName string) tea.Cmd {
 	return func() tea.Msg {
 		var err error
 		tid := primitives.NewTransactionID()
