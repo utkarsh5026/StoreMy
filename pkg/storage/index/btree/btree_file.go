@@ -13,6 +13,7 @@ import (
 // BTreeFile represents a persistent B+Tree index file
 type BTreeFile struct {
 	*page.BaseFile
+	indexID  int
 	keyType  types.Type
 	numPages int
 	mutex    sync.RWMutex
@@ -32,6 +33,7 @@ func NewBTreeFile(filename string, keyType types.Type) (*BTreeFile, error) {
 
 	bf := &BTreeFile{
 		BaseFile: baseFile,
+		indexID:  0, // Will be set by BTree
 		keyType:  keyType,
 		numPages: numPages,
 	}
@@ -57,7 +59,7 @@ func (bf *BTreeFile) ReadPage(tid *primitives.TransactionID, pageID *BTreePageID
 		return nil, fmt.Errorf("page ID cannot be nil")
 	}
 
-	if pageID.GetTableID() != bf.GetID() {
+	if pageID.GetTableID() != bf.indexID {
 		return nil, fmt.Errorf("page ID index mismatch")
 	}
 
@@ -107,7 +109,7 @@ func (bf *BTreeFile) AllocatePage(tid *primitives.TransactionID, keyType types.T
 	bf.numPages++
 	bf.mutex.Unlock()
 
-	pageID := NewBTreePageID(bf.GetID(), pageNum)
+	pageID := NewBTreePageID(bf.indexID, pageNum)
 
 	var newPage *BTreePage
 	if isLeaf {
