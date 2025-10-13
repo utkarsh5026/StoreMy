@@ -9,6 +9,8 @@ const (
 	Delete
 	CreateTable
 	DropTable
+	CreateIndex
+	DropIndex
 	Transaction
 )
 
@@ -26,6 +28,10 @@ func (st StatementType) String() string {
 		return "CREATE TABLE"
 	case DropTable:
 		return "DROP TABLE"
+	case CreateIndex:
+		return "CREATE INDEX"
+	case DropIndex:
+		return "DROP INDEX"
 	case Transaction:
 		return "TRANSACTION"
 	default:
@@ -40,7 +46,7 @@ func (st StatementType) IsDML() bool {
 
 // IsDDL returns true if the statement type is a DDL operation (CREATE, DROP)
 func (st StatementType) IsDDL() bool {
-	return st == CreateTable || st == DropTable
+	return st == CreateTable || st == DropTable || st == CreateIndex || st == DropIndex
 }
 
 // Statement is the interface that all SQL statements must implement
