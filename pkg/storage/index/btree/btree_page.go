@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"storemy/pkg/primitives"
+	"storemy/pkg/storage/heap"
 	"storemy/pkg/storage/index"
 	"storemy/pkg/storage/page"
 	"storemy/pkg/tuple"
@@ -17,6 +18,7 @@ const (
 	pageTypeInternal byte = 0x01
 	pageTypeLeaf     byte = 0x02
 	noLeaf                = -1
+	noParent              = -1
 
 	// Page header size (in bytes)
 	// 1 byte: page type
@@ -195,6 +197,16 @@ func (p *BTreePage) serializeEntry(w io.Writer, entry *index.IndexEntry) error {
 	}
 
 	rid := entry.RID
+	// Write page ID type (0 for HeapPageID, 1 for BTreePageID)
+	var pageIDType byte
+	switch rid.PageID.(type) {
+	case *BTreePageID:
+		pageIDType = 1
+	default: // HeapPageID or other
+		pageIDType = 0
+	}
+	binary.Write(w, binary.BigEndian, pageIDType)
+
 	binary.Write(w, binary.BigEndian, int32(rid.PageID.GetTableID()))
 	binary.Write(w, binary.BigEndian, int32(rid.PageID.PageNo()))
 	binary.Write(w, binary.BigEndian, int32(rid.TupleNum))
@@ -288,12 +300,22 @@ func deserializeEntry(r *bytes.Reader) (*index.IndexEntry, error) {
 		return nil, err
 	}
 
+	// Read page ID type
+	var pageIDType byte
+	binary.Read(r, binary.BigEndian, &pageIDType)
+
 	var tableID, pageNum, tupleNum int32
 	binary.Read(r, binary.BigEndian, &tableID)
 	binary.Read(r, binary.BigEndian, &pageNum)
 	binary.Read(r, binary.BigEndian, &tupleNum)
 
-	pageID := NewBTreePageID(int(tableID), int(pageNum))
+	// Create the correct PageID type
+	var pageID primitives.PageID
+	if pageIDType == 1 {
+		pageID = NewBTreePageID(int(tableID), int(pageNum))
+	} else {
+		pageID = heap.NewHeapPageID(int(tableID), int(pageNum))
+	}
 
 	rid := &tuple.TupleRecordID{
 		PageID:   pageID,
