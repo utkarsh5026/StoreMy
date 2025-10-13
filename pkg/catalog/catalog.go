@@ -5,8 +5,10 @@ import (
 	"path/filepath"
 	"storemy/pkg/catalog/schema"
 	"storemy/pkg/catalog/systemtable"
+	"storemy/pkg/catalog/tablecache"
 	"storemy/pkg/concurrency/transaction"
 	"storemy/pkg/iterator"
+	"storemy/pkg/memory"
 	"storemy/pkg/primitives"
 	"storemy/pkg/storage/heap"
 	"storemy/pkg/tuple"
@@ -21,9 +23,8 @@ import (
 //   - CATALOG_STATISTICS: stores table statistics for query optimization
 //   - CATALOG_INDEXES: stores index metadata (ID, name, table ID, column, type, file path)
 type SystemCatalog struct {
-	store             PageStoreInterface
-	cache             *tableCache
-	loader            *SchemaLoader
+	store             *memory.PageStore
+	cache             *tablecache.TableCache
 	TablesTableID     int
 	ColumnsTableID    int
 	StatisticsTableID int
@@ -32,13 +33,11 @@ type SystemCatalog struct {
 
 // NewSystemCatalog creates a new system catalog instance.
 // The catalog must be initialized via Initialize() before use.
-func NewSystemCatalog(ps PageStoreInterface, cache *tableCache) *SystemCatalog {
+func NewSystemCatalog(ps *memory.PageStore, cache *tablecache.TableCache) *SystemCatalog {
 	sc := &SystemCatalog{
 		store: ps,
 		cache: cache,
 	}
-
-	sc.loader = NewSchemaLoader(0, sc.iterateTable)
 	return sc
 }
 
@@ -81,8 +80,6 @@ func (sc *SystemCatalog) Initialize(ctx *transaction.TransactionContext, dataDir
 		// Register the DbFile with PageStore for flush operations
 		sc.store.RegisterDbFile(f.GetID(), f)
 	}
-
-	sc.loader.columnsTableID = sc.ColumnsTableID
 	return nil
 }
 
@@ -194,7 +191,7 @@ func (sc *SystemCatalog) LoadTable(tid *primitives.TransactionID, tableName stri
 		return fmt.Errorf("failed to get table metadata: %w", err)
 	}
 
-	sch, err := sc.loader.LoadTableSchema(tid, tm.TableID)
+	sch, err := sc.LoadTableSchema(tid, tm.TableID)
 	if err != nil {
 		return fmt.Errorf("failed to load schema: %w", err)
 	}
