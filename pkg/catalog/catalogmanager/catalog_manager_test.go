@@ -1,10 +1,11 @@
-package catalog
+package catalogmanager
 
 import (
 	"fmt"
 	"os"
 	"path/filepath"
 	"storemy/pkg/catalog/schema"
+	"storemy/pkg/catalog/tablecache"
 	"storemy/pkg/concurrency/transaction"
 	"storemy/pkg/log"
 	"storemy/pkg/memory"
@@ -24,7 +25,7 @@ type testSetup struct {
 	tempDir    string
 	catalogMgr *CatalogManager
 	txRegistry *transaction.TransactionRegistry
-	tm         *tableCache
+	tm         *tablecache.TableCache
 	store      *memory.PageStore
 	wal        *log.WAL
 	t          *testing.T
@@ -35,7 +36,7 @@ func setupTest(t *testing.T) *testSetup {
 	tempDir := t.TempDir()
 	walPath := filepath.Join(tempDir, "test.wal")
 
-	tm := newTableCache()
+	tm := tablecache.NewTableCache()
 	wal, err := log.NewWAL(walPath, 8192)
 	if err != nil {
 		t.Fatalf("Failed to create WAL: %v", err)
@@ -58,7 +59,7 @@ func setupTest(t *testing.T) *testSetup {
 
 // cleanup closes all resources
 func (s *testSetup) cleanup() {
-	s.tm.clear()
+	s.tm.Clear()
 	s.wal.Close()
 }
 
