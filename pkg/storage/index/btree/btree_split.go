@@ -3,9 +3,53 @@ package btree
 import (
 	"fmt"
 	"storemy/pkg/primitives"
+	"storemy/pkg/storage/index"
 	"storemy/pkg/tuple"
 	"storemy/pkg/types"
 )
+
+// insertIntoLeaf inserts a key-value pair into a leaf page (assumes space is available)
+func (bt *BTree) insertIntoLeaf(tid *primitives.TransactionID, leaf *BTreePage, e *index.IndexEntry) error {
+	insertPos := 0
+	wasFirstKey := false
+
+	for i, entry := range leaf.entries {
+		if entry.Equals(e) {
+			return fmt.Errorf("duplicate entry: key %v, rid %v already exists", e.Key, e.RID)
+		}
+
+		if lt, _ := e.Key.Compare(primitives.LessThan, entry.Key); lt {
+			insertPos = i
+			if i == 0 {
+				wasFirstKey = true
+			}
+			break
+		}
+		insertPos = i + 1
+	}
+
+	leaf.entries = append(leaf.entries[:insertPos],
+		append([]*index.IndexEntry{e}, leaf.entries[insertPos:]...)...)
+	leaf.numEntries++
+	leaf.MarkDirty(true, tid)
+
+	if err := bt.file.WritePage(leaf); err != nil {
+		return err
+	}
+
+	// If we inserted at position 0 and this isn't root, update parent separator key
+	if wasFirstKey && leaf.parentPage != -1 {
+		return bt.updateParentKey(tid, leaf, e.Key)
+	}
+
+	return nil
+}
+
+// insertAndSplit handles insertion when the leaf page is full
+// This method delegates to insertAndSplitLeaf in btree_split.go
+func (bt *BTree) insertAndSplit(tid *primitives.TransactionID, leafPage *BTreePage, key types.Field, rid *tuple.TupleRecordID) error {
+	return bt.insertAndSplitLeaf(tid, leafPage, key, rid)
+}
 
 // insertAndSplitLeaf handles insertion into a full leaf page by splitting it
 func (bt *BTree) insertAndSplitLeaf(tid *primitives.TransactionID, leafPage *BTreePage, key types.Field, rid *tuple.TupleRecordID) error {
@@ -14,19 +58,19 @@ func (bt *BTree) insertAndSplitLeaf(tid *primitives.TransactionID, leafPage *BTr
 	}
 
 	// Create a temporary slice with all entries including the new one
-	allEntries := make([]*BTreeEntry, 0, len(leafPage.entries)+1)
+	allEntries := make([]*index.IndexEntry, 0, len(leafPage.entries)+1)
 	inserted := false
 
 	for _, entry := range leafPage.entries {
 		if !inserted && (compareKeys(key, entry.Key) < 0) {
-			allEntries = append(allEntries, &BTreeEntry{Key: key, RID: rid})
+			allEntries = append(allEntries, &index.IndexEntry{Key: key, RID: rid})
 			inserted = true
 		}
 		allEntries = append(allEntries, entry)
 	}
 
 	if !inserted {
-		allEntries = append(allEntries, &BTreeEntry{Key: key, RID: rid})
+		allEntries = append(allEntries, &index.IndexEntry{Key: key, RID: rid})
 	}
 
 	// Split point: divide entries in half
