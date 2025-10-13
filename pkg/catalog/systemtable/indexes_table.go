@@ -32,31 +32,15 @@ type IndexesTable struct {
 // Schema returns the schema for the CATALOG_INDEXES system table.
 // Schema: (index_id INT, index_name STRING, table_id INT, column_name STRING, index_type STRING, file_path STRING, created_at INT)
 func (it *IndexesTable) Schema() *schema.Schema {
-	columns := make([]schema.ColumnMetadata, 0, 7)
-
-	col0, _ := schema.NewColumnMetadata("index_id", types.IntType, 0, InvalidTableID, true, false)
-	columns = append(columns, *col0)
-
-	col1, _ := schema.NewColumnMetadata("index_name", types.StringType, 1, InvalidTableID, false, false)
-	columns = append(columns, *col1)
-
-	col2, _ := schema.NewColumnMetadata("table_id", types.IntType, 2, InvalidTableID, false, false)
-	columns = append(columns, *col2)
-
-	col3, _ := schema.NewColumnMetadata("column_name", types.StringType, 3, InvalidTableID, false, false)
-	columns = append(columns, *col3)
-
-	col4, _ := schema.NewColumnMetadata("index_type", types.StringType, 4, InvalidTableID, false, false)
-	columns = append(columns, *col4)
-
-	col5, _ := schema.NewColumnMetadata("file_path", types.StringType, 5, InvalidTableID, false, false)
-	columns = append(columns, *col5)
-
-	col6, _ := schema.NewColumnMetadata("created_at", types.IntType, 6, InvalidTableID, false, false)
-	columns = append(columns, *col6)
-
-	sch, _ := schema.NewSchema(InvalidTableID, it.TableName(), columns)
-	return sch
+	return schema.NewSchemaBuilder(InvalidTableID, it.TableName()).
+		AddPrimaryKey("index_id", types.IntType).
+		AddColumn("index_name", types.StringType).
+		AddColumn("table_id", types.IntType).
+		AddColumn("column_name", types.StringType).
+		AddColumn("index_type", types.StringType).
+		AddColumn("file_path", types.StringType).
+		AddColumn("created_at", types.IntType).
+		Build()
 }
 
 func (it *IndexesTable) TableName() string {
