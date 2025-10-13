@@ -15,10 +15,11 @@ import (
 )
 
 // SystemCatalog manages database metadata including table and column definitions.
-// It maintains three system tables:
+// It maintains four system tables:
 //   - CATALOG_TABLES: stores table metadata (ID, name, file path, primary key)
 //   - CATALOG_COLUMNS: stores column metadata (table ID, name, type, position, is_primary)
 //   - CATALOG_STATISTICS: stores table statistics for query optimization
+//   - CATALOG_INDEXES: stores index metadata (ID, name, table ID, column, type, file path)
 type SystemCatalog struct {
 	store             PageStoreInterface
 	cache             *tableCache
@@ -26,6 +27,7 @@ type SystemCatalog struct {
 	TablesTableID     int
 	ColumnsTableID    int
 	StatisticsTableID int
+	IndexesTableID    int
 }
 
 // NewSystemCatalog creates a new system catalog instance.
@@ -40,7 +42,7 @@ func NewSystemCatalog(ps PageStoreInterface, cache *tableCache) *SystemCatalog {
 	return sc
 }
 
-// Initialize creates or loads the system catalog tables (CATALOG_TABLES, CATALOG_COLUMNS, and CATALOG_STATISTICS)
+// Initialize creates or loads the system catalog tables (CATALOG_TABLES, CATALOG_COLUMNS, CATALOG_STATISTICS, and CATALOG_INDEXES)
 // and registers them with the table manager. This must be called before any other catalog operations.
 // Works for both new and existing databases - heap.NewHeapFile handles both creation and loading.
 //
@@ -57,6 +59,7 @@ func (sc *SystemCatalog) Initialize(ctx *transaction.TransactionContext, dataDir
 		systemtable.Tables,
 		systemtable.Columns,
 		systemtable.Stats,
+		systemtable.Indexes,
 	}
 
 	for _, table := range systemTables {
@@ -84,10 +87,10 @@ func (sc *SystemCatalog) Initialize(ctx *transaction.TransactionContext, dataDir
 }
 
 // setSystemTableID sets the appropriate system table ID field based on table name.
-// This is called during initialization to track the IDs of the three system catalog tables.
+// This is called during initialization to track the IDs of the four system catalog tables.
 //
 // Parameters:
-//   - tableName: Name of the system table (CATALOG_TABLES, CATALOG_COLUMNS, or CATALOG_STATISTICS)
+//   - tableName: Name of the system table (CATALOG_TABLES, CATALOG_COLUMNS, CATALOG_STATISTICS, or CATALOG_INDEXES)
 //   - tableID: Heap file ID assigned to this system table
 func (sc *SystemCatalog) setSystemTableID(tableName string, tableID int) {
 	switch tableName {
@@ -97,6 +100,8 @@ func (sc *SystemCatalog) setSystemTableID(tableName string, tableID int) {
 		sc.ColumnsTableID = tableID
 	case systemtable.Stats.TableName():
 		sc.StatisticsTableID = tableID
+	case systemtable.Indexes.TableName():
+		sc.IndexesTableID = tableID
 	}
 }
 
@@ -209,7 +214,7 @@ func (sc *SystemCatalog) LoadTable(tid *primitives.TransactionID, tableName stri
 }
 
 // DeleteCatalogEntry removes all catalog metadata for a table, including entries in
-// CATALOG_TABLES, CATALOG_COLUMNS, and CATALOG_STATISTICS.
+// CATALOG_TABLES, CATALOG_COLUMNS, CATALOG_STATISTICS, and CATALOG_INDEXES.
 //
 // This is typically called as part of a DROP TABLE operation. Note that this only removes
 // catalog entries - the heap file itself must be deleted separately.
@@ -220,7 +225,7 @@ func (sc *SystemCatalog) LoadTable(tid *primitives.TransactionID, tableName stri
 //
 // Returns an error if any system table deletion fails.
 func (sc *SystemCatalog) DeleteCatalogEntry(tx *transaction.TransactionContext, tableID int) error {
-	sysTableIDs := []int{sc.TablesTableID, sc.ColumnsTableID, sc.StatisticsTableID}
+	sysTableIDs := []int{sc.TablesTableID, sc.ColumnsTableID, sc.StatisticsTableID, sc.IndexesTableID}
 	for _, id := range sysTableIDs {
 		if err := sc.DeleteTableFromSysTable(tx, tableID, id); err != nil {
 			return err
@@ -280,7 +285,7 @@ func (sc *SystemCatalog) DeleteTableFromSysTable(tx *transaction.TransactionCont
 // This is used to access system table-specific methods like TableIDIndex().
 //
 // Parameters:
-//   - id: System table ID (TablesTableID, ColumnsTableID, or StatisticsTableID)
+//   - id: System table ID (TablesTableID, ColumnsTableID, StatisticsTableID, or IndexesTableID)
 //
 // Returns the corresponding SystemTable interface or an error if the ID is invalid.
 func (sc *SystemCatalog) getSysTable(id int) (systemtable.SystemTable, error) {
@@ -291,6 +296,8 @@ func (sc *SystemCatalog) getSysTable(id int) (systemtable.SystemTable, error) {
 		return systemtable.Columns, nil
 	case sc.StatisticsTableID:
 		return systemtable.Stats, nil
+	case sc.IndexesTableID:
+		return systemtable.Indexes, nil
 	default:
 		return nil, fmt.Errorf("unknown system table ID: %d", id)
 	}
