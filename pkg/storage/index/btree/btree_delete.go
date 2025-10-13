@@ -7,7 +7,18 @@ import (
 	"storemy/pkg/storage/index"
 )
 
-// deleteFromLeaf removes a key-value pair from a leaf page
+// deleteFromLeaf removes a key-value pair from a leaf page and handles rebalancing.
+// It performs the following steps:
+// 1. Locates and removes the target entry from the leaf
+// 2. Updates parent keys if the first key was deleted
+// 3. Handles underflow by redistributing or merging with siblings
+//
+// Parameters:
+//   - tid: Transaction ID for lock management
+//   - leaf: The leaf page containing the entry to delete
+//   - ie: The index entry to remove
+//
+// Returns an error if the entry is not found or if write operations fail.
 func (bt *BTree) deleteFromLeaf(tid *primitives.TransactionID, leaf *BTreePage, ie *index.IndexEntry) error {
 	deleteIdx := slices.IndexFunc(leaf.entries, func(e *index.IndexEntry) bool {
 		return e.Equals(ie)
@@ -39,7 +50,21 @@ func (bt *BTree) deleteFromLeaf(tid *primitives.TransactionID, leaf *BTreePage, 
 	return nil
 }
 
-// handleUnderflow handles page underflow after deletion
+// handleUnderflow restores B-tree balance after a page falls below minimum occupancy.
+// It follows the standard B-tree rebalancing algorithm:
+// 1. If root has one child, promote that child to root
+// 2. Try borrowing from left sibling (if it has spare entries)
+// 3. Try borrowing from right sibling (if it has spare entries)
+// 4. Merge with left sibling if borrowing fails
+// 5. Merge with right sibling as last resort
+//
+// This recursively propagates underflow up the tree if merging causes parent underflow.
+//
+// Parameters:
+//   - tid: Transaction ID for lock management
+//   - page: The page with insufficient entries (< maxEntriesPerPage/2)
+//
+// Returns an error if page operations fail.
 func (bt *BTree) handleUnderflow(tid *primitives.TransactionID, page *BTreePage) error {
 	if page.parentPage == -1 {
 		if page.IsInternalPage() && page.numEntries == 0 && len(page.children) == 1 {
@@ -68,7 +93,7 @@ func (bt *BTree) handleUnderflow(tid *primitives.TransactionID, page *BTreePage)
 	})
 
 	if childIdx == -1 {
-		return fmt.Errorf("page not found in parent")
+		return fmt.Errorf("child not found in parent")
 	}
 
 	if childIdx > 0 {
@@ -110,7 +135,20 @@ func (bt *BTree) handleUnderflow(tid *primitives.TransactionID, page *BTreePage)
 	return nil
 }
 
-// redistributeFromLeft borrows an entry from left sibling
+// redistributeFromLeft borrows the rightmost entry from the left sibling.
+// For leaf pages: moves the last entry from left to the beginning of current
+// For internal pages: rotates entries through the parent separator key
+//
+// This operation maintains B-tree ordering by updating the parent's separator key.
+//
+// Parameters:
+//   - tid: Transaction ID for lock management
+//   - left: Left sibling with spare entries
+//   - current: Underflow page receiving the entry
+//   - parent: Parent page containing separator keys
+//   - pageIdx: Index of current page in parent's children array
+//
+// Returns an error if write operations fail.
 func (bt *BTree) redistributeFromLeft(tid *primitives.TransactionID, left, current, parent *BTreePage, pageIdx int) error {
 	if current.IsLeafPage() {
 		leftLastIdx := left.numEntries - 1
@@ -124,8 +162,7 @@ func (bt *BTree) redistributeFromLeft(tid *primitives.TransactionID, left, curre
 		return bt.writePages(left, current, parent)
 	}
 
-	last := left.numEntries
-	moved := deleteFromPage(left, last, left.children, tid)
+	moved := deleteFromPage(left, left.numEntries, left.children, tid)
 
 	ch := newBtreeChildPtr(nil, (*moved).ChildPID)
 	if len(current.children) > 0 {
@@ -139,7 +176,20 @@ func (bt *BTree) redistributeFromLeft(tid *primitives.TransactionID, left, curre
 	return bt.writePages(left, current, parent)
 }
 
-// redistributeFromRight borrows an entry from right sibling
+// redistributeFromRight borrows the leftmost entry from the right sibling.
+// For leaf pages: moves the first entry from right to the end of current
+// For internal pages: rotates entries through the parent separator key
+//
+// This operation maintains B-tree ordering by updating the parent's separator key.
+//
+// Parameters:
+//   - tid: Transaction ID for lock management
+//   - current: Underflow page receiving the entry
+//   - right: Right sibling with spare entries
+//   - parent: Parent page containing separator keys
+//   - pageIdx: Index of current page in parent's children array
+//
+// Returns an error if write operations fail.
 func (bt *BTree) redistributeFromRight(tid *primitives.TransactionID, current, right, parent *BTreePage, pageIdx int) error {
 	rightStart := 0
 
@@ -162,20 +212,55 @@ func (bt *BTree) redistributeFromRight(tid *primitives.TransactionID, current, r
 		right.children[0].Key = nil
 	}
 	parent.MarkDirty(true, tid)
-	return bt.writePages(parent, current, parent)
+	return bt.writePages(current, right, parent)
 }
 
-// mergeWithLeft merges current page with left sibling
+// mergeWithLeft merges the current page into its left sibling.
+// This is a convenience wrapper around mergePages that handles left-side merging.
+//
+// Parameters:
+//   - tid: Transaction ID for lock management
+//   - leftSibling: Left sibling receiving merged entries
+//   - current: Current page being merged (will be deallocated)
+//   - parent: Parent page whose child pointer will be removed
+//   - pageIdx: Index of current page in parent's children array
+//
+// Returns an error if merge operations fail.
 func (bt *BTree) mergeWithLeft(tid *primitives.TransactionID, leftSibling, current, parent *BTreePage, pageIdx int) error {
 	return bt.mergePages(tid, leftSibling, current, parent, pageIdx, pageIdx)
 }
 
-// mergeWithRight merges current page with right sibling
+// mergeWithRight merges the right sibling into the current page.
+// This is a convenience wrapper around mergePages that handles right-side merging.
+//
+// Parameters:
+//   - tid: Transaction ID for lock management
+//   - page: Current page receiving merged entries
+//   - rightSibling: Right sibling being merged (will be deallocated)
+//   - parentPage: Parent page whose child pointer will be removed
+//   - pageIdx: Index of current page in parent's children array
+//
+// Returns an error if merge operations fail.
 func (bt *BTree) mergeWithRight(tid *primitives.TransactionID, page, rightSibling, parentPage *BTreePage, pageIdx int) error {
-	return bt.mergePages(tid, page, rightSibling, parentPage, pageIdx, pageIdx+1)
+	return bt.mergePages(tid, page, rightSibling, parentPage, pageIdx+1, pageIdx+1)
 }
 
-// mergePages merges right page into left page
+// mergePages combines two sibling pages into one, removing a child pointer from parent.
+// For leaf pages: concatenates entries and updates doubly-linked leaf chain
+// For internal pages: includes parent's separator key in the merge
+//
+// After merging, the right page is effectively deallocated and the parent's
+// child pointer is removed. If this causes parent underflow, recursively rebalance.
+//
+// Parameters:
+//   - tid: Transaction ID for lock management
+//   - left: Page receiving all merged entries
+//   - right: Page being merged (entries moved to left)
+//   - parent: Parent page losing a child pointer
+//   - childIdxToDelete: Index of child pointer to remove from parent
+//   - separatorIdx: Index of separator key in parent (for internal nodes)
+//
+// Returns an error if page operations fail.
 func (bt *BTree) mergePages(tid *primitives.TransactionID, left, right, parent *BTreePage, childIdxToDelete int, separatorIdx int) error {
 	if left.IsLeafPage() {
 		left.entries = append(left.entries, right.entries...)
@@ -202,6 +287,17 @@ func (bt *BTree) mergePages(tid *primitives.TransactionID, left, right, parent *
 		left.children = append(left.children, right.children...)
 		left.numEntries += right.numEntries
 		left.MarkDirty(true, tid)
+
+		// Update all children from right page to point to left page as their parent
+		for _, child := range right.children {
+			childPage, err := bt.file.ReadPage(tid, child.ChildPID)
+			if err == nil {
+				childPage.parentPage = left.pageID.PageNo()
+				childPage.MarkDirty(true, tid)
+				bt.file.WritePage(childPage)
+			}
+		}
+
 		bt.file.WritePage(left)
 	}
 
@@ -215,6 +311,14 @@ func (bt *BTree) mergePages(tid *primitives.TransactionID, left, right, parent *
 	return nil
 }
 
+// writePages writes multiple pages to disk in sequence.
+// This is a utility function to reduce code duplication when multiple pages
+// need to be persisted after a rebalancing operation.
+//
+// Parameters:
+//   - pages: Variable number of pages to write
+//
+// Returns the first error encountered during writing, or nil if all succeed.
 func (bt *BTree) writePages(pages ...*BTreePage) error {
 	for _, page := range pages {
 		if err := bt.file.WritePage(page); err != nil {
@@ -224,6 +328,18 @@ func (bt *BTree) writePages(pages ...*BTreePage) error {
 	return nil
 }
 
+// deleteFromPage removes an element at the specified index from a page's slice.
+// This generic helper function works with both entries ([]*IndexEntry) and
+// children ([]*BTreeChildPtr) slices. It updates the page's internal slice,
+// decrements numEntries, and marks the page dirty.
+//
+// Parameters:
+//   - p: Page containing the slice
+//   - idx: Index of element to delete
+//   - s: Slice containing the element (entries or children)
+//   - tid: Transaction ID for marking page dirty
+//
+// Returns a pointer to the deleted element, or nil if index is invalid.
 func deleteFromPage[T any](p *BTreePage, idx int, s []T, tid *primitives.TransactionID) *T {
 	if idx < 0 || idx >= len(s) {
 		return nil
@@ -245,7 +361,19 @@ func deleteFromPage[T any](p *BTreePage, idx int, s []T, tid *primitives.Transac
 	return &deleted
 }
 
-// insertIntoPage inserts an element at the specified index (0 = beginning, len = end)
+// insertIntoPage inserts an element at the specified index in a page's slice.
+// This generic helper function works with both entries ([]*IndexEntry) and
+// children ([]*BTreeChildPtr) slices. It updates the page's internal slice,
+// increments numEntries, and marks the page dirty.
+//
+// Parameters:
+//   - p: Page containing the slice
+//   - idx: Index where element should be inserted (0 = beginning, len(s) = end)
+//   - s: Slice to insert into (entries or children)
+//   - elem: Element to insert
+//   - tid: Transaction ID for marking page dirty
+//
+// Returns an error if the index is out of bounds.
 func insertIntoPage[T any](p *BTreePage, idx int, s []T, elem T, tid *primitives.TransactionID) error {
 	if idx < 0 || idx > len(s) {
 		return fmt.Errorf("invalid index %d for inserting element", idx)
@@ -266,10 +394,30 @@ func insertIntoPage[T any](p *BTreePage, idx int, s []T, elem T, tid *primitives
 	return nil
 }
 
+// insertAtBegin inserts an element at the beginning of a page's slice.
+// This is a convenience wrapper around insertIntoPage.
+//
+// Parameters:
+//   - p: Page containing the slice
+//   - s: Slice to insert into (entries or children)
+//   - elem: Element to insert at position 0
+//   - tid: Transaction ID for marking page dirty
+//
+// Returns an error if the insertion fails.
 func insertAtBegin[T any](p *BTreePage, s []T, elem T, tid *primitives.TransactionID) error {
 	return insertIntoPage(p, 0, s, elem, tid)
 }
 
+// insertAtEnd appends an element to the end of a page's slice.
+// This is a convenience wrapper around insertIntoPage.
+//
+// Parameters:
+//   - p: Page containing the slice
+//   - s: Slice to insert into (entries or children)
+//   - elem: Element to append at the end
+//   - tid: Transaction ID for marking page dirty
+//
+// Returns an error if the insertion fails.
 func insertAtEnd[T any](p *BTreePage, s []T, elem T, tid *primitives.TransactionID) error {
 	return insertIntoPage(p, len(s), s, elem, tid)
 }
