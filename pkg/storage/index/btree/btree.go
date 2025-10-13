@@ -24,8 +24,11 @@ func NewBTree(indexID int, keyType types.Type, file *BTreeFile) *BTree {
 		file:    file,
 	}
 
+	// Set the file's index ID to match this BTree's index ID
+	file.indexID = indexID
+
 	if file.NumPages() > 0 {
-		bt.rootPageID = NewBTreePageID(indexID, 0)
+		bt.rootPageID = NewBTreePageID(bt.indexID, 0)
 	}
 
 	return bt
@@ -259,12 +262,20 @@ func (bt *BTree) updateParentKey(tid *primitives.TransactionID, childPage *BTree
 	}
 
 	// Find the child pointer and update its key
+	// Note: children[0] has no key in B+tree, so we start from index 1
 	for i := 1; i < len(parentPage.children); i++ {
 		if parentPage.children[i].ChildPID.Equals(childPage.pageID) {
 			parentPage.children[i].Key = newKey
 			parentPage.MarkDirty(true, tid)
 			return bt.file.WritePage(parentPage)
 		}
+	}
+
+	// If we get here, the child might be at index 0, which doesn't have a separator key
+	// Check if it's the first child
+	if len(parentPage.children) > 0 && parentPage.children[0].ChildPID.Equals(childPage.pageID) {
+		// First child doesn't have a separator key, so nothing to update
+		return nil
 	}
 
 	return fmt.Errorf("child not found in parent")
