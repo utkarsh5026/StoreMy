@@ -10,6 +10,11 @@ func getIntField(tup *tuple.Tuple, index int) int {
 	return int(field.(*types.IntField).Value)
 }
 
+func getInt64Field(tup *tuple.Tuple, index int) int64 {
+	field, _ := tup.GetField(index)
+	return field.(*types.IntField).Value
+}
+
 func getStringField(tup *tuple.Tuple, index int) string {
 	field, _ := tup.GetField(index)
 	return field.String()
