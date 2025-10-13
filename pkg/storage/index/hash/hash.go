@@ -144,17 +144,16 @@ func (hi *HashIndex) createAndLinkOverflowPage(tid TID, bucketNum int, parentPag
 //
 // Parameters:
 //   - tid: Transaction ID for lock coordination
-//   - parentPage: Page containing the overflow pointer
+//   - p: Page containing the overflow pointer
 //
 // Returns the overflow page or error if pointer is invalid or read fails.
-func (hi *HashIndex) readOverflowPage(tid TID, parentPage *HashPage) (*HashPage, error) {
-	overflowPageNum := parentPage.GetOverflowPage()
+func (hi *HashIndex) readOverflowPage(tid TID, p *HashPage) (*HashPage, error) {
+	overflowPageNum := p.GetOverflowPage()
 
 	if overflowPageNum == NoOverFlowPage {
 		return nil, fmt.Errorf("no overflow page for this hash page")
 	}
 
-	// Validate overflow page number
 	if overflowPageNum >= hi.file.NumPages() {
 		return nil, fmt.Errorf("invalid overflow page number %d (max: %d)",
 			overflowPageNum, hi.file.NumPages())
@@ -340,6 +339,27 @@ func (hi *HashIndex) GetKeyType() types.Type {
 // Returns error if file close operation fails.
 func (hi *HashIndex) Close() error {
 	return hi.file.Close()
+}
+
+// Iterator returns an iterator over all entries in the hash index.
+// The iterator visits all buckets sequentially, including overflow pages,
+// and returns entries in an unordered fashion (hash indexes don't maintain order).
+//
+// Parameters:
+//   - tid: Transaction ID for the scan operation
+//
+// Returns:
+//   - Iterator that yields all index entries across all buckets
+//
+// Performance: O(n) where n is total entries, scans all buckets
+func (hi *HashIndex) Iterator(tid TID) *HashFileIterator {
+	return &HashFileIterator{
+		file:          hi.file,
+		tid:           tid,
+		currentBucket: 0,
+		currentPage:   nil,
+		currentPos:    0,
+	}
 }
 
 // hashKey computes the hash of a key and returns the bucket number.
