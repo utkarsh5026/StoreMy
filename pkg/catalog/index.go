@@ -127,7 +127,7 @@ func (sc *SystemCatalog) DeleteIndexFromCatalog(tx *transaction.TransactionConte
 	})
 
 	for _, tup := range tuplesToDelete {
-		if err := sc.store.DeleteTuple(tx, indexesFile, tup); err != nil {
+		if err := sc.tupMgr.DeleteTuple(tx, indexesFile, tup); err != nil {
 			return err
 		}
 	}

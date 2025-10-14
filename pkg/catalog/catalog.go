@@ -11,6 +11,7 @@ import (
 	"storemy/pkg/memory"
 	"storemy/pkg/primitives"
 	"storemy/pkg/storage/heap"
+	"storemy/pkg/table"
 	"storemy/pkg/tuple"
 	"storemy/pkg/types"
 	"strings"
@@ -25,6 +26,7 @@ import (
 type SystemCatalog struct {
 	store             *memory.PageStore
 	cache             *tablecache.TableCache
+	tupMgr            *table.TupleManager
 	TablesTableID     int
 	ColumnsTableID    int
 	StatisticsTableID int
@@ -35,8 +37,9 @@ type SystemCatalog struct {
 // The catalog must be initialized via Initialize() before use.
 func NewSystemCatalog(ps *memory.PageStore, cache *tablecache.TableCache) *SystemCatalog {
 	sc := &SystemCatalog{
-		store: ps,
-		cache: cache,
+		store:  ps,
+		cache:  cache,
+		tupMgr: table.NewTupleManager(ps),
 	}
 	return sc
 }
@@ -126,7 +129,7 @@ func (sc *SystemCatalog) RegisterTable(tx *transaction.TransactionContext, sch *
 		PrimaryKeyCol: sch.PrimaryKey,
 	}
 	tup := systemtable.Tables.CreateTuple(tm)
-	if err := sc.store.InsertTuple(tx, tablesFile, tup); err != nil {
+	if err := sc.tupMgr.InsertTuple(tx, tablesFile, tup); err != nil {
 		return fmt.Errorf("failed to insert table metadata: %w", err)
 	}
 
@@ -137,7 +140,7 @@ func (sc *SystemCatalog) RegisterTable(tx *transaction.TransactionContext, sch *
 
 	for _, col := range sch.Columns {
 		tup = systemtable.Columns.CreateTuple(col)
-		if err := sc.store.InsertTuple(tx, colFile, tup); err != nil {
+		if err := sc.tupMgr.InsertTuple(tx, colFile, tup); err != nil {
 			return fmt.Errorf("failed to insert column metadata: %w", err)
 		}
 	}
@@ -271,7 +274,7 @@ func (sc *SystemCatalog) DeleteTableFromSysTable(tx *transaction.TransactionCont
 	})
 
 	for _, tup := range tuplesToDelete {
-		if err := sc.store.DeleteTuple(tx, tableInfo.File, tup); err != nil {
+		if err := sc.tupMgr.DeleteTuple(tx, tableInfo.File, tup); err != nil {
 			return err
 		}
 	}

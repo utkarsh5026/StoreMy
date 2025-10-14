@@ -127,7 +127,7 @@ func (sc *SystemCatalog) insertNewStatistics(tx *transaction.TransactionContext,
 		return err
 	}
 
-	if err := sc.store.InsertTuple(tx, file, tup); err != nil {
+	if err := sc.tupMgr.InsertTuple(tx, file, tup); err != nil {
 		return fmt.Errorf("failed to insert statistics: %w", err)
 	}
 	return nil

@@ -115,11 +115,11 @@ func (sc *SystemCatalog) IncrementAutoIncrementValue(tx *transaction.Transaction
 	newTuple := systemtable.Columns.CreateTuple(col)
 	newTuple.SetField(6, types.NewIntField(int64(newValue)))
 
-	if err := sc.store.DeleteTuple(tx, file, match.Tuple); err != nil {
+	if err := sc.tupMgr.DeleteTuple(tx, file, match.Tuple); err != nil {
 		return fmt.Errorf("failed to delete old tuple: %w", err)
 	}
 
-	if err := sc.store.InsertTuple(tx, file, newTuple); err != nil {
+	if err := sc.tupMgr.InsertTuple(tx, file, newTuple); err != nil {
 		return fmt.Errorf("failed to insert updated tuple: %w", err)
 	}
 
