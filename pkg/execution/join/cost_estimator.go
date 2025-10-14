@@ -2,7 +2,7 @@ package join
 
 import (
 	"storemy/pkg/catalog"
-	"storemy/pkg/primitives"
+	"storemy/pkg/concurrency/transaction"
 )
 
 const (
@@ -23,8 +23,8 @@ func NewCostEstimator(cat *catalog.SystemCatalog) *CostEstimator {
 
 // BuildJoinStatistics creates JoinStatistics from catalog statistics for two tables
 func (ce *CostEstimator) BuildJoinStatistics(
-	tid *primitives.TransactionID, leftTableID, rightTableID, memoryPages int) (*JoinStatistics, error) {
-	leftStats, err := ce.catalog.GetTableStatistics(tid, leftTableID)
+	tx *transaction.TransactionContext, leftTableID, rightTableID, memoryPages int) (*JoinStatistics, error) {
+	leftStats, err := ce.catalog.GetTableStatistics(tx, leftTableID)
 	if err != nil {
 		leftStats = &catalog.TableStatistics{
 			TableID:     leftTableID,
@@ -33,7 +33,7 @@ func (ce *CostEstimator) BuildJoinStatistics(
 		}
 	}
 
-	rightStats, err := ce.catalog.GetTableStatistics(tid, rightTableID)
+	rightStats, err := ce.catalog.GetTableStatistics(tx, rightTableID)
 	if err != nil {
 		rightStats = &catalog.TableStatistics{
 			TableID:     rightTableID,
