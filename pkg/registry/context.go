@@ -5,7 +5,7 @@ import (
 	"storemy/pkg/concurrency/transaction"
 	"storemy/pkg/log"
 	"storemy/pkg/memory"
-	"storemy/pkg/table"
+	"storemy/pkg/memory/wrappers/table"
 )
 
 // DatabaseContext holds all shared components that are needed across the database system.
