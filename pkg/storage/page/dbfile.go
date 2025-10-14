@@ -1,7 +1,6 @@
 package page
 
 import (
-	"storemy/pkg/iterator"
 	"storemy/pkg/primitives"
 	"storemy/pkg/tuple"
 )
@@ -19,11 +18,6 @@ type DbFile interface {
 	// The page will be written to its designated location based on its page ID.
 	// Returns an error if the write operation fails.
 	WritePage(p Page) error
-
-	// Iterator creates and returns a new iterator for traversing all tuples in the database file
-	// within the context of the specified primitives. The iterator allows sequential access
-	// to each tuple, respecting the visibility and access control of the primitives.
-	Iterator(tid *primitives.TransactionID) iterator.DbFileIterator
 
 	// GetID returns the unique identifier of the database file.
 	GetID() int
