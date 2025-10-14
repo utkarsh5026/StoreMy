@@ -111,7 +111,7 @@ func (p *InsertPlan) insertTuples(tableID int, tupleDesc *tuple.TupleDescription
 			return 0, err
 		}
 
-		if err := p.ctx.PageStore().InsertTuple(p.transactionCtx, dbFile, newTuple); err != nil {
+		if err := p.ctx.TupleManager().InsertTuple(p.transactionCtx, dbFile, newTuple); err != nil {
 			return 0, fmt.Errorf("failed to insert tuple: %v", err)
 		}
 

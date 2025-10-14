@@ -79,7 +79,7 @@ func (p *UpdatePlan) buildUpdateMap(tupleDesc TupleDesc) (map[int]types.Field, e
 // updateTuples applies updates to all collected tuples
 // UPDATE is implemented as DELETE + INSERT at the storage layer
 func (p *UpdatePlan) updateTuples(tuples []*tuple.Tuple, updateMap map[int]types.Field, tableID int) error {
-	store := p.ctx.PageStore()
+	tupleMgr := p.ctx.TupleManager()
 	ctm := p.ctx.CatalogManager()
 
 	file, err := ctm.GetTableFile(tableID)
@@ -91,7 +91,7 @@ func (p *UpdatePlan) updateTuples(tuples []*tuple.Tuple, updateMap map[int]types
 		if err != nil {
 			return err
 		}
-		if err := store.UpdateTuple(p.tx, file, old, newTup); err != nil {
+		if err := tupleMgr.UpdateTuple(p.tx, file, old, newTup); err != nil {
 			return fmt.Errorf("failed to update tuple: %v", err)
 		}
 	}

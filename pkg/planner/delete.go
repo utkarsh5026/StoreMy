@@ -60,14 +60,14 @@ func (p *DeletePlan) Execute() (any, error) {
 // deleteTuples performs the actual deletion of collected tuples.
 func (p *DeletePlan) deleteTuples(ts []*tuple.Tuple, tableID int) error {
 	ctm := p.ctx.CatalogManager()
-	store := p.ctx.PageStore()
+	tupleMgr := p.ctx.TupleManager()
 	dbFile, err := ctm.GetTableFile(tableID)
 	if err != nil {
 		return err
 	}
 
 	for i, t := range ts {
-		if err := store.DeleteTuple(p.tx, dbFile, t); err != nil {
+		if err := tupleMgr.DeleteTuple(p.tx, dbFile, t); err != nil {
 			return fmt.Errorf("failed to delete tuple %d: %v", i+1, err)
 		}
 	}
