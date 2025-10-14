@@ -5,16 +5,18 @@ import (
 	"storemy/pkg/concurrency/transaction"
 	"storemy/pkg/log"
 	"storemy/pkg/memory"
+	"storemy/pkg/table"
 )
 
 // DatabaseContext holds all shared components that are needed across the database system.
 // This provides a single source of truth and avoids passing multiple dependencies everywhere.
 type DatabaseContext struct {
-	pageStore  *memory.PageStore
-	catalogMgr *catalogmanager.CatalogManager
-	txRegistry *transaction.TransactionRegistry
-	wal        *log.WAL
-	dataDir    string
+	pageStore    *memory.PageStore
+	catalogMgr   *catalogmanager.CatalogManager
+	txRegistry   *transaction.TransactionRegistry
+	tupleManager *table.TupleManager
+	wal          *log.WAL
+	dataDir      string
 }
 
 // NewDatabaseContext creates a new database context with all required components
@@ -24,12 +26,14 @@ func NewDatabaseContext(
 	wal *log.WAL,
 	dataDir string,
 ) *DatabaseContext {
+	tupleManager := table.NewTupleManager(pageStore, wal)
 	return &DatabaseContext{
-		pageStore:  pageStore,
-		catalogMgr: catalogMgr,
-		txRegistry: transaction.NewTransactionRegistry(wal),
-		wal:        wal,
-		dataDir:    dataDir,
+		pageStore:    pageStore,
+		catalogMgr:   catalogMgr,
+		txRegistry:   transaction.NewTransactionRegistry(wal),
+		tupleManager: tupleManager,
+		wal:          wal,
+		dataDir:      dataDir,
 	}
 }
 
@@ -51,4 +55,8 @@ func (ctx *DatabaseContext) TransactionRegistry() *transaction.TransactionRegist
 
 func (ctx *DatabaseContext) CatalogManager() *catalogmanager.CatalogManager {
 	return ctx.catalogMgr
+}
+
+func (ctx *DatabaseContext) TupleManager() *table.TupleManager {
+	return ctx.tupleManager
 }
