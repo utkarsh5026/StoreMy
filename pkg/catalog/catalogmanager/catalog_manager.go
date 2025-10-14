@@ -431,6 +431,10 @@ func (cm *CatalogManager) IndexExists(tid TID, indexName string) bool {
 	return err == nil
 }
 
+func (cm *CatalogManager) Catalog() *catalog.SystemCatalog {
+	return cm.catalog
+}
+
 // hashFilePath generates a unique ID from a file path (simple hash function)
 func hashFilePath(filePath string) int {
 	hash := 0

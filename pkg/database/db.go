@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"storemy/pkg/catalog"
+	"storemy/pkg/catalog/catalogmanager"
 	"storemy/pkg/concurrency/transaction"
 	"storemy/pkg/log"
 	"storemy/pkg/memory"
@@ -23,7 +24,7 @@ const (
 
 // Database represents the main database engine that coordinates all components
 type Database struct {
-	catalogMgr   *catalog.CatalogManager
+	catalogMgr   *catalogmanager.CatalogManager
 	pageStore    *memory.PageStore
 	queryPlanner *planner.QueryPlanner
 	wal          *log.WAL
@@ -77,7 +78,7 @@ func NewDatabase(name, dataDir, logDir string) (*Database, error) {
 	}
 
 	pageStore := memory.NewPageStore(wal)
-	catalogMgr := catalog.NewCatalogManager(pageStore, dataDir)
+	catalogMgr := catalogmanager.NewCatalogManager(pageStore, dataDir)
 
 	ctx := registry.NewDatabaseContext(pageStore, catalogMgr, wal, fullPath)
 
@@ -91,7 +92,7 @@ func NewDatabase(name, dataDir, logDir string) (*Database, error) {
 		stats:      &DatabaseStats{},
 	}
 
-	statsManager := catalog.NewStatisticsManager(catalogMgr, db)
+	statsManager := catalog.NewStatisticsManager(catalogMgr.Catalog(), db)
 	pageStore.SetStatsManager(statsManager)
 	db.statsManager = statsManager
 
