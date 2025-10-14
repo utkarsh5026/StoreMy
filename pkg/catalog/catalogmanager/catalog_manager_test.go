@@ -169,7 +169,7 @@ func TestCatalogManager_CreateTable(t *testing.T) {
 
 	// Verify table ID lookup works
 	tx3 := setup.beginTx()
-	foundID, err := setup.catalogMgr.GetTableID(tx3.ID, "users")
+	foundID, err := setup.catalogMgr.GetTableID(tx3, "users")
 	if err != nil {
 		t.Errorf("GetTableID failed: %v", err)
 	}
@@ -178,7 +178,7 @@ func TestCatalogManager_CreateTable(t *testing.T) {
 	}
 
 	// Verify table name lookup works
-	foundName, err := setup.catalogMgr.GetTableName(tx3.ID, tableID)
+	foundName, err := setup.catalogMgr.GetTableName(tx3, tableID)
 	if err != nil {
 		t.Errorf("GetTableName failed: %v", err)
 	}
@@ -187,7 +187,7 @@ func TestCatalogManager_CreateTable(t *testing.T) {
 	}
 
 	// Verify schema
-	schema, err := setup.catalogMgr.GetTableSchema(tx3.ID, tableID)
+	schema, err := setup.catalogMgr.GetTableSchema(tx3, tableID)
 	if err != nil {
 		t.Errorf("GetTableSchema failed: %v", err)
 	}
@@ -229,7 +229,7 @@ func TestCatalogManager_DropTable(t *testing.T) {
 
 	// Verify table exists
 	tx3 := setup.beginTx()
-	if !setup.catalogMgr.TableExists(tx3.ID, "test_table") {
+	if !setup.catalogMgr.TableExists(tx3, "test_table") {
 		t.Fatal("Table should exist before drop")
 	}
 
@@ -248,7 +248,7 @@ func TestCatalogManager_DropTable(t *testing.T) {
 
 	// Verify table no longer in catalog
 	tx5 := setup.beginTx()
-	_, err = setup.catalogMgr.GetTableID(tx5.ID, "test_table")
+	_, err = setup.catalogMgr.GetTableID(tx5, "test_table")
 	if err == nil {
 		t.Error("Table should not be found in catalog after drop")
 	}
@@ -270,7 +270,7 @@ func TestCatalogManager_TableExists(t *testing.T) {
 	tx2 := setup.beginTx()
 
 	// Non-existent table
-	if setup.catalogMgr.TableExists(tx2.ID, "nonexistent") {
+	if setup.catalogMgr.TableExists(tx2, "nonexistent") {
 		t.Error("TableExists should return false for non-existent table")
 	}
 
@@ -286,7 +286,7 @@ func TestCatalogManager_TableExists(t *testing.T) {
 	}
 
 	tx4 := setup.beginTx()
-	if !setup.catalogMgr.TableExists(tx4.ID, "exists_test") {
+	if !setup.catalogMgr.TableExists(tx4, "exists_test") {
 		t.Error("TableExists should return true for existing table")
 	}
 }
@@ -332,12 +332,12 @@ func TestCatalogManager_RenameTable(t *testing.T) {
 
 	// Verify new name exists in catalog
 	tx4 := setup.beginTx()
-	if !setup.catalogMgr.TableExists(tx4.ID, "new_name") {
+	if !setup.catalogMgr.TableExists(tx4, "new_name") {
 		t.Error("New table name should exist in catalog")
 	}
 
 	// Verify table ID unchanged
-	newID, err := setup.catalogMgr.GetTableID(tx4.ID, "new_name")
+	newID, err := setup.catalogMgr.GetTableID(tx4, "new_name")
 	if err != nil {
 		t.Errorf("GetTableID failed: %v", err)
 	}
@@ -389,13 +389,13 @@ func TestCatalogManager_LoadUnloadTable(t *testing.T) {
 
 	// Verify still in catalog
 	tx3 := setup.beginTx()
-	if !setup.catalogMgr.TableExists(tx3.ID, "lazy_table") {
+	if !setup.catalogMgr.TableExists(tx3, "lazy_table") {
 		t.Error("Table should still exist in disk catalog")
 	}
 
 	// Load the table back
 	tx4 := setup.beginTx()
-	err = setup.catalogMgr.LoadTable(tx4.ID, "lazy_table")
+	err = setup.catalogMgr.LoadTable(tx4, "lazy_table")
 	if err != nil {
 		t.Fatalf("LoadTable failed: %v", err)
 	}
@@ -438,7 +438,7 @@ func TestCatalogManager_ListTables(t *testing.T) {
 
 	// List tables from memory (refreshFromDisk = false)
 	tx2 := setup.beginTx()
-	memoryTables, err := setup.catalogMgr.ListAllTables(tx2.ID, false)
+	memoryTables, err := setup.catalogMgr.ListAllTables(tx2, false)
 	if err != nil {
 		t.Fatalf("ListAllTables failed: %v", err)
 	}
@@ -448,7 +448,7 @@ func TestCatalogManager_ListTables(t *testing.T) {
 
 	// List tables from disk (refreshFromDisk = true)
 	tx3 := setup.beginTx()
-	diskTables, err := setup.catalogMgr.ListAllTables(tx3.ID, true)
+	diskTables, err := setup.catalogMgr.ListAllTables(tx3, true)
 	if err != nil {
 		t.Fatalf("ListAllTablesFromDisk failed: %v", err)
 	}
@@ -495,7 +495,7 @@ func TestCatalogManager_GetPrimaryKey(t *testing.T) {
 
 	// Get primary key via schema
 	tx3 := setup.beginTx()
-	tableSchema2, err := setup.catalogMgr.GetTableSchema(tx3.ID, tableID)
+	tableSchema2, err := setup.catalogMgr.GetTableSchema(tx3, tableID)
 	if err != nil {
 		t.Fatalf("GetTableSchema failed: %v", err)
 	}
@@ -533,7 +533,7 @@ func TestCatalogManager_ValidateIntegrity(t *testing.T) {
 	// This is a known limitation of the current implementation.
 	// For now, we just verify it doesn't panic.
 	tx3 := setup.beginTx()
-	_ = setup.catalogMgr.ValidateIntegrity(tx3.ID)
+	_ = setup.catalogMgr.ValidateIntegrity(tx3)
 }
 
 // TestCatalogManager_LoadAllTables tests loading all tables at startup
@@ -615,7 +615,7 @@ func TestCatalogManager_AutoIncrement(t *testing.T) {
 
 	// Get auto-increment column info (after commit)
 	tx3 := setup.beginTx()
-	autoIncInfo, err := setup.catalogMgr.GetAutoIncrementColumn(tx3.ID, tableID)
+	autoIncInfo, err := setup.catalogMgr.GetAutoIncrementColumn(tx3, tableID)
 	if err != nil {
 		t.Fatalf("GetAutoIncrementColumn failed: %v", err)
 	}
@@ -671,7 +671,7 @@ func TestCatalogManager_IncrementAutoIncrement(t *testing.T) {
 
 	// Verify new value
 	tx4 := setup.beginTx()
-	autoIncInfo, err := setup.catalogMgr.GetAutoIncrementColumn(tx4.ID, tableID)
+	autoIncInfo, err := setup.catalogMgr.GetAutoIncrementColumn(tx4, tableID)
 	if err != nil {
 		t.Fatalf("GetAutoIncrementColumn failed: %v", err)
 	}
@@ -694,7 +694,7 @@ func TestCatalogManager_IncrementAutoIncrement(t *testing.T) {
 
 	// Verify incremented value
 	tx6 := setup.beginTx()
-	autoIncInfo2, err := setup.catalogMgr.GetAutoIncrementColumn(tx6.ID, tableID)
+	autoIncInfo2, err := setup.catalogMgr.GetAutoIncrementColumn(tx6, tableID)
 	if err != nil {
 		t.Fatalf("GetAutoIncrementColumn failed: %v", err)
 	}
@@ -736,7 +736,7 @@ func TestCatalogManager_NoAutoIncrement(t *testing.T) {
 
 	// Get auto-increment column info (should be empty)
 	tx3 := setup.beginTx()
-	autoIncInfo, err := setup.catalogMgr.GetAutoIncrementColumn(tx3.ID, tableID)
+	autoIncInfo, err := setup.catalogMgr.GetAutoIncrementColumn(tx3, tableID)
 	if err != nil {
 		t.Fatalf("GetAutoIncrementColumn failed: %v", err)
 	}

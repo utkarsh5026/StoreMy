@@ -117,7 +117,7 @@ func (cm *CatalogManager) CreateTable(
 
 // DropTable completely removes a table from both disk catalog and memory cache.
 func (cm *CatalogManager) DropTable(tx TxContext, tableName string) error {
-	tableID, err := cm.GetTableID(tx.ID, tableName)
+	tableID, err := cm.GetTableID(tx, tableName)
 	if err != nil {
 		return fmt.Errorf("table %s not found: %w", tableName, err)
 	}
@@ -135,12 +135,12 @@ func (cm *CatalogManager) DropTable(tx TxContext, tableName string) error {
 
 // GetTableID retrieves the table ID for a given table name.
 // Checks in-memory cache first (O(1)), falls back to disk scan if not found.
-func (cm *CatalogManager) GetTableID(tid TID, tableName string) (int, error) {
+func (cm *CatalogManager) GetTableID(tx TxContext, tableName string) (int, error) {
 	if id, err := cm.tableCache.GetTableID(tableName); err == nil {
 		return id, nil
 	}
 
-	if md, err := cm.catalog.GetTableMetadataByName(tid, tableName); err == nil {
+	if md, err := cm.catalog.GetTableMetadataByName(tx, tableName); err == nil {
 		return md.TableID, nil
 	}
 
@@ -149,12 +149,12 @@ func (cm *CatalogManager) GetTableID(tid TID, tableName string) (int, error) {
 
 // GetTableName retrieves the table name for a given table ID.
 // Checks in-memory cache first (O(1)), falls back to disk scan if not found.
-func (cm *CatalogManager) GetTableName(tid TID, tableID int) (string, error) {
+func (cm *CatalogManager) GetTableName(tx TxContext, tableID int) (string, error) {
 	if info, err := cm.tableCache.GetTableInfo(tableID); err == nil {
 		return info.Schema.TableName, nil
 	}
 
-	if md, err := cm.catalog.GetTableMetadataByID(tid, tableID); err == nil {
+	if md, err := cm.catalog.GetTableMetadataByID(tx, tableID); err == nil {
 		return md.TableName, nil
 	}
 
@@ -163,12 +163,12 @@ func (cm *CatalogManager) GetTableName(tid TID, tableID int) (string, error) {
 
 // GetTableSchema retrieves the schema for a table.
 // First checks in-memory cache, then loads from disk if necessary.
-func (cm *CatalogManager) GetTableSchema(tid TID, tableID int) (*schema.Schema, error) {
+func (cm *CatalogManager) GetTableSchema(tx TxContext, tableID int) (*schema.Schema, error) {
 	if info, err := cm.tableCache.GetTableInfo(tableID); err == nil {
 		return info.Schema, nil
 	}
 
-	schema, err := cm.catalog.LoadTableSchema(tid, tableID)
+	schema, err := cm.catalog.LoadTableSchema(tx, tableID)
 	if err != nil {
 		return nil, err
 	}
@@ -183,22 +183,22 @@ func (cm *CatalogManager) GetTableFile(tableID int) (page.DbFile, error) {
 
 // TableExists checks if a table exists by name.
 // Checks memory first, then disk catalog.
-func (cm *CatalogManager) TableExists(tid TID, tableName string) bool {
+func (cm *CatalogManager) TableExists(tx TxContext, tableName string) bool {
 	if cm.tableCache.TableExists(tableName) {
 		return true
 	}
-	_, err := cm.catalog.GetTableMetadataByName(tid, tableName)
+	_, err := cm.catalog.GetTableMetadataByName(tx, tableName)
 	return err == nil
 }
 
 // ListAllTablesFromDisk scans CATALOG_TABLES and returns all table names.
 // This is slower than ListAllTables but includes tables not currently loaded in memory.
-func (cm *CatalogManager) ListAllTables(tid TID, refreshFromDisk bool) ([]string, error) {
+func (cm *CatalogManager) ListAllTables(tx TxContext, refreshFromDisk bool) ([]string, error) {
 	if !refreshFromDisk {
 		return cm.tableCache.GetAllTableNames(), nil
 	}
 
-	tables, err := cm.catalog.GetAllTables(tid)
+	tables, err := cm.catalog.GetAllTables(tx)
 	if err != nil {
 		return nil, err
 	}
@@ -223,7 +223,7 @@ func (cm *CatalogManager) RefreshStatistics(tx TxContext, tableID int) (*TableSt
 	if err := cm.UpdateTableStatistics(tx, tableID); err != nil {
 		return nil, err
 	}
-	return cm.catalog.GetTableStatistics(tx.ID, tableID)
+	return cm.catalog.GetTableStatistics(tx, tableID)
 }
 
 // RenameTable renames a table in both memory and disk catalog.
@@ -231,11 +231,11 @@ func (cm *CatalogManager) RefreshStatistics(tx TxContext, tableID int) (*TableSt
 //  1. Renames in TableManager (in-memory)
 //  2. Updates CATALOG_TABLES entry on disk
 func (cm *CatalogManager) RenameTable(tx TxContext, oldName, newName string) error {
-	if cm.TableExists(tx.ID, newName) {
+	if cm.TableExists(tx, newName) {
 		return fmt.Errorf("table %s already exists", newName)
 	}
 
-	tableID, err := cm.GetTableID(tx.ID, oldName)
+	tableID, err := cm.GetTableID(tx, oldName)
 	if err != nil {
 		return fmt.Errorf("table %s not found: %w", oldName, err)
 	}
@@ -244,7 +244,7 @@ func (cm *CatalogManager) RenameTable(tx TxContext, oldName, newName string) err
 		return fmt.Errorf("failed to rename in memory: %w", err)
 	}
 
-	tm, err := cm.catalog.GetTableMetadataByID(tx.ID, tableID)
+	tm, err := cm.catalog.GetTableMetadataByID(tx, tableID)
 	if err != nil {
 		cm.tableCache.RenameTable(newName, oldName)
 		return fmt.Errorf("failed to find table metadata: %w", err)
@@ -274,23 +274,23 @@ func (cm *CatalogManager) RenameTable(tx TxContext, oldName, newName string) err
 
 // LoadTable loads a specific table from disk into memory by name.
 // Useful for lazy loading tables on demand rather than loading all tables at startup.
-func (cm *CatalogManager) LoadTable(tid TID, tableName string) error {
+func (cm *CatalogManager) LoadTable(tx TxContext, tableName string) error {
 	if cm.tableCache.TableExists(tableName) {
 		return nil
 	}
-	return cm.catalog.LoadTable(tid, tableName)
+	return cm.catalog.LoadTable(tx, tableName)
 }
 
 // ValidateIntegrity checks consistency between memory and disk catalog.
 // Returns an error if any inconsistencies are found.
-func (cm *CatalogManager) ValidateIntegrity(tid TID) error {
+func (cm *CatalogManager) ValidateIntegrity(tx TxContext) error {
 	if err := cm.tableCache.ValidateIntegrity(); err != nil {
 		return fmt.Errorf("cache integrity error: %w", err)
 	}
 
 	names := cm.tableCache.GetAllTableNames()
 	for _, n := range names {
-		if _, err := cm.catalog.GetTableMetadataByName(tid, n); err != nil {
+		if _, err := cm.catalog.GetTableMetadataByName(tx, n); err != nil {
 			return fmt.Errorf("table %s exists in memory but not in disk catalog", n)
 		}
 	}
@@ -311,8 +311,8 @@ func (cm *CatalogManager) ClearCache() {
 
 // GetAutoIncrementColumn retrieves auto-increment column information for a table.
 // Returns nil if the table has no auto-increment column.
-func (cm *CatalogManager) GetAutoIncrementColumn(tid TID, tableID int) (AutoIncrementInfo, error) {
-	return cm.catalog.GetAutoIncrementColumn(tid, tableID)
+func (cm *CatalogManager) GetAutoIncrementColumn(tx TxContext, tableID int) (AutoIncrementInfo, error) {
+	return cm.catalog.GetAutoIncrementColumn(tx, tableID)
 }
 
 // IncrementAutoIncrementValue updates the next auto-increment value for a table's auto-increment column.
@@ -322,12 +322,12 @@ func (cm *CatalogManager) IncrementAutoIncrementValue(tx TxContext, tableID int,
 
 // GetTableStatisticsWithCache retrieves statistics, using cache when available.
 // Falls back to disk if not cached, then caches the result.
-func (cm *CatalogManager) GetTableStatistics(tid TID, tableID int) (*TableStatistics, error) {
+func (cm *CatalogManager) GetTableStatistics(tx TxContext, tableID int) (*TableStatistics, error) {
 	if stats, found := cm.tableCache.GetCachedStatistics(tableID); found {
 		return stats, nil
 	}
 
-	stats, err := cm.catalog.GetTableStatistics(tid, tableID)
+	stats, err := cm.catalog.GetTableStatistics(tx, tableID)
 	if err != nil {
 		return nil, err
 	}
@@ -349,12 +349,12 @@ func (cm *CatalogManager) CreateIndex(
 	columnName string,
 	indexType index.IndexType,
 ) (indexID int, filePath string, err error) {
-	tableID, err := cm.GetTableID(tx.ID, tableName)
+	tableID, err := cm.GetTableID(tx, tableName)
 	if err != nil {
 		return 0, "", fmt.Errorf("table %s not found: %w", tableName, err)
 	}
 
-	tableSchema, err := cm.GetTableSchema(tx.ID, tableID)
+	tableSchema, err := cm.GetTableSchema(tx, tableID)
 	if err != nil {
 		return 0, "", fmt.Errorf("failed to get table schema: %w", err)
 	}
@@ -370,7 +370,7 @@ func (cm *CatalogManager) CreateIndex(
 		return 0, "", fmt.Errorf("column %s does not exist in table %s", columnName, tableName)
 	}
 
-	if cm.IndexExists(tx.ID, indexName) {
+	if cm.IndexExists(tx, indexName) {
 		return 0, "", fmt.Errorf("index %s already exists", indexName)
 	}
 
@@ -407,7 +407,7 @@ func (cm *CatalogManager) CreateIndex(
 //  2. Removes index metadata from CATALOG_INDEXES
 //  3. Returns the file path for deletion
 func (cm *CatalogManager) DropIndex(tx TxContext, indexName string) (filePath string, err error) {
-	metadata, err := cm.GetIndexByName(tx.ID, indexName)
+	metadata, err := cm.GetIndexByName(tx, indexName)
 	if err != nil {
 		return "", fmt.Errorf("index %s not found: %w", indexName, err)
 	}
@@ -419,18 +419,18 @@ func (cm *CatalogManager) DropIndex(tx TxContext, indexName string) (filePath st
 }
 
 // GetIndexesByTable returns all indexes for a given table.
-func (cm *CatalogManager) GetIndexesByTable(tid TID, tableID int) ([]*systemtable.IndexMetadata, error) {
+func (cm *CatalogManager) GetIndexesByTable(tid TxContext, tableID int) ([]*systemtable.IndexMetadata, error) {
 	return cm.catalog.GetIndexesByTable(tid, tableID)
 }
 
 // GetIndexByName retrieves index metadata by index name.
-func (cm *CatalogManager) GetIndexByName(tid TID, indexName string) (*systemtable.IndexMetadata, error) {
-	return cm.catalog.GetIndexByName(tid, indexName)
+func (cm *CatalogManager) GetIndexByName(tx TxContext, indexName string) (*systemtable.IndexMetadata, error) {
+	return cm.catalog.GetIndexByName(tx, indexName)
 }
 
 // IndexExists checks if an index with the given name exists.
-func (cm *CatalogManager) IndexExists(tid TID, indexName string) bool {
-	_, err := cm.GetIndexByName(tid, indexName)
+func (cm *CatalogManager) IndexExists(tx TxContext, indexName string) bool {
+	_, err := cm.GetIndexByName(tx, indexName)
 	return err == nil
 }
 
