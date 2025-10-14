@@ -12,7 +12,6 @@ import (
 	"storemy/pkg/parser/parser"
 	"storemy/pkg/parser/statements"
 	"storemy/pkg/planner"
-	"storemy/pkg/primitives"
 	"storemy/pkg/registry"
 	"sync"
 	"time"
@@ -202,7 +201,9 @@ func (db *Database) GetTables() []string {
 	db.mutex.RLock()
 	defer db.mutex.RUnlock()
 
-	names, _ := db.catalogMgr.ListAllTables(primitives.NewTransactionID(), true)
+	tx, _ := db.txRegistry.Begin()
+	defer db.pageStore.CommitTransaction(tx)
+	names, _ := db.catalogMgr.ListAllTables(tx, true)
 	return names
 }
 
@@ -252,7 +253,7 @@ func (db *Database) UpdateTableStatistics(tableName string) error {
 	}
 	defer db.cleanupTransaction(tx, &err)
 
-	tableID, err := db.catalogMgr.GetTableID(tx.ID, tableName)
+	tableID, err := db.catalogMgr.GetTableID(tx, tableName)
 	if err != nil {
 		return fmt.Errorf("table not found: %v", err)
 	}
@@ -276,12 +277,12 @@ func (db *Database) GetTableStatistics(tableName string) (*catalog.TableStatisti
 		}
 	}()
 
-	tableID, err := db.catalogMgr.GetTableID(tx.ID, tableName)
+	tableID, err := db.catalogMgr.GetTableID(tx, tableName)
 	if err != nil {
 		return nil, fmt.Errorf("table not found: %v", err)
 	}
 
-	stats, err := db.catalogMgr.GetTableStatistics(tx.ID, tableID)
+	stats, err := db.catalogMgr.GetTableStatistics(tx, tableID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get statistics: %v", err)
 	}

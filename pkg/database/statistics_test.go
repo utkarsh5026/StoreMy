@@ -68,7 +68,7 @@ func TestDatabase_StatisticsAutoTracking(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to begin transaction: %v", err)
 	}
-	tableID, err := db.catalogMgr.GetTableID(tx.ID, "USERS")
+	tableID, err := db.catalogMgr.GetTableID(tx, "USERS")
 	if err != nil {
 		t.Fatalf("Failed to get table ID for 'USERS': %v", err)
 	}
@@ -221,8 +221,8 @@ func TestDatabase_StatisticsMultipleTables(t *testing.T) {
 
 	// Create multiple tables
 	tables := []struct {
-		name      string
-		rowCount  int
+		name     string
+		rowCount int
 	}{
 		{"users", 50},
 		{"orders", 100},
@@ -285,7 +285,7 @@ func TestDatabase_StatisticsThresholdBehavior(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to begin transaction: %v", err)
 	}
-	tableID, err := db.catalogMgr.GetTableID(tx.ID, toUpperTable("threshold_test"))
+	tableID, err := db.catalogMgr.GetTableID(tx, toUpperTable("threshold_test"))
 	if err != nil {
 		t.Fatalf("Failed to get table ID: %v", err)
 	}
