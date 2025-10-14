@@ -9,6 +9,7 @@ import (
 	"storemy/pkg/catalog/tablecache"
 	"storemy/pkg/concurrency/transaction"
 	"storemy/pkg/memory"
+	"storemy/pkg/memory/wrappers/table"
 	"storemy/pkg/primitives"
 	"storemy/pkg/storage/heap"
 	"storemy/pkg/storage/index"
@@ -36,6 +37,7 @@ type CatalogManager struct {
 	catalog    *catalog.SystemCatalog
 	tableCache *tablecache.TableCache
 	store      *memory.PageStore
+	tupMgr     *table.TupleManager
 	dataDir    string
 }
 
@@ -48,6 +50,7 @@ func NewCatalogManager(ps *memory.PageStore, dataDir string) *CatalogManager {
 		tableCache: cache,
 		store:      ps,
 		dataDir:    dataDir,
+		tupMgr:     table.NewTupleManager(ps),
 	}
 }
 
@@ -261,7 +264,7 @@ func (cm *CatalogManager) RenameTable(tx TxContext, oldName, newName string) err
 		return fmt.Errorf("failed to get tables catalog file: %w", err)
 	}
 
-	if err := cm.store.InsertTuple(tx, tablesFile, tup); err != nil {
+	if err := cm.tupMgr.InsertTuple(tx, tablesFile, tup); err != nil {
 		cm.tableCache.RenameTable(newName, oldName)
 		return fmt.Errorf("failed to insert new catalog entry: %w", err)
 	}
@@ -391,7 +394,7 @@ func (cm *CatalogManager) CreateIndex(
 	}
 
 	tup := systemtable.Indexes.CreateTuple(metadata)
-	if err := cm.store.InsertTuple(tx, indexesFile, tup); err != nil {
+	if err := cm.tupMgr.InsertTuple(tx, indexesFile, tup); err != nil {
 		return 0, "", fmt.Errorf("failed to register index in catalog: %w", err)
 	}
 
