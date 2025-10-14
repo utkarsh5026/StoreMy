@@ -523,3 +523,7 @@ func (p *PageStore) handleAbort(dirtyPageIDs []primitives.PageID) error {
 	}
 	return nil
 }
+
+func (p *PageStore) GetWal() *log.WAL {
+	return p.wal
+}
