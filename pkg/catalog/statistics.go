@@ -33,7 +33,7 @@ func (sc *SystemCatalog) UpdateTableStatistics(tx *transaction.TransactionContex
 	}
 
 	// Update cache with fresh statistics
-	_ = sc.cache.setCachedStatistics(tableID, stats)
+	_ = sc.cache.SetCachedStatistics(tableID, stats)
 
 	return nil
 }

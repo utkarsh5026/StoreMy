@@ -4,21 +4,18 @@ import (
 	"storemy/pkg/catalog/schema"
 )
 
-// System table IDs - reserved IDs for internal catalog tables.
-// These are fixed IDs that cannot be used by user tables.
 const (
-	SystemTableTablesID     = 1 // Catalog table storing metadata about all tables
-	SystemTableColumnsID    = 2 // Catalog table storing column definitions
-	SystemTableStatisticsID = 3 // Catalog table storing table/index statistics
+	InvalidTableID = -1 // Represents an invalid or uninitialized table ID
 )
 
 // Global instances of system tables.
 // These are initialized at startup and provide access to the system catalog.
 var (
-	Tables          = &TablesTable{}                        // Manages table metadata (names, IDs, file paths)
-	Columns         = &ColumnsTable{}                       // Manages column definitions for all tables
-	Stats           = &StatsTable{}                         // Manages statistics for query optimization
-	AllSystemTables = []SystemTable{Tables, Columns, Stats} // List of all system tables
+	Tables          = &TablesTable{}
+	Columns         = &ColumnsTable{}
+	Stats           = &StatsTable{}
+	Indexes         = &IndexesTable{}
+	AllSystemTables = []SystemTable{Tables, Columns, Stats, Indexes}
 )
 
 // SystemTable defines the interface that all system catalog tables must implement.

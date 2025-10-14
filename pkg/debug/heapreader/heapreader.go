@@ -3,7 +3,7 @@ package main
 import (
 	"fmt"
 	"os"
-	"storemy/pkg/catalog"
+	"storemy/pkg/catalog/catalogmanager"
 	"storemy/pkg/catalog/systemtable"
 	"storemy/pkg/concurrency/transaction"
 	"storemy/pkg/debug/ui"
@@ -45,7 +45,7 @@ type tableInfo struct {
 }
 
 type heapModel struct {
-	catalog       *catalog.CatalogManager
+	catalog       *catalogmanager.CatalogManager
 	store         *memory.PageStore
 	currentView   string // "menu", "table_data", "page_view"
 	cursor        int
@@ -77,7 +77,7 @@ func (m heapModel) Init() tea.Cmd {
 }
 
 type heapInitMsg struct {
-	catalog *catalog.CatalogManager
+	catalog *catalogmanager.CatalogManager
 	store   *memory.PageStore
 	tables  []tableInfo
 	err     error
@@ -86,7 +86,7 @@ type heapInitMsg struct {
 func initializeHeapReader(dataDir string) tea.Cmd {
 	return func() tea.Msg {
 		store := memory.NewPageStore(nil) // No WAL for reading
-		cat := catalog.NewCatalogManager(store, dataDir)
+		cat := catalogmanager.NewCatalogManager(store, dataDir)
 
 		tx := transaction.NewTransactionContext(primitives.NewTransactionID())
 		if err := cat.Initialize(tx); err != nil {
@@ -148,7 +148,7 @@ type tableDataLoadedMsg struct {
 	err       error
 }
 
-func loadTableData(cat *catalog.CatalogManager, tableInfo *tableInfo) tea.Cmd {
+func loadTableData(cat *catalogmanager.CatalogManager, tableInfo *tableInfo) tea.Cmd {
 	return func() tea.Msg {
 		file, err := cat.GetTableFile(tableInfo.tableID)
 		if err != nil {
@@ -215,7 +215,7 @@ type pageDataLoadedMsg struct {
 	err    error
 }
 
-func loadPageData(cat *catalog.CatalogManager, tableID int, pageNo int) tea.Cmd {
+func loadPageData(cat *catalogmanager.CatalogManager, tableID int, pageNo int) tea.Cmd {
 	return func() tea.Msg {
 		file, err := cat.GetTableFile(tableID)
 		if err != nil {

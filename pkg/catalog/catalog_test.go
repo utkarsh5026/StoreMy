@@ -1,8 +1,11 @@
 package catalog
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
+	"storemy/pkg/catalog/schema"
+	"storemy/pkg/catalog/tablecache"
 	"storemy/pkg/concurrency/transaction"
 	"storemy/pkg/log"
 	"storemy/pkg/memory"
@@ -12,8 +15,33 @@ import (
 	"testing"
 )
 
+// FieldMetadata is a simple helper struct for test field definitions
+type FieldMetadata struct {
+	Name      string
+	Type      types.Type
+	IsAutoInc bool
+}
+
 // Note: FieldMetadata is already defined in catalog_manager_test.go
 // We don't need to redefine it here since they're in the same package
+// createTestSchema creates a schema from field metadata for testing
+func createTestSchema(tableName, primaryKey string, fields []FieldMetadata) *schema.Schema {
+	columns := make([]schema.ColumnMetadata, len(fields))
+	for i, field := range fields {
+		isPrimary := field.Name == primaryKey
+		col, err := schema.NewColumnMetadata(field.Name, field.Type, i, 0, isPrimary, field.IsAutoInc)
+		if err != nil {
+			panic(fmt.Sprintf("Failed to create column metadata: %v", err))
+		}
+		columns[i] = *col
+	}
+
+	s, err := schema.NewSchema(0, tableName, columns)
+	if err != nil {
+		panic(fmt.Sprintf("Failed to create schema: %v", err))
+	}
+	return s
+}
 
 func setupTestCatalog(t *testing.T) (*SystemCatalog, *transaction.TransactionRegistry, string, func()) {
 	t.Helper()
@@ -35,7 +63,7 @@ func setupTestCatalog(t *testing.T) (*SystemCatalog, *transaction.TransactionReg
 	store := memory.NewPageStore(wal)
 
 	txRegistry := transaction.NewTransactionRegistry(wal)
-	cache := newTableCache()
+	cache := tablecache.NewTableCache()
 	catalog := NewSystemCatalog(store, cache)
 
 	// Initialize catalog with a transaction
@@ -108,7 +136,7 @@ func TestNewSystemCatalog(t *testing.T) {
 	store := memory.NewPageStore(wal)
 	defer store.Close()
 
-	cache := newTableCache()
+	cache := tablecache.NewTableCache()
 	catalog := NewSystemCatalog(store, cache)
 
 	if catalog == nil {
@@ -149,7 +177,7 @@ func TestSystemCatalog_Initialize(t *testing.T) {
 	}
 
 	// Verify table IDs are set
-	tablesID, err := catalog.cache.getTableID("CATALOG_TABLES")
+	tablesID, err := catalog.cache.GetTableID("CATALOG_TABLES")
 	if err != nil {
 		t.Fatalf("failed to get CATALOG_TABLES ID: %v", err)
 	}
@@ -157,7 +185,7 @@ func TestSystemCatalog_Initialize(t *testing.T) {
 		t.Errorf("expected CATALOG_TABLES ID=%d, got %d", catalog.TablesTableID, tablesID)
 	}
 
-	columnsID, err := catalog.cache.getTableID("CATALOG_COLUMNS")
+	columnsID, err := catalog.cache.GetTableID("CATALOG_COLUMNS")
 	if err != nil {
 		t.Fatalf("failed to get CATALOG_COLUMNS ID: %v", err)
 	}
@@ -238,7 +266,7 @@ func TestSystemCatalog_LoadTables(t *testing.T) {
 	wal2, _ := log.NewWAL(filepath.Join(tempDir, "wal2.log"), 8192)
 	pageStore2 := memory.NewPageStore(wal2)
 	txRegistry2 := transaction.NewTransactionRegistry(wal2)
-	cache2 := newTableCache()
+	cache2 := tablecache.NewTableCache()
 	catalog2 := NewSystemCatalog(pageStore2, cache2)
 
 	// Initialize and load tables
@@ -353,7 +381,7 @@ func TestSystemCatalog_LoadTables_Multiple(t *testing.T) {
 	wal2, _ := log.NewWAL(filepath.Join(tempDir, "wal2.log"), 8192)
 	pageStore2 := memory.NewPageStore(wal2)
 	txRegistry2 := transaction.NewTransactionRegistry(wal2)
-	cache2 := newTableCache()
+	cache2 := tablecache.NewTableCache()
 	catalog2 := NewSystemCatalog(pageStore2, cache2)
 
 	// Initialize must be called to set up system catalog tables
@@ -402,9 +430,9 @@ func TestSystemCatalog_GetTableID(t *testing.T) {
 	catalog.store.CommitTransaction(tx)
 
 	// Get table ID from cache
-	tableID, err := catalog.cache.getTableID("test_table")
+	tableID, err := catalog.cache.GetTableID("test_table")
 	if err != nil {
-		t.Fatalf("getTableID failed: %v", err)
+		t.Fatalf("GetTableID failed: %v", err)
 	}
 
 	// The catalog stores table IDs as int32, so we need to compare truncated values
@@ -417,7 +445,7 @@ func TestSystemCatalog_GetTableID_NotFound(t *testing.T) {
 	catalog, _, _, cleanup := setupTestCatalog(t)
 	defer cleanup()
 
-	_, err := catalog.cache.getTableID("nonexistent_table")
+	_, err := catalog.cache.GetTableID("nonexistent_table")
 	if err == nil {
 		t.Error("expected error for non-existent table")
 	}
@@ -445,7 +473,7 @@ func TestSystemCatalog_RegisterTable_WithBoolField(t *testing.T) {
 	wal2, _ := log.NewWAL(filepath.Join(tempDir, "wal2.log"), 8192)
 	pageStore2 := memory.NewPageStore(wal2)
 	txRegistry2 := transaction.NewTransactionRegistry(wal2)
-	cache2 := newTableCache()
+	cache2 := tablecache.NewTableCache()
 	catalog2 := NewSystemCatalog(pageStore2, cache2)
 
 	tx2, err := txRegistry2.Begin()
@@ -520,7 +548,7 @@ func TestSystemCatalog_PrimaryKeyPreserved(t *testing.T) {
 	wal2, _ := log.NewWAL(filepath.Join(tempDir, "wal2.log"), 8192)
 	pageStore2 := memory.NewPageStore(wal2)
 	txRegistry2 := transaction.NewTransactionRegistry(wal2)
-	cache2 := newTableCache()
+	cache2 := tablecache.NewTableCache()
 	catalog2 := NewSystemCatalog(pageStore2, cache2)
 
 	tx2, err := txRegistry2.Begin()

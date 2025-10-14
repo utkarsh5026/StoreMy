@@ -3,7 +3,7 @@ package planner
 import (
 	"os"
 	"path/filepath"
-	"storemy/pkg/catalog"
+	"storemy/pkg/catalog/catalogmanager"
 	"storemy/pkg/concurrency/transaction"
 	"storemy/pkg/log"
 	"storemy/pkg/memory"
@@ -25,7 +25,7 @@ func createTransactionContext(t *testing.T) TransactionCtx {
 }
 
 // cleanupTable registers cleanup for table files to ensure proper resource cleanup on Windows
-func cleanupTable(t *testing.T, catalogMgr *catalog.CatalogManager, tableName string, txID interface{}) {
+func cleanupTable(t *testing.T, catalogMgr *catalogmanager.CatalogManager, tableName string, txID interface{}) {
 	t.Helper()
 	t.Cleanup(func() {
 		// Tables will be cleaned up when catalogMgr.ClearCache() is called
@@ -54,7 +54,7 @@ func createTestContextWithCleanup(t *testing.T, dataDir string) *registry.Databa
 	}
 
 	pageStore := memory.NewPageStore(wal)
-	catalogMgr := catalog.NewCatalogManager(pageStore, dataDir)
+	catalogMgr := catalogmanager.NewCatalogManager(pageStore, dataDir)
 
 	// Set bidirectional dependency
 

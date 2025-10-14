@@ -28,6 +28,10 @@ const (
 	BY
 	LIMIT
 	OFFSET
+	INDEX
+	USING
+	HASH
+	BTREE
 
 	ASC
 	DESC
@@ -117,6 +121,14 @@ func (t TokenType) String() string {
 		return "LIMIT"
 	case OFFSET:
 		return "OFFSET"
+	case INDEX:
+		return "INDEX"
+	case USING:
+		return "USING"
+	case HASH:
+		return "HASH"
+	case BTREE:
+		return "BTREE"
 	case ASC:
 		return "ASC"
 	case DESC:

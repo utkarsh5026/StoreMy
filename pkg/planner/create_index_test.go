@@ -1,0 +1,435 @@
+package planner
+
+import (
+	"os"
+	"path/filepath"
+	"storemy/pkg/parser/statements"
+	"storemy/pkg/storage/index"
+	"storemy/pkg/types"
+	"testing"
+)
+
+// Helper function to create a table for index testing
+func createTestTableForIndex(t *testing.T, ctx DbContext, transCtx TransactionCtx, tableName string) {
+	stmt := statements.NewCreateStatement(tableName, false)
+	stmt.AddField("id", types.IntType, true, nil)
+	stmt.AddField("name", types.StringType, false, nil)
+	stmt.AddField("age", types.IntType, false, nil)
+	stmt.AddField("email", types.StringType, false, nil)
+	stmt.PrimaryKey = "id"
+
+	plan := NewCreateTablePlan(stmt, ctx, transCtx)
+	_, err := plan.Execute()
+	if err != nil {
+		t.Fatalf("Failed to create test table: %v", err)
+	}
+}
+
+// Helper function to execute CREATE INDEX plan
+func executeCreateIndexPlan(t *testing.T, plan *CreateIndexPlan) (*DDLResult, error) {
+	resultAny, err := plan.Execute()
+	if err != nil {
+		return nil, err
+	}
+
+	if resultAny == nil {
+		return nil, nil
+	}
+
+	result, ok := resultAny.(*DDLResult)
+	if !ok {
+		t.Fatalf("Result is not a DDLResult, got %T", resultAny)
+	}
+
+	return result, nil
+}
+
+// Helper function to execute DROP INDEX plan
+func executeDropIndexPlan(t *testing.T, plan *DropIndexPlan) (*DDLResult, error) {
+	resultAny, err := plan.Execute()
+	if err != nil {
+		return nil, err
+	}
+
+	if resultAny == nil {
+		return nil, nil
+	}
+
+	result, ok := resultAny.(*DDLResult)
+	if !ok {
+		t.Fatalf("Result is not a DDLResult, got %T", resultAny)
+	}
+
+	return result, nil
+}
+
+func TestNewCreateIndexPlan(t *testing.T) {
+	dataDir := setupTestDataDir(t)
+
+	stmt := statements.NewCreateIndexStatement("idx_users_email", "users", "email", index.HashIndex, false)
+
+	ctx := createTestContextWithCleanup(t, dataDir)
+	transCtx := createTransactionContext(t)
+
+	plan := NewCreateIndexPlan(stmt, ctx, transCtx)
+
+	if plan == nil {
+		t.Fatal("NewCreateIndexPlan returned nil")
+	}
+
+	if plan.Statement != stmt {
+		t.Error("Statement not properly assigned")
+	}
+
+	if plan.ctx != ctx {
+		t.Error("Context not properly assigned")
+	}
+
+	if plan.tx != transCtx {
+		t.Error("TransactionCtx not properly assigned")
+	}
+}
+
+func TestCreateIndexPlan_Execute_HashIndex(t *testing.T) {
+	dataDir := setupTestDataDir(t)
+
+	ctx := createTestContextWithCleanup(t, dataDir)
+	transCtx := createTransactionContext(t)
+
+	// Create the test table first
+	createTestTableForIndex(t, ctx, transCtx, "users")
+
+	// Create HASH index
+	stmt := statements.NewCreateIndexStatement("idx_users_email", "users", "email", index.HashIndex, false)
+	plan := NewCreateIndexPlan(stmt, ctx, transCtx)
+
+	result, err := executeCreateIndexPlan(t, plan)
+
+	if err != nil {
+		t.Fatalf("Execute failed: %v", err)
+	}
+
+	if result == nil {
+		t.Fatal("Result is nil")
+	}
+
+	if !result.Success {
+		t.Error("Expected success to be true")
+	}
+
+	// Verify index exists in catalog
+	if !ctx.CatalogManager().IndexExists(transCtx.ID, "idx_users_email") {
+		t.Error("Index was not added to catalog")
+	}
+
+	// Verify index file was created
+	indexMeta, _ := ctx.CatalogManager().GetIndexByName(transCtx.ID, "idx_users_email")
+	if _, err := os.Stat(indexMeta.FilePath); os.IsNotExist(err) {
+		t.Errorf("Index file was not created at %s", indexMeta.FilePath)
+	}
+
+	// Cleanup
+	dropPlan := NewDropIndexPlan(
+		statements.NewDropIndexStatement("idx_users_email", "", false),
+		ctx, transCtx)
+	dropPlan.Execute()
+	cleanupTable(t, ctx.CatalogManager(), "users", transCtx.ID)
+}
+
+func TestCreateIndexPlan_Execute_BTreeIndex(t *testing.T) {
+	dataDir := setupTestDataDir(t)
+
+	ctx := createTestContextWithCleanup(t, dataDir)
+	transCtx := createTransactionContext(t)
+
+	createTestTableForIndex(t, ctx, transCtx, "users")
+
+	// Create BTREE index
+	stmt := statements.NewCreateIndexStatement("idx_users_age", "users", "age", index.BTreeIndex, false)
+	plan := NewCreateIndexPlan(stmt, ctx, transCtx)
+
+	result, err := executeCreateIndexPlan(t, plan)
+
+	if err != nil {
+		t.Fatalf("Execute failed: %v", err)
+	}
+
+	if !result.Success {
+		t.Error("Expected success to be true")
+	}
+
+	if !ctx.CatalogManager().IndexExists(transCtx.ID, "idx_users_age") {
+		t.Error("Index was not added to catalog")
+	}
+
+	// Cleanup
+	dropPlan := NewDropIndexPlan(
+		statements.NewDropIndexStatement("idx_users_age", "", false),
+		ctx, transCtx)
+	dropPlan.Execute()
+	cleanupTable(t, ctx.CatalogManager(), "users", transCtx.ID)
+}
+
+func TestCreateIndexPlan_Execute_IfNotExists_IndexDoesNotExist(t *testing.T) {
+	dataDir := setupTestDataDir(t)
+
+	ctx := createTestContextWithCleanup(t, dataDir)
+	transCtx := createTransactionContext(t)
+
+	createTestTableForIndex(t, ctx, transCtx, "users")
+
+	stmt := statements.NewCreateIndexStatement("idx_users_email", "users", "email", index.HashIndex, true)
+	plan := NewCreateIndexPlan(stmt, ctx, transCtx)
+
+	result, err := executeCreateIndexPlan(t, plan)
+
+	if err != nil {
+		t.Fatalf("Execute failed: %v", err)
+	}
+
+	if !result.Success {
+		t.Error("Expected success to be true")
+	}
+
+	expectedMessage := "Index idx_users_email created successfully on users(email) using HASH"
+	if result.Message != expectedMessage {
+		t.Errorf("Expected message %q, got %q", expectedMessage, result.Message)
+	}
+
+	// Cleanup
+	dropPlan := NewDropIndexPlan(
+		statements.NewDropIndexStatement("idx_users_email", "", false),
+		ctx, transCtx)
+	dropPlan.Execute()
+	cleanupTable(t, ctx.CatalogManager(), "users", transCtx.ID)
+}
+
+func TestCreateIndexPlan_Execute_IfNotExists_IndexExists(t *testing.T) {
+	dataDir := setupTestDataDir(t)
+
+	ctx := createTestContextWithCleanup(t, dataDir)
+	transCtx := createTransactionContext(t)
+
+	createTestTableForIndex(t, ctx, transCtx, "users")
+
+	// Create first index
+	stmt1 := statements.NewCreateIndexStatement("idx_users_email", "users", "email", index.HashIndex, false)
+	plan1 := NewCreateIndexPlan(stmt1, ctx, transCtx)
+	_, err := plan1.Execute()
+	if err != nil {
+		t.Fatalf("Failed to create first index: %v", err)
+	}
+
+	// Try to create same index with IF NOT EXISTS
+	stmt2 := statements.NewCreateIndexStatement("idx_users_email", "users", "email", index.HashIndex, true)
+	plan2 := NewCreateIndexPlan(stmt2, ctx, transCtx)
+
+	result, err := executeCreateIndexPlan(t, plan2)
+
+	if err != nil {
+		t.Fatalf("Execute failed: %v", err)
+	}
+
+	if !result.Success {
+		t.Error("Expected success to be true")
+	}
+
+	expectedMessage := "Index idx_users_email already exists (IF NOT EXISTS)"
+	if result.Message != expectedMessage {
+		t.Errorf("Expected message %q, got %q", expectedMessage, result.Message)
+	}
+
+	// Cleanup
+	dropPlan := NewDropIndexPlan(
+		statements.NewDropIndexStatement("idx_users_email", "", false),
+		ctx, transCtx)
+	dropPlan.Execute()
+	cleanupTable(t, ctx.CatalogManager(), "users", transCtx.ID)
+}
+
+func TestCreateIndexPlan_Execute_Error_TableDoesNotExist(t *testing.T) {
+	dataDir := setupTestDataDir(t)
+
+	ctx := createTestContextWithCleanup(t, dataDir)
+	transCtx := createTransactionContext(t)
+
+	stmt := statements.NewCreateIndexStatement("idx_users_email", "nonexistent_table", "email", index.HashIndex, false)
+	plan := NewCreateIndexPlan(stmt, ctx, transCtx)
+
+	result, err := executeCreateIndexPlan(t, plan)
+
+	if result != nil {
+		t.Error("Expected result to be nil on error")
+	}
+
+	if err == nil {
+		t.Fatal("Expected error when table does not exist")
+	}
+
+	expectedError := "table nonexistent_table does not exist"
+	if err.Error() != expectedError {
+		t.Errorf("Expected error %q, got %q", expectedError, err.Error())
+	}
+}
+
+func TestCreateIndexPlan_Execute_Error_ColumnDoesNotExist(t *testing.T) {
+	dataDir := setupTestDataDir(t)
+
+	ctx := createTestContextWithCleanup(t, dataDir)
+	transCtx := createTransactionContext(t)
+
+	createTestTableForIndex(t, ctx, transCtx, "users")
+
+	stmt := statements.NewCreateIndexStatement("idx_users_invalid", "users", "nonexistent_column", index.HashIndex, false)
+	plan := NewCreateIndexPlan(stmt, ctx, transCtx)
+
+	result, err := executeCreateIndexPlan(t, plan)
+
+	if result != nil {
+		t.Error("Expected result to be nil on error")
+	}
+
+	if err == nil {
+		t.Fatal("Expected error when column does not exist")
+	}
+
+	expectedError := "column nonexistent_column does not exist in table users"
+	if err.Error() != expectedError {
+		t.Errorf("Expected error %q, got %q", expectedError, err.Error())
+	}
+
+	cleanupTable(t, ctx.CatalogManager(), "users", transCtx.ID)
+}
+
+func TestCreateIndexPlan_Execute_Error_IndexAlreadyExists(t *testing.T) {
+	dataDir := setupTestDataDir(t)
+
+	ctx := createTestContextWithCleanup(t, dataDir)
+	transCtx := createTransactionContext(t)
+
+	createTestTableForIndex(t, ctx, transCtx, "users")
+
+	// Create first index
+	stmt1 := statements.NewCreateIndexStatement("idx_users_email", "users", "email", index.HashIndex, false)
+	plan1 := NewCreateIndexPlan(stmt1, ctx, transCtx)
+	_, err := plan1.Execute()
+	if err != nil {
+		t.Fatalf("Failed to create first index: %v", err)
+	}
+
+	// Try to create same index again without IF NOT EXISTS
+	stmt2 := statements.NewCreateIndexStatement("idx_users_email", "users", "email", index.HashIndex, false)
+	plan2 := NewCreateIndexPlan(stmt2, ctx, transCtx)
+
+	result, err := executeCreateIndexPlan(t, plan2)
+
+	if result != nil {
+		t.Error("Expected result to be nil on error")
+	}
+
+	if err == nil {
+		t.Fatal("Expected error when index already exists")
+	}
+
+	expectedError := "index idx_users_email already exists"
+	if err.Error() != expectedError {
+		t.Errorf("Expected error %q, got %q", expectedError, err.Error())
+	}
+
+	// Cleanup
+	dropPlan := NewDropIndexPlan(
+		statements.NewDropIndexStatement("idx_users_email", "", false),
+		ctx, transCtx)
+	dropPlan.Execute()
+	cleanupTable(t, ctx.CatalogManager(), "users", transCtx.ID)
+}
+
+func TestCreateIndexPlan_Execute_MultipleIndexesOnSameTable(t *testing.T) {
+	dataDir := setupTestDataDir(t)
+
+	ctx := createTestContextWithCleanup(t, dataDir)
+	transCtx := createTransactionContext(t)
+
+	createTestTableForIndex(t, ctx, transCtx, "users")
+
+	// Create first index on email
+	stmt1 := statements.NewCreateIndexStatement("idx_users_email", "users", "email", index.HashIndex, false)
+	plan1 := NewCreateIndexPlan(stmt1, ctx, transCtx)
+	result1, err := executeCreateIndexPlan(t, plan1)
+	if err != nil {
+		t.Fatalf("Failed to create first index: %v", err)
+	}
+	if !result1.Success {
+		t.Error("Expected first index creation to succeed")
+	}
+
+	// Create second index on age
+	stmt2 := statements.NewCreateIndexStatement("idx_users_age", "users", "age", index.BTreeIndex, false)
+	plan2 := NewCreateIndexPlan(stmt2, ctx, transCtx)
+	result2, err := executeCreateIndexPlan(t, plan2)
+	if err != nil {
+		t.Fatalf("Failed to create second index: %v", err)
+	}
+	if !result2.Success {
+		t.Error("Expected second index creation to succeed")
+	}
+
+	// Verify both indexes exist
+	tableID, _ := ctx.CatalogManager().GetTableID(transCtx.ID, "users")
+	indexes, err := ctx.CatalogManager().GetIndexesByTable(transCtx.ID, tableID)
+	if err != nil {
+		t.Fatalf("Failed to get indexes: %v", err)
+	}
+
+	if len(indexes) != 2 {
+		t.Errorf("Expected 2 indexes, got %d", len(indexes))
+	}
+
+	// Cleanup
+	dropPlan1 := NewDropIndexPlan(
+		statements.NewDropIndexStatement("idx_users_email", "", false),
+		ctx, transCtx)
+	dropPlan1.Execute()
+
+	dropPlan2 := NewDropIndexPlan(
+		statements.NewDropIndexStatement("idx_users_age", "", false),
+		ctx, transCtx)
+	dropPlan2.Execute()
+
+	cleanupTable(t, ctx.CatalogManager(), "users", transCtx.ID)
+}
+
+func TestCreateIndexPlan_Execute_IndexFileCreation(t *testing.T) {
+	dataDir := setupTestDataDir(t)
+
+	ctx := createTestContextWithCleanup(t, dataDir)
+	transCtx := createTransactionContext(t)
+
+	createTestTableForIndex(t, ctx, transCtx, "users")
+
+	stmt := statements.NewCreateIndexStatement("idx_users_email", "users", "email", index.HashIndex, false)
+	plan := NewCreateIndexPlan(stmt, ctx, transCtx)
+
+	result, err := executeCreateIndexPlan(t, plan)
+
+	if err != nil {
+		t.Fatalf("Execute failed: %v", err)
+	}
+
+	if !result.Success {
+		t.Error("Expected success to be true")
+	}
+
+	// Verify index file exists
+	expectedFileName := filepath.Join(dataDir, "users_idx_users_email.idx")
+	if _, err := os.Stat(expectedFileName); os.IsNotExist(err) {
+		t.Errorf("Expected index file %s to be created", expectedFileName)
+	}
+
+	// Cleanup
+	dropPlan := NewDropIndexPlan(
+		statements.NewDropIndexStatement("idx_users_email", "", false),
+		ctx, transCtx)
+	dropPlan.Execute()
+	cleanupTable(t, ctx.CatalogManager(), "users", transCtx.ID)
+}

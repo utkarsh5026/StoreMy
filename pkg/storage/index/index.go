@@ -11,11 +11,11 @@ type TID = *primitives.TransactionID
 type RecID = *tuple.TupleRecordID
 type Field = types.Field
 
-type IndexType int
+type IndexType string
 
 const (
-	BTreeIndex IndexType = iota
-	HashIndex
+	BTreeIndex IndexType = "BTREE"
+	HashIndex  IndexType = "HASH"
 )
 
 // IndexEntry represents a single key-value pair in a hash bucket.

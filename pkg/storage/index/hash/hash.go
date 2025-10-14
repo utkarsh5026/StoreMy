@@ -103,7 +103,7 @@ func (hi *HashIndex) Insert(tid TID, key Field, rid RecID) error {
 			}
 			break
 		}
-		currentPage, err = hi.readOverflowPage(tid, currentPage)
+		currentPage, err = hi.readOverflowPage(currentPage)
 		if err != nil {
 			return fmt.Errorf("failed to read overflow page: %w", err)
 		}
@@ -147,7 +147,7 @@ func (hi *HashIndex) createAndLinkOverflowPage(tid TID, bucketNum int, parentPag
 //   - p: Page containing the overflow pointer
 //
 // Returns the overflow page or error if pointer is invalid or read fails.
-func (hi *HashIndex) readOverflowPage(tid TID, p *HashPage) (*HashPage, error) {
+func (hi *HashIndex) readOverflowPage(p *HashPage) (*HashPage, error) {
 	overflowPageNum := p.GetOverflowPage()
 
 	if overflowPageNum == NoOverFlowPage {
@@ -160,7 +160,7 @@ func (hi *HashIndex) readOverflowPage(tid TID, p *HashPage) (*HashPage, error) {
 	}
 
 	overflowPageID := NewHashPageID(hi.file.GetID(), overflowPageNum)
-	page, err := hi.file.ReadPage(tid, overflowPageID)
+	page, err := hi.file.ReadPage(overflowPageID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read overflow page %d: %w", overflowPageNum, err)
 	}
@@ -435,7 +435,7 @@ func (hi *HashIndex) traverseOverflowChain(tid TID, startPage *HashPage, f func(
 			break
 		}
 
-		currentPage, err = hi.readOverflowPage(tid, currentPage)
+		currentPage, err = hi.readOverflowPage(currentPage)
 		if err != nil {
 			return fmt.Errorf("failed to read overflow page: %w", err)
 		}

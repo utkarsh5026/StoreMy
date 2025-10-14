@@ -13,31 +13,15 @@ type ColumnsTable struct{}
 // Schema returns the schema for the CATALOG_COLUMNS system table.
 // Schema: (table_id INT, column_name STRING, type_id INT, position INT, is_primary_key BOOL, is_auto_increment BOOL, next_auto_value INT)
 func (ct *ColumnsTable) Schema() *schema.Schema {
-	columns := make([]schema.ColumnMetadata, 0, 7)
-
-	col0, _ := schema.NewColumnMetadata("table_id", types.IntType, 0, SystemTableColumnsID, false, false)
-	columns = append(columns, *col0)
-
-	col1, _ := schema.NewColumnMetadata("column_name", types.StringType, 1, SystemTableColumnsID, false, false)
-	columns = append(columns, *col1)
-
-	col2, _ := schema.NewColumnMetadata("type_id", types.IntType, 2, SystemTableColumnsID, false, false)
-	columns = append(columns, *col2)
-
-	col3, _ := schema.NewColumnMetadata("position", types.IntType, 3, SystemTableColumnsID, false, false)
-	columns = append(columns, *col3)
-
-	col4, _ := schema.NewColumnMetadata("is_primary_key", types.BoolType, 4, SystemTableColumnsID, false, false)
-	columns = append(columns, *col4)
-
-	col5, _ := schema.NewColumnMetadata("is_auto_increment", types.BoolType, 5, SystemTableColumnsID, false, false)
-	columns = append(columns, *col5)
-
-	col6, _ := schema.NewColumnMetadata("next_auto_value", types.IntType, 6, SystemTableColumnsID, false, false)
-	columns = append(columns, *col6)
-
-	sch, _ := schema.NewSchema(SystemTableColumnsID, ct.TableName(), columns)
-	return sch
+	return schema.NewSchemaBuilder(InvalidTableID, ct.TableName()).
+		AddColumn("table_id", types.IntType).
+		AddColumn("column_name", types.StringType).
+		AddColumn("type_id", types.IntType).
+		AddColumn("position", types.IntType).
+		AddColumn("is_primary_key", types.BoolType).
+		AddColumn("is_auto_increment", types.BoolType).
+		AddColumn("next_auto_value", types.IntType).
+		Build()
 }
 
 func (ct *ColumnsTable) TableName() string {

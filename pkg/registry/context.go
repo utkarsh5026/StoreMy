@@ -1,7 +1,7 @@
 package registry
 
 import (
-	"storemy/pkg/catalog"
+	"storemy/pkg/catalog/catalogmanager"
 	"storemy/pkg/concurrency/transaction"
 	"storemy/pkg/log"
 	"storemy/pkg/memory"
@@ -11,7 +11,7 @@ import (
 // This provides a single source of truth and avoids passing multiple dependencies everywhere.
 type DatabaseContext struct {
 	pageStore  *memory.PageStore
-	catalogMgr *catalog.CatalogManager
+	catalogMgr *catalogmanager.CatalogManager
 	txRegistry *transaction.TransactionRegistry
 	wal        *log.WAL
 	dataDir    string
@@ -20,7 +20,7 @@ type DatabaseContext struct {
 // NewDatabaseContext creates a new database context with all required components
 func NewDatabaseContext(
 	pageStore *memory.PageStore,
-	catalogMgr *catalog.CatalogManager,
+	catalogMgr *catalogmanager.CatalogManager,
 	wal *log.WAL,
 	dataDir string,
 ) *DatabaseContext {
@@ -49,6 +49,6 @@ func (ctx *DatabaseContext) TransactionRegistry() *transaction.TransactionRegist
 	return ctx.txRegistry
 }
 
-func (ctx *DatabaseContext) CatalogManager() *catalog.CatalogManager {
+func (ctx *DatabaseContext) CatalogManager() *catalogmanager.CatalogManager {
 	return ctx.catalogMgr
 }

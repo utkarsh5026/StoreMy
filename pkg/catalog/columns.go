@@ -125,3 +125,50 @@ func (sc *SystemCatalog) IncrementAutoIncrementValue(tx *transaction.Transaction
 
 	return nil
 }
+
+// LoadTableSchema reconstructs the schema for a table from CATALOG_COLUMNS.
+// It scans all column metadata for the given tableID and builds a Schema object.
+func (sc *SystemCatalog) LoadTableSchema(tid *primitives.TransactionID, tableID int) (*schema.Schema, error) {
+	columns, err := sc.loadColumnMetadata(tid, tableID)
+	if err != nil {
+		return nil, err
+	}
+
+	if len(columns) == 0 {
+		return nil, fmt.Errorf("no columns found for table %d", tableID)
+	}
+
+	schemaObj, err := schema.NewSchema(tableID, "", columns)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create schema: %w", err)
+	}
+
+	return schemaObj, nil
+}
+
+// loadColumnMetadata queries CATALOG_COLUMNS for all columns belonging to tableID.
+// It filters rows by table_id and collects ColumnInfo for each matching column.
+func (sc *SystemCatalog) loadColumnMetadata(tid *primitives.TransactionID, tableID int) ([]schema.ColumnMetadata, error) {
+	var columns []schema.ColumnMetadata
+
+	err := sc.iterateTable(sc.ColumnsTableID, tid, func(columnTuple *tuple.Tuple) error {
+		id, err := systemtable.Columns.GetTableID(columnTuple)
+		if err != nil {
+			return err
+		}
+
+		if id != tableID {
+			return nil
+		}
+
+		col, err := systemtable.Columns.Parse(columnTuple)
+		if err != nil {
+			return fmt.Errorf("failed to parse column tuple: %v", err)
+		}
+
+		columns = append(columns, *col)
+		return nil
+	})
+
+	return columns, err
+}

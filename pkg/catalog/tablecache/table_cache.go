@@ -1,4 +1,4 @@
-package catalog
+package tablecache
 
 import (
 	"container/list"
@@ -6,6 +6,7 @@ import (
 	"maps"
 	"slices"
 	"storemy/pkg/catalog/schema"
+	"storemy/pkg/catalog/systemtable"
 	"storemy/pkg/storage/page"
 	"strings"
 	"sync"
@@ -13,9 +14,11 @@ import (
 	"time"
 )
 
-// tableInfo holds metadata about a table in the cache
+type TableStatistics = systemtable.TableStatistics
+
+// TableInfo holds metadata about a table in the cache
 // Enhanced with statistics caching and pre-computed metadata
-type tableInfo struct {
+type TableInfo struct {
 	File         page.DbFile
 	Schema       *schema.Schema
 	Stats        *TableStatistics
@@ -25,8 +28,8 @@ type tableInfo struct {
 }
 
 // newTableInfo creates a new table info instance with pre-computed metadata
-func newTableInfo(file page.DbFile, schema *schema.Schema) *tableInfo {
-	return &tableInfo{
+func newTableInfo(file page.DbFile, schema *schema.Schema) *TableInfo {
+	return &TableInfo{
 		File:         file,
 		Schema:       schema,
 		LastAccessed: time.Now(),
@@ -34,7 +37,7 @@ func newTableInfo(file page.DbFile, schema *schema.Schema) *tableInfo {
 }
 
 // GetID returns the table's unique identifier
-func (ti *tableInfo) GetFileID() int {
+func (ti *TableInfo) GetFileID() int {
 	return ti.File.GetID()
 }
 
@@ -59,7 +62,7 @@ type cacheMetrics struct {
 	evictions   atomic.Int64
 }
 
-// tableCache is an internal in-memory cache for table metadata.
+// TableCache is an internal in-memory cache for table metadata.
 // It maintains bidirectional mappings between table names and IDs for efficient lookups.
 // This is private to the catalog package and should only be accessed via CatalogManager.
 //
@@ -70,9 +73,9 @@ type cacheMetrics struct {
 //   - LRU eviction policy to prevent unbounded memory growth
 //   - Caches statistics and pre-computed metadata for query optimization
 //   - Does NOT handle persistence - that's CatalogManager's responsibility
-type tableCache struct {
-	nameToTable map[string]*tableInfo
-	idToTable   map[int]*tableInfo
+type TableCache struct {
+	nameToTable map[string]*TableInfo
+	idToTable   map[int]*TableInfo
 	lruList     *list.List
 	maxSize     int
 	ttl         cacheTTLConfig
@@ -80,13 +83,13 @@ type tableCache struct {
 	mutex       sync.RWMutex
 }
 
-// newTableCache creates a new empty tableCache instance.
+// NewTableCache creates a new empty TableCache instance.
 // If maxSize is 0, the cache grows without bounds (original behavior).
 // If maxSize > 0, LRU eviction is used when the limit is reached.
-func newTableCache() *tableCache {
-	return &tableCache{
-		nameToTable: make(map[string]*tableInfo),
-		idToTable:   make(map[int]*tableInfo),
+func NewTableCache() *TableCache {
+	return &TableCache{
+		nameToTable: make(map[string]*TableInfo),
+		idToTable:   make(map[int]*TableInfo),
 		lruList:     list.New(),
 		maxSize:     0, // Unlimited by default
 		ttl:         DefaultCacheTTL(),
@@ -96,7 +99,7 @@ func newTableCache() *tableCache {
 // addTable adds a new table to the cache with the specified database file and schema.
 // If a table with the same name or ID already exists, it will be replaced.
 // Implements LRU eviction if maxSize is configured and cache is full.
-func (tc *tableCache) AddTable(f page.DbFile, schema *schema.Schema) error {
+func (tc *TableCache) AddTable(f page.DbFile, schema *schema.Schema) error {
 	if f == nil {
 		return fmt.Errorf("file cannot be nil")
 	}
@@ -129,7 +132,7 @@ func (tc *tableCache) AddTable(f page.DbFile, schema *schema.Schema) error {
 
 // getTableID retrieves the unique identifier for a table given its name.
 // Updates LRU position on access.
-func (tc *tableCache) getTableID(tableName string) (int, error) {
+func (tc *TableCache) GetTableID(tableName string) (int, error) {
 	tc.mutex.Lock()
 	defer tc.mutex.Unlock()
 
@@ -147,7 +150,7 @@ func (tc *tableCache) getTableID(tableName string) (int, error) {
 
 // getDbFile retrieves the database file for a table by ID.
 // Updates LRU position on access.
-func (tc *tableCache) GetDbFile(tableId int) (page.DbFile, error) {
+func (tc *TableCache) GetDbFile(tableId int) (page.DbFile, error) {
 	tc.mutex.Lock()
 	defer tc.mutex.Unlock()
 
@@ -165,7 +168,7 @@ func (tc *tableCache) GetDbFile(tableId int) (page.DbFile, error) {
 
 // removeTable removes a table from the cache and closes its associated database file.
 // This operation is irreversible and will close the underlying file handle.
-func (tc *tableCache) removeTable(name string) error {
+func (tc *TableCache) RemoveTable(name string) error {
 	tc.mutex.Lock()
 	defer tc.mutex.Unlock()
 
@@ -191,7 +194,7 @@ func (tc *tableCache) removeTable(name string) error {
 
 // clear removes all tables from the cache and closes all associated database files.
 // This operation cannot be undone. File closure errors are logged as warnings.
-func (tc *tableCache) clear() {
+func (tc *TableCache) Clear() {
 	tc.mutex.Lock()
 	defer tc.mutex.Unlock()
 
@@ -214,7 +217,7 @@ func (tc *tableCache) clear() {
 // This method verifies that the bidirectional mappings between names and IDs are consistent.
 //
 // Returns an error if any integrity violations are detected, nil otherwise.
-func (tc *tableCache) validateIntegrity() error {
+func (tc *TableCache) ValidateIntegrity() error {
 	tc.mutex.RLock()
 	defer tc.mutex.RUnlock()
 
@@ -243,7 +246,7 @@ func (tc *tableCache) validateIntegrity() error {
 
 // getAllTableNames returns a slice containing the names of all tables in the cache.
 // The returned slice is a copy and can be safely modified without affecting the cache.
-func (tc *tableCache) GetAllTableNames() []string {
+func (tc *TableCache) GetAllTableNames() []string {
 	tc.mutex.RLock()
 	defer tc.mutex.RUnlock()
 	return slices.Collect(maps.Keys(tc.nameToTable))
@@ -252,7 +255,7 @@ func (tc *tableCache) GetAllTableNames() []string {
 // removeExistingTable removes any existing table with the given name or ID from both maps.
 // This is a helper method used internally during table addition to handle replacements.
 // Must be called with write lock held.
-func (tc *tableCache) removeExistingTable(name string, tableID int) {
+func (tc *TableCache) removeExistingTable(name string, tableID int) {
 	if t, exists := tc.nameToTable[name]; exists {
 		delete(tc.idToTable, t.GetFileID())
 	}
@@ -265,13 +268,13 @@ func (tc *tableCache) removeExistingTable(name string, tableID int) {
 // addTableToMaps adds a table to both the name-to-table and ID-to-table mappings.
 // This is a helper method used internally during table addition.
 // Must be called with write lock held.
-func (tc *tableCache) addTableToMaps(name string, tableID int, info *tableInfo) {
+func (tc *TableCache) addTableToMaps(name string, tableID int, info *TableInfo) {
 	tc.nameToTable[name] = info
 	tc.idToTable[tableID] = info
 }
 
 // tableExists checks whether a table with the given name exists in the cache.
-func (tc *tableCache) TableExists(name string) bool {
+func (tc *TableCache) TableExists(name string) bool {
 	tc.mutex.RLock()
 	defer tc.mutex.RUnlock()
 
@@ -281,7 +284,7 @@ func (tc *tableCache) TableExists(name string) bool {
 
 // getTableInfo retrieves the full table info for a table by ID.
 // Updates LRU position on access.
-func (tc *tableCache) GetTableInfo(tableID int) (*tableInfo, error) {
+func (tc *TableCache) GetTableInfo(tableID int) (*TableInfo, error) {
 	tc.mutex.Lock()
 	defer tc.mutex.Unlock()
 
@@ -298,7 +301,7 @@ func (tc *tableCache) GetTableInfo(tableID int) (*tableInfo, error) {
 
 // renameTable changes the name of an existing table in the cache.
 // The operation maintains all other table metadata and file associations.
-func (tc *tableCache) RenameTable(oldName, newName string) error {
+func (tc *TableCache) RenameTable(oldName, newName string) error {
 	if oldName == "" || newName == "" {
 		return fmt.Errorf("table names cannot be empty")
 	}
@@ -326,7 +329,7 @@ func (tc *tableCache) RenameTable(oldName, newName string) error {
 
 // evictLRU removes the least recently used table from the cache.
 // Must be called with write lock held.
-func (tc *tableCache) evictLRU() {
+func (tc *TableCache) evictLRU() {
 	if tc.lruList.Len() == 0 {
 		return
 	}
@@ -360,7 +363,7 @@ func (tc *tableCache) evictLRU() {
 
 // markAsUsed updates the LRU position for a table, marking it as recently accessed.
 // Must be called with write lock held.
-func (tc *tableCache) markAsUsed(info *tableInfo) {
+func (tc *TableCache) markAsUsed(info *TableInfo) {
 	if info.lruElement != nil {
 		tc.lruList.MoveToFront(info.lruElement)
 	}
@@ -372,7 +375,7 @@ func (tc *tableCache) markAsUsed(info *tableInfo) {
 
 // getCachedStatistics retrieves cached statistics for a table if available and not expired.
 // Returns nil if not cached or expired.
-func (tc *tableCache) getCachedStatistics(tableID int) (*TableStatistics, bool) {
+func (tc *TableCache) GetCachedStatistics(tableID int) (*TableStatistics, bool) {
 	tc.mutex.RLock()
 	defer tc.mutex.RUnlock()
 
@@ -393,7 +396,7 @@ func (tc *tableCache) getCachedStatistics(tableID int) (*TableStatistics, bool) 
 
 // setCachedStatistics stores statistics in the cache with TTL.
 // Must be called after acquiring write lock or during table addition.
-func (tc *tableCache) setCachedStatistics(tableID int, stats *TableStatistics) error {
+func (tc *TableCache) SetCachedStatistics(tableID int, stats *TableStatistics) error {
 	tc.mutex.Lock()
 	defer tc.mutex.Unlock()
 
