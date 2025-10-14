@@ -1,12 +1,84 @@
-package memory
+package table
 
 import (
 	"fmt"
 	"storemy/pkg/concurrency/transaction"
+	"storemy/pkg/log"
+	"storemy/pkg/memory"
+	"storemy/pkg/primitives"
 	"storemy/pkg/storage/heap"
 	"storemy/pkg/storage/page"
 	"storemy/pkg/tuple"
 )
+
+// OperationType defines the type of tuple operation
+type OperationType uint8
+
+const (
+	InsertOperation OperationType = iota
+	DeleteOperation
+	UpdateOperation
+)
+
+func (o OperationType) String() string {
+	switch o {
+	case InsertOperation:
+		return "INSERT"
+	case DeleteOperation:
+		return "DELETE"
+	case UpdateOperation:
+		return "UPDATE"
+	}
+	return "UNKNOWN"
+}
+
+// PageProvider interface abstracts page-level operations from the buffer pool
+// This allows TupleManager to work with any buffer pool implementation
+type PageProvider interface {
+	GetPage(ctx *transaction.TransactionContext, dbFile page.DbFile, pid primitives.PageID, perm transaction.Permissions) (page.Page, error)
+}
+
+// StatsRecorder interface for recording table modifications (to avoid circular dependency)
+type StatsRecorder interface {
+	RecordModification(tableID int)
+}
+
+// TupleManager handles tuple-level operations (insert, delete, update) on tables.
+// It sits above the buffer pool layer and provides high-level tuple manipulation
+// while delegating page-level concerns to the buffer pool.
+//
+// Responsibilities:
+//   - Tuple insertion (finding free space, handling page allocation)
+//   - Tuple deletion (locating and removing tuples)
+//   - Tuple updates (implementing delete+insert semantics)
+//   - WAL logging for all tuple operations
+//   - Transaction coordination for tuple operations
+//   - Statistics tracking for query optimization
+//
+// The TupleManager coordinates with:
+//   - PageProvider (buffer pool): For page access and caching
+//   - WAL: For logging tuple operations
+//   - TransactionContext: For ACID compliance
+//   - StatsRecorder: For maintaining table statistics
+type TupleManager struct {
+	pageProvider PageProvider
+	wal          *log.WAL
+	statsManager StatsRecorder
+}
+
+// NewTupleManager creates a new TupleManager instance
+func NewTupleManager(pageProvider PageProvider, wal *log.WAL) *TupleManager {
+	return &TupleManager{
+		pageProvider: pageProvider,
+		wal:          wal,
+		statsManager: nil,
+	}
+}
+
+// SetStatsManager sets the statistics manager for tracking table modifications
+func (tm *TupleManager) SetStatsManager(sm StatsRecorder) {
+	tm.statsManager = sm
+}
 
 // InsertTuple adds a new tuple to the specified table within the given transaction context.
 // This operation:
@@ -30,9 +102,9 @@ import (
 //   - Lock acquisition fails
 //
 // Thread-safe: Uses page locks and proper WAL ordering.
-func (p *PageStore) InsertTuple(ctx *transaction.TransactionContext, dbFile page.DbFile, t *tuple.Tuple) error {
+func (tm *TupleManager) InsertTuple(ctx *transaction.TransactionContext, dbFile page.DbFile, t *tuple.Tuple) error {
 	tableID := dbFile.GetID()
-	return p.performDataOperation(InsertOperation, ctx, dbFile, tableID, t)
+	return tm.performDataOperation(InsertOperation, ctx, dbFile, tableID, t)
 }
 
 // DeleteTuple removes a tuple from its table within the given transaction context.
@@ -59,7 +131,7 @@ func (p *PageStore) InsertTuple(ctx *transaction.TransactionContext, dbFile page
 //   - Tuple not found at specified RecordID
 //
 // Thread-safe: Uses page locks and proper WAL ordering.
-func (p *PageStore) DeleteTuple(ctx *transaction.TransactionContext, dbFile page.DbFile, t *tuple.Tuple) error {
+func (tm *TupleManager) DeleteTuple(ctx *transaction.TransactionContext, dbFile page.DbFile, t *tuple.Tuple) error {
 	if t == nil {
 		return fmt.Errorf("tuple cannot be nil")
 	}
@@ -69,7 +141,49 @@ func (p *PageStore) DeleteTuple(ctx *transaction.TransactionContext, dbFile page
 	}
 
 	tableID := dbFile.GetID()
-	return p.performDataOperation(DeleteOperation, ctx, dbFile, tableID, t)
+	return tm.performDataOperation(DeleteOperation, ctx, dbFile, tableID, t)
+}
+
+// UpdateTuple replaces an existing tuple with a new version within the given transaction.
+// This implements the UPDATE operation as a DELETE followed by INSERT:
+//  1. Delete old tuple (preserving before-image)
+//  2. Insert new tuple (may go to different page)
+//  3. Rollback insert if it fails (re-insert old tuple)
+//
+// This approach simplifies MVCC and recovery but may cause fragmentation over time.
+// Future optimization: In-place updates when tuple size doesn't change.
+//
+// Parameters:
+//   - ctx: Transaction context
+//   - dbFile: Heap file for the table
+//   - oldTuple: Current version to replace (must have RecordID)
+//   - newTuple: New version to insert
+//
+// Returns an error if:
+//   - oldTuple is nil or has no RecordID
+//   - Delete operation fails
+//   - Insert operation fails (attempts rollback by reinserting oldTuple)
+//
+// Thread-safe: Uses page locks via Delete and Insert operations.
+func (tm *TupleManager) UpdateTuple(ctx *transaction.TransactionContext, dbFile page.DbFile, oldTuple *tuple.Tuple, newTuple *tuple.Tuple) error {
+	if oldTuple == nil {
+		return fmt.Errorf("old tuple cannot be nil")
+	}
+
+	if oldTuple.RecordID == nil {
+		return fmt.Errorf("old tuple has no RecordID")
+	}
+
+	if err := tm.DeleteTuple(ctx, dbFile, oldTuple); err != nil {
+		return fmt.Errorf("failed to delete old tuple: %v", err)
+	}
+
+	if err := tm.InsertTuple(ctx, dbFile, newTuple); err != nil {
+		tm.InsertTuple(ctx, dbFile, oldTuple)
+		return fmt.Errorf("failed to insert updated tuple: %v", err)
+	}
+
+	return nil
 }
 
 // performDataOperation is the unified handler for INSERT and DELETE operations.
@@ -92,12 +206,12 @@ func (p *PageStore) DeleteTuple(ctx *transaction.TransactionContext, dbFile page
 // Returns an error if any step fails. The transaction should be aborted on error.
 //
 // Note: Updates are implemented as DELETE + INSERT at a higher level.
-func (p *PageStore) performDataOperation(operation OperationType, ctx *transaction.TransactionContext, dbFile page.DbFile, tableID int, t *tuple.Tuple) error {
+func (tm *TupleManager) performDataOperation(operation OperationType, ctx *transaction.TransactionContext, dbFile page.DbFile, tableID int, t *tuple.Tuple) error {
 	if ctx == nil {
 		return fmt.Errorf("transaction context cannot be nil")
 	}
 
-	if err := ctx.EnsureBegunInWAL(p.wal); err != nil {
+	if err := ctx.EnsureBegunInWAL(tm.wal); err != nil {
 		return err
 	}
 
@@ -105,10 +219,10 @@ func (p *PageStore) performDataOperation(operation OperationType, ctx *transacti
 	var err error
 	switch operation {
 	case InsertOperation:
-		modifiedPages, err = p.handleInsert(ctx, t, dbFile)
+		modifiedPages, err = tm.handleInsert(ctx, t, dbFile)
 
 	case DeleteOperation:
-		modifiedPages, err = p.handleDelete(ctx, dbFile, t)
+		modifiedPages, err = tm.handleDelete(ctx, dbFile, t)
 
 	default:
 		return fmt.Errorf("unsupported operation: %s", operation.String())
@@ -118,10 +232,10 @@ func (p *PageStore) performDataOperation(operation OperationType, ctx *transacti
 		return err
 	}
 
-	p.markPagesAsDirty(ctx, modifiedPages)
+	tm.markPagesAsDirty(ctx, modifiedPages)
 
-	if p.statsManager != nil {
-		p.statsManager.RecordModification(tableID)
+	if tm.statsManager != nil {
+		tm.statsManager.RecordModification(tableID)
 	}
 
 	return nil
@@ -143,7 +257,7 @@ func (p *PageStore) performDataOperation(operation OperationType, ctx *transacti
 // Returns:
 //   - modifiedPages: All pages changed by the insert (for dirty tracking)
 //   - error: If insert or WAL logging fails
-func (p *PageStore) handleInsert(ctx *transaction.TransactionContext, t *tuple.Tuple, dbFile page.DbFile) ([]page.Page, error) {
+func (tm *TupleManager) handleInsert(ctx *transaction.TransactionContext, t *tuple.Tuple, dbFile page.DbFile) ([]page.Page, error) {
 	heapFile, ok := dbFile.(*heap.HeapFile)
 	if !ok {
 		return nil, fmt.Errorf("dbFile must be a HeapFile for tuple insertion")
@@ -153,7 +267,7 @@ func (p *PageStore) handleInsert(ctx *transaction.TransactionContext, t *tuple.T
 		return nil, fmt.Errorf("tuple schema does not match file schema")
 	}
 
-	modifiedPages, inserted, err := p.tryInsertIntoExistingPages(ctx, t, heapFile)
+	modifiedPages, inserted, err := tm.tryInsertIntoExistingPages(ctx, t, heapFile)
 	if err != nil {
 		return nil, err
 	}
@@ -161,7 +275,7 @@ func (p *PageStore) handleInsert(ctx *transaction.TransactionContext, t *tuple.T
 		return modifiedPages, nil
 	}
 
-	return p.insertIntoNewPage(ctx, t, heapFile)
+	return tm.insertIntoNewPage(ctx, t, heapFile)
 }
 
 // insertIntoNewPage allocates a new page at the end of the heap file and inserts the tuple.
@@ -179,16 +293,7 @@ func (p *PageStore) handleInsert(ctx *transaction.TransactionContext, t *tuple.T
 //   - The page is not yet reachable through normal queries (beyond current file bounds)
 //   - WAL record makes the page "officially" part of the table
 //   - On recovery, pages without WAL records are ignored
-//
-// Parameters:
-//   - ctx: Transaction context for tracking modifications
-//   - t: Tuple to insert into the new page
-//   - heapFile: Heap file to extend with new page
-//
-// Returns:
-//   - []page.Page: Single-element array containing the newly created page
-//   - error: If page creation, tuple insertion, disk write, or WAL logging fails
-func (p *PageStore) insertIntoNewPage(ctx *transaction.TransactionContext, t *tuple.Tuple, heapFile *heap.HeapFile) ([]page.Page, error) {
+func (tm *TupleManager) insertIntoNewPage(ctx *transaction.TransactionContext, t *tuple.Tuple, heapFile *heap.HeapFile) ([]page.Page, error) {
 	numPages, err := heapFile.NumPages()
 	if err != nil {
 		return nil, fmt.Errorf("failed to get number of pages: %v", err)
@@ -208,7 +313,7 @@ func (p *PageStore) insertIntoNewPage(ctx *transaction.TransactionContext, t *tu
 		return nil, fmt.Errorf("failed to write new page: %v", err)
 	}
 
-	if err := p.logOperation(InsertOperation, ctx.ID, newPageID, newPage.GetPageData()); err != nil {
+	if err := tm.logOperation(memory.InsertOperation, ctx.ID, newPageID, newPage.GetPageData()); err != nil {
 		return nil, err
 	}
 
@@ -239,17 +344,7 @@ func (p *PageStore) insertIntoNewPage(ctx *transaction.TransactionContext, t *tu
 //   - O(n) scan of all pages in worst case (no free space found)
 //   - No free space tracking - future optimization opportunity
 //   - Lock contention possible on popular pages
-//
-// Parameters:
-//   - ctx: Transaction context for lock acquisition and dirty tracking
-//   - t: Tuple to insert
-//   - heapFile: Heap file containing the pages to scan
-//
-// Returns:
-//   - []page.Page: Single-element array with the page where tuple was inserted (if successful)
-//   - bool: true if insertion succeeded, false if no suitable page found
-//   - error: Only for critical failures (WAL logging errors). Lock failures are silently skipped.
-func (p *PageStore) tryInsertIntoExistingPages(ctx *transaction.TransactionContext, t *tuple.Tuple, heapFile *heap.HeapFile) ([]page.Page, bool, error) {
+func (tm *TupleManager) tryInsertIntoExistingPages(ctx *transaction.TransactionContext, t *tuple.Tuple, heapFile *heap.HeapFile) ([]page.Page, bool, error) {
 	numPages, err := heapFile.NumPages()
 	if err != nil {
 		return nil, false, fmt.Errorf("failed to get number of pages: %v", err)
@@ -257,7 +352,7 @@ func (p *PageStore) tryInsertIntoExistingPages(ctx *transaction.TransactionConte
 
 	for i := range numPages {
 		pageID := heap.NewHeapPageID(heapFile.GetID(), i)
-		pg, err := p.GetPage(ctx, heapFile, pageID, transaction.ReadWrite)
+		pg, err := tm.pageProvider.GetPage(ctx, heapFile, pageID, transaction.ReadWrite)
 		if err != nil {
 			continue
 		}
@@ -268,7 +363,7 @@ func (p *PageStore) tryInsertIntoExistingPages(ctx *transaction.TransactionConte
 		}
 
 		if heapPage.GetNumEmptySlots() > 0 {
-			if err := p.logOperation(InsertOperation, ctx.ID, pageID, heapPage.GetPageData()); err != nil {
+			if err := tm.logOperation(memory.InsertOperation, ctx.ID, pageID, heapPage.GetPageData()); err != nil {
 				return nil, false, err
 			}
 
@@ -297,14 +392,14 @@ func (p *PageStore) tryInsertIntoExistingPages(ctx *transaction.TransactionConte
 // Returns:
 //   - modifiedPages: Single-element array with the page containing deleted tuple
 //   - error: If page access, WAL logging, or deletion fails
-func (p *PageStore) handleDelete(ctx *transaction.TransactionContext, dbFile page.DbFile, t *tuple.Tuple) ([]page.Page, error) {
+func (tm *TupleManager) handleDelete(ctx *transaction.TransactionContext, dbFile page.DbFile, t *tuple.Tuple) ([]page.Page, error) {
 	pageID := t.RecordID.PageID
-	pg, err := p.GetPage(ctx, dbFile, pageID, transaction.ReadWrite)
+	pg, err := tm.pageProvider.GetPage(ctx, dbFile, pageID, transaction.ReadWrite)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get page for delete: %v", err)
 	}
 
-	if err := p.logOperation(DeleteOperation, ctx.ID, pageID, pg.GetPageData()); err != nil {
+	if err := tm.logOperation(memory.DeleteOperation, ctx.ID, pageID, pg.GetPageData()); err != nil {
 		return nil, err
 	}
 
@@ -319,44 +414,51 @@ func (p *PageStore) handleDelete(ctx *transaction.TransactionContext, dbFile pag
 	return nil, fmt.Errorf("expecting the pageType to be of heapage")
 }
 
-// UpdateTuple replaces an existing tuple with a new version within the given transaction.
-// This implements the UPDATE operation as a DELETE followed by INSERT:
-//  1. Delete old tuple (preserving before-image)
-//  2. Insert new tuple (may go to different page)
-//  3. Rollback insert if it fails (re-insert old tuple)
+// logOperation writes an operation record to the Write-Ahead Log.
+// This enforces the WAL protocol: log records must be written before page modifications.
 //
-// This approach simplifies MVCC and recovery but may cause fragmentation over time.
-// Future optimization: In-place updates when tuple size doesn't change.
+// Record types:
+//   - INSERT: Records new tuple data with page ID
+//   - DELETE: Records before-image with page ID for UNDO
 //
 // Parameters:
-//   - ctx: Transaction context
-//   - dbFile: Heap file for the table
-//   - oldTuple: Current version to replace (must have RecordID)
-//   - newTuple: New version to insert
+//   - operation: Type of operation to log
+//   - tid: Transaction ID performing the operation
+//   - pageID: Page affected
+//   - data: Page or tuple data
 //
-// Returns an error if:
-//   - oldTuple is nil or has no RecordID
-//   - Delete operation fails
-//   - Insert operation fails (attempts rollback by reinserting oldTuple)
-//
-// Thread-safe: Uses page locks via Delete and Insert operations.
-func (p *PageStore) UpdateTuple(ctx *transaction.TransactionContext, dbFile page.DbFile, oldTuple *tuple.Tuple, newTuple *tuple.Tuple) error {
-	if oldTuple == nil {
-		return fmt.Errorf("old tuple cannot be nil")
+// Returns an error if WAL write fails. This is a critical error that should
+// cause the operation to be aborted.
+func (tm *TupleManager) logOperation(operation memory.OperationType, tid *primitives.TransactionID, pageID primitives.PageID, data []byte) error {
+	var err error
+	switch operation {
+	case memory.InsertOperation:
+		_, err = tm.wal.LogInsert(tid, pageID, data)
+	case memory.DeleteOperation:
+		_, err = tm.wal.LogDelete(tid, pageID, data)
+	default:
+		return fmt.Errorf("unknown operation: %s", operation.String())
 	}
 
-	if oldTuple.RecordID == nil {
-		return fmt.Errorf("old tuple has no RecordID")
+	if err != nil {
+		return fmt.Errorf("failed to log %s to WAL: %v", operation, err)
 	}
-
-	if err := p.DeleteTuple(ctx, dbFile, oldTuple); err != nil {
-		return fmt.Errorf("failed to delete old tuple: %v", err)
-	}
-
-	if err := p.InsertTuple(ctx, dbFile, newTuple); err != nil {
-		p.InsertTuple(ctx, dbFile, oldTuple)
-		return fmt.Errorf("failed to insert updated tuple: %v", err)
-	}
-
 	return nil
+}
+
+// markPagesAsDirty updates the dirty status for all pages modified by an operation.
+// This helper:
+//  1. Marks each page as dirty with transaction ID
+//  2. Records page in transaction's write set
+//
+// This ensures proper tracking for commit/abort processing and lock management.
+//
+// Parameters:
+//   - ctx: Transaction context that modified the pages
+//   - pages: All pages that were modified
+func (tm *TupleManager) markPagesAsDirty(ctx *transaction.TransactionContext, pages []page.Page) {
+	for _, pg := range pages {
+		pg.MarkDirty(true, ctx.ID)
+		ctx.MarkPageDirty(pg.GetID())
+	}
 }
