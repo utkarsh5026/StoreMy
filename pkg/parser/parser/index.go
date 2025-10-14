@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"storemy/pkg/parser/lexer"
 	"storemy/pkg/parser/statements"
+	"storemy/pkg/storage/index"
 )
 
 // parseCreateIndexStatement parses a CREATE INDEX SQL statement from the lexer tokens.
@@ -45,15 +46,15 @@ func parseCreateIndexStatement(l *lexer.Lexer) (*statements.CreateIndexStatement
 		return nil, err
 	}
 
-	indexType := statements.HashIndex
+	indexType := index.HashIndex
 	token := l.NextToken()
 	if token.Type == lexer.USING {
 		typeToken := l.NextToken()
 		switch typeToken.Type {
 		case lexer.HASH:
-			indexType = statements.HashIndex
+			indexType = index.HashIndex
 		case lexer.BTREE:
-			indexType = statements.BTreeIndex
+			indexType = index.BTreeIndex
 		default:
 			return nil, fmt.Errorf("expected HASH or BTREE after USING, got %s", typeToken.Value)
 		}

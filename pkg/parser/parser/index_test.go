@@ -2,6 +2,7 @@ package parser
 
 import (
 	"storemy/pkg/parser/statements"
+	"storemy/pkg/storage/index"
 	"testing"
 )
 
@@ -13,7 +14,7 @@ func TestParseCreateIndexStatement(t *testing.T) {
 		indexName   string
 		tableName   string
 		columnName  string
-		indexType   statements.IndexType
+		indexType   index.IndexType
 		ifNotExists bool
 	}{
 		{
@@ -23,7 +24,7 @@ func TestParseCreateIndexStatement(t *testing.T) {
 			indexName:   "IDX_USERS_EMAIL",
 			tableName:   "USERS",
 			columnName:  "EMAIL",
-			indexType:   statements.HashIndex,
+			indexType:   index.HashIndex,
 			ifNotExists: false,
 		},
 		{
@@ -33,7 +34,7 @@ func TestParseCreateIndexStatement(t *testing.T) {
 			indexName:   "IDX_PRODUCTS_PRICE",
 			tableName:   "PRODUCTS",
 			columnName:  "PRICE",
-			indexType:   statements.BTreeIndex,
+			indexType:   index.BTreeIndex,
 			ifNotExists: false,
 		},
 		{
@@ -43,7 +44,7 @@ func TestParseCreateIndexStatement(t *testing.T) {
 			indexName:   "IDX_ORDERS_ID",
 			tableName:   "ORDERS",
 			columnName:  "ORDER_ID",
-			indexType:   statements.HashIndex,
+			indexType:   index.HashIndex,
 			ifNotExists: false,
 		},
 		{
@@ -53,7 +54,7 @@ func TestParseCreateIndexStatement(t *testing.T) {
 			indexName:   "IDX_USERS_NAME",
 			tableName:   "USERS",
 			columnName:  "NAME",
-			indexType:   statements.HashIndex,
+			indexType:   index.HashIndex,
 			ifNotExists: true,
 		},
 		{
@@ -63,7 +64,7 @@ func TestParseCreateIndexStatement(t *testing.T) {
 			indexName:   "IDX_STATUS",
 			tableName:   "TASKS",
 			columnName:  "STATUS",
-			indexType:   statements.HashIndex,
+			indexType:   index.HashIndex,
 			ifNotExists: true,
 		},
 		{
