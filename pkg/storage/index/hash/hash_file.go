@@ -3,9 +3,9 @@ package hash
 import (
 	"fmt"
 	"io"
-	"storemy/pkg/iterator"
 	"storemy/pkg/primitives"
 	"storemy/pkg/storage/page"
+	"storemy/pkg/tuple"
 	"storemy/pkg/types"
 	"sync"
 )
@@ -104,16 +104,22 @@ func (hf *HashFile) GetNumBuckets() int {
 	return hf.numBuckets
 }
 
-// ReadPage reads a hash page from disk or returns it from cache.
+// ReadPage reads a hash page from disk and deserializes it.
+// This is the DbFile interface implementation - it only handles I/O,
+// no caching or page management (that's handled by PageStore).
 //
 // Parameters:
-//   - tid: Transaction ID for concurrency control
-//   - pageID: Identifier for the page to read
+//   - pid: Page identifier (must be a HashPageID)
 //
 // Returns:
-//   - *HashPage: The requested page (from cache or disk)
+//   - page.Page: The requested page (as HashPage)
 //   - error: Error if page ID is invalid or I/O fails
-func (hf *HashFile) ReadPage(pageID *HashPageID) (*HashPage, error) {
+func (hf *HashFile) ReadPage(pid primitives.PageID) (page.Page, error) {
+	pageID, ok := pid.(*HashPageID)
+	if !ok {
+		return nil, fmt.Errorf("invalid page ID type: expected HashPageID")
+	}
+
 	if pageID == nil {
 		return nil, fmt.Errorf("page ID cannot be nil")
 	}
@@ -125,6 +131,7 @@ func (hf *HashFile) ReadPage(pageID *HashPageID) (*HashPage, error) {
 	pageData, err := hf.ReadPageData(pageID.PageNo())
 	if err != nil {
 		if err == io.EOF {
+			// Return a new empty page for unallocated pages
 			bucketNum := pageID.PageNo()
 			newPage := NewHashPage(pageID, bucketNum, hf.keyType)
 			return newPage, nil
@@ -140,21 +147,27 @@ func (hf *HashFile) ReadPage(pageID *HashPageID) (*HashPage, error) {
 	return hashPage, nil
 }
 
-// WritePage writes a hash page to disk and updates the cache.
-// This is a synchronous write operation that flushes to disk immediately.
+// WritePage writes a hash page to disk.
+// This is the DbFile interface implementation - it only handles I/O,
+// no caching (that's handled by PageStore).
 //
 // Parameters:
-//   - p: The hash page to write
+//   - p: The page to write (must be a HashPage)
 //
 // Returns:
 //   - error: Error if page is nil, write fails, or sync fails
-func (hf *HashFile) WritePage(p *HashPage) error {
+func (hf *HashFile) WritePage(p page.Page) error {
 	if p == nil {
 		return fmt.Errorf("page cannot be nil")
 	}
 
-	pageID := p.pageID
-	pageData := p.GetPageData()
+	hashPage, ok := p.(*HashPage)
+	if !ok {
+		return fmt.Errorf("invalid page type: expected HashPage")
+	}
+
+	pageID := hashPage.pageID
+	pageData := hashPage.GetPageData()
 
 	if err := hf.WritePageData(pageID.PageNo(), pageData); err != nil {
 		return fmt.Errorf("failed to write page: %w", err)
@@ -169,67 +182,43 @@ func (hf *HashFile) WritePage(p *HashPage) error {
 	return nil
 }
 
-// AllocatePage allocates a new overflow page for a bucket.
-// Overflow pages are created when a bucket's primary page becomes full.
-//
-// Parameters:
-//   - tid: Transaction ID that will own modifications to this page
-//   - bucketNum: Bucket number this overflow page belongs to
+// AllocatePageNum allocates a new page number for overflow pages.
+// This is used by HashIndex when creating new overflow pages.
+// The actual page creation and management is done by PageStore.
 //
 // Returns:
-//   - *HashPage: The newly allocated page
-//   - error: Error if write operation fails
-func (hf *HashFile) AllocatePage(tid *primitives.TransactionID, bucketNum int) (*HashPage, error) {
+//   - int: The newly allocated page number
+//
+// Thread-safe: Uses mutex to ensure atomic page number allocation.
+func (hf *HashFile) AllocatePageNum() int {
 	hf.mutex.Lock()
+	defer hf.mutex.Unlock()
 	pageNum := hf.numPages
 	hf.numPages++
-	hf.mutex.Unlock()
-
-	pageID := NewHashPageID(hf.GetID(), pageNum)
-	newPage := NewHashPage(pageID, bucketNum, hf.keyType)
-	newPage.MarkDirty(true, tid)
-
-	if err := hf.WritePage(newPage); err != nil {
-		return nil, fmt.Errorf("failed to write new page: %w", err)
-	}
-
-	return newPage, nil
+	return pageNum
 }
 
-// GetBucketPage returns the primary page for a given bucket number.
-// This is the starting point for searching entries in a bucket.
+// GetBucketPageNum returns the page number for a given bucket.
+// The actual page retrieval should go through PageStore.
 //
 // Parameters:
-//   - tid: Transaction ID for concurrency control
 //   - bucketNum: Bucket number (0 to numBuckets-1)
 //
 // Returns:
-//   - *HashPage: The primary bucket page
-//   - error: Error if bucket number is invalid or read fails
-func (hf *HashFile) GetBucketPage(tid *primitives.TransactionID, bucketNum int) (*HashPage, error) {
+//   - int: Page number for this bucket
+//   - error: Error if bucket number is invalid
+func (hf *HashFile) GetBucketPageNum(bucketNum int) (int, error) {
 	if bucketNum < 0 || bucketNum >= hf.numBuckets {
-		return nil, fmt.Errorf("invalid bucket number: %d", bucketNum)
+		return -1, fmt.Errorf("invalid bucket number: %d", bucketNum)
 	}
 
+	hf.mutex.RLock()
 	pageNum := hf.bucketPageID[bucketNum]
-	pageID := NewHashPageID(hf.GetID(), pageNum)
-	return hf.ReadPage(pageID)
+	hf.mutex.RUnlock()
+
+	return pageNum, nil
 }
 
-// Iterator returns an iterator over all entries in the hash index.
-// The iterator visits all buckets sequentially, including overflow pages.
-//
-// Parameters:
-//   - tid: Transaction ID for the scan operation
-//
-// Returns:
-//   - iterator.DbFileIterator: Iterator that yields all hash entries in file order
-func (hf *HashFile) Iterator(tid *primitives.TransactionID) iterator.DbFileIterator {
-	return &HashFileIterator{
-		file:          hf,
-		tid:           tid,
-		currentBucket: 0,
-		currentPage:   nil,
-		currentPos:    0,
-	}
+func (hf *HashFile) GetTupleDesc() *tuple.TupleDescription {
+	return nil
 }

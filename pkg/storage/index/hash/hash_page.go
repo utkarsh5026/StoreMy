@@ -89,7 +89,7 @@ func (hp *HashPage) GetID() primitives.PageID {
 // Returns:
 //   - Transaction ID if page is dirty
 //   - nil if page is clean (matches disk state)
-func (hp *HashPage) IsDirty() TID {
+func (hp *HashPage) IsDirty() *primitives.TransactionID {
 	if hp.isDirty {
 		return hp.dirtyTxn
 	}
@@ -106,7 +106,7 @@ func (hp *HashPage) IsDirty() TID {
 // Behavior:
 //   - On first dirty mark, captures current state as before-image
 //   - Before-image used for rollback if transaction aborts
-func (hp *HashPage) MarkDirty(dirty bool, tid TID) {
+func (hp *HashPage) MarkDirty(dirty bool, tid *primitives.TransactionID) {
 	if dirty && !hp.isDirty && hp.beforeImage == nil {
 		hp.beforeImage = hp.GetPageData()
 	}
@@ -194,8 +194,16 @@ func (hp *HashPage) GetBucketNum() int {
 // Returns:
 //   - Page number of overflow page (>= 0)
 //   - NoOverFlowPage (-1) if no overflow page exists
-func (hp *HashPage) GetOverflowPage() int {
+func (hp *HashPage) GetOverflowPageNum() int {
 	return hp.overflowPage
+}
+
+func (hp *HashPage) HasNoOverflowPage() bool {
+	return hp.overflowPage == NoOverFlowPage
+}
+
+func (hp *HashPage) GetPageNo() int {
+	return hp.pageID.pageNum
 }
 
 // SetOverflowPage links an overflow page to this hash page.
