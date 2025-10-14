@@ -31,7 +31,7 @@ func NewDropTablePlan(
 //  3. CatalogManager handles cleanup of data files and cache
 func (p *DropTablePlan) Execute() (any, error) {
 	catalogMgr := p.ctx.CatalogManager()
-	if !catalogMgr.TableExists(p.transactionCtx.ID, p.Statement.TableName) {
+	if !catalogMgr.TableExists(p.transactionCtx, p.Statement.TableName) {
 		if p.Statement.IfExists {
 			return &DDLResult{
 				Success: true,

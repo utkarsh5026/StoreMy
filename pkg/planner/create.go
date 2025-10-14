@@ -43,7 +43,7 @@ func NewCreateTablePlan(
 //  4. CatalogManager handles file path generation and persistence
 func (p *CreateTablePlan) Execute() (any, error) {
 	catalogMgr := p.ctx.CatalogManager()
-	if catalogMgr.TableExists(p.transactionCtx.ID, p.Statement.TableName) {
+	if catalogMgr.TableExists(p.transactionCtx, p.Statement.TableName) {
 		if p.Statement.IfNotExists {
 			return &DDLResult{
 				Success: true,

@@ -43,10 +43,9 @@ func NewDropIndexPlan(
 //  5. Returns success result
 func (p *DropIndexPlan) Execute() (any, error) {
 	cm := p.ctx.CatalogManager()
-	tid := p.transactionCtx.ID
 	idxName, tableName := p.Statement.IndexName, p.Statement.TableName
 
-	if !cm.IndexExists(tid, idxName) {
+	if !cm.IndexExists(p.transactionCtx, idxName) {
 		if p.Statement.IfExists {
 			return &DDLResult{
 				Success: true,
@@ -56,13 +55,13 @@ func (p *DropIndexPlan) Execute() (any, error) {
 		return nil, fmt.Errorf("index %s does not exist", idxName)
 	}
 
-	idx, err := cm.GetIndexByName(tid, idxName)
+	idx, err := cm.GetIndexByName(p.transactionCtx, idxName)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get index metadata: %v", err)
 	}
 
 	if tableName != "" {
-		tn, err := cm.GetTableName(tid, idx.TableID)
+		tn, err := cm.GetTableName(p.transactionCtx, idx.TableID)
 		if err != nil {
 			return nil, fmt.Errorf("failed to verify table name: %v", err)
 		}

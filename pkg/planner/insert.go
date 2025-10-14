@@ -42,7 +42,7 @@ func NewInsertPlan(
 // all specified tuples into the target table. It validates the data, creates
 // tuples according to the table schema, and coordinates with the storage layer.
 func (p *InsertPlan) Execute() (any, error) {
-	md, err := resolveTableMetadata(p.statement.TableName, p.transactionCtx.ID, p.ctx)
+	md, err := resolveTableMetadata(p.statement.TableName, p.transactionCtx, p.ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -53,7 +53,7 @@ func (p *InsertPlan) Execute() (any, error) {
 	}
 
 	// Check for auto-increment column
-	autoIncInfo, err := p.ctx.CatalogManager().GetAutoIncrementColumn(p.transactionCtx.ID, md.TableID)
+	autoIncInfo, err := p.ctx.CatalogManager().GetAutoIncrementColumn(p.transactionCtx, md.TableID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get auto-increment info: %v", err)
 	}

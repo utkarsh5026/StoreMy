@@ -6,6 +6,7 @@ import (
 	"storemy/pkg/execution/query"
 	"storemy/pkg/iterator"
 	"storemy/pkg/parser/plan"
+	"storemy/pkg/storage/heap"
 	"storemy/pkg/tuple"
 	"storemy/pkg/types"
 	"strings"
@@ -18,14 +19,14 @@ type tableMetadata struct {
 
 // resolveTableMetadata retrieves table ID and schema in a single operation.
 // This is the primary table lookup method used by all planner components.
-func resolveTableMetadata(tableName string, tid TID, ctx DbContext) (*tableMetadata, error) {
+func resolveTableMetadata(tableName string, tx TransactionCtx, ctx DbContext) (*tableMetadata, error) {
 	catalogMgr := ctx.CatalogManager()
-	tableID, err := catalogMgr.GetTableID(tid, tableName)
+	tableID, err := catalogMgr.GetTableID(tx, tableName)
 	if err != nil {
 		return nil, fmt.Errorf("table %s not found", tableName)
 	}
 
-	sch, err := catalogMgr.GetTableSchema(tid, tableID)
+	sch, err := catalogMgr.GetTableSchema(tx, tableID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get schema for table %s: %v", tableName, err)
 	}
@@ -38,8 +39,8 @@ func resolveTableMetadata(tableName string, tid TID, ctx DbContext) (*tableMetad
 
 // resolveTableID converts a table name to its internal numeric identifier.
 // Convenience wrapper around resolveTableMetadata when only the ID is needed.
-func resolveTableID(tableName string, tid TID, ctx DbContext) (int, error) {
-	md, err := resolveTableMetadata(tableName, tid, ctx)
+func resolveTableID(tableName string, tx TransactionCtx, ctx DbContext) (int, error) {
+	md, err := resolveTableMetadata(tableName, tx, ctx)
 	if err != nil {
 		return -1, err
 	}
@@ -67,7 +68,17 @@ func collectAllTuples(it DbIterator) ([]*tuple.Tuple, error) {
 //  2. Filter (optional) - applies WHERE predicates
 func buildScanWithFilter(tx *transaction.TransactionContext, tableID int, whereClause *plan.FilterNode, ctx DbContext,
 ) (DbIterator, error) {
-	scanOp, err := query.NewSeqScan(tx, tableID, ctx.CatalogManager(), ctx.PageStore())
+	cm := ctx.CatalogManager()
+	file, err := cm.GetTableFile(tableID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get table file: %v", err)
+	}
+
+	heapFile, ok := file.(*heap.HeapFile)
+	if !ok {
+		return nil, fmt.Errorf("unsupported file type for table %d", tableID)
+	}
+	scanOp, err := query.NewSeqScan(tx, tableID, heapFile, ctx.PageStore())
 	if err != nil {
 		return nil, fmt.Errorf("failed to create table scan: %v", err)
 	}

@@ -118,12 +118,12 @@ func TestCreateIndexPlan_Execute_HashIndex(t *testing.T) {
 	}
 
 	// Verify index exists in catalog
-	if !ctx.CatalogManager().IndexExists(transCtx.ID, "idx_users_email") {
+	if !ctx.CatalogManager().IndexExists(transCtx, "idx_users_email") {
 		t.Error("Index was not added to catalog")
 	}
 
 	// Verify index file was created
-	indexMeta, _ := ctx.CatalogManager().GetIndexByName(transCtx.ID, "idx_users_email")
+	indexMeta, _ := ctx.CatalogManager().GetIndexByName(transCtx, "idx_users_email")
 	if _, err := os.Stat(indexMeta.FilePath); os.IsNotExist(err) {
 		t.Errorf("Index file was not created at %s", indexMeta.FilePath)
 	}
@@ -133,7 +133,7 @@ func TestCreateIndexPlan_Execute_HashIndex(t *testing.T) {
 		statements.NewDropIndexStatement("idx_users_email", "", false),
 		ctx, transCtx)
 	dropPlan.Execute()
-	cleanupTable(t, ctx.CatalogManager(), "users", transCtx.ID)
+	cleanupTable(t, ctx.CatalogManager(), "users", transCtx)
 }
 
 func TestCreateIndexPlan_Execute_BTreeIndex(t *testing.T) {
@@ -158,7 +158,7 @@ func TestCreateIndexPlan_Execute_BTreeIndex(t *testing.T) {
 		t.Error("Expected success to be true")
 	}
 
-	if !ctx.CatalogManager().IndexExists(transCtx.ID, "idx_users_age") {
+	if !ctx.CatalogManager().IndexExists(transCtx, "idx_users_age") {
 		t.Error("Index was not added to catalog")
 	}
 
@@ -167,7 +167,7 @@ func TestCreateIndexPlan_Execute_BTreeIndex(t *testing.T) {
 		statements.NewDropIndexStatement("idx_users_age", "", false),
 		ctx, transCtx)
 	dropPlan.Execute()
-	cleanupTable(t, ctx.CatalogManager(), "users", transCtx.ID)
+	cleanupTable(t, ctx.CatalogManager(), "users", transCtx)
 }
 
 func TestCreateIndexPlan_Execute_IfNotExists_IndexDoesNotExist(t *testing.T) {
@@ -201,7 +201,7 @@ func TestCreateIndexPlan_Execute_IfNotExists_IndexDoesNotExist(t *testing.T) {
 		statements.NewDropIndexStatement("idx_users_email", "", false),
 		ctx, transCtx)
 	dropPlan.Execute()
-	cleanupTable(t, ctx.CatalogManager(), "users", transCtx.ID)
+	cleanupTable(t, ctx.CatalogManager(), "users", transCtx)
 }
 
 func TestCreateIndexPlan_Execute_IfNotExists_IndexExists(t *testing.T) {
@@ -244,7 +244,7 @@ func TestCreateIndexPlan_Execute_IfNotExists_IndexExists(t *testing.T) {
 		statements.NewDropIndexStatement("idx_users_email", "", false),
 		ctx, transCtx)
 	dropPlan.Execute()
-	cleanupTable(t, ctx.CatalogManager(), "users", transCtx.ID)
+	cleanupTable(t, ctx.CatalogManager(), "users", transCtx)
 }
 
 func TestCreateIndexPlan_Execute_Error_TableDoesNotExist(t *testing.T) {
@@ -298,7 +298,7 @@ func TestCreateIndexPlan_Execute_Error_ColumnDoesNotExist(t *testing.T) {
 		t.Errorf("Expected error %q, got %q", expectedError, err.Error())
 	}
 
-	cleanupTable(t, ctx.CatalogManager(), "users", transCtx.ID)
+	cleanupTable(t, ctx.CatalogManager(), "users", transCtx)
 }
 
 func TestCreateIndexPlan_Execute_Error_IndexAlreadyExists(t *testing.T) {
@@ -341,7 +341,7 @@ func TestCreateIndexPlan_Execute_Error_IndexAlreadyExists(t *testing.T) {
 		statements.NewDropIndexStatement("idx_users_email", "", false),
 		ctx, transCtx)
 	dropPlan.Execute()
-	cleanupTable(t, ctx.CatalogManager(), "users", transCtx.ID)
+	cleanupTable(t, ctx.CatalogManager(), "users", transCtx)
 }
 
 func TestCreateIndexPlan_Execute_MultipleIndexesOnSameTable(t *testing.T) {
@@ -375,8 +375,8 @@ func TestCreateIndexPlan_Execute_MultipleIndexesOnSameTable(t *testing.T) {
 	}
 
 	// Verify both indexes exist
-	tableID, _ := ctx.CatalogManager().GetTableID(transCtx.ID, "users")
-	indexes, err := ctx.CatalogManager().GetIndexesByTable(transCtx.ID, tableID)
+	tableID, _ := ctx.CatalogManager().GetTableID(transCtx, "users")
+	indexes, err := ctx.CatalogManager().GetIndexesByTable(transCtx, tableID)
 	if err != nil {
 		t.Fatalf("Failed to get indexes: %v", err)
 	}
@@ -396,7 +396,7 @@ func TestCreateIndexPlan_Execute_MultipleIndexesOnSameTable(t *testing.T) {
 		ctx, transCtx)
 	dropPlan2.Execute()
 
-	cleanupTable(t, ctx.CatalogManager(), "users", transCtx.ID)
+	cleanupTable(t, ctx.CatalogManager(), "users", transCtx)
 }
 
 func TestCreateIndexPlan_Execute_IndexFileCreation(t *testing.T) {
@@ -431,5 +431,5 @@ func TestCreateIndexPlan_Execute_IndexFileCreation(t *testing.T) {
 		statements.NewDropIndexStatement("idx_users_email", "", false),
 		ctx, transCtx)
 	dropPlan.Execute()
-	cleanupTable(t, ctx.CatalogManager(), "users", transCtx.ID)
+	cleanupTable(t, ctx.CatalogManager(), "users", transCtx)
 }

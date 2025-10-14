@@ -3,14 +3,14 @@ package planner
 import (
 	"fmt"
 	"os"
+	"storemy/pkg/execution/query"
 	"storemy/pkg/iterator"
 	hashindex "storemy/pkg/memory/wrappers/hash_index"
 	"storemy/pkg/parser/statements"
-	"storemy/pkg/primitives"
+	"storemy/pkg/storage/heap"
 	"storemy/pkg/storage/index"
 	"storemy/pkg/storage/index/btree"
 	"storemy/pkg/storage/index/hash"
-	"storemy/pkg/storage/page"
 	"storemy/pkg/tuple"
 	"storemy/pkg/types"
 )
@@ -56,20 +56,19 @@ func NewCreateIndexPlan(
 //  7. Returns success result
 func (p *CreateIndexPlan) Execute() (any, error) {
 	cm := p.ctx.CatalogManager()
-	tid := p.tx.ID
 	tableName, indexName, colName := p.Statement.TableName, p.Statement.IndexName, p.Statement.ColumnName
 	idxType := p.Statement.IndexType
 
-	if !cm.TableExists(tid, tableName) {
+	if !cm.TableExists(p.tx, tableName) {
 		return nil, fmt.Errorf("table %s does not exist", tableName)
 	}
 
-	tableID, err := cm.GetTableID(tid, tableName)
+	tableID, err := cm.GetTableID(p.tx, tableName)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get table ID: %v", err)
 	}
 
-	tableSchema, err := cm.GetTableSchema(tid, tableID)
+	tableSchema, err := cm.GetTableSchema(p.tx, tableID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get table schema: %v", err)
 	}
@@ -80,7 +79,7 @@ func (p *CreateIndexPlan) Execute() (any, error) {
 			colName, tableName)
 	}
 
-	if cm.IndexExists(p.tx.ID, p.Statement.IndexName) {
+	if cm.IndexExists(p.tx, p.Statement.IndexName) {
 		if p.Statement.IfNotExists {
 			return &DDLResult{
 				Success: true,
@@ -198,11 +197,19 @@ func (p *CreateIndexPlan) populateIndex(
 		return fmt.Errorf("unsupported index type: %s", indexType)
 	}
 
-	return insertIntoIndex(p.tx.ID, tableFile, columnIndex, insertFunc)
+	heapFile, ok := tableFile.(*heap.HeapFile)
+	if !ok {
+		return fmt.Errorf("expected heap file for table, got %T", tableFile)
+	}
+
+	return p.insertIntoIndex(p.tx, heapFile, columnIndex, tableID, insertFunc)
 }
 
-func insertIntoIndex(tid *primitives.TransactionID, tableFile page.DbFile, indexColIdx int, insertFunc func(key types.Field, rid *tuple.TupleRecordID) error) error {
-	it := tableFile.Iterator(tid)
+func (p *CreateIndexPlan) insertIntoIndex(tx TransactionCtx, tableFile *heap.HeapFile, heapTableID, indexColIdx int, insertFunc func(key types.Field, rid *tuple.TupleRecordID) error) error {
+	it, err := query.NewSeqScan(tx, heapTableID, tableFile, p.ctx.PageStore())
+	if err != nil {
+		return fmt.Errorf("failed to create sequential scan: %v", err)
+	}
 	it.Open()
 	defer it.Close()
 

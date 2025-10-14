@@ -436,13 +436,13 @@ func TestInsertPlan_getTableID(t *testing.T) {
 
 	stmt := statements.NewInsertStatement("test_table")
 
-	tableID, err := resolveTableID(stmt.TableName, transCtx.ID, ctx)
+	tableID, err := resolveTableID(stmt.TableName, transCtx, ctx)
 
 	if err != nil {
 		t.Fatalf("getTableID failed: %v", err)
 	}
 
-	expectedTableID, _ := ctx.CatalogManager().GetTableID(transCtx.ID, "test_table")
+	expectedTableID, _ := ctx.CatalogManager().GetTableID(transCtx, "test_table")
 	if tableID != expectedTableID {
 		t.Errorf("Expected table ID %d, got %d", expectedTableID, tableID)
 	}
@@ -463,7 +463,7 @@ func TestInsertPlan_getTupleDesc(t *testing.T) {
 
 	stmt := statements.NewInsertStatement("test_table")
 
-	md, err := resolveTableMetadata(stmt.TableName, transCtx.ID, ctx)
+	md, err := resolveTableMetadata(stmt.TableName, transCtx, ctx)
 	tupleDesc := md.TupleDesc
 
 	if err != nil {
@@ -496,7 +496,7 @@ func TestInsertPlan_createFieldMapping(t *testing.T) {
 	stmt.AddFieldNames([]string{"name", "id"})
 	plan := NewInsertPlan(stmt, transCtx, ctx)
 
-	md, err := resolveTableMetadata(stmt.TableName, transCtx.ID, ctx)
+	md, err := resolveTableMetadata(stmt.TableName, transCtx, ctx)
 	tupleDesc := md.TupleDesc
 	if err != nil {
 		t.Fatalf("getTupleDesc failed: %v", err)
@@ -537,7 +537,7 @@ func TestInsertPlan_createFieldMapping_EmptyFields(t *testing.T) {
 	stmt := statements.NewInsertStatement("test_table")
 	plan := NewInsertPlan(stmt, transCtx, ctx)
 
-	md, err := resolveTableMetadata(stmt.TableName, transCtx.ID, ctx)
+	md, err := resolveTableMetadata(stmt.TableName, transCtx, ctx)
 	tupleDesc := md.TupleDesc
 	if err != nil {
 		t.Fatalf("getTupleDesc failed: %v", err)
@@ -569,7 +569,7 @@ func TestInsertPlan_validateValueCount(t *testing.T) {
 
 	stmt := statements.NewInsertStatement("test_table")
 
-	md, err := resolveTableMetadata(stmt.TableName, transCtx.ID, ctx)
+	md, err := resolveTableMetadata(stmt.TableName, transCtx, ctx)
 	tupleDesc := md.TupleDesc
 	if err != nil {
 		t.Fatalf("getTupleDesc failed: %v", err)

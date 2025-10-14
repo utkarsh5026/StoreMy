@@ -31,7 +31,7 @@ func NewDeletePlan(
 // 3. Collect all tuples matching the criteria
 // 4. Delete the collected tuples
 func (p *DeletePlan) Execute() (any, error) {
-	tableID, err := resolveTableID(p.statement.TableName, p.tx.ID, p.ctx)
+	tableID, err := resolveTableID(p.statement.TableName, p.tx, p.ctx)
 	if err != nil {
 		return nil, err
 	}

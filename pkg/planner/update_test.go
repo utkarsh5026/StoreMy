@@ -479,7 +479,7 @@ func TestUpdatePlan_getTableMetadata(t *testing.T) {
 
 	stmt := statements.NewUpdateStatement("users", "users")
 
-	md, err := resolveTableMetadata(stmt.TableName, tx.ID, ctx)
+	md, err := resolveTableMetadata(stmt.TableName, tx, ctx)
 	tableID := md.TableID
 	tupleDesc := md.TupleDesc
 
@@ -487,7 +487,7 @@ func TestUpdatePlan_getTableMetadata(t *testing.T) {
 		t.Fatalf("getTableMetadata failed: %v", err)
 	}
 
-	expectedTableID, _ := ctx.CatalogManager().GetTableID(tx.ID, "users")
+	expectedTableID, _ := ctx.CatalogManager().GetTableID(tx, "users")
 	if tableID != expectedTableID {
 		t.Errorf("Expected table ID %d, got %d", expectedTableID, tableID)
 	}
@@ -510,7 +510,7 @@ func TestUpdatePlan_findFieldIndex(t *testing.T) {
 
 	stmt := statements.NewUpdateStatement("users", "users")
 
-	md, err := resolveTableMetadata(stmt.TableName, tx.ID, ctx)
+	md, err := resolveTableMetadata(stmt.TableName, tx, ctx)
 	if err != nil {
 		t.Fatalf("getTableMetadata failed: %v", err)
 	}
@@ -561,7 +561,7 @@ func TestUpdatePlan_buildUpdateMap(t *testing.T) {
 
 	updatePlan := NewUpdatePlan(stmt, tx, ctx)
 
-	md, err := resolveTableMetadata(stmt.TableName, tx.ID, ctx)
+	md, err := resolveTableMetadata(stmt.TableName, tx, ctx)
 	if err != nil {
 		t.Fatalf("getTableMetadata failed: %v", err)
 	}
