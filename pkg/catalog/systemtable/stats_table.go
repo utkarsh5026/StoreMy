@@ -26,7 +26,7 @@ type StatsTable struct {
 
 // Schema returns the schema for the CATALOG_STATS system table.
 func (st *StatsTable) Schema() *schema.Schema {
-	return schema.NewSchemaBuilder(InvalidTableID, st.TableName()).
+	sch, _ := schema.NewSchemaBuilder(InvalidTableID, st.TableName()).
 		AddPrimaryKey("table_id", types.IntType).
 		AddColumn("cardinality", types.IntType).
 		AddColumn("page_count", types.IntType).
@@ -37,6 +37,8 @@ func (st *StatsTable) Schema() *schema.Schema {
 		AddColumn("min_value", types.StringType).
 		AddColumn("max_value", types.StringType).
 		Build()
+
+	return sch
 }
 
 func (st *StatsTable) FileName() string {
@@ -61,8 +63,10 @@ func (st *StatsTable) GetTableID(t *tuple.Tuple) (int, error) {
 	}
 
 	tableID := getIntField(t, 0)
-	if tableID <= 0 {
-		return 0, fmt.Errorf("invalid table_id %d: must be positive", tableID)
+	// Allow any table ID (including negative for generated IDs), but not InvalidTableID (-1)
+	// which is reserved for system table schemas
+	if tableID == InvalidTableID {
+		return 0, fmt.Errorf("invalid table_id: cannot be InvalidTableID (%d)", InvalidTableID)
 	}
 
 	return tableID, nil

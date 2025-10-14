@@ -25,7 +25,7 @@ type IndexesTable struct {
 // Schema returns the schema for the CATALOG_INDEXES system table.
 // Schema: (index_id INT, index_name STRING, table_id INT, column_name STRING, index_type STRING, file_path STRING, created_at INT)
 func (it *IndexesTable) Schema() *schema.Schema {
-	return schema.NewSchemaBuilder(InvalidTableID, it.TableName()).
+	sch, _ := schema.NewSchemaBuilder(InvalidTableID, it.TableName()).
 		AddPrimaryKey("index_id", types.IntType).
 		AddColumn("index_name", types.StringType).
 		AddColumn("table_id", types.IntType).
@@ -34,6 +34,7 @@ func (it *IndexesTable) Schema() *schema.Schema {
 		AddColumn("file_path", types.StringType).
 		AddColumn("created_at", types.IntType).
 		Build()
+	return sch
 }
 
 func (it *IndexesTable) TableName() string {
@@ -99,8 +100,10 @@ func (it *IndexesTable) Parse(t *tuple.Tuple) (*IndexMetadata, error) {
 		return nil, fmt.Errorf("index_name cannot be empty")
 	}
 
-	if tableID <= 0 {
-		return nil, fmt.Errorf("invalid table_id %d: must be positive", tableID)
+	// Allow any table ID (including negative for generated IDs), but not InvalidTableID (-1)
+	// which is reserved for system table schemas
+	if tableID == InvalidTableID {
+		return nil, fmt.Errorf("invalid table_id: cannot be InvalidTableID (%d)", InvalidTableID)
 	}
 
 	if columnName == "" {

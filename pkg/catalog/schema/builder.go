@@ -1,6 +1,7 @@
 package schema
 
 import (
+	"fmt"
 	"storemy/pkg/types"
 )
 
@@ -62,11 +63,11 @@ func (sb *SchemaBuilder) AddAutoIncrement(name string) *SchemaBuilder {
 }
 
 // Build constructs the schema
-func (sb *SchemaBuilder) Build() *Schema {
+func (sb *SchemaBuilder) Build() (*Schema, error) {
 	columns := make([]ColumnMetadata, 0, len(sb.columns))
 
 	for i, colDef := range sb.columns {
-		col, _ := NewColumnMetadata(
+		col, err := NewColumnMetadata(
 			colDef.Name,
 			colDef.Type,
 			i, // position is automatically set
@@ -74,15 +75,21 @@ func (sb *SchemaBuilder) Build() *Schema {
 			colDef.IsPrimaryKey,
 			colDef.IsAutoIncrement,
 		)
+		if err != nil {
+			return nil, fmt.Errorf("failed to create column metadata: %v", err)
+		}
 		columns = append(columns, *col)
 	}
 
-	sch, _ := NewSchema(sb.tableID, sb.tableName, columns)
-	return sch
+	sch, err := NewSchema(sb.tableID, sb.tableName, columns)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create schema: %v", err)
+	}
+	return sch, nil
 }
 
 // BuildColumns is a convenience function for simple schema creation
-func BuildColumns(tableID int, tableName string, defs ...ColumnDef) *Schema {
+func BuildColumns(tableID int, tableName string, defs ...ColumnDef) (*Schema, error) {
 	builder := NewSchemaBuilder(tableID, tableName)
 	for _, def := range defs {
 		if def.IsAutoIncrement {

@@ -13,7 +13,7 @@ type ColumnsTable struct{}
 // Schema returns the schema for the CATALOG_COLUMNS system table.
 // Schema: (table_id INT, column_name STRING, type_id INT, position INT, is_primary_key BOOL, is_auto_increment BOOL, next_auto_value INT)
 func (ct *ColumnsTable) Schema() *schema.Schema {
-	return schema.NewSchemaBuilder(InvalidTableID, ct.TableName()).
+	sch, _ := schema.NewSchemaBuilder(InvalidTableID, ct.TableName()).
 		AddColumn("table_id", types.IntType).
 		AddColumn("column_name", types.StringType).
 		AddColumn("type_id", types.IntType).
@@ -22,6 +22,8 @@ func (ct *ColumnsTable) Schema() *schema.Schema {
 		AddColumn("is_auto_increment", types.BoolType).
 		AddColumn("next_auto_value", types.IntType).
 		Build()
+
+	return sch
 }
 
 func (ct *ColumnsTable) TableName() string {
@@ -58,8 +60,10 @@ func (ct *ColumnsTable) GetTableID(t *tuple.Tuple) (int, error) {
 	}
 
 	tableID := getIntField(t, 0)
-	if tableID <= 0 {
-		return 0, fmt.Errorf("invalid table_id %d: must be positive", tableID)
+	// Allow any table ID (including negative for generated IDs), but not InvalidTableID (-1)
+	// which is reserved for system table schemas
+	if tableID == InvalidTableID {
+		return 0, fmt.Errorf("invalid table_id: cannot be InvalidTableID (%d)", InvalidTableID)
 	}
 
 	return tableID, nil

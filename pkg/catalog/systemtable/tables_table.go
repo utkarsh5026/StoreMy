@@ -20,12 +20,13 @@ type TablesTable struct {
 // Schema returns the schema for the CATALOG_TABLES system table.
 // Schema: (table_id INT, table_name STRING, file_path STRING, primary_key STRING)
 func (tt *TablesTable) Schema() *schema.Schema {
-	return schema.NewSchemaBuilder(InvalidTableID, tt.TableName()).
+	sch, _ := schema.NewSchemaBuilder(InvalidTableID, tt.TableName()).
 		AddPrimaryKey("table_id", types.IntType).
 		AddColumn("table_name", types.StringType).
 		AddColumn("file_path", types.StringType).
 		AddColumn("primary_key", types.StringType).
 		Build()
+	return sch
 }
 
 func (tt *TablesTable) TableName() string {
@@ -74,8 +75,10 @@ func (tt *TablesTable) Parse(t *tuple.Tuple) (*TableMetadata, error) {
 	filePath := getStringField(t, 2)
 	primaryKey := getStringField(t, 3)
 
-	if tableID <= 0 {
-		return nil, fmt.Errorf("invalid table_id %d: must be positive", tableID)
+	// Allow any table ID (including negative for generated IDs), but not InvalidTableID (-1)
+	// which is reserved for system table schemas
+	if tableID == InvalidTableID {
+		return nil, fmt.Errorf("invalid table_id: cannot be InvalidTableID (%d)", InvalidTableID)
 	}
 
 	if tableName == "" {
