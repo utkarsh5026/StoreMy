@@ -3,16 +3,9 @@ package systemtable
 import (
 	"fmt"
 	"storemy/pkg/catalog/schema"
+	"storemy/pkg/storage/index"
 	"storemy/pkg/tuple"
 	"storemy/pkg/types"
-)
-
-// IndexType represents the type of index (HASH or BTREE)
-type IndexType string
-
-const (
-	IndexTypeHash  IndexType = "HASH"
-	IndexTypeBTree IndexType = "BTREE"
 )
 
 // IndexMetadata represents metadata for a database index
@@ -21,7 +14,7 @@ type IndexMetadata struct {
 	IndexName  string
 	TableID    int
 	ColumnName string
-	IndexType  IndexType
+	IndexType  index.IndexType
 	FilePath   string
 	CreatedAt  int64 // Unix timestamp
 }
@@ -114,8 +107,8 @@ func (it *IndexesTable) Parse(t *tuple.Tuple) (*IndexMetadata, error) {
 		return nil, fmt.Errorf("column_name cannot be empty")
 	}
 
-	indexType := IndexType(indexTypeStr)
-	if indexType != IndexTypeHash && indexType != IndexTypeBTree {
+	indexType := index.IndexType(indexTypeStr)
+	if indexType != index.HashIndex && indexType != index.BTreeIndex {
 		return nil, fmt.Errorf("invalid index_type %s: must be HASH or BTREE", indexTypeStr)
 	}
 
