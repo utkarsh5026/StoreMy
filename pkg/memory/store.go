@@ -10,6 +10,8 @@ import (
 	"sync"
 )
 
+type TxContext = *transaction.TransactionContext
+
 const (
 	MaxPageCount = 1000
 )
@@ -26,12 +28,6 @@ const (
 
 func (o OperationType) String() string {
 	switch o {
-	case InsertOperation:
-		return "INSERT"
-	case DeleteOperation:
-		return "DELETE"
-	case UpdateOperation:
-		return "UPDATE"
 	case CommitOperation:
 		return "COMMIT"
 	case AbortOperation:
@@ -128,7 +124,7 @@ func (p *PageStore) SetStatsManager(sm StatsRecorder) {
 //   - Disk read fails for page not in cache
 //
 // Thread-safe: Acquires appropriate locks via LockManager and mutex.
-func (p *PageStore) GetPage(ctx *transaction.TransactionContext, dbFile page.DbFile, pid primitives.PageID, perm transaction.Permissions) (page.Page, error) {
+func (p *PageStore) GetPage(ctx TxContext, dbFile page.DbFile, pid primitives.PageID, perm transaction.Permissions) (page.Page, error) {
 	if ctx == nil {
 		return nil, fmt.Errorf("transaction context cannot be nil")
 	}
@@ -381,10 +377,7 @@ func (p *PageStore) getDbFileForPage(pageID primitives.PageID) (page.DbFile, err
 //
 // Parameters:
 //   - ctx: Transaction context containing dirty pages and lock information
-//
-// Returns an error if WAL logging or page flushing fails.
-// On error, the transaction may be in an inconsistent state and recovery is needed.
-func (p *PageStore) CommitTransaction(ctx *transaction.TransactionContext) error {
+func (p *PageStore) CommitTransaction(ctx TxContext) error {
 	return p.finalizeTransaction(ctx, CommitOperation)
 }
 
@@ -402,11 +395,7 @@ func (p *PageStore) CommitTransaction(ctx *transaction.TransactionContext) error
 //
 // Parameters:
 //   - ctx: Transaction context containing dirty pages and lock information
-//
-// Returns an error if WAL logging or before-image restoration fails.
-//
-// Thread-safe: Coordinates with LockManager to release locks atomically.
-func (p *PageStore) AbortTransaction(ctx *transaction.TransactionContext) error {
+func (p *PageStore) AbortTransaction(ctx TxContext) error {
 	return p.finalizeTransaction(ctx, AbortOperation)
 }
 
@@ -524,6 +513,7 @@ func (p *PageStore) handleAbort(dirtyPageIDs []primitives.PageID) error {
 	return nil
 }
 
+// GetWal returns the WAL instance used by this PageStore.
 func (p *PageStore) GetWal() *log.WAL {
 	return p.wal
 }
