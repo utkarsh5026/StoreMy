@@ -113,7 +113,7 @@ func (hf *HashFile) GetNumBuckets() int {
 // Returns:
 //   - *HashPage: The requested page (from cache or disk)
 //   - error: Error if page ID is invalid or I/O fails
-func (hf *HashFile) ReadPage(tid *primitives.TransactionID, pageID *HashPageID) (*HashPage, error) {
+func (hf *HashFile) ReadPage(pageID *HashPageID) (*HashPage, error) {
 	if pageID == nil {
 		return nil, fmt.Errorf("page ID cannot be nil")
 	}
@@ -213,7 +213,7 @@ func (hf *HashFile) GetBucketPage(tid *primitives.TransactionID, bucketNum int) 
 
 	pageNum := hf.bucketPageID[bucketNum]
 	pageID := NewHashPageID(hf.GetID(), pageNum)
-	return hf.ReadPage(tid, pageID)
+	return hf.ReadPage(pageID)
 }
 
 // Iterator returns an iterator over all entries in the hash index.

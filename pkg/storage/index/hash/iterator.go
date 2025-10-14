@@ -25,7 +25,6 @@ func (it *HashFileIterator) Open() error {
 	it.currentBucket = 0
 	it.currentPos = 0
 
-	// Find the first non-empty bucket
 	for it.currentBucket < it.file.numBuckets {
 		page, err := it.file.GetBucketPage(it.tid, it.currentBucket)
 		if err != nil {
@@ -40,7 +39,6 @@ func (it *HashFileIterator) Open() error {
 		it.currentBucket++
 	}
 
-	// All buckets are empty
 	it.currentPage = nil
 	return nil
 }
@@ -51,12 +49,10 @@ func (it *HashFileIterator) HasNext() (bool, error) {
 		return false, nil
 	}
 
-	// Check if there are more entries in the current page
 	if it.currentPos < len(it.currentPage.entries) {
 		return true, nil
 	}
 
-	// Try to advance to find more entries
 	return it.advanceToNextEntry()
 }
 
@@ -98,12 +94,10 @@ func (it *HashFileIterator) advanceToNextEntry() (bool, error) {
 				}
 				continue
 			}
-
-			// Mark as visited before reading
 			visitedPages[overflowPageNum] = true
 
 			pageID := NewHashPageID(it.file.GetID(), overflowPageNum)
-			nextPage, err := it.file.ReadPage(it.tid, pageID)
+			nextPage, err := it.file.ReadPage(pageID)
 			if err != nil {
 				return false, fmt.Errorf("failed to read overflow page: %w", err)
 			}
@@ -113,9 +107,7 @@ func (it *HashFileIterator) advanceToNextEntry() (bool, error) {
 			if len(it.currentPage.entries) > 0 {
 				return true, nil
 			}
-			// Continue loop if this overflow page is empty
 		} else {
-			// No more overflow pages, move to next bucket
 			it.currentBucket++
 			if it.currentBucket >= it.file.numBuckets {
 				it.currentPage = nil
@@ -128,25 +120,22 @@ func (it *HashFileIterator) advanceToNextEntry() (bool, error) {
 			}
 			it.currentPage = nextPage
 			it.currentPos = 0
-			visitedPages = make(map[int]bool) // Reset visited pages for new bucket
+			visitedPages = make(map[int]bool)
 
 			if len(it.currentPage.entries) > 0 {
 				return true, nil
 			}
-			// Continue loop if this bucket is empty
 		}
 	}
 }
 
 // Next returns the next entry
 func (it *HashFileIterator) Next() (*tuple.Tuple, error) {
-	// Check if we have an entry at current position
 	if it.currentPage == nil {
 		return nil, fmt.Errorf("no more entries")
 	}
 
 	if it.currentPos >= len(it.currentPage.entries) {
-		// Try to advance to next entry
 		hasNext, err := it.advanceToNextEntry()
 		if err != nil {
 			return nil, err
@@ -156,7 +145,6 @@ func (it *HashFileIterator) Next() (*tuple.Tuple, error) {
 		}
 	}
 
-	// Now currentPage and currentPos should point to a valid entry
 	if it.currentPos >= len(it.currentPage.entries) {
 		return nil, fmt.Errorf("no more entries in page")
 	}
