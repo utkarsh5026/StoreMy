@@ -11,6 +11,7 @@ import (
 	"storemy/pkg/memory"
 	"storemy/pkg/primitives"
 	"storemy/pkg/storage/heap"
+	"storemy/pkg/storage/index"
 	"storemy/pkg/storage/page"
 	"time"
 )
@@ -343,7 +344,7 @@ func (cm *CatalogManager) CreateIndex(
 	indexName,
 	tableName,
 	columnName string,
-	indexType systemtable.IndexType,
+	indexType index.IndexType,
 ) (indexID int, filePath string, err error) {
 	tableID, err := cm.GetTableID(tx.ID, tableName)
 	if err != nil {
