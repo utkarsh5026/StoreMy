@@ -5,7 +5,8 @@ import (
 	"storemy/pkg/catalog/schema"
 	"storemy/pkg/catalog/systemtable"
 	"storemy/pkg/concurrency/transaction"
-	"storemy/pkg/primitives"
+	"storemy/pkg/execution/query"
+	"storemy/pkg/storage/heap"
 	"storemy/pkg/tuple"
 	"storemy/pkg/types"
 )
@@ -30,10 +31,10 @@ type AutoIncrementInfo struct {
 //
 // Returns AutoIncrementInfo if an auto-increment column exists, nil if none exists,
 // or an error if the catalog cannot be read.
-func (sc *SystemCatalog) GetAutoIncrementColumn(tid *primitives.TransactionID, tableID int) (*AutoIncrementInfo, error) {
+func (sc *SystemCatalog) GetAutoIncrementColumn(tx *transaction.TransactionContext, tableID int) (*AutoIncrementInfo, error) {
 	var result *AutoIncrementInfo
 
-	err := sc.iterateTable(sc.ColumnsTableID, tid, func(columnTuple *tuple.Tuple) error {
+	err := sc.iterateTable(sc.ColumnsTableID, tx, func(columnTuple *tuple.Tuple) error {
 		colTableID, err := systemtable.Columns.GetTableID(columnTuple)
 		if err != nil {
 			return err
@@ -88,7 +89,8 @@ func (sc *SystemCatalog) IncrementAutoIncrementValue(tx *transaction.Transaction
 		return fmt.Errorf("failed to get columns table: %w", err)
 	}
 
-	iter := file.Iterator(tx.ID)
+	heapFFile := file.(*heap.HeapFile)
+	iter, err := query.NewSeqScan(tx, sc.ColumnsTableID, heapFFile, sc.store)
 	if err := iter.Open(); err != nil {
 		return fmt.Errorf("failed to open iterator: %w", err)
 	}
@@ -128,8 +130,8 @@ func (sc *SystemCatalog) IncrementAutoIncrementValue(tx *transaction.Transaction
 
 // LoadTableSchema reconstructs the schema for a table from CATALOG_COLUMNS.
 // It scans all column metadata for the given tableID and builds a Schema object.
-func (sc *SystemCatalog) LoadTableSchema(tid *primitives.TransactionID, tableID int) (*schema.Schema, error) {
-	columns, err := sc.loadColumnMetadata(tid, tableID)
+func (sc *SystemCatalog) LoadTableSchema(tx *transaction.TransactionContext, tableID int) (*schema.Schema, error) {
+	columns, err := sc.loadColumnMetadata(tx, tableID)
 	if err != nil {
 		return nil, err
 	}
@@ -148,10 +150,10 @@ func (sc *SystemCatalog) LoadTableSchema(tid *primitives.TransactionID, tableID 
 
 // loadColumnMetadata queries CATALOG_COLUMNS for all columns belonging to tableID.
 // It filters rows by table_id and collects ColumnInfo for each matching column.
-func (sc *SystemCatalog) loadColumnMetadata(tid *primitives.TransactionID, tableID int) ([]schema.ColumnMetadata, error) {
+func (sc *SystemCatalog) loadColumnMetadata(tx *transaction.TransactionContext, tableID int) ([]schema.ColumnMetadata, error) {
 	var columns []schema.ColumnMetadata
 
-	err := sc.iterateTable(sc.ColumnsTableID, tid, func(columnTuple *tuple.Tuple) error {
+	err := sc.iterateTable(sc.ColumnsTableID, tx, func(columnTuple *tuple.Tuple) error {
 		id, err := systemtable.Columns.GetTableID(columnTuple)
 		if err != nil {
 			return err

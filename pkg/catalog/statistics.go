@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"storemy/pkg/catalog/systemtable"
 	"storemy/pkg/concurrency/transaction"
-	"storemy/pkg/primitives"
 	"storemy/pkg/storage/heap"
 	"storemy/pkg/storage/page"
 	"storemy/pkg/tuple"
@@ -16,12 +15,12 @@ type TableStatistics = systemtable.TableStatistics
 // UpdateTableStatistics collects and updates statistics for a given table
 // Also updates the cache with fresh statistics
 func (sc *SystemCatalog) UpdateTableStatistics(tx *transaction.TransactionContext, tableID int) error {
-	stats, err := sc.collectTableStatistics(tx.ID, tableID)
+	stats, err := sc.collectTableStatistics(tx, tableID)
 	if err != nil {
 		return fmt.Errorf("failed to collect statistics for table %d: %w", tableID, err)
 	}
 
-	existingStats, err := sc.GetTableStatistics(tx.ID, tableID)
+	existingStats, err := sc.GetTableStatistics(tx, tableID)
 	if err == nil && existingStats != nil {
 		if err := sc.updateExistingStatistics(tx, tableID, stats); err != nil {
 			return err
@@ -39,7 +38,7 @@ func (sc *SystemCatalog) UpdateTableStatistics(tx *transaction.TransactionContex
 }
 
 // collectTableStatistics scans a table and computes its statistics
-func (sc *SystemCatalog) collectTableStatistics(tid *primitives.TransactionID, tableID int) (*TableStatistics, error) {
+func (sc *SystemCatalog) collectTableStatistics(tx *transaction.TransactionContext, tableID int) (*TableStatistics, error) {
 	file, err := sc.cache.GetDbFile(tableID)
 	if err != nil {
 		return nil, err
@@ -60,7 +59,7 @@ func (sc *SystemCatalog) collectTableStatistics(tid *primitives.TransactionID, t
 	totalSize := 0
 	distinctMap := make(map[string]bool)
 
-	err = sc.iterateTable(sc.StatisticsTableID, tid, func(t *tuple.Tuple) error {
+	err = sc.iterateTable(sc.StatisticsTableID, tx, func(t *tuple.Tuple) error {
 		stats.Cardinality++
 		td := t.TupleDesc
 		totalSize += int(td.GetSize())
@@ -89,10 +88,10 @@ func (sc *SystemCatalog) collectTableStatistics(tid *primitives.TransactionID, t
 }
 
 // GetTableStatistics retrieves statistics for a given table
-func (sc *SystemCatalog) GetTableStatistics(tid *primitives.TransactionID, tableID int) (*TableStatistics, error) {
+func (sc *SystemCatalog) GetTableStatistics(tx *transaction.TransactionContext, tableID int) (*TableStatistics, error) {
 	var result *TableStatistics
 
-	err := sc.iterateTable(sc.StatisticsTableID, tid, func(statsTuple *tuple.Tuple) error {
+	err := sc.iterateTable(sc.StatisticsTableID, tx, func(statsTuple *tuple.Tuple) error {
 		storedTableID, err := systemtable.Stats.GetTableID(statsTuple)
 		if err != nil {
 			return err

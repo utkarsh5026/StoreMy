@@ -7,10 +7,10 @@ import (
 	"storemy/pkg/catalog/systemtable"
 	"storemy/pkg/catalog/tablecache"
 	"storemy/pkg/concurrency/transaction"
+	"storemy/pkg/execution/query"
 	"storemy/pkg/iterator"
 	"storemy/pkg/memory"
 	"storemy/pkg/memory/wrappers/table"
-	"storemy/pkg/primitives"
 	"storemy/pkg/storage/heap"
 	"storemy/pkg/tuple"
 	"storemy/pkg/types"
@@ -163,13 +163,13 @@ func (sc *SystemCatalog) RegisterTable(tx *transaction.TransactionContext, sch *
 func (sc *SystemCatalog) LoadTables(tx *transaction.TransactionContext, dataDir string) error {
 	defer sc.store.CommitTransaction(tx)
 
-	return sc.iterateTable(sc.TablesTableID, tx.ID, func(tableTuple *tuple.Tuple) error {
+	return sc.iterateTable(sc.TablesTableID, tx, func(tableTuple *tuple.Tuple) error {
 		table, err := systemtable.Tables.Parse(tableTuple)
 		if err != nil {
 			return err
 		}
 
-		if err := sc.LoadTable(tx.ID, table.TableName); err != nil {
+		if err := sc.LoadTable(tx, table.TableName); err != nil {
 			return fmt.Errorf("error loading the table %s: %v", table.TableName, err)
 		}
 
@@ -188,13 +188,13 @@ func (sc *SystemCatalog) LoadTables(tx *transaction.TransactionContext, dataDir 
 //
 // Returns an error if the table metadata cannot be retrieved, schema cannot be loaded,
 // heap file cannot be opened, or registration fails.
-func (sc *SystemCatalog) LoadTable(tid *primitives.TransactionID, tableName string) error {
-	tm, err := sc.GetTableMetadataByName(tid, tableName)
+func (sc *SystemCatalog) LoadTable(tx *transaction.TransactionContext, tableName string) error {
+	tm, err := sc.GetTableMetadataByName(tx, tableName)
 	if err != nil {
 		return fmt.Errorf("failed to get table metadata: %w", err)
 	}
 
-	sch, err := sc.LoadTableSchema(tid, tm.TableID)
+	sch, err := sc.LoadTableSchema(tx, tm.TableID)
 	if err != nil {
 		return fmt.Errorf("failed to load schema: %w", err)
 	}
@@ -258,7 +258,7 @@ func (sc *SystemCatalog) DeleteTableFromSysTable(tx *transaction.TransactionCont
 	}
 	var tuplesToDelete []*tuple.Tuple
 
-	sc.iterateTable(sysTableID, tx.ID, func(t *tuple.Tuple) error {
+	sc.iterateTable(sysTableID, tx, func(t *tuple.Tuple) error {
 		field, err := t.GetField(syst.TableIDIndex())
 		if err != nil {
 			return err
@@ -304,30 +304,20 @@ func (sc *SystemCatalog) getSysTable(id int) (systemtable.SystemTable, error) {
 }
 
 // GetTableMetadataByID retrieves complete table metadata from CATALOG_TABLES by table ID.
-//
-// Parameters:
-//   - tid: Transaction ID for reading catalog
-//   - tableID: Heap file ID of the table
-//
 // Returns TableMetadata containing table name, file path, and primary key column,
 // or an error if the table is not found.
-func (sc *SystemCatalog) GetTableMetadataByID(tid *primitives.TransactionID, tableID int) (*systemtable.TableMetadata, error) {
-	return sc.findTableMetadata(tid, func(tm *systemtable.TableMetadata) bool {
+func (sc *SystemCatalog) GetTableMetadataByID(tx *transaction.TransactionContext, tableID int) (*systemtable.TableMetadata, error) {
+	return sc.findTableMetadata(tx, func(tm *systemtable.TableMetadata) bool {
 		return tm.TableID == tableID
 	})
 }
 
 // GetTableMetadataByName retrieves complete table metadata from CATALOG_TABLES by table name.
 // Table name matching is case-insensitive.
-//
-// Parameters:
-//   - tid: Transaction ID for reading catalog
-//   - tableName: Name of the table to look up
-//
 // Returns TableMetadata containing table ID, file path, and primary key column,
 // or an error if the table is not found.
-func (sc *SystemCatalog) GetTableMetadataByName(tid *primitives.TransactionID, tableName string) (*systemtable.TableMetadata, error) {
-	return sc.findTableMetadata(tid, func(tm *systemtable.TableMetadata) bool {
+func (sc *SystemCatalog) GetTableMetadataByName(tx *transaction.TransactionContext, tableName string) (*systemtable.TableMetadata, error) {
+	return sc.findTableMetadata(tx, func(tm *systemtable.TableMetadata) bool {
 		return strings.EqualFold(tm.TableName, tableName)
 	})
 }
@@ -345,13 +335,19 @@ func (sc *SystemCatalog) GetTableMetadataByName(tid *primitives.TransactionID, t
 //   - processFunc: Function to apply to each tuple. Return an error to stop iteration early.
 //
 // Returns an error if the iterator cannot be opened or if processFunc returns an error.
-func (sc *SystemCatalog) iterateTable(tableID int, tid *primitives.TransactionID, processFunc func(*tuple.Tuple) error) error {
+func (sc *SystemCatalog) iterateTable(tableID int, tx *transaction.TransactionContext, processFunc func(*tuple.Tuple) error) error {
 	file, err := sc.cache.GetDbFile(tableID)
 	if err != nil {
 		return fmt.Errorf("failed to get table file: %w", err)
 	}
 
-	iter := file.Iterator(tid)
+	heapFile := file.(*heap.HeapFile)
+
+	iter, err := query.NewSeqScan(tx, tableID, heapFile, sc.store)
+	if err != nil {
+		return fmt.Errorf("failed to create iterator: %w", err)
+	}
+
 	if err := iter.Open(); err != nil {
 		return fmt.Errorf("failed to open iter: %w", err)
 	}
@@ -368,10 +364,10 @@ func (sc *SystemCatalog) iterateTable(tableID int, tid *primitives.TransactionID
 //   - pred: Predicate function that returns true when the desired table is found
 //
 // Returns the matching TableMetadata or an error if not found or if catalog access fails.
-func (sc *SystemCatalog) findTableMetadata(tid *primitives.TransactionID, pred func(tm *systemtable.TableMetadata) bool) (*systemtable.TableMetadata, error) {
+func (sc *SystemCatalog) findTableMetadata(tx *transaction.TransactionContext, pred func(tm *systemtable.TableMetadata) bool) (*systemtable.TableMetadata, error) {
 	var result *systemtable.TableMetadata
 
-	err := sc.iterateTable(sc.TablesTableID, tid, func(tableTuple *tuple.Tuple) error {
+	err := sc.iterateTable(sc.TablesTableID, tx, func(tableTuple *tuple.Tuple) error {
 		table, err := systemtable.Tables.Parse(tableTuple)
 		if err != nil {
 			return err
@@ -405,9 +401,9 @@ func (sc *SystemCatalog) findTableMetadata(tid *primitives.TransactionID, pred f
 //   - tid: Transaction ID for reading catalog
 //
 // Returns a slice of TableMetadata for all tables, or an error if the catalog cannot be read.
-func (sc *SystemCatalog) GetAllTables(tid *primitives.TransactionID) ([]*systemtable.TableMetadata, error) {
+func (sc *SystemCatalog) GetAllTables(tx *transaction.TransactionContext) ([]*systemtable.TableMetadata, error) {
 	var tables []*systemtable.TableMetadata
-	err := sc.iterateTable(sc.TablesTableID, tid, func(tup *tuple.Tuple) error {
+	err := sc.iterateTable(sc.TablesTableID, tx, func(tup *tuple.Tuple) error {
 		tm, err := systemtable.Tables.Parse(tup)
 		if err != nil {
 			return err

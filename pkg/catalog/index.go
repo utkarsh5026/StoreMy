@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"storemy/pkg/catalog/systemtable"
 	"storemy/pkg/concurrency/transaction"
-	"storemy/pkg/primitives"
 	"storemy/pkg/tuple"
 	"storemy/pkg/types"
 	"strings"
@@ -17,9 +16,9 @@ import (
 //   - tableID: ID of the table whose indexes to retrieve
 //
 // Returns a slice of IndexMetadata for all indexes on the table, or an error if the catalog cannot be read.
-func (sc *SystemCatalog) GetIndexesByTable(tid *primitives.TransactionID, tableID int) ([]*systemtable.IndexMetadata, error) {
+func (sc *SystemCatalog) GetIndexesByTable(tx *transaction.TransactionContext, tableID int) ([]*systemtable.IndexMetadata, error) {
 	var indexes []*systemtable.IndexMetadata
-	err := sc.iterateTable(sc.IndexesTableID, tid, func(tup *tuple.Tuple) error {
+	err := sc.iterateTable(sc.IndexesTableID, tx, func(tup *tuple.Tuple) error {
 		im, err := systemtable.Indexes.Parse(tup)
 		if err != nil {
 			return err
@@ -43,8 +42,8 @@ func (sc *SystemCatalog) GetIndexesByTable(tid *primitives.TransactionID, tableI
 //   - indexName: Name of the index to look up
 //
 // Returns IndexMetadata or an error if the index is not found.
-func (sc *SystemCatalog) GetIndexByName(tid *primitives.TransactionID, indexName string) (*systemtable.IndexMetadata, error) {
-	return sc.findIndexMetadata(tid, func(im *systemtable.IndexMetadata) bool {
+func (sc *SystemCatalog) GetIndexByName(tx *transaction.TransactionContext, indexName string) (*systemtable.IndexMetadata, error) {
+	return sc.findIndexMetadata(tx, func(im *systemtable.IndexMetadata) bool {
 		return strings.EqualFold(im.IndexName, indexName)
 	})
 }
@@ -56,8 +55,8 @@ func (sc *SystemCatalog) GetIndexByName(tid *primitives.TransactionID, indexName
 //   - indexID: ID of the index to look up
 //
 // Returns IndexMetadata or an error if the index is not found.
-func (sc *SystemCatalog) GetIndexByID(tid *primitives.TransactionID, indexID int) (*systemtable.IndexMetadata, error) {
-	return sc.findIndexMetadata(tid, func(im *systemtable.IndexMetadata) bool {
+func (sc *SystemCatalog) GetIndexByID(tx *transaction.TransactionContext, indexID int) (*systemtable.IndexMetadata, error) {
+	return sc.findIndexMetadata(tx, func(im *systemtable.IndexMetadata) bool {
 		return im.IndexID == indexID
 	})
 }
@@ -69,10 +68,10 @@ func (sc *SystemCatalog) GetIndexByID(tid *primitives.TransactionID, indexID int
 //   - pred: Predicate function that returns true when the desired index is found
 //
 // Returns the matching IndexMetadata or an error if not found or if catalog access fails.
-func (sc *SystemCatalog) findIndexMetadata(tid *primitives.TransactionID, pred func(im *systemtable.IndexMetadata) bool) (*systemtable.IndexMetadata, error) {
+func (sc *SystemCatalog) findIndexMetadata(tx *transaction.TransactionContext, pred func(im *systemtable.IndexMetadata) bool) (*systemtable.IndexMetadata, error) {
 	var result *systemtable.IndexMetadata
 
-	err := sc.iterateTable(sc.IndexesTableID, tid, func(indexTuple *tuple.Tuple) error {
+	err := sc.iterateTable(sc.IndexesTableID, tx, func(indexTuple *tuple.Tuple) error {
 		index, err := systemtable.Indexes.Parse(indexTuple)
 		if err != nil {
 			return err
@@ -111,7 +110,7 @@ func (sc *SystemCatalog) DeleteIndexFromCatalog(tx *transaction.TransactionConte
 
 	var tuplesToDelete []*tuple.Tuple
 
-	sc.iterateTable(sc.IndexesTableID, tx.ID, func(t *tuple.Tuple) error {
+	sc.iterateTable(sc.IndexesTableID, tx, func(t *tuple.Tuple) error {
 		field, err := t.GetField(0) // index_id is at position 0
 		if err != nil {
 			return err
