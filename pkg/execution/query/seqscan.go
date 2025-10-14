@@ -27,7 +27,6 @@ type SequentialScan struct {
 	base                 *BaseIterator
 	tableID, currentPage int
 	tupleDesc            *tuple.TupleDescription
-	tableInfoProvider    TableInfoProvider
 	tx                   *transaction.TransactionContext
 	dbFile               *heap.HeapFile
 	store                *memory.PageStore
@@ -36,27 +35,18 @@ type SequentialScan struct {
 
 // NewSeqScan creates a new SequentialScan operator for the specified table within a transaction context.
 // It initializes the scan operator with the necessary metadata and prepares it for iteration.
-func NewSeqScan(tx *transaction.TransactionContext, tableID int, provider TableInfoProvider, store *memory.PageStore) (*SequentialScan, error) {
-	if provider == nil {
-		return nil, fmt.Errorf("table info provider cannot be nil")
-	}
-
+func NewSeqScan(tx *transaction.TransactionContext, tableID int, file *heap.HeapFile, store *memory.PageStore) (*SequentialScan, error) {
 	if store == nil {
 		return nil, fmt.Errorf("page store cannot be nil")
 	}
 
-	sch, err := provider.GetTableSchema(tx.ID, tableID)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get tuple desc for table %d: %v", tableID, err)
-	}
-
 	ss := &SequentialScan{
-		tx:                tx,
-		tableID:           tableID,
-		tupleDesc:         sch.TupleDesc,
-		tableInfoProvider: provider,
-		store:             store,
-		currentPage:       -1, // Start at -1 so first increment brings us to page 0
+		tx:          tx,
+		tableID:     tableID,
+		tupleDesc:   file.GetTupleDesc(),
+		store:       store,
+		currentPage: -1, // Start at -1 so first increment brings us to page 0
+		dbFile:      file,
 	}
 
 	ss.base = NewBaseIterator(ss.readNext)
@@ -71,26 +61,6 @@ func NewSeqScan(tx *transaction.TransactionContext, tableID int, provider TableI
 //
 // Returns an error if the database file cannot be accessed or the iterator fails to open.
 func (ss *SequentialScan) Open() error {
-	file, err := ss.tableInfoProvider.GetTableFile(ss.tableID)
-	if err != nil {
-		return fmt.Errorf("failed to get db file for table %d: %v", ss.tableID, err)
-	}
-
-	heapFile, ok := file.(*heap.HeapFile)
-	if !ok {
-		return fmt.Errorf("db file for table %d is not a heap file", ss.tableID)
-	}
-	ss.dbFile = heapFile
-
-	// ss.fileIter = file.Iterator(ss.tid)
-	// if ss.fileIter == nil {
-	// 	return fmt.Errorf("failed to create file iterator")
-	// }
-
-	// if err := ss.fileIter.Open(); err != nil {
-	// 	return fmt.Errorf("failed to open file iterator: %v", err)
-	// }
-
 	ss.base.MarkOpened()
 	return nil
 }
