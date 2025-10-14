@@ -32,12 +32,6 @@ func (o OperationType) String() string {
 	return "UNKNOWN"
 }
 
-// PageProvider interface abstracts page-level operations from the buffer pool
-// This allows TupleManager to work with any buffer pool implementation
-type PageProvider interface {
-	GetPage(ctx *transaction.TransactionContext, dbFile page.DbFile, pid primitives.PageID, perm transaction.Permissions) (page.Page, error)
-}
-
 // StatsRecorder interface for recording table modifications (to avoid circular dependency)
 type StatsRecorder interface {
 	RecordModification(tableID int)
@@ -61,16 +55,16 @@ type StatsRecorder interface {
 //   - TransactionContext: For ACID compliance
 //   - StatsRecorder: For maintaining table statistics
 type TupleManager struct {
-	pageProvider PageProvider
+	pageProvider *memory.PageStore
 	wal          *log.WAL
 	statsManager StatsRecorder
 }
 
 // NewTupleManager creates a new TupleManager instance
-func NewTupleManager(pageProvider PageProvider, wal *log.WAL) *TupleManager {
+func NewTupleManager(store *memory.PageStore) *TupleManager {
 	return &TupleManager{
-		pageProvider: pageProvider,
-		wal:          wal,
+		pageProvider: store,
+		wal:          store.GetWal(),
 		statsManager: nil,
 	}
 }

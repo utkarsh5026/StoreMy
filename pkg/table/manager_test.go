@@ -47,7 +47,7 @@ func setupTestEnvironment(t *testing.T) (*TupleManager, *heap.HeapFile, *memory.
 	ps.RegisterDbFile(heapFile.GetID(), heapFile)
 
 	// Create TupleManager
-	tm := NewTupleManager(ps, wal)
+	tm := NewTupleManager(ps)
 
 	cleanup := func() {
 		heapFile.Close()
