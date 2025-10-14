@@ -106,7 +106,7 @@ func (p *SelectPlan) buildScanOperator() (DbIterator, error) {
 		filter = filters[0]
 	}
 
-	scanOp, err := buildScanWithFilter(p.tx.ID, metadata.TableID, filter, p.ctx)
+	scanOp, err := buildScanWithFilter(p.tx, metadata.TableID, filter, p.ctx)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create table scan: %w", err)
 	}
@@ -213,7 +213,7 @@ func (p *SelectPlan) buildJoinRightSide(joinNode *plan.JoinNode) (DbIterator, er
 		return nil, err
 	}
 
-	scanOp, err := query.NewSeqScan(p.tx.ID, md.TableID, p.ctx.CatalogManager())
+	scanOp, err := query.NewSeqScan(p.tx, md.TableID, p.ctx.CatalogManager(), p.ctx.PageStore())
 	if err != nil {
 		return nil, fmt.Errorf("failed to create scan for table %s: %w", table.TableName, err)
 	}

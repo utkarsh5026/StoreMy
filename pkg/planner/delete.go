@@ -36,7 +36,7 @@ func (p *DeletePlan) Execute() (any, error) {
 		return nil, err
 	}
 
-	query, err := buildScanWithFilter(p.tx.ID, tableID, p.statement.WhereClause, p.ctx)
+	query, err := buildScanWithFilter(p.tx, tableID, p.statement.WhereClause, p.ctx)
 	if err != nil {
 		return nil, err
 	}

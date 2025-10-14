@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"storemy/pkg/iterator"
+	hashindex "storemy/pkg/memory/wrappers/hash_index"
 	"storemy/pkg/parser/statements"
 	"storemy/pkg/primitives"
 	"storemy/pkg/storage/index"
@@ -176,9 +177,9 @@ func (p *CreateIndexPlan) populateIndex(
 		}
 		defer hashFile.Close()
 
-		hashIndex := hash.NewHashIndex(indexID, keyType, hashFile)
+		hashIndex := hashindex.NewHashIndex(indexID, keyType, hashFile, p.ctx.PageStore())
 		insertFunc = func(key types.Field, rid *tuple.TupleRecordID) error {
-			return hashIndex.Insert(p.tx.ID, key, rid)
+			return hashIndex.Insert(p.tx, key, rid)
 		}
 
 	case index.BTreeIndex:

@@ -39,7 +39,7 @@ func (p *UpdatePlan) Execute() (any, error) {
 		return nil, err
 	}
 
-	queryPlan, err := buildScanWithFilter(p.tx.ID, md.TableID, p.statement.WhereClause, p.ctx)
+	queryPlan, err := buildScanWithFilter(p.tx, md.TableID, p.statement.WhereClause, p.ctx)
 	if err != nil {
 		return nil, err
 	}

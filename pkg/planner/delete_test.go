@@ -409,7 +409,7 @@ func TestDeletePlan_createTableScan(t *testing.T) {
 		t.Fatalf("getTableID failed: %v", err)
 	}
 
-	scanOp, err := buildScanWithFilter(tx.ID, tableID, nil, ctx)
+	scanOp, err := buildScanWithFilter(tx, tableID, nil, ctx)
 
 	if err != nil {
 		t.Fatalf("createTableScan failed: %v", err)
@@ -446,7 +446,7 @@ func TestDeletePlan_addWhereFilter(t *testing.T) {
 		t.Fatalf("getTableID failed: %v", err)
 	}
 
-	filterOp, err := buildScanWithFilter(tx.ID, tableID, whereClause, ctx)
+	filterOp, err := buildScanWithFilter(tx, tableID, whereClause, ctx)
 
 	if err != nil {
 		t.Fatalf("addWhereFilter failed: %v", err)
@@ -476,7 +476,7 @@ func TestDeletePlan_collectTuplesToDelete(t *testing.T) {
 		t.Fatalf("getTableID failed: %v", err)
 	}
 
-	query, err := buildScanWithFilter(tx.ID, tableID, nil, ctx)
+	query, err := buildScanWithFilter(tx, tableID, nil, ctx)
 	if err != nil {
 		t.Fatalf("createQuery failed: %v", err)
 	}
@@ -511,7 +511,7 @@ func TestDeletePlan_createQuery_NoWhere(t *testing.T) {
 		t.Fatalf("getTableID failed: %v", err)
 	}
 
-	query, err := buildScanWithFilter(tx.ID, tableID, nil, ctx)
+	query, err := buildScanWithFilter(tx, tableID, nil, ctx)
 
 	if err != nil {
 		t.Fatalf("createQuery failed: %v", err)
@@ -548,7 +548,7 @@ func TestDeletePlan_createQuery_WithWhere(t *testing.T) {
 		t.Fatalf("getTableID failed: %v", err)
 	}
 
-	query, err := buildScanWithFilter(tx.ID, tableID, whereClause, ctx)
+	query, err := buildScanWithFilter(tx, tableID, whereClause, ctx)
 
 	if err != nil {
 		t.Fatalf("createQuery failed: %v", err)

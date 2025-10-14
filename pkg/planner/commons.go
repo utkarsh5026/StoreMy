@@ -2,6 +2,7 @@ package planner
 
 import (
 	"fmt"
+	"storemy/pkg/concurrency/transaction"
 	"storemy/pkg/execution/query"
 	"storemy/pkg/iterator"
 	"storemy/pkg/parser/plan"
@@ -64,9 +65,9 @@ func collectAllTuples(it DbIterator) ([]*tuple.Tuple, error) {
 // Query execution pipeline:
 //  1. SeqScan - reads pages via page-level locks (see LockManager)
 //  2. Filter (optional) - applies WHERE predicates
-func buildScanWithFilter(tid TID, tableID int, whereClause *plan.FilterNode, ctx DbContext,
+func buildScanWithFilter(tx *transaction.TransactionContext, tableID int, whereClause *plan.FilterNode, ctx DbContext,
 ) (DbIterator, error) {
-	scanOp, err := query.NewSeqScan(tid, tableID, ctx.CatalogManager())
+	scanOp, err := query.NewSeqScan(tx, tableID, ctx.CatalogManager(), ctx.PageStore())
 	if err != nil {
 		return nil, fmt.Errorf("failed to create table scan: %v", err)
 	}
