@@ -2,15 +2,8 @@ package statements
 
 import (
 	"fmt"
+	"storemy/pkg/storage/index"
 	"strings"
-)
-
-// IndexType represents the type of index (HASH or BTREE)
-type IndexType string
-
-const (
-	HashIndex  IndexType = "HASH"
-	BTreeIndex IndexType = "BTREE"
 )
 
 // CreateIndexStatement represents a SQL CREATE INDEX statement
@@ -18,12 +11,12 @@ const (
 type CreateIndexStatement struct {
 	BaseStatement
 	IndexName, TableName, ColumnName string
-	IndexType                        IndexType
+	IndexType                        index.IndexType
 	IfNotExists                      bool
 }
 
 // NewCreateIndexStatement creates a new CREATE INDEX statement
-func NewCreateIndexStatement(indexName, tableName, columnName string, indexType IndexType, ifNotExists bool) *CreateIndexStatement {
+func NewCreateIndexStatement(indexName, tableName, columnName string, indexType index.IndexType, ifNotExists bool) *CreateIndexStatement {
 	return &CreateIndexStatement{
 		BaseStatement: NewBaseStatement(CreateIndex),
 		IndexName:     indexName,
@@ -49,10 +42,10 @@ func (cis *CreateIndexStatement) Validate() error {
 	}
 
 	if cis.IndexType == "" {
-		cis.IndexType = HashIndex
+		cis.IndexType = index.HashIndex
 	}
 
-	if cis.IndexType != HashIndex && cis.IndexType != BTreeIndex {
+	if cis.IndexType != index.HashIndex && cis.IndexType != index.BTreeIndex {
 		return NewValidationError(CreateIndex, "IndexType", fmt.Sprintf("invalid index type: %s (must be HASH or BTREE)", cis.IndexType))
 	}
 
