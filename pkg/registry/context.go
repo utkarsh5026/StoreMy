@@ -26,7 +26,7 @@ func NewDatabaseContext(
 	wal *log.WAL,
 	dataDir string,
 ) *DatabaseContext {
-	tupleManager := table.NewTupleManager(pageStore, wal)
+	tupleManager := table.NewTupleManager(pageStore)
 	return &DatabaseContext{
 		pageStore:    pageStore,
 		catalogMgr:   catalogMgr,
