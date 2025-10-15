@@ -34,9 +34,10 @@ type cacheEntry struct {
 // LRUPageCache implements an LRU (Least Recently Used) eviction policy for the page cache.
 // This implementation uses Go's built-in container/list (doubly linked list) combined with
 // a hash map to achieve O(1) operations for all cache operations.
+// Note: Uses HashCode() as map key instead of PageID directly to avoid pointer equality issues.
 type LRUPageCache struct {
 	maxSize int
-	cache   map[primitives.PageID]*list.Element
+	cache   map[int]*list.Element // map from HashCode to list element
 	lru     *list.List
 	mutex   sync.RWMutex
 }
@@ -45,7 +46,7 @@ type LRUPageCache struct {
 func NewLRUPageCache(maxSize int) *LRUPageCache {
 	return &LRUPageCache{
 		maxSize: maxSize,
-		cache:   make(map[primitives.PageID]*list.Element),
+		cache:   make(map[int]*list.Element),
 		lru:     list.New(),
 	}
 }
@@ -56,7 +57,8 @@ func (c *LRUPageCache) Get(pid primitives.PageID) (page.Page, bool) {
 	c.mutex.Lock()
 	defer c.mutex.Unlock()
 
-	if elem, exists := c.cache[pid]; exists {
+	hashCode := pid.HashCode()
+	if elem, exists := c.cache[hashCode]; exists {
 		c.lru.MoveToFront(elem)
 		entry := elem.Value.(*cacheEntry)
 		return entry.page, true
@@ -71,7 +73,8 @@ func (c *LRUPageCache) Put(pid primitives.PageID, p page.Page) error {
 	c.mutex.Lock()
 	defer c.mutex.Unlock()
 
-	if elem, exists := c.cache[pid]; exists {
+	hashCode := pid.HashCode()
+	if elem, exists := c.cache[hashCode]; exists {
 		entry := elem.Value.(*cacheEntry)
 		entry.page = p
 		c.lru.MoveToFront(elem)
@@ -88,7 +91,7 @@ func (c *LRUPageCache) Put(pid primitives.PageID, p page.Page) error {
 	}
 
 	elem := c.lru.PushFront(entry)
-	c.cache[pid] = elem
+	c.cache[hashCode] = elem
 	return nil
 }
 
@@ -98,8 +101,9 @@ func (c *LRUPageCache) Remove(pid primitives.PageID) {
 	c.mutex.Lock()
 	defer c.mutex.Unlock()
 
-	if elem, exists := c.cache[pid]; exists {
-		delete(c.cache, pid)
+	hashCode := pid.HashCode()
+	if elem, exists := c.cache[hashCode]; exists {
+		delete(c.cache, hashCode)
 		c.lru.Remove(elem)
 	}
 }
@@ -117,7 +121,7 @@ func (c *LRUPageCache) Clear() {
 	c.mutex.Lock()
 	defer c.mutex.Unlock()
 
-	c.cache = make(map[primitives.PageID]*list.Element)
+	c.cache = make(map[int]*list.Element)
 	c.lru.Init()
 }
 
