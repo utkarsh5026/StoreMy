@@ -3,9 +3,9 @@ package btree
 import (
 	"fmt"
 	"io"
-	"storemy/pkg/iterator"
 	"storemy/pkg/primitives"
 	"storemy/pkg/storage/page"
+	"storemy/pkg/tuple"
 	"storemy/pkg/types"
 	"sync"
 )
@@ -53,8 +53,8 @@ func (bf *BTreeFile) NumPages() int {
 	return bf.numPages
 }
 
-// ReadPage reads a B+Tree page from disk
-func (bf *BTreeFile) ReadPage(tid *primitives.TransactionID, pageID *BTreePageID) (*BTreePage, error) {
+// ReadBTreePage reads a B+Tree page from disk
+func (bf *BTreeFile) ReadBTreePage(pageID *BTreePageID) (*BTreePage, error) {
 	if pageID == nil {
 		return nil, fmt.Errorf("page ID cannot be nil")
 	}
@@ -79,8 +79,18 @@ func (bf *BTreeFile) ReadPage(tid *primitives.TransactionID, pageID *BTreePageID
 	return btreePage, nil
 }
 
-// WritePage writes a B+Tree page to disk
-func (bf *BTreeFile) WritePage(p *BTreePage) error {
+// ReadPage implements the DbFile interface by accepting a generic PageID
+// and delegating to ReadBTreePage
+func (bf *BTreeFile) ReadPage(pid primitives.PageID) (page.Page, error) {
+	btreePageID, ok := pid.(*BTreePageID)
+	if !ok {
+		return nil, fmt.Errorf("page ID must be a BTreePageID, got %T", pid)
+	}
+	return bf.ReadBTreePage(btreePageID)
+}
+
+// WriteBTreePage writes a B+Tree page to disk
+func (bf *BTreeFile) WriteBTreePage(p *BTreePage) error {
 	if p == nil {
 		return fmt.Errorf("page cannot be nil")
 	}
@@ -102,7 +112,19 @@ func (bf *BTreeFile) WritePage(p *BTreePage) error {
 	return nil
 }
 
+// WritePage implements the DbFile interface by accepting a generic Page
+// and delegating to WriteBTreePage
+func (bf *BTreeFile) WritePage(p page.Page) error {
+	btreePage, ok := p.(*BTreePage)
+	if !ok {
+		return fmt.Errorf("page must be a BTreePage, got %T", p)
+	}
+	return bf.WriteBTreePage(btreePage)
+}
+
 // AllocatePage allocates a new page in the file
+// Note: The page is marked dirty but NOT written to disk immediately.
+// The caller is responsible for adding it to the PageStore's dirty page tracking.
 func (bf *BTreeFile) AllocatePage(tid *primitives.TransactionID, keyType types.Type, isLeaf bool, parentPage int) (*BTreePage, error) {
 	bf.mutex.Lock()
 	pageNum := bf.numPages
@@ -120,19 +142,30 @@ func (bf *BTreeFile) AllocatePage(tid *primitives.TransactionID, keyType types.T
 
 	newPage.MarkDirty(true, tid)
 
-	if err := bf.WritePage(newPage); err != nil {
-		return nil, fmt.Errorf("failed to write new page: %w", err)
-	}
-
 	return newPage, nil
 }
 
-// Iterator returns an iterator over all entries in the B+Tree
-func (bf *BTreeFile) Iterator(tid *primitives.TransactionID) iterator.DbFileIterator {
-	return &BTreeFileIterator{
-		file:        bf,
-		tid:         tid,
-		currentPage: 0,
-		currentPos:  0,
-	}
+// SetIndexID sets the index ID for this BTree file
+// This should be called when the file is associated with a specific index
+func (bf *BTreeFile) SetIndexID(indexID int) {
+	bf.mutex.Lock()
+	defer bf.mutex.Unlock()
+	bf.indexID = indexID
+}
+
+// GetIndexID returns the index ID for this BTree file
+func (bf *BTreeFile) GetIndexID() int {
+	bf.mutex.RLock()
+	defer bf.mutex.RUnlock()
+	return bf.indexID
+}
+
+// GetID implements the DbFile interface by returning the index ID
+func (bf *BTreeFile) GetID() int {
+	return bf.GetIndexID()
+}
+
+func (bf *BTreeFile) GetTupleDesc() *tuple.TupleDescription {
+	td, _ := tuple.NewTupleDesc([]types.Type{bf.keyType}, []string{"key"})
+	return td
 }
