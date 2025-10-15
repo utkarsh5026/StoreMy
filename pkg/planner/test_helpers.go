@@ -7,18 +7,25 @@ import (
 	"storemy/pkg/concurrency/transaction"
 	"storemy/pkg/log"
 	"storemy/pkg/memory"
+	"storemy/pkg/parser/statements"
 	"storemy/pkg/registry"
+	"storemy/pkg/storage/index"
 	"testing"
 )
+
+// Global transaction registry for tests (will be set by createTestContextWithCleanup)
+var testTxRegistry *transaction.TransactionRegistry
 
 func createTransactionContext(t *testing.T) TransactionCtx {
 	t.Helper()
 
-	rg := transaction.NewTransactionRegistry(nil)
-	ctx, err := rg.Begin()
+	if testTxRegistry == nil {
+		t.Fatal("Test transaction registry not initialized. Call createTestContextWithCleanup first.")
+	}
 
+	ctx, err := testTxRegistry.Begin()
 	if err != nil {
-		t.Fatalf("Error creating transaction Context")
+		t.Fatalf("Error creating transaction Context: %v", err)
 	}
 
 	return ctx
@@ -56,16 +63,40 @@ func createTestContextWithCleanup(t *testing.T, dataDir string) *registry.Databa
 	pageStore := memory.NewPageStore(wal)
 	catalogMgr := catalogmanager.NewCatalogManager(pageStore, dataDir)
 
-	// Set bidirectional dependency
-
+	// Create transaction registry and store it globally for test transactions
 	txRegistry := transaction.NewTransactionRegistry(wal)
+	testTxRegistry = txRegistry
+
 	tx, err := txRegistry.Begin()
-	if err == nil {
-		_ = catalogMgr.Initialize(tx)
+	if err != nil {
+		if t != nil {
+			t.Fatalf("failed to begin init transaction: %v", err)
+		}
+		panic(err)
+	}
+
+	if initErr := catalogMgr.Initialize(tx); initErr != nil {
+		if t != nil {
+			t.Fatalf("failed to initialize catalog: %v", initErr)
+		}
+		panic(initErr)
+	}
+
+	// Verify catalog is accessible
+	if t != nil {
+		testTx, _ := txRegistry.Begin()
+		if !catalogMgr.TableExists(testTx, "CATALOG_TABLES") {
+			t.Logf("WARNING: CATALOG_TABLES does not exist after initialization")
+		} else {
+			t.Logf("SUCCESS: CATALOG_TABLES exists after initialization")
+		}
 	}
 
 	if t != nil {
 		t.Cleanup(func() {
+			// Reset global registry
+			testTxRegistry = nil
+
 			if catalogMgr != nil {
 				catalogMgr.ClearCache()
 			}
@@ -84,22 +115,26 @@ func createTestContextWithCleanup(t *testing.T, dataDir string) *registry.Databa
 	)
 }
 
-// Add this helper function near the top of the file after imports
+// setupTestDataDir creates a temporary data directory for tests and returns its absolute path
 func setupTestDataDir(t *testing.T) string {
 	t.Helper()
-	dataDir := t.TempDir()
-	oldDir, err := os.Getwd()
-	if err != nil {
-		t.Fatalf("Failed to get working directory: %v", err)
-	}
-	if err := os.Chdir(dataDir); err != nil {
-		t.Fatalf("Failed to change to temp directory: %v", err)
-	}
-	t.Cleanup(func() { os.Chdir(oldDir) })
+	tmpDir := t.TempDir()
+	dataDir := filepath.Join(tmpDir, "data")
 
-	if err := os.Mkdir("data", 0755); err != nil {
+	if err := os.MkdirAll(dataDir, 0755); err != nil {
 		t.Fatalf("Failed to create data directory: %v", err)
 	}
 
 	return dataDir
+}
+
+// createTestIndex creates an index for testing purposes
+func createTestIndex(t *testing.T, ctx DbContext, transCtx TransactionCtx, tableName, indexName, columnName string, indexType index.IndexType) {
+	t.Helper()
+	stmt := statements.NewCreateIndexStatement(indexName, tableName, columnName, indexType, false)
+	plan := NewCreateIndexPlan(stmt, ctx, transCtx)
+	_, err := plan.Execute()
+	if err != nil {
+		t.Fatalf("Failed to create test index: %v", err)
+	}
 }

@@ -4,8 +4,11 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"storemy/pkg/catalog/systemtable"
 	"storemy/pkg/parser/statements"
+	"storemy/pkg/storage/index"
 	"storemy/pkg/types"
+	"strings"
 	"testing"
 )
 
@@ -457,4 +460,378 @@ func TestDDLResult_Values(t *testing.T) {
 			}
 		})
 	}
+}
+
+// Tests for primary key index creation
+
+func TestCreateTablePlan_Execute_PrimaryKeyIndex_Created(t *testing.T) {
+	dataDir := setupTestDataDir(t)
+
+	stmt := statements.NewCreateStatement("users", false)
+	stmt.AddField("id", types.IntType, true, nil)
+	stmt.AddField("name", types.StringType, false, nil)
+	stmt.AddField("email", types.StringType, false, nil)
+	stmt.PrimaryKey = "id"
+
+	ctx := createTestContextWithCleanup(t, dataDir)
+	transCtx := createTransactionContext(t)
+
+	plan := NewCreateTablePlan(stmt, ctx, transCtx)
+	result, err := executePlan(t, plan)
+
+	if err != nil {
+		t.Fatalf("Execute failed: %v", err)
+	}
+
+	if !result.Success {
+		t.Error("Expected success to be true")
+	}
+
+	// Verify the success message mentions the primary key index
+	if !strings.Contains(result.Message, "BTree index on primary key id") {
+		t.Errorf("Expected message to mention primary key index, got: %q", result.Message)
+	}
+
+	// Verify table exists
+	if !ctx.CatalogManager().TableExists(transCtx, "users") {
+		t.Error("Table was not created")
+	}
+
+	// Get table ID
+	tableID, err := ctx.CatalogManager().GetTableID(transCtx, "users")
+	if err != nil {
+		t.Fatalf("Failed to get table ID: %v", err)
+	}
+
+	// Verify primary key index was created
+	indexes, err := ctx.CatalogManager().GetIndexesByTable(transCtx, tableID)
+	if err != nil {
+		t.Fatalf("Failed to get indexes: %v", err)
+	}
+
+	if len(indexes) == 0 {
+		t.Fatal("No index was created for primary key")
+	}
+
+	// Verify index properties
+	var pkIndex *systemtable.IndexMetadata
+	for _, idx := range indexes {
+		if idx.ColumnName == "id" && idx.IndexType == index.BTreeIndex {
+			pkIndex = idx
+			break
+		}
+	}
+
+	if pkIndex == nil {
+		t.Fatal("Primary key BTree index not found")
+	}
+
+	expectedIndexName := "pk_users_id"
+	if pkIndex.IndexName != expectedIndexName {
+		t.Errorf("Expected index name %q, got %q", expectedIndexName, pkIndex.IndexName)
+	}
+
+	// Verify index file exists
+	if _, err := os.Stat(pkIndex.FilePath); os.IsNotExist(err) {
+		t.Errorf("Index file %s does not exist", pkIndex.FilePath)
+	}
+
+	cleanupTable(t, ctx.CatalogManager(), "users", transCtx)
+}
+
+func TestCreateTablePlan_Execute_NoPrimaryKey_NoIndex(t *testing.T) {
+	dataDir := setupTestDataDir(t)
+
+	stmt := statements.NewCreateStatement("simple_table", false)
+	stmt.AddField("col1", types.IntType, false, nil)
+	stmt.AddField("col2", types.StringType, false, nil)
+	// No primary key set
+
+	ctx := createTestContextWithCleanup(t, dataDir)
+	transCtx := createTransactionContext(t)
+
+	plan := NewCreateTablePlan(stmt, ctx, transCtx)
+	result, err := executePlan(t, plan)
+
+	if err != nil {
+		t.Fatalf("Execute failed: %v", err)
+	}
+
+	if !result.Success {
+		t.Error("Expected success to be true")
+	}
+
+	// Verify the message doesn't mention index
+	if strings.Contains(result.Message, "BTree index") {
+		t.Errorf("Expected message to not mention index for table without primary key, got: %q", result.Message)
+	}
+
+	// Get table ID
+	tableID, err := ctx.CatalogManager().GetTableID(transCtx, "simple_table")
+	if err != nil {
+		t.Fatalf("Failed to get table ID: %v", err)
+	}
+
+	// Verify no index was created
+	indexes, err := ctx.CatalogManager().GetIndexesByTable(transCtx, tableID)
+	if err != nil {
+		t.Fatalf("Failed to get indexes: %v", err)
+	}
+
+	if len(indexes) != 0 {
+		t.Errorf("Expected no indexes, but found %d", len(indexes))
+	}
+
+	cleanupTable(t, ctx.CatalogManager(), "simple_table", transCtx)
+}
+
+func TestCreateTablePlan_Execute_PrimaryKeyIndex_DifferentTypes(t *testing.T) {
+	dataDir := setupTestDataDir(t)
+	ctx := createTestContextWithCleanup(t, dataDir)
+	transCtx := createTransactionContext(t)
+
+	tests := []struct {
+		name           string
+		tableName      string
+		pkColumn       string
+		pkType         types.Type
+		expectedIdxType index.IndexType
+	}{
+		{
+			name:           "Int primary key",
+			tableName:      "users_int",
+			pkColumn:       "id",
+			pkType:         types.IntType,
+			expectedIdxType: index.BTreeIndex,
+		},
+		{
+			name:           "String primary key",
+			tableName:      "users_string",
+			pkColumn:       "email",
+			pkType:         types.StringType,
+			expectedIdxType: index.BTreeIndex,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			stmt := statements.NewCreateStatement(tt.tableName, false)
+			stmt.AddField(tt.pkColumn, tt.pkType, true, nil)
+			stmt.AddField("name", types.StringType, false, nil)
+			stmt.PrimaryKey = tt.pkColumn
+
+			plan := NewCreateTablePlan(stmt, ctx, transCtx)
+			result, err := executePlan(t, plan)
+
+			if err != nil {
+				t.Fatalf("Execute failed: %v", err)
+			}
+
+			if !result.Success {
+				t.Error("Expected success to be true")
+			}
+
+			// Verify index was created
+			tableID, _ := ctx.CatalogManager().GetTableID(transCtx, tt.tableName)
+			indexes, _ := ctx.CatalogManager().GetIndexesByTable(transCtx, tableID)
+
+			if len(indexes) == 0 {
+				t.Error("No index was created")
+			} else {
+				idx := indexes[0]
+				if idx.IndexType != tt.expectedIdxType {
+					t.Errorf("Expected index type %v, got %v", tt.expectedIdxType, idx.IndexType)
+				}
+
+				if idx.ColumnName != tt.pkColumn {
+					t.Errorf("Expected column name %q, got %q", tt.pkColumn, idx.ColumnName)
+				}
+			}
+
+			cleanupTable(t, ctx.CatalogManager(), tt.tableName, transCtx)
+		})
+	}
+}
+
+func TestCreateTablePlan_Execute_PrimaryKeyIndex_MultipleColumns(t *testing.T) {
+	dataDir := setupTestDataDir(t)
+
+	stmt := statements.NewCreateStatement("products", false)
+	stmt.AddField("id", types.IntType, true, nil)
+	stmt.AddField("name", types.StringType, false, nil)
+	stmt.AddField("category", types.StringType, false, nil)
+	stmt.AddField("price", types.FloatType, false, nil)
+	stmt.PrimaryKey = "id" // Only one column as primary key
+
+	ctx := createTestContextWithCleanup(t, dataDir)
+	transCtx := createTransactionContext(t)
+
+	plan := NewCreateTablePlan(stmt, ctx, transCtx)
+	result, err := executePlan(t, plan)
+
+	if err != nil {
+		t.Fatalf("Execute failed: %v", err)
+	}
+
+	if !result.Success {
+		t.Error("Expected success to be true")
+	}
+
+	// Verify only one index was created (on the primary key column)
+	tableID, _ := ctx.CatalogManager().GetTableID(transCtx, "products")
+	indexes, _ := ctx.CatalogManager().GetIndexesByTable(transCtx, tableID)
+
+	if len(indexes) != 1 {
+		t.Errorf("Expected exactly 1 index, got %d", len(indexes))
+	}
+
+	if len(indexes) > 0 {
+		idx := indexes[0]
+		if idx.ColumnName != "id" {
+			t.Errorf("Expected index on column 'id', got %q", idx.ColumnName)
+		}
+
+		expectedName := "pk_products_id"
+		if idx.IndexName != expectedName {
+			t.Errorf("Expected index name %q, got %q", expectedName, idx.IndexName)
+		}
+	}
+
+	cleanupTable(t, ctx.CatalogManager(), "products", transCtx)
+}
+
+func TestCreateTablePlan_Execute_PrimaryKeyIndex_IndexNameConvention(t *testing.T) {
+	dataDir := setupTestDataDir(t)
+	ctx := createTestContextWithCleanup(t, dataDir)
+	transCtx := createTransactionContext(t)
+
+	tests := []struct {
+		tableName        string
+		pkColumn         string
+		expectedIndexName string
+	}{
+		{"users", "id", "pk_users_id"},
+		{"products", "product_id", "pk_products_product_id"},
+		{"orders", "order_number", "pk_orders_order_number"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.tableName, func(t *testing.T) {
+			stmt := statements.NewCreateStatement(tt.tableName, false)
+			stmt.AddField(tt.pkColumn, types.IntType, true, nil)
+			stmt.AddField("data", types.StringType, false, nil)
+			stmt.PrimaryKey = tt.pkColumn
+
+			plan := NewCreateTablePlan(stmt, ctx, transCtx)
+			_, err := executePlan(t, plan)
+
+			if err != nil {
+				t.Fatalf("Execute failed: %v", err)
+			}
+
+			// Verify index name follows convention
+			tableID, _ := ctx.CatalogManager().GetTableID(transCtx, tt.tableName)
+			indexes, _ := ctx.CatalogManager().GetIndexesByTable(transCtx, tableID)
+
+			if len(indexes) > 0 {
+				if indexes[0].IndexName != tt.expectedIndexName {
+					t.Errorf("Expected index name %q, got %q", tt.expectedIndexName, indexes[0].IndexName)
+				}
+			}
+
+			cleanupTable(t, ctx.CatalogManager(), tt.tableName, transCtx)
+		})
+	}
+}
+
+func TestCreateTablePlan_Execute_PrimaryKeyIndex_FileLocation(t *testing.T) {
+	dataDir := setupTestDataDir(t)
+
+	stmt := statements.NewCreateStatement("test_table", false)
+	stmt.AddField("id", types.IntType, true, nil)
+	stmt.AddField("name", types.StringType, false, nil)
+	stmt.PrimaryKey = "id"
+
+	ctx := createTestContextWithCleanup(t, dataDir)
+	transCtx := createTransactionContext(t)
+
+	plan := NewCreateTablePlan(stmt, ctx, transCtx)
+	result, err := executePlan(t, plan)
+
+	if err != nil {
+		t.Fatalf("Execute failed: %v", err)
+	}
+
+	if !result.Success {
+		t.Error("Expected success to be true")
+	}
+
+	// Verify index file is in the correct location
+	tableID, _ := ctx.CatalogManager().GetTableID(transCtx, "test_table")
+	indexes, _ := ctx.CatalogManager().GetIndexesByTable(transCtx, tableID)
+
+	if len(indexes) > 0 {
+		idx := indexes[0]
+
+		// Verify file path contains table name and index name
+		if !strings.Contains(idx.FilePath, "test_table") {
+			t.Errorf("Index file path should contain table name, got: %q", idx.FilePath)
+		}
+
+		if !strings.Contains(idx.FilePath, "pk_test_table_id") {
+			t.Errorf("Index file path should contain index name, got: %q", idx.FilePath)
+		}
+
+		// Verify file has .idx extension
+		if !strings.HasSuffix(idx.FilePath, ".idx") {
+			t.Errorf("Index file should have .idx extension, got: %q", idx.FilePath)
+		}
+
+		// Verify file actually exists
+		if _, err := os.Stat(idx.FilePath); os.IsNotExist(err) {
+			t.Errorf("Index file does not exist at: %q", idx.FilePath)
+		}
+	}
+
+	cleanupTable(t, ctx.CatalogManager(), "test_table", transCtx)
+}
+
+func TestCreateTablePlan_Execute_PrimaryKeyIndex_WithAutoIncrement(t *testing.T) {
+	dataDir := setupTestDataDir(t)
+
+	stmt := statements.NewCreateStatement("auto_inc_table", false)
+	stmt.AddField("id", types.IntType, true, nil) // Auto-increment
+	stmt.AddField("name", types.StringType, false, nil)
+	stmt.PrimaryKey = "id"
+
+	ctx := createTestContextWithCleanup(t, dataDir)
+	transCtx := createTransactionContext(t)
+
+	plan := NewCreateTablePlan(stmt, ctx, transCtx)
+	result, err := executePlan(t, plan)
+
+	if err != nil {
+		t.Fatalf("Execute failed: %v", err)
+	}
+
+	if !result.Success {
+		t.Error("Expected success to be true")
+	}
+
+	// Verify index was created even with auto-increment
+	tableID, _ := ctx.CatalogManager().GetTableID(transCtx, "auto_inc_table")
+	indexes, _ := ctx.CatalogManager().GetIndexesByTable(transCtx, tableID)
+
+	if len(indexes) == 0 {
+		t.Error("No index was created for auto-increment primary key")
+	}
+
+	if len(indexes) > 0 {
+		idx := indexes[0]
+		if idx.ColumnName != "id" {
+			t.Errorf("Expected index on 'id', got %q", idx.ColumnName)
+		}
+	}
+
+	cleanupTable(t, ctx.CatalogManager(), "auto_inc_table", transCtx)
 }

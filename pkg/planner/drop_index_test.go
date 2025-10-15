@@ -7,16 +7,6 @@ import (
 	"testing"
 )
 
-// Helper function to create an index for DROP testing
-func createTestIndex(t *testing.T, ctx DbContext, transCtx TransactionCtx, tableName, indexName, columnName string, indexType index.IndexType) {
-	stmt := statements.NewCreateIndexStatement(indexName, tableName, columnName, indexType, false)
-	plan := NewCreateIndexPlan(stmt, ctx, transCtx)
-	_, err := plan.Execute()
-	if err != nil {
-		t.Fatalf("Failed to create test index: %v", err)
-	}
-}
-
 func TestNewDropIndexPlan(t *testing.T) {
 	dataDir := setupTestDataDir(t)
 
