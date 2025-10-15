@@ -81,7 +81,7 @@ func (bt *BTree) insertAndSplitLeaf(leafPage *BTreePage, key types.Field, rid *t
 	leafPage.Entries = leftEntries
 
 	// Create new right page
-	rightPage, err := bt.file.AllocatePage(tid, bt.keyType, true, leafPage.ParentPage)
+	rightPage, err := bt.file.AllocatePage(bt.tx.ID, bt.keyType, true, leafPage.ParentPage)
 	if err != nil {
 		return fmt.Errorf("failed to allocate new leaf page: %w", err)
 	}
@@ -135,11 +135,11 @@ func (bt *BTree) insertIntoParent(separatorKey types.Field, left, right *BTreePa
 
 	// Check if parent is full
 	if parentPage.IsFull() {
-		return bt.insertAndSplitInternal(parentPage, separatorKey, right.GetID())
+		return bt.insertAndSplitInternal(parentPage, separatorKey, right.GetBTreePageID())
 	}
 
 	// Insert into parent (not full)
-	return bt.insertIntoInternal(parentPage, separatorKey, right.GetID())
+	return bt.insertIntoInternal(parentPage, separatorKey, right.GetBTreePageID())
 }
 
 // insertIntoInternal inserts a key-pointer pair into an internal node (assumes space available)
@@ -215,7 +215,7 @@ func (bt *BTree) insertAndSplitInternal(internalPage *BTreePage, key types.Field
 	bt.addDirtyPage(internalPage, memory.UpdateOperation)
 
 	// Create new right page
-	rightPage, err := bt.file.AllocatePage(tid, bt.keyType, false, internalPage.ParentPage)
+	rightPage, err := bt.file.AllocatePage(bt.tx.ID, bt.keyType, false, internalPage.ParentPage)
 	if err != nil {
 		return fmt.Errorf("failed to allocate new internal page: %w", err)
 	}
@@ -246,7 +246,7 @@ func (bt *BTree) insertAndSplitInternal(internalPage *BTreePage, key types.Field
 // createNewRoot creates a new root page after splitting the old root
 func (bt *BTree) createNewRoot(left *BTreePage, separatorKey types.Field, right *BTreePage) error {
 	// Allocate new root page
-	newRoot, err := bt.file.AllocatePage(tid, bt.keyType, false, -1)
+	newRoot, err := bt.file.AllocatePage(bt.tx.ID, bt.keyType, false, -1)
 	if err != nil {
 		return fmt.Errorf("failed to allocate new root: %w", err)
 	}
@@ -254,8 +254,8 @@ func (bt *BTree) createNewRoot(left *BTreePage, separatorKey types.Field, right 
 	// Set up new root's children
 	// First child (no key)
 	newRoot.InternalPages = []*btree.BTreeChildPtr{
-		{Key: nil, ChildPID: left.GetID()},
-		{Key: separatorKey, ChildPID: right.GetID()},
+		{Key: nil, ChildPID: left.GetBTreePageID()},
+		{Key: separatorKey, ChildPID: right.GetBTreePageID()},
 	}
 
 	// Update children's parent pointers
@@ -263,7 +263,7 @@ func (bt *BTree) createNewRoot(left *BTreePage, separatorKey types.Field, right 
 	right.ParentPage = newRoot.PageNo()
 
 	// Update root pointer
-	bt.rootPageID = newRoot.GetID()
+	bt.rootPageID = newRoot.GetBTreePageID()
 
 	bt.addDirtyPage(left, memory.UpdateOperation)
 	bt.addDirtyPage(right, memory.UpdateOperation)
