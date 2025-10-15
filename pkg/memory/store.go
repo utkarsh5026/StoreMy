@@ -28,12 +28,19 @@ const (
 
 func (o OperationType) String() string {
 	switch o {
+	case InsertOperation:
+		return "INSERT"
+	case DeleteOperation:
+		return "DELETE"
+	case UpdateOperation:
+		return "UPDATE"
 	case CommitOperation:
 		return "COMMIT"
 	case AbortOperation:
 		return "ABORT"
+	default:
+		return "UNKNOWN"
 	}
-	return "UNKNOWN"
 }
 
 // PageStore manages an in-memory cache of database pages and handles transaction-aware page operations.
@@ -144,14 +151,28 @@ func (p *PageStore) HandlePageChange(ctx TxContext, op OperationType, getDirtyPa
 		return fmt.Errorf("failed to get dirty pages: %v", err)
 	}
 
-	for _, page := range dirtyPages {
-		pid := page.GetID()
-		if err := p.logOperation(op, ctx.ID, pid, page.GetPageData()); err != nil {
-			return fmt.Errorf("failed to log update operation: %v", err)
+	for _, pg := range dirtyPages {
+		pid := pg.GetID()
+
+		// Handle UpdateOperation specially - it needs both before and after images
+		if op == UpdateOperation {
+			var beforeImage []byte
+			if beforePage := pg.GetBeforeImage(); beforePage != nil {
+				beforeImage = beforePage.GetPageData()
+			}
+			afterImage := pg.GetPageData()
+
+			if _, err := p.wal.LogUpdate(ctx.ID, pid, beforeImage, afterImage); err != nil {
+				return fmt.Errorf("failed to log update operation: %v", err)
+			}
+		} else {
+			if err := p.logOperation(op, ctx.ID, pid, pg.GetPageData()); err != nil {
+				return fmt.Errorf("failed to log %s operation: %v", op, err)
+			}
 		}
 
-		page.MarkDirty(true, ctx.ID)
-		p.cache.Put(pid, page)
+		pg.MarkDirty(true, ctx.ID)
+		p.cache.Put(pid, pg)
 		ctx.MarkPageDirty(pid)
 	}
 	return nil
