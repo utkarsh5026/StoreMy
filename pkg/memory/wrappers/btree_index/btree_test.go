@@ -622,7 +622,8 @@ func TestBTree_RangeSearch_MultiplePages(t *testing.T) {
 		t.Fatalf("Failed to perform range search: %v", err)
 	}
 
-	expectedCount := (btree.MaxEntriesPerPage*2 + 10) - (btree.MaxEntriesPerPage - 10) + 1
+	// Only entries 140-299 exist (160 entries), even though we search up to 310
+	expectedCount := numEntries - (btree.MaxEntriesPerPage - 10)
 	if len(results) != expectedCount {
 		t.Errorf("Expected %d results, got %d", expectedCount, len(results))
 	}
@@ -961,7 +962,8 @@ func TestBTree_TreeStructure_MultipleSplits(t *testing.T) {
 		t.Fatalf("Failed to perform range search after splits: %v", err)
 	}
 
-	expectedCount := 101 // 100-200 inclusive
+	// Only entries 100-199 exist (100 entries), even though we search up to 200
+	expectedCount := 100 // 100-199 inclusive
 	if len(results) != expectedCount {
 		t.Errorf("Expected %d results after splits, got %d", expectedCount, len(results))
 	}
