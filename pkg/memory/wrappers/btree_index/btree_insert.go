@@ -177,39 +177,45 @@ func (bt *BTree) insertAndSplitInternal(internalPage *BTreePage, key types.Field
 	}
 
 	allChildren := mergeChildPtrIntoSorted(internalPage.InternalPages, key, childPID)
-	leftChildren, middleKey, rightChildren := splitInternalChildren(allChildren)
+	left, middleKey, right := splitInternalChildren(allChildren)
 
-	// Update current page (left side)
-	internalPage.InternalPages = leftChildren
+	internalPage.InternalPages = left
 	bt.addDirtyPage(internalPage, memory.UpdateOperation)
 
-	// Create new right page
 	rightPage, err := bt.file.AllocatePage(bt.tx.ID, bt.keyType, false, internalPage.ParentPage)
 	if err != nil {
 		return fmt.Errorf("failed to allocate new internal page: %w", err)
 	}
 
-	rightPage.InternalPages = rightChildren
+	rightPage.InternalPages = right
 	bt.addDirtyPage(rightPage, memory.UpdateOperation)
 
-	// Update all children's parent pointers
-	for _, child := range leftChildren {
-		childPage, err := bt.getPage(child.ChildPID, transaction.ReadWrite)
-		if err == nil {
-			childPage.ParentPage = internalPage.PageNo()
-			bt.addDirtyPage(childPage, memory.UpdateOperation)
-		}
+	if err := bt.updateChildrenParentPointers(left, internalPage.PageNo()); err != nil {
+		return err
 	}
-
-	for _, child := range rightChildren {
-		childPage, err := bt.getPage(child.ChildPID, transaction.ReadWrite)
-		if err == nil {
-			childPage.ParentPage = rightPage.PageNo()
-			bt.addDirtyPage(childPage, memory.UpdateOperation)
-		}
+	if err := bt.updateChildrenParentPointers(right, rightPage.PageNo()); err != nil {
+		return err
 	}
 
 	return bt.insertIntoParent(middleKey, internalPage, rightPage)
+}
+func (bt *BTree) updateChildrenParentPointers(children []*btree.BTreeChildPtr, parentPageNo int) error {
+	for _, child := range children {
+		if err := bt.updateChildParentPointer(child.ChildPID, parentPageNo); err != nil {
+			return fmt.Errorf("failed to update child parent pointer: %w", err)
+		}
+	}
+	return nil
+}
+
+func (bt *BTree) updateChildParentPointer(childPID *BTreePageID, parentPageNo int) error {
+	childPage, err := bt.getPage(childPID, transaction.ReadWrite)
+	if err != nil {
+		return err
+	}
+
+	childPage.ParentPage = parentPageNo
+	return bt.addDirtyPage(childPage, memory.UpdateOperation)
 }
 
 // mergeChildPtrIntoSorted inserts a new child pointer into sorted children
