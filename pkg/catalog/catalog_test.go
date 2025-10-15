@@ -127,6 +127,12 @@ func registerTestTable(
 		t.Fatalf("RegisterTable failed: %v", err)
 	}
 
+	// Add table to cache and register with page store (similar to LoadTable)
+	if err := catalog.cache.AddTable(heapFile, tableSchema); err != nil {
+		t.Fatalf("failed to add table to cache: %v", err)
+	}
+	catalog.store.RegisterDbFile(tableID, heapFile)
+
 	return tableID
 }
 
@@ -262,6 +268,15 @@ func TestSystemCatalog_LoadTables(t *testing.T) {
 	tableID := registerTestTable(t, catalog, tx, tempDir, "customers", "id", fields)
 	catalog.store.CommitTransaction(tx)
 
+	// Flush all pages to disk so catalog2 can read them
+	if err := catalog.store.FlushAllPages(); err != nil {
+		t.Fatalf("failed to flush pages: %v", err)
+	}
+
+	// Don't close catalog1's files - let them remain open
+	// This simulates a scenario where the old handles aren't released yet
+	// catalog2 will open new file handles for the same files
+
 	// Create a new catalog instance (simulating restart)
 	wal2, _ := log.NewWAL(filepath.Join(tempDir, "wal2.log"), 8192)
 	pageStore2 := memory.NewPageStore(wal2)
@@ -375,6 +390,10 @@ func TestSystemCatalog_LoadTables_Multiple(t *testing.T) {
 		}
 		registerTestTable(t, catalog, tx, tempDir, table.name, table.pk, table.fields)
 		catalog.store.CommitTransaction(tx)
+		// Flush after each transaction to ensure data is written to disk
+		if err := catalog.store.FlushAllPages(); err != nil {
+			t.Fatalf("failed to flush pages: %v", err)
+		}
 	}
 
 	// Create new catalog and load
@@ -469,6 +488,11 @@ func TestSystemCatalog_RegisterTable_WithBoolField(t *testing.T) {
 
 	tableID := registerTestTable(t, catalog, tx, tempDir, "flags", "id", fields)
 
+	// Flush all pages to disk so catalog2 can read them
+	if err := catalog.store.FlushAllPages(); err != nil {
+		t.Fatalf("failed to flush pages: %v", err)
+	}
+
 	// Load in new catalog
 	wal2, _ := log.NewWAL(filepath.Join(tempDir, "wal2.log"), 8192)
 	pageStore2 := memory.NewPageStore(wal2)
@@ -543,6 +567,11 @@ func TestSystemCatalog_PrimaryKeyPreserved(t *testing.T) {
 
 	registerTestTable(t, catalog, tx, tempDir, "players", "user_id", fields)
 	catalog.store.CommitTransaction(tx)
+
+	// Flush all pages to disk so catalog2 can read them
+	if err := catalog.store.FlushAllPages(); err != nil {
+		t.Fatalf("failed to flush pages: %v", err)
+	}
 
 	// Load in new catalog
 	wal2, _ := log.NewWAL(filepath.Join(tempDir, "wal2.log"), 8192)
