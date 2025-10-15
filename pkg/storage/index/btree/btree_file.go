@@ -2,7 +2,6 @@ package btree
 
 import (
 	"fmt"
-	"io"
 	"storemy/pkg/primitives"
 	"storemy/pkg/storage/page"
 	"storemy/pkg/tuple"
@@ -65,11 +64,7 @@ func (bf *BTreeFile) ReadBTreePage(pageID *BTreePageID) (*BTreePage, error) {
 
 	pageData, err := bf.ReadPageData(pageID.PageNo())
 	if err != nil {
-		if err == io.EOF {
-			newPage := NewBTreeLeafPage(pageID, bf.keyType, -1)
-			return newPage, nil
-		}
-		return nil, fmt.Errorf("failed to read page data: %w", err)
+		return nil, fmt.Errorf("failed to read page %d (numPages=%d): %w", pageID.PageNo(), bf.NumPages(), err)
 	}
 
 	btreePage, err := DeserializeBTreePage(pageData, pageID)
