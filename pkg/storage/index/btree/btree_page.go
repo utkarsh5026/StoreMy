@@ -18,8 +18,7 @@ const (
 	// Page type constants
 	pageTypeInternal byte = 0x01
 	pageTypeLeaf     byte = 0x02
-	noLeaf                = -1
-	noParent              = -1
+	NoPage                = -1
 
 	// Page header size (in bytes)
 	// 1 byte: page type
@@ -32,7 +31,7 @@ const (
 	// Maximum number of entries per page (conservative estimate)
 	// For 4KB pages: (4096 - 17) / (8 + 8 + 4 + 4) ≈ 169 entries for int keys
 	// We'll use a more conservative number to handle string keys
-	maxEntriesPerPage = 150
+	MaxEntriesPerPage = 150
 )
 
 // BTreePage represents a page in a B+Tree index
@@ -40,7 +39,7 @@ const (
 type BTreePage struct {
 	pageID                                     *BTreePageID
 	pageType                                   byte
-	parentPage, numEntries, nextLeaf, prevLeaf int // -1 if root
+	ParentPage, numEntries, NextLeaf, PrevLeaf int // -1 if root
 
 	keyType     types.Type
 	entries     []*index.IndexEntry // For leaf pages
@@ -56,38 +55,38 @@ type BTreeChildPtr struct {
 	ChildPID *BTreePageID // Child page ID
 }
 
-func newBtreeChildPtr(key types.Field, childPID *BTreePageID) *BTreeChildPtr {
+func NewBtreeChildPtr(key types.Field, childPID *BTreePageID) *BTreeChildPtr {
 	return &BTreeChildPtr{Key: key, ChildPID: childPID}
 }
 
 // NewBTreeLeafPage creates a new leaf page
-func NewBTreeLeafPage(pageID *BTreePageID, keyType types.Type, parentPage int) *BTreePage {
+func NewBTreeLeafPage(pageID *BTreePageID, keyType types.Type, ParentPage int) *BTreePage {
 	return &BTreePage{
 		pageID:     pageID,
 		pageType:   pageTypeLeaf,
-		parentPage: parentPage,
+		ParentPage: ParentPage,
 		numEntries: 0,
-		nextLeaf:   noLeaf,
-		prevLeaf:   noLeaf,
+		NextLeaf:   NoPage,
+		PrevLeaf:   NoPage,
 		keyType:    keyType,
-		entries:    make([]*index.IndexEntry, 0, maxEntriesPerPage),
+		entries:    make([]*index.IndexEntry, 0, MaxEntriesPerPage),
 		children:   nil,
 		isDirty:    false,
 	}
 }
 
 // NewBTreeInternalPage creates a new internal page
-func NewBTreeInternalPage(pageID *BTreePageID, keyType types.Type, parentPage int) *BTreePage {
+func NewBTreeInternalPage(pageID *BTreePageID, keyType types.Type, ParentPage int) *BTreePage {
 	return &BTreePage{
 		pageID:     pageID,
 		pageType:   pageTypeInternal,
-		parentPage: parentPage,
+		ParentPage: ParentPage,
 		numEntries: 0,
-		nextLeaf:   noLeaf,
-		prevLeaf:   noLeaf,
+		NextLeaf:   NoPage,
+		PrevLeaf:   NoPage,
 		keyType:    keyType,
 		entries:    nil,
-		children:   make([]*BTreeChildPtr, 0, maxEntriesPerPage+1),
+		children:   make([]*BTreeChildPtr, 0, MaxEntriesPerPage+1),
 		isDirty:    false,
 	}
 }
@@ -119,10 +118,10 @@ func (p *BTreePage) GetPageData() []byte {
 	buf := new(bytes.Buffer)
 
 	buf.WriteByte(p.pageType)
-	binary.Write(buf, binary.BigEndian, int32(p.parentPage))
+	binary.Write(buf, binary.BigEndian, int32(p.ParentPage))
 	binary.Write(buf, binary.BigEndian, int32(p.numEntries))
-	binary.Write(buf, binary.BigEndian, int32(p.nextLeaf))
-	binary.Write(buf, binary.BigEndian, int32(p.prevLeaf))
+	binary.Write(buf, binary.BigEndian, int32(p.NextLeaf))
+	binary.Write(buf, binary.BigEndian, int32(p.PrevLeaf))
 
 	if p.IsLeafPage() {
 		for _, entry := range p.entries {
@@ -161,6 +160,21 @@ func (p *BTreePage) Children() []*BTreeChildPtr {
 	return p.children
 }
 
+func (p *BTreePage) Parent() int {
+	return p.ParentPage
+}
+
+func (p *BTreePage) PageNo() int {
+	return p.pageID.PageNo()
+}
+
+func (p *BTreePage) GetChildKey(index int) (types.Field, error) {
+	if index < 0 || index >= len(p.children) {
+		return nil, fmt.Errorf("invalid index %d for getting child key", index)
+	}
+	return p.children[index].Key, nil
+}
+
 func (p *BTreePage) InsertEntry(e *index.IndexEntry, index int) error {
 	if index < -1 || index > len(p.entries) {
 		return fmt.Errorf("invalid index %d for inserting element", index)
@@ -176,8 +190,12 @@ func (p *BTreePage) InsertEntry(e *index.IndexEntry, index int) error {
 }
 
 func (p *BTreePage) RemoveEntry(index int) (*index.IndexEntry, error) {
-	if index < 0 || index >= len(p.entries) {
+	if index < -1 || index >= len(p.entries) {
 		return nil, fmt.Errorf("invalid index %d for removing element", index)
+	}
+
+	if index == -1 {
+		index = len(p.entries) - 1
 	}
 
 	removed := p.entries[index]
@@ -225,13 +243,37 @@ func (p *BTreePage) SetBeforeImage() {
 	p.beforeImage = p.GetPageData()
 }
 
+func (p *BTreePage) SetParent(id int) {
+	p.ParentPage = id
+}
+
 // IsLeafPage returns true if this is a leaf page
 func (p *BTreePage) IsLeafPage() bool {
 	return p.pageType == pageTypeLeaf
 }
 
 func (p *BTreePage) IsRoot() bool {
-	return p.parentPage == noParent
+	return p.ParentPage == NoPage
+}
+
+func (p *BTreePage) HasPreviousLeaf() bool {
+	return p.PrevLeaf != NoPage
+}
+
+func (p *BTreePage) HasNextLeaf() bool {
+	return p.NextLeaf != NoPage
+}
+
+func (p *BTreePage) Leaves() (left, right int) {
+	return p.PrevLeaf, p.NextLeaf
+}
+
+func (p *BTreePage) UpdateChildrenKey(index int, key types.Field) error {
+	if index < 1 || index >= len(p.children) {
+		return fmt.Errorf("invalid index %d for updating child key", index)
+	}
+	p.children[index].Key = key
+	return nil
 }
 
 // IsInternalPage returns true if this is an internal page
@@ -241,12 +283,20 @@ func (p *BTreePage) IsInternalPage() bool {
 
 // IsFull returns true if the page cannot accept more entries
 func (p *BTreePage) IsFull() bool {
-	return p.numEntries >= maxEntriesPerPage
+	return p.numEntries >= MaxEntriesPerPage
 }
 
 // GetNumEntries returns the number of entries in this page
 func (p *BTreePage) GetNumEntries() int {
 	return p.numEntries
+}
+
+func (p *BTreePage) HasMoreThanRequired() bool {
+	return p.GetNumEntries() > MaxEntriesPerPage/2
+}
+
+func (p *BTreePage) HashLessThanRequired() bool {
+	return p.GetNumEntries() < MaxEntriesPerPage/2
 }
 
 // serializeEntry writes an entry to the buffer
@@ -288,19 +338,19 @@ func DeserializeBTreePage(data []byte, pageID *BTreePageID) (*BTreePage, error) 
 
 	pageType, _ := buf.ReadByte()
 
-	var parentPage, numEntries, nextLeaf, prevLeaf int32
-	binary.Read(buf, binary.BigEndian, &parentPage)
+	var ParentPage, numEntries, NextLeaf, PrevLeaf int32
+	binary.Read(buf, binary.BigEndian, &ParentPage)
 	binary.Read(buf, binary.BigEndian, &numEntries)
-	binary.Read(buf, binary.BigEndian, &nextLeaf)
-	binary.Read(buf, binary.BigEndian, &prevLeaf)
+	binary.Read(buf, binary.BigEndian, &NextLeaf)
+	binary.Read(buf, binary.BigEndian, &PrevLeaf)
 
 	page := &BTreePage{
 		pageID:     pageID,
 		pageType:   pageType,
-		parentPage: int(parentPage),
+		ParentPage: int(ParentPage),
 		numEntries: int(numEntries),
-		nextLeaf:   int(nextLeaf),
-		prevLeaf:   int(prevLeaf),
+		NextLeaf:   int(NextLeaf),
+		PrevLeaf:   int(PrevLeaf),
 		isDirty:    false,
 	}
 
