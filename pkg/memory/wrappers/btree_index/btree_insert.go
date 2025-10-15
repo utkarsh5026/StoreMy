@@ -57,46 +57,49 @@ func (bt *BTree) insertAndSplitLeaf(leafPage *BTreePage, key types.Field, rid *t
 	leftEntries := allEntries[:midPoint]
 	rightEntries := allEntries[midPoint:]
 
-	// Update current page (left side)
-	leafPage.Entries = leftEntries
-
-	// Create new right page
-	rightPage, err := bt.file.AllocatePage(bt.tx.ID, bt.keyType, true, leafPage.ParentPage)
+	rightPage, err := bt.createRightLeafSibling(leafPage, rightEntries)
 	if err != nil {
-		return fmt.Errorf("failed to allocate new leaf page: %w", err)
+		return err
 	}
 
-	rightPage.Entries = rightEntries
-	rightPage.PrevLeaf = leafPage.PageNo()
-	rightPage.NextLeaf = leafPage.NextLeaf
+	leafPage.Entries = leftEntries
+	if err := bt.addDirtyPage(leafPage, memory.UpdateOperation); err != nil {
+		return fmt.Errorf("failed to mark left leaf as dirty: %w", err)
+	}
 
-	bt.addDirtyPage(rightPage, memory.UpdateOperation)
+	separatorKey := rightEntries[0].Key
+	return bt.insertIntoParent(separatorKey, leafPage, rightPage)
+}
 
-	// Update leaf page links
-	if leafPage.NextLeaf != btree.NoPage {
-		nextPageID := btree.NewBTreePageID(bt.indexID, leafPage.NextLeaf)
-		nextPage, err := bt.getPage(nextPageID, transaction.ReadWrite)
-		if err == nil {
-			nextPage.PrevLeaf = rightPage.PageNo()
-			bt.addDirtyPage(nextPage, memory.UpdateOperation)
+func (bt *BTree) createRightLeafSibling(left *BTreePage, entries []*index.IndexEntry) (*BTreePage, error) {
+	right, err := bt.file.AllocatePage(bt.tx.ID, bt.keyType, true, left.ParentPage)
+	if err != nil {
+		return nil, fmt.Errorf("failed to allocate new leaf page: %w", err)
+	}
+
+	right.Entries = entries
+	right.PrevLeaf = left.PageNo()
+	right.NextLeaf = left.NextLeaf
+
+	if left.NextLeaf != btree.NoPage {
+		if err := bt.updateLeafPrevPointer(left.NextLeaf, right.PageNo()); err != nil {
+			return nil, fmt.Errorf("error setting the pointers of the right")
 		}
 	}
 
-	leafPage.NextLeaf = rightPage.PageNo()
+	left.NextLeaf = right.PageNo()
+	return right, bt.addDirtyPage(right, memory.InsertOperation)
+}
 
-	// Get the first key of the right page (separator key)
-	separatorKey := rightEntries[0].Key
-
-	// Write both pages
-	if err := bt.file.WritePage(leafPage); err != nil {
-		return fmt.Errorf("failed to write left leaf: %w", err)
-	}
-	if err := bt.file.WritePage(rightPage); err != nil {
-		return fmt.Errorf("failed to write right leaf: %w", err)
+func (bt *BTree) updateLeafPrevPointer(pageNo, newPrev int) error {
+	pageID := btree.NewBTreePageID(bt.indexID, pageNo)
+	page, err := bt.getPage(pageID, transaction.ReadWrite)
+	if err != nil {
+		return err
 	}
 
-	// Insert separator into parent
-	return bt.insertIntoParent(separatorKey, leafPage, rightPage)
+	page.PrevLeaf = newPrev
+	return bt.addDirtyPage(page, memory.UpdateOperation)
 }
 
 // mergeEntryIntoSorted inserts a new entry into a sorted slice
@@ -257,24 +260,19 @@ func splitInternalChildren(children []*btree.BTreeChildPtr) (left []*btree.BTree
 
 // createNewRoot creates a new root page after splitting the old root
 func (bt *BTree) createNewRoot(left *BTreePage, separatorKey types.Field, right *BTreePage) error {
-	// Allocate new root page
-	newRoot, err := bt.file.AllocatePage(bt.tx.ID, bt.keyType, false, -1)
+	newRoot, err := bt.file.AllocatePage(bt.tx.ID, bt.keyType, false, btree.NoPage)
 	if err != nil {
 		return fmt.Errorf("failed to allocate new root: %w", err)
 	}
 
-	// Set up new root's children
-	// First child (no key)
 	newRoot.InternalPages = []*btree.BTreeChildPtr{
 		{Key: nil, ChildPID: left.GetBTreePageID()},
 		{Key: separatorKey, ChildPID: right.GetBTreePageID()},
 	}
 
-	// Update children's parent pointers
 	left.ParentPage = newRoot.PageNo()
 	right.ParentPage = newRoot.PageNo()
 
-	// Update root pointer
 	bt.rootPageID = newRoot.GetBTreePageID()
 
 	bt.addDirtyPage(left, memory.UpdateOperation)
