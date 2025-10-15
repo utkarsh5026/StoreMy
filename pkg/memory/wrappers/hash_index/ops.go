@@ -96,8 +96,12 @@ func (hi *HashIndex) Delete(ctx *transaction.TransactionContext, key Field, rid 
 	entry := index.NewIndexEntry(key, rid)
 	err = hi.traverseOverflowChain(ctx, bucketPage, func(hp HashPage) error {
 		if err := hp.RemoveEntry(entry); err == nil {
-			// Mark dirty - PageStore handles flush on commit
-			hp.MarkDirty(true, ctx.ID)
+			hi.pageStore.HandlePageChange(
+				ctx,
+				memory.DeleteOperation,
+				func() ([]page.Page, error) {
+					return []page.Page{hp}, nil
+				})
 			return errSuccess
 		}
 		return nil
