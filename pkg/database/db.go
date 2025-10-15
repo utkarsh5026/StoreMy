@@ -92,7 +92,6 @@ func NewDatabase(name, dataDir, logDir string) (*Database, error) {
 	}
 
 	statsManager := catalog.NewStatisticsManager(catalogMgr.Catalog(), db)
-	pageStore.SetStatsManager(statsManager)
 	db.statsManager = statsManager
 
 	queryPlanner := planner.NewQueryPlanner(ctx)
