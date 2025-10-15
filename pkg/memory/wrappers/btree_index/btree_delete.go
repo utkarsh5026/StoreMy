@@ -22,7 +22,7 @@ import (
 //
 // Returns an error if the entry is not found or if write operations fail.
 func (bt *BTree) deleteFromLeaf(leaf *BTreePage, ie *index.IndexEntry) error {
-	deleteIdx := slices.IndexFunc(leaf.Entries(), func(e *index.IndexEntry) bool {
+	deleteIdx := slices.IndexFunc(leaf.Entries, func(e *index.IndexEntry) bool {
 		return e.Equals(ie)
 	})
 
@@ -38,7 +38,7 @@ func (bt *BTree) deleteFromLeaf(leaf *BTreePage, ie *index.IndexEntry) error {
 	}
 
 	if wasFirstKey && !leaf.IsRoot() {
-		newFirstKey := leaf.Entries()[0].Key
+		newFirstKey := leaf.Entries[0].Key
 		if err := bt.updateParentKey(leaf, newFirstKey); err != nil {
 			return err
 		}
@@ -85,8 +85,9 @@ func (bt *BTree) handleUnderflow(page *BTreePage) error {
 		return err
 	}
 
+	pageID := page.GetBTreePageID()
 	childIdx := slices.IndexFunc(parent.Children(), func(pp *btree.BTreeChildPtr) bool {
-		return pp.ChildPID.Equals(page.GetID())
+		return pp.ChildPID.Equals(pageID)
 	})
 
 	if childIdx == -1 {
@@ -197,7 +198,7 @@ func (bt *BTree) redistributeFromRight(current, right, parent *BTreePage, pageId
 			return fmt.Errorf("failed to insert entry into current page: %w", err)
 		}
 
-		parent.UpdateChildrenKey(pageIdx+1, right.Entries()[rightStart].Key)
+		parent.UpdateChildrenKey(pageIdx+1, right.Entries[rightStart].Key)
 		return nil
 	}
 
@@ -249,7 +250,7 @@ func (bt *BTree) mergeWithRight(page, rightSibling, parentPage *BTreePage, pageI
 // Returns an error if page operations fail.
 func (bt *BTree) mergePages(left, right, parent *BTreePage, childIdxToDelete int, separatorIdx int) error {
 	if left.IsLeafPage() {
-		for _, e := range right.Entries() {
+		for _, e := range right.Entries {
 			left.InsertEntry(e, -1)
 		}
 		left.NextLeaf = right.NextLeaf
