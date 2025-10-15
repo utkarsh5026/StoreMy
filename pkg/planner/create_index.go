@@ -5,6 +5,7 @@ import (
 	"os"
 	"storemy/pkg/execution/query"
 	"storemy/pkg/iterator"
+	btreeindex "storemy/pkg/memory/wrappers/btree_index"
 	hashindex "storemy/pkg/memory/wrappers/hash_index"
 	"storemy/pkg/parser/statements"
 	"storemy/pkg/storage/heap"
@@ -188,9 +189,9 @@ func (p *CreateIndexPlan) populateIndex(
 		}
 		defer btreeFile.Close()
 
-		btreeIndex := btree.NewBTree(indexID, keyType, btreeFile)
+		btreeIndex := btreeindex.NewBTree(indexID, keyType, btreeFile, p.tx, p.ctx.PageStore())
 		insertFunc = func(key types.Field, rid *tuple.TupleRecordID) error {
-			return btreeIndex.Insert(p.tx.ID, key, rid)
+			return btreeIndex.Insert(key, rid)
 		}
 
 	default:
