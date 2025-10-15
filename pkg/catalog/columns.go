@@ -130,7 +130,7 @@ func (sc *SystemCatalog) IncrementAutoIncrementValue(tx *transaction.Transaction
 
 // LoadTableSchema reconstructs the schema for a table from CATALOG_COLUMNS.
 // It scans all column metadata for the given tableID and builds a Schema object.
-func (sc *SystemCatalog) LoadTableSchema(tx *transaction.TransactionContext, tableID int) (*schema.Schema, error) {
+func (sc *SystemCatalog) LoadTableSchema(tx *transaction.TransactionContext, tableID int, tableName string) (*schema.Schema, error) {
 	columns, err := sc.loadColumnMetadata(tx, tableID)
 	if err != nil {
 		return nil, err
@@ -140,7 +140,7 @@ func (sc *SystemCatalog) LoadTableSchema(tx *transaction.TransactionContext, tab
 		return nil, fmt.Errorf("no columns found for table %d", tableID)
 	}
 
-	schemaObj, err := schema.NewSchema(tableID, "", columns)
+	schemaObj, err := schema.NewSchema(tableID, tableName, columns)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create schema: %w", err)
 	}

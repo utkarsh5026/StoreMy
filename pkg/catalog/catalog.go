@@ -194,7 +194,7 @@ func (sc *SystemCatalog) LoadTable(tx *transaction.TransactionContext, tableName
 		return fmt.Errorf("failed to get table metadata: %w", err)
 	}
 
-	sch, err := sc.LoadTableSchema(tx, tm.TableID)
+	sch, err := sc.LoadTableSchema(tx, tm.TableID, tm.TableName)
 	if err != nil {
 		return fmt.Errorf("failed to load schema: %w", err)
 	}

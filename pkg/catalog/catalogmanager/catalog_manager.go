@@ -168,7 +168,13 @@ func (cm *CatalogManager) GetTableSchema(tx TxContext, tableID int) (*schema.Sch
 		return info.Schema, nil
 	}
 
-	schema, err := cm.catalog.LoadTableSchema(tx, tableID)
+	// Get table metadata to retrieve the table name
+	tm, err := cm.catalog.GetTableMetadataByID(tx, tableID)
+	if err != nil {
+		return nil, err
+	}
+
+	schema, err := cm.catalog.LoadTableSchema(tx, tableID, tm.TableName)
 	if err != nil {
 		return nil, err
 	}
