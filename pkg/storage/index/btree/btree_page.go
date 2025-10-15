@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"io"
+	"slices"
 	"storemy/pkg/primitives"
 	"storemy/pkg/storage/heap"
 	"storemy/pkg/storage/index"
@@ -152,6 +153,60 @@ func (p *BTreePage) GetPageData() []byte {
 	return data
 }
 
+func (p *BTreePage) Entries() []*index.IndexEntry {
+	return p.entries
+}
+
+func (p *BTreePage) Children() []*BTreeChildPtr {
+	return p.children
+}
+
+func (p *BTreePage) InsertEntry(e *index.IndexEntry, index int) error {
+	if index < -1 || index > len(p.entries) {
+		return fmt.Errorf("invalid index %d for inserting element", index)
+	}
+
+	if index == -1 {
+		index = len(p.entries)
+	}
+
+	p.entries = slices.Insert(p.entries, index, e)
+	p.numEntries = len(p.entries)
+	return nil
+}
+
+func (p *BTreePage) RemoveEntry(index int) (*index.IndexEntry, error) {
+	if index < 0 || index >= len(p.entries) {
+		return nil, fmt.Errorf("invalid index %d for removing element", index)
+	}
+
+	removed := p.entries[index]
+	p.entries = slices.Delete(p.entries, index, index+1)
+	p.numEntries = len(p.entries)
+	return removed, nil
+}
+
+func (p *BTreePage) AddChildPtr(child *BTreeChildPtr, index int) error {
+	if index < 0 || index > len(p.children) {
+		return fmt.Errorf("invalid index %d for inserting child pointer", index)
+	}
+
+	p.children = slices.Insert(p.children, index, child)
+	p.numEntries = len(p.children) - 1
+	return nil
+}
+
+func (p *BTreePage) RemoveChildPtr(index int) (*BTreeChildPtr, error) {
+	if index < 0 || index >= len(p.children) {
+		return nil, fmt.Errorf("invalid index %d for removing child pointer", index)
+	}
+
+	removed := p.children[index]
+	p.children = slices.Delete(p.children, index, index+1)
+	p.numEntries = len(p.children) - 1
+	return removed, nil
+}
+
 // GetBeforeImage returns the before-image of this page
 func (p *BTreePage) GetBeforeImage() page.Page {
 	if p.beforeImage == nil {
@@ -173,6 +228,10 @@ func (p *BTreePage) SetBeforeImage() {
 // IsLeafPage returns true if this is a leaf page
 func (p *BTreePage) IsLeafPage() bool {
 	return p.pageType == pageTypeLeaf
+}
+
+func (p *BTreePage) IsRoot() bool {
+	return p.parentPage == noParent
 }
 
 // IsInternalPage returns true if this is an internal page
@@ -215,10 +274,7 @@ func (p *BTreePage) serializeEntry(w io.Writer, entry *index.IndexEntry) error {
 
 // serializeField writes a field to the buffer
 func (p *BTreePage) serializeField(w io.Writer, field types.Field) error {
-	// Write field type
 	binary.Write(w, binary.BigEndian, byte(field.Type()))
-
-	// Write field data
 	return field.Serialize(w)
 }
 
