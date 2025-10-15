@@ -301,3 +301,9 @@ func (bt *BTree) addDirtyPage(p *BTreePage, op memory.OperationType) error {
 		return []page.Page{p}, nil
 	})
 }
+
+func (bt *BTree) getSiblingPage(parent *BTreePage, currIDx, direction int) (*BTreePage, error) {
+	children := parent.Children()
+	sibPageID := children[currIDx+direction].ChildPID
+	return bt.getPage(sibPageID, transaction.ReadWrite)
+}
