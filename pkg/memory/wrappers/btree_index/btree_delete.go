@@ -94,30 +94,31 @@ func (bt *BTree) handleUnderflow(page *BTreePage) error {
 		return fmt.Errorf("child not found in parent")
 	}
 
-	left, lerr := bt.getSiblingPage(parent, childIdx, -1)
+	// Try to borrow from left sibling
+	var left *BTreePage
+	var lerr error
 	if childIdx > 0 {
+		left, lerr = bt.getSiblingPage(parent, childIdx, -1)
 		if lerr == nil && left.HasMoreThanRequired() {
 			return bt.redistributeFromLeft(left, page, parent, childIdx)
 		}
 	}
 
-	right, rerr := bt.getSiblingPage(parent, childIdx, 1)
+	var right *BTreePage
+	var rerr error
 	if childIdx < len(parent.Children())-1 {
+		right, rerr = bt.getSiblingPage(parent, childIdx, 1)
 		if rerr == nil && right.HasMoreThanRequired() {
 			return bt.redistributeFromRight(page, right, parent, childIdx)
 		}
 	}
 
-	if childIdx > 0 {
-		if lerr == nil {
-			return bt.mergeWithLeft(left, page, parent, childIdx)
-		}
+	if childIdx > 0 && lerr == nil {
+		return bt.mergeWithLeft(left, page, parent, childIdx)
 	}
 
-	if childIdx < len(parent.Children())-1 {
-		if rerr == nil {
-			return bt.mergeWithRight(page, right, parent, childIdx)
-		}
+	if childIdx < len(parent.Children())-1 && rerr == nil {
+		return bt.mergeWithRight(page, right, parent, childIdx)
 	}
 
 	return nil
