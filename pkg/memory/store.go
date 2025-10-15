@@ -36,14 +36,6 @@ func (o OperationType) String() string {
 	return "UNKNOWN"
 }
 
-// NOTE: OperationType constants are kept here for backward compatibility with WAL logging
-// and transaction operations. Tuple-level operations have been moved to pkg/table/manager.go
-
-// StatsRecorder interface for recording table modifications (to avoid circular dependency)
-type StatsRecorder interface {
-	RecordModification(tableID int)
-}
-
 // PageStore manages an in-memory cache of database pages and handles transaction-aware page operations.
 // It serves as the main interface between the database engine and the underlying storage layer,
 // providing ACID compliance through:
@@ -59,22 +51,20 @@ type StatsRecorder interface {
 //   - PageCache: LRU cache for minimizing disk I/O
 //   - DbFiles: Actual heap file access for page read/write
 type PageStore struct {
-	mutex        sync.RWMutex
-	lockManager  *lock.LockManager
-	cache        PageCache
-	wal          *log.WAL
-	statsManager StatsRecorder
-	dbFiles      map[int]page.DbFile // tableID -> DbFile mapping
+	mutex       sync.RWMutex
+	lockManager *lock.LockManager
+	cache       PageCache
+	wal         *log.WAL
+	dbFiles     map[int]page.DbFile // tableID -> DbFile mapping
 }
 
 // NewPageStore creates and initializes a new PageStore instance
 func NewPageStore(wal *log.WAL) *PageStore {
 	return &PageStore{
-		cache:        NewLRUPageCache(MaxPageCount),
-		lockManager:  lock.NewLockManager(),
-		wal:          wal,
-		statsManager: nil, // Can be set later via SetStatsManager
-		dbFiles:      make(map[int]page.DbFile),
+		cache:       NewLRUPageCache(MaxPageCount),
+		lockManager: lock.NewLockManager(),
+		wal:         wal,
+		dbFiles:     make(map[int]page.DbFile),
 	}
 }
 
@@ -93,12 +83,6 @@ func (p *PageStore) UnregisterDbFile(tableID int) {
 	delete(p.dbFiles, tableID)
 }
 
-// SetStatsManager sets the statistics manager for tracking table modifications
-// This allows the PageStore to automatically record modifications for statistics updates
-func (p *PageStore) SetStatsManager(sm StatsRecorder) {
-	p.statsManager = sm
-}
-
 // GetPage retrieves a page with specified permissions for a transaction.
 // This is the main entry point for all page access in the database, enforcing:
 //   - Lock acquisition through LockManager (shared for READ, exclusive for READ_WRITE)
@@ -106,24 +90,11 @@ func (p *PageStore) SetStatsManager(sm StatsRecorder) {
 //   - LRU eviction when cache is full (respecting NO-STEAL policy)
 //   - Transaction tracking of accessed pages for commit/abort
 //
-// Lock Protocol:
-//   - ReadOnly: Acquires shared lock (allows concurrent reads)
-//   - ReadWrite: Acquires exclusive lock (blocks all other access)
-//   - Deadlock detection via dependency graph in LockManager
-//
 // Parameters:
 //   - ctx: Transaction context (must not be nil)
 //   - dbFile: Heap file containing the requested page
 //   - pid: Page identifier (contains table ID and page number)
 //   - perm: Access permissions (ReadOnly or ReadWrite)
-//
-// Returns the requested page or an error if:
-//   - Transaction context is nil
-//   - Lock acquisition fails (deadlock or timeout)
-//   - Cache is full and eviction fails (all pages dirty or locked)
-//   - Disk read fails for page not in cache
-//
-// Thread-safe: Acquires appropriate locks via LockManager and mutex.
 func (p *PageStore) GetPage(ctx TxContext, dbFile page.DbFile, pid primitives.PageID, perm transaction.Permissions) (page.Page, error) {
 	if ctx == nil {
 		return nil, fmt.Errorf("transaction context cannot be nil")
@@ -158,6 +129,32 @@ func (p *PageStore) GetPage(ctx TxContext, dbFile page.DbFile, pid primitives.Pa
 	}
 
 	return page, nil
+}
+
+func (p *PageStore) HandlePageChange(ctx TxContext, op OperationType, getDirtyPages func() ([]page.Page, error)) error {
+
+	p.mutex.Lock()
+	defer p.mutex.Unlock()
+	if ctx == nil || ctx.ID == nil {
+		return fmt.Errorf("transaction context cannot be nil")
+	}
+
+	dirtyPages, err := getDirtyPages()
+	if err != nil {
+		return fmt.Errorf("failed to get dirty pages: %v", err)
+	}
+
+	for _, page := range dirtyPages {
+		pid := page.GetID()
+		if err := p.logOperation(op, ctx.ID, pid, page.GetPageData()); err != nil {
+			return fmt.Errorf("failed to log update operation: %v", err)
+		}
+
+		page.MarkDirty(true, ctx.ID)
+		p.cache.Put(pid, page)
+		ctx.MarkPageDirty(pid)
+	}
+	return nil
 }
 
 // evictPage implements NO-STEAL buffer management policy.

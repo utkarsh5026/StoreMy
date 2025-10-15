@@ -4,8 +4,10 @@ import (
 	"errors"
 	"fmt"
 	"storemy/pkg/concurrency/transaction"
+	"storemy/pkg/memory"
 	"storemy/pkg/primitives"
 	"storemy/pkg/storage/index"
+	"storemy/pkg/storage/page"
 	"storemy/pkg/tuple"
 )
 
@@ -59,9 +61,12 @@ func (hi *HashIndex) Insert(ctx *transaction.TransactionContext, key Field, rid 
 		return fmt.Errorf("failed to add entry: %w", err)
 	}
 
-	// Mark as dirty - PageStore will handle flush on commit
-	currentPage.MarkDirty(true, ctx.ID)
-	return nil
+	return hi.pageStore.HandlePageChange(
+		ctx,
+		memory.InsertOperation,
+		func() ([]page.Page, error) {
+			return []page.Page{currentPage}, nil
+		})
 }
 
 // Delete removes a key-value pair from the hash index.
