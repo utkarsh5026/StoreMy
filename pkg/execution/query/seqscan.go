@@ -2,20 +2,11 @@ package query
 
 import (
 	"fmt"
-	"storemy/pkg/catalog/schema"
 	"storemy/pkg/concurrency/transaction"
 	"storemy/pkg/memory"
-	"storemy/pkg/primitives"
 	"storemy/pkg/storage/heap"
-	"storemy/pkg/storage/page"
 	"storemy/pkg/tuple"
 )
-
-// TableInfoProvider interface for getting table information (to avoid direct dependency on catalog)
-type TableInfoProvider interface {
-	GetTableFile(tableID int) (page.DbFile, error)
-	GetTableSchema(tid *primitives.TransactionID, tableID int) (*schema.Schema, error)
-}
 
 // SequentialScan implements a sequential scan operator that iterates through all tuples in a table.
 // It provides an iterator interface for reading tuples from a database file sequentially.
@@ -67,11 +58,11 @@ func (ss *SequentialScan) Open() error {
 
 // Close releases resources associated with the SequentialScan operator by closing
 // the file iterator and performing cleanup.
+// Note: This does NOT close the underlying DbFile, as it's managed by the catalog
+// and may be shared across multiple iterators.
 func (ss *SequentialScan) Close() error {
-	if ss.dbFile != nil {
-		ss.dbFile.Close()
-		ss.dbFile = nil
-	}
+	// Don't close ss.dbFile - it's owned by the catalog, not this iterator
+	ss.dbFile = nil
 	return ss.base.Close()
 }
 

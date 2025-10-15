@@ -32,11 +32,6 @@ func NewColumnMetadata(name string, fieldType types.Type, position, tableID int,
 		return nil, fmt.Errorf("column position must be non-negative, got %d for column '%s'", position, name)
 	}
 
-	// Allow -1 for system tables (InvalidTableID constant)
-	if tableID < -1 {
-		return nil, fmt.Errorf("table ID must be >= -1, got %d for column '%s'", tableID, name)
-	}
-
 	if isAutoInc {
 		if fieldType != types.IntType {
 			return nil, fmt.Errorf("auto-increment column '%s' must be of type INT, got %s", name, fieldType.String())
@@ -72,10 +67,9 @@ type Schema struct {
 
 // NewSchema creates a new Schema from column metadata.
 func NewSchema(tableID int, tableName string, columns []ColumnMetadata) (*Schema, error) {
-	// Allow -1 for system tables (InvalidTableID constant)
-	if tableID < -1 {
-		return nil, fmt.Errorf("invalid table_id %d: must be >= -1", tableID)
-	}
+	// Note: tableID can be any integer value (including negative) as it comes from a hash function
+	// Only InvalidTableID (-1) is reserved for system table schemas during initialization
+	// We don't validate the tableID here since it's a hash that can be any value
 
 	if len(columns) == 0 {
 		return nil, fmt.Errorf("schema must have at least one column")
