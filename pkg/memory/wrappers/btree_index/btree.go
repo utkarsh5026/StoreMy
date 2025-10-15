@@ -37,7 +37,10 @@ func NewBTree(indexID int, keyType types.Type, file *BTreeFile, tx *transaction.
 	}
 
 	// Set the file's index ID to match this BTree's index ID
-	// file.indexID = indexID
+	file.SetIndexID(indexID)
+
+	// Register the BTreeFile with the PageStore so it can flush pages properly
+	store.RegisterDbFile(indexID, file)
 
 	if file.NumPages() > 0 {
 		bt.rootPageID = btree.NewBTreePageID(bt.indexID, 0)
@@ -68,13 +71,14 @@ func (bt *BTree) Insert(key types.Field, rid *tuple.TupleRecordID) error {
 	}
 
 	if leafPage.IsFull() {
-		return bt.insertAndSplit(leafPage, key, rid)
+		return bt.insertAndSplitLeaf(leafPage, key, rid)
 	}
 
 	return bt.insertIntoLeaf(leafPage, entry)
 }
 
 // Delete removes a key-value pair from the B+Tree
+// Note: tid parameter is unused - the transaction context is stored in bt.tx
 func (bt *BTree) Delete(tid *primitives.TransactionID, key types.Field, rid *tuple.TupleRecordID) error {
 	if key.Type() != bt.keyType {
 		return fmt.Errorf("key type mismatch: expected %v, got %v", bt.keyType, key.Type())
@@ -115,7 +119,7 @@ func (bt *BTree) Search(key types.Field) ([]*tuple.TupleRecordID, error) {
 	}
 
 	var results []*tuple.TupleRecordID
-	for _, entry := range leafPage.Entries() {
+	for _, entry := range leafPage.Entries {
 		if entry.Key.Equals(key) {
 			results = append(results, entry.RID)
 		}
@@ -124,6 +128,7 @@ func (bt *BTree) Search(key types.Field) ([]*tuple.TupleRecordID, error) {
 }
 
 // RangeSearch finds all tuples where key is in [startKey, endKey]
+// Note: tid parameter is unused - the transaction context is stored in bt.tx
 func (bt *BTree) RangeSearch(tid *primitives.TransactionID, startKey, endKey types.Field) ([]*tuple.TupleRecordID, error) {
 	if startKey.Type() != bt.keyType || endKey.Type() != bt.keyType {
 		return nil, fmt.Errorf("key type mismatch")
@@ -146,7 +151,7 @@ func (bt *BTree) RangeSearch(tid *primitives.TransactionID, startKey, endKey typ
 	var results []*tuple.TupleRecordID
 
 	for leafPage != nil {
-		for _, entry := range leafPage.Entries() {
+		for _, entry := range leafPage.Entries {
 			geStart, _ := entry.Key.Compare(primitives.GreaterThanOrEqual, startKey)
 			leEnd, _ := entry.Key.Compare(primitives.LessThanOrEqual, endKey)
 
@@ -184,6 +189,8 @@ func (bt *BTree) GetKeyType() types.Type {
 
 // Close releases resources held by the index
 func (bt *BTree) Close() error {
+	// Unregister the file from PageStore
+	bt.store.UnregisterDbFile(bt.indexID)
 	return bt.file.Close()
 }
 
@@ -193,8 +200,19 @@ func (bt *BTree) getRootPage(perm transaction.Permissions) (*BTreePage, error) {
 		return bt.getPage(bt.rootPageID, perm)
 	}
 
-	bt.rootPageID = btree.NewBTreePageID(bt.indexID, 0)
-	root := btree.NewBTreeLeafPage(bt.rootPageID, bt.keyType, -1)
+	// Allocate a new root page
+	root, err := bt.file.AllocatePage(bt.tx.ID, bt.keyType, true, -1)
+	if err != nil {
+		return nil, fmt.Errorf("failed to allocate root page: %w", err)
+	}
+
+	bt.rootPageID = root.GetBTreePageID()
+
+	// Add the root page to the cache
+	if err := bt.addDirtyPage(root, memory.InsertOperation); err != nil {
+		return nil, fmt.Errorf("failed to mark root page as dirty: %w", err)
+	}
+
 	return root, nil
 }
 
@@ -265,8 +283,9 @@ func (bt *BTree) updateParentKey(child *BTreePage, newKey types.Field) error {
 
 	// Find the child pointer and update its key
 	// Note: children[0] has no key in B+tree, so we start from index 1
+	childID := child.GetBTreePageID()
 	for i := 1; i < len(children); i++ {
-		if children[i].ChildPID.Equals(child.GetID()) {
+		if children[i].ChildPID.Equals(childID) {
 			parent.UpdateChildrenKey(i, newKey)
 			return bt.addDirtyPage(parent, memory.UpdateOperation)
 		}
@@ -274,7 +293,7 @@ func (bt *BTree) updateParentKey(child *BTreePage, newKey types.Field) error {
 
 	// If we get here, the child might be at index 0, which doesn't have a separator key
 	// Check if it's the first child
-	if len(children) > 0 && children[0].ChildPID.Equals(child.GetID()) {
+	if len(children) > 0 && children[0].ChildPID.Equals(childID) {
 
 		return nil
 	}

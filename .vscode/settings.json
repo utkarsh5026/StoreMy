@@ -1,6 +1,7 @@
 {
     "cSpell.words": [
         "bpid",
+        "btreeindex",
         "bubbletea",
         "catalogdb",
         "catalogmanager",
@@ -13,10 +14,12 @@
         "functools",
         "golangci",
         "GOPATH",
+        "hashindex",
         "heapage",
         "heapreader",
         "inotify",
         "inotifywait",
+        "lerr",
         "lipgloss",
         "lsns",
         "mitranim",
@@ -29,6 +32,7 @@
         "pgup",
         "pids",
         "reaccess",
+        "rerr",
         "statsdb",
         "storemy",
         "systemtable",
