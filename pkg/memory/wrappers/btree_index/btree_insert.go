@@ -45,33 +45,13 @@ func (bt *BTree) insertIntoLeaf(leaf *BTreePage, e *index.IndexEntry) error {
 	return nil
 }
 
-// insertAndSplit handles insertion when the leaf page is full
-// This method delegates to insertAndSplitLeaf in btree_split.go
-func (bt *BTree) insertAndSplit(leafPage *BTreePage, key types.Field, rid *tuple.TupleRecordID) error {
-	return bt.insertAndSplitLeaf(leafPage, key, rid)
-}
-
 // insertAndSplitLeaf handles insertion into a full leaf page by splitting it
 func (bt *BTree) insertAndSplitLeaf(leafPage *BTreePage, key types.Field, rid *tuple.TupleRecordID) error {
 	if !leafPage.IsLeafPage() {
 		return fmt.Errorf("page is not a leaf")
 	}
 
-	// Create a temporary slice with all entries including the new one
-	allEntries := make([]*index.IndexEntry, 0, len(leafPage.Entries)+1)
-	inserted := false
-
-	for _, entry := range leafPage.Entries {
-		if !inserted && (compareKeys(key, entry.Key) < 0) {
-			allEntries = append(allEntries, index.NewIndexEntry(key, rid))
-			inserted = true
-		}
-		allEntries = append(allEntries, entry)
-	}
-
-	if !inserted {
-		allEntries = append(allEntries, index.NewIndexEntry(key, rid))
-	}
+	allEntries := mergeEntryIntoSorted(leafPage.Entries, index.NewIndexEntry(key, rid))
 
 	midPoint := len(allEntries) / 2
 	leftEntries := allEntries[:midPoint]
@@ -119,26 +99,42 @@ func (bt *BTree) insertAndSplitLeaf(leafPage *BTreePage, key types.Field, rid *t
 	return bt.insertIntoParent(separatorKey, leafPage, rightPage)
 }
 
+// mergeEntryIntoSorted inserts a new entry into a sorted slice
+func mergeEntryIntoSorted(entries []*index.IndexEntry, newEntry *index.IndexEntry) []*index.IndexEntry {
+	allEntries := make([]*index.IndexEntry, 0, len(entries)+1)
+	inserted := false
+
+	for _, entry := range entries {
+		if !inserted && compareKeys(newEntry.Key, entry.Key) < 0 {
+			allEntries = append(allEntries, newEntry)
+			inserted = true
+		}
+		allEntries = append(allEntries, entry)
+	}
+
+	if !inserted {
+		allEntries = append(allEntries, newEntry)
+	}
+
+	return allEntries
+}
+
 // insertIntoParent inserts a separator key into the parent after a split
 func (bt *BTree) insertIntoParent(separatorKey types.Field, left, right *BTreePage) error {
-	// If left page is root, create a new root
 	if left.IsRoot() {
 		return bt.createNewRoot(left, separatorKey, right)
 	}
 
-	// Get parent page
 	parentPageID := btree.NewBTreePageID(bt.indexID, left.ParentPage)
 	parentPage, err := bt.getPage(parentPageID, transaction.ReadWrite)
 	if err != nil {
 		return fmt.Errorf("failed to read parent page: %w", err)
 	}
 
-	// Check if parent is full
 	if parentPage.IsFull() {
 		return bt.insertAndSplitInternal(parentPage, separatorKey, right.GetBTreePageID())
 	}
 
-	// Insert into parent (not full)
 	return bt.insertIntoInternal(parentPage, separatorKey, right.GetBTreePageID())
 }
 
@@ -180,35 +176,8 @@ func (bt *BTree) insertAndSplitInternal(internalPage *BTreePage, key types.Field
 		return fmt.Errorf("page is not internal")
 	}
 
-	// Create temporary slice with all InternalPages including new one
-	allChildren := make([]*btree.BTreeChildPtr, 0, len(internalPage.InternalPages)+1)
-	inserted := false
-
-	// First child has no key
-	allChildren = append(allChildren, internalPage.InternalPages[0])
-
-	for i := 1; i < len(internalPage.InternalPages); i++ {
-		child := internalPage.InternalPages[i]
-		if !inserted && compareKeys(key, child.Key) < 0 {
-			allChildren = append(allChildren, btree.NewBtreeChildPtr(key, childPID))
-			inserted = true
-		}
-		allChildren = append(allChildren, child)
-	}
-
-	if !inserted {
-		allChildren = append(allChildren, btree.NewBtreeChildPtr(key, childPID))
-	}
-
-	// Split point: divide in half
-	// For internal nodes, we push up the middle key
-	midPoint := len(allChildren) / 2
-	leftChildren := allChildren[:midPoint]
-	middleKey := allChildren[midPoint].Key
-	rightChildren := allChildren[midPoint:]
-
-	// Fix: right children's first child shouldn't have a key
-	rightChildren[0].Key = nil
+	allChildren := mergeChildPtrIntoSorted(internalPage.InternalPages, key, childPID)
+	leftChildren, middleKey, rightChildren := splitInternalChildren(allChildren)
 
 	// Update current page (left side)
 	internalPage.InternalPages = leftChildren
@@ -241,6 +210,43 @@ func (bt *BTree) insertAndSplitInternal(internalPage *BTreePage, key types.Field
 	}
 
 	return bt.insertIntoParent(middleKey, internalPage, rightPage)
+}
+
+// mergeChildPtrIntoSorted inserts a new child pointer into sorted children
+func mergeChildPtrIntoSorted(children []*btree.BTreeChildPtr, key types.Field, childPID *BTreePageID) []*btree.BTreeChildPtr {
+	allChildren := make([]*btree.BTreeChildPtr, 0, len(children)+1)
+	inserted := false
+
+	// First child has no key
+	allChildren = append(allChildren, children[0])
+
+	for i := 1; i < len(children); i++ {
+		child := children[i]
+		if !inserted && compareKeys(key, child.Key) < 0 {
+			allChildren = append(allChildren, btree.NewBtreeChildPtr(key, childPID))
+			inserted = true
+		}
+		allChildren = append(allChildren, child)
+	}
+
+	if !inserted {
+		allChildren = append(allChildren, btree.NewBtreeChildPtr(key, childPID))
+	}
+
+	return allChildren
+}
+
+func splitInternalChildren(children []*btree.BTreeChildPtr) (left []*btree.BTreeChildPtr, middleKey types.Field, right []*btree.BTreeChildPtr) {
+	midPoint := len(children) / 2
+
+	left = children[:midPoint]
+	middleKey = children[midPoint].Key
+	right = children[midPoint:]
+
+	// Right side's first child shouldn't have a key
+	right[0].Key = nil
+
+	return
 }
 
 // createNewRoot creates a new root page after splitting the old root

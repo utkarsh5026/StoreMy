@@ -17,24 +17,6 @@ import (
 	"testing"
 )
 
-// Helper functions
-func mustCreateTupleDesc() *tuple.TupleDescription {
-	typesList := []types.Type{types.IntType, types.StringType}
-	fields := []string{"id", "name"}
-	td, err := tuple.NewTupleDesc(typesList, fields)
-	if err != nil {
-		panic(err)
-	}
-	return td
-}
-
-func createTestTuple(td *tuple.TupleDescription, id int64, name string) *tuple.Tuple {
-	t := tuple.NewTuple(td)
-	t.SetField(0, types.NewIntField(id))
-	t.SetField(1, types.NewStringField(name, 128))
-	return t
-}
-
 func setupTestBTree(t *testing.T, keyType types.Type) (*BTree, *memory.PageStore, *transaction.TransactionContext, string, func()) {
 	t.Helper()
 
@@ -651,8 +633,8 @@ func TestBTree_StringKeys(t *testing.T) {
 
 	pageID := heap.NewHeapPageID(1, 0)
 	testData := []struct {
-		key  string
-		idx  int
+		key string
+		idx int
 	}{
 		{"apple", 0},
 		{"banana", 1},
