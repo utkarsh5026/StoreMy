@@ -3,6 +3,7 @@ package table
 import (
 	"fmt"
 	"storemy/pkg/concurrency/transaction"
+	"storemy/pkg/indexmanager"
 	"storemy/pkg/log"
 	"storemy/pkg/memory"
 	"storemy/pkg/primitives"
@@ -47,17 +48,14 @@ type StatsRecorder interface {
 //   - Tuple updates (implementing delete+insert semantics)
 //   - WAL logging for all tuple operations
 //   - Transaction coordination for tuple operations
+//   - Index maintenance on all DML operations
 //   - Statistics tracking for query optimization
-//
-// The TupleManager coordinates with:
-//   - PageProvider (buffer pool): For page access and caching
-//   - WAL: For logging tuple operations
-//   - TransactionContext: For ACID compliance
-//   - StatsRecorder: For maintaining table statistics
+
 type TupleManager struct {
 	pageProvider *memory.PageStore
 	wal          *log.WAL
 	statsManager StatsRecorder
+	indexManager *indexmanager.IndexManager
 }
 
 // NewTupleManager creates a new TupleManager instance
@@ -66,12 +64,18 @@ func NewTupleManager(store *memory.PageStore) *TupleManager {
 		pageProvider: store,
 		wal:          store.GetWal(),
 		statsManager: nil,
+		indexManager: nil,
 	}
 }
 
 // SetStatsManager sets the statistics manager for tracking table modifications
 func (tm *TupleManager) SetStatsManager(sm StatsRecorder) {
 	tm.statsManager = sm
+}
+
+// SetIndexManager sets the index manager for maintaining indexes on tuple operations
+func (tm *TupleManager) SetIndexManager(im *indexmanager.IndexManager) {
+	tm.indexManager = im
 }
 
 // InsertTuple adds a new tuple to the specified table within the given transaction context.
@@ -83,19 +87,6 @@ func (tm *TupleManager) SetStatsManager(sm StatsRecorder) {
 //
 // The tuple may span multiple pages if the table has large tuples or requires page splits.
 // All modified pages are tracked for commit/abort processing.
-//
-// Parameters:
-//   - ctx: Transaction context for ACID compliance
-//   - dbFile: Heap file for the target table
-//   - t: Tuple to insert (RecordID will be assigned during insertion)
-//
-// Returns an error if:
-//   - Transaction context is nil
-//   - WAL logging fails
-//   - No free space exists in any page (table full)
-//   - Lock acquisition fails
-//
-// Thread-safe: Uses page locks and proper WAL ordering.
 func (tm *TupleManager) InsertTuple(ctx *transaction.TransactionContext, dbFile page.DbFile, t *tuple.Tuple) error {
 	tableID := dbFile.GetID()
 	return tm.performDataOperation(InsertOperation, ctx, dbFile, tableID, t)
@@ -186,20 +177,8 @@ func (tm *TupleManager) UpdateTuple(ctx *transaction.TransactionContext, dbFile 
 //  2. Execute operation-specific logic (insert or delete)
 //  3. Log operation to WAL before page modification
 //  4. Mark modified pages as dirty
-//  5. Record modification for statistics
-//
-// This centralizes the common transaction management code shared by all DML operations.
-//
-// Parameters:
-//   - operation: Type of operation (InsertOperation or DeleteOperation)
-//   - ctx: Transaction context
-//   - dbFile: Target heap file
-//   - tableID: Table identifier for statistics
-//   - t: Tuple being inserted or deleted
-//
-// Returns an error if any step fails. The transaction should be aborted on error.
-//
-// Note: Updates are implemented as DELETE + INSERT at a higher level.
+//  5. Update all indexes for the table (automatic index maintenance)
+//  6. Record modification for statistics
 func (tm *TupleManager) performDataOperation(operation OperationType, ctx *transaction.TransactionContext, dbFile page.DbFile, tableID int, t *tuple.Tuple) error {
 	if ctx == nil {
 		return fmt.Errorf("transaction context cannot be nil")
@@ -227,6 +206,19 @@ func (tm *TupleManager) performDataOperation(operation OperationType, ctx *trans
 	}
 
 	tm.markPagesAsDirty(ctx, modifiedPages)
+
+	if tm.indexManager != nil {
+		switch operation {
+		case InsertOperation:
+			if err := tm.indexManager.OnInsert(ctx, tableID, t); err != nil {
+				return fmt.Errorf("failed to update indexes on insert: %v", err)
+			}
+		case DeleteOperation:
+			if err := tm.indexManager.OnDelete(ctx, tableID, t); err != nil {
+				return fmt.Errorf("failed to update indexes on delete: %v", err)
+			}
+		}
+	}
 
 	if tm.statsManager != nil {
 		tm.statsManager.RecordModification(tableID)
