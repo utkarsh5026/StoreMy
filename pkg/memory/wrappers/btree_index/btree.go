@@ -149,7 +149,7 @@ func (bt *BTree) Insert(key types.Field, rid *tuple.TupleRecordID) error {
 //
 // Returns:
 //   - error: Returns error if key type mismatch, page access fails, or entry not found
-func (bt *BTree) Delete(tid *primitives.TransactionID, key types.Field, rid *tuple.TupleRecordID) error {
+func (bt *BTree) Delete(key types.Field, rid *tuple.TupleRecordID) error {
 	if key.Type() != bt.keyType {
 		return fmt.Errorf("key type mismatch: expected %v, got %v", bt.keyType, key.Type())
 	}
@@ -242,7 +242,7 @@ func (bt *BTree) Search(key types.Field) ([]*tuple.TupleRecordID, error) {
 // Returns:
 //   - []*tuple.TupleRecordID: All record IDs with keys in [startKey, endKey]
 //   - error: Returns error if key types mismatch or page access fails
-func (bt *BTree) RangeSearch(tid *primitives.TransactionID, startKey, endKey types.Field) ([]*tuple.TupleRecordID, error) {
+func (bt *BTree) RangeSearch(startKey, endKey types.Field) ([]*tuple.TupleRecordID, error) {
 	if startKey.Type() != bt.keyType || endKey.Type() != bt.keyType {
 		return nil, fmt.Errorf("key type mismatch")
 	}
@@ -310,18 +310,7 @@ func (bt *BTree) GetKeyType() types.Type {
 
 // Close releases all resources held by the index and unregister it from PageStore.
 // Should be called when the index is no longer needed to prevent resource leaks.
-//
-// Cleanup steps:
-// 1. Unregister the BTreeFile from PageStore (stops page tracking)
-// 2. Closes the underlying file (flushes pending writes)
-//
-// Note: Any uncommitted changes will be handled by transaction rollback/commit,
-// not by this method. Close is for resource cleanup only.
-//
-// Returns:
-//   - error: Returns error if file close fails
 func (bt *BTree) Close() error {
-	// Unregister the file from PageStore
 	bt.store.UnregisterDbFile(bt.indexID)
 	return bt.file.Close()
 }
@@ -345,15 +334,12 @@ func (bt *BTree) getRootPage(perm transaction.Permissions) (*BTreePage, error) {
 		return bt.getPage(bt.rootPageID, perm)
 	}
 
-	// Allocate a new root page
 	root, err := bt.file.AllocatePage(bt.tx.ID, bt.keyType, true, -1)
 	if err != nil {
 		return nil, fmt.Errorf("failed to allocate root page: %w", err)
 	}
 
 	bt.rootPageID = root.GetBTreePageID()
-
-	// Add the root page to the cache
 	if err := bt.addDirtyPage(root, memory.InsertOperation); err != nil {
 		return nil, fmt.Errorf("failed to mark root page as dirty: %w", err)
 	}

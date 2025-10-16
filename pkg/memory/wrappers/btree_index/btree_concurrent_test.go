@@ -1,7 +1,6 @@
 package btreeindex
 
 import (
-	"storemy/pkg/primitives"
 	"storemy/pkg/storage/heap"
 	"storemy/pkg/tuple"
 	"storemy/pkg/types"
@@ -97,8 +96,6 @@ func TestBTree_Concurrent_RangeSearches(t *testing.T) {
 		go func(goroutineID int) {
 			defer wg.Done()
 
-			tid := primitives.NewTransactionID()
-
 			for r := 0; r < rangeSearchesPerGoroutine; r++ {
 				startIdx := r % (numEntries - 20)
 				endIdx := startIdx + 20
@@ -106,7 +103,7 @@ func TestBTree_Concurrent_RangeSearches(t *testing.T) {
 				startKey := types.NewIntField(int64(startIdx))
 				endKey := types.NewIntField(int64(endIdx))
 
-				results, err := bt.RangeSearch(tid, startKey, endKey)
+				results, err := bt.RangeSearch(startKey, endKey)
 				if err != nil {
 					t.Errorf("Goroutine %d: Failed range search [%d, %d]: %v", goroutineID, startIdx, endIdx, err)
 					return
@@ -255,8 +252,6 @@ func TestBTree_Concurrent_PointVsRangeQueries(t *testing.T) {
 		go func(goroutineID int) {
 			defer wg.Done()
 
-			tid := primitives.NewTransactionID()
-
 			for q := 0; q < queriesPerGoroutine; q++ {
 				startIdx := q % (numEntries - 10)
 				endIdx := startIdx + 10
@@ -264,7 +259,7 @@ func TestBTree_Concurrent_PointVsRangeQueries(t *testing.T) {
 				startKey := types.NewIntField(int64(startIdx))
 				endKey := types.NewIntField(int64(endIdx))
 
-				results, err := bt.RangeSearch(tid, startKey, endKey)
+				results, err := bt.RangeSearch(startKey, endKey)
 				if err != nil {
 					t.Errorf("Range query goroutine %d: Failed for range [%d, %d]: %v",
 						goroutineID, startIdx, endIdx, err)
@@ -404,8 +399,6 @@ func TestBTree_Stress_MassiveConcurrency(t *testing.T) {
 		go func(id int) {
 			defer wg.Done()
 
-			tid := primitives.NewTransactionID()
-
 			for i := 0; i < 200; i++ {
 				startIdx := (id*5 + i*3) % (numInitialEntries - 20)
 				endIdx := startIdx + 20
@@ -413,7 +406,7 @@ func TestBTree_Stress_MassiveConcurrency(t *testing.T) {
 				startKey := types.NewIntField(int64(startIdx))
 				endKey := types.NewIntField(int64(endIdx))
 
-				_, err := bt.RangeSearch(tid, startKey, endKey)
+				_, err := bt.RangeSearch(startKey, endKey)
 
 				rangeSearchCount.Add(1)
 				if err != nil {
@@ -583,7 +576,7 @@ func BenchmarkBTree_ConcurrentRangeSearches(b *testing.B) {
 	b.ResetTimer()
 
 	b.RunParallel(func(pb *testing.PB) {
-		tid := primitives.NewTransactionID()
+
 		i := 0
 		for pb.Next() {
 			startIdx := i % (numEntries - 100)
@@ -591,7 +584,7 @@ func BenchmarkBTree_ConcurrentRangeSearches(b *testing.B) {
 
 			startKey := types.NewIntField(int64(startIdx))
 			endKey := types.NewIntField(int64(endIdx))
-			bt.RangeSearch(tid, startKey, endKey)
+			bt.RangeSearch(startKey, endKey)
 			i++
 		}
 	})

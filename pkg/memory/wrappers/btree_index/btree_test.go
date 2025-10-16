@@ -312,8 +312,7 @@ func TestBTree_Delete_Single(t *testing.T) {
 		t.Fatalf("Failed to insert entry: %v", err)
 	}
 
-	tid := primitives.NewTransactionID()
-	err = bt.Delete(tid, key, rid)
+	err = bt.Delete(key, rid)
 	if err != nil {
 		t.Fatalf("Failed to delete entry: %v", err)
 	}
@@ -348,11 +347,11 @@ func TestBTree_Delete_Multiple(t *testing.T) {
 	}
 
 	// Delete every other entry
-	tid := primitives.NewTransactionID()
+
 	for i := 0; i < numEntries; i += 2 {
 		key := types.NewIntField(int64(i))
 		rid := tuple.NewTupleRecordID(pageID, i)
-		err := bt.Delete(tid, key, rid)
+		err := bt.Delete(key, rid)
 		if err != nil {
 			t.Fatalf("Failed to delete entry %d: %v", i, err)
 		}
@@ -394,8 +393,7 @@ func TestBTree_Delete_NonExistent(t *testing.T) {
 	pageID := heap.NewHeapPageID(1, 0)
 	rid := tuple.NewTupleRecordID(pageID, 0)
 
-	tid := primitives.NewTransactionID()
-	err := bt.Delete(tid, key, rid)
+	err := bt.Delete(key, rid)
 	if err == nil {
 		t.Error("Expected error when deleting non-existent entry, but got none")
 	}
@@ -410,8 +408,7 @@ func TestBTree_Delete_TypeMismatch(t *testing.T) {
 	pageID := heap.NewHeapPageID(1, 0)
 	rid := tuple.NewTupleRecordID(pageID, 0)
 
-	tid := primitives.NewTransactionID()
-	err := bt.Delete(tid, key, rid)
+	err := bt.Delete(key, rid)
 	if err == nil {
 		t.Error("Expected error when deleting with wrong key type, but got none")
 	}
@@ -516,11 +513,11 @@ func TestBTree_RangeSearch_Basic(t *testing.T) {
 	}
 
 	// Range search [20, 30]
-	tid := primitives.NewTransactionID()
+
 	startKey := types.NewIntField(20)
 	endKey := types.NewIntField(30)
 
-	results, err := bt.RangeSearch(tid, startKey, endKey)
+	results, err := bt.RangeSearch(startKey, endKey)
 	if err != nil {
 		t.Fatalf("Failed to perform range search: %v", err)
 	}
@@ -545,10 +542,9 @@ func TestBTree_RangeSearch_SingleElement(t *testing.T) {
 		bt.Insert(key, rid)
 	}
 
-	tid := primitives.NewTransactionID()
 	key := types.NewIntField(5)
 
-	results, err := bt.RangeSearch(tid, key, key)
+	results, err := bt.RangeSearch(key, key)
 	if err != nil {
 		t.Fatalf("Failed to perform range search: %v", err)
 	}
@@ -563,11 +559,10 @@ func TestBTree_RangeSearch_EmptyTree(t *testing.T) {
 	bt, _, _, _, cleanup := setupTestBTree(t, types.IntType)
 	defer cleanup()
 
-	tid := primitives.NewTransactionID()
 	startKey := types.NewIntField(10)
 	endKey := types.NewIntField(20)
 
-	results, err := bt.RangeSearch(tid, startKey, endKey)
+	results, err := bt.RangeSearch(startKey, endKey)
 	if err != nil {
 		t.Fatalf("Failed to perform range search on empty tree: %v", err)
 	}
@@ -595,11 +590,10 @@ func TestBTree_RangeSearch_MultiplePages(t *testing.T) {
 		}
 	}
 
-	tid := primitives.NewTransactionID()
 	startKey := types.NewIntField(btree.MaxEntriesPerPage - 10)
 	endKey := types.NewIntField(btree.MaxEntriesPerPage*2 + 10)
 
-	results, err := bt.RangeSearch(tid, startKey, endKey)
+	results, err := bt.RangeSearch(startKey, endKey)
 	if err != nil {
 		t.Fatalf("Failed to perform range search: %v", err)
 	}
@@ -616,11 +610,10 @@ func TestBTree_RangeSearch_TypeMismatch(t *testing.T) {
 	bt, _, _, _, cleanup := setupTestBTree(t, types.IntType)
 	defer cleanup()
 
-	tid := primitives.NewTransactionID()
 	startKey := types.NewStringField("invalid", 128)
 	endKey := types.NewStringField("invalid2", 128)
 
-	_, err := bt.RangeSearch(tid, startKey, endKey)
+	_, err := bt.RangeSearch(startKey, endKey)
 	if err == nil {
 		t.Error("Expected error when range searching with wrong key type, but got none")
 	}
@@ -667,11 +660,11 @@ func TestBTree_StringKeys(t *testing.T) {
 	}
 
 	// Range search
-	tid := primitives.NewTransactionID()
+
 	startKey := types.NewStringField("banana", 128)
 	endKey := types.NewStringField("date", 128)
 
-	results, err := bt.RangeSearch(tid, startKey, endKey)
+	results, err := bt.RangeSearch(startKey, endKey)
 	if err != nil {
 		t.Fatalf("Failed to perform range search: %v", err)
 	}
@@ -712,11 +705,11 @@ func TestBTree_Stress_InsertDelete(t *testing.T) {
 	}
 
 	// Delete half of them
-	tid := primitives.NewTransactionID()
+
 	for i := 0; i < numOperations; i += 2 {
 		key := types.NewIntField(int64(i))
 		rid := tuple.NewTupleRecordID(pageID, i)
-		err := bt.Delete(tid, key, rid)
+		err := bt.Delete(key, rid)
 		if err != nil {
 			t.Fatalf("Failed to delete entry %d: %v", i, err)
 		}
@@ -808,19 +801,17 @@ func TestBTree_EdgeCase_Boundaries(t *testing.T) {
 		}
 	}
 
-	tid := primitives.NewTransactionID()
-
 	// Delete entries at the beginning of each page
 	key1 := types.NewIntField(0)
 	rid1 := tuple.NewTupleRecordID(pageID, 0)
-	err := bt.Delete(tid, key1, rid1)
+	err := bt.Delete(key1, rid1)
 	if err != nil {
 		t.Fatalf("Failed to delete first entry: %v", err)
 	}
 
 	key2 := types.NewIntField(int64(btree.MaxEntriesPerPage))
 	rid2 := tuple.NewTupleRecordID(pageID, btree.MaxEntriesPerPage)
-	err = bt.Delete(tid, key2, rid2)
+	err = bt.Delete(key2, rid2)
 	if err != nil {
 		t.Fatalf("Failed to delete entry at page boundary: %v", err)
 	}
@@ -935,11 +926,11 @@ func TestBTree_TreeStructure_MultipleSplits(t *testing.T) {
 	}
 
 	// Verify range search works correctly across the tree
-	tid := primitives.NewTransactionID()
+
 	startKey := types.NewIntField(100)
 	endKey := types.NewIntField(200)
 
-	results, err := bt.RangeSearch(tid, startKey, endKey)
+	results, err := bt.RangeSearch(startKey, endKey)
 	if err != nil {
 		t.Fatalf("Failed to perform range search after splits: %v", err)
 	}
@@ -968,11 +959,11 @@ func TestBTree_EmptyRoot(t *testing.T) {
 	}
 
 	// Range search in empty tree
-	tid := primitives.NewTransactionID()
+
 	startKey := types.NewIntField(10)
 	endKey := types.NewIntField(20)
 
-	rangeResults, err := bt.RangeSearch(tid, startKey, endKey)
+	rangeResults, err := bt.RangeSearch(startKey, endKey)
 	if err != nil {
 		t.Fatalf("Failed to range search in empty tree: %v", err)
 	}
