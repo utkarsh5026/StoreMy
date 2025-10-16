@@ -62,18 +62,18 @@ type Index interface {
 	// Insert adds a key-value pair to the index
 	// key: The indexed field value
 	// rid: The location of the tuple containing this key
-	Insert(tid TID, key Field, rid RecID) error
+	Insert(key Field, rid RecID) error
 
 	// Delete removes a key-value pair from the index
-	Delete(tid TID, key Field, rid RecID) error
+	Delete(key Field, rid RecID) error
 
 	// Search finds all tuple locations for a given key
 	// Returns empty slice if key not found
-	Search(tid TID, key Field) ([]RecID, error)
+	Search(key Field) ([]RecID, error)
 
 	// RangeSearch finds all tuples where key is in [startKey, endKey]
 	// Used for range queries like: WHERE age >= 18 AND age <= 65
-	RangeSearch(tid TID, startKey, endKey Field) ([]RecID, error)
+	RangeSearch(startKey, endKey Field) ([]RecID, error)
 
 	// GetIndexType returns the type of this index
 	GetIndexType() IndexType
@@ -100,13 +100,4 @@ type IndexFile interface {
 
 	// NumPages returns the number of pages in the index file
 	NumPages() int
-}
-
-// IndexMetadata stores information about an index
-type IndexMetadata struct {
-	IndexName, FilePath, FieldName string
-	IndexID, TableID, FieldIndex   int
-	KeyType                        types.Type
-	IndexType                      IndexType
-	IsUnique, IsPrimary            bool
 }
