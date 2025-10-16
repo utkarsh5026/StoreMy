@@ -151,6 +151,15 @@ func (hi *HashIndex) GetKeyType() types.Type {
 	return hi.keyType
 }
 
+// Close releases all resources held by the index and unregister it from PageStore.
+// Should be called when the index is no longer needed to prevent resource leaks.
+// Returns:
+//   - error: Returns error if file close fails
+func (hi *HashIndex) Close() error {
+	hi.pageStore.UnregisterDbFile(hi.indexID)
+	return hi.file.Close()
+}
+
 // hashKey computes the hash of a key and returns the bucket number.
 //
 // Parameters:
@@ -229,6 +238,8 @@ func (hi *HashIndex) traverseOverflowChain(start HashPage, f func(HashPage) erro
 	return nil
 }
 
+// getPageFromStore retrieves a hash page from the PageStore with proper type validation.
+// This method centralizes all page access to ensure consistent locking and caching behavior.
 func (hi *HashIndex) getPageFromStore(pid *hash.HashPageID) (HashPage, error) {
 	page, err := hi.pageStore.GetPage(hi.tx, hi.file, pid, transaction.ReadWrite)
 	if err != nil {
