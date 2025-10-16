@@ -22,14 +22,14 @@ import (
 
 // mockIndex implements the index.Index interface for testing
 type mockIndex struct {
-	indexType     index.IndexType
-	keyType       types.Type
-	entries       map[string][]*tuple.TupleRecordID // key -> list of RIDs
-	searchError   error
-	rangeError    error
-	insertError   error
-	deleteError   error
-	isClosed      bool
+	indexType   index.IndexType
+	keyType     types.Type
+	entries     map[string][]*tuple.TupleRecordID // key -> list of RIDs
+	searchError error
+	rangeError  error
+	insertError error
+	deleteError error
+	isClosed    bool
 }
 
 func newMockIndex(indexType index.IndexType, keyType types.Type) *mockIndex {
@@ -40,7 +40,7 @@ func newMockIndex(indexType index.IndexType, keyType types.Type) *mockIndex {
 	}
 }
 
-func (m *mockIndex) Insert(tid index.TID, key types.Field, rid index.RecID) error {
+func (m *mockIndex) Insert(key types.Field, rid index.RecID) error {
 	if m.insertError != nil {
 		return m.insertError
 	}
@@ -49,7 +49,7 @@ func (m *mockIndex) Insert(tid index.TID, key types.Field, rid index.RecID) erro
 	return nil
 }
 
-func (m *mockIndex) Delete(tid index.TID, key types.Field, rid index.RecID) error {
+func (m *mockIndex) Delete(key types.Field, rid index.RecID) error {
 	if m.deleteError != nil {
 		return m.deleteError
 	}
@@ -64,7 +64,7 @@ func (m *mockIndex) Delete(tid index.TID, key types.Field, rid index.RecID) erro
 	return nil
 }
 
-func (m *mockIndex) Search(tid index.TID, key types.Field) ([]index.RecID, error) {
+func (m *mockIndex) Search(key types.Field) ([]index.RecID, error) {
 	if m.searchError != nil {
 		return nil, m.searchError
 	}
@@ -72,7 +72,7 @@ func (m *mockIndex) Search(tid index.TID, key types.Field) ([]index.RecID, error
 	return m.entries[keyStr], nil
 }
 
-func (m *mockIndex) RangeSearch(tid index.TID, startKey, endKey types.Field) ([]index.RecID, error) {
+func (m *mockIndex) RangeSearch(startKey, endKey types.Field) ([]index.RecID, error) {
 	if m.rangeError != nil {
 		return nil, m.rangeError
 	}
@@ -417,7 +417,7 @@ func TestIndexEqualityScan_SingleMatch(t *testing.T) {
 	// Add entries to the mock index
 	for _, tup := range tuples {
 		idField, _ := tup.GetField(0)
-		idx.Insert(tx.ID, idField, tup.RecordID)
+		idx.Insert(idField, tup.RecordID)
 	}
 
 	// Search for id = 2
@@ -487,7 +487,7 @@ func TestIndexEqualityScan_MultipleMatches(t *testing.T) {
 	// Add entries to the mock index
 	for _, tup := range tuples {
 		idField, _ := tup.GetField(0)
-		idx.Insert(tx.ID, idField, tup.RecordID)
+		idx.Insert(idField, tup.RecordID)
 	}
 
 	// Search for id = 5 (should return 3 tuples)
@@ -552,7 +552,7 @@ func TestIndexEqualityScan_NoMatches(t *testing.T) {
 	// Add entries to the mock index
 	for _, tup := range tuples {
 		idField, _ := tup.GetField(0)
-		idx.Insert(tx.ID, idField, tup.RecordID)
+		idx.Insert(idField, tup.RecordID)
 	}
 
 	// Search for id = 99 (no matches)
@@ -601,7 +601,7 @@ func TestIndexRangeScan_MultipleMatches(t *testing.T) {
 	// Add entries to the mock index
 	for _, tup := range tuples {
 		idField, _ := tup.GetField(0)
-		idx.Insert(tx.ID, idField, tup.RecordID)
+		idx.Insert(idField, tup.RecordID)
 	}
 
 	// Range search: 3 <= id <= 7 (should return Bob, Charlie, David)
@@ -668,7 +668,7 @@ func TestIndexRangeScan_NoMatches(t *testing.T) {
 	// Add entries to the mock index
 	for _, tup := range tuples {
 		idField, _ := tup.GetField(0)
-		idx.Insert(tx.ID, idField, tup.RecordID)
+		idx.Insert(idField, tup.RecordID)
 	}
 
 	// Range search: 10 <= id <= 20 (no matches)
@@ -712,7 +712,7 @@ func TestIndexRangeScan_AllMatch(t *testing.T) {
 	// Add entries to the mock index
 	for _, tup := range tuples {
 		idField, _ := tup.GetField(0)
-		idx.Insert(tx.ID, idField, tup.RecordID)
+		idx.Insert(idField, tup.RecordID)
 	}
 
 	// Range search: 1 <= id <= 10 (all match)
@@ -852,7 +852,7 @@ func TestIndexScan_OpenClose(t *testing.T) {
 
 	for _, tup := range tuples {
 		idField, _ := tup.GetField(0)
-		idx.Insert(tx.ID, idField, tup.RecordID)
+		idx.Insert(idField, tup.RecordID)
 	}
 
 	searchKey := types.NewIntField(1)
@@ -896,7 +896,7 @@ func TestIndexScan_Rewind(t *testing.T) {
 
 	for _, tup := range tuples {
 		idField, _ := tup.GetField(0)
-		idx.Insert(tx.ID, idField, tup.RecordID)
+		idx.Insert(idField, tup.RecordID)
 	}
 
 	searchKey := types.NewIntField(5)
@@ -1052,7 +1052,7 @@ func TestIndexScan_MultipleOpens(t *testing.T) {
 
 	for _, tup := range tuples {
 		idField, _ := tup.GetField(0)
-		idx.Insert(tx.ID, idField, tup.RecordID)
+		idx.Insert(idField, tup.RecordID)
 	}
 
 	searchKey := types.NewIntField(1)

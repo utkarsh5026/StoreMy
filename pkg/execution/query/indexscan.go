@@ -155,14 +155,14 @@ func (is *IndexScan) Open() error {
 	switch is.scanType {
 	case EqualityScan:
 		// Use index's Search method for exact match
-		rids, err = is.idx.Search(is.tx.ID, is.searchKey)
+		rids, err = is.idx.Search(is.searchKey)
 		if err != nil {
 			return fmt.Errorf("index equality search failed: %w", err)
 		}
 
 	case RangeScan:
 		// Use index's RangeSearch method for range queries
-		rids, err = is.idx.RangeSearch(is.tx.ID, is.startKey, is.endKey)
+		rids, err = is.idx.RangeSearch(is.startKey, is.endKey)
 		if err != nil {
 			return fmt.Errorf("index range search failed: %w", err)
 		}
