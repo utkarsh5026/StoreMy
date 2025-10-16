@@ -177,9 +177,9 @@ func (p *CreateIndexPlan) populateIndex(
 		}
 		defer hashFile.Close()
 
-		hashIndex := hashindex.NewHashIndex(indexID, keyType, hashFile, p.ctx.PageStore())
+		hashIndex := hashindex.NewHashIndex(indexID, keyType, hashFile, p.ctx.PageStore(), p.tx)
 		insertFunc = func(key types.Field, rid *tuple.TupleRecordID) error {
-			return hashIndex.Insert(p.tx, key, rid)
+			return hashIndex.Insert(key, rid)
 		}
 
 	case index.BTreeIndex:
