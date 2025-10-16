@@ -2,9 +2,9 @@ package heap
 
 import (
 	"bytes"
+	"encoding/binary"
 	"fmt"
 	"io"
-	"math/bits"
 	"storemy/pkg/primitives"
 	"storemy/pkg/storage/page"
 	"storemy/pkg/tuple"
@@ -13,30 +13,48 @@ import (
 )
 
 const (
-	// BitsPerByte is the number of bits in a byte (8)
-	BitsPerByte = 8
+	// SlotPointerSize is the size of each slot pointer (4 bytes: 2 for offset, 2 for length)
+	SlotPointerSize = 4
+	// MaxTupleSize is the maximum size a tuple can be (limited by uint16)
+	MaxTupleSize = 65535
 )
 
+// SlotPointer represents a pointer to a tuple within a page (PostgreSQL-style)
+// Each slot has an offset (where tuple starts) and length (how long it is)
+// If offset is 0, the slot is considered empty/deleted
+type SlotPointer struct {
+	Offset uint16 // Offset from start of page (0 = empty slot)
+	Length uint16 // Length of tuple data in bytes
+}
+
 // HeapPage represents a single page in a heap file and implements the page.Page interface.
-// It uses a slotted page structure with a bitmap header to track occupied tuple slots.
+// It uses a PostgreSQL-style slotted page structure with pointer array to track tuples.
 //
-// Page Layout:
-//   - Header (variable size): Bitmap tracking which slots contain tuples (1 bit per slot)
-//   - Tuple data (remainder): Fixed-size slots for tuples, some may be empty
-//   - Padding: Zero-filled bytes to reach PageSize
+// Page Layout (inspired by PostgreSQL):
+//   - Slot Pointer Array: Array of (offset, length) pairs, one per slot (grows from start)
+//   - Free Space: Available space in the middle
+//   - Tuple Data: Actual tuple data (grows from end, backward)
+//
+// Benefits:
+//   - Stable RecordIDs even after page compaction
+//   - Variable-length tuple support
+//   - Efficient space reclamation
+//   - Better update performance (can reuse slots)
 type HeapPage struct {
-	pageID          *HeapPageID
-	tupleDesc       *tuple.TupleDescription
-	tuples          []*tuple.Tuple
-	numSlots        int
-	dirtier         *primitives.TransactionID
-	header, oldData []byte
-	mutex           sync.RWMutex
+	pageID       *HeapPageID
+	tupleDesc    *tuple.TupleDescription
+	tuples       []*tuple.Tuple // In-memory tuple cache (indexed by slot number)
+	slotPointers []SlotPointer  // Pointer array (offset, length) for each slot
+	numSlots     int            // Maximum number of slots
+	freeSpacePtr uint16         // Points to start of free space
+	dirtier      *primitives.TransactionID
+	oldData      []byte // Before-image for rollback
+	mutex        sync.RWMutex
 }
 
 // NewHeapPage creates a new HeapPage by deserializing raw page data.
 // It calculates the optimal number of slots based on tuple size and initializes
-// the header bitmap and tuple array from the provided data.
+// the slot pointer array and tuple array from the provided data.
 func NewHeapPage(pid *HeapPageID, data []byte, td *tuple.TupleDescription) (*HeapPage, error) {
 	if len(data) != page.PageSize {
 		return nil, fmt.Errorf("invalid page data size: expected %d, got %d", page.PageSize, len(data))
@@ -49,9 +67,9 @@ func NewHeapPage(pid *HeapPageID, data []byte, td *tuple.TupleDescription) (*Hea
 	}
 
 	hp.numSlots = hp.getNumTuples()
-	headerSize := hp.getHeaderSize()
-	hp.header = make([]byte, headerSize)
+	hp.slotPointers = make([]SlotPointer, hp.numSlots)
 	hp.tuples = make([]*tuple.Tuple, hp.numSlots)
+	hp.freeSpacePtr = uint16(hp.getHeaderSize())
 
 	if err := hp.parsePageData(data); err != nil {
 		return nil, err
@@ -73,20 +91,12 @@ func (hp *HeapPage) GetNumEmptySlots() int {
 }
 
 // GetID returns the unique page identifier for this heap page.
-// Implements the page.Page interface.
-//
-// Returns:
-//   - primitives.PageID: The HeapPageID cast to PageID interface
 func (hp *HeapPage) GetID() primitives.PageID {
 	return hp.pageID
 }
 
 // IsDirty returns the transaction that last modified this page.
 // A nil return indicates the page is clean (not modified in current transaction).
-// Implements the page.Page interface.
-//
-// Returns:
-//   - *primitives.TransactionID: Transaction that dirtied the page, or nil if clean
 func (hp *HeapPage) IsDirty() *primitives.TransactionID {
 	hp.mutex.RLock()
 	defer hp.mutex.RUnlock()
@@ -107,38 +117,41 @@ func (hp *HeapPage) MarkDirty(dirty bool, tid *primitives.TransactionID) {
 }
 
 // GetPageData serializes the entire page into a byte array suitable for disk storage.
-// The returned data includes the header bitmap, all tuple data (including empty slots),
-// and padding to reach page.PageSize.
+// The returned data includes the slot pointer array, tuple data, and padding to reach page.PageSize.
+//
+// Layout:
+//
+//	[SlotPointer0][SlotPointer1]...[SlotPointerN][FreeSpace][...TupleData...]
 func (hp *HeapPage) GetPageData() []byte {
 	hp.mutex.RLock()
 	defer hp.mutex.RUnlock()
-	buffer := bytes.NewBuffer(make([]byte, 0, page.PageSize))
 
-	buffer.Write(hp.header)
-	tupleSize := hp.tupleDesc.GetSize()
-	emptySlot := make([]byte, tupleSize)
+	pageData := make([]byte, page.PageSize)
 
 	for i := 0; i < hp.numSlots; i++ {
-		if hp.tuples[i] == nil {
-			buffer.Write(emptySlot)
-			continue
+		offset := i * SlotPointerSize
+		binary.LittleEndian.PutUint16(pageData[offset:], hp.slotPointers[i].Offset)
+		binary.LittleEndian.PutUint16(pageData[offset+2:], hp.slotPointers[i].Length)
+	}
+
+	for i := 0; i < hp.numSlots; i++ {
+		if hp.slotPointers[i].Offset == 0 || hp.tuples[i] == nil {
+			continue // Empty slot
 		}
+
+		tupleOffset := hp.slotPointers[i].Offset
+		buffer := bytes.NewBuffer(pageData[tupleOffset:tupleOffset])
 
 		for j := 0; j < hp.tupleDesc.NumFields(); j++ {
 			field, err := hp.tuples[i].GetField(j)
 			if err != nil {
-				buffer.Write(emptySlot)
-				break
+				continue
 			}
 			field.Serialize(buffer)
 		}
 	}
 
-	if buffer.Len() < page.PageSize {
-		buffer.Write(make([]byte, page.PageSize-buffer.Len()))
-	}
-
-	return buffer.Bytes()
+	return pageData
 }
 
 // GetBeforeImage returns a page containing the state before the current transaction's modifications.
@@ -163,6 +176,7 @@ func (hp *HeapPage) SetBeforeImage() {
 
 // AddTuple inserts a tuple into the first available empty slot on this page.
 // The tuple's RecordID is set to identify its location on this page.
+// Tuples are allocated from the end of the page, growing backward toward the pointer array.
 //
 // Thread-safe: Uses write lock for concurrent access.
 //
@@ -175,7 +189,7 @@ func (hp *HeapPage) SetBeforeImage() {
 // Errors:
 //   - Schema mismatch between tuple and page
 //   - No empty slots available
-//   - Internal error finding empty slot
+//   - Not enough contiguous free space
 func (hp *HeapPage) AddTuple(t *tuple.Tuple) error {
 	hp.mutex.Lock()
 	defer hp.mutex.Unlock()
@@ -184,23 +198,36 @@ func (hp *HeapPage) AddTuple(t *tuple.Tuple) error {
 		return fmt.Errorf("tuple schema does not match page schema")
 	}
 
-	if hp.getNumEmptySlots() == 0 {
+	slotIndex := hp.findFirstEmptySlot()
+	if slotIndex == -1 {
+		return fmt.Errorf("no empty slot available")
+	}
+
+	tupleSize := hp.tupleDesc.GetSize()
+	if tupleSize > MaxTupleSize {
+		return fmt.Errorf("tuple size %d exceeds maximum %d", tupleSize, MaxTupleSize)
+	}
+
+	if !hp.hasSpaceForTuple(uint16(tupleSize)) {
 		return fmt.Errorf("no space left on this page")
 	}
 
-	slotIndex := hp.findFirstEmptySlot()
-	if slotIndex == -1 {
-		return fmt.Errorf("no empty slot found")
+	newTupleOffset := hp.freeSpacePtr
+	hp.freeSpacePtr += uint16(tupleSize)
+
+	hp.slotPointers[slotIndex] = SlotPointer{
+		Offset: newTupleOffset,
+		Length: uint16(tupleSize),
 	}
 
-	hp.setSlot(slotIndex, true)
 	hp.tuples[slotIndex] = t
 	t.RecordID = tuple.NewTupleRecordID(hp.pageID, slotIndex)
 	return nil
 }
 
-// DeleteTuple removes a tuple from this page by clearing its slot in the header bitmap.
+// DeleteTuple removes a tuple from this page by invalidating its slot pointer.
 // The tuple's RecordID is set to nil after successful deletion.
+// Note: This does not reclaim space immediately. Call Compact() to defragment the page.
 func (hp *HeapPage) DeleteTuple(t *tuple.Tuple) error {
 	hp.mutex.Lock()
 	defer hp.mutex.Unlock()
@@ -223,7 +250,7 @@ func (hp *HeapPage) DeleteTuple(t *tuple.Tuple) error {
 		return fmt.Errorf("tuple slot %d is already empty", slotIndex)
 	}
 
-	hp.setSlot(slotIndex, false)
+	hp.slotPointers[slotIndex] = SlotPointer{Offset: 0, Length: 0}
 	hp.tuples[slotIndex] = nil
 	t.RecordID = nil
 	return nil
@@ -258,60 +285,77 @@ func (hp *HeapPage) GetTupleAt(idx int) (*tuple.Tuple, error) {
 }
 
 // getNumTuples calculates the maximum number of tuple slots that fit on a page.
-// This accounts for both tuple data size and the header bitmap overhead.
+// This accounts for both tuple data size and the slot pointer array overhead.
 //
-// Formula: floor((PageSize * BitsPerByte) / (tupleSize * BitsPerByte + 1))
-//   - The +1 accounts for the header bit required per tuple slot
+// Formula: floor((PageSize) / (tupleSize + SlotPointerSize))
+//   - Each slot needs SlotPointerSize bytes for the pointer + tupleSize bytes for data
 //
 // Returns:
 //   - int: Maximum number of tuple slots for this page's schema
 func (hp *HeapPage) getNumTuples() int {
 	tupleSize := hp.tupleDesc.GetSize()
-	return int((page.PageSize * BitsPerByte)) / int((tupleSize*BitsPerByte + 1))
+	return int(page.PageSize) / int(tupleSize+SlotPointerSize)
 }
 
-// getHeaderSize calculates the number of bytes needed for the header bitmap.
-// One bit is required per tuple slot to track occupancy.
-//
-// Formula: ceiling(numTuples / 8)
+// getHeaderSize calculates the number of bytes needed for the slot pointer array.
+// Each slot requires SlotPointerSize (4) bytes: 2 for offset, 2 for length.
 //
 // Returns:
-//   - int: Size in bytes of the header bitmap
+//   - int: Size in bytes of the slot pointer array
 func (hp *HeapPage) getHeaderSize() int {
-	numTuples := hp.getNumTuples()
-	headerBytes := numTuples / BitsPerByte
-	if numTuples%BitsPerByte != 0 {
-		headerBytes++
-	}
-	return headerBytes
+	return hp.getNumTuples() * SlotPointerSize
 }
 
-// parsePageData deserializes raw page bytes into the header bitmap and tuple array.
+// parsePageData deserializes raw page bytes into the slot pointer array and tuple array.
 // Called during page initialization to reconstruct page state from disk.
+//
+// Layout:
+//
+//	[SlotPointer0][SlotPointer1]...[SlotPointerN][FreeSpace][...TupleData...]
 func (hp *HeapPage) parsePageData(data []byte) error {
-	reader := bytes.NewReader(data)
+	maxOffset := uint16(0)
+	for i := 0; i < hp.numSlots; i++ {
+		offset := i * SlotPointerSize
+		if offset+SlotPointerSize > len(data) {
+			return fmt.Errorf("invalid page data: insufficient data for slot pointers")
+		}
 
-	if _, err := reader.Read(hp.header); err != nil {
-		return fmt.Errorf("failed to read header: %v", err)
+		hp.slotPointers[i].Offset = binary.LittleEndian.Uint16(data[offset:])
+		hp.slotPointers[i].Length = binary.LittleEndian.Uint16(data[offset+2:])
+
+		if hp.slotPointers[i].Offset != 0 {
+			endOffset := hp.slotPointers[i].Offset + hp.slotPointers[i].Length
+			if endOffset > maxOffset {
+				maxOffset = endOffset
+			}
+		}
 	}
 
-	tupleSize := hp.tupleDesc.GetSize()
+	hp.freeSpacePtr = max(maxOffset, uint16(hp.getHeaderSize()))
+
 	for i := 0; i < hp.numSlots; i++ {
-		if hp.isSlotUsed(i) {
-			t, err := readTuple(reader, hp.tupleDesc)
-			if err != nil {
-				return fmt.Errorf("failed to read tuple at slot %d: %v", i, err)
-			}
-
-			t.RecordID = tuple.NewTupleRecordID(hp.pageID, i)
-			hp.tuples[i] = t
-			continue
+		if hp.slotPointers[i].Offset == 0 {
+			continue // Empty slot
 		}
 
-		tup := emptyTuple(tupleSize)
-		if _, err := reader.Read(tup); err != nil {
-			return err
+		tupleOffset := hp.slotPointers[i].Offset
+		tupleLength := hp.slotPointers[i].Length
+
+		if int(tupleOffset+tupleLength) > len(data) {
+			return fmt.Errorf("invalid tuple at slot %d: offset %d + length %d exceeds page size",
+				i, tupleOffset, tupleLength)
 		}
+
+		tupleData := data[tupleOffset : tupleOffset+tupleLength]
+		reader := bytes.NewReader(tupleData)
+
+		t, err := readTuple(reader, hp.tupleDesc)
+		if err != nil {
+			return fmt.Errorf("failed to read tuple at slot %d: %v", i, err)
+		}
+
+		t.RecordID = tuple.NewTupleRecordID(hp.pageID, i)
+		hp.tuples[i] = t
 	}
 
 	return nil
@@ -320,52 +364,25 @@ func (hp *HeapPage) parsePageData(data []byte) error {
 // getNumEmptySlots internal implementation that counts unoccupied slots.
 // Must be called with lock already held (does not acquire lock).
 func (hp *HeapPage) getNumEmptySlots() int {
-	usedSlots := 0
-	for _, b := range hp.header {
-		usedSlots += bits.OnesCount8(b)
+	emptySlots := 0
+	for i := 0; i < hp.numSlots; i++ {
+		if hp.slotPointers[i].Offset == 0 {
+			emptySlots++
+		}
 	}
-	return hp.numSlots - usedSlots
+	return emptySlots
 }
 
-// isSlotUsed checks if a slot is marked as occupied in the header bitmap.
+// isSlotUsed checks if a slot is marked as occupied in the slot pointer array.
+// A slot is considered used if its offset is non-zero.
 func (hp *HeapPage) isSlotUsed(idx int) bool {
 	if idx < 0 || idx >= hp.numSlots {
 		return false
 	}
-
-	byteIndex := idx / BitsPerByte
-	bitOffset := idx % BitsPerByte
-
-	if byteIndex >= len(hp.header) {
-		return false
-	}
-
-	bitMask := byte(1 << bitOffset)
-	return (hp.header[byteIndex] & bitMask) != 0
+	return hp.slotPointers[idx].Offset != 0
 }
 
-// setSlot sets or clears a bit in the header bitmap to mark slot occupancy.
-func (hp *HeapPage) setSlot(idx int, used bool) {
-	if idx < 0 || idx >= hp.numSlots {
-		return
-	}
-
-	byteIndex := idx / 8
-	bitOffset := idx % 8
-
-	if byteIndex >= len(hp.header) {
-		return
-	}
-
-	mask := byte(1 << bitOffset)
-	if used {
-		hp.header[byteIndex] |= mask
-	} else {
-		hp.header[byteIndex] &^= mask
-	}
-}
-
-// findFirstEmptySlot scans the header bitmap for the first unoccupied slot.
+// findFirstEmptySlot scans the slot pointer array for the first unoccupied slot.
 func (hp *HeapPage) findFirstEmptySlot() int {
 	for i := 0; i < hp.numSlots; i++ {
 		if !hp.isSlotUsed(i) {
@@ -373,6 +390,12 @@ func (hp *HeapPage) findFirstEmptySlot() int {
 		}
 	}
 	return -1
+}
+
+// hasSpaceForTuple checks if there is enough contiguous free space for a tuple of the given size.
+// Free space is between freeSpacePtr and the end of the page.
+func (hp *HeapPage) hasSpaceForTuple(tupleSize uint16) bool {
+	return uint32(hp.freeSpacePtr)+uint32(tupleSize) <= uint32(page.PageSize)
 }
 
 // readTuple deserializes a single tuple from a byte stream.
@@ -406,8 +429,73 @@ func readTuple(reader io.Reader, td *tuple.TupleDescription) (*tuple.Tuple, erro
 	return t, nil
 }
 
-// emptyTuple creates a zero-filled byte slice representing an empty tuple slot.
-// Used when serializing pages to ensure consistent size for empty slots.
-func emptyTuple(size uint32) []byte {
-	return make([]byte, size)
+// Compact defragments the page by moving all tuples together to eliminate gaps.
+// This reclaims space left by deleted tuples, making it available for new insertions.
+//
+// Key benefits:
+//   - Reclaims fragmented free space after deletions
+//   - RecordIDs remain stable (slot numbers don't change, only internal offsets)
+//   - Indexes continue to work correctly
+//
+// Thread-safe: Uses write lock for concurrent access.
+//
+// Returns:
+//   - int: Number of bytes reclaimed by compaction
+func (hp *HeapPage) Compact() int {
+	hp.mutex.Lock()
+	defer hp.mutex.Unlock()
+
+	// Serialize all tuples to a temporary buffer
+	type tupleData struct {
+		slotIndex int
+		data      []byte
+	}
+
+	var activeTuples []tupleData
+	for i := 0; i < hp.numSlots; i++ {
+		if hp.slotPointers[i].Offset == 0 || hp.tuples[i] == nil {
+			continue // Skip empty slots
+		}
+
+		// Serialize tuple
+		buffer := &bytes.Buffer{}
+		for j := 0; j < hp.tupleDesc.NumFields(); j++ {
+			field, err := hp.tuples[i].GetField(j)
+			if err != nil {
+				continue
+			}
+			field.Serialize(buffer)
+		}
+
+		activeTuples = append(activeTuples, tupleData{
+			slotIndex: i,
+			data:      buffer.Bytes(),
+		})
+	}
+
+	// Calculate space before compaction
+	spaceBefore := int(page.PageSize) - int(hp.freeSpacePtr)
+
+	// Reset free space pointer to start right after header
+	hp.freeSpacePtr = uint16(hp.getHeaderSize())
+
+	// Repack tuples contiguously from the free space pointer
+	for _, td := range activeTuples {
+		tupleSize := uint16(len(td.data))
+
+		// Update slot pointer to new location
+		hp.slotPointers[td.slotIndex] = SlotPointer{
+			Offset: hp.freeSpacePtr,
+			Length: tupleSize,
+		}
+
+		// Advance free space pointer
+		hp.freeSpacePtr += tupleSize
+	}
+
+	// Calculate space after compaction
+	spaceAfter := int(page.PageSize) - int(hp.freeSpacePtr)
+	spaceReclaimed := spaceAfter - spaceBefore
+
+	return spaceReclaimed
 }
