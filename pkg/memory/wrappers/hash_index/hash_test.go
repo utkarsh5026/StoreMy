@@ -129,7 +129,7 @@ func setupTestHashIndex(t *testing.T, keyType types.Type, numBuckets int) (*Hash
 
 	// Create hash index
 	indexID := 1
-	hi := NewHashIndex(indexID, keyType, file, store)
+	hi := NewHashIndex(indexID, keyType, file, store, tx)
 
 	cleanup := func() {
 		if file != nil {
@@ -189,20 +189,20 @@ func TestNewHashIndex(t *testing.T) {
 
 // Test: Insert single entry
 func TestHashIndex_Insert_Single(t *testing.T) {
-	hi, _, ctx, _, cleanup := setupTestHashIndex(t, types.IntType, 8)
+	hi, _, _, _, cleanup := setupTestHashIndex(t, types.IntType, 8)
 	defer cleanup()
 
 	key := types.NewIntField(42)
 	pageID := heap.NewHeapPageID(1, 0)
 	rid := tuple.NewTupleRecordID(pageID, 0)
 
-	err := hi.Insert(ctx, key, rid)
+	err := hi.Insert(key, rid)
 	if err != nil {
 		t.Fatalf("Failed to insert entry: %v", err)
 	}
 
 	// Verify insertion by searching
-	results, err := hi.Search(ctx, key)
+	results, err := hi.Search(key)
 	if err != nil {
 		t.Fatalf("Failed to search for key: %v", err)
 	}
@@ -218,7 +218,7 @@ func TestHashIndex_Insert_Single(t *testing.T) {
 
 // Test: Insert multiple entries
 func TestHashIndex_Insert_Multiple(t *testing.T) {
-	hi, _, ctx, _, cleanup := setupTestHashIndex(t, types.IntType, 16)
+	hi, _, _, _, cleanup := setupTestHashIndex(t, types.IntType, 16)
 	defer cleanup()
 
 	numEntries := 100
@@ -229,7 +229,7 @@ func TestHashIndex_Insert_Multiple(t *testing.T) {
 		key := types.NewIntField(int64(i))
 		rid := tuple.NewTupleRecordID(pageID, i)
 
-		err := hi.Insert(ctx, key, rid)
+		err := hi.Insert(key, rid)
 		if err != nil {
 			t.Fatalf("Failed to insert entry %d: %v", i, err)
 		}
@@ -238,7 +238,7 @@ func TestHashIndex_Insert_Multiple(t *testing.T) {
 	// Verify all entries are present
 	for i := 0; i < numEntries; i++ {
 		key := types.NewIntField(int64(i))
-		results, err := hi.Search(ctx, key)
+		results, err := hi.Search(key)
 		if err != nil {
 			t.Fatalf("Failed to search for key %d: %v", i, err)
 		}
@@ -252,7 +252,7 @@ func TestHashIndex_Insert_Multiple(t *testing.T) {
 // Test: Insert with hash collisions (same bucket)
 func TestHashIndex_Insert_Collisions(t *testing.T) {
 	// Use small number of buckets to force collisions
-	hi, _, ctx, _, cleanup := setupTestHashIndex(t, types.IntType, 4)
+	hi, _, _, _, cleanup := setupTestHashIndex(t, types.IntType, 4)
 	defer cleanup()
 
 	pageID := heap.NewHeapPageID(1, 0)
@@ -265,7 +265,7 @@ func TestHashIndex_Insert_Collisions(t *testing.T) {
 		key := types.NewIntField(keyVal)
 		rid := tuple.NewTupleRecordID(pageID, i)
 
-		err := hi.Insert(ctx, key, rid)
+		err := hi.Insert(key, rid)
 		if err != nil {
 			t.Fatalf("Failed to insert key %d: %v", keyVal, err)
 		}
@@ -274,7 +274,7 @@ func TestHashIndex_Insert_Collisions(t *testing.T) {
 	// Verify all entries are retrievable
 	for _, keyVal := range keysToInsert {
 		key := types.NewIntField(keyVal)
-		results, err := hi.Search(ctx, key)
+		results, err := hi.Search(key)
 		if err != nil {
 			t.Fatalf("Failed to search for key %d: %v", keyVal, err)
 		}
@@ -287,7 +287,7 @@ func TestHashIndex_Insert_Collisions(t *testing.T) {
 
 // Test: Insert duplicate keys (hash index allows duplicates)
 func TestHashIndex_Insert_Duplicates(t *testing.T) {
-	hi, _, ctx, _, cleanup := setupTestHashIndex(t, types.IntType, 8)
+	hi, _, _, _, cleanup := setupTestHashIndex(t, types.IntType, 8)
 	defer cleanup()
 
 	key := types.NewIntField(42)
@@ -298,23 +298,23 @@ func TestHashIndex_Insert_Duplicates(t *testing.T) {
 	rid2 := tuple.NewTupleRecordID(pageID, 1)
 	rid3 := tuple.NewTupleRecordID(pageID, 2)
 
-	err := hi.Insert(ctx, key, rid1)
+	err := hi.Insert(key, rid1)
 	if err != nil {
 		t.Fatalf("Failed to insert first entry: %v", err)
 	}
 
-	err = hi.Insert(ctx, key, rid2)
+	err = hi.Insert(key, rid2)
 	if err != nil {
 		t.Fatalf("Failed to insert second entry: %v", err)
 	}
 
-	err = hi.Insert(ctx, key, rid3)
+	err = hi.Insert(key, rid3)
 	if err != nil {
 		t.Fatalf("Failed to insert third entry: %v", err)
 	}
 
 	// Search should return all three RIDs
-	results, err := hi.Search(ctx, key)
+	results, err := hi.Search(key)
 	if err != nil {
 		t.Fatalf("Failed to search for key: %v", err)
 	}
@@ -326,14 +326,14 @@ func TestHashIndex_Insert_Duplicates(t *testing.T) {
 
 // Test: Insert with type mismatch
 func TestHashIndex_Insert_TypeMismatch(t *testing.T) {
-	hi, _, ctx, _, cleanup := setupTestHashIndex(t, types.IntType, 8)
+	hi, _, _, _, cleanup := setupTestHashIndex(t, types.IntType, 8)
 	defer cleanup()
 
 	key := types.NewStringField("invalid", 128)
 	pageID := heap.NewHeapPageID(1, 0)
 	rid := tuple.NewTupleRecordID(pageID, 0)
 
-	err := hi.Insert(ctx, key, rid)
+	err := hi.Insert(key, rid)
 	if err == nil {
 		t.Error("Expected error when inserting key with wrong type, but got none")
 	}
@@ -342,7 +342,7 @@ func TestHashIndex_Insert_TypeMismatch(t *testing.T) {
 // Test: Insert triggering overflow pages
 func TestHashIndex_Insert_OverflowPages(t *testing.T) {
 	// Use very small number of buckets to force overflow
-	hi, _, ctx, _, cleanup := setupTestHashIndex(t, types.IntType, 2)
+	hi, _, _, _, cleanup := setupTestHashIndex(t, types.IntType, 2)
 	defer cleanup()
 
 	// Insert many entries to force overflow pages
@@ -353,7 +353,7 @@ func TestHashIndex_Insert_OverflowPages(t *testing.T) {
 		key := types.NewIntField(int64(i))
 		rid := tuple.NewTupleRecordID(pageID, i)
 
-		err := hi.Insert(ctx, key, rid)
+		err := hi.Insert(key, rid)
 		if err != nil {
 			t.Fatalf("Failed to insert entry %d: %v", i, err)
 		}
@@ -362,7 +362,7 @@ func TestHashIndex_Insert_OverflowPages(t *testing.T) {
 	// Verify all entries are still present after overflow page creation
 	for i := 0; i < numEntries; i++ {
 		key := types.NewIntField(int64(i))
-		results, err := hi.Search(ctx, key)
+		results, err := hi.Search(key)
 		if err != nil {
 			t.Fatalf("Failed to search for key %d: %v", i, err)
 		}
@@ -375,7 +375,7 @@ func TestHashIndex_Insert_OverflowPages(t *testing.T) {
 
 // Test: Delete single entry
 func TestHashIndex_Delete_Single(t *testing.T) {
-	hi, _, ctx, _, cleanup := setupTestHashIndex(t, types.IntType, 8)
+	hi, _, _, _, cleanup := setupTestHashIndex(t, types.IntType, 8)
 	defer cleanup()
 
 	key := types.NewIntField(42)
@@ -383,18 +383,18 @@ func TestHashIndex_Delete_Single(t *testing.T) {
 	rid := tuple.NewTupleRecordID(pageID, 0)
 
 	// Insert then delete
-	err := hi.Insert(ctx, key, rid)
+	err := hi.Insert(key, rid)
 	if err != nil {
 		t.Fatalf("Failed to insert entry: %v", err)
 	}
 
-	err = hi.Delete(ctx, key, rid)
+	err = hi.Delete(key, rid)
 	if err != nil {
 		t.Fatalf("Failed to delete entry: %v", err)
 	}
 
 	// Verify entry is gone
-	results, err := hi.Search(ctx, key)
+	results, err := hi.Search(key)
 	if err != nil {
 		t.Fatalf("Failed to search for key: %v", err)
 	}
@@ -406,7 +406,7 @@ func TestHashIndex_Delete_Single(t *testing.T) {
 
 // Test: Delete multiple entries
 func TestHashIndex_Delete_Multiple(t *testing.T) {
-	hi, _, ctx, _, cleanup := setupTestHashIndex(t, types.IntType, 16)
+	hi, _, _, _, cleanup := setupTestHashIndex(t, types.IntType, 16)
 	defer cleanup()
 
 	numEntries := 50
@@ -416,7 +416,7 @@ func TestHashIndex_Delete_Multiple(t *testing.T) {
 	for i := 0; i < numEntries; i++ {
 		key := types.NewIntField(int64(i))
 		rid := tuple.NewTupleRecordID(pageID, i)
-		err := hi.Insert(ctx, key, rid)
+		err := hi.Insert(key, rid)
 		if err != nil {
 			t.Fatalf("Failed to insert entry %d: %v", i, err)
 		}
@@ -426,7 +426,7 @@ func TestHashIndex_Delete_Multiple(t *testing.T) {
 	for i := 0; i < numEntries; i += 2 {
 		key := types.NewIntField(int64(i))
 		rid := tuple.NewTupleRecordID(pageID, i)
-		err := hi.Delete(ctx, key, rid)
+		err := hi.Delete(key, rid)
 		if err != nil {
 			t.Fatalf("Failed to delete entry %d: %v", i, err)
 		}
@@ -435,7 +435,7 @@ func TestHashIndex_Delete_Multiple(t *testing.T) {
 	// Verify deleted entries are gone
 	for i := 0; i < numEntries; i += 2 {
 		key := types.NewIntField(int64(i))
-		results, err := hi.Search(ctx, key)
+		results, err := hi.Search(key)
 		if err != nil {
 			t.Fatalf("Failed to search for key %d: %v", i, err)
 		}
@@ -448,7 +448,7 @@ func TestHashIndex_Delete_Multiple(t *testing.T) {
 	// Verify remaining entries are still present
 	for i := 1; i < numEntries; i += 2 {
 		key := types.NewIntField(int64(i))
-		results, err := hi.Search(ctx, key)
+		results, err := hi.Search(key)
 		if err != nil {
 			t.Fatalf("Failed to search for key %d: %v", i, err)
 		}
@@ -461,7 +461,7 @@ func TestHashIndex_Delete_Multiple(t *testing.T) {
 
 // Test: Delete one duplicate but keep others
 func TestHashIndex_Delete_OneDuplicate(t *testing.T) {
-	hi, _, ctx, _, cleanup := setupTestHashIndex(t, types.IntType, 8)
+	hi, _, _, _, cleanup := setupTestHashIndex(t, types.IntType, 8)
 	defer cleanup()
 
 	key := types.NewIntField(42)
@@ -472,18 +472,18 @@ func TestHashIndex_Delete_OneDuplicate(t *testing.T) {
 	rid3 := tuple.NewTupleRecordID(pageID, 2)
 
 	// Insert three entries with same key
-	hi.Insert(ctx, key, rid1)
-	hi.Insert(ctx, key, rid2)
-	hi.Insert(ctx, key, rid3)
+	hi.Insert(key, rid1)
+	hi.Insert(key, rid2)
+	hi.Insert(key, rid3)
 
 	// Delete only one entry
-	err := hi.Delete(ctx, key, rid2)
+	err := hi.Delete(key, rid2)
 	if err != nil {
 		t.Fatalf("Failed to delete entry: %v", err)
 	}
 
 	// Should still have 2 entries
-	results, err := hi.Search(ctx, key)
+	results, err := hi.Search(key)
 	if err != nil {
 		t.Fatalf("Failed to search for key: %v", err)
 	}
@@ -502,14 +502,14 @@ func TestHashIndex_Delete_OneDuplicate(t *testing.T) {
 
 // Test: Delete non-existent entry
 func TestHashIndex_Delete_NonExistent(t *testing.T) {
-	hi, _, ctx, _, cleanup := setupTestHashIndex(t, types.IntType, 8)
+	hi, _, _, _, cleanup := setupTestHashIndex(t, types.IntType, 8)
 	defer cleanup()
 
 	key := types.NewIntField(42)
 	pageID := heap.NewHeapPageID(1, 0)
 	rid := tuple.NewTupleRecordID(pageID, 0)
 
-	err := hi.Delete(ctx, key, rid)
+	err := hi.Delete(key, rid)
 	// Note: Current implementation returns nil when entry not found
 	// This is acceptable behavior for hash index (no-op delete)
 	// If you want strict error checking, uncomment below:
@@ -521,14 +521,14 @@ func TestHashIndex_Delete_NonExistent(t *testing.T) {
 
 // Test: Delete with type mismatch
 func TestHashIndex_Delete_TypeMismatch(t *testing.T) {
-	hi, _, ctx, _, cleanup := setupTestHashIndex(t, types.IntType, 8)
+	hi, _, _, _, cleanup := setupTestHashIndex(t, types.IntType, 8)
 	defer cleanup()
 
 	key := types.NewStringField("invalid", 128)
 	pageID := heap.NewHeapPageID(1, 0)
 	rid := tuple.NewTupleRecordID(pageID, 0)
 
-	err := hi.Delete(ctx, key, rid)
+	err := hi.Delete(key, rid)
 	if err == nil {
 		t.Error("Expected error when deleting with wrong key type, but got none")
 	}
@@ -536,7 +536,7 @@ func TestHashIndex_Delete_TypeMismatch(t *testing.T) {
 
 // Test: Delete from overflow chain
 func TestHashIndex_Delete_FromOverflow(t *testing.T) {
-	hi, _, ctx, _, cleanup := setupTestHashIndex(t, types.IntType, 2)
+	hi, _, _, _, cleanup := setupTestHashIndex(t, types.IntType, 2)
 	defer cleanup()
 
 	// Insert enough entries to create overflow pages
@@ -546,7 +546,7 @@ func TestHashIndex_Delete_FromOverflow(t *testing.T) {
 	for i := 0; i < numEntries; i++ {
 		key := types.NewIntField(int64(i))
 		rid := tuple.NewTupleRecordID(pageID, i)
-		hi.Insert(ctx, key, rid)
+		hi.Insert(key, rid)
 	}
 
 	// Delete some entries from different parts of overflow chain
@@ -554,7 +554,7 @@ func TestHashIndex_Delete_FromOverflow(t *testing.T) {
 	for _, idx := range deleteIndices {
 		key := types.NewIntField(int64(idx))
 		rid := tuple.NewTupleRecordID(pageID, idx)
-		err := hi.Delete(ctx, key, rid)
+		err := hi.Delete(key, rid)
 		if err != nil {
 			t.Fatalf("Failed to delete entry %d: %v", idx, err)
 		}
@@ -563,7 +563,7 @@ func TestHashIndex_Delete_FromOverflow(t *testing.T) {
 	// Verify deletions
 	for _, idx := range deleteIndices {
 		key := types.NewIntField(int64(idx))
-		results, err := hi.Search(ctx, key)
+		results, err := hi.Search(key)
 		if err != nil {
 			t.Fatalf("Failed to search after delete: %v", err)
 		}
@@ -575,19 +575,19 @@ func TestHashIndex_Delete_FromOverflow(t *testing.T) {
 
 // Test: Search for existing key
 func TestHashIndex_Search_Existing(t *testing.T) {
-	hi, _, ctx, _, cleanup := setupTestHashIndex(t, types.IntType, 8)
+	hi, _, _, _, cleanup := setupTestHashIndex(t, types.IntType, 8)
 	defer cleanup()
 
 	key := types.NewIntField(42)
 	pageID := heap.NewHeapPageID(1, 0)
 	rid := tuple.NewTupleRecordID(pageID, 0)
 
-	err := hi.Insert(ctx, key, rid)
+	err := hi.Insert(key, rid)
 	if err != nil {
 		t.Fatalf("Failed to insert entry: %v", err)
 	}
 
-	results, err := hi.Search(ctx, key)
+	results, err := hi.Search(key)
 	if err != nil {
 		t.Fatalf("Failed to search for key: %v", err)
 	}
@@ -603,7 +603,7 @@ func TestHashIndex_Search_Existing(t *testing.T) {
 
 // Test: Search for non-existent key
 func TestHashIndex_Search_NonExistent(t *testing.T) {
-	hi, _, ctx, _, cleanup := setupTestHashIndex(t, types.IntType, 8)
+	hi, _, _, _, cleanup := setupTestHashIndex(t, types.IntType, 8)
 	defer cleanup()
 
 	// Insert some entries
@@ -611,12 +611,12 @@ func TestHashIndex_Search_NonExistent(t *testing.T) {
 	for i := 0; i < 10; i++ {
 		key := types.NewIntField(int64(i * 10))
 		rid := tuple.NewTupleRecordID(pageID, i)
-		hi.Insert(ctx, key, rid)
+		hi.Insert(key, rid)
 	}
 
 	// Search for non-existent key
 	key := types.NewIntField(42)
-	results, err := hi.Search(ctx, key)
+	results, err := hi.Search(key)
 	if err != nil {
 		t.Fatalf("Failed to search for key: %v", err)
 	}
@@ -628,11 +628,11 @@ func TestHashIndex_Search_NonExistent(t *testing.T) {
 
 // Test: Search in empty index
 func TestHashIndex_Search_Empty(t *testing.T) {
-	hi, _, ctx, _, cleanup := setupTestHashIndex(t, types.IntType, 8)
+	hi, _, _, _, cleanup := setupTestHashIndex(t, types.IntType, 8)
 	defer cleanup()
 
 	key := types.NewIntField(42)
-	results, err := hi.Search(ctx, key)
+	results, err := hi.Search(key)
 	if err != nil {
 		t.Fatalf("Failed to search in empty index: %v", err)
 	}
@@ -644,11 +644,11 @@ func TestHashIndex_Search_Empty(t *testing.T) {
 
 // Test: Search with type mismatch
 func TestHashIndex_Search_TypeMismatch(t *testing.T) {
-	hi, _, ctx, _, cleanup := setupTestHashIndex(t, types.IntType, 8)
+	hi, _, _, _, cleanup := setupTestHashIndex(t, types.IntType, 8)
 	defer cleanup()
 
 	key := types.NewStringField("invalid", 128)
-	_, err := hi.Search(ctx, key)
+	_, err := hi.Search(key)
 	if err == nil {
 		t.Error("Expected error when searching with wrong key type, but got none")
 	}
@@ -656,7 +656,7 @@ func TestHashIndex_Search_TypeMismatch(t *testing.T) {
 
 // Test: Search in overflow chain
 func TestHashIndex_Search_InOverflow(t *testing.T) {
-	hi, _, ctx, _, cleanup := setupTestHashIndex(t, types.IntType, 2)
+	hi, _, _, _, cleanup := setupTestHashIndex(t, types.IntType, 2)
 	defer cleanup()
 
 	// Insert enough to create overflow pages
@@ -666,14 +666,14 @@ func TestHashIndex_Search_InOverflow(t *testing.T) {
 	for i := 0; i < numEntries; i++ {
 		key := types.NewIntField(int64(i))
 		rid := tuple.NewTupleRecordID(pageID, i)
-		hi.Insert(ctx, key, rid)
+		hi.Insert(key, rid)
 	}
 
 	// Search for keys throughout the overflow chain
 	testKeys := []int{0, 50, 100, 150, 199}
 	for _, keyVal := range testKeys {
 		key := types.NewIntField(int64(keyVal))
-		results, err := hi.Search(ctx, key)
+		results, err := hi.Search(key)
 		if err != nil {
 			t.Fatalf("Failed to search for key %d: %v", keyVal, err)
 		}
@@ -689,7 +689,7 @@ func TestHashIndex_Search_InOverflow(t *testing.T) {
 func TestHashIndex_RangeSearch_Basic(t *testing.T) {
 	t.Skip("RangeSearch requires pages to be flushed to disk - needs transaction commit flow")
 
-	hi, _, ctx, _, cleanup := setupTestHashIndex(t, types.IntType, 16)
+	hi, _, _, _, cleanup := setupTestHashIndex(t, types.IntType, 16)
 	defer cleanup()
 
 	pageID := heap.NewHeapPageID(1, 0)
@@ -698,7 +698,7 @@ func TestHashIndex_RangeSearch_Basic(t *testing.T) {
 	for i := 0; i < 100; i++ {
 		key := types.NewIntField(int64(i))
 		rid := tuple.NewTupleRecordID(pageID, i)
-		err := hi.Insert(ctx, key, rid)
+		err := hi.Insert(key, rid)
 		if err != nil {
 			t.Fatalf("Failed to insert entry %d: %v", i, err)
 		}
@@ -708,7 +708,7 @@ func TestHashIndex_RangeSearch_Basic(t *testing.T) {
 	startKey := types.NewIntField(20)
 	endKey := types.NewIntField(30)
 
-	results, err := hi.RangeSearch(ctx, startKey, endKey)
+	results, err := hi.RangeSearch(startKey, endKey)
 	if err != nil {
 		t.Fatalf("Failed to perform range search: %v", err)
 	}
@@ -724,7 +724,7 @@ func TestHashIndex_RangeSearch_Basic(t *testing.T) {
 func TestHashIndex_RangeSearch_SingleElement(t *testing.T) {
 	t.Skip("RangeSearch requires pages to be flushed to disk - needs transaction commit flow")
 
-	hi, _, ctx, _, cleanup := setupTestHashIndex(t, types.IntType, 8)
+	hi, _, _, _, cleanup := setupTestHashIndex(t, types.IntType, 8)
 	defer cleanup()
 
 	pageID := heap.NewHeapPageID(1, 0)
@@ -732,11 +732,11 @@ func TestHashIndex_RangeSearch_SingleElement(t *testing.T) {
 	for i := 0; i < 10; i++ {
 		key := types.NewIntField(int64(i))
 		rid := tuple.NewTupleRecordID(pageID, i)
-		hi.Insert(ctx, key, rid)
+		hi.Insert(key, rid)
 	}
 
 	key := types.NewIntField(5)
-	results, err := hi.RangeSearch(ctx, key, key)
+	results, err := hi.RangeSearch(key, key)
 	if err != nil {
 		t.Fatalf("Failed to perform range search: %v", err)
 	}
@@ -748,13 +748,13 @@ func TestHashIndex_RangeSearch_SingleElement(t *testing.T) {
 
 // Test: RangeSearch in empty index
 func TestHashIndex_RangeSearch_Empty(t *testing.T) {
-	hi, _, ctx, _, cleanup := setupTestHashIndex(t, types.IntType, 8)
+	hi, _, _, _, cleanup := setupTestHashIndex(t, types.IntType, 8)
 	defer cleanup()
 
 	startKey := types.NewIntField(10)
 	endKey := types.NewIntField(20)
 
-	results, err := hi.RangeSearch(ctx, startKey, endKey)
+	results, err := hi.RangeSearch(startKey, endKey)
 	if err != nil {
 		t.Fatalf("Failed to perform range search on empty index: %v", err)
 	}
@@ -766,13 +766,13 @@ func TestHashIndex_RangeSearch_Empty(t *testing.T) {
 
 // Test: RangeSearch with type mismatch
 func TestHashIndex_RangeSearch_TypeMismatch(t *testing.T) {
-	hi, _, ctx, _, cleanup := setupTestHashIndex(t, types.IntType, 8)
+	hi, _, _, _, cleanup := setupTestHashIndex(t, types.IntType, 8)
 	defer cleanup()
 
 	startKey := types.NewStringField("invalid", 128)
 	endKey := types.NewStringField("invalid2", 128)
 
-	_, err := hi.RangeSearch(ctx, startKey, endKey)
+	_, err := hi.RangeSearch(startKey, endKey)
 	if err == nil {
 		t.Error("Expected error when range searching with wrong key type, but got none")
 	}
@@ -782,7 +782,7 @@ func TestHashIndex_RangeSearch_TypeMismatch(t *testing.T) {
 func TestHashIndex_RangeSearch_Duplicates(t *testing.T) {
 	t.Skip("RangeSearch requires pages to be flushed to disk - needs transaction commit flow")
 
-	hi, _, ctx, _, cleanup := setupTestHashIndex(t, types.IntType, 8)
+	hi, _, _, _, cleanup := setupTestHashIndex(t, types.IntType, 8)
 	defer cleanup()
 
 	pageID := heap.NewHeapPageID(1, 0)
@@ -791,19 +791,19 @@ func TestHashIndex_RangeSearch_Duplicates(t *testing.T) {
 	for i := 0; i < 20; i++ {
 		key := types.NewIntField(int64(i))
 		rid := tuple.NewTupleRecordID(pageID, i)
-		hi.Insert(ctx, key, rid)
+		hi.Insert(key, rid)
 
 		// Add duplicate for keys 10-15
 		if i >= 10 && i <= 15 {
 			rid2 := tuple.NewTupleRecordID(pageID, i+1000)
-			hi.Insert(ctx, key, rid2)
+			hi.Insert(key, rid2)
 		}
 	}
 
 	startKey := types.NewIntField(10)
 	endKey := types.NewIntField(15)
 
-	results, err := hi.RangeSearch(ctx, startKey, endKey)
+	results, err := hi.RangeSearch(startKey, endKey)
 	if err != nil {
 		t.Fatalf("Failed to perform range search: %v", err)
 	}
@@ -817,7 +817,7 @@ func TestHashIndex_RangeSearch_Duplicates(t *testing.T) {
 
 // Test: String keys
 func TestHashIndex_StringKeys(t *testing.T) {
-	hi, _, ctx, _, cleanup := setupTestHashIndex(t, types.StringType, 8)
+	hi, _, _, _, cleanup := setupTestHashIndex(t, types.StringType, 8)
 	defer cleanup()
 
 	pageID := heap.NewHeapPageID(1, 0)
@@ -836,7 +836,7 @@ func TestHashIndex_StringKeys(t *testing.T) {
 	for _, data := range testData {
 		key := types.NewStringField(data.key, 128)
 		rid := tuple.NewTupleRecordID(pageID, data.idx)
-		err := hi.Insert(ctx, key, rid)
+		err := hi.Insert(key, rid)
 		if err != nil {
 			t.Fatalf("Failed to insert %s: %v", data.key, err)
 		}
@@ -845,7 +845,7 @@ func TestHashIndex_StringKeys(t *testing.T) {
 	// Search
 	for _, data := range testData {
 		key := types.NewStringField(data.key, 128)
-		results, err := hi.Search(ctx, key)
+		results, err := hi.Search(key)
 		if err != nil {
 			t.Fatalf("Failed to search for %s: %v", data.key, err)
 		}
@@ -859,13 +859,13 @@ func TestHashIndex_StringKeys(t *testing.T) {
 	// Range search
 	// startKey := types.NewStringField("banana", 128)
 	// endKey := types.NewStringField("date", 128)
-	// results, err := hi.RangeSearch(ctx, startKey, endKey)
+	// results, err := hi.RangeSearch(, startKey, endKey)
 	// Should get banana, cherry, date (3 entries)
 }
 
 // Test: Float keys
 func TestHashIndex_FloatKeys(t *testing.T) {
-	hi, _, ctx, _, cleanup := setupTestHashIndex(t, types.FloatType, 8)
+	hi, _, _, _, cleanup := setupTestHashIndex(t, types.FloatType, 8)
 	defer cleanup()
 
 	pageID := heap.NewHeapPageID(1, 0)
@@ -875,7 +875,7 @@ func TestHashIndex_FloatKeys(t *testing.T) {
 	for i, val := range testValues {
 		key := types.NewFloat64Field(val)
 		rid := tuple.NewTupleRecordID(pageID, i)
-		err := hi.Insert(ctx, key, rid)
+		err := hi.Insert(key, rid)
 		if err != nil {
 			t.Fatalf("Failed to insert %.2f: %v", val, err)
 		}
@@ -884,7 +884,7 @@ func TestHashIndex_FloatKeys(t *testing.T) {
 	// Search
 	for _, val := range testValues {
 		key := types.NewFloat64Field(val)
-		results, err := hi.Search(ctx, key)
+		results, err := hi.Search(key)
 		if err != nil {
 			t.Fatalf("Failed to search for %.2f: %v", val, err)
 		}
@@ -897,7 +897,7 @@ func TestHashIndex_FloatKeys(t *testing.T) {
 
 // Test: Bool keys
 func TestHashIndex_BoolKeys(t *testing.T) {
-	hi, _, ctx, _, cleanup := setupTestHashIndex(t, types.BoolType, 2)
+	hi, _, _, _, cleanup := setupTestHashIndex(t, types.BoolType, 2)
 	defer cleanup()
 
 	pageID := heap.NewHeapPageID(1, 0)
@@ -906,7 +906,7 @@ func TestHashIndex_BoolKeys(t *testing.T) {
 	for i := 0; i < 10; i++ {
 		key := types.NewBoolField(i%2 == 0)
 		rid := tuple.NewTupleRecordID(pageID, i)
-		err := hi.Insert(ctx, key, rid)
+		err := hi.Insert(key, rid)
 		if err != nil {
 			t.Fatalf("Failed to insert bool entry %d: %v", i, err)
 		}
@@ -914,7 +914,7 @@ func TestHashIndex_BoolKeys(t *testing.T) {
 
 	// Search for true
 	trueKey := types.NewBoolField(true)
-	trueResults, err := hi.Search(ctx, trueKey)
+	trueResults, err := hi.Search(trueKey)
 	if err != nil {
 		t.Fatalf("Failed to search for true: %v", err)
 	}
@@ -924,7 +924,7 @@ func TestHashIndex_BoolKeys(t *testing.T) {
 
 	// Search for false
 	falseKey := types.NewBoolField(false)
-	falseResults, err := hi.Search(ctx, falseKey)
+	falseResults, err := hi.Search(falseKey)
 	if err != nil {
 		t.Fatalf("Failed to search for false: %v", err)
 	}
@@ -936,7 +936,7 @@ func TestHashIndex_BoolKeys(t *testing.T) {
 // Test: Hash key distribution
 func TestHashIndex_HashDistribution(t *testing.T) {
 	numBuckets := 16
-	hi, _, ctx, _, cleanup := setupTestHashIndex(t, types.IntType, numBuckets)
+	hi, _, _, _, cleanup := setupTestHashIndex(t, types.IntType, numBuckets)
 	defer cleanup()
 
 	// Insert many entries
@@ -946,7 +946,7 @@ func TestHashIndex_HashDistribution(t *testing.T) {
 	for i := 0; i < numEntries; i++ {
 		key := types.NewIntField(int64(i))
 		rid := tuple.NewTupleRecordID(pageID, i)
-		err := hi.Insert(ctx, key, rid)
+		err := hi.Insert(key, rid)
 		if err != nil {
 			t.Fatalf("Failed to insert entry %d: %v", i, err)
 		}
@@ -982,7 +982,7 @@ func TestHashIndex_HashDistribution(t *testing.T) {
 
 // Test: Stress test with many insertions and deletions
 func TestHashIndex_Stress_InsertDelete(t *testing.T) {
-	hi, _, ctx, _, cleanup := setupTestHashIndex(t, types.IntType, 32)
+	hi, _, _, _, cleanup := setupTestHashIndex(t, types.IntType, 32)
 	defer cleanup()
 
 	numOperations := 500
@@ -992,7 +992,7 @@ func TestHashIndex_Stress_InsertDelete(t *testing.T) {
 	for i := 0; i < numOperations; i++ {
 		key := types.NewIntField(int64(i))
 		rid := tuple.NewTupleRecordID(pageID, i)
-		err := hi.Insert(ctx, key, rid)
+		err := hi.Insert(key, rid)
 		if err != nil {
 			t.Fatalf("Failed to insert entry %d: %v", i, err)
 		}
@@ -1002,7 +1002,7 @@ func TestHashIndex_Stress_InsertDelete(t *testing.T) {
 	for i := 0; i < numOperations; i += 2 {
 		key := types.NewIntField(int64(i))
 		rid := tuple.NewTupleRecordID(pageID, i)
-		err := hi.Delete(ctx, key, rid)
+		err := hi.Delete(key, rid)
 		if err != nil {
 			t.Fatalf("Failed to delete entry %d: %v", i, err)
 		}
@@ -1012,7 +1012,7 @@ func TestHashIndex_Stress_InsertDelete(t *testing.T) {
 	for i := 0; i < numOperations; i += 2 {
 		key := types.NewIntField(int64(i))
 		rid := tuple.NewTupleRecordID(pageID, i+10000)
-		err := hi.Insert(ctx, key, rid)
+		err := hi.Insert(key, rid)
 		if err != nil {
 			t.Fatalf("Failed to re-insert entry %d: %v", i, err)
 		}
@@ -1021,7 +1021,7 @@ func TestHashIndex_Stress_InsertDelete(t *testing.T) {
 	// Verify all entries are present
 	for i := 0; i < numOperations; i++ {
 		key := types.NewIntField(int64(i))
-		results, err := hi.Search(ctx, key)
+		results, err := hi.Search(key)
 		if err != nil {
 			t.Fatalf("Failed to search for key %d: %v", i, err)
 		}
@@ -1034,7 +1034,7 @@ func TestHashIndex_Stress_InsertDelete(t *testing.T) {
 
 // Test: Concurrent reads
 func TestHashIndex_Concurrent_Reads(t *testing.T) {
-	hi, _, ctx, _, cleanup := setupTestHashIndex(t, types.IntType, 32)
+	hi, _, _, _, cleanup := setupTestHashIndex(t, types.IntType, 32)
 	defer cleanup()
 
 	numEntries := 100
@@ -1044,7 +1044,7 @@ func TestHashIndex_Concurrent_Reads(t *testing.T) {
 	for i := 0; i < numEntries; i++ {
 		key := types.NewIntField(int64(i))
 		rid := tuple.NewTupleRecordID(pageID, i)
-		err := hi.Insert(ctx, key, rid)
+		err := hi.Insert(key, rid)
 		if err != nil {
 			t.Fatalf("Failed to insert entry %d: %v", i, err)
 		}
@@ -1061,7 +1061,7 @@ func TestHashIndex_Concurrent_Reads(t *testing.T) {
 
 			for i := 0; i < numEntries; i++ {
 				key := types.NewIntField(int64(i))
-				results, err := hi.Search(ctx, key)
+				results, err := hi.Search(key)
 				if err != nil {
 					t.Errorf("Goroutine %d: Failed to search for key %d: %v", goroutineID, i, err)
 					return
@@ -1115,7 +1115,7 @@ func TestHashIndex_ValidateKeyType(t *testing.T) {
 func TestHashIndex_OverflowChain_Safety(t *testing.T) {
 	// This test ensures we don't crash on very long overflow chains
 	// With 2 buckets to distribute load, but still create overflow chains
-	hi, _, ctx, _, cleanup := setupTestHashIndex(t, types.IntType, 2)
+	hi, _, _, _, cleanup := setupTestHashIndex(t, types.IntType, 2)
 	defer cleanup()
 
 	// Insert many entries to create long overflow chains
@@ -1125,7 +1125,7 @@ func TestHashIndex_OverflowChain_Safety(t *testing.T) {
 	for i := 0; i < numEntries; i++ {
 		key := types.NewIntField(int64(i))
 		rid := tuple.NewTupleRecordID(pageID, i)
-		err := hi.Insert(ctx, key, rid)
+		err := hi.Insert(key, rid)
 		if err != nil {
 			t.Fatalf("Failed to insert entry %d: %v", i, err)
 		}
@@ -1136,7 +1136,7 @@ func TestHashIndex_OverflowChain_Safety(t *testing.T) {
 	testIndices := []int{0, 1, 50, 51, 100, 101, 200, 201, 299}
 	for _, i := range testIndices {
 		key := types.NewIntField(int64(i))
-		results, err := hi.Search(ctx, key)
+		results, err := hi.Search(key)
 		if err != nil {
 			t.Fatalf("Failed to search in overflow chain for key %d: %v", i, err)
 		}

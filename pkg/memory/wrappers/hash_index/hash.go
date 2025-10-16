@@ -49,6 +49,7 @@ type HashFile = *hash.HashFile
 //   - Range queries are inefficient (O(n)) - scans all buckets
 type HashIndex struct {
 	indexID, numBuckets int
+	tx                  *transaction.TransactionContext
 	keyType             types.Type
 	file                *hash.HashFile    // I/O layer only
 	pageStore           *memory.PageStore // Page management layer
@@ -63,13 +64,14 @@ type HashIndex struct {
 //   - pageStore: PageStore for page lifecycle management
 //
 // Returns a configured HashIndex ready for insert/search operations.
-func NewHashIndex(indexID int, keyType types.Type, file *hash.HashFile, pageStore *memory.PageStore) *HashIndex {
+func NewHashIndex(indexID int, keyType types.Type, file *hash.HashFile, pageStore *memory.PageStore, tx *transaction.TransactionContext) *HashIndex {
 	return &HashIndex{
 		indexID:    indexID,
 		keyType:    keyType,
 		file:       file,
 		pageStore:  pageStore,
 		numBuckets: file.GetNumBuckets(),
+		tx:         tx,
 	}
 }
 
@@ -77,20 +79,19 @@ func NewHashIndex(indexID int, keyType types.Type, file *hash.HashFile, pageStor
 // Updates parent page with overflow pointer and marks both as dirty.
 //
 // Parameters:
-//   - ctx: Transaction context for page management
 //   - bucketNum: Bucket number for the new overflow page
 //   - parentPage: Page to link the new overflow page to
 //
 // Returns the newly created overflow page or error on failure.
-func (hi *HashIndex) createAndLinkOverflowPage(ctx *transaction.TransactionContext, bucketNum int, parentPage HashPage) (HashPage, error) {
+func (hi *HashIndex) createAndLinkOverflowPage(bucketNum int, parentPage HashPage) (HashPage, error) {
 	pageNum := hi.file.AllocatePageNum()
 	pageID := hash.NewHashPageID(hi.file.GetID(), pageNum)
 
 	overflowPage := hash.NewHashPage(pageID, bucketNum, hi.keyType)
-	overflowPage.MarkDirty(true, ctx.ID)
+	overflowPage.MarkDirty(true, hi.tx.ID)
 
 	parentPage.SetOverflowPage(overflowPage.GetPageNo())
-	parentPage.MarkDirty(true, ctx.ID)
+	parentPage.MarkDirty(true, hi.tx.ID)
 
 	return overflowPage, nil
 }
@@ -104,7 +105,7 @@ func (hi *HashIndex) createAndLinkOverflowPage(ctx *transaction.TransactionConte
 //   - p: Page containing the overflow pointer
 //
 // Returns the overflow page or error if pointer is invalid or read fails.
-func (hi *HashIndex) readOverflowPage(ctx *transaction.TransactionContext, p HashPage) (HashPage, error) {
+func (hi *HashIndex) readOverflowPage(p HashPage) (HashPage, error) {
 	overflowPageNum := p.GetOverflowPageNum()
 
 	if p.HasNoOverflowPage() {
@@ -117,17 +118,7 @@ func (hi *HashIndex) readOverflowPage(ctx *transaction.TransactionContext, p Has
 	}
 
 	overflowPageID := hash.NewHashPageID(hi.file.GetID(), overflowPageNum)
-	page, err := hi.pageStore.GetPage(ctx, hi.file, overflowPageID, transaction.ReadWrite)
-	if err != nil {
-		return nil, fmt.Errorf("failed to read overflow page %d: %w", overflowPageNum, err)
-	}
-
-	hashPage, ok := page.(*hash.HashPage)
-	if !ok {
-		return nil, fmt.Errorf("invalid page type: expected HashPage")
-	}
-
-	return hashPage, nil
+	return hi.getPageFromStore(overflowPageID)
 }
 
 // getBucketPage retrieves the primary bucket page for a given bucket number.
@@ -138,24 +129,14 @@ func (hi *HashIndex) readOverflowPage(ctx *transaction.TransactionContext, p Has
 //   - bucketNum: Bucket number (0 to numBuckets-1)
 //
 // Returns the bucket page or error on failure.
-func (hi *HashIndex) getBucketPageByNum(ctx *transaction.TransactionContext, bucketNum int) (HashPage, error) {
+func (hi *HashIndex) getBucketPageByNum(bucketNum int) (HashPage, error) {
 	pageNum, err := hi.file.GetBucketPageNum(bucketNum)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get bucket page number: %w", err)
 	}
 
 	pageID := hash.NewHashPageID(hi.file.GetID(), pageNum)
-	page, err := hi.pageStore.GetPage(ctx, hi.file, pageID, transaction.ReadWrite)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get bucket page: %w", err)
-	}
-
-	hashPage, ok := page.(*hash.HashPage)
-	if !ok {
-		return nil, fmt.Errorf("invalid page type: expected HashPage")
-	}
-
-	return hashPage, nil
+	return hi.getPageFromStore(pageID)
 }
 
 // GetIndexType returns the type identifier for this index implementation.
@@ -198,9 +179,9 @@ func (hi *HashIndex) validateKeyType(key Field) error {
 //   - key: Key to hash for bucket selection
 //
 // Returns the bucket page or error on failure.
-func (hi *HashIndex) getBucketPage(ctx *transaction.TransactionContext, key Field) (HashPage, error) {
+func (hi *HashIndex) getBucketPage(key Field) (HashPage, error) {
 	bucketNum := hi.hashKey(key)
-	return hi.getBucketPageByNum(ctx, bucketNum)
+	return hi.getBucketPageByNum(bucketNum)
 }
 
 // traverseOverflowChain applies a function to each page in an overflow chain.
@@ -219,7 +200,7 @@ func (hi *HashIndex) getBucketPage(ctx *transaction.TransactionContext, key Fiel
 //   - Tracks visited pages to detect cycles
 //   - Limits traversal to maxOverflowPages (1000)
 //   - Validates overflow pointers before following
-func (hi *HashIndex) traverseOverflowChain(ctx *transaction.TransactionContext, start HashPage, f func(HashPage) error) error {
+func (hi *HashIndex) traverseOverflowChain(start HashPage, f func(HashPage) error) error {
 	var err error
 	currentPage := start
 	visited := make(map[int]bool)
@@ -239,11 +220,23 @@ func (hi *HashIndex) traverseOverflowChain(ctx *transaction.TransactionContext, 
 			break
 		}
 
-		currentPage, err = hi.readOverflowPage(ctx, currentPage)
+		currentPage, err = hi.readOverflowPage(currentPage)
 		if err != nil {
 			return fmt.Errorf("failed to read overflow page: %w", err)
 		}
 	}
 
 	return nil
+}
+
+func (hi *HashIndex) getPageFromStore(pid *hash.HashPageID) (HashPage, error) {
+	page, err := hi.pageStore.GetPage(hi.tx, hi.file, pid, transaction.ReadWrite)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read overflow page %s: %w", pid, err)
+	}
+	hashPage, ok := page.(*hash.HashPage)
+	if !ok {
+		return nil, fmt.Errorf("invalid page type: expected HashPage")
+	}
+	return hashPage, nil
 }
