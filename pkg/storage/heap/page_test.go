@@ -83,8 +83,8 @@ func TestNewHeapPage(t *testing.T) {
 				t.Errorf("Expected positive numSlots, got %d", hp.numSlots)
 			}
 
-			if len(hp.header) == 0 {
-				t.Errorf("Expected non-empty header")
+			if len(hp.slotPointers) == 0 {
+				t.Errorf("Expected non-empty slot pointers array")
 			}
 
 			if len(hp.tuples) != hp.numSlots {
