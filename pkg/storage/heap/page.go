@@ -499,3 +499,11 @@ func (hp *HeapPage) Compact() int {
 
 	return spaceReclaimed
 }
+
+// GetTupleDesc returns the tuple description (schema) for this page
+// This is useful for recovery operations that need to deserialize tuples
+func (hp *HeapPage) GetTupleDesc() *tuple.TupleDescription {
+	hp.mutex.RLock()
+	defer hp.mutex.RUnlock()
+	return hp.tupleDesc
+}
