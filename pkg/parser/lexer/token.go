@@ -32,6 +32,10 @@ const (
 	USING
 	HASH
 	BTREE
+	UNION
+	INTERSECT
+	EXCEPT
+	ALL
 
 	ASC
 	DESC
@@ -129,6 +133,14 @@ func (t TokenType) String() string {
 		return "HASH"
 	case BTREE:
 		return "BTREE"
+	case UNION:
+		return "UNION"
+	case INTERSECT:
+		return "INTERSECT"
+	case EXCEPT:
+		return "EXCEPT"
+	case ALL:
+		return "ALL"
 	case ASC:
 		return "ASC"
 	case DESC:
