@@ -17,10 +17,12 @@ type joinCondition struct {
 
 // parseSelectStatement is the main entry point for parsing SELECT statements.
 // It orchestrates the parsing of all SELECT clauses in order: SELECT, FROM, WHERE, GROUP BY, ORDER BY.
+// Also handles set operations (UNION, INTERSECT, EXCEPT) which can combine multiple SELECT statements.
 //
 // Grammar:
 //
 //	SELECT [* | field_list] FROM table_list [WHERE conditions] [GROUP BY field] [ORDER BY field [ASC|DESC]]
+//	[UNION [ALL] | INTERSECT [ALL] | EXCEPT [ALL] SELECT ...]
 //
 // Returns a SelectStatement ready for execution planning, or an error if parsing fails.
 func parseSelectStatement(l *lexer.Lexer) (*statements.SelectStatement, error) {
@@ -38,6 +40,16 @@ func parseSelectStatement(l *lexer.Lexer) (*statements.SelectStatement, error) {
 		if err := parseFunc(l, p); err != nil {
 			return nil, err
 		}
+	}
+
+	// Check for set operations (UNION, INTERSECT, EXCEPT)
+	setOpPlan, err := parseSetOperation(l, p)
+	if err != nil {
+		return nil, err
+	}
+
+	if setOpPlan != nil {
+		return statements.NewSelectStatement(setOpPlan), nil
 	}
 
 	return statements.NewSelectStatement(p), nil
@@ -437,4 +449,55 @@ func consumeCommaIfPresent(l *lexer.Lexer) bool {
 
 	l.SetPos(token.Position)
 	return false
+}
+
+// parseSetOperation checks for and parses set operations (UNION, INTERSECT, EXCEPT).
+// If a set operation is found, it recursively parses the right SELECT statement
+// and returns a SetOperationPlan wrapping both sides.
+//
+// Grammar:
+//
+//	[UNION [ALL] | INTERSECT [ALL] | EXCEPT [ALL] SELECT ...]
+//
+// Returns:
+//   - *plan.SelectPlan: A SetOperationPlan if a set operation is found, nil otherwise
+//   - error: An error if parsing fails
+func parseSetOperation(l *lexer.Lexer, leftPlan *plan.SelectPlan) (*plan.SelectPlan, error) {
+	token := l.NextToken()
+
+	var opType plan.SetOperationType
+	var isAll bool = false
+
+	switch token.Type {
+	case lexer.UNION:
+		opType = plan.UnionOp
+	case lexer.INTERSECT:
+		opType = plan.IntersectOp
+	case lexer.EXCEPT:
+		opType = plan.ExceptOp
+	default:
+		l.SetPos(token.Position)
+		return nil, nil
+	}
+
+	nextToken := l.NextToken()
+	if nextToken.Type == lexer.ALL {
+		isAll = true
+	} else {
+		l.SetPos(nextToken.Position)
+	}
+
+	selectToken := l.NextToken()
+	if selectToken.Type != lexer.SELECT {
+		return nil, fmt.Errorf("expected SELECT after %s, got %s", token.Value, selectToken.Value)
+	}
+	l.SetPos(selectToken.Position)
+
+	rightStmt, err := parseSelectStatement(l)
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse right side of %s: %v", token.Value, err)
+	}
+
+	setOpPlan := plan.NewSetOperationPlan(leftPlan, rightStmt.Plan, opType, isAll)
+	return setOpPlan, nil
 }
