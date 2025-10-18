@@ -91,6 +91,34 @@ func (s *SetOp) hashTuple(t *tuple.Tuple) uint32 {
 	return hash
 }
 
+func (s *SetOp) buildRightHashSet() error {
+	if s.initialized {
+		return nil
+	}
+
+	for {
+		t, err := s.rightChild.FetchNext()
+		if err != nil {
+			return err
+		}
+		if t == nil {
+			break
+		}
+
+		hash := s.hashTuple(t)
+		if s.preserveAll && s.opType != SetUnion {
+			// For INTERSECT ALL and EXCEPT ALL, count occurrences
+			s.rightHashes[hash]++
+		} else {
+			// For set semantics or UNION, just mark as present
+			s.rightHashes[hash] = 1
+		}
+	}
+
+	s.initialized = true
+	return nil
+}
+
 // GetTupleDesc returns the schema of the result.
 func (s *SetOp) GetTupleDesc() *tuple.TupleDescription {
 	return s.leftChild.GetTupleDesc()
@@ -220,6 +248,53 @@ func (u *Union) readNext() (*tuple.Tuple, error) {
 				continue
 			}
 			u.leftSeen[hash] = true
+		}
+
+		return t, nil
+	}
+}
+
+// Intersect represents an INTERSECT operator that returns only tuples that appear in both inputs.
+type Intersect struct {
+	*SetOp
+}
+
+// NewIntersect creates a new Intersect operator.
+func NewIntersect(left, right iterator.DbIterator, intersectAll bool) (*Intersect, error) {
+	base, err := NewSetOperationBase(left, right, SetIntersect, intersectAll)
+	if err != nil {
+		return nil, err
+	}
+
+	in := &Intersect{SetOp: base}
+	in.base = NewBaseIterator(in.readNext)
+	return in, nil
+}
+
+// readNext implements the intersect logic.
+func (in *Intersect) readNext() (*tuple.Tuple, error) {
+	if err := in.buildRightHashSet(); err != nil {
+		return nil, err
+	}
+
+	for {
+		t, err := in.leftChild.FetchNext()
+		if err != nil || t == nil {
+			return t, err
+		}
+
+		hash := in.hashTuple(t)
+		count, exists := in.rightHashes[hash]
+
+		if !exists || count <= 0 {
+			continue
+		}
+
+		if in.preserveAll {
+			in.rightHashes[hash]--
+		} else {
+			// For INTERSECT, mark as used to avoid duplicates
+			in.rightHashes[hash] = 0
 		}
 
 		return t, nil
