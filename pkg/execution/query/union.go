@@ -77,17 +77,19 @@ func (u *Union) readNext() (*tuple.Tuple, error) {
 			return nil, err
 		}
 
-		if t != nil {
-			if !u.unionAll {
-				hash := hashTuple(t)
-				if u.seenHashes[hash] {
-					return u.readNext()
-				}
-				u.seenHashes[hash] = true
-			}
-			return t, nil
+		if t == nil {
+			u.leftDone = true
+			return u.readNext()
 		}
-		u.leftDone = true
+
+		if !u.unionAll {
+			hash := hashTuple(t)
+			if u.seenHashes[hash] {
+				return u.readNext()
+			}
+			u.seenHashes[hash] = true
+		}
+		return t, nil
 	}
 
 	for {
