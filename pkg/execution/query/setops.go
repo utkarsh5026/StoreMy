@@ -300,3 +300,62 @@ func (in *Intersect) readNext() (*tuple.Tuple, error) {
 		return t, nil
 	}
 }
+
+// Except represents an EXCEPT operator that returns tuples from left not in right.
+type Except struct {
+	*SetOp
+}
+
+// NewExcept creates a new Except operator.
+func NewExcept(left, right iterator.DbIterator, exceptAll bool) (*Except, error) {
+	base, err := NewSetOperationBase(left, right, SetExcept, exceptAll)
+	if err != nil {
+		return nil, err
+	}
+
+	ex := &Except{SetOp: base}
+
+	if !exceptAll {
+		ex.leftSeen = make(map[uint32]bool)
+	}
+
+	ex.base = NewBaseIterator(ex.readNext)
+	return ex, nil
+}
+
+// readNext implements the except logic.
+func (ex *Except) readNext() (*tuple.Tuple, error) {
+	if err := ex.buildRightHashSet(); err != nil {
+		return nil, err
+	}
+
+	for {
+		t, err := ex.leftChild.FetchNext()
+		if err != nil || t == nil {
+			return t, err
+		}
+
+		hash := ex.hashTuple(t)
+
+		if ex.preserveAll {
+			// EXCEPT ALL: Check if we've exhausted the right count
+			count, exists := ex.rightHashes[hash]
+			if exists && count > 0 {
+				ex.rightHashes[hash]--
+				continue
+			}
+			return t, nil
+		} else {
+			// EXCEPT: Check if tuple exists in right or already output
+			_, existsInRight := ex.rightHashes[hash]
+			_, alreadyOutput := ex.leftSeen[hash]
+
+			if existsInRight || alreadyOutput {
+				continue
+			}
+
+			ex.leftSeen[hash] = true
+			return t, nil
+		}
+	}
+}
