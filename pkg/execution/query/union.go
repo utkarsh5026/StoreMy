@@ -10,8 +10,7 @@ import (
 // UNION removes duplicate tuples (set semantics), while UNION ALL preserves all tuples.
 type Union struct {
 	base       *BaseIterator
-	leftChild  *sourceOperator
-	rightChild *sourceOperator
+	lch, rch   *sourceOperator // left and right child
 	unionAll   bool            // true for UNION ALL, false for UNION (with deduplication)
 	seenHashes map[uint32]bool // For deduplication in UNION (not UNION ALL)
 	leftDone   bool            // Track if left child is exhausted
@@ -35,17 +34,17 @@ func NewUnion(left, right iterator.DbIterator, unionAll bool) (*Union, error) {
 		return nil, fmt.Errorf("failed to create right source: %v", err)
 	}
 
-	leftDesc := leftOp.GetTupleDesc()
-	rightDesc := rightOp.GetTupleDesc()
+	ld := leftOp.GetTupleDesc()
+	rd := rightOp.GetTupleDesc()
 
-	if leftDesc.NumFields() != rightDesc.NumFields() {
+	if ld.NumFields() != rd.NumFields() {
 		return nil, fmt.Errorf("union schema mismatch: left has %d fields, right has %d fields",
-			leftDesc.NumFields(), rightDesc.NumFields())
+			ld.NumFields(), rd.NumFields())
 	}
 
-	for i := 0; i < leftDesc.NumFields(); i++ {
-		leftType, _ := leftDesc.TypeAtIndex(i)
-		rightType, _ := rightDesc.TypeAtIndex(i)
+	for i := 0; i < ld.NumFields(); i++ {
+		leftType, _ := ld.TypeAtIndex(i)
+		rightType, _ := rd.TypeAtIndex(i)
 		if leftType != rightType {
 			return nil, fmt.Errorf("union schema mismatch at field %d: left type %v, right type %v",
 				i, leftType, rightType)
@@ -53,10 +52,10 @@ func NewUnion(left, right iterator.DbIterator, unionAll bool) (*Union, error) {
 	}
 
 	u := &Union{
-		leftChild:  leftOp,
-		rightChild: rightOp,
-		unionAll:   unionAll,
-		leftDone:   false,
+		lch:      leftOp,
+		rch:      rightOp,
+		unionAll: unionAll,
+		leftDone: false,
 	}
 
 	if !unionAll {
@@ -73,14 +72,14 @@ func NewUnion(left, right iterator.DbIterator, unionAll bool) (*Union, error) {
 // For UNION (not UNION ALL), it skips duplicates using a hash set.
 func (u *Union) readNext() (*tuple.Tuple, error) {
 	if !u.leftDone {
-		t, err := u.leftChild.FetchNext()
+		t, err := u.lch.FetchNext()
 		if err != nil {
 			return nil, err
 		}
 
 		if t != nil {
 			if !u.unionAll {
-				hash := u.hashTuple(t)
+				hash := hashTuple(t)
 				if u.seenHashes[hash] {
 					return u.readNext()
 				}
@@ -92,13 +91,13 @@ func (u *Union) readNext() (*tuple.Tuple, error) {
 	}
 
 	for {
-		t, err := u.rightChild.FetchNext()
+		t, err := u.rch.FetchNext()
 		if err != nil || t == nil {
 			return t, err
 		}
 
 		if !u.unionAll {
-			hash := u.hashTuple(t)
+			hash := hashTuple(t)
 			if u.seenHashes[hash] {
 				continue
 			}
@@ -111,7 +110,7 @@ func (u *Union) readNext() (*tuple.Tuple, error) {
 
 // hashTuple computes a hash for a tuple for deduplication.
 // This is a simple hash function that combines field hashes.
-func (u *Union) hashTuple(t *tuple.Tuple) uint32 {
+func hashTuple(t *tuple.Tuple) uint32 {
 	var hash uint32 = 0
 	for i := 0; i < t.TupleDesc.NumFields(); i++ {
 		field, _ := t.GetField(i)
@@ -123,12 +122,12 @@ func (u *Union) hashTuple(t *tuple.Tuple) uint32 {
 
 // Open initializes the Union operator by opening both child operators.
 func (u *Union) Open() error {
-	if err := u.leftChild.Open(); err != nil {
+	if err := u.lch.Open(); err != nil {
 		return fmt.Errorf("failed to open left child: %v", err)
 	}
 
-	if err := u.rightChild.Open(); err != nil {
-		u.leftChild.Close() // Clean up on error
+	if err := u.rch.Open(); err != nil {
+		u.lch.Close() // Clean up on error
 		return fmt.Errorf("failed to open right child: %v", err)
 	}
 
@@ -143,8 +142,8 @@ func (u *Union) Open() error {
 
 // Close releases resources by closing both child operators.
 func (u *Union) Close() error {
-	leftErr := u.leftChild.Close()
-	rightErr := u.rightChild.Close()
+	leftErr := u.lch.Close()
+	rightErr := u.rch.Close()
 
 	if leftErr != nil {
 		return leftErr
@@ -159,7 +158,7 @@ func (u *Union) Close() error {
 // GetTupleDesc returns the schema of the union result.
 // Since both children must have compatible schemas, we return the left child's schema.
 func (u *Union) GetTupleDesc() *tuple.TupleDescription {
-	return u.leftChild.GetTupleDesc()
+	return u.lch.GetTupleDesc()
 }
 
 // HasNext checks if there are more tuples available from the union.
@@ -174,16 +173,16 @@ func (u *Union) Next() (*tuple.Tuple, error) {
 
 // Rewind resets the Union operator to the beginning.
 func (u *Union) Rewind() error {
-	if err := u.leftChild.Rewind(); err != nil {
+	if err := u.lch.Rewind(); err != nil {
 		return err
 	}
-	if err := u.rightChild.Rewind(); err != nil {
+	if err := u.rch.Rewind(); err != nil {
 		return err
 	}
 
 	u.leftDone = false
 	if !u.unionAll {
-		u.seenHashes = make(map[uint32]bool)
+		clear(u.seenHashes)
 	}
 
 	u.base.ClearCache()
