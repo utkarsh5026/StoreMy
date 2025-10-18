@@ -81,6 +81,16 @@ func validateSchemaCompatibility(left, right *tuple.TupleDescription) error {
 	return nil
 }
 
+func (s *SetOp) hashTuple(t *tuple.Tuple) uint32 {
+	var hash uint32 = 0
+	for i := 0; i < t.TupleDesc.NumFields(); i++ {
+		field, _ := t.GetField(i)
+		fieldHash, _ := field.Hash()
+		hash = hash*31 + fieldHash
+	}
+	return hash
+}
+
 // GetTupleDesc returns the schema of the result.
 func (s *SetOp) GetTupleDesc() *tuple.TupleDescription {
 	return s.leftChild.GetTupleDesc()
@@ -153,4 +163,65 @@ func (s *SetOp) Open() error {
 
 	s.base.MarkOpened()
 	return nil
+}
+
+type Union struct {
+	*SetOp
+}
+
+func NewUnion(left, right iterator.DbIterator, unionAll bool) (*Union, error) {
+	base, err := NewSetOperationBase(left, right, SetUnion, unionAll)
+	if err != nil {
+		return nil, err
+	}
+
+	u := &Union{SetOp: base}
+
+	if !unionAll {
+		u.leftSeen = make(map[uint32]bool)
+	}
+
+	u.base = NewBaseIterator(u.readNext)
+	return u, nil
+}
+
+// readNext implements the union logic.
+func (u *Union) readNext() (*tuple.Tuple, error) {
+	for !u.leftDone {
+		t, err := u.leftChild.FetchNext()
+		if err != nil {
+			return nil, err
+		}
+
+		if t == nil {
+			u.leftDone = true
+			break
+		}
+
+		if !u.preserveAll {
+			hash := u.hashTuple(t)
+			if u.leftSeen[hash] {
+				continue
+			}
+			u.leftSeen[hash] = true
+		}
+		return t, nil
+	}
+
+	for {
+		t, err := u.rightChild.FetchNext()
+		if err != nil || t == nil {
+			return t, err
+		}
+
+		if !u.preserveAll {
+			hash := u.hashTuple(t)
+			if u.leftSeen[hash] {
+				continue
+			}
+			u.leftSeen[hash] = true
+		}
+
+		return t, nil
+	}
 }
