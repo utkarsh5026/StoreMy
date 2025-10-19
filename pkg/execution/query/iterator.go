@@ -89,3 +89,14 @@ func (it *BaseIterator) MarkOpened() {
 func (it *BaseIterator) ClearCache() {
 	it.nextTuple = nil
 }
+
+// Rewind resets the iterator's cache to allow re-reading from the source.
+// Note: This only clears the BaseIterator's cache. The underlying source
+// must also be rewound separately for this to work correctly.
+func (it *BaseIterator) Rewind() error {
+	if !it.opened {
+		return fmt.Errorf("iterator not opened")
+	}
+	it.nextTuple = nil
+	return nil
+}
