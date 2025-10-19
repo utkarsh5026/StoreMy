@@ -7,12 +7,23 @@ import (
 	"strings"
 )
 
+// SetOperationType defines the type of set operation
+type SetOperationType int
+
+const (
+	UnionOp SetOperationType = iota
+	IntersectOp
+	ExceptOp
+)
+
 // SelectPlan represents the execution plan for a SELECT query.
 // It contains all the parsed components of a SELECT statement including
-// projections, filters, joins, aggregations, and ordering.
+// projections, filters, joins, aggregations, ordering, and DISTINCT.
+// It can also represent a set operation (UNION, INTERSECT, EXCEPT) combining two SELECT queries.
 type SelectPlan struct {
 	selectList []*SelectListNode
 	selectAll  bool
+	distinct   bool // true for SELECT DISTINCT
 
 	tables []*ScanNode
 	joins  []*JoinNode
@@ -27,6 +38,13 @@ type SelectPlan struct {
 	hasOrderBy   bool
 	orderByField string
 	orderByAsc   bool
+
+	// Set operation fields
+	isSetOperation bool
+	setOpType      SetOperationType
+	setOpAll       bool // true for UNION ALL, INTERSECT ALL, EXCEPT ALL
+	leftPlan       *SelectPlan
+	rightPlan      *SelectPlan
 
 	query string
 }
@@ -149,4 +167,50 @@ func (sp *SelectPlan) OrderByField() string {
 
 func (sp *SelectPlan) OrderByAsc() bool {
 	return sp.orderByAsc
+}
+
+// NewSetOperationPlan creates a SelectPlan that represents a set operation.
+func NewSetOperationPlan(left, right *SelectPlan, opType SetOperationType, isAll bool) *SelectPlan {
+	return &SelectPlan{
+		isSetOperation: true,
+		setOpType:      opType,
+		setOpAll:       isAll,
+		leftPlan:       left,
+		rightPlan:      right,
+	}
+}
+
+// IsSetOperation returns true if this plan represents a set operation.
+func (sp *SelectPlan) IsSetOperation() bool {
+	return sp.isSetOperation
+}
+
+// SetOpType returns the type of set operation (UNION, INTERSECT, EXCEPT).
+func (sp *SelectPlan) SetOpType() SetOperationType {
+	return sp.setOpType
+}
+
+// SetOpAll returns true for UNION ALL, INTERSECT ALL, EXCEPT ALL.
+func (sp *SelectPlan) SetOpAll() bool {
+	return sp.setOpAll
+}
+
+// LeftPlan returns the left child plan for set operations.
+func (sp *SelectPlan) LeftPlan() *SelectPlan {
+	return sp.leftPlan
+}
+
+// RightPlan returns the right child plan for set operations.
+func (sp *SelectPlan) RightPlan() *SelectPlan {
+	return sp.rightPlan
+}
+
+// SetDistinct sets whether this is a SELECT DISTINCT query.
+func (sp *SelectPlan) SetDistinct(distinct bool) {
+	sp.distinct = distinct
+}
+
+// IsDistinct returns true if this is a SELECT DISTINCT query.
+func (sp *SelectPlan) IsDistinct() bool {
+	return sp.distinct
 }
