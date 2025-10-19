@@ -2,95 +2,125 @@ package planner
 
 import (
 	"fmt"
-	"os"
 	"storemy/pkg/parser/statements"
 )
 
+// DropTablePlan represents the execution plan for DROP TABLE statement.
+// It handles complete table removal including indexes, catalog entries, and physical files.
+//
+// Execution flow:
+//  1. Validates table exists (respects IF EXISTS clause)
+//  2. Drops all associated indexes (including auto-created primary key indexes)
+//  3. Removes table metadata from CATALOG_TABLES
+//  4. CatalogManager handles heap file deletion and buffer pool eviction
+//
+// Example:
+//
+//	DROP TABLE users;                    -- Fails if not exists
+//	DROP TABLE IF EXISTS users;          -- Succeeds even if missing
 type DropTablePlan struct {
-	Statement      *statements.DropStatement
-	ctx            DbContext
-	transactionCtx TransactionCtx
+	Statement *statements.DropStatement
+	ctx       DbContext
+	tx        TransactionCtx
 }
 
+// NewDropTablePlan creates a new DROP TABLE plan instance.
+//
+// Parameters:
+//   - stmt: Parsed DROP TABLE statement containing table name and IF EXISTS flag
+//   - ctx: Database context providing access to CatalogManager and IndexManager
+//   - tx: Active transaction for catalog modifications
 func NewDropTablePlan(
-	stmt *statements.DropStatement,
-	ctx DbContext,
-	transactionCtx TransactionCtx,
-) *DropTablePlan {
+	stmt *statements.DropStatement, ctx DbContext, tx TransactionCtx) *DropTablePlan {
 	return &DropTablePlan{
-		Statement:      stmt,
-		ctx:            ctx,
-		transactionCtx: transactionCtx,
+		Statement: stmt,
+		ctx:       ctx,
+		tx:        tx,
 	}
 }
 
 // Execute performs the DROP TABLE operation within the current transaction.
 //
 // Execution steps:
-//  1. Validates table exists (respects IF EXISTS clause)
-//  2. Drops all indexes associated with the table (including primary key indexes)
-//  3. Removes table entry from catalog
-//  4. CatalogManager handles cleanup of data files and cache
-func (p *DropTablePlan) Execute() (any, error) {
-	catalogMgr := p.ctx.CatalogManager()
-	if !catalogMgr.TableExists(p.transactionCtx, p.Statement.TableName) {
+//  1. Checks if table exists via CatalogManager.TableExists()
+//  2. If missing and IF EXISTS specified, returns success without error
+//  3. Retrieves table ID for cascade index deletion
+//  4. Drops all indexes associated with the table (CASCADE behavior)
+//  5. Removes table entry from CATALOG_TABLES
+//  6. CatalogManager handles heap file cleanup and buffer pool eviction
+//
+// Returns:
+//   - DDLResult with success message on completion
+//   - Error if table doesn't exist (without IF EXISTS) or operation fails
+func (p *DropTablePlan) Execute() (Result, error) {
+	cm := p.ctx.CatalogManager()
+	tableName := p.Statement.TableName
+
+	if !cm.TableExists(p.tx, tableName) {
 		if p.Statement.IfExists {
 			return &DDLResult{
 				Success: true,
-				Message: fmt.Sprintf("Table %s does not exist (IF EXISTS)", p.Statement.TableName),
+				Message: fmt.Sprintf("Table %s does not exist (IF EXISTS)", tableName),
 			}, nil
 		}
-		return nil, fmt.Errorf("table %s does not exist", p.Statement.TableName)
+		return nil, fmt.Errorf("table %s does not exist", tableName)
 	}
 
-	// Get table ID for index lookup
-	tableID, err := catalogMgr.GetTableID(p.transactionCtx, p.Statement.TableName)
+	tableID, err := cm.GetTableID(p.tx, tableName)
 	if err != nil {
-		return nil, fmt.Errorf("failed to get table ID: %v", err)
+		return nil, fmt.Errorf("failed to get table ID: %w", err)
 	}
 
-	// Drop all indexes associated with this table first
 	if err := p.dropTableIndexes(tableID); err != nil {
-		return nil, fmt.Errorf("failed to drop table indexes: %v", err)
+		return nil, fmt.Errorf("failed to drop table indexes: %w", err)
 	}
 
-	// Now drop the table itself
-	err = catalogMgr.DropTable(p.transactionCtx, p.Statement.TableName)
-	if err != nil {
-		return nil, fmt.Errorf("failed to drop table: %v", err)
+	if err := cm.DropTable(p.tx, tableName); err != nil {
+		return nil, fmt.Errorf("failed to drop table: %w", err)
 	}
 
 	return &DDLResult{
 		Success: true,
-		Message: fmt.Sprintf("Table %s dropped successfully", p.Statement.TableName),
+		Message: fmt.Sprintf("Table %s dropped successfully", tableName),
 	}, nil
 }
 
-// dropTableIndexes drops all indexes associated with a table.
-// This includes any primary key indexes that were automatically created.
+// dropTableIndexes drops all indexes associated with a table (CASCADE semantics).
+//
+// This includes:
+//   - User-created indexes (CREATE INDEX statements)
+//   - Auto-generated primary key indexes (internal B+ trees)
+//   - Any unique constraint indexes (if implemented)
+//
+// Process:
+//  1. Retrieves all indexes for the table via CatalogManager.GetIndexesByTable()
+//  2. For each index:
+//     a. Removes from CATALOG_INDEXES via CatalogManager.DropIndex()
+//     b. Deletes physical index file via IndexManager.DeletePhysicalIndex()
+//  3. Logs warnings for failures but continues (best-effort cleanup)
+//
+// Returns:
+//   - nil on success (even if some index deletions fail)
+//   - Never returns error (failures are logged as warnings)
 func (p *DropTablePlan) dropTableIndexes(tableID int) error {
-	catalogMgr := p.ctx.CatalogManager()
+	cm := p.ctx.CatalogManager()
+	im := p.ctx.IndexManager()
 
-	// Get all indexes for this table
-	indexes, err := catalogMgr.GetIndexesByTable(p.transactionCtx, tableID)
+	indexes, err := cm.GetIndexesByTable(p.tx, tableID)
 	if err != nil {
-		// If no indexes found or error, log but don't fail the drop
 		fmt.Printf("Warning: failed to get indexes for table: %v\n", err)
 		return nil
 	}
 
-	// Drop each index
 	var droppedCount int
 	for _, indexMeta := range indexes {
-		filePath, err := catalogMgr.DropIndex(p.transactionCtx, indexMeta.IndexName)
+		filePath, err := cm.DropIndex(p.tx, indexMeta.IndexName)
 		if err != nil {
 			fmt.Printf("Warning: failed to drop index %s: %v\n", indexMeta.IndexName, err)
 			continue
 		}
 
-		// Delete the physical index file
-		if err := os.Remove(filePath); err != nil {
-			// Log but don't fail - file might already be deleted
+		if err := im.DeletePhysicalIndex(filePath); err != nil {
 			fmt.Printf("Warning: failed to delete index file %s: %v\n", filePath, err)
 		}
 
