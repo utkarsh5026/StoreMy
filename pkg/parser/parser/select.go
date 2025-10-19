@@ -57,10 +57,11 @@ func parseSelectStatement(l *lexer.Lexer) (*statements.SelectStatement, error) {
 
 // parseSelect parses the SELECT clause, handling both SELECT * and explicit field lists.
 // Also handles aggregate functions like COUNT(field), SUM(field), etc.
+// Supports DISTINCT keyword: SELECT DISTINCT ...
 //
 // Grammar:
 //
-//	SELECT * | field [, field]*
+//	SELECT [DISTINCT] * | field [, field]*
 //	field = IDENTIFIER | AGGREGATE_FUNC(IDENTIFIER)
 func parseSelect(l *lexer.Lexer, p *plan.SelectPlan) error {
 	if err := expectTokenSequence(l, lexer.SELECT); err != nil {
@@ -68,6 +69,12 @@ func parseSelect(l *lexer.Lexer, p *plan.SelectPlan) error {
 	}
 
 	token := l.NextToken()
+
+	if token.Type == lexer.DISTINCT {
+		p.SetDistinct(true)
+		token = l.NextToken() // Get next token after DISTINCT
+	}
+
 	if token.Type == lexer.ASTERISK {
 		p.SetSelectAll(true)
 		return nil
