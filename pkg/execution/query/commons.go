@@ -6,24 +6,24 @@ import (
 	"storemy/pkg/tuple"
 )
 
-// sourceOperator encapsulates common child operator management logic
+// SourceIter encapsulates common child operator management logic
 // for unary operators (operators with a single child).
-type sourceOperator struct {
+type SourceIter struct {
 	child iterator.DbIterator
 }
 
 // NewSourceOperator creates a new source operator wrapper with validation.
-func NewSourceOperator(child iterator.DbIterator) (*sourceOperator, error) {
+func NewSourceOperator(child iterator.DbIterator) (*SourceIter, error) {
 	if child == nil {
 		return nil, fmt.Errorf("child operator cannot be nil")
 	}
-	return &sourceOperator{child: child}, nil
+	return &SourceIter{child: child}, nil
 }
 
 // FetchNext retrieves the next tuple from the child operator.
 // Returns the tuple if available, nil if no more tuples, or error.
 // Handles all the HasNext/Next ceremony internally.
-func (c *sourceOperator) FetchNext() (*tuple.Tuple, error) {
+func (c *SourceIter) FetchNext() (*tuple.Tuple, error) {
 	hasNext, err := c.child.HasNext()
 	if err != nil {
 		return nil, fmt.Errorf("error checking if child has next: %w", err)
@@ -42,7 +42,7 @@ func (c *sourceOperator) FetchNext() (*tuple.Tuple, error) {
 }
 
 // Open opens the child operator.
-func (c *sourceOperator) Open() error {
+func (c *SourceIter) Open() error {
 	if err := c.child.Open(); err != nil {
 		return fmt.Errorf("failed to open child operator: %w", err)
 	}
@@ -50,7 +50,7 @@ func (c *sourceOperator) Open() error {
 }
 
 // Close closes the child operator.
-func (c *sourceOperator) Close() error {
+func (c *SourceIter) Close() error {
 	if c.child != nil {
 		return c.child.Close()
 	}
@@ -58,7 +58,7 @@ func (c *sourceOperator) Close() error {
 }
 
 // Rewind rewinds the child operator.
-func (c *sourceOperator) Rewind() error {
+func (c *SourceIter) Rewind() error {
 	if err := c.child.Rewind(); err != nil {
 		return fmt.Errorf("failed to rewind child operator: %w", err)
 	}
@@ -66,6 +66,6 @@ func (c *sourceOperator) Rewind() error {
 }
 
 // GetTupleDesc returns the child's tuple description.
-func (c *sourceOperator) GetTupleDesc() *tuple.TupleDescription {
+func (c *SourceIter) GetTupleDesc() *tuple.TupleDescription {
 	return c.child.GetTupleDesc()
 }

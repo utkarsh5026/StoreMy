@@ -16,7 +16,7 @@ type Project struct {
 	base           *BaseIterator
 	projectedCols  []int
 	projectedTypes []types.Type
-	source         *sourceOperator
+	source         *SourceIter
 	tupleDesc      *tuple.TupleDescription
 }
 

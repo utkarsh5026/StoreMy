@@ -11,7 +11,7 @@ import (
 type Filter struct {
 	base      *BaseIterator
 	predicate *Predicate
-	source    *sourceOperator
+	source    *SourceIter
 }
 
 // NewFilter creates a new Filter operator with the specified predicate and source iterator.
