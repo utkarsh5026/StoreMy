@@ -2,6 +2,7 @@ package query
 
 import (
 	"fmt"
+	"storemy/pkg/iterator"
 	"storemy/pkg/tuple"
 	"storemy/pkg/types"
 	"testing"
@@ -36,7 +37,7 @@ func TestNewLimitOperator(t *testing.T) {
 
 	tests := []struct {
 		name      string
-		child     *mockChildIterator
+		child     iterator.DbIterator
 		limit     int
 		offset    int
 		expectErr bool
