@@ -15,6 +15,7 @@ const (
 	NULL
 	AUTO_INCREMENT
 	SELECT
+	DISTINCT
 	FROM
 	WHERE
 	JOIN
@@ -99,6 +100,8 @@ func (t TokenType) String() string {
 		return "AUTO_INCREMENT"
 	case SELECT:
 		return "SELECT"
+	case DISTINCT:
+		return "DISTINCT"
 	case FROM:
 		return "FROM"
 	case WHERE:

@@ -129,6 +129,8 @@ func (l *Lexer) readIdentifier(start int) Token {
 	switch value {
 	case "SELECT":
 		return createToken(SELECT, value, start)
+	case "DISTINCT":
+		return createToken(DISTINCT, value, start)
 	case "FROM":
 		return createToken(FROM, value, start)
 	case "WHERE":
