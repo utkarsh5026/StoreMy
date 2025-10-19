@@ -23,13 +23,10 @@ type SetOp struct {
 	opType      SetOperationType
 	preserveAll bool // true for ALL variants (UNION ALL, INTERSECT ALL, etc.)
 
-	// Shared state for different operations
-	rightHashes map[uint32]int  // Hash -> count (used by all operations)
-	leftSeen    map[uint32]bool // For deduplication (UNION, EXCEPT)
-	leftDone    bool            // Track if left child exhausted (UNION)
-	initialized bool            // Track if right hash set is built
-
-	readNextFunc func() (*tuple.Tuple, error)
+	// Set abstraction for managing tuples
+	tracker     *TupleSetTracker
+	leftDone    bool // Track if left child exhausted (UNION)
+	initialized bool // Track if right hash set is built
 }
 
 // NewSetOperationBase creates a new base for set operations with common validation.
@@ -58,7 +55,7 @@ func NewSetOperationBase(left, right iterator.DbIterator, opType SetOperationTyp
 		rightChild:  rightOp,
 		opType:      opType,
 		preserveAll: preserveAll,
-		rightHashes: make(map[uint32]int),
+		tracker:     NewTupleSetTracker(preserveAll),
 		initialized: false,
 	}, nil
 }
@@ -81,16 +78,6 @@ func validateSchemaCompatibility(left, right *tuple.TupleDescription) error {
 	return nil
 }
 
-func (s *SetOp) hashTuple(t *tuple.Tuple) uint32 {
-	var hash uint32 = 0
-	for i := 0; i < t.TupleDesc.NumFields(); i++ {
-		field, _ := t.GetField(i)
-		fieldHash, _ := field.Hash()
-		hash = hash*31 + fieldHash
-	}
-	return hash
-}
-
 func (s *SetOp) buildRightHashSet() error {
 	if s.initialized {
 		return nil
@@ -105,14 +92,7 @@ func (s *SetOp) buildRightHashSet() error {
 			break
 		}
 
-		hash := s.hashTuple(t)
-		if s.preserveAll && s.opType != SetUnion {
-			// For INTERSECT ALL and EXCEPT ALL, count occurrences
-			s.rightHashes[hash]++
-		} else {
-			// For set semantics or UNION, just mark as present
-			s.rightHashes[hash] = 1
-		}
+		s.tracker.AddToRight(t)
 	}
 
 	s.initialized = true
@@ -145,11 +125,7 @@ func (s *SetOp) Rewind() error {
 
 	s.initialized = false
 	s.leftDone = false
-	s.rightHashes = make(map[uint32]int)
-
-	if !s.preserveAll && s.opType != SetIntersect {
-		s.leftSeen = make(map[uint32]bool)
-	}
+	s.tracker.Clear()
 
 	s.base.ClearCache()
 	return nil
@@ -183,11 +159,7 @@ func (s *SetOp) Open() error {
 
 	s.initialized = false
 	s.leftDone = false
-	s.rightHashes = make(map[uint32]int)
-
-	if !s.preserveAll && s.opType != SetIntersect {
-		s.leftSeen = make(map[uint32]bool)
-	}
+	s.tracker = NewTupleSetTracker(s.preserveAll)
 
 	s.base.MarkOpened()
 	return nil
@@ -204,11 +176,6 @@ func NewUnion(left, right iterator.DbIterator, unionAll bool) (*Union, error) {
 	}
 
 	u := &Union{SetOp: base}
-
-	if !unionAll {
-		u.leftSeen = make(map[uint32]bool)
-	}
-
 	u.base = NewBaseIterator(u.readNext)
 	return u, nil
 }
@@ -226,16 +193,13 @@ func (u *Union) readNext() (*tuple.Tuple, error) {
 			break
 		}
 
-		if !u.preserveAll {
-			hash := u.hashTuple(t)
-			if u.leftSeen[hash] {
-				continue
-			}
-			u.leftSeen[hash] = true
+		if !u.preserveAll && !u.tracker.MarkSeen(t) {
+			continue // Already seen, skip it
 		}
 		return t, nil
 	}
 
+	// Then, process tuples from the right child
 	for {
 		t, err := u.rightChild.FetchNext()
 		if err != nil || t == nil {
@@ -243,11 +207,10 @@ func (u *Union) readNext() (*tuple.Tuple, error) {
 		}
 
 		if !u.preserveAll {
-			hash := u.hashTuple(t)
-			if u.leftSeen[hash] {
-				continue
+			// For UNION (not UNION ALL), check if we've already seen this tuple
+			if !u.tracker.MarkSeen(t) {
+				continue // Already seen, skip it
 			}
-			u.leftSeen[hash] = true
 		}
 
 		return t, nil
@@ -283,18 +246,25 @@ func (in *Intersect) readNext() (*tuple.Tuple, error) {
 			return t, err
 		}
 
-		hash := in.hashTuple(t)
-		count, exists := in.rightHashes[hash]
-
-		if !exists || count <= 0 {
-			continue
+		// Check if tuple exists in right set
+		if !in.tracker.ContainsInRight(t) {
+			continue // Not in right set, skip
 		}
 
 		if in.preserveAll {
-			in.rightHashes[hash]--
+			// For INTERSECT ALL, decrement count and check if we can still return it
+			count := in.tracker.GetRightCount(t)
+			if count <= 0 {
+				continue
+			}
+			in.tracker.DecrementRight(t)
 		} else {
 			// For INTERSECT, mark as used to avoid duplicates
-			in.rightHashes[hash] = 0
+			count := in.tracker.GetRightCount(t)
+			if count <= 0 {
+				continue
+			}
+			in.tracker.rightSet.Remove(t)
 		}
 
 		return t, nil
@@ -314,11 +284,6 @@ func NewExcept(left, right iterator.DbIterator, exceptAll bool) (*Except, error)
 	}
 
 	ex := &Except{SetOp: base}
-
-	if !exceptAll {
-		ex.leftSeen = make(map[uint32]bool)
-	}
-
 	ex.base = NewBaseIterator(ex.readNext)
 	return ex, nil
 }
@@ -335,26 +300,22 @@ func (ex *Except) readNext() (*tuple.Tuple, error) {
 			return t, err
 		}
 
-		hash := ex.hashTuple(t)
-
 		if ex.preserveAll {
-			// EXCEPT ALL: Check if we've exhausted the right count
-			count, exists := ex.rightHashes[hash]
-			if exists && count > 0 {
-				ex.rightHashes[hash]--
+			count := ex.tracker.GetRightCount(t)
+			if count > 0 {
+				ex.tracker.DecrementRight(t)
 				continue
 			}
 			return t, nil
 		} else {
-			// EXCEPT: Check if tuple exists in right or already output
-			_, existsInRight := ex.rightHashes[hash]
-			_, alreadyOutput := ex.leftSeen[hash]
+			existsInRight := ex.tracker.ContainsInRight(t)
+			alreadyOutput := ex.tracker.WasSeen(t)
 
 			if existsInRight || alreadyOutput {
 				continue
 			}
 
-			ex.leftSeen[hash] = true
+			ex.tracker.MarkSeen(t)
 			return t, nil
 		}
 	}
