@@ -1,20 +1,24 @@
 package setops
 
 import (
+	"slices"
 	"storemy/pkg/tuple"
 )
 
-// TupleSet provides a hash-based set abstraction for tuples.
+// TupleSet provides a hash-based set abstraction for tuples with collision detection.
 // It supports both set semantics (distinct) and bag semantics (with counts).
+// Hash collisions are handled by storing actual tuple references for comparison.
 type TupleSet struct {
-	hashes      map[uint32]int // Hash -> count
-	preserveAll bool           // If true, tracks counts; if false, just presence
+	hashes      map[uint32]int            // Hash -> count
+	tuples      map[uint32][]*tuple.Tuple // Hash -> list of tuples (for collision detection)
+	preserveAll bool                      // If true, tracks counts; if false, just presence
 }
 
 // NewTupleSet creates a new tuple set.
 func NewTupleSet(preserveAll bool) *TupleSet {
 	return &TupleSet{
 		hashes:      make(map[uint32]int),
+		tuples:      make(map[uint32][]*tuple.Tuple),
 		preserveAll: preserveAll,
 	}
 }
@@ -30,31 +34,75 @@ func hashTuple(t *tuple.Tuple) uint32 {
 	return hash
 }
 
-// Add adds a tuple to the set.
+// tuplesEqual compares two tuples for equality by comparing all fields.
+// This is used for collision detection when two tuples have the same hash.
+func tuplesEqual(t1, t2 *tuple.Tuple) bool {
+	if t1.TupleDesc.NumFields() != t2.TupleDesc.NumFields() {
+		return false
+	}
+
+	for i := 0; i < t1.TupleDesc.NumFields(); i++ {
+		f1, _ := t1.GetField(i)
+		f2, _ := t2.GetField(i)
+
+		if !f1.Equals(f2) {
+			return false
+		}
+	}
+
+	return true
+}
+
+// findTupleInList searches for a tuple in a list of tuples.
+// Returns the index if found, -1 otherwise.
+func findTupleInList(t *tuple.Tuple, list []*tuple.Tuple) int {
+	return slices.IndexFunc(list, func(
+		tup *tuple.Tuple) bool {
+		return tuplesEqual(t, tup)
+	})
+}
+
+// Add adds a tuple to the set with collision detection.
 // Returns true if the tuple was added (or count incremented for bag semantics).
 func (ts *TupleSet) Add(t *tuple.Tuple) bool {
 	hash := hashTuple(t)
 
+	existingTuples, hasHash := ts.tuples[hash]
+
 	if ts.preserveAll {
 		// Bag semantics: always add, increment count
+		if hasHash && findTupleInList(t, existingTuples) >= 0 {
+			ts.hashes[hash]++
+			return true
+		}
+
+		ts.tuples[hash] = append(existingTuples, t)
 		ts.hashes[hash]++
 		return true
 	} else {
 		// Set semantics: only add if not present
-		if _, exists := ts.hashes[hash]; exists {
+		if hasHash && findTupleInList(t, existingTuples) >= 0 {
 			return false
 		}
+
+		ts.tuples[hash] = append(existingTuples, t)
 		ts.hashes[hash] = 1
 		return true
 	}
 }
 
-// Contains checks if a tuple exists in the set.
+// Contains checks if a tuple exists in the set with collision detection.
 // For bag semantics, returns true if count > 0.
 func (ts *TupleSet) Contains(t *tuple.Tuple) bool {
 	hash := hashTuple(t)
-	count, exists := ts.hashes[hash]
-	return exists && count > 0
+	existingTuples, hasHash := ts.tuples[hash]
+
+	if !hasHash {
+		return false
+	}
+
+	idx := findTupleInList(t, existingTuples)
+	return idx >= 0 && ts.hashes[hash] > 0
 }
 
 // GetCount returns the count of a tuple in the set.
@@ -86,7 +134,8 @@ func (ts *TupleSet) Remove(t *tuple.Tuple) {
 
 // Clear empties the set.
 func (ts *TupleSet) Clear() {
-	ts.hashes = make(map[uint32]int)
+	clear(ts.hashes)
+	clear(ts.tuples)
 }
 
 // Size returns the number of unique hashes in the set.
