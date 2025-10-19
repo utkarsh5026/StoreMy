@@ -22,6 +22,8 @@ type SequentialScan struct {
 	dbFile               *heap.HeapFile
 	store                *memory.PageStore
 	tupIter              *tuple.Iterator
+	prefetchEnabled      bool
+	prefetchDone         chan struct{} // Signals when prefetch is complete
 }
 
 // NewSeqScan creates a new SequentialScan operator for the specified table within a transaction context.
@@ -32,13 +34,18 @@ func NewSeqScan(tx *transaction.TransactionContext, tableID int, file *heap.Heap
 	}
 
 	ss := &SequentialScan{
-		tx:          tx,
-		tableID:     tableID,
-		tupleDesc:   file.GetTupleDesc(),
-		store:       store,
-		currentPage: -1, // Start at -1 so first increment brings us to page 0
-		dbFile:      file,
+		tx:              tx,
+		tableID:         tableID,
+		tupleDesc:       file.GetTupleDesc(),
+		store:           store,
+		currentPage:     -1, // Start at -1 so first increment brings us to page 0
+		dbFile:          file,
+		prefetchEnabled: true,
+		prefetchDone:    make(chan struct{}),
 	}
+
+	// Close the initial channel since no prefetch is in progress
+	close(ss.prefetchDone)
 
 	ss.base = NewBaseIterator(ss.readNext)
 	return ss, nil
@@ -46,11 +53,6 @@ func NewSeqScan(tx *transaction.TransactionContext, tableID int, file *heap.Heap
 
 // Open initializes the SequentialScan operator for iteration by creating and opening
 // the underlying file iterator.
-//
-// The method obtains the database file for the target table and creates a file
-// iterator that will be used to read tuples sequentially from storage.
-//
-// Returns an error if the database file cannot be accessed or the iterator fails to open.
 func (ss *SequentialScan) Open() error {
 	ss.base.MarkOpened()
 	return nil
@@ -61,7 +63,9 @@ func (ss *SequentialScan) Open() error {
 // Note: This does NOT close the underlying DbFile, as it's managed by the catalog
 // and may be shared across multiple iterators.
 func (ss *SequentialScan) Close() error {
-	// Don't close ss.dbFile - it's owned by the catalog, not this iterator
+	if ss.prefetchDone != nil {
+		<-ss.prefetchDone
+	}
 	ss.dbFile = nil
 	return ss.base.Close()
 }
@@ -82,9 +86,35 @@ func (ss *SequentialScan) Next() (*tuple.Tuple, error) {
 	return ss.base.Next()
 }
 
+// prefetchNextPage asynchronously prefetches the next page to improve I/O performance.
+// It runs in a background goroutine and signals completion via the prefetchDone channel.
+func (ss *SequentialScan) prefetchNextPage(nextPageNum int) {
+	if !ss.prefetchEnabled {
+		return
+	}
+
+	numPages, err := ss.dbFile.NumPages()
+	if err != nil || nextPageNum >= numPages {
+		return
+	}
+
+	ss.prefetchDone = make(chan struct{})
+
+	go func() {
+		defer close(ss.prefetchDone)
+
+		nextPID := heap.NewHeapPageID(ss.tableID, nextPageNum)
+		_, _ = ss.store.GetPage(ss.tx, ss.dbFile, nextPID, transaction.ReadOnly)
+		// Ignore errors in prefetch - the main read will handle them
+	}()
+}
+
 // readNext is the internal method that implements the sequential scanning logic.
 // It reads the next tuple from the underlying file iterator, handling the
 // low-level details of tuple retrieval from storage.
+//
+// The implementation includes page prefetching: when moving to a new page,
+// it asynchronously prefetches the next page in the background to reduce I/O wait time.
 func (ss *SequentialScan) readNext() (*tuple.Tuple, error) {
 	if ss.dbFile == nil {
 		return nil, fmt.Errorf("database file not initialized")
@@ -95,7 +125,6 @@ func (ss *SequentialScan) readNext() (*tuple.Tuple, error) {
 		return nil, fmt.Errorf("failed to get number of pages: %v", err)
 	}
 
-	// Check if current iterator has more tuples
 	if ss.tupIter != nil {
 		hasNext, err := ss.tupIter.HasNext()
 		if err != nil {
@@ -106,12 +135,13 @@ func (ss *SequentialScan) readNext() (*tuple.Tuple, error) {
 		}
 	}
 
-	// Need to fetch next page with tuples
 	for {
 		ss.currentPage++
 		if ss.currentPage >= numPages {
-			return nil, nil // End of table
+			return nil, nil
 		}
+
+		<-ss.prefetchDone
 
 		pid := heap.NewHeapPageID(ss.tableID, ss.currentPage)
 		page, err := ss.store.GetPage(ss.tx, ss.dbFile, pid, transaction.ReadOnly)
@@ -122,14 +152,13 @@ func (ss *SequentialScan) readNext() (*tuple.Tuple, error) {
 		hPage := page.(*heap.HeapPage)
 		tuples := hPage.GetTuples()
 
-		// Skip empty pages
+		ss.prefetchNextPage(ss.currentPage + 1)
+
 		if len(tuples) == 0 {
 			continue
 		}
 
 		ss.tupIter = tuple.NewIterator(tuples)
-
-		// Return first tuple from this page
 		hasNext, err := ss.tupIter.HasNext()
 		if err != nil {
 			return nil, fmt.Errorf("failed to check iterator: %v", err)
@@ -148,8 +177,13 @@ func (ss *SequentialScan) Rewind() error {
 		return fmt.Errorf("database file not initialized")
 	}
 
+	<-ss.prefetchDone
+
 	ss.currentPage = -1
 	ss.tupIter = nil
 	ss.base.ClearCache()
+
+	ss.prefetchDone = make(chan struct{})
+	close(ss.prefetchDone)
 	return nil
 }
