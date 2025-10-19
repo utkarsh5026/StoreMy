@@ -1,4 +1,4 @@
-package query
+package setops
 
 import (
 	"storemy/pkg/tuple"
@@ -7,8 +7,8 @@ import (
 // TupleSet provides a hash-based set abstraction for tuples.
 // It supports both set semantics (distinct) and bag semantics (with counts).
 type TupleSet struct {
-	hashes      map[uint32]int  // Hash -> count
-	preserveAll bool            // If true, tracks counts; if false, just presence
+	hashes      map[uint32]int // Hash -> count
+	preserveAll bool           // If true, tracks counts; if false, just presence
 }
 
 // NewTupleSet creates a new tuple set.

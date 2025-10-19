@@ -1,4 +1,4 @@
-package query
+package setops
 
 import (
 	"storemy/pkg/iterator"
