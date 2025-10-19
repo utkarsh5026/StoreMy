@@ -14,55 +14,69 @@ import (
 	"time"
 )
 
-// TestSeqScanPrefetching verifies that prefetching is working correctly
-func TestSeqScanPrefetching(t *testing.T) {
-	// Setup: Create a temporary database file with multiple pages
+// testSetup holds common test resources
+type testSetup struct {
+	heapFile *heap.HeapFile
+	wal      *log.WAL
+	store    *memory.PageStore
+	tx       *transaction.TransactionContext
+	td       *tuple.TupleDescription
+}
+
+// setupSeqScanTest creates common test resources
+func setupSeqScanTest(t *testing.T, fields []types.Type, fieldNames []string) *testSetup {
 	tempDir := t.TempDir()
 	filePath := filepath.Join(tempDir, "seqscan_test.dat")
 
-	// Create tuple description
-	td, err := tuple.NewTupleDesc(
-		[]types.Type{types.IntType, types.StringType},
-		[]string{"id", "name"},
-	)
+	td, err := tuple.NewTupleDesc(fields, fieldNames)
 	if err != nil {
 		t.Fatalf("Failed to create tuple description: %v", err)
 	}
 
-	// Create heap file
 	heapFile, err := heap.NewHeapFile(filePath, td)
 	if err != nil {
 		t.Fatalf("Failed to create heap file: %v", err)
 	}
-	defer heapFile.Close()
 
-	// Create WAL and page store
 	walPath := filepath.Join(tempDir, "test.wal")
 	wal, err := log.NewWAL(walPath, 4096)
 	if err != nil {
 		t.Fatalf("Failed to create WAL: %v", err)
 	}
-	defer wal.Close()
 
 	store := memory.NewPageStore(wal)
-	defer store.Close()
-
-	// Create transaction
 	tx := transaction.NewTransactionContext(primitives.NewTransactionID())
 
-	// Insert multiple pages of data
-	totalTuples := 100
+	return &testSetup{
+		heapFile: heapFile,
+		wal:      wal,
+		store:    store,
+		tx:       tx,
+		td:       td,
+	}
+}
 
-	for i := 0; i < totalTuples; i++ {
-		tup := tuple.NewTuple(td)
-		tup.SetField(0, types.NewIntField(int64(i)))
-		tup.SetField(1, types.NewStringField("tuple", 128))
+// cleanup closes all resources
+func (s *testSetup) cleanup() {
+	if s.store != nil {
+		s.store.Close()
+	}
+	if s.wal != nil {
+		s.wal.Close()
+	}
+	if s.heapFile != nil {
+		s.heapFile.Close()
+	}
+}
 
-		// Manually add tuples to pages
+// insertTuples inserts tuples into the heap file
+func (s *testSetup) insertTuples(t *testing.T, numTuples int, tupleFactory func(int, *tuple.TupleDescription) *tuple.Tuple) {
+	for i := 0; i < numTuples; i++ {
+		tup := tupleFactory(i, s.td)
 		pageNum := i / 10
-		pageID := heap.NewHeapPageID(heapFile.GetID(), pageNum)
+		pageID := heap.NewHeapPageID(s.heapFile.GetID(), pageNum)
 
-		pg, err := store.GetPage(tx, heapFile, pageID, transaction.ReadWrite)
+		pg, err := s.store.GetPage(s.tx, s.heapFile, pageID, transaction.ReadWrite)
 		if err != nil {
 			t.Fatalf("Failed to get page: %v", err)
 		}
@@ -73,32 +87,41 @@ func TestSeqScanPrefetching(t *testing.T) {
 			t.Fatalf("Failed to add tuple %d: %v", i, err)
 		}
 
-		// Write the page back
-		err = heapFile.WritePage(heapPage)
+		err = s.heapFile.WritePage(heapPage)
 		if err != nil {
 			t.Fatalf("Failed to write page: %v", err)
 		}
 	}
+}
 
-	// Create sequential scan
-	seqScan, err := NewSeqScan(tx, heapFile.GetID(), heapFile, store)
+// TestSeqScanPrefetching verifies that prefetching is working correctly
+func TestSeqScanPrefetching(t *testing.T) {
+	setup := setupSeqScanTest(t, []types.Type{types.IntType, types.StringType}, []string{"id", "name"})
+	defer setup.cleanup()
+
+	totalTuples := 100
+	setup.insertTuples(t, totalTuples, func(i int, td *tuple.TupleDescription) *tuple.Tuple {
+		tup := tuple.NewTuple(td)
+		tup.SetField(0, types.NewIntField(int64(i)))
+		tup.SetField(1, types.NewStringField("tuple", 128))
+		return tup
+	})
+
+	seqScan, err := NewSeqScan(setup.tx, setup.heapFile.GetID(), setup.heapFile, setup.store)
 	if err != nil {
 		t.Fatalf("Failed to create sequential scan: %v", err)
 	}
 
-	// Verify prefetching is enabled
 	if !seqScan.prefetchEnabled {
 		t.Error("Expected prefetching to be enabled by default")
 	}
 
-	// Open the scan
 	err = seqScan.Open()
 	if err != nil {
 		t.Fatalf("Failed to open sequential scan: %v", err)
 	}
 	defer seqScan.Close()
 
-	// Read all tuples and verify they are returned correctly
 	count := 0
 	for {
 		hasNext, err := seqScan.HasNext()
@@ -121,12 +144,10 @@ func TestSeqScanPrefetching(t *testing.T) {
 		count++
 	}
 
-	// Verify we read all tuples
 	if count != totalTuples {
 		t.Errorf("Expected %d tuples, got %d", totalTuples, count)
 	}
 
-	// Verify the prefetch channel is properly managed
 	select {
 	case <-seqScan.prefetchDone:
 		// Channel should be closed or ready
@@ -137,68 +158,17 @@ func TestSeqScanPrefetching(t *testing.T) {
 
 // TestSeqScanPrefetchingRewind tests that prefetching works correctly with Rewind
 func TestSeqScanPrefetchingRewind(t *testing.T) {
-	// Setup: Create a temporary database file
-	tempDir := t.TempDir()
-	filePath := filepath.Join(tempDir, "seqscan_rewind_test.dat")
+	setup := setupSeqScanTest(t, []types.Type{types.IntType}, []string{"id"})
+	defer setup.cleanup()
 
-	// Create tuple description
-	td, err := tuple.NewTupleDesc(
-		[]types.Type{types.IntType},
-		[]string{"id"},
-	)
-	if err != nil {
-		t.Fatalf("Failed to create tuple description: %v", err)
-	}
-
-	// Create heap file
-	heapFile, err := heap.NewHeapFile(filePath, td)
-	if err != nil {
-		t.Fatalf("Failed to create heap file: %v", err)
-	}
-	defer heapFile.Close()
-
-	// Create WAL and page store
-	walPath := filepath.Join(tempDir, "test.wal")
-	wal, err := log.NewWAL(walPath, 4096)
-	if err != nil {
-		t.Fatalf("Failed to create WAL: %v", err)
-	}
-	defer wal.Close()
-
-	store := memory.NewPageStore(wal)
-	defer store.Close()
-
-	// Create transaction
-	tx := transaction.NewTransactionContext(primitives.NewTransactionID())
-
-	// Insert some tuples
 	numTuples := 50
-	for i := 0; i < numTuples; i++ {
+	setup.insertTuples(t, numTuples, func(i int, td *tuple.TupleDescription) *tuple.Tuple {
 		tup := tuple.NewTuple(td)
 		tup.SetField(0, types.NewIntField(int64(i)))
+		return tup
+	})
 
-		pageNum := i / 10
-		pageID := heap.NewHeapPageID(heapFile.GetID(), pageNum)
-
-		pg, err := store.GetPage(tx, heapFile, pageID, transaction.ReadWrite)
-		if err != nil {
-			t.Fatalf("Failed to get page: %v", err)
-		}
-
-		heapPage := pg.(*heap.HeapPage)
-		err = heapPage.AddTuple(tup)
-		if err != nil {
-			t.Fatalf("Failed to add tuple %d: %v", i, err)
-		}
-
-		err = heapFile.WritePage(heapPage)
-		if err != nil {
-			t.Fatalf("Failed to write page: %v", err)
-		}
-	}
-
-	// Create sequential scan
-	seqScan, err := NewSeqScan(tx, heapFile.GetID(), heapFile, store)
+	seqScan, err := NewSeqScan(setup.tx, setup.heapFile.GetID(), setup.heapFile, setup.store)
 	if err != nil {
 		t.Fatalf("Failed to create sequential scan: %v", err)
 	}
@@ -209,7 +179,6 @@ func TestSeqScanPrefetchingRewind(t *testing.T) {
 	}
 	defer seqScan.Close()
 
-	// First iteration
 	count1 := 0
 	for {
 		hasNext, _ := seqScan.HasNext()
@@ -223,13 +192,11 @@ func TestSeqScanPrefetchingRewind(t *testing.T) {
 		count1++
 	}
 
-	// Rewind
 	err = seqScan.Rewind()
 	if err != nil {
 		t.Fatalf("Rewind failed: %v", err)
 	}
 
-	// Verify prefetch channel is reset after rewind
 	select {
 	case <-seqScan.prefetchDone:
 		// Channel should be ready immediately after rewind
@@ -237,7 +204,6 @@ func TestSeqScanPrefetchingRewind(t *testing.T) {
 		t.Error("prefetchDone channel is blocking after rewind")
 	}
 
-	// Second iteration
 	count2 := 0
 	for {
 		hasNext, _ := seqScan.HasNext()
@@ -251,7 +217,6 @@ func TestSeqScanPrefetchingRewind(t *testing.T) {
 		count2++
 	}
 
-	// Both iterations should return the same number of tuples
 	if count1 != count2 {
 		t.Errorf("Expected same number of tuples in both iterations: first=%d, second=%d", count1, count2)
 	}
@@ -263,68 +228,17 @@ func TestSeqScanPrefetchingRewind(t *testing.T) {
 
 // TestSeqScanPrefetchingClose tests that Close properly waits for pending prefetch
 func TestSeqScanPrefetchingClose(t *testing.T) {
-	// Setup: Create a temporary database file
-	tempDir := t.TempDir()
-	filePath := filepath.Join(tempDir, "seqscan_close_test.dat")
+	setup := setupSeqScanTest(t, []types.Type{types.IntType}, []string{"id"})
+	defer setup.cleanup()
 
-	// Create tuple description
-	td, err := tuple.NewTupleDesc(
-		[]types.Type{types.IntType},
-		[]string{"id"},
-	)
-	if err != nil {
-		t.Fatalf("Failed to create tuple description: %v", err)
-	}
-
-	// Create heap file
-	heapFile, err := heap.NewHeapFile(filePath, td)
-	if err != nil {
-		t.Fatalf("Failed to create heap file: %v", err)
-	}
-	defer heapFile.Close()
-
-	// Create WAL and page store
-	walPath := filepath.Join(tempDir, "test.wal")
-	wal, err := log.NewWAL(walPath, 4096)
-	if err != nil {
-		t.Fatalf("Failed to create WAL: %v", err)
-	}
-	defer wal.Close()
-
-	store := memory.NewPageStore(wal)
-	defer store.Close()
-
-	// Create transaction
-	tx := transaction.NewTransactionContext(primitives.NewTransactionID())
-
-	// Insert some tuples across multiple pages
 	numTuples := 100
-	for i := 0; i < numTuples; i++ {
+	setup.insertTuples(t, numTuples, func(i int, td *tuple.TupleDescription) *tuple.Tuple {
 		tup := tuple.NewTuple(td)
 		tup.SetField(0, types.NewIntField(int64(i)))
+		return tup
+	})
 
-		pageNum := i / 10
-		pageID := heap.NewHeapPageID(heapFile.GetID(), pageNum)
-
-		pg, err := store.GetPage(tx, heapFile, pageID, transaction.ReadWrite)
-		if err != nil {
-			t.Fatalf("Failed to get page: %v", err)
-		}
-
-		heapPage := pg.(*heap.HeapPage)
-		err = heapPage.AddTuple(tup)
-		if err != nil {
-			t.Fatalf("Failed to add tuple %d: %v", i, err)
-		}
-
-		err = heapFile.WritePage(heapPage)
-		if err != nil {
-			t.Fatalf("Failed to write page: %v", err)
-		}
-	}
-
-	// Create sequential scan
-	seqScan, err := NewSeqScan(tx, heapFile.GetID(), heapFile, store)
+	seqScan, err := NewSeqScan(setup.tx, setup.heapFile.GetID(), setup.heapFile, setup.store)
 	if err != nil {
 		t.Fatalf("Failed to create sequential scan: %v", err)
 	}
@@ -334,7 +248,6 @@ func TestSeqScanPrefetchingClose(t *testing.T) {
 		t.Fatalf("Failed to open sequential scan: %v", err)
 	}
 
-	// Read a few tuples to trigger prefetching
 	for i := 0; i < 10; i++ {
 		hasNext, _ := seqScan.HasNext()
 		if !hasNext {
@@ -343,14 +256,12 @@ func TestSeqScanPrefetchingClose(t *testing.T) {
 		seqScan.Next()
 	}
 
-	// Close should wait for any pending prefetch and not hang
 	done := make(chan struct{})
 	go func() {
 		seqScan.Close()
 		close(done)
 	}()
 
-	// Wait for close with timeout
 	select {
 	case <-done:
 		// Success - Close completed
@@ -361,68 +272,17 @@ func TestSeqScanPrefetchingClose(t *testing.T) {
 
 // TestSeqScanPrefetchingConcurrency tests concurrent access patterns
 func TestSeqScanPrefetchingConcurrency(t *testing.T) {
-	// Setup: Create a temporary database file
-	tempDir := t.TempDir()
-	filePath := filepath.Join(tempDir, "seqscan_concurrent_test.dat")
+	setup := setupSeqScanTest(t, []types.Type{types.IntType, types.StringType}, []string{"id", "value"})
+	defer setup.cleanup()
 
-	// Create tuple description
-	td, err := tuple.NewTupleDesc(
-		[]types.Type{types.IntType, types.StringType},
-		[]string{"id", "value"},
-	)
-	if err != nil {
-		t.Fatalf("Failed to create tuple description: %v", err)
-	}
-
-	// Create heap file
-	heapFile, err := heap.NewHeapFile(filePath, td)
-	if err != nil {
-		t.Fatalf("Failed to create heap file: %v", err)
-	}
-	defer heapFile.Close()
-
-	// Create WAL and page store with larger buffer pool for concurrent access
-	walPath := filepath.Join(tempDir, "test.wal")
-	wal, err := log.NewWAL(walPath, 4096)
-	if err != nil {
-		t.Fatalf("Failed to create WAL: %v", err)
-	}
-	defer wal.Close()
-
-	store := memory.NewPageStore(wal)
-	defer store.Close()
-
-	// Create transaction
-	tx := transaction.NewTransactionContext(primitives.NewTransactionID())
-
-	// Insert data
 	numTuples := 200
-	for i := 0; i < numTuples; i++ {
+	setup.insertTuples(t, numTuples, func(i int, td *tuple.TupleDescription) *tuple.Tuple {
 		tup := tuple.NewTuple(td)
 		tup.SetField(0, types.NewIntField(int64(i)))
 		tup.SetField(1, types.NewStringField("value", 128))
+		return tup
+	})
 
-		pageNum := i / 10
-		pageID := heap.NewHeapPageID(heapFile.GetID(), pageNum)
-
-		pg, err := store.GetPage(tx, heapFile, pageID, transaction.ReadWrite)
-		if err != nil {
-			t.Fatalf("Failed to get page: %v", err)
-		}
-
-		heapPage := pg.(*heap.HeapPage)
-		err = heapPage.AddTuple(tup)
-		if err != nil {
-			t.Fatalf("Failed to add tuple %d: %v", i, err)
-		}
-
-		err = heapFile.WritePage(heapPage)
-		if err != nil {
-			t.Fatalf("Failed to write page: %v", err)
-		}
-	}
-
-	// Create multiple sequential scans and run them concurrently
 	numScans := 5
 	var wg sync.WaitGroup
 	errors := make(chan error, numScans)
@@ -432,10 +292,9 @@ func TestSeqScanPrefetchingConcurrency(t *testing.T) {
 		go func(scanID int) {
 			defer wg.Done()
 
-			// Each goroutine gets its own transaction
 			tx := transaction.NewTransactionContext(primitives.NewTransactionID())
 
-			seqScan, err := NewSeqScan(tx, heapFile.GetID(), heapFile, store)
+			seqScan, err := NewSeqScan(tx, setup.heapFile.GetID(), setup.heapFile, setup.store)
 			if err != nil {
 				errors <- err
 				return
@@ -473,16 +332,12 @@ func TestSeqScanPrefetchingConcurrency(t *testing.T) {
 		}(i)
 	}
 
-	// Wait for all scans to complete before cleaning up
 	wg.Wait()
 	close(errors)
 
-	// Check for errors
 	for err := range errors {
 		if err != nil {
 			t.Errorf("Concurrent scan error: %v", err)
 		}
 	}
-
-	// Cleanup happens via defer statements
 }
