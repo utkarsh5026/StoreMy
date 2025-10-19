@@ -3,16 +3,7 @@ package planner
 import (
 	"fmt"
 	"os"
-	"storemy/pkg/execution/query"
-	"storemy/pkg/iterator"
-	btreeindex "storemy/pkg/memory/wrappers/btree_index"
-	hashindex "storemy/pkg/memory/wrappers/hash_index"
 	"storemy/pkg/parser/statements"
-	"storemy/pkg/storage/heap"
-	"storemy/pkg/storage/index"
-	"storemy/pkg/storage/index/btree"
-	"storemy/pkg/storage/index/hash"
-	"storemy/pkg/tuple"
 	"storemy/pkg/types"
 )
 
@@ -55,7 +46,7 @@ func NewCreateIndexPlan(
 //  5. Registers index in catalog (CATALOG_INDEXES)
 //  6. Populates index with existing data from the table
 //  7. Returns success result
-func (p *CreateIndexPlan) Execute() (any, error) {
+func (p *CreateIndexPlan) Execute() (Result, error) {
 	cm := p.ctx.CatalogManager()
 	tableName, indexName, colName := p.Statement.TableName, p.Statement.IndexName, p.Statement.ColumnName
 	idxType := p.Statement.IndexType
@@ -69,12 +60,12 @@ func (p *CreateIndexPlan) Execute() (any, error) {
 		return nil, fmt.Errorf("failed to get table ID: %v", err)
 	}
 
-	tableSchema, err := cm.GetTableSchema(p.tx, tableID)
+	tsch, err := cm.GetTableSchema(p.tx, tableID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get table schema: %v", err)
 	}
 
-	columnIndex := tableSchema.GetFieldIndex(colName)
+	columnIndex := tsch.GetFieldIndex(colName)
 	if columnIndex < 0 {
 		return nil, fmt.Errorf("column %s does not exist in table %s",
 			colName, tableName)
@@ -101,20 +92,19 @@ func (p *CreateIndexPlan) Execute() (any, error) {
 		return nil, fmt.Errorf("failed to create index in catalog: %v", err)
 	}
 
-	columnType := tableSchema.Columns[columnIndex].FieldType
-	if err := p.createPhysicalIndex(filePath, columnType, idxType); err != nil {
-		if _, dropErr := cm.DropIndex(p.tx, indexName); dropErr != nil {
-			fmt.Printf("Warning: failed to cleanup catalog entry after index creation failure: %v\n", dropErr)
-		}
-		return nil, fmt.Errorf("failed to create physical index: %v", err)
+	columnType := tsch.Columns[columnIndex].FieldType
+
+	if err := p.createIndex(filePath, columnType); err != nil {
+		return nil, err
 	}
 
-	if err := p.populateIndex(filePath, indexID, tableID, columnIndex, columnType, idxType); err != nil {
-		os.Remove(filePath)
-		if _, dropErr := cm.DropIndex(p.tx, indexName); dropErr != nil {
-			fmt.Printf("Warning: failed to cleanup catalog entry after population failure: %v\n", dropErr)
-		}
-		return nil, fmt.Errorf("failed to populate index: %v", err)
+	if err := p.populateIndex(
+		filePath,
+		columnType,
+		columnIndex,
+		indexID,
+		tableID); err != nil {
+		return nil, err
 	}
 
 	return &DDLResult{
@@ -127,110 +117,36 @@ func (p *CreateIndexPlan) Execute() (any, error) {
 	}, nil
 }
 
-// createPhysicalIndex creates the actual index file on disk based on the index type.
-func (p *CreateIndexPlan) createPhysicalIndex(
-	filePath string,
-	keyType types.Type,
-	indexType index.IndexType,
-) error {
-	switch indexType {
-	case index.HashIndex:
-		hashFile, err := hash.NewHashFile(filePath, keyType, hash.DefaultBuckets)
-		if err != nil {
-			return fmt.Errorf("failed to create hash index file: %v", err)
+func (p *CreateIndexPlan) createIndex(indexFilePath string, indexColType types.Type) error {
+	cm := p.ctx.CatalogManager()
+	im := p.ctx.IndexManager()
+	if err := im.CreatePhysicalIndex(indexFilePath, indexColType, p.Statement.IndexType); err != nil {
+		if _, dropErr := cm.DropIndex(p.tx, p.Statement.IndexName); dropErr != nil {
+			fmt.Printf("Warning: failed to cleanup catalog entry after index creation failure: %v\n", dropErr)
 		}
-		return hashFile.Close()
-
-	case index.BTreeIndex:
-		btreeFile, err := btree.NewBTreeFile(filePath, keyType)
-		if err != nil {
-			return fmt.Errorf("failed to create btree index file: %v", err)
-		}
-		return btreeFile.Close()
-
-	default:
-		return fmt.Errorf("unsupported index type: %s", indexType)
+		return fmt.Errorf("failed to create physical index: %v", err)
 	}
+	return nil
 }
 
-// populateIndex scans the table and inserts all existing tuples into the index.
-// This is called immediately after index creation to build the initial index state.
-func (p *CreateIndexPlan) populateIndex(
-	filePath string,
-	indexID,
-	tableID,
-	columnIndex int,
-	keyType types.Type,
-	indexType index.IndexType,
-) error {
-	tableFile, err := p.ctx.CatalogManager().GetTableFile(tableID)
+func (p *CreateIndexPlan) populateIndex(indexFilePath string, indexColType types.Type, indexCol, indexID, tableID int) error {
+	cm := p.ctx.CatalogManager()
+	im := p.ctx.IndexManager()
+	tableFile, err := cm.GetTableFile(tableID)
 	if err != nil {
+		os.Remove(indexFilePath)
+		if _, dropErr := cm.DropIndex(p.tx, p.Statement.IndexName); dropErr != nil {
+			fmt.Printf("Warning: failed to cleanup catalog entry after file access failure: %v\n", dropErr)
+		}
 		return fmt.Errorf("failed to get table file: %v", err)
 	}
-	var insertFunc func(key types.Field, rid *tuple.TupleRecordID) error
 
-	switch indexType {
-	case index.HashIndex:
-		hashFile, err := hash.NewHashFile(filePath, keyType, 100)
-		if err != nil {
-			return fmt.Errorf("failed to open hash index: %v", err)
+	if err := im.PopulateIndex(p.tx, indexFilePath, indexID, tableFile, indexCol, indexColType, p.Statement.IndexType); err != nil {
+		os.Remove(indexFilePath)
+		if _, dropErr := cm.DropIndex(p.tx, p.Statement.IndexName); dropErr != nil {
+			fmt.Printf("Warning: failed to cleanup catalog entry after population failure: %v\n", dropErr)
 		}
-		defer hashFile.Close()
-
-		hashIndex := hashindex.NewHashIndex(indexID, keyType, hashFile, p.ctx.PageStore(), p.tx)
-		insertFunc = func(key types.Field, rid *tuple.TupleRecordID) error {
-			return hashIndex.Insert(key, rid)
-		}
-
-	case index.BTreeIndex:
-		btreeFile, err := btree.NewBTreeFile(filePath, keyType)
-		if err != nil {
-			return fmt.Errorf("failed to open btree index: %v", err)
-		}
-		defer btreeFile.Close()
-
-		btreeIndex := btreeindex.NewBTree(indexID, keyType, btreeFile, p.tx, p.ctx.PageStore())
-		insertFunc = func(key types.Field, rid *tuple.TupleRecordID) error {
-			return btreeIndex.Insert(key, rid)
-		}
-
-	default:
-		return fmt.Errorf("unsupported index type: %s", indexType)
+		return fmt.Errorf("failed to populate index: %v", err)
 	}
-
-	heapFile, ok := tableFile.(*heap.HeapFile)
-	if !ok {
-		return fmt.Errorf("expected heap file for table, got %T", tableFile)
-	}
-
-	return p.insertIntoIndex(p.tx, heapFile, columnIndex, tableID, insertFunc)
-}
-
-func (p *CreateIndexPlan) insertIntoIndex(tx TransactionCtx, tableFile *heap.HeapFile, heapTableID, indexColIdx int, insertFunc func(key types.Field, rid *tuple.TupleRecordID) error) error {
-	it, err := query.NewSeqScan(tx, heapTableID, tableFile, p.ctx.PageStore())
-	if err != nil {
-		return fmt.Errorf("failed to create sequential scan: %v", err)
-	}
-	it.Open()
-	defer it.Close()
-
-	return iterator.ForEach(it, func(t *tuple.Tuple) error {
-		key, err := t.GetField(indexColIdx)
-		if err != nil {
-			return fmt.Errorf("failed to get field at index %d: %v", indexColIdx, err)
-		}
-
-		if key == nil {
-			return nil
-		}
-
-		if t.RecordID == nil {
-			return fmt.Errorf("tuple missing record ID")
-		}
-
-		if err := insertFunc(key, t.RecordID); err != nil {
-			return fmt.Errorf("failed to insert key into index: %v", err)
-		}
-		return nil
-	})
+	return nil
 }
