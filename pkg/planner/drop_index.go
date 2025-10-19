@@ -64,7 +64,7 @@ func NewDropIndexPlan(
 // Returns:
 //   - DDLResult with success message on completion
 //   - Error if index doesn't exist (without IF EXISTS) or validation fails
-func (p *DropIndexPlan) Execute() (any, error) {
+func (p *DropIndexPlan) Execute() (Result, error) {
 	cm := p.ctx.CatalogManager()
 	idxName := p.Statement.IndexName
 
@@ -112,7 +112,6 @@ func (p *DropIndexPlan) deleteIndex() error {
 		return fmt.Errorf("failed to drop index from catalog: %w", err)
 	}
 
-	// Best-effort file deletion - warn on failure but don't rollback
 	im := p.ctx.IndexManager()
 	if err := im.DeletePhysicalIndex(filePath); err != nil {
 		fmt.Printf("Warning: failed to delete index file %s: %v\n", filePath, err)
@@ -141,7 +140,6 @@ func (p *DropIndexPlan) validateTable() error {
 		return fmt.Errorf("failed to get index metadata: %w", err)
 	}
 
-	// Only validate if ON clause was specified
 	tableName := p.Statement.TableName
 	if tableName != "" {
 		tn, err := cm.GetTableName(p.transactionCtx, idx.TableID)

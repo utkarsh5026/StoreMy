@@ -30,7 +30,7 @@ func NewDeletePlan(
 // 2. Build query plan with optional WHERE filtering
 // 3. Collect all tuples matching the criteria
 // 4. Delete the collected tuples
-func (p *DeletePlan) Execute() (any, error) {
+func (p *DeletePlan) Execute() (Result, error) {
 	tableID, err := resolveTableID(p.statement.TableName, p.tx, p.ctx)
 	if err != nil {
 		return nil, err

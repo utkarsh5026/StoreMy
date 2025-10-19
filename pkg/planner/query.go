@@ -6,7 +6,7 @@ import (
 )
 
 type Plan interface {
-	Execute() (any, error)
+	Execute() (Result, error)
 }
 
 type QueryPlanner struct {

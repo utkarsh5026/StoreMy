@@ -9,15 +9,6 @@ import (
 	"storemy/pkg/types"
 )
 
-type DMLResult struct {
-	RowsAffected int
-	Message      string
-}
-
-func (d *DMLResult) String() string {
-	return fmt.Sprintf("%d row(s) affected: %s", d.RowsAffected, d.Message)
-}
-
 type InsertPlan struct {
 	statement      *statements.InsertStatement
 	ctx            DbContext
@@ -41,7 +32,7 @@ func NewInsertPlan(
 // Execute performs the INSERT operation by processing the statement and inserting
 // all specified tuples into the target table. It validates the data, creates
 // tuples according to the table schema, and coordinates with the storage layer.
-func (p *InsertPlan) Execute() (any, error) {
+func (p *InsertPlan) Execute() (Result, error) {
 	md, err := resolveTableMetadata(p.statement.TableName, p.transactionCtx, p.ctx)
 	if err != nil {
 		return nil, err

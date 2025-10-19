@@ -28,7 +28,7 @@ func NewUpdatePlan(statement *statements.UpdateStatement, tx TransactionCtx, ctx
 //
 // Returns a DMLResult with the count of modified rows.
 // All operations are atomic within the transaction - failures trigger rollback.
-func (p *UpdatePlan) Execute() (any, error) {
+func (p *UpdatePlan) Execute() (Result, error) {
 	md, err := resolveTableMetadata(p.statement.TableName, p.tx, p.ctx)
 	if err != nil {
 		return nil, err
