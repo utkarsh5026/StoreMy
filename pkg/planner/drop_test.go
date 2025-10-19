@@ -63,7 +63,7 @@ func TestNewDropTablePlan(t *testing.T) {
 		t.Error("Context not properly assigned")
 	}
 
-	if plan.transactionCtx != transCtx {
+	if plan.tx != transCtx {
 		t.Error("TransactionCtx not properly assigned")
 	}
 }
