@@ -138,6 +138,7 @@ func createTestPageStore(t *testing.T) (*memory.PageStore, func()) {
 	store := memory.NewPageStore(wal)
 	cleanup := func() {
 		store.Close()
+		wal.Close()
 	}
 	return store, cleanup
 }
