@@ -23,13 +23,27 @@ const (
 )
 
 // CardinalityEstimator estimates the output cardinality (number of rows)
-// of query plan nodes
+// of query plan nodes. It works in conjunction with SelectivityEstimator
+// to provide cost-based query optimization.
+//
+// The estimator uses various techniques:
+//   - Table statistics from the system catalog (row counts, distinct values)
+//   - Predicate selectivity estimation (via SelectivityEstimator)
+//   - Join cardinality formulas (based on join type and predicates)
+//   - Correlation correction for multiple predicates
+//
+// All estimates require a transaction context for accessing catalog statistics.
 type CardinalityEstimator struct {
 	catalog   *catalog.SystemCatalog
 	estimator *selectivity.SelectivityEstimator
 }
 
-// NewCardinalityEstimator creates a new cardinality estimator
+// NewCardinalityEstimator creates a new cardinality estimator.
+//
+// Parameters:
+//   - cat: System catalog for accessing table/column statistics
+//
+// Returns error if catalog is nil.
 func NewCardinalityEstimator(cat *catalog.SystemCatalog) (*CardinalityEstimator, error) {
 	if cat == nil {
 		return nil, fmt.Errorf("cannot have nil CATALOG")
@@ -40,7 +54,26 @@ func NewCardinalityEstimator(cat *catalog.SystemCatalog) (*CardinalityEstimator,
 	}, nil
 }
 
-// EstimatePlanCardinality estimates the output cardinality for a plan node
+// EstimatePlanCardinality estimates the output cardinality for a plan node.
+// Returns the cached cardinality if already computed, otherwise recursively
+// estimates based on the node type.
+//
+// Supported plan node types:
+//   - ScanNode: Base table cardinality from statistics
+//   - JoinNode: Product of inputs × join selectivity
+//   - FilterNode: Input cardinality × predicate selectivity
+//   - ProjectNode: Pass-through from child
+//   - AggregateNode: GROUP BY distinct count estimation
+//   - SortNode: Pass-through from child
+//   - LimitNode: Min(limit, child cardinality)
+//   - DistinctNode: Estimated distinct values
+//   - Set operations (Union/Intersect/Except)
+//
+// Parameters:
+//   - tx: Transaction context for catalog access
+//   - planNode: Plan node to estimate
+//
+// Returns estimated cardinality or error if estimation fails.
 func (ce *CardinalityEstimator) EstimatePlanCardinality(
 	tx *transaction.TransactionContext,
 	planNode plan.PlanNode,
@@ -81,7 +114,16 @@ func (ce *CardinalityEstimator) EstimatePlanCardinality(
 	}
 }
 
-// getColumnDistinctCount gets the distinct count for a column in a plan subtree
+// getColumnDistinctCount retrieves the distinct count for a column by searching
+// the plan tree for scan nodes with statistics. This is used for GROUP BY and
+// DISTINCT cardinality estimation.
+//
+// Parameters:
+//   - tx: Transaction context for catalog access
+//   - planNode: Root of plan subtree to search
+//   - columnName: Name of column to get distinct count for
+//
+// Returns distinct count from statistics, or DefaultDistinctCount if unavailable.
 func (ce *CardinalityEstimator) getColumnDistinctCount(
 	tx *transaction.TransactionContext,
 	planNode plan.PlanNode,
@@ -110,9 +152,21 @@ func (ce *CardinalityEstimator) getColumnDistinctCount(
 	return DefaultDistinctCount
 }
 
-// estimateAggr estimates output rows for an aggregation.
+// estimateAggr estimates output rows for an aggregation operation.
 // Uses actual distinct count statistics for GROUP BY columns when available,
 // falling back to heuristics when statistics are unavailable.
+//
+// Estimation logic:
+//   - No GROUP BY: Returns 1 (single aggregated row)
+//   - Single column GROUP BY: Uses column distinct count from statistics
+//   - Multiple column GROUP BY: Multiplies distinct counts (assumes independence)
+//   - Result capped at input cardinality (aggregation can't increase rows)
+//
+// Parameters:
+//   - tx: Transaction context for catalog access
+//   - node: Aggregate plan node to estimate
+//
+// Returns estimated output cardinality, minimum 1.
 func (ce *CardinalityEstimator) estimateAggr(
 	tx *transaction.TransactionContext,
 	node *plan.AggregateNode,
@@ -134,7 +188,21 @@ func (ce *CardinalityEstimator) estimateAggr(
 
 // estimateGroupByDistinctCount estimates the distinct count for a GROUP BY operation.
 // For single columns, it attempts to use actual statistics. For multiple columns,
-// it multiplies distinct counts assuming independence.
+// it multiplies distinct counts assuming independence (a common simplification).
+//
+// Multi-column estimation formula:
+//
+//	distinct(A, B, C) ≈ distinct(A) × distinct(B) × distinct(C)
+//
+// This assumes column independence, which may overestimate in practice.
+// Real systems use multi-column statistics or sampling for better accuracy.
+//
+// Parameters:
+//   - tx: Transaction context for catalog access
+//   - planNode: Child plan node to analyze
+//   - groupByExprs: List of GROUP BY column names
+//
+// Returns estimated distinct group count, capped at 1 billion to prevent overflow.
 func (ce *CardinalityEstimator) estimateGroupByDistinctCount(
 	tx *transaction.TransactionContext,
 	planNode plan.PlanNode,
@@ -189,9 +257,26 @@ func (ce *CardinalityEstimator) estimateGroupByDistinctCount(
 // to account for possible correlation between predicates. This prevents
 // over-optimistic selectivity estimates when predicates are correlated.
 //
-// Uses exponential backoff based on the number of predicates:
-// correction = product^(1 / (1 + log(n)))
-// where n is the number of predicates and product is their naive product.
+// Correction formula:
+//
+//	corrected = product^(1 / (1 + log(n)))
+//
+// where:
+//   - product = naive product of individual selectivities
+//   - n = number of predicates
+//
+// The correction increases with more predicates, making estimates more conservative.
+// Returns the corrected selectivity, bounded by the naive product (never more optimistic).
+//
+// Example:
+//   - 2 predicates with 0.1 selectivity each
+//   - Naive: 0.1 × 0.1 = 0.01 (1%)
+//   - Corrected: 0.01^(1/(1+log(2))) ≈ 0.046 (4.6%)
+//
+// Parameters:
+//   - selectivities: Array of individual predicate selectivities
+//
+// Returns corrected combined selectivity (1.0 for empty input).
 func applyCorrelationCorrection(selectivities []float64) float64 {
 	if len(selectivities) == 0 {
 		return 1.0
@@ -213,6 +298,21 @@ func applyCorrelationCorrection(selectivities []float64) float64 {
 	return math.Max(product, corrected)
 }
 
+// calculateSelectivity computes the combined selectivity of multiple predicates
+// with correlation correction, then applies it to the base cardinality.
+//
+// This is the main entry point for filter selectivity calculation, combining:
+//  1. Individual predicate selectivity estimation
+//  2. Correlation correction for multiple predicates
+//  3. Application to base cardinality
+//
+// Parameters:
+//   - tx: Transaction context for catalog access
+//   - predicates: Array of predicates to evaluate
+//   - tableID: Base table ID for statistics lookup
+//   - baseCard: Input cardinality before filtering
+//
+// Returns estimated output cardinality after applying all predicates.
 func (ce *CardinalityEstimator) calculateSelectivity(tx TxCtx, predicates []plan.PredicateInfo, tableID int, baseCard int64) int64 {
 	selectivities := make([]float64, 0, len(predicates))
 	for i := range predicates {
@@ -224,8 +324,19 @@ func (ce *CardinalityEstimator) calculateSelectivity(tx TxCtx, predicates []plan
 	return int64(float64(baseCard) * totalSelectivity)
 }
 
-// findBaseTableID walks the plan tree to find the base table ID.
-// Returns 0 if no base table is found (e.g., for joins or complex plans).
+// findBaseTableID walks the plan tree to find the base table ID by recursively
+// descending through single-child operators until reaching a ScanNode.
+//
+// This is used to associate predicates with their source table for statistics lookup.
+//
+// Supported traversal through:
+//   - FilterNode, ProjectNode, AggregateNode, SortNode, LimitNode, DistinctNode
+//
+// Parameters:
+//   - planNode: Root of plan subtree to search
+//
+// Returns table ID from the first ScanNode found, or 0 if no scan exists
+// (e.g., for joins or other multi-child nodes).
 func findBaseTableID(planNode plan.PlanNode) int {
 	if planNode == nil {
 		return 0
@@ -253,7 +364,19 @@ func findBaseTableID(planNode plan.PlanNode) int {
 }
 
 // getColumnType retrieves the type of a column from a table in the catalog.
-// Returns the column type if found, or IntType as default.
+// Used for parsing predicate values with correct type information.
+//
+// Type lookup order:
+//  1. Column statistics (from MinValue/MaxValue type)
+//  2. Table schema metadata
+//  3. Default to IntType if unavailable
+//
+// Parameters:
+//   - tx: Transaction context for catalog access
+//   - tableID: ID of table containing the column
+//   - columnName: Name of column to look up
+//
+// Returns column type, or IntType as default fallback.
 func (ce *CardinalityEstimator) getColumnType(
 	tx *transaction.TransactionContext,
 	tableID int,
@@ -292,7 +415,15 @@ func (ce *CardinalityEstimator) getColumnType(
 }
 
 // parsePredicateValue converts a string value to a types.Field using the column type.
-// Returns nil if the value cannot be parsed.
+// This enables type-aware selectivity estimation for predicates like "age > 25".
+//
+// Parameters:
+//   - tx: Transaction context for catalog access
+//   - tableID: Table ID for type lookup
+//   - columnName: Column name for type lookup
+//   - valueStr: String representation of value to parse
+//
+// Returns parsed Field with correct type, or nil if parsing fails.
 func (ce *CardinalityEstimator) parsePredicateValue(
 	tx *transaction.TransactionContext,
 	tableID int,
@@ -314,6 +445,22 @@ func (ce *CardinalityEstimator) parsePredicateValue(
 
 // estimatePredicateSelectivity estimates selectivity for a single predicate
 // using the most appropriate method based on predicate type and available information.
+//
+// Dispatches to specialized estimators for:
+//   - NullCheckPredicate: IS NULL / IS NOT NULL (uses null count statistics)
+//   - LikePredicate: LIKE pattern matching (uses pattern analysis)
+//   - InPredicate: IN (...) lists (uses list length)
+//   - StandardPredicate: =, <, >, <=, >= (uses histogram or range statistics)
+//
+// For StandardPredicate, attempts to parse the value for value-based estimation,
+// falling back to predicate-only estimation if parsing fails.
+//
+// Parameters:
+//   - tx: Transaction context for catalog access
+//   - tableID: Base table ID for statistics
+//   - pred: Predicate information including type, column, operator, and value
+//
+// Returns selectivity estimate between 0.0 and 1.0.
 func (ce *CardinalityEstimator) estimatePredicateSelectivity(
 	tx *transaction.TransactionContext,
 	tableID int,
