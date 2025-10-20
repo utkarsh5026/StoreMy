@@ -2,7 +2,6 @@ package planner
 
 import (
 	"fmt"
-	"os"
 
 	"storemy/pkg/catalog/schema"
 	"storemy/pkg/parser/statements"
@@ -131,31 +130,17 @@ func (p *CreateTablePlan) createPrimaryKeyIndex(tableID int, tableSchema *schema
 		return fmt.Errorf("failed to register index in catalog: %v", err)
 	}
 
-	indexMgr := p.ctx.IndexManager()
-
-	if err := indexMgr.CreatePhysicalIndex(filePath, pkColumn.FieldType, index.BTreeIndex); err != nil {
-		if _, dropErr := cm.DropIndex(p.transactionCtx, indexName); dropErr != nil {
-			fmt.Printf("Warning: failed to cleanup catalog entry: %v\n", dropErr)
-		}
-		return fmt.Errorf("failed to create physical index file: %v", err)
+	idxConfig := IndexCreationConfig{
+		Ctx:         p.ctx,
+		Tx:          p.transactionCtx,
+		IndexName:   indexName,
+		IndexID:     indexID,
+		IndexType:   index.BTreeIndex,
+		FilePath:    filePath,
+		TableID:     tableID,
+		ColumnIndex: pkColumnIndex,
+		ColumnType:  pkColumn.FieldType,
 	}
 
-	tableFile, err := cm.GetTableFile(tableID)
-	if err != nil {
-		os.Remove(filePath)
-		if _, dropErr := cm.DropIndex(p.transactionCtx, indexName); dropErr != nil {
-			fmt.Printf("Warning: failed to cleanup catalog entry: %v\n", dropErr)
-		}
-		return fmt.Errorf("failed to get table file: %v", err)
-	}
-
-	if err := indexMgr.PopulateIndex(p.transactionCtx, filePath, indexID, tableFile, pkColumnIndex, pkColumn.FieldType, index.BTreeIndex); err != nil {
-		os.Remove(filePath)
-		if _, dropErr := cm.DropIndex(p.transactionCtx, indexName); dropErr != nil {
-			fmt.Printf("Warning: failed to cleanup catalog entry: %v\n", dropErr)
-		}
-		return fmt.Errorf("failed to populate index: %v", err)
-	}
-
-	return nil
+	return createAndPopulateIndex(&idxConfig)
 }

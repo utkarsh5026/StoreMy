@@ -2,9 +2,7 @@ package planner
 
 import (
 	"fmt"
-	"os"
 	"storemy/pkg/parser/statements"
-	"storemy/pkg/types"
 )
 
 // CreateIndexPlan represents the execution plan for CREATE INDEX statement.
@@ -94,16 +92,19 @@ func (p *CreateIndexPlan) Execute() (Result, error) {
 
 	columnType := tsch.Columns[columnIndex].FieldType
 
-	if err := p.createIndex(filePath, columnType); err != nil {
-		return nil, err
+	idxConfig := IndexCreationConfig{
+		Ctx:         p.ctx,
+		Tx:          p.tx,
+		IndexName:   indexName,
+		IndexID:     indexID,
+		IndexType:   idxType,
+		FilePath:    filePath,
+		TableID:     tableID,
+		ColumnIndex: columnIndex,
+		ColumnType:  columnType,
 	}
 
-	if err := p.populateIndex(
-		filePath,
-		columnType,
-		columnIndex,
-		indexID,
-		tableID); err != nil {
+	if err := createAndPopulateIndex(&idxConfig); err != nil {
 		return nil, err
 	}
 
@@ -115,38 +116,4 @@ func (p *CreateIndexPlan) Execute() (Result, error) {
 			colName,
 			idxType),
 	}, nil
-}
-
-func (p *CreateIndexPlan) createIndex(indexFilePath string, indexColType types.Type) error {
-	cm := p.ctx.CatalogManager()
-	im := p.ctx.IndexManager()
-	if err := im.CreatePhysicalIndex(indexFilePath, indexColType, p.Statement.IndexType); err != nil {
-		if _, dropErr := cm.DropIndex(p.tx, p.Statement.IndexName); dropErr != nil {
-			fmt.Printf("Warning: failed to cleanup catalog entry after index creation failure: %v\n", dropErr)
-		}
-		return fmt.Errorf("failed to create physical index: %v", err)
-	}
-	return nil
-}
-
-func (p *CreateIndexPlan) populateIndex(indexFilePath string, indexColType types.Type, indexCol, indexID, tableID int) error {
-	cm := p.ctx.CatalogManager()
-	im := p.ctx.IndexManager()
-	tableFile, err := cm.GetTableFile(tableID)
-	if err != nil {
-		os.Remove(indexFilePath)
-		if _, dropErr := cm.DropIndex(p.tx, p.Statement.IndexName); dropErr != nil {
-			fmt.Printf("Warning: failed to cleanup catalog entry after file access failure: %v\n", dropErr)
-		}
-		return fmt.Errorf("failed to get table file: %v", err)
-	}
-
-	if err := im.PopulateIndex(p.tx, indexFilePath, indexID, tableFile, indexCol, indexColType, p.Statement.IndexType); err != nil {
-		os.Remove(indexFilePath)
-		if _, dropErr := cm.DropIndex(p.tx, p.Statement.IndexName); dropErr != nil {
-			fmt.Printf("Warning: failed to cleanup catalog entry after population failure: %v\n", dropErr)
-		}
-		return fmt.Errorf("failed to populate index: %v", err)
-	}
-	return nil
 }
