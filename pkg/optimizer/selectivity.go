@@ -34,6 +34,8 @@ func NewSelectivityEstimator(cat *catalog.SystemCatalog) *SelectivityEstimator {
 }
 
 // EstimatePredicateSelectivity estimates the selectivity of a predicate
+// when the comparison value is not available. Falls back to distinct count
+// or default selectivity estimates.
 func (se *SelectivityEstimator) EstimatePredicateSelectivity(
 	tx *transaction.TransactionContext,
 	pred primitives.Predicate,
@@ -45,12 +47,46 @@ func (se *SelectivityEstimator) EstimatePredicateSelectivity(
 		return se.getDefaultSelectivityForOp(pred)
 	}
 
-	if colStats.Histogram != nil {
-		// For now, return default until we have value extraction
-		// In real usage, you'd extract the comparison value
-		return se.estimateSelectivityFromDistinctCount(pred, colStats)
-	}
 	return se.estimateSelectivityFromDistinctCount(pred, colStats)
+}
+
+// EstimatePredicateSelectivityWithValue estimates the selectivity of a predicate
+// when the comparison value is known. Uses MCV (Most Common Values) and histogram
+// statistics for accurate estimation when available.
+func (se *SelectivityEstimator) EstimatePredicateSelectivityWithValue(
+	tx *transaction.TransactionContext,
+	pred primitives.Predicate,
+	tableID int,
+	columnName string,
+	value types.Field,
+) float64 {
+	colStats, err := se.catalog.GetColumnStatistics(tx, tableID, columnName)
+	if err != nil || colStats == nil {
+		return se.getDefaultSelectivityForOp(pred)
+	}
+
+	switch pred {
+	case primitives.Equals:
+		if mcvFreq, found := se.findMCVFrequency(colStats, value); found {
+			return mcvFreq
+		}
+	case primitives.NotEqual, primitives.NotEqualsBracket:
+		if mcvFreq, found := se.findMCVFrequency(colStats, value); found {
+			return 1.0 - mcvFreq
+		}
+	}
+
+	if colStats.Histogram != nil && isComparisonPredicate(pred) {
+		sel := se.estimateHistogramSelectivityWithMCV(colStats, pred, value)
+		return math.Max(0.0, math.Min(1.0, sel))
+	}
+
+	// Fall back to distinct count for equality when histogram unavailable
+	if pred == primitives.Equals && colStats.DistinctCount > 0 {
+		return se.estimateEqualityWithoutHistogram(colStats)
+	}
+
+	return se.getDefaultSelectivityForOp(pred)
 }
 
 // estimateSelectivityFromDistinctCount estimates selectivity based on distinct count
@@ -189,4 +225,83 @@ func (se *SelectivityEstimator) EstimateInSelectivity(
 
 	selectivity := float64(valueCount) / float64(colStats.DistinctCount)
 	return math.Min(selectivity, MaxSelectivity)
+}
+
+// isComparisonPredicate checks if a predicate is a comparison that can use histograms
+func isComparisonPredicate(pred primitives.Predicate) bool {
+	switch pred {
+	case primitives.Equals,
+		primitives.NotEqual,
+		primitives.NotEqualsBracket,
+		primitives.GreaterThan,
+		primitives.GreaterThanOrEqual,
+		primitives.LessThan,
+		primitives.LessThanOrEqual:
+		return true
+	default:
+		return false
+	}
+}
+
+// findMCVFrequency searches for a value in the Most Common Values list
+// and returns its frequency if found
+func (se *SelectivityEstimator) findMCVFrequency(
+	colStats *catalog.ColumnStatistics,
+	value types.Field,
+) (float64, bool) {
+	if len(colStats.MostCommonVals) == 0 {
+		return 0.0, false
+	}
+
+	for i, mcv := range colStats.MostCommonVals {
+		if i >= len(colStats.MCVFreqs) {
+			break
+		}
+
+		equal, err := value.Compare(primitives.Equals, mcv)
+		if err == nil && equal {
+			return colStats.MCVFreqs[i], true
+		}
+	}
+
+	return 0.0, false
+}
+
+// estimateHistogramSelectivityWithMCV uses histogram for selectivity but accounts for MCVs
+// MCVs are typically tracked separately from histograms, so we use histogram directly
+func (se *SelectivityEstimator) estimateHistogramSelectivityWithMCV(
+	colStats *catalog.ColumnStatistics,
+	pred primitives.Predicate,
+	value types.Field,
+) float64 {
+	// For range predicates, histogram handles MCVs naturally as they're part of the distribution
+	// For equality, we already checked MCVs above, so if we're here, value is not an MCV
+	return se.EstimateHistogramSelectivity(colStats.Histogram, pred, value)
+}
+
+// estimateEqualityWithoutHistogram estimates equality selectivity without histogram
+// but accounts for MCVs by distributing remaining probability among non-MCV values
+func (se *SelectivityEstimator) estimateEqualityWithoutHistogram(
+	colStats *catalog.ColumnStatistics,
+) float64 {
+	if colStats.DistinctCount == 0 {
+		return 0.0
+	}
+
+	mcvTotalFreq := 0.0
+	for _, freq := range colStats.MCVFreqs {
+		mcvTotalFreq += freq
+	}
+
+	remainingFreq := 1.0 - mcvTotalFreq
+	if remainingFreq < 0.0 {
+		remainingFreq = 0.0
+	}
+
+	nonMCVDistinct := colStats.DistinctCount - int64(len(colStats.MostCommonVals))
+	if nonMCVDistinct <= 0 {
+		return 1.0 / float64(colStats.DistinctCount)
+	}
+
+	return remainingFreq / float64(nonMCVDistinct)
 }
