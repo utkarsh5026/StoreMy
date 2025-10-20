@@ -2,8 +2,8 @@ package planner
 
 import (
 	"os"
-	"storemy/pkg/parser/plan"
 	"storemy/pkg/parser/statements"
+	"storemy/pkg/plan"
 	"storemy/pkg/primitives"
 	"storemy/pkg/registry"
 	"storemy/pkg/types"

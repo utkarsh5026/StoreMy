@@ -9,7 +9,7 @@ import (
 	"storemy/pkg/iterator"
 	btreeindex "storemy/pkg/memory/wrappers/btree_index"
 	hashindex "storemy/pkg/memory/wrappers/hash_index"
-	"storemy/pkg/parser/plan"
+	"storemy/pkg/plan"
 	"storemy/pkg/primitives"
 	"storemy/pkg/storage/heap"
 	"storemy/pkg/storage/index"
