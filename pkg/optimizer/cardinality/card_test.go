@@ -1,12 +1,181 @@
 package cardinality
 
 import (
+	"os"
+	"path/filepath"
+	"storemy/pkg/catalog"
+	"storemy/pkg/catalog/schema"
+	"storemy/pkg/catalog/tablecache"
 	"storemy/pkg/concurrency/transaction"
+	"storemy/pkg/log"
+	"storemy/pkg/memory"
+	"storemy/pkg/memory/wrappers/table"
 	"storemy/pkg/optimizer/selectivity"
 	"storemy/pkg/plan"
 	"storemy/pkg/primitives"
+	"storemy/pkg/storage/heap"
+	"storemy/pkg/tuple"
+	"storemy/pkg/types"
 	"testing"
 )
+
+// testCatalogSetup holds all components needed for testing with a real catalog
+type testCatalogSetup struct {
+	catalog    *catalog.SystemCatalog
+	cache      *tablecache.TableCache
+	txRegistry *transaction.TransactionRegistry
+	store      *memory.PageStore
+	tempDir    string
+	cleanup    func()
+}
+
+// setupTestCatalogWithData creates a catalog with realistic test tables and data
+func setupTestCatalogWithData(t *testing.T) *testCatalogSetup {
+	t.Helper()
+
+	// Create temp directory
+	tempDir, err := os.MkdirTemp("", "cardinality_test_*")
+	if err != nil {
+		t.Fatalf("failed to create temp dir: %v", err)
+	}
+
+	logPath := filepath.Join(tempDir, "wal.log")
+
+	// Setup components
+	wal, err := log.NewWAL(logPath, 8192)
+	if err != nil {
+		t.Fatalf("failed to create WAL: %v", err)
+	}
+
+	store := memory.NewPageStore(wal)
+	txRegistry := transaction.NewTransactionRegistry(wal)
+	cache := tablecache.NewTableCache()
+	cat := catalog.NewSystemCatalog(store, cache)
+
+	// Initialize catalog
+	tx, err := txRegistry.Begin()
+	if err != nil {
+		t.Fatalf("failed to begin transaction: %v", err)
+	}
+	if err := cat.Initialize(tx, tempDir); err != nil {
+		t.Fatalf("failed to initialize catalog: %v", err)
+	}
+
+	cleanup := func() {
+		store.Close()
+		os.RemoveAll(tempDir)
+	}
+
+	return &testCatalogSetup{
+		catalog:    cat,
+		cache:      cache,
+		txRegistry: txRegistry,
+		store:      store,
+		tempDir:    tempDir,
+		cleanup:    cleanup,
+	}
+}
+
+// createTestTable creates a table with a schema in the catalog
+func (tcs *testCatalogSetup) createTestTable(t *testing.T, tableName string, columns []schema.ColumnMetadata) int {
+	t.Helper()
+
+	tx, err := tcs.txRegistry.Begin()
+	if err != nil {
+		t.Fatalf("failed to begin transaction: %v", err)
+	}
+	defer tcs.store.CommitTransaction(tx)
+
+	// Create schema
+	sch, err := schema.NewSchema(0, tableName, columns)
+	if err != nil {
+		t.Fatalf("failed to create schema: %v", err)
+	}
+
+	// Create heap file
+	filePath := filepath.Join(tcs.tempDir, tableName+".dat")
+	heapFile, err := heap.NewHeapFile(filePath, sch.TupleDesc)
+	if err != nil {
+		t.Fatalf("failed to create heap file: %v", err)
+	}
+
+	tableID := heapFile.GetID()
+	sch.TableID = tableID
+	for i := range sch.Columns {
+		sch.Columns[i].TableID = tableID
+	}
+
+	// Register with catalog
+	if err := tcs.catalog.RegisterTable(tx, sch, filePath); err != nil {
+		t.Fatalf("failed to register table: %v", err)
+	}
+
+	// Add to cache and page store
+	if err := tcs.cache.AddTable(heapFile, sch); err != nil {
+		t.Fatalf("failed to add table to cache: %v", err)
+	}
+	tcs.store.RegisterDbFile(tableID, heapFile)
+
+	return tableID
+}
+
+// insertTestData inserts rows into a table
+func (tcs *testCatalogSetup) insertTestData(t *testing.T, tableID int, rows [][]types.Field) {
+	t.Helper()
+
+	tx, err := tcs.txRegistry.Begin()
+	if err != nil {
+		t.Fatalf("failed to begin transaction: %v", err)
+	}
+	defer tcs.store.CommitTransaction(tx)
+
+	dbFile, err := tcs.cache.GetDbFile(tableID)
+	if err != nil {
+		t.Fatalf("failed to get db file: %v", err)
+	}
+
+	tableInfo, err := tcs.cache.GetTableInfo(tableID)
+	if err != nil {
+		t.Fatalf("failed to get table info: %v", err)
+	}
+
+	tupMgr := table.NewTupleManager(tcs.store)
+
+	for _, row := range rows {
+		tup := tuple.NewTuple(tableInfo.Schema.TupleDesc)
+		for i, field := range row {
+			if err := tup.SetField(i, field); err != nil {
+				t.Fatalf("failed to set field %d: %v", i, err)
+			}
+		}
+		if err := tupMgr.InsertTuple(tx, dbFile, tup); err != nil {
+			t.Fatalf("failed to insert tuple: %v", err)
+		}
+	}
+}
+
+// collectColumnStats collects statistics for a specific column
+func (tcs *testCatalogSetup) collectColumnStats(t *testing.T, tableID int, columnName string, columnIndex int) *catalog.ColumnStatistics {
+	t.Helper()
+
+	// Flush all pages to ensure data is visible
+	if err := tcs.store.FlushAllPages(); err != nil {
+		t.Fatalf("failed to flush pages: %v", err)
+	}
+
+	tx, err := tcs.txRegistry.Begin()
+	if err != nil {
+		t.Fatalf("failed to begin transaction: %v", err)
+	}
+	defer tcs.store.CommitTransaction(tx)
+
+	stats, err := tcs.catalog.CollectColumnStatistics(tx, tableID, columnName, columnIndex, 10, 5)
+	if err != nil {
+		t.Fatalf("failed to collect column statistics: %v", err)
+	}
+
+	return stats
+}
 
 // TestCorrelationCorrection tests the correlation correction for multiple predicates
 func TestCorrelationCorrection(t *testing.T) {
@@ -738,11 +907,19 @@ func TestLimitCardinality(t *testing.T) {
 // TestScanCardinalityBounds tests scan cardinality bounds
 func TestScanCardinalityBounds(t *testing.T) {
 	t.Run("Scan Cardinality Non-Negative", func(t *testing.T) {
-		ce := &CardinalityEstimator{
-			catalog:   nil, // Use nil instead of uninitialized catalog
-			estimator: selectivity.NewSelectivityEstimator(nil),
+		tcs := setupTestCatalogWithData(t)
+		defer tcs.cleanup()
+
+		ce, err := NewCardinalityEstimator(tcs.catalog)
+		if err != nil {
+			t.Fatalf("Failed to create cardinality estimator: %v", err)
 		}
-		tx := &transaction.TransactionContext{}
+
+		tx, err := tcs.txRegistry.Begin()
+		if err != nil {
+			t.Fatalf("Failed to begin transaction: %v", err)
+		}
+		defer tcs.store.CommitTransaction(tx)
 
 		scan := &plan.ScanNode{
 			TableID: 999, // Non-existent table
@@ -775,10 +952,19 @@ func TestScanCardinalityBounds(t *testing.T) {
 
 // TestGroupByDistinctCountEstimation tests GROUP BY distinct count helper
 func TestGroupByDistinctCountEstimation(t *testing.T) {
-	ce := &CardinalityEstimator{
-		catalog: nil,
+	tcs := setupTestCatalogWithData(t)
+	defer tcs.cleanup()
+
+	ce, err := NewCardinalityEstimator(tcs.catalog)
+	if err != nil {
+		t.Fatalf("Failed to create cardinality estimator: %v", err)
 	}
-	tx := &transaction.TransactionContext{}
+
+	tx, err := tcs.txRegistry.Begin()
+	if err != nil {
+		t.Fatalf("Failed to begin transaction: %v", err)
+	}
+	defer tcs.store.CommitTransaction(tx)
 
 	t.Run("Empty GROUP BY Returns 1", func(t *testing.T) {
 		child := &plan.ProjectNode{}
@@ -824,10 +1010,19 @@ func TestGroupByDistinctCountEstimation(t *testing.T) {
 
 // TestEquiJoinSelectivityContainment tests improved join selectivity with containment
 func TestEquiJoinSelectivityContainment(t *testing.T) {
-	ce := &CardinalityEstimator{
-		catalog: nil,
+	tcs := setupTestCatalogWithData(t)
+	defer tcs.cleanup()
+
+	ce, err := NewCardinalityEstimator(tcs.catalog)
+	if err != nil {
+		t.Fatalf("Failed to create cardinality estimator: %v", err)
 	}
-	tx := &transaction.TransactionContext{}
+
+	tx, err := tcs.txRegistry.Begin()
+	if err != nil {
+		t.Fatalf("Failed to begin transaction: %v", err)
+	}
+	defer tcs.store.CommitTransaction(tx)
 
 	t.Run("Containment Scenario", func(t *testing.T) {
 		// Small distinct count (100) vs large distinct count (10000)
@@ -1052,4 +1247,345 @@ func BenchmarkEstimateJoinCardinality(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		_, _ = ce.estimateJoin(tx, join)
 	}
+}
+
+// TestScanCardinalityWithActualCatalog tests scan cardinality with real catalog and statistics
+func TestScanCardinalityWithActualCatalog(t *testing.T) {
+	tcs := setupTestCatalogWithData(t)
+	defer tcs.cleanup()
+
+	// Create a users table
+	columns := []schema.ColumnMetadata{
+		{Name: "id", FieldType: types.IntType, Position: 0, IsPrimary: true},
+		{Name: "status", FieldType: types.StringType, Position: 1},
+		{Name: "age", FieldType: types.IntType, Position: 2},
+		{Name: "city", FieldType: types.StringType, Position: 3},
+	}
+
+	tableID := tcs.createTestTable(t, "users", columns)
+
+	// Insert 1000 rows with realistic data distribution
+	rows := make([][]types.Field, 1000)
+	for i := 0; i < 1000; i++ {
+		status := "active"
+		if i%5 == 0 {
+			status = "inactive" // 20% inactive
+		}
+
+		age := int64(20 + (i % 49)) // Ages 20-68 (49 distinct values + 20 offset = values 20-68)
+
+		city := "NewYork" // No spaces to avoid potential issues
+		switch i % 3 {
+		case 0:
+			city = "LosAngeles"
+		case 1:
+			city = "Chicago"
+		default:
+			city = "NewYork"
+		}
+
+		rows[i] = []types.Field{
+			&types.IntField{Value: int64(i)},
+			&types.StringField{Value: status},
+			&types.IntField{Value: age},
+			&types.StringField{Value: city},
+		}
+	}
+
+	tcs.insertTestData(t, tableID, rows)
+
+	// Collect statistics for each column
+	statusStats := tcs.collectColumnStats(t, tableID, "status", 1)
+	ageStats := tcs.collectColumnStats(t, tableID, "age", 2)
+	cityStats := tcs.collectColumnStats(t, tableID, "city", 3)
+
+	// Verify statistics were collected correctly
+	t.Logf("Status column: distinct=%d, null=%d, total=%d",
+		statusStats.DistinctCount, statusStats.NullCount, statusStats.Histogram.TotalCount)
+	t.Logf("Age column: distinct=%d, null=%d, total=%d",
+		ageStats.DistinctCount, ageStats.NullCount, ageStats.Histogram.TotalCount)
+	t.Logf("City column: distinct=%d, null=%d, total=%d",
+		cityStats.DistinctCount, cityStats.NullCount, cityStats.Histogram.TotalCount)
+
+	// Verify statistics were collected (values should be reasonable)
+	if statusStats.DistinctCount < 2 || statusStats.DistinctCount > 5 {
+		t.Errorf("Expected 2-5 distinct statuses, got %d", statusStats.DistinctCount)
+	}
+	if ageStats.DistinctCount < 40 || ageStats.DistinctCount > 60 {
+		t.Errorf("Expected 40-60 distinct ages, got %d", ageStats.DistinctCount)
+	}
+	if cityStats.DistinctCount < 3 || cityStats.DistinctCount > 5 {
+		t.Errorf("Expected 3-5 distinct cities, got %d", cityStats.DistinctCount)
+	}
+
+	// Verify histograms were built
+	if len(statusStats.Histogram.Buckets) == 0 {
+		t.Error("Status histogram has no buckets")
+	}
+	if len(ageStats.Histogram.Buckets) == 0 {
+		t.Error("Age histogram has no buckets")
+	}
+	if len(cityStats.Histogram.Buckets) == 0 {
+		t.Error("City histogram has no buckets")
+	}
+
+	t.Logf("Status histogram buckets: %d, MCVs: %d", len(statusStats.Histogram.Buckets), len(statusStats.MostCommonVals))
+	t.Logf("Age histogram buckets: %d, MCVs: %d", len(ageStats.Histogram.Buckets), len(ageStats.MostCommonVals))
+	t.Logf("City histogram buckets: %d, MCVs: %d", len(cityStats.Histogram.Buckets), len(cityStats.MostCommonVals))
+
+	// Now test cardinality estimation with the actual catalog
+	ce, err := NewCardinalityEstimator(tcs.catalog)
+	if err != nil {
+		t.Fatalf("Failed to create cardinality estimator: %v", err)
+	}
+
+	tx, err := tcs.txRegistry.Begin()
+	if err != nil {
+		t.Fatalf("Failed to begin transaction: %v", err)
+	}
+	defer tcs.store.CommitTransaction(tx)
+
+	t.Run("Scan without predicates", func(t *testing.T) {
+		scan := &plan.ScanNode{
+			TableID:    tableID,
+			Predicates: []plan.PredicateInfo{},
+		}
+
+		result, err := ce.estimateScan(tx, scan)
+		if err != nil {
+			t.Fatalf("estimateScan error: %v", err)
+		}
+
+		// Should return approximately the row count
+		if result < 900 || result > 1100 {
+			t.Errorf("Expected scan cardinality around 1000, got %d", result)
+		}
+		t.Logf("Full scan cardinality: %d", result)
+	})
+
+	t.Run("Scan with status = 'active'", func(t *testing.T) {
+		scan := &plan.ScanNode{
+			TableID: tableID,
+			Predicates: []plan.PredicateInfo{
+				{
+					Column:    "status",
+					Predicate: primitives.Equals,
+					Value:     "active",
+					Type:      plan.StandardPredicate,
+				},
+			},
+		}
+
+		result, err := ce.estimateScan(tx, scan)
+		if err != nil {
+			t.Fatalf("estimateScan error: %v", err)
+		}
+
+		// With actual statistics, we know status has 2 distinct values
+		// Equality predicate should give approximately 1/distinct * rowCount
+		// Expected: ~500 rows (50% are active)
+		// But since we're using defaults when stats aren't stored in catalog,
+		// it should still be reasonable
+		if result < 1 || result > 1000 {
+			t.Errorf("Expected reasonable cardinality for status='active', got %d", result)
+		}
+		t.Logf("Scan with status='active' cardinality: %d (actual=800)", result)
+	})
+
+	t.Run("Scan with multiple predicates", func(t *testing.T) {
+		scan := &plan.ScanNode{
+			TableID: tableID,
+			Predicates: []plan.PredicateInfo{
+				{
+					Column:    "status",
+					Predicate: primitives.Equals,
+					Value:     "active",
+					Type:      plan.StandardPredicate,
+				},
+				{
+					Column:    "city",
+					Predicate: primitives.Equals,
+					Value:     "NewYork",
+					Type:      plan.StandardPredicate,
+				},
+			},
+		}
+
+		result, err := ce.estimateScan(tx, scan)
+		if err != nil {
+			t.Fatalf("estimateScan error: %v", err)
+		}
+
+		// Should apply correlation correction - result should be less than
+		// the product but more than 0
+		if result < 1 {
+			t.Errorf("Expected at least 1 row, got %d", result)
+		}
+		t.Logf("Scan with multiple predicates cardinality: %d", result)
+	})
+
+	t.Run("Scan with age range", func(t *testing.T) {
+		scan := &plan.ScanNode{
+			TableID: tableID,
+			Predicates: []plan.PredicateInfo{
+				{
+					Column:    "age",
+					Predicate: primitives.GreaterThan,
+					Value:     "30",
+					Type:      plan.StandardPredicate,
+				},
+			},
+		}
+
+		result, err := ce.estimateScan(tx, scan)
+		if err != nil {
+			t.Fatalf("estimateScan error: %v", err)
+		}
+
+		// With histogram statistics, this should use histogram estimation
+		// rather than default 1/3 selectivity
+		if result < 1 || result > 1000 {
+			t.Errorf("Expected reasonable cardinality for age>30, got %d", result)
+		}
+		t.Logf("Scan with age>30 cardinality: %d", result)
+	})
+}
+
+// TestJoinCardinalityWithActualCatalog tests join cardinality with real statistics
+func TestJoinCardinalityWithActualCatalog(t *testing.T) {
+	tcs := setupTestCatalogWithData(t)
+	defer tcs.cleanup()
+
+	// Create users table
+	usersColumns := []schema.ColumnMetadata{
+		{Name: "user_id", FieldType: types.IntType, Position: 0, IsPrimary: true},
+		{Name: "name", FieldType: types.StringType, Position: 1},
+	}
+	usersTableID := tcs.createTestTable(t, "users", usersColumns)
+
+	// Create orders table
+	ordersColumns := []schema.ColumnMetadata{
+		{Name: "order_id", FieldType: types.IntType, Position: 0, IsPrimary: true},
+		{Name: "user_id", FieldType: types.IntType, Position: 1},
+		{Name: "amount", FieldType: types.IntType, Position: 2},
+	}
+	ordersTableID := tcs.createTestTable(t, "orders", ordersColumns)
+
+	// Insert 100 users
+	userRows := make([][]types.Field, 100)
+	for i := 0; i < 100; i++ {
+		userRows[i] = []types.Field{
+			&types.IntField{Value: int64(i)},
+			&types.StringField{Value: "User" + string(rune(i))},
+		}
+	}
+	tcs.insertTestData(t, usersTableID, userRows)
+
+	// Insert 500 orders (each user has ~5 orders on average)
+	orderRows := make([][]types.Field, 500)
+	for i := 0; i < 500; i++ {
+		userID := int64(i % 100) // Distribute orders among users
+		orderRows[i] = []types.Field{
+			&types.IntField{Value: int64(i)},
+			&types.IntField{Value: userID},
+			&types.IntField{Value: int64(100 + i*10)},
+		}
+	}
+	tcs.insertTestData(t, ordersTableID, orderRows)
+
+	// Collect statistics
+	userIDStats := tcs.collectColumnStats(t, usersTableID, "user_id", 0)
+	orderUserIDStats := tcs.collectColumnStats(t, ordersTableID, "user_id", 1)
+
+	t.Logf("Users.user_id: distinct=%d", userIDStats.DistinctCount)
+	t.Logf("Orders.user_id: distinct=%d", orderUserIDStats.DistinctCount)
+
+	// Create cardinality estimator
+	ce, err := NewCardinalityEstimator(tcs.catalog)
+	if err != nil {
+		t.Fatalf("Failed to create cardinality estimator: %v", err)
+	}
+
+	tx, err := tcs.txRegistry.Begin()
+	if err != nil {
+		t.Fatalf("Failed to begin transaction: %v", err)
+	}
+	defer tcs.store.CommitTransaction(tx)
+
+	t.Run("Inner join users and orders", func(t *testing.T) {
+		leftScan := &plan.ScanNode{TableID: usersTableID}
+		leftScan.SetCardinality(100)
+
+		rightScan := &plan.ScanNode{TableID: ordersTableID}
+		rightScan.SetCardinality(500)
+
+		join := &plan.JoinNode{
+			LeftChild:   leftScan,
+			RightChild:  rightScan,
+			LeftColumn:  "user_id",
+			RightColumn: "user_id",
+		}
+
+		result, err := ce.estimateJoin(tx, join)
+		if err != nil {
+			t.Fatalf("estimateJoin error: %v", err)
+		}
+
+		// Expected: Since every order has a matching user, result should be ~500
+		// With containment logic, we know smaller distinct count (100) is contained
+		// in larger (100), so join selectivity should be high
+		t.Logf("Join cardinality: %d (expected ~500, actual=500)", result)
+
+		// Result should be reasonable - not 0, not more than cartesian product
+		if result < 1 || result > 50000 {
+			t.Errorf("Join cardinality out of reasonable range: %d", result)
+		}
+	})
+
+	t.Run("Join with extra filter", func(t *testing.T) {
+		leftScan := &plan.ScanNode{TableID: usersTableID}
+		leftScan.SetCardinality(100)
+
+		rightScan := &plan.ScanNode{TableID: ordersTableID}
+		rightScan.SetCardinality(500)
+
+		join := &plan.JoinNode{
+			LeftChild:   leftScan,
+			RightChild:  rightScan,
+			LeftColumn:  "user_id",
+			RightColumn: "user_id",
+			ExtraFilters: []plan.PredicateInfo{
+				{
+					Column:    "amount",
+					Predicate: primitives.GreaterThan,
+					Value:     "1000",
+					Type:      plan.StandardPredicate,
+				},
+			},
+		}
+
+		resultWithFilter, err := ce.estimateJoin(tx, join)
+		if err != nil {
+			t.Fatalf("estimateJoin error: %v", err)
+		}
+
+		// Result with filter should be less than without filter
+		joinNoFilter := &plan.JoinNode{
+			LeftChild:   leftScan,
+			RightChild:  rightScan,
+			LeftColumn:  "user_id",
+			RightColumn: "user_id",
+		}
+		resultNoFilter, err := ce.estimateJoin(tx, joinNoFilter)
+		if err != nil {
+			t.Fatalf("estimateJoin error: %v", err)
+		}
+
+		t.Logf("Join with filter: %d, without filter: %d", resultWithFilter, resultNoFilter)
+
+		if resultWithFilter >= resultNoFilter {
+			t.Errorf("Join with filter (%d) should be less than without filter (%d)",
+				resultWithFilter, resultNoFilter)
+		}
+	})
 }
