@@ -2,7 +2,9 @@ package catalog
 
 import (
 	"fmt"
+	"storemy/pkg/catalog/systemtable"
 	"storemy/pkg/concurrency/transaction"
+	"storemy/pkg/storage/index"
 	"storemy/pkg/tuple"
 	"storemy/pkg/types"
 	"time"
@@ -10,27 +12,26 @@ import (
 
 // IndexStatistics represents statistics about an index for query optimization
 type IndexStatistics struct {
-	IndexID          int       // Index identifier
-	TableID          int       // Table this index belongs to
-	IndexName        string    // Index name
-	IndexType        string    // "btree", "hash", etc.
-	ColumnName       string    // Indexed column name
-	NumEntries       int64     // Number of entries in the index
-	NumPages         int       // Number of pages used by index
-	Height           int       // Tree height (for B-tree indexes)
-	DistinctKeys     int64     // Number of distinct keys
-	ClusteringFactor float64   // 0.0-1.0: how ordered is table by this index
-	AvgKeySize       int       // Average key size in bytes
-	LastUpdated      time.Time // Last update timestamp
+	IndexID          int             // Index identifier
+	TableID          int             // Table this index belongs to
+	IndexName        string          // Index name
+	IndexType        index.IndexType // "btree", "hash", etc.
+	ColumnName       string          // Indexed column name
+	NumEntries       int64           // Number of entries in the index
+	NumPages         int             // Number of pages used by index
+	Height           int             // Tree height (for B-tree indexes)
+	DistinctKeys     int64           // Number of distinct keys
+	ClusteringFactor float64         // 0.0-1.0: how ordered is table by this index
+	AvgKeySize       int             // Average key size in bytes
+	LastUpdated      time.Time       // Last update timestamp
 }
 
 // CollectIndexStatistics collects statistics for a specific index
 func (sc *SystemCatalog) CollectIndexStatistics(
 	tx *transaction.TransactionContext,
-	indexID int,
-	tableID int,
+	indexID, tableID int,
 	indexName string,
-	indexType string,
+	indexType index.IndexType,
 	columnName string,
 ) (*IndexStatistics, error) {
 	stats := &IndexStatistics{
@@ -42,9 +43,6 @@ func (sc *SystemCatalog) CollectIndexStatistics(
 		LastUpdated: time.Now(),
 	}
 
-	// Estimate statistics from table and column data
-	// This is a simplified implementation - in a real system,
-	// you would query the actual index structure
 	tableStats, err := sc.GetTableStatistics(tx, tableID)
 	if err == nil && tableStats != nil {
 		stats.NumEntries = int64(tableStats.Cardinality)
@@ -61,19 +59,17 @@ func (sc *SystemCatalog) CollectIndexStatistics(
 
 	// For now, set reasonable defaults
 	stats.DistinctKeys = stats.NumEntries / 10 // Rough estimate
-	stats.AvgKeySize = 8                        // Default key size
+	stats.AvgKeySize = 8                       // Default key size
 
 	// Set type-specific defaults
 	switch indexType {
-	case "btree":
-		// B-tree height estimation: log(fanout, entries)
-		// Assume fanout of ~100
+	case index.BTreeIndex:
 		if stats.NumEntries > 0 {
 			stats.Height = int(logBase(float64(stats.NumEntries), 100)) + 1
 		} else {
 			stats.Height = 1
 		}
-	case "hash":
+	case index.HashIndex:
 		stats.Height = 1 // Hash indexes are single-level
 	default:
 		stats.Height = 1
@@ -106,7 +102,7 @@ func (sc *SystemCatalog) calculateClusteringFactor(
 	columnName string,
 ) (float64, error) {
 	// This is a simplified implementation
-	// In practice, you'd scan the index in order and track how many times
+	// In practice, scan the index in order and track how many times
 	// the table page changes as you follow the index entries
 
 	// For now, return a default value
@@ -116,7 +112,6 @@ func (sc *SystemCatalog) calculateClusteringFactor(
 
 // UpdateIndexStatistics updates statistics for all indexes on a table
 func (sc *SystemCatalog) UpdateIndexStatistics(tx *transaction.TransactionContext, tableID int) error {
-	// Get all indexes for this table
 	indexes, err := sc.GetIndexesForTable(tx, tableID)
 	if err != nil {
 		return fmt.Errorf("failed to get indexes: %w", err)
@@ -145,20 +140,105 @@ func (sc *SystemCatalog) UpdateIndexStatistics(tx *transaction.TransactionContex
 	return nil
 }
 
-// storeIndexStatistics stores index statistics
+// storeIndexStatistics stores index statistics in CATALOG_INDEX_STATISTICS
+// Handles both insert (new statistics) and update (existing statistics) cases
 func (sc *SystemCatalog) storeIndexStatistics(tx *transaction.TransactionContext, stats *IndexStatistics) error {
-	// TODO: Store in CATALOG_INDEX_STATISTICS system table
-	// For now, just cache in memory
+	existingStats, err := sc.GetIndexStatistics(tx, stats.IndexID)
+	if err == nil && existingStats != nil {
+		if err := sc.deleteIndexStatistics(tx, stats.IndexID); err != nil {
+			return fmt.Errorf("failed to delete old index statistics: %w", err)
+		}
+	}
+
+	// Convert IndexStatistics to IndexStatisticsRow for storage
+	statsRow := &systemtable.IndexStatisticsRow{
+		IndexID:          stats.IndexID,
+		TableID:          stats.TableID,
+		IndexName:        stats.IndexName,
+		IndexType:        stats.IndexType,
+		ColumnName:       stats.ColumnName,
+		NumEntries:       stats.NumEntries,
+		NumPages:         stats.NumPages,
+		BTreeHeight:      stats.Height,
+		DistinctKeys:     stats.DistinctKeys,
+		ClusteringFactor: stats.ClusteringFactor,
+		AvgKeySize:       stats.AvgKeySize,
+		LastUpdated:      stats.LastUpdated,
+	}
+
+	// Create tuple from statistics row
+	tup := systemtable.IndexStats.CreateTuple(statsRow)
+
+	// Get the index statistics table file
+	file, err := sc.cache.GetDbFile(sc.SystemTabs.IndexStatisticsTableID)
+	if err != nil {
+		return fmt.Errorf("failed to get index statistics table: %w", err)
+	}
+
+	// Insert the tuple
+	if err := sc.tupMgr.InsertTuple(tx, file, tup); err != nil {
+		return fmt.Errorf("failed to insert index statistics: %w", err)
+	}
+
 	return nil
 }
 
-// GetIndexStatistics retrieves statistics for a specific index
+// deleteIndexStatistics removes index statistics for a specific index
+func (sc *SystemCatalog) deleteIndexStatistics(
+	tx *transaction.TransactionContext,
+	indexID int,
+) error {
+	return sc.DeleteTableFromSysTable(tx, indexID, sc.SystemTabs.IndexStatisticsTableID)
+}
+
+// GetIndexStatistics retrieves statistics for a specific index from CATALOG_INDEX_STATISTICS
 func (sc *SystemCatalog) GetIndexStatistics(
 	tx *transaction.TransactionContext,
 	indexID int,
 ) (*IndexStatistics, error) {
-	// TODO: Retrieve from CATALOG_INDEX_STATISTICS system table
-	return nil, fmt.Errorf("index statistics not found")
+	var result *IndexStatistics
+
+	err := sc.iterateTable(sc.SystemTabs.IndexStatisticsTableID, tx, func(statsTuple *tuple.Tuple) error {
+		storedIndexID, err := systemtable.IndexStats.GetIndexID(statsTuple)
+		if err != nil {
+			return err
+		}
+
+		if storedIndexID != indexID {
+			return nil
+		}
+
+		statsRow, err := systemtable.IndexStats.Parse(statsTuple)
+		if err != nil {
+			return err
+		}
+
+		result = &IndexStatistics{
+			IndexID:          statsRow.IndexID,
+			TableID:          statsRow.TableID,
+			IndexName:        statsRow.IndexName,
+			IndexType:        statsRow.IndexType,
+			ColumnName:       statsRow.ColumnName,
+			NumEntries:       statsRow.NumEntries,
+			NumPages:         statsRow.NumPages,
+			Height:           statsRow.BTreeHeight,
+			DistinctKeys:     statsRow.DistinctKeys,
+			ClusteringFactor: statsRow.ClusteringFactor,
+			AvgKeySize:       statsRow.AvgKeySize,
+			LastUpdated:      statsRow.LastUpdated,
+		}
+
+		return fmt.Errorf("found")
+	})
+
+	if err != nil && err.Error() == "found" {
+		return result, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+
+	return nil, fmt.Errorf("index statistics not found for index %d", indexID)
 }
 
 // IndexInfo represents basic index metadata (already exists in catalog)
@@ -166,7 +246,7 @@ type IndexInfo struct {
 	IndexID    int
 	TableID    int
 	IndexName  string
-	IndexType  string
+	IndexType  index.IndexType
 	ColumnName string
 	FilePath   string
 }
@@ -196,7 +276,7 @@ func log2(x float64) float64 {
 func (sc *SystemCatalog) GetIndexesForTable(tx *transaction.TransactionContext, tableID int) ([]*IndexInfo, error) {
 	var indexes []*IndexInfo
 
-	err := sc.iterateTable(sc.IndexesTableID, tx, func(t *tuple.Tuple) error {
+	err := sc.iterateTable(sc.SystemTabs.IndexesTableID, tx, func(t *tuple.Tuple) error {
 		// Parse index tuple to get table ID
 		// This is simplified - actual implementation would use systemtable.Indexes
 		field, err := t.GetField(1) // Assuming field 1 is table_id
