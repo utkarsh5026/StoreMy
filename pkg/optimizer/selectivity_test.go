@@ -129,7 +129,7 @@ func TestEstimatePredicateSelectivityWithValue_NoHistogram(t *testing.T) {
 			estimator := &SelectivityEstimator{}
 
 			// This should fall back to distinct count estimate
-			sel := estimator.estimateFromDistinct(tt.pred, colStats)
+			sel := estimator.fromDistinct(tt.pred, colStats)
 
 			if math.Abs(sel-tt.expected) > 0.0001 {
 				t.Errorf("Expected selectivity %f, got %f", tt.expected, sel)
@@ -362,7 +362,7 @@ func TestMCVSelectivity(t *testing.T) {
 			}
 
 			estimator := &SelectivityEstimator{}
-			freq, found := estimator.findMCVFrequency(colStats, tt.queryValue)
+			freq, found := estimator.checkMCV(colStats, tt.queryValue)
 
 			if !found {
 				t.Errorf("%s: expected to find MCV but didn't", tt.description)
@@ -393,7 +393,7 @@ func TestMCVSelectivityMiss(t *testing.T) {
 	estimator := &SelectivityEstimator{}
 
 	// Query for a value not in MCVs
-	freq, found := estimator.findMCVFrequency(colStats, types.NewIntField(999))
+	freq, found := estimator.checkMCV(colStats, types.NewIntField(999))
 
 	if found {
 		t.Errorf("Expected not to find non-MCV value, but found with frequency %f", freq)
@@ -453,7 +453,7 @@ func TestEstimateEqualityWithoutHistogram(t *testing.T) {
 			}
 
 			estimator := &SelectivityEstimator{}
-			sel := estimator.estimateEqualityWithoutHistogram(colStats)
+			sel := estimator.equalityNoHist(colStats)
 
 			if sel < tt.expectedRange[0] || sel > tt.expectedRange[1] {
 				t.Errorf("%s: selectivity %f not in expected range [%f, %f]",
@@ -523,7 +523,7 @@ func TestMCVIntegrationWithHistogram(t *testing.T) {
 			var sel float64
 
 			if tt.checkMCV {
-				freq, found := estimator.findMCVFrequency(colStats, tt.value)
+				freq, found := estimator.checkMCV(colStats, tt.value)
 				if !found {
 					t.Errorf("Expected to find MCV")
 					return

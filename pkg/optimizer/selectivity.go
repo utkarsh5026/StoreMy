@@ -32,7 +32,7 @@ const (
 //   - Set membership (IN)
 //   - Combined predicates (AND, OR, NOT)
 type SelectivityEstimator struct {
-	catalog *catalog.SystemCatalog // System catalog providing table and column statistics
+	catalog *catalog.SystemCatalog
 }
 
 // NewSelectivityEstimator creates a new selectivity estimator.
@@ -71,10 +71,10 @@ func (se *SelectivityEstimator) EstimatePredicateSelectivity(
 ) float64 {
 	colStats, err := se.catalog.GetColumnStatistics(tx, tableID, columnName)
 	if err != nil || colStats == nil {
-		return se.getDefaultSelectivity(pred)
+		return se.defaultSel(pred)
 	}
 
-	return se.estimateFromDistinct(pred, colStats)
+	return se.fromDistinct(pred, colStats)
 }
 
 // EstimatePredicateSelectivityWithValue estimates the selectivity of a predicate
@@ -104,16 +104,16 @@ func (se *SelectivityEstimator) EstimatePredicateSelectivityWithValue(
 ) float64 {
 	colStats, err := se.catalog.GetColumnStatistics(tx, tableID, columnName)
 	if err != nil || colStats == nil {
-		return se.getDefaultSelectivity(pred)
+		return se.defaultSel(pred)
 	}
 
 	switch pred {
 	case primitives.Equals:
-		if mcvFreq, found := se.findMCVFrequency(colStats, value); found {
+		if mcvFreq, found := se.checkMCV(colStats, value); found {
 			return mcvFreq
 		}
 	case primitives.NotEqual, primitives.NotEqualsBracket:
-		if mcvFreq, found := se.findMCVFrequency(colStats, value); found {
+		if mcvFreq, found := se.checkMCV(colStats, value); found {
 			return 1.0 - mcvFreq
 		}
 	}
@@ -124,13 +124,13 @@ func (se *SelectivityEstimator) EstimatePredicateSelectivityWithValue(
 	}
 
 	if pred == primitives.Equals && colStats.DistinctCount > 0 {
-		return se.estimateEqualityWithoutHistogram(colStats)
+		return se.equalityNoHist(colStats)
 	}
 
-	return se.getDefaultSelectivity(pred)
+	return se.defaultSel(pred)
 }
 
-// estimateFromDistinct estimates selectivity based on distinct count,
+// fromDistinct estimates selectivity based on distinct count,
 // assuming uniform distribution of values.
 //
 // Parameters:
@@ -139,7 +139,7 @@ func (se *SelectivityEstimator) EstimatePredicateSelectivityWithValue(
 //
 // Returns:
 //   - float64: Estimated selectivity between 0.0 and 1.0
-func (se *SelectivityEstimator) estimateFromDistinct(pred primitives.Predicate, stats *catalog.ColumnStatistics) float64 {
+func (se *SelectivityEstimator) fromDistinct(pred primitives.Predicate, stats *catalog.ColumnStatistics) float64 {
 	dc := stats.DistinctCount
 	if dc == 0 {
 		return 0.0
@@ -257,7 +257,7 @@ func (se *SelectivityEstimator) EstimateNotSelectivity(sel float64) float64 {
 	return 1.0 - sel
 }
 
-// getDefaultSelectivity returns a default selectivity estimate based on
+// defaultSel returns a default selectivity estimate based on
 // the predicate operator when no statistics are available.
 //
 // Parameters:
@@ -265,7 +265,7 @@ func (se *SelectivityEstimator) EstimateNotSelectivity(sel float64) float64 {
 //
 // Returns:
 //   - float64: Default selectivity estimate
-func (se *SelectivityEstimator) getDefaultSelectivity(pred primitives.Predicate) float64 {
+func (se *SelectivityEstimator) defaultSel(pred primitives.Predicate) float64 {
 	switch pred {
 	case primitives.Equals:
 		return EqualitySelectivity
@@ -364,7 +364,7 @@ func isComparisonPredicate(pred primitives.Predicate) bool {
 	}
 }
 
-// findMCVFrequency searches for a value in the Most Common Values (MCV) list
+// checkMCV searches for a value in the Most Common Values (MCV) list
 // and returns its frequency if found.
 //
 // MCVs track the most frequently occurring values and their exact frequencies,
@@ -377,10 +377,7 @@ func isComparisonPredicate(pred primitives.Predicate) bool {
 // Returns:
 //   - float64: Frequency of the value (0.0 to 1.0)
 //   - bool: true if the value was found in the MCV list
-func (se *SelectivityEstimator) findMCVFrequency(
-	colStats *catalog.ColumnStatistics,
-	value types.Field,
-) (float64, bool) {
+func (se *SelectivityEstimator) checkMCV(colStats *catalog.ColumnStatistics, value types.Field) (freq float64, found bool) {
 	if len(colStats.MostCommonVals) == 0 {
 		return 0.0, false
 	}
@@ -399,7 +396,7 @@ func (se *SelectivityEstimator) findMCVFrequency(
 	return 0.0, false
 }
 
-// estimateEqualityWithoutHistogram estimates equality selectivity without histogram
+// equalityNoHist estimates equality selectivity without histogram
 // but accounts for MCVs by distributing remaining probability among non-MCV values.
 //
 // This assumes MCVs account for a portion of the data, and the remaining data is
@@ -410,7 +407,7 @@ func (se *SelectivityEstimator) findMCVFrequency(
 //
 // Returns:
 //   - float64: Estimated selectivity for equality on non-MCV value
-func (se *SelectivityEstimator) estimateEqualityWithoutHistogram(
+func (se *SelectivityEstimator) equalityNoHist(
 	colStats *catalog.ColumnStatistics,
 ) float64 {
 	if colStats.DistinctCount == 0 {
@@ -422,7 +419,7 @@ func (se *SelectivityEstimator) estimateEqualityWithoutHistogram(
 		mcvTotalFreq += freq
 	}
 
-	remainingFreq := math.Min(1.0-mcvTotalFreq, 0)
+	remainingFreq := math.Max(1.0-mcvTotalFreq, 0)
 
 	nonMCVDistinct := colStats.DistinctCount - int64(len(colStats.MostCommonVals))
 	if nonMCVDistinct <= 0 {
