@@ -80,24 +80,32 @@ func (ist *IndexStatsTable) GetIndexID(t *tuple.Tuple) (int, error) {
 
 // Parse converts a tuple into an IndexStatisticsRow
 func (ist *IndexStatsTable) Parse(t *tuple.Tuple) (*IndexStatisticsRow, error) {
-	indexID, err := ist.GetIndexID(t)
-	if err != nil {
+	// Parse fields sequentially using the parser
+	p := tuple.NewParser(t).ExpectFields(12)
+
+	indexID := p.ReadInt()
+	tableID := p.ReadInt()
+	indexName := p.ReadString()
+	indexType := p.ReadString()
+	columnName := p.ReadString()
+	numEntries := p.ReadInt64()
+	numPages := p.ReadInt()
+	height := p.ReadInt()
+	distinctKeys := p.ReadInt64()
+	clusteringFactor := p.ReadScaledFloat(1000000)
+	avgKeySize := p.ReadInt()
+	lastUpdated := p.ReadTimestamp()
+
+	// Check for parsing errors (field count, type mismatches, etc.)
+	if err := p.Error(); err != nil {
 		return nil, err
 	}
 
-	tableID := getIntField(t, 1)
-	indexName := getStringField(t, 2)
-	indexType := getStringField(t, 3)
-	columnName := getStringField(t, 4)
-	numEntries := int64(getIntField(t, 5))
-	numPages := getIntField(t, 6)
-	height := getIntField(t, 7)
-	distinctKeys := int64(getIntField(t, 8))
-	clusteringFactorInt := getIntField(t, 9)
-	avgKeySize := getIntField(t, 10)
-	lastUpdatedUnix := getIntField(t, 11)
+	// Custom validation logic
+	if indexID <= 0 {
+		return nil, fmt.Errorf("invalid index_id: must be positive")
+	}
 
-	// Validation
 	if tableID <= 0 {
 		return nil, fmt.Errorf("invalid table_id: must be positive")
 	}
@@ -139,8 +147,6 @@ func (ist *IndexStatsTable) Parse(t *tuple.Tuple) (*IndexStatisticsRow, error) {
 		return nil, fmt.Errorf("invalid distinct_keys %d: cannot exceed num_entries %d", distinctKeys, numEntries)
 	}
 
-	// Convert clustering factor from int (0-1000000) to float64 (0.0-1.0)
-	clusteringFactor := float64(clusteringFactorInt) / 1000000.0
 	if clusteringFactor < 0.0 || clusteringFactor > 1.0 {
 		return nil, fmt.Errorf("invalid clustering_factor: must be between 0.0 and 1.0")
 	}
@@ -161,7 +167,7 @@ func (ist *IndexStatsTable) Parse(t *tuple.Tuple) (*IndexStatisticsRow, error) {
 		DistinctKeys:     distinctKeys,
 		ClusteringFactor: clusteringFactor,
 		AvgKeySize:       avgKeySize,
-		LastUpdated:      time.Unix(int64(lastUpdatedUnix), 0),
+		LastUpdated:      lastUpdated,
 	}
 
 	return result, nil

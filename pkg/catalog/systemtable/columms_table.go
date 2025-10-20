@@ -100,17 +100,23 @@ func (ct *ColumnsTable) GetTableID(t *tuple.Tuple) (int, error) {
 //   - position is non-negative
 //   - auto-increment columns are INT type with next_auto_value >= 1
 func (ct *ColumnsTable) Parse(t *tuple.Tuple) (*schema.ColumnMetadata, error) {
-	tableID, err := ct.GetTableID(t)
-	if err != nil {
+	p := tuple.NewParser(t).ExpectFields(7)
+
+	tableID := p.ReadInt()
+	name := p.ReadString()
+	typeID := p.ReadInt()
+	position := p.ReadInt()
+	isPrimary := p.ReadBool()
+	isAutoInc := p.ReadBool()
+	nextAutoValue := p.ReadInt()
+
+	if err := p.Error(); err != nil {
 		return nil, err
 	}
 
-	name := getStringField(t, 1)
-	typeID := getIntField(t, 2)
-	position := getIntField(t, 3)
-	isPrimary := getBoolField(t, 4)
-	isAutoInc := getBoolField(t, 5)
-	nextAutoValue := getIntField(t, 6)
+	if tableID == InvalidTableID {
+		return nil, fmt.Errorf("invalid table_id: cannot be InvalidTableID (%d)", InvalidTableID)
+	}
 
 	if name == "" {
 		return nil, fmt.Errorf("column name cannot be empty")

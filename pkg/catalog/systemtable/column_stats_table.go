@@ -73,21 +73,26 @@ func (cst *ColumnStatsTable) GetTableID(t *tuple.Tuple) (int, error) {
 
 // Parse converts a tuple into a ColumnStatisticsRow
 func (cst *ColumnStatsTable) Parse(t *tuple.Tuple) (*ColumnStatisticsRow, error) {
-	tableID, err := cst.GetTableID(t)
-	if err != nil {
+	p := tuple.NewParser(t).ExpectFields(9)
+
+	tableID := p.ReadInt()
+	columnName := p.ReadString()
+	columnIndex := p.ReadInt()
+	distinctCount := p.ReadInt64()
+	nullCount := p.ReadInt64()
+	minValue := p.ReadString()
+	maxValue := p.ReadString()
+	avgWidth := p.ReadInt()
+	lastUpdated := p.ReadTimestamp()
+
+	if err := p.Error(); err != nil {
 		return nil, err
 	}
 
-	columnName := getStringField(t, 1)
-	columnIndex := getIntField(t, 2)
-	distinctCount := int64(getIntField(t, 3))
-	nullCount := int64(getIntField(t, 4))
-	minValue := getStringField(t, 5)
-	maxValue := getStringField(t, 6)
-	avgWidth := getIntField(t, 7)
-	lastUpdatedUnix := getIntField(t, 8)
+	if tableID == InvalidTableID {
+		return nil, fmt.Errorf("invalid table_id: cannot be InvalidTableID (%d)", InvalidTableID)
+	}
 
-	// Validation
 	if columnName == "" {
 		return nil, fmt.Errorf("invalid column_name: cannot be empty")
 	}
@@ -117,7 +122,7 @@ func (cst *ColumnStatsTable) Parse(t *tuple.Tuple) (*ColumnStatisticsRow, error)
 		MinValue:      minValue,
 		MaxValue:      maxValue,
 		AvgWidth:      avgWidth,
-		LastUpdated:   time.Unix(int64(lastUpdatedUnix), 0),
+		LastUpdated:   lastUpdated,
 	}
 
 	return result, nil

@@ -73,18 +73,28 @@ func (st *StatsTable) GetTableID(t *tuple.Tuple) (int, error) {
 }
 
 func (st *StatsTable) Parse(t *tuple.Tuple) (*TableStatistics, error) {
-	tableID, err := st.GetTableID(t)
-	if err != nil {
+	// Parse fields sequentially using the parser
+	p := tuple.NewParser(t).ExpectFields(9)
+
+	tableID := p.ReadInt()
+	cardinality := p.ReadInt()
+	pageCount := p.ReadInt()
+	avgTupleSize := p.ReadInt()
+	lastUpdated := p.ReadTimestamp()
+	distinctValues := p.ReadInt()
+	nullCount := p.ReadInt()
+	minValue := p.ReadString()
+	maxValue := p.ReadString()
+
+	// Check for parsing errors (field count, type mismatches, etc.)
+	if err := p.Error(); err != nil {
 		return nil, err
 	}
-	cardinality := getIntField(t, 1)
-	pageCount := getIntField(t, 2)
-	avgTupleSize := getIntField(t, 3)
-	lastUpdatedUnix := getIntField(t, 4)
-	distinctValues := getIntField(t, 5)
-	nullCount := getIntField(t, 6)
-	minValue := getStringField(t, 7)
-	maxValue := getStringField(t, 8)
+
+	// Custom validation logic
+	if tableID == InvalidTableID {
+		return nil, fmt.Errorf("invalid table_id: cannot be InvalidTableID (%d)", InvalidTableID)
+	}
 
 	if cardinality < 0 {
 		return nil, fmt.Errorf("invalid cardinality %d: must be non-negative", cardinality)
@@ -96,10 +106,6 @@ func (st *StatsTable) Parse(t *tuple.Tuple) (*TableStatistics, error) {
 
 	if cardinality > 0 && avgTupleSize <= 0 {
 		return nil, fmt.Errorf("invalid avg_tuple_size %d: must be positive when cardinality > 0", avgTupleSize)
-	}
-
-	if lastUpdatedUnix < 0 {
-		return nil, fmt.Errorf("invalid last_updated %d: timestamp cannot be negative", lastUpdatedUnix)
 	}
 
 	if distinctValues > cardinality {
@@ -123,7 +129,7 @@ func (st *StatsTable) Parse(t *tuple.Tuple) (*TableStatistics, error) {
 		Cardinality:    cardinality,
 		PageCount:      pageCount,
 		AvgTupleSize:   avgTupleSize,
-		LastUpdated:    time.Unix(int64(lastUpdatedUnix), 0),
+		LastUpdated:    lastUpdated,
 		DistinctValues: distinctValues,
 		NullCount:      nullCount,
 		MinValue:       minValue,

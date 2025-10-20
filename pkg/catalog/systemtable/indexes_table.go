@@ -80,17 +80,20 @@ func (it *IndexesTable) TableIDIndex() int {
 
 // Parse parses a tuple into IndexMetadata
 func (it *IndexesTable) Parse(t *tuple.Tuple) (*IndexMetadata, error) {
-	if t.TupleDesc.NumFields() != it.GetNumFields() {
-		return nil, fmt.Errorf("invalid tuple: expected 7 fields, got %d", t.TupleDesc.NumFields())
-	}
+	p := tuple.NewParser(t).ExpectFields(it.GetNumFields())
 
-	indexID := getIntField(t, 0)
-	indexName := getStringField(t, 1)
-	tableID := getIntField(t, 2)
-	columnName := getStringField(t, 3)
-	indexTypeStr := getStringField(t, 4)
-	filePath := getStringField(t, 5)
-	createdAt := getInt64Field(t, 6)
+	indexID := p.ReadInt()
+	indexName := p.ReadString()
+	tableID := p.ReadInt()
+	columnName := p.ReadString()
+	indexTypeStr := p.ReadString()
+	filePath := p.ReadString()
+	createdAt := p.ReadInt64()
+
+	// Check for parsing errors (field count, type mismatches, etc.)
+	if err := p.Error(); err != nil {
+		return nil, err
+	}
 
 	if indexID <= 0 {
 		return nil, fmt.Errorf("invalid index_id %d: must be positive", indexID)

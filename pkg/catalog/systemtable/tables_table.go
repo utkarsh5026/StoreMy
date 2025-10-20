@@ -94,16 +94,17 @@ func (tt *TablesTable) TableIDIndex() int {
 //
 // Returns parsed TableMetadata or an error if validation fails.
 func (tt *TablesTable) Parse(t *tuple.Tuple) (*TableMetadata, error) {
-	if t.TupleDesc.NumFields() != tt.GetNumFields() {
-		return nil, fmt.Errorf("invalid tuple: expected 4 fields, got %d", t.TupleDesc.NumFields())
+	p := tuple.NewParser(t).ExpectFields(tt.GetNumFields())
+
+	tableID := p.ReadInt()
+	tableName := p.ReadString()
+	filePath := p.ReadString()
+	primaryKey := p.ReadString()
+
+	if err := p.Error(); err != nil {
+		return nil, err
 	}
 
-	tableID := getIntField(t, 0)
-	tableName := getStringField(t, 1)
-	filePath := getStringField(t, 2)
-	primaryKey := getStringField(t, 3)
-
-	// table_id must not be the special InvalidTableID reserved for system schema definitions.
 	if tableID == InvalidTableID {
 		return nil, fmt.Errorf("invalid table_id: cannot be InvalidTableID (%d)", InvalidTableID)
 	}
