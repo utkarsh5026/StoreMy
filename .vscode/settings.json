@@ -17,6 +17,7 @@
         "hashindex",
         "heapage",
         "heapreader",
+        "indexmanager",
         "inotify",
         "inotifywait",
         "lerr",
@@ -33,6 +34,7 @@
         "pids",
         "reaccess",
         "rerr",
+        "setops",
         "statsdb",
         "storemy",
         "systemtable",
@@ -41,6 +43,7 @@
         "testdb",
         "tids",
         "tndata",
+        "tsch",
         "Txns",
         "unflushed"
     ]
