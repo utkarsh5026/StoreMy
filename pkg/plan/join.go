@@ -117,3 +117,61 @@ func (u *UnionNode) String() string {
 func (u *UnionNode) GetChildren() []PlanNode {
 	return []PlanNode{u.LeftChild, u.RightChild}
 }
+
+// IntersectNode represents an INTERSECT operation
+type IntersectNode struct {
+	BasePlanNode
+	LeftChild    PlanNode // Left input relation
+	RightChild   PlanNode // Right input relation
+	IntersectAll bool     // true for INTERSECT ALL, false for INTERSECT (with deduplication)
+}
+
+func (i *IntersectNode) GetNodeType() string {
+	return "Intersect"
+}
+
+func (i *IntersectNode) String() string {
+	var sb strings.Builder
+	intersectType := "INTERSECT"
+	if i.IntersectAll {
+		intersectType = "INTERSECT ALL"
+	}
+	sb.WriteString(fmt.Sprintf("Intersect(%s, cost=%.2f, rows=%d)\n", intersectType, i.Cost, i.Cardinality))
+	sb.WriteString(indent(i.LeftChild.String(), 2))
+	sb.WriteString("\n")
+	sb.WriteString(indent(i.RightChild.String(), 2))
+	return sb.String()
+}
+
+func (i *IntersectNode) GetChildren() []PlanNode {
+	return []PlanNode{i.LeftChild, i.RightChild}
+}
+
+// ExceptNode represents an EXCEPT (MINUS) operation
+type ExceptNode struct {
+	BasePlanNode
+	LeftChild  PlanNode // Left input relation
+	RightChild PlanNode // Right input relation
+	ExceptAll  bool     // true for EXCEPT ALL, false for EXCEPT (with deduplication)
+}
+
+func (e *ExceptNode) GetNodeType() string {
+	return "Except"
+}
+
+func (e *ExceptNode) String() string {
+	var sb strings.Builder
+	exceptType := "EXCEPT"
+	if e.ExceptAll {
+		exceptType = "EXCEPT ALL"
+	}
+	sb.WriteString(fmt.Sprintf("Except(%s, cost=%.2f, rows=%d)\n", exceptType, e.Cost, e.Cardinality))
+	sb.WriteString(indent(e.LeftChild.String(), 2))
+	sb.WriteString("\n")
+	sb.WriteString(indent(e.RightChild.String(), 2))
+	return sb.String()
+}
+
+func (e *ExceptNode) GetChildren() []PlanNode {
+	return []PlanNode{e.LeftChild, e.RightChild}
+}
