@@ -2,18 +2,32 @@ package cardinality
 
 import (
 	"math"
-	"storemy/pkg/concurrency/transaction"
 	"storemy/pkg/plan"
 )
 
 // estimateScan estimates output rows for a scan node.
-// Uses enhanced selectivity estimation supporting NULL checks, LIKE patterns,
-// IN clauses, and value-based estimates. Applies correlation correction when
-// multiple predicates are present to avoid over-optimistic estimates.
-func (ce *CardinalityEstimator) estimateScan(
-	tx *transaction.TransactionContext,
-	node *plan.ScanNode,
-) (int64, error) {
+//
+// Mathematical Model:
+//   - Base cardinality: Uses catalog statistics for table row count
+//   - Single predicate selectivity: sel = P(predicate is true)
+//   - Multiple predicates: Applies correlation correction to avoid independence assumption
+//
+// Formula:
+//
+//	outputRows = tableRows × ∏(selectivity_i)^correlationFactor
+//
+// Reasoning:
+//   - Naive multiplication (sel₁ × sel₂ × ...) assumes predicate independence
+//   - Real predicates often correlate (e.g., age > 30 AND salary > 50k)
+//   - Correlation correction uses geometric mean to avoid over-aggressive filtering
+//   - Without statistics, falls back to conservative DefaultTableCardinality
+//
+// Example:
+//
+//	Table with 10,000 rows, predicates: age > 30 (sel=0.6), city='NYC' (sel=0.1)
+//	Naive: 10000 × 0.6 × 0.1 = 600 rows
+//	With correlation correction: ~1000-1500 rows (more realistic)
+func (ce *CardinalityEstimator) estimateScan(tx TxCtx, node *plan.ScanNode) (int64, error) {
 	tableStats, err := ce.catalog.GetTableStatistics(tx, node.TableID)
 	if err != nil || tableStats == nil {
 		return DefaultTableCardinality, nil
@@ -24,22 +38,32 @@ func (ce *CardinalityEstimator) estimateScan(
 		return tableCard, nil
 	}
 
-	selectivities := make([]float64, 0, len(node.Predicates))
-	for i := range node.Predicates {
-		sel := ce.estimatePredicateSelectivity(tx, node.TableID, &node.Predicates[i])
-		selectivities = append(selectivities, sel)
-	}
-
-	totalSelectivity := applyCorrelationCorrection(selectivities)
-	return int64(float64(tableCard) * totalSelectivity), nil
+	return ce.calculateSelectivity(tx, node.Predicates, node.TableID, tableCard), nil
 }
 
 // estimateFilter estimates output rows for a filter node.
-// Uses enhanced selectivity estimation supporting NULL checks, LIKE patterns,
-// IN clauses, and value-based estimates. Applies correlation correction when
-// multiple predicates are present to avoid over-optimistic estimates.
+//
+// Mathematical Model:
+//   - Inherits child cardinality as base
+//   - Applies same selectivity mathematics as estimateScan
+//   - Propagates estimates up the query tree
+//
+// Formula:
+//
+//	outputRows = childRows × ∏(selectivity_i)^correlationFactor
+//
+// Reasoning:
+//   - Filters reduce rows but don't change fundamental estimation approach
+//   - Child cardinality already reflects upstream operations (joins, scans)
+//   - Correlation correction prevents compounding selectivity errors
+//   - Attempts to find base table for better statistics lookup
+//
+// Example:
+//
+//	Child outputs 5,000 rows, filter: status='active' (sel=0.3)
+//	Output estimate: 5000 × 0.3 = 1,500 rows
 func (ce *CardinalityEstimator) estimateFilter(
-	tx *transaction.TransactionContext,
+	tx TxCtx,
 	node *plan.FilterNode,
 ) (int64, error) {
 	childCard, err := ce.EstimatePlanCardinality(tx, node.Child)
@@ -52,38 +76,73 @@ func (ce *CardinalityEstimator) estimateFilter(
 	}
 
 	tableID := findBaseTableID(node.Child)
-
-	selectivities := make([]float64, 0, len(node.Predicates))
-	for i := range node.Predicates {
-		sel := ce.estimatePredicateSelectivity(tx, tableID, &node.Predicates[i])
-		selectivities = append(selectivities, sel)
-	}
-
-	totalSelectivity := applyCorrelationCorrection(selectivities)
-	return int64(float64(childCard) * totalSelectivity), nil
+	return ce.calculateSelectivity(tx, node.Predicates, tableID, childCard), nil
 }
 
-// estimateProject estimates output rows for a projection
-// Projection doesn't change cardinality (only the schema)
+// estimateProject estimates output rows for a projection.
+//
+// Mathematical Model:
+//
+//	outputRows = childRows (no change)
+//
+// Reasoning:
+//   - Projection is a schema operation, not a row-filtering operation
+//   - Projects selected columns but preserves all input rows
+//   - Cardinality remains unchanged through projection
+//   - Only affects tuple width/schema, not tuple count
+//
+// Example:
+//
+//	SELECT id, name FROM users → same row count as input
 func (ce *CardinalityEstimator) estimateProject(
-	tx *transaction.TransactionContext,
+	tx TxCtx,
 	node *plan.ProjectNode,
 ) (int64, error) {
 	return ce.EstimatePlanCardinality(tx, node.Child)
 }
 
-// estimateSort estimates output rows for a sort
-// Sort doesn't change cardinality
+// estimateSort estimates output rows for a sort operation.
+//
+// Mathematical Model:
+//
+//	outputRows = childRows (no change)
+//
+// Reasoning:
+//   - Sort reorders rows but doesn't filter them
+//   - Cardinality invariant under sorting
+//   - Affects physical ordering, not logical row count
+//   - Important for cost estimation (O(n log n)) but not cardinality
+//
+// Example:
+//
+//	ORDER BY salary DESC → same row count, different order
 func (ce *CardinalityEstimator) estimateSort(
-	tx *transaction.TransactionContext,
+	tx TxCtx,
 	node *plan.SortNode,
 ) (int64, error) {
 	return ce.EstimatePlanCardinality(tx, node.Child)
 }
 
-// estimateLimit estimates output rows for a LIMIT
+// estimateLimit estimates output rows for a LIMIT clause.
+//
+// Mathematical Model:
+//
+//	effectiveRows = childRows - offset
+//	outputRows = min(limit, max(0, effectiveRows))
+//
+// Reasoning:
+//   - LIMIT caps maximum output rows
+//   - OFFSET skips initial rows before limiting
+//   - Cannot produce negative rows (max with 0)
+//   - Cannot produce more rows than available after offset
+//   - Critical for pagination query optimization
+//
+// Examples:
+//  1. Child: 100 rows, LIMIT 10, OFFSET 0 → 10 rows
+//  2. Child: 100 rows, LIMIT 50, OFFSET 80 → 20 rows (100-80)
+//  3. Child: 100 rows, LIMIT 10, OFFSET 200 → 0 rows
 func (ce *CardinalityEstimator) estimateLimit(
-	tx *transaction.TransactionContext,
+	tx TxCtx,
 	node *plan.LimitNode,
 ) (int64, error) {
 	childCard, err := ce.EstimatePlanCardinality(tx, node.Child)
