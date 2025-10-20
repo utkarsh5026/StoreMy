@@ -1,10 +1,12 @@
 package index
 
 import (
+	"fmt"
 	"storemy/pkg/primitives"
 	"storemy/pkg/storage/page"
 	"storemy/pkg/tuple"
 	"storemy/pkg/types"
+	"strings"
 )
 
 type TID = *primitives.TransactionID
@@ -17,6 +19,20 @@ const (
 	BTreeIndex IndexType = "BTREE"
 	HashIndex  IndexType = "HASH"
 )
+
+func ParseIndexType(str string) (IndexType, error) {
+	switch strings.ToUpper(str) {
+
+	case "BTREE":
+		return BTreeIndex, nil
+
+	case "HASH":
+		return HashIndex, nil
+
+	default:
+		return "", fmt.Errorf("error in parsing the index type ")
+	}
+}
 
 // IndexEntry represents a single key-value pair in a hash bucket.
 // Maps an index key to a tuple location in the heap file.
