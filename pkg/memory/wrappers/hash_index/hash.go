@@ -64,12 +64,13 @@ type HashIndex struct {
 //   - pageStore: PageStore for page lifecycle management
 //
 // Returns a configured HashIndex ready for insert/search operations.
-func NewHashIndex(indexID int, keyType types.Type, file *hash.HashFile, pageStore *memory.PageStore, tx *transaction.TransactionContext) *HashIndex {
+func NewHashIndex(indexID int, keyType types.Type, file *hash.HashFile, store *memory.PageStore, tx *transaction.TransactionContext) *HashIndex {
+	store.RegisterDbFile(indexID, file)
 	return &HashIndex{
 		indexID:    indexID,
 		keyType:    keyType,
 		file:       file,
-		pageStore:  pageStore,
+		pageStore:  store,
 		numBuckets: file.GetNumBuckets(),
 		tx:         tx,
 	}
