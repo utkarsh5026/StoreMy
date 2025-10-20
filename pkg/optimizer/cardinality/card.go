@@ -10,6 +10,10 @@ import (
 	"storemy/pkg/types"
 )
 
+type (
+	TxCtx = *transaction.TransactionContext
+)
+
 // Default constants for cardinality estimation
 const (
 	DefaultTableCardinality = 1000 // Default table size when no statistics
@@ -66,6 +70,10 @@ func (ce *CardinalityEstimator) EstimatePlanCardinality(
 		return ce.estimateLimit(tx, node)
 	case *plan.DistinctNode:
 		return ce.estimateDistinct(tx, node)
+	case *plan.IntersectNode:
+		return ce.estimateIntersectCardinality(tx, node)
+	case *plan.ExceptNode:
+		return ce.estimateExceptCardinality(tx, node)
 	case *plan.UnionNode:
 		return ce.estimateUnionCardinality(tx, node)
 	default:
@@ -193,21 +201,27 @@ func applyCorrelationCorrection(selectivities []float64) float64 {
 		return selectivities[0]
 	}
 
-	// Calculate naive product (assumes independence)
 	product := 1.0
 	for _, sel := range selectivities {
 		product *= sel
 	}
 
-	// Apply exponential backoff to account for correlation
-	// The more predicates we have, the more likely they are correlated
 	n := float64(len(selectivities))
 	exponent := 1.0 / (1.0 + math.Log(n))
 	corrected := math.Pow(product, exponent)
 
-	// Return the maximum of product and corrected value
-	// (corrected is always >= product due to exponent < 1)
 	return math.Max(product, corrected)
+}
+
+func (ce *CardinalityEstimator) calculateSelectivity(tx TxCtx, predicates []plan.PredicateInfo, tableID int, baseCard int64) int64 {
+	selectivities := make([]float64, 0, len(predicates))
+	for i := range predicates {
+		sel := ce.estimatePredicateSelectivity(tx, tableID, &predicates[i])
+		selectivities = append(selectivities, sel)
+	}
+
+	totalSelectivity := applyCorrelationCorrection(selectivities)
+	return int64(float64(baseCard) * totalSelectivity)
 }
 
 // findBaseTableID walks the plan tree to find the base table ID.
@@ -282,7 +296,7 @@ func (ce *CardinalityEstimator) getColumnType(
 func (ce *CardinalityEstimator) parsePredicateValue(
 	tx *transaction.TransactionContext,
 	tableID int,
-	columnName string,
+	columnName,
 	valueStr string,
 ) types.Field {
 	if valueStr == "" {
