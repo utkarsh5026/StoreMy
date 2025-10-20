@@ -17,20 +17,84 @@ import (
 	"strings"
 )
 
+// System tables initialized:
+//   - CATALOG_TABLES: table metadata
+//   - CATALOG_COLUMNS: column definitions
+//   - CATALOG_STATISTICS: table statistics
+//   - CATALOG_INDEXES: index metadata
+//   - CATALOG_COLUMN_STATISTICS: column-level statistics
+//   - CATALOG_INDEX_STATISTICS: index statistics
+type SystemTableIDs struct {
+	TablesTableID           int
+	ColumnsTableID          int
+	StatisticsTableID       int
+	IndexesTableID          int
+	ColumnStatisticsTableID int
+	IndexStatisticsTableID  int
+}
+
+// GetSysTable returns the SystemTable interface for a given system table ID.
+// This is used to access system table-specific methods like TableIDIndex().
+//
+// Parameters:
+//   - id: System table ID
+//
+// Returns the corresponding SystemTable interface or an error if the ID is invalid.
+func (sc *SystemTableIDs) GetSysTable(id int) (systemtable.SystemTable, error) {
+	switch id {
+	case sc.TablesTableID:
+		return systemtable.Tables, nil
+	case sc.ColumnsTableID:
+		return systemtable.Columns, nil
+	case sc.StatisticsTableID:
+		return systemtable.Stats, nil
+	case sc.IndexesTableID:
+		return systemtable.Indexes, nil
+	case sc.ColumnStatisticsTableID:
+		return systemtable.ColumnStats, nil
+	case sc.IndexStatisticsTableID:
+		return systemtable.IndexStats, nil
+	default:
+		return nil, fmt.Errorf("unknown system table ID: %d", id)
+	}
+}
+
+// SetSystemTableID sets the appropriate system table ID field based on table name.
+// This is called during initialization to track the IDs of all system catalog tables.
+//
+// Parameters:
+//   - tableName: Name of the system table
+//   - tableID: Heap file ID assigned to this system table
+func (sc *SystemTableIDs) SetSystemTableID(tableName string, tableID int) {
+	switch tableName {
+	case systemtable.Tables.TableName():
+		sc.TablesTableID = tableID
+	case systemtable.Columns.TableName():
+		sc.ColumnsTableID = tableID
+	case systemtable.Stats.TableName():
+		sc.StatisticsTableID = tableID
+	case systemtable.Indexes.TableName():
+		sc.IndexesTableID = tableID
+	case systemtable.ColumnStats.TableName():
+		sc.ColumnStatisticsTableID = tableID
+	case systemtable.IndexStats.TableName():
+		sc.IndexStatisticsTableID = tableID
+	}
+}
+
 // SystemCatalog manages database metadata including table and column definitions.
-// It maintains four system tables:
+// It maintains six system tables:
 //   - CATALOG_TABLES: stores table metadata (ID, name, file path, primary key)
 //   - CATALOG_COLUMNS: stores column metadata (table ID, name, type, position, is_primary)
 //   - CATALOG_STATISTICS: stores table statistics for query optimization
 //   - CATALOG_INDEXES: stores index metadata (ID, name, table ID, column, type, file path)
+//   - CATALOG_COLUMN_STATISTICS: stores column-level statistics for selectivity estimation
+//   - CATALOG_INDEX_STATISTICS: stores index statistics for query optimization
 type SystemCatalog struct {
-	store             *memory.PageStore
-	cache             *tablecache.TableCache
-	tupMgr            *table.TupleManager
-	TablesTableID     int
-	ColumnsTableID    int
-	StatisticsTableID int
-	IndexesTableID    int
+	store      *memory.PageStore
+	cache      *tablecache.TableCache
+	tupMgr     *table.TupleManager
+	SystemTabs SystemTableIDs
 }
 
 // NewSystemCatalog creates a new system catalog instance.
@@ -44,8 +108,8 @@ func NewSystemCatalog(ps *memory.PageStore, cache *tablecache.TableCache) *Syste
 	return sc
 }
 
-// Initialize creates or loads the system catalog tables (CATALOG_TABLES, CATALOG_COLUMNS, CATALOG_STATISTICS, and CATALOG_INDEXES)
-// and registers them with the table manager. This must be called before any other catalog operations.
+// Initialize creates or loads all system catalog tables and registers them with the table manager.
+// This must be called before any other catalog operations.
 // Works for both new and existing databases - heap.NewHeapFile handles both creation and loading.
 //
 // Parameters:
@@ -57,12 +121,7 @@ func NewSystemCatalog(ps *memory.PageStore, cache *tablecache.TableCache) *Syste
 func (sc *SystemCatalog) Initialize(ctx *transaction.TransactionContext, dataDir string) error {
 	defer sc.store.CommitTransaction(ctx)
 
-	systemTables := []systemtable.SystemTable{
-		systemtable.Tables,
-		systemtable.Columns,
-		systemtable.Stats,
-		systemtable.Indexes,
-	}
+	systemTables := systemtable.AllSystemTables
 
 	for _, table := range systemTables {
 		sch := table.Schema()
@@ -78,31 +137,10 @@ func (sc *SystemCatalog) Initialize(ctx *transaction.TransactionContext, dataDir
 			return fmt.Errorf("failed to register %s: %w", table.TableName(), err)
 		}
 
-		sc.setSystemTableID(table.TableName(), f.GetID())
-
-		// Register the DbFile with PageStore for flush operations
+		sc.SystemTabs.SetSystemTableID(table.TableName(), f.GetID())
 		sc.store.RegisterDbFile(f.GetID(), f)
 	}
 	return nil
-}
-
-// setSystemTableID sets the appropriate system table ID field based on table name.
-// This is called during initialization to track the IDs of the four system catalog tables.
-//
-// Parameters:
-//   - tableName: Name of the system table (CATALOG_TABLES, CATALOG_COLUMNS, CATALOG_STATISTICS, or CATALOG_INDEXES)
-//   - tableID: Heap file ID assigned to this system table
-func (sc *SystemCatalog) setSystemTableID(tableName string, tableID int) {
-	switch tableName {
-	case systemtable.Tables.TableName():
-		sc.TablesTableID = tableID
-	case systemtable.Columns.TableName():
-		sc.ColumnsTableID = tableID
-	case systemtable.Stats.TableName():
-		sc.StatisticsTableID = tableID
-	case systemtable.Indexes.TableName():
-		sc.IndexesTableID = tableID
-	}
 }
 
 // RegisterTable adds a new user table to the system catalog.
@@ -118,10 +156,11 @@ func (sc *SystemCatalog) setSystemTableID(tableName string, tableID int) {
 //
 // Returns an error if table or column metadata cannot be inserted into the catalog.
 func (sc *SystemCatalog) RegisterTable(tx *transaction.TransactionContext, sch *schema.Schema, filepath string) error {
-	tablesFile, err := sc.cache.GetDbFile(sc.TablesTableID)
+	tablesFile, err := sc.cache.GetDbFile(sc.SystemTabs.TablesTableID)
 	if err != nil {
 		return err
 	}
+
 	tm := systemtable.TableMetadata{
 		TableName:     sch.TableName,
 		TableID:       sch.TableID,
@@ -133,7 +172,7 @@ func (sc *SystemCatalog) RegisterTable(tx *transaction.TransactionContext, sch *
 		return fmt.Errorf("failed to insert table metadata: %w", err)
 	}
 
-	colFile, err := sc.cache.GetDbFile(sc.ColumnsTableID)
+	colFile, err := sc.cache.GetDbFile(sc.SystemTabs.ColumnsTableID)
 	if err != nil {
 		return err
 	}
@@ -163,7 +202,7 @@ func (sc *SystemCatalog) RegisterTable(tx *transaction.TransactionContext, sch *
 func (sc *SystemCatalog) LoadTables(tx *transaction.TransactionContext, dataDir string) error {
 	defer sc.store.CommitTransaction(tx)
 
-	return sc.iterateTable(sc.TablesTableID, tx, func(tableTuple *tuple.Tuple) error {
+	return sc.iterateTable(sc.SystemTabs.TablesTableID, tx, func(tableTuple *tuple.Tuple) error {
 		table, err := systemtable.Tables.Parse(tableTuple)
 		if err != nil {
 			return err
@@ -225,7 +264,7 @@ func (sc *SystemCatalog) LoadTable(tx *transaction.TransactionContext, tableName
 //
 // Returns an error if any system table deletion fails.
 func (sc *SystemCatalog) DeleteCatalogEntry(tx *transaction.TransactionContext, tableID int) error {
-	sysTableIDs := []int{sc.TablesTableID, sc.ColumnsTableID, sc.StatisticsTableID, sc.IndexesTableID}
+	sysTableIDs := []int{sc.SystemTabs.TablesTableID, sc.SystemTabs.ColumnsTableID, sc.SystemTabs.StatisticsTableID, sc.SystemTabs.IndexesTableID}
 	for _, id := range sysTableIDs {
 		if err := sc.DeleteTableFromSysTable(tx, tableID, id); err != nil {
 			return err
@@ -252,7 +291,7 @@ func (sc *SystemCatalog) DeleteTableFromSysTable(tx *transaction.TransactionCont
 		return err
 	}
 
-	syst, err := sc.getSysTable(sysTableID)
+	syst, err := sc.SystemTabs.GetSysTable(sysTableID)
 	if err != nil {
 		return nil
 	}
@@ -279,28 +318,6 @@ func (sc *SystemCatalog) DeleteTableFromSysTable(tx *transaction.TransactionCont
 		}
 	}
 	return nil
-}
-
-// getSysTable returns the SystemTable interface for a given system table ID.
-// This is used to access system table-specific methods like TableIDIndex().
-//
-// Parameters:
-//   - id: System table ID (TablesTableID, ColumnsTableID, StatisticsTableID, or IndexesTableID)
-//
-// Returns the corresponding SystemTable interface or an error if the ID is invalid.
-func (sc *SystemCatalog) getSysTable(id int) (systemtable.SystemTable, error) {
-	switch id {
-	case sc.TablesTableID:
-		return systemtable.Tables, nil
-	case sc.ColumnsTableID:
-		return systemtable.Columns, nil
-	case sc.StatisticsTableID:
-		return systemtable.Stats, nil
-	case sc.IndexesTableID:
-		return systemtable.Indexes, nil
-	default:
-		return nil, fmt.Errorf("unknown system table ID: %d", id)
-	}
 }
 
 // GetTableMetadataByID retrieves complete table metadata from CATALOG_TABLES by table ID.
@@ -367,7 +384,7 @@ func (sc *SystemCatalog) iterateTable(tableID int, tx *transaction.TransactionCo
 func (sc *SystemCatalog) findTableMetadata(tx *transaction.TransactionContext, pred func(tm *systemtable.TableMetadata) bool) (*systemtable.TableMetadata, error) {
 	var result *systemtable.TableMetadata
 
-	err := sc.iterateTable(sc.TablesTableID, tx, func(tableTuple *tuple.Tuple) error {
+	err := sc.iterateTable(sc.SystemTabs.TablesTableID, tx, func(tableTuple *tuple.Tuple) error {
 		table, err := systemtable.Tables.Parse(tableTuple)
 		if err != nil {
 			return err
@@ -403,7 +420,7 @@ func (sc *SystemCatalog) findTableMetadata(tx *transaction.TransactionContext, p
 // Returns a slice of TableMetadata for all tables, or an error if the catalog cannot be read.
 func (sc *SystemCatalog) GetAllTables(tx *transaction.TransactionContext) ([]*systemtable.TableMetadata, error) {
 	var tables []*systemtable.TableMetadata
-	err := sc.iterateTable(sc.TablesTableID, tx, func(tup *tuple.Tuple) error {
+	err := sc.iterateTable(sc.SystemTabs.TablesTableID, tx, func(tup *tuple.Tuple) error {
 		tm, err := systemtable.Tables.Parse(tup)
 		if err != nil {
 			return err
