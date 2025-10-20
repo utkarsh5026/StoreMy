@@ -125,15 +125,15 @@ func (cst *ColumnStatsTable) Parse(t *tuple.Tuple) (*ColumnStatisticsRow, error)
 
 // CreateTuple creates a tuple for the column statistics table
 func (cst *ColumnStatsTable) CreateTuple(stats *ColumnStatisticsRow) *tuple.Tuple {
-	t := tuple.NewTuple(cst.Schema().TupleDesc)
-	t.SetField(0, types.NewIntField(int64(stats.TableID)))
-	t.SetField(1, types.NewStringField(stats.ColumnName, types.StringMaxSize))
-	t.SetField(2, types.NewIntField(int64(stats.ColumnIndex)))
-	t.SetField(3, types.NewIntField(int64(stats.DistinctCount)))
-	t.SetField(4, types.NewIntField(int64(stats.NullCount)))
-	t.SetField(5, types.NewStringField(stats.MinValue, types.StringMaxSize))
-	t.SetField(6, types.NewStringField(stats.MaxValue, types.StringMaxSize))
-	t.SetField(7, types.NewIntField(int64(stats.AvgWidth)))
-	t.SetField(8, types.NewIntField(int64(stats.LastUpdated.Unix())))
-	return t
+	return tuple.NewBuilder(cst.Schema().TupleDesc).
+		AddInt(int64(stats.TableID)).
+		AddString(stats.ColumnName).
+		AddInt(int64(stats.ColumnIndex)).
+		AddInt(int64(stats.DistinctCount)).
+		AddInt(int64(stats.NullCount)).
+		AddString(stats.MinValue).
+		AddString(stats.MaxValue).
+		AddInt(int64(stats.AvgWidth)).
+		AddInt(int64(stats.LastUpdated.Unix())).
+		MustBuild()
 }

@@ -169,19 +169,19 @@ func (ist *IndexStatsTable) Parse(t *tuple.Tuple) (*IndexStatisticsRow, error) {
 
 // CreateTuple creates a tuple for the index statistics table
 func (ist *IndexStatsTable) CreateTuple(stats *IndexStatisticsRow) *tuple.Tuple {
-	t := tuple.NewTuple(ist.Schema().TupleDesc)
-	t.SetField(0, types.NewIntField(int64(stats.IndexID)))
-	t.SetField(1, types.NewIntField(int64(stats.TableID)))
-	t.SetField(2, types.NewStringField(stats.IndexName, types.StringMaxSize))
-	t.SetField(3, types.NewStringField(string(stats.IndexType), types.StringMaxSize))
-	t.SetField(4, types.NewStringField(stats.ColumnName, types.StringMaxSize))
-	t.SetField(5, types.NewIntField(int64(stats.NumEntries)))
-	t.SetField(6, types.NewIntField(int64(stats.NumPages)))
-	t.SetField(7, types.NewIntField(int64(stats.BTreeHeight)))
-	t.SetField(8, types.NewIntField(int64(stats.DistinctKeys)))
 	clusteringFactorInt := int64(stats.ClusteringFactor * 1000000.0)
-	t.SetField(9, types.NewIntField(clusteringFactorInt))
-	t.SetField(10, types.NewIntField(int64(stats.AvgKeySize)))
-	t.SetField(11, types.NewIntField(int64(stats.LastUpdated.Unix())))
-	return t
+	return tuple.NewBuilder(ist.Schema().TupleDesc).
+		AddInt(int64(stats.IndexID)).
+		AddInt(int64(stats.TableID)).
+		AddString(stats.IndexName).
+		AddString(string(stats.IndexType)).
+		AddString(stats.ColumnName).
+		AddInt(int64(stats.NumEntries)).
+		AddInt(int64(stats.NumPages)).
+		AddInt(int64(stats.BTreeHeight)).
+		AddInt(int64(stats.DistinctKeys)).
+		AddInt(clusteringFactorInt).
+		AddInt(int64(stats.AvgKeySize)).
+		AddInt(int64(stats.LastUpdated.Unix())).
+		MustBuild()
 }

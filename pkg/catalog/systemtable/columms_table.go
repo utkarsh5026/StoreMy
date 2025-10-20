@@ -66,15 +66,15 @@ func (ct *ColumnsTable) TableIDIndex() int {
 // CreateTuple constructs a new catalog tuple from column metadata.
 // Auto-increment columns are initialized with next_auto_value=1.
 func (ct *ColumnsTable) CreateTuple(col schema.ColumnMetadata) *tuple.Tuple {
-	t := tuple.NewTuple(ct.Schema().TupleDesc)
-	t.SetField(0, types.NewIntField(int64(col.TableID)))
-	t.SetField(1, types.NewStringField(col.Name, types.StringMaxSize))
-	t.SetField(2, types.NewIntField(int64(col.FieldType)))
-	t.SetField(3, types.NewIntField(int64(col.Position)))
-	t.SetField(4, types.NewBoolField(col.IsPrimary))
-	t.SetField(5, types.NewBoolField(col.IsAutoInc))
-	t.SetField(6, types.NewIntField(1)) // Start auto-increment at 1
-	return t
+	return tuple.NewBuilder(ct.Schema().TupleDesc).
+		AddInt(int64(col.TableID)).
+		AddString(col.Name).
+		AddInt(int64(col.FieldType)).
+		AddInt(int64(col.Position)).
+		AddBool(col.IsPrimary).
+		AddBool(col.IsAutoInc).
+		AddInt(1). // Start auto-increment at 1
+		MustBuild()
 }
 
 // GetTableID extracts and validates the table_id from a catalog tuple.

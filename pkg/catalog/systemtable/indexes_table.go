@@ -55,15 +55,15 @@ func (it *IndexesTable) GetNumFields() int {
 
 // CreateTuple creates a tuple from IndexMetadata
 func (it *IndexesTable) CreateTuple(im IndexMetadata) *tuple.Tuple {
-	t := tuple.NewTuple(it.Schema().TupleDesc)
-	t.SetField(0, types.NewIntField(int64(im.IndexID)))
-	t.SetField(1, types.NewStringField(im.IndexName, types.StringMaxSize))
-	t.SetField(2, types.NewIntField(int64(im.TableID)))
-	t.SetField(3, types.NewStringField(im.ColumnName, types.StringMaxSize))
-	t.SetField(4, types.NewStringField(string(im.IndexType), types.StringMaxSize))
-	t.SetField(5, types.NewStringField(im.FilePath, types.StringMaxSize))
-	t.SetField(6, types.NewIntField(im.CreatedAt))
-	return t
+	return tuple.NewBuilder(it.Schema().TupleDesc).
+		AddInt(int64(im.IndexID)).
+		AddString(im.IndexName).
+		AddInt(int64(im.TableID)).
+		AddString(im.ColumnName).
+		AddString(string(im.IndexType)).
+		AddString(im.FilePath).
+		AddInt(im.CreatedAt).
+		MustBuild()
 }
 
 // GetID retrieves the index ID from a tuple

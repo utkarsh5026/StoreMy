@@ -135,15 +135,15 @@ func (st *StatsTable) Parse(t *tuple.Tuple) (*TableStatistics, error) {
 
 // createStatisticsTuple creates a tuple for the statistics table
 func (st *StatsTable) CreateTuple(stats *TableStatistics) *tuple.Tuple {
-	t := tuple.NewTuple(st.Schema().TupleDesc)
-	t.SetField(0, types.NewIntField(int64(stats.TableID)))
-	t.SetField(1, types.NewIntField(int64(stats.Cardinality)))
-	t.SetField(2, types.NewIntField(int64(stats.PageCount)))
-	t.SetField(3, types.NewIntField(int64(stats.AvgTupleSize)))
-	t.SetField(4, types.NewIntField(int64(stats.LastUpdated.Unix())))
-	t.SetField(5, types.NewIntField(int64(stats.DistinctValues)))
-	t.SetField(6, types.NewIntField(int64(stats.NullCount)))
-	t.SetField(7, types.NewStringField(stats.MinValue, types.StringMaxSize))
-	t.SetField(8, types.NewStringField(stats.MaxValue, types.StringMaxSize))
-	return t
+	return tuple.NewBuilder(st.Schema().TupleDesc).
+		AddInt(int64(stats.TableID)).
+		AddInt(int64(stats.Cardinality)).
+		AddInt(int64(stats.PageCount)).
+		AddInt(int64(stats.AvgTupleSize)).
+		AddInt(int64(stats.LastUpdated.Unix())).
+		AddInt(int64(stats.DistinctValues)).
+		AddInt(int64(stats.NullCount)).
+		AddString(stats.MinValue).
+		AddString(stats.MaxValue).
+		MustBuild()
 }
