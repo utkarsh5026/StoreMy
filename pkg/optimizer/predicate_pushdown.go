@@ -3,7 +3,7 @@ package optimizer
 import (
 	"storemy/pkg/concurrency/transaction"
 	"storemy/pkg/optimizer/cardinality"
-	"storemy/pkg/planner"
+	"storemy/pkg/plan"
 )
 
 // PredicatePushdownOptimizer applies predicate pushdown optimization
@@ -22,18 +22,18 @@ func NewPredicatePushdownOptimizer(costModel *CostModel) *PredicatePushdownOptim
 // Optimize applies predicate pushdown to a plan tree
 func (ppo *PredicatePushdownOptimizer) Optimize(
 	tx *transaction.TransactionContext,
-	plan planner.PlanNode,
-) planner.PlanNode {
-	if plan == nil {
+	planNode plan.PlanNode,
+) plan.PlanNode {
+	if planNode == nil {
 		return nil
 	}
 
-	return ppo.pushPredicates(tx, plan, make([]*PredicateContext, 0))
+	return ppo.pushPredicates(tx, planNode, make([]*PredicateContext, 0))
 }
 
 // PredicateContext holds information about a predicate being pushed down
 type PredicateContext struct {
-	Predicate      *planner.PredicateInfo
+	Predicate      *plan.PredicateInfo
 	CanPushThrough bool     // Whether this predicate can be pushed through joins
 	RequiredTables []string // Tables referenced by this predicate
 }
@@ -41,17 +41,17 @@ type PredicateContext struct {
 // pushPredicates recursively pushes predicates down the plan tree
 func (ppo *PredicatePushdownOptimizer) pushPredicates(
 	tx *transaction.TransactionContext,
-	node planner.PlanNode,
+	node plan.PlanNode,
 	predicates []*PredicateContext,
-) planner.PlanNode {
+) plan.PlanNode {
 	switch n := node.(type) {
-	case *planner.FilterNode:
+	case *plan.FilterNode:
 		return ppo.optimizeFilter(tx, n, predicates)
-	case *planner.JoinNode:
+	case *plan.JoinNode:
 		return ppo.optimizeJoin(tx, n, predicates)
-	case *planner.ScanNode:
+	case *plan.ScanNode:
 		return ppo.optimizeScan(tx, n, predicates)
-	case *planner.ProjectNode:
+	case *plan.ProjectNode:
 		return ppo.optimizeProject(tx, n, predicates)
 	default:
 		// For other node types, recursively optimize children
@@ -62,9 +62,9 @@ func (ppo *PredicatePushdownOptimizer) pushPredicates(
 // optimizeFilter handles filter node optimization
 func (ppo *PredicatePushdownOptimizer) optimizeFilter(
 	tx *transaction.TransactionContext,
-	node *planner.FilterNode,
+	node *plan.FilterNode,
 	existingPredicates []*PredicateContext,
-) planner.PlanNode {
+) plan.PlanNode {
 	// Convert filter predicates to PredicateContext
 	newPredicates := make([]*PredicateContext, 0, len(node.Predicates))
 	for i := range node.Predicates {
@@ -89,9 +89,9 @@ func (ppo *PredicatePushdownOptimizer) optimizeFilter(
 // optimizeJoin handles join node optimization
 func (ppo *PredicatePushdownOptimizer) optimizeJoin(
 	tx *transaction.TransactionContext,
-	node *planner.JoinNode,
+	node *plan.JoinNode,
 	predicates []*PredicateContext,
-) planner.PlanNode {
+) plan.PlanNode {
 	// Partition predicates:
 	// 1. Predicates that can be pushed to left child
 	// 2. Predicates that can be pushed to right child
@@ -99,7 +99,7 @@ func (ppo *PredicatePushdownOptimizer) optimizeJoin(
 
 	leftPredicates := make([]*PredicateContext, 0)
 	rightPredicates := make([]*PredicateContext, 0)
-	joinPredicates := make([]planner.PredicateInfo, 0)
+	joinPredicates := make([]plan.PredicateInfo, 0)
 
 	leftTables := ppo.getReferencedTables(node.LeftChild)
 	rightTables := ppo.getReferencedTables(node.RightChild)
@@ -127,7 +127,7 @@ func (ppo *PredicatePushdownOptimizer) optimizeJoin(
 	optimizedRight := ppo.pushPredicates(tx, node.RightChild, rightPredicates)
 
 	// Create new join node with optimized children
-	newJoin := &planner.JoinNode{
+	newJoin := &plan.JoinNode{
 		BasePlanNode:  node.BasePlanNode,
 		LeftChild:     optimizedLeft,
 		RightChild:    optimizedRight,
@@ -155,11 +155,11 @@ func (ppo *PredicatePushdownOptimizer) optimizeJoin(
 // optimizeScan handles scan node optimization
 func (ppo *PredicatePushdownOptimizer) optimizeScan(
 	tx *transaction.TransactionContext,
-	node *planner.ScanNode,
+	node *plan.ScanNode,
 	predicates []*PredicateContext,
-) planner.PlanNode {
+) plan.PlanNode {
 	// Push all applicable predicates to the scan
-	pushedPredicates := make([]planner.PredicateInfo, 0, len(node.Predicates))
+	pushedPredicates := make([]plan.PredicateInfo, 0, len(node.Predicates))
 	pushedPredicates = append(pushedPredicates, node.Predicates...)
 
 	scanTable := node.TableName
@@ -180,7 +180,7 @@ func (ppo *PredicatePushdownOptimizer) optimizeScan(
 	}
 
 	// Create new scan node with pushed predicates
-	newScan := &planner.ScanNode{
+	newScan := &plan.ScanNode{
 		BasePlanNode: node.BasePlanNode,
 		TableName:    node.TableName,
 		TableID:      node.TableID,
@@ -207,13 +207,13 @@ func (ppo *PredicatePushdownOptimizer) optimizeScan(
 // optimizeProject handles project node optimization
 func (ppo *PredicatePushdownOptimizer) optimizeProject(
 	tx *transaction.TransactionContext,
-	node *planner.ProjectNode,
+	node *plan.ProjectNode,
 	predicates []*PredicateContext,
-) planner.PlanNode {
+) plan.PlanNode {
 	// Predicates can be pushed through projection
 	optimizedChild := ppo.pushPredicates(tx, node.Child, predicates)
 
-	newProject := &planner.ProjectNode{
+	newProject := &plan.ProjectNode{
 		BasePlanNode: node.BasePlanNode,
 		Child:        optimizedChild,
 		Columns:      node.Columns,
@@ -236,9 +236,9 @@ func (ppo *PredicatePushdownOptimizer) optimizeProject(
 // optimizeGeneric handles generic node types
 func (ppo *PredicatePushdownOptimizer) optimizeGeneric(
 	tx *transaction.TransactionContext,
-	node planner.PlanNode,
+	node plan.PlanNode,
 	predicates []*PredicateContext,
-) planner.PlanNode {
+) plan.PlanNode {
 	// For generic nodes, try to push predicates through to children
 	children := node.GetChildren()
 	if len(children) == 0 {
@@ -253,7 +253,7 @@ func (ppo *PredicatePushdownOptimizer) optimizeGeneric(
 // Helper methods
 
 // canPushThroughJoin determines if a predicate can be pushed through a join
-func (ppo *PredicatePushdownOptimizer) canPushThroughJoin(pred *planner.PredicateInfo) bool {
+func (ppo *PredicatePushdownOptimizer) canPushThroughJoin(pred *plan.PredicateInfo) bool {
 	// A predicate can be pushed through a join if it only references
 	// columns from one side of the join
 	// For now, assume all predicates can potentially be pushed
@@ -261,7 +261,7 @@ func (ppo *PredicatePushdownOptimizer) canPushThroughJoin(pred *planner.Predicat
 }
 
 // getRequiredTables extracts table references from a predicate
-func (ppo *PredicatePushdownOptimizer) getRequiredTables(pred *planner.PredicateInfo) []string {
+func (ppo *PredicatePushdownOptimizer) getRequiredTables(pred *plan.PredicateInfo) []string {
 	// Extract table name from column reference
 	// Format: "table.column" or just "column"
 	tables := make([]string, 0)
@@ -276,11 +276,11 @@ func (ppo *PredicatePushdownOptimizer) getRequiredTables(pred *planner.Predicate
 }
 
 // getReferencedTables gets all tables referenced by a plan subtree
-func (ppo *PredicatePushdownOptimizer) getReferencedTables(plan planner.PlanNode) []string {
+func (ppo *PredicatePushdownOptimizer) getReferencedTables(planNode plan.PlanNode) []string {
 	tables := make([]string, 0)
 
-	switch n := plan.(type) {
-	case *planner.ScanNode:
+	switch n := planNode.(type) {
+	case *plan.ScanNode:
 		if n.Alias != "" {
 			tables = append(tables, n.Alias)
 		} else {
@@ -288,7 +288,7 @@ func (ppo *PredicatePushdownOptimizer) getReferencedTables(plan planner.PlanNode
 		}
 	default:
 		// Recursively collect from children
-		for _, child := range plan.GetChildren() {
+		for _, child := range planNode.GetChildren() {
 			tables = append(tables, ppo.getReferencedTables(child)...)
 		}
 	}

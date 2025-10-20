@@ -5,7 +5,7 @@ import (
 	"storemy/pkg/catalog"
 	"storemy/pkg/concurrency/transaction"
 	"storemy/pkg/optimizer/cardinality"
-	"storemy/pkg/planner"
+	"storemy/pkg/plan"
 )
 
 // JoinOrderOptimizer uses dynamic programming to find optimal join order
@@ -25,11 +25,11 @@ type JoinOrderOptimizer struct {
 
 // JoinPlan represents a candidate join plan for a set of relations
 type JoinPlan struct {
-	RelationSet uint64           // Bitmask of relations in this plan
-	PlanNode    planner.PlanNode // The actual plan tree
-	Cost        float64          // Total cost
-	Cardinality int64            // Estimated output rows
-	JoinMethod  string           // Join method used (for multi-way joins)
+	RelationSet uint64        // Bitmask of relations in this plan
+	PlanNode    plan.PlanNode // The actual plan tree
+	Cost        float64       // Total cost
+	Cardinality int64         // Estimated output rows
+	JoinMethod  string        // Join method used (for multi-way joins)
 }
 
 // NewJoinOrderOptimizer creates a new join order optimizer
@@ -51,7 +51,7 @@ func NewJoinOrderOptimizer(
 func (joo *JoinOrderOptimizer) OptimizeJoinOrder(
 	tx *transaction.TransactionContext,
 	graph *JoinGraph,
-) (planner.PlanNode, error) {
+) (plan.PlanNode, error) {
 	joo.graph = graph
 	joo.dpTable = make(map[uint64]*JoinPlan)
 
@@ -96,18 +96,18 @@ func (joo *JoinOrderOptimizer) initializeBaseRelations(
 		scanNode := rel.ScanNode
 		if scanNode == nil {
 			// Create a default scan node
-			scanNode = &planner.ScanNode{
+			scanNode = &plan.ScanNode{
 				TableName:    rel.TableName,
 				TableID:      rel.TableID,
 				AccessMethod: "seqscan",
 				Alias:        rel.Alias,
-				Predicates:   make([]planner.PredicateInfo, 0),
+				Predicates:   make([]plan.PredicateInfo, 0),
 			}
 		}
 
 		// Apply pushed-down predicates
 		for _, pred := range rel.Predicates {
-			scanNode.Predicates = append(scanNode.Predicates, planner.PredicateInfo{
+			scanNode.Predicates = append(scanNode.Predicates, plan.PredicateInfo{
 				Column:    pred.Column,
 				Value:     "",
 				Predicate: 0, // Would need to convert from string
@@ -313,14 +313,14 @@ func (joo *JoinOrderOptimizer) createJoinPlan(
 	}
 
 	// Create join node
-	joinNode := &planner.JoinNode{
+	joinNode := &plan.JoinNode{
 		LeftChild:    leftPlan.PlanNode,
 		RightChild:   rightPlan.PlanNode,
 		JoinType:     "inner",
 		JoinMethod:   joinMethod,
 		LeftColumn:   bestPredicate.LeftColumn,
 		RightColumn:  bestPredicate.RightColumn,
-		ExtraFilters: make([]planner.PredicateInfo, 0),
+		ExtraFilters: make([]plan.PredicateInfo, 0),
 	}
 
 	// Estimate cost and cardinality
@@ -408,7 +408,7 @@ func (joo *JoinOrderOptimizer) getAllRelationSet(graph *JoinGraph) uint64 {
 func (joo *JoinOrderOptimizer) optimizeGreedy(
 	tx *transaction.TransactionContext,
 	graph *JoinGraph,
-) (planner.PlanNode, error) {
+) (plan.PlanNode, error) {
 	// Greedy algorithm: repeatedly join the pair with lowest cost
 	// This is a fallback for when DP is too expensive
 

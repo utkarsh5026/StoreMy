@@ -5,7 +5,7 @@ import (
 	"storemy/pkg/catalog"
 	"storemy/pkg/concurrency/transaction"
 	"storemy/pkg/optimizer/cardinality"
-	"storemy/pkg/planner"
+	"storemy/pkg/plan"
 )
 
 const (
@@ -44,51 +44,51 @@ func NewCostModel(cat *catalog.SystemCatalog) *CostModel {
 // EstimatePlanCost estimates the total cost of executing a plan node
 func (cm *CostModel) EstimatePlanCost(
 	tx *transaction.TransactionContext,
-	plan planner.PlanNode,
+	planNode plan.PlanNode,
 ) float64 {
-	if plan == nil {
+	if planNode == nil {
 		return 0.0
 	}
 
 	// First ensure cardinality is estimated
-	if plan.GetCardinality() == 0 {
-		card, err := cm.cardinalityEstimator.EstimatePlanCardinality(tx, plan)
+	if planNode.GetCardinality() == 0 {
+		card, err := cm.cardinalityEstimator.EstimatePlanCardinality(tx, planNode)
 		if err != nil {
 			// On error, use a default cardinality
 			card = cardinality.DefaultTableCardinality
 		}
-		plan.SetCardinality(card)
+		planNode.SetCardinality(card)
 	}
 
 	var cost float64
-	switch node := plan.(type) {
-	case *planner.ScanNode:
+	switch node := planNode.(type) {
+	case *plan.ScanNode:
 		cost = cm.estimateScanCost(tx, node)
-	case *planner.JoinNode:
+	case *plan.JoinNode:
 		cost = cm.estimateJoinCost(tx, node)
-	case *planner.FilterNode:
+	case *plan.FilterNode:
 		cost = cm.estimateFilterCost(tx, node)
-	case *planner.ProjectNode:
+	case *plan.ProjectNode:
 		cost = cm.estimateProjectCost(tx, node)
-	case *planner.AggregateNode:
+	case *plan.AggregateNode:
 		cost = cm.estimateAggregateCost(tx, node)
-	case *planner.SortNode:
+	case *plan.SortNode:
 		cost = cm.estimateSortCost(tx, node)
-	case *planner.LimitNode:
+	case *plan.LimitNode:
 		cost = cm.estimateLimitCost(tx, node)
 	default:
 		cost = 0.0
 	}
 
 	// Set the cost on the node
-	plan.SetCost(cost)
+	planNode.SetCost(cost)
 	return cost
 }
 
 // estimateScanCost estimates the cost of a table scan
 func (cm *CostModel) estimateScanCost(
 	tx *transaction.TransactionContext,
-	node *planner.ScanNode,
+	node *plan.ScanNode,
 ) float64 {
 	stats, err := cm.catalog.GetTableStatistics(tx, node.TableID)
 	if err != nil || stats == nil {
@@ -115,7 +115,7 @@ func (cm *CostModel) estimateSeqScanCost(stats *catalog.TableStatistics) float64
 
 func (cm *CostModel) estimateIndexScanCost(
 	tx *transaction.TransactionContext,
-	node *planner.ScanNode,
+	node *plan.ScanNode,
 	tableStats *catalog.TableStatistics,
 ) float64 {
 	indexStats, err := cm.catalog.GetIndexStatistics(tx, node.IndexID)
@@ -137,7 +137,7 @@ func (cm *CostModel) estimateIndexScanCost(
 // estimateJoinCost estimates the cost of a join operation
 func (cm *CostModel) estimateJoinCost(
 	tx *transaction.TransactionContext,
-	node *planner.JoinNode,
+	node *plan.JoinNode,
 ) float64 {
 	leftCost := cm.EstimatePlanCost(tx, node.LeftChild)
 	rightCost := cm.EstimatePlanCost(tx, node.RightChild)
@@ -202,7 +202,7 @@ func (cm *CostModel) estimateNestedLoopJoinCost(leftCard, rightCard int64) float
 // estimateFilterCost estimates cost of a filter operation
 func (cm *CostModel) estimateFilterCost(
 	tx *transaction.TransactionContext,
-	node *planner.FilterNode,
+	node *plan.FilterNode,
 ) float64 {
 	childCost := cm.EstimatePlanCost(tx, node.Child)
 	childCard := node.Child.GetCardinality()
@@ -215,7 +215,7 @@ func (cm *CostModel) estimateFilterCost(
 // estimateProjectCost estimates cost of a projection
 func (cm *CostModel) estimateProjectCost(
 	tx *transaction.TransactionContext,
-	node *planner.ProjectNode,
+	node *plan.ProjectNode,
 ) float64 {
 	childCost := cm.EstimatePlanCost(tx, node.Child)
 	childCard := node.Child.GetCardinality()
@@ -228,7 +228,7 @@ func (cm *CostModel) estimateProjectCost(
 // estimateAggregateCost estimates cost of aggregation
 func (cm *CostModel) estimateAggregateCost(
 	tx *transaction.TransactionContext,
-	node *planner.AggregateNode,
+	node *plan.AggregateNode,
 ) float64 {
 	childCost := cm.EstimatePlanCost(tx, node.Child)
 	childCard := node.Child.GetCardinality()
@@ -249,7 +249,7 @@ func (cm *CostModel) estimateAggregateCost(
 // estimateSortCost estimates cost of a sort operation
 func (cm *CostModel) estimateSortCost(
 	tx *transaction.TransactionContext,
-	node *planner.SortNode,
+	node *plan.SortNode,
 ) float64 {
 	childCost := cm.EstimatePlanCost(tx, node.Child)
 	childCard := node.Child.GetCardinality()
@@ -288,7 +288,7 @@ func (cm *CostModel) estimateSortCost2(n int64) float64 {
 // estimateLimitCost estimates cost of a LIMIT operation
 func (cm *CostModel) estimateLimitCost(
 	tx *transaction.TransactionContext,
-	node *planner.LimitNode,
+	node *plan.LimitNode,
 ) float64 {
 	// LIMIT can often short-circuit execution
 	// Estimate cost based on limited output rather than full child cost

@@ -6,7 +6,7 @@ import (
 	"storemy/pkg/catalog/systemtable"
 	"storemy/pkg/concurrency/transaction"
 	"storemy/pkg/optimizer/cardinality"
-	"storemy/pkg/planner"
+	"storemy/pkg/plan"
 )
 
 // QueryOptimizer is the main optimizer that applies various optimization strategies
@@ -69,13 +69,13 @@ func NewQueryOptimizer(cat *catalog.SystemCatalog, config *OptimizerConfig) *Que
 // Optimize applies all optimization strategies to a query plan
 func (qo *QueryOptimizer) Optimize(
 	tx *transaction.TransactionContext,
-	plan planner.PlanNode,
-) (planner.PlanNode, error) {
-	if plan == nil {
+	planNode plan.PlanNode,
+) (plan.PlanNode, error) {
+	if planNode == nil {
 		return nil, nil
 	}
 
-	optimizedPlan := plan
+	optimizedPlan := planNode
 
 	// Phase 1: Logical optimization
 	// Apply predicate pushdown
@@ -111,19 +111,19 @@ func (qo *QueryOptimizer) Optimize(
 func (qo *QueryOptimizer) OptimizeJoinOrder(
 	tx *transaction.TransactionContext,
 	graph *JoinGraph,
-) (planner.PlanNode, error) {
+) (plan.PlanNode, error) {
 	return qo.joinOrderOptimizer.OptimizeJoinOrder(tx, graph)
 }
 
 // extractJoinGraph extracts a join graph from a plan tree
 func (qo *QueryOptimizer) extractJoinGraph(
 	tx *transaction.TransactionContext,
-	plan planner.PlanNode,
+	planNode plan.PlanNode,
 ) (*JoinGraph, error) {
 	graph := NewJoinGraph()
 	relationID := 0
 
-	err := qo.extractJoinGraphRecursive(tx, plan, graph, &relationID)
+	err := qo.extractJoinGraphRecursive(tx, planNode, graph, &relationID)
 	if err != nil {
 		return nil, err
 	}
@@ -134,7 +134,7 @@ func (qo *QueryOptimizer) extractJoinGraph(
 // extractJoinGraphRecursive recursively extracts join information
 func (qo *QueryOptimizer) extractJoinGraphRecursive(
 	tx *transaction.TransactionContext,
-	node planner.PlanNode,
+	node plan.PlanNode,
 	graph *JoinGraph,
 	relationID *int,
 ) error {
@@ -143,7 +143,7 @@ func (qo *QueryOptimizer) extractJoinGraphRecursive(
 	}
 
 	switch n := node.(type) {
-	case *planner.ScanNode:
+	case *plan.ScanNode:
 		// Add base relation
 		rel := &Relation{
 			ID:         *relationID,
@@ -166,7 +166,7 @@ func (qo *QueryOptimizer) extractJoinGraphRecursive(
 
 		graph.AddRelation(rel)
 
-	case *planner.JoinNode:
+	case *plan.JoinNode:
 		// Recursively extract from children first
 		err := qo.extractJoinGraphRecursive(tx, n.LeftChild, graph, relationID)
 		if err != nil {
@@ -194,7 +194,7 @@ func (qo *QueryOptimizer) extractJoinGraphRecursive(
 			graph.AddJoinPredicate(joinPred)
 		}
 
-	case *planner.FilterNode:
+	case *plan.FilterNode:
 		// Extract predicates and recurse
 		err := qo.extractJoinGraphRecursive(tx, n.Child, graph, relationID)
 		if err != nil {
@@ -215,7 +215,7 @@ func (qo *QueryOptimizer) extractJoinGraphRecursive(
 }
 
 // findRelations finds all relation IDs referenced in a plan subtree
-func (qo *QueryOptimizer) findRelations(node planner.PlanNode, graph *JoinGraph) []int {
+func (qo *QueryOptimizer) findRelations(node plan.PlanNode, graph *JoinGraph) []int {
 	if node == nil {
 		return nil
 	}
@@ -223,7 +223,7 @@ func (qo *QueryOptimizer) findRelations(node planner.PlanNode, graph *JoinGraph)
 	var relations []int
 
 	switch n := node.(type) {
-	case *planner.ScanNode:
+	case *plan.ScanNode:
 		// Find this scan in the graph
 		for id, rel := range graph.Relations {
 			if rel.TableID == n.TableID {
@@ -241,16 +241,16 @@ func (qo *QueryOptimizer) findRelations(node planner.PlanNode, graph *JoinGraph)
 }
 
 // containsJoins checks if a plan tree contains any joins
-func (qo *QueryOptimizer) containsJoins(plan planner.PlanNode) bool {
-	if plan == nil {
+func (qo *QueryOptimizer) containsJoins(planNode plan.PlanNode) bool {
+	if planNode == nil {
 		return false
 	}
 
-	if _, ok := plan.(*planner.JoinNode); ok {
+	if _, ok := planNode.(*plan.JoinNode); ok {
 		return true
 	}
 
-	for _, child := range plan.GetChildren() {
+	for _, child := range planNode.GetChildren() {
 		if qo.containsJoins(child) {
 			return true
 		}
@@ -262,30 +262,30 @@ func (qo *QueryOptimizer) containsJoins(plan planner.PlanNode) bool {
 // selectAccessMethods chooses between index and sequential scans
 func (qo *QueryOptimizer) selectAccessMethods(
 	tx *transaction.TransactionContext,
-	plan planner.PlanNode,
-) planner.PlanNode {
-	if plan == nil {
+	planNode plan.PlanNode,
+) plan.PlanNode {
+	if planNode == nil {
 		return nil
 	}
 
-	switch n := plan.(type) {
-	case *planner.ScanNode:
+	switch n := planNode.(type) {
+	case *plan.ScanNode:
 		return qo.chooseBestAccessMethod(tx, n)
 	default:
 		// Recursively optimize children
-		children := plan.GetChildren()
+		children := planNode.GetChildren()
 		for i, child := range children {
 			children[i] = qo.selectAccessMethods(tx, child)
 		}
-		return plan
+		return planNode
 	}
 }
 
 // chooseBestAccessMethod selects the best access method for a scan
 func (qo *QueryOptimizer) chooseBestAccessMethod(
 	tx *transaction.TransactionContext,
-	scan *planner.ScanNode,
-) planner.PlanNode {
+	scan *plan.ScanNode,
+) plan.PlanNode {
 	// If already using an access method, keep it
 	if scan.AccessMethod != "" && scan.AccessMethod != "seqscan" {
 		return scan
@@ -300,7 +300,7 @@ func (qo *QueryOptimizer) chooseBestAccessMethod(
 	}
 
 	// Estimate cost of sequential scan
-	seqScanNode := &planner.ScanNode{
+	seqScanNode := &plan.ScanNode{
 		BasePlanNode: scan.BasePlanNode,
 		TableName:    scan.TableName,
 		TableID:      scan.TableID,
@@ -329,7 +329,7 @@ func (qo *QueryOptimizer) chooseBestAccessMethod(
 		}
 
 		// Estimate index scan cost
-		indexScanNode := &planner.ScanNode{
+		indexScanNode := &plan.ScanNode{
 			BasePlanNode: scan.BasePlanNode,
 			TableName:    scan.TableName,
 			TableID:      scan.TableID,
@@ -352,7 +352,7 @@ func (qo *QueryOptimizer) chooseBestAccessMethod(
 
 // predicateMatchesIndex checks if a predicate can use an index
 func (qo *QueryOptimizer) predicateMatchesIndex(
-	pred planner.PredicateInfo,
+	pred plan.PredicateInfo,
 	index *systemtable.IndexMetadata,
 ) bool {
 	// Check if the predicate column matches the index key column
@@ -363,38 +363,38 @@ func (qo *QueryOptimizer) predicateMatchesIndex(
 // estimateFinalCosts recursively estimates costs for the final plan
 func (qo *QueryOptimizer) estimateFinalCosts(
 	tx *transaction.TransactionContext,
-	plan planner.PlanNode,
+	planNode plan.PlanNode,
 ) {
-	if plan == nil {
+	if planNode == nil {
 		return
 	}
 
 	// Recursively estimate costs for children first
-	for _, child := range plan.GetChildren() {
+	for _, child := range planNode.GetChildren() {
 		qo.estimateFinalCosts(tx, child)
 	}
 
 	// Estimate cost for this node
-	card, err := qo.costModel.cardinalityEstimator.EstimatePlanCardinality(tx, plan)
+	card, err := qo.costModel.cardinalityEstimator.EstimatePlanCardinality(tx, planNode)
 	if err != nil {
 		// On error, use a default cardinality
 		card = cardinality.DefaultTableCardinality
 	}
-	cost := qo.costModel.EstimatePlanCost(tx, plan)
-	plan.SetCardinality(card)
-	plan.SetCost(cost)
+	cost := qo.costModel.EstimatePlanCost(tx, planNode)
+	planNode.SetCardinality(card)
+	planNode.SetCost(cost)
 }
 
 // ExplainPlan generates an explanation of the query plan with costs
-func (qo *QueryOptimizer) ExplainPlan(plan planner.PlanNode) string {
-	if plan == nil {
+func (qo *QueryOptimizer) ExplainPlan(planNode plan.PlanNode) string {
+	if planNode == nil {
 		return "No plan"
 	}
-	return qo.explainPlanRecursive(plan, 0)
+	return qo.explainPlanRecursive(planNode, 0)
 }
 
 // explainPlanRecursive generates indented plan explanation
-func (qo *QueryOptimizer) explainPlanRecursive(node planner.PlanNode, indent int) string {
+func (qo *QueryOptimizer) explainPlanRecursive(node plan.PlanNode, indent int) string {
 	if node == nil {
 		return ""
 	}
@@ -422,7 +422,7 @@ func (qo *QueryOptimizer) GetCostModel() *CostModel {
 // CreateJoinGraph creates a join graph from scan nodes and join conditions
 // This is a helper for manual join optimization
 func (qo *QueryOptimizer) CreateJoinGraph(
-	scans []*planner.ScanNode,
+	scans []*plan.ScanNode,
 	joinPredicates []*JoinPredicate,
 ) *JoinGraph {
 	graph := NewJoinGraph()
