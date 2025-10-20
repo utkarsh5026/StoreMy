@@ -60,7 +60,7 @@ func (ic *indexCache) Clear() map[int][]*indexWithMetadata {
 	defer ic.mu.Unlock()
 
 	old := ic.cache
-	clear(ic.cache)
+	ic.cache = make(map[int][]*indexWithMetadata)
 	return old
 }
 
