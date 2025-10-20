@@ -256,7 +256,7 @@ func (cm *CatalogManager) RenameTable(tx TxContext, oldName, newName string) err
 		return fmt.Errorf("failed to find table metadata: %w", err)
 	}
 
-	if err := cm.catalog.DeleteTableFromSysTable(tx, tableID, cm.catalog.TablesTableID); err != nil {
+	if err := cm.catalog.DeleteTableFromSysTable(tx, tableID, cm.catalog.SystemTabs.TablesTableID); err != nil {
 		cm.tableCache.RenameTable(newName, oldName)
 		return fmt.Errorf("failed to delete old catalog entry: %w", err)
 	}
@@ -264,7 +264,7 @@ func (cm *CatalogManager) RenameTable(tx TxContext, oldName, newName string) err
 	tm.TableName = newName
 	tup := systemtable.Tables.CreateTuple(*tm)
 
-	tablesFile, err := cm.tableCache.GetDbFile(cm.catalog.TablesTableID)
+	tablesFile, err := cm.tableCache.GetDbFile(cm.catalog.SystemTabs.TablesTableID)
 	if err != nil {
 		cm.tableCache.RenameTable(newName, oldName)
 		return fmt.Errorf("failed to get tables catalog file: %w", err)
@@ -383,7 +383,7 @@ func (cm *CatalogManager) CreateIndex(
 	fileName := fmt.Sprintf("%s_%s.idx", tableName, indexName)
 	filePath = filepath.Join(cm.dataDir, fileName)
 
-	indexesFile, err := cm.tableCache.GetDbFile(cm.catalog.IndexesTableID)
+	indexesFile, err := cm.tableCache.GetDbFile(cm.catalog.SystemTabs.IndexesTableID)
 	if err != nil {
 		return 0, "", fmt.Errorf("failed to get indexes catalog file: %w", err)
 	}
