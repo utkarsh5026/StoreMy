@@ -3,8 +3,8 @@ package parser
 import (
 	"fmt"
 	"storemy/pkg/parser/lexer"
-	"storemy/pkg/parser/plan"
 	"storemy/pkg/parser/statements"
+	"storemy/pkg/plan"
 )
 
 // parseDeleteStatement parses a DELETE SQL statement from the lexer tokens.

@@ -1,7 +1,6 @@
 package parser
 
 import (
-	"storemy/pkg/parser/plan"
 	"storemy/pkg/parser/statements"
 	"testing"
 )
@@ -31,8 +30,8 @@ func TestParseSelectWithInnerJoin(t *testing.T) {
 	}
 
 	join := joins[0]
-	if join.JoinType != plan.InnerJoin {
-		t.Errorf("Expected InnerJoin, got %v", join.JoinType)
+	if join.JoinType != "inner" {
+		t.Errorf("Expected inner join, got %v", join.JoinType)
 	}
 
 	if join.RightTable.TableName != "ORDERS" {
@@ -66,8 +65,8 @@ func TestParseSelectWithSimpleJoin(t *testing.T) {
 	}
 
 	join := joins[0]
-	if join.JoinType != plan.InnerJoin {
-		t.Errorf("Expected InnerJoin for plain JOIN, got %v", join.JoinType)
+	if join.JoinType != "inner" {
+		t.Errorf("Expected inner join for plain JOIN, got %v", join.JoinType)
 	}
 }
 
@@ -89,8 +88,8 @@ func TestParseSelectWithLeftJoin(t *testing.T) {
 	}
 
 	join := joins[0]
-	if join.JoinType != plan.LeftJoin {
-		t.Errorf("Expected LeftJoin, got %v", join.JoinType)
+	if join.JoinType != "left" {
+		t.Errorf("Expected left join, got %v", join.JoinType)
 	}
 }
 
@@ -112,8 +111,8 @@ func TestParseSelectWithLeftOuterJoin(t *testing.T) {
 	}
 
 	join := joins[0]
-	if join.JoinType != plan.LeftJoin {
-		t.Errorf("Expected LeftJoin for LEFT OUTER JOIN, got %v", join.JoinType)
+	if join.JoinType != "left" {
+		t.Errorf("Expected left join for LEFT OUTER JOIN, got %v", join.JoinType)
 	}
 }
 
@@ -135,8 +134,8 @@ func TestParseSelectWithRightJoin(t *testing.T) {
 	}
 
 	join := joins[0]
-	if join.JoinType != plan.RightJoin {
-		t.Errorf("Expected RightJoin, got %v", join.JoinType)
+	if join.JoinType != "right" {
+		t.Errorf("Expected right join, got %v", join.JoinType)
 	}
 }
 
@@ -157,12 +156,12 @@ func TestParseSelectWithMultipleJoins(t *testing.T) {
 		t.Fatalf("Expected 2 joins, got %d", len(joins))
 	}
 
-	if joins[0].JoinType != plan.InnerJoin {
-		t.Errorf("Expected first join to be InnerJoin, got %v", joins[0].JoinType)
+	if joins[0].JoinType != "inner" {
+		t.Errorf("Expected first join to be inner join, got %v", joins[0].JoinType)
 	}
 
-	if joins[1].JoinType != plan.LeftJoin {
-		t.Errorf("Expected second join to be LeftJoin, got %v", joins[1].JoinType)
+	if joins[1].JoinType != "left" {
+		t.Errorf("Expected second join to be left join, got %v", joins[1].JoinType)
 	}
 }
 

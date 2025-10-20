@@ -2,8 +2,8 @@ package parser
 
 import (
 	"storemy/pkg/parser/lexer"
-	"storemy/pkg/parser/plan"
 	"storemy/pkg/parser/statements"
+	"storemy/pkg/plan"
 	"testing"
 )
 
