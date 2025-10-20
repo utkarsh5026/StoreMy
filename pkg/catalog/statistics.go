@@ -59,7 +59,7 @@ func (sc *SystemCatalog) collectTableStatistics(tx *transaction.TransactionConte
 	totalSize := 0
 	distinctMap := make(map[string]bool)
 
-	err = sc.iterateTable(sc.StatisticsTableID, tx, func(t *tuple.Tuple) error {
+	err = sc.iterateTable(sc.SystemTabs.StatisticsTableID, tx, func(t *tuple.Tuple) error {
 		stats.Cardinality++
 		td := t.TupleDesc
 		totalSize += int(td.GetSize())
@@ -91,7 +91,7 @@ func (sc *SystemCatalog) collectTableStatistics(tx *transaction.TransactionConte
 func (sc *SystemCatalog) GetTableStatistics(tx *transaction.TransactionContext, tableID int) (*TableStatistics, error) {
 	var result *TableStatistics
 
-	err := sc.iterateTable(sc.StatisticsTableID, tx, func(statsTuple *tuple.Tuple) error {
+	err := sc.iterateTable(sc.SystemTabs.StatisticsTableID, tx, func(statsTuple *tuple.Tuple) error {
 		storedTableID, err := systemtable.Stats.GetTableID(statsTuple)
 		if err != nil {
 			return err
@@ -121,7 +121,7 @@ func (sc *SystemCatalog) GetTableStatistics(tx *transaction.TransactionContext, 
 // insertNewStatistics creates a new statistics entry
 func (sc *SystemCatalog) insertNewStatistics(tx *transaction.TransactionContext, stats *TableStatistics) error {
 	tup := systemtable.Stats.CreateTuple(stats)
-	file, err := sc.cache.GetDbFile(sc.StatisticsTableID)
+	file, err := sc.cache.GetDbFile(sc.SystemTabs.StatisticsTableID)
 	if err != nil {
 		return err
 	}
@@ -134,7 +134,7 @@ func (sc *SystemCatalog) insertNewStatistics(tx *transaction.TransactionContext,
 
 // updateExistingStatistics updates an existing statistics entry
 func (sc *SystemCatalog) updateExistingStatistics(tx *transaction.TransactionContext, tableID int, stats *TableStatistics) error {
-	if err := sc.DeleteTableFromSysTable(tx, tableID, sc.StatisticsTableID); err != nil {
+	if err := sc.DeleteTableFromSysTable(tx, tableID, sc.SystemTabs.StatisticsTableID); err != nil {
 		return fmt.Errorf("failed to delete old statistics: %w", err)
 	}
 	return sc.insertNewStatistics(tx, stats)

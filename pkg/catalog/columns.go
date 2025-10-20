@@ -34,7 +34,7 @@ type AutoIncrementInfo struct {
 func (sc *SystemCatalog) GetAutoIncrementColumn(tx *transaction.TransactionContext, tableID int) (*AutoIncrementInfo, error) {
 	var result *AutoIncrementInfo
 
-	err := sc.iterateTable(sc.ColumnsTableID, tx, func(columnTuple *tuple.Tuple) error {
+	err := sc.iterateTable(sc.SystemTabs.ColumnsTableID, tx, func(columnTuple *tuple.Tuple) error {
 		colTableID, err := systemtable.Columns.GetTableID(columnTuple)
 		if err != nil {
 			return err
@@ -84,13 +84,17 @@ func (sc *SystemCatalog) GetAutoIncrementColumn(tx *transaction.TransactionConte
 //
 // Returns an error if the column cannot be found or the catalog update fails.
 func (sc *SystemCatalog) IncrementAutoIncrementValue(tx *transaction.TransactionContext, tableID int, columnName string, newValue int) error {
-	file, err := sc.cache.GetDbFile(sc.ColumnsTableID)
+	file, err := sc.cache.GetDbFile(sc.SystemTabs.ColumnsTableID)
 	if err != nil {
 		return fmt.Errorf("failed to get columns table: %w", err)
 	}
 
 	heapFFile := file.(*heap.HeapFile)
-	iter, err := query.NewSeqScan(tx, sc.ColumnsTableID, heapFFile, sc.store)
+	iter, err := query.NewSeqScan(tx, sc.SystemTabs.ColumnsTableID, heapFFile, sc.store)
+	if err != nil {
+		return err
+	}
+
 	if err := iter.Open(); err != nil {
 		return fmt.Errorf("failed to open iterator: %w", err)
 	}
@@ -153,8 +157,8 @@ func (sc *SystemCatalog) LoadTableSchema(tx *transaction.TransactionContext, tab
 func (sc *SystemCatalog) loadColumnMetadata(tx *transaction.TransactionContext, tableID int) ([]schema.ColumnMetadata, error) {
 	var columns []schema.ColumnMetadata
 
-	err := sc.iterateTable(sc.ColumnsTableID, tx, func(columnTuple *tuple.Tuple) error {
-		id, err := systemtable.Columns.GetTableID(columnTuple)
+	err := sc.iterateTable(sc.SystemTabs.ColumnsTableID, tx, func(ct *tuple.Tuple) error {
+		id, err := systemtable.Columns.GetTableID(ct)
 		if err != nil {
 			return err
 		}
@@ -163,7 +167,7 @@ func (sc *SystemCatalog) loadColumnMetadata(tx *transaction.TransactionContext, 
 			return nil
 		}
 
-		col, err := systemtable.Columns.Parse(columnTuple)
+		col, err := systemtable.Columns.Parse(ct)
 		if err != nil {
 			return fmt.Errorf("failed to parse column tuple: %v", err)
 		}
