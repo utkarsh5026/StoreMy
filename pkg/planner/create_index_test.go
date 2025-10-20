@@ -381,8 +381,9 @@ func TestCreateIndexPlan_Execute_MultipleIndexesOnSameTable(t *testing.T) {
 		t.Fatalf("Failed to get indexes: %v", err)
 	}
 
-	if len(indexes) != 2 {
-		t.Errorf("Expected 2 indexes, got %d", len(indexes))
+	// Expected: 3 indexes total (1 primary key + 2 created)
+	if len(indexes) != 3 {
+		t.Errorf("Expected 3 indexes (1 PK + 2 created), got %d", len(indexes))
 	}
 
 	// Cleanup
