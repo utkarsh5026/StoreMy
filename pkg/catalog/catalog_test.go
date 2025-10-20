@@ -187,16 +187,16 @@ func TestSystemCatalog_Initialize(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to get CATALOG_TABLES ID: %v", err)
 	}
-	if tablesID != catalog.TablesTableID {
-		t.Errorf("expected CATALOG_TABLES ID=%d, got %d", catalog.TablesTableID, tablesID)
+	if tablesID != catalog.SystemTabs.TablesTableID {
+		t.Errorf("expected CATALOG_TABLES ID=%d, got %d", catalog.SystemTabs.TablesTableID, tablesID)
 	}
 
 	columnsID, err := catalog.cache.GetTableID("CATALOG_COLUMNS")
 	if err != nil {
 		t.Fatalf("failed to get CATALOG_COLUMNS ID: %v", err)
 	}
-	if columnsID != catalog.ColumnsTableID {
-		t.Errorf("expected CATALOG_COLUMNS ID=%d, got %d", catalog.ColumnsTableID, columnsID)
+	if columnsID != catalog.SystemTabs.ColumnsTableID {
+		t.Errorf("expected CATALOG_COLUMNS ID=%d, got %d", catalog.SystemTabs.ColumnsTableID, columnsID)
 	}
 }
 
