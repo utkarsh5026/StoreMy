@@ -6,7 +6,7 @@ import (
 	"storemy/pkg/catalog"
 	"storemy/pkg/concurrency/transaction"
 	"storemy/pkg/optimizer/selectivity"
-	"storemy/pkg/planner"
+	"storemy/pkg/plan"
 	"storemy/pkg/types"
 )
 
@@ -39,34 +39,34 @@ func NewCardinalityEstimator(cat *catalog.SystemCatalog) (*CardinalityEstimator,
 // EstimatePlanCardinality estimates the output cardinality for a plan node
 func (ce *CardinalityEstimator) EstimatePlanCardinality(
 	tx *transaction.TransactionContext,
-	plan planner.PlanNode,
+	planNode plan.PlanNode,
 ) (int64, error) {
-	if plan == nil {
+	if planNode == nil {
 		return 0, nil
 	}
 
-	if existingCard := plan.GetCardinality(); existingCard > 0 {
+	if existingCard := planNode.GetCardinality(); existingCard > 0 {
 		return existingCard, nil
 	}
 
-	switch node := plan.(type) {
-	case *planner.ScanNode:
+	switch node := planNode.(type) {
+	case *plan.ScanNode:
 		return ce.estimateScan(tx, node)
-	case *planner.JoinNode:
+	case *plan.JoinNode:
 		return ce.estimateJoin(tx, node)
-	case *planner.FilterNode:
+	case *plan.FilterNode:
 		return ce.estimateFilter(tx, node)
-	case *planner.ProjectNode:
+	case *plan.ProjectNode:
 		return ce.estimateProject(tx, node)
-	case *planner.AggregateNode:
+	case *plan.AggregateNode:
 		return ce.estimateAggr(tx, node)
-	case *planner.SortNode:
+	case *plan.SortNode:
 		return ce.estimateSort(tx, node)
-	case *planner.LimitNode:
+	case *plan.LimitNode:
 		return ce.estimateLimit(tx, node)
-	case *planner.DistinctNode:
+	case *plan.DistinctNode:
 		return ce.estimateDistinct(tx, node)
-	case *planner.UnionNode:
+	case *plan.UnionNode:
 		return ce.estimateUnionCardinality(tx, node)
 	default:
 		return 0, nil
@@ -79,7 +79,7 @@ func (ce *CardinalityEstimator) EstimatePlanCardinality(
 // multiple predicates are present to avoid over-optimistic estimates.
 func (ce *CardinalityEstimator) estimateScan(
 	tx *transaction.TransactionContext,
-	node *planner.ScanNode,
+	node *plan.ScanNode,
 ) (int64, error) {
 	tableStats, err := ce.catalog.GetTableStatistics(tx, node.TableID)
 	if err != nil || tableStats == nil {
@@ -104,14 +104,14 @@ func (ce *CardinalityEstimator) estimateScan(
 // getColumnDistinctCount gets the distinct count for a column in a plan subtree
 func (ce *CardinalityEstimator) getColumnDistinctCount(
 	tx *transaction.TransactionContext,
-	plan planner.PlanNode,
+	planNode plan.PlanNode,
 	columnName string,
 ) int64 {
-	if plan == nil {
+	if planNode == nil {
 		return DefaultDistinctCount
 	}
 
-	if scanNode, ok := plan.(*planner.ScanNode); ok {
+	if scanNode, ok := planNode.(*plan.ScanNode); ok {
 		if ce.catalog != nil {
 			colStats, err := ce.catalog.GetColumnStatistics(tx, scanNode.TableID, columnName)
 			if err == nil && colStats != nil {
@@ -120,7 +120,7 @@ func (ce *CardinalityEstimator) getColumnDistinctCount(
 		}
 	}
 
-	for _, child := range plan.GetChildren() {
+	for _, child := range planNode.GetChildren() {
 		distinct := ce.getColumnDistinctCount(tx, child, columnName)
 		if distinct > 0 {
 			return distinct
@@ -136,7 +136,7 @@ func (ce *CardinalityEstimator) getColumnDistinctCount(
 // multiple predicates are present to avoid over-optimistic estimates.
 func (ce *CardinalityEstimator) estimateFilter(
 	tx *transaction.TransactionContext,
-	node *planner.FilterNode,
+	node *plan.FilterNode,
 ) (int64, error) {
 	childCard, err := ce.EstimatePlanCardinality(tx, node.Child)
 	if err != nil {
@@ -163,7 +163,7 @@ func (ce *CardinalityEstimator) estimateFilter(
 // Projection doesn't change cardinality (only the schema)
 func (ce *CardinalityEstimator) estimateProject(
 	tx *transaction.TransactionContext,
-	node *planner.ProjectNode,
+	node *plan.ProjectNode,
 ) (int64, error) {
 	return ce.EstimatePlanCardinality(tx, node.Child)
 }
@@ -173,7 +173,7 @@ func (ce *CardinalityEstimator) estimateProject(
 // falling back to heuristics when statistics are unavailable.
 func (ce *CardinalityEstimator) estimateAggr(
 	tx *transaction.TransactionContext,
-	node *planner.AggregateNode,
+	node *plan.AggregateNode,
 ) (int64, error) {
 	childCard, err := ce.EstimatePlanCardinality(tx, node.Child)
 	if err != nil {
@@ -194,7 +194,7 @@ func (ce *CardinalityEstimator) estimateAggr(
 // Sort doesn't change cardinality
 func (ce *CardinalityEstimator) estimateSort(
 	tx *transaction.TransactionContext,
-	node *planner.SortNode,
+	node *plan.SortNode,
 ) (int64, error) {
 	return ce.EstimatePlanCardinality(tx, node.Child)
 }
@@ -202,7 +202,7 @@ func (ce *CardinalityEstimator) estimateSort(
 // estimateLimit estimates output rows for a LIMIT
 func (ce *CardinalityEstimator) estimateLimit(
 	tx *transaction.TransactionContext,
-	node *planner.LimitNode,
+	node *plan.LimitNode,
 ) (int64, error) {
 	childCard, err := ce.EstimatePlanCardinality(tx, node.Child)
 	if err != nil {
@@ -226,7 +226,7 @@ func (ce *CardinalityEstimator) estimateLimit(
 // Uses column statistics when available, or applies a default reduction factor.
 func (ce *CardinalityEstimator) estimateDistinct(
 	tx *transaction.TransactionContext,
-	node *planner.DistinctNode,
+	node *plan.DistinctNode,
 ) (int64, error) {
 	childCard, err := ce.EstimatePlanCardinality(tx, node.Child)
 	if err != nil {
@@ -256,7 +256,7 @@ func (ce *CardinalityEstimator) estimateDistinct(
 // UNION ALL simply adds cardinalities, while UNION estimates overlap and deduplicates.
 func (ce *CardinalityEstimator) estimateUnionCardinality(
 	tx *transaction.TransactionContext,
-	node *planner.UnionNode,
+	node *plan.UnionNode,
 ) (int64, error) {
 	leftCard, err := ce.EstimatePlanCardinality(tx, node.LeftChild)
 	if err != nil {
@@ -319,7 +319,7 @@ func (ce *CardinalityEstimator) estimateUnionCardinality(
 // it multiplies distinct counts assuming independence.
 func (ce *CardinalityEstimator) estimateGroupByDistinctCount(
 	tx *transaction.TransactionContext,
-	plan planner.PlanNode,
+	planNode plan.PlanNode,
 	groupByExprs []string,
 ) int64 {
 	if len(groupByExprs) == 0 {
@@ -328,7 +328,7 @@ func (ce *CardinalityEstimator) estimateGroupByDistinctCount(
 
 	// For single column, try to get actual distinct count
 	if len(groupByExprs) == 1 {
-		distinct := ce.getColumnDistinctCount(tx, plan, groupByExprs[0])
+		distinct := ce.getColumnDistinctCount(tx, planNode, groupByExprs[0])
 		if distinct > 0 {
 			return distinct
 		}
@@ -341,7 +341,7 @@ func (ce *CardinalityEstimator) estimateGroupByDistinctCount(
 	foundStats := false
 
 	for _, expr := range groupByExprs {
-		distinct := ce.getColumnDistinctCount(tx, plan, expr)
+		distinct := ce.getColumnDistinctCount(tx, planNode, expr)
 		if distinct > 0 {
 			totalDistinct *= distinct
 			foundStats = true
@@ -402,25 +402,25 @@ func applyCorrelationCorrection(selectivities []float64) float64 {
 
 // findBaseTableID walks the plan tree to find the base table ID.
 // Returns 0 if no base table is found (e.g., for joins or complex plans).
-func (ce *CardinalityEstimator) findBaseTableID(plan planner.PlanNode) int {
-	if plan == nil {
+func (ce *CardinalityEstimator) findBaseTableID(planNode plan.PlanNode) int {
+	if planNode == nil {
 		return 0
 	}
 
-	switch node := plan.(type) {
-	case *planner.ScanNode:
+	switch node := planNode.(type) {
+	case *plan.ScanNode:
 		return node.TableID
-	case *planner.FilterNode:
+	case *plan.FilterNode:
 		return ce.findBaseTableID(node.Child)
-	case *planner.ProjectNode:
+	case *plan.ProjectNode:
 		return ce.findBaseTableID(node.Child)
-	case *planner.AggregateNode:
+	case *plan.AggregateNode:
 		return ce.findBaseTableID(node.Child)
-	case *planner.SortNode:
+	case *plan.SortNode:
 		return ce.findBaseTableID(node.Child)
-	case *planner.LimitNode:
+	case *plan.LimitNode:
 		return ce.findBaseTableID(node.Child)
-	case *planner.DistinctNode:
+	case *plan.DistinctNode:
 		return ce.findBaseTableID(node.Child)
 	default:
 		// For joins, unions, or other multi-child nodes, return 0
@@ -495,20 +495,20 @@ func (ce *CardinalityEstimator) parsePredicateValue(
 func (ce *CardinalityEstimator) estimatePredicateSelectivity(
 	tx *transaction.TransactionContext,
 	tableID int,
-	pred *planner.PredicateInfo,
+	pred *plan.PredicateInfo,
 ) float64 {
 	est := ce.estimator
 	switch pred.Type {
-	case planner.NullCheckPredicate:
+	case plan.NullCheckPredicate:
 		return est.EstimateNull(tx, tableID, pred.Column, pred.IsNull)
 
-	case planner.LikePredicate:
+	case plan.LikePredicate:
 		return est.EstimateLike(pred.Value)
 
-	case planner.InPredicate:
+	case plan.InPredicate:
 		return est.EstimateIn(tx, tableID, pred.Column, len(pred.Values))
 
-	case planner.StandardPredicate:
+	case plan.StandardPredicate:
 		if pred.Value != "" {
 			field := ce.parsePredicateValue(tx, tableID, pred.Column, pred.Value)
 			if field != nil {

@@ -3,7 +3,7 @@ package cardinality
 import (
 	"math"
 	"storemy/pkg/concurrency/transaction"
-	"storemy/pkg/planner"
+	"storemy/pkg/plan"
 )
 
 // estimateJoin estimates output rows for a join node.
@@ -11,7 +11,7 @@ import (
 // correlation correction when multiple filters are present.
 func (ce *CardinalityEstimator) estimateJoin(
 	tx *transaction.TransactionContext,
-	node *planner.JoinNode,
+	node *plan.JoinNode,
 ) (int64, error) {
 	leftCard, err := ce.EstimatePlanCardinality(tx, node.LeftChild)
 	if err != nil {
@@ -57,7 +57,7 @@ func (ce *CardinalityEstimator) estimateJoin(
 // estimateJoinSelectivity estimates the selectivity of the join condition
 func (ce *CardinalityEstimator) estimateJoinSelectivity(
 	tx *transaction.TransactionContext,
-	node *planner.JoinNode,
+	node *plan.JoinNode,
 ) float64 {
 	if node.LeftColumn == "" || node.RightColumn == "" {
 		return 1.0
@@ -71,7 +71,7 @@ func (ce *CardinalityEstimator) estimateJoinSelectivity(
 // for the possibility that one side's values may be a subset of the other.
 func (ce *CardinalityEstimator) estimateEquiJoinSelectivity(
 	tx *transaction.TransactionContext,
-	node *planner.JoinNode,
+	node *plan.JoinNode,
 ) float64 {
 	leftDistinct := ce.getColumnDistinctCount(tx, node.LeftChild, node.LeftColumn)
 	rightDistinct := ce.getColumnDistinctCount(tx, node.RightChild, node.RightColumn)

@@ -3,7 +3,7 @@ package cardinality
 import (
 	"storemy/pkg/concurrency/transaction"
 	"storemy/pkg/optimizer/selectivity"
-	"storemy/pkg/planner"
+	"storemy/pkg/plan"
 	"storemy/pkg/primitives"
 	"testing"
 )
@@ -129,7 +129,7 @@ func TestFindBaseTableID(t *testing.T) {
 	ce := &CardinalityEstimator{}
 
 	t.Run("Direct Scan Node", func(t *testing.T) {
-		scan := &planner.ScanNode{TableID: 42}
+		scan := &plan.ScanNode{TableID: 42}
 		result := ce.findBaseTableID(scan)
 		if result != 42 {
 			t.Errorf("Expected table ID 42, got %d", result)
@@ -137,8 +137,8 @@ func TestFindBaseTableID(t *testing.T) {
 	})
 
 	t.Run("Filter -> Scan", func(t *testing.T) {
-		scan := &planner.ScanNode{TableID: 99}
-		filter := &planner.FilterNode{Child: scan}
+		scan := &plan.ScanNode{TableID: 99}
+		filter := &plan.FilterNode{Child: scan}
 		result := ce.findBaseTableID(filter)
 		if result != 99 {
 			t.Errorf("Expected table ID 99, got %d", result)
@@ -146,9 +146,9 @@ func TestFindBaseTableID(t *testing.T) {
 	})
 
 	t.Run("Project -> Filter -> Scan", func(t *testing.T) {
-		scan := &planner.ScanNode{TableID: 123}
-		filter := &planner.FilterNode{Child: scan}
-		project := &planner.ProjectNode{Child: filter}
+		scan := &plan.ScanNode{TableID: 123}
+		filter := &plan.FilterNode{Child: scan}
+		project := &plan.ProjectNode{Child: filter}
 		result := ce.findBaseTableID(project)
 		if result != 123 {
 			t.Errorf("Expected table ID 123, got %d", result)
@@ -156,10 +156,10 @@ func TestFindBaseTableID(t *testing.T) {
 	})
 
 	t.Run("Sort -> Limit -> Aggregate -> Scan", func(t *testing.T) {
-		scan := &planner.ScanNode{TableID: 77}
-		agg := &planner.AggregateNode{Child: scan}
-		limit := &planner.LimitNode{Child: agg}
-		sort := &planner.SortNode{Child: limit}
+		scan := &plan.ScanNode{TableID: 77}
+		agg := &plan.AggregateNode{Child: scan}
+		limit := &plan.LimitNode{Child: agg}
+		sort := &plan.SortNode{Child: limit}
 		result := ce.findBaseTableID(sort)
 		if result != 77 {
 			t.Errorf("Expected table ID 77, got %d", result)
@@ -167,8 +167,8 @@ func TestFindBaseTableID(t *testing.T) {
 	})
 
 	t.Run("Distinct -> Scan", func(t *testing.T) {
-		scan := &planner.ScanNode{TableID: 55}
-		distinct := &planner.DistinctNode{Child: scan}
+		scan := &plan.ScanNode{TableID: 55}
+		distinct := &plan.DistinctNode{Child: scan}
 		result := ce.findBaseTableID(distinct)
 		if result != 55 {
 			t.Errorf("Expected table ID 55, got %d", result)
@@ -176,9 +176,9 @@ func TestFindBaseTableID(t *testing.T) {
 	})
 
 	t.Run("Join Node Returns 0", func(t *testing.T) {
-		leftScan := &planner.ScanNode{TableID: 1}
-		rightScan := &planner.ScanNode{TableID: 2}
-		join := &planner.JoinNode{
+		leftScan := &plan.ScanNode{TableID: 1}
+		rightScan := &plan.ScanNode{TableID: 2}
+		join := &plan.JoinNode{
 			LeftChild:  leftScan,
 			RightChild: rightScan,
 		}
@@ -208,11 +208,11 @@ func TestDistinctCardinality(t *testing.T) {
 	t.Run("DISTINCT All Columns", func(t *testing.T) {
 		// Child produces 1000 rows
 		// Use a simple node that doesn't require catalog
-		child := &planner.ProjectNode{}
+		child := &plan.ProjectNode{}
 		child.SetCardinality(1000)
 
 		// DISTINCT on all columns (no specific columns)
-		distinct := &planner.DistinctNode{
+		distinct := &plan.DistinctNode{
 			Child:         child,
 			DistinctExprs: []string{}, // Empty = all columns
 		}
@@ -239,10 +239,10 @@ func TestDistinctCardinality(t *testing.T) {
 		testCases := []int64{10, 100, 1000, 10000}
 
 		for _, childCard := range testCases {
-			child := &planner.ProjectNode{}
+			child := &plan.ProjectNode{}
 			child.SetCardinality(childCard)
 
-			distinct := &planner.DistinctNode{
+			distinct := &plan.DistinctNode{
 				Child:         child,
 				DistinctExprs: []string{},
 			}
@@ -260,10 +260,10 @@ func TestDistinctCardinality(t *testing.T) {
 	})
 
 	t.Run("DISTINCT On Empty Input", func(t *testing.T) {
-		child := &planner.ProjectNode{}
+		child := &plan.ProjectNode{}
 		child.SetCardinality(0)
 
-		distinct := &planner.DistinctNode{
+		distinct := &plan.DistinctNode{
 			Child:         child,
 			DistinctExprs: []string{},
 		}
@@ -279,10 +279,10 @@ func TestDistinctCardinality(t *testing.T) {
 	})
 
 	t.Run("DISTINCT Minimum 1 Row", func(t *testing.T) {
-		child := &planner.ProjectNode{}
+		child := &plan.ProjectNode{}
 		child.SetCardinality(1)
 
-		distinct := &planner.DistinctNode{
+		distinct := &plan.DistinctNode{
 			Child:         child,
 			DistinctExprs: []string{},
 		}
@@ -304,13 +304,13 @@ func TestUnionCardinality(t *testing.T) {
 	tx := &transaction.TransactionContext{}
 
 	t.Run("UNION ALL Simple Addition", func(t *testing.T) {
-		leftChild := &planner.ProjectNode{}
+		leftChild := &plan.ProjectNode{}
 		leftChild.SetCardinality(1000)
 
-		rightChild := &planner.ProjectNode{}
+		rightChild := &plan.ProjectNode{}
 		rightChild.SetCardinality(500)
 
-		union := &planner.UnionNode{
+		union := &plan.UnionNode{
 			LeftChild:  leftChild,
 			RightChild: rightChild,
 			UnionAll:   true,
@@ -328,13 +328,13 @@ func TestUnionCardinality(t *testing.T) {
 	})
 
 	t.Run("UNION With Deduplication - Similar Sizes", func(t *testing.T) {
-		leftChild := &planner.ProjectNode{}
+		leftChild := &plan.ProjectNode{}
 		leftChild.SetCardinality(1000)
 
-		rightChild := &planner.ProjectNode{}
+		rightChild := &plan.ProjectNode{}
 		rightChild.SetCardinality(900)
 
-		union := &planner.UnionNode{
+		union := &plan.UnionNode{
 			LeftChild:  leftChild,
 			RightChild: rightChild,
 			UnionAll:   false, // UNION with dedup
@@ -361,13 +361,13 @@ func TestUnionCardinality(t *testing.T) {
 	})
 
 	t.Run("UNION With Deduplication - Small vs Large", func(t *testing.T) {
-		leftChild := &planner.ProjectNode{}
+		leftChild := &plan.ProjectNode{}
 		leftChild.SetCardinality(10000)
 
-		rightChild := &planner.ProjectNode{}
+		rightChild := &plan.ProjectNode{}
 		rightChild.SetCardinality(500) // 5% of left
 
-		union := &planner.UnionNode{
+		union := &plan.UnionNode{
 			LeftChild:  leftChild,
 			RightChild: rightChild,
 			UnionAll:   false,
@@ -398,13 +398,13 @@ func TestUnionCardinality(t *testing.T) {
 	})
 
 	t.Run("UNION With Zero Input", func(t *testing.T) {
-		leftChild := &planner.ProjectNode{}
+		leftChild := &plan.ProjectNode{}
 		leftChild.SetCardinality(0)
 
-		rightChild := &planner.ProjectNode{}
+		rightChild := &plan.ProjectNode{}
 		rightChild.SetCardinality(100)
 
-		union := &planner.UnionNode{
+		union := &plan.UnionNode{
 			LeftChild:  leftChild,
 			RightChild: rightChild,
 			UnionAll:   false,
@@ -429,10 +429,10 @@ func TestAggregateCardinality(t *testing.T) {
 	tx := &transaction.TransactionContext{}
 
 	t.Run("No GROUP BY Returns 1", func(t *testing.T) {
-		child := &planner.ProjectNode{}
+		child := &plan.ProjectNode{}
 		child.SetCardinality(10000)
 
-		agg := &planner.AggregateNode{
+		agg := &plan.AggregateNode{
 			Child:        child,
 			GroupByExprs: []string{}, // No GROUP BY
 		}
@@ -448,10 +448,10 @@ func TestAggregateCardinality(t *testing.T) {
 	})
 
 	t.Run("GROUP BY Never Exceeds Input", func(t *testing.T) {
-		child := &planner.ProjectNode{}
+		child := &plan.ProjectNode{}
 		child.SetCardinality(1000)
 
-		agg := &planner.AggregateNode{
+		agg := &plan.AggregateNode{
 			Child:        child,
 			GroupByExprs: []string{"status"},
 		}
@@ -467,10 +467,10 @@ func TestAggregateCardinality(t *testing.T) {
 	})
 
 	t.Run("GROUP BY Minimum 1", func(t *testing.T) {
-		child := &planner.ProjectNode{}
+		child := &plan.ProjectNode{}
 		child.SetCardinality(1)
 
-		agg := &planner.AggregateNode{
+		agg := &plan.AggregateNode{
 			Child:        child,
 			GroupByExprs: []string{"id"},
 		}
@@ -486,10 +486,10 @@ func TestAggregateCardinality(t *testing.T) {
 	})
 
 	t.Run("Multiple GROUP BY Columns", func(t *testing.T) {
-		child := &planner.ProjectNode{}
+		child := &plan.ProjectNode{}
 		child.SetCardinality(10000)
 
-		agg := &planner.AggregateNode{
+		agg := &plan.AggregateNode{
 			Child:        child,
 			GroupByExprs: []string{"col1", "col2", "col3"},
 		}
@@ -518,13 +518,13 @@ func TestJoinCardinalityWithContainment(t *testing.T) {
 	tx := &transaction.TransactionContext{}
 
 	t.Run("Join Bounded By Cartesian Product", func(t *testing.T) {
-		leftChild := &planner.ProjectNode{}
+		leftChild := &plan.ProjectNode{}
 		leftChild.SetCardinality(100)
 
-		rightChild := &planner.ProjectNode{}
+		rightChild := &plan.ProjectNode{}
 		rightChild.SetCardinality(200)
 
-		join := &planner.JoinNode{
+		join := &plan.JoinNode{
 			LeftChild:  leftChild,
 			RightChild: rightChild,
 		}
@@ -542,13 +542,13 @@ func TestJoinCardinalityWithContainment(t *testing.T) {
 	})
 
 	t.Run("Join Minimum 1", func(t *testing.T) {
-		leftChild := &planner.ProjectNode{}
+		leftChild := &plan.ProjectNode{}
 		leftChild.SetCardinality(10)
 
-		rightChild := &planner.ProjectNode{}
+		rightChild := &plan.ProjectNode{}
 		rightChild.SetCardinality(10)
 
-		join := &planner.JoinNode{
+		join := &plan.JoinNode{
 			LeftChild:  leftChild,
 			RightChild: rightChild,
 		}
@@ -564,13 +564,13 @@ func TestJoinCardinalityWithContainment(t *testing.T) {
 	})
 
 	t.Run("Join With Zero Input Returns 0", func(t *testing.T) {
-		leftChild := &planner.ProjectNode{}
+		leftChild := &plan.ProjectNode{}
 		leftChild.SetCardinality(0)
 
-		rightChild := &planner.ProjectNode{}
+		rightChild := &plan.ProjectNode{}
 		rightChild.SetCardinality(100)
 
-		join := &planner.JoinNode{
+		join := &plan.JoinNode{
 			LeftChild:  leftChild,
 			RightChild: rightChild,
 		}
@@ -586,21 +586,21 @@ func TestJoinCardinalityWithContainment(t *testing.T) {
 	})
 
 	t.Run("Join With Extra Filters", func(t *testing.T) {
-		leftScan := &planner.ScanNode{TableID: 1}
+		leftScan := &plan.ScanNode{TableID: 1}
 		leftScan.SetCardinality(1000)
 
-		rightScan := &planner.ScanNode{TableID: 2}
+		rightScan := &plan.ScanNode{TableID: 2}
 		rightScan.SetCardinality(500)
 
-		join := &planner.JoinNode{
+		join := &plan.JoinNode{
 			LeftChild:  leftScan,
 			RightChild: rightScan,
-			ExtraFilters: []planner.PredicateInfo{
+			ExtraFilters: []plan.PredicateInfo{
 				{
 					Column:    "status",
 					Predicate: primitives.Equals,
 					Value:     "active",
-					Type:      planner.StandardPredicate,
+					Type:      plan.StandardPredicate,
 				},
 			},
 		}
@@ -611,7 +611,7 @@ func TestJoinCardinalityWithContainment(t *testing.T) {
 		}
 
 		// Result with filter should be less than without filter
-		joinNoFilter := &planner.JoinNode{
+		joinNoFilter := &plan.JoinNode{
 			LeftChild:  leftScan,
 			RightChild: rightScan,
 		}
@@ -637,10 +637,10 @@ func TestLimitCardinality(t *testing.T) {
 	tx := &transaction.TransactionContext{}
 
 	t.Run("LIMIT Less Than Input", func(t *testing.T) {
-		child := &planner.ProjectNode{}
+		child := &plan.ProjectNode{}
 		child.SetCardinality(1000)
 
-		limit := &planner.LimitNode{
+		limit := &plan.LimitNode{
 			Child:  child,
 			Limit:  100,
 			Offset: 0,
@@ -657,10 +657,10 @@ func TestLimitCardinality(t *testing.T) {
 	})
 
 	t.Run("LIMIT Greater Than Input", func(t *testing.T) {
-		child := &planner.ProjectNode{}
+		child := &plan.ProjectNode{}
 		child.SetCardinality(50)
 
-		limit := &planner.LimitNode{
+		limit := &plan.LimitNode{
 			Child:  child,
 			Limit:  100,
 			Offset: 0,
@@ -677,10 +677,10 @@ func TestLimitCardinality(t *testing.T) {
 	})
 
 	t.Run("LIMIT With OFFSET", func(t *testing.T) {
-		child := &planner.ProjectNode{}
+		child := &plan.ProjectNode{}
 		child.SetCardinality(1000)
 
-		limit := &planner.LimitNode{
+		limit := &plan.LimitNode{
 			Child:  child,
 			Limit:  100,
 			Offset: 200,
@@ -697,10 +697,10 @@ func TestLimitCardinality(t *testing.T) {
 	})
 
 	t.Run("OFFSET Exceeds Input", func(t *testing.T) {
-		child := &planner.ProjectNode{}
+		child := &plan.ProjectNode{}
 		child.SetCardinality(100)
 
-		limit := &planner.LimitNode{
+		limit := &plan.LimitNode{
 			Child:  child,
 			Limit:  50,
 			Offset: 200,
@@ -717,10 +717,10 @@ func TestLimitCardinality(t *testing.T) {
 	})
 
 	t.Run("Zero LIMIT Returns All", func(t *testing.T) {
-		child := &planner.ProjectNode{}
+		child := &plan.ProjectNode{}
 		child.SetCardinality(1000)
 
-		limit := &planner.LimitNode{
+		limit := &plan.LimitNode{
 			Child:  child,
 			Limit:  0, // 0 means no limit
 			Offset: 0,
@@ -746,14 +746,14 @@ func TestScanCardinalityBounds(t *testing.T) {
 		}
 		tx := &transaction.TransactionContext{}
 
-		scan := &planner.ScanNode{
+		scan := &plan.ScanNode{
 			TableID: 999, // Non-existent table
-			Predicates: []planner.PredicateInfo{
+			Predicates: []plan.PredicateInfo{
 				{
 					Column:    "x",
 					Predicate: primitives.Equals,
 					Value:     "test",
-					Type:      planner.StandardPredicate,
+					Type:      plan.StandardPredicate,
 				},
 			},
 		}
@@ -783,7 +783,7 @@ func TestGroupByDistinctCountEstimation(t *testing.T) {
 	tx := &transaction.TransactionContext{}
 
 	t.Run("Empty GROUP BY Returns 1", func(t *testing.T) {
-		child := &planner.ProjectNode{}
+		child := &plan.ProjectNode{}
 		result := ce.estimateGroupByDistinctCount(tx, child, []string{})
 
 		if result != 1 {
@@ -792,7 +792,7 @@ func TestGroupByDistinctCountEstimation(t *testing.T) {
 	})
 
 	t.Run("Multiple Columns Uses Product", func(t *testing.T) {
-		child := &planner.ProjectNode{}
+		child := &plan.ProjectNode{}
 		result := ce.estimateGroupByDistinctCount(tx, child, []string{"col1", "col2"})
 
 		// Should use default distinct count product
@@ -807,7 +807,7 @@ func TestGroupByDistinctCountEstimation(t *testing.T) {
 
 	t.Run("Overflow Protection", func(t *testing.T) {
 		// Many columns should not overflow
-		child := &planner.ProjectNode{}
+		child := &plan.ProjectNode{}
 		manyColumns := make([]string, 20)
 		for i := 0; i < 20; i++ {
 			manyColumns[i] = "col" + string(rune(i))
@@ -834,10 +834,10 @@ func TestEquiJoinSelectivityContainment(t *testing.T) {
 	t.Run("Containment Scenario", func(t *testing.T) {
 		// Small distinct count (100) vs large distinct count (10000)
 		// Should use smaller distinct count (containment)
-		leftScan := &planner.ScanNode{TableID: 1}
-		rightScan := &planner.ScanNode{TableID: 2}
+		leftScan := &plan.ScanNode{TableID: 1}
+		rightScan := &plan.ScanNode{TableID: 2}
 
-		join := &planner.JoinNode{
+		join := &plan.JoinNode{
 			LeftChild:   leftScan,
 			RightChild:  rightScan,
 			LeftColumn:  "left_id",
@@ -856,10 +856,10 @@ func TestEquiJoinSelectivityContainment(t *testing.T) {
 	})
 
 	t.Run("Similar Sizes Scenario", func(t *testing.T) {
-		leftScan := &planner.ScanNode{TableID: 1}
-		rightScan := &planner.ScanNode{TableID: 2}
+		leftScan := &plan.ScanNode{TableID: 1}
+		rightScan := &plan.ScanNode{TableID: 2}
 
-		join := &planner.JoinNode{
+		join := &plan.JoinNode{
 			LeftChild:   leftScan,
 			RightChild:  rightScan,
 			LeftColumn:  "id",
@@ -880,10 +880,10 @@ func TestEquiJoinSelectivityContainment(t *testing.T) {
 	})
 
 	t.Run("Zero Distinct Count Returns Default", func(t *testing.T) {
-		leftScan := &planner.ScanNode{TableID: 999}
-		rightScan := &planner.ScanNode{TableID: 998}
+		leftScan := &plan.ScanNode{TableID: 999}
+		rightScan := &plan.ScanNode{TableID: 998}
 
-		join := &planner.JoinNode{
+		join := &plan.JoinNode{
 			LeftChild:   leftScan,
 			RightChild:  rightScan,
 			LeftColumn:  "nonexistent",
@@ -908,10 +908,10 @@ func TestCardinalityMathematicalProperties(t *testing.T) {
 	tx := &transaction.TransactionContext{}
 
 	t.Run("Projection Preserves Cardinality", func(t *testing.T) {
-		child := &planner.ProjectNode{}
+		child := &plan.ProjectNode{}
 		child.SetCardinality(12345)
 
-		project := &planner.ProjectNode{
+		project := &plan.ProjectNode{
 			Child:   child,
 			Columns: []string{"col1", "col2"},
 		}
@@ -928,10 +928,10 @@ func TestCardinalityMathematicalProperties(t *testing.T) {
 	})
 
 	t.Run("Sort Preserves Cardinality", func(t *testing.T) {
-		child := &planner.ProjectNode{}
+		child := &plan.ProjectNode{}
 		child.SetCardinality(9999)
 
-		sort := &planner.SortNode{
+		sort := &plan.SortNode{
 			Child:    child,
 			SortKeys: []string{"col1"},
 		}
@@ -948,17 +948,17 @@ func TestCardinalityMathematicalProperties(t *testing.T) {
 	})
 
 	t.Run("Filter Reduces Cardinality", func(t *testing.T) {
-		scan := &planner.ScanNode{TableID: 1}
+		scan := &plan.ScanNode{TableID: 1}
 		scan.SetCardinality(1000)
 
-		filter := &planner.FilterNode{
+		filter := &plan.FilterNode{
 			Child: scan,
-			Predicates: []planner.PredicateInfo{
+			Predicates: []plan.PredicateInfo{
 				{
 					Column:    "status",
 					Predicate: primitives.Equals,
 					Value:     "active",
-					Type:      planner.StandardPredicate,
+					Type:      plan.StandardPredicate,
 				},
 			},
 		}
@@ -982,15 +982,15 @@ func TestCardinalityMathematicalProperties(t *testing.T) {
 
 	t.Run("All Estimates Are Non-Negative", func(t *testing.T) {
 		// Test various node types return non-negative cardinalities
-		child := &planner.ProjectNode{}
+		child := &plan.ProjectNode{}
 		child.SetCardinality(100)
 
-		testNodes := []planner.PlanNode{
-			&planner.ProjectNode{Child: child},
-			&planner.SortNode{Child: child},
-			&planner.LimitNode{Child: child, Limit: 10},
-			&planner.DistinctNode{Child: child},
-			&planner.AggregateNode{Child: child, GroupByExprs: []string{"col"}},
+		testNodes := []plan.PlanNode{
+			&plan.ProjectNode{Child: child},
+			&plan.SortNode{Child: child},
+			&plan.LimitNode{Child: child, Limit: 10},
+			&plan.DistinctNode{Child: child},
+			&plan.AggregateNode{Child: child, GroupByExprs: []string{"col"}},
 		}
 
 		for _, node := range testNodes {
@@ -1020,11 +1020,11 @@ func BenchmarkFindBaseTableID(b *testing.B) {
 	ce := &CardinalityEstimator{}
 
 	// Create a deep plan tree
-	scan := &planner.ScanNode{TableID: 1}
-	filter := &planner.FilterNode{Child: scan}
-	project := &planner.ProjectNode{Child: filter}
-	sort := &planner.SortNode{Child: project}
-	limit := &planner.LimitNode{Child: sort}
+	scan := &plan.ScanNode{TableID: 1}
+	filter := &plan.FilterNode{Child: scan}
+	project := &plan.ProjectNode{Child: filter}
+	sort := &plan.SortNode{Child: project}
+	limit := &plan.LimitNode{Child: sort}
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
@@ -1039,13 +1039,13 @@ func BenchmarkEstimateJoinCardinality(b *testing.B) {
 	}
 	tx := &transaction.TransactionContext{}
 
-	leftScan := &planner.ScanNode{TableID: 1}
+	leftScan := &plan.ScanNode{TableID: 1}
 	leftScan.SetCardinality(10000)
 
-	rightScan := &planner.ScanNode{TableID: 2}
+	rightScan := &plan.ScanNode{TableID: 2}
 	rightScan.SetCardinality(5000)
 
-	join := &planner.JoinNode{
+	join := &plan.JoinNode{
 		LeftChild:   leftScan,
 		RightChild:  rightScan,
 		LeftColumn:  "id",
