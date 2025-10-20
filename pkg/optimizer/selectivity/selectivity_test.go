@@ -1,4 +1,4 @@
-package optimizer
+package selectivity
 
 import (
 	"math"
