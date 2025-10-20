@@ -3,6 +3,7 @@ package systemtable
 import (
 	"fmt"
 	"storemy/pkg/catalog/schema"
+	"storemy/pkg/storage/index"
 	"storemy/pkg/tuple"
 	"storemy/pkg/types"
 	"time"
@@ -10,18 +11,18 @@ import (
 
 // IndexStatisticsRow represents a row in the CATALOG_INDEX_STATISTICS table
 type IndexStatisticsRow struct {
-	IndexID          int       // Index identifier
-	TableID          int       // Table this index belongs to
-	IndexName        string    // Index name
-	IndexType        string    // "btree", "hash", etc.
-	ColumnName       string    // Indexed column
-	NumEntries       int64     // Number of entries in index
-	NumPages         int       // Number of pages
-	Height           int       // Tree height (for B-tree)
-	DistinctKeys     int64     // Number of distinct keys
-	ClusteringFactor float64   // 0.0-1.0: table ordering by index
-	AvgKeySize       int       // Average key size in bytes
-	LastUpdated      time.Time // Last update timestamp
+	IndexID          int             // Index identifier
+	TableID          int             // Table this index belongs to
+	IndexName        string          // Index name
+	IndexType        index.IndexType // "btree", "hash", etc.
+	ColumnName       string          // Indexed column
+	NumEntries       int64           // Number of entries in index
+	NumPages         int             // Number of pages
+	BTreeHeight      int             // Tree height (for B-tree)
+	DistinctKeys     int64           // Number of distinct keys
+	ClusteringFactor float64         // 0.0-1.0: table ordering by index
+	AvgKeySize       int             // Average key size in bytes
+	LastUpdated      time.Time       // Last update timestamp
 }
 
 type IndexStatsTable struct{}
@@ -109,6 +110,11 @@ func (ist *IndexStatsTable) Parse(t *tuple.Tuple) (*IndexStatisticsRow, error) {
 		return nil, fmt.Errorf("invalid index_type: cannot be empty")
 	}
 
+	idxType, err := index.ParseIndexType(indexType)
+	if err != nil {
+		return nil, fmt.Errorf("error in parsing the index type must be HASH or BTREE")
+	}
+
 	if columnName == "" {
 		return nil, fmt.Errorf("invalid column_name: cannot be empty")
 	}
@@ -147,11 +153,11 @@ func (ist *IndexStatsTable) Parse(t *tuple.Tuple) (*IndexStatisticsRow, error) {
 		IndexID:          indexID,
 		TableID:          tableID,
 		IndexName:        indexName,
-		IndexType:        indexType,
+		IndexType:        idxType,
 		ColumnName:       columnName,
 		NumEntries:       numEntries,
 		NumPages:         numPages,
-		Height:           height,
+		BTreeHeight:      height,
 		DistinctKeys:     distinctKeys,
 		ClusteringFactor: clusteringFactor,
 		AvgKeySize:       avgKeySize,
@@ -167,13 +173,12 @@ func (ist *IndexStatsTable) CreateTuple(stats *IndexStatisticsRow) *tuple.Tuple 
 	t.SetField(0, types.NewIntField(int64(stats.IndexID)))
 	t.SetField(1, types.NewIntField(int64(stats.TableID)))
 	t.SetField(2, types.NewStringField(stats.IndexName, types.StringMaxSize))
-	t.SetField(3, types.NewStringField(stats.IndexType, types.StringMaxSize))
+	t.SetField(3, types.NewStringField(string(stats.IndexType), types.StringMaxSize))
 	t.SetField(4, types.NewStringField(stats.ColumnName, types.StringMaxSize))
 	t.SetField(5, types.NewIntField(int64(stats.NumEntries)))
 	t.SetField(6, types.NewIntField(int64(stats.NumPages)))
-	t.SetField(7, types.NewIntField(int64(stats.Height)))
+	t.SetField(7, types.NewIntField(int64(stats.BTreeHeight)))
 	t.SetField(8, types.NewIntField(int64(stats.DistinctKeys)))
-	// Convert clustering factor to int (0-1000000) for storage precision
 	clusteringFactorInt := int64(stats.ClusteringFactor * 1000000.0)
 	t.SetField(9, types.NewIntField(clusteringFactorInt))
 	t.SetField(10, types.NewIntField(int64(stats.AvgKeySize)))
