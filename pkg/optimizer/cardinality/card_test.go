@@ -297,18 +297,18 @@ func TestCorrelationCorrectionMathProperties(t *testing.T) {
 func TestFindBaseTableID(t *testing.T) {
 	t.Run("Direct Scan Node", func(t *testing.T) {
 		scan := &plan.ScanNode{TableID: 42}
-		result := findBaseTableID(scan)
-		if result != 42 {
-			t.Errorf("Expected table ID 42, got %d", result)
+		result, found := findBaseTableID(scan)
+		if result != 42 || !found {
+			t.Errorf("Expected table ID 42 and found=true, got %d and found=%v", result, found)
 		}
 	})
 
 	t.Run("Filter -> Scan", func(t *testing.T) {
 		scan := &plan.ScanNode{TableID: 99}
 		filter := &plan.FilterNode{Child: scan}
-		result := findBaseTableID(filter)
-		if result != 99 {
-			t.Errorf("Expected table ID 99, got %d", result)
+		result, found := findBaseTableID(filter)
+		if result != 99 || !found {
+			t.Errorf("Expected table ID 99 and found=true, got %d and found=%v", result, found)
 		}
 	})
 
@@ -316,9 +316,9 @@ func TestFindBaseTableID(t *testing.T) {
 		scan := &plan.ScanNode{TableID: 123}
 		filter := &plan.FilterNode{Child: scan}
 		project := &plan.ProjectNode{Child: filter}
-		result := findBaseTableID(project)
-		if result != 123 {
-			t.Errorf("Expected table ID 123, got %d", result)
+		result, found := findBaseTableID(project)
+		if result != 123 || !found {
+			t.Errorf("Expected table ID 123 and found=true, got %d and found=%v", result, found)
 		}
 	})
 
@@ -327,38 +327,38 @@ func TestFindBaseTableID(t *testing.T) {
 		agg := &plan.AggregateNode{Child: scan}
 		limit := &plan.LimitNode{Child: agg}
 		sort := &plan.SortNode{Child: limit}
-		result := findBaseTableID(sort)
-		if result != 77 {
-			t.Errorf("Expected table ID 77, got %d", result)
+		result, found := findBaseTableID(sort)
+		if result != 77 || !found {
+			t.Errorf("Expected table ID 77 and found=true, got %d and found=%v", result, found)
 		}
 	})
 
 	t.Run("Distinct -> Scan", func(t *testing.T) {
 		scan := &plan.ScanNode{TableID: 55}
 		distinct := &plan.DistinctNode{Child: scan}
-		result := findBaseTableID(distinct)
-		if result != 55 {
-			t.Errorf("Expected table ID 55, got %d", result)
+		result, found := findBaseTableID(distinct)
+		if result != 55 || !found {
+			t.Errorf("Expected table ID 55 and found=true, got %d and found=%v", result, found)
 		}
 	})
 
-	t.Run("Join Node Returns 0", func(t *testing.T) {
+	t.Run("Join Node Returns Not Found", func(t *testing.T) {
 		leftScan := &plan.ScanNode{TableID: 1}
 		rightScan := &plan.ScanNode{TableID: 2}
 		join := &plan.JoinNode{
 			LeftChild:  leftScan,
 			RightChild: rightScan,
 		}
-		result := findBaseTableID(join)
-		if result != 0 {
-			t.Errorf("Expected table ID 0 for join, got %d", result)
+		result, found := findBaseTableID(join)
+		if result != 0 || found {
+			t.Errorf("Expected table ID 0 and found=false for join, got %d and found=%v", result, found)
 		}
 	})
 
-	t.Run("Nil Node Returns 0", func(t *testing.T) {
-		result := findBaseTableID(nil)
-		if result != 0 {
-			t.Errorf("Expected table ID 0 for nil, got %d", result)
+	t.Run("Nil Node Returns Not Found", func(t *testing.T) {
+		result, found := findBaseTableID(nil)
+		if result != 0 || found {
+			t.Errorf("Expected table ID 0 and found=false for nil, got %d and found=%v", result, found)
 		}
 	})
 }
@@ -1219,7 +1219,7 @@ func BenchmarkFindBaseTableID(b *testing.B) {
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		_ = findBaseTableID(limit)
+		_, _ = findBaseTableID(limit)
 	}
 }
 

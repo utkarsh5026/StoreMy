@@ -63,9 +63,9 @@ func (ce *CardinalityEstimator) estimateJoin(
 	filterSelectivity := 1.0
 	if len(node.ExtraFilters) > 0 {
 		selectivities := make([]float64, 0, len(node.ExtraFilters))
-		tableID := findBaseTableID(node.LeftChild)
-		if tableID == 0 {
-			tableID = findBaseTableID(node.RightChild)
+		tableID, found := findBaseTableID(node.LeftChild)
+		if !found {
+			tableID, _ = findBaseTableID(node.RightChild)
 		}
 
 		for i := range node.ExtraFilters {

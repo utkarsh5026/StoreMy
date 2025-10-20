@@ -335,16 +335,17 @@ func (ce *CardinalityEstimator) calculateSelectivity(tx TxCtx, predicates []plan
 // Parameters:
 //   - planNode: Root of plan subtree to search
 //
-// Returns table ID from the first ScanNode found, or 0 if no scan exists
-// (e.g., for joins or other multi-child nodes).
-func findBaseTableID(planNode plan.PlanNode) int {
+// Returns:
+//   - tableID: The table ID from the first ScanNode found (0 if not found)
+//   - found: true if a ScanNode was found, false for nil/multi-child nodes
+func findBaseTableID(planNode plan.PlanNode) (tableID int, found bool) {
 	if planNode == nil {
-		return 0
+		return 0, false
 	}
 
 	switch node := planNode.(type) {
 	case *plan.ScanNode:
-		return node.TableID
+		return node.TableID, true
 	case *plan.FilterNode:
 		return findBaseTableID(node.Child)
 	case *plan.ProjectNode:
@@ -358,8 +359,8 @@ func findBaseTableID(planNode plan.PlanNode) int {
 	case *plan.DistinctNode:
 		return findBaseTableID(node.Child)
 	default:
-		// For joins, unions, or other multi-child nodes, return 0
-		return 0
+		// For joins, unions, or other multi-child nodes
+		return 0, false
 	}
 }
 

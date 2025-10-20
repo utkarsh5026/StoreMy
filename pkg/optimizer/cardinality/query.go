@@ -75,7 +75,7 @@ func (ce *CardinalityEstimator) estimateFilter(
 		return childCard, nil
 	}
 
-	tableID := findBaseTableID(node.Child)
+	tableID, _ := findBaseTableID(node.Child)
 	return ce.calculateSelectivity(tx, node.Predicates, tableID, childCard), nil
 }
 
