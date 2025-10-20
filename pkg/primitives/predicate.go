@@ -9,6 +9,7 @@ const (
 	LessThanOrEqual
 	GreaterThanOrEqual
 	NotEqual
+	NotEqualsBracket // alternative notation for NotEqual
 	Like
 )
 
@@ -31,6 +32,9 @@ func (p Predicate) String() string {
 
 	case NotEqual:
 		return "!="
+
+	case NotEqualsBracket:
+		return "<>"
 
 	case Like:
 		return "LIKE"
