@@ -2,7 +2,7 @@ package statements
 
 import (
 	"fmt"
-	"storemy/pkg/parser/plan"
+	"storemy/pkg/plan"
 	"storemy/pkg/types"
 	"strings"
 )

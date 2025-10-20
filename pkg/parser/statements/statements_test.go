@@ -1,7 +1,7 @@
 package statements
 
 import (
-	"storemy/pkg/parser/plan"
+	"storemy/pkg/plan"
 	"storemy/pkg/types"
 	"testing"
 )

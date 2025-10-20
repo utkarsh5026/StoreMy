@@ -1,6 +1,6 @@
 package statements
 
-import "storemy/pkg/parser/plan"
+import "storemy/pkg/plan"
 
 // SelectStatement represents a SQL SELECT statement with its execution plan
 type SelectStatement struct {
