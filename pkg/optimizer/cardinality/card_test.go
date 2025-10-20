@@ -126,11 +126,9 @@ func TestCorrelationCorrectionMathProperties(t *testing.T) {
 
 // TestFindBaseTableID tests the plan tree traversal for finding base table
 func TestFindBaseTableID(t *testing.T) {
-	ce := &CardinalityEstimator{}
-
 	t.Run("Direct Scan Node", func(t *testing.T) {
 		scan := &plan.ScanNode{TableID: 42}
-		result := ce.findBaseTableID(scan)
+		result := findBaseTableID(scan)
 		if result != 42 {
 			t.Errorf("Expected table ID 42, got %d", result)
 		}
@@ -139,7 +137,7 @@ func TestFindBaseTableID(t *testing.T) {
 	t.Run("Filter -> Scan", func(t *testing.T) {
 		scan := &plan.ScanNode{TableID: 99}
 		filter := &plan.FilterNode{Child: scan}
-		result := ce.findBaseTableID(filter)
+		result := findBaseTableID(filter)
 		if result != 99 {
 			t.Errorf("Expected table ID 99, got %d", result)
 		}
@@ -149,7 +147,7 @@ func TestFindBaseTableID(t *testing.T) {
 		scan := &plan.ScanNode{TableID: 123}
 		filter := &plan.FilterNode{Child: scan}
 		project := &plan.ProjectNode{Child: filter}
-		result := ce.findBaseTableID(project)
+		result := findBaseTableID(project)
 		if result != 123 {
 			t.Errorf("Expected table ID 123, got %d", result)
 		}
@@ -160,7 +158,7 @@ func TestFindBaseTableID(t *testing.T) {
 		agg := &plan.AggregateNode{Child: scan}
 		limit := &plan.LimitNode{Child: agg}
 		sort := &plan.SortNode{Child: limit}
-		result := ce.findBaseTableID(sort)
+		result := findBaseTableID(sort)
 		if result != 77 {
 			t.Errorf("Expected table ID 77, got %d", result)
 		}
@@ -169,7 +167,7 @@ func TestFindBaseTableID(t *testing.T) {
 	t.Run("Distinct -> Scan", func(t *testing.T) {
 		scan := &plan.ScanNode{TableID: 55}
 		distinct := &plan.DistinctNode{Child: scan}
-		result := ce.findBaseTableID(distinct)
+		result := findBaseTableID(distinct)
 		if result != 55 {
 			t.Errorf("Expected table ID 55, got %d", result)
 		}
@@ -182,14 +180,14 @@ func TestFindBaseTableID(t *testing.T) {
 			LeftChild:  leftScan,
 			RightChild: rightScan,
 		}
-		result := ce.findBaseTableID(join)
+		result := findBaseTableID(join)
 		if result != 0 {
 			t.Errorf("Expected table ID 0 for join, got %d", result)
 		}
 	})
 
 	t.Run("Nil Node Returns 0", func(t *testing.T) {
-		result := ce.findBaseTableID(nil)
+		result := findBaseTableID(nil)
 		if result != 0 {
 			t.Errorf("Expected table ID 0 for nil, got %d", result)
 		}
@@ -1017,8 +1015,6 @@ func BenchmarkCorrelationCorrection(b *testing.B) {
 }
 
 func BenchmarkFindBaseTableID(b *testing.B) {
-	ce := &CardinalityEstimator{}
-
 	// Create a deep plan tree
 	scan := &plan.ScanNode{TableID: 1}
 	filter := &plan.FilterNode{Child: scan}
@@ -1028,7 +1024,7 @@ func BenchmarkFindBaseTableID(b *testing.B) {
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		_ = ce.findBaseTableID(limit)
+		_ = findBaseTableID(limit)
 	}
 }
 

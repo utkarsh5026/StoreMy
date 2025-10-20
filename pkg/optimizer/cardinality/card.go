@@ -73,34 +73,6 @@ func (ce *CardinalityEstimator) EstimatePlanCardinality(
 	}
 }
 
-// estimateScan estimates output rows for a scan node.
-// Uses enhanced selectivity estimation supporting NULL checks, LIKE patterns,
-// IN clauses, and value-based estimates. Applies correlation correction when
-// multiple predicates are present to avoid over-optimistic estimates.
-func (ce *CardinalityEstimator) estimateScan(
-	tx *transaction.TransactionContext,
-	node *plan.ScanNode,
-) (int64, error) {
-	tableStats, err := ce.catalog.GetTableStatistics(tx, node.TableID)
-	if err != nil || tableStats == nil {
-		return DefaultTableCardinality, nil
-	}
-
-	tableCard := int64(tableStats.Cardinality)
-	if len(node.Predicates) == 0 {
-		return tableCard, nil
-	}
-
-	selectivities := make([]float64, 0, len(node.Predicates))
-	for i := range node.Predicates {
-		sel := ce.estimatePredicateSelectivity(tx, node.TableID, &node.Predicates[i])
-		selectivities = append(selectivities, sel)
-	}
-
-	totalSelectivity := applyCorrelationCorrection(selectivities)
-	return int64(float64(tableCard) * totalSelectivity), nil
-}
-
 // getColumnDistinctCount gets the distinct count for a column in a plan subtree
 func (ce *CardinalityEstimator) getColumnDistinctCount(
 	tx *transaction.TransactionContext,
@@ -130,44 +102,6 @@ func (ce *CardinalityEstimator) getColumnDistinctCount(
 	return DefaultDistinctCount
 }
 
-// estimateFilter estimates output rows for a filter node.
-// Uses enhanced selectivity estimation supporting NULL checks, LIKE patterns,
-// IN clauses, and value-based estimates. Applies correlation correction when
-// multiple predicates are present to avoid over-optimistic estimates.
-func (ce *CardinalityEstimator) estimateFilter(
-	tx *transaction.TransactionContext,
-	node *plan.FilterNode,
-) (int64, error) {
-	childCard, err := ce.EstimatePlanCardinality(tx, node.Child)
-	if err != nil {
-		return 0, err
-	}
-
-	if len(node.Predicates) == 0 {
-		return childCard, nil
-	}
-
-	tableID := ce.findBaseTableID(node.Child)
-
-	selectivities := make([]float64, 0, len(node.Predicates))
-	for i := range node.Predicates {
-		sel := ce.estimatePredicateSelectivity(tx, tableID, &node.Predicates[i])
-		selectivities = append(selectivities, sel)
-	}
-
-	totalSelectivity := applyCorrelationCorrection(selectivities)
-	return int64(float64(childCard) * totalSelectivity), nil
-}
-
-// estimateProject estimates output rows for a projection
-// Projection doesn't change cardinality (only the schema)
-func (ce *CardinalityEstimator) estimateProject(
-	tx *transaction.TransactionContext,
-	node *plan.ProjectNode,
-) (int64, error) {
-	return ce.EstimatePlanCardinality(tx, node.Child)
-}
-
 // estimateAggr estimates output rows for an aggregation.
 // Uses actual distinct count statistics for GROUP BY columns when available,
 // falling back to heuristics when statistics are unavailable.
@@ -188,130 +122,6 @@ func (ce *CardinalityEstimator) estimateAggr(
 	result := int64(math.Min(float64(groupCard), float64(childCard)))
 
 	return int64(math.Max(1.0, float64(result))), nil
-}
-
-// estimateSort estimates output rows for a sort
-// Sort doesn't change cardinality
-func (ce *CardinalityEstimator) estimateSort(
-	tx *transaction.TransactionContext,
-	node *plan.SortNode,
-) (int64, error) {
-	return ce.EstimatePlanCardinality(tx, node.Child)
-}
-
-// estimateLimit estimates output rows for a LIMIT
-func (ce *CardinalityEstimator) estimateLimit(
-	tx *transaction.TransactionContext,
-	node *plan.LimitNode,
-) (int64, error) {
-	childCard, err := ce.EstimatePlanCardinality(tx, node.Child)
-	if err != nil {
-		return 0, err
-	}
-
-	limitCard := int64(node.Limit)
-	if limitCard <= 0 {
-		return childCard, nil
-	}
-
-	effectiveCard := childCard - int64(node.Offset)
-	if effectiveCard < 0 {
-		return 0, nil
-	}
-
-	return int64(math.Min(float64(limitCard), float64(effectiveCard))), nil
-}
-
-// estimateDistinct estimates output rows for a DISTINCT operation.
-// Uses column statistics when available, or applies a default reduction factor.
-func (ce *CardinalityEstimator) estimateDistinct(
-	tx *transaction.TransactionContext,
-	node *plan.DistinctNode,
-) (int64, error) {
-	childCard, err := ce.EstimatePlanCardinality(tx, node.Child)
-	if err != nil {
-		return 0, err
-	}
-
-	if childCard == 0 {
-		return 0, nil
-	}
-
-	if len(node.DistinctExprs) > 0 {
-		distinctCount := ce.estimateGroupByDistinctCount(tx, node.Child, node.DistinctExprs)
-		return int64(math.Min(float64(distinctCount), float64(childCard))), nil
-	}
-
-	// DISTINCT on all columns: estimate based on typical duplicate ratio
-	// Research shows that typical tables have 70-90% unique rows
-	// We use 80% as a middle ground estimate
-	defaultDistinctRatio := 0.8
-	estimatedDistinct := int64(float64(childCard) * defaultDistinctRatio)
-
-	// Ensure at least 1 row
-	return int64(math.Max(1.0, float64(estimatedDistinct))), nil
-}
-
-// estimateUnionCardinality estimates output rows for a UNION operation.
-// UNION ALL simply adds cardinalities, while UNION estimates overlap and deduplicates.
-func (ce *CardinalityEstimator) estimateUnionCardinality(
-	tx *transaction.TransactionContext,
-	node *plan.UnionNode,
-) (int64, error) {
-	leftCard, err := ce.EstimatePlanCardinality(tx, node.LeftChild)
-	if err != nil {
-		return 0, err
-	}
-
-	rightCard, err := ce.EstimatePlanCardinality(tx, node.RightChild)
-	if err != nil {
-		return 0, err
-	}
-
-	if node.UnionAll {
-		return leftCard + rightCard, nil
-	}
-
-	// UNION (with deduplication): estimate overlap and subtract
-	// Use a heuristic approach based on the relative sizes
-	totalCard := leftCard + rightCard
-	if totalCard == 0 {
-		return 0, nil
-	}
-
-	// Estimate overlap using inclusion-exclusion principle
-	// Assume some overlap based on relative sizes
-	// If sets are similar size, assume 10-20% overlap
-	// If one is much smaller, assume higher containment
-	minCard := math.Min(float64(leftCard), float64(rightCard))
-	maxCard := math.Max(float64(leftCard), float64(rightCard))
-
-	var overlapRatio float64
-	if maxCard > 0 {
-		sizeRatio := minCard / maxCard
-
-		if sizeRatio < 0.1 {
-			overlapRatio = 0.5
-		} else if sizeRatio < 0.5 {
-			overlapRatio = 0.3
-		} else {
-			overlapRatio = 0.15
-		}
-	} else {
-		overlapRatio = 0.15
-	}
-
-	// Estimate overlap based on the smaller set
-	estimatedOverlap := minCard * overlapRatio
-
-	// Result = left + right - overlap
-	result := float64(totalCard) - estimatedOverlap
-
-	// Ensure result is between max(leftCard, rightCard) and leftCard + rightCard
-	result = math.Max(maxCard, result)
-	result = math.Min(float64(totalCard), result)
-
-	return int64(math.Max(1.0, result)), nil
 }
 
 // estimateGroupByDistinctCount estimates the distinct count for a GROUP BY operation.
@@ -402,7 +212,7 @@ func applyCorrelationCorrection(selectivities []float64) float64 {
 
 // findBaseTableID walks the plan tree to find the base table ID.
 // Returns 0 if no base table is found (e.g., for joins or complex plans).
-func (ce *CardinalityEstimator) findBaseTableID(planNode plan.PlanNode) int {
+func findBaseTableID(planNode plan.PlanNode) int {
 	if planNode == nil {
 		return 0
 	}
@@ -411,17 +221,17 @@ func (ce *CardinalityEstimator) findBaseTableID(planNode plan.PlanNode) int {
 	case *plan.ScanNode:
 		return node.TableID
 	case *plan.FilterNode:
-		return ce.findBaseTableID(node.Child)
+		return findBaseTableID(node.Child)
 	case *plan.ProjectNode:
-		return ce.findBaseTableID(node.Child)
+		return findBaseTableID(node.Child)
 	case *plan.AggregateNode:
-		return ce.findBaseTableID(node.Child)
+		return findBaseTableID(node.Child)
 	case *plan.SortNode:
-		return ce.findBaseTableID(node.Child)
+		return findBaseTableID(node.Child)
 	case *plan.LimitNode:
-		return ce.findBaseTableID(node.Child)
+		return findBaseTableID(node.Child)
 	case *plan.DistinctNode:
-		return ce.findBaseTableID(node.Child)
+		return findBaseTableID(node.Child)
 	default:
 		// For joins, unions, or other multi-child nodes, return 0
 		return 0
@@ -435,12 +245,10 @@ func (ce *CardinalityEstimator) getColumnType(
 	tableID int,
 	columnName string,
 ) types.Type {
-	// If catalog is not initialized, return default type
 	if ce.catalog == nil {
 		return types.IntType
 	}
 
-	// Try to get column statistics and infer type from min/max values
 	colStats, err := ce.catalog.GetColumnStatistics(tx, tableID, columnName)
 	if err == nil && colStats != nil {
 		if colStats.MinValue != nil {
