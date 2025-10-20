@@ -5,7 +5,6 @@ import (
 	"storemy/pkg/catalog/systemtable"
 	"storemy/pkg/concurrency/transaction"
 	"storemy/pkg/tuple"
-	"storemy/pkg/types"
 	"strings"
 )
 
@@ -18,7 +17,7 @@ import (
 // Returns a slice of IndexMetadata for all indexes on the table, or an error if the catalog cannot be read.
 func (sc *SystemCatalog) GetIndexesByTable(tx *transaction.TransactionContext, tableID int) ([]*systemtable.IndexMetadata, error) {
 	var indexes []*systemtable.IndexMetadata
-	err := sc.iterateTable(sc.IndexesTableID, tx, func(tup *tuple.Tuple) error {
+	err := sc.iterateTable(sc.SystemTabs.IndexesTableID, tx, func(tup *tuple.Tuple) error {
 		im, err := systemtable.Indexes.Parse(tup)
 		if err != nil {
 			return err
@@ -71,7 +70,7 @@ func (sc *SystemCatalog) GetIndexByID(tx *transaction.TransactionContext, indexI
 func (sc *SystemCatalog) findIndexMetadata(tx *transaction.TransactionContext, pred func(im *systemtable.IndexMetadata) bool) (*systemtable.IndexMetadata, error) {
 	var result *systemtable.IndexMetadata
 
-	err := sc.iterateTable(sc.IndexesTableID, tx, func(indexTuple *tuple.Tuple) error {
+	err := sc.iterateTable(sc.SystemTabs.IndexesTableID, tx, func(indexTuple *tuple.Tuple) error {
 		index, err := systemtable.Indexes.Parse(indexTuple)
 		if err != nil {
 			return err
@@ -103,23 +102,21 @@ func (sc *SystemCatalog) findIndexMetadata(tx *transaction.TransactionContext, p
 //
 // Returns an error if the index cannot be deleted.
 func (sc *SystemCatalog) DeleteIndexFromCatalog(tx *transaction.TransactionContext, indexID int) error {
-	indexesFile, err := sc.cache.GetDbFile(sc.IndexesTableID)
+	indexesFile, err := sc.cache.GetDbFile(sc.SystemTabs.IndexesTableID)
 	if err != nil {
 		return err
 	}
 
 	var tuplesToDelete []*tuple.Tuple
 
-	sc.iterateTable(sc.IndexesTableID, tx, func(t *tuple.Tuple) error {
-		field, err := t.GetField(0) // index_id is at position 0
+	sc.iterateTable(sc.SystemTabs.IndexesTableID, tx, func(t *tuple.Tuple) error {
+		index, err := systemtable.Indexes.Parse(t)
 		if err != nil {
 			return err
 		}
 
-		if intField, ok := field.(*types.IntField); ok {
-			if intField.Value == int64(indexID) {
-				tuplesToDelete = append(tuplesToDelete, t)
-			}
+		if int64(index.IndexID) == int64(indexID) {
+			tuplesToDelete = append(tuplesToDelete, t)
 		}
 
 		return nil
