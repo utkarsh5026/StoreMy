@@ -5,17 +5,13 @@ import (
 	"storemy/pkg/execution/aggregation"
 	"storemy/pkg/execution/join"
 	"storemy/pkg/execution/query"
+	"storemy/pkg/execution/setops"
 	"storemy/pkg/parser/plan"
 	"storemy/pkg/parser/statements"
 	"storemy/pkg/tuple"
 	"storemy/pkg/types"
 	"strings"
 )
-
-type SelectQueryResult struct {
-	TupleDesc *tuple.TupleDescription
-	Tuples    []*tuple.Tuple
-}
 
 // SelectPlan orchestrates the execution of a SELECT statement.
 // Implements the Planner → Executor pipeline by building an operator tree
@@ -38,12 +34,20 @@ func NewSelectPlan(stmt *statements.SelectStatement, tx TransactionCtx, ctx DbCo
 // Execute builds and runs the query operator tree, materializing results.
 //
 // Execution flow:
-//  1. Build base scan with WHERE filter
-//  2. Apply JOINs (if any)
-//  3. Apply aggregation/GROUP BY (if any)
-//  4. Apply projection/SELECT list (if no aggregation)
-//  5. Materialize all results via collectAllTuples()
-func (p *SelectPlan) Execute() (any, error) {
+//  1. Check if this is a set operation (UNION, INTERSECT, EXCEPT)
+//  2. If set operation: recursively execute left and right, then apply set operator
+//  3. Otherwise: Build base scan with WHERE filter
+//  4. Apply JOINs (if any)
+//  5. Apply aggregation/GROUP BY (if any)
+//  6. Apply projection/SELECT list (if no aggregation)
+//  7. Apply DISTINCT (if specified and no aggregation)
+//  8. Apply ORDER BY (if specified)
+//  9. Materialize all results via collectAllTuples()
+func (p *SelectPlan) Execute() (Result, error) {
+	if p.statement.Plan.IsSetOperation() {
+		return p.executeSetOperation()
+	}
+
 	currentOp, err := p.buildScanOperator()
 	if err != nil {
 		return nil, err
@@ -64,6 +68,18 @@ func (p *SelectPlan) Execute() (any, error) {
 		if err != nil {
 			return nil, err
 		}
+	}
+
+	if p.statement.Plan.IsDistinct() && !p.statement.Plan.HasAgg() {
+		currentOp, err = p.applyDistinctIfNeeded(currentOp)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	currentOp, err = p.applySortIfNeeded(currentOp)
+	if err != nil {
+		return nil, err
 	}
 
 	results, err := collectAllTuples(currentOp)
@@ -297,6 +313,63 @@ func (p *SelectPlan) applyAggregationIfNeeded(input DbIterator) (DbIterator, err
 	return aggOperator, nil
 }
 
+// applyDistinctIfNeeded applies DISTINCT deduplication to the input operator.
+// Only executes if the query specifies SELECT DISTINCT.
+//
+// DISTINCT process:
+//  1. Wraps input in Distinct operator
+//  2. Distinct operator uses hash-based TupleSet for deduplication
+//  3. Hash collisions are properly handled via tuple comparison
+//  4. Outputs only unique tuples from input stream
+//
+// Example: SELECT DISTINCT name FROM employees
+//
+//	→ Returns unique names only (duplicates removed)
+//
+// Returns Distinct operator wrapping input, or input unchanged if not DISTINCT.
+func (p *SelectPlan) applyDistinctIfNeeded(input DbIterator) (DbIterator, error) {
+	distinctOp, err := setops.NewDistinct(input)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create distinct operator: %w", err)
+	}
+
+	return distinctOp, nil
+}
+
+// applySortIfNeeded applies ORDER BY sorting to the input operator.
+// Only executes if the query specifies ORDER BY clause.
+//
+// Sorting process:
+//  1. Wraps input in Sort operator
+//  2. Sort operator materializes all tuples and sorts them in memory
+//  3. Outputs tuples in sorted order (ASC or DESC)
+//
+// Example: SELECT * FROM employees ORDER BY age DESC
+//
+//	→ Returns employees sorted by age in descending order
+//
+// Returns Sort operator wrapping input, or input unchanged if no ORDER BY.
+func (p *SelectPlan) applySortIfNeeded(input DbIterator) (DbIterator, error) {
+	if !p.statement.Plan.HasOrderBy() {
+		return input, nil
+	}
+
+	td := input.GetTupleDesc()
+	orderByFieldName := extractFieldName(p.statement.Plan.OrderByField())
+
+	orderByFieldIdx, err := td.FindFieldIndex(orderByFieldName)
+	if err != nil {
+		return nil, fmt.Errorf("order by field %s not found: %w", p.statement.Plan.OrderByField(), err)
+	}
+
+	sortOp, err := query.NewSort(input, orderByFieldIdx, p.statement.Plan.OrderByAsc())
+	if err != nil {
+		return nil, fmt.Errorf("failed to create sort operator: %w", err)
+	}
+
+	return sortOp, nil
+}
+
 // parseAggregateOp converts an aggregate operation string to AggregateOp enum.
 func parseAggregateOp(opStr string) (aggregation.AggregateOp, error) {
 	switch strings.ToUpper(opStr) {
@@ -336,4 +409,74 @@ func getJoinFieldIndex(fieldName string, td *tuple.TupleDescription) (int, error
 func extractFieldName(qualifiedName string) string {
 	parts := strings.Split(qualifiedName, ".")
 	return parts[len(parts)-1]
+}
+
+// executeSetOperation handles execution of set operations (UNION, INTERSECT, EXCEPT).
+// Recursively executes left and right SELECT statements, then applies the appropriate set operator.
+//
+// Process:
+//  1. Execute left SELECT statement to get left iterator
+//  2. Execute right SELECT statement to get right iterator
+//  3. Create appropriate set operation operator (Union, Intersect, or Except)
+//  4. Materialize and return results
+func (p *SelectPlan) executeSetOperation() (Result, error) {
+	// Create left and right plans
+	leftStmt := statements.NewSelectStatement(p.statement.Plan.LeftPlan())
+	rightStmt := statements.NewSelectStatement(p.statement.Plan.RightPlan())
+
+	leftPlan := NewSelectPlan(leftStmt, p.tx, p.ctx)
+	rightPlan := NewSelectPlan(rightStmt, p.tx, p.ctx)
+
+	// Execute left side
+	leftResult, err := leftPlan.Execute()
+	if err != nil {
+		return nil, fmt.Errorf("failed to execute left side of set operation: %v", err)
+	}
+	leftQueryResult := leftResult.(*SelectQueryResult)
+
+	// Execute right side
+	rightResult, err := rightPlan.Execute()
+	if err != nil {
+		return nil, fmt.Errorf("failed to execute right side of set operation: %v", err)
+	}
+	rightQueryResult := rightResult.(*SelectQueryResult)
+
+	// Convert results to iterators
+	leftIter := tuple.NewIteratorWithDesc(leftQueryResult.Tuples, leftQueryResult.TupleDesc)
+	rightIter := tuple.NewIteratorWithDesc(rightQueryResult.Tuples, rightQueryResult.TupleDesc)
+
+	// Create appropriate set operation operator
+	var setOp DbIterator
+	isAll := p.statement.Plan.SetOpAll()
+
+	switch p.statement.Plan.SetOpType() {
+	case plan.UnionOp:
+		setOp, err = setops.NewUnion(leftIter, rightIter, isAll)
+		if err != nil {
+			return nil, fmt.Errorf("failed to create UNION operator: %v", err)
+		}
+	case plan.IntersectOp:
+		setOp, err = setops.NewIntersect(leftIter, rightIter, isAll)
+		if err != nil {
+			return nil, fmt.Errorf("failed to create INTERSECT operator: %v", err)
+		}
+	case plan.ExceptOp:
+		setOp, err = setops.NewExcept(leftIter, rightIter, isAll)
+		if err != nil {
+			return nil, fmt.Errorf("failed to create EXCEPT operator: %v", err)
+		}
+	default:
+		return nil, fmt.Errorf("unsupported set operation type")
+	}
+
+	// Materialize results
+	results, err := collectAllTuples(setOp)
+	if err != nil {
+		return nil, err
+	}
+
+	return &SelectQueryResult{
+		TupleDesc: setOp.GetTupleDesc(),
+		Tuples:    results,
+	}, nil
 }
