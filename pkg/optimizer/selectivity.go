@@ -77,7 +77,7 @@ func (se *SelectivityEstimator) EstimatePredicateSelectivity(
 	return se.fromDistinct(pred, colStats)
 }
 
-// EstimatePredicateSelectivityWithValue estimates the selectivity of a predicate
+// EstimateWithValue estimates the selectivity of a predicate
 // when the comparison value is known. Uses MCV (Most Common Values) and histogram
 // statistics for accurate estimation when available.
 //
@@ -95,7 +95,7 @@ func (se *SelectivityEstimator) EstimatePredicateSelectivity(
 //
 // Returns:
 //   - float64: Estimated selectivity between 0.0 and 1.0
-func (se *SelectivityEstimator) EstimatePredicateSelectivityWithValue(
+func (se *SelectivityEstimator) EstimateWithValue(
 	tx *transaction.TransactionContext,
 	pred primitives.Predicate,
 	tableID int,
@@ -119,7 +119,7 @@ func (se *SelectivityEstimator) EstimatePredicateSelectivityWithValue(
 	}
 
 	if colStats.Histogram != nil && isComparisonPredicate(pred) {
-		sel := se.EstimateHistogram(colStats.Histogram, pred, value)
+		sel := se.estimateHist(colStats.Histogram, pred, value)
 		return math.Max(0.0, math.Min(1.0, sel))
 	}
 
@@ -160,7 +160,7 @@ func (se *SelectivityEstimator) fromDistinct(pred primitives.Predicate, stats *c
 	}
 }
 
-// EstimateHistogram uses histogram statistics for accurate selectivity
+// estimateHist uses histogram statistics for accurate selectivity
 // estimation of comparison predicates.
 //
 // Histograms divide the value range into buckets and track the number of rows
@@ -173,7 +173,7 @@ func (se *SelectivityEstimator) fromDistinct(pred primitives.Predicate, stats *c
 //
 // Returns:
 //   - float64: Estimated selectivity between 0.0 and 1.0
-func (se *SelectivityEstimator) EstimateHistogram(h *catalog.Histogram, pred primitives.Predicate, value types.Field) float64 {
+func (se *SelectivityEstimator) estimateHist(h *catalog.Histogram, pred primitives.Predicate, value types.Field) float64 {
 	if h == nil {
 		return DefaultSelectivity
 	}
@@ -221,30 +221,27 @@ func (se *SelectivityEstimator) EstimateNull(
 	return nullify(nullFraction)
 }
 
-// EstimateCombinedSelectivity estimates selectivity for combined predicates (AND/OR).
+// EstimateCombined estimates selectivity for combined predicates (AND/OR).
 //
 // Uses probability theory assuming predicate independence:
 //   - AND: sel(A AND B) = sel(A) × sel(B)
 //   - OR:  sel(A OR B) = sel(A) + sel(B) - sel(A) × sel(B)
 //
 // Parameters:
-//   - sel1: Selectivity of first predicate
-//   - sel2: Selectivity of second predicate
-//   - isAnd: true for AND, false for OR
+//   - s1: Selectivity of first predicate
+//   - s2: Selectivity of second predicate
+//   - and: true for AND, false for OR
 //
 // Returns:
 //   - float64: Combined selectivity between 0.0 and 1.0
-func (se *SelectivityEstimator) EstimateCombinedSelectivity(
-	sel1, sel2 float64,
-	isAnd bool,
-) float64 {
-	if isAnd {
-		return sel1 * sel2
+func (se *SelectivityEstimator) EstimateCombined(s1, s2 float64, and bool) float64 {
+	if and {
+		return s1 * s2
 	}
-	return sel1 + sel2 - (sel1 * sel2)
+	return s1 + s2 - (s1 * s2)
 }
 
-// EstimateNotSelectivity estimates selectivity for NOT predicate.
+// EstimateNot estimates selectivity for NOT predicate.
 //
 // Simply inverts the selectivity: sel(NOT A) = 1 - sel(A)
 //
@@ -253,7 +250,7 @@ func (se *SelectivityEstimator) EstimateCombinedSelectivity(
 //
 // Returns:
 //   - float64: Inverted selectivity between 0.0 and 1.0
-func (se *SelectivityEstimator) EstimateNotSelectivity(sel float64) float64 {
+func (se *SelectivityEstimator) EstimateNot(sel float64) float64 {
 	return 1.0 - sel
 }
 
@@ -278,7 +275,7 @@ func (se *SelectivityEstimator) defaultSel(pred primitives.Predicate) float64 {
 	}
 }
 
-// EstimateLikeSelectivity estimates selectivity for LIKE predicates based on
+// EstimateLike estimates selectivity for LIKE predicates based on
 // the pattern structure.
 //
 // Different wildcard patterns have different selectivities:
@@ -292,7 +289,7 @@ func (se *SelectivityEstimator) defaultSel(pred primitives.Predicate) float64 {
 //
 // Returns:
 //   - float64: Estimated selectivity between 0.0 and 1.0
-func (se *SelectivityEstimator) EstimateLikeSelectivity(pattern string) float64 {
+func (se *SelectivityEstimator) EstimateLike(pattern string) float64 {
 	if pattern == "" {
 		return LikeSelectivity
 	}
@@ -309,7 +306,7 @@ func (se *SelectivityEstimator) EstimateLikeSelectivity(pattern string) float64 
 	}
 }
 
-// EstimateInSelectivity estimates selectivity for IN predicates.
+// EstimateIn estimates selectivity for IN predicates.
 //
 // Assumes each value in the IN list is equally likely and uses the ratio
 // of IN list size to distinct count as the selectivity estimate.
@@ -322,7 +319,7 @@ func (se *SelectivityEstimator) EstimateLikeSelectivity(pattern string) float64 
 //
 // Returns:
 //   - float64: Estimated selectivity between 0.0 and 1.0
-func (se *SelectivityEstimator) EstimateInSelectivity(
+func (se *SelectivityEstimator) EstimateIn(
 	tx *transaction.TransactionContext,
 	tableID int,
 	columnName string,

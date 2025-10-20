@@ -77,7 +77,7 @@ func TestEstimatePredicateSelectivityWithValue_Histogram(t *testing.T) {
 			estimator := &SelectivityEstimator{}
 
 			// Estimate selectivity
-			sel := estimator.EstimateHistogram(histogram, tt.pred, tt.queryValue)
+			sel := estimator.estimateHist(histogram, tt.pred, tt.queryValue)
 
 			// Verify selectivity is in valid range [0.0, 1.0]
 			if sel < 0.0 || sel > 1.0 {
@@ -181,7 +181,7 @@ func TestEstimateCombinedSelectivity(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := estimator.EstimateCombinedSelectivity(tt.sel1, tt.sel2, tt.isAnd)
+			result := estimator.EstimateCombined(tt.sel1, tt.sel2, tt.isAnd)
 			if math.Abs(result-tt.expected) > 0.0001 {
 				t.Errorf("Expected %f, got %f", tt.expected, result)
 			}
@@ -240,7 +240,7 @@ func TestHistogramSelectivityBounds(t *testing.T) {
 
 	for _, pred := range predicates {
 		for _, val := range testValues {
-			sel := estimator.EstimateHistogram(histogram, pred, val)
+			sel := estimator.estimateHist(histogram, pred, val)
 			if sel < 0.0 || sel > 1.0 {
 				t.Errorf("Selectivity %f out of bounds for predicate %v with value %v",
 					sel, pred, val)
@@ -296,7 +296,7 @@ func TestEstimateLikeSelectivity(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := estimator.EstimateLikeSelectivity(tt.pattern)
+			result := estimator.EstimateLike(tt.pattern)
 			if math.Abs(result-tt.expected) > 0.0001 {
 				t.Errorf("Expected %f for pattern '%s', got %f", tt.expected, tt.pattern, result)
 			}
@@ -536,7 +536,7 @@ func TestMCVIntegrationWithHistogram(t *testing.T) {
 				}
 			} else {
 				// Use histogram
-				sel = estimator.EstimateHistogram(colStats.Histogram, tt.pred, tt.value)
+				sel = estimator.estimateHist(colStats.Histogram, tt.pred, tt.value)
 			}
 
 			// Verify bounds
