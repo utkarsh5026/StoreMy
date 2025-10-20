@@ -30,7 +30,7 @@ func newIndexLoader(catalog CatalogReader, pageStore *memory.PageStore) *indexLo
 
 // loadAndOpenIndexes loads index metadata from catalog and opens all index files for a table.
 func (il *indexLoader) loadAndOpenIndexes(ctx TxCtx, tableID int) ([]*indexWithMetadata, error) {
-	metadataList, err := il.loadIndexMetadataFromCatalog(ctx, tableID)
+	metadataList, err := il.loadFromCatalog(ctx, tableID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get indexes from catalog: %v", err)
 	}
@@ -53,7 +53,7 @@ func (il *indexLoader) loadAndOpenIndexes(ctx TxCtx, tableID int) ([]*indexWithM
 
 // loadIndexMetadataFromCatalog loads raw index info from catalog and resolves it
 // with schema information (ColumnIndex, KeyType) to create full IndexMetadata.
-func (il *indexLoader) loadIndexMetadataFromCatalog(ctx TxCtx, tableID int) ([]*IndexMetadata, error) {
+func (il *indexLoader) loadFromCatalog(ctx TxCtx, tableID int) ([]*IndexMetadata, error) {
 	catalogIndexes, err := il.catalog.GetIndexesByTable(ctx, tableID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get indexes from catalog: %v", err)
@@ -68,18 +68,18 @@ func (il *indexLoader) loadIndexMetadataFromCatalog(ctx TxCtx, tableID int) ([]*
 		return nil, fmt.Errorf("failed to get table schema: %v", err)
 	}
 
-	return il.resolveIndexMetadata(catalogIndexes, schema), nil
+	return resolveIndexMetadata(catalogIndexes, schema), nil
 }
 
 // resolveIndexMetadata resolves catalog metadata with schema to create complete IndexMetadata.
-func (il *indexLoader) resolveIndexMetadata(
+func resolveIndexMetadata(
 	catalogIndexes []*systemtable.IndexMetadata,
 	schema *schema.Schema,
 ) []*IndexMetadata {
 	result := make([]*IndexMetadata, 0, len(catalogIndexes))
 
 	for _, catIdx := range catalogIndexes {
-		columnIndex, keyType := il.findColumnInfo(schema, catIdx.ColumnName)
+		columnIndex, keyType := findColumnInfo(schema, catIdx.ColumnName)
 
 		if columnIndex == -1 {
 			fmt.Fprintf(os.Stderr, "Warning: column %s not found in schema for index %s\n",
@@ -104,7 +104,7 @@ func (il *indexLoader) resolveIndexMetadata(
 }
 
 // findColumnInfo finds the column index and type in the schema.
-func (il *indexLoader) findColumnInfo(schema *schema.Schema, columnName string) (int, types.Type) {
+func findColumnInfo(schema *schema.Schema, columnName string) (int, types.Type) {
 	for i := 0; i < schema.TupleDesc.NumFields(); i++ {
 		fieldName, _ := schema.TupleDesc.GetFieldName(i)
 		if fieldName == columnName {
@@ -115,47 +115,36 @@ func (il *indexLoader) findColumnInfo(schema *schema.Schema, columnName string) 
 }
 
 // openIndex opens an index file based on its metadata.
-func (il *indexLoader) openIndex(
-	ctx TxCtx,
-	metadata *IndexMetadata,
-) (index.Index, error) {
-	switch metadata.IndexType {
+func (il *indexLoader) openIndex(ctx TxCtx, m *IndexMetadata) (index.Index, error) {
+	switch m.IndexType {
 	case index.BTreeIndex:
-		return il.openBTreeIndex(ctx, metadata)
+		return il.openBTreeIndex(ctx, m)
 	case index.HashIndex:
-		return il.openHashIndex(ctx, metadata)
+		return il.openHashIndex(ctx, m)
 	default:
-		return nil, fmt.Errorf("unsupported index type: %s", metadata.IndexType)
+		return nil, fmt.Errorf("unsupported index type: %s", m.IndexType)
 	}
 }
 
 // openBTreeIndex opens a B+Tree index file.
-func (il *indexLoader) openBTreeIndex(
-	ctx TxCtx,
-	metadata *IndexMetadata,
-) (*btreeindex.BTree, error) {
-	file, err := btree.NewBTreeFile(metadata.FilePath, metadata.KeyType)
+func (il *indexLoader) openBTreeIndex(ctx TxCtx, m *IndexMetadata) (*btreeindex.BTree, error) {
+	file, err := btree.NewBTreeFile(m.FilePath, m.KeyType)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open BTree file: %v", err)
 	}
 
-	btreeIdx := btreeindex.NewBTree(metadata.IndexID, metadata.KeyType, file, ctx, il.pageStore)
+	btreeIdx := btreeindex.NewBTree(m.IndexID, m.KeyType, file, ctx, il.pageStore)
 	return btreeIdx, nil
 }
 
 // openHashIndex opens a hash index file.
-func (il *indexLoader) openHashIndex(ctx TxCtx, metadata *IndexMetadata) (*hashindex.HashIndex, error) {
-	numBuckets := hash.DefaultBuckets
-
-	file, err := hash.NewHashFile(metadata.FilePath, metadata.KeyType, numBuckets)
+func (il *indexLoader) openHashIndex(ctx TxCtx, m *IndexMetadata) (*hashindex.HashIndex, error) {
+	file, err := hash.NewHashFile(m.FilePath, m.KeyType, hash.DefaultBuckets)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open hash file: %v", err)
 	}
 
-	// Register the file with the PageStore
-	il.pageStore.RegisterDbFile(metadata.IndexID, file)
-
-	hashIdx := hashindex.NewHashIndex(metadata.IndexID, metadata.KeyType, file, il.pageStore, ctx)
+	hashIdx := hashindex.NewHashIndex(m.IndexID, m.KeyType, file, il.pageStore, ctx)
 	return hashIdx, nil
 }
 
