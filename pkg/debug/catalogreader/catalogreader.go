@@ -9,6 +9,7 @@ import (
 	"storemy/pkg/debug/ui"
 	"storemy/pkg/memory"
 	"storemy/pkg/primitives"
+	"storemy/pkg/storage/heap"
 	"storemy/pkg/types"
 	"strings"
 
@@ -86,8 +87,8 @@ type tableLoadedMsg struct {
 func loadTableData(cat *catalogmanager.CatalogManager, tableName string) tea.Cmd {
 	return func() tea.Msg {
 		var err error
-		tid := primitives.NewTransactionID()
-		tableID, err := cat.GetTableID(tid, tableName)
+		tx := transaction.NewTransactionContext(primitives.NewTransactionID())
+		tableID, err := cat.GetTableID(tx, tableName)
 		if err != nil {
 			return tableLoadedMsg{err: err}
 		}
@@ -96,7 +97,12 @@ func loadTableData(cat *catalogmanager.CatalogManager, tableName string) tea.Cmd
 			return tableLoadedMsg{err: err}
 		}
 
-		iter := file.Iterator(tid)
+		hf, ok := file.(*heap.HeapFile)
+		if !ok {
+			return tableLoadedMsg{err: fmt.Errorf("not a heap file")}
+		}
+
+		iter := hf.Iterator(tx.ID)
 		if err := iter.Open(); err != nil {
 			return tableLoadedMsg{err: err}
 		}

@@ -97,17 +97,17 @@ func initializeHeapReader(dataDir string) tea.Cmd {
 			return heapInitMsg{err: err}
 		}
 
-		tid := primitives.NewTransactionID()
+		tx2 := transaction.NewTransactionContext(primitives.NewTransactionID())
 
 		// Collect all user tables (non-catalog tables
 		var tables []tableInfo
-		catalogTableID, _ := cat.GetTableID(tid, tablesTable)
-		columnsTableID, _ := cat.GetTableID(tid, colsTable)
-		statsTableID, _ := cat.GetTableID(tid, statsTable)
+		catalogTableID, _ := cat.GetTableID(tx2, tablesTable)
+		columnsTableID, _ := cat.GetTableID(tx2, colsTable)
+		statsTableID, _ := cat.GetTableID(tx2, statsTable)
 
-		allTableNames, _ := cat.ListAllTables(tid, true)
+		allTableNames, _ := cat.ListAllTables(tx2, true)
 		for _, name := range allTableNames {
-			tableID, err := cat.GetTableID(tid, name)
+			tableID, err := cat.GetTableID(tx2, name)
 			if err != nil {
 				continue
 			}
@@ -162,7 +162,12 @@ func loadTableData(cat *catalogmanager.CatalogManager, tableInfo *tableInfo) tea
 			headers[i] = name
 		}
 
-		iter := file.Iterator(primitives.NewTransactionID())
+		hf, ok := file.(*heap.HeapFile)
+		if !ok {
+			return tableDataLoadedMsg{err: fmt.Errorf("not a heap file")}
+		}
+
+		iter := hf.Iterator(primitives.NewTransactionID())
 		if err := iter.Open(); err != nil {
 			return tableDataLoadedMsg{err: err}
 		}
