@@ -2,6 +2,7 @@ package optimizer
 
 import (
 	"storemy/pkg/concurrency/transaction"
+	"storemy/pkg/optimizer/cardinality"
 	"storemy/pkg/planner"
 )
 
@@ -33,7 +34,7 @@ func (ppo *PredicatePushdownOptimizer) Optimize(
 // PredicateContext holds information about a predicate being pushed down
 type PredicateContext struct {
 	Predicate      *planner.PredicateInfo
-	CanPushThrough bool // Whether this predicate can be pushed through joins
+	CanPushThrough bool     // Whether this predicate can be pushed through joins
 	RequiredTables []string // Tables referenced by this predicate
 }
 
@@ -139,7 +140,11 @@ func (ppo *PredicatePushdownOptimizer) optimizeJoin(
 	}
 
 	// Recompute cost and cardinality
-	card := ppo.costModel.cardinalityEstimator.EstimatePlanCardinality(tx, newJoin)
+	card, err := ppo.costModel.cardinalityEstimator.EstimatePlanCardinality(tx, newJoin)
+	if err != nil {
+		// On error, use a default cardinality
+		card = cardinality.DefaultTableCardinality
+	}
 	cost := ppo.costModel.EstimatePlanCost(tx, newJoin)
 	newJoin.SetCardinality(card)
 	newJoin.SetCost(cost)
@@ -187,7 +192,11 @@ func (ppo *PredicatePushdownOptimizer) optimizeScan(
 	}
 
 	// Recompute cost and cardinality with pushed predicates
-	card := ppo.costModel.cardinalityEstimator.EstimatePlanCardinality(tx, newScan)
+	card, err := ppo.costModel.cardinalityEstimator.EstimatePlanCardinality(tx, newScan)
+	if err != nil {
+		// On error, use a default cardinality
+		card = cardinality.DefaultTableCardinality
+	}
 	cost := ppo.costModel.EstimatePlanCost(tx, newScan)
 	newScan.SetCardinality(card)
 	newScan.SetCost(cost)
@@ -212,7 +221,11 @@ func (ppo *PredicatePushdownOptimizer) optimizeProject(
 	}
 
 	// Recompute cost
-	card := ppo.costModel.cardinalityEstimator.EstimatePlanCardinality(tx, newProject)
+	card, err := ppo.costModel.cardinalityEstimator.EstimatePlanCardinality(tx, newProject)
+	if err != nil {
+		// On error, use a default cardinality
+		card = cardinality.DefaultTableCardinality
+	}
 	cost := ppo.costModel.EstimatePlanCost(tx, newProject)
 	newProject.SetCardinality(card)
 	newProject.SetCost(cost)
@@ -330,5 +343,5 @@ func containsTable(columnRef, tableName string) bool {
 	// Format: "table.column" or just "column"
 	// This is simplified - in practice, you'd have proper parsing
 	return columnRef == tableName || len(columnRef) > len(tableName) &&
-		   columnRef[:len(tableName)] == tableName
+		columnRef[:len(tableName)] == tableName
 }

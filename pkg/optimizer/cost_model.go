@@ -4,14 +4,20 @@ import (
 	"math"
 	"storemy/pkg/catalog"
 	"storemy/pkg/concurrency/transaction"
+	"storemy/pkg/optimizer/cardinality"
 	"storemy/pkg/planner"
+)
+
+const (
+	IoCostPerPage   = 1.0
+	CPUCostPerTuple = 0.01
 )
 
 // CostModel provides cost estimation for query plan nodes
 // Costs are measured in arbitrary units representing I/O and CPU time
 type CostModel struct {
 	catalog              *catalog.SystemCatalog
-	cardinalityEstimator *CardinalityEstimator
+	cardinalityEstimator *cardinality.CardinalityEstimator
 
 	// Cost parameters (tunable based on hardware)
 	IOCostPerPage   float64 // Cost of reading one page from disk
@@ -23,14 +29,15 @@ type CostModel struct {
 
 // NewCostModel creates a new cost model with default parameters
 func NewCostModel(cat *catalog.SystemCatalog) *CostModel {
+	cardEst, _ := cardinality.NewCardinalityEstimator(cat)
 	return &CostModel{
 		catalog:              cat,
-		cardinalityEstimator: NewCardinalityEstimator(cat),
-		IOCostPerPage:        1.0,  // Baseline I/O cost
-		CPUCostPerTuple:      0.01, // CPU cost is cheaper than I/O
-		MemoryPages:          1000, // 1000 pages = ~8MB with 8KB pages
-		HashTableMemory:      500,  // Half of buffer pool for hash tables
-		SortMemory:           500,  // Half of buffer pool for sorting
+		cardinalityEstimator: cardEst,
+		IOCostPerPage:        IoCostPerPage,   // Baseline I/O cost
+		CPUCostPerTuple:      CPUCostPerTuple, // CPU cost is cheaper than I/O
+		MemoryPages:          1000,            // 1000 pages = ~8MB with 8KB pages
+		HashTableMemory:      500,             // Half of buffer pool for hash tables
+		SortMemory:           500,             // Half of buffer pool for sorting
 	}
 }
 
@@ -45,7 +52,11 @@ func (cm *CostModel) EstimatePlanCost(
 
 	// First ensure cardinality is estimated
 	if plan.GetCardinality() == 0 {
-		card := cm.cardinalityEstimator.EstimatePlanCardinality(tx, plan)
+		card, err := cm.cardinalityEstimator.EstimatePlanCardinality(tx, plan)
+		if err != nil {
+			// On error, use a default cardinality
+			card = cardinality.DefaultTableCardinality
+		}
 		plan.SetCardinality(card)
 	}
 

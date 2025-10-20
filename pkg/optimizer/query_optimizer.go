@@ -5,6 +5,7 @@ import (
 	"storemy/pkg/catalog"
 	"storemy/pkg/catalog/systemtable"
 	"storemy/pkg/concurrency/transaction"
+	"storemy/pkg/optimizer/cardinality"
 	"storemy/pkg/planner"
 )
 
@@ -374,7 +375,11 @@ func (qo *QueryOptimizer) estimateFinalCosts(
 	}
 
 	// Estimate cost for this node
-	card := qo.costModel.cardinalityEstimator.EstimatePlanCardinality(tx, plan)
+	card, err := qo.costModel.cardinalityEstimator.EstimatePlanCardinality(tx, plan)
+	if err != nil {
+		// On error, use a default cardinality
+		card = cardinality.DefaultTableCardinality
+	}
 	cost := qo.costModel.EstimatePlanCost(tx, plan)
 	plan.SetCardinality(card)
 	plan.SetCost(cost)

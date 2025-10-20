@@ -4,6 +4,7 @@ import (
 	"math"
 	"storemy/pkg/catalog"
 	"storemy/pkg/concurrency/transaction"
+	"storemy/pkg/optimizer/cardinality"
 	"storemy/pkg/planner"
 )
 
@@ -24,11 +25,11 @@ type JoinOrderOptimizer struct {
 
 // JoinPlan represents a candidate join plan for a set of relations
 type JoinPlan struct {
-	RelationSet uint64              // Bitmask of relations in this plan
-	PlanNode    planner.PlanNode    // The actual plan tree
-	Cost        float64             // Total cost
-	Cardinality int64               // Estimated output rows
-	JoinMethod  string              // Join method used (for multi-way joins)
+	RelationSet uint64           // Bitmask of relations in this plan
+	PlanNode    planner.PlanNode // The actual plan tree
+	Cost        float64          // Total cost
+	Cardinality int64            // Estimated output rows
+	JoinMethod  string           // Join method used (for multi-way joins)
 }
 
 // NewJoinOrderOptimizer creates a new join order optimizer
@@ -114,7 +115,11 @@ func (joo *JoinOrderOptimizer) initializeBaseRelations(
 		}
 
 		// Estimate cost and cardinality
-		card := joo.costModel.cardinalityEstimator.EstimatePlanCardinality(tx, scanNode)
+		card, err := joo.costModel.cardinalityEstimator.EstimatePlanCardinality(tx, scanNode)
+		if err != nil {
+			// On error, use a default cardinality
+			card = cardinality.DefaultTableCardinality
+		}
 		cost := joo.costModel.EstimatePlanCost(tx, scanNode)
 		scanNode.SetCardinality(card)
 		scanNode.SetCost(cost)
@@ -296,8 +301,8 @@ func (joo *JoinOrderOptimizer) createJoinPlan(
 		rightMask := graph.Relations[pred.RightRelation].BitMask
 
 		// Check if this predicate connects the two subplans
-		if ((leftMask & leftPlan.RelationSet) != 0 && (rightMask & rightPlan.RelationSet) != 0) ||
-		   ((leftMask & rightPlan.RelationSet) != 0 && (rightMask & leftPlan.RelationSet) != 0) {
+		if ((leftMask&leftPlan.RelationSet) != 0 && (rightMask&rightPlan.RelationSet) != 0) ||
+			((leftMask&rightPlan.RelationSet) != 0 && (rightMask&leftPlan.RelationSet) != 0) {
 			bestPredicate = pred
 			break
 		}
@@ -309,17 +314,21 @@ func (joo *JoinOrderOptimizer) createJoinPlan(
 
 	// Create join node
 	joinNode := &planner.JoinNode{
-		LeftChild:     leftPlan.PlanNode,
-		RightChild:    rightPlan.PlanNode,
-		JoinType:      "inner",
-		JoinMethod:    joinMethod,
-		LeftColumn:    bestPredicate.LeftColumn,
-		RightColumn:   bestPredicate.RightColumn,
-		ExtraFilters:  make([]planner.PredicateInfo, 0),
+		LeftChild:    leftPlan.PlanNode,
+		RightChild:   rightPlan.PlanNode,
+		JoinType:     "inner",
+		JoinMethod:   joinMethod,
+		LeftColumn:   bestPredicate.LeftColumn,
+		RightColumn:  bestPredicate.RightColumn,
+		ExtraFilters: make([]planner.PredicateInfo, 0),
 	}
 
 	// Estimate cost and cardinality
-	card := joo.costModel.cardinalityEstimator.EstimatePlanCardinality(tx, joinNode)
+	card, err := joo.costModel.cardinalityEstimator.EstimatePlanCardinality(tx, joinNode)
+	if err != nil {
+		// On error, use a default cardinality
+		card = cardinality.DefaultTableCardinality
+	}
 	cost := joo.costModel.EstimatePlanCost(tx, joinNode)
 	joinNode.SetCardinality(card)
 	joinNode.SetCost(cost)
