@@ -63,12 +63,13 @@ func (tt *TablesTable) GetNumFields() int {
 // CreateTuple constructs a catalog tuple for a given TableMetadata.
 // Fields are populated in schema order: table_id, table_name, file_path, primary_key.
 func (tt *TablesTable) CreateTuple(tm TableMetadata) *tuple.Tuple {
-	t := tuple.NewTuple(tt.Schema().TupleDesc)
-	t.SetField(0, types.NewIntField(int64(tm.TableID)))
-	t.SetField(1, types.NewStringField(tm.TableName, types.StringMaxSize))
-	t.SetField(2, types.NewStringField(tm.FilePath, types.StringMaxSize))
-	t.SetField(3, types.NewStringField(tm.PrimaryKeyCol, types.StringMaxSize))
-	return t
+	td := tt.Schema().TupleDesc
+	return tuple.NewBuilder(td).
+		AddInt(int64(tm.TableID)).
+		AddString(tm.TableName).
+		AddString(tm.FilePath).
+		AddString(tm.PrimaryKeyCol).
+		MustBuild()
 }
 
 // GetID extracts the table_id from a catalog tuple and validates tuple arity.
