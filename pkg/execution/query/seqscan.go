@@ -159,6 +159,9 @@ func (ss *SequentialScan) readNext() (*tuple.Tuple, error) {
 		}
 
 		ss.tupIter = tuple.NewIterator(tuples)
+		if err := ss.tupIter.Open(); err != nil {
+			return nil, fmt.Errorf("failed to open tuple iterator: %v", err)
+		}
 		hasNext, err := ss.tupIter.HasNext()
 		if err != nil {
 			return nil, fmt.Errorf("failed to check iterator: %v", err)
