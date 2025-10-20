@@ -33,18 +33,21 @@ const (
 //   - Combined predicates (AND, OR, NOT)
 type SelectivityEstimator struct {
 	catalog *catalog.SystemCatalog
+	tx      *transaction.TransactionContext
 }
 
 // NewSelectivityEstimator creates a new selectivity estimator.
 //
 // Parameters:
 //   - cat: System catalog containing table and column statistics
+//   - tx: Transaction context for accessing catalog statistics
 //
 // Returns:
 //   - *SelectivityEstimator: A new selectivity estimator instance
-func NewSelectivityEstimator(cat *catalog.SystemCatalog) *SelectivityEstimator {
+func NewSelectivityEstimator(cat *catalog.SystemCatalog, tx *transaction.TransactionContext) *SelectivityEstimator {
 	return &SelectivityEstimator{
 		catalog: cat,
+		tx:      tx,
 	}
 }
 
@@ -56,7 +59,6 @@ func NewSelectivityEstimator(cat *catalog.SystemCatalog) *SelectivityEstimator {
 // specific value being compared (e.g., during join selectivity estimation).
 //
 // Parameters:
-//   - tx: Transaction context for accessing catalog statistics
 //   - pred: The predicate operator (=, !=, <, >, etc.)
 //   - tableID: ID of the table containing the column
 //   - columnName: Name of the column in the predicate
@@ -64,12 +66,11 @@ func NewSelectivityEstimator(cat *catalog.SystemCatalog) *SelectivityEstimator {
 // Returns:
 //   - float64: Estimated selectivity between 0.0 and 1.0
 func (se *SelectivityEstimator) EstimatePredicateSelectivity(
-	tx *transaction.TransactionContext,
 	pred primitives.Predicate,
 	tableID int,
 	columnName string,
 ) float64 {
-	colStats, err := se.catalog.GetColumnStatistics(tx, tableID, columnName)
+	colStats, err := se.catalog.GetColumnStatistics(se.tx, tableID, columnName)
 	if err != nil || colStats == nil {
 		return se.defaultSel(pred)
 	}
@@ -87,7 +88,6 @@ func (se *SelectivityEstimator) EstimatePredicateSelectivity(
 //   - Distinct count for uniform distribution assumptions
 //
 // Parameters:
-//   - tx: Transaction context for accessing catalog statistics
 //   - pred: The predicate operator (=, !=, <, >, etc.)
 //   - tableID: ID of the table containing the column
 //   - columnName: Name of the column in the predicate
@@ -96,13 +96,12 @@ func (se *SelectivityEstimator) EstimatePredicateSelectivity(
 // Returns:
 //   - float64: Estimated selectivity between 0.0 and 1.0
 func (se *SelectivityEstimator) EstimateWithValue(
-	tx *transaction.TransactionContext,
 	pred primitives.Predicate,
 	tableID int,
 	columnName string,
 	value types.Field,
 ) float64 {
-	colStats, err := se.catalog.GetColumnStatistics(tx, tableID, columnName)
+	colStats, err := se.catalog.GetColumnStatistics(se.tx, tableID, columnName)
 	if err != nil || colStats == nil {
 		return se.defaultSel(pred)
 	}
@@ -187,20 +186,14 @@ func (se *SelectivityEstimator) estimateHist(h *catalog.Histogram, pred primitiv
 // of null values in the column.
 //
 // Parameters:
-//   - tx: Transaction context for accessing catalog statistics
 //   - tableID: ID of the table containing the column
 //   - columnName: Name of the column being checked
 //   - isNull: true for IS NULL, false for IS NOT NULL
 //
 // Returns:
 //   - float64: Estimated selectivity between 0.0 and 1.0
-func (se *SelectivityEstimator) EstimateNull(
-	tx *transaction.TransactionContext,
-	tableID int,
-	columnName string,
-	isNull bool,
-) float64 {
-	colStats, err := se.catalog.GetColumnStatistics(tx, tableID, columnName)
+func (se *SelectivityEstimator) EstimateNull(tableID int, columnName string, isNull bool) float64 {
+	colStats, err := se.catalog.GetColumnStatistics(se.tx, tableID, columnName)
 	nullify := func(val float64) float64 {
 		if isNull {
 			return val
@@ -212,7 +205,7 @@ func (se *SelectivityEstimator) EstimateNull(
 		return nullify(NullSelectivity)
 	}
 
-	tableStats, err := se.catalog.GetTableStatistics(tx, tableID)
+	tableStats, err := se.catalog.GetTableStatistics(se.tx, tableID)
 	if err != nil || tableStats == nil || tableStats.Cardinality == 0 {
 		return nullify(NullSelectivity)
 	}
@@ -312,20 +305,14 @@ func (se *SelectivityEstimator) EstimateLike(pattern string) float64 {
 // of IN list size to distinct count as the selectivity estimate.
 //
 // Parameters:
-//   - tx: Transaction context for accessing catalog statistics
 //   - tableID: ID of the table containing the column
 //   - columnName: Name of the column being checked
 //   - valueCount: Number of values in the IN list
 //
 // Returns:
 //   - float64: Estimated selectivity between 0.0 and 1.0
-func (se *SelectivityEstimator) EstimateIn(
-	tx *transaction.TransactionContext,
-	tableID int,
-	columnName string,
-	valueCount int,
-) float64 {
-	colStats, err := se.catalog.GetColumnStatistics(tx, tableID, columnName)
+func (se *SelectivityEstimator) EstimateIn(tableID int, columnName string, valueCount int) float64 {
+	colStats, err := se.catalog.GetColumnStatistics(se.tx, tableID, columnName)
 	if err != nil || colStats == nil || colStats.DistinctCount == 0 {
 		return InSelectivity
 	}
@@ -404,9 +391,7 @@ func (se *SelectivityEstimator) checkMCV(colStats *catalog.ColumnStatistics, val
 //
 // Returns:
 //   - float64: Estimated selectivity for equality on non-MCV value
-func (se *SelectivityEstimator) equalityNoHist(
-	colStats *catalog.ColumnStatistics,
-) float64 {
+func (se *SelectivityEstimator) equalityNoHist(colStats *catalog.ColumnStatistics) float64 {
 	if colStats.DistinctCount == 0 {
 		return 0.0
 	}

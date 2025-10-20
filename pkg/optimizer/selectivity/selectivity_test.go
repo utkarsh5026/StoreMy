@@ -74,7 +74,7 @@ func TestEstimatePredicateSelectivityWithValue_Histogram(t *testing.T) {
 			histogram := catalog.NewHistogram(tt.values, 10)
 
 			// Create estimator
-			estimator := &SelectivityEstimator{}
+			estimator := &SelectivityEstimator{tx: nil}
 
 			// Estimate selectivity
 			sel := estimator.estimateHist(histogram, tt.pred, tt.queryValue)
@@ -126,7 +126,7 @@ func TestEstimatePredicateSelectivityWithValue_NoHistogram(t *testing.T) {
 				Histogram:     nil, // No histogram
 			}
 
-			estimator := &SelectivityEstimator{}
+			estimator := &SelectivityEstimator{tx: nil}
 
 			// This should fall back to distinct count estimate
 			sel := estimator.fromDistinct(tt.pred, colStats)
@@ -140,7 +140,7 @@ func TestEstimatePredicateSelectivityWithValue_NoHistogram(t *testing.T) {
 
 // TestEstimateCombinedSelectivity tests AND/OR combinations
 func TestEstimateCombinedSelectivity(t *testing.T) {
-	estimator := &SelectivityEstimator{}
+	estimator := &SelectivityEstimator{tx: nil}
 
 	tests := []struct {
 		name     string
@@ -219,7 +219,7 @@ func TestHistogramSelectivityBounds(t *testing.T) {
 	values := createIntFields(1, 1000, 1)
 	histogram := catalog.NewHistogram(values, 20)
 
-	estimator := &SelectivityEstimator{}
+	estimator := &SelectivityEstimator{tx: nil}
 
 	predicates := []primitives.Predicate{
 		primitives.Equals,
@@ -260,7 +260,7 @@ func createIntFields(start, end, step int) []types.Field {
 
 // TestEstimateLikeSelectivity tests LIKE pattern selectivity
 func TestEstimateLikeSelectivity(t *testing.T) {
-	estimator := &SelectivityEstimator{}
+	estimator := &SelectivityEstimator{tx: nil}
 
 	tests := []struct {
 		name     string
@@ -361,7 +361,7 @@ func TestMCVSelectivity(t *testing.T) {
 				DistinctCount:  100,
 			}
 
-			estimator := &SelectivityEstimator{}
+			estimator := &SelectivityEstimator{tx: nil}
 			freq, found := estimator.checkMCV(colStats, tt.queryValue)
 
 			if !found {
@@ -390,7 +390,7 @@ func TestMCVSelectivityMiss(t *testing.T) {
 		DistinctCount: 100,
 	}
 
-	estimator := &SelectivityEstimator{}
+	estimator := &SelectivityEstimator{tx: nil}
 
 	// Query for a value not in MCVs
 	freq, found := estimator.checkMCV(colStats, types.NewIntField(999))
