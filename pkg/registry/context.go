@@ -2,7 +2,10 @@ package registry
 
 import (
 	"storemy/pkg/catalog/catalogmanager"
+	"storemy/pkg/catalog/schema"
+	"storemy/pkg/catalog/systemtable"
 	"storemy/pkg/concurrency/transaction"
+	"storemy/pkg/indexmanager"
 	"storemy/pkg/log"
 	"storemy/pkg/memory"
 	"storemy/pkg/memory/wrappers/table"
@@ -13,10 +16,24 @@ import (
 type DatabaseContext struct {
 	pageStore    *memory.PageStore
 	catalogMgr   *catalogmanager.CatalogManager
+	indexManager *indexmanager.IndexManager
 	txRegistry   *transaction.TransactionRegistry
 	tupleManager *table.TupleManager
 	wal          *log.WAL
 	dataDir      string
+}
+
+// catalogAdapter adapts catalogmanager.CatalogManager to indexmanager.CatalogReader
+type catalogAdapter struct {
+	cm *catalogmanager.CatalogManager
+}
+
+func (ca *catalogAdapter) GetIndexesByTable(tx *transaction.TransactionContext, tableID int) ([]*systemtable.IndexMetadata, error) {
+	return ca.cm.GetIndexesByTable(tx, tableID)
+}
+
+func (ca *catalogAdapter) GetTableSchema(tableID int) (*schema.Schema, error) {
+	return ca.cm.GetTableSchema(nil, tableID)
 }
 
 // NewDatabaseContext creates a new database context with all required components
@@ -27,9 +44,12 @@ func NewDatabaseContext(
 	dataDir string,
 ) *DatabaseContext {
 	tupleManager := table.NewTupleManager(pageStore)
+	adapter := &catalogAdapter{cm: catalogMgr}
+	indexMgr := indexmanager.NewIndexManager(adapter, pageStore, wal)
 	return &DatabaseContext{
 		pageStore:    pageStore,
 		catalogMgr:   catalogMgr,
+		indexManager: indexMgr,
 		txRegistry:   transaction.NewTransactionRegistry(wal),
 		tupleManager: tupleManager,
 		wal:          wal,
@@ -59,4 +79,8 @@ func (ctx *DatabaseContext) CatalogManager() *catalogmanager.CatalogManager {
 
 func (ctx *DatabaseContext) TupleManager() *table.TupleManager {
 	return ctx.tupleManager
+}
+
+func (ctx *DatabaseContext) IndexManager() *indexmanager.IndexManager {
+	return ctx.indexManager
 }
