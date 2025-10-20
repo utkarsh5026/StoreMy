@@ -11,12 +11,12 @@ import (
 // TestEstimatePredicateSelectivityWithValue_Histogram tests histogram-based selectivity
 func TestEstimatePredicateSelectivityWithValue_Histogram(t *testing.T) {
 	tests := []struct {
-		name           string
-		values         []types.Field
-		pred           primitives.Predicate
-		queryValue     types.Field
-		expectedRange  [2]float64 // min and max expected selectivity
-		description    string
+		name          string
+		values        []types.Field
+		pred          primitives.Predicate
+		queryValue    types.Field
+		expectedRange [2]float64 // min and max expected selectivity
+		description   string
 	}{
 		{
 			name:          "Equality in middle bucket",
@@ -77,7 +77,7 @@ func TestEstimatePredicateSelectivityWithValue_Histogram(t *testing.T) {
 			estimator := &SelectivityEstimator{}
 
 			// Estimate selectivity
-			sel := estimator.EstimateHistogramSelectivity(histogram, tt.pred, tt.queryValue)
+			sel := estimator.EstimateHistogram(histogram, tt.pred, tt.queryValue)
 
 			// Verify selectivity is in valid range [0.0, 1.0]
 			if sel < 0.0 || sel > 1.0 {
@@ -129,7 +129,7 @@ func TestEstimatePredicateSelectivityWithValue_NoHistogram(t *testing.T) {
 			estimator := &SelectivityEstimator{}
 
 			// This should fall back to distinct count estimate
-			sel := estimator.estimateSelectivityFromDistinctCount(tt.pred, colStats)
+			sel := estimator.estimateFromDistinct(tt.pred, colStats)
 
 			if math.Abs(sel-tt.expected) > 0.0001 {
 				t.Errorf("Expected selectivity %f, got %f", tt.expected, sel)
@@ -231,16 +231,16 @@ func TestHistogramSelectivityBounds(t *testing.T) {
 	}
 
 	testValues := []types.Field{
-		types.NewIntField(-100),  // Below min
-		types.NewIntField(1),     // At min
-		types.NewIntField(500),   // Middle
-		types.NewIntField(1000),  // At max
-		types.NewIntField(2000),  // Above max
+		types.NewIntField(-100), // Below min
+		types.NewIntField(1),    // At min
+		types.NewIntField(500),  // Middle
+		types.NewIntField(1000), // At max
+		types.NewIntField(2000), // Above max
 	}
 
 	for _, pred := range predicates {
 		for _, val := range testValues {
-			sel := estimator.EstimateHistogramSelectivity(histogram, pred, val)
+			sel := estimator.EstimateHistogram(histogram, pred, val)
 			if sel < 0.0 || sel > 1.0 {
 				t.Errorf("Selectivity %f out of bounds for predicate %v with value %v",
 					sel, pred, val)
@@ -307,13 +307,13 @@ func TestEstimateLikeSelectivity(t *testing.T) {
 // TestMCVSelectivity tests MCV-based selectivity estimation
 func TestMCVSelectivity(t *testing.T) {
 	tests := []struct {
-		name          string
-		mcvs          []types.Field
-		mcvFreqs      []float64
-		queryValue    types.Field
-		pred          primitives.Predicate
-		expected      float64
-		description   string
+		name        string
+		mcvs        []types.Field
+		mcvFreqs    []float64
+		queryValue  types.Field
+		pred        primitives.Predicate
+		expected    float64
+		description string
 	}{
 		{
 			name:        "Equality with MCV hit - high frequency",
@@ -536,7 +536,7 @@ func TestMCVIntegrationWithHistogram(t *testing.T) {
 				}
 			} else {
 				// Use histogram
-				sel = estimator.estimateHistogramSelectivityWithMCV(colStats, tt.pred, tt.value)
+				sel = estimator.EstimateHistogram(colStats.Histogram, tt.pred, tt.value)
 			}
 
 			// Verify bounds
