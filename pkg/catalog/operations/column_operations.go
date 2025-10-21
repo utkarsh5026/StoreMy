@@ -176,3 +176,39 @@ func (co *ColumnOperations) IncrementAutoIncrementValue(tx *transaction.Transact
 
 	return nil
 }
+
+// LoadTableSchema reconstructs the schema for a table from CATALOG_COLUMNS.
+// It scans all column metadata for the given tableID and builds a Schema object.
+func (co *ColumnOperations) LoadTableSchema(tx *transaction.TransactionContext, tableID int, tableName string) (*schema.Schema, error) {
+	columns, err := co.loadColumnMetadata(tx, tableID)
+	if err != nil {
+		return nil, err
+	}
+
+	if len(columns) == 0 {
+		return nil, fmt.Errorf("no columns found for table %d", tableID)
+	}
+
+	schemaObj, err := schema.NewSchema(tableID, tableName, columns)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create schema: %w", err)
+	}
+
+	return schemaObj, nil
+}
+
+// loadColumnMetadata queries CATALOG_COLUMNS for all columns belonging to tableID.
+// It filters rows by table_id and collects ColumnInfo for each matching column.
+func (co *ColumnOperations) loadColumnMetadata(tx *transaction.TransactionContext, tableID int) ([]schema.ColumnMetadata, error) {
+	var columns []schema.ColumnMetadata
+
+	err := co.iterateColumnsTable(tx, func(c *schema.ColumnMetadata) error {
+		if c.TableID != tableID {
+			return nil
+		}
+		columns = append(columns, *c)
+		return nil
+	})
+
+	return columns, err
+}

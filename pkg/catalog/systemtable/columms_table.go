@@ -3,7 +3,6 @@ package systemtable
 import (
 	"fmt"
 	"storemy/pkg/catalog/schema"
-	"storemy/pkg/iterator"
 	"storemy/pkg/tuple"
 	"storemy/pkg/types"
 )
@@ -73,7 +72,7 @@ func (ct *ColumnsTable) CreateTuple(col schema.ColumnMetadata) *tuple.Tuple {
 		AddInt(int64(col.Position)).
 		AddBool(col.IsPrimary).
 		AddBool(col.IsAutoInc).
-		AddInt(1). // Start auto-increment at 1
+		AddInt(int64(col.NextAutoValue)). // Start auto-increment at 1
 		MustBuild()
 }
 
@@ -165,63 +164,4 @@ func (ct *ColumnsTable) UpdateAutoIncrementValue(oldTuple *tuple.Tuple, newValue
 	}
 	newTuple.SetField(6, types.NewIntField(int64(newValue)))
 	return newTuple
-}
-
-// ColumnMatch represents the result of finding an auto-increment column
-// with its current state and metadata. Used to coordinate auto-increment
-// value generation during INSERT operations.
-type ColumnMatch struct {
-	Tuple                *tuple.Tuple
-	ColumnType           types.Type
-	Position             int
-	IsPrimary, IsAutoInc bool
-	CurrentValue         int // Current next_auto_value from catalog
-}
-
-// FindLatestAutoIncrementColumn finds the latest version (highest next_auto_value) of an auto-increment column.
-// This is MVCC-aware and handles multiple versions of the same column that may exist due to concurrent
-// transactions updating the auto-increment counter.
-//
-// Parameters:
-//   - iter: TupleIterator over CATALOG_COLUMNS (may contain multiple versions)
-//   - tableID: The table to search within
-//   - columnName: The column name to find
-//
-// Returns the ColumnMatch with the highest next_auto_value, or nil if no matching column found.
-// This ensures we always use the most recent auto-increment state even with concurrent INSERTs.
-func (ct *ColumnsTable) FindLatestAutoIncrementColumn(iter iterator.TupleIterator, tableID int, columnName string) (*ColumnMatch, error) {
-	var result *ColumnMatch
-	maxValue := -1
-
-	for {
-		hasNext, err := iter.HasNext()
-		if err != nil || !hasNext {
-			break
-		}
-
-		tup, err := iter.Next()
-		if err != nil || tup == nil {
-			break
-		}
-
-		colTableID := getIntField(tup, 0)
-		colName := getStringField(tup, 1)
-
-		if colTableID == tableID && colName == columnName {
-			currentValue := getIntField(tup, 6)
-			if currentValue > maxValue {
-				result = &ColumnMatch{
-					Tuple:        tup,
-					ColumnType:   types.Type(getIntField(tup, 2)),
-					Position:     getIntField(tup, 3),
-					IsPrimary:    getBoolField(tup, 4),
-					IsAutoInc:    getBoolField(tup, 5),
-					CurrentValue: currentValue,
-				}
-				maxValue = currentValue
-			}
-		}
-	}
-
-	return result, nil
 }

@@ -108,6 +108,7 @@ type SystemCatalog struct {
 
 	// Domain-specific operation handlers (injected with interfaces)
 	indexOps *operations.IndexOperations
+	colOps   *operations.ColumnOperations
 }
 
 // NewSystemCatalog creates a new system catalog instance.
@@ -156,9 +157,8 @@ func (sc *SystemCatalog) Initialize(ctx TxContext, dataDir string) error {
 		sc.store.RegisterDbFile(f.GetID(), f)
 	}
 
-	// Initialize operation handlers by injecting the CatalogIO instance
 	sc.indexOps = operations.NewIndexOperations(sc.io, sc.SystemTabs.IndexesTableID)
-
+	sc.colOps = operations.NewColumnOperations(sc.io, sc.SystemTabs.ColumnsTableID)
 	return nil
 }
 
