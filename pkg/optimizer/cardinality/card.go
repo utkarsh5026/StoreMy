@@ -359,7 +359,7 @@ func findBaseTableID(planNode plan.PlanNode) (tableID int, found bool) {
 // Returns column type and an error if the catalog is unavailable or the column cannot be found.
 func (ce *CardinalityEstimator) getColumnType(tableID int, columnName string) (types.Type, error) {
 	if ce.catalog == nil {
-		return types.UnknownType, fmt.Errorf("catalog is nil")
+		return 0, fmt.Errorf("catalog is nil")
 	}
 
 	colStats, err := ce.catalog.GetColumnStatistics(ce.tx, tableID, columnName)
@@ -374,18 +374,18 @@ func (ce *CardinalityEstimator) getColumnType(tableID int, columnName string) (t
 
 	tableMetadata, err := ce.catalog.GetTableMetadataByID(ce.tx, tableID)
 	if err != nil {
-		return types.UnknownType, fmt.Errorf("failed to get table metadata for table %d: %w", tableID, err)
+		return 0, fmt.Errorf("failed to get table metadata for table %d: %w", tableID, err)
 	}
 	if tableMetadata == nil {
-		return types.UnknownType, fmt.Errorf("table metadata not found for table %d", tableID)
+		return 0, fmt.Errorf("table metadata not found for table %d", tableID)
 	}
 
 	schema, err := ce.catalog.LoadTableSchema(ce.tx, tableID, tableMetadata.TableName)
 	if err != nil {
-		return types.UnknownType, fmt.Errorf("failed to load table schema for table %d: %w", tableID, err)
+		return 0, fmt.Errorf("failed to load table schema for table %d: %w", tableID, err)
 	}
 	if schema == nil {
-		return types.UnknownType, fmt.Errorf("table schema not found for table %d", tableID)
+		return 0, fmt.Errorf("table schema not found for table %d", tableID)
 	}
 
 	for _, col := range schema.Columns {
@@ -394,7 +394,7 @@ func (ce *CardinalityEstimator) getColumnType(tableID int, columnName string) (t
 		}
 	}
 
-	return types.UnknownType, fmt.Errorf("column %s not found in table %d", columnName, tableID)
+	return 0, fmt.Errorf("column %s not found in table %d", columnName, tableID)
 }
 
 // parsePredicateValue converts a string value to a types.Field using the column type.
@@ -405,23 +405,23 @@ func (ce *CardinalityEstimator) getColumnType(tableID int, columnName string) (t
 //   - columnName: Column name for type lookup
 //   - valueStr: String representation of value to parse
 //
-// Returns parsed Field with correct type, or nil if parsing fails.
-func (ce *CardinalityEstimator) parsePredicateValue(tableID int, columnName, valueStr string) types.Field {
+// Returns parsed Field with correct type, or error if type lookup or parsing fails.
+func (ce *CardinalityEstimator) parsePredicateValue(tableID int, columnName, valueStr string) (types.Field, error) {
 	if valueStr == "" {
-		return nil
+		return nil, fmt.Errorf("value string is empty")
 	}
 
 	columnType, err := ce.getColumnType(tableID, columnName)
 	if err != nil {
-		return nil
+		return nil, fmt.Errorf("failed to get column type: %w", err)
 	}
 
 	field, err := types.CreateFieldFromConstant(columnType, valueStr)
 	if err != nil {
-		return nil
+		return nil, fmt.Errorf("failed to create field from constant: %w", err)
 	}
 
-	return field
+	return field, nil
 }
 
 // estimatePredicateSelectivity estimates selectivity for a single predicate
@@ -455,12 +455,13 @@ func (ce *CardinalityEstimator) estimatePredicateSelectivity(tableID int, pred *
 
 	case plan.StandardPredicate:
 		if pred.Value != "" {
-			field := ce.parsePredicateValue(tableID, pred.Column, pred.Value)
-			if field != nil {
+			field, err := ce.parsePredicateValue(tableID, pred.Column, pred.Value)
+			if err == nil {
 				return est.EstimateWithValue(
 					pred.Predicate, tableID, pred.Column, field,
 				)
 			}
+			// If parsing fails, fall back to predicate-only estimation
 		}
 
 		return est.EstimatePredicateSelectivity(
