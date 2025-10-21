@@ -3,7 +3,7 @@ package planner
 import (
 	"fmt"
 	"slices"
-	"storemy/pkg/catalog"
+	"storemy/pkg/catalog/operations"
 	"storemy/pkg/parser/statements"
 	"storemy/pkg/tuple"
 	"storemy/pkg/types"
@@ -84,7 +84,7 @@ func (p *InsertPlan) createFieldMapping(td *tuple.TupleDescription) ([]int, erro
 // insertTuples processes each set of values in the INSERT statement, creating and
 // inserting tuples into the specified table. It validates value counts, creates
 // tuples according to the schema, and uses the page store for persistent storage.
-func (p *InsertPlan) insertTuples(tableID int, tupleDesc *tuple.TupleDescription, fieldMapping []int, autoIncInfo *catalog.AutoIncrementInfo) (int, error) {
+func (p *InsertPlan) insertTuples(tableID int, tupleDesc *tuple.TupleDescription, fieldMapping []int, autoIncInfo *operations.AutoIncrementInfo) (int, error) {
 	// Get the DbFile for the table
 	dbFile, err := p.ctx.CatalogManager().GetTableFile(tableID)
 	if err != nil {
@@ -125,7 +125,7 @@ func (p *InsertPlan) insertTuples(tableID int, tupleDesc *tuple.TupleDescription
 // number of fields, either from the explicit field list or the complete table schema.
 // This prevents runtime errors during tuple creation.
 // If auto-increment column exists and is not in the field mapping, we expect one fewer value.
-func validateValueCount(values []types.Field, tupleDesc *tuple.TupleDescription, fieldMapping []int, autoIncInfo *catalog.AutoIncrementInfo) error {
+func validateValueCount(values []types.Field, tupleDesc *tuple.TupleDescription, fieldMapping []int, autoIncInfo *operations.AutoIncrementInfo) error {
 	var expected int
 	if fieldMapping != nil {
 		expected = len(fieldMapping)
@@ -148,7 +148,7 @@ func validateValueCount(values []types.Field, tupleDesc *tuple.TupleDescription,
 // It handles both explicit field mappings (for partial inserts) and full row inserts.
 // For explicit mappings, it validates that all required fields are provided.
 // If auto-increment info is provided, it automatically fills the auto-increment column.
-func createTuple(values []types.Field, tupleDesc *tuple.TupleDescription, fieldMapping []int, autoIncInfo *catalog.AutoIncrementInfo) (*tuple.Tuple, error) {
+func createTuple(values []types.Field, tupleDesc *tuple.TupleDescription, fieldMapping []int, autoIncInfo *operations.AutoIncrementInfo) (*tuple.Tuple, error) {
 	newTuple := tuple.NewTuple(tupleDesc)
 
 	if fieldMapping != nil {
@@ -208,7 +208,7 @@ func setMappedFields(tup *tuple.Tuple, values []types.Field, fieldMapping []int)
 // validateAllFieldsSet ensures all table fields have values when using explicit field mapping.
 // Prevents NULL values in fields not included in the INSERT field list.
 // Auto-increment columns are exempt from this check as they are auto-filled.
-func validateAllFieldsSet(tupleDesc *tuple.TupleDescription, fieldMapping []int, autoIncInfo *catalog.AutoIncrementInfo) error {
+func validateAllFieldsSet(tupleDesc *tuple.TupleDescription, fieldMapping []int, autoIncInfo *operations.AutoIncrementInfo) error {
 	for i := 0; i < tupleDesc.NumFields(); i++ {
 		// Skip auto-increment column - it's automatically filled
 		if autoIncInfo != nil && i == autoIncInfo.ColumnIndex {
