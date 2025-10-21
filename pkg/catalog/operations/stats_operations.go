@@ -189,6 +189,9 @@ func (so *StatsOperations) iterateTable(tx TxContext, processFunc func(t *TableS
 		}
 
 		if err = processFunc(stats); err != nil {
+			if errors.Is(err, ErrSuccess) {
+				return err
+			}
 			return fmt.Errorf("failed to process statistics tuple: %v", err)
 		}
 		return nil
