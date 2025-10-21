@@ -3,6 +3,8 @@ package catalog
 import (
 	"fmt"
 	"path/filepath"
+	"storemy/pkg/catalog/catalogio"
+	"storemy/pkg/catalog/operations"
 	"storemy/pkg/catalog/schema"
 	"storemy/pkg/catalog/systemtable"
 	"storemy/pkg/catalog/tablecache"
@@ -12,9 +14,15 @@ import (
 	"storemy/pkg/memory"
 	"storemy/pkg/memory/wrappers/table"
 	"storemy/pkg/storage/heap"
+	"storemy/pkg/storage/page"
 	"storemy/pkg/tuple"
 	"storemy/pkg/types"
 	"strings"
+)
+
+type (
+	TxContext = *transaction.TransactionContext
+	Tuple     = *tuple.Tuple
 )
 
 // System tables initialized:
@@ -91,16 +99,23 @@ func (sc *SystemTableIDs) SetSystemTableID(tableName string, tableID int) {
 //   - CATALOG_COLUMN_STATISTICS: stores column-level statistics for selectivity estimation
 //   - CATALOG_INDEX_STATISTICS: stores index statistics for query optimization
 type SystemCatalog struct {
+	// I/O layer (handles all read/write operations)
+	io         *catalogio.CatalogIO
 	store      *memory.PageStore
 	cache      *tablecache.TableCache
 	tupMgr     *table.TupleManager
 	SystemTabs SystemTableIDs
+
+	// Domain-specific operation handlers (injected with interfaces)
+	indexOps *operations.IndexOperations
 }
 
 // NewSystemCatalog creates a new system catalog instance.
 // The catalog must be initialized via Initialize() before use.
 func NewSystemCatalog(ps *memory.PageStore, cache *tablecache.TableCache) *SystemCatalog {
+	io := catalogio.NewCatalogIO(ps, cache)
 	sc := &SystemCatalog{
+		io:     io,
 		store:  ps,
 		cache:  cache,
 		tupMgr: table.NewTupleManager(ps),
@@ -118,7 +133,7 @@ func NewSystemCatalog(ps *memory.PageStore, cache *tablecache.TableCache) *Syste
 //
 // Returns an error if any system table cannot be created, loaded, or registered.
 // On success, the catalog is ready for use and the transaction is committed.
-func (sc *SystemCatalog) Initialize(ctx *transaction.TransactionContext, dataDir string) error {
+func (sc *SystemCatalog) Initialize(ctx TxContext, dataDir string) error {
 	defer sc.store.CommitTransaction(ctx)
 
 	systemTables := systemtable.AllSystemTables
@@ -140,6 +155,10 @@ func (sc *SystemCatalog) Initialize(ctx *transaction.TransactionContext, dataDir
 		sc.SystemTabs.SetSystemTableID(table.TableName(), f.GetID())
 		sc.store.RegisterDbFile(f.GetID(), f)
 	}
+
+	// Initialize operation handlers by injecting the CatalogIO instance
+	sc.indexOps = operations.NewIndexOperations(sc.io, sc.SystemTabs.IndexesTableID)
+
 	return nil
 }
 
@@ -155,7 +174,7 @@ func (sc *SystemCatalog) Initialize(ctx *transaction.TransactionContext, dataDir
 //   - filepath: Path to the heap file for this table
 //
 // Returns an error if table or column metadata cannot be inserted into the catalog.
-func (sc *SystemCatalog) RegisterTable(tx *transaction.TransactionContext, sch *schema.Schema, filepath string) error {
+func (sc *SystemCatalog) RegisterTable(tx TxContext, sch *schema.Schema, filepath string) error {
 	tablesFile, err := sc.cache.GetDbFile(sc.SystemTabs.TablesTableID)
 	if err != nil {
 		return err
@@ -199,7 +218,7 @@ func (sc *SystemCatalog) RegisterTable(tx *transaction.TransactionContext, sch *
 //
 // Returns an error if any table cannot be loaded. The database may be in a partial state
 // if this fails, requiring recovery or manual intervention.
-func (sc *SystemCatalog) LoadTables(tx *transaction.TransactionContext, dataDir string) error {
+func (sc *SystemCatalog) LoadTables(tx TxContext, dataDir string) error {
 	defer sc.store.CommitTransaction(tx)
 
 	return sc.iterateTable(sc.SystemTabs.TablesTableID, tx, func(tableTuple *tuple.Tuple) error {
@@ -227,7 +246,7 @@ func (sc *SystemCatalog) LoadTables(tx *transaction.TransactionContext, dataDir 
 //
 // Returns an error if the table metadata cannot be retrieved, schema cannot be loaded,
 // heap file cannot be opened, or registration fails.
-func (sc *SystemCatalog) LoadTable(tx *transaction.TransactionContext, tableName string) error {
+func (sc *SystemCatalog) LoadTable(tx TxContext, tableName string) error {
 	tm, err := sc.GetTableMetadataByName(tx, tableName)
 	if err != nil {
 		return fmt.Errorf("failed to get table metadata: %w", err)
@@ -263,7 +282,7 @@ func (sc *SystemCatalog) LoadTable(tx *transaction.TransactionContext, tableName
 //   - tableID: ID of the table whose catalog entries should be removed
 //
 // Returns an error if any system table deletion fails.
-func (sc *SystemCatalog) DeleteCatalogEntry(tx *transaction.TransactionContext, tableID int) error {
+func (sc *SystemCatalog) DeleteCatalogEntry(tx TxContext, tableID int) error {
 	sysTableIDs := []int{sc.SystemTabs.TablesTableID, sc.SystemTabs.ColumnsTableID, sc.SystemTabs.StatisticsTableID, sc.SystemTabs.IndexesTableID}
 	for _, id := range sysTableIDs {
 		if err := sc.DeleteTableFromSysTable(tx, tableID, id); err != nil {
@@ -285,7 +304,7 @@ func (sc *SystemCatalog) DeleteCatalogEntry(tx *transaction.TransactionContext, 
 //   - sysTableID: ID of the system table to delete from (CATALOG_TABLES, CATALOG_COLUMNS, or CATALOG_STATISTICS)
 //
 // Returns an error if tuples cannot be deleted from the system table.
-func (sc *SystemCatalog) DeleteTableFromSysTable(tx *transaction.TransactionContext, tableID, sysTableID int) error {
+func (sc *SystemCatalog) DeleteTableFromSysTable(tx TxContext, tableID, sysTableID int) error {
 	tableInfo, err := sc.cache.GetTableInfo(sysTableID)
 	if err != nil {
 		return err
@@ -323,7 +342,7 @@ func (sc *SystemCatalog) DeleteTableFromSysTable(tx *transaction.TransactionCont
 // GetTableMetadataByID retrieves complete table metadata from CATALOG_TABLES by table ID.
 // Returns TableMetadata containing table name, file path, and primary key column,
 // or an error if the table is not found.
-func (sc *SystemCatalog) GetTableMetadataByID(tx *transaction.TransactionContext, tableID int) (*systemtable.TableMetadata, error) {
+func (sc *SystemCatalog) GetTableMetadataByID(tx TxContext, tableID int) (*systemtable.TableMetadata, error) {
 	return sc.findTableMetadata(tx, func(tm *systemtable.TableMetadata) bool {
 		return tm.TableID == tableID
 	})
@@ -333,7 +352,7 @@ func (sc *SystemCatalog) GetTableMetadataByID(tx *transaction.TransactionContext
 // Table name matching is case-insensitive.
 // Returns TableMetadata containing table ID, file path, and primary key column,
 // or an error if the table is not found.
-func (sc *SystemCatalog) GetTableMetadataByName(tx *transaction.TransactionContext, tableName string) (*systemtable.TableMetadata, error) {
+func (sc *SystemCatalog) GetTableMetadataByName(tx TxContext, tableName string) (*systemtable.TableMetadata, error) {
 	return sc.findTableMetadata(tx, func(tm *systemtable.TableMetadata) bool {
 		return strings.EqualFold(tm.TableName, tableName)
 	})
@@ -352,7 +371,7 @@ func (sc *SystemCatalog) GetTableMetadataByName(tx *transaction.TransactionConte
 //   - processFunc: Function to apply to each tuple. Return an error to stop iteration early.
 //
 // Returns an error if the iterator cannot be opened or if processFunc returns an error.
-func (sc *SystemCatalog) iterateTable(tableID int, tx *transaction.TransactionContext, processFunc func(*tuple.Tuple) error) error {
+func (sc *SystemCatalog) iterateTable(tableID int, tx TxContext, processFunc func(*tuple.Tuple) error) error {
 	file, err := sc.cache.GetDbFile(tableID)
 	if err != nil {
 		return fmt.Errorf("failed to get table file: %w", err)
@@ -381,7 +400,7 @@ func (sc *SystemCatalog) iterateTable(tableID int, tx *transaction.TransactionCo
 //   - pred: Predicate function that returns true when the desired table is found
 //
 // Returns the matching TableMetadata or an error if not found or if catalog access fails.
-func (sc *SystemCatalog) findTableMetadata(tx *transaction.TransactionContext, pred func(tm *systemtable.TableMetadata) bool) (*systemtable.TableMetadata, error) {
+func (sc *SystemCatalog) findTableMetadata(tx TxContext, pred func(tm *systemtable.TableMetadata) bool) (*systemtable.TableMetadata, error) {
 	var result *systemtable.TableMetadata
 
 	err := sc.iterateTable(sc.SystemTabs.TablesTableID, tx, func(tableTuple *tuple.Tuple) error {
@@ -418,7 +437,7 @@ func (sc *SystemCatalog) findTableMetadata(tx *transaction.TransactionContext, p
 //   - tid: Transaction ID for reading catalog
 //
 // Returns a slice of TableMetadata for all tables, or an error if the catalog cannot be read.
-func (sc *SystemCatalog) GetAllTables(tx *transaction.TransactionContext) ([]*systemtable.TableMetadata, error) {
+func (sc *SystemCatalog) GetAllTables(tx TxContext) ([]*systemtable.TableMetadata, error) {
 	var tables []*systemtable.TableMetadata
 	err := sc.iterateTable(sc.SystemTabs.TablesTableID, tx, func(tup *tuple.Tuple) error {
 		tm, err := systemtable.Tables.Parse(tup)
@@ -432,4 +451,51 @@ func (sc *SystemCatalog) GetAllTables(tx *transaction.TransactionContext) ([]*sy
 		return nil, err
 	}
 	return tables, nil
+}
+
+// IterateTable implements CatalogReader interface by delegating to CatalogIO.
+// Scans all tuples in a table and applies a processing function to each.
+func (sc *SystemCatalog) IterateTable(tableID int, tx TxContext, processFunc func(Tuple) error) error {
+	return sc.io.IterateTable(tableID, tx, processFunc)
+}
+
+// GetTableFile retrieves the DbFile for a table from the cache.
+// Retrieves the DbFile for a table from the cache.
+func (sc *SystemCatalog) GetTableFile(tableID int) (page.DbFile, error) {
+	return sc.cache.GetDbFile(tableID)
+}
+
+// InsertRow implements CatalogWriter interface by delegating to CatalogIO.
+// Inserts a tuple into a table within a transaction.
+func (sc *SystemCatalog) InsertRow(tableID int, tx TxContext, tup Tuple) error {
+	return sc.io.InsertRow(tableID, tx, tup)
+}
+
+// DeleteRow implements CatalogWriter interface by delegating to CatalogIO.
+// Deletes a tuple from a table within a transaction.
+func (sc *SystemCatalog) DeleteRow(tableID int, tx TxContext, tup Tuple) error {
+	return sc.io.DeleteRow(tableID, tx, tup)
+}
+
+//==========================Index Operarions========================================
+
+// GetIndexesByTable retrieves all indexes for a given table from CATALOG_INDEXES.
+func (sc *SystemCatalog) GetIndexesByTable(tx TxContext, tableID int) ([]*systemtable.IndexMetadata, error) {
+	return sc.indexOps.GetIndexesByTable(tx, tableID)
+}
+
+// GetIndexByName retrieves index metadata from CATALOG_INDEXES by index name.
+// Index name matching is case-insensitive.
+func (sc *SystemCatalog) GetIndexByName(tx TxContext, indexName string) (*systemtable.IndexMetadata, error) {
+	return sc.indexOps.GetIndexByName(tx, indexName)
+}
+
+// GetIndexByID retrieves index metadata from CATALOG_INDEXES by index ID.
+func (sc *SystemCatalog) GetIndexByID(tx TxContext, indexID int) (*systemtable.IndexMetadata, error) {
+	return sc.indexOps.GetIndexByID(tx, indexID)
+}
+
+// DeleteIndexFromCatalog removes an index entry from CATALOG_INDEXES.
+func (sc *SystemCatalog) DeleteIndexFromCatalog(tx TxContext, indexID int) error {
+	return sc.indexOps.DeleteIndexFromCatalog(tx, indexID)
 }
