@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"storemy/pkg/catalog"
+	"storemy/pkg/catalog/operations"
 	"storemy/pkg/catalog/schema"
 	"storemy/pkg/catalog/systemtable"
 	"storemy/pkg/catalog/tablecache"
@@ -18,7 +19,7 @@ import (
 )
 
 type TableStatistics = systemtable.TableStatistics
-type AutoIncrementInfo = *catalog.AutoIncrementInfo
+type AutoIncrementInfo = *operations.AutoIncrementInfo
 type TID = *primitives.TransactionID
 type TxContext = *transaction.TransactionContext
 type TableSchema = *schema.Schema
