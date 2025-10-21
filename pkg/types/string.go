@@ -10,7 +10,7 @@ import (
 
 // StringMaxSize defines the default maximum size for string fields in bytes.
 const (
-	StringMaxSize = 128
+	StringMaxSize = 256
 )
 
 // StringField represents a variable-length string field type in the database.
