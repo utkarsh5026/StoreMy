@@ -2,7 +2,6 @@ package cardinality
 
 import (
 	"math"
-	"storemy/pkg/concurrency/transaction"
 	"storemy/pkg/plan"
 )
 
@@ -39,16 +38,13 @@ import (
 //	Join selectivity: 1/1,000 = 0.001
 //	Output: 10,000,000 × 0.001 = 10,000 rows
 //	With filter status='active' (sel=0.3): 10,000 × 0.3 = 3,000 rows
-func (ce *CardinalityEstimator) estimateJoin(
-	tx *transaction.TransactionContext,
-	node *plan.JoinNode,
-) (int64, error) {
-	leftCard, err := ce.EstimatePlanCardinality(tx, node.LeftChild)
+func (ce *CardinalityEstimator) estimateJoin(node *plan.JoinNode) (int64, error) {
+	leftCard, err := ce.EstimatePlanCardinality(node.LeftChild)
 	if err != nil {
 		return 0, err
 	}
 
-	rightCard, err := ce.EstimatePlanCardinality(tx, node.RightChild)
+	rightCard, err := ce.EstimatePlanCardinality(node.RightChild)
 	if err != nil {
 		return 0, err
 	}
@@ -58,7 +54,7 @@ func (ce *CardinalityEstimator) estimateJoin(
 	}
 
 	baseCard := leftCard * rightCard
-	joinSelectivity := ce.estimateJoinSelectivity(tx, node)
+	joinSelectivity := ce.estimateJoinSelectivity(node)
 
 	filterSelectivity := 1.0
 	if len(node.ExtraFilters) > 0 {
@@ -69,7 +65,7 @@ func (ce *CardinalityEstimator) estimateJoin(
 		}
 
 		for i := range node.ExtraFilters {
-			sel := ce.estimatePredicateSelectivity(tx, tableID, &node.ExtraFilters[i])
+			sel := ce.estimatePredicateSelectivity(tableID, &node.ExtraFilters[i])
 			selectivities = append(selectivities, sel)
 		}
 
@@ -97,15 +93,12 @@ func (ce *CardinalityEstimator) estimateJoin(
 // Example:
 //   - Equi-join: orders.customer_id = customers.id → uses NDV-based estimation
 //   - Cross join: SELECT * FROM A, B → selectivity = 1.0
-func (ce *CardinalityEstimator) estimateJoinSelectivity(
-	tx *transaction.TransactionContext,
-	node *plan.JoinNode,
-) float64 {
+func (ce *CardinalityEstimator) estimateJoinSelectivity(node *plan.JoinNode) float64 {
 	if node.LeftColumn == "" || node.RightColumn == "" {
 		return 1.0
 	}
 
-	return ce.estimateEquiJoinSelectivity(tx, node)
+	return ce.estimateEquiJoinSelectivity(node)
 }
 
 // estimateEquiJoinSelectivity estimates selectivity for equi-joins using
@@ -151,12 +144,9 @@ func (ce *CardinalityEstimator) estimateJoinSelectivity(
 //
 //  3. No statistics:
 //     selectivity = DefaultJoinSelectivity = 0.1
-func (ce *CardinalityEstimator) estimateEquiJoinSelectivity(
-	tx *transaction.TransactionContext,
-	node *plan.JoinNode,
-) float64 {
-	leftDistinct := ce.getColumnDistinctCount(tx, node.LeftChild, node.LeftColumn)
-	rightDistinct := ce.getColumnDistinctCount(tx, node.RightChild, node.RightColumn)
+func (ce *CardinalityEstimator) estimateEquiJoinSelectivity(node *plan.JoinNode) float64 {
+	leftDistinct := ce.getColumnDistinctCount(node.LeftChild, node.LeftColumn)
+	rightDistinct := ce.getColumnDistinctCount(node.RightChild, node.RightColumn)
 
 	if leftDistinct == DefaultDistinctCount && rightDistinct == DefaultDistinctCount {
 		return DefaultJoinSelectivity

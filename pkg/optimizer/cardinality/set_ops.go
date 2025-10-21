@@ -2,7 +2,6 @@ package cardinality
 
 import (
 	"math"
-	"storemy/pkg/concurrency/transaction"
 	"storemy/pkg/plan"
 )
 
@@ -39,11 +38,8 @@ import (
 //  3. Edge case:
 //     Child: 5 rows, DISTINCT with NDV=100
 //     Output: min(100, 5) = 5 rows (can't exceed child cardinality)
-func (ce *CardinalityEstimator) estimateDistinct(
-	tx *transaction.TransactionContext,
-	node *plan.DistinctNode,
-) (int64, error) {
-	childCard, err := ce.EstimatePlanCardinality(tx, node.Child)
+func (ce *CardinalityEstimator) estimateDistinct(node *plan.DistinctNode) (int64, error) {
+	childCard, err := ce.EstimatePlanCardinality(node.Child)
 	if err != nil {
 		return 0, err
 	}
@@ -53,7 +49,7 @@ func (ce *CardinalityEstimator) estimateDistinct(
 	}
 
 	if len(node.DistinctExprs) > 0 {
-		distinctCount := ce.estimateGroupByDistinctCount(tx, node.Child, node.DistinctExprs)
+		distinctCount := ce.estimateGroupByDistinctCount(node.Child, node.DistinctExprs)
 		return int64(math.Min(float64(distinctCount), float64(childCard))), nil
 	}
 
@@ -113,16 +109,13 @@ func (ce *CardinalityEstimator) estimateDistinct(
 //     SizeRatio: 100/10,000 = 0.01 → overlapRatio = 0.50
 //     Overlap: 100 × 0.50 = 50 rows
 //     Output: 100 + 10,000 - 50 = 10,050 rows
-func (ce *CardinalityEstimator) estimateUnionCardinality(
-	tx *transaction.TransactionContext,
-	node *plan.UnionNode,
-) (int64, error) {
-	leftCard, err := ce.EstimatePlanCardinality(tx, node.LeftChild)
+func (ce *CardinalityEstimator) estimateUnionCardinality(node *plan.UnionNode) (int64, error) {
+	leftCard, err := ce.EstimatePlanCardinality(node.LeftChild)
 	if err != nil {
 		return 0, err
 	}
 
-	rightCard, err := ce.EstimatePlanCardinality(tx, node.RightChild)
+	rightCard, err := ce.EstimatePlanCardinality(node.RightChild)
 	if err != nil {
 		return 0, err
 	}
@@ -131,8 +124,6 @@ func (ce *CardinalityEstimator) estimateUnionCardinality(
 		return leftCard + rightCard, nil
 	}
 
-	// UNION (with deduplication): estimate overlap and subtract
-	// Use a heuristic approach based on the relative sizes
 	totalCard := leftCard + rightCard
 	if totalCard == 0 {
 		return 0, nil
@@ -160,10 +151,7 @@ func (ce *CardinalityEstimator) estimateUnionCardinality(
 		overlapRatio = 0.15
 	}
 
-	// Estimate overlap based on the smaller set
 	estimatedOverlap := minCard * overlapRatio
-
-	// Result = left + right - overlap
 	result := float64(totalCard) - estimatedOverlap
 
 	// Ensure result is between max(leftCard, rightCard) and leftCard + rightCard
@@ -225,15 +213,14 @@ func (ce *CardinalityEstimator) estimateUnionCardinality(
 //     Left: 1,000 rows, Right: 0 rows
 //     Output: 0 rows (no intersection possible)
 func (ce *CardinalityEstimator) estimateIntersectCardinality(
-	tx *transaction.TransactionContext,
 	node *plan.IntersectNode,
 ) (int64, error) {
-	leftCard, err := ce.EstimatePlanCardinality(tx, node.LeftChild)
+	leftCard, err := ce.EstimatePlanCardinality(node.LeftChild)
 	if err != nil {
 		return 0, err
 	}
 
-	rightCard, err := ce.EstimatePlanCardinality(tx, node.RightChild)
+	rightCard, err := ce.EstimatePlanCardinality(node.RightChild)
 	if err != nil {
 		return 0, err
 	}
@@ -337,15 +324,14 @@ func (ce *CardinalityEstimator) estimateIntersectCardinality(
 //     Left: 100 rows, Right: 10,000 rows (contains all left rows)
 //     Output: 0 rows (all left rows removed)
 func (ce *CardinalityEstimator) estimateExceptCardinality(
-	tx *transaction.TransactionContext,
 	node *plan.ExceptNode,
 ) (int64, error) {
-	leftCard, err := ce.EstimatePlanCardinality(tx, node.LeftChild)
+	leftCard, err := ce.EstimatePlanCardinality(node.LeftChild)
 	if err != nil {
 		return 0, err
 	}
 
-	rightCard, err := ce.EstimatePlanCardinality(tx, node.RightChild)
+	rightCard, err := ce.EstimatePlanCardinality(node.RightChild)
 	if err != nil {
 		return 0, err
 	}

@@ -190,10 +190,7 @@ func (ce *CardinalityEstimator) estimateAggr(node *plan.AggregateNode) (int64, e
 //   - groupByExprs: List of GROUP BY column names
 //
 // Returns estimated distinct group count, capped at 1 billion to prevent overflow.
-func (ce *CardinalityEstimator) estimateGroupByDistinctCount(
-	planNode plan.PlanNode,
-	groupByExprs []string,
-) int64 {
+func (ce *CardinalityEstimator) estimateGroupByDistinctCount(planNode plan.PlanNode, groupByExprs []string) int64 {
 	if len(groupByExprs) == 0 {
 		return 1
 	}
@@ -354,40 +351,50 @@ func findBaseTableID(planNode plan.PlanNode) (tableID int, found bool) {
 // Type lookup order:
 //  1. Column statistics (from MinValue/MaxValue type)
 //  2. Table schema metadata
-//  3. Default to IntType if unavailable
 //
 // Parameters:
 //   - tableID: ID of table containing the column
 //   - columnName: Name of column to look up
 //
-// Returns column type, or IntType as default fallback.
-func (ce *CardinalityEstimator) getColumnType(tableID int, columnName string) types.Type {
+// Returns column type and an error if the catalog is unavailable or the column cannot be found.
+func (ce *CardinalityEstimator) getColumnType(tableID int, columnName string) (types.Type, error) {
 	if ce.catalog == nil {
-		return types.IntType
+		return types.UnknownType, fmt.Errorf("catalog is nil")
 	}
 
 	colStats, err := ce.catalog.GetColumnStatistics(ce.tx, tableID, columnName)
 	if err == nil && colStats != nil {
 		if colStats.MinValue != nil {
-			return colStats.MinValue.Type()
+			return colStats.MinValue.Type(), nil
 		}
 		if colStats.MaxValue != nil {
-			return colStats.MaxValue.Type()
+			return colStats.MaxValue.Type(), nil
 		}
 	}
 
 	tableMetadata, err := ce.catalog.GetTableMetadataByID(ce.tx, tableID)
-	if err == nil && tableMetadata != nil {
-		schema, err := ce.catalog.LoadTableSchema(ce.tx, tableID, tableMetadata.TableName)
-		if err == nil && schema != nil {
-			for _, col := range schema.Columns {
-				if col.Name == columnName {
-					return col.FieldType
-				}
-			}
+	if err != nil {
+		return types.UnknownType, fmt.Errorf("failed to get table metadata for table %d: %w", tableID, err)
+	}
+	if tableMetadata == nil {
+		return types.UnknownType, fmt.Errorf("table metadata not found for table %d", tableID)
+	}
+
+	schema, err := ce.catalog.LoadTableSchema(ce.tx, tableID, tableMetadata.TableName)
+	if err != nil {
+		return types.UnknownType, fmt.Errorf("failed to load table schema for table %d: %w", tableID, err)
+	}
+	if schema == nil {
+		return types.UnknownType, fmt.Errorf("table schema not found for table %d", tableID)
+	}
+
+	for _, col := range schema.Columns {
+		if col.Name == columnName {
+			return col.FieldType, nil
 		}
 	}
-	return types.IntType
+
+	return types.UnknownType, fmt.Errorf("column %s not found in table %d", columnName, tableID)
 }
 
 // parsePredicateValue converts a string value to a types.Field using the column type.
@@ -404,7 +411,11 @@ func (ce *CardinalityEstimator) parsePredicateValue(tableID int, columnName, val
 		return nil
 	}
 
-	columnType := ce.getColumnType(tableID, columnName)
+	columnType, err := ce.getColumnType(tableID, columnName)
+	if err != nil {
+		return nil
+	}
+
 	field, err := types.CreateFieldFromConstant(columnType, valueStr)
 	if err != nil {
 		return nil

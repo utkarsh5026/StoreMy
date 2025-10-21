@@ -10,7 +10,6 @@ import (
 	"storemy/pkg/log"
 	"storemy/pkg/memory"
 	"storemy/pkg/memory/wrappers/table"
-	"storemy/pkg/optimizer/selectivity"
 	"storemy/pkg/plan"
 	"storemy/pkg/primitives"
 	"storemy/pkg/storage/heap"
@@ -366,11 +365,11 @@ func TestFindBaseTableID(t *testing.T) {
 // TestDistinctCardinality tests DISTINCT operation cardinality estimation
 func TestDistinctCardinality(t *testing.T) {
 	// Use nil catalog for basic tests (doesn't require stats)
-	ce := &CardinalityEstimator{
-		catalog:   nil,
-		estimator: nil,
-	}
 	tx := &transaction.TransactionContext{}
+	ce := &CardinalityEstimator{
+		catalog: nil,
+		tx:      tx,
+	}
 
 	t.Run("DISTINCT All Columns", func(t *testing.T) {
 		// Child produces 1000 rows
@@ -384,7 +383,7 @@ func TestDistinctCardinality(t *testing.T) {
 			DistinctExprs: []string{}, // Empty = all columns
 		}
 
-		result, err := ce.estimateDistinct(tx, distinct)
+		result, err := ce.estimateDistinct( distinct)
 		if err != nil {
 			t.Fatalf("estimateDistinct error: %v", err)
 		}
@@ -414,7 +413,7 @@ func TestDistinctCardinality(t *testing.T) {
 				DistinctExprs: []string{},
 			}
 
-			result, err := ce.estimateDistinct(tx, distinct)
+			result, err := ce.estimateDistinct( distinct)
 			if err != nil {
 				t.Fatalf("estimateDistinct error: %v", err)
 			}
@@ -435,7 +434,7 @@ func TestDistinctCardinality(t *testing.T) {
 			DistinctExprs: []string{},
 		}
 
-		result, err := ce.estimateDistinct(tx, distinct)
+		result, err := ce.estimateDistinct( distinct)
 		if err != nil {
 			t.Fatalf("estimateDistinct error: %v", err)
 		}
@@ -454,7 +453,7 @@ func TestDistinctCardinality(t *testing.T) {
 			DistinctExprs: []string{},
 		}
 
-		result, err := ce.estimateDistinct(tx, distinct)
+		result, err := ce.estimateDistinct( distinct)
 		if err != nil {
 			t.Fatalf("estimateDistinct error: %v", err)
 		}
@@ -467,8 +466,11 @@ func TestDistinctCardinality(t *testing.T) {
 
 // TestUnionCardinality tests UNION and UNION ALL cardinality estimation
 func TestUnionCardinality(t *testing.T) {
-	ce := &CardinalityEstimator{}
 	tx := &transaction.TransactionContext{}
+	ce := &CardinalityEstimator{
+		catalog: nil,
+		tx:      tx,
+	}
 
 	t.Run("UNION ALL Simple Addition", func(t *testing.T) {
 		leftChild := &plan.ProjectNode{}
@@ -483,7 +485,7 @@ func TestUnionCardinality(t *testing.T) {
 			UnionAll:   true,
 		}
 
-		result, err := ce.estimateUnionCardinality(tx, union)
+		result, err := ce.estimateUnionCardinality( union)
 		if err != nil {
 			t.Fatalf("estimateUnionCardinality error: %v", err)
 		}
@@ -507,7 +509,7 @@ func TestUnionCardinality(t *testing.T) {
 			UnionAll:   false, // UNION with dedup
 		}
 
-		result, err := ce.estimateUnionCardinality(tx, union)
+		result, err := ce.estimateUnionCardinality( union)
 		if err != nil {
 			t.Fatalf("estimateUnionCardinality error: %v", err)
 		}
@@ -540,7 +542,7 @@ func TestUnionCardinality(t *testing.T) {
 			UnionAll:   false,
 		}
 
-		result, err := ce.estimateUnionCardinality(tx, union)
+		result, err := ce.estimateUnionCardinality( union)
 		if err != nil {
 			t.Fatalf("estimateUnionCardinality error: %v", err)
 		}
@@ -577,7 +579,7 @@ func TestUnionCardinality(t *testing.T) {
 			UnionAll:   false,
 		}
 
-		result, err := ce.estimateUnionCardinality(tx, union)
+		result, err := ce.estimateUnionCardinality( union)
 		if err != nil {
 			t.Fatalf("estimateUnionCardinality error: %v", err)
 		}
@@ -590,10 +592,11 @@ func TestUnionCardinality(t *testing.T) {
 
 // TestAggregateCardinality tests improved aggregate cardinality estimation
 func TestAggregateCardinality(t *testing.T) {
+	tx := &transaction.TransactionContext{}
 	ce := &CardinalityEstimator{
 		catalog: nil,
+		tx:      tx,
 	}
-	tx := &transaction.TransactionContext{}
 
 	t.Run("No GROUP BY Returns 1", func(t *testing.T) {
 		child := &plan.ProjectNode{}
@@ -604,7 +607,7 @@ func TestAggregateCardinality(t *testing.T) {
 			GroupByExprs: []string{}, // No GROUP BY
 		}
 
-		result, err := ce.estimateAggr(tx, agg)
+		result, err := ce.estimateAggr( agg)
 		if err != nil {
 			t.Fatalf("estimateAggr error: %v", err)
 		}
@@ -623,7 +626,7 @@ func TestAggregateCardinality(t *testing.T) {
 			GroupByExprs: []string{"status"},
 		}
 
-		result, err := ce.estimateAggr(tx, agg)
+		result, err := ce.estimateAggr( agg)
 		if err != nil {
 			t.Fatalf("estimateAggr error: %v", err)
 		}
@@ -642,7 +645,7 @@ func TestAggregateCardinality(t *testing.T) {
 			GroupByExprs: []string{"id"},
 		}
 
-		result, err := ce.estimateAggr(tx, agg)
+		result, err := ce.estimateAggr( agg)
 		if err != nil {
 			t.Fatalf("estimateAggr error: %v", err)
 		}
@@ -661,7 +664,7 @@ func TestAggregateCardinality(t *testing.T) {
 			GroupByExprs: []string{"col1", "col2", "col3"},
 		}
 
-		result, err := ce.estimateAggr(tx, agg)
+		result, err := ce.estimateAggr( agg)
 		if err != nil {
 			t.Fatalf("estimateAggr error: %v", err)
 		}
@@ -678,11 +681,11 @@ func TestAggregateCardinality(t *testing.T) {
 
 // TestJoinCardinalityWithContainment tests improved join selectivity
 func TestJoinCardinalityWithContainment(t *testing.T) {
-	ce := &CardinalityEstimator{
-		catalog:   nil,
-		estimator: selectivity.NewSelectivityEstimator(nil),
-	}
 	tx := &transaction.TransactionContext{}
+	ce := &CardinalityEstimator{
+		catalog: nil,
+		tx:      tx,
+	}
 
 	t.Run("Join Bounded By Cartesian Product", func(t *testing.T) {
 		leftChild := &plan.ProjectNode{}
@@ -696,7 +699,7 @@ func TestJoinCardinalityWithContainment(t *testing.T) {
 			RightChild: rightChild,
 		}
 
-		result, err := ce.estimateJoin(tx, join)
+		result, err := ce.estimateJoin( join)
 		if err != nil {
 			t.Fatalf("estimateJoin error: %v", err)
 		}
@@ -720,7 +723,7 @@ func TestJoinCardinalityWithContainment(t *testing.T) {
 			RightChild: rightChild,
 		}
 
-		result, err := ce.estimateJoin(tx, join)
+		result, err := ce.estimateJoin( join)
 		if err != nil {
 			t.Fatalf("estimateJoin error: %v", err)
 		}
@@ -742,7 +745,7 @@ func TestJoinCardinalityWithContainment(t *testing.T) {
 			RightChild: rightChild,
 		}
 
-		result, err := ce.estimateJoin(tx, join)
+		result, err := ce.estimateJoin( join)
 		if err != nil {
 			t.Fatalf("estimateJoin error: %v", err)
 		}
@@ -772,7 +775,7 @@ func TestJoinCardinalityWithContainment(t *testing.T) {
 			},
 		}
 
-		resultWithFilter, err := ce.estimateJoin(tx, join)
+		resultWithFilter, err := ce.estimateJoin( join)
 		if err != nil {
 			t.Fatalf("estimateJoin error: %v", err)
 		}
@@ -782,7 +785,7 @@ func TestJoinCardinalityWithContainment(t *testing.T) {
 			LeftChild:  leftScan,
 			RightChild: rightScan,
 		}
-		resultNoFilter, err := ce.estimateJoin(tx, joinNoFilter)
+		resultNoFilter, err := ce.estimateJoin( joinNoFilter)
 		if err != nil {
 			t.Fatalf("estimateJoin error: %v", err)
 		}
@@ -800,8 +803,11 @@ func TestJoinCardinalityWithContainment(t *testing.T) {
 
 // TestLimitCardinality tests LIMIT/OFFSET cardinality
 func TestLimitCardinality(t *testing.T) {
-	ce := &CardinalityEstimator{}
 	tx := &transaction.TransactionContext{}
+	ce := &CardinalityEstimator{
+		catalog: nil,
+		tx:      tx,
+	}
 
 	t.Run("LIMIT Less Than Input", func(t *testing.T) {
 		child := &plan.ProjectNode{}
@@ -813,7 +819,7 @@ func TestLimitCardinality(t *testing.T) {
 			Offset: 0,
 		}
 
-		result, err := ce.estimateLimit(tx, limit)
+		result, err := ce.estimateLimit( limit)
 		if err != nil {
 			t.Fatalf("estimateLimit error: %v", err)
 		}
@@ -833,7 +839,7 @@ func TestLimitCardinality(t *testing.T) {
 			Offset: 0,
 		}
 
-		result, err := ce.estimateLimit(tx, limit)
+		result, err := ce.estimateLimit( limit)
 		if err != nil {
 			t.Fatalf("estimateLimit error: %v", err)
 		}
@@ -853,7 +859,7 @@ func TestLimitCardinality(t *testing.T) {
 			Offset: 200,
 		}
 
-		result, err := ce.estimateLimit(tx, limit)
+		result, err := ce.estimateLimit( limit)
 		if err != nil {
 			t.Fatalf("estimateLimit error: %v", err)
 		}
@@ -873,7 +879,7 @@ func TestLimitCardinality(t *testing.T) {
 			Offset: 200,
 		}
 
-		result, err := ce.estimateLimit(tx, limit)
+		result, err := ce.estimateLimit( limit)
 		if err != nil {
 			t.Fatalf("estimateLimit error: %v", err)
 		}
@@ -893,7 +899,7 @@ func TestLimitCardinality(t *testing.T) {
 			Offset: 0,
 		}
 
-		result, err := ce.estimateLimit(tx, limit)
+		result, err := ce.estimateLimit( limit)
 		if err != nil {
 			t.Fatalf("estimateLimit error: %v", err)
 		}
@@ -910,16 +916,16 @@ func TestScanCardinalityBounds(t *testing.T) {
 		tcs := setupTestCatalogWithData(t)
 		defer tcs.cleanup()
 
-		ce, err := NewCardinalityEstimator(tcs.catalog)
-		if err != nil {
-			t.Fatalf("Failed to create cardinality estimator: %v", err)
-		}
-
 		tx, err := tcs.txRegistry.Begin()
 		if err != nil {
 			t.Fatalf("Failed to begin transaction: %v", err)
 		}
 		defer tcs.store.CommitTransaction(tx)
+
+		ce, err := NewCardinalityEstimator(tcs.catalog, tx)
+		if err != nil {
+			t.Fatalf("Failed to create cardinality estimator: %v", err)
+		}
 
 		scan := &plan.ScanNode{
 			TableID: 999, // Non-existent table
@@ -933,7 +939,7 @@ func TestScanCardinalityBounds(t *testing.T) {
 			},
 		}
 
-		result, err := ce.estimateScan(tx, scan)
+		result, err := ce.estimateScan( scan)
 		if err != nil {
 			t.Fatalf("estimateScan error: %v", err)
 		}
@@ -955,20 +961,20 @@ func TestGroupByDistinctCountEstimation(t *testing.T) {
 	tcs := setupTestCatalogWithData(t)
 	defer tcs.cleanup()
 
-	ce, err := NewCardinalityEstimator(tcs.catalog)
-	if err != nil {
-		t.Fatalf("Failed to create cardinality estimator: %v", err)
-	}
-
 	tx, err := tcs.txRegistry.Begin()
 	if err != nil {
 		t.Fatalf("Failed to begin transaction: %v", err)
 	}
 	defer tcs.store.CommitTransaction(tx)
 
+	ce, err := NewCardinalityEstimator(tcs.catalog, tx)
+	if err != nil {
+		t.Fatalf("Failed to create cardinality estimator: %v", err)
+	}
+
 	t.Run("Empty GROUP BY Returns 1", func(t *testing.T) {
 		child := &plan.ProjectNode{}
-		result := ce.estimateGroupByDistinctCount(tx, child, []string{})
+		result := ce.estimateGroupByDistinctCount( child, []string{})
 
 		if result != 1 {
 			t.Errorf("Empty GROUP BY: expected 1, got %d", result)
@@ -977,7 +983,7 @@ func TestGroupByDistinctCountEstimation(t *testing.T) {
 
 	t.Run("Multiple Columns Uses Product", func(t *testing.T) {
 		child := &plan.ProjectNode{}
-		result := ce.estimateGroupByDistinctCount(tx, child, []string{"col1", "col2"})
+		result := ce.estimateGroupByDistinctCount( child, []string{"col1", "col2"})
 
 		// Should use default distinct count product
 		expectedMin := int64(DefaultDistinctCount) // At least one column's distinct
@@ -997,7 +1003,7 @@ func TestGroupByDistinctCountEstimation(t *testing.T) {
 			manyColumns[i] = "col" + string(rune(i))
 		}
 
-		result := ce.estimateGroupByDistinctCount(tx, child, manyColumns)
+		result := ce.estimateGroupByDistinctCount( child, manyColumns)
 
 		// Should be capped at reasonable maximum
 		maxAllowed := int64(1e9)
@@ -1013,16 +1019,16 @@ func TestEquiJoinSelectivityContainment(t *testing.T) {
 	tcs := setupTestCatalogWithData(t)
 	defer tcs.cleanup()
 
-	ce, err := NewCardinalityEstimator(tcs.catalog)
-	if err != nil {
-		t.Fatalf("Failed to create cardinality estimator: %v", err)
-	}
-
 	tx, err := tcs.txRegistry.Begin()
 	if err != nil {
 		t.Fatalf("Failed to begin transaction: %v", err)
 	}
 	defer tcs.store.CommitTransaction(tx)
+
+	ce, err := NewCardinalityEstimator(tcs.catalog, tx)
+	if err != nil {
+		t.Fatalf("Failed to create cardinality estimator: %v", err)
+	}
 
 	t.Run("Containment Scenario", func(t *testing.T) {
 		// Small distinct count (100) vs large distinct count (10000)
@@ -1039,7 +1045,7 @@ func TestEquiJoinSelectivityContainment(t *testing.T) {
 
 		// Can't test exact values without mock catalog,
 		// but we can test the logic doesn't panic
-		sel := ce.estimateEquiJoinSelectivity(tx, join)
+		sel := ce.estimateEquiJoinSelectivity( join)
 
 		if sel < 0.0 || sel > 1.0 {
 			t.Errorf("Join selectivity out of range: %.6f", sel)
@@ -1059,7 +1065,7 @@ func TestEquiJoinSelectivityContainment(t *testing.T) {
 			RightColumn: "id",
 		}
 
-		sel := ce.estimateEquiJoinSelectivity(tx, join)
+		sel := ce.estimateEquiJoinSelectivity( join)
 
 		if sel < 0.0 || sel > 1.0 {
 			t.Errorf("Join selectivity out of range: %.6f", sel)
@@ -1083,7 +1089,7 @@ func TestEquiJoinSelectivityContainment(t *testing.T) {
 			RightColumn: "nonexistent",
 		}
 
-		sel := ce.estimateEquiJoinSelectivity(tx, join)
+		sel := ce.estimateEquiJoinSelectivity( join)
 
 		if sel != DefaultJoinSelectivity {
 			t.Errorf("Expected default selectivity %.2f, got %.6f",
@@ -1094,11 +1100,11 @@ func TestEquiJoinSelectivityContainment(t *testing.T) {
 
 // TestCardinalityMathematicalProperties tests mathematical invariants
 func TestCardinalityMathematicalProperties(t *testing.T) {
-	ce := &CardinalityEstimator{
-		catalog:   nil,
-		estimator: selectivity.NewSelectivityEstimator(nil),
-	}
 	tx := &transaction.TransactionContext{}
+	ce := &CardinalityEstimator{
+		catalog: nil,
+		tx:      tx,
+	}
 
 	t.Run("Projection Preserves Cardinality", func(t *testing.T) {
 		child := &plan.ProjectNode{}
@@ -1109,7 +1115,7 @@ func TestCardinalityMathematicalProperties(t *testing.T) {
 			Columns: []string{"col1", "col2"},
 		}
 
-		result, err := ce.estimateProject(tx, project)
+		result, err := ce.estimateProject( project)
 		if err != nil {
 			t.Fatalf("estimateProject error: %v", err)
 		}
@@ -1129,7 +1135,7 @@ func TestCardinalityMathematicalProperties(t *testing.T) {
 			SortKeys: []string{"col1"},
 		}
 
-		result, err := ce.estimateSort(tx, sort)
+		result, err := ce.estimateSort( sort)
 		if err != nil {
 			t.Fatalf("estimateSort error: %v", err)
 		}
@@ -1156,7 +1162,7 @@ func TestCardinalityMathematicalProperties(t *testing.T) {
 			},
 		}
 
-		result, err := ce.estimateFilter(tx, filter)
+		result, err := ce.estimateFilter( filter)
 		if err != nil {
 			t.Fatalf("estimateFilter error: %v", err)
 		}
@@ -1187,7 +1193,7 @@ func TestCardinalityMathematicalProperties(t *testing.T) {
 		}
 
 		for _, node := range testNodes {
-			result, err := ce.EstimatePlanCardinality(tx, node)
+			result, err := ce.EstimatePlanCardinality(node)
 			if err != nil {
 				t.Fatalf("EstimatePlanCardinality error: %v", err)
 			}
@@ -1224,11 +1230,11 @@ func BenchmarkFindBaseTableID(b *testing.B) {
 }
 
 func BenchmarkEstimateJoinCardinality(b *testing.B) {
-	ce := &CardinalityEstimator{
-		catalog:   nil,
-		estimator: selectivity.NewSelectivityEstimator(nil),
-	}
 	tx := &transaction.TransactionContext{}
+	ce := &CardinalityEstimator{
+		catalog: nil,
+		tx:      tx,
+	}
 
 	leftScan := &plan.ScanNode{TableID: 1}
 	leftScan.SetCardinality(10000)
@@ -1245,7 +1251,7 @@ func BenchmarkEstimateJoinCardinality(b *testing.B) {
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		_, _ = ce.estimateJoin(tx, join)
+		_, _ = ce.estimateJoin( join)
 	}
 }
 
@@ -1334,16 +1340,16 @@ func TestScanCardinalityWithActualCatalog(t *testing.T) {
 	t.Logf("City histogram buckets: %d, MCVs: %d", len(cityStats.Histogram.Buckets), len(cityStats.MostCommonVals))
 
 	// Now test cardinality estimation with the actual catalog
-	ce, err := NewCardinalityEstimator(tcs.catalog)
-	if err != nil {
-		t.Fatalf("Failed to create cardinality estimator: %v", err)
-	}
-
 	tx, err := tcs.txRegistry.Begin()
 	if err != nil {
 		t.Fatalf("Failed to begin transaction: %v", err)
 	}
 	defer tcs.store.CommitTransaction(tx)
+
+	ce, err := NewCardinalityEstimator(tcs.catalog, tx)
+	if err != nil {
+		t.Fatalf("Failed to create cardinality estimator: %v", err)
+	}
 
 	t.Run("Scan without predicates", func(t *testing.T) {
 		scan := &plan.ScanNode{
@@ -1351,7 +1357,7 @@ func TestScanCardinalityWithActualCatalog(t *testing.T) {
 			Predicates: []plan.PredicateInfo{},
 		}
 
-		result, err := ce.estimateScan(tx, scan)
+		result, err := ce.estimateScan( scan)
 		if err != nil {
 			t.Fatalf("estimateScan error: %v", err)
 		}
@@ -1376,7 +1382,7 @@ func TestScanCardinalityWithActualCatalog(t *testing.T) {
 			},
 		}
 
-		result, err := ce.estimateScan(tx, scan)
+		result, err := ce.estimateScan( scan)
 		if err != nil {
 			t.Fatalf("estimateScan error: %v", err)
 		}
@@ -1411,7 +1417,7 @@ func TestScanCardinalityWithActualCatalog(t *testing.T) {
 			},
 		}
 
-		result, err := ce.estimateScan(tx, scan)
+		result, err := ce.estimateScan( scan)
 		if err != nil {
 			t.Fatalf("estimateScan error: %v", err)
 		}
@@ -1437,7 +1443,7 @@ func TestScanCardinalityWithActualCatalog(t *testing.T) {
 			},
 		}
 
-		result, err := ce.estimateScan(tx, scan)
+		result, err := ce.estimateScan( scan)
 		if err != nil {
 			t.Fatalf("estimateScan error: %v", err)
 		}
@@ -1501,16 +1507,16 @@ func TestJoinCardinalityWithActualCatalog(t *testing.T) {
 	t.Logf("Orders.user_id: distinct=%d", orderUserIDStats.DistinctCount)
 
 	// Create cardinality estimator
-	ce, err := NewCardinalityEstimator(tcs.catalog)
-	if err != nil {
-		t.Fatalf("Failed to create cardinality estimator: %v", err)
-	}
-
 	tx, err := tcs.txRegistry.Begin()
 	if err != nil {
 		t.Fatalf("Failed to begin transaction: %v", err)
 	}
 	defer tcs.store.CommitTransaction(tx)
+
+	ce, err := NewCardinalityEstimator(tcs.catalog, tx)
+	if err != nil {
+		t.Fatalf("Failed to create cardinality estimator: %v", err)
+	}
 
 	t.Run("Inner join users and orders", func(t *testing.T) {
 		leftScan := &plan.ScanNode{TableID: usersTableID}
@@ -1526,7 +1532,7 @@ func TestJoinCardinalityWithActualCatalog(t *testing.T) {
 			RightColumn: "user_id",
 		}
 
-		result, err := ce.estimateJoin(tx, join)
+		result, err := ce.estimateJoin( join)
 		if err != nil {
 			t.Fatalf("estimateJoin error: %v", err)
 		}
@@ -1564,7 +1570,7 @@ func TestJoinCardinalityWithActualCatalog(t *testing.T) {
 			},
 		}
 
-		resultWithFilter, err := ce.estimateJoin(tx, join)
+		resultWithFilter, err := ce.estimateJoin( join)
 		if err != nil {
 			t.Fatalf("estimateJoin error: %v", err)
 		}
@@ -1576,7 +1582,7 @@ func TestJoinCardinalityWithActualCatalog(t *testing.T) {
 			LeftColumn:  "user_id",
 			RightColumn: "user_id",
 		}
-		resultNoFilter, err := ce.estimateJoin(tx, joinNoFilter)
+		resultNoFilter, err := ce.estimateJoin( joinNoFilter)
 		if err != nil {
 			t.Fatalf("estimateJoin error: %v", err)
 		}
