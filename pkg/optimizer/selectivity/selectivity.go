@@ -65,11 +65,7 @@ func NewSelectivityEstimator(cat *catalog.SystemCatalog, tx *transaction.Transac
 //
 // Returns:
 //   - float64: Estimated selectivity between 0.0 and 1.0
-func (se *SelectivityEstimator) EstimatePredicateSelectivity(
-	pred primitives.Predicate,
-	tableID int,
-	columnName string,
-) float64 {
+func (se *SelectivityEstimator) EstimatePredicateSelectivity(pred primitives.Predicate, tableID int, columnName string) float64 {
 	colStats, err := se.catalog.GetColumnStatistics(se.tx, tableID, columnName)
 	if err != nil || colStats == nil {
 		return se.defaultSel(pred)
@@ -95,12 +91,7 @@ func (se *SelectivityEstimator) EstimatePredicateSelectivity(
 //
 // Returns:
 //   - float64: Estimated selectivity between 0.0 and 1.0
-func (se *SelectivityEstimator) EstimateWithValue(
-	pred primitives.Predicate,
-	tableID int,
-	columnName string,
-	value types.Field,
-) float64 {
+func (se *SelectivityEstimator) EstimateWithValue(pred primitives.Predicate, tableID int, columnName string, value types.Field) float64 {
 	colStats, err := se.catalog.GetColumnStatistics(se.tx, tableID, columnName)
 	if err != nil || colStats == nil {
 		return se.defaultSel(pred)

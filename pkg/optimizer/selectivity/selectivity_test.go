@@ -452,7 +452,7 @@ func TestEstimateEqualityWithoutHistogram(t *testing.T) {
 				DistinctCount:  tt.distinctCount,
 			}
 
-			estimator := &SelectivityEstimator{}
+			estimator := &SelectivityEstimator{tx: nil}
 			sel := estimator.equalityNoHist(colStats)
 
 			if sel < tt.expectedRange[0] || sel > tt.expectedRange[1] {
@@ -486,7 +486,7 @@ func TestMCVIntegrationWithHistogram(t *testing.T) {
 		Histogram:      catalog.NewHistogram(values, 10),
 	}
 
-	estimator := &SelectivityEstimator{}
+	estimator := &SelectivityEstimator{tx: nil}
 
 	tests := []struct {
 		name     string
