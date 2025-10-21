@@ -109,6 +109,7 @@ type SystemCatalog struct {
 	// Domain-specific operation handlers (injected with interfaces)
 	indexOps *operations.IndexOperations
 	colOps   *operations.ColumnOperations
+	statsOps *operations.StatsOperations
 }
 
 // NewSystemCatalog creates a new system catalog instance.
@@ -159,6 +160,7 @@ func (sc *SystemCatalog) Initialize(ctx TxContext, dataDir string) error {
 
 	sc.indexOps = operations.NewIndexOperations(sc.io, sc.SystemTabs.IndexesTableID)
 	sc.colOps = operations.NewColumnOperations(sc.io, sc.SystemTabs.ColumnsTableID)
+	sc.statsOps = operations.NewStatsOperations(sc.io, sc.SystemTabs.StatisticsTableID, sc.cache.GetDbFile, sc.cache)
 	return nil
 }
 
@@ -498,4 +500,15 @@ func (sc *SystemCatalog) GetIndexByID(tx TxContext, indexID int) (*systemtable.I
 // DeleteIndexFromCatalog removes an index entry from CATALOG_INDEXES.
 func (sc *SystemCatalog) DeleteIndexFromCatalog(tx TxContext, indexID int) error {
 	return sc.indexOps.DeleteIndexFromCatalog(tx, indexID)
+}
+
+// UpdateTableStatistics collects and updates statistics for a given table
+// Also updates the cache with fresh statistics
+func (sc *SystemCatalog) UpdateTableStatistics(tx *transaction.TransactionContext, tableID int) error {
+	return sc.statsOps.UpdateTableStatistics(tx, tableID)
+}
+
+// GetTableStatistics retrieves statistics for a given table
+func (sc *SystemCatalog) GetTableStatistics(tx *transaction.TransactionContext, tableID int) (*systemtable.TableStatistics, error) {
+	return sc.statsOps.GetTableStatistics(tx, tableID)
 }

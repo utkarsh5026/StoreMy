@@ -14,12 +14,16 @@ import (
 
 type TableStatistics = systemtable.TableStatistics
 type FileGetter = func(tableID int) (page.DbFile, error)
+type StatsCacheSetter interface {
+	SetCachedStatistics(tableID int, stats *TableStatistics) error
+}
 
 type StatsOperations struct {
 	reader       catalogio.CatalogReader
 	writer       catalogio.CatalogWriter
 	statsTableID int // ID of CATALOG_STATISTICS table
 	fileGetter   FileGetter
+	cache        StatsCacheSetter // Optional cache for storing statistics
 }
 
 // NewStatsOperations creates a new StatsOperations instance.
@@ -28,12 +32,14 @@ type StatsOperations struct {
 //   - access: CatalogAccess implementation (typically SystemCatalog)
 //   - statsTableID: ID of the CATALOG_STATISTICS system table
 //   - fileGetter: Function to retrieve DbFile by table ID
-func NewStatsOperations(access catalogio.CatalogAccess, statsTableID int, fileGetter FileGetter) *StatsOperations {
+//   - cache: Optional cache for storing statistics (can be nil)
+func NewStatsOperations(access catalogio.CatalogAccess, statsTableID int, fileGetter FileGetter, cache StatsCacheSetter) *StatsOperations {
 	return &StatsOperations{
 		reader:       access,
 		writer:       access,
 		statsTableID: statsTableID,
 		fileGetter:   fileGetter,
+		cache:        cache,
 	}
 }
 
@@ -55,6 +61,12 @@ func (so *StatsOperations) UpdateTableStatistics(tx TxContext, tableID int) erro
 			return err
 		}
 	}
+
+	// Update cache with fresh statistics if cache is available
+	if so.cache != nil {
+		_ = so.cache.SetCachedStatistics(tableID, stats)
+	}
+
 	return nil
 }
 
