@@ -3,17 +3,18 @@ package optimizer
 import (
 	"storemy/pkg/concurrency/transaction"
 	"storemy/pkg/optimizer/cardinality"
+	costmodel "storemy/pkg/optimizer/cost_model"
 	"storemy/pkg/plan"
 )
 
 // PredicatePushdownOptimizer applies predicate pushdown optimization
 // Pushes filter predicates as close to the base scans as possible
 type PredicatePushdownOptimizer struct {
-	costModel *CostModel
+	costModel *costmodel.CostModel
 }
 
 // NewPredicatePushdownOptimizer creates a new predicate pushdown optimizer
-func NewPredicatePushdownOptimizer(costModel *CostModel) *PredicatePushdownOptimizer {
+func NewPredicatePushdownOptimizer(costModel *costmodel.CostModel) *PredicatePushdownOptimizer {
 	return &PredicatePushdownOptimizer{
 		costModel: costModel,
 	}
@@ -140,12 +141,12 @@ func (ppo *PredicatePushdownOptimizer) optimizeJoin(
 	}
 
 	// Recompute cost and cardinality
-	card, err := ppo.costModel.cardinalityEstimator.EstimatePlanCardinality(tx, newJoin)
+	card, err := ppo.costModel.GetCardinalityEstimator().EstimatePlanCardinality(newJoin)
 	if err != nil {
 		// On error, use a default cardinality
 		card = cardinality.DefaultTableCardinality
 	}
-	cost := ppo.costModel.EstimatePlanCost(tx, newJoin)
+	cost := ppo.costModel.EstimatePlanCost( newJoin)
 	newJoin.SetCardinality(card)
 	newJoin.SetCost(cost)
 
@@ -192,12 +193,12 @@ func (ppo *PredicatePushdownOptimizer) optimizeScan(
 	}
 
 	// Recompute cost and cardinality with pushed predicates
-	card, err := ppo.costModel.cardinalityEstimator.EstimatePlanCardinality(tx, newScan)
+	card, err := ppo.costModel.GetCardinalityEstimator().EstimatePlanCardinality(newScan)
 	if err != nil {
 		// On error, use a default cardinality
 		card = cardinality.DefaultTableCardinality
 	}
-	cost := ppo.costModel.EstimatePlanCost(tx, newScan)
+	cost := ppo.costModel.EstimatePlanCost( newScan)
 	newScan.SetCardinality(card)
 	newScan.SetCost(cost)
 
@@ -221,12 +222,12 @@ func (ppo *PredicatePushdownOptimizer) optimizeProject(
 	}
 
 	// Recompute cost
-	card, err := ppo.costModel.cardinalityEstimator.EstimatePlanCardinality(tx, newProject)
+	card, err := ppo.costModel.GetCardinalityEstimator().EstimatePlanCardinality(newProject)
 	if err != nil {
 		// On error, use a default cardinality
 		card = cardinality.DefaultTableCardinality
 	}
-	cost := ppo.costModel.EstimatePlanCost(tx, newProject)
+	cost := ppo.costModel.EstimatePlanCost( newProject)
 	newProject.SetCardinality(card)
 	newProject.SetCost(cost)
 

@@ -6,13 +6,14 @@ import (
 	"storemy/pkg/catalog/systemtable"
 	"storemy/pkg/concurrency/transaction"
 	"storemy/pkg/optimizer/cardinality"
+	costmodel "storemy/pkg/optimizer/cost_model"
 	"storemy/pkg/plan"
 )
 
 // QueryOptimizer is the main optimizer that applies various optimization strategies
 type QueryOptimizer struct {
 	catalog            *catalog.SystemCatalog
-	costModel          *CostModel
+	costModel          *costmodel.CostModel
 	predicatePushdown  *PredicatePushdownOptimizer
 	joinOrderOptimizer *JoinOrderOptimizer
 
@@ -44,12 +45,19 @@ func DefaultOptimizerConfig() *OptimizerConfig {
 }
 
 // NewQueryOptimizer creates a new query optimizer
-func NewQueryOptimizer(cat *catalog.SystemCatalog, config *OptimizerConfig) *QueryOptimizer {
+// Note: This initializes the cost model with a nil transaction context.
+// The cost model will work but won't have access to statistics until used with a real transaction.
+func NewQueryOptimizer(cat *catalog.SystemCatalog, config *OptimizerConfig) (*QueryOptimizer, error) {
 	if config == nil {
 		config = DefaultOptimizerConfig()
 	}
 
-	costModel := NewCostModel(cat)
+	// Create cost model with nil transaction (will be provided during optimization)
+	costModel, err := costmodel.NewCostModel(cat, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create cost model: %w", err)
+	}
+
 	predicatePushdown := NewPredicatePushdownOptimizer(costModel)
 	joinOrderOptimizer := NewJoinOrderOptimizer(cat, costModel, config.EnableBushyJoins)
 	joinOrderOptimizer.SetMaxRelations(config.MaxJoinRelations)
@@ -63,7 +71,7 @@ func NewQueryOptimizer(cat *catalog.SystemCatalog, config *OptimizerConfig) *Que
 		enableJoinReordering:    config.EnableJoinReordering,
 		enableBushyJoins:        config.EnableBushyJoins,
 		enableIndexSelection:    config.EnableIndexSelection,
-	}
+	}, nil
 }
 
 // Optimize applies all optimization strategies to a query plan
@@ -308,7 +316,7 @@ func (qo *QueryOptimizer) chooseBestAccessMethod(
 		Predicates:   scan.Predicates,
 		Alias:        scan.Alias,
 	}
-	seqScanCost := qo.costModel.EstimatePlanCost(tx, seqScanNode)
+	seqScanCost := qo.costModel.EstimatePlanCost(seqScanNode)
 
 	bestNode := seqScanNode
 	bestCost := seqScanCost
@@ -339,7 +347,7 @@ func (qo *QueryOptimizer) chooseBestAccessMethod(
 			Predicates:   scan.Predicates,
 			Alias:        scan.Alias,
 		}
-		indexScanCost := qo.costModel.EstimatePlanCost(tx, indexScanNode)
+		indexScanCost := qo.costModel.EstimatePlanCost(indexScanNode)
 
 		if indexScanCost < bestCost {
 			bestCost = indexScanCost
@@ -375,12 +383,12 @@ func (qo *QueryOptimizer) estimateFinalCosts(
 	}
 
 	// Estimate cost for this node
-	card, err := qo.costModel.cardinalityEstimator.EstimatePlanCardinality(tx, planNode)
+	card, err := qo.costModel.GetCardinalityEstimator().EstimatePlanCardinality(planNode)
 	if err != nil {
 		// On error, use a default cardinality
 		card = cardinality.DefaultTableCardinality
 	}
-	cost := qo.costModel.EstimatePlanCost(tx, planNode)
+	cost := qo.costModel.EstimatePlanCost(planNode)
 	planNode.SetCardinality(card)
 	planNode.SetCost(cost)
 }
@@ -415,7 +423,7 @@ func (qo *QueryOptimizer) explainPlanRecursive(node plan.PlanNode, indent int) s
 }
 
 // GetCostModel returns the cost model (for testing/tuning)
-func (qo *QueryOptimizer) GetCostModel() *CostModel {
+func (qo *QueryOptimizer) GetCostModel() *costmodel.CostModel {
 	return qo.costModel
 }
 

@@ -5,6 +5,7 @@ import (
 	"storemy/pkg/catalog"
 	"storemy/pkg/concurrency/transaction"
 	"storemy/pkg/optimizer/cardinality"
+	costmodel "storemy/pkg/optimizer/cost_model"
 	"storemy/pkg/plan"
 )
 
@@ -12,7 +13,7 @@ import (
 // Supports both left-deep and bushy join trees
 type JoinOrderOptimizer struct {
 	catalog   *catalog.SystemCatalog
-	costModel *CostModel
+	costModel *costmodel.CostModel
 	graph     *JoinGraph
 
 	// DP table: maps relation set (bitmask) to best plan
@@ -35,7 +36,7 @@ type JoinPlan struct {
 // NewJoinOrderOptimizer creates a new join order optimizer
 func NewJoinOrderOptimizer(
 	cat *catalog.SystemCatalog,
-	costModel *CostModel,
+	costModel *costmodel.CostModel,
 	enableBushyTrees bool,
 ) *JoinOrderOptimizer {
 	return &JoinOrderOptimizer{
@@ -115,12 +116,12 @@ func (joo *JoinOrderOptimizer) initializeBaseRelations(
 		}
 
 		// Estimate cost and cardinality
-		card, err := joo.costModel.cardinalityEstimator.EstimatePlanCardinality(tx, scanNode)
+		card, err := joo.costModel.GetCardinalityEstimator().EstimatePlanCardinality(scanNode)
 		if err != nil {
 			// On error, use a default cardinality
 			card = cardinality.DefaultTableCardinality
 		}
-		cost := joo.costModel.EstimatePlanCost(tx, scanNode)
+		cost := joo.costModel.EstimatePlanCost( scanNode)
 		scanNode.SetCardinality(card)
 		scanNode.SetCost(cost)
 
@@ -324,12 +325,12 @@ func (joo *JoinOrderOptimizer) createJoinPlan(
 	}
 
 	// Estimate cost and cardinality
-	card, err := joo.costModel.cardinalityEstimator.EstimatePlanCardinality(tx, joinNode)
+	card, err := joo.costModel.GetCardinalityEstimator().EstimatePlanCardinality(joinNode)
 	if err != nil {
 		// On error, use a default cardinality
 		card = cardinality.DefaultTableCardinality
 	}
-	cost := joo.costModel.EstimatePlanCost(tx, joinNode)
+	cost := joo.costModel.EstimatePlanCost( joinNode)
 	joinNode.SetCardinality(card)
 	joinNode.SetCost(cost)
 
