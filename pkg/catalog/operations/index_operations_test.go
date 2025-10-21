@@ -280,3 +280,429 @@ func TestIndexOperations_Isolation(t *testing.T) {
 
 	t.Log("✅ IndexOperations successfully works with interface-only dependency")
 }
+
+// TestGetIndexesByTable_MultipleIndexesSameTable tests retrieving multiple indexes from the same table
+func TestGetIndexesByTable_MultipleIndexesSameTable(t *testing.T) {
+	mock := NewMockCatalogAccess()
+	indexTableID := 100
+
+	// Create 5 indexes for table 10
+	mock.tables[indexTableID] = []*tuple.Tuple{
+		createIndexTuple(1, 10, "idx_col1", "col1", index.BTreeIndex),
+		createIndexTuple(2, 10, "idx_col2", "col2", index.BTreeIndex),
+		createIndexTuple(3, 10, "idx_col3", "col3", index.HashIndex),
+		createIndexTuple(4, 10, "idx_col4", "col4", index.BTreeIndex),
+		createIndexTuple(5, 20, "idx_other", "col1", index.BTreeIndex),
+	}
+
+	ops := NewIndexOperations(mock, indexTableID)
+
+	indexes, err := ops.GetIndexesByTable(nil, 10)
+	if err != nil {
+		t.Fatalf("Failed to get indexes: %v", err)
+	}
+
+	if len(indexes) != 4 {
+		t.Errorf("Expected 4 indexes for table 10, got %d", len(indexes))
+	}
+
+	// Verify all belong to table 10
+	for _, idx := range indexes {
+		if idx.TableID != 10 {
+			t.Errorf("Expected tableID 10, got %d", idx.TableID)
+		}
+	}
+}
+
+// TestGetIndexesByTable_NoIndexes tests retrieving indexes when table has none
+func TestGetIndexesByTable_NoIndexes(t *testing.T) {
+	mock := NewMockCatalogAccess()
+	indexTableID := 100
+
+	mock.tables[indexTableID] = []*tuple.Tuple{
+		createIndexTuple(1, 10, "idx_table10", "col1", index.BTreeIndex),
+		createIndexTuple(2, 20, "idx_table20", "col1", index.BTreeIndex),
+	}
+
+	ops := NewIndexOperations(mock, indexTableID)
+
+	// Query for table 30 which has no indexes
+	indexes, err := ops.GetIndexesByTable(nil, 30)
+	if err != nil {
+		t.Fatalf("Should not error when no indexes found: %v", err)
+	}
+
+	if len(indexes) != 0 {
+		t.Errorf("Expected 0 indexes for table 30, got %d", len(indexes))
+	}
+}
+
+// TestGetIndexByName_CaseInsensitive tests case-insensitive name matching
+func TestGetIndexByName_CaseInsensitive(t *testing.T) {
+	mock := NewMockCatalogAccess()
+	indexTableID := 100
+
+	mock.tables[indexTableID] = []*tuple.Tuple{
+		createIndexTuple(1, 10, "MyIndexName", "col1", index.BTreeIndex),
+	}
+
+	ops := NewIndexOperations(mock, indexTableID)
+
+	testCases := []string{
+		"myindexname",
+		"MYINDEXNAME",
+		"MyIndexName",
+		"mYiNdExNaMe",
+	}
+
+	for _, testName := range testCases {
+		idx, err := ops.GetIndexByName(nil, testName)
+		if err != nil {
+			t.Errorf("Failed to find index with name '%s': %v", testName, err)
+		}
+		if idx.IndexID != 1 {
+			t.Errorf("Expected index ID 1, got %d for name '%s'", idx.IndexID, testName)
+		}
+	}
+}
+
+// TestGetIndexByName_SpecialCharacters tests indexes with special characters
+func TestGetIndexByName_SpecialCharacters(t *testing.T) {
+	mock := NewMockCatalogAccess()
+	indexTableID := 100
+
+	specialNames := []string{
+		"idx_user@email",
+		"idx_product#price",
+		"idx_order$total",
+		"idx_table.column",
+		"idx-with-dashes",
+		"idx_with_underscores",
+	}
+
+	// Create tuples for each special name
+	for i, name := range specialNames {
+		tup := createIndexTuple(i+1, 10, name, "col1", index.BTreeIndex)
+		mock.tables[indexTableID] = append(mock.tables[indexTableID], tup)
+	}
+
+	ops := NewIndexOperations(mock, indexTableID)
+
+	// Test each special name can be found
+	for i, name := range specialNames {
+		idx, err := ops.GetIndexByName(nil, name)
+		if err != nil {
+			t.Errorf("Failed to find index with name '%s': %v", name, err)
+		}
+		if idx.IndexID != i+1 {
+			t.Errorf("Expected index ID %d, got %d for name '%s'", i+1, idx.IndexID, name)
+		}
+	}
+}
+
+// TestGetIndexByID_EdgeCases tests edge cases for ID lookups
+func TestGetIndexByID_EdgeCases(t *testing.T) {
+	mock := NewMockCatalogAccess()
+	indexTableID := 100
+
+	mock.tables[indexTableID] = []*tuple.Tuple{
+		createIndexTuple(1, 10, "idx_1", "col1", index.BTreeIndex),
+		createIndexTuple(999999, 10, "idx_large", "col1", index.BTreeIndex),
+	}
+
+	ops := NewIndexOperations(mock, indexTableID)
+
+	// Test valid IDs
+	testCases := []struct {
+		id          int
+		expectFound bool
+		expectName  string
+	}{
+		{1, true, "idx_1"},
+		{999999, true, "idx_large"},
+		{0, false, ""},
+		{-1, false, ""},
+		{500, false, ""},
+	}
+
+	for _, tc := range testCases {
+		idx, err := ops.GetIndexByID(nil, tc.id)
+		if tc.expectFound {
+			if err != nil {
+				t.Errorf("Expected to find index with ID %d: %v", tc.id, err)
+			}
+			if idx.IndexName != tc.expectName {
+				t.Errorf("Expected index name '%s', got '%s'", tc.expectName, idx.IndexName)
+			}
+		} else {
+			if err == nil {
+				t.Errorf("Expected error for index ID %d, but found index", tc.id)
+			}
+		}
+	}
+}
+
+// TestDeleteIndexFromCatalog_MultipleDeletes tests deleting multiple indexes
+func TestDeleteIndexFromCatalog_MultipleDeletes(t *testing.T) {
+	mock := NewMockCatalogAccess()
+	indexTableID := 100
+
+	// Create 5 indexes
+	for i := 1; i <= 5; i++ {
+		tup := createIndexTuple(i, 10, fmt.Sprintf("idx_%d", i), "col1", index.BTreeIndex)
+		mock.tables[indexTableID] = append(mock.tables[indexTableID], tup)
+	}
+
+	ops := NewIndexOperations(mock, indexTableID)
+
+	// Delete indexes 2, 4, and 5
+	deleteIDs := []int{2, 4, 5}
+	for _, id := range deleteIDs {
+		err := ops.DeleteIndexFromCatalog(nil, id)
+		if err != nil {
+			t.Fatalf("Failed to delete index %d: %v", id, err)
+		}
+	}
+
+	// Verify only 1 and 3 remain
+	remainingIDs := []int{1, 3}
+	for _, id := range remainingIDs {
+		_, err := ops.GetIndexByID(nil, id)
+		if err != nil {
+			t.Errorf("Index %d should still exist: %v", id, err)
+		}
+	}
+
+	// Verify deleted indexes are gone
+	for _, id := range deleteIDs {
+		_, err := ops.GetIndexByID(nil, id)
+		if err == nil {
+			t.Errorf("Index %d should have been deleted", id)
+		}
+	}
+
+	// Verify count
+	if len(mock.tables[indexTableID]) != 2 {
+		t.Errorf("Expected 2 remaining indexes, got %d", len(mock.tables[indexTableID]))
+	}
+}
+
+// TestDeleteIndexFromCatalog_NonExistent tests deleting non-existent index
+func TestDeleteIndexFromCatalog_NonExistent(t *testing.T) {
+	mock := NewMockCatalogAccess()
+	indexTableID := 100
+
+	mock.tables[indexTableID] = []*tuple.Tuple{
+		createIndexTuple(1, 10, "idx_1", "col1", index.BTreeIndex),
+	}
+
+	ops := NewIndexOperations(mock, indexTableID)
+
+	// Try to delete non-existent index - should not error
+	err := ops.DeleteIndexFromCatalog(nil, 999)
+	if err != nil {
+		t.Errorf("Should not error when deleting non-existent index: %v", err)
+	}
+
+	// Original index should still exist
+	_, err = ops.GetIndexByID(nil, 1)
+	if err != nil {
+		t.Errorf("Original index should still exist: %v", err)
+	}
+}
+
+// TestIndexOperations_HashIndexType tests operations with Hash indexes
+func TestIndexOperations_HashIndexType(t *testing.T) {
+	mock := NewMockCatalogAccess()
+	indexTableID := 100
+
+	mock.tables[indexTableID] = []*tuple.Tuple{
+		createIndexTuple(1, 10, "idx_hash", "col1", index.HashIndex),
+		createIndexTuple(2, 10, "idx_btree", "col2", index.BTreeIndex),
+	}
+
+	ops := NewIndexOperations(mock, indexTableID)
+
+	// Get hash index
+	idx, err := ops.GetIndexByName(nil, "idx_hash")
+	if err != nil {
+		t.Fatalf("Failed to get hash index: %v", err)
+	}
+
+	if idx.IndexType != index.HashIndex {
+		t.Errorf("Expected HashIndex type, got %v", idx.IndexType)
+	}
+
+	// Get all indexes for table
+	indexes, err := ops.GetIndexesByTable(nil, 10)
+	if err != nil {
+		t.Fatalf("Failed to get indexes: %v", err)
+	}
+
+	// Count by type
+	btreeCount := 0
+	hashCount := 0
+	for _, idx := range indexes {
+		switch idx.IndexType {
+		case index.BTreeIndex:
+			btreeCount++
+		case index.HashIndex:
+			hashCount++
+		}
+	}
+
+	if btreeCount != 1 || hashCount != 1 {
+		t.Errorf("Expected 1 BTree and 1 Hash index, got %d BTree and %d Hash", btreeCount, hashCount)
+	}
+}
+
+// TestGetIndexesByTable_LargeNumberOfIndexes tests performance with many indexes
+func TestGetIndexesByTable_LargeNumberOfIndexes(t *testing.T) {
+	mock := NewMockCatalogAccess()
+	indexTableID := 100
+
+	// Create 100 indexes for table 10
+	for i := 1; i <= 100; i++ {
+		tup := createIndexTuple(i, 10, fmt.Sprintf("idx_%d", i), fmt.Sprintf("col%d", i), index.BTreeIndex)
+		mock.tables[indexTableID] = append(mock.tables[indexTableID], tup)
+	}
+
+	// Add some indexes for other tables
+	for i := 101; i <= 120; i++ {
+		tup := createIndexTuple(i, 20, fmt.Sprintf("idx_%d", i), "col1", index.BTreeIndex)
+		mock.tables[indexTableID] = append(mock.tables[indexTableID], tup)
+	}
+
+	ops := NewIndexOperations(mock, indexTableID)
+
+	indexes, err := ops.GetIndexesByTable(nil, 10)
+	if err != nil {
+		t.Fatalf("Failed to get indexes: %v", err)
+	}
+
+	if len(indexes) != 100 {
+		t.Errorf("Expected 100 indexes for table 10, got %d", len(indexes))
+	}
+}
+
+// TestIndexOperations_EmptyIndexName tests handling of empty index names
+func TestIndexOperations_EmptyIndexName(t *testing.T) {
+	mock := NewMockCatalogAccess()
+	indexTableID := 100
+
+	mock.tables[indexTableID] = []*tuple.Tuple{
+		createIndexTuple(1, 10, "valid_name", "col1", index.BTreeIndex),
+	}
+
+	ops := NewIndexOperations(mock, indexTableID)
+
+	// Try to find by empty name
+	_, err := ops.GetIndexByName(nil, "")
+	if err == nil {
+		t.Error("Expected error when searching for empty index name")
+	}
+}
+
+// TestDeleteIndexFromCatalog_AllIndexes tests deleting all indexes
+func TestDeleteIndexFromCatalog_AllIndexes(t *testing.T) {
+	mock := NewMockCatalogAccess()
+	indexTableID := 100
+
+	// Create 3 indexes
+	for i := 1; i <= 3; i++ {
+		tup := createIndexTuple(i, 10, fmt.Sprintf("idx_%d", i), "col1", index.BTreeIndex)
+		mock.tables[indexTableID] = append(mock.tables[indexTableID], tup)
+	}
+
+	ops := NewIndexOperations(mock, indexTableID)
+
+	// Delete all indexes
+	for i := 1; i <= 3; i++ {
+		err := ops.DeleteIndexFromCatalog(nil, i)
+		if err != nil {
+			t.Fatalf("Failed to delete index %d: %v", i, err)
+		}
+	}
+
+	// Verify table is empty
+	if len(mock.tables[indexTableID]) != 0 {
+		t.Errorf("Expected empty table after deleting all indexes, got %d tuples", len(mock.tables[indexTableID]))
+	}
+
+	// Verify no indexes can be retrieved
+	indexes, err := ops.GetIndexesByTable(nil, 10)
+	if err != nil {
+		t.Fatalf("Should not error on empty table: %v", err)
+	}
+	if len(indexes) != 0 {
+		t.Errorf("Expected 0 indexes after deletion, got %d", len(indexes))
+	}
+}
+
+// TestIndexOperations_DuplicateIndexNames tests indexes with similar names
+func TestIndexOperations_DuplicateIndexNames(t *testing.T) {
+	mock := NewMockCatalogAccess()
+	indexTableID := 100
+
+	// Create indexes with very similar names (different case)
+	mock.tables[indexTableID] = []*tuple.Tuple{
+		createIndexTuple(1, 10, "idx_user", "col1", index.BTreeIndex),
+		createIndexTuple(2, 20, "idx_user", "col1", index.BTreeIndex), // Same name, different table
+	}
+
+	ops := NewIndexOperations(mock, indexTableID)
+
+	// GetIndexByName should return the first match
+	idx, err := ops.GetIndexByName(nil, "idx_user")
+	if err != nil {
+		t.Fatalf("Failed to get index by name: %v", err)
+	}
+
+	// Should get one of them (the first one found)
+	if idx.IndexID != 1 && idx.IndexID != 2 {
+		t.Errorf("Expected index ID 1 or 2, got %d", idx.IndexID)
+	}
+}
+
+// TestIndexOperations_ColumnNameValidation tests different column name formats
+func TestIndexOperations_ColumnNameValidation(t *testing.T) {
+	mock := NewMockCatalogAccess()
+	indexTableID := 100
+
+	columnNames := []string{
+		"col1",
+		"column_with_underscores",
+		"ColumnWithCamelCase",
+		"col123",
+		"_leading_underscore",
+	}
+
+	for i, colName := range columnNames {
+		tup := createIndexTuple(i+1, 10, fmt.Sprintf("idx_%d", i), colName, index.BTreeIndex)
+		mock.tables[indexTableID] = append(mock.tables[indexTableID], tup)
+	}
+
+	ops := NewIndexOperations(mock, indexTableID)
+
+	// Verify all indexes can be retrieved
+	indexes, err := ops.GetIndexesByTable(nil, 10)
+	if err != nil {
+		t.Fatalf("Failed to get indexes: %v", err)
+	}
+
+	if len(indexes) != len(columnNames) {
+		t.Errorf("Expected %d indexes, got %d", len(columnNames), len(indexes))
+	}
+
+	// Verify column names are preserved
+	foundColumns := make(map[string]bool)
+	for _, idx := range indexes {
+		foundColumns[idx.ColumnName] = true
+	}
+
+	for _, colName := range columnNames {
+		if !foundColumns[colName] {
+			t.Errorf("Column name '%s' not found in results", colName)
+		}
+	}
+}
