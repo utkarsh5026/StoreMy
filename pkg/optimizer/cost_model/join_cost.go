@@ -28,7 +28,6 @@ import (
 // Returns:
 //   - float64: Total estimated cost (input + join + output)
 func (cm *CostModel) estimateJoinCost(node *plan.JoinNode) float64 {
-	// First, estimate costs of child nodes
 	leftCost := cm.EstimatePlanCost(node.LeftChild)
 	rightCost := cm.EstimatePlanCost(node.RightChild)
 	leftCard := node.LeftChild.GetCardinality()
@@ -47,7 +46,6 @@ func (cm *CostModel) estimateJoinCost(node *plan.JoinNode) float64 {
 	case "nested":
 		joinMethodCost = cm.estimateNestedLoopJoinCost(leftCard, rightCard)
 	default:
-		// Default to nested loop (simplest, usually worst)
 		joinMethodCost = cm.estimateNestedLoopJoinCost(leftCard, rightCard)
 	}
 
@@ -81,11 +79,6 @@ func (cm *CostModel) estimateJoinCost(node *plan.JoinNode) float64 {
 //   - In-memory: BuildCost + ProbeCost
 //   - Grace hash: BuildCost + ProbeCost + 2× PartitionI/O
 //
-// Best suited for:
-//   - Large unsorted inputs
-//   - Equijoin predicates
-//   - Sufficient memory for build relation
-//
 // Parameters:
 //   - leftCard: Cardinality of left input relation
 //   - rightCard: Cardinality of right input relation
@@ -93,16 +86,10 @@ func (cm *CostModel) estimateJoinCost(node *plan.JoinNode) float64 {
 // Returns:
 //   - float64: Total hash join cost (CPU + potential I/O)
 func (cm *CostModel) estimateHashJoinCost(leftCard, rightCard int64) float64 {
-	// Choose smaller relation for build phase to minimize memory usage
 	buildSize := float64(min(leftCard, rightCard))
 	probeSize := float64(max(leftCard, rightCard))
 
-	// Build phase: hash computation and hash table insertion
-	// HashBuildCPUFactor accounts for hash function + insertion overhead
 	buildCost := buildSize * cm.CPUCostPerTuple * HashBuildCPUFactor
-
-	// Probe phase: hash lookup and equality comparison
-	// HashProbeCPUFactor accounts for hash function + bucket scan
 	probeCost := probeSize * cm.CPUCostPerTuple * HashProbeCPUFactor
 
 	// Check if hash table fits in memory
@@ -117,7 +104,6 @@ func (cm *CostModel) estimateHashJoinCost(leftCard, rightCard int64) float64 {
 		return buildCost + probeCost + partitionIOCost
 	}
 
-	// Hash table fits in memory - optimal case
 	return buildCost + probeCost
 }
 
@@ -155,8 +141,6 @@ func (cm *CostModel) estimateHashJoinCost(leftCard, rightCard int64) float64 {
 // Returns:
 //   - float64: Total sort-merge join cost (sort + merge)
 func (cm *CostModel) estimateSortMergeJoinCost(leftCard, rightCard int64) float64 {
-	// Sort both inputs on join key
-	// Uses external merge sort if data exceeds SortMemory
 	leftSortCost := cm.estimateSortCostInternal(leftCard)
 	rightSortCost := cm.estimateSortCostInternal(rightCard)
 
@@ -187,16 +171,6 @@ func (cm *CostModel) estimateSortMergeJoinCost(leftCard, rightCard int64) float6
 //   - Inner loop: For each outer tuple, scan all inner tuples
 //   - Total comparisons: leftCard × rightCard
 //
-// When to use:
-//   - One relation is very small (< 10 tuples)
-//   - No suitable index exists
-//   - Join predicate is not equality-based
-//   - Last resort when other methods fail
-//
-// Optimization note:
-//   - Always use smaller relation as outer to minimize iterations
-//   - Consider block nested loop for better cache performance
-//
 // Parameters:
 //   - leftCard: Cardinality of left (outer) input relation
 //   - rightCard: Cardinality of right (inner) input relation
@@ -204,7 +178,6 @@ func (cm *CostModel) estimateSortMergeJoinCost(leftCard, rightCard int64) float6
 // Returns:
 //   - float64: Total nested loop cost (outer + inner loop processing)
 func (cm *CostModel) estimateNestedLoopJoinCost(leftCard, rightCard int64) float64 {
-	// Outer loop cost: process each outer tuple once
 	outerCost := float64(leftCard) * cm.CPUCostPerTuple
 
 	// Inner loop: for each outer tuple, process all inner tuples
@@ -249,15 +222,15 @@ func (cm *CostModel) estimateNestedLoopJoinCost(leftCard, rightCard int64) float
 // Returns:
 //   - float64: Total sort cost (CPU + I/O)
 //   - Returns 0.0 for empty input
-func (cm *CostModel) estimateSortCostInternal(n int64) float64 {
-	if n <= 0 {
+func (cm *CostModel) estimateSortCostInternal(cardinality int64) float64 {
+	if cardinality <= 0 {
 		return 0.0
 	}
 
-	nFloat := float64(n)
+	nFloat := float64(cardinality)
 
 	// Calculate pages needed to store n tuples
-	sortPages := estimatePagesForTuples(n, DefaultTuplesPerPage)
+	sortPages := estimatePagesForTuples(cardinality, DefaultTuplesPerPage)
 
 	if sortPages <= float64(cm.SortMemory) {
 		// In-memory quicksort: O(n log n) comparisons
