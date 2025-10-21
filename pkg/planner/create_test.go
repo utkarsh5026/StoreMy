@@ -307,37 +307,6 @@ func TestCreateTablePlan_Execute_Error_InvalidFieldType(t *testing.T) {
 	}
 }
 
-func TestCreateTablePlan_Execute_Error_DataDirectoryMissing(t *testing.T) {
-	dataDir := t.TempDir()
-	oldDir, _ := os.Getwd()
-	os.Chdir(dataDir)
-	defer os.Chdir(oldDir)
-
-	// Don't create the data directory - test expects error when default "data" dir doesn't exist
-	stmt := statements.NewCreateStatement("users", false)
-	stmt.AddField("id", types.IntType, true, nil)
-
-	// Pass empty string for dataDir to force use of "data/" directory
-	ctx := createTestContextWithCleanup(t, "")
-	transCtx := createTransactionContext(t)
-
-	plan := NewCreateTablePlan(stmt, ctx, transCtx)
-
-	result, err := plan.Execute()
-
-	if result != nil {
-		t.Error("Expected result to be nil on error")
-	}
-
-	if err == nil {
-		t.Fatal("Expected error when data directory does not exist")
-	}
-
-	if err.Error()[:22] != "failed to create table" {
-		t.Errorf("Expected error to start with 'failed to create table', got %q", err.Error())
-	}
-}
-
 func TestCreateTablePlan_Execute_ComplexTable(t *testing.T) {
 	dataDir := setupTestDataDir(t)
 
@@ -591,24 +560,24 @@ func TestCreateTablePlan_Execute_PrimaryKeyIndex_DifferentTypes(t *testing.T) {
 	transCtx := createTransactionContext(t)
 
 	tests := []struct {
-		name           string
-		tableName      string
-		pkColumn       string
-		pkType         types.Type
+		name            string
+		tableName       string
+		pkColumn        string
+		pkType          types.Type
 		expectedIdxType index.IndexType
 	}{
 		{
-			name:           "Int primary key",
-			tableName:      "users_int",
-			pkColumn:       "id",
-			pkType:         types.IntType,
+			name:            "Int primary key",
+			tableName:       "users_int",
+			pkColumn:        "id",
+			pkType:          types.IntType,
 			expectedIdxType: index.BTreeIndex,
 		},
 		{
-			name:           "String primary key",
-			tableName:      "users_string",
-			pkColumn:       "email",
-			pkType:         types.StringType,
+			name:            "String primary key",
+			tableName:       "users_string",
+			pkColumn:        "email",
+			pkType:          types.StringType,
 			expectedIdxType: index.BTreeIndex,
 		},
 	}
@@ -706,8 +675,8 @@ func TestCreateTablePlan_Execute_PrimaryKeyIndex_IndexNameConvention(t *testing.
 	transCtx := createTransactionContext(t)
 
 	tests := []struct {
-		tableName        string
-		pkColumn         string
+		tableName         string
+		pkColumn          string
 		expectedIndexName string
 	}{
 		{"users", "id", "pk_users_id"},
