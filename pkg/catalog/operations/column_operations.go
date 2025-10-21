@@ -166,11 +166,11 @@ func (co *ColumnOperations) IncrementAutoIncrementValue(tx *transaction.Transact
 	newTuple := systemtable.Columns.CreateTuple(*match)
 	newTuple.SetField(6, types.NewIntField(int64(newValue)))
 
-	if err := co.writer.DeleteRow(tableID, tx, oldTuple); err != nil {
+	if err := co.writer.DeleteRow(co.columnsTableID, tx, oldTuple); err != nil {
 		return fmt.Errorf("failed to delete old tuple: %w", err)
 	}
 
-	if err := co.writer.InsertRow(tableID, tx, newTuple); err != nil {
+	if err := co.writer.InsertRow(co.columnsTableID, tx, newTuple); err != nil {
 		return fmt.Errorf("failed to insert updated tuple: %w", err)
 	}
 
