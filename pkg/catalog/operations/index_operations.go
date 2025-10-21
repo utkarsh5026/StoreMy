@@ -48,7 +48,7 @@ func (io *IndexOperations) GetIndexesByTable(tx *transaction.TransactionContext,
 	err := io.reader.IterateTable(io.indexTableID, tx, func(tup *tuple.Tuple) error {
 		im, err := systemtable.Indexes.Parse(tup)
 		if err != nil {
-			return fmt.Errorf("error in parsing the index table")
+			return fmt.Errorf("error parsing index table: %w", err)
 		}
 		if im.TableID == tableID {
 			indexes = append(indexes, im)
