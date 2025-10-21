@@ -34,23 +34,24 @@ const (
 //
 // All estimates require a transaction context for accessing catalog statistics.
 type CardinalityEstimator struct {
-	catalog   *catalog.SystemCatalog
-	estimator *selectivity.SelectivityEstimator
+	catalog *catalog.SystemCatalog
+	tx      *transaction.TransactionContext
 }
 
 // NewCardinalityEstimator creates a new cardinality estimator.
 //
 // Parameters:
 //   - cat: System catalog for accessing table/column statistics
+//   - tx: Transaction context for accessing catalog statistics
 //
 // Returns error if catalog is nil.
-func NewCardinalityEstimator(cat *catalog.SystemCatalog) (*CardinalityEstimator, error) {
+func NewCardinalityEstimator(cat *catalog.SystemCatalog, tx *transaction.TransactionContext) (*CardinalityEstimator, error) {
 	if cat == nil {
 		return nil, fmt.Errorf("cannot have nil CATALOG")
 	}
 	return &CardinalityEstimator{
-		catalog:   cat,
-		estimator: selectivity.NewSelectivityEstimator(cat),
+		catalog: cat,
+		tx:      tx,
 	}, nil
 }
 
@@ -70,14 +71,10 @@ func NewCardinalityEstimator(cat *catalog.SystemCatalog) (*CardinalityEstimator,
 //   - Set operations (Union/Intersect/Except)
 //
 // Parameters:
-//   - tx: Transaction context for catalog access
 //   - planNode: Plan node to estimate
 //
 // Returns estimated cardinality or error if estimation fails.
-func (ce *CardinalityEstimator) EstimatePlanCardinality(
-	tx *transaction.TransactionContext,
-	planNode plan.PlanNode,
-) (int64, error) {
+func (ce *CardinalityEstimator) EstimatePlanCardinality(planNode plan.PlanNode) (int64, error) {
 	if planNode == nil {
 		return 0, nil
 	}
@@ -88,27 +85,27 @@ func (ce *CardinalityEstimator) EstimatePlanCardinality(
 
 	switch node := planNode.(type) {
 	case *plan.ScanNode:
-		return ce.estimateScan(tx, node)
+		return ce.estimateScan(node)
 	case *plan.JoinNode:
-		return ce.estimateJoin(tx, node)
+		return ce.estimateJoin(node)
 	case *plan.FilterNode:
-		return ce.estimateFilter(tx, node)
+		return ce.estimateFilter(node)
 	case *plan.ProjectNode:
-		return ce.estimateProject(tx, node)
+		return ce.estimateProject(node)
 	case *plan.AggregateNode:
-		return ce.estimateAggr(tx, node)
+		return ce.estimateAggr(node)
 	case *plan.SortNode:
-		return ce.estimateSort(tx, node)
+		return ce.estimateSort(node)
 	case *plan.LimitNode:
-		return ce.estimateLimit(tx, node)
+		return ce.estimateLimit(node)
 	case *plan.DistinctNode:
-		return ce.estimateDistinct(tx, node)
+		return ce.estimateDistinct(node)
 	case *plan.IntersectNode:
-		return ce.estimateIntersectCardinality(tx, node)
+		return ce.estimateIntersectCardinality(node)
 	case *plan.ExceptNode:
-		return ce.estimateExceptCardinality(tx, node)
+		return ce.estimateExceptCardinality(node)
 	case *plan.UnionNode:
-		return ce.estimateUnionCardinality(tx, node)
+		return ce.estimateUnionCardinality(node)
 	default:
 		return 0, nil
 	}
@@ -119,23 +116,18 @@ func (ce *CardinalityEstimator) EstimatePlanCardinality(
 // DISTINCT cardinality estimation.
 //
 // Parameters:
-//   - tx: Transaction context for catalog access
 //   - planNode: Root of plan subtree to search
 //   - columnName: Name of column to get distinct count for
 //
 // Returns distinct count from statistics, or DefaultDistinctCount if unavailable.
-func (ce *CardinalityEstimator) getColumnDistinctCount(
-	tx *transaction.TransactionContext,
-	planNode plan.PlanNode,
-	columnName string,
-) int64 {
+func (ce *CardinalityEstimator) getColumnDistinctCount(planNode plan.PlanNode, columnName string) int64 {
 	if planNode == nil {
 		return DefaultDistinctCount
 	}
 
 	if scanNode, ok := planNode.(*plan.ScanNode); ok {
 		if ce.catalog != nil {
-			colStats, err := ce.catalog.GetColumnStatistics(tx, scanNode.TableID, columnName)
+			colStats, err := ce.catalog.GetColumnStatistics(ce.tx, scanNode.TableID, columnName)
 			if err == nil && colStats != nil {
 				return colStats.DistinctCount
 			}
@@ -143,7 +135,7 @@ func (ce *CardinalityEstimator) getColumnDistinctCount(
 	}
 
 	for _, child := range planNode.GetChildren() {
-		distinct := ce.getColumnDistinctCount(tx, child, columnName)
+		distinct := ce.getColumnDistinctCount(child, columnName)
 		if distinct > 0 {
 			return distinct
 		}
@@ -163,15 +155,11 @@ func (ce *CardinalityEstimator) getColumnDistinctCount(
 //   - Result capped at input cardinality (aggregation can't increase rows)
 //
 // Parameters:
-//   - tx: Transaction context for catalog access
 //   - node: Aggregate plan node to estimate
 //
 // Returns estimated output cardinality, minimum 1.
-func (ce *CardinalityEstimator) estimateAggr(
-	tx *transaction.TransactionContext,
-	node *plan.AggregateNode,
-) (int64, error) {
-	childCard, err := ce.EstimatePlanCardinality(tx, node.Child)
+func (ce *CardinalityEstimator) estimateAggr(node *plan.AggregateNode) (int64, error) {
+	childCard, err := ce.EstimatePlanCardinality(node.Child)
 	if err != nil {
 		return 0, err
 	}
@@ -180,7 +168,7 @@ func (ce *CardinalityEstimator) estimateAggr(
 		return 1, nil
 	}
 
-	groupCard := ce.estimateGroupByDistinctCount(tx, node.Child, node.GroupByExprs)
+	groupCard := ce.estimateGroupByDistinctCount(node.Child, node.GroupByExprs)
 	result := int64(math.Min(float64(groupCard), float64(childCard)))
 
 	return int64(math.Max(1.0, float64(result))), nil
@@ -198,13 +186,11 @@ func (ce *CardinalityEstimator) estimateAggr(
 // Real systems use multi-column statistics or sampling for better accuracy.
 //
 // Parameters:
-//   - tx: Transaction context for catalog access
 //   - planNode: Child plan node to analyze
 //   - groupByExprs: List of GROUP BY column names
 //
 // Returns estimated distinct group count, capped at 1 billion to prevent overflow.
 func (ce *CardinalityEstimator) estimateGroupByDistinctCount(
-	tx *transaction.TransactionContext,
 	planNode plan.PlanNode,
 	groupByExprs []string,
 ) int64 {
@@ -214,7 +200,7 @@ func (ce *CardinalityEstimator) estimateGroupByDistinctCount(
 
 	// For single column, try to get actual distinct count
 	if len(groupByExprs) == 1 {
-		distinct := ce.getColumnDistinctCount(tx, planNode, groupByExprs[0])
+		distinct := ce.getColumnDistinctCount(planNode, groupByExprs[0])
 		if distinct > 0 {
 			return distinct
 		}
@@ -227,7 +213,7 @@ func (ce *CardinalityEstimator) estimateGroupByDistinctCount(
 	foundStats := false
 
 	for _, expr := range groupByExprs {
-		distinct := ce.getColumnDistinctCount(tx, planNode, expr)
+		distinct := ce.getColumnDistinctCount(planNode, expr)
 		if distinct > 0 {
 			totalDistinct *= distinct
 			foundStats = true
@@ -307,16 +293,15 @@ func applyCorrelationCorrection(selectivities []float64) float64 {
 //  3. Application to base cardinality
 //
 // Parameters:
-//   - tx: Transaction context for catalog access
 //   - predicates: Array of predicates to evaluate
 //   - tableID: Base table ID for statistics lookup
 //   - baseCard: Input cardinality before filtering
 //
 // Returns estimated output cardinality after applying all predicates.
-func (ce *CardinalityEstimator) calculateSelectivity(tx TxCtx, predicates []plan.PredicateInfo, tableID int, baseCard int64) int64 {
+func (ce *CardinalityEstimator) calculateSelectivity(predicates []plan.PredicateInfo, tableID int, baseCard int64) int64 {
 	selectivities := make([]float64, 0, len(predicates))
 	for i := range predicates {
-		sel := ce.estimatePredicateSelectivity(tx, tableID, &predicates[i])
+		sel := ce.estimatePredicateSelectivity(tableID, &predicates[i])
 		selectivities = append(selectivities, sel)
 	}
 
@@ -359,7 +344,6 @@ func findBaseTableID(planNode plan.PlanNode) (tableID int, found bool) {
 	case *plan.DistinctNode:
 		return findBaseTableID(node.Child)
 	default:
-		// For joins, unions, or other multi-child nodes
 		return 0, false
 	}
 }
@@ -373,21 +357,16 @@ func findBaseTableID(planNode plan.PlanNode) (tableID int, found bool) {
 //  3. Default to IntType if unavailable
 //
 // Parameters:
-//   - tx: Transaction context for catalog access
 //   - tableID: ID of table containing the column
 //   - columnName: Name of column to look up
 //
 // Returns column type, or IntType as default fallback.
-func (ce *CardinalityEstimator) getColumnType(
-	tx *transaction.TransactionContext,
-	tableID int,
-	columnName string,
-) types.Type {
+func (ce *CardinalityEstimator) getColumnType(tableID int, columnName string) types.Type {
 	if ce.catalog == nil {
 		return types.IntType
 	}
 
-	colStats, err := ce.catalog.GetColumnStatistics(tx, tableID, columnName)
+	colStats, err := ce.catalog.GetColumnStatistics(ce.tx, tableID, columnName)
 	if err == nil && colStats != nil {
 		if colStats.MinValue != nil {
 			return colStats.MinValue.Type()
@@ -397,12 +376,10 @@ func (ce *CardinalityEstimator) getColumnType(
 		}
 	}
 
-	// Try to get table metadata and load schema
-	tableMetadata, err := ce.catalog.GetTableMetadataByID(tx, tableID)
+	tableMetadata, err := ce.catalog.GetTableMetadataByID(ce.tx, tableID)
 	if err == nil && tableMetadata != nil {
-		schema, err := ce.catalog.LoadTableSchema(tx, tableID, tableMetadata.TableName)
+		schema, err := ce.catalog.LoadTableSchema(ce.tx, tableID, tableMetadata.TableName)
 		if err == nil && schema != nil {
-			// Search for column in schema
 			for _, col := range schema.Columns {
 				if col.Name == columnName {
 					return col.FieldType
@@ -410,8 +387,6 @@ func (ce *CardinalityEstimator) getColumnType(
 			}
 		}
 	}
-
-	// Default to IntType if we can't determine the type
 	return types.IntType
 }
 
@@ -419,23 +394,17 @@ func (ce *CardinalityEstimator) getColumnType(
 // This enables type-aware selectivity estimation for predicates like "age > 25".
 //
 // Parameters:
-//   - tx: Transaction context for catalog access
 //   - tableID: Table ID for type lookup
 //   - columnName: Column name for type lookup
 //   - valueStr: String representation of value to parse
 //
 // Returns parsed Field with correct type, or nil if parsing fails.
-func (ce *CardinalityEstimator) parsePredicateValue(
-	tx *transaction.TransactionContext,
-	tableID int,
-	columnName,
-	valueStr string,
-) types.Field {
+func (ce *CardinalityEstimator) parsePredicateValue(tableID int, columnName, valueStr string) types.Field {
 	if valueStr == "" {
 		return nil
 	}
 
-	columnType := ce.getColumnType(tx, tableID, columnName)
+	columnType := ce.getColumnType(tableID, columnName)
 	field, err := types.CreateFieldFromConstant(columnType, valueStr)
 	if err != nil {
 		return nil
@@ -457,44 +426,39 @@ func (ce *CardinalityEstimator) parsePredicateValue(
 // falling back to predicate-only estimation if parsing fails.
 //
 // Parameters:
-//   - tx: Transaction context for catalog access
 //   - tableID: Base table ID for statistics
 //   - pred: Predicate information including type, column, operator, and value
 //
 // Returns selectivity estimate between 0.0 and 1.0.
-func (ce *CardinalityEstimator) estimatePredicateSelectivity(
-	tx *transaction.TransactionContext,
-	tableID int,
-	pred *plan.PredicateInfo,
-) float64 {
-	est := ce.estimator
+func (ce *CardinalityEstimator) estimatePredicateSelectivity(tableID int, pred *plan.PredicateInfo) float64 {
+	est := selectivity.NewSelectivityEstimator(ce.catalog, ce.tx)
 	switch pred.Type {
 	case plan.NullCheckPredicate:
-		return est.EstimateNull(tx, tableID, pred.Column, pred.IsNull)
+		return est.EstimateNull(tableID, pred.Column, pred.IsNull)
 
 	case plan.LikePredicate:
 		return est.EstimateLike(pred.Value)
 
 	case plan.InPredicate:
-		return est.EstimateIn(tx, tableID, pred.Column, len(pred.Values))
+		return est.EstimateIn(tableID, pred.Column, len(pred.Values))
 
 	case plan.StandardPredicate:
 		if pred.Value != "" {
-			field := ce.parsePredicateValue(tx, tableID, pred.Column, pred.Value)
+			field := ce.parsePredicateValue(tableID, pred.Column, pred.Value)
 			if field != nil {
 				return est.EstimateWithValue(
-					tx, pred.Predicate, tableID, pred.Column, field,
+					pred.Predicate, tableID, pred.Column, field,
 				)
 			}
 		}
 
 		return est.EstimatePredicateSelectivity(
-			tx, pred.Predicate, tableID, pred.Column,
+			pred.Predicate, tableID, pred.Column,
 		)
 
 	default:
 		return est.EstimatePredicateSelectivity(
-			tx, pred.Predicate, tableID, pred.Column,
+			pred.Predicate, tableID, pred.Column,
 		)
 	}
 }
