@@ -52,23 +52,23 @@ func (m *mockDbFile) Close() error {
 
 // mockStatsCache implements StatsCacheSetter for testing
 type mockStatsCache struct {
-	cached map[int]*TableStatistics
+	cached map[int]*tableStats
 }
 
 func newMockStatsCache() *mockStatsCache {
 	return &mockStatsCache{
-		cached: make(map[int]*TableStatistics),
+		cached: make(map[int]*tableStats),
 	}
 }
 
-func (m *mockStatsCache) SetCachedStatistics(tableID int, stats *TableStatistics) error {
+func (m *mockStatsCache) SetCachedStatistics(tableID int, stats *tableStats) error {
 	m.cached[tableID] = stats
 	return nil
 }
 
 // createStatsTuple creates a statistics tuple for testing
 func createStatsTuple(tableID, cardinality, pageCount, avgTupleSize, distinctValues int) *tuple.Tuple {
-	stats := &systemtable.TableStatistics{
+	stats := &tableStats{
 		TableID:        tableID,
 		Cardinality:    cardinality,
 		PageCount:      pageCount,
@@ -88,8 +88,8 @@ func TestNewStatsOperations(t *testing.T) {
 		t.Fatal("expected StatsOperations, got nil")
 	}
 
-	if so.statsTableID != 1 {
-		t.Errorf("expected statsTableID 1, got %d", so.statsTableID)
+	if so.TableID() != 1 {
+		t.Errorf("expected statsTableID 1, got %d", so.TableID())
 	}
 
 	if so.cache == nil {
@@ -343,7 +343,7 @@ func TestCollectTableStatistics_EmptyTable(t *testing.T) {
 	mock.tuples[100] = []*tuple.Tuple{}
 
 	tx := &transaction.TransactionContext{}
-	stats, err := so.collectTableStatistics(tx, 100)
+	stats, err := so.collectStats(tx, 100)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -383,7 +383,7 @@ func TestCollectTableStatistics_SingleColumn(t *testing.T) {
 	mock.tuples[100] = []*tuple.Tuple{t1, t2, t3}
 
 	tx := &transaction.TransactionContext{}
-	stats, err := so.collectTableStatistics(tx, 100)
+	stats, err := so.collectStats(tx, 100)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -409,7 +409,7 @@ func TestCollectTableStatistics_NoFields(t *testing.T) {
 	mock.tuples[100] = []*tuple.Tuple{}
 
 	tx := &transaction.TransactionContext{}
-	stats, err := so.collectTableStatistics(tx, 100)
+	stats, err := so.collectStats(tx, 100)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -428,7 +428,7 @@ func TestCollectTableStatistics_FileError(t *testing.T) {
 	so := NewStatsOperations(mock, 1, mockFileGetter, nil)
 
 	tx := &transaction.TransactionContext{}
-	stats, err := so.collectTableStatistics(tx, 999) // Invalid table ID
+	stats, err := so.collectStats(tx, 999) // Invalid table ID
 	if err == nil {
 		t.Fatal("expected error, got nil")
 	}
@@ -438,65 +438,11 @@ func TestCollectTableStatistics_FileError(t *testing.T) {
 	}
 }
 
-func TestDeleteTableStats(t *testing.T) {
-	mock := newMockCatalogAccess()
-	so := NewStatsOperations(mock, 1, mockFileGetter, nil)
-
-	// Add statistics for multiple tables
-	mock.tuples[1] = []*tuple.Tuple{
-		createStatsTuple(100, 1000, 5, 50, 100),
-		createStatsTuple(200, 2000, 10, 60, 200),
-		createStatsTuple(100, 1500, 7, 55, 150), // Another entry for table 100
-	}
-
-	tx := &transaction.TransactionContext{}
-	err := so.deleteTableStats(tx, 100)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-
-	// Verify only table 100 statistics were deleted
-	remaining := mock.tuples[1]
-	if len(remaining) != 1 {
-		t.Errorf("expected 1 remaining tuple, got %d", len(remaining))
-	}
-
-	stats, err := systemtable.Stats.Parse(remaining[0])
-	if err != nil {
-		t.Fatalf("failed to parse stats: %v", err)
-	}
-
-	if stats.TableID != 200 {
-		t.Errorf("expected remaining table ID 200, got %d", stats.TableID)
-	}
-}
-
-func TestDeleteTableStats_NotFound(t *testing.T) {
-	mock := newMockCatalogAccess()
-	so := NewStatsOperations(mock, 1, mockFileGetter, nil)
-
-	// Add statistics for different table
-	mock.tuples[1] = []*tuple.Tuple{
-		createStatsTuple(200, 2000, 10, 60, 200),
-	}
-
-	tx := &transaction.TransactionContext{}
-	err := so.deleteTableStats(tx, 100)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-
-	// Should not error, just no-op
-	if len(mock.tuples[1]) != 1 {
-		t.Errorf("expected 1 remaining tuple, got %d", len(mock.tuples[1]))
-	}
-}
-
 func TestInsertNewStatistics(t *testing.T) {
 	mock := newMockCatalogAccess()
 	so := NewStatsOperations(mock, 1, mockFileGetter, nil)
 
-	stats := &systemtable.TableStatistics{
+	stats := &tableStats{
 		TableID:        100,
 		Cardinality:    1000,
 		PageCount:      5,
@@ -506,7 +452,7 @@ func TestInsertNewStatistics(t *testing.T) {
 	}
 
 	tx := &transaction.TransactionContext{}
-	err := so.insertNewStatistics(tx, stats)
+	err := so.insert(tx, stats)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -538,7 +484,7 @@ func TestUpdateExistingStatistics(t *testing.T) {
 		createStatsTuple(100, 1000, 5, 50, 100),
 	}
 
-	newStats := &systemtable.TableStatistics{
+	newStats := &tableStats{
 		TableID:        100,
 		Cardinality:    2000,
 		PageCount:      10,
@@ -548,7 +494,7 @@ func TestUpdateExistingStatistics(t *testing.T) {
 	}
 
 	tx := &transaction.TransactionContext{}
-	err := so.updateExistingStatistics(tx, 100, newStats)
+	err := so.update(tx, 100, newStats)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -581,7 +527,7 @@ func TestIterateTable(t *testing.T) {
 
 	tx := &transaction.TransactionContext{}
 	count := 0
-	err := so.iterateTable(tx, func(t *TableStatistics) error {
+	err := so.Iterate(tx, func(t *tableStats) error {
 		count++
 		if t.TableID < 100 || t.TableID > 300 {
 			return errors.New("invalid table ID")
@@ -608,7 +554,7 @@ func TestIterateTable_ErrorHandling(t *testing.T) {
 
 	tx := &transaction.TransactionContext{}
 	testError := errors.New("test error")
-	err := so.iterateTable(tx, func(t *TableStatistics) error {
+	err := so.Iterate(tx, func(t *tableStats) error {
 		return testError
 	})
 
@@ -617,7 +563,7 @@ func TestIterateTable_ErrorHandling(t *testing.T) {
 	}
 
 	// Error should be wrapped
-	if err.Error() != "failed to process statistics tuple: test error" {
+	if err.Error() != "failed to process entity: test error" {
 		t.Errorf("expected wrapped test error, got %v", err)
 	}
 }
