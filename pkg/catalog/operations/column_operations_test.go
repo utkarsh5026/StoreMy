@@ -360,7 +360,7 @@ func TestNewColumnOperations(t *testing.T) {
 		t.Fatal("expected ColumnOperations, got nil")
 	}
 
-	if co.columnsTableID != 42 {
-		t.Errorf("expected columnsTableID 42, got %d", co.columnsTableID)
+	if co.TableID() != 42 {
+		t.Errorf("expected columnsTableID 42, got %d", co.TableID())
 	}
 }
