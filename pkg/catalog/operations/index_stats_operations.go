@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"storemy/pkg/catalog/catalogio"
 	"storemy/pkg/catalog/systemtable"
+	"storemy/pkg/primitives"
 	"storemy/pkg/storage/index"
 	"storemy/pkg/tuple"
 	"storemy/pkg/types"
@@ -245,44 +246,21 @@ func compareFields(a, b types.Field) int {
 		return 1
 	}
 
-	// Compare based on type
-	switch aVal := a.(type) {
-	case *types.IntField:
-		bVal := b.(*types.IntField)
-		if aVal.Value < bVal.Value {
-			return -1
-		} else if aVal.Value > bVal.Value {
-			return 1
-		}
-		return 0
-	case *types.StringField:
-		bVal := b.(*types.StringField)
-		if aVal.Value < bVal.Value {
-			return -1
-		} else if aVal.Value > bVal.Value {
-			return 1
-		}
-		return 0
-	case *types.Float64Field:
-		bVal := b.(*types.Float64Field)
-		if aVal.Value < bVal.Value {
-			return -1
-		} else if aVal.Value > bVal.Value {
-			return 1
-		}
-		return 0
-	case *types.BoolField:
-		bVal := b.(*types.BoolField)
-		if !aVal.Value && bVal.Value {
-			return -1
-		} else if aVal.Value && !bVal.Value {
-			return 1
-		}
-		return 0
-	default:
-		// Unknown type, consider equal
+	// Use the Field's built-in Compare method
+	// Check equality first
+	eq, err := a.Compare(primitives.Equals, b)
+	if err == nil && eq {
 		return 0
 	}
+
+	// Check less than
+	lt, err := a.Compare(primitives.LessThan, b)
+	if err == nil && lt {
+		return -1
+	}
+
+	// Must be greater than
+	return 1
 }
 
 // UpdateIndexStatistics updates statistics for all indexes on a table
