@@ -208,3 +208,9 @@ func (bo *BaseOperations[T]) Upsert(tx TxContext, predicate func(T) bool, entity
 func (bo *BaseOperations[T]) TableID() int {
 	return bo.tableID
 }
+
+// Reader returns the underlying CatalogReader for accessing other catalog tables.
+// This allows operations to query related catalog tables when needed.
+func (bo *BaseOperations[T]) Reader() catalogio.CatalogReader {
+	return bo.reader
+}

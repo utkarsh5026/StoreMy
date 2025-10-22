@@ -151,11 +151,7 @@ func (iso *IndexStatsOperations) CollectIndexStatistics(
 //
 // A high clustering factor means scanning the index results in sequential
 // table page access (good for range scans), while a low factor means random access.
-func (iso *IndexStatsOperations) calculateClusteringFactor(
-	tx TxContext,
-	tableID int,
-	columnName string,
-) (float64, error) {
+func (iso *IndexStatsOperations) calculateClusteringFactor(tx TxContext, tableID int, columnName string) (float64, error) {
 	tableFile, err := iso.fileGetter(tableID)
 	if err != nil || tableFile == nil {
 		return 0.5, nil
