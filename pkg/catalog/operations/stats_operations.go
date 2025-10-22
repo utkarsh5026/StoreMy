@@ -12,15 +12,27 @@ import (
 
 type tableStats = systemtable.TableStatistics
 type FileGetter = func(tableID int) (page.DbFile, error)
+
+// StatsCacheSetter defines the interface for caching table statistics.
+// Implementations should handle concurrent access safely.
 type StatsCacheSetter interface {
 	SetCachedStatistics(tableID int, stats *tableStats) error
 }
 
+// StatsOperations manages table statistics in the CATALOG_STATISTICS system table.
+// It provides functionality to collect, update, and retrieve table statistics including:
+//   - Cardinality (number of tuples)
+//   - Page count
+//   - Average tuple size
+//   - Distinct values (sampled from first field)
+//
+// Statistics are persisted to disk and optionally cached for performance.
+// All operations respect transaction boundaries through the provided TxContext.
 type StatsOperations struct {
 	*BaseOperations[*tableStats]
-	reader     catalogio.CatalogReader
-	fileGetter FileGetter
-	cache      StatsCacheSetter
+	reader     catalogio.CatalogReader // Reads tuples from catalog tables
+	fileGetter FileGetter              // Retrieves DbFile for a table ID
+	cache      StatsCacheSetter        // Optional statistics cache
 }
 
 // NewStatsOperations creates a new StatsOperations instance.
@@ -30,6 +42,9 @@ type StatsOperations struct {
 //   - statsTableID: ID of the CATALOG_STATISTICS system table
 //   - fileGetter: Function to retrieve DbFile by table ID
 //   - cache: Optional cache for storing statistics (can be nil)
+//
+// Returns:
+//   - *StatsOperations: Configured operations instance
 func NewStatsOperations(access catalogio.CatalogAccess, statsTableID int, fileGetter FileGetter, cache StatsCacheSetter) *StatsOperations {
 	base := NewBaseOperations(
 		access,
@@ -46,8 +61,18 @@ func NewStatsOperations(access catalogio.CatalogAccess, statsTableID int, fileGe
 	}
 }
 
-// UpdateTableStatistics collects and updates statistics for a given table
-// Also updates the cache with fresh statistics
+// UpdateTableStatistics collects fresh statistics for a table and persists them.
+// If statistics already exist, they are updated; otherwise, new statistics are inserted.
+// The cache is automatically updated with fresh statistics if a cache is configured.
+//
+// This operation performs a full table scan to collect accurate statistics.
+//
+// Parameters:
+//   - tx: Transaction context for the operation
+//   - tableID: ID of the table to update statistics for
+//
+// Returns:
+//   - error: nil on success, or error if collection/persistence fails
 func (so *StatsOperations) UpdateTableStatistics(tx TxContext, tableID int) error {
 	stats, err := so.collectStats(tx, tableID)
 	if err != nil {
@@ -71,8 +96,22 @@ func (so *StatsOperations) UpdateTableStatistics(tx TxContext, tableID int) erro
 	return nil
 }
 
-// collectStats scans a table and computes its statistics
-// Collects: Cardinality, PageCount, AvgTupleSize, and DistinctValues (sampled from first field)
+// collectStats performs a full table scan to compute statistics.
+//
+// Collected metrics:
+//   - Cardinality: Total number of tuples
+//   - PageCount: Number of pages in the heap file
+//   - AvgTupleSize: Average tuple size in bytes
+//   - DistinctValues: Number of distinct values in the first field (used for selectivity estimation)
+//   - LastUpdated: Timestamp of collection
+//
+// Parameters:
+//   - tx: Transaction context for reading the table
+//   - tableID: ID of the table to scan
+//
+// Returns:
+//   - *tableStats: Collected statistics
+//   - error: nil on success, or error if scan fails
 func (so *StatsOperations) collectStats(tx TxContext, tableID int) (*tableStats, error) {
 	file, err := so.fileGetter(tableID)
 	if err != nil {
@@ -122,7 +161,16 @@ func (so *StatsOperations) collectStats(tx TxContext, tableID int) (*tableStats,
 	return stats, nil
 }
 
-// GetTableStatistics retrieves statistics for a given table
+// GetTableStatistics retrieves persisted statistics for a table.
+// Does not trigger statistics collection - returns existing data only.
+//
+// Parameters:
+//   - tx: Transaction context for the read
+//   - tableID: ID of the table
+//
+// Returns:
+//   - *tableStats: Statistics record if found
+//   - error: error if statistics not found or read fails
 func (so *StatsOperations) GetTableStatistics(tx TxContext, tableID int) (*tableStats, error) {
 	result, err := so.FindOne(tx, func(t *tableStats) bool {
 		return t.TableID == tableID
@@ -135,7 +183,14 @@ func (so *StatsOperations) GetTableStatistics(tx TxContext, tableID int) (*table
 	return result, nil
 }
 
-// insert creates a new statistics entry
+// insert creates a new statistics entry in the CATALOG_STATISTICS table.
+//
+// Parameters:
+//   - tx: Transaction context
+//   - stats: Statistics to insert
+//
+// Returns:
+//   - error: nil on success, or error if insertion fails
 func (so *StatsOperations) insert(tx TxContext, stats *tableStats) error {
 	if err := so.Insert(tx, stats); err != nil {
 		return fmt.Errorf("failed to insert statistics: %w", err)
@@ -143,7 +198,15 @@ func (so *StatsOperations) insert(tx TxContext, stats *tableStats) error {
 	return nil
 }
 
-// update updates an existing statistics entry
+// update replaces existing statistics for a table.
+//
+// Parameters:
+//   - tx: Transaction context
+//   - tableID: ID of the table to update
+//   - stats: New statistics values
+//
+// Returns:
+//   - error: nil on success, or error if update fails
 func (so *StatsOperations) update(tx TxContext, tableID int, stats *tableStats) error {
 	err := so.Upsert(tx, func(t *tableStats) bool {
 		return t.TableID == tableID
@@ -155,8 +218,15 @@ func (so *StatsOperations) update(tx TxContext, tableID int, stats *tableStats) 
 	return nil
 }
 
-// getHeapPageCount retrieves the number of pages in a heap file
-// Returns 0 for non-heap files, or the actual page count for heap files
+// getHeapPageCount retrieves the number of pages in a heap file.
+// This is used to track storage footprint for cost estimation.
+//
+// Parameters:
+//   - file: DbFile to inspect (must be a HeapFile)
+//
+// Returns:
+//   - int: Number of pages, or 0 for non-heap files
+//   - error: nil on success, or error if page count retrieval fails
 func getHeapPageCount(file page.DbFile) (int, error) {
 	hf, ok := file.(*heap.HeapFile)
 	if !ok {
