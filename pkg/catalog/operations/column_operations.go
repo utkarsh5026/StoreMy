@@ -169,7 +169,7 @@ func (co *ColumnOperations) IncrementAutoIncrementValue(tx TxContext, tableID in
 //   - Fully constructed Schema object with all column metadata
 //   - error if the table has no columns or catalog read fails
 func (co *ColumnOperations) LoadTableSchema(tx TxContext, tableID int, tableName string) (*schema.Schema, error) {
-	columns, err := co.loadColumnMetadata(tx, tableID)
+	columns, err := co.LoadColumnMetadata(tx, tableID)
 	if err != nil {
 		return nil, err
 	}
@@ -195,7 +195,7 @@ func (co *ColumnOperations) LoadTableSchema(tx TxContext, tableID int, tableName
 // Returns:
 //   - Slice of ColumnMetadata for all columns in the table
 //   - error if catalog read or parsing fails
-func (co *ColumnOperations) loadColumnMetadata(tx TxContext, tableID int) ([]colMetadata, error) {
+func (co *ColumnOperations) LoadColumnMetadata(tx TxContext, tableID int) ([]colMetadata, error) {
 	columnPtrs, err := co.FindAll(tx, func(c *colMetadata) bool {
 		return c.TableID == tableID
 	})

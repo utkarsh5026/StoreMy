@@ -335,7 +335,7 @@ func TestLoadColumnMetadata(t *testing.T) {
 	}
 
 	tx := &transaction.TransactionContext{}
-	columns, err := co.loadColumnMetadata(tx, 100)
+	columns, err := co.LoadColumnMetadata(tx, 100)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
