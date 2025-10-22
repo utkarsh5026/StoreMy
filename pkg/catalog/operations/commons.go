@@ -10,6 +10,7 @@ import (
 
 type (
 	TxContext = *transaction.TransactionContext
+	Tuple     = tuple.Tuple
 )
 
 var (
@@ -39,15 +40,14 @@ type BaseOperations[T any] struct {
 //   - parser: Function to parse a tuple into type T
 //   - creator: Function to create a tuple from type T
 func NewBaseOperations[T any](
-	reader catalogio.CatalogReader,
-	writer catalogio.CatalogWriter,
+	access catalogio.CatalogAccess,
 	tableID int,
 	parser func(*tuple.Tuple) (T, error),
 	creator func(T) *tuple.Tuple,
 ) *BaseOperations[T] {
 	return &BaseOperations[T]{
-		reader:  reader,
-		writer:  writer,
+		reader:  access,
+		writer:  access,
 		tableID: tableID,
 		parser:  parser,
 		creator: creator,
