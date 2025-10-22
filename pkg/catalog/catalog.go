@@ -14,15 +14,16 @@ import (
 	"storemy/pkg/memory"
 	"storemy/pkg/memory/wrappers/table"
 	"storemy/pkg/storage/heap"
+	"storemy/pkg/storage/index"
 	"storemy/pkg/storage/page"
 	"storemy/pkg/tuple"
 	"storemy/pkg/types"
-	"strings"
 )
 
 type (
-	TxContext = *transaction.TransactionContext
-	Tuple     = *tuple.Tuple
+	TxContext       = *transaction.TransactionContext
+	Tuple           = *tuple.Tuple
+	IndexStatistics = systemtable.IndexStatisticsRow
 )
 
 // System tables initialized:
@@ -110,6 +111,7 @@ type SystemCatalog struct {
 	indexOps *operations.IndexOperations
 	colOps   *operations.ColumnOperations
 	statsOps *operations.StatsOperations
+	tableOps *operations.TableOperations
 }
 
 // NewSystemCatalog creates a new system catalog instance.
@@ -161,6 +163,7 @@ func (sc *SystemCatalog) Initialize(ctx TxContext, dataDir string) error {
 	sc.indexOps = operations.NewIndexOperations(sc.io, sc.SystemTabs.IndexesTableID)
 	sc.colOps = operations.NewColumnOperations(sc.io, sc.SystemTabs.ColumnsTableID)
 	sc.statsOps = operations.NewStatsOperations(sc.io, sc.SystemTabs.StatisticsTableID, sc.cache.GetDbFile, sc.cache)
+	sc.tableOps = operations.NewTableOperations(sc.io, sc.SystemTabs.TablesTableID)
 	return nil
 }
 
@@ -345,9 +348,7 @@ func (sc *SystemCatalog) DeleteTableFromSysTable(tx TxContext, tableID, sysTable
 // Returns TableMetadata containing table name, file path, and primary key column,
 // or an error if the table is not found.
 func (sc *SystemCatalog) GetTableMetadataByID(tx TxContext, tableID int) (*systemtable.TableMetadata, error) {
-	return sc.findTableMetadata(tx, func(tm *systemtable.TableMetadata) bool {
-		return tm.TableID == tableID
-	})
+	return sc.tableOps.GetTableMetadataByID(tx, tableID)
 }
 
 // GetTableMetadataByName retrieves complete table metadata from CATALOG_TABLES by table name.
@@ -355,9 +356,7 @@ func (sc *SystemCatalog) GetTableMetadataByID(tx TxContext, tableID int) (*syste
 // Returns TableMetadata containing table ID, file path, and primary key column,
 // or an error if the table is not found.
 func (sc *SystemCatalog) GetTableMetadataByName(tx TxContext, tableName string) (*systemtable.TableMetadata, error) {
-	return sc.findTableMetadata(tx, func(tm *systemtable.TableMetadata) bool {
-		return strings.EqualFold(tm.TableName, tableName)
-	})
+	return sc.tableOps.GetTableMetadataByName(tx, tableName)
 }
 
 // iterateTable scans all tuples in a table and applies a processing function to each.
@@ -440,19 +439,7 @@ func (sc *SystemCatalog) findTableMetadata(tx TxContext, pred func(tm *systemtab
 //
 // Returns a slice of TableMetadata for all tables, or an error if the catalog cannot be read.
 func (sc *SystemCatalog) GetAllTables(tx TxContext) ([]*systemtable.TableMetadata, error) {
-	var tables []*systemtable.TableMetadata
-	err := sc.iterateTable(sc.SystemTabs.TablesTableID, tx, func(tup *tuple.Tuple) error {
-		tm, err := systemtable.Tables.Parse(tup)
-		if err != nil {
-			return err
-		}
-		tables = append(tables, tm)
-		return nil
-	})
-	if err != nil {
-		return nil, err
-	}
-	return tables, nil
+	return sc.tableOps.GetAllTables(tx)
 }
 
 // IterateTable implements CatalogReader interface by delegating to CatalogIO.
@@ -511,4 +498,87 @@ func (sc *SystemCatalog) UpdateTableStatistics(tx *transaction.TransactionContex
 // GetTableStatistics retrieves statistics for a given table
 func (sc *SystemCatalog) GetTableStatistics(tx *transaction.TransactionContext, tableID int) (*systemtable.TableStatistics, error) {
 	return sc.statsOps.GetTableStatistics(tx, tableID)
+}
+
+// CollectIndexStatistics collects statistics for a specific index
+// Delegates to IndexStatsOperations for the actual work
+func (sc *SystemCatalog) CollectIndexStatistics(
+	tx *transaction.TransactionContext,
+	indexID, tableID int,
+	indexName string,
+	indexType index.IndexType,
+	columnName string,
+) (*IndexStatistics, error) {
+	indexStatsOps := sc.getIndexStatsOps()
+	return indexStatsOps.CollectIndexStatistics(tx, indexID, tableID, indexName, indexType, columnName)
+}
+
+// UpdateIndexStatistics updates statistics for all indexes on a table
+// Delegates to IndexStatsOperations for the actual work
+func (sc *SystemCatalog) UpdateIndexStatistics(tx *transaction.TransactionContext, tableID int) error {
+	indexStatsOps := sc.getIndexStatsOps()
+	return indexStatsOps.UpdateIndexStatistics(tx, tableID)
+}
+
+// GetIndexStatistics retrieves statistics for a specific index from CATALOG_INDEX_STATISTICS
+// Delegates to IndexStatsOperations for the actual work
+func (sc *SystemCatalog) GetIndexStatistics(
+	tx *transaction.TransactionContext,
+	indexID int,
+) (*IndexStatistics, error) {
+	indexStatsOps := sc.getIndexStatsOps()
+	return indexStatsOps.GetIndexStatistics(tx, indexID)
+}
+
+// getIndexStatsOps returns an IndexStatsOperations instance
+func (sc *SystemCatalog) getIndexStatsOps() *operations.IndexStatsOperations {
+	return operations.NewIndexStatsOperations(
+		sc,
+		sc.SystemTabs.IndexStatisticsTableID,
+		sc.SystemTabs.IndexesTableID,
+		sc.cache.GetDbFile,
+		sc.statsOps,
+	)
+}
+
+// IndexInfo represents basic index metadata (already exists in catalog)
+type IndexInfo struct {
+	IndexID    int
+	TableID    int
+	IndexName  string
+	IndexType  index.IndexType
+	ColumnName string
+	FilePath   string
+}
+
+// GetIndexesForTable retrieves all indexes for a table
+func (sc *SystemCatalog) GetIndexesForTable(tx *transaction.TransactionContext, tableID int) ([]*IndexInfo, error) {
+	var indexes []*IndexInfo
+
+	err := sc.iterateTable(sc.SystemTabs.IndexesTableID, tx, func(t *tuple.Tuple) error {
+		// Parse index metadata properly using systemtable.Indexes
+		im, err := systemtable.Indexes.Parse(t)
+		if err != nil {
+			return err
+		}
+
+		if im.TableID == tableID {
+			// Convert IndexMetadata to IndexInfo
+			indexes = append(indexes, &IndexInfo{
+				IndexID:    im.IndexID,
+				TableID:    im.TableID,
+				IndexName:  im.IndexName,
+				IndexType:  im.IndexType,
+				ColumnName: im.ColumnName,
+				FilePath:   im.FilePath,
+			})
+		}
+		return nil
+	})
+
+	if err != nil {
+		return nil, err
+	}
+
+	return indexes, nil
 }
