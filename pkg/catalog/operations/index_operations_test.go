@@ -64,9 +64,19 @@ func (m *MockCatalogAccess) DeleteRow(
 		return fmt.Errorf("table %d not found", tableID)
 	}
 
-	// Find and remove the tuple
+	// Parse the tuple to delete for comparison
+	toDelete, err := systemtable.Indexes.Parse(tup)
+	if err != nil {
+		return fmt.Errorf("failed to parse tuple to delete: %w", err)
+	}
+
+	// Find and remove the tuple by comparing IndexID
 	for i, t := range tuples {
-		if t == tup {
+		existing, err := systemtable.Indexes.Parse(t)
+		if err != nil {
+			continue
+		}
+		if existing.IndexID == toDelete.IndexID {
 			m.tables[tableID] = append(tuples[:i], tuples[i+1:]...)
 			return nil
 		}
