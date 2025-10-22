@@ -108,10 +108,12 @@ type SystemCatalog struct {
 	SystemTabs SystemTableIDs
 
 	// Domain-specific operation handlers (injected with interfaces)
-	indexOps *operations.IndexOperations
-	colOps   *operations.ColumnOperations
-	statsOps *operations.StatsOperations
-	tableOps *operations.TableOperations
+	indexOps      *operations.IndexOperations
+	colOps        *operations.ColumnOperations
+	statsOps      *operations.StatsOperations
+	tableOps      *operations.TableOperations
+	colStatsOps   *operations.ColStatsOperations
+	indexStatsOps *operations.IndexStatsOperations
 }
 
 // NewSystemCatalog creates a new system catalog instance.
@@ -164,6 +166,8 @@ func (sc *SystemCatalog) Initialize(ctx TxContext, dataDir string) error {
 	sc.colOps = operations.NewColumnOperations(sc.io, sc.SystemTabs.ColumnsTableID)
 	sc.statsOps = operations.NewStatsOperations(sc.io, sc.SystemTabs.StatisticsTableID, sc.cache.GetDbFile, sc.cache)
 	sc.tableOps = operations.NewTableOperations(sc.io, sc.SystemTabs.TablesTableID)
+	sc.colStatsOps = operations.NewColStatsOperations(sc.io, sc.SystemTabs.ColumnStatisticsTableID, sc.cache.GetDbFile, sc.colOps)
+	sc.indexStatsOps = operations.NewIndexStatsOperations(sc.io, sc.SystemTabs.IndexStatisticsTableID, sc.SystemTabs.IndexesTableID, sc.cache.GetDbFile, sc.statsOps)
 	return nil
 }
 
@@ -581,4 +585,38 @@ func (sc *SystemCatalog) GetIndexesForTable(tx *transaction.TransactionContext, 
 	}
 
 	return indexes, nil
+}
+
+// CollectColumnStatistics collects statistics for a specific column in a table.
+// Delegates to ColStatsOperations for the actual collection logic.
+func (sc *SystemCatalog) CollectColumnStatistics(
+	tx *transaction.TransactionContext,
+	tableID int,
+	columnName string,
+	columnIndex int,
+	histogramBuckets int,
+	mcvCount int,
+) (*ColumnStatistics, error) {
+	info, err := sc.colStatsOps.CollectColumnStatistics(tx, columnName, tableID, columnIndex, histogramBuckets, mcvCount)
+	if err != nil {
+		return nil, err
+	}
+	return toColumnStatistics(info), nil
+}
+
+// UpdateColumnStatistics updates statistics for all columns in a table.
+// Delegates to ColStatsOperations which handles column iteration and stats storage.
+func (sc *SystemCatalog) UpdateColumnStatistics(tx *transaction.TransactionContext, tableID int) error {
+	return sc.colStatsOps.UpdateColumnStatistics(tx, tableID)
+}
+
+// GetColumnStatistics retrieves statistics for a specific column from CATALOG_COLUMN_STATISTICS.
+// Note: Histogram and MCV data are not stored in the system table and will be nil.
+// Use CollectColumnStatistics to rebuild these on demand if needed.
+func (sc *SystemCatalog) GetColumnStatistics(
+	tx *transaction.TransactionContext,
+	tableID int,
+	columnName string,
+) (*systemtable.ColumnStatisticsRow, error) {
+	return sc.colStatsOps.GetColumnStatistics(tx, tableID, columnName)
 }
