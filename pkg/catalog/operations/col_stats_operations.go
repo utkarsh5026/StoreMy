@@ -3,6 +3,7 @@ package operations
 import (
 	"fmt"
 	"sort"
+	"storemy/pkg/catalog/catalogio"
 	"storemy/pkg/catalog/systemtable"
 	"storemy/pkg/optimizer/statistics"
 	"storemy/pkg/primitives"
@@ -32,6 +33,37 @@ type ColStatsOperations struct {
 	fileGetter FileGetter
 	BaseOperations[*colStats]
 	colOps *ColumnOperations
+}
+
+// NewColStatsOperations creates a new ColStatsOperations instance.
+//
+// Parameters:
+//   - access: CatalogAccess interface providing both read and write capabilities
+//   - colStatsTableID: The table ID of the CATALOG_COLUMN_STATISTICS system table
+//   - fileGetter: Function to retrieve database files by table ID
+//   - colOps: ColumnOperations instance for accessing column metadata
+//
+// Returns a configured ColStatsOperations ready to collect and manage column statistics.
+func NewColStatsOperations(
+	access catalogio.CatalogAccess,
+	colStatsTableID int,
+	fileGetter FileGetter,
+	colOps *ColumnOperations,
+) *ColStatsOperations {
+	base := NewBaseOperations(
+		access,
+		colStatsTableID,
+		systemtable.ColumnStats.Parse,
+		func(cs *colStats) *Tuple {
+			return systemtable.ColumnStats.CreateTuple(cs)
+		},
+	)
+
+	return &ColStatsOperations{
+		fileGetter:     fileGetter,
+		BaseOperations: *base,
+		colOps:         colOps,
+	}
 }
 
 // CollectColumnStatistics collects statistics for a specific column in a table.
