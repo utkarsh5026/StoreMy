@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"storemy/pkg/catalog"
 	"storemy/pkg/catalog/catalogmanager"
+	"storemy/pkg/catalog/systemtable"
 	"storemy/pkg/concurrency/transaction"
 	"storemy/pkg/log"
 	"storemy/pkg/memory"
@@ -265,7 +266,7 @@ func (db *Database) UpdateTableStatistics(tableName string) error {
 }
 
 // GetTableStatistics returns statistics for a specific table
-func (db *Database) GetTableStatistics(tableName string) (*catalog.TableStatistics, error) {
+func (db *Database) GetTableStatistics(tableName string) (*systemtable.TableStatistics, error) {
 	tx, err := db.txRegistry.Begin()
 	if err != nil {
 		return nil, fmt.Errorf("failed to begin transaction: %v", err)

@@ -4,6 +4,7 @@ import (
 	"math"
 	"storemy/pkg/catalog"
 	"storemy/pkg/concurrency/transaction"
+	"storemy/pkg/optimizer/statistics"
 	"storemy/pkg/primitives"
 	"storemy/pkg/types"
 )
@@ -66,6 +67,10 @@ func NewSelectivityEstimator(cat *catalog.SystemCatalog, tx *transaction.Transac
 // Returns:
 //   - float64: Estimated selectivity between 0.0 and 1.0
 func (se *SelectivityEstimator) EstimatePredicateSelectivity(pred primitives.Predicate, tableID int, columnName string) float64 {
+	if se.catalog == nil {
+		return se.defaultSel(pred)
+	}
+
 	colStats, err := se.catalog.GetColumnStatistics(se.tx, tableID, columnName)
 	if err != nil || colStats == nil {
 		return se.defaultSel(pred)
@@ -92,6 +97,10 @@ func (se *SelectivityEstimator) EstimatePredicateSelectivity(pred primitives.Pre
 // Returns:
 //   - float64: Estimated selectivity between 0.0 and 1.0
 func (se *SelectivityEstimator) EstimateWithValue(pred primitives.Predicate, tableID int, columnName string, value types.Field) float64 {
+	if se.catalog == nil {
+		return se.defaultSel(pred)
+	}
+
 	colStats, err := se.catalog.GetColumnStatistics(se.tx, tableID, columnName)
 	if err != nil || colStats == nil {
 		return se.defaultSel(pred)
@@ -163,7 +172,7 @@ func (se *SelectivityEstimator) fromDistinct(pred primitives.Predicate, stats *c
 //
 // Returns:
 //   - float64: Estimated selectivity between 0.0 and 1.0
-func (se *SelectivityEstimator) estimateHist(h *catalog.Histogram, pred primitives.Predicate, value types.Field) float64 {
+func (se *SelectivityEstimator) estimateHist(h *statistics.Histogram, pred primitives.Predicate, value types.Field) float64 {
 	if h == nil {
 		return DefaultSelectivity
 	}
@@ -184,7 +193,6 @@ func (se *SelectivityEstimator) estimateHist(h *catalog.Histogram, pred primitiv
 // Returns:
 //   - float64: Estimated selectivity between 0.0 and 1.0
 func (se *SelectivityEstimator) EstimateNull(tableID int, columnName string, isNull bool) float64 {
-	colStats, err := se.catalog.GetColumnStatistics(se.tx, tableID, columnName)
 	nullify := func(val float64) float64 {
 		if isNull {
 			return val
@@ -192,6 +200,11 @@ func (se *SelectivityEstimator) EstimateNull(tableID int, columnName string, isN
 		return 1.0 - val
 	}
 
+	if se.catalog == nil {
+		return nullify(NullSelectivity)
+	}
+
+	colStats, err := se.catalog.GetColumnStatistics(se.tx, tableID, columnName)
 	if err != nil || colStats == nil {
 		return nullify(NullSelectivity)
 	}
@@ -303,6 +316,10 @@ func (se *SelectivityEstimator) EstimateLike(pattern string) float64 {
 // Returns:
 //   - float64: Estimated selectivity between 0.0 and 1.0
 func (se *SelectivityEstimator) EstimateIn(tableID int, columnName string, valueCount int) float64 {
+	if se.catalog == nil {
+		return InSelectivity
+	}
+
 	colStats, err := se.catalog.GetColumnStatistics(se.tx, tableID, columnName)
 	if err != nil || colStats == nil || colStats.DistinctCount == 0 {
 		return InSelectivity

@@ -617,6 +617,32 @@ func (sc *SystemCatalog) GetColumnStatistics(
 	tx *transaction.TransactionContext,
 	tableID int,
 	columnName string,
-) (*systemtable.ColumnStatisticsRow, error) {
-	return sc.colStatsOps.GetColumnStatistics(tx, tableID, columnName)
+) (*ColumnStatistics, error) {
+	if sc.colStatsOps == nil {
+		return nil, nil
+	}
+
+	row, err := sc.colStatsOps.GetColumnStatistics(tx, tableID, columnName)
+	if err != nil {
+		return nil, err
+	}
+	if row == nil {
+		return nil, nil
+	}
+
+	// Convert row to ColumnStatistics (Histogram and MCVs will be nil)
+	return &ColumnStatistics{
+		TableID:        row.TableID,
+		ColumnName:     row.ColumnName,
+		ColumnIndex:    row.ColumnIndex,
+		DistinctCount:  row.DistinctCount,
+		NullCount:      row.NullCount,
+		MinValue:       stringToField(row.MinValue),
+		MaxValue:       stringToField(row.MaxValue),
+		AvgWidth:       row.AvgWidth,
+		Histogram:      nil, // Not stored in system table
+		MostCommonVals: nil, // Not stored in system table
+		MCVFreqs:       nil, // Not stored in system table
+		LastUpdated:    row.LastUpdated,
+	}, nil
 }
