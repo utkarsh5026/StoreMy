@@ -10,6 +10,7 @@ __pycache__/
 .Python
 build/
 test_data/
+data/
 develop-eggs/
 dist/
 downloads/
@@ -29,6 +30,8 @@ share/python-wheels/
 *.egg
 MANIFEST
 *.exe
+storemy
+storemy.exe
 
 # PyInstaller
 #  Usually these files are written by a python script from a template
