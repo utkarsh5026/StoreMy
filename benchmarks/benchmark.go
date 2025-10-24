@@ -12,33 +12,48 @@ import (
 	"storemy/pkg/database"
 )
 
+// BenchmarkResult captures detailed performance metrics for a single benchmark test.
+// It includes timing statistics, throughput metrics, and success/error counts.
 type BenchmarkResult struct {
-	QueryType         string        `json:"query_type"`
-	Query             string        `json:"query"`
-	Iterations        int           `json:"iterations"`
-	TotalDuration     time.Duration `json:"total_duration_ns"`
-	AvgDuration       time.Duration `json:"avg_duration_ns"`
-	MinDuration       time.Duration `json:"min_duration_ns"`
-	MaxDuration       time.Duration `json:"max_duration_ns"`
-	MedianDuration    time.Duration `json:"median_duration_ns"`
-	P95Duration       time.Duration `json:"p95_duration_ns"`
-	P99Duration       time.Duration `json:"p99_duration_ns"`
-	QueriesPerSecond  float64       `json:"queries_per_second"`
-	ConcurrentQueries int           `json:"concurrent_queries"`
-	SuccessCount      int           `json:"success_count"`
-	ErrorCount        int           `json:"error_count"`
-	Timestamp         time.Time     `json:"timestamp"`
+	QueryType         string        `json:"query_type"`         // Descriptive name of the benchmark test
+	Query             string        `json:"query"`              // The actual SQL query being benchmarked
+	Iterations        int           `json:"iterations"`         // Total number of times the query was executed
+	TotalDuration     time.Duration `json:"total_duration_ns"`  // Total time taken for all iterations
+	AvgDuration       time.Duration `json:"avg_duration_ns"`    // Average time per query execution
+	MinDuration       time.Duration `json:"min_duration_ns"`    // Fastest query execution time
+	MaxDuration       time.Duration `json:"max_duration_ns"`    // Slowest query execution time
+	MedianDuration    time.Duration `json:"median_duration_ns"` // Median query execution time
+	P95Duration       time.Duration `json:"p95_duration_ns"`    // 95th percentile execution time
+	P99Duration       time.Duration `json:"p99_duration_ns"`    // 99th percentile execution time
+	QueriesPerSecond  float64       `json:"queries_per_second"` // Throughput metric
+	ConcurrentQueries int           `json:"concurrent_queries"` // Number of concurrent goroutines
+	SuccessCount      int           `json:"success_count"`      // Number of successful query executions
+	ErrorCount        int           `json:"error_count"`        // Number of failed query executions
+	Timestamp         time.Time     `json:"timestamp"`          // When this benchmark was executed
 }
 
+// BenchmarkReport aggregates results from all benchmark tests into a single report.
+// It includes metadata about the test environment and timing information.
 type BenchmarkReport struct {
-	StartTime     time.Time         `json:"start_time"`
-	EndTime       time.Time         `json:"end_time"`
-	TotalDuration time.Duration     `json:"total_duration"`
-	Results       []BenchmarkResult `json:"results"`
-	DatabaseName  string            `json:"database_name"`
-	DataDir       string            `json:"data_dir"`
+	StartTime     time.Time         `json:"start_time"`     // When the benchmark suite started
+	EndTime       time.Time         `json:"end_time"`       // When the benchmark suite completed
+	TotalDuration time.Duration     `json:"total_duration"` // Total time for entire benchmark suite
+	Results       []BenchmarkResult `json:"results"`        // Individual benchmark test results
+	DatabaseName  string            `json:"database_name"`  // Name of the database being benchmarked
+	DataDir       string            `json:"data_dir"`       // Directory where database files are stored
 }
 
+// main orchestrates the entire benchmark suite execution.
+// It reads configuration from environment variables, initializes the database,
+// runs all benchmarks, and generates both JSON and HTML reports.
+//
+// Environment variables:
+//   - BENCHMARK_OUTPUT: Directory for output reports (default: ./benchmark-results)
+//   - BENCHMARK_ITERATIONS: Number of iterations per benchmark (default: 1000)
+//   - BENCHMARK_CONCURRENT_QUERIES: Number of concurrent queries (default: 10)
+//   - DB_NAME: Database name (default: benchmark_db)
+//   - DATA_DIR: Data directory path (default: /app/benchmark_data)
+//   - LOG_DIR: Log directory path (default: /app/benchmark_logs)
 func main() {
 	outputDir := os.Getenv("BENCHMARK_OUTPUT")
 	if outputDir == "" {
@@ -142,6 +157,15 @@ func main() {
 	log.Printf("Results saved to: %s", outputDir)
 }
 
+// setupBenchmarkData prepares the database with sample data for benchmarking.
+// It creates necessary tables (users, orders) and inserts 1000 user records
+// and 500 order records if they don't already exist.
+//
+// Parameters:
+//   - db: The database instance to populate with test data
+//
+// Returns:
+//   - error: Any error encountered during setup, or nil on success
 func setupBenchmarkData(db *database.Database) error {
 	log.Println("Setting up benchmark data...")
 
@@ -190,6 +214,24 @@ func setupBenchmarkData(db *database.Database) error {
 	return nil
 }
 
+// runBenchmark executes a single benchmark test with the specified parameters.
+// It runs the query multiple times (iterations) with configurable concurrency,
+// collects timing data, and calculates comprehensive statistics including
+// percentiles and throughput metrics.
+//
+// The function uses goroutines for concurrent execution and a semaphore pattern
+// to limit the number of concurrent queries. All timing data is collected safely
+// using mutex synchronization.
+//
+// Parameters:
+//   - db: The database instance to run queries against
+//   - queryType: Descriptive name for this benchmark (e.g., "Simple SELECT")
+//   - query: The SQL query to benchmark
+//   - iterations: Total number of times to execute the query
+//   - concurrent: Maximum number of concurrent query executions
+//
+// Returns:
+//   - BenchmarkResult: Comprehensive statistics about the benchmark execution
 func runBenchmark(db *database.Database, queryType, query string, iterations, concurrent int) BenchmarkResult {
 	durations := make([]time.Duration, 0, iterations)
 	var mu sync.Mutex
@@ -267,6 +309,12 @@ func runBenchmark(db *database.Database, queryType, query string, iterations, co
 	}
 }
 
+// printBenchmarkResult outputs benchmark statistics to the console in a
+// human-readable format. It displays timing metrics, percentiles, throughput,
+// and success/error counts.
+//
+// Parameters:
+//   - result: The benchmark result to print
 func printBenchmarkResult(result BenchmarkResult) {
 	log.Printf("  Total Duration: %v", result.TotalDuration)
 	log.Printf("  Avg Query Time: %v", result.AvgDuration)
@@ -276,6 +324,12 @@ func printBenchmarkResult(result BenchmarkResult) {
 	log.Printf("  Success/Error: %d / %d", result.SuccessCount, result.ErrorCount)
 }
 
+// saveJSONReport serializes the benchmark report to a JSON file.
+// The JSON format allows for easy parsing and integration with other tools.
+//
+// Parameters:
+//   - report: The complete benchmark report to save
+//   - filename: Path where the JSON file should be written
 func saveJSONReport(report BenchmarkReport, filename string) {
 	data, err := json.MarshalIndent(report, "", "  ")
 	if err != nil {
@@ -291,63 +345,75 @@ func saveJSONReport(report BenchmarkReport, filename string) {
 	log.Printf("JSON report saved: %s", filename)
 }
 
+// saveHTMLReport generates a styled HTML report from the benchmark results.
+// The report uses Tailwind CSS for styling and Cascadia Code font for a
+// modern, professional appearance. It includes:
+//   - Summary information (start/end time, duration, database name)
+//   - Detailed results table with all metrics
+//   - Color-coded success rates and performance indicators
+//
+// Parameters:
+//   - report: The complete benchmark report to convert to HTML
+//   - filename: Path where the HTML file should be written
 func saveHTMLReport(report BenchmarkReport, filename string) {
 	html := fmt.Sprintf(`<!DOCTYPE html>
 <html>
 <head>
+	<meta charset="UTF-8">
+	<meta name="viewport" content="width=device-width, initial-scale=1.0">
 	<title>StoreMy Benchmark Report - %s</title>
+	<script src="https://cdn.tailwindcss.com"></script>
+	<link rel="preconnect" href="https://fonts.googleapis.com">
+	<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+	<link href="https://fonts.googleapis.com/css2?family=Cascadia+Code:wght@400;600;700&display=swap" rel="stylesheet">
 	<style>
-		body { font-family: Arial, sans-serif; margin: 20px; background: #f5f5f5; }
-		.container { max-width: 1200px; margin: 0 auto; background: white; padding: 30px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
-		h1 { color: #333; border-bottom: 3px solid #4CAF50; padding-bottom: 10px; }
-		h2 { color: #555; margin-top: 30px; }
-		.summary { background: #e8f5e9; padding: 15px; border-radius: 5px; margin: 20px 0; }
-		table { width: 100%%; border-collapse: collapse; margin: 20px 0; }
-		th { background: #4CAF50; color: white; padding: 12px; text-align: left; }
-		td { padding: 10px; border-bottom: 1px solid #ddd; }
-		tr:hover { background: #f5f5f5; }
-		.metric { display: inline-block; margin: 10px 20px 10px 0; }
-		.metric-label { font-weight: bold; color: #666; }
-		.metric-value { color: #4CAF50; font-size: 1.2em; }
-		.query-cell { font-family: monospace; font-size: 0.9em; max-width: 400px; }
+		body {
+			font-family: 'Cascadia Code', monospace;
+		}
 	</style>
 </head>
-<body>
-	<div class="container">
-		<h1>StoreMy Benchmark Report</h1>
+<body class="bg-gray-100 p-6">
+	<div class="max-w-7xl mx-auto bg-white rounded-lg shadow-lg p-8">
+		<h1 class="text-4xl font-bold text-gray-800 border-b-4 border-green-500 pb-3 mb-6">
+			StoreMy Benchmark Report
+		</h1>
 
-		<div class="summary">
-			<div class="metric">
-				<span class="metric-label">Start Time:</span>
-				<span class="metric-value">%s</span>
+		<div class="bg-green-50 rounded-lg p-6 mb-8 grid grid-cols-2 md:grid-cols-4 gap-4">
+			<div class="space-y-1">
+				<div class="text-sm font-semibold text-gray-600">Start Time</div>
+				<div class="text-lg text-green-600 font-bold">%s</div>
 			</div>
-			<div class="metric">
-				<span class="metric-label">End Time:</span>
-				<span class="metric-value">%s</span>
+			<div class="space-y-1">
+				<div class="text-sm font-semibold text-gray-600">End Time</div>
+				<div class="text-lg text-green-600 font-bold">%s</div>
 			</div>
-			<div class="metric">
-				<span class="metric-label">Total Duration:</span>
-				<span class="metric-value">%v</span>
+			<div class="space-y-1">
+				<div class="text-sm font-semibold text-gray-600">Total Duration</div>
+				<div class="text-lg text-green-600 font-bold">%v</div>
 			</div>
-			<div class="metric">
-				<span class="metric-label">Database:</span>
-				<span class="metric-value">%s</span>
+			<div class="space-y-1">
+				<div class="text-sm font-semibold text-gray-600">Database</div>
+				<div class="text-lg text-green-600 font-bold">%s</div>
 			</div>
 		</div>
 
-		<h2>Benchmark Results</h2>
-		<table>
-			<tr>
-				<th>Query Type</th>
-				<th>Query</th>
-				<th>Iterations</th>
-				<th>Concurrent</th>
-				<th>Avg Time</th>
-				<th>Min/Max</th>
-				<th>P95</th>
-				<th>QPS</th>
-				<th>Success Rate</th>
-			</tr>
+		<h2 class="text-2xl font-bold text-gray-700 mt-8 mb-4">Benchmark Results</h2>
+		<div class="overflow-x-auto">
+			<table class="min-w-full border-collapse">
+				<thead>
+					<tr class="bg-green-500 text-white">
+						<th class="px-4 py-3 text-left font-bold">Query Type</th>
+						<th class="px-4 py-3 text-left font-bold">Query</th>
+						<th class="px-4 py-3 text-left font-bold">Iterations</th>
+						<th class="px-4 py-3 text-left font-bold">Concurrent</th>
+						<th class="px-4 py-3 text-left font-bold">Avg Time</th>
+						<th class="px-4 py-3 text-left font-bold">Min/Max</th>
+						<th class="px-4 py-3 text-left font-bold">P95</th>
+						<th class="px-4 py-3 text-left font-bold">QPS</th>
+						<th class="px-4 py-3 text-left font-bold">Success Rate</th>
+					</tr>
+				</thead>
+				<tbody class="divide-y divide-gray-200">
 `,
 		report.StartTime.Format("2006-01-02 15:04:05"),
 		report.StartTime.Format("2006-01-02 15:04:05"),
@@ -359,17 +425,17 @@ func saveHTMLReport(report BenchmarkReport, filename string) {
 	for _, result := range report.Results {
 		successRate := float64(result.SuccessCount) / float64(result.Iterations) * 100
 		html += fmt.Sprintf(`
-			<tr>
-				<td><strong>%s</strong></td>
-				<td class="query-cell">%s</td>
-				<td>%d</td>
-				<td>%d</td>
-				<td>%v</td>
-				<td>%v / %v</td>
-				<td>%v</td>
-				<td>%.2f</td>
-				<td>%.1f%%</td>
-			</tr>
+					<tr class="hover:bg-gray-50 transition-colors">
+						<td class="px-4 py-3 font-bold text-gray-800">%s</td>
+						<td class="px-4 py-3 text-sm text-gray-700 max-w-md truncate">%s</td>
+						<td class="px-4 py-3 text-gray-700">%d</td>
+						<td class="px-4 py-3 text-gray-700">%d</td>
+						<td class="px-4 py-3 text-gray-700">%v</td>
+						<td class="px-4 py-3 text-gray-700">%v / %v</td>
+						<td class="px-4 py-3 text-gray-700">%v</td>
+						<td class="px-4 py-3 text-green-600 font-semibold">%.2f</td>
+						<td class="px-4 py-3 text-green-600 font-semibold">%.1f%%</td>
+					</tr>
 `,
 			result.QueryType,
 			result.Query,
@@ -385,7 +451,9 @@ func saveHTMLReport(report BenchmarkReport, filename string) {
 	}
 
 	html += `
-		</table>
+				</tbody>
+			</table>
+		</div>
 	</div>
 </body>
 </html>
