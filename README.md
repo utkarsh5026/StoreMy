@@ -25,7 +25,6 @@ docker-compose up storemy-demo
 
 This starts the database with pre-loaded demo data. Press **Ctrl+E** to execute queries, **Ctrl+H** for help.
 
-**For detailed Docker instructions, see [DOCKER_README.md](DOCKER_README.md) or [RECRUITER_QUICKSTART.md](RECRUITER_QUICKSTART.md)**
 
 ### Other Quick Start Options
 
