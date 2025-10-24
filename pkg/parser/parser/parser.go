@@ -21,6 +21,7 @@ import (
 //   - DROP TABLE: Remove tables
 //   - DROP INDEX: Remove indexes
 //   - EXPLAIN: Show query execution plan
+//   - SHOW INDEXES: Display index information
 //
 // Parameters:
 //   - sql: The SQL statement string to parse
@@ -73,6 +74,9 @@ func ParseStatement(sql string) (statements.Statement, error) {
 	case lexer.EXPLAIN:
 		l.SetPos(0)
 		return parseExplainStatement(l)
+	case lexer.SHOW:
+		l.SetPos(0)
+		return parseShowStatement(l)
 	default:
 		return nil, fmt.Errorf("unsupported statement type: %s", token.Value)
 	}

@@ -59,6 +59,9 @@ const (
 	ANALYZE
 	FORMAT
 
+	SHOW
+	INDEXES
+
 	INT
 	VARCHAR
 	TEXT
@@ -182,6 +185,10 @@ func (t TokenType) String() string {
 		return "ANALYZE"
 	case FORMAT:
 		return "FORMAT"
+	case SHOW:
+		return "SHOW"
+	case INDEXES:
+		return "INDEXES"
 	case INT:
 		return "INT"
 	case VARCHAR:
