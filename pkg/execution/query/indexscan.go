@@ -154,14 +154,12 @@ func (is *IndexScan) Open() error {
 
 	switch is.scanType {
 	case EqualityScan:
-		// Use index's Search method for exact match
 		rids, err = is.idx.Search(is.searchKey)
 		if err != nil {
 			return fmt.Errorf("index equality search failed: %w", err)
 		}
 
 	case RangeScan:
-		// Use index's RangeSearch method for range queries
 		rids, err = is.idx.RangeSearch(is.startKey, is.endKey)
 		if err != nil {
 			return fmt.Errorf("index range search failed: %w", err)
@@ -212,13 +210,12 @@ func (is *IndexScan) Next() (*tuple.Tuple, error) {
 //   - An error if tuple fetch fails
 func (is *IndexScan) readNext() (*tuple.Tuple, error) {
 	if is.currentPos >= len(is.resultRIDs) {
-		return nil, nil // End of results
+		return nil, nil
 	}
 
 	rid := is.resultRIDs[is.currentPos]
 	is.currentPos++
 
-	// Fetch the page containing this tuple
 	pageID := rid.PageID
 	page, err := is.store.GetPage(is.tx, is.heapFile, pageID, transaction.ReadOnly)
 	if err != nil {
@@ -230,14 +227,12 @@ func (is *IndexScan) readNext() (*tuple.Tuple, error) {
 		return nil, fmt.Errorf("expected HeapPage, got %T", page)
 	}
 
-	// Fetch the specific tuple using the tuple number
 	tup, err := heapPage.GetTupleAt(rid.TupleNum)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get tuple at slot %d: %w", rid.TupleNum, err)
 	}
 
 	if tup == nil {
-		// Tuple was deleted - skip it and try next
 		return is.readNext()
 	}
 
