@@ -8,6 +8,7 @@ import (
 	"storemy/pkg/catalog/catalogmanager"
 	"storemy/pkg/catalog/systemtable"
 	"storemy/pkg/concurrency/transaction"
+	dberror "storemy/pkg/error"
 	"storemy/pkg/log/wal"
 	"storemy/pkg/memory"
 	"storemy/pkg/parser/parser"
@@ -69,12 +70,18 @@ type DatabaseInfo struct {
 func NewDatabase(name, dataDir, logDir string) (*Database, error) {
 	fullPath := filepath.Join(dataDir, name)
 	if err := os.MkdirAll(fullPath, 0755); err != nil {
-		return nil, fmt.Errorf("failed to create data directory: %v", err)
+		dbErr := dberror.Wrap(err, "DIR_CREATE_FAILED", "NewDatabase", "Database")
+		dbErr.Detail = fmt.Sprintf("Failed to create directory: %s", fullPath)
+		dbErr.Hint = "Check that the parent directory exists and you have write permissions"
+		return nil, dbErr
 	}
 
 	walInstance, err := wal.NewWAL(logDir, 8192)
 	if err != nil {
-		return nil, fmt.Errorf("failed to initialize WAL: %v", err)
+		dbErr := dberror.Wrap(err, "WAL_INIT_FAILED", "NewDatabase", "WAL")
+		dbErr.Detail = fmt.Sprintf("Failed to initialize Write-Ahead Log at: %s", logDir)
+		dbErr.Hint = "Ensure the log directory exists and has sufficient disk space"
+		return nil, dbErr
 	}
 
 	pageStore := memory.NewPageStore(walInstance)
@@ -101,7 +108,10 @@ func NewDatabase(name, dataDir, logDir string) (*Database, error) {
 	statsManager.StartBackgroundUpdater(30 * time.Second)
 
 	if err := db.loadExistingTables(); err != nil {
-		return nil, fmt.Errorf("failed to load existing tables: %v", err)
+		dbErr := dberror.Wrap(err, "TABLE_LOAD_FAILED", "NewDatabase", "CatalogManager")
+		dbErr.Detail = "Failed to load existing tables from disk"
+		dbErr.Hint = "Database catalog files may be corrupted. Consider restoring from backup"
+		return nil, dbErr
 	}
 	return db, nil
 }
@@ -111,34 +121,52 @@ func (db *Database) ExecuteQuery(query string) (QueryResult, error) {
 	var res QueryResult
 	tx, err := db.txRegistry.Begin()
 	if err != nil {
-		return res, err
+		dbErr := dberror.Wrap(err, "TX_BEGIN_FAILED", "ExecuteQuery", "TransactionRegistry")
+		dbErr.Category = dberror.ErrCategoryTransient
+		dbErr.Detail = "Failed to start a new transaction"
+		dbErr.Hint = "Try again. If the problem persists, check system resources"
+		return res, dbErr
 	}
 	defer db.cleanupTransaction(tx, &err)
 
 	stmt, err := parser.ParseStatement(query)
 	if err != nil {
 		db.recordError()
-		return QueryResult{}, fmt.Errorf("parse error: %v", err)
+		dbErr := dberror.Wrap(err, "PARSE_ERROR", "ExecuteQuery", "Parser")
+		dbErr.Category = dberror.ErrCategoryUser
+		dbErr.Detail = fmt.Sprintf("Invalid SQL syntax in query: %s", query)
+		dbErr.Hint = "Check your SQL syntax. Common issues: missing semicolon, typos in keywords, unmatched quotes"
+		return QueryResult{}, dbErr
 	}
 
 	var plan planner.Plan
 	plan, err = db.queryPlanner.Plan(stmt, tx)
 	if err != nil {
 		db.recordError()
-		return QueryResult{}, fmt.Errorf("planning error: %v", err)
+		dbErr := dberror.Wrap(err, "PLAN_ERROR", "ExecuteQuery", "QueryPlanner")
+		dbErr.Category = dberror.ErrCategoryUser
+		dbErr.Detail = "Failed to create query execution plan"
+		dbErr.Hint = "Verify that all referenced tables and columns exist"
+		return QueryResult{}, dbErr
 	}
 
 	var result QueryResult
 	result, err = db.executePlan(plan, stmt)
 	if err != nil {
 		db.recordError()
-		return QueryResult{}, fmt.Errorf("execution error: %v", err)
+		dbErr := dberror.Wrap(err, "EXEC_ERROR", "ExecuteQuery", "Executor")
+		dbErr.Detail = "Failed to execute query plan"
+		return QueryResult{}, dbErr
 	}
 
 	err = db.pageStore.CommitTransaction(tx)
 	if err != nil {
 		db.recordError()
-		return QueryResult{}, fmt.Errorf("commit error: %v", err)
+		dbErr := dberror.Wrap(err, "COMMIT_FAILED", "ExecuteQuery", "PageStore")
+		dbErr.Category = dberror.ErrCategoryTransient
+		dbErr.Detail = "Failed to commit transaction changes to disk"
+		dbErr.Hint = "This may be a temporary issue. Retry the operation"
+		return QueryResult{}, dbErr
 	}
 
 	db.recordSuccess()
@@ -151,11 +179,18 @@ func (db *Database) loadExistingTables() error {
 
 	tx, err := db.txRegistry.Begin()
 	if err != nil {
-		return fmt.Errorf("failed to begin transaction for catalog initialization: %v", err)
+		dbErr := dberror.Wrap(err, "TX_BEGIN_FAILED", "loadExistingTables", "TransactionRegistry")
+		dbErr.Category = dberror.ErrCategorySystem
+		dbErr.Detail = "Failed to begin transaction for catalog initialization"
+		return dbErr
 	}
 
 	if err := db.catalogMgr.Initialize(tx); err != nil {
-		return fmt.Errorf("failed to initialize catalog: %v", err)
+		dbErr := dberror.Wrap(err, "CATALOG_INIT_FAILED", "loadExistingTables", "CatalogManager")
+		dbErr.Category = dberror.ErrCategorySystem
+		dbErr.Detail = "Failed to initialize system catalog tables"
+		dbErr.Hint = "The database may need to be recreated if catalog tables are corrupted"
+		return dbErr
 	}
 	fmt.Printf("[loadExistingTables] Catalog initialized\n")
 
@@ -169,11 +204,18 @@ func (db *Database) loadExistingTables() error {
 
 	tx2, err := db.txRegistry.Begin()
 	if err != nil {
-		return fmt.Errorf("failed to begin transaction for loading tables: %v", err)
+		dbErr := dberror.Wrap(err, "TX_BEGIN_FAILED", "loadExistingTables", "TransactionRegistry")
+		dbErr.Category = dberror.ErrCategorySystem
+		dbErr.Detail = "Failed to begin transaction for loading tables"
+		return dbErr
 	}
 
 	if err := db.catalogMgr.LoadAllTables(tx2); err != nil {
-		return fmt.Errorf("failed to load tables from catalog: %v", err)
+		dbErr := dberror.Wrap(err, "TABLE_LOAD_FAILED", "loadExistingTables", "CatalogManager")
+		dbErr.Category = dberror.ErrCategoryData
+		dbErr.Detail = fmt.Sprintf("Failed to load tables from catalog file: %s", catalogTablesPath)
+		dbErr.Hint = "Catalog file may be corrupted. Check file permissions and integrity"
+		return dbErr
 	}
 	fmt.Printf("[loadExistingTables] Tables loaded successfully\n")
 
@@ -256,17 +298,27 @@ func (db *Database) cleanupTransaction(tx *transaction.TransactionContext, err *
 func (db *Database) UpdateTableStatistics(tableName string) error {
 	tx, err := db.txRegistry.Begin()
 	if err != nil {
-		return fmt.Errorf("failed to begin transaction: %v", err)
+		dbErr := dberror.Wrap(err, "TX_BEGIN_FAILED", "UpdateTableStatistics", "TransactionRegistry")
+		dbErr.Category = dberror.ErrCategoryTransient
+		dbErr.Detail = "Failed to begin transaction for statistics update"
+		return dbErr
 	}
 	defer db.cleanupTransaction(tx, &err)
 
 	tableID, err := db.catalogMgr.GetTableID(tx, tableName)
 	if err != nil {
-		return fmt.Errorf("table not found: %v", err)
+		dbErr := dberror.Wrap(err, "TABLE_NOT_FOUND", "UpdateTableStatistics", "CatalogManager")
+		dbErr.Category = dberror.ErrCategoryUser
+		dbErr.Detail = fmt.Sprintf("Table '%s' does not exist", tableName)
+		dbErr.Hint = "Use SHOW TABLES to list available tables"
+		return dbErr
 	}
 
 	if err := db.catalogMgr.UpdateTableStatistics(tx, tableID); err != nil {
-		return fmt.Errorf("failed to update statistics: %v", err)
+		dbErr := dberror.Wrap(err, "STATS_UPDATE_FAILED", "UpdateTableStatistics", "CatalogManager")
+		dbErr.Category = dberror.ErrCategorySystem
+		dbErr.Detail = fmt.Sprintf("Failed to update statistics for table '%s'", tableName)
+		return dbErr
 	}
 
 	return db.pageStore.CommitTransaction(tx)
@@ -276,7 +328,10 @@ func (db *Database) UpdateTableStatistics(tableName string) error {
 func (db *Database) GetTableStatistics(tableName string) (*systemtable.TableStatistics, error) {
 	tx, err := db.txRegistry.Begin()
 	if err != nil {
-		return nil, fmt.Errorf("failed to begin transaction: %v", err)
+		dbErr := dberror.Wrap(err, "TX_BEGIN_FAILED", "GetTableStatistics", "TransactionRegistry")
+		dbErr.Category = dberror.ErrCategoryTransient
+		dbErr.Detail = "Failed to begin transaction for reading statistics"
+		return nil, dbErr
 	}
 	defer func() {
 		if err != nil {
@@ -286,12 +341,19 @@ func (db *Database) GetTableStatistics(tableName string) (*systemtable.TableStat
 
 	tableID, err := db.catalogMgr.GetTableID(tx, tableName)
 	if err != nil {
-		return nil, fmt.Errorf("table not found: %v", err)
+		dbErr := dberror.Wrap(err, "TABLE_NOT_FOUND", "GetTableStatistics", "CatalogManager")
+		dbErr.Category = dberror.ErrCategoryUser
+		dbErr.Detail = fmt.Sprintf("Table '%s' does not exist", tableName)
+		dbErr.Hint = "Use SHOW TABLES to list available tables"
+		return nil, dbErr
 	}
 
 	stats, err := db.catalogMgr.GetTableStatistics(tx, tableID)
 	if err != nil {
-		return nil, fmt.Errorf("failed to get statistics: %v", err)
+		dbErr := dberror.Wrap(err, "STATS_READ_FAILED", "GetTableStatistics", "CatalogManager")
+		dbErr.Category = dberror.ErrCategorySystem
+		dbErr.Detail = fmt.Sprintf("Failed to read statistics for table '%s'", tableName)
+		return nil, dbErr
 	}
 
 	return stats, nil
@@ -316,11 +378,18 @@ func (db *Database) Close() error {
 	}
 
 	if err := db.pageStore.FlushAllPages(); err != nil {
-		return fmt.Errorf("failed to flush pages: %v", err)
+		dbErr := dberror.Wrap(err, "PAGE_FLUSH_FAILED", "Close", "PageStore")
+		dbErr.Category = dberror.ErrCategorySystem
+		dbErr.Detail = "Failed to flush dirty pages to disk during shutdown"
+		dbErr.Hint = "Check disk space and file system health. Some data may not be persisted"
+		return dbErr
 	}
 
 	if err := db.walInstance.Close(); err != nil {
-		return fmt.Errorf("failed to close WAL: %v", err)
+		dbErr := dberror.Wrap(err, "WAL_CLOSE_FAILED", "Close", "WAL")
+		dbErr.Category = dberror.ErrCategorySystem
+		dbErr.Detail = "Failed to close Write-Ahead Log during shutdown"
+		return dbErr
 	}
 
 	db.catalogMgr.ClearCache()
