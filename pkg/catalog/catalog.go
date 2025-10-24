@@ -26,71 +26,6 @@ type (
 	IndexStatistics = systemtable.IndexStatisticsRow
 )
 
-// System tables initialized:
-//   - CATALOG_TABLES: table metadata
-//   - CATALOG_COLUMNS: column definitions
-//   - CATALOG_STATISTICS: table statistics
-//   - CATALOG_INDEXES: index metadata
-//   - CATALOG_COLUMN_STATISTICS: column-level statistics
-//   - CATALOG_INDEX_STATISTICS: index statistics
-type SystemTableIDs struct {
-	TablesTableID           int
-	ColumnsTableID          int
-	StatisticsTableID       int
-	IndexesTableID          int
-	ColumnStatisticsTableID int
-	IndexStatisticsTableID  int
-}
-
-// GetSysTable returns the SystemTable interface for a given system table ID.
-// This is used to access system table-specific methods like TableIDIndex().
-//
-// Parameters:
-//   - id: System table ID
-//
-// Returns the corresponding SystemTable interface or an error if the ID is invalid.
-func (sc *SystemTableIDs) GetSysTable(id int) (systemtable.SystemTable, error) {
-	switch id {
-	case sc.TablesTableID:
-		return systemtable.Tables, nil
-	case sc.ColumnsTableID:
-		return systemtable.Columns, nil
-	case sc.StatisticsTableID:
-		return systemtable.Stats, nil
-	case sc.IndexesTableID:
-		return systemtable.Indexes, nil
-	case sc.ColumnStatisticsTableID:
-		return systemtable.ColumnStats, nil
-	case sc.IndexStatisticsTableID:
-		return systemtable.IndexStats, nil
-	default:
-		return nil, fmt.Errorf("unknown system table ID: %d", id)
-	}
-}
-
-// SetSystemTableID sets the appropriate system table ID field based on table name.
-// This is called during initialization to track the IDs of all system catalog tables.
-//
-// Parameters:
-//   - tableName: Name of the system table
-//   - tableID: Heap file ID assigned to this system table
-func (sc *SystemTableIDs) SetSystemTableID(tableName string, tableID int) {
-	switch tableName {
-	case systemtable.Tables.TableName():
-		sc.TablesTableID = tableID
-	case systemtable.Columns.TableName():
-		sc.ColumnsTableID = tableID
-	case systemtable.Stats.TableName():
-		sc.StatisticsTableID = tableID
-	case systemtable.Indexes.TableName():
-		sc.IndexesTableID = tableID
-	case systemtable.ColumnStats.TableName():
-		sc.ColumnStatisticsTableID = tableID
-	case systemtable.IndexStats.TableName():
-		sc.IndexStatisticsTableID = tableID
-	}
-}
-
 // SystemCatalog manages database metadata including table and column definitions.
 // It maintains six system tables:
 //   - CATALOG_TABLES: stores table metadata (ID, name, file path, primary key)
@@ -395,41 +330,6 @@ func (sc *SystemCatalog) iterateTable(tableID int, tx TxContext, processFunc fun
 	defer iter.Close()
 
 	return iterator.ForEach(iter, processFunc)
-}
-
-// findTableMetadata is a generic helper for searching CATALOG_TABLES with a custom predicate.
-// Used by GetTableMetadataByID and GetTableMetadataByName to avoid code duplication.
-//
-// Parameters:
-//   - tid: Transaction ID for reading catalog
-//   - pred: Predicate function that returns true when the desired table is found
-//
-// Returns the matching TableMetadata or an error if not found or if catalog access fails.
-func (sc *SystemCatalog) findTableMetadata(tx TxContext, pred func(tm *systemtable.TableMetadata) bool) (*systemtable.TableMetadata, error) {
-	var result *systemtable.TableMetadata
-
-	err := sc.iterateTable(sc.SystemTabs.TablesTableID, tx, func(tableTuple *tuple.Tuple) error {
-		table, err := systemtable.Tables.Parse(tableTuple)
-		if err != nil {
-			return err
-		}
-
-		if pred(table) {
-			result = table
-			return fmt.Errorf("found")
-		}
-
-		return nil
-	})
-
-	if err != nil && err.Error() == "found" {
-		return result, nil
-	}
-	if err != nil {
-		return nil, err
-	}
-
-	return nil, fmt.Errorf("table not found in catalog")
 }
 
 // GetAllTables retrieves metadata for all tables registered in the catalog.
