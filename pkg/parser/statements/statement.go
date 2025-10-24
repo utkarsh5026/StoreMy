@@ -12,6 +12,7 @@ const (
 	CreateIndex
 	DropIndex
 	Transaction
+	Explain
 )
 
 func (st StatementType) String() string {
@@ -34,6 +35,8 @@ func (st StatementType) String() string {
 		return "DROP INDEX"
 	case Transaction:
 		return "TRANSACTION"
+	case Explain:
+		return "EXPLAIN"
 	default:
 		return "UNKNOWN"
 	}
