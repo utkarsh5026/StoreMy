@@ -7,6 +7,38 @@ StoreMy is a production-grade educational database engine implementing core DBMS
 ![Go Version](https://img.shields.io/badge/Go-1.24%2B-00ADD8?style=flat&logo=go)
 ![License](https://img.shields.io/badge/license-MIT-blue.svg)
 ![Tests](https://img.shields.io/badge/tests-74%20files-success)
+![Docker](https://img.shields.io/badge/docker-ready-blue?style=flat&logo=docker)
+
+## 🚀 Quick Start with Docker (Recommended for Testing)
+
+**Want to test StoreMy in 2 minutes?** Just run:
+
+```bash
+make quickstart
+```
+
+Or using Docker Compose directly:
+
+```bash
+docker-compose up storemy-demo
+```
+
+This starts the database with pre-loaded demo data. Press **Ctrl+E** to execute queries, **Ctrl+H** for help.
+
+**For detailed Docker instructions, see [DOCKER_README.md](DOCKER_README.md) or [RECRUITER_QUICKSTART.md](RECRUITER_QUICKSTART.md)**
+
+### Other Quick Start Options
+
+```bash
+# Run automated CRUD tests
+make docker-test
+
+# Import custom SQL file
+docker-compose up storemy-import
+
+# Start fresh database (no demo data)
+docker-compose up storemy-fresh
+```
 
 ## Key Features
 
