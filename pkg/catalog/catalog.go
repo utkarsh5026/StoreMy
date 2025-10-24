@@ -377,6 +377,13 @@ func (sc *SystemCatalog) GetIndexesByTable(tx TxContext, tableID int) ([]*system
 	return sc.indexOps.GetIndexesByTable(tx, tableID)
 }
 
+// GetAllIndexes retrieves all indexes from CATALOG_INDEXES.
+func (sc *SystemCatalog) GetAllIndexes(tx TxContext) ([]*systemtable.IndexMetadata, error) {
+	return sc.indexOps.FindAll(tx, func(_ *systemtable.IndexMetadata) bool {
+		return true
+	})
+}
+
 // GetIndexByName retrieves index metadata from CATALOG_INDEXES by index name.
 // Index name matching is case-insensitive.
 func (sc *SystemCatalog) GetIndexByName(tx TxContext, indexName string) (*systemtable.IndexMetadata, error) {

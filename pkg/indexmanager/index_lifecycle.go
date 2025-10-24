@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"storemy/pkg/concurrency/transaction"
 	"storemy/pkg/execution/query"
 	"storemy/pkg/memory"
 	btreeindex "storemy/pkg/memory/wrappers/btree_index"
@@ -40,11 +39,7 @@ func newIndexLifecycle(pageStore *memory.PageStore) *indexLifecycle {
 //   - indexType: Type of index to create (HashIndex or BTreeIndex)
 //
 // Returns an error if the index file cannot be created or if the index type is unsupported.
-func (il *indexLifecycle) CreatePhysicalIndex(
-	filePath string,
-	keyType types.Type,
-	indexType index.IndexType,
-) error {
+func (il *indexLifecycle) CreatePhysicalIndex(filePath string, keyType types.Type, indexType IndexType) error {
 	dir := filepath.Dir(filePath)
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		return fmt.Errorf("failed to create directory: %v", err)
@@ -85,7 +80,7 @@ func (il *indexLifecycle) CreatePhysicalIndex(
 //
 // Returns an error if the index cannot be opened, populated, or if tuple scanning fails.
 func (il *indexLifecycle) PopulateIndex(
-	ctx *transaction.TransactionContext,
+	ctx TxCtx,
 	filePath string,
 	indexID int,
 	tableFile page.DbFile,
@@ -129,17 +124,21 @@ func (il *indexLifecycle) PopulateIndex(
 		return fmt.Errorf("expected heap file for table, got %T", tableFile)
 	}
 
+	tupleDesc := heapFile.GetTupleDesc()
+	if tupleDesc == nil {
+		return fmt.Errorf("table has no schema definition")
+	}
+	numFields := tupleDesc.NumFields()
+	if columnIndex < 0 || columnIndex >= numFields {
+		return fmt.Errorf("column index %d is out of range for table with %d columns", columnIndex, numFields)
+	}
+
 	return il.insertIntoIndex(ctx, heapFile, columnIndex, insertFunc)
 }
 
 // insertIntoIndex is a helper method that scans a table and inserts all tuples
 // into an index using the provided insert function.
-func (il *indexLifecycle) insertIntoIndex(
-	ctx *transaction.TransactionContext,
-	tableFile *heap.HeapFile,
-	columnIndex int,
-	insertFunc func(key types.Field, rid *tuple.TupleRecordID) error,
-) error {
+func (il *indexLifecycle) insertIntoIndex(ctx TxCtx, tableFile *heap.HeapFile, columnIndex int, insertFunc func(key types.Field, rid *tuple.TupleRecordID) error) error {
 	seqScan, err := query.NewSeqScan(ctx, tableFile.GetID(), tableFile, il.pageStore)
 	if err != nil {
 		return fmt.Errorf("failed to create sequential scan: %v", err)
@@ -202,17 +201,13 @@ func (il *indexLifecycle) DeletePhysicalIndex(filePath string) error {
 }
 
 // CreatePhysicalIndex is a convenience method on IndexManager that delegates to lifecycle.
-func (im *IndexManager) CreatePhysicalIndex(
-	filePath string,
-	keyType types.Type,
-	indexType index.IndexType,
-) error {
+func (im *IndexManager) CreatePhysicalIndex(filePath string, keyType types.Type, indexType index.IndexType) error {
 	return im.lifecycle.CreatePhysicalIndex(filePath, keyType, indexType)
 }
 
 // PopulateIndex is a convenience method on IndexManager that delegates to lifecycle.
 func (im *IndexManager) PopulateIndex(
-	ctx *transaction.TransactionContext,
+	ctx TxCtx,
 	filePath string,
 	indexID int,
 	tableFile page.DbFile,

@@ -88,15 +88,9 @@ func resolveIndexMetadata(
 		}
 
 		result = append(result, &IndexMetadata{
-			IndexID:     catIdx.IndexID,
-			IndexName:   catIdx.IndexName,
-			TableID:     catIdx.TableID,
-			ColumnName:  catIdx.ColumnName,
-			IndexType:   catIdx.IndexType,
-			FilePath:    catIdx.FilePath,
-			CreatedAt:   catIdx.CreatedAt,
-			ColumnIndex: columnIndex,
-			KeyType:     keyType,
+			IndexMetadata: *catIdx,
+			ColumnIndex:   columnIndex,
+			KeyType:       keyType,
 		})
 	}
 

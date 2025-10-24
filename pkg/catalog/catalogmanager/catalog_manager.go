@@ -439,6 +439,11 @@ func (cm *CatalogManager) GetIndexesByTable(tid TxContext, tableID int) ([]*syst
 	return cm.catalog.GetIndexesByTable(tid, tableID)
 }
 
+// GetAllIndexes retrieves all indexes from the catalog.
+func (cm *CatalogManager) GetAllIndexes(tx TxContext) ([]*systemtable.IndexMetadata, error) {
+	return cm.catalog.GetAllIndexes(tx)
+}
+
 // GetIndexByName retrieves index metadata by index name.
 func (cm *CatalogManager) GetIndexByName(tx TxContext, indexName string) (*systemtable.IndexMetadata, error) {
 	return cm.catalog.GetIndexByName(tx, indexName)

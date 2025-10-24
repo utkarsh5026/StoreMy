@@ -1,7 +1,6 @@
 package indexmanager
 
 import (
-	"storemy/pkg/concurrency/transaction"
 	"sync"
 )
 
@@ -66,10 +65,7 @@ func (ic *indexCache) Clear() map[int][]*indexWithMetadata {
 
 // GetOrLoad attempts to get indexes from cache, or loads them using the provided loader function.
 // This implements the full lazy-loading pattern with double-check locking.
-func (ic *indexCache) GetOrLoad(
-	tableID int,
-	loader func() ([]*indexWithMetadata, error),
-) ([]*indexWithMetadata, error) {
+func (ic *indexCache) GetOrLoad(tableID int, loader func() ([]*indexWithMetadata, error)) ([]*indexWithMetadata, error) {
 	if indexes, exists := ic.Get(tableID); exists {
 		return indexes, nil
 	}
@@ -84,10 +80,7 @@ func (ic *indexCache) GetOrLoad(
 
 // getIndexesForTable retrieves all indexes for a given table with caching.
 // This is a helper method that combines cache lookup with loading from catalog.
-func (im *IndexManager) getIndexesForTable(
-	ctx *transaction.TransactionContext,
-	tableID int,
-) ([]*indexWithMetadata, error) {
+func (im *IndexManager) getIndexesForTable(ctx TxCtx, tableID int) ([]*indexWithMetadata, error) {
 	return im.cache.GetOrLoad(tableID, func() ([]*indexWithMetadata, error) {
 		return im.loadAndOpenIndexes(ctx, tableID)
 	})
