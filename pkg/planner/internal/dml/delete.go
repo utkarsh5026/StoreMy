@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"storemy/pkg/concurrency/transaction"
 	"storemy/pkg/parser/statements"
+	"storemy/pkg/planner/internal/metadata"
 	"storemy/pkg/planner/internal/result"
 	"storemy/pkg/planner/internal/scan"
 	"storemy/pkg/registry"
@@ -55,7 +56,7 @@ func NewDeletePlan(
 //   - DMLResult containing the number of rows deleted
 //   - error if any step fails (table not found, invalid WHERE clause, deletion failure, etc.)
 func (p *DeletePlan) Execute() (result.Result, error) {
-	tableID, err := resolveTableID(p.statement.TableName, p.tx, p.ctx)
+	tableID, err := metadata.ResolveTableID(p.statement.TableName, p.tx, p.ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -65,7 +66,7 @@ func (p *DeletePlan) Execute() (result.Result, error) {
 		return nil, err
 	}
 
-	tuplesToDelete, err := collectAllTuples(query)
+	tuplesToDelete, err := metadata.CollectAllTuples(query)
 	if err != nil {
 		return nil, err
 	}

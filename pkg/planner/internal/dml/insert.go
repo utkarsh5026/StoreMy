@@ -6,6 +6,7 @@ import (
 	"storemy/pkg/catalog/operations"
 	"storemy/pkg/concurrency/transaction"
 	"storemy/pkg/parser/statements"
+	"storemy/pkg/planner/internal/metadata"
 	"storemy/pkg/planner/internal/result"
 	"storemy/pkg/registry"
 	"storemy/pkg/tuple"
@@ -33,7 +34,7 @@ func NewInsertPlan(stmt *statements.InsertStatement, tx *transaction.Transaction
 // all specified tuples into the target table. It validates the data, creates
 // tuples according to the table schema, and coordinates with the storage layer.
 func (p *InsertPlan) Execute() (result.Result, error) {
-	md, err := resolveTableMetadata(p.statement.TableName, p.tx, p.ctx)
+	md, err := metadata.ResolveTableMetadata(p.statement.TableName, p.tx, p.ctx)
 	if err != nil {
 		return nil, err
 	}

@@ -3,10 +3,14 @@ package planner
 import (
 	"fmt"
 	"storemy/pkg/parser/statements"
+	"storemy/pkg/planner/internal/ddl"
+	"storemy/pkg/planner/internal/dml"
+	"storemy/pkg/planner/internal/indexops"
+	"storemy/pkg/planner/internal/result"
 )
 
 type Plan interface {
-	Execute() (Result, error)
+	Execute() (result.Result, error)
 }
 
 type QueryPlanner struct {
@@ -22,25 +26,23 @@ func NewQueryPlanner(ctx DbContext) *QueryPlanner {
 func (qp *QueryPlanner) Plan(stmt statements.Statement, tx TxContext) (Plan, error) {
 	switch s := stmt.(type) {
 	case *statements.CreateStatement:
-		return NewCreateTablePlan(s, qp.ctx, tx), nil
+		return ddl.NewCreateTablePlan(s, qp.ctx, tx), nil
 	case *statements.DropStatement:
-		return NewDropTablePlan(s, qp.ctx, tx), nil
+		return ddl.NewDropTablePlan(s, qp.ctx, tx), nil
 	case *statements.CreateIndexStatement:
-		return NewCreateIndexPlan(s, qp.ctx, tx), nil
+		return indexops.NewCreateIndexPlan(s, qp.ctx, tx), nil
 	case *statements.DropIndexStatement:
-		return NewDropIndexPlan(s, qp.ctx, tx), nil
+		return indexops.NewDropIndexPlan(s, qp.ctx, tx), nil
 	case *statements.InsertStatement:
-		return NewInsertPlan(s, tx, qp.ctx), nil
+		return dml.NewInsertPlan(s, tx, qp.ctx), nil
 	case *statements.DeleteStatement:
-		return NewDeletePlan(s, tx, qp.ctx), nil
+		return dml.NewDeletePlan(s, tx, qp.ctx), nil
 	case *statements.SelectStatement:
-		return NewSelectPlan(s, tx, qp.ctx), nil
+		return dml.NewSelectPlan(s, tx, qp.ctx), nil
 	case *statements.UpdateStatement:
-		return NewUpdatePlan(s, tx, qp.ctx), nil
-	case *statements.ExplainStatement:
-		return NewExplainPlan(s, tx, qp.ctx), nil
+		return dml.NewUpdatePlan(s, tx, qp.ctx), nil
 	case *statements.ShowIndexesStatement:
-		return NewShowIndexesPlan(s, qp.ctx, tx), nil
+		return indexops.NewShowIndexesPlan(s, qp.ctx, tx), nil
 	default:
 		return nil, fmt.Errorf("unsupported statement type: %T", stmt)
 	}

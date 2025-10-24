@@ -1,4 +1,4 @@
-package dml
+package metadata
 
 import (
 	"fmt"
@@ -8,14 +8,14 @@ import (
 	"storemy/pkg/tuple"
 )
 
-type tableMetadata struct {
+type TableMetadata struct {
 	TableID   int
 	TupleDesc *tuple.TupleDescription
 }
 
 // resolveTableMetadata retrieves table ID and schema in a single operation.
 // This is the primary table lookup method used by all planner components.
-func resolveTableMetadata(tableName string, tx *transaction.TransactionContext, ctx *registry.DatabaseContext) (*tableMetadata, error) {
+func ResolveTableMetadata(tableName string, tx *transaction.TransactionContext, ctx *registry.DatabaseContext) (*TableMetadata, error) {
 	catalogMgr := ctx.CatalogManager()
 	tableID, err := catalogMgr.GetTableID(tx, tableName)
 	if err != nil {
@@ -27,7 +27,7 @@ func resolveTableMetadata(tableName string, tx *transaction.TransactionContext, 
 		return nil, fmt.Errorf("failed to get schema for table %s: %v", tableName, err)
 	}
 
-	return &tableMetadata{
+	return &TableMetadata{
 		TableID:   tableID,
 		TupleDesc: sch.TupleDesc,
 	}, nil
@@ -35,8 +35,8 @@ func resolveTableMetadata(tableName string, tx *transaction.TransactionContext, 
 
 // resolveTableID converts a table name to its internal numeric identifier.
 // Convenience wrapper around resolveTableMetadata when only the ID is needed.
-func resolveTableID(tableName string, tx *transaction.TransactionContext, ctx *registry.DatabaseContext) (int, error) {
-	md, err := resolveTableMetadata(tableName, tx, ctx)
+func ResolveTableID(tableName string, tx *transaction.TransactionContext, ctx *registry.DatabaseContext) (int, error) {
+	md, err := ResolveTableMetadata(tableName, tx, ctx)
 	if err != nil {
 		return -1, err
 	}
@@ -46,7 +46,7 @@ func resolveTableID(tableName string, tx *transaction.TransactionContext, ctx *r
 
 // collectAllTuples executes an iterator and materializes all results into memory.
 // This is used by operators that require full result sets (e.g., ORDER BY, aggregation).
-func collectAllTuples(it iterator.DbIterator) ([]*tuple.Tuple, error) {
+func CollectAllTuples(it iterator.DbIterator) ([]*tuple.Tuple, error) {
 	if err := it.Open(); err != nil {
 		return nil, fmt.Errorf("failed to open iterator: %v", err)
 	}

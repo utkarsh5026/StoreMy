@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"storemy/pkg/concurrency/transaction"
 	"storemy/pkg/parser/statements"
+	"storemy/pkg/planner/internal/metadata"
 	"storemy/pkg/planner/internal/result"
 	"storemy/pkg/planner/internal/scan"
 	"storemy/pkg/registry"
@@ -33,7 +34,7 @@ func NewUpdatePlan(statement *statements.UpdateStatement, tx *transaction.Transa
 // Returns a DMLResult with the count of modified rows.
 // All operations are atomic within the transaction - failures trigger rollback.
 func (p *UpdatePlan) Execute() (result.Result, error) {
-	md, err := resolveTableMetadata(p.statement.TableName, p.tx, p.ctx)
+	md, err := metadata.ResolveTableMetadata(p.statement.TableName, p.tx, p.ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -48,7 +49,7 @@ func (p *UpdatePlan) Execute() (result.Result, error) {
 		return nil, err
 	}
 
-	tuplesToUpdate, err := collectAllTuples(queryPlan)
+	tuplesToUpdate, err := metadata.CollectAllTuples(queryPlan)
 	if err != nil {
 		return nil, err
 	}

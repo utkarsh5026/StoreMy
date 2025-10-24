@@ -10,6 +10,7 @@ import (
 	"storemy/pkg/iterator"
 	"storemy/pkg/parser/statements"
 	"storemy/pkg/plan"
+	"storemy/pkg/planner/internal/metadata"
 	"storemy/pkg/planner/internal/result"
 	"storemy/pkg/planner/internal/scan"
 	"storemy/pkg/registry"
@@ -87,7 +88,7 @@ func (p *SelectPlan) Execute() (result.Result, error) {
 		return nil, err
 	}
 
-	results, err := collectAllTuples(currentOp)
+	results, err := metadata.CollectAllTuples(currentOp)
 	if err != nil {
 		return nil, err
 	}
@@ -116,7 +117,7 @@ func (p *SelectPlan) buildScanOperator() (iterator.DbIterator, error) {
 	}
 
 	firstTable := tables[0]
-	metadata, err := resolveTableMetadata(firstTable.TableName, p.tx, p.ctx)
+	metadata, err := metadata.ResolveTableMetadata(firstTable.TableName, p.tx, p.ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -230,7 +231,7 @@ func (p *SelectPlan) applyJoinsIfNeeded(input iterator.DbIterator) (iterator.DbI
 // Each join's right side is a fresh scan of a table (no filter optimization currently).
 func (p *SelectPlan) buildJoinRightSide(joinNode *plan.JoinNode) (iterator.DbIterator, error) {
 	table := joinNode.RightTable
-	md, err := resolveTableMetadata(table.TableName, p.tx, p.ctx)
+	md, err := metadata.ResolveTableMetadata(table.TableName, p.tx, p.ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -475,7 +476,7 @@ func (p *SelectPlan) executeSetOperation() (result.Result, error) {
 	}
 
 	// Materialize results
-	results, err := collectAllTuples(setOp)
+	results, err := metadata.CollectAllTuples(setOp)
 	if err != nil {
 		return nil, err
 	}
