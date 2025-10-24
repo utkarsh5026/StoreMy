@@ -78,7 +78,7 @@ func NewDatabase(name, dataDir, logDir string) (*Database, error) {
 	}
 
 	pageStore := memory.NewPageStore(walInstance)
-	catalogMgr := catalogmanager.NewCatalogManager(pageStore, dataDir)
+	catalogMgr := catalogmanager.NewCatalogManager(pageStore, fullPath)
 
 	ctx := registry.NewDatabaseContext(pageStore, catalogMgr, walInstance, fullPath)
 
@@ -147,6 +147,8 @@ func (db *Database) ExecuteQuery(query string) (QueryResult, error) {
 
 // loadExistingTables loads table metadata from disk
 func (db *Database) loadExistingTables() error {
+	fmt.Printf("[loadExistingTables] Starting to load existing tables from %s\n", db.dataDir)
+
 	tx, err := db.txRegistry.Begin()
 	if err != nil {
 		return fmt.Errorf("failed to begin transaction for catalog initialization: %v", err)
@@ -155,11 +157,15 @@ func (db *Database) loadExistingTables() error {
 	if err := db.catalogMgr.Initialize(tx); err != nil {
 		return fmt.Errorf("failed to initialize catalog: %v", err)
 	}
+	fmt.Printf("[loadExistingTables] Catalog initialized\n")
 
 	catalogTablesPath := filepath.Join(db.dataDir, CatalogTablesFile)
+	fmt.Printf("[loadExistingTables] Checking for catalog file at: %s\n", catalogTablesPath)
 	if _, err := os.Stat(catalogTablesPath); os.IsNotExist(err) {
+		fmt.Printf("[loadExistingTables] Catalog file does not exist, skipping table loading\n")
 		return nil
 	}
+	fmt.Printf("[loadExistingTables] Catalog file exists, loading tables...\n")
 
 	tx2, err := db.txRegistry.Begin()
 	if err != nil {
@@ -169,6 +175,7 @@ func (db *Database) loadExistingTables() error {
 	if err := db.catalogMgr.LoadAllTables(tx2); err != nil {
 		return fmt.Errorf("failed to load tables from catalog: %v", err)
 	}
+	fmt.Printf("[loadExistingTables] Tables loaded successfully\n")
 
 	return nil
 }

@@ -113,6 +113,9 @@ func (cm *CatalogManager) CreateTable(
 	}
 
 	cm.store.RegisterDbFile(tableID, heapFile)
+	if _, verifyErr := cm.tableCache.GetDbFile(tableID); verifyErr != nil {
+		return 0, fmt.Errorf("table was added to cache but immediate verification failed: %w", verifyErr)
+	}
 	return tableID, nil
 }
 
@@ -185,7 +188,13 @@ func (cm *CatalogManager) GetTableSchema(tx TxContext, tableID int) (*schema.Sch
 // GetTableFile retrieves the DbFile for a table from the in-memory cache.
 // Returns an error if the table is not loaded in memory.
 func (cm *CatalogManager) GetTableFile(tableID int) (page.DbFile, error) {
-	return cm.tableCache.GetDbFile(tableID)
+	file, err := cm.tableCache.GetDbFile(tableID)
+	if err != nil {
+		allTables := cm.tableCache.GetAllTableNames()
+		return nil, fmt.Errorf("table with ID %d not found in cache (cache has %d tables: %v): %w",
+			tableID, len(allTables), allTables, err)
+	}
+	return file, nil
 }
 
 // TableExists checks if a table exists by name.
