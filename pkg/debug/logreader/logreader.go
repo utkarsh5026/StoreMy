@@ -4,7 +4,8 @@ import (
 	"fmt"
 	"os"
 	"storemy/pkg/debug/ui"
-	"storemy/pkg/log"
+	"storemy/pkg/log/record"
+	"storemy/pkg/log/wal"
 	"strings"
 
 	"github.com/charmbracelet/bubbles/key"
@@ -30,9 +31,9 @@ var keys = keyMap{
 }
 
 type model struct {
-	records      []*log.LogRecord
+	records      []*record.LogRecord
 	cursor       int
-	selected     *log.LogRecord
+	selected     *record.LogRecord
 	viewport     viewport.Model
 	width        int
 	height       int
@@ -53,13 +54,13 @@ func (m model) Init() tea.Cmd {
 }
 
 type recordsLoadedMsg struct {
-	records []*log.LogRecord
+	records []*record.LogRecord
 	err     error
 }
 
 func loadRecords(logPath string) tea.Cmd {
 	return func() tea.Msg {
-		reader, err := log.NewLogReader(logPath)
+		reader, err := wal.NewLogReader(logPath)
 		if err != nil {
 			return recordsLoadedMsg{err: err}
 		}
@@ -184,7 +185,7 @@ func (m model) renderListView() string {
 	return b.String()
 }
 
-func (m model) formatRecordLine(record *log.LogRecord, index int) string {
+func (m model) formatRecordLine(record *record.LogRecord, index int) string {
 	typeStr := m.colorizeRecordType(record.Type)
 
 	lsnStr := ui.LabelStyle.Render("LSN:") + " " + ui.ValueStyle.Render(fmt.Sprintf("%d", record.LSN))
@@ -198,45 +199,45 @@ func (m model) formatRecordLine(record *log.LogRecord, index int) string {
 	return fmt.Sprintf("[%3d] %s │ %s │ %s │ %s", index+1, typeStr, lsnStr, tidStr, timeStr)
 }
 
-func (m model) colorizeRecordType(recordType log.LogRecordType) string {
+func (m model) colorizeRecordType(recordType record.LogRecordType) string {
 	var color lipgloss.Color
 	var icon string
 	var name string
 
 	switch recordType {
-	case log.BeginRecord:
+	case record.BeginRecord:
 		color = lipgloss.Color(ui.SuccessColor.Dark)
 		icon = "▶"
 		name = "BEGIN    "
-	case log.CommitRecord:
+	case record.CommitRecord:
 		color = lipgloss.Color(ui.SuccessColor.Dark)
 		icon = "✓"
 		name = "COMMIT   "
-	case log.AbortRecord:
+	case record.AbortRecord:
 		color = lipgloss.Color(ui.ErrorColor.Dark)
 		icon = "✗"
 		name = "ABORT    "
-	case log.UpdateRecord:
+	case record.UpdateRecord:
 		color = lipgloss.Color(ui.WarningColor.Dark)
 		icon = "⟳"
 		name = "UPDATE   "
-	case log.InsertRecord:
+	case record.InsertRecord:
 		color = lipgloss.Color(ui.PrimaryColor.Dark)
 		icon = "+"
 		name = "INSERT   "
-	case log.DeleteRecord:
+	case record.DeleteRecord:
 		color = lipgloss.Color(ui.ErrorColor.Dark)
 		icon = "−"
 		name = "DELETE   "
-	case log.CheckpointBegin:
+	case record.CheckpointBegin:
 		color = lipgloss.Color(ui.SecondaryColor.Dark)
 		icon = "◆"
 		name = "CKPT BEGIN"
-	case log.CheckpointEnd:
+	case record.CheckpointEnd:
 		color = lipgloss.Color(ui.SecondaryColor.Dark)
 		icon = "◇"
 		name = "CKPT END  "
-	case log.CLRRecord:
+	case record.CLRRecord:
 		color = lipgloss.Color(ui.MutedColor.Dark)
 		icon = "↶"
 		name = "CLR      "
@@ -256,45 +257,45 @@ func (m model) renderDetailView() string {
 
 	var b strings.Builder
 
-	record := m.selected
+	re := m.selected
 
-	typeStr := m.colorizeRecordType(record.Type)
+	typeStr := m.colorizeRecordType(re.Type)
 	b.WriteString(lipgloss.NewStyle().Bold(true).Foreground(ui.PrimaryColor).Render("Record Details") + "\n\n")
 	b.WriteString(ui.LabelStyle.Render("Type: ") + typeStr + "\n\n")
 
-	b.WriteString(m.renderKeyValue("LSN", fmt.Sprintf("%d", record.LSN)))
-	b.WriteString(m.renderKeyValue("Previous LSN", fmt.Sprintf("%d", record.PrevLSN)))
-	b.WriteString(m.renderKeyValue("Timestamp", record.Timestamp.Format("2006-01-02 15:04:05")))
+	b.WriteString(m.renderKeyValue("LSN", fmt.Sprintf("%d", re.LSN)))
+	b.WriteString(m.renderKeyValue("Previous LSN", fmt.Sprintf("%d", re.PrevLSN)))
+	b.WriteString(m.renderKeyValue("Timestamp", re.Timestamp.Format("2006-01-02 15:04:05")))
 
-	if record.TID != nil {
-		b.WriteString(m.renderKeyValue("Transaction ID", record.TID.String()))
+	if re.TID != nil {
+		b.WriteString(m.renderKeyValue("Transaction ID", re.TID.String()))
 	}
 
 	b.WriteString("\n")
 
 	// Type-specific details
-	switch record.Type {
-	case log.UpdateRecord, log.InsertRecord, log.DeleteRecord:
-		if record.PageID != nil {
+	switch re.Type {
+	case record.UpdateRecord, record.InsertRecord, record.DeleteRecord:
+		if re.PageID != nil {
 			b.WriteString(ui.LabelStyle.Render("Page Information:") + "\n")
-			b.WriteString(m.renderKeyValue("  Table ID", fmt.Sprintf("%d", record.PageID.GetTableID())))
-			b.WriteString(m.renderKeyValue("  Page Number", fmt.Sprintf("%d", record.PageID.PageNo())))
+			b.WriteString(m.renderKeyValue("  Table ID", fmt.Sprintf("%d", re.PageID.GetTableID())))
+			b.WriteString(m.renderKeyValue("  Page Number", fmt.Sprintf("%d", re.PageID.PageNo())))
 			b.WriteString("\n")
 		}
 
-		if record.BeforeImage != nil {
-			b.WriteString(m.renderKeyValue("Before Image Size", fmt.Sprintf("%d bytes", len(record.BeforeImage))))
+		if re.BeforeImage != nil {
+			b.WriteString(m.renderKeyValue("Before Image Size", fmt.Sprintf("%d bytes", len(re.BeforeImage))))
 		}
-		if record.AfterImage != nil {
-			b.WriteString(m.renderKeyValue("After Image Size", fmt.Sprintf("%d bytes", len(record.AfterImage))))
+		if re.AfterImage != nil {
+			b.WriteString(m.renderKeyValue("After Image Size", fmt.Sprintf("%d bytes", len(re.AfterImage))))
 		}
 
-	case log.CLRRecord:
-		if record.PageID != nil {
+	case record.CLRRecord:
+		if re.PageID != nil {
 			b.WriteString(ui.LabelStyle.Render("CLR Information:") + "\n")
-			b.WriteString(m.renderKeyValue("  Undo Next LSN", fmt.Sprintf("%d", record.UndoNextLSN)))
-			b.WriteString(m.renderKeyValue("  Table ID", fmt.Sprintf("%d", record.PageID.GetTableID())))
-			b.WriteString(m.renderKeyValue("  Page Number", fmt.Sprintf("%d", record.PageID.PageNo())))
+			b.WriteString(m.renderKeyValue("  Undo Next LSN", fmt.Sprintf("%d", re.UndoNextLSN)))
+			b.WriteString(m.renderKeyValue("  Table ID", fmt.Sprintf("%d", re.PageID.GetTableID())))
+			b.WriteString(m.renderKeyValue("  Page Number", fmt.Sprintf("%d", re.PageID.PageNo())))
 		}
 	}
 
