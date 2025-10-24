@@ -32,6 +32,10 @@ MANIFEST
 *.exe
 storemy
 storemy.exe
+benchmark-results/
+benchmark_data/
+benchmark_logs/
+
 
 # PyInstaller
 #  Usually these files are written by a python script from a template
