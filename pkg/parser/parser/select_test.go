@@ -549,3 +549,84 @@ func TestConsumeCommaIfPresent_WithoutComma(t *testing.T) {
 		t.Error("expected comma not to be consumed")
 	}
 }
+
+// Test for unqualified column names in WHERE clauses
+func TestParseStatement_SelectWithUnqualifiedColumnInWhere(t *testing.T) {
+	stmt, err := ParseStatement("SELECT name FROM users WHERE age > 30")
+	if err != nil {
+		t.Fatalf("unexpected error: %s", err.Error())
+	}
+
+	selectStmt, ok := stmt.(*statements.SelectStatement)
+	if !ok {
+		t.Fatal("expected SelectStatement")
+	}
+
+	if len(selectStmt.Plan.Filters()) != 1 {
+		t.Errorf("expected 1 filter, got %d", len(selectStmt.Plan.Filters()))
+	}
+
+	filter := selectStmt.Plan.Filters()[0]
+	// The field should be auto-qualified with the table name
+	if filter.Field != "USERS.AGE" {
+		t.Errorf("expected field name 'USERS.AGE', got %s", filter.Field)
+	}
+
+	if filter.Constant != "30" {
+		t.Errorf("expected constant '30', got %s", filter.Constant)
+	}
+}
+
+func TestParseStatement_SelectWithUnqualifiedColumnAndAlias(t *testing.T) {
+	stmt, err := ParseStatement("SELECT name FROM users u WHERE id = 1")
+	if err != nil {
+		t.Fatalf("unexpected error: %s", err.Error())
+	}
+
+	selectStmt, ok := stmt.(*statements.SelectStatement)
+	if !ok {
+		t.Fatal("expected SelectStatement")
+	}
+
+	if len(selectStmt.Plan.Filters()) != 1 {
+		t.Errorf("expected 1 filter, got %d", len(selectStmt.Plan.Filters()))
+	}
+
+	filter := selectStmt.Plan.Filters()[0]
+	// When alias exists, it should use the alias for qualification
+	if filter.Field != "U.ID" {
+		t.Errorf("expected field name 'U.ID', got %s", filter.Field)
+	}
+
+	if filter.Constant != "1" {
+		t.Errorf("expected constant '1', got %s", filter.Constant)
+	}
+}
+
+func TestParseStatement_SelectWithMultipleUnqualifiedConditions(t *testing.T) {
+	stmt, err := ParseStatement("SELECT name FROM users WHERE age > 30 AND id < 100")
+	if err != nil {
+		t.Fatalf("unexpected error: %s", err.Error())
+	}
+
+	selectStmt, ok := stmt.(*statements.SelectStatement)
+	if !ok {
+		t.Fatal("expected SelectStatement")
+	}
+
+	if len(selectStmt.Plan.Filters()) != 2 {
+		t.Errorf("expected 2 filters, got %d", len(selectStmt.Plan.Filters()))
+	}
+
+	// Check first filter
+	filter1 := selectStmt.Plan.Filters()[0]
+	if filter1.Field != "USERS.AGE" {
+		t.Errorf("expected first field name 'USERS.AGE', got %s", filter1.Field)
+	}
+
+	// Check second filter
+	filter2 := selectStmt.Plan.Filters()[1]
+	if filter2.Field != "USERS.ID" {
+		t.Errorf("expected second field name 'USERS.ID', got %s", filter2.Field)
+	}
+}
