@@ -81,14 +81,17 @@ func parseExplainOptions(l *lexer.Lexer) (statements.ExplainOptions, error) {
 	}
 
 	if token.Type == lexer.FORMAT {
-		formatType, err := parseValueWithType(l, lexer.IDENTIFIER)
-		if err != nil {
-			return options, fmt.Errorf("expected format type (TEXT or JSON): %w", err)
+		formatToken := l.NextToken()
+		var formatType string
+
+		if formatToken.Type == lexer.TEXT {
+			formatType = "TEXT"
+		} else if formatToken.Type == lexer.IDENTIFIER && formatToken.Value == "JSON" {
+			formatType = "JSON"
+		} else {
+			return options, fmt.Errorf("invalid format type: %s (must be TEXT or JSON)", formatToken.Value)
 		}
 
-		if formatType != "TEXT" && formatType != "JSON" {
-			return options, fmt.Errorf("invalid format type: %s (must be TEXT or JSON)", formatType)
-		}
 		options.Format = formatType
 		token = l.NextToken()
 	}
