@@ -6,6 +6,7 @@ import (
 	"storemy/pkg/concurrency/transaction"
 	"storemy/pkg/parser/statements"
 	"storemy/pkg/planner/internal/indexops"
+	"storemy/pkg/planner/internal/result"
 	"storemy/pkg/registry"
 	"storemy/pkg/storage/index"
 )
@@ -37,11 +38,11 @@ func NewCreateTablePlan(stmt *statements.CreateStatement, ctx DbContext,
 //  3. Creates table entry in catalog with schema
 //  4. CatalogManager handles file path generation and persistence
 //  5. If primary key is specified, creates a BTree index on the primary key column
-func (p *CreateTablePlan) Execute() (*DDLResult, error) {
+func (p *CreateTablePlan) Execute() (result.Result, error) {
 	cm := p.ctx.CatalogManager()
 	if cm.TableExists(p.TxContext, p.Statement.TableName) {
 		if p.Statement.IfNotExists {
-			return &DDLResult{
+			return &result.DDLResult{
 				Success: true,
 				Message: fmt.Sprintf("Table %s already exists (IF NOT EXISTS)", p.Statement.TableName),
 			}, nil
@@ -69,7 +70,7 @@ func (p *CreateTablePlan) Execute() (*DDLResult, error) {
 		}
 	}
 
-	return &DDLResult{
+	return &result.DDLResult{
 		Success: true,
 		Message: fmt.Sprintf("Table %s created successfully%s", p.Statement.TableName, indexMessage),
 	}, nil

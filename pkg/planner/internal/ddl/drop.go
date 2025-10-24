@@ -3,6 +3,7 @@ package ddl
 import (
 	"fmt"
 	"storemy/pkg/parser/statements"
+	"storemy/pkg/planner/internal/result"
 )
 
 // DropTablePlan represents the execution plan for DROP TABLE statement.
@@ -52,13 +53,13 @@ func NewDropTablePlan(
 // Returns:
 //   - DDLResult with success message on completion
 //   - Error if table doesn't exist (without IF EXISTS) or operation fails
-func (p *DropTablePlan) Execute() (*DDLResult, error) {
+func (p *DropTablePlan) Execute() (result.Result, error) {
 	cm := p.ctx.CatalogManager()
 	tableName := p.Statement.TableName
 
 	if !cm.TableExists(p.tx, tableName) {
 		if p.Statement.IfExists {
-			return &DDLResult{
+			return &result.DDLResult{
 				Success: true,
 				Message: fmt.Sprintf("Table %s does not exist (IF EXISTS)", tableName),
 			}, nil
@@ -79,7 +80,7 @@ func (p *DropTablePlan) Execute() (*DDLResult, error) {
 		return nil, fmt.Errorf("failed to drop table: %w", err)
 	}
 
-	return &DDLResult{
+	return &result.DDLResult{
 		Success: true,
 		Message: fmt.Sprintf("Table %s dropped successfully", tableName),
 	}, nil
