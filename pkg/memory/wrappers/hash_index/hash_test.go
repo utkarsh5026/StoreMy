@@ -73,7 +73,7 @@ import (
 	"os"
 	"path/filepath"
 	"storemy/pkg/concurrency/transaction"
-	"storemy/pkg/log"
+	"storemy/pkg/log/wal"
 	"storemy/pkg/memory"
 	"storemy/pkg/primitives"
 	"storemy/pkg/storage/heap"
@@ -86,7 +86,7 @@ import (
 )
 
 // Helper function to create test transaction context
-func createTestTxContext(t *testing.T, wal *log.WAL) *transaction.TransactionContext {
+func createTestTxContext(t *testing.T, wal *wal.WAL) *transaction.TransactionContext {
 	t.Helper()
 	txID := primitives.NewTransactionID()
 	tx := transaction.NewTransactionContext(txID)
@@ -116,7 +116,7 @@ func setupTestHashIndex(t *testing.T, keyType types.Type, numBuckets int) (*Hash
 
 	// Create WAL
 	walPath := filepath.Join(tmpDir, "wal.log")
-	wal, err := log.NewWAL(walPath, 8192)
+	wal, err := wal.NewWAL(walPath, 8192)
 	if err != nil {
 		t.Fatalf("Failed to create WAL: %v", err)
 	}

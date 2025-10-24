@@ -5,7 +5,7 @@ import (
 	"path/filepath"
 	"storemy/pkg/catalog/catalogmanager"
 	"storemy/pkg/concurrency/transaction"
-	"storemy/pkg/log"
+	"storemy/pkg/log/wal"
 	"storemy/pkg/memory"
 	"storemy/pkg/parser/statements"
 	"storemy/pkg/registry"
@@ -51,7 +51,7 @@ func createTestContextWithCleanup(t *testing.T, dataDir string) *registry.Databa
 	}
 
 	walPath := filepath.Join(tmpDir, "test.wal")
-	wal, err := log.NewWAL(walPath, 8192)
+	wal, err := wal.NewWAL(walPath, 8192)
 	if err != nil {
 		os.RemoveAll(tmpDir)
 		if t != nil {

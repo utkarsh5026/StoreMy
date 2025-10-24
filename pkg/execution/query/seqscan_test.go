@@ -3,7 +3,7 @@ package query
 import (
 	"path/filepath"
 	"storemy/pkg/concurrency/transaction"
-	"storemy/pkg/log"
+	"storemy/pkg/log/wal"
 	"storemy/pkg/memory"
 	"storemy/pkg/primitives"
 	"storemy/pkg/storage/heap"
@@ -17,7 +17,7 @@ import (
 // testSetup holds common test resources
 type testSetup struct {
 	heapFile *heap.HeapFile
-	wal      *log.WAL
+	wal      *wal.WAL
 	store    *memory.PageStore
 	tx       *transaction.TransactionContext
 	td       *tuple.TupleDescription
@@ -39,7 +39,7 @@ func setupSeqScanTest(t *testing.T, fields []types.Type, fieldNames []string) *t
 	}
 
 	walPath := filepath.Join(tempDir, "test.wal")
-	wal, err := log.NewWAL(walPath, 4096)
+	wal, err := wal.NewWAL(walPath, 4096)
 	if err != nil {
 		t.Fatalf("Failed to create WAL: %v", err)
 	}

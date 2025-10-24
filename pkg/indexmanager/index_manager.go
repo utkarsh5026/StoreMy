@@ -5,7 +5,7 @@ import (
 	"storemy/pkg/catalog/schema"
 	"storemy/pkg/catalog/systemtable"
 	"storemy/pkg/concurrency/transaction"
-	"storemy/pkg/log"
+	"storemy/pkg/log/wal"
 	"storemy/pkg/memory"
 	btreeindex "storemy/pkg/memory/wrappers/btree_index"
 	hashindex "storemy/pkg/memory/wrappers/hash_index"
@@ -64,7 +64,7 @@ type indexWithMetadata struct {
 type IndexManager struct {
 	catalog   CatalogReader
 	pageStore *memory.PageStore
-	wal       *log.WAL
+	wal       *wal.WAL
 
 	cache       *indexCache
 	loader      *indexLoader
@@ -80,7 +80,7 @@ type IndexManager struct {
 //   - wal: Write-ahead log for logging index operations
 //
 // Returns a new IndexManager ready to manage indexes.
-func NewIndexManager(catalog CatalogReader, pageStore *memory.PageStore, wal *log.WAL) *IndexManager {
+func NewIndexManager(catalog CatalogReader, pageStore *memory.PageStore, wal *wal.WAL) *IndexManager {
 	im := &IndexManager{
 		catalog:   catalog,
 		pageStore: pageStore,

@@ -5,7 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"storemy/pkg/concurrency/transaction"
-	"storemy/pkg/log"
+	"storemy/pkg/log/wal"
 	"storemy/pkg/memory"
 	"storemy/pkg/primitives"
 	"storemy/pkg/storage/heap"
@@ -131,7 +131,7 @@ func createTestPageStore(t *testing.T) (*memory.PageStore, func()) {
 	t.Helper()
 	tempDir := t.TempDir()
 	walPath := filepath.Join(tempDir, "test.wal")
-	wal, err := log.NewWAL(walPath, 4096)
+	wal, err := wal.NewWAL(walPath, 4096)
 	if err != nil {
 		t.Fatalf("Failed to create WAL: %v", err)
 	}

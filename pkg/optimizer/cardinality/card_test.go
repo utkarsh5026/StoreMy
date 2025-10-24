@@ -7,7 +7,7 @@ import (
 	"storemy/pkg/catalog/schema"
 	"storemy/pkg/catalog/tablecache"
 	"storemy/pkg/concurrency/transaction"
-	"storemy/pkg/log"
+	"storemy/pkg/log/wal"
 	"storemy/pkg/memory"
 	"storemy/pkg/memory/wrappers/table"
 	"storemy/pkg/plan"
@@ -41,7 +41,7 @@ func setupTestCatalogWithData(t *testing.T) *testCatalogSetup {
 	logPath := filepath.Join(tempDir, "wal.log")
 
 	// Setup components
-	wal, err := log.NewWAL(logPath, 8192)
+	wal, err := wal.NewWAL(logPath, 8192)
 	if err != nil {
 		t.Fatalf("failed to create WAL: %v", err)
 	}
@@ -383,7 +383,7 @@ func TestDistinctCardinality(t *testing.T) {
 			DistinctExprs: []string{}, // Empty = all columns
 		}
 
-		result, err := ce.estimateDistinct( distinct)
+		result, err := ce.estimateDistinct(distinct)
 		if err != nil {
 			t.Fatalf("estimateDistinct error: %v", err)
 		}
@@ -413,7 +413,7 @@ func TestDistinctCardinality(t *testing.T) {
 				DistinctExprs: []string{},
 			}
 
-			result, err := ce.estimateDistinct( distinct)
+			result, err := ce.estimateDistinct(distinct)
 			if err != nil {
 				t.Fatalf("estimateDistinct error: %v", err)
 			}
@@ -434,7 +434,7 @@ func TestDistinctCardinality(t *testing.T) {
 			DistinctExprs: []string{},
 		}
 
-		result, err := ce.estimateDistinct( distinct)
+		result, err := ce.estimateDistinct(distinct)
 		if err != nil {
 			t.Fatalf("estimateDistinct error: %v", err)
 		}
@@ -453,7 +453,7 @@ func TestDistinctCardinality(t *testing.T) {
 			DistinctExprs: []string{},
 		}
 
-		result, err := ce.estimateDistinct( distinct)
+		result, err := ce.estimateDistinct(distinct)
 		if err != nil {
 			t.Fatalf("estimateDistinct error: %v", err)
 		}
@@ -485,7 +485,7 @@ func TestUnionCardinality(t *testing.T) {
 			UnionAll:   true,
 		}
 
-		result, err := ce.estimateUnionCardinality( union)
+		result, err := ce.estimateUnionCardinality(union)
 		if err != nil {
 			t.Fatalf("estimateUnionCardinality error: %v", err)
 		}
@@ -509,7 +509,7 @@ func TestUnionCardinality(t *testing.T) {
 			UnionAll:   false, // UNION with dedup
 		}
 
-		result, err := ce.estimateUnionCardinality( union)
+		result, err := ce.estimateUnionCardinality(union)
 		if err != nil {
 			t.Fatalf("estimateUnionCardinality error: %v", err)
 		}
@@ -542,7 +542,7 @@ func TestUnionCardinality(t *testing.T) {
 			UnionAll:   false,
 		}
 
-		result, err := ce.estimateUnionCardinality( union)
+		result, err := ce.estimateUnionCardinality(union)
 		if err != nil {
 			t.Fatalf("estimateUnionCardinality error: %v", err)
 		}
@@ -579,7 +579,7 @@ func TestUnionCardinality(t *testing.T) {
 			UnionAll:   false,
 		}
 
-		result, err := ce.estimateUnionCardinality( union)
+		result, err := ce.estimateUnionCardinality(union)
 		if err != nil {
 			t.Fatalf("estimateUnionCardinality error: %v", err)
 		}
@@ -607,7 +607,7 @@ func TestAggregateCardinality(t *testing.T) {
 			GroupByExprs: []string{}, // No GROUP BY
 		}
 
-		result, err := ce.estimateAggr( agg)
+		result, err := ce.estimateAggr(agg)
 		if err != nil {
 			t.Fatalf("estimateAggr error: %v", err)
 		}
@@ -626,7 +626,7 @@ func TestAggregateCardinality(t *testing.T) {
 			GroupByExprs: []string{"status"},
 		}
 
-		result, err := ce.estimateAggr( agg)
+		result, err := ce.estimateAggr(agg)
 		if err != nil {
 			t.Fatalf("estimateAggr error: %v", err)
 		}
@@ -645,7 +645,7 @@ func TestAggregateCardinality(t *testing.T) {
 			GroupByExprs: []string{"id"},
 		}
 
-		result, err := ce.estimateAggr( agg)
+		result, err := ce.estimateAggr(agg)
 		if err != nil {
 			t.Fatalf("estimateAggr error: %v", err)
 		}
@@ -664,7 +664,7 @@ func TestAggregateCardinality(t *testing.T) {
 			GroupByExprs: []string{"col1", "col2", "col3"},
 		}
 
-		result, err := ce.estimateAggr( agg)
+		result, err := ce.estimateAggr(agg)
 		if err != nil {
 			t.Fatalf("estimateAggr error: %v", err)
 		}
@@ -699,7 +699,7 @@ func TestJoinCardinalityWithContainment(t *testing.T) {
 			RightChild: rightChild,
 		}
 
-		result, err := ce.estimateJoin( join)
+		result, err := ce.estimateJoin(join)
 		if err != nil {
 			t.Fatalf("estimateJoin error: %v", err)
 		}
@@ -723,7 +723,7 @@ func TestJoinCardinalityWithContainment(t *testing.T) {
 			RightChild: rightChild,
 		}
 
-		result, err := ce.estimateJoin( join)
+		result, err := ce.estimateJoin(join)
 		if err != nil {
 			t.Fatalf("estimateJoin error: %v", err)
 		}
@@ -745,7 +745,7 @@ func TestJoinCardinalityWithContainment(t *testing.T) {
 			RightChild: rightChild,
 		}
 
-		result, err := ce.estimateJoin( join)
+		result, err := ce.estimateJoin(join)
 		if err != nil {
 			t.Fatalf("estimateJoin error: %v", err)
 		}
@@ -775,7 +775,7 @@ func TestJoinCardinalityWithContainment(t *testing.T) {
 			},
 		}
 
-		resultWithFilter, err := ce.estimateJoin( join)
+		resultWithFilter, err := ce.estimateJoin(join)
 		if err != nil {
 			t.Fatalf("estimateJoin error: %v", err)
 		}
@@ -785,7 +785,7 @@ func TestJoinCardinalityWithContainment(t *testing.T) {
 			LeftChild:  leftScan,
 			RightChild: rightScan,
 		}
-		resultNoFilter, err := ce.estimateJoin( joinNoFilter)
+		resultNoFilter, err := ce.estimateJoin(joinNoFilter)
 		if err != nil {
 			t.Fatalf("estimateJoin error: %v", err)
 		}
@@ -819,7 +819,7 @@ func TestLimitCardinality(t *testing.T) {
 			Offset: 0,
 		}
 
-		result, err := ce.estimateLimit( limit)
+		result, err := ce.estimateLimit(limit)
 		if err != nil {
 			t.Fatalf("estimateLimit error: %v", err)
 		}
@@ -839,7 +839,7 @@ func TestLimitCardinality(t *testing.T) {
 			Offset: 0,
 		}
 
-		result, err := ce.estimateLimit( limit)
+		result, err := ce.estimateLimit(limit)
 		if err != nil {
 			t.Fatalf("estimateLimit error: %v", err)
 		}
@@ -859,7 +859,7 @@ func TestLimitCardinality(t *testing.T) {
 			Offset: 200,
 		}
 
-		result, err := ce.estimateLimit( limit)
+		result, err := ce.estimateLimit(limit)
 		if err != nil {
 			t.Fatalf("estimateLimit error: %v", err)
 		}
@@ -879,7 +879,7 @@ func TestLimitCardinality(t *testing.T) {
 			Offset: 200,
 		}
 
-		result, err := ce.estimateLimit( limit)
+		result, err := ce.estimateLimit(limit)
 		if err != nil {
 			t.Fatalf("estimateLimit error: %v", err)
 		}
@@ -899,7 +899,7 @@ func TestLimitCardinality(t *testing.T) {
 			Offset: 0,
 		}
 
-		result, err := ce.estimateLimit( limit)
+		result, err := ce.estimateLimit(limit)
 		if err != nil {
 			t.Fatalf("estimateLimit error: %v", err)
 		}
@@ -939,7 +939,7 @@ func TestScanCardinalityBounds(t *testing.T) {
 			},
 		}
 
-		result, err := ce.estimateScan( scan)
+		result, err := ce.estimateScan(scan)
 		if err != nil {
 			t.Fatalf("estimateScan error: %v", err)
 		}
@@ -974,7 +974,7 @@ func TestGroupByDistinctCountEstimation(t *testing.T) {
 
 	t.Run("Empty GROUP BY Returns 1", func(t *testing.T) {
 		child := &plan.ProjectNode{}
-		result := ce.estimateGroupByDistinctCount( child, []string{})
+		result := ce.estimateGroupByDistinctCount(child, []string{})
 
 		if result != 1 {
 			t.Errorf("Empty GROUP BY: expected 1, got %d", result)
@@ -983,7 +983,7 @@ func TestGroupByDistinctCountEstimation(t *testing.T) {
 
 	t.Run("Multiple Columns Uses Product", func(t *testing.T) {
 		child := &plan.ProjectNode{}
-		result := ce.estimateGroupByDistinctCount( child, []string{"col1", "col2"})
+		result := ce.estimateGroupByDistinctCount(child, []string{"col1", "col2"})
 
 		// Should use default distinct count product
 		expectedMin := int64(DefaultDistinctCount) // At least one column's distinct
@@ -1003,7 +1003,7 @@ func TestGroupByDistinctCountEstimation(t *testing.T) {
 			manyColumns[i] = "col" + string(rune(i))
 		}
 
-		result := ce.estimateGroupByDistinctCount( child, manyColumns)
+		result := ce.estimateGroupByDistinctCount(child, manyColumns)
 
 		// Should be capped at reasonable maximum
 		maxAllowed := int64(1e9)
@@ -1045,7 +1045,7 @@ func TestEquiJoinSelectivityContainment(t *testing.T) {
 
 		// Can't test exact values without mock catalog,
 		// but we can test the logic doesn't panic
-		sel := ce.estimateEquiJoinSelectivity( join)
+		sel := ce.estimateEquiJoinSelectivity(join)
 
 		if sel < 0.0 || sel > 1.0 {
 			t.Errorf("Join selectivity out of range: %.6f", sel)
@@ -1065,7 +1065,7 @@ func TestEquiJoinSelectivityContainment(t *testing.T) {
 			RightColumn: "id",
 		}
 
-		sel := ce.estimateEquiJoinSelectivity( join)
+		sel := ce.estimateEquiJoinSelectivity(join)
 
 		if sel < 0.0 || sel > 1.0 {
 			t.Errorf("Join selectivity out of range: %.6f", sel)
@@ -1089,7 +1089,7 @@ func TestEquiJoinSelectivityContainment(t *testing.T) {
 			RightColumn: "nonexistent",
 		}
 
-		sel := ce.estimateEquiJoinSelectivity( join)
+		sel := ce.estimateEquiJoinSelectivity(join)
 
 		if sel != DefaultJoinSelectivity {
 			t.Errorf("Expected default selectivity %.2f, got %.6f",
@@ -1115,7 +1115,7 @@ func TestCardinalityMathematicalProperties(t *testing.T) {
 			Columns: []string{"col1", "col2"},
 		}
 
-		result, err := ce.estimateProject( project)
+		result, err := ce.estimateProject(project)
 		if err != nil {
 			t.Fatalf("estimateProject error: %v", err)
 		}
@@ -1135,7 +1135,7 @@ func TestCardinalityMathematicalProperties(t *testing.T) {
 			SortKeys: []string{"col1"},
 		}
 
-		result, err := ce.estimateSort( sort)
+		result, err := ce.estimateSort(sort)
 		if err != nil {
 			t.Fatalf("estimateSort error: %v", err)
 		}
@@ -1162,7 +1162,7 @@ func TestCardinalityMathematicalProperties(t *testing.T) {
 			},
 		}
 
-		result, err := ce.estimateFilter( filter)
+		result, err := ce.estimateFilter(filter)
 		if err != nil {
 			t.Fatalf("estimateFilter error: %v", err)
 		}
@@ -1251,7 +1251,7 @@ func BenchmarkEstimateJoinCardinality(b *testing.B) {
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		_, _ = ce.estimateJoin( join)
+		_, _ = ce.estimateJoin(join)
 	}
 }
 
@@ -1357,7 +1357,7 @@ func TestScanCardinalityWithActualCatalog(t *testing.T) {
 			Predicates: []plan.PredicateInfo{},
 		}
 
-		result, err := ce.estimateScan( scan)
+		result, err := ce.estimateScan(scan)
 		if err != nil {
 			t.Fatalf("estimateScan error: %v", err)
 		}
@@ -1382,7 +1382,7 @@ func TestScanCardinalityWithActualCatalog(t *testing.T) {
 			},
 		}
 
-		result, err := ce.estimateScan( scan)
+		result, err := ce.estimateScan(scan)
 		if err != nil {
 			t.Fatalf("estimateScan error: %v", err)
 		}
@@ -1417,7 +1417,7 @@ func TestScanCardinalityWithActualCatalog(t *testing.T) {
 			},
 		}
 
-		result, err := ce.estimateScan( scan)
+		result, err := ce.estimateScan(scan)
 		if err != nil {
 			t.Fatalf("estimateScan error: %v", err)
 		}
@@ -1443,7 +1443,7 @@ func TestScanCardinalityWithActualCatalog(t *testing.T) {
 			},
 		}
 
-		result, err := ce.estimateScan( scan)
+		result, err := ce.estimateScan(scan)
 		if err != nil {
 			t.Fatalf("estimateScan error: %v", err)
 		}
@@ -1532,7 +1532,7 @@ func TestJoinCardinalityWithActualCatalog(t *testing.T) {
 			RightColumn: "user_id",
 		}
 
-		result, err := ce.estimateJoin( join)
+		result, err := ce.estimateJoin(join)
 		if err != nil {
 			t.Fatalf("estimateJoin error: %v", err)
 		}
@@ -1570,7 +1570,7 @@ func TestJoinCardinalityWithActualCatalog(t *testing.T) {
 			},
 		}
 
-		resultWithFilter, err := ce.estimateJoin( join)
+		resultWithFilter, err := ce.estimateJoin(join)
 		if err != nil {
 			t.Fatalf("estimateJoin error: %v", err)
 		}
@@ -1582,7 +1582,7 @@ func TestJoinCardinalityWithActualCatalog(t *testing.T) {
 			LeftColumn:  "user_id",
 			RightColumn: "user_id",
 		}
-		resultNoFilter, err := ce.estimateJoin( joinNoFilter)
+		resultNoFilter, err := ce.estimateJoin(joinNoFilter)
 		if err != nil {
 			t.Fatalf("estimateJoin error: %v", err)
 		}

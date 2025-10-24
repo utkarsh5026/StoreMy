@@ -3,7 +3,7 @@ package memory
 import (
 	"path/filepath"
 	"storemy/pkg/concurrency/transaction"
-	"storemy/pkg/log"
+	"storemy/pkg/log/wal"
 	"storemy/pkg/primitives"
 	"storemy/pkg/storage/heap"
 	"storemy/pkg/storage/page"
@@ -15,7 +15,7 @@ import (
 // TestNewPageStore tests PageStore initialization
 func TestNewPageStore(t *testing.T) {
 	walPath := filepath.Join(t.TempDir(), "test.wal")
-	wal, err := log.NewWAL(walPath, 4096)
+	wal, err := wal.NewWAL(walPath, 4096)
 	if err != nil {
 		t.Fatalf("Failed to create WAL: %v", err)
 	}
@@ -47,7 +47,7 @@ func TestNewPageStore(t *testing.T) {
 // TestRegisterDbFile tests DbFile registration
 func TestRegisterDbFile(t *testing.T) {
 	walPath := filepath.Join(t.TempDir(), "test.wal")
-	wal, err := log.NewWAL(walPath, 4096)
+	wal, err := wal.NewWAL(walPath, 4096)
 	if err != nil {
 		t.Fatalf("Failed to create WAL: %v", err)
 	}
@@ -74,7 +74,7 @@ func TestRegisterDbFile(t *testing.T) {
 // TestUnregisterDbFile tests DbFile removal
 func TestUnregisterDbFile(t *testing.T) {
 	walPath := filepath.Join(t.TempDir(), "test.wal")
-	wal, err := log.NewWAL(walPath, 4096)
+	wal, err := wal.NewWAL(walPath, 4096)
 	if err != nil {
 		t.Fatalf("Failed to create WAL: %v", err)
 	}
@@ -98,7 +98,7 @@ func TestUnregisterDbFile(t *testing.T) {
 // TestGetPage_NilContext tests GetPage with nil transaction context
 func TestGetPage_NilContext(t *testing.T) {
 	walPath := filepath.Join(t.TempDir(), "test.wal")
-	wal, err := log.NewWAL(walPath, 4096)
+	wal, err := wal.NewWAL(walPath, 4096)
 	if err != nil {
 		t.Fatalf("Failed to create WAL: %v", err)
 	}
@@ -118,7 +118,7 @@ func TestGetPage_NilContext(t *testing.T) {
 // TestGetPage_BasicRead tests basic page reading
 func TestGetPage_BasicRead(t *testing.T) {
 	walPath := filepath.Join(t.TempDir(), "test.wal")
-	wal, err := log.NewWAL(walPath, 4096)
+	wal, err := wal.NewWAL(walPath, 4096)
 	if err != nil {
 		t.Fatalf("Failed to create WAL: %v", err)
 	}
@@ -160,7 +160,7 @@ func TestGetPage_BasicRead(t *testing.T) {
 // TestGetPage_CachedPage tests retrieving a page from cache
 func TestGetPage_CachedPage(t *testing.T) {
 	walPath := filepath.Join(t.TempDir(), "test.wal")
-	wal, err := log.NewWAL(walPath, 4096)
+	wal, err := wal.NewWAL(walPath, 4096)
 	if err != nil {
 		t.Fatalf("Failed to create WAL: %v", err)
 	}
@@ -191,7 +191,7 @@ func TestGetPage_CachedPage(t *testing.T) {
 // TestGetPage_ReadWritePermissions tests page access with write permissions
 func TestGetPage_ReadWritePermissions(t *testing.T) {
 	walPath := filepath.Join(t.TempDir(), "test.wal")
-	wal, err := log.NewWAL(walPath, 4096)
+	wal, err := wal.NewWAL(walPath, 4096)
 	if err != nil {
 		t.Fatalf("Failed to create WAL: %v", err)
 	}
@@ -226,7 +226,7 @@ func TestGetPage_ReadWritePermissions(t *testing.T) {
 // TestGetPage_Eviction tests page eviction when cache is full
 func TestGetPage_Eviction(t *testing.T) {
 	walPath := filepath.Join(t.TempDir(), "test.wal")
-	wal, err := log.NewWAL(walPath, 4096)
+	wal, err := wal.NewWAL(walPath, 4096)
 	if err != nil {
 		t.Fatalf("Failed to create WAL: %v", err)
 	}
@@ -260,7 +260,7 @@ func TestGetPage_Eviction(t *testing.T) {
 // TestGetPage_EvictionFailure tests when no pages can be evicted
 func TestGetPage_EvictionFailure(t *testing.T) {
 	walPath := filepath.Join(t.TempDir(), "test.wal")
-	wal, err := log.NewWAL(walPath, 4096)
+	wal, err := wal.NewWAL(walPath, 4096)
 	if err != nil {
 		t.Fatalf("Failed to create WAL: %v", err)
 	}
@@ -296,7 +296,7 @@ func TestGetPage_EvictionFailure(t *testing.T) {
 // TestHandlePageChange_InsertOperation tests logging insert operations
 func TestHandlePageChange_InsertOperation(t *testing.T) {
 	walPath := filepath.Join(t.TempDir(), "test.wal")
-	wal, err := log.NewWAL(walPath, 4096)
+	wal, err := wal.NewWAL(walPath, 4096)
 	if err != nil {
 		t.Fatalf("Failed to create WAL: %v", err)
 	}
@@ -340,7 +340,7 @@ func TestHandlePageChange_InsertOperation(t *testing.T) {
 // TestHandlePageChange_UpdateOperation tests logging update operations
 func TestHandlePageChange_UpdateOperation(t *testing.T) {
 	walPath := filepath.Join(t.TempDir(), "test.wal")
-	wal, err := log.NewWAL(walPath, 4096)
+	wal, err := wal.NewWAL(walPath, 4096)
 	if err != nil {
 		t.Fatalf("Failed to create WAL: %v", err)
 	}
@@ -374,7 +374,7 @@ func TestHandlePageChange_UpdateOperation(t *testing.T) {
 // TestHandlePageChange_DeleteOperation tests logging delete operations
 func TestHandlePageChange_DeleteOperation(t *testing.T) {
 	walPath := filepath.Join(t.TempDir(), "test.wal")
-	wal, err := log.NewWAL(walPath, 4096)
+	wal, err := wal.NewWAL(walPath, 4096)
 	if err != nil {
 		t.Fatalf("Failed to create WAL: %v", err)
 	}
@@ -405,7 +405,7 @@ func TestHandlePageChange_DeleteOperation(t *testing.T) {
 // TestHandlePageChange_NilContext tests with nil context
 func TestHandlePageChange_NilContext(t *testing.T) {
 	walPath := filepath.Join(t.TempDir(), "test.wal")
-	wal, err := log.NewWAL(walPath, 4096)
+	wal, err := wal.NewWAL(walPath, 4096)
 	if err != nil {
 		t.Fatalf("Failed to create WAL: %v", err)
 	}
@@ -427,7 +427,7 @@ func TestHandlePageChange_NilContext(t *testing.T) {
 // TestCommitTransaction tests successful transaction commit
 func TestCommitTransaction(t *testing.T) {
 	walPath := filepath.Join(t.TempDir(), "test.wal")
-	wal, err := log.NewWAL(walPath, 4096)
+	wal, err := wal.NewWAL(walPath, 4096)
 	if err != nil {
 		t.Fatalf("Failed to create WAL: %v", err)
 	}
@@ -479,7 +479,7 @@ func TestCommitTransaction(t *testing.T) {
 // TestCommitTransaction_NoChanges tests commit with read-only transaction
 func TestCommitTransaction_NoChanges(t *testing.T) {
 	walPath := filepath.Join(t.TempDir(), "test.wal")
-	wal, err := log.NewWAL(walPath, 4096)
+	wal, err := wal.NewWAL(walPath, 4096)
 	if err != nil {
 		t.Fatalf("Failed to create WAL: %v", err)
 	}
@@ -499,7 +499,7 @@ func TestCommitTransaction_NoChanges(t *testing.T) {
 // TestAbortTransaction tests transaction rollback
 func TestAbortTransaction(t *testing.T) {
 	walPath := filepath.Join(t.TempDir(), "test.wal")
-	wal, err := log.NewWAL(walPath, 4096)
+	wal, err := wal.NewWAL(walPath, 4096)
 	if err != nil {
 		t.Fatalf("Failed to create WAL: %v", err)
 	}
@@ -553,7 +553,7 @@ func TestAbortTransaction(t *testing.T) {
 // TestAbortTransaction_NoBeforeImage tests abort without before image
 func TestAbortTransaction_NoBeforeImage(t *testing.T) {
 	walPath := filepath.Join(t.TempDir(), "test.wal")
-	wal, err := log.NewWAL(walPath, 4096)
+	wal, err := wal.NewWAL(walPath, 4096)
 	if err != nil {
 		t.Fatalf("Failed to create WAL: %v", err)
 	}
@@ -594,7 +594,7 @@ func TestAbortTransaction_NoBeforeImage(t *testing.T) {
 // TestFlushAllPages tests flushing all dirty pages to disk
 func TestFlushAllPages(t *testing.T) {
 	walPath := filepath.Join(t.TempDir(), "test.wal")
-	wal, err := log.NewWAL(walPath, 4096)
+	wal, err := wal.NewWAL(walPath, 4096)
 	if err != nil {
 		t.Fatalf("Failed to create WAL: %v", err)
 	}
@@ -648,7 +648,7 @@ func TestFlushAllPages(t *testing.T) {
 // TestFlushAllPages_EmptyCache tests flushing with empty cache
 func TestFlushAllPages_EmptyCache(t *testing.T) {
 	walPath := filepath.Join(t.TempDir(), "test.wal")
-	wal, err := log.NewWAL(walPath, 4096)
+	wal, err := wal.NewWAL(walPath, 4096)
 	if err != nil {
 		t.Fatalf("Failed to create WAL: %v", err)
 	}
@@ -666,7 +666,7 @@ func TestFlushAllPages_EmptyCache(t *testing.T) {
 // TestClose tests proper shutdown
 func TestClose(t *testing.T) {
 	walPath := filepath.Join(t.TempDir(), "test.wal")
-	wal, err := log.NewWAL(walPath, 4096)
+	wal, err := wal.NewWAL(walPath, 4096)
 	if err != nil {
 		t.Fatalf("Failed to create WAL: %v", err)
 	}
@@ -705,7 +705,7 @@ func TestClose(t *testing.T) {
 // TestGetWal tests WAL getter
 func TestGetWal(t *testing.T) {
 	walPath := filepath.Join(t.TempDir(), "test.wal")
-	wal, err := log.NewWAL(walPath, 4096)
+	wal, err := wal.NewWAL(walPath, 4096)
 	if err != nil {
 		t.Fatalf("Failed to create WAL: %v", err)
 	}
@@ -723,7 +723,7 @@ func TestGetWal(t *testing.T) {
 // TestConcurrentGetPage tests concurrent page access
 func TestConcurrentGetPage(t *testing.T) {
 	walPath := filepath.Join(t.TempDir(), "test.wal")
-	wal, err := log.NewWAL(walPath, 4096)
+	wal, err := wal.NewWAL(walPath, 4096)
 	if err != nil {
 		t.Fatalf("Failed to create WAL: %v", err)
 	}
@@ -760,7 +760,7 @@ func TestConcurrentGetPage(t *testing.T) {
 // TestConcurrentCommitAbort tests concurrent commits and aborts
 func TestConcurrentCommitAbort(t *testing.T) {
 	walPath := filepath.Join(t.TempDir(), "test.wal")
-	wal, err := log.NewWAL(walPath, 4096)
+	wal, err := wal.NewWAL(walPath, 4096)
 	if err != nil {
 		t.Fatalf("Failed to create WAL: %v", err)
 	}
@@ -834,7 +834,7 @@ func TestConcurrentCommitAbort(t *testing.T) {
 // TestLockingBehavior tests that proper locks are acquired
 func TestLockingBehavior(t *testing.T) {
 	walPath := filepath.Join(t.TempDir(), "test.wal")
-	wal, err := log.NewWAL(walPath, 4096)
+	wal, err := wal.NewWAL(walPath, 4096)
 	if err != nil {
 		t.Fatalf("Failed to create WAL: %v", err)
 	}
@@ -866,7 +866,7 @@ func TestLockingBehavior(t *testing.T) {
 // TestEvictionPolicy tests NO-STEAL policy enforcement
 func TestEvictionPolicy(t *testing.T) {
 	walPath := filepath.Join(t.TempDir(), "test.wal")
-	wal, err := log.NewWAL(walPath, 4096)
+	wal, err := wal.NewWAL(walPath, 4096)
 	if err != nil {
 		t.Fatalf("Failed to create WAL: %v", err)
 	}
@@ -906,7 +906,7 @@ func TestEvictionPolicy(t *testing.T) {
 // TestMultipleTableOperations tests operations across multiple tables
 func TestMultipleTableOperations(t *testing.T) {
 	walPath := filepath.Join(t.TempDir(), "test.wal")
-	wal, err := log.NewWAL(walPath, 4096)
+	wal, err := wal.NewWAL(walPath, 4096)
 	if err != nil {
 		t.Fatalf("Failed to create WAL: %v", err)
 	}
@@ -959,7 +959,7 @@ func TestMultipleTableOperations(t *testing.T) {
 // TestGetDbFileForPage tests DbFile lookup
 func TestGetDbFileForPage(t *testing.T) {
 	walPath := filepath.Join(t.TempDir(), "test.wal")
-	wal, err := log.NewWAL(walPath, 4096)
+	wal, err := wal.NewWAL(walPath, 4096)
 	if err != nil {
 		t.Fatalf("Failed to create WAL: %v", err)
 	}
@@ -997,7 +997,7 @@ func TestPageStoreStress(t *testing.T) {
 	}
 
 	walPath := filepath.Join(t.TempDir(), "test.wal")
-	wal, err := log.NewWAL(walPath, 4096)
+	wal, err := wal.NewWAL(walPath, 4096)
 	if err != nil {
 		t.Fatalf("Failed to create WAL: %v", err)
 	}
@@ -1055,7 +1055,7 @@ func TestPageStoreStress(t *testing.T) {
 // TestTransactionContextIntegration tests integration with transaction context
 func TestTransactionContextIntegration(t *testing.T) {
 	walPath := filepath.Join(t.TempDir(), "test.wal")
-	wal, err := log.NewWAL(walPath, 4096)
+	wal, err := wal.NewWAL(walPath, 4096)
 	if err != nil {
 		t.Fatalf("Failed to create WAL: %v", err)
 	}
@@ -1089,7 +1089,7 @@ func TestTransactionContextIntegration(t *testing.T) {
 func BenchmarkGetPage(b *testing.B) {
 	tmpDir := b.TempDir()
 	walPath := filepath.Join(tmpDir, "bench.wal")
-	wal, _ := log.NewWAL(walPath, 4096)
+	wal, _ := wal.NewWAL(walPath, 4096)
 	defer wal.Close()
 
 	ps := NewPageStore(wal)
@@ -1106,7 +1106,7 @@ func BenchmarkGetPage(b *testing.B) {
 func BenchmarkCommit(b *testing.B) {
 	tmpDir := b.TempDir()
 	walPath := filepath.Join(tmpDir, "bench.wal")
-	wal, _ := log.NewWAL(walPath, 4096)
+	wal, _ := wal.NewWAL(walPath, 4096)
 	defer wal.Close()
 
 	ps := NewPageStore(wal)
@@ -1127,7 +1127,7 @@ func BenchmarkCommit(b *testing.B) {
 func BenchmarkAbort(b *testing.B) {
 	tmpDir := b.TempDir()
 	walPath := filepath.Join(tmpDir, "bench.wal")
-	wal, _ := log.NewWAL(walPath, 4096)
+	wal, _ := wal.NewWAL(walPath, 4096)
 	defer wal.Close()
 
 	ps := NewPageStore(wal)

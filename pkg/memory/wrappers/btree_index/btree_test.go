@@ -5,7 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"storemy/pkg/concurrency/transaction"
-	"storemy/pkg/log"
+	"storemy/pkg/log/wal"
 	"storemy/pkg/memory"
 	"storemy/pkg/primitives"
 	"storemy/pkg/storage/heap"
@@ -32,7 +32,7 @@ func setupTestBTree(t *testing.T, keyType types.Type) (*BTree, *memory.PageStore
 
 	// Create WAL
 	walPath := filepath.Join(tmpDir, "wal.log")
-	wal, err := log.NewWAL(walPath, 8192)
+	wal, err := wal.NewWAL(walPath, 8192)
 	if err != nil {
 		t.Fatalf("Failed to create WAL: %v", err)
 	}

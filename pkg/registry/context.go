@@ -6,7 +6,7 @@ import (
 	"storemy/pkg/catalog/systemtable"
 	"storemy/pkg/concurrency/transaction"
 	"storemy/pkg/indexmanager"
-	"storemy/pkg/log"
+	"storemy/pkg/log/wal"
 	"storemy/pkg/memory"
 	"storemy/pkg/memory/wrappers/table"
 )
@@ -19,7 +19,7 @@ type DatabaseContext struct {
 	indexManager *indexmanager.IndexManager
 	txRegistry   *transaction.TransactionRegistry
 	tupleManager *table.TupleManager
-	wal          *log.WAL
+	wal          *wal.WAL
 	dataDir      string
 }
 
@@ -40,7 +40,7 @@ func (ca *catalogAdapter) GetTableSchema(tableID int) (*schema.Schema, error) {
 func NewDatabaseContext(
 	pageStore *memory.PageStore,
 	catalogMgr *catalogmanager.CatalogManager,
-	wal *log.WAL,
+	wal *wal.WAL,
 	dataDir string,
 ) *DatabaseContext {
 	tupleManager := table.NewTupleManager(pageStore)
@@ -61,7 +61,7 @@ func (ctx *DatabaseContext) PageStore() *memory.PageStore {
 	return ctx.pageStore
 }
 
-func (ctx *DatabaseContext) WAL() *log.WAL {
+func (ctx *DatabaseContext) WAL() *wal.WAL {
 	return ctx.wal
 }
 

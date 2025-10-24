@@ -7,7 +7,7 @@ import (
 	"storemy/pkg/catalog/schema"
 	"storemy/pkg/catalog/tablecache"
 	"storemy/pkg/concurrency/transaction"
-	"storemy/pkg/log"
+	"storemy/pkg/log/wal"
 	"storemy/pkg/memory"
 	"storemy/pkg/types"
 	"testing"
@@ -27,7 +27,7 @@ type testSetup struct {
 	txRegistry *transaction.TransactionRegistry
 	tm         *tablecache.TableCache
 	store      *memory.PageStore
-	wal        *log.WAL
+	wal        *wal.WAL
 	t          *testing.T
 }
 
@@ -37,7 +37,7 @@ func setupTest(t *testing.T) *testSetup {
 	walPath := filepath.Join(tempDir, "test.wal")
 
 	tm := tablecache.NewTableCache()
-	wal, err := log.NewWAL(walPath, 8192)
+	wal, err := wal.NewWAL(walPath, 8192)
 	if err != nil {
 		t.Fatalf("Failed to create WAL: %v", err)
 	}

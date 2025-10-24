@@ -4,7 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"storemy/pkg/concurrency/transaction"
-	"storemy/pkg/log"
+	"storemy/pkg/log/wal"
 	"storemy/pkg/memory"
 	"storemy/pkg/primitives"
 	"storemy/pkg/storage/heap"
@@ -22,7 +22,7 @@ func setupTestEnvironment(t *testing.T) (*TupleManager, *heap.HeapFile, *memory.
 	heapPath := filepath.Join(tempDir, "test.heap")
 
 	// Create WAL
-	wal, err := log.NewWAL(walPath, 8192)
+	wal, err := wal.NewWAL(walPath, 8192)
 	if err != nil {
 		t.Fatalf("Failed to create WAL: %v", err)
 	}

@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"storemy/pkg/concurrency/transaction"
 	"storemy/pkg/indexmanager"
-	"storemy/pkg/log"
+	"storemy/pkg/log/wal"
 	"storemy/pkg/memory"
 	"storemy/pkg/primitives"
 	"storemy/pkg/storage/heap"
@@ -53,7 +53,7 @@ type StatsRecorder interface {
 
 type TupleManager struct {
 	pageProvider *memory.PageStore
-	wal          *log.WAL
+	wal          *wal.WAL
 	statsManager StatsRecorder
 	indexManager *indexmanager.IndexManager
 }

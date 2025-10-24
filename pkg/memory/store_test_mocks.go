@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"storemy/pkg/concurrency/transaction"
 	"storemy/pkg/iterator"
-	"storemy/pkg/log"
+	"storemy/pkg/log/wal"
 	"storemy/pkg/primitives"
 	"storemy/pkg/storage/heap"
 	"storemy/pkg/storage/page"
@@ -187,7 +187,7 @@ func (m *mockDbFileForPageStore) IsClosed() bool {
 	return false
 }
 
-func createTransactionContext(t *testing.T, wal *log.WAL) *transaction.TransactionContext {
+func createTransactionContext(t *testing.T, wal *wal.WAL) *transaction.TransactionContext {
 	t.Helper()
 
 	rg := transaction.NewTransactionRegistry(wal)

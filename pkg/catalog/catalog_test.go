@@ -7,7 +7,7 @@ import (
 	"storemy/pkg/catalog/schema"
 	"storemy/pkg/catalog/tablecache"
 	"storemy/pkg/concurrency/transaction"
-	"storemy/pkg/log"
+	"storemy/pkg/log/wal"
 	"storemy/pkg/memory"
 	"storemy/pkg/storage/heap"
 	"storemy/pkg/tuple"
@@ -55,7 +55,7 @@ func setupTestCatalog(t *testing.T) (*SystemCatalog, *transaction.TransactionReg
 	logPath := filepath.Join(tempDir, "wal.log")
 
 	// Setup components
-	wal, err := log.NewWAL(logPath, 8192)
+	wal, err := wal.NewWAL(logPath, 8192)
 	if err != nil {
 		t.Fatalf("failed to create WAL: %v", err)
 	}
@@ -138,7 +138,7 @@ func registerTestTable(
 
 func TestNewSystemCatalog(t *testing.T) {
 	walPath := filepath.Join(t.TempDir(), "test.wal")
-	wal, _ := log.NewWAL(walPath, 8192)
+	wal, _ := wal.NewWAL(walPath, 8192)
 	store := memory.NewPageStore(wal)
 	defer store.Close()
 
@@ -278,7 +278,7 @@ func TestSystemCatalog_LoadTables(t *testing.T) {
 	// catalog2 will open new file handles for the same files
 
 	// Create a new catalog instance (simulating restart)
-	wal2, _ := log.NewWAL(filepath.Join(tempDir, "wal2.log"), 8192)
+	wal2, _ := wal.NewWAL(filepath.Join(tempDir, "wal2.log"), 8192)
 	pageStore2 := memory.NewPageStore(wal2)
 	txRegistry2 := transaction.NewTransactionRegistry(wal2)
 	cache2 := tablecache.NewTableCache()
@@ -397,7 +397,7 @@ func TestSystemCatalog_LoadTables_Multiple(t *testing.T) {
 	}
 
 	// Create new catalog and load
-	wal2, _ := log.NewWAL(filepath.Join(tempDir, "wal2.log"), 8192)
+	wal2, _ := wal.NewWAL(filepath.Join(tempDir, "wal2.log"), 8192)
 	pageStore2 := memory.NewPageStore(wal2)
 	txRegistry2 := transaction.NewTransactionRegistry(wal2)
 	cache2 := tablecache.NewTableCache()
@@ -494,7 +494,7 @@ func TestSystemCatalog_RegisterTable_WithBoolField(t *testing.T) {
 	}
 
 	// Load in new catalog
-	wal2, _ := log.NewWAL(filepath.Join(tempDir, "wal2.log"), 8192)
+	wal2, _ := wal.NewWAL(filepath.Join(tempDir, "wal2.log"), 8192)
 	pageStore2 := memory.NewPageStore(wal2)
 	txRegistry2 := transaction.NewTransactionRegistry(wal2)
 	cache2 := tablecache.NewTableCache()
@@ -574,7 +574,7 @@ func TestSystemCatalog_PrimaryKeyPreserved(t *testing.T) {
 	}
 
 	// Load in new catalog
-	wal2, _ := log.NewWAL(filepath.Join(tempDir, "wal2.log"), 8192)
+	wal2, _ := wal.NewWAL(filepath.Join(tempDir, "wal2.log"), 8192)
 	pageStore2 := memory.NewPageStore(wal2)
 	txRegistry2 := transaction.NewTransactionRegistry(wal2)
 	cache2 := tablecache.NewTableCache()

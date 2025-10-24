@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"storemy/pkg/concurrency/lock"
 	"storemy/pkg/concurrency/transaction"
-	"storemy/pkg/log"
+	"storemy/pkg/log/wal"
 	"storemy/pkg/primitives"
 	"storemy/pkg/storage/page"
 	"sync"
@@ -61,12 +61,12 @@ type PageStore struct {
 	mutex       sync.RWMutex
 	lockManager *lock.LockManager
 	cache       PageCache
-	wal         *log.WAL
+	wal         *wal.WAL
 	dbFiles     map[int]page.DbFile // tableID -> DbFile mapping
 }
 
 // NewPageStore creates and initializes a new PageStore instance
-func NewPageStore(wal *log.WAL) *PageStore {
+func NewPageStore(wal *wal.WAL) *PageStore {
 	return &PageStore{
 		cache:       NewLRUPageCache(MaxPageCount),
 		lockManager: lock.NewLockManager(),
@@ -532,6 +532,6 @@ func (p *PageStore) handleAbort(dirtyPageIDs []primitives.PageID) error {
 }
 
 // GetWal returns the WAL instance used by this PageStore.
-func (p *PageStore) GetWal() *log.WAL {
+func (p *PageStore) GetWal() *wal.WAL {
 	return p.wal
 }

@@ -33,7 +33,7 @@ The main entry point for all index operations.
 type IndexManager struct {
     catalog   CatalogReader       // Interface to read from system catalog
     pageStore *memory.PageStore   // Page management
-    wal       *log.WAL            // Write-ahead logging
+    wal       *wal.WAL            // Write-ahead logging
 
     cache       *indexCache
     loader      *indexLoader
@@ -95,7 +95,7 @@ import (
 // Initialize dependencies
 catalog := catalog.NewCatalog(...)
 pageStore := memory.NewPageStore(...)
-wal := log.NewWAL(...)
+wal := wal.NewWAL(...)
 
 // Create IndexManager
 indexMgr := indexmanager.NewIndexManager(catalog, pageStore, wal)
