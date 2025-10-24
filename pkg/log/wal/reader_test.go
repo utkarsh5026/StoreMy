@@ -1,9 +1,10 @@
-package log
+package wal
 
 import (
 	"io"
 	"os"
 	"path/filepath"
+	"storemy/pkg/log/record"
 	"storemy/pkg/primitives"
 	"storemy/pkg/storage/heap"
 	"testing"
@@ -91,7 +92,7 @@ func TestLogReader_ReadNext_SingleRecord(t *testing.T) {
 	// Create a log record
 	tid := primitives.NewTransactionID()
 	pageID := heap.NewHeapPageID(1, 42)
-	record := NewLogRecord(UpdateRecord, tid, pageID, []byte("before"), []byte("after"), FirstLSN)
+	rec := record.NewLogRecord(record.UpdateRecord, tid, pageID, []byte("before"), []byte("after"), FirstLSN)
 
 	// Write the record to file
 	file, err := os.Create(logPath)
@@ -99,7 +100,7 @@ func TestLogReader_ReadNext_SingleRecord(t *testing.T) {
 		t.Fatalf("failed to create test file: %v", err)
 	}
 
-	serialized, err := SerializeLogRecord(record)
+	serialized, err := record.SerializeLogRecord(rec)
 	if err != nil {
 		t.Fatalf("failed to serialize record: %v", err)
 	}
@@ -127,7 +128,7 @@ func TestLogReader_ReadNext_SingleRecord(t *testing.T) {
 	}
 
 	// Verify record contents
-	if readRecord.Type != UpdateRecord {
+	if readRecord.Type != record.UpdateRecord {
 		t.Errorf("expected Type UpdateRecord, got %v", readRecord.Type)
 	}
 
@@ -173,13 +174,13 @@ func TestLogReader_ReadNext_MultipleRecords(t *testing.T) {
 	pageID1 := heap.NewHeapPageID(1, 10)
 	pageID2 := heap.NewHeapPageID(2, 20)
 
-	records := []*LogRecord{
-		NewLogRecord(BeginRecord, tid1, nil, nil, nil, FirstLSN),
-		NewLogRecord(UpdateRecord, tid1, pageID1, []byte("old1"), []byte("new1"), FirstLSN),
-		NewLogRecord(BeginRecord, tid2, nil, nil, nil, FirstLSN),
-		NewLogRecord(InsertRecord, tid2, pageID2, nil, []byte("inserted"), FirstLSN),
-		NewLogRecord(CommitRecord, tid1, nil, nil, nil, FirstLSN),
-		NewLogRecord(CommitRecord, tid2, nil, nil, nil, FirstLSN),
+	records := []*record.LogRecord{
+		record.NewLogRecord(record.BeginRecord, tid1, nil, nil, nil, FirstLSN),
+		record.NewLogRecord(record.UpdateRecord, tid1, pageID1, []byte("old1"), []byte("new1"), FirstLSN),
+		record.NewLogRecord(record.BeginRecord, tid2, nil, nil, nil, FirstLSN),
+		record.NewLogRecord(record.InsertRecord, tid2, pageID2, nil, []byte("inserted"), FirstLSN),
+		record.NewLogRecord(record.CommitRecord, tid1, nil, nil, nil, FirstLSN),
+		record.NewLogRecord(record.CommitRecord, tid2, nil, nil, nil, FirstLSN),
 	}
 
 	// Write all records to file
@@ -188,8 +189,8 @@ func TestLogReader_ReadNext_MultipleRecords(t *testing.T) {
 		t.Fatalf("failed to create test file: %v", err)
 	}
 
-	for _, record := range records {
-		serialized, err := SerializeLogRecord(record)
+	for _, rec := range records {
+		serialized, err := record.SerializeLogRecord(rec)
 		if err != nil {
 			t.Fatalf("failed to serialize record: %v", err)
 		}
@@ -241,10 +242,10 @@ func TestLogReader_ReadAll(t *testing.T) {
 	tid := primitives.NewTransactionID()
 	pageID := heap.NewHeapPageID(1, 5)
 
-	records := []*LogRecord{
-		NewLogRecord(BeginRecord, tid, nil, nil, nil, FirstLSN),
-		NewLogRecord(UpdateRecord, tid, pageID, []byte("before"), []byte("after"), FirstLSN),
-		NewLogRecord(CommitRecord, tid, nil, nil, nil, FirstLSN),
+	records := []*record.LogRecord{
+		record.NewLogRecord(record.BeginRecord, tid, nil, nil, nil, FirstLSN),
+		record.NewLogRecord(record.UpdateRecord, tid, pageID, []byte("before"), []byte("after"), FirstLSN),
+		record.NewLogRecord(record.CommitRecord, tid, nil, nil, nil, FirstLSN),
 	}
 
 	// Write records to file
@@ -253,8 +254,8 @@ func TestLogReader_ReadAll(t *testing.T) {
 		t.Fatalf("failed to create test file: %v", err)
 	}
 
-	for _, record := range records {
-		serialized, err := SerializeLogRecord(record)
+	for _, rec := range records {
+		serialized, err := record.SerializeLogRecord(rec)
 		if err != nil {
 			t.Fatalf("failed to serialize record: %v", err)
 		}
@@ -323,9 +324,9 @@ func TestLogReader_Reset(t *testing.T) {
 
 	// Create test records
 	tid := primitives.NewTransactionID()
-	records := []*LogRecord{
-		NewLogRecord(BeginRecord, tid, nil, nil, nil, FirstLSN),
-		NewLogRecord(CommitRecord, tid, nil, nil, nil, FirstLSN),
+	records := []*record.LogRecord{
+		record.NewLogRecord(record.BeginRecord, tid, nil, nil, nil, FirstLSN),
+		record.NewLogRecord(record.CommitRecord, tid, nil, nil, nil, FirstLSN),
 	}
 
 	// Write records to file
@@ -334,8 +335,8 @@ func TestLogReader_Reset(t *testing.T) {
 		t.Fatalf("failed to create test file: %v", err)
 	}
 
-	for _, record := range records {
-		serialized, err := SerializeLogRecord(record)
+	for _, rec := range records {
+		serialized, err := record.SerializeLogRecord(rec)
 		if err != nil {
 			t.Fatalf("failed to serialize record: %v", err)
 		}
@@ -375,13 +376,13 @@ func TestLogReader_Reset(t *testing.T) {
 	}
 
 	// Read again - should get the first record again
-	record, err := reader.ReadNext()
+	readRec, err := reader.ReadNext()
 	if err != nil {
 		t.Fatalf("ReadNext after reset failed: %v", err)
 	}
 
-	if record.Type != BeginRecord {
-		t.Errorf("expected first record to be BeginRecord after reset, got %v", record.Type)
+	if readRec.Type != record.BeginRecord {
+		t.Errorf("expected first record to be BeginRecord after reset, got %v", readRec.Type)
 	}
 }
 
@@ -392,7 +393,7 @@ func TestLogReader_GetFileSize(t *testing.T) {
 
 	// Create test record
 	tid := primitives.NewTransactionID()
-	record := NewLogRecord(BeginRecord, tid, nil, nil, nil, FirstLSN)
+	rec := record.NewLogRecord(record.BeginRecord, tid, nil, nil, nil, FirstLSN)
 
 	// Write record to file
 	file, err := os.Create(logPath)
@@ -400,7 +401,7 @@ func TestLogReader_GetFileSize(t *testing.T) {
 		t.Fatalf("failed to create test file: %v", err)
 	}
 
-	serialized, err := SerializeLogRecord(record)
+	serialized, err := record.SerializeLogRecord(rec)
 	if err != nil {
 		t.Fatalf("failed to serialize record: %v", err)
 	}
@@ -557,9 +558,9 @@ func TestLogReader_IncompleteRecord(t *testing.T) {
 
 	// Create a valid record
 	tid := primitives.NewTransactionID()
-	record := NewLogRecord(BeginRecord, tid, nil, nil, nil, FirstLSN)
+	rec := record.NewLogRecord(record.BeginRecord, tid, nil, nil, nil, FirstLSN)
 
-	serialized, err := SerializeLogRecord(record)
+	serialized, err := record.SerializeLogRecord(rec)
 	if err != nil {
 		t.Fatalf("failed to serialize record: %v", err)
 	}
@@ -599,17 +600,17 @@ func TestLogReader_DifferentRecordTypes(t *testing.T) {
 
 	testCases := []struct {
 		name   string
-		record *LogRecord
+		record *record.LogRecord
 	}{
-		{"BeginRecord", NewLogRecord(BeginRecord, tid, nil, nil, nil, FirstLSN)},
-		{"CommitRecord", NewLogRecord(CommitRecord, tid, nil, nil, nil, FirstLSN)},
-		{"AbortRecord", NewLogRecord(AbortRecord, tid, nil, nil, nil, FirstLSN)},
-		{"UpdateRecord", NewLogRecord(UpdateRecord, tid, pageID, []byte("old"), []byte("new"), FirstLSN)},
-		{"InsertRecord", NewLogRecord(InsertRecord, tid, pageID, nil, []byte("data"), FirstLSN)},
-		{"DeleteRecord", NewLogRecord(DeleteRecord, tid, pageID, []byte("deleted"), nil, FirstLSN)},
-		{"CheckpointBegin", NewLogRecord(CheckpointBegin, nil, nil, nil, nil, FirstLSN)},
-		{"CheckpointEnd", NewLogRecord(CheckpointEnd, nil, nil, nil, nil, FirstLSN)},
-		{"CLRRecord", NewLogRecord(CLRRecord, tid, pageID, []byte("undo"), []byte("redo"), FirstLSN)},
+		{"BeginRecord", record.NewLogRecord(record.BeginRecord, tid, nil, nil, nil, FirstLSN)},
+		{"CommitRecord", record.NewLogRecord(record.CommitRecord, tid, nil, nil, nil, FirstLSN)},
+		{"AbortRecord", record.NewLogRecord(record.AbortRecord, tid, nil, nil, nil, FirstLSN)},
+		{"UpdateRecord", record.NewLogRecord(record.UpdateRecord, tid, pageID, []byte("old"), []byte("new"), FirstLSN)},
+		{"InsertRecord", record.NewLogRecord(record.InsertRecord, tid, pageID, nil, []byte("data"), FirstLSN)},
+		{"DeleteRecord", record.NewLogRecord(record.DeleteRecord, tid, pageID, []byte("deleted"), nil, FirstLSN)},
+		{"CheckpointBegin", record.NewLogRecord(record.CheckpointBegin, nil, nil, nil, nil, FirstLSN)},
+		{"CheckpointEnd", record.NewLogRecord(record.CheckpointEnd, nil, nil, nil, nil, FirstLSN)},
+		{"CLRRecord", record.NewLogRecord(record.CLRRecord, tid, pageID, []byte("undo"), []byte("redo"), FirstLSN)},
 	}
 
 	// Write all record types to file
@@ -619,7 +620,7 @@ func TestLogReader_DifferentRecordTypes(t *testing.T) {
 	}
 
 	for _, tc := range testCases {
-		serialized, err := SerializeLogRecord(tc.record)
+		serialized, err := record.SerializeLogRecord(tc.record)
 		if err != nil {
 			t.Fatalf("failed to serialize %s: %v", tc.name, err)
 		}
@@ -658,10 +659,10 @@ func TestLogReader_LSNAssignment(t *testing.T) {
 	tid := primitives.NewTransactionID()
 	pageID := heap.NewHeapPageID(1, 1)
 
-	records := []*LogRecord{
-		NewLogRecord(BeginRecord, tid, nil, nil, nil, FirstLSN),
-		NewLogRecord(UpdateRecord, tid, pageID, []byte("before"), []byte("after"), FirstLSN),
-		NewLogRecord(CommitRecord, tid, nil, nil, nil, FirstLSN),
+	records := []*record.LogRecord{
+		record.NewLogRecord(record.BeginRecord, tid, nil, nil, nil, FirstLSN),
+		record.NewLogRecord(record.UpdateRecord, tid, pageID, []byte("before"), []byte("after"), FirstLSN),
+		record.NewLogRecord(record.CommitRecord, tid, nil, nil, nil, FirstLSN),
 	}
 
 	// Write records and track their sizes
@@ -673,8 +674,8 @@ func TestLogReader_LSNAssignment(t *testing.T) {
 	var expectedLSNs []primitives.LSN
 	currentOffset := int64(0)
 
-	for _, record := range records {
-		serialized, err := SerializeLogRecord(record)
+	for _, rec := range records {
+		serialized, err := record.SerializeLogRecord(rec)
 		if err != nil {
 			t.Fatalf("failed to serialize record: %v", err)
 		}

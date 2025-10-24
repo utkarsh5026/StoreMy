@@ -1,10 +1,11 @@
-package log
+package wal
 
 import (
 	"encoding/binary"
 	"fmt"
 	"io"
 	"os"
+	"storemy/pkg/log/record"
 	"storemy/pkg/primitives"
 )
 
@@ -34,44 +35,44 @@ func NewLogReader(logPath string) (*LogReader, error) {
 
 // ReadNext reads the next log record from the file
 // Returns nil when EOF is reached
-func (lr *LogReader) ReadNext() (*LogRecord, error) {
+func (lr *LogReader) ReadNext() (*record.LogRecord, error) {
 	recLen, err := readHeader(lr.file, lr.offset)
 	if err != nil {
 		return nil, err
 	}
 
-	recordBuf, err := readRecordBytes(lr.file, int64(recLen-RecordSize), lr.offset+RecordSize)
+	recordBuf, err := readRecordBytes(lr.file, int64(recLen-record.RecordSize), lr.offset+record.RecordSize)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read record bytes at offset %d: %w", lr.offset, err)
 	}
 
 	fullRecord := make([]byte, recLen)
-	binary.BigEndian.PutUint32(fullRecord[0:RecordSize], recLen)
-	copy(fullRecord[RecordSize:], recordBuf)
+	binary.BigEndian.PutUint32(fullRecord[0:record.RecordSize], recLen)
+	copy(fullRecord[record.RecordSize:], recordBuf)
 
-	record, err := DeserializeLogRecord(fullRecord)
+	rec, err := record.DeserializeLogRecord(fullRecord)
 	if err != nil {
 		return nil, fmt.Errorf("failed to deserialize record at offset %d: %w", lr.offset, err)
 	}
 
-	record.LSN = primitives.LSN(lr.offset)
+	rec.LSN = primitives.LSN(lr.offset)
 	lr.offset += int64(recLen)
-	return record, nil
+	return rec, nil
 }
 
 // ReadAll reads all log records from the file
-func (lr *LogReader) ReadAll() ([]*LogRecord, error) {
-	var records []*LogRecord
+func (lr *LogReader) ReadAll() ([]*record.LogRecord, error) {
+	var records []*record.LogRecord
 
 	for {
-		record, err := lr.ReadNext()
+		rec, err := lr.ReadNext()
 		if err == io.EOF {
 			break
 		}
 		if err != nil {
 			return nil, err
 		}
-		records = append(records, record)
+		records = append(records, rec)
 	}
 
 	return records, nil
@@ -101,7 +102,7 @@ func (lr *LogReader) GetFileSize() (int64, error) {
 }
 
 func readHeader(file *os.File, offset int64) (uint32, error) {
-	sizeBuf := make([]byte, RecordSize)
+	sizeBuf := make([]byte, record.RecordSize)
 	n, err := file.ReadAt(sizeBuf, offset)
 	if err == io.EOF || n == 0 {
 		return 0, io.EOF
