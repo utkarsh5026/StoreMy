@@ -153,6 +153,10 @@ func (l *Lexer) readIdentifier(start int) Token {
 		return createToken(BY, value, start)
 	case "ORDER":
 		return createToken(ORDER, value, start)
+	case "LIMIT":
+		return createToken(LIMIT, value, start)
+	case "OFFSET":
+		return createToken(OFFSET, value, start)
 	case "ASC":
 		return createToken(ASC, value, start)
 	case "DESC":

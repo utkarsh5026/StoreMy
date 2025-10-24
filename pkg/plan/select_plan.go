@@ -81,7 +81,6 @@ func (sp *SelectPlan) AddOrderBy(field string, ascending bool) {
 
 // AddScan adds a table scan to the FROM clause.
 func (sp *SelectPlan) AddScan(tableName string, alias string) {
-	fmt.Printf("Added scan of table %s\n", alias)
 	scan := NewScanNode(tableName, alias)
 	sp.tables = append(sp.tables, scan)
 }
@@ -115,7 +114,6 @@ func (sp *SelectPlan) AddFilter(field string, pred primitives.Predicate, constan
 	}
 
 	filter := NewFilterNode(table, qualifiedField, pred, constant)
-	fmt.Printf("Added filter %s %s %s\n", qualifiedField, pred, constant)
 	sp.filters = append(sp.filters, filter)
 	return nil
 }
@@ -124,7 +122,6 @@ func (sp *SelectPlan) AddFilter(field string, pred primitives.Predicate, constan
 func (sp *SelectPlan) AddJoin(rightTable *ScanNode, joinType JoinType, leftField, rightField string, predicate primitives.Predicate) {
 	join := NewJoinNode(rightTable, joinType, leftField, rightField, predicate)
 	sp.joins = append(sp.joins, join)
-	fmt.Printf("Added join: %s\n", join.String())
 }
 
 func (sp *SelectPlan) SelectList() []*SelectListNode {
