@@ -1,5 +1,7 @@
 {
     "cSpell.words": [
+        "addgroup",
+        "adduser",
         "Bitmask",
         "bpid",
         "btreeindex",
@@ -29,6 +31,7 @@
         "indexscan",
         "inotify",
         "inotifywait",
+        "installsuffix",
         "lerr",
         "lipgloss",
         "lsns",
