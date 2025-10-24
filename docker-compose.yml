@@ -31,10 +31,166 @@ services:
     networks:
       - storemy-network
 
+  storemy-benchmark:
+    build:
+      context: .
+      dockerfile: Dockerfile.dev
+    container_name: storemy-benchmark
+    volumes:
+      - .:/app
+      - ./benchmark-results:/app/benchmark-results
+      - storemy-benchmark-data:/app/benchmark_data
+      - storemy-benchmark-logs:/app/benchmark_logs
+    working_dir: /app
+    environment:
+      - BENCHMARK_OUTPUT=/app/benchmark-results
+      - BENCHMARK_ITERATIONS=1000
+      - BENCHMARK_CONCURRENT_QUERIES=10
+      - DB_NAME=benchmark_db
+      - DATA_DIR=/app/benchmark_data
+      - LOG_DIR=/app/benchmark_logs
+    command:
+      - /bin/sh
+      - -c
+      - |
+        echo "=========================================="
+        echo "  StoreMy Performance Benchmark Suite"
+        echo "=========================================="
+        echo ""
+        go run benchmarks/benchmark.go
+        echo ""
+        echo "=========================================="
+        echo "  ✓ Benchmark Complete!"
+        echo "=========================================="
+        echo ""
+        echo "📊 View Results:"
+        echo "  • HTML Report: ./benchmark-results/"
+        ls -1t /app/benchmark-results/*.html 2>/dev/null | head -1 | xargs -I {} echo "    └─ {}"
+        echo ""
+        echo "  • JSON Data:   ./benchmark-results/"
+        ls -1t /app/benchmark-results/*.json 2>/dev/null | head -1 | xargs -I {} echo "    └─ {}"
+        echo ""
+        echo "💡 Quick Actions:"
+        echo "  • Open HTML:   open ./benchmark-results/benchmark_report_*.html"
+        echo "  • Start monitoring:  docker-compose --profile monitoring up -d"
+        echo "  • View Grafana:      http://localhost:3000 (admin/storemy)"
+        echo ""
+    networks:
+      - storemy-network
+    profiles:
+      - benchmark # Only starts when explicitly requested
+
+  benchmark-viewer:
+    image: busybox
+    container_name: storemy-benchmark-viewer
+    volumes:
+      - ./benchmark-results:/results:ro
+    command:
+      - /bin/sh
+      - -c
+      - |
+        echo "=========================================="
+        echo "  StoreMy Benchmark Results"
+        echo "=========================================="
+        echo ""
+        if [ ! -d "/results" ] || [ -z "$$(ls -A /results 2>/dev/null)" ]; then
+          echo "❌ No benchmark results found!"
+          echo ""
+          echo "Run benchmarks first:"
+          echo "  docker-compose --profile benchmark up storemy-benchmark"
+          echo ""
+          exit 1
+        fi
+        echo "📊 Available Reports:"
+        echo ""
+        ls -lt /results/*.html 2>/dev/null | head -5 | awk '{print "  • " $$9 " (" $$6 " " $$7 ")"}'
+        echo ""
+        echo "💡 To view:"
+        echo "  • Windows: start benchmark-results\\benchmark_report_*.html"
+        echo "  • Linux:   xdg-open benchmark-results/benchmark_report_*.html"
+        echo "  • Mac:     open benchmark-results/benchmark_report_*.html"
+        echo ""
+        echo "📈 Monitoring Dashboard:"
+        echo "  • Grafana: http://localhost:3000 (admin/storemy)"
+        echo "  • Start:   docker-compose --profile monitoring up -d"
+        echo ""
+    profiles:
+      - benchmark
+
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: storemy-prometheus
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.path=/prometheus"
+      - "--web.console.libraries=/etc/prometheus/console_libraries"
+      - "--web.console.templates=/etc/prometheus/consoles"
+    ports:
+      - "9090:9090"
+    networks:
+      - storemy-network
+    profiles:
+      - monitoring
+
+  grafana:
+    image: grafana/grafana:latest
+    container_name: storemy-grafana
+    volumes:
+      - ./monitoring/grafana/dashboards:/etc/grafana/provisioning/dashboards:ro
+      - ./monitoring/grafana/datasources:/etc/grafana/provisioning/datasources:ro
+      - grafana-data:/var/lib/grafana
+    environment:
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=storemy
+      - GF_USERS_ALLOW_SIGN_UP=false
+    ports:
+      - "3000:3000"
+    depends_on:
+      - prometheus
+    networks:
+      - storemy-network
+    profiles:
+      - monitoring
+
+  storemy-metrics:
+    build:
+      context: .
+      dockerfile: Dockerfile.dev
+    container_name: storemy-metrics
+    volumes:
+      - .:/app
+      - storemy-data:/app/data
+      - storemy-metrics-logs:/app/metrics_logs
+    environment:
+      - DB_NAME=storemy_db
+      - DATA_DIR=/app/data
+      - LOG_DIR=/app/metrics_logs
+      - METRICS_PORT=8080
+    command: ["go", "run", "monitoring/exporter/metrics_exporter.go"]
+    ports:
+      - "8080:8080"
+    networks:
+      - storemy-network
+    profiles:
+      - monitoring
+
 volumes:
   storemy-data:
     driver: local
   storemy-test-data:
+    driver: local
+  storemy-benchmark-data:
+    driver: local
+  storemy-benchmark-logs:
+    driver: local
+  storemy-metrics-logs:
+    driver: local
+  prometheus-data:
+    driver: local
+  grafana-data:
     driver: local
 
 networks:
