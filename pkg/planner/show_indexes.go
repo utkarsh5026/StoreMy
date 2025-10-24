@@ -69,24 +69,15 @@ func NewShowIndexesPlan(
 //   - SelectQueryResult with index metadata on success
 //   - Error if table doesn't exist or catalog read fails
 func (p *ShowIndexesPlan) Execute() (Result, error) {
-	cm := p.ctx.CatalogManager()
 	var indexes []*systemtable.IndexMetadata
 	var err error
 
 	if p.Statement.TableName != "" {
-		tableName := p.Statement.TableName
-
-		tableID, err := cm.GetTableID(p.tx, tableName)
+		indexes, err = p.getIndexesForTable()
 		if err != nil {
-			return nil, fmt.Errorf("table %s does not exist", tableName)
-		}
-
-		indexes, err = cm.GetIndexesByTable(p.tx, tableID)
-		if err != nil {
-			return nil, fmt.Errorf("failed to retrieve indexes for table %s: %w", tableName, err)
+			return nil, err
 		}
 	} else {
-		// Get all indexes by scanning the entire CATALOG_INDEXES table
 		indexes, err = p.getAllIndexes()
 		if err != nil {
 			return nil, fmt.Errorf("failed to retrieve indexes: %w", err)
@@ -99,6 +90,30 @@ func (p *ShowIndexesPlan) Execute() (Result, error) {
 		TupleDesc: tupleDesc,
 		Tuples:    tuples,
 	}, nil
+}
+
+// getIndexesForTable retrieves all indexes for a specific table.
+//
+// This method validates that the specified table exists and fetches all associated
+// index metadata from the catalog. It's used when SHOW INDEXES FROM <table> is executed.
+//
+// Returns:
+//   - Slice of IndexMetadata for the specified table
+//   - Error if table doesn't exist or catalog read fails
+func (p *ShowIndexesPlan) getIndexesForTable() ([]*systemtable.IndexMetadata, error) {
+	cm := p.ctx.CatalogManager()
+	tableName := p.Statement.TableName
+
+	tableID, err := cm.GetTableID(p.tx, tableName)
+	if err != nil {
+		return nil, fmt.Errorf("table %s does not exist", tableName)
+	}
+
+	indexes, err := cm.GetIndexesByTable(p.tx, tableID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to retrieve indexes for table %s: %w", tableName, err)
+	}
+	return indexes, nil
 }
 
 // getAllIndexes retrieves all indexes from the catalog.
@@ -127,7 +142,6 @@ func (p *ShowIndexesPlan) getAllIndexes() ([]*systemtable.IndexMetadata, error) 
 //   - TupleDescription for the result schema
 //   - Slice of tuples containing index information
 func (p *ShowIndexesPlan) createResultTuples(indexes []*systemtable.IndexMetadata) (*tuple.TupleDescription, []*tuple.Tuple) {
-	// Create schema for result
 	sch, _ := schema.NewSchemaBuilder(-1, "show_indexes_result").
 		AddColumn("index_name", types.StringType).
 		AddColumn("table_name", types.StringType).
@@ -138,19 +152,15 @@ func (p *ShowIndexesPlan) createResultTuples(indexes []*systemtable.IndexMetadat
 
 	tupleDesc := sch.TupleDesc
 
-	// Convert indexes to tuples
 	var tuples []*tuple.Tuple
 	cm := p.ctx.CatalogManager()
 
 	for _, idx := range indexes {
-		// Get table name from table ID
 		tableName, err := cm.GetTableName(p.tx, idx.TableID)
 		if err != nil {
-			// If we can't get table name, use the ID
 			tableName = fmt.Sprintf("table_%d", idx.TableID)
 		}
 
-		// Create tuple with index information
 		t := tuple.NewBuilder(tupleDesc).
 			AddString(idx.IndexName).
 			AddString(tableName).
