@@ -12,16 +12,16 @@ import (
 // TransactionRegistry manages all active transaction contexts
 // This is the single global registry that replaces scattered transaction maps
 type TransactionRegistry struct {
-	contexts map[*primitives.TransactionID]*TransactionContext
-	mutex    sync.RWMutex
-	walInstance      *wal.WAL
+	contexts    map[*primitives.TransactionID]*TransactionContext
+	mutex       sync.RWMutex
+	walInstance *wal.WAL
 }
 
 // NewTransactionRegistry creates a new transaction registry
 func NewTransactionRegistry(w *wal.WAL) *TransactionRegistry {
 	return &TransactionRegistry{
-		contexts: make(map[*primitives.TransactionID]*TransactionContext),
-		walInstance:      w,
+		contexts:    make(map[*primitives.TransactionID]*TransactionContext),
+		walInstance: w,
 	}
 }
 
@@ -33,6 +33,13 @@ func (tr *TransactionRegistry) Begin() (*TransactionContext, error) {
 	tr.mutex.Lock()
 	tr.contexts[tid] = ctx
 	tr.mutex.Unlock()
+
+	// Register transaction with WAL (sets LSNs and begunInWAL flag)
+	err := ctx.EnsureBegunInWAL(tr.walInstance)
+	if err != nil {
+		tr.Remove(tid)
+		return nil, fmt.Errorf("failed to log transaction begin: %w", err)
+	}
 
 	return ctx, nil
 }
@@ -52,15 +59,18 @@ func (tr *TransactionRegistry) Get(tid *primitives.TransactionID) (*TransactionC
 // GetOrCreate gets an existing context or creates a new one
 func (tr *TransactionRegistry) GetOrCreate(tid *primitives.TransactionID) *TransactionContext {
 	tr.mutex.Lock()
-	defer tr.mutex.Unlock()
-
 	ctx, exists := tr.contexts[tid]
 	if exists {
+		tr.mutex.Unlock()
 		return ctx
 	}
 
 	ctx = NewTransactionContext(tid)
 	tr.contexts[tid] = ctx
+	tr.mutex.Unlock()
+
+	_ = ctx.EnsureBegunInWAL(tr.walInstance)
+
 	return ctx
 }
 
