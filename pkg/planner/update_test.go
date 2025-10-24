@@ -10,7 +10,7 @@ import (
 	"testing"
 )
 
-func setupUpdateTest(t *testing.T) (*registry.DatabaseContext, TransactionCtx, func()) {
+func setupUpdateTest(t *testing.T) (*registry.DatabaseContext, TxContext, func()) {
 	dataDir := t.TempDir()
 	oldDir, _ := os.Getwd()
 	os.Chdir(dataDir)
@@ -48,7 +48,7 @@ func executeUpdatePlan(t *testing.T, plan *UpdatePlan) (*DMLResult, error) {
 	return result, nil
 }
 
-func createUpdateTestTable(t *testing.T, ctx *registry.DatabaseContext, tx TransactionCtx) {
+func createUpdateTestTable(t *testing.T, ctx *registry.DatabaseContext, tx TxContext) {
 	stmt := statements.NewCreateStatement("users", false)
 	stmt.AddField("id", types.IntType, false, nil)
 	stmt.AddField("name", types.StringType, false, nil)
@@ -67,7 +67,7 @@ func createUpdateTestTable(t *testing.T, ctx *registry.DatabaseContext, tx Trans
 	cleanupTable(t, ctx.CatalogManager(), "users", tx.ID)
 }
 
-func insertUpdateTestData(t *testing.T, ctx *registry.DatabaseContext, tx TransactionCtx) {
+func insertUpdateTestData(t *testing.T, ctx *registry.DatabaseContext, tx TxContext) {
 	insertStmt := statements.NewInsertStatement("users")
 
 	values1 := []types.Field{
