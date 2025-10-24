@@ -22,6 +22,11 @@ func formatResult(rawResult any, stmt statements.Statement) (QueryResult, error)
 		if ddlResult, ok := rawResult.(*planner.DDLResult); ok {
 			return formatDDL(ddlResult), nil
 		}
+
+	case statements.Explain:
+		if explainResult, ok := rawResult.(*planner.ExplainResult); ok {
+			return formatExplain(explainResult), nil
+		}
 	}
 
 	return QueryResult{
@@ -96,5 +101,15 @@ func formatDDL(result *planner.DDLResult) QueryResult {
 	return QueryResult{
 		Success: result.Success,
 		Message: result.Message,
+	}
+}
+
+// formatExplain converts EXPLAIN query results to standard format
+func formatExplain(result *planner.ExplainResult) QueryResult {
+	return QueryResult{
+		Success: true,
+		Message: result.Plan,
+		Columns: []string{"Query Plan"},
+		Rows:    [][]string{{result.Plan}},
 	}
 }

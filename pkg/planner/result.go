@@ -22,6 +22,7 @@ const (
 	DDLResultType ResultType = iota
 	DMLResultType
 	SelectResultType
+	ExplainResultType
 )
 
 // DDLResult represents the outcome of DDL operations (CREATE, DROP, ALTER).
@@ -64,4 +65,19 @@ func (r *SelectQueryResult) String() string {
 
 func (r *SelectQueryResult) Type() ResultType {
 	return SelectResultType
+}
+
+// ExplainResult represents the outcome of EXPLAIN queries.
+type ExplainResult struct {
+	Plan    string // The query execution plan as text
+	Format  string // The format used (TEXT, JSON, etc.)
+	Analyze bool   // Whether this was an EXPLAIN ANALYZE
+}
+
+func (r *ExplainResult) String() string {
+	return r.Plan
+}
+
+func (r *ExplainResult) Type() ResultType {
+	return ExplainResultType
 }

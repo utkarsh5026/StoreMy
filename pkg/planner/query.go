@@ -37,6 +37,8 @@ func (qp *QueryPlanner) Plan(stmt statements.Statement, tx TransactionCtx) (Plan
 		return NewSelectPlan(s, tx, qp.ctx), nil
 	case *statements.UpdateStatement:
 		return NewUpdatePlan(s, tx, qp.ctx), nil
+	case *statements.ExplainStatement:
+		return NewExplainPlan(s, tx, qp.ctx), nil
 	default:
 		return nil, fmt.Errorf("unsupported statement type: %T", stmt)
 	}
