@@ -1,16 +1,18 @@
-package planner
+package indexops
 
 import (
 	"fmt"
 	"os"
+	"storemy/pkg/concurrency/transaction"
+	"storemy/pkg/registry"
 	"storemy/pkg/storage/index"
 	"storemy/pkg/types"
 )
 
 // IndexCreationConfig contains all parameters needed to create and populate an index.
 type IndexCreationConfig struct {
-	Ctx DbContext
-	Tx  TxContext
+	Ctx *registry.DatabaseContext
+	Tx  *transaction.TransactionContext
 
 	// Index metadata
 	IndexName string
@@ -68,12 +70,12 @@ func populateIndexWithCleanup(config *IndexCreationConfig) error {
 	return nil
 }
 
-// createAndPopulateIndex creates a physical index file and populates it with existing table data.
+// CreateAndPopulateIndex creates a physical index file and populates it with existing table data.
 // It handles all cleanup automatically on failure.
 //
 // This is the recommended way to create indexes as it ensures proper error handling
 // and cleanup in all failure scenarios.
-func createAndPopulateIndex(config *IndexCreationConfig) error {
+func CreateAndPopulateIndex(config *IndexCreationConfig) error {
 	if err := createPhysicalIndexWithCleanup(config); err != nil {
 		return err
 	}
