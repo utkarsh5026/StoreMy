@@ -30,6 +30,7 @@ type BenchmarkResult struct {
 	ConcurrentQueries int           `json:"concurrent_queries"` // Number of concurrent goroutines
 	SuccessCount      int           `json:"success_count"`      // Number of successful query executions
 	ErrorCount        int           `json:"error_count"`        // Number of failed query executions
+	ErrorSamples      []string      `json:"error_samples"`      // Sample error messages for debugging
 	Timestamp         time.Time     `json:"timestamp"`          // When this benchmark was executed
 }
 
@@ -115,14 +116,16 @@ func main() {
 		name  string
 		query string
 	}{
-		{"Simple SELECT", "SELECT * FROM users LIMIT 100"},
-		{"SELECT with WHERE", "SELECT * FROM users WHERE age > 25"},
-		{"SELECT with JOIN", "SELECT u.name, o.amount FROM users u JOIN orders o ON u.id = o.user_id LIMIT 100"},
-		{"Aggregate COUNT", "SELECT COUNT(*) FROM users"},
-		{"Aggregate with GROUP BY", "SELECT age, COUNT(*) FROM users GROUP BY age"},
+		// Fast tests first to show failures quickly
 		{"INSERT", "INSERT INTO users (id, name, age, email) VALUES (99999, 'Bench User', 30, 'bench@test.com')"},
 		{"UPDATE", "UPDATE users SET age = 31 WHERE id = 99999"},
 		{"DELETE", "DELETE FROM users WHERE id = 99999"},
+		{"Simple SELECT", "SELECT * FROM users LIMIT 100"},
+		{"SELECT with WHERE", "SELECT * FROM users WHERE age > 25"},
+		// Slower tests at the end
+		{"Aggregate COUNT", "SELECT COUNT(id) FROM users"},
+		{"Aggregate with GROUP BY", "SELECT age, COUNT(id) FROM users GROUP BY age"},
+		{"SELECT with JOIN", "SELECT u.name, o.amount FROM users u JOIN orders o ON u.id = o.user_id LIMIT 100"},
 	}
 
 	for _, bench := range benchmarks {
@@ -138,7 +141,6 @@ func main() {
 		report.Results = append(report.Results, seqResult)
 		printBenchmarkResult(seqResult)
 
-		// Concurrent benchmark (for read queries)
 		if bench.name != "INSERT" && bench.name != "UPDATE" && bench.name != "DELETE" {
 			log.Printf("")
 			log.Printf("→ Running concurrent test (%d parallel queries, %d iterations)...", concurrentQueries, iterations)
@@ -189,24 +191,33 @@ func main() {
 func setupBenchmarkData(db *database.Database) error {
 	log.Println("Setting up benchmark data...")
 
-	queries := []string{
-		"CREATE TABLE IF NOT EXISTS users (id INT PRIMARY KEY, name TEXT, age INT, email TEXT)",
-		"CREATE TABLE IF NOT EXISTS orders (id INT PRIMARY KEY, user_id INT, amount DECIMAL, order_date TEXT)",
+	log.Println("  Creating users table...")
+	if _, err := db.ExecuteQuery("CREATE TABLE IF NOT EXISTS users (id INT PRIMARY KEY, name TEXT, age INT, email TEXT)"); err != nil {
+		return fmt.Errorf("failed to create users table: %v", err)
 	}
 
-	for _, query := range queries {
-		if _, err := db.ExecuteQuery(query); err != nil {
-			log.Printf("Setup query warning: %v", err)
-		}
+	log.Println("  Creating orders table...")
+	if _, err := db.ExecuteQuery("CREATE TABLE IF NOT EXISTS orders (id INT PRIMARY KEY, user_id INT, amount TEXT, order_date TEXT)"); err != nil {
+		return fmt.Errorf("failed to create orders table: %v", err)
 	}
 
-	result, err := db.ExecuteQuery("SELECT COUNT(*) FROM users")
+	log.Println("  Verifying table creation...")
+
+	tables := db.GetTables()
+	log.Printf("  Tables in database: %v", tables)
+
+	result, err := db.ExecuteQuery("SELECT COUNT(id) FROM users")
+	if err != nil {
+		return fmt.Errorf("failed to verify users table (table may not be properly created): %v", err)
+	}
 
 	shouldInsertData := true
-	if err == nil && len(result.Rows) > 0 && len(result.Rows[0]) > 0 {
+	if len(result.Rows) > 0 && len(result.Rows[0]) > 0 {
 		var count int64
 		fmt.Sscanf(result.Rows[0][0], "%d", &count)
+		log.Printf("  Found %d existing records in users table", count)
 		if count >= 1000 {
+			log.Printf("  Skipping data insertion (already populated)")
 			shouldInsertData = false
 		}
 	}
@@ -222,7 +233,7 @@ func setupBenchmarkData(db *database.Database) error {
 
 			if i <= 500 {
 				orderQuery := fmt.Sprintf(
-					"INSERT INTO orders (id, user_id, amount, order_date) VALUES (%d, %d, %d.99, '2025-01-%02d')",
+					"INSERT INTO orders (id, user_id, amount, order_date) VALUES (%d, %d, '%d.99', '2025-01-%02d')",
 					i, i, 100+i%900, 1+i%28,
 				)
 				db.ExecuteQuery(orderQuery)
@@ -259,6 +270,7 @@ func runBenchmark(db *database.Database, queryType, query string, iterations, co
 
 	successCount := 0
 	errorCount := 0
+	errorSamples := make([]string, 0, 5)
 	startTime := time.Now()
 
 	sem := make(chan struct{}, concurrent)
@@ -278,6 +290,9 @@ func runBenchmark(db *database.Database, queryType, query string, iterations, co
 			durations = append(durations, duration)
 			if err != nil {
 				errorCount++
+				if len(errorSamples) < 5 {
+					errorSamples = append(errorSamples, err.Error())
+				}
 			} else {
 				successCount++
 			}
@@ -325,6 +340,7 @@ func runBenchmark(db *database.Database, queryType, query string, iterations, co
 		ConcurrentQueries: concurrent,
 		SuccessCount:      successCount,
 		ErrorCount:        errorCount,
+		ErrorSamples:      errorSamples,
 		Timestamp:         time.Now(),
 	}
 }
@@ -362,6 +378,22 @@ func printBenchmarkResult(result BenchmarkResult) {
 	log.Printf("  │  P99:               %s", formatDuration(result.P99Duration))
 	log.Printf("  │  Throughput:        %.0f queries/sec", result.QueriesPerSecond)
 	log.Printf("  │  Success Rate:      %.1f%% (%d/%d)", successRate, result.SuccessCount, result.Iterations)
+
+	if result.ErrorCount > 0 && len(result.ErrorSamples) > 0 {
+		log.Printf("  │")
+		log.Printf("  │  ⚠ Errors detected (%d failures):", result.ErrorCount)
+		for i, errMsg := range result.ErrorSamples {
+			if i == 0 {
+				log.Printf("  │     Sample: %s", errMsg)
+			} else if i < 3 { // Show up to 3 unique errors
+				log.Printf("  │            %s", errMsg)
+			}
+		}
+		if len(result.ErrorSamples) > 3 {
+			log.Printf("  │     ... and %d more error(s)", len(result.ErrorSamples)-3)
+		}
+	}
+
 	log.Printf("  └─")
 }
 
