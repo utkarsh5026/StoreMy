@@ -7,6 +7,7 @@ import (
 	"storemy/pkg/catalog/schema"
 	"storemy/pkg/catalog/systemtable"
 	"storemy/pkg/concurrency/transaction"
+	"storemy/pkg/log/wal"
 	"storemy/pkg/memory"
 	"storemy/pkg/primitives"
 	"storemy/pkg/storage/heap"
@@ -67,18 +68,38 @@ func setupTestEnvironment(t *testing.T) (*IndexManager, *memory.PageStore, *tran
 		schema:  testSchema,
 	}
 
-	// Create page store (requires WAL, pass nil)
-	pageStore := memory.NewPageStore(nil)
+	// Create temp directory for test files
+	tempDir := t.TempDir()
 
-	// Create index manager (WAL can be nil for these tests)
-	im := NewIndexManager(catalog, pageStore, nil)
+	// Create WAL instance
+	walPath := filepath.Join(tempDir, "test.wal")
+	walInstance, err := wal.NewWAL(walPath, 4096)
+	if err != nil {
+		t.Fatalf("Failed to create WAL: %v", err)
+	}
+	t.Cleanup(func() {
+		walInstance.Close()
+	})
 
-	// Create transaction context
+	// Create page store with WAL
+	pageStore := memory.NewPageStore(walInstance)
+
+	// Create index manager with WAL
+	im := NewIndexManager(catalog, pageStore, walInstance)
+
+	// Create transaction context and register with WAL
 	txID := primitives.NewTransactionIDFromValue(1)
 	ctx := transaction.NewTransactionContext(txID)
 
-	// Create temp directory for test files
-	tempDir := t.TempDir()
+	// Begin transaction in WAL
+	_, err = walInstance.LogBegin(txID)
+	if err != nil {
+		t.Fatalf("Failed to begin transaction: %v", err)
+	}
+	t.Cleanup(func() {
+		// Abort transaction on cleanup if still active
+		walInstance.LogAbort(txID)
+	})
 
 	return im, pageStore, ctx, td, tempDir
 }
@@ -686,8 +707,8 @@ func TestIndexCache_GetOrLoad_ConcurrentLoads(t *testing.T) {
 func TestIndexCache_Set_DoubleCheckLocking(t *testing.T) {
 	cache := newIndexCache()
 
-	indexes1 := []*indexWithMetadata{{metadata: &IndexMetadata{IndexID: 1}}}
-	indexes2 := []*indexWithMetadata{{metadata: &IndexMetadata{IndexID: 2}}}
+	indexes1 := []*indexWithMetadata{{metadata: &IndexMetadata{IndexMetadata: systemtable.IndexMetadata{IndexID: 1}}}}
+	indexes2 := []*indexWithMetadata{{metadata: &IndexMetadata{IndexMetadata: systemtable.IndexMetadata{IndexID: 2}}}}
 
 	// First set
 	result1 := cache.Set(1, indexes1)
@@ -740,13 +761,46 @@ func TestCreatePhysicalIndex_AllSupportedTypes(t *testing.T) {
 }
 
 func TestPopulateIndex_InvalidColumnIndex(t *testing.T) {
-	t.Skip("PopulateIndex does not validate column index upfront - error occurs during scanning")
+	im, _, ctx, td, tempDir := setupTestEnvironment(t)
 
-	// Note: PopulateIndex doesn't validate the column index parameter.
-	// Instead, the error would occur when trying to extract the field from a tuple.
-	// For an empty table, no error occurs. For a table with data, the error would
-	// be "failed to get field at index 999: index out of range"
-	// This is acceptable behavior - validation happens during operation.
+	// Create heap file
+	heapFilePath := filepath.Join(tempDir, "invalid_col_table.dat")
+	heapFile, err := heap.NewHeapFile(heapFilePath, td)
+	if err != nil {
+		t.Fatalf("Failed to create heap file: %v", err)
+	}
+	defer heapFile.Close()
+
+	// Create index file
+	indexFilePath := filepath.Join(tempDir, "invalid_col_index.dat")
+	err = im.CreatePhysicalIndex(indexFilePath, types.IntType, index.BTreeIndex)
+	if err != nil {
+		t.Fatalf("Failed to create index: %v", err)
+	}
+
+	// Test with negative column index
+	err = im.PopulateIndex(ctx, indexFilePath, 1, heapFile, -1, types.IntType, index.BTreeIndex)
+	if err == nil {
+		t.Error("Expected error for negative column index")
+	}
+	if err != nil && err.Error() != "column index -1 is out of range for table with 2 columns" {
+		t.Errorf("Expected specific error message for negative index, got: %v", err)
+	}
+
+	// Test with column index >= number of fields (td has 2 fields: id and name)
+	err = im.PopulateIndex(ctx, indexFilePath, 1, heapFile, 999, types.IntType, index.BTreeIndex)
+	if err == nil {
+		t.Error("Expected error for column index out of range")
+	}
+	if err != nil && err.Error() != "column index 999 is out of range for table with 2 columns" {
+		t.Errorf("Expected specific error message, got: %v", err)
+	}
+
+	// Test with valid column index (should succeed even on empty table)
+	err = im.PopulateIndex(ctx, indexFilePath, 1, heapFile, 0, types.IntType, index.BTreeIndex)
+	if err != nil {
+		t.Errorf("Should not error with valid column index: %v", err)
+	}
 }
 
 func TestOnInsert_WithNilContext(t *testing.T) {
@@ -791,8 +845,8 @@ func TestIndexManager_Lifecycle_CompleteWorkflow(t *testing.T) {
 		t.Fatalf("Failed to create heap page: %v", err)
 	}
 
-	// Add tuples to page
-	for i := int64(1); i <= 20; i++ {
+	// Add tuples to page (reduce to 10 to fit in single page)
+	for i := int64(1); i <= 10; i++ {
 		tup := createTestTuple(td, i, fmt.Sprintf("name%d", i))
 		err = heapPage.AddTuple(tup)
 		if err != nil {

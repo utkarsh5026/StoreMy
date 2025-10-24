@@ -29,16 +29,7 @@ type CatalogReader interface {
 // IndexMetadata represents complete, resolved metadata for a database index.
 // This extends systemtable.IndexMetadata with resolved schema information needed for index operations.
 type IndexMetadata struct {
-	// Fields from catalog (systemtable.IndexMetadata)
-	IndexID    int
-	IndexName  string
-	TableID    int
-	ColumnName string
-	IndexType  index.IndexType // Already typed in catalog
-	FilePath   string
-	CreatedAt  int64
-
-	// Additional fields resolved from schema
+	systemtable.IndexMetadata
 	ColumnIndex int        // Field index in tuple (0-based, resolved from schema)
 	KeyType     types.Type // Type of the indexed column (resolved from schema)
 }
