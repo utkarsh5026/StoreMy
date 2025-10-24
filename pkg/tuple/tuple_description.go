@@ -6,16 +6,26 @@ import (
 	"strings"
 )
 
-// TupleDesc describes the schema of a tuple (like a table schema)
-// It contains the types and names of fields in a tuple
+// TupleDescription describes the schema of a tuple (like a table schema).
+// It contains the types and names of fields in a tuple, providing metadata
+// about the structure of data records in the database.
 type TupleDescription struct {
-	Types      []types.Type
+	// Types contains the data type of each field in order
+	Types []types.Type
+	// FieldNames contains the name of each field (optional, may be nil)
 	FieldNames []string
 }
 
-// NewTupleDesc creates a new TupleDescription given field types and optional field names
-// If fieldNames is nil, fields will have no names
-// Returns an error if fieldTypes is empty or if fieldNames length doesn't match fieldTypes length
+// NewTupleDesc creates a new TupleDescription given field types and optional field names.
+// If fieldNames is nil, fields will have no names.
+//
+// Parameters:
+//   - fieldTypes: slice of field types (must contain at least one element)
+//   - fieldNames: optional slice of field names (must match fieldTypes length if provided)
+//
+// Returns:
+//   - *TupleDescription: newly created tuple descriptor
+//   - error: if fieldTypes is empty or fieldNames length doesn't match fieldTypes length
 func NewTupleDesc(fieldTypes []types.Type, fieldNames []string) (*TupleDescription, error) {
 	if len(fieldTypes) < 1 {
 		return nil, fmt.Errorf("must provide at least one field type")
@@ -40,12 +50,22 @@ func NewTupleDesc(fieldTypes []types.Type, fieldNames []string) (*TupleDescripti
 	}, nil
 }
 
-// NumFields returns the number of fields in this tuple descriptor
+// NumFields returns the number of fields in this tuple descriptor.
+//
+// Returns:
+//   - int: total number of fields in the schema
 func (td *TupleDescription) NumFields() int {
 	return len(td.Types)
 }
 
-// GetFieldName returns the name of the ith field, or empty string if no names were provided
+// GetFieldName returns the name of the ith field.
+//
+// Parameters:
+//   - i: zero-based index of the field
+//
+// Returns:
+//   - string: field name, or empty string if no names were provided
+//   - error: if index is out of bounds
 func (td *TupleDescription) GetFieldName(i int) (string, error) {
 	if i < 0 || i >= len(td.Types) {
 		return "", fmt.Errorf("field index %d out of bounds [0, %d)", i, len(td.Types))
@@ -58,7 +78,14 @@ func (td *TupleDescription) GetFieldName(i int) (string, error) {
 	return td.FieldNames[i], nil
 }
 
-// TypeAtIndex returns the type of the ith field, or an error if the index is out of bounds
+// TypeAtIndex returns the type of the ith field.
+//
+// Parameters:
+//   - i: zero-based index of the field
+//
+// Returns:
+//   - types.Type: data type of the field
+//   - error: if index is out of bounds
 func (td *TupleDescription) TypeAtIndex(i int) (types.Type, error) {
 	if i < 0 || i >= len(td.Types) {
 		return 0, fmt.Errorf("field index %d out of bounds [0, %d)", i, len(td.Types))
@@ -66,7 +93,11 @@ func (td *TupleDescription) TypeAtIndex(i int) (types.Type, error) {
 	return td.Types[i], nil
 }
 
-// GetSize returns the size in bytes of tuples corresponding to this TupleDescription
+// GetSize returns the size in bytes of tuples corresponding to this TupleDescription.
+// This is the sum of all field type sizes.
+//
+// Returns:
+//   - uint32: total size in bytes
 func (td *TupleDescription) GetSize() uint32 {
 	var size uint32
 	for _, fieldType := range td.Types {
@@ -75,7 +106,15 @@ func (td *TupleDescription) GetSize() uint32 {
 	return size
 }
 
-// Equals checks if two TupleDescriptions are equal (same size and types)
+// Equals checks if two TupleDescriptions are equal.
+// Two descriptors are equal if they have the same size and field types in the same order.
+// Field names are not compared.
+//
+// Parameters:
+//   - other: the TupleDescription to compare against
+//
+// Returns:
+//   - bool: true if the descriptors are equal, false otherwise
 func (td *TupleDescription) Equals(other *TupleDescription) bool {
 	if other == nil {
 		return false
@@ -97,7 +136,12 @@ func (td *TupleDescription) Equals(other *TupleDescription) bool {
 	return true
 }
 
-// String returns a string representation of this TupleDescription
+// String returns a string representation of this TupleDescription.
+// Format: "Type1(fieldName1),Type2(fieldName2),..."
+// If a field has no name, "null" is used as the name.
+//
+// Returns:
+//   - string: comma-separated list of field descriptions
 func (td *TupleDescription) String() string {
 	var parts []string
 
@@ -116,8 +160,15 @@ func (td *TupleDescription) String() string {
 	return strings.Join(parts, ",")
 }
 
-// findFieldIndex locates a field by name in the tuple descriptor.
+// FindFieldIndex locates a field by name in the tuple descriptor.
 // Performs case-sensitive linear search through the schema definition.
+//
+// Parameters:
+//   - fieldName: name of the field to find
+//
+// Returns:
+//   - int: zero-based index of the field
+//   - error: if the field is not found
 func (td *TupleDescription) FindFieldIndex(fieldName string) (int, error) {
 	for i := 0; i < td.NumFields(); i++ {
 		name, _ := td.GetFieldName(i)
@@ -128,7 +179,17 @@ func (td *TupleDescription) FindFieldIndex(fieldName string) (int, error) {
 	return -1, fmt.Errorf("column %s not found", fieldName)
 }
 
-// Combine merges two TupleDescriptions into one
+// Combine merges two TupleDescriptions into one.
+// The resulting descriptor contains all fields from td1 followed by all fields from td2.
+// If either descriptor is nil, returns the other descriptor.
+// If both are nil, returns nil.
+//
+// Parameters:
+//   - td1: first TupleDescription to merge
+//   - td2: second TupleDescription to merge
+//
+// Returns:
+//   - *TupleDescription: combined tuple descriptor with all fields from both inputs
 func Combine(td1, td2 *TupleDescription) *TupleDescription {
 	if td1 == nil && td2 == nil {
 		return nil
