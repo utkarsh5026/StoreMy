@@ -54,7 +54,7 @@ func TestNewDatabase_Success(t *testing.T) {
 	if db.queryPlanner == nil {
 		t.Error("queryPlanner should be initialized")
 	}
-	if db.wal == nil {
+	if db.walInstance == nil {
 		t.Error("wal should be initialized")
 	}
 	if db.stats == nil {

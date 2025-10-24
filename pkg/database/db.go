@@ -8,7 +8,7 @@ import (
 	"storemy/pkg/catalog/catalogmanager"
 	"storemy/pkg/catalog/systemtable"
 	"storemy/pkg/concurrency/transaction"
-	"storemy/pkg/log"
+	"storemy/pkg/log/wal"
 	"storemy/pkg/memory"
 	"storemy/pkg/parser/parser"
 	"storemy/pkg/parser/statements"
@@ -27,7 +27,7 @@ type Database struct {
 	catalogMgr   *catalogmanager.CatalogManager
 	pageStore    *memory.PageStore
 	queryPlanner *planner.QueryPlanner
-	wal          *log.WAL
+	walInstance  *wal.WAL
 	txRegistry   *transaction.TransactionRegistry
 	statsManager *catalog.StatisticsManager
 
@@ -72,21 +72,21 @@ func NewDatabase(name, dataDir, logDir string) (*Database, error) {
 		return nil, fmt.Errorf("failed to create data directory: %v", err)
 	}
 
-	wal, err := log.NewWAL(logDir, 8192)
+	walInstance, err := wal.NewWAL(logDir, 8192)
 	if err != nil {
 		return nil, fmt.Errorf("failed to initialize WAL: %v", err)
 	}
 
-	pageStore := memory.NewPageStore(wal)
+	pageStore := memory.NewPageStore(walInstance)
 	catalogMgr := catalogmanager.NewCatalogManager(pageStore, dataDir)
 
-	ctx := registry.NewDatabaseContext(pageStore, catalogMgr, wal, fullPath)
+	ctx := registry.NewDatabaseContext(pageStore, catalogMgr, walInstance, fullPath)
 
 	db := &Database{
 		catalogMgr: catalogMgr,
 		pageStore:  pageStore,
 		txRegistry: ctx.TransactionRegistry(),
-		wal:        wal,
+		walInstance:        walInstance,
 		name:       name,
 		dataDir:    fullPath,
 		stats:      &DatabaseStats{},
@@ -312,7 +312,7 @@ func (db *Database) Close() error {
 		return fmt.Errorf("failed to flush pages: %v", err)
 	}
 
-	if err := db.wal.Close(); err != nil {
+	if err := db.walInstance.Close(); err != nil {
 		return fmt.Errorf("failed to close WAL: %v", err)
 	}
 
