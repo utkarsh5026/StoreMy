@@ -1,4 +1,4 @@
-package planner
+package result
 
 import (
 	"fmt"
@@ -10,9 +10,6 @@ import (
 type Result interface {
 	// String returns a human-readable representation of the result
 	String() string
-
-	// Type returns the category of result for type switching if needed
-	Type() ResultType
 }
 
 // ResultType categorizes the different kinds of query results
