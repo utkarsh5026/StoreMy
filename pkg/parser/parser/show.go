@@ -30,11 +30,11 @@ func parseShowStatement(l *lexer.Lexer) (statements.Statement, error) {
 	tableName := ""
 	token := l.NextToken()
 	if token.Type == lexer.FROM {
-		token = l.NextToken()
-		if token.Type != lexer.IDENTIFIER {
-			return nil, fmt.Errorf("expected table name after FROM, got %s", token.Value)
+		var err error
+		tableName, err = parseValueWithType(l, lexer.IDENTIFIER)
+		if err != nil {
+			return nil, fmt.Errorf("expected table name after FROM: %w", err)
 		}
-		tableName = token.Value
 	} else {
 		l.SetPos(token.Position)
 	}
