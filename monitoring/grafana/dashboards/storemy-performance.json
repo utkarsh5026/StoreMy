@@ -1,0 +1,81 @@
+{
+  "dashboard": {
+    "title": "StoreMy Performance Dashboard",
+    "panels": [
+      {
+        "id": 1,
+        "title": "Queries Per Second",
+        "type": "graph",
+        "gridPos": {"x": 0, "y": 0, "w": 12, "h": 8},
+        "targets": [
+          {
+            "expr": "rate(storemy_queries_total[1m])",
+            "legendFormat": "QPS"
+          }
+        ]
+      },
+      {
+        "id": 2,
+        "title": "Average Query Duration",
+        "type": "graph",
+        "gridPos": {"x": 12, "y": 0, "w": 12, "h": 8},
+        "targets": [
+          {
+            "expr": "storemy_query_duration_microseconds",
+            "legendFormat": "Avg Duration (μs)"
+          }
+        ]
+      },
+      {
+        "id": 3,
+        "title": "Total Queries",
+        "type": "stat",
+        "gridPos": {"x": 0, "y": 8, "w": 6, "h": 4},
+        "targets": [
+          {
+            "expr": "storemy_queries_total"
+          }
+        ]
+      },
+      {
+        "id": 4,
+        "title": "Error Rate",
+        "type": "stat",
+        "gridPos": {"x": 6, "y": 8, "w": 6, "h": 4},
+        "targets": [
+          {
+            "expr": "rate(storemy_query_errors_total[5m])"
+          }
+        ]
+      },
+      {
+        "id": 5,
+        "title": "Database Tables",
+        "type": "stat",
+        "gridPos": {"x": 12, "y": 8, "w": 6, "h": 4},
+        "targets": [
+          {
+            "expr": "storemy_table_count"
+          }
+        ]
+      },
+      {
+        "id": 6,
+        "title": "Database Status",
+        "type": "stat",
+        "gridPos": {"x": 18, "y": 8, "w": 6, "h": 4},
+        "targets": [
+          {
+            "expr": "storemy_up"
+          }
+        ]
+      }
+    ],
+    "refresh": "5s",
+    "time": {
+      "from": "now-15m",
+      "to": "now"
+    },
+    "timezone": "browser"
+  }
+}
