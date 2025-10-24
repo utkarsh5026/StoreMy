@@ -1,10 +1,13 @@
-package planner
+package indexops
 
 import (
 	"fmt"
 	"storemy/pkg/catalog/schema"
 	"storemy/pkg/catalog/systemtable"
+	"storemy/pkg/concurrency/transaction"
 	"storemy/pkg/parser/statements"
+	"storemy/pkg/planner/internal/result"
+	"storemy/pkg/registry"
 	"storemy/pkg/tuple"
 	"storemy/pkg/types"
 	"strings"
@@ -31,8 +34,8 @@ import (
 //	SHOW INDEXES FROM users;          -- Show indexes for 'users' table
 type ShowIndexesPlan struct {
 	Statement *statements.ShowIndexesStatement // Parsed SHOW INDEXES statement
-	ctx       DbContext                        // Database context for catalog access
-	tx        TxContext                        // Current transaction for catalog operations
+	ctx       *registry.DatabaseContext        // Database context for catalog access
+	tx        *transaction.TransactionContext  // Current transaction for catalog operations
 }
 
 // NewShowIndexesPlan creates a new SHOW INDEXES plan instance.
@@ -47,8 +50,8 @@ type ShowIndexesPlan struct {
 //	Plan ready for execution via Execute() method
 func NewShowIndexesPlan(
 	stmt *statements.ShowIndexesStatement,
-	ctx DbContext,
-	tx TxContext,
+	ctx *registry.DatabaseContext,
+	tx *transaction.TransactionContext,
 ) *ShowIndexesPlan {
 	return &ShowIndexesPlan{
 		Statement: stmt,
@@ -68,7 +71,7 @@ func NewShowIndexesPlan(
 // Returns:
 //   - SelectQueryResult with index metadata on success
 //   - Error if table doesn't exist or catalog read fails
-func (p *ShowIndexesPlan) Execute() (Result, error) {
+func (p *ShowIndexesPlan) Execute() (result.Result, error) {
 	var indexes []*systemtable.IndexMetadata
 	var err error
 
@@ -86,7 +89,7 @@ func (p *ShowIndexesPlan) Execute() (Result, error) {
 
 	tupleDesc, tuples := p.createResultTuples(indexes)
 
-	return &SelectQueryResult{
+	return &result.SelectQueryResult{
 		TupleDesc: tupleDesc,
 		Tuples:    tuples,
 	}, nil

@@ -1,8 +1,11 @@
-package planner
+package indexops
 
 import (
 	"fmt"
+	"storemy/pkg/concurrency/transaction"
 	"storemy/pkg/parser/statements"
+	"storemy/pkg/planner/internal/result"
+	"storemy/pkg/registry"
 )
 
 // DropIndexPlan represents the execution plan for DROP INDEX statement.
@@ -25,9 +28,9 @@ import (
 //	DROP INDEX IF EXISTS idx_users_email;           -- Succeeds even if missing
 //	DROP INDEX idx_users_email ON users;            -- Validates table ownership
 type DropIndexPlan struct {
-	Statement *statements.DropIndexStatement // Parsed DROP INDEX statement
-	ctx       DbContext                      // Database context for catalog/index access
-	TxContext TxContext                      // Current transaction for catalog operations
+	Statement *statements.DropIndexStatement  // Parsed DROP INDEX statement
+	ctx       *registry.DatabaseContext       // Database context for catalog/index access
+	tx        *transaction.TransactionContext // Current transaction for catalog operations
 }
 
 // NewDropIndexPlan creates a new DROP INDEX plan instance.
@@ -35,20 +38,19 @@ type DropIndexPlan struct {
 // Parameters:
 //   - stmt: Parsed DROP INDEX statement containing index name and IF EXISTS flag
 //   - ctx: Database context providing access to CatalogManager and IndexManager
-//   - TxContext: Active transaction for catalog modifications
+//   - *transaction.TransactionContext: Active transaction for catalog modifications
 //
 // Returns:
 //
 //	Plan ready for execution via Execute() method
 func NewDropIndexPlan(
 	stmt *statements.DropIndexStatement,
-	ctx DbContext,
-	TxContext TxContext,
+	ctx *registry.DatabaseContext, tx *transaction.TransactionContext,
 ) *DropIndexPlan {
 	return &DropIndexPlan{
 		Statement: stmt,
 		ctx:       ctx,
-		TxContext: TxContext,
+		tx:        tx,
 	}
 }
 
@@ -64,13 +66,13 @@ func NewDropIndexPlan(
 // Returns:
 //   - DDLResult with success message on completion
 //   - Error if index doesn't exist (without IF EXISTS) or validation fails
-func (p *DropIndexPlan) Execute() (Result, error) {
+func (p *DropIndexPlan) Execute() (result.Result, error) {
 	cm := p.ctx.CatalogManager()
 	idxName := p.Statement.IndexName
 
-	if !cm.IndexExists(p.TxContext, idxName) {
+	if !cm.IndexExists(p.tx, idxName) {
 		if p.Statement.IfExists {
-			return &DDLResult{
+			return &result.DDLResult{
 				Success: true,
 				Message: fmt.Sprintf("Index %s does not exist (IF EXISTS)", idxName),
 			}, nil
@@ -86,7 +88,7 @@ func (p *DropIndexPlan) Execute() (Result, error) {
 		return nil, err
 	}
 
-	return &DDLResult{
+	return &result.DDLResult{
 		Success: true,
 		Message: fmt.Sprintf("Index %s dropped successfully", idxName),
 	}, nil
@@ -107,7 +109,7 @@ func (p *DropIndexPlan) Execute() (Result, error) {
 // but the operation succeeds (catalog entry is already removed).
 func (p *DropIndexPlan) deleteIndex() error {
 	cm := p.ctx.CatalogManager()
-	filePath, err := cm.DropIndex(p.TxContext, p.Statement.IndexName)
+	filePath, err := cm.DropIndex(p.tx, p.Statement.IndexName)
 	if err != nil {
 		return fmt.Errorf("failed to drop index from catalog: %w", err)
 	}
@@ -135,14 +137,14 @@ func (p *DropIndexPlan) deleteIndex() error {
 //   - Error if table name doesn't match or metadata lookup fails
 func (p *DropIndexPlan) validateTable() error {
 	cm := p.ctx.CatalogManager()
-	idx, err := cm.GetIndexByName(p.TxContext, p.Statement.IndexName)
+	idx, err := cm.GetIndexByName(p.tx, p.Statement.IndexName)
 	if err != nil {
 		return fmt.Errorf("failed to get index metadata: %w", err)
 	}
 
 	tableName := p.Statement.TableName
 	if tableName != "" {
-		tn, err := cm.GetTableName(p.TxContext, idx.TableID)
+		tn, err := cm.GetTableName(p.tx, idx.TableID)
 		if err != nil {
 			return fmt.Errorf("failed to verify table name: %w", err)
 		}

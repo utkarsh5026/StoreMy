@@ -1,8 +1,11 @@
-package planner
+package indexops
 
 import (
 	"fmt"
+	"storemy/pkg/concurrency/transaction"
 	"storemy/pkg/parser/statements"
+	"storemy/pkg/planner/internal/result"
+	"storemy/pkg/registry"
 )
 
 // CreateIndexPlan represents the execution plan for CREATE INDEX statement.
@@ -17,15 +20,15 @@ import (
 //  6. Returns DDL result with success message
 type CreateIndexPlan struct {
 	Statement *statements.CreateIndexStatement
-	ctx       DbContext
-	tx        TxContext
+	ctx       *registry.DatabaseContext
+	tx        *transaction.TransactionContext
 }
 
 // NewCreateIndexPlan creates a new CREATE INDEX plan instance.
 func NewCreateIndexPlan(
 	stmt *statements.CreateIndexStatement,
-	ctx DbContext,
-	tx TxContext,
+	ctx *registry.DatabaseContext,
+	tx *transaction.TransactionContext,
 ) *CreateIndexPlan {
 	return &CreateIndexPlan{
 		Statement: stmt,
@@ -44,7 +47,7 @@ func NewCreateIndexPlan(
 //  5. Registers index in catalog (CATALOG_INDEXES)
 //  6. Populates index with existing data from the table
 //  7. Returns success result
-func (p *CreateIndexPlan) Execute() (Result, error) {
+func (p *CreateIndexPlan) Execute() (result.Result, error) {
 	cm := p.ctx.CatalogManager()
 	tableName, indexName, colName := p.Statement.TableName, p.Statement.IndexName, p.Statement.ColumnName
 	idxType := p.Statement.IndexType
@@ -71,7 +74,7 @@ func (p *CreateIndexPlan) Execute() (Result, error) {
 
 	if cm.IndexExists(p.tx, p.Statement.IndexName) {
 		if p.Statement.IfNotExists {
-			return &DDLResult{
+			return &result.DDLResult{
 				Success: true,
 				Message: fmt.Sprintf("Index %s already exists (IF NOT EXISTS)", p.Statement.IndexName),
 			}, nil
@@ -104,11 +107,11 @@ func (p *CreateIndexPlan) Execute() (Result, error) {
 		ColumnType:  columnType,
 	}
 
-	if err := createAndPopulateIndex(&idxConfig); err != nil {
+	if err := CreateAndPopulateIndex(&idxConfig); err != nil {
 		return nil, err
 	}
 
-	return &DDLResult{
+	return &result.DDLResult{
 		Success: true,
 		Message: fmt.Sprintf("Index %s created successfully on %s(%s) using %s",
 			p.Statement.IndexName,
