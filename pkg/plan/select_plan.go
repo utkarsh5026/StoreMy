@@ -1,7 +1,6 @@
 package plan
 
 import (
-	"errors"
 	"fmt"
 	"storemy/pkg/primitives"
 	"strings"
@@ -88,15 +87,35 @@ func (sp *SelectPlan) AddScan(tableName string, alias string) {
 }
 
 // AddFilter adds a WHERE clause filter condition.
+// Accepts both qualified (table.column) and unqualified (column) field names.
+// For unqualified names, infers the table from the FROM clause if possible.
 func (sp *SelectPlan) AddFilter(field string, pred primitives.Predicate, constant string) error {
+	var table string
+	var qualifiedField string
+
 	parts := strings.Split(field, ".")
-	if len(parts) != 2 {
-		return errors.New("field name must be fully qualified for filters")
+	if len(parts) == 2 {
+		table = parts[0]
+		qualifiedField = field
+	} else if len(parts) == 1 {
+		if len(sp.tables) > 0 {
+			// Use the first table's alias if available, otherwise use table name
+			if sp.tables[0].Alias != "" {
+				table = sp.tables[0].Alias
+			} else {
+				table = sp.tables[0].TableName
+			}
+			qualifiedField = table + "." + field
+		} else {
+			table = ""
+			qualifiedField = field
+		}
+	} else {
+		return fmt.Errorf("invalid field name format: %s", field)
 	}
 
-	table := parts[0]
-	filter := NewFilterNode(table, field, pred, constant)
-	fmt.Printf("Added filter %s %s %s\n", field, pred, constant)
+	filter := NewFilterNode(table, qualifiedField, pred, constant)
+	fmt.Printf("Added filter %s %s %s\n", qualifiedField, pred, constant)
 	sp.filters = append(sp.filters, filter)
 	return nil
 }
