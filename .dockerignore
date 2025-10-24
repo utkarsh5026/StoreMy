@@ -1,0 +1,53 @@
+# Git files
+.git
+.gitignore
+.gitattributes
+
+# IDE and editor files
+.vscode
+.idea
+*.swp
+*.swo
+*~
+
+# Build artifacts
+*.exe
+storemy
+test_db
+storemy.exe
+
+# Test files with main() that conflict
+test_db.go
+test_crud.sql
+
+# Test and temporary data
+test_data/
+data/
+*.log
+
+# Documentation (except examples)
+*.md
+!DOCKER_README.md
+docs/
+
+# CI/CD
+.github/
+.gitlab-ci.yml
+.travis.yml
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Development files
+tmp/
+temp/
+*.tmp
+
+# Benchmarks
+.benchmarks/
+
+# Coverage
+*.cover
+coverage.xml
+*.out

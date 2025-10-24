@@ -1,0 +1,42 @@
+services:
+  storemy:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: storemy
+    stdin_open: true # Keep STDIN open for interactive terminal
+    tty: true # Allocate a pseudo-TTY for terminal UI
+    volumes:
+      - storemy-data:/app/data
+      - ./examples:/app/examples:ro
+    environment:
+      - DB_NAME=storemy_db
+      - DATA_DIR=/app/data
+      - TERM=xterm-256color # Enable colors in terminal
+    command: ["--db", "storemy_db", "--data", "/app/data"]
+    networks:
+      - storemy-network
+
+  # Test Runner Service (for automated testing)
+  storemy-test:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: storemy-test
+    volumes:
+      - ./examples/test_db:/app/test_db:ro
+      - storemy-test-data:/app/test_data
+    working_dir: /app
+    entrypoint: ["go", "run", "test_db/test_db.go"]
+    networks:
+      - storemy-network
+
+volumes:
+  storemy-data:
+    driver: local
+  storemy-test-data:
+    driver: local
+
+networks:
+  storemy-network:
+    driver: bridge
