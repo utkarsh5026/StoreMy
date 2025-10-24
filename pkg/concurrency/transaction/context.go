@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"maps"
 	"slices"
-	"storemy/pkg/log"
+	"storemy/pkg/log/wal"
 	"storemy/pkg/primitives"
 	"sync"
 	"time"
@@ -198,7 +198,7 @@ func (tc *TransactionContext) GetWaitingFor() []primitives.PageID {
 }
 
 // EnsureBegunInWAL ensures a BEGIN record has been written
-func (tc *TransactionContext) EnsureBegunInWAL(wal *log.WAL) error {
+func (tc *TransactionContext) EnsureBegunInWAL(w *wal.WAL) error {
 	tc.mutex.Lock()
 	defer tc.mutex.Unlock()
 
@@ -206,7 +206,7 @@ func (tc *TransactionContext) EnsureBegunInWAL(wal *log.WAL) error {
 		return nil
 	}
 
-	lsn, err := wal.LogBegin(tc.ID)
+	lsn, err := w.LogBegin(tc.ID)
 	if err != nil {
 		return err
 	}

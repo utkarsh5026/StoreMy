@@ -2,7 +2,7 @@ package transaction
 
 import (
 	"path/filepath"
-	"storemy/pkg/log"
+	"storemy/pkg/log/wal"
 	"storemy/pkg/primitives"
 	"sync"
 	"testing"
@@ -28,10 +28,10 @@ func (m *mockPageID) Equals(other primitives.PageID) bool {
 }
 
 // Helper function to create a temporary WAL for testing
-func createTestWAL(t *testing.T) (*log.WAL, string) {
+func createTestWAL(t *testing.T) (*wal.WAL, string) {
 	tempDir := t.TempDir()
 	walPath := filepath.Join(tempDir, "test.wal")
-	wal, err := log.NewWAL(walPath, 4096)
+	wal, err := wal.NewWAL(walPath, 4096)
 	if err != nil {
 		t.Fatalf("Failed to create test WAL: %v", err)
 	}
@@ -492,7 +492,7 @@ func TestNewTransactionRegistry(t *testing.T) {
 		t.Error("contexts map is nil")
 	}
 
-	if registry.wal != wal {
+	if registry.walInstance != wal {
 		t.Error("WAL not set correctly")
 	}
 

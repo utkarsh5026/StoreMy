@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"maps"
 	"slices"
-	"storemy/pkg/log"
+	"storemy/pkg/log/wal"
 	"storemy/pkg/primitives"
 	"sync"
 )
@@ -14,14 +14,14 @@ import (
 type TransactionRegistry struct {
 	contexts map[*primitives.TransactionID]*TransactionContext
 	mutex    sync.RWMutex
-	wal      *log.WAL
+	walInstance      *wal.WAL
 }
 
 // NewTransactionRegistry creates a new transaction registry
-func NewTransactionRegistry(wal *log.WAL) *TransactionRegistry {
+func NewTransactionRegistry(w *wal.WAL) *TransactionRegistry {
 	return &TransactionRegistry{
 		contexts: make(map[*primitives.TransactionID]*TransactionContext),
-		wal:      wal,
+		walInstance:      w,
 	}
 }
 
