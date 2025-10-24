@@ -1,12 +1,17 @@
-package planner
+package ddl
 
 import (
 	"fmt"
-
 	"storemy/pkg/catalog/schema"
+	"storemy/pkg/concurrency/transaction"
 	"storemy/pkg/parser/statements"
+	"storemy/pkg/planner/indexops"
+	"storemy/pkg/registry"
 	"storemy/pkg/storage/index"
 )
+
+type DbContext = *registry.DatabaseContext
+type TxContext = *transaction.TransactionContext
 
 type CreateTablePlan struct {
 	Statement *statements.CreateStatement
@@ -14,9 +19,7 @@ type CreateTablePlan struct {
 	TxContext TxContext
 }
 
-func NewCreateTablePlan(
-	stmt *statements.CreateStatement,
-	ctx DbContext,
+func NewCreateTablePlan(stmt *statements.CreateStatement, ctx DbContext,
 	TxContext TxContext,
 ) *CreateTablePlan {
 	return &CreateTablePlan{
@@ -34,7 +37,7 @@ func NewCreateTablePlan(
 //  3. Creates table entry in catalog with schema
 //  4. CatalogManager handles file path generation and persistence
 //  5. If primary key is specified, creates a BTree index on the primary key column
-func (p *CreateTablePlan) Execute() (Result, error) {
+func (p *CreateTablePlan) Execute() (*DDLResult, error) {
 	cm := p.ctx.CatalogManager()
 	if cm.TableExists(p.TxContext, p.Statement.TableName) {
 		if p.Statement.IfNotExists {
@@ -130,7 +133,7 @@ func (p *CreateTablePlan) createPrimaryKeyIndex(tableID int, tableSchema *schema
 		return fmt.Errorf("failed to register index in catalog: %v", err)
 	}
 
-	idxConfig := IndexCreationConfig{
+	idxConfig := indexops.IndexCreationConfig{
 		Ctx:         p.ctx,
 		Tx:          p.TxContext,
 		IndexName:   indexName,
@@ -142,5 +145,5 @@ func (p *CreateTablePlan) createPrimaryKeyIndex(tableID int, tableSchema *schema
 		ColumnType:  pkColumn.FieldType,
 	}
 
-	return createAndPopulateIndex(&idxConfig)
+	return indexops.CreateAndPopulateIndex(&idxConfig)
 }
