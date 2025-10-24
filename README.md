@@ -25,7 +25,6 @@ docker-compose up storemy-demo
 
 This starts the database with pre-loaded demo data. Press **Ctrl+E** to execute queries, **Ctrl+H** for help.
 
-
 ### Other Quick Start Options
 
 ```bash
@@ -42,6 +41,7 @@ docker-compose up storemy-fresh
 ## Key Features
 
 ### Storage Engine
+
 - **Slotted Page Architecture** with 4KB pages for efficient variable-length tuple storage
 - **B+Tree Indexes** with automatic rebalancing, split/merge operations, and range scan support
 - **Hash Indexes** with separate chaining and overflow page management for fast equality lookups
@@ -49,6 +49,7 @@ docker-compose up storemy-fresh
 - **Heap File Storage** with page-level locking and dirty page tracking
 
 ### Transaction Processing
+
 - **ACID Guarantees** with full transaction support (begin, commit, abort)
 - **Two-Phase Locking (2PL)** with page-level granularity for concurrency control
 - **Deadlock Detection** using dependency graph analysis with automatic abort and retry
@@ -56,6 +57,7 @@ docker-compose up storemy-fresh
 - **Before-Image Tracking** for transaction rollback support
 
 ### Query Execution
+
 - **SQL Parser** supporting SELECT, INSERT, UPDATE, DELETE, CREATE TABLE, DROP TABLE
 - **Cost-Based Query Optimization** with join algorithm selection and cardinality estimation
 - **Multiple Join Algorithms**:
@@ -66,12 +68,14 @@ docker-compose up storemy-fresh
 - **Iterator-Based Execution Model** for memory-efficient query processing
 
 ### System Catalog
+
 - **Self-Describing Metadata** stored in system tables (CATALOG_TABLES, CATALOG_COLUMNS, CATALOG_STATISTICS)
 - **Auto-Increment Columns** with persistent counter management
 - **Table Statistics** for query optimization including cardinality, page counts, and distinct value estimates
 - **Background Statistics Updater** maintaining fresh optimizer statistics
 
 ### User Interface
+
 - **Beautiful Terminal UI** built with Bubble Tea framework
 - **Syntax Highlighting Hints** for SQL queries
 - **Real-Time Statistics Display** showing database health and performance metrics
@@ -186,12 +190,12 @@ go run main.go --import init_schema.sql
 
 ### Command-Line Options
 
-| Flag | Description | Default |
-|------|-------------|---------|
-| `--db` | Database name | `mydb` |
-| `--data` | Data directory path | `./data` |
-| `--demo` | Run in demo mode with sample data | `false` |
-| `--import` | SQL file to import on startup | `""` |
+| Flag         | Description                       | Default    |
+| ------------ | --------------------------------- | ---------- |
+| `--db`     | Database name                     | `mydb`   |
+| `--data`   | Data directory path               | `./data` |
+| `--demo`   | Run in demo mode with sample data | `false`  |
+| `--import` | SQL file to import on startup     | `""`     |
 
 ## Usage Examples
 
@@ -242,21 +246,22 @@ DROP TABLE employees
 
 ### Keyboard Shortcuts (Interactive Mode)
 
-| Shortcut | Action |
-|----------|--------|
-| `Ctrl+E` | Execute current query |
-| `Ctrl+C` | Clear editor |
-| `Ctrl+T` | Show all tables |
+| Shortcut   | Action                   |
+| ---------- | ------------------------ |
+| `Ctrl+E` | Execute current query    |
+| `Ctrl+C` | Clear editor             |
+| `Ctrl+T` | Show all tables          |
 | `Ctrl+S` | Show database statistics |
-| `Ctrl+H` | Toggle help overlay |
-| `Ctrl+Q` | Quit application |
-| `↑/↓` | Navigate query history |
+| `Ctrl+H` | Toggle help overlay      |
+| `Ctrl+Q` | Quit application         |
+| `↑/↓`  | Navigate query history   |
 
 ## Technical Highlights
 
 ### Buffer Pool Management
 
 The PageStore implements sophisticated buffer management:
+
 - **Maximum Capacity**: 1000 pages (configurable)
 - **LRU Eviction**: Least Recently Used policy for clean pages
 - **NO-STEAL Policy**: Dirty pages never evicted before commit
@@ -267,13 +272,14 @@ The PageStore implements sophisticated buffer management:
 
 Cost-based optimizer selects optimal join algorithm:
 
-| Algorithm | Best For | Time Complexity | Space Complexity |
-|-----------|----------|-----------------|------------------|
-| **Block Nested Loop** | Non-equality predicates, small relations | O(\|R\| + (\|R\|/B) × \|S\|) | O(B) |
-| **Hash Join** | Equality predicates, sufficient memory | O(\|R\| + \|S\|) avg | O(\|S\|) |
-| **Sort-Merge** | Pre-sorted inputs, large relations | O(\|R\| log \|R\| + \|S\| log \|S\|) | O(1) merge |
+| Algorithm                   | Best For                                 | Time Complexity                      | Space Complexity |
+| --------------------------- | ---------------------------------------- | ------------------------------------ | ---------------- |
+| **Block Nested Loop** | Non-equality predicates, small relations | O(\|R\| + (\|R\|/B) × \|S\|)        | O(B)             |
+| **Hash Join**         | Equality predicates, sufficient memory   | O(\|R\| + \|S\|) avg                 | O(\|S\|)         |
+| **Sort-Merge**        | Pre-sorted inputs, large relations       | O(\|R\| log \|R\| + \|S\| log \|S\|) | O(1) merge       |
 
 Selection criteria based on:
+
 - Predicate type (equality vs. range)
 - Table cardinality from catalog statistics
 - Available memory for hash tables
@@ -282,12 +288,14 @@ Selection criteria based on:
 ### Index Structures
 
 **B+Tree Implementation**:
+
 - Internal nodes store separator keys and child pointers
 - Leaf nodes contain (key, RID) pairs with sibling pointers for range scans
 - Automatic split/merge operations maintain balance
 - O(log n) point queries, O(log n + k) range queries
 
 **Hash Index Implementation**:
+
 - Fixed bucket count determined at creation
 - FNV-1a hash function for key distribution
 - Separate chaining with overflow pages
@@ -325,16 +333,19 @@ go test -v ./pkg/database/...
 ## Performance Characteristics
 
 ### Storage Layer
+
 - **Page Size**: 4KB (standard database page size)
 - **Buffer Pool**: 1000 pages = 4MB default cache
 - **Index Lookup**: O(log n) for B+Tree, O(1) average for Hash
 
 ### Concurrency
+
 - **Lock Granularity**: Page-level (fine-grained)
 - **Deadlock Detection**: Immediate with automatic retry
 - **Max Retry Attempts**: 100 with exponential backoff (1ms → 50ms)
 
 ### Query Execution
+
 - **Iterator Model**: Memory-efficient tuple-at-a-time processing
 - **Join Block Size**: 100 tuples (configurable)
 - **Hash Table**: O(1) build and probe for equi-joins
@@ -359,6 +370,7 @@ StoreMy demonstrates several key principles:
 ## Limitations & Future Enhancements
 
 ### Current Limitations
+
 - Full crash recovery (redo phase) not yet implemented
 - No multi-column indexes or composite keys
 - Limited query optimizer (no join reordering)
@@ -366,6 +378,7 @@ StoreMy demonstrates several key principles:
 - No support for subqueries, views, or stored procedures
 
 ### Potential Enhancements
+
 - [ ] MVCC (Multi-Version Concurrency Control) for higher concurrency
 - [ ] Query optimizer improvements (join reordering, cost models)
 - [ ] Additional aggregate functions (MEDIAN, STDDEV)
@@ -392,6 +405,7 @@ This project is available under the MIT License. See LICENSE file for details.
 ## Acknowledgments
 
 Built with inspiration from:
+
 - Database System Concepts (Silberschatz, Korth, Sudarshan)
 - Database Management Systems (Ramakrishnan, Gehrke)
 - CMU 15-445/645 Database Systems course materials
