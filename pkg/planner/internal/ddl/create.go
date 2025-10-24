@@ -5,7 +5,7 @@ import (
 	"storemy/pkg/catalog/schema"
 	"storemy/pkg/concurrency/transaction"
 	"storemy/pkg/parser/statements"
-	"storemy/pkg/planner/indexops"
+	"storemy/pkg/planner/internal/indexops"
 	"storemy/pkg/registry"
 	"storemy/pkg/storage/index"
 )
