@@ -1,4 +1,4 @@
-package planner
+package planner_tests
 
 import (
 	"fmt"
@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"storemy/pkg/catalog/systemtable"
 	"storemy/pkg/parser/statements"
+	"storemy/pkg/planner/internal/ddl"
+	"storemy/pkg/planner/internal/result"
 	"storemy/pkg/storage/index"
 	"storemy/pkg/types"
 	"strings"
@@ -13,22 +15,21 @@ import (
 )
 
 // Helper function to execute plan and cast result to DDLResult
-func executePlan(t *testing.T, plan *CreateTablePlan) (*DDLResult, error) {
-	resultAny, err := plan.Execute()
+func executePlan(t *testing.T, plan *ddl.CreateTablePlan) (*result.DDLResult, error) {
+	res, err := plan.Execute()
 	if err != nil {
 		return nil, err
 	}
 
-	if resultAny == nil {
+	if res == nil {
 		return nil, nil
 	}
 
-	result, ok := resultAny.(*DDLResult)
-	if !ok {
-		t.Fatalf("Result is not a DDLResult, got %T", resultAny)
+	if ddlResult, ok := res.(*result.DDLResult); ok {
+		return ddlResult, nil
 	}
 
-	return result, nil
+	return nil, fmt.Errorf("unexpected result type: %T", res)
 }
 
 func TestNewCreateTablePlan(t *testing.T) {
@@ -40,18 +41,14 @@ func TestNewCreateTablePlan(t *testing.T) {
 	ctx := createTestContextWithCleanup(t, dataDir)
 	transCtx := createTransactionContext(t)
 
-	plan := NewCreateTablePlan(stmt, ctx, transCtx)
+	plan := ddl.NewCreateTablePlan(stmt, ctx, transCtx)
 
 	if plan == nil {
-		t.Fatal("NewCreateTablePlan returned nil")
+		t.Fatal("ddl.NewCreateTablePlan returned nil")
 	}
 
 	if plan.Statement != stmt {
 		t.Error("Statement not properly assigned")
-	}
-
-	if plan.ctx != ctx {
-		t.Error("Context not properly assigned")
 	}
 
 	if plan.TxContext != transCtx {
@@ -68,7 +65,7 @@ func TestCreateTablePlan_Execute_BasicSuccess(t *testing.T) {
 	ctx := createTestContextWithCleanup(t, dataDir)
 	transCtx := createTransactionContext(t)
 
-	plan := NewCreateTablePlan(stmt, ctx, transCtx)
+	plan := ddl.NewCreateTablePlan(stmt, ctx, transCtx)
 
 	result, err := executePlan(t, plan)
 
@@ -107,7 +104,7 @@ func TestCreateTablePlan_Execute_WithPrimaryKey(t *testing.T) {
 	ctx := createTestContextWithCleanup(t, dataDir)
 	transCtx := createTransactionContext(t)
 
-	plan := NewCreateTablePlan(stmt, ctx, transCtx)
+	plan := ddl.NewCreateTablePlan(stmt, ctx, transCtx)
 
 	result, err := executePlan(t, plan)
 
@@ -138,7 +135,7 @@ func TestCreateTablePlan_Execute_AllFieldTypes(t *testing.T) {
 	ctx := createTestContextWithCleanup(t, dataDir)
 	transCtx := createTransactionContext(t)
 
-	plan := NewCreateTablePlan(stmt, ctx, transCtx)
+	plan := ddl.NewCreateTablePlan(stmt, ctx, transCtx)
 
 	result, err := executePlan(t, plan)
 
@@ -166,7 +163,7 @@ func TestCreateTablePlan_Execute_IfNotExists_TableDoesNotExist(t *testing.T) {
 	ctx := createTestContextWithCleanup(t, dataDir)
 	transCtx := createTransactionContext(t)
 
-	plan := NewCreateTablePlan(stmt, ctx, transCtx)
+	plan := ddl.NewCreateTablePlan(stmt, ctx, transCtx)
 
 	result, err := executePlan(t, plan)
 
@@ -198,7 +195,7 @@ func TestCreateTablePlan_Execute_IfNotExists_TableExists(t *testing.T) {
 
 	existingStmt := statements.NewCreateStatement("users", false)
 	existingStmt.AddField("id", types.IntType, true, nil)
-	existingPlan := NewCreateTablePlan(existingStmt, ctx, transCtx)
+	existingPlan := ddl.NewCreateTablePlan(existingStmt, ctx, transCtx)
 	_, err := existingPlan.Execute()
 	if err != nil {
 		t.Fatalf("Failed to create existing table: %v", err)
@@ -208,7 +205,7 @@ func TestCreateTablePlan_Execute_IfNotExists_TableExists(t *testing.T) {
 	stmt.AddField("id", types.IntType, true, nil)
 	stmt.AddField("name", types.StringType, false, nil)
 
-	plan := NewCreateTablePlan(stmt, ctx, transCtx)
+	plan := ddl.NewCreateTablePlan(stmt, ctx, transCtx)
 
 	result, err := executePlan(t, plan)
 
@@ -236,7 +233,7 @@ func TestCreateTablePlan_Execute_Error_TableAlreadyExists(t *testing.T) {
 
 	existingStmt := statements.NewCreateStatement("users", false)
 	existingStmt.AddField("id", types.IntType, true, nil)
-	existingPlan := NewCreateTablePlan(existingStmt, ctx, transCtx)
+	existingPlan := ddl.NewCreateTablePlan(existingStmt, ctx, transCtx)
 	_, err := existingPlan.Execute()
 	if err != nil {
 		t.Fatalf("Failed to create existing table: %v", err)
@@ -245,7 +242,7 @@ func TestCreateTablePlan_Execute_Error_TableAlreadyExists(t *testing.T) {
 	stmt := statements.NewCreateStatement("users", false)
 	stmt.AddField("id", types.IntType, true, nil)
 
-	plan := NewCreateTablePlan(stmt, ctx, transCtx)
+	plan := ddl.NewCreateTablePlan(stmt, ctx, transCtx)
 
 	result, err := executePlan(t, plan)
 
@@ -273,7 +270,7 @@ func TestCreateTablePlan_Execute_Error_EmptyFields(t *testing.T) {
 	ctx := createTestContextWithCleanup(t, dataDir)
 	transCtx := createTransactionContext(t)
 
-	plan := NewCreateTablePlan(stmt, ctx, transCtx)
+	plan := ddl.NewCreateTablePlan(stmt, ctx, transCtx)
 
 	result, err := plan.Execute()
 
@@ -294,7 +291,7 @@ func TestCreateTablePlan_Execute_Error_InvalidFieldType(t *testing.T) {
 	ctx := createTestContextWithCleanup(t, dataDir)
 	transCtx := createTransactionContext(t)
 
-	plan := NewCreateTablePlan(stmt, ctx, transCtx)
+	plan := ddl.NewCreateTablePlan(stmt, ctx, transCtx)
 
 	result, err := plan.Execute()
 
@@ -325,7 +322,7 @@ func TestCreateTablePlan_Execute_ComplexTable(t *testing.T) {
 	ctx := createTestContextWithCleanup(t, dataDir)
 	transCtx := createTransactionContext(t)
 
-	plan := NewCreateTablePlan(stmt, ctx, transCtx)
+	plan := ddl.NewCreateTablePlan(stmt, ctx, transCtx)
 
 	result, err := executePlan(t, plan)
 
@@ -369,7 +366,7 @@ func TestCreateTablePlan_Execute_FileCreation(t *testing.T) {
 	ctx := createTestContextWithCleanup(t, dataDir)
 	transCtx := createTransactionContext(t)
 
-	plan := NewCreateTablePlan(stmt, ctx, transCtx)
+	plan := ddl.NewCreateTablePlan(stmt, ctx, transCtx)
 
 	result, err := executePlan(t, plan)
 
@@ -390,7 +387,7 @@ func TestCreateTablePlan_Execute_FileCreation(t *testing.T) {
 }
 
 func TestDDLResult_String(t *testing.T) {
-	result := &DDLResult{
+	result := &result.DDLResult{
 		Success: true,
 		Message: "Test message",
 	}
@@ -415,7 +412,7 @@ func TestDDLResult_Values(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := &DDLResult{
+			result := &result.DDLResult{
 				Success: tt.success,
 				Message: tt.message,
 			}
@@ -445,7 +442,7 @@ func TestCreateTablePlan_Execute_PrimaryKeyIndex_Created(t *testing.T) {
 	ctx := createTestContextWithCleanup(t, dataDir)
 	transCtx := createTransactionContext(t)
 
-	plan := NewCreateTablePlan(stmt, ctx, transCtx)
+	plan := ddl.NewCreateTablePlan(stmt, ctx, transCtx)
 	result, err := executePlan(t, plan)
 
 	if err != nil {
@@ -519,7 +516,7 @@ func TestCreateTablePlan_Execute_NoPrimaryKey_NoIndex(t *testing.T) {
 	ctx := createTestContextWithCleanup(t, dataDir)
 	transCtx := createTransactionContext(t)
 
-	plan := NewCreateTablePlan(stmt, ctx, transCtx)
+	plan := ddl.NewCreateTablePlan(stmt, ctx, transCtx)
 	result, err := executePlan(t, plan)
 
 	if err != nil {
@@ -589,7 +586,7 @@ func TestCreateTablePlan_Execute_PrimaryKeyIndex_DifferentTypes(t *testing.T) {
 			stmt.AddField("name", types.StringType, false, nil)
 			stmt.PrimaryKey = tt.pkColumn
 
-			plan := NewCreateTablePlan(stmt, ctx, transCtx)
+			plan := ddl.NewCreateTablePlan(stmt, ctx, transCtx)
 			result, err := executePlan(t, plan)
 
 			if err != nil {
@@ -635,7 +632,7 @@ func TestCreateTablePlan_Execute_PrimaryKeyIndex_MultipleColumns(t *testing.T) {
 	ctx := createTestContextWithCleanup(t, dataDir)
 	transCtx := createTransactionContext(t)
 
-	plan := NewCreateTablePlan(stmt, ctx, transCtx)
+	plan := ddl.NewCreateTablePlan(stmt, ctx, transCtx)
 	result, err := executePlan(t, plan)
 
 	if err != nil {
@@ -691,7 +688,7 @@ func TestCreateTablePlan_Execute_PrimaryKeyIndex_IndexNameConvention(t *testing.
 			stmt.AddField("data", types.StringType, false, nil)
 			stmt.PrimaryKey = tt.pkColumn
 
-			plan := NewCreateTablePlan(stmt, ctx, transCtx)
+			plan := ddl.NewCreateTablePlan(stmt, ctx, transCtx)
 			_, err := executePlan(t, plan)
 
 			if err != nil {
@@ -724,7 +721,7 @@ func TestCreateTablePlan_Execute_PrimaryKeyIndex_FileLocation(t *testing.T) {
 	ctx := createTestContextWithCleanup(t, dataDir)
 	transCtx := createTransactionContext(t)
 
-	plan := NewCreateTablePlan(stmt, ctx, transCtx)
+	plan := ddl.NewCreateTablePlan(stmt, ctx, transCtx)
 	result, err := executePlan(t, plan)
 
 	if err != nil {
@@ -776,7 +773,7 @@ func TestCreateTablePlan_Execute_PrimaryKeyIndex_WithAutoIncrement(t *testing.T)
 	ctx := createTestContextWithCleanup(t, dataDir)
 	transCtx := createTransactionContext(t)
 
-	plan := NewCreateTablePlan(stmt, ctx, transCtx)
+	plan := ddl.NewCreateTablePlan(stmt, ctx, transCtx)
 	result, err := executePlan(t, plan)
 
 	if err != nil {

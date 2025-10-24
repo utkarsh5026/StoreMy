@@ -1,17 +1,28 @@
-package planner
+package planner_tests
 
 import (
 	"os"
 	"path/filepath"
 	"storemy/pkg/catalog/catalogmanager"
 	"storemy/pkg/concurrency/transaction"
+	"storemy/pkg/iterator"
 	"storemy/pkg/log/wal"
 	"storemy/pkg/memory"
 	"storemy/pkg/parser/statements"
+	"storemy/pkg/planner/internal/indexops"
+	"storemy/pkg/primitives"
 	"storemy/pkg/registry"
 	"storemy/pkg/storage/index"
+	"storemy/pkg/tuple"
 	"testing"
 )
+
+type DbIterator = iterator.DbIterator
+type TID = *primitives.TransactionID
+type DbContext = *registry.DatabaseContext
+type TupleDesc = *tuple.TupleDescription
+type TxContext = *transaction.TransactionContext
+type TransactionCtx = *transaction.TransactionContext // Alias for backward compatibility
 
 // Global transaction registry for tests (will be set by createTestContextWithCleanup)
 var testTxRegistry *transaction.TransactionRegistry
@@ -132,7 +143,7 @@ func setupTestDataDir(t *testing.T) string {
 func createTestIndex(t *testing.T, ctx DbContext, transCtx TxContext, tableName, indexName, columnName string, indexType index.IndexType) {
 	t.Helper()
 	stmt := statements.NewCreateIndexStatement(indexName, tableName, columnName, indexType, false)
-	plan := NewCreateIndexPlan(stmt, ctx, transCtx)
+	plan := indexops.NewCreateIndexPlan(stmt, ctx, transCtx)
 	_, err := plan.Execute()
 	if err != nil {
 		t.Fatalf("Failed to create test index: %v", err)

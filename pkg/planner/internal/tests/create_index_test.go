@@ -1,9 +1,12 @@
-package planner
+package planner_tests
 
 import (
 	"os"
 	"path/filepath"
 	"storemy/pkg/parser/statements"
+	"storemy/pkg/planner/internal/ddl"
+	"storemy/pkg/planner/internal/indexops"
+	"storemy/pkg/planner/internal/result"
 	"storemy/pkg/storage/index"
 	"storemy/pkg/types"
 	"testing"
@@ -18,7 +21,7 @@ func createTestTableForIndex(t *testing.T, ctx DbContext, transCtx TxContext, ta
 	stmt.AddField("email", types.StringType, false, nil)
 	stmt.PrimaryKey = "id"
 
-	plan := NewCreateTablePlan(stmt, ctx, transCtx)
+	plan := ddl.NewCreateTablePlan(stmt, ctx, transCtx)
 	_, err := plan.Execute()
 	if err != nil {
 		t.Fatalf("Failed to create test table: %v", err)
@@ -26,7 +29,7 @@ func createTestTableForIndex(t *testing.T, ctx DbContext, transCtx TxContext, ta
 }
 
 // Helper function to execute CREATE INDEX plan
-func executeCreateIndexPlan(t *testing.T, plan *CreateIndexPlan) (*DDLResult, error) {
+func executeCreateIndexPlan(t *testing.T, plan *indexops.CreateIndexPlan) (*result.DDLResult, error) {
 	resultAny, err := plan.Execute()
 	if err != nil {
 		return nil, err
@@ -36,7 +39,7 @@ func executeCreateIndexPlan(t *testing.T, plan *CreateIndexPlan) (*DDLResult, er
 		return nil, nil
 	}
 
-	result, ok := resultAny.(*DDLResult)
+	result, ok := resultAny.(*result.DDLResult)
 	if !ok {
 		t.Fatalf("Result is not a DDLResult, got %T", resultAny)
 	}
@@ -45,7 +48,7 @@ func executeCreateIndexPlan(t *testing.T, plan *CreateIndexPlan) (*DDLResult, er
 }
 
 // Helper function to execute DROP INDEX plan
-func executeDropIndexPlan(t *testing.T, plan *DropIndexPlan) (*DDLResult, error) {
+func executeDropIndexPlan(t *testing.T, plan *indexops.DropIndexPlan) (*result.DDLResult, error) {
 	resultAny, err := plan.Execute()
 	if err != nil {
 		return nil, err
@@ -55,7 +58,7 @@ func executeDropIndexPlan(t *testing.T, plan *DropIndexPlan) (*DDLResult, error)
 		return nil, nil
 	}
 
-	result, ok := resultAny.(*DDLResult)
+	result, ok := resultAny.(*result.DDLResult)
 	if !ok {
 		t.Fatalf("Result is not a DDLResult, got %T", resultAny)
 	}
@@ -71,7 +74,7 @@ func TestNewCreateIndexPlan(t *testing.T) {
 	ctx := createTestContextWithCleanup(t, dataDir)
 	transCtx := createTransactionContext(t)
 
-	plan := NewCreateIndexPlan(stmt, ctx, transCtx)
+	plan := indexops.NewCreateIndexPlan(stmt, ctx, transCtx)
 
 	if plan == nil {
 		t.Fatal("NewCreateIndexPlan returned nil")
@@ -81,13 +84,6 @@ func TestNewCreateIndexPlan(t *testing.T) {
 		t.Error("Statement not properly assigned")
 	}
 
-	if plan.ctx != ctx {
-		t.Error("Context not properly assigned")
-	}
-
-	if plan.tx != transCtx {
-		t.Error("TxContext not properly assigned")
-	}
 }
 
 func TestCreateIndexPlan_Execute_HashIndex(t *testing.T) {
@@ -101,7 +97,7 @@ func TestCreateIndexPlan_Execute_HashIndex(t *testing.T) {
 
 	// Create HASH index
 	stmt := statements.NewCreateIndexStatement("idx_users_email", "users", "email", index.HashIndex, false)
-	plan := NewCreateIndexPlan(stmt, ctx, transCtx)
+	plan := indexops.NewCreateIndexPlan(stmt, ctx, transCtx)
 
 	result, err := executeCreateIndexPlan(t, plan)
 
@@ -129,7 +125,7 @@ func TestCreateIndexPlan_Execute_HashIndex(t *testing.T) {
 	}
 
 	// Cleanup
-	dropPlan := NewDropIndexPlan(
+	dropPlan := indexops.NewDropIndexPlan(
 		statements.NewDropIndexStatement("idx_users_email", "", false),
 		ctx, transCtx)
 	dropPlan.Execute()
@@ -146,7 +142,7 @@ func TestCreateIndexPlan_Execute_BTreeIndex(t *testing.T) {
 
 	// Create BTREE index
 	stmt := statements.NewCreateIndexStatement("idx_users_age", "users", "age", index.BTreeIndex, false)
-	plan := NewCreateIndexPlan(stmt, ctx, transCtx)
+	plan := indexops.NewCreateIndexPlan(stmt, ctx, transCtx)
 
 	result, err := executeCreateIndexPlan(t, plan)
 
@@ -163,7 +159,7 @@ func TestCreateIndexPlan_Execute_BTreeIndex(t *testing.T) {
 	}
 
 	// Cleanup
-	dropPlan := NewDropIndexPlan(
+	dropPlan := indexops.NewDropIndexPlan(
 		statements.NewDropIndexStatement("idx_users_age", "", false),
 		ctx, transCtx)
 	dropPlan.Execute()
@@ -179,7 +175,7 @@ func TestCreateIndexPlan_Execute_IfNotExists_IndexDoesNotExist(t *testing.T) {
 	createTestTableForIndex(t, ctx, transCtx, "users")
 
 	stmt := statements.NewCreateIndexStatement("idx_users_email", "users", "email", index.HashIndex, true)
-	plan := NewCreateIndexPlan(stmt, ctx, transCtx)
+	plan := indexops.NewCreateIndexPlan(stmt, ctx, transCtx)
 
 	result, err := executeCreateIndexPlan(t, plan)
 
@@ -197,7 +193,7 @@ func TestCreateIndexPlan_Execute_IfNotExists_IndexDoesNotExist(t *testing.T) {
 	}
 
 	// Cleanup
-	dropPlan := NewDropIndexPlan(
+	dropPlan := indexops.NewDropIndexPlan(
 		statements.NewDropIndexStatement("idx_users_email", "", false),
 		ctx, transCtx)
 	dropPlan.Execute()
@@ -214,7 +210,7 @@ func TestCreateIndexPlan_Execute_IfNotExists_IndexExists(t *testing.T) {
 
 	// Create first index
 	stmt1 := statements.NewCreateIndexStatement("idx_users_email", "users", "email", index.HashIndex, false)
-	plan1 := NewCreateIndexPlan(stmt1, ctx, transCtx)
+	plan1 := indexops.NewCreateIndexPlan(stmt1, ctx, transCtx)
 	_, err := plan1.Execute()
 	if err != nil {
 		t.Fatalf("Failed to create first index: %v", err)
@@ -222,7 +218,7 @@ func TestCreateIndexPlan_Execute_IfNotExists_IndexExists(t *testing.T) {
 
 	// Try to create same index with IF NOT EXISTS
 	stmt2 := statements.NewCreateIndexStatement("idx_users_email", "users", "email", index.HashIndex, true)
-	plan2 := NewCreateIndexPlan(stmt2, ctx, transCtx)
+	plan2 := indexops.NewCreateIndexPlan(stmt2, ctx, transCtx)
 
 	result, err := executeCreateIndexPlan(t, plan2)
 
@@ -240,7 +236,7 @@ func TestCreateIndexPlan_Execute_IfNotExists_IndexExists(t *testing.T) {
 	}
 
 	// Cleanup
-	dropPlan := NewDropIndexPlan(
+	dropPlan := indexops.NewDropIndexPlan(
 		statements.NewDropIndexStatement("idx_users_email", "", false),
 		ctx, transCtx)
 	dropPlan.Execute()
@@ -254,7 +250,7 @@ func TestCreateIndexPlan_Execute_Error_TableDoesNotExist(t *testing.T) {
 	transCtx := createTransactionContext(t)
 
 	stmt := statements.NewCreateIndexStatement("idx_users_email", "nonexistent_table", "email", index.HashIndex, false)
-	plan := NewCreateIndexPlan(stmt, ctx, transCtx)
+	plan := indexops.NewCreateIndexPlan(stmt, ctx, transCtx)
 
 	result, err := executeCreateIndexPlan(t, plan)
 
@@ -281,7 +277,7 @@ func TestCreateIndexPlan_Execute_Error_ColumnDoesNotExist(t *testing.T) {
 	createTestTableForIndex(t, ctx, transCtx, "users")
 
 	stmt := statements.NewCreateIndexStatement("idx_users_invalid", "users", "nonexistent_column", index.HashIndex, false)
-	plan := NewCreateIndexPlan(stmt, ctx, transCtx)
+	plan := indexops.NewCreateIndexPlan(stmt, ctx, transCtx)
 
 	result, err := executeCreateIndexPlan(t, plan)
 
@@ -311,7 +307,7 @@ func TestCreateIndexPlan_Execute_Error_IndexAlreadyExists(t *testing.T) {
 
 	// Create first index
 	stmt1 := statements.NewCreateIndexStatement("idx_users_email", "users", "email", index.HashIndex, false)
-	plan1 := NewCreateIndexPlan(stmt1, ctx, transCtx)
+	plan1 := indexops.NewCreateIndexPlan(stmt1, ctx, transCtx)
 	_, err := plan1.Execute()
 	if err != nil {
 		t.Fatalf("Failed to create first index: %v", err)
@@ -319,7 +315,7 @@ func TestCreateIndexPlan_Execute_Error_IndexAlreadyExists(t *testing.T) {
 
 	// Try to create same index again without IF NOT EXISTS
 	stmt2 := statements.NewCreateIndexStatement("idx_users_email", "users", "email", index.HashIndex, false)
-	plan2 := NewCreateIndexPlan(stmt2, ctx, transCtx)
+	plan2 := indexops.NewCreateIndexPlan(stmt2, ctx, transCtx)
 
 	result, err := executeCreateIndexPlan(t, plan2)
 
@@ -337,7 +333,7 @@ func TestCreateIndexPlan_Execute_Error_IndexAlreadyExists(t *testing.T) {
 	}
 
 	// Cleanup
-	dropPlan := NewDropIndexPlan(
+	dropPlan := indexops.NewDropIndexPlan(
 		statements.NewDropIndexStatement("idx_users_email", "", false),
 		ctx, transCtx)
 	dropPlan.Execute()
@@ -354,7 +350,7 @@ func TestCreateIndexPlan_Execute_MultipleIndexesOnSameTable(t *testing.T) {
 
 	// Create first index on email
 	stmt1 := statements.NewCreateIndexStatement("idx_users_email", "users", "email", index.HashIndex, false)
-	plan1 := NewCreateIndexPlan(stmt1, ctx, transCtx)
+	plan1 := indexops.NewCreateIndexPlan(stmt1, ctx, transCtx)
 	result1, err := executeCreateIndexPlan(t, plan1)
 	if err != nil {
 		t.Fatalf("Failed to create first index: %v", err)
@@ -365,7 +361,7 @@ func TestCreateIndexPlan_Execute_MultipleIndexesOnSameTable(t *testing.T) {
 
 	// Create second index on age
 	stmt2 := statements.NewCreateIndexStatement("idx_users_age", "users", "age", index.BTreeIndex, false)
-	plan2 := NewCreateIndexPlan(stmt2, ctx, transCtx)
+	plan2 := indexops.NewCreateIndexPlan(stmt2, ctx, transCtx)
 	result2, err := executeCreateIndexPlan(t, plan2)
 	if err != nil {
 		t.Fatalf("Failed to create second index: %v", err)
@@ -387,12 +383,12 @@ func TestCreateIndexPlan_Execute_MultipleIndexesOnSameTable(t *testing.T) {
 	}
 
 	// Cleanup
-	dropPlan1 := NewDropIndexPlan(
+	dropPlan1 := indexops.NewDropIndexPlan(
 		statements.NewDropIndexStatement("idx_users_email", "", false),
 		ctx, transCtx)
 	dropPlan1.Execute()
 
-	dropPlan2 := NewDropIndexPlan(
+	dropPlan2 := indexops.NewDropIndexPlan(
 		statements.NewDropIndexStatement("idx_users_age", "", false),
 		ctx, transCtx)
 	dropPlan2.Execute()
@@ -409,7 +405,7 @@ func TestCreateIndexPlan_Execute_IndexFileCreation(t *testing.T) {
 	createTestTableForIndex(t, ctx, transCtx, "users")
 
 	stmt := statements.NewCreateIndexStatement("idx_users_email", "users", "email", index.HashIndex, false)
-	plan := NewCreateIndexPlan(stmt, ctx, transCtx)
+	plan := indexops.NewCreateIndexPlan(stmt, ctx, transCtx)
 
 	result, err := executeCreateIndexPlan(t, plan)
 
@@ -428,7 +424,7 @@ func TestCreateIndexPlan_Execute_IndexFileCreation(t *testing.T) {
 	}
 
 	// Cleanup
-	dropPlan := NewDropIndexPlan(
+	dropPlan := indexops.NewDropIndexPlan(
 		statements.NewDropIndexStatement("idx_users_email", "", false),
 		ctx, transCtx)
 	dropPlan.Execute()

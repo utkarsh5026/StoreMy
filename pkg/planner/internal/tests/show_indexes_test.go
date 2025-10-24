@@ -1,7 +1,10 @@
-package planner
+package planner_tests
 
 import (
 	"storemy/pkg/parser/statements"
+	"storemy/pkg/planner/ddl"
+	"storemy/pkg/planner/internal/indexops"
+	"storemy/pkg/planner/internal/result"
 	"storemy/pkg/storage/index"
 	"storemy/pkg/types"
 	"testing"
@@ -16,18 +19,18 @@ func TestShowIndexesPlan_Execute_NoIndexes(t *testing.T) {
 	stmt := statements.NewShowIndexesStatement("")
 
 	// Create plan
-	plan := NewShowIndexesPlan(stmt, ctx, transCtx)
+	plan := indexops.NewShowIndexesPlan(stmt, ctx, transCtx)
 
 	// Execute
-	result, err := plan.Execute()
+	res, err := plan.Execute()
 	if err != nil {
 		t.Fatalf("Expected no error, got: %v", err)
 	}
 
-	// Verify result type
-	selectResult, ok := result.(*SelectQueryResult)
+	// Verify res type
+	selectResult, ok := res.(*result.SelectQueryResult)
 	if !ok {
-		t.Fatalf("Expected SelectQueryResult, got: %T", result)
+		t.Fatalf("Expected SelectQueryResult, got: %T", res)
 	}
 
 	// Allow any number of results since system might have indexes
@@ -57,7 +60,7 @@ func TestShowIndexesPlan_Execute_WithIndexes(t *testing.T) {
 		false,
 	)
 
-	createIndexPlan := NewCreateIndexPlan(createIndexStmt, ctx, transCtx)
+	createIndexPlan := indexops.NewCreateIndexPlan(createIndexStmt, ctx, transCtx)
 	_, err := createIndexPlan.Execute()
 	if err != nil {
 		t.Fatalf("Failed to create index: %v", err)
@@ -67,18 +70,18 @@ func TestShowIndexesPlan_Execute_WithIndexes(t *testing.T) {
 	stmt := statements.NewShowIndexesStatement("")
 
 	// Create plan
-	plan := NewShowIndexesPlan(stmt, ctx, transCtx)
+	plan := indexops.NewShowIndexesPlan(stmt, ctx, transCtx)
 
 	// Execute
-	result, err := plan.Execute()
+	res, err := plan.Execute()
 	if err != nil {
 		t.Fatalf("Expected no error, got: %v", err)
 	}
 
-	// Verify result type
-	selectResult, ok := result.(*SelectQueryResult)
+	// Verify res type
+	selectResult, ok := res.(*result.SelectQueryResult)
 	if !ok {
-		t.Fatalf("Expected SelectQueryResult, got: %T", result)
+		t.Fatalf("Expected SelectQueryResult, got: %T", res)
 	}
 
 	// Should return at least 1 row (our index)
@@ -174,7 +177,7 @@ func TestShowIndexesPlan_Execute_FilterByTable(t *testing.T) {
 		index.HashIndex,
 		false,
 	)
-	createIndexPlan1 := NewCreateIndexPlan(createIndexStmt1, ctx, transCtx)
+	createIndexPlan1 := indexops.NewCreateIndexPlan(createIndexStmt1, ctx, transCtx)
 	_, err := createIndexPlan1.Execute()
 	if err != nil {
 		t.Fatalf("Failed to create index on table1: %v", err)
@@ -186,7 +189,7 @@ func TestShowIndexesPlan_Execute_FilterByTable(t *testing.T) {
 	stmt.AddField("id", types.IntType, true, nil)
 	stmt.AddField("email", types.StringType, false, nil)
 	stmt.PrimaryKey = "id"
-	createTablePlan := NewCreateTablePlan(stmt, ctx, transCtx)
+	createTablePlan := ddl.NewCreateTablePlan(stmt, ctx, transCtx)
 	_, err = createTablePlan.Execute()
 	if err != nil {
 		t.Fatalf("Failed to create test table 2: %v", err)
@@ -200,7 +203,7 @@ func TestShowIndexesPlan_Execute_FilterByTable(t *testing.T) {
 		index.BTreeIndex,
 		false,
 	)
-	createIndexPlan2 := NewCreateIndexPlan(createIndexStmt2, ctx, transCtx)
+	createIndexPlan2 := indexops.NewCreateIndexPlan(createIndexStmt2, ctx, transCtx)
 	_, err = createIndexPlan2.Execute()
 	if err != nil {
 		t.Fatalf("Failed to create index on table2: %v", err)
@@ -208,16 +211,16 @@ func TestShowIndexesPlan_Execute_FilterByTable(t *testing.T) {
 
 	// SHOW INDEXES FROM table1
 	showStmt := statements.NewShowIndexesStatement(table1Name)
-	plan := NewShowIndexesPlan(showStmt, ctx, transCtx)
+	plan := indexops.NewShowIndexesPlan(showStmt, ctx, transCtx)
 
-	result, err := plan.Execute()
+	res, err := plan.Execute()
 	if err != nil {
 		t.Fatalf("Expected no error, got: %v", err)
 	}
 
-	selectResult, ok := result.(*SelectQueryResult)
+	selectResult, ok := res.(*result.SelectQueryResult)
 	if !ok {
-		t.Fatalf("Expected SelectQueryResult, got: %T", result)
+		t.Fatalf("Expected SelectQueryResult, got: %T", res)
 	}
 
 	// Should only return indexes for table1
@@ -251,7 +254,7 @@ func TestShowIndexesPlan_Execute_NonExistentTable(t *testing.T) {
 	stmt := statements.NewShowIndexesStatement("nonexistent_table")
 
 	// Create plan
-	plan := NewShowIndexesPlan(stmt, ctx, transCtx)
+	plan := indexops.NewShowIndexesPlan(stmt, ctx, transCtx)
 
 	// Execute - should return an error
 	_, err := plan.Execute()
