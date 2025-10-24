@@ -158,7 +158,8 @@ func buildProjection(input DbIterator, selectFields []*plan.SelectListNode) (DbI
 	tupleDesc := input.GetTupleDesc()
 
 	for _, field := range selectFields {
-		idx, err := tupleDesc.FindFieldIndex(field.FieldName)
+		unqualifiedName := extractFieldName(field.FieldName)
+		idx, err := tupleDesc.FindFieldIndex(unqualifiedName)
 		if err != nil {
 			return nil, err
 		}
