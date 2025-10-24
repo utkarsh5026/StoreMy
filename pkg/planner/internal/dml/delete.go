@@ -1,8 +1,12 @@
-package planner
+package dml
 
 import (
 	"fmt"
+	"storemy/pkg/concurrency/transaction"
 	"storemy/pkg/parser/statements"
+	"storemy/pkg/planner/internal/result"
+	"storemy/pkg/planner/internal/scan"
+	"storemy/pkg/registry"
 	"storemy/pkg/tuple"
 )
 
@@ -16,9 +20,9 @@ import (
 // This approach ensures consistency by determining the full set of tuples to delete
 // before performing any modifications.
 type DeletePlan struct {
-	statement *statements.DeleteStatement // The parsed DELETE statement to execute
-	ctx       DbContext                   // Database context providing access to catalog and storage managers
-	tx        TxContext                   // Transaction context for ensuring ACID properties
+	statement *statements.DeleteStatement     // The parsed DELETE statement to execute
+	ctx       *registry.DatabaseContext       // Database context providing access to catalog and storage managers
+	tx        *transaction.TransactionContext // Transaction context for ensuring ACID properties
 }
 
 // NewDeletePlan creates a new DELETE execution plan.
@@ -32,8 +36,8 @@ type DeletePlan struct {
 //   - A new DeletePlan instance ready for execution
 func NewDeletePlan(
 	stmt *statements.DeleteStatement,
-	tx TxContext,
-	ctx DbContext) *DeletePlan {
+	tx *transaction.TransactionContext,
+	ctx *registry.DatabaseContext) *DeletePlan {
 	return &DeletePlan{
 		statement: stmt,
 		tx:        tx,
@@ -50,13 +54,13 @@ func NewDeletePlan(
 // Returns:
 //   - DMLResult containing the number of rows deleted
 //   - error if any step fails (table not found, invalid WHERE clause, deletion failure, etc.)
-func (p *DeletePlan) Execute() (Result, error) {
+func (p *DeletePlan) Execute() (result.Result, error) {
 	tableID, err := resolveTableID(p.statement.TableName, p.tx, p.ctx)
 	if err != nil {
 		return nil, err
 	}
 
-	query, err := buildScanWithFilter(p.tx, tableID, p.statement.WhereClause, p.ctx)
+	query, err := scan.BuildScanWithFilter(p.tx, tableID, p.statement.WhereClause, p.ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -71,7 +75,7 @@ func (p *DeletePlan) Execute() (Result, error) {
 		return nil, err
 	}
 
-	return &DMLResult{
+	return &result.DMLResult{
 		RowsAffected: len(tuplesToDelete),
 		Message:      fmt.Sprintf("%d row(s) deleted", len(tuplesToDelete)),
 	}, nil

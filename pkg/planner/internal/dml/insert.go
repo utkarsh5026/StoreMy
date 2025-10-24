@@ -1,39 +1,39 @@
-package planner
+package dml
 
 import (
 	"fmt"
 	"slices"
 	"storemy/pkg/catalog/operations"
+	"storemy/pkg/concurrency/transaction"
 	"storemy/pkg/parser/statements"
+	"storemy/pkg/planner/internal/result"
+	"storemy/pkg/registry"
 	"storemy/pkg/tuple"
 	"storemy/pkg/types"
 )
 
 type InsertPlan struct {
 	statement *statements.InsertStatement
-	ctx       DbContext
-	TxContext TxContext
+	ctx       *registry.DatabaseContext
+	tx        *transaction.TransactionContext
 }
 
 // NewInsertPlan creates a new InsertPlan instance with the provided components.
 // This constructor initializes the plan with all necessary dependencies for
 // executing INSERT operations within a transactional context.
-func NewInsertPlan(
-	stmt *statements.InsertStatement,
-	TxContext TxContext,
-	ctx DbContext) *InsertPlan {
+func NewInsertPlan(stmt *statements.InsertStatement, tx *transaction.TransactionContext, ctx *registry.DatabaseContext) *InsertPlan {
 	return &InsertPlan{
 		statement: stmt,
 		ctx:       ctx,
-		TxContext: TxContext,
+		tx:        tx,
 	}
 }
 
 // Execute performs the INSERT operation by processing the statement and inserting
 // all specified tuples into the target table. It validates the data, creates
 // tuples according to the table schema, and coordinates with the storage layer.
-func (p *InsertPlan) Execute() (Result, error) {
-	md, err := resolveTableMetadata(p.statement.TableName, p.TxContext, p.ctx)
+func (p *InsertPlan) Execute() (result.Result, error) {
+	md, err := resolveTableMetadata(p.statement.TableName, p.tx, p.ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -44,7 +44,7 @@ func (p *InsertPlan) Execute() (Result, error) {
 	}
 
 	// Check for auto-increment column
-	autoIncInfo, err := p.ctx.CatalogManager().GetAutoIncrementColumn(p.TxContext, md.TableID)
+	autoIncInfo, err := p.ctx.CatalogManager().GetAutoIncrementColumn(p.tx, md.TableID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get auto-increment info: %v", err)
 	}
@@ -54,7 +54,7 @@ func (p *InsertPlan) Execute() (Result, error) {
 		return nil, err
 	}
 
-	return &DMLResult{
+	return &result.DMLResult{
 		RowsAffected: insertedCount,
 		Message:      fmt.Sprintf("%d row(s) inserted", insertedCount),
 	}, nil
@@ -102,14 +102,14 @@ func (p *InsertPlan) insertTuples(tableID int, tupleDesc *tuple.TupleDescription
 			return 0, err
 		}
 
-		if err := p.ctx.TupleManager().InsertTuple(p.TxContext, dbFile, newTuple); err != nil {
+		if err := p.ctx.TupleManager().InsertTuple(p.tx, dbFile, newTuple); err != nil {
 			return 0, fmt.Errorf("failed to insert tuple: %v", err)
 		}
 
 		// Update auto-increment counter if column is auto-incremented
 		if autoIncInfo != nil {
 			newValue := autoIncInfo.NextValue + 1
-			if err := p.ctx.CatalogManager().IncrementAutoIncrementValue(p.TxContext, tableID, autoIncInfo.ColumnName, newValue); err != nil {
+			if err := p.ctx.CatalogManager().IncrementAutoIncrementValue(p.tx, tableID, autoIncInfo.ColumnName, newValue); err != nil {
 				return 0, fmt.Errorf("failed to update auto-increment value: %v", err)
 			}
 			autoIncInfo.NextValue = newValue

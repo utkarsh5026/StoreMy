@@ -1,19 +1,23 @@
-package planner
+package dml
 
 import (
 	"fmt"
+	"storemy/pkg/concurrency/transaction"
 	"storemy/pkg/parser/statements"
+	"storemy/pkg/planner/internal/result"
+	"storemy/pkg/planner/internal/scan"
+	"storemy/pkg/registry"
 	"storemy/pkg/tuple"
 	"storemy/pkg/types"
 )
 
 type UpdatePlan struct {
 	statement *statements.UpdateStatement
-	ctx       DbContext
-	tx        TxContext
+	ctx       *registry.DatabaseContext
+	tx        *transaction.TransactionContext
 }
 
-func NewUpdatePlan(statement *statements.UpdateStatement, tx TxContext, ctx DbContext) *UpdatePlan {
+func NewUpdatePlan(statement *statements.UpdateStatement, tx *transaction.TransactionContext, ctx *registry.DatabaseContext) *UpdatePlan {
 	return &UpdatePlan{
 		statement: statement,
 		ctx:       ctx,
@@ -28,7 +32,7 @@ func NewUpdatePlan(statement *statements.UpdateStatement, tx TxContext, ctx DbCo
 //
 // Returns a DMLResult with the count of modified rows.
 // All operations are atomic within the transaction - failures trigger rollback.
-func (p *UpdatePlan) Execute() (Result, error) {
+func (p *UpdatePlan) Execute() (result.Result, error) {
 	md, err := resolveTableMetadata(p.statement.TableName, p.tx, p.ctx)
 	if err != nil {
 		return nil, err
@@ -39,7 +43,7 @@ func (p *UpdatePlan) Execute() (Result, error) {
 		return nil, err
 	}
 
-	queryPlan, err := buildScanWithFilter(p.tx, md.TableID, p.statement.WhereClause, p.ctx)
+	queryPlan, err := scan.BuildScanWithFilter(p.tx, md.TableID, p.statement.WhereClause, p.ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -54,7 +58,7 @@ func (p *UpdatePlan) Execute() (Result, error) {
 		return nil, err
 	}
 
-	return &DMLResult{
+	return &result.DMLResult{
 		RowsAffected: len(tuplesToUpdate),
 		Message:      fmt.Sprintf("%d row(s) updated", len(tuplesToUpdate)),
 	}, nil
@@ -64,7 +68,7 @@ func (p *UpdatePlan) Execute() (Result, error) {
 // Validates that all referenced fields exist in the table schema.
 //
 // Returns a map of field_index → new_field_value for efficient updates.
-func (p *UpdatePlan) buildUpdateMap(tupleDesc TupleDesc) (map[int]types.Field, error) {
+func (p *UpdatePlan) buildUpdateMap(tupleDesc *tuple.TupleDescription) (map[int]types.Field, error) {
 	updateMap := make(map[int]types.Field)
 	for _, cl := range p.statement.SetClauses {
 		i, err := tupleDesc.FindFieldIndex(cl.FieldName)

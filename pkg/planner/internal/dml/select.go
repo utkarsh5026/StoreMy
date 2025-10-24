@@ -1,13 +1,18 @@
-package planner
+package dml
 
 import (
 	"fmt"
+	"storemy/pkg/concurrency/transaction"
 	"storemy/pkg/execution/aggregation"
 	"storemy/pkg/execution/join"
 	"storemy/pkg/execution/query"
 	"storemy/pkg/execution/setops"
+	"storemy/pkg/iterator"
 	"storemy/pkg/parser/statements"
 	"storemy/pkg/plan"
+	"storemy/pkg/planner/internal/result"
+	"storemy/pkg/planner/internal/scan"
+	"storemy/pkg/registry"
 	"storemy/pkg/tuple"
 	"storemy/pkg/types"
 	"strings"
@@ -17,13 +22,13 @@ import (
 // Implements the Planner → Executor pipeline by building an operator tree
 // that follows the iterator pattern for query execution.
 type SelectPlan struct {
-	ctx       DbContext
-	tx        TxContext
+	ctx       *registry.DatabaseContext
+	tx        *transaction.TransactionContext
 	statement *statements.SelectStatement
 }
 
 // NewSelectPlan creates a new SELECT query execution plan.
-func NewSelectPlan(stmt *statements.SelectStatement, tx TxContext, ctx DbContext) *SelectPlan {
+func NewSelectPlan(stmt *statements.SelectStatement, tx *transaction.TransactionContext, ctx *registry.DatabaseContext) *SelectPlan {
 	return &SelectPlan{
 		ctx:       ctx,
 		tx:        tx,
@@ -43,7 +48,7 @@ func NewSelectPlan(stmt *statements.SelectStatement, tx TxContext, ctx DbContext
 //  7. Apply DISTINCT (if specified and no aggregation)
 //  8. Apply ORDER BY (if specified)
 //  9. Materialize all results via collectAllTuples()
-func (p *SelectPlan) Execute() (Result, error) {
+func (p *SelectPlan) Execute() (result.Result, error) {
 	if p.statement.Plan.IsSetOperation() {
 		return p.executeSetOperation()
 	}
@@ -87,7 +92,7 @@ func (p *SelectPlan) Execute() (Result, error) {
 		return nil, err
 	}
 
-	return &SelectQueryResult{
+	return &result.SelectQueryResult{
 		TupleDesc: currentOp.GetTupleDesc(),
 		Tuples:    results,
 	}, nil
@@ -102,9 +107,9 @@ func (p *SelectPlan) Execute() (Result, error) {
 //  3. Create SeqScan operator (acquires page locks via LockManager)
 //  4. Wrap in Filter operator if WHERE clause exists
 //
-// Returns DbIterator ready to produce tuples from base table.
+// Returns iterator.DbIterator ready to produce tuples from base table.
 // Errors if table doesn't exist or scan creation fails.
-func (p *SelectPlan) buildScanOperator() (DbIterator, error) {
+func (p *SelectPlan) buildScanOperator() (iterator.DbIterator, error) {
 	tables := p.statement.Plan.Tables()
 	if len(tables) == 0 {
 		return nil, fmt.Errorf("SELECT requires at least one table in FROM clause")
@@ -122,7 +127,7 @@ func (p *SelectPlan) buildScanOperator() (DbIterator, error) {
 		filter = filters[0]
 	}
 
-	scanOp, err := buildScanWithFilter(p.tx, metadata.TableID, filter, p.ctx)
+	scanOp, err := scan.BuildScanWithFilter(p.tx, metadata.TableID, filter, p.ctx)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create table scan: %w", err)
 	}
@@ -132,7 +137,7 @@ func (p *SelectPlan) buildScanOperator() (DbIterator, error) {
 
 // applyProjectionIfNeeded applies the SELECT clause projection if not SELECT *.
 // Skipped if query has aggregation (aggregation defines output schema instead).
-func (p *SelectPlan) applyProjectionIfNeeded(input DbIterator) (DbIterator, error) {
+func (p *SelectPlan) applyProjectionIfNeeded(input iterator.DbIterator) (iterator.DbIterator, error) {
 	if p.statement.Plan.SelectAll() {
 		return input, nil
 	}
@@ -152,7 +157,7 @@ func (p *SelectPlan) applyProjectionIfNeeded(input DbIterator) (DbIterator, erro
 //  1. For each field in SELECT list, find its index in input schema
 //  2. Extract field type from input schema
 //  3. Create Project operator with field indices and types
-func buildProjection(input DbIterator, selectFields []*plan.SelectListNode) (DbIterator, error) {
+func buildProjection(input iterator.DbIterator, selectFields []*plan.SelectListNode) (iterator.DbIterator, error) {
 	fieldIndices := make([]int, 0, len(selectFields))
 	fieldTypes := make([]types.Type, 0, len(selectFields))
 	tupleDesc := input.GetTupleDesc()
@@ -192,7 +197,7 @@ func buildProjection(input DbIterator, selectFields []*plan.SelectListNode) (DbI
 //
 //	FROM users u JOIN orders o ON u.id = o.user_id JOIN products p ON o.product_id = p.id
 //	→ (users JOIN orders) JOIN products
-func (p *SelectPlan) applyJoinsIfNeeded(input DbIterator) (DbIterator, error) {
+func (p *SelectPlan) applyJoinsIfNeeded(input iterator.DbIterator) (iterator.DbIterator, error) {
 	joins := p.statement.Plan.Joins()
 	if len(joins) == 0 {
 		return input, nil
@@ -223,14 +228,14 @@ func (p *SelectPlan) applyJoinsIfNeeded(input DbIterator) (DbIterator, error) {
 
 // buildJoinRightSide creates a scan operator for the right side of a JOIN.
 // Each join's right side is a fresh scan of a table (no filter optimization currently).
-func (p *SelectPlan) buildJoinRightSide(joinNode *plan.JoinNode) (DbIterator, error) {
+func (p *SelectPlan) buildJoinRightSide(joinNode *plan.JoinNode) (iterator.DbIterator, error) {
 	table := joinNode.RightTable
 	md, err := resolveTableMetadata(table.TableName, p.tx, p.ctx)
 	if err != nil {
 		return nil, err
 	}
 
-	scanOp, err := buildScanWithFilter(p.tx, md.TableID, nil, p.ctx)
+	scanOp, err := scan.BuildScanWithFilter(p.tx, md.TableID, nil, p.ctx)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create scan for table %s: %w", table.TableName, err)
 	}
@@ -249,7 +254,7 @@ func (p *SelectPlan) buildJoinRightSide(joinNode *plan.JoinNode) (DbIterator, er
 // Example: ON users.id = orders.user_id
 //
 //	→ leftIndex=0 (users.id at position 0), rightIndex=2 (orders.user_id at position 2)
-func (p *SelectPlan) buildJoinPredicate(node *plan.JoinNode, l, r DbIterator) (*join.JoinPredicate, error) {
+func (p *SelectPlan) buildJoinPredicate(node *plan.JoinNode, l, r iterator.DbIterator) (*join.JoinPredicate, error) {
 	li, err := getJoinFieldIndex(node.LeftField, l.GetTupleDesc())
 	if err != nil {
 		return nil, err
@@ -279,7 +284,7 @@ func (p *SelectPlan) buildJoinPredicate(node *plan.JoinNode, l, r DbIterator) (*
 //	→ Groups by dept field, counts id field per group
 //
 // Returns AggregateOperator, or input unchanged if no aggregation.
-func (p *SelectPlan) applyAggregationIfNeeded(input DbIterator) (DbIterator, error) {
+func (p *SelectPlan) applyAggregationIfNeeded(input iterator.DbIterator) (iterator.DbIterator, error) {
 	if !p.statement.Plan.HasAgg() {
 		return input, nil
 	}
@@ -328,7 +333,7 @@ func (p *SelectPlan) applyAggregationIfNeeded(input DbIterator) (DbIterator, err
 //	→ Returns unique names only (duplicates removed)
 //
 // Returns Distinct operator wrapping input, or input unchanged if not DISTINCT.
-func (p *SelectPlan) applyDistinctIfNeeded(input DbIterator) (DbIterator, error) {
+func (p *SelectPlan) applyDistinctIfNeeded(input iterator.DbIterator) (iterator.DbIterator, error) {
 	distinctOp, err := setops.NewDistinct(input)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create distinct operator: %w", err)
@@ -350,7 +355,7 @@ func (p *SelectPlan) applyDistinctIfNeeded(input DbIterator) (DbIterator, error)
 //	→ Returns employees sorted by age in descending order
 //
 // Returns Sort operator wrapping input, or input unchanged if no ORDER BY.
-func (p *SelectPlan) applySortIfNeeded(input DbIterator) (DbIterator, error) {
+func (p *SelectPlan) applySortIfNeeded(input iterator.DbIterator) (iterator.DbIterator, error) {
 	if !p.statement.Plan.HasOrderBy() {
 		return input, nil
 	}
@@ -420,8 +425,7 @@ func extractFieldName(qualifiedName string) string {
 //  2. Execute right SELECT statement to get right iterator
 //  3. Create appropriate set operation operator (Union, Intersect, or Except)
 //  4. Materialize and return results
-func (p *SelectPlan) executeSetOperation() (Result, error) {
-	// Create left and right plans
+func (p *SelectPlan) executeSetOperation() (result.Result, error) {
 	leftStmt := statements.NewSelectStatement(p.statement.Plan.LeftPlan())
 	rightStmt := statements.NewSelectStatement(p.statement.Plan.RightPlan())
 
@@ -433,21 +437,21 @@ func (p *SelectPlan) executeSetOperation() (Result, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to execute left side of set operation: %v", err)
 	}
-	leftQueryResult := leftResult.(*SelectQueryResult)
+	leftQueryResult := leftResult.(*result.SelectQueryResult)
 
 	// Execute right side
 	rightResult, err := rightPlan.Execute()
 	if err != nil {
 		return nil, fmt.Errorf("failed to execute right side of set operation: %v", err)
 	}
-	rightQueryResult := rightResult.(*SelectQueryResult)
+	rightQueryResult := rightResult.(*result.SelectQueryResult)
 
 	// Convert results to iterators
 	leftIter := tuple.NewIteratorWithDesc(leftQueryResult.Tuples, leftQueryResult.TupleDesc)
 	rightIter := tuple.NewIteratorWithDesc(rightQueryResult.Tuples, rightQueryResult.TupleDesc)
 
 	// Create appropriate set operation operator
-	var setOp DbIterator
+	var setOp iterator.DbIterator
 	isAll := p.statement.Plan.SetOpAll()
 
 	switch p.statement.Plan.SetOpType() {
@@ -476,7 +480,7 @@ func (p *SelectPlan) executeSetOperation() (Result, error) {
 		return nil, err
 	}
 
-	return &SelectQueryResult{
+	return &result.SelectQueryResult{
 		TupleDesc: setOp.GetTupleDesc(),
 		Tuples:    results,
 	}, nil
