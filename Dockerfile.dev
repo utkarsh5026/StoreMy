@@ -1,0 +1,27 @@
+# Development Dockerfile with Go toolchain for benchmarking and testing
+FROM golang:1.24-alpine
+
+# Install additional tools
+RUN apk add --no-cache git make bash ca-certificates
+
+# Set working directory
+WORKDIR /app
+
+# Copy go mod files
+COPY go.mod go.sum ./
+
+# Download dependencies
+RUN go mod download
+
+# Copy source code
+COPY . .
+
+# Create necessary directories
+RUN mkdir -p /app/data /app/data/logs /app/benchmark_data /app/benchmark_logs /app/benchmark-results /app/metrics_logs
+
+# Set environment variables
+ENV DB_NAME=storemy_db
+ENV DATA_DIR=/app/data
+
+# Default command
+CMD ["go", "version"]
