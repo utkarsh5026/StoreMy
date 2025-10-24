@@ -6,6 +6,7 @@ import (
 	"log"
 	"os"
 	"slices"
+	"strings"
 	"sync"
 	"time"
 
@@ -125,15 +126,22 @@ func main() {
 	}
 
 	for _, bench := range benchmarks {
-		log.Printf("\n=== Running benchmark: %s ===", bench.name)
+		log.Printf("%s", "\n"+strings.Repeat("=", 80))
+		log.Printf("TEST: %s", bench.name)
+		log.Printf("%s", strings.Repeat("=", 80))
+		log.Printf("Query: %s", bench.query)
+		log.Printf("")
 
 		// Sequential benchmark
+		log.Printf("→ Running sequential test (%d iterations)...", iterations)
 		seqResult := runBenchmark(db, bench.name, bench.query, iterations, 1)
 		report.Results = append(report.Results, seqResult)
 		printBenchmarkResult(seqResult)
 
 		// Concurrent benchmark (for read queries)
 		if bench.name != "INSERT" && bench.name != "UPDATE" && bench.name != "DELETE" {
+			log.Printf("")
+			log.Printf("→ Running concurrent test (%d parallel queries, %d iterations)...", concurrentQueries, iterations)
 			concName := bench.name + " (Concurrent)"
 			concResult := runBenchmark(db, concName, bench.query, iterations, concurrentQueries)
 			report.Results = append(report.Results, concResult)
@@ -149,12 +157,24 @@ func main() {
 	jsonFile := fmt.Sprintf("%s/benchmark_report_%s.json", outputDir, timestamp)
 	htmlFile := fmt.Sprintf("%s/benchmark_report_%s.html", outputDir, timestamp)
 
+	log.Printf("%s", "\n"+strings.Repeat("=", 80))
+	log.Printf("BENCHMARK SUITE COMPLETE")
+	log.Printf("%s", strings.Repeat("=", 80))
+	log.Printf("")
+	log.Printf("  Summary:")
+	log.Printf("    Total Duration:     %s", formatDuration(report.TotalDuration))
+	log.Printf("    Tests Run:          %d", len(report.Results))
+	log.Printf("    Database:           %s", dbName)
+	log.Printf("")
+	log.Printf("  Saving reports...")
+
 	saveJSONReport(report, jsonFile)
 	saveHTMLReport(report, htmlFile)
 
-	log.Printf("\n=== Benchmark Complete ===")
-	log.Printf("Total Duration: %v", report.TotalDuration)
-	log.Printf("Results saved to: %s", outputDir)
+	log.Printf("")
+	log.Printf("  ✓ Reports saved to: %s", outputDir)
+	log.Printf("")
+	log.Printf("%s", strings.Repeat("=", 80))
 }
 
 // setupBenchmarkData prepares the database with sample data for benchmarking.
@@ -309,6 +329,21 @@ func runBenchmark(db *database.Database, queryType, query string, iterations, co
 	}
 }
 
+// formatDuration formats a duration in a human-readable way with appropriate units.
+// Examples: 1.23ms, 456.78µs, 12.34s
+func formatDuration(d time.Duration) string {
+	switch {
+	case d >= time.Second:
+		return fmt.Sprintf("%.2fs", d.Seconds())
+	case d >= time.Millisecond:
+		return fmt.Sprintf("%.2fms", float64(d.Microseconds())/1000.0)
+	case d >= time.Microsecond:
+		return fmt.Sprintf("%.2fµs", float64(d.Nanoseconds())/1000.0)
+	default:
+		return fmt.Sprintf("%dns", d.Nanoseconds())
+	}
+}
+
 // printBenchmarkResult outputs benchmark statistics to the console in a
 // human-readable format. It displays timing metrics, percentiles, throughput,
 // and success/error counts.
@@ -316,12 +351,18 @@ func runBenchmark(db *database.Database, queryType, query string, iterations, co
 // Parameters:
 //   - result: The benchmark result to print
 func printBenchmarkResult(result BenchmarkResult) {
-	log.Printf("  Total Duration: %v", result.TotalDuration)
-	log.Printf("  Avg Query Time: %v", result.AvgDuration)
-	log.Printf("  Min/Max: %v / %v", result.MinDuration, result.MaxDuration)
-	log.Printf("  Median: %v, P95: %v, P99: %v", result.MedianDuration, result.P95Duration, result.P99Duration)
-	log.Printf("  Queries/Sec: %.2f", result.QueriesPerSecond)
-	log.Printf("  Success/Error: %d / %d", result.SuccessCount, result.ErrorCount)
+	successRate := float64(result.SuccessCount) / float64(result.Iterations) * 100
+
+	log.Printf("  ┌─ Results")
+	log.Printf("  │  Total Time:        %s", formatDuration(result.TotalDuration))
+	log.Printf("  │  Avg per Query:     %s", formatDuration(result.AvgDuration))
+	log.Printf("  │  Min / Max:         %s / %s", formatDuration(result.MinDuration), formatDuration(result.MaxDuration))
+	log.Printf("  │  Median (P50):      %s", formatDuration(result.MedianDuration))
+	log.Printf("  │  P95:               %s", formatDuration(result.P95Duration))
+	log.Printf("  │  P99:               %s", formatDuration(result.P99Duration))
+	log.Printf("  │  Throughput:        %.0f queries/sec", result.QueriesPerSecond)
+	log.Printf("  │  Success Rate:      %.1f%% (%d/%d)", successRate, result.SuccessCount, result.Iterations)
+	log.Printf("  └─")
 }
 
 // saveJSONReport serializes the benchmark report to a JSON file.
