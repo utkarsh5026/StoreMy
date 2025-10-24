@@ -1,6 +1,7 @@
 # Makefile for StoreMy project
 
-.PHONY: test test-tables test-all test-watch test-watch-tables clean install-tools examples
+.PHONY: test test-tables test-all test-watch test-watch-tables clean install-tools examples \
+        docker-demo docker-import docker-fresh docker-test docker-build docker-clean docker-stop quickstart
 
 # Run all tests
 test:
@@ -66,7 +67,19 @@ examples:
 
 # Help
 help:
-	@echo "Available targets:"
+	@echo "StoreMy Database - Available Commands"
+	@echo ""
+	@echo "Docker Commands (Recommended for Testing):"
+	@echo "  make docker-demo      - Start database with demo data (easiest way to test)"
+	@echo "  make docker-import    - Start database and import sample SQL"
+	@echo "  make docker-fresh     - Start empty database"
+	@echo "  make docker-test      - Run automated CRUD tests"
+	@echo "  make docker-build     - Build Docker image"
+	@echo "  make docker-clean     - Stop containers and remove volumes"
+	@echo "  make docker-stop      - Stop Docker containers"
+	@echo "  make quickstart       - Build and run demo (one command)"
+	@echo ""
+	@echo "Local Development:"
 	@echo "  test              - Run all tests"
 	@echo "  test-tables       - Run table tests only"
 	@echo "  test-coverage     - Run tests with coverage"
@@ -81,3 +94,39 @@ help:
 	@echo "  check             - Run fmt, vet, and test"
 	@echo "  examples          - Run WAL transaction examples"
 	@echo "  help              - Show this help"
+
+# ============================================
+# Docker Commands (For Recruiters/Testers)
+# ============================================
+
+docker-demo:
+	@echo "🚀 Starting StoreMy with demo data..."
+	@echo "Use Ctrl+E to execute queries, Ctrl+H for help, Ctrl+Q to quit"
+	docker-compose up storemy-demo
+
+docker-import:
+	@echo "📥 Starting StoreMy with sample SQL import..."
+	docker-compose up storemy-import
+
+docker-fresh:
+	@echo "🆕 Starting fresh StoreMy database..."
+	docker-compose up storemy-fresh
+
+docker-test:
+	@echo "🧪 Running automated CRUD tests..."
+	docker-compose run --rm storemy-test
+
+docker-build:
+	@echo "🔨 Building Docker image..."
+	docker-compose build
+
+docker-clean:
+	@echo "🧹 Cleaning up Docker containers and volumes..."
+	docker-compose down -v
+
+docker-stop:
+	@echo "🛑 Stopping Docker containers..."
+	docker-compose down
+
+# Quick start for recruiters
+quickstart: docker-build docker-demo
