@@ -223,6 +223,13 @@ func (l *Lexer) readIdentifier(start int) Token {
 	case "TRANSACTION":
 		return createToken(TRANSACTION, value, start)
 
+	case "EXPLAIN":
+		return createToken(EXPLAIN, value, start)
+	case "ANALYZE":
+		return createToken(ANALYZE, value, start)
+	case "FORMAT":
+		return createToken(FORMAT, value, start)
+
 	// Data type keywords
 	case "INT", "INTEGER":
 		return createToken(INT, value, start)

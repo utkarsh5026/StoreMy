@@ -55,6 +55,10 @@ const (
 	ROLLBACK
 	TRANSACTION
 
+	EXPLAIN
+	ANALYZE
+	FORMAT
+
 	INT
 	VARCHAR
 	TEXT
@@ -172,6 +176,12 @@ func (t TokenType) String() string {
 		return "ROLLBACK"
 	case TRANSACTION:
 		return "TRANSACTION"
+	case EXPLAIN:
+		return "EXPLAIN"
+	case ANALYZE:
+		return "ANALYZE"
+	case FORMAT:
+		return "FORMAT"
 	case INT:
 		return "INT"
 	case VARCHAR:
