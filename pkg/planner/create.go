@@ -9,20 +9,20 @@ import (
 )
 
 type CreateTablePlan struct {
-	Statement      *statements.CreateStatement
-	ctx            DbContext
-	transactionCtx TransactionCtx
+	Statement *statements.CreateStatement
+	ctx       DbContext
+	TxContext TxContext
 }
 
 func NewCreateTablePlan(
 	stmt *statements.CreateStatement,
 	ctx DbContext,
-	transactionCtx TransactionCtx,
+	TxContext TxContext,
 ) *CreateTablePlan {
 	return &CreateTablePlan{
-		Statement:      stmt,
-		ctx:            ctx,
-		transactionCtx: transactionCtx,
+		Statement: stmt,
+		ctx:       ctx,
+		TxContext: TxContext,
 	}
 }
 
@@ -36,7 +36,7 @@ func NewCreateTablePlan(
 //  5. If primary key is specified, creates a BTree index on the primary key column
 func (p *CreateTablePlan) Execute() (Result, error) {
 	cm := p.ctx.CatalogManager()
-	if cm.TableExists(p.transactionCtx, p.Statement.TableName) {
+	if cm.TableExists(p.TxContext, p.Statement.TableName) {
 		if p.Statement.IfNotExists {
 			return &DDLResult{
 				Success: true,
@@ -51,7 +51,7 @@ func (p *CreateTablePlan) Execute() (Result, error) {
 		return nil, err
 	}
 
-	tableID, err := cm.CreateTable(p.transactionCtx, tableSchema)
+	tableID, err := cm.CreateTable(p.TxContext, tableSchema)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create table: %v", err)
 	}
@@ -115,12 +115,12 @@ func (p *CreateTablePlan) createPrimaryKeyIndex(tableID int, tableSchema *schema
 	pkColumn := tableSchema.Columns[pkColumnIndex]
 	indexName := fmt.Sprintf("pk_%s_%s", p.Statement.TableName, p.Statement.PrimaryKey)
 
-	if cm.IndexExists(p.transactionCtx, indexName) {
+	if cm.IndexExists(p.TxContext, indexName) {
 		return nil
 	}
 
 	indexID, filePath, err := cm.CreateIndex(
-		p.transactionCtx,
+		p.TxContext,
 		indexName,
 		p.Statement.TableName,
 		p.Statement.PrimaryKey,
@@ -132,7 +132,7 @@ func (p *CreateTablePlan) createPrimaryKeyIndex(tableID int, tableSchema *schema
 
 	idxConfig := IndexCreationConfig{
 		Ctx:         p.ctx,
-		Tx:          p.transactionCtx,
+		Tx:          p.TxContext,
 		IndexName:   indexName,
 		IndexID:     indexID,
 		IndexType:   index.BTreeIndex,

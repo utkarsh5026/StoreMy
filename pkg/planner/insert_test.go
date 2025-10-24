@@ -28,7 +28,7 @@ func executeInsertPlan(t *testing.T, plan *InsertPlan) (*DMLResult, error) {
 }
 
 // Helper function to create a test table
-func createTestTable(t *testing.T, ctx *registry.DatabaseContext, tx TransactionCtx) {
+func createTestTable(t *testing.T, ctx *registry.DatabaseContext, tx TxContext) {
 	stmt := statements.NewCreateStatement("test_table", false)
 	stmt.AddField("id", types.IntType, false, nil)
 	stmt.AddField("name", types.StringType, false, nil)
@@ -62,7 +62,7 @@ func TestNewInsertPlan(t *testing.T) {
 		t.Error("Statement not properly assigned")
 	}
 
-	if plan.transactionCtx != transCtx {
+	if plan.TxContext != transCtx {
 		t.Error("TransactionID not properly assigned")
 	}
 }

@@ -54,7 +54,7 @@ func TestNewCreateTablePlan(t *testing.T) {
 		t.Error("Context not properly assigned")
 	}
 
-	if plan.transactionCtx != transCtx {
+	if plan.TxContext != transCtx {
 		t.Error("TransactionID not properly assigned")
 	}
 }

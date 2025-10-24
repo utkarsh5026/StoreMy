@@ -10,12 +10,12 @@ import (
 // It generates a query execution plan without necessarily executing the query.
 type ExplainPlan struct {
 	ctx       DbContext
-	tx        TransactionCtx
+	tx        TxContext
 	statement *statements.ExplainStatement
 }
 
 // NewExplainPlan creates a new EXPLAIN query execution plan.
-func NewExplainPlan(stmt *statements.ExplainStatement, tx TransactionCtx, ctx DbContext) *ExplainPlan {
+func NewExplainPlan(stmt *statements.ExplainStatement, tx TxContext, ctx DbContext) *ExplainPlan {
 	return &ExplainPlan{
 		ctx:       ctx,
 		tx:        tx,

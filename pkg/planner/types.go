@@ -12,4 +12,5 @@ type DbIterator = iterator.DbIterator
 type TID = *primitives.TransactionID
 type DbContext = *registry.DatabaseContext
 type TupleDesc = *tuple.TupleDescription
-type TransactionCtx = *transaction.TransactionContext
+type TxContext = *transaction.TransactionContext
+type TransactionCtx = *transaction.TransactionContext // Alias for backward compatibility

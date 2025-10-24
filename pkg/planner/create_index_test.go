@@ -10,7 +10,7 @@ import (
 )
 
 // Helper function to create a table for index testing
-func createTestTableForIndex(t *testing.T, ctx DbContext, transCtx TransactionCtx, tableName string) {
+func createTestTableForIndex(t *testing.T, ctx DbContext, transCtx TxContext, tableName string) {
 	stmt := statements.NewCreateStatement(tableName, false)
 	stmt.AddField("id", types.IntType, true, nil)
 	stmt.AddField("name", types.StringType, false, nil)
@@ -86,7 +86,7 @@ func TestNewCreateIndexPlan(t *testing.T) {
 	}
 
 	if plan.tx != transCtx {
-		t.Error("TransactionCtx not properly assigned")
+		t.Error("TxContext not properly assigned")
 	}
 }
 

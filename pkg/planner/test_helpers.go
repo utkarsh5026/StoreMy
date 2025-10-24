@@ -16,7 +16,7 @@ import (
 // Global transaction registry for tests (will be set by createTestContextWithCleanup)
 var testTxRegistry *transaction.TransactionRegistry
 
-func createTransactionContext(t *testing.T) TransactionCtx {
+func createTransactionContext(t *testing.T) TxContext {
 	t.Helper()
 
 	if testTxRegistry == nil {
@@ -129,7 +129,7 @@ func setupTestDataDir(t *testing.T) string {
 }
 
 // createTestIndex creates an index for testing purposes
-func createTestIndex(t *testing.T, ctx DbContext, transCtx TransactionCtx, tableName, indexName, columnName string, indexType index.IndexType) {
+func createTestIndex(t *testing.T, ctx DbContext, transCtx TxContext, tableName, indexName, columnName string, indexType index.IndexType) {
 	t.Helper()
 	stmt := statements.NewCreateIndexStatement(indexName, tableName, columnName, indexType, false)
 	plan := NewCreateIndexPlan(stmt, ctx, transCtx)

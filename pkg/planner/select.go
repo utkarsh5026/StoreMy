@@ -18,12 +18,12 @@ import (
 // that follows the iterator pattern for query execution.
 type SelectPlan struct {
 	ctx       DbContext
-	tx        TransactionCtx
+	tx        TxContext
 	statement *statements.SelectStatement
 }
 
 // NewSelectPlan creates a new SELECT query execution plan.
-func NewSelectPlan(stmt *statements.SelectStatement, tx TransactionCtx, ctx DbContext) *SelectPlan {
+func NewSelectPlan(stmt *statements.SelectStatement, tx TxContext, ctx DbContext) *SelectPlan {
 	return &SelectPlan{
 		ctx:       ctx,
 		tx:        tx,

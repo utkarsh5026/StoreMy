@@ -29,7 +29,7 @@ func TestNewDropIndexPlan(t *testing.T) {
 		t.Error("Context not properly assigned")
 	}
 
-	if plan.transactionCtx != transCtx {
+	if plan.TxContext != transCtx {
 		t.Error("TransactionCtx not properly assigned")
 	}
 }

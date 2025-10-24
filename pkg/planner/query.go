@@ -19,7 +19,7 @@ func NewQueryPlanner(ctx DbContext) *QueryPlanner {
 	}
 }
 
-func (qp *QueryPlanner) Plan(stmt statements.Statement, tx TransactionCtx) (Plan, error) {
+func (qp *QueryPlanner) Plan(stmt statements.Statement, tx TxContext) (Plan, error) {
 	switch s := stmt.(type) {
 	case *statements.CreateStatement:
 		return NewCreateTablePlan(s, qp.ctx, tx), nil
@@ -39,6 +39,8 @@ func (qp *QueryPlanner) Plan(stmt statements.Statement, tx TransactionCtx) (Plan
 		return NewUpdatePlan(s, tx, qp.ctx), nil
 	case *statements.ExplainStatement:
 		return NewExplainPlan(s, tx, qp.ctx), nil
+	case *statements.ShowIndexesStatement:
+		return NewShowIndexesPlan(s, qp.ctx, tx), nil
 	default:
 		return nil, fmt.Errorf("unsupported statement type: %T", stmt)
 	}

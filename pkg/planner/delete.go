@@ -18,7 +18,7 @@ import (
 type DeletePlan struct {
 	statement *statements.DeleteStatement // The parsed DELETE statement to execute
 	ctx       DbContext                   // Database context providing access to catalog and storage managers
-	tx        TransactionCtx              // Transaction context for ensuring ACID properties
+	tx        TxContext                   // Transaction context for ensuring ACID properties
 }
 
 // NewDeletePlan creates a new DELETE execution plan.
@@ -32,7 +32,7 @@ type DeletePlan struct {
 //   - A new DeletePlan instance ready for execution
 func NewDeletePlan(
 	stmt *statements.DeleteStatement,
-	tx TransactionCtx,
+	tx TxContext,
 	ctx DbContext) *DeletePlan {
 	return &DeletePlan{
 		statement: stmt,

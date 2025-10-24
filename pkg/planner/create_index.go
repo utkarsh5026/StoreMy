@@ -18,14 +18,14 @@ import (
 type CreateIndexPlan struct {
 	Statement *statements.CreateIndexStatement
 	ctx       DbContext
-	tx        TransactionCtx
+	tx        TxContext
 }
 
 // NewCreateIndexPlan creates a new CREATE INDEX plan instance.
 func NewCreateIndexPlan(
 	stmt *statements.CreateIndexStatement,
 	ctx DbContext,
-	tx TransactionCtx,
+	tx TxContext,
 ) *CreateIndexPlan {
 	return &CreateIndexPlan{
 		Statement: stmt,

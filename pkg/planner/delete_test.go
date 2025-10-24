@@ -9,7 +9,7 @@ import (
 	"testing"
 )
 
-func setupDeleteTest(t *testing.T) (string, *registry.DatabaseContext, TransactionCtx) {
+func setupDeleteTest(t *testing.T) (string, *registry.DatabaseContext, TxContext) {
 	dataDir := setupTestDataDir(t)
 	ctx := createTestContextWithCleanup(t, dataDir)
 	tx := createTransactionContext(t)
@@ -37,7 +37,7 @@ func executeDeletePlan(t *testing.T, plan *DeletePlan) (*DMLResult, error) {
 }
 
 // Helper function to create and populate a test table with sample data
-func createAndPopulateTestTable(t *testing.T, ctx *registry.DatabaseContext, tx TransactionCtx) {
+func createAndPopulateTestTable(t *testing.T, ctx *registry.DatabaseContext, tx TxContext) {
 	// Create table
 	createStmt := statements.NewCreateStatement("test_table", false)
 	createStmt.AddField("id", types.IntType, false, nil)

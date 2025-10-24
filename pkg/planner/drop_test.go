@@ -9,7 +9,7 @@ import (
 )
 
 // Helper function to create a test table for DROP testing
-func createTestTableForDrop(t *testing.T, ctx DbContext, transCtx TransactionCtx, tableName, primaryKey string) {
+func createTestTableForDrop(t *testing.T, ctx DbContext, transCtx TxContext, tableName, primaryKey string) {
 	t.Helper()
 	stmt := statements.NewCreateStatement(tableName, false)
 	stmt.AddField("id", types.IntType, true, nil)
@@ -64,7 +64,7 @@ func TestNewDropTablePlan(t *testing.T) {
 	}
 
 	if plan.tx != transCtx {
-		t.Error("TransactionCtx not properly assigned")
+		t.Error("TxContext not properly assigned")
 	}
 }
 

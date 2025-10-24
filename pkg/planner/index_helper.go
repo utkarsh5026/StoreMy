@@ -10,7 +10,7 @@ import (
 // IndexCreationConfig contains all parameters needed to create and populate an index.
 type IndexCreationConfig struct {
 	Ctx DbContext
-	Tx  TransactionCtx
+	Tx  TxContext
 
 	// Index metadata
 	IndexName string

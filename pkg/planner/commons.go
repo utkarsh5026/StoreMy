@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"math"
 	"storemy/pkg/catalog/systemtable"
-	"storemy/pkg/concurrency/transaction"
 	"storemy/pkg/execution/query"
 	"storemy/pkg/iterator"
 	btreeindex "storemy/pkg/memory/wrappers/btree_index"
@@ -27,7 +26,7 @@ type tableMetadata struct {
 
 // resolveTableMetadata retrieves table ID and schema in a single operation.
 // This is the primary table lookup method used by all planner components.
-func resolveTableMetadata(tableName string, tx TransactionCtx, ctx DbContext) (*tableMetadata, error) {
+func resolveTableMetadata(tableName string, tx TxContext, ctx DbContext) (*tableMetadata, error) {
 	catalogMgr := ctx.CatalogManager()
 	tableID, err := catalogMgr.GetTableID(tx, tableName)
 	if err != nil {
@@ -47,7 +46,7 @@ func resolveTableMetadata(tableName string, tx TransactionCtx, ctx DbContext) (*
 
 // resolveTableID converts a table name to its internal numeric identifier.
 // Convenience wrapper around resolveTableMetadata when only the ID is needed.
-func resolveTableID(tableName string, tx TransactionCtx, ctx DbContext) (int, error) {
+func resolveTableID(tableName string, tx TxContext, ctx DbContext) (int, error) {
 	md, err := resolveTableMetadata(tableName, tx, ctx)
 	if err != nil {
 		return -1, err
@@ -75,7 +74,7 @@ func collectAllTuples(it DbIterator) ([]*tuple.Tuple, error) {
 //  1. Try to use index scan if WHERE clause matches an indexed column
 //  2. Fall back to SeqScan if no suitable index exists
 //  3. Apply additional filters if needed
-func buildScanWithFilter(tx *transaction.TransactionContext, tableID int, whereClause *plan.FilterNode, ctx DbContext,
+func buildScanWithFilter(tx TxContext, tableID int, whereClause *plan.FilterNode, ctx DbContext,
 ) (DbIterator, error) {
 	cm := ctx.CatalogManager()
 	file, err := cm.GetTableFile(tableID)
@@ -156,7 +155,7 @@ func buildPredicateFromFilterNode(filter *plan.FilterNode, td TupleDesc) (*query
 //  3. Check if the predicate is index-friendly (=, <, >, <=, >=)
 //  4. Create appropriate IndexScan operator (equality or range)
 func tryBuildIndexScan(
-	tx *transaction.TransactionContext,
+	tx TxContext,
 	tableID int,
 	heapFile *heap.HeapFile,
 	filter *plan.FilterNode,
@@ -203,7 +202,7 @@ func tryBuildIndexScan(
 // buildIndexEqualityScan creates an IndexScan operator for equality predicates (=).
 // Works with both Hash and BTree indexes.
 func buildIndexEqualityScan(
-	tx *transaction.TransactionContext,
+	tx TxContext,
 	heapFile *heap.HeapFile,
 	indexMeta *systemtable.IndexMetadata,
 	filter *plan.FilterNode,
@@ -242,7 +241,7 @@ func buildIndexEqualityScan(
 // buildIndexRangeScan creates an IndexScan operator for range predicates (<, >, <=, >=).
 // Only works with BTree indexes.
 func buildIndexRangeScan(
-	tx *transaction.TransactionContext,
+	tx TxContext,
 	heapFile *heap.HeapFile,
 	indexMeta *systemtable.IndexMetadata,
 	filter *plan.FilterNode,
@@ -303,7 +302,7 @@ func buildIndexRangeScan(
 
 // loadIndex loads an index from disk based on its metadata.
 // Returns an appropriate index wrapped in an adapter for interface compatibility.
-func loadIndex(indexMeta *systemtable.IndexMetadata, tx *transaction.TransactionContext, ctx DbContext) (index.Index, error) {
+func loadIndex(indexMeta *systemtable.IndexMetadata, tx TxContext, ctx DbContext) (index.Index, error) {
 	switch indexMeta.IndexType {
 	case index.HashIndex:
 		// Open the hash index file

@@ -21,7 +21,7 @@ import (
 type DropTablePlan struct {
 	Statement *statements.DropStatement
 	ctx       DbContext
-	tx        TransactionCtx
+	tx        TxContext
 }
 
 // NewDropTablePlan creates a new DROP TABLE plan instance.
@@ -31,7 +31,7 @@ type DropTablePlan struct {
 //   - ctx: Database context providing access to CatalogManager and IndexManager
 //   - tx: Active transaction for catalog modifications
 func NewDropTablePlan(
-	stmt *statements.DropStatement, ctx DbContext, tx TransactionCtx) *DropTablePlan {
+	stmt *statements.DropStatement, ctx DbContext, tx TxContext) *DropTablePlan {
 	return &DropTablePlan{
 		Statement: stmt,
 		ctx:       ctx,

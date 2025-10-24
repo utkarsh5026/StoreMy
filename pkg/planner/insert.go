@@ -10,9 +10,9 @@ import (
 )
 
 type InsertPlan struct {
-	statement      *statements.InsertStatement
-	ctx            DbContext
-	transactionCtx TransactionCtx
+	statement *statements.InsertStatement
+	ctx       DbContext
+	TxContext TxContext
 }
 
 // NewInsertPlan creates a new InsertPlan instance with the provided components.
@@ -20,12 +20,12 @@ type InsertPlan struct {
 // executing INSERT operations within a transactional context.
 func NewInsertPlan(
 	stmt *statements.InsertStatement,
-	transactionCtx TransactionCtx,
+	TxContext TxContext,
 	ctx DbContext) *InsertPlan {
 	return &InsertPlan{
-		statement:      stmt,
-		ctx:            ctx,
-		transactionCtx: transactionCtx,
+		statement: stmt,
+		ctx:       ctx,
+		TxContext: TxContext,
 	}
 }
 
@@ -33,7 +33,7 @@ func NewInsertPlan(
 // all specified tuples into the target table. It validates the data, creates
 // tuples according to the table schema, and coordinates with the storage layer.
 func (p *InsertPlan) Execute() (Result, error) {
-	md, err := resolveTableMetadata(p.statement.TableName, p.transactionCtx, p.ctx)
+	md, err := resolveTableMetadata(p.statement.TableName, p.TxContext, p.ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -44,7 +44,7 @@ func (p *InsertPlan) Execute() (Result, error) {
 	}
 
 	// Check for auto-increment column
-	autoIncInfo, err := p.ctx.CatalogManager().GetAutoIncrementColumn(p.transactionCtx, md.TableID)
+	autoIncInfo, err := p.ctx.CatalogManager().GetAutoIncrementColumn(p.TxContext, md.TableID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get auto-increment info: %v", err)
 	}
@@ -102,14 +102,14 @@ func (p *InsertPlan) insertTuples(tableID int, tupleDesc *tuple.TupleDescription
 			return 0, err
 		}
 
-		if err := p.ctx.TupleManager().InsertTuple(p.transactionCtx, dbFile, newTuple); err != nil {
+		if err := p.ctx.TupleManager().InsertTuple(p.TxContext, dbFile, newTuple); err != nil {
 			return 0, fmt.Errorf("failed to insert tuple: %v", err)
 		}
 
 		// Update auto-increment counter if column is auto-incremented
 		if autoIncInfo != nil {
 			newValue := autoIncInfo.NextValue + 1
-			if err := p.ctx.CatalogManager().IncrementAutoIncrementValue(p.transactionCtx, tableID, autoIncInfo.ColumnName, newValue); err != nil {
+			if err := p.ctx.CatalogManager().IncrementAutoIncrementValue(p.TxContext, tableID, autoIncInfo.ColumnName, newValue); err != nil {
 				return 0, fmt.Errorf("failed to update auto-increment value: %v", err)
 			}
 			autoIncInfo.NextValue = newValue

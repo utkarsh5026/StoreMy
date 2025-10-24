@@ -25,9 +25,9 @@ import (
 //	DROP INDEX IF EXISTS idx_users_email;           -- Succeeds even if missing
 //	DROP INDEX idx_users_email ON users;            -- Validates table ownership
 type DropIndexPlan struct {
-	Statement      *statements.DropIndexStatement // Parsed DROP INDEX statement
-	ctx            DbContext                      // Database context for catalog/index access
-	transactionCtx TransactionCtx                 // Current transaction for catalog operations
+	Statement *statements.DropIndexStatement // Parsed DROP INDEX statement
+	ctx       DbContext                      // Database context for catalog/index access
+	TxContext TxContext                      // Current transaction for catalog operations
 }
 
 // NewDropIndexPlan creates a new DROP INDEX plan instance.
@@ -35,7 +35,7 @@ type DropIndexPlan struct {
 // Parameters:
 //   - stmt: Parsed DROP INDEX statement containing index name and IF EXISTS flag
 //   - ctx: Database context providing access to CatalogManager and IndexManager
-//   - transactionCtx: Active transaction for catalog modifications
+//   - TxContext: Active transaction for catalog modifications
 //
 // Returns:
 //
@@ -43,12 +43,12 @@ type DropIndexPlan struct {
 func NewDropIndexPlan(
 	stmt *statements.DropIndexStatement,
 	ctx DbContext,
-	transactionCtx TransactionCtx,
+	TxContext TxContext,
 ) *DropIndexPlan {
 	return &DropIndexPlan{
-		Statement:      stmt,
-		ctx:            ctx,
-		transactionCtx: transactionCtx,
+		Statement: stmt,
+		ctx:       ctx,
+		TxContext: TxContext,
 	}
 }
 
@@ -68,7 +68,7 @@ func (p *DropIndexPlan) Execute() (Result, error) {
 	cm := p.ctx.CatalogManager()
 	idxName := p.Statement.IndexName
 
-	if !cm.IndexExists(p.transactionCtx, idxName) {
+	if !cm.IndexExists(p.TxContext, idxName) {
 		if p.Statement.IfExists {
 			return &DDLResult{
 				Success: true,
@@ -107,7 +107,7 @@ func (p *DropIndexPlan) Execute() (Result, error) {
 // but the operation succeeds (catalog entry is already removed).
 func (p *DropIndexPlan) deleteIndex() error {
 	cm := p.ctx.CatalogManager()
-	filePath, err := cm.DropIndex(p.transactionCtx, p.Statement.IndexName)
+	filePath, err := cm.DropIndex(p.TxContext, p.Statement.IndexName)
 	if err != nil {
 		return fmt.Errorf("failed to drop index from catalog: %w", err)
 	}
@@ -135,14 +135,14 @@ func (p *DropIndexPlan) deleteIndex() error {
 //   - Error if table name doesn't match or metadata lookup fails
 func (p *DropIndexPlan) validateTable() error {
 	cm := p.ctx.CatalogManager()
-	idx, err := cm.GetIndexByName(p.transactionCtx, p.Statement.IndexName)
+	idx, err := cm.GetIndexByName(p.TxContext, p.Statement.IndexName)
 	if err != nil {
 		return fmt.Errorf("failed to get index metadata: %w", err)
 	}
 
 	tableName := p.Statement.TableName
 	if tableName != "" {
-		tn, err := cm.GetTableName(p.transactionCtx, idx.TableID)
+		tn, err := cm.GetTableName(p.TxContext, idx.TableID)
 		if err != nil {
 			return fmt.Errorf("failed to verify table name: %w", err)
 		}
