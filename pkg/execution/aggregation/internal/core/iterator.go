@@ -1,4 +1,4 @@
-package aggregation
+package core
 
 import (
 	"fmt"

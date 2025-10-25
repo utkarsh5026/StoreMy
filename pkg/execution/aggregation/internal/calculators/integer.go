@@ -1,8 +1,9 @@
-package aggregation
+package calculators
 
 import (
 	"fmt"
 	"math"
+	"storemy/pkg/execution/aggregation/internal/core"
 	"storemy/pkg/types"
 )
 
@@ -10,10 +11,10 @@ import (
 type IntCalculator struct {
 	groupToAgg   map[string]int64 // Maps group value to aggregate result
 	groupToCount map[string]int64 // Maps group value to count (for AVG)
-	op           AggregateOp      // Store operation for context
+	op           core.AggregateOp      // Store operation for context
 }
 
-func NewIntCalculator(op AggregateOp) *IntCalculator {
+func NewIntCalculator(op core.AggregateOp) *IntCalculator {
 	calc := &IntCalculator{
 		groupToAgg:   make(map[string]int64),
 		groupToCount: make(map[string]int64),
@@ -22,30 +23,30 @@ func NewIntCalculator(op AggregateOp) *IntCalculator {
 	return calc
 }
 
-func (ic *IntCalculator) ValidateOperation(op AggregateOp) error {
+func (ic *IntCalculator) ValidateOperation(op core.AggregateOp) error {
 	switch op {
-	case Min, Max, Sum, Avg, Count:
+	case core.Min, core.Max, core.Sum, core.Avg, core.Count:
 		return nil
 	default:
 		return fmt.Errorf("integer aggregator does not support operation: %s", op.String())
 	}
 }
 
-func (ic *IntCalculator) GetResultType(op AggregateOp) types.Type {
+func (ic *IntCalculator) GetResultType(op core.AggregateOp) types.Type {
 	return types.IntType
 }
 
 func (ic *IntCalculator) InitializeGroup(groupKey string) {
 	switch ic.op {
-	case Min:
+	case core.Min:
 		ic.groupToAgg[groupKey] = math.MaxInt32
-	case Max:
+	case core.Max:
 		ic.groupToAgg[groupKey] = math.MinInt32
-	case Sum, Avg, Count:
+	case core.Sum, core.Avg, core.Count:
 		ic.groupToAgg[groupKey] = 0
 	}
 
-	if ic.op == Avg {
+	if ic.op == core.Avg {
 		ic.groupToCount[groupKey] = 0
 	}
 }
@@ -60,20 +61,20 @@ func (ic *IntCalculator) UpdateAggregate(groupKey string, fieldValue types.Field
 	currentAgg := ic.groupToAgg[groupKey]
 
 	switch ic.op {
-	case Min:
+	case core.Min:
 		if aggValue < currentAgg {
 			ic.groupToAgg[groupKey] = aggValue
 		}
-	case Max:
+	case core.Max:
 		if aggValue > currentAgg {
 			ic.groupToAgg[groupKey] = aggValue
 		}
-	case Sum:
+	case core.Sum:
 		ic.groupToAgg[groupKey] = currentAgg + aggValue
-	case Avg:
+	case core.Avg:
 		ic.groupToAgg[groupKey] = currentAgg + aggValue
 		ic.groupToCount[groupKey]++
-	case Count:
+	case core.Count:
 		ic.groupToAgg[groupKey]++
 	}
 
@@ -83,7 +84,7 @@ func (ic *IntCalculator) UpdateAggregate(groupKey string, fieldValue types.Field
 func (ic *IntCalculator) GetFinalValue(groupKey string) (types.Field, error) {
 	aggValue := ic.groupToAgg[groupKey]
 
-	if ic.op == Avg {
+	if ic.op == core.Avg {
 		count := ic.groupToCount[groupKey]
 		if count > 0 {
 			aggValue = aggValue / count
@@ -93,12 +94,12 @@ func (ic *IntCalculator) GetFinalValue(groupKey string) (types.Field, error) {
 }
 
 type IntAggregator struct {
-	*BaseAggregator
+	*core.BaseAggregator
 }
 
-func NewIntAggregator(gbField int, gbFieldType types.Type, aField int, op AggregateOp) (*IntAggregator, error) {
+func NewIntAggregator(gbField int, gbFieldType types.Type, aField int, op core.AggregateOp) (*IntAggregator, error) {
 	calculator := NewIntCalculator(op)
-	base, err := NewBaseAggregator(gbField, gbFieldType, aField, op, calculator)
+	base, err := core.NewBaseAggregator(gbField, gbFieldType, aField, op, calculator)
 	if err != nil {
 		return nil, err
 	}

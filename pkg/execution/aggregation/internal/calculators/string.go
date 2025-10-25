@@ -1,38 +1,39 @@
-package aggregation
+package calculators
 
 import (
 	"fmt"
+	"storemy/pkg/execution/aggregation/internal/core"
 	"storemy/pkg/types"
 )
 
 type StringCalculator struct {
-	op           AggregateOp
-	groupToCount map[string]int32
+	op           core.AggregateOp
+	groupToCount map[string]int64
 	groupToAgg   map[string]any
 }
 
-func NewStringCalculator(op AggregateOp) *StringCalculator {
+func NewStringCalculator(op core.AggregateOp) *StringCalculator {
 	return &StringCalculator{
 		op:           op,
-		groupToCount: make(map[string]int32),
+		groupToCount: make(map[string]int64),
 		groupToAgg:   make(map[string]any),
 	}
 }
 
-func (sc *StringCalculator) ValidateOperation(op AggregateOp) error {
+func (sc *StringCalculator) ValidateOperation(op core.AggregateOp) error {
 	switch op {
-	case Count, Min, Max:
+	case core.Count, core.Min, core.Max:
 		return nil
 	default:
 		return fmt.Errorf("string aggregator does not support operation: %s", op.String())
 	}
 }
 
-func (sc *StringCalculator) GetResultType(op AggregateOp) types.Type {
+func (sc *StringCalculator) GetResultType(op core.AggregateOp) types.Type {
 	switch op {
-	case Count:
+	case core.Count:
 		return types.IntType
-	case Min, Max:
+	case core.Min, core.Max:
 		return types.StringType
 	default:
 		return types.IntType // Default fallback
@@ -52,11 +53,11 @@ func (sc *StringCalculator) UpdateAggregate(groupKey string, fieldValue types.Fi
 
 	aggValue := stringField.Value
 	switch sc.op {
-	case Count:
+	case core.Count:
 		currentVal := sc.groupToAgg[groupKey]
-		sc.groupToAgg[groupKey] = currentVal.(int32) + 1
+		sc.groupToAgg[groupKey] = currentVal.(int64) + 1
 
-	case Min:
+	case core.Min:
 		if sc.groupToCount[groupKey] == 0 {
 			sc.groupToAgg[groupKey] = aggValue
 		} else {
@@ -66,7 +67,7 @@ func (sc *StringCalculator) UpdateAggregate(groupKey string, fieldValue types.Fi
 			}
 		}
 
-	case Max:
+	case core.Max:
 		if sc.groupToCount[groupKey] == 0 {
 			sc.groupToAgg[groupKey] = aggValue
 		} else {
@@ -85,14 +86,14 @@ func (sc *StringCalculator) UpdateAggregate(groupKey string, fieldValue types.Fi
 
 func (sc *StringCalculator) getInitValue() any {
 	switch sc.op {
-	case Count:
-		return int32(0)
-	case Min:
+	case core.Count:
+		return int64(0)
+	case core.Min:
 		return ""
-	case Max:
+	case core.Max:
 		return ""
 	default:
-		return int32(0)
+		return int64(0)
 	}
 }
 
@@ -110,12 +111,12 @@ func (sc *StringCalculator) GetFinalValue(groupKey string) (types.Field, error) 
 }
 
 type StringAggregator struct {
-	*BaseAggregator
+	*core.BaseAggregator
 }
 
-func NewStringAggregator(gbField int, gbFieldType types.Type, aField int, op AggregateOp) (*StringAggregator, error) {
+func NewStringAggregator(gbField int, gbFieldType types.Type, aField int, op core.AggregateOp) (*StringAggregator, error) {
 	calculator := NewStringCalculator(op)
-	base, err := NewBaseAggregator(gbField, gbFieldType, aField, op, calculator)
+	base, err := core.NewBaseAggregator(gbField, gbFieldType, aField, op, calculator)
 	if err != nil {
 		return nil, err
 	}

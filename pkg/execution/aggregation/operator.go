@@ -2,6 +2,7 @@ package aggregation
 
 import (
 	"fmt"
+	"storemy/pkg/execution/aggregation/internal/calculators"
 	"storemy/pkg/iterator"
 	"storemy/pkg/tuple"
 	"storemy/pkg/types"
@@ -246,16 +247,17 @@ func validateInputs(source iterator.DbIterator, aggregateField, groupByField int
 	return nil
 }
 
+// createAggregator creates the appropriate type-specific aggregator based on the field type
 func createAggregator(fieldType types.Type, groupByField int, gbFieldType types.Type, aggregateField int, op AggregateOp) (Aggregator, error) {
 	switch fieldType {
 	case types.IntType:
-		return NewIntAggregator(groupByField, gbFieldType, aggregateField, op)
+		return calculators.NewIntAggregator(groupByField, gbFieldType, aggregateField, op)
 	case types.BoolType:
-		return NewBooleanAggregator(groupByField, gbFieldType, aggregateField, op)
+		return calculators.NewBooleanAggregator(groupByField, gbFieldType, aggregateField, op)
 	case types.StringType:
-		return NewStringAggregator(groupByField, gbFieldType, aggregateField, op)
+		return calculators.NewStringAggregator(groupByField, gbFieldType, aggregateField, op)
 	case types.FloatType:
-		return NewFloatAggregator(groupByField, gbFieldType, aggregateField, op)
+		return calculators.NewFloatAggregator(groupByField, gbFieldType, aggregateField, op)
 	default:
 		return nil, fmt.Errorf("unsupported field type for aggregation: %v", fieldType)
 	}

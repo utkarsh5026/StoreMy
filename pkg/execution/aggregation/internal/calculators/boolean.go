@@ -1,7 +1,8 @@
-package aggregation
+package calculators
 
 import (
 	"fmt"
+	"storemy/pkg/execution/aggregation/internal/core"
 	"storemy/pkg/types"
 )
 
@@ -9,10 +10,10 @@ import (
 type BooleanCalculator struct {
 	groupToAgg   map[string]any   // bool for AND/OR, int64 for COUNT/SUM
 	groupToCount map[string]int64 // for count tracking
-	op           AggregateOp
+	op           core.AggregateOp
 }
 
-func NewBooleanCalculator(op AggregateOp) *BooleanCalculator {
+func NewBooleanCalculator(op core.AggregateOp) *BooleanCalculator {
 	return &BooleanCalculator{
 		groupToAgg:   make(map[string]any),
 		groupToCount: make(map[string]int64),
@@ -20,20 +21,20 @@ func NewBooleanCalculator(op AggregateOp) *BooleanCalculator {
 	}
 }
 
-func (bc *BooleanCalculator) ValidateOperation(op AggregateOp) error {
+func (bc *BooleanCalculator) ValidateOperation(op core.AggregateOp) error {
 	switch op {
-	case Count, And, Or, Sum:
+	case core.Count, core.And, core.Or, core.Sum:
 		return nil
 	default:
 		return fmt.Errorf("boolean aggregator does not support operation: %s", op.String())
 	}
 }
 
-func (bc *BooleanCalculator) GetResultType(op AggregateOp) types.Type {
+func (bc *BooleanCalculator) GetResultType(op core.AggregateOp) types.Type {
 	switch op {
-	case And, Or:
+	case core.And, core.Or:
 		return types.BoolType
-	case Count, Sum:
+	case core.Count, core.Sum:
 		return types.IntType
 	default:
 		return types.IntType
@@ -42,11 +43,11 @@ func (bc *BooleanCalculator) GetResultType(op AggregateOp) types.Type {
 
 func (bc *BooleanCalculator) InitializeGroup(groupKey string) {
 	switch bc.op {
-	case And:
+	case core.And:
 		bc.groupToAgg[groupKey] = true
-	case Or:
+	case core.Or:
 		bc.groupToAgg[groupKey] = false
-	case Count, Sum:
+	case core.Count, core.Sum:
 		bc.groupToAgg[groupKey] = int64(0)
 	}
 	bc.groupToCount[groupKey] = 0
@@ -61,18 +62,18 @@ func (bc *BooleanCalculator) UpdateAggregate(groupKey string, fieldValue types.F
 	value := boolField.Value
 
 	switch bc.op {
-	case And:
+	case core.And:
 		currentVal := bc.groupToAgg[groupKey].(bool)
 		bc.groupToAgg[groupKey] = currentVal && value
-	case Or:
+	case core.Or:
 		currentVal := bc.groupToAgg[groupKey].(bool)
 		bc.groupToAgg[groupKey] = currentVal || value
-	case Sum:
+	case core.Sum:
 		currentVal := bc.groupToAgg[groupKey].(int64)
 		if value {
 			bc.groupToAgg[groupKey] = currentVal + 1
 		}
-	case Count:
+	case core.Count:
 		currentVal := bc.groupToAgg[groupKey].(int64)
 		bc.groupToAgg[groupKey] = currentVal + 1
 	}
@@ -95,12 +96,12 @@ func (bc *BooleanCalculator) GetFinalValue(groupKey string) (types.Field, error)
 }
 
 type BooleanAggregator struct {
-	*BaseAggregator
+	*core.BaseAggregator
 }
 
-func NewBooleanAggregator(gbField int, gbFieldType types.Type, aField int, op AggregateOp) (*BooleanAggregator, error) {
+func NewBooleanAggregator(gbField int, gbFieldType types.Type, aField int, op core.AggregateOp) (*BooleanAggregator, error) {
 	calculator := NewBooleanCalculator(op)
-	base, err := NewBaseAggregator(gbField, gbFieldType, aField, op, calculator)
+	base, err := core.NewBaseAggregator(gbField, gbFieldType, aField, op, calculator)
 	if err != nil {
 		return nil, err
 	}
