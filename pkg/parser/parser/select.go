@@ -34,6 +34,7 @@ func parseSelectStatement(l *lexer.Lexer) (*statements.SelectStatement, error) {
 		parseWhere,
 		parseGroupBy,
 		parseOrderBy,
+		parseLimit,
 	}
 
 	for _, parseFunc := range parseFuncs {
@@ -129,16 +130,25 @@ func parseSelectField(l *lexer.Lexer, p *plan.SelectPlan, fieldToken lexer.Token
 //
 // Grammar:
 //
-//	AGGREGATE_FUNC(IDENTIFIER)
+//	AGGREGATE_FUNC(IDENTIFIER | *)
 //
 // Supported functions: COUNT, SUM, AVG, MIN, MAX
 // Example: COUNT(ID) → adds projection with field "ID" and aggregation operator "COUNT"
+// Example: COUNT(*) → adds projection with field "*" and aggregation operator "COUNT"
 func parseAggregateFunction(l *lexer.Lexer, p *plan.SelectPlan, funcToken lexer.Token) error {
 	aggOp := strings.ToUpper(funcToken.Value)
 
 	fieldToken := l.NextToken()
-	if err := expectToken(fieldToken, lexer.IDENTIFIER); err != nil {
-		return fmt.Errorf("expected field name in aggregate function")
+
+	// Handle COUNT(*) special case
+	var fieldName string
+	switch fieldToken.Type {
+	case lexer.ASTERISK:
+		fieldName = "*"
+	case lexer.IDENTIFIER:
+		fieldName = strings.ToUpper(fieldToken.Value)
+	default:
+		return fmt.Errorf("expected field name or * in aggregate function, got %s", fieldToken.Value)
 	}
 
 	parenToken := l.NextToken()
@@ -146,7 +156,7 @@ func parseAggregateFunction(l *lexer.Lexer, p *plan.SelectPlan, funcToken lexer.
 		return fmt.Errorf("expected closing parenthesis in aggregate function")
 	}
 
-	p.AddProjectField(strings.ToUpper(fieldToken.Value), aggOp)
+	p.AddProjectField(fieldName, aggOp)
 	return nil
 }
 
@@ -211,6 +221,49 @@ func parseOrderBy(l *lexer.Lexer, p *plan.SelectPlan) error {
 	}
 
 	p.AddOrderBy(strings.ToUpper(fieldToken.Value), ascending)
+	return nil
+}
+
+// parseLimit parses the optional LIMIT clause with optional OFFSET.
+//
+// Grammar:
+//
+//	[LIMIT number [OFFSET number]]
+//
+// Example: LIMIT 10 OFFSET 5
+// Defaults to offset 0 if not specified.
+func parseLimit(l *lexer.Lexer, p *plan.SelectPlan) error {
+	token := l.NextToken()
+	if token.Type != lexer.LIMIT {
+		l.SetPos(token.Position)
+		return nil
+	}
+
+	limitToken := l.NextToken()
+	if limitToken.Type != lexer.INT {
+		return fmt.Errorf("expected integer after LIMIT, got %s", limitToken.Value)
+	}
+
+	limitValue := 0
+	if _, err := fmt.Sscanf(limitToken.Value, "%d", &limitValue); err != nil {
+		return fmt.Errorf("invalid LIMIT value: %s", limitToken.Value)
+	}
+
+	offset := 0
+	offsetToken := l.NextToken()
+	if offsetToken.Type == lexer.OFFSET {
+		offsetValueToken := l.NextToken()
+		if offsetValueToken.Type != lexer.INT {
+			return fmt.Errorf("expected integer after OFFSET, got %s", offsetValueToken.Value)
+		}
+		if _, err := fmt.Sscanf(offsetValueToken.Value, "%d", &offset); err != nil {
+			return fmt.Errorf("invalid OFFSET value: %s", offsetValueToken.Value)
+		}
+	} else {
+		l.SetPos(offsetToken.Position)
+	}
+
+	p.SetLimit(limitValue, offset)
 	return nil
 }
 
