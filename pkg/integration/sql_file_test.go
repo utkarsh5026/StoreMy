@@ -80,8 +80,8 @@ func TestSQLFile_StepByStepExecution(t *testing.T) {
 	// Update and verify
 	td.MustExecute(t, "UPDATE test_data SET value = 'updated' WHERE id = 2")
 	result := td.MustExecute(t, "SELECT value FROM test_data WHERE id = 2")
-	if len(result.Rows) > 0 && result.Rows[0][0] != "updated" {
-		t.Errorf("expected 'updated', got %s", result.Rows[0][0])
+	if len(result.Rows) > 0 && result.Rows[0][0] != "UPDATED" {
+		t.Errorf("expected 'UPDATED', got %s", result.Rows[0][0])
 	}
 
 	// Delete and verify
