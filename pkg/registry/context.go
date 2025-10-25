@@ -46,6 +46,9 @@ func NewDatabaseContext(
 	tupleManager := table.NewTupleManager(pageStore)
 	adapter := &catalogAdapter{cm: catalogMgr}
 	indexMgr := indexmanager.NewIndexManager(adapter, pageStore, wal)
+
+	tupleManager.SetIndexManager(indexMgr)
+
 	return &DatabaseContext{
 		pageStore:    pageStore,
 		catalogMgr:   catalogMgr,
