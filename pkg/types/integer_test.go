@@ -68,8 +68,42 @@ func TestIntField_Hash(t *testing.T) {
 		t.Errorf("Unexpected error: %v", err)
 	}
 
-	if hash != uint32(42) {
-		t.Errorf("Expected hash %d, got %d", uint32(42), hash)
+	// FNV-1a hash of 42 (as 8 bytes in little-endian)
+	if hash != uint32(3990555855) {
+		t.Errorf("Expected hash %d, got %d", uint32(3990555855), hash)
+	}
+}
+
+func TestIntField_Hash_Consistency(t *testing.T) {
+	// Test that hashing the same value produces consistent results
+	field1 := NewIntField(42)
+	field2 := NewIntField(42)
+
+	hash1, err1 := field1.Hash()
+	hash2, err2 := field2.Hash()
+
+	if err1 != nil || err2 != nil {
+		t.Fatalf("Unexpected errors: %v, %v", err1, err2)
+	}
+
+	if hash1 != hash2 {
+		t.Errorf("Hash should be consistent for same value: got %d and %d", hash1, hash2)
+	}
+
+	// Test that different values produce different hashes
+	field3 := NewIntField(100)
+	hash3, _ := field3.Hash()
+
+	if hash1 == hash3 {
+		t.Error("Hash should be different for different values (42 vs 100)")
+	}
+
+	// Test negative numbers
+	field4 := NewIntField(-42)
+	hash4, _ := field4.Hash()
+
+	if hash1 == hash4 {
+		t.Error("Hash should be different for 42 and -42")
 	}
 }
 

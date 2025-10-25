@@ -87,8 +87,8 @@ func TestBoolField_Hash(t *testing.T) {
 		value    bool
 		expected uint32
 	}{
-		{"true value", true, 1},
-		{"false value", false, 0},
+		{"true value", true, 67918732},  // FNV-1a hash of byte{1}
+		{"false value", false, 84696351}, // FNV-1a hash of byte{0}
 	}
 
 	for _, tt := range tests {
@@ -102,6 +102,27 @@ func TestBoolField_Hash(t *testing.T) {
 				t.Errorf("Expected hash %d, got %d", tt.expected, hash)
 			}
 		})
+	}
+}
+
+func TestBoolField_Hash_Consistency(t *testing.T) {
+	// Test that hashing the same value produces consistent results
+	field1 := NewBoolField(true)
+	field2 := NewBoolField(true)
+
+	hash1, _ := field1.Hash()
+	hash2, _ := field2.Hash()
+
+	if hash1 != hash2 {
+		t.Errorf("Hash should be consistent for same value: got %d and %d", hash1, hash2)
+	}
+
+	// Test that different values produce different hashes
+	field3 := NewBoolField(false)
+	hash3, _ := field3.Hash()
+
+	if hash1 == hash3 {
+		t.Error("Hash should be different for true and false")
 	}
 }
 

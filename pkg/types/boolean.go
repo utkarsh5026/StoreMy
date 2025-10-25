@@ -107,10 +107,10 @@ func (b *BoolField) Equals(other Field) bool {
 	return b.Value == otherBool.Value
 }
 
-// Hash returns a hash value for this boolean field.
+// Hash returns a hash value for this boolean field using FNV-1a hashing.
 //
 // Returns:
-//   - uint32: 1 if the value is true, 0 if false
+//   - uint32: The FNV-1a hash of the boolean value
 //   - error: Always returns nil for boolean fields
 func (b *BoolField) Hash() (uint32, error) {
 	h := fnv.New32a()
