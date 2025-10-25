@@ -113,8 +113,9 @@ func insertUpdateTestData(t *testing.T, ctx *registry.DatabaseContext, tx *trans
 }
 
 func TestNewUpdatePlan(t *testing.T) {
+	dataDir := testutil.SetupTestDataDir(t)
 	stmt := statements.NewUpdateStatement("users", "users")
-	ctx, txRegistry := testutil.CreateTestContextWithCleanup(t, "")
+	ctx, txRegistry := testutil.CreateTestContextWithCleanup(t, dataDir)
 	tx, _ := txRegistry.Begin()
 
 	plan := NewUpdatePlan(stmt, tx, ctx)

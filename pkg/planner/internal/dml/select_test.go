@@ -118,9 +118,10 @@ func insertSelectTestData(t *testing.T, ctx *registry.DatabaseContext, tx *trans
 }
 
 func TestNewSelectPlan(t *testing.T) {
+	dataDir := testutil.SetupTestDataDir(t)
 	selectPlan := plan.NewSelectPlan()
 	stmt := statements.NewSelectStatement(selectPlan)
-	ctx, txRegistry := testutil.CreateTestContextWithCleanup(t, "")
+	ctx, txRegistry := testutil.CreateTestContextWithCleanup(t, dataDir)
 	tx, _ := txRegistry.Begin()
 
 	plan := NewSelectPlan(stmt, tx, ctx)
@@ -278,14 +279,9 @@ func TestSelectPlan_Execute_WithFilterAndProjection(t *testing.T) {
 }
 
 func TestSelectPlan_Execute_Error_NoTables(t *testing.T) {
-	dataDir := t.TempDir()
-	oldDir, _ := os.Getwd()
-	os.Chdir(dataDir)
-	defer os.Chdir(oldDir)
+	dataDir := testutil.SetupTestDataDir(t)
 
-	os.Mkdir("data", 0755)
-
-	ctx, txRegistry := testutil.CreateTestContextWithCleanup(t, "")
+	ctx, txRegistry := testutil.CreateTestContextWithCleanup(t, dataDir)
 	tx, _ := txRegistry.Begin()
 
 	selectPlan := plan.NewSelectPlan()
