@@ -161,9 +161,8 @@ func TestColumnsTable_RoundTrip(t *testing.T) {
 	if parsed.IsAutoInc != colMeta.IsAutoInc {
 		t.Errorf("IsAutoInc mismatch: expected %v, got %v", colMeta.IsAutoInc, parsed.IsAutoInc)
 	}
-	// Note: NextAutoValue is set to 1 in CreateTuple
-	if parsed.NextAutoValue != 1 {
-		t.Errorf("NextAutoValue mismatch: expected 1, got %d", parsed.NextAutoValue)
+	if parsed.NextAutoValue != colMeta.NextAutoValue {
+		t.Errorf("NextAutoValue mismatch: expected %d, got %d", colMeta.NextAutoValue, parsed.NextAutoValue)
 	}
 }
 
