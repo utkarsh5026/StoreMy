@@ -1,8 +1,10 @@
 package aggregation
 
 import (
+	"fmt"
 	"storemy/pkg/iterator"
 	"storemy/pkg/tuple"
+	"strings"
 )
 
 const (
@@ -45,6 +47,28 @@ func (op AggregateOp) String() string {
 	}
 }
 
+// ParseAggregateOp converts an aggregate operation string to AggregateOp enum.
+func ParseAggregateOp(opStr string) (AggregateOp, error) {
+	switch strings.ToUpper(opStr) {
+	case "MIN":
+		return Min, nil
+	case "MAX":
+		return Max, nil
+	case "SUM":
+		return Sum, nil
+	case "AVG":
+		return Avg, nil
+	case "COUNT":
+		return Count, nil
+	case "AND":
+		return And, nil
+	case "OR":
+		return Or, nil
+	default:
+		return 0, fmt.Errorf("unsupported aggregate operation: %s", opStr)
+	}
+}
+
 // Aggregator interface defines the contract for aggregation operations
 // This is the fundamental interface that all aggregators must implement
 type Aggregator interface {
@@ -58,4 +82,8 @@ type Aggregator interface {
 
 	// GetTupleDesc returns the tuple description for the aggregate results
 	GetTupleDesc() *tuple.TupleDescription
+
+	// InitializeDefault initializes the default group for non-grouped aggregates
+	// This is used when there are no input tuples to ensure COUNT(*) returns 0
+	InitializeDefault() error
 }

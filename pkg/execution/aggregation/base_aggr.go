@@ -126,3 +126,22 @@ func (ba *BaseAggregator) extractGroupKey(tup *tuple.Tuple) (string, error) {
 
 	return groupField.String(), nil
 }
+
+// InitializeDefault initializes the default group for non-grouped aggregates.
+// This ensures that COUNT(*) on an empty table returns 0 instead of no rows.
+func (ba *BaseAggregator) InitializeDefault() error {
+	if ba.gbField != NoGrouping {
+		return nil
+	}
+
+	ba.mutex.Lock()
+	defer ba.mutex.Unlock()
+
+	groupKey := "NO_GROUPING"
+	if !ba.groups[groupKey] {
+		ba.calculator.InitializeGroup(groupKey)
+		ba.groups[groupKey] = true
+	}
+
+	return nil
+}

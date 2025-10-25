@@ -106,8 +106,9 @@ func (agg *AggregateOperator) Rewind() error {
 // This method:
 // 1. Opens the source iterator
 // 2. Consumes all input tuples and feeds them to the aggregator
-// 3. Creates an iterator over the computed results
-// 4. Prepares the operator for result iteration
+// 3. For non-grouped aggregates with no input tuples, initializes a default group
+// 4. Creates an iterator over the computed results
+// 5. Prepares the operator for result iteration
 //
 // Returns:
 //   - error: Error if operator is already opened, source fails, or aggregation fails
@@ -120,12 +121,22 @@ func (agg *AggregateOperator) Open() error {
 		return fmt.Errorf("failed to open source iterator: %v", err)
 	}
 
+	tupleCount := 0
 	iterator.ForEach(agg.source, func(t *tuple.Tuple) error {
+		tupleCount++
 		if err := agg.aggregator.Merge(t); err != nil {
 			return fmt.Errorf("error merging tuple: %v", err)
 		}
 		return nil
 	})
+
+	// For non-grouped aggregates (e.g., COUNT(*) with no GROUP BY),
+	// we need to return a single row even if there are no input tuples.
+	if tupleCount == 0 && agg.groupByField == NoGrouping {
+		if err := agg.aggregator.InitializeDefault(); err != nil {
+			return fmt.Errorf("failed to initialize default group: %v", err)
+		}
+	}
 
 	agg.aggIterator = agg.aggregator.Iterator()
 	if err := agg.aggIterator.Open(); err != nil {
