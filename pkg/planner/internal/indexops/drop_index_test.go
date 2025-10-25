@@ -1,22 +1,22 @@
-package planner_tests
+package indexops
 
 import (
+	"storemy/pkg/planner/internal/testutil"
 	"os"
 	"storemy/pkg/parser/statements"
-	"storemy/pkg/planner/internal/indexops"
 	"storemy/pkg/storage/index"
 	"testing"
 )
 
 func TestNewDropIndexPlan(t *testing.T) {
-	dataDir := setupTestDataDir(t)
+	dataDir := testutil.SetupTestDataDir(t)
 
 	stmt := statements.NewDropIndexStatement("idx_users_email", "", false)
 
-	ctx := createTestContextWithCleanup(t, dataDir)
-	transCtx := createTransactionContext(t)
+	ctx, txRegistry := testutil.CreateTestContextWithCleanup(t, dataDir)
+	transCtx, _ := txRegistry.Begin()
 
-	plan := indexops.NewDropIndexPlan(stmt, ctx, transCtx)
+	plan := NewDropIndexPlan(stmt, ctx, transCtx)
 
 	if plan == nil {
 		t.Fatal("NewDropIndexPlan returned nil")
@@ -29,10 +29,10 @@ func TestNewDropIndexPlan(t *testing.T) {
 }
 
 func TestDropIndexPlan_Execute_Success(t *testing.T) {
-	dataDir := setupTestDataDir(t)
+	dataDir := testutil.SetupTestDataDir(t)
 
-	ctx := createTestContextWithCleanup(t, dataDir)
-	transCtx := createTransactionContext(t)
+	ctx, txRegistry := testutil.CreateTestContextWithCleanup(t, dataDir)
+	transCtx, _ := txRegistry.Begin()
 
 	// Create table and index
 	createTestTableForIndex(t, ctx, transCtx, "users")
@@ -54,7 +54,7 @@ func TestDropIndexPlan_Execute_Success(t *testing.T) {
 
 	// Drop the index
 	stmt := statements.NewDropIndexStatement("idx_users_email", "", false)
-	plan := indexops.NewDropIndexPlan(stmt, ctx, transCtx)
+	plan := NewDropIndexPlan(stmt, ctx, transCtx)
 
 	result, err := executeDropIndexPlan(t, plan)
 
@@ -86,21 +86,21 @@ func TestDropIndexPlan_Execute_Success(t *testing.T) {
 	}
 
 	// Cleanup
-	cleanupTable(t, ctx.CatalogManager(), "users", transCtx)
+	testutil.CleanupTable(t, ctx.CatalogManager(), "users", transCtx)
 }
 
 func TestDropIndexPlan_Execute_IfExists_IndexExists(t *testing.T) {
-	dataDir := setupTestDataDir(t)
+	dataDir := testutil.SetupTestDataDir(t)
 
-	ctx := createTestContextWithCleanup(t, dataDir)
-	transCtx := createTransactionContext(t)
+	ctx, txRegistry := testutil.CreateTestContextWithCleanup(t, dataDir)
+	transCtx, _ := txRegistry.Begin()
 
 	createTestTableForIndex(t, ctx, transCtx, "users")
 	createTestIndex(t, ctx, transCtx, "users", "idx_users_email", "email", index.HashIndex)
 
 	// Drop with IF EXISTS
 	stmt := statements.NewDropIndexStatement("idx_users_email", "", true)
-	plan := indexops.NewDropIndexPlan(stmt, ctx, transCtx)
+	plan := NewDropIndexPlan(stmt, ctx, transCtx)
 
 	result, err := executeDropIndexPlan(t, plan)
 
@@ -118,20 +118,20 @@ func TestDropIndexPlan_Execute_IfExists_IndexExists(t *testing.T) {
 	}
 
 	// Cleanup
-	cleanupTable(t, ctx.CatalogManager(), "users", transCtx)
+	testutil.CleanupTable(t, ctx.CatalogManager(), "users", transCtx)
 }
 
 func TestDropIndexPlan_Execute_IfExists_IndexDoesNotExist(t *testing.T) {
-	dataDir := setupTestDataDir(t)
+	dataDir := testutil.SetupTestDataDir(t)
 
-	ctx := createTestContextWithCleanup(t, dataDir)
-	transCtx := createTransactionContext(t)
+	ctx, txRegistry := testutil.CreateTestContextWithCleanup(t, dataDir)
+	transCtx, _ := txRegistry.Begin()
 
 	// Don't create the index
 
 	// Drop with IF EXISTS
 	stmt := statements.NewDropIndexStatement("nonexistent_index", "", true)
-	plan := indexops.NewDropIndexPlan(stmt, ctx, transCtx)
+	plan := NewDropIndexPlan(stmt, ctx, transCtx)
 
 	result, err := executeDropIndexPlan(t, plan)
 
@@ -150,14 +150,14 @@ func TestDropIndexPlan_Execute_IfExists_IndexDoesNotExist(t *testing.T) {
 }
 
 func TestDropIndexPlan_Execute_Error_IndexDoesNotExist(t *testing.T) {
-	dataDir := setupTestDataDir(t)
+	dataDir := testutil.SetupTestDataDir(t)
 
-	ctx := createTestContextWithCleanup(t, dataDir)
-	transCtx := createTransactionContext(t)
+	ctx, txRegistry := testutil.CreateTestContextWithCleanup(t, dataDir)
+	transCtx, _ := txRegistry.Begin()
 
 	// Drop without IF EXISTS
 	stmt := statements.NewDropIndexStatement("nonexistent_index", "", false)
-	plan := indexops.NewDropIndexPlan(stmt, ctx, transCtx)
+	plan := NewDropIndexPlan(stmt, ctx, transCtx)
 
 	result, err := executeDropIndexPlan(t, plan)
 
@@ -176,17 +176,17 @@ func TestDropIndexPlan_Execute_Error_IndexDoesNotExist(t *testing.T) {
 }
 
 func TestDropIndexPlan_Execute_WithTableName_Success(t *testing.T) {
-	dataDir := setupTestDataDir(t)
+	dataDir := testutil.SetupTestDataDir(t)
 
-	ctx := createTestContextWithCleanup(t, dataDir)
-	transCtx := createTransactionContext(t)
+	ctx, txRegistry := testutil.CreateTestContextWithCleanup(t, dataDir)
+	transCtx, _ := txRegistry.Begin()
 
 	createTestTableForIndex(t, ctx, transCtx, "users")
 	createTestIndex(t, ctx, transCtx, "users", "idx_users_email", "email", index.HashIndex)
 
 	// Drop with table name specified
 	stmt := statements.NewDropIndexStatement("idx_users_email", "users", false)
-	plan := indexops.NewDropIndexPlan(stmt, ctx, transCtx)
+	plan := NewDropIndexPlan(stmt, ctx, transCtx)
 
 	result, err := executeDropIndexPlan(t, plan)
 
@@ -199,14 +199,14 @@ func TestDropIndexPlan_Execute_WithTableName_Success(t *testing.T) {
 	}
 
 	// Cleanup
-	cleanupTable(t, ctx.CatalogManager(), "users", transCtx)
+	testutil.CleanupTable(t, ctx.CatalogManager(), "users", transCtx)
 }
 
 func TestDropIndexPlan_Execute_WithTableName_Error_WrongTable(t *testing.T) {
-	dataDir := setupTestDataDir(t)
+	dataDir := testutil.SetupTestDataDir(t)
 
-	ctx := createTestContextWithCleanup(t, dataDir)
-	transCtx := createTransactionContext(t)
+	ctx, txRegistry := testutil.CreateTestContextWithCleanup(t, dataDir)
+	transCtx, _ := txRegistry.Begin()
 
 	// Create two tables
 	createTestTableForIndex(t, ctx, transCtx, "users")
@@ -217,7 +217,7 @@ func TestDropIndexPlan_Execute_WithTableName_Error_WrongTable(t *testing.T) {
 
 	// Try to drop index with wrong table name
 	stmt := statements.NewDropIndexStatement("idx_users_email", "products", false)
-	plan := indexops.NewDropIndexPlan(stmt, ctx, transCtx)
+	plan := NewDropIndexPlan(stmt, ctx, transCtx)
 
 	result, err := executeDropIndexPlan(t, plan)
 
@@ -235,19 +235,19 @@ func TestDropIndexPlan_Execute_WithTableName_Error_WrongTable(t *testing.T) {
 	}
 
 	// Cleanup
-	dropPlan := indexops.NewDropIndexPlan(
+	dropPlan := NewDropIndexPlan(
 		statements.NewDropIndexStatement("idx_users_email", "", false),
 		ctx, transCtx)
 	dropPlan.Execute()
-	cleanupTable(t, ctx.CatalogManager(), "users", transCtx)
-	cleanupTable(t, ctx.CatalogManager(), "products", transCtx)
+	testutil.CleanupTable(t, ctx.CatalogManager(), "users", transCtx)
+	testutil.CleanupTable(t, ctx.CatalogManager(), "products", transCtx)
 }
 
 func TestDropIndexPlan_Execute_FileAlreadyDeleted(t *testing.T) {
-	dataDir := setupTestDataDir(t)
+	dataDir := testutil.SetupTestDataDir(t)
 
-	ctx := createTestContextWithCleanup(t, dataDir)
-	transCtx := createTransactionContext(t)
+	ctx, txRegistry := testutil.CreateTestContextWithCleanup(t, dataDir)
+	transCtx, _ := txRegistry.Begin()
 
 	createTestTableForIndex(t, ctx, transCtx, "users")
 	createTestIndex(t, ctx, transCtx, "users", "idx_users_email", "email", index.HashIndex)
@@ -259,7 +259,7 @@ func TestDropIndexPlan_Execute_FileAlreadyDeleted(t *testing.T) {
 
 	// Drop the index (should succeed even if file doesn't exist)
 	stmt := statements.NewDropIndexStatement("idx_users_email", "", false)
-	plan := indexops.NewDropIndexPlan(stmt, ctx, transCtx)
+	plan := NewDropIndexPlan(stmt, ctx, transCtx)
 
 	result, err := executeDropIndexPlan(t, plan)
 
@@ -277,14 +277,14 @@ func TestDropIndexPlan_Execute_FileAlreadyDeleted(t *testing.T) {
 	}
 
 	// Cleanup
-	cleanupTable(t, ctx.CatalogManager(), "users", transCtx)
+	testutil.CleanupTable(t, ctx.CatalogManager(), "users", transCtx)
 }
 
 func TestDropIndexPlan_Execute_MultipleIndexes(t *testing.T) {
-	dataDir := setupTestDataDir(t)
+	dataDir := testutil.SetupTestDataDir(t)
 
-	ctx := createTestContextWithCleanup(t, dataDir)
-	transCtx := createTransactionContext(t)
+	ctx, txRegistry := testutil.CreateTestContextWithCleanup(t, dataDir)
+	transCtx, _ := txRegistry.Begin()
 
 	createTestTableForIndex(t, ctx, transCtx, "users")
 
@@ -302,7 +302,7 @@ func TestDropIndexPlan_Execute_MultipleIndexes(t *testing.T) {
 
 	// Drop one index
 	stmt := statements.NewDropIndexStatement("idx_users_age", "", false)
-	plan := indexops.NewDropIndexPlan(stmt, ctx, transCtx)
+	plan := NewDropIndexPlan(stmt, ctx, transCtx)
 	_, err := executeDropIndexPlan(t, plan)
 	if err != nil {
 		t.Fatalf("Failed to drop index: %v", err)
@@ -328,15 +328,15 @@ func TestDropIndexPlan_Execute_MultipleIndexes(t *testing.T) {
 	}
 
 	// Cleanup
-	dropPlan1 := indexops.NewDropIndexPlan(
+	dropPlan1 := NewDropIndexPlan(
 		statements.NewDropIndexStatement("idx_users_email", "", false),
 		ctx, transCtx)
 	dropPlan1.Execute()
 
-	dropPlan2 := indexops.NewDropIndexPlan(
+	dropPlan2 := NewDropIndexPlan(
 		statements.NewDropIndexStatement("idx_users_name", "", false),
 		ctx, transCtx)
 	dropPlan2.Execute()
 
-	cleanupTable(t, ctx.CatalogManager(), "users", transCtx)
+	testutil.CleanupTable(t, ctx.CatalogManager(), "users", transCtx)
 }

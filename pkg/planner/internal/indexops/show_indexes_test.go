@@ -1,25 +1,24 @@
-package planner_tests
+package indexops
 
 import (
 	"storemy/pkg/parser/statements"
-	"storemy/pkg/planner/ddl"
-	"storemy/pkg/planner/internal/indexops"
 	"storemy/pkg/planner/internal/result"
+	"storemy/pkg/planner/internal/testutil"
 	"storemy/pkg/storage/index"
 	"storemy/pkg/types"
 	"testing"
 )
 
 func TestShowIndexesPlan_Execute_NoIndexes(t *testing.T) {
-	dataDir := setupTestDataDir(t)
-	ctx := createTestContextWithCleanup(t, dataDir)
-	transCtx := createTransactionContext(t)
+	dataDir := testutil.SetupTestDataDir(t)
+	ctx, txRegistry := testutil.CreateTestContextWithCleanup(t, dataDir)
+	transCtx, _ := txRegistry.Begin()
 
 	// Create SHOW INDEXES statement
 	stmt := statements.NewShowIndexesStatement("")
 
 	// Create plan
-	plan := indexops.NewShowIndexesPlan(stmt, ctx, transCtx)
+	plan := NewShowIndexesPlan(stmt, ctx, transCtx)
 
 	// Execute
 	res, err := plan.Execute()
@@ -43,9 +42,9 @@ func TestShowIndexesPlan_Execute_NoIndexes(t *testing.T) {
 }
 
 func TestShowIndexesPlan_Execute_WithIndexes(t *testing.T) {
-	dataDir := setupTestDataDir(t)
-	ctx := createTestContextWithCleanup(t, dataDir)
-	transCtx := createTransactionContext(t)
+	dataDir := testutil.SetupTestDataDir(t)
+	ctx, txRegistry := testutil.CreateTestContextWithCleanup(t, dataDir)
+	transCtx, _ := txRegistry.Begin()
 
 	// Create a test table
 	tableName := "test_users"
@@ -60,7 +59,7 @@ func TestShowIndexesPlan_Execute_WithIndexes(t *testing.T) {
 		false,
 	)
 
-	createIndexPlan := indexops.NewCreateIndexPlan(createIndexStmt, ctx, transCtx)
+	createIndexPlan := NewCreateIndexPlan(createIndexStmt, ctx, transCtx)
 	_, err := createIndexPlan.Execute()
 	if err != nil {
 		t.Fatalf("Failed to create index: %v", err)
@@ -70,7 +69,7 @@ func TestShowIndexesPlan_Execute_WithIndexes(t *testing.T) {
 	stmt := statements.NewShowIndexesStatement("")
 
 	// Create plan
-	plan := indexops.NewShowIndexesPlan(stmt, ctx, transCtx)
+	plan := NewShowIndexesPlan(stmt, ctx, transCtx)
 
 	// Execute
 	res, err := plan.Execute()
@@ -161,9 +160,9 @@ func TestShowIndexesPlan_Execute_WithIndexes(t *testing.T) {
 }
 
 func TestShowIndexesPlan_Execute_FilterByTable(t *testing.T) {
-	dataDir := setupTestDataDir(t)
-	ctx := createTestContextWithCleanup(t, dataDir)
-	transCtx := createTransactionContext(t)
+	dataDir := testutil.SetupTestDataDir(t)
+	ctx, txRegistry := testutil.CreateTestContextWithCleanup(t, dataDir)
+	transCtx, _ := txRegistry.Begin()
 
 	// Create first test table
 	table1Name := "test_table_1"
@@ -177,7 +176,7 @@ func TestShowIndexesPlan_Execute_FilterByTable(t *testing.T) {
 		index.HashIndex,
 		false,
 	)
-	createIndexPlan1 := indexops.NewCreateIndexPlan(createIndexStmt1, ctx, transCtx)
+	createIndexPlan1 := NewCreateIndexPlan(createIndexStmt1, ctx, transCtx)
 	_, err := createIndexPlan1.Execute()
 	if err != nil {
 		t.Fatalf("Failed to create index on table1: %v", err)
@@ -185,15 +184,7 @@ func TestShowIndexesPlan_Execute_FilterByTable(t *testing.T) {
 
 	// Create second test table
 	table2Name := "test_table_2"
-	stmt := statements.NewCreateStatement(table2Name, false)
-	stmt.AddField("id", types.IntType, true, nil)
-	stmt.AddField("email", types.StringType, false, nil)
-	stmt.PrimaryKey = "id"
-	createTablePlan := ddl.NewCreateTablePlan(stmt, ctx, transCtx)
-	_, err = createTablePlan.Execute()
-	if err != nil {
-		t.Fatalf("Failed to create test table 2: %v", err)
-	}
+	createTestTableForIndex(t, ctx, transCtx, table2Name)
 
 	// Create an index on the second table
 	createIndexStmt2 := statements.NewCreateIndexStatement(
@@ -203,7 +194,7 @@ func TestShowIndexesPlan_Execute_FilterByTable(t *testing.T) {
 		index.BTreeIndex,
 		false,
 	)
-	createIndexPlan2 := indexops.NewCreateIndexPlan(createIndexStmt2, ctx, transCtx)
+	createIndexPlan2 := NewCreateIndexPlan(createIndexStmt2, ctx, transCtx)
 	_, err = createIndexPlan2.Execute()
 	if err != nil {
 		t.Fatalf("Failed to create index on table2: %v", err)
@@ -211,7 +202,7 @@ func TestShowIndexesPlan_Execute_FilterByTable(t *testing.T) {
 
 	// SHOW INDEXES FROM table1
 	showStmt := statements.NewShowIndexesStatement(table1Name)
-	plan := indexops.NewShowIndexesPlan(showStmt, ctx, transCtx)
+	plan := NewShowIndexesPlan(showStmt, ctx, transCtx)
 
 	res, err := plan.Execute()
 	if err != nil {
@@ -246,15 +237,15 @@ func TestShowIndexesPlan_Execute_FilterByTable(t *testing.T) {
 }
 
 func TestShowIndexesPlan_Execute_NonExistentTable(t *testing.T) {
-	dataDir := setupTestDataDir(t)
-	ctx := createTestContextWithCleanup(t, dataDir)
-	transCtx := createTransactionContext(t)
+	dataDir := testutil.SetupTestDataDir(t)
+	ctx, txRegistry := testutil.CreateTestContextWithCleanup(t, dataDir)
+	transCtx, _ := txRegistry.Begin()
 
 	// Create SHOW INDEXES statement for non-existent table
 	stmt := statements.NewShowIndexesStatement("nonexistent_table")
 
 	// Create plan
-	plan := indexops.NewShowIndexesPlan(stmt, ctx, transCtx)
+	plan := NewShowIndexesPlan(stmt, ctx, transCtx)
 
 	// Execute - should return an error
 	_, err := plan.Execute()

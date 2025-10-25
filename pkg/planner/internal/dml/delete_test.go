@@ -1,29 +1,29 @@
-package planner_tests
+package dml
 
 import (
+	"storemy/pkg/concurrency/transaction"
 	"storemy/pkg/parser/statements"
 	"storemy/pkg/plan"
-	"storemy/pkg/planner/internal/ddl"
-	"storemy/pkg/planner/internal/dml"
 	"storemy/pkg/planner/internal/metadata"
 	"storemy/pkg/planner/internal/result"
 	"storemy/pkg/planner/internal/scan"
+	"storemy/pkg/planner/internal/testutil"
 	"storemy/pkg/primitives"
 	"storemy/pkg/registry"
 	"storemy/pkg/types"
 	"testing"
 )
 
-func setupDeleteTest(t *testing.T) (string, *registry.DatabaseContext, TxContext) {
-	dataDir := setupTestDataDir(t)
-	ctx := createTestContextWithCleanup(t, dataDir)
-	tx := createTransactionContext(t)
+func setupDeleteTest(t *testing.T) (string, *registry.DatabaseContext, *transaction.TransactionContext) {
+	dataDir := testutil.SetupTestDataDir(t)
+	ctx, txRegistry := testutil.CreateTestContextWithCleanup(t, dataDir)
+	tx, _ := txRegistry.Begin()
 
 	return dataDir, ctx, tx
 }
 
-// Helper function to execute delete plan and cast result to DMLResult
-func executeDeletePlan(t *testing.T, plan *dml.DeletePlan) (*result.DMLResult, error) {
+// Helper function to execute delete plan and cast result to result.DMLResult
+func executeDeletePlan(t *testing.T, plan *DeletePlan) (*result.DMLResult, error) {
 	resultAny, err := plan.Execute()
 	if err != nil {
 		return nil, err
@@ -35,29 +35,20 @@ func executeDeletePlan(t *testing.T, plan *dml.DeletePlan) (*result.DMLResult, e
 
 	result, ok := resultAny.(*result.DMLResult)
 	if !ok {
-		t.Fatalf("Result is not a DMLResult, got %T", resultAny)
+		t.Fatalf("Result is not a result.DMLResult, got %T", resultAny)
 	}
 
 	return result, nil
 }
 
 // Helper function to create and populate a test table with sample data
-func createAndPopulateTestTable(t *testing.T, ctx *registry.DatabaseContext, tx TxContext) {
-	// Create table
-	createStmt := statements.NewCreateStatement("test_table", false)
-	createStmt.AddField("id", types.IntType, false, nil)
-	createStmt.AddField("name", types.StringType, false, nil)
-	createStmt.AddField("active", types.BoolType, false, nil)
-	createStmt.AddField("price", types.FloatType, false, nil)
+func createAndPopulateTestTable(t *testing.T, ctx *registry.DatabaseContext, tx *transaction.TransactionContext) {
+	t.Helper()
 
-	createPlan := ddl.NewCreateTablePlan(createStmt, ctx, tx)
-	_, err := createPlan.Execute()
-	if err != nil {
-		t.Fatalf("Failed to create test table: %v", err)
-	}
+	// Create table using direct schema creation
+	createTestTable(t, ctx, tx)
 
-	// Register cleanup to close table file
-	cleanupTable(t, ctx.CatalogManager(), "test_table", tx)
+	// Note: testutil.CleanupTable is called inside createTestTable
 
 	// Insert test data
 	insertStmt := statements.NewInsertStatement("test_table")
@@ -89,8 +80,8 @@ func createAndPopulateTestTable(t *testing.T, ctx *registry.DatabaseContext, tx 
 	}
 	insertStmt.AddValues(values3)
 
-	insertPlan := dml.NewInsertPlan(insertStmt, tx, ctx)
-	_, err = insertPlan.Execute()
+	insertPlan := NewInsertPlan(insertStmt, tx, ctx)
+	_, err := insertPlan.Execute()
 	if err != nil {
 		t.Fatalf("Failed to populate test table: %v", err)
 	}
@@ -100,7 +91,7 @@ func TestNewDeletePlan(t *testing.T) {
 	_, ctx, tx := setupDeleteTest(t)
 	stmt := statements.NewDeleteStatement("test_table", "")
 
-	plan := dml.NewDeletePlan(stmt, tx, ctx)
+	plan := NewDeletePlan(stmt, tx, ctx)
 
 	if plan == nil {
 		t.Fatal("NewDeletePlan returned nil")
@@ -108,14 +99,14 @@ func TestNewDeletePlan(t *testing.T) {
 }
 
 func TestDeletePlan_Execute_DeleteAll(t *testing.T) {
-	dataDir := setupTestDataDir(t)
-	ctx := createTestContextWithCleanup(t, dataDir)
-	tx := createTransactionContext(t)
+	dataDir := testutil.SetupTestDataDir(t)
+	ctx, txRegistry := testutil.CreateTestContextWithCleanup(t, dataDir)
+	tx, _ := txRegistry.Begin()
 
 	createAndPopulateTestTable(t, ctx, tx)
 
 	stmt := statements.NewDeleteStatement("test_table", "")
-	plan := dml.NewDeletePlan(stmt, tx, ctx)
+	plan := NewDeletePlan(stmt, tx, ctx)
 
 	result, err := executeDeletePlan(t, plan)
 
@@ -151,7 +142,7 @@ func TestDeletePlan_Execute_WithWhereClause(t *testing.T) {
 	stmt := statements.NewDeleteStatement("test_table", "")
 	stmt.SetWhereClause(whereClause)
 
-	plan := dml.NewDeletePlan(stmt, tx, ctx)
+	plan := NewDeletePlan(stmt, tx, ctx)
 	result, err := executeDeletePlan(t, plan)
 
 	if err != nil {
@@ -182,7 +173,7 @@ func TestDeletePlan_Execute_WithWhereClause_MultipleRows(t *testing.T) {
 	stmt := statements.NewDeleteStatement("test_table", "")
 	stmt.SetWhereClause(whereClause)
 
-	plan := dml.NewDeletePlan(stmt, tx, ctx)
+	plan := NewDeletePlan(stmt, tx, ctx)
 
 	result, err := executeDeletePlan(t, plan)
 
@@ -214,7 +205,7 @@ func TestDeletePlan_Execute_WithWhereClause_NoMatch(t *testing.T) {
 	stmt := statements.NewDeleteStatement("test_table", "")
 	stmt.SetWhereClause(whereClause)
 
-	plan := dml.NewDeletePlan(stmt, tx, ctx)
+	plan := NewDeletePlan(stmt, tx, ctx)
 
 	result, err := executeDeletePlan(t, plan)
 
@@ -246,7 +237,7 @@ func TestDeletePlan_Execute_WithWhereClause_GreaterThan(t *testing.T) {
 	stmt := statements.NewDeleteStatement("test_table", "")
 	stmt.SetWhereClause(whereClause)
 
-	plan := dml.NewDeletePlan(stmt, tx, ctx)
+	plan := NewDeletePlan(stmt, tx, ctx)
 
 	result, err := executeDeletePlan(t, plan)
 
@@ -268,7 +259,7 @@ func TestDeletePlan_Execute_Error_TableNotFound(t *testing.T) {
 	_, ctx, tx := setupDeleteTest(t)
 
 	stmt := statements.NewDeleteStatement("nonexistent_table", "")
-	plan := dml.NewDeletePlan(stmt, tx, ctx)
+	plan := NewDeletePlan(stmt, tx, ctx)
 
 	result, err := executeDeletePlan(t, plan)
 
@@ -300,7 +291,7 @@ func TestDeletePlan_Execute_Error_InvalidField(t *testing.T) {
 	stmt := statements.NewDeleteStatement("test_table", "")
 	stmt.SetWhereClause(whereClause)
 
-	plan := dml.NewDeletePlan(stmt, tx, ctx)
+	plan := NewDeletePlan(stmt, tx, ctx)
 
 	result, err := executeDeletePlan(t, plan)
 
@@ -320,22 +311,11 @@ func TestDeletePlan_Execute_Error_InvalidField(t *testing.T) {
 
 func TestDeletePlan_Execute_EmptyTable(t *testing.T) {
 	_, ctx, tx := setupDeleteTest(t)
-	// Create table but don't populate it
-	createStmt := statements.NewCreateStatement("test_table", false)
-	createStmt.AddField("id", types.IntType, false, nil)
-	createStmt.AddField("name", types.StringType, false, nil)
-
-	createPlan := ddl.NewCreateTablePlan(createStmt, ctx, tx)
-	_, err := createPlan.Execute()
-	if err != nil {
-		t.Fatalf("Failed to create test table: %v", err)
-	}
-
-	// Register cleanup to close table file
-	cleanupTable(t, ctx.CatalogManager(), "test_table", tx)
+	createTestTable(t, ctx, tx)
+	testutil.CleanupTable(t, ctx.CatalogManager(), "test_table", tx)
 
 	stmt := statements.NewDeleteStatement("test_table", "")
-	plan := dml.NewDeletePlan(stmt, tx, ctx)
+	plan := NewDeletePlan(stmt, tx, ctx)
 
 	result, err := executeDeletePlan(t, plan)
 

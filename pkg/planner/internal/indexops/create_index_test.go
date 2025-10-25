@@ -1,35 +1,47 @@
-package planner_tests
+package indexops
 
 import (
 	"os"
 	"path/filepath"
+	"storemy/pkg/catalog/schema"
+	"storemy/pkg/concurrency/transaction"
 	"storemy/pkg/parser/statements"
-	"storemy/pkg/planner/internal/ddl"
-	"storemy/pkg/planner/internal/indexops"
 	"storemy/pkg/planner/internal/result"
+	"storemy/pkg/planner/internal/testutil"
+	"storemy/pkg/registry"
 	"storemy/pkg/storage/index"
 	"storemy/pkg/types"
 	"testing"
 )
 
 // Helper function to create a table for index testing
-func createTestTableForIndex(t *testing.T, ctx DbContext, transCtx TxContext, tableName string) {
-	stmt := statements.NewCreateStatement(tableName, false)
-	stmt.AddField("id", types.IntType, true, nil)
-	stmt.AddField("name", types.StringType, false, nil)
-	stmt.AddField("age", types.IntType, false, nil)
-	stmt.AddField("email", types.StringType, false, nil)
-	stmt.PrimaryKey = "id"
+func createTestTableForIndex(t *testing.T, ctx *registry.DatabaseContext, transCtx *transaction.TransactionContext, tableName string) {
+	t.Helper()
 
-	plan := ddl.NewCreateTablePlan(stmt, ctx, transCtx)
-	_, err := plan.Execute()
+	// Create schema columns
+	columns := []schema.ColumnMetadata{
+		{Name: "id", FieldType: types.IntType, Position: 0, IsPrimary: true},
+		{Name: "name", FieldType: types.StringType, Position: 1},
+		{Name: "age", FieldType: types.IntType, Position: 2},
+		{Name: "email", FieldType: types.StringType, Position: 3},
+	}
+
+	// Create table schema
+	tblSchema, err := schema.NewSchema(0, tableName, columns)
+	if err != nil {
+		t.Fatalf("Failed to create schema: %v", err)
+	}
+	tblSchema.PrimaryKey = "id"
+
+	// Create table in catalog
+	_, err = ctx.CatalogManager().CreateTable(transCtx, tblSchema)
 	if err != nil {
 		t.Fatalf("Failed to create test table: %v", err)
 	}
 }
 
 // Helper function to execute CREATE INDEX plan
-func executeCreateIndexPlan(t *testing.T, plan *indexops.CreateIndexPlan) (*result.DDLResult, error) {
+func executeCreateIndexPlan(t *testing.T, plan *CreateIndexPlan) (*result.DDLResult, error) {
 	resultAny, err := plan.Execute()
 	if err != nil {
 		return nil, err
@@ -48,7 +60,7 @@ func executeCreateIndexPlan(t *testing.T, plan *indexops.CreateIndexPlan) (*resu
 }
 
 // Helper function to execute DROP INDEX plan
-func executeDropIndexPlan(t *testing.T, plan *indexops.DropIndexPlan) (*result.DDLResult, error) {
+func executeDropIndexPlan(t *testing.T, plan *DropIndexPlan) (*result.DDLResult, error) {
 	resultAny, err := plan.Execute()
 	if err != nil {
 		return nil, err
@@ -67,14 +79,14 @@ func executeDropIndexPlan(t *testing.T, plan *indexops.DropIndexPlan) (*result.D
 }
 
 func TestNewCreateIndexPlan(t *testing.T) {
-	dataDir := setupTestDataDir(t)
+	dataDir := testutil.SetupTestDataDir(t)
 
 	stmt := statements.NewCreateIndexStatement("idx_users_email", "users", "email", index.HashIndex, false)
 
-	ctx := createTestContextWithCleanup(t, dataDir)
-	transCtx := createTransactionContext(t)
+	ctx, txRegistry := testutil.CreateTestContextWithCleanup(t, dataDir)
+	transCtx, _ := txRegistry.Begin()
 
-	plan := indexops.NewCreateIndexPlan(stmt, ctx, transCtx)
+	plan := NewCreateIndexPlan(stmt, ctx, transCtx)
 
 	if plan == nil {
 		t.Fatal("NewCreateIndexPlan returned nil")
@@ -87,17 +99,17 @@ func TestNewCreateIndexPlan(t *testing.T) {
 }
 
 func TestCreateIndexPlan_Execute_HashIndex(t *testing.T) {
-	dataDir := setupTestDataDir(t)
+	dataDir := testutil.SetupTestDataDir(t)
 
-	ctx := createTestContextWithCleanup(t, dataDir)
-	transCtx := createTransactionContext(t)
+	ctx, txRegistry := testutil.CreateTestContextWithCleanup(t, dataDir)
+	transCtx, _ := txRegistry.Begin()
 
 	// Create the test table first
 	createTestTableForIndex(t, ctx, transCtx, "users")
 
 	// Create HASH index
 	stmt := statements.NewCreateIndexStatement("idx_users_email", "users", "email", index.HashIndex, false)
-	plan := indexops.NewCreateIndexPlan(stmt, ctx, transCtx)
+	plan := NewCreateIndexPlan(stmt, ctx, transCtx)
 
 	result, err := executeCreateIndexPlan(t, plan)
 
@@ -125,24 +137,24 @@ func TestCreateIndexPlan_Execute_HashIndex(t *testing.T) {
 	}
 
 	// Cleanup
-	dropPlan := indexops.NewDropIndexPlan(
+	dropPlan := NewDropIndexPlan(
 		statements.NewDropIndexStatement("idx_users_email", "", false),
 		ctx, transCtx)
 	dropPlan.Execute()
-	cleanupTable(t, ctx.CatalogManager(), "users", transCtx)
+	testutil.CleanupTable(t, ctx.CatalogManager(), "users", transCtx)
 }
 
 func TestCreateIndexPlan_Execute_BTreeIndex(t *testing.T) {
-	dataDir := setupTestDataDir(t)
+	dataDir := testutil.SetupTestDataDir(t)
 
-	ctx := createTestContextWithCleanup(t, dataDir)
-	transCtx := createTransactionContext(t)
+	ctx, txRegistry := testutil.CreateTestContextWithCleanup(t, dataDir)
+	transCtx, _ := txRegistry.Begin()
 
 	createTestTableForIndex(t, ctx, transCtx, "users")
 
 	// Create BTREE index
 	stmt := statements.NewCreateIndexStatement("idx_users_age", "users", "age", index.BTreeIndex, false)
-	plan := indexops.NewCreateIndexPlan(stmt, ctx, transCtx)
+	plan := NewCreateIndexPlan(stmt, ctx, transCtx)
 
 	result, err := executeCreateIndexPlan(t, plan)
 
@@ -159,23 +171,23 @@ func TestCreateIndexPlan_Execute_BTreeIndex(t *testing.T) {
 	}
 
 	// Cleanup
-	dropPlan := indexops.NewDropIndexPlan(
+	dropPlan := NewDropIndexPlan(
 		statements.NewDropIndexStatement("idx_users_age", "", false),
 		ctx, transCtx)
 	dropPlan.Execute()
-	cleanupTable(t, ctx.CatalogManager(), "users", transCtx)
+	testutil.CleanupTable(t, ctx.CatalogManager(), "users", transCtx)
 }
 
 func TestCreateIndexPlan_Execute_IfNotExists_IndexDoesNotExist(t *testing.T) {
-	dataDir := setupTestDataDir(t)
+	dataDir := testutil.SetupTestDataDir(t)
 
-	ctx := createTestContextWithCleanup(t, dataDir)
-	transCtx := createTransactionContext(t)
+	ctx, txRegistry := testutil.CreateTestContextWithCleanup(t, dataDir)
+	transCtx, _ := txRegistry.Begin()
 
 	createTestTableForIndex(t, ctx, transCtx, "users")
 
 	stmt := statements.NewCreateIndexStatement("idx_users_email", "users", "email", index.HashIndex, true)
-	plan := indexops.NewCreateIndexPlan(stmt, ctx, transCtx)
+	plan := NewCreateIndexPlan(stmt, ctx, transCtx)
 
 	result, err := executeCreateIndexPlan(t, plan)
 
@@ -193,24 +205,24 @@ func TestCreateIndexPlan_Execute_IfNotExists_IndexDoesNotExist(t *testing.T) {
 	}
 
 	// Cleanup
-	dropPlan := indexops.NewDropIndexPlan(
+	dropPlan := NewDropIndexPlan(
 		statements.NewDropIndexStatement("idx_users_email", "", false),
 		ctx, transCtx)
 	dropPlan.Execute()
-	cleanupTable(t, ctx.CatalogManager(), "users", transCtx)
+	testutil.CleanupTable(t, ctx.CatalogManager(), "users", transCtx)
 }
 
 func TestCreateIndexPlan_Execute_IfNotExists_IndexExists(t *testing.T) {
-	dataDir := setupTestDataDir(t)
+	dataDir := testutil.SetupTestDataDir(t)
 
-	ctx := createTestContextWithCleanup(t, dataDir)
-	transCtx := createTransactionContext(t)
+	ctx, txRegistry := testutil.CreateTestContextWithCleanup(t, dataDir)
+	transCtx, _ := txRegistry.Begin()
 
 	createTestTableForIndex(t, ctx, transCtx, "users")
 
 	// Create first index
 	stmt1 := statements.NewCreateIndexStatement("idx_users_email", "users", "email", index.HashIndex, false)
-	plan1 := indexops.NewCreateIndexPlan(stmt1, ctx, transCtx)
+	plan1 := NewCreateIndexPlan(stmt1, ctx, transCtx)
 	_, err := plan1.Execute()
 	if err != nil {
 		t.Fatalf("Failed to create first index: %v", err)
@@ -218,7 +230,7 @@ func TestCreateIndexPlan_Execute_IfNotExists_IndexExists(t *testing.T) {
 
 	// Try to create same index with IF NOT EXISTS
 	stmt2 := statements.NewCreateIndexStatement("idx_users_email", "users", "email", index.HashIndex, true)
-	plan2 := indexops.NewCreateIndexPlan(stmt2, ctx, transCtx)
+	plan2 := NewCreateIndexPlan(stmt2, ctx, transCtx)
 
 	result, err := executeCreateIndexPlan(t, plan2)
 
@@ -236,21 +248,21 @@ func TestCreateIndexPlan_Execute_IfNotExists_IndexExists(t *testing.T) {
 	}
 
 	// Cleanup
-	dropPlan := indexops.NewDropIndexPlan(
+	dropPlan := NewDropIndexPlan(
 		statements.NewDropIndexStatement("idx_users_email", "", false),
 		ctx, transCtx)
 	dropPlan.Execute()
-	cleanupTable(t, ctx.CatalogManager(), "users", transCtx)
+	testutil.CleanupTable(t, ctx.CatalogManager(), "users", transCtx)
 }
 
 func TestCreateIndexPlan_Execute_Error_TableDoesNotExist(t *testing.T) {
-	dataDir := setupTestDataDir(t)
+	dataDir := testutil.SetupTestDataDir(t)
 
-	ctx := createTestContextWithCleanup(t, dataDir)
-	transCtx := createTransactionContext(t)
+	ctx, txRegistry := testutil.CreateTestContextWithCleanup(t, dataDir)
+	transCtx, _ := txRegistry.Begin()
 
 	stmt := statements.NewCreateIndexStatement("idx_users_email", "nonexistent_table", "email", index.HashIndex, false)
-	plan := indexops.NewCreateIndexPlan(stmt, ctx, transCtx)
+	plan := NewCreateIndexPlan(stmt, ctx, transCtx)
 
 	result, err := executeCreateIndexPlan(t, plan)
 
@@ -269,15 +281,15 @@ func TestCreateIndexPlan_Execute_Error_TableDoesNotExist(t *testing.T) {
 }
 
 func TestCreateIndexPlan_Execute_Error_ColumnDoesNotExist(t *testing.T) {
-	dataDir := setupTestDataDir(t)
+	dataDir := testutil.SetupTestDataDir(t)
 
-	ctx := createTestContextWithCleanup(t, dataDir)
-	transCtx := createTransactionContext(t)
+	ctx, txRegistry := testutil.CreateTestContextWithCleanup(t, dataDir)
+	transCtx, _ := txRegistry.Begin()
 
 	createTestTableForIndex(t, ctx, transCtx, "users")
 
 	stmt := statements.NewCreateIndexStatement("idx_users_invalid", "users", "nonexistent_column", index.HashIndex, false)
-	plan := indexops.NewCreateIndexPlan(stmt, ctx, transCtx)
+	plan := NewCreateIndexPlan(stmt, ctx, transCtx)
 
 	result, err := executeCreateIndexPlan(t, plan)
 
@@ -294,20 +306,20 @@ func TestCreateIndexPlan_Execute_Error_ColumnDoesNotExist(t *testing.T) {
 		t.Errorf("Expected error %q, got %q", expectedError, err.Error())
 	}
 
-	cleanupTable(t, ctx.CatalogManager(), "users", transCtx)
+	testutil.CleanupTable(t, ctx.CatalogManager(), "users", transCtx)
 }
 
 func TestCreateIndexPlan_Execute_Error_IndexAlreadyExists(t *testing.T) {
-	dataDir := setupTestDataDir(t)
+	dataDir := testutil.SetupTestDataDir(t)
 
-	ctx := createTestContextWithCleanup(t, dataDir)
-	transCtx := createTransactionContext(t)
+	ctx, txRegistry := testutil.CreateTestContextWithCleanup(t, dataDir)
+	transCtx, _ := txRegistry.Begin()
 
 	createTestTableForIndex(t, ctx, transCtx, "users")
 
 	// Create first index
 	stmt1 := statements.NewCreateIndexStatement("idx_users_email", "users", "email", index.HashIndex, false)
-	plan1 := indexops.NewCreateIndexPlan(stmt1, ctx, transCtx)
+	plan1 := NewCreateIndexPlan(stmt1, ctx, transCtx)
 	_, err := plan1.Execute()
 	if err != nil {
 		t.Fatalf("Failed to create first index: %v", err)
@@ -315,7 +327,7 @@ func TestCreateIndexPlan_Execute_Error_IndexAlreadyExists(t *testing.T) {
 
 	// Try to create same index again without IF NOT EXISTS
 	stmt2 := statements.NewCreateIndexStatement("idx_users_email", "users", "email", index.HashIndex, false)
-	plan2 := indexops.NewCreateIndexPlan(stmt2, ctx, transCtx)
+	plan2 := NewCreateIndexPlan(stmt2, ctx, transCtx)
 
 	result, err := executeCreateIndexPlan(t, plan2)
 
@@ -333,24 +345,24 @@ func TestCreateIndexPlan_Execute_Error_IndexAlreadyExists(t *testing.T) {
 	}
 
 	// Cleanup
-	dropPlan := indexops.NewDropIndexPlan(
+	dropPlan := NewDropIndexPlan(
 		statements.NewDropIndexStatement("idx_users_email", "", false),
 		ctx, transCtx)
 	dropPlan.Execute()
-	cleanupTable(t, ctx.CatalogManager(), "users", transCtx)
+	testutil.CleanupTable(t, ctx.CatalogManager(), "users", transCtx)
 }
 
 func TestCreateIndexPlan_Execute_MultipleIndexesOnSameTable(t *testing.T) {
-	dataDir := setupTestDataDir(t)
+	dataDir := testutil.SetupTestDataDir(t)
 
-	ctx := createTestContextWithCleanup(t, dataDir)
-	transCtx := createTransactionContext(t)
+	ctx, txRegistry := testutil.CreateTestContextWithCleanup(t, dataDir)
+	transCtx, _ := txRegistry.Begin()
 
 	createTestTableForIndex(t, ctx, transCtx, "users")
 
 	// Create first index on email
 	stmt1 := statements.NewCreateIndexStatement("idx_users_email", "users", "email", index.HashIndex, false)
-	plan1 := indexops.NewCreateIndexPlan(stmt1, ctx, transCtx)
+	plan1 := NewCreateIndexPlan(stmt1, ctx, transCtx)
 	result1, err := executeCreateIndexPlan(t, plan1)
 	if err != nil {
 		t.Fatalf("Failed to create first index: %v", err)
@@ -361,7 +373,7 @@ func TestCreateIndexPlan_Execute_MultipleIndexesOnSameTable(t *testing.T) {
 
 	// Create second index on age
 	stmt2 := statements.NewCreateIndexStatement("idx_users_age", "users", "age", index.BTreeIndex, false)
-	plan2 := indexops.NewCreateIndexPlan(stmt2, ctx, transCtx)
+	plan2 := NewCreateIndexPlan(stmt2, ctx, transCtx)
 	result2, err := executeCreateIndexPlan(t, plan2)
 	if err != nil {
 		t.Fatalf("Failed to create second index: %v", err)
@@ -383,29 +395,29 @@ func TestCreateIndexPlan_Execute_MultipleIndexesOnSameTable(t *testing.T) {
 	}
 
 	// Cleanup
-	dropPlan1 := indexops.NewDropIndexPlan(
+	dropPlan1 := NewDropIndexPlan(
 		statements.NewDropIndexStatement("idx_users_email", "", false),
 		ctx, transCtx)
 	dropPlan1.Execute()
 
-	dropPlan2 := indexops.NewDropIndexPlan(
+	dropPlan2 := NewDropIndexPlan(
 		statements.NewDropIndexStatement("idx_users_age", "", false),
 		ctx, transCtx)
 	dropPlan2.Execute()
 
-	cleanupTable(t, ctx.CatalogManager(), "users", transCtx)
+	testutil.CleanupTable(t, ctx.CatalogManager(), "users", transCtx)
 }
 
 func TestCreateIndexPlan_Execute_IndexFileCreation(t *testing.T) {
-	dataDir := setupTestDataDir(t)
+	dataDir := testutil.SetupTestDataDir(t)
 
-	ctx := createTestContextWithCleanup(t, dataDir)
-	transCtx := createTransactionContext(t)
+	ctx, txRegistry := testutil.CreateTestContextWithCleanup(t, dataDir)
+	transCtx, _ := txRegistry.Begin()
 
 	createTestTableForIndex(t, ctx, transCtx, "users")
 
 	stmt := statements.NewCreateIndexStatement("idx_users_email", "users", "email", index.HashIndex, false)
-	plan := indexops.NewCreateIndexPlan(stmt, ctx, transCtx)
+	plan := NewCreateIndexPlan(stmt, ctx, transCtx)
 
 	result, err := executeCreateIndexPlan(t, plan)
 
@@ -424,9 +436,9 @@ func TestCreateIndexPlan_Execute_IndexFileCreation(t *testing.T) {
 	}
 
 	// Cleanup
-	dropPlan := indexops.NewDropIndexPlan(
+	dropPlan := NewDropIndexPlan(
 		statements.NewDropIndexStatement("idx_users_email", "", false),
 		ctx, transCtx)
 	dropPlan.Execute()
-	cleanupTable(t, ctx.CatalogManager(), "users", transCtx)
+	testutil.CleanupTable(t, ctx.CatalogManager(), "users", transCtx)
 }
