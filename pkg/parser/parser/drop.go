@@ -16,14 +16,10 @@ func parseDropStatement(l *lexer.Lexer) (*statements.DropStatement, error) {
 	ifExists := false
 	token := l.NextToken()
 	if token.Type == lexer.IF {
-		l.NextToken()
-		token = l.NextToken()
-		if token.Type != lexer.EXISTS {
-			return nil, fmt.Errorf("expected EXISTS after IF, got: %s", token.Value)
+		if err := expectTokenSequence(l, lexer.EXISTS); err != nil {
+			return nil, fmt.Errorf("expected EXISTS after IF, got: %v", err)
 		}
 		ifExists = true
-		token = l.NextToken()
-	} else {
 		token = l.NextToken()
 	}
 

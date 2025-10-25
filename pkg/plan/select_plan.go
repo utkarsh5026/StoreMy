@@ -29,6 +29,10 @@ type SelectPlan struct {
 	orderByField string
 	orderByAsc   bool
 
+	hasLimit bool
+	limit    int
+	offset   int
+
 	// Set operation fields
 	isSetOperation bool
 	setOpType      SetOperationType
@@ -220,4 +224,26 @@ func (sp *SelectPlan) SetDistinct(distinct bool) {
 // IsDistinct returns true if this is a SELECT DISTINCT query.
 func (sp *SelectPlan) IsDistinct() bool {
 	return sp.distinct
+}
+
+// SetLimit sets the LIMIT clause for the query.
+func (sp *SelectPlan) SetLimit(limit int, offset int) {
+	sp.hasLimit = true
+	sp.limit = limit
+	sp.offset = offset
+}
+
+// HasLimit returns true if this query has a LIMIT clause.
+func (sp *SelectPlan) HasLimit() bool {
+	return sp.hasLimit
+}
+
+// Limit returns the LIMIT value.
+func (sp *SelectPlan) Limit() int {
+	return sp.limit
+}
+
+// Offset returns the OFFSET value.
+func (sp *SelectPlan) Offset() int {
+	return sp.offset
 }
