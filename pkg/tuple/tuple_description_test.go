@@ -224,22 +224,22 @@ func TestTupleDescription_GetSize(t *testing.T) {
 		{
 			name:         "Int field only",
 			fieldTypes:   []types.Type{types.IntType},
-			expectedSize: 4,
+			expectedSize: 8, // int64 is 8 bytes
 		},
 		{
 			name:         "String field only",
 			fieldTypes:   []types.Type{types.StringType},
-			expectedSize: 4 + 128, // 4 for length + 128 for max size
+			expectedSize: 4 + 256, // 4 for length + 256 for max size (StringMaxSize)
 		},
 		{
 			name:         "Int and String fields",
 			fieldTypes:   []types.Type{types.IntType, types.StringType},
-			expectedSize: 4 + 4 + 128,
+			expectedSize: 8 + 260, // 8 (int) + 260 (string)
 		},
 		{
 			name:         "Multiple fields",
 			fieldTypes:   []types.Type{types.IntType, types.IntType, types.StringType},
-			expectedSize: 4 + 4 + 4 + 128,
+			expectedSize: 8 + 8 + 260, // 8 (int) + 8 (int) + 260 (string)
 		},
 	}
 
