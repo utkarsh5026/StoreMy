@@ -82,7 +82,7 @@ func createStatsTuple(tableID, cardinality, pageCount, avgTupleSize, distinctVal
 func TestNewStatsOperations(t *testing.T) {
 	mock := newMockCatalogAccess()
 	cache := newMockStatsCache()
-	so := NewStatsOperations(mock, 1, mockFileGetter, cache)
+	so := NewStatsOperations(mock, 1, 2, mockFileGetter, cache)
 
 	if so == nil {
 		t.Fatal("expected StatsOperations, got nil")
@@ -99,7 +99,7 @@ func TestNewStatsOperations(t *testing.T) {
 
 func TestNewStatsOperations_NilCache(t *testing.T) {
 	mock := newMockCatalogAccess()
-	so := NewStatsOperations(mock, 1, mockFileGetter, nil)
+	so := NewStatsOperations(mock, 1, 2, mockFileGetter, nil)
 
 	if so == nil {
 		t.Fatal("expected StatsOperations, got nil")
@@ -112,7 +112,7 @@ func TestNewStatsOperations_NilCache(t *testing.T) {
 
 func TestGetTableStatistics_Success(t *testing.T) {
 	mock := newMockCatalogAccess()
-	so := NewStatsOperations(mock, 1, mockFileGetter, nil)
+	so := NewStatsOperations(mock, 1, 2, mockFileGetter, nil)
 
 	// Add statistics for table 100
 	mock.tuples[1] = []*tuple.Tuple{
@@ -153,7 +153,7 @@ func TestGetTableStatistics_Success(t *testing.T) {
 
 func TestGetTableStatistics_NotFound(t *testing.T) {
 	mock := newMockCatalogAccess()
-	so := NewStatsOperations(mock, 1, mockFileGetter, nil)
+	so := NewStatsOperations(mock, 1, 2, mockFileGetter, nil)
 
 	// Add statistics for different table
 	mock.tuples[1] = []*tuple.Tuple{
@@ -173,7 +173,7 @@ func TestGetTableStatistics_NotFound(t *testing.T) {
 
 func TestGetTableStatistics_EmptyTable(t *testing.T) {
 	mock := newMockCatalogAccess()
-	so := NewStatsOperations(mock, 1, mockFileGetter, nil)
+	so := NewStatsOperations(mock, 1, 2, mockFileGetter, nil)
 
 	mock.tuples[1] = []*tuple.Tuple{}
 
@@ -191,7 +191,17 @@ func TestGetTableStatistics_EmptyTable(t *testing.T) {
 func TestUpdateTableStatistics_InsertNew(t *testing.T) {
 	mock := newMockCatalogAccess()
 	cache := newMockStatsCache()
-	so := NewStatsOperations(mock, 1, mockFileGetter, cache)
+	so := NewStatsOperations(mock, 1, 2, mockFileGetter, cache)
+
+	// Setup column metadata for table 100 (id is primary key at position 0)
+	setupTableColumns(mock, 2, 100, []struct {
+		name      string
+		fieldType types.Type
+		isPrimary bool
+	}{
+		{"id", types.IntType, true},
+		{"name", types.StringType, false},
+	})
 
 	// Create test data for table 100
 	td, err := tuple.NewTupleDesc([]types.Type{types.IntType, types.StringType}, []string{"id", "name"})
@@ -257,7 +267,7 @@ func TestUpdateTableStatistics_InsertNew(t *testing.T) {
 func TestUpdateTableStatistics_UpdateExisting(t *testing.T) {
 	mock := newMockCatalogAccess()
 	cache := newMockStatsCache()
-	so := NewStatsOperations(mock, 1, mockFileGetter, cache)
+	so := NewStatsOperations(mock, 1, 2, mockFileGetter, cache)
 
 	// Add existing statistics
 	mock.tuples[1] = []*tuple.Tuple{
@@ -310,7 +320,7 @@ func TestUpdateTableStatistics_UpdateExisting(t *testing.T) {
 
 func TestUpdateTableStatistics_NilCache(t *testing.T) {
 	mock := newMockCatalogAccess()
-	so := NewStatsOperations(mock, 1, mockFileGetter, nil)
+	so := NewStatsOperations(mock, 1, 2, mockFileGetter, nil)
 
 	// Create test data
 	td, err := tuple.NewTupleDesc([]types.Type{types.IntType}, []string{"id"})
@@ -337,7 +347,7 @@ func TestUpdateTableStatistics_NilCache(t *testing.T) {
 
 func TestCollectTableStatistics_EmptyTable(t *testing.T) {
 	mock := newMockCatalogAccess()
-	so := NewStatsOperations(mock, 1, mockFileGetter, nil)
+	so := NewStatsOperations(mock, 1, 2, mockFileGetter, nil)
 
 	// No tuples in table
 	mock.tuples[100] = []*tuple.Tuple{}
@@ -363,7 +373,16 @@ func TestCollectTableStatistics_EmptyTable(t *testing.T) {
 
 func TestCollectTableStatistics_SingleColumn(t *testing.T) {
 	mock := newMockCatalogAccess()
-	so := NewStatsOperations(mock, 1, mockFileGetter, nil)
+	so := NewStatsOperations(mock, 1, 2, mockFileGetter, nil)
+
+	// Setup column metadata for table 100 (id is primary key at position 0)
+	setupTableColumns(mock, 2, 100, []struct {
+		name      string
+		fieldType types.Type
+		isPrimary bool
+	}{
+		{"id", types.IntType, true},
+	})
 
 	// Create table with distinct values
 	td, err := tuple.NewTupleDesc([]types.Type{types.IntType}, []string{"id"})
@@ -403,7 +422,7 @@ func TestCollectTableStatistics_SingleColumn(t *testing.T) {
 
 func TestCollectTableStatistics_NoFields(t *testing.T) {
 	mock := newMockCatalogAccess()
-	so := NewStatsOperations(mock, 1, mockFileGetter, nil)
+	so := NewStatsOperations(mock, 1, 2, mockFileGetter, nil)
 
 	// Empty table
 	mock.tuples[100] = []*tuple.Tuple{}
@@ -425,7 +444,7 @@ func TestCollectTableStatistics_NoFields(t *testing.T) {
 
 func TestCollectTableStatistics_FileError(t *testing.T) {
 	mock := newMockCatalogAccess()
-	so := NewStatsOperations(mock, 1, mockFileGetter, nil)
+	so := NewStatsOperations(mock, 1, 2, mockFileGetter, nil)
 
 	tx := &transaction.TransactionContext{}
 	stats, err := so.collectStats(tx, 999) // Invalid table ID
@@ -440,7 +459,7 @@ func TestCollectTableStatistics_FileError(t *testing.T) {
 
 func TestInsertNewStatistics(t *testing.T) {
 	mock := newMockCatalogAccess()
-	so := NewStatsOperations(mock, 1, mockFileGetter, nil)
+	so := NewStatsOperations(mock, 1, 2, mockFileGetter, nil)
 
 	stats := &tableStats{
 		TableID:        100,
@@ -477,7 +496,7 @@ func TestInsertNewStatistics(t *testing.T) {
 
 func TestUpdateExistingStatistics(t *testing.T) {
 	mock := newMockCatalogAccess()
-	so := NewStatsOperations(mock, 1, mockFileGetter, nil)
+	so := NewStatsOperations(mock, 1, 2, mockFileGetter, nil)
 
 	// Add old statistics
 	mock.tuples[1] = []*tuple.Tuple{
@@ -516,7 +535,7 @@ func TestUpdateExistingStatistics(t *testing.T) {
 
 func TestIterateTable(t *testing.T) {
 	mock := newMockCatalogAccess()
-	so := NewStatsOperations(mock, 1, mockFileGetter, nil)
+	so := NewStatsOperations(mock, 1, 2, mockFileGetter, nil)
 
 	// Add statistics for multiple tables
 	mock.tuples[1] = []*tuple.Tuple{
@@ -546,7 +565,7 @@ func TestIterateTable(t *testing.T) {
 
 func TestIterateTable_ErrorHandling(t *testing.T) {
 	mock := newMockCatalogAccess()
-	so := NewStatsOperations(mock, 1, mockFileGetter, nil)
+	so := NewStatsOperations(mock, 1, 2, mockFileGetter, nil)
 
 	mock.tuples[1] = []*tuple.Tuple{
 		createStatsTuple(100, 1000, 5, 50, 100),

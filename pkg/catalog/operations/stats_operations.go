@@ -24,15 +24,16 @@ type StatsCacheSetter interface {
 //   - Cardinality (number of tuples)
 //   - Page count
 //   - Average tuple size
-//   - Distinct values (sampled from first field)
+//   - Distinct values (sampled from primary key column)
 //
 // Statistics are persisted to disk and optionally cached for performance.
 // All operations respect transaction boundaries through the provided TxContext.
 type StatsOperations struct {
 	*BaseOperations[*tableStats]
-	reader     catalogio.CatalogReader // Reads tuples from catalog tables
-	fileGetter FileGetter              // Retrieves DbFile for a table ID
-	cache      StatsCacheSetter        // Optional statistics cache
+	reader         catalogio.CatalogReader // Reads tuples from catalog tables
+	fileGetter     FileGetter              // Retrieves DbFile for a table ID
+	cache          StatsCacheSetter        // Optional statistics cache
+	columnsTableID int                     // ID of CATALOG_COLUMNS table for schema lookup
 }
 
 // NewStatsOperations creates a new StatsOperations instance.
@@ -40,12 +41,13 @@ type StatsOperations struct {
 // Parameters:
 //   - access: CatalogAccess implementation (typically SystemCatalog)
 //   - statsTableID: ID of the CATALOG_STATISTICS system table
+//   - columnsTableID: ID of the CATALOG_COLUMNS system table (for primary key lookup)
 //   - fileGetter: Function to retrieve DbFile by table ID
 //   - cache: Optional cache for storing statistics (can be nil)
 //
 // Returns:
 //   - *StatsOperations: Configured operations instance
-func NewStatsOperations(access catalogio.CatalogAccess, statsTableID int, fileGetter FileGetter, cache StatsCacheSetter) *StatsOperations {
+func NewStatsOperations(access catalogio.CatalogAccess, statsTableID int, columnsTableID int, fileGetter FileGetter, cache StatsCacheSetter) *StatsOperations {
 	base := NewBaseOperations(
 		access,
 		statsTableID,
@@ -58,6 +60,7 @@ func NewStatsOperations(access catalogio.CatalogAccess, statsTableID int, fileGe
 		reader:         access,
 		fileGetter:     fileGetter,
 		cache:          cache,
+		columnsTableID: columnsTableID,
 	}
 }
 
@@ -96,13 +99,50 @@ func (so *StatsOperations) UpdateTableStatistics(tx TxContext, tableID int) erro
 	return nil
 }
 
+// getPrimaryKeyIndex finds the primary key column index for a table by querying CATALOG_COLUMNS.
+// Returns -1 if no primary key is found.
+//
+// Parameters:
+//   - tx: Transaction context for reading catalog
+//   - tableID: ID of the table to find primary key for
+//
+// Returns:
+//   - int: Column index of the primary key, or -1 if not found
+//   - error: nil on success, or error if catalog read fails
+func (so *StatsOperations) getPrimaryKeyIndex(tx TxContext, tableID int) (int, error) {
+	primaryKeyIndex := -1
+
+	err := so.reader.IterateTable(so.columnsTableID, tx, func(t *tuple.Tuple) error {
+		col, err := systemtable.Columns.Parse(t)
+		if err != nil {
+			return nil
+		}
+
+		if col.TableID != tableID {
+			return nil
+		}
+
+		if col.IsPrimary {
+			primaryKeyIndex = col.Position
+		}
+
+		return nil
+	})
+
+	if err != nil {
+		return -1, fmt.Errorf("failed to query primary key: %w", err)
+	}
+
+	return primaryKeyIndex, nil
+}
+
 // collectStats performs a full table scan to compute statistics.
 //
 // Collected metrics:
 //   - Cardinality: Total number of tuples
 //   - PageCount: Number of pages in the heap file
 //   - AvgTupleSize: Average tuple size in bytes
-//   - DistinctValues: Number of distinct values in the first field (used for selectivity estimation)
+//   - DistinctValues: Number of distinct values in the primary key column (for selectivity estimation)
 //   - LastUpdated: Timestamp of collection
 //
 // Parameters:
@@ -123,6 +163,11 @@ func (so *StatsOperations) collectStats(tx TxContext, tableID int) (*tableStats,
 		return nil, err
 	}
 
+	primaryKeyIndex, err := so.getPrimaryKeyIndex(tx, tableID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get primary key index: %w", err)
+	}
+
 	stats := &tableStats{
 		TableID:     tableID,
 		Cardinality: 0,
@@ -131,7 +176,7 @@ func (so *StatsOperations) collectStats(tx TxContext, tableID int) (*tableStats,
 	}
 
 	totalSize := 0
-	distinctMap := make(map[int]bool)
+	distinctMap := make(map[string]bool)
 
 	err = so.reader.IterateTable(tableID, tx, func(t *tuple.Tuple) error {
 		stats.Cardinality++
@@ -142,10 +187,17 @@ func (so *StatsOperations) collectStats(tx TxContext, tableID int) (*tableStats,
 			return nil
 		}
 
-		id, err := systemtable.Stats.GetTableID(t)
-		if err == nil {
-			distinctMap[id] = true
+		// Track distinct values in the primary key column for selectivity estimation
+		// If no primary key exists, use the first column as fallback
+		columnIndex := max(primaryKeyIndex, 0)
+
+		if columnIndex < td.NumFields() {
+			field, err := t.GetField(columnIndex)
+			if err == nil && field != nil {
+				distinctMap[field.String()] = true
+			}
 		}
+
 		return nil
 	})
 
