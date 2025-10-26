@@ -32,18 +32,21 @@ func NewColumnMetadata(name string, fieldType types.Type, position, tableID int,
 		return nil, fmt.Errorf("column position must be non-negative, got %d for column '%s'", position, name)
 	}
 
+	nextAutoValue := 0
 	if isAutoInc {
 		if fieldType != types.IntType {
 			return nil, fmt.Errorf("auto-increment column '%s' must be of type INT, got %s", name, fieldType.String())
 		}
+		nextAutoValue = 1 // Initialize auto-increment columns with next value = 1
 	}
 	return &ColumnMetadata{
-		Name:      name,
-		FieldType: fieldType,
-		Position:  position,
-		IsPrimary: isPrimary,
-		IsAutoInc: isAutoInc,
-		TableID:   tableID,
+		Name:          name,
+		FieldType:     fieldType,
+		Position:      position,
+		IsPrimary:     isPrimary,
+		IsAutoInc:     isAutoInc,
+		NextAutoValue: nextAutoValue,
+		TableID:       tableID,
 	}, nil
 }
 
