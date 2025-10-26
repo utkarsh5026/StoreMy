@@ -99,7 +99,7 @@ func NewDatabase(name, dataDir, logDir string) (*Database, error) {
 		stats:      &DatabaseStats{},
 	}
 
-	statsManager := catalog.NewStatisticsManager(catalogMgr.Catalog(), db)
+	statsManager := catalog.NewStatisticsManager(catalogMgr, db)
 	db.statsManager = statsManager
 
 	queryPlanner := planner.NewQueryPlanner(ctx)
