@@ -3,7 +3,9 @@ package catalogmanager
 import (
 	"fmt"
 	"storemy/pkg/catalog/schema"
+	"storemy/pkg/catalog/systemtable"
 	"storemy/pkg/storage/page"
+	"storemy/pkg/utils/functools"
 )
 
 // GetTableID retrieves the table ID for a given table name.
@@ -68,15 +70,11 @@ func (cm *CatalogManager) GetTableSchema(tx TxContext, tableID int) (*schema.Sch
 		return info.Schema, nil
 	}
 
-	tm, err := cm.GetTableMetadataByID(tx, tableID)
+	schema, err := cm.LoadTableSchema(tx, tableID)
 	if err != nil {
 		return nil, err
 	}
 
-	schema, err := cm.LoadTableSchema(tx, tableID, tm.TableName)
-	if err != nil {
-		return nil, err
-	}
 	return schema, nil
 }
 
@@ -138,10 +136,8 @@ func (cm *CatalogManager) ListAllTables(tx TxContext, refreshFromDisk bool) ([]s
 		return nil, err
 	}
 
-	var tableNames []string
-	for _, table := range tables {
-		tableNames = append(tableNames, table.TableName)
-	}
+	tableNames := functools.Map(tables,
+		func(t *systemtable.TableMetadata) string { return t.TableName })
 
 	return tableNames, nil
 }
@@ -196,7 +192,6 @@ func (cm *CatalogManager) ClearCache() {
 	for _, name := range tableNames {
 		if !systemTables[name] {
 			if tableID, err := cm.tableCache.GetTableID(name); err == nil {
-				// Close the file handle before unregistering to prevent resource leaks
 				if heapFile, exists := cm.openFiles[tableID]; exists {
 					heapFile.Close()
 					delete(cm.openFiles, tableID)
@@ -218,7 +213,6 @@ func (cm *CatalogManager) ClearCacheCompletely() {
 	tableNames := cm.tableCache.GetAllTableNames()
 	for _, name := range tableNames {
 		if tableID, err := cm.tableCache.GetTableID(name); err == nil {
-			// Close the file handle before unregistering to prevent resource leaks
 			if heapFile, exists := cm.openFiles[tableID]; exists {
 				heapFile.Close()
 				delete(cm.openFiles, tableID)
