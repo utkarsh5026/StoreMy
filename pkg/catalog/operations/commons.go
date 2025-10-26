@@ -150,9 +150,14 @@ func (bo *BaseOperations[T]) FindAll(tx TxContext, predicate func(T) bool) ([]T,
 func (bo *BaseOperations[T]) DeleteBy(tx TxContext, predicate func(T) bool) error {
 	var tuplesToDelete []*tuple.Tuple
 
-	err := bo.Iterate(tx, func(entity T) error {
+	err := bo.reader.IterateTable(bo.tableID, tx, func(tup *tuple.Tuple) error {
+		entity, err := bo.parser(tup)
+		if err != nil {
+			return fmt.Errorf("failed to parse tuple: %w", err)
+		}
+
 		if predicate(entity) {
-			tuplesToDelete = append(tuplesToDelete, bo.creator(entity))
+			tuplesToDelete = append(tuplesToDelete, tup)
 		}
 		return nil
 	})
@@ -202,6 +207,68 @@ func (bo *BaseOperations[T]) Upsert(tx TxContext, predicate func(T) bool, entity
 		}
 	}
 	return bo.Insert(tx, entity)
+}
+
+// UpdateBy updates all entities matching the predicate by applying the update function.
+// Uses delete-then-insert pattern for MVCC compatibility.
+// This provides SQL-like UPDATE ... WHERE ... semantics with type-safe transformations.
+//
+// Parameters:
+//   - tx: Transaction context
+//   - predicate: Function to find entities to update (like WHERE clause)
+//   - updateFunc: Function to transform each matching entity
+//
+// Returns error if operation fails or the number of updated entities.
+//
+// Example:
+//
+//	// Update row count for table ID 5
+//	err := statsOps.UpdateBy(tx,
+//	    func(stats *TableStatistics) bool { return stats.TableID == 5 },
+//	    func(stats *TableStatistics) *TableStatistics {
+//	        stats.RowCount += 100
+//	        return stats
+//	    })
+func (bo *BaseOperations[T]) UpdateBy(tx TxContext, predicate func(T) bool, updateFunc func(T) T) error {
+	type tupleEntityPair struct {
+		tuple  *tuple.Tuple
+		entity T
+	}
+	var toUpdate []tupleEntityPair
+
+	err := bo.reader.IterateTable(bo.tableID, tx, func(tup *tuple.Tuple) error {
+		entity, err := bo.parser(tup)
+		if err != nil {
+			return fmt.Errorf("failed to parse tuple: %w", err)
+		}
+
+		if predicate(entity) {
+			toUpdate = append(toUpdate, tupleEntityPair{
+				tuple:  tup,
+				entity: entity,
+			})
+		}
+		return nil
+	})
+
+	if err != nil {
+		return fmt.Errorf("failed to collect tuples for update: %w", err)
+	}
+
+	for _, pair := range toUpdate {
+		if err := bo.writer.DeleteRow(bo.tableID, tx, pair.tuple); err != nil {
+			return fmt.Errorf("failed to delete old tuple: %w", err)
+		}
+
+		updatedEntity := updateFunc(pair.entity)
+
+		newTuple := bo.creator(updatedEntity)
+		if err := bo.writer.InsertRow(bo.tableID, tx, newTuple); err != nil {
+			return fmt.Errorf("failed to insert updated entity: %w", err)
+		}
+	}
+
+	return nil
 }
 
 // TableID returns the catalog table ID this BaseOperations instance operates on.
