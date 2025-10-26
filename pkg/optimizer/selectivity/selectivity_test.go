@@ -3,6 +3,8 @@ package selectivity
 import (
 	"math"
 	"storemy/pkg/catalog"
+	"storemy/pkg/catalog/catalogmanager"
+	"storemy/pkg/optimizer/statistics"
 	"storemy/pkg/primitives"
 	"storemy/pkg/types"
 	"testing"
@@ -71,7 +73,7 @@ func TestEstimatePredicateSelectivityWithValue_Histogram(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			// Create histogram
-			histogram := catalog.NewHistogram(tt.values, 10)
+			histogram := statistics.NewHistogram(tt.values, 10)
 
 			// Create estimator
 			estimator := &SelectivityEstimator{tx: nil}
@@ -121,7 +123,7 @@ func TestEstimatePredicateSelectivityWithValue_NoHistogram(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			// Create column stats without histogram
-			colStats := &catalog.ColumnStatistics{
+			colStats := &catalogmanager.ColumnStatistics{
 				DistinctCount: tt.distinctCount,
 				Histogram:     nil, // No histogram
 			}
@@ -355,7 +357,7 @@ func TestMCVSelectivity(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			colStats := &catalog.ColumnStatistics{
+			colStats := &catalogmanager.ColumnStatistics{
 				MostCommonVals: tt.mcvs,
 				MCVFreqs:       tt.mcvFreqs,
 				DistinctCount:  100,
@@ -380,7 +382,7 @@ func TestMCVSelectivity(t *testing.T) {
 
 // TestMCVSelectivityMiss tests behavior when value is not in MCVs
 func TestMCVSelectivityMiss(t *testing.T) {
-	colStats := &catalog.ColumnStatistics{
+	colStats := &catalogmanager.ColumnStatistics{
 		MostCommonVals: []types.Field{
 			types.NewIntField(1),
 			types.NewIntField(2),
@@ -446,7 +448,7 @@ func TestEstimateEqualityWithoutHistogram(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			colStats := &catalog.ColumnStatistics{
+			colStats := &catalogmanager.ColumnStatistics{
 				MostCommonVals: tt.mcvs,
 				MCVFreqs:       tt.mcvFreqs,
 				DistinctCount:  tt.distinctCount,
@@ -479,7 +481,7 @@ func TestMCVIntegrationWithHistogram(t *testing.T) {
 	}
 	mcvFreqs := []float64{0.3, 0.2, 0.15} // Total: 65% of data
 
-	colStats := &catalog.ColumnStatistics{
+	colStats := &catalogmanager.ColumnStatistics{
 		MostCommonVals: mcvs,
 		MCVFreqs:       mcvFreqs,
 		DistinctCount:  100,
