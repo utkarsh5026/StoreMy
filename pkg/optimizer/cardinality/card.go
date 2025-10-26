@@ -3,7 +3,7 @@ package cardinality
 import (
 	"fmt"
 	"math"
-	"storemy/pkg/catalog"
+	"storemy/pkg/catalog/catalogmanager"
 	"storemy/pkg/concurrency/transaction"
 	"storemy/pkg/optimizer/selectivity"
 	"storemy/pkg/plan"
@@ -27,25 +27,25 @@ const (
 // to provide cost-based query optimization.
 //
 // The estimator uses various techniques:
-//   - Table statistics from the system catalog (row counts, distinct values)
+//   - Table statistics from the catalog manager (row counts, distinct values)
 //   - Predicate selectivity estimation (via SelectivityEstimator)
 //   - Join cardinality formulas (based on join type and predicates)
 //   - Correlation correction for multiple predicates
 //
 // All estimates require a transaction context for accessing catalog statistics.
 type CardinalityEstimator struct {
-	catalog *catalog.SystemCatalog
+	catalog *catalogmanager.CatalogManager
 	tx      *transaction.TransactionContext
 }
 
 // NewCardinalityEstimator creates a new cardinality estimator.
 //
 // Parameters:
-//   - cat: System catalog for accessing table/column statistics
+//   - cat: CatalogManager for accessing table/column statistics
 //   - tx: Transaction context for accessing catalog statistics
 //
 // Returns error if catalog is nil.
-func NewCardinalityEstimator(cat *catalog.SystemCatalog, tx *transaction.TransactionContext) (*CardinalityEstimator, error) {
+func NewCardinalityEstimator(cat *catalogmanager.CatalogManager, tx *transaction.TransactionContext) (*CardinalityEstimator, error) {
 	if cat == nil {
 		return nil, fmt.Errorf("cannot have nil CATALOG")
 	}

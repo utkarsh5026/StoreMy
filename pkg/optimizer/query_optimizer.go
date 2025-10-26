@@ -2,7 +2,7 @@ package optimizer
 
 import (
 	"fmt"
-	"storemy/pkg/catalog"
+	"storemy/pkg/catalog/catalogmanager"
 	"storemy/pkg/catalog/systemtable"
 	"storemy/pkg/concurrency/transaction"
 	"storemy/pkg/optimizer/cardinality"
@@ -12,7 +12,7 @@ import (
 
 // QueryOptimizer is the main optimizer that applies various optimization strategies
 type QueryOptimizer struct {
-	catalog            *catalog.SystemCatalog
+	catalog            *catalogmanager.CatalogManager
 	costModel          *costmodel.CostModel
 	predicatePushdown  *PredicatePushdownOptimizer
 	joinOrderOptimizer *JoinOrderOptimizer
@@ -47,7 +47,7 @@ func DefaultOptimizerConfig() *OptimizerConfig {
 // NewQueryOptimizer creates a new query optimizer
 // Note: This initializes the cost model with a nil transaction context.
 // The cost model will work but won't have access to statistics until used with a real transaction.
-func NewQueryOptimizer(cat *catalog.SystemCatalog, config *OptimizerConfig) (*QueryOptimizer, error) {
+func NewQueryOptimizer(cat *catalogmanager.CatalogManager, config *OptimizerConfig) (*QueryOptimizer, error) {
 	if config == nil {
 		config = DefaultOptimizerConfig()
 	}

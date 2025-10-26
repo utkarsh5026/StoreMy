@@ -2,7 +2,7 @@ package costmodel
 
 import (
 	"fmt"
-	"storemy/pkg/catalog"
+	"storemy/pkg/catalog/catalogmanager"
 	"storemy/pkg/concurrency/transaction"
 	"storemy/pkg/optimizer/cardinality"
 	"storemy/pkg/plan"
@@ -18,7 +18,7 @@ import (
 // - Access methods: Sequential scans, index scans, index-only scans
 // - Join algorithms: Hash join, sort-merge join, nested loop join
 type CostModel struct {
-	catalog              *catalog.SystemCatalog
+	catalog              *catalogmanager.CatalogManager
 	cardinalityEstimator *cardinality.CardinalityEstimator
 	bufferCache          *BufferPoolCache // Optional: models buffer pool cache effects
 	tx                   *transaction.TransactionContext
@@ -34,7 +34,7 @@ type CostModel struct {
 // NewCostModel creates a new cost model with default parameters.
 // The transaction context is stored and used for all statistics lookups.
 // Returns an error if the cardinality estimator cannot be initialized.
-func NewCostModel(cat *catalog.SystemCatalog, tx *transaction.TransactionContext) (*CostModel, error) {
+func NewCostModel(cat *catalogmanager.CatalogManager, tx *transaction.TransactionContext) (*CostModel, error) {
 	cardEst, err := cardinality.NewCardinalityEstimator(cat, tx)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create cardinality estimator: %w", err)

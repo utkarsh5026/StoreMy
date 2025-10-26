@@ -2,7 +2,7 @@ package selectivity
 
 import (
 	"math"
-	"storemy/pkg/catalog"
+	"storemy/pkg/catalog/catalogmanager"
 	"storemy/pkg/concurrency/transaction"
 	"storemy/pkg/optimizer/statistics"
 	"storemy/pkg/primitives"
@@ -33,19 +33,19 @@ const (
 //   - Set membership (IN)
 //   - Combined predicates (AND, OR, NOT)
 type SelectivityEstimator struct {
-	catalog *catalog.SystemCatalog
+	catalog *catalogmanager.CatalogManager
 	tx      *transaction.TransactionContext
 }
 
 // NewSelectivityEstimator creates a new selectivity estimator.
 //
 // Parameters:
-//   - cat: System catalog containing table and column statistics
+//   - cat: CatalogManager containing table and column statistics
 //   - tx: Transaction context for accessing catalog statistics
 //
 // Returns:
 //   - *SelectivityEstimator: A new selectivity estimator instance
-func NewSelectivityEstimator(cat *catalog.SystemCatalog, tx *transaction.TransactionContext) *SelectivityEstimator {
+func NewSelectivityEstimator(cat *catalogmanager.CatalogManager, tx *transaction.TransactionContext) *SelectivityEstimator {
 	return &SelectivityEstimator{
 		catalog: cat,
 		tx:      tx,
@@ -138,7 +138,7 @@ func (se *SelectivityEstimator) EstimateWithValue(pred primitives.Predicate, tab
 //
 // Returns:
 //   - float64: Estimated selectivity between 0.0 and 1.0
-func (se *SelectivityEstimator) fromDistinct(pred primitives.Predicate, stats *catalog.ColumnStatistics) float64 {
+func (se *SelectivityEstimator) fromDistinct(pred primitives.Predicate, stats *catalogmanager.ColumnStatistics) float64 {
 	dc := stats.DistinctCount
 	if dc == 0 {
 		return 0.0
@@ -369,7 +369,7 @@ func isComparisonPredicate(pred primitives.Predicate) bool {
 // Returns:
 //   - float64: Frequency of the value (0.0 to 1.0)
 //   - bool: true if the value was found in the MCV list
-func (se *SelectivityEstimator) checkMCV(colStats *catalog.ColumnStatistics, value types.Field) (freq float64, found bool) {
+func (se *SelectivityEstimator) checkMCV(colStats *catalogmanager.ColumnStatistics, value types.Field) (freq float64, found bool) {
 	if len(colStats.MostCommonVals) == 0 {
 		return 0.0, false
 	}
@@ -399,7 +399,7 @@ func (se *SelectivityEstimator) checkMCV(colStats *catalog.ColumnStatistics, val
 //
 // Returns:
 //   - float64: Estimated selectivity for equality on non-MCV value
-func (se *SelectivityEstimator) equalityNoHist(colStats *catalog.ColumnStatistics) float64 {
+func (se *SelectivityEstimator) equalityNoHist(colStats *catalogmanager.ColumnStatistics) float64 {
 	if colStats.DistinctCount == 0 {
 		return 0.0
 	}

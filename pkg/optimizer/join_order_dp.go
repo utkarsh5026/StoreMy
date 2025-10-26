@@ -2,7 +2,7 @@ package optimizer
 
 import (
 	"math"
-	"storemy/pkg/catalog"
+	"storemy/pkg/catalog/catalogmanager"
 	"storemy/pkg/concurrency/transaction"
 	"storemy/pkg/optimizer/cardinality"
 	costmodel "storemy/pkg/optimizer/cost_model"
@@ -12,7 +12,7 @@ import (
 // JoinOrderOptimizer uses dynamic programming to find optimal join order
 // Supports both left-deep and bushy join trees
 type JoinOrderOptimizer struct {
-	catalog   *catalog.SystemCatalog
+	catalog   *catalogmanager.CatalogManager
 	costModel *costmodel.CostModel
 	graph     *JoinGraph
 
@@ -35,7 +35,7 @@ type JoinPlan struct {
 
 // NewJoinOrderOptimizer creates a new join order optimizer
 func NewJoinOrderOptimizer(
-	cat *catalog.SystemCatalog,
+	cat *catalogmanager.CatalogManager,
 	costModel *costmodel.CostModel,
 	enableBushyTrees bool,
 ) *JoinOrderOptimizer {

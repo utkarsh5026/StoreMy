@@ -3,7 +3,7 @@ package cardinality
 import (
 	"os"
 	"path/filepath"
-	"storemy/pkg/catalog"
+	"storemy/pkg/catalog/catalogmanager"
 	"storemy/pkg/catalog/schema"
 	"storemy/pkg/catalog/tablecache"
 	"storemy/pkg/concurrency/transaction"
@@ -20,7 +20,7 @@ import (
 
 // testCatalogSetup holds all components needed for testing with a real catalog
 type testCatalogSetup struct {
-	catalog    *catalog.SystemCatalog
+	catalog    *catalogmanager.CatalogManager
 	cache      *tablecache.TableCache
 	txRegistry *transaction.TransactionRegistry
 	store      *memory.PageStore
@@ -49,7 +49,7 @@ func setupTestCatalogWithData(t *testing.T) *testCatalogSetup {
 	store := memory.NewPageStore(wal)
 	txRegistry := transaction.NewTransactionRegistry(wal)
 	cache := tablecache.NewTableCache()
-	cat := catalog.NewSystemCatalog(store, cache)
+	cat := catalogmanager.NewCatalogManager(store, tempDir)
 
 	// Initialize catalog
 	tx, err := txRegistry.Begin()
