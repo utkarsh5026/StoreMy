@@ -220,6 +220,68 @@ func (bf *BaseFile) Close() error {
 	return nil
 }
 
+// AllocateNewPage atomically allocates and reserves the next available page number.
+// This method ensures that concurrent calls to allocate new pages receive
+// unique page numbers, preventing race conditions during concurrent inserts.
+//
+// The allocation is atomic - it:
+//  1. Reads the current page count
+//  2. Extends the file by one page (writes zeros) to reserve the space
+//  3. Returns the allocated page number
+//
+// All operations occur while holding the write lock, ensuring no other
+// thread can see an intermediate state or allocate the same page number.
+//
+// Returns:
+//   - int: The allocated page number (equal to old NumPages)
+//   - error: An error if the file is closed, stat fails, or write fails
+//
+// Thread-safety: Uses write lock to ensure exclusive access during allocation.
+//
+// Note: After allocation, the caller should overwrite the zero-filled page
+// with actual data using WritePageData. The zero-fill ensures the file size
+// increases atomically, preventing other threads from allocating the same page.
+func (bf *BaseFile) AllocateNewPage() (int, error) {
+	bf.mutex.Lock()
+	defer bf.mutex.Unlock()
+
+	if bf.file == nil {
+		return 0, fmt.Errorf("file is closed")
+	}
+
+	fileInfo, err := bf.file.Stat()
+	if err != nil {
+		return 0, fmt.Errorf("failed to stat file: %w", err)
+	}
+
+	// Calculate current number of pages
+	currentSize := fileInfo.Size()
+	numPages := int(currentSize / int64(PageSize))
+	if currentSize%int64(PageSize) != 0 {
+		numPages++
+	}
+
+	// Allocate page number (this will be the new page)
+	allocatedPageNo := numPages
+
+	// Atomically reserve space by writing a zero-filled page
+	// This ensures the file size increases immediately, preventing
+	// other threads from allocating the same page number
+	zeroPage := make([]byte, PageSize)
+	offset := int64(allocatedPageNo) * int64(PageSize)
+
+	if _, err := bf.file.WriteAt(zeroPage, offset); err != nil {
+		return 0, fmt.Errorf("failed to reserve page space: %w", err)
+	}
+
+	// Sync to ensure the size change is visible to other processes
+	if err := bf.file.Sync(); err != nil {
+		return 0, fmt.Errorf("failed to sync file after page allocation: %w", err)
+	}
+
+	return allocatedPageNo, nil
+}
+
 // FilePath returns the absolute path to the database file.
 //
 // Returns:
