@@ -158,34 +158,6 @@ func (co *ColumnOperations) IncrementAutoIncrementValue(tx TxContext, tableID in
 	return nil
 }
 
-// LoadTableSchema reconstructs the complete schema for a table from CATALOG_COLUMNS.
-//
-// Parameters:
-//   - tx: Transaction context for reading catalog
-//   - tableID: ID of the table whose schema to load
-//   - tableName: Name of the table (used for error messages and schema metadata)
-//
-// Returns:
-//   - Fully constructed Schema object with all column metadata
-//   - error if the table has no columns or catalog read fails
-func (co *ColumnOperations) LoadTableSchema(tx TxContext, tableID int, tableName string) (*schema.Schema, error) {
-	columns, err := co.LoadColumnMetadata(tx, tableID)
-	if err != nil {
-		return nil, err
-	}
-
-	if len(columns) == 0 {
-		return nil, fmt.Errorf("no columns found for table %d", tableID)
-	}
-
-	sch, err := schema.NewSchema(tableID, tableName, columns)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create schema: %w", err)
-	}
-
-	return sch, nil
-}
-
 // loadColumnMetadata queries CATALOG_COLUMNS for all columns belonging to tableID.
 //
 // Parameters:
@@ -210,4 +182,27 @@ func (co *ColumnOperations) LoadColumnMetadata(tx TxContext, tableID int) ([]col
 	}
 
 	return columns, nil
+}
+
+// InsertColumns inserts multiple column metadata records into CATALOG_COLUMNS.
+//
+// This is typically used during table creation to populate all column definitions
+// in a single transaction. Each column is inserted sequentially; if any insertion
+// fails, the function returns immediately with the error.
+//
+// Parameters:
+//   - tx: Transaction context for catalog writes
+//   - cols: Slice of ColumnMetadata to insert
+//
+// Returns an error if any column insertion fails, which may indicate:
+//   - Storage errors (page allocation failures, I/O errors)
+//   - Constraint violations (duplicate column entries)
+//   - Transaction conflicts
+func (co *ColumnOperations) InsertColumns(tx TxContext, cols []schema.ColumnMetadata) error {
+	for _, col := range cols {
+		if err := co.Insert(tx, &col); err != nil {
+			return fmt.Errorf("failed to insert column metadata: %w", err)
+		}
+	}
+	return nil
 }

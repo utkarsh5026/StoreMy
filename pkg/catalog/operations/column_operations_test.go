@@ -270,59 +270,6 @@ func TestIncrementAutoIncrementValue_ColumnNotFound(t *testing.T) {
 	}
 }
 
-func TestLoadTableSchema(t *testing.T) {
-	mock := newMockCatalogAccess()
-	co := NewColumnOperations(mock, 1)
-
-	// Add columns for a table
-	mock.tuples[1] = []*tuple.Tuple{
-		createColumnTuple(100, "id", 0, types.IntType, true, 1),
-		createColumnTuple(100, "name", 1, types.StringType, false, 0),
-		createColumnTuple(100, "age", 2, types.IntType, false, 0),
-	}
-
-	tx := &transaction.TransactionContext{}
-	schema, err := co.LoadTableSchema(tx, 100, "users")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-
-	if schema == nil {
-		t.Fatal("expected schema, got nil")
-	}
-
-	if schema.TableName != "users" {
-		t.Errorf("expected table name 'users', got '%s'", schema.TableName)
-	}
-
-	if schema.TableID != 100 {
-		t.Errorf("expected table ID 100, got %d", schema.TableID)
-	}
-
-	columns := schema.Columns
-	if len(columns) != 3 {
-		t.Errorf("expected 3 columns, got %d", len(columns))
-	}
-}
-
-func TestLoadTableSchema_NoColumns(t *testing.T) {
-	mock := newMockCatalogAccess()
-	co := NewColumnOperations(mock, 1)
-
-	// No columns for table 100
-	mock.tuples[1] = []*tuple.Tuple{}
-
-	tx := &transaction.TransactionContext{}
-	schema, err := co.LoadTableSchema(tx, 100, "users")
-	if err == nil {
-		t.Fatal("expected error, got nil")
-	}
-
-	if schema != nil {
-		t.Errorf("expected nil schema, got %+v", schema)
-	}
-}
-
 func TestLoadColumnMetadata(t *testing.T) {
 	mock := newMockCatalogAccess()
 	co := NewColumnOperations(mock, 1)
