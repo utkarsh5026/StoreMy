@@ -1,6 +1,7 @@
 package catalog
 
 import (
+	"storemy/pkg/catalog/catalogmanager"
 	"storemy/pkg/concurrency/transaction"
 	"sync"
 	"time"
@@ -8,7 +9,7 @@ import (
 
 // StatisticsManager handles automatic statistics updates with intelligent caching
 type StatisticsManager struct {
-	catalog           *SystemCatalog
+	catalog           *catalogmanager.CatalogManager
 	lastUpdate        map[int]time.Time // tableID -> last update time
 	modificationCount map[int]int       // tableID -> number of modifications since last stats update
 	mu                sync.RWMutex
@@ -23,7 +24,7 @@ type StatisticsManager struct {
 }
 
 // NewStatisticsManager creates a new statistics manager
-func NewStatisticsManager(catalog *SystemCatalog, db interface {
+func NewStatisticsManager(catalog *catalogmanager.CatalogManager, db interface {
 	BeginTransaction() (*transaction.TransactionContext, error)
 	CommitTransaction(tx *transaction.TransactionContext) error
 }) *StatisticsManager {
