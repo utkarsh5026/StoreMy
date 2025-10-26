@@ -188,6 +188,12 @@ func (tm *TupleManager) performDataOperation(operation OperationType, ctx *trans
 		return err
 	}
 
+	if operation == DeleteOperation && tm.indexManager != nil {
+		if err := tm.indexManager.OnDelete(ctx, tableID, t); err != nil {
+			return fmt.Errorf("failed to update indexes on delete: %v", err)
+		}
+	}
+
 	var modifiedPages []page.Page
 	var err error
 	switch operation {
@@ -207,16 +213,9 @@ func (tm *TupleManager) performDataOperation(operation OperationType, ctx *trans
 
 	tm.markPagesAsDirty(ctx, modifiedPages)
 
-	if tm.indexManager != nil {
-		switch operation {
-		case InsertOperation:
-			if err := tm.indexManager.OnInsert(ctx, tableID, t); err != nil {
-				return fmt.Errorf("failed to update indexes on insert: %v", err)
-			}
-		case DeleteOperation:
-			if err := tm.indexManager.OnDelete(ctx, tableID, t); err != nil {
-				return fmt.Errorf("failed to update indexes on delete: %v", err)
-			}
+	if operation == InsertOperation && tm.indexManager != nil {
+		if err := tm.indexManager.OnInsert(ctx, tableID, t); err != nil {
+			return fmt.Errorf("failed to update indexes on insert: %v", err)
 		}
 	}
 
@@ -268,24 +267,19 @@ func (tm *TupleManager) handleInsert(ctx *transaction.TransactionContext, t *tup
 // This is called when no existing page has sufficient free space for the insertion.
 //
 // The function follows this sequence:
-//  1. Determine next page number (current page count)
+//  1. Atomically allocate next page number (prevents concurrent allocation races)
 //  2. Create new HeapPage with fresh page buffer
 //  3. Add tuple to the new page
 //  4. Write page to disk through heap file
 //  5. Log operation to WAL for durability
 //  6. Mark page as dirty in transaction context
-//
-// WAL Ordering: The page is written to disk BEFORE WAL logging. This is safe because:
-//   - The page is not yet reachable through normal queries (beyond current file bounds)
-//   - WAL record makes the page "officially" part of the table
-//   - On recovery, pages without WAL records are ignored
 func (tm *TupleManager) insertIntoNewPage(ctx *transaction.TransactionContext, t *tuple.Tuple, heapFile *heap.HeapFile) ([]page.Page, error) {
-	numPages, err := heapFile.NumPages()
+	newPageNo, err := heapFile.AllocateNewPage()
 	if err != nil {
-		return nil, fmt.Errorf("failed to get number of pages: %v", err)
+		return nil, fmt.Errorf("failed to allocate new page: %v", err)
 	}
 
-	newPageID := heap.NewHeapPageID(heapFile.GetID(), numPages)
+	newPageID := heap.NewHeapPageID(heapFile.GetID(), newPageNo)
 	newPage, err := heap.NewHeapPage(newPageID, make([]byte, page.PageSize), heapFile.GetTupleDesc())
 	if err != nil {
 		return nil, fmt.Errorf("failed to create new page: %v", err)
