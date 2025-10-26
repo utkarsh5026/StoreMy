@@ -96,6 +96,10 @@ func createJoinTestTuple(tupleDesc *tuple.TupleDescription, values []interface{}
 		switch v := val.(type) {
 		case int64:
 			field = types.NewIntField(v)
+		case int32:
+			field = types.NewIntField(int64(v))
+		case int:
+			field = types.NewIntField(int64(v))
 		case string:
 			field = types.NewStringField(v, types.StringMaxSize)
 		}

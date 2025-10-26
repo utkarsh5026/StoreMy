@@ -70,22 +70,22 @@ func GetStatistics(left, right iterator.DbIterator) (*common.JoinStatistics, err
 
 	leftCount, err := countTuples(left)
 	if err != nil {
-		return stats, err
+		return nil, err
 	}
 	stats.LeftCardinality = leftCount
 
 	if err := left.Rewind(); err != nil {
-		return stats, err
+		return nil, err
 	}
 
 	rightCount, err := countTuples(right)
 	if err != nil {
-		return stats, err
+		return nil, err
 	}
 	stats.RightCardinality = rightCount
 
 	if err := right.Rewind(); err != nil {
-		return stats, err
+		return nil, err
 	}
 
 	stats.LeftSize = (stats.LeftCardinality + 99) / 100
