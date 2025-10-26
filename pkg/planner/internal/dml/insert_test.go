@@ -517,7 +517,7 @@ func TestInsertPlan_createFieldMapping(t *testing.T) {
 		t.Fatalf("getTupleDesc failed: %v", err)
 	}
 
-	fieldMapping, err := plan.createFieldMapping(tupleDesc)
+	fieldMapping, err := plan.buildColumnIndexMapping(tupleDesc)
 
 	if err != nil {
 		t.Fatalf("createFieldMapping failed: %v", err)
@@ -558,7 +558,7 @@ func TestInsertPlan_createFieldMapping_EmptyFields(t *testing.T) {
 		t.Fatalf("getTupleDesc failed: %v", err)
 	}
 
-	fieldMapping, err := plan.createFieldMapping(tupleDesc)
+	fieldMapping, err := plan.buildColumnIndexMapping(tupleDesc)
 
 	if err != nil {
 		t.Fatalf("createFieldMapping failed: %v", err)

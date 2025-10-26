@@ -13,15 +13,37 @@ import (
 	"storemy/pkg/types"
 )
 
+// InsertPlan represents an execution plan for an INSERT statement.
+// It encapsulates all the necessary components to execute an INSERT operation
+// including the parsed statement, database context, and transaction context.
+//
+// The plan supports:
+//   - Full row inserts: INSERT INTO table VALUES (...)
+//   - Partial column inserts: INSERT INTO table (col1, col2) VALUES (...)
+//   - Auto-increment columns: Automatically generates values for auto-increment fields
+//   - Batch inserts: Multiple value sets in a single INSERT statement
+//
+// Example usage:
+//
+//	plan := NewInsertPlan(stmt, tx, ctx)
+//	result, err := plan.Execute()
 type InsertPlan struct {
-	statement *statements.InsertStatement
-	ctx       *registry.DatabaseContext
-	tx        *transaction.TransactionContext
+	statement *statements.InsertStatement     // The parsed INSERT statement to execute
+	ctx       *registry.DatabaseContext       // Database-wide context and managers
+	tx        *transaction.TransactionContext // Transaction context for ACID compliance
 }
 
 // NewInsertPlan creates a new InsertPlan instance with the provided components.
 // This constructor initializes the plan with all necessary dependencies for
 // executing INSERT operations within a transactional context.
+//
+// Parameters:
+//   - stmt: The parsed INSERT statement containing table name, fields, and values
+//   - tx: Transaction context for ensuring ACID properties
+//   - ctx: Database context providing access to catalog and tuple managers
+//
+// Returns:
+//   - A fully initialized InsertPlan ready for execution
 func NewInsertPlan(stmt *statements.InsertStatement, tx *transaction.TransactionContext, ctx *registry.DatabaseContext) *InsertPlan {
 	return &InsertPlan{
 		statement: stmt,
@@ -33,18 +55,35 @@ func NewInsertPlan(stmt *statements.InsertStatement, tx *transaction.Transaction
 // Execute performs the INSERT operation by processing the statement and inserting
 // all specified tuples into the target table. It validates the data, creates
 // tuples according to the table schema, and coordinates with the storage layer.
+//
+// The execution flow:
+//  1. Resolves table metadata from the catalog
+//  2. Builds column index mapping if explicit fields are specified
+//  3. Retrieves auto-increment information if applicable
+//  4. Inserts each tuple and updates auto-increment counter
+//  5. Returns the number of rows affected
+//
+// Returns:
+//   - A DMLResult containing the number of rows inserted and a success message
+//   - An error if table doesn't exist, validation fails, or insertion fails
+//
+// Errors:
+//   - Table not found
+//   - Invalid column names
+//   - Value count mismatch
+//   - Type conversion errors
+//   - Storage layer errors
 func (p *InsertPlan) Execute() (result.Result, error) {
 	md, err := metadata.ResolveTableMetadata(p.statement.TableName, p.tx, p.ctx)
 	if err != nil {
 		return nil, err
 	}
 
-	mapping, err := p.createFieldMapping(md.TupleDesc)
+	mapping, err := p.buildColumnIndexMapping(md.TupleDesc)
 	if err != nil {
 		return nil, err
 	}
 
-	// Check for auto-increment column
 	autoIncInfo, err := p.ctx.CatalogManager().GetAutoIncrementColumn(p.tx, md.TableID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get auto-increment info: %v", err)
@@ -61,10 +100,26 @@ func (p *InsertPlan) Execute() (result.Result, error) {
 	}, nil
 }
 
-// createFieldMapping builds a mapping between the specified field names in the INSERT
+// buildColumnIndexMapping builds a mapping between the specified field names in the INSERT
 // statement and their corresponding indices in the table schema. This allows for
 // INSERT statements with explicit field lists (e.g., INSERT INTO table (col1, col3) VALUES (...)).
-func (p *InsertPlan) createFieldMapping(td *tuple.TupleDescription) ([]int, error) {
+//
+// If no explicit fields are specified in the INSERT statement, returns nil to indicate
+// that values should be mapped sequentially to all table columns.
+//
+// Parameters:
+//   - td: The tuple description containing the table schema
+//
+// Returns:
+//   - A slice where each element is the table column index for the corresponding value position
+//   - nil if no explicit field list was provided
+//   - An error if any specified field name doesn't exist in the table
+//
+// Example:
+//
+//	For INSERT INTO users (email, name) VALUES (...) where table has [id, name, email, age]
+//	Returns: [2, 1] (email is index 2, name is index 1)
+func (p *InsertPlan) buildColumnIndexMapping(td *tuple.TupleDescription) ([]int, error) {
 	if len(p.statement.Fields) == 0 {
 		return nil, nil
 	}
@@ -85,9 +140,26 @@ func (p *InsertPlan) createFieldMapping(td *tuple.TupleDescription) ([]int, erro
 // insertTuples processes each set of values in the INSERT statement, creating and
 // inserting tuples into the specified table. It validates value counts, creates
 // tuples according to the schema, and uses the page store for persistent storage.
+//
+// For each value set, it:
+//  1. Validates that the number of values matches expectations
+//  2. Creates a tuple with proper field placement
+//  3. Handles auto-increment column generation
+//  4. Inserts the tuple through the tuple manager
+//  5. Updates the auto-increment counter if applicable
+//
+// Parameters:
+//   - tableID: The unique identifier of the target table
+//   - tupleDesc: The schema description of the table
+//   - fieldMapping: Optional mapping of value positions to column indices (nil for sequential)
+//   - autoIncInfo: Information about auto-increment column (nil if none exists)
+//
+// Returns:
+//   - The number of successfully inserted tuples
+//   - An error if validation fails or any insertion fails (all inserts are rolled back)
 func (p *InsertPlan) insertTuples(tableID int, tupleDesc *tuple.TupleDescription, fieldMapping []int, autoIncInfo *operations.AutoIncrementInfo) (int, error) {
-	// Get the DbFile for the table
-	dbFile, err := p.ctx.CatalogManager().GetTableFile(tableID)
+	cm := p.ctx.CatalogManager()
+	dbFile, err := cm.GetTableFile(tableID)
 	if err != nil {
 		return 0, fmt.Errorf("failed to get table file: %v", err)
 	}
@@ -125,14 +197,32 @@ func (p *InsertPlan) insertTuples(tableID int, tupleDesc *tuple.TupleDescription
 // validateValueCount ensures that the number of values provided matches the expected
 // number of fields, either from the explicit field list or the complete table schema.
 // This prevents runtime errors during tuple creation.
-// If auto-increment column exists and is not in the field mapping, we expect one fewer value.
-func validateValueCount(values []types.Field, tupleDesc *tuple.TupleDescription, fieldMapping []int, autoIncInfo *operations.AutoIncrementInfo) error {
+//
+// When an auto-increment column exists and is not explicitly provided in the field mapping,
+// the function expects one fewer value since the auto-increment value is generated automatically.
+//
+// Parameters:
+//   - values: The slice of field values to be inserted
+//   - td: The tuple description defining the table schema
+//   - fieldMapping: Optional explicit field list (nil means all fields in order)
+//   - autoIncInfo: Information about auto-increment column (nil if none exists)
+//
+// Returns:
+//   - nil if value count is correct
+//   - An error describing the mismatch if value count is incorrect
+//
+// Examples:
+//
+//	Table: [id (auto), name, email]
+//	INSERT INTO table VALUES ('John', 'john@example.com') - expects 2 values
+//	INSERT INTO table (name, email) VALUES ('John', 'john@example.com') - expects 2 values
+//	INSERT INTO table (id, name, email) VALUES (1, 'John', 'john@example.com') - expects 3 values
+func validateValueCount(values []types.Field, td *tuple.TupleDescription, fieldMapping []int, autoIncInfo *operations.AutoIncrementInfo) error {
 	var expected int
 	if fieldMapping != nil {
 		expected = len(fieldMapping)
 	} else {
-		expected = tupleDesc.NumFields()
-		// If no field mapping and auto-increment exists, user can omit auto-increment field
+		expected = td.NumFields()
 		if autoIncInfo != nil {
 			expected--
 		}
@@ -149,35 +239,98 @@ func validateValueCount(values []types.Field, tupleDesc *tuple.TupleDescription,
 // It handles both explicit field mappings (for partial inserts) and full row inserts.
 // For explicit mappings, it validates that all required fields are provided.
 // If auto-increment info is provided, it automatically fills the auto-increment column.
+//
+// This is a dispatcher function that delegates to specialized builders based on
+// whether an explicit field mapping is provided.
+//
+// Parameters:
+//   - values: The field values to insert
+//   - tupleDesc: The schema definition of the table
+//   - fieldMapping: Optional mapping of values to specific columns (nil for sequential)
+//   - autoIncInfo: Information about auto-increment column (nil if none exists)
+//
+// Returns:
+//   - A fully constructed tuple ready for insertion
+//   - An error if tuple construction fails (type mismatch, missing fields, etc.)
 func createTuple(values []types.Field, tupleDesc *tuple.TupleDescription, fieldMapping []int, autoIncInfo *operations.AutoIncrementInfo) (*tuple.Tuple, error) {
-	newTuple := tuple.NewTuple(tupleDesc)
-
 	if fieldMapping != nil {
-		if err := setMappedFields(newTuple, values, fieldMapping); err != nil {
-			return nil, err
-		}
+		return buildTupleWithPartialColumns(values, tupleDesc, fieldMapping, autoIncInfo)
+	}
+	return buildTupleFromAllColumns(values, tupleDesc, autoIncInfo)
+}
 
-		// Set auto-increment value if not provided in field mapping
-		if autoIncInfo != nil && !slices.Contains(fieldMapping, autoIncInfo.ColumnIndex) {
-			if err := newTuple.SetField(autoIncInfo.ColumnIndex, types.NewIntField(int64(autoIncInfo.NextValue))); err != nil {
-				return nil, fmt.Errorf("failed to set auto-increment field: %v", err)
-			}
-		}
-
-		if err := validateAllFieldsSet(tupleDesc, fieldMapping, autoIncInfo); err != nil {
-			return nil, err
-		}
-
-		return newTuple, nil
+// buildTupleWithPartialColumns constructs a tuple when an explicit field list is provided.
+// This handles INSERT statements like: INSERT INTO table (col1, col3) VALUES (val1, val3)
+//
+// The function:
+//  1. Creates an empty tuple
+//  2. Populates fields according to the mapping
+//  3. Adds auto-increment value if the auto-increment column wasn't explicitly provided
+//  4. Validates that all required columns have values
+//
+// Parameters:
+//   - values: The field values in the order specified in the INSERT statement
+//   - td: The tuple description defining the complete table schema
+//   - mapping: Array mapping value indices to table column indices
+//   - autoInc: Information about auto-increment column (nil if none exists)
+//
+// Returns:
+//   - A complete tuple with all fields populated
+//   - An error if any required field is missing or field population fails
+//
+// Example:
+//
+//	Table schema: [id (auto), name, email, age]
+//	INSERT INTO table (email, name) VALUES ('john@example.com', 'John')
+//	mapping: [2, 1] (email=index 2, name=index 1)
+//	Result: tuple with id=auto, name='John', email='john@example.com', age=error (missing)
+func buildTupleWithPartialColumns(values []types.Field, td *tuple.TupleDescription, mapping []int, autoInc *operations.AutoIncrementInfo) (*tuple.Tuple, error) {
+	newTuple := tuple.NewTuple(td)
+	if err := populateMappedColumns(newTuple, values, mapping); err != nil {
+		return nil, err
 	}
 
-	// No field mapping - insert all values in order
+	if autoInc != nil && !slices.Contains(mapping, autoInc.ColumnIndex) {
+		if err := applyAutoIncrementValue(newTuple, autoInc); err != nil {
+			return nil, err
+		}
+	}
+
+	if err := ensureAllColumnsProvided(td, mapping, autoInc); err != nil {
+		return nil, err
+	}
+
+	return newTuple, nil
+}
+
+// buildTupleFromAllColumns constructs a tuple when no explicit field list is provided.
+// This handles INSERT INTO table VALUES (val1, val2, val3)
+//
+// Values are assigned sequentially to table columns, skipping any auto-increment column
+// which is automatically generated. The function ensures values align with the table
+// schema after accounting for the auto-increment column.
+//
+// Parameters:
+//   - values: The field values in sequential order
+//   - td: The tuple description defining the complete table schema
+//   - autoInc: Information about auto-increment column (nil if none exists)
+//
+// Returns:
+//   - A complete tuple with all fields populated
+//   - An error if there are too few values or field assignment fails
+//
+// Example:
+//
+//	Table schema: [id (auto), name, email, age]
+//	INSERT INTO table VALUES ('John', 'john@example.com', 25)
+//	Result: tuple with id=auto, name='John', email='john@example.com', age=25
+func buildTupleFromAllColumns(values []types.Field, td *tuple.TupleDescription, autoInc *operations.AutoIncrementInfo) (*tuple.Tuple, error) {
+	newTuple := tuple.NewTuple(td)
 	valueIndex := 0
-	for i := 0; i < tupleDesc.NumFields(); i++ {
-		// Skip auto-increment column if present - it will be filled automatically
-		if autoIncInfo != nil && i == autoIncInfo.ColumnIndex {
-			if err := newTuple.SetField(i, types.NewIntField(int64(autoIncInfo.NextValue))); err != nil {
-				return nil, fmt.Errorf("failed to set auto-increment field: %v", err)
+	for i := 0; i < td.NumFields(); i++ {
+		if autoInc != nil && i == autoInc.ColumnIndex {
+			if err := applyAutoIncrementValue(newTuple, autoInc); err != nil {
+				return nil, err
 			}
 			continue
 		}
@@ -191,13 +344,49 @@ func createTuple(values []types.Field, tupleDesc *tuple.TupleDescription, fieldM
 		}
 		valueIndex++
 	}
-
 	return newTuple, nil
 }
 
-// setMappedFields sets tuple fields using an explicit field mapping.
+// applyAutoIncrementValue sets the auto-increment field in a tuple to its next value.
+// This is called automatically during tuple construction to populate auto-increment columns.
+//
+// Parameters:
+//   - t: The tuple to modify
+//   - autoInc: Contains the column index and next value to use
+//
+// Returns:
+//   - nil on success
+//   - An error if setting the field fails (wrong type, invalid index, etc.)
+func applyAutoIncrementValue(t *tuple.Tuple, autoInc *operations.AutoIncrementInfo) error {
+	index := autoInc.ColumnIndex
+	value := types.NewIntField(int64(autoInc.NextValue))
+	if err := t.SetField(index, value); err != nil {
+		return fmt.Errorf("failed to set auto-increment field: %v", err)
+	}
+	return nil
+}
+
+// populateMappedColumns sets tuple fields using an explicit field mapping.
 // Used when INSERT statement specifies a subset of columns.
-func setMappedFields(tup *tuple.Tuple, values []types.Field, fieldMapping []int) error {
+//
+// Each value is placed in the tuple at the position specified by the corresponding
+// mapping index. This allows for flexible column ordering in INSERT statements.
+//
+// Parameters:
+//   - tup: The tuple to populate
+//   - values: The field values to insert
+//   - fieldMapping: Maps each value index to its target column index in the tuple
+//
+// Returns:
+//   - nil on success
+//   - An error if any field assignment fails (type mismatch, invalid index, etc.)
+//
+// Example:
+//
+//	fieldMapping: [2, 0, 3]
+//	values: [val0, val1, val2]
+//	Result: tuple[0]=val1, tuple[2]=val0, tuple[3]=val2
+func populateMappedColumns(tup *tuple.Tuple, values []types.Field, fieldMapping []int) error {
 	for i, value := range values {
 		if err := tup.SetField(fieldMapping[i], value); err != nil {
 			return fmt.Errorf("failed to set field at index %d: %w", fieldMapping[i], err)
@@ -206,13 +395,30 @@ func setMappedFields(tup *tuple.Tuple, values []types.Field, fieldMapping []int)
 	return nil
 }
 
-// validateAllFieldsSet ensures all table fields have values when using explicit field mapping.
+// ensureAllColumnsProvided ensures all table fields have values when using explicit field mapping.
 // Prevents NULL values in fields not included in the INSERT field list.
 // Auto-increment columns are exempt from this check as they are auto-filled.
-func validateAllFieldsSet(tupleDesc *tuple.TupleDescription, fieldMapping []int, autoIncInfo *operations.AutoIncrementInfo) error {
-	for i := 0; i < tupleDesc.NumFields(); i++ {
-		// Skip auto-increment column - it's automatically filled
-		if autoIncInfo != nil && i == autoIncInfo.ColumnIndex {
+//
+// This enforces that partial column inserts must still provide values for all non-auto-increment
+// columns. In the future, this could be relaxed to allow NULL values or default values.
+//
+// Parameters:
+//   - td: The complete table schema
+//   - fieldMapping: The explicitly provided column indices
+//   - autoInc: Information about auto-increment column (nil if none exists)
+//
+// Returns:
+//   - nil if all required columns are present in the mapping
+//   - An error specifying which field index is missing
+//
+// Example:
+//
+//	Table: [id (auto), name, email, age]
+//	Mapping: [1, 2] (name, email provided)
+//	Result: Error - missing value for field index 3 (age)
+func ensureAllColumnsProvided(td *tuple.TupleDescription, fieldMapping []int, autoInc *operations.AutoIncrementInfo) error {
+	for i := 0; i < td.NumFields(); i++ {
+		if autoInc != nil && i == autoInc.ColumnIndex {
 			continue
 		}
 
