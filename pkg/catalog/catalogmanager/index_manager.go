@@ -3,10 +3,17 @@ package catalogmanager
 import (
 	"fmt"
 	"path/filepath"
+	"slices"
+	"storemy/pkg/catalog/schema"
 	"storemy/pkg/catalog/systemtable"
 	"storemy/pkg/storage/index"
 	"storemy/pkg/utils/functools"
 )
+
+type indexCol struct {
+	indexName, columnName, tableName string
+	indexType                        index.IndexType
+}
 
 // CreateIndex creates a new index and registers it in the catalog.
 //
@@ -32,49 +39,74 @@ import (
 //   - filePath: Path where index file should be created
 //   - error: Error if validation or registration fails
 func (cm *CatalogManager) CreateIndex(tx TxContext, indexName, tableName, columnName string, indexType index.IndexType) (indexID int, filePath string, err error) {
+	cm.mu.Lock()
+	defer cm.mu.Unlock()
+
 	tableID, err := cm.GetTableID(tx, tableName)
 	if err != nil {
 		return 0, "", fmt.Errorf("table %s not found: %w", tableName, err)
 	}
 
-	if err := cm.canCreateIndex(tx, tableID, columnName, indexName, tableName); err != nil {
+	indexCol := &indexCol{
+		indexName:  indexName,
+		tableName:  tableName,
+		columnName: columnName,
+		indexType:  indexType,
+	}
+	return cm.registerIndexWithTableID(tx, tableID, indexCol)
+}
+
+// registerIndexWithTableID is an internal helper that creates an index when tableID is already known.
+// This is used by both CreateIndex (which looks up tableID) and RegisterTable (which already has tableID).
+func (cm *CatalogManager) registerIndexWithTableID(tx TxContext, tableID int, indexCol *indexCol) (indexID int, filePath string, err error) {
+	cols, err := cm.colOps.LoadColumnMetadata(tx, tableID)
+	if err != nil {
+		return 0, "", fmt.Errorf("failed to get table schema: %w", err)
+	}
+
+	if err := cm.validateIndexCreation(tx, cols, indexCol); err != nil {
 		return 0, "", err
 	}
 
-	metadata := cm.createIndexMeta(tableID, tableName, columnName, indexName, indexType)
+	metadata := cm.buildIndexMetadata(tableID, indexCol)
 
-	if err := cm.insertIndex(tx, *metadata); err != nil {
+	if err := cm.persistIndexMetadata(tx, *metadata); err != nil {
 		return 0, "", fmt.Errorf("failed to register index in catalog: %w", err)
 	}
 
 	return metadata.IndexID, metadata.FilePath, nil
 }
 
-func (cm *CatalogManager) canCreateIndex(tx TxContext, tableID int, columnName, indexName, tableName string) error {
-	tableSchema, err := cm.GetTableSchema(tx, tableID)
-	if err != nil {
-		return fmt.Errorf("failed to get table schema: %w", err)
+// registerIndexWithSchema is an internal helper that creates an index without schema lookup.
+// This is used by RegisterTable which already has the schema and avoids race conditions.
+func (cm *CatalogManager) registerIndexWithSchema(tx TxContext, sch TableSchema, indexCol *indexCol) (indexID int, filePath string, err error) {
+	if err := cm.validateIndexCreation(tx, sch.Columns, indexCol); err != nil {
+		return -1, "", err
+	}
+	metadata := cm.buildIndexMetadata(sch.TableID, indexCol)
+
+	if err := cm.persistIndexMetadata(tx, *metadata); err != nil {
+		return 0, "", fmt.Errorf("failed to register index in catalog: %w", err)
 	}
 
-	columnExists := false
-	for _, col := range tableSchema.Columns {
-		if col.Name == columnName {
-			columnExists = true
-			break
-		}
-	}
-	if !columnExists {
-		return fmt.Errorf("column %s does not exist in table %s", columnName, tableName)
+	return metadata.IndexID, metadata.FilePath, nil
+}
+
+func (cm *CatalogManager) validateIndexCreation(tx TxContext, cols []schema.ColumnMetadata, indexCol *indexCol) error {
+	if columnExists := slices.ContainsFunc(cols, func(col schema.ColumnMetadata) bool {
+		return col.Name == indexCol.columnName
+	}); !columnExists {
+		return fmt.Errorf("column %s does not exist in table %s", indexCol.columnName, indexCol.tableName)
 	}
 
-	if cm.IndexExists(tx, indexName) {
-		return fmt.Errorf("index %s already exists", indexName)
+	if cm.IndexExists(tx, indexCol.indexName) {
+		return fmt.Errorf("index %s already exists", indexCol.indexName)
 	}
 
 	return nil
 }
 
-func (cm *CatalogManager) insertIndex(tx TxContext, metadata systemtable.IndexMetadata) error {
+func (cm *CatalogManager) persistIndexMetadata(tx TxContext, metadata systemtable.IndexMetadata) error {
 	indexesFile, err := cm.tableCache.GetDbFile(cm.SystemTabs.IndexesTableID)
 	if err != nil {
 		return fmt.Errorf("failed to get indexes catalog file: %w", err)
@@ -88,16 +120,16 @@ func (cm *CatalogManager) insertIndex(tx TxContext, metadata systemtable.IndexMe
 	return nil
 }
 
-func (cm *CatalogManager) createIndexMeta(tableID int, tableName, colName, indexName string, indexType index.IndexType) *systemtable.IndexMetadata {
-	fileName := fmt.Sprintf("%s_%s.idx", tableName, indexName)
+func (cm *CatalogManager) buildIndexMetadata(tableID int, indexCol *indexCol) *systemtable.IndexMetadata {
+	fileName := fmt.Sprintf("%s_%s.idx", indexCol.tableName, indexCol.indexName)
 	filePath := filepath.Join(cm.dataDir, fileName)
 	indexID := hashFilePath(filePath)
 	metadata := systemtable.IndexMetadata{
 		IndexID:    indexID,
-		IndexName:  indexName,
+		IndexName:  indexCol.indexName,
 		TableID:    tableID,
-		ColumnName: colName,
-		IndexType:  indexType,
+		ColumnName: indexCol.columnName,
+		IndexType:  indexCol.indexType,
 		FilePath:   filePath,
 		CreatedAt:  getCurrentTimestamp(),
 	}
