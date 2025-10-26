@@ -61,6 +61,16 @@ func (t *Tuple) SetField(i int, field types.Field) error {
 	return nil
 }
 
+// TableNotAssigned checks whether this tuple has been assigned a physical storage location.
+// A tuple without a RecordID is considered "not assigned" to a table, meaning it exists
+// only in memory and has not been persisted to disk.
+//
+// Returns:
+//   - bool: true if the tuple has no RecordID (not persisted), false otherwise
+func (t *Tuple) TableNotAssigned() bool {
+	return t.RecordID == nil
+}
+
 // GetField returns the value of the field at the specified index.
 //
 // Parameters:
