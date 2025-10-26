@@ -78,6 +78,9 @@ func (cm *CatalogManager) addTableToCache(tx TxContext, file *heap.HeapFile, sch
 		return fmt.Errorf("failed to add table to cache: %w", err)
 	}
 
+	// CatalogManager owns the file - track it for lifecycle management
+	cm.openFiles[sch.TableID] = file
+	// Register with PageStore for I/O operations only
 	cm.store.RegisterDbFile(sch.TableID, file)
 	if _, verifyErr := cm.tableCache.GetDbFile(sch.TableID); verifyErr != nil {
 		return fmt.Errorf("table was added to cache but immediate verification failed: %w", verifyErr)
@@ -106,6 +109,11 @@ func (cm *CatalogManager) DropTable(tx TxContext, tableName string) error {
 		return fmt.Errorf("table %s not found: %w", tableName, err)
 	}
 
+	// Close the file handle before unregistering to prevent resource leaks
+	if heapFile, exists := cm.openFiles[tableID]; exists {
+		heapFile.Close()
+		delete(cm.openFiles, tableID)
+	}
 	cm.store.UnregisterDbFile(tableID)
 	if err := cm.DeleteCatalogEntry(tx, tableID); err != nil {
 		return fmt.Errorf("failed to delete catalog entry: %w", err)
@@ -172,6 +180,9 @@ func (cm *CatalogManager) registerTable(filePath string, sch TableSchema) error 
 		return fmt.Errorf("failed to add table to cache: %w", err)
 	}
 
+	// CatalogManager owns the file - track it for lifecycle management
+	cm.openFiles[sch.TableID] = heapFile
+	// Register with PageStore for I/O operations only
 	cm.store.RegisterDbFile(sch.TableID, heapFile)
 	return nil
 }

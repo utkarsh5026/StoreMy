@@ -26,6 +26,11 @@ import (
 //   - Transactional: All mutations require transaction context
 //   - Cache-first: Check memory before disk for performance
 //   - Complete operations: Methods handle both disk and cache atomically
+//
+// File Ownership:
+//   - CatalogManager owns all table file lifecycles (open/close)
+//   - PageStore only performs I/O operations via PageIO interface
+//   - openFiles map tracks owned files for proper cleanup
 type CatalogManager struct {
 	// Core infrastructure
 	io         *catalogio.CatalogIO
@@ -34,6 +39,9 @@ type CatalogManager struct {
 	tupMgr     *table.TupleManager
 	dataDir    string
 	SystemTabs SystemTableIDs
+
+	// File ownership - tracks all open table files for lifecycle management
+	openFiles map[int]*heap.HeapFile
 
 	// Domain-specific operation handlers
 	indexOps      *operations.IndexOperations
@@ -63,6 +71,7 @@ func NewCatalogManager(ps *memory.PageStore, dataDir string) *CatalogManager {
 		tableCache: cache,
 		dataDir:    dataDir,
 		tupMgr:     table.NewTupleManager(ps),
+		openFiles:  make(map[int]*heap.HeapFile),
 	}
 }
 
@@ -106,10 +115,15 @@ func (cm *CatalogManager) Initialize(ctx TxContext) error {
 		}
 
 		cm.SystemTabs.SetSystemTableID(table.TableName(), f.GetID())
+		cm.openFiles[f.GetID()] = f
 		cm.store.RegisterDbFile(f.GetID(), f)
 	}
 
-	// Initialize operation handlers after system tables are set up
+	cm.setupSystables()
+	return nil
+}
+
+func (cm *CatalogManager) setupSystables() {
 	cm.indexOps = operations.NewIndexOperations(cm.io, cm.SystemTabs.IndexesTableID)
 	cm.colOps = operations.NewColumnOperations(cm.io, cm.SystemTabs.ColumnsTableID)
 	cm.statsOps = operations.NewStatsOperations(cm.io, cm.SystemTabs.StatisticsTableID, cm.SystemTabs.ColumnsTableID, cm.tableCache.GetDbFile, cm.tableCache)
@@ -117,5 +131,4 @@ func (cm *CatalogManager) Initialize(ctx TxContext) error {
 	cm.colStatsOps = operations.NewColStatsOperations(cm.io, cm.SystemTabs.ColumnStatisticsTableID, cm.tableCache.GetDbFile, cm.colOps)
 	cm.indexStatsOps = operations.NewIndexStatsOperations(cm.io, cm.SystemTabs.IndexStatisticsTableID, cm.SystemTabs.IndexesTableID, cm.tableCache.GetDbFile, cm.statsOps)
 
-	return nil
 }
