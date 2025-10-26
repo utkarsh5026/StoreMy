@@ -4,8 +4,8 @@ import (
 	"math"
 	"storemy/pkg/catalog/catalogmanager"
 	"storemy/pkg/concurrency/transaction"
-	"storemy/pkg/optimizer/cardinality"
-	costmodel "storemy/pkg/optimizer/cost_model"
+	"storemy/pkg/optimizer/internal/cardinality"
+	costmodel "storemy/pkg/optimizer/internal/cost_model"
 	"storemy/pkg/plan"
 )
 
@@ -121,7 +121,7 @@ func (joo *JoinOrderOptimizer) initializeBaseRelations(
 			// On error, use a default cardinality
 			card = cardinality.DefaultTableCardinality
 		}
-		cost := joo.costModel.EstimatePlanCost( scanNode)
+		cost := joo.costModel.EstimatePlanCost(scanNode)
 		scanNode.SetCardinality(card)
 		scanNode.SetCost(cost)
 
@@ -330,7 +330,7 @@ func (joo *JoinOrderOptimizer) createJoinPlan(
 		// On error, use a default cardinality
 		card = cardinality.DefaultTableCardinality
 	}
-	cost := joo.costModel.EstimatePlanCost( joinNode)
+	cost := joo.costModel.EstimatePlanCost(joinNode)
 	joinNode.SetCardinality(card)
 	joinNode.SetCost(cost)
 

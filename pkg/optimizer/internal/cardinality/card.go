@@ -5,7 +5,7 @@ import (
 	"math"
 	"storemy/pkg/catalog/catalogmanager"
 	"storemy/pkg/concurrency/transaction"
-	"storemy/pkg/optimizer/selectivity"
+	"storemy/pkg/optimizer/internal/selectivity"
 	"storemy/pkg/plan"
 	"storemy/pkg/types"
 )
@@ -380,7 +380,7 @@ func (ce *CardinalityEstimator) getColumnType(tableID int, columnName string) (t
 		return 0, fmt.Errorf("table metadata not found for table %d", tableID)
 	}
 
-	schema, err := ce.catalog.LoadTableSchema(ce.tx, tableID, tableMetadata.TableName)
+	schema, err := ce.catalog.LoadTableSchema(ce.tx, tableID)
 	if err != nil {
 		return 0, fmt.Errorf("failed to load table schema for table %d: %w", tableID, err)
 	}

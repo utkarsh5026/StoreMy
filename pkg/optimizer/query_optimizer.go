@@ -5,8 +5,8 @@ import (
 	"storemy/pkg/catalog/catalogmanager"
 	"storemy/pkg/catalog/systemtable"
 	"storemy/pkg/concurrency/transaction"
-	"storemy/pkg/optimizer/cardinality"
-	costmodel "storemy/pkg/optimizer/cost_model"
+	"storemy/pkg/optimizer/internal/cardinality"
+	costmodel "storemy/pkg/optimizer/internal/cost_model"
 	"storemy/pkg/plan"
 )
 

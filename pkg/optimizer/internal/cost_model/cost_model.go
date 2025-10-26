@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"storemy/pkg/catalog/catalogmanager"
 	"storemy/pkg/concurrency/transaction"
-	"storemy/pkg/optimizer/cardinality"
+	"storemy/pkg/optimizer/internal/cardinality"
 	"storemy/pkg/plan"
 )
 

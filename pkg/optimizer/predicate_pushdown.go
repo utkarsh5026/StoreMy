@@ -2,8 +2,8 @@ package optimizer
 
 import (
 	"storemy/pkg/concurrency/transaction"
-	"storemy/pkg/optimizer/cardinality"
-	costmodel "storemy/pkg/optimizer/cost_model"
+	"storemy/pkg/optimizer/internal/cardinality"
+	costmodel "storemy/pkg/optimizer/internal/cost_model"
 	"storemy/pkg/plan"
 )
 
@@ -146,7 +146,7 @@ func (ppo *PredicatePushdownOptimizer) optimizeJoin(
 		// On error, use a default cardinality
 		card = cardinality.DefaultTableCardinality
 	}
-	cost := ppo.costModel.EstimatePlanCost( newJoin)
+	cost := ppo.costModel.EstimatePlanCost(newJoin)
 	newJoin.SetCardinality(card)
 	newJoin.SetCost(cost)
 
@@ -198,7 +198,7 @@ func (ppo *PredicatePushdownOptimizer) optimizeScan(
 		// On error, use a default cardinality
 		card = cardinality.DefaultTableCardinality
 	}
-	cost := ppo.costModel.EstimatePlanCost( newScan)
+	cost := ppo.costModel.EstimatePlanCost(newScan)
 	newScan.SetCardinality(card)
 	newScan.SetCost(cost)
 
@@ -227,7 +227,7 @@ func (ppo *PredicatePushdownOptimizer) optimizeProject(
 		// On error, use a default cardinality
 		card = cardinality.DefaultTableCardinality
 	}
-	cost := ppo.costModel.EstimatePlanCost( newProject)
+	cost := ppo.costModel.EstimatePlanCost(newProject)
 	newProject.SetCardinality(card)
 	newProject.SetCost(cost)
 
