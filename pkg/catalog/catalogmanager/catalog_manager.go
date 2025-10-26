@@ -26,15 +26,6 @@ import (
 //   - Transactional: All mutations require transaction context
 //   - Cache-first: Check memory before disk for performance
 //   - Complete operations: Methods handle both disk and cache atomically
-//
-// The CatalogManager is organized across multiple files:
-//   - catalog_manager.go: Core struct, constructor, initialization
-//   - types.go: Type definitions and SystemTableIDs
-//   - table_lifecycle.go: Create, Drop, Load, Rename tables
-//   - table_queries.go: Get, Exists, List tables
-//   - index_manager.go: Create, Drop, Get indexes
-//   - statistics_collector.go: Collect, Update, Get statistics
-//   - helpers.go: Internal helper methods
 type CatalogManager struct {
 	// Core infrastructure
 	io         *catalogio.CatalogIO

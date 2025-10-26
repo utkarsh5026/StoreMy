@@ -41,24 +41,13 @@ func (cm *CatalogManager) CreateIndex(tx TxContext, indexName, tableName, column
 		return 0, "", err
 	}
 
-	fileName := fmt.Sprintf("%s_%s.idx", tableName, indexName)
-	filePath = filepath.Join(cm.dataDir, fileName)
-	indexID = hashFilePath(filePath)
-	metadata := systemtable.IndexMetadata{
-		IndexID:    indexID,
-		IndexName:  indexName,
-		TableID:    tableID,
-		ColumnName: columnName,
-		IndexType:  indexType,
-		FilePath:   filePath,
-		CreatedAt:  getCurrentTimestamp(),
-	}
+	metadata := cm.createIndexMeta(tableID, tableName, columnName, indexName, indexType)
 
-	if err := cm.insertIndex(tx, metadata); err != nil {
+	if err := cm.insertIndex(tx, *metadata); err != nil {
 		return 0, "", fmt.Errorf("failed to register index in catalog: %w", err)
 	}
 
-	return indexID, filePath, nil
+	return metadata.IndexID, metadata.FilePath, nil
 }
 
 func (cm *CatalogManager) canCreateIndex(tx TxContext, tableID int, columnName, indexName, tableName string) error {
@@ -97,6 +86,22 @@ func (cm *CatalogManager) insertIndex(tx TxContext, metadata systemtable.IndexMe
 	}
 
 	return nil
+}
+
+func (cm *CatalogManager) createIndexMeta(tableID int, tableName, colName, indexName string, indexType index.IndexType) *systemtable.IndexMetadata {
+	fileName := fmt.Sprintf("%s_%s.idx", tableName, indexName)
+	filePath := filepath.Join(cm.dataDir, fileName)
+	indexID := hashFilePath(filePath)
+	metadata := systemtable.IndexMetadata{
+		IndexID:    indexID,
+		IndexName:  indexName,
+		TableID:    tableID,
+		ColumnName: colName,
+		IndexType:  indexType,
+		FilePath:   filePath,
+		CreatedAt:  getCurrentTimestamp(),
+	}
+	return &metadata
 }
 
 // DropIndex removes an index from the catalog.

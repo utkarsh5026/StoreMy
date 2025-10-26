@@ -26,49 +26,93 @@ func TestCatalogManager_ConcurrentTableCreation(t *testing.T) {
 	var wg sync.WaitGroup
 	numTables := 10
 	errors := make(chan error, numTables)
+	successes := make(chan string, numTables)
 
 	for i := 0; i < numTables; i++ {
 		wg.Add(1)
 		go func(index int) {
 			defer wg.Done()
+			defer func() {
+				if r := recover(); r != nil {
+					errors <- fmt.Errorf("table concurrent_table_%d: panic: %v", index, r)
+				}
+			}()
 
 			tableName := fmt.Sprintf("concurrent_table_%d", index)
 			fields := []FieldMetadata{{Name: "id", Type: types.IntType}}
 			tableSchema := createTestSchema(tableName, "id", fields)
 
-			tx := setup.beginTx()
-			_, err := setup.catalogMgr.CreateTable(tx, tableSchema)
-			setup.commitTx(tx)
+			// Begin transaction and handle errors properly (t.Fatalf is not safe in goroutines)
+			tx, err := setup.txRegistry.Begin()
 			if err != nil {
-				errors <- fmt.Errorf("table %s creation failed: %w", tableName, err)
+				errors <- fmt.Errorf("table %s: begin transaction failed: %w", tableName, err)
+				return
+			}
+
+			tableID, err := setup.catalogMgr.CreateTable(tx, tableSchema)
+			if err != nil {
+				errors <- fmt.Errorf("table %s: creation failed: %w", tableName, err)
+				return
+			}
+
+			// Commit and handle errors properly
+			if err := setup.store.CommitTransaction(tx); err != nil {
+				errors <- fmt.Errorf("table %s (ID=%d): commit failed: %w", tableName, tableID, err)
+			} else {
+				successes <- tableName
 			}
 		}(i)
 	}
 
 	wg.Wait()
 	close(errors)
+	close(successes)
 
 	// Check for errors
+	errorCount := 0
 	for err := range errors {
-		t.Error(err)
+		errorCount++
+		t.Logf("Error during concurrent table creation: %v", err)
+	}
+
+	// Count successes
+	successCount := 0
+	successfulTables := []string{}
+	for tableName := range successes {
+		successCount++
+		successfulTables = append(successfulTables, tableName)
+	}
+
+	t.Logf("Successfully created and committed %d tables: %v", successCount, successfulTables)
+
+	if errorCount > 0 {
+		t.Errorf("Encountered %d errors during concurrent table creation", errorCount)
+	}
+
+	// Flush all pages to ensure writes are visible
+	if err := setup.store.FlushAllPages(); err != nil {
+		t.Fatalf("FlushAllPages failed: %v", err)
 	}
 
 	// Verify all tables were created
 	tx2 := setup.beginTx()
 	allTables, err := setup.catalogMgr.ListAllTables(tx2, true)
+	setup.commitTx(tx2)
 	if err != nil {
 		t.Fatalf("ListAllTables failed: %v", err)
 	}
 
 	createdCount := 0
+	createdTables := []string{}
 	for _, name := range allTables {
 		if len(name) > 17 && name[:17] == "concurrent_table_" {
 			createdCount++
+			createdTables = append(createdTables, name)
 		}
 	}
 
 	if createdCount != numTables {
-		t.Errorf("Expected %d concurrent tables, got %d", numTables, createdCount)
+		t.Errorf("Expected %d concurrent tables, got %d. Created tables: %v", numTables, createdCount, createdTables)
 	}
 }
 
@@ -114,9 +158,14 @@ func TestCatalogManager_ConcurrentIndexCreation(t *testing.T) {
 
 			tx := setup.beginTx()
 			_, _, err := setup.catalogMgr.CreateIndex(tx, indexName, "concurrent_idx_table", columnName, index.BTreeIndex)
-			setup.commitTx(tx)
 			if err != nil {
 				errors <- fmt.Errorf("index %s creation failed: %w", indexName, err)
+				return
+			}
+
+			// Commit and handle errors properly (t.Fatalf is not safe in goroutines)
+			if err := setup.store.CommitTransaction(tx); err != nil {
+				errors <- fmt.Errorf("index %s commit failed: %w", indexName, err)
 			}
 		}(i)
 	}
@@ -125,13 +174,20 @@ func TestCatalogManager_ConcurrentIndexCreation(t *testing.T) {
 	close(errors)
 
 	// Check for errors
+	errorCount := 0
 	for err := range errors {
-		t.Error(err)
+		errorCount++
+		t.Logf("Error during concurrent index creation: %v", err)
+	}
+
+	if errorCount > 0 {
+		t.Errorf("Encountered %d errors during concurrent index creation", errorCount)
 	}
 
 	// Verify all indexes were created
 	tx3 := setup.beginTx()
 	indexes, err := setup.catalogMgr.GetIndexesByTable(tx3, tableID)
+	setup.commitTx(tx3)
 	if err != nil {
 		t.Fatalf("GetIndexesByTable failed: %v", err)
 	}

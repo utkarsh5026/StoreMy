@@ -514,6 +514,7 @@ func TestCatalogManager_DropIndex(t *testing.T) {
 	if !setup.catalogMgr.IndexExists(tx4, "idx_to_drop") {
 		t.Fatal("Index should exist before drop")
 	}
+	setup.commitTx(tx4)
 
 	// Drop the index
 	tx5 := setup.beginTx()
@@ -537,6 +538,7 @@ func TestCatalogManager_DropIndex(t *testing.T) {
 	if setup.catalogMgr.IndexExists(tx6, "idx_to_drop") {
 		t.Error("Index should not exist after drop")
 	}
+	setup.commitTx(tx6)
 }
 
 // TestCatalogManager_DropIndex_NonExistent tests dropping a non-existent index
@@ -983,6 +985,7 @@ func TestCatalogManager_MultipleTableOperationsSequence(t *testing.T) {
 	if len(indexes) != 1 {
 		t.Errorf("Expected 1 index after rename, got %d", len(indexes))
 	}
+	setup.commitTx(tx6)
 
 	// Drop index
 	tx7 := setup.beginTx()
@@ -1008,6 +1011,7 @@ func TestCatalogManager_MultipleTableOperationsSequence(t *testing.T) {
 	if setup.catalogMgr.TableExists(tx9, "renamed_sequence") {
 		t.Error("Table should not exist after drop")
 	}
+	setup.commitTx(tx9)
 }
 
 // TestCatalogManager_CreateDropMultipleTables tests creating and dropping multiple tables
