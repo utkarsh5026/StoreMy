@@ -293,11 +293,11 @@ func TestDropIndexPlan_Execute_MultipleIndexes(t *testing.T) {
 	createTestIndex(t, ctx, transCtx, "users", "idx_users_age", "age", index.BTreeIndex)
 	createTestIndex(t, ctx, transCtx, "users", "idx_users_name", "name", index.HashIndex)
 
-	// Verify all exist
+	// Verify all exist (3 created + 1 auto-created PK index = 4 total)
 	tableID, _ := ctx.CatalogManager().GetTableID(transCtx, "users")
 	indexes, _ := ctx.CatalogManager().GetIndexesByTable(transCtx, tableID)
-	if len(indexes) != 3 {
-		t.Fatalf("Expected 3 indexes, got %d", len(indexes))
+	if len(indexes) != 4 {
+		t.Fatalf("Expected 4 indexes (3 created + 1 PK), got %d", len(indexes))
 	}
 
 	// Drop one index
@@ -308,10 +308,10 @@ func TestDropIndexPlan_Execute_MultipleIndexes(t *testing.T) {
 		t.Fatalf("Failed to drop index: %v", err)
 	}
 
-	// Verify only 2 remain
+	// Verify only 3 remain (2 created + 1 PK index)
 	indexes, _ = ctx.CatalogManager().GetIndexesByTable(transCtx, tableID)
-	if len(indexes) != 2 {
-		t.Errorf("Expected 2 indexes after drop, got %d", len(indexes))
+	if len(indexes) != 3 {
+		t.Errorf("Expected 3 indexes after drop (2 created + 1 PK), got %d", len(indexes))
 	}
 
 	// Verify correct index was dropped

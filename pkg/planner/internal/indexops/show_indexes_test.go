@@ -214,14 +214,16 @@ func TestShowIndexesPlan_Execute_FilterByTable(t *testing.T) {
 		t.Fatalf("Expected SelectQueryResult, got: %T", res)
 	}
 
-	// Should only return indexes for table1
-	if len(selectResult.Tuples) != 1 {
-		t.Errorf("Expected 1 index for table1, got: %d", len(selectResult.Tuples))
+	// Should only return indexes for table1 (1 created + 1 auto-created PK index)
+	if len(selectResult.Tuples) != 2 {
+		t.Errorf("Expected 2 indexes for table1 (1 created + 1 PK), got: %d", len(selectResult.Tuples))
 	}
 
-	// Verify it's the right index
-	if len(selectResult.Tuples) > 0 {
-		indexNameField, err := selectResult.Tuples[0].GetField(0)
+	// Verify both indexes are present
+	foundPK := false
+	foundCreated := false
+	for _, tup := range selectResult.Tuples {
+		indexNameField, err := tup.GetField(0)
 		if err != nil {
 			t.Fatalf("Failed to get index_name field: %v", err)
 		}
@@ -230,9 +232,19 @@ func TestShowIndexesPlan_Execute_FilterByTable(t *testing.T) {
 			t.Fatalf("Expected StringField for index_name, got %T", indexNameField)
 		}
 		indexName := indexNameStringField.Value
-		if indexName != "idx_table1_name" {
-			t.Errorf("Expected index 'idx_table1_name', got: %s", indexName)
+		if indexName == "idx_table1_name" {
+			foundCreated = true
 		}
+		if indexName == "pk_test_table_1_id" {
+			foundPK = true
+		}
+	}
+
+	if !foundCreated {
+		t.Error("Expected to find 'idx_table1_name' in results")
+	}
+	if !foundPK {
+		t.Error("Expected to find 'pk_test_table_1_id' (PK index) in results")
 	}
 }
 
