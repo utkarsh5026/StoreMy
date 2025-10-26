@@ -192,9 +192,15 @@ func (cm *CatalogManager) ClearCache() {
 	for _, name := range tableNames {
 		if !systemTables[name] {
 			if tableID, err := cm.tableCache.GetTableID(name); err == nil {
-				if heapFile, exists := cm.openFiles[tableID]; exists {
-					heapFile.Close()
+				cm.mu.Lock()
+				heapFile, exists := cm.openFiles[tableID]
+				if exists {
 					delete(cm.openFiles, tableID)
+				}
+				cm.mu.Unlock()
+
+				if exists {
+					heapFile.Close()
 				}
 				cm.store.UnregisterDbFile(tableID)
 			}
@@ -213,9 +219,15 @@ func (cm *CatalogManager) ClearCacheCompletely() {
 	tableNames := cm.tableCache.GetAllTableNames()
 	for _, name := range tableNames {
 		if tableID, err := cm.tableCache.GetTableID(name); err == nil {
-			if heapFile, exists := cm.openFiles[tableID]; exists {
-				heapFile.Close()
+			cm.mu.Lock()
+			heapFile, exists := cm.openFiles[tableID]
+			if exists {
 				delete(cm.openFiles, tableID)
+			}
+			cm.mu.Unlock()
+
+			if exists {
+				heapFile.Close()
 			}
 			cm.store.UnregisterDbFile(tableID)
 		}
