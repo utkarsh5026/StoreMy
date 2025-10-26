@@ -8,16 +8,12 @@ import (
 	"strings"
 )
 
-type (
-	tableMetadata = systemtable.TableMetadata
-)
-
 type TableOperations struct {
-	*BaseOperations[*tableMetadata]
+	*BaseOperations[*systemtable.TableMetadata]
 }
 
 func NewTableOperations(access catalogio.CatalogAccess, tableID int) *TableOperations {
-	baseOp := NewBaseOperations(access, tableID, systemtable.Tables.Parse, func(t *tableMetadata) *tuple.Tuple {
+	baseOp := NewBaseOperations(access, tableID, systemtable.Tables.Parse, func(t *systemtable.TableMetadata) *tuple.Tuple {
 		return systemtable.Tables.CreateTuple(*t)
 	})
 	return &TableOperations{
@@ -33,7 +29,7 @@ func NewTableOperations(access catalogio.CatalogAccess, tableID int) *TableOpera
 //   - pred: Predicate function that returns true when the desired table is found
 //
 // Returns the matching TableMetadata or an error if not found or if catalog access fails.
-func (to *TableOperations) findTableMetadata(tx TxContext, pred func(tm *tableMetadata) bool) (*tableMetadata, error) {
+func (to *TableOperations) findTableMetadata(tx TxContext, pred func(tm *systemtable.TableMetadata) bool) (*systemtable.TableMetadata, error) {
 	res, err := to.FindOne(tx, pred)
 
 	if err != nil {
@@ -53,8 +49,8 @@ func (to *TableOperations) findTableMetadata(tx TxContext, pred func(tm *tableMe
 //   - tid: Transaction ID for reading catalog
 //
 // Returns a slice of TableMetadata for all tables, or an error if the catalog cannot be read.
-func (to *TableOperations) GetAllTables(tx TxContext) ([]*tableMetadata, error) {
-	return to.FindAll(tx, func(tm *tableMetadata) bool {
+func (to *TableOperations) GetAllTables(tx TxContext) ([]*systemtable.TableMetadata, error) {
+	return to.FindAll(tx, func(tm *systemtable.TableMetadata) bool {
 		return true
 	})
 }
@@ -62,8 +58,8 @@ func (to *TableOperations) GetAllTables(tx TxContext) ([]*tableMetadata, error) 
 // GetTableMetadataByID retrieves complete table metadata from CATALOG_TABLES by table ID.
 // Returns TableMetadata containing table name, file path, and primary key column,
 // or an error if the table is not found.
-func (to *TableOperations) GetTableMetadataByID(tx TxContext, tableID int) (*tableMetadata, error) {
-	return to.findTableMetadata(tx, func(tm *tableMetadata) bool {
+func (to *TableOperations) GetTableMetadataByID(tx TxContext, tableID int) (*systemtable.TableMetadata, error) {
+	return to.findTableMetadata(tx, func(tm *systemtable.TableMetadata) bool {
 		return tm.TableID == tableID
 	})
 }
@@ -72,8 +68,14 @@ func (to *TableOperations) GetTableMetadataByID(tx TxContext, tableID int) (*tab
 // Table name matching is case-insensitive.
 // Returns TableMetadata containing table ID, file path, and primary key column,
 // or an error if the table is not found.
-func (to *TableOperations) GetTableMetadataByName(tx TxContext, tableName string) (*tableMetadata, error) {
-	return to.findTableMetadata(tx, func(tm *tableMetadata) bool {
+func (to *TableOperations) GetTableMetadataByName(tx TxContext, tableName string) (*systemtable.TableMetadata, error) {
+	return to.findTableMetadata(tx, func(tm *systemtable.TableMetadata) bool {
 		return strings.EqualFold(tm.TableName, tableName)
+	})
+}
+
+func (to *TableOperations) DeleteTable(tx TxContext, tableID int) error {
+	return to.DeleteBy(tx, func(tm *systemtable.TableMetadata) bool {
+		return tm.TableID == tableID
 	})
 }
