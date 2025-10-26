@@ -8,7 +8,7 @@ import (
 	"storemy/pkg/execution/query"
 	"storemy/pkg/iterator"
 	"storemy/pkg/storage/heap"
-	"storemy/pkg/storage/page"
+	"storemy/pkg/storage/index"
 	"storemy/pkg/tuple"
 	"storemy/pkg/types"
 	"time"
@@ -16,34 +16,35 @@ import (
 
 // RegisterTable adds a new user table to the system catalog.
 // It inserts metadata into CATALOG_TABLES and column definitions into CATALOG_COLUMNS.
+// If the table has a primary key, it automatically creates a BTREE index for it.
 //
 // This is an internal helper used by CreateTable.
 func (cm *CatalogManager) RegisterTable(tx TxContext, sch *schema.Schema, filepath string) error {
-	tablesFile, err := cm.tableCache.GetDbFile(cm.SystemTabs.TablesTableID)
-	if err != nil {
-		return err
-	}
-
-	tm := systemtable.TableMetadata{
+	tm := &systemtable.TableMetadata{
 		TableName:     sch.TableName,
 		TableID:       sch.TableID,
 		FilePath:      filepath,
 		PrimaryKeyCol: sch.PrimaryKey,
 	}
-	tup := systemtable.Tables.CreateTuple(tm)
-	if err := cm.tupMgr.InsertTuple(tx, tablesFile, tup); err != nil {
-		return fmt.Errorf("failed to insert table metadata: %w", err)
-	}
-
-	colFile, err := cm.tableCache.GetDbFile(cm.SystemTabs.ColumnsTableID)
-	if err != nil {
+	if err := cm.tableOps.Insert(tx, tm); err != nil {
 		return err
 	}
 
-	for _, col := range sch.Columns {
-		tup = systemtable.Columns.CreateTuple(col)
-		if err := cm.tupMgr.InsertTuple(tx, colFile, tup); err != nil {
-			return fmt.Errorf("failed to insert column metadata: %w", err)
+	if err := cm.colOps.InsertColumns(tx, sch.Columns); err != nil {
+		return err
+	}
+
+	if sch.PrimaryKey != "" {
+		pkIndexName := "pk_" + sch.TableName + "_" + sch.PrimaryKey
+		indexCol := &indexCol{
+			indexName:  pkIndexName,
+			tableName:  sch.TableName,
+			indexType:  index.BTreeIndex,
+			columnName: sch.PrimaryKey,
+		}
+		_, _, err := cm.registerIndexWithSchema(tx, sch, indexCol)
+		if err != nil {
+			return fmt.Errorf("failed to create primary key index: %w", err)
 		}
 	}
 
@@ -129,8 +130,27 @@ func (cm *CatalogManager) GetAllTables(tx TxContext) ([]*systemtable.TableMetada
 
 // LoadTableSchema reconstructs the complete schema for a table from CATALOG_COLUMNS.
 // This includes column definitions, types, and constraints.
-func (cm *CatalogManager) LoadTableSchema(tx TxContext, tableID int, tableName string) (*schema.Schema, error) {
-	return cm.colOps.LoadTableSchema(tx, tableID, tableName)
+func (cm *CatalogManager) LoadTableSchema(tx TxContext, tableID int) (*schema.Schema, error) {
+	tm, err := cm.GetTableMetadataByID(tx, tableID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get table metadata: %w", err)
+	}
+
+	columns, err := cm.colOps.LoadColumnMetadata(tx, tableID)
+	if err != nil {
+		return nil, err
+	}
+
+	if len(columns) == 0 {
+		return nil, fmt.Errorf("no columns found for table %d", tableID)
+	}
+
+	sch, err := schema.NewSchema(tableID, tm.TableName, columns)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create schema: %w", err)
+	}
+
+	return sch, nil
 }
 
 // iterateTable scans all tuples in a table and applies a processing function to each.
@@ -160,12 +180,6 @@ func (cm *CatalogManager) iterateTable(tableID int, tx TxContext, processFunc fu
 // Scans all tuples in a table and applies a processing function to each.
 func (cm *CatalogManager) IterateTable(tableID int, tx TxContext, processFunc func(Tuple) error) error {
 	return cm.io.IterateTable(tableID, tx, processFunc)
-}
-
-// GetTableFile2 retrieves the DbFile for a table from the cache.
-// This is used by operation handlers that need direct file access.
-func (cm *CatalogManager) GetTableFile2(tableID int) (page.DbFile, error) {
-	return cm.tableCache.GetDbFile(tableID)
 }
 
 // InsertRow implements CatalogWriter interface by delegating to CatalogIO.
