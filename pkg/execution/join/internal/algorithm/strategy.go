@@ -1,33 +1,27 @@
-package join
+package algorithm
 
 import (
 	"fmt"
+	"storemy/pkg/execution/join/internal/common"
 	"storemy/pkg/iterator"
 	"storemy/pkg/tuple"
 )
 
 // JoinStrategy selects the best join algorithm based on statistics and predicate type
 type JoinStrategy struct {
-	algorithms []JoinAlgorithm
-	stats      *JoinStatistics
+	algorithms []common.JoinAlgorithm
+	stats      *common.JoinStatistics
 }
 
 // NewJoinStrategy creates a strategy selector with available join algorithms
-func NewJoinStrategy(left, right iterator.DbIterator, pred *JoinPredicate, stats *JoinStatistics) *JoinStrategy {
+func NewJoinStrategy(left, right iterator.DbIterator, pred common.JoinPredicate, stats *common.JoinStatistics) *JoinStrategy {
 	if stats == nil {
-		stats = &JoinStatistics{
-			LeftCardinality:  1000,
-			RightCardinality: 1000,
-			LeftSize:         10,
-			RightSize:        10,
-			MemorySize:       100,
-			Selectivity:      0.1,
-		}
+		stats = common.DefaultJoinStatistics()
 	}
 
 	strategy := &JoinStrategy{
 		stats:      stats,
-		algorithms: make([]JoinAlgorithm, 0),
+		algorithms: make([]common.JoinAlgorithm, 0),
 	}
 
 	strategy.algorithms = append(strategy.algorithms,
@@ -40,8 +34,8 @@ func NewJoinStrategy(left, right iterator.DbIterator, pred *JoinPredicate, stats
 }
 
 // SelectBestAlgorithm chooses the most efficient join algorithm
-func (js *JoinStrategy) SelectBestAlgorithm(pred *JoinPredicate) (JoinAlgorithm, error) {
-	var bestAlgorithm JoinAlgorithm
+func (js *JoinStrategy) SelectBestAlgorithm(pred common.JoinPredicate) (common.JoinAlgorithm, error) {
+	var bestAlgorithm common.JoinAlgorithm
 	bestCost := float64(^uint(0) >> 1)
 
 	for _, alg := range js.algorithms {
@@ -64,8 +58,8 @@ func (js *JoinStrategy) SelectBestAlgorithm(pred *JoinPredicate) (JoinAlgorithm,
 }
 
 // GetStatistics collects statistics about the input relations
-func GetStatistics(left, right iterator.DbIterator) (*JoinStatistics, error) {
-	stats := &JoinStatistics{
+func GetStatistics(left, right iterator.DbIterator) (*common.JoinStatistics, error) {
+	stats := &common.JoinStatistics{
 		LeftCardinality:  0,
 		RightCardinality: 0,
 		LeftSize:         0,
@@ -76,22 +70,22 @@ func GetStatistics(left, right iterator.DbIterator) (*JoinStatistics, error) {
 
 	leftCount, err := countTuples(left)
 	if err != nil {
-		return nil, err
+		return stats, err
 	}
 	stats.LeftCardinality = leftCount
 
 	if err := left.Rewind(); err != nil {
-		return nil, err
+		return stats, err
 	}
 
 	rightCount, err := countTuples(right)
 	if err != nil {
-		return nil, err
+		return stats, err
 	}
 	stats.RightCardinality = rightCount
 
 	if err := right.Rewind(); err != nil {
-		return nil, err
+		return stats, err
 	}
 
 	stats.LeftSize = (stats.LeftCardinality + 99) / 100

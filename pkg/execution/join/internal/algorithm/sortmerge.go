@@ -1,18 +1,13 @@
-package join
+package algorithm
 
 import (
 	"fmt"
 	"math"
 	"sort"
+	"storemy/pkg/execution/join/internal/common"
 	"storemy/pkg/iterator"
 	"storemy/pkg/primitives"
 	"storemy/pkg/tuple"
-)
-
-const (
-	ComparisonEqual        = "equal"
-	ComparisonLeftSmaller  = "leftSmaller"
-	ComparisonRightSmaller = "rightSmaller"
 )
 
 // SortMergeJoin implements the sort-merge join algorithm.
@@ -30,7 +25,7 @@ const (
 // Time Complexity: O(n log n + m log m + n + m) where n, m are input sizes
 // Space Complexity: O(n + m) for storing sorted tuples
 type SortMergeJoin struct {
-	BaseJoin
+	common.BaseJoin
 	leftSorted  []*tuple.Tuple
 	rightSorted []*tuple.Tuple
 	leftIndex   int
@@ -38,9 +33,9 @@ type SortMergeJoin struct {
 }
 
 // NewSortMergeJoin creates a new sort-merge join operator.
-func NewSortMergeJoin(left, right iterator.DbIterator, pred *JoinPredicate, stats *JoinStatistics) *SortMergeJoin {
+func NewSortMergeJoin(left, right iterator.DbIterator, pred common.JoinPredicate, stats *common.JoinStatistics) *SortMergeJoin {
 	return &SortMergeJoin{
-		BaseJoin: NewBaseJoin(left, right, pred, stats),
+		BaseJoin: common.NewBaseJoin(left, right, pred, stats),
 	}
 }
 
@@ -56,12 +51,12 @@ func (s *SortMergeJoin) Initialize() error {
 	}
 
 	var err error
-	s.leftSorted, err = loadAndSort(s.leftChild, s.predicate.GetField1())
+	s.leftSorted, err = loadAndSort(s.LeftChild(), s.Predicate().GetField1())
 	if err != nil {
 		return err
 	}
 
-	s.rightSorted, err = loadAndSort(s.rightChild, s.predicate.GetField2())
+	s.rightSorted, err = loadAndSort(s.RightChild(), s.Predicate().GetField2())
 	if err != nil {
 		return err
 	}
@@ -86,7 +81,7 @@ func (s *SortMergeJoin) Next() (*tuple.Tuple, error) {
 		return match, nil
 	}
 
-	s.matchBuffer.StartNew()
+	s.MatchBuffer().StartNew()
 
 	for s.leftIndex < len(s.leftSorted) && s.rightIndex < len(s.rightSorted) {
 		cmp, err := s.compareCurrentTuples()
@@ -100,7 +95,7 @@ func (s *SortMergeJoin) Next() (*tuple.Tuple, error) {
 			if err := s.processEqualKeys(); err != nil {
 				return nil, err
 			}
-			if result := s.matchBuffer.GetFirstAndAdvance(); result != nil {
+			if result := s.MatchBuffer().GetFirstAndAdvance(); result != nil {
 				return result, nil
 			}
 
@@ -135,23 +130,24 @@ func (s *SortMergeJoin) Close() error {
 // - Sorting cost: O(n log n) for each unsorted relation
 // - Merge cost: O(n + m) for the merge phase
 func (s *SortMergeJoin) EstimateCost() float64 {
-	if s.stats == nil {
-		return DefaultHighCost
+	stats := s.Stats()
+	if stats == nil {
+		return common.DefaultHighCost
 	}
 
 	totalCost := 0.0
 
-	if !s.stats.LeftSorted {
-		leftSize := float64(s.stats.LeftSize)
+	if !stats.LeftSorted {
+		leftSize := float64(stats.LeftSize)
 		totalCost += leftSize * 2 * math.Log2(leftSize) // 2 * n * log(n) for sorting
 	}
 
-	if !s.stats.RightSorted {
-		rightSize := float64(s.stats.RightSize)
+	if !stats.RightSorted {
+		rightSize := float64(stats.RightSize)
 		totalCost += rightSize * 2 * math.Log2(rightSize) // 2 * m * log(m) for sorting
 	}
 
-	mergeCost := float64(s.stats.LeftSize + s.stats.RightSize)
+	mergeCost := float64(stats.LeftSize + stats.RightSize)
 	totalCost += mergeCost
 	return totalCost
 }
@@ -159,7 +155,7 @@ func (s *SortMergeJoin) EstimateCost() float64 {
 // SupportsPredicateType checks if the sort-merge join supports the given predicate type.
 //
 // Sort-merge join supports all comparison operators because it works on sorted data.
-func (s *SortMergeJoin) SupportsPredicateType(predicate *JoinPredicate) bool {
+func (s *SortMergeJoin) SupportsPredicateType(predicate common.JoinPredicate) bool {
 	op := predicate.GetOP()
 	return op == primitives.Equals || op == primitives.LessThan ||
 		op == primitives.LessThanOrEqual || op == primitives.GreaterThan ||
@@ -169,7 +165,7 @@ func (s *SortMergeJoin) SupportsPredicateType(predicate *JoinPredicate) bool {
 // compareCurrentTuples compares the current tuples pointed to by leftIndex and rightIndex.
 func (s *SortMergeJoin) compareCurrentTuples() (int, error) {
 	left, right := s.leftSorted[s.leftIndex], s.rightSorted[s.rightIndex]
-	lf, rf := s.predicate.GetField1(), s.predicate.GetField2()
+	lf, rf := s.Predicate().GetField1(), s.Predicate().GetField2()
 
 	eq, err := compareTuples(left, right, lf, rf, primitives.Equals)
 	if err != nil {
@@ -204,13 +200,13 @@ func (s *SortMergeJoin) compareCurrentTuples() (int, error) {
 // 5. Advance to next left tuple
 func (s *SortMergeJoin) processEqualKeys() error {
 	leftTuple := s.leftSorted[s.leftIndex]
-	leftField, _ := leftTuple.GetField(s.predicate.GetField1())
+	leftField, _ := leftTuple.GetField(s.Predicate().GetField1())
 
 	rightStart := s.rightIndex
 
 	for s.rightIndex < len(s.rightSorted) {
 		rt := s.rightSorted[s.rightIndex]
-		rf, err := rt.GetField(s.predicate.GetField2())
+		rf, err := rt.GetField(s.Predicate().GetField2())
 		if err != nil || rf == nil {
 			s.rightIndex++
 			continue
@@ -223,7 +219,7 @@ func (s *SortMergeJoin) processEqualKeys() error {
 
 		combined, err := tuple.CombineTuples(leftTuple, rt)
 		if err == nil {
-			s.matchBuffer.Add(combined)
+			s.MatchBuffer().Add(combined)
 		}
 
 		s.rightIndex++
@@ -234,7 +230,7 @@ func (s *SortMergeJoin) processEqualKeys() error {
 	return nil
 }
 
-// LoadAndSort loads all tuples from an iterator and sorts by field index.
+// loadAndSort loads all tuples from an iterator and sorts by field index.
 func loadAndSort(iter iterator.DbIterator, fieldIndex int) ([]*tuple.Tuple, error) {
 	tuples, err := iterator.Map(iter, func(t *tuple.Tuple) (*tuple.Tuple, error) {
 		return t, nil
@@ -267,7 +263,7 @@ func sortTuplesByField(tuples []*tuple.Tuple, fieldIndex int) {
 	})
 }
 
-// CompareTuples compares two tuples at specified fields using the given operator.
+// compareTuples compares two tuples at specified fields using the given operator.
 func compareTuples(t1, t2 *tuple.Tuple, field1, field2 int, op primitives.Predicate) (bool, error) {
 	f1, err := t1.GetField(field1)
 	if err != nil || f1 == nil {

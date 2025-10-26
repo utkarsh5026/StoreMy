@@ -3,8 +3,11 @@ package join
 import (
 	"errors"
 	"fmt"
+	"storemy/pkg/execution/join/internal/algorithm"
+	"storemy/pkg/execution/join/internal/common"
 	"storemy/pkg/execution/query"
 	"storemy/pkg/iterator"
+	"storemy/pkg/primitives"
 	"storemy/pkg/tuple"
 	"sync"
 )
@@ -16,17 +19,22 @@ type JoinOperator struct {
 	base       *query.BaseIterator
 	leftChild  iterator.DbIterator
 	rightChild iterator.DbIterator
-	predicate  *JoinPredicate
+	predicate  common.JoinPredicate
 	tupleDesc  *tuple.TupleDescription
-	algorithm  JoinAlgorithm
-	strategy   *JoinStrategy
+	algorithm  common.JoinAlgorithm
+	strategy   *algorithm.JoinStrategy
 
 	initialized bool
 	mutex       sync.RWMutex
 }
 
 // NewJoinOperator creates a new join operator with automatic algorithm selection.
-func NewJoinOperator(predicate *JoinPredicate, leftChild, rightChild iterator.DbIterator) (*JoinOperator, error) {
+func NewJoinOperator(field1, field2 int, op primitives.Predicate, leftChild, rightChild iterator.DbIterator) (*JoinOperator, error) {
+	predicate, err := common.NewJoinPredicate(field1, field2, op)
+	if err != nil {
+		return nil, fmt.Errorf("invalid join predicate: %w", err)
+	}
+
 	if err := validateInputs(predicate, leftChild, rightChild); err != nil {
 		return nil, fmt.Errorf("invalid join operator inputs: %w", err)
 	}
@@ -94,31 +102,24 @@ func (j *JoinOperator) openChildOperators() error {
 }
 
 // gatherStatistics collects statistics about the input relations
-func (j *JoinOperator) gatherStatistics() (*JoinStatistics, error) {
-	return GetStatistics(j.leftChild, j.rightChild)
+func (j *JoinOperator) gatherStatistics() (*common.JoinStatistics, error) {
+	return algorithm.GetStatistics(j.leftChild, j.rightChild)
 }
 
 // getDefaultStatistics provides fallback statistics when gathering fails
-func (j *JoinOperator) getDefaultStatistics() *JoinStatistics {
-	return &JoinStatistics{
-		LeftCardinality:  1000, // Assume moderate cardinality
-		RightCardinality: 1000,
-		LeftSize:         10, // Assume small relations
-		RightSize:        10,
-		MemorySize:       100, // Conservative memory estimate
-		Selectivity:      0.1, // Assume 10% selectivity
-	}
+func (j *JoinOperator) getDefaultStatistics() *common.JoinStatistics {
+	return common.DefaultJoinStatistics()
 }
 
 // selectAndInitializeAlgorithm chooses and sets up the optimal join algorithm
-func (j *JoinOperator) selectAndInitializeAlgorithm(stats *JoinStatistics) error {
-	j.strategy = NewJoinStrategy(j.leftChild, j.rightChild, j.predicate, stats)
+func (j *JoinOperator) selectAndInitializeAlgorithm(stats *common.JoinStatistics) error {
+	j.strategy = algorithm.NewJoinStrategy(j.leftChild, j.rightChild, j.predicate, stats)
 
-	algorithm, err := j.strategy.SelectBestAlgorithm(j.predicate)
+	alg, err := j.strategy.SelectBestAlgorithm(j.predicate)
 	if err != nil {
 		return fmt.Errorf("failed to select join algorithm: %w", err)
 	}
-	j.algorithm = algorithm
+	j.algorithm = alg
 
 	if err := j.algorithm.Initialize(); err != nil {
 		return fmt.Errorf("failed to initialize join algorithm: %w", err)
@@ -225,7 +226,7 @@ func (j *JoinOperator) Next() (*tuple.Tuple, error) {
 }
 
 // validateInputs checks that all required inputs are valid.
-func validateInputs(predicate *JoinPredicate, leftChild, rightChild iterator.DbIterator) error {
+func validateInputs(predicate common.JoinPredicate, leftChild, rightChild iterator.DbIterator) error {
 	if predicate == nil {
 		return fmt.Errorf("join predicate cannot be nil")
 	}

@@ -1,7 +1,8 @@
-package join
+package algorithm
 
 import (
 	"fmt"
+	"storemy/pkg/execution/join/internal/common"
 	"storemy/pkg/iterator"
 	"storemy/pkg/primitives"
 	"storemy/pkg/tuple"
@@ -18,15 +19,15 @@ import (
 // Time complexity: O(|R| + |S|) where R and S are the input relations
 // Space complexity: O(|S|) for the hash table storage
 type HashJoin struct {
-	BaseJoin
+	common.BaseJoin
 	hashTable   map[string][]*tuple.Tuple
 	currentLeft *tuple.Tuple
 }
 
 // NewHashJoin creates a new hash join operator.
-func NewHashJoin(left, right iterator.DbIterator, pred *JoinPredicate, stats *JoinStatistics) *HashJoin {
+func NewHashJoin(left, right iterator.DbIterator, pred common.JoinPredicate, stats *common.JoinStatistics) *HashJoin {
 	return &HashJoin{
-		BaseJoin:  NewBaseJoin(left, right, pred, stats),
+		BaseJoin:  common.NewBaseJoin(left, right, pred, stats),
 		hashTable: make(map[string][]*tuple.Tuple),
 	}
 }
@@ -58,7 +59,7 @@ func (hj *HashJoin) Next() (*tuple.Tuple, error) {
 func (hj *HashJoin) Reset() error {
 	hj.currentLeft = nil
 	hj.ResetCommon()
-	return hj.leftChild.Rewind()
+	return hj.LeftChild().Rewind()
 }
 
 // Initialize builds the hash table from the right child relation.
@@ -81,21 +82,22 @@ func (hj *HashJoin) Initialize() error {
 // Uses the classic formula: 3 * (|R| + |S|) representing the cost of
 // reading both relations plus the hash table operations.
 func (hj *HashJoin) EstimateCost() float64 {
-	if hj.stats == nil {
-		return DefaultHighCost
+	stats := hj.Stats()
+	if stats == nil {
+		return common.DefaultHighCost
 	}
-	return 3 * float64(hj.stats.LeftSize+hj.stats.RightSize)
+	return 3 * float64(stats.LeftSize+stats.RightSize)
 }
 
 // SupportsPredicateType checks if this hash join can handle the given predicate.
-func (hj *HashJoin) SupportsPredicateType(predicate *JoinPredicate) bool {
+func (hj *HashJoin) SupportsPredicateType(predicate common.JoinPredicate) bool {
 	return predicate.GetOP() == primitives.Equals
 }
 
 // findNextJoinedTuple finds the next left tuple that has matching right tuples.
 // Iterates through left tuples until finding one with matches in the hash table.
 func (hj *HashJoin) findNextMatch() (*tuple.Tuple, error) {
-	leftFieldIndex := hj.predicate.GetField1()
+	leftFieldIndex := hj.Predicate().GetField1()
 
 	for {
 		leftTuple, err := hj.nextLeftTuple()
@@ -106,7 +108,7 @@ func (hj *HashJoin) findNextMatch() (*tuple.Tuple, error) {
 			return nil, nil // No more tuples
 		}
 
-		key, err := extractJoinKey(leftTuple, leftFieldIndex)
+		key, err := common.ExtractJoinKey(leftTuple, leftFieldIndex)
 		if err != nil {
 			continue
 		}
@@ -122,18 +124,18 @@ func (hj *HashJoin) findNextMatch() (*tuple.Tuple, error) {
 
 // nextLeftTuple gets next tuple from left child.
 func (hj *HashJoin) nextLeftTuple() (*tuple.Tuple, error) {
-	hasNext, err := hj.leftChild.HasNext()
+	hasNext, err := hj.LeftChild().HasNext()
 	if err != nil || !hasNext {
 		return nil, err
 	}
-	return hj.leftChild.Next()
+	return hj.LeftChild().Next()
 }
 
 // setupMatches prepares the iteration state for a left tuple with matches.
 // Sets up currentLeft, matchBuffer, and returns the first joined result.
 func (hj *HashJoin) setupMatches(leftTuple *tuple.Tuple, matches []*tuple.Tuple) (*tuple.Tuple, error) {
 	hj.currentLeft = leftTuple
-	firstRight := hj.matchBuffer.SetMatches(matches)
+	firstRight := hj.MatchBuffer().SetMatches(matches)
 	if firstRight == nil {
 		return nil, nil
 	}
@@ -147,8 +149,8 @@ func (hj *HashJoin) setupMatches(leftTuple *tuple.Tuple, matches []*tuple.Tuple)
 // The hash table maps string join keys to slices of tuples, allowing for
 // duplicate keys (multiple tuples with the same join key value).
 func (h *HashJoin) buildHashTable() error {
-	rightFieldIndex := h.predicate.GetField2()
-	rightTuples, err := iterator.Map(h.rightChild, func(t *tuple.Tuple) (*tuple.Tuple, error) {
+	rightFieldIndex := h.Predicate().GetField2()
+	rightTuples, err := iterator.Map(h.RightChild(), func(t *tuple.Tuple) (*tuple.Tuple, error) {
 		return t, nil
 	})
 
@@ -168,7 +170,7 @@ func (h *HashJoin) buildHashTable() error {
 // addToHashTable adds a single tuple to the hash table using the specified field as key.
 // Handles duplicate keys by appending to the existing slice of tuples.
 func (hj *HashJoin) addToHashTable(rightTuple *tuple.Tuple, fieldIndex int) error {
-	joinKey, err := extractJoinKey(rightTuple, fieldIndex)
+	joinKey, err := common.ExtractJoinKey(rightTuple, fieldIndex)
 	if err != nil {
 		return err
 	}
@@ -179,7 +181,7 @@ func (hj *HashJoin) addToHashTable(rightTuple *tuple.Tuple, fieldIndex int) erro
 
 func (hj *HashJoin) combineWithCurrent(right *tuple.Tuple) (*tuple.Tuple, error) {
 	result, err := tuple.CombineTuples(hj.currentLeft, right)
-	if !hj.matchBuffer.HasNext() {
+	if !hj.MatchBuffer().HasNext() {
 		hj.currentLeft = nil
 	}
 	return result, err

@@ -1,4 +1,4 @@
-package join
+package common
 
 import (
 	"storemy/pkg/primitives"
@@ -75,14 +75,14 @@ func TestNewJoinPredicate(t *testing.T) {
 				if jp == nil {
 					t.Errorf("expected non-nil predicate")
 				}
-				if jp.field1 != tt.field1 {
-					t.Errorf("expected field1=%d, got %d", tt.field1, jp.field1)
+				if jp.GetField1() != tt.field1 {
+					t.Errorf("expected field1=%d, got %d", tt.field1, jp.GetField1())
 				}
-				if jp.field2 != tt.field2 {
-					t.Errorf("expected field2=%d, got %d", tt.field2, jp.field2)
+				if jp.GetField2() != tt.field2 {
+					t.Errorf("expected field2=%d, got %d", tt.field2, jp.GetField2())
 				}
-				if jp.op != tt.op {
-					t.Errorf("expected op=%v, got %v", tt.op, jp.op)
+				if jp.GetOP() != tt.op {
+					t.Errorf("expected op=%v, got %v", tt.op, jp.GetOP())
 				}
 			}
 		})
@@ -133,8 +133,12 @@ func createTestTuple(fieldTypes []types.Type, values []any) *tuple.Tuple {
 	for i, val := range values {
 		var field types.Field
 		switch v := val.(type) {
+		case int32:
+			field = types.NewIntField(int64(v))
 		case int64:
 			field = types.NewIntField(v)
+		case int:
+			field = types.NewIntField(int64(v))
 		case string:
 			field = types.NewStringField(v, types.StringMaxSize)
 		}

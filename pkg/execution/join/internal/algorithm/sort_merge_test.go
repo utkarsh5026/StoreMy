@@ -1,6 +1,7 @@
-package join
+package algorithm
 
 import (
+	"storemy/pkg/execution/join/internal/common"
 	"storemy/pkg/primitives"
 	"storemy/pkg/tuple"
 	"storemy/pkg/types"
@@ -19,8 +20,8 @@ func TestNewSortMergeJoin(t *testing.T) {
 	leftChild := newMockIterator([]*tuple.Tuple{}, leftTupleDesc)
 	rightChild := newMockIterator([]*tuple.Tuple{}, rightTupleDesc)
 
-	predicate, _ := NewJoinPredicate(0, 0, primitives.Equals)
-	stats := &JoinStatistics{
+	predicate, _ := common.NewJoinPredicate(0, 0, primitives.Equals)
+	stats := &common.JoinStatistics{
 		LeftSize:  10,
 		RightSize: 20,
 	}
@@ -30,16 +31,16 @@ func TestNewSortMergeJoin(t *testing.T) {
 	if smj == nil {
 		t.Fatal("expected non-nil SortMergeJoin")
 	}
-	if smj.leftChild != leftChild {
+	if smj.LeftChildField != leftChild {
 		t.Error("left child not set correctly")
 	}
-	if smj.rightChild != rightChild {
+	if smj.RightChildField != rightChild {
 		t.Error("right child not set correctly")
 	}
-	if smj.predicate != predicate {
+	if smj.PredicateField != predicate {
 		t.Error("predicate not set correctly")
 	}
-	if smj.stats != stats {
+	if smj.StatsField != stats {
 		t.Error("stats not set correctly")
 	}
 	if smj.leftIndex != 0 {
@@ -49,10 +50,10 @@ func TestNewSortMergeJoin(t *testing.T) {
 		t.Error("rightIndex should be initialized to 0")
 	}
 
-	if smj.matchBuffer == nil {
+	if smj.MatchBufferField == nil {
 		t.Error("matchBuffer should be initialized")
 	}
-	if smj.initialized {
+	if smj.Initialized {
 		t.Error("initialized should be false")
 	}
 }
@@ -104,7 +105,7 @@ func TestSortMergeJoinInitialize(t *testing.T) {
 			leftChild.Open()
 			rightChild.Open()
 
-			predicate, _ := NewJoinPredicate(0, 0, primitives.Equals)
+			predicate, _ := common.NewJoinPredicate(0, 0, primitives.Equals)
 			smj := NewSortMergeJoin(leftChild, rightChild, predicate, nil)
 
 			err := smj.Initialize()
@@ -112,7 +113,7 @@ func TestSortMergeJoinInitialize(t *testing.T) {
 				t.Fatalf("Initialize failed: %v", err)
 			}
 
-			if !smj.initialized {
+			if !smj.Initialized {
 				t.Error("initialized flag should be true after Initialize")
 			}
 
@@ -144,7 +145,7 @@ func TestSortMergeJoinInitializeIdempotent(t *testing.T) {
 	leftChild.Open()
 	rightChild.Open()
 
-	predicate, _ := NewJoinPredicate(0, 0, primitives.Equals)
+	predicate, _ := common.NewJoinPredicate(0, 0, primitives.Equals)
 	smj := NewSortMergeJoin(leftChild, rightChild, predicate, nil)
 
 	// First initialization
@@ -159,7 +160,7 @@ func TestSortMergeJoinInitializeIdempotent(t *testing.T) {
 		t.Fatalf("second Initialize failed: %v", err)
 	}
 
-	if !smj.initialized {
+	if !smj.Initialized {
 		t.Error("should remain initialized")
 	}
 }
@@ -187,7 +188,7 @@ func TestSortMergeJoinSorting(t *testing.T) {
 	leftChild.Open()
 	rightChild.Open()
 
-	predicate, _ := NewJoinPredicate(0, 0, primitives.Equals)
+	predicate, _ := common.NewJoinPredicate(0, 0, primitives.Equals)
 	smj := NewSortMergeJoin(leftChild, rightChild, predicate, nil)
 
 	err := smj.Initialize()
@@ -240,7 +241,7 @@ func TestSortMergeJoinNext(t *testing.T) {
 	leftChild.Open()
 	rightChild.Open()
 
-	predicate, _ := NewJoinPredicate(0, 0, primitives.Equals)
+	predicate, _ := common.NewJoinPredicate(0, 0, primitives.Equals)
 	smj := NewSortMergeJoin(leftChild, rightChild, predicate, nil)
 
 	err := smj.Initialize()
@@ -280,7 +281,7 @@ func TestSortMergeJoinNextBeforeInitialize(t *testing.T) {
 	leftChild := newMockIterator([]*tuple.Tuple{}, leftTupleDesc)
 	rightChild := newMockIterator([]*tuple.Tuple{}, rightTupleDesc)
 
-	predicate, _ := NewJoinPredicate(0, 0, primitives.Equals)
+	predicate, _ := common.NewJoinPredicate(0, 0, primitives.Equals)
 	smj := NewSortMergeJoin(leftChild, rightChild, predicate, nil)
 
 	// Try to call Next without Initialize
@@ -311,7 +312,7 @@ func TestSortMergeJoinDuplicates(t *testing.T) {
 	leftChild.Open()
 	rightChild.Open()
 
-	predicate, _ := NewJoinPredicate(0, 0, primitives.Equals)
+	predicate, _ := common.NewJoinPredicate(0, 0, primitives.Equals)
 	smj := NewSortMergeJoin(leftChild, rightChild, predicate, nil)
 
 	err := smj.Initialize()
@@ -359,7 +360,7 @@ func TestSortMergeJoinOneToMany(t *testing.T) {
 	leftChild.Open()
 	rightChild.Open()
 
-	predicate, _ := NewJoinPredicate(0, 0, primitives.Equals)
+	predicate, _ := common.NewJoinPredicate(0, 0, primitives.Equals)
 	smj := NewSortMergeJoin(leftChild, rightChild, predicate, nil)
 
 	err := smj.Initialize()
@@ -406,7 +407,7 @@ func TestSortMergeJoinNoMatches(t *testing.T) {
 	leftChild.Open()
 	rightChild.Open()
 
-	predicate, _ := NewJoinPredicate(0, 0, primitives.Equals)
+	predicate, _ := common.NewJoinPredicate(0, 0, primitives.Equals)
 	smj := NewSortMergeJoin(leftChild, rightChild, predicate, nil)
 
 	err := smj.Initialize()
@@ -468,7 +469,7 @@ func TestSortMergeJoinEmptyInputs(t *testing.T) {
 			leftChild.Open()
 			rightChild.Open()
 
-			predicate, _ := NewJoinPredicate(0, 0, primitives.Equals)
+			predicate, _ := common.NewJoinPredicate(0, 0, primitives.Equals)
 			smj := NewSortMergeJoin(leftChild, rightChild, predicate, nil)
 
 			err := smj.Initialize()
@@ -507,7 +508,7 @@ func TestSortMergeJoinWithNullFields(t *testing.T) {
 	leftChild.Open()
 	rightChild.Open()
 
-	predicate, _ := NewJoinPredicate(0, 0, primitives.Equals)
+	predicate, _ := common.NewJoinPredicate(0, 0, primitives.Equals)
 	smj := NewSortMergeJoin(leftChild, rightChild, predicate, nil)
 
 	err := smj.Initialize()
@@ -554,7 +555,7 @@ func TestSortMergeJoinReset(t *testing.T) {
 	leftChild.Open()
 	rightChild.Open()
 
-	predicate, _ := NewJoinPredicate(0, 0, primitives.Equals)
+	predicate, _ := common.NewJoinPredicate(0, 0, primitives.Equals)
 	smj := NewSortMergeJoin(leftChild, rightChild, predicate, nil)
 
 	err := smj.Initialize()
@@ -613,7 +614,7 @@ func TestSortMergeJoinClose(t *testing.T) {
 	leftChild.Open()
 	rightChild.Open()
 
-	predicate, _ := NewJoinPredicate(0, 0, primitives.Equals)
+	predicate, _ := common.NewJoinPredicate(0, 0, primitives.Equals)
 	smj := NewSortMergeJoin(leftChild, rightChild, predicate, nil)
 
 	err := smj.Initialize()
@@ -634,7 +635,7 @@ func TestSortMergeJoinClose(t *testing.T) {
 	if smj.rightSorted != nil {
 		t.Error("rightSorted should be nil after close")
 	}
-	if smj.initialized {
+	if smj.Initialized {
 		t.Error("initialized should be false after close")
 	}
 }
@@ -647,11 +648,11 @@ func TestSortMergeJoinEstimateCost(t *testing.T) {
 	leftChild := newMockIterator([]*tuple.Tuple{}, leftTupleDesc)
 	rightChild := newMockIterator([]*tuple.Tuple{}, rightTupleDesc)
 
-	predicate, _ := NewJoinPredicate(0, 0, primitives.Equals)
+	predicate, _ := common.NewJoinPredicate(0, 0, primitives.Equals)
 
 	tests := []struct {
 		name         string
-		stats        *JoinStatistics
+		stats        *common.JoinStatistics
 		expectedCost float64
 	}{
 		{
@@ -661,7 +662,7 @@ func TestSortMergeJoinEstimateCost(t *testing.T) {
 		},
 		{
 			name: "both sorted",
-			stats: &JoinStatistics{
+			stats: &common.JoinStatistics{
 				LeftSize:    100,
 				RightSize:   200,
 				LeftSorted:  true,
@@ -671,7 +672,7 @@ func TestSortMergeJoinEstimateCost(t *testing.T) {
 		},
 		{
 			name: "neither sorted",
-			stats: &JoinStatistics{
+			stats: &common.JoinStatistics{
 				LeftSize:    8,
 				RightSize:   4,
 				LeftSorted:  false,
@@ -685,7 +686,7 @@ func TestSortMergeJoinEstimateCost(t *testing.T) {
 		},
 		{
 			name: "left sorted only",
-			stats: &JoinStatistics{
+			stats: &common.JoinStatistics{
 				LeftSize:    10,
 				RightSize:   8,
 				LeftSorted:  true,
@@ -718,7 +719,7 @@ func TestSortMergeJoinSupportsPredicateType(t *testing.T) {
 	leftChild := newMockIterator([]*tuple.Tuple{}, leftTupleDesc)
 	rightChild := newMockIterator([]*tuple.Tuple{}, rightTupleDesc)
 
-	predicate, _ := NewJoinPredicate(0, 0, primitives.Equals)
+	predicate, _ := common.NewJoinPredicate(0, 0, primitives.Equals)
 	smj := NewSortMergeJoin(leftChild, rightChild, predicate, nil)
 
 	tests := []struct {
@@ -760,7 +761,7 @@ func TestSortMergeJoinSupportsPredicateType(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			pred, _ := NewJoinPredicate(0, 0, tt.op)
+			pred, _ := common.NewJoinPredicate(0, 0, tt.op)
 			result := smj.SupportsPredicateType(pred)
 
 			if result != tt.expectedResult {
@@ -792,7 +793,7 @@ func TestSortMergeJoinStringKeys(t *testing.T) {
 	leftChild.Open()
 	rightChild.Open()
 
-	predicate, _ := NewJoinPredicate(0, 0, primitives.Equals)
+	predicate, _ := common.NewJoinPredicate(0, 0, primitives.Equals)
 	smj := NewSortMergeJoin(leftChild, rightChild, predicate, nil)
 
 	err := smj.Initialize()
@@ -830,7 +831,7 @@ func TestSortMergeJoinErrorHandling(t *testing.T) {
 		leftChild.hasError = true
 		leftChild.Open()
 
-		predicate, _ := NewJoinPredicate(0, 0, primitives.Equals)
+		predicate, _ := common.NewJoinPredicate(0, 0, primitives.Equals)
 		smj := NewSortMergeJoin(leftChild, rightChild, predicate, nil)
 
 		err := smj.Initialize()
@@ -849,7 +850,7 @@ func TestSortMergeJoinErrorHandling(t *testing.T) {
 		leftChild.Open()
 		rightChild.Open()
 
-		predicate, _ := NewJoinPredicate(0, 0, primitives.Equals)
+		predicate, _ := common.NewJoinPredicate(0, 0, primitives.Equals)
 		smj := NewSortMergeJoin(leftChild, rightChild, predicate, nil)
 
 		err := smj.Initialize()
@@ -879,7 +880,7 @@ func TestSortMergeJoinBufferMatches(t *testing.T) {
 	leftChild.Open()
 	rightChild.Open()
 
-	predicate, _ := NewJoinPredicate(0, 0, primitives.Equals)
+	predicate, _ := common.NewJoinPredicate(0, 0, primitives.Equals)
 	smj := NewSortMergeJoin(leftChild, rightChild, predicate, nil)
 
 	err := smj.Initialize()

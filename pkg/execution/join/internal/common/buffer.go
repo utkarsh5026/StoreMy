@@ -1,10 +1,6 @@
-package join
+package common
 
-import (
-	"fmt"
-	"storemy/pkg/iterator"
-	"storemy/pkg/tuple"
-)
+import "storemy/pkg/tuple"
 
 // JoinMatchBuffer manages a buffer of matched tuples for join operations.
 // This provides a common abstraction for buffering join results that need
@@ -79,66 +75,4 @@ func (jmb *JoinMatchBuffer) GetFirstAndAdvance() *tuple.Tuple {
 	}
 	jmb.index = 1
 	return jmb.buffer[0]
-}
-
-// BaseJoin provides common functionality for all join implementations.
-type BaseJoin struct {
-	leftChild   iterator.DbIterator
-	rightChild  iterator.DbIterator
-	predicate   *JoinPredicate
-	stats       *JoinStatistics
-	matchBuffer *JoinMatchBuffer
-	initialized bool
-}
-
-// NewBaseJoin creates a new base join with common initialization.
-func NewBaseJoin(left, right iterator.DbIterator, pred *JoinPredicate, stats *JoinStatistics) BaseJoin {
-	return BaseJoin{
-		leftChild:   left,
-		rightChild:  right,
-		predicate:   pred,
-		stats:       stats,
-		matchBuffer: NewJoinMatchBuffer(),
-		initialized: false,
-	}
-}
-
-// Close releases common resources.
-func (bj *BaseJoin) Close() error {
-	bj.matchBuffer.Reset()
-	bj.initialized = false
-	return nil
-}
-
-// IsInitialized checks if the join has been initialized.
-func (bj *BaseJoin) IsInitialized() bool {
-	return bj.initialized
-}
-
-// SetInitialized marks the join as initialized.
-func (bj *BaseJoin) SetInitialized() {
-	bj.initialized = true
-}
-
-// GetMatchFromBuffer returns next match if available, nil otherwise.
-func (bj *BaseJoin) GetMatchFromBuffer() *tuple.Tuple {
-	if bj.matchBuffer.HasNext() {
-		return bj.matchBuffer.Next()
-	}
-	return nil
-}
-
-// ResetCommon resets common state for all join types.
-func (bj *BaseJoin) ResetCommon() error {
-	bj.matchBuffer.Reset()
-	return nil
-}
-
-// ExtractJoinKey extracts and stringifies the join key from a tuple.
-func extractJoinKey(t *tuple.Tuple, fieldIndex int) (string, error) {
-	field, err := t.GetField(fieldIndex)
-	if err != nil || field == nil {
-		return "", fmt.Errorf("invalid join key at field %d", fieldIndex)
-	}
-	return field.String(), nil
 }

@@ -1,13 +1,14 @@
-package join
+package algorithm
 
 import (
+	"storemy/pkg/execution/join/internal/common"
 	"storemy/pkg/primitives"
 	"storemy/pkg/tuple"
 	"storemy/pkg/types"
 	"testing"
 )
 
-// mockJoinAlgorithm is a test helper that implements JoinAlgorithm
+// mockJoinAlgorithm is a test helper that implements common.JoinAlgorithm
 type mockJoinAlgorithm struct {
 	supportsType bool
 	cost         float64
@@ -33,14 +34,14 @@ func (m *mockJoinAlgorithm) EstimateCost() float64 {
 	return m.cost
 }
 
-func (m *mockJoinAlgorithm) SupportsPredicateType(pred *JoinPredicate) bool {
+func (m *mockJoinAlgorithm) SupportsPredicateType(pred common.JoinPredicate) bool {
 	return m.supportsType
 }
 
 func TestNewJoinStrategy(t *testing.T) {
 	tests := []struct {
 		name  string
-		stats *JoinStatistics
+		stats *common.JoinStatistics
 	}{
 		{
 			name:  "with nil stats",
@@ -48,7 +49,7 @@ func TestNewJoinStrategy(t *testing.T) {
 		},
 		{
 			name: "with provided stats",
-			stats: &JoinStatistics{
+			stats: &common.JoinStatistics{
 				LeftCardinality:  500,
 				RightCardinality: 1500,
 				LeftSize:         5,
@@ -64,7 +65,7 @@ func TestNewJoinStrategy(t *testing.T) {
 			tupleDesc := createTestTupleDesc([]types.Type{types.IntType}, []string{"id"})
 			left := newMockIterator([]*tuple.Tuple{}, tupleDesc)
 			right := newMockIterator([]*tuple.Tuple{}, tupleDesc)
-			pred, _ := NewJoinPredicate(0, 0, primitives.Equals)
+			pred, _ := common.NewJoinPredicate(0, 0, primitives.Equals)
 
 			strategy := NewJoinStrategy(left, right, pred, tt.stats)
 
@@ -108,13 +109,13 @@ func TestNewJoinStrategy(t *testing.T) {
 func TestSelectBestAlgorithm(t *testing.T) {
 	tests := []struct {
 		name          string
-		algorithms    []JoinAlgorithm
+		algorithms    []common.JoinAlgorithm
 		expectedError bool
 		expectedCost  float64
 	}{
 		{
 			name: "selects algorithm with lowest cost",
-			algorithms: []JoinAlgorithm{
+			algorithms: []common.JoinAlgorithm{
 				&mockJoinAlgorithm{supportsType: true, cost: 100},
 				&mockJoinAlgorithm{supportsType: true, cost: 50},
 				&mockJoinAlgorithm{supportsType: true, cost: 200},
@@ -124,7 +125,7 @@ func TestSelectBestAlgorithm(t *testing.T) {
 		},
 		{
 			name: "skips algorithms that don't support predicate",
-			algorithms: []JoinAlgorithm{
+			algorithms: []common.JoinAlgorithm{
 				&mockJoinAlgorithm{supportsType: false, cost: 10},
 				&mockJoinAlgorithm{supportsType: true, cost: 100},
 				&mockJoinAlgorithm{supportsType: false, cost: 5},
@@ -134,7 +135,7 @@ func TestSelectBestAlgorithm(t *testing.T) {
 		},
 		{
 			name: "returns error when no algorithm supports predicate",
-			algorithms: []JoinAlgorithm{
+			algorithms: []common.JoinAlgorithm{
 				&mockJoinAlgorithm{supportsType: false, cost: 10},
 				&mockJoinAlgorithm{supportsType: false, cost: 20},
 			},
@@ -142,7 +143,7 @@ func TestSelectBestAlgorithm(t *testing.T) {
 		},
 		{
 			name:          "returns error with empty algorithms",
-			algorithms:    []JoinAlgorithm{},
+			algorithms:    []common.JoinAlgorithm{},
 			expectedError: true,
 		},
 	}
@@ -151,10 +152,10 @@ func TestSelectBestAlgorithm(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			strategy := &JoinStrategy{
 				algorithms: tt.algorithms,
-				stats:      &JoinStatistics{},
+				stats:      &common.JoinStatistics{},
 			}
 
-			pred, _ := NewJoinPredicate(0, 0, primitives.Equals)
+			pred, _ := common.NewJoinPredicate(0, 0, primitives.Equals)
 
 			alg, err := strategy.SelectBestAlgorithm(pred)
 

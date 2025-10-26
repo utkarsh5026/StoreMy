@@ -1,6 +1,7 @@
-package join
+package algorithm
 
 import (
+	"storemy/pkg/execution/join/internal/common"
 	"storemy/pkg/primitives"
 	"storemy/pkg/tuple"
 	"storemy/pkg/types"
@@ -19,11 +20,11 @@ func TestNewNestedLoopJoin(t *testing.T) {
 	leftChild := newMockIterator([]*tuple.Tuple{}, leftTupleDesc)
 	rightChild := newMockIterator([]*tuple.Tuple{}, rightTupleDesc)
 
-	predicate, _ := NewJoinPredicate(0, 0, primitives.Equals)
+	predicate, _ := common.NewJoinPredicate(0, 0, primitives.Equals)
 
 	tests := []struct {
 		name              string
-		stats             *JoinStatistics
+		stats             *common.JoinStatistics
 		expectedBlockSize int
 	}{
 		{
@@ -33,14 +34,14 @@ func TestNewNestedLoopJoin(t *testing.T) {
 		},
 		{
 			name: "with stats memory size",
-			stats: &JoinStatistics{
+			stats: &common.JoinStatistics{
 				MemorySize: 5,
 			},
 			expectedBlockSize: 500, // 5 * 100
 		},
 		{
 			name: "zero memory size",
-			stats: &JoinStatistics{
+			stats: &common.JoinStatistics{
 				MemorySize: 0,
 			},
 			expectedBlockSize: 100, // Default
@@ -54,13 +55,13 @@ func TestNewNestedLoopJoin(t *testing.T) {
 			if nl == nil {
 				t.Fatal("expected non-nil NestedLoopJoin")
 			}
-			if nl.leftChild != leftChild {
+			if nl.LeftChildField != leftChild {
 				t.Error("left child not set correctly")
 			}
-			if nl.rightChild != rightChild {
+			if nl.RightChildField != rightChild {
 				t.Error("right child not set correctly")
 			}
-			if nl.predicate != predicate {
+			if nl.PredicateField != predicate {
 				t.Error("predicate not set correctly")
 			}
 			if nl.blockSize != tt.expectedBlockSize {
@@ -69,10 +70,10 @@ func TestNewNestedLoopJoin(t *testing.T) {
 			if nl.blockIndex != 0 {
 				t.Error("blockIndex should be initialized to 0")
 			}
-			if nl.matchBuffer == nil {
+			if nl.MatchBufferField == nil {
 				t.Error("matchBuffer should be initialized")
 			}
-			if nl.initialized {
+			if nl.Initialized {
 				t.Error("initialized should be false")
 			}
 		})
@@ -120,7 +121,7 @@ func TestNestedLoopJoinInitialize(t *testing.T) {
 			leftChild.Open()
 			rightChild.Open()
 
-			predicate, _ := NewJoinPredicate(0, 0, primitives.Equals)
+			predicate, _ := common.NewJoinPredicate(0, 0, primitives.Equals)
 			nl := NewNestedLoopJoin(leftChild, rightChild, predicate, nil)
 
 			err := nl.Initialize()
@@ -128,8 +129,8 @@ func TestNestedLoopJoinInitialize(t *testing.T) {
 				t.Fatalf("Initialize failed: %v", err)
 			}
 
-			if nl.initialized != tt.expectedInitialize {
-				t.Errorf("expected initialized=%v, got %v", tt.expectedInitialize, nl.initialized)
+			if nl.Initialized != tt.expectedInitialize {
+				t.Errorf("expected initialized=%v, got %v", tt.expectedInitialize, nl.Initialized)
 			}
 
 			if len(nl.leftBlock) != tt.expectedBlockSize {
@@ -153,7 +154,7 @@ func TestNestedLoopJoinInitializeIdempotent(t *testing.T) {
 	leftChild.Open()
 	rightChild.Open()
 
-	predicate, _ := NewJoinPredicate(0, 0, primitives.Equals)
+	predicate, _ := common.NewJoinPredicate(0, 0, primitives.Equals)
 	nl := NewNestedLoopJoin(leftChild, rightChild, predicate, nil)
 
 	// First initialization
@@ -168,7 +169,7 @@ func TestNestedLoopJoinInitializeIdempotent(t *testing.T) {
 		t.Fatalf("second Initialize failed: %v", err)
 	}
 
-	if !nl.initialized {
+	if !nl.Initialized {
 		t.Error("should remain initialized")
 	}
 }
@@ -195,7 +196,7 @@ func TestNestedLoopJoinNext(t *testing.T) {
 	leftChild.Open()
 	rightChild.Open()
 
-	predicate, _ := NewJoinPredicate(0, 0, primitives.Equals)
+	predicate, _ := common.NewJoinPredicate(0, 0, primitives.Equals)
 	nl := NewNestedLoopJoin(leftChild, rightChild, predicate, nil)
 
 	err := nl.Initialize()
@@ -235,7 +236,7 @@ func TestNestedLoopJoinNextBeforeInitialize(t *testing.T) {
 	leftChild := newMockIterator([]*tuple.Tuple{}, leftTupleDesc)
 	rightChild := newMockIterator([]*tuple.Tuple{}, rightTupleDesc)
 
-	predicate, _ := NewJoinPredicate(0, 0, primitives.Equals)
+	predicate, _ := common.NewJoinPredicate(0, 0, primitives.Equals)
 	nl := NewNestedLoopJoin(leftChild, rightChild, predicate, nil)
 
 	// Try to call Next without Initialize
@@ -268,9 +269,9 @@ func TestNestedLoopJoinMultipleBlocks(t *testing.T) {
 	leftChild.Open()
 	rightChild.Open()
 
-	predicate, _ := NewJoinPredicate(0, 0, primitives.Equals)
+	predicate, _ := common.NewJoinPredicate(0, 0, primitives.Equals)
 	// Set small block size to force multiple blocks
-	stats := &JoinStatistics{MemorySize: 0} // Will use default 100
+	stats := &common.JoinStatistics{MemorySize: 0} // Will use default 100
 	nl := NewNestedLoopJoin(leftChild, rightChild, predicate, stats)
 	nl.blockSize = 2 // Override to force multiple blocks
 
@@ -320,7 +321,7 @@ func TestNestedLoopJoinNonEquality(t *testing.T) {
 	rightChild.Open()
 
 	// Greater than predicate
-	predicate, _ := NewJoinPredicate(0, 0, primitives.GreaterThan)
+	predicate, _ := common.NewJoinPredicate(0, 0, primitives.GreaterThan)
 	nl := NewNestedLoopJoin(leftChild, rightChild, predicate, nil)
 
 	err := nl.Initialize()
@@ -369,7 +370,7 @@ func TestNestedLoopJoinMultipleMatches(t *testing.T) {
 	leftChild.Open()
 	rightChild.Open()
 
-	predicate, _ := NewJoinPredicate(0, 0, primitives.Equals)
+	predicate, _ := common.NewJoinPredicate(0, 0, primitives.Equals)
 	nl := NewNestedLoopJoin(leftChild, rightChild, predicate, nil)
 
 	err := nl.Initialize()
@@ -417,7 +418,7 @@ func TestNestedLoopJoinManyToMany(t *testing.T) {
 	leftChild.Open()
 	rightChild.Open()
 
-	predicate, _ := NewJoinPredicate(0, 0, primitives.Equals)
+	predicate, _ := common.NewJoinPredicate(0, 0, primitives.Equals)
 	nl := NewNestedLoopJoin(leftChild, rightChild, predicate, nil)
 
 	err := nl.Initialize()
@@ -464,7 +465,7 @@ func TestNestedLoopJoinNoMatches(t *testing.T) {
 	leftChild.Open()
 	rightChild.Open()
 
-	predicate, _ := NewJoinPredicate(0, 0, primitives.Equals)
+	predicate, _ := common.NewJoinPredicate(0, 0, primitives.Equals)
 	nl := NewNestedLoopJoin(leftChild, rightChild, predicate, nil)
 
 	err := nl.Initialize()
@@ -526,7 +527,7 @@ func TestNestedLoopJoinEmptyInputs(t *testing.T) {
 			leftChild.Open()
 			rightChild.Open()
 
-			predicate, _ := NewJoinPredicate(0, 0, primitives.Equals)
+			predicate, _ := common.NewJoinPredicate(0, 0, primitives.Equals)
 			nl := NewNestedLoopJoin(leftChild, rightChild, predicate, nil)
 
 			err := nl.Initialize()
@@ -565,7 +566,7 @@ func TestNestedLoopJoinWithNullFields(t *testing.T) {
 	leftChild.Open()
 	rightChild.Open()
 
-	predicate, _ := NewJoinPredicate(0, 0, primitives.Equals)
+	predicate, _ := common.NewJoinPredicate(0, 0, primitives.Equals)
 	nl := NewNestedLoopJoin(leftChild, rightChild, predicate, nil)
 
 	err := nl.Initialize()
@@ -612,7 +613,7 @@ func TestNestedLoopJoinReset(t *testing.T) {
 	leftChild.Open()
 	rightChild.Open()
 
-	predicate, _ := NewJoinPredicate(0, 0, primitives.Equals)
+	predicate, _ := common.NewJoinPredicate(0, 0, primitives.Equals)
 	nl := NewNestedLoopJoin(leftChild, rightChild, predicate, nil)
 
 	err := nl.Initialize()
@@ -668,7 +669,7 @@ func TestNestedLoopJoinClose(t *testing.T) {
 	leftChild.Open()
 	rightChild.Open()
 
-	predicate, _ := NewJoinPredicate(0, 0, primitives.Equals)
+	predicate, _ := common.NewJoinPredicate(0, 0, primitives.Equals)
 	nl := NewNestedLoopJoin(leftChild, rightChild, predicate, nil)
 
 	err := nl.Initialize()
@@ -686,7 +687,7 @@ func TestNestedLoopJoinClose(t *testing.T) {
 	if nl.leftBlock != nil {
 		t.Error("leftBlock should be nil after close")
 	}
-	if nl.initialized {
+	if nl.Initialized {
 		t.Error("initialized should be false after close")
 	}
 }
@@ -699,11 +700,11 @@ func TestNestedLoopJoinEstimateCost(t *testing.T) {
 	leftChild := newMockIterator([]*tuple.Tuple{}, leftTupleDesc)
 	rightChild := newMockIterator([]*tuple.Tuple{}, rightTupleDesc)
 
-	predicate, _ := NewJoinPredicate(0, 0, primitives.Equals)
+	predicate, _ := common.NewJoinPredicate(0, 0, primitives.Equals)
 
 	tests := []struct {
 		name         string
-		stats        *JoinStatistics
+		stats        *common.JoinStatistics
 		blockSize    int
 		expectedCost float64
 	}{
@@ -715,7 +716,7 @@ func TestNestedLoopJoinEstimateCost(t *testing.T) {
 		},
 		{
 			name: "with stats",
-			stats: &JoinStatistics{
+			stats: &common.JoinStatistics{
 				LeftSize:  100,
 				RightSize: 200,
 			},
@@ -724,7 +725,7 @@ func TestNestedLoopJoinEstimateCost(t *testing.T) {
 		},
 		{
 			name: "multiple blocks",
-			stats: &JoinStatistics{
+			stats: &common.JoinStatistics{
 				LeftSize:  200,
 				RightSize: 100,
 			},
@@ -754,7 +755,7 @@ func TestNestedLoopJoinSupportsPredicateType(t *testing.T) {
 	leftChild := newMockIterator([]*tuple.Tuple{}, leftTupleDesc)
 	rightChild := newMockIterator([]*tuple.Tuple{}, rightTupleDesc)
 
-	predicate, _ := NewJoinPredicate(0, 0, primitives.Equals)
+	predicate, _ := common.NewJoinPredicate(0, 0, primitives.Equals)
 	nl := NewNestedLoopJoin(leftChild, rightChild, predicate, nil)
 
 	// Nested loop join supports all predicate types
@@ -772,7 +773,7 @@ func TestNestedLoopJoinSupportsPredicateType(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			pred, _ := NewJoinPredicate(0, 0, tt.op)
+			pred, _ := common.NewJoinPredicate(0, 0, tt.op)
 			result := nl.SupportsPredicateType(pred)
 
 			if !result {
@@ -802,7 +803,7 @@ func TestNestedLoopJoinStringKeys(t *testing.T) {
 	leftChild.Open()
 	rightChild.Open()
 
-	predicate, _ := NewJoinPredicate(0, 0, primitives.Equals)
+	predicate, _ := common.NewJoinPredicate(0, 0, primitives.Equals)
 	nl := NewNestedLoopJoin(leftChild, rightChild, predicate, nil)
 
 	err := nl.Initialize()
@@ -840,7 +841,7 @@ func TestNestedLoopJoinErrorHandling(t *testing.T) {
 		leftChild.hasError = true
 		leftChild.Open()
 
-		predicate, _ := NewJoinPredicate(0, 0, primitives.Equals)
+		predicate, _ := common.NewJoinPredicate(0, 0, primitives.Equals)
 		nl := NewNestedLoopJoin(leftChild, rightChild, predicate, nil)
 
 		err := nl.Initialize()
@@ -863,7 +864,7 @@ func TestNestedLoopJoinErrorHandling(t *testing.T) {
 		leftChild.Open()
 		rightChild.Open()
 
-		predicate, _ := NewJoinPredicate(0, 0, primitives.Equals)
+		predicate, _ := common.NewJoinPredicate(0, 0, primitives.Equals)
 		nl := NewNestedLoopJoin(leftChild, rightChild, predicate, nil)
 
 		err := nl.Initialize()
@@ -898,7 +899,7 @@ func TestNestedLoopJoinBufferMatches(t *testing.T) {
 	leftChild.Open()
 	rightChild.Open()
 
-	predicate, _ := NewJoinPredicate(0, 0, primitives.Equals)
+	predicate, _ := common.NewJoinPredicate(0, 0, primitives.Equals)
 	nl := NewNestedLoopJoin(leftChild, rightChild, predicate, nil)
 
 	err := nl.Initialize()
