@@ -5,7 +5,6 @@ import (
 	"os"
 	"path/filepath"
 	"storemy/pkg/catalog/schema"
-	"storemy/pkg/catalog/tablecache"
 	"storemy/pkg/concurrency/transaction"
 	"storemy/pkg/log/wal"
 	"storemy/pkg/memory"
@@ -25,7 +24,6 @@ type testSetup struct {
 	tempDir    string
 	catalogMgr *CatalogManager
 	txRegistry *transaction.TransactionRegistry
-	tm         *tablecache.TableCache
 	store      *memory.PageStore
 	wal        *wal.WAL
 	t          *testing.T
@@ -36,7 +34,6 @@ func setupTest(t *testing.T) *testSetup {
 	tempDir := t.TempDir()
 	walPath := filepath.Join(tempDir, "test.wal")
 
-	tm := tablecache.NewTableCache()
 	wal, err := wal.NewWAL(walPath, 8192)
 	if err != nil {
 		t.Fatalf("Failed to create WAL: %v", err)
@@ -50,7 +47,6 @@ func setupTest(t *testing.T) *testSetup {
 		tempDir:    tempDir,
 		catalogMgr: catalogMgr,
 		txRegistry: txRegistry,
-		tm:         tm,
 		store:      store,
 		wal:        wal,
 		t:          t,
@@ -59,7 +55,7 @@ func setupTest(t *testing.T) *testSetup {
 
 // cleanup closes all resources
 func (s *testSetup) cleanup() {
-	s.tm.Clear()
+	s.catalogMgr.tableCache.Clear()
 	s.wal.Close()
 }
 
@@ -111,11 +107,14 @@ func TestCatalogManager_Initialize(t *testing.T) {
 	}
 
 	// Verify catalog tables exist in memory
-	tables := setup.tm.GetAllTableNames()
+	tables := setup.catalogMgr.tableCache.GetAllTableNames()
 	expectedTables := map[string]bool{
-		"CATALOG_TABLES":     true,
-		"CATALOG_COLUMNS":    true,
-		"CATALOG_STATISTICS": true,
+		"CATALOG_TABLES":            true,
+		"CATALOG_COLUMNS":           true,
+		"CATALOG_STATISTICS":        true,
+		"CATALOG_INDEXES":           true,
+		"CATALOG_COLUMN_STATISTICS": true,
+		"CATALOG_INDEX_STATISTICS":  true,
 	}
 
 	if len(tables) != len(expectedTables) {
@@ -163,8 +162,8 @@ func TestCatalogManager_CreateTable(t *testing.T) {
 	}
 
 	// Verify table exists in memory
-	if !setup.tm.TableExists("users") {
-		t.Error("Table not found in TableManager")
+	if !setup.catalogMgr.tableCache.TableExists("users") {
+		t.Error("Table not found in TableCache")
 	}
 
 	// Verify table ID lookup works
@@ -242,8 +241,8 @@ func TestCatalogManager_DropTable(t *testing.T) {
 	}
 
 	// Verify table no longer exists in memory
-	if setup.tm.TableExists("test_table") {
-		t.Error("Table still exists in TableManager after drop")
+	if setup.catalogMgr.tableCache.TableExists("test_table") {
+		t.Error("Table still exists in TableCache after drop")
 	}
 
 	// Verify table no longer in catalog
@@ -321,12 +320,12 @@ func TestCatalogManager_RenameTable(t *testing.T) {
 	setup.commitTx(tx3)
 
 	// Verify in memory: old name doesn't exist
-	if setup.tm.TableExists("old_name") {
+	if setup.catalogMgr.tableCache.TableExists("old_name") {
 		t.Error("Old table name should not exist in memory")
 	}
 
 	// Verify in memory: new name exists
-	if !setup.tm.TableExists("new_name") {
+	if !setup.catalogMgr.tableCache.TableExists("new_name") {
 		t.Error("New table name should exist in memory")
 	}
 
@@ -383,7 +382,7 @@ func TestCatalogManager_LoadUnloadTable(t *testing.T) {
 	// }
 
 	// Verify not in memory
-	if setup.tm.TableExists("lazy_table") {
+	if setup.catalogMgr.tableCache.TableExists("lazy_table") {
 		t.Error("Table should not be in memory after unload")
 	}
 
@@ -401,7 +400,7 @@ func TestCatalogManager_LoadUnloadTable(t *testing.T) {
 	}
 
 	// Verify in memory again
-	if !setup.tm.TableExists("lazy_table") {
+	if !setup.catalogMgr.tableCache.TableExists("lazy_table") {
 		t.Error("Table should be in memory after load")
 	}
 
@@ -560,31 +559,51 @@ func TestCatalogManager_LoadAllTables(t *testing.T) {
 		}
 	}
 
-	// Create new catalog manager (simulating restart)
-	setup2 := setupTest(t)
-	setup2.tempDir = setup.tempDir
-	defer setup2.cleanup()
+	// Close first setup to simulate shutdown
+	setup.cleanup()
 
-	catalogMgr2 := NewCatalogManager(setup2.store, setup2.tempDir)
+	// Create new catalog manager with same directory (simulating restart)
+	walPath2 := filepath.Join(setup.tempDir, "test2.wal")
+	wal2, err := wal.NewWAL(walPath2, 8192)
+	if err != nil {
+		t.Fatalf("Failed to create second WAL: %v", err)
+	}
+
+	store2 := memory.NewPageStore(wal2)
+	txRegistry2 := transaction.NewTransactionRegistry(wal2)
+	catalogMgr2 := NewCatalogManager(store2, setup.tempDir)
+
+	beginTx2 := func() *transaction.TransactionContext {
+		tx, err := txRegistry2.Begin()
+		if err != nil {
+			t.Fatalf("Failed to begin transaction: %v", err)
+		}
+		return tx
+	}
 
 	// Initialize catalog tables
-	tx2 := setup2.beginTx()
+	tx2 := beginTx2()
 	if err := catalogMgr2.Initialize(tx2); err != nil {
 		t.Fatalf("Second Initialize failed: %v", err)
 	}
 
 	// Load all tables
-	tx3 := setup2.beginTx()
-	err := catalogMgr2.LoadAllTables(tx3)
+	tx3 := beginTx2()
+	err = catalogMgr2.LoadAllTables(tx3)
 	if err != nil {
 		t.Fatalf("LoadAllTables failed: %v", err)
 	}
 
-	// Verify tables loaded
-	tables := setup2.tm.GetAllTableNames()
-	if len(tables) < 3 {
-		t.Errorf("Expected at least 3 user tables loaded, got %d", len(tables))
+	// Verify tables loaded (should have 6 system tables + 3 user tables = 9 total)
+	tables := catalogMgr2.tableCache.GetAllTableNames()
+	t.Logf("Loaded %d tables: %v", len(tables), tables)
+	if len(tables) < 9 {
+		t.Errorf("Expected at least 9 tables loaded (6 system + 3 user), got %d", len(tables))
 	}
+
+	// Cleanup second catalog manager to release file locks
+	catalogMgr2.tableCache.Clear()
+	wal2.Close()
 }
 
 // TestCatalogManager_AutoIncrement tests auto-increment functionality
