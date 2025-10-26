@@ -65,7 +65,7 @@ func CreateTestContextWithCleanup(t *testing.T, dataDir string) (*registry.Datab
 	if t != nil {
 		t.Cleanup(func() {
 			if catalogMgr != nil {
-				catalogMgr.ClearCache()
+				catalogMgr.ClearCacheCompletely()
 			}
 			if walInstance != nil {
 				walInstance.Close()
