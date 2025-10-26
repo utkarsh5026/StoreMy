@@ -68,7 +68,6 @@ func (cm *CatalogManager) GetTableSchema(tx TxContext, tableID int) (*schema.Sch
 		return info.Schema, nil
 	}
 
-	// Get table metadata to retrieve the table name
 	tm, err := cm.GetTableMetadataByID(tx, tableID)
 	if err != nil {
 		return nil, err
@@ -124,7 +123,7 @@ func (cm *CatalogManager) TableExists(tx TxContext, tableName string) bool {
 // Parameters:
 //   - tx: Transaction context for reading catalog
 //   - refreshFromDisk: If true, scans CATALOG_TABLES (slower but includes unloaded tables).
-//                      If false, returns tables from memory cache (faster).
+//     If false, returns tables from memory cache (faster).
 //
 // Returns:
 //   - []string: List of table names
@@ -171,15 +170,46 @@ func (cm *CatalogManager) ValidateIntegrity(tx TxContext) error {
 	return nil
 }
 
-// ClearCache removes all tables from memory cache.
+// ClearCache removes all user tables from memory cache while preserving system tables.
+//
+// System tables (CATALOG_*) must remain in cache for the catalog to function properly.
+// If you need to fully clear the cache including system tables, call ClearCacheCompletely().
 //
 // This is useful for:
-//  - Clean database shutdown
-//  - Testing
-//  - Forcing a full reload from disk
+//   - Clean database shutdown
+//   - Testing
+//   - Forcing a full reload of user tables from disk
 //
 // Note: This does NOT modify disk catalog - only clears memory.
 func (cm *CatalogManager) ClearCache() {
+	tableNames := cm.tableCache.GetAllTableNames()
+
+	systemTables := map[string]bool{
+		"CATALOG_TABLES":            true,
+		"CATALOG_COLUMNS":           true,
+		"CATALOG_STATISTICS":        true,
+		"CATALOG_INDEXES":           true,
+		"CATALOG_COLUMN_STATISTICS": true,
+		"CATALOG_INDEX_STATISTICS":  true,
+	}
+
+	for _, name := range tableNames {
+		if !systemTables[name] {
+			if tableID, err := cm.tableCache.GetTableID(name); err == nil {
+				cm.store.UnregisterDbFile(tableID)
+			}
+			cm.tableCache.RemoveTable(name)
+		}
+	}
+}
+
+// ClearCacheCompletely removes ALL tables from memory cache including system tables.
+//
+// WARNING: This will make the catalog manager unable to query the catalog until
+// system tables are reloaded. Use ClearCache() instead unless you know what you're doing.
+//
+// This is primarily useful for complete database shutdown.
+func (cm *CatalogManager) ClearCacheCompletely() {
 	tableNames := cm.tableCache.GetAllTableNames()
 	for _, name := range tableNames {
 		if tableID, err := cm.tableCache.GetTableID(name); err == nil {
