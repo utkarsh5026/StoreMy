@@ -5,7 +5,6 @@ import (
 	"path/filepath"
 	"storemy/pkg/catalog/systemtable"
 	"storemy/pkg/storage/heap"
-	"storemy/pkg/tuple"
 )
 
 // CreateTable creates a new table with complete disk + cache registration.
@@ -25,52 +24,72 @@ import (
 // Returns:
 //   - tableID: The ID assigned to the new table
 //   - err: Error if any step fails
-func (cm *CatalogManager) CreateTable(
-	tx TxContext,
-	tableSchema TableSchema,
-) (tableID int, err error) {
-	if tableSchema == nil {
+func (cm *CatalogManager) CreateTable(tx TxContext, sch TableSchema) (int, error) {
+	if sch == nil {
 		return 0, fmt.Errorf("schema cannot be nil")
 	}
 
-	fileName := tableSchema.TableName + ".dat"
-	fullPath := filepath.Join(cm.dataDir, fileName)
+	if cm.TableExists(tx, sch.TableName) {
+		return 0, fmt.Errorf("table %s already exists", sch.TableName)
+	}
 
-	heapFile, err := heap.NewHeapFile(fullPath, tableSchema.TupleDesc)
+	heapFile, err := cm.createTableFile(sch)
 	if err != nil {
-		return 0, fmt.Errorf("failed to create heap file: %w", err)
+		return 0, err
 	}
 
-	tableID = heapFile.GetID()
-	tableSchema.TableID = tableID
-	for i := range tableSchema.Columns {
-		tableSchema.Columns[i].TableID = tableID
-	}
-
-	if err := cm.RegisterTable(tx, tableSchema, fullPath); err != nil {
+	if err := cm.RegisterTable(tx, sch, heapFile.FilePath()); err != nil {
 		heapFile.Close()
 		return 0, fmt.Errorf("failed to register table in catalog: %w", err)
 	}
 
-	if err := cm.tableCache.AddTable(heapFile, tableSchema); err != nil {
-		if deleteErr := cm.DeleteCatalogEntry(tx, tableID); deleteErr != nil {
-			fmt.Printf("Warning: failed to rollback catalog entry after cache failure: %v\n", deleteErr)
-		}
-		heapFile.Close()
-		return 0, fmt.Errorf("failed to add table to cache: %w", err)
+	if err := cm.addTableToCache(tx, heapFile, sch); err != nil {
+		return 0, err
 	}
 
-	cm.store.RegisterDbFile(tableID, heapFile)
-	if _, verifyErr := cm.tableCache.GetDbFile(tableID); verifyErr != nil {
-		return 0, fmt.Errorf("table was added to cache but immediate verification failed: %w", verifyErr)
+	return sch.TableID, nil
+}
+
+func (cm *CatalogManager) createTableFile(sch TableSchema) (*heap.HeapFile, error) {
+	fileName := sch.TableName + ".dat"
+	fullPath := filepath.Join(cm.dataDir, fileName)
+
+	heapFile, err := heap.NewHeapFile(fullPath, sch.TupleDesc)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create heap file: %w", err)
 	}
-	return tableID, nil
+
+	tableID := heapFile.GetID()
+	sch.TableID = tableID
+	for i := range sch.Columns {
+		sch.Columns[i].TableID = tableID
+	}
+
+	return heapFile, err
+
+}
+
+func (cm *CatalogManager) addTableToCache(tx TxContext, file *heap.HeapFile, sch TableSchema) error {
+	if err := cm.tableCache.AddTable(file, sch); err != nil {
+		if deleteErr := cm.DeleteCatalogEntry(tx, sch.TableID); deleteErr != nil {
+			fmt.Printf("Warning: failed to rollback catalog entry after cache failure: %v\n", deleteErr)
+		}
+		file.Close()
+		return fmt.Errorf("failed to add table to cache: %w", err)
+	}
+
+	cm.store.RegisterDbFile(sch.TableID, file)
+	if _, verifyErr := cm.tableCache.GetDbFile(sch.TableID); verifyErr != nil {
+		return fmt.Errorf("table was added to cache but immediate verification failed: %w", verifyErr)
+	}
+
+	return nil
 }
 
 // DropTable completely removes a table from both disk catalog and memory cache.
 //
 // Steps:
-//  1. Unregisters the table from page store
+//  1. Un-registers the table from page store
 //  2. Removes all catalog entries (CATALOG_TABLES, CATALOG_COLUMNS, etc.)
 //  3. Removes the table from in-memory cache
 //
@@ -120,18 +139,30 @@ func (cm *CatalogManager) LoadTable(tx TxContext, tableName string) error {
 		return nil
 	}
 
-	// Load table from disk
+	sch, filePath, err := cm.loadFromDisk(tx, tableName)
+	if err != nil {
+		return err
+	}
+
+	return cm.registerTable(filePath, sch)
+}
+
+func (cm *CatalogManager) loadFromDisk(tx TxContext, tableName string) (TableSchema, string, error) {
 	tm, err := cm.GetTableMetadataByName(tx, tableName)
 	if err != nil {
-		return fmt.Errorf("failed to get table metadata: %w", err)
+		return nil, "", fmt.Errorf("failed to get table metadata: %w", err)
 	}
 
 	sch, err := cm.LoadTableSchema(tx, tm.TableID, tm.TableName)
 	if err != nil {
-		return fmt.Errorf("failed to load schema: %w", err)
+		return nil, "", fmt.Errorf("failed to load schema: %w", err)
 	}
 
-	heapFile, err := heap.NewHeapFile(tm.FilePath, sch.TupleDesc)
+	return sch, tm.FilePath, nil
+}
+
+func (cm *CatalogManager) registerTable(filePath string, sch TableSchema) error {
+	heapFile, err := heap.NewHeapFile(filePath, sch.TupleDesc)
 	if err != nil {
 		return fmt.Errorf("failed to open heap file: %w", err)
 	}
@@ -141,7 +172,7 @@ func (cm *CatalogManager) LoadTable(tx TxContext, tableName string) error {
 		return fmt.Errorf("failed to add table to cache: %w", err)
 	}
 
-	cm.store.RegisterDbFile(tm.TableID, heapFile)
+	cm.store.RegisterDbFile(sch.TableID, heapFile)
 	return nil
 }
 
@@ -157,20 +188,18 @@ func (cm *CatalogManager) LoadTable(tx TxContext, tableName string) error {
 //
 // Returns error if any table cannot be loaded.
 func (cm *CatalogManager) LoadAllTables(tx TxContext) error {
-	defer cm.store.CommitTransaction(tx)
+	tables, err := cm.tableOps.GetAllTables(tx)
+	if err != nil {
+		return fmt.Errorf("failed to read tables from catalog: %w", err)
+	}
 
-	return cm.iterateTable(cm.SystemTabs.TablesTableID, tx, func(tableTuple *tuple.Tuple) error {
-		table, err := systemtable.Tables.Parse(tableTuple)
-		if err != nil {
-			return err
-		}
-
+	for _, table := range tables {
 		if err := cm.LoadTable(tx, table.TableName); err != nil {
 			return fmt.Errorf("error loading the table %s: %v", table.TableName, err)
 		}
+	}
 
-		return nil
-	})
+	return nil
 }
 
 // RenameTable renames a table in both memory and disk catalog.
@@ -193,39 +222,22 @@ func (cm *CatalogManager) RenameTable(tx TxContext, oldName, newName string) err
 		return fmt.Errorf("table %s already exists", newName)
 	}
 
-	tableID, err := cm.GetTableID(tx, oldName)
-	if err != nil {
-		return fmt.Errorf("table %s not found: %w", oldName, err)
-	}
-
 	if err := cm.tableCache.RenameTable(oldName, newName); err != nil {
 		return fmt.Errorf("failed to rename in memory: %w", err)
 	}
 
-	tm, err := cm.GetTableMetadataByID(tx, tableID)
+	err := cm.tableOps.UpdateBy(tx,
+		func(tm *systemtable.TableMetadata) bool {
+			return tm.TableName == oldName
+		},
+		func(tm *systemtable.TableMetadata) *systemtable.TableMetadata {
+			tm.TableName = newName
+			return tm
+		})
+
 	if err != nil {
-		cm.tableCache.RenameTable(newName, oldName)
-		return fmt.Errorf("failed to find table metadata: %w", err)
-	}
-
-	if err := cm.DeleteTableFromSysTable(tx, tableID, cm.SystemTabs.TablesTableID); err != nil {
-		cm.tableCache.RenameTable(newName, oldName)
-		return fmt.Errorf("failed to delete old catalog entry: %w", err)
-	}
-
-	tm.TableName = newName
-	tup := systemtable.Tables.CreateTuple(*tm)
-
-	tablesFile, err := cm.tableCache.GetDbFile(cm.SystemTabs.TablesTableID)
-	if err != nil {
-		cm.tableCache.RenameTable(newName, oldName)
-		return fmt.Errorf("failed to get tables catalog file: %w", err)
-	}
-
-	if err := cm.tupMgr.InsertTuple(tx, tablesFile, tup); err != nil {
 		cm.tableCache.RenameTable(newName, oldName)
 		return fmt.Errorf("failed to insert new catalog entry: %w", err)
 	}
-
 	return nil
 }
