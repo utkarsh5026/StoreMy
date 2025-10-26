@@ -8,6 +8,7 @@ import (
 	"storemy/pkg/primitives"
 	"storemy/pkg/storage/index"
 	"storemy/pkg/storage/index/hash"
+	"storemy/pkg/storage/page"
 	"storemy/pkg/tuple"
 	"storemy/pkg/types"
 )
@@ -157,8 +158,9 @@ func (hi *HashIndex) GetKeyType() types.Type {
 // Returns:
 //   - error: Returns error if file close fails
 func (hi *HashIndex) Close() error {
+	err := hi.file.Close()
 	hi.pageStore.UnregisterDbFile(hi.indexID)
-	return hi.file.Close()
+	return err
 }
 
 // hashKey computes the hash of a key and returns the bucket number.
@@ -251,4 +253,144 @@ func (hi *HashIndex) getPageFromStore(pid *hash.HashPageID) (HashPage, error) {
 		return nil, fmt.Errorf("invalid page type: expected HashPage")
 	}
 	return hashPage, nil
+}
+
+// removeEntry removes an index entry from the hash index.
+// Traverses the overflow chain starting from bucketPage until the entry is found.
+// When found, removes the entry and notifies PageStore of the deletion.
+//
+// Parameters:
+//   - entry: IndexEntry to remove (contains key and RID)
+//   - bucketPage: Starting page of the bucket's overflow chain
+//
+// Returns:
+//   - nil if entry was successfully removed
+//   - error if entry not found or removal operation fails
+//
+// Implementation notes:
+//   - Uses errSuccess as sentinel to stop traversal when entry is found
+//   - Marks page as dirty via HandlePageChange callback
+//   - Returns error if entry doesn't exist in any page of the chain
+func (hi *HashIndex) removeEntry(entry *index.IndexEntry, bucketPage HashPage) error {
+	err := hi.traverseOverflowChain(bucketPage, func(hp HashPage) error {
+		if err := hp.RemoveEntry(entry); err == nil {
+			hi.pageStore.HandlePageChange(
+				hi.tx,
+				memory.DeleteOperation,
+				func() ([]page.Page, error) {
+					return []page.Page{hp}, nil
+				})
+			return errSuccess
+		}
+		return nil
+	})
+
+	if errors.Is(err, errSuccess) {
+		return nil
+	}
+
+	return err
+}
+
+// getMatchingEntries retrieves all tuple record IDs that match the given key.
+// Searches through the entire overflow chain starting from bucketPage.
+//
+// Parameters:
+//   - key: Field value to search for
+//   - bucketPage: Starting page of the bucket's overflow chain
+//
+// Returns:
+//   - []*tuple.TupleRecordID: Slice of all matching record IDs (may be empty if no matches)
+//   - error: Non-nil if overflow chain traversal fails
+//
+// Performance:
+//   - O(c) where c is the length of the overflow chain for this bucket
+//   - All pages in the chain are examined
+//   - Multiple entries with same key are supported (non-unique index)
+func (hi *HashIndex) getMatchingEntries(key Field, bucketPage HashPage) ([]*tuple.TupleRecordID, error) {
+	var results []*tuple.TupleRecordID
+	err := hi.traverseOverflowChain(bucketPage, func(hp HashPage) error {
+		entries := hp.FindEntries(key)
+		results = append(results, entries...)
+		return nil
+	})
+
+	if err != nil {
+		return nil, fmt.Errorf("error during overflow chain traversal: %w", err)
+	}
+
+	return results, nil
+}
+
+// getEntriesInRange retrieves all tuple record IDs with keys in the range [start, end].
+// Scans through the entire overflow chain and filters entries by range comparison.
+//
+// Parameters:
+//   - start: Lower bound of range (inclusive)
+//   - end: Upper bound of range (inclusive)
+//   - bucketPage: Starting page of the bucket's overflow chain
+//
+// Returns:
+//   - []*tuple.TupleRecordID: Slice of record IDs for entries in range (may be empty)
+//   - error: Non-nil if overflow chain traversal fails
+//
+// Performance:
+//   - O(n) where n is total entries in the bucket's overflow chain
+//   - Not optimal for range queries (B+ tree is better suited)
+//   - Each entry's key is compared against both bounds
+//
+// Note: This method only scans a single bucket. For full range queries across
+// all buckets, caller must invoke this on each bucket and merge results.
+func (hi *HashIndex) getEntriesInRange(start, end Field, bucketPage HashPage) ([]*tuple.TupleRecordID, error) {
+	var results []*tuple.TupleRecordID
+	err := hi.traverseOverflowChain(bucketPage, func(hp HashPage) error {
+		for _, entry := range hp.GetEntries() {
+			geStart, _ := entry.Key.Compare(primitives.GreaterThanOrEqual, start)
+			leEnd, _ := entry.Key.Compare(primitives.LessThanOrEqual, end)
+
+			if geStart && leEnd {
+				results = append(results, entry.RID)
+			}
+		}
+		return nil
+	})
+
+	return results, err
+}
+
+// findFirstEmptyPage locates the first page in the overflow chain with available space.
+// If all pages are full, creates a new overflow page and links it to the chain.
+//
+// Parameters:
+//   - bucketPage: Starting page of the bucket's overflow chain
+//   - bucketNum: Bucket number (used for overflow page initialization)
+//
+// Returns:
+//   - HashPage: Page with available space for new entry
+//   - error: Non-nil if page creation or traversal fails
+//
+// Behavior:
+//   - Traverses overflow chain until a non-full page is found
+//   - If no non-full page exists, allocates new overflow page
+//   - New overflow pages are automatically linked to the chain
+//   - Returned page is guaranteed to have space (unless page creation fails)
+//
+// Used by: Insert operation to find where to place new index entries
+func (hi *HashIndex) findFirstEmptyPage(bucketPage HashPage, bucketNum int) (HashPage, error) {
+	var err error
+	currentPage := bucketPage
+	for currentPage.IsFull() {
+		if currentPage.HasNoOverflowPage() {
+			currentPage, err = hi.createAndLinkOverflowPage(bucketNum, currentPage)
+			if err != nil {
+				return nil, fmt.Errorf("failed to create and link overflow page: %w", err)
+			}
+			break
+		}
+		currentPage, err = hi.readOverflowPage(currentPage)
+		if err != nil {
+			return nil, fmt.Errorf("failed to read overflow page: %w", err)
+		}
+	}
+	return currentPage, nil
 }

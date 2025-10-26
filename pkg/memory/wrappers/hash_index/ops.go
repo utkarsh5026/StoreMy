@@ -1,13 +1,10 @@
 package hashindex
 
 import (
-	"errors"
 	"fmt"
 	"storemy/pkg/memory"
-	"storemy/pkg/primitives"
 	"storemy/pkg/storage/index"
 	"storemy/pkg/storage/page"
-	"storemy/pkg/tuple"
 )
 
 // Insert adds a key-value pair to the hash index.
@@ -39,23 +36,12 @@ func (hi *HashIndex) Insert(key Field, rid RecID) error {
 		return fmt.Errorf("failed to get bucket page: %w", err)
 	}
 
-	entry := index.NewIndexEntry(key, rid)
-
-	currentPage := bucketPage
-	for currentPage.IsFull() {
-		if currentPage.HasNoOverflowPage() {
-			currentPage, err = hi.createAndLinkOverflowPage(bucketNum, currentPage)
-			if err != nil {
-				return fmt.Errorf("failed to create and link overflow page: %w", err)
-			}
-			break
-		}
-		currentPage, err = hi.readOverflowPage(currentPage)
-		if err != nil {
-			return fmt.Errorf("failed to read overflow page: %w", err)
-		}
+	currentPage, err := hi.findFirstEmptyPage(bucketPage, bucketNum)
+	if err != nil {
+		return err
 	}
 
+	entry := index.NewIndexEntry(key, rid)
 	if err := currentPage.AddEntry(entry); err != nil {
 		return fmt.Errorf("failed to add entry: %w", err)
 	}
@@ -93,24 +79,7 @@ func (hi *HashIndex) Delete(key Field, rid RecID) error {
 	}
 
 	entry := index.NewIndexEntry(key, rid)
-	err = hi.traverseOverflowChain(bucketPage, func(hp HashPage) error {
-		if err := hp.RemoveEntry(entry); err == nil {
-			hi.pageStore.HandlePageChange(
-				hi.tx,
-				memory.DeleteOperation,
-				func() ([]page.Page, error) {
-					return []page.Page{hp}, nil
-				})
-			return errSuccess
-		}
-		return nil
-	})
-
-	if errors.Is(err, errSuccess) {
-		return nil
-	}
-
-	return err
+	return hi.removeEntry(entry, bucketPage)
 }
 
 // Search finds all tuple locations for a given key.
@@ -135,19 +104,7 @@ func (hi *HashIndex) Search(key Field) ([]RecID, error) {
 		return nil, fmt.Errorf("failed to get bucket page: %w", err)
 	}
 
-	var results []*tuple.TupleRecordID
-
-	err = hi.traverseOverflowChain(bucketPage, func(hp HashPage) error {
-		entries := hp.FindEntries(key)
-		results = append(results, entries...)
-		return nil
-	})
-
-	if err != nil {
-		return nil, fmt.Errorf("error during overflow chain traversal: %w", err)
-	}
-
-	return results, nil
+	return hi.getMatchingEntries(key, bucketPage)
 }
 
 // RangeSearch finds all tuples where key is in [startKey, endKey].
@@ -186,21 +143,12 @@ func (hi *HashIndex) RangeSearch(startKey, endKey Field) ([]RecID, error) {
 			continue
 		}
 
-		err = hi.traverseOverflowChain(bucketPage, func(hp HashPage) error {
-			for _, entry := range hp.GetEntries() {
-				geStart, _ := entry.Key.Compare(primitives.GreaterThanOrEqual, startKey)
-				leEnd, _ := entry.Key.Compare(primitives.LessThanOrEqual, endKey)
-
-				if geStart && leEnd {
-					results = append(results, entry.RID)
-				}
-			}
-			return nil
-		})
-
+		entries, err := hi.getEntriesInRange(startKey, endKey, bucketPage)
 		if err != nil {
 			return nil, fmt.Errorf("error during overflow chain traversal: %w", err)
 		}
+
+		results = append(results, entries...)
 	}
 
 	return results, nil
