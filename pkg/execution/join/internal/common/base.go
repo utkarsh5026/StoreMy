@@ -18,9 +18,6 @@ type BaseJoin struct {
 
 // NewBaseJoin creates a new base join with common initialization.
 func NewBaseJoin(left, right iterator.DbIterator, pred JoinPredicate, stats *JoinStatistics) BaseJoin {
-	if stats == nil {
-		stats = DefaultJoinStatistics()
-	}
 	return BaseJoin{
 		LeftChildField:   left,
 		RightChildField:  right,
