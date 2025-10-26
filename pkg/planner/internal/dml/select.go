@@ -13,6 +13,7 @@ import (
 	"storemy/pkg/planner/internal/metadata"
 	"storemy/pkg/planner/internal/result"
 	"storemy/pkg/planner/internal/scan"
+	"storemy/pkg/primitives"
 	"storemy/pkg/registry"
 	"storemy/pkg/tuple"
 	"storemy/pkg/types"
@@ -238,12 +239,12 @@ func (p *SelectPlan) applyJoinsIfNeeded(input iterator.DbIterator) (iterator.DbI
 			return nil, fmt.Errorf("failed to build right side of join: %w", err)
 		}
 
-		pred, err := p.buildJoinPredicate(joinNode, currentOp, rightOp)
+		li, ri, predOp, err := p.buildJoinPredicateFields(joinNode, currentOp, rightOp)
 		if err != nil {
 			return nil, fmt.Errorf("failed to build join predicate: %w", err)
 		}
 
-		joinOp, err := join.NewJoinOperator(pred, currentOp, rightOp)
+		joinOp, err := join.NewJoinOperator(li, ri, predOp, currentOp, rightOp)
 		if err != nil {
 			return nil, fmt.Errorf("failed to create join operator: %w", err)
 		}
@@ -271,29 +272,29 @@ func (p *SelectPlan) buildJoinRightSide(joinNode *plan.JoinNode) (iterator.DbIte
 	return scanOp, nil
 }
 
-// buildJoinPredicate constructs a JoinPredicate from the parsed JOIN ON clause.
+// buildJoinPredicateFields extracts join predicate fields from the parsed JOIN ON clause.
 // Maps field names to tuple positions in left and right operators.
 //
 // Process:
 //  1. Resolve left field name to index in left operator's schema
 //  2. Resolve right field name to index in right operator's schema
-//  3. Convert parser predicate type to join predicate operation
+//  3. Return field indexes and predicate operation for join operator
 //
 // Example: ON users.id = orders.user_id
 //
 //	→ leftIndex=0 (users.id at position 0), rightIndex=2 (orders.user_id at position 2)
-func (p *SelectPlan) buildJoinPredicate(node *plan.JoinNode, l, r iterator.DbIterator) (*join.JoinPredicate, error) {
+func (p *SelectPlan) buildJoinPredicateFields(node *plan.JoinNode, l, r iterator.DbIterator) (int, int, primitives.Predicate, error) {
 	li, err := findFieldIndex(node.LeftField, l.GetTupleDesc())
 	if err != nil {
-		return nil, err
+		return 0, 0, 0, err
 	}
 
 	ri, err := findFieldIndex(node.RightField, r.GetTupleDesc())
 	if err != nil {
-		return nil, err
+		return 0, 0, 0, err
 	}
 
-	return join.NewJoinPredicate(li, ri, node.Predicate)
+	return li, ri, node.Predicate, nil
 }
 
 // applyAggregationIfNeeded applies aggregation/GROUP BY to the input operator.
