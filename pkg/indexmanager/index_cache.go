@@ -80,8 +80,18 @@ func (ic *indexCache) GetOrLoad(tableID int, loader func() ([]*indexWithMetadata
 
 // getIndexesForTable retrieves all indexes for a given table with caching.
 // This is a helper method that combines cache lookup with loading from catalog.
+//
+// IMPORTANT: Caching is currently disabled because index wrappers (BTree/HashIndex)
+// contain transaction contexts. Caching them causes issues when a new transaction
+// tries to use an index created with an old transaction's context.
+// TODO: Implement proper transaction-aware caching or cache index files separately
 func (im *IndexManager) getIndexesForTable(ctx TxCtx, tableID int) ([]*indexWithMetadata, error) {
-	return im.cache.GetOrLoad(tableID, func() ([]*indexWithMetadata, error) {
-		return im.loadAndOpenIndexes(ctx, tableID)
-	})
+	// Temporarily disable caching to fix transaction context issues
+	// Always reload indexes for each transaction
+	return im.loadAndOpenIndexes(ctx, tableID)
+
+	// Old cached implementation (causes transaction ID errors):
+	// return im.cache.GetOrLoad(tableID, func() ([]*indexWithMetadata, error) {
+	// 	return im.loadAndOpenIndexes(ctx, tableID)
+	// })
 }
