@@ -5,7 +5,7 @@ import (
 	"path/filepath"
 	"storemy/pkg/catalog/systemtable"
 	"storemy/pkg/storage/index"
-	"storemy/pkg/tuple"
+	"storemy/pkg/utils/functools"
 )
 
 // CreateIndex creates a new index and registers it in the catalog.
@@ -31,46 +31,18 @@ import (
 //   - indexID: Generated ID for the index
 //   - filePath: Path where index file should be created
 //   - error: Error if validation or registration fails
-func (cm *CatalogManager) CreateIndex(
-	tx TxContext,
-	indexName,
-	tableName,
-	columnName string,
-	indexType index.IndexType,
-) (indexID int, filePath string, err error) {
+func (cm *CatalogManager) CreateIndex(tx TxContext, indexName, tableName, columnName string, indexType index.IndexType) (indexID int, filePath string, err error) {
 	tableID, err := cm.GetTableID(tx, tableName)
 	if err != nil {
 		return 0, "", fmt.Errorf("table %s not found: %w", tableName, err)
 	}
 
-	tableSchema, err := cm.GetTableSchema(tx, tableID)
-	if err != nil {
-		return 0, "", fmt.Errorf("failed to get table schema: %w", err)
-	}
-
-	columnExists := false
-	for _, col := range tableSchema.Columns {
-		if col.Name == columnName {
-			columnExists = true
-			break
-		}
-	}
-	if !columnExists {
-		return 0, "", fmt.Errorf("column %s does not exist in table %s", columnName, tableName)
-	}
-
-	if cm.IndexExists(tx, indexName) {
-		return 0, "", fmt.Errorf("index %s already exists", indexName)
+	if err := cm.canCreateIndex(tx, tableID, columnName, indexName, tableName); err != nil {
+		return 0, "", err
 	}
 
 	fileName := fmt.Sprintf("%s_%s.idx", tableName, indexName)
 	filePath = filepath.Join(cm.dataDir, fileName)
-
-	indexesFile, err := cm.tableCache.GetDbFile(cm.SystemTabs.IndexesTableID)
-	if err != nil {
-		return 0, "", fmt.Errorf("failed to get indexes catalog file: %w", err)
-	}
-
 	indexID = hashFilePath(filePath)
 	metadata := systemtable.IndexMetadata{
 		IndexID:    indexID,
@@ -82,12 +54,49 @@ func (cm *CatalogManager) CreateIndex(
 		CreatedAt:  getCurrentTimestamp(),
 	}
 
-	tup := systemtable.Indexes.CreateTuple(metadata)
-	if err := cm.tupMgr.InsertTuple(tx, indexesFile, tup); err != nil {
+	if err := cm.insertIndex(tx, metadata); err != nil {
 		return 0, "", fmt.Errorf("failed to register index in catalog: %w", err)
 	}
 
 	return indexID, filePath, nil
+}
+
+func (cm *CatalogManager) canCreateIndex(tx TxContext, tableID int, columnName, indexName, tableName string) error {
+	tableSchema, err := cm.GetTableSchema(tx, tableID)
+	if err != nil {
+		return fmt.Errorf("failed to get table schema: %w", err)
+	}
+
+	columnExists := false
+	for _, col := range tableSchema.Columns {
+		if col.Name == columnName {
+			columnExists = true
+			break
+		}
+	}
+	if !columnExists {
+		return fmt.Errorf("column %s does not exist in table %s", columnName, tableName)
+	}
+
+	if cm.IndexExists(tx, indexName) {
+		return fmt.Errorf("index %s already exists", indexName)
+	}
+
+	return nil
+}
+
+func (cm *CatalogManager) insertIndex(tx TxContext, metadata systemtable.IndexMetadata) error {
+	indexesFile, err := cm.tableCache.GetDbFile(cm.SystemTabs.IndexesTableID)
+	if err != nil {
+		return fmt.Errorf("failed to get indexes catalog file: %w", err)
+	}
+
+	tup := systemtable.Indexes.CreateTuple(metadata)
+	if err := cm.tupMgr.InsertTuple(tx, indexesFile, tup); err != nil {
+		return fmt.Errorf("failed to register index in catalog: %w", err)
+	}
+
+	return nil
 }
 
 // DropIndex removes an index from the catalog.
@@ -189,30 +198,20 @@ func (cm *CatalogManager) IndexExists(tx TxContext, indexName string) bool {
 func (cm *CatalogManager) GetIndexesForTable(tx TxContext, tableID int) ([]*IndexInfo, error) {
 	var indexes []*IndexInfo
 
-	err := cm.iterateTable(cm.SystemTabs.IndexesTableID, tx, func(t *tuple.Tuple) error {
-		// Parse index metadata properly using systemtable.Indexes
-		im, err := systemtable.Indexes.Parse(t)
-		if err != nil {
-			return err
-		}
-
-		if im.TableID == tableID {
-			// Convert IndexMetadata to IndexInfo
-			indexes = append(indexes, &IndexInfo{
-				IndexID:    im.IndexID,
-				TableID:    im.TableID,
-				IndexName:  im.IndexName,
-				IndexType:  im.IndexType,
-				ColumnName: im.ColumnName,
-				FilePath:   im.FilePath,
-			})
-		}
-		return nil
-	})
-
+	idxs, err := cm.indexOps.GetIndexesByTable(tx, tableID)
 	if err != nil {
-		return nil, err
+		return indexes, err
 	}
 
-	return indexes, nil
+	return functools.Map(idxs, func(im *systemtable.IndexMetadata) *IndexInfo {
+		return &IndexInfo{
+			IndexID:    im.IndexID,
+			TableID:    im.TableID,
+			IndexName:  im.IndexName,
+			IndexType:  im.IndexType,
+			ColumnName: im.ColumnName,
+			FilePath:   im.FilePath,
+		}
+	}), nil
+
 }

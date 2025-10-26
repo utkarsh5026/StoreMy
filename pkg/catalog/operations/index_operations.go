@@ -9,15 +9,11 @@ import (
 	"strings"
 )
 
-type (
-	indexData = *systemtable.IndexMetadata
-)
-
 // IndexOperations handles all index-related catalog operations.
 // It depends only on the CatalogAccess interface, making it testable
 // and decoupled from the concrete SystemCatalog implementation.
 type IndexOperations struct {
-	*BaseOperations[indexData]
+	*BaseOperations[*systemtable.IndexMetadata]
 }
 
 // NewIndexOperations creates a new IndexOperations instance.
@@ -30,7 +26,7 @@ func NewIndexOperations(access catalogio.CatalogAccess, indexTableID int) *Index
 		access,
 		indexTableID,
 		systemtable.Indexes.Parse,
-		func(im indexData) *tuple.Tuple {
+		func(im *systemtable.IndexMetadata) *tuple.Tuple {
 			return systemtable.Indexes.CreateTuple(*im)
 		},
 	)
@@ -47,8 +43,8 @@ func NewIndexOperations(access catalogio.CatalogAccess, indexTableID int) *Index
 //   - tableID: ID of the table whose indexes to retrieve
 //
 // Returns a slice of IndexMetadata for all indexes on the table, or an error if the catalog cannot be read.
-func (io *IndexOperations) GetIndexesByTable(tx *transaction.TransactionContext, tableID int) ([]indexData, error) {
-	return io.FindAll(tx, func(im indexData) bool {
+func (io *IndexOperations) GetIndexesByTable(tx *transaction.TransactionContext, tableID int) ([]*systemtable.IndexMetadata, error) {
+	return io.FindAll(tx, func(im *systemtable.IndexMetadata) bool {
 		return im.TableID == tableID
 	})
 }
@@ -61,8 +57,8 @@ func (io *IndexOperations) GetIndexesByTable(tx *transaction.TransactionContext,
 //   - indexName: Name of the index to look up
 //
 // Returns IndexMetadata or an error if the index is not found.
-func (io *IndexOperations) GetIndexByName(tx *transaction.TransactionContext, indexName string) (indexData, error) {
-	return io.FindOne(tx, func(im indexData) bool {
+func (io *IndexOperations) GetIndexByName(tx *transaction.TransactionContext, indexName string) (*systemtable.IndexMetadata, error) {
+	return io.FindOne(tx, func(im *systemtable.IndexMetadata) bool {
 		return strings.EqualFold(im.IndexName, indexName)
 	})
 }
@@ -74,8 +70,8 @@ func (io *IndexOperations) GetIndexByName(tx *transaction.TransactionContext, in
 //   - indexID: ID of the index to look up
 //
 // Returns IndexMetadata or an error if the index is not found.
-func (io *IndexOperations) GetIndexByID(tx *transaction.TransactionContext, indexID int) (indexData, error) {
-	return io.FindOne(tx, func(im indexData) bool {
+func (io *IndexOperations) GetIndexByID(tx *transaction.TransactionContext, indexID int) (*systemtable.IndexMetadata, error) {
+	return io.FindOne(tx, func(im *systemtable.IndexMetadata) bool {
 		return im.IndexID == indexID
 	})
 }
@@ -88,7 +84,7 @@ func (io *IndexOperations) GetIndexByID(tx *transaction.TransactionContext, inde
 //
 // Returns an error if the index cannot be deleted.
 func (io *IndexOperations) DeleteIndexFromCatalog(tx *transaction.TransactionContext, indexID int) error {
-	if err := io.DeleteBy(tx, func(im indexData) bool {
+	if err := io.DeleteBy(tx, func(im *systemtable.IndexMetadata) bool {
 		return im.IndexID == indexID
 	}); err != nil {
 		return fmt.Errorf("failed to delete index: %w", err)
