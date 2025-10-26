@@ -4,12 +4,13 @@ import (
 	"fmt"
 	"path/filepath"
 	"storemy/pkg/catalog/catalogio"
-	"storemy/pkg/catalog/operations"
+	ops "storemy/pkg/catalog/operations"
 	"storemy/pkg/catalog/systemtable"
 	"storemy/pkg/catalog/tablecache"
 	"storemy/pkg/memory"
 	"storemy/pkg/memory/wrappers/table"
 	"storemy/pkg/storage/heap"
+	"sync"
 )
 
 // CatalogManager manages all database metadata including tables, columns, indexes, and statistics.
@@ -28,7 +29,7 @@ import (
 //   - Complete operations: Methods handle both disk and cache atomically
 //
 // File Ownership:
-//   - CatalogManager owns all table file lifecycles (open/close)
+//   - CatalogManager owns all table file life-cycles (open/close)
 //   - PageStore only performs I/O operations via PageIO interface
 //   - openFiles map tracks owned files for proper cleanup
 type CatalogManager struct {
@@ -41,15 +42,16 @@ type CatalogManager struct {
 	SystemTabs SystemTableIDs
 
 	// File ownership - tracks all open table files for lifecycle management
+	mu        sync.RWMutex // protects openFiles and concurrent operations
 	openFiles map[int]*heap.HeapFile
 
 	// Domain-specific operation handlers
-	indexOps      *operations.IndexOperations
-	colOps        *operations.ColumnOperations
-	statsOps      *operations.StatsOperations
-	tableOps      *operations.TableOperations
-	colStatsOps   *operations.ColStatsOperations
-	indexStatsOps *operations.IndexStatsOperations
+	indexOps      *ops.IndexOperations
+	colOps        *ops.ColumnOperations
+	statsOps      *ops.StatsOperations
+	tableOps      *ops.TableOperations
+	colStatsOps   *ops.ColStatsOperations
+	indexStatsOps *ops.IndexStatsOperations
 }
 
 // NewCatalogManager creates a new CatalogManager instance.
@@ -115,20 +117,42 @@ func (cm *CatalogManager) Initialize(ctx TxContext) error {
 		}
 
 		cm.SystemTabs.SetSystemTableID(table.TableName(), f.GetID())
+		cm.mu.Lock()
 		cm.openFiles[f.GetID()] = f
+		cm.mu.Unlock()
 		cm.store.RegisterDbFile(f.GetID(), f)
 	}
 
-	cm.setupSystables()
+	cm.setupSysTables()
 	return nil
 }
 
-func (cm *CatalogManager) setupSystables() {
-	cm.indexOps = operations.NewIndexOperations(cm.io, cm.SystemTabs.IndexesTableID)
-	cm.colOps = operations.NewColumnOperations(cm.io, cm.SystemTabs.ColumnsTableID)
-	cm.statsOps = operations.NewStatsOperations(cm.io, cm.SystemTabs.StatisticsTableID, cm.SystemTabs.ColumnsTableID, cm.tableCache.GetDbFile, cm.tableCache)
-	cm.tableOps = operations.NewTableOperations(cm.io, cm.SystemTabs.TablesTableID)
-	cm.colStatsOps = operations.NewColStatsOperations(cm.io, cm.SystemTabs.ColumnStatisticsTableID, cm.tableCache.GetDbFile, cm.colOps)
-	cm.indexStatsOps = operations.NewIndexStatsOperations(cm.io, cm.SystemTabs.IndexStatisticsTableID, cm.SystemTabs.IndexesTableID, cm.tableCache.GetDbFile, cm.statsOps)
-
+// setupSysTables initializes all domain-specific operation handlers with their respective system table IDs.
+//
+// This method is called during Initialize() after all system catalog tables have been created/loaded.
+// It wires up the operation handlers that provide high-level business logic for catalog operations.
+//
+// Operation handlers initialized:
+//   - indexOps: Manages index metadata in CATALOG_INDEXES
+//   - colOps: Manages column definitions in CATALOG_COLUMNS
+//   - statsOps: Manages table statistics in CATALOG_STATISTICS
+//   - tableOps: Manages table metadata in CATALOG_TABLES
+//   - colStatsOps: Manages column statistics in CATALOG_COLUMN_STATISTICS
+//   - indexStatsOps: Manages index statistics in CATALOG_INDEX_STATISTICS
+//
+// Dependencies:
+//   - All handlers depend on CatalogIO for low-level read/write operations
+//   - Stats handlers require access to DbFile instances via tableCache.GetDbFile
+//   - Index stats depends on statsOps for table-level statistics
+//   - Column stats depends on colOps for column metadata
+//
+// This separation allows each operation handler to focus on a single domain
+// while sharing common infrastructure through CatalogIO and TableCache.
+func (cm *CatalogManager) setupSysTables() {
+	cm.indexOps = ops.NewIndexOperations(cm.io, cm.SystemTabs.IndexesTableID)
+	cm.colOps = ops.NewColumnOperations(cm.io, cm.SystemTabs.ColumnsTableID)
+	cm.statsOps = ops.NewStatsOperations(cm.io, cm.SystemTabs.StatisticsTableID, cm.SystemTabs.ColumnsTableID, cm.tableCache.GetDbFile, cm.tableCache)
+	cm.tableOps = ops.NewTableOperations(cm.io, cm.SystemTabs.TablesTableID)
+	cm.colStatsOps = ops.NewColStatsOperations(cm.io, cm.SystemTabs.ColumnStatisticsTableID, cm.tableCache.GetDbFile, cm.colOps)
+	cm.indexStatsOps = ops.NewIndexStatsOperations(cm.io, cm.SystemTabs.IndexStatisticsTableID, cm.SystemTabs.IndexesTableID, cm.tableCache.GetDbFile, cm.statsOps)
 }
