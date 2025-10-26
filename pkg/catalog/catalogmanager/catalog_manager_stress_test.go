@@ -184,7 +184,7 @@ func TestCatalogManager_ConcurrentIndexCreation(t *testing.T) {
 		t.Errorf("Encountered %d errors during concurrent index creation", errorCount)
 	}
 
-	// Verify all indexes were created
+	// Verify all indexes were created (including auto-created PK index)
 	tx3 := setup.beginTx()
 	indexes, err := setup.catalogMgr.GetIndexesByTable(tx3, tableID)
 	setup.commitTx(tx3)
@@ -192,8 +192,9 @@ func TestCatalogManager_ConcurrentIndexCreation(t *testing.T) {
 		t.Fatalf("GetIndexesByTable failed: %v", err)
 	}
 
-	if len(indexes) != numIndexes {
-		t.Errorf("Expected %d indexes, got %d", numIndexes, len(indexes))
+	expectedIndexes := numIndexes + 1 // +1 for auto-created PK index
+	if len(indexes) != expectedIndexes {
+		t.Errorf("Expected %d indexes (%d created + 1 PK), got %d", expectedIndexes, numIndexes, len(indexes))
 	}
 }
 
@@ -445,18 +446,19 @@ func TestCatalogManager_StressTest_ManyIndexes(t *testing.T) {
 		}
 	}
 
-	// Verify all indexes were created
+	// Verify all indexes were created (including auto-created PK index)
 	tx3 := setup.beginTx()
 	indexes, err := setup.catalogMgr.GetIndexesByTable(tx3, tableID)
 	if err != nil {
 		t.Fatalf("GetIndexesByTable failed: %v", err)
 	}
 
-	if len(indexes) != numIndexes {
-		t.Errorf("Expected %d indexes, got %d", numIndexes, len(indexes))
+	expectedIndexes := numIndexes + 1 // +1 for auto-created PK index
+	if len(indexes) != expectedIndexes {
+		t.Errorf("Expected %d indexes (%d created + 1 PK), got %d", expectedIndexes, numIndexes, len(indexes))
 	}
 
-	t.Logf("Successfully created and verified %d indexes", numIndexes)
+	t.Logf("Successfully created and verified %d indexes (%d manually created + 1 auto-created PK)", expectedIndexes, numIndexes)
 }
 
 // TestCatalogManager_StressTest_RepeatedOperations tests repeated create/drop cycles

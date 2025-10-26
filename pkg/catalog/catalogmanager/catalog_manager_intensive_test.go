@@ -605,8 +605,8 @@ func TestCatalogManager_GetIndexesByTable(t *testing.T) {
 		t.Fatalf("GetIndexesByTable failed: %v", err)
 	}
 
-	if len(indexes) != 2 {
-		t.Errorf("Expected 2 indexes, got %d", len(indexes))
+	if len(indexes) != 3 {
+		t.Errorf("Expected 3 indexes (2 created + 1 PK), got %d", len(indexes))
 	}
 
 	// Verify index names
@@ -620,6 +620,9 @@ func TestCatalogManager_GetIndexesByTable(t *testing.T) {
 	}
 	if !indexNames["idx_email"] {
 		t.Error("idx_email not found in indexes")
+	}
+	if !indexNames["pk_multi_idx_table_id"] {
+		t.Error("pk_multi_idx_table_id (PK index) not found in indexes")
 	}
 }
 
@@ -658,21 +661,33 @@ func TestCatalogManager_GetIndexesForTable(t *testing.T) {
 		t.Fatalf("GetIndexesForTable failed: %v", err)
 	}
 
-	if len(indexInfos) != 1 {
-		t.Errorf("Expected 1 index, got %d", len(indexInfos))
+	if len(indexInfos) != 2 {
+		t.Errorf("Expected 2 indexes (1 created + 1 PK), got %d", len(indexInfos))
 	}
 
-	if len(indexInfos) > 0 {
-		info := indexInfos[0]
-		if info.IndexName != "idx_test" {
-			t.Errorf("Expected index name 'idx_test', got '%s'", info.IndexName)
+	// Verify both indexes exist
+	foundCreated := false
+	foundPK := false
+	for _, info := range indexInfos {
+		if info.IndexName == "idx_test" {
+			foundCreated = true
+			if info.TableID != tableID {
+				t.Errorf("Expected table ID %d, got %d", tableID, info.TableID)
+			}
+			if info.ColumnName != "id" {
+				t.Errorf("Expected column 'id', got '%s'", info.ColumnName)
+			}
 		}
-		if info.TableID != tableID {
-			t.Errorf("Expected table ID %d, got %d", tableID, info.TableID)
+		if info.IndexName == "pk_idx_info_test_id" {
+			foundPK = true
 		}
-		if info.ColumnName != "id" {
-			t.Errorf("Expected column 'id', got '%s'", info.ColumnName)
-		}
+	}
+
+	if !foundCreated {
+		t.Error("idx_test not found in indexes")
+	}
+	if !foundPK {
+		t.Error("pk_idx_info_test_id (PK index) not found in indexes")
 	}
 }
 
@@ -982,8 +997,8 @@ func TestCatalogManager_MultipleTableOperationsSequence(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetIndexesByTable failed: %v", err)
 	}
-	if len(indexes) != 1 {
-		t.Errorf("Expected 1 index after rename, got %d", len(indexes))
+	if len(indexes) != 2 {
+		t.Errorf("Expected 2 indexes after rename (1 created + 1 PK), got %d", len(indexes))
 	}
 	setup.commitTx(tx6)
 
