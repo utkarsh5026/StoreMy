@@ -56,13 +56,17 @@ func (o OperationType) String() string {
 //   - LockManager: Ensures serializable isolation through page locks
 //   - WAL: Records all modifications for crash recovery
 //   - PageCache: LRU cache for minimizing disk I/O
-//   - DbFiles: Actual heap file access for page read/write
+//   - PageIO implementations: Actual heap file access for page read/write
+//
+// Important: PageStore uses the PageIO interface (not DbFile) to ensure it only
+// performs I/O operations and cannot manage file lifecycle (open/close).
+// File ownership belongs to CatalogManager and IndexManager.
 type PageStore struct {
 	mutex       sync.RWMutex
 	lockManager *lock.LockManager
 	cache       PageCache
 	wal         *wal.WAL
-	dbFiles     map[int]page.DbFile // tableID -> DbFile mapping
+	dbFiles     map[int]page.PageIO // tableID -> PageIO mapping for I/O operations
 }
 
 // NewPageStore creates and initializes a new PageStore instance
@@ -71,19 +75,30 @@ func NewPageStore(wal *wal.WAL) *PageStore {
 		cache:       NewLRUPageCache(MaxPageCount),
 		lockManager: lock.NewLockManager(),
 		wal:         wal,
-		dbFiles:     make(map[int]page.DbFile),
+		dbFiles:     make(map[int]page.PageIO),
 	}
 }
 
-// RegisterDbFile registers a DbFile for a specific table ID
-// This allows PageStore to look up DbFiles when needed for flushing pages
-func (p *PageStore) RegisterDbFile(tableID int, dbFile page.DbFile) {
+// RegisterDbFile registers a PageIO implementation for a specific table ID.
+// This allows PageStore to perform read/write operations on pages.
+// Note: Accepts PageIO (not DbFile) to prevent PageStore from managing file lifecycle.
+func (p *PageStore) RegisterDbFile(tableID int, pageIO page.PageIO) {
 	p.mutex.Lock()
 	defer p.mutex.Unlock()
-	p.dbFiles[tableID] = dbFile
+	p.dbFiles[tableID] = pageIO
 }
 
-// UnregisterDbFile removes a DbFile registration for a specific table ID
+// GetDbFile retrieves the PageIO for a specific table ID.
+// Returns nil if no PageIO is registered for the given table ID.
+// Note: Returns PageIO (not DbFile) - caller must handle lifecycle separately.
+func (p *PageStore) GetDbFile(tableID int) page.PageIO {
+	p.mutex.RLock()
+	defer p.mutex.RUnlock()
+	return p.dbFiles[tableID]
+}
+
+// UnregisterDbFile removes a DbFile registration for a specific table ID.
+// Note: The caller is responsible for closing the DbFile before calling this method.
 func (p *PageStore) UnregisterDbFile(tableID int) {
 	p.mutex.Lock()
 	defer p.mutex.Unlock()
@@ -99,10 +114,10 @@ func (p *PageStore) UnregisterDbFile(tableID int) {
 //
 // Parameters:
 //   - ctx: Transaction context (must not be nil)
-//   - dbFile: Heap file containing the requested page
+//   - pageIO: Page I/O interface for reading the page from disk if not cached
 //   - pid: Page identifier (contains table ID and page number)
 //   - perm: Access permissions (ReadOnly or ReadWrite)
-func (p *PageStore) GetPage(ctx TxContext, dbFile page.DbFile, pid primitives.PageID, perm transaction.Permissions) (page.Page, error) {
+func (p *PageStore) GetPage(ctx TxContext, pageIO page.PageIO, pid primitives.PageID, perm transaction.Permissions) (page.Page, error) {
 	if ctx == nil {
 		return nil, fmt.Errorf("transaction context cannot be nil")
 	}
@@ -126,7 +141,7 @@ func (p *PageStore) GetPage(ctx TxContext, dbFile page.DbFile, pid primitives.Pa
 		}
 	}
 
-	page, err := dbFile.ReadPage(pid)
+	page, err := pageIO.ReadPage(pid)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read page from disk: %v", err)
 	}
@@ -263,21 +278,18 @@ func (p *PageStore) FlushAllPages() error {
 // Algorithm:
 //  1. Check if page exists in cache
 //  2. Skip if page is not dirty
-//  3. Write page data to heap file
+//  3. Write page data to file
 //  4. Unmark dirty flag
 //  5. Update cached copy
 //
 // Parameters:
-//   - dbFile: Heap file to write the page to (must match page's table ID)
+//   - pageIO: Page I/O interface to write the page to (must match page's table ID)
 //   - pid: Page identifier to flush
 //
 // Returns:
 //   - nil if page doesn't exist or isn't dirty (no-op)
 //   - error if disk write fails
-//
-// Note: Caller must ensure dbFile matches the page's table.
-// Thread-safe: Acquires locks for cache access and page updates.
-func (p *PageStore) flushPage(dbFile page.DbFile, pid primitives.PageID) error {
+func (p *PageStore) flushPage(pageIO page.PageIO, pid primitives.PageID) error {
 	p.mutex.RLock()
 	page, exists := p.cache.Get(pid)
 	p.mutex.RUnlock()
@@ -290,7 +302,7 @@ func (p *PageStore) flushPage(dbFile page.DbFile, pid primitives.PageID) error {
 		return nil
 	}
 
-	if err := dbFile.WritePage(page); err != nil {
+	if err := pageIO.WritePage(page); err != nil {
 		return fmt.Errorf("failed to write page to disk: %v", err)
 	}
 	page.MarkDirty(false, nil)
@@ -366,169 +378,19 @@ func (p *PageStore) logOperation(operation OperationType, tid *primitives.Transa
 	return nil
 }
 
-// getDbFileForPage retrieves the DbFile for a given page ID
-// This is used internally for operations like flushing that need the DbFile
-func (p *PageStore) getDbFileForPage(pageID primitives.PageID) (page.DbFile, error) {
+// getDbFileForPage retrieves the PageIO for a given page ID.
+// This is used internally for operations like flushing that need page I/O access.
+func (p *PageStore) getDbFileForPage(pageID primitives.PageID) (page.PageIO, error) {
 	tableID := pageID.GetTableID()
 	p.mutex.RLock()
-	dbFile, exists := p.dbFiles[tableID]
+	pageIO, exists := p.dbFiles[tableID]
 	p.mutex.RUnlock()
 
 	if !exists {
-		return nil, fmt.Errorf("no DbFile registered for table %d", tableID)
+		return nil, fmt.Errorf("no PageIO registered for table %d", tableID)
 	}
 
-	return dbFile, nil
-}
-
-// CommitTransaction finalizes all changes made by a transaction and makes them durable.
-// This implements the commit phase of the 2-Phase Commit protocol:
-//  1. Log COMMIT record to WAL
-//  2. Update before-images for all dirty pages (for next transaction)
-//  3. Flush all dirty pages to disk (FORCE policy)
-//  4. Release all locks held by transaction
-//
-// After commit completes:
-//   - All changes are durable (survive crash)
-//   - Other transactions can see the changes
-//   - Transaction resources are released
-//
-// Parameters:
-//   - ctx: Transaction context containing dirty pages and lock information
-func (p *PageStore) CommitTransaction(ctx TxContext) error {
-	return p.finalizeTransaction(ctx, CommitOperation)
-}
-
-// AbortTransaction undoes all changes made by a transaction and releases its resources.
-// This implements the rollback mechanism:
-//  1. Log ABORT record to WAL
-//  2. Restore before-images for all dirty pages (UNDO)
-//  3. Remove uncommitted pages from cache
-//  4. Release all locks held by transaction
-//
-// After abort completes:
-//   - All changes are discarded (not visible to any transaction)
-//   - Database state is as if transaction never executed
-//   - Transaction resources are released
-//
-// Parameters:
-//   - ctx: Transaction context containing dirty pages and lock information
-func (p *PageStore) AbortTransaction(ctx TxContext) error {
-	return p.finalizeTransaction(ctx, AbortOperation)
-}
-
-// finalizeTransaction is the unified handler for COMMIT and ABORT operations.
-// It implements the common transaction finalization protocol:
-//  1. Validate transaction context
-//  2. Check for dirty pages (no-op if read-only transaction)
-//  3. Log operation to WAL
-//  4. Execute operation-specific logic (commit or abort)
-//  5. Release all locks
-//
-// This centralizes lock management and WAL logging for transaction termination.
-//
-// Parameters:
-//   - ctx: Transaction context (must not be nil)
-//   - operation: CommitOperation or AbortOperation
-//
-// Returns an error if any step fails. The transaction may be in an inconsistent
-func (p *PageStore) finalizeTransaction(ctx *transaction.TransactionContext, operation OperationType) error {
-	if ctx == nil || ctx.ID == nil {
-		return fmt.Errorf("transaction context cannot be nil")
-	}
-
-	dirtyPageIDs := ctx.GetDirtyPages()
-	if len(dirtyPageIDs) == 0 {
-		p.lockManager.UnlockAllPages(ctx.ID)
-		return nil
-	}
-
-	if err := p.logOperation(operation, ctx.ID, nil, nil); err != nil {
-		return err
-	}
-
-	var err error
-	switch operation {
-	case CommitOperation:
-		err = p.handleCommit(dirtyPageIDs)
-
-	case AbortOperation:
-		err = p.handleAbort(dirtyPageIDs)
-
-	default:
-		return fmt.Errorf("unknown operation: %s", operation.String())
-	}
-
-	if err != nil {
-		return err
-	}
-
-	p.lockManager.UnlockAllPages(ctx.ID)
-	return nil
-}
-
-// handleCommit executes the commit phase for dirty pages:
-//  1. Update before-images (for next transaction's rollback)
-//  2. Flush all dirty pages to disk (FORCE policy)
-//
-// This ensures durability - after commit returns, changes survive crashes.
-//
-// Parameters:
-//   - dirtyPageIDs: List of pages modified by the committing transaction
-//
-// Returns an error if any page flush fails. This is a serious error that may
-// leave the database in an inconsistent state requiring recovery.
-func (p *PageStore) handleCommit(dirtyPageIDs []primitives.PageID) error {
-	p.mutex.Lock()
-	for _, pid := range dirtyPageIDs {
-		if page, exists := p.cache.Get(pid); exists {
-			page.SetBeforeImage()
-			p.cache.Put(pid, page)
-		}
-	}
-	p.mutex.Unlock()
-
-	for _, pid := range dirtyPageIDs {
-		dbFile, err := p.getDbFileForPage(pid)
-		if err != nil {
-			return fmt.Errorf("commit failed: unable to get dbFile for page %v: %v", pid, err)
-		}
-		if err := p.flushPage(dbFile, pid); err != nil {
-			return fmt.Errorf("commit failed: unable to flush page %v: %v", pid, err)
-		}
-	}
-	return nil
-}
-
-// handleAbort executes the rollback phase for dirty pages:
-//  1. Restore before-images for all modified pages (UNDO)
-//  2. Remove pages without before-images (newly allocated)
-//
-// This ensures atomicity - after abort returns, no trace of the transaction remains.
-//
-// Parameters:
-//   - dirtyPageIDs: List of pages modified by the aborting transaction
-//
-// Returns an error only in exceptional cases (should not normally fail).
-//
-// Thread-safe: Acquires lock for entire operation to ensure atomic rollback.
-func (p *PageStore) handleAbort(dirtyPageIDs []primitives.PageID) error {
-	p.mutex.Lock()
-	defer p.mutex.Unlock()
-
-	for _, pid := range dirtyPageIDs {
-		page, exists := p.cache.Get(pid)
-		if !exists {
-			continue
-		}
-
-		if beforeImage := page.GetBeforeImage(); beforeImage != nil {
-			p.cache.Put(pid, beforeImage)
-		} else {
-			p.cache.Remove(pid)
-		}
-	}
-	return nil
+	return pageIO, nil
 }
 
 // GetWal returns the WAL instance used by this PageStore.
