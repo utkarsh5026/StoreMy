@@ -60,7 +60,6 @@ type IndexManager struct {
 	cache       *indexCache
 	loader      *indexLoader
 	maintenance *indexMaintenance
-	lifecycle   *indexLifecycle
 }
 
 // NewIndexManager creates a new IndexManager instance.
@@ -80,8 +79,6 @@ func NewIndexManager(catalog CatalogReader, pageStore *memory.PageStore, wal *wa
 
 	im.cache = newIndexCache()
 	im.loader = newIndexLoader(catalog, pageStore)
-	im.lifecycle = newIndexLifecycle(pageStore)
-
 	im.maintenance = newIndexMaintenance(im.getIndexesForTable)
 	return im
 }

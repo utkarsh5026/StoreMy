@@ -128,10 +128,6 @@ func TestNewIndexManager(t *testing.T) {
 	if im.maintenance == nil {
 		t.Error("Expected maintenance to be initialized")
 	}
-
-	if im.lifecycle == nil {
-		t.Error("Expected lifecycle to be initialized")
-	}
 }
 
 func TestCreatePhysicalIndex_BTree(t *testing.T) {

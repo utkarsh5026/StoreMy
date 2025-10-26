@@ -5,7 +5,6 @@ import (
 	"os"
 	"path/filepath"
 	"storemy/pkg/execution/query"
-	"storemy/pkg/memory"
 	btreeindex "storemy/pkg/memory/wrappers/btree_index"
 	hashindex "storemy/pkg/memory/wrappers/hash_index"
 	"storemy/pkg/storage/heap"
@@ -17,129 +16,26 @@ import (
 	"storemy/pkg/types"
 )
 
-// indexLifecycle handles physical index file operations (create, populate, delete).
-type indexLifecycle struct {
-	pageStore *memory.PageStore
-}
-
-// newIndexLifecycle creates a new index lifecycle handler.
-func newIndexLifecycle(pageStore *memory.PageStore) *indexLifecycle {
-	return &indexLifecycle{
-		pageStore: pageStore,
-	}
-}
-
-// CreatePhysicalIndex creates the actual index file on disk based on the index type.
-// This method creates the appropriate index structure (Hash or BTree) and initializes
-// the file with the proper header and metadata.
+// insertIntoIndex scans a table and inserts all tuples into an index.
+// It performs a sequential scan of the table file and for each tuple,
+// extracts the value at the specified column index and inserts it into
+// the index using the provided insert function.
 //
-// Parameters:
-//   - filePath: Path where the index file should be created
-//   - keyType: Type of the key field that will be indexed
-//   - indexType: Type of index to create (HashIndex or BTreeIndex)
-//
-// Returns an error if the index file cannot be created or if the index type is unsupported.
-func (il *indexLifecycle) CreatePhysicalIndex(filePath string, keyType types.Type, indexType IndexType) error {
-	dir := filepath.Dir(filePath)
-	if err := os.MkdirAll(dir, 0755); err != nil {
-		return fmt.Errorf("failed to create directory: %v", err)
-	}
-
-	switch indexType {
-	case index.HashIndex:
-		hashFile, err := hash.NewHashFile(filePath, keyType, hash.DefaultBuckets)
-		if err != nil {
-			return fmt.Errorf("failed to create hash index file: %v", err)
-		}
-		return hashFile.Close()
-
-	case index.BTreeIndex:
-		btreeFile, err := btree.NewBTreeFile(filePath, keyType)
-		if err != nil {
-			return fmt.Errorf("failed to create btree index file: %v", err)
-		}
-		return btreeFile.Close()
-
-	default:
-		return fmt.Errorf("unsupported index type: %s", indexType)
-	}
-}
-
-// PopulateIndex scans a table and inserts all existing tuples into the specified index.
-// This is typically called after index creation to build the initial index state from
-// existing table data.
+// The method skips tuples with nil key values and validates that each
+// tuple has a valid record ID before insertion.
 //
 // Parameters:
 //   - ctx: Transaction context for the operation
-//   - filePath: Path to the index file to populate
-//   - indexID: ID of the index being populated
 //   - tableFile: The heap file containing the table data to index
-//   - columnIndex: Index of the column to extract for the index key
-//   - keyType: Type of the key field being indexed
-//   - indexType: Type of index (HashIndex or BTreeIndex)
+//   - columnIndex: Zero-based index of the column to extract keys from
+//   - insertFunc: Function that performs the actual insertion into the index,
+//     taking a key and tuple record ID as parameters
 //
-// Returns an error if the index cannot be opened, populated, or if tuple scanning fails.
-func (il *indexLifecycle) PopulateIndex(
-	ctx TxCtx,
-	filePath string,
-	indexID int,
-	tableFile page.DbFile,
-	columnIndex int,
-	keyType types.Type,
-	indexType IndexType,
-) error {
-	var insertFunc func(key types.Field, rid *tuple.TupleRecordID) error
-
-	switch indexType {
-	case index.HashIndex:
-		hashFile, err := hash.NewHashFile(filePath, keyType, hash.DefaultBuckets)
-		if err != nil {
-			return fmt.Errorf("failed to open hash index: %v", err)
-		}
-		defer hashFile.Close()
-
-		hashIdx := hashindex.NewHashIndex(indexID, keyType, hashFile, il.pageStore, ctx)
-		insertFunc = func(key types.Field, rid *tuple.TupleRecordID) error {
-			return hashIdx.Insert(key, rid)
-		}
-
-	case index.BTreeIndex:
-		btreeFile, err := btree.NewBTreeFile(filePath, keyType)
-		if err != nil {
-			return fmt.Errorf("failed to open btree index: %v", err)
-		}
-		defer btreeFile.Close()
-
-		btreeIdx := btreeindex.NewBTree(indexID, keyType, btreeFile, ctx, il.pageStore)
-		insertFunc = func(key types.Field, rid *tuple.TupleRecordID) error {
-			return btreeIdx.Insert(key, rid)
-		}
-
-	default:
-		return fmt.Errorf("unsupported index type: %s", indexType)
-	}
-
-	heapFile, ok := tableFile.(*heap.HeapFile)
-	if !ok {
-		return fmt.Errorf("expected heap file for table, got %T", tableFile)
-	}
-
-	tupleDesc := heapFile.GetTupleDesc()
-	if tupleDesc == nil {
-		return fmt.Errorf("table has no schema definition")
-	}
-	numFields := tupleDesc.NumFields()
-	if columnIndex < 0 || columnIndex >= numFields {
-		return fmt.Errorf("column index %d is out of range for table with %d columns", columnIndex, numFields)
-	}
-
-	return il.insertIntoIndex(ctx, heapFile, columnIndex, insertFunc)
-}
-
-// insertIntoIndex is a helper method that scans a table and inserts all tuples
-// into an index using the provided insert function.
-func (il *indexLifecycle) insertIntoIndex(ctx TxCtx, tableFile *heap.HeapFile, columnIndex int, insertFunc func(key types.Field, rid *tuple.TupleRecordID) error) error {
-	seqScan, err := query.NewSeqScan(ctx, tableFile.GetID(), tableFile, il.pageStore)
+// Returns:
+//   - error: nil on success, or an error if the sequential scan fails,
+//     tuple access fails, or index insertion fails
+func (im *IndexManager) insertIntoIndex(ctx TxCtx, tableFile *heap.HeapFile, columnIndex int, insertFunc func(key types.Field, rid *tuple.TupleRecordID) error) error {
+	seqScan, err := query.NewSeqScan(ctx, tableFile.GetID(), tableFile, im.pageStore)
 	if err != nil {
 		return fmt.Errorf("failed to create sequential scan: %v", err)
 	}
@@ -167,7 +63,7 @@ func (il *indexLifecycle) insertIntoIndex(ctx TxCtx, tableFile *heap.HeapFile, c
 			continue
 		}
 
-		if t.RecordID == nil {
+		if t.TableNotAssigned() {
 			return fmt.Errorf("tuple missing record ID")
 		}
 
@@ -179,33 +75,95 @@ func (il *indexLifecycle) insertIntoIndex(ctx TxCtx, tableFile *heap.HeapFile, c
 	return nil
 }
 
-// DeletePhysicalIndex removes the physical index file from disk.
-// This method is typically called after removing the index from the catalog
-// to clean up disk resources.
+// CreatePhysicalIndex creates the physical index file on disk.
+// This method initializes the appropriate index structure (Hash or BTree)
+// based on the specified index type and creates the file with proper
+// headers and metadata. The parent directory is created if it doesn't exist.
+//
+// Supported index types:
+//   - HashIndex: Creates a hash-based index with default bucket configuration
+//   - BTreeIndex: Creates a B-tree index optimized for range queries
 //
 // Parameters:
-//   - filePath: Path to the index file to delete
+//   - filePath: Absolute or relative path where the index file should be created.
+//     Parent directories will be created automatically if they don't exist.
+//   - keyType: The data type of the indexed column (e.g., IntType, StringType).
+//     This determines how keys are stored and compared in the index.
+//   - indexType: The type of index structure to create (HashIndex or BTreeIndex)
 //
-// Returns nil if the file doesn't exist (already deleted) or was successfully deleted.
-// Returns an error if the file exists but cannot be deleted.
-func (il *indexLifecycle) DeletePhysicalIndex(filePath string) error {
-	if _, err := os.Stat(filePath); os.IsNotExist(err) {
-		return nil
-	}
-
-	if err := os.Remove(filePath); err != nil {
-		return fmt.Errorf("failed to remove file %s: %v", filePath, err)
-	}
-
-	return nil
-}
-
-// CreatePhysicalIndex is a convenience method on IndexManager that delegates to lifecycle.
+// Returns:
+//   - error: nil on success, or an error if:
+//   - Directory creation fails
+//   - Index file creation fails
+//   - Index type is unsupported
+//   - File system I/O errors occur
+//
+// Example:
+//
+//	err := im.CreatePhysicalIndex("data/indexes/user_id.idx", types.IntType, index.HashIndex)
 func (im *IndexManager) CreatePhysicalIndex(filePath string, keyType types.Type, indexType index.IndexType) error {
-	return im.lifecycle.CreatePhysicalIndex(filePath, keyType, indexType)
+	dir := filepath.Dir(filePath)
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return fmt.Errorf("failed to create directory: %v", err)
+	}
+
+	switch indexType {
+	case index.HashIndex:
+		hashFile, err := hash.NewHashFile(filePath, keyType, hash.DefaultBuckets)
+		if err != nil {
+			return fmt.Errorf("failed to create hash index file: %v", err)
+		}
+		return hashFile.Close()
+
+	case index.BTreeIndex:
+		btreeFile, err := btree.NewBTreeFile(filePath, keyType)
+		if err != nil {
+			return fmt.Errorf("failed to create btree index file: %v", err)
+		}
+		return btreeFile.Close()
+
+	default:
+		return fmt.Errorf("unsupported index type: %s", indexType)
+	}
 }
 
-// PopulateIndex is a convenience method on IndexManager that delegates to lifecycle.
+// PopulateIndex builds an index by scanning an existing table and inserting all tuples.
+// This method is typically called after creating a new index to populate it with
+// existing data from the table. It performs the following steps:
+//
+// 1. Opens the index file based on the specified index type
+// 2. Creates an in-memory index wrapper (Hash or BTree)
+// 3. Performs a sequential scan of the table
+// 4. Extracts the key value from each tuple's specified column
+// 5. Inserts the key-value pair (key, record ID) into the index
+//
+// The method validates that the column index is within the valid range for
+// the table's schema before beginning the population process.
+//
+// Parameters:
+//   - ctx: Transaction context for the index population operation
+//   - filePath: Path to the physical index file on disk
+//   - indexID: Unique identifier for this index in the catalog
+//   - tableFile: The database file containing the table data to index.
+//     Must be a heap file implementation.
+//   - columnIndex: Zero-based index of the column to create the index on.
+//     Must be within the valid range [0, numColumns-1].
+//   - keyType: The data type of the indexed column
+//   - indexType: The type of index structure (HashIndex or BTreeIndex)
+//
+// Returns:
+//   - error: nil on success, or an error if:
+//   - The index file cannot be opened
+//   - The table file is not a valid heap file
+//   - The column index is out of range
+//   - The sequential scan fails
+//   - Any tuple insertion into the index fails
+//   - The index type is unsupported
+//
+// Example:
+//
+//	err := im.PopulateIndex(ctx, "data/indexes/user_id.idx", 1, tableFile, 0,
+//	                       types.IntType, index.HashIndex)
 func (im *IndexManager) PopulateIndex(
 	ctx TxCtx,
 	filePath string,
@@ -215,10 +173,82 @@ func (im *IndexManager) PopulateIndex(
 	keyType types.Type,
 	indexType index.IndexType,
 ) error {
-	return im.lifecycle.PopulateIndex(ctx, filePath, indexID, tableFile, columnIndex, keyType, indexType)
+	var insertFunc func(key types.Field, rid *tuple.TupleRecordID) error
+
+	switch indexType {
+	case index.HashIndex:
+		hashFile, err := hash.NewHashFile(filePath, keyType, hash.DefaultBuckets)
+		if err != nil {
+			return fmt.Errorf("failed to open hash index: %v", err)
+		}
+		defer hashFile.Close()
+
+		hashIdx := hashindex.NewHashIndex(indexID, keyType, hashFile, im.pageStore, ctx)
+		insertFunc = func(key types.Field, rid *tuple.TupleRecordID) error {
+			return hashIdx.Insert(key, rid)
+		}
+
+	case index.BTreeIndex:
+		btreeFile, err := btree.NewBTreeFile(filePath, keyType)
+		if err != nil {
+			return fmt.Errorf("failed to open btree index: %v", err)
+		}
+		defer btreeFile.Close()
+
+		btreeIdx := btreeindex.NewBTree(indexID, keyType, btreeFile, ctx, im.pageStore)
+		insertFunc = func(key types.Field, rid *tuple.TupleRecordID) error {
+			return btreeIdx.Insert(key, rid)
+		}
+
+	default:
+		return fmt.Errorf("unsupported index type: %s", indexType)
+	}
+
+	heapFile, ok := tableFile.(*heap.HeapFile)
+	if !ok {
+		return fmt.Errorf("expected heap file for table, got %T", tableFile)
+	}
+
+	tupleDesc := heapFile.GetTupleDesc()
+	if tupleDesc == nil {
+		return fmt.Errorf("table has no schema definition")
+	}
+	numFields := tupleDesc.NumFields()
+	if columnIndex < 0 || columnIndex >= numFields {
+		return fmt.Errorf("column index %d is out of range for table with %d columns", columnIndex, numFields)
+	}
+
+	return im.insertIntoIndex(ctx, heapFile, columnIndex, insertFunc)
 }
 
-// DeletePhysicalIndex is a convenience method on IndexManager that delegates to lifecycle.
+// DeletePhysicalIndex removes the physical index file from the file system.
+// This method is typically called during a DROP INDEX operation after the
+// index has been removed from the catalog. It safely handles the case where
+// the file has already been deleted.
+//
+// The method does not perform any catalog updates or transaction management;
+// it only handles the physical file deletion. Catalog cleanup should be
+// performed separately before calling this method.
+//
+// Parameters:
+//   - filePath: Absolute or relative path to the index file to delete
+//
+// Returns:
+//   - error: nil if the file doesn't exist (idempotent operation) or was
+//     successfully deleted. Returns an error if the file exists but cannot
+//     be deleted due to permission issues or file system errors.
+//
+// Example:
+//
+//	err := im.DeletePhysicalIndex("data/indexes/user_id.idx")
 func (im *IndexManager) DeletePhysicalIndex(filePath string) error {
-	return im.lifecycle.DeletePhysicalIndex(filePath)
+	if _, err := os.Stat(filePath); os.IsNotExist(err) {
+		return nil
+	}
+
+	if err := os.Remove(filePath); err != nil {
+		return fmt.Errorf("failed to remove file %s: %v", filePath, err)
+	}
+
+	return nil
 }
