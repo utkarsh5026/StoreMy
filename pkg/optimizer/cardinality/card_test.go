@@ -56,7 +56,7 @@ func setupTestCatalogWithData(t *testing.T) *testCatalogSetup {
 	if err != nil {
 		t.Fatalf("failed to begin transaction: %v", err)
 	}
-	if err := cat.Initialize(tx, tempDir); err != nil {
+	if err := cat.Initialize(tx); err != nil {
 		t.Fatalf("failed to initialize catalog: %v", err)
 	}
 
@@ -154,7 +154,7 @@ func (tcs *testCatalogSetup) insertTestData(t *testing.T, tableID int, rows [][]
 }
 
 // collectColumnStats collects statistics for a specific column
-func (tcs *testCatalogSetup) collectColumnStats(t *testing.T, tableID int, columnName string, columnIndex int) *catalog.ColumnStatistics {
+func (tcs *testCatalogSetup) collectColumnStats(t *testing.T, tableID int, columnName string, columnIndex int) *catalogmanager.ColumnStatistics {
 	t.Helper()
 
 	// Flush all pages to ensure data is visible
