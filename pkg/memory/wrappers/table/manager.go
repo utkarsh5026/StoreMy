@@ -35,7 +35,7 @@ func (o OperationType) String() string {
 
 // StatsRecorder interface for recording table modifications (to avoid circular dependency)
 type StatsRecorder interface {
-	RecordModification(tableID int)
+	RecordModification(tableID primitives.TableID)
 }
 
 // TupleManager handles tuple-level operations (insert, delete, update) on tables.
@@ -179,7 +179,7 @@ func (tm *TupleManager) UpdateTuple(ctx *transaction.TransactionContext, dbFile 
 //  4. Mark modified pages as dirty
 //  5. Update all indexes for the table (automatic index maintenance)
 //  6. Record modification for statistics
-func (tm *TupleManager) performDataOperation(operation OperationType, ctx *transaction.TransactionContext, dbFile page.DbFile, tableID int, t *tuple.Tuple) error {
+func (tm *TupleManager) performDataOperation(operation OperationType, ctx *transaction.TransactionContext, dbFile page.DbFile, tableID primitives.TableID, t *tuple.Tuple) error {
 	if ctx == nil {
 		return fmt.Errorf("transaction context cannot be nil")
 	}
@@ -279,7 +279,7 @@ func (tm *TupleManager) insertIntoNewPage(ctx *transaction.TransactionContext, t
 		return nil, fmt.Errorf("failed to allocate new page: %v", err)
 	}
 
-	newPageID := heap.NewHeapPageID(heapFile.GetID(), newPageNo)
+	newPageID := page.NewPageDescriptor(heapFile.GetID(), newPageNo)
 	newPage, err := heap.NewHeapPage(newPageID, make([]byte, page.PageSize), heapFile.GetTupleDesc())
 	if err != nil {
 		return nil, fmt.Errorf("failed to create new page: %v", err)
@@ -331,7 +331,7 @@ func (tm *TupleManager) tryInsertIntoExistingPages(ctx *transaction.TransactionC
 	}
 
 	for i := range numPages {
-		pageID := heap.NewHeapPageID(heapFile.GetID(), i)
+		pageID := page.NewPageDescriptor(heapFile.GetID(), i)
 		pg, err := tm.pageProvider.GetPage(ctx, heapFile, pageID, transaction.ReadWrite)
 		if err != nil {
 			continue
@@ -374,7 +374,11 @@ func (tm *TupleManager) tryInsertIntoExistingPages(ctx *transaction.TransactionC
 //   - error: If page access, WAL logging, or deletion fails
 func (tm *TupleManager) handleDelete(ctx *transaction.TransactionContext, dbFile page.DbFile, t *tuple.Tuple) ([]page.Page, error) {
 	pageID := t.RecordID.PageID
-	pg, err := tm.pageProvider.GetPage(ctx, dbFile, pageID, transaction.ReadWrite)
+	hpid, ok := pageID.(*page.PageDescriptor)
+	if !ok {
+		return nil, fmt.Errorf("wrong poage id format")
+	}
+	pg, err := tm.pageProvider.GetPage(ctx, dbFile, hpid, transaction.ReadWrite)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get page for delete: %v", err)
 	}

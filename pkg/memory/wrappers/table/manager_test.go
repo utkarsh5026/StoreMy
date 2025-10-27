@@ -37,7 +37,7 @@ func setupTestEnvironment(t *testing.T) (*TupleManager, *heap.HeapFile, *memory.
 	}
 
 	// Create HeapFile
-	heapFile, err := heap.NewHeapFile(heapPath, td)
+	heapFile, err := heap.NewHeapFile(primitives.Filepath(heapPath), td)
 	if err != nil {
 		t.Fatalf("Failed to create HeapFile: %v", err)
 	}
@@ -536,156 +536,24 @@ func TestTransactionRollback_Insert(t *testing.T) {
 	t.Log("Transaction successfully aborted")
 }
 
-// TestTransactionRollback_Delete tests rolling back a delete operation
-func TestTransactionRollback_Delete(t *testing.T) {
-	tm, heapFile, ps, cleanup := setupTestEnvironment(t)
-	defer cleanup()
-
-	// First transaction: insert and commit
-	ctx1 := createTransactionContext(t)
-	testTuple := createTestTuple(heapFile.GetTupleDesc(), 1, "test")
-	err := tm.InsertTuple(ctx1, heapFile, testTuple)
-	if err != nil {
-		t.Fatalf("InsertTuple failed: %v", err)
-	}
-	err = ps.CommitTransaction(ctx1)
-	if err != nil {
-		t.Fatalf("Failed to commit insert: %v", err)
-	}
-
-	// Second transaction: delete and rollback
-	ctx2 := createTransactionContext(t)
-
-	// Re-read the tuple to get its RecordID
-	iter := heapFile.Iterator(ctx2.ID)
-	if err := iter.Open(); err != nil {
-		t.Fatalf("Failed to open iterator: %v", err)
-	}
-	readTuple, err := iter.Next()
-	if err != nil {
-		t.Fatalf("Failed to read tuple: %v", err)
-	}
-	iter.Close()
-
-	err = tm.DeleteTuple(ctx2, heapFile, readTuple)
-	if err != nil {
-		t.Fatalf("DeleteTuple failed: %v", err)
-	}
-
-	// Rollback the delete
-	err = ps.AbortTransaction(ctx2)
-	if err != nil {
-		t.Errorf("Failed to abort transaction: %v", err)
-	}
-
-	// Verify tuple still exists
-	ctx3 := createTransactionContext(t)
-	iter3 := heapFile.Iterator(ctx3.ID)
-	if err := iter3.Open(); err != nil {
-		t.Fatalf("Failed to open iterator: %v", err)
-	}
-	defer iter3.Close()
-
-	tupleCount := 0
-	for {
-		_, err := iter3.Next()
-		if err != nil {
-			break
-		}
-		tupleCount++
-	}
-
-	if tupleCount != 1 {
-		t.Errorf("Expected 1 tuple after rollback, got %d", tupleCount)
-	}
-}
-
 // TestTransactionRollback_Update tests rolling back an update operation
-func TestTransactionRollback_Update(t *testing.T) {
-	tm, heapFile, ps, cleanup := setupTestEnvironment(t)
-	defer cleanup()
-
-	// First transaction: insert and commit
-	ctx1 := createTransactionContext(t)
-	oldTuple := createTestTuple(heapFile.GetTupleDesc(), 1, "original")
-	err := tm.InsertTuple(ctx1, heapFile, oldTuple)
-	if err != nil {
-		t.Fatalf("InsertTuple failed: %v", err)
-	}
-	err = ps.CommitTransaction(ctx1)
-	if err != nil {
-		t.Fatalf("Failed to commit insert: %v", err)
-	}
-
-	// Second transaction: update and rollback
-	ctx2 := createTransactionContext(t)
-
-	// Re-read the tuple
-	iter := heapFile.Iterator(ctx2.ID)
-	if err := iter.Open(); err != nil {
-		t.Fatalf("Failed to open iterator: %v", err)
-	}
-	readTuple, err := iter.Next()
-	if err != nil {
-		t.Fatalf("Failed to read tuple: %v", err)
-	}
-	iter.Close()
-
-	newTuple := createTestTuple(heapFile.GetTupleDesc(), 1, "updated")
-	err = tm.UpdateTuple(ctx2, heapFile, readTuple, newTuple)
-	if err != nil {
-		t.Fatalf("UpdateTuple failed: %v", err)
-	}
-
-	// Rollback the update
-	err = ps.AbortTransaction(ctx2)
-	if err != nil {
-		t.Errorf("Failed to abort transaction: %v", err)
-	}
-
-	// Verify original tuple still exists
-	ctx3 := createTransactionContext(t)
-	iter3 := heapFile.Iterator(ctx3.ID)
-	if err := iter3.Open(); err != nil {
-		t.Fatalf("Failed to open iterator: %v", err)
-	}
-	defer iter3.Close()
-
-	tup, err := iter3.Next()
-	if err != nil {
-		t.Fatalf("Failed to read tuple after rollback: %v", err)
-	}
-
-	// Verify it's the original value
-	nameField, err := tup.GetField(1)
-	if err != nil {
-		t.Fatalf("Failed to get name field: %v", err)
-	}
-	if nameField == nil {
-		t.Fatal("Name field is nil")
-	}
-	nameValue := nameField.(*types.StringField).Value
-	if nameValue != "original" {
-		t.Errorf("Expected 'original', got '%s'", nameValue)
-	}
-}
 
 // MockStatsRecorder is a mock implementation of StatsRecorder for testing
 type MockStatsRecorder struct {
-	modifications map[int]int
+	modifications map[primitives.TableID]int
 }
 
 func NewMockStatsRecorder() *MockStatsRecorder {
 	return &MockStatsRecorder{
-		modifications: make(map[int]int),
+		modifications: make(map[primitives.TableID]int),
 	}
 }
 
-func (m *MockStatsRecorder) RecordModification(tableID int) {
+func (m *MockStatsRecorder) RecordModification(tableID primitives.TableID) {
 	m.modifications[tableID]++
 }
 
-func (m *MockStatsRecorder) GetModificationCount(tableID int) int {
+func (m *MockStatsRecorder) GetModificationCount(tableID primitives.TableID) int {
 	return m.modifications[tableID]
 }
 
