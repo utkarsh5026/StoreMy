@@ -2,6 +2,7 @@ package primitives
 
 import (
 	"hash/fnv"
+	"path/filepath"
 )
 
 type Filepath string
@@ -10,6 +11,10 @@ func (f Filepath) Hash() TableID {
 	h := fnv.New64a()
 	h.Write([]byte(f))
 	return TableID(h.Sum64())
+}
+
+func (f Filepath) Dir() string {
+	return filepath.Dir(string(f))
 }
 
 // PageID interface represents a unique identifier for a page

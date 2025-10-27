@@ -35,3 +35,6 @@ type CheckpointID uint64
 
 // Offset represents a byte offset (within page, file, or log)
 type Offset uint32
+
+// RowID uniquely identifies a row within a table
+type RowID uint64
