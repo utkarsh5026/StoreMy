@@ -74,6 +74,13 @@ func (to *TableOperations) GetTableMetadataByName(tx TxContext, tableName string
 	})
 }
 
+// DeleteTable removes a table entry from the catalog using its table ID.
+//
+// Parameters:
+//   - tx: Transaction context for deletions
+//   - tableID: ID of the table to remove
+//
+// Returns an error if the table cannot be deleted or is not found.
 func (to *TableOperations) DeleteTable(tx TxContext, tableID int) error {
 	return to.DeleteBy(tx, func(tm *systemtable.TableMetadata) bool {
 		return tm.TableID == tableID
