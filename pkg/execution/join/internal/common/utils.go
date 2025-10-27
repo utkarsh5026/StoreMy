@@ -2,11 +2,12 @@ package common
 
 import (
 	"fmt"
+	"storemy/pkg/primitives"
 	"storemy/pkg/tuple"
 )
 
 // ExtractJoinKey extracts and stringifies the join key from a tuple.
-func ExtractJoinKey(t *tuple.Tuple, fieldIndex int) (string, error) {
+func ExtractJoinKey(t *tuple.Tuple, fieldIndex primitives.ColumnID) (string, error) {
 	field, err := t.GetField(fieldIndex)
 	if err != nil || field == nil {
 		return "", fmt.Errorf("invalid join key at field %d", fieldIndex)

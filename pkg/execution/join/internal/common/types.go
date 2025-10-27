@@ -68,10 +68,10 @@ type JoinPredicate interface {
 	GetOP() primitives.Predicate
 
 	// GetField1 returns the index of the field in the first tuple
-	GetField1() int
+	GetLeftField() primitives.ColumnID
 
 	// GetField2 returns the index of the field in the second tuple
-	GetField2() int
+	GetRightField() primitives.ColumnID
 
 	// String returns a string representation for debugging
 	String() string
@@ -79,13 +79,13 @@ type JoinPredicate interface {
 
 // joinPredicate is the internal implementation of JoinPredicate
 type joinPredicate struct {
-	field1 int                  // Field index in the first (left) tuple
-	field2 int                  // Field index in the second (right) tuple
+	field1 primitives.ColumnID  // Field index in the first (left) tuple
+	field2 primitives.ColumnID  // Field index in the second (right) tuple
 	op     primitives.Predicate // The comparison operation to apply
 }
 
 // NewJoinPredicate creates a new join predicate
-func NewJoinPredicate(field1, field2 int, op primitives.Predicate) (JoinPredicate, error) {
+func NewJoinPredicate(field1, field2 primitives.ColumnID, op primitives.Predicate) (JoinPredicate, error) {
 	if field1 < 0 {
 		return nil, fmt.Errorf("field1 index cannot be negative: %d", field1)
 	}
@@ -136,11 +136,11 @@ func (jp *joinPredicate) GetOP() primitives.Predicate {
 }
 
 // GetField1 returns the index of the field in the first tuple used in the join predicate.
-func (jp *joinPredicate) GetField1() int {
+func (jp *joinPredicate) GetLeftField() primitives.ColumnID {
 	return jp.field1
 }
 
-// GetField2 returns the index of the field in the second tuple used in the join predicate.
-func (jp *joinPredicate) GetField2() int {
+// GetRightField returns the index of the field in the second tuple used in the join predicate.
+func (jp *joinPredicate) GetRightField() primitives.ColumnID {
 	return jp.field2
 }

@@ -15,8 +15,8 @@ import (
 func TestNewJoinPredicate(t *testing.T) {
 	tests := []struct {
 		name      string
-		field1    int
-		field2    int
+		field1    primitives.ColumnID
+		field2    primitives.ColumnID
 		op        primitives.Predicate
 		expectErr bool
 	}{
@@ -26,27 +26,6 @@ func TestNewJoinPredicate(t *testing.T) {
 			field2:    1,
 			op:        primitives.Equals,
 			expectErr: false,
-		},
-		{
-			name:      "negative field1",
-			field1:    -1,
-			field2:    0,
-			op:        primitives.Equals,
-			expectErr: true,
-		},
-		{
-			name:      "negative field2",
-			field1:    0,
-			field2:    -1,
-			op:        primitives.Equals,
-			expectErr: true,
-		},
-		{
-			name:      "both fields negative",
-			field1:    -1,
-			field2:    -2,
-			op:        primitives.Equals,
-			expectErr: true,
 		},
 		{
 			name:      "valid predicate with GreaterThan",
@@ -75,11 +54,11 @@ func TestNewJoinPredicate(t *testing.T) {
 				if jp == nil {
 					t.Errorf("expected non-nil predicate")
 				}
-				if jp.GetField1() != tt.field1 {
-					t.Errorf("expected field1=%d, got %d", tt.field1, jp.GetField1())
+				if jp.GetLeftField() != tt.field1 {
+					t.Errorf("expected field1=%d, got %d", tt.field1, jp.GetLeftField())
 				}
-				if jp.GetField2() != tt.field2 {
-					t.Errorf("expected field2=%d, got %d", tt.field2, jp.GetField2())
+				if jp.GetRightField() != tt.field2 {
+					t.Errorf("expected field2=%d, got %d", tt.field2, jp.GetRightField())
 				}
 				if jp.GetOP() != tt.op {
 					t.Errorf("expected op=%v, got %v", tt.op, jp.GetOP())
@@ -91,7 +70,7 @@ func TestNewJoinPredicate(t *testing.T) {
 
 // TestJoinPredicateGetters tests the getter methods
 func TestJoinPredicateGetters(t *testing.T) {
-	field1, field2 := 1, 2
+	var field1, field2 primitives.ColumnID = 1, 2
 	op := primitives.LessThan
 
 	jp, err := NewJoinPredicate(field1, field2, op)
@@ -99,12 +78,12 @@ func TestJoinPredicateGetters(t *testing.T) {
 		t.Fatalf("failed to create join predicate: %v", err)
 	}
 
-	if jp.GetField1() != field1 {
-		t.Errorf("GetField1() = %d, want %d", jp.GetField1(), field1)
+	if jp.GetLeftField() != field1 {
+		t.Errorf("GetLeftField() = %d, want %d", jp.GetLeftField(), field1)
 	}
 
-	if jp.GetField2() != field2 {
-		t.Errorf("GetField2() = %d, want %d", jp.GetField2(), field2)
+	if jp.GetRightField() != field2 {
+		t.Errorf("GetRightField() = %d, want %d", jp.GetRightField(), field2)
 	}
 
 	if jp.GetOP() != op {
@@ -142,7 +121,7 @@ func createTestTuple(fieldTypes []types.Type, values []any) *tuple.Tuple {
 		case string:
 			field = types.NewStringField(v, types.StringMaxSize)
 		}
-		tup.SetField(i, field)
+		tup.SetField(primitives.ColumnID(i), field)
 	}
 
 	return tup
@@ -152,8 +131,8 @@ func createTestTuple(fieldTypes []types.Type, values []any) *tuple.Tuple {
 func TestJoinPredicateFilter(t *testing.T) {
 	tests := []struct {
 		name       string
-		field1     int
-		field2     int
+		field1     primitives.ColumnID
+		field2     primitives.ColumnID
 		op         primitives.Predicate
 		tuple1Data []interface{}
 		tuple2Data []interface{}
