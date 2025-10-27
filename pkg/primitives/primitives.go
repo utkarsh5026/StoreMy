@@ -1,5 +1,17 @@
 package primitives
 
+import (
+	"hash/fnv"
+)
+
+type Filepath string
+
+func (f Filepath) Hash() TableID {
+	h := fnv.New64a()
+	h.Write([]byte(f))
+	return TableID(h.Sum64())
+}
+
 // PageID interface represents a unique identifier for a page
 // This is a placeholder interface that will be implemented by specific page types
 type PageID interface {

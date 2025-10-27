@@ -18,12 +18,6 @@ type SlotID uint16
 // PageNumber represents a page number within a table
 type PageNumber uint64
 
-// FileID uniquely identifies a database file
-type FileID uint32
-
-// BufferPoolID identifies a buffer frame in the buffer pool
-type BufferPoolID uint32
-
 // LockID uniquely identifies a lock (could be hash of resource)
 type LockID uint64
 
@@ -31,7 +25,7 @@ type LockID uint64
 type Timestamp uint64
 
 // ColumnID identifies a column within a table
-type ColumnID uint16
+type ColumnID uint32
 
 // IndexID uniquely identifies an index
 type IndexID uint64
@@ -41,6 +35,3 @@ type CheckpointID uint64
 
 // Offset represents a byte offset (within page, file, or log)
 type Offset uint32
-
-// Size represents a size in bytes
-type Size uint32
