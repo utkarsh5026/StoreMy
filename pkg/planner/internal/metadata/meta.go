@@ -4,12 +4,13 @@ import (
 	"fmt"
 	"storemy/pkg/concurrency/transaction"
 	"storemy/pkg/iterator"
+	"storemy/pkg/primitives"
 	"storemy/pkg/registry"
 	"storemy/pkg/tuple"
 )
 
 type TableMetadata struct {
-	TableID   int
+	TableID   primitives.FileID
 	TupleDesc *tuple.TupleDescription
 }
 
@@ -35,10 +36,10 @@ func ResolveTableMetadata(tableName string, tx *transaction.TransactionContext, 
 
 // resolveTableID converts a table name to its internal numeric identifier.
 // Convenience wrapper around resolveTableMetadata when only the ID is needed.
-func ResolveTableID(tableName string, tx *transaction.TransactionContext, ctx *registry.DatabaseContext) (int, error) {
+func ResolveTableID(tableName string, tx *transaction.TransactionContext, ctx *registry.DatabaseContext) (primitives.FileID, error) {
 	md, err := ResolveTableMetadata(tableName, tx, ctx)
 	if err != nil {
-		return -1, err
+		return 0, err
 	}
 
 	return md.TableID, nil
