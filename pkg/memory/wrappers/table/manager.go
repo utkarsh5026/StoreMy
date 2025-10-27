@@ -35,7 +35,7 @@ func (o OperationType) String() string {
 
 // StatsRecorder interface for recording table modifications (to avoid circular dependency)
 type StatsRecorder interface {
-	RecordModification(tableID primitives.TableID)
+	RecordModification(tableID primitives.FileID)
 }
 
 // TupleManager handles tuple-level operations (insert, delete, update) on tables.
@@ -179,7 +179,7 @@ func (tm *TupleManager) UpdateTuple(ctx *transaction.TransactionContext, dbFile 
 //  4. Mark modified pages as dirty
 //  5. Update all indexes for the table (automatic index maintenance)
 //  6. Record modification for statistics
-func (tm *TupleManager) performDataOperation(operation OperationType, ctx *transaction.TransactionContext, dbFile page.DbFile, tableID primitives.TableID, t *tuple.Tuple) error {
+func (tm *TupleManager) performDataOperation(operation OperationType, ctx *transaction.TransactionContext, dbFile page.DbFile, tableID primitives.FileID, t *tuple.Tuple) error {
 	if ctx == nil {
 		return fmt.Errorf("transaction context cannot be nil")
 	}

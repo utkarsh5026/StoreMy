@@ -8,6 +8,7 @@ import (
 	"storemy/pkg/memory"
 	"storemy/pkg/primitives"
 	"storemy/pkg/storage/heap"
+	"storemy/pkg/storage/page"
 	"storemy/pkg/tuple"
 	"storemy/pkg/types"
 	"testing"
@@ -360,7 +361,7 @@ func TestDeleteTuple_NonExistent(t *testing.T) {
 
 	// Manually set a RecordID that doesn't exist
 	testTuple.RecordID = tuple.NewTupleRecordID(
-		heap.NewHeapPageID(heapFile.GetID(), 0),
+		page.NewPageDescriptor(heapFile.GetID(), 0),
 		999,
 	)
 
@@ -378,7 +379,7 @@ func TestDeleteTuple_NilTransaction(t *testing.T) {
 
 	testTuple := createTestTuple(heapFile.GetTupleDesc(), 1, "test")
 	testTuple.RecordID = tuple.NewTupleRecordID(
-		heap.NewHeapPageID(heapFile.GetID(), 0),
+		page.NewPageDescriptor(heapFile.GetID(), 0),
 		0,
 	)
 
@@ -540,20 +541,20 @@ func TestTransactionRollback_Insert(t *testing.T) {
 
 // MockStatsRecorder is a mock implementation of StatsRecorder for testing
 type MockStatsRecorder struct {
-	modifications map[primitives.TableID]int
+	modifications map[primitives.FileID]int
 }
 
 func NewMockStatsRecorder() *MockStatsRecorder {
 	return &MockStatsRecorder{
-		modifications: make(map[primitives.TableID]int),
+		modifications: make(map[primitives.FileID]int),
 	}
 }
 
-func (m *MockStatsRecorder) RecordModification(tableID primitives.TableID) {
+func (m *MockStatsRecorder) RecordModification(tableID primitives.FileID) {
 	m.modifications[tableID]++
 }
 
-func (m *MockStatsRecorder) GetModificationCount(tableID primitives.TableID) int {
+func (m *MockStatsRecorder) GetModificationCount(tableID primitives.FileID) int {
 	return m.modifications[tableID]
 }
 
