@@ -66,7 +66,9 @@ type HashIndex struct {
 //
 // Returns a configured HashIndex ready for insert/search operations.
 func NewHashIndex(indexID int, keyType types.Type, file *hash.HashFile, store *memory.PageStore, tx *transaction.TransactionContext) *HashIndex {
+	file.SetIndexID(indexID)
 	store.RegisterDbFile(indexID, file)
+
 	return &HashIndex{
 		indexID:    indexID,
 		keyType:    keyType,
@@ -87,7 +89,7 @@ func NewHashIndex(indexID int, keyType types.Type, file *hash.HashFile, store *m
 // Returns the newly created overflow page or error on failure.
 func (hi *HashIndex) createAndLinkOverflowPage(bucketNum int, parentPage HashPage) (HashPage, error) {
 	pageNum := hi.file.AllocatePageNum()
-	pageID := hash.NewHashPageID(hi.file.GetID(), pageNum)
+	pageID := hash.NewHashPageID(hi.indexID, pageNum)
 
 	overflowPage := hash.NewHashPage(pageID, bucketNum, hi.keyType)
 	overflowPage.MarkDirty(true, hi.tx.ID)
@@ -119,7 +121,7 @@ func (hi *HashIndex) readOverflowPage(p HashPage) (HashPage, error) {
 			overflowPageNum, hi.file.NumPages())
 	}
 
-	overflowPageID := hash.NewHashPageID(hi.file.GetID(), overflowPageNum)
+	overflowPageID := hash.NewHashPageID(hi.indexID, overflowPageNum)
 	return hi.getPageFromStore(overflowPageID)
 }
 
@@ -137,7 +139,7 @@ func (hi *HashIndex) getBucketPageByNum(bucketNum int) (HashPage, error) {
 		return nil, fmt.Errorf("failed to get bucket page number: %w", err)
 	}
 
-	pageID := hash.NewHashPageID(hi.file.GetID(), pageNum)
+	pageID := hash.NewHashPageID(hi.indexID, pageNum)
 	return hi.getPageFromStore(pageID)
 }
 
@@ -159,6 +161,7 @@ func (hi *HashIndex) GetKeyType() types.Type {
 //   - error: Returns error if file close fails
 func (hi *HashIndex) Close() error {
 	err := hi.file.Close()
+	// Unregister using the indexID, matching the registration
 	hi.pageStore.UnregisterDbFile(hi.indexID)
 	return err
 }

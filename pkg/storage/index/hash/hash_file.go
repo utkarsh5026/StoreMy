@@ -27,6 +27,7 @@ type HashFile struct {
 	*page.BaseFile
 	keyType              types.Type
 	numPages, numBuckets int
+	indexID              int         // Override index ID (set when file is associated with an index)
 	mutex                sync.RWMutex
 	bucketPageID         map[int]int // Maps bucket number to primary page number
 }
@@ -102,6 +103,35 @@ func (hf *HashFile) GetNumBuckets() int {
 	hf.mutex.RLock()
 	defer hf.mutex.RUnlock()
 	return hf.numBuckets
+}
+
+// SetIndexID sets the index ID for this hash file.
+// This should be called when the file is associated with a specific index.
+// The indexID overrides the BaseFile's ID for page validation.
+func (hf *HashFile) SetIndexID(indexID int) {
+	hf.mutex.Lock()
+	defer hf.mutex.Unlock()
+	hf.indexID = indexID
+}
+
+// GetIndexID returns the index ID for this hash file.
+// Returns 0 if no index ID has been set.
+func (hf *HashFile) GetIndexID() int {
+	hf.mutex.RLock()
+	defer hf.mutex.RUnlock()
+	return hf.indexID
+}
+
+// GetID implements the DbFile interface by returning the index ID if set,
+// otherwise returns the BaseFile's ID (hash of filename).
+// This allows the file to be registered with a specific index ID.
+func (hf *HashFile) GetID() int {
+	hf.mutex.RLock()
+	defer hf.mutex.RUnlock()
+	if hf.indexID != 0 {
+		return hf.indexID
+	}
+	return hf.BaseFile.GetID()
 }
 
 // ReadPage reads a hash page from disk and deserializes it.
