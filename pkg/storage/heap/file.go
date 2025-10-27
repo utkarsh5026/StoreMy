@@ -3,7 +3,6 @@ package heap
 import (
 	"fmt"
 	"io"
-	"storemy/pkg/iterator"
 	"storemy/pkg/primitives"
 	"storemy/pkg/storage/page"
 	"storemy/pkg/tuple"
@@ -32,7 +31,7 @@ type HeapFile struct {
 // Returns:
 //   - *HeapFile: The initialized heap file
 //   - error: If the filename is empty or file cannot be opened
-func NewHeapFile(filename string, td *tuple.TupleDescription) (*HeapFile, error) {
+func NewHeapFile(filename primitives.Filepath, td *tuple.TupleDescription) (*HeapFile, error) {
 	baseFile, err := page.NewBaseFile(filename)
 	if err != nil {
 		return nil, err
@@ -57,7 +56,7 @@ func (hf *HeapFile) GetTupleDesc() *tuple.TupleDescription {
 // the BufferPool rather than directly.
 //
 // Parameters:
-//   - pageID: The page identifier (must be a *HeapPageID)
+//   - pageID: The page identifier (must be a page.PageDescriptor)
 //
 // Returns:
 //   - page.Page: The loaded HeapPage with tuple data
@@ -67,7 +66,7 @@ func (hf *HeapFile) GetTupleDesc() *tuple.TupleDescription {
 //   - Returns a blank page if reading past EOF
 //   - Validates that pageID matches this file's table ID
 //   - Acquires a read lock during the operation
-func (hf *HeapFile) ReadPage(pageID primitives.PageID) (page.Page, error) {
+func (hf *HeapFile) ReadPage(pageID *page.PageDescriptor) (page.Page, error) {
 	heapPageID, err := hf.validateAndConvertPageID(pageID)
 	if err != nil {
 		return nil, err
@@ -90,16 +89,20 @@ func (hf *HeapFile) ReadPage(pageID primitives.PageID) (page.Page, error) {
 //   - pageID: The page identifier to validate
 //
 // Returns:
-//   - *HeapPageID: The validated and type-cast page ID
+//   - page.PageDescriptor: The validated and type-cast page ID
 //   - error: If validation fails
-func (hf *HeapFile) validateAndConvertPageID(pageID primitives.PageID) (*HeapPageID, error) {
+func (hf *HeapFile) validateAndConvertPageID(pageID primitives.PageID) (*page.PageDescriptor, error) {
 	if pageID == nil {
 		return nil, fmt.Errorf("page ID cannot be nil")
 	}
 
-	heapPageID, ok := pageID.(*HeapPageID)
+	heapPageID, ok := pageID.(*page.PageDescriptor)
 	if !ok {
 		return nil, fmt.Errorf("invalid page ID type for HeapFile")
+	}
+
+	if heapPageID == nil {
+		return nil, fmt.Errorf("page descriptor cannot be nil")
 	}
 
 	if heapPageID.GetTableID() != hf.GetID() {
@@ -122,22 +125,5 @@ func (hf *HeapFile) WritePage(p page.Page) error {
 		return fmt.Errorf("page cannot be nil")
 	}
 
-	heapPageID, ok := p.GetID().(*HeapPageID)
-	if !ok {
-		return fmt.Errorf("invalid page ID type for HeapFile")
-	}
-
-	return hf.WritePageData(heapPageID.PageNo(), p.GetPageData())
-}
-
-// Iterator returns a DbFileIterator for iterating over all tuples in this HeapFile.
-// The iterator will scan through pages sequentially and return tuples one at a time.
-//
-// Parameters:
-//   - tid: Transaction ID for locking and concurrency control
-//
-// Returns:
-//   - iterator.DbFileIterator: An iterator over all tuples in the file
-func (hf *HeapFile) Iterator(tid *primitives.TransactionID) iterator.DbFileIterator {
-	return NewHeapFileIterator(hf, tid)
+	return hf.WritePageData(p.GetID().PageNo(), p.GetPageData())
 }

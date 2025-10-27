@@ -10,13 +10,13 @@ import (
 )
 
 func TestNewHeapPage(t *testing.T) {
-	pageID := NewHeapPageID(1, 2)
+	pageID := page.NewPageDescriptor(1, 2)
 	td := mustCreateTupleDesc()
 	validData := make([]byte, page.PageSize)
 
 	tests := []struct {
 		name          string
-		pageID        *HeapPageID
+		pageID        *page.PageDescriptor
 		data          []byte
 		tupleDesc     *tuple.TupleDescription
 		expectedError bool
@@ -87,7 +87,7 @@ func TestNewHeapPage(t *testing.T) {
 				t.Errorf("Expected non-empty slot pointers array")
 			}
 
-			if len(hp.tuples) != hp.numSlots {
+			if len(hp.tuples) != int(hp.numSlots) {
 				t.Errorf("Expected tuples slice length %d, got %d", hp.numSlots, len(hp.tuples))
 			}
 
@@ -99,7 +99,7 @@ func TestNewHeapPage(t *testing.T) {
 }
 
 func TestHeapPage_GetID(t *testing.T) {
-	pageID := NewHeapPageID(5, 10)
+	pageID := page.NewPageDescriptor(5, 10)
 	td := mustCreateTupleDesc()
 	data := make([]byte, page.PageSize)
 
@@ -115,7 +115,7 @@ func TestHeapPage_GetID(t *testing.T) {
 }
 
 func TestHeapPage_IsDirty_MarkDirty(t *testing.T) {
-	pageID := NewHeapPageID(1, 2)
+	pageID := page.NewPageDescriptor(1, 2)
 	td := mustCreateTupleDesc()
 	data := make([]byte, page.PageSize)
 
@@ -142,7 +142,7 @@ func TestHeapPage_IsDirty_MarkDirty(t *testing.T) {
 }
 
 func TestHeapPage_GetNumEmptySlots(t *testing.T) {
-	pageID := NewHeapPageID(1, 2)
+	pageID := page.NewPageDescriptor(1, 2)
 	td := mustCreateTupleDesc()
 	data := make([]byte, page.PageSize)
 
@@ -179,7 +179,7 @@ func TestHeapPage_GetNumEmptySlots(t *testing.T) {
 }
 
 func TestHeapPage_AddTuple(t *testing.T) {
-	pageID := NewHeapPageID(1, 2)
+	pageID := page.NewPageDescriptor(1, 2)
 	td := mustCreateTupleDesc()
 	data := make([]byte, page.PageSize)
 
@@ -247,7 +247,7 @@ func TestHeapPage_AddTuple(t *testing.T) {
 }
 
 func TestHeapPage_DeleteTuple(t *testing.T) {
-	pageID := NewHeapPageID(1, 2)
+	pageID := page.NewPageDescriptor(1, 2)
 	td := mustCreateTupleDesc()
 	data := make([]byte, page.PageSize)
 
@@ -287,7 +287,7 @@ func TestHeapPage_DeleteTuple(t *testing.T) {
 			name: "Tuple from different page",
 			tuple: func() *tuple.Tuple {
 				t := createTestTuple(td, 3, "Charlie")
-				differentPageID := NewHeapPageID(2, 1)
+				differentPageID := page.NewPageDescriptor(2, 1)
 				t.RecordID = tuple.NewTupleRecordID(differentPageID, 0)
 				return t
 			}(),
@@ -336,7 +336,7 @@ func TestHeapPage_DeleteTuple(t *testing.T) {
 }
 
 func TestHeapPage_GetTuples(t *testing.T) {
-	pageID := NewHeapPageID(1, 2)
+	pageID := page.NewPageDescriptor(1, 2)
 	td := mustCreateTupleDesc()
 	data := make([]byte, page.PageSize)
 
@@ -386,7 +386,7 @@ func TestHeapPage_GetTuples(t *testing.T) {
 }
 
 func TestHeapPage_GetTupleAt(t *testing.T) {
-	pageID := NewHeapPageID(1, 2)
+	pageID := page.NewPageDescriptor(1, 2)
 	td := mustCreateTupleDesc()
 	data := make([]byte, page.PageSize)
 
@@ -397,7 +397,7 @@ func TestHeapPage_GetTupleAt(t *testing.T) {
 
 	tests := []struct {
 		name          string
-		index         int
+		index         primitives.SlotID
 		expectedError bool
 		expectNil     bool
 	}{
@@ -406,11 +406,6 @@ func TestHeapPage_GetTupleAt(t *testing.T) {
 			index:         0,
 			expectedError: false,
 			expectNil:     true,
-		},
-		{
-			name:          "Negative index",
-			index:         -1,
-			expectedError: true,
 		},
 		{
 			name:          "Index out of bounds",
@@ -459,7 +454,7 @@ func TestHeapPage_GetTupleAt(t *testing.T) {
 }
 
 func TestHeapPage_GetPageData(t *testing.T) {
-	pageID := NewHeapPageID(1, 2)
+	pageID := page.NewPageDescriptor(1, 2)
 	td := mustCreateTupleDesc()
 	data := make([]byte, page.PageSize)
 
@@ -490,7 +485,7 @@ func TestHeapPage_GetPageData(t *testing.T) {
 }
 
 func TestHeapPage_GetBeforeImage_SetBeforeImage(t *testing.T) {
-	pageID := NewHeapPageID(1, 2)
+	pageID := page.NewPageDescriptor(1, 2)
 	td := mustCreateTupleDesc()
 	data := make([]byte, page.PageSize)
 
@@ -524,7 +519,7 @@ func TestHeapPage_GetBeforeImage_SetBeforeImage(t *testing.T) {
 }
 
 func TestHeapPage_AddTuple_FillPage(t *testing.T) {
-	pageID := NewHeapPageID(1, 2)
+	pageID := page.NewPageDescriptor(1, 2)
 	td := mustCreateTupleDesc()
 	data := make([]byte, page.PageSize)
 
@@ -534,7 +529,8 @@ func TestHeapPage_AddTuple_FillPage(t *testing.T) {
 	}
 
 	maxTuples := hp.numSlots
-	for i := 0; i < maxTuples; i++ {
+	var i primitives.SlotID
+	for i = 0; i < maxTuples; i++ {
 		tuple := createTestTuple(td, int64(i), "User")
 		err := hp.AddTuple(tuple)
 		if err != nil {
@@ -554,7 +550,7 @@ func TestHeapPage_AddTuple_FillPage(t *testing.T) {
 }
 
 func TestHeapPage_DeleteTuple_AlreadyEmpty(t *testing.T) {
-	pageID := NewHeapPageID(1, 2)
+	pageID := page.NewPageDescriptor(1, 2)
 	td := mustCreateTupleDesc()
 	data := make([]byte, page.PageSize)
 
@@ -581,7 +577,7 @@ func TestHeapPage_DeleteTuple_AlreadyEmpty(t *testing.T) {
 }
 
 func TestHeapPage_ConcurrentAccess(t *testing.T) {
-	pageID := NewHeapPageID(1, 2)
+	pageID := page.NewPageDescriptor(1, 2)
 	td := mustCreateTupleDesc()
 	data := make([]byte, page.PageSize)
 

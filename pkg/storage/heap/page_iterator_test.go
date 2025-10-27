@@ -8,7 +8,7 @@ import (
 )
 
 func TestNewHeapPageIterator(t *testing.T) {
-	pageID := NewHeapPageID(1, 2)
+	pageID := page.NewPageDescriptor(1, 2)
 	td := mustCreateTupleDesc()
 	data := make([]byte, page.PageSize)
 
@@ -41,7 +41,7 @@ func TestNewHeapPageIterator(t *testing.T) {
 }
 
 func TestHeapPageIterator_Open(t *testing.T) {
-	pageID := NewHeapPageID(1, 2)
+	pageID := page.NewPageDescriptor(1, 2)
 	td := mustCreateTupleDesc()
 	data := make([]byte, page.PageSize)
 
@@ -80,7 +80,7 @@ func TestHeapPageIterator_Open(t *testing.T) {
 }
 
 func TestHeapPageIterator_HasNext(t *testing.T) {
-	pageID := NewHeapPageID(1, 2)
+	pageID := page.NewPageDescriptor(1, 2)
 	td := mustCreateTupleDesc()
 	data := make([]byte, page.PageSize)
 
@@ -144,7 +144,7 @@ func TestHeapPageIterator_HasNext(t *testing.T) {
 }
 
 func TestHeapPageIterator_Next(t *testing.T) {
-	pageID := NewHeapPageID(1, 2)
+	pageID := page.NewPageDescriptor(1, 2)
 	td := mustCreateTupleDesc()
 	data := make([]byte, page.PageSize)
 
@@ -217,7 +217,7 @@ func TestHeapPageIterator_Next(t *testing.T) {
 }
 
 func TestHeapPageIterator_NextEmptyPage(t *testing.T) {
-	pageID := NewHeapPageID(1, 2)
+	pageID := page.NewPageDescriptor(1, 2)
 	td := mustCreateTupleDesc()
 	data := make([]byte, page.PageSize)
 
@@ -239,7 +239,7 @@ func TestHeapPageIterator_NextEmptyPage(t *testing.T) {
 }
 
 func TestHeapPageIterator_Rewind(t *testing.T) {
-	pageID := NewHeapPageID(1, 2)
+	pageID := page.NewPageDescriptor(1, 2)
 	td := mustCreateTupleDesc()
 	data := make([]byte, page.PageSize)
 
@@ -331,7 +331,7 @@ func TestHeapPageIterator_Rewind(t *testing.T) {
 }
 
 func TestHeapPageIterator_Close(t *testing.T) {
-	pageID := NewHeapPageID(1, 2)
+	pageID := page.NewPageDescriptor(1, 2)
 	td := mustCreateTupleDesc()
 	data := make([]byte, page.PageSize)
 
@@ -371,7 +371,7 @@ func TestHeapPageIterator_Close(t *testing.T) {
 }
 
 func TestHeapPageIterator_IterateTwice(t *testing.T) {
-	pageID := NewHeapPageID(1, 2)
+	pageID := page.NewPageDescriptor(1, 2)
 	td := mustCreateTupleDesc()
 	data := make([]byte, page.PageSize)
 
@@ -459,7 +459,7 @@ func TestHeapPageIterator_IterateTwice(t *testing.T) {
 }
 
 func TestHeapPageIterator_ModifiedPageAfterOpen(t *testing.T) {
-	pageID := NewHeapPageID(1, 2)
+	pageID := page.NewPageDescriptor(1, 2)
 	td := mustCreateTupleDesc()
 	data := make([]byte, page.PageSize)
 
@@ -513,7 +513,7 @@ func TestHeapPageIterator_ModifiedPageAfterOpen(t *testing.T) {
 }
 
 func TestHeapPageIterator_OpenMultipleTimes(t *testing.T) {
-	pageID := NewHeapPageID(1, 2)
+	pageID := page.NewPageDescriptor(1, 2)
 	td := mustCreateTupleDesc()
 	data := make([]byte, page.PageSize)
 
@@ -573,7 +573,7 @@ func TestHeapPageIterator_OpenMultipleTimes(t *testing.T) {
 }
 
 func TestHeapPageIterator_TupleOrder(t *testing.T) {
-	pageID := NewHeapPageID(1, 2)
+	pageID := page.NewPageDescriptor(1, 2)
 	td := mustCreateTupleDesc()
 	data := make([]byte, page.PageSize)
 

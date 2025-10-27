@@ -21,7 +21,7 @@ func createTestTupleDesc() *tuple.TupleDescription {
 	return td
 }
 
-func createTempFile(t *testing.T, name string) (string, func()) {
+func createTempFile(t *testing.T, name string) (primitives.Filepath, func()) {
 	t.Helper()
 	tempDir := t.TempDir()
 	filePath := filepath.Join(tempDir, name)
@@ -30,7 +30,7 @@ func createTempFile(t *testing.T, name string) (string, func()) {
 		os.Remove(filePath)
 	}
 
-	return filePath, cleanup
+	return primitives.Filepath(filePath), cleanup
 }
 
 func createTestTupleForFile(td *tuple.TupleDescription, id int64, name string) *tuple.Tuple {
@@ -77,7 +77,7 @@ func TestNewHeapFile(t *testing.T) {
 		defer cleanup()
 
 		// Remove the file first to test creation
-		os.Remove(filePath)
+		os.Remove(string(filePath))
 
 		hf, err := NewHeapFile(filePath, td)
 		if err != nil {
@@ -85,7 +85,7 @@ func TestNewHeapFile(t *testing.T) {
 		}
 		defer hf.Close()
 
-		if _, err := os.Stat(filePath); os.IsNotExist(err) {
+		if _, err := os.Stat(string(filePath)); os.IsNotExist(err) {
 			t.Error("File was not created")
 		}
 	})
@@ -182,7 +182,7 @@ func TestHeapFile_NumPages(t *testing.T) {
 	})
 
 	t.Run("After writing a page", func(t *testing.T) {
-		pageID := NewHeapPageID(hf.GetID(), 0)
+		pageID := page.NewPageDescriptor(hf.GetID(), 0)
 		pageData := make([]byte, page.PageSize)
 		heapPage, err := NewHeapPage(pageID, pageData, td)
 		if err != nil {
@@ -235,7 +235,7 @@ func TestHeapFile_ReadPage(t *testing.T) {
 	defer hf.Close()
 
 	t.Run("Read non-existent page (EOF)", func(t *testing.T) {
-		pageID := NewHeapPageID(hf.GetID(), 0)
+		pageID := page.NewPageDescriptor(hf.GetID(), 0)
 		p, err := hf.ReadPage(pageID)
 		if err != nil {
 			t.Errorf("ReadPage failed for non-existent page: %v", err)
@@ -247,7 +247,7 @@ func TestHeapFile_ReadPage(t *testing.T) {
 	})
 
 	t.Run("Write and read page", func(t *testing.T) {
-		pageID := NewHeapPageID(hf.GetID(), 0)
+		pageID := page.NewPageDescriptor(hf.GetID(), 0)
 		pageData := make([]byte, page.PageSize)
 		heapPage, err := NewHeapPage(pageID, pageData, td)
 		if err != nil {
@@ -298,7 +298,7 @@ func TestHeapFile_ReadPage(t *testing.T) {
 	})
 
 	t.Run("Invalid page ID - wrong table ID", func(t *testing.T) {
-		wrongPageID := NewHeapPageID(hf.GetID()+1, 0)
+		wrongPageID := page.NewPageDescriptor(hf.GetID()+1, 0)
 		_, err := hf.ReadPage(wrongPageID)
 		if err == nil {
 			t.Error("Expected error with wrong table ID")
@@ -316,7 +316,7 @@ func TestHeapFile_ReadPage_ClosedFile(t *testing.T) {
 		t.Fatalf("Failed to create HeapFile: %v", err)
 	}
 
-	pageID := NewHeapPageID(hf.GetID(), 0)
+	pageID := page.NewPageDescriptor(hf.GetID(), 0)
 	hf.Close()
 
 	_, err = hf.ReadPage(pageID)
@@ -337,7 +337,7 @@ func TestHeapFile_WritePage(t *testing.T) {
 	defer hf.Close()
 
 	t.Run("Write valid page", func(t *testing.T) {
-		pageID := NewHeapPageID(hf.GetID(), 0)
+		pageID := page.NewPageDescriptor(hf.GetID(), 0)
 		pageData := make([]byte, page.PageSize)
 		heapPage, err := NewHeapPage(pageID, pageData, td)
 		if err != nil {
@@ -359,7 +359,7 @@ func TestHeapFile_WritePage(t *testing.T) {
 
 	t.Run("Write multiple pages", func(t *testing.T) {
 		for i := 0; i < 3; i++ {
-			pageID := NewHeapPageID(hf.GetID(), i)
+			pageID := page.NewPageDescriptor(hf.GetID(), primitives.PageNumber(i))
 			pageData := make([]byte, page.PageSize)
 			heapPage, err := NewHeapPage(pageID, pageData, td)
 			if err != nil {
@@ -393,7 +393,7 @@ func TestHeapFile_WritePage_ClosedFile(t *testing.T) {
 		t.Fatalf("Failed to create HeapFile: %v", err)
 	}
 
-	pageID := NewHeapPageID(hf.GetID(), 0)
+	pageID := page.NewPageDescriptor(hf.GetID(), 0)
 	pageData := make([]byte, page.PageSize)
 	heapPage, err := NewHeapPage(pageID, pageData, td)
 	if err != nil {
@@ -444,25 +444,6 @@ func TestHeapFile_Close(t *testing.T) {
 	})
 }
 
-func TestHeapFile_Iterator(t *testing.T) {
-	td := createTestTupleDesc()
-	filePath, cleanup := createTempFile(t, "test.dat")
-	defer cleanup()
-
-	hf, err := NewHeapFile(filePath, td)
-	if err != nil {
-		t.Fatalf("Failed to create HeapFile: %v", err)
-	}
-	defer hf.Close()
-
-	tid := &primitives.TransactionID{}
-	iter := hf.Iterator(tid)
-
-	if iter == nil {
-		t.Fatal("Iterator returned nil")
-	}
-}
-
 func TestHeapFile_ReadWrite_Integration(t *testing.T) {
 	td := createTestTupleDesc()
 	filePath, cleanup := createTempFile(t, "test_integration.dat")
@@ -475,7 +456,7 @@ func TestHeapFile_ReadWrite_Integration(t *testing.T) {
 	defer hf.Close()
 
 	// Create and write a page with tuples
-	pageID := NewHeapPageID(hf.GetID(), 0)
+	pageID := page.NewPageDescriptor(hf.GetID(), 0)
 	pageData := make([]byte, page.PageSize)
 	heapPage, err := NewHeapPage(pageID, pageData, td)
 	if err != nil {
@@ -560,7 +541,7 @@ func TestHeapFile_MultiPage_ReadWrite(t *testing.T) {
 
 	// Write multiple pages
 	for pageNum := 0; pageNum < numPages; pageNum++ {
-		pageID := NewHeapPageID(hf.GetID(), pageNum)
+		pageID := page.NewPageDescriptor(hf.GetID(), primitives.PageNumber(pageNum))
 		pageData := make([]byte, page.PageSize)
 		heapPage, err := NewHeapPage(pageID, pageData, td)
 		if err != nil {
@@ -588,13 +569,13 @@ func TestHeapFile_MultiPage_ReadWrite(t *testing.T) {
 		t.Fatalf("NumPages failed: %v", err)
 	}
 
-	if numPagesRead != numPages {
+	if numPagesRead != primitives.PageNumber(numPages) {
 		t.Errorf("Expected %d pages, got %d", numPages, numPagesRead)
 	}
 
 	// Read and verify each page
 	for pageNum := 0; pageNum < numPages; pageNum++ {
-		pageID := NewHeapPageID(hf.GetID(), pageNum)
+		pageID := page.NewPageDescriptor(hf.GetID(), primitives.PageNumber(pageNum))
 		readPage, err := hf.ReadPage(pageID)
 		if err != nil {
 			t.Fatalf("Failed to read page %d: %v", pageNum, err)
@@ -621,7 +602,7 @@ func TestHeapFile_ConcurrentReads(t *testing.T) {
 	defer hf.Close()
 
 	// Write a page
-	pageID := NewHeapPageID(hf.GetID(), 0)
+	pageID := page.NewPageDescriptor(hf.GetID(), 0)
 	pageData := make([]byte, page.PageSize)
 	heapPage, err := NewHeapPage(pageID, pageData, td)
 	if err != nil {
@@ -686,12 +667,12 @@ func TestHeapFile_ValidatePageID(t *testing.T) {
 
 	tests := []struct {
 		name          string
-		pageID        primitives.PageID
+		pageID        *page.PageDescriptor
 		expectedError bool
 	}{
 		{
 			name:          "Valid HeapPageID",
-			pageID:        NewHeapPageID(hf.GetID(), 0),
+			pageID:        page.NewPageDescriptor(hf.GetID(), 0),
 			expectedError: false,
 		},
 		{
@@ -701,7 +682,7 @@ func TestHeapFile_ValidatePageID(t *testing.T) {
 		},
 		{
 			name:          "Wrong table ID",
-			pageID:        NewHeapPageID(hf.GetID()+1, 0),
+			pageID:        page.NewPageDescriptor(hf.GetID()+1, 0),
 			expectedError: true,
 		},
 	}
