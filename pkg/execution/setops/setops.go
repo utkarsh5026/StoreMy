@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"storemy/pkg/execution/query"
 	"storemy/pkg/iterator"
+	"storemy/pkg/primitives"
 	"storemy/pkg/tuple"
 )
 
@@ -66,7 +67,8 @@ func validateSchemaCompatibility(l, r *tuple.TupleDescription) error {
 			l.NumFields(), r.NumFields())
 	}
 
-	for i := 0; i < l.NumFields(); i++ {
+	var i primitives.ColumnID
+	for i = 0; i < l.NumFields(); i++ {
 		lt, _ := l.TypeAtIndex(i)
 		rt, _ := r.TypeAtIndex(i)
 		if lt != rt {

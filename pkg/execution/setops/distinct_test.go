@@ -2,6 +2,7 @@ package setops
 
 import (
 	"storemy/pkg/iterator"
+	"storemy/pkg/primitives"
 	"storemy/pkg/tuple"
 	"storemy/pkg/types"
 	"testing"
@@ -71,7 +72,7 @@ func createDistinctTestTuple(desc *tuple.TupleDescription, values ...interface{}
 		case string:
 			field = types.NewStringField(val, 50)
 		}
-		tup.SetField(i, field)
+		tup.SetField(primitives.ColumnID(i), field)
 	}
 	return tup
 }

@@ -2,6 +2,7 @@ package setops
 
 import (
 	"slices"
+	"storemy/pkg/primitives"
 	"storemy/pkg/tuple"
 )
 
@@ -9,24 +10,25 @@ import (
 // It supports both set semantics (distinct) and bag semantics (with counts).
 // Hash collisions are handled by storing actual tuple references for comparison.
 type TupleSet struct {
-	hashes      map[uint32]int            // Hash -> count
-	tuples      map[uint32][]*tuple.Tuple // Hash -> list of tuples (for collision detection)
-	preserveAll bool                      // If true, tracks counts; if false, just presence
+	hashes      map[primitives.HashCode]int            // Hash -> count
+	tuples      map[primitives.HashCode][]*tuple.Tuple // Hash -> list of tuples (for collision detection)
+	preserveAll bool                                   // If true, tracks counts; if false, just presence
 }
 
 // NewTupleSet creates a new tuple set.
 func NewTupleSet(preserveAll bool) *TupleSet {
 	return &TupleSet{
-		hashes:      make(map[uint32]int),
-		tuples:      make(map[uint32][]*tuple.Tuple),
+		hashes:      make(map[primitives.HashCode]int),
+		tuples:      make(map[primitives.HashCode][]*tuple.Tuple),
 		preserveAll: preserveAll,
 	}
 }
 
 // hashTuple computes a hash for a tuple based on all its fields.
-func hashTuple(t *tuple.Tuple) uint32 {
-	var hash uint32 = 0
-	for i := 0; i < t.TupleDesc.NumFields(); i++ {
+func hashTuple(t *tuple.Tuple) primitives.HashCode {
+	var hash primitives.HashCode = 0
+	var i primitives.ColumnID
+	for i = 0; i < t.TupleDesc.NumFields(); i++ {
 		field, _ := t.GetField(i)
 		fieldHash, _ := field.Hash()
 		hash = hash*31 + fieldHash
@@ -41,7 +43,8 @@ func tuplesEqual(t1, t2 *tuple.Tuple) bool {
 		return false
 	}
 
-	for i := 0; i < t1.TupleDesc.NumFields(); i++ {
+	var i primitives.ColumnID
+	for i = 0; i < t1.TupleDesc.NumFields(); i++ {
 		f1, _ := t1.GetField(i)
 		f2, _ := t2.GetField(i)
 
