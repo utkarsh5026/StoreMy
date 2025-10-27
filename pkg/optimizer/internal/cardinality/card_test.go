@@ -76,7 +76,7 @@ func setupTestCatalogWithData(t *testing.T) *testCatalogSetup {
 }
 
 // createTestTable creates a table with a schema in the catalog
-func (tcs *testCatalogSetup) createTestTable(t *testing.T, tableName string, columns []schema.ColumnMetadata) int {
+func (tcs *testCatalogSetup) createTestTable(t *testing.T, tableName string, columns []schema.ColumnMetadata) primitives.TableID {
 	t.Helper()
 
 	tx, err := tcs.txRegistry.Begin()
@@ -93,7 +93,7 @@ func (tcs *testCatalogSetup) createTestTable(t *testing.T, tableName string, col
 
 	// Create heap file
 	filePath := filepath.Join(tcs.tempDir, tableName+".dat")
-	heapFile, err := heap.NewHeapFile(filePath, sch.TupleDesc)
+	heapFile, err := heap.NewHeapFile(primitives.Filepath(filePath), sch.TupleDesc)
 	if err != nil {
 		t.Fatalf("failed to create heap file: %v", err)
 	}
@@ -119,7 +119,7 @@ func (tcs *testCatalogSetup) createTestTable(t *testing.T, tableName string, col
 }
 
 // insertTestData inserts rows into a table
-func (tcs *testCatalogSetup) insertTestData(t *testing.T, tableID int, rows [][]types.Field) {
+func (tcs *testCatalogSetup) insertTestData(t *testing.T, tableID primitives.TableID, rows [][]types.Field) {
 	t.Helper()
 
 	tx, err := tcs.txRegistry.Begin()
@@ -143,7 +143,7 @@ func (tcs *testCatalogSetup) insertTestData(t *testing.T, tableID int, rows [][]
 	for _, row := range rows {
 		tup := tuple.NewTuple(tableInfo.Schema.TupleDesc)
 		for i, field := range row {
-			if err := tup.SetField(i, field); err != nil {
+			if err := tup.SetField(primitives.ColumnID(i), field); err != nil {
 				t.Fatalf("failed to set field %d: %v", i, err)
 			}
 		}
@@ -154,7 +154,7 @@ func (tcs *testCatalogSetup) insertTestData(t *testing.T, tableID int, rows [][]
 }
 
 // collectColumnStats collects statistics for a specific column
-func (tcs *testCatalogSetup) collectColumnStats(t *testing.T, tableID int, columnName string, columnIndex int) *catalogmanager.ColumnStatistics {
+func (tcs *testCatalogSetup) collectColumnStats(t *testing.T, tableID primitives.TableID, columnName string, columnIndex int) *catalogmanager.ColumnStatistics {
 	t.Helper()
 
 	// Flush all pages to ensure data is visible
@@ -986,8 +986,8 @@ func TestGroupByDistinctCountEstimation(t *testing.T) {
 		result := ce.estimateGroupByDistinctCount(child, []string{"col1", "col2"})
 
 		// Should use default distinct count product
-		expectedMin := int64(DefaultDistinctCount) // At least one column's distinct
-		expectedMax := int64(DefaultDistinctCount * DefaultDistinctCount)
+		expectedMin := uint64(DefaultDistinctCount) // At least one column's distinct
+		expectedMax := uint64(DefaultDistinctCount * DefaultDistinctCount)
 
 		if result < expectedMin || result > expectedMax {
 			t.Errorf("Multi-column GROUP BY: expected range [%d, %d], got %d",
@@ -1006,7 +1006,7 @@ func TestGroupByDistinctCountEstimation(t *testing.T) {
 		result := ce.estimateGroupByDistinctCount(child, manyColumns)
 
 		// Should be capped at reasonable maximum
-		maxAllowed := int64(1e9)
+		maxAllowed := uint64(1e9)
 		if result > maxAllowed {
 			t.Errorf("GROUP BY distinct count overflow: got %d, max %d",
 				result, maxAllowed)

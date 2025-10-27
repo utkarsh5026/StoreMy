@@ -7,6 +7,7 @@ import (
 	"storemy/pkg/concurrency/transaction"
 	"storemy/pkg/optimizer/internal/selectivity"
 	"storemy/pkg/plan"
+	"storemy/pkg/primitives"
 	"storemy/pkg/types"
 )
 
@@ -120,7 +121,7 @@ func (ce *CardinalityEstimator) EstimatePlanCardinality(planNode plan.PlanNode) 
 //   - columnName: Name of column to get distinct count for
 //
 // Returns distinct count from statistics, or DefaultDistinctCount if unavailable.
-func (ce *CardinalityEstimator) getColumnDistinctCount(planNode plan.PlanNode, columnName string) int64 {
+func (ce *CardinalityEstimator) getColumnDistinctCount(planNode plan.PlanNode, columnName string) uint64 {
 	if planNode == nil {
 		return DefaultDistinctCount
 	}
@@ -190,7 +191,7 @@ func (ce *CardinalityEstimator) estimateAggr(node *plan.AggregateNode) (int64, e
 //   - groupByExprs: List of GROUP BY column names
 //
 // Returns estimated distinct group count, capped at 1 billion to prevent overflow.
-func (ce *CardinalityEstimator) estimateGroupByDistinctCount(planNode plan.PlanNode, groupByExprs []string) int64 {
+func (ce *CardinalityEstimator) estimateGroupByDistinctCount(planNode plan.PlanNode, groupByExprs []string) uint64 {
 	if len(groupByExprs) == 0 {
 		return 1
 	}
@@ -206,7 +207,7 @@ func (ce *CardinalityEstimator) estimateGroupByDistinctCount(planNode plan.PlanN
 
 	// Multi-column: multiply distinct counts (assumes independence)
 	// This is an approximation; real systems use multi-column statistics
-	totalDistinct := int64(1)
+	totalDistinct := uint64(1)
 	foundStats := false
 
 	for _, expr := range groupByExprs {
@@ -230,7 +231,7 @@ func (ce *CardinalityEstimator) estimateGroupByDistinctCount(planNode plan.PlanN
 	if !foundStats {
 		// No statistics found, return conservative estimate
 		// based on number of group-by columns
-		return int64(math.Pow(float64(DefaultDistinctCount), math.Min(float64(len(groupByExprs)), 2.0)))
+		return uint64(math.Pow(float64(DefaultDistinctCount), math.Min(float64(len(groupByExprs)), 2.0)))
 	}
 
 	return totalDistinct
@@ -295,7 +296,7 @@ func applyCorrelationCorrection(selectivities []float64) float64 {
 //   - baseCard: Input cardinality before filtering
 //
 // Returns estimated output cardinality after applying all predicates.
-func (ce *CardinalityEstimator) calculateSelectivity(predicates []plan.PredicateInfo, tableID int, baseCard int64) int64 {
+func (ce *CardinalityEstimator) calculateSelectivity(predicates []plan.PredicateInfo, tableID primitives.TableID, baseCard int64) int64 {
 	selectivities := make([]float64, 0, len(predicates))
 	for i := range predicates {
 		sel := ce.estimatePredicateSelectivity(tableID, &predicates[i])
@@ -320,7 +321,7 @@ func (ce *CardinalityEstimator) calculateSelectivity(predicates []plan.Predicate
 // Returns:
 //   - tableID: The table ID from the first ScanNode found (0 if not found)
 //   - found: true if a ScanNode was found, false for nil/multi-child nodes
-func findBaseTableID(planNode plan.PlanNode) (tableID int, found bool) {
+func findBaseTableID(planNode plan.PlanNode) (tableID primitives.TableID, found bool) {
 	if planNode == nil {
 		return 0, false
 	}
@@ -357,7 +358,7 @@ func findBaseTableID(planNode plan.PlanNode) (tableID int, found bool) {
 //   - columnName: Name of column to look up
 //
 // Returns column type and an error if the catalog is unavailable or the column cannot be found.
-func (ce *CardinalityEstimator) getColumnType(tableID int, columnName string) (types.Type, error) {
+func (ce *CardinalityEstimator) getColumnType(tableID primitives.TableID, columnName string) (types.Type, error) {
 	if ce.catalog == nil {
 		return 0, fmt.Errorf("catalog is nil")
 	}
@@ -406,7 +407,7 @@ func (ce *CardinalityEstimator) getColumnType(tableID int, columnName string) (t
 //   - valueStr: String representation of value to parse
 //
 // Returns parsed Field with correct type, or error if type lookup or parsing fails.
-func (ce *CardinalityEstimator) parsePredicateValue(tableID int, columnName, valueStr string) (types.Field, error) {
+func (ce *CardinalityEstimator) parsePredicateValue(tableID primitives.TableID, columnName, valueStr string) (types.Field, error) {
 	if valueStr == "" {
 		return nil, fmt.Errorf("value string is empty")
 	}
@@ -441,7 +442,7 @@ func (ce *CardinalityEstimator) parsePredicateValue(tableID int, columnName, val
 //   - pred: Predicate information including type, column, operator, and value
 //
 // Returns selectivity estimate between 0.0 and 1.0.
-func (ce *CardinalityEstimator) estimatePredicateSelectivity(tableID int, pred *plan.PredicateInfo) float64 {
+func (ce *CardinalityEstimator) estimatePredicateSelectivity(tableID primitives.TableID, pred *plan.PredicateInfo) float64 {
 	est := selectivity.NewSelectivityEstimator(ce.catalog, ce.tx)
 	switch pred.Type {
 	case plan.NullCheckPredicate:
