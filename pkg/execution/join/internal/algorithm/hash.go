@@ -97,7 +97,7 @@ func (hj *HashJoin) SupportsPredicateType(predicate common.JoinPredicate) bool {
 // findNextJoinedTuple finds the next left tuple that has matching right tuples.
 // Iterates through left tuples until finding one with matches in the hash table.
 func (hj *HashJoin) findNextMatch() (*tuple.Tuple, error) {
-	leftFieldIndex := hj.Predicate().GetField1()
+	leftFieldIndex := hj.Predicate().GetLeftField()
 
 	for {
 		leftTuple, err := hj.nextLeftTuple()
@@ -149,7 +149,7 @@ func (hj *HashJoin) setupMatches(leftTuple *tuple.Tuple, matches []*tuple.Tuple)
 // The hash table maps string join keys to slices of tuples, allowing for
 // duplicate keys (multiple tuples with the same join key value).
 func (h *HashJoin) buildHashTable() error {
-	rightFieldIndex := h.Predicate().GetField2()
+	rightFieldIndex := h.Predicate().GetRightField()
 	rightTuples, err := iterator.Map(h.RightChild(), func(t *tuple.Tuple) (*tuple.Tuple, error) {
 		return t, nil
 	})
@@ -169,7 +169,7 @@ func (h *HashJoin) buildHashTable() error {
 
 // addToHashTable adds a single tuple to the hash table using the specified field as key.
 // Handles duplicate keys by appending to the existing slice of tuples.
-func (hj *HashJoin) addToHashTable(rightTuple *tuple.Tuple, fieldIndex int) error {
+func (hj *HashJoin) addToHashTable(rightTuple *tuple.Tuple, fieldIndex primitives.ColumnID) error {
 	joinKey, err := common.ExtractJoinKey(rightTuple, fieldIndex)
 	if err != nil {
 		return err

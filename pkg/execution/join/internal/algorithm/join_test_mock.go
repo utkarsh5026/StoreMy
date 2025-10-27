@@ -2,6 +2,7 @@ package algorithm
 
 import (
 	"fmt"
+	"storemy/pkg/primitives"
 	"storemy/pkg/tuple"
 	"storemy/pkg/types"
 )
@@ -103,7 +104,7 @@ func createJoinTestTuple(tupleDesc *tuple.TupleDescription, values []interface{}
 		case string:
 			field = types.NewStringField(v, types.StringMaxSize)
 		}
-		tup.SetField(i, field)
+		tup.SetField(primitives.ColumnID(i), field)
 	}
 	return tup
 }

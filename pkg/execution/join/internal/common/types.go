@@ -86,13 +86,6 @@ type joinPredicate struct {
 
 // NewJoinPredicate creates a new join predicate
 func NewJoinPredicate(field1, field2 primitives.ColumnID, op primitives.Predicate) (JoinPredicate, error) {
-	if field1 < 0 {
-		return nil, fmt.Errorf("field1 index cannot be negative: %d", field1)
-	}
-	if field2 < 0 {
-		return nil, fmt.Errorf("field2 index cannot be negative: %d", field2)
-	}
-
 	return &joinPredicate{
 		field1: field1,
 		field2: field2,

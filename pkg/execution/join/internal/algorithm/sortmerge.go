@@ -51,12 +51,12 @@ func (s *SortMergeJoin) Initialize() error {
 	}
 
 	var err error
-	s.leftSorted, err = loadAndSort(s.LeftChild(), s.Predicate().GetField1())
+	s.leftSorted, err = loadAndSort(s.LeftChild(), s.Predicate().GetLeftField())
 	if err != nil {
 		return err
 	}
 
-	s.rightSorted, err = loadAndSort(s.RightChild(), s.Predicate().GetField2())
+	s.rightSorted, err = loadAndSort(s.RightChild(), s.Predicate().GetRightField())
 	if err != nil {
 		return err
 	}
@@ -165,7 +165,7 @@ func (s *SortMergeJoin) SupportsPredicateType(predicate common.JoinPredicate) bo
 // compareCurrentTuples compares the current tuples pointed to by leftIndex and rightIndex.
 func (s *SortMergeJoin) compareCurrentTuples() (int, error) {
 	left, right := s.leftSorted[s.leftIndex], s.rightSorted[s.rightIndex]
-	lf, rf := s.Predicate().GetField1(), s.Predicate().GetField2()
+	lf, rf := s.Predicate().GetLeftField(), s.Predicate().GetRightField()
 
 	eq, err := compareTuples(left, right, lf, rf, primitives.Equals)
 	if err != nil {
@@ -200,13 +200,13 @@ func (s *SortMergeJoin) compareCurrentTuples() (int, error) {
 // 5. Advance to next left tuple
 func (s *SortMergeJoin) processEqualKeys() error {
 	leftTuple := s.leftSorted[s.leftIndex]
-	leftField, _ := leftTuple.GetField(s.Predicate().GetField1())
+	leftField, _ := leftTuple.GetField(s.Predicate().GetLeftField())
 
 	rightStart := s.rightIndex
 
 	for s.rightIndex < len(s.rightSorted) {
 		rt := s.rightSorted[s.rightIndex]
-		rf, err := rt.GetField(s.Predicate().GetField2())
+		rf, err := rt.GetField(s.Predicate().GetRightField())
 		if err != nil || rf == nil {
 			s.rightIndex++
 			continue
@@ -231,7 +231,7 @@ func (s *SortMergeJoin) processEqualKeys() error {
 }
 
 // loadAndSort loads all tuples from an iterator and sorts by field index.
-func loadAndSort(iter iterator.DbIterator, fieldIndex int) ([]*tuple.Tuple, error) {
+func loadAndSort(iter iterator.DbIterator, fieldIndex primitives.ColumnID) ([]*tuple.Tuple, error) {
 	tuples, err := iterator.Map(iter, func(t *tuple.Tuple) (*tuple.Tuple, error) {
 		return t, nil
 	})
@@ -244,7 +244,7 @@ func loadAndSort(iter iterator.DbIterator, fieldIndex int) ([]*tuple.Tuple, erro
 }
 
 // sortTuplesByField sorts tuples by comparing values at the specified field.
-func sortTuplesByField(tuples []*tuple.Tuple, fieldIndex int) {
+func sortTuplesByField(tuples []*tuple.Tuple, fieldIndex primitives.ColumnID) {
 	defer func() {
 		if r := recover(); r != nil {
 		}
@@ -264,7 +264,7 @@ func sortTuplesByField(tuples []*tuple.Tuple, fieldIndex int) {
 }
 
 // compareTuples compares two tuples at specified fields using the given operator.
-func compareTuples(t1, t2 *tuple.Tuple, field1, field2 int, op primitives.Predicate) (bool, error) {
+func compareTuples(t1, t2 *tuple.Tuple, field1, field2 primitives.ColumnID, op primitives.Predicate) (bool, error) {
 	f1, err := t1.GetField(field1)
 	if err != nil || f1 == nil {
 		return false, fmt.Errorf("invalid field %d in left tuple", field1)
