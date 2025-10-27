@@ -2,6 +2,7 @@ package catalogio
 
 import (
 	"storemy/pkg/concurrency/transaction"
+	"storemy/pkg/primitives"
 	"storemy/pkg/tuple"
 )
 
@@ -24,7 +25,7 @@ type CatalogReader interface {
 	//   - processFunc: Function to apply to each tuple. Return error to stop iteration.
 	//
 	// Returns an error if the iterator cannot be opened or if processFunc returns an error.
-	IterateTable(tableID int, tx *transaction.TransactionContext, processFunc func(*tuple.Tuple) error) error
+	IterateTable(tableID primitives.TableID, tx *transaction.TransactionContext, processFunc func(*tuple.Tuple) error) error
 }
 
 // CatalogWriter provides write access to catalog data.
@@ -39,7 +40,7 @@ type CatalogWriter interface {
 	//   - tup: Tuple to insert
 	//
 	// Returns an error if the table cannot be found or insertion fails.
-	InsertRow(tableID int, tx *transaction.TransactionContext, tup *tuple.Tuple) error
+	InsertRow(tableID primitives.TableID, tx *transaction.TransactionContext, tup *tuple.Tuple) error
 
 	// DeleteRow deletes a tuple from a table within a transaction.
 	//
@@ -49,7 +50,7 @@ type CatalogWriter interface {
 	//   - tup: Tuple to delete
 	//
 	// Returns an error if the table cannot be found or deletion fails.
-	DeleteRow(tableID int, tx *transaction.TransactionContext, tup *tuple.Tuple) error
+	DeleteRow(tableID primitives.TableID, tx *transaction.TransactionContext, tup *tuple.Tuple) error
 }
 
 // CatalogAccess combines read and write access for system table implementations.
