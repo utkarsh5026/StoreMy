@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"storemy/pkg/primitives"
 	"storemy/pkg/tuple"
 	"storemy/pkg/types"
 	"testing"
@@ -202,7 +203,7 @@ func TestBenchmarkAndSaveResults(t *testing.T) {
 	benchmarks := []struct {
 		name     string
 		size     int
-		groupBy  int
+		groupBy  primitives.ColumnID
 		op       AggregateOp
 		runCount int
 	}{

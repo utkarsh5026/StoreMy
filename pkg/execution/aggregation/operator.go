@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"storemy/pkg/execution/aggregation/internal/calculators"
 	"storemy/pkg/iterator"
+	"storemy/pkg/primitives"
 	"storemy/pkg/tuple"
 	"storemy/pkg/types"
 )
@@ -15,8 +16,8 @@ import (
 // 2. Iteration phase: Returns computed aggregate results
 type AggregateOperator struct {
 	source         iterator.DbIterator
-	aggregateField int
-	groupByField   int
+	aggregateField primitives.ColumnID
+	groupByField   primitives.ColumnID
 	op             AggregateOp
 	aggregator     Aggregator
 	aggIterator    iterator.DbIterator
@@ -28,7 +29,7 @@ type AggregateOperator struct {
 
 // NewAggregateOperator creates a new aggregate operator with the specified configuration.
 // The operator will aggregate values from aggregateField, optionally grouping by groupByField.
-func NewAggregateOperator(source iterator.DbIterator, aggregateField, groupByField int, op AggregateOp) (*AggregateOperator, error) {
+func NewAggregateOperator(source iterator.DbIterator, aggregateField, groupByField primitives.ColumnID, op AggregateOp) (*AggregateOperator, error) {
 	if err := validateInputs(source, aggregateField, groupByField); err != nil {
 		return nil, err
 	}
@@ -226,21 +227,21 @@ func (agg *AggregateOperator) ensureOpened() error {
 }
 
 // validateInputs validates the constructor parameters
-func validateInputs(source iterator.DbIterator, aggregateField, groupByField int) error {
+func validateInputs(source iterator.DbIterator, aggregateField, groupByField primitives.ColumnID) error {
 	if source == nil {
 		return fmt.Errorf("source iterator cannot be nil")
 	}
 
-	sourceDesc := source.GetTupleDesc()
-	if sourceDesc == nil {
+	td := source.GetTupleDesc()
+	if td == nil {
 		return fmt.Errorf("source tuple description cannot be nil")
 	}
 
-	if aggregateField < 0 || aggregateField >= len(sourceDesc.Types) {
+	if aggregateField >= td.NumFields() {
 		return fmt.Errorf("invalid aggregate field index: %d", aggregateField)
 	}
 
-	if groupByField != NoGrouping && (groupByField < 0 || groupByField >= len(sourceDesc.Types)) {
+	if groupByField != NoGrouping && (groupByField >= td.NumFields()) {
 		return fmt.Errorf("invalid group field index: %d", groupByField)
 	}
 
@@ -248,7 +249,7 @@ func validateInputs(source iterator.DbIterator, aggregateField, groupByField int
 }
 
 // createAggregator creates the appropriate type-specific aggregator based on the field type
-func createAggregator(fieldType types.Type, groupByField int, gbFieldType types.Type, aggregateField int, op AggregateOp) (Aggregator, error) {
+func createAggregator(fieldType types.Type, groupByField primitives.ColumnID, gbFieldType types.Type, aggregateField primitives.ColumnID, op AggregateOp) (Aggregator, error) {
 	switch fieldType {
 	case types.IntType:
 		return calculators.NewIntAggregator(groupByField, gbFieldType, aggregateField, op)

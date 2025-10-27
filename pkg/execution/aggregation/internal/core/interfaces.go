@@ -1,6 +1,7 @@
 package core
 
 import (
+	"storemy/pkg/primitives"
 	"storemy/pkg/tuple"
 	"storemy/pkg/types"
 )
@@ -40,7 +41,7 @@ type GroupAggregator interface {
 	//
 	// Returns:
 	//   - int: field index for grouping, or -1 if this is a non-grouped aggregation
-	GetGroupingField() int
+	GetGroupingField() primitives.ColumnID
 
 	// RLock acquires a read lock for thread-safe access during iteration.
 	RLock()

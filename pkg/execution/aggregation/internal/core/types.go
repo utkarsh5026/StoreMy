@@ -2,12 +2,13 @@ package core
 
 import (
 	"fmt"
+	"math"
 	"strings"
 )
 
 const (
 	// NoGrouping indicates that no grouping field is used in aggregation
-	NoGrouping = -1
+	NoGrouping = math.MaxUint32
 )
 
 // AggregateOp represents the type of aggregation operation to perform

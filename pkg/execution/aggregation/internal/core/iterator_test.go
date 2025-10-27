@@ -2,6 +2,7 @@ package core
 
 import (
 	"fmt"
+	"storemy/pkg/primitives"
 	"storemy/pkg/tuple"
 	"storemy/pkg/types"
 	"sync"
@@ -11,13 +12,13 @@ import (
 // mockGroupAggregator implements GroupAggregator interface for testing
 type mockGroupAggregator struct {
 	groups        map[string]types.Field
-	groupingField int
+	groupingField primitives.ColumnID
 	tupleDesc     *tuple.TupleDescription
 	shouldError   bool
 	mu            sync.RWMutex
 }
 
-func newMockGroupAggregator(groupingField int, tupleDesc *tuple.TupleDescription) *mockGroupAggregator {
+func newMockGroupAggregator(groupingField primitives.ColumnID, tupleDesc *tuple.TupleDescription) *mockGroupAggregator {
 	return &mockGroupAggregator{
 		groups:        make(map[string]types.Field),
 		groupingField: groupingField,
@@ -50,7 +51,7 @@ func (m *mockGroupAggregator) GetTupleDesc() *tuple.TupleDescription {
 	return m.tupleDesc
 }
 
-func (m *mockGroupAggregator) GetGroupingField() int {
+func (m *mockGroupAggregator) GetGroupingField() primitives.ColumnID {
 	return m.groupingField
 }
 

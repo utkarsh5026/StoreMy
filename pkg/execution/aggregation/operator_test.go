@@ -3,6 +3,7 @@ package aggregation
 import (
 	"fmt"
 	"storemy/pkg/iterator"
+	"storemy/pkg/primitives"
 	"storemy/pkg/tuple"
 	"storemy/pkg/types"
 	"testing"
@@ -125,8 +126,8 @@ func TestNewAggregateOperator(t *testing.T) {
 	tests := []struct {
 		name        string
 		source      iterator.DbIterator
-		aField      int
-		gField      int
+		aField      primitives.ColumnID
+		gField      primitives.ColumnID
 		op          AggregateOp
 		expectError bool
 		errorMsg    string
@@ -170,24 +171,6 @@ func TestNewAggregateOperator(t *testing.T) {
 			source:      source,
 			aField:      1,
 			gField:      5,
-			op:          Sum,
-			expectError: true,
-			errorMsg:    "invalid group field index",
-		},
-		{
-			name:        "negative aggregate field",
-			source:      source,
-			aField:      -1,
-			gField:      0,
-			op:          Sum,
-			expectError: true,
-			errorMsg:    "invalid aggregate field index",
-		},
-		{
-			name:        "negative group field (not NoGrouping)",
-			source:      source,
-			aField:      1,
-			gField:      -2,
 			op:          Sum,
 			expectError: true,
 			errorMsg:    "invalid group field index",

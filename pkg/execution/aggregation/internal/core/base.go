@@ -5,6 +5,7 @@ import (
 	"maps"
 	"slices"
 	"storemy/pkg/iterator"
+	"storemy/pkg/primitives"
 	"storemy/pkg/tuple"
 	"storemy/pkg/types"
 	"sync"
@@ -20,9 +21,9 @@ import (
 // Thread-safety: All public methods that modify state are protected by a mutex.
 // Use RLock/RUnlock for read-only operations when iterating over results.
 type BaseAggregator struct {
-	gbField     int                     // Index of grouping field (-1 for NoGrouping)
+	gbField     primitives.ColumnID     // Index of grouping field (-1 for NoGrouping)
 	gbFieldType types.Type              // Type of grouping field
-	aField      int                     // Index of field to aggregate
+	aField      primitives.ColumnID     // Index of field to aggregate
 	op          AggregateOp             // Aggregation operation (COUNT, SUM, AVG, MIN, MAX)
 	tupleDesc   *tuple.TupleDescription // Description of result tuples
 	mutex       sync.RWMutex            // Protects concurrent access to groups and calculator
@@ -42,7 +43,7 @@ type BaseAggregator struct {
 // Returns:
 //   - *BaseAggregator: Initialized aggregator ready to process tuples
 //   - error: If the operation is invalid for the given calculator or tuple description fails
-func NewBaseAggregator(gbField int, gbFieldType types.Type, aField int, op AggregateOp, calculator AggregateCalculator) (*BaseAggregator, error) {
+func NewBaseAggregator(gbField primitives.ColumnID, gbFieldType types.Type, aField primitives.ColumnID, op AggregateOp, calculator AggregateCalculator) (*BaseAggregator, error) {
 	if err := calculator.ValidateOperation(op); err != nil {
 		return nil, err
 	}
@@ -116,7 +117,7 @@ func (ba *BaseAggregator) GetTupleDesc() *tuple.TupleDescription {
 //
 // Returns:
 //   - int: Index of the grouping field (NoGrouping if no grouping is used)
-func (ba *BaseAggregator) GetGroupingField() int {
+func (ba *BaseAggregator) GetGroupingField() primitives.ColumnID {
 	return ba.gbField
 }
 

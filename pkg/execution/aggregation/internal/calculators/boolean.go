@@ -3,6 +3,7 @@ package calculators
 import (
 	"fmt"
 	"storemy/pkg/execution/aggregation/internal/core"
+	"storemy/pkg/primitives"
 	"storemy/pkg/types"
 )
 
@@ -172,7 +173,7 @@ type BooleanAggregator struct {
 // Returns:
 //   - *BooleanAggregator: A new aggregator instance
 //   - error: Error if validation fails or initialization encounters issues
-func NewBooleanAggregator(gbField int, gbFieldType types.Type, aField int, op core.AggregateOp) (*BooleanAggregator, error) {
+func NewBooleanAggregator(gbField primitives.ColumnID, gbFieldType types.Type, aField primitives.ColumnID, op core.AggregateOp) (*BooleanAggregator, error) {
 	calculator := NewBooleanCalculator(op)
 	base, err := core.NewBaseAggregator(gbField, gbFieldType, aField, op, calculator)
 	if err != nil {

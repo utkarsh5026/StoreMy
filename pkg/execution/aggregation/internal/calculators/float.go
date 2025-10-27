@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"math"
 	"storemy/pkg/execution/aggregation/internal/core"
+	"storemy/pkg/primitives"
 	"storemy/pkg/types"
 )
 
@@ -176,7 +177,7 @@ type FloatAggregator struct {
 // Returns:
 //   - *FloatAggregator: A new aggregator instance
 //   - error: Error if validation fails or initialization encounters issues
-func NewFloatAggregator(gbField int, gbFieldType types.Type, aField int, op core.AggregateOp) (*FloatAggregator, error) {
+func NewFloatAggregator(gbField primitives.ColumnID, gbFieldType types.Type, aField primitives.ColumnID, op core.AggregateOp) (*FloatAggregator, error) {
 	calculator := NewFloatCalculator(op)
 	base, err := core.NewBaseAggregator(gbField, gbFieldType, aField, op, calculator)
 	if err != nil {
