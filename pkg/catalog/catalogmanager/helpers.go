@@ -7,10 +7,10 @@ import (
 	"storemy/pkg/catalog/systemtable"
 	"storemy/pkg/execution/query"
 	"storemy/pkg/iterator"
+	"storemy/pkg/primitives"
 	"storemy/pkg/storage/heap"
 	"storemy/pkg/tuple"
 	"storemy/pkg/types"
-	"time"
 )
 
 // RegisterTable adds a new user table to the system catalog.
@@ -20,7 +20,7 @@ import (
 // both catalog metadata and physical index files are created together.
 //
 // This is an internal helper used by CreateTable.
-func (cm *CatalogManager) RegisterTable(tx TxContext, sch *schema.Schema, filepath string) error {
+func (cm *CatalogManager) registerTable(tx TxContext, sch *schema.Schema, filepath primitives.Filepath) error {
 	tm := &systemtable.TableMetadata{
 		TableName:     sch.TableName,
 		TableID:       sch.TableID,
@@ -43,8 +43,8 @@ func (cm *CatalogManager) RegisterTable(tx TxContext, sch *schema.Schema, filepa
 //
 // This is typically called as part of a DROP TABLE operation.
 // Note: This only removes catalog entries - the heap file must be deleted separately.
-func (cm *CatalogManager) DeleteCatalogEntry(tx TxContext, tableID int) error {
-	sysTableIDs := []int{
+func (cm *CatalogManager) DeleteCatalogEntry(tx TxContext, tableID primitives.TableID) error {
+	sysTableIDs := []primitives.TableID{
 		cm.SystemTabs.TablesTableID,
 		cm.SystemTabs.ColumnsTableID,
 		cm.SystemTabs.StatisticsTableID,
@@ -61,7 +61,7 @@ func (cm *CatalogManager) DeleteCatalogEntry(tx TxContext, tableID int) error {
 
 // DeleteTableFromSysTable removes all entries for a specific table from a given system table.
 // Due to MVCC, there may be multiple versions of tuples for the same table - this deletes all.
-func (cm *CatalogManager) DeleteTableFromSysTable(tx TxContext, tableID, sysTableID int) error {
+func (cm *CatalogManager) DeleteTableFromSysTable(tx TxContext, tableID, sysTableID primitives.TableID) error {
 	tableInfo, err := cm.tableCache.GetTableInfo(sysTableID)
 	if err != nil {
 		return err
@@ -75,7 +75,7 @@ func (cm *CatalogManager) DeleteTableFromSysTable(tx TxContext, tableID, sysTabl
 	var tuplesToDelete []*tuple.Tuple
 
 	cm.iterateTable(sysTableID, tx, func(t *tuple.Tuple) error {
-		field, err := t.GetField(syst.TableIDIndex())
+		field, err := t.GetField(primitives.ColumnID(syst.TableIDIndex()))
 		if err != nil {
 			return err
 		}
@@ -99,7 +99,7 @@ func (cm *CatalogManager) DeleteTableFromSysTable(tx TxContext, tableID, sysTabl
 
 // GetTableMetadataByID retrieves complete table metadata from CATALOG_TABLES by table ID.
 // Returns TableMetadata or an error if the table is not found.
-func (cm *CatalogManager) GetTableMetadataByID(tx TxContext, tableID int) (*systemtable.TableMetadata, error) {
+func (cm *CatalogManager) GetTableMetadataByID(tx TxContext, tableID primitives.TableID) (*systemtable.TableMetadata, error) {
 	return cm.tableOps.GetTableMetadataByID(tx, tableID)
 }
 
@@ -117,7 +117,7 @@ func (cm *CatalogManager) GetAllTables(tx TxContext) ([]*systemtable.TableMetada
 
 // LoadTableSchema reconstructs the complete schema for a table from CATALOG_COLUMNS.
 // This includes column definitions, types, and constraints.
-func (cm *CatalogManager) LoadTableSchema(tx TxContext, tableID int) (*schema.Schema, error) {
+func (cm *CatalogManager) LoadTableSchema(tx TxContext, tableID primitives.TableID) (*schema.Schema, error) {
 	tm, err := cm.GetTableMetadataByID(tx, tableID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get table metadata: %w", err)
@@ -142,7 +142,7 @@ func (cm *CatalogManager) LoadTableSchema(tx TxContext, tableID int) (*schema.Sc
 
 // iterateTable scans all tuples in a table and applies a processing function to each.
 // This is the core primitive for catalog queries, handling MVCC visibility and locking.
-func (cm *CatalogManager) iterateTable(tableID int, tx TxContext, processFunc func(*tuple.Tuple) error) error {
+func (cm *CatalogManager) iterateTable(tableID primitives.TableID, tx TxContext, processFunc func(*tuple.Tuple) error) error {
 	file, err := cm.tableCache.GetDbFile(tableID)
 	if err != nil {
 		return fmt.Errorf("failed to get table file: %w", err)
@@ -165,19 +165,19 @@ func (cm *CatalogManager) iterateTable(tableID int, tx TxContext, processFunc fu
 
 // IterateTable implements CatalogReader interface by delegating to CatalogIO.
 // Scans all tuples in a table and applies a processing function to each.
-func (cm *CatalogManager) IterateTable(tableID int, tx TxContext, processFunc func(Tuple) error) error {
+func (cm *CatalogManager) IterateTable(tableID primitives.TableID, tx TxContext, processFunc func(Tuple) error) error {
 	return cm.io.IterateTable(tableID, tx, processFunc)
 }
 
 // InsertRow implements CatalogWriter interface by delegating to CatalogIO.
 // Inserts a tuple into a table within a transaction.
-func (cm *CatalogManager) InsertRow(tableID int, tx TxContext, tup Tuple) error {
+func (cm *CatalogManager) InsertRow(tableID primitives.TableID, tx TxContext, tup Tuple) error {
 	return cm.io.InsertRow(tableID, tx, tup)
 }
 
 // DeleteRow implements CatalogWriter interface by delegating to CatalogIO.
 // Deletes a tuple from a table within a transaction.
-func (cm *CatalogManager) DeleteRow(tableID int, tx TxContext, tup Tuple) error {
+func (cm *CatalogManager) DeleteRow(tableID primitives.TableID, tx TxContext, tup Tuple) error {
 	return cm.io.DeleteRow(tableID, tx, tup)
 }
 
@@ -224,10 +224,4 @@ func hashFilePath(filePath string) int {
 		hash = -hash
 	}
 	return hash
-}
-
-// getCurrentTimestamp returns the current Unix timestamp in seconds.
-// Used for recording creation times in catalog metadata.
-func getCurrentTimestamp() int64 {
-	return time.Now().Unix()
 }

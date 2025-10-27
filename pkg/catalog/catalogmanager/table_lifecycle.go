@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"storemy/pkg/catalog/systemtable"
+	"storemy/pkg/primitives"
 	"storemy/pkg/storage/heap"
 )
 
@@ -39,7 +40,7 @@ import (
 //	if err != nil {
 //	    log.Fatal(err)
 //	}
-func (cm *CatalogManager) CreateTable(tx TxContext, sch TableSchema) (int, error) {
+func (cm *CatalogManager) CreateTable(tx TxContext, sch TableSchema) (primitives.TableID, error) {
 	if sch == nil {
 		return 0, fmt.Errorf("schema cannot be nil")
 	}
@@ -56,7 +57,7 @@ func (cm *CatalogManager) CreateTable(tx TxContext, sch TableSchema) (int, error
 		return 0, err
 	}
 
-	if err := cm.RegisterTable(tx, sch, heapFile.FilePath()); err != nil {
+	if err := cm.registerTable(tx, sch, heapFile.FilePath()); err != nil {
 		heapFile.Close()
 		return 0, fmt.Errorf("failed to register table in catalog: %w", err)
 	}
@@ -86,7 +87,7 @@ func (cm *CatalogManager) createTableFile(sch TableSchema) (*heap.HeapFile, erro
 	fileName := sch.TableName + ".dat"
 	fullPath := filepath.Join(cm.dataDir, fileName)
 
-	heapFile, err := heap.NewHeapFile(fullPath, sch.TupleDesc)
+	heapFile, err := heap.NewHeapFile(primitives.Filepath(fullPath), sch.TupleDesc)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create heap file: %w", err)
 	}
@@ -221,7 +222,7 @@ func (cm *CatalogManager) LoadTable(tx TxContext, tableName string) error {
 		return err
 	}
 
-	return cm.registerTable(filePath, sch)
+	return cm.openTable(filePath, sch)
 }
 
 // loadFromDisk retrieves table metadata and schema from the catalog.
@@ -237,7 +238,7 @@ func (cm *CatalogManager) LoadTable(tx TxContext, tableName string) error {
 //   - TableSchema: The reconstructed schema with columns and tuple descriptor
 //   - string: The file path to the heap file
 //   - error: nil on success, error if metadata cannot be read
-func (cm *CatalogManager) loadFromDisk(tx TxContext, tableName string) (TableSchema, string, error) {
+func (cm *CatalogManager) loadFromDisk(tx TxContext, tableName string) (TableSchema, primitives.Filepath, error) {
 	tm, err := cm.GetTableMetadataByName(tx, tableName)
 	if err != nil {
 		return nil, "", fmt.Errorf("failed to get table metadata: %w", err)
@@ -265,7 +266,7 @@ func (cm *CatalogManager) loadFromDisk(tx TxContext, tableName string) (TableSch
 //
 // Returns:
 //   - error: nil on success, error if file cannot be opened or registered
-func (cm *CatalogManager) registerTable(filePath string, sch TableSchema) error {
+func (cm *CatalogManager) openTable(filePath primitives.Filepath, sch TableSchema) error {
 	heapFile, err := heap.NewHeapFile(filePath, sch.TupleDesc)
 	if err != nil {
 		return fmt.Errorf("failed to open heap file: %w", err)

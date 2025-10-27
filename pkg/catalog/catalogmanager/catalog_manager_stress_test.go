@@ -2,6 +2,7 @@ package catalogmanager
 
 import (
 	"fmt"
+	"storemy/pkg/primitives"
 	"storemy/pkg/storage/index"
 	"storemy/pkg/types"
 	"sync"
@@ -157,7 +158,8 @@ func TestCatalogManager_ConcurrentIndexCreation(t *testing.T) {
 			columnName := fmt.Sprintf("col%d", idx+1)
 
 			tx := setup.beginTx()
-			_, _, err := setup.catalogMgr.CreateIndex(tx, indexName, "concurrent_idx_table", columnName, index.BTreeIndex)
+			testIndexID := setup.generateIndexID("concurrent_idx_table", indexName)
+			_, err := setup.catalogMgr.CreateIndex(tx, testIndexID, indexName, "concurrent_idx_table", columnName, index.BTreeIndex)
 			if err != nil {
 				errors <- fmt.Errorf("index %s creation failed: %w", indexName, err)
 				return
@@ -279,7 +281,7 @@ func TestCatalogManager_ConcurrentStatisticsUpdate(t *testing.T) {
 
 	// Create multiple tables
 	numTables := 5
-	tableIDs := make([]int, numTables)
+	tableIDs := make([]primitives.TableID, numTables)
 
 	for i := 0; i < numTables; i++ {
 		tableName := fmt.Sprintf("stats_concurrent_%d", i)
@@ -301,7 +303,7 @@ func TestCatalogManager_ConcurrentStatisticsUpdate(t *testing.T) {
 
 	for i := 0; i < numTables; i++ {
 		wg.Add(1)
-		go func(tableID int) {
+		go func(tableID primitives.TableID) {
 			defer wg.Done()
 
 			tx := setup.beginTx()
@@ -435,7 +437,8 @@ func TestCatalogManager_StressTest_ManyIndexes(t *testing.T) {
 		columnName := fmt.Sprintf("col%d", i)
 
 		tx := setup.beginTx()
-		_, _, err := setup.catalogMgr.CreateIndex(tx, indexName, "many_idx_table", columnName, index.BTreeIndex)
+		testIndexID := setup.generateIndexID("many_idx_table", indexName)
+		_, err := setup.catalogMgr.CreateIndex(tx, testIndexID, indexName, "many_idx_table", columnName, index.BTreeIndex)
 		setup.commitTx(tx)
 		if err != nil {
 			t.Fatalf("CreateIndex %d failed: %v", i, err)
@@ -685,8 +688,9 @@ func TestCatalogManager_StressTest_AutoIncrementValues(t *testing.T) {
 	}
 
 	// Increment 1000 times
-	increments := 1000
-	for i := 1; i <= increments; i++ {
+	var increments uint64 = 1000
+	var i uint64
+	for i = 1; i <= increments; i++ {
 		tx := setup.beginTx()
 		err := setup.catalogMgr.IncrementAutoIncrementValue(tx, tableID, "id", i+1)
 		setup.commitTx(tx)

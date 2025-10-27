@@ -1,15 +1,16 @@
 package catalogmanager
 
 import (
+	"storemy/pkg/primitives"
 	"storemy/pkg/storage/index"
 )
 
 // UpdateTableStatistics collects and updates statistics for a given table.
 //
 // This scans the entire table and computes:
-//  - Cardinality (row count)
-//  - Page count
-//  - Average tuple size
+//   - Cardinality (row count)
+//   - Page count
+//   - Average tuple size
 //
 // The statistics are stored in CATALOG_STATISTICS and also cached in memory.
 //
@@ -18,7 +19,7 @@ import (
 //   - tableID: ID of the table
 //
 // Returns error if statistics collection or update fails.
-func (cm *CatalogManager) UpdateTableStatistics(tx TxContext, tableID int) error {
+func (cm *CatalogManager) UpdateTableStatistics(tx TxContext, tableID primitives.TableID) error {
 	return cm.statsOps.UpdateTableStatistics(tx, tableID)
 }
 
@@ -34,7 +35,7 @@ func (cm *CatalogManager) UpdateTableStatistics(tx TxContext, tableID int) error
 // Returns:
 //   - *TableStatistics: Table statistics
 //   - error: Error if statistics cannot be retrieved
-func (cm *CatalogManager) GetTableStatistics(tx TxContext, tableID int) (*TableStatistics, error) {
+func (cm *CatalogManager) GetTableStatistics(tx TxContext, tableID primitives.TableID) (*TableStatistics, error) {
 	if stats, found := cm.tableCache.GetCachedStatistics(tableID); found {
 		return stats, nil
 	}
@@ -59,7 +60,7 @@ func (cm *CatalogManager) GetTableStatistics(tx TxContext, tableID int) (*TableS
 // Returns:
 //   - *TableStatistics: Updated table statistics
 //   - error: Error if update or retrieval fails
-func (cm *CatalogManager) RefreshStatistics(tx TxContext, tableID int) (*TableStatistics, error) {
+func (cm *CatalogManager) RefreshStatistics(tx TxContext, tableID primitives.TableID) (*TableStatistics, error) {
 	if err := cm.UpdateTableStatistics(tx, tableID); err != nil {
 		return nil, err
 	}
@@ -69,12 +70,12 @@ func (cm *CatalogManager) RefreshStatistics(tx TxContext, tableID int) (*TableSt
 // CollectColumnStatistics collects statistics for a specific column in a table.
 //
 // This scans the column and computes:
-//  - Distinct count (NDV)
-//  - Null count
-//  - Min/max values
-//  - Average width (for variable-length types)
-//  - Histogram (optional, if histogramBuckets > 0)
-//  - Most common values (optional, if mcvCount > 0)
+//   - Distinct count (NDV)
+//   - Null count
+//   - Min/max values
+//   - Average width (for variable-length types)
+//   - Histogram (optional, if histogramBuckets > 0)
+//   - Most common values (optional, if mcvCount > 0)
 //
 // The statistics are stored in CATALOG_COLUMN_STATISTICS.
 //
@@ -91,9 +92,9 @@ func (cm *CatalogManager) RefreshStatistics(tx TxContext, tableID int) (*TableSt
 //   - error: Error if collection fails
 func (cm *CatalogManager) CollectColumnStatistics(
 	tx TxContext,
-	tableID int,
+	tableID primitives.TableID,
 	columnName string,
-	columnIndex int,
+	columnIndex primitives.ColumnID,
 	histogramBuckets int,
 	mcvCount int,
 ) (*ColumnStatistics, error) {
@@ -114,7 +115,7 @@ func (cm *CatalogManager) CollectColumnStatistics(
 //   - tableID: ID of the table
 //
 // Returns error if any column statistics update fails.
-func (cm *CatalogManager) UpdateColumnStatistics(tx TxContext, tableID int) error {
+func (cm *CatalogManager) UpdateColumnStatistics(tx TxContext, tableID primitives.TableID) error {
 	return cm.colStatsOps.UpdateColumnStatistics(tx, tableID)
 }
 
@@ -133,7 +134,7 @@ func (cm *CatalogManager) UpdateColumnStatistics(tx TxContext, tableID int) erro
 //   - error: Error if statistics cannot be retrieved
 func (cm *CatalogManager) GetColumnStatistics(
 	tx TxContext,
-	tableID int,
+	tableID primitives.TableID,
 	columnName string,
 ) (*ColumnStatistics, error) {
 	if cm.colStatsOps == nil {
@@ -168,10 +169,10 @@ func (cm *CatalogManager) GetColumnStatistics(
 // CollectIndexStatistics collects statistics for a specific index.
 //
 // This scans the index and computes:
-//  - Number of entries
-//  - Index height (for B-Tree)
-//  - Number of pages
-//  - Average key size
+//   - Number of entries
+//   - Index height (for B-Tree)
+//   - Number of pages
+//   - Average key size
 //
 // The statistics are stored in CATALOG_INDEX_STATISTICS.
 //
@@ -188,7 +189,8 @@ func (cm *CatalogManager) GetColumnStatistics(
 //   - error: Error if collection fails
 func (cm *CatalogManager) CollectIndexStatistics(
 	tx TxContext,
-	indexID, tableID int,
+	indexID primitives.IndexID,
+	tableID primitives.TableID,
 	indexName string,
 	indexType index.IndexType,
 	columnName string,
@@ -205,7 +207,7 @@ func (cm *CatalogManager) CollectIndexStatistics(
 //   - tableID: ID of the table
 //
 // Returns error if any index statistics update fails.
-func (cm *CatalogManager) UpdateIndexStatistics(tx TxContext, tableID int) error {
+func (cm *CatalogManager) UpdateIndexStatistics(tx TxContext, tableID primitives.TableID) error {
 	return cm.indexStatsOps.UpdateIndexStatistics(tx, tableID)
 }
 
@@ -220,7 +222,7 @@ func (cm *CatalogManager) UpdateIndexStatistics(tx TxContext, tableID int) error
 //   - error: Error if statistics cannot be retrieved
 func (cm *CatalogManager) GetIndexStatistics(
 	tx TxContext,
-	indexID int,
+	indexID primitives.IndexID,
 ) (*IndexStatistics, error) {
 	return cm.indexStatsOps.GetIndexStatistics(tx, indexID)
 }

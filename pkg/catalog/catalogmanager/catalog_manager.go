@@ -9,6 +9,7 @@ import (
 	"storemy/pkg/catalog/tablecache"
 	"storemy/pkg/memory"
 	"storemy/pkg/memory/wrappers/table"
+	"storemy/pkg/primitives"
 	"storemy/pkg/storage/heap"
 	"sync"
 )
@@ -43,7 +44,7 @@ type CatalogManager struct {
 
 	// File ownership - tracks all open table files for lifecycle management
 	mu        sync.RWMutex // protects openFiles and concurrent operations
-	openFiles map[int]*heap.HeapFile
+	openFiles map[primitives.TableID]*heap.HeapFile
 
 	// Domain-specific operation handlers
 	indexOps      *ops.IndexOperations
@@ -73,7 +74,7 @@ func NewCatalogManager(ps *memory.PageStore, dataDir string) *CatalogManager {
 		tableCache: cache,
 		dataDir:    dataDir,
 		tupMgr:     table.NewTupleManager(ps),
-		openFiles:  make(map[int]*heap.HeapFile),
+		openFiles:  make(map[primitives.TableID]*heap.HeapFile),
 	}
 }
 
@@ -104,10 +105,9 @@ func (cm *CatalogManager) Initialize(ctx TxContext) error {
 
 	for _, table := range systemTables {
 		sch := table.Schema()
-		f, err := heap.NewHeapFile(
-			filepath.Join(cm.dataDir, table.FileName()),
-			sch.TupleDesc,
-		)
+
+		path := primitives.Filepath(filepath.Join(cm.dataDir, table.FileName()))
+		f, err := heap.NewHeapFile(path, sch.TupleDesc)
 		if err != nil {
 			return fmt.Errorf("failed to initialize %s: %w", table.TableName(), err)
 		}

@@ -8,6 +8,7 @@ import (
 	"storemy/pkg/concurrency/transaction"
 	"storemy/pkg/log/wal"
 	"storemy/pkg/memory"
+	"storemy/pkg/primitives"
 	"storemy/pkg/types"
 	"testing"
 )
@@ -53,6 +54,13 @@ func setupTest(t *testing.T) *testSetup {
 	}
 }
 
+// generateIndexID generates a fake index ID for testing (matches the old behavior)
+func (s *testSetup) generateIndexID(tableName, indexName string) primitives.IndexID {
+	fileName := fmt.Sprintf("%s_%s.idx", tableName, indexName)
+	filePath := filepath.Join(s.tempDir, fileName)
+	return primitives.IndexID(hashFilePath(filePath))
+}
+
 // cleanup closes all resources
 func (s *testSetup) cleanup() {
 	s.catalogMgr.tableCache.Clear()
@@ -80,7 +88,7 @@ func createTestSchema(tableName, primaryKey string, fields []FieldMetadata) *sch
 	columns := make([]schema.ColumnMetadata, len(fields))
 	for i, field := range fields {
 		isPrimary := field.Name == primaryKey
-		col, err := schema.NewColumnMetadata(field.Name, field.Type, i, 0, isPrimary, field.IsAutoInc)
+		col, err := schema.NewColumnMetadata(field.Name, field.Type, primitives.ColumnID(i), 0, isPrimary, field.IsAutoInc)
 		if err != nil {
 			panic(fmt.Sprintf("Failed to create column metadata: %v", err))
 		}
@@ -499,7 +507,7 @@ func TestCatalogManager_GetPrimaryKey(t *testing.T) {
 		t.Fatalf("GetTableSchema failed: %v", err)
 	}
 
-	pk := tableSchema2.GetPrimaryKeyName()
+	pk := tableSchema2.PrimaryKey
 	if pk != "user_id" {
 		t.Errorf("Expected primary key 'user_id', got '%s'", pk)
 	}

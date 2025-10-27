@@ -404,7 +404,8 @@ func TestCatalogManager_IndexExists_BeforeAndAfterCreation(t *testing.T) {
 
 	// Create index
 	tx4 := setup.beginTx()
-	_, _, err = setup.catalogMgr.CreateIndex(tx4, "idx_test_exists", "idx_exists_test", "id", index.BTreeIndex)
+	testIndexID := setup.generateIndexID("idx_exists_test", "idx_test_exists")
+	_, err = setup.catalogMgr.CreateIndex(tx4, testIndexID, "idx_test_exists", "idx_exists_test", "id", index.BTreeIndex)
 	setup.commitTx(tx4)
 	if err != nil {
 		t.Fatalf("CreateIndex failed: %v", err)

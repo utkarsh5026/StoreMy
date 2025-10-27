@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"storemy/pkg/catalog/schema"
 	"storemy/pkg/catalog/systemtable"
+	"storemy/pkg/primitives"
 	"storemy/pkg/storage/page"
 	"storemy/pkg/utils/functools"
 )
@@ -19,7 +20,7 @@ import (
 // Returns:
 //   - tableID: The table's ID
 //   - error: Error if table is not found
-func (cm *CatalogManager) GetTableID(tx TxContext, tableName string) (int, error) {
+func (cm *CatalogManager) GetTableID(tx TxContext, tableName string) (primitives.TableID, error) {
 	if id, err := cm.tableCache.GetTableID(tableName); err == nil {
 		return id, nil
 	}
@@ -28,7 +29,7 @@ func (cm *CatalogManager) GetTableID(tx TxContext, tableName string) (int, error
 		return md.TableID, nil
 	}
 
-	return -1, fmt.Errorf("table %s not found", tableName)
+	return 0, fmt.Errorf("table %s not found", tableName)
 }
 
 // GetTableName retrieves the table name for a given table ID.
@@ -42,7 +43,7 @@ func (cm *CatalogManager) GetTableID(tx TxContext, tableName string) (int, error
 // Returns:
 //   - tableName: The table's name
 //   - error: Error if table is not found
-func (cm *CatalogManager) GetTableName(tx TxContext, tableID int) (string, error) {
+func (cm *CatalogManager) GetTableName(tx TxContext, tableID primitives.TableID) (string, error) {
 	if info, err := cm.tableCache.GetTableInfo(tableID); err == nil {
 		return info.Schema.TableName, nil
 	}
@@ -65,7 +66,7 @@ func (cm *CatalogManager) GetTableName(tx TxContext, tableID int) (string, error
 // Returns:
 //   - schema: The table's schema definition
 //   - error: Error if schema cannot be retrieved
-func (cm *CatalogManager) GetTableSchema(tx TxContext, tableID int) (*schema.Schema, error) {
+func (cm *CatalogManager) GetTableSchema(tx TxContext, tableID primitives.TableID) (*schema.Schema, error) {
 	if info, err := cm.tableCache.GetTableInfo(tableID); err == nil {
 		return info.Schema, nil
 	}
@@ -88,7 +89,7 @@ func (cm *CatalogManager) GetTableSchema(tx TxContext, tableID int) (*schema.Sch
 // Returns:
 //   - DbFile: The table's heap file
 //   - error: Error if table is not in cache
-func (cm *CatalogManager) GetTableFile(tableID int) (page.DbFile, error) {
+func (cm *CatalogManager) GetTableFile(tableID primitives.TableID) (page.DbFile, error) {
 	file, err := cm.tableCache.GetDbFile(tableID)
 	if err != nil {
 		allTables := cm.tableCache.GetAllTableNames()
@@ -247,7 +248,7 @@ func (cm *CatalogManager) ClearCacheCompletely() {
 // Returns:
 //   - AutoIncrementInfo: Auto-increment metadata (nil if none)
 //   - error: Error if catalog read fails
-func (cm *CatalogManager) GetAutoIncrementColumn(tx TxContext, tableID int) (AutoIncrementInfo, error) {
+func (cm *CatalogManager) GetAutoIncrementColumn(tx TxContext, tableID primitives.TableID) (AutoIncrementInfo, error) {
 	return cm.colOps.GetAutoIncrementColumn(tx, tableID)
 }
 
@@ -262,6 +263,6 @@ func (cm *CatalogManager) GetAutoIncrementColumn(tx TxContext, tableID int) (Aut
 //   - newValue: The new next_auto_value to set
 //
 // Returns error if the update fails.
-func (cm *CatalogManager) IncrementAutoIncrementValue(tx TxContext, tableID int, columnName string, newValue int) error {
+func (cm *CatalogManager) IncrementAutoIncrementValue(tx TxContext, tableID primitives.TableID, columnName string, newValue uint64) error {
 	return cm.colOps.IncrementAutoIncrementValue(tx, tableID, columnName, newValue)
 }
