@@ -3,23 +3,24 @@ package operations
 import (
 	"fmt"
 	"storemy/pkg/catalog/systemtable"
+	"storemy/pkg/primitives"
 	"storemy/pkg/tuple"
 	"testing"
 )
 
 // Helper to create table metadata tuple
-func createTableTuple(tableID int, tableName, filePath, primaryKey string) *systemtable.TableMetadata {
+func createTableTuple(tableID primitives.TableID, tableName, filePath, primaryKey string) *systemtable.TableMetadata {
 	return &systemtable.TableMetadata{
 		TableID:       tableID,
 		TableName:     tableName,
-		FilePath:      filePath,
+		FilePath:      primitives.Filepath(filePath),
 		PrimaryKeyCol: primaryKey,
 	}
 }
 
 func TestGetTableMetadataByID(t *testing.T) {
 	mock := NewMockCatalogAccess()
-	tableTableID := 100
+	tableTableID := primitives.TableID(100)
 
 	// Add table tuples
 	mock.tables[tableTableID] = []*tuple.Tuple{
@@ -55,7 +56,7 @@ func TestGetTableMetadataByID(t *testing.T) {
 
 func TestGetTableMetadataByName(t *testing.T) {
 	mock := NewMockCatalogAccess()
-	tableTableID := 100
+	tableTableID := primitives.TableID(100)
 
 	mock.tables[tableTableID] = []*tuple.Tuple{
 		systemtable.Tables.CreateTuple(*createTableTuple(10, "users", "/data/users.dat", "id")),
@@ -95,7 +96,7 @@ func TestGetTableMetadataByName(t *testing.T) {
 
 func TestGetAllTables(t *testing.T) {
 	mock := NewMockCatalogAccess()
-	tableTableID := 100
+	tableTableID := primitives.TableID(100)
 
 	// Add multiple tables
 	mock.tables[tableTableID] = []*tuple.Tuple{
@@ -138,7 +139,7 @@ func TestGetAllTables(t *testing.T) {
 
 func TestGetAllTables_EmptyTable(t *testing.T) {
 	mock := NewMockCatalogAccess()
-	tableTableID := 100
+	tableTableID := primitives.TableID(100)
 	mock.tables[tableTableID] = []*tuple.Tuple{} // Empty table
 
 	ops := NewTableOperations(mock, tableTableID)
@@ -155,7 +156,7 @@ func TestGetAllTables_EmptyTable(t *testing.T) {
 
 func TestGetTableMetadataByName_CaseInsensitive(t *testing.T) {
 	mock := NewMockCatalogAccess()
-	tableTableID := 100
+	tableTableID := primitives.TableID(100)
 
 	mock.tables[tableTableID] = []*tuple.Tuple{
 		systemtable.Tables.CreateTuple(*createTableTuple(10, "MyTableName", "/data/mytable.dat", "id")),
@@ -183,7 +184,7 @@ func TestGetTableMetadataByName_CaseInsensitive(t *testing.T) {
 
 func TestGetTableMetadataByID_EdgeCases(t *testing.T) {
 	mock := NewMockCatalogAccess()
-	tableTableID := 100
+	tableTableID := primitives.TableID(100)
 
 	mock.tables[tableTableID] = []*tuple.Tuple{
 		systemtable.Tables.CreateTuple(*createTableTuple(1, "table_1", "/data/t1.dat", "id")),
@@ -194,14 +195,13 @@ func TestGetTableMetadataByID_EdgeCases(t *testing.T) {
 
 	// Test valid IDs
 	testCases := []struct {
-		id          int
+		id          primitives.TableID
 		expectFound bool
 		expectName  string
 	}{
 		{1, true, "table_1"},
 		{999999, true, "table_large"},
 		{0, false, ""},
-		{-1, false, ""},
 		{500, false, ""},
 	}
 
@@ -224,7 +224,7 @@ func TestGetTableMetadataByID_EdgeCases(t *testing.T) {
 
 func TestGetTableMetadataByName_SpecialCharacters(t *testing.T) {
 	mock := NewMockCatalogAccess()
-	tableTableID := 100
+	tableTableID := primitives.TableID(100)
 
 	specialNames := []string{
 		"table@user",
@@ -257,7 +257,7 @@ func TestGetTableMetadataByName_SpecialCharacters(t *testing.T) {
 
 func TestGetTableMetadataByName_EmptyName(t *testing.T) {
 	mock := NewMockCatalogAccess()
-	tableTableID := 100
+	tableTableID := primitives.TableID(100)
 
 	mock.tables[tableTableID] = []*tuple.Tuple{
 		systemtable.Tables.CreateTuple(*createTableTuple(10, "valid_name", "/data/valid.dat", "id")),
@@ -274,7 +274,7 @@ func TestGetTableMetadataByName_EmptyName(t *testing.T) {
 
 func TestTableOperations_WithPrimaryKeys(t *testing.T) {
 	mock := NewMockCatalogAccess()
-	tableTableID := 100
+	tableTableID := primitives.TableID(100)
 
 	// Tables with different primary key configurations
 	mock.tables[tableTableID] = []*tuple.Tuple{
@@ -315,7 +315,7 @@ func TestTableOperations_WithPrimaryKeys(t *testing.T) {
 
 func TestGetAllTables_LargeNumberOfTables(t *testing.T) {
 	mock := NewMockCatalogAccess()
-	tableTableID := 100
+	tableTableID := primitives.TableID(100)
 
 	// Create 100 tables
 	for i := 1; i <= 100; i++ {
@@ -354,7 +354,7 @@ func TestGetAllTables_LargeNumberOfTables(t *testing.T) {
 
 func TestGetTableMetadataByName_DuplicateNames(t *testing.T) {
 	mock := NewMockCatalogAccess()
-	tableTableID := 100
+	tableTableID := primitives.TableID(100)
 
 	// Create tables with same name but different IDs (edge case)
 	mock.tables[tableTableID] = []*tuple.Tuple{
@@ -378,7 +378,7 @@ func TestGetTableMetadataByName_DuplicateNames(t *testing.T) {
 
 func TestGetTableMetadataByID_SystemTables(t *testing.T) {
 	mock := NewMockCatalogAccess()
-	tableTableID := 100
+	tableTableID := primitives.TableID(100)
 
 	// Simulate system catalog tables
 	systemTables := []*tuple.Tuple{
@@ -405,7 +405,7 @@ func TestGetTableMetadataByID_SystemTables(t *testing.T) {
 
 func TestTableOperations_FilePaths(t *testing.T) {
 	mock := NewMockCatalogAccess()
-	tableTableID := 100
+	tableTableID := primitives.TableID(100)
 
 	// Test various file path formats
 	filePaths := []struct {
@@ -420,7 +420,7 @@ func TestTableOperations_FilePaths(t *testing.T) {
 	}
 
 	for i, fp := range filePaths {
-		tup := systemtable.Tables.CreateTuple(*createTableTuple(i+1, fmt.Sprintf("table_%d", i), fp.path, "id"))
+		tup := systemtable.Tables.CreateTuple(*createTableTuple(primitives.TableID(i+1), fmt.Sprintf("table_%d", i), fp.path, "id"))
 		mock.tables[tableTableID] = append(mock.tables[tableTableID], tup)
 	}
 
@@ -428,11 +428,11 @@ func TestTableOperations_FilePaths(t *testing.T) {
 
 	// Verify all file paths are preserved correctly
 	for i, fp := range filePaths {
-		tm, err := ops.GetTableMetadataByID(nil, i+1)
+		tm, err := ops.GetTableMetadataByID(nil, primitives.TableID(i+1))
 		if err != nil {
 			t.Errorf("Failed to get table with ID %d: %v", i+1, err)
 		}
-		if tm.FilePath != fp.expected {
+		if string(tm.FilePath) != fp.expected {
 			t.Errorf("Expected file path '%s', got '%s'", fp.expected, tm.FilePath)
 		}
 	}
@@ -443,7 +443,7 @@ func TestTableOperations_Isolation(t *testing.T) {
 	// and doesn't require the full SystemCatalog
 
 	mock := NewMockCatalogAccess()
-	tableTableID := 100
+	tableTableID := primitives.TableID(100)
 
 	// Add some data
 	mock.tables[tableTableID] = []*tuple.Tuple{
@@ -468,7 +468,7 @@ func TestTableOperations_Isolation(t *testing.T) {
 
 func TestGetTableMetadataByName_Unicode(t *testing.T) {
 	mock := NewMockCatalogAccess()
-	tableTableID := 100
+	tableTableID := primitives.TableID(100)
 
 	// Unicode table names
 	unicodeNames := []string{
@@ -499,7 +499,7 @@ func TestGetTableMetadataByName_Unicode(t *testing.T) {
 
 func TestGetAllTables_OrderPreservation(t *testing.T) {
 	mock := NewMockCatalogAccess()
-	tableTableID := 100
+	tableTableID := primitives.TableID(100)
 
 	// Add tables in specific order
 	tableIDs := []int{5, 1, 10, 3, 7}

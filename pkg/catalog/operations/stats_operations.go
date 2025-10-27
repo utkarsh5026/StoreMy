@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"storemy/pkg/catalog/catalogio"
 	"storemy/pkg/catalog/systemtable"
+	"storemy/pkg/primitives"
 	"storemy/pkg/storage/heap"
 	"storemy/pkg/storage/page"
 	"storemy/pkg/tuple"
@@ -11,12 +12,12 @@ import (
 )
 
 type tableStats = systemtable.TableStatistics
-type FileGetter = func(tableID int) (page.DbFile, error)
+type FileGetter = func(tableID primitives.TableID) (page.DbFile, error)
 
 // StatsCacheSetter defines the interface for caching table statistics.
 // Implementations should handle concurrent access safely.
 type StatsCacheSetter interface {
-	SetCachedStatistics(tableID int, stats *tableStats) error
+	SetCachedStatistics(tableID primitives.TableID, stats *tableStats) error
 }
 
 // StatsOperations manages table statistics in the CATALOG_STATISTICS system table.
@@ -33,7 +34,7 @@ type StatsOperations struct {
 	reader         catalogio.CatalogReader // Reads tuples from catalog tables
 	fileGetter     FileGetter              // Retrieves DbFile for a table ID
 	cache          StatsCacheSetter        // Optional statistics cache
-	columnsTableID int                     // ID of CATALOG_COLUMNS table for schema lookup
+	columnsTableID primitives.TableID      // ID of CATALOG_COLUMNS table for schema lookup
 }
 
 // NewStatsOperations creates a new StatsOperations instance.
@@ -47,7 +48,7 @@ type StatsOperations struct {
 //
 // Returns:
 //   - *StatsOperations: Configured operations instance
-func NewStatsOperations(access catalogio.CatalogAccess, statsTableID int, columnsTableID int, fileGetter FileGetter, cache StatsCacheSetter) *StatsOperations {
+func NewStatsOperations(access catalogio.CatalogAccess, statsTableID, columnsTableID primitives.TableID, f FileGetter, cache StatsCacheSetter) *StatsOperations {
 	base := NewBaseOperations(
 		access,
 		statsTableID,
@@ -58,7 +59,7 @@ func NewStatsOperations(access catalogio.CatalogAccess, statsTableID int, column
 	return &StatsOperations{
 		BaseOperations: base,
 		reader:         access,
-		fileGetter:     fileGetter,
+		fileGetter:     f,
 		cache:          cache,
 		columnsTableID: columnsTableID,
 	}
@@ -76,7 +77,7 @@ func NewStatsOperations(access catalogio.CatalogAccess, statsTableID int, column
 //
 // Returns:
 //   - error: nil on success, or error if collection/persistence fails
-func (so *StatsOperations) UpdateTableStatistics(tx TxContext, tableID int) error {
+func (so *StatsOperations) UpdateTableStatistics(tx TxContext, tableID primitives.TableID) error {
 	stats, err := so.collectStats(tx, tableID)
 	if err != nil {
 		return fmt.Errorf("failed to collect statistics for table %d: %w", tableID, err)
@@ -109,8 +110,8 @@ func (so *StatsOperations) UpdateTableStatistics(tx TxContext, tableID int) erro
 // Returns:
 //   - int: Column index of the primary key, or -1 if not found
 //   - error: nil on success, or error if catalog read fails
-func (so *StatsOperations) getPrimaryKeyIndex(tx TxContext, tableID int) (int, error) {
-	primaryKeyIndex := -1
+func (so *StatsOperations) getPrimaryKeyIndex(tx TxContext, tableID primitives.TableID) (primitives.ColumnID, error) {
+	var primaryKeyIndex primitives.ColumnID = 0
 
 	err := so.reader.IterateTable(so.columnsTableID, tx, func(t *tuple.Tuple) error {
 		col, err := systemtable.Columns.Parse(t)
@@ -130,7 +131,7 @@ func (so *StatsOperations) getPrimaryKeyIndex(tx TxContext, tableID int) (int, e
 	})
 
 	if err != nil {
-		return -1, fmt.Errorf("failed to query primary key: %w", err)
+		return 0, fmt.Errorf("failed to query primary key: %w", err)
 	}
 
 	return primaryKeyIndex, nil
@@ -152,7 +153,7 @@ func (so *StatsOperations) getPrimaryKeyIndex(tx TxContext, tableID int) (int, e
 // Returns:
 //   - *tableStats: Collected statistics
 //   - error: nil on success, or error if scan fails
-func (so *StatsOperations) collectStats(tx TxContext, tableID int) (*tableStats, error) {
+func (so *StatsOperations) collectStats(tx TxContext, tableID primitives.TableID) (*tableStats, error) {
 	file, err := so.fileGetter(tableID)
 	if err != nil {
 		return nil, err
@@ -183,7 +184,9 @@ func (so *StatsOperations) collectStats(tx TxContext, tableID int) (*tableStats,
 		td := t.TupleDesc
 		totalSize += int(td.GetSize())
 
-		if td.NumFields() == 0 {
+		fieldCount := td.NumFields()
+
+		if fieldCount == 0 {
 			return nil
 		}
 
@@ -191,7 +194,7 @@ func (so *StatsOperations) collectStats(tx TxContext, tableID int) (*tableStats,
 		// If no primary key exists, use the first column as fallback
 		columnIndex := max(primaryKeyIndex, 0)
 
-		if columnIndex < td.NumFields() {
+		if columnIndex < primitives.ColumnID(fieldCount) {
 			field, err := t.GetField(columnIndex)
 			if err == nil && field != nil {
 				distinctMap[field.String()] = true
@@ -206,9 +209,9 @@ func (so *StatsOperations) collectStats(tx TxContext, tableID int) (*tableStats,
 	}
 
 	if stats.Cardinality > 0 {
-		stats.AvgTupleSize = totalSize / stats.Cardinality
+		stats.AvgTupleSize = uint64(totalSize) / stats.Cardinality
 	}
-	stats.DistinctValues = len(distinctMap)
+	stats.DistinctValues = uint64(len(distinctMap))
 
 	return stats, nil
 }
@@ -223,7 +226,7 @@ func (so *StatsOperations) collectStats(tx TxContext, tableID int) (*tableStats,
 // Returns:
 //   - *tableStats: Statistics record if found
 //   - error: error if statistics not found or read fails
-func (so *StatsOperations) GetTableStatistics(tx TxContext, tableID int) (*tableStats, error) {
+func (so *StatsOperations) GetTableStatistics(tx TxContext, tableID primitives.TableID) (*tableStats, error) {
 	result, err := so.FindOne(tx, func(t *tableStats) bool {
 		return t.TableID == tableID
 	})
@@ -259,7 +262,7 @@ func (so *StatsOperations) insert(tx TxContext, stats *tableStats) error {
 //
 // Returns:
 //   - error: nil on success, or error if update fails
-func (so *StatsOperations) update(tx TxContext, tableID int, stats *tableStats) error {
+func (so *StatsOperations) update(tx TxContext, tableID primitives.TableID, stats *tableStats) error {
 	err := so.Upsert(tx, func(t *tableStats) bool {
 		return t.TableID == tableID
 	}, stats)
@@ -279,7 +282,7 @@ func (so *StatsOperations) update(tx TxContext, tableID int, stats *tableStats) 
 // Returns:
 //   - int: Number of pages, or 0 for non-heap files
 //   - error: nil on success, or error if page count retrieval fails
-func getHeapPageCount(file page.DbFile) (int, error) {
+func getHeapPageCount(file page.DbFile) (primitives.PageNumber, error) {
 	hf, ok := file.(*heap.HeapFile)
 	if !ok {
 		return 0, nil

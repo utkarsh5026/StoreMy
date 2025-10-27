@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"storemy/pkg/catalog/catalogio"
 	"storemy/pkg/concurrency/transaction"
+	"storemy/pkg/primitives"
 	"storemy/pkg/tuple"
 )
 
@@ -26,7 +27,7 @@ var (
 type BaseOperations[T any] struct {
 	reader  catalogio.CatalogReader
 	writer  catalogio.CatalogWriter
-	tableID int
+	tableID primitives.TableID
 	parser  func(*tuple.Tuple) (T, error)
 	creator func(T) *tuple.Tuple
 }
@@ -41,7 +42,7 @@ type BaseOperations[T any] struct {
 //   - creator: Function to create a tuple from type T
 func NewBaseOperations[T any](
 	access catalogio.CatalogAccess,
-	tableID int,
+	tableID primitives.TableID,
 	parser func(*tuple.Tuple) (T, error),
 	creator func(T) *tuple.Tuple,
 ) *BaseOperations[T] {
@@ -272,7 +273,7 @@ func (bo *BaseOperations[T]) UpdateBy(tx TxContext, predicate func(T) bool, upda
 }
 
 // TableID returns the catalog table ID this BaseOperations instance operates on.
-func (bo *BaseOperations[T]) TableID() int {
+func (bo *BaseOperations[T]) TableID() primitives.TableID {
 	return bo.tableID
 }
 

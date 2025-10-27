@@ -5,6 +5,7 @@ import (
 	"storemy/pkg/catalog/catalogio"
 	"storemy/pkg/catalog/schema"
 	"storemy/pkg/catalog/systemtable"
+	"storemy/pkg/primitives"
 )
 
 type colMetadata = schema.ColumnMetadata
@@ -12,9 +13,9 @@ type colMetadata = schema.ColumnMetadata
 // AutoIncrementInfo represents auto-increment metadata for a column.
 // Contains the column name, its position in the tuple, and the next value to use.
 type AutoIncrementInfo struct {
-	ColumnName  string // Name of the auto-increment column (e.g., "id")
-	ColumnIndex int    // Position of the column in the tuple (0-indexed)
-	NextValue   int    // Next value to use for this column
+	ColumnName  string              // Name of the auto-increment column (e.g., "id")
+	ColumnIndex primitives.ColumnID // Position of the column in the tuple (0-indexed)
+	NextValue   uint64              // Next value to use for this column
 }
 
 // ColumnOperations provides operations for managing column metadata in the CATALOG_COLUMNS system table.
@@ -34,7 +35,7 @@ type ColumnOperations struct {
 //   - colTableID: The table ID of the CATALOG_COLUMNS system table (typically 2)
 //
 // Returns a configured ColumnOperations ready to perform catalog operations.
-func NewColumnOperations(access catalogio.CatalogAccess, colTableID int) *ColumnOperations {
+func NewColumnOperations(access catalogio.CatalogAccess, colTableID primitives.TableID) *ColumnOperations {
 	base := NewBaseOperations(access, colTableID, systemtable.Columns.Parse,
 		func(c *colMetadata) *Tuple {
 			return systemtable.Columns.CreateTuple(*c)
@@ -57,7 +58,7 @@ func NewColumnOperations(access catalogio.CatalogAccess, colTableID int) *Column
 //   - AutoIncrementInfo if an auto-increment column exists
 //   - nil if the table has no auto-increment column
 //   - error if the catalog cannot be read or is corrupted
-func (co *ColumnOperations) GetAutoIncrementColumn(tx TxContext, tableID int) (*AutoIncrementInfo, error) {
+func (co *ColumnOperations) GetAutoIncrementColumn(tx TxContext, tableID primitives.TableID) (*AutoIncrementInfo, error) {
 	var result *AutoIncrementInfo
 
 	err := co.Iterate(tx, func(col *colMetadata) error {
@@ -69,7 +70,6 @@ func (co *ColumnOperations) GetAutoIncrementColumn(tx TxContext, tableID int) (*
 			return nil
 		}
 
-		// Keep the version with the highest next_auto_value (most recent)
 		if result == nil || col.NextAutoValue > result.NextValue {
 			result = &AutoIncrementInfo{
 				ColumnName:  col.Name,
@@ -98,9 +98,9 @@ func (co *ColumnOperations) GetAutoIncrementColumn(tx TxContext, tableID int) (*
 //   - ColumnMetadata with the highest next_auto_value for the specified column
 //   - nil if no matching column found
 //   - error if catalog read fails
-func (co *ColumnOperations) findLatestAutoIncrementColumn(tx TxContext, tableID int, columnName string) (*colMetadata, error) {
+func (co *ColumnOperations) findLatestAutoIncrementColumn(tx TxContext, tableID primitives.TableID, columnName string) (*colMetadata, error) {
 	var result *colMetadata
-	maxValue := -1
+	var maxValue uint64 = 0
 
 	err := co.Iterate(tx, func(c *colMetadata) error {
 		if c.TableID != tableID || c.Name != columnName || c.NextAutoValue < maxValue {
@@ -139,7 +139,7 @@ func (co *ColumnOperations) findLatestAutoIncrementColumn(tx TxContext, tableID 
 //   - The column cannot be found (may indicate catalog corruption)
 //   - The delete operation fails (lock conflict or storage error)
 //   - The insert operation fails (storage error or constraint violation)
-func (co *ColumnOperations) IncrementAutoIncrementValue(tx TxContext, tableID int, columnName string, newValue int) error {
+func (co *ColumnOperations) IncrementAutoIncrementValue(tx TxContext, tableID primitives.TableID, columnName string, newValue uint64) error {
 	match, err := co.findLatestAutoIncrementColumn(tx, tableID, columnName)
 	if err != nil || match == nil {
 		return fmt.Errorf("failed to find auto-increment column: %w", err)
@@ -167,7 +167,7 @@ func (co *ColumnOperations) IncrementAutoIncrementValue(tx TxContext, tableID in
 // Returns:
 //   - Slice of ColumnMetadata for all columns in the table
 //   - error if catalog read or parsing fails
-func (co *ColumnOperations) LoadColumnMetadata(tx TxContext, tableID int) ([]colMetadata, error) {
+func (co *ColumnOperations) LoadColumnMetadata(tx TxContext, tableID primitives.TableID) ([]colMetadata, error) {
 	columnPtrs, err := co.FindAll(tx, func(c *colMetadata) bool {
 		return c.TableID == tableID
 	})

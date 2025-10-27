@@ -31,9 +31,9 @@ const (
 // indexEntry represents a single entry in the index scan order
 // Used for calculating clustering factor by tracking physical location
 type indexEntry struct {
-	keyValue types.Field // The indexed column value
-	pageID   int         // Physical page ID where tuple is stored
-	tupleNum int         // Tuple number within the page
+	keyValue types.Field           // The indexed column value
+	pageID   primitives.PageNumber // Physical page ID where tuple is stored
+	tupleNum primitives.SlotID     // Tuple number within the page
 }
 
 // IndexStatsOperations handles all index statistics-related catalog operations.
@@ -42,7 +42,7 @@ type indexEntry struct {
 type IndexStatsOperations struct {
 	*BaseOperations[*IndexStatistics]
 	indexOps     *BaseOperations[*indexMetadata] // For querying CATALOG_INDEXES table
-	indexTableID int                             // ID of CATALOG_INDEXES table
+	indexTableID primitives.TableID              // ID of CATALOG_INDEXES table
 	fileGetter   FileGetter
 	statsOps     *StatsOperations // For accessing table statistics
 }
@@ -55,7 +55,7 @@ type IndexStatsOperations struct {
 //   - indexTableID: ID of the CATALOG_INDEXES system table
 //   - fileGetter: Function to retrieve DbFile by table ID
 //   - statsOps: StatsOperations instance for accessing table statistics (optional)
-func NewIndexStatsOperations(access catalogio.CatalogAccess, indexStatsTableID, indexTableID int, fileGetter FileGetter, statsOps *StatsOperations) *IndexStatsOperations {
+func NewIndexStatsOperations(access catalogio.CatalogAccess, indexStatsTableID, indexTableID primitives.TableID, f FileGetter, s *StatsOperations) *IndexStatsOperations {
 	base := NewBaseOperations(
 		access,
 		indexStatsTableID,
@@ -76,15 +76,16 @@ func NewIndexStatsOperations(access catalogio.CatalogAccess, indexStatsTableID, 
 		BaseOperations: base,
 		indexOps:       indexOps,
 		indexTableID:   indexTableID,
-		fileGetter:     fileGetter,
-		statsOps:       statsOps,
+		fileGetter:     f,
+		statsOps:       s,
 	}
 }
 
 // CollectIndexStatistics collects statistics for a specific index
 func (iso *IndexStatsOperations) CollectIndexStatistics(
 	tx TxContext,
-	indexID, tableID int,
+	indexID primitives.IndexID,
+	tableID primitives.TableID,
 	indexName string,
 	indexType index.IndexType,
 	columnName string,
@@ -101,7 +102,7 @@ func (iso *IndexStatsOperations) CollectIndexStatistics(
 	if iso.statsOps != nil {
 		tableStats, err := iso.statsOps.GetTableStatistics(tx, tableID)
 		if err == nil && tableStats != nil {
-			stats.NumEntries = int64(tableStats.Cardinality)
+			stats.NumEntries = tableStats.Cardinality
 			stats.NumPages = tableStats.PageCount / defaultIndexPagesEstimate
 		}
 	}
@@ -122,8 +123,7 @@ func (iso *IndexStatsOperations) CollectIndexStatistics(
 	switch indexType {
 	case index.BTreeIndex:
 		if stats.NumEntries > 0 {
-			// Height = log_fanout(entries) + 1 (for root level)
-			stats.BTreeHeight = int(math.Log(float64(stats.NumEntries))/math.Log(btreeFanout)) + 1
+			stats.BTreeHeight = uint32(math.Log(float64(stats.NumEntries))/math.Log(btreeFanout)) + 1
 		} else {
 			stats.BTreeHeight = 1
 		}
@@ -151,7 +151,7 @@ func (iso *IndexStatsOperations) CollectIndexStatistics(
 //
 // A high clustering factor means scanning the index results in sequential
 // table page access (good for range scans), while a low factor means random access.
-func (iso *IndexStatsOperations) calculateClusteringFactor(tx TxContext, tableID int, columnName string) (float64, error) {
+func (iso *IndexStatsOperations) calculateClusteringFactor(tx TxContext, tableID primitives.TableID, columnName string) (float64, error) {
 	tableFile, err := iso.fileGetter(tableID)
 	if err != nil || tableFile == nil {
 		return 0.5, nil
@@ -245,7 +245,7 @@ func compareFields(a, b types.Field) int {
 }
 
 // UpdateIndexStatistics updates statistics for all indexes on a table
-func (iso *IndexStatsOperations) UpdateIndexStatistics(tx TxContext, tableID int) error {
+func (iso *IndexStatsOperations) UpdateIndexStatistics(tx TxContext, tableID primitives.TableID) error {
 	indexes, err := iso.getIndexesForTable(tx, tableID)
 	if err != nil {
 		return fmt.Errorf("failed to get indexes: %w", err)
@@ -286,7 +286,7 @@ func (iso *IndexStatsOperations) StoreIndexStatistics(tx TxContext, stats *Index
 }
 
 // GetIndexStatistics retrieves statistics for a specific index from CATALOG_INDEX_STATISTICS
-func (iso *IndexStatsOperations) GetIndexStatistics(tx TxContext, indexID int) (*IndexStatistics, error) {
+func (iso *IndexStatsOperations) GetIndexStatistics(tx TxContext, indexID primitives.IndexID) (*IndexStatistics, error) {
 	result, err := iso.FindOne(tx, func(stats *IndexStatistics) bool {
 		return stats.IndexID == indexID
 	})
@@ -299,7 +299,7 @@ func (iso *IndexStatsOperations) GetIndexStatistics(tx TxContext, indexID int) (
 }
 
 // getIndexesForTable retrieves all indexes for a table using BaseOperations pattern
-func (iso *IndexStatsOperations) getIndexesForTable(tx TxContext, tableID int) ([]*indexMetadata, error) {
+func (iso *IndexStatsOperations) getIndexesForTable(tx TxContext, tableID primitives.TableID) ([]*indexMetadata, error) {
 	return iso.indexOps.FindAll(tx, func(im *indexMetadata) bool {
 		return im.TableID == tableID
 	})

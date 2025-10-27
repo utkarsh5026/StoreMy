@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"storemy/pkg/catalog/systemtable"
 	"storemy/pkg/concurrency/transaction"
+	"storemy/pkg/primitives"
 	"storemy/pkg/storage/index"
 	"storemy/pkg/storage/page"
 	"storemy/pkg/tuple"
@@ -17,7 +18,7 @@ type mockIndexStatsAccess struct {
 	iterateError   error
 }
 
-func (m *mockIndexStatsAccess) IterateTable(tableID int, tx *transaction.TransactionContext, processFunc func(*tuple.Tuple) error) error {
+func (m *mockIndexStatsAccess) IterateTable(tableID primitives.TableID, tx *transaction.TransactionContext, processFunc func(*tuple.Tuple) error) error {
 	if m.iterateError != nil {
 		return m.iterateError
 	}
@@ -41,7 +42,7 @@ func (m *mockIndexStatsAccess) IterateTable(tableID int, tx *transaction.Transac
 	return nil
 }
 
-func (m *mockIndexStatsAccess) InsertRow(tableID int, tx *transaction.TransactionContext, t *tuple.Tuple) error {
+func (m *mockIndexStatsAccess) InsertRow(tableID primitives.TableID, tx *transaction.TransactionContext, t *tuple.Tuple) error {
 	stats, err := systemtable.IndexStats.Parse(t)
 	if err != nil {
 		return err
@@ -50,7 +51,7 @@ func (m *mockIndexStatsAccess) InsertRow(tableID int, tx *transaction.Transactio
 	return nil
 }
 
-func (m *mockIndexStatsAccess) DeleteRow(tableID int, tx *transaction.TransactionContext, t *tuple.Tuple) error {
+func (m *mockIndexStatsAccess) DeleteRow(tableID primitives.TableID, tx *transaction.TransactionContext, t *tuple.Tuple) error {
 	stats, err := systemtable.IndexStats.Parse(t)
 	if err != nil {
 		return err
@@ -59,7 +60,7 @@ func (m *mockIndexStatsAccess) DeleteRow(tableID int, tx *transaction.Transactio
 	return nil
 }
 
-func mockIndexStatsFileGetter(tableID int) (page.DbFile, error) {
+func mockIndexStatsFileGetter(tableID primitives.TableID) (page.DbFile, error) {
 	return nil, nil
 }
 
@@ -764,7 +765,7 @@ type MockStatsOperations struct {
 	stats map[int]*systemtable.TableStatistics
 }
 
-func (m *MockStatsOperations) GetTableStatistics(tx TxContext, tableID int) (*systemtable.TableStatistics, error) {
+func (m *MockStatsOperations) GetTableStatistics(tx TxContext, tableID primitives.TableID) (*systemtable.TableStatistics, error) {
 	stats, ok := m.stats[tableID]
 	if !ok {
 		return nil, fmt.Errorf("table statistics not found")

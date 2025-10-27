@@ -46,7 +46,7 @@ type ColStatsOperations struct {
 // Returns a configured ColStatsOperations ready to collect and manage column statistics.
 func NewColStatsOperations(
 	access catalogio.CatalogAccess,
-	colStatsTableID int,
+	colStatsTableID primitives.TableID,
 	fileGetter FileGetter,
 	colOps *ColumnOperations,
 ) *ColStatsOperations {
@@ -71,19 +71,17 @@ func NewColStatsOperations(
 // - Null count, distinct count, min/max values, average width
 // - Histogram distribution
 // - Most common values (MCV) and their frequencies
-func (co *ColStatsOperations) CollectColumnStatistics(tx TxContext, colName string, tableID, columnIndex, histogramBuckets, mcvCount int) (*ColStatsInfo, error) {
-	// Verify table exists
+func (co *ColStatsOperations) CollectColumnStatistics(tx TxContext, colName string, tableID primitives.TableID, columnIndex primitives.ColumnID, histogramBuckets, mcvCount int) (*ColStatsInfo, error) {
 	if _, err := co.fileGetter(tableID); err != nil {
 		return nil, fmt.Errorf("failed to get db file: %w", err)
 	}
 
 	var (
 		values     []types.Field
-		nullCount  int64
-		totalWidth int
+		nullCount  uint64
+		totalWidth uint64
 	)
 
-	// Scan table and collect column values
 	err := co.Reader().IterateTable(tableID, tx, func(t *tuple.Tuple) error {
 		if columnIndex >= t.TupleDesc.NumFields() {
 			return fmt.Errorf("column index %d out of range (tuple has %d fields)", columnIndex, t.TupleDesc.NumFields())
@@ -103,9 +101,9 @@ func (co *ColStatsOperations) CollectColumnStatistics(tx TxContext, colName stri
 
 		// Calculate field width
 		if strField, ok := field.(*types.StringField); ok {
-			totalWidth += len(strField.Value)
+			totalWidth += uint64(len(strField.Value))
 		} else {
-			totalWidth += int(field.Type().Size())
+			totalWidth += uint64(field.Type().Size())
 		}
 
 		return nil
@@ -138,10 +136,10 @@ func (co *ColStatsOperations) CollectColumnStatistics(tx TxContext, colName stri
 	})
 
 	// Compute derived statistics
-	stats.DistinctCount = int64(countDistinct(values))
+	stats.DistinctCount = countDistinct(values)
 	stats.MinValue = values[0].String()
 	stats.MaxValue = values[len(values)-1].String()
-	stats.AvgWidth = totalWidth / len(values)
+	stats.AvgWidth = totalWidth / uint64(len(values))
 
 	// Build comprehensive statistics info
 	statsInfo := &ColStatsInfo{
@@ -154,7 +152,7 @@ func (co *ColStatsOperations) CollectColumnStatistics(tx TxContext, colName stri
 }
 
 // UpdateColumnStatistics updates statistics for all columns in a table
-func (co *ColStatsOperations) UpdateColumnStatistics(tx TxContext, tableID int) error {
+func (co *ColStatsOperations) UpdateColumnStatistics(tx TxContext, tableID primitives.TableID) error {
 	columns, err := co.colOps.LoadColumnMetadata(tx, tableID)
 	if err != nil {
 		return fmt.Errorf("failed to load column metadata: %w", err)
@@ -192,7 +190,7 @@ func (co *ColStatsOperations) storeColumnStatistics(tx TxContext, stats *colStat
 }
 
 // GetColumnStatistics retrieves statistics for a specific column from CATALOG_COLUMN_STATISTICS
-func (co *ColStatsOperations) GetColumnStatistics(tx TxContext, tableID int, columnName string) (*colStats, error) {
+func (co *ColStatsOperations) GetColumnStatistics(tx TxContext, tableID primitives.TableID, columnName string) (*colStats, error) {
 	stats, err := co.FindOne(tx, func(cs *colStats) bool {
 		return cs.TableID == tableID && cs.ColumnName == columnName
 	})
@@ -206,12 +204,12 @@ func (co *ColStatsOperations) GetColumnStatistics(tx TxContext, tableID int, col
 
 // countDistinct counts unique values in a sorted slice of fields.
 // Assumes values are already sorted for efficient O(n) counting.
-func countDistinct(sortedVals []types.Field) int {
+func countDistinct(sortedVals []types.Field) uint64 {
 	if len(sortedVals) == 0 {
 		return 0
 	}
 
-	distinctCount := 1
+	var distinctCount uint64 = 1
 	for i := 1; i < len(sortedVals); i++ {
 		notEqual, _ := sortedVals[i].Compare(primitives.NotEqual, sortedVals[i-1])
 		if notEqual {

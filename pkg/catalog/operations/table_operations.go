@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"storemy/pkg/catalog/catalogio"
 	"storemy/pkg/catalog/systemtable"
+	"storemy/pkg/primitives"
 	"storemy/pkg/tuple"
 	"strings"
 )
@@ -12,7 +13,7 @@ type TableOperations struct {
 	*BaseOperations[*systemtable.TableMetadata]
 }
 
-func NewTableOperations(access catalogio.CatalogAccess, tableID int) *TableOperations {
+func NewTableOperations(access catalogio.CatalogAccess, tableID primitives.TableID) *TableOperations {
 	baseOp := NewBaseOperations(access, tableID, systemtable.Tables.Parse, func(t *systemtable.TableMetadata) *tuple.Tuple {
 		return systemtable.Tables.CreateTuple(*t)
 	})
@@ -58,7 +59,7 @@ func (to *TableOperations) GetAllTables(tx TxContext) ([]*systemtable.TableMetad
 // GetTableMetadataByID retrieves complete table metadata from CATALOG_TABLES by table ID.
 // Returns TableMetadata containing table name, file path, and primary key column,
 // or an error if the table is not found.
-func (to *TableOperations) GetTableMetadataByID(tx TxContext, tableID int) (*systemtable.TableMetadata, error) {
+func (to *TableOperations) GetTableMetadataByID(tx TxContext, tableID primitives.TableID) (*systemtable.TableMetadata, error) {
 	return to.findTableMetadata(tx, func(tm *systemtable.TableMetadata) bool {
 		return tm.TableID == tableID
 	})
@@ -81,7 +82,7 @@ func (to *TableOperations) GetTableMetadataByName(tx TxContext, tableName string
 //   - tableID: ID of the table to remove
 //
 // Returns an error if the table cannot be deleted or is not found.
-func (to *TableOperations) DeleteTable(tx TxContext, tableID int) error {
+func (to *TableOperations) DeleteTable(tx TxContext, tableID primitives.TableID) error {
 	return to.DeleteBy(tx, func(tm *systemtable.TableMetadata) bool {
 		return tm.TableID == tableID
 	})

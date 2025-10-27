@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"storemy/pkg/catalog/systemtable"
 	"storemy/pkg/concurrency/transaction"
+	"storemy/pkg/primitives"
 	"storemy/pkg/storage/index"
 	"storemy/pkg/tuple"
 	"testing"
@@ -11,18 +12,18 @@ import (
 
 // MockCatalogAccess implements CatalogAccess for testing
 type MockCatalogAccess struct {
-	tables map[int][]*tuple.Tuple // tableID -> tuples
+	tables map[primitives.TableID][]*tuple.Tuple // tableID -> tuples
 }
 
 func NewMockCatalogAccess() *MockCatalogAccess {
 	return &MockCatalogAccess{
-		tables: make(map[int][]*tuple.Tuple),
+		tables: make(map[primitives.TableID][]*tuple.Tuple),
 	}
 }
 
 // IterateTable implements CatalogReader
 func (m *MockCatalogAccess) IterateTable(
-	tableID int,
+	tableID primitives.TableID,
 	tx *transaction.TransactionContext,
 	processFunc func(*tuple.Tuple) error,
 ) error {
@@ -45,7 +46,7 @@ func (m *MockCatalogAccess) IterateTable(
 
 // InsertRow implements CatalogWriter
 func (m *MockCatalogAccess) InsertRow(
-	tableID int,
+	tableID primitives.TableID,
 	tx *transaction.TransactionContext,
 	tup *tuple.Tuple,
 ) error {
@@ -55,7 +56,7 @@ func (m *MockCatalogAccess) InsertRow(
 
 // DeleteRow implements CatalogWriter
 func (m *MockCatalogAccess) DeleteRow(
-	tableID int,
+	tableID primitives.TableID,
 	tx *transaction.TransactionContext,
 	tup *tuple.Tuple,
 ) error {
@@ -85,7 +86,7 @@ func (m *MockCatalogAccess) DeleteRow(
 }
 
 // Helper to create index metadata tuple
-func createIndexTuple(indexID, tableID int, indexName, columnName string, indexType index.IndexType) *tuple.Tuple {
+func createIndexTuple(indexID, tableID primitives.TableID, indexName, columnName string, indexType index.IndexType) *tuple.Tuple {
 	metadata := systemtable.IndexMetadata{
 		IndexID:    indexID,
 		IndexName:  indexName,

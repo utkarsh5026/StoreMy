@@ -14,7 +14,7 @@ import (
 
 // mockFileGetter returns a mock DbFile for testing
 // Note: Returns a non-HeapFile to simulate page count of 0 unless we can properly mock HeapFile
-func mockFileGetter(tableID int) (page.DbFile, error) {
+func mockFileGetter(tableID primitives.TableID) (page.DbFile, error) {
 	if tableID == 999 {
 		return nil, errors.New("file not found")
 	}
@@ -52,22 +52,22 @@ func (m *mockDbFile) Close() error {
 
 // mockStatsCache implements StatsCacheSetter for testing
 type mockStatsCache struct {
-	cached map[int]*tableStats
+	cached map[primitives.TableID]*tableStats
 }
 
 func newMockStatsCache() *mockStatsCache {
 	return &mockStatsCache{
-		cached: make(map[int]*tableStats),
+		cached: make(map[primitives.TableID]*tableStats),
 	}
 }
 
-func (m *mockStatsCache) SetCachedStatistics(tableID int, stats *tableStats) error {
+func (m *mockStatsCache) SetCachedStatistics(tableID primitives.TableID, stats *tableStats) error {
 	m.cached[tableID] = stats
 	return nil
 }
 
 // createStatsTuple creates a statistics tuple for testing
-func createStatsTuple(tableID, cardinality, pageCount, avgTupleSize, distinctValues int) *tuple.Tuple {
+func createStatsTuple(tableID primitives.TableID, cardinality uint64, pageCount primitives.PageNumber, avgTupleSize, distinctValues uint64) *tuple.Tuple {
 	stats := &tableStats{
 		TableID:        tableID,
 		Cardinality:    cardinality,
