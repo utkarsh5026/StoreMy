@@ -10,9 +10,14 @@ import (
 	"sync"
 )
 
+// BucketNumber represents a logical hash bucket identifier.
+// This is distinct from PageNumber - buckets are logical hash table slots,
+// while pages are physical storage units.
+type BucketNumber = int
+
 const (
 	// DefaultBuckets is the default number of hash buckets when not specified
-	DefaultBuckets = 256
+	DefaultBuckets BucketNumber = 256
 )
 
 // HashFile represents a persistent hash index file that provides fast key-based lookups.
@@ -26,11 +31,11 @@ const (
 type HashFile struct {
 	*page.BaseFile
 	keyType      types.Type
-	numPages     primitives.PageNumber
-	numBuckets   int
-	indexID      primitives.FileID // Override index ID (set when file is associated with an index)
+	numPages     primitives.PageNumber  // Physical page count
+	numBuckets   BucketNumber           // Logical bucket count
+	indexID      primitives.FileID      // Override index ID (set when file is associated with an index)
 	mutex        sync.RWMutex
-	bucketPageID map[int]primitives.PageNumber // Maps bucket number to primary page number
+	bucketPageID map[BucketNumber]primitives.PageNumber // Maps bucket number to primary page number
 }
 
 // NewHashFile creates or opens a hash index file at the specified path.
@@ -45,7 +50,7 @@ type HashFile struct {
 // Returns:
 //   - *HashFile: The opened or created hash file
 //   - error: Error if file operations fail or invalid parameters provided
-func NewHashFile(filePath primitives.Filepath, keyType types.Type, numBuckets int) (*HashFile, error) {
+func NewHashFile(filePath primitives.Filepath, keyType types.Type, numBuckets BucketNumber) (*HashFile, error) {
 	if filePath == "" {
 		return nil, fmt.Errorf("filePath cannot be empty")
 	}
@@ -70,12 +75,12 @@ func NewHashFile(filePath primitives.Filepath, keyType types.Type, numBuckets in
 		keyType:      keyType,
 		numPages:     numPages,
 		numBuckets:   numBuckets,
-		bucketPageID: make(map[int]primitives.PageNumber),
+		bucketPageID: make(map[BucketNumber]primitives.PageNumber),
 	}
 
 	// Initialize bucket-to-page mapping
 	// For now, bucket i is stored in page i (one bucket per page initially)
-	for i := 0; i < numBuckets; i++ {
+	for i := BucketNumber(0); i < numBuckets; i++ {
 		hf.bucketPageID[i] = primitives.PageNumber(i)
 	}
 
@@ -100,7 +105,7 @@ func (hf *HashFile) NumPages() primitives.PageNumber {
 // GetNumBuckets returns the number of hash buckets in this index.
 // The bucket count is fixed at creation time and determines the hash distribution.
 // Thread-safe with read lock.
-func (hf *HashFile) GetNumBuckets() int {
+func (hf *HashFile) GetNumBuckets() BucketNumber {
 	hf.mutex.RLock()
 	defer hf.mutex.RUnlock()
 	return hf.numBuckets
@@ -155,7 +160,8 @@ func (hf *HashFile) ReadPage(pageID *page.PageDescriptor) (page.Page, error) {
 	if err != nil {
 		if err == io.EOF {
 			// Return a new empty page for unallocated pages
-			bucketNum := pageID.PageNo()
+			// Use page number as bucket number for initial pages
+			bucketNum := BucketNumber(pageID.PageNo())
 			newPage := NewHashPage(pageID, bucketNum, hf.keyType)
 			return newPage, nil
 		}
@@ -230,7 +236,7 @@ func (hf *HashFile) AllocatePageNum() primitives.PageNumber {
 // Returns:
 //   - int: Page number for this bucket
 //   - error: Error if bucket number is invalid
-func (hf *HashFile) GetBucketPageNum(bucketNum int) (primitives.PageNumber, error) {
+func (hf *HashFile) GetBucketPageNum(bucketNum BucketNumber) (primitives.PageNumber, error) {
 	if bucketNum < 0 || bucketNum >= hf.numBuckets {
 		return 0, fmt.Errorf("invalid bucket number: %d", bucketNum)
 	}

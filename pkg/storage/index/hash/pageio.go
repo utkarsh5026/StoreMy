@@ -33,16 +33,17 @@ func DeserializeHashPage(data []byte, pageID *page.PageDescriptor) (*HashPage, e
 	buf := bytes.NewReader(data)
 
 	var (
-		bucketNum, overflowPage primitives.PageNumber
-		numEntries              int32
+		bucketNumRaw uint64
+		overflowPage primitives.PageNumber
+		numEntries   int32
 	)
-	binary.Read(buf, binary.BigEndian, &bucketNum)
+	binary.Read(buf, binary.BigEndian, &bucketNumRaw)
 	binary.Read(buf, binary.BigEndian, &numEntries)
 	binary.Read(buf, binary.BigEndian, &overflowPage)
 
 	page := &HashPage{
 		pageID:       pageID,
-		bucketNum:    bucketNum,
+		bucketNum:    BucketNumber(bucketNumRaw),
 		numEntries:   int(numEntries),
 		overflowPage: overflowPage,
 		entries:      make([]*index.IndexEntry, 0, numEntries),

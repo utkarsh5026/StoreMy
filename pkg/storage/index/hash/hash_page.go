@@ -47,9 +47,9 @@ const (
 //   - Dirty flag tracks modifications within transaction
 type HashPage struct {
 	pageID       *page.PageDescriptor      // Unique identifier for this page
-	bucketNum    primitives.PageNumber     // Hash bucket number this page belongs to
+	bucketNum    BucketNumber              // Hash bucket number this page belongs to (logical)
 	numEntries   int                       // Current number of entries stored
-	overflowPage primitives.PageNumber     // Page number of overflow page (-1 if none)
+	overflowPage primitives.PageNumber     // Page number of overflow page (physical)
 	keyType      types.Type                // Type of keys stored (IntType, StringType, etc.)
 	entries      []*index.IndexEntry       // Actual hash entries in this page
 	isDirty      bool                      // True if page modified since load
@@ -66,7 +66,7 @@ type HashPage struct {
 //   - keyType: Type of keys this page will store
 //
 // Returns a new HashPage marked as dirty (needs to be written).
-func NewHashPage(pageID *page.PageDescriptor, bucketNum primitives.PageNumber, keyType types.Type) *HashPage {
+func NewHashPage(pageID *page.PageDescriptor, bucketNum BucketNumber, keyType types.Type) *HashPage {
 	return &HashPage{
 		pageID:       pageID,
 		bucketNum:    bucketNum,
@@ -131,7 +131,7 @@ func (hp *HashPage) MarkDirty(dirty bool, tid *primitives.TransactionID) {
 func (hp *HashPage) GetPageData() []byte {
 	buf := new(bytes.Buffer)
 
-	binary.Write(buf, binary.BigEndian, hp.bucketNum)
+	binary.Write(buf, binary.BigEndian, uint64(hp.bucketNum))
 	binary.Write(buf, binary.BigEndian, int32(hp.numEntries))
 	binary.Write(buf, binary.BigEndian, hp.overflowPage)
 
@@ -185,7 +185,7 @@ func (hp *HashPage) GetNumEntries() int {
 }
 
 // GetBucketNum returns the hash bucket number this page belongs to.
-func (hp *HashPage) GetBucketNum() primitives.PageNumber {
+func (hp *HashPage) GetBucketNum() BucketNumber {
 	return hp.bucketNum
 }
 
