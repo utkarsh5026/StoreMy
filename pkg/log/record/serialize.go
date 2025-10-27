@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"io"
 	"storemy/pkg/primitives"
-	"storemy/pkg/storage/heap"
+	"storemy/pkg/storage/page"
 	"time"
 )
 
@@ -156,7 +156,7 @@ func deserializePageID(buf *bytes.Reader) (primitives.PageID, error) {
 		return nil, fmt.Errorf("failed to read PageID pageNo: %w", err)
 	}
 
-	return heap.NewHeapPageID(int(tableID), int(pageNo)), nil
+	return page.NewPageDescriptor(primitives.TableID(tableID), primitives.PageNumber(pageNo)), nil
 }
 
 // deserializeImage deserializes a byte slice image (BeforeImage or AfterImage).

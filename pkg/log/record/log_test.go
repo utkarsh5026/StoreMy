@@ -8,15 +8,15 @@ import (
 
 // mockPageIDForLog implements primitives.PageID for testing
 type mockPageIDForLog struct {
-	tableID int
-	pageNo  int
+	tableID primitives.TableID
+	pageNo  primitives.PageNumber
 }
 
-func (m *mockPageIDForLog) GetTableID() int {
+func (m *mockPageIDForLog) GetTableID() primitives.TableID {
 	return m.tableID
 }
 
-func (m *mockPageIDForLog) PageNo() int {
+func (m *mockPageIDForLog) PageNo() primitives.PageNumber {
 	return m.pageNo
 }
 
@@ -24,12 +24,21 @@ func (m *mockPageIDForLog) Equals(other primitives.PageID) bool {
 	return m.GetTableID() == other.GetTableID() && m.PageNo() == other.PageNo()
 }
 
-func (m *mockPageIDForLog) HashCode() int {
-	return m.tableID*31 + m.pageNo
+func (m *mockPageIDForLog) HashCode() primitives.HashCode {
+	return primitives.HashCode(uint64(m.tableID)*31 + uint64(m.pageNo))
 }
 
-func (m *mockPageIDForLog) Serialize() []int {
-	return []int{m.tableID, m.pageNo}
+func (m *mockPageIDForLog) Serialize() []byte {
+	result := make([]byte, 16)
+	// Serialize TableID (8 bytes)
+	for i := 0; i < 8; i++ {
+		result[i] = byte(m.tableID >> (i * 8))
+	}
+	// Serialize PageNumber (8 bytes)
+	for i := 0; i < 8; i++ {
+		result[8+i] = byte(m.pageNo >> (i * 8))
+	}
+	return result
 }
 
 func (m *mockPageIDForLog) String() string {

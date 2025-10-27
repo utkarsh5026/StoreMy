@@ -11,28 +11,37 @@ import (
 
 // MockPageID implements PageID interface for testing
 type MockPageID struct {
-	tableID int
-	pageNo  int
+	tableID primitives.TableID
+	pageNo  primitives.PageNumber
 }
 
-func (m *MockPageID) GetTableID() int {
+func (m *MockPageID) GetTableID() primitives.TableID {
 	return m.tableID
 }
 
-func (m *MockPageID) PageNo() int {
+func (m *MockPageID) PageNo() primitives.PageNumber {
 	return m.pageNo
 }
 
-func (m *MockPageID) Serialize() []int {
-	return []int{m.tableID, m.pageNo}
+func (m *MockPageID) Serialize() []byte {
+	result := make([]byte, 16)
+	// Serialize TableID (8 bytes)
+	for i := 0; i < 8; i++ {
+		result[i] = byte(m.tableID >> (i * 8))
+	}
+	// Serialize PageNumber (8 bytes)
+	for i := 0; i < 8; i++ {
+		result[8+i] = byte(m.pageNo >> (i * 8))
+	}
+	return result
 }
 
 func (m *MockPageID) Equals(other primitives.PageID) bool {
 	return m.tableID == other.GetTableID() && m.pageNo == other.PageNo()
 }
 
-func (m *MockPageID) HashCode() int {
-	return m.tableID*31 + m.pageNo
+func (m *MockPageID) HashCode() primitives.HashCode {
+	return primitives.HashCode(uint64(m.tableID)*31 + uint64(m.pageNo))
 }
 
 func (m *MockPageID) String() string {
