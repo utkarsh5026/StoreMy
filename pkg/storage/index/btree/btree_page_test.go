@@ -2,16 +2,16 @@ package btree
 
 import (
 	"storemy/pkg/primitives"
-	"storemy/pkg/storage/heap"
 	"storemy/pkg/storage/index"
+	"storemy/pkg/storage/page"
 	"storemy/pkg/tuple"
 	"storemy/pkg/types"
 	"testing"
 )
 
 func TestNewBTreeLeafPage(t *testing.T) {
-	pageID := NewBTreePageID(1, 0)
-	page := NewBTreeLeafPage(pageID, types.IntType, NoPage)
+	pageID := page.NewPageDescriptor(1, 0)
+	page := NewBTreeLeafPage(pageID, types.IntType, primitives.InvalidPageNumber)
 
 	if !page.IsLeafPage() {
 		t.Error("Expected leaf page")
@@ -22,8 +22,8 @@ func TestNewBTreeLeafPage(t *testing.T) {
 	if page.GetNumEntries() != 0 {
 		t.Errorf("Expected 0 entries, got %d", page.GetNumEntries())
 	}
-	if page.ParentPage != NoPage {
-		t.Errorf("Expected parent NoPage, got %d", page.ParentPage)
+	if page.ParentPage != primitives.InvalidPageNumber {
+		t.Errorf("Expected parent InvalidPageNumber, got %d", page.ParentPage)
 	}
 	if page.IsRoot() != true {
 		t.Error("Expected page to be root")
@@ -34,8 +34,8 @@ func TestNewBTreeLeafPage(t *testing.T) {
 }
 
 func TestNewBTreeInternalPage(t *testing.T) {
-	pageID := NewBTreePageID(1, 0)
-	page := NewBTreeInternalPage(pageID, types.IntType, NoPage)
+	pageID := page.NewPageDescriptor(1, 0)
+	page := NewBTreeInternalPage(pageID, types.IntType, primitives.InvalidPageNumber)
 
 	if page.IsLeafPage() {
 		t.Error("Expected not leaf page")
@@ -47,133 +47,133 @@ func TestNewBTreeInternalPage(t *testing.T) {
 	if page.GetNumEntries() != -1 {
 		t.Errorf("Expected -1 entries for empty internal page, got %d", page.GetNumEntries())
 	}
-	if page.ParentPage != NoPage {
-		t.Errorf("Expected parent NoPage, got %d", page.ParentPage)
+	if page.ParentPage != primitives.InvalidPageNumber {
+		t.Errorf("Expected parent InvalidPageNumber, got %d", page.ParentPage)
 	}
 }
 
 func TestLeafPageEntryOperations(t *testing.T) {
-	pageID := NewBTreePageID(1, 0)
-	page := NewBTreeLeafPage(pageID, types.IntType, NoPage)
+	pageID := page.NewPageDescriptor(1, 0)
+	btreePage := NewBTreeLeafPage(pageID, types.IntType, primitives.InvalidPageNumber)
 
 	// Create test entries
 	entry1 := &index.IndexEntry{
 		Key: types.NewIntField(10),
 		RID: &tuple.TupleRecordID{
-			PageID:   heap.NewHeapPageID(1, 0),
+			PageID:   page.NewPageDescriptor(1, 0),
 			TupleNum: 0,
 		},
 	}
 	entry2 := &index.IndexEntry{
 		Key: types.NewIntField(20),
 		RID: &tuple.TupleRecordID{
-			PageID:   heap.NewHeapPageID(1, 0),
+			PageID:   page.NewPageDescriptor(1, 0),
 			TupleNum: 1,
 		},
 	}
 	entry3 := &index.IndexEntry{
 		Key: types.NewIntField(15),
 		RID: &tuple.TupleRecordID{
-			PageID:   heap.NewHeapPageID(1, 0),
+			PageID:   page.NewPageDescriptor(1, 0),
 			TupleNum: 2,
 		},
 	}
 
 	// Test insert at end
-	if err := page.InsertEntry(entry1, -1); err != nil {
+	if err := btreePage.InsertEntry(entry1, -1); err != nil {
 		t.Fatalf("Failed to insert entry1: %v", err)
 	}
-	if page.GetNumEntries() != 1 {
-		t.Errorf("Expected 1 entry, got %d", page.GetNumEntries())
+	if btreePage.GetNumEntries() != 1 {
+		t.Errorf("Expected 1 entry, got %d", btreePage.GetNumEntries())
 	}
 
 	// Test insert at specific position
-	if err := page.InsertEntry(entry2, 1); err != nil {
+	if err := btreePage.InsertEntry(entry2, 1); err != nil {
 		t.Fatalf("Failed to insert entry2: %v", err)
 	}
-	if page.GetNumEntries() != 2 {
-		t.Errorf("Expected 2 entries, got %d", page.GetNumEntries())
+	if btreePage.GetNumEntries() != 2 {
+		t.Errorf("Expected 2 entries, got %d", btreePage.GetNumEntries())
 	}
 
 	// Test insert in middle
-	if err := page.InsertEntry(entry3, 1); err != nil {
+	if err := btreePage.InsertEntry(entry3, 1); err != nil {
 		t.Fatalf("Failed to insert entry3: %v", err)
 	}
-	if page.GetNumEntries() != 3 {
-		t.Errorf("Expected 3 entries, got %d", page.GetNumEntries())
+	if btreePage.GetNumEntries() != 3 {
+		t.Errorf("Expected 3 entries, got %d", btreePage.GetNumEntries())
 	}
 
 	// Verify order: entry1(10), entry3(15), entry2(20)
-	if eq, _ := page.Entries[0].Key.Compare(primitives.Equals, entry1.Key); !eq {
+	if eq, _ := btreePage.Entries[0].Key.Compare(primitives.Equals, entry1.Key); !eq {
 		t.Error("Entry at position 0 incorrect")
 	}
-	if eq, _ := page.Entries[1].Key.Compare(primitives.Equals, entry3.Key); !eq {
+	if eq, _ := btreePage.Entries[1].Key.Compare(primitives.Equals, entry3.Key); !eq {
 		t.Error("Entry at position 1 incorrect")
 	}
-	if eq, _ := page.Entries[2].Key.Compare(primitives.Equals, entry2.Key); !eq {
+	if eq, _ := btreePage.Entries[2].Key.Compare(primitives.Equals, entry2.Key); !eq {
 		t.Error("Entry at position 2 incorrect")
 	}
 
 	// Test remove entry
-	removed, err := page.RemoveEntry(1)
+	removed, err := btreePage.RemoveEntry(1)
 	if err != nil {
 		t.Fatalf("Failed to remove entry: %v", err)
 	}
 	if eq, _ := removed.Key.Compare(primitives.Equals, entry3.Key); !eq {
 		t.Error("Removed wrong entry")
 	}
-	if page.GetNumEntries() != 2 {
-		t.Errorf("Expected 2 entries after removal, got %d", page.GetNumEntries())
+	if btreePage.GetNumEntries() != 2 {
+		t.Errorf("Expected 2 entries after removal, got %d", btreePage.GetNumEntries())
 	}
 
 	// Test remove last entry
-	removed, err = page.RemoveEntry(-1)
+	removed, err = btreePage.RemoveEntry(-1)
 	if err != nil {
 		t.Fatalf("Failed to remove last entry: %v", err)
 	}
 	if eq, _ := removed.Key.Compare(primitives.Equals, entry2.Key); !eq {
 		t.Error("Removed wrong entry")
 	}
-	if page.GetNumEntries() != 1 {
-		t.Errorf("Expected 1 entry after removal, got %d", page.GetNumEntries())
+	if btreePage.GetNumEntries() != 1 {
+		t.Errorf("Expected 1 entry after removal, got %d", btreePage.GetNumEntries())
 	}
 }
 
 func TestInternalPageChildOperations(t *testing.T) {
-	pageID := NewBTreePageID(1, 0)
-	page := NewBTreeInternalPage(pageID, types.IntType, NoPage)
+	pageID := page.NewPageDescriptor(1, 0)
+	btreePage := NewBTreeInternalPage(pageID, types.IntType, primitives.InvalidPageNumber)
 
 	// Create child pointers
-	child0 := NewBtreeChildPtr(nil, NewBTreePageID(1, 1))
-	child1 := NewBtreeChildPtr(types.NewIntField(10), NewBTreePageID(1, 2))
-	child2 := NewBtreeChildPtr(types.NewIntField(20), NewBTreePageID(1, 3))
+	child0 := NewBtreeChildPtr(nil, page.NewPageDescriptor(1, 1))
+	child1 := NewBtreeChildPtr(types.NewIntField(10), page.NewPageDescriptor(1, 2))
+	child2 := NewBtreeChildPtr(types.NewIntField(20), page.NewPageDescriptor(1, 3))
 
 	// Add first child (no key)
-	if err := page.AddChildPtr(child0, 0); err != nil {
+	if err := btreePage.AddChildPtr(child0, 0); err != nil {
 		t.Fatalf("Failed to add child0: %v", err)
 	}
-	if page.GetNumEntries() != 0 {
-		t.Errorf("Expected 0 entries with 1 child, got %d", page.GetNumEntries())
+	if btreePage.GetNumEntries() != 0 {
+		t.Errorf("Expected 0 entries with 1 child, got %d", btreePage.GetNumEntries())
 	}
 
 	// Add second child (with key)
-	if err := page.AddChildPtr(child1, 1); err != nil {
+	if err := btreePage.AddChildPtr(child1, 1); err != nil {
 		t.Fatalf("Failed to add child1: %v", err)
 	}
-	if page.GetNumEntries() != 1 {
-		t.Errorf("Expected 1 entry with 2 children, got %d", page.GetNumEntries())
+	if btreePage.GetNumEntries() != 1 {
+		t.Errorf("Expected 1 entry with 2 children, got %d", btreePage.GetNumEntries())
 	}
 
 	// Add third child
-	if err := page.AddChildPtr(child2, 2); err != nil {
+	if err := btreePage.AddChildPtr(child2, 2); err != nil {
 		t.Fatalf("Failed to add child2: %v", err)
 	}
-	if page.GetNumEntries() != 2 {
-		t.Errorf("Expected 2 entries with 3 children, got %d", page.GetNumEntries())
+	if btreePage.GetNumEntries() != 2 {
+		t.Errorf("Expected 2 entries with 3 children, got %d", btreePage.GetNumEntries())
 	}
 
 	// Test get child key
-	key, err := page.GetChildKey(1)
+	key, err := btreePage.GetChildKey(1)
 	if err != nil {
 		t.Fatalf("Failed to get child key: %v", err)
 	}
@@ -182,54 +182,54 @@ func TestInternalPageChildOperations(t *testing.T) {
 	}
 
 	// Test update child key
-	if err := page.UpdateChildrenKey(1, types.NewIntField(15)); err != nil {
+	if err := btreePage.UpdateChildrenKey(1, types.NewIntField(15)); err != nil {
 		t.Fatalf("Failed to update child key: %v", err)
 	}
-	key, _ = page.GetChildKey(1)
+	key, _ = btreePage.GetChildKey(1)
 	if eq, _ := key.Compare(primitives.Equals, types.NewIntField(15)); !eq {
 		t.Error("Child key not updated correctly")
 	}
 
 	// Test remove child
-	removed, err := page.RemoveChildPtr(1)
+	removed, err := btreePage.RemoveChildPtr(1)
 	if err != nil {
 		t.Fatalf("Failed to remove child: %v", err)
 	}
 	if eq, _ := removed.Key.Compare(primitives.Equals, types.NewIntField(15)); !eq {
 		t.Error("Removed wrong child")
 	}
-	if page.GetNumEntries() != 1 {
-		t.Errorf("Expected 1 entry after removal, got %d", page.GetNumEntries())
+	if btreePage.GetNumEntries() != 1 {
+		t.Errorf("Expected 1 entry after removal, got %d", btreePage.GetNumEntries())
 	}
 }
 
 func TestPageSerialization(t *testing.T) {
 	// Create a leaf page with entries
-	pageID := NewBTreePageID(1, 5)
-	page := NewBTreeLeafPage(pageID, types.IntType, 2)
-	page.NextLeaf = 6
-	page.PrevLeaf = 4
+	pageID := page.NewPageDescriptor(1, 5)
+	btreePage := NewBTreeLeafPage(pageID, types.IntType, 2)
+	btreePage.NextLeaf = 6
+	btreePage.PrevLeaf = 4
 
 	entry1 := &index.IndexEntry{
 		Key: types.NewIntField(100),
 		RID: &tuple.TupleRecordID{
-			PageID:   heap.NewHeapPageID(1, 10),
+			PageID:   page.NewPageDescriptor(1, 10),
 			TupleNum: 5,
 		},
 	}
 	entry2 := &index.IndexEntry{
 		Key: types.NewIntField(200),
 		RID: &tuple.TupleRecordID{
-			PageID:   heap.NewHeapPageID(1, 11),
+			PageID:   page.NewPageDescriptor(1, 11),
 			TupleNum: 7,
 		},
 	}
 
-	page.InsertEntry(entry1, -1)
-	page.InsertEntry(entry2, -1)
+	btreePage.InsertEntry(entry1, -1)
+	btreePage.InsertEntry(entry2, -1)
 
 	// Serialize
-	data := page.GetPageData()
+	data := btreePage.GetPageData()
 
 	// Deserialize
 	deserializedPage, err := DeserializeBTreePage(data, pageID)
@@ -267,19 +267,19 @@ func TestPageSerialization(t *testing.T) {
 }
 
 func TestInternalPageSerialization(t *testing.T) {
-	pageID := NewBTreePageID(2, 3)
-	page := NewBTreeInternalPage(pageID, types.IntType, NoPage)
+	pageID := page.NewPageDescriptor(2, 3)
+	btreePage := NewBTreeInternalPage(pageID, types.IntType, primitives.InvalidPageNumber)
 
-	child0 := NewBtreeChildPtr(nil, NewBTreePageID(2, 10))
-	child1 := NewBtreeChildPtr(types.NewIntField(50), NewBTreePageID(2, 11))
-	child2 := NewBtreeChildPtr(types.NewIntField(100), NewBTreePageID(2, 12))
+	child0 := NewBtreeChildPtr(nil, page.NewPageDescriptor(2, 10))
+	child1 := NewBtreeChildPtr(types.NewIntField(50), page.NewPageDescriptor(2, 11))
+	child2 := NewBtreeChildPtr(types.NewIntField(100), page.NewPageDescriptor(2, 12))
 
-	page.AddChildPtr(child0, 0)
-	page.AddChildPtr(child1, 1)
-	page.AddChildPtr(child2, 2)
+	btreePage.AddChildPtr(child0, 0)
+	btreePage.AddChildPtr(child1, 1)
+	btreePage.AddChildPtr(child2, 2)
 
 	// Serialize
-	data := page.GetPageData()
+	data := btreePage.GetPageData()
 
 	// Deserialize
 	deserializedPage, err := DeserializeBTreePage(data, pageID)
@@ -318,27 +318,27 @@ func TestInternalPageSerialization(t *testing.T) {
 }
 
 func TestDirtyTracking(t *testing.T) {
-	pageID := NewBTreePageID(1, 0)
-	page := NewBTreeLeafPage(pageID, types.IntType, NoPage)
+	pageID := page.NewPageDescriptor(1, 0)
+	btreePage := NewBTreeLeafPage(pageID, types.IntType, primitives.InvalidPageNumber)
 
 	// Initially not dirty
-	if page.IsDirty() != nil {
+	if btreePage.IsDirty() != nil {
 		t.Error("New page should not be dirty")
 	}
 
 	// Mark dirty
 	txnID := primitives.NewTransactionIDFromValue(123)
-	page.MarkDirty(true, txnID)
+	btreePage.MarkDirty(true, txnID)
 
-	if page.IsDirty() == nil {
+	if btreePage.IsDirty() == nil {
 		t.Error("Page should be dirty after marking")
 	}
-	if page.IsDirty().ID() != 123 {
-		t.Errorf("Expected txn ID %d, got %d", 123, page.IsDirty().ID())
+	if btreePage.IsDirty().ID() != 123 {
+		t.Errorf("Expected txn ID %d, got %d", 123, btreePage.IsDirty().ID())
 	}
 
 	// Verify before image was captured
-	if page.beforeImage == nil {
+	if btreePage.beforeImage == nil {
 		t.Error("Before image should be set when marking dirty")
 	}
 
@@ -346,14 +346,14 @@ func TestDirtyTracking(t *testing.T) {
 	entry := &index.IndexEntry{
 		Key: types.NewIntField(10),
 		RID: &tuple.TupleRecordID{
-			PageID:   heap.NewHeapPageID(1, 0),
+			PageID:   page.NewPageDescriptor(1, 0),
 			TupleNum: 0,
 		},
 	}
-	page.InsertEntry(entry, -1)
+	btreePage.InsertEntry(entry, -1)
 
 	// Get before image
-	beforePage := page.GetBeforeImage()
+	beforePage := btreePage.GetBeforeImage()
 	if beforePage == nil {
 		t.Fatal("Before image should be retrievable")
 	}
@@ -362,16 +362,16 @@ func TestDirtyTracking(t *testing.T) {
 	if beforeBTree.GetNumEntries() != 0 {
 		t.Error("Before image should have 0 entries")
 	}
-	if page.GetNumEntries() != 1 {
+	if btreePage.GetNumEntries() != 1 {
 		t.Error("Current page should have 1 entry")
 	}
 }
 
 func TestPageCapacity(t *testing.T) {
-	pageID := NewBTreePageID(1, 0)
-	page := NewBTreeLeafPage(pageID, types.IntType, NoPage)
+	pageID := page.NewPageDescriptor(1, 0)
+	btreePage := NewBTreeLeafPage(pageID, types.IntType, primitives.InvalidPageNumber)
 
-	if page.IsFull() {
+	if btreePage.IsFull() {
 		t.Error("Empty page should not be full")
 	}
 
@@ -380,88 +380,88 @@ func TestPageCapacity(t *testing.T) {
 		entry := &index.IndexEntry{
 			Key: types.NewIntField(int64(i)),
 			RID: &tuple.TupleRecordID{
-				PageID:   heap.NewHeapPageID(1, 0),
-				TupleNum: i,
+				PageID:   page.NewPageDescriptor(1, 0),
+				TupleNum: primitives.SlotID(i),
 			},
 		}
-		page.InsertEntry(entry, -1)
+		btreePage.InsertEntry(entry, -1)
 	}
 
-	if !page.IsFull() {
+	if !btreePage.IsFull() {
 		t.Error("Page should be full after adding max entries")
 	}
 
-	if !page.HasMoreThanRequired() {
+	if !btreePage.HasMoreThanRequired() {
 		t.Error("Full page should have more than required entries")
 	}
 }
 
 func TestPageRelations(t *testing.T) {
-	pageID := NewBTreePageID(1, 5)
-	page := NewBTreeLeafPage(pageID, types.IntType, 2)
+	pageID := page.NewPageDescriptor(1, 5)
+	btreePage := NewBTreeLeafPage(pageID, types.IntType, 2)
 
 	// Test parent
-	if page.IsRoot() {
+	if btreePage.IsRoot() {
 		t.Error("Page with parent should not be root")
 	}
-	if page.Parent() != 2 {
-		t.Errorf("Expected parent 2, got %d", page.Parent())
+	if btreePage.Parent() != 2 {
+		t.Errorf("Expected parent 2, got %d", btreePage.Parent())
 	}
 
 	// Set new parent
-	page.SetParent(3)
-	if page.Parent() != 3 {
-		t.Errorf("Expected parent 3, got %d", page.Parent())
+	btreePage.SetParent(3)
+	if btreePage.Parent() != 3 {
+		t.Errorf("Expected parent 3, got %d", btreePage.Parent())
 	}
 
 	// Test leaf links
-	if page.HasPreviousLeaf() {
+	if btreePage.HasPreviousLeaf() {
 		t.Error("Should not have previous leaf initially")
 	}
-	if page.HasNextLeaf() {
+	if btreePage.HasNextLeaf() {
 		t.Error("Should not have next leaf initially")
 	}
 
-	page.PrevLeaf = 4
-	page.NextLeaf = 6
+	btreePage.PrevLeaf = 4
+	btreePage.NextLeaf = 6
 
-	if !page.HasPreviousLeaf() {
+	if !btreePage.HasPreviousLeaf() {
 		t.Error("Should have previous leaf")
 	}
-	if !page.HasNextLeaf() {
+	if !btreePage.HasNextLeaf() {
 		t.Error("Should have next leaf")
 	}
 
-	left, right := page.Leaves()
+	left, right := btreePage.Leaves()
 	if left != 4 || right != 6 {
 		t.Errorf("Expected leaves (4, 6), got (%d, %d)", left, right)
 	}
 }
 
 func TestPageWithStringKeys(t *testing.T) {
-	pageID := NewBTreePageID(1, 0)
-	page := NewBTreeLeafPage(pageID, types.StringType, NoPage)
+	pageID := page.NewPageDescriptor(1, 0)
+	btreePage := NewBTreeLeafPage(pageID, types.StringType, primitives.InvalidPageNumber)
 
 	entry1 := &index.IndexEntry{
 		Key: types.NewStringField("apple", types.StringMaxSize),
 		RID: &tuple.TupleRecordID{
-			PageID:   heap.NewHeapPageID(1, 0),
+			PageID:   page.NewPageDescriptor(1, 0),
 			TupleNum: 0,
 		},
 	}
 	entry2 := &index.IndexEntry{
 		Key: types.NewStringField("banana", types.StringMaxSize),
 		RID: &tuple.TupleRecordID{
-			PageID:   heap.NewHeapPageID(1, 0),
+			PageID:   page.NewPageDescriptor(1, 0),
 			TupleNum: 1,
 		},
 	}
 
-	page.InsertEntry(entry1, -1)
-	page.InsertEntry(entry2, -1)
+	btreePage.InsertEntry(entry1, -1)
+	btreePage.InsertEntry(entry2, -1)
 
 	// Serialize and deserialize
-	data := page.GetPageData()
+	data := btreePage.GetPageData()
 	deserializedPage, err := DeserializeBTreePage(data, pageID)
 	if err != nil {
 		t.Fatalf("Failed to deserialize page with string keys: %v", err)
@@ -480,37 +480,37 @@ func TestPageWithStringKeys(t *testing.T) {
 }
 
 func TestErrorConditions(t *testing.T) {
-	pageID := NewBTreePageID(1, 0)
-	page := NewBTreeLeafPage(pageID, types.IntType, NoPage)
+	pageID := page.NewPageDescriptor(1, 0)
+	btreePage := NewBTreeLeafPage(pageID, types.IntType, primitives.InvalidPageNumber)
 
 	// Test invalid insert index
 	entry := &index.IndexEntry{
 		Key: types.NewIntField(10),
 		RID: &tuple.TupleRecordID{
-			PageID:   heap.NewHeapPageID(1, 0),
+			PageID:   page.NewPageDescriptor(1, 0),
 			TupleNum: 0,
 		},
 	}
 
-	if err := page.InsertEntry(entry, 10); err == nil {
+	if err := btreePage.InsertEntry(entry, 10); err == nil {
 		t.Error("Should error on invalid insert index")
 	}
-	if err := page.InsertEntry(entry, -2); err == nil {
+	if err := btreePage.InsertEntry(entry, -2); err == nil {
 		t.Error("Should error on invalid negative index")
 	}
 
 	// Test invalid remove index
-	page.InsertEntry(entry, -1)
-	if _, err := page.RemoveEntry(10); err == nil {
+	btreePage.InsertEntry(entry, -1)
+	if _, err := btreePage.RemoveEntry(10); err == nil {
 		t.Error("Should error on invalid remove index")
 	}
-	if _, err := page.RemoveEntry(-2); err == nil {
+	if _, err := btreePage.RemoveEntry(-2); err == nil {
 		t.Error("Should error on invalid negative remove index")
 	}
 
 	// Test internal page errors
-	internalPage := NewBTreeInternalPage(NewBTreePageID(1, 1), types.IntType, NoPage)
-	child := NewBtreeChildPtr(nil, NewBTreePageID(1, 2))
+	internalPage := NewBTreeInternalPage(page.NewPageDescriptor(1, 1), types.IntType, primitives.InvalidPageNumber)
+	child := NewBtreeChildPtr(nil, page.NewPageDescriptor(1, 2))
 	internalPage.AddChildPtr(child, 0)
 
 	if err := internalPage.UpdateChildrenKey(0, types.NewIntField(10)); err == nil {

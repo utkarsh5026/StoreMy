@@ -76,7 +76,7 @@ func setupTestCatalogWithData(t *testing.T) *testCatalogSetup {
 }
 
 // createTestTable creates a table with a schema in the catalog
-func (tcs *testCatalogSetup) createTestTable(t *testing.T, tableName string, columns []schema.ColumnMetadata) primitives.TableID {
+func (tcs *testCatalogSetup) createTestTable(t *testing.T, tableName string, columns []schema.ColumnMetadata) primitives.FileID {
 	t.Helper()
 
 	tx, err := tcs.txRegistry.Begin()
@@ -119,7 +119,7 @@ func (tcs *testCatalogSetup) createTestTable(t *testing.T, tableName string, col
 }
 
 // insertTestData inserts rows into a table
-func (tcs *testCatalogSetup) insertTestData(t *testing.T, tableID primitives.TableID, rows [][]types.Field) {
+func (tcs *testCatalogSetup) insertTestData(t *testing.T, tableID primitives.FileID, rows [][]types.Field) {
 	t.Helper()
 
 	tx, err := tcs.txRegistry.Begin()
@@ -154,7 +154,7 @@ func (tcs *testCatalogSetup) insertTestData(t *testing.T, tableID primitives.Tab
 }
 
 // collectColumnStats collects statistics for a specific column
-func (tcs *testCatalogSetup) collectColumnStats(t *testing.T, tableID primitives.TableID, columnName string, columnIndex int) *catalogmanager.ColumnStatistics {
+func (tcs *testCatalogSetup) collectColumnStats(t *testing.T, tableID primitives.FileID, columnName string, columnIndex int) *catalogmanager.ColumnStatistics {
 	t.Helper()
 
 	// Flush all pages to ensure data is visible

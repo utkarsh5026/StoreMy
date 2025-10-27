@@ -296,7 +296,7 @@ func applyCorrelationCorrection(selectivities []float64) float64 {
 //   - baseCard: Input cardinality before filtering
 //
 // Returns estimated output cardinality after applying all predicates.
-func (ce *CardinalityEstimator) calculateSelectivity(predicates []plan.PredicateInfo, tableID primitives.TableID, baseCard int64) int64 {
+func (ce *CardinalityEstimator) calculateSelectivity(predicates []plan.PredicateInfo, tableID primitives.FileID, baseCard int64) int64 {
 	selectivities := make([]float64, 0, len(predicates))
 	for i := range predicates {
 		sel := ce.estimatePredicateSelectivity(tableID, &predicates[i])
@@ -321,7 +321,7 @@ func (ce *CardinalityEstimator) calculateSelectivity(predicates []plan.Predicate
 // Returns:
 //   - tableID: The table ID from the first ScanNode found (0 if not found)
 //   - found: true if a ScanNode was found, false for nil/multi-child nodes
-func findBaseTableID(planNode plan.PlanNode) (tableID primitives.TableID, found bool) {
+func findBaseTableID(planNode plan.PlanNode) (tableID primitives.FileID, found bool) {
 	if planNode == nil {
 		return 0, false
 	}
@@ -358,7 +358,7 @@ func findBaseTableID(planNode plan.PlanNode) (tableID primitives.TableID, found 
 //   - columnName: Name of column to look up
 //
 // Returns column type and an error if the catalog is unavailable or the column cannot be found.
-func (ce *CardinalityEstimator) getColumnType(tableID primitives.TableID, columnName string) (types.Type, error) {
+func (ce *CardinalityEstimator) getColumnType(tableID primitives.FileID, columnName string) (types.Type, error) {
 	if ce.catalog == nil {
 		return 0, fmt.Errorf("catalog is nil")
 	}
@@ -407,7 +407,7 @@ func (ce *CardinalityEstimator) getColumnType(tableID primitives.TableID, column
 //   - valueStr: String representation of value to parse
 //
 // Returns parsed Field with correct type, or error if type lookup or parsing fails.
-func (ce *CardinalityEstimator) parsePredicateValue(tableID primitives.TableID, columnName, valueStr string) (types.Field, error) {
+func (ce *CardinalityEstimator) parsePredicateValue(tableID primitives.FileID, columnName, valueStr string) (types.Field, error) {
 	if valueStr == "" {
 		return nil, fmt.Errorf("value string is empty")
 	}
@@ -442,7 +442,7 @@ func (ce *CardinalityEstimator) parsePredicateValue(tableID primitives.TableID, 
 //   - pred: Predicate information including type, column, operator, and value
 //
 // Returns selectivity estimate between 0.0 and 1.0.
-func (ce *CardinalityEstimator) estimatePredicateSelectivity(tableID primitives.TableID, pred *plan.PredicateInfo) float64 {
+func (ce *CardinalityEstimator) estimatePredicateSelectivity(tableID primitives.FileID, pred *plan.PredicateInfo) float64 {
 	est := selectivity.NewSelectivityEstimator(ce.catalog, ce.tx)
 	switch pred.Type {
 	case plan.NullCheckPredicate:

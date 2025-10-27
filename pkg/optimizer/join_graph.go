@@ -3,6 +3,7 @@ package optimizer
 import (
 	"fmt"
 	"storemy/pkg/plan"
+	"storemy/pkg/primitives"
 )
 
 // JoinGraph represents a of relations and their join predicates
@@ -23,7 +24,7 @@ type JoinGraph struct {
 type Relation struct {
 	ID         int                // Unique identifier
 	TableName  string             // Table name
-	TableID    int                // Database table ID
+	TableID    primitives.FileID  // Database table ID
 	Alias      string             // Table alias
 	ScanNode   *plan.ScanNode     // Base scan plan
 	Predicates []*FilterPredicate // Pushed-down predicates

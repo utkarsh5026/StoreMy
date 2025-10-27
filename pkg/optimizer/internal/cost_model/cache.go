@@ -14,9 +14,9 @@ import (
 // a discount factor to I/O costs for recently accessed tables.
 type BufferPoolCache struct {
 	mu            sync.RWMutex
-	recentAccess  map[primitives.TableID]time.Time // tableID -> last access time
-	cacheWindow   time.Duration                    // How long to consider data "cached"
-	cacheDiscount float64                          // Cost multiplier for cached data (0.0-1.0)
+	recentAccess  map[primitives.FileID]time.Time // tableID -> last access time
+	cacheWindow   time.Duration                   // How long to consider data "cached"
+	cacheDiscount float64                         // Cost multiplier for cached data (0.0-1.0)
 }
 
 // NewBufferPoolCache creates a new buffer pool cache model.
@@ -24,14 +24,14 @@ type BufferPoolCache struct {
 // - cacheDiscount: I/O cost multiplier for cached pages (0.1 = 90% discount)
 func NewBufferPoolCache(cacheWindow time.Duration, cacheDiscount float64) *BufferPoolCache {
 	return &BufferPoolCache{
-		recentAccess:  make(map[primitives.TableID]time.Time),
+		recentAccess:  make(map[primitives.FileID]time.Time),
 		cacheWindow:   cacheWindow,
 		cacheDiscount: cacheDiscount,
 	}
 }
 
 // RecordAccess records that a table was accessed at the current time.
-func (bpc *BufferPoolCache) RecordAccess(tableID primitives.TableID) {
+func (bpc *BufferPoolCache) RecordAccess(tableID primitives.FileID) {
 	bpc.mu.Lock()
 	defer bpc.mu.Unlock()
 	bpc.recentAccess[tableID] = time.Now()
@@ -41,7 +41,7 @@ func (bpc *BufferPoolCache) RecordAccess(tableID primitives.TableID) {
 // Returns a value between cacheDiscount and 1.0:
 // - cacheDiscount: table was accessed very recently (likely in cache)
 // - 1.0: table hasn't been accessed recently (cold read from disk)
-func (bpc *BufferPoolCache) GetCacheFactor(tableID primitives.TableID) float64 {
+func (bpc *BufferPoolCache) GetCacheFactor(tableID primitives.FileID) float64 {
 	bpc.mu.RLock()
 	defer bpc.mu.RUnlock()
 
@@ -86,7 +86,7 @@ func (bpc *BufferPoolCache) CleanExpired() {
 
 // ApplyCacheFactor applies the cache discount to an I/O cost.
 // This should be called when estimating costs for table scans.
-func (cm *CostModel) applyCacheFactor(tableID primitives.TableID, ioCost float64) float64 {
+func (cm *CostModel) applyCacheFactor(tableID primitives.FileID, ioCost float64) float64 {
 	if cm.bufferCache == nil {
 		// No cache modeling enabled
 		return ioCost
@@ -98,7 +98,7 @@ func (cm *CostModel) applyCacheFactor(tableID primitives.TableID, ioCost float64
 
 // recordTableAccess records that a table was accessed during costing.
 // This updates the buffer pool cache model.
-func (cm *CostModel) recordTableAccess(tableID primitives.TableID) {
+func (cm *CostModel) recordTableAccess(tableID primitives.FileID) {
 	if cm.bufferCache != nil {
 		cm.bufferCache.RecordAccess(tableID)
 	}
