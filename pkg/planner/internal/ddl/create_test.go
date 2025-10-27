@@ -498,7 +498,7 @@ func TestCreateTablePlan_Execute_PrimaryKeyIndex_Created(t *testing.T) {
 	}
 
 	// Verify index file exists
-	if _, err := os.Stat(pkIndex.FilePath); os.IsNotExist(err) {
+	if !pkIndex.FilePath.Exists() {
 		t.Errorf("Index file %s does not exist", pkIndex.FilePath)
 	}
 
@@ -740,21 +740,21 @@ func TestCreateTablePlan_Execute_PrimaryKeyIndex_FileLocation(t *testing.T) {
 		idx := indexes[0]
 
 		// Verify file path contains table name and index name
-		if !strings.Contains(idx.FilePath, "test_table") {
+		if !strings.Contains(idx.FilePath.String(), "test_table") {
 			t.Errorf("Index file path should contain table name, got: %q", idx.FilePath)
 		}
 
-		if !strings.Contains(idx.FilePath, "pk_test_table_id") {
+		if !strings.Contains(idx.FilePath.String(), "pk_test_table_id") {
 			t.Errorf("Index file path should contain index name, got: %q", idx.FilePath)
 		}
 
 		// Verify file has .idx extension
-		if !strings.HasSuffix(idx.FilePath, ".idx") {
+		if !strings.HasSuffix(idx.FilePath.String(), ".idx") {
 			t.Errorf("Index file should have .idx extension, got: %q", idx.FilePath)
 		}
 
 		// Verify file actually exists
-		if _, err := os.Stat(idx.FilePath); os.IsNotExist(err) {
+		if !idx.FilePath.Exists() {
 			t.Errorf("Index file does not exist at: %q", idx.FilePath)
 		}
 	}

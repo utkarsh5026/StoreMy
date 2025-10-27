@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"storemy/pkg/parser/statements"
 	"storemy/pkg/planner/internal/result"
+	"storemy/pkg/primitives"
 )
 
 // DropTablePlan represents the execution plan for DROP TABLE statement.
@@ -103,7 +104,7 @@ func (p *DropTablePlan) Execute() (result.Result, error) {
 // Returns:
 //   - nil on success (even if some index deletions fail)
 //   - Never returns error (failures are logged as warnings)
-func (p *DropTablePlan) dropTableIndexes(tableID int) error {
+func (p *DropTablePlan) dropTableIndexes(tableID primitives.FileID) error {
 	cm := p.ctx.CatalogManager()
 	im := p.ctx.IndexManager()
 

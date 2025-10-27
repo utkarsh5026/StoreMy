@@ -7,6 +7,7 @@ import (
 	"storemy/pkg/parser/statements"
 	"storemy/pkg/planner/internal/indexops"
 	"storemy/pkg/planner/internal/result"
+	"storemy/pkg/primitives"
 	"storemy/pkg/registry"
 	"storemy/pkg/storage/index"
 )
@@ -83,7 +84,7 @@ func (p *CreateTablePlan) makeTableSchema() (*schema.Schema, error) {
 		columns[i] = schema.ColumnMetadata{
 			Name:      field.Name,
 			FieldType: field.Type,
-			Position:  i,
+			Position:  primitives.ColumnID(i),
 			IsPrimary: isPrimary,
 			IsAutoInc: field.AutoIncrement,
 			TableID:   0, // Will be set by CatalogManager
@@ -104,16 +105,15 @@ func (p *CreateTablePlan) makeTableSchema() (*schema.Schema, error) {
 // Steps:
 //  1. Finds the column index of the primary key
 //  2. Determines the data type of the primary key column
-//  3. Generates index name and file path
-//  4. Creates index metadata in catalog
-//  5. Creates physical BTree index file
-//  6. Populates index with existing table data (if any)
-func (p *CreateTablePlan) createPrimaryKeyIndex(tableID int, tableSchema *schema.Schema) error {
+//  3. Creates physical BTree index file and gets its actual ID
+//  4. Registers index metadata in catalog using the actual file ID
+//  5. Populates index with existing table data (if any)
+func (p *CreateTablePlan) createPrimaryKeyIndex(tableID primitives.FileID, tableSchema *schema.Schema) error {
 	cm := p.ctx.CatalogManager()
 
-	pkColumnIndex := tableSchema.GetFieldIndex(p.Statement.PrimaryKey)
-	if pkColumnIndex < 0 {
-		return fmt.Errorf("primary key column %s not found in schema", p.Statement.PrimaryKey)
+	pkColumnIndex, err := tableSchema.GetFieldIndex(p.Statement.PrimaryKey)
+	if err != nil {
+		return fmt.Errorf("primary key column %s not found in schema %w", p.Statement.PrimaryKey, err)
 	}
 
 	pkColumn := tableSchema.Columns[pkColumnIndex]
@@ -123,28 +123,36 @@ func (p *CreateTablePlan) createPrimaryKeyIndex(tableID int, tableSchema *schema
 		return nil
 	}
 
-	indexID, filePath, err := cm.CreateIndex(
-		p.TxContext,
-		indexName,
-		p.Statement.TableName,
-		p.Statement.PrimaryKey,
-		index.BTreeIndex,
-	)
-	if err != nil {
-		return fmt.Errorf("failed to register index in catalog: %v", err)
-	}
+	// Generate file path using centralized helper
+	filePath := indexops.GenerateIndexFilePath(p.ctx, p.Statement.TableName, indexName)
 
+	// Step 1: Create physical index file and get actual ID
 	idxConfig := indexops.IndexCreationConfig{
 		Ctx:         p.ctx,
 		Tx:          p.TxContext,
 		IndexName:   indexName,
-		IndexID:     indexID,
 		IndexType:   index.BTreeIndex,
 		FilePath:    filePath,
 		TableID:     tableID,
+		TableName:   p.Statement.TableName,
 		ColumnIndex: pkColumnIndex,
+		ColumnName:  p.Statement.PrimaryKey,
 		ColumnType:  pkColumn.FieldType,
 	}
 
-	return indexops.CreateAndPopulateIndex(&idxConfig)
+	actualIndexID, err := indexops.CreatePhysicalIndexAndGetID(&idxConfig)
+	if err != nil {
+		return fmt.Errorf("failed to create physical index: %v", err)
+	}
+
+	_, err = cm.CreateIndex(p.TxContext, actualIndexID, indexName, p.Statement.TableName, p.Statement.PrimaryKey, index.BTreeIndex)
+	if err != nil {
+		return fmt.Errorf("failed to register index in catalog: %v", err)
+	}
+
+	// Update config with actual ID for population
+	idxConfig.IndexID = actualIndexID
+
+	// Step 3: Populate the index
+	return indexops.PopulateIndexWithData(&idxConfig)
 }

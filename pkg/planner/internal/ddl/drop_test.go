@@ -1,12 +1,12 @@
 package ddl
 
 import (
-	"os"
 	"storemy/pkg/concurrency/transaction"
 	"storemy/pkg/parser/statements"
 	"storemy/pkg/planner/internal/indexops"
 	"storemy/pkg/planner/internal/result"
 	"storemy/pkg/planner/internal/testutil"
+	"storemy/pkg/primitives"
 	"storemy/pkg/registry"
 	"storemy/pkg/storage/index"
 	"storemy/pkg/types"
@@ -159,11 +159,12 @@ func TestDropTablePlan_Execute_WithPrimaryKeyIndex(t *testing.T) {
 	}
 
 	// Store index file paths for verification
-	var indexPaths []string
+	var indexPaths []primitives.Filepath
 	for _, idx := range indexes {
 		indexPaths = append(indexPaths, idx.FilePath)
 		// Verify index file exists
-		if _, err := os.Stat(idx.FilePath); os.IsNotExist(err) {
+
+		if !idx.FilePath.Exists() {
 			t.Errorf("Index file %s does not exist", idx.FilePath)
 		}
 	}
@@ -189,7 +190,7 @@ func TestDropTablePlan_Execute_WithPrimaryKeyIndex(t *testing.T) {
 
 	// Verify all index files were deleted
 	for _, indexPath := range indexPaths {
-		if _, err := os.Stat(indexPath); !os.IsNotExist(err) {
+		if !indexPath.Exists() {
 			t.Errorf("Index file %s still exists after table drop", indexPath)
 		}
 	}
@@ -222,7 +223,7 @@ func TestDropTablePlan_Execute_WithMultipleIndexes(t *testing.T) {
 	}
 
 	// Store index file paths and names
-	var indexPaths []string
+	var indexPaths []primitives.Filepath
 	var indexNames []string
 	for _, idx := range indexes {
 		indexPaths = append(indexPaths, idx.FilePath)
@@ -257,7 +258,7 @@ func TestDropTablePlan_Execute_WithMultipleIndexes(t *testing.T) {
 
 	// Verify all index files were deleted
 	for _, indexPath := range indexPaths {
-		if _, err := os.Stat(indexPath); !os.IsNotExist(err) {
+		if indexPath.Exists() {
 			t.Errorf("Index file %s still exists after table drop", indexPath)
 		}
 	}
@@ -368,7 +369,7 @@ func TestDropTablePlan_Execute_WithIndexFilesMissing(t *testing.T) {
 	indexes, _ := ctx.CatalogManager().GetIndexesByTable(transCtx, tableID)
 
 	for _, idx := range indexes {
-		os.Remove(idx.FilePath)
+		idx.FilePath.Remove()
 	}
 
 	// Drop the table (should succeed even if index files don't exist)
