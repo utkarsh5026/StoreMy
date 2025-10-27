@@ -3,6 +3,7 @@ package database
 import (
 	"storemy/pkg/parser/statements"
 	"storemy/pkg/planner"
+	"storemy/pkg/primitives"
 	"storemy/pkg/tuple"
 	"storemy/pkg/types"
 	"testing"
@@ -594,7 +595,7 @@ func TestFormatSelect_ManyColumns(t *testing.T) {
 
 	tup := tuple.NewTuple(td)
 	for i := 0; i < numCols; i++ {
-		tup.SetField(i, types.NewIntField(int64(i)))
+		tup.SetField(primitives.ColumnID(i), types.NewIntField(int64(i)))
 	}
 
 	queryResult := &planner.SelectQueryResult{

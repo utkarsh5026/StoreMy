@@ -92,7 +92,7 @@ func TestDatabase_StatisticsAutoTracking(t *testing.T) {
 	}
 
 	// Verify statistics content
-	if stats.Cardinality != insertCount {
+	if stats.Cardinality != uint64(insertCount) {
 		t.Errorf("Expected cardinality %d, got %d", insertCount, stats.Cardinality)
 	}
 
@@ -222,7 +222,7 @@ func TestDatabase_StatisticsMultipleTables(t *testing.T) {
 	// Create multiple tables
 	tables := []struct {
 		name     string
-		rowCount int
+		rowCount uint64
 	}{
 		{"users", 50},
 		{"orders", 100},
@@ -235,7 +235,7 @@ func TestDatabase_StatisticsMultipleTables(t *testing.T) {
 		db.ExecuteQuery(createQuery)
 
 		// Insert data
-		for i := 1; i <= table.rowCount; i++ {
+		for i := 1; i <= int(table.rowCount); i++ {
 			insertQuery := fmt.Sprintf("INSERT INTO %s VALUES (%d, 'data%d')", table.name, i, i)
 			db.ExecuteQuery(insertQuery)
 		}
@@ -385,7 +385,7 @@ func TestDatabase_StatisticsAfterBulkInsert(t *testing.T) {
 		t.Fatalf("Failed to get statistics: %v", err)
 	}
 
-	if stats.Cardinality != bulkCount {
+	if stats.Cardinality != uint64(bulkCount) {
 		t.Errorf("Expected cardinality %d, got %d", bulkCount, stats.Cardinality)
 	}
 
