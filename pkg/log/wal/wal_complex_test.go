@@ -172,7 +172,7 @@ func TestConcurrentWrites(t *testing.T) {
 			}
 
 			for j := 0; j < opsPerGoroutine; j++ {
-				pageID := &mockPageID{tableID: routineID, pageNo: j}
+				pageID := &mockPageID{tableID: primitives.TableID(routineID), pageNo: primitives.PageNumber(j)}
 				_, err := wal.LogUpdate(tid, pageID, []byte(fmt.Sprintf("before_%d_%d", routineID, j)), []byte(fmt.Sprintf("after_%d_%d", routineID, j)))
 				if err != nil {
 					errors <- fmt.Errorf("goroutine %d: LogUpdate failed: %v", routineID, err)
@@ -221,7 +221,7 @@ func TestLargeTransaction(t *testing.T) {
 
 	numOps := 1000
 	for i := 0; i < numOps; i++ {
-		pageID := &mockPageID{tableID: 1, pageNo: i}
+		pageID := &mockPageID{tableID: 1, pageNo: primitives.PageNumber(i)}
 
 		switch i % 3 {
 		case 0:
@@ -326,7 +326,7 @@ func TestBufferOverflow(t *testing.T) {
 	// Write many small records to eventually overflow buffer
 	smallData := make([]byte, 20)
 	for i := 0; i < 20; i++ {
-		pageID := &mockPageID{tableID: 1, pageNo: i}
+		pageID := &mockPageID{tableID: 1, pageNo: primitives.PageNumber(i)}
 		_, err := wal.LogUpdate(tid, pageID, smallData, smallData)
 		if err != nil {
 			t.Fatalf("LogUpdate %d failed: %v", i, err)
@@ -354,7 +354,7 @@ func TestGetDirtyPages(t *testing.T) {
 	numPages := 5
 	pageIDs := make([]*mockPageID, numPages)
 	for i := 0; i < numPages; i++ {
-		pageIDs[i] = &mockPageID{tableID: 1, pageNo: i}
+		pageIDs[i] = &mockPageID{tableID: 1, pageNo: primitives.PageNumber(i)}
 		_, err := wal.LogUpdate(tid, pageIDs[i], []byte("before"), []byte("after"))
 		if err != nil {
 			t.Fatalf("LogUpdate %d failed: %v", i, err)
@@ -571,7 +571,7 @@ func TestStressTest(t *testing.T) {
 				}
 
 				for k := 0; k < opsPerTxn; k++ {
-					pageID := &mockPageID{tableID: routineID, pageNo: k}
+					pageID := &mockPageID{tableID: primitives.TableID(routineID), pageNo: primitives.PageNumber(k)}
 
 					switch k % 3 {
 					case 0:
@@ -645,7 +645,7 @@ func TestPersistenceAfterCommit(t *testing.T) {
 			t.Fatalf("LogBegin %d failed: %v", i, err)
 		}
 
-		pageID := &mockPageID{tableID: 1, pageNo: i}
+		pageID := &mockPageID{tableID: 1, pageNo: primitives.PageNumber(i)}
 		_, err = wal.LogUpdate(tid, pageID, []byte(fmt.Sprintf("before_%d", i)), []byte(fmt.Sprintf("after_%d", i)))
 		if err != nil {
 			t.Fatalf("LogUpdate %d failed: %v", i, err)

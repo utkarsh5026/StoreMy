@@ -10,20 +10,29 @@ import (
 
 // mockPageID is a simple implementation of PageID for testing
 type mockPageID struct {
-	tableID int
-	pageNo  int
+	tableID primitives.TableID
+	pageNo  primitives.PageNumber
 }
 
-func (m *mockPageID) GetTableID() int {
+func (m *mockPageID) GetTableID() primitives.TableID {
 	return m.tableID
 }
 
-func (m *mockPageID) PageNo() int {
+func (m *mockPageID) PageNo() primitives.PageNumber {
 	return m.pageNo
 }
 
-func (m *mockPageID) Serialize() []int {
-	return []int{m.tableID, m.pageNo}
+func (m *mockPageID) Serialize() []byte {
+	result := make([]byte, 16)
+	// Serialize TableID (8 bytes)
+	for i := 0; i < 8; i++ {
+		result[i] = byte(m.tableID >> (i * 8))
+	}
+	// Serialize PageNumber (8 bytes)
+	for i := 0; i < 8; i++ {
+		result[8+i] = byte(m.pageNo >> (i * 8))
+	}
+	return result
 }
 
 func (m *mockPageID) Equals(other primitives.PageID) bool {
@@ -37,8 +46,8 @@ func (m *mockPageID) String() string {
 	return ""
 }
 
-func (m *mockPageID) HashCode() int {
-	return m.tableID*1000 + m.pageNo
+func (m *mockPageID) HashCode() primitives.HashCode {
+	return primitives.HashCode(uint64(m.tableID)*1000 + uint64(m.pageNo))
 }
 
 // Helper function to create a temporary WAL for testing
@@ -183,7 +192,7 @@ func TestMultipleUpdates(t *testing.T) {
 	// Log multiple updates
 	lsns := make([]primitives.LSN, 3)
 	for i := 0; i < 3; i++ {
-		pageID := &mockPageID{tableID: 1, pageNo: 100 + i}
+		pageID := &mockPageID{tableID: 1, pageNo: primitives.PageNumber(100 + i)}
 		lsn, err := wal.LogUpdate(tid, pageID, []byte("before"), []byte("after"))
 		if err != nil {
 			t.Fatalf("LogUpdate %d failed: %v", i, err)
@@ -276,7 +285,7 @@ func TestBufferFlushing(t *testing.T) {
 
 	// Log many updates to force buffer flush
 	for i := 0; i < 10; i++ {
-		pageID := &mockPageID{tableID: 1, pageNo: i}
+		pageID := &mockPageID{tableID: 1, pageNo: primitives.PageNumber(i)}
 		beforeImage := make([]byte, 10)
 		afterImage := make([]byte, 10)
 
@@ -596,7 +605,7 @@ func TestMultipleInsertsAndDeletes(t *testing.T) {
 	// Log multiple inserts
 	insertLSNs := make([]primitives.LSN, 3)
 	for i := 0; i < 3; i++ {
-		pageID := &mockPageID{tableID: 1, pageNo: 100 + i}
+		pageID := &mockPageID{tableID: 1, pageNo: primitives.PageNumber(100 + i)}
 		lsn, err := wal.LogInsert(tid, pageID, []byte(fmt.Sprintf("insert %d", i)))
 		if err != nil {
 			t.Fatalf("LogInsert %d failed: %v", i, err)
@@ -607,7 +616,7 @@ func TestMultipleInsertsAndDeletes(t *testing.T) {
 	// Log multiple deletes
 	deleteLSNs := make([]primitives.LSN, 3)
 	for i := 0; i < 3; i++ {
-		pageID := &mockPageID{tableID: 1, pageNo: 200 + i}
+		pageID := &mockPageID{tableID: 1, pageNo: primitives.PageNumber(200 + i)}
 		lsn, err := wal.LogDelete(tid, pageID, []byte(fmt.Sprintf("delete %d", i)))
 		if err != nil {
 			t.Fatalf("LogDelete %d failed: %v", i, err)
@@ -848,7 +857,7 @@ func TestCloseFlushesBuffer(t *testing.T) {
 
 	// Log some updates
 	for i := 0; i < 5; i++ {
-		pageID := &mockPageID{tableID: 1, pageNo: i}
+		pageID := &mockPageID{tableID: 1, pageNo: primitives.PageNumber(i)}
 		_, err = wal.LogUpdate(tid, pageID, []byte("before"), []byte("after"))
 		if err != nil {
 			t.Fatalf("LogUpdate %d failed: %v", i, err)
@@ -938,7 +947,7 @@ func TestMultipleCommits(t *testing.T) {
 			t.Fatalf("LogBegin %d failed: %v", i, err)
 		}
 
-		pageID := &mockPageID{tableID: 1, pageNo: i}
+		pageID := &mockPageID{tableID: 1, pageNo: primitives.PageNumber(i)}
 		_, err = wal.LogUpdate(tid, pageID, []byte("before"), []byte("after"))
 		if err != nil {
 			t.Fatalf("LogUpdate %d failed: %v", i, err)
