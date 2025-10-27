@@ -29,11 +29,11 @@ type catalogAdapter struct {
 	cm *catalogmanager.CatalogManager
 }
 
-func (ca *catalogAdapter) GetIndexesByTable(tx *transaction.TransactionContext, tableID primitives.TableID) ([]*systemtable.IndexMetadata, error) {
+func (ca *catalogAdapter) GetIndexesByTable(tx *transaction.TransactionContext, tableID primitives.FileID) ([]*systemtable.IndexMetadata, error) {
 	return ca.cm.GetIndexesByTable(tx, tableID)
 }
 
-func (ca *catalogAdapter) GetTableSchema(tableID primitives.TableID) (*schema.Schema, error) {
+func (ca *catalogAdapter) GetTableSchema(tableID primitives.FileID) (*schema.Schema, error) {
 	return ca.cm.GetTableSchema(nil, tableID)
 }
 
