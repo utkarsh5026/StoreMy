@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/binary"
 	"fmt"
+	"math"
 	"slices"
 	"storemy/pkg/primitives"
 	"storemy/pkg/storage/index"
@@ -14,15 +15,16 @@ import (
 )
 
 const (
-	// NoOverFlowPage indicates that a hash page has no overflow page linked
-	NoOverFlowPage = -1
+	// NoOverFlowPage indicates that a hash page has no overflow page linked.
+	// Uses math.MaxUint64 as a sentinel value since PageNumber is uint64.
+	NoOverFlowPage = math.MaxUint64
 
 	// hashHeaderSize defines the size of the hash page header in bytes
 	// Layout:
-	//   - 4 bytes: bucket number (int32)
+	//   - 8 bytes: bucket number (uint64)
 	//   - 4 bytes: number of entries (int32)
-	//   - 4 bytes: overflow page pointer (int32, -1 if none)
-	hashHeaderSize = 12
+	//   - 8 bytes: overflow page pointer (uint64, MaxUint64 if none)
+	hashHeaderSize = 20
 
 	// maxHashEntriesPerPage is the maximum number of hash entries that can fit in a single page.
 	// Conservative estimate for 4KB pages to account for variable-length keys.
@@ -35,7 +37,7 @@ const (
 // when the primary bucket becomes full.
 //
 // Layout:
-//   - Header (12 bytes): bucket number, entry count, overflow pointer
+//   - Header (20 bytes): bucket number (8 bytes), entry count (4 bytes), overflow pointer (8 bytes)
 //   - Entries: Variable-length serialized index.IndexEntry records
 //   - Padding: Zeroes to fill page to PageSize
 //
@@ -45,9 +47,9 @@ const (
 //   - Dirty flag tracks modifications within transaction
 type HashPage struct {
 	pageID       *page.PageDescriptor      // Unique identifier for this page
-	bucketNum    int                       // Hash bucket number this page belongs to
+	bucketNum    primitives.PageNumber     // Hash bucket number this page belongs to
 	numEntries   int                       // Current number of entries stored
-	overflowPage int                       // Page number of overflow page (-1 if none)
+	overflowPage primitives.PageNumber     // Page number of overflow page (-1 if none)
 	keyType      types.Type                // Type of keys stored (IntType, StringType, etc.)
 	entries      []*index.IndexEntry       // Actual hash entries in this page
 	isDirty      bool                      // True if page modified since load
@@ -64,7 +66,7 @@ type HashPage struct {
 //   - keyType: Type of keys this page will store
 //
 // Returns a new HashPage marked as dirty (needs to be written).
-func NewHashPage(pageID *page.PageDescriptor, bucketNum int, keyType types.Type) *HashPage {
+func NewHashPage(pageID *page.PageDescriptor, bucketNum primitives.PageNumber, keyType types.Type) *HashPage {
 	return &HashPage{
 		pageID:       pageID,
 		bucketNum:    bucketNum,
@@ -78,7 +80,7 @@ func NewHashPage(pageID *page.PageDescriptor, bucketNum int, keyType types.Type)
 
 // GetID returns the page identifier.
 // Implements page.Page interface.
-func (hp *HashPage) GetID() primitives.PageID {
+func (hp *HashPage) GetID() *page.PageDescriptor {
 	return hp.pageID
 }
 
@@ -117,10 +119,10 @@ func (hp *HashPage) MarkDirty(dirty bool, tid *primitives.TransactionID) {
 // Implements page.Page interface.
 //
 // Format:
-//  1. Header (12 bytes):
-//     - Bucket number (4 bytes, big-endian int32)
+//  1. Header (20 bytes):
+//     - Bucket number (8 bytes, big-endian uint64)
 //     - Entry count (4 bytes, big-endian int32)
-//     - Overflow page (4 bytes, big-endian int32)
+//     - Overflow page (8 bytes, big-endian uint64, MaxUint64 if none)
 //  2. Entries (variable length):
 //     - Each entry serialized with key + RID
 //  3. Padding (zeroes to PageSize)
@@ -129,17 +131,16 @@ func (hp *HashPage) MarkDirty(dirty bool, tid *primitives.TransactionID) {
 func (hp *HashPage) GetPageData() []byte {
 	buf := new(bytes.Buffer)
 
-	binary.Write(buf, binary.BigEndian, int32(hp.bucketNum))
+	binary.Write(buf, binary.BigEndian, hp.bucketNum)
 	binary.Write(buf, binary.BigEndian, int32(hp.numEntries))
-	binary.Write(buf, binary.BigEndian, int32(hp.overflowPage))
+	binary.Write(buf, binary.BigEndian, hp.overflowPage)
 
 	for _, entry := range hp.entries {
-		if err := hp.serializeEntry(buf, entry); err != nil {
+		if err := entry.Serialize(buf); err != nil {
 			panic(fmt.Sprintf("failed to serialize entry: %v", err))
 		}
 	}
 
-	// Pad to page size
 	data := buf.Bytes()
 	if len(data) < page.PageSize {
 		padding := make([]byte, page.PageSize-len(data))
@@ -184,7 +185,7 @@ func (hp *HashPage) GetNumEntries() int {
 }
 
 // GetBucketNum returns the hash bucket number this page belongs to.
-func (hp *HashPage) GetBucketNum() int {
+func (hp *HashPage) GetBucketNum() primitives.PageNumber {
 	return hp.bucketNum
 }
 
@@ -192,8 +193,8 @@ func (hp *HashPage) GetBucketNum() int {
 //
 // Returns:
 //   - Page number of overflow page (>= 0)
-//   - NoOverFlowPage (-1) if no overflow page exists
-func (hp *HashPage) GetOverflowPageNum() int {
+//   - NoOverFlowPage (math.MaxUint64) if no overflow page exists
+func (hp *HashPage) GetOverflowPageNum() primitives.PageNumber {
 	return hp.overflowPage
 }
 
@@ -210,7 +211,7 @@ func (hp *HashPage) GetPageNo() primitives.PageNumber {
 //
 // Parameters:
 //   - pageNum: Page number of the overflow page to link
-func (hp *HashPage) SetOverflowPage(pageNum int) {
+func (hp *HashPage) SetOverflowPage(pageNum primitives.PageNumber) {
 	hp.overflowPage = pageNum
 }
 

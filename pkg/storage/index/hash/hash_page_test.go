@@ -2,75 +2,75 @@ package hash
 
 import (
 	"storemy/pkg/primitives"
-	"storemy/pkg/storage/heap"
 	"storemy/pkg/storage/index"
+	"storemy/pkg/storage/page"
 	"storemy/pkg/tuple"
 	"storemy/pkg/types"
 	"testing"
 )
 
 func TestNewHashPage(t *testing.T) {
-	pageID := NewHashPageID(1, 0)
-	page := NewHashPage(pageID, 5, types.IntType)
+	pageID := page.NewPageDescriptor(1, 0)
+	hp := NewHashPage(pageID, 5, types.IntType)
 
-	if page.GetBucketNum() != 5 {
-		t.Errorf("Expected bucket 5, got %d", page.GetBucketNum())
+	if hp.GetBucketNum() != 5 {
+		t.Errorf("Expected bucket 5, got %d", hp.GetBucketNum())
 	}
-	if page.GetNumEntries() != 0 {
-		t.Errorf("Expected 0 entries, got %d", page.GetNumEntries())
+	if hp.GetNumEntries() != 0 {
+		t.Errorf("Expected 0 entries, got %d", hp.GetNumEntries())
 	}
-	if !page.HasNoOverflowPage() {
+	if !hp.HasNoOverflowPage() {
 		t.Error("New page should have no overflow page")
 	}
-	if page.GetOverflowPageNum() != NoOverFlowPage {
-		t.Errorf("Expected overflow page %d, got %d", NoOverFlowPage, page.GetOverflowPageNum())
+	if hp.GetOverflowPageNum() != NoOverFlowPage {
+		t.Errorf("Expected overflow page got %v", hp.GetOverflowPageNum())
 	}
-	if page.IsFull() {
+	if hp.IsFull() {
 		t.Error("Empty page should not be full")
 	}
-	if page.GetPageNo() != 0 {
-		t.Errorf("Expected page number 0, got %d", page.GetPageNo())
+	if hp.GetPageNo() != 0 {
+		t.Errorf("Expected page number 0, got %d", hp.GetPageNo())
 	}
 }
 
 func TestHashPageAddEntry(t *testing.T) {
-	pageID := NewHashPageID(1, 0)
-	page := NewHashPage(pageID, 0, types.IntType)
+	pageID := page.NewPageDescriptor(1, 0)
+	hp := NewHashPage(pageID, 0, types.IntType)
 
 	// Create test entries
 	entry1 := &index.IndexEntry{
 		Key: types.NewIntField(100),
 		RID: &tuple.TupleRecordID{
-			PageID:   heap.NewHeapPageID(1, 5),
+			PageID:   page.NewPageDescriptor(1, 5),
 			TupleNum: 10,
 		},
 	}
 	entry2 := &index.IndexEntry{
 		Key: types.NewIntField(200),
 		RID: &tuple.TupleRecordID{
-			PageID:   heap.NewHeapPageID(1, 6),
+			PageID:   page.NewPageDescriptor(1, 6),
 			TupleNum: 15,
 		},
 	}
 
 	// Add first entry
-	if err := page.AddEntry(entry1); err != nil {
+	if err := hp.AddEntry(entry1); err != nil {
 		t.Fatalf("Failed to add entry1: %v", err)
 	}
-	if page.GetNumEntries() != 1 {
-		t.Errorf("Expected 1 entry, got %d", page.GetNumEntries())
+	if hp.GetNumEntries() != 1 {
+		t.Errorf("Expected 1 entry, got %d", hp.GetNumEntries())
 	}
 
 	// Add second entry
-	if err := page.AddEntry(entry2); err != nil {
+	if err := hp.AddEntry(entry2); err != nil {
 		t.Fatalf("Failed to add entry2: %v", err)
 	}
-	if page.GetNumEntries() != 2 {
-		t.Errorf("Expected 2 entries, got %d", page.GetNumEntries())
+	if hp.GetNumEntries() != 2 {
+		t.Errorf("Expected 2 entries, got %d", hp.GetNumEntries())
 	}
 
 	// Verify entries
-	entries := page.GetEntries()
+	entries := hp.GetEntries()
 	if len(entries) != 2 {
 		t.Errorf("Expected 2 entries from GetEntries, got %d", len(entries))
 	}
@@ -83,45 +83,45 @@ func TestHashPageAddEntry(t *testing.T) {
 }
 
 func TestHashPageRemoveEntry(t *testing.T) {
-	pageID := NewHashPageID(1, 0)
-	page := NewHashPage(pageID, 0, types.IntType)
+	pageID := page.NewPageDescriptor(1, 0)
+	hp := NewHashPage(pageID, 0, types.IntType)
 
 	entry1 := &index.IndexEntry{
 		Key: types.NewIntField(100),
 		RID: &tuple.TupleRecordID{
-			PageID:   heap.NewHeapPageID(1, 5),
+			PageID:   page.NewPageDescriptor(1, 5),
 			TupleNum: 10,
 		},
 	}
 	entry2 := &index.IndexEntry{
 		Key: types.NewIntField(200),
 		RID: &tuple.TupleRecordID{
-			PageID:   heap.NewHeapPageID(1, 6),
+			PageID:   page.NewPageDescriptor(1, 6),
 			TupleNum: 15,
 		},
 	}
 	entry3 := &index.IndexEntry{
 		Key: types.NewIntField(300),
 		RID: &tuple.TupleRecordID{
-			PageID:   heap.NewHeapPageID(1, 7),
+			PageID:   page.NewPageDescriptor(1, 7),
 			TupleNum: 20,
 		},
 	}
 
-	page.AddEntry(entry1)
-	page.AddEntry(entry2)
-	page.AddEntry(entry3)
+	hp.AddEntry(entry1)
+	hp.AddEntry(entry2)
+	hp.AddEntry(entry3)
 
 	// Remove middle entry
-	if err := page.RemoveEntry(entry2); err != nil {
+	if err := hp.RemoveEntry(entry2); err != nil {
 		t.Fatalf("Failed to remove entry2: %v", err)
 	}
-	if page.GetNumEntries() != 2 {
-		t.Errorf("Expected 2 entries after removal, got %d", page.GetNumEntries())
+	if hp.GetNumEntries() != 2 {
+		t.Errorf("Expected 2 entries after removal, got %d", hp.GetNumEntries())
 	}
 
 	// Verify remaining entries
-	entries := page.GetEntries()
+	entries := hp.GetEntries()
 	if len(entries) != 2 {
 		t.Errorf("Expected 2 entries, got %d", len(entries))
 	}
@@ -136,18 +136,18 @@ func TestHashPageRemoveEntry(t *testing.T) {
 	nonExistent := &index.IndexEntry{
 		Key: types.NewIntField(999),
 		RID: &tuple.TupleRecordID{
-			PageID:   heap.NewHeapPageID(1, 99),
+			PageID:   page.NewPageDescriptor(1, 99),
 			TupleNum: 99,
 		},
 	}
-	if err := page.RemoveEntry(nonExistent); err == nil {
+	if err := hp.RemoveEntry(nonExistent); err == nil {
 		t.Error("Should error when removing non-existent entry")
 	}
 }
 
 func TestHashPageFindEntries(t *testing.T) {
-	pageID := NewHashPageID(1, 0)
-	page := NewHashPage(pageID, 0, types.IntType)
+	pageID := page.NewPageDescriptor(1, 0)
+	hp := NewHashPage(pageID, 0, types.IntType)
 
 	key := types.NewIntField(100)
 
@@ -155,31 +155,31 @@ func TestHashPageFindEntries(t *testing.T) {
 	entry1 := &index.IndexEntry{
 		Key: key,
 		RID: &tuple.TupleRecordID{
-			PageID:   heap.NewHeapPageID(1, 5),
+			PageID:   page.NewPageDescriptor(1, 5),
 			TupleNum: 10,
 		},
 	}
 	entry2 := &index.IndexEntry{
 		Key: key,
 		RID: &tuple.TupleRecordID{
-			PageID:   heap.NewHeapPageID(1, 6),
+			PageID:   page.NewPageDescriptor(1, 6),
 			TupleNum: 15,
 		},
 	}
 	entry3 := &index.IndexEntry{
 		Key: types.NewIntField(200), // Different key
 		RID: &tuple.TupleRecordID{
-			PageID:   heap.NewHeapPageID(1, 7),
+			PageID:   page.NewPageDescriptor(1, 7),
 			TupleNum: 20,
 		},
 	}
 
-	page.AddEntry(entry1)
-	page.AddEntry(entry2)
-	page.AddEntry(entry3)
+	hp.AddEntry(entry1)
+	hp.AddEntry(entry2)
+	hp.AddEntry(entry3)
 
 	// Find entries with key 100
-	results := page.FindEntries(key)
+	results := hp.FindEntries(key)
 	if len(results) != 2 {
 		t.Errorf("Expected 2 results for key 100, got %d", len(results))
 	}
@@ -191,102 +191,102 @@ func TestHashPageFindEntries(t *testing.T) {
 	}
 
 	// Find entries with key 200
-	results = page.FindEntries(types.NewIntField(200))
+	results = hp.FindEntries(types.NewIntField(200))
 	if len(results) != 1 {
 		t.Errorf("Expected 1 result for key 200, got %d", len(results))
 	}
 
 	// Find entries with non-existent key
-	results = page.FindEntries(types.NewIntField(999))
+	results = hp.FindEntries(types.NewIntField(999))
 	if len(results) != 0 {
 		t.Errorf("Expected 0 results for non-existent key, got %d", len(results))
 	}
 }
 
 func TestHashPageOverflow(t *testing.T) {
-	pageID := NewHashPageID(1, 0)
-	page := NewHashPage(pageID, 0, types.IntType)
+	pageID := page.NewPageDescriptor(1, 0)
+	hp := NewHashPage(pageID, 0, types.IntType)
 
 	// Test setting overflow page
-	page.SetOverflowPage(42)
-	if page.HasNoOverflowPage() {
-		t.Error("Page should have overflow page after setting")
+	hp.SetOverflowPage(42)
+	if hp.HasNoOverflowPage() {
+		t.Error("Page should have overflow hp after setting")
 	}
-	if page.GetOverflowPageNum() != 42 {
-		t.Errorf("Expected overflow page 42, got %d", page.GetOverflowPageNum())
+	if hp.GetOverflowPageNum() != 42 {
+		t.Errorf("Expected overflow hp 42, got %d", hp.GetOverflowPageNum())
 	}
 
 	// Reset to no overflow
-	page.SetOverflowPage(NoOverFlowPage)
-	if !page.HasNoOverflowPage() {
+	hp.SetOverflowPage(NoOverFlowPage)
+	if !hp.HasNoOverflowPage() {
 		t.Error("Page should have no overflow page after reset")
 	}
 }
 
 func TestHashPageFullCapacity(t *testing.T) {
-	pageID := NewHashPageID(1, 0)
-	page := NewHashPage(pageID, 0, types.IntType)
+	pageID := page.NewPageDescriptor(1, 0)
+	hp := NewHashPage(pageID, 0, types.IntType)
 
 	// Add entries up to capacity
 	for i := 0; i < maxHashEntriesPerPage; i++ {
 		entry := &index.IndexEntry{
 			Key: types.NewIntField(int64(i)),
 			RID: &tuple.TupleRecordID{
-				PageID:   heap.NewHeapPageID(1, 0),
-				TupleNum: i,
+				PageID:   page.NewPageDescriptor(1, 0),
+				TupleNum: primitives.SlotID(i),
 			},
 		}
-		if err := page.AddEntry(entry); err != nil {
+		if err := hp.AddEntry(entry); err != nil {
 			t.Fatalf("Failed to add entry %d: %v", i, err)
 		}
 	}
 
-	if !page.IsFull() {
+	if !hp.IsFull() {
 		t.Error("Page should be full after adding max entries")
 	}
-	if page.GetNumEntries() != maxHashEntriesPerPage {
-		t.Errorf("Expected %d entries, got %d", maxHashEntriesPerPage, page.GetNumEntries())
+	if hp.GetNumEntries() != maxHashEntriesPerPage {
+		t.Errorf("Expected %d entries, got %d", maxHashEntriesPerPage, hp.GetNumEntries())
 	}
 
 	// Try to add one more entry
 	extraEntry := &index.IndexEntry{
 		Key: types.NewIntField(9999),
 		RID: &tuple.TupleRecordID{
-			PageID:   heap.NewHeapPageID(1, 0),
+			PageID:   page.NewPageDescriptor(1, 0),
 			TupleNum: 9999,
 		},
 	}
-	if err := page.AddEntry(extraEntry); err == nil {
+	if err := hp.AddEntry(extraEntry); err == nil {
 		t.Error("Should error when adding to full page")
 	}
 }
 
 func TestHashPageSerialization(t *testing.T) {
-	pageID := NewHashPageID(2, 10)
-	page := NewHashPage(pageID, 5, types.IntType)
-	page.SetOverflowPage(15)
+	pageID := page.NewPageDescriptor(2, 10)
+	hp := NewHashPage(pageID, 5, types.IntType)
+	hp.SetOverflowPage(15)
 
 	// Add entries
 	entry1 := &index.IndexEntry{
 		Key: types.NewIntField(100),
 		RID: &tuple.TupleRecordID{
-			PageID:   heap.NewHeapPageID(2, 5),
+			PageID:   page.NewPageDescriptor(2, 5),
 			TupleNum: 10,
 		},
 	}
 	entry2 := &index.IndexEntry{
 		Key: types.NewIntField(200),
 		RID: &tuple.TupleRecordID{
-			PageID:   heap.NewHeapPageID(2, 6),
+			PageID:   page.NewPageDescriptor(2, 6),
 			TupleNum: 15,
 		},
 	}
 
-	page.AddEntry(entry1)
-	page.AddEntry(entry2)
+	hp.AddEntry(entry1)
+	hp.AddEntry(entry2)
 
 	// Serialize
-	data := page.GetPageData()
+	data := hp.GetPageData()
 	if len(data) != 4096 {
 		t.Errorf("Expected page data size 4096, got %d", len(data))
 	}
@@ -331,29 +331,29 @@ func TestHashPageSerialization(t *testing.T) {
 }
 
 func TestHashPageSerializationWithStringKeys(t *testing.T) {
-	pageID := NewHashPageID(1, 0)
-	page := NewHashPage(pageID, 3, types.StringType)
+	pageID := page.NewPageDescriptor(1, 0)
+	hp := NewHashPage(pageID, 3, types.StringType)
 
 	entry1 := &index.IndexEntry{
 		Key: types.NewStringField("apple", types.StringMaxSize),
 		RID: &tuple.TupleRecordID{
-			PageID:   heap.NewHeapPageID(1, 10),
+			PageID:   page.NewPageDescriptor(1, 10),
 			TupleNum: 5,
 		},
 	}
 	entry2 := &index.IndexEntry{
 		Key: types.NewStringField("banana", types.StringMaxSize),
 		RID: &tuple.TupleRecordID{
-			PageID:   heap.NewHeapPageID(1, 11),
+			PageID:   page.NewPageDescriptor(1, 11),
 			TupleNum: 7,
 		},
 	}
 
-	page.AddEntry(entry1)
-	page.AddEntry(entry2)
+	hp.AddEntry(entry1)
+	hp.AddEntry(entry2)
 
 	// Serialize
-	data := page.GetPageData()
+	data := hp.GetPageData()
 
 	// Deserialize
 	deserializedPage, err := DeserializeHashPage(data, pageID)
@@ -375,66 +375,66 @@ func TestHashPageSerializationWithStringKeys(t *testing.T) {
 }
 
 func TestHashPageDirtyTracking(t *testing.T) {
-	pageID := NewHashPageID(1, 0)
-	page := NewHashPage(pageID, 0, types.IntType)
+	pageID := page.NewPageDescriptor(1, 0)
+	hp := NewHashPage(pageID, 0, types.IntType)
 
 	// New page has isDirty=true but dirtyTxn=nil, so IsDirty() returns nil
 	// This is expected behavior - page is marked dirty but no transaction owns it yet
-	if page.IsDirty() != nil {
-		t.Error("New page IsDirty should return nil (no transaction yet)")
+	if hp.IsDirty() != nil {
+		t.Error("New hp IsDirty should return nil (no transaction yet)")
 	}
 
 	// Mark clean
-	page.MarkDirty(false, nil)
-	if page.IsDirty() != nil {
+	hp.MarkDirty(false, nil)
+	if hp.IsDirty() != nil {
 		t.Error("Page should be clean after marking not dirty")
 	}
 
 	// Mark dirty with transaction
 	txnID := primitives.NewTransactionIDFromValue(123)
-	page.MarkDirty(true, txnID)
+	hp.MarkDirty(true, txnID)
 
-	if page.IsDirty() == nil {
+	if hp.IsDirty() == nil {
 		t.Error("Page should be dirty after marking")
 	}
-	if page.IsDirty().ID() != 123 {
-		t.Errorf("Expected txn ID %d, got %d", 123, page.IsDirty().ID())
+	if hp.IsDirty().ID() != 123 {
+		t.Errorf("Expected txn ID %d, got %d", 123, hp.IsDirty().ID())
 	}
 
 	// Verify before image was captured
-	if page.beforeImage == nil {
+	if hp.beforeImage == nil {
 		t.Error("Before image should be set when marking dirty")
 	}
 }
 
 func TestHashPageBeforeImage(t *testing.T) {
-	pageID := NewHashPageID(1, 0)
-	page := NewHashPage(pageID, 0, types.IntType)
+	pageID := page.NewPageDescriptor(1, 0)
+	hp := NewHashPage(pageID, 0, types.IntType)
 
 	// Mark clean first
-	page.MarkDirty(false, nil)
+	hp.MarkDirty(false, nil)
 
 	// Initially no before image
-	if page.GetBeforeImage() != nil {
+	if hp.GetBeforeImage() != nil {
 		t.Error("Should have no before image initially")
 	}
 
 	// Mark dirty to capture before image
 	txnID := primitives.NewTransactionIDFromValue(123)
-	page.MarkDirty(true, txnID)
+	hp.MarkDirty(true, txnID)
 
 	// Add an entry
 	entry := &index.IndexEntry{
 		Key: types.NewIntField(100),
 		RID: &tuple.TupleRecordID{
-			PageID:   heap.NewHeapPageID(1, 0),
+			PageID:   page.NewPageDescriptor(1, 0),
 			TupleNum: 0,
 		},
 	}
-	page.AddEntry(entry)
+	hp.AddEntry(entry)
 
 	// Get before image
-	beforePage := page.GetBeforeImage()
+	beforePage := hp.GetBeforeImage()
 	if beforePage == nil {
 		t.Fatal("Before image should be retrievable")
 	}
@@ -443,30 +443,30 @@ func TestHashPageBeforeImage(t *testing.T) {
 	if beforeHash.GetNumEntries() != 0 {
 		t.Error("Before image should have 0 entries")
 	}
-	if page.GetNumEntries() != 1 {
+	if hp.GetNumEntries() != 1 {
 		t.Error("Current page should have 1 entry")
 	}
 }
 
 func TestHashPageSetBeforeImage(t *testing.T) {
-	pageID := NewHashPageID(1, 0)
-	page := NewHashPage(pageID, 0, types.IntType)
+	pageID := page.NewPageDescriptor(1, 0)
+	hp := NewHashPage(pageID, 0, types.IntType)
 
 	// Mark clean
-	page.MarkDirty(false, nil)
+	hp.MarkDirty(false, nil)
 
 	entry := &index.IndexEntry{
 		Key: types.NewIntField(100),
 		RID: &tuple.TupleRecordID{
-			PageID:   heap.NewHeapPageID(1, 0),
+			PageID:   page.NewPageDescriptor(1, 0),
 			TupleNum: 0,
 		},
 	}
-	page.AddEntry(entry)
+	hp.AddEntry(entry)
 
 	// Manually set before image
-	page.SetBeforeImage()
-	if page.beforeImage == nil {
+	hp.SetBeforeImage()
+	if hp.beforeImage == nil {
 		t.Error("Before image should be set")
 	}
 
@@ -474,28 +474,28 @@ func TestHashPageSetBeforeImage(t *testing.T) {
 	entry2 := &index.IndexEntry{
 		Key: types.NewIntField(200),
 		RID: &tuple.TupleRecordID{
-			PageID:   heap.NewHeapPageID(1, 0),
+			PageID:   page.NewPageDescriptor(1, 0),
 			TupleNum: 1,
 		},
 	}
-	page.AddEntry(entry2)
+	hp.AddEntry(entry2)
 
 	// Before image should have 1 entry, current has 2
-	beforePage := page.GetBeforeImage()
+	beforePage := hp.GetBeforeImage()
 	beforeHash := beforePage.(*HashPage)
 	if beforeHash.GetNumEntries() != 1 {
 		t.Errorf("Before image should have 1 entry, got %d", beforeHash.GetNumEntries())
 	}
-	if page.GetNumEntries() != 2 {
-		t.Errorf("Current page should have 2 entries, got %d", page.GetNumEntries())
+	if hp.GetNumEntries() != 2 {
+		t.Errorf("Current page should have 2 entries, got %d", hp.GetNumEntries())
 	}
 }
 
 func TestHashPageGetID(t *testing.T) {
-	pageID := NewHashPageID(5, 10)
-	page := NewHashPage(pageID, 0, types.IntType)
+	pageID := page.NewPageDescriptor(5, 10)
+	hp := NewHashPage(pageID, 0, types.IntType)
 
-	retrievedID := page.GetID()
+	retrievedID := hp.GetID()
 	if retrievedID.GetTableID() != 5 {
 		t.Errorf("Expected table ID 5, got %d", retrievedID.GetTableID())
 	}
@@ -505,11 +505,11 @@ func TestHashPageGetID(t *testing.T) {
 }
 
 func TestHashPageEmptySerialization(t *testing.T) {
-	pageID := NewHashPageID(1, 0)
-	page := NewHashPage(pageID, 7, types.IntType)
+	pageID := page.NewPageDescriptor(1, 0)
+	hp := NewHashPage(pageID, 7, types.IntType)
 
 	// Serialize empty page
-	data := page.GetPageData()
+	data := hp.GetPageData()
 
 	// Deserialize
 	deserializedPage, err := DeserializeHashPage(data, pageID)
@@ -529,7 +529,7 @@ func TestHashPageEmptySerialization(t *testing.T) {
 }
 
 func TestHashPageDeserializationInvalidData(t *testing.T) {
-	pageID := NewHashPageID(1, 0)
+	pageID := page.NewPageDescriptor(1, 0)
 
 	// Test with too short data
 	shortData := make([]byte, 5)
@@ -541,19 +541,19 @@ func TestHashPageDeserializationInvalidData(t *testing.T) {
 
 func TestHashPageWithMultipleKeyTypes(t *testing.T) {
 	// Test with Float keys
-	pageID := NewHashPageID(1, 0)
-	page := NewHashPage(pageID, 0, types.FloatType)
+	pageID := page.NewPageDescriptor(1, 0)
+	hp := NewHashPage(pageID, 0, types.FloatType)
 
 	entry := &index.IndexEntry{
 		Key: types.NewFloat64Field(3.14),
 		RID: &tuple.TupleRecordID{
-			PageID:   heap.NewHeapPageID(1, 0),
+			PageID:   page.NewPageDescriptor(1, 0),
 			TupleNum: 0,
 		},
 	}
-	page.AddEntry(entry)
+	hp.AddEntry(entry)
 
-	data := page.GetPageData()
+	data := hp.GetPageData()
 	deserializedPage, err := DeserializeHashPage(data, pageID)
 	if err != nil {
 		t.Fatalf("Failed to deserialize page with float keys: %v", err)

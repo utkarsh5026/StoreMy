@@ -25,11 +25,12 @@ const (
 //   - Pages are cached in memory for performance
 type HashFile struct {
 	*page.BaseFile
-	keyType              types.Type
-	numPages, numBuckets int
-	indexID              int         // Override index ID (set when file is associated with an index)
-	mutex                sync.RWMutex
-	bucketPageID         map[int]int // Maps bucket number to primary page number
+	keyType      types.Type
+	numPages     primitives.PageNumber
+	numBuckets   int
+	indexID      primitives.TableID // Override index ID (set when file is associated with an index)
+	mutex        sync.RWMutex
+	bucketPageID map[int]primitives.PageNumber // Maps bucket number to primary page number
 }
 
 // NewHashFile creates or opens a hash index file at the specified path.
@@ -44,16 +45,16 @@ type HashFile struct {
 // Returns:
 //   - *HashFile: The opened or created hash file
 //   - error: Error if file operations fail or invalid parameters provided
-func NewHashFile(filename string, keyType types.Type, numBuckets int) (*HashFile, error) {
-	if filename == "" {
-		return nil, fmt.Errorf("filename cannot be empty")
+func NewHashFile(filePath primitives.Filepath, keyType types.Type, numBuckets int) (*HashFile, error) {
+	if filePath == "" {
+		return nil, fmt.Errorf("filePath cannot be empty")
 	}
 
 	if numBuckets <= 0 {
 		numBuckets = DefaultBuckets
 	}
 
-	baseFile, err := page.NewBaseFile(filename)
+	baseFile, err := page.NewBaseFile(filePath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create base file: %w", err)
 	}
@@ -69,13 +70,13 @@ func NewHashFile(filename string, keyType types.Type, numBuckets int) (*HashFile
 		keyType:      keyType,
 		numPages:     numPages,
 		numBuckets:   numBuckets,
-		bucketPageID: make(map[int]int),
+		bucketPageID: make(map[int]primitives.PageNumber),
 	}
 
 	// Initialize bucket-to-page mapping
 	// For now, bucket i is stored in page i (one bucket per page initially)
 	for i := 0; i < numBuckets; i++ {
-		hf.bucketPageID[i] = i
+		hf.bucketPageID[i] = primitives.PageNumber(i)
 	}
 
 	return hf, nil
@@ -90,7 +91,7 @@ func (hf *HashFile) GetKeyType() types.Type {
 // NumPages returns the total number of pages in this file.
 // This includes both primary bucket pages and overflow pages.
 // Thread-safe with read lock.
-func (hf *HashFile) NumPages() int {
+func (hf *HashFile) NumPages() primitives.PageNumber {
 	hf.mutex.RLock()
 	defer hf.mutex.RUnlock()
 	return hf.numPages
@@ -108,7 +109,7 @@ func (hf *HashFile) GetNumBuckets() int {
 // SetIndexID sets the index ID for this hash file.
 // This should be called when the file is associated with a specific index.
 // The indexID overrides the BaseFile's ID for page validation.
-func (hf *HashFile) SetIndexID(indexID int) {
+func (hf *HashFile) SetIndexID(indexID primitives.TableID) {
 	hf.mutex.Lock()
 	defer hf.mutex.Unlock()
 	hf.indexID = indexID
@@ -116,7 +117,7 @@ func (hf *HashFile) SetIndexID(indexID int) {
 
 // GetIndexID returns the index ID for this hash file.
 // Returns 0 if no index ID has been set.
-func (hf *HashFile) GetIndexID() int {
+func (hf *HashFile) GetIndexID() primitives.TableID {
 	hf.mutex.RLock()
 	defer hf.mutex.RUnlock()
 	return hf.indexID
@@ -125,7 +126,7 @@ func (hf *HashFile) GetIndexID() int {
 // GetID implements the DbFile interface by returning the index ID if set,
 // otherwise returns the BaseFile's ID (hash of filename).
 // This allows the file to be registered with a specific index ID.
-func (hf *HashFile) GetID() int {
+func (hf *HashFile) GetID() primitives.TableID {
 	hf.mutex.RLock()
 	defer hf.mutex.RUnlock()
 	if hf.indexID != 0 {
@@ -144,15 +145,7 @@ func (hf *HashFile) GetID() int {
 // Returns:
 //   - page.Page: The requested page (as HashPage)
 //   - error: Error if page ID is invalid or I/O fails
-func (hf *HashFile) ReadPage(pid primitives.PageID) (page.Page, error) {
-	pageID, ok := pid.(*HashPageID)
-	if !ok {
-		return nil, fmt.Errorf("invalid page ID type: expected HashPageID")
-	}
-
-	if pageID == nil {
-		return nil, fmt.Errorf("page ID cannot be nil")
-	}
+func (hf *HashFile) ReadPage(pageID *page.PageDescriptor) (page.Page, error) {
 
 	if pageID.GetTableID() != hf.GetID() {
 		return nil, fmt.Errorf("page ID index mismatch")
@@ -220,7 +213,7 @@ func (hf *HashFile) WritePage(p page.Page) error {
 //   - int: The newly allocated page number
 //
 // Thread-safe: Uses mutex to ensure atomic page number allocation.
-func (hf *HashFile) AllocatePageNum() int {
+func (hf *HashFile) AllocatePageNum() primitives.PageNumber {
 	hf.mutex.Lock()
 	defer hf.mutex.Unlock()
 	pageNum := hf.numPages
@@ -237,9 +230,9 @@ func (hf *HashFile) AllocatePageNum() int {
 // Returns:
 //   - int: Page number for this bucket
 //   - error: Error if bucket number is invalid
-func (hf *HashFile) GetBucketPageNum(bucketNum int) (int, error) {
+func (hf *HashFile) GetBucketPageNum(bucketNum int) (primitives.PageNumber, error) {
 	if bucketNum < 0 || bucketNum >= hf.numBuckets {
-		return -1, fmt.Errorf("invalid bucket number: %d", bucketNum)
+		return 0, fmt.Errorf("invalid bucket number: %d", bucketNum)
 	}
 
 	hf.mutex.RLock()
