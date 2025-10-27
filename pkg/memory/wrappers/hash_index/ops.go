@@ -30,7 +30,11 @@ func (hi *HashIndex) Insert(key Field, rid RecID) error {
 		return err
 	}
 
-	bucketNum := hi.hashKey(key)
+	bucketNum, err := hi.hashKey(key)
+	if err != nil {
+		return err
+	}
+
 	bucketPage, err := hi.getBucketPage(key)
 	if err != nil {
 		return fmt.Errorf("failed to get bucket page: %w", err)
@@ -129,8 +133,9 @@ func (hi *HashIndex) RangeSearch(startKey, endKey Field) ([]RecID, error) {
 	}
 
 	var results []RecID
+
 	for bucketNum := 0; bucketNum < hi.numBuckets; bucketNum++ {
-		if bucketNum >= hi.file.NumPages() {
+		if bucketNum >= int(hi.file.NumPages()) {
 			continue
 		}
 

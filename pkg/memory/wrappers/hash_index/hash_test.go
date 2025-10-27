@@ -76,9 +76,9 @@ import (
 	"storemy/pkg/log/wal"
 	"storemy/pkg/memory"
 	"storemy/pkg/primitives"
-	"storemy/pkg/storage/heap"
 	"storemy/pkg/storage/index"
 	"storemy/pkg/storage/index/hash"
+	"storemy/pkg/storage/page"
 	"storemy/pkg/tuple"
 	"storemy/pkg/types"
 	"sync"
@@ -109,7 +109,7 @@ func setupTestHashIndex(t *testing.T, keyType types.Type, numBuckets int) (*Hash
 	if numBuckets <= 0 {
 		numBuckets = hash.DefaultBuckets
 	}
-	file, err := hash.NewHashFile(filename, keyType, numBuckets)
+	file, err := hash.NewHashFile(primitives.Filepath(filename), keyType, numBuckets)
 	if err != nil {
 		t.Fatalf("Failed to create hash file: %v", err)
 	}
@@ -128,7 +128,7 @@ func setupTestHashIndex(t *testing.T, keyType types.Type, numBuckets int) (*Hash
 	store := memory.NewPageStore(wal)
 
 	// Create hash index
-	indexID := 1
+	indexID := primitives.FileID(1)
 	hi := NewHashIndex(indexID, keyType, file, store, tx)
 
 	cleanup := func() {
@@ -193,7 +193,7 @@ func TestHashIndex_Insert_Single(t *testing.T) {
 	defer cleanup()
 
 	key := types.NewIntField(42)
-	pageID := heap.NewHeapPageID(1, 0)
+	pageID := page.NewPageDescriptor(1, 0)
 	rid := tuple.NewTupleRecordID(pageID, 0)
 
 	err := hi.Insert(key, rid)
@@ -222,12 +222,12 @@ func TestHashIndex_Insert_Multiple(t *testing.T) {
 	defer cleanup()
 
 	numEntries := 100
-	pageID := heap.NewHeapPageID(1, 0)
+	pageID := page.NewPageDescriptor(1, 0)
 
 	// Insert entries
 	for i := 0; i < numEntries; i++ {
 		key := types.NewIntField(int64(i))
-		rid := tuple.NewTupleRecordID(pageID, i)
+		rid := tuple.NewTupleRecordID(pageID, primitives.SlotID(i))
 
 		err := hi.Insert(key, rid)
 		if err != nil {
@@ -255,7 +255,7 @@ func TestHashIndex_Insert_Collisions(t *testing.T) {
 	hi, _, _, _, cleanup := setupTestHashIndex(t, types.IntType, 4)
 	defer cleanup()
 
-	pageID := heap.NewHeapPageID(1, 0)
+	pageID := page.NewPageDescriptor(1, 0)
 
 	// Insert keys that will hash to the same bucket
 	// With 4 buckets, keys 0, 4, 8, 12, ... will hash to bucket 0
@@ -263,7 +263,7 @@ func TestHashIndex_Insert_Collisions(t *testing.T) {
 
 	for i, keyVal := range keysToInsert {
 		key := types.NewIntField(keyVal)
-		rid := tuple.NewTupleRecordID(pageID, i)
+		rid := tuple.NewTupleRecordID(pageID, primitives.SlotID(i))
 
 		err := hi.Insert(key, rid)
 		if err != nil {
@@ -291,7 +291,7 @@ func TestHashIndex_Insert_Duplicates(t *testing.T) {
 	defer cleanup()
 
 	key := types.NewIntField(42)
-	pageID := heap.NewHeapPageID(1, 0)
+	pageID := page.NewPageDescriptor(1, 0)
 
 	// Insert same key with different RIDs
 	rid1 := tuple.NewTupleRecordID(pageID, 0)
@@ -330,7 +330,7 @@ func TestHashIndex_Insert_TypeMismatch(t *testing.T) {
 	defer cleanup()
 
 	key := types.NewStringField("invalid", 128)
-	pageID := heap.NewHeapPageID(1, 0)
+	pageID := page.NewPageDescriptor(1, 0)
 	rid := tuple.NewTupleRecordID(pageID, 0)
 
 	err := hi.Insert(key, rid)
@@ -347,11 +347,11 @@ func TestHashIndex_Insert_OverflowPages(t *testing.T) {
 
 	// Insert many entries to force overflow pages
 	numEntries := 300
-	pageID := heap.NewHeapPageID(1, 0)
+	pageID := page.NewPageDescriptor(1, 0)
 
 	for i := 0; i < numEntries; i++ {
 		key := types.NewIntField(int64(i))
-		rid := tuple.NewTupleRecordID(pageID, i)
+		rid := tuple.NewTupleRecordID(pageID, primitives.SlotID(i))
 
 		err := hi.Insert(key, rid)
 		if err != nil {
@@ -379,7 +379,7 @@ func TestHashIndex_Delete_Single(t *testing.T) {
 	defer cleanup()
 
 	key := types.NewIntField(42)
-	pageID := heap.NewHeapPageID(1, 0)
+	pageID := page.NewPageDescriptor(1, 0)
 	rid := tuple.NewTupleRecordID(pageID, 0)
 
 	// Insert then delete
@@ -410,12 +410,12 @@ func TestHashIndex_Delete_Multiple(t *testing.T) {
 	defer cleanup()
 
 	numEntries := 50
-	pageID := heap.NewHeapPageID(1, 0)
+	pageID := page.NewPageDescriptor(1, 0)
 
 	// Insert entries
 	for i := 0; i < numEntries; i++ {
 		key := types.NewIntField(int64(i))
-		rid := tuple.NewTupleRecordID(pageID, i)
+		rid := tuple.NewTupleRecordID(pageID, primitives.SlotID(i))
 		err := hi.Insert(key, rid)
 		if err != nil {
 			t.Fatalf("Failed to insert entry %d: %v", i, err)
@@ -425,7 +425,7 @@ func TestHashIndex_Delete_Multiple(t *testing.T) {
 	// Delete every other entry
 	for i := 0; i < numEntries; i += 2 {
 		key := types.NewIntField(int64(i))
-		rid := tuple.NewTupleRecordID(pageID, i)
+		rid := tuple.NewTupleRecordID(pageID, primitives.SlotID(i))
 		err := hi.Delete(key, rid)
 		if err != nil {
 			t.Fatalf("Failed to delete entry %d: %v", i, err)
@@ -465,7 +465,7 @@ func TestHashIndex_Delete_OneDuplicate(t *testing.T) {
 	defer cleanup()
 
 	key := types.NewIntField(42)
-	pageID := heap.NewHeapPageID(1, 0)
+	pageID := page.NewPageDescriptor(1, 0)
 
 	rid1 := tuple.NewTupleRecordID(pageID, 0)
 	rid2 := tuple.NewTupleRecordID(pageID, 1)
@@ -506,7 +506,7 @@ func TestHashIndex_Delete_NonExistent(t *testing.T) {
 	defer cleanup()
 
 	key := types.NewIntField(42)
-	pageID := heap.NewHeapPageID(1, 0)
+	pageID := page.NewPageDescriptor(1, 0)
 	rid := tuple.NewTupleRecordID(pageID, 0)
 
 	err := hi.Delete(key, rid)
@@ -525,7 +525,7 @@ func TestHashIndex_Delete_TypeMismatch(t *testing.T) {
 	defer cleanup()
 
 	key := types.NewStringField("invalid", 128)
-	pageID := heap.NewHeapPageID(1, 0)
+	pageID := page.NewPageDescriptor(1, 0)
 	rid := tuple.NewTupleRecordID(pageID, 0)
 
 	err := hi.Delete(key, rid)
@@ -541,11 +541,11 @@ func TestHashIndex_Delete_FromOverflow(t *testing.T) {
 
 	// Insert enough entries to create overflow pages
 	numEntries := 200
-	pageID := heap.NewHeapPageID(1, 0)
+	pageID := page.NewPageDescriptor(1, 0)
 
 	for i := 0; i < numEntries; i++ {
 		key := types.NewIntField(int64(i))
-		rid := tuple.NewTupleRecordID(pageID, i)
+		rid := tuple.NewTupleRecordID(pageID, primitives.SlotID(i))
 		hi.Insert(key, rid)
 	}
 
@@ -553,7 +553,7 @@ func TestHashIndex_Delete_FromOverflow(t *testing.T) {
 	deleteIndices := []int{5, 50, 100, 150, 195}
 	for _, idx := range deleteIndices {
 		key := types.NewIntField(int64(idx))
-		rid := tuple.NewTupleRecordID(pageID, idx)
+		rid := tuple.NewTupleRecordID(pageID, primitives.SlotID(idx))
 		err := hi.Delete(key, rid)
 		if err != nil {
 			t.Fatalf("Failed to delete entry %d: %v", idx, err)
@@ -579,7 +579,7 @@ func TestHashIndex_Search_Existing(t *testing.T) {
 	defer cleanup()
 
 	key := types.NewIntField(42)
-	pageID := heap.NewHeapPageID(1, 0)
+	pageID := page.NewPageDescriptor(1, 0)
 	rid := tuple.NewTupleRecordID(pageID, 0)
 
 	err := hi.Insert(key, rid)
@@ -607,10 +607,10 @@ func TestHashIndex_Search_NonExistent(t *testing.T) {
 	defer cleanup()
 
 	// Insert some entries
-	pageID := heap.NewHeapPageID(1, 0)
+	pageID := page.NewPageDescriptor(1, 0)
 	for i := 0; i < 10; i++ {
 		key := types.NewIntField(int64(i * 10))
-		rid := tuple.NewTupleRecordID(pageID, i)
+		rid := tuple.NewTupleRecordID(pageID, primitives.SlotID(i))
 		hi.Insert(key, rid)
 	}
 
@@ -661,11 +661,11 @@ func TestHashIndex_Search_InOverflow(t *testing.T) {
 
 	// Insert enough to create overflow pages
 	numEntries := 200
-	pageID := heap.NewHeapPageID(1, 0)
+	pageID := page.NewPageDescriptor(1, 0)
 
 	for i := 0; i < numEntries; i++ {
 		key := types.NewIntField(int64(i))
-		rid := tuple.NewTupleRecordID(pageID, i)
+		rid := tuple.NewTupleRecordID(pageID, primitives.SlotID(i))
 		hi.Insert(key, rid)
 	}
 
@@ -692,12 +692,12 @@ func TestHashIndex_RangeSearch_Basic(t *testing.T) {
 	hi, _, _, _, cleanup := setupTestHashIndex(t, types.IntType, 16)
 	defer cleanup()
 
-	pageID := heap.NewHeapPageID(1, 0)
+	pageID := page.NewPageDescriptor(1, 0)
 
 	// Insert entries 0-99
 	for i := 0; i < 100; i++ {
 		key := types.NewIntField(int64(i))
-		rid := tuple.NewTupleRecordID(pageID, i)
+		rid := tuple.NewTupleRecordID(pageID, primitives.SlotID(i))
 		err := hi.Insert(key, rid)
 		if err != nil {
 			t.Fatalf("Failed to insert entry %d: %v", i, err)
@@ -727,11 +727,11 @@ func TestHashIndex_RangeSearch_SingleElement(t *testing.T) {
 	hi, _, _, _, cleanup := setupTestHashIndex(t, types.IntType, 8)
 	defer cleanup()
 
-	pageID := heap.NewHeapPageID(1, 0)
+	pageID := page.NewPageDescriptor(1, 0)
 
 	for i := 0; i < 10; i++ {
 		key := types.NewIntField(int64(i))
-		rid := tuple.NewTupleRecordID(pageID, i)
+		rid := tuple.NewTupleRecordID(pageID, primitives.SlotID(i))
 		hi.Insert(key, rid)
 	}
 
@@ -785,17 +785,17 @@ func TestHashIndex_RangeSearch_Duplicates(t *testing.T) {
 	hi, _, _, _, cleanup := setupTestHashIndex(t, types.IntType, 8)
 	defer cleanup()
 
-	pageID := heap.NewHeapPageID(1, 0)
+	pageID := page.NewPageDescriptor(1, 0)
 
 	// Insert entries with some duplicates
 	for i := 0; i < 20; i++ {
 		key := types.NewIntField(int64(i))
-		rid := tuple.NewTupleRecordID(pageID, i)
+		rid := tuple.NewTupleRecordID(pageID, primitives.SlotID(i))
 		hi.Insert(key, rid)
 
 		// Add duplicate for keys 10-15
 		if i >= 10 && i <= 15 {
-			rid2 := tuple.NewTupleRecordID(pageID, i+1000)
+			rid2 := tuple.NewTupleRecordID(pageID, primitives.SlotID(i+1000))
 			hi.Insert(key, rid2)
 		}
 	}
@@ -820,7 +820,7 @@ func TestHashIndex_StringKeys(t *testing.T) {
 	hi, _, _, _, cleanup := setupTestHashIndex(t, types.StringType, 8)
 	defer cleanup()
 
-	pageID := heap.NewHeapPageID(1, 0)
+	pageID := page.NewPageDescriptor(1, 0)
 	testData := []struct {
 		key string
 		idx int
@@ -835,7 +835,7 @@ func TestHashIndex_StringKeys(t *testing.T) {
 	// Insert
 	for _, data := range testData {
 		key := types.NewStringField(data.key, 128)
-		rid := tuple.NewTupleRecordID(pageID, data.idx)
+		rid := tuple.NewTupleRecordID(pageID, primitives.SlotID(data.idx))
 		err := hi.Insert(key, rid)
 		if err != nil {
 			t.Fatalf("Failed to insert %s: %v", data.key, err)
@@ -868,13 +868,13 @@ func TestHashIndex_FloatKeys(t *testing.T) {
 	hi, _, _, _, cleanup := setupTestHashIndex(t, types.FloatType, 8)
 	defer cleanup()
 
-	pageID := heap.NewHeapPageID(1, 0)
+	pageID := page.NewPageDescriptor(1, 0)
 	testValues := []float64{1.5, 2.7, 3.14, 42.0, 100.001}
 
 	// Insert
 	for i, val := range testValues {
 		key := types.NewFloat64Field(val)
-		rid := tuple.NewTupleRecordID(pageID, i)
+		rid := tuple.NewTupleRecordID(pageID, primitives.SlotID(i))
 		err := hi.Insert(key, rid)
 		if err != nil {
 			t.Fatalf("Failed to insert %.2f: %v", val, err)
@@ -900,12 +900,12 @@ func TestHashIndex_BoolKeys(t *testing.T) {
 	hi, _, _, _, cleanup := setupTestHashIndex(t, types.BoolType, 2)
 	defer cleanup()
 
-	pageID := heap.NewHeapPageID(1, 0)
+	pageID := page.NewPageDescriptor(1, 0)
 
 	// Insert multiple entries for each boolean value
 	for i := 0; i < 10; i++ {
 		key := types.NewBoolField(i%2 == 0)
-		rid := tuple.NewTupleRecordID(pageID, i)
+		rid := tuple.NewTupleRecordID(pageID, primitives.SlotID(i))
 		err := hi.Insert(key, rid)
 		if err != nil {
 			t.Fatalf("Failed to insert bool entry %d: %v", i, err)
@@ -941,11 +941,11 @@ func TestHashIndex_HashDistribution(t *testing.T) {
 
 	// Insert many entries
 	numEntries := 1000
-	pageID := heap.NewHeapPageID(1, 0)
+	pageID := page.NewPageDescriptor(1, 0)
 
 	for i := 0; i < numEntries; i++ {
 		key := types.NewIntField(int64(i))
-		rid := tuple.NewTupleRecordID(pageID, i)
+		rid := tuple.NewTupleRecordID(pageID, primitives.SlotID(i))
 		err := hi.Insert(key, rid)
 		if err != nil {
 			t.Fatalf("Failed to insert entry %d: %v", i, err)
@@ -957,7 +957,7 @@ func TestHashIndex_HashDistribution(t *testing.T) {
 	bucketCounts := make(map[int]int)
 	for i := 0; i < numEntries; i++ {
 		key := types.NewIntField(int64(i))
-		bucketNum := hi.hashKey(key)
+		bucketNum, _ := hi.hashKey(key)
 
 		if bucketNum < 0 || bucketNum >= numBuckets {
 			t.Errorf("Hash key %d mapped to invalid bucket %d (expected 0-%d)", i, bucketNum, numBuckets-1)
@@ -986,12 +986,12 @@ func TestHashIndex_Stress_InsertDelete(t *testing.T) {
 	defer cleanup()
 
 	numOperations := 500
-	pageID := heap.NewHeapPageID(1, 0)
+	pageID := page.NewPageDescriptor(1, 0)
 
 	// Insert many entries
 	for i := 0; i < numOperations; i++ {
 		key := types.NewIntField(int64(i))
-		rid := tuple.NewTupleRecordID(pageID, i)
+		rid := tuple.NewTupleRecordID(pageID, primitives.SlotID(i))
 		err := hi.Insert(key, rid)
 		if err != nil {
 			t.Fatalf("Failed to insert entry %d: %v", i, err)
@@ -1001,7 +1001,7 @@ func TestHashIndex_Stress_InsertDelete(t *testing.T) {
 	// Delete half of them
 	for i := 0; i < numOperations; i += 2 {
 		key := types.NewIntField(int64(i))
-		rid := tuple.NewTupleRecordID(pageID, i)
+		rid := tuple.NewTupleRecordID(pageID, primitives.SlotID(i))
 		err := hi.Delete(key, rid)
 		if err != nil {
 			t.Fatalf("Failed to delete entry %d: %v", i, err)
@@ -1011,7 +1011,7 @@ func TestHashIndex_Stress_InsertDelete(t *testing.T) {
 	// Insert new entries in the gaps
 	for i := 0; i < numOperations; i += 2 {
 		key := types.NewIntField(int64(i))
-		rid := tuple.NewTupleRecordID(pageID, i+10000)
+		rid := tuple.NewTupleRecordID(pageID, primitives.SlotID(i+10000))
 		err := hi.Insert(key, rid)
 		if err != nil {
 			t.Fatalf("Failed to re-insert entry %d: %v", i, err)
@@ -1038,12 +1038,12 @@ func TestHashIndex_Concurrent_Reads(t *testing.T) {
 	defer cleanup()
 
 	numEntries := 100
-	pageID := heap.NewHeapPageID(1, 0)
+	pageID := page.NewPageDescriptor(1, 0)
 
 	// Insert entries
 	for i := 0; i < numEntries; i++ {
 		key := types.NewIntField(int64(i))
-		rid := tuple.NewTupleRecordID(pageID, i)
+		rid := tuple.NewTupleRecordID(pageID, primitives.SlotID(i))
 		err := hi.Insert(key, rid)
 		if err != nil {
 			t.Fatalf("Failed to insert entry %d: %v", i, err)
@@ -1120,11 +1120,11 @@ func TestHashIndex_OverflowChain_Safety(t *testing.T) {
 
 	// Insert many entries to create long overflow chains
 	numEntries := 300
-	pageID := heap.NewHeapPageID(1, 0)
+	pageID := page.NewPageDescriptor(1, 0)
 
 	for i := 0; i < numEntries; i++ {
 		key := types.NewIntField(int64(i))
-		rid := tuple.NewTupleRecordID(pageID, i)
+		rid := tuple.NewTupleRecordID(pageID, primitives.SlotID(i))
 		err := hi.Insert(key, rid)
 		if err != nil {
 			t.Fatalf("Failed to insert entry %d: %v", i, err)
