@@ -42,3 +42,16 @@ type Offset uint32
 
 // RowID uniquely identifies a row within a table
 type RowID uint64
+
+// Sentinel values for invalid/unset identifiers
+const (
+	// InvalidPageNumber represents an invalid or unset page number
+	// Used for: no parent page, no next/prev leaf, uninitialized references
+	InvalidPageNumber PageNumber = 0
+
+	// InvalidFileID represents an invalid or unset file ID
+	InvalidFileID FileID = 0
+
+	// InvalidSlotID represents an invalid or unset slot ID
+	InvalidSlotID SlotID = 0
+)
