@@ -11,7 +11,7 @@ import (
 // TableMetadata holds persisted metadata for a single table recorded in the system catalog.
 // It is used by TableManager to rebuild in-memory catalog state during database startup.
 type TableMetadata struct {
-	TableID       primitives.TableID  // Unique numeric identifier for the table
+	TableID       primitives.FileID   // Unique numeric identifier for the table
 	TableName     string              // Canonical table name used in SQL
 	FilePath      primitives.Filepath // Heap file name where the table data is stored
 	PrimaryKeyCol string              // Name of the primary key column (empty if none or composite)
@@ -97,7 +97,7 @@ func (tt *TablesTable) TableIDIndex() int {
 func (tt *TablesTable) Parse(t *tuple.Tuple) (*TableMetadata, error) {
 	p := tuple.NewParser(t).ExpectFields(tt.GetNumFields())
 
-	tableID := primitives.TableID(p.ReadUint64())
+	tableID := primitives.FileID(p.ReadUint64())
 	tableName := p.ReadString()
 	filePath := p.ReadString()
 	primaryKey := p.ReadString()

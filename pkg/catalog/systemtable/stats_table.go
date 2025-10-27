@@ -11,7 +11,7 @@ import (
 
 // TableStatistics holds statistics about a table for query optimization
 type TableStatistics struct {
-	TableID        primitives.TableID    // Table identifier
+	TableID        primitives.FileID     // Table identifier
 	Cardinality    uint64                // Number of tuples in the table
 	PageCount      primitives.PageNumber // Number of pages used by the table
 	AvgTupleSize   uint64                // Average tuple size in bytes
@@ -62,7 +62,7 @@ func (st *StatsTable) Parse(t *tuple.Tuple) (*TableStatistics, error) {
 	// Parse fields sequentially using the parser
 	p := tuple.NewParser(t).ExpectFields(9)
 
-	tableID := primitives.TableID(p.ReadUint64())
+	tableID := primitives.FileID(p.ReadUint64())
 	cardinality := p.ReadUint64()
 	pageCount := p.ReadUint64()
 	avgTupleSize := p.ReadUint64()

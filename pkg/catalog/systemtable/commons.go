@@ -6,7 +6,7 @@ import (
 )
 
 const (
-	InvalidTableID primitives.TableID = 0 // Represents an invalid or uninitialized table ID
+	InvalidTableID primitives.FileID = 0 // Represents an invalid or uninitialized table ID
 )
 
 // Global instances of system tables.

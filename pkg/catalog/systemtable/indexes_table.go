@@ -12,9 +12,9 @@ import (
 
 // IndexMetadata represents metadata for a database index
 type IndexMetadata struct {
-	IndexID    primitives.IndexID
+	IndexID    primitives.FileID
 	IndexName  string
-	TableID    primitives.TableID
+	TableID    primitives.FileID
 	ColumnName string
 	IndexType  index.IndexType
 	FilePath   primitives.Filepath
@@ -69,11 +69,11 @@ func (it *IndexesTable) CreateTuple(im IndexMetadata) *tuple.Tuple {
 }
 
 // GetID retrieves the index ID from a tuple
-func (it *IndexesTable) GetID(t *tuple.Tuple) (primitives.IndexID, error) {
+func (it *IndexesTable) GetID(t *tuple.Tuple) (primitives.FileID, error) {
 	if int(t.NumFields()) != it.GetNumFields() {
 		return 0, fmt.Errorf("invalid tuple: expected 7 fields, got %d", t.TupleDesc.NumFields())
 	}
-	return primitives.IndexID(getUint64Field(t, 0)), nil
+	return primitives.FileID(getUint64Field(t, 0)), nil
 }
 
 func (it *IndexesTable) TableIDIndex() int {
@@ -84,9 +84,9 @@ func (it *IndexesTable) TableIDIndex() int {
 func (it *IndexesTable) Parse(t *tuple.Tuple) (*IndexMetadata, error) {
 	p := tuple.NewParser(t).ExpectFields(it.GetNumFields())
 
-	indexID := primitives.IndexID(p.ReadUint64())
+	indexID := primitives.FileID(p.ReadUint64())
 	indexName := p.ReadString()
-	tableID := primitives.TableID(p.ReadUint64())
+	tableID := primitives.FileID(p.ReadUint64())
 	columnName := p.ReadString()
 	indexTypeStr := p.ReadString()
 	filePath := p.ReadString()

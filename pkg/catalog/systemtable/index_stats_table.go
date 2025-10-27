@@ -12,8 +12,8 @@ import (
 
 // IndexStatisticsRow represents a row in the CATALOG_INDEX_STATISTICS table
 type IndexStatisticsRow struct {
-	IndexID          primitives.IndexID    // Index identifier
-	TableID          primitives.TableID    // Table this index belongs to
+	IndexID          primitives.FileID     // Index identifier
+	TableID          primitives.FileID     // Table this index belongs to
 	IndexName        string                // Index name
 	IndexType        index.IndexType       // "btree", "hash", etc.
 	ColumnName       string                // Indexed column
@@ -66,12 +66,12 @@ func (ist *IndexStatsTable) TableIDIndex() int {
 }
 
 // GetIndexID extracts the index ID from an index statistics tuple
-func (ist *IndexStatsTable) GetIndexID(t *tuple.Tuple) (primitives.IndexID, error) {
+func (ist *IndexStatsTable) GetIndexID(t *tuple.Tuple) (primitives.FileID, error) {
 	if t.TupleDesc.NumFields() != 12 {
 		return 0, fmt.Errorf("invalid tuple: expected 12 fields, got %d", t.TupleDesc.NumFields())
 	}
 
-	indexID := primitives.IndexID(getUint64Field(t, 0))
+	indexID := primitives.FileID(getUint64Field(t, 0))
 	if indexID == 0 {
 		return 0, fmt.Errorf("invalid index_id: must be positive")
 	}
@@ -84,8 +84,8 @@ func (ist *IndexStatsTable) Parse(t *tuple.Tuple) (*IndexStatisticsRow, error) {
 	// Parse fields sequentially using the parser
 	p := tuple.NewParser(t).ExpectFields(12)
 
-	indexID := primitives.IndexID(p.ReadUint64())
-	tableID := primitives.TableID(p.ReadUint64())
+	indexID := primitives.FileID(p.ReadUint64())
+	tableID := primitives.FileID(p.ReadUint64())
 	indexName := p.ReadString()
 	indexType := p.ReadString()
 	columnName := p.ReadString()

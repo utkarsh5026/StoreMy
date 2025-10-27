@@ -12,7 +12,7 @@ import (
 // ColumnStatisticsRow represents a row in the CATALOG_COLUMN_STATISTICS table
 // Note: Histogram and MCV data are stored separately due to size constraints
 type ColumnStatisticsRow struct {
-	TableID       primitives.TableID  // Table identifier
+	TableID       primitives.FileID   // Table identifier
 	ColumnName    string              // Column name
 	ColumnIndex   primitives.ColumnID // Column position (0-based)
 	DistinctCount uint64              // Number of distinct values
@@ -59,12 +59,12 @@ func (cst *ColumnStatsTable) TableIDIndex() int {
 }
 
 // GetTableID extracts the table ID from a column statistics tuple
-func (cst *ColumnStatsTable) GetTableID(t *tuple.Tuple) (primitives.TableID, error) {
+func (cst *ColumnStatsTable) GetTableID(t *tuple.Tuple) (primitives.FileID, error) {
 	if t.TupleDesc.NumFields() != 9 {
 		return 0, fmt.Errorf("invalid tuple: expected 9 fields, got %d", t.TupleDesc.NumFields())
 	}
 
-	tableID := primitives.TableID(getUint64Field(t, 0))
+	tableID := primitives.FileID(getUint64Field(t, 0))
 	if tableID == InvalidTableID {
 		return 0, fmt.Errorf("invalid table_id: cannot be InvalidTableID (%d)", InvalidTableID)
 	}
@@ -76,7 +76,7 @@ func (cst *ColumnStatsTable) GetTableID(t *tuple.Tuple) (primitives.TableID, err
 func (cst *ColumnStatsTable) Parse(t *tuple.Tuple) (*ColumnStatisticsRow, error) {
 	p := tuple.NewParser(t).ExpectFields(9)
 
-	tableID := primitives.TableID(p.ReadUint64())
+	tableID := primitives.FileID(p.ReadUint64())
 	columnName := p.ReadString()
 	columnIndex := primitives.ColumnID(p.ReadUint32())
 	distinctCount := p.ReadUint64()

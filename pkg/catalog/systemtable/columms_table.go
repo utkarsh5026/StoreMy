@@ -125,7 +125,7 @@ func (ct *ColumnsTable) Parse(t *tuple.Tuple) (*schema.ColumnMetadata, error) {
 		IsPrimary:     isPrimary,
 		IsAutoInc:     isAutoInc,
 		NextAutoValue: nextAutoValue,
-		TableID:       primitives.TableID(tableID),
+		TableID:       primitives.FileID(tableID),
 	}
 
 	return col, nil
