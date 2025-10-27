@@ -192,9 +192,9 @@ func TestCatalogManager_ConcurrentIndexCreation(t *testing.T) {
 		t.Fatalf("GetIndexesByTable failed: %v", err)
 	}
 
-	expectedIndexes := numIndexes + 1 // +1 for auto-created PK index
-	if len(indexes) != expectedIndexes {
-		t.Errorf("Expected %d indexes (%d created + 1 PK), got %d", expectedIndexes, numIndexes, len(indexes))
+	// Should have only the manually created indexes (PK indexes are now created by DDL layer, not catalog manager)
+	if len(indexes) != numIndexes {
+		t.Errorf("Expected %d indexes, got %d", numIndexes, len(indexes))
 	}
 }
 
@@ -453,12 +453,12 @@ func TestCatalogManager_StressTest_ManyIndexes(t *testing.T) {
 		t.Fatalf("GetIndexesByTable failed: %v", err)
 	}
 
-	expectedIndexes := numIndexes + 1 // +1 for auto-created PK index
-	if len(indexes) != expectedIndexes {
-		t.Errorf("Expected %d indexes (%d created + 1 PK), got %d", expectedIndexes, numIndexes, len(indexes))
+	// Should have only the manually created indexes (PK indexes are now created by DDL layer, not catalog manager)
+	if len(indexes) != numIndexes {
+		t.Errorf("Expected %d indexes, got %d", numIndexes, len(indexes))
 	}
 
-	t.Logf("Successfully created and verified %d indexes (%d manually created + 1 auto-created PK)", expectedIndexes, numIndexes)
+	t.Logf("Successfully created and verified %d indexes", numIndexes)
 }
 
 // TestCatalogManager_StressTest_RepeatedOperations tests repeated create/drop cycles

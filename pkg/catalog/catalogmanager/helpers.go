@@ -8,7 +8,6 @@ import (
 	"storemy/pkg/execution/query"
 	"storemy/pkg/iterator"
 	"storemy/pkg/storage/heap"
-	"storemy/pkg/storage/index"
 	"storemy/pkg/tuple"
 	"storemy/pkg/types"
 	"time"
@@ -16,7 +15,9 @@ import (
 
 // RegisterTable adds a new user table to the system catalog.
 // It inserts metadata into CATALOG_TABLES and column definitions into CATALOG_COLUMNS.
-// If the table has a primary key, it automatically creates a BTREE index for it.
+//
+// Note: Primary key indexes should be created separately by the DDL layer to ensure
+// both catalog metadata and physical index files are created together.
 //
 // This is an internal helper used by CreateTable.
 func (cm *CatalogManager) RegisterTable(tx TxContext, sch *schema.Schema, filepath string) error {
@@ -32,20 +33,6 @@ func (cm *CatalogManager) RegisterTable(tx TxContext, sch *schema.Schema, filepa
 
 	if err := cm.colOps.InsertColumns(tx, sch.Columns); err != nil {
 		return err
-	}
-
-	if sch.PrimaryKey != "" {
-		pkIndexName := "pk_" + sch.TableName + "_" + sch.PrimaryKey
-		indexCol := &indexCol{
-			indexName:  pkIndexName,
-			tableName:  sch.TableName,
-			indexType:  index.BTreeIndex,
-			columnName: sch.PrimaryKey,
-		}
-		_, _, err := cm.registerIndexWithSchema(tx, sch, indexCol)
-		if err != nil {
-			return fmt.Errorf("failed to create primary key index: %w", err)
-		}
 	}
 
 	return nil
