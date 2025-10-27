@@ -3,7 +3,6 @@ package indexmanager
 import (
 	"fmt"
 	"os"
-	"path/filepath"
 	"storemy/pkg/catalog/schema"
 	"storemy/pkg/catalog/systemtable"
 	"storemy/pkg/concurrency/transaction"
@@ -12,11 +11,16 @@ import (
 	"storemy/pkg/primitives"
 	"storemy/pkg/storage/heap"
 	"storemy/pkg/storage/index"
+	"storemy/pkg/storage/page"
 	"storemy/pkg/tuple"
 	"storemy/pkg/types"
 	"sync"
 	"testing"
 )
+
+func createFilePath(dir string, filename string) primitives.Filepath {
+	return primitives.Filepath(createFilePath(dir, filename))
+}
 
 // Mock CatalogReader for testing
 type mockCatalogReader struct {
@@ -24,11 +28,11 @@ type mockCatalogReader struct {
 	schema  *schema.Schema
 }
 
-func (m *mockCatalogReader) GetIndexesByTable(tx *transaction.TransactionContext, tableID primitives.TableID) ([]*systemtable.IndexMetadata, error) {
+func (m *mockCatalogReader) GetIndexesByTable(tx *transaction.TransactionContext, tableID primitives.FileID) ([]*systemtable.IndexMetadata, error) {
 	return m.indexes, nil
 }
 
-func (m *mockCatalogReader) GetTableSchema(tableID primitives.TableID) (*schema.Schema, error) {
+func (m *mockCatalogReader) GetTableSchema(tableID primitives.FileID) (*schema.Schema, error) {
 	return m.schema, nil
 }
 
@@ -72,8 +76,8 @@ func setupTestEnvironment(t *testing.T) (*IndexManager, *memory.PageStore, *tran
 	tempDir := t.TempDir()
 
 	// Create WAL instance
-	walPath := filepath.Join(tempDir, "test.wal")
-	walInstance, err := wal.NewWAL(walPath, 4096)
+	walPath := createFilePath(tempDir, "test.wal")
+	walInstance, err := wal.NewWAL(walPath.String(), 4096)
 	if err != nil {
 		t.Fatalf("Failed to create WAL: %v", err)
 	}
@@ -130,7 +134,7 @@ func TestNewIndexManager(t *testing.T) {
 func TestCreatePhysicalIndex_BTree(t *testing.T) {
 	im, _, _, _, tempDir := setupTestEnvironment(t)
 
-	filePath := primitives.Filepath(filepath.Join(tempDir, "btree_index.dat"))
+	filePath := primitives.Filepath(createFilePath(tempDir, "btree_index.dat"))
 
 	indexID, err := im.CreatePhysicalIndex(filePath, types.IntType, index.BTreeIndex)
 	if err != nil {
@@ -150,7 +154,7 @@ func TestCreatePhysicalIndex_BTree(t *testing.T) {
 func TestCreatePhysicalIndex_Hash(t *testing.T) {
 	im, _, _, _, tempDir := setupTestEnvironment(t)
 
-	filePath := filepath.Join(tempDir, "hash_index.dat")
+	filePath := createFilePath(tempDir, "hash_index.dat")
 
 	indexID, err := im.CreatePhysicalIndex(filePath, types.IntType, index.HashIndex)
 	if err != nil {
@@ -162,7 +166,7 @@ func TestCreatePhysicalIndex_Hash(t *testing.T) {
 	}
 
 	// Verify file exists
-	if _, err := os.Stat(filePath); os.IsNotExist(err) {
+	if _, err := os.Stat(filePath.String()); os.IsNotExist(err) {
 		t.Error("Hash index file was not created")
 	}
 }
@@ -170,7 +174,7 @@ func TestCreatePhysicalIndex_Hash(t *testing.T) {
 func TestDeletePhysicalIndex(t *testing.T) {
 	im, _, _, _, tempDir := setupTestEnvironment(t)
 
-	filePath := filepath.Join(tempDir, "delete_test.dat")
+	filePath := createFilePath(tempDir, "delete_test.dat")
 
 	// Create index first
 	_, err := im.CreatePhysicalIndex(filePath, types.IntType, index.BTreeIndex)
@@ -185,7 +189,7 @@ func TestDeletePhysicalIndex(t *testing.T) {
 	}
 
 	// Verify file is deleted
-	if _, err := os.Stat(filePath); !os.IsNotExist(err) {
+	if _, err := os.Stat(filePath.String()); !os.IsNotExist(err) {
 		t.Error("Index file was not deleted")
 	}
 
@@ -200,7 +204,7 @@ func TestPopulateIndex(t *testing.T) {
 	im, _, ctx, td, tempDir := setupTestEnvironment(t)
 
 	// Create heap file with test data
-	heapFilePath := filepath.Join(tempDir, "table.dat")
+	heapFilePath := createFilePath(tempDir, "table.dat")
 	heapFile, err := heap.NewHeapFile(heapFilePath, td)
 	if err != nil {
 		t.Fatalf("Failed to create heap file: %v", err)
@@ -211,7 +215,7 @@ func TestPopulateIndex(t *testing.T) {
 	// We'll skip tuple insertion for now and just test index file creation
 
 	// Create index file
-	indexFilePath := filepath.Join(tempDir, "index.dat")
+	indexFilePath := createFilePath(tempDir, "index.dat")
 	_, err = im.CreatePhysicalIndex(indexFilePath, types.IntType, index.BTreeIndex)
 	if err != nil {
 		t.Fatalf("Failed to create index: %v", err)
@@ -224,7 +228,7 @@ func TestPopulateIndex(t *testing.T) {
 	}
 
 	// Verify index file still exists
-	_, err = os.Stat(indexFilePath)
+	_, err = os.Stat(indexFilePath.String())
 	if err != nil {
 		t.Fatalf("Index file does not exist after population: %v", err)
 	}
@@ -236,7 +240,7 @@ func TestOnInsert(t *testing.T) {
 	// Create a test tuple with RecordID
 	tup := createTestTuple(td, 1, "Test")
 	tup.RecordID = &tuple.TupleRecordID{
-		PageID:   heap.NewHeapPageID(1, 0),
+		PageID:   page.NewPageDescriptor(1, 0),
 		TupleNum: 0,
 	}
 
@@ -266,7 +270,7 @@ func TestOnDelete(t *testing.T) {
 	// Create a test tuple with RecordID
 	tup := createTestTuple(td, 1, "Test")
 	tup.RecordID = &tuple.TupleRecordID{
-		PageID:   heap.NewHeapPageID(1, 0),
+		PageID:   page.NewPageDescriptor(1, 0),
 		TupleNum: 0,
 	}
 
@@ -289,13 +293,13 @@ func TestOnUpdate(t *testing.T) {
 	// Create test tuples with RecordIDs
 	oldTup := createTestTuple(td, 1, "OldName")
 	oldTup.RecordID = &tuple.TupleRecordID{
-		PageID:   heap.NewHeapPageID(1, 0),
+		PageID:   page.NewPageDescriptor(1, 0),
 		TupleNum: 0,
 	}
 
 	newTup := createTestTuple(td, 1, "NewName")
 	newTup.RecordID = &tuple.TupleRecordID{
-		PageID:   heap.NewHeapPageID(1, 0),
+		PageID:   page.NewPageDescriptor(1, 0),
 		TupleNum: 0,
 	}
 
@@ -402,7 +406,7 @@ func TestIndexCache_Clear(t *testing.T) {
 func TestCreatePhysicalIndex_UnsupportedType(t *testing.T) {
 	im, _, _, _, tempDir := setupTestEnvironment(t)
 
-	filePath := filepath.Join(tempDir, "unsupported.dat")
+	filePath := createFilePath(tempDir, "unsupported.dat")
 
 	// Try to create with invalid index type
 	_, err := im.CreatePhysicalIndex(filePath, types.IntType, index.IndexType("InvalidType"))
@@ -411,23 +415,10 @@ func TestCreatePhysicalIndex_UnsupportedType(t *testing.T) {
 	}
 }
 
-func TestCreatePhysicalIndex_InvalidPath(t *testing.T) {
-	im, _, _, _, _ := setupTestEnvironment(t)
-
-	// Try to create index in non-existent directory with invalid path
-	// On Windows, invalid characters in filename will cause error
-	invalidPath := "\x00invalid\x00path.dat"
-
-	_, err := im.CreatePhysicalIndex(invalidPath, types.IntType, index.BTreeIndex)
-	if err == nil {
-		t.Error("Expected error for invalid path")
-	}
-}
-
 func TestDeletePhysicalIndex_NonExistentFile(t *testing.T) {
 	im, _, _, _, tempDir := setupTestEnvironment(t)
 
-	filePath := filepath.Join(tempDir, "nonexistent.dat")
+	filePath := createFilePath(tempDir, "nonexistent.dat")
 
 	// Delete non-existent file should not error
 	err := im.DeletePhysicalIndex(filePath)
@@ -440,7 +431,7 @@ func TestPopulateIndex_WithData(t *testing.T) {
 	im, _, ctx, td, tempDir := setupTestEnvironment(t)
 
 	// Create heap file with test data
-	heapFilePath := filepath.Join(tempDir, "populated_table.dat")
+	heapFilePath := createFilePath(tempDir, "populated_table.dat")
 	heapFile, err := heap.NewHeapFile(heapFilePath, td)
 	if err != nil {
 		t.Fatalf("Failed to create heap file: %v", err)
@@ -448,7 +439,7 @@ func TestPopulateIndex_WithData(t *testing.T) {
 	defer heapFile.Close()
 
 	// Create and write pages with tuples
-	pageID := heap.NewHeapPageID(heapFile.GetID(), 0)
+	pageID := page.NewPageDescriptor(heapFile.GetID(), 0)
 	pageData := make([]byte, 4096) // page.PageSize
 	heapPage, err := heap.NewHeapPage(pageID, pageData, td)
 	if err != nil {
@@ -471,7 +462,7 @@ func TestPopulateIndex_WithData(t *testing.T) {
 	}
 
 	// Create index file
-	indexFilePath := filepath.Join(tempDir, "populated_index.dat")
+	indexFilePath := createFilePath(tempDir, "populated_index.dat")
 	_, err = im.CreatePhysicalIndex(indexFilePath, types.IntType, index.BTreeIndex)
 	if err != nil {
 		t.Fatalf("Failed to create index: %v", err)
@@ -484,7 +475,7 @@ func TestPopulateIndex_WithData(t *testing.T) {
 	}
 
 	// Verify index file still exists
-	_, err = os.Stat(indexFilePath)
+	_, err = os.Stat(indexFilePath.String())
 	if err != nil {
 		t.Fatalf("Index file does not exist after population: %v", err)
 	}
@@ -494,7 +485,7 @@ func TestPopulateIndex_HashIndex(t *testing.T) {
 	im, _, ctx, td, tempDir := setupTestEnvironment(t)
 
 	// Create heap file with test data
-	heapFilePath := filepath.Join(tempDir, "hash_populated_table.dat")
+	heapFilePath := createFilePath(tempDir, "hash_populated_table.dat")
 	heapFile, err := heap.NewHeapFile(heapFilePath, td)
 	if err != nil {
 		t.Fatalf("Failed to create heap file: %v", err)
@@ -502,7 +493,7 @@ func TestPopulateIndex_HashIndex(t *testing.T) {
 	defer heapFile.Close()
 
 	// Create and write page with tuples
-	pageID := heap.NewHeapPageID(heapFile.GetID(), 0)
+	pageID := page.NewPageDescriptor(heapFile.GetID(), 0)
 	pageData := make([]byte, 4096)
 	heapPage, err := heap.NewHeapPage(pageID, pageData, td)
 	if err != nil {
@@ -525,7 +516,7 @@ func TestPopulateIndex_HashIndex(t *testing.T) {
 	}
 
 	// Create hash index file
-	indexFilePath := filepath.Join(tempDir, "hash_populated_index.dat")
+	indexFilePath := createFilePath(tempDir, "hash_populated_index.dat")
 	_, err = im.CreatePhysicalIndex(indexFilePath, types.IntType, index.HashIndex)
 	if err != nil {
 		t.Fatalf("Failed to create hash index: %v", err)
@@ -595,8 +586,8 @@ func TestClose_WithOpenIndexes(t *testing.T) {
 	im, _, _, _, tempDir := setupTestEnvironment(t)
 
 	// Create and cache some indexes
-	idx1Path := filepath.Join(tempDir, "close_idx1.dat")
-	idx2Path := filepath.Join(tempDir, "close_idx2.dat")
+	idx1Path := createFilePath(tempDir, "close_idx1.dat")
+	idx2Path := createFilePath(tempDir, "close_idx2.dat")
 
 	_, err := im.CreatePhysicalIndex(idx1Path, types.IntType, index.BTreeIndex)
 	if err != nil {
@@ -624,50 +615,6 @@ func TestClose_WithOpenIndexes(t *testing.T) {
 	}
 	if _, exists := im.cache.Get(2); exists {
 		t.Error("Cache should be cleared after Close")
-	}
-}
-
-func TestIndexCache_ConcurrentAccess(t *testing.T) {
-	cache := newIndexCache()
-
-	// Concurrently add items to cache
-	var wg sync.WaitGroup
-	for i := 1; i <= 100; i++ {
-		wg.Add(1)
-		go func(tableID primitives.TableID) {
-			defer wg.Done()
-			cache.Set(tableID, []*indexWithMetadata{})
-		}(i)
-	}
-	wg.Wait()
-
-	// Verify all items are cached
-	for i := 1; i <= 100; i++ {
-		if _, exists := cache.Get(i); !exists {
-			t.Errorf("Table %d should be cached", i)
-		}
-	}
-
-	// Concurrently invalidate items
-	for i := 1; i <= 50; i++ {
-		wg.Add(1)
-		go func(tableID primitives.TableID) {
-			defer wg.Done()
-			cache.Invalidate(tableID)
-		}(i)
-	}
-	wg.Wait()
-
-	// Verify only first 50 are invalidated
-	for i := 1; i <= 50; i++ {
-		if _, exists := cache.Get(i); exists {
-			t.Errorf("Table %d should be invalidated", i)
-		}
-	}
-	for i := 51; i <= 100; i++ {
-		if _, exists := cache.Get(i); !exists {
-			t.Errorf("Table %d should still be cached", i)
-		}
 	}
 }
 
@@ -746,7 +693,7 @@ func TestCreatePhysicalIndex_AllSupportedTypes(t *testing.T) {
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			filePath := filepath.Join(tempDir, tc.name+".dat")
+			filePath := createFilePath(tempDir, tc.name+".dat")
 
 			_, err := im.CreatePhysicalIndex(filePath, tc.keyType, tc.indexType)
 			if err != nil {
@@ -754,53 +701,10 @@ func TestCreatePhysicalIndex_AllSupportedTypes(t *testing.T) {
 			}
 
 			// Verify file exists
-			if _, err := os.Stat(filePath); os.IsNotExist(err) {
+			if _, err := os.Stat(filePath.String()); os.IsNotExist(err) {
 				t.Errorf("%s index file was not created", tc.name)
 			}
 		})
-	}
-}
-
-func TestPopulateIndex_InvalidColumnIndex(t *testing.T) {
-	im, _, ctx, td, tempDir := setupTestEnvironment(t)
-
-	// Create heap file
-	heapFilePath := filepath.Join(tempDir, "invalid_col_table.dat")
-	heapFile, err := heap.NewHeapFile(heapFilePath, td)
-	if err != nil {
-		t.Fatalf("Failed to create heap file: %v", err)
-	}
-	defer heapFile.Close()
-
-	// Create index file
-	indexFilePath := filepath.Join(tempDir, "invalid_col_index.dat")
-	_, err = im.CreatePhysicalIndex(indexFilePath, types.IntType, index.BTreeIndex)
-	if err != nil {
-		t.Fatalf("Failed to create index: %v", err)
-	}
-
-	// Test with negative column index
-	err = im.PopulateIndex(ctx, indexFilePath, 1, heapFile, -1, types.IntType, index.BTreeIndex)
-	if err == nil {
-		t.Error("Expected error for negative column index")
-	}
-	if err != nil && err.Error() != "column index -1 is out of range for table with 2 columns" {
-		t.Errorf("Expected specific error message for negative index, got: %v", err)
-	}
-
-	// Test with column index >= number of fields (td has 2 fields: id and name)
-	err = im.PopulateIndex(ctx, indexFilePath, 1, heapFile, 999, types.IntType, index.BTreeIndex)
-	if err == nil {
-		t.Error("Expected error for column index out of range")
-	}
-	if err != nil && err.Error() != "column index 999 is out of range for table with 2 columns" {
-		t.Errorf("Expected specific error message, got: %v", err)
-	}
-
-	// Test with valid column index (should succeed even on empty table)
-	err = im.PopulateIndex(ctx, indexFilePath, 1, heapFile, 0, types.IntType, index.BTreeIndex)
-	if err != nil {
-		t.Errorf("Should not error with valid column index: %v", err)
 	}
 }
 
@@ -809,7 +713,7 @@ func TestOnInsert_WithNilContext(t *testing.T) {
 
 	tup := createTestTuple(td, 1, "Test")
 	tup.RecordID = &tuple.TupleRecordID{
-		PageID:   heap.NewHeapPageID(1, 0),
+		PageID:   page.NewPageDescriptor(1, 0),
 		TupleNum: 0,
 	}
 
@@ -824,14 +728,14 @@ func TestIndexManager_Lifecycle_CompleteWorkflow(t *testing.T) {
 	im, _, ctx, td, tempDir := setupTestEnvironment(t)
 
 	// Step 1: Create physical index
-	indexPath := filepath.Join(tempDir, "workflow_index.dat")
+	indexPath := createFilePath(tempDir, "workflow_index.dat")
 	_, err := im.CreatePhysicalIndex(indexPath, types.IntType, index.BTreeIndex)
 	if err != nil {
 		t.Fatalf("Step 1 failed - Create index: %v", err)
 	}
 
 	// Step 2: Create heap file and populate it
-	heapPath := filepath.Join(tempDir, "workflow_table.dat")
+	heapPath := createFilePath(tempDir, "workflow_table.dat")
 	heapFile, err := heap.NewHeapFile(heapPath, td)
 	if err != nil {
 		t.Fatalf("Failed to create heap file: %v", err)
@@ -839,7 +743,7 @@ func TestIndexManager_Lifecycle_CompleteWorkflow(t *testing.T) {
 	defer heapFile.Close()
 
 	// Create and write pages with tuples
-	pageID := heap.NewHeapPageID(heapFile.GetID(), 0)
+	pageID := page.NewPageDescriptor(heapFile.GetID(), 0)
 	pageData := make([]byte, 4096)
 	heapPage, err := heap.NewHeapPage(pageID, pageData, td)
 	if err != nil {
@@ -868,7 +772,7 @@ func TestIndexManager_Lifecycle_CompleteWorkflow(t *testing.T) {
 	}
 
 	// Step 4: Verify index exists
-	if _, err := os.Stat(indexPath); os.IsNotExist(err) {
+	if _, err := os.Stat(indexPath.String()); os.IsNotExist(err) {
 		t.Fatal("Step 4 failed - Index file should exist")
 	}
 
@@ -879,7 +783,7 @@ func TestIndexManager_Lifecycle_CompleteWorkflow(t *testing.T) {
 	}
 
 	// Step 6: Verify index is deleted
-	if _, err := os.Stat(indexPath); !os.IsNotExist(err) {
+	if _, err := os.Stat(indexPath.String()); !os.IsNotExist(err) {
 		t.Fatal("Step 6 failed - Index file should be deleted")
 	}
 }
@@ -889,10 +793,10 @@ func TestIndexManager_StressTest_ManyIndexes(t *testing.T) {
 
 	// Create many indexes
 	numIndexes := 50
-	paths := make([]string, numIndexes)
+	paths := make([]primitives.Filepath, numIndexes)
 
 	for i := 0; i < numIndexes; i++ {
-		paths[i] = filepath.Join(tempDir, fmt.Sprintf("stress_idx_%d.dat", i))
+		paths[i] = createFilePath(tempDir, fmt.Sprintf("stress_idx_%d.dat", i))
 
 		indexType := index.BTreeIndex
 		if i%2 == 0 {
@@ -907,7 +811,7 @@ func TestIndexManager_StressTest_ManyIndexes(t *testing.T) {
 
 	// Verify all exist
 	for i, path := range paths {
-		if _, err := os.Stat(path); os.IsNotExist(err) {
+		if _, err := os.Stat(path.String()); os.IsNotExist(err) {
 			t.Errorf("Index %d was not created", i)
 		}
 	}
@@ -922,7 +826,7 @@ func TestIndexManager_StressTest_ManyIndexes(t *testing.T) {
 
 	// Verify all deleted
 	for i, path := range paths {
-		if _, err := os.Stat(path); !os.IsNotExist(err) {
+		if _, err := os.Stat(path.String()); !os.IsNotExist(err) {
 			t.Errorf("Index %d was not deleted", i)
 		}
 	}

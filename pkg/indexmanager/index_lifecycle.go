@@ -106,7 +106,7 @@ func (im *IndexManager) insertIntoIndex(ctx TxCtx, tableFile *heap.HeapFile, col
 // Example:
 //
 //	indexID, err := im.CreatePhysicalIndex("data/indexes/user_id.idx", types.IntType, index.HashIndex)
-func (im *IndexManager) CreatePhysicalIndex(f primitives.Filepath, keyType types.Type, indexType index.IndexType) (primitives.TableID, error) {
+func (im *IndexManager) CreatePhysicalIndex(f primitives.Filepath, keyType types.Type, indexType index.IndexType) (primitives.FileID, error) {
 	dir := f.Dir()
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		return 0, fmt.Errorf("failed to create directory: %v", err)
@@ -180,7 +180,7 @@ func (im *IndexManager) CreatePhysicalIndex(f primitives.Filepath, keyType types
 func (im *IndexManager) PopulateIndex(
 	ctx TxCtx,
 	filePath primitives.Filepath,
-	indexID int,
+	indexID primitives.FileID,
 	tableFile page.DbFile,
 	columnIndex primitives.ColumnID,
 	keyType types.Type,

@@ -57,7 +57,7 @@ func newIndexLoader(catalog CatalogReader, pageStore *memory.PageStore) *indexLo
 // Returns:
 //   - A slice of indexWithMetadata containing successfully opened indexes
 //   - An error if catalog access fails
-func (il *indexLoader) loadAndOpenIndexes(ctx TxCtx, tableID primitives.TableID) ([]*indexWithMetadata, error) {
+func (il *indexLoader) loadAndOpenIndexes(ctx TxCtx, tableID primitives.FileID) ([]*indexWithMetadata, error) {
 	metadataList, err := il.loadFromCatalog(ctx, tableID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get indexes from catalog: %v", err)
@@ -91,7 +91,7 @@ func (il *indexLoader) loadAndOpenIndexes(ctx TxCtx, tableID primitives.TableID)
 // Returns:
 //   - A slice of complete IndexMetadata with resolved schema information
 //   - An error if catalog access or schema retrieval fails
-func (il *indexLoader) loadFromCatalog(ctx TxCtx, tableID primitives.TableID) ([]*IndexMetadata, error) {
+func (il *indexLoader) loadFromCatalog(ctx TxCtx, tableID primitives.FileID) ([]*IndexMetadata, error) {
 	catalogIndexes, err := il.catalog.GetIndexesByTable(ctx, tableID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get indexes from catalog: %v", err)
@@ -238,6 +238,6 @@ func (il *indexLoader) openHashIndex(ctx TxCtx, m *IndexMetadata) (*hashindex.Ha
 // Returns:
 //   - A slice of indexWithMetadata containing successfully opened indexes
 //   - An error if loading or opening fails
-func (im *IndexManager) loadAndOpenIndexes(ctx TxCtx, tableID primitives.TableID) ([]*indexWithMetadata, error) {
+func (im *IndexManager) loadAndOpenIndexes(ctx TxCtx, tableID primitives.FileID) ([]*indexWithMetadata, error) {
 	return im.loader.loadAndOpenIndexes(ctx, tableID)
 }

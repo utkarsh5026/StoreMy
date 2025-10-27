@@ -21,10 +21,10 @@ type IndexType = index.IndexType
 // This avoids circular dependencies with the catalog package.
 type CatalogReader interface {
 	// GetIndexesByTable retrieves index information from the catalog
-	GetIndexesByTable(tx *transaction.TransactionContext, tableID primitives.TableID) ([]*systemtable.IndexMetadata, error)
+	GetIndexesByTable(tx *transaction.TransactionContext, tableID primitives.FileID) ([]*systemtable.IndexMetadata, error)
 
 	// GetTableSchema retrieves the schema for a table
-	GetTableSchema(tableID primitives.TableID) (*schema.Schema, error)
+	GetTableSchema(tableID primitives.FileID) (*schema.Schema, error)
 }
 
 // IndexMetadata represents complete, resolved metadata for a database index.
@@ -84,7 +84,7 @@ func NewIndexManager(catalog CatalogReader, pageStore *memory.PageStore, wal *wa
 
 // InvalidateCache removes cached indexes for a table.
 // This is typically called when indexes are created or dropped for a table.
-func (im *IndexManager) InvalidateCache(tableID primitives.TableID) {
+func (im *IndexManager) InvalidateCache(tableID primitives.FileID) {
 	im.cache.Invalidate(tableID)
 }
 

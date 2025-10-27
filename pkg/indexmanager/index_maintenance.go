@@ -48,7 +48,7 @@ func (op operationType) String() string {
 //
 // Returns:
 //   - error: nil if all operations succeed, or an error describing the first failure
-func (im *IndexManager) processIndexOperation(ctx TxCtx, tableID primitives.TableID, t *tuple.Tuple, opType operationType) error {
+func (im *IndexManager) processIndexOperation(ctx TxCtx, tableID primitives.FileID, t *tuple.Tuple, opType operationType) error {
 	if t == nil || t.TableNotAssigned() {
 		return fmt.Errorf("tuple must be non-nil and have a RecordID")
 	}
@@ -165,7 +165,7 @@ func extractKey(t *tuple.Tuple, metadata *IndexMetadata) (types.Field, error) {
 //
 // Returns:
 //   - error: nil if all index insertions succeed, or an error describing the failure
-func (im *IndexManager) OnInsert(ctx TxCtx, tableID primitives.TableID, t *tuple.Tuple) error {
+func (im *IndexManager) OnInsert(ctx TxCtx, tableID primitives.FileID, t *tuple.Tuple) error {
 	return im.processIndexOperation(ctx, tableID, t, insertOp)
 }
 
@@ -183,7 +183,7 @@ func (im *IndexManager) OnInsert(ctx TxCtx, tableID primitives.TableID, t *tuple
 //
 // Returns:
 //   - error: nil if all index deletions succeed, or an error describing the failure
-func (im *IndexManager) OnDelete(ctx TxCtx, tableID primitives.TableID, t *tuple.Tuple) error {
+func (im *IndexManager) OnDelete(ctx TxCtx, tableID primitives.FileID, t *tuple.Tuple) error {
 	return im.processIndexOperation(ctx, tableID, t, deleteOp)
 }
 
@@ -203,7 +203,7 @@ func (im *IndexManager) OnDelete(ctx TxCtx, tableID primitives.TableID, t *tuple
 //
 // Returns:
 //   - error: nil if both deletion and insertion succeed, or an error describing the failure
-func (im *IndexManager) OnUpdate(ctx TxCtx, tableID primitives.TableID, old, new *tuple.Tuple) error {
+func (im *IndexManager) OnUpdate(ctx TxCtx, tableID primitives.FileID, old, new *tuple.Tuple) error {
 	if err := im.OnDelete(ctx, tableID, old); err != nil {
 		return err
 	}
