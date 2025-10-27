@@ -496,8 +496,8 @@ func TestHashPageGetID(t *testing.T) {
 	hp := NewHashPage(pageID, 0, types.IntType)
 
 	retrievedID := hp.GetID()
-	if retrievedID.GetTableID() != 5 {
-		t.Errorf("Expected table ID 5, got %d", retrievedID.GetTableID())
+	if retrievedID.FileID() != 5 {
+		t.Errorf("Expected table ID 5, got %d", retrievedID.FileID())
 	}
 	if retrievedID.PageNo() != 10 {
 		t.Errorf("Expected page number 10, got %d", retrievedID.PageNo())

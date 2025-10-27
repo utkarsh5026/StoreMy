@@ -28,7 +28,7 @@ type HashFile struct {
 	keyType      types.Type
 	numPages     primitives.PageNumber
 	numBuckets   int
-	indexID      primitives.TableID // Override index ID (set when file is associated with an index)
+	indexID      primitives.FileID // Override index ID (set when file is associated with an index)
 	mutex        sync.RWMutex
 	bucketPageID map[int]primitives.PageNumber // Maps bucket number to primary page number
 }
@@ -109,7 +109,7 @@ func (hf *HashFile) GetNumBuckets() int {
 // SetIndexID sets the index ID for this hash file.
 // This should be called when the file is associated with a specific index.
 // The indexID overrides the BaseFile's ID for page validation.
-func (hf *HashFile) SetIndexID(indexID primitives.TableID) {
+func (hf *HashFile) SetIndexID(indexID primitives.FileID) {
 	hf.mutex.Lock()
 	defer hf.mutex.Unlock()
 	hf.indexID = indexID
@@ -117,7 +117,7 @@ func (hf *HashFile) SetIndexID(indexID primitives.TableID) {
 
 // GetIndexID returns the index ID for this hash file.
 // Returns 0 if no index ID has been set.
-func (hf *HashFile) GetIndexID() primitives.TableID {
+func (hf *HashFile) GetIndexID() primitives.FileID {
 	hf.mutex.RLock()
 	defer hf.mutex.RUnlock()
 	return hf.indexID
@@ -126,7 +126,7 @@ func (hf *HashFile) GetIndexID() primitives.TableID {
 // GetID implements the DbFile interface by returning the index ID if set,
 // otherwise returns the BaseFile's ID (hash of filename).
 // This allows the file to be registered with a specific index ID.
-func (hf *HashFile) GetID() primitives.TableID {
+func (hf *HashFile) GetID() primitives.FileID {
 	hf.mutex.RLock()
 	defer hf.mutex.RUnlock()
 	if hf.indexID != 0 {
@@ -147,7 +147,7 @@ func (hf *HashFile) GetID() primitives.TableID {
 //   - error: Error if page ID is invalid or I/O fails
 func (hf *HashFile) ReadPage(pageID *page.PageDescriptor) (page.Page, error) {
 
-	if pageID.GetTableID() != hf.GetID() {
+	if pageID.FileID() != hf.GetID() {
 		return nil, fmt.Errorf("page ID index mismatch")
 	}
 
