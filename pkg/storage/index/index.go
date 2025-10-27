@@ -34,44 +34,6 @@ func ParseIndexType(str string) (IndexType, error) {
 	}
 }
 
-// IndexEntry represents a single key-value pair in a hash bucket.
-// Maps an index key to a tuple location in the heap file.
-//
-// Structure:
-//   - Key: The indexed field value (can be Int, String, Bool, or Float)
-//   - RID: Record ID pointing to the tuple in the heap file
-type IndexEntry struct {
-	Key Field
-	RID RecID
-}
-
-// NewHashEntry creates a new hash entry with the given key and tuple location.
-//
-// Parameters:
-//   - key: Field value to index
-//   - rid: Tuple record ID pointing to the actual data
-//
-// Returns a new IndexEntry ready to be inserted into a hash page.
-func NewIndexEntry(key Field, rid RecID) *IndexEntry {
-	return &IndexEntry{
-		Key: key,
-		RID: rid,
-	}
-}
-
-// Equals checks if this hash entry is identical to another.
-// Compares both the key value and the tuple location.
-//
-// Parameters:
-//   - other: IndexEntry to compare against
-//
-// Returns true if both key and RID match exactly.
-func (i *IndexEntry) Equals(other *IndexEntry) bool {
-	return i.Key.Equals(other.Key) &&
-		i.RID.PageID.Equals(other.RID.PageID) &&
-		i.RID.TupleNum == other.RID.TupleNum
-}
-
 // Index is the generic interface that all index types must implement
 // This allows different index implementations (BTree, Hash, etc.) to be used interchangeably
 type Index interface {
