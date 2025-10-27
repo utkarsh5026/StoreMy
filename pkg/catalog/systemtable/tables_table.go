@@ -11,10 +11,10 @@ import (
 // TableMetadata holds persisted metadata for a single table recorded in the system catalog.
 // It is used by TableManager to rebuild in-memory catalog state during database startup.
 type TableMetadata struct {
-	TableID       primitives.TableID // Unique numeric identifier for the table
-	TableName     string             // Canonical table name used in SQL
-	FilePath      string             // Heap file name where the table data is stored
-	PrimaryKeyCol string             // Name of the primary key column (empty if none or composite)
+	TableID       primitives.TableID  // Unique numeric identifier for the table
+	TableName     string              // Canonical table name used in SQL
+	FilePath      primitives.Filepath // Heap file name where the table data is stored
+	PrimaryKeyCol string              // Name of the primary key column (empty if none or composite)
 }
 
 // TablesTable provides accessors and helpers for the CATALOG_TABLES system table.
@@ -68,7 +68,7 @@ func (tt *TablesTable) CreateTuple(tm TableMetadata) *tuple.Tuple {
 	return tuple.NewBuilder(td).
 		AddInt(int64(tm.TableID)).
 		AddString(tm.TableName).
-		AddString(tm.FilePath).
+		AddString(string(tm.FilePath)).
 		AddString(tm.PrimaryKeyCol).
 		MustBuild()
 }
@@ -117,7 +117,7 @@ func (tt *TablesTable) Parse(t *tuple.Tuple) (*TableMetadata, error) {
 	return &TableMetadata{
 		TableID:       tableID,
 		TableName:     tableName,
-		FilePath:      filePath,
+		FilePath:      primitives.Filepath(filePath),
 		PrimaryKeyCol: primaryKey,
 	}, nil
 }
