@@ -3,6 +3,7 @@ package catalog
 import (
 	"storemy/pkg/catalog/operations"
 	"storemy/pkg/optimizer/statistics"
+	"storemy/pkg/primitives"
 	"storemy/pkg/types"
 	"time"
 )
@@ -11,18 +12,18 @@ import (
 // This is the high-level API type returned to database clients.
 // It wraps the system table data with runtime computed histogram and MCV data.
 type ColumnStatistics struct {
-	TableID        int                    // Table identifier
-	ColumnName     string                 // Column name
-	ColumnIndex    int                    // Column position in table (0-based)
-	DistinctCount  int64                  // Number of distinct values
-	NullCount      int64                  // Number of NULL values
-	MinValue       types.Field            // Minimum value in column
-	MaxValue       types.Field            // Maximum value in column
-	AvgWidth       int                    // Average width in bytes (for variable length types)
-	Histogram      *statistics.Histogram  // Value distribution histogram
-	MostCommonVals []types.Field          // Most common values (MCVs)
-	MCVFreqs       []float64              // Frequencies of MCVs (0.0-1.0)
-	LastUpdated    time.Time              // Last statistics update time
+	TableID        primitives.FileID     // Table identifier
+	ColumnName     string                // Column name
+	ColumnIndex    primitives.ColumnID   // Column position in table (0-based)
+	DistinctCount  uint64                // Number of distinct values
+	NullCount      uint64                // Number of NULL values
+	MinValue       types.Field           // Minimum value in column
+	MaxValue       types.Field           // Maximum value in column
+	AvgWidth       uint64                // Average width in bytes (for variable length types)
+	Histogram      *statistics.Histogram // Value distribution histogram
+	MostCommonVals []types.Field         // Most common values (MCVs)
+	MCVFreqs       []float64             // Frequencies of MCVs (0.0-1.0)
+	LastUpdated    time.Time             // Last statistics update time
 }
 
 // toColumnStatistics converts operations.ColStatsInfo to catalog.ColumnStatistics.

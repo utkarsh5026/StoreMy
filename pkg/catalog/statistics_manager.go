@@ -3,6 +3,7 @@ package catalog
 import (
 	"storemy/pkg/catalog/catalogmanager"
 	"storemy/pkg/concurrency/transaction"
+	"storemy/pkg/primitives"
 	"sync"
 	"time"
 )
@@ -10,8 +11,8 @@ import (
 // StatisticsManager handles automatic statistics updates with intelligent caching
 type StatisticsManager struct {
 	catalog           *catalogmanager.CatalogManager
-	lastUpdate        map[int]time.Time // tableID -> last update time
-	modificationCount map[int]int       // tableID -> number of modifications since last stats update
+	lastUpdate        map[primitives.FileID]time.Time // tableID -> last update time
+	modificationCount map[primitives.FileID]int       // tableID -> number of modifications since last stats update
 	mu                sync.RWMutex
 	updateThreshold   int            // Number of modifications before forcing stats update
 	updateInterval    time.Duration  // Minimum time between stats updates
@@ -31,8 +32,8 @@ func NewStatisticsManager(catalog *catalogmanager.CatalogManager, db interface {
 	return &StatisticsManager{
 		catalog:           catalog,
 		db:                db,
-		lastUpdate:        make(map[int]time.Time),
-		modificationCount: make(map[int]int),
+		lastUpdate:        make(map[primitives.FileID]time.Time),
+		modificationCount: make(map[primitives.FileID]int),
 		updateThreshold:   1000, // Update stats after 1000 modifications
 		updateInterval:    5 * time.Minute,
 		stopChan:          make(chan struct{}),
@@ -41,7 +42,7 @@ func NewStatisticsManager(catalog *catalogmanager.CatalogManager, db interface {
 
 // RecordModification records a modification to a table (insert/delete/update)
 // This is called by the PageStore after successful modifications
-func (sm *StatisticsManager) RecordModification(tableID int) {
+func (sm *StatisticsManager) RecordModification(tableID primitives.FileID) {
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
 
@@ -50,7 +51,7 @@ func (sm *StatisticsManager) RecordModification(tableID int) {
 
 // ShouldUpdateStatistics determines if statistics should be updated based on
 // modification count and time since last update
-func (sm *StatisticsManager) ShouldUpdateStatistics(tableID int) bool {
+func (sm *StatisticsManager) ShouldUpdateStatistics(tableID primitives.FileID) bool {
 	sm.mu.RLock()
 	defer sm.mu.RUnlock()
 
@@ -69,7 +70,7 @@ func (sm *StatisticsManager) ShouldUpdateStatistics(tableID int) bool {
 }
 
 // UpdateStatisticsIfNeeded updates statistics only if needed based on heuristics
-func (sm *StatisticsManager) UpdateStatisticsIfNeeded(tx *transaction.TransactionContext, tableID int) error {
+func (sm *StatisticsManager) UpdateStatisticsIfNeeded(tx *transaction.TransactionContext, tableID primitives.FileID) error {
 	if !sm.ShouldUpdateStatistics(tableID) {
 		return nil
 	}
@@ -99,7 +100,7 @@ func (sm *StatisticsManager) UpdateStatisticsIfNeeded(tx *transaction.Transactio
 }
 
 // ForceUpdate forces an immediate statistics update regardless of heuristics
-func (sm *StatisticsManager) ForceUpdate(tx *transaction.TransactionContext, tableID int) error {
+func (sm *StatisticsManager) ForceUpdate(tx *transaction.TransactionContext, tableID primitives.FileID) error {
 	if err := sm.catalog.UpdateTableStatistics(tx, tableID); err != nil {
 		return err
 	}
@@ -137,7 +138,7 @@ func (sm *StatisticsManager) SetUpdateInterval(interval time.Duration) {
 }
 
 // GetModificationCount returns the number of modifications for a table (for testing)
-func (sm *StatisticsManager) GetModificationCount(tableID int) int {
+func (sm *StatisticsManager) GetModificationCount(tableID primitives.FileID) int {
 	sm.mu.RLock()
 	defer sm.mu.RUnlock()
 	return sm.modificationCount[tableID]
@@ -178,11 +179,11 @@ func (sm *StatisticsManager) processTableUpdates() {
 }
 
 // getTablesNeedingUpdate returns a list of table IDs that need statistics updates
-func (sm *StatisticsManager) getTablesNeedingUpdate() []int {
+func (sm *StatisticsManager) getTablesNeedingUpdate() []primitives.FileID {
 	sm.mu.RLock()
 	defer sm.mu.RUnlock()
 
-	var tables []int
+	var tables []primitives.FileID
 	for tableID := range sm.modificationCount {
 		if sm.shouldUpdateStatisticsLocked(tableID) {
 			tables = append(tables, tableID)
@@ -192,7 +193,7 @@ func (sm *StatisticsManager) getTablesNeedingUpdate() []int {
 }
 
 // shouldUpdateStatisticsLocked is the internal version that assumes lock is already held
-func (sm *StatisticsManager) shouldUpdateStatisticsLocked(tableID int) bool {
+func (sm *StatisticsManager) shouldUpdateStatisticsLocked(tableID primitives.FileID) bool {
 	modCount := sm.modificationCount[tableID]
 	lastUpdate, exists := sm.lastUpdate[tableID]
 
@@ -208,7 +209,7 @@ func (sm *StatisticsManager) shouldUpdateStatisticsLocked(tableID int) bool {
 }
 
 // updateTableInSeparateTransaction updates statistics for a table in its own transaction
-func (sm *StatisticsManager) updateTableInSeparateTransaction(tableID int) error {
+func (sm *StatisticsManager) updateTableInSeparateTransaction(tableID primitives.FileID) error {
 	tx, err := sm.db.BeginTransaction()
 	if err != nil {
 		return err
