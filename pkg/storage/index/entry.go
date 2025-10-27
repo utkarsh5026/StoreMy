@@ -70,7 +70,7 @@ func (i *IndexEntry) Serialize(w io.Writer) error {
 	rid := i.RID
 	binary.Write(w, binary.BigEndian, byte(i.Key.Type()))
 	i.Key.Serialize(w)
-	binary.Write(w, binary.BigEndian, rid.PageID.GetTableID())
+	binary.Write(w, binary.BigEndian, rid.PageID.FileID())
 	binary.Write(w, binary.BigEndian, rid.PageID.PageNo())
 	binary.Write(w, binary.BigEndian, rid.TupleNum)
 	return nil
@@ -96,7 +96,7 @@ func DeserializeEntry(r *bytes.Reader) (*IndexEntry, error) {
 		return nil, err
 	}
 
-	var tableID primitives.TableID
+	var tableID primitives.FileID
 	var pageNum primitives.PageNumber
 	var tupleNum primitives.SlotID
 

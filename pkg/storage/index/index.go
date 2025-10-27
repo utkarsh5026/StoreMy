@@ -79,3 +79,20 @@ type IndexFile interface {
 	// NumPages returns the number of pages in the index file
 	NumPages() int
 }
+
+type IndexConfig struct {
+	// Index metadata
+	IndexName string
+	IndexID   primitives.FileID // Will be overwritten with actual ID from physical file
+	IndexType IndexType
+
+	// File path for the physical index
+	FilePath primitives.Filepath
+
+	// Table and column information
+	TableID     primitives.FileID
+	TableName   string
+	ColumnIndex primitives.ColumnID
+	ColumnName  string
+	ColumnType  types.Type
+}
