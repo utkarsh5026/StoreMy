@@ -4,28 +4,11 @@ import (
 	"path/filepath"
 	"storemy/pkg/log/wal"
 	"storemy/pkg/primitives"
+	"storemy/pkg/storage/page"
 	"sync"
 	"testing"
 	"time"
 )
-
-// mockPageID implements primitives.PageID for testing
-type mockPageID struct {
-	tableID int
-	pageNo  int
-}
-
-func (m *mockPageID) GetTableID() int  { return m.tableID }
-func (m *mockPageID) PageNo() int      { return m.pageNo }
-func (m *mockPageID) Serialize() []int { return []int{m.tableID, m.pageNo} }
-func (m *mockPageID) String() string   { return "mockPageID" }
-func (m *mockPageID) HashCode() int    { return m.tableID*31 + m.pageNo }
-func (m *mockPageID) Equals(other primitives.PageID) bool {
-	if other == nil {
-		return false
-	}
-	return m.tableID == other.GetTableID() && m.pageNo == other.PageNo()
-}
 
 // Helper function to create a temporary WAL for testing
 func createTestWAL(t *testing.T) (*wal.WAL, string) {
@@ -161,8 +144,8 @@ func TestTransactionContext_RecordPageAccess(t *testing.T) {
 	tid := primitives.NewTransactionID()
 	ctx := NewTransactionContext(tid)
 
-	pid1 := &mockPageID{tableID: 1, pageNo: 1}
-	pid2 := &mockPageID{tableID: 1, pageNo: 2}
+	pid1 := page.NewPageDescriptor(1, 1)
+	pid2 := page.NewPageDescriptor(1, 2)
 
 	// Record read-only access
 	ctx.RecordPageAccess(pid1, ReadOnly)
@@ -204,8 +187,8 @@ func TestTransactionContext_MarkPageDirty(t *testing.T) {
 	tid := primitives.NewTransactionID()
 	ctx := NewTransactionContext(tid)
 
-	pid1 := &mockPageID{tableID: 1, pageNo: 1}
-	pid2 := &mockPageID{tableID: 1, pageNo: 2}
+	pid1 := page.NewPageDescriptor(1, 2)
+	pid2 := page.NewPageDescriptor(1, 2)
 
 	// Mark first page dirty
 	ctx.MarkPageDirty(pid1)
@@ -243,9 +226,9 @@ func TestTransactionContext_WaitingFor(t *testing.T) {
 	tid := primitives.NewTransactionID()
 	ctx := NewTransactionContext(tid)
 
-	pid1 := &mockPageID{tableID: 1, pageNo: 1}
-	pid2 := &mockPageID{tableID: 1, pageNo: 2}
-	pid3 := &mockPageID{tableID: 1, pageNo: 3}
+	pid1 := page.NewPageDescriptor(1, 1)
+	pid2 := page.NewPageDescriptor(1, 2)
+	pid3 := page.NewPageDescriptor(1, 3)
 
 	// Add pages to waiting list
 	ctx.AddWaitingFor(pid1)
@@ -272,7 +255,7 @@ func TestTransactionContext_WaitingFor(t *testing.T) {
 	}
 
 	// Remove non-existent page (should not crash)
-	ctx.RemoveWaitingFor(&mockPageID{tableID: 99, pageNo: 99})
+	ctx.RemoveWaitingFor(page.NewPageDescriptor(99, 99))
 	waiting = ctx.GetWaitingFor()
 	if len(waiting) != 2 {
 		t.Errorf("Expected 2 waiting pages after removing non-existent, got %d", len(waiting))
@@ -356,7 +339,7 @@ func TestTransactionContext_Statistics(t *testing.T) {
 	tid := primitives.NewTransactionID()
 	ctx := NewTransactionContext(tid)
 
-	pid := &mockPageID{tableID: 1, pageNo: 1}
+	pid := page.NewPageDescriptor(1, 1)
 
 	// Record various operations
 	ctx.RecordPageAccess(pid, ReadOnly)
@@ -420,7 +403,7 @@ func TestTransactionContext_String(t *testing.T) {
 	tid := primitives.NewTransactionID()
 	ctx := NewTransactionContext(tid)
 
-	pid := &mockPageID{tableID: 1, pageNo: 1}
+	pid := page.NewPageDescriptor(1, 1)
 	ctx.RecordPageAccess(pid, ReadWrite)
 	ctx.MarkPageDirty(pid)
 
@@ -448,10 +431,10 @@ func TestTransactionContext_Concurrency(t *testing.T) {
 
 	// Concurrent operations
 	for i := 0; i < goroutines; i++ {
-		go func(id int) {
+		go func(id primitives.FileID) {
 			defer wg.Done()
 			for j := 0; j < operationsPerGoroutine; j++ {
-				pid := &mockPageID{tableID: id, pageNo: j}
+				pid := page.NewPageDescriptor(id, primitives.PageNumber(j))
 				ctx.RecordPageAccess(pid, ReadWrite)
 				ctx.MarkPageDirty(pid)
 				ctx.RecordTupleRead()
@@ -460,7 +443,7 @@ func TestTransactionContext_Concurrency(t *testing.T) {
 				_ = ctx.GetDirtyPages()
 				_ = ctx.GetLockedPages()
 			}
-		}(i)
+		}(primitives.FileID(i))
 	}
 
 	wg.Wait()
@@ -721,7 +704,7 @@ func TestTransactionRegistry_Concurrency(t *testing.T) {
 				}
 
 				// Perform some operations
-				pid := &mockPageID{tableID: 1, pageNo: j}
+				pid := page.NewPageDescriptor(primitives.FileID(i), primitives.PageNumber(j))
 				ctx.RecordPageAccess(pid, ReadWrite)
 				ctx.MarkPageDirty(pid)
 
@@ -808,7 +791,7 @@ func TestTransactionContext_DirtyPagesIndependence(t *testing.T) {
 	tid := primitives.NewTransactionID()
 	ctx := NewTransactionContext(tid)
 
-	pid1 := &mockPageID{tableID: 1, pageNo: 1}
+	pid1 := page.NewPageDescriptor(1, 1)
 	ctx.MarkPageDirty(pid1)
 
 	dirtyPages1 := ctx.GetDirtyPages()
@@ -820,7 +803,7 @@ func TestTransactionContext_DirtyPagesIndependence(t *testing.T) {
 	}
 
 	// Add another dirty page
-	pid2 := &mockPageID{tableID: 1, pageNo: 2}
+	pid2 := page.NewPageDescriptor(1, 2)
 	ctx.MarkPageDirty(pid2)
 
 	dirtyPages3 := ctx.GetDirtyPages()
@@ -839,13 +822,13 @@ func TestTransactionContext_LockedPagesIndependence(t *testing.T) {
 	tid := primitives.NewTransactionID()
 	ctx := NewTransactionContext(tid)
 
-	pid1 := &mockPageID{tableID: 1, pageNo: 1}
+	pid1 := page.NewPageDescriptor(1, 1)
 	ctx.RecordPageAccess(pid1, ReadOnly)
 
 	lockedPages1 := ctx.GetLockedPages()
 
 	// Add another locked page
-	pid2 := &mockPageID{tableID: 1, pageNo: 2}
+	pid2 := page.NewPageDescriptor(1, 2)
 	ctx.RecordPageAccess(pid2, ReadWrite)
 
 	lockedPages2 := ctx.GetLockedPages()
@@ -865,13 +848,13 @@ func TestTransactionContext_WaitingForIndependence(t *testing.T) {
 	tid := primitives.NewTransactionID()
 	ctx := NewTransactionContext(tid)
 
-	pid1 := &mockPageID{tableID: 1, pageNo: 1}
+	pid1 := page.NewPageDescriptor(1, 1)
 	ctx.AddWaitingFor(pid1)
 
 	waiting1 := ctx.GetWaitingFor()
 
 	// Add another waiting page
-	pid2 := &mockPageID{tableID: 1, pageNo: 2}
+	pid2 := page.NewPageDescriptor(1, 2)
 	ctx.AddWaitingFor(pid2)
 
 	waiting2 := ctx.GetWaitingFor()
