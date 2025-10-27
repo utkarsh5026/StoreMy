@@ -2,19 +2,20 @@ package plan
 
 import (
 	"fmt"
+	"storemy/pkg/primitives"
 	"strings"
 )
 
 // ScanNode represents a table scan operation
 type ScanNode struct {
 	BasePlanNode
-	TableName    string          // Name of the table being scanned
-	TableID      int             // Table identifier
-	AccessMethod string          // "seqscan", "indexscan", "indexonlyscan"
-	IndexName    string          // Index name (if using index scan)
-	IndexID      int             // Index ID (if using index scan)
-	Predicates   []PredicateInfo // Filter predicates pushed down to scan
-	Alias        string          // Table alias (if any)
+	TableName    string            // Name of the table being scanned
+	TableID      primitives.FileID // Table identifier
+	AccessMethod string            // "seqscan", "indexscan", "indexonlyscan"
+	IndexName    string            // Index name (if using index scan)
+	IndexID      primitives.FileID // Index ID (if using index scan)
+	Predicates   []PredicateInfo   // Filter predicates pushed down to scan
+	Alias        string            // Table alias (if any)
 }
 
 // NewScanNode creates a new simple table scan node with the given table name and alias.
