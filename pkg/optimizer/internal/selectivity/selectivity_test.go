@@ -559,7 +559,7 @@ func TestMCVIntegrationWithHistogram(t *testing.T) {
 func TestEstimateInSelectivity(t *testing.T) {
 	tests := []struct {
 		name          string
-		distinctCount int64
+		distinctCount uint64
 		valueCount    int
 		expected      float64
 	}{

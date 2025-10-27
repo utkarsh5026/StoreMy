@@ -154,7 +154,7 @@ func (tcs *testCatalogSetup) insertTestData(t *testing.T, tableID primitives.Fil
 }
 
 // collectColumnStats collects statistics for a specific column
-func (tcs *testCatalogSetup) collectColumnStats(t *testing.T, tableID primitives.FileID, columnName string, columnIndex int) *catalogmanager.ColumnStatistics {
+func (tcs *testCatalogSetup) collectColumnStats(t *testing.T, tableID primitives.FileID, columnName string, columnIndex primitives.ColumnID) *catalogmanager.ColumnStatistics {
 	t.Helper()
 
 	// Flush all pages to ensure data is visible
