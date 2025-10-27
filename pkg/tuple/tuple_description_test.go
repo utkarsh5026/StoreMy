@@ -1,6 +1,7 @@
 package tuple
 
 import (
+	"storemy/pkg/primitives"
 	"storemy/pkg/types"
 	"testing"
 )
@@ -11,7 +12,7 @@ func TestNewTupleDesc(t *testing.T) {
 		fieldTypes     []types.Type
 		fieldNames     []string
 		expectedError  bool
-		expectedLength int
+		expectedLength primitives.ColumnID
 	}{
 		{
 			name:           "Valid tuple with types and names",
@@ -94,7 +95,7 @@ func TestNewTupleDesc(t *testing.T) {
 
 func TestTupleDescription_NumFields(t *testing.T) {
 	td, _ := NewTupleDesc([]types.Type{types.IntType, types.StringType}, []string{"id", "name"})
-	
+
 	if td.NumFields() != 2 {
 		t.Errorf("Expected 2 fields, got %d", td.NumFields())
 	}
@@ -104,7 +105,7 @@ func TestTupleDescription_GetFieldName(t *testing.T) {
 	tests := []struct {
 		name          string
 		td            *TupleDescription
-		index         int
+		index         primitives.ColumnID
 		expectedName  string
 		expectedError bool
 	}{
@@ -121,12 +122,6 @@ func TestTupleDescription_GetFieldName(t *testing.T) {
 			index:         0,
 			expectedName:  "",
 			expectedError: false,
-		},
-		{
-			name:          "Invalid negative index",
-			td:            mustCreateTupleDesc([]types.Type{types.IntType}, []string{"id"}),
-			index:         -1,
-			expectedError: true,
 		},
 		{
 			name:          "Invalid index out of bounds",
@@ -164,7 +159,7 @@ func TestTupleDescription_TypeAtIndex(t *testing.T) {
 
 	tests := []struct {
 		name          string
-		index         int
+		index         primitives.ColumnID
 		expectedType  types.Type
 		expectedError bool
 	}{
@@ -179,11 +174,6 @@ func TestTupleDescription_TypeAtIndex(t *testing.T) {
 			index:         1,
 			expectedType:  types.StringType,
 			expectedError: false,
-		},
-		{
-			name:          "Invalid negative index",
-			index:         -1,
-			expectedError: true,
 		},
 		{
 			name:          "Invalid index out of bounds",
@@ -361,43 +351,43 @@ func TestCombine(t *testing.T) {
 	td4 := mustCreateTupleDesc([]types.Type{types.StringType}, nil)
 
 	tests := []struct {
-		name                string
-		td1                 *TupleDescription
-		td2                 *TupleDescription
-		expectedTypes       []types.Type
-		expectedFieldNames  []string
-		expectedHasNames    bool
+		name               string
+		td1                *TupleDescription
+		td2                *TupleDescription
+		expectedTypes      []types.Type
+		expectedFieldNames []string
+		expectedHasNames   bool
 	}{
 		{
-			name:                "Combine two descriptions with names",
-			td1:                 td1,
-			td2:                 td2,
-			expectedTypes:       []types.Type{types.IntType, types.StringType},
-			expectedFieldNames:  []string{"id", "name"},
-			expectedHasNames:    true,
+			name:               "Combine two descriptions with names",
+			td1:                td1,
+			td2:                td2,
+			expectedTypes:      []types.Type{types.IntType, types.StringType},
+			expectedFieldNames: []string{"id", "name"},
+			expectedHasNames:   true,
 		},
 		{
-			name:                "Combine two descriptions without names",
-			td1:                 td3,
-			td2:                 td4,
-			expectedTypes:       []types.Type{types.IntType, types.StringType},
-			expectedHasNames:    false,
+			name:             "Combine two descriptions without names",
+			td1:              td3,
+			td2:              td4,
+			expectedTypes:    []types.Type{types.IntType, types.StringType},
+			expectedHasNames: false,
 		},
 		{
-			name:                "Combine description with names and without names",
-			td1:                 td1,
-			td2:                 td4,
-			expectedTypes:       []types.Type{types.IntType, types.StringType},
-			expectedFieldNames:  []string{"id", ""},
-			expectedHasNames:    true,
+			name:               "Combine description with names and without names",
+			td1:                td1,
+			td2:                td4,
+			expectedTypes:      []types.Type{types.IntType, types.StringType},
+			expectedFieldNames: []string{"id", ""},
+			expectedHasNames:   true,
 		},
 		{
-			name:                "Combine description without names and with names",
-			td1:                 td3,
-			td2:                 td2,
-			expectedTypes:       []types.Type{types.IntType, types.StringType},
-			expectedFieldNames:  []string{"", "name"},
-			expectedHasNames:    true,
+			name:               "Combine description without names and with names",
+			td1:                td3,
+			td2:                td2,
+			expectedTypes:      []types.Type{types.IntType, types.StringType},
+			expectedFieldNames: []string{"", "name"},
+			expectedHasNames:   true,
 		},
 		{
 			name:          "Combine with first nil",

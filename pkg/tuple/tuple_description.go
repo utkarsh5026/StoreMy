@@ -2,6 +2,7 @@ package tuple
 
 import (
 	"fmt"
+	"storemy/pkg/primitives"
 	"storemy/pkg/types"
 	"strings"
 )
@@ -54,8 +55,8 @@ func NewTupleDesc(fieldTypes []types.Type, fieldNames []string) (*TupleDescripti
 //
 // Returns:
 //   - int: total number of fields in the schema
-func (td *TupleDescription) NumFields() int {
-	return len(td.Types)
+func (td *TupleDescription) NumFields() primitives.ColumnID {
+	return primitives.ColumnID(len(td.Types))
 }
 
 // GetFieldName returns the name of the ith field.
@@ -66,8 +67,8 @@ func (td *TupleDescription) NumFields() int {
 // Returns:
 //   - string: field name, or empty string if no names were provided
 //   - error: if index is out of bounds
-func (td *TupleDescription) GetFieldName(i int) (string, error) {
-	if i < 0 || i >= len(td.Types) {
+func (td *TupleDescription) GetFieldName(i primitives.ColumnID) (string, error) {
+	if i < 0 || i >= td.NumFields() {
 		return "", fmt.Errorf("field index %d out of bounds [0, %d)", i, len(td.Types))
 	}
 
@@ -86,8 +87,8 @@ func (td *TupleDescription) GetFieldName(i int) (string, error) {
 // Returns:
 //   - types.Type: data type of the field
 //   - error: if index is out of bounds
-func (td *TupleDescription) TypeAtIndex(i int) (types.Type, error) {
-	if i < 0 || i >= len(td.Types) {
+func (td *TupleDescription) TypeAtIndex(i primitives.ColumnID) (types.Type, error) {
+	if i >= td.NumFields() {
 		return 0, fmt.Errorf("field index %d out of bounds [0, %d)", i, len(td.Types))
 	}
 	return td.Types[i], nil
@@ -169,14 +170,15 @@ func (td *TupleDescription) String() string {
 // Returns:
 //   - int: zero-based index of the field
 //   - error: if the field is not found
-func (td *TupleDescription) FindFieldIndex(fieldName string) (int, error) {
-	for i := 0; i < td.NumFields(); i++ {
+func (td *TupleDescription) FindFieldIndex(fieldName string) (primitives.ColumnID, error) {
+	var i primitives.ColumnID
+	for i = 0; i < td.NumFields(); i++ {
 		name, _ := td.GetFieldName(i)
 		if name == fieldName {
 			return i, nil
 		}
 	}
-	return -1, fmt.Errorf("column %s not found", fieldName)
+	return 0, fmt.Errorf("column %s not found", fieldName)
 }
 
 // Combine merges two TupleDescriptions into one.

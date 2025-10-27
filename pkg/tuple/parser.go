@@ -2,6 +2,7 @@ package tuple
 
 import (
 	"fmt"
+	"storemy/pkg/primitives"
 	"storemy/pkg/types"
 	"time"
 )
@@ -10,7 +11,7 @@ import (
 // It mirrors the Builder pattern but for reading instead of writing
 type Parser struct {
 	tuple        *Tuple
-	currentIndex int
+	currentIndex primitives.ColumnID
 	err          error
 }
 
@@ -29,7 +30,7 @@ func (p *Parser) ExpectFields(count int) *Parser {
 	if p.err != nil {
 		return p
 	}
-	if p.tuple.TupleDesc.NumFields() != count {
+	if p.tuple.TupleDesc.NumFields() != primitives.ColumnID(count) {
 		p.err = fmt.Errorf("invalid tuple: expected %d fields, got %d",
 			count, p.tuple.TupleDesc.NumFields())
 	}

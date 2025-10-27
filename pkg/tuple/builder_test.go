@@ -1,6 +1,7 @@
 package tuple
 
 import (
+	"storemy/pkg/primitives"
 	"storemy/pkg/types"
 	"testing"
 	"time"
@@ -481,7 +482,7 @@ func TestBuilder_AllIntegerTypes(t *testing.T) {
 
 	// Verify all fields
 	tests := []struct {
-		index        int
+		index        primitives.ColumnID
 		expectedType string
 		checkValue   func(field types.Field) bool
 	}{

@@ -2,6 +2,7 @@ package tuple
 
 import (
 	"fmt"
+	"storemy/pkg/primitives"
 	"storemy/pkg/types"
 	"strings"
 )
@@ -46,8 +47,8 @@ func NewTuple(td *TupleDescription) *Tuple {
 //
 // Returns:
 //   - error: Returns an error if the index is out of bounds or if the field type doesn't match the schema
-func (t *Tuple) SetField(i int, field types.Field) error {
-	if i < 0 || i >= len(t.fields) {
+func (t *Tuple) SetField(i primitives.ColumnID, field types.Field) error {
+	if i >= t.fieldCount() {
 		return fmt.Errorf("field index %d out of bounds [0, %d)", i, len(t.fields))
 	}
 
@@ -79,8 +80,8 @@ func (t *Tuple) TableNotAssigned() bool {
 // Returns:
 //   - types.Field: The field value at the specified index
 //   - error: Returns an error if the index is out of bounds
-func (t *Tuple) GetField(i int) (types.Field, error) {
-	if i < 0 || i >= len(t.fields) {
+func (t *Tuple) GetField(i primitives.ColumnID) (types.Field, error) {
+	if i >= t.fieldCount() {
 		return nil, fmt.Errorf("field index %d out of bounds [0, %d)", i, len(t.fields))
 	}
 	return t.fields[i], nil
@@ -145,8 +146,9 @@ func CombineTuples(t1, t2 *Tuple) (*Tuple, error) {
 //
 // Returns:
 //   - error: Returns an error if any field retrieval or setting fails
-func (t *Tuple) copyFieldsTo(target *Tuple, startIndex int) error {
-	for i := 0; i < t.TupleDesc.NumFields(); i++ {
+func (t *Tuple) copyFieldsTo(target *Tuple, startIndex primitives.ColumnID) error {
+	var i primitives.ColumnID
+	for i = 0; i < t.TupleDesc.NumFields(); i++ {
 		field, err := t.GetField(i)
 		if err != nil {
 			return err
@@ -195,7 +197,7 @@ func (t *Tuple) Clone() (*Tuple, error) {
 // Returns:
 //   - *Tuple: A new tuple with the specified fields updated
 //   - error: Returns an error if cloning fails or if any field update is invalid
-func (t *Tuple) WithUpdatedFields(fieldUpdates map[int]types.Field) (*Tuple, error) {
+func (t *Tuple) WithUpdatedFields(fieldUpdates map[primitives.ColumnID]types.Field) (*Tuple, error) {
 	newTup, err := t.Clone()
 	if err != nil {
 		return nil, fmt.Errorf("failed to clone tuple: %w", err)
@@ -208,4 +210,13 @@ func (t *Tuple) WithUpdatedFields(fieldUpdates map[int]types.Field) (*Tuple, err
 	}
 
 	return newTup, nil
+}
+
+// fieldCount returns the number of fields in the tuple.
+// This is an unexported helper method, used to get the count of stored field values.
+//
+// Returns:
+//   - primitives.ColumnID: The number of fields in the tuple.
+func (t *Tuple) fieldCount() primitives.ColumnID {
+	return primitives.ColumnID(len(t.fields))
 }

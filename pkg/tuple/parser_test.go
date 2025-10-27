@@ -82,8 +82,8 @@ func TestParser_TypeMismatch(t *testing.T) {
 
 	// Try to read string as int
 	p := NewParser(tuple).ExpectFields(2)
-	_ = p.ReadInt()  // OK
-	_ = p.ReadInt()  // Wrong - should be string
+	_ = p.ReadInt() // OK
+	_ = p.ReadInt() // Wrong - should be string
 
 	if err := p.Error(); err == nil {
 		t.Error("expected type mismatch error, got nil")
@@ -149,8 +149,8 @@ func TestParser_ReadBeyondBounds(t *testing.T) {
 		MustBuild()
 
 	p := NewParser(tuple).ExpectFields(1)
-	_ = p.ReadInt()  // OK
-	_ = p.ReadInt()  // Beyond bounds
+	_ = p.ReadInt() // OK
+	_ = p.ReadInt() // Beyond bounds
 
 	if err := p.Error(); err == nil {
 		t.Error("expected read beyond bounds error, got nil")
@@ -170,7 +170,7 @@ func TestParser_Done(t *testing.T) {
 
 	// Test incomplete parsing
 	p := NewParser(tuple).ExpectFields(2)
-	_ = p.ReadInt()  // Only read 1 field
+	_ = p.ReadInt() // Only read 1 field
 
 	if err := p.Done(); err == nil {
 		t.Error("expected incomplete parsing error, got nil")

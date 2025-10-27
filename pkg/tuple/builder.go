@@ -2,6 +2,7 @@ package tuple
 
 import (
 	"fmt"
+	"storemy/pkg/primitives"
 	"storemy/pkg/types"
 	"time"
 )
@@ -9,7 +10,7 @@ import (
 // Builder provides a fluent interface for constructing tuples
 type Builder struct {
 	tuple        *Tuple
-	currentIndex int
+	currentIndex primitives.ColumnID
 	err          error
 }
 

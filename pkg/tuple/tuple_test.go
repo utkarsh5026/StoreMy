@@ -43,7 +43,7 @@ func TestTuple_SetField(t *testing.T) {
 
 	tests := []struct {
 		name          string
-		index         int
+		index         primitives.ColumnID
 		field         types.Field
 		expectedError bool
 	}{
@@ -58,12 +58,6 @@ func TestTuple_SetField(t *testing.T) {
 			index:         1,
 			field:         stringField,
 			expectedError: false,
-		},
-		{
-			name:          "Invalid negative index",
-			index:         -1,
-			field:         intField,
-			expectedError: true,
 		},
 		{
 			name:          "Invalid index out of bounds",
@@ -121,7 +115,7 @@ func TestTuple_GetField(t *testing.T) {
 
 	tests := []struct {
 		name          string
-		index         int
+		index         primitives.ColumnID
 		expectedField types.Field
 		expectedError bool
 	}{
@@ -136,11 +130,6 @@ func TestTuple_GetField(t *testing.T) {
 			index:         1,
 			expectedField: stringField,
 			expectedError: false,
-		},
-		{
-			name:          "Invalid negative index",
-			index:         -1,
-			expectedError: true,
 		},
 		{
 			name:          "Invalid index out of bounds",
@@ -261,7 +250,7 @@ func TestCombineTuples(t *testing.T) {
 		setupTuple1    func() *Tuple
 		setupTuple2    func() *Tuple
 		expectedError  bool
-		expectedFields int
+		expectedFields primitives.ColumnID
 		validateResult func(*testing.T, *Tuple)
 	}{
 		{
@@ -317,7 +306,7 @@ func TestCombineTuples(t *testing.T) {
 				expectedValues := []interface{}{int32(2), "Bob", "Smith", int32(25)}
 
 				for i, expected := range expectedValues {
-					field, _ := result.GetField(i)
+					field, _ := result.GetField(primitives.ColumnID(i))
 
 					switch v := expected.(type) {
 					case int64:
