@@ -456,20 +456,26 @@ func TestTuple_RecordID(t *testing.T) {
 }
 
 type mockPageID struct {
-	tableID int
-	pageNo  int
+	tableID primitives.TableID
+	pageNo  primitives.PageNumber
 }
 
-func (m *mockPageID) GetTableID() int {
+func (m *mockPageID) GetTableID() primitives.TableID {
 	return m.tableID
 }
 
-func (m *mockPageID) PageNo() int {
+func (m *mockPageID) PageNo() primitives.PageNumber {
 	return m.pageNo
 }
 
-func (m *mockPageID) Serialize() []int {
-	return []int{m.tableID, m.pageNo}
+func (m *mockPageID) Serialize() []byte {
+	// Simple serialization for testing - just convert to bytes
+	result := make([]byte, 16)
+	for i := 0; i < 8; i++ {
+		result[i] = byte(m.tableID >> (8 * i))
+		result[i+8] = byte(m.pageNo >> (8 * i))
+	}
+	return result
 }
 
 func (m *mockPageID) Equals(other primitives.PageID) bool {
@@ -483,6 +489,6 @@ func (m *mockPageID) String() string {
 	return "mockPageID(1,2)"
 }
 
-func (m *mockPageID) HashCode() int {
-	return m.tableID*31 + m.pageNo
+func (m *mockPageID) HashCode() primitives.HashCode {
+	return primitives.HashCode(uint64(m.tableID)*31 + uint64(m.pageNo))
 }
