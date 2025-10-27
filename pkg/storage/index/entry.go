@@ -3,6 +3,11 @@ package index
 import (
 	"bytes"
 	"encoding/binary"
+	"io"
+	"storemy/pkg/primitives"
+	"storemy/pkg/storage/page"
+	"storemy/pkg/tuple"
+	"storemy/pkg/types"
 )
 
 // IndexEntry represents a single key-value pair in a hash bucket.
@@ -61,13 +66,67 @@ func (i *IndexEntry) Equals(other *IndexEntry) bool {
 //
 //	entry := NewIndexEntry(IntField{Value: 42}, rid)
 //	data, err := entry.Serialize()
-func (i *IndexEntry) Serialize() ([]byte, error) {
-	buf := new(bytes.Buffer)
+func (i *IndexEntry) Serialize(w io.Writer) error {
 	rid := i.RID
-	binary.Write(buf, binary.BigEndian, byte(i.Key.Type()))
-	i.Key.Serialize(buf)
-	binary.Write(buf, binary.BigEndian, rid.PageID.GetTableID())
-	binary.Write(buf, binary.BigEndian, rid.PageID.PageNo())
-	binary.Write(buf, binary.BigEndian, rid.TupleNum)
-	return buf.Bytes(), nil
+	binary.Write(w, binary.BigEndian, byte(i.Key.Type()))
+	i.Key.Serialize(w)
+	binary.Write(w, binary.BigEndian, rid.PageID.GetTableID())
+	binary.Write(w, binary.BigEndian, rid.PageID.PageNo())
+	binary.Write(w, binary.BigEndian, rid.TupleNum)
+	return nil
+}
+
+// DeserializeEntry reads a single hash entry from the byte stream.
+//
+// Expects format:
+//  1. Key field (type byte + data)
+//  2. Table ID (4 bytes)
+//  3. Page number (4 bytes)
+//  4. Tuple number (4 bytes)
+//
+// Parameters:
+//   - r: Reader to deserialize from
+//
+// Returns:
+//   - Reconstructed index.IndexEntry
+//   - Error if read fails or format is invalid
+func DeserializeEntry(r *bytes.Reader) (*IndexEntry, error) {
+	key, err := deserializeField(r)
+	if err != nil {
+		return nil, err
+	}
+
+	var tableID primitives.TableID
+	var pageNum primitives.PageNumber
+	var tupleNum primitives.SlotID
+
+	binary.Read(r, binary.BigEndian, &tableID)
+	binary.Read(r, binary.BigEndian, &pageNum)
+	binary.Read(r, binary.BigEndian, &tupleNum)
+
+	pageID := page.NewPageDescriptor(tableID, pageNum)
+	rid := tuple.NewTupleRecordID(pageID, tupleNum)
+
+	return NewIndexEntry(key, rid), nil
+}
+
+// deserializeField reads a field value from the byte stream.
+//
+// Expects format:
+//  1. Type byte (IntType, StringType, BoolType, FloatType)
+//  2. Type-specific data
+//
+// Parameters:
+//   - r: Reader to deserialize from
+//
+// Returns:
+//   - Reconstructed Field
+//   - Error if read fails or type is invalid
+func deserializeField(r *bytes.Reader) (types.Field, error) {
+	fieldTypeByte, err := r.ReadByte()
+	if err != nil {
+		return nil, err
+	}
+	fieldType := types.Type(fieldTypeByte)
+	return types.ParseField(r, fieldType)
 }
