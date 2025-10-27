@@ -6,7 +6,6 @@ import (
 	"storemy/pkg/iterator"
 	"storemy/pkg/log/wal"
 	"storemy/pkg/primitives"
-	"storemy/pkg/storage/heap"
 	"storemy/pkg/storage/page"
 	"storemy/pkg/tuple"
 	"storemy/pkg/types"
@@ -14,9 +13,13 @@ import (
 	"testing"
 )
 
+func pgNum(id int) primitives.PageNumber {
+	return primitives.PageNumber(id)
+}
+
 // mockPage implements page.Page interface for testing
 type mockPage struct {
-	id        primitives.PageID
+	id        *page.PageDescriptor
 	dirty     bool
 	dirtyTid  *primitives.TransactionID
 	data      []byte
@@ -24,14 +27,14 @@ type mockPage struct {
 	mutex     sync.RWMutex
 }
 
-func newMockPage(pageID primitives.PageID) *mockPage {
+func newMockPage(pageID *page.PageDescriptor) *mockPage {
 	return &mockPage{
 		id:   pageID,
 		data: make([]byte, page.PageSize),
 	}
 }
 
-func (m *mockPage) GetID() primitives.PageID {
+func (m *mockPage) GetID() *page.PageDescriptor {
 	return m.id
 }
 
@@ -100,7 +103,7 @@ func newMockDbFileForPageStore(id int, fieldTypes []types.Type, fieldNames []str
 	}
 }
 
-func (m *mockDbFileForPageStore) ReadPage(pid primitives.PageID) (page.Page, error) {
+func (m *mockDbFileForPageStore) ReadPage(pid *page.PageDescriptor) (page.Page, error) {
 	m.mutex.RLock()
 	defer m.mutex.RUnlock()
 
@@ -132,7 +135,7 @@ func (m *mockDbFileForPageStore) AddTuple(tid *primitives.TransactionID, t *tupl
 	defer m.mutex.Unlock()
 
 	// Create a new page for the tuple
-	pageID := heap.NewHeapPageID(m.id, len(m.pages))
+	pageID := page.NewPageDescriptor(primitives.FileID(m.id), primitives.PageNumber(len(m.pages)))
 	newPage := newMockPage(pageID)
 	newPage.MarkDirty(true, tid)
 
@@ -157,8 +160,8 @@ func (m *mockDbFileForPageStore) DeleteTuple(tid *primitives.TransactionID, t *t
 			return existingPage, nil
 		}
 
-		// Create new page if it doesn't exist
-		newPage := newMockPage(pageID)
+		hpid := pageID.(*page.PageDescriptor)
+		newPage := newMockPage(hpid)
 		newPage.MarkDirty(true, tid)
 		m.pages[pageID] = newPage
 		return newPage, nil

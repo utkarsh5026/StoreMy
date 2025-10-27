@@ -3,7 +3,7 @@ package memory
 import (
 	"fmt"
 	"storemy/pkg/primitives"
-	"storemy/pkg/storage/heap"
+	"storemy/pkg/storage/page"
 	"sync"
 	"testing"
 )
@@ -37,7 +37,7 @@ func TestNewLRUPageCache(t *testing.T) {
 func TestLRUPageCache_Put_Get(t *testing.T) {
 	cache := NewLRUPageCache(5)
 
-	pid1 := heap.NewHeapPageID(1, 1)
+	pid1 := page.NewPageDescriptor(1, 1)
 	page1 := newMockPage(pid1)
 
 	// Put a page
@@ -64,7 +64,7 @@ func TestLRUPageCache_Put_Get(t *testing.T) {
 func TestLRUPageCache_Get_NonExistent(t *testing.T) {
 	cache := NewLRUPageCache(5)
 
-	pid := heap.NewHeapPageID(1, 1)
+	pid := page.NewPageDescriptor(1, 1)
 	_, found := cache.Get(pid)
 
 	if found {
@@ -75,7 +75,7 @@ func TestLRUPageCache_Get_NonExistent(t *testing.T) {
 func TestLRUPageCache_Put_Update(t *testing.T) {
 	cache := NewLRUPageCache(5)
 
-	pid := heap.NewHeapPageID(1, 1)
+	pid := page.NewPageDescriptor(1, 1)
 	page1 := newMockPage(pid)
 	page2 := newMockPage(pid)
 
@@ -104,7 +104,7 @@ func TestLRUPageCache_Put_CacheFull(t *testing.T) {
 
 	// Fill the cache
 	for i := 1; i <= 3; i++ {
-		pid := heap.NewHeapPageID(1, i)
+		pid := page.NewPageDescriptor(1, pgNum(i))
 		p := newMockPage(pid)
 		err := cache.Put(pid, p)
 		if err != nil {
@@ -117,7 +117,7 @@ func TestLRUPageCache_Put_CacheFull(t *testing.T) {
 	}
 
 	// Try to add one more page
-	pid4 := heap.NewHeapPageID(1, 4)
+	pid4 := page.NewPageDescriptor(1, 4)
 	page4 := newMockPage(pid4)
 	err := cache.Put(pid4, page4)
 
@@ -133,7 +133,7 @@ func TestLRUPageCache_Put_CacheFull(t *testing.T) {
 func TestLRUPageCache_Remove(t *testing.T) {
 	cache := NewLRUPageCache(5)
 
-	pid1 := heap.NewHeapPageID(1, 1)
+	pid1 := page.NewPageDescriptor(1, 1)
 	page1 := newMockPage(pid1)
 
 	// Put and then remove
@@ -153,7 +153,7 @@ func TestLRUPageCache_Remove(t *testing.T) {
 func TestLRUPageCache_Remove_NonExistent(t *testing.T) {
 	cache := NewLRUPageCache(5)
 
-	pid := heap.NewHeapPageID(1, 1)
+	pid := page.NewPageDescriptor(1, 1)
 
 	// Should not panic
 	cache.Remove(pid)
@@ -171,7 +171,7 @@ func TestLRUPageCache_Clear(t *testing.T) {
 
 	// Add multiple pages
 	for i := 1; i <= 3; i++ {
-		pid := heap.NewHeapPageID(1, i)
+		pid := page.NewPageDescriptor(1, pgNum(i))
 		pids[i-1] = pid
 		p := newMockPage(pid)
 		cache.Put(pid, p)
@@ -209,7 +209,7 @@ func TestLRUPageCache_Size(t *testing.T) {
 
 	// Add pages and verify size
 	for i := 1; i <= 3; i++ {
-		pid := heap.NewHeapPageID(1, i)
+		pid := page.NewPageDescriptor(1, pgNum(i))
 		pids[i-1] = pid
 		p := newMockPage(pid)
 		cache.Put(pid, p)
@@ -236,9 +236,9 @@ func TestLRUPageCache_GetAll(t *testing.T) {
 	}
 
 	// Add pages
-	pid1 := heap.NewHeapPageID(1, 1)
-	pid2 := heap.NewHeapPageID(1, 2)
-	pid3 := heap.NewHeapPageID(1, 3)
+	pid1 := page.NewPageDescriptor(1, 1)
+	pid2 := page.NewPageDescriptor(1, 2)
+	pid3 := page.NewPageDescriptor(1, 3)
 
 	cache.Put(pid1, newMockPage(pid1))
 	cache.Put(pid2, newMockPage(pid2))
@@ -250,13 +250,13 @@ func TestLRUPageCache_GetAll(t *testing.T) {
 	}
 
 	// Verify all pages are present
-	pidMap := make(map[int]bool)
+	pidMap := make(map[primitives.PageNumber]bool)
 	for _, pid := range pids {
 		pidMap[pid.PageNo()] = true
 	}
 
 	for i := 1; i <= 3; i++ {
-		if !pidMap[i] {
+		if !pidMap[pgNum(i)] {
 			t.Errorf("Page %d not found in GetAll result", i)
 		}
 	}
@@ -266,9 +266,9 @@ func TestLRUPageCache_GetAll_LRUOrder(t *testing.T) {
 	cache := NewLRUPageCache(5)
 
 	// Add pages in order
-	pid1 := heap.NewHeapPageID(1, 1)
-	pid2 := heap.NewHeapPageID(1, 2)
-	pid3 := heap.NewHeapPageID(1, 3)
+	pid1 := page.NewPageDescriptor(1, 1)
+	pid2 := page.NewPageDescriptor(1, 2)
+	pid3 := page.NewPageDescriptor(1, 3)
 
 	cache.Put(pid1, newMockPage(pid1))
 	cache.Put(pid2, newMockPage(pid2))
@@ -299,9 +299,9 @@ func TestLRUPageCache_GetAll_LRUOrder(t *testing.T) {
 func TestLRUPageCache_LRUBehavior(t *testing.T) {
 	cache := NewLRUPageCache(3)
 
-	pid1 := heap.NewHeapPageID(1, 1)
-	pid2 := heap.NewHeapPageID(1, 2)
-	pid3 := heap.NewHeapPageID(1, 3)
+	pid1 := page.NewPageDescriptor(1, 1)
+	pid2 := page.NewPageDescriptor(1, 2)
+	pid3 := page.NewPageDescriptor(1, 3)
 
 	// Add three pages
 	cache.Put(pid1, newMockPage(pid1))
@@ -339,7 +339,7 @@ func TestLRUPageCache_ConcurrentOperations(t *testing.T) {
 		go func(id int) {
 			defer wg.Done()
 			for j := 0; j < opsPerGoroutine; j++ {
-				pid := heap.NewHeapPageID(id, j)
+				pid := page.NewPageDescriptor(primitives.FileID(id), pgNum(j))
 				p := newMockPage(pid)
 				cache.Put(pid, p)
 			}
@@ -360,7 +360,7 @@ func TestLRUPageCache_ConcurrentGetPut(t *testing.T) {
 
 	// Pre-populate cache
 	for i := 0; i < 20; i++ {
-		pid := heap.NewHeapPageID(1, i)
+		pid := page.NewPageDescriptor(1, pgNum(i))
 		p := newMockPage(pid)
 		cache.Put(pid, p)
 	}
@@ -373,7 +373,7 @@ func TestLRUPageCache_ConcurrentGetPut(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			for j := 0; j < 100; j++ {
-				pid := heap.NewHeapPageID(1, j%20)
+				pid := page.NewPageDescriptor(1, pgNum(j%20))
 				cache.Get(pid)
 			}
 		}()
@@ -384,7 +384,7 @@ func TestLRUPageCache_ConcurrentGetPut(t *testing.T) {
 		go func(id int) {
 			defer wg.Done()
 			for j := 0; j < 30; j++ {
-				pid := heap.NewHeapPageID(2, id*30+j)
+				pid := page.NewPageDescriptor(2, pgNum(id*30+j))
 				p := newMockPage(pid)
 				cache.Put(pid, p)
 			}
@@ -407,7 +407,7 @@ func TestLRUPageCache_ConcurrentRemove(t *testing.T) {
 
 	// Pre-populate cache
 	for i := 0; i < 50; i++ {
-		pid := heap.NewHeapPageID(1, i)
+		pid := page.NewPageDescriptor(1, pgNum(i))
 		pids[i] = pid
 		p := newMockPage(pid)
 		cache.Put(pid, p)
@@ -445,7 +445,7 @@ func TestLRUPageCache_ConcurrentClear(t *testing.T) {
 		go func(id int) {
 			defer wg.Done()
 			for j := 0; j < 10; j++ {
-				pid := heap.NewHeapPageID(id, j)
+				pid := page.NewPageDescriptor(primitives.FileID(id), pgNum(j))
 				p := newMockPage(pid)
 				cache.Put(pid, p)
 			}
@@ -476,7 +476,7 @@ func TestLRUPageCache_MultipleTablePages(t *testing.T) {
 	// Add pages from different tables
 	for table := 1; table <= 3; table++ {
 		for pageNo := 1; pageNo <= 2; pageNo++ {
-			pid := heap.NewHeapPageID(table, pageNo)
+			pid := page.NewPageDescriptor(primitives.FileID(table), pgNum(pageNo))
 			key := fmt.Sprintf("%d-%d", table, pageNo)
 			pids[key] = pid
 			p := newMockPage(pid)

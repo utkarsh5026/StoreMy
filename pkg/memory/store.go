@@ -66,7 +66,7 @@ type PageStore struct {
 	lockManager *lock.LockManager
 	cache       PageCache
 	wal         *wal.WAL
-	dbFiles     map[int]page.PageIO // tableID -> PageIO mapping for I/O operations
+	dbFiles     map[primitives.FileID]page.PageIO // tableID -> PageIO mapping for I/O operations
 }
 
 // NewPageStore creates and initializes a new PageStore instance
@@ -75,14 +75,14 @@ func NewPageStore(wal *wal.WAL) *PageStore {
 		cache:       NewLRUPageCache(MaxPageCount),
 		lockManager: lock.NewLockManager(),
 		wal:         wal,
-		dbFiles:     make(map[int]page.PageIO),
+		dbFiles:     make(map[primitives.FileID]page.PageIO),
 	}
 }
 
 // RegisterDbFile registers a PageIO implementation for a specific table ID.
 // This allows PageStore to perform read/write operations on pages.
 // Note: Accepts PageIO (not DbFile) to prevent PageStore from managing file lifecycle.
-func (p *PageStore) RegisterDbFile(tableID int, pageIO page.PageIO) {
+func (p *PageStore) RegisterDbFile(tableID primitives.FileID, pageIO page.PageIO) {
 	p.mutex.Lock()
 	defer p.mutex.Unlock()
 	p.dbFiles[tableID] = pageIO
@@ -91,7 +91,7 @@ func (p *PageStore) RegisterDbFile(tableID int, pageIO page.PageIO) {
 // GetDbFile retrieves the PageIO for a specific table ID.
 // Returns nil if no PageIO is registered for the given table ID.
 // Note: Returns PageIO (not DbFile) - caller must handle lifecycle separately.
-func (p *PageStore) GetDbFile(tableID int) page.PageIO {
+func (p *PageStore) GetDbFile(tableID primitives.FileID) page.PageIO {
 	p.mutex.RLock()
 	defer p.mutex.RUnlock()
 	return p.dbFiles[tableID]
@@ -99,7 +99,7 @@ func (p *PageStore) GetDbFile(tableID int) page.PageIO {
 
 // UnregisterDbFile removes a DbFile registration for a specific table ID.
 // Note: The caller is responsible for closing the DbFile before calling this method.
-func (p *PageStore) UnregisterDbFile(tableID int) {
+func (p *PageStore) UnregisterDbFile(tableID primitives.FileID) {
 	p.mutex.Lock()
 	defer p.mutex.Unlock()
 	delete(p.dbFiles, tableID)
@@ -117,7 +117,7 @@ func (p *PageStore) UnregisterDbFile(tableID int) {
 //   - pageIO: Page I/O interface for reading the page from disk if not cached
 //   - pid: Page identifier (contains table ID and page number)
 //   - perm: Access permissions (ReadOnly or ReadWrite)
-func (p *PageStore) GetPage(ctx TxContext, pageIO page.PageIO, pid primitives.PageID, perm transaction.Permissions) (page.Page, error) {
+func (p *PageStore) GetPage(ctx TxContext, pageIO page.PageIO, pid *page.PageDescriptor, perm transaction.Permissions) (page.Page, error) {
 	if ctx == nil {
 		return nil, fmt.Errorf("transaction context cannot be nil")
 	}
@@ -381,7 +381,7 @@ func (p *PageStore) logOperation(operation OperationType, tid *primitives.Transa
 // getDbFileForPage retrieves the PageIO for a given page ID.
 // This is used internally for operations like flushing that need page I/O access.
 func (p *PageStore) getDbFileForPage(pageID primitives.PageID) (page.PageIO, error) {
-	tableID := pageID.GetTableID()
+	tableID := pageID.FileID()
 	p.mutex.RLock()
 	pageIO, exists := p.dbFiles[tableID]
 	p.mutex.RUnlock()

@@ -37,7 +37,7 @@ type cacheEntry struct {
 // Note: Uses HashCode() as map key instead of PageID directly to avoid pointer equality issues.
 type LRUPageCache struct {
 	maxSize int
-	cache   map[int]*list.Element // map from HashCode to list element
+	cache   map[primitives.HashCode]*list.Element // map from HashCode to list element
 	lru     *list.List
 	mutex   sync.RWMutex
 }
@@ -46,7 +46,7 @@ type LRUPageCache struct {
 func NewLRUPageCache(maxSize int) *LRUPageCache {
 	return &LRUPageCache{
 		maxSize: maxSize,
-		cache:   make(map[int]*list.Element),
+		cache:   make(map[primitives.HashCode]*list.Element),
 		lru:     list.New(),
 	}
 }
@@ -121,7 +121,7 @@ func (c *LRUPageCache) Clear() {
 	c.mutex.Lock()
 	defer c.mutex.Unlock()
 
-	c.cache = make(map[int]*list.Element)
+	clear(c.cache)
 	c.lru.Init()
 }
 

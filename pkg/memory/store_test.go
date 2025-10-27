@@ -5,7 +5,6 @@ import (
 	"storemy/pkg/concurrency/transaction"
 	"storemy/pkg/log/wal"
 	"storemy/pkg/primitives"
-	"storemy/pkg/storage/heap"
 	"storemy/pkg/storage/page"
 	"storemy/pkg/types"
 	"sync"
@@ -106,7 +105,7 @@ func TestGetPage_NilContext(t *testing.T) {
 
 	ps := NewPageStore(wal)
 	dbFile := newMockDbFileForPageStore(1, []types.Type{types.IntType}, []string{"id"})
-	pid := heap.NewHeapPageID(1, 0)
+	pid := page.NewPageDescriptor(1, 0)
 
 	_, err = ps.GetPage(nil, dbFile, pid, transaction.ReadOnly)
 
@@ -127,7 +126,7 @@ func TestGetPage_BasicRead(t *testing.T) {
 	ps := NewPageStore(wal)
 	dbFile := newMockDbFileForPageStore(1, []types.Type{types.IntType}, []string{"id"})
 	ctx := createTransactionContext(t, wal)
-	pid := heap.NewHeapPageID(1, 0)
+	pid := page.NewPageDescriptor(1, 0)
 
 	page, err := ps.GetPage(ctx, dbFile, pid, transaction.ReadOnly)
 
@@ -169,7 +168,7 @@ func TestGetPage_CachedPage(t *testing.T) {
 	ps := NewPageStore(wal)
 	dbFile := newMockDbFileForPageStore(1, []types.Type{types.IntType}, []string{"id"})
 	ctx := createTransactionContext(t, wal)
-	pid := heap.NewHeapPageID(1, 0)
+	pid := page.NewPageDescriptor(1, 0)
 
 	// First read - loads from disk
 	page1, err := ps.GetPage(ctx, dbFile, pid, transaction.ReadOnly)
@@ -200,7 +199,7 @@ func TestGetPage_ReadWritePermissions(t *testing.T) {
 	ps := NewPageStore(wal)
 	dbFile := newMockDbFileForPageStore(1, []types.Type{types.IntType}, []string{"id"})
 	ctx := createTransactionContext(t, wal)
-	pid := heap.NewHeapPageID(1, 0)
+	pid := page.NewPageDescriptor(1, 0)
 
 	page, err := ps.GetPage(ctx, dbFile, pid, transaction.ReadWrite)
 
@@ -238,7 +237,7 @@ func TestGetPage_Eviction(t *testing.T) {
 	// Fill the cache to MaxPageCount
 	for i := 0; i < MaxPageCount; i++ {
 		ctx := createTransactionContext(t, wal)
-		pid := heap.NewHeapPageID(1, i)
+		pid := page.NewPageDescriptor(1, primitives.PageNumber(i))
 		_, err := ps.GetPage(ctx, dbFile, pid, transaction.ReadOnly)
 		if err != nil {
 			t.Fatalf("Failed to fill cache: %v", err)
@@ -249,7 +248,7 @@ func TestGetPage_Eviction(t *testing.T) {
 
 	// Try to add one more page - should trigger eviction
 	ctx := createTransactionContext(t, wal)
-	pid := heap.NewHeapPageID(1, MaxPageCount)
+	pid := page.NewPageDescriptor(1, MaxPageCount)
 	_, err = ps.GetPage(ctx, dbFile, pid, transaction.ReadOnly)
 
 	if err != nil {
@@ -272,7 +271,7 @@ func TestGetPage_EvictionFailure(t *testing.T) {
 
 	// Fill cache with dirty pages that can't be evicted (NO-STEAL)
 	for i := 0; i < MaxPageCount; i++ {
-		pid := heap.NewHeapPageID(1, i)
+		pid := page.NewPageDescriptor(1, primitives.PageNumber(i))
 		page, err := ps.GetPage(ctx, dbFile, pid, transaction.ReadWrite)
 		if err != nil {
 			t.Fatalf("Failed to fill cache: %v", err)
@@ -285,7 +284,7 @@ func TestGetPage_EvictionFailure(t *testing.T) {
 
 	// Try to add another page - should fail (NO-STEAL policy)
 	newCtx := createTransactionContext(t, wal)
-	pid := heap.NewHeapPageID(1, MaxPageCount)
+	pid := page.NewPageDescriptor(1, MaxPageCount)
 	_, err = ps.GetPage(newCtx, dbFile, pid, transaction.ReadOnly)
 
 	if err == nil {
@@ -310,7 +309,7 @@ func TestHandlePageChange_InsertOperation(t *testing.T) {
 		t.Fatalf("Failed to begin transaction in WAL: %v", err)
 	}
 
-	pid := heap.NewHeapPageID(1, 0)
+	pid := page.NewPageDescriptor(1, 0)
 
 	getDirtyPages := func() ([]page.Page, error) {
 		mockPage := newMockPage(pid)
@@ -354,7 +353,7 @@ func TestHandlePageChange_UpdateOperation(t *testing.T) {
 		t.Fatalf("Failed to begin transaction in WAL: %v", err)
 	}
 
-	pid := heap.NewHeapPageID(1, 0)
+	pid := page.NewPageDescriptor(1, 0)
 
 	// Create a page with a before image
 	mockPage := newMockPage(pid)
@@ -388,7 +387,7 @@ func TestHandlePageChange_DeleteOperation(t *testing.T) {
 		t.Fatalf("Failed to begin transaction in WAL: %v", err)
 	}
 
-	pid := heap.NewHeapPageID(1, 0)
+	pid := page.NewPageDescriptor(1, 0)
 
 	getDirtyPages := func() ([]page.Page, error) {
 		mockPage := newMockPage(pid)
@@ -444,7 +443,7 @@ func TestCommitTransaction(t *testing.T) {
 	}
 
 	// Get a page and modify it
-	pid := heap.NewHeapPageID(1, 0)
+	pid := page.NewPageDescriptor(1, 0)
 	page, err := ps.GetPage(ctx, dbFile, pid, transaction.ReadWrite)
 	if err != nil {
 		t.Fatalf("GetPage failed: %v", err)
@@ -516,7 +515,7 @@ func TestAbortTransaction(t *testing.T) {
 	}
 
 	// Get a page and modify it
-	pid := heap.NewHeapPageID(1, 0)
+	pid := page.NewPageDescriptor(1, 0)
 	page, err := ps.GetPage(ctx, dbFile, pid, transaction.ReadWrite)
 	if err != nil {
 		t.Fatalf("GetPage failed: %v", err)
@@ -568,7 +567,7 @@ func TestAbortTransaction_NoBeforeImage(t *testing.T) {
 	}
 
 	// Add a dirty page without before image (newly allocated page)
-	pid := heap.NewHeapPageID(1, 0)
+	pid := page.NewPageDescriptor(1, 0)
 	page := newMockPage(pid)
 	page.MarkDirty(true, ctx.ID)
 	ctx.MarkPageDirty(pid)
@@ -606,10 +605,10 @@ func TestFlushAllPages(t *testing.T) {
 	ctx := createTransactionContext(t, wal)
 
 	// Create several dirty pages
-	pids := []primitives.PageID{
-		heap.NewHeapPageID(1, 0),
-		heap.NewHeapPageID(1, 1),
-		heap.NewHeapPageID(1, 2),
+	pids := []*page.PageDescriptor{
+		page.NewPageDescriptor(1, 0),
+		page.NewPageDescriptor(1, 1),
+		page.NewPageDescriptor(1, 2),
 	}
 
 	for _, pid := range pids {
@@ -677,7 +676,7 @@ func TestClose(t *testing.T) {
 	ctx := createTransactionContext(t, wal)
 
 	// Add some dirty pages
-	pid := heap.NewHeapPageID(1, 0)
+	pid := page.NewPageDescriptor(1, 0)
 	page, err := ps.GetPage(ctx, dbFile, pid, transaction.ReadWrite)
 	if err != nil {
 		t.Fatalf("GetPage failed: %v", err)
@@ -743,7 +742,7 @@ func TestConcurrentGetPage(t *testing.T) {
 			ctx := createTransactionContext(t, wal)
 
 			for j := 0; j < pagesPerGoroutine; j++ {
-				pid := heap.NewHeapPageID(1, id*pagesPerGoroutine+j)
+				pid := page.NewPageDescriptor(1, primitives.PageNumber(id*pagesPerGoroutine+j))
 				_, err := ps.GetPage(ctx, dbFile, pid, transaction.ReadOnly)
 				if err != nil {
 					t.Errorf("Concurrent GetPage failed: %v", err)
@@ -786,7 +785,7 @@ func TestConcurrentCommitAbort(t *testing.T) {
 			}
 
 			// Get and modify a page
-			pid := heap.NewHeapPageID(1, id)
+			pid := page.NewPageDescriptor(1, primitives.PageNumber(id))
 			page, err := ps.GetPage(ctx, dbFile, pid, transaction.ReadWrite)
 			if err != nil {
 				t.Errorf("GetPage failed: %v", err)
@@ -820,7 +819,7 @@ func TestConcurrentCommitAbort(t *testing.T) {
 
 	// All committed pages should be in cache and clean
 	for i := 0; i < numGoroutines; i += 2 {
-		pid := heap.NewHeapPageID(1, i)
+		pid := page.NewPageDescriptor(1, primitives.PageNumber(i))
 		if ps.lockManager.IsPageLocked(pid) {
 			t.Errorf("Page %v still locked after commit", pid)
 		}
@@ -844,7 +843,7 @@ func TestLockingBehavior(t *testing.T) {
 	dbFile := newMockDbFileForPageStore(1, []types.Type{types.IntType}, []string{"id"})
 	ctx1 := createTransactionContext(t, wal)
 	ctx2 := createTransactionContext(t, wal)
-	pid := heap.NewHeapPageID(1, 0)
+	pid := page.NewPageDescriptor(1, 0)
 
 	// Transaction 1 gets read lock
 	_, err = ps.GetPage(ctx1, dbFile, pid, transaction.ReadOnly)
@@ -876,7 +875,7 @@ func TestEvictionPolicy(t *testing.T) {
 	ctx := createTransactionContext(t, wal)
 
 	// Add a dirty page
-	pid := heap.NewHeapPageID(1, 0)
+	pid := page.NewPageDescriptor(1, 0)
 	page := newMockPage(pid)
 	page.MarkDirty(true, ctx.ID)
 	ps.cache.Put(pid, page)
@@ -929,8 +928,8 @@ func TestMultipleTableOperations(t *testing.T) {
 	}
 
 	// Access pages from both tables
-	pid1 := heap.NewHeapPageID(1, 0)
-	pid2 := heap.NewHeapPageID(2, 0)
+	pid1 := page.NewPageDescriptor(1, 0)
+	pid2 := page.NewPageDescriptor(2, 0)
 
 	page1, err := ps.GetPage(ctx, dbFile1, pid1, transaction.ReadWrite)
 	if err != nil {
@@ -969,7 +968,7 @@ func TestGetDbFileForPage(t *testing.T) {
 	dbFile := newMockDbFileForPageStore(1, []types.Type{types.IntType}, []string{"id"})
 	ps.RegisterDbFile(1, dbFile)
 
-	pid := heap.NewHeapPageID(1, 0)
+	pid := page.NewPageDescriptor(1, 0)
 
 	// Should find the DbFile
 	foundFile, err := ps.getDbFileForPage(pid)
@@ -982,7 +981,7 @@ func TestGetDbFileForPage(t *testing.T) {
 	}
 
 	// Should fail for unregistered table
-	pid2 := heap.NewHeapPageID(999, 0)
+	pid2 := page.NewPageDescriptor(999, 0)
 	_, err = ps.getDbFileForPage(pid2)
 
 	if err == nil {
@@ -1018,7 +1017,7 @@ func TestPageStoreStress(t *testing.T) {
 
 			for j := 0; j < operationsPerWorker; j++ {
 				ctx := createTransactionContext(t, wal)
-				pid := heap.NewHeapPageID(1, (workerID*operationsPerWorker+j)%500)
+				pid := page.NewPageDescriptor(1, primitives.PageNumber(workerID*operationsPerWorker+j)%500)
 
 				page, err := ps.GetPage(ctx, dbFile, pid, transaction.ReadWrite)
 				if err != nil {
@@ -1067,7 +1066,7 @@ func TestTransactionContextIntegration(t *testing.T) {
 	ctx := createTransactionContext(t, wal)
 
 	// Verify transaction tracks page access
-	pid := heap.NewHeapPageID(1, 0)
+	pid := page.NewPageDescriptor(1, 0)
 	_, err = ps.GetPage(ctx, dbFile, pid, transaction.ReadWrite)
 	if err != nil {
 		t.Fatalf("GetPage failed: %v", err)
@@ -1098,7 +1097,7 @@ func BenchmarkGetPage(b *testing.B) {
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		pid := heap.NewHeapPageID(1, i%100)
+		pid := page.NewPageDescriptor(1, primitives.PageNumber(i%100))
 		ps.GetPage(ctx, dbFile, pid, transaction.ReadOnly)
 	}
 }
@@ -1116,7 +1115,7 @@ func BenchmarkCommit(b *testing.B) {
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		ctx := createTransactionContext(&testing.T{}, wal)
-		pid := heap.NewHeapPageID(1, i%100)
+		pid := page.NewPageDescriptor(1, primitives.PageNumber(i%100))
 		page, _ := ps.GetPage(ctx, dbFile, pid, transaction.ReadWrite)
 		page.MarkDirty(true, ctx.ID)
 		ctx.MarkPageDirty(pid)
@@ -1137,7 +1136,7 @@ func BenchmarkAbort(b *testing.B) {
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		ctx := createTransactionContext(&testing.T{}, wal)
-		pid := heap.NewHeapPageID(1, i%100)
+		pid := page.NewPageDescriptor(1, primitives.PageNumber(i%100))
 		page, _ := ps.GetPage(ctx, dbFile, pid, transaction.ReadWrite)
 		page.SetBeforeImage()
 		page.MarkDirty(true, ctx.ID)
