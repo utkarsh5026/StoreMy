@@ -72,6 +72,14 @@ func (t *Tuple) TableNotAssigned() bool {
 	return t.RecordID == nil
 }
 
+// NumFields returns the number of fields in this tuple according to its schema.
+//
+// Returns:
+//   - primitives.ColumnID: The total number of fields defined in the tuple's schema.
+func (t *Tuple) NumFields() primitives.ColumnID {
+	return t.TupleDesc.NumFields()
+}
+
 // GetField returns the value of the field at the specified index.
 //
 // Parameters:
