@@ -2,8 +2,8 @@ package indexops
 
 import (
 	"fmt"
-	"os"
 	"storemy/pkg/concurrency/transaction"
+	"storemy/pkg/primitives"
 	"storemy/pkg/registry"
 	"storemy/pkg/storage/index"
 	"storemy/pkg/types"
@@ -16,52 +16,54 @@ type IndexCreationConfig struct {
 
 	// Index metadata
 	IndexName string
-	IndexID   int
+	IndexID   primitives.FileID // Will be overwritten with actual ID from physical file
 	IndexType index.IndexType
 
 	// File path for the physical index
-	FilePath string
+	FilePath primitives.Filepath
 
 	// Table and column information
-	TableID     int
-	ColumnIndex int
+	TableID     primitives.FileID
+	TableName   string
+	ColumnIndex primitives.ColumnID
+	ColumnName  string
 	ColumnType  types.Type
 }
 
-// createPhysicalIndexWithCleanup creates a physical index file on disk.
-// If creation fails, it automatically removes the index from the catalog.
-func createPhysicalIndexWithCleanup(config *IndexCreationConfig) error {
-	im := config.Ctx.IndexManager()
-	cm := config.Ctx.CatalogManager()
+// createPhysicalIndexWithCleanup creates a physical index file on disk and returns its actual ID.
+// The caller is responsible for registering the index in the catalog using this ID.
+//
+// Returns the actual index ID from the physical file.
+func createPhysicalIndexWithCleanup(cf *IndexCreationConfig) (primitives.FileID, error) {
+	im := cf.Ctx.IndexManager()
 
-	if err := im.CreatePhysicalIndex(config.FilePath, config.ColumnType, config.IndexType); err != nil {
-		if _, dropErr := cm.DropIndex(config.Tx, config.IndexName); dropErr != nil {
-			fmt.Printf("Warning: failed to cleanup catalog entry after index creation failure: %v\n", dropErr)
-		}
-		return fmt.Errorf("failed to create physical index: %v", err)
+	actualIndexID, err := im.CreatePhysicalIndex(cf.FilePath, cf.ColumnType, cf.IndexType)
+	if err != nil {
+		return 0, fmt.Errorf("failed to create physical index: %v", err)
 	}
-	return nil
+
+	return actualIndexID, nil
 }
 
 // populateIndexWithCleanup populates an index with existing table data.
 // If population fails at any step, it automatically cleans up both the physical
 // index file and the catalog entry.
-func populateIndexWithCleanup(config *IndexCreationConfig) error {
-	cm := config.Ctx.CatalogManager()
-	im := config.Ctx.IndexManager()
+func populateIndexWithCleanup(cf *IndexCreationConfig) error {
+	cm := cf.Ctx.CatalogManager()
+	im := cf.Ctx.IndexManager()
 
-	tableFile, err := cm.GetTableFile(config.TableID)
+	tableFile, err := cm.GetTableFile(cf.TableID)
 	if err != nil {
-		os.Remove(config.FilePath)
-		if _, dropErr := cm.DropIndex(config.Tx, config.IndexName); dropErr != nil {
+		cf.FilePath.Remove()
+		if _, dropErr := cm.DropIndex(cf.Tx, cf.IndexName); dropErr != nil {
 			fmt.Printf("Warning: failed to cleanup catalog entry after file access failure: %v\n", dropErr)
 		}
 		return fmt.Errorf("failed to get table file: %v", err)
 	}
 
-	if err := im.PopulateIndex(config.Tx, config.FilePath, config.IndexID, tableFile, config.ColumnIndex, config.ColumnType, config.IndexType); err != nil {
-		os.Remove(config.FilePath)
-		if _, dropErr := cm.DropIndex(config.Tx, config.IndexName); dropErr != nil {
+	if err := im.PopulateIndex(cf.Tx, cf.FilePath, cf.IndexID, tableFile, cf.ColumnIndex, cf.ColumnType, cf.IndexType); err != nil {
+		cf.FilePath.Remove()
+		if _, dropErr := cm.DropIndex(cf.Tx, cf.IndexName); dropErr != nil {
 			fmt.Printf("Warning: failed to cleanup catalog entry after population failure: %v\n", dropErr)
 		}
 		return fmt.Errorf("failed to populate index: %v", err)
@@ -70,19 +72,32 @@ func populateIndexWithCleanup(config *IndexCreationConfig) error {
 	return nil
 }
 
-// CreateAndPopulateIndex creates a physical index file and populates it with existing table data.
-// It handles all cleanup automatically on failure.
+// CreatePhysicalIndexAndGetID creates a physical index file and returns its actual ID.
+// The caller should use this ID when registering the index in the catalog.
 //
-// This is the recommended way to create indexes as it ensures proper error handling
-// and cleanup in all failure scenarios.
-func CreateAndPopulateIndex(config *IndexCreationConfig) error {
-	if err := createPhysicalIndexWithCleanup(config); err != nil {
-		return err
-	}
+// This implements the proper architecture:
+//  1. IndexManager creates physical file and returns actual ID
+//  2. Caller registers in catalog using that ID
+//  3. Caller calls PopulateIndexWithData to fill the index
+func CreatePhysicalIndexAndGetID(config *IndexCreationConfig) (primitives.FileID, error) {
+	return createPhysicalIndexWithCleanup(config)
+}
 
-	if err := populateIndexWithCleanup(config); err != nil {
-		return err
-	}
+// PopulateIndexWithData populates an index with existing table data.
+// This should be called after the index is registered in the catalog.
+func PopulateIndexWithData(config *IndexCreationConfig) error {
+	return populateIndexWithCleanup(config)
+}
 
-	return nil
+// GenerateIndexFilePath creates a standardized file path for an index file.
+// Format: {dataDir}/{tableName}_{indexName}.idx
+//
+// This centralizes the index file naming convention to ensure consistency
+// across index creation operations.
+func GenerateIndexFilePath(ctx *registry.DatabaseContext, tableName, indexName string) primitives.Filepath {
+	fileName := fmt.Sprintf("%s_%s.idx", tableName, indexName)
+	if dataDir := ctx.DataDir(); dataDir != "" {
+		return primitives.Filepath(fmt.Sprintf("%s/%s", dataDir, fileName))
+	}
+	return primitives.Filepath(fileName)
 }

@@ -145,7 +145,7 @@ func (p *ShowIndexesPlan) getAllIndexes() ([]*systemtable.IndexMetadata, error) 
 //   - TupleDescription for the result schema
 //   - Slice of tuples containing index information
 func (p *ShowIndexesPlan) createResultTuples(indexes []*systemtable.IndexMetadata) (*tuple.TupleDescription, []*tuple.Tuple) {
-	sch, _ := schema.NewSchemaBuilder(-1, "show_indexes_result").
+	sch, _ := schema.NewSchemaBuilder(systemtable.InvalidTableID, "show_indexes_result").
 		AddColumn("index_name", types.StringType).
 		AddColumn("table_name", types.StringType).
 		AddColumn("column_name", types.StringType).
@@ -169,7 +169,7 @@ func (p *ShowIndexesPlan) createResultTuples(indexes []*systemtable.IndexMetadat
 			AddString(tableName).
 			AddString(idx.ColumnName).
 			AddString(strings.ToUpper(string(idx.IndexType))).
-			AddInt(idx.CreatedAt).
+			AddTimestamp(idx.CreatedAt).
 			MustBuild()
 
 		tuples = append(tuples, t)

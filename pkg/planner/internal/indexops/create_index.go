@@ -66,8 +66,8 @@ func (p *CreateIndexPlan) Execute() (result.Result, error) {
 		return nil, fmt.Errorf("failed to get table schema: %v", err)
 	}
 
-	columnIndex := tsch.GetFieldIndex(colName)
-	if columnIndex < 0 {
+	columnIndex, err := tsch.GetFieldIndex(colName)
+	if err != nil {
 		return nil, fmt.Errorf("column %s does not exist in table %s",
 			colName, tableName)
 	}
@@ -82,32 +82,40 @@ func (p *CreateIndexPlan) Execute() (result.Result, error) {
 		return nil, fmt.Errorf("index %s already exists", p.Statement.IndexName)
 	}
 
-	indexID, filePath, err := cm.CreateIndex(
-		p.tx,
-		indexName,
-		tableName,
-		colName,
-		idxType,
-	)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create index in catalog: %v", err)
-	}
-
 	columnType := tsch.Columns[columnIndex].FieldType
+
+	filePath := GenerateIndexFilePath(p.ctx, tableName, indexName)
 
 	idxConfig := IndexCreationConfig{
 		Ctx:         p.ctx,
 		Tx:          p.tx,
 		IndexName:   indexName,
-		IndexID:     indexID,
 		IndexType:   idxType,
 		FilePath:    filePath,
 		TableID:     tableID,
+		TableName:   tableName,
 		ColumnIndex: columnIndex,
+		ColumnName:  colName,
 		ColumnType:  columnType,
 	}
 
-	if err := CreateAndPopulateIndex(&idxConfig); err != nil {
+	actualIndexID, err := CreatePhysicalIndexAndGetID(&idxConfig)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create physical index: %v", err)
+	}
+
+	// Step 2: Register in catalog using actual file ID
+	_, err = cm.CreateIndex(p.tx, actualIndexID, indexName, tableName, colName, idxType)
+	if err != nil {
+		filePath.Remove()
+		return nil, fmt.Errorf("failed to register index in catalog: %v", err)
+	}
+
+	// Update config with actual ID for population
+	idxConfig.IndexID = actualIndexID
+
+	// Step 3: Populate the index
+	if err := PopulateIndexWithData(&idxConfig); err != nil {
 		return nil, err
 	}
 

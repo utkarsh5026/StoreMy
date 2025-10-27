@@ -132,7 +132,7 @@ func TestCreateIndexPlan_Execute_HashIndex(t *testing.T) {
 
 	// Verify index file was created
 	indexMeta, _ := ctx.CatalogManager().GetIndexByName(transCtx, "idx_users_email")
-	if _, err := os.Stat(indexMeta.FilePath); os.IsNotExist(err) {
+	if !indexMeta.FilePath.Exists() {
 		t.Errorf("Index file was not created at %s", indexMeta.FilePath)
 	}
 

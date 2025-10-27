@@ -1,9 +1,8 @@
 package indexops
 
 import (
-	"storemy/pkg/planner/internal/testutil"
-	"os"
 	"storemy/pkg/parser/statements"
+	"storemy/pkg/planner/internal/testutil"
 	"storemy/pkg/storage/index"
 	"testing"
 )
@@ -48,7 +47,7 @@ func TestDropIndexPlan_Execute_Success(t *testing.T) {
 	filePath := indexMeta.FilePath
 
 	// Verify file exists before dropping
-	if _, err := os.Stat(filePath); os.IsNotExist(err) {
+	if !filePath.Exists() {
 		t.Fatal("Index file does not exist before dropping")
 	}
 
@@ -81,7 +80,7 @@ func TestDropIndexPlan_Execute_Success(t *testing.T) {
 	}
 
 	// Verify file was deleted
-	if _, err := os.Stat(filePath); !os.IsNotExist(err) {
+	if filePath.Exists() {
 		t.Error("Index file still exists after drop")
 	}
 
@@ -255,7 +254,7 @@ func TestDropIndexPlan_Execute_FileAlreadyDeleted(t *testing.T) {
 	// Get index metadata and manually delete the file
 	indexMeta, _ := ctx.CatalogManager().GetIndexByName(transCtx, "idx_users_email")
 	filePath := indexMeta.FilePath
-	os.Remove(filePath)
+	filePath.Remove()
 
 	// Drop the index (should succeed even if file doesn't exist)
 	stmt := statements.NewDropIndexStatement("idx_users_email", "", false)
