@@ -6,7 +6,7 @@ import (
 	"math/rand"
 	"runtime"
 	"storemy/pkg/primitives"
-	"storemy/pkg/storage/heap"
+	"storemy/pkg/storage/page"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -37,7 +37,7 @@ func TestNewLockManager(t *testing.T) {
 func TestLockPageSharedLock(t *testing.T) {
 	lm := NewLockManager()
 	tid := primitives.NewTransactionID()
-	pid := heap.NewHeapPageID(1, 1)
+	pid := page.NewPageDescriptor(1, 1)
 
 	err := lm.LockPage(tid, pid, false) // shared lock
 	if err != nil {
@@ -72,7 +72,7 @@ func TestLockPageSharedLock(t *testing.T) {
 func TestLockPageExclusiveLock(t *testing.T) {
 	lm := NewLockManager()
 	tid := primitives.NewTransactionID()
-	pid := heap.NewHeapPageID(1, 1)
+	pid := page.NewPageDescriptor(1, 1)
 
 	err := lm.LockPage(tid, pid, true) // exclusive lock
 	if err != nil {
@@ -98,7 +98,7 @@ func TestMultipleSharedLocks(t *testing.T) {
 	lm := NewLockManager()
 	tid1 := primitives.NewTransactionID()
 	tid2 := primitives.NewTransactionID()
-	pid := heap.NewHeapPageID(1, 1)
+	pid := page.NewPageDescriptor(1, 1)
 
 	// First transaction gets shared lock
 	err := lm.LockPage(tid1, pid, false)
@@ -130,7 +130,7 @@ func TestExclusiveLockBlocksSharedLock(t *testing.T) {
 	lm := NewLockManager()
 	tid1 := primitives.NewTransactionID()
 	tid2 := primitives.NewTransactionID()
-	pid := heap.NewHeapPageID(1, 1)
+	pid := page.NewPageDescriptor(1, 1)
 
 	// First transaction gets exclusive lock
 	err := lm.LockPage(tid1, pid, true)
@@ -158,7 +158,7 @@ func TestSharedLockBlocksExclusiveLock(t *testing.T) {
 	lm := NewLockManager()
 	tid1 := primitives.NewTransactionID()
 	tid2 := primitives.NewTransactionID()
-	pid := heap.NewHeapPageID(1, 1)
+	pid := page.NewPageDescriptor(1, 1)
 
 	// First transaction gets shared lock
 	err := lm.LockPage(tid1, pid, false)
@@ -185,7 +185,7 @@ func TestSharedLockBlocksExclusiveLock(t *testing.T) {
 func TestLockUpgrade(t *testing.T) {
 	lm := NewLockManager()
 	tid := primitives.NewTransactionID()
-	pid := heap.NewHeapPageID(1, 1)
+	pid := page.NewPageDescriptor(1, 1)
 
 	// First acquire shared lock
 	err := lm.LockPage(tid, pid, false)
@@ -224,7 +224,7 @@ func TestLockUpgradeBlocked(t *testing.T) {
 	lm := NewLockManager()
 	tid1 := primitives.NewTransactionID()
 	tid2 := primitives.NewTransactionID()
-	pid := heap.NewHeapPageID(1, 1)
+	pid := page.NewPageDescriptor(1, 1)
 
 	// Both transactions get shared locks
 	err := lm.LockPage(tid1, pid, false)
@@ -256,7 +256,7 @@ func TestLockUpgradeBlocked(t *testing.T) {
 func TestAlreadyHasLock(t *testing.T) {
 	lm := NewLockManager()
 	tid := primitives.NewTransactionID()
-	pid := heap.NewHeapPageID(1, 1)
+	pid := page.NewPageDescriptor(1, 1)
 
 	// Acquire shared lock
 	err := lm.LockPage(tid, pid, false)
@@ -293,8 +293,8 @@ func TestDeadlockDetection(t *testing.T) {
 	lm := NewLockManager()
 	tid1 := primitives.NewTransactionID()
 	tid2 := primitives.NewTransactionID()
-	pid1 := heap.NewHeapPageID(1, 1)
-	pid2 := heap.NewHeapPageID(1, 2)
+	pid1 := page.NewPageDescriptor(1, 1)
+	pid2 := page.NewPageDescriptor(1, 2)
 
 	// tid1 gets exclusive lock on pid1
 	err := lm.LockPage(tid1, pid1, true)
@@ -364,7 +364,7 @@ func containsDeadlockMessage(errorMsg string, tidID int64) bool {
 
 func TestConcurrentLockAcquisition(t *testing.T) {
 	lm := NewLockManager()
-	pid := heap.NewHeapPageID(1, 1)
+	pid := page.NewPageDescriptor(1, 1)
 	numGoroutines := 10
 
 	var wg sync.WaitGroup
@@ -402,7 +402,7 @@ func TestCanGrantLock(t *testing.T) {
 	lm := NewLockManager()
 	tid1 := primitives.NewTransactionID()
 	tid2 := primitives.NewTransactionID()
-	pid := heap.NewHeapPageID(1, 1)
+	pid := page.NewPageDescriptor(1, 1)
 
 	// Empty page - should grant any lock
 	if !lm.lockGrantor.CanGrantImmediately(tid1, pid, SharedLock) {
@@ -436,7 +436,7 @@ func TestCanUpgradeLock(t *testing.T) {
 	lm := NewLockManager()
 	tid1 := primitives.NewTransactionID()
 	tid2 := primitives.NewTransactionID()
-	pid := heap.NewHeapPageID(1, 1)
+	pid := page.NewPageDescriptor(1, 1)
 
 	// Single shared lock - should be able to upgrade
 	lm.lockGrantor.GrantLock(tid1, pid, SharedLock)
@@ -456,7 +456,7 @@ func TestCanUpgradeLock(t *testing.T) {
 func TestHasLock(t *testing.T) {
 	lm := NewLockManager()
 	tid := primitives.NewTransactionID()
-	pid := heap.NewHeapPageID(1, 1)
+	pid := page.NewPageDescriptor(1, 1)
 
 	// No lock initially
 	if lm.lockTable.HasSufficientLock(tid, pid, SharedLock) {
@@ -490,7 +490,7 @@ func TestWaitQueueOperations(t *testing.T) {
 	lm := NewLockManager()
 	tid1 := primitives.NewTransactionID()
 	tid2 := primitives.NewTransactionID()
-	pid := heap.NewHeapPageID(1, 1)
+	pid := page.NewPageDescriptor(1, 1)
 
 	// Add to wait queue
 	lm.waitQueue.Add(tid1, pid, SharedLock)
@@ -543,7 +543,7 @@ func TestUpdateDependencies(t *testing.T) {
 	tid1 := primitives.NewTransactionID()
 	tid2 := primitives.NewTransactionID()
 	tid3 := primitives.NewTransactionID()
-	pid := heap.NewHeapPageID(1, 1)
+	pid := page.NewPageDescriptor(1, 1)
 
 	// Grant some locks
 	lm.lockGrantor.GrantLock(tid1, pid, SharedLock)
@@ -574,8 +574,8 @@ func TestMultiplePageWaiting(t *testing.T) {
 	lm := NewLockManager()
 	tid1 := primitives.NewTransactionID()
 	tid2 := primitives.NewTransactionID()
-	pid1 := heap.NewHeapPageID(1, 1)
-	pid2 := heap.NewHeapPageID(1, 2)
+	pid1 := page.NewPageDescriptor(1, 1)
+	pid2 := page.NewPageDescriptor(1, 2)
 
 	// tid1 gets exclusive locks on both pages
 	err := lm.LockPage(tid1, pid1, true)
@@ -634,7 +634,7 @@ func TestHighConcurrencySharedLocks(t *testing.T) {
 	}
 
 	lm := NewLockManager()
-	pid := heap.NewHeapPageID(1, 1)
+	pid := page.NewPageDescriptor(1, 1)
 	numGoroutines := 100
 
 	var wg sync.WaitGroup
@@ -681,7 +681,7 @@ func TestConcurrentExclusiveLockContention(t *testing.T) {
 	}
 
 	lm := NewLockManager()
-	pid := heap.NewHeapPageID(1, 1)
+	pid := page.NewPageDescriptor(1, 1)
 	numGoroutines := 10 // Reduced from 50 to prevent excessive timeouts
 
 	var wg sync.WaitGroup
@@ -736,9 +736,9 @@ func TestComplexDeadlockScenarios(t *testing.T) {
 		tid1 := primitives.NewTransactionID()
 		tid2 := primitives.NewTransactionID()
 		tid3 := primitives.NewTransactionID()
-		pid1 := heap.NewHeapPageID(1, 1)
-		pid2 := heap.NewHeapPageID(1, 2)
-		pid3 := heap.NewHeapPageID(1, 3)
+		pid1 := page.NewPageDescriptor(1, 1)
+		pid2 := page.NewPageDescriptor(1, 2)
+		pid3 := page.NewPageDescriptor(1, 3)
 
 		// Create initial locks: tid1->pid1, tid2->pid2, tid3->pid3
 		lm.LockPage(tid1, pid1, true)
@@ -789,12 +789,12 @@ func TestComplexDeadlockScenarios(t *testing.T) {
 		lm := NewLockManager()
 		numTransactions := 5
 		tids := make([]*primitives.TransactionID, numTransactions)
-		pids := make([]*heap.HeapPageID, numTransactions)
+		pids := make([]*page.PageDescriptor, numTransactions)
 
 		// Create transactions and pages
 		for i := 0; i < numTransactions; i++ {
 			tids[i] = primitives.NewTransactionID()
-			pids[i] = heap.NewHeapPageID(1, i+1)
+			pids[i] = page.NewPageDescriptor(1, primitives.PageNumber(i+1))
 		}
 
 		// Each transaction locks its own page
@@ -863,7 +863,7 @@ func TestMixedWorkloadStress(t *testing.T) {
 			default:
 				tid := primitives.NewTransactionID()
 				pageNum := rand.Intn(numPages) + 1
-				pid := heap.NewHeapPageID(1, pageNum)
+				pid := page.NewPageDescriptor(1, primitives.PageNumber(pageNum))
 				exclusive := rand.Float32() < 0.3 // 30% exclusive locks
 
 				err := lm.LockPage(tid, pid, exclusive)
@@ -946,7 +946,7 @@ func TestRaceConditionDetection(t *testing.T) {
 			// but still tests internal data structure concurrency
 			for j := 0; j < 5; j++ {
 				pageNum := (id*5 + j) + 1 // Unique page per iteration
-				pid := heap.NewHeapPageID(1, pageNum)
+				pid := page.NewPageDescriptor(1, primitives.PageNumber(pageNum))
 
 				err := lm.LockPage(tid, pid, j%2 == 0) // Mix shared/exclusive
 				if err != nil && !containsTimeout(err.Error()) && !containsDeadlockMessage(err.Error(), tid.ID()) {
@@ -974,7 +974,7 @@ func TestMemoryPressure(t *testing.T) {
 	numPages := 100
 
 	var tids []*primitives.TransactionID
-	var pids []*heap.HeapPageID
+	var pids []*page.PageDescriptor
 
 	// Create many transactions and pages
 	for i := 0; i < numTransactions; i++ {
@@ -982,7 +982,7 @@ func TestMemoryPressure(t *testing.T) {
 	}
 
 	for i := 0; i < numPages; i++ {
-		pids = append(pids, heap.NewHeapPageID(1, i+1))
+		pids = append(pids, page.NewPageDescriptor(1, primitives.PageNumber(i+1)))
 	}
 
 	var wg sync.WaitGroup
@@ -1032,7 +1032,7 @@ func TestMemoryPressure(t *testing.T) {
 func TestEdgeCases(t *testing.T) {
 	t.Run("NilTransactionID", func(t *testing.T) {
 		lm := NewLockManager()
-		pid := heap.NewHeapPageID(1, 1)
+		pid := page.NewPageDescriptor(1, 1)
 
 		// This should not panic
 		defer func() {
@@ -1050,7 +1050,7 @@ func TestEdgeCases(t *testing.T) {
 	t.Run("SamePageMultipleLockTypes", func(t *testing.T) {
 		lm := NewLockManager()
 		tid := primitives.NewTransactionID()
-		pid := heap.NewHeapPageID(1, 1)
+		pid := page.NewPageDescriptor(1, 1)
 
 		// Get shared lock
 		err := lm.LockPage(tid, pid, false)
@@ -1083,7 +1083,7 @@ func TestEdgeCases(t *testing.T) {
 		numPages := 100
 
 		for i := 0; i < numPages; i++ {
-			pid := heap.NewHeapPageID(1, i+1)
+			pid := page.NewPageDescriptor(1, primitives.PageNumber(i+1))
 			err := lm.LockPage(tid, pid, i%2 == 0) // Mix shared and exclusive
 			if err != nil {
 				t.Fatalf("Failed to lock page %d: %v", i+1, err)
@@ -1105,7 +1105,7 @@ func TestEdgeCases(t *testing.T) {
 
 func BenchmarkSharedLockAcquisition(b *testing.B) {
 	lm := NewLockManager()
-	pid := heap.NewHeapPageID(1, 1)
+	pid := page.NewPageDescriptor(1, 1)
 
 	b.ResetTimer()
 	b.RunParallel(func(pb *testing.PB) {
@@ -1125,7 +1125,7 @@ func BenchmarkExclusiveLockAcquisition(b *testing.B) {
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		tid := primitives.NewTransactionID()
-		pid := heap.NewHeapPageID(1, i+1) // Different pages to avoid contention
+		pid := page.NewPageDescriptor(1, primitives.PageNumber(i+1)) // Different pages to avoid contention
 		err := lm.LockPage(tid, pid, true)
 		if err != nil {
 			b.Errorf("Unexpected error: %v", err)
@@ -1139,7 +1139,7 @@ func BenchmarkLockUpgrade(b *testing.B) {
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		tid := primitives.NewTransactionID()
-		pid := heap.NewHeapPageID(1, i+1)
+		pid := page.NewPageDescriptor(1, primitives.PageNumber(i+1))
 
 		// Get shared lock first
 		err := lm.LockPage(tid, pid, false)
@@ -1242,7 +1242,7 @@ func TestProcessWaitQueue(t *testing.T) {
 	tid1 := primitives.NewTransactionID()
 	tid2 := primitives.NewTransactionID()
 	tid3 := primitives.NewTransactionID()
-	pid := heap.NewHeapPageID(1, 1)
+	pid := page.NewPageDescriptor(1, 1)
 
 	// Create a scenario where tid1 has exclusive lock, tid2 and tid3 are waiting
 	lm.lockGrantor.GrantLock(tid1, pid, ExclusiveLock)
@@ -1277,7 +1277,7 @@ func TestProcessWaitQueuePartialGrant(t *testing.T) {
 	tid1 := primitives.NewTransactionID()
 	tid2 := primitives.NewTransactionID()
 	tid3 := primitives.NewTransactionID()
-	pid := heap.NewHeapPageID(1, 1)
+	pid := page.NewPageDescriptor(1, 1)
 
 	// Grant shared lock to tid1
 	lm.lockGrantor.GrantLock(tid1, pid, SharedLock)
@@ -1306,7 +1306,7 @@ func TestProcessWaitQueuePartialGrant(t *testing.T) {
 func TestIsPageLockedAdvanced(t *testing.T) {
 	lm := NewLockManager()
 	tid := primitives.NewTransactionID()
-	pid := heap.NewHeapPageID(1, 1)
+	pid := page.NewPageDescriptor(1, 1)
 
 	// Initially no locks
 	if lm.IsPageLocked(pid) {
@@ -1341,9 +1341,9 @@ func TestUnlockAllPages(t *testing.T) {
 	lm := NewLockManager()
 	tid1 := primitives.NewTransactionID()
 	tid2 := primitives.NewTransactionID()
-	pid1 := heap.NewHeapPageID(1, 1)
-	pid2 := heap.NewHeapPageID(1, 2)
-	pid3 := heap.NewHeapPageID(1, 3)
+	pid1 := page.NewPageDescriptor(1, 1)
+	pid2 := page.NewPageDescriptor(1, 2)
+	pid3 := page.NewPageDescriptor(1, 3)
 
 	// Grant multiple locks to tid1
 	lm.lockGrantor.GrantLock(tid1, pid1, SharedLock)
@@ -1413,7 +1413,7 @@ func TestUnlockPageDetailed(t *testing.T) {
 	lm := NewLockManager()
 	tid1 := primitives.NewTransactionID()
 	tid2 := primitives.NewTransactionID()
-	pid := heap.NewHeapPageID(1, 1)
+	pid := page.NewPageDescriptor(1, 1)
 
 	// Grant locks to both transactions
 	lm.lockGrantor.GrantLock(tid1, pid, SharedLock)

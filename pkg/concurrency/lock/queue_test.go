@@ -2,7 +2,7 @@ package lock
 
 import (
 	"storemy/pkg/primitives"
-	"storemy/pkg/storage/heap"
+	"storemy/pkg/storage/page"
 	"sync"
 	"testing"
 )
@@ -35,7 +35,7 @@ func TestNewWaitQueue(t *testing.T) {
 func TestWaitQueueAdd(t *testing.T) {
 	wq := NewWaitQueue()
 	tid := primitives.NewTransactionID()
-	pid := heap.NewHeapPageID(1, 1)
+	pid := page.NewPageDescriptor(1, 1)
 
 	// Test adding first request
 	err := wq.Add(tid, pid, SharedLock)
@@ -73,7 +73,7 @@ func TestWaitQueueAddMultiple(t *testing.T) {
 	tid1 := primitives.NewTransactionID()
 	tid2 := primitives.NewTransactionID()
 	tid3 := primitives.NewTransactionID()
-	pid := heap.NewHeapPageID(1, 1)
+	pid := page.NewPageDescriptor(1, 1)
 
 	// Add multiple transactions to same page queue
 	err := wq.Add(tid1, pid, SharedLock)
@@ -121,7 +121,7 @@ func TestWaitQueueAddMultiple(t *testing.T) {
 func TestWaitQueueAddDuplicatePrevention(t *testing.T) {
 	wq := NewWaitQueue()
 	tid := primitives.NewTransactionID()
-	pid := heap.NewHeapPageID(1, 1)
+	pid := page.NewPageDescriptor(1, 1)
 
 	// Add first request
 	err := wq.Add(tid, pid, SharedLock)
@@ -150,9 +150,9 @@ func TestWaitQueueAddDuplicatePrevention(t *testing.T) {
 func TestWaitQueueAddMultiplePages(t *testing.T) {
 	wq := NewWaitQueue()
 	tid := primitives.NewTransactionID()
-	pid1 := heap.NewHeapPageID(1, 1)
-	pid2 := heap.NewHeapPageID(1, 2)
-	pid3 := heap.NewHeapPageID(1, 3)
+	pid1 := page.NewPageDescriptor(1, 1)
+	pid2 := page.NewPageDescriptor(1, 2)
+	pid3 := page.NewPageDescriptor(1, 3)
 
 	// Transaction waiting for multiple pages
 	err := wq.Add(tid, pid1, SharedLock)
@@ -193,7 +193,7 @@ func TestWaitQueueRemove(t *testing.T) {
 	tid1 := primitives.NewTransactionID()
 	tid2 := primitives.NewTransactionID()
 	tid3 := primitives.NewTransactionID()
-	pid := heap.NewHeapPageID(1, 1)
+	pid := page.NewPageDescriptor(1, 1)
 
 	// Add multiple requests
 	wq.Add(tid1, pid, SharedLock)
@@ -235,7 +235,7 @@ func TestWaitQueueRemove(t *testing.T) {
 func TestWaitQueueRemoveLastRequest(t *testing.T) {
 	wq := NewWaitQueue()
 	tid := primitives.NewTransactionID()
-	pid := heap.NewHeapPageID(1, 1)
+	pid := page.NewPageDescriptor(1, 1)
 
 	// Add single request
 	wq.Add(tid, pid, SharedLock)
@@ -267,7 +267,7 @@ func TestWaitQueueRemoveLastRequest(t *testing.T) {
 func TestWaitQueueRemoveNonExistent(t *testing.T) {
 	wq := NewWaitQueue()
 	tid := primitives.NewTransactionID()
-	pid := heap.NewHeapPageID(1, 1)
+	pid := page.NewPageDescriptor(1, 1)
 
 	// Try to remove from empty queue - should not panic
 	wq.RemoveRequest(tid, pid)
@@ -288,9 +288,9 @@ func TestWaitQueueRemoveNonExistent(t *testing.T) {
 func TestWaitQueueRemoveTransaction(t *testing.T) {
 	wq := NewWaitQueue()
 	tid := primitives.NewTransactionID()
-	pid1 := heap.NewHeapPageID(1, 1)
-	pid2 := heap.NewHeapPageID(1, 2)
-	pid3 := heap.NewHeapPageID(1, 3)
+	pid1 := page.NewPageDescriptor(1, 1)
+	pid2 := page.NewPageDescriptor(1, 2)
+	pid3 := page.NewPageDescriptor(1, 3)
 
 	// Transaction waiting for multiple pages
 	wq.Add(tid, pid1, SharedLock)
@@ -343,7 +343,7 @@ func TestWaitQueueRemoveTransactionNonExistent(t *testing.T) {
 
 	// Add some transactions
 	tid2 := primitives.NewTransactionID()
-	pid := heap.NewHeapPageID(1, 1)
+	pid := page.NewPageDescriptor(1, 1)
 	wq.Add(tid2, pid, SharedLock)
 
 	// RemoveRequest non-existent transaction - should not affect existing ones
@@ -357,7 +357,7 @@ func TestWaitQueueRemoveTransactionNonExistent(t *testing.T) {
 
 func TestWaitQueueGetRequests(t *testing.T) {
 	wq := NewWaitQueue()
-	pid := heap.NewHeapPageID(1, 1)
+	pid := page.NewPageDescriptor(1, 1)
 
 	// Empty queue
 	requests := wq.GetRequests(pid)
@@ -396,8 +396,8 @@ func TestWaitQueueGetPagesRequestedFor(t *testing.T) {
 	}
 
 	// Add requests
-	pid1 := heap.NewHeapPageID(1, 1)
-	pid2 := heap.NewHeapPageID(1, 2)
+	pid1 := page.NewPageDescriptor(1, 1)
+	pid2 := page.NewPageDescriptor(1, 2)
 	wq.Add(tid, pid1, SharedLock)
 	wq.Add(tid, pid2, ExclusiveLock)
 
@@ -426,8 +426,8 @@ func TestWaitQueueConsistency(t *testing.T) {
 	wq := NewWaitQueue()
 	tid1 := primitives.NewTransactionID()
 	tid2 := primitives.NewTransactionID()
-	pid1 := heap.NewHeapPageID(1, 1)
-	pid2 := heap.NewHeapPageID(1, 2)
+	pid1 := page.NewPageDescriptor(1, 1)
+	pid2 := page.NewPageDescriptor(1, 2)
 
 	// Build complex state
 	wq.Add(tid1, pid1, SharedLock)
@@ -487,7 +487,7 @@ func TestWaitQueueWithExternalSynchronization(t *testing.T) {
 			tid := primitives.NewTransactionID()
 
 			for j := 0; j < numOperationsPerGoroutine; j++ {
-				pid := heap.NewHeapPageID(1, (id*numOperationsPerGoroutine+j)%5+1) // Use pages 1-5
+				pid := page.NewPageDescriptor(1, primitives.PageNumber((id*numOperationsPerGoroutine+j)%5+1)) // Use pages 1-5
 
 				// Add request with synchronization
 				mutex.Lock()
@@ -512,7 +512,7 @@ func TestWaitQueueWithExternalSynchronization(t *testing.T) {
 	// After all concurrent operations, queues should be empty
 	mutex.RLock()
 	for i := 1; i <= 5; i++ {
-		pid := heap.NewHeapPageID(1, i)
+		pid := page.NewPageDescriptor(1, primitives.PageNumber(i))
 		requests := wq.GetRequests(pid)
 		if len(requests) > 0 {
 			t.Errorf("Page %d should have empty queue after concurrent operations, got %d requests", i, len(requests))
@@ -539,7 +539,7 @@ func TestWaitQueueStressTest(t *testing.T) {
 	}
 
 	for i := 0; i < numPages; i++ {
-		pages = append(pages, heap.NewHeapPageID(1, i+1))
+		pages = append(pages, page.NewPageDescriptor(1, primitives.PageNumber(i+1)))
 	}
 
 	// Each transaction requests locks on multiple pages
@@ -595,7 +595,7 @@ func TestWaitQueueLockTypePreservation(t *testing.T) {
 	wq := NewWaitQueue()
 	tid1 := primitives.NewTransactionID()
 	tid2 := primitives.NewTransactionID()
-	pid := heap.NewHeapPageID(1, 1)
+	pid := page.NewPageDescriptor(1, 1)
 
 	// Add requests with different lock types
 	err := wq.Add(tid1, pid, SharedLock)
@@ -625,7 +625,7 @@ func TestWaitQueueLockTypePreservation(t *testing.T) {
 
 func TestWaitQueueFIFOOrdering(t *testing.T) {
 	wq := NewWaitQueue()
-	pid := heap.NewHeapPageID(1, 1)
+	pid := page.NewPageDescriptor(1, 1)
 	var transactions []*primitives.TransactionID
 
 	// Add multiple transactions
