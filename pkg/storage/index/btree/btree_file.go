@@ -12,14 +12,14 @@ import (
 // BTreeFile represents a persistent B+Tree index file
 type BTreeFile struct {
 	*page.BaseFile
-	indexID  int
+	indexID  primitives.TableID
 	keyType  types.Type
-	numPages int
+	numPages primitives.PageNumber
 	mutex    sync.RWMutex
 }
 
 // NewBTreeFile creates or opens a B+Tree index file
-func NewBTreeFile(filename string, keyType types.Type) (*BTreeFile, error) {
+func NewBTreeFile(filename primitives.Filepath, keyType types.Type) (*BTreeFile, error) {
 	baseFile, err := page.NewBaseFile(filename)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create base file: %w", err)
@@ -155,9 +155,16 @@ func (bf *BTreeFile) GetIndexID() int {
 	return bf.indexID
 }
 
-// GetID implements the DbFile interface by returning the index ID
-func (bf *BTreeFile) GetID() int {
-	return bf.GetIndexID()
+// GetID implements the DbFile interface by returning the index ID if set,
+// otherwise returns the BaseFile's ID (hash of filename).
+// This allows the file to use its natural ID from BaseFile when not explicitly set.
+func (bf *BTreeFile) GetID() primitives.TableID {
+	bf.mutex.RLock()
+	defer bf.mutex.RUnlock()
+	if bf.indexID != 0 {
+		return bf.indexID
+	}
+	return bf.BaseFile.GetID()
 }
 
 func (bf *BTreeFile) GetTupleDesc() *tuple.TupleDescription {
