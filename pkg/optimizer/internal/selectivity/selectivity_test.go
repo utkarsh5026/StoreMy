@@ -103,7 +103,7 @@ func TestEstimatePredicateSelectivityWithValue_NoHistogram(t *testing.T) {
 	tests := []struct {
 		name          string
 		pred          primitives.Predicate
-		distinctCount int64
+		distinctCount uint64
 		expected      float64
 	}{
 		{
@@ -408,7 +408,7 @@ func TestEstimateEqualityWithoutHistogram(t *testing.T) {
 		name          string
 		mcvs          []types.Field
 		mcvFreqs      []float64
-		distinctCount int64
+		distinctCount uint64
 		expectedRange [2]float64
 		description   string
 	}{

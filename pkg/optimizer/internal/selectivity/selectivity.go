@@ -66,7 +66,7 @@ func NewSelectivityEstimator(cat *catalogmanager.CatalogManager, tx *transaction
 //
 // Returns:
 //   - float64: Estimated selectivity between 0.0 and 1.0
-func (se *SelectivityEstimator) EstimatePredicateSelectivity(pred primitives.Predicate, tableID int, columnName string) float64 {
+func (se *SelectivityEstimator) EstimatePredicateSelectivity(pred primitives.Predicate, tableID primitives.TableID, columnName string) float64 {
 	if se.catalog == nil {
 		return se.defaultSel(pred)
 	}
@@ -96,7 +96,7 @@ func (se *SelectivityEstimator) EstimatePredicateSelectivity(pred primitives.Pre
 //
 // Returns:
 //   - float64: Estimated selectivity between 0.0 and 1.0
-func (se *SelectivityEstimator) EstimateWithValue(pred primitives.Predicate, tableID int, columnName string, value types.Field) float64 {
+func (se *SelectivityEstimator) EstimateWithValue(pred primitives.Predicate, tableID primitives.TableID, columnName string, value types.Field) float64 {
 	if se.catalog == nil {
 		return se.defaultSel(pred)
 	}
@@ -192,7 +192,7 @@ func (se *SelectivityEstimator) estimateHist(h *statistics.Histogram, pred primi
 //
 // Returns:
 //   - float64: Estimated selectivity between 0.0 and 1.0
-func (se *SelectivityEstimator) EstimateNull(tableID int, columnName string, isNull bool) float64 {
+func (se *SelectivityEstimator) EstimateNull(tableID primitives.TableID, columnName string, isNull bool) float64 {
 	nullify := func(val float64) float64 {
 		if isNull {
 			return val
@@ -315,7 +315,7 @@ func (se *SelectivityEstimator) EstimateLike(pattern string) float64 {
 //
 // Returns:
 //   - float64: Estimated selectivity between 0.0 and 1.0
-func (se *SelectivityEstimator) EstimateIn(tableID int, columnName string, valueCount int) float64 {
+func (se *SelectivityEstimator) EstimateIn(tableID primitives.TableID, columnName string, valueCount int) float64 {
 	if se.catalog == nil {
 		return InSelectivity
 	}
@@ -411,7 +411,7 @@ func (se *SelectivityEstimator) equalityNoHist(colStats *catalogmanager.ColumnSt
 
 	remainingFreq := math.Max(1.0-mcvTotalFreq, 0)
 
-	nonMCVDistinct := colStats.DistinctCount - int64(len(colStats.MostCommonVals))
+	nonMCVDistinct := int(colStats.DistinctCount) - len(colStats.MostCommonVals)
 	if nonMCVDistinct <= 0 {
 		return 1.0 / float64(colStats.DistinctCount)
 	}
