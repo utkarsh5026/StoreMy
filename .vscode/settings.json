@@ -30,6 +30,7 @@
         "indexonlyscan",
         "indexops",
         "indexscan",
+        "Inited",
         "inotify",
         "inotifywait",
         "installsuffix",
