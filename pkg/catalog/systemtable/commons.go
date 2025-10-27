@@ -2,10 +2,11 @@ package systemtable
 
 import (
 	"storemy/pkg/catalog/schema"
+	"storemy/pkg/primitives"
 )
 
 const (
-	InvalidTableID = -1 // Represents an invalid or uninitialized table ID
+	InvalidTableID primitives.TableID = 0 // Represents an invalid or uninitialized table ID
 )
 
 // Global instances of system tables.

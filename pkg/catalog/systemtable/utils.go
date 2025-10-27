@@ -25,6 +25,16 @@ func getBoolField(tup *tuple.Tuple, index int) bool {
 	return field.(*types.BoolField).Value
 }
 
+func getUint32Field(tup *tuple.Tuple, index int) uint32 {
+	field, _ := tup.GetField(index)
+	return field.(*types.Uint32Field).Value
+}
+
+func getUint64Field(tup *tuple.Tuple, index int) uint64 {
+	field, _ := tup.GetField(index)
+	return field.(*types.Uint64Field).Value
+}
+
 func isLessThan(a int, b int) bool {
 	return a < b
 }

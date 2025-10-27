@@ -3,36 +3,38 @@ package systemtable
 import (
 	"fmt"
 	"storemy/pkg/catalog/schema"
+	"storemy/pkg/primitives"
 	"storemy/pkg/storage/index"
 	"storemy/pkg/tuple"
 	"storemy/pkg/types"
+	"time"
 )
 
 // IndexMetadata represents metadata for a database index
 type IndexMetadata struct {
-	IndexID    int
+	IndexID    primitives.IndexID
 	IndexName  string
-	TableID    int
+	TableID    primitives.TableID
 	ColumnName string
 	IndexType  index.IndexType
 	FilePath   string
-	CreatedAt  int64 // Unix timestamp
+	CreatedAt  time.Time
 }
 
 type IndexesTable struct {
 }
 
 // Schema returns the schema for the CATALOG_INDEXES system table.
-// Schema: (index_id INT, index_name STRING, table_id INT, column_name STRING, index_type STRING, file_path STRING, created_at INT)
+// Schema: (index_id UINT64, index_name STRING, table_id UINT64, column_name STRING, index_type STRING, file_path STRING, created_at INT64)
 func (it *IndexesTable) Schema() *schema.Schema {
 	sch, _ := schema.NewSchemaBuilder(InvalidTableID, it.TableName()).
-		AddPrimaryKey("index_id", types.IntType).
+		AddPrimaryKey("index_id", types.Uint64Type).
 		AddColumn("index_name", types.StringType).
-		AddColumn("table_id", types.IntType).
+		AddColumn("table_id", types.Uint64Type).
 		AddColumn("column_name", types.StringType).
 		AddColumn("index_type", types.StringType).
 		AddColumn("file_path", types.StringType).
-		AddColumn("created_at", types.IntType).
+		AddColumn("created_at", types.Int64Type).
 		Build()
 	return sch
 }
@@ -56,22 +58,22 @@ func (it *IndexesTable) GetNumFields() int {
 // CreateTuple creates a tuple from IndexMetadata
 func (it *IndexesTable) CreateTuple(im IndexMetadata) *tuple.Tuple {
 	return tuple.NewBuilder(it.Schema().TupleDesc).
-		AddInt(int64(im.IndexID)).
+		AddUint64(uint64(im.IndexID)).
 		AddString(im.IndexName).
-		AddInt(int64(im.TableID)).
+		AddUint64(uint64(im.TableID)).
 		AddString(im.ColumnName).
 		AddString(string(im.IndexType)).
 		AddString(im.FilePath).
-		AddInt(im.CreatedAt).
+		AddInt64(im.CreatedAt.Unix()).
 		MustBuild()
 }
 
 // GetID retrieves the index ID from a tuple
-func (it *IndexesTable) GetID(t *tuple.Tuple) (int, error) {
+func (it *IndexesTable) GetID(t *tuple.Tuple) (primitives.IndexID, error) {
 	if t.TupleDesc.NumFields() != it.GetNumFields() {
-		return -1, fmt.Errorf("invalid tuple: expected 7 fields, got %d", t.TupleDesc.NumFields())
+		return 0, fmt.Errorf("invalid tuple: expected 7 fields, got %d", t.TupleDesc.NumFields())
 	}
-	return getIntField(t, 0), nil
+	return primitives.IndexID(getUint64Field(t, 0)), nil
 }
 
 func (it *IndexesTable) TableIDIndex() int {
@@ -82,20 +84,20 @@ func (it *IndexesTable) TableIDIndex() int {
 func (it *IndexesTable) Parse(t *tuple.Tuple) (*IndexMetadata, error) {
 	p := tuple.NewParser(t).ExpectFields(it.GetNumFields())
 
-	indexID := p.ReadInt()
+	indexID := primitives.IndexID(p.ReadUint64())
 	indexName := p.ReadString()
-	tableID := p.ReadInt()
+	tableID := primitives.TableID(p.ReadUint64())
 	columnName := p.ReadString()
 	indexTypeStr := p.ReadString()
 	filePath := p.ReadString()
-	createdAt := p.ReadInt64()
+	createdAt := p.ReadTimestamp()
 
 	// Check for parsing errors (field count, type mismatches, etc.)
 	if err := p.Error(); err != nil {
 		return nil, err
 	}
 
-	if indexID <= 0 {
+	if indexID == 0 {
 		return nil, fmt.Errorf("invalid index_id %d: must be positive", indexID)
 	}
 
@@ -103,8 +105,6 @@ func (it *IndexesTable) Parse(t *tuple.Tuple) (*IndexMetadata, error) {
 		return nil, fmt.Errorf("index_name cannot be empty")
 	}
 
-	// Allow any table ID (including negative for generated IDs), but not InvalidTableID (-1)
-	// which is reserved for system table schemas
 	if tableID == InvalidTableID {
 		return nil, fmt.Errorf("invalid table_id: cannot be InvalidTableID (%d)", InvalidTableID)
 	}

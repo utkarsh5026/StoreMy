@@ -3,6 +3,7 @@ package systemtable
 import (
 	"fmt"
 	"storemy/pkg/catalog/schema"
+	"storemy/pkg/primitives"
 	"storemy/pkg/tuple"
 	"storemy/pkg/types"
 )
@@ -10,10 +11,10 @@ import (
 // TableMetadata holds persisted metadata for a single table recorded in the system catalog.
 // It is used by TableManager to rebuild in-memory catalog state during database startup.
 type TableMetadata struct {
-	TableID       int    // Unique numeric identifier for the table
-	TableName     string // Canonical table name used in SQL
-	FilePath      string // Heap file name where the table data is stored
-	PrimaryKeyCol string // Name of the primary key column (empty if none or composite)
+	TableID       primitives.TableID // Unique numeric identifier for the table
+	TableName     string             // Canonical table name used in SQL
+	FilePath      string             // Heap file name where the table data is stored
+	PrimaryKeyCol string             // Name of the primary key column (empty if none or composite)
 }
 
 // TablesTable provides accessors and helpers for the CATALOG_TABLES system table.
@@ -32,7 +33,7 @@ type TablesTable struct {
 //   - primary_key is the column name used as primary key; empty string denotes none or composite keys recorded elsewhere.
 func (tt *TablesTable) Schema() *schema.Schema {
 	sch, _ := schema.NewSchemaBuilder(InvalidTableID, tt.TableName()).
-		AddPrimaryKey("table_id", types.IntType).
+		AddPrimaryKey("table_id", types.Uint64Type).
 		AddColumn("table_name", types.StringType).
 		AddColumn("file_path", types.StringType).
 		AddColumn("primary_key", types.StringType).
@@ -96,17 +97,13 @@ func (tt *TablesTable) TableIDIndex() int {
 func (tt *TablesTable) Parse(t *tuple.Tuple) (*TableMetadata, error) {
 	p := tuple.NewParser(t).ExpectFields(tt.GetNumFields())
 
-	tableID := p.ReadInt()
+	tableID := primitives.TableID(p.ReadUint64())
 	tableName := p.ReadString()
 	filePath := p.ReadString()
 	primaryKey := p.ReadString()
 
 	if err := p.Error(); err != nil {
 		return nil, err
-	}
-
-	if tableID == InvalidTableID {
-		return nil, fmt.Errorf("invalid table_id: cannot be InvalidTableID (%d)", InvalidTableID)
 	}
 
 	if tableName == "" {

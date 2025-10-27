@@ -3,6 +3,7 @@ package systemtable
 import (
 	"fmt"
 	"storemy/pkg/catalog/schema"
+	"storemy/pkg/primitives"
 	"storemy/pkg/tuple"
 	"storemy/pkg/types"
 )
@@ -28,13 +29,13 @@ type ColumnsTable struct{}
 //   - next_auto_value: Next value to use for auto-increment (>=1 when is_auto_increment=true)
 func (ct *ColumnsTable) Schema() *schema.Schema {
 	sch, _ := schema.NewSchemaBuilder(InvalidTableID, ct.TableName()).
-		AddColumn("table_id", types.IntType).
+		AddColumn("table_id", types.Uint64Type).
 		AddColumn("column_name", types.StringType).
 		AddColumn("type_id", types.IntType).
-		AddColumn("position", types.IntType).
+		AddColumn("position", types.Uint32Type).
 		AddColumn("is_primary_key", types.BoolType).
 		AddColumn("is_auto_increment", types.BoolType).
-		AddColumn("next_auto_value", types.IntType).
+		AddColumn("next_auto_value", types.Uint64Type).
 		Build()
 
 	return sch
@@ -66,29 +67,14 @@ func (ct *ColumnsTable) TableIDIndex() int {
 // Auto-increment columns are initialized with next_auto_value=1.
 func (ct *ColumnsTable) CreateTuple(col schema.ColumnMetadata) *tuple.Tuple {
 	return tuple.NewBuilder(ct.Schema().TupleDesc).
-		AddInt(int64(col.TableID)).
+		AddUint64(uint64(col.TableID)).
 		AddString(col.Name).
 		AddInt(int64(col.FieldType)).
-		AddInt(int64(col.Position)).
+		AddUint32(uint32(col.Position)).
 		AddBool(col.IsPrimary).
 		AddBool(col.IsAutoInc).
-		AddInt(int64(col.NextAutoValue)). // Start auto-increment at 1
+		AddUint64((col.NextAutoValue)). // Start auto-increment at 1
 		MustBuild()
-}
-
-// GetTableID extracts and validates the table_id from a catalog tuple.
-// Returns an error if the tuple structure is invalid or table_id is InvalidTableID (-1).
-func (ct *ColumnsTable) GetTableID(t *tuple.Tuple) (int, error) {
-	if t.TupleDesc.NumFields() != 7 {
-		return 0, fmt.Errorf("invalid tuple: expected 7 fields, got %d", t.TupleDesc.NumFields())
-	}
-
-	tableID := getIntField(t, 0)
-	if tableID == InvalidTableID {
-		return 0, fmt.Errorf("invalid table_id: cannot be InvalidTableID (%d)", InvalidTableID)
-	}
-
-	return tableID, nil
 }
 
 // Parse converts a catalog tuple into a ColumnMetadata struct with full validation.
@@ -101,20 +87,16 @@ func (ct *ColumnsTable) GetTableID(t *tuple.Tuple) (int, error) {
 func (ct *ColumnsTable) Parse(t *tuple.Tuple) (*schema.ColumnMetadata, error) {
 	p := tuple.NewParser(t).ExpectFields(7)
 
-	tableID := p.ReadInt()
+	tableID := p.ReadUint64()
 	name := p.ReadString()
 	typeID := p.ReadInt()
-	position := p.ReadInt()
+	position := p.ReadUint32()
 	isPrimary := p.ReadBool()
 	isAutoInc := p.ReadBool()
-	nextAutoValue := p.ReadInt()
+	nextAutoValue := p.ReadUint64()
 
 	if err := p.Error(); err != nil {
 		return nil, err
-	}
-
-	if tableID == InvalidTableID {
-		return nil, fmt.Errorf("invalid table_id: cannot be InvalidTableID (%d)", InvalidTableID)
 	}
 
 	if name == "" {
@@ -126,16 +108,12 @@ func (ct *ColumnsTable) Parse(t *tuple.Tuple) (*schema.ColumnMetadata, error) {
 		return nil, fmt.Errorf("invalid type_id %d: not a recognized type", typeID)
 	}
 
-	if isLessThanZero(position) {
-		return nil, fmt.Errorf("invalid column position %d: must be non-negative", position)
-	}
-
 	if isAutoInc {
 		if fieldType != types.IntType {
 			return nil, fmt.Errorf("auto-increment column must be INT type, got type_id %d", typeID)
 		}
 
-		if isLessThan(nextAutoValue, 1) {
+		if nextAutoValue < 1 {
 			return nil, fmt.Errorf("invalid next_auto_value %d: must be >= 1", nextAutoValue)
 		}
 	}
@@ -143,11 +121,11 @@ func (ct *ColumnsTable) Parse(t *tuple.Tuple) (*schema.ColumnMetadata, error) {
 	col := &schema.ColumnMetadata{
 		Name:          name,
 		FieldType:     fieldType,
-		Position:      position,
+		Position:      primitives.ColumnID(position),
 		IsPrimary:     isPrimary,
 		IsAutoInc:     isAutoInc,
 		NextAutoValue: nextAutoValue,
-		TableID:       tableID,
+		TableID:       primitives.TableID(tableID),
 	}
 
 	return col, nil

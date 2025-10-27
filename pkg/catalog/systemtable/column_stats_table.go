@@ -3,6 +3,7 @@ package systemtable
 import (
 	"fmt"
 	"storemy/pkg/catalog/schema"
+	"storemy/pkg/primitives"
 	"storemy/pkg/tuple"
 	"storemy/pkg/types"
 	"time"
@@ -11,15 +12,15 @@ import (
 // ColumnStatisticsRow represents a row in the CATALOG_COLUMN_STATISTICS table
 // Note: Histogram and MCV data are stored separately due to size constraints
 type ColumnStatisticsRow struct {
-	TableID       int       // Table identifier
-	ColumnName    string    // Column name
-	ColumnIndex   int       // Column position (0-based)
-	DistinctCount int64     // Number of distinct values
-	NullCount     int64     // Number of NULL values
-	MinValue      string    // Minimum value (as string)
-	MaxValue      string    // Maximum value (as string)
-	AvgWidth      int       // Average width in bytes
-	LastUpdated   time.Time // Last update timestamp
+	TableID       primitives.TableID  // Table identifier
+	ColumnName    string              // Column name
+	ColumnIndex   primitives.ColumnID // Column position (0-based)
+	DistinctCount uint64              // Number of distinct values
+	NullCount     uint64              // Number of NULL values
+	MinValue      string              // Minimum value (as string)
+	MaxValue      string              // Maximum value (as string)
+	AvgWidth      uint64              // Average width in bytes
+	LastUpdated   time.Time           // Last update timestamp
 }
 
 type ColumnStatsTable struct{}
@@ -27,15 +28,15 @@ type ColumnStatsTable struct{}
 // Schema returns the schema for the CATALOG_COLUMN_STATISTICS system table
 func (cst *ColumnStatsTable) Schema() *schema.Schema {
 	sch, _ := schema.NewSchemaBuilder(InvalidTableID, cst.TableName()).
-		AddColumn("table_id", types.IntType).
+		AddColumn("table_id", types.Uint64Type).
 		AddColumn("column_name", types.StringType).
-		AddColumn("column_index", types.IntType).
-		AddColumn("distinct_count", types.IntType).
-		AddColumn("null_count", types.IntType).
+		AddColumn("column_index", types.Uint32Type).
+		AddColumn("distinct_count", types.Uint64Type).
+		AddColumn("null_count", types.Uint64Type).
 		AddColumn("min_value", types.StringType).
 		AddColumn("max_value", types.StringType).
-		AddColumn("avg_width", types.IntType).
-		AddColumn("last_updated", types.IntType).
+		AddColumn("avg_width", types.Uint64Type).
+		AddColumn("last_updated", types.Int64Type).
 		Build()
 
 	return sch
@@ -58,12 +59,12 @@ func (cst *ColumnStatsTable) TableIDIndex() int {
 }
 
 // GetTableID extracts the table ID from a column statistics tuple
-func (cst *ColumnStatsTable) GetTableID(t *tuple.Tuple) (int, error) {
+func (cst *ColumnStatsTable) GetTableID(t *tuple.Tuple) (primitives.TableID, error) {
 	if t.TupleDesc.NumFields() != 9 {
 		return 0, fmt.Errorf("invalid tuple: expected 9 fields, got %d", t.TupleDesc.NumFields())
 	}
 
-	tableID := getIntField(t, 0)
+	tableID := primitives.TableID(getUint64Field(t, 0))
 	if tableID == InvalidTableID {
 		return 0, fmt.Errorf("invalid table_id: cannot be InvalidTableID (%d)", InvalidTableID)
 	}
@@ -75,14 +76,14 @@ func (cst *ColumnStatsTable) GetTableID(t *tuple.Tuple) (int, error) {
 func (cst *ColumnStatsTable) Parse(t *tuple.Tuple) (*ColumnStatisticsRow, error) {
 	p := tuple.NewParser(t).ExpectFields(9)
 
-	tableID := p.ReadInt()
+	tableID := primitives.TableID(p.ReadUint64())
 	columnName := p.ReadString()
-	columnIndex := p.ReadInt()
-	distinctCount := p.ReadInt64()
-	nullCount := p.ReadInt64()
+	columnIndex := primitives.ColumnID(p.ReadUint32())
+	distinctCount := p.ReadUint64()
+	nullCount := p.ReadUint64()
 	minValue := p.ReadString()
 	maxValue := p.ReadString()
-	avgWidth := p.ReadInt()
+	avgWidth := p.ReadUint64()
 	lastUpdated := p.ReadTimestamp()
 
 	if err := p.Error(); err != nil {
@@ -95,22 +96,6 @@ func (cst *ColumnStatsTable) Parse(t *tuple.Tuple) (*ColumnStatisticsRow, error)
 
 	if columnName == "" {
 		return nil, fmt.Errorf("invalid column_name: cannot be empty")
-	}
-
-	if columnIndex < 0 {
-		return nil, fmt.Errorf("invalid column_index %d: must be non-negative", columnIndex)
-	}
-
-	if distinctCount < 0 {
-		return nil, fmt.Errorf("invalid distinct_count %d: must be non-negative", distinctCount)
-	}
-
-	if nullCount < 0 {
-		return nil, fmt.Errorf("invalid null_count %d: must be non-negative", nullCount)
-	}
-
-	if avgWidth < 0 {
-		return nil, fmt.Errorf("invalid avg_width %d: must be non-negative", avgWidth)
 	}
 
 	result := &ColumnStatisticsRow{
@@ -131,14 +116,14 @@ func (cst *ColumnStatsTable) Parse(t *tuple.Tuple) (*ColumnStatisticsRow, error)
 // CreateTuple creates a tuple for the column statistics table
 func (cst *ColumnStatsTable) CreateTuple(stats *ColumnStatisticsRow) *tuple.Tuple {
 	return tuple.NewBuilder(cst.Schema().TupleDesc).
-		AddInt(int64(stats.TableID)).
+		AddUint64(uint64(stats.TableID)).
 		AddString(stats.ColumnName).
-		AddInt(int64(stats.ColumnIndex)).
-		AddInt(int64(stats.DistinctCount)).
-		AddInt(int64(stats.NullCount)).
+		AddUint32(uint32(stats.ColumnIndex)).
+		AddUint64(stats.DistinctCount).
+		AddUint64(stats.NullCount).
 		AddString(stats.MinValue).
 		AddString(stats.MaxValue).
-		AddInt(int64(stats.AvgWidth)).
-		AddInt(int64(stats.LastUpdated.Unix())).
+		AddUint64(stats.AvgWidth).
+		AddInt64(stats.LastUpdated.Unix()).
 		MustBuild()
 }

@@ -170,7 +170,7 @@ func TestColumnsTable_RoundTrip(t *testing.T) {
 func TestIndexesTable_RoundTrip(t *testing.T) {
 	it := &IndexesTable{}
 
-	now := time.Now().Unix()
+	now := time.Now()
 	metadata := IndexMetadata{
 		IndexID:    1,
 		IndexName:  "idx_users_email",
@@ -213,7 +213,7 @@ func TestIndexesTable_RoundTrip(t *testing.T) {
 		t.Errorf("FilePath mismatch: expected %s, got %s", metadata.FilePath, parsed.FilePath)
 	}
 	if parsed.CreatedAt != metadata.CreatedAt {
-		t.Errorf("CreatedAt mismatch: expected %d, got %d", metadata.CreatedAt, parsed.CreatedAt)
+		t.Errorf("CreatedAt mismatch: expected %v, got %v", metadata.CreatedAt, parsed.CreatedAt)
 	}
 }
 
