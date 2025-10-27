@@ -188,7 +188,7 @@ func (p *SelectPlan) applyProjectionIfNeeded(input iterator.DbIterator) (iterato
 //  2. Extract field type from input schema
 //  3. Create Project operator with field indices and types
 func buildProjection(input iterator.DbIterator, selectFields []*plan.SelectListNode) (iterator.DbIterator, error) {
-	fieldIndices := make([]int, 0, len(selectFields))
+	fieldIndices := make([]primitives.ColumnID, 0, len(selectFields))
 	fieldTypes := make([]types.Type, 0, len(selectFields))
 	tupleDesc := input.GetTupleDesc()
 
@@ -283,7 +283,7 @@ func (p *SelectPlan) buildJoinRightSide(joinNode *plan.JoinNode) (iterator.DbIte
 // Example: ON users.id = orders.user_id
 //
 //	→ leftIndex=0 (users.id at position 0), rightIndex=2 (orders.user_id at position 2)
-func (p *SelectPlan) buildJoinPredicateFields(node *plan.JoinNode, l, r iterator.DbIterator) (int, int, primitives.Predicate, error) {
+func (p *SelectPlan) buildJoinPredicateFields(node *plan.JoinNode, l, r iterator.DbIterator) (primitives.ColumnID, primitives.ColumnID, primitives.Predicate, error) {
 	li, err := findFieldIndex(node.LeftField, l.GetTupleDesc())
 	if err != nil {
 		return 0, 0, 0, err
@@ -345,20 +345,20 @@ func (p *SelectPlan) applyAggregationIfNeeded(input iterator.DbIterator) (iterat
 	return aggOperator, nil
 }
 
-func (p *SelectPlan) parseAggregationIndex(td *tuple.TupleDescription) (int, error) {
+func (p *SelectPlan) parseAggregationIndex(td *tuple.TupleDescription) (primitives.ColumnID, error) {
 	aggFieldName := extractFieldName(p.statement.Plan.AggField())
-	var aggFieldIndex int
+	var aggFieldIndex primitives.ColumnID
 	var err error
 
 	if aggFieldName == "*" {
 		if td.NumFields() == 0 {
-			return -1, fmt.Errorf("cannot perform COUNT(*) on table with no fields")
+			return 0, fmt.Errorf("cannot perform COUNT(*) on table with no fields")
 		}
 		aggFieldIndex = 0
 	} else {
 		aggFieldIndex, err = td.FindFieldIndex(aggFieldName)
 		if err != nil {
-			return -1, fmt.Errorf("aggregate field %s not found: %w", p.statement.Plan.AggField(), err)
+			return 0, fmt.Errorf("aggregate field %s not found: %w", p.statement.Plan.AggField(), err)
 		}
 	}
 

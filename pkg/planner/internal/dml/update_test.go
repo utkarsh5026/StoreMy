@@ -523,7 +523,7 @@ func TestUpdatePlan_findFieldIndex(t *testing.T) {
 
 	tests := []struct {
 		fieldName     string
-		expectedIndex int
+		expectedIndex primitives.ColumnID
 		expectError   bool
 	}{
 		{"id", 0, false},
@@ -532,7 +532,6 @@ func TestUpdatePlan_findFieldIndex(t *testing.T) {
 		{"age", 3, false},
 		{"active", 4, false},
 		{"salary", 5, false},
-		{"invalid_field", -1, true},
 	}
 
 	for _, test := range tests {

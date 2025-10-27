@@ -7,10 +7,13 @@ import (
 	"storemy/pkg/planner/internal/metadata"
 	"storemy/pkg/planner/internal/result"
 	"storemy/pkg/planner/internal/scan"
+	"storemy/pkg/primitives"
 	"storemy/pkg/registry"
 	"storemy/pkg/tuple"
 	"storemy/pkg/types"
 )
+
+type updatedColMap = map[primitives.ColumnID]types.Field
 
 // UpdatePlan represents a physical plan for executing an UPDATE statement.
 //
@@ -92,8 +95,8 @@ func (p *UpdatePlan) Execute() (result.Result, error) {
 // Returns:
 // - map[int]types.Field: a map of field_index → new_field_value for efficient updates.
 // - error: non-nil if any field name in the SET clauses cannot be resolved.
-func (p *UpdatePlan) buildUpdateMap(tupleDesc *tuple.TupleDescription) (map[int]types.Field, error) {
-	updateMap := make(map[int]types.Field)
+func (p *UpdatePlan) buildUpdateMap(tupleDesc *tuple.TupleDescription) (updatedColMap, error) {
+	updateMap := make(updatedColMap)
 	for _, cl := range p.statement.SetClauses {
 		i, err := tupleDesc.FindFieldIndex(cl.FieldName)
 		if err != nil {
@@ -118,7 +121,7 @@ func (p *UpdatePlan) buildUpdateMap(tupleDesc *tuple.TupleDescription) (map[int]
 //
 // Returns:
 // - error: non-nil if any tuple update fails (e.g., constraint violation, I/O error).
-func (p *UpdatePlan) updateTuples(tuples []*tuple.Tuple, updateMap map[int]types.Field, tableID int) error {
+func (p *UpdatePlan) updateTuples(tuples []*tuple.Tuple, updateMap updatedColMap, tableID primitives.FileID) error {
 	tupleMgr := p.ctx.TupleManager()
 	ctm := p.ctx.CatalogManager()
 

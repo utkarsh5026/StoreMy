@@ -1,17 +1,18 @@
 package dml
 
 import (
+	"storemy/pkg/primitives"
 	"storemy/pkg/tuple"
 	"strings"
 )
 
 // findFieldIndex resolves a field name to its index in the tuple schema.
 // Handles qualified names (table.field) by extracting just the field part.
-func findFieldIndex(fieldName string, td *tuple.TupleDescription) (int, error) {
+func findFieldIndex(fieldName string, td *tuple.TupleDescription) (primitives.ColumnID, error) {
 	name := extractFieldName(fieldName)
 	idx, err := td.FindFieldIndex(name)
 	if err != nil {
-		return -1, err
+		return 0, err
 	}
 
 	return idx, nil

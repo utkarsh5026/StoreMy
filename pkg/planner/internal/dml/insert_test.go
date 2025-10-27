@@ -8,6 +8,7 @@ import (
 	"storemy/pkg/planner/internal/metadata"
 	"storemy/pkg/planner/internal/result"
 	"storemy/pkg/planner/internal/testutil"
+	"storemy/pkg/primitives"
 	"storemy/pkg/registry"
 	"storemy/pkg/types"
 	"testing"
@@ -602,7 +603,7 @@ func TestInsertPlan_validateValueCount(t *testing.T) {
 		t.Errorf("validateValueCount failed: %v", err)
 	}
 
-	fieldMapping := []int{0, 1}
+	fieldMapping := []primitives.ColumnID{0, 1}
 	values2 := []types.Field{
 		&types.IntField{Value: 1},
 		types.NewStringField("John", types.StringMaxSize),

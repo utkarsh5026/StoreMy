@@ -7,6 +7,7 @@ import (
 	"storemy/pkg/planner/internal/metadata"
 	"storemy/pkg/planner/internal/result"
 	"storemy/pkg/planner/internal/scan"
+	"storemy/pkg/primitives"
 	"storemy/pkg/registry"
 	"storemy/pkg/tuple"
 )
@@ -91,7 +92,7 @@ func (p *DeletePlan) Execute() (result.Result, error) {
 //
 // Returns:
 //   - error if tuple deletion fails, including the index of the failed tuple
-func (p *DeletePlan) deleteTuples(ts []*tuple.Tuple, tableID int) error {
+func (p *DeletePlan) deleteTuples(ts []*tuple.Tuple, tableID primitives.FileID) error {
 	ctm := p.ctx.CatalogManager()
 	tm := p.ctx.TupleManager()
 	dbFile, err := ctm.GetTableFile(tableID)
