@@ -13,7 +13,6 @@ import (
 
 type BTreeFile = btree.BTreeFile
 type BTreePage = btree.BTreePage
-type BTreePageID = btree.BTreePageID
 
 // BTree implements the Index interface for B+Tree indexes.
 // It provides an ordered index structure that supports efficient search, range queries,
@@ -33,10 +32,10 @@ type BTreePageID = btree.BTreePageID
 //   - tx: Transaction context for concurrency control and rollback
 //   - store: PageStore for buffer pool management and page locking
 type BTree struct {
-	indexID    int
+	indexID    primitives.FileID
 	keyType    types.Type
 	file       *BTreeFile
-	rootPageID *BTreePageID
+	rootPageID *page.PageDescriptor
 	tx         *transaction.TransactionContext
 	store      *memory.PageStore
 }
@@ -45,14 +44,16 @@ type BTree struct {
 // Initializes the tree structure and registers with the PageStore for proper
 // buffer management and transaction support.
 //
+// The indexID parameter should match the file's natural ID (from BaseFile.GetID()).
+// This ensures proper coordination between the catalog, physical storage, and page management.
+//
 // The function:
 // 1. Creates the BTree wrapper with provided parameters
-// 2. Sets the file's index ID for proper page identification
-// 3. Registers the file with PageStore for flush coordination
-// 4. If pages exist, sets root to page 0 (B+Tree convention)
+// 2. Registers the file with PageStore for flush coordination
+// 3. If pages exist, sets root to page 0 (B+Tree convention)
 //
 // Parameters:
-//   - indexID: Unique identifier for this index in the database
+//   - indexID: Unique identifier for this index (should match file.GetID())
 //   - keyType: Type of keys this index will store (must be consistent)
 //   - file: BTreeFile managing physical storage of pages
 //   - tx: Transaction context for ACID properties
@@ -60,7 +61,7 @@ type BTree struct {
 //
 // Returns:
 //   - *BTree: Initialized B+Tree ready for operations
-func NewBTree(indexID int, keyType types.Type, file *BTreeFile, tx *transaction.TransactionContext, store *memory.PageStore) *BTree {
+func NewBTree(indexID primitives.FileID, keyType types.Type, file *BTreeFile, tx *transaction.TransactionContext, store *memory.PageStore) *BTree {
 	bt := &BTree{
 		indexID: indexID,
 		keyType: keyType,
@@ -69,14 +70,11 @@ func NewBTree(indexID int, keyType types.Type, file *BTreeFile, tx *transaction.
 		store:   store,
 	}
 
-	// Set the file's index ID to match this BTree's index ID
-	file.SetIndexID(indexID)
-
 	// Register the BTreeFile with the PageStore so it can flush pages properly
-	store.RegisterDbFile(indexID, file)
+	store.RegisterDbFile(primitives.FileID(indexID), file)
 
 	if file.NumPages() > 0 {
-		bt.rootPageID = btree.NewBTreePageID(bt.indexID, 0)
+		bt.rootPageID = page.NewPageDescriptor(bt.indexID, 0)
 	}
 
 	return bt
@@ -127,12 +125,12 @@ func (bt *BTree) getRootPage(perm transaction.Permissions) (*BTreePage, error) {
 		return bt.getPage(bt.rootPageID, perm)
 	}
 
-	root, err := bt.file.AllocatePage(bt.tx.ID, bt.keyType, true, -1)
+	root, err := bt.file.AllocatePage(bt.tx.ID, bt.keyType, true, primitives.InvalidPageNumber)
 	if err != nil {
 		return nil, fmt.Errorf("failed to allocate root page: %w", err)
 	}
 
-	bt.rootPageID = root.GetBTreePageID()
+	bt.rootPageID = root.GetID()
 	if err := bt.addDirtyPage(root, memory.InsertOperation); err != nil {
 		return nil, fmt.Errorf("failed to mark root page as dirty: %w", err)
 	}
@@ -198,9 +196,9 @@ func (bt *BTree) findLeafPage(currentPage *BTreePage, key types.Field) (*BTreePa
 //   - key: The key to find appropriate subtree for
 //
 // Returns:
-//   - *BTreePageID: Page ID of the child that should contain the key
+//   - *page.PageDescriptor: Page ID of the child that should contain the key
 //   - nil: If page is not internal or has no children (should not happen)
-func (bt *BTree) findChildPointer(internalPage *BTreePage, key types.Field) *BTreePageID {
+func (bt *BTree) findChildPointer(internalPage *BTreePage, key types.Field) *page.PageDescriptor {
 	if !internalPage.IsInternalPage() || len(internalPage.Children()) == 0 {
 		return nil
 	}
@@ -269,7 +267,7 @@ func (bt *BTree) updateParentKey(child *BTreePage, newKey types.Field) error {
 		return nil
 	}
 
-	parID := btree.NewBTreePageID(bt.indexID, child.Parent())
+	parID := page.NewPageDescriptor(bt.indexID, child.Parent())
 	parent, err := bt.getPage(parID, transaction.ReadWrite)
 	if err != nil {
 		return fmt.Errorf("failed to read parent page: %w", err)
@@ -279,7 +277,7 @@ func (bt *BTree) updateParentKey(child *BTreePage, newKey types.Field) error {
 
 	// Find the child pointer and update its key
 	// Note: children[0] has no key in B+tree, so we start from index 1
-	childID := child.GetBTreePageID()
+	childID := child.GetID()
 	for i := 1; i < len(children); i++ {
 		if children[i].ChildPID.Equals(childID) {
 			parent.UpdateChildrenKey(i, newKey)
@@ -313,7 +311,7 @@ func (bt *BTree) updateParentKey(child *BTreePage, newKey types.Field) error {
 // Returns:
 //   - *BTreePage: The requested page, properly locked and typed
 //   - error: Returns error if page fetch fails or type is incorrect
-func (bt *BTree) getPage(pageID *BTreePageID, perm transaction.Permissions) (*BTreePage, error) {
+func (bt *BTree) getPage(pageID *page.PageDescriptor, perm transaction.Permissions) (*BTreePage, error) {
 	p, err := bt.store.GetPage(bt.tx, bt.file, pageID, perm)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get page: %w", err)

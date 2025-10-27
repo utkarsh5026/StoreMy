@@ -8,9 +8,9 @@ import (
 	"storemy/pkg/log/wal"
 	"storemy/pkg/memory"
 	"storemy/pkg/primitives"
-	"storemy/pkg/storage/heap"
 	"storemy/pkg/storage/index"
 	"storemy/pkg/storage/index/btree"
+	"storemy/pkg/storage/page"
 	"storemy/pkg/tuple"
 	"storemy/pkg/types"
 	"sync"
@@ -25,7 +25,7 @@ func setupTestBTree(t *testing.T, keyType types.Type) (*BTree, *memory.PageStore
 	filename := filepath.Join(tmpDir, fmt.Sprintf("btree_test_%d.dat", os.Getpid()))
 
 	// Create BTree file
-	file, err := btree.NewBTreeFile(filename, keyType)
+	file, err := btree.NewBTreeFile(primitives.Filepath(filename), keyType)
 	if err != nil {
 		t.Fatalf("Failed to create BTree file: %v", err)
 	}
@@ -51,7 +51,7 @@ func setupTestBTree(t *testing.T, keyType types.Type) (*BTree, *memory.PageStore
 	store := memory.NewPageStore(wal)
 
 	// Create BTree
-	indexID := 1
+	indexID := primitives.FileID(1)
 	bt := NewBTree(indexID, keyType, file, tx, store)
 
 	cleanup := func() {
@@ -105,8 +105,8 @@ func TestBTree_Insert_Single(t *testing.T) {
 	defer cleanup()
 
 	key := types.NewIntField(42)
-	pageID := heap.NewHeapPageID(1, 0)
-	rid := tuple.NewTupleRecordID(pageID, 0)
+	pageID := page.NewPageDescriptor(1, 0)
+	rid := tuple.NewTupleRecordID(pageID, primitives.SlotID(0))
 
 	err := bt.Insert(key, rid)
 	if err != nil {
@@ -134,12 +134,12 @@ func TestBTree_Insert_MultipleOrdered(t *testing.T) {
 	defer cleanup()
 
 	numEntries := 100
-	pageID := heap.NewHeapPageID(1, 0)
+	pageID := page.NewPageDescriptor(1, 0)
 
 	// Insert in ascending order
 	for i := 0; i < numEntries; i++ {
 		key := types.NewIntField(int64(i))
-		rid := tuple.NewTupleRecordID(pageID, i)
+		rid := tuple.NewTupleRecordID(pageID, primitives.SlotID(i))
 
 		err := bt.Insert(key, rid)
 		if err != nil {
@@ -167,12 +167,12 @@ func TestBTree_Insert_MultipleReverse(t *testing.T) {
 	defer cleanup()
 
 	numEntries := 100
-	pageID := heap.NewHeapPageID(1, 0)
+	pageID := page.NewPageDescriptor(1, 0)
 
 	// Insert in descending order
 	for i := numEntries - 1; i >= 0; i-- {
 		key := types.NewIntField(int64(i))
-		rid := tuple.NewTupleRecordID(pageID, i)
+		rid := tuple.NewTupleRecordID(pageID, primitives.SlotID(i))
 
 		err := bt.Insert(key, rid)
 		if err != nil {
@@ -201,11 +201,11 @@ func TestBTree_Insert_MultipleRandom(t *testing.T) {
 
 	// Insert in random order
 	testKeys := []int{50, 20, 80, 10, 30, 70, 90, 5, 15, 25, 35, 60, 75, 85, 95}
-	pageID := heap.NewHeapPageID(1, 0)
+	pageID := page.NewPageDescriptor(1, 0)
 
 	for i, keyVal := range testKeys {
 		key := types.NewIntField(int64(keyVal))
-		rid := tuple.NewTupleRecordID(pageID, i)
+		rid := tuple.NewTupleRecordID(pageID, primitives.SlotID(i))
 
 		err := bt.Insert(key, rid)
 		if err != nil {
@@ -233,8 +233,8 @@ func TestBTree_Insert_Duplicate(t *testing.T) {
 	defer cleanup()
 
 	key := types.NewIntField(42)
-	pageID := heap.NewHeapPageID(1, 0)
-	rid := tuple.NewTupleRecordID(pageID, 0)
+	pageID := page.NewPageDescriptor(1, 0)
+	rid := tuple.NewTupleRecordID(pageID, primitives.SlotID(0))
 
 	// First insert should succeed
 	err := bt.Insert(key, rid)
@@ -255,8 +255,8 @@ func TestBTree_Insert_TypeMismatch(t *testing.T) {
 	defer cleanup()
 
 	key := types.NewStringField("invalid", 128)
-	pageID := heap.NewHeapPageID(1, 0)
-	rid := tuple.NewTupleRecordID(pageID, 0)
+	pageID := page.NewPageDescriptor(1, 0)
+	rid := tuple.NewTupleRecordID(pageID, primitives.SlotID(0))
 
 	err := bt.Insert(key, rid)
 	if err == nil {
@@ -271,11 +271,11 @@ func TestBTree_Insert_PageSplit(t *testing.T) {
 
 	// Insert enough entries to trigger at least one split (reduced for stability)
 	numEntries := 160
-	pageID := heap.NewHeapPageID(1, 0)
+	pageID := page.NewPageDescriptor(1, 0)
 
 	for i := 0; i < numEntries; i++ {
 		key := types.NewIntField(int64(i))
-		rid := tuple.NewTupleRecordID(pageID, i)
+		rid := tuple.NewTupleRecordID(pageID, primitives.SlotID(i))
 
 		err := bt.Insert(key, rid)
 		if err != nil {
@@ -303,8 +303,8 @@ func TestBTree_Delete_Single(t *testing.T) {
 	defer cleanup()
 
 	key := types.NewIntField(42)
-	pageID := heap.NewHeapPageID(1, 0)
-	rid := tuple.NewTupleRecordID(pageID, 0)
+	pageID := page.NewPageDescriptor(1, 0)
+	rid := tuple.NewTupleRecordID(pageID, primitives.SlotID(0))
 
 	// Insert then delete
 	err := bt.Insert(key, rid)
@@ -334,12 +334,12 @@ func TestBTree_Delete_Multiple(t *testing.T) {
 	defer cleanup()
 
 	numEntries := 50
-	pageID := heap.NewHeapPageID(1, 0)
+	pageID := page.NewPageDescriptor(1, 0)
 
 	// Insert entries
 	for i := 0; i < numEntries; i++ {
 		key := types.NewIntField(int64(i))
-		rid := tuple.NewTupleRecordID(pageID, i)
+		rid := tuple.NewTupleRecordID(pageID, primitives.SlotID(i))
 		err := bt.Insert(key, rid)
 		if err != nil {
 			t.Fatalf("Failed to insert entry %d: %v", i, err)
@@ -350,7 +350,7 @@ func TestBTree_Delete_Multiple(t *testing.T) {
 
 	for i := 0; i < numEntries; i += 2 {
 		key := types.NewIntField(int64(i))
-		rid := tuple.NewTupleRecordID(pageID, i)
+		rid := tuple.NewTupleRecordID(pageID, primitives.SlotID(i))
 		err := bt.Delete(key, rid)
 		if err != nil {
 			t.Fatalf("Failed to delete entry %d: %v", i, err)
@@ -390,8 +390,8 @@ func TestBTree_Delete_NonExistent(t *testing.T) {
 	defer cleanup()
 
 	key := types.NewIntField(42)
-	pageID := heap.NewHeapPageID(1, 0)
-	rid := tuple.NewTupleRecordID(pageID, 0)
+	pageID := page.NewPageDescriptor(1, 0)
+	rid := tuple.NewTupleRecordID(pageID, primitives.SlotID(0))
 
 	err := bt.Delete(key, rid)
 	if err == nil {
@@ -405,8 +405,8 @@ func TestBTree_Delete_TypeMismatch(t *testing.T) {
 	defer cleanup()
 
 	key := types.NewStringField("invalid", 128)
-	pageID := heap.NewHeapPageID(1, 0)
-	rid := tuple.NewTupleRecordID(pageID, 0)
+	pageID := page.NewPageDescriptor(1, 0)
+	rid := tuple.NewTupleRecordID(pageID, primitives.SlotID(0))
 
 	err := bt.Delete(key, rid)
 	if err == nil {
@@ -420,8 +420,8 @@ func TestBTree_Search_Existing(t *testing.T) {
 	defer cleanup()
 
 	key := types.NewIntField(42)
-	pageID := heap.NewHeapPageID(1, 0)
-	rid := tuple.NewTupleRecordID(pageID, 0)
+	pageID := page.NewPageDescriptor(1, 0)
+	rid := tuple.NewTupleRecordID(pageID, primitives.SlotID(0))
 
 	err := bt.Insert(key, rid)
 	if err != nil {
@@ -448,10 +448,10 @@ func TestBTree_Search_NonExistent(t *testing.T) {
 	defer cleanup()
 
 	// Insert some entries
-	pageID := heap.NewHeapPageID(1, 0)
+	pageID := page.NewPageDescriptor(1, 0)
 	for i := 0; i < 10; i++ {
 		key := types.NewIntField(int64(i * 10))
-		rid := tuple.NewTupleRecordID(pageID, i)
+		rid := tuple.NewTupleRecordID(pageID, primitives.SlotID(i))
 		bt.Insert(key, rid)
 	}
 
@@ -500,12 +500,12 @@ func TestBTree_RangeSearch_Basic(t *testing.T) {
 	bt, _, _, _, cleanup := setupTestBTree(t, types.IntType)
 	defer cleanup()
 
-	pageID := heap.NewHeapPageID(1, 0)
+	pageID := page.NewPageDescriptor(1, 0)
 
 	// Insert entries 0-99
 	for i := 0; i < 100; i++ {
 		key := types.NewIntField(int64(i))
-		rid := tuple.NewTupleRecordID(pageID, i)
+		rid := tuple.NewTupleRecordID(pageID, primitives.SlotID(i))
 		err := bt.Insert(key, rid)
 		if err != nil {
 			t.Fatalf("Failed to insert entry %d: %v", i, err)
@@ -534,11 +534,11 @@ func TestBTree_RangeSearch_SingleElement(t *testing.T) {
 	bt, _, _, _, cleanup := setupTestBTree(t, types.IntType)
 	defer cleanup()
 
-	pageID := heap.NewHeapPageID(1, 0)
+	pageID := page.NewPageDescriptor(1, 0)
 
 	for i := 0; i < 10; i++ {
 		key := types.NewIntField(int64(i))
-		rid := tuple.NewTupleRecordID(pageID, i)
+		rid := tuple.NewTupleRecordID(pageID, primitives.SlotID(i))
 		bt.Insert(key, rid)
 	}
 
@@ -579,11 +579,11 @@ func TestBTree_RangeSearch_MultiplePages(t *testing.T) {
 
 	// Insert enough entries to span multiple leaf pages (reduced for testing)
 	numEntries := btree.MaxEntriesPerPage * 2
-	pageID := heap.NewHeapPageID(1, 0)
+	pageID := page.NewPageDescriptor(1, 0)
 
 	for i := 0; i < numEntries; i++ {
 		key := types.NewIntField(int64(i))
-		rid := tuple.NewTupleRecordID(pageID, i)
+		rid := tuple.NewTupleRecordID(pageID, primitives.SlotID(i))
 		err := bt.Insert(key, rid)
 		if err != nil {
 			t.Fatalf("Failed to insert entry %d: %v", i, err)
@@ -624,7 +624,7 @@ func TestBTree_StringKeys(t *testing.T) {
 	bt, _, _, _, cleanup := setupTestBTree(t, types.StringType)
 	defer cleanup()
 
-	pageID := heap.NewHeapPageID(1, 0)
+	pageID := page.NewPageDescriptor(1, 0)
 	testData := []struct {
 		key string
 		idx int
@@ -639,7 +639,7 @@ func TestBTree_StringKeys(t *testing.T) {
 	// Insert
 	for _, data := range testData {
 		key := types.NewStringField(data.key, 128)
-		rid := tuple.NewTupleRecordID(pageID, data.idx)
+		rid := tuple.NewTupleRecordID(pageID, primitives.SlotID(data.idx))
 		err := bt.Insert(key, rid)
 		if err != nil {
 			t.Fatalf("Failed to insert %s: %v", data.key, err)
@@ -692,12 +692,12 @@ func TestBTree_Stress_InsertDelete(t *testing.T) {
 	defer cleanup()
 
 	numOperations := 200
-	pageID := heap.NewHeapPageID(1, 0)
+	pageID := page.NewPageDescriptor(1, 0)
 
 	// Insert many entries
 	for i := 0; i < numOperations; i++ {
 		key := types.NewIntField(int64(i))
-		rid := tuple.NewTupleRecordID(pageID, i)
+		rid := tuple.NewTupleRecordID(pageID, primitives.SlotID(i))
 		err := bt.Insert(key, rid)
 		if err != nil {
 			t.Fatalf("Failed to insert entry %d: %v", i, err)
@@ -708,7 +708,7 @@ func TestBTree_Stress_InsertDelete(t *testing.T) {
 
 	for i := 0; i < numOperations; i += 2 {
 		key := types.NewIntField(int64(i))
-		rid := tuple.NewTupleRecordID(pageID, i)
+		rid := tuple.NewTupleRecordID(pageID, primitives.SlotID(i))
 		err := bt.Delete(key, rid)
 		if err != nil {
 			t.Fatalf("Failed to delete entry %d: %v", i, err)
@@ -718,7 +718,7 @@ func TestBTree_Stress_InsertDelete(t *testing.T) {
 	// Insert new entries in the gaps
 	for i := 0; i < numOperations; i += 2 {
 		key := types.NewIntField(int64(i))
-		rid := tuple.NewTupleRecordID(pageID, i+10000)
+		rid := tuple.NewTupleRecordID(pageID, primitives.SlotID(i+10000))
 		err := bt.Insert(key, rid)
 		if err != nil {
 			t.Fatalf("Failed to re-insert entry %d: %v", i, err)
@@ -745,12 +745,12 @@ func TestBTree_Concurrent_Reads(t *testing.T) {
 	defer cleanup()
 
 	numEntries := 100
-	pageID := heap.NewHeapPageID(1, 0)
+	pageID := page.NewPageDescriptor(1, 0)
 
 	// Insert entries
 	for i := 0; i < numEntries; i++ {
 		key := types.NewIntField(int64(i))
-		rid := tuple.NewTupleRecordID(pageID, i)
+		rid := tuple.NewTupleRecordID(pageID, primitives.SlotID(i))
 		err := bt.Insert(key, rid)
 		if err != nil {
 			t.Fatalf("Failed to insert entry %d: %v", i, err)
@@ -789,12 +789,12 @@ func TestBTree_EdgeCase_Boundaries(t *testing.T) {
 	bt, _, _, _, cleanup := setupTestBTree(t, types.IntType)
 	defer cleanup()
 
-	pageID := heap.NewHeapPageID(1, 0)
+	pageID := page.NewPageDescriptor(1, 0)
 
 	// Insert at page boundaries (reduced for stability)
 	for i := 0; i < 200; i++ {
 		key := types.NewIntField(int64(i))
-		rid := tuple.NewTupleRecordID(pageID, i)
+		rid := tuple.NewTupleRecordID(pageID, primitives.SlotID(i))
 		err := bt.Insert(key, rid)
 		if err != nil {
 			t.Fatalf("Failed to insert entry %d: %v", i, err)
@@ -803,14 +803,14 @@ func TestBTree_EdgeCase_Boundaries(t *testing.T) {
 
 	// Delete entries at the beginning of each page
 	key1 := types.NewIntField(0)
-	rid1 := tuple.NewTupleRecordID(pageID, 0)
+	rid1 := tuple.NewTupleRecordID(pageID, primitives.SlotID(0))
 	err := bt.Delete(key1, rid1)
 	if err != nil {
 		t.Fatalf("Failed to delete first entry: %v", err)
 	}
 
 	key2 := types.NewIntField(int64(btree.MaxEntriesPerPage))
-	rid2 := tuple.NewTupleRecordID(pageID, btree.MaxEntriesPerPage)
+	rid2 := tuple.NewTupleRecordID(pageID, primitives.SlotID(btree.MaxEntriesPerPage))
 	err = bt.Delete(key2, rid2)
 	if err != nil {
 		t.Fatalf("Failed to delete entry at page boundary: %v", err)
@@ -841,8 +841,8 @@ func TestBTree_Insert_VariousTypes(t *testing.T) {
 			keyType: types.IntType,
 			insertFn: func(bt *BTree, i int) error {
 				key := types.NewIntField(int64(i))
-				pageID := heap.NewHeapPageID(1, 0)
-				rid := tuple.NewTupleRecordID(pageID, i)
+				pageID := page.NewPageDescriptor(1, 0)
+				rid := tuple.NewTupleRecordID(pageID, primitives.SlotID(i))
 				return bt.Insert(key, rid)
 			},
 			searchFn: func(bt *BTree, i int) (int, error) {
@@ -856,8 +856,8 @@ func TestBTree_Insert_VariousTypes(t *testing.T) {
 			keyType: types.FloatType,
 			insertFn: func(bt *BTree, i int) error {
 				key := types.NewFloat64Field(float64(i) + 0.5)
-				pageID := heap.NewHeapPageID(1, 0)
-				rid := tuple.NewTupleRecordID(pageID, i)
+				pageID := page.NewPageDescriptor(1, 0)
+				rid := tuple.NewTupleRecordID(pageID, primitives.SlotID(i))
 				return bt.Insert(key, rid)
 			},
 			searchFn: func(bt *BTree, i int) (int, error) {
@@ -901,11 +901,11 @@ func TestBTree_TreeStructure_MultipleSplits(t *testing.T) {
 
 	// Insert enough entries to trigger multiple levels of splits (reduced for stability)
 	numEntries := 200
-	pageID := heap.NewHeapPageID(1, 0)
+	pageID := page.NewPageDescriptor(1, 0)
 
 	for i := 0; i < numEntries; i++ {
 		key := types.NewIntField(int64(i))
-		rid := tuple.NewTupleRecordID(pageID, i)
+		rid := tuple.NewTupleRecordID(pageID, primitives.SlotID(i))
 		err := bt.Insert(key, rid)
 		if err != nil {
 			t.Fatalf("Failed to insert entry %d: %v", i, err)

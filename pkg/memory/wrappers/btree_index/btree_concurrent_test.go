@@ -1,7 +1,8 @@
 package btreeindex
 
 import (
-	"storemy/pkg/storage/heap"
+	"storemy/pkg/primitives"
+	"storemy/pkg/storage/page"
 	"storemy/pkg/tuple"
 	"storemy/pkg/types"
 	"sync"
@@ -15,12 +16,12 @@ func TestBTree_MassiveConcurrent_Reads(t *testing.T) {
 	defer cleanup()
 
 	numEntries := 100
-	pageID := heap.NewHeapPageID(1, 0)
+	pageID := page.NewPageDescriptor(1, 0)
 
 	// Insert entries
 	for i := 0; i < numEntries; i++ {
 		key := types.NewIntField(int64(i))
-		rid := tuple.NewTupleRecordID(pageID, i)
+		rid := tuple.NewTupleRecordID(pageID, primitives.SlotID(i))
 		err := bt.Insert(key, rid)
 		if err != nil {
 			t.Fatalf("Failed to insert entry %d: %v", i, err)
@@ -75,12 +76,12 @@ func TestBTree_Concurrent_RangeSearches(t *testing.T) {
 	defer cleanup()
 
 	numEntries := 100
-	pageID := heap.NewHeapPageID(1, 0)
+	pageID := page.NewPageDescriptor(1, 0)
 
 	// Insert entries
 	for i := 0; i < numEntries; i++ {
 		key := types.NewIntField(int64(i))
-		rid := tuple.NewTupleRecordID(pageID, i)
+		rid := tuple.NewTupleRecordID(pageID, primitives.SlotID(i))
 		err := bt.Insert(key, rid)
 		if err != nil {
 			t.Fatalf("Failed to insert entry %d: %v", i, err)
@@ -128,11 +129,11 @@ func TestBTree_Concurrent_MixedReadsAndInserts(t *testing.T) {
 
 	// Pre-populate with some entries
 	numInitialEntries := 50
-	pageID := heap.NewHeapPageID(1, 0)
+	pageID := page.NewPageDescriptor(1, 0)
 
 	for i := 0; i < numInitialEntries; i++ {
 		key := types.NewIntField(int64(i))
-		rid := tuple.NewTupleRecordID(pageID, i)
+		rid := tuple.NewTupleRecordID(pageID, primitives.SlotID(i))
 		err := bt.Insert(key, rid)
 		if err != nil {
 			t.Fatalf("Failed to insert initial entry %d: %v", i, err)
@@ -175,7 +176,7 @@ func TestBTree_Concurrent_MixedReadsAndInserts(t *testing.T) {
 			for i := 0; i < writesPerGoroutine; i++ {
 				keyVal := nextKey.Add(1)
 				key := types.NewIntField(keyVal)
-				rid := tuple.NewTupleRecordID(pageID, int(keyVal))
+				rid := tuple.NewTupleRecordID(pageID, primitives.SlotID(keyVal))
 
 				err := bt.Insert(key, rid)
 				if err != nil {
@@ -207,12 +208,12 @@ func TestBTree_Concurrent_PointVsRangeQueries(t *testing.T) {
 	defer cleanup()
 
 	numEntries := 100
-	pageID := heap.NewHeapPageID(1, 0)
+	pageID := page.NewPageDescriptor(1, 0)
 
 	// Insert entries
 	for i := 0; i < numEntries; i++ {
 		key := types.NewIntField(int64(i))
-		rid := tuple.NewTupleRecordID(pageID, i)
+		rid := tuple.NewTupleRecordID(pageID, primitives.SlotID(i))
 		err := bt.Insert(key, rid)
 		if err != nil {
 			t.Fatalf("Failed to insert entry %d: %v", i, err)
@@ -284,12 +285,12 @@ func TestBTree_Concurrent_VariedDistribution(t *testing.T) {
 	defer cleanup()
 
 	numEntries := 100
-	pageID := heap.NewHeapPageID(1, 0)
+	pageID := page.NewPageDescriptor(1, 0)
 
 	// Insert entries
 	for i := 0; i < numEntries; i++ {
 		key := types.NewIntField(int64(i))
-		rid := tuple.NewTupleRecordID(pageID, i)
+		rid := tuple.NewTupleRecordID(pageID, primitives.SlotID(i))
 		err := bt.Insert(key, rid)
 		if err != nil {
 			t.Fatalf("Failed to insert entry %d: %v", i, err)
@@ -359,11 +360,11 @@ func TestBTree_Stress_MassiveConcurrency(t *testing.T) {
 
 	// Pre-populate
 	numInitialEntries := 100
-	pageID := heap.NewHeapPageID(1, 0)
+	pageID := page.NewPageDescriptor(1, 0)
 
 	for i := 0; i < numInitialEntries; i++ {
 		key := types.NewIntField(int64(i))
-		rid := tuple.NewTupleRecordID(pageID, i)
+		rid := tuple.NewTupleRecordID(pageID, primitives.SlotID(i))
 		err := bt.Insert(key, rid)
 		if err != nil {
 			t.Fatalf("Failed to insert initial entry %d: %v", i, err)
@@ -434,7 +435,7 @@ func TestBTree_Concurrent_StringKeys(t *testing.T) {
 	defer cleanup()
 
 	// Insert string entries
-	pageID := heap.NewHeapPageID(1, 0)
+	pageID := page.NewPageDescriptor(1, 0)
 	testStrings := []string{
 		"apple", "banana", "cherry", "date", "elderberry",
 		"fig", "grape", "honeydew", "kiwi", "lemon",
@@ -444,7 +445,7 @@ func TestBTree_Concurrent_StringKeys(t *testing.T) {
 
 	for i, str := range testStrings {
 		key := types.NewStringField(str, 128)
-		rid := tuple.NewTupleRecordID(pageID, i)
+		rid := tuple.NewTupleRecordID(pageID, primitives.SlotID(i))
 		err := bt.Insert(key, rid)
 		if err != nil {
 			t.Fatalf("Failed to insert string %s: %v", str, err)
@@ -493,7 +494,7 @@ func TestBTree_Concurrent_DuplicateSearches(t *testing.T) {
 
 	// Insert one entry
 	key := types.NewIntField(42)
-	pageID := heap.NewHeapPageID(1, 0)
+	pageID := page.NewPageDescriptor(1, 0)
 	rid := tuple.NewTupleRecordID(pageID, 0)
 
 	err := bt.Insert(key, rid)
@@ -538,11 +539,11 @@ func BenchmarkBTree_ConcurrentReads(b *testing.B) {
 	defer cleanup()
 
 	numEntries := 1000
-	pageID := heap.NewHeapPageID(1, 0)
+	pageID := page.NewPageDescriptor(1, 0)
 
 	for i := 0; i < numEntries; i++ {
 		key := types.NewIntField(int64(i))
-		rid := tuple.NewTupleRecordID(pageID, i)
+		rid := tuple.NewTupleRecordID(pageID, primitives.SlotID(i))
 		bt.Insert(key, rid)
 	}
 
@@ -565,11 +566,11 @@ func BenchmarkBTree_ConcurrentRangeSearches(b *testing.B) {
 	defer cleanup()
 
 	numEntries := 1000
-	pageID := heap.NewHeapPageID(1, 0)
+	pageID := page.NewPageDescriptor(1, 0)
 
 	for i := 0; i < numEntries; i++ {
 		key := types.NewIntField(int64(i))
-		rid := tuple.NewTupleRecordID(pageID, i)
+		rid := tuple.NewTupleRecordID(pageID, primitives.SlotID(i))
 		bt.Insert(key, rid)
 	}
 

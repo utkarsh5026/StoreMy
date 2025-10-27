@@ -7,6 +7,7 @@ import (
 	"storemy/pkg/primitives"
 	"storemy/pkg/storage/index"
 	"storemy/pkg/storage/index/btree"
+	"storemy/pkg/storage/page"
 	"storemy/pkg/tuple"
 	"storemy/pkg/types"
 )
@@ -129,7 +130,7 @@ func (bt *BTree) createRightLeafSibling(left *BTreePage, entries []*index.IndexE
 	right.PrevLeaf = left.PageNo()
 	right.NextLeaf = left.NextLeaf
 
-	if left.NextLeaf != btree.NoPage {
+	if left.NextLeaf != primitives.InvalidPageNumber {
 		if err := bt.updateLeafPrevPointer(left.NextLeaf, right.PageNo()); err != nil {
 			return nil, fmt.Errorf("error setting the pointers of the right")
 		}
@@ -148,15 +149,15 @@ func (bt *BTree) createRightLeafSibling(left *BTreePage, entries []*index.IndexE
 //
 // Returns:
 //   - error: Returns error if page fetch fails or dirty marking fails
-func (bt *BTree) updateLeafPrevPointer(pageNo, newPrev int) error {
-	pageID := btree.NewBTreePageID(bt.indexID, pageNo)
-	page, err := bt.getPage(pageID, transaction.ReadWrite)
+func (bt *BTree) updateLeafPrevPointer(pageNo, newPrev primitives.PageNumber) error {
+	pageID := page.NewPageDescriptor(bt.indexID, pageNo)
+	leafPage, err := bt.getPage(pageID, transaction.ReadWrite)
 	if err != nil {
 		return err
 	}
 
-	page.PrevLeaf = newPrev
-	return bt.addDirtyPage(page, memory.UpdateOperation)
+	leafPage.PrevLeaf = newPrev
+	return bt.addDirtyPage(leafPage, memory.UpdateOperation)
 }
 
 // mergeEntryIntoSorted inserts a new entry into a sorted slice while maintaining sort order.
@@ -213,17 +214,17 @@ func (bt *BTree) insertIntoParent(separatorKey types.Field, left, right *BTreePa
 		return bt.createNewRoot(left, separatorKey, right)
 	}
 
-	parentPageID := btree.NewBTreePageID(bt.indexID, left.ParentPage)
+	parentPageID := page.NewPageDescriptor(bt.indexID, left.ParentPage)
 	parentPage, err := bt.getPage(parentPageID, transaction.ReadWrite)
 	if err != nil {
 		return fmt.Errorf("failed to read parent page: %w", err)
 	}
 
 	if parentPage.IsFull() {
-		return bt.insertAndSplitInternal(parentPage, separatorKey, right.GetBTreePageID())
+		return bt.insertAndSplitInternal(parentPage, separatorKey, right.GetID())
 	}
 
-	return bt.insertIntoInternal(parentPage, separatorKey, right.GetBTreePageID())
+	return bt.insertIntoInternal(parentPage, separatorKey, right.GetID())
 }
 
 // insertIntoInternal inserts a key-pointer pair into an internal (non-leaf) node.
@@ -245,7 +246,7 @@ func (bt *BTree) insertIntoParent(separatorKey types.Field, left, right *BTreePa
 //
 // Returns:
 //   - error: Returns error if page is not internal, dirty marking fails, or write fails
-func (bt *BTree) insertIntoInternal(internalPage *BTreePage, key types.Field, childPID *BTreePageID) error {
+func (bt *BTree) insertIntoInternal(internalPage *BTreePage, key types.Field, childPID *page.PageDescriptor) error {
 	if !internalPage.IsInternalPage() {
 		return fmt.Errorf("page is not internal")
 	}
@@ -295,7 +296,7 @@ func (bt *BTree) insertIntoInternal(internalPage *BTreePage, key types.Field, ch
 //
 // Returns:
 //   - error: Returns error if allocation fails, pointer updates fail, or parent insertion fails
-func (bt *BTree) insertAndSplitInternal(internalPage *BTreePage, key types.Field, childPID *BTreePageID) error {
+func (bt *BTree) insertAndSplitInternal(internalPage *BTreePage, key types.Field, childPID *page.PageDescriptor) error {
 	if !internalPage.IsInternalPage() {
 		return fmt.Errorf("page is not internal")
 	}
@@ -333,7 +334,7 @@ func (bt *BTree) insertAndSplitInternal(internalPage *BTreePage, key types.Field
 //
 // Returns:
 //   - error: Returns error if any child pointer update fails
-func (bt *BTree) updateChildrenParentPointers(children []*btree.BTreeChildPtr, parentPageNo int) error {
+func (bt *BTree) updateChildrenParentPointers(children []*btree.BTreeChildPtr, parentPageNo primitives.PageNumber) error {
 	for _, child := range children {
 		if err := bt.updateChildParentPointer(child.ChildPID, parentPageNo); err != nil {
 			return fmt.Errorf("failed to update child parent pointer: %w", err)
@@ -351,7 +352,7 @@ func (bt *BTree) updateChildrenParentPointers(children []*btree.BTreeChildPtr, p
 //
 // Returns:
 //   - error: Returns error if page fetch fails or dirty marking fails
-func (bt *BTree) updateChildParentPointer(childPID *BTreePageID, parentPageNo int) error {
+func (bt *BTree) updateChildParentPointer(childPID *page.PageDescriptor, parentPageNo primitives.PageNumber) error {
 	childPage, err := bt.getPage(childPID, transaction.ReadWrite)
 	if err != nil {
 		return err
@@ -374,7 +375,7 @@ func (bt *BTree) updateChildParentPointer(childPID *BTreePageID, parentPageNo in
 //
 // Returns:
 //   - []*btree.BTreeChildPtr: New slice with all child pointers in sorted order
-func mergeChildPtrIntoSorted(children []*btree.BTreeChildPtr, key types.Field, childPID *BTreePageID) []*btree.BTreeChildPtr {
+func mergeChildPtrIntoSorted(children []*btree.BTreeChildPtr, key types.Field, childPID *page.PageDescriptor) []*btree.BTreeChildPtr {
 	allChildren := make([]*btree.BTreeChildPtr, 0, len(children)+1)
 	inserted := false
 
@@ -445,20 +446,20 @@ func splitInternalChildren(children []*btree.BTreeChildPtr) (left []*btree.BTree
 // Returns:
 //   - error: Returns error if allocation fails or dirty marking fails
 func (bt *BTree) createNewRoot(left *BTreePage, separatorKey types.Field, right *BTreePage) error {
-	newRoot, err := bt.file.AllocatePage(bt.tx.ID, bt.keyType, false, btree.NoPage)
+	newRoot, err := bt.file.AllocatePage(bt.tx.ID, bt.keyType, false, primitives.InvalidPageNumber)
 	if err != nil {
 		return fmt.Errorf("failed to allocate new root: %w", err)
 	}
 
 	newRoot.InternalPages = []*btree.BTreeChildPtr{
-		{Key: nil, ChildPID: left.GetBTreePageID()},
-		{Key: separatorKey, ChildPID: right.GetBTreePageID()},
+		{Key: nil, ChildPID: left.GetID()},
+		{Key: separatorKey, ChildPID: right.GetID()},
 	}
 
 	left.ParentPage = newRoot.PageNo()
 	right.ParentPage = newRoot.PageNo()
 
-	bt.rootPageID = newRoot.GetBTreePageID()
+	bt.rootPageID = newRoot.GetID()
 
 	bt.addDirtyPage(left, memory.UpdateOperation)
 	bt.addDirtyPage(right, memory.UpdateOperation)

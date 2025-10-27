@@ -5,8 +5,10 @@ import (
 	"slices"
 	"storemy/pkg/concurrency/transaction"
 	"storemy/pkg/memory"
+	"storemy/pkg/primitives"
 	"storemy/pkg/storage/index"
 	"storemy/pkg/storage/index/btree"
+	"storemy/pkg/storage/page"
 )
 
 // deleteFromLeaf removes a key-value pair from a leaf page and handles rebalancing.
@@ -67,25 +69,25 @@ func (bt *BTree) deleteFromLeaf(leaf *BTreePage, ie *index.IndexEntry) error {
 //   - page: The page with insufficient entries (< maxEntriesPerPage/2)
 //
 // Returns an error if page operations fail.
-func (bt *BTree) handleUnderflow(page *BTreePage) error {
-	if page.IsRoot() && page.IsInternalPage() && page.GetNumEntries() == 0 && len(page.Children()) == 1 {
-		childPID := page.Children()[0].ChildPID
+func (bt *BTree) handleUnderflow(underflowPage *BTreePage) error {
+	if underflowPage.IsRoot() && underflowPage.IsInternalPage() && underflowPage.GetNumEntries() == 0 && len(underflowPage.Children()) == 1 {
+		childPID := underflowPage.Children()[0].ChildPID
 		childPage, err := bt.getPage(childPID, transaction.ReadWrite)
 		if err != nil {
 			return err
 		}
-		childPage.SetParent(btree.NoPage)
+		childPage.SetParent(primitives.InvalidPageNumber)
 		bt.rootPageID = childPID
 		return bt.addDirtyPage(childPage, memory.UpdateOperation)
 	}
 
-	parentPageID := btree.NewBTreePageID(bt.indexID, page.Parent())
+	parentPageID := page.NewPageDescriptor(bt.indexID, underflowPage.Parent())
 	parent, err := bt.getPage(parentPageID, transaction.ReadWrite)
 	if err != nil {
 		return err
 	}
 
-	pageID := page.GetBTreePageID()
+	pageID := underflowPage.GetID()
 	childIdx := slices.IndexFunc(parent.Children(), func(pp *btree.BTreeChildPtr) bool {
 		return pp.ChildPID.Equals(pageID)
 	})
@@ -100,7 +102,7 @@ func (bt *BTree) handleUnderflow(page *BTreePage) error {
 	if childIdx > 0 {
 		left, lerr = bt.getSiblingPage(parent, childIdx, -1)
 		if lerr == nil && left.HasMoreThanRequired() {
-			return bt.redistributeFromLeft(left, page, parent, childIdx)
+			return bt.redistributeFromLeft(left, underflowPage, parent, childIdx)
 		}
 	}
 
@@ -109,16 +111,16 @@ func (bt *BTree) handleUnderflow(page *BTreePage) error {
 	if childIdx < len(parent.Children())-1 {
 		right, rerr = bt.getSiblingPage(parent, childIdx, 1)
 		if rerr == nil && right.HasMoreThanRequired() {
-			return bt.redistributeFromRight(page, right, parent, childIdx)
+			return bt.redistributeFromRight(underflowPage, right, parent, childIdx)
 		}
 	}
 
 	if childIdx > 0 && lerr == nil {
-		return bt.mergeWithLeft(left, page, parent, childIdx)
+		return bt.mergeWithLeft(left, underflowPage, parent, childIdx)
 	}
 
 	if childIdx < len(parent.Children())-1 && rerr == nil {
-		return bt.mergeWithRight(page, right, parent, childIdx)
+		return bt.mergeWithRight(underflowPage, right, parent, childIdx)
 	}
 
 	return nil
@@ -257,8 +259,8 @@ func (bt *BTree) mergePages(left, right, parent *BTreePage, childIdxToDelete int
 		left.NextLeaf = right.NextLeaf
 		bt.addDirtyPage(left, memory.UpdateOperation)
 
-		if right.NextLeaf != btree.NoPage {
-			nextPageID := btree.NewBTreePageID(bt.indexID, right.NextLeaf)
+		if right.NextLeaf != primitives.InvalidPageNumber {
+			nextPageID := page.NewPageDescriptor(bt.indexID, right.NextLeaf)
 			nextPage, err := bt.getPage(nextPageID, transaction.ReadWrite)
 			if err == nil {
 				nextPage.PrevLeaf = left.PageNo()

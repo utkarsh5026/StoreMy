@@ -5,7 +5,7 @@ import (
 	"storemy/pkg/concurrency/transaction"
 	"storemy/pkg/primitives"
 	"storemy/pkg/storage/index"
-	"storemy/pkg/storage/index/btree"
+	"storemy/pkg/storage/page"
 	"storemy/pkg/tuple"
 	"storemy/pkg/types"
 )
@@ -207,7 +207,7 @@ func (bt *BTree) RangeSearch(startKey, endKey types.Field) ([]*tuple.TupleRecord
 		}
 
 		_, nextLeaf := leafPage.Leaves()
-		nextPageID := btree.NewBTreePageID(bt.indexID, nextLeaf)
+		nextPageID := page.NewPageDescriptor(bt.indexID, nextLeaf)
 		leafPage, err = bt.getPage(nextPageID, transaction.ReadOnly)
 		if err != nil {
 			return nil, fmt.Errorf("failed to read next leaf page: %w", err)
