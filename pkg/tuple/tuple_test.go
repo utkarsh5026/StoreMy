@@ -445,11 +445,11 @@ func TestTuple_RecordID(t *testing.T) {
 }
 
 type mockPageID struct {
-	tableID primitives.TableID
+	tableID primitives.FileID
 	pageNo  primitives.PageNumber
 }
 
-func (m *mockPageID) GetTableID() primitives.TableID {
+func (m *mockPageID) FileID() primitives.FileID {
 	return m.tableID
 }
 
@@ -471,7 +471,7 @@ func (m *mockPageID) Equals(other primitives.PageID) bool {
 	if other == nil {
 		return false
 	}
-	return m.tableID == other.GetTableID() && m.pageNo == other.PageNo()
+	return m.tableID == other.FileID() && m.pageNo == other.PageNo()
 }
 
 func (m *mockPageID) String() string {

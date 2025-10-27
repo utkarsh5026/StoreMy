@@ -68,7 +68,7 @@ func (td *TupleDescription) NumFields() primitives.ColumnID {
 //   - string: field name, or empty string if no names were provided
 //   - error: if index is out of bounds
 func (td *TupleDescription) GetFieldName(i primitives.ColumnID) (string, error) {
-	if i < 0 || i >= td.NumFields() {
+	if i >= td.NumFields() {
 		return "", fmt.Errorf("field index %d out of bounds [0, %d)", i, len(td.Types))
 	}
 
