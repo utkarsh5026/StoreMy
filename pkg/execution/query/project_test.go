@@ -14,15 +14,15 @@ import (
 
 // Mock PageID for testing
 type mockPageID struct {
-	pageID int
+	pageID primitives.PageNumber
 }
 
-func (m *mockPageID) GetTableID() int                     { return 0 }
-func (m *mockPageID) PageNo() int                         { return m.pageID }
-func (m *mockPageID) Serialize() []int                    { return []int{m.pageID} }
-func (m *mockPageID) Equals(other primitives.PageID) bool { return other.PageNo() == m.pageID }
-func (m *mockPageID) String() string                      { return fmt.Sprintf("Page(%d)", m.pageID) }
-func (m *mockPageID) HashCode() int                       { return m.pageID }
+func (m *mockPageID) GetTableID() primitives.TableID           { return 0 }
+func (m *mockPageID) PageNo() primitives.PageNumber            { return m.pageID }
+func (m *mockPageID) Serialize() []byte                        { return []byte{byte(m.pageID)} }
+func (m *mockPageID) Equals(other primitives.PageID) bool      { return other.PageNo() == m.pageID }
+func (m *mockPageID) String() string                           { return fmt.Sprintf("Page(%d)", m.pageID) }
+func (m *mockPageID) HashCode() primitives.HashCode            { return primitives.HashCode(m.pageID) }
 
 func mustCreateProjectTupleDesc() *tuple.TupleDescription {
 	td, err := tuple.NewTupleDesc(
@@ -69,7 +69,7 @@ func TestNewProject_ValidInputs(t *testing.T) {
 	td := mustCreateProjectTupleDesc()
 	child := newMockChildIterator([]*tuple.Tuple{}, td)
 
-	projectedCols := []int{0, 2}
+	projectedCols := []primitives.ColumnID{0, 2}
 	typesList := []types.Type{types.IntType, types.IntType}
 
 	project, err := NewProject(projectedCols, typesList, child)
@@ -105,7 +105,7 @@ func TestNewProject_ValidInputs(t *testing.T) {
 }
 
 func TestNewProject_NilChild(t *testing.T) {
-	projectedCols := []int{0, 1}
+	projectedCols := []primitives.ColumnID{0, 1}
 	typesList := []types.Type{types.IntType, types.StringType}
 
 	project, err := NewProject(projectedCols, typesList, nil)
@@ -121,7 +121,7 @@ func TestNewProject_FieldTypesLengthMismatch(t *testing.T) {
 	td := mustCreateProjectTupleDesc()
 	child := newMockChildIterator([]*tuple.Tuple{}, td)
 
-	projectedCols := []int{0, 1}
+	projectedCols := []primitives.ColumnID{0, 1}
 	typesList := []types.Type{types.IntType}
 
 	project, err := NewProject(projectedCols, typesList, child)
@@ -137,7 +137,7 @@ func TestNewProject_EmptyFieldList(t *testing.T) {
 	td := mustCreateProjectTupleDesc()
 	child := newMockChildIterator([]*tuple.Tuple{}, td)
 
-	projectedCols := []int{}
+	projectedCols := []primitives.ColumnID{}
 	typesList := []types.Type{}
 
 	project, err := NewProject(projectedCols, typesList, child)
@@ -155,7 +155,7 @@ func TestNewProject_NilChildTupleDesc(t *testing.T) {
 		td:     nil,
 	}
 
-	projectedCols := []int{0}
+	projectedCols := []primitives.ColumnID{0}
 	typesList := []types.Type{types.IntType}
 
 	project, err := NewProject(projectedCols, typesList, child)
@@ -171,7 +171,7 @@ func TestNewProject_FieldIndexOutOfBounds(t *testing.T) {
 	td := mustCreateProjectTupleDesc()
 	child := newMockChildIterator([]*tuple.Tuple{}, td)
 
-	projectedCols := []int{0, 10}
+	projectedCols := []primitives.ColumnID{0, 10}
 	typesList := []types.Type{types.IntType, types.IntType}
 
 	project, err := NewProject(projectedCols, typesList, child)
@@ -187,15 +187,16 @@ func TestNewProject_NegativeFieldIndex(t *testing.T) {
 	td := mustCreateProjectTupleDesc()
 	child := newMockChildIterator([]*tuple.Tuple{}, td)
 
-	projectedCols := []int{-1, 1}
+	// Use max uint32 value to test invalid field index (since ColumnID is unsigned)
+	projectedCols := []primitives.ColumnID{^primitives.ColumnID(0), 1}
 	typesList := []types.Type{types.IntType, types.StringType}
 
 	project, err := NewProject(projectedCols, typesList, child)
 	if err == nil {
-		t.Error("Expected error when field index is negative")
+		t.Error("Expected error when field index is invalid")
 	}
 	if project != nil {
-		t.Error("Expected nil project when field index is negative")
+		t.Error("Expected nil project when field index is invalid")
 	}
 }
 
@@ -203,7 +204,7 @@ func TestNewProject_TypeMismatch(t *testing.T) {
 	td := mustCreateProjectTupleDesc()
 	child := newMockChildIterator([]*tuple.Tuple{}, td)
 
-	projectedCols := []int{0, 1}
+	projectedCols := []primitives.ColumnID{0, 1}
 	typesList := []types.Type{types.StringType, types.IntType}
 
 	project, err := NewProject(projectedCols, typesList, child)
@@ -223,7 +224,7 @@ func TestProject_GetTupleDesc(t *testing.T) {
 	td := mustCreateProjectTupleDesc()
 	child := newMockChildIterator([]*tuple.Tuple{}, td)
 
-	projectedCols := []int{0, 2}
+	projectedCols := []primitives.ColumnID{0, 2}
 	typesList := []types.Type{types.IntType, types.IntType}
 
 	project, err := NewProject(projectedCols, typesList, child)
@@ -265,7 +266,7 @@ func TestProject_EmptyInput(t *testing.T) {
 	td := mustCreateProjectTupleDesc()
 	child := newMockChildIterator([]*tuple.Tuple{}, td)
 
-	projectedCols := []int{0, 1}
+	projectedCols := []primitives.ColumnID{0, 1}
 	typesList := []types.Type{types.IntType, types.StringType}
 
 	project, err := NewProject(projectedCols, typesList, child)
@@ -298,7 +299,7 @@ func TestProject_SingleFieldProjection(t *testing.T) {
 
 	child := newMockChildIterator(tuples, td)
 
-	projectedCols := []int{1}
+	projectedCols := []primitives.ColumnID{1}
 	typesList := []types.Type{types.StringType}
 
 	project, err := NewProject(projectedCols, typesList, child)
@@ -364,7 +365,7 @@ func TestProject_MultipleFieldProjection(t *testing.T) {
 
 	child := newMockChildIterator(tuples, td)
 
-	projectedCols := []int{0, 2}
+	projectedCols := []primitives.ColumnID{0, 2}
 	typesList := []types.Type{types.IntType, types.IntType}
 
 	project, err := NewProject(projectedCols, typesList, child)
@@ -441,7 +442,7 @@ func TestProject_ReorderedFields(t *testing.T) {
 
 	child := newMockChildIterator(tuples, td)
 
-	projectedCols := []int{3, 0, 1}
+	projectedCols := []primitives.ColumnID{3, 0, 1}
 	typesList := []types.Type{types.StringType, types.IntType, types.StringType}
 
 	project, err := NewProject(projectedCols, typesList, child)
@@ -518,7 +519,7 @@ func TestProject_RecordIDPreserved(t *testing.T) {
 	tuples := []*tuple.Tuple{testTuple}
 	child := newMockChildIterator(tuples, td)
 
-	projectedCols := []int{0}
+	projectedCols := []primitives.ColumnID{0}
 	typesList := []types.Type{types.IntType}
 
 	project, err := NewProject(projectedCols, typesList, child)
@@ -565,7 +566,7 @@ func TestProject_Close(t *testing.T) {
 	td := mustCreateProjectTupleDesc()
 	child := newMockChildIterator([]*tuple.Tuple{}, td)
 
-	projectedCols := []int{0, 1}
+	projectedCols := []primitives.ColumnID{0, 1}
 	typesList := []types.Type{types.IntType, types.StringType}
 
 	project, err := NewProject(projectedCols, typesList, child)
@@ -593,7 +594,7 @@ func TestProject_Rewind(t *testing.T) {
 
 	child := newMockChildIterator(tuples, td)
 
-	projectedCols := []int{0}
+	projectedCols := []primitives.ColumnID{0}
 	typesList := []types.Type{types.IntType}
 
 	project, err := NewProject(projectedCols, typesList, child)
@@ -680,7 +681,7 @@ func TestProject_Rewind_ChildError(t *testing.T) {
 	td := mustCreateProjectTupleDesc()
 	child := newMockChildIterator([]*tuple.Tuple{}, td)
 
-	projectedCols := []int{0}
+	projectedCols := []primitives.ColumnID{0}
 	typesList := []types.Type{types.IntType}
 
 	project, err := NewProject(projectedCols, typesList, child)
@@ -704,7 +705,7 @@ func TestProject_ChildError_HasNext(t *testing.T) {
 	td := mustCreateProjectTupleDesc()
 	child := newMockChildIterator([]*tuple.Tuple{}, td)
 
-	projectedCols := []int{0}
+	projectedCols := []primitives.ColumnID{0}
 	typesList := []types.Type{types.IntType}
 
 	project, err := NewProject(projectedCols, typesList, child)
@@ -730,7 +731,7 @@ func TestProject_ChildError_Next(t *testing.T) {
 	}
 	child := newMockChildIterator(tuples, td)
 
-	projectedCols := []int{0}
+	projectedCols := []primitives.ColumnID{0}
 	typesList := []types.Type{types.IntType}
 
 	project, err := NewProject(projectedCols, typesList, child)

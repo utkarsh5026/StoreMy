@@ -7,6 +7,7 @@ import (
 	"storemy/pkg/memory"
 	"storemy/pkg/primitives"
 	"storemy/pkg/storage/heap"
+	"storemy/pkg/storage/page"
 	"storemy/pkg/tuple"
 	"storemy/pkg/types"
 	"sync"
@@ -33,7 +34,7 @@ func setupSeqScanTest(t *testing.T, fields []types.Type, fieldNames []string) *t
 		t.Fatalf("Failed to create tuple description: %v", err)
 	}
 
-	heapFile, err := heap.NewHeapFile(filePath, td)
+	heapFile, err := heap.NewHeapFile(primitives.Filepath(filePath), td)
 	if err != nil {
 		t.Fatalf("Failed to create heap file: %v", err)
 	}
@@ -74,7 +75,7 @@ func (s *testSetup) insertTuples(t *testing.T, numTuples int, tupleFactory func(
 	for i := 0; i < numTuples; i++ {
 		tup := tupleFactory(i, s.td)
 		pageNum := i / 10
-		pageID := heap.NewHeapPageID(s.heapFile.GetID(), pageNum)
+		pageID := page.NewPageDescriptor(s.heapFile.GetID(), primitives.PageNumber(pageNum))
 
 		pg, err := s.store.GetPage(s.tx, s.heapFile, pageID, transaction.ReadWrite)
 		if err != nil {

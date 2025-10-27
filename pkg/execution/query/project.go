@@ -3,6 +3,7 @@ package query
 import (
 	"fmt"
 	"storemy/pkg/iterator"
+	"storemy/pkg/primitives"
 	"storemy/pkg/tuple"
 	"storemy/pkg/types"
 )
@@ -14,14 +15,14 @@ import (
 // Conceptually: SELECT col1, col3, col5 FROM table
 type Project struct {
 	base           *BaseIterator
-	projectedCols  []int
+	projectedCols  []primitives.ColumnID
 	projectedTypes []types.Type
 	source         *SourceIter
 	tupleDesc      *tuple.TupleDescription
 }
 
 // NewProject creates a new Project operator that selects specific fields from input tuples.
-func NewProject(projectedCols []int, projectedTypes []types.Type, source iterator.DbIterator) (*Project, error) {
+func NewProject(projectedCols []primitives.ColumnID, projectedTypes []types.Type, source iterator.DbIterator) (*Project, error) {
 	if err := validateProjectInputs(projectedCols, projectedTypes, source); err != nil {
 		return nil, err
 	}
@@ -54,7 +55,7 @@ func NewProject(projectedCols []int, projectedTypes []types.Type, source iterato
 }
 
 // validateProjectInputs performs basic validation of constructor parameters
-func validateProjectInputs(projectedCols []int, projectedTypes []types.Type, source iterator.DbIterator) error {
+func validateProjectInputs(projectedCols []primitives.ColumnID, projectedTypes []types.Type, source iterator.DbIterator) error {
 	if source == nil {
 		return fmt.Errorf("source operator cannot be nil")
 	}
@@ -135,7 +136,7 @@ func (p *Project) readNext() (*tuple.Tuple, error) {
 			return nil, fmt.Errorf("failed to get field %d from source tuple: %v", fieldIndex, err)
 		}
 
-		if err := projectedTuple.SetField(i, field); err != nil {
+		if err := projectedTuple.SetField(primitives.ColumnID(i), field); err != nil {
 			return nil, fmt.Errorf("failed to set field %d in projected tuple: %v", i, err)
 		}
 	}
@@ -145,12 +146,12 @@ func (p *Project) readNext() (*tuple.Tuple, error) {
 }
 
 // validateAndExtractFieldNames validates field indices and extracts corresponding field names
-func validateAndExtractFieldNames(cols []int, types []types.Type,
+func validateAndExtractFieldNames(cols []primitives.ColumnID, types []types.Type,
 	td *tuple.TupleDescription) ([]string, error) {
 	fieldNames := make([]string, len(cols))
 
 	for i, fieldIndex := range cols {
-		if fieldIndex < 0 || fieldIndex >= td.NumFields() {
+		if fieldIndex >= td.NumFields() {
 			return nil, fmt.Errorf("field index %d out of bounds (source has %d fields)",
 				fieldIndex, td.NumFields())
 		}
@@ -170,7 +171,7 @@ func validateAndExtractFieldNames(cols []int, types []types.Type,
 }
 
 // validateFieldType checks that the expected type matches the source schema
-func validateFieldType(idx int, expected types.Type, td *tuple.TupleDescription) error {
+func validateFieldType(idx primitives.ColumnID, expected types.Type, td *tuple.TupleDescription) error {
 
 	actual, err := td.TypeAtIndex(idx)
 	if err != nil {

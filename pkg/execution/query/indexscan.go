@@ -6,6 +6,7 @@ import (
 	"storemy/pkg/memory"
 	"storemy/pkg/storage/heap"
 	"storemy/pkg/storage/index"
+	"storemy/pkg/storage/page"
 	"storemy/pkg/tuple"
 	"storemy/pkg/types"
 )
@@ -217,7 +218,7 @@ func (is *IndexScan) readNext() (*tuple.Tuple, error) {
 	is.currentPos++
 
 	pageID := rid.PageID
-	page, err := is.store.GetPage(is.tx, is.heapFile, pageID, transaction.ReadOnly)
+	page, err := is.store.GetPage(is.tx, is.heapFile, pageID.(*page.PageDescriptor), transaction.ReadOnly)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get page %v: %w", pageID, err)
 	}

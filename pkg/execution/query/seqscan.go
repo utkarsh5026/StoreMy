@@ -4,7 +4,9 @@ import (
 	"fmt"
 	"storemy/pkg/concurrency/transaction"
 	"storemy/pkg/memory"
+	"storemy/pkg/primitives"
 	"storemy/pkg/storage/heap"
+	"storemy/pkg/storage/page"
 	"storemy/pkg/tuple"
 )
 
@@ -15,20 +17,21 @@ import (
 // for table scans in query execution. It reads all tuples from a table in storage order,
 // making it suitable for operations that need to examine every tuple in a table.
 type SequentialScan struct {
-	base                 *BaseIterator
-	tableID, currentPage int
-	tupleDesc            *tuple.TupleDescription
-	tx                   *transaction.TransactionContext
-	dbFile               *heap.HeapFile
-	store                *memory.PageStore
-	tupIter              *tuple.Iterator
-	prefetchEnabled      bool
-	prefetchDone         chan struct{} // Signals when prefetch is complete
+	base            *BaseIterator
+	tableID         primitives.TableID
+	currentPage     int64
+	tupleDesc       *tuple.TupleDescription
+	tx              *transaction.TransactionContext
+	dbFile          *heap.HeapFile
+	store           *memory.PageStore
+	tupIter         *tuple.Iterator
+	prefetchEnabled bool
+	prefetchDone    chan struct{} // Signals when prefetch is complete
 }
 
 // NewSeqScan creates a new SequentialScan operator for the specified table within a transaction context.
 // It initializes the scan operator with the necessary metadata and prepares it for iteration.
-func NewSeqScan(tx *transaction.TransactionContext, tableID int, file *heap.HeapFile, store *memory.PageStore) (*SequentialScan, error) {
+func NewSeqScan(tx *transaction.TransactionContext, tableID primitives.TableID, file *heap.HeapFile, store *memory.PageStore) (*SequentialScan, error) {
 	if store == nil {
 		return nil, fmt.Errorf("page store cannot be nil")
 	}
@@ -88,7 +91,7 @@ func (ss *SequentialScan) Next() (*tuple.Tuple, error) {
 
 // prefetchNextPage asynchronously prefetches the next page to improve I/O performance.
 // It runs in a background goroutine and signals completion via the prefetchDone channel.
-func (ss *SequentialScan) prefetchNextPage(nextPageNum int) {
+func (ss *SequentialScan) prefetchNextPage(nextPageNum primitives.PageNumber) {
 	if !ss.prefetchEnabled {
 		return
 	}
@@ -103,7 +106,7 @@ func (ss *SequentialScan) prefetchNextPage(nextPageNum int) {
 	go func() {
 		defer close(ss.prefetchDone)
 
-		nextPID := heap.NewHeapPageID(ss.tableID, nextPageNum)
+		nextPID := page.NewPageDescriptor(ss.tableID, nextPageNum)
 		_, _ = ss.store.GetPage(ss.tx, ss.dbFile, nextPID, transaction.ReadOnly)
 		// Ignore errors in prefetch - the main read will handle them
 	}()
@@ -137,13 +140,13 @@ func (ss *SequentialScan) readNext() (*tuple.Tuple, error) {
 
 	for {
 		ss.currentPage++
-		if ss.currentPage >= numPages {
+		if ss.currentPage >= int64(numPages) {
 			return nil, nil
 		}
 
 		<-ss.prefetchDone
 
-		pid := heap.NewHeapPageID(ss.tableID, ss.currentPage)
+		pid := page.NewPageDescriptor(ss.tableID, primitives.PageNumber(ss.currentPage))
 		page, err := ss.store.GetPage(ss.tx, ss.dbFile, pid, transaction.ReadOnly)
 		if err != nil {
 			return nil, fmt.Errorf("failed to get page %d: %v", pid, err)
@@ -152,7 +155,7 @@ func (ss *SequentialScan) readNext() (*tuple.Tuple, error) {
 		hPage := page.(*heap.HeapPage)
 		tuples := hPage.GetTuples()
 
-		ss.prefetchNextPage(ss.currentPage + 1)
+		ss.prefetchNextPage(primitives.PageNumber(ss.currentPage + 1))
 
 		if len(tuples) == 0 {
 			continue

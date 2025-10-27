@@ -23,10 +23,10 @@ import (
 type Sort struct {
 	base         *BaseIterator
 	source       *SourceIter
-	sortedTuples []*tuple.Tuple // Materialized and sorted tuples
-	currentIndex int            // Current position in sorted slice
-	sortFieldIdx int            // Index of field to sort by
-	ascending    bool           // Sort direction: true = ASC, false = DESC
+	sortedTuples []*tuple.Tuple      // Materialized and sorted tuples
+	currentIndex int                 // Current position in sorted slice
+	sortFieldIdx primitives.ColumnID // Index of field to sort by
+	ascending    bool                // Sort direction: true = ASC, false = DESC
 	opened       bool
 	materialized bool // Flag to track if tuples have been materialized
 }
@@ -41,13 +41,9 @@ type Sort struct {
 // Returns:
 //   - *Sort operator ready to be opened and iterated
 //   - error if parameters are invalid
-func NewSort(child iterator.DbIterator, sortFieldIdx int, ascending bool) (*Sort, error) {
+func NewSort(child iterator.DbIterator, sortFieldIdx primitives.ColumnID, ascending bool) (*Sort, error) {
 	if child == nil {
 		return nil, fmt.Errorf("child operator cannot be nil")
-	}
-
-	if sortFieldIdx < 0 {
-		return nil, fmt.Errorf("sort field index must be non-negative, got %d", sortFieldIdx)
 	}
 
 	td := child.GetTupleDesc()

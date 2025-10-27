@@ -42,19 +42,6 @@ func TestNewSort_NilChild(t *testing.T) {
 	}
 }
 
-func TestNewSort_NegativeFieldIndex(t *testing.T) {
-	td := mustCreateSortTupleDesc()
-	child := newMockChildIterator([]*tuple.Tuple{}, td)
-
-	sort, err := NewSort(child, -1, true)
-	if err == nil {
-		t.Error("Expected error when field index is negative")
-	}
-	if sort != nil {
-		t.Error("Expected nil sort when field index is negative")
-	}
-}
-
 func TestNewSort_FieldIndexOutOfBounds(t *testing.T) {
 	td := mustCreateSortTupleDesc()
 	child := newMockChildIterator([]*tuple.Tuple{}, td)

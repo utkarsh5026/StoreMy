@@ -148,7 +148,7 @@ func createTestHeapFileWithData(t *testing.T, td *tuple.TupleDescription, tuples
 	tempDir := t.TempDir()
 	filePath := filepath.Join(tempDir, "test_heap.dat")
 
-	hf, err := heap.NewHeapFile(filePath, td)
+	hf, err := heap.NewHeapFile(primitives.Filepath(filePath), td)
 	if err != nil {
 		t.Fatalf("Failed to create HeapFile: %v", err)
 	}
@@ -160,7 +160,7 @@ func createTestHeapFileWithData(t *testing.T, td *tuple.TupleDescription, tuples
 	// Add tuples to the heap file
 	for i, tup := range tuples {
 		pageNum := i / 10 // Distribute tuples across pages
-		pageID := heap.NewHeapPageID(hf.GetID(), pageNum)
+		pageID := page.NewPageDescriptor(hf.GetID(), primitives.PageNumber(pageNum))
 
 		// Read or create page
 		var heapPage *heap.HeapPage
