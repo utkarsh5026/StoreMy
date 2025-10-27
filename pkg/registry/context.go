@@ -9,6 +9,7 @@ import (
 	"storemy/pkg/log/wal"
 	"storemy/pkg/memory"
 	"storemy/pkg/memory/wrappers/table"
+	"storemy/pkg/primitives"
 )
 
 // DatabaseContext holds all shared components that are needed across the database system.
@@ -28,11 +29,11 @@ type catalogAdapter struct {
 	cm *catalogmanager.CatalogManager
 }
 
-func (ca *catalogAdapter) GetIndexesByTable(tx *transaction.TransactionContext, tableID int) ([]*systemtable.IndexMetadata, error) {
+func (ca *catalogAdapter) GetIndexesByTable(tx *transaction.TransactionContext, tableID primitives.TableID) ([]*systemtable.IndexMetadata, error) {
 	return ca.cm.GetIndexesByTable(tx, tableID)
 }
 
-func (ca *catalogAdapter) GetTableSchema(tableID int) (*schema.Schema, error) {
+func (ca *catalogAdapter) GetTableSchema(tableID primitives.TableID) (*schema.Schema, error) {
 	return ca.cm.GetTableSchema(nil, tableID)
 }
 
