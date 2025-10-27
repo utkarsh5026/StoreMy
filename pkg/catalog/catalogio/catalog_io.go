@@ -69,7 +69,7 @@ func NewCatalogIO(store *memory.PageStore, cache *tablecache.TableCache) *Catalo
 //   - processFunc: Function to apply to each tuple. Return error to stop iteration.
 //
 // Returns an error if the iterator cannot be opened or if processFunc returns an error.
-func (cio *CatalogIO) IterateTable(tableID primitives.TableID, tx *transaction.TransactionContext, processFunc func(*tuple.Tuple) error) error {
+func (cio *CatalogIO) IterateTable(tableID primitives.FileID, tx *transaction.TransactionContext, processFunc func(*tuple.Tuple) error) error {
 	file, err := cio.cache.GetDbFile(tableID)
 	if err != nil {
 		return fmt.Errorf("failed to get table file: %w", err)
@@ -107,7 +107,7 @@ func (cio *CatalogIO) IterateTable(tableID primitives.TableID, tx *transaction.T
 //   - tup: Tuple to insert
 //
 // Returns an error if the table cannot be found or insertion fails.
-func (cio *CatalogIO) InsertRow(tableID primitives.TableID, tx *transaction.TransactionContext, tup *tuple.Tuple) error {
+func (cio *CatalogIO) InsertRow(tableID primitives.FileID, tx *transaction.TransactionContext, tup *tuple.Tuple) error {
 	file, err := cio.cache.GetDbFile(tableID)
 	if err != nil {
 		return fmt.Errorf("failed to get table file for ID %d: %w", tableID, err)
@@ -130,7 +130,7 @@ func (cio *CatalogIO) InsertRow(tableID primitives.TableID, tx *transaction.Tran
 //
 // Returns an error if the table cannot be found or deletion fails.
 func (cio *CatalogIO) DeleteRow(
-	tableID primitives.TableID,
+	tableID primitives.FileID,
 	tx *transaction.TransactionContext,
 	tup *tuple.Tuple,
 ) error {
