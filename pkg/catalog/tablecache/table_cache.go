@@ -7,6 +7,7 @@ import (
 	"slices"
 	"storemy/pkg/catalog/schema"
 	"storemy/pkg/catalog/systemtable"
+	"storemy/pkg/primitives"
 	"storemy/pkg/storage/page"
 	"strings"
 	"sync"
@@ -37,7 +38,7 @@ func newTableInfo(file page.DbFile, schema *schema.Schema) *TableInfo {
 }
 
 // GetID returns the table's unique identifier
-func (ti *TableInfo) GetFileID() int {
+func (ti *TableInfo) GetFileID() primitives.TableID {
 	return ti.File.GetID()
 }
 
@@ -75,7 +76,7 @@ type cacheMetrics struct {
 //   - Does NOT handle persistence - that's CatalogManager's responsibility
 type TableCache struct {
 	nameToTable map[string]*TableInfo
-	idToTable   map[int]*TableInfo
+	idToTable   map[primitives.TableID]*TableInfo
 	lruList     *list.List
 	maxSize     int
 	ttl         cacheTTLConfig
@@ -89,7 +90,7 @@ type TableCache struct {
 func NewTableCache() *TableCache {
 	return &TableCache{
 		nameToTable: make(map[string]*TableInfo),
-		idToTable:   make(map[int]*TableInfo),
+		idToTable:   make(map[primitives.TableID]*TableInfo),
 		lruList:     list.New(),
 		maxSize:     0, // Unlimited by default
 		ttl:         DefaultCacheTTL(),
@@ -132,7 +133,7 @@ func (tc *TableCache) AddTable(f page.DbFile, schema *schema.Schema) error {
 
 // getTableID retrieves the unique identifier for a table given its name.
 // Updates LRU position on access.
-func (tc *TableCache) GetTableID(tableName string) (int, error) {
+func (tc *TableCache) GetTableID(tableName string) (primitives.TableID, error) {
 	tc.mutex.Lock()
 	defer tc.mutex.Unlock()
 
@@ -150,7 +151,7 @@ func (tc *TableCache) GetTableID(tableName string) (int, error) {
 
 // getDbFile retrieves the database file for a table by ID.
 // Updates LRU position on access.
-func (tc *TableCache) GetDbFile(tableId int) (page.DbFile, error) {
+func (tc *TableCache) GetDbFile(tableId primitives.TableID) (page.DbFile, error) {
 	tc.mutex.Lock()
 	defer tc.mutex.Unlock()
 
@@ -255,7 +256,7 @@ func (tc *TableCache) GetAllTableNames() []string {
 // removeExistingTable removes any existing table with the given name or ID from both maps.
 // This is a helper method used internally during table addition to handle replacements.
 // Must be called with write lock held.
-func (tc *TableCache) removeExistingTable(name string, tableID int) {
+func (tc *TableCache) removeExistingTable(name string, tableID primitives.TableID) {
 	if t, exists := tc.nameToTable[name]; exists {
 		delete(tc.idToTable, t.GetFileID())
 	}
@@ -268,7 +269,7 @@ func (tc *TableCache) removeExistingTable(name string, tableID int) {
 // addTableToMaps adds a table to both the name-to-table and ID-to-table mappings.
 // This is a helper method used internally during table addition.
 // Must be called with write lock held.
-func (tc *TableCache) addTableToMaps(name string, tableID int, info *TableInfo) {
+func (tc *TableCache) addTableToMaps(name string, tableID primitives.TableID, info *TableInfo) {
 	tc.nameToTable[name] = info
 	tc.idToTable[tableID] = info
 }
@@ -284,7 +285,7 @@ func (tc *TableCache) TableExists(name string) bool {
 
 // getTableInfo retrieves the full table info for a table by ID.
 // Updates LRU position on access.
-func (tc *TableCache) GetTableInfo(tableID int) (*TableInfo, error) {
+func (tc *TableCache) GetTableInfo(tableID primitives.TableID) (*TableInfo, error) {
 	tc.mutex.Lock()
 	defer tc.mutex.Unlock()
 
@@ -339,7 +340,7 @@ func (tc *TableCache) evictLRU() {
 		return
 	}
 
-	tableID := elem.Value.(int)
+	tableID := elem.Value.(primitives.TableID)
 	info, exists := tc.idToTable[tableID]
 	if !exists {
 		tc.lruList.Remove(elem)
@@ -375,7 +376,7 @@ func (tc *TableCache) markAsUsed(info *TableInfo) {
 
 // getCachedStatistics retrieves cached statistics for a table if available and not expired.
 // Returns nil if not cached or expired.
-func (tc *TableCache) GetCachedStatistics(tableID int) (*TableStatistics, bool) {
+func (tc *TableCache) GetCachedStatistics(tableID primitives.TableID) (*TableStatistics, bool) {
 	tc.mutex.RLock()
 	defer tc.mutex.RUnlock()
 
@@ -396,7 +397,7 @@ func (tc *TableCache) GetCachedStatistics(tableID int) (*TableStatistics, bool) 
 
 // setCachedStatistics stores statistics in the cache with TTL.
 // Must be called after acquiring write lock or during table addition.
-func (tc *TableCache) SetCachedStatistics(tableID int, stats *TableStatistics) error {
+func (tc *TableCache) SetCachedStatistics(tableID primitives.TableID, stats *TableStatistics) error {
 	tc.mutex.Lock()
 	defer tc.mutex.Unlock()
 
