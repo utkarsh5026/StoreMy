@@ -16,7 +16,7 @@ type ColumnMetadata struct {
 	IsPrimary     bool                // Whether this is the primary key column
 	IsAutoInc     bool                // Whether this column auto-increments
 	NextAutoValue uint64              // Next auto-increment value (if IsAutoInc is true)
-	TableID       primitives.TableID  // Table this column belongs to
+	TableID       primitives.FileID   // Table this column belongs to
 }
 
 // NewColumnMetadata creates a new ColumnMetadata instance with the specified properties.
@@ -45,7 +45,7 @@ type ColumnMetadata struct {
 //	if err != nil {
 //	    log.Fatal(err)
 //	}
-func NewColumnMetadata(name string, fieldType types.Type, position primitives.ColumnID, tableID primitives.TableID, isPrimary, isAutoInc bool) (*ColumnMetadata, error) {
+func NewColumnMetadata(name string, fieldType types.Type, position primitives.ColumnID, tableID primitives.FileID, isPrimary, isAutoInc bool) (*ColumnMetadata, error) {
 	if name == "" {
 		return nil, fmt.Errorf("column name cannot be empty")
 	}

@@ -16,13 +16,13 @@ type ColumnDef struct {
 
 // SchemaBuilder helps construct system table schemas with less boilerplate
 type SchemaBuilder struct {
-	tableID   primitives.TableID
+	tableID   primitives.FileID
 	tableName string
 	columns   []ColumnDef
 }
 
 // NewSchemaBuilder creates a new schema builder
-func NewSchemaBuilder(tableID primitives.TableID, tableName string) *SchemaBuilder {
+func NewSchemaBuilder(tableID primitives.FileID, tableName string) *SchemaBuilder {
 	return &SchemaBuilder{
 		tableID:   tableID,
 		tableName: tableName,
@@ -90,7 +90,7 @@ func (sb *SchemaBuilder) Build() (*Schema, error) {
 }
 
 // BuildColumns is a convenience function for simple schema creation
-func BuildColumns(tableID primitives.TableID, tableName string, defs ...ColumnDef) (*Schema, error) {
+func BuildColumns(tableID primitives.FileID, tableName string, defs ...ColumnDef) (*Schema, error) {
 	builder := NewSchemaBuilder(tableID, tableName)
 	for _, def := range defs {
 		if def.IsAutoIncrement {

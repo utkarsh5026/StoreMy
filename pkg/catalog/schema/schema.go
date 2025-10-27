@@ -24,7 +24,7 @@ type Schema struct {
 	TupleDesc *tuple.TupleDescription
 
 	// TableID is the unique identifier for this table in the catalog.
-	TableID primitives.TableID
+	TableID primitives.FileID
 
 	// TableName is the human-readable name of the table.
 	TableName string
@@ -72,7 +72,7 @@ type Schema struct {
 //	    {Name: "name", FieldType: types.StringType, Position: 1},
 //	}
 //	schema, err := NewSchema(tableID, "users", columns)
-func NewSchema(tableID primitives.TableID, tableName string, columns []ColumnMetadata) (*Schema, error) {
+func NewSchema(tableID primitives.FileID, tableName string, columns []ColumnMetadata) (*Schema, error) {
 	if len(columns) == 0 {
 		return nil, fmt.Errorf("schema must have at least one column")
 	}
