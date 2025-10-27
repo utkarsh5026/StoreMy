@@ -1,20 +1,16 @@
 package primitives
 
-// LSN (Log Sequence Number) uniquely identifies each log record
-// It's monotonically increasing and represents the byte offset in the log file
-type LSN uint64
-
 // PageID interface represents a unique identifier for a page
 // This is a placeholder interface that will be implemented by specific page types
 type PageID interface {
 	// GetTableID returns the table this page belongs to
-	GetTableID() int
+	GetTableID() TableID
 
 	// PageNo returns the page number within the table
-	PageNo() int
+	PageNo() PageNumber
 
 	// Serialize returns a representation of this page ID as integers
-	Serialize() []int
+	Serialize() []byte
 
 	// Equals checks if two page IDs are equal
 	Equals(other PageID) bool
@@ -23,5 +19,5 @@ type PageID interface {
 	String() string
 
 	// HashCode returns a hash code for this page ID
-	HashCode() int
+	HashCode() HashCode
 }
