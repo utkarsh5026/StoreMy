@@ -3,58 +3,16 @@ package schema
 import (
 	"fmt"
 	"slices"
+	"storemy/pkg/primitives"
 	"storemy/pkg/tuple"
 	"storemy/pkg/types"
 )
-
-// ColumnMetadata represents comprehensive metadata for a single column in a table schema.
-type ColumnMetadata struct {
-	Name          string     // Column name
-	FieldType     types.Type // Column data type
-	Position      int        // Column position in tuple (0-indexed)
-	IsPrimary     bool       // Whether this is the primary key column
-	IsAutoInc     bool       // Whether this column auto-increments
-	NextAutoValue int        // Next auto-increment value (if IsAutoInc is true)
-	TableID       int        // Table this column belongs to
-}
-
-// NewColumnMetadata creates a new ColumnMetadata instance.
-func NewColumnMetadata(name string, fieldType types.Type, position, tableID int, isPrimary, isAutoInc bool) (*ColumnMetadata, error) {
-	if name == "" {
-		return nil, fmt.Errorf("column name cannot be empty")
-	}
-
-	if !types.IsValidType(fieldType) {
-		return nil, fmt.Errorf("field type cannot be nil for column '%s'", name)
-	}
-
-	if position < 0 {
-		return nil, fmt.Errorf("column position must be non-negative, got %d for column '%s'", position, name)
-	}
-
-	nextAutoValue := 0
-	if isAutoInc {
-		if fieldType != types.IntType {
-			return nil, fmt.Errorf("auto-increment column '%s' must be of type INT, got %s", name, fieldType.String())
-		}
-		nextAutoValue = 1 // Initialize auto-increment columns with next value = 1
-	}
-	return &ColumnMetadata{
-		Name:          name,
-		FieldType:     fieldType,
-		Position:      position,
-		IsPrimary:     isPrimary,
-		IsAutoInc:     isAutoInc,
-		NextAutoValue: nextAutoValue,
-		TableID:       tableID,
-	}, nil
-}
 
 // Schema represents a complete table schema with metadata and helper methods.
 // It provides a rich interface for working with table structures beyond just field types.
 type Schema struct {
 	TupleDesc *tuple.TupleDescription
-	TableID   int
+	TableID   primitives.TableID
 	TableName string
 
 	// Primary key metadata
@@ -69,7 +27,7 @@ type Schema struct {
 }
 
 // NewSchema creates a new Schema from column metadata.
-func NewSchema(tableID int, tableName string, columns []ColumnMetadata) (*Schema, error) {
+func NewSchema(tableID primitives.TableID, tableName string, columns []ColumnMetadata) (*Schema, error) {
 	// Note: tableID can be any integer value (including negative) as it comes from a hash function
 	// Only InvalidTableID (-1) is reserved for system table schemas during initialization
 	// We don't validate the tableID here since it's a hash that can be any value
@@ -80,7 +38,7 @@ func NewSchema(tableID int, tableName string, columns []ColumnMetadata) (*Schema
 
 	sortedCols := slices.Clone(columns)
 	slices.SortFunc(sortedCols, func(a, b ColumnMetadata) int {
-		return a.Position - b.Position
+		return int(a.Position) - int(b.Position)
 	})
 
 	fieldTypes := make([]types.Type, len(sortedCols))

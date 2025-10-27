@@ -2,6 +2,7 @@ package schema
 
 import (
 	"fmt"
+	"storemy/pkg/primitives"
 	"storemy/pkg/types"
 )
 
@@ -15,13 +16,13 @@ type ColumnDef struct {
 
 // SchemaBuilder helps construct system table schemas with less boilerplate
 type SchemaBuilder struct {
-	tableID   int
+	tableID   primitives.TableID
 	tableName string
 	columns   []ColumnDef
 }
 
 // NewSchemaBuilder creates a new schema builder
-func NewSchemaBuilder(tableID int, tableName string) *SchemaBuilder {
+func NewSchemaBuilder(tableID primitives.TableID, tableName string) *SchemaBuilder {
 	return &SchemaBuilder{
 		tableID:   tableID,
 		tableName: tableName,
@@ -70,7 +71,7 @@ func (sb *SchemaBuilder) Build() (*Schema, error) {
 		col, err := NewColumnMetadata(
 			colDef.Name,
 			colDef.Type,
-			i, // position is automatically set
+			primitives.ColumnID(i), // position is automatically set
 			sb.tableID,
 			colDef.IsPrimaryKey,
 			colDef.IsAutoIncrement,
@@ -89,7 +90,7 @@ func (sb *SchemaBuilder) Build() (*Schema, error) {
 }
 
 // BuildColumns is a convenience function for simple schema creation
-func BuildColumns(tableID int, tableName string, defs ...ColumnDef) (*Schema, error) {
+func BuildColumns(tableID primitives.TableID, tableName string, defs ...ColumnDef) (*Schema, error) {
 	builder := NewSchemaBuilder(tableID, tableName)
 	for _, def := range defs {
 		if def.IsAutoIncrement {
