@@ -16,18 +16,17 @@ const (
 	// Page type constants
 	pageTypeInternal byte = 0x01
 	pageTypeLeaf     byte = 0x02
-	NoPage                = -1
 
 	// Page header size (in bytes)
 	// 1 byte: page type
-	// 4 bytes: parent page number
+	// 8 bytes: parent page number (uint64)
 	// 4 bytes: number of Entries
-	// 4 bytes: next leaf (for leaf pages, -1 for internal)
-	// 4 bytes: prev leaf (for leaf pages, -1 for internal)
-	headerSize = 17
+	// 8 bytes: next leaf (for leaf pages, InvalidPageNumber for internal)
+	// 8 bytes: prev leaf (for leaf pages, InvalidPageNumber for internal)
+	headerSize = 29
 
 	// Maximum number of Entries per page (conservative estimate)
-	// For 4KB pages: (4096 - 17) / (8 + 8 + 4 + 4) ≈ 169 Entries for int keys
+	// For 4KB pages: (4096 - 29) / (8 + 8 + 4 + 4) ≈ 169 Entries for int keys
 	// We'll use a more conservative number to handle string keys
 	MaxEntriesPerPage = 150
 )
@@ -37,7 +36,7 @@ const (
 type BTreePage struct {
 	pageID                         *page.PageDescriptor
 	pageType                       byte
-	ParentPage, NextLeaf, PrevLeaf int // -1 if root
+	ParentPage, NextLeaf, PrevLeaf primitives.PageNumber // InvalidPageNumber if root/not linked
 
 	keyType       types.Type
 	Entries       []*index.IndexEntry // For leaf pages
@@ -58,13 +57,13 @@ func NewBtreeChildPtr(key types.Field, childPID *page.PageDescriptor) *BTreeChil
 }
 
 // NewBTreeLeafPage creates a new leaf page
-func NewBTreeLeafPage(pageID *page.PageDescriptor, keyType types.Type, ParentPage int) *BTreePage {
+func NewBTreeLeafPage(pageID *page.PageDescriptor, keyType types.Type, ParentPage primitives.PageNumber) *BTreePage {
 	return &BTreePage{
 		pageID:        pageID,
 		pageType:      pageTypeLeaf,
 		ParentPage:    ParentPage,
-		NextLeaf:      NoPage,
-		PrevLeaf:      NoPage,
+		NextLeaf:      primitives.InvalidPageNumber,
+		PrevLeaf:      primitives.InvalidPageNumber,
 		keyType:       keyType,
 		Entries:       make([]*index.IndexEntry, 0, MaxEntriesPerPage),
 		InternalPages: nil,
@@ -73,13 +72,13 @@ func NewBTreeLeafPage(pageID *page.PageDescriptor, keyType types.Type, ParentPag
 }
 
 // NewBTreeInternalPage creates a new internal page
-func NewBTreeInternalPage(pageID *page.PageDescriptor, keyType types.Type, ParentPage int) *BTreePage {
+func NewBTreeInternalPage(pageID *page.PageDescriptor, keyType types.Type, ParentPage primitives.PageNumber) *BTreePage {
 	return &BTreePage{
 		pageID:        pageID,
 		pageType:      pageTypeInternal,
 		ParentPage:    ParentPage,
-		NextLeaf:      NoPage,
-		PrevLeaf:      NoPage,
+		NextLeaf:      primitives.InvalidPageNumber,
+		PrevLeaf:      primitives.InvalidPageNumber,
 		keyType:       keyType,
 		Entries:       nil,
 		InternalPages: make([]*BTreeChildPtr, 0, MaxEntriesPerPage+1),
@@ -87,13 +86,8 @@ func NewBTreeInternalPage(pageID *page.PageDescriptor, keyType types.Type, Paren
 	}
 }
 
-// GetID returns the page ID as a primitives.PageID interface
-func (p *BTreePage) GetID() primitives.PageID {
-	return p.pageID
-}
-
-// GetBTreePageID returns the page ID as a concrete BTreePageID
-func (p *BTreePage) GetBTreePageID() *page.PageDescriptor {
+// GetID returns the page ID (implements page.Page interface)
+func (p *BTreePage) GetID() *page.PageDescriptor {
 	return p.pageID
 }
 
@@ -119,10 +113,10 @@ func (p *BTreePage) GetPageData() []byte {
 	buf := new(bytes.Buffer)
 
 	buf.WriteByte(p.pageType)
-	binary.Write(buf, binary.BigEndian, int32(p.ParentPage))
+	binary.Write(buf, binary.BigEndian, uint64(p.ParentPage))
 	binary.Write(buf, binary.BigEndian, int32(p.GetNumEntries()))
-	binary.Write(buf, binary.BigEndian, int32(p.NextLeaf))
-	binary.Write(buf, binary.BigEndian, int32(p.PrevLeaf))
+	binary.Write(buf, binary.BigEndian, uint64(p.NextLeaf))
+	binary.Write(buf, binary.BigEndian, uint64(p.PrevLeaf))
 
 	if p.IsLeafPage() {
 		for _, entry := range p.Entries {
@@ -139,8 +133,8 @@ func (p *BTreePage) GetPageData() []byte {
 					panic(fmt.Sprintf("failed to serialize key: %v", err))
 				}
 			}
-			binary.Write(buf, binary.BigEndian, int32(child.ChildPID.tableID))
-			binary.Write(buf, binary.BigEndian, int32(child.ChildPID.pageNum))
+			binary.Write(buf, binary.BigEndian, uint64(child.ChildPID.FileID()))
+			binary.Write(buf, binary.BigEndian, uint64(child.ChildPID.PageNo()))
 		}
 	}
 
@@ -157,11 +151,11 @@ func (p *BTreePage) Children() []*BTreeChildPtr {
 	return p.InternalPages
 }
 
-func (p *BTreePage) Parent() int {
+func (p *BTreePage) Parent() primitives.PageNumber {
 	return p.ParentPage
 }
 
-func (p *BTreePage) PageNo() int {
+func (p *BTreePage) PageNo() primitives.PageNumber {
 	return p.pageID.PageNo()
 }
 
@@ -236,7 +230,7 @@ func (p *BTreePage) SetBeforeImage() {
 	p.beforeImage = p.GetPageData()
 }
 
-func (p *BTreePage) SetParent(id int) {
+func (p *BTreePage) SetParent(id primitives.PageNumber) {
 	p.ParentPage = id
 }
 
@@ -246,18 +240,18 @@ func (p *BTreePage) IsLeafPage() bool {
 }
 
 func (p *BTreePage) IsRoot() bool {
-	return p.ParentPage == NoPage
+	return p.ParentPage == primitives.InvalidPageNumber
 }
 
 func (p *BTreePage) HasPreviousLeaf() bool {
-	return p.PrevLeaf != NoPage
+	return p.PrevLeaf != primitives.InvalidPageNumber
 }
 
 func (p *BTreePage) HasNextLeaf() bool {
-	return p.NextLeaf != NoPage
+	return p.NextLeaf != primitives.InvalidPageNumber
 }
 
-func (p *BTreePage) Leaves() (left, right int) {
+func (p *BTreePage) Leaves() (left, right primitives.PageNumber) {
 	return p.PrevLeaf, p.NextLeaf
 }
 
@@ -305,19 +299,13 @@ func (p *BTreePage) serializeEntry(w io.Writer, entry *index.IndexEntry) error {
 	}
 
 	rid := entry.RID
-	// Write page ID type (0 for HeapPageID, 1 for BTreePageID)
-	var pageIDType byte
-	switch rid.PageID.(type) {
-	case *BTreePageID:
-		pageIDType = 1
-	default: // HeapPageID or other
-		pageIDType = 0
-	}
+	// Write page ID type (kept for compatibility, always 0 now)
+	var pageIDType byte = 0
 	binary.Write(w, binary.BigEndian, pageIDType)
 
-	binary.Write(w, binary.BigEndian, int32(rid.PageID.GetTableID()))
-	binary.Write(w, binary.BigEndian, int32(rid.PageID.PageNo()))
-	binary.Write(w, binary.BigEndian, int32(rid.TupleNum))
+	binary.Write(w, binary.BigEndian, uint64(rid.PageID.FileID()))
+	binary.Write(w, binary.BigEndian, uint64(rid.PageID.PageNo()))
+	binary.Write(w, binary.BigEndian, uint16(rid.TupleNum))
 	return nil
 }
 

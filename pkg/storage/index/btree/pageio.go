@@ -5,7 +5,6 @@ import (
 	"encoding/binary"
 	"fmt"
 	"storemy/pkg/primitives"
-	"storemy/pkg/storage/heap"
 	"storemy/pkg/storage/index"
 	"storemy/pkg/storage/page"
 	"storemy/pkg/tuple"
@@ -22,36 +21,37 @@ func DeserializeBTreePage(data []byte, pageID *page.PageDescriptor) (*BTreePage,
 
 	pageType, _ := buf.ReadByte()
 
-	var ParentPage, numEntries, NextLeaf, PrevLeaf int32
+	var ParentPage, NextLeaf, PrevLeaf uint64
+	var numEntries int32
 	binary.Read(buf, binary.BigEndian, &ParentPage)
 	binary.Read(buf, binary.BigEndian, &numEntries)
 	binary.Read(buf, binary.BigEndian, &NextLeaf)
 	binary.Read(buf, binary.BigEndian, &PrevLeaf)
 
-	page := &BTreePage{
+	btreePage := &BTreePage{
 		pageID:     pageID,
 		pageType:   pageType,
-		ParentPage: int(ParentPage),
-		NextLeaf:   int(NextLeaf),
-		PrevLeaf:   int(PrevLeaf),
+		ParentPage: primitives.PageNumber(ParentPage),
+		NextLeaf:   primitives.PageNumber(NextLeaf),
+		PrevLeaf:   primitives.PageNumber(PrevLeaf),
 		isDirty:    false,
 	}
 
 	// Deserialize Entries/InternalPages based on page type
 	if pageType == pageTypeLeaf {
-		page.Entries = make([]*index.IndexEntry, 0, numEntries)
+		btreePage.Entries = make([]*index.IndexEntry, 0, numEntries)
 		for i := 0; i < int(numEntries); i++ {
 			entry, err := deserializeEntry(buf)
 			if err != nil {
 				return nil, fmt.Errorf("failed to deserialize entry %d: %w", i, err)
 			}
-			page.Entries = append(page.Entries, entry)
+			btreePage.Entries = append(btreePage.Entries, entry)
 			if i == 0 && entry.Key != nil {
-				page.keyType = entry.Key.Type()
+				btreePage.keyType = entry.Key.Type()
 			}
 		}
 	} else {
-		page.InternalPages = make([]*BTreeChildPtr, 0, numEntries+1)
+		btreePage.InternalPages = make([]*BTreeChildPtr, 0, numEntries+1)
 		for i := 0; i <= int(numEntries); i++ {
 			var key types.Field
 			var err error
@@ -63,23 +63,23 @@ func DeserializeBTreePage(data []byte, pageID *page.PageDescriptor) (*BTreePage,
 					return nil, fmt.Errorf("failed to deserialize key %d: %w", i, err)
 				}
 				if i == 1 && key != nil {
-					page.keyType = key.Type()
+					btreePage.keyType = key.Type()
 				}
 			}
 
-			var tableID, pageNum int32
-			binary.Read(buf, binary.BigEndian, &tableID)
+			var fileID, pageNum uint64
+			binary.Read(buf, binary.BigEndian, &fileID)
 			binary.Read(buf, binary.BigEndian, &pageNum)
 
 			childPtr := &BTreeChildPtr{
 				Key:      key,
-				ChildPID: NewBTreePageID(int(tableID), int(pageNum)),
+				ChildPID: page.NewPageDescriptor(primitives.FileID(fileID), primitives.PageNumber(pageNum)),
 			}
-			page.InternalPages = append(page.InternalPages, childPtr)
+			btreePage.InternalPages = append(btreePage.InternalPages, childPtr)
 		}
 	}
 
-	return page, nil
+	return btreePage, nil
 }
 
 // deserializeEntry reads an entry from the buffer
@@ -89,26 +89,21 @@ func deserializeEntry(r *bytes.Reader) (*index.IndexEntry, error) {
 		return nil, err
 	}
 
-	// Read page ID type
+	// Read page ID type (kept for compatibility but not used anymore)
 	var pageIDType byte
 	binary.Read(r, binary.BigEndian, &pageIDType)
 
-	var tableID, pageNum, tupleNum int32
-	binary.Read(r, binary.BigEndian, &tableID)
+	var fileID, pageNum uint64
+	var tupleNum uint16
+	binary.Read(r, binary.BigEndian, &fileID)
 	binary.Read(r, binary.BigEndian, &pageNum)
 	binary.Read(r, binary.BigEndian, &tupleNum)
 
-	// Create the correct PageID type
-	var pageID primitives.PageID
-	if pageIDType == 1 {
-		pageID = NewBTreePageID(int(tableID), int(pageNum))
-	} else {
-		pageID = heap.NewHeapPageID(int(tableID), int(pageNum))
-	}
+	pageID := page.NewPageDescriptor(primitives.FileID(fileID), primitives.PageNumber(pageNum))
 
 	rid := &tuple.TupleRecordID{
 		PageID:   pageID,
-		TupleNum: int(tupleNum),
+		TupleNum: primitives.SlotID(tupleNum),
 	}
 
 	return &index.IndexEntry{

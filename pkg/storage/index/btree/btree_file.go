@@ -12,7 +12,7 @@ import (
 // BTreeFile represents a persistent B+Tree index file
 type BTreeFile struct {
 	*page.BaseFile
-	indexID  primitives.TableID
+	indexID  primitives.FileID
 	keyType  types.Type
 	numPages primitives.PageNumber
 	mutex    sync.RWMutex
@@ -49,16 +49,16 @@ func (bf *BTreeFile) GetKeyType() types.Type {
 func (bf *BTreeFile) NumPages() int {
 	bf.mutex.RLock()
 	defer bf.mutex.RUnlock()
-	return bf.numPages
+	return int(bf.numPages)
 }
 
 // ReadBTreePage reads a B+Tree page from disk
-func (bf *BTreeFile) ReadBTreePage(pageID *BTreePageID) (*BTreePage, error) {
+func (bf *BTreeFile) ReadBTreePage(pageID *page.PageDescriptor) (*BTreePage, error) {
 	if pageID == nil {
 		return nil, fmt.Errorf("page ID cannot be nil")
 	}
 
-	if pageID.GetTableID() != bf.indexID {
+	if pageID.FileID() != bf.indexID {
 		return nil, fmt.Errorf("page ID index mismatch")
 	}
 
@@ -74,14 +74,9 @@ func (bf *BTreeFile) ReadBTreePage(pageID *BTreePageID) (*BTreePage, error) {
 	return btreePage, nil
 }
 
-// ReadPage implements the DbFile interface by accepting a generic PageID
-// and delegating to ReadBTreePage
-func (bf *BTreeFile) ReadPage(pid primitives.PageID) (page.Page, error) {
-	btreePageID, ok := pid.(*BTreePageID)
-	if !ok {
-		return nil, fmt.Errorf("page ID must be a BTreePageID, got %T", pid)
-	}
-	return bf.ReadBTreePage(btreePageID)
+// ReadPage implements the DbFile interface
+func (bf *BTreeFile) ReadPage(pageID *page.PageDescriptor) (page.Page, error) {
+	return bf.ReadBTreePage(pageID)
 }
 
 // WriteBTreePage writes a B+Tree page to disk
@@ -120,13 +115,13 @@ func (bf *BTreeFile) WritePage(p page.Page) error {
 // AllocatePage allocates a new page in the file
 // Note: The page is marked dirty but NOT written to disk immediately.
 // The caller is responsible for adding it to the PageStore's dirty page tracking.
-func (bf *BTreeFile) AllocatePage(tid *primitives.TransactionID, keyType types.Type, isLeaf bool, parentPage int) (*BTreePage, error) {
+func (bf *BTreeFile) AllocatePage(tid *primitives.TransactionID, keyType types.Type, isLeaf bool, parentPage primitives.PageNumber) (*BTreePage, error) {
 	bf.mutex.Lock()
 	pageNum := bf.numPages
 	bf.numPages++
 	bf.mutex.Unlock()
 
-	pageID := NewBTreePageID(bf.indexID, pageNum)
+	pageID := page.NewPageDescriptor(bf.indexID, pageNum)
 
 	var newPage *BTreePage
 	if isLeaf {
@@ -142,14 +137,14 @@ func (bf *BTreeFile) AllocatePage(tid *primitives.TransactionID, keyType types.T
 
 // SetIndexID sets the index ID for this BTree file
 // This should be called when the file is associated with a specific index
-func (bf *BTreeFile) SetIndexID(indexID int) {
+func (bf *BTreeFile) SetIndexID(indexID primitives.FileID) {
 	bf.mutex.Lock()
 	defer bf.mutex.Unlock()
 	bf.indexID = indexID
 }
 
 // GetIndexID returns the index ID for this BTree file
-func (bf *BTreeFile) GetIndexID() int {
+func (bf *BTreeFile) GetIndexID() primitives.FileID {
 	bf.mutex.RLock()
 	defer bf.mutex.RUnlock()
 	return bf.indexID
@@ -158,7 +153,7 @@ func (bf *BTreeFile) GetIndexID() int {
 // GetID implements the DbFile interface by returning the index ID if set,
 // otherwise returns the BaseFile's ID (hash of filename).
 // This allows the file to use its natural ID from BaseFile when not explicitly set.
-func (bf *BTreeFile) GetID() primitives.TableID {
+func (bf *BTreeFile) GetID() primitives.FileID {
 	bf.mutex.RLock()
 	defer bf.mutex.RUnlock()
 	if bf.indexID != 0 {
