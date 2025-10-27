@@ -9,6 +9,7 @@ import (
 	"storemy/pkg/memory"
 	btreeindex "storemy/pkg/memory/wrappers/btree_index"
 	hashindex "storemy/pkg/memory/wrappers/hash_index"
+	"storemy/pkg/primitives"
 	"storemy/pkg/storage/index"
 	"storemy/pkg/types"
 )
@@ -20,18 +21,18 @@ type IndexType = index.IndexType
 // This avoids circular dependencies with the catalog package.
 type CatalogReader interface {
 	// GetIndexesByTable retrieves index information from the catalog
-	GetIndexesByTable(tx *transaction.TransactionContext, tableID int) ([]*systemtable.IndexMetadata, error)
+	GetIndexesByTable(tx *transaction.TransactionContext, tableID primitives.TableID) ([]*systemtable.IndexMetadata, error)
 
 	// GetTableSchema retrieves the schema for a table
-	GetTableSchema(tableID int) (*schema.Schema, error)
+	GetTableSchema(tableID primitives.TableID) (*schema.Schema, error)
 }
 
 // IndexMetadata represents complete, resolved metadata for a database index.
 // This extends systemtable.IndexMetadata with resolved schema information needed for index operations.
 type IndexMetadata struct {
 	systemtable.IndexMetadata
-	ColumnIndex int        // Field index in tuple (0-based, resolved from schema)
-	KeyType     types.Type // Type of the indexed column (resolved from schema)
+	ColumnIndex primitives.ColumnID // Field index in tuple (0-based, resolved from schema)
+	KeyType     types.Type          // Type of the indexed column (resolved from schema)
 }
 
 // indexWithMetadata wraps an index (BTree or HashIndex) with its metadata
@@ -57,9 +58,8 @@ type IndexManager struct {
 	pageStore *memory.PageStore
 	wal       *wal.WAL
 
-	cache       *indexCache
-	loader      *indexLoader
-	maintenance *indexMaintenance
+	cache  *indexCache
+	loader *indexLoader
 }
 
 // NewIndexManager creates a new IndexManager instance.
@@ -79,13 +79,12 @@ func NewIndexManager(catalog CatalogReader, pageStore *memory.PageStore, wal *wa
 
 	im.cache = newIndexCache()
 	im.loader = newIndexLoader(catalog, pageStore)
-	im.maintenance = newIndexMaintenance(im.getIndexesForTable)
 	return im
 }
 
 // InvalidateCache removes cached indexes for a table.
 // This is typically called when indexes are created or dropped for a table.
-func (im *IndexManager) InvalidateCache(tableID int) {
+func (im *IndexManager) InvalidateCache(tableID primitives.TableID) {
 	im.cache.Invalidate(tableID)
 }
 

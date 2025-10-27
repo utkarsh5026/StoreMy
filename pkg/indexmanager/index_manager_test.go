@@ -24,11 +24,11 @@ type mockCatalogReader struct {
 	schema  *schema.Schema
 }
 
-func (m *mockCatalogReader) GetIndexesByTable(tx *transaction.TransactionContext, tableID int) ([]*systemtable.IndexMetadata, error) {
+func (m *mockCatalogReader) GetIndexesByTable(tx *transaction.TransactionContext, tableID primitives.TableID) ([]*systemtable.IndexMetadata, error) {
 	return m.indexes, nil
 }
 
-func (m *mockCatalogReader) GetTableSchema(tableID int) (*schema.Schema, error) {
+func (m *mockCatalogReader) GetTableSchema(tableID primitives.TableID) (*schema.Schema, error) {
 	return m.schema, nil
 }
 
@@ -125,23 +125,24 @@ func TestNewIndexManager(t *testing.T) {
 		t.Error("Expected loader to be initialized")
 	}
 
-	if im.maintenance == nil {
-		t.Error("Expected maintenance to be initialized")
-	}
 }
 
 func TestCreatePhysicalIndex_BTree(t *testing.T) {
 	im, _, _, _, tempDir := setupTestEnvironment(t)
 
-	filePath := filepath.Join(tempDir, "btree_index.dat")
+	filePath := primitives.Filepath(filepath.Join(tempDir, "btree_index.dat"))
 
-	err := im.CreatePhysicalIndex(filePath, types.IntType, index.BTreeIndex)
+	indexID, err := im.CreatePhysicalIndex(filePath, types.IntType, index.BTreeIndex)
 	if err != nil {
 		t.Fatalf("Failed to create BTree index: %v", err)
 	}
 
+	if indexID == 0 {
+		t.Error("Expected non-zero index ID")
+	}
+
 	// Verify file exists
-	if _, err := os.Stat(filePath); os.IsNotExist(err) {
+	if _, err := os.Stat(string(filePath)); os.IsNotExist(err) {
 		t.Error("BTree index file was not created")
 	}
 }
@@ -151,9 +152,13 @@ func TestCreatePhysicalIndex_Hash(t *testing.T) {
 
 	filePath := filepath.Join(tempDir, "hash_index.dat")
 
-	err := im.CreatePhysicalIndex(filePath, types.IntType, index.HashIndex)
+	indexID, err := im.CreatePhysicalIndex(filePath, types.IntType, index.HashIndex)
 	if err != nil {
 		t.Fatalf("Failed to create Hash index: %v", err)
+	}
+
+	if indexID == 0 {
+		t.Error("Expected non-zero index ID")
 	}
 
 	// Verify file exists
@@ -168,7 +173,7 @@ func TestDeletePhysicalIndex(t *testing.T) {
 	filePath := filepath.Join(tempDir, "delete_test.dat")
 
 	// Create index first
-	err := im.CreatePhysicalIndex(filePath, types.IntType, index.BTreeIndex)
+	_, err := im.CreatePhysicalIndex(filePath, types.IntType, index.BTreeIndex)
 	if err != nil {
 		t.Fatalf("Failed to create index: %v", err)
 	}
@@ -207,7 +212,7 @@ func TestPopulateIndex(t *testing.T) {
 
 	// Create index file
 	indexFilePath := filepath.Join(tempDir, "index.dat")
-	err = im.CreatePhysicalIndex(indexFilePath, types.IntType, index.BTreeIndex)
+	_, err = im.CreatePhysicalIndex(indexFilePath, types.IntType, index.BTreeIndex)
 	if err != nil {
 		t.Fatalf("Failed to create index: %v", err)
 	}
@@ -400,7 +405,7 @@ func TestCreatePhysicalIndex_UnsupportedType(t *testing.T) {
 	filePath := filepath.Join(tempDir, "unsupported.dat")
 
 	// Try to create with invalid index type
-	err := im.CreatePhysicalIndex(filePath, types.IntType, index.IndexType("InvalidType"))
+	_, err := im.CreatePhysicalIndex(filePath, types.IntType, index.IndexType("InvalidType"))
 	if err == nil {
 		t.Fatal("Expected error for unsupported index type")
 	}
@@ -413,7 +418,7 @@ func TestCreatePhysicalIndex_InvalidPath(t *testing.T) {
 	// On Windows, invalid characters in filename will cause error
 	invalidPath := "\x00invalid\x00path.dat"
 
-	err := im.CreatePhysicalIndex(invalidPath, types.IntType, index.BTreeIndex)
+	_, err := im.CreatePhysicalIndex(invalidPath, types.IntType, index.BTreeIndex)
 	if err == nil {
 		t.Error("Expected error for invalid path")
 	}
@@ -467,7 +472,7 @@ func TestPopulateIndex_WithData(t *testing.T) {
 
 	// Create index file
 	indexFilePath := filepath.Join(tempDir, "populated_index.dat")
-	err = im.CreatePhysicalIndex(indexFilePath, types.IntType, index.BTreeIndex)
+	_, err = im.CreatePhysicalIndex(indexFilePath, types.IntType, index.BTreeIndex)
 	if err != nil {
 		t.Fatalf("Failed to create index: %v", err)
 	}
@@ -521,7 +526,7 @@ func TestPopulateIndex_HashIndex(t *testing.T) {
 
 	// Create hash index file
 	indexFilePath := filepath.Join(tempDir, "hash_populated_index.dat")
-	err = im.CreatePhysicalIndex(indexFilePath, types.IntType, index.HashIndex)
+	_, err = im.CreatePhysicalIndex(indexFilePath, types.IntType, index.HashIndex)
 	if err != nil {
 		t.Fatalf("Failed to create hash index: %v", err)
 	}
@@ -593,12 +598,12 @@ func TestClose_WithOpenIndexes(t *testing.T) {
 	idx1Path := filepath.Join(tempDir, "close_idx1.dat")
 	idx2Path := filepath.Join(tempDir, "close_idx2.dat")
 
-	err := im.CreatePhysicalIndex(idx1Path, types.IntType, index.BTreeIndex)
+	_, err := im.CreatePhysicalIndex(idx1Path, types.IntType, index.BTreeIndex)
 	if err != nil {
 		t.Fatalf("Failed to create index 1: %v", err)
 	}
 
-	err = im.CreatePhysicalIndex(idx2Path, types.IntType, index.HashIndex)
+	_, err = im.CreatePhysicalIndex(idx2Path, types.IntType, index.HashIndex)
 	if err != nil {
 		t.Fatalf("Failed to create index 2: %v", err)
 	}
@@ -629,7 +634,7 @@ func TestIndexCache_ConcurrentAccess(t *testing.T) {
 	var wg sync.WaitGroup
 	for i := 1; i <= 100; i++ {
 		wg.Add(1)
-		go func(tableID int) {
+		go func(tableID primitives.TableID) {
 			defer wg.Done()
 			cache.Set(tableID, []*indexWithMetadata{})
 		}(i)
@@ -646,7 +651,7 @@ func TestIndexCache_ConcurrentAccess(t *testing.T) {
 	// Concurrently invalidate items
 	for i := 1; i <= 50; i++ {
 		wg.Add(1)
-		go func(tableID int) {
+		go func(tableID primitives.TableID) {
 			defer wg.Done()
 			cache.Invalidate(tableID)
 		}(i)
@@ -743,7 +748,7 @@ func TestCreatePhysicalIndex_AllSupportedTypes(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			filePath := filepath.Join(tempDir, tc.name+".dat")
 
-			err := im.CreatePhysicalIndex(filePath, tc.keyType, tc.indexType)
+			_, err := im.CreatePhysicalIndex(filePath, tc.keyType, tc.indexType)
 			if err != nil {
 				t.Fatalf("Failed to create %s index: %v", tc.name, err)
 			}
@@ -769,7 +774,7 @@ func TestPopulateIndex_InvalidColumnIndex(t *testing.T) {
 
 	// Create index file
 	indexFilePath := filepath.Join(tempDir, "invalid_col_index.dat")
-	err = im.CreatePhysicalIndex(indexFilePath, types.IntType, index.BTreeIndex)
+	_, err = im.CreatePhysicalIndex(indexFilePath, types.IntType, index.BTreeIndex)
 	if err != nil {
 		t.Fatalf("Failed to create index: %v", err)
 	}
@@ -820,7 +825,7 @@ func TestIndexManager_Lifecycle_CompleteWorkflow(t *testing.T) {
 
 	// Step 1: Create physical index
 	indexPath := filepath.Join(tempDir, "workflow_index.dat")
-	err := im.CreatePhysicalIndex(indexPath, types.IntType, index.BTreeIndex)
+	_, err := im.CreatePhysicalIndex(indexPath, types.IntType, index.BTreeIndex)
 	if err != nil {
 		t.Fatalf("Step 1 failed - Create index: %v", err)
 	}
@@ -894,7 +899,7 @@ func TestIndexManager_StressTest_ManyIndexes(t *testing.T) {
 			indexType = index.HashIndex
 		}
 
-		err := im.CreatePhysicalIndex(paths[i], types.IntType, indexType)
+		_, err := im.CreatePhysicalIndex(paths[i], types.IntType, indexType)
 		if err != nil {
 			t.Fatalf("Failed to create index %d: %v", i, err)
 		}

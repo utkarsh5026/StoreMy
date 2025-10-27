@@ -4,6 +4,7 @@ import (
 	"fmt"
 	btreeindex "storemy/pkg/memory/wrappers/btree_index"
 	hashindex "storemy/pkg/memory/wrappers/hash_index"
+	"storemy/pkg/primitives"
 	"storemy/pkg/tuple"
 	"storemy/pkg/types"
 )
@@ -31,37 +32,6 @@ func (op operationType) String() string {
 	}
 }
 
-// indexMaintenance is responsible for maintaining index consistency during DML operations.
-// It ensures that all indexes associated with a table are properly updated when tuples
-// are inserted, deleted, or modified. This component is critical for maintaining query
-// performance and data integrity across indexed columns.
-//
-// The maintenance handler supports multiple index types (B-Tree and Hash) and handles
-// atomic operations across all indexes for a given table. In case of failures, it attempts
-// to rollback changes to maintain consistency.
-type indexMaintenance struct {
-	// getIndexes is a function that retrieves all indexes associated with a table.
-	// It takes a transaction context and table ID, returning a slice of indexes
-	// along with their metadata, or an error if the operation fails.
-	getIndexes func(TxCtx, int) ([]*indexWithMetadata, error)
-}
-
-// newIndexMaintenance creates and initializes a new index maintenance handler.
-//
-// Parameters:
-//   - getIndexes: A function that fetches all indexes for a given table ID within
-//     a transaction context. This function is used by all maintenance operations
-//     to determine which indexes need to be updated.
-//
-// Returns:
-//   - *indexMaintenance: A fully initialized index maintenance handler ready to
-//     process DML operations.
-func newIndexMaintenance(getIndexes func(TxCtx, int) ([]*indexWithMetadata, error)) *indexMaintenance {
-	return &indexMaintenance{
-		getIndexes: getIndexes,
-	}
-}
-
 // ProcessIndexOperation performs a specified operation (insert or delete) on all indexes
 // associated with a table for a given tuple. This is the core method that coordinates
 // index maintenance across all index types.
@@ -78,12 +48,12 @@ func newIndexMaintenance(getIndexes func(TxCtx, int) ([]*indexWithMetadata, erro
 //
 // Returns:
 //   - error: nil if all operations succeed, or an error describing the first failure
-func (im *indexMaintenance) ProcessIndexOperation(ctx TxCtx, tableID int, t *tuple.Tuple, opType operationType) error {
+func (im *IndexManager) processIndexOperation(ctx TxCtx, tableID primitives.TableID, t *tuple.Tuple, opType operationType) error {
 	if t == nil || t.TableNotAssigned() {
 		return fmt.Errorf("tuple must be non-nil and have a RecordID")
 	}
 
-	indexes, err := im.getIndexes(ctx, tableID)
+	indexes, err := im.getIndexesForTable(ctx, tableID)
 	if err != nil {
 		return fmt.Errorf("failed to get indexes for table %d: %v", tableID, err)
 	}
@@ -195,8 +165,8 @@ func extractKey(t *tuple.Tuple, metadata *IndexMetadata) (types.Field, error) {
 //
 // Returns:
 //   - error: nil if all index insertions succeed, or an error describing the failure
-func (im *IndexManager) OnInsert(ctx TxCtx, tableID int, t *tuple.Tuple) error {
-	return im.maintenance.ProcessIndexOperation(ctx, tableID, t, insertOp)
+func (im *IndexManager) OnInsert(ctx TxCtx, tableID primitives.TableID, t *tuple.Tuple) error {
+	return im.processIndexOperation(ctx, tableID, t, insertOp)
 }
 
 // OnDelete maintains all indexes for a table when a tuple is deleted.
@@ -213,8 +183,8 @@ func (im *IndexManager) OnInsert(ctx TxCtx, tableID int, t *tuple.Tuple) error {
 //
 // Returns:
 //   - error: nil if all index deletions succeed, or an error describing the failure
-func (im *IndexManager) OnDelete(ctx TxCtx, tableID int, t *tuple.Tuple) error {
-	return im.maintenance.ProcessIndexOperation(ctx, tableID, t, deleteOp)
+func (im *IndexManager) OnDelete(ctx TxCtx, tableID primitives.TableID, t *tuple.Tuple) error {
+	return im.processIndexOperation(ctx, tableID, t, deleteOp)
 }
 
 // OnUpdate maintains all indexes for a table when a tuple is updated.
@@ -233,7 +203,7 @@ func (im *IndexManager) OnDelete(ctx TxCtx, tableID int, t *tuple.Tuple) error {
 //
 // Returns:
 //   - error: nil if both deletion and insertion succeed, or an error describing the failure
-func (im *IndexManager) OnUpdate(ctx TxCtx, tableID int, old, new *tuple.Tuple) error {
+func (im *IndexManager) OnUpdate(ctx TxCtx, tableID primitives.TableID, old, new *tuple.Tuple) error {
 	if err := im.OnDelete(ctx, tableID, old); err != nil {
 		return err
 	}

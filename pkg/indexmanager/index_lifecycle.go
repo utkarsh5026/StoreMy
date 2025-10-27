@@ -3,10 +3,10 @@ package indexmanager
 import (
 	"fmt"
 	"os"
-	"path/filepath"
 	"storemy/pkg/execution/query"
 	btreeindex "storemy/pkg/memory/wrappers/btree_index"
 	hashindex "storemy/pkg/memory/wrappers/hash_index"
+	"storemy/pkg/primitives"
 	"storemy/pkg/storage/heap"
 	"storemy/pkg/storage/index"
 	"storemy/pkg/storage/index/btree"
@@ -34,7 +34,7 @@ import (
 // Returns:
 //   - error: nil on success, or an error if the sequential scan fails,
 //     tuple access fails, or index insertion fails
-func (im *IndexManager) insertIntoIndex(ctx TxCtx, tableFile *heap.HeapFile, columnIndex int, insertFunc func(key types.Field, rid *tuple.TupleRecordID) error) error {
+func (im *IndexManager) insertIntoIndex(ctx TxCtx, tableFile *heap.HeapFile, columnIndex primitives.ColumnID, insertFunc func(key types.Field, rid *tuple.TupleRecordID) error) error {
 	seqScan, err := query.NewSeqScan(ctx, tableFile.GetID(), tableFile, im.pageStore)
 	if err != nil {
 		return fmt.Errorf("failed to create sequential scan: %v", err)
@@ -75,10 +75,14 @@ func (im *IndexManager) insertIntoIndex(ctx TxCtx, tableFile *heap.HeapFile, col
 	return nil
 }
 
-// CreatePhysicalIndex creates the physical index file on disk.
+// CreatePhysicalIndex creates the physical index file on disk and returns its actual file ID.
 // This method initializes the appropriate index structure (Hash or BTree)
 // based on the specified index type and creates the file with proper
 // headers and metadata. The parent directory is created if it doesn't exist.
+//
+// The returned indexID is the file's natural ID from BaseFile (hash of filename).
+// This ID should be used when registering the index in the catalog to ensure
+// proper separation of concerns between physical and metadata layers.
 //
 // Supported index types:
 //   - HashIndex: Creates a hash-based index with default bucket configuration
@@ -92,6 +96,7 @@ func (im *IndexManager) insertIntoIndex(ctx TxCtx, tableFile *heap.HeapFile, col
 //   - indexType: The type of index structure to create (HashIndex or BTreeIndex)
 //
 // Returns:
+//   - indexID: The actual file ID from the created index file (from BaseFile)
 //   - error: nil on success, or an error if:
 //   - Directory creation fails
 //   - Index file creation fails
@@ -100,30 +105,38 @@ func (im *IndexManager) insertIntoIndex(ctx TxCtx, tableFile *heap.HeapFile, col
 //
 // Example:
 //
-//	err := im.CreatePhysicalIndex("data/indexes/user_id.idx", types.IntType, index.HashIndex)
-func (im *IndexManager) CreatePhysicalIndex(filePath string, keyType types.Type, indexType index.IndexType) error {
-	dir := filepath.Dir(filePath)
+//	indexID, err := im.CreatePhysicalIndex("data/indexes/user_id.idx", types.IntType, index.HashIndex)
+func (im *IndexManager) CreatePhysicalIndex(f primitives.Filepath, keyType types.Type, indexType index.IndexType) (primitives.TableID, error) {
+	dir := f.Dir()
 	if err := os.MkdirAll(dir, 0755); err != nil {
-		return fmt.Errorf("failed to create directory: %v", err)
+		return 0, fmt.Errorf("failed to create directory: %v", err)
 	}
 
 	switch indexType {
 	case index.HashIndex:
-		hashFile, err := hash.NewHashFile(filePath, keyType, hash.DefaultBuckets)
+		hashFile, err := hash.NewHashFile(f, keyType, hash.DefaultBuckets)
 		if err != nil {
-			return fmt.Errorf("failed to create hash index file: %v", err)
+			return 0, fmt.Errorf("failed to create hash index file: %v", err)
 		}
-		return hashFile.Close()
+		indexID := hashFile.GetID()
+		if err := hashFile.Close(); err != nil {
+			return 0, fmt.Errorf("failed to close hash index file: %v", err)
+		}
+		return indexID, nil
 
 	case index.BTreeIndex:
-		btreeFile, err := btree.NewBTreeFile(filePath, keyType)
+		btreeFile, err := btree.NewBTreeFile(f, keyType)
 		if err != nil {
-			return fmt.Errorf("failed to create btree index file: %v", err)
+			return 0, fmt.Errorf("failed to create btree index file: %v", err)
 		}
-		return btreeFile.Close()
+		indexID := btreeFile.GetID()
+		if err := btreeFile.Close(); err != nil {
+			return 0, fmt.Errorf("failed to close btree index file: %v", err)
+		}
+		return indexID, nil
 
 	default:
-		return fmt.Errorf("unsupported index type: %s", indexType)
+		return 0, fmt.Errorf("unsupported index type: %s", indexType)
 	}
 }
 
@@ -166,10 +179,10 @@ func (im *IndexManager) CreatePhysicalIndex(filePath string, keyType types.Type,
 //	                       types.IntType, index.HashIndex)
 func (im *IndexManager) PopulateIndex(
 	ctx TxCtx,
-	filePath string,
+	filePath primitives.Filepath,
 	indexID int,
 	tableFile page.DbFile,
-	columnIndex int,
+	columnIndex primitives.ColumnID,
 	keyType types.Type,
 	indexType index.IndexType,
 ) error {
@@ -183,7 +196,8 @@ func (im *IndexManager) PopulateIndex(
 		}
 		defer hashFile.Close()
 
-		hashIdx := hashindex.NewHashIndex(indexID, keyType, hashFile, im.pageStore, ctx)
+		// Use the file's actual ID, which should match the indexID passed from catalog
+		hashIdx := hashindex.NewHashIndex(hashFile.GetID(), keyType, hashFile, im.pageStore, ctx)
 		insertFunc = func(key types.Field, rid *tuple.TupleRecordID) error {
 			return hashIdx.Insert(key, rid)
 		}
@@ -195,7 +209,8 @@ func (im *IndexManager) PopulateIndex(
 		}
 		defer btreeFile.Close()
 
-		btreeIdx := btreeindex.NewBTree(indexID, keyType, btreeFile, ctx, im.pageStore)
+		// Use the file's actual ID, which should match the indexID passed from catalog
+		btreeIdx := btreeindex.NewBTree(btreeFile.GetID(), keyType, btreeFile, ctx, im.pageStore)
 		insertFunc = func(key types.Field, rid *tuple.TupleRecordID) error {
 			return btreeIdx.Insert(key, rid)
 		}
@@ -241,13 +256,14 @@ func (im *IndexManager) PopulateIndex(
 // Example:
 //
 //	err := im.DeletePhysicalIndex("data/indexes/user_id.idx")
-func (im *IndexManager) DeletePhysicalIndex(filePath string) error {
-	if _, err := os.Stat(filePath); os.IsNotExist(err) {
+func (im *IndexManager) DeletePhysicalIndex(f primitives.Filepath) error {
+	path := string(f)
+	if _, err := os.Stat(path); os.IsNotExist(err) {
 		return nil
 	}
 
-	if err := os.Remove(filePath); err != nil {
-		return fmt.Errorf("failed to remove file %s: %v", filePath, err)
+	if err := os.Remove(path); err != nil {
+		return fmt.Errorf("failed to remove file %s: %v", path, err)
 	}
 
 	return nil

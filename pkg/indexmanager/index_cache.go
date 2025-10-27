@@ -1,6 +1,7 @@
 package indexmanager
 
 import (
+	"storemy/pkg/primitives"
 	"sync"
 )
 
@@ -8,20 +9,20 @@ import (
 // It provides thread-safe access to cached indexes with lazy loading support.
 type indexCache struct {
 	// Cache of loaded indexes: tableID -> []*indexWithMetadata
-	cache map[int][]*indexWithMetadata
+	cache map[primitives.TableID][]*indexWithMetadata
 	mu    sync.RWMutex
 }
 
 // newIndexCache creates a new index cache.
 func newIndexCache() *indexCache {
 	return &indexCache{
-		cache: make(map[int][]*indexWithMetadata),
+		cache: make(map[primitives.TableID][]*indexWithMetadata),
 	}
 }
 
 // Get retrieves cached indexes for a table.
 // Returns (indexes, true) if cached, (nil, false) if not found.
-func (ic *indexCache) Get(tableID int) ([]*indexWithMetadata, bool) {
+func (ic *indexCache) Get(tableID primitives.TableID) ([]*indexWithMetadata, bool) {
 	ic.mu.RLock()
 	defer ic.mu.RUnlock()
 
@@ -32,7 +33,7 @@ func (ic *indexCache) Get(tableID int) ([]*indexWithMetadata, bool) {
 // Set stores indexes for a table in the cache.
 // This method uses double-check locking pattern to prevent race conditions
 // when multiple goroutines try to load indexes for the same table.
-func (ic *indexCache) Set(tableID int, indexes []*indexWithMetadata) []*indexWithMetadata {
+func (ic *indexCache) Set(tableID primitives.TableID, indexes []*indexWithMetadata) []*indexWithMetadata {
 	ic.mu.Lock()
 	defer ic.mu.Unlock()
 
@@ -46,7 +47,7 @@ func (ic *indexCache) Set(tableID int, indexes []*indexWithMetadata) []*indexWit
 
 // Invalidate removes cached indexes for a table.
 // This is typically called when indexes are created or dropped for a table.
-func (ic *indexCache) Invalidate(tableID int) {
+func (ic *indexCache) Invalidate(tableID primitives.TableID) {
 	ic.mu.Lock()
 	defer ic.mu.Unlock()
 	delete(ic.cache, tableID)
@@ -54,18 +55,18 @@ func (ic *indexCache) Invalidate(tableID int) {
 
 // Clear removes all cached indexes and returns them for cleanup.
 // This is typically called during shutdown.
-func (ic *indexCache) Clear() map[int][]*indexWithMetadata {
+func (ic *indexCache) Clear() map[primitives.TableID][]*indexWithMetadata {
 	ic.mu.Lock()
 	defer ic.mu.Unlock()
 
 	old := ic.cache
-	ic.cache = make(map[int][]*indexWithMetadata)
+	ic.cache = make(map[primitives.TableID][]*indexWithMetadata)
 	return old
 }
 
 // GetOrLoad attempts to get indexes from cache, or loads them using the provided loader function.
 // This implements the full lazy-loading pattern with double-check locking.
-func (ic *indexCache) GetOrLoad(tableID int, loader func() ([]*indexWithMetadata, error)) ([]*indexWithMetadata, error) {
+func (ic *indexCache) GetOrLoad(tableID primitives.TableID, loader func() ([]*indexWithMetadata, error)) ([]*indexWithMetadata, error) {
 	if indexes, exists := ic.Get(tableID); exists {
 		return indexes, nil
 	}
@@ -85,7 +86,7 @@ func (ic *indexCache) GetOrLoad(tableID int, loader func() ([]*indexWithMetadata
 // contain transaction contexts. Caching them causes issues when a new transaction
 // tries to use an index created with an old transaction's context.
 // TODO: Implement proper transaction-aware caching or cache index files separately
-func (im *IndexManager) getIndexesForTable(ctx TxCtx, tableID int) ([]*indexWithMetadata, error) {
+func (im *IndexManager) getIndexesForTable(ctx TxCtx, tableID primitives.TableID) ([]*indexWithMetadata, error) {
 	// Temporarily disable caching to fix transaction context issues
 	// Always reload indexes for each transaction
 	return im.loadAndOpenIndexes(ctx, tableID)

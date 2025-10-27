@@ -11,6 +11,7 @@ import (
 	"storemy/pkg/memory"
 	btreeindex "storemy/pkg/memory/wrappers/btree_index"
 	hashindex "storemy/pkg/memory/wrappers/hash_index"
+	"storemy/pkg/primitives"
 	"storemy/pkg/storage/index"
 	"storemy/pkg/storage/index/btree"
 	"storemy/pkg/storage/index/hash"
@@ -56,7 +57,7 @@ func newIndexLoader(catalog CatalogReader, pageStore *memory.PageStore) *indexLo
 // Returns:
 //   - A slice of indexWithMetadata containing successfully opened indexes
 //   - An error if catalog access fails
-func (il *indexLoader) loadAndOpenIndexes(ctx TxCtx, tableID int) ([]*indexWithMetadata, error) {
+func (il *indexLoader) loadAndOpenIndexes(ctx TxCtx, tableID primitives.TableID) ([]*indexWithMetadata, error) {
 	metadataList, err := il.loadFromCatalog(ctx, tableID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get indexes from catalog: %v", err)
@@ -90,7 +91,7 @@ func (il *indexLoader) loadAndOpenIndexes(ctx TxCtx, tableID int) ([]*indexWithM
 // Returns:
 //   - A slice of complete IndexMetadata with resolved schema information
 //   - An error if catalog access or schema retrieval fails
-func (il *indexLoader) loadFromCatalog(ctx TxCtx, tableID int) ([]*IndexMetadata, error) {
+func (il *indexLoader) loadFromCatalog(ctx TxCtx, tableID primitives.TableID) ([]*IndexMetadata, error) {
 	catalogIndexes, err := il.catalog.GetIndexesByTable(ctx, tableID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get indexes from catalog: %v", err)
@@ -124,9 +125,9 @@ func resolveIndexMetadata(catalogIndexes []*systemtable.IndexMetadata, schema *s
 	result := make([]*IndexMetadata, 0, len(catalogIndexes))
 
 	for _, catIdx := range catalogIndexes {
-		columnIndex, keyType := findColumnInfo(schema, catIdx.ColumnName)
+		columnIndex, keyType, err := findColumnInfo(schema, catIdx.ColumnName)
 
-		if columnIndex == -1 {
+		if err != nil {
 			fmt.Fprintf(os.Stderr, "Warning: column %s not found in schema for index %s\n",
 				catIdx.ColumnName, catIdx.IndexName)
 			continue
@@ -153,14 +154,15 @@ func resolveIndexMetadata(catalogIndexes []*systemtable.IndexMetadata, schema *s
 //   - The zero-based index of the column in the schema
 //   - The data type of the column
 //   - Returns (-1, IntType) if the column is not found
-func findColumnInfo(schema *schema.Schema, columnName string) (int, types.Type) {
-	for i := 0; i < schema.TupleDesc.NumFields(); i++ {
+func findColumnInfo(schema *schema.Schema, columnName string) (primitives.ColumnID, types.Type, error) {
+	var i primitives.ColumnID
+	for i = 0; i < schema.TupleDesc.NumFields(); i++ {
 		fieldName, _ := schema.TupleDesc.GetFieldName(i)
 		if fieldName == columnName {
-			return i, schema.TupleDesc.Types[i]
+			return i, schema.TupleDesc.Types[i], nil
 		}
 	}
-	return -1, types.IntType
+	return 0, types.IntType, fmt.Errorf("column %s not found", columnName)
 }
 
 // openIndex opens an index file based on its metadata.
@@ -236,6 +238,6 @@ func (il *indexLoader) openHashIndex(ctx TxCtx, m *IndexMetadata) (*hashindex.Ha
 // Returns:
 //   - A slice of indexWithMetadata containing successfully opened indexes
 //   - An error if loading or opening fails
-func (im *IndexManager) loadAndOpenIndexes(ctx TxCtx, tableID int) ([]*indexWithMetadata, error) {
+func (im *IndexManager) loadAndOpenIndexes(ctx TxCtx, tableID primitives.TableID) ([]*indexWithMetadata, error) {
 	return im.loader.loadAndOpenIndexes(ctx, tableID)
 }
