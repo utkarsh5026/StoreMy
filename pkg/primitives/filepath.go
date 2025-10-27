@@ -26,7 +26,7 @@ import (
 //	}
 type Filepath string
 
-// Hash generates a unique TableID from the file path using FNV-1a hashing.
+// Hash generates a unique FileID from the file path using FNV-1a hashing.
 // This hash is used as the physical file identifier throughout the system.
 //
 // The hash provides:
@@ -35,16 +35,45 @@ type Filepath string
 //   - Collision resistance for different paths
 //
 // Returns:
-//   - TableID: A 64-bit hash value representing this file path
+//   - FileID: A 64-bit hash value representing this file path
 //
 // Example:
 //
 //	path := primitives.Filepath("/data/users.dat")
-//	tableID := path.Hash() // Returns consistent ID for this path
-func (f Filepath) Hash() TableID {
+//	fileID := path.Hash() // Returns consistent ID for this path
+//	tableID := path.HashAsTableID() // Or get directly as TableID
+func (f Filepath) Hash() FileID {
 	h := fnv.New64a()
 	h.Write([]byte(f))
-	return TableID(h.Sum64())
+	return FileID(h.Sum64())
+}
+
+// HashAsTableID generates a TableID by hashing the file path.
+// This is a convenience method for when you know the path represents a table file.
+//
+// Returns:
+//   - TableID: A 64-bit hash value as a TableID
+//
+// Example:
+//
+//	tablePath := primitives.Filepath("/data/users.dat")
+//	tableID := tablePath.HashAsTableID()
+func (f Filepath) HashAsTableID() TableID {
+	return TableID(f.Hash())
+}
+
+// HashAsIndexID generates an IndexID by hashing the file path.
+// This is a convenience method for when you know the path represents an index file.
+//
+// Returns:
+//   - IndexID: A 64-bit hash value as an IndexID
+//
+// Example:
+//
+//	indexPath := primitives.Filepath("/data/indexes/users_id.idx")
+//	indexID := indexPath.HashAsIndexID()
+func (f Filepath) HashAsIndexID() IndexID {
+	return IndexID(f.Hash())
 }
 
 // Dir returns the directory portion of the file path.
