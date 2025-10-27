@@ -35,7 +35,7 @@ type DbFile interface {
 	PageIO // Embeds PageIO for read/write operations (ReadPage, WritePage)
 
 	// GetID returns the unique identifier of the database file.
-	GetID() primitives.TableID
+	GetID() primitives.FileID
 
 	// GetTupleDesc returns the tuple description associated with the database file.
 	// The tuple description defines the schema and structure of the tuples stored in the file.

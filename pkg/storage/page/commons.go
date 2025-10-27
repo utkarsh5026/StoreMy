@@ -23,7 +23,7 @@ import (
 // Thread-safety: All public methods use read/write locks to ensure safe concurrent access.
 type BaseFile struct {
 	file     *os.File            // The underlying OS file handle for I/O operations
-	fileID   primitives.TableID  // Unique identifier generated from the file path hash
+	fileID   primitives.FileID   // Unique identifier generated from the file path hash
 	mutex    sync.RWMutex        // Read-write mutex for thread-safe operations
 	filePath primitives.Filepath // Absolute path to the database file
 }
@@ -64,7 +64,7 @@ func NewBaseFile(filePath primitives.Filepath) (*BaseFile, error) {
 //
 // Returns:
 //   - int: The unique file identifier
-func (bf *BaseFile) GetID() primitives.TableID {
+func (bf *BaseFile) GetID() primitives.FileID {
 	return bf.fileID
 }
 

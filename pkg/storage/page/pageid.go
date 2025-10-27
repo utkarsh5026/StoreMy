@@ -10,22 +10,24 @@ import (
 type PageType uint8
 
 // PageDescriptor represents a unique identifier for a heap page
+// Deprecated: Use HeapPageDescriptor or IndexPageDescriptor instead
 type PageDescriptor struct {
-	tableID primitives.TableID
+	fileID  primitives.FileID
 	pageNum primitives.PageNumber
 }
 
 // NewPageDescriptor creates a new page descriptor
-func NewPageDescriptor(tableID primitives.TableID, pageNum primitives.PageNumber) *PageDescriptor {
+// Deprecated: Use NewHeapPageDescriptor or NewIndexPageDescriptor instead
+func NewPageDescriptor(fileID primitives.FileID, pageNum primitives.PageNumber) *PageDescriptor {
 	return &PageDescriptor{
-		tableID: tableID,
+		fileID:  fileID,
 		pageNum: pageNum,
 	}
 }
 
-// GetTableID returns the table ID
-func (hpid *PageDescriptor) GetTableID() primitives.TableID {
-	return hpid.tableID
+// FileID returns the file ID
+func (hpid *PageDescriptor) FileID() primitives.FileID {
+	return hpid.fileID
 }
 
 // PageNo returns the page number
@@ -36,7 +38,7 @@ func (hpid *PageDescriptor) PageNo() primitives.PageNumber {
 // Serialize returns this page ID as an array of integers
 func (hpid *PageDescriptor) Serialize() []byte {
 	buf := make([]byte, 16)
-	binary.LittleEndian.PutUint64(buf[0:8], uint64(hpid.tableID))
+	binary.LittleEndian.PutUint64(buf[0:8], uint64(hpid.fileID))
 	binary.LittleEndian.PutUint64(buf[8:16], uint64(hpid.pageNum))
 	return buf
 }
@@ -46,12 +48,12 @@ func (hpid *PageDescriptor) Equals(other primitives.PageID) bool {
 	if other == nil {
 		return false
 	}
-	return hpid.tableID == other.GetTableID() && hpid.pageNum == other.PageNo()
+	return hpid.fileID == other.FileID() && hpid.pageNum == other.PageNo()
 }
 
 // String returns a string representation of this heap page ID
 func (hpid *PageDescriptor) String() string {
-	return fmt.Sprintf("PageDescriptor(table=%d, page=%d)", hpid.tableID, hpid.pageNum)
+	return fmt.Sprintf("PageDescriptor(file=%d, page=%d)", hpid.fileID, hpid.pageNum)
 }
 
 // HashCode returns a hash code for this heap page ID
