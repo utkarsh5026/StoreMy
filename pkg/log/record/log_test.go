@@ -8,11 +8,11 @@ import (
 
 // mockPageIDForLog implements primitives.PageID for testing
 type mockPageIDForLog struct {
-	tableID primitives.TableID
+	tableID primitives.FileID
 	pageNo  primitives.PageNumber
 }
 
-func (m *mockPageIDForLog) GetTableID() primitives.TableID {
+func (m *mockPageIDForLog) FileID() primitives.FileID {
 	return m.tableID
 }
 
@@ -21,7 +21,7 @@ func (m *mockPageIDForLog) PageNo() primitives.PageNumber {
 }
 
 func (m *mockPageIDForLog) Equals(other primitives.PageID) bool {
-	return m.GetTableID() == other.GetTableID() && m.PageNo() == other.PageNo()
+	return m.FileID() == other.FileID() && m.PageNo() == other.PageNo()
 }
 
 func (m *mockPageIDForLog) HashCode() primitives.HashCode {
@@ -165,8 +165,8 @@ func TestNewLogRecord_InsertRecord(t *testing.T) {
 		t.Errorf("expected AfterImage to be 'new_data', got %s", string(record.AfterImage))
 	}
 
-	if record.PageID.GetTableID() != 5 {
-		t.Errorf("expected TableID to be 5, got %d", record.PageID.GetTableID())
+	if record.PageID.FileID() != 5 {
+		t.Errorf("expected TableID to be 5, got %d", record.PageID.FileID())
 	}
 
 	if record.PageID.PageNo() != 10 {
@@ -216,8 +216,8 @@ func TestNewLogRecord_UpdateRecord(t *testing.T) {
 		t.Errorf("expected AfterImage to be 'new_value', got %s", string(record.AfterImage))
 	}
 
-	if record.PageID.GetTableID() != 2 {
-		t.Errorf("expected TableID to be 2, got %d", record.PageID.GetTableID())
+	if record.PageID.FileID() != 2 {
+		t.Errorf("expected TableID to be 2, got %d", record.PageID.FileID())
 	}
 
 	if record.PageID.PageNo() != 15 {

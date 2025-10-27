@@ -10,11 +10,11 @@ import (
 
 // mockPageID is a simple implementation of PageID for testing
 type mockPageID struct {
-	tableID primitives.TableID
+	tableID primitives.FileID
 	pageNo  primitives.PageNumber
 }
 
-func (m *mockPageID) GetTableID() primitives.TableID {
+func (m *mockPageID) FileID() primitives.FileID {
 	return m.tableID
 }
 

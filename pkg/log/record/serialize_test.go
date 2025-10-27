@@ -11,11 +11,11 @@ import (
 
 // MockPageID implements PageID interface for testing
 type MockPageID struct {
-	tableID primitives.TableID
+	tableID primitives.FileID
 	pageNo  primitives.PageNumber
 }
 
-func (m *MockPageID) GetTableID() primitives.TableID {
+func (m *MockPageID) FileID() primitives.FileID {
 	return m.tableID
 }
 
@@ -37,7 +37,7 @@ func (m *MockPageID) Serialize() []byte {
 }
 
 func (m *MockPageID) Equals(other primitives.PageID) bool {
-	return m.tableID == other.GetTableID() && m.pageNo == other.PageNo()
+	return m.tableID == other.FileID() && m.pageNo == other.PageNo()
 }
 
 func (m *MockPageID) HashCode() primitives.HashCode {
@@ -485,8 +485,8 @@ func TestDeserializeLogRecord_UpdateRecord(t *testing.T) {
 	if deserialized.Type != original.Type {
 		t.Errorf("Type mismatch: got %v, want %v", deserialized.Type, original.Type)
 	}
-	if deserialized.PageID.GetTableID() != pageID.GetTableID() {
-		t.Errorf("TableID mismatch: got %d, want %d", deserialized.PageID.GetTableID(), pageID.GetTableID())
+	if deserialized.PageID.FileID() != pageID.FileID() {
+		t.Errorf("TableID mismatch: got %d, want %d", deserialized.PageID.FileID(), pageID.FileID())
 	}
 	if deserialized.PageID.PageNo() != pageID.PageNo() {
 		t.Errorf("PageNo mismatch: got %d, want %d", deserialized.PageID.PageNo(), pageID.PageNo())

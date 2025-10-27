@@ -172,7 +172,7 @@ func TestConcurrentWrites(t *testing.T) {
 			}
 
 			for j := 0; j < opsPerGoroutine; j++ {
-				pageID := &mockPageID{tableID: primitives.TableID(routineID), pageNo: primitives.PageNumber(j)}
+				pageID := &mockPageID{tableID: primitives.FileID(routineID), pageNo: primitives.PageNumber(j)}
 				_, err := wal.LogUpdate(tid, pageID, []byte(fmt.Sprintf("before_%d_%d", routineID, j)), []byte(fmt.Sprintf("after_%d_%d", routineID, j)))
 				if err != nil {
 					errors <- fmt.Errorf("goroutine %d: LogUpdate failed: %v", routineID, err)
@@ -571,7 +571,7 @@ func TestStressTest(t *testing.T) {
 				}
 
 				for k := 0; k < opsPerTxn; k++ {
-					pageID := &mockPageID{tableID: primitives.TableID(routineID), pageNo: primitives.PageNumber(k)}
+					pageID := &mockPageID{tableID: primitives.FileID(routineID), pageNo: primitives.PageNumber(k)}
 
 					switch k % 3 {
 					case 0:
