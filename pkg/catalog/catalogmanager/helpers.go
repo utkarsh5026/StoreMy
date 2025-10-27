@@ -43,8 +43,8 @@ func (cm *CatalogManager) registerTable(tx TxContext, sch *schema.Schema, filepa
 //
 // This is typically called as part of a DROP TABLE operation.
 // Note: This only removes catalog entries - the heap file must be deleted separately.
-func (cm *CatalogManager) DeleteCatalogEntry(tx TxContext, tableID primitives.TableID) error {
-	sysTableIDs := []primitives.TableID{
+func (cm *CatalogManager) DeleteCatalogEntry(tx TxContext, tableID primitives.FileID) error {
+	sysTableIDs := []primitives.FileID{
 		cm.SystemTabs.TablesTableID,
 		cm.SystemTabs.ColumnsTableID,
 		cm.SystemTabs.StatisticsTableID,
@@ -61,7 +61,7 @@ func (cm *CatalogManager) DeleteCatalogEntry(tx TxContext, tableID primitives.Ta
 
 // DeleteTableFromSysTable removes all entries for a specific table from a given system table.
 // Due to MVCC, there may be multiple versions of tuples for the same table - this deletes all.
-func (cm *CatalogManager) DeleteTableFromSysTable(tx TxContext, tableID, sysTableID primitives.TableID) error {
+func (cm *CatalogManager) DeleteTableFromSysTable(tx TxContext, tableID, sysTableID primitives.FileID) error {
 	tableInfo, err := cm.tableCache.GetTableInfo(sysTableID)
 	if err != nil {
 		return err
@@ -99,7 +99,7 @@ func (cm *CatalogManager) DeleteTableFromSysTable(tx TxContext, tableID, sysTabl
 
 // GetTableMetadataByID retrieves complete table metadata from CATALOG_TABLES by table ID.
 // Returns TableMetadata or an error if the table is not found.
-func (cm *CatalogManager) GetTableMetadataByID(tx TxContext, tableID primitives.TableID) (*systemtable.TableMetadata, error) {
+func (cm *CatalogManager) GetTableMetadataByID(tx TxContext, tableID primitives.FileID) (*systemtable.TableMetadata, error) {
 	return cm.tableOps.GetTableMetadataByID(tx, tableID)
 }
 
@@ -117,7 +117,7 @@ func (cm *CatalogManager) GetAllTables(tx TxContext) ([]*systemtable.TableMetada
 
 // LoadTableSchema reconstructs the complete schema for a table from CATALOG_COLUMNS.
 // This includes column definitions, types, and constraints.
-func (cm *CatalogManager) LoadTableSchema(tx TxContext, tableID primitives.TableID) (*schema.Schema, error) {
+func (cm *CatalogManager) LoadTableSchema(tx TxContext, tableID primitives.FileID) (*schema.Schema, error) {
 	tm, err := cm.GetTableMetadataByID(tx, tableID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get table metadata: %w", err)
@@ -142,7 +142,7 @@ func (cm *CatalogManager) LoadTableSchema(tx TxContext, tableID primitives.Table
 
 // iterateTable scans all tuples in a table and applies a processing function to each.
 // This is the core primitive for catalog queries, handling MVCC visibility and locking.
-func (cm *CatalogManager) iterateTable(tableID primitives.TableID, tx TxContext, processFunc func(*tuple.Tuple) error) error {
+func (cm *CatalogManager) iterateTable(tableID primitives.FileID, tx TxContext, processFunc func(*tuple.Tuple) error) error {
 	file, err := cm.tableCache.GetDbFile(tableID)
 	if err != nil {
 		return fmt.Errorf("failed to get table file: %w", err)
@@ -165,19 +165,19 @@ func (cm *CatalogManager) iterateTable(tableID primitives.TableID, tx TxContext,
 
 // IterateTable implements CatalogReader interface by delegating to CatalogIO.
 // Scans all tuples in a table and applies a processing function to each.
-func (cm *CatalogManager) IterateTable(tableID primitives.TableID, tx TxContext, processFunc func(Tuple) error) error {
+func (cm *CatalogManager) IterateTable(tableID primitives.FileID, tx TxContext, processFunc func(Tuple) error) error {
 	return cm.io.IterateTable(tableID, tx, processFunc)
 }
 
 // InsertRow implements CatalogWriter interface by delegating to CatalogIO.
 // Inserts a tuple into a table within a transaction.
-func (cm *CatalogManager) InsertRow(tableID primitives.TableID, tx TxContext, tup Tuple) error {
+func (cm *CatalogManager) InsertRow(tableID primitives.FileID, tx TxContext, tup Tuple) error {
 	return cm.io.InsertRow(tableID, tx, tup)
 }
 
 // DeleteRow implements CatalogWriter interface by delegating to CatalogIO.
 // Deletes a tuple from a table within a transaction.
-func (cm *CatalogManager) DeleteRow(tableID primitives.TableID, tx TxContext, tup Tuple) error {
+func (cm *CatalogManager) DeleteRow(tableID primitives.FileID, tx TxContext, tup Tuple) error {
 	return cm.io.DeleteRow(tableID, tx, tup)
 }
 

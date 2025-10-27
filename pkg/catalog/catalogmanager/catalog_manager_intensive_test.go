@@ -1044,7 +1044,7 @@ func TestCatalogManager_CreateDropMultipleTables(t *testing.T) {
 	fields := []FieldMetadata{{Name: "id", Type: types.IntType}}
 
 	// Create 10 tables
-	tableIDs := make([]primitives.TableID, 10)
+	tableIDs := make([]primitives.FileID, 10)
 	for i := 0; i < 10; i++ {
 		tableName := filepath.Base(setup.tempDir) + "_multi_table_" + string(rune('0'+i))
 		tableSchema := createTestSchema(tableName, "id", fields)

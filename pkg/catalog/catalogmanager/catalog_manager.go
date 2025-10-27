@@ -44,7 +44,7 @@ type CatalogManager struct {
 
 	// File ownership - tracks all open table files for lifecycle management
 	mu        sync.RWMutex // protects openFiles and concurrent operations
-	openFiles map[primitives.TableID]*heap.HeapFile
+	openFiles map[primitives.FileID]*heap.HeapFile
 
 	// Domain-specific operation handlers
 	indexOps      *ops.IndexOperations
@@ -74,7 +74,7 @@ func NewCatalogManager(ps *memory.PageStore, dataDir string) *CatalogManager {
 		tableCache: cache,
 		dataDir:    dataDir,
 		tupMgr:     table.NewTupleManager(ps),
-		openFiles:  make(map[primitives.TableID]*heap.HeapFile),
+		openFiles:  make(map[primitives.FileID]*heap.HeapFile),
 	}
 }
 

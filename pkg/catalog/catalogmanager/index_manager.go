@@ -46,7 +46,7 @@ type indexCol struct {
 // Returns:
 //   - filePath: Path where index file was created
 //   - error: Error if validation or registration fails
-func (cm *CatalogManager) CreateIndex(tx TxContext, indexID primitives.IndexID, indexName, tableName, columnName string, indexType index.IndexType) (filePath primitives.Filepath, err error) {
+func (cm *CatalogManager) CreateIndex(tx TxContext, indexID primitives.FileID, indexName, tableName, columnName string, indexType index.IndexType) (filePath primitives.Filepath, err error) {
 	cm.mu.Lock()
 	defer cm.mu.Unlock()
 
@@ -66,7 +66,7 @@ func (cm *CatalogManager) CreateIndex(tx TxContext, indexID primitives.IndexID, 
 
 // registerIndexWithTableID is an internal helper that creates an index when tableID is already known.
 // This is used by both CreateIndex (which looks up tableID) and RegisterTable (which already has tableID).
-func (cm *CatalogManager) registerIndexWithTableID(tx TxContext, tableID primitives.TableID, indexID primitives.IndexID, indexCol *indexCol) (filePath primitives.Filepath, err error) {
+func (cm *CatalogManager) registerIndexWithTableID(tx TxContext, tableID primitives.FileID, indexID primitives.FileID, indexCol *indexCol) (filePath primitives.Filepath, err error) {
 	cols, err := cm.colOps.LoadColumnMetadata(tx, tableID)
 	if err != nil {
 		return "", fmt.Errorf("failed to get table schema: %w", err)
@@ -113,7 +113,7 @@ func (cm *CatalogManager) persistIndexMetadata(tx TxContext, metadata systemtabl
 	return nil
 }
 
-func (cm *CatalogManager) buildIndexMetadata(tableID primitives.TableID, indexID primitives.IndexID, indexCol *indexCol) *systemtable.IndexMetadata {
+func (cm *CatalogManager) buildIndexMetadata(tableID primitives.FileID, indexID primitives.FileID, indexCol *indexCol) *systemtable.IndexMetadata {
 	fileName := fmt.Sprintf("%s_%s.idx", indexCol.tableName, indexCol.indexName)
 	filePath := filepath.Join(cm.dataDir, fileName)
 	metadata := systemtable.IndexMetadata{
@@ -166,7 +166,7 @@ func (cm *CatalogManager) DropIndex(tx TxContext, indexName string) (filePath pr
 // Returns:
 //   - []*IndexMetadata: List of index metadata
 //   - error: Error if catalog read fails
-func (cm *CatalogManager) GetIndexesByTable(tx TxContext, tableID primitives.TableID) ([]*systemtable.IndexMetadata, error) {
+func (cm *CatalogManager) GetIndexesByTable(tx TxContext, tableID primitives.FileID) ([]*systemtable.IndexMetadata, error) {
 	return cm.indexOps.GetIndexesByTable(tx, tableID)
 }
 
@@ -224,7 +224,7 @@ func (cm *CatalogManager) IndexExists(tx TxContext, indexName string) bool {
 // Returns:
 //   - []*IndexInfo: List of index information
 //   - error: Error if catalog read fails
-func (cm *CatalogManager) GetIndexesForTable(tx TxContext, tableID primitives.TableID) ([]*IndexInfo, error) {
+func (cm *CatalogManager) GetIndexesForTable(tx TxContext, tableID primitives.FileID) ([]*IndexInfo, error) {
 	var indexes []*IndexInfo
 
 	idxs, err := cm.indexOps.GetIndexesByTable(tx, tableID)

@@ -55,10 +55,10 @@ func setupTest(t *testing.T) *testSetup {
 }
 
 // generateIndexID generates a fake index ID for testing (matches the old behavior)
-func (s *testSetup) generateIndexID(tableName, indexName string) primitives.IndexID {
+func (s *testSetup) generateIndexID(tableName, indexName string) primitives.FileID {
 	fileName := fmt.Sprintf("%s_%s.idx", tableName, indexName)
 	filePath := filepath.Join(s.tempDir, fileName)
-	return primitives.IndexID(hashFilePath(filePath))
+	return primitives.FileID(hashFilePath(filePath))
 }
 
 // cleanup closes all resources

@@ -20,7 +20,7 @@ import (
 // Returns:
 //   - tableID: The table's ID
 //   - error: Error if table is not found
-func (cm *CatalogManager) GetTableID(tx TxContext, tableName string) (primitives.TableID, error) {
+func (cm *CatalogManager) GetTableID(tx TxContext, tableName string) (primitives.FileID, error) {
 	if id, err := cm.tableCache.GetTableID(tableName); err == nil {
 		return id, nil
 	}
@@ -43,7 +43,7 @@ func (cm *CatalogManager) GetTableID(tx TxContext, tableName string) (primitives
 // Returns:
 //   - tableName: The table's name
 //   - error: Error if table is not found
-func (cm *CatalogManager) GetTableName(tx TxContext, tableID primitives.TableID) (string, error) {
+func (cm *CatalogManager) GetTableName(tx TxContext, tableID primitives.FileID) (string, error) {
 	if info, err := cm.tableCache.GetTableInfo(tableID); err == nil {
 		return info.Schema.TableName, nil
 	}
@@ -66,7 +66,7 @@ func (cm *CatalogManager) GetTableName(tx TxContext, tableID primitives.TableID)
 // Returns:
 //   - schema: The table's schema definition
 //   - error: Error if schema cannot be retrieved
-func (cm *CatalogManager) GetTableSchema(tx TxContext, tableID primitives.TableID) (*schema.Schema, error) {
+func (cm *CatalogManager) GetTableSchema(tx TxContext, tableID primitives.FileID) (*schema.Schema, error) {
 	if info, err := cm.tableCache.GetTableInfo(tableID); err == nil {
 		return info.Schema, nil
 	}
@@ -89,7 +89,7 @@ func (cm *CatalogManager) GetTableSchema(tx TxContext, tableID primitives.TableI
 // Returns:
 //   - DbFile: The table's heap file
 //   - error: Error if table is not in cache
-func (cm *CatalogManager) GetTableFile(tableID primitives.TableID) (page.DbFile, error) {
+func (cm *CatalogManager) GetTableFile(tableID primitives.FileID) (page.DbFile, error) {
 	file, err := cm.tableCache.GetDbFile(tableID)
 	if err != nil {
 		allTables := cm.tableCache.GetAllTableNames()
@@ -191,23 +191,26 @@ func (cm *CatalogManager) ClearCache() {
 	}
 
 	for _, name := range tableNames {
-		if !systemTables[name] {
-			if tableID, err := cm.tableCache.GetTableID(name); err == nil {
-				cm.mu.Lock()
-				heapFile, exists := cm.openFiles[tableID]
-				if exists {
-					delete(cm.openFiles, tableID)
-				}
-				cm.mu.Unlock()
-
-				if exists {
-					heapFile.Close()
-				}
-				cm.store.UnregisterDbFile(tableID)
-			}
-			cm.tableCache.RemoveTable(name)
+		if systemTables[name] {
+			continue
 		}
+
+		if tableID, err := cm.tableCache.GetTableID(name); err == nil {
+			cm.mu.Lock()
+			heapFile, exists := cm.openFiles[tableID]
+			if exists {
+				delete(cm.openFiles, tableID)
+			}
+			cm.mu.Unlock()
+
+			if exists {
+				heapFile.Close()
+			}
+			cm.store.UnregisterDbFile(tableID)
+		}
+		cm.tableCache.RemoveTable(name)
 	}
+
 }
 
 // ClearCacheCompletely removes ALL tables from memory cache including system tables.
@@ -248,7 +251,7 @@ func (cm *CatalogManager) ClearCacheCompletely() {
 // Returns:
 //   - AutoIncrementInfo: Auto-increment metadata (nil if none)
 //   - error: Error if catalog read fails
-func (cm *CatalogManager) GetAutoIncrementColumn(tx TxContext, tableID primitives.TableID) (AutoIncrementInfo, error) {
+func (cm *CatalogManager) GetAutoIncrementColumn(tx TxContext, tableID primitives.FileID) (AutoIncrementInfo, error) {
 	return cm.colOps.GetAutoIncrementColumn(tx, tableID)
 }
 
@@ -263,6 +266,6 @@ func (cm *CatalogManager) GetAutoIncrementColumn(tx TxContext, tableID primitive
 //   - newValue: The new next_auto_value to set
 //
 // Returns error if the update fails.
-func (cm *CatalogManager) IncrementAutoIncrementValue(tx TxContext, tableID primitives.TableID, columnName string, newValue uint64) error {
+func (cm *CatalogManager) IncrementAutoIncrementValue(tx TxContext, tableID primitives.FileID, columnName string, newValue uint64) error {
 	return cm.colOps.IncrementAutoIncrementValue(tx, tableID, columnName, newValue)
 }

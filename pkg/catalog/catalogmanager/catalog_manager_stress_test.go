@@ -281,7 +281,7 @@ func TestCatalogManager_ConcurrentStatisticsUpdate(t *testing.T) {
 
 	// Create multiple tables
 	numTables := 5
-	tableIDs := make([]primitives.TableID, numTables)
+	tableIDs := make([]primitives.FileID, numTables)
 
 	for i := 0; i < numTables; i++ {
 		tableName := fmt.Sprintf("stats_concurrent_%d", i)
@@ -303,7 +303,7 @@ func TestCatalogManager_ConcurrentStatisticsUpdate(t *testing.T) {
 
 	for i := 0; i < numTables; i++ {
 		wg.Add(1)
-		go func(tableID primitives.TableID) {
+		go func(tableID primitives.FileID) {
 			defer wg.Done()
 
 			tx := setup.beginTx()

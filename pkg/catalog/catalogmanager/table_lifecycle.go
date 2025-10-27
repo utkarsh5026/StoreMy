@@ -2,7 +2,6 @@ package catalogmanager
 
 import (
 	"fmt"
-	"path/filepath"
 	"storemy/pkg/catalog/systemtable"
 	"storemy/pkg/primitives"
 	"storemy/pkg/storage/heap"
@@ -40,7 +39,7 @@ import (
 //	if err != nil {
 //	    log.Fatal(err)
 //	}
-func (cm *CatalogManager) CreateTable(tx TxContext, sch TableSchema) (primitives.TableID, error) {
+func (cm *CatalogManager) CreateTable(tx TxContext, sch TableSchema) (primitives.FileID, error) {
 	if sch == nil {
 		return 0, fmt.Errorf("schema cannot be nil")
 	}
@@ -85,9 +84,9 @@ func (cm *CatalogManager) CreateTable(tx TxContext, sch TableSchema) (primitives
 //   - error: nil on success, error if file creation fails
 func (cm *CatalogManager) createTableFile(sch TableSchema) (*heap.HeapFile, error) {
 	fileName := sch.TableName + ".dat"
-	fullPath := filepath.Join(cm.dataDir, fileName)
+	fullPath := primitives.Filepath(cm.dataDir).Join(fileName)
 
-	heapFile, err := heap.NewHeapFile(primitives.Filepath(fullPath), sch.TupleDesc)
+	heapFile, err := heap.NewHeapFile(fullPath, sch.TupleDesc)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create heap file: %w", err)
 	}

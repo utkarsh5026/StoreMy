@@ -19,7 +19,7 @@ import (
 //   - tableID: ID of the table
 //
 // Returns error if statistics collection or update fails.
-func (cm *CatalogManager) UpdateTableStatistics(tx TxContext, tableID primitives.TableID) error {
+func (cm *CatalogManager) UpdateTableStatistics(tx TxContext, tableID primitives.FileID) error {
 	return cm.statsOps.UpdateTableStatistics(tx, tableID)
 }
 
@@ -35,7 +35,7 @@ func (cm *CatalogManager) UpdateTableStatistics(tx TxContext, tableID primitives
 // Returns:
 //   - *TableStatistics: Table statistics
 //   - error: Error if statistics cannot be retrieved
-func (cm *CatalogManager) GetTableStatistics(tx TxContext, tableID primitives.TableID) (*TableStatistics, error) {
+func (cm *CatalogManager) GetTableStatistics(tx TxContext, tableID primitives.FileID) (*TableStatistics, error) {
 	if stats, found := cm.tableCache.GetCachedStatistics(tableID); found {
 		return stats, nil
 	}
@@ -60,7 +60,7 @@ func (cm *CatalogManager) GetTableStatistics(tx TxContext, tableID primitives.Ta
 // Returns:
 //   - *TableStatistics: Updated table statistics
 //   - error: Error if update or retrieval fails
-func (cm *CatalogManager) RefreshStatistics(tx TxContext, tableID primitives.TableID) (*TableStatistics, error) {
+func (cm *CatalogManager) RefreshStatistics(tx TxContext, tableID primitives.FileID) (*TableStatistics, error) {
 	if err := cm.UpdateTableStatistics(tx, tableID); err != nil {
 		return nil, err
 	}
@@ -92,7 +92,7 @@ func (cm *CatalogManager) RefreshStatistics(tx TxContext, tableID primitives.Tab
 //   - error: Error if collection fails
 func (cm *CatalogManager) CollectColumnStatistics(
 	tx TxContext,
-	tableID primitives.TableID,
+	tableID primitives.FileID,
 	columnName string,
 	columnIndex primitives.ColumnID,
 	histogramBuckets int,
@@ -115,7 +115,7 @@ func (cm *CatalogManager) CollectColumnStatistics(
 //   - tableID: ID of the table
 //
 // Returns error if any column statistics update fails.
-func (cm *CatalogManager) UpdateColumnStatistics(tx TxContext, tableID primitives.TableID) error {
+func (cm *CatalogManager) UpdateColumnStatistics(tx TxContext, tableID primitives.FileID) error {
 	return cm.colStatsOps.UpdateColumnStatistics(tx, tableID)
 }
 
@@ -134,7 +134,7 @@ func (cm *CatalogManager) UpdateColumnStatistics(tx TxContext, tableID primitive
 //   - error: Error if statistics cannot be retrieved
 func (cm *CatalogManager) GetColumnStatistics(
 	tx TxContext,
-	tableID primitives.TableID,
+	tableID primitives.FileID,
 	columnName string,
 ) (*ColumnStatistics, error) {
 	if cm.colStatsOps == nil {
@@ -189,8 +189,8 @@ func (cm *CatalogManager) GetColumnStatistics(
 //   - error: Error if collection fails
 func (cm *CatalogManager) CollectIndexStatistics(
 	tx TxContext,
-	indexID primitives.IndexID,
-	tableID primitives.TableID,
+	indexID primitives.FileID,
+	tableID primitives.FileID,
 	indexName string,
 	indexType index.IndexType,
 	columnName string,
@@ -207,7 +207,7 @@ func (cm *CatalogManager) CollectIndexStatistics(
 //   - tableID: ID of the table
 //
 // Returns error if any index statistics update fails.
-func (cm *CatalogManager) UpdateIndexStatistics(tx TxContext, tableID primitives.TableID) error {
+func (cm *CatalogManager) UpdateIndexStatistics(tx TxContext, tableID primitives.FileID) error {
 	return cm.indexStatsOps.UpdateIndexStatistics(tx, tableID)
 }
 
@@ -222,7 +222,7 @@ func (cm *CatalogManager) UpdateIndexStatistics(tx TxContext, tableID primitives
 //   - error: Error if statistics cannot be retrieved
 func (cm *CatalogManager) GetIndexStatistics(
 	tx TxContext,
-	indexID primitives.IndexID,
+	indexID primitives.FileID,
 ) (*IndexStatistics, error) {
 	return cm.indexStatsOps.GetIndexStatistics(tx, indexID)
 }

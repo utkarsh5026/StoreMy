@@ -36,14 +36,14 @@ type (
 //   - CATALOG_COLUMN_STATISTICS: column-level statistics
 //   - CATALOG_INDEX_STATISTICS: index statistics
 type SystemTableIDs struct {
-	TablesTableID, StatisticsTableID        primitives.TableID
-	ColumnsTableID, ColumnStatisticsTableID primitives.TableID
-	IndexesTableID, IndexStatisticsTableID  primitives.TableID
+	TablesTableID, StatisticsTableID        primitives.FileID
+	ColumnsTableID, ColumnStatisticsTableID primitives.FileID
+	IndexesTableID, IndexStatisticsTableID  primitives.FileID
 }
 
 // GetSysTable returns the SystemTable interface for a given system table ID.
 // This is used to access system table-specific methods like TableIDIndex().
-func (st *SystemTableIDs) GetSysTable(id primitives.TableID) (systemtable.SystemTable, error) {
+func (st *SystemTableIDs) GetSysTable(id primitives.FileID) (systemtable.SystemTable, error) {
 	switch id {
 	case st.TablesTableID:
 		return systemtable.Tables, nil
@@ -64,7 +64,7 @@ func (st *SystemTableIDs) GetSysTable(id primitives.TableID) (systemtable.System
 
 // SetSystemTableID sets the appropriate system table ID field based on table name.
 // Called during initialization to track the IDs of all system catalog tables.
-func (st *SystemTableIDs) SetSystemTableID(tableName string, tableID primitives.TableID) {
+func (st *SystemTableIDs) SetSystemTableID(tableName string, tableID primitives.FileID) {
 	switch tableName {
 	case systemtable.Tables.TableName():
 		st.TablesTableID = tableID
@@ -84,7 +84,7 @@ func (st *SystemTableIDs) SetSystemTableID(tableName string, tableID primitives.
 // ColumnStatistics represents detailed statistics for a single column.
 // Used by the query optimizer for selectivity estimation and cardinality calculation.
 type ColumnStatistics struct {
-	TableID        primitives.TableID    // Table identifier
+	TableID        primitives.FileID     // Table identifier
 	ColumnName     string                // Column name
 	ColumnIndex    primitives.ColumnID   // Column position in table (0-based)
 	DistinctCount  uint64                // Number of distinct values (NDV)
@@ -101,8 +101,8 @@ type ColumnStatistics struct {
 // IndexInfo represents basic index metadata.
 // This is a lightweight view of index information for query planning.
 type IndexInfo struct {
-	IndexID    primitives.IndexID  // Unique index identifier
-	TableID    primitives.TableID  // Table this index belongs to
+	IndexID    primitives.FileID   // Unique index identifier
+	TableID    primitives.FileID   // Table this index belongs to
 	IndexName  string              // Index name
 	IndexType  index.IndexType     // Index type (B-Tree, Hash, etc.)
 	ColumnName string              // Column being indexed
