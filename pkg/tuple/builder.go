@@ -22,12 +22,64 @@ func NewBuilder(td *TupleDescription) *Builder {
 	}
 }
 
-// AddInt adds an integer field at the current index
+// AddInt adds an integer field at the current index (backward compatible, uses int64)
 func (b *Builder) AddInt(value int64) *Builder {
 	if b.err != nil {
 		return b
 	}
 	if err := b.tuple.SetField(b.currentIndex, types.NewIntField(value)); err != nil {
+		b.err = fmt.Errorf("field %d: %w", b.currentIndex, err)
+		return b
+	}
+	b.currentIndex++
+	return b
+}
+
+// AddInt32 adds a 32-bit signed integer field at the current index
+func (b *Builder) AddInt32(value int32) *Builder {
+	if b.err != nil {
+		return b
+	}
+	if err := b.tuple.SetField(b.currentIndex, types.NewInt32Field(value)); err != nil {
+		b.err = fmt.Errorf("field %d: %w", b.currentIndex, err)
+		return b
+	}
+	b.currentIndex++
+	return b
+}
+
+// AddInt64 adds a 64-bit signed integer field at the current index
+func (b *Builder) AddInt64(value int64) *Builder {
+	if b.err != nil {
+		return b
+	}
+	if err := b.tuple.SetField(b.currentIndex, types.NewInt64Field(value)); err != nil {
+		b.err = fmt.Errorf("field %d: %w", b.currentIndex, err)
+		return b
+	}
+	b.currentIndex++
+	return b
+}
+
+// AddUint32 adds a 32-bit unsigned integer field at the current index
+func (b *Builder) AddUint32(value uint32) *Builder {
+	if b.err != nil {
+		return b
+	}
+	if err := b.tuple.SetField(b.currentIndex, types.NewUint32Field(value)); err != nil {
+		b.err = fmt.Errorf("field %d: %w", b.currentIndex, err)
+		return b
+	}
+	b.currentIndex++
+	return b
+}
+
+// AddUint64 adds a 64-bit unsigned integer field at the current index
+func (b *Builder) AddUint64(value uint64) *Builder {
+	if b.err != nil {
+		return b
+	}
+	if err := b.tuple.SetField(b.currentIndex, types.NewUint64Field(value)); err != nil {
 		b.err = fmt.Errorf("field %d: %w", b.currentIndex, err)
 		return b
 	}
