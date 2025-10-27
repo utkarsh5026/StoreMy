@@ -4,7 +4,6 @@ import (
 	"hash/fnv"
 	"os"
 	"path/filepath"
-	"strings"
 )
 
 // Filepath is a type-safe wrapper around file paths used throughout the database system.
@@ -46,34 +45,6 @@ func (f Filepath) Hash() FileID {
 	h := fnv.New64a()
 	h.Write([]byte(f))
 	return FileID(h.Sum64())
-}
-
-// HashAsTableID generates a TableID by hashing the file path.
-// This is a convenience method for when you know the path represents a table file.
-//
-// Returns:
-//   - TableID: A 64-bit hash value as a TableID
-//
-// Example:
-//
-//	tablePath := primitives.Filepath("/data/users.dat")
-//	tableID := tablePath.HashAsTableID()
-func (f Filepath) HashAsTableID() TableID {
-	return TableID(f.Hash())
-}
-
-// HashAsIndexID generates an IndexID by hashing the file path.
-// This is a convenience method for when you know the path represents an index file.
-//
-// Returns:
-//   - IndexID: A 64-bit hash value as an IndexID
-//
-// Example:
-//
-//	indexPath := primitives.Filepath("/data/indexes/users_id.idx")
-//	indexID := indexPath.HashAsIndexID()
-func (f Filepath) HashAsIndexID() IndexID {
-	return IndexID(f.Hash())
 }
 
 // Dir returns the directory portion of the file path.
@@ -209,59 +180,6 @@ func (f Filepath) MkdirAll(perm os.FileMode) error {
 	return os.MkdirAll(f.Dir(), perm)
 }
 
-// Ext returns the file extension including the dot.
-// Returns empty string if the file has no extension.
-//
-// Returns:
-//   - string: The file extension (e.g., ".dat", ".idx", ".wal")
-//
-// Example:
-//
-//	path := primitives.Filepath("/data/users.dat")
-//	ext := path.Ext() // Returns ".dat"
-func (f Filepath) Ext() string {
-	return filepath.Ext(string(f))
-}
-
-// WithExt returns a new Filepath with the extension replaced.
-// If the new extension doesn't start with a dot, one is automatically added.
-//
-// Parameters:
-//   - newExt: The new extension (with or without leading dot)
-//
-// Returns:
-//   - Filepath: A new Filepath with the replaced extension
-//
-// Example:
-//
-//	path := primitives.Filepath("/data/users.dat")
-//	backup := path.WithExt(".bak")     // Returns "/data/users.bak"
-//	backup2 := path.WithExt("backup")  // Returns "/data/users.backup"
-func (f Filepath) WithExt(newExt string) Filepath {
-	ext := f.Ext()
-	base := strings.TrimSuffix(string(f), ext)
-	if newExt != "" && !strings.HasPrefix(newExt, ".") {
-		newExt = "." + newExt
-	}
-	return Filepath(base + newExt)
-}
-
-// IsAbs reports whether the path is absolute.
-// This is a wrapper around filepath.IsAbs.
-//
-// Returns:
-//   - bool: true if the path is absolute, false if relative
-//
-// Example:
-//
-//	path1 := primitives.Filepath("/data/users.dat")
-//	path2 := primitives.Filepath("data/users.dat")
-//	path1.IsAbs() // Returns true
-//	path2.IsAbs() // Returns false
-func (f Filepath) IsAbs() bool {
-	return filepath.IsAbs(string(f))
-}
-
 // Clean returns the shortest path name equivalent to the path by purely lexical processing.
 // This is a wrapper around filepath.Clean that returns a Filepath type.
 //
@@ -274,22 +192,4 @@ func (f Filepath) IsAbs() bool {
 //	clean := path.Clean() // Returns "/data/users.dat"
 func (f Filepath) Clean() Filepath {
 	return Filepath(filepath.Clean(string(f)))
-}
-
-// Stat returns file information from the filesystem.
-// This is a convenience wrapper around os.Stat.
-//
-// Returns:
-//   - os.FileInfo: File metadata including size, permissions, modification time
-//   - error: nil on success, error if file doesn't exist or stat fails
-//
-// Example:
-//
-//	path := primitives.Filepath("/data/users.dat")
-//	info, err := path.Stat()
-//	if err == nil {
-//	    fmt.Printf("File size: %d bytes\n", info.Size())
-//	}
-func (f Filepath) Stat() (os.FileInfo, error) {
-	return os.Stat(string(f))
 }

@@ -19,14 +19,6 @@ type HashCode uint64
 // This type is typically not used directly - instead use TableID or IndexID for semantic clarity.
 type FileID uint64
 
-// TableID uniquely identifies a database table within the system.
-// It represents the hash of the table's heap file path and is used throughout
-// the system to reference tables in pages, indexes, transactions, and the buffer pool.
-//
-// TableID is fundamentally a FileID but maintains type safety to prevent
-// accidental mixing with IndexID or other file identifiers.
-type TableID FileID
-
 // SlotID represents a slot number within a page (for tuple storage)
 type SlotID uint16
 
@@ -41,14 +33,6 @@ type Timestamp uint64
 
 // ColumnID identifies a column within a table
 type ColumnID uint32
-
-// IndexID uniquely identifies an index within the system.
-// It represents the hash of the index file path and is used throughout
-// the system to reference indexes in the buffer pool and index manager.
-//
-// IndexID is fundamentally a FileID but maintains type safety to prevent
-// accidental mixing with TableID or other file identifiers.
-type IndexID FileID
 
 // CheckpointID identifies a checkpoint in the recovery log
 type CheckpointID uint64

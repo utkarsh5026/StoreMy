@@ -39,44 +39,6 @@ func TestFilepath_Dir(t *testing.T) {
 	}
 }
 
-func TestFilepath_Ext(t *testing.T) {
-	tests := []struct {
-		path     Filepath
-		expected string
-	}{
-		{Filepath("/data/users.dat"), ".dat"},
-		{Filepath("/data/index.idx"), ".idx"},
-		{Filepath("/data/file"), ""},
-	}
-
-	for _, tt := range tests {
-		ext := tt.path.Ext()
-		if ext != tt.expected {
-			t.Errorf("for path '%s', expected ext '%s', got '%s'", tt.path, tt.expected, ext)
-		}
-	}
-}
-
-func TestFilepath_WithExt(t *testing.T) {
-	tests := []struct {
-		path     Filepath
-		newExt   string
-		expected string
-	}{
-		{Filepath("/data/users.dat"), ".bak", "/data/users.bak"},
-		{Filepath("/data/users.dat"), "backup", "/data/users.backup"},
-		{Filepath("/data/file"), ".log", "/data/file.log"},
-	}
-
-	for _, tt := range tests {
-		result := tt.path.WithExt(tt.newExt)
-		if result.String() != tt.expected {
-			t.Errorf("for path '%s' with ext '%s', expected '%s', got '%s'",
-				tt.path, tt.newExt, tt.expected, result.String())
-		}
-	}
-}
-
 func TestFilepath_IsEmpty(t *testing.T) {
 	tests := []struct {
 		path     Filepath
@@ -91,23 +53,6 @@ func TestFilepath_IsEmpty(t *testing.T) {
 		if result != tt.expected {
 			t.Errorf("for path '%s', expected IsEmpty=%v, got %v", tt.path, tt.expected, result)
 		}
-	}
-}
-
-func TestFilepath_IsAbs(t *testing.T) {
-	// Create platform-specific absolute path
-	tmpDir := t.TempDir() // This will be an absolute path
-	absPath := Filepath(tmpDir)
-	relPath := Filepath("data/users.dat")
-
-	// Test absolute path
-	if !absPath.IsAbs() {
-		t.Errorf("path '%s' should be absolute", absPath)
-	}
-
-	// Test relative path
-	if relPath.IsAbs() {
-		t.Errorf("path '%s' should be relative", relPath)
 	}
 }
 
@@ -206,34 +151,5 @@ func TestFilepath_MkdirAll(t *testing.T) {
 	}
 	if !info.IsDir() {
 		t.Errorf("path should be a directory")
-	}
-}
-
-func TestFilepath_Stat(t *testing.T) {
-	// Create a temporary file
-	tmpDir := t.TempDir()
-	testPath := Filepath(filepath.Join(tmpDir, "test_file.dat"))
-
-	// Stat on non-existent file should error
-	_, err := testPath.Stat()
-	if err == nil {
-		t.Errorf("Stat() should error on non-existent file")
-	}
-
-	// Create the file with some content
-	content := []byte("test content")
-	err = os.WriteFile(testPath.String(), content, 0644)
-	if err != nil {
-		t.Fatalf("failed to create test file: %v", err)
-	}
-
-	// Stat should now work
-	info, err := testPath.Stat()
-	if err != nil {
-		t.Errorf("Stat() failed: %v", err)
-	}
-
-	if info.Size() != int64(len(content)) {
-		t.Errorf("expected size %d, got %d", len(content), info.Size())
 	}
 }

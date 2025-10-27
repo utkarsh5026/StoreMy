@@ -4,7 +4,7 @@ package primitives
 // This is a placeholder interface that will be implemented by specific page types
 type PageID interface {
 	// GetTableID returns the table this page belongs to
-	GetTableID() TableID
+	FileID() FileID
 
 	// PageNo returns the page number within the table
 	PageNo() PageNumber
