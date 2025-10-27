@@ -16,7 +16,7 @@ type PageIO interface {
 	// ReadPage retrieves a specific page from the database file by its page ID.
 	// The page contains multiple tuples and metadata about the stored data.
 	// Returns the requested page or an error if the page cannot be read.
-	ReadPage(pid primitives.PageID) (Page, error)
+	ReadPage(pid *PageDescriptor) (Page, error)
 
 	// WritePage persists a page to the database file.
 	// The page will be written to its designated location based on its page ID.
@@ -35,7 +35,7 @@ type DbFile interface {
 	PageIO // Embeds PageIO for read/write operations (ReadPage, WritePage)
 
 	// GetID returns the unique identifier of the database file.
-	GetID() int
+	GetID() primitives.TableID
 
 	// GetTupleDesc returns the tuple description associated with the database file.
 	// The tuple description defines the schema and structure of the tuples stored in the file.

@@ -3,7 +3,7 @@ package page
 import (
 	"fmt"
 	"os"
-	"storemy/pkg/utils"
+	"storemy/pkg/primitives"
 	"sync"
 )
 
@@ -22,10 +22,10 @@ import (
 //
 // Thread-safety: All public methods use read/write locks to ensure safe concurrent access.
 type BaseFile struct {
-	file     *os.File     // The underlying OS file handle for I/O operations
-	fileID   int          // Unique identifier generated from the file path hash
-	mutex    sync.RWMutex // Read-write mutex for thread-safe operations
-	filePath string       // Absolute path to the database file
+	file     *os.File            // The underlying OS file handle for I/O operations
+	fileID   primitives.TableID  // Unique identifier generated from the file path hash
+	mutex    sync.RWMutex        // Read-write mutex for thread-safe operations
+	filePath primitives.Filepath // Absolute path to the database file
 }
 
 // NewBaseFile creates a new base file handler.
@@ -40,20 +40,20 @@ type BaseFile struct {
 // Returns:
 //   - *BaseFile: A pointer to the initialized BaseFile structure
 //   - error: An error if the filename is empty or file opening fails
-func NewBaseFile(filename string) (*BaseFile, error) {
-	if filename == "" {
-		return nil, fmt.Errorf("filename cannot be empty")
+func NewBaseFile(filePath primitives.Filepath) (*BaseFile, error) {
+	if filePath == "" {
+		return nil, fmt.Errorf("filePath cannot be empty")
 	}
 
-	file, err := utils.OpenFile(filename)
+	file, err := openFile(filePath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open file: %w", err)
 	}
 
 	return &BaseFile{
 		file:     file,
-		fileID:   utils.HashString(file.Name()),
-		filePath: filename,
+		fileID:   filePath.Hash(),
+		filePath: filePath,
 	}, nil
 }
 
@@ -64,7 +64,7 @@ func NewBaseFile(filename string) (*BaseFile, error) {
 //
 // Returns:
 //   - int: The unique file identifier
-func (bf *BaseFile) GetID() int {
+func (bf *BaseFile) GetID() primitives.TableID {
 	return bf.fileID
 }
 
@@ -94,7 +94,7 @@ func (bf *BaseFile) GetFile() *os.File {
 //
 // Thread-safety: Uses read lock to allow concurrent reads while preventing
 // writes during the operation.
-func (bf *BaseFile) NumPages() (int, error) {
+func (bf *BaseFile) NumPages() (primitives.PageNumber, error) {
 	bf.mutex.RLock()
 	defer bf.mutex.RUnlock()
 
@@ -107,7 +107,7 @@ func (bf *BaseFile) NumPages() (int, error) {
 		return 0, fmt.Errorf("failed to stat file: %w", err)
 	}
 
-	numPages := int(fileInfo.Size() / int64(PageSize))
+	numPages := primitives.PageNumber(fileInfo.Size() / int64(PageSize))
 	if fileInfo.Size()%int64(PageSize) != 0 {
 		numPages++
 	}
@@ -126,7 +126,7 @@ func (bf *BaseFile) NumPages() (int, error) {
 // Returns:
 //   - []byte: A slice containing the raw page data (always PageSize bytes)
 //   - error: An error if the file is closed or read operation fails
-func (bf *BaseFile) ReadPageData(pageNo int) ([]byte, error) {
+func (bf *BaseFile) ReadPageData(pageNo primitives.PageNumber) ([]byte, error) {
 	bf.mutex.RLock()
 	defer bf.mutex.RUnlock()
 
@@ -167,7 +167,7 @@ func (bf *BaseFile) ReadPageData(pageNo int) ([]byte, error) {
 //	if err != nil {
 //	    log.Fatal(err)
 //	}
-func (bf *BaseFile) WritePageData(pageNo int, pageData []byte) error {
+func (bf *BaseFile) WritePageData(pageNo primitives.PageNumber, pageData []byte) error {
 	bf.mutex.Lock()
 	defer bf.mutex.Unlock()
 
@@ -241,7 +241,7 @@ func (bf *BaseFile) Close() error {
 // Note: After allocation, the caller should overwrite the zero-filled page
 // with actual data using WritePageData. The zero-fill ensures the file size
 // increases atomically, preventing other threads from allocating the same page.
-func (bf *BaseFile) AllocateNewPage() (int, error) {
+func (bf *BaseFile) AllocateNewPage() (primitives.PageNumber, error) {
 	bf.mutex.Lock()
 	defer bf.mutex.Unlock()
 
@@ -279,13 +279,21 @@ func (bf *BaseFile) AllocateNewPage() (int, error) {
 		return 0, fmt.Errorf("failed to sync file after page allocation: %w", err)
 	}
 
-	return allocatedPageNo, nil
+	return primitives.PageNumber(allocatedPageNo), nil
 }
 
 // FilePath returns the absolute path to the database file.
 //
 // Returns:
 //   - string: The file path used to create this BaseFile instance
-func (bf *BaseFile) FilePath() string {
+func (bf *BaseFile) FilePath() primitives.Filepath {
 	return bf.filePath
+}
+
+func openFile(filename primitives.Filepath) (*os.File, error) {
+	file, err := os.OpenFile(string(filename), os.O_RDWR|os.O_CREATE, 0644)
+	if err != nil {
+		return nil, fmt.Errorf("failed to open file %s: %v", filename, err)
+	}
+	return file, nil
 }

@@ -7,6 +7,8 @@ import (
 	"storemy/pkg/primitives"
 )
 
+type PageType uint8
+
 // PageDescriptor represents a unique identifier for a heap page
 type PageDescriptor struct {
 	tableID primitives.TableID

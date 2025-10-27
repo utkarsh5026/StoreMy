@@ -13,7 +13,7 @@ const (
 // Pages may be "dirty", indicating they have been modified since last written to disk
 type Page interface {
 	// GetID returns the ID of this page
-	GetID() primitives.PageID
+	GetID() *PageDescriptor
 
 	// IsDirty returns the transaction ID that last dirtied this page, or nil if clean
 	IsDirty() *primitives.TransactionID
