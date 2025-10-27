@@ -27,6 +27,18 @@ func ParseField(r io.Reader, fieldType Type) (Field, error) {
 	case IntType:
 		return parseIntField(r, size)
 
+	case Int32Type:
+		return parseInt32Field(r, size)
+
+	case Int64Type:
+		return parseInt64Field(r, size)
+
+	case Uint32Type:
+		return parseUint32Field(r, size)
+
+	case Uint64Type:
+		return parseUint64Field(r, size)
+
 	case StringType:
 		return parseStringField(r)
 
@@ -112,6 +124,86 @@ func parseBoolField(r io.Reader) (*BoolField, error) {
 
 	value := bytes[0] != 0
 	return NewBoolField(value), nil
+}
+
+// parseInt32Field reads and parses a 32-bit signed integer field from the reader.
+// The integer is expected to be serialized as a big-endian int32.
+//
+// Parameters:
+//   - r: The io.Reader to read the serialized integer data from
+//   - maxSize: The maximum size in bytes for the integer field (should be 4 for int32)
+//
+// Returns:
+//   - *Int32Field: The parsed Int32Field instance
+//   - error: An error if reading fails or if the data is incomplete
+func parseInt32Field(r io.Reader, maxSize uint32) (*Int32Field, error) {
+	bytes := make([]byte, maxSize)
+	if _, err := io.ReadFull(r, bytes); err != nil {
+		return nil, err
+	}
+
+	value := int32(binary.BigEndian.Uint32(bytes))
+	return NewInt32Field(value), nil
+}
+
+// parseInt64Field reads and parses a 64-bit signed integer field from the reader.
+// The integer is expected to be serialized as a big-endian int64.
+//
+// Parameters:
+//   - r: The io.Reader to read the serialized integer data from
+//   - maxSize: The maximum size in bytes for the integer field (should be 8 for int64)
+//
+// Returns:
+//   - *Int64Field: The parsed Int64Field instance
+//   - error: An error if reading fails or if the data is incomplete
+func parseInt64Field(r io.Reader, maxSize uint32) (*Int64Field, error) {
+	bytes := make([]byte, maxSize)
+	if _, err := io.ReadFull(r, bytes); err != nil {
+		return nil, err
+	}
+
+	value := int64(binary.BigEndian.Uint64(bytes))
+	return NewInt64Field(value), nil
+}
+
+// parseUint32Field reads and parses a 32-bit unsigned integer field from the reader.
+// The integer is expected to be serialized as a big-endian uint32.
+//
+// Parameters:
+//   - r: The io.Reader to read the serialized integer data from
+//   - maxSize: The maximum size in bytes for the integer field (should be 4 for uint32)
+//
+// Returns:
+//   - *Uint32Field: The parsed Uint32Field instance
+//   - error: An error if reading fails or if the data is incomplete
+func parseUint32Field(r io.Reader, maxSize uint32) (*Uint32Field, error) {
+	bytes := make([]byte, maxSize)
+	if _, err := io.ReadFull(r, bytes); err != nil {
+		return nil, err
+	}
+
+	value := binary.BigEndian.Uint32(bytes)
+	return NewUint32Field(value), nil
+}
+
+// parseUint64Field reads and parses a 64-bit unsigned integer field from the reader.
+// The integer is expected to be serialized as a big-endian uint64.
+//
+// Parameters:
+//   - r: The io.Reader to read the serialized integer data from
+//   - maxSize: The maximum size in bytes for the integer field (should be 8 for uint64)
+//
+// Returns:
+//   - *Uint64Field: The parsed Uint64Field instance
+//   - error: An error if reading fails or if the data is incomplete
+func parseUint64Field(r io.Reader, maxSize uint32) (*Uint64Field, error) {
+	bytes := make([]byte, maxSize)
+	if _, err := io.ReadFull(r, bytes); err != nil {
+		return nil, err
+	}
+
+	value := binary.BigEndian.Uint64(bytes)
+	return NewUint64Field(value), nil
 }
 
 // parseFloat64Field reads and parses a 64-bit floating-point field from the reader.

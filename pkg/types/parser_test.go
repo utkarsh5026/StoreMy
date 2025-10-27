@@ -498,3 +498,448 @@ func TestParseStringField_LengthHandling(t *testing.T) {
 		t.Errorf("Expected 'hello world', got '%s'", parsed.Value)
 	}
 }
+
+// ===== Int32Field Parser Tests =====
+
+func TestParseField_Int32Field(t *testing.T) {
+	original := NewInt32Field(42)
+
+	var buf bytes.Buffer
+	err := original.Serialize(&buf)
+	if err != nil {
+		t.Fatalf("Failed to serialize: %v", err)
+	}
+
+	parsed, err := ParseField(&buf, Int32Type)
+	if err != nil {
+		t.Fatalf("Failed to parse: %v", err)
+	}
+
+	parsedInt32, ok := parsed.(*Int32Field)
+	if !ok {
+		t.Fatalf("Expected *Int32Field, got %T", parsed)
+	}
+
+	if parsedInt32.Value != original.Value {
+		t.Errorf("Expected value %d, got %d", original.Value, parsedInt32.Value)
+	}
+}
+
+func TestParseField_RoundTrip_Int32Field(t *testing.T) {
+	tests := []int32{0, 42, -42, 2147483647, -2147483648}
+
+	for _, value := range tests {
+		original := NewInt32Field(value)
+
+		var buf bytes.Buffer
+		err := original.Serialize(&buf)
+		if err != nil {
+			t.Fatalf("Failed to serialize %d: %v", value, err)
+		}
+
+		parsed, err := ParseField(&buf, Int32Type)
+		if err != nil {
+			t.Fatalf("Failed to parse %d: %v", value, err)
+		}
+
+		if !original.Equals(parsed) {
+			t.Errorf("Round trip failed for %d", value)
+		}
+	}
+}
+
+func TestParseInt32Field_DirectFunction(t *testing.T) {
+	tests := []int32{0, 42, -42, 2147483647, -2147483648}
+
+	for _, value := range tests {
+		var buf bytes.Buffer
+		binary.BigEndian.PutUint32(make([]byte, 4), uint32(value))
+		bytes := make([]byte, 4)
+		binary.BigEndian.PutUint32(bytes, uint32(value))
+		buf.Write(bytes)
+
+		field, err := parseInt32Field(&buf, 4)
+		if err != nil {
+			t.Fatalf("Failed to parse %d: %v", value, err)
+		}
+
+		if field.Value != value {
+			t.Errorf("Expected value %d, got %d", value, field.Value)
+		}
+	}
+}
+
+func TestParseField_InsufficientData_Int32Field(t *testing.T) {
+	tests := []struct {
+		name string
+		data []byte
+	}{
+		{"empty buffer", []byte{}},
+		{"partial data 1 byte", []byte{1}},
+		{"partial data 2 bytes", []byte{1, 2}},
+		{"partial data 3 bytes", []byte{1, 2, 3}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			buf := bytes2.NewBuffer(tt.data)
+
+			_, err := ParseField(buf, Int32Type)
+
+			if err == nil {
+				t.Error("Expected error for insufficient data")
+			}
+
+			if err != io.EOF && err != io.ErrUnexpectedEOF {
+				t.Errorf("Expected EOF error, got: %v", err)
+			}
+		})
+	}
+}
+
+func TestParseField_EmptyReader_Int32Field(t *testing.T) {
+	var buf bytes.Buffer
+
+	_, err := parseInt32Field(&buf, 4)
+
+	if err == nil {
+		t.Error("Expected error for empty reader")
+	}
+
+	if err != io.EOF {
+		t.Errorf("Expected EOF error, got: %v", err)
+	}
+}
+
+// ===== Int64Field Parser Tests =====
+
+func TestParseField_Int64Field(t *testing.T) {
+	original := NewInt64Field(42)
+
+	var buf bytes.Buffer
+	err := original.Serialize(&buf)
+	if err != nil {
+		t.Fatalf("Failed to serialize: %v", err)
+	}
+
+	parsed, err := ParseField(&buf, Int64Type)
+	if err != nil {
+		t.Fatalf("Failed to parse: %v", err)
+	}
+
+	parsedInt64, ok := parsed.(*Int64Field)
+	if !ok {
+		t.Fatalf("Expected *Int64Field, got %T", parsed)
+	}
+
+	if parsedInt64.Value != original.Value {
+		t.Errorf("Expected value %d, got %d", original.Value, parsedInt64.Value)
+	}
+}
+
+func TestParseField_RoundTrip_Int64Field(t *testing.T) {
+	tests := []int64{0, 42, -42, 9223372036854775807, -9223372036854775808}
+
+	for _, value := range tests {
+		original := NewInt64Field(value)
+
+		var buf bytes.Buffer
+		err := original.Serialize(&buf)
+		if err != nil {
+			t.Fatalf("Failed to serialize %d: %v", value, err)
+		}
+
+		parsed, err := ParseField(&buf, Int64Type)
+		if err != nil {
+			t.Fatalf("Failed to parse %d: %v", value, err)
+		}
+
+		if !original.Equals(parsed) {
+			t.Errorf("Round trip failed for %d", value)
+		}
+	}
+}
+
+func TestParseInt64Field_DirectFunction(t *testing.T) {
+	tests := []int64{0, 42, -42, 9223372036854775807, -9223372036854775808}
+
+	for _, value := range tests {
+		var buf bytes.Buffer
+		bytes := make([]byte, 8)
+		binary.BigEndian.PutUint64(bytes, uint64(value))
+		buf.Write(bytes)
+
+		field, err := parseInt64Field(&buf, 8)
+		if err != nil {
+			t.Fatalf("Failed to parse %d: %v", value, err)
+		}
+
+		if field.Value != value {
+			t.Errorf("Expected value %d, got %d", value, field.Value)
+		}
+	}
+}
+
+func TestParseField_InsufficientData_Int64Field(t *testing.T) {
+	tests := []struct {
+		name string
+		data []byte
+	}{
+		{"empty buffer", []byte{}},
+		{"partial data 1 byte", []byte{1}},
+		{"partial data 4 bytes", []byte{1, 2, 3, 4}},
+		{"partial data 7 bytes", []byte{1, 2, 3, 4, 5, 6, 7}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			buf := bytes2.NewBuffer(tt.data)
+
+			_, err := ParseField(buf, Int64Type)
+
+			if err == nil {
+				t.Error("Expected error for insufficient data")
+			}
+
+			if err != io.EOF && err != io.ErrUnexpectedEOF {
+				t.Errorf("Expected EOF error, got: %v", err)
+			}
+		})
+	}
+}
+
+func TestParseField_EmptyReader_Int64Field(t *testing.T) {
+	var buf bytes.Buffer
+
+	_, err := parseInt64Field(&buf, 8)
+
+	if err == nil {
+		t.Error("Expected error for empty reader")
+	}
+
+	if err != io.EOF {
+		t.Errorf("Expected EOF error, got: %v", err)
+	}
+}
+
+// ===== Uint32Field Parser Tests =====
+
+func TestParseField_Uint32Field(t *testing.T) {
+	original := NewUint32Field(42)
+
+	var buf bytes.Buffer
+	err := original.Serialize(&buf)
+	if err != nil {
+		t.Fatalf("Failed to serialize: %v", err)
+	}
+
+	parsed, err := ParseField(&buf, Uint32Type)
+	if err != nil {
+		t.Fatalf("Failed to parse: %v", err)
+	}
+
+	parsedUint32, ok := parsed.(*Uint32Field)
+	if !ok {
+		t.Fatalf("Expected *Uint32Field, got %T", parsed)
+	}
+
+	if parsedUint32.Value != original.Value {
+		t.Errorf("Expected value %d, got %d", original.Value, parsedUint32.Value)
+	}
+}
+
+func TestParseField_RoundTrip_Uint32Field(t *testing.T) {
+	tests := []uint32{0, 42, 4294967295}
+
+	for _, value := range tests {
+		original := NewUint32Field(value)
+
+		var buf bytes.Buffer
+		err := original.Serialize(&buf)
+		if err != nil {
+			t.Fatalf("Failed to serialize %d: %v", value, err)
+		}
+
+		parsed, err := ParseField(&buf, Uint32Type)
+		if err != nil {
+			t.Fatalf("Failed to parse %d: %v", value, err)
+		}
+
+		if !original.Equals(parsed) {
+			t.Errorf("Round trip failed for %d", value)
+		}
+	}
+}
+
+func TestParseUint32Field_DirectFunction(t *testing.T) {
+	tests := []uint32{0, 42, 4294967295}
+
+	for _, value := range tests {
+		var buf bytes.Buffer
+		bytes := make([]byte, 4)
+		binary.BigEndian.PutUint32(bytes, value)
+		buf.Write(bytes)
+
+		field, err := parseUint32Field(&buf, 4)
+		if err != nil {
+			t.Fatalf("Failed to parse %d: %v", value, err)
+		}
+
+		if field.Value != value {
+			t.Errorf("Expected value %d, got %d", value, field.Value)
+		}
+	}
+}
+
+func TestParseField_InsufficientData_Uint32Field(t *testing.T) {
+	tests := []struct {
+		name string
+		data []byte
+	}{
+		{"empty buffer", []byte{}},
+		{"partial data 1 byte", []byte{1}},
+		{"partial data 2 bytes", []byte{1, 2}},
+		{"partial data 3 bytes", []byte{1, 2, 3}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			buf := bytes2.NewBuffer(tt.data)
+
+			_, err := ParseField(buf, Uint32Type)
+
+			if err == nil {
+				t.Error("Expected error for insufficient data")
+			}
+
+			if err != io.EOF && err != io.ErrUnexpectedEOF {
+				t.Errorf("Expected EOF error, got: %v", err)
+			}
+		})
+	}
+}
+
+func TestParseField_EmptyReader_Uint32Field(t *testing.T) {
+	var buf bytes.Buffer
+
+	_, err := parseUint32Field(&buf, 4)
+
+	if err == nil {
+		t.Error("Expected error for empty reader")
+	}
+
+	if err != io.EOF {
+		t.Errorf("Expected EOF error, got: %v", err)
+	}
+}
+
+// ===== Uint64Field Parser Tests =====
+
+func TestParseField_Uint64Field(t *testing.T) {
+	original := NewUint64Field(42)
+
+	var buf bytes.Buffer
+	err := original.Serialize(&buf)
+	if err != nil {
+		t.Fatalf("Failed to serialize: %v", err)
+	}
+
+	parsed, err := ParseField(&buf, Uint64Type)
+	if err != nil {
+		t.Fatalf("Failed to parse: %v", err)
+	}
+
+	parsedUint64, ok := parsed.(*Uint64Field)
+	if !ok {
+		t.Fatalf("Expected *Uint64Field, got %T", parsed)
+	}
+
+	if parsedUint64.Value != original.Value {
+		t.Errorf("Expected value %d, got %d", original.Value, parsedUint64.Value)
+	}
+}
+
+func TestParseField_RoundTrip_Uint64Field(t *testing.T) {
+	tests := []uint64{0, 42, 18446744073709551615}
+
+	for _, value := range tests {
+		original := NewUint64Field(value)
+
+		var buf bytes.Buffer
+		err := original.Serialize(&buf)
+		if err != nil {
+			t.Fatalf("Failed to serialize %d: %v", value, err)
+		}
+
+		parsed, err := ParseField(&buf, Uint64Type)
+		if err != nil {
+			t.Fatalf("Failed to parse %d: %v", value, err)
+		}
+
+		if !original.Equals(parsed) {
+			t.Errorf("Round trip failed for %d", value)
+		}
+	}
+}
+
+func TestParseUint64Field_DirectFunction(t *testing.T) {
+	tests := []uint64{0, 42, 18446744073709551615}
+
+	for _, value := range tests {
+		var buf bytes.Buffer
+		bytes := make([]byte, 8)
+		binary.BigEndian.PutUint64(bytes, value)
+		buf.Write(bytes)
+
+		field, err := parseUint64Field(&buf, 8)
+		if err != nil {
+			t.Fatalf("Failed to parse %d: %v", value, err)
+		}
+
+		if field.Value != value {
+			t.Errorf("Expected value %d, got %d", value, field.Value)
+		}
+	}
+}
+
+func TestParseField_InsufficientData_Uint64Field(t *testing.T) {
+	tests := []struct {
+		name string
+		data []byte
+	}{
+		{"empty buffer", []byte{}},
+		{"partial data 1 byte", []byte{1}},
+		{"partial data 4 bytes", []byte{1, 2, 3, 4}},
+		{"partial data 7 bytes", []byte{1, 2, 3, 4, 5, 6, 7}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			buf := bytes2.NewBuffer(tt.data)
+
+			_, err := ParseField(buf, Uint64Type)
+
+			if err == nil {
+				t.Error("Expected error for insufficient data")
+			}
+
+			if err != io.EOF && err != io.ErrUnexpectedEOF {
+				t.Errorf("Expected EOF error, got: %v", err)
+			}
+		})
+	}
+}
+
+func TestParseField_EmptyReader_Uint64Field(t *testing.T) {
+	var buf bytes.Buffer
+
+	_, err := parseUint64Field(&buf, 8)
+
+	if err == nil {
+		t.Error("Expected error for empty reader")
+	}
+
+	if err != io.EOF {
+		t.Errorf("Expected EOF error, got: %v", err)
+	}
+}
