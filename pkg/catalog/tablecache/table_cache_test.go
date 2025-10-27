@@ -15,13 +15,13 @@ import (
 
 // mockDbFile implements page.DbFile for testing
 type mockDbFile struct {
-	id        int
+	id        primitives.FileID
 	tupleDesc *tuple.TupleDescription
 	closed    bool
 	mutex     sync.Mutex
 }
 
-func newMockDbFile(id int, fieldTypes []types.Type, fieldNames []string) *mockDbFile {
+func newMockDbFile(id primitives.FileID, fieldTypes []types.Type, fieldNames []string) *mockDbFile {
 	td, err := tuple.NewTupleDesc(fieldTypes, fieldNames)
 	if err != nil {
 		panic("Failed to create TupleDescription: " + err.Error())
@@ -33,7 +33,7 @@ func newMockDbFile(id int, fieldTypes []types.Type, fieldNames []string) *mockDb
 	}
 }
 
-func (m *mockDbFile) ReadPage(pid primitives.PageID) (page.Page, error) {
+func (m *mockDbFile) ReadPage(pid *page.PageDescriptor) (page.Page, error) {
 	return nil, nil
 }
 
@@ -45,7 +45,7 @@ func (m *mockDbFile) Iterator(tid *primitives.TransactionID) iterator.DbFileIter
 	return nil
 }
 
-func (m *mockDbFile) GetID() int {
+func (m *mockDbFile) GetID() primitives.FileID {
 	return m.id
 }
 
@@ -67,10 +67,10 @@ func (m *mockDbFile) IsClosed() bool {
 }
 
 // Helper function to create a test schema
-func createTestSchema(tableName string, tableID int, fields []string) *schema.Schema {
+func createTestSchema(tableName string, tableID primitives.FileID, fields []string) *schema.Schema {
 	columns := make([]schema.ColumnMetadata, len(fields))
 	for i, fieldName := range fields {
-		col, err := schema.NewColumnMetadata(fieldName, types.IntType, i, tableID, i == 0, false)
+		col, err := schema.NewColumnMetadata(fieldName, types.IntType, primitives.ColumnID(i), tableID, i == 0, false)
 		if err != nil {
 			panic(fmt.Sprintf("Failed to create column metadata: %v", err))
 		}
@@ -130,16 +130,16 @@ func TestAddTable_Basic(t *testing.T) {
 	if err != nil {
 		t.Errorf("GetTableID failed: %v", err)
 	}
-	if tableID != 1 {
+	if tableID != primitives.FileID(1) {
 		t.Errorf("Expected table ID 1, got %d", tableID)
 	}
 
 	// Verify we can retrieve DbFile
-	retrievedFile, err := cache.GetDbFile(1)
+	retrievedFile, err := cache.GetDbFile(primitives.FileID(1))
 	if err != nil {
 		t.Errorf("GetDbFile failed: %v", err)
 	}
-	if retrievedFile != mockFile {
+	if retrievedFile.GetID() != mockFile.GetID() {
 		t.Error("Retrieved file does not match original")
 	}
 }
@@ -197,12 +197,12 @@ func TestAddTable_Replacement(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetTableID failed: %v", err)
 	}
-	if tableID != 2 {
+	if tableID != primitives.FileID(2) {
 		t.Errorf("Expected new table ID 2, got %d", tableID)
 	}
 
 	// Verify old ID no longer exists
-	_, err = cache.GetDbFile(1)
+	_, err = cache.GetDbFile(primitives.FileID(1))
 	if err == nil {
 		t.Error("Old table ID should not exist in cache")
 	}
@@ -222,7 +222,7 @@ func TestGetTableID_NotFound(t *testing.T) {
 func TestGetDbFile_NotFound(t *testing.T) {
 	cache := NewTableCache()
 
-	_, err := cache.GetDbFile(999)
+	_, err := cache.GetDbFile(primitives.FileID(999))
 	if err == nil {
 		t.Error("GetDbFile should return error for non-existent table ID")
 	}
@@ -275,8 +275,8 @@ func TestClear(t *testing.T) {
 	// Add multiple tables
 	for i := 1; i <= 3; i++ {
 		tableName := fmt.Sprintf("table%d", i)
-		testSchema := createTestSchema(tableName, i, []string{"id"})
-		mockFile := newMockDbFile(i, testSchema.FieldTypes(), testSchema.FieldNames())
+		testSchema := createTestSchema(tableName, primitives.FileID(i), []string{"id"})
+		mockFile := newMockDbFile(primitives.FileID(i), testSchema.FieldTypes(), testSchema.FieldNames())
 		cache.AddTable(mockFile, testSchema)
 	}
 
@@ -309,8 +309,8 @@ func TestGetAllTableNames(t *testing.T) {
 
 	i := 1
 	for tableName := range expectedTables {
-		testSchema := createTestSchema(tableName, i, []string{"id"})
-		mockFile := newMockDbFile(i, testSchema.FieldTypes(), testSchema.FieldNames())
+		testSchema := createTestSchema(tableName, primitives.FileID(i), []string{"id"})
+		mockFile := newMockDbFile(primitives.FileID(i), testSchema.FieldTypes(), testSchema.FieldNames())
 		cache.AddTable(mockFile, testSchema)
 		i++
 	}
@@ -336,8 +336,8 @@ func TestValidateIntegrity(t *testing.T) {
 	// Add tables
 	for i := 1; i <= 3; i++ {
 		tableName := fmt.Sprintf("table%d", i)
-		testSchema := createTestSchema(tableName, i, []string{"id"})
-		mockFile := newMockDbFile(i, testSchema.FieldTypes(), testSchema.FieldNames())
+		testSchema := createTestSchema(tableName, primitives.FileID(i), []string{"id"})
+		mockFile := newMockDbFile(primitives.FileID(i), testSchema.FieldTypes(), testSchema.FieldNames())
 		cache.AddTable(mockFile, testSchema)
 	}
 
@@ -359,7 +359,7 @@ func TestValidateIntegrity_Corrupted(t *testing.T) {
 
 	// Corrupt the cache by manually removing from one map
 	cache.mutex.Lock()
-	delete(cache.idToTable, 1)
+	delete(cache.idToTable, primitives.FileID(1))
 	cache.mutex.Unlock()
 
 	// Validate should fail
@@ -398,7 +398,7 @@ func TestRenameTable(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetTableID failed: %v", err)
 	}
-	if tableID != 1 {
+	if tableID != primitives.FileID(1) {
 		t.Errorf("Table ID should be unchanged, expected 1, got %d", tableID)
 	}
 }
@@ -462,7 +462,7 @@ func TestGetTableInfo(t *testing.T) {
 	cache.AddTable(mockFile, testSchema)
 
 	// Get table info
-	info, err := cache.GetTableInfo(1)
+	info, err := cache.GetTableInfo(primitives.FileID(1))
 	if err != nil {
 		t.Fatalf("GetTableInfo failed: %v", err)
 	}
@@ -471,7 +471,7 @@ func TestGetTableInfo(t *testing.T) {
 		t.Fatal("GetTableInfo returned nil")
 	}
 
-	if info.File != mockFile {
+	if info.File.GetID() != mockFile.GetID() {
 		t.Error("TableInfo file does not match original")
 	}
 
@@ -479,7 +479,7 @@ func TestGetTableInfo(t *testing.T) {
 		t.Errorf("Expected table name 'users', got '%s'", info.Schema.TableName)
 	}
 
-	if info.GetFileID() != 1 {
+	if info.GetFileID() != primitives.FileID(1) {
 		t.Errorf("Expected file ID 1, got %d", info.GetFileID())
 	}
 }
@@ -493,7 +493,7 @@ func TestStatisticsCaching(t *testing.T) {
 	cache.AddTable(mockFile, testSchema)
 
 	// Initially, no cached statistics
-	stats, found := cache.GetCachedStatistics(1)
+	stats, found := cache.GetCachedStatistics(primitives.FileID(1))
 	if found {
 		t.Error("Should not have cached statistics initially")
 	}
@@ -503,18 +503,18 @@ func TestStatisticsCaching(t *testing.T) {
 
 	// Set cached statistics
 	testStats := &TableStatistics{
-		TableID:     1,
+		TableID:     primitives.FileID(1),
 		Cardinality: 1000,
 		PageCount:   10,
 	}
 
-	err := cache.SetCachedStatistics(1, testStats)
+	err := cache.SetCachedStatistics(primitives.FileID(1), testStats)
 	if err != nil {
 		t.Fatalf("SetCachedStatistics failed: %v", err)
 	}
 
 	// Retrieve cached statistics
-	cachedStats, found := cache.GetCachedStatistics(1)
+	cachedStats, found := cache.GetCachedStatistics(primitives.FileID(1))
 	if !found {
 		t.Error("Should have found cached statistics")
 	}
@@ -537,13 +537,13 @@ func TestStatisticsCaching_Expiry(t *testing.T) {
 
 	// Set cached statistics
 	testStats := &TableStatistics{
-		TableID:     1,
+		TableID:     primitives.FileID(1),
 		Cardinality: 1000,
 	}
-	cache.SetCachedStatistics(1, testStats)
+	cache.SetCachedStatistics(primitives.FileID(1), testStats)
 
 	// Should be available immediately
-	_, found := cache.GetCachedStatistics(1)
+	_, found := cache.GetCachedStatistics(primitives.FileID(1))
 	if !found {
 		t.Error("Should have found cached statistics immediately")
 	}
@@ -552,7 +552,7 @@ func TestStatisticsCaching_Expiry(t *testing.T) {
 	time.Sleep(150 * time.Millisecond)
 
 	// Should be expired now
-	_, found = cache.GetCachedStatistics(1)
+	_, found = cache.GetCachedStatistics(primitives.FileID(1))
 	if found {
 		t.Error("Statistics should have expired")
 	}
@@ -564,17 +564,17 @@ func TestStatisticsCaching_NotFound(t *testing.T) {
 
 	// Try to set statistics for non-existent table
 	testStats := &TableStatistics{
-		TableID:     999,
+		TableID:     primitives.FileID(999),
 		Cardinality: 1000,
 	}
 
-	err := cache.SetCachedStatistics(999, testStats)
+	err := cache.SetCachedStatistics(primitives.FileID(999), testStats)
 	if err == nil {
 		t.Error("SetCachedStatistics should return error for non-existent table")
 	}
 
 	// Try to get statistics for non-existent table
-	_, found := cache.GetCachedStatistics(999)
+	_, found := cache.GetCachedStatistics(primitives.FileID(999))
 	if found {
 		t.Error("Should not find statistics for non-existent table")
 	}
@@ -588,8 +588,8 @@ func TestLRU_Eviction(t *testing.T) {
 	// Add 3 tables (fill cache)
 	for i := 1; i <= 3; i++ {
 		tableName := fmt.Sprintf("table%d", i)
-		testSchema := createTestSchema(tableName, i, []string{"id"})
-		mockFile := newMockDbFile(i, testSchema.FieldTypes(), testSchema.FieldNames())
+		testSchema := createTestSchema(tableName, primitives.FileID(i), []string{"id"})
+		mockFile := newMockDbFile(primitives.FileID(i), testSchema.FieldTypes(), testSchema.FieldNames())
 		cache.AddTable(mockFile, testSchema)
 	}
 
@@ -733,8 +733,8 @@ func TestStatsMetrics(t *testing.T) {
 func TestConcurrency(t *testing.T) {
 	cache := NewTableCache()
 
-	// Add initial tables
-	for i := 1; i <= 10; i++ {
+	var i primitives.FileID
+	for i = 1; i <= 10; i++ {
 		tableName := fmt.Sprintf("table%d", i)
 		testSchema := createTestSchema(tableName, i, []string{"id"})
 		mockFile := newMockDbFile(i, testSchema.FieldTypes(), testSchema.FieldNames())
@@ -752,7 +752,7 @@ func TestConcurrency(t *testing.T) {
 			defer wg.Done()
 
 			for i := 0; i < operationsPerGoroutine; i++ {
-				tableID := (i % 10) + 1
+				tableID := primitives.FileID((i % 10) + 1)
 				tableName := fmt.Sprintf("table%d", tableID)
 
 				// Random operations
@@ -793,7 +793,7 @@ func TestConcurrency_WithModifications(t *testing.T) {
 			defer wg.Done()
 
 			for i := 0; i < 50; i++ {
-				tableID := goroutineID*50 + i
+				tableID := primitives.FileID(goroutineID*50 + i)
 				tableName := fmt.Sprintf("table_%d_%d", goroutineID, i)
 				testSchema := createTestSchema(tableName, tableID, []string{"id"})
 				mockFile := newMockDbFile(tableID, testSchema.FieldTypes(), testSchema.FieldNames())
@@ -809,7 +809,7 @@ func TestConcurrency_WithModifications(t *testing.T) {
 			defer wg.Done()
 
 			for i := 0; i < 100; i++ {
-				tableID := i % 100
+				tableID := primitives.FileID(i % 100)
 				cache.GetDbFile(tableID)
 				cache.GetTableInfo(tableID)
 			}
