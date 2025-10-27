@@ -46,7 +46,7 @@ type ColStatsOperations struct {
 // Returns a configured ColStatsOperations ready to collect and manage column statistics.
 func NewColStatsOperations(
 	access catalogio.CatalogAccess,
-	colStatsTableID primitives.TableID,
+	colStatsTableID primitives.FileID,
 	fileGetter FileGetter,
 	colOps *ColumnOperations,
 ) *ColStatsOperations {
@@ -71,7 +71,7 @@ func NewColStatsOperations(
 // - Null count, distinct count, min/max values, average width
 // - Histogram distribution
 // - Most common values (MCV) and their frequencies
-func (co *ColStatsOperations) CollectColumnStatistics(tx TxContext, colName string, tableID primitives.TableID, columnIndex primitives.ColumnID, histogramBuckets, mcvCount int) (*ColStatsInfo, error) {
+func (co *ColStatsOperations) CollectColumnStatistics(tx TxContext, colName string, tableID primitives.FileID, columnIndex primitives.ColumnID, histogramBuckets, mcvCount int) (*ColStatsInfo, error) {
 	if _, err := co.fileGetter(tableID); err != nil {
 		return nil, fmt.Errorf("failed to get db file: %w", err)
 	}
@@ -152,7 +152,7 @@ func (co *ColStatsOperations) CollectColumnStatistics(tx TxContext, colName stri
 }
 
 // UpdateColumnStatistics updates statistics for all columns in a table
-func (co *ColStatsOperations) UpdateColumnStatistics(tx TxContext, tableID primitives.TableID) error {
+func (co *ColStatsOperations) UpdateColumnStatistics(tx TxContext, tableID primitives.FileID) error {
 	columns, err := co.colOps.LoadColumnMetadata(tx, tableID)
 	if err != nil {
 		return fmt.Errorf("failed to load column metadata: %w", err)
@@ -190,7 +190,7 @@ func (co *ColStatsOperations) storeColumnStatistics(tx TxContext, stats *colStat
 }
 
 // GetColumnStatistics retrieves statistics for a specific column from CATALOG_COLUMN_STATISTICS
-func (co *ColStatsOperations) GetColumnStatistics(tx TxContext, tableID primitives.TableID, columnName string) (*colStats, error) {
+func (co *ColStatsOperations) GetColumnStatistics(tx TxContext, tableID primitives.FileID, columnName string) (*colStats, error) {
 	stats, err := co.FindOne(tx, func(cs *colStats) bool {
 		return cs.TableID == tableID && cs.ColumnName == columnName
 	})

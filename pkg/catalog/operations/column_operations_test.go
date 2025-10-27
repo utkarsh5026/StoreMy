@@ -12,16 +12,16 @@ import (
 
 // mockCatalogAccess implements both CatalogReader and CatalogWriter for testing
 type mockCatalogAccess struct {
-	tuples map[primitives.TableID][]*tuple.Tuple // tableID -> tuples
+	tuples map[primitives.FileID][]*tuple.Tuple // tableID -> tuples
 }
 
 func newMockCatalogAccess() *mockCatalogAccess {
 	return &mockCatalogAccess{
-		tuples: make(map[primitives.TableID][]*tuple.Tuple),
+		tuples: make(map[primitives.FileID][]*tuple.Tuple),
 	}
 }
 
-func (m *mockCatalogAccess) IterateTable(tableID primitives.TableID, tx TxContext, fn func(*tuple.Tuple) error) error {
+func (m *mockCatalogAccess) IterateTable(tableID primitives.FileID, tx TxContext, fn func(*tuple.Tuple) error) error {
 	for _, t := range m.tuples[tableID] {
 		if err := fn(t); err != nil {
 			return err
@@ -30,12 +30,12 @@ func (m *mockCatalogAccess) IterateTable(tableID primitives.TableID, tx TxContex
 	return nil
 }
 
-func (m *mockCatalogAccess) InsertRow(tableID primitives.TableID, tx TxContext, t *tuple.Tuple) error {
+func (m *mockCatalogAccess) InsertRow(tableID primitives.FileID, tx TxContext, t *tuple.Tuple) error {
 	m.tuples[tableID] = append(m.tuples[tableID], t)
 	return nil
 }
 
-func (m *mockCatalogAccess) DeleteRow(tableID primitives.TableID, tx TxContext, t *tuple.Tuple) error {
+func (m *mockCatalogAccess) DeleteRow(tableID primitives.FileID, tx TxContext, t *tuple.Tuple) error {
 	tuples := m.tuples[tableID]
 	for i, existing := range tuples {
 		if tuplesEqual(existing, t) {
@@ -67,7 +67,7 @@ func tuplesEqual(t1, t2 *tuple.Tuple) bool {
 	return true
 }
 
-func createColumnTuple(tableID primitives.TableID, name string, position primitives.ColumnID, fieldType types.Type, isAutoInc bool, nextAutoValue uint64) *tuple.Tuple {
+func createColumnTuple(tableID primitives.FileID, name string, position primitives.ColumnID, fieldType types.Type, isAutoInc bool, nextAutoValue uint64) *tuple.Tuple {
 	col := schema.ColumnMetadata{
 		TableID:       tableID,
 		Name:          name,

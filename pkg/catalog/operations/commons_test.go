@@ -9,7 +9,7 @@ import (
 )
 
 // createColumnMetadata creates a column metadata tuple for testing with all options
-func createColumnMetadata(tableID primitives.TableID, name string, position primitives.ColumnID, fieldType types.Type, isPrimary, isAutoInc bool, nextAutoValue uint64) *tuple.Tuple {
+func createColumnMetadata(tableID primitives.FileID, name string, position primitives.ColumnID, fieldType types.Type, isPrimary, isAutoInc bool, nextAutoValue uint64) *tuple.Tuple {
 	col := schema.ColumnMetadata{
 		TableID:       tableID,
 		Name:          name,
@@ -23,7 +23,7 @@ func createColumnMetadata(tableID primitives.TableID, name string, position prim
 }
 
 // setupTableColumns adds column metadata to the mock for a table
-func setupTableColumns(mock *mockCatalogAccess, columnsTableID primitives.TableID, tableID primitives.TableID, columns []struct {
+func setupTableColumns(mock *mockCatalogAccess, columnsTableID primitives.FileID, tableID primitives.FileID, columns []struct {
 	name      string
 	fieldType types.Type
 	isPrimary bool
@@ -32,4 +32,8 @@ func setupTableColumns(mock *mockCatalogAccess, columnsTableID primitives.TableI
 		colTuple := createColumnMetadata(tableID, col.name, primitives.ColumnID(i), col.fieldType, col.isPrimary, false, 0)
 		mock.tuples[columnsTableID] = append(mock.tuples[columnsTableID], colTuple)
 	}
+}
+
+func fid(id int) primitives.FileID {
+	return primitives.FileID(id)
 }

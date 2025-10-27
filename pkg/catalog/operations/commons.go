@@ -27,7 +27,7 @@ var (
 type BaseOperations[T any] struct {
 	reader  catalogio.CatalogReader
 	writer  catalogio.CatalogWriter
-	tableID primitives.TableID
+	tableID primitives.FileID
 	parser  func(*tuple.Tuple) (T, error)
 	creator func(T) *tuple.Tuple
 }
@@ -42,7 +42,7 @@ type BaseOperations[T any] struct {
 //   - creator: Function to create a tuple from type T
 func NewBaseOperations[T any](
 	access catalogio.CatalogAccess,
-	tableID primitives.TableID,
+	tableID primitives.FileID,
 	parser func(*tuple.Tuple) (T, error),
 	creator func(T) *tuple.Tuple,
 ) *BaseOperations[T] {
@@ -273,7 +273,7 @@ func (bo *BaseOperations[T]) UpdateBy(tx TxContext, predicate func(T) bool, upda
 }
 
 // TableID returns the catalog table ID this BaseOperations instance operates on.
-func (bo *BaseOperations[T]) TableID() primitives.TableID {
+func (bo *BaseOperations[T]) TableID() primitives.FileID {
 	return bo.tableID
 }
 

@@ -13,12 +13,12 @@ import (
 
 // mockIndexStatsAccess implements a mock for testing IndexStatsOperations
 type mockIndexStatsAccess struct {
-	indexStatsData map[int]*systemtable.IndexStatisticsRow
+	indexStatsData map[primitives.FileID]*systemtable.IndexStatisticsRow
 	indexData      map[int]*systemtable.IndexMetadata
 	iterateError   error
 }
 
-func (m *mockIndexStatsAccess) IterateTable(tableID primitives.TableID, tx *transaction.TransactionContext, processFunc func(*tuple.Tuple) error) error {
+func (m *mockIndexStatsAccess) IterateTable(tableID primitives.FileID, tx *transaction.TransactionContext, processFunc func(*tuple.Tuple) error) error {
 	if m.iterateError != nil {
 		return m.iterateError
 	}
@@ -42,7 +42,7 @@ func (m *mockIndexStatsAccess) IterateTable(tableID primitives.TableID, tx *tran
 	return nil
 }
 
-func (m *mockIndexStatsAccess) InsertRow(tableID primitives.TableID, tx *transaction.TransactionContext, t *tuple.Tuple) error {
+func (m *mockIndexStatsAccess) InsertRow(tableID primitives.FileID, tx *transaction.TransactionContext, t *tuple.Tuple) error {
 	stats, err := systemtable.IndexStats.Parse(t)
 	if err != nil {
 		return err
@@ -51,7 +51,7 @@ func (m *mockIndexStatsAccess) InsertRow(tableID primitives.TableID, tx *transac
 	return nil
 }
 
-func (m *mockIndexStatsAccess) DeleteRow(tableID primitives.TableID, tx *transaction.TransactionContext, t *tuple.Tuple) error {
+func (m *mockIndexStatsAccess) DeleteRow(tableID primitives.FileID, tx *transaction.TransactionContext, t *tuple.Tuple) error {
 	stats, err := systemtable.IndexStats.Parse(t)
 	if err != nil {
 		return err
@@ -60,13 +60,13 @@ func (m *mockIndexStatsAccess) DeleteRow(tableID primitives.TableID, tx *transac
 	return nil
 }
 
-func mockIndexStatsFileGetter(tableID primitives.TableID) (page.DbFile, error) {
+func mockIndexStatsFileGetter(tableID primitives.FileID) (page.DbFile, error) {
 	return nil, nil
 }
 
 func TestIndexStatsOperations_GetIndexStatistics(t *testing.T) {
 	mock := &mockIndexStatsAccess{
-		indexStatsData: map[int]*systemtable.IndexStatisticsRow{
+		indexStatsData: map[primitives.FileID]*systemtable.IndexStatisticsRow{
 			1: {
 				IndexID:          1,
 				TableID:          100,
@@ -103,7 +103,7 @@ func TestIndexStatsOperations_GetIndexStatistics(t *testing.T) {
 
 func TestIndexStatsOperations_GetIndexStatistics_NotFound(t *testing.T) {
 	mock := &mockIndexStatsAccess{
-		indexStatsData: map[int]*systemtable.IndexStatisticsRow{},
+		indexStatsData: map[primitives.FileID]*systemtable.IndexStatisticsRow{},
 	}
 
 	ops := NewIndexStatsOperations(mock, 1, 2, mockIndexStatsFileGetter, nil)
@@ -116,7 +116,7 @@ func TestIndexStatsOperations_GetIndexStatistics_NotFound(t *testing.T) {
 
 func TestIndexStatsOperations_StoreIndexStatistics(t *testing.T) {
 	mock := &mockIndexStatsAccess{
-		indexStatsData: map[int]*systemtable.IndexStatisticsRow{},
+		indexStatsData: map[primitives.FileID]*systemtable.IndexStatisticsRow{},
 	}
 
 	ops := NewIndexStatsOperations(mock, 1, 2, mockIndexStatsFileGetter, nil)
@@ -153,7 +153,7 @@ func TestIndexStatsOperations_StoreIndexStatistics(t *testing.T) {
 
 func TestIndexStatsOperations_StoreIndexStatistics_Update(t *testing.T) {
 	mock := &mockIndexStatsAccess{
-		indexStatsData: map[int]*systemtable.IndexStatisticsRow{
+		indexStatsData: map[primitives.FileID]*systemtable.IndexStatisticsRow{
 			3: {
 				IndexID:          3,
 				TableID:          300,
@@ -209,7 +209,7 @@ func TestIndexStatsOperations_StoreIndexStatistics_Update(t *testing.T) {
 // TestIndexStatsOperations_MultipleStatistics tests managing multiple index statistics
 func TestIndexStatsOperations_MultipleStatistics(t *testing.T) {
 	mock := &mockIndexStatsAccess{
-		indexStatsData: make(map[int]*systemtable.IndexStatisticsRow),
+		indexStatsData: make(map[primitives.FileID]*systemtable.IndexStatisticsRow),
 	}
 
 	ops := NewIndexStatsOperations(mock, 1, 2, mockIndexStatsFileGetter, nil)
@@ -217,15 +217,15 @@ func TestIndexStatsOperations_MultipleStatistics(t *testing.T) {
 	// Store multiple statistics
 	for i := 1; i <= 5; i++ {
 		stats := &systemtable.IndexStatisticsRow{
-			IndexID:          i,
+			IndexID:          fid(i),
 			TableID:          100,
 			IndexName:        "idx_" + string(rune('0'+i)),
 			IndexType:        index.BTreeIndex,
 			ColumnName:       "col" + string(rune('0'+i)),
-			NumEntries:       int64(i * 1000),
-			NumPages:         i * 10,
-			BTreeHeight:      i + 1,
-			DistinctKeys:     int64(i * 800),
+			NumEntries:       uint64(i * 1000),
+			NumPages:         primitives.PageNumber(i * 10),
+			BTreeHeight:      uint32(i + 1),
+			DistinctKeys:     uint64(i * 800),
 			ClusteringFactor: float64(i) * 0.15,
 			AvgKeySize:       8,
 		}
@@ -242,14 +242,14 @@ func TestIndexStatsOperations_MultipleStatistics(t *testing.T) {
 
 	// Retrieve and verify each one
 	for i := 1; i <= 5; i++ {
-		stats, err := ops.GetIndexStatistics(nil, i)
+		stats, err := ops.GetIndexStatistics(nil, fid(i))
 		if err != nil {
 			t.Errorf("Failed to retrieve stats for index %d: %v", i, err)
 		}
-		if stats.IndexID != i {
+		if stats.IndexID != fid(i) {
 			t.Errorf("Expected IndexID %d, got %d", i, stats.IndexID)
 		}
-		if stats.NumEntries != int64(i*1000) {
+		if stats.NumEntries != uint64(i*1000) {
 			t.Errorf("Expected NumEntries %d, got %d", i*1000, stats.NumEntries)
 		}
 	}
@@ -258,7 +258,7 @@ func TestIndexStatsOperations_MultipleStatistics(t *testing.T) {
 // TestIndexStatsOperations_ZeroEntries tests statistics with zero entries
 func TestIndexStatsOperations_ZeroEntries(t *testing.T) {
 	mock := &mockIndexStatsAccess{
-		indexStatsData: make(map[int]*systemtable.IndexStatisticsRow),
+		indexStatsData: map[primitives.FileID]*systemtable.IndexStatisticsRow{},
 	}
 
 	ops := NewIndexStatsOperations(mock, 1, 2, mockIndexStatsFileGetter, nil)
@@ -298,7 +298,7 @@ func TestIndexStatsOperations_ZeroEntries(t *testing.T) {
 // TestIndexStatsOperations_LargeEntries tests statistics with very large numbers
 func TestIndexStatsOperations_LargeEntries(t *testing.T) {
 	mock := &mockIndexStatsAccess{
-		indexStatsData: make(map[int]*systemtable.IndexStatisticsRow),
+		indexStatsData: map[primitives.FileID]*systemtable.IndexStatisticsRow{},
 	}
 
 	ops := NewIndexStatsOperations(mock, 1, 2, mockIndexStatsFileGetter, nil)
@@ -338,7 +338,7 @@ func TestIndexStatsOperations_LargeEntries(t *testing.T) {
 // TestIndexStatsOperations_ClusteringFactorEdgeCases tests clustering factor boundaries
 func TestIndexStatsOperations_ClusteringFactorEdgeCases(t *testing.T) {
 	mock := &mockIndexStatsAccess{
-		indexStatsData: make(map[int]*systemtable.IndexStatisticsRow),
+		indexStatsData: map[primitives.FileID]*systemtable.IndexStatisticsRow{},
 	}
 
 	ops := NewIndexStatsOperations(mock, 1, 2, mockIndexStatsFileGetter, nil)
@@ -356,7 +356,7 @@ func TestIndexStatsOperations_ClusteringFactorEdgeCases(t *testing.T) {
 
 	for i, tc := range testCases {
 		stats := &systemtable.IndexStatisticsRow{
-			IndexID:          i + 1,
+			IndexID:          fid(i + 1),
 			TableID:          100,
 			IndexName:        "idx_" + tc.name,
 			IndexType:        index.BTreeIndex,
@@ -374,7 +374,7 @@ func TestIndexStatsOperations_ClusteringFactorEdgeCases(t *testing.T) {
 			t.Fatalf("Failed to store stats with clustering factor %.2f: %v", tc.clusteringFactor, err)
 		}
 
-		retrieved, err := ops.GetIndexStatistics(nil, i+1)
+		retrieved, err := ops.GetIndexStatistics(nil, fid(i+1))
 		if err != nil {
 			t.Fatalf("Failed to retrieve stats: %v", err)
 		}
@@ -390,7 +390,7 @@ func TestIndexStatsOperations_ClusteringFactorEdgeCases(t *testing.T) {
 // TestIndexStatsOperations_HashIndexType tests statistics for Hash indexes
 func TestIndexStatsOperations_HashIndexType(t *testing.T) {
 	mock := &mockIndexStatsAccess{
-		indexStatsData: make(map[int]*systemtable.IndexStatisticsRow),
+		indexStatsData: map[primitives.FileID]*systemtable.IndexStatisticsRow{},
 	}
 
 	ops := NewIndexStatsOperations(mock, 1, 2, mockIndexStatsFileGetter, nil)
@@ -430,7 +430,7 @@ func TestIndexStatsOperations_HashIndexType(t *testing.T) {
 // TestIndexStatsOperations_BTreeVsHash tests both index types side by side
 func TestIndexStatsOperations_BTreeVsHash(t *testing.T) {
 	mock := &mockIndexStatsAccess{
-		indexStatsData: make(map[int]*systemtable.IndexStatisticsRow),
+		indexStatsData: map[primitives.FileID]*systemtable.IndexStatisticsRow{},
 	}
 
 	ops := NewIndexStatsOperations(mock, 1, 2, mockIndexStatsFileGetter, nil)
@@ -492,7 +492,7 @@ func TestIndexStatsOperations_BTreeVsHash(t *testing.T) {
 // TestIndexStatsOperations_CollectIndexStatistics tests the CollectIndexStatistics method
 func TestIndexStatsOperations_CollectIndexStatistics(t *testing.T) {
 	mock := &mockIndexStatsAccess{
-		indexStatsData: make(map[int]*systemtable.IndexStatisticsRow),
+		indexStatsData: map[primitives.FileID]*systemtable.IndexStatisticsRow{},
 	}
 
 	ops := NewIndexStatsOperations(mock, 1, 2, mockIndexStatsFileGetter, nil)
@@ -524,7 +524,7 @@ func TestIndexStatsOperations_CollectIndexStatistics(t *testing.T) {
 // TestIndexStatsOperations_CollectIndexStatistics_HashIndex tests collecting stats for hash index
 func TestIndexStatsOperations_CollectIndexStatistics_HashIndex(t *testing.T) {
 	mock := &mockIndexStatsAccess{
-		indexStatsData: make(map[int]*systemtable.IndexStatisticsRow),
+		indexStatsData: map[primitives.FileID]*systemtable.IndexStatisticsRow{},
 	}
 
 	ops := NewIndexStatsOperations(mock, 1, 2, mockIndexStatsFileGetter, nil)
@@ -545,7 +545,7 @@ func TestIndexStatsOperations_CollectIndexStatistics_HashIndex(t *testing.T) {
 // TestIndexStatsOperations_StoreAndRetrieveMultiple tests storing and retrieving multiple stats
 func TestIndexStatsOperations_StoreAndRetrieveMultiple(t *testing.T) {
 	mock := &mockIndexStatsAccess{
-		indexStatsData: make(map[int]*systemtable.IndexStatisticsRow),
+		indexStatsData: map[primitives.FileID]*systemtable.IndexStatisticsRow{},
 	}
 
 	ops := NewIndexStatsOperations(mock, 1, 2, mockIndexStatsFileGetter, nil)
@@ -553,15 +553,15 @@ func TestIndexStatsOperations_StoreAndRetrieveMultiple(t *testing.T) {
 	// Store 10 different statistics
 	for i := 1; i <= 10; i++ {
 		stats := &systemtable.IndexStatisticsRow{
-			IndexID:          i,
-			TableID:          100 + i,
+			IndexID:          fid(i),
+			TableID:          fid(100 + i),
 			IndexName:        "idx_" + string(rune('A'+i-1)),
 			IndexType:        index.BTreeIndex,
 			ColumnName:       "col" + string(rune('0'+i)),
-			NumEntries:       int64(i * 100),
-			NumPages:         i,
+			NumEntries:       uint64(i * 100),
+			NumPages:         primitives.PageNumber(i),
 			BTreeHeight:      2,
-			DistinctKeys:     int64(i * 80),
+			DistinctKeys:     uint64(i * 80),
 			ClusteringFactor: float64(i) * 0.09,
 			AvgKeySize:       8,
 		}
@@ -573,12 +573,12 @@ func TestIndexStatsOperations_StoreAndRetrieveMultiple(t *testing.T) {
 
 	// Verify all can be retrieved
 	for i := 1; i <= 10; i++ {
-		stats, err := ops.GetIndexStatistics(nil, i)
+		stats, err := ops.GetIndexStatistics(nil, fid(i))
 		if err != nil {
 			t.Errorf("Failed to retrieve stats %d: %v", i, err)
 			continue
 		}
-		if stats.TableID != 100+i {
+		if stats.TableID != fid(100+i) {
 			t.Errorf("Stats %d: Expected TableID %d, got %d", i, 100+i, stats.TableID)
 		}
 	}
@@ -587,7 +587,7 @@ func TestIndexStatsOperations_StoreAndRetrieveMultiple(t *testing.T) {
 // TestIndexStatsOperations_UpdateMultipleTimes tests updating statistics multiple times
 func TestIndexStatsOperations_UpdateMultipleTimes(t *testing.T) {
 	mock := &mockIndexStatsAccess{
-		indexStatsData: make(map[int]*systemtable.IndexStatisticsRow),
+		indexStatsData: map[primitives.FileID]*systemtable.IndexStatisticsRow{},
 	}
 
 	ops := NewIndexStatsOperations(mock, 1, 2, mockIndexStatsFileGetter, nil)
@@ -609,8 +609,8 @@ func TestIndexStatsOperations_UpdateMultipleTimes(t *testing.T) {
 
 	// Store and update 5 times
 	for i := 0; i < 5; i++ {
-		stats.NumEntries = int64((i + 1) * 1000)
-		stats.DistinctKeys = int64((i + 1) * 800)
+		stats.NumEntries = uint64((i + 1) * 1000)
+		stats.DistinctKeys = uint64((i + 1) * 800)
 		err := ops.StoreIndexStatistics(nil, stats)
 		if err != nil {
 			t.Fatalf("Failed to update stats (iteration %d): %v", i, err)
@@ -634,7 +634,7 @@ func TestIndexStatsOperations_UpdateMultipleTimes(t *testing.T) {
 // TestIndexStatsOperations_DifferentColumnNames tests indexes on different columns
 func TestIndexStatsOperations_DifferentColumnNames(t *testing.T) {
 	mock := &mockIndexStatsAccess{
-		indexStatsData: make(map[int]*systemtable.IndexStatisticsRow),
+		indexStatsData: map[primitives.FileID]*systemtable.IndexStatisticsRow{},
 	}
 
 	ops := NewIndexStatsOperations(mock, 1, 2, mockIndexStatsFileGetter, nil)
@@ -652,7 +652,7 @@ func TestIndexStatsOperations_DifferentColumnNames(t *testing.T) {
 
 	for i, colName := range columnNames {
 		stats := &systemtable.IndexStatisticsRow{
-			IndexID:          i + 1,
+			IndexID:          fid(i + 1),
 			TableID:          100,
 			IndexName:        "idx_" + colName,
 			IndexType:        index.BTreeIndex,
@@ -672,7 +672,7 @@ func TestIndexStatsOperations_DifferentColumnNames(t *testing.T) {
 
 	// Verify all were stored with correct column names
 	for i, colName := range columnNames {
-		stats, err := ops.GetIndexStatistics(nil, i+1)
+		stats, err := ops.GetIndexStatistics(nil, fid(i+1))
 		if err != nil {
 			t.Errorf("Failed to retrieve stats for column '%s': %v", colName, err)
 			continue
@@ -686,7 +686,7 @@ func TestIndexStatsOperations_DifferentColumnNames(t *testing.T) {
 // TestIndexStatsOperations_HighDistinctKeys tests indexes with high cardinality
 func TestIndexStatsOperations_HighDistinctKeys(t *testing.T) {
 	mock := &mockIndexStatsAccess{
-		indexStatsData: make(map[int]*systemtable.IndexStatisticsRow),
+		indexStatsData: map[primitives.FileID]*systemtable.IndexStatisticsRow{},
 	}
 
 	ops := NewIndexStatsOperations(mock, 1, 2, mockIndexStatsFileGetter, nil)
@@ -725,7 +725,7 @@ func TestIndexStatsOperations_HighDistinctKeys(t *testing.T) {
 // TestIndexStatsOperations_LowDistinctKeys tests indexes with low cardinality
 func TestIndexStatsOperations_LowDistinctKeys(t *testing.T) {
 	mock := &mockIndexStatsAccess{
-		indexStatsData: make(map[int]*systemtable.IndexStatisticsRow),
+		indexStatsData: map[primitives.FileID]*systemtable.IndexStatisticsRow{},
 	}
 
 	ops := NewIndexStatsOperations(mock, 1, 2, mockIndexStatsFileGetter, nil)
@@ -762,10 +762,10 @@ func TestIndexStatsOperations_LowDistinctKeys(t *testing.T) {
 
 // MockStatsOperations is a mock for testing
 type MockStatsOperations struct {
-	stats map[int]*systemtable.TableStatistics
+	stats map[primitives.FileID]*systemtable.TableStatistics
 }
 
-func (m *MockStatsOperations) GetTableStatistics(tx TxContext, tableID primitives.TableID) (*systemtable.TableStatistics, error) {
+func (m *MockStatsOperations) GetTableStatistics(tx TxContext, tableID primitives.FileID) (*systemtable.TableStatistics, error) {
 	stats, ok := m.stats[tableID]
 	if !ok {
 		return nil, fmt.Errorf("table statistics not found")

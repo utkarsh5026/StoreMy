@@ -14,7 +14,7 @@ import (
 
 // mockFileGetter returns a mock DbFile for testing
 // Note: Returns a non-HeapFile to simulate page count of 0 unless we can properly mock HeapFile
-func mockFileGetter(tableID primitives.TableID) (page.DbFile, error) {
+func mockFileGetter(tableID primitives.FileID) (page.DbFile, error) {
 	if tableID == 999 {
 		return nil, errors.New("file not found")
 	}
@@ -30,7 +30,7 @@ func (m *mockDbFile) NumPages() (int, error) {
 	return 5, nil
 }
 
-func (m *mockDbFile) ReadPage(pid primitives.PageID) (page.Page, error) {
+func (m *mockDbFile) ReadPage(pid *page.PageDescriptor) (page.Page, error) {
 	return nil, nil
 }
 
@@ -38,8 +38,8 @@ func (m *mockDbFile) WritePage(p page.Page) error {
 	return nil
 }
 
-func (m *mockDbFile) GetID() int {
-	return 1
+func (m *mockDbFile) GetID() primitives.FileID {
+	return primitives.FileID(1)
 }
 
 func (m *mockDbFile) GetTupleDesc() *tuple.TupleDescription {
@@ -52,22 +52,22 @@ func (m *mockDbFile) Close() error {
 
 // mockStatsCache implements StatsCacheSetter for testing
 type mockStatsCache struct {
-	cached map[primitives.TableID]*tableStats
+	cached map[primitives.FileID]*tableStats
 }
 
 func newMockStatsCache() *mockStatsCache {
 	return &mockStatsCache{
-		cached: make(map[primitives.TableID]*tableStats),
+		cached: make(map[primitives.FileID]*tableStats),
 	}
 }
 
-func (m *mockStatsCache) SetCachedStatistics(tableID primitives.TableID, stats *tableStats) error {
+func (m *mockStatsCache) SetCachedStatistics(tableID primitives.FileID, stats *tableStats) error {
 	m.cached[tableID] = stats
 	return nil
 }
 
 // createStatsTuple creates a statistics tuple for testing
-func createStatsTuple(tableID primitives.TableID, cardinality uint64, pageCount primitives.PageNumber, avgTupleSize, distinctValues uint64) *tuple.Tuple {
+func createStatsTuple(tableID primitives.FileID, cardinality uint64, pageCount primitives.PageNumber, avgTupleSize, distinctValues uint64) *tuple.Tuple {
 	stats := &tableStats{
 		TableID:        tableID,
 		Cardinality:    cardinality,

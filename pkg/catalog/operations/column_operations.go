@@ -35,7 +35,7 @@ type ColumnOperations struct {
 //   - colTableID: The table ID of the CATALOG_COLUMNS system table (typically 2)
 //
 // Returns a configured ColumnOperations ready to perform catalog operations.
-func NewColumnOperations(access catalogio.CatalogAccess, colTableID primitives.TableID) *ColumnOperations {
+func NewColumnOperations(access catalogio.CatalogAccess, colTableID primitives.FileID) *ColumnOperations {
 	base := NewBaseOperations(access, colTableID, systemtable.Columns.Parse,
 		func(c *colMetadata) *Tuple {
 			return systemtable.Columns.CreateTuple(*c)
@@ -58,7 +58,7 @@ func NewColumnOperations(access catalogio.CatalogAccess, colTableID primitives.T
 //   - AutoIncrementInfo if an auto-increment column exists
 //   - nil if the table has no auto-increment column
 //   - error if the catalog cannot be read or is corrupted
-func (co *ColumnOperations) GetAutoIncrementColumn(tx TxContext, tableID primitives.TableID) (*AutoIncrementInfo, error) {
+func (co *ColumnOperations) GetAutoIncrementColumn(tx TxContext, tableID primitives.FileID) (*AutoIncrementInfo, error) {
 	var result *AutoIncrementInfo
 
 	err := co.Iterate(tx, func(col *colMetadata) error {
@@ -98,7 +98,7 @@ func (co *ColumnOperations) GetAutoIncrementColumn(tx TxContext, tableID primiti
 //   - ColumnMetadata with the highest next_auto_value for the specified column
 //   - nil if no matching column found
 //   - error if catalog read fails
-func (co *ColumnOperations) findLatestAutoIncrementColumn(tx TxContext, tableID primitives.TableID, columnName string) (*colMetadata, error) {
+func (co *ColumnOperations) findLatestAutoIncrementColumn(tx TxContext, tableID primitives.FileID, columnName string) (*colMetadata, error) {
 	var result *colMetadata
 	var maxValue uint64 = 0
 
@@ -139,7 +139,7 @@ func (co *ColumnOperations) findLatestAutoIncrementColumn(tx TxContext, tableID 
 //   - The column cannot be found (may indicate catalog corruption)
 //   - The delete operation fails (lock conflict or storage error)
 //   - The insert operation fails (storage error or constraint violation)
-func (co *ColumnOperations) IncrementAutoIncrementValue(tx TxContext, tableID primitives.TableID, columnName string, newValue uint64) error {
+func (co *ColumnOperations) IncrementAutoIncrementValue(tx TxContext, tableID primitives.FileID, columnName string, newValue uint64) error {
 	match, err := co.findLatestAutoIncrementColumn(tx, tableID, columnName)
 	if err != nil || match == nil {
 		return fmt.Errorf("failed to find auto-increment column: %w", err)
@@ -167,7 +167,7 @@ func (co *ColumnOperations) IncrementAutoIncrementValue(tx TxContext, tableID pr
 // Returns:
 //   - Slice of ColumnMetadata for all columns in the table
 //   - error if catalog read or parsing fails
-func (co *ColumnOperations) LoadColumnMetadata(tx TxContext, tableID primitives.TableID) ([]colMetadata, error) {
+func (co *ColumnOperations) LoadColumnMetadata(tx TxContext, tableID primitives.FileID) ([]colMetadata, error) {
 	columnPtrs, err := co.FindAll(tx, func(c *colMetadata) bool {
 		return c.TableID == tableID
 	})

@@ -22,7 +22,7 @@ type IndexOperations struct {
 // Parameters:
 //   - access: CatalogAccess implementation (typically SystemCatalog)
 //   - indexTableID: ID of the CATALOG_INDEXES system table
-func NewIndexOperations(access catalogio.CatalogAccess, indexTableID primitives.TableID) *IndexOperations {
+func NewIndexOperations(access catalogio.CatalogAccess, indexTableID primitives.FileID) *IndexOperations {
 	base := NewBaseOperations(
 		access,
 		indexTableID,
@@ -44,7 +44,7 @@ func NewIndexOperations(access catalogio.CatalogAccess, indexTableID primitives.
 //   - tableID: ID of the table whose indexes to retrieve
 //
 // Returns a slice of IndexMetadata for all indexes on the table, or an error if the catalog cannot be read.
-func (io *IndexOperations) GetIndexesByTable(tx *transaction.TransactionContext, tableID primitives.TableID) ([]*systemtable.IndexMetadata, error) {
+func (io *IndexOperations) GetIndexesByTable(tx *transaction.TransactionContext, tableID primitives.FileID) ([]*systemtable.IndexMetadata, error) {
 	return io.FindAll(tx, func(im *systemtable.IndexMetadata) bool {
 		return im.TableID == tableID
 	})
@@ -71,7 +71,7 @@ func (io *IndexOperations) GetIndexByName(tx *transaction.TransactionContext, in
 //   - indexID: ID of the index to look up
 //
 // Returns IndexMetadata or an error if the index is not found.
-func (io *IndexOperations) GetIndexByID(tx *transaction.TransactionContext, indexID primitives.IndexID) (*systemtable.IndexMetadata, error) {
+func (io *IndexOperations) GetIndexByID(tx *transaction.TransactionContext, indexID primitives.FileID) (*systemtable.IndexMetadata, error) {
 	return io.FindOne(tx, func(im *systemtable.IndexMetadata) bool {
 		return im.IndexID == indexID
 	})
@@ -84,7 +84,7 @@ func (io *IndexOperations) GetIndexByID(tx *transaction.TransactionContext, inde
 //   - indexID: ID of the index to remove
 //
 // Returns an error if the index cannot be deleted.
-func (io *IndexOperations) DeleteIndexFromCatalog(tx *transaction.TransactionContext, indexID primitives.IndexID) error {
+func (io *IndexOperations) DeleteIndexFromCatalog(tx *transaction.TransactionContext, indexID primitives.FileID) error {
 	if err := io.DeleteBy(tx, func(im *systemtable.IndexMetadata) bool {
 		return im.IndexID == indexID
 	}); err != nil {

@@ -12,12 +12,12 @@ import (
 )
 
 type tableStats = systemtable.TableStatistics
-type FileGetter = func(tableID primitives.TableID) (page.DbFile, error)
+type FileGetter = func(tableID primitives.FileID) (page.DbFile, error)
 
 // StatsCacheSetter defines the interface for caching table statistics.
 // Implementations should handle concurrent access safely.
 type StatsCacheSetter interface {
-	SetCachedStatistics(tableID primitives.TableID, stats *tableStats) error
+	SetCachedStatistics(tableID primitives.FileID, stats *tableStats) error
 }
 
 // StatsOperations manages table statistics in the CATALOG_STATISTICS system table.
@@ -34,7 +34,7 @@ type StatsOperations struct {
 	reader         catalogio.CatalogReader // Reads tuples from catalog tables
 	fileGetter     FileGetter              // Retrieves DbFile for a table ID
 	cache          StatsCacheSetter        // Optional statistics cache
-	columnsTableID primitives.TableID      // ID of CATALOG_COLUMNS table for schema lookup
+	columnsTableID primitives.FileID       // ID of CATALOG_COLUMNS table for schema lookup
 }
 
 // NewStatsOperations creates a new StatsOperations instance.
@@ -48,7 +48,7 @@ type StatsOperations struct {
 //
 // Returns:
 //   - *StatsOperations: Configured operations instance
-func NewStatsOperations(access catalogio.CatalogAccess, statsTableID, columnsTableID primitives.TableID, f FileGetter, cache StatsCacheSetter) *StatsOperations {
+func NewStatsOperations(access catalogio.CatalogAccess, statsTableID, columnsTableID primitives.FileID, f FileGetter, cache StatsCacheSetter) *StatsOperations {
 	base := NewBaseOperations(
 		access,
 		statsTableID,
@@ -77,7 +77,7 @@ func NewStatsOperations(access catalogio.CatalogAccess, statsTableID, columnsTab
 //
 // Returns:
 //   - error: nil on success, or error if collection/persistence fails
-func (so *StatsOperations) UpdateTableStatistics(tx TxContext, tableID primitives.TableID) error {
+func (so *StatsOperations) UpdateTableStatistics(tx TxContext, tableID primitives.FileID) error {
 	stats, err := so.collectStats(tx, tableID)
 	if err != nil {
 		return fmt.Errorf("failed to collect statistics for table %d: %w", tableID, err)
@@ -110,7 +110,7 @@ func (so *StatsOperations) UpdateTableStatistics(tx TxContext, tableID primitive
 // Returns:
 //   - int: Column index of the primary key, or -1 if not found
 //   - error: nil on success, or error if catalog read fails
-func (so *StatsOperations) getPrimaryKeyIndex(tx TxContext, tableID primitives.TableID) (primitives.ColumnID, error) {
+func (so *StatsOperations) getPrimaryKeyIndex(tx TxContext, tableID primitives.FileID) (primitives.ColumnID, error) {
 	var primaryKeyIndex primitives.ColumnID = 0
 
 	err := so.reader.IterateTable(so.columnsTableID, tx, func(t *tuple.Tuple) error {
@@ -153,7 +153,7 @@ func (so *StatsOperations) getPrimaryKeyIndex(tx TxContext, tableID primitives.T
 // Returns:
 //   - *tableStats: Collected statistics
 //   - error: nil on success, or error if scan fails
-func (so *StatsOperations) collectStats(tx TxContext, tableID primitives.TableID) (*tableStats, error) {
+func (so *StatsOperations) collectStats(tx TxContext, tableID primitives.FileID) (*tableStats, error) {
 	file, err := so.fileGetter(tableID)
 	if err != nil {
 		return nil, err
@@ -226,7 +226,7 @@ func (so *StatsOperations) collectStats(tx TxContext, tableID primitives.TableID
 // Returns:
 //   - *tableStats: Statistics record if found
 //   - error: error if statistics not found or read fails
-func (so *StatsOperations) GetTableStatistics(tx TxContext, tableID primitives.TableID) (*tableStats, error) {
+func (so *StatsOperations) GetTableStatistics(tx TxContext, tableID primitives.FileID) (*tableStats, error) {
 	result, err := so.FindOne(tx, func(t *tableStats) bool {
 		return t.TableID == tableID
 	})
@@ -262,7 +262,7 @@ func (so *StatsOperations) insert(tx TxContext, stats *tableStats) error {
 //
 // Returns:
 //   - error: nil on success, or error if update fails
-func (so *StatsOperations) update(tx TxContext, tableID primitives.TableID, stats *tableStats) error {
+func (so *StatsOperations) update(tx TxContext, tableID primitives.FileID, stats *tableStats) error {
 	err := so.Upsert(tx, func(t *tableStats) bool {
 		return t.TableID == tableID
 	}, stats)

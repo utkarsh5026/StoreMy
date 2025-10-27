@@ -8,22 +8,23 @@ import (
 	"storemy/pkg/storage/index"
 	"storemy/pkg/tuple"
 	"testing"
+	"time"
 )
 
 // MockCatalogAccess implements CatalogAccess for testing
 type MockCatalogAccess struct {
-	tables map[primitives.TableID][]*tuple.Tuple // tableID -> tuples
+	tables map[primitives.FileID][]*tuple.Tuple // tableID -> tuples
 }
 
 func NewMockCatalogAccess() *MockCatalogAccess {
 	return &MockCatalogAccess{
-		tables: make(map[primitives.TableID][]*tuple.Tuple),
+		tables: make(map[primitives.FileID][]*tuple.Tuple),
 	}
 }
 
 // IterateTable implements CatalogReader
 func (m *MockCatalogAccess) IterateTable(
-	tableID primitives.TableID,
+	tableID primitives.FileID,
 	tx *transaction.TransactionContext,
 	processFunc func(*tuple.Tuple) error,
 ) error {
@@ -46,7 +47,7 @@ func (m *MockCatalogAccess) IterateTable(
 
 // InsertRow implements CatalogWriter
 func (m *MockCatalogAccess) InsertRow(
-	tableID primitives.TableID,
+	tableID primitives.FileID,
 	tx *transaction.TransactionContext,
 	tup *tuple.Tuple,
 ) error {
@@ -56,7 +57,7 @@ func (m *MockCatalogAccess) InsertRow(
 
 // DeleteRow implements CatalogWriter
 func (m *MockCatalogAccess) DeleteRow(
-	tableID primitives.TableID,
+	tableID primitives.FileID,
 	tx *transaction.TransactionContext,
 	tup *tuple.Tuple,
 ) error {
@@ -86,15 +87,15 @@ func (m *MockCatalogAccess) DeleteRow(
 }
 
 // Helper to create index metadata tuple
-func createIndexTuple(indexID, tableID primitives.TableID, indexName, columnName string, indexType index.IndexType) *tuple.Tuple {
+func createIndexTuple(indexID, tableID primitives.FileID, indexName, columnName string, indexType index.IndexType) *tuple.Tuple {
 	metadata := systemtable.IndexMetadata{
 		IndexID:    indexID,
 		IndexName:  indexName,
 		TableID:    tableID,
 		ColumnName: columnName,
 		IndexType:  indexType,
-		FilePath:   fmt.Sprintf("/data/idx_%d.dat", indexID),
-		CreatedAt:  1234567890,
+		FilePath:   primitives.Filepath(fmt.Sprintf("/data/idx_%d.dat", indexID)),
+		CreatedAt:  time.Now(),
 	}
 	return systemtable.Indexes.CreateTuple(metadata)
 }
@@ -102,7 +103,7 @@ func createIndexTuple(indexID, tableID primitives.TableID, indexName, columnName
 func TestGetIndexesByTable(t *testing.T) {
 	// Setup mock catalog
 	mock := NewMockCatalogAccess()
-	indexTableID := 100
+	var indexTableID primitives.FileID = 100
 
 	// Add index tuples for different tables
 	mock.tables[indexTableID] = []*tuple.Tuple{
@@ -143,7 +144,7 @@ func TestGetIndexesByTable(t *testing.T) {
 
 func TestGetIndexByName(t *testing.T) {
 	mock := NewMockCatalogAccess()
-	indexTableID := 100
+	var indexTableID primitives.FileID = 100
 
 	mock.tables[indexTableID] = []*tuple.Tuple{
 		createIndexTuple(1, 10, "idx_users_email", "email", index.BTreeIndex),
@@ -174,7 +175,7 @@ func TestGetIndexByName(t *testing.T) {
 
 func TestGetIndexByID(t *testing.T) {
 	mock := NewMockCatalogAccess()
-	indexTableID := 100
+	var indexTableID primitives.FileID = 100
 
 	mock.tables[indexTableID] = []*tuple.Tuple{
 		createIndexTuple(1, 10, "idx_users_email", "email", index.BTreeIndex),
@@ -202,7 +203,7 @@ func TestGetIndexByID(t *testing.T) {
 
 func TestDeleteIndexFromCatalog(t *testing.T) {
 	mock := NewMockCatalogAccess()
-	indexTableID := 100
+	var indexTableID primitives.FileID = 100
 
 	// Add test data
 	tup1 := createIndexTuple(1, 10, "idx_users_email", "email", index.BTreeIndex)
@@ -243,7 +244,7 @@ func TestDeleteIndexFromCatalog(t *testing.T) {
 
 func TestIndexOperations_WithEmptyTable(t *testing.T) {
 	mock := NewMockCatalogAccess()
-	indexTableID := 100
+	var indexTableID primitives.FileID = 100
 	mock.tables[indexTableID] = []*tuple.Tuple{} // Empty table
 
 	ops := NewIndexOperations(mock, indexTableID)
@@ -269,7 +270,7 @@ func TestIndexOperations_Isolation(t *testing.T) {
 	// and doesn't require the full SystemCatalog
 
 	mock := NewMockCatalogAccess()
-	indexTableID := 100
+	var indexTableID primitives.FileID = 100
 
 	// Add some data
 	mock.tables[indexTableID] = []*tuple.Tuple{
@@ -295,7 +296,7 @@ func TestIndexOperations_Isolation(t *testing.T) {
 // TestGetIndexesByTable_MultipleIndexesSameTable tests retrieving multiple indexes from the same table
 func TestGetIndexesByTable_MultipleIndexesSameTable(t *testing.T) {
 	mock := NewMockCatalogAccess()
-	indexTableID := 100
+	var indexTableID primitives.FileID = 100
 
 	// Create 5 indexes for table 10
 	mock.tables[indexTableID] = []*tuple.Tuple{
@@ -328,7 +329,7 @@ func TestGetIndexesByTable_MultipleIndexesSameTable(t *testing.T) {
 // TestGetIndexesByTable_NoIndexes tests retrieving indexes when table has none
 func TestGetIndexesByTable_NoIndexes(t *testing.T) {
 	mock := NewMockCatalogAccess()
-	indexTableID := 100
+	var indexTableID primitives.FileID = 100
 
 	mock.tables[indexTableID] = []*tuple.Tuple{
 		createIndexTuple(1, 10, "idx_table10", "col1", index.BTreeIndex),
@@ -351,7 +352,7 @@ func TestGetIndexesByTable_NoIndexes(t *testing.T) {
 // TestGetIndexByName_CaseInsensitive tests case-insensitive name matching
 func TestGetIndexByName_CaseInsensitive(t *testing.T) {
 	mock := NewMockCatalogAccess()
-	indexTableID := 100
+	var indexTableID primitives.FileID = 100
 
 	mock.tables[indexTableID] = []*tuple.Tuple{
 		createIndexTuple(1, 10, "MyIndexName", "col1", index.BTreeIndex),
@@ -380,7 +381,7 @@ func TestGetIndexByName_CaseInsensitive(t *testing.T) {
 // TestGetIndexByName_SpecialCharacters tests indexes with special characters
 func TestGetIndexByName_SpecialCharacters(t *testing.T) {
 	mock := NewMockCatalogAccess()
-	indexTableID := 100
+	var indexTableID primitives.FileID = 100
 
 	specialNames := []string{
 		"idx_user@email",
@@ -393,7 +394,7 @@ func TestGetIndexByName_SpecialCharacters(t *testing.T) {
 
 	// Create tuples for each special name
 	for i, name := range specialNames {
-		tup := createIndexTuple(i+1, 10, name, "col1", index.BTreeIndex)
+		tup := createIndexTuple(primitives.FileID(i+1), 10, name, "col1", index.BTreeIndex)
 		mock.tables[indexTableID] = append(mock.tables[indexTableID], tup)
 	}
 
@@ -405,7 +406,7 @@ func TestGetIndexByName_SpecialCharacters(t *testing.T) {
 		if err != nil {
 			t.Errorf("Failed to find index with name '%s': %v", name, err)
 		}
-		if idx.IndexID != i+1 {
+		if int(idx.IndexID) != i+1 {
 			t.Errorf("Expected index ID %d, got %d for name '%s'", i+1, idx.IndexID, name)
 		}
 	}
@@ -414,7 +415,7 @@ func TestGetIndexByName_SpecialCharacters(t *testing.T) {
 // TestGetIndexByID_EdgeCases tests edge cases for ID lookups
 func TestGetIndexByID_EdgeCases(t *testing.T) {
 	mock := NewMockCatalogAccess()
-	indexTableID := 100
+	var indexTableID primitives.FileID = 100
 
 	mock.tables[indexTableID] = []*tuple.Tuple{
 		createIndexTuple(1, 10, "idx_1", "col1", index.BTreeIndex),
@@ -425,14 +426,13 @@ func TestGetIndexByID_EdgeCases(t *testing.T) {
 
 	// Test valid IDs
 	testCases := []struct {
-		id          int
+		id          primitives.FileID
 		expectFound bool
 		expectName  string
 	}{
 		{1, true, "idx_1"},
 		{999999, true, "idx_large"},
 		{0, false, ""},
-		{-1, false, ""},
 		{500, false, ""},
 	}
 
@@ -456,18 +456,18 @@ func TestGetIndexByID_EdgeCases(t *testing.T) {
 // TestDeleteIndexFromCatalog_MultipleDeletes tests deleting multiple indexes
 func TestDeleteIndexFromCatalog_MultipleDeletes(t *testing.T) {
 	mock := NewMockCatalogAccess()
-	indexTableID := 100
+	var indexTableID primitives.FileID = 100
 
 	// Create 5 indexes
 	for i := 1; i <= 5; i++ {
-		tup := createIndexTuple(i, 10, fmt.Sprintf("idx_%d", i), "col1", index.BTreeIndex)
+		tup := createIndexTuple(primitives.FileID(i), 10, fmt.Sprintf("idx_%d", i), "col1", index.BTreeIndex)
 		mock.tables[indexTableID] = append(mock.tables[indexTableID], tup)
 	}
 
 	ops := NewIndexOperations(mock, indexTableID)
 
 	// Delete indexes 2, 4, and 5
-	deleteIDs := []int{2, 4, 5}
+	deleteIDs := []primitives.FileID{2, 4, 5}
 	for _, id := range deleteIDs {
 		err := ops.DeleteIndexFromCatalog(nil, id)
 		if err != nil {
@@ -476,7 +476,7 @@ func TestDeleteIndexFromCatalog_MultipleDeletes(t *testing.T) {
 	}
 
 	// Verify only 1 and 3 remain
-	remainingIDs := []int{1, 3}
+	remainingIDs := []primitives.FileID{1, 3}
 	for _, id := range remainingIDs {
 		_, err := ops.GetIndexByID(nil, id)
 		if err != nil {
@@ -501,7 +501,7 @@ func TestDeleteIndexFromCatalog_MultipleDeletes(t *testing.T) {
 // TestDeleteIndexFromCatalog_NonExistent tests deleting non-existent index
 func TestDeleteIndexFromCatalog_NonExistent(t *testing.T) {
 	mock := NewMockCatalogAccess()
-	indexTableID := 100
+	var indexTableID primitives.FileID = 100
 
 	mock.tables[indexTableID] = []*tuple.Tuple{
 		createIndexTuple(1, 10, "idx_1", "col1", index.BTreeIndex),
@@ -525,7 +525,7 @@ func TestDeleteIndexFromCatalog_NonExistent(t *testing.T) {
 // TestIndexOperations_HashIndexType tests operations with Hash indexes
 func TestIndexOperations_HashIndexType(t *testing.T) {
 	mock := NewMockCatalogAccess()
-	indexTableID := 100
+	var indexTableID primitives.FileID = 100
 
 	mock.tables[indexTableID] = []*tuple.Tuple{
 		createIndexTuple(1, 10, "idx_hash", "col1", index.HashIndex),
@@ -570,17 +570,17 @@ func TestIndexOperations_HashIndexType(t *testing.T) {
 // TestGetIndexesByTable_LargeNumberOfIndexes tests performance with many indexes
 func TestGetIndexesByTable_LargeNumberOfIndexes(t *testing.T) {
 	mock := NewMockCatalogAccess()
-	indexTableID := 100
+	var indexTableID primitives.FileID = 100
 
 	// Create 100 indexes for table 10
 	for i := 1; i <= 100; i++ {
-		tup := createIndexTuple(i, 10, fmt.Sprintf("idx_%d", i), fmt.Sprintf("col%d", i), index.BTreeIndex)
+		tup := createIndexTuple(primitives.FileID(i), 10, fmt.Sprintf("idx_%d", i), fmt.Sprintf("col%d", i), index.BTreeIndex)
 		mock.tables[indexTableID] = append(mock.tables[indexTableID], tup)
 	}
 
 	// Add some indexes for other tables
 	for i := 101; i <= 120; i++ {
-		tup := createIndexTuple(i, 20, fmt.Sprintf("idx_%d", i), "col1", index.BTreeIndex)
+		tup := createIndexTuple(primitives.FileID(i), 20, fmt.Sprintf("idx_%d", i), "col1", index.BTreeIndex)
 		mock.tables[indexTableID] = append(mock.tables[indexTableID], tup)
 	}
 
@@ -599,7 +599,7 @@ func TestGetIndexesByTable_LargeNumberOfIndexes(t *testing.T) {
 // TestIndexOperations_EmptyIndexName tests handling of empty index names
 func TestIndexOperations_EmptyIndexName(t *testing.T) {
 	mock := NewMockCatalogAccess()
-	indexTableID := 100
+	var indexTableID primitives.FileID = 100
 
 	mock.tables[indexTableID] = []*tuple.Tuple{
 		createIndexTuple(1, 10, "valid_name", "col1", index.BTreeIndex),
@@ -617,11 +617,11 @@ func TestIndexOperations_EmptyIndexName(t *testing.T) {
 // TestDeleteIndexFromCatalog_AllIndexes tests deleting all indexes
 func TestDeleteIndexFromCatalog_AllIndexes(t *testing.T) {
 	mock := NewMockCatalogAccess()
-	indexTableID := 100
+	var indexTableID primitives.FileID = 100
 
 	// Create 3 indexes
 	for i := 1; i <= 3; i++ {
-		tup := createIndexTuple(i, 10, fmt.Sprintf("idx_%d", i), "col1", index.BTreeIndex)
+		tup := createIndexTuple(primitives.FileID(i), 10, fmt.Sprintf("idx_%d", i), "col1", index.BTreeIndex)
 		mock.tables[indexTableID] = append(mock.tables[indexTableID], tup)
 	}
 
@@ -629,7 +629,7 @@ func TestDeleteIndexFromCatalog_AllIndexes(t *testing.T) {
 
 	// Delete all indexes
 	for i := 1; i <= 3; i++ {
-		err := ops.DeleteIndexFromCatalog(nil, i)
+		err := ops.DeleteIndexFromCatalog(nil, primitives.FileID(i))
 		if err != nil {
 			t.Fatalf("Failed to delete index %d: %v", i, err)
 		}
@@ -653,7 +653,7 @@ func TestDeleteIndexFromCatalog_AllIndexes(t *testing.T) {
 // TestIndexOperations_DuplicateIndexNames tests indexes with similar names
 func TestIndexOperations_DuplicateIndexNames(t *testing.T) {
 	mock := NewMockCatalogAccess()
-	indexTableID := 100
+	var indexTableID primitives.FileID = 100
 
 	// Create indexes with very similar names (different case)
 	mock.tables[indexTableID] = []*tuple.Tuple{
@@ -678,7 +678,7 @@ func TestIndexOperations_DuplicateIndexNames(t *testing.T) {
 // TestIndexOperations_ColumnNameValidation tests different column name formats
 func TestIndexOperations_ColumnNameValidation(t *testing.T) {
 	mock := NewMockCatalogAccess()
-	indexTableID := 100
+	var indexTableID primitives.FileID = 100
 
 	columnNames := []string{
 		"col1",
@@ -689,7 +689,7 @@ func TestIndexOperations_ColumnNameValidation(t *testing.T) {
 	}
 
 	for i, colName := range columnNames {
-		tup := createIndexTuple(i+1, 10, fmt.Sprintf("idx_%d", i), colName, index.BTreeIndex)
+		tup := createIndexTuple(primitives.FileID(i+1), 10, fmt.Sprintf("idx_%d", i), colName, index.BTreeIndex)
 		mock.tables[indexTableID] = append(mock.tables[indexTableID], tup)
 	}
 
