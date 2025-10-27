@@ -3,12 +3,13 @@ package core
 import (
 	"fmt"
 	"math"
+	"storemy/pkg/primitives"
 	"strings"
 )
 
 const (
 	// NoGrouping indicates that no grouping field is used in aggregation
-	NoGrouping = math.MaxUint32
+	NoGrouping primitives.ColumnID = math.MaxUint32
 )
 
 // AggregateOp represents the type of aggregation operation to perform

@@ -18,7 +18,7 @@ import (
 // making it suitable for operations that need to examine every tuple in a table.
 type SequentialScan struct {
 	base            *BaseIterator
-	tableID         primitives.TableID
+	tableID         primitives.FileID
 	currentPage     int64
 	tupleDesc       *tuple.TupleDescription
 	tx              *transaction.TransactionContext
@@ -31,7 +31,7 @@ type SequentialScan struct {
 
 // NewSeqScan creates a new SequentialScan operator for the specified table within a transaction context.
 // It initializes the scan operator with the necessary metadata and prepares it for iteration.
-func NewSeqScan(tx *transaction.TransactionContext, tableID primitives.TableID, file *heap.HeapFile, store *memory.PageStore) (*SequentialScan, error) {
+func NewSeqScan(tx *transaction.TransactionContext, tableID primitives.FileID, file *heap.HeapFile, store *memory.PageStore) (*SequentialScan, error) {
 	if store == nil {
 		return nil, fmt.Errorf("page store cannot be nil")
 	}

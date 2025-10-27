@@ -17,12 +17,12 @@ type mockPageID struct {
 	pageID primitives.PageNumber
 }
 
-func (m *mockPageID) GetTableID() primitives.TableID           { return 0 }
-func (m *mockPageID) PageNo() primitives.PageNumber            { return m.pageID }
-func (m *mockPageID) Serialize() []byte                        { return []byte{byte(m.pageID)} }
-func (m *mockPageID) Equals(other primitives.PageID) bool      { return other.PageNo() == m.pageID }
-func (m *mockPageID) String() string                           { return fmt.Sprintf("Page(%d)", m.pageID) }
-func (m *mockPageID) HashCode() primitives.HashCode            { return primitives.HashCode(m.pageID) }
+func (m *mockPageID) FileID() primitives.FileID           { return 0 }
+func (m *mockPageID) PageNo() primitives.PageNumber       { return m.pageID }
+func (m *mockPageID) Serialize() []byte                   { return []byte{byte(m.pageID)} }
+func (m *mockPageID) Equals(other primitives.PageID) bool { return other.PageNo() == m.pageID }
+func (m *mockPageID) String() string                      { return fmt.Sprintf("Page(%d)", m.pageID) }
+func (m *mockPageID) HashCode() primitives.HashCode       { return primitives.HashCode(m.pageID) }
 
 func mustCreateProjectTupleDesc() *tuple.TupleDescription {
 	td, err := tuple.NewTupleDesc(
