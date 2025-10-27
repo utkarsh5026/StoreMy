@@ -105,7 +105,7 @@ func (hf *HeapFile) validateAndConvertPageID(pageID primitives.PageID) (*page.Pa
 		return nil, fmt.Errorf("page descriptor cannot be nil")
 	}
 
-	if heapPageID.GetTableID() != hf.GetID() {
+	if heapPageID.FileID() != hf.GetID() {
 		return nil, fmt.Errorf("page ID table mismatch")
 	}
 
