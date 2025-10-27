@@ -79,7 +79,7 @@ func (f *Float64Field) Equals(other Field) bool {
 	return math.Abs(f.Value-otherFloat64.Value) < epsilon
 }
 
-func (f *Float64Field) Hash() (uint32, error) {
+func (f *Float64Field) Hash() (primitives.HashCode, error) {
 	h := fnv.New32a()
 	bytes := make([]byte, 8)
 	bits := uint64(f.Value)
@@ -87,7 +87,7 @@ func (f *Float64Field) Hash() (uint32, error) {
 		bytes[i] = byte(bits >> (8 * i))
 	}
 	h.Write(bytes)
-	return h.Sum32(), nil
+	return primitives.HashCode(h.Sum32()), nil
 }
 
 func (f *Float64Field) Length() uint32 {

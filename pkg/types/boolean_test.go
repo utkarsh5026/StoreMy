@@ -85,10 +85,10 @@ func TestBoolField_Hash(t *testing.T) {
 	tests := []struct {
 		name     string
 		value    bool
-		expected uint32
+		expected primitives.HashCode
 	}{
-		{"true value", true, 67918732},  // FNV-1a hash of byte{1}
-		{"false value", false, 84696351}, // FNV-1a hash of byte{0}
+		{"true value", true, primitives.HashCode(67918732)},  // FNV-1a hash of byte{1}
+		{"false value", false, primitives.HashCode(84696351)}, // FNV-1a hash of byte{0}
 	}
 
 	for _, tt := range tests {

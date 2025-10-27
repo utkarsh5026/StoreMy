@@ -140,12 +140,12 @@ func (s *StringField) Equals(other Field) bool {
 // Hash returns a hash value for this string field using a simple polynomial hash function.
 //
 // Returns:
-//   - uint32: The computed hash value for the string
+//   - primitives.HashCode: The computed hash value for the string
 //   - error: Always returns nil for string fields
-func (s *StringField) Hash() (uint32, error) {
+func (s *StringField) Hash() (primitives.HashCode, error) {
 	h := fnv.New32a()
 	h.Write([]byte(s.Value))
-	return h.Sum32(), nil
+	return primitives.HashCode(h.Sum32()), nil
 }
 
 // Length returns the total serialized size of this string field in bytes.

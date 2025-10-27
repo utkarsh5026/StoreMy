@@ -69,8 +69,8 @@ func TestIntField_Hash(t *testing.T) {
 	}
 
 	// FNV-1a hash of 42 (as 8 bytes in little-endian)
-	if hash != uint32(3990555855) {
-		t.Errorf("Expected hash %d, got %d", uint32(3990555855), hash)
+	if hash != primitives.HashCode(3990555855) {
+		t.Errorf("Expected hash %d, got %d", primitives.HashCode(3990555855), hash)
 	}
 }
 

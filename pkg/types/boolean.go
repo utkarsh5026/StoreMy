@@ -110,16 +110,16 @@ func (b *BoolField) Equals(other Field) bool {
 // Hash returns a hash value for this boolean field using FNV-1a hashing.
 //
 // Returns:
-//   - uint32: The FNV-1a hash of the boolean value
+//   - primitives.HashCode: The FNV-1a hash of the boolean value
 //   - error: Always returns nil for boolean fields
-func (b *BoolField) Hash() (uint32, error) {
+func (b *BoolField) Hash() (primitives.HashCode, error) {
 	h := fnv.New32a()
 	if b.Value {
 		h.Write([]byte{1})
 	} else {
 		h.Write([]byte{0})
 	}
-	return h.Sum32(), nil
+	return primitives.HashCode(h.Sum32()), nil
 }
 
 // Length returns the serialized size of this boolean field in bytes.

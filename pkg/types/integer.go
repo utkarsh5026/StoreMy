@@ -48,12 +48,12 @@ func (f *Int32Field) Equals(other Field) bool {
 	return f.Value == otherField.Value
 }
 
-func (f *Int32Field) Hash() (uint32, error) {
+func (f *Int32Field) Hash() (primitives.HashCode, error) {
 	h := fnv.New32a()
 	bytes := make([]byte, 4)
 	binary.BigEndian.PutUint32(bytes, uint32(f.Value))
 	h.Write(bytes)
-	return h.Sum32(), nil
+	return primitives.HashCode(h.Sum32()), nil
 }
 
 func (f *Int32Field) Length() uint32 {
@@ -100,12 +100,12 @@ func (f *Int64Field) Equals(other Field) bool {
 	return f.Value == otherField.Value
 }
 
-func (f *Int64Field) Hash() (uint32, error) {
+func (f *Int64Field) Hash() (primitives.HashCode, error) {
 	h := fnv.New32a()
 	bytes := make([]byte, 8)
 	binary.BigEndian.PutUint64(bytes, uint64(f.Value))
 	h.Write(bytes)
-	return h.Sum32(), nil
+	return primitives.HashCode(h.Sum32()), nil
 }
 
 func (f *Int64Field) Length() uint32 {
@@ -152,12 +152,12 @@ func (f *Uint32Field) Equals(other Field) bool {
 	return f.Value == otherField.Value
 }
 
-func (f *Uint32Field) Hash() (uint32, error) {
+func (f *Uint32Field) Hash() (primitives.HashCode, error) {
 	h := fnv.New32a()
 	bytes := make([]byte, 4)
 	binary.BigEndian.PutUint32(bytes, f.Value)
 	h.Write(bytes)
-	return h.Sum32(), nil
+	return primitives.HashCode(h.Sum32()), nil
 }
 
 func (f *Uint32Field) Length() uint32 {
@@ -204,12 +204,12 @@ func (f *Uint64Field) Equals(other Field) bool {
 	return f.Value == otherField.Value
 }
 
-func (f *Uint64Field) Hash() (uint32, error) {
+func (f *Uint64Field) Hash() (primitives.HashCode, error) {
 	h := fnv.New32a()
 	bytes := make([]byte, 8)
 	binary.BigEndian.PutUint64(bytes, f.Value)
 	h.Write(bytes)
-	return h.Sum32(), nil
+	return primitives.HashCode(h.Sum32()), nil
 }
 
 func (f *Uint64Field) Length() uint32 {
@@ -256,7 +256,7 @@ func (f *IntField) Equals(other Field) bool {
 	return f.Value == otherInt.Value
 }
 
-func (f *IntField) Hash() (uint32, error) {
+func (f *IntField) Hash() (primitives.HashCode, error) {
 	h := fnv.New32a()
 	value := f.Value
 	bytes := make([]byte, 8)
@@ -264,7 +264,7 @@ func (f *IntField) Hash() (uint32, error) {
 		bytes[i] = byte(value >> (8 * i))
 	}
 	h.Write(bytes)
-	return h.Sum32(), nil
+	return primitives.HashCode(h.Sum32()), nil
 }
 
 func (f *IntField) Length() uint32 {
