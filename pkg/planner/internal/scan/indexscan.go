@@ -32,7 +32,7 @@ import (
 //  4. Create appropriate IndexScan operator (equality or range)
 func tryBuildIndexScan(
 	tx *transaction.TransactionContext,
-	tableID int,
+	tableID primitives.FileID,
 	heapFile *heap.HeapFile,
 	filter *plan.FilterNode,
 	ctx *registry.DatabaseContext,

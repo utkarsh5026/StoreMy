@@ -6,6 +6,7 @@ import (
 	"storemy/pkg/execution/query"
 	"storemy/pkg/iterator"
 	"storemy/pkg/plan"
+	"storemy/pkg/primitives"
 	"storemy/pkg/registry"
 	"storemy/pkg/storage/heap"
 	"storemy/pkg/tuple"
@@ -31,8 +32,7 @@ import (
 // Returns:
 // - iterator.DbIterator: an iterator that produces tuples from the table (possibly filtered).
 // - error: non-nil on failure to prepare the scan or predicate.
-func BuildScanWithFilter(tx *transaction.TransactionContext, tableID int, whereClause *plan.FilterNode, ctx *registry.DatabaseContext,
-) (iterator.DbIterator, error) {
+func BuildScanWithFilter(tx *transaction.TransactionContext, tableID primitives.FileID, whereClause *plan.FilterNode, ctx *registry.DatabaseContext) (iterator.DbIterator, error) {
 	heapFile, err := getHeapFileForTable(ctx, tableID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get table file: %v", err)
@@ -107,7 +107,7 @@ func buildPredicateFromFilterNode(filter *plan.FilterNode, td *tuple.TupleDescri
 // Returns:
 // - *heap.HeapFile: the heap file for the specified table.
 // - error: non-nil if the table file cannot be retrieved or is not a HeapFile.
-func getHeapFileForTable(ctx *registry.DatabaseContext, tableID int) (*heap.HeapFile, error) {
+func getHeapFileForTable(ctx *registry.DatabaseContext, tableID primitives.FileID) (*heap.HeapFile, error) {
 	cm := ctx.CatalogManager()
 	file, err := cm.GetTableFile(tableID)
 	if err != nil {
