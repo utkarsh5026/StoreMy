@@ -6,7 +6,7 @@ import (
 	"path/filepath"
 	"storemy/pkg/log/record"
 	"storemy/pkg/primitives"
-	"storemy/pkg/storage/heap"
+	"storemy/pkg/storage/page"
 	"testing"
 )
 
@@ -91,7 +91,7 @@ func TestLogReader_ReadNext_SingleRecord(t *testing.T) {
 
 	// Create a log record
 	tid := primitives.NewTransactionID()
-	pageID := heap.NewHeapPageID(1, 42)
+	pageID := page.NewPageDescriptor(1, 42)
 	rec := record.NewLogRecord(record.UpdateRecord, tid, pageID, []byte("before"), []byte("after"), FirstLSN)
 
 	// Write the record to file
@@ -171,8 +171,8 @@ func TestLogReader_ReadNext_MultipleRecords(t *testing.T) {
 	// Create multiple log records
 	tid1 := primitives.NewTransactionID()
 	tid2 := primitives.NewTransactionID()
-	pageID1 := heap.NewHeapPageID(1, 10)
-	pageID2 := heap.NewHeapPageID(2, 20)
+	pageID1 := page.NewPageDescriptor(1, 10)
+	pageID2 := page.NewPageDescriptor(2, 20)
 
 	records := []*record.LogRecord{
 		record.NewLogRecord(record.BeginRecord, tid1, nil, nil, nil, FirstLSN),
@@ -240,7 +240,7 @@ func TestLogReader_ReadAll(t *testing.T) {
 
 	// Create test records
 	tid := primitives.NewTransactionID()
-	pageID := heap.NewHeapPageID(1, 5)
+	pageID := page.NewPageDescriptor(1, 5)
 
 	records := []*record.LogRecord{
 		record.NewLogRecord(record.BeginRecord, tid, nil, nil, nil, FirstLSN),
@@ -596,7 +596,7 @@ func TestLogReader_DifferentRecordTypes(t *testing.T) {
 	logPath := filepath.Join(tmpDir, "types.log")
 
 	tid := primitives.NewTransactionID()
-	pageID := heap.NewHeapPageID(1, 1)
+	pageID := page.NewPageDescriptor(1, 1)
 
 	testCases := []struct {
 		name   string
@@ -657,7 +657,7 @@ func TestLogReader_LSNAssignment(t *testing.T) {
 
 	// Create records with different sizes
 	tid := primitives.NewTransactionID()
-	pageID := heap.NewHeapPageID(1, 1)
+	pageID := page.NewPageDescriptor(1, 1)
 
 	records := []*record.LogRecord{
 		record.NewLogRecord(record.BeginRecord, tid, nil, nil, nil, FirstLSN),
