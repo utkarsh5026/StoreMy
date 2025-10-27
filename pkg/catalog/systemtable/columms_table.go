@@ -130,16 +130,3 @@ func (ct *ColumnsTable) Parse(t *tuple.Tuple) (*schema.ColumnMetadata, error) {
 
 	return col, nil
 }
-
-// UpdateAutoIncrementValue creates a new tuple with updated next_auto_value field.
-// This is used during INSERT operations to persist the next available auto-increment value.
-// The new tuple preserves all other fields from oldTuple and only modifies field index 6.
-func (ct *ColumnsTable) UpdateAutoIncrementValue(oldTuple *tuple.Tuple, newValue int) *tuple.Tuple {
-	newTuple := tuple.NewTuple(ct.Schema().TupleDesc)
-	for i := range 6 {
-		field, _ := oldTuple.GetField(i)
-		newTuple.SetField(i, field)
-	}
-	newTuple.SetField(6, types.NewIntField(int64(newValue)))
-	return newTuple
-}

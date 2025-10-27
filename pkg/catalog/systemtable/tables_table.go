@@ -76,7 +76,7 @@ func (tt *TablesTable) CreateTuple(tm TableMetadata) *tuple.Tuple {
 // GetID extracts the table_id from a catalog tuple and validates tuple arity.
 // Returns an error when the tuple does not match the expected schema length.
 func (tt *TablesTable) GetID(t *tuple.Tuple) (int, error) {
-	if t.TupleDesc.NumFields() != tt.GetNumFields() {
+	if int(t.NumFields()) != tt.GetNumFields() {
 		return -1, fmt.Errorf("invalid tuple: expected 4 fields, got %d", t.TupleDesc.NumFields())
 	}
 	return getIntField(t, 0), nil

@@ -17,7 +17,7 @@ type IndexMetadata struct {
 	TableID    primitives.TableID
 	ColumnName string
 	IndexType  index.IndexType
-	FilePath   string
+	FilePath   primitives.Filepath
 	CreatedAt  time.Time
 }
 
@@ -63,14 +63,14 @@ func (it *IndexesTable) CreateTuple(im IndexMetadata) *tuple.Tuple {
 		AddUint64(uint64(im.TableID)).
 		AddString(im.ColumnName).
 		AddString(string(im.IndexType)).
-		AddString(im.FilePath).
+		AddString(string(im.FilePath)).
 		AddInt64(im.CreatedAt.Unix()).
 		MustBuild()
 }
 
 // GetID retrieves the index ID from a tuple
 func (it *IndexesTable) GetID(t *tuple.Tuple) (primitives.IndexID, error) {
-	if t.TupleDesc.NumFields() != it.GetNumFields() {
+	if int(t.NumFields()) != it.GetNumFields() {
 		return 0, fmt.Errorf("invalid tuple: expected 7 fields, got %d", t.TupleDesc.NumFields())
 	}
 	return primitives.IndexID(getUint64Field(t, 0)), nil
@@ -92,7 +92,6 @@ func (it *IndexesTable) Parse(t *tuple.Tuple) (*IndexMetadata, error) {
 	filePath := p.ReadString()
 	createdAt := p.ReadTimestamp()
 
-	// Check for parsing errors (field count, type mismatches, etc.)
 	if err := p.Error(); err != nil {
 		return nil, err
 	}
@@ -128,7 +127,7 @@ func (it *IndexesTable) Parse(t *tuple.Tuple) (*IndexMetadata, error) {
 		TableID:    tableID,
 		ColumnName: columnName,
 		IndexType:  indexType,
-		FilePath:   filePath,
+		FilePath:   primitives.Filepath(filePath),
 		CreatedAt:  createdAt,
 	}, nil
 }
