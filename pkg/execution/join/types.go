@@ -19,7 +19,7 @@ type JoinStatistics = common.JoinStatistics
 type JoinPredicate = common.JoinPredicate
 
 // NewJoinPredicate creates a new join predicate
-func NewJoinPredicate(field1, field2 int, op primitives.Predicate) (JoinPredicate, error) {
+func NewJoinPredicate(field1, field2 primitives.ColumnID, op primitives.Predicate) (JoinPredicate, error) {
 	return common.NewJoinPredicate(field1, field2, op)
 }
 

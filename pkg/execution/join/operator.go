@@ -29,7 +29,7 @@ type JoinOperator struct {
 }
 
 // NewJoinOperator creates a new join operator with automatic algorithm selection.
-func NewJoinOperator(field1, field2 int, op primitives.Predicate, leftChild, rightChild iterator.DbIterator) (*JoinOperator, error) {
+func NewJoinOperator(field1, field2 primitives.ColumnID, op primitives.Predicate, leftChild, rightChild iterator.DbIterator) (*JoinOperator, error) {
 	predicate, err := common.NewJoinPredicate(field1, field2, op)
 	if err != nil {
 		return nil, fmt.Errorf("invalid join predicate: %w", err)
