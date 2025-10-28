@@ -380,20 +380,6 @@ func padString(s string, width int) string {
 	return s + strings.Repeat(" ", width-len(s))
 }
 
-func max(a, b int) int {
-	if a > b {
-		return a
-	}
-	return b
-}
-
-func min(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
-}
-
 func main() {
 	if len(os.Args) < 2 {
 		fmt.Println("Usage: catalogreader <data-directory>")
