@@ -1,5 +1,7 @@
 package costmodel
 
+import "storemy/pkg/optimizer/internal/cardinality"
+
 const (
 	// I/O cost parameters
 	IoCostPerPage          = 1.0  // Cost of reading one page from disk
@@ -12,12 +14,12 @@ const (
 	DefaultSortMemory      = 500  // Half of buffer pool for sorting
 
 	// Estimation parameters
-	DefaultTuplesPerPage   = 100   // Default tuples per page if not calculable
-	DefaultTableCardinality = 1000 // Default cardinality when statistics are missing
+	DefaultTuplesPerPage                            = 100  // Default tuples per page if not calculable
+	DefaultTableCardinality cardinality.Cardinality = 1000 // Default cardinality when statistics are missing
 
 	// Hash join parameters
-	HashBuildCPUFactor = 2.0  // Building hash table is more expensive
-	HashProbeCPUFactor = 1.5  // Hash lookup overhead
+	HashBuildCPUFactor = 2.0 // Building hash table is more expensive
+	HashProbeCPUFactor = 1.5 // Hash lookup overhead
 
 	// Projection/filter parameters
 	ProjectionCPUFactor = 0.5 // Projection is lighter than full tuple processing

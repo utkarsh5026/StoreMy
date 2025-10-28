@@ -71,7 +71,7 @@ func (cm *CostModel) EstimatePlanCost(planNode plan.PlanNode) float64 {
 		if err != nil {
 			card = DefaultTableCardinality
 		}
-		planNode.SetCardinality(card)
+		planNode.SetCardinality(int64(card))
 	}
 
 	var cost float64
