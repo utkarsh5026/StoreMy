@@ -1,42 +1,46 @@
 package common
 
-import "storemy/pkg/tuple"
+import (
+	"storemy/pkg/iterator"
+	"storemy/pkg/tuple"
+)
 
 // JoinMatchBuffer manages a buffer of matched tuples for join operations.
 // This provides a common abstraction for buffering join results that need
 // to be returned across multiple Next() calls.
+//
+// Internally wraps SliceIterator to reuse common iteration logic while
+// providing join-specific convenience methods.
 type JoinMatchBuffer struct {
-	buffer []*tuple.Tuple
-	index  int
+	iter *iterator.SliceIterator[*tuple.Tuple]
 }
 
 // NewJoinMatchBuffer creates a new empty match buffer.
 func NewJoinMatchBuffer() *JoinMatchBuffer {
 	return &JoinMatchBuffer{
-		index: -1,
+		iter: iterator.NewSliceIterator([]*tuple.Tuple(nil)),
 	}
 }
 
 // HasNext returns true if there are more buffered results to return.
 func (jmb *JoinMatchBuffer) HasNext() bool {
-	return jmb.index >= 0 && jmb.index < len(jmb.buffer)
+	return jmb.iter.HasNext()
 }
 
 // Next returns the next buffered tuple and advances the index.
 // Should only be called when HasNext() returns true.
 func (jmb *JoinMatchBuffer) Next() *tuple.Tuple {
-	if !jmb.HasNext() {
+	result, err := jmb.iter.Next()
+	if err != nil {
 		return nil
 	}
-	result := jmb.buffer[jmb.index]
-	jmb.index++
 	return result
 }
 
 // Reset clears the buffer and resets the index.
+// The iterator remains open (ready for use).
 func (jmb *JoinMatchBuffer) Reset() {
-	jmb.buffer = nil
-	jmb.index = -1
+	jmb.iter.Reset(nil)
 }
 
 // SetMatches sets the buffer to the provided slice and resets index to start.
@@ -46,33 +50,50 @@ func (jmb *JoinMatchBuffer) SetMatches(matches []*tuple.Tuple) *tuple.Tuple {
 		jmb.Reset()
 		return nil
 	}
-	jmb.buffer = matches
-	jmb.index = 1 // First tuple will be returned immediately, next call starts at 1
-	return matches[0]
+	jmb.iter.Reset(matches)
+	first, err := jmb.iter.Next()
+	if err != nil {
+		return nil
+	}
+	return first
 }
 
 // StartNew initializes a new empty buffer for accumulating matches.
 func (jmb *JoinMatchBuffer) StartNew() {
-	jmb.buffer = make([]*tuple.Tuple, 0)
-	jmb.index = 0
+	jmb.iter.Reset(make([]*tuple.Tuple, 0))
 }
 
 // Add appends a tuple to the buffer.
+// Note: Preserves the current iteration position.
 func (jmb *JoinMatchBuffer) Add(t *tuple.Tuple) {
-	jmb.buffer = append(jmb.buffer, t)
+	currentData := jmb.iter.GetData()
+	currentPos := jmb.iter.CurrentIndex()
+
+	// Append new tuple and restore position
+	newData := append(currentData, t)
+	jmb.iter.Reset(newData)
+
+	// Manually restore the iteration position
+	for i := 0; i < currentPos; i++ {
+		jmb.iter.Next()
+	}
 }
 
 // Len returns the number of tuples in the buffer.
 func (jmb *JoinMatchBuffer) Len() int {
-	return len(jmb.buffer)
+	return jmb.iter.Len()
 }
 
 // GetFirstAndAdvance returns the first tuple and sets up iteration for the rest.
 // Returns nil if buffer is empty.
 func (jmb *JoinMatchBuffer) GetFirstAndAdvance() *tuple.Tuple {
-	if len(jmb.buffer) == 0 {
+	if jmb.iter.Len() == 0 {
 		return nil
 	}
-	jmb.index = 1
-	return jmb.buffer[0]
+	jmb.iter.Rewind()
+	first, err := jmb.iter.Next()
+	if err != nil {
+		return nil
+	}
+	return first
 }

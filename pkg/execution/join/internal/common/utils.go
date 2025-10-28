@@ -6,13 +6,13 @@ import (
 	"storemy/pkg/tuple"
 )
 
-// ExtractJoinKey extracts and stringifies the join key from a tuple.
-func ExtractJoinKey(t *tuple.Tuple, fieldIndex primitives.ColumnID) (string, error) {
+// ExtractJoinKey extracts and hashes the join key from a tuple.
+func ExtractJoinKey(t *tuple.Tuple, fieldIndex primitives.ColumnID) (primitives.HashCode, error) {
 	field, err := t.GetField(fieldIndex)
 	if err != nil || field == nil {
-		return "", fmt.Errorf("invalid join key at field %d", fieldIndex)
+		return 0, fmt.Errorf("invalid join key at field %d", fieldIndex)
 	}
-	return field.String(), nil
+	return field.Hash()
 }
 
 // CombineAndBuffer combines matching tuples and adds to buffer.
