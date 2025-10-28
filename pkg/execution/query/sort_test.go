@@ -23,8 +23,8 @@ func TestNewSort_ValidInputs(t *testing.T) {
 		t.Fatal("NewSort returned nil")
 	}
 
-	if sort.sortFieldIdx != 0 {
-		t.Errorf("Expected sortFieldIdx 0, got %d", sort.sortFieldIdx)
+	if sort.sortField != 0 {
+		t.Errorf("Expected sortFieldIdx 0, got %d", sort.sortField)
 	}
 
 	if !sort.ascending {

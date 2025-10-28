@@ -125,17 +125,15 @@ func (it *SliceIterator[T]) Reset(data []T) {
 
 // Open marks the iterator as opened and ready for use.
 // Resets the position to the beginning.
-func (it *SliceIterator[T]) Open() error {
+func (it *SliceIterator[T]) Open() {
 	it.opened = true
 	it.currentIndex = 0
-	return nil
 }
 
 // Close marks the iterator as closed.
 // The underlying slice is NOT cleared (use Clear() for that).
-func (it *SliceIterator[T]) Close() error {
+func (it *SliceIterator[T]) Close() {
 	it.opened = false
-	return nil
 }
 
 // Clear releases the underlying slice and resets the iterator.
@@ -169,95 +167,4 @@ func (it *SliceIterator[T]) CurrentIndex() int {
 // Note: This provides direct access to the internal data structure.
 func (it *SliceIterator[T]) GetData() []T {
 	return it.data
-}
-
-// ForEach applies a function to each remaining element in the iterator.
-// The iteration stops early if processFunc returns an error.
-// After ForEach completes, the iterator will be positioned at the end.
-func (it *SliceIterator[T]) ForEach(processFunc func(T) error) error {
-	if !it.opened {
-		return fmt.Errorf("slice iterator not opened")
-	}
-
-	for it.HasNext() {
-		element, err := it.Next()
-		if err != nil {
-			return err
-		}
-
-		if err := processFunc(element); err != nil {
-			return err
-		}
-	}
-
-	return nil
-}
-
-// Collect returns all remaining elements as a new slice.
-// The iterator will be positioned at the end after this operation.
-func (it *SliceIterator[T]) Collect() ([]T, error) {
-	if !it.opened {
-		return nil, fmt.Errorf("slice iterator not opened")
-	}
-
-	remaining := it.Remaining()
-	result := make([]T, 0, remaining)
-
-	for it.HasNext() {
-		element, err := it.Next()
-		if err != nil {
-			return nil, err
-		}
-		result = append(result, element)
-	}
-
-	return result, nil
-}
-
-// Take returns up to n elements from the current position.
-// If fewer than n elements remain, returns all remaining elements.
-// Advances the iterator position by the number of elements returned.
-func (it *SliceIterator[T]) Take(n int) ([]T, error) {
-	if !it.opened {
-		return nil, fmt.Errorf("slice iterator not opened")
-	}
-
-	if n <= 0 {
-		return []T{}, nil
-	}
-
-	result := make([]T, 0, n)
-	count := 0
-
-	for it.HasNext() && count < n {
-		element, err := it.Next()
-		if err != nil {
-			return nil, err
-		}
-		result = append(result, element)
-		count++
-	}
-
-	return result, nil
-}
-
-// Skip advances the iterator position by n elements without returning them.
-// Returns an error if the iterator is not opened.
-// If there are fewer than n elements remaining, advances to the end.
-func (it *SliceIterator[T]) Skip(n int) error {
-	if !it.opened {
-		return fmt.Errorf("slice iterator not opened")
-	}
-
-	if n <= 0 {
-		return nil
-	}
-
-	newIndex := it.currentIndex + n
-	if newIndex > len(it.data) {
-		newIndex = len(it.data)
-	}
-
-	it.currentIndex = newIndex
-	return nil
 }

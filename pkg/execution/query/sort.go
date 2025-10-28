@@ -23,9 +23,8 @@ import (
 type Sort struct {
 	base         *iterator.BaseIterator
 	child        iterator.DbIterator
-	sortedTuples []*tuple.Tuple      // Materialized and sorted tuples
-	currentIndex int                 // Current position in sorted slice
-	sortFieldIdx primitives.ColumnID // Index of field to sort by
+	sorted       *iterator.SliceIterator[*tuple.Tuple]
+	sortField    primitives.ColumnID // Index of field to sort by
 	ascending    bool                // Sort direction: true = ASC, false = DESC
 	opened       bool
 	materialized bool // Flag to track if tuples have been materialized
@@ -35,13 +34,13 @@ type Sort struct {
 //
 // Parameters:
 //   - child: Input iterator providing tuples to sort
-//   - sortFieldIdx: Index of field to sort by (0-based)
+//   - sortField: Index of field to sort by (0-based)
 //   - ascending: true for ASC, false for DESC
 //
 // Returns:
 //   - *Sort operator ready to be opened and iterated
 //   - error if parameters are invalid
-func NewSort(child iterator.DbIterator, sortFieldIdx primitives.ColumnID, ascending bool) (*Sort, error) {
+func NewSort(child iterator.DbIterator, sortField primitives.ColumnID, ascending bool) (*Sort, error) {
 	if child == nil {
 		return nil, fmt.Errorf("child operator cannot be nil")
 	}
@@ -51,16 +50,15 @@ func NewSort(child iterator.DbIterator, sortFieldIdx primitives.ColumnID, ascend
 		return nil, fmt.Errorf("child operator has nil tuple descriptor")
 	}
 
-	if sortFieldIdx >= td.NumFields() {
+	if sortField >= td.NumFields() {
 		return nil, fmt.Errorf("sort field index %d out of bounds (schema has %d fields)",
-			sortFieldIdx, td.NumFields())
+			sortField, td.NumFields())
 	}
 
 	s := &Sort{
-		child:        child,
-		sortFieldIdx: sortFieldIdx,
-		ascending:    ascending,
-		currentIndex: 0,
+		child:     child,
+		sortField: sortField,
+		ascending: ascending,
 	}
 
 	s.base = iterator.NewBaseIterator(s.readNext)
@@ -100,10 +98,9 @@ func (s *Sort) materializeTuples() error {
 		return fmt.Errorf("error sorting tuples: %w", err)
 	}
 
-	s.sortedTuples = tuples
-	s.currentIndex = 0
+	s.sorted = iterator.NewSliceIterator(tuples)
+	s.sorted.Open()
 	s.materialized = true
-
 	return nil
 }
 
@@ -116,13 +113,13 @@ func (s *Sort) sortTuples(tuples []*tuple.Tuple) error {
 			return false
 		}
 
-		field1, err := tuples[i].GetField(s.sortFieldIdx)
+		field1, err := tuples[i].GetField(s.sortField)
 		if err != nil || field1 == nil {
 			sortErr = fmt.Errorf("failed to get sort field from tuple %d: %w", i, err)
 			return false
 		}
 
-		field2, err := tuples[j].GetField(s.sortFieldIdx)
+		field2, err := tuples[j].GetField(s.sortField)
 		if err != nil || field2 == nil {
 			sortErr = fmt.Errorf("failed to get sort field from tuple %d: %w", j, err)
 			return false
@@ -154,13 +151,11 @@ func (s *Sort) readNext() (*tuple.Tuple, error) {
 		}
 	}
 
-	if s.currentIndex >= len(s.sortedTuples) {
+	if s.sorted.Remaining() == 0 {
 		return nil, nil
 	}
 
-	t := s.sortedTuples[s.currentIndex]
-	s.currentIndex++
-	return t, nil
+	return s.sorted.Next()
 }
 
 // Open initializes the Sort operator and materializes all tuples.
@@ -174,8 +169,6 @@ func (s *Sort) Open() error {
 
 	s.opened = true
 	s.materialized = false
-	s.currentIndex = 0
-	s.sortedTuples = nil
 
 	s.base.MarkOpened()
 	return nil
@@ -185,8 +178,10 @@ func (s *Sort) Open() error {
 func (s *Sort) Close() error {
 	s.opened = false
 	s.materialized = false
-	s.sortedTuples = nil
-	s.currentIndex = 0
+
+	if s.sorted != nil {
+		s.sorted.Close()
+	}
 
 	if err := s.child.Close(); err != nil {
 		return fmt.Errorf("failed to close source operator: %w", err)
@@ -218,7 +213,10 @@ func (s *Sort) Rewind() error {
 		return fmt.Errorf("sort operator not opened")
 	}
 
-	s.currentIndex = 0
+	if s.sorted != nil {
+		s.sorted.Rewind()
+	}
+
 	return s.base.Rewind()
 }
 
