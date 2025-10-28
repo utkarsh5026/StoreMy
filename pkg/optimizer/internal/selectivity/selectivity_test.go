@@ -2,7 +2,6 @@ package selectivity
 
 import (
 	"math"
-	"storemy/pkg/catalog"
 	"storemy/pkg/catalog/catalogmanager"
 	"storemy/pkg/optimizer/statistics"
 	"storemy/pkg/primitives"
@@ -83,17 +82,17 @@ func TestEstimatePredicateSelectivityWithValue_Histogram(t *testing.T) {
 
 			// Verify selectivity is in valid range [0.0, 1.0]
 			if sel < 0.0 || sel > 1.0 {
-				t.Errorf("%s: selectivity %f out of valid range [0.0, 1.0]", tt.description, sel)
+				t.Errorf("%s: selectivity %f out of valid range [0.0, 1.0]", tt.description, float64(sel))
 			}
 
 			// Verify selectivity is in expected range
-			if sel < tt.expectedRange[0] || sel > tt.expectedRange[1] {
+			if float64(sel) < tt.expectedRange[0] || float64(sel) > tt.expectedRange[1] {
 				t.Errorf("%s: selectivity %f not in expected range [%f, %f]",
-					tt.description, sel, tt.expectedRange[0], tt.expectedRange[1])
+					tt.description, float64(sel), tt.expectedRange[0], tt.expectedRange[1])
 			}
 
 			t.Logf("%s: selectivity = %.4f (expected [%.4f, %.4f])",
-				tt.description, sel, tt.expectedRange[0], tt.expectedRange[1])
+				tt.description, float64(sel), tt.expectedRange[0], tt.expectedRange[1])
 		})
 	}
 }
@@ -133,8 +132,8 @@ func TestEstimatePredicateSelectivityWithValue_NoHistogram(t *testing.T) {
 			// This should fall back to distinct count estimate
 			sel := estimator.fromDistinct(tt.pred, colStats)
 
-			if math.Abs(sel-tt.expected) > 0.0001 {
-				t.Errorf("Expected selectivity %f, got %f", tt.expected, sel)
+			if math.Abs(float64(sel)-tt.expected) > 0.0001 {
+				t.Errorf("Expected selectivity %f, got %f", tt.expected, float64(sel))
 			}
 		})
 	}
@@ -146,10 +145,10 @@ func TestEstimateCombinedSelectivity(t *testing.T) {
 
 	tests := []struct {
 		name     string
-		sel1     float64
-		sel2     float64
+		sel1     Selectivity
+		sel2     Selectivity
 		isAnd    bool
-		expected float64
+		expected Selectivity
 	}{
 		{
 			name:     "AND with independent predicates",
@@ -184,8 +183,8 @@ func TestEstimateCombinedSelectivity(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			result := estimator.EstimateCombined(tt.sel1, tt.sel2, tt.isAnd)
-			if math.Abs(result-tt.expected) > 0.0001 {
-				t.Errorf("Expected %f, got %f", tt.expected, result)
+			if math.Abs(float64(result)-float64(tt.expected)) > 0.0001 {
+				t.Errorf("Expected %f, got %f", float64(tt.expected), float64(result))
 			}
 		})
 	}
@@ -219,7 +218,7 @@ func TestIsComparisonPredicate(t *testing.T) {
 // TestHistogramSelectivityBounds tests that histogram always returns [0.0, 1.0]
 func TestHistogramSelectivityBounds(t *testing.T) {
 	values := createIntFields(1, 1000, 1)
-	histogram := catalog.NewHistogram(values, 20)
+	histogram := statistics.NewHistogram(values, 20)
 
 	estimator := &SelectivityEstimator{tx: nil}
 
@@ -245,7 +244,7 @@ func TestHistogramSelectivityBounds(t *testing.T) {
 			sel := estimator.estimateHist(histogram, pred, val)
 			if sel < 0.0 || sel > 1.0 {
 				t.Errorf("Selectivity %f out of bounds for predicate %v with value %v",
-					sel, pred, val)
+					float64(sel), pred, val)
 			}
 		}
 	}
@@ -267,7 +266,7 @@ func TestEstimateLikeSelectivity(t *testing.T) {
 	tests := []struct {
 		name     string
 		pattern  string
-		expected float64
+		expected Selectivity
 	}{
 		{
 			name:     "Prefix match (abc%)",
@@ -299,8 +298,8 @@ func TestEstimateLikeSelectivity(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			result := estimator.EstimateLike(tt.pattern)
-			if math.Abs(result-tt.expected) > 0.0001 {
-				t.Errorf("Expected %f for pattern '%s', got %f", tt.expected, tt.pattern, result)
+			if math.Abs(float64(result)-float64(tt.expected)) > 0.0001 {
+				t.Errorf("Expected %f for pattern '%s', got %f", float64(tt.expected), tt.pattern, float64(result))
 			}
 		})
 	}
@@ -371,11 +370,11 @@ func TestMCVSelectivity(t *testing.T) {
 				return
 			}
 
-			if math.Abs(freq-tt.expected) > 0.0001 {
-				t.Errorf("%s: expected %f, got %f", tt.description, tt.expected, freq)
+			if math.Abs(float64(freq)-tt.expected) > 0.0001 {
+				t.Errorf("%s: expected %f, got %f", tt.description, tt.expected, float64(freq))
 			}
 
-			t.Logf("%s: frequency = %.4f", tt.description, freq)
+			t.Logf("%s: frequency = %.4f", tt.description, float64(freq))
 		})
 	}
 }
@@ -398,7 +397,7 @@ func TestMCVSelectivityMiss(t *testing.T) {
 	freq, found := estimator.checkMCV(colStats, types.NewIntField(999))
 
 	if found {
-		t.Errorf("Expected not to find non-MCV value, but found with frequency %f", freq)
+		t.Errorf("Expected not to find non-MCV value, but found with frequency %f", float64(freq))
 	}
 }
 
@@ -457,13 +456,13 @@ func TestEstimateEqualityWithoutHistogram(t *testing.T) {
 			estimator := &SelectivityEstimator{tx: nil}
 			sel := estimator.equalityNoHist(colStats)
 
-			if sel < tt.expectedRange[0] || sel > tt.expectedRange[1] {
+			if float64(sel) < tt.expectedRange[0] || float64(sel) > tt.expectedRange[1] {
 				t.Errorf("%s: selectivity %f not in expected range [%f, %f]",
-					tt.description, sel, tt.expectedRange[0], tt.expectedRange[1])
+					tt.description, float64(sel), tt.expectedRange[0], tt.expectedRange[1])
 			}
 
 			t.Logf("%s: selectivity = %.6f (expected [%.6f, %.6f])",
-				tt.description, sel, tt.expectedRange[0], tt.expectedRange[1])
+				tt.description, float64(sel), tt.expectedRange[0], tt.expectedRange[1])
 		})
 	}
 }
@@ -485,7 +484,7 @@ func TestMCVIntegrationWithHistogram(t *testing.T) {
 		MostCommonVals: mcvs,
 		MCVFreqs:       mcvFreqs,
 		DistinctCount:  100,
-		Histogram:      catalog.NewHistogram(values, 10),
+		Histogram:      statistics.NewHistogram(values, 10),
 	}
 
 	estimator := &SelectivityEstimator{tx: nil}
@@ -522,7 +521,7 @@ func TestMCVIntegrationWithHistogram(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			var sel float64
+			var sel Selectivity
 
 			if tt.checkMCV {
 				freq, found := estimator.checkMCV(colStats, tt.value)
@@ -543,14 +542,14 @@ func TestMCVIntegrationWithHistogram(t *testing.T) {
 
 			// Verify bounds
 			if sel < 0.0 || sel > 1.0 {
-				t.Errorf("Selectivity %f out of bounds [0.0, 1.0]", sel)
+				t.Errorf("Selectivity %f out of bounds [0.0, 1.0]", float64(sel))
 			}
 
-			if tt.checkMCV && math.Abs(sel-tt.expected) > 0.0001 {
-				t.Errorf("Expected %f, got %f", tt.expected, sel)
+			if tt.checkMCV && math.Abs(float64(sel)-tt.expected) > 0.0001 {
+				t.Errorf("Expected %f, got %f", tt.expected, float64(sel))
 			}
 
-			t.Logf("%s: selectivity = %.4f", tt.name, sel)
+			t.Logf("%s: selectivity = %.4f", tt.name, float64(sel))
 		})
 	}
 }
@@ -591,22 +590,22 @@ func TestEstimateInSelectivity(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			colStats := &catalog.ColumnStatistics{
+			colStats := &catalogmanager.ColumnStatistics{
 				DistinctCount: tt.distinctCount,
 			}
 
 			// Simulate EstimateInSelectivity logic
-			var result float64
+			var result Selectivity
 			if tt.valueCount == 0 {
 				result = 0.0
 			} else if tt.distinctCount == 0 {
 				result = InSelectivity
 			} else {
-				result = math.Min(float64(tt.valueCount)/float64(colStats.DistinctCount), MaxSelectivity)
+				result = Selectivity(math.Min(float64(tt.valueCount)/float64(colStats.DistinctCount), float64(MaxSelectivity)))
 			}
 
-			if math.Abs(result-tt.expected) > 0.0001 {
-				t.Errorf("Expected %f, got %f", tt.expected, result)
+			if math.Abs(float64(result)-tt.expected) > 0.0001 {
+				t.Errorf("Expected %f, got %f", tt.expected, float64(result))
 			}
 		})
 	}

@@ -9,16 +9,18 @@ import (
 	"storemy/pkg/types"
 )
 
+type Selectivity float64
+
 // Default selectivity constants used when statistical information is unavailable.
 // Selectivity represents the fraction of rows (0.0 to 1.0) that satisfy a predicate.
 const (
-	DefaultSelectivity  = 0.1  // 10% - general unknown predicate without statistics
-	EqualitySelectivity = 0.01 // 1% - equality predicate without statistics
-	RangeSelectivity    = 0.33 // 33% - range predicate (>, <, >=, <=) without statistics
-	LikeSelectivity     = 0.2  // 20% - LIKE predicate without statistics
-	InSelectivity       = 0.05 // 5% - IN predicate without statistics
-	NullSelectivity     = 0.05 // 5% - IS NULL predicate without statistics
-	MaxSelectivity      = 1.0  // 100% - all rows satisfy the predicate
+	DefaultSelectivity  Selectivity = 0.1  // 10% - general unknown predicate without statistics
+	EqualitySelectivity Selectivity = 0.01 // 1% - equality predicate without statistics
+	RangeSelectivity    Selectivity = 0.33 // 33% - range predicate (>, <, >=, <=) without statistics
+	LikeSelectivity     Selectivity = 0.2  // 20% - LIKE predicate without statistics
+	InSelectivity       Selectivity = 0.05 // 5% - IN predicate without statistics
+	NullSelectivity     Selectivity = 0.05 // 5% - IS NULL predicate without statistics
+	MaxSelectivity      Selectivity = 1.0  // 100% - all rows satisfy the predicate
 )
 
 // SelectivityEstimator estimates the selectivity of predicates for query optimization.
@@ -65,8 +67,8 @@ func NewSelectivityEstimator(cat *catalogmanager.CatalogManager, tx *transaction
 //   - columnName: Name of the column in the predicate
 //
 // Returns:
-//   - float64: Estimated selectivity between 0.0 and 1.0
-func (se *SelectivityEstimator) EstimatePredicateSelectivity(pred primitives.Predicate, tableID primitives.FileID, columnName string) float64 {
+//   - Selectivity: Estimated selectivity between 0.0 and 1.0
+func (se *SelectivityEstimator) EstimatePredicateSelectivity(pred primitives.Predicate, tableID primitives.FileID, columnName string) Selectivity {
 	if se.catalog == nil {
 		return se.defaultSel(pred)
 	}
@@ -95,8 +97,8 @@ func (se *SelectivityEstimator) EstimatePredicateSelectivity(pred primitives.Pre
 //   - value: The specific value being compared against
 //
 // Returns:
-//   - float64: Estimated selectivity between 0.0 and 1.0
-func (se *SelectivityEstimator) EstimateWithValue(pred primitives.Predicate, tableID primitives.FileID, columnName string, value types.Field) float64 {
+//   - Selectivity: Estimated selectivity between 0.0 and 1.0
+func (se *SelectivityEstimator) EstimateWithValue(pred primitives.Predicate, tableID primitives.FileID, columnName string, value types.Field) Selectivity {
 	if se.catalog == nil {
 		return se.defaultSel(pred)
 	}
@@ -113,13 +115,13 @@ func (se *SelectivityEstimator) EstimateWithValue(pred primitives.Predicate, tab
 		}
 	case primitives.NotEqual, primitives.NotEqualsBracket:
 		if mcvFreq, found := se.checkMCV(colStats, value); found {
-			return 1.0 - mcvFreq
+			return MaxSelectivity - mcvFreq
 		}
 	}
 
 	if colStats.Histogram != nil && isComparisonPredicate(pred) {
 		sel := se.estimateHist(colStats.Histogram, pred, value)
-		return math.Max(0.0, math.Min(1.0, sel))
+		return Selectivity(math.Max(0.0, math.Min(1.0, float64(sel))))
 	}
 
 	if pred == primitives.Equals && colStats.DistinctCount > 0 {
@@ -137,8 +139,8 @@ func (se *SelectivityEstimator) EstimateWithValue(pred primitives.Predicate, tab
 //   - colStats: Column statistics containing distinct count
 //
 // Returns:
-//   - float64: Estimated selectivity between 0.0 and 1.0
-func (se *SelectivityEstimator) fromDistinct(pred primitives.Predicate, stats *catalogmanager.ColumnStatistics) float64 {
+//   - Selectivity: Estimated selectivity between 0.0 and 1.0
+func (se *SelectivityEstimator) fromDistinct(pred primitives.Predicate, stats *catalogmanager.ColumnStatistics) Selectivity {
 	dc := stats.DistinctCount
 	if dc == 0 {
 		return 0.0
@@ -146,10 +148,10 @@ func (se *SelectivityEstimator) fromDistinct(pred primitives.Predicate, stats *c
 
 	switch pred {
 	case primitives.Equals:
-		return 1.0 / float64(dc)
+		return Selectivity(1.0 / float64(dc))
 
 	case primitives.NotEqual:
-		return 1.0 - (1.0 / float64(dc))
+		return Selectivity(1.0 - (1.0 / float64(dc)))
 
 	case primitives.GreaterThan, primitives.GreaterThanOrEqual, primitives.LessThan, primitives.LessThanOrEqual:
 		return RangeSelectivity
@@ -171,13 +173,13 @@ func (se *SelectivityEstimator) fromDistinct(pred primitives.Predicate, stats *c
 //   - value: The value being compared against
 //
 // Returns:
-//   - float64: Estimated selectivity between 0.0 and 1.0
-func (se *SelectivityEstimator) estimateHist(h *statistics.Histogram, pred primitives.Predicate, value types.Field) float64 {
+//   - Selectivity: Estimated selectivity between 0.0 and 1.0
+func (se *SelectivityEstimator) estimateHist(h *statistics.Histogram, pred primitives.Predicate, value types.Field) Selectivity {
 	if h == nil {
 		return DefaultSelectivity
 	}
 
-	return h.EstimateSelectivity(pred, value)
+	return Selectivity(h.EstimateSelectivity(pred, value))
 }
 
 // EstimateNull estimates selectivity for NULL checks (IS NULL / IS NOT NULL).
@@ -191,13 +193,13 @@ func (se *SelectivityEstimator) estimateHist(h *statistics.Histogram, pred primi
 //   - isNull: true for IS NULL, false for IS NOT NULL
 //
 // Returns:
-//   - float64: Estimated selectivity between 0.0 and 1.0
-func (se *SelectivityEstimator) EstimateNull(tableID primitives.FileID, columnName string, isNull bool) float64 {
-	nullify := func(val float64) float64 {
+//   - Selectivity: Estimated selectivity between 0.0 and 1.0
+func (se *SelectivityEstimator) EstimateNull(tableID primitives.FileID, columnName string, isNull bool) Selectivity {
+	nullify := func(val Selectivity) Selectivity {
 		if isNull {
 			return val
 		}
-		return 1.0 - val
+		return MaxSelectivity - val
 	}
 
 	if se.catalog == nil {
@@ -214,7 +216,7 @@ func (se *SelectivityEstimator) EstimateNull(tableID primitives.FileID, columnNa
 		return nullify(NullSelectivity)
 	}
 
-	nullFraction := float64(colStats.NullCount) / float64(tableStats.Cardinality)
+	nullFraction := Selectivity(float64(colStats.NullCount) / float64(tableStats.Cardinality))
 	return nullify(nullFraction)
 }
 
@@ -230,8 +232,8 @@ func (se *SelectivityEstimator) EstimateNull(tableID primitives.FileID, columnNa
 //   - and: true for AND, false for OR
 //
 // Returns:
-//   - float64: Combined selectivity between 0.0 and 1.0
-func (se *SelectivityEstimator) EstimateCombined(s1, s2 float64, and bool) float64 {
+//   - Selectivity: Combined selectivity between 0.0 and 1.0
+func (se *SelectivityEstimator) EstimateCombined(s1, s2 Selectivity, and bool) Selectivity {
 	if and {
 		return s1 * s2
 	}
@@ -246,9 +248,9 @@ func (se *SelectivityEstimator) EstimateCombined(s1, s2 float64, and bool) float
 //   - sel: Selectivity of the inner predicate
 //
 // Returns:
-//   - float64: Inverted selectivity between 0.0 and 1.0
-func (se *SelectivityEstimator) EstimateNot(sel float64) float64 {
-	return 1.0 - sel
+//   - Selectivity: Inverted selectivity between 0.0 and 1.0
+func (se *SelectivityEstimator) EstimateNot(sel Selectivity) Selectivity {
+	return MaxSelectivity - sel
 }
 
 // defaultSel returns a default selectivity estimate based on
@@ -258,13 +260,13 @@ func (se *SelectivityEstimator) EstimateNot(sel float64) float64 {
 //   - pred: The predicate operator
 //
 // Returns:
-//   - float64: Default selectivity estimate
-func (se *SelectivityEstimator) defaultSel(pred primitives.Predicate) float64 {
+//   - Selectivity: Default selectivity estimate
+func (se *SelectivityEstimator) defaultSel(pred primitives.Predicate) Selectivity {
 	switch pred {
 	case primitives.Equals:
 		return EqualitySelectivity
 	case primitives.NotEqual:
-		return 1.0 - EqualitySelectivity
+		return MaxSelectivity - EqualitySelectivity
 	case primitives.GreaterThan, primitives.GreaterThanOrEqual, primitives.LessThan, primitives.LessThanOrEqual:
 		return RangeSelectivity
 	default:
@@ -285,8 +287,8 @@ func (se *SelectivityEstimator) defaultSel(pred primitives.Predicate) float64 {
 //   - pattern: The LIKE pattern string
 //
 // Returns:
-//   - float64: Estimated selectivity between 0.0 and 1.0
-func (se *SelectivityEstimator) EstimateLike(pattern string) float64 {
+//   - Selectivity: Estimated selectivity between 0.0 and 1.0
+func (se *SelectivityEstimator) EstimateLike(pattern string) Selectivity {
 	if pattern == "" {
 		return LikeSelectivity
 	}
@@ -314,8 +316,8 @@ func (se *SelectivityEstimator) EstimateLike(pattern string) float64 {
 //   - valueCount: Number of values in the IN list
 //
 // Returns:
-//   - float64: Estimated selectivity between 0.0 and 1.0
-func (se *SelectivityEstimator) EstimateIn(tableID primitives.FileID, columnName string, valueCount int) float64 {
+//   - Selectivity: Estimated selectivity between 0.0 and 1.0
+func (se *SelectivityEstimator) EstimateIn(tableID primitives.FileID, columnName string, valueCount int) Selectivity {
 	if se.catalog == nil {
 		return InSelectivity
 	}
@@ -329,8 +331,11 @@ func (se *SelectivityEstimator) EstimateIn(tableID primitives.FileID, columnName
 		return 0.0
 	}
 
-	selectivity := float64(valueCount) / float64(colStats.DistinctCount)
-	return math.Min(selectivity, MaxSelectivity)
+	selectivity := Selectivity(float64(valueCount) / float64(colStats.DistinctCount))
+	if selectivity > MaxSelectivity {
+		return MaxSelectivity
+	}
+	return selectivity
 }
 
 // isComparisonPredicate checks if a predicate is a comparison operator that
@@ -367,9 +372,9 @@ func isComparisonPredicate(pred primitives.Predicate) bool {
 //   - value: The value to search for
 //
 // Returns:
-//   - float64: Frequency of the value (0.0 to 1.0)
+//   - Selectivity: Frequency of the value (0.0 to 1.0)
 //   - bool: true if the value was found in the MCV list
-func (se *SelectivityEstimator) checkMCV(colStats *catalogmanager.ColumnStatistics, value types.Field) (freq float64, found bool) {
+func (se *SelectivityEstimator) checkMCV(colStats *catalogmanager.ColumnStatistics, value types.Field) (freq Selectivity, found bool) {
 	if len(colStats.MostCommonVals) == 0 {
 		return 0.0, false
 	}
@@ -381,7 +386,7 @@ func (se *SelectivityEstimator) checkMCV(colStats *catalogmanager.ColumnStatisti
 
 		equal, err := value.Compare(primitives.Equals, mcv)
 		if err == nil && equal {
-			return colStats.MCVFreqs[i], true
+			return Selectivity(colStats.MCVFreqs[i]), true
 		}
 	}
 
@@ -398,8 +403,8 @@ func (se *SelectivityEstimator) checkMCV(colStats *catalogmanager.ColumnStatisti
 //   - colStats: Column statistics with MCV information
 //
 // Returns:
-//   - float64: Estimated selectivity for equality on non-MCV value
-func (se *SelectivityEstimator) equalityNoHist(colStats *catalogmanager.ColumnStatistics) float64 {
+//   - Selectivity: Estimated selectivity for equality on non-MCV value
+func (se *SelectivityEstimator) equalityNoHist(colStats *catalogmanager.ColumnStatistics) Selectivity {
 	if colStats.DistinctCount == 0 {
 		return 0.0
 	}
@@ -413,8 +418,8 @@ func (se *SelectivityEstimator) equalityNoHist(colStats *catalogmanager.ColumnSt
 
 	nonMCVDistinct := int(colStats.DistinctCount) - len(colStats.MostCommonVals)
 	if nonMCVDistinct <= 0 {
-		return 1.0 / float64(colStats.DistinctCount)
+		return Selectivity(1.0 / float64(colStats.DistinctCount))
 	}
 
-	return remainingFreq / float64(nonMCVDistinct)
+	return Selectivity(remainingFreq / float64(nonMCVDistinct))
 }
