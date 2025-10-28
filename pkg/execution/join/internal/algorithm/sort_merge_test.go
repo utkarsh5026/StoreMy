@@ -43,12 +43,6 @@ func TestNewSortMergeJoin(t *testing.T) {
 	if smj.StatsField != stats {
 		t.Error("stats not set correctly")
 	}
-	if smj.leftIndex != 0 {
-		t.Error("leftIndex should be initialized to 0")
-	}
-	if smj.rightIndex != 0 {
-		t.Error("rightIndex should be initialized to 0")
-	}
 
 	if smj.MatchBufferField == nil {
 		t.Error("matchBuffer should be initialized")
@@ -118,11 +112,11 @@ func TestSortMergeJoinInitialize(t *testing.T) {
 			}
 
 			// Verify tuples were loaded
-			if len(smj.leftSorted) != len(tt.leftTuples) {
-				t.Errorf("expected %d left tuples, got %d", len(tt.leftTuples), len(smj.leftSorted))
+			if smj.leftIterator.Len() != len(tt.leftTuples) {
+				t.Errorf("expected %d left tuples, got %d", len(tt.leftTuples), smj.leftIterator.Len())
 			}
-			if len(smj.rightSorted) != len(tt.rightTuples) {
-				t.Errorf("expected %d right tuples, got %d", len(tt.rightTuples), len(smj.rightSorted))
+			if smj.rightIterator.Len() != len(tt.rightTuples) {
+				t.Errorf("expected %d right tuples, got %d", len(tt.rightTuples), smj.rightIterator.Len())
 			}
 		})
 	}
@@ -197,9 +191,10 @@ func TestSortMergeJoinSorting(t *testing.T) {
 	}
 
 	// Verify left is sorted
-	for i := 0; i < len(smj.leftSorted)-1; i++ {
-		field1, _ := smj.leftSorted[i].GetField(0)
-		field2, _ := smj.leftSorted[i+1].GetField(0)
+	leftData := smj.leftIterator.GetData()
+	for i := 0; i < len(leftData)-1; i++ {
+		field1, _ := leftData[i].GetField(0)
+		field2, _ := leftData[i+1].GetField(0)
 		less, _ := field1.Compare(primitives.LessThan, field2)
 		equals, _ := field1.Compare(primitives.Equals, field2)
 		if !less && !equals {
@@ -208,9 +203,10 @@ func TestSortMergeJoinSorting(t *testing.T) {
 	}
 
 	// Verify right is sorted
-	for i := 0; i < len(smj.rightSorted)-1; i++ {
-		field1, _ := smj.rightSorted[i].GetField(0)
-		field2, _ := smj.rightSorted[i+1].GetField(0)
+	rightData := smj.rightIterator.GetData()
+	for i := 0; i < len(rightData)-1; i++ {
+		field1, _ := rightData[i].GetField(0)
+		field2, _ := rightData[i+1].GetField(0)
 		less, _ := field1.Compare(primitives.LessThan, field2)
 		equals, _ := field1.Compare(primitives.Equals, field2)
 		if !less && !equals {
@@ -579,11 +575,11 @@ func TestSortMergeJoinReset(t *testing.T) {
 	}
 
 	// Verify internal state is reset
-	if smj.leftIndex != 0 {
-		t.Error("leftIndex should be 0 after reset")
+	if smj.leftIterator.CurrentIndex() != 0 {
+		t.Error("left iterator should be at index 0 after reset")
 	}
-	if smj.rightIndex != 0 {
-		t.Error("rightIndex should be 0 after reset")
+	if smj.rightIterator.CurrentIndex() != 0 {
+		t.Error("right iterator should be at index 0 after reset")
 	}
 
 	// Should be able to iterate again
@@ -629,11 +625,11 @@ func TestSortMergeJoinClose(t *testing.T) {
 	}
 
 	// Verify resources are cleaned up
-	if smj.leftSorted != nil {
-		t.Error("leftSorted should be nil after close")
+	if smj.leftIterator.GetData() != nil {
+		t.Error("left iterator data should be nil after close")
 	}
-	if smj.rightSorted != nil {
-		t.Error("rightSorted should be nil after close")
+	if smj.rightIterator.GetData() != nil {
+		t.Error("right iterator data should be nil after close")
 	}
 	if smj.Initialized {
 		t.Error("initialized should be false after close")

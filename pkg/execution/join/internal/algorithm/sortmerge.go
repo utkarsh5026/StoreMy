@@ -26,10 +26,8 @@ import (
 // Space Complexity: O(n + m) for storing sorted tuples
 type SortMergeJoin struct {
 	common.BaseJoin
-	leftSorted  []*tuple.Tuple
-	rightSorted []*tuple.Tuple
-	leftIndex   int
-	rightIndex  int
+	leftIterator  *iterator.SliceIterator[*tuple.Tuple]
+	rightIterator *iterator.SliceIterator[*tuple.Tuple]
 }
 
 // NewSortMergeJoin creates a new sort-merge join operator.
@@ -51,15 +49,17 @@ func (s *SortMergeJoin) Initialize() error {
 	}
 
 	var err error
-	s.leftSorted, err = loadAndSort(s.LeftChild(), s.Predicate().GetLeftField())
+	leftSorted, err := loadAndSort(s.LeftChild(), s.Predicate().GetLeftField())
 	if err != nil {
 		return err
 	}
+	s.leftIterator = iterator.NewSliceIterator(leftSorted)
 
-	s.rightSorted, err = loadAndSort(s.RightChild(), s.Predicate().GetRightField())
+	rightSorted, err := loadAndSort(s.RightChild(), s.Predicate().GetRightField())
 	if err != nil {
 		return err
 	}
+	s.rightIterator = iterator.NewSliceIterator(rightSorted)
 
 	s.SetInitialized()
 	return nil
@@ -83,10 +83,10 @@ func (s *SortMergeJoin) Next() (*tuple.Tuple, error) {
 
 	s.MatchBuffer().StartNew()
 
-	for s.leftIndex < len(s.leftSorted) && s.rightIndex < len(s.rightSorted) {
+	for s.leftIterator.HasNext() && s.rightIterator.HasNext() {
 		cmp, err := s.compareCurrentTuples()
 		if err != nil {
-			s.leftIndex++
+			s.leftIterator.Next()
 			continue
 		}
 
@@ -100,10 +100,10 @@ func (s *SortMergeJoin) Next() (*tuple.Tuple, error) {
 			}
 
 		case -1: // Left < Right
-			s.leftIndex++
+			s.leftIterator.Next()
 
 		case 1: // Left > Right
-			s.rightIndex++
+			s.rightIterator.Next()
 		}
 	}
 
@@ -112,15 +112,23 @@ func (s *SortMergeJoin) Next() (*tuple.Tuple, error) {
 
 // Reset resets the join to its initial state, allowing it to be re-executed.
 func (s *SortMergeJoin) Reset() error {
-	s.leftIndex = 0
-	s.rightIndex = 0
+	if s.leftIterator != nil {
+		s.leftIterator.Rewind()
+	}
+	if s.rightIterator != nil {
+		s.rightIterator.Rewind()
+	}
 	return s.ResetCommon()
 }
 
 // Close releases all resources used by the sort-merge join.
 func (s *SortMergeJoin) Close() error {
-	s.leftSorted = nil
-	s.rightSorted = nil
+	if s.leftIterator != nil {
+		s.leftIterator.Clear()
+	}
+	if s.rightIterator != nil {
+		s.rightIterator.Clear()
+	}
 	return s.BaseJoin.Close()
 }
 
@@ -162,9 +170,18 @@ func (s *SortMergeJoin) SupportsPredicateType(predicate common.JoinPredicate) bo
 		op == primitives.GreaterThanOrEqual
 }
 
-// compareCurrentTuples compares the current tuples pointed to by leftIndex and rightIndex.
+// compareCurrentTuples compares the current tuples from both iterators.
 func (s *SortMergeJoin) compareCurrentTuples() (int, error) {
-	left, right := s.leftSorted[s.leftIndex], s.rightSorted[s.rightIndex]
+	left, err := s.leftIterator.Peek()
+	if err != nil {
+		return 0, err
+	}
+
+	right, err := s.rightIterator.Peek()
+	if err != nil {
+		return 0, err
+	}
+
 	lf, rf := s.Predicate().GetLeftField(), s.Predicate().GetRightField()
 
 	eq, err := compareTuples(left, right, lf, rf, primitives.Equals)
@@ -199,16 +216,24 @@ func (s *SortMergeJoin) compareCurrentTuples() (int, error) {
 // 4. Buffer all results for subsequent Next() calls
 // 5. Advance to next left tuple
 func (s *SortMergeJoin) processEqualKeys() error {
-	leftTuple := s.leftSorted[s.leftIndex]
+	leftTuple, err := s.leftIterator.Peek()
+	if err != nil {
+		return err
+	}
 	leftField, _ := leftTuple.GetField(s.Predicate().GetLeftField())
 
-	rightStart := s.rightIndex
+	rightStart := s.rightIterator.CurrentIndex()
 
-	for s.rightIndex < len(s.rightSorted) {
-		rt := s.rightSorted[s.rightIndex]
+	for s.rightIterator.HasNext() {
+		rt, err := s.rightIterator.Peek()
+		if err != nil {
+			s.rightIterator.Next()
+			continue
+		}
+
 		rf, err := rt.GetField(s.Predicate().GetRightField())
 		if err != nil || rf == nil {
-			s.rightIndex++
+			s.rightIterator.Next()
 			continue
 		}
 
@@ -222,11 +247,16 @@ func (s *SortMergeJoin) processEqualKeys() error {
 			s.MatchBuffer().Add(combined)
 		}
 
-		s.rightIndex++
+		s.rightIterator.Next()
 	}
 
-	s.rightIndex = rightStart
-	s.leftIndex++
+	// Reset right iterator to the saved position
+	s.rightIterator.Rewind()
+	for i := 0; i < rightStart; i++ {
+		s.rightIterator.Next()
+	}
+
+	s.leftIterator.Next()
 	return nil
 }
 
