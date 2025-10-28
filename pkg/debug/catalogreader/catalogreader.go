@@ -110,7 +110,8 @@ func loadTableData(cat *catalogmanager.CatalogManager, tableName string) tea.Cmd
 
 		schema := file.GetTupleDesc()
 		headers := make([]string, schema.NumFields())
-		for i := 0; i < schema.NumFields(); i++ {
+		var i primitives.ColumnID
+		for i = 0; i < schema.NumFields(); i++ {
 			name, _ := schema.GetFieldName(i)
 			headers[i] = name
 		}
@@ -128,7 +129,9 @@ func loadTableData(cat *catalogmanager.CatalogManager, tableName string) tea.Cmd
 			}
 
 			row := make([]string, schema.NumFields())
-			for i := 0; i < schema.NumFields(); i++ {
+
+			var i primitives.ColumnID
+			for i = 0; i < schema.NumFields(); i++ {
 				field, _ := tup.GetField(i)
 				row[i] = formatField(field)
 			}

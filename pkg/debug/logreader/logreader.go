@@ -278,7 +278,7 @@ func (m model) renderDetailView() string {
 	case record.UpdateRecord, record.InsertRecord, record.DeleteRecord:
 		if re.PageID != nil {
 			b.WriteString(ui.LabelStyle.Render("Page Information:") + "\n")
-			b.WriteString(m.renderKeyValue("  Table ID", fmt.Sprintf("%d", re.PageID.GetTableID())))
+			b.WriteString(m.renderKeyValue("  File ID", fmt.Sprintf("%d", re.PageID.FileID())))
 			b.WriteString(m.renderKeyValue("  Page Number", fmt.Sprintf("%d", re.PageID.PageNo())))
 			b.WriteString("\n")
 		}
@@ -294,7 +294,7 @@ func (m model) renderDetailView() string {
 		if re.PageID != nil {
 			b.WriteString(ui.LabelStyle.Render("CLR Information:") + "\n")
 			b.WriteString(m.renderKeyValue("  Undo Next LSN", fmt.Sprintf("%d", re.UndoNextLSN)))
-			b.WriteString(m.renderKeyValue("  Table ID", fmt.Sprintf("%d", re.PageID.GetTableID())))
+			b.WriteString(m.renderKeyValue("  File ID", fmt.Sprintf("%d", re.PageID.FileID())))
 			b.WriteString(m.renderKeyValue("  Page Number", fmt.Sprintf("%d", re.PageID.PageNo())))
 		}
 	}

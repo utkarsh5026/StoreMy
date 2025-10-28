@@ -10,6 +10,7 @@ import (
 	"storemy/pkg/memory"
 	"storemy/pkg/primitives"
 	"storemy/pkg/storage/heap"
+	"storemy/pkg/storage/page"
 	"storemy/pkg/tuple"
 	"storemy/pkg/types"
 	"strings"
@@ -37,7 +38,7 @@ var (
 )
 
 type tableInfo struct {
-	tableID    int
+	tableID    primitives.FileID
 	tableName  string
 	filePath   string
 	primaryKey string
@@ -57,8 +58,8 @@ type heapModel struct {
 	dataDir       string
 	tables        []tableInfo
 	selectedTable *tableInfo
-	currentPage   int
-	totalPages    int
+	currentPage   primitives.PageNumber
+	totalPages    primitives.PageNumber
 	tableData     [][]string
 	columnHeaders []string
 	rowCursor     int
@@ -144,7 +145,7 @@ func initializeHeapReader(dataDir string) tea.Cmd {
 type tableDataLoadedMsg struct {
 	headers   []string
 	data      [][]string
-	pageCount int
+	pageCount primitives.PageNumber
 	err       error
 }
 
@@ -157,7 +158,8 @@ func loadTableData(cat *catalogmanager.CatalogManager, tableInfo *tableInfo) tea
 
 		schema := file.GetTupleDesc()
 		headers := make([]string, schema.NumFields())
-		for i := 0; i < schema.NumFields(); i++ {
+		var i primitives.ColumnID
+		for i = 0; i < schema.NumFields(); i++ {
 			name, _ := schema.GetFieldName(i)
 			headers[i] = name
 		}
@@ -186,7 +188,8 @@ func loadTableData(cat *catalogmanager.CatalogManager, tableInfo *tableInfo) tea
 			}
 
 			row := make([]string, schema.NumFields())
-			for i := 0; i < schema.NumFields(); i++ {
+			var i primitives.ColumnID
+			for i = 0; i < schema.NumFields(); i++ {
 				field, err := tup.GetField(i)
 				if err != nil {
 					row[i] = "ERROR"
@@ -198,7 +201,7 @@ func loadTableData(cat *catalogmanager.CatalogManager, tableInfo *tableInfo) tea
 		}
 
 		// Get page count
-		pageCount := 0
+		var pageCount primitives.PageNumber = 0
 		if hf, ok := file.(*heap.HeapFile); ok {
 			pc, err := hf.NumPages()
 			if err == nil {
@@ -215,12 +218,12 @@ func loadTableData(cat *catalogmanager.CatalogManager, tableInfo *tableInfo) tea
 }
 
 type pageDataLoadedMsg struct {
-	pageNo int
+	pageNo primitives.PageNumber
 	tuples []*tuple.Tuple
 	err    error
 }
 
-func loadPageData(cat *catalogmanager.CatalogManager, tableID int, pageNo int) tea.Cmd {
+func loadPageData(cat *catalogmanager.CatalogManager, tableID primitives.FileID, pageNo primitives.PageNumber) tea.Cmd {
 	return func() tea.Msg {
 		file, err := cat.GetTableFile(tableID)
 		if err != nil {
@@ -232,7 +235,7 @@ func loadPageData(cat *catalogmanager.CatalogManager, tableID int, pageNo int) t
 			return pageDataLoadedMsg{err: fmt.Errorf("not a heap file")}
 		}
 
-		pageID := heap.NewHeapPageID(tableID, pageNo)
+		pageID := page.NewPageDescriptor(tableID, pageNo)
 		page, err := hf.ReadPage(pageID)
 		if err != nil {
 			return pageDataLoadedMsg{err: err}
@@ -373,7 +376,7 @@ func (m heapModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.rowCursor++
 				}
 			case key.Matches(msg, heapKeys.NextPage):
-				if m.currentPage < m.totalPages-1 {
+				if m.totalPages > 0 && m.currentPage < m.totalPages-1 {
 					m.currentPage++
 					return m, loadPageData(m.catalog, m.selectedTable.tableID, m.currentPage)
 				}
