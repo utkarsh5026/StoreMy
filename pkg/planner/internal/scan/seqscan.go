@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"storemy/pkg/concurrency/transaction"
 	"storemy/pkg/execution/query"
+	"storemy/pkg/execution/scanner"
 	"storemy/pkg/iterator"
 	"storemy/pkg/plan"
 	"storemy/pkg/primitives"
@@ -47,7 +48,7 @@ func BuildScanWithFilter(tx *transaction.TransactionContext, tableID primitives.
 		}
 	}
 
-	scanOp, err := query.NewSeqScan(tx, tableID, heapFile, ctx.PageStore())
+	scanOp, err := scanner.NewSeqScan(tx, tableID, heapFile, ctx.PageStore())
 	if err != nil {
 		return nil, fmt.Errorf("failed to create table scan: %v", err)
 	}

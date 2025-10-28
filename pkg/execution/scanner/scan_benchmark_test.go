@@ -1,10 +1,11 @@
-package query
+package scanner
 
 import (
 	"fmt"
 	"path/filepath"
 	"runtime"
 	"storemy/pkg/concurrency/transaction"
+	"storemy/pkg/execution/query"
 	"storemy/pkg/log/wal"
 	"storemy/pkg/memory"
 	"storemy/pkg/primitives"
@@ -329,7 +330,7 @@ func BenchmarkScanWithFilter(b *testing.B) {
 	defer setup.cleanup()
 
 	// Filter: id > 5000
-	pred := NewPredicate(0, primitives.GreaterThan, types.NewIntField(5000))
+	pred := query.NewPredicate(0, primitives.GreaterThan, types.NewIntField(5000))
 
 	b.Run("Sequential_with_filter", func(b *testing.B) {
 		b.ResetTimer()
@@ -337,7 +338,7 @@ func BenchmarkScanWithFilter(b *testing.B) {
 			tx := transaction.NewTransactionContext(primitives.NewTransactionID())
 
 			seqScan, _ := NewSeqScan(tx, setup.heapFile.GetID(), setup.heapFile, setup.store)
-			filter, _ := NewFilter(pred, seqScan)
+			filter, _ := query.NewFilter(pred, seqScan)
 			filter.Open()
 
 			count := 0
@@ -361,7 +362,7 @@ func BenchmarkScanWithFilter(b *testing.B) {
 			tx := transaction.NewTransactionContext(primitives.NewTransactionID())
 
 			parallelScan, _ := NewParallelSeqScan(tx, setup.heapFile.GetID(), setup.heapFile, setup.store, config)
-			filter, _ := NewFilter(pred, parallelScan)
+			filter, _ := query.NewFilter(pred, parallelScan)
 			filter.Open()
 
 			count := 0

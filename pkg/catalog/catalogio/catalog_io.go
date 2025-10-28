@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"storemy/pkg/catalog/tablecache"
 	"storemy/pkg/concurrency/transaction"
-	"storemy/pkg/execution/query"
+	"storemy/pkg/execution/scanner"
 	"storemy/pkg/iterator"
 	"storemy/pkg/memory"
 	"storemy/pkg/memory/wrappers/table"
@@ -80,7 +80,7 @@ func (cio *CatalogIO) IterateTable(tableID primitives.FileID, tx *transaction.Tr
 		return fmt.Errorf("table %d is not a heap file", tableID)
 	}
 
-	iter, err := query.NewSeqScan(tx, tableID, heapFile, cio.store)
+	iter, err := scanner.NewSeqScan(tx, tableID, heapFile, cio.store)
 	if err != nil {
 		return fmt.Errorf("failed to create iterator: %w", err)
 	}

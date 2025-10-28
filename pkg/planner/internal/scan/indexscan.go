@@ -5,7 +5,7 @@ import (
 	"math"
 	"storemy/pkg/catalog/systemtable"
 	"storemy/pkg/concurrency/transaction"
-	"storemy/pkg/execution/query"
+	"storemy/pkg/execution/scanner"
 	"storemy/pkg/iterator"
 	btreeindex "storemy/pkg/memory/wrappers/btree_index"
 	hashindex "storemy/pkg/memory/wrappers/hash_index"
@@ -106,7 +106,7 @@ func buildIndexEqualityScan(
 	}
 
 	// Create index scan operator
-	indexScan, err := query.NewIndexEqualityScan(tx, idx, heapFile, ctx.PageStore(), searchKey)
+	indexScan, err := scanner.NewIndexEqualityScan(tx, idx, heapFile, ctx.PageStore(), searchKey)
 	if err != nil {
 		return nil, false, fmt.Errorf("failed to create index scan: %w", err)
 	}
@@ -168,7 +168,7 @@ func buildIndexRangeScan(
 	}
 
 	// Create index scan operator
-	indexScan, err := query.NewIndexRangeScan(tx, idx, heapFile, ctx.PageStore(), startKey, endKey)
+	indexScan, err := scanner.NewIndexRangeScan(tx, idx, heapFile, ctx.PageStore(), startKey, endKey)
 	if err != nil {
 		return nil, false, fmt.Errorf("failed to create range scan: %w", err)
 	}

@@ -1,9 +1,10 @@
-package query
+package scanner
 
 import (
 	"fmt"
 	"sort"
 	"storemy/pkg/concurrency/transaction"
+	"storemy/pkg/execution/query"
 	"storemy/pkg/primitives"
 	"storemy/pkg/tuple"
 	"storemy/pkg/types"
@@ -306,9 +307,9 @@ func TestParallelSeqScanWithFilter(t *testing.T) {
 	}
 
 	// Filter: id > 50
-	pred := NewPredicate(0, primitives.GreaterThan, types.NewIntField(50))
+	pred := query.NewPredicate(0, primitives.GreaterThan, types.NewIntField(50))
 
-	filter, err := NewFilter(pred, parallelScan)
+	filter, err := query.NewFilter(pred, parallelScan)
 	if err != nil {
 		t.Fatalf("Failed to create filter: %v", err)
 	}

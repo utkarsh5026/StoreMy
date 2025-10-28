@@ -5,7 +5,7 @@ import (
 	"storemy/pkg/catalog/operations"
 	"storemy/pkg/catalog/schema"
 	"storemy/pkg/catalog/systemtable"
-	"storemy/pkg/execution/query"
+	"storemy/pkg/execution/scanner"
 	"storemy/pkg/iterator"
 	"storemy/pkg/primitives"
 	"storemy/pkg/storage/heap"
@@ -150,7 +150,7 @@ func (cm *CatalogManager) iterateTable(tableID primitives.FileID, tx TxContext, 
 
 	heapFile := file.(*heap.HeapFile)
 
-	iter, err := query.NewSeqScan(tx, tableID, heapFile, cm.store)
+	iter, err := scanner.NewSeqScan(tx, tableID, heapFile, cm.store)
 	if err != nil {
 		return fmt.Errorf("failed to create iterator: %w", err)
 	}

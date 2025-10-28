@@ -1,4 +1,4 @@
-package query
+package scanner
 
 import (
 	"fmt"
@@ -28,23 +28,23 @@ import (
 //   - Higher memory usage due to channel buffering
 //   - Does NOT support Rewind() operation
 type ParallelSeqScan struct {
-	base        *iterator.BaseIterator
-	tableID     primitives.FileID
-	tupleDesc   *tuple.TupleDescription
-	tx          *transaction.TransactionContext
-	dbFile      *heap.HeapFile
-	store       *memory.PageStore
+	base      *iterator.BaseIterator
+	tableID   primitives.FileID
+	tupleDesc *tuple.TupleDescription
+	tx        *transaction.TransactionContext
+	dbFile    *heap.HeapFile
+	store     *memory.PageStore
 
 	// Parallelism control
-	numWorkers  int
-	pageQueue   chan primitives.PageNumber
-	resultChan  chan *tuple.Tuple
-	errorChan   chan error
+	numWorkers int
+	pageQueue  chan primitives.PageNumber
+	resultChan chan *tuple.Tuple
+	errorChan  chan error
 
 	// Synchronization
-	wg          sync.WaitGroup
-	started     bool
-	mu          sync.Mutex
+	wg      sync.WaitGroup
+	started bool
+	mu      sync.Mutex
 }
 
 // ParallelSeqScanConfig holds configuration for parallel scanning

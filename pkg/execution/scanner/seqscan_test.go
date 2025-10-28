@@ -1,4 +1,4 @@
-package query
+package scanner
 
 import (
 	"path/filepath"
