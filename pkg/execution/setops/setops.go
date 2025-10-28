@@ -2,7 +2,6 @@ package setops
 
 import (
 	"fmt"
-	"storemy/pkg/execution/query"
 	"storemy/pkg/iterator"
 	"storemy/pkg/primitives"
 	"storemy/pkg/tuple"
@@ -19,9 +18,9 @@ const (
 
 // SetOp provides common functionality for UNION, INTERSECT, and EXCEPT operators.
 type SetOp struct {
-	base        *query.BaseIterator
-	leftChild   *query.SourceIter
-	rightChild  *query.SourceIter
+	base        *iterator.BaseIterator
+	leftChild   iterator.DbIterator
+	rightChild  iterator.DbIterator
 	opType      SetOperationType
 	preserveAll bool // true for ALL variants (UNION ALL, INTERSECT ALL, etc.)
 
@@ -36,24 +35,14 @@ func NewSetOperationBase(left, right iterator.DbIterator, opType SetOperationTyp
 		return nil, fmt.Errorf("set operation children cannot be nil")
 	}
 
-	leftOp, err := query.NewSourceOperator(left)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create left source: %w", err)
-	}
-
-	rightOp, err := query.NewSourceOperator(right)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create right source: %w", err)
-	}
-
 	// Validate schema compatibility
-	if err := validateSchemaCompatibility(leftOp.GetTupleDesc(), rightOp.GetTupleDesc()); err != nil {
+	if err := validateSchemaCompatibility(left.GetTupleDesc(), right.GetTupleDesc()); err != nil {
 		return nil, err
 	}
 
 	return &SetOp{
-		leftChild:   leftOp,
-		rightChild:  rightOp,
+		leftChild:   left,
+		rightChild:  right,
 		opType:      opType,
 		preserveAll: preserveAll,
 		tracker:     NewTupleSetTracker(preserveAll),
@@ -86,7 +75,7 @@ func (s *SetOp) buildRightHashSet() error {
 	}
 
 	for {
-		rt, err := s.rightChild.FetchNext()
+		rt, err := s.rightChild.Next()
 		if err != nil {
 			return err
 		}

@@ -1,7 +1,6 @@
 package setops
 
 import (
-	"storemy/pkg/execution/query"
 	"storemy/pkg/iterator"
 	"storemy/pkg/tuple"
 )
@@ -44,7 +43,7 @@ func NewUnion(left, right iterator.DbIterator, unionAll bool) (*Union, error) {
 	}
 
 	u := &Union{SetOp: base}
-	u.base = query.NewBaseIterator(u.readNext)
+	u.base = iterator.NewBaseIterator(u.readNext)
 	return u, nil
 }
 
@@ -64,7 +63,7 @@ func NewUnion(left, right iterator.DbIterator, unionAll bool) (*Union, error) {
 //   - Error if iteration fails
 func (u *Union) readNext() (*tuple.Tuple, error) {
 	for !u.leftDone {
-		t, err := u.leftChild.FetchNext()
+		t, err := u.leftChild.Next()
 		if err != nil {
 			return nil, err
 		}
@@ -83,7 +82,7 @@ func (u *Union) readNext() (*tuple.Tuple, error) {
 	}
 
 	for {
-		t, err := u.rightChild.FetchNext()
+		t, err := u.rightChild.Next()
 		if err != nil || t == nil {
 			return t, err
 		}

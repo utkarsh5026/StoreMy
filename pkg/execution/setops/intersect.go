@@ -1,7 +1,6 @@
 package setops
 
 import (
-	"storemy/pkg/execution/query"
 	"storemy/pkg/iterator"
 	"storemy/pkg/tuple"
 )
@@ -35,7 +34,7 @@ func NewIntersect(left, right iterator.DbIterator, intersectAll bool) (*Intersec
 	}
 
 	in := &Intersect{SetOp: base}
-	in.base = query.NewBaseIterator(in.readNext)
+	in.base = iterator.NewBaseIterator(in.readNext)
 	return in, nil
 }
 
@@ -58,7 +57,7 @@ func (in *Intersect) readNext() (*tuple.Tuple, error) {
 	}
 
 	for {
-		t, err := in.leftChild.FetchNext()
+		t, err := in.leftChild.Next()
 		if err != nil || t == nil {
 			return t, err
 		}

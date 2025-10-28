@@ -1,7 +1,6 @@
 package setops
 
 import (
-	"storemy/pkg/execution/query"
 	"storemy/pkg/iterator"
 	"storemy/pkg/tuple"
 )
@@ -36,7 +35,7 @@ func NewExcept(left, right iterator.DbIterator, exceptAll bool) (*Except, error)
 	}
 
 	ex := &Except{SetOp: base}
-	ex.base = query.NewBaseIterator(ex.readNext)
+	ex.base = iterator.NewBaseIterator(ex.readNext)
 	return ex, nil
 }
 
@@ -58,7 +57,7 @@ func (ex *Except) readNext() (*tuple.Tuple, error) {
 	}
 
 	for {
-		t, err := ex.leftChild.FetchNext()
+		t, err := ex.leftChild.Next()
 		if err != nil || t == nil {
 			return t, err
 		}

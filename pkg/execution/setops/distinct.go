@@ -2,7 +2,6 @@ package setops
 
 import (
 	"fmt"
-	"storemy/pkg/execution/query"
 	"storemy/pkg/iterator"
 	"storemy/pkg/tuple"
 )
@@ -28,8 +27,7 @@ import (
 //   - Hash lookups: O(1) average case
 //   - Collision resolution: O(k) where k=tuples with same hash (typically 1)
 type Distinct struct {
-	base   *query.BaseIterator
-	source *query.SourceIter
+	*iterator.UnaryOperator
 	seen   *TupleSet // Tracks unique tuples already emitted
 	opened bool
 }
@@ -47,17 +45,16 @@ func NewDistinct(child iterator.DbIterator) (*Distinct, error) {
 		return nil, fmt.Errorf("child operator cannot be nil")
 	}
 
-	sourceOp, err := query.NewSourceOperator(child)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create source operator: %w", err)
-	}
-
 	d := &Distinct{
-		source: sourceOp,
-		seen:   NewTupleSet(false),
+		seen: NewTupleSet(false),
 	}
 
-	d.base = query.NewBaseIterator(d.readNext)
+	unaryOp, err := iterator.NewUnaryOperator(child, d.readNext)
+	if err != nil {
+		return nil, err
+	}
+	d.UnaryOperator = unaryOp
+
 	return d, nil
 }
 
@@ -72,7 +69,7 @@ func NewDistinct(child iterator.DbIterator) (*Distinct, error) {
 //  5. Continue until unique tuple found or source exhausted
 func (d *Distinct) readNext() (*tuple.Tuple, error) {
 	for {
-		t, err := d.source.FetchNext()
+		t, err := d.FetchNext()
 		if err != nil {
 			return nil, fmt.Errorf("error fetching tuple from source: %w", err)
 		}
@@ -92,14 +89,13 @@ func (d *Distinct) readNext() (*tuple.Tuple, error) {
 // Must be called before HasNext/Next can be used.
 // Resets the seen set to handle multiple Open/Close cycles.
 func (d *Distinct) Open() error {
-	if err := d.source.Open(); err != nil {
-		return fmt.Errorf("failed to open source operator: %w", err)
+	if err := d.UnaryOperator.Open(); err != nil {
+		return fmt.Errorf("failed to open child operator: %w", err)
 	}
 
 	d.seen.Clear()
 	d.opened = true
 
-	d.base.MarkOpened()
 	return nil
 }
 
@@ -108,29 +104,7 @@ func (d *Distinct) Close() error {
 	d.opened = false
 	d.seen.Clear()
 
-	if err := d.source.Close(); err != nil {
-		return fmt.Errorf("failed to close source operator: %w", err)
-	}
-
-	return nil
-}
-
-// HasNext checks if there are more unique tuples available.
-// Delegates to BaseIterator which caches the next tuple.
-func (d *Distinct) HasNext() (bool, error) {
-	if !d.opened {
-		return false, fmt.Errorf("distinct operator not opened")
-	}
-	return d.base.HasNext()
-}
-
-// Next returns the next unique tuple.
-// Delegates to BaseIterator which returns the cached tuple.
-func (d *Distinct) Next() (*tuple.Tuple, error) {
-	if !d.opened {
-		return nil, fmt.Errorf("distinct operator not opened")
-	}
-	return d.base.Next()
+	return d.UnaryOperator.Close()
 }
 
 // Rewind resets the Distinct operator to the beginning.
@@ -141,15 +115,5 @@ func (d *Distinct) Rewind() error {
 	}
 
 	d.seen.Clear()
-	if err := d.source.Rewind(); err != nil {
-		return fmt.Errorf("failed to rewind source operator: %w", err)
-	}
-
-	return d.base.Rewind()
-}
-
-// GetTupleDesc returns the tuple descriptor (schema) from the source.
-// Distinct does not modify the schema, only filters tuples.
-func (d *Distinct) GetTupleDesc() *tuple.TupleDescription {
-	return d.source.GetTupleDesc()
+	return d.UnaryOperator.Rewind()
 }
