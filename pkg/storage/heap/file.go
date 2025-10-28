@@ -127,3 +127,15 @@ func (hf *HeapFile) WritePage(p page.Page) error {
 
 	return hf.WritePageData(p.GetID().PageNo(), p.GetPageData())
 }
+
+// Iterator returns a new iterator for this heap file that iterates over all tuples
+// across all pages in the file.
+//
+// Parameters:
+//   - tid: The transaction ID for this iteration
+//
+// Returns:
+//   - *HeapFileIterator: An iterator that implements iterator.DbFileIterator
+func (hf *HeapFile) Iterator(tid *primitives.TransactionID) *HeapFileIterator {
+	return NewHeapFileIterator(hf, tid)
+}
