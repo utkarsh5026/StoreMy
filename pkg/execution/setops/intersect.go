@@ -34,8 +34,7 @@ func NewIntersect(left, right iterator.DbIterator, intersectAll bool) (*Intersec
 	}
 
 	in := &Intersect{SetOp: base}
-	in.base = iterator.NewBaseIterator(in.readNext)
-	return in, nil
+	return in, in.setBinaryOperator(left, right, in.readNext)
 }
 
 // readNext implements the INTERSECT logic using hash-based matching.
@@ -57,7 +56,7 @@ func (in *Intersect) readNext() (*tuple.Tuple, error) {
 	}
 
 	for {
-		t, err := in.leftChild.Next()
+		t, err := in.FetchLeft()
 		if err != nil || t == nil {
 			return t, err
 		}

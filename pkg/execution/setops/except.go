@@ -35,8 +35,7 @@ func NewExcept(left, right iterator.DbIterator, exceptAll bool) (*Except, error)
 	}
 
 	ex := &Except{SetOp: base}
-	ex.base = iterator.NewBaseIterator(ex.readNext)
-	return ex, nil
+	return ex, ex.setBinaryOperator(left, right, ex.readNext)
 }
 
 // readNext implements the EXCEPT logic using hash-based filtering.
@@ -57,7 +56,7 @@ func (ex *Except) readNext() (*tuple.Tuple, error) {
 	}
 
 	for {
-		t, err := ex.leftChild.Next()
+		t, err := ex.FetchLeft()
 		if err != nil || t == nil {
 			return t, err
 		}

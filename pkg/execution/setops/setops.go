@@ -18,9 +18,7 @@ const (
 
 // SetOp provides common functionality for UNION, INTERSECT, and EXCEPT operators.
 type SetOp struct {
-	base        *iterator.BaseIterator
-	leftChild   iterator.DbIterator
-	rightChild  iterator.DbIterator
+	*iterator.BinaryOperator
 	opType      SetOperationType
 	preserveAll bool // true for ALL variants (UNION ALL, INTERSECT ALL, etc.)
 
@@ -30,19 +28,17 @@ type SetOp struct {
 }
 
 // NewSetOperationBase creates a new base for set operations with common validation.
+// Note: The caller must set the BinaryOperator field after creating the SetOp.
 func NewSetOperationBase(left, right iterator.DbIterator, opType SetOperationType, preserveAll bool) (*SetOp, error) {
 	if left == nil || right == nil {
 		return nil, fmt.Errorf("set operation children cannot be nil")
 	}
 
-	// Validate schema compatibility
 	if err := validateSchemaCompatibility(left.GetTupleDesc(), right.GetTupleDesc()); err != nil {
 		return nil, err
 	}
 
 	return &SetOp{
-		leftChild:   left,
-		rightChild:  right,
 		opType:      opType,
 		preserveAll: preserveAll,
 		tracker:     NewTupleSetTracker(preserveAll),
@@ -75,7 +71,7 @@ func (s *SetOp) buildRightHashSet() error {
 	}
 
 	for {
-		rt, err := s.rightChild.Next()
+		rt, err := s.FetchRight()
 		if err != nil {
 			return err
 		}
@@ -92,66 +88,41 @@ func (s *SetOp) buildRightHashSet() error {
 
 // GetTupleDesc returns the schema of the result.
 func (s *SetOp) GetTupleDesc() *tuple.TupleDescription {
-	return s.leftChild.GetTupleDesc()
-}
-
-// HasNext checks if there are more tuples available.
-func (s *SetOp) HasNext() (bool, error) {
-	return s.base.HasNext()
-}
-
-// Next retrieves the next tuple.
-func (s *SetOp) Next() (*tuple.Tuple, error) {
-	return s.base.Next()
+	return s.GetLeftChild().GetTupleDesc()
 }
 
 // Rewind resets the operator to the beginning.
 func (s *SetOp) Rewind() error {
-	if err := s.leftChild.Rewind(); err != nil {
-		return err
-	}
-	if err := s.rightChild.Rewind(); err != nil {
-		return err
-	}
-
 	s.initialized = false
 	s.leftDone = false
 	s.tracker.Clear()
 
-	s.base.ClearCache()
-	return nil
+	return s.BinaryOperator.Rewind()
 }
 
 // Close releases resources by closing both child operators.
 func (s *SetOp) Close() error {
-	leftErr := s.leftChild.Close()
-	rightErr := s.rightChild.Close()
-
-	if leftErr != nil {
-		return leftErr
-	}
-	if rightErr != nil {
-		return rightErr
-	}
-
-	return s.base.Close()
+	return s.BinaryOperator.Close()
 }
 
 // Open initializes the set operation by opening both child operators.
 func (s *SetOp) Open() error {
-	if err := s.leftChild.Open(); err != nil {
-		return fmt.Errorf("failed to open left child: %w", err)
-	}
-
-	if err := s.rightChild.Open(); err != nil {
-		s.leftChild.Close()
-		return fmt.Errorf("failed to open right child: %w", err)
+	if err := s.BinaryOperator.Open(); err != nil {
+		return err
 	}
 
 	s.initialized = false
 	s.leftDone = false
 	s.tracker = NewTupleSetTracker(s.preserveAll)
 
-	s.base.MarkOpened()
+	return nil
+}
+
+func (s *SetOp) setBinaryOperator(l, r iterator.DbIterator, readNext iterator.ReadNextFunc) error {
+	binaryOp, err := iterator.NewBinaryOperator(l, r, readNext)
+	if err != nil {
+		return err
+	}
+	s.BinaryOperator = binaryOp
 	return nil
 }

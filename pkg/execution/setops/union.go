@@ -43,8 +43,7 @@ func NewUnion(left, right iterator.DbIterator, unionAll bool) (*Union, error) {
 	}
 
 	u := &Union{SetOp: base}
-	u.base = iterator.NewBaseIterator(u.readNext)
-	return u, nil
+	return u, u.setBinaryOperator(left, right, u.readNext)
 }
 
 // readNext implements the UNION logic using streaming approach.
@@ -63,7 +62,7 @@ func NewUnion(left, right iterator.DbIterator, unionAll bool) (*Union, error) {
 //   - Error if iteration fails
 func (u *Union) readNext() (*tuple.Tuple, error) {
 	for !u.leftDone {
-		t, err := u.leftChild.Next()
+		t, err := u.FetchLeft()
 		if err != nil {
 			return nil, err
 		}
@@ -82,7 +81,7 @@ func (u *Union) readNext() (*tuple.Tuple, error) {
 	}
 
 	for {
-		t, err := u.rightChild.Next()
+		t, err := u.FetchRight()
 		if err != nil || t == nil {
 			return t, err
 		}
