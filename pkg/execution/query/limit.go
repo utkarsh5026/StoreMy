@@ -7,11 +7,10 @@ import (
 )
 
 type LimitOperator struct {
-	child  iterator.DbIterator
+	*iterator.UnaryOperator
 	limit  int
 	offset int
 	count  int
-	base   *BaseIterator
 }
 
 func NewLimitOperator(child iterator.DbIterator, limit, offset int) (*LimitOperator, error) {
@@ -27,35 +26,37 @@ func NewLimitOperator(child iterator.DbIterator, limit, offset int) (*LimitOpera
 		return nil, fmt.Errorf("offset must be non-negative")
 	}
 
-	return &LimitOperator{
-		child:  child,
+	lo := &LimitOperator{
 		limit:  limit,
 		offset: offset,
-	}, nil
+	}
+
+	unaryOp, err := iterator.NewUnaryOperator(child, lo.readNext)
+	if err != nil {
+		return nil, err
+	}
+	lo.UnaryOperator = unaryOp
+
+	return lo, nil
 }
 
 func (lo *LimitOperator) Open() error {
-	if err := lo.child.Open(); err != nil {
+	if err := lo.UnaryOperator.Open(); err != nil {
 		return err
 	}
 
+	// Skip offset tuples
 	for i := 0; i < lo.offset; i++ {
-		hasNext, err := lo.child.HasNext()
+		t, err := lo.FetchNext()
 		if err != nil {
 			return err
 		}
-		if !hasNext {
+		if t == nil {
 			break
-		}
-		_, err = lo.child.Next()
-		if err != nil {
-			return err
 		}
 	}
 
 	lo.count = 0
-	lo.base = NewBaseIterator(lo.readNext)
-	lo.base.MarkOpened()
 	return nil
 }
 
@@ -64,71 +65,33 @@ func (lo *LimitOperator) readNext() (*tuple.Tuple, error) {
 		return nil, nil
 	}
 
-	hasNext, err := lo.child.HasNext()
-	if err != nil {
-		return nil, err
-	}
-	if !hasNext {
-		return nil, nil
-	}
-
-	t, err := lo.child.Next()
-	if err != nil {
-		return nil, err
+	t, err := lo.FetchNext()
+	if err != nil || t == nil {
+		return t, err
 	}
 
 	lo.count++
 	return t, nil
 }
 
-func (lo *LimitOperator) Close() error {
-	if lo.child != nil {
-		lo.child.Close()
-	}
-	if lo.base != nil {
-		return lo.base.Close()
-	}
-	return nil
-}
-
-func (lo *LimitOperator) GetTupleDesc() *tuple.TupleDescription {
-	return lo.child.GetTupleDesc()
-}
-
-func (lo *LimitOperator) HasNext() (bool, error) {
-	if lo.base == nil {
-		return false, fmt.Errorf("limit operator not opened")
-	}
-	return lo.base.HasNext()
-}
-
-func (lo *LimitOperator) Next() (*tuple.Tuple, error) {
-	if lo.base == nil {
-		return nil, fmt.Errorf("limit operator not opened")
-	}
-	return lo.base.Next()
-}
-
 func (lo *LimitOperator) Rewind() error {
 	lo.count = 0
-	if err := lo.child.Rewind(); err != nil {
+
+	// Rewind using UnaryOperator's Rewind
+	if err := lo.UnaryOperator.Rewind(); err != nil {
 		return err
 	}
 
+	// Skip offset tuples again
 	for i := 0; i < lo.offset; i++ {
-		hasNext, err := lo.child.HasNext()
+		t, err := lo.FetchNext()
 		if err != nil {
 			return err
 		}
-		if !hasNext {
+		if t == nil {
 			break
-		}
-		_, err = lo.child.Next()
-		if err != nil {
-			return err
 		}
 	}
 
-	lo.base.ClearCache()
 	return nil
 }

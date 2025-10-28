@@ -3,6 +3,7 @@ package query
 import (
 	"fmt"
 	"storemy/pkg/concurrency/transaction"
+	"storemy/pkg/iterator"
 	"storemy/pkg/memory"
 	"storemy/pkg/primitives"
 	"storemy/pkg/storage/heap"
@@ -17,7 +18,7 @@ import (
 // for table scans in query execution. It reads all tuples from a table in storage order,
 // making it suitable for operations that need to examine every tuple in a table.
 type SequentialScan struct {
-	base            *BaseIterator
+	base            *iterator.BaseIterator
 	tableID         primitives.FileID
 	currentPage     int64
 	tupleDesc       *tuple.TupleDescription
@@ -50,7 +51,7 @@ func NewSeqScan(tx *transaction.TransactionContext, tableID primitives.FileID, f
 	// Close the initial channel since no prefetch is in progress
 	close(ss.prefetchDone)
 
-	ss.base = NewBaseIterator(ss.readNext)
+	ss.base = iterator.NewBaseIterator(ss.readNext)
 	return ss, nil
 }
 

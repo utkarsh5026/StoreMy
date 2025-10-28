@@ -91,14 +91,6 @@ func TestNewProject_ValidInputs(t *testing.T) {
 		}
 	}
 
-	if project.source == nil {
-		t.Error("Expected child to be set")
-	}
-
-	if project.base == nil {
-		t.Error("Expected base iterator to be initialized")
-	}
-
 	if project.tupleDesc == nil {
 		t.Error("Expected tuple descriptor to be initialized")
 	}

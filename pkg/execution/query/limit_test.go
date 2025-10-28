@@ -111,9 +111,6 @@ func TestNewLimitOperator(t *testing.T) {
 					if op.offset != tt.offset {
 						t.Errorf("Expected offset %d, got %d", tt.offset, op.offset)
 					}
-					if op.child != tt.child {
-						t.Errorf("Child iterator not set correctly")
-					}
 				}
 			}
 		})

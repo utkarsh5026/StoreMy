@@ -3,6 +3,7 @@ package query
 import (
 	"fmt"
 	"storemy/pkg/concurrency/transaction"
+	"storemy/pkg/iterator"
 	"storemy/pkg/memory"
 	"storemy/pkg/storage/heap"
 	"storemy/pkg/storage/index"
@@ -24,7 +25,7 @@ import (
 //   - Range search: O(log n + k) for btree, where k is number of matching tuples
 //   - Much faster than sequential scan when selectivity is low
 type IndexScan struct {
-	base       *BaseIterator
+	base       *iterator.BaseIterator
 	tx         *transaction.TransactionContext
 	idx        index.Index
 	heapFile   *heap.HeapFile
@@ -89,7 +90,7 @@ func NewIndexEqualityScan(
 		currentPos: 0,
 	}
 
-	is.base = NewBaseIterator(is.readNext)
+	is.base = iterator.NewBaseIterator(is.readNext)
 	return is, nil
 }
 
@@ -135,7 +136,7 @@ func NewIndexRangeScan(
 		currentPos: 0,
 	}
 
-	is.base = NewBaseIterator(is.readNext)
+	is.base = iterator.NewBaseIterator(is.readNext)
 	return is, nil
 }
 

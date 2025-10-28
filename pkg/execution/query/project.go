@@ -14,10 +14,9 @@ import (
 //
 // Conceptually: SELECT col1, col3, col5 FROM table
 type Project struct {
-	base           *BaseIterator
+	*iterator.UnaryOperator
 	projectedCols  []primitives.ColumnID
 	projectedTypes []types.Type
-	source         *SourceIter
 	tupleDesc      *tuple.TupleDescription
 }
 
@@ -38,19 +37,18 @@ func NewProject(projectedCols []primitives.ColumnID, projectedTypes []types.Type
 		return nil, fmt.Errorf("failed to create output tuple desc: %v", err)
 	}
 
-	sourceOp, err := NewSourceOperator(source)
-	if err != nil {
-		return nil, err
-	}
-
 	p := &Project{
 		projectedCols:  projectedCols,
 		projectedTypes: projectedTypes,
-		source:         sourceOp,
 		tupleDesc:      tupleDesc,
 	}
 
-	p.base = NewBaseIterator(p.readNext)
+	unaryOp, err := iterator.NewUnaryOperator(source, p.readNext)
+	if err != nil {
+		return nil, err
+	}
+	p.UnaryOperator = unaryOp
+
 	return p, nil
 }
 
@@ -82,49 +80,11 @@ func (p *Project) GetTupleDesc() *tuple.TupleDescription {
 	return p.tupleDesc
 }
 
-// Open initializes the Project operator for iteration by opening its source operator.
-func (p *Project) Open() error {
-	if err := p.source.Open(); err != nil {
-		return err
-	}
-	p.base.MarkOpened()
-	return nil
-}
-
-// Close releases resources associated with the Project operator by closing its source
-// operator and performing cleanup.
-func (p *Project) Close() error {
-	if p.source != nil {
-		p.source.Close()
-	}
-	return p.base.Close()
-}
-
-// Rewind resets the Project operator to the beginning of its result set.
-func (p *Project) Rewind() error {
-	if err := p.source.Rewind(); err != nil {
-		return err
-	}
-
-	p.base.ClearCache()
-	return nil
-}
-
-// HasNext checks if there are more tuples available for projection.
-func (p *Project) HasNext() (bool, error) {
-	return p.base.HasNext()
-}
-
-// Next retrieves the next projected tuple from the operator.
-func (p *Project) Next() (*tuple.Tuple, error) {
-	return p.base.Next()
-}
-
 // readNext is the internal method that implements the projection logic.
 // It reads the next tuple from the source operator and creates a new tuple
 // containing only the projected fields in the specified order.
 func (p *Project) readNext() (*tuple.Tuple, error) {
-	t, err := p.source.FetchNext()
+	t, err := p.FetchNext()
 	if err != nil || t == nil {
 		return t, err
 	}

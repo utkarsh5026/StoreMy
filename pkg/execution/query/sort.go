@@ -21,8 +21,8 @@ import (
 //   - Space: O(n) to store all tuples
 //   - Blocking: Must read all input before producing first output
 type Sort struct {
-	base         *BaseIterator
-	source       *SourceIter
+	base         *iterator.BaseIterator
+	child        iterator.DbIterator
 	sortedTuples []*tuple.Tuple      // Materialized and sorted tuples
 	currentIndex int                 // Current position in sorted slice
 	sortFieldIdx primitives.ColumnID // Index of field to sort by
@@ -56,19 +56,14 @@ func NewSort(child iterator.DbIterator, sortFieldIdx primitives.ColumnID, ascend
 			sortFieldIdx, td.NumFields())
 	}
 
-	sourceOp, err := NewSourceOperator(child)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create source operator: %w", err)
-	}
-
 	s := &Sort{
-		source:       sourceOp,
+		child:        child,
 		sortFieldIdx: sortFieldIdx,
 		ascending:    ascending,
 		currentIndex: 0,
 	}
 
-	s.base = NewBaseIterator(s.readNext)
+	s.base = iterator.NewBaseIterator(s.readNext)
 	return s, nil
 }
 
@@ -81,7 +76,15 @@ func (s *Sort) materializeTuples() error {
 
 	tuples := make([]*tuple.Tuple, 0)
 	for {
-		t, err := s.source.FetchNext()
+		hasNext, err := s.child.HasNext()
+		if err != nil {
+			return fmt.Errorf("error checking if child has next: %w", err)
+		}
+		if !hasNext {
+			break
+		}
+
+		t, err := s.child.Next()
 		if err != nil {
 			return fmt.Errorf("error fetching tuple from source: %w", err)
 		}
@@ -165,8 +168,8 @@ func (s *Sort) readNext() (*tuple.Tuple, error) {
 // This is a blocking operation that reads all input tuples and sorts them
 // before returning. Must be called before HasNext/Next can be used.
 func (s *Sort) Open() error {
-	if err := s.source.Open(); err != nil {
-		return fmt.Errorf("failed to open source operator: %w", err)
+	if err := s.child.Open(); err != nil {
+		return fmt.Errorf("failed to open child operator: %w", err)
 	}
 
 	s.opened = true
@@ -185,7 +188,7 @@ func (s *Sort) Close() error {
 	s.sortedTuples = nil
 	s.currentIndex = 0
 
-	if err := s.source.Close(); err != nil {
+	if err := s.child.Close(); err != nil {
 		return fmt.Errorf("failed to close source operator: %w", err)
 	}
 
@@ -222,5 +225,5 @@ func (s *Sort) Rewind() error {
 // GetTupleDesc returns the tuple descriptor (schema) from the source.
 // Sort does not modify the schema, only the order of tuples.
 func (s *Sort) GetTupleDesc() *tuple.TupleDescription {
-	return s.source.GetTupleDesc()
+	return s.child.GetTupleDesc()
 }

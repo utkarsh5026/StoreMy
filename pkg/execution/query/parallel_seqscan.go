@@ -3,6 +3,7 @@ package query
 import (
 	"fmt"
 	"storemy/pkg/concurrency/transaction"
+	"storemy/pkg/iterator"
 	"storemy/pkg/memory"
 	"storemy/pkg/primitives"
 	"storemy/pkg/storage/heap"
@@ -27,7 +28,7 @@ import (
 //   - Higher memory usage due to channel buffering
 //   - Does NOT support Rewind() operation
 type ParallelSeqScan struct {
-	base        *BaseIterator
+	base        *iterator.BaseIterator
 	tableID     primitives.FileID
 	tupleDesc   *tuple.TupleDescription
 	tx          *transaction.TransactionContext
@@ -101,7 +102,7 @@ func NewParallelSeqScan(
 		pageQueue:  make(chan primitives.PageNumber, config.NumWorkers*2),
 	}
 
-	ps.base = NewBaseIterator(ps.readNext)
+	ps.base = iterator.NewBaseIterator(ps.readNext)
 	return ps, nil
 }
 
