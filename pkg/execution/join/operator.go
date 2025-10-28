@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"storemy/pkg/execution/join/internal/algorithm"
 	"storemy/pkg/execution/join/internal/common"
-	"storemy/pkg/execution/query"
 	"storemy/pkg/iterator"
 	"storemy/pkg/primitives"
 	"storemy/pkg/tuple"
@@ -16,7 +15,7 @@ import (
 // It abstracts the underlying join algorithm and provides automatic algorithm selection
 // based on data characteristics and available resources.
 type JoinOperator struct {
-	base       *query.BaseIterator
+	base       *iterator.BaseIterator
 	leftChild  iterator.DbIterator
 	rightChild iterator.DbIterator
 	predicate  common.JoinPredicate
@@ -51,7 +50,7 @@ func NewJoinOperator(field1, field2 primitives.ColumnID, op primitives.Predicate
 		initialized: false,
 	}
 
-	j.base = query.NewBaseIterator(j.readNext)
+	j.base = iterator.NewBaseIterator(j.readNext)
 	return j, nil
 }
 
