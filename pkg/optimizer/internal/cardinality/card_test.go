@@ -12,7 +12,6 @@ import (
 	"storemy/pkg/memory/wrappers/table"
 	"storemy/pkg/plan"
 	"storemy/pkg/primitives"
-	"storemy/pkg/storage/heap"
 	"storemy/pkg/tuple"
 	"storemy/pkg/types"
 	"testing"
@@ -91,28 +90,18 @@ func (tcs *testCatalogSetup) createTestTable(t *testing.T, tableName string, col
 		t.Fatalf("failed to create schema: %v", err)
 	}
 
-	// Create heap file
-	filePath := filepath.Join(tcs.tempDir, tableName+".dat")
-	heapFile, err := heap.NewHeapFile(primitives.Filepath(filePath), sch.TupleDesc)
+	// Use CreateTable which handles file creation and registration
+	tableID, err := tcs.catalog.CreateTable(tx, sch)
 	if err != nil {
-		t.Fatalf("failed to create heap file: %v", err)
+		t.Fatalf("failed to create table: %v", err)
 	}
 
-	tableID := heapFile.GetID()
-	sch.TableID = tableID
-	for i := range sch.Columns {
-		sch.Columns[i].TableID = tableID
+	// Get the created heap file from cache to register with page store
+	heapFile, err := tcs.cache.GetDbFile(tableID)
+	if err != nil {
+		t.Fatalf("failed to get heap file from cache: %v", err)
 	}
 
-	// Register with catalog
-	if err := tcs.catalog.RegisterTable(tx, sch, filePath); err != nil {
-		t.Fatalf("failed to register table: %v", err)
-	}
-
-	// Add to cache and page store
-	if err := tcs.cache.AddTable(heapFile, sch); err != nil {
-		t.Fatalf("failed to add table to cache: %v", err)
-	}
 	tcs.store.RegisterDbFile(tableID, heapFile)
 
 	return tableID
@@ -389,8 +378,8 @@ func TestDistinctCardinality(t *testing.T) {
 		}
 
 		// Should apply 80% reduction (typical duplicate ratio)
-		expectedMin := int64(700) // 70% of 1000
-		expectedMax := int64(900) // 90% of 1000
+		expectedMin := Cardinality(700) // 70% of 1000
+		expectedMax := Cardinality(900) // 90% of 1000
 
 		if result < expectedMin || result > expectedMax {
 			t.Errorf("Expected DISTINCT cardinality in range [%d, %d], got %d",
@@ -402,11 +391,11 @@ func TestDistinctCardinality(t *testing.T) {
 	})
 
 	t.Run("DISTINCT Never Exceeds Input", func(t *testing.T) {
-		testCases := []int64{10, 100, 1000, 10000}
+		testCases := []Cardinality{10, 100, 1000, 10000}
 
 		for _, childCard := range testCases {
 			child := &plan.ProjectNode{}
-			child.SetCardinality(childCard)
+			child.SetCardinality(int64(childCard))
 
 			distinct := &plan.DistinctNode{
 				Child:         child,
@@ -490,7 +479,7 @@ func TestUnionCardinality(t *testing.T) {
 			t.Fatalf("estimateUnionCardinality error: %v", err)
 		}
 
-		expected := int64(1500)
+		expected := Cardinality(1500)
 		if result != expected {
 			t.Errorf("UNION ALL: expected %d, got %d", expected, result)
 		}
@@ -516,9 +505,9 @@ func TestUnionCardinality(t *testing.T) {
 
 		// Similar sizes: ~15% overlap expected
 		// Result should be between max(1000, 900) and 1000+900
-		minExpected := int64(1000)     // At least the larger set
-		maxExpected := int64(1900)     // At most the sum
-		typicalExpected := int64(1700) // ~1900 - 15% of 900
+		minExpected := Cardinality(1000)     // At least the larger set
+		maxExpected := Cardinality(1900)     // At most the sum
+		typicalExpected := Cardinality(1700) // ~1900 - 15% of 900
 
 		if result < minExpected || result > maxExpected {
 			t.Errorf("UNION similar sizes: expected range [%d, %d], got %d",
@@ -549,8 +538,8 @@ func TestUnionCardinality(t *testing.T) {
 
 		// Small set likely mostly contained in large set
 		// Result should be closer to 10000 than to 10500
-		minExpected := int64(10000) // At least the larger set
-		maxExpected := int64(10500) // At most the sum
+		minExpected := Cardinality(10000) // At least the larger set
+		maxExpected := Cardinality(10500) // At most the sum
 
 		if result < minExpected || result > maxExpected {
 			t.Errorf("UNION small vs large: expected range [%d, %d], got %d",
@@ -558,7 +547,7 @@ func TestUnionCardinality(t *testing.T) {
 		}
 
 		// Result should be significantly less than sum due to overlap
-		if result > int64(10300) {
+		if result > Cardinality(10300) {
 			t.Errorf("UNION should account for containment: got %d, expected < 10300",
 				result)
 		}
@@ -704,7 +693,7 @@ func TestJoinCardinalityWithContainment(t *testing.T) {
 			t.Fatalf("estimateJoin error: %v", err)
 		}
 
-		cartesian := int64(100 * 200)
+		cartesian := Cardinality(100 * 200)
 		if result > cartesian {
 			t.Errorf("Join cardinality %d exceeds cartesian product %d",
 				result, cartesian)

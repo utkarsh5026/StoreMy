@@ -38,7 +38,7 @@ import (
 //	Join selectivity: 1/1,000 = 0.001
 //	Output: 10,000,000 × 0.001 = 10,000 rows
 //	With filter status='active' (sel=0.3): 10,000 × 0.3 = 3,000 rows
-func (ce *CardinalityEstimator) estimateJoin(node *plan.JoinNode) (int64, error) {
+func (ce *CardinalityEstimator) estimateJoin(node *plan.JoinNode) (Cardinality, error) {
 	leftCard, err := ce.EstimatePlanCardinality(node.LeftChild)
 	if err != nil {
 		return 0, err
@@ -66,17 +66,17 @@ func (ce *CardinalityEstimator) estimateJoin(node *plan.JoinNode) (int64, error)
 
 		for i := range node.ExtraFilters {
 			sel := ce.estimatePredicateSelectivity(tableID, &node.ExtraFilters[i])
-			selectivities = append(selectivities, sel)
+			selectivities = append(selectivities, float64(sel))
 		}
 
 		filterSelectivity = applyCorrelationCorrection(selectivities)
 	}
 
 	totalSelectivity := joinSelectivity * filterSelectivity
-	result := int64(float64(baseCard) * totalSelectivity)
+	result := Cardinality(float64(baseCard) * totalSelectivity)
 
 	finalCard := math.Min(float64(result), float64(leftCard*rightCard))
-	return int64(math.Max(1.0, finalCard)), nil
+	return Cardinality(math.Max(1.0, finalCard)), nil
 }
 
 // estimateJoinSelectivity estimates the selectivity of the join condition.

@@ -15,12 +15,16 @@ type (
 	TxCtx = *transaction.TransactionContext
 )
 
+// Cardinality represents the estimated number of rows in a query result.
+// It is defined as int64 since row counts are always non-negative integers.
+type Cardinality int64
+
 // Default constants for cardinality estimation
 const (
-	DefaultTableCardinality = 1000 // Default table size when no statistics
-	DefaultDistinctCount    = 100  // Default distinct count
-	DefaultJoinSelectivity  = 0.1  // 10% for non-equi-joins
-	MinCardinality          = 1    // Minimum estimated cardinality
+	DefaultTableCardinality Cardinality = 1000 // Default table size when no statistics
+	DefaultDistinctCount    uint64      = 100  // Default distinct count (kept as uint64 for compatibility)
+	DefaultJoinSelectivity  float64     = 0.1  // 10% for non-equi-joins (selectivity, not cardinality)
+	MinCardinality          Cardinality = 1    // Minimum estimated cardinality
 )
 
 // CardinalityEstimator estimates the output cardinality (number of rows)
@@ -75,13 +79,13 @@ func NewCardinalityEstimator(cat *catalogmanager.CatalogManager, tx *transaction
 //   - planNode: Plan node to estimate
 //
 // Returns estimated cardinality or error if estimation fails.
-func (ce *CardinalityEstimator) EstimatePlanCardinality(planNode plan.PlanNode) (int64, error) {
+func (ce *CardinalityEstimator) EstimatePlanCardinality(planNode plan.PlanNode) (Cardinality, error) {
 	if planNode == nil {
 		return 0, nil
 	}
 
 	if existingCard := planNode.GetCardinality(); existingCard > 0 {
-		return existingCard, nil
+		return Cardinality(existingCard), nil
 	}
 
 	switch node := planNode.(type) {
@@ -159,7 +163,7 @@ func (ce *CardinalityEstimator) getColumnDistinctCount(planNode plan.PlanNode, c
 //   - node: Aggregate plan node to estimate
 //
 // Returns estimated output cardinality, minimum 1.
-func (ce *CardinalityEstimator) estimateAggr(node *plan.AggregateNode) (int64, error) {
+func (ce *CardinalityEstimator) estimateAggr(node *plan.AggregateNode) (Cardinality, error) {
 	childCard, err := ce.EstimatePlanCardinality(node.Child)
 	if err != nil {
 		return 0, err
@@ -170,9 +174,9 @@ func (ce *CardinalityEstimator) estimateAggr(node *plan.AggregateNode) (int64, e
 	}
 
 	groupCard := ce.estimateGroupByDistinctCount(node.Child, node.GroupByExprs)
-	result := int64(math.Min(float64(groupCard), float64(childCard)))
+	result := Cardinality(math.Min(float64(groupCard), float64(childCard)))
 
-	return int64(math.Max(1.0, float64(result))), nil
+	return Cardinality(math.Max(1.0, float64(result))), nil
 }
 
 // estimateGroupByDistinctCount estimates the distinct count for a GROUP BY operation.
@@ -296,15 +300,15 @@ func applyCorrelationCorrection(selectivities []float64) float64 {
 //   - baseCard: Input cardinality before filtering
 //
 // Returns estimated output cardinality after applying all predicates.
-func (ce *CardinalityEstimator) calculateSelectivity(predicates []plan.PredicateInfo, tableID primitives.FileID, baseCard int64) int64 {
+func (ce *CardinalityEstimator) calculateSelectivity(predicates []plan.PredicateInfo, tableID primitives.FileID, baseCard Cardinality) Cardinality {
 	selectivities := make([]float64, 0, len(predicates))
 	for i := range predicates {
 		sel := ce.estimatePredicateSelectivity(tableID, &predicates[i])
-		selectivities = append(selectivities, sel)
+		selectivities = append(selectivities, float64(sel))
 	}
 
 	totalSelectivity := applyCorrelationCorrection(selectivities)
-	return int64(float64(baseCard) * totalSelectivity)
+	return Cardinality(float64(baseCard) * totalSelectivity)
 }
 
 // findBaseTableID walks the plan tree to find the base table ID by recursively
@@ -442,7 +446,7 @@ func (ce *CardinalityEstimator) parsePredicateValue(tableID primitives.FileID, c
 //   - pred: Predicate information including type, column, operator, and value
 //
 // Returns selectivity estimate between 0.0 and 1.0.
-func (ce *CardinalityEstimator) estimatePredicateSelectivity(tableID primitives.FileID, pred *plan.PredicateInfo) float64 {
+func (ce *CardinalityEstimator) estimatePredicateSelectivity(tableID primitives.FileID, pred *plan.PredicateInfo) selectivity.Selectivity {
 	est := selectivity.NewSelectivityEstimator(ce.catalog, ce.tx)
 	switch pred.Type {
 	case plan.NullCheckPredicate:

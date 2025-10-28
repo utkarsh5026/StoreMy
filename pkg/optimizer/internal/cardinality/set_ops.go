@@ -38,7 +38,7 @@ import (
 //  3. Edge case:
 //     Child: 5 rows, DISTINCT with NDV=100
 //     Output: min(100, 5) = 5 rows (can't exceed child cardinality)
-func (ce *CardinalityEstimator) estimateDistinct(node *plan.DistinctNode) (int64, error) {
+func (ce *CardinalityEstimator) estimateDistinct(node *plan.DistinctNode) (Cardinality, error) {
 	childCard, err := ce.EstimatePlanCardinality(node.Child)
 	if err != nil {
 		return 0, err
@@ -50,17 +50,17 @@ func (ce *CardinalityEstimator) estimateDistinct(node *plan.DistinctNode) (int64
 
 	if len(node.DistinctExprs) > 0 {
 		distinctCount := ce.estimateGroupByDistinctCount(node.Child, node.DistinctExprs)
-		return int64(math.Min(float64(distinctCount), float64(childCard))), nil
+		return Cardinality(math.Min(float64(distinctCount), float64(childCard))), nil
 	}
 
 	// DISTINCT on all columns: estimate based on typical duplicate ratio
 	// Research shows that typical tables have 70-90% unique rows
 	// We use 80% as a middle ground estimate
 	defaultDistinctRatio := 0.8
-	estimatedDistinct := int64(float64(childCard) * defaultDistinctRatio)
+	estimatedDistinct := Cardinality(float64(childCard) * defaultDistinctRatio)
 
 	// Ensure at least 1 row
-	return int64(math.Max(1.0, float64(estimatedDistinct))), nil
+	return Cardinality(math.Max(1.0, float64(estimatedDistinct))), nil
 }
 
 // estimateUnionCardinality estimates output rows for a UNION operation.
@@ -109,7 +109,7 @@ func (ce *CardinalityEstimator) estimateDistinct(node *plan.DistinctNode) (int64
 //     SizeRatio: 100/10,000 = 0.01 → overlapRatio = 0.50
 //     Overlap: 100 × 0.50 = 50 rows
 //     Output: 100 + 10,000 - 50 = 10,050 rows
-func (ce *CardinalityEstimator) estimateUnionCardinality(node *plan.UnionNode) (int64, error) {
+func (ce *CardinalityEstimator) estimateUnionCardinality(node *plan.UnionNode) (Cardinality, error) {
 	leftCard, err := ce.EstimatePlanCardinality(node.LeftChild)
 	if err != nil {
 		return 0, err
@@ -158,7 +158,7 @@ func (ce *CardinalityEstimator) estimateUnionCardinality(node *plan.UnionNode) (
 	result = math.Max(maxCard, result)
 	result = math.Min(float64(totalCard), result)
 
-	return int64(math.Max(1.0, result)), nil
+	return Cardinality(math.Max(1.0, result)), nil
 }
 
 // estimateIntersectCardinality estimates output rows for an INTERSECT operation.
@@ -214,7 +214,7 @@ func (ce *CardinalityEstimator) estimateUnionCardinality(node *plan.UnionNode) (
 //     Output: 0 rows (no intersection possible)
 func (ce *CardinalityEstimator) estimateIntersectCardinality(
 	node *plan.IntersectNode,
-) (int64, error) {
+) (Cardinality, error) {
 	leftCard, err := ce.EstimatePlanCardinality(node.LeftChild)
 	if err != nil {
 		return 0, err
@@ -250,7 +250,7 @@ func (ce *CardinalityEstimator) estimateIntersectCardinality(
 		}
 
 		result := minCard * intersectRatio
-		return int64(math.Max(1.0, result)), nil
+		return Cardinality(math.Max(1.0, result)), nil
 	}
 
 	var intersectRatio float64
@@ -269,7 +269,7 @@ func (ce *CardinalityEstimator) estimateIntersectCardinality(
 	}
 
 	result := minCard * intersectRatio
-	return int64(math.Max(1.0, result)), nil
+	return Cardinality(math.Max(1.0, result)), nil
 }
 
 // estimateExceptCardinality estimates output rows for an EXCEPT (MINUS) operation.
@@ -325,7 +325,7 @@ func (ce *CardinalityEstimator) estimateIntersectCardinality(
 //     Output: 0 rows (all left rows removed)
 func (ce *CardinalityEstimator) estimateExceptCardinality(
 	node *plan.ExceptNode,
-) (int64, error) {
+) (Cardinality, error) {
 	leftCard, err := ce.EstimatePlanCardinality(node.LeftChild)
 	if err != nil {
 		return 0, err
@@ -370,7 +370,7 @@ func (ce *CardinalityEstimator) estimateExceptCardinality(
 		// EXCEPT ALL: remove matching rows based on their counts
 		removed := float64(leftCard) * removalRatio
 		result := float64(leftCard) - removed
-		return int64(math.Max(0.0, result)), nil
+		return Cardinality(math.Max(0.0, result)), nil
 	}
 
 	// EXCEPT (with deduplication): estimate unique rows remaining
@@ -379,5 +379,5 @@ func (ce *CardinalityEstimator) estimateExceptCardinality(
 	removed := distinctLeft * removalRatio
 	result := distinctLeft - removed
 
-	return int64(math.Max(0.0, result)), nil
+	return Cardinality(math.Max(0.0, result)), nil
 }
