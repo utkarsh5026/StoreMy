@@ -3,7 +3,7 @@ package indexmanager
 import (
 	"fmt"
 	"os"
-	"storemy/pkg/execution/query"
+	"storemy/pkg/execution/scanner"
 	btreeindex "storemy/pkg/memory/wrappers/btree_index"
 	hashindex "storemy/pkg/memory/wrappers/hash_index"
 	"storemy/pkg/primitives"
@@ -35,7 +35,7 @@ import (
 //   - error: nil on success, or an error if the sequential scan fails,
 //     tuple access fails, or index insertion fails
 func (im *IndexManager) insertIntoIndex(ctx TxCtx, tableFile *heap.HeapFile, columnIndex primitives.ColumnID, insertFunc func(key types.Field, rid *tuple.TupleRecordID) error) error {
-	seqScan, err := query.NewSeqScan(ctx, tableFile.GetID(), tableFile, im.pageStore)
+	seqScan, err := scanner.NewSeqScan(ctx, tableFile.GetID(), tableFile, im.pageStore)
 	if err != nil {
 		return fmt.Errorf("failed to create sequential scan: %v", err)
 	}
@@ -229,7 +229,7 @@ func (im *IndexManager) PopulateIndex(
 		return fmt.Errorf("table has no schema definition")
 	}
 	numFields := tupleDesc.NumFields()
-	if columnIndex < 0 || columnIndex >= numFields {
+	if columnIndex >= numFields {
 		return fmt.Errorf("column index %d is out of range for table with %d columns", columnIndex, numFields)
 	}
 

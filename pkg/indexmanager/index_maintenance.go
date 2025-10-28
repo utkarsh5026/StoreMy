@@ -132,7 +132,7 @@ func applyIndexOperation(idx *indexWithMetadata, key types.Field, rid *tuple.Tup
 //   - The field type doesn't match the index's expected key type
 func extractKey(t *tuple.Tuple, metadata *IndexMetadata) (types.Field, error) {
 	colIndex := metadata.ColumnIndex
-	if colIndex < 0 || colIndex >= t.TupleDesc.NumFields() {
+	if colIndex >= t.TupleDesc.NumFields() {
 		return nil, fmt.Errorf("invalid column index %d for tuple with %d fields",
 			colIndex, t.TupleDesc.NumFields())
 	}
