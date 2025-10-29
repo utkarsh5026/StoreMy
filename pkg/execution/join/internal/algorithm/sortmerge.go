@@ -54,12 +54,14 @@ func (s *SortMergeJoin) Initialize() error {
 		return err
 	}
 	s.leftIterator = iterator.NewSliceIterator(leftSorted)
+	s.leftIterator.Open()
 
 	rightSorted, err := loadAndSort(s.RightChild(), s.Predicate().GetRightField())
 	if err != nil {
 		return err
 	}
 	s.rightIterator = iterator.NewSliceIterator(rightSorted)
+	s.rightIterator.Open()
 
 	s.SetInitialized()
 	return nil

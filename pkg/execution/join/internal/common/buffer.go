@@ -17,8 +17,10 @@ type JoinMatchBuffer struct {
 
 // NewJoinMatchBuffer creates a new empty match buffer.
 func NewJoinMatchBuffer() *JoinMatchBuffer {
+	iter := iterator.NewSliceIterator([]*tuple.Tuple(nil))
+	iter.Open()
 	return &JoinMatchBuffer{
-		iter: iterator.NewSliceIterator([]*tuple.Tuple(nil)),
+		iter: iter,
 	}
 }
 

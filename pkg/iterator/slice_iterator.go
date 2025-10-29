@@ -15,6 +15,7 @@ import "fmt"
 //
 //	// Create iterator with data
 //	iter := NewSliceIterator([]int{1, 2, 3, 4, 5})
+//	iter.Open()
 //
 //	// Iterate through elements
 //	for iter.HasNext() {
@@ -24,11 +25,6 @@ import "fmt"
 //	    }
 //	    process(val)
 //	}
-//
-//	// Or iterate using ForEach
-//	err := iter.ForEach(func(val int) error {
-//	    return process(val)
-//	})
 type SliceIterator[T any] struct {
 	data         []T  // The underlying slice to iterate over
 	currentIndex int  // Current position in the slice
@@ -36,29 +32,24 @@ type SliceIterator[T any] struct {
 }
 
 // NewSliceIterator creates a new iterator over the given slice.
-// The iterator starts in an opened state and positioned at the beginning.
+// The iterator starts in a CLOSED state and must be explicitly opened before use.
+// This follows the DbIterator pattern where all iterators require Open() to be called.
 //
 // Parameters:
 //   - data: Slice to iterate over (can be nil or empty)
 //
 // Returns:
-//   - *SliceIterator ready to use
+//   - *SliceIterator in closed state
+//
+// Usage:
+//   iter := NewSliceIterator(data)
+//   iter.Open()
+//   for iter.HasNext() { ... }
 func NewSliceIterator[T any](data []T) *SliceIterator[T] {
 	return &SliceIterator[T]{
 		data:         data,
 		currentIndex: 0,
-		opened:       true,
-	}
-}
-
-// NewClosedSliceIterator creates a new iterator in closed state.
-// The iterator must be explicitly opened before use.
-// This is useful when you want to control when iteration starts.
-func NewClosedSliceIterator[T any](data []T) *SliceIterator[T] {
-	return &SliceIterator[T]{
-		data:         data,
-		currentIndex: 0,
-		opened:       false,
+		opened:       false, // Default to closed for consistency
 	}
 }
 
