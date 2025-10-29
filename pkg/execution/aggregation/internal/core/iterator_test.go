@@ -105,14 +105,11 @@ func TestNewAggregatorIterator(t *testing.T) {
 	if iter.aggregator == nil {
 		t.Error("Expected non-nil aggregator")
 	}
-	if iter.tupleDesc == nil {
-		t.Error("Expected non-nil tuple description")
-	}
-	if iter.currentIdx != 0 {
-		t.Errorf("Expected currentIdx to be 0, got %d", iter.currentIdx)
+	if iter.tupleIter == nil {
+		t.Error("Expected non-nil tuple iterator")
 	}
 	if iter.opened {
-		t.Error("Expected iterator to be closed initially")
+		t.Error("Expected iterator to not be opened initially")
 	}
 }
 
@@ -133,11 +130,14 @@ func TestAggregatorIterator_Open(t *testing.T) {
 		if !iter.opened {
 			t.Error("Expected iterator to be opened")
 		}
-		if iter.currentIdx != 0 {
-			t.Errorf("Expected currentIdx to be 0, got %d", iter.currentIdx)
+
+		// Verify tuples were materialized by checking HasNext
+		hasNext, err := iter.HasNext()
+		if err != nil {
+			t.Errorf("HasNext error: %v", err)
 		}
-		if iter.groups == nil {
-			t.Error("Expected groups to be initialized")
+		if !hasNext {
+			t.Error("Expected materialized tuples after Open()")
 		}
 	})
 
@@ -174,8 +174,22 @@ func TestAggregatorIterator_Open(t *testing.T) {
 			t.Fatalf("Unexpected error: %v", err)
 		}
 
-		if len(iter.groups) != 3 {
-			t.Errorf("Expected 3 groups, got %d", len(iter.groups))
+		// Count tuples to verify all groups were materialized
+		count := 0
+		for {
+			hasNext, _ := iter.HasNext()
+			if !hasNext {
+				break
+			}
+			_, err := iter.Next()
+			if err != nil {
+				t.Fatalf("Next error: %v", err)
+			}
+			count++
+		}
+
+		if count != 3 {
+			t.Errorf("Expected 3 tuples, got %d", count)
 		}
 	})
 }
@@ -395,8 +409,8 @@ func TestAggregatorIterator_Next(t *testing.T) {
 	})
 }
 
-// TestAggregatorIterator_readNext tests the internal readNext method behavior
-func TestAggregatorIterator_readNext_NonGrouped(t *testing.T) {
+// TestAggregatorIterator_Next_NonGrouped tests Next with non-grouped aggregation
+func TestAggregatorIterator_Next_NonGrouped(t *testing.T) {
 	td := createIteratorTestTupleDesc(false)
 	agg := newMockGroupAggregator(NoGrouping, td)
 	agg.addGroup("NO_GROUPING", types.NewIntField(42))
@@ -407,7 +421,7 @@ func TestAggregatorIterator_readNext_NonGrouped(t *testing.T) {
 		t.Fatalf("Failed to open iterator: %v", err)
 	}
 
-	tup, err := iter.readNext()
+	tup, err := iter.Next()
 	if err != nil {
 		t.Fatalf("Unexpected error: %v", err)
 	}
@@ -435,8 +449,8 @@ func TestAggregatorIterator_readNext_NonGrouped(t *testing.T) {
 	}
 }
 
-// TestAggregatorIterator_readNext_Grouped tests readNext with grouped aggregation
-func TestAggregatorIterator_readNext_Grouped(t *testing.T) {
+// TestAggregatorIterator_Next_Grouped tests Next with grouped aggregation
+func TestAggregatorIterator_Next_Grouped(t *testing.T) {
 	td := createIteratorTestTupleDesc(true)
 	agg := newMockGroupAggregator(0, td)
 	agg.addGroup("TestGroup", types.NewIntField(100))
@@ -447,7 +461,7 @@ func TestAggregatorIterator_readNext_Grouped(t *testing.T) {
 		t.Fatalf("Failed to open iterator: %v", err)
 	}
 
-	tup, err := iter.readNext()
+	tup, err := iter.Next()
 	if err != nil {
 		t.Fatalf("Unexpected error: %v", err)
 	}
@@ -524,11 +538,7 @@ func TestAggregatorIterator_Rewind(t *testing.T) {
 			t.Fatalf("Unexpected error: %v", err)
 		}
 
-		if iter.currentIdx != 0 {
-			t.Errorf("Expected currentIdx to be 0 after rewind, got %d", iter.currentIdx)
-		}
-
-		// Should be able to iterate again
+		// Should be able to iterate again from the beginning
 		count := 0
 		for {
 			hasNext, err := iter.HasNext()
@@ -607,11 +617,11 @@ func TestAggregatorIterator_Close(t *testing.T) {
 			t.Errorf("Unexpected error: %v", err)
 		}
 
-		if iter.opened {
-			t.Error("Expected iterator to be closed")
+		// Verify iterator is closed by checking that HasNext returns false
+		hasNext, _ := iter.HasNext()
+		if hasNext {
+			t.Error("Expected iterator to be closed (HasNext should return false)")
 		}
-		// Note: aggregator and groups are private fields, so we can't check them directly
-		// Instead, we verify the iterator is closed by testing behavior
 	})
 
 	t.Run("close unopened iterator", func(t *testing.T) {

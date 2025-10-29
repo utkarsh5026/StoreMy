@@ -54,14 +54,12 @@ func (s *SortMergeJoin) Initialize() error {
 		return err
 	}
 	s.leftIterator = iterator.NewSliceIterator(leftSorted)
-	s.leftIterator.Open()
 
 	rightSorted, err := loadAndSort(s.RightChild(), s.Predicate().GetRightField())
 	if err != nil {
 		return err
 	}
 	s.rightIterator = iterator.NewSliceIterator(rightSorted)
-	s.rightIterator.Open()
 
 	s.SetInitialized()
 	return nil
@@ -125,12 +123,9 @@ func (s *SortMergeJoin) Reset() error {
 
 // Close releases all resources used by the sort-merge join.
 func (s *SortMergeJoin) Close() error {
-	if s.leftIterator != nil {
-		s.leftIterator.Clear()
-	}
-	if s.rightIterator != nil {
-		s.rightIterator.Clear()
-	}
+	// Release iterator data for GC
+	s.leftIterator = nil
+	s.rightIterator = nil
 	return s.BaseJoin.Close()
 }
 

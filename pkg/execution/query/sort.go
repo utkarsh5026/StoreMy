@@ -99,7 +99,6 @@ func (s *Sort) materializeTuples() error {
 	}
 
 	s.sorted = iterator.NewSliceIterator(tuples)
-	s.sorted.Open()
 	s.materialized = true
 	return nil
 }
@@ -180,7 +179,7 @@ func (s *Sort) Close() error {
 	s.materialized = false
 
 	if s.sorted != nil {
-		s.sorted.Close()
+		s.sorted = iterator.NewSliceIterator([]*tuple.Tuple{nil})
 	}
 
 	if err := s.child.Close(); err != nil {

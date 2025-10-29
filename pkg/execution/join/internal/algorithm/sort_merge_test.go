@@ -625,11 +625,11 @@ func TestSortMergeJoinClose(t *testing.T) {
 	}
 
 	// Verify resources are cleaned up
-	if smj.leftIterator.GetData() != nil {
-		t.Error("left iterator data should be nil after close")
+	if smj.leftIterator != nil {
+		t.Error("left iterator should be nil after close")
 	}
-	if smj.rightIterator.GetData() != nil {
-		t.Error("right iterator data should be nil after close")
+	if smj.rightIterator != nil {
+		t.Error("right iterator should be nil after close")
 	}
 	if smj.Initialized {
 		t.Error("initialized should be false after close")

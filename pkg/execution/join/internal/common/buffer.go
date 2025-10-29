@@ -17,10 +17,8 @@ type JoinMatchBuffer struct {
 
 // NewJoinMatchBuffer creates a new empty match buffer.
 func NewJoinMatchBuffer() *JoinMatchBuffer {
-	iter := iterator.NewSliceIterator([]*tuple.Tuple(nil))
-	iter.Open()
 	return &JoinMatchBuffer{
-		iter: iter,
+		iter: iterator.NewSliceIterator([]*tuple.Tuple(nil)),
 	}
 }
 
@@ -40,9 +38,8 @@ func (jmb *JoinMatchBuffer) Next() *tuple.Tuple {
 }
 
 // Reset clears the buffer and resets the index.
-// The iterator remains open (ready for use).
 func (jmb *JoinMatchBuffer) Reset() {
-	jmb.iter.Reset(nil)
+	jmb.iter = iterator.NewSliceIterator([]*tuple.Tuple(nil))
 }
 
 // SetMatches sets the buffer to the provided slice and resets index to start.
@@ -52,7 +49,7 @@ func (jmb *JoinMatchBuffer) SetMatches(matches []*tuple.Tuple) *tuple.Tuple {
 		jmb.Reset()
 		return nil
 	}
-	jmb.iter.Reset(matches)
+	jmb.iter = iterator.NewSliceIterator(matches)
 	first, err := jmb.iter.Next()
 	if err != nil {
 		return nil
@@ -62,7 +59,7 @@ func (jmb *JoinMatchBuffer) SetMatches(matches []*tuple.Tuple) *tuple.Tuple {
 
 // StartNew initializes a new empty buffer for accumulating matches.
 func (jmb *JoinMatchBuffer) StartNew() {
-	jmb.iter.Reset(make([]*tuple.Tuple, 0))
+	jmb.iter = iterator.NewSliceIterator(make([]*tuple.Tuple, 0))
 }
 
 // Add appends a tuple to the buffer.
@@ -71,9 +68,9 @@ func (jmb *JoinMatchBuffer) Add(t *tuple.Tuple) {
 	currentData := jmb.iter.GetData()
 	currentPos := jmb.iter.CurrentIndex()
 
-	// Append new tuple and restore position
+	// Append new tuple and create new iterator with updated data
 	newData := append(currentData, t)
-	jmb.iter.Reset(newData)
+	jmb.iter = iterator.NewSliceIterator(newData)
 
 	// Manually restore the iteration position
 	for i := 0; i < currentPos; i++ {
