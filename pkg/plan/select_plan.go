@@ -29,9 +29,8 @@ type SelectPlan struct {
 	orderByField string
 	orderByAsc   bool
 
-	hasLimit bool
-	limit    int
-	offset   int
+	hasLimit      bool
+	limit, offset primitives.RowID
 
 	// Set operation fields
 	isSetOperation bool
@@ -227,7 +226,7 @@ func (sp *SelectPlan) IsDistinct() bool {
 }
 
 // SetLimit sets the LIMIT clause for the query.
-func (sp *SelectPlan) SetLimit(limit int, offset int) {
+func (sp *SelectPlan) SetLimit(limit, offset primitives.RowID) {
 	sp.hasLimit = true
 	sp.limit = limit
 	sp.offset = offset
@@ -239,11 +238,11 @@ func (sp *SelectPlan) HasLimit() bool {
 }
 
 // Limit returns the LIMIT value.
-func (sp *SelectPlan) Limit() int {
+func (sp *SelectPlan) Limit() primitives.RowID {
 	return sp.limit
 }
 
 // Offset returns the OFFSET value.
-func (sp *SelectPlan) Offset() int {
+func (sp *SelectPlan) Offset() primitives.RowID {
 	return sp.offset
 }

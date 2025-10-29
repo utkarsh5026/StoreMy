@@ -3,6 +3,7 @@ package query
 import (
 	"fmt"
 	"storemy/pkg/iterator"
+	"storemy/pkg/primitives"
 	"storemy/pkg/tuple"
 )
 
@@ -14,9 +15,9 @@ import (
 // Returns 10 tuples starting from the 6th tuple.
 type LimitOperator struct {
 	*iterator.UnaryOperator
-	limit  int // Maximum number of tuples to return
-	offset int // Number of tuples to skip from the beginning
-	count  int // Number of tuples returned so far
+	limit  primitives.RowID // Maximum number of tuples to return
+	offset primitives.RowID // Number of tuples to skip from the beginning
+	count  primitives.RowID // Number of tuples returned so far
 }
 
 // NewLimitOperator creates a new LimitOperator instance.
@@ -29,17 +30,9 @@ type LimitOperator struct {
 // Returns:
 //   - *LimitOperator: The initialized limit operator
 //   - error: If child is nil, or limit/offset are negative
-func NewLimitOperator(child iterator.DbIterator, limit, offset int) (*LimitOperator, error) {
+func NewLimitOperator(child iterator.DbIterator, limit, offset primitives.RowID) (*LimitOperator, error) {
 	if child == nil {
 		return nil, fmt.Errorf("child operator cannot be nil")
-	}
-
-	if limit < 0 {
-		return nil, fmt.Errorf("limit must be non-negative")
-	}
-
-	if offset < 0 {
-		return nil, fmt.Errorf("offset must be non-negative")
 	}
 
 	lo := &LimitOperator{
@@ -66,19 +59,8 @@ func (lo *LimitOperator) Open() error {
 		return err
 	}
 
-	// Skip offset tuples
-	for i := 0; i < lo.offset; i++ {
-		t, err := lo.FetchNext()
-		if err != nil {
-			return err
-		}
-		if t == nil {
-			break
-		}
-	}
-
 	lo.count = 0
-	return nil
+	return lo.skipOffset()
 }
 
 // readNext retrieves the next tuple within the limit range.
@@ -110,13 +92,23 @@ func (lo *LimitOperator) readNext() (*tuple.Tuple, error) {
 func (lo *LimitOperator) Rewind() error {
 	lo.count = 0
 
-	// Rewind using UnaryOperator's Rewind
 	if err := lo.UnaryOperator.Rewind(); err != nil {
 		return err
 	}
 
-	// Skip offset tuples again
-	for i := 0; i < lo.offset; i++ {
+	return lo.skipOffset()
+}
+
+// skipOffset advances the child operator by the number of tuples specified
+// by the offset value, discarding those tuples. This prepares the limit
+// operator so the next retrieved tuple is the first one after the offset.
+// If there are fewer tuples than the offset value, it stops early.
+//
+// Returns:
+//   - error: If an error occurs while fetching the next tuple from the child operator.
+func (lo *LimitOperator) skipOffset() error {
+	var i primitives.RowID
+	for i = 0; i < lo.offset; i++ {
 		t, err := lo.FetchNext()
 		if err != nil {
 			return err
@@ -125,6 +117,5 @@ func (lo *LimitOperator) Rewind() error {
 			break
 		}
 	}
-
 	return nil
 }

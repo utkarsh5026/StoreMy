@@ -3,6 +3,7 @@ package query
 import (
 	"fmt"
 	"storemy/pkg/iterator"
+	"storemy/pkg/primitives"
 	"storemy/pkg/tuple"
 	"storemy/pkg/types"
 	"testing"
@@ -38,8 +39,8 @@ func TestNewLimitOperator(t *testing.T) {
 	tests := []struct {
 		name      string
 		child     iterator.DbIterator
-		limit     int
-		offset    int
+		limit     primitives.RowID
+		offset    primitives.RowID
 		expectErr bool
 	}{
 		{
@@ -68,20 +69,6 @@ func TestNewLimitOperator(t *testing.T) {
 			child:     nil,
 			limit:     5,
 			offset:    2,
-			expectErr: true,
-		},
-		{
-			name:      "Negative limit",
-			child:     child,
-			limit:     -1,
-			offset:    2,
-			expectErr: true,
-		},
-		{
-			name:      "Negative offset",
-			child:     child,
-			limit:     5,
-			offset:    -1,
 			expectErr: true,
 		},
 	}

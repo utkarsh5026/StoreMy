@@ -244,7 +244,7 @@ func parseLimit(l *lexer.Lexer, p *plan.SelectPlan) error {
 		return fmt.Errorf("expected integer after LIMIT, got %s", limitToken.Value)
 	}
 
-	limitValue := 0
+	var limitValue = 0
 	if _, err := fmt.Sscanf(limitToken.Value, "%d", &limitValue); err != nil {
 		return fmt.Errorf("invalid LIMIT value: %s", limitToken.Value)
 	}
@@ -263,7 +263,11 @@ func parseLimit(l *lexer.Lexer, p *plan.SelectPlan) error {
 		l.SetPos(offsetToken.Position)
 	}
 
-	p.SetLimit(limitValue, offset)
+	if offset < 0 || limitValue < 0 {
+		return fmt.Errorf("limit and offset cannot be zero")
+	}
+
+	p.SetLimit(primitives.RowID(limitValue), primitives.RowID(offset))
 	return nil
 }
 
