@@ -256,16 +256,11 @@ func createAggregator(fieldType, gbFieldType types.Type, groupByField, aggregate
 		GbFieldType: gbFieldType,
 		AggrField:   aggregateField,
 	}
-	switch fieldType {
-	case types.IntType:
-		return calculators.NewIntAggregator(conf)
-	case types.BoolType:
-		return calculators.NewBooleanAggregator(conf)
-	case types.StringType:
-		return calculators.NewStringAggregator(conf)
-	case types.FloatType:
-		return calculators.NewFloatAggregator(conf)
-	default:
-		return nil, fmt.Errorf("unsupported field type for aggregation: %v", fieldType)
+
+	calculator, err := calculators.GetCalculator(fieldType, op)
+	if err != nil {
+		return nil, err
 	}
+
+	return core.NewBaseAggregator(conf, calculator)
 }

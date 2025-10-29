@@ -157,20 +157,3 @@ func (ic *IntCalculator) GetFinalValue(groupKey string) (types.Field, error) {
 type IntAggregator struct {
 	*core.BaseAggregator
 }
-
-// NewIntAggregator creates a new IntAggregator instance for aggregating integer fields.
-//
-// Returns:
-//   - *IntAggregator: A new aggregator instance
-//   - error: Error if validation fails or initialization encounters issues
-func NewIntAggregator(config *core.AggregatorConfig) (*IntAggregator, error) {
-	calculator := NewIntCalculator(config.Operation)
-	base, err := core.NewBaseAggregator(config, calculator)
-	if err != nil {
-		return nil, err
-	}
-
-	return &IntAggregator{
-		BaseAggregator: base,
-	}, nil
-}

@@ -164,20 +164,3 @@ func (fc *FloatCalculator) GetFinalValue(groupKey string) (types.Field, error) {
 type FloatAggregator struct {
 	*core.BaseAggregator
 }
-
-// NewFloatAggregator creates a new FloatAggregator instance for aggregating float64 fields.
-//
-// Returns:
-//   - *FloatAggregator: A new aggregator instance
-//   - error: Error if validation fails or initialization encounters issues
-func NewFloatAggregator(config *core.AggregatorConfig) (*FloatAggregator, error) {
-	calculator := NewFloatCalculator(config.Operation)
-	base, err := core.NewBaseAggregator(config, calculator)
-	if err != nil {
-		return nil, err
-	}
-
-	return &FloatAggregator{
-		BaseAggregator: base,
-	}, nil
-}

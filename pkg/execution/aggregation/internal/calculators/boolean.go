@@ -160,20 +160,3 @@ func (bc *BooleanCalculator) GetFinalValue(groupKey string) (types.Field, error)
 type BooleanAggregator struct {
 	*core.BaseAggregator
 }
-
-// NewBooleanAggregator creates a new BooleanAggregator instance for aggregating boolean fields.
-//
-// Returns:
-//   - *BooleanAggregator: A new aggregator instance
-//   - error: Error if validation fails or initialization encounters issues
-func NewBooleanAggregator(config *core.AggregatorConfig) (*BooleanAggregator, error) {
-	calculator := NewBooleanCalculator(config.Operation)
-	base, err := core.NewBaseAggregator(config, calculator)
-	if err != nil {
-		return nil, err
-	}
-
-	return &BooleanAggregator{
-		BaseAggregator: base,
-	}, nil
-}

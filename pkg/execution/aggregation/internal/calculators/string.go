@@ -178,20 +178,3 @@ func (sc *StringCalculator) GetFinalValue(groupKey string) (types.Field, error) 
 type StringAggregator struct {
 	*core.BaseAggregator
 }
-
-// NewStringAggregator creates a new StringAggregator instance for aggregating string fields.
-//
-// Returns:
-//   - *StringAggregator: A new aggregator instance
-//   - error: Error if validation fails or initialization encounters issues
-func NewStringAggregator(config *core.AggregatorConfig) (*StringAggregator, error) {
-	calculator := NewStringCalculator(config.Operation)
-	base, err := core.NewBaseAggregator(config, calculator)
-	if err != nil {
-		return nil, err
-	}
-
-	return &StringAggregator{
-		BaseAggregator: base,
-	}, nil
-}
