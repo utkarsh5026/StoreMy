@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"math"
 	"storemy/pkg/execution/aggregation/internal/core"
-	"storemy/pkg/primitives"
 	"storemy/pkg/types"
 )
 
@@ -161,18 +160,12 @@ type IntAggregator struct {
 
 // NewIntAggregator creates a new IntAggregator instance for aggregating integer fields.
 //
-// Parameters:
-//   - gbField: The index of the field to group by
-//   - gbFieldType: The data type of the group-by field
-//   - aField: The index of the field to aggregate
-//   - op: The aggregate operation to perform
-//
 // Returns:
 //   - *IntAggregator: A new aggregator instance
 //   - error: Error if validation fails or initialization encounters issues
-func NewIntAggregator(gbField primitives.ColumnID, gbFieldType types.Type, aField primitives.ColumnID, op core.AggregateOp) (*IntAggregator, error) {
-	calculator := NewIntCalculator(op)
-	base, err := core.NewBaseAggregator(gbField, gbFieldType, aField, op, calculator)
+func NewIntAggregator(config *core.AggregatorConfig) (*IntAggregator, error) {
+	calculator := NewIntCalculator(config.Operation)
+	base, err := core.NewBaseAggregator(config, calculator)
 	if err != nil {
 		return nil, err
 	}

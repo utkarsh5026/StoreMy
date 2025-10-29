@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"math"
 	"storemy/pkg/primitives"
+	"storemy/pkg/types"
 	"strings"
 )
 
@@ -67,4 +68,11 @@ func ParseAggregateOp(opStr string) (AggregateOp, error) {
 	default:
 		return 0, fmt.Errorf("unsupported aggregate operation: %s", opStr)
 	}
+}
+
+type AggregatorConfig struct {
+	GbField     primitives.ColumnID // Index of grouping field (-1 for NoGrouping)
+	GbFieldType types.Type          // Type of grouping field
+	AggrField   primitives.ColumnID // Index of field to aggregate
+	Operation   AggregateOp         // Aggregation operation (COUNT, SUM, AVG, MIN, MAX)
 }

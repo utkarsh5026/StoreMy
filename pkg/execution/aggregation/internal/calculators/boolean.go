@@ -3,7 +3,6 @@ package calculators
 import (
 	"fmt"
 	"storemy/pkg/execution/aggregation/internal/core"
-	"storemy/pkg/primitives"
 	"storemy/pkg/types"
 )
 
@@ -164,18 +163,12 @@ type BooleanAggregator struct {
 
 // NewBooleanAggregator creates a new BooleanAggregator instance for aggregating boolean fields.
 //
-// Parameters:
-//   - gbField: The index of the field to group by
-//   - gbFieldType: The data type of the group-by field
-//   - aField: The index of the field to aggregate
-//   - op: The aggregate operation to perform
-//
 // Returns:
 //   - *BooleanAggregator: A new aggregator instance
 //   - error: Error if validation fails or initialization encounters issues
-func NewBooleanAggregator(gbField primitives.ColumnID, gbFieldType types.Type, aField primitives.ColumnID, op core.AggregateOp) (*BooleanAggregator, error) {
-	calculator := NewBooleanCalculator(op)
-	base, err := core.NewBaseAggregator(gbField, gbFieldType, aField, op, calculator)
+func NewBooleanAggregator(config *core.AggregatorConfig) (*BooleanAggregator, error) {
+	calculator := NewBooleanCalculator(config.Operation)
+	base, err := core.NewBaseAggregator(config, calculator)
 	if err != nil {
 		return nil, err
 	}

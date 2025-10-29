@@ -2,6 +2,7 @@ package core
 
 import (
 	"fmt"
+	"storemy/pkg/primitives"
 	"storemy/pkg/tuple"
 	"storemy/pkg/types"
 	"sync"
@@ -33,6 +34,16 @@ func newMockCalculator(resultType types.Type, validOps ...AggregateOp) *mockCalc
 		calc.validOperations[op] = true
 	}
 	return calc
+}
+
+func newBaseAggregator(gbField primitives.ColumnID, gbFieldType types.Type, aField primitives.ColumnID, op AggregateOp, calculator AggregateCalculator) (*BaseAggregator, error) {
+	conf := &AggregatorConfig{
+		Operation:   op,
+		GbField:     gbField,
+		GbFieldType: gbFieldType,
+		AggrField:   aField,
+	}
+	return NewBaseAggregator(conf, calculator)
 }
 
 func (m *mockCalculator) InitializeGroup(groupKey string) {
@@ -117,7 +128,7 @@ func createBaseTestTuple(group string, value int64) *tuple.Tuple {
 func TestNewBaseAggregator(t *testing.T) {
 	t.Run("valid aggregator with grouping", func(t *testing.T) {
 		calc := newMockCalculator(types.IntType, Sum, Count)
-		agg, err := NewBaseAggregator(0, types.StringType, 1, Sum, calc)
+		agg, err := newBaseAggregator(0, types.StringType, 1, Sum, calc)
 
 		if err != nil {
 			t.Fatalf("Unexpected error: %v", err)
@@ -125,14 +136,14 @@ func TestNewBaseAggregator(t *testing.T) {
 		if agg == nil {
 			t.Fatal("Expected non-nil aggregator")
 		}
-		if agg.gbField != 0 {
-			t.Errorf("Expected gbField 0, got %d", agg.gbField)
+		if agg.GbField != 0 {
+			t.Errorf("Expected GbField 0, got %d", agg.GbField)
 		}
-		if agg.aField != 1 {
-			t.Errorf("Expected aField 1, got %d", agg.aField)
+		if agg.AggrField != 1 {
+			t.Errorf("Expected AggrField 1, got %d", agg.AggrField)
 		}
-		if agg.op != Sum {
-			t.Errorf("Expected operation Sum, got %v", agg.op)
+		if agg.Operation != Sum {
+			t.Errorf("Expected operation Sum, got %v", agg.Operation)
 		}
 		if agg.tupleDesc == nil {
 			t.Error("Expected non-nil tuple description")
@@ -144,7 +155,7 @@ func TestNewBaseAggregator(t *testing.T) {
 
 	t.Run("valid aggregator without grouping", func(t *testing.T) {
 		calc := newMockCalculator(types.IntType, Count)
-		agg, err := NewBaseAggregator(NoGrouping, types.IntType, 0, Count, calc)
+		agg, err := newBaseAggregator(NoGrouping, types.IntType, 0, Count, calc)
 
 		if err != nil {
 			t.Fatalf("Unexpected error: %v", err)
@@ -152,14 +163,14 @@ func TestNewBaseAggregator(t *testing.T) {
 		if agg == nil {
 			t.Fatal("Expected non-nil aggregator")
 		}
-		if agg.gbField != NoGrouping {
-			t.Errorf("Expected gbField NoGrouping, got %d", agg.gbField)
+		if agg.GbField != NoGrouping {
+			t.Errorf("Expected GbField NoGrouping, got %d", agg.GbField)
 		}
 	})
 
 	t.Run("invalid operation", func(t *testing.T) {
 		calc := newMockCalculator(types.IntType, Sum) // Only Sum is valid
-		agg, err := NewBaseAggregator(0, types.StringType, 1, Count, calc)
+		agg, err := newBaseAggregator(0, types.StringType, 1, Count, calc)
 
 		if err == nil {
 			t.Error("Expected error for invalid operation")
@@ -174,7 +185,7 @@ func TestNewBaseAggregator(t *testing.T) {
 func TestBaseAggregator_createTupleDesc(t *testing.T) {
 	t.Run("non-grouped aggregation", func(t *testing.T) {
 		calc := newMockCalculator(types.IntType, Sum)
-		agg, err := NewBaseAggregator(NoGrouping, types.IntType, 0, Sum, calc)
+		agg, err := newBaseAggregator(NoGrouping, types.IntType, 0, Sum, calc)
 		if err != nil {
 			t.Fatalf("Failed to create aggregator: %v", err)
 		}
@@ -197,7 +208,7 @@ func TestBaseAggregator_createTupleDesc(t *testing.T) {
 
 	t.Run("grouped aggregation", func(t *testing.T) {
 		calc := newMockCalculator(types.IntType, Sum)
-		agg, err := NewBaseAggregator(0, types.StringType, 1, Sum, calc)
+		agg, err := newBaseAggregator(0, types.StringType, 1, Sum, calc)
 		if err != nil {
 			t.Fatalf("Failed to create aggregator: %v", err)
 		}
@@ -235,7 +246,7 @@ func TestBaseAggregator_createTupleDesc(t *testing.T) {
 func TestBaseAggregator_GetGroups(t *testing.T) {
 	t.Run("empty groups", func(t *testing.T) {
 		calc := newMockCalculator(types.IntType, Sum)
-		agg, err := NewBaseAggregator(0, types.StringType, 1, Sum, calc)
+		agg, err := newBaseAggregator(0, types.StringType, 1, Sum, calc)
 		if err != nil {
 			t.Fatalf("Failed to create aggregator: %v", err)
 		}
@@ -248,7 +259,7 @@ func TestBaseAggregator_GetGroups(t *testing.T) {
 
 	t.Run("single group after merge", func(t *testing.T) {
 		calc := newMockCalculator(types.IntType, Sum)
-		agg, err := NewBaseAggregator(0, types.StringType, 1, Sum, calc)
+		agg, err := newBaseAggregator(0, types.StringType, 1, Sum, calc)
 		if err != nil {
 			t.Fatalf("Failed to create aggregator: %v", err)
 		}
@@ -270,7 +281,7 @@ func TestBaseAggregator_GetGroups(t *testing.T) {
 
 	t.Run("multiple groups", func(t *testing.T) {
 		calc := newMockCalculator(types.IntType, Sum)
-		agg, err := NewBaseAggregator(0, types.StringType, 1, Sum, calc)
+		agg, err := newBaseAggregator(0, types.StringType, 1, Sum, calc)
 		if err != nil {
 			t.Fatalf("Failed to create aggregator: %v", err)
 		}
@@ -308,7 +319,7 @@ func TestBaseAggregator_GetGroups(t *testing.T) {
 func TestBaseAggregator_GetAggregateValue(t *testing.T) {
 	t.Run("get value for existing group", func(t *testing.T) {
 		calc := newMockCalculator(types.IntType, Sum)
-		agg, err := NewBaseAggregator(0, types.StringType, 1, Sum, calc)
+		agg, err := newBaseAggregator(0, types.StringType, 1, Sum, calc)
 		if err != nil {
 			t.Fatalf("Failed to create aggregator: %v", err)
 		}
@@ -335,7 +346,7 @@ func TestBaseAggregator_GetAggregateValue(t *testing.T) {
 
 	t.Run("get value for non-existing group", func(t *testing.T) {
 		calc := newMockCalculator(types.IntType, Sum)
-		agg, err := NewBaseAggregator(0, types.StringType, 1, Sum, calc)
+		agg, err := newBaseAggregator(0, types.StringType, 1, Sum, calc)
 		if err != nil {
 			t.Fatalf("Failed to create aggregator: %v", err)
 		}
@@ -350,7 +361,7 @@ func TestBaseAggregator_GetAggregateValue(t *testing.T) {
 // TestBaseAggregator_GetTupleDesc tests tuple description retrieval
 func TestBaseAggregator_GetTupleDesc(t *testing.T) {
 	calc := newMockCalculator(types.IntType, Sum)
-	agg, err := NewBaseAggregator(0, types.StringType, 1, Sum, calc)
+	agg, err := newBaseAggregator(0, types.StringType, 1, Sum, calc)
 	if err != nil {
 		t.Fatalf("Failed to create aggregator: %v", err)
 	}
@@ -368,27 +379,27 @@ func TestBaseAggregator_GetTupleDesc(t *testing.T) {
 func TestBaseAggregator_GetGroupingField(t *testing.T) {
 	t.Run("with grouping", func(t *testing.T) {
 		calc := newMockCalculator(types.IntType, Sum)
-		agg, err := NewBaseAggregator(0, types.StringType, 1, Sum, calc)
+		agg, err := newBaseAggregator(0, types.StringType, 1, Sum, calc)
 		if err != nil {
 			t.Fatalf("Failed to create aggregator: %v", err)
 		}
 
-		gbField := agg.GetGroupingField()
-		if gbField != 0 {
-			t.Errorf("Expected grouping field 0, got %d", gbField)
+		GbField := agg.GetGroupingField()
+		if GbField != 0 {
+			t.Errorf("Expected grouping field 0, got %d", GbField)
 		}
 	})
 
 	t.Run("without grouping", func(t *testing.T) {
 		calc := newMockCalculator(types.IntType, Sum)
-		agg, err := NewBaseAggregator(NoGrouping, types.IntType, 0, Sum, calc)
+		agg, err := newBaseAggregator(NoGrouping, types.IntType, 0, Sum, calc)
 		if err != nil {
 			t.Fatalf("Failed to create aggregator: %v", err)
 		}
 
-		gbField := agg.GetGroupingField()
-		if gbField != NoGrouping {
-			t.Errorf("Expected grouping field NoGrouping, got %d", gbField)
+		GbField := agg.GetGroupingField()
+		if GbField != NoGrouping {
+			t.Errorf("Expected grouping field NoGrouping, got %d", GbField)
 		}
 	})
 }
@@ -396,7 +407,7 @@ func TestBaseAggregator_GetGroupingField(t *testing.T) {
 // TestBaseAggregator_RLockRUnlock tests read locking
 func TestBaseAggregator_RLockRUnlock(t *testing.T) {
 	calc := newMockCalculator(types.IntType, Sum)
-	agg, err := NewBaseAggregator(0, types.StringType, 1, Sum, calc)
+	agg, err := newBaseAggregator(0, types.StringType, 1, Sum, calc)
 	if err != nil {
 		t.Fatalf("Failed to create aggregator: %v", err)
 	}
@@ -409,7 +420,7 @@ func TestBaseAggregator_RLockRUnlock(t *testing.T) {
 // TestBaseAggregator_Iterator tests iterator creation
 func TestBaseAggregator_Iterator(t *testing.T) {
 	calc := newMockCalculator(types.IntType, Sum)
-	agg, err := NewBaseAggregator(0, types.StringType, 1, Sum, calc)
+	agg, err := newBaseAggregator(0, types.StringType, 1, Sum, calc)
 	if err != nil {
 		t.Fatalf("Failed to create aggregator: %v", err)
 	}
@@ -430,7 +441,7 @@ func TestBaseAggregator_Iterator(t *testing.T) {
 func TestBaseAggregator_Merge(t *testing.T) {
 	t.Run("merge single tuple with grouping", func(t *testing.T) {
 		calc := newMockCalculator(types.IntType, Sum)
-		agg, err := NewBaseAggregator(0, types.StringType, 1, Sum, calc)
+		agg, err := newBaseAggregator(0, types.StringType, 1, Sum, calc)
 		if err != nil {
 			t.Fatalf("Failed to create aggregator: %v", err)
 		}
@@ -449,7 +460,7 @@ func TestBaseAggregator_Merge(t *testing.T) {
 
 	t.Run("merge multiple tuples same group", func(t *testing.T) {
 		calc := newMockCalculator(types.IntType, Sum)
-		agg, err := NewBaseAggregator(0, types.StringType, 1, Sum, calc)
+		agg, err := newBaseAggregator(0, types.StringType, 1, Sum, calc)
 		if err != nil {
 			t.Fatalf("Failed to create aggregator: %v", err)
 		}
@@ -481,7 +492,7 @@ func TestBaseAggregator_Merge(t *testing.T) {
 
 	t.Run("merge multiple tuples different groups", func(t *testing.T) {
 		calc := newMockCalculator(types.IntType, Sum)
-		agg, err := NewBaseAggregator(0, types.StringType, 1, Sum, calc)
+		agg, err := newBaseAggregator(0, types.StringType, 1, Sum, calc)
 		if err != nil {
 			t.Fatalf("Failed to create aggregator: %v", err)
 		}
@@ -514,7 +525,7 @@ func TestBaseAggregator_Merge(t *testing.T) {
 		tup1 := tuple.NewTuple(td)
 		tup1.SetField(0, types.NewIntField(10))
 
-		agg, err := NewBaseAggregator(NoGrouping, types.IntType, 0, Count, calc)
+		agg, err := newBaseAggregator(NoGrouping, types.IntType, 0, Count, calc)
 		if err != nil {
 			t.Fatalf("Failed to create aggregator: %v", err)
 		}
@@ -535,7 +546,7 @@ func TestBaseAggregator_Merge(t *testing.T) {
 
 	t.Run("merge with invalid aggregate field", func(t *testing.T) {
 		calc := newMockCalculator(types.IntType, Sum)
-		agg, err := NewBaseAggregator(0, types.StringType, 5, Sum, calc)
+		agg, err := newBaseAggregator(0, types.StringType, 5, Sum, calc)
 		if err != nil {
 			t.Fatalf("Failed to create aggregator: %v", err)
 		}
@@ -549,7 +560,7 @@ func TestBaseAggregator_Merge(t *testing.T) {
 
 	t.Run("merge with invalid grouping field", func(t *testing.T) {
 		calc := newMockCalculator(types.IntType, Sum)
-		agg, err := NewBaseAggregator(5, types.StringType, 1, Sum, calc)
+		agg, err := newBaseAggregator(5, types.StringType, 1, Sum, calc)
 		if err != nil {
 			t.Fatalf("Failed to create aggregator: %v", err)
 		}
@@ -566,7 +577,7 @@ func TestBaseAggregator_Merge(t *testing.T) {
 func TestBaseAggregator_extractGroupKey(t *testing.T) {
 	t.Run("extract group key with grouping", func(t *testing.T) {
 		calc := newMockCalculator(types.IntType, Sum)
-		agg, err := NewBaseAggregator(0, types.StringType, 1, Sum, calc)
+		agg, err := newBaseAggregator(0, types.StringType, 1, Sum, calc)
 		if err != nil {
 			t.Fatalf("Failed to create aggregator: %v", err)
 		}
@@ -583,7 +594,7 @@ func TestBaseAggregator_extractGroupKey(t *testing.T) {
 
 	t.Run("extract group key without grouping", func(t *testing.T) {
 		calc := newMockCalculator(types.IntType, Count)
-		agg, err := NewBaseAggregator(NoGrouping, types.IntType, 0, Count, calc)
+		agg, err := newBaseAggregator(NoGrouping, types.IntType, 0, Count, calc)
 		if err != nil {
 			t.Fatalf("Failed to create aggregator: %v", err)
 		}
@@ -606,7 +617,7 @@ func TestBaseAggregator_extractGroupKey(t *testing.T) {
 
 	t.Run("extract group key with invalid field", func(t *testing.T) {
 		calc := newMockCalculator(types.IntType, Sum)
-		agg, err := NewBaseAggregator(5, types.StringType, 1, Sum, calc)
+		agg, err := newBaseAggregator(5, types.StringType, 1, Sum, calc)
 		if err != nil {
 			t.Fatalf("Failed to create aggregator: %v", err)
 		}
@@ -623,7 +634,7 @@ func TestBaseAggregator_extractGroupKey(t *testing.T) {
 func TestBaseAggregator_InitializeDefault(t *testing.T) {
 	t.Run("initialize default for non-grouped aggregate", func(t *testing.T) {
 		calc := newMockCalculator(types.IntType, Count)
-		agg, err := NewBaseAggregator(NoGrouping, types.IntType, 0, Count, calc)
+		agg, err := newBaseAggregator(NoGrouping, types.IntType, 0, Count, calc)
 		if err != nil {
 			t.Fatalf("Failed to create aggregator: %v", err)
 		}
@@ -653,7 +664,7 @@ func TestBaseAggregator_InitializeDefault(t *testing.T) {
 
 	t.Run("initialize default for grouped aggregate does nothing", func(t *testing.T) {
 		calc := newMockCalculator(types.IntType, Sum)
-		agg, err := NewBaseAggregator(0, types.StringType, 1, Sum, calc)
+		agg, err := newBaseAggregator(0, types.StringType, 1, Sum, calc)
 		if err != nil {
 			t.Fatalf("Failed to create aggregator: %v", err)
 		}
@@ -671,7 +682,7 @@ func TestBaseAggregator_InitializeDefault(t *testing.T) {
 
 	t.Run("initialize default twice is idempotent", func(t *testing.T) {
 		calc := newMockCalculator(types.IntType, Count)
-		agg, err := NewBaseAggregator(NoGrouping, types.IntType, 0, Count, calc)
+		agg, err := newBaseAggregator(NoGrouping, types.IntType, 0, Count, calc)
 		if err != nil {
 			t.Fatalf("Failed to create aggregator: %v", err)
 		}
@@ -696,7 +707,7 @@ func TestBaseAggregator_InitializeDefault(t *testing.T) {
 // TestBaseAggregator_ThreadSafety tests concurrent access
 func TestBaseAggregator_ThreadSafety(t *testing.T) {
 	calc := newMockCalculator(types.IntType, Sum)
-	agg, err := NewBaseAggregator(0, types.StringType, 1, Sum, calc)
+	agg, err := newBaseAggregator(0, types.StringType, 1, Sum, calc)
 	if err != nil {
 		t.Fatalf("Failed to create aggregator: %v", err)
 	}
@@ -730,7 +741,7 @@ func TestBaseAggregator_ThreadSafety(t *testing.T) {
 func TestBaseAggregator_Integration(t *testing.T) {
 	t.Run("complete aggregation workflow", func(t *testing.T) {
 		calc := newMockCalculator(types.IntType, Sum)
-		agg, err := NewBaseAggregator(0, types.StringType, 1, Sum, calc)
+		agg, err := newBaseAggregator(0, types.StringType, 1, Sum, calc)
 		if err != nil {
 			t.Fatalf("Failed to create aggregator: %v", err)
 		}
@@ -793,7 +804,7 @@ func TestBaseAggregator_Integration(t *testing.T) {
 
 	t.Run("non-grouped aggregation with empty table", func(t *testing.T) {
 		calc := newMockCalculator(types.IntType, Count)
-		agg, err := NewBaseAggregator(NoGrouping, types.IntType, 0, Count, calc)
+		agg, err := newBaseAggregator(NoGrouping, types.IntType, 0, Count, calc)
 		if err != nil {
 			t.Fatalf("Failed to create aggregator: %v", err)
 		}

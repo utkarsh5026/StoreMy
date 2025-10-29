@@ -3,7 +3,6 @@ package calculators
 import (
 	"fmt"
 	"storemy/pkg/execution/aggregation/internal/core"
-	"storemy/pkg/primitives"
 	"storemy/pkg/types"
 )
 
@@ -182,18 +181,12 @@ type StringAggregator struct {
 
 // NewStringAggregator creates a new StringAggregator instance for aggregating string fields.
 //
-// Parameters:
-//   - gbField: The index of the field to group by
-//   - gbFieldType: The data type of the group-by field
-//   - aField: The index of the field to aggregate
-//   - op: The aggregate operation to perform
-//
 // Returns:
 //   - *StringAggregator: A new aggregator instance
 //   - error: Error if validation fails or initialization encounters issues
-func NewStringAggregator(gbField primitives.ColumnID, gbFieldType types.Type, aField primitives.ColumnID, op core.AggregateOp) (*StringAggregator, error) {
-	calculator := NewStringCalculator(op)
-	base, err := core.NewBaseAggregator(gbField, gbFieldType, aField, op, calculator)
+func NewStringAggregator(config *core.AggregatorConfig) (*StringAggregator, error) {
+	calculator := NewStringCalculator(config.Operation)
+	base, err := core.NewBaseAggregator(config, calculator)
 	if err != nil {
 		return nil, err
 	}

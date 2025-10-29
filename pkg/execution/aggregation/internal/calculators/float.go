@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"math"
 	"storemy/pkg/execution/aggregation/internal/core"
-	"storemy/pkg/primitives"
 	"storemy/pkg/types"
 )
 
@@ -168,18 +167,12 @@ type FloatAggregator struct {
 
 // NewFloatAggregator creates a new FloatAggregator instance for aggregating float64 fields.
 //
-// Parameters:
-//   - gbField: The index of the field to group by
-//   - gbFieldType: The data type of the group-by field
-//   - aField: The index of the field to aggregate
-//   - op: The aggregate operation to perform
-//
 // Returns:
 //   - *FloatAggregator: A new aggregator instance
 //   - error: Error if validation fails or initialization encounters issues
-func NewFloatAggregator(gbField primitives.ColumnID, gbFieldType types.Type, aField primitives.ColumnID, op core.AggregateOp) (*FloatAggregator, error) {
-	calculator := NewFloatCalculator(op)
-	base, err := core.NewBaseAggregator(gbField, gbFieldType, aField, op, calculator)
+func NewFloatAggregator(config *core.AggregatorConfig) (*FloatAggregator, error) {
+	calculator := NewFloatCalculator(config.Operation)
+	base, err := core.NewBaseAggregator(config, calculator)
 	if err != nil {
 		return nil, err
 	}

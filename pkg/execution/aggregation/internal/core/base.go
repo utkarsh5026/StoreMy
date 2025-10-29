@@ -21,14 +21,11 @@ import (
 // Thread-safety: All public methods that modify state are protected by a mutex.
 // Use RLock/RUnlock for read-only operations when iterating over results.
 type BaseAggregator struct {
-	gbField     primitives.ColumnID     // Index of grouping field (-1 for NoGrouping)
-	gbFieldType types.Type              // Type of grouping field
-	aField      primitives.ColumnID     // Index of field to aggregate
-	op          AggregateOp             // Aggregation operation (COUNT, SUM, AVG, MIN, MAX)
-	tupleDesc   *tuple.TupleDescription // Description of result tuples
-	mutex       sync.RWMutex            // Protects concurrent access to groups and calculator
-	groups      map[string]bool         // Track which groups exist (groupKey -> exists)
-	calculator  AggregateCalculator     // Type-specific aggregation logic
+	*AggregatorConfig
+	tupleDesc  *tuple.TupleDescription // Description of result tuples
+	mutex      sync.RWMutex            // Protects concurrent access to groups and calculator
+	groups     map[string]bool         // Track which groups exist (groupKey -> exists)
+	calculator AggregateCalculator     // Type-specific aggregation logic
 }
 
 // NewBaseAggregator creates a new BaseAggregator instance.
@@ -43,18 +40,15 @@ type BaseAggregator struct {
 // Returns:
 //   - *BaseAggregator: Initialized aggregator ready to process tuples
 //   - error: If the operation is invalid for the given calculator or tuple description fails
-func NewBaseAggregator(gbField primitives.ColumnID, gbFieldType types.Type, aField primitives.ColumnID, op AggregateOp, calculator AggregateCalculator) (*BaseAggregator, error) {
-	if err := calculator.ValidateOperation(op); err != nil {
+func NewBaseAggregator(config *AggregatorConfig, calculator AggregateCalculator) (*BaseAggregator, error) {
+	if err := calculator.ValidateOperation(config.Operation); err != nil {
 		return nil, err
 	}
 
 	agg := &BaseAggregator{
-		gbField:     gbField,
-		gbFieldType: gbFieldType,
-		aField:      aField,
-		op:          op,
-		groups:      make(map[string]bool),
-		calculator:  calculator,
+		AggregatorConfig: config,
+		groups:           make(map[string]bool),
+		calculator:       calculator,
 	}
 
 	tupleDesc, err := agg.createTupleDesc()
@@ -69,17 +63,17 @@ func NewBaseAggregator(gbField primitives.ColumnID, gbFieldType types.Type, aFie
 // For non-grouped aggregates, returns a single field with the aggregate result.
 // For grouped aggregates, returns two fields: group key and aggregate result.
 func (ba *BaseAggregator) createTupleDesc() (*tuple.TupleDescription, error) {
-	resultType := ba.calculator.GetResultType(ba.op)
+	resultType := ba.calculator.GetResultType(ba.Operation)
 
-	if ba.gbField == NoGrouping {
+	if ba.GbField == NoGrouping {
 		return tuple.NewTupleDesc(
 			[]types.Type{resultType},
-			[]string{ba.op.String()},
+			[]string{ba.Operation.String()},
 		)
 	} else {
 		return tuple.NewTupleDesc(
-			[]types.Type{ba.gbFieldType, resultType},
-			[]string{"group", ba.op.String()},
+			[]types.Type{ba.GbFieldType, resultType},
+			[]string{"group", ba.Operation.String()},
 		)
 	}
 }
@@ -118,7 +112,7 @@ func (ba *BaseAggregator) GetTupleDesc() *tuple.TupleDescription {
 // Returns:
 //   - int: Index of the grouping field (NoGrouping if no grouping is used)
 func (ba *BaseAggregator) GetGroupingField() primitives.ColumnID {
-	return ba.gbField
+	return ba.GbField
 }
 
 // RLock acquires a read lock on the aggregator.
@@ -166,7 +160,7 @@ func (ba *BaseAggregator) Merge(tup *tuple.Tuple) error {
 		return err
 	}
 
-	aggField, err := tup.GetField(ba.aField)
+	aggField, err := tup.GetField(ba.AggrField)
 	if err != nil {
 		return fmt.Errorf("failed to get aggregate field: %v", err)
 	}
@@ -183,11 +177,11 @@ func (ba *BaseAggregator) Merge(tup *tuple.Tuple) error {
 // For non-grouped aggregates, returns the constant "NO_GROUPING".
 // For grouped aggregates, returns the string representation of the grouping field.
 func (ba *BaseAggregator) extractGroupKey(tup *tuple.Tuple) (string, error) {
-	if ba.gbField == NoGrouping {
+	if ba.GbField == NoGrouping {
 		return "NO_GROUPING", nil
 	}
 
-	groupField, err := tup.GetField(ba.gbField)
+	groupField, err := tup.GetField(ba.GbField)
 	if err != nil {
 		return "", fmt.Errorf("failed to get grouping field: %v", err)
 	}
@@ -207,7 +201,7 @@ func (ba *BaseAggregator) extractGroupKey(tup *tuple.Tuple) (string, error) {
 // Returns:
 //   - error: Always returns nil, provided for interface consistency
 func (ba *BaseAggregator) InitializeDefault() error {
-	if ba.gbField != NoGrouping {
+	if ba.GbField != NoGrouping {
 		return nil
 	}
 

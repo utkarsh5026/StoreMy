@@ -3,6 +3,7 @@ package aggregation
 import (
 	"fmt"
 	"storemy/pkg/execution/aggregation/internal/calculators"
+	"storemy/pkg/execution/aggregation/internal/core"
 	"storemy/pkg/iterator"
 	"storemy/pkg/primitives"
 	"storemy/pkg/tuple"
@@ -15,16 +16,15 @@ import (
 // 1. Open phase: Consumes all input tuples and builds aggregation state
 // 2. Iteration phase: Returns computed aggregate results
 type AggregateOperator struct {
-	source         iterator.DbIterator
-	aggregateField primitives.ColumnID
-	groupByField   primitives.ColumnID
-	op             AggregateOp
-	aggregator     Aggregator
-	aggIterator    iterator.DbIterator
-	tupleDesc      *tuple.TupleDescription
-	opened         bool
-	nextTuple      *tuple.Tuple
-	hasNextCalled  bool
+	source                       iterator.DbIterator
+	aggregateField, groupByField primitives.ColumnID
+	op                           AggregateOp
+	aggregator                   Aggregator
+	aggIterator                  iterator.DbIterator
+	tupleDesc                    *tuple.TupleDescription
+	opened                       bool
+	nextTuple                    *tuple.Tuple
+	hasNextCalled                bool
 }
 
 // NewAggregateOperator creates a new aggregate operator with the specified configuration.
@@ -50,7 +50,7 @@ func NewAggregateOperator(source iterator.DbIterator, aggregateField, groupByFie
 	}
 
 	var err error
-	aggOp.aggregator, err = createAggregator(aggFieldType, groupByField, gbFieldType, aggregateField, op)
+	aggOp.aggregator, err = createAggregator(aggFieldType, gbFieldType, groupByField, aggregateField, op)
 	if err != nil {
 		return nil, err
 	}
@@ -249,16 +249,22 @@ func validateInputs(source iterator.DbIterator, aggregateField, groupByField pri
 }
 
 // createAggregator creates the appropriate type-specific aggregator based on the field type
-func createAggregator(fieldType types.Type, groupByField primitives.ColumnID, gbFieldType types.Type, aggregateField primitives.ColumnID, op AggregateOp) (Aggregator, error) {
+func createAggregator(fieldType, gbFieldType types.Type, groupByField, aggregateField primitives.ColumnID, op AggregateOp) (Aggregator, error) {
+	conf := &core.AggregatorConfig{
+		Operation:   op,
+		GbField:     groupByField,
+		GbFieldType: gbFieldType,
+		AggrField:   aggregateField,
+	}
 	switch fieldType {
 	case types.IntType:
-		return calculators.NewIntAggregator(groupByField, gbFieldType, aggregateField, op)
+		return calculators.NewIntAggregator(conf)
 	case types.BoolType:
-		return calculators.NewBooleanAggregator(groupByField, gbFieldType, aggregateField, op)
+		return calculators.NewBooleanAggregator(conf)
 	case types.StringType:
-		return calculators.NewStringAggregator(groupByField, gbFieldType, aggregateField, op)
+		return calculators.NewStringAggregator(conf)
 	case types.FloatType:
-		return calculators.NewFloatAggregator(groupByField, gbFieldType, aggregateField, op)
+		return calculators.NewFloatAggregator(conf)
 	default:
 		return nil, fmt.Errorf("unsupported field type for aggregation: %v", fieldType)
 	}
