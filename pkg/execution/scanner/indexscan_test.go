@@ -16,6 +16,28 @@ import (
 	"testing"
 )
 
+func newIndexEqualityScan(tx *transaction.TransactionContext, idx index.Index, hf *heap.HeapFile, store *memory.PageStore, searchKey types.Field) (*IndexScan, error) {
+	cfg := &IndexScanConfig{
+		Tx:       tx,
+		Index:    idx,
+		HeapFile: hf,
+		Store:    store,
+	}
+
+	return NewIndexEqualityScan(*cfg, searchKey)
+}
+
+func newIndexRangeScan(tx *transaction.TransactionContext, idx index.Index, hf *heap.HeapFile, store *memory.PageStore, start, end types.Field) (*IndexScan, error) {
+	cfg := &IndexScanConfig{
+		Tx:       tx,
+		Index:    idx,
+		HeapFile: hf,
+		Store:    store,
+	}
+
+	return NewIndexRangeScan(*cfg, start, end)
+}
+
 // ============================================================================
 // TEST HELPERS AND MOCKS
 // ============================================================================
@@ -228,13 +250,13 @@ func TestNewIndexEqualityScan_ValidInputs(t *testing.T) {
 	tx := transaction.NewTransactionContext(primitives.NewTransactionID())
 	searchKey := types.NewIntField(1)
 
-	scan, err := NewIndexEqualityScan(tx, idx, hf, store, searchKey)
+	scan, err := newIndexEqualityScan(tx, idx, hf, store, searchKey)
 	if err != nil {
-		t.Fatalf("NewIndexEqualityScan returned error: %v", err)
+		t.Fatalf("newIndexEqualityScan returned error: %v", err)
 	}
 
 	if scan == nil {
-		t.Fatal("NewIndexEqualityScan returned nil")
+		t.Fatal("newIndexEqualityScan returned nil")
 	}
 
 	if scan.scanType != EqualityScan {
@@ -256,7 +278,7 @@ func TestNewIndexEqualityScan_NilStore(t *testing.T) {
 	tx := transaction.NewTransactionContext(primitives.NewTransactionID())
 	searchKey := types.NewIntField(1)
 
-	scan, err := NewIndexEqualityScan(tx, idx, hf, nil, searchKey)
+	scan, err := newIndexEqualityScan(tx, idx, hf, nil, searchKey)
 	if err == nil {
 		t.Error("Expected error when store is nil")
 	}
@@ -276,7 +298,7 @@ func TestNewIndexEqualityScan_NilIndex(t *testing.T) {
 	tx := transaction.NewTransactionContext(primitives.NewTransactionID())
 	searchKey := types.NewIntField(1)
 
-	scan, err := NewIndexEqualityScan(tx, nil, hf, store, searchKey)
+	scan, err := newIndexEqualityScan(tx, nil, hf, store, searchKey)
 	if err == nil {
 		t.Error("Expected error when index is nil")
 	}
@@ -292,7 +314,7 @@ func TestNewIndexEqualityScan_NilHeapFile(t *testing.T) {
 	tx := transaction.NewTransactionContext(primitives.NewTransactionID())
 	searchKey := types.NewIntField(1)
 
-	scan, err := NewIndexEqualityScan(tx, idx, nil, store, searchKey)
+	scan, err := newIndexEqualityScan(tx, idx, nil, store, searchKey)
 	if err == nil {
 		t.Error("Expected error when heap file is nil")
 	}
@@ -316,13 +338,13 @@ func TestNewIndexRangeScan_ValidInputs(t *testing.T) {
 	startKey := types.NewIntField(1)
 	endKey := types.NewIntField(10)
 
-	scan, err := NewIndexRangeScan(tx, idx, hf, store, startKey, endKey)
+	scan, err := newIndexRangeScan(tx, idx, hf, store, startKey, endKey)
 	if err != nil {
-		t.Fatalf("NewIndexRangeScan returned error: %v", err)
+		t.Fatalf("newIndexRangeScan returned error: %v", err)
 	}
 
 	if scan == nil {
-		t.Fatal("NewIndexRangeScan returned nil")
+		t.Fatal("newIndexRangeScan returned nil")
 	}
 
 	if scan.scanType != RangeScan {
@@ -349,7 +371,7 @@ func TestNewIndexRangeScan_NilStore(t *testing.T) {
 	startKey := types.NewIntField(1)
 	endKey := types.NewIntField(10)
 
-	scan, err := NewIndexRangeScan(tx, idx, hf, nil, startKey, endKey)
+	scan, err := newIndexRangeScan(tx, idx, hf, nil, startKey, endKey)
 	if err == nil {
 		t.Error("Expected error when store is nil")
 	}
@@ -370,7 +392,7 @@ func TestNewIndexRangeScan_NilIndex(t *testing.T) {
 	startKey := types.NewIntField(1)
 	endKey := types.NewIntField(10)
 
-	scan, err := NewIndexRangeScan(tx, nil, hf, store, startKey, endKey)
+	scan, err := newIndexRangeScan(tx, nil, hf, store, startKey, endKey)
 	if err == nil {
 		t.Error("Expected error when index is nil")
 	}
@@ -387,7 +409,7 @@ func TestNewIndexRangeScan_NilHeapFile(t *testing.T) {
 	startKey := types.NewIntField(1)
 	endKey := types.NewIntField(10)
 
-	scan, err := NewIndexRangeScan(tx, idx, nil, store, startKey, endKey)
+	scan, err := newIndexRangeScan(tx, idx, nil, store, startKey, endKey)
 	if err == nil {
 		t.Error("Expected error when heap file is nil")
 	}
@@ -423,9 +445,9 @@ func TestIndexEqualityScan_SingleMatch(t *testing.T) {
 
 	// Search for id = 2
 	searchKey := types.NewIntField(2)
-	scan, err := NewIndexEqualityScan(tx, idx, hf, store, searchKey)
+	scan, err := newIndexEqualityScan(tx, idx, hf, store, searchKey)
 	if err != nil {
-		t.Fatalf("NewIndexEqualityScan failed: %v", err)
+		t.Fatalf("newIndexEqualityScan failed: %v", err)
 	}
 
 	err = scan.Open()
@@ -493,9 +515,9 @@ func TestIndexEqualityScan_MultipleMatches(t *testing.T) {
 
 	// Search for id = 5 (should return 3 tuples)
 	searchKey := types.NewIntField(5)
-	scan, err := NewIndexEqualityScan(tx, idx, hf, store, searchKey)
+	scan, err := newIndexEqualityScan(tx, idx, hf, store, searchKey)
 	if err != nil {
-		t.Fatalf("NewIndexEqualityScan failed: %v", err)
+		t.Fatalf("newIndexEqualityScan failed: %v", err)
 	}
 
 	err = scan.Open()
@@ -558,9 +580,9 @@ func TestIndexEqualityScan_NoMatches(t *testing.T) {
 
 	// Search for id = 99 (no matches)
 	searchKey := types.NewIntField(99)
-	scan, err := NewIndexEqualityScan(tx, idx, hf, store, searchKey)
+	scan, err := newIndexEqualityScan(tx, idx, hf, store, searchKey)
 	if err != nil {
-		t.Fatalf("NewIndexEqualityScan failed: %v", err)
+		t.Fatalf("newIndexEqualityScan failed: %v", err)
 	}
 
 	err = scan.Open()
@@ -608,9 +630,9 @@ func TestIndexRangeScan_MultipleMatches(t *testing.T) {
 	// Range search: 3 <= id <= 7 (should return Bob, Charlie, David)
 	startKey := types.NewIntField(3)
 	endKey := types.NewIntField(7)
-	scan, err := NewIndexRangeScan(tx, idx, hf, store, startKey, endKey)
+	scan, err := newIndexRangeScan(tx, idx, hf, store, startKey, endKey)
 	if err != nil {
-		t.Fatalf("NewIndexRangeScan failed: %v", err)
+		t.Fatalf("newIndexRangeScan failed: %v", err)
 	}
 
 	err = scan.Open()
@@ -675,9 +697,9 @@ func TestIndexRangeScan_NoMatches(t *testing.T) {
 	// Range search: 10 <= id <= 20 (no matches)
 	startKey := types.NewIntField(10)
 	endKey := types.NewIntField(20)
-	scan, err := NewIndexRangeScan(tx, idx, hf, store, startKey, endKey)
+	scan, err := newIndexRangeScan(tx, idx, hf, store, startKey, endKey)
 	if err != nil {
-		t.Fatalf("NewIndexRangeScan failed: %v", err)
+		t.Fatalf("newIndexRangeScan failed: %v", err)
 	}
 
 	err = scan.Open()
@@ -719,9 +741,9 @@ func TestIndexRangeScan_AllMatch(t *testing.T) {
 	// Range search: 1 <= id <= 10 (all match)
 	startKey := types.NewIntField(1)
 	endKey := types.NewIntField(10)
-	scan, err := NewIndexRangeScan(tx, idx, hf, store, startKey, endKey)
+	scan, err := newIndexRangeScan(tx, idx, hf, store, startKey, endKey)
 	if err != nil {
-		t.Fatalf("NewIndexRangeScan failed: %v", err)
+		t.Fatalf("newIndexRangeScan failed: %v", err)
 	}
 
 	err = scan.Open()
@@ -771,9 +793,9 @@ func TestIndexScan_SearchError(t *testing.T) {
 	tx := transaction.NewTransactionContext(primitives.NewTransactionID())
 
 	searchKey := types.NewIntField(1)
-	scan, err := NewIndexEqualityScan(tx, idx, hf, store, searchKey)
+	scan, err := newIndexEqualityScan(tx, idx, hf, store, searchKey)
 	if err != nil {
-		t.Fatalf("NewIndexEqualityScan failed: %v", err)
+		t.Fatalf("newIndexEqualityScan failed: %v", err)
 	}
 
 	err = scan.Open()
@@ -796,9 +818,9 @@ func TestIndexScan_RangeSearchError(t *testing.T) {
 
 	startKey := types.NewIntField(1)
 	endKey := types.NewIntField(10)
-	scan, err := NewIndexRangeScan(tx, idx, hf, store, startKey, endKey)
+	scan, err := newIndexRangeScan(tx, idx, hf, store, startKey, endKey)
 	if err != nil {
-		t.Fatalf("NewIndexRangeScan failed: %v", err)
+		t.Fatalf("newIndexRangeScan failed: %v", err)
 	}
 
 	err = scan.Open()
@@ -819,9 +841,9 @@ func TestIndexScan_NotOpened(t *testing.T) {
 	tx := transaction.NewTransactionContext(primitives.NewTransactionID())
 
 	searchKey := types.NewIntField(1)
-	scan, err := NewIndexEqualityScan(tx, idx, hf, store, searchKey)
+	scan, err := newIndexEqualityScan(tx, idx, hf, store, searchKey)
 	if err != nil {
-		t.Fatalf("NewIndexEqualityScan failed: %v", err)
+		t.Fatalf("newIndexEqualityScan failed: %v", err)
 	}
 
 	// Try to use scan without opening
@@ -857,9 +879,9 @@ func TestIndexScan_OpenClose(t *testing.T) {
 	}
 
 	searchKey := types.NewIntField(1)
-	scan, err := NewIndexEqualityScan(tx, idx, hf, store, searchKey)
+	scan, err := newIndexEqualityScan(tx, idx, hf, store, searchKey)
 	if err != nil {
-		t.Fatalf("NewIndexEqualityScan failed: %v", err)
+		t.Fatalf("newIndexEqualityScan failed: %v", err)
 	}
 
 	err = scan.Open()
@@ -901,9 +923,9 @@ func TestIndexScan_Rewind(t *testing.T) {
 	}
 
 	searchKey := types.NewIntField(5)
-	scan, err := NewIndexEqualityScan(tx, idx, hf, store, searchKey)
+	scan, err := newIndexEqualityScan(tx, idx, hf, store, searchKey)
 	if err != nil {
-		t.Fatalf("NewIndexEqualityScan failed: %v", err)
+		t.Fatalf("newIndexEqualityScan failed: %v", err)
 	}
 
 	err = scan.Open()
@@ -988,9 +1010,9 @@ func TestIndexScan_GetTupleDesc(t *testing.T) {
 	tx := transaction.NewTransactionContext(primitives.NewTransactionID())
 
 	searchKey := types.NewIntField(1)
-	scan, err := NewIndexEqualityScan(tx, idx, hf, store, searchKey)
+	scan, err := newIndexEqualityScan(tx, idx, hf, store, searchKey)
 	if err != nil {
-		t.Fatalf("NewIndexEqualityScan failed: %v", err)
+		t.Fatalf("newIndexEqualityScan failed: %v", err)
 	}
 
 	resultTD := scan.GetTupleDesc()
@@ -1018,9 +1040,9 @@ func TestIndexScan_EmptyIndex(t *testing.T) {
 	// Don't insert any entries into the index
 
 	searchKey := types.NewIntField(1)
-	scan, err := NewIndexEqualityScan(tx, idx, hf, store, searchKey)
+	scan, err := newIndexEqualityScan(tx, idx, hf, store, searchKey)
 	if err != nil {
-		t.Fatalf("NewIndexEqualityScan failed: %v", err)
+		t.Fatalf("newIndexEqualityScan failed: %v", err)
 	}
 
 	err = scan.Open()
@@ -1057,9 +1079,9 @@ func TestIndexScan_MultipleOpens(t *testing.T) {
 	}
 
 	searchKey := types.NewIntField(1)
-	scan, err := NewIndexEqualityScan(tx, idx, hf, store, searchKey)
+	scan, err := newIndexEqualityScan(tx, idx, hf, store, searchKey)
 	if err != nil {
-		t.Fatalf("NewIndexEqualityScan failed: %v", err)
+		t.Fatalf("newIndexEqualityScan failed: %v", err)
 	}
 
 	// Open multiple times
