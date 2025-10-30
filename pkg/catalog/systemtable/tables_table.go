@@ -66,7 +66,7 @@ func (tt *TablesTable) GetNumFields() int {
 func (tt *TablesTable) CreateTuple(tm TableMetadata) *tuple.Tuple {
 	td := tt.Schema().TupleDesc
 	return tuple.NewBuilder(td).
-		AddInt(int64(tm.TableID)).
+		AddUint64(uint64(tm.TableID)).
 		AddString(tm.TableName).
 		AddString(string(tm.FilePath)).
 		AddString(tm.PrimaryKeyCol).

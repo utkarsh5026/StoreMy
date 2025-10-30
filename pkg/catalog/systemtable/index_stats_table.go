@@ -31,18 +31,18 @@ type IndexStatsTable struct{}
 // Schema returns the schema for the CATALOG_INDEX_STATISTICS system table
 func (ist *IndexStatsTable) Schema() *schema.Schema {
 	sch, _ := schema.NewSchemaBuilder(InvalidTableID, ist.TableName()).
-		AddPrimaryKey("index_id", types.IntType).
-		AddColumn("table_id", types.IntType).
+		AddPrimaryKey("index_id", types.Uint64Type).
+		AddColumn("table_id", types.Uint64Type).
 		AddColumn("index_name", types.StringType).
 		AddColumn("index_type", types.StringType).
 		AddColumn("column_name", types.StringType).
-		AddColumn("num_entries", types.IntType).
-		AddColumn("num_pages", types.IntType).
-		AddColumn("height", types.IntType).
-		AddColumn("distinct_keys", types.IntType).
+		AddColumn("num_entries", types.Uint64Type).
+		AddColumn("num_pages", types.Uint64Type).
+		AddColumn("height", types.Uint32Type).
+		AddColumn("distinct_keys", types.Uint64Type).
 		// Clustering factor stored as int (0-1000000) for precision
 		AddColumn("clustering_factor", types.IntType).
-		AddColumn("avg_key_size", types.IntType).
+		AddColumn("avg_key_size", types.Uint64Type).
 		AddColumn("last_updated", types.IntType).
 		Build()
 
