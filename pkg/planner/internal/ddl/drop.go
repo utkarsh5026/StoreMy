@@ -3,7 +3,6 @@ package ddl
 import (
 	"fmt"
 	"storemy/pkg/parser/statements"
-	"storemy/pkg/planner/internal/indexops"
 	"storemy/pkg/planner/internal/result"
 	"storemy/pkg/primitives"
 )
@@ -107,18 +106,23 @@ func (p *DropTablePlan) Execute() (result.Result, error) {
 //   - Never returns error (failures are logged as warnings)
 func (p *DropTablePlan) dropTableIndexes(tableID primitives.FileID) error {
 	cm := p.ctx.CatalogManager()
-	indexes, err := cm.NewIndexOps(p.tx).GetIndexesByTable(tableID)
+	im := p.ctx.IndexManager()
+	ops := cm.NewIndexOps(p.tx)
+	indexes, err := ops.GetIndexesByTable(tableID)
 	if err != nil {
 		fmt.Printf("Warning: failed to get indexes for table: %v\n", err)
 		return nil
 	}
 
 	var droppedCount int
-	ops := indexops.NewIndexOps(p.tx, p.ctx.CatalogManager(), p.ctx.IndexManager())
 	for _, indexMeta := range indexes {
-		if err := ops.DeleteIndexFromSystem(indexMeta.IndexName); err != nil {
-			fmt.Printf("Warning: failed to drop index %s: %v\n", indexMeta.IndexName, err)
-			continue
+		metadata, err := ops.DropIndex(indexMeta.IndexName)
+		if err != nil {
+			return fmt.Errorf("failed to drop index from catalog: %w", err)
+		}
+
+		if err := im.NewFileOps(metadata.FilePath).DeletePhysicalIndex(); err != nil {
+			return fmt.Errorf("failed to delete index file %s: %w", metadata.FilePath, err)
 		}
 		droppedCount++
 	}
