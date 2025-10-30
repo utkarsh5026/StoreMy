@@ -81,38 +81,11 @@ func (p *DropIndexPlan) Execute() (result.Result, error) {
 		return nil, err
 	}
 
-	if err := p.deleteIndex(); err != nil {
+	if err := NewIndexOps(p.tx, p.ctx.CatalogManager(), p.ctx.IndexManager()).DeleteIndexFromSystem(p.Statement.IndexName); err != nil {
 		return nil, err
 	}
 
 	return result.NewDDLResult(true, fmt.Sprintf("Index %s dropped successfully", idxName)), nil
-}
-
-// deleteIndex removes the index from catalog and deletes its physical file.
-//
-// Process:
-//  1. Calls CatalogManager.DropIndex() to remove from CATALOG_INDEXES
-//  2. DropIndex returns the file path of the index to delete
-//  3. Uses IndexManager.DeletePhysicalIndex() to remove file
-//
-// Returns:
-//   - nil on success (even if file deletion fails - warns instead)
-//   - Error if catalog update fails
-//
-// Note: File deletion is best-effort. If it fails, a warning is printed
-// but the operation succeeds (catalog entry is already removed).
-func (p *DropIndexPlan) deleteIndex() error {
-	cm := p.ctx.CatalogManager()
-	filePath, err := cm.DropIndex(p.tx, p.Statement.IndexName)
-	if err != nil {
-		return fmt.Errorf("failed to drop index from catalog: %w", err)
-	}
-
-	im := p.ctx.IndexManager().NewFileOps(filePath)
-	if err := im.DeletePhysicalIndex(); err != nil {
-		fmt.Printf("Warning: failed to delete index file %s: %v\n", filePath, err)
-	}
-	return nil
 }
 
 // validateTable verifies the index belongs to the specified table (if provided).
