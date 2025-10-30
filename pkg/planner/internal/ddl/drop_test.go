@@ -190,7 +190,7 @@ func TestDropTablePlan_Execute_WithPrimaryKeyIndex(t *testing.T) {
 
 	// Verify all index files were deleted
 	for _, indexPath := range indexPaths {
-		if !indexPath.Exists() {
+		if indexPath.Exists() {
 			t.Errorf("Index file %s still exists after table drop", indexPath)
 		}
 	}
