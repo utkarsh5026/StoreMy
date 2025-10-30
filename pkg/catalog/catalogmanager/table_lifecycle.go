@@ -149,10 +149,14 @@ func (cm *CatalogManager) addTableToCache(tx TxContext, file *heap.HeapFile, sch
 //
 // Steps performed:
 //  1. Looks up the table ID by name
-//  2. Closes and removes the open heap file handle
-//  3. Un-registers the file from the page store
-//  4. Deletes entries from CATALOG_TABLES and CATALOG_COLUMNS
-//  5. Removes the table from the in-memory cache
+//  2. Removes the table from the in-memory cache (so queries immediately stop finding it)
+//  3. Closes and removes the open heap file handle
+//  4. Un-registers the file from the page store
+//  5. Deletes entries from CATALOG_TABLES and CATALOG_COLUMNS
+//
+// The operation is atomic - if cache removal fails, the table is not dropped.
+// If disk catalog deletion fails after cache removal, the operation attempts to
+// rollback by re-adding the table to cache.
 //
 // The function is thread-safe for file handle operations.
 //
@@ -162,14 +166,24 @@ func (cm *CatalogManager) addTableToCache(tx TxContext, file *heap.HeapFile, sch
 //
 // Returns:
 //   - error: nil on success, error if table not found or deletion fails
-//
-// Note: Cache removal failures are logged but do not prevent the drop operation.
 func (cm *CatalogManager) DropTable(tx TxContext, tableName string) error {
 	tableID, err := cm.GetTableID(tx, tableName)
 	if err != nil {
 		return fmt.Errorf("table %s not found: %w", tableName, err)
 	}
 
+	// Get table info before removing from cache (needed for potential rollback)
+	tableInfo, err := cm.tableCache.GetTableInfo(tableID)
+	if err != nil {
+		return fmt.Errorf("failed to get table info: %w", err)
+	}
+
+	// Step 1: Remove from cache FIRST so queries immediately stop finding it
+	if err := cm.tableCache.RemoveTable(tableName); err != nil {
+		return fmt.Errorf("failed to remove table from cache: %w", err)
+	}
+
+	// Step 2: Close and remove file handle
 	cm.mu.Lock()
 	heapFile, exists := cm.openFiles[tableID]
 	if exists {
@@ -181,14 +195,18 @@ func (cm *CatalogManager) DropTable(tx TxContext, tableName string) error {
 		heapFile.Close()
 	}
 
+	// Step 3: Unregister from page store
 	cm.store.UnregisterDbFile(tableID)
+
+	// Step 4: Delete from disk catalog
 	if err := cm.DeleteCatalogEntry(tx, tableID); err != nil {
+		// Rollback: Try to re-add table to cache
+		if rollbackErr := cm.tableCache.AddTable(tableInfo.File, tableInfo.Schema); rollbackErr != nil {
+			fmt.Printf("CRITICAL: failed to rollback cache after disk deletion failure: %v (original error: %v)\n", rollbackErr, err)
+		}
 		return fmt.Errorf("failed to delete catalog entry: %w", err)
 	}
 
-	if err := cm.tableCache.RemoveTable(tableName); err != nil {
-		fmt.Printf("Warning: failed to remove table from cache: %v\n", err)
-	}
 	return nil
 }
 

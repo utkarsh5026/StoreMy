@@ -74,14 +74,16 @@ func (cm *CatalogManager) DeleteTableFromSysTable(tx TxContext, tableID, sysTabl
 
 	var tuplesToDelete []*tuple.Tuple
 
-	cm.iterateTable(sysTableID, tx, func(t *tuple.Tuple) error {
+	// Iterate through the system table to find all tuples matching the tableID
+	err = cm.iterateTable(sysTableID, tx, func(t *tuple.Tuple) error {
 		field, err := t.GetField(primitives.ColumnID(syst.TableIDIndex()))
 		if err != nil {
 			return err
 		}
 
-		if intField, ok := field.(*types.IntField); ok {
-			if intField.Value == int64(tableID) {
+		// All system tables use Uint64Field for table_id
+		if uint64Field, ok := field.(*types.Uint64Field); ok {
+			if uint64Field.Value == uint64(tableID) {
 				tuplesToDelete = append(tuplesToDelete, t)
 			}
 		}
@@ -89,6 +91,12 @@ func (cm *CatalogManager) DeleteTableFromSysTable(tx TxContext, tableID, sysTabl
 		return nil
 	})
 
+	// Check if iteration failed
+	if err != nil {
+		return fmt.Errorf("failed to iterate system table %d: %w", sysTableID, err)
+	}
+
+	// Delete all matching tuples
 	for _, tup := range tuplesToDelete {
 		if err := cm.tupMgr.DeleteTuple(tx, tableInfo.File, tup); err != nil {
 			return err
@@ -211,17 +219,4 @@ func stringToField(s string) types.Field {
 		return nil
 	}
 	return types.NewStringField(s, len(s))
-}
-
-// hashFilePath generates a unique ID from a file path using a simple hash function.
-// Used for generating index IDs from file paths.
-func hashFilePath(filePath string) int {
-	hash := 0
-	for i := 0; i < len(filePath); i++ {
-		hash = hash*31 + int(filePath[i])
-	}
-	if hash < 0 {
-		hash = -hash
-	}
-	return hash
 }
