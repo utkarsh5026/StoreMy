@@ -170,7 +170,7 @@ func TestColumnsTable_RoundTrip(t *testing.T) {
 func TestIndexesTable_RoundTrip(t *testing.T) {
 	it := &IndexesTable{}
 
-	now := time.Now()
+	now := time.Now().Truncate(time.Second)
 	metadata := IndexMetadata{
 		IndexID:    1,
 		IndexName:  "idx_users_email",

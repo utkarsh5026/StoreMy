@@ -106,6 +106,10 @@ func (tt *TablesTable) Parse(t *tuple.Tuple) (*TableMetadata, error) {
 		return nil, err
 	}
 
+	if tableID == InvalidTableID {
+		return nil, fmt.Errorf("invalid table_id: cannot be InvalidTableID (%d)", InvalidTableID)
+	}
+
 	if tableName == "" {
 		return nil, fmt.Errorf("table_name cannot be empty")
 	}
