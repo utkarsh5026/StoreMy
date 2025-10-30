@@ -75,49 +75,104 @@ func (i *AggregatorIterator) Open() error {
 		return fmt.Errorf("iterator already opened - call Close() first")
 	}
 
-	i.aggregator.RLock()
-	groups := i.aggregator.GetGroups()
-	isGrouped := i.aggregator.GetGroupingField() != NoGrouping
-	tupleDesc := i.aggregator.GetTupleDesc()
-
-	tuples := make([]*tuple.Tuple, 0, len(groups))
-
-	for _, groupKey := range groups {
-		aggValue, err := i.aggregator.GetAggregateValue(groupKey)
-		if err != nil {
-			i.aggregator.RUnlock()
-			return fmt.Errorf("failed to get aggregate value for group '%s': %w", groupKey, err)
-		}
-
-		resultTuple := tuple.NewTuple(tupleDesc)
-
-		if !isGrouped {
-			if err := resultTuple.SetField(0, aggValue); err != nil {
-				i.aggregator.RUnlock()
-				return fmt.Errorf("failed to set aggregate field: %w", err)
-			}
-		} else {
-			groupField := types.NewStringField(groupKey, len(groupKey))
-
-			if err := resultTuple.SetField(0, groupField); err != nil {
-				i.aggregator.RUnlock()
-				return fmt.Errorf("failed to set group field: %w", err)
-			}
-			if err := resultTuple.SetField(1, aggValue); err != nil {
-				i.aggregator.RUnlock()
-				return fmt.Errorf("failed to set aggregate field: %w", err)
-			}
-		}
-
-		tuples = append(tuples, resultTuple)
+	tuples, err := i.materializeResults()
+	if err != nil {
+		return err
 	}
-	i.aggregator.RUnlock()
 
-	// Create new iterator with materialized tuples (always ready to use)
 	i.tupleIter = iterator.NewSliceIterator(tuples)
 	i.opened = true
 
 	return nil
+}
+
+// materializeResults captures a snapshot of all aggregation results.
+//
+// This method:
+//   - Acquires a read lock on the aggregator for thread-safe access
+//   - Retrieves all group keys from the aggregator
+//   - Builds result tuples for each group
+//   - Returns the materialized tuples in a slice
+//
+// The returned tuples represent a point-in-time snapshot and won't reflect
+// changes made to the aggregator after this method returns.
+//
+// Returns:
+//   - []*tuple.Tuple: Slice of materialized result tuples
+//   - error: If tuple building fails for any group
+func (i *AggregatorIterator) materializeResults() ([]*tuple.Tuple, error) {
+	i.aggregator.RLock()
+	defer i.aggregator.RUnlock()
+
+	groups := i.aggregator.GetGroups()
+	tuples := make([]*tuple.Tuple, 0, len(groups))
+
+	for _, groupKey := range groups {
+		resultTuple, err := i.buildResultTuple(groupKey)
+		if err != nil {
+			return nil, err
+		}
+		tuples = append(tuples, resultTuple)
+	}
+
+	return tuples, nil
+}
+
+// buildResultTuple constructs a result tuple for the given group key.
+//
+// The tuple structure depends on whether grouping is enabled:
+//   - Non-grouped: Single field containing the aggregate value
+//   - Grouped: Two fields - group key (field 0) and aggregate value (field 1)
+//
+// Parameters:
+//   - groupKey: The group identifier to build a tuple for (use NoGrouping constant
+//     for non-grouped aggregates)
+//
+// Returns:
+//   - *tuple.Tuple: The constructed result tuple
+//   - error: If retrieving the aggregate value fails or setting tuple fields fails
+func (i *AggregatorIterator) buildResultTuple(groupKey string) (*tuple.Tuple, error) {
+	aggValue, err := i.aggregator.GetAggregateValue(groupKey)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get aggregate value for group '%s': %w", groupKey, err)
+	}
+
+	t := tuple.NewTuple(i.aggregator.GetTupleDesc())
+
+	if i.aggregator.GetGroupingField() == NoGrouping {
+		if err := t.SetField(0, aggValue); err != nil {
+			return nil, fmt.Errorf("failed to set aggregate field: %w", err)
+		}
+		return t, nil
+	}
+
+	return i.setGroupedFields(t, groupKey, aggValue)
+}
+
+// setGroupedFields populates a tuple with both group key and aggregate value.
+//
+// This helper method is used for grouped aggregations to set:
+//   - Field 0: The group key (converted to StringField)
+//   - Field 1: The computed aggregate value
+//
+// Parameters:
+//   - t: The tuple to populate (must have schema matching grouped aggregate results)
+//   - groupKey: The string representation of the group key
+//   - aggValue: The computed aggregate value for this group
+//
+// Returns:
+//   - *tuple.Tuple: The populated tuple (same instance as parameter t)
+//   - error: If setting either field fails
+func (i *AggregatorIterator) setGroupedFields(t *tuple.Tuple, groupKey string, aggValue types.Field) (*tuple.Tuple, error) {
+	groupField := types.NewStringField(groupKey, len(groupKey))
+
+	if err := t.SetField(0, groupField); err != nil {
+		return nil, fmt.Errorf("failed to set group field: %w", err)
+	}
+	if err := t.SetField(1, aggValue); err != nil {
+		return nil, fmt.Errorf("failed to set aggregate field: %w", err)
+	}
+	return t, nil
 }
 
 // HasNext checks if there are more tuples available.
