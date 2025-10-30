@@ -310,7 +310,7 @@ func TestInvalidateCache(t *testing.T) {
 	im, _, _, _, _ := setupTestEnvironment(t)
 
 	// Add something to cache
-	im.cache.Set(1, []*indexWithMetadata{})
+	im.cache.Set(1, []*IndexWithMetadata{})
 
 	// Verify it's cached
 	if _, exists := im.cache.Get(1); !exists {
@@ -330,8 +330,8 @@ func TestClose(t *testing.T) {
 	im, _, _, _, _ := setupTestEnvironment(t)
 
 	// Add some mock data to cache
-	im.cache.Set(1, []*indexWithMetadata{})
-	im.cache.Set(2, []*indexWithMetadata{})
+	im.cache.Set(1, []*IndexWithMetadata{})
+	im.cache.Set(2, []*IndexWithMetadata{})
 
 	err := im.Close()
 	if err != nil {
@@ -351,9 +351,9 @@ func TestIndexCache_GetOrLoad(t *testing.T) {
 	cache := newIndexCache()
 
 	loadCount := 0
-	loader := func() ([]*indexWithMetadata, error) {
+	loader := func() ([]*IndexWithMetadata, error) {
 		loadCount++
-		return []*indexWithMetadata{}, nil
+		return []*IndexWithMetadata{}, nil
 	}
 
 	// First call should load
@@ -381,8 +381,8 @@ func TestIndexCache_Clear(t *testing.T) {
 	cache := newIndexCache()
 
 	// Add some items
-	cache.Set(1, []*indexWithMetadata{})
-	cache.Set(2, []*indexWithMetadata{})
+	cache.Set(1, []*IndexWithMetadata{})
+	cache.Set(2, []*IndexWithMetadata{})
 
 	// Clear
 	old := cache.Clear()
@@ -559,9 +559,9 @@ func TestInvalidateCache_MultipleTables(t *testing.T) {
 	im, _, _, _, _ := setupTestEnvironment(t)
 
 	// Add indexes for multiple tables to cache
-	im.cache.Set(1, []*indexWithMetadata{})
-	im.cache.Set(2, []*indexWithMetadata{})
-	im.cache.Set(3, []*indexWithMetadata{})
+	im.cache.Set(1, []*IndexWithMetadata{})
+	im.cache.Set(2, []*IndexWithMetadata{})
+	im.cache.Set(3, []*IndexWithMetadata{})
 
 	// Invalidate one table
 	im.InvalidateCache(2)
@@ -596,8 +596,8 @@ func TestClose_WithOpenIndexes(t *testing.T) {
 	}
 
 	// Manually add some indexes to cache
-	im.cache.Set(1, []*indexWithMetadata{})
-	im.cache.Set(2, []*indexWithMetadata{})
+	im.cache.Set(1, []*IndexWithMetadata{})
+	im.cache.Set(2, []*IndexWithMetadata{})
 
 	// Close should clear cache
 	err = im.Close()
@@ -620,11 +620,11 @@ func TestIndexCache_GetOrLoad_ConcurrentLoads(t *testing.T) {
 	loadCount := int64(0)
 	var loadMu sync.Mutex
 
-	loader := func() ([]*indexWithMetadata, error) {
+	loader := func() ([]*IndexWithMetadata, error) {
 		loadMu.Lock()
 		loadCount++
 		loadMu.Unlock()
-		return []*indexWithMetadata{}, nil
+		return []*IndexWithMetadata{}, nil
 	}
 
 	// Multiple goroutines try to load the same table
@@ -651,8 +651,8 @@ func TestIndexCache_GetOrLoad_ConcurrentLoads(t *testing.T) {
 func TestIndexCache_Set_DoubleCheckLocking(t *testing.T) {
 	cache := newIndexCache()
 
-	indexes1 := []*indexWithMetadata{{metadata: &IndexMetadata{IndexMetadata: systemtable.IndexMetadata{IndexID: 1}}}}
-	indexes2 := []*indexWithMetadata{{metadata: &IndexMetadata{IndexMetadata: systemtable.IndexMetadata{IndexID: 2}}}}
+	indexes1 := []*IndexWithMetadata{{metadata: &IndexMetadata{IndexMetadata: systemtable.IndexMetadata{IndexID: 1}}}}
+	indexes2 := []*IndexWithMetadata{{metadata: &IndexMetadata{IndexMetadata: systemtable.IndexMetadata{IndexID: 2}}}}
 
 	// First set
 	result1 := cache.Set(1, indexes1)

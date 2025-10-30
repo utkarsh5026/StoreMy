@@ -36,7 +36,7 @@ type IndexMetadata struct {
 }
 
 // indexWithMetadata wraps an index (BTree or HashIndex) with its metadata
-type indexWithMetadata struct {
+type IndexWithMetadata struct {
 	index    index.Index    // Either *btreeindex.BTree or *hashindex.HashIndex
 	metadata *IndexMetadata // Resolved metadata for this index
 }
@@ -116,4 +116,12 @@ func closeIndexFile(index index.Index) error {
 	}
 
 	return nil
+}
+
+func (im *IndexManager) NewLoader(tx *transaction.TransactionContext) *IndexLoader {
+	return &IndexLoader{
+		tx:      tx,
+		catalog: im.catalog,
+		store:   im.pageStore,
+	}
 }

@@ -6,8 +6,11 @@ package indexmanager
 import (
 	"fmt"
 	"os"
+	"slices"
 	"storemy/pkg/catalog/schema"
 	"storemy/pkg/catalog/systemtable"
+	"storemy/pkg/concurrency/transaction"
+	"storemy/pkg/memory"
 	btreeindex "storemy/pkg/memory/wrappers/btree_index"
 	hashindex "storemy/pkg/memory/wrappers/hash_index"
 	"storemy/pkg/primitives"
@@ -16,6 +19,12 @@ import (
 	"storemy/pkg/storage/index/hash"
 	"storemy/pkg/types"
 )
+
+type IndexLoader struct {
+	store   *memory.PageStore
+	tx      *transaction.TransactionContext
+	catalog CatalogReader
+}
 
 // loadAndOpenIndexes loads index metadata from catalog and opens all index files for a table.
 // This is the main entry point for initializing all indexes associated with a table.
@@ -34,20 +43,20 @@ import (
 // Returns:
 //   - A slice of indexWithMetadata containing successfully opened indexes
 //   - An error if catalog access fails
-func (il *IndexManager) loadAndOpenIndexes(ctx TxCtx, tableID primitives.FileID) ([]*indexWithMetadata, error) {
-	metadataList, err := il.loadFromCatalog(ctx, tableID)
+func (il *IndexLoader) LoadIndexes(tableID primitives.FileID) ([]*IndexWithMetadata, error) {
+	metadataList, err := il.loadFromCatalog(tableID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get indexes from catalog: %v", err)
 	}
 
-	indexes := make([]*indexWithMetadata, 0, len(metadataList))
+	indexes := make([]*IndexWithMetadata, 0, len(metadataList))
 	for _, metadata := range metadataList {
-		idx, err := il.openIndex(ctx, metadata)
+		idx, err := il.openIndex(metadata)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Warning: failed to open index %s: %v\n", metadata.IndexName, err)
 			continue
 		}
-		indexes = append(indexes, &indexWithMetadata{
+		indexes = append(indexes, &IndexWithMetadata{
 			index:    idx,
 			metadata: metadata,
 		})
@@ -56,20 +65,35 @@ func (il *IndexManager) loadAndOpenIndexes(ctx TxCtx, tableID primitives.FileID)
 	return indexes, nil
 }
 
+func (il *IndexLoader) LoadIndexForCol(colID primitives.ColumnID, tableID primitives.FileID) (index.Index, error) {
+	indexes, err := il.loadFromCatalog(tableID)
+	if err != nil {
+		return nil, err
+	}
+
+	colIdx := slices.IndexFunc(indexes, func(i *IndexMetadata) bool {
+		return i.ColumnIndex == colID
+	})
+	if colIdx == -1 {
+		return nil, fmt.Errorf("col %d not found", colID)
+	}
+
+	return il.openIndex(indexes[colIdx])
+}
+
 // loadFromCatalog loads raw index info from catalog and resolves it
 // with schema information (ColumnIndex, KeyType) to create full IndexMetadata.
 // This method enriches the catalog metadata with schema-specific information
 // needed for index operations.
 //
 // Parameters:
-//   - ctx: Transaction context for catalog operations
 //   - tableID: The ID of the table whose index metadata should be loaded
 //
 // Returns:
 //   - A slice of complete IndexMetadata with resolved schema information
 //   - An error if catalog access or schema retrieval fails
-func (il *IndexManager) loadFromCatalog(ctx TxCtx, tableID primitives.FileID) ([]*IndexMetadata, error) {
-	catalogIndexes, err := il.catalog.GetIndexesByTable(ctx, tableID)
+func (il *IndexLoader) loadFromCatalog(tableID primitives.FileID) ([]*IndexMetadata, error) {
+	catalogIndexes, err := il.catalog.GetIndexesByTable(il.tx, tableID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get indexes from catalog: %v", err)
 	}
@@ -153,12 +177,12 @@ func findColumnInfo(schema *schema.Schema, columnName string) (primitives.Column
 // Returns:
 //   - The opened index instance
 //   - An error if the index type is unsupported or opening fails
-func (il *IndexManager) openIndex(ctx TxCtx, m *IndexMetadata) (index.Index, error) {
+func (il *IndexLoader) openIndex(m *IndexMetadata) (index.Index, error) {
 	switch m.IndexType {
 	case index.BTreeIndex:
-		return il.openBTreeIndex(ctx, m)
+		return il.openBTreeIndex(m)
 	case index.HashIndex:
-		return il.openHashIndex(ctx, m)
+		return il.openHashIndex(m)
 	default:
 		return nil, fmt.Errorf("unsupported index type: %s", m.IndexType)
 	}
@@ -168,19 +192,18 @@ func (il *IndexManager) openIndex(ctx TxCtx, m *IndexMetadata) (index.Index, err
 // B+Tree indexes provide efficient range queries and ordered traversal.
 //
 // Parameters:
-//   - ctx: Transaction context for index operations
 //   - m: Index metadata containing file path and key type
 //
 // Returns:
 //   - A BTree index wrapper ready for use
 //   - An error if the file cannot be opened or initialized
-func (il *IndexManager) openBTreeIndex(ctx TxCtx, m *IndexMetadata) (*btreeindex.BTree, error) {
+func (il *IndexLoader) openBTreeIndex(m *IndexMetadata) (*btreeindex.BTree, error) {
 	file, err := btree.NewBTreeFile(m.FilePath, m.KeyType)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open BTree file: %v", err)
 	}
 
-	btreeIdx := btreeindex.NewBTree(m.IndexID, m.KeyType, file, ctx, il.pageStore)
+	btreeIdx := btreeindex.NewBTree(m.IndexID, m.KeyType, file, il.tx, il.store)
 	return btreeIdx, nil
 }
 
@@ -194,12 +217,12 @@ func (il *IndexManager) openBTreeIndex(ctx TxCtx, m *IndexMetadata) (*btreeindex
 // Returns:
 //   - A HashIndex wrapper ready for use
 //   - An error if the file cannot be opened or initialized
-func (il *IndexManager) openHashIndex(ctx TxCtx, m *IndexMetadata) (*hashindex.HashIndex, error) {
+func (il *IndexLoader) openHashIndex(m *IndexMetadata) (*hashindex.HashIndex, error) {
 	file, err := hash.NewHashFile(m.FilePath, m.KeyType, hash.DefaultBuckets)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open hash file: %v", err)
 	}
 
-	hashIdx := hashindex.NewHashIndex(m.IndexID, m.KeyType, file, il.pageStore, ctx)
+	hashIdx := hashindex.NewHashIndex(m.IndexID, m.KeyType, file, il.store, il.tx)
 	return hashIdx, nil
 }

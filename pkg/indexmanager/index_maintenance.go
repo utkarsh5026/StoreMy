@@ -99,7 +99,7 @@ func (im *IndexManager) processIndexOperation(ctx TxCtx, tableID primitives.File
 //   - error: nil if the operation succeeds, or an error if:
 //   - The index type is not supported
 //   - The underlying index operation fails
-func applyIndexOperation(idx *indexWithMetadata, key types.Field, rid *tuple.TupleRecordID, opType operationType) error {
+func applyIndexOperation(idx *IndexWithMetadata, key types.Field, rid *tuple.TupleRecordID, opType operationType) error {
 	switch v := idx.index.(type) {
 	case *btreeindex.BTree:
 		if opType == insertOp {
