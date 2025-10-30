@@ -110,6 +110,7 @@ func (p *CreateTablePlan) makeTableSchema() (*schema.Schema, error) {
 //  5. Populates index with existing table data (if any)
 func (p *CreateTablePlan) createPrimaryKeyIndex(tableID primitives.FileID, tableSchema *schema.Schema) error {
 	cm := p.ctx.CatalogManager()
+	indexOps := cm.NewIndexOps(p.TxContext)
 
 	pkColumnIndex, err := tableSchema.GetFieldIndex(p.Statement.PrimaryKey)
 	if err != nil {
@@ -119,7 +120,7 @@ func (p *CreateTablePlan) createPrimaryKeyIndex(tableID primitives.FileID, table
 	pkColumn := tableSchema.Columns[pkColumnIndex]
 	indexName := fmt.Sprintf("pk_%s_%s", p.Statement.TableName, p.Statement.PrimaryKey)
 
-	if cm.IndexExists(p.TxContext, indexName) {
+	if indexOps.IndexExists(indexName) {
 		return nil
 	}
 
@@ -145,7 +146,7 @@ func (p *CreateTablePlan) createPrimaryKeyIndex(tableID primitives.FileID, table
 		return fmt.Errorf("failed to create physical index: %v", err)
 	}
 
-	_, err = cm.CreateIndex(p.TxContext, actualIndexID, indexName, p.Statement.TableName, p.Statement.PrimaryKey, index.BTreeIndex)
+	_, err = indexOps.CreateIndex(actualIndexID, indexName, p.Statement.TableName, p.Statement.PrimaryKey, index.BTreeIndex)
 	if err != nil {
 		return fmt.Errorf("failed to register index in catalog: %v", err)
 	}

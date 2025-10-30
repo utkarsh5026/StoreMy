@@ -107,7 +107,7 @@ func (p *DropTablePlan) Execute() (result.Result, error) {
 //   - Never returns error (failures are logged as warnings)
 func (p *DropTablePlan) dropTableIndexes(tableID primitives.FileID) error {
 	cm := p.ctx.CatalogManager()
-	indexes, err := cm.GetIndexesByTable(p.tx, tableID)
+	indexes, err := cm.NewIndexOps(p.tx).GetIndexesByTable(tableID)
 	if err != nil {
 		fmt.Printf("Warning: failed to get indexes for table: %v\n", err)
 		return nil
