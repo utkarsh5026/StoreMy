@@ -40,91 +40,73 @@ func NewCreateIndexPlan(
 // Execute performs the CREATE INDEX operation within the current transaction.
 //
 // Steps:
-//  1. Validates table exists
-//  2. Validates column exists in the table
-//  3. Checks if index already exists (respects IF NOT EXISTS)
-//  4. Determines index type and creates appropriate index file
-//  5. Registers index in catalog (CATALOG_INDEXES)
-//  6. Populates index with existing data from the table
-//  7. Returns success result
+//  1. Validates index creation (table exists, column exists, index name unique)
+//  2. Handles IF NOT EXISTS clause
+//  3. Creates physical index file
+//  4. Registers index in catalog (CATALOG_INDEXES)
+//  5. Populates index with existing data from the table
+//  6. Returns success result
 func (p *CreateIndexPlan) Execute() (result.Result, error) {
-	cm := p.ctx.CatalogManager()
 	tableName, indexName, colName := p.Statement.TableName, p.Statement.IndexName, p.Statement.ColumnName
 	idxType := p.Statement.IndexType
 
-	if !cm.TableExists(p.tx, tableName) {
-		return nil, fmt.Errorf("table %s does not exist", tableName)
-	}
+	catalogOps := p.ctx.CatalogManager().NewIndexOps(p.tx)
 
-	tableID, err := cm.GetTableID(p.tx, tableName)
+	// Step 1: Validate via catalog (single consolidated call)
+	validation, err := catalogOps.ValidateIndexCreation(indexName, tableName, colName)
 	if err != nil {
-		return nil, fmt.Errorf("failed to get table ID: %v", err)
-	}
-
-	tsch, err := cm.GetTableSchema(p.tx, tableID)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get table schema: %v", err)
-	}
-
-	columnIndex, err := tsch.GetFieldIndex(colName)
-	if err != nil {
-		return nil, fmt.Errorf("column %s does not exist in table %s",
-			colName, tableName)
-	}
-
-	if cm.IndexExists(p.tx, p.Statement.IndexName) {
-		if p.Statement.IfNotExists {
+		// Handle IF NOT EXISTS for already-existing index
+		if p.Statement.IfNotExists && fmt.Sprintf("%v", err) == fmt.Sprintf("index %s already exists", indexName) {
 			return &result.DDLResult{
 				Success: true,
-				Message: fmt.Sprintf("Index %s already exists (IF NOT EXISTS)", p.Statement.IndexName),
+				Message: fmt.Sprintf("Index %s already exists (IF NOT EXISTS)", indexName),
 			}, nil
 		}
-		return nil, fmt.Errorf("index %s already exists", p.Statement.IndexName)
+		return nil, err
 	}
 
-	columnType := tsch.Columns[columnIndex].FieldType
-
+	// Step 2: Create physical index file
 	filePath := GenerateIndexFilePath(p.ctx, tableName, indexName)
+	fileOps := p.ctx.IndexManager().NewFileOps(filePath)
 
+	physicalID, err := fileOps.CreatePhysicalIndex(validation.ColumnType, idxType)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create physical index: %w", err)
+	}
+
+	// Step 3: Register in catalog using actual file ID
+	_, err = catalogOps.CreateIndex(physicalID, indexName, tableName, colName, idxType)
+	if err != nil {
+		// Rollback: Delete physical file
+		fileOps.DeletePhysicalIndex()
+		return nil, fmt.Errorf("failed to register index in catalog: %w", err)
+	}
+
+	// Step 4: Populate the index with existing data
 	idxConfig := IndexCreationConfig{
 		Ctx:         p.ctx,
 		Tx:          p.tx,
+		IndexID:     physicalID,
 		IndexName:   indexName,
 		IndexType:   idxType,
 		FilePath:    filePath,
-		TableID:     tableID,
+		TableID:     validation.TableID,
 		TableName:   tableName,
-		ColumnIndex: columnIndex,
+		ColumnIndex: validation.ColumnIndex,
 		ColumnName:  colName,
-		ColumnType:  columnType,
+		ColumnType:  validation.ColumnType,
 	}
 
-	actualIndexID, err := CreatePhysicalIndexAndGetID(&idxConfig)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create physical index: %v", err)
-	}
-
-	// Step 2: Register in catalog using actual file ID
-	_, err = cm.CreateIndex(p.tx, actualIndexID, indexName, tableName, colName, idxType)
-	if err != nil {
-		filePath.Remove()
-		return nil, fmt.Errorf("failed to register index in catalog: %v", err)
-	}
-
-	// Update config with actual ID for population
-	idxConfig.IndexID = actualIndexID
-
-	// Step 3: Populate the index
 	if err := PopulateIndexWithData(&idxConfig); err != nil {
-		return nil, err
+		// Rollback: Remove from catalog and delete physical file
+		catalogOps.DropIndex(indexName)
+		fileOps.DeletePhysicalIndex()
+		return nil, fmt.Errorf("failed to populate index: %w", err)
 	}
 
 	return &result.DDLResult{
 		Success: true,
 		Message: fmt.Sprintf("Index %s created successfully on %s(%s) using %s",
-			p.Statement.IndexName,
-			tableName,
-			colName,
-			idxType),
+			indexName, tableName, colName, idxType),
 	}, nil
 }

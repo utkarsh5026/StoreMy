@@ -126,12 +126,12 @@ func TestCreateIndexPlan_Execute_HashIndex(t *testing.T) {
 	}
 
 	// Verify index exists in catalog
-	if !ctx.CatalogManager().IndexExists(transCtx, "idx_users_email") {
+	if !ctx.CatalogManager().NewIndexOps(transCtx).IndexExists( "idx_users_email") {
 		t.Error("Index was not added to catalog")
 	}
 
 	// Verify index file was created
-	indexMeta, _ := ctx.CatalogManager().GetIndexByName(transCtx, "idx_users_email")
+	indexMeta, _ := ctx.CatalogManager().NewIndexOps(transCtx).GetIndexByName( "idx_users_email")
 	if !indexMeta.FilePath.Exists() {
 		t.Errorf("Index file was not created at %s", indexMeta.FilePath)
 	}
@@ -166,7 +166,7 @@ func TestCreateIndexPlan_Execute_BTreeIndex(t *testing.T) {
 		t.Error("Expected success to be true")
 	}
 
-	if !ctx.CatalogManager().IndexExists(transCtx, "idx_users_age") {
+	if !ctx.CatalogManager().NewIndexOps(transCtx).IndexExists( "idx_users_age") {
 		t.Error("Index was not added to catalog")
 	}
 
@@ -384,7 +384,7 @@ func TestCreateIndexPlan_Execute_MultipleIndexesOnSameTable(t *testing.T) {
 
 	// Verify both indexes exist
 	tableID, _ := ctx.CatalogManager().GetTableID(transCtx, "users")
-	indexes, err := ctx.CatalogManager().GetIndexesByTable(transCtx, tableID)
+	indexes, err := ctx.CatalogManager().NewIndexOps(transCtx).GetIndexesByTable( tableID)
 	if err != nil {
 		t.Fatalf("Failed to get indexes: %v", err)
 	}

@@ -112,7 +112,7 @@ func (p *ShowIndexesPlan) getIndexesForTable() ([]*systemtable.IndexMetadata, er
 		return nil, fmt.Errorf("table %s does not exist", tableName)
 	}
 
-	indexes, err := cm.GetIndexesByTable(p.tx, tableID)
+	indexes, err := cm.NewIndexOps(p.tx).GetIndexesByTable(tableID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to retrieve indexes for table %s: %w", tableName, err)
 	}
@@ -126,7 +126,7 @@ func (p *ShowIndexesPlan) getIndexesForTable() ([]*systemtable.IndexMetadata, er
 //   - Error if catalog read fails
 func (p *ShowIndexesPlan) getAllIndexes() ([]*systemtable.IndexMetadata, error) {
 	cm := p.ctx.CatalogManager()
-	return cm.GetAllIndexes(p.tx)
+	return cm.NewIndexOps(p.tx).GetAllIndexes()
 }
 
 // createResultTuples converts index metadata into displayable tuples.

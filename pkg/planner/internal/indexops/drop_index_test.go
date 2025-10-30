@@ -38,12 +38,12 @@ func TestDropIndexPlan_Execute_Success(t *testing.T) {
 	createTestIndex(t, ctx, transCtx, "users", "idx_users_email", "email", index.HashIndex)
 
 	// Verify index exists
-	if !ctx.CatalogManager().IndexExists(transCtx, "idx_users_email") {
+	if !ctx.CatalogManager().NewIndexOps(transCtx).IndexExists( "idx_users_email") {
 		t.Fatal("Index was not created")
 	}
 
 	// Get index metadata to check file path
-	indexMeta, _ := ctx.CatalogManager().GetIndexByName(transCtx, "idx_users_email")
+	indexMeta, _ := ctx.CatalogManager().NewIndexOps(transCtx).GetIndexByName( "idx_users_email")
 	filePath := indexMeta.FilePath
 
 	// Verify file exists before dropping
@@ -75,7 +75,7 @@ func TestDropIndexPlan_Execute_Success(t *testing.T) {
 	}
 
 	// Verify index no longer exists in catalog
-	if ctx.CatalogManager().IndexExists(transCtx, "idx_users_email") {
+	if ctx.CatalogManager().NewIndexOps(transCtx).IndexExists( "idx_users_email") {
 		t.Error("Index still exists in catalog after drop")
 	}
 
@@ -252,7 +252,7 @@ func TestDropIndexPlan_Execute_FileAlreadyDeleted(t *testing.T) {
 	createTestIndex(t, ctx, transCtx, "users", "idx_users_email", "email", index.HashIndex)
 
 	// Get index metadata and manually delete the file
-	indexMeta, _ := ctx.CatalogManager().GetIndexByName(transCtx, "idx_users_email")
+	indexMeta, _ := ctx.CatalogManager().NewIndexOps(transCtx).GetIndexByName( "idx_users_email")
 	filePath := indexMeta.FilePath
 	filePath.Remove()
 
@@ -271,7 +271,7 @@ func TestDropIndexPlan_Execute_FileAlreadyDeleted(t *testing.T) {
 	}
 
 	// Verify index was removed from catalog
-	if ctx.CatalogManager().IndexExists(transCtx, "idx_users_email") {
+	if ctx.CatalogManager().NewIndexOps(transCtx).IndexExists( "idx_users_email") {
 		t.Error("Index still exists in catalog")
 	}
 
@@ -294,7 +294,7 @@ func TestDropIndexPlan_Execute_MultipleIndexes(t *testing.T) {
 
 	// Verify all exist (3 manually created indexes - PK indexes are now created by DDL layer)
 	tableID, _ := ctx.CatalogManager().GetTableID(transCtx, "users")
-	indexes, _ := ctx.CatalogManager().GetIndexesByTable(transCtx, tableID)
+	indexes, _ := ctx.CatalogManager().NewIndexOps(transCtx).GetIndexesByTable( tableID)
 	if len(indexes) != 3 {
 		t.Fatalf("Expected 3 indexes, got %d", len(indexes))
 	}
@@ -308,21 +308,21 @@ func TestDropIndexPlan_Execute_MultipleIndexes(t *testing.T) {
 	}
 
 	// Verify only 2 remain
-	indexes, _ = ctx.CatalogManager().GetIndexesByTable(transCtx, tableID)
+	indexes, _ = ctx.CatalogManager().NewIndexOps(transCtx).GetIndexesByTable( tableID)
 	if len(indexes) != 2 {
 		t.Errorf("Expected 2 indexes after drop, got %d", len(indexes))
 	}
 
 	// Verify correct index was dropped
-	if ctx.CatalogManager().IndexExists(transCtx, "idx_users_age") {
+	if ctx.CatalogManager().NewIndexOps(transCtx).IndexExists( "idx_users_age") {
 		t.Error("Dropped index still exists")
 	}
 
 	// Verify other indexes still exist
-	if !ctx.CatalogManager().IndexExists(transCtx, "idx_users_email") {
+	if !ctx.CatalogManager().NewIndexOps(transCtx).IndexExists( "idx_users_email") {
 		t.Error("idx_users_email should still exist")
 	}
-	if !ctx.CatalogManager().IndexExists(transCtx, "idx_users_name") {
+	if !ctx.CatalogManager().NewIndexOps(transCtx).IndexExists( "idx_users_name") {
 		t.Error("idx_users_name should still exist")
 	}
 

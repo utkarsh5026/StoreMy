@@ -300,7 +300,7 @@ func (qo *QueryOptimizer) chooseBestAccessMethod(
 	}
 
 	// Get available indexes for this table
-	indexes, err := qo.catalog.GetIndexesByTable(tx, scan.TableID)
+	indexes, err := qo.catalog.NewIndexOps(tx).GetIndexesByTable(scan.TableID)
 	if err != nil || len(indexes) == 0 {
 		// No indexes available, use sequential scan
 		scan.AccessMethod = "seqscan"

@@ -57,68 +57,35 @@ func NewDropIndexPlan(
 // Execute performs the DROP INDEX operation within the current transaction.
 //
 // Steps:
-//  1. Checks if index exists via CatalogManager.IndexExists()
-//  2. If missing and IF EXISTS specified, returns success without error
-//  3. Validates table ownership if ON clause specified
-//  4. Removes index entry from CATALOG_INDEXES table
-//  5. Deletes physical index file from disk (best-effort)
+//  1. Validates index deletion (index exists, table ownership if specified)
+//  2. Handles IF EXISTS clause
+//  3. Removes index entry from CATALOG_INDEXES table
+//  4. Deletes physical index file from disk
 //
 // Returns:
 //   - DDLResult with success message on completion
 //   - Error if index doesn't exist (without IF EXISTS) or validation fails
 func (p *DropIndexPlan) Execute() (result.Result, error) {
-	cm := p.ctx.CatalogManager()
 	idxName := p.Statement.IndexName
+	tableName := p.Statement.TableName
 
-	if !cm.IndexExists(p.tx, idxName) {
+	catalogOps := p.ctx.CatalogManager().NewIndexOps(p.tx)
+
+	// Step 1: Validate via catalog (single consolidated call)
+	_, err := catalogOps.ValidateIndexDeletion(idxName, tableName)
+	if err != nil {
+		// Handle IF EXISTS for non-existent index
 		if p.Statement.IfExists {
 			return result.NewDDLResult(true, fmt.Sprintf("Index %s does not exist (IF EXISTS)", idxName)), nil
 		}
-		return nil, fmt.Errorf("index %s does not exist", idxName)
-	}
-
-	if err := p.validateTable(); err != nil {
 		return nil, err
 	}
 
-	if err := NewIndexOps(p.tx, p.ctx.CatalogManager(), p.ctx.IndexManager()).DeleteIndexFromSystem(p.Statement.IndexName); err != nil {
-		return nil, err
+	// Step 2: Delete index from system (catalog + physical file)
+	indexOpsCoordinator := NewIndexOps(p.tx, p.ctx.CatalogManager(), p.ctx.IndexManager())
+	if err := indexOpsCoordinator.DeleteIndexFromSystem(idxName); err != nil {
+		return nil, fmt.Errorf("failed to drop index: %w", err)
 	}
 
 	return result.NewDDLResult(true, fmt.Sprintf("Index %s dropped successfully", idxName)), nil
-}
-
-// validateTable verifies the index belongs to the specified table (if provided).
-//
-// This validation runs when DROP INDEX statement includes ON clause:
-//
-//	DROP INDEX idx_name ON table_name;
-//
-// Process:
-//  1. Retrieves index metadata from catalog
-//  2. Gets table name for index's TableID
-//  3. Compares with statement's TableName
-//
-// Returns:
-//   - nil if validation passes or no table specified
-//   - Error if table name doesn't match or metadata lookup fails
-func (p *DropIndexPlan) validateTable() error {
-	cm := p.ctx.CatalogManager()
-	idx, err := cm.GetIndexByName(p.tx, p.Statement.IndexName)
-	if err != nil {
-		return fmt.Errorf("failed to get index metadata: %w", err)
-	}
-
-	tableName := p.Statement.TableName
-	if tableName != "" {
-		tn, err := cm.GetTableName(p.tx, idx.TableID)
-		if err != nil {
-			return fmt.Errorf("failed to verify table name: %w", err)
-		}
-		if tn != tableName {
-			return fmt.Errorf("index %s does not belong to table %s",
-				p.Statement.IndexName, tableName)
-		}
-	}
-	return nil
 }

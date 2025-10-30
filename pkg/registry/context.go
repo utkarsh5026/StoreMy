@@ -30,7 +30,7 @@ type catalogAdapter struct {
 }
 
 func (ca *catalogAdapter) GetIndexesByTable(tx *transaction.TransactionContext, tableID primitives.FileID) ([]*systemtable.IndexMetadata, error) {
-	return ca.cm.GetIndexesByTable(tx, tableID)
+	return ca.cm.NewIndexOps(tx).GetIndexesByTable(tableID)
 }
 
 func (ca *catalogAdapter) GetTableSchema(tableID primitives.FileID) (*schema.Schema, error) {
