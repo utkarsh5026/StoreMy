@@ -38,6 +38,13 @@ type StatsRecorder interface {
 	RecordModification(tableID primitives.FileID)
 }
 
+// TupleOperation defines the interface for batch tuple operations.
+// Each operation is scoped to a single transaction context and can operate on multiple tuples.
+type TupleOperation interface {
+	Execute() error
+	Validate() error
+}
+
 // TupleManager handles tuple-level operations (insert, delete, update) on tables.
 // It sits above the buffer pool layer and provides high-level tuple manipulation
 // while delegating page-level concerns to the buffer pool.
