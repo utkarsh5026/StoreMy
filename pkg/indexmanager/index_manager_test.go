@@ -125,10 +125,6 @@ func TestNewIndexManager(t *testing.T) {
 		t.Error("Expected cache to be initialized")
 	}
 
-	if im.loader == nil {
-		t.Error("Expected loader to be initialized")
-	}
-
 }
 
 func TestCreatePhysicalIndex_BTree(t *testing.T) {

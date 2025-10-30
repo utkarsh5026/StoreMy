@@ -8,7 +8,6 @@ import (
 	"os"
 	"storemy/pkg/catalog/schema"
 	"storemy/pkg/catalog/systemtable"
-	"storemy/pkg/memory"
 	btreeindex "storemy/pkg/memory/wrappers/btree_index"
 	hashindex "storemy/pkg/memory/wrappers/hash_index"
 	"storemy/pkg/primitives"
@@ -17,28 +16,6 @@ import (
 	"storemy/pkg/storage/index/hash"
 	"storemy/pkg/types"
 )
-
-// indexLoader handles loading index metadata from catalog and opening index files.
-// It acts as a bridge between the catalog system and the physical index files,
-// ensuring that all indexes for a table are properly loaded and initialized.
-type indexLoader struct {
-	catalog   CatalogReader     // catalog provides access to index metadata and table schemas
-	pageStore *memory.PageStore // pageStore manages in-memory pages for index operations
-}
-
-// newIndexLoader creates a new index loader.
-//
-// Parameters:
-//   - catalog: The catalog reader to fetch index metadata and schemas
-//   - pageStore: The page store for managing index pages in memory
-//
-// Returns a configured indexLoader instance.
-func newIndexLoader(catalog CatalogReader, pageStore *memory.PageStore) *indexLoader {
-	return &indexLoader{
-		catalog:   catalog,
-		pageStore: pageStore,
-	}
-}
 
 // loadAndOpenIndexes loads index metadata from catalog and opens all index files for a table.
 // This is the main entry point for initializing all indexes associated with a table.
@@ -57,7 +34,7 @@ func newIndexLoader(catalog CatalogReader, pageStore *memory.PageStore) *indexLo
 // Returns:
 //   - A slice of indexWithMetadata containing successfully opened indexes
 //   - An error if catalog access fails
-func (il *indexLoader) loadAndOpenIndexes(ctx TxCtx, tableID primitives.FileID) ([]*indexWithMetadata, error) {
+func (il *IndexManager) loadAndOpenIndexes(ctx TxCtx, tableID primitives.FileID) ([]*indexWithMetadata, error) {
 	metadataList, err := il.loadFromCatalog(ctx, tableID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get indexes from catalog: %v", err)
@@ -91,7 +68,7 @@ func (il *indexLoader) loadAndOpenIndexes(ctx TxCtx, tableID primitives.FileID) 
 // Returns:
 //   - A slice of complete IndexMetadata with resolved schema information
 //   - An error if catalog access or schema retrieval fails
-func (il *indexLoader) loadFromCatalog(ctx TxCtx, tableID primitives.FileID) ([]*IndexMetadata, error) {
+func (il *IndexManager) loadFromCatalog(ctx TxCtx, tableID primitives.FileID) ([]*IndexMetadata, error) {
 	catalogIndexes, err := il.catalog.GetIndexesByTable(ctx, tableID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get indexes from catalog: %v", err)
@@ -176,7 +153,7 @@ func findColumnInfo(schema *schema.Schema, columnName string) (primitives.Column
 // Returns:
 //   - The opened index instance
 //   - An error if the index type is unsupported or opening fails
-func (il *indexLoader) openIndex(ctx TxCtx, m *IndexMetadata) (index.Index, error) {
+func (il *IndexManager) openIndex(ctx TxCtx, m *IndexMetadata) (index.Index, error) {
 	switch m.IndexType {
 	case index.BTreeIndex:
 		return il.openBTreeIndex(ctx, m)
@@ -197,7 +174,7 @@ func (il *indexLoader) openIndex(ctx TxCtx, m *IndexMetadata) (index.Index, erro
 // Returns:
 //   - A BTree index wrapper ready for use
 //   - An error if the file cannot be opened or initialized
-func (il *indexLoader) openBTreeIndex(ctx TxCtx, m *IndexMetadata) (*btreeindex.BTree, error) {
+func (il *IndexManager) openBTreeIndex(ctx TxCtx, m *IndexMetadata) (*btreeindex.BTree, error) {
 	file, err := btree.NewBTreeFile(m.FilePath, m.KeyType)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open BTree file: %v", err)
@@ -217,7 +194,7 @@ func (il *indexLoader) openBTreeIndex(ctx TxCtx, m *IndexMetadata) (*btreeindex.
 // Returns:
 //   - A HashIndex wrapper ready for use
 //   - An error if the file cannot be opened or initialized
-func (il *indexLoader) openHashIndex(ctx TxCtx, m *IndexMetadata) (*hashindex.HashIndex, error) {
+func (il *IndexManager) openHashIndex(ctx TxCtx, m *IndexMetadata) (*hashindex.HashIndex, error) {
 	file, err := hash.NewHashFile(m.FilePath, m.KeyType, hash.DefaultBuckets)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open hash file: %v", err)
@@ -225,19 +202,4 @@ func (il *indexLoader) openHashIndex(ctx TxCtx, m *IndexMetadata) (*hashindex.Ha
 
 	hashIdx := hashindex.NewHashIndex(m.IndexID, m.KeyType, file, il.pageStore, ctx)
 	return hashIdx, nil
-}
-
-// loadAndOpenIndexes is a convenience method on IndexManager that delegates to the loader.
-// This allows the IndexManager to expose index loading functionality without
-// directly coupling to the implementation details.
-//
-// Parameters:
-//   - ctx: Transaction context for catalog and index operations
-//   - tableID: The ID of the table whose indexes should be loaded
-//
-// Returns:
-//   - A slice of indexWithMetadata containing successfully opened indexes
-//   - An error if loading or opening fails
-func (im *IndexManager) loadAndOpenIndexes(ctx TxCtx, tableID primitives.FileID) ([]*indexWithMetadata, error) {
-	return im.loader.loadAndOpenIndexes(ctx, tableID)
 }
