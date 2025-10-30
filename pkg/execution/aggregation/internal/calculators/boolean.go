@@ -154,9 +154,3 @@ func (bc *BooleanCalculator) GetFinalValue(groupKey string) (types.Field, error)
 		return nil, fmt.Errorf("unexpected aggregate value type: %T", v)
 	}
 }
-
-// BooleanAggregator is a specialized aggregator for boolean field types.
-// It wraps the BaseAggregator and provides boolean-specific aggregation functionality.
-type BooleanAggregator struct {
-	*core.BaseAggregator
-}

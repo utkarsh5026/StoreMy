@@ -172,9 +172,3 @@ func (sc *StringCalculator) GetFinalValue(groupKey string) (types.Field, error) 
 		return nil, fmt.Errorf("unexpected aggregate value type: %T", v)
 	}
 }
-
-// StringAggregator is a specialized aggregator for string field types.
-// It wraps the BaseAggregator and provides string-specific aggregation functionality.
-type StringAggregator struct {
-	*core.BaseAggregator
-}

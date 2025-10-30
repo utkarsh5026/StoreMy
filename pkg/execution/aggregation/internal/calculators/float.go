@@ -158,9 +158,3 @@ func (fc *FloatCalculator) GetFinalValue(groupKey string) (types.Field, error) {
 	}
 	return types.NewFloat64Field(aggValue), nil
 }
-
-// FloatAggregator is a specialized aggregator for float64 field types.
-// It wraps the BaseAggregator and provides float-specific aggregation functionality.
-type FloatAggregator struct {
-	*core.BaseAggregator
-}

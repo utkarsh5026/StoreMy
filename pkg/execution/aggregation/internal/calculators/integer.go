@@ -151,9 +151,3 @@ func (ic *IntCalculator) GetFinalValue(groupKey string) (types.Field, error) {
 	}
 	return types.NewIntField(aggValue), nil
 }
-
-// IntAggregator is a specialized aggregator for integer field types.
-// It wraps the BaseAggregator and provides integer-specific aggregation functionality.
-type IntAggregator struct {
-	*core.BaseAggregator
-}

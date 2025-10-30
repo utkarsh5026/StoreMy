@@ -1143,11 +1143,11 @@ func TestStringCalculator_GetInitValue(t *testing.T) {
 
 func TestGetCalculator(t *testing.T) {
 	tests := []struct {
-		name          string
-		fieldType     types.Type
-		op            core.AggregateOp
-		expectError   bool
-		expectedType  any
+		name         string
+		fieldType    types.Type
+		op           core.AggregateOp
+		expectError  bool
+		expectedType any
 	}{
 		{"IntType returns IntCalculator", types.IntType, core.Sum, false, &IntCalculator{}},
 		{"FloatType returns FloatCalculator", types.FloatType, core.Avg, false, &FloatCalculator{}},
