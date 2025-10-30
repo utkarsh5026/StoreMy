@@ -1196,7 +1196,7 @@ func TestUpdateOp_ValidationErrors(t *testing.T) {
 	tests := []struct {
 		name      string
 		ctx       *transaction.TransactionContext
-		dbFile    page.DbFile
+		dbFile    *heap.HeapFile
 		oldTuples []*tuple.Tuple
 		newTuples []*tuple.Tuple
 		wantError bool

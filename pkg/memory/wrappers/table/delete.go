@@ -3,6 +3,8 @@ package table
 import (
 	"fmt"
 	"storemy/pkg/concurrency/transaction"
+	"storemy/pkg/memory"
+	"storemy/pkg/storage/heap"
 	"storemy/pkg/storage/page"
 	"storemy/pkg/tuple"
 )
@@ -16,7 +18,7 @@ import (
 type DeleteOp struct {
 	tm     *TupleManager
 	ctx    *transaction.TransactionContext
-	dbFile page.DbFile
+	dbFile *heap.HeapFile
 	tuples []*tuple.Tuple
 
 	executed bool
@@ -32,7 +34,7 @@ type DeleteOp struct {
 //
 // Returns:
 //   - *DeleteOp: A new delete operation ready to be validated and executed
-func (tm *TupleManager) NewDeleteOp(ctx *transaction.TransactionContext, dbFile page.DbFile, tuples []*tuple.Tuple) *DeleteOp {
+func (tm *TupleManager) NewDeleteOp(ctx *transaction.TransactionContext, dbFile *heap.HeapFile, tuples []*tuple.Tuple) *DeleteOp {
 	return &DeleteOp{
 		tm:     tm,
 		ctx:    ctx,
@@ -103,7 +105,7 @@ func (op *DeleteOp) Execute() error {
 	}
 
 	for i, t := range op.tuples {
-		modifiedPages, err := op.tm.handleDelete(op.ctx, op.dbFile, t)
+		modifiedPages, err := op.handleDelete(t)
 		if err != nil {
 			return fmt.Errorf("failed to delete tuple at index %d: %v", i, err)
 		}
@@ -112,4 +114,46 @@ func (op *DeleteOp) Execute() error {
 	}
 
 	return nil
+}
+
+// handleDelete executes the delete operation and logs it to WAL.
+// This helper:
+//   - Acquires exclusive lock on page containing tuple
+//   - Logs before-image to WAL for UNDO capability
+//   - Performs actual tuple deletion on HeapPage
+//   - Marks page as dirty
+//
+// Parameters:
+//   - ctx: Transaction context
+//   - dbFile: Heap file containing the tuple
+//   - t: Tuple to delete (must have RecordID)
+//
+// Returns:
+//   - modifiedPages: Single-element array with the page containing deleted tuple
+//   - error: If page access, WAL logging, or deletion fails
+func (op *DeleteOp) handleDelete(t *tuple.Tuple) ([]*heap.HeapPage, error) {
+	pageID := t.RecordID.PageID
+	hpid, ok := pageID.(*page.PageDescriptor)
+	if !ok {
+		return nil, fmt.Errorf("wrong poage id format")
+	}
+
+	pg, err := op.tm.pageProvider.GetPage(op.ctx, op.dbFile, hpid, transaction.ReadWrite)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get page for delete: %v", err)
+	}
+
+	if err := op.tm.logOperation(memory.DeleteOperation, op.ctx.ID, pageID, pg.GetPageData()); err != nil {
+		return nil, err
+	}
+
+	if heapPage, ok := pg.(*heap.HeapPage); ok {
+		if err := heapPage.DeleteTuple(t); err != nil {
+			return nil, fmt.Errorf("failed to delete tuple: %v", err)
+		}
+		heapPage.MarkDirty(true, op.ctx.ID)
+		return []*heap.HeapPage{heapPage}, nil
+	}
+
+	return nil, fmt.Errorf("expecting the pageType to be of heapage")
 }

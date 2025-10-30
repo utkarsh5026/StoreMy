@@ -202,7 +202,15 @@ func (tm *TupleManager) performDataOperation(operation OperationType, ctx *trans
 		return err
 	}
 
-	tm.markPagesAsDirty(ctx, modifiedPages)
+	// Convert []page.Page to []*heap.HeapPage before passing to markPagesAsDirty
+	heapPages := make([]*heap.HeapPage, 0, len(modifiedPages))
+	for _, p := range modifiedPages {
+		if hp, ok := p.(*heap.HeapPage); ok {
+			heapPages = append(heapPages, hp)
+		}
+	}
+
+	tm.markPagesAsDirty(ctx, heapPages)
 
 	if operation == InsertOperation && tm.indexManager != nil {
 		if err := tm.indexManager.OnInsert(ctx, tableID, t); err != nil {

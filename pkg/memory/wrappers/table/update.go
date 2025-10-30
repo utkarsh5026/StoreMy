@@ -3,7 +3,7 @@ package table
 import (
 	"fmt"
 	"storemy/pkg/concurrency/transaction"
-	"storemy/pkg/storage/page"
+	"storemy/pkg/storage/heap"
 	"storemy/pkg/tuple"
 )
 
@@ -16,7 +16,7 @@ import (
 type UpdateOp struct {
 	tm        *TupleManager
 	ctx       *transaction.TransactionContext
-	dbFile    page.DbFile
+	dbFile    *heap.HeapFile
 	oldTuples []*tuple.Tuple
 	newTuples []*tuple.Tuple
 
@@ -36,7 +36,7 @@ type UpdateOp struct {
 //
 // Returns:
 //   - *UpdateOp: A new update operation ready to be validated and executed
-func (tm *TupleManager) NewUpdateOp(ctx *transaction.TransactionContext, dbFile page.DbFile, oldTuples, newTuples []*tuple.Tuple) *UpdateOp {
+func (tm *TupleManager) NewUpdateOp(ctx *transaction.TransactionContext, dbFile *heap.HeapFile, oldTuples, newTuples []*tuple.Tuple) *UpdateOp {
 	return &UpdateOp{
 		tm:        tm,
 		ctx:       ctx,
