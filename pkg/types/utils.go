@@ -30,8 +30,9 @@ func CreateFieldFromConstant(t Type, constant string) (Field, error) {
 }
 
 func IsValidType(t Type) bool {
-	return t == IntType || t == StringType ||
-		t == BoolType || t == FloatType
+	return t == IntType || t == Int32Type || t == Int64Type ||
+		t == Uint32Type || t == Uint64Type ||
+		t == StringType || t == BoolType || t == FloatType
 }
 
 // GetMinValueFor returns the minimum value for a given Type as a Field.
