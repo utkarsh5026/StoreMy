@@ -15,6 +15,9 @@ import (
 	"strings"
 )
 
+// IndexScannerBuilder is responsible for constructing optimized index scan operators
+// from filter predicates. It analyzes available indexes and determines if a table scan
+// can be replaced with a more efficient index scan.
 type IndexScannerBuilder struct {
 	tx      *transaction.TransactionContext
 	ctx     *registry.DatabaseContext
@@ -31,9 +34,7 @@ type IndexScannerBuilder struct {
 //  2. Find an index on the filtered column
 //  3. Check if the predicate is index-friendly (=, <, >, <=, >=)
 //  4. Create appropriate IndexScan operator (equality or range)
-func (b *IndexScannerBuilder) TryBuildIndexScan(
-	filter *plan.FilterNode,
-) (iterator.DbIterator, bool, error) {
+func (b *IndexScannerBuilder) TryBuildIndexScan(filter *plan.FilterNode) (iterator.DbIterator, bool, error) {
 	indexCol, err := b.getIndexColumn(filter)
 	if err != nil {
 		return nil, false, err
@@ -47,6 +48,7 @@ func (b *IndexScannerBuilder) TryBuildIndexScan(
 	if err != nil {
 		return nil, false, err
 	}
+
 	pred, err := buildPredicateFromFilterNode(filter, indexCfg.HeapFile.GetTupleDesc())
 	if err != nil {
 		return nil, false, err
@@ -98,6 +100,9 @@ func (b *IndexScannerBuilder) buildIndexRangeScan(cfg scanner.IndexScanConfig, p
 	return indexScan, true, nil
 }
 
+// createIndexConfig constructs an IndexScanConfig by loading the necessary components:
+// the heap file containing table data and the index for the specified column.
+// Returns an error if the heap file or index cannot be loaded.
 func (b *IndexScannerBuilder) createIndexConfig(column primitives.ColumnID) (*scanner.IndexScanConfig, error) {
 	heapFile, err := getHeapFileForTable(b.ctx, b.tableID)
 	if err != nil {
@@ -118,6 +123,9 @@ func (b *IndexScannerBuilder) createIndexConfig(column primitives.ColumnID) (*sc
 	}, nil
 }
 
+// getIndexColumn retrieves the column ID for the field referenced in the filter node.
+// It looks up the table schema and matches the filter's field name to a column.
+// Returns InvalidColumnID if the column is not found, or an error if schema lookup fails.
 func (b *IndexScannerBuilder) getIndexColumn(filter *plan.FilterNode) (primitives.ColumnID, error) {
 	cm := b.ctx.CatalogManager()
 	sch, err := cm.GetTableSchema(b.tx, b.tableID)

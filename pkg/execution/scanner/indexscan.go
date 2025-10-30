@@ -51,40 +51,49 @@ const (
 
 type RecID = *tuple.TupleRecordID
 
+// IndexScanConfig holds the core infrastructure dependencies for creating an IndexScan.
+// These are the common required components that don't change based on scan type.
+type IndexScanConfig struct {
+	Tx       *transaction.TransactionContext
+	Index    index.Index
+	HeapFile *heap.HeapFile
+	Store    *memory.PageStore
+}
+
+// validate checks that all required fields in the config are non-nil.
+func (cfg *IndexScanConfig) validate() error {
+	if cfg.Store == nil {
+		return fmt.Errorf("page store cannot be nil")
+	}
+	if cfg.Index == nil {
+		return fmt.Errorf("index cannot be nil")
+	}
+	if cfg.HeapFile == nil {
+		return fmt.Errorf("heap file cannot be nil")
+	}
+	return nil
+}
+
 // NewIndexEqualityScan creates a new index scan operator for equality predicates.
 // This scan uses index.Search() to find tuples matching the exact key value.
 //
 // Parameters:
-//   - tx: Transaction context for concurrency control
-//   - idx: The index to search
-//   - heapFile: The table's heap file to fetch actual tuples
-//   - store: Page store for fetching pages
+//   - cfg: Configuration containing transaction, index, heap file, and page store
 //   - searchKey: The exact key value to search for (e.g., 5 for "WHERE id = 5")
 //
 // Returns a configured IndexScan operator or an error if initialization fails.
-func NewIndexEqualityScan(
-	tx *transaction.TransactionContext,
-	idx index.Index,
-	heapFile *heap.HeapFile,
-	store *memory.PageStore,
-	searchKey types.Field,
+func NewIndexEqualityScan(cfg IndexScanConfig, searchKey types.Field,
 ) (*IndexScan, error) {
-	if store == nil {
-		return nil, fmt.Errorf("page store cannot be nil")
-	}
-	if idx == nil {
-		return nil, fmt.Errorf("index cannot be nil")
-	}
-	if heapFile == nil {
-		return nil, fmt.Errorf("heap file cannot be nil")
+	if err := cfg.validate(); err != nil {
+		return nil, err
 	}
 
 	is := &IndexScan{
-		tx:         tx,
-		idx:        idx,
-		heapFile:   heapFile,
-		store:      store,
-		tupleDesc:  heapFile.GetTupleDesc(),
+		tx:         cfg.Tx,
+		idx:        cfg.Index,
+		heapFile:   cfg.HeapFile,
+		store:      cfg.Store,
+		tupleDesc:  cfg.HeapFile.GetTupleDesc(),
 		scanType:   EqualityScan,
 		searchKey:  searchKey,
 		currentPos: 0,
@@ -98,38 +107,26 @@ func NewIndexEqualityScan(
 // This scan uses index.RangeSearch() to find tuples within a key range.
 //
 // Parameters:
-//   - tx: Transaction context for concurrency control
-//   - idx: The index to search (must support range queries - typically B-Tree)
-//   - heapFile: The table's heap file to fetch actual tuples
-//   - store: Page store for fetching pages
+//   - cfg: Configuration containing transaction, index, heap file, and page store
 //   - startKey: Lower bound of the range (inclusive)
 //   - endKey: Upper bound of the range (inclusive)
 //
 // Returns a configured IndexScan operator or an error if initialization fails.
 func NewIndexRangeScan(
-	tx *transaction.TransactionContext,
-	idx index.Index,
-	heapFile *heap.HeapFile,
-	store *memory.PageStore,
+	cfg IndexScanConfig,
 	startKey types.Field,
 	endKey types.Field,
 ) (*IndexScan, error) {
-	if store == nil {
-		return nil, fmt.Errorf("page store cannot be nil")
-	}
-	if idx == nil {
-		return nil, fmt.Errorf("index cannot be nil")
-	}
-	if heapFile == nil {
-		return nil, fmt.Errorf("heap file cannot be nil")
+	if err := cfg.validate(); err != nil {
+		return nil, err
 	}
 
 	is := &IndexScan{
-		tx:         tx,
-		idx:        idx,
-		heapFile:   heapFile,
-		store:      store,
-		tupleDesc:  heapFile.GetTupleDesc(),
+		tx:         cfg.Tx,
+		idx:        cfg.Index,
+		heapFile:   cfg.HeapFile,
+		store:      cfg.Store,
+		tupleDesc:  cfg.HeapFile.GetTupleDesc(),
 		scanType:   RangeScan,
 		startKey:   startKey,
 		endKey:     endKey,
@@ -203,21 +200,38 @@ func (is *IndexScan) Next() (*tuple.Tuple, error) {
 }
 
 // readNext is the internal method that fetches tuples using RecordIDs from the index.
-// It reads the next RecordID from the result set and fetches the corresponding
-// tuple from the heap file.
+// It iterates through the result set and fetches corresponding tuples from the heap file,
+// skipping over any deleted tuples (nil entries).
 //
 // Returns:
 //   - The next tuple if available
 //   - nil when all tuples have been read
 //   - An error if tuple fetch fails
 func (is *IndexScan) readNext() (*tuple.Tuple, error) {
-	if is.currentPos >= len(is.resultRIDs) {
-		return nil, nil
+	for is.currentPos < len(is.resultRIDs) {
+		rid := is.resultRIDs[is.currentPos]
+		is.currentPos++
+
+		tup, err := is.fetchTupleByRID(rid)
+		if err != nil {
+			return nil, err
+		}
+
+		if tup != nil {
+			return tup, nil
+		}
 	}
 
-	rid := is.resultRIDs[is.currentPos]
-	is.currentPos++
+	return nil, nil
+}
 
+// fetchTupleByRID retrieves a tuple from the heap file using its RecordID.
+// This method handles page fetching and tuple extraction.
+//
+// Returns:
+//   - The tuple at the given RID, or nil if the tuple has been deleted
+//   - An error if page fetch or tuple extraction fails
+func (is *IndexScan) fetchTupleByRID(rid RecID) (*tuple.Tuple, error) {
 	pageID := rid.PageID
 	page, err := is.store.GetPage(is.tx, is.heapFile, pageID.(*page.PageDescriptor), transaction.ReadOnly)
 	if err != nil {
@@ -232,10 +246,6 @@ func (is *IndexScan) readNext() (*tuple.Tuple, error) {
 	tup, err := heapPage.GetTupleAt(rid.TupleNum)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get tuple at slot %d: %w", rid.TupleNum, err)
-	}
-
-	if tup == nil {
-		return is.readNext()
 	}
 
 	return tup, nil
