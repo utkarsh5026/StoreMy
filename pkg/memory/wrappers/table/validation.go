@@ -65,15 +65,6 @@ func validateTuplesHaveRecordIDs(tuples []*tuple.Tuple, tupleName string) error 
 	return nil
 }
 
-// validateHeapFile checks if the dbFile is a HeapFile and returns it.
-func validateHeapFile(dbFile page.DbFile) (*heap.HeapFile, error) {
-	heapFile, ok := dbFile.(*heap.HeapFile)
-	if !ok {
-		return nil, fmt.Errorf("dbFile must be a HeapFile for tuple insertion")
-	}
-	return heapFile, nil
-}
-
 // validateSchemaMatch checks if all tuples match the file's schema.
 func validateSchemaMatch(tuples []*tuple.Tuple, heapFile *heap.HeapFile) error {
 	fileSchema := heapFile.GetTupleDesc()
