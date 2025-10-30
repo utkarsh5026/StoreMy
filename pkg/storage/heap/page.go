@@ -52,6 +52,21 @@ type HeapPage struct {
 	mutex        sync.RWMutex
 }
 
+// NewEmptyHeapPage creates a brand new, empty HeapPage with the given PageDescriptor and TupleDescription.
+// The page data is initialized to all zeroes (empty), and the page is formatted using the provided tuple layout.
+// This is commonly used to allocate new pages before inserting any tuples.
+//
+// Parameters:
+//   - pid: The PageDescriptor that uniquely identifies this page
+//   - td:  The TupleDescription specifying the schema/format used for the tuples in this page
+//
+// Returns:
+//   - *HeapPage: A pointer to the newly created, empty HeapPage
+//   - error:     An error if creation failed (shouldn't happen with correct page size)
+func NewEmptyHeapPage(pid *page.PageDescriptor, td *tuple.TupleDescription) (*HeapPage, error) {
+	return NewHeapPage(pid, make([]byte, page.PageSize), td)
+}
+
 // NewHeapPage creates a new HeapPage by deserializing raw page data.
 // It calculates the optimal number of slots based on tuple size and initializes
 // the slot pointer array and tuple array from the provided data.
