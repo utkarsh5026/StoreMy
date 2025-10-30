@@ -1,5 +1,7 @@
 package primitives
 
+import "math"
+
 // LSN (Log Sequence Number) uniquely identifies each log record
 // It's monotonically increasing and represents the byte offset in the log file
 type LSN uint64
@@ -54,4 +56,6 @@ const (
 
 	// InvalidSlotID represents an invalid or unset slot ID
 	InvalidSlotID SlotID = 0
+
+	InvalidColumnID ColumnID = math.MaxUint32
 )

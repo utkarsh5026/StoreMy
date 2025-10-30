@@ -11,6 +11,7 @@ const (
 	StringType
 	BoolType
 	FloatType
+	InvalidType
 )
 
 // String returns a string representation of the type

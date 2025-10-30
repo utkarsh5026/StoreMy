@@ -2,6 +2,8 @@ package types
 
 import (
 	"fmt"
+	"math"
+	"strings"
 )
 
 func CreateFieldFromConstant(t Type, constant string) (Field, error) {
@@ -30,4 +32,50 @@ func CreateFieldFromConstant(t Type, constant string) (Field, error) {
 func IsValidType(t Type) bool {
 	return t == IntType || t == StringType ||
 		t == BoolType || t == FloatType
+}
+
+// GetMinValueFor returns the minimum value for a given Type as a Field.
+// This is mainly used for range queries to define the lower bound for each type.
+//   - For IntType: Should return the minimum int64 value (math.MinInt64), but currently uses MaxInt64 (potential bug).
+//   - For FloatType: Returns the minimum float64 value (-math.MaxFloat64).
+//   - For StringType: Returns an empty string as the minimum value.
+//   - For BoolType: Returns false as the minimum value.
+//   - For unsupported types: Returns nil.
+func GetMinValueFor(t Type) Field {
+	switch t {
+	case IntType:
+		return NewIntField(math.MinInt64) // math.MinInt64
+	case FloatType:
+		return NewFloat64Field(-math.MaxFloat64) // -math.MaxFloat64
+	case StringType:
+		return NewStringField("", StringMaxSize)
+	case BoolType:
+		return NewBoolField(false)
+	default:
+		return nil
+	}
+}
+
+// GetMaxValueFor returns the maximum value for a given Type as a Field.
+// This is mainly used for range queries to define the upper bound for each type.
+//   - For IntType: Returns the maximum int64 value (math.MaxInt64).
+//   - For FloatType: Returns the maximum float64 value (math.MaxFloat64).
+//   - For StringType: Returns a string composed of the largest Unicode character repeated up to StringMaxSize.
+//   - For BoolType: Returns true as the maximum value.
+//   - For unsupported types: Returns nil.
+func GetMaxValueFor(t Type) Field {
+	switch t {
+	case IntType:
+		return NewIntField(math.MaxInt64) // math.MaxInt64
+	case FloatType:
+		return NewFloat64Field(math.MaxFloat64) // math.MaxFloat64
+	case StringType:
+		// For strings, use a very high Unicode character repeated
+		maxStr := strings.Repeat("\U0010FFFF", StringMaxSize/4)
+		return NewStringField(maxStr, StringMaxSize)
+	case BoolType:
+		return NewBoolField(true)
+	default:
+		return nil
+	}
 }
