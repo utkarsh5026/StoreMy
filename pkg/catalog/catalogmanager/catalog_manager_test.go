@@ -58,7 +58,7 @@ func setupTest(t *testing.T) *testSetup {
 func (s *testSetup) generateIndexID(tableName, indexName string) primitives.FileID {
 	fileName := fmt.Sprintf("%s_%s.idx", tableName, indexName)
 	filePath := filepath.Join(s.tempDir, fileName)
-	return primitives.FileID(hashFilePath(filePath))
+	return primitives.Filepath(filePath).Hash()
 }
 
 // cleanup closes all resources

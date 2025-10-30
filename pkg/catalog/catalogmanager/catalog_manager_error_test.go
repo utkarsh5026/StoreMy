@@ -398,14 +398,14 @@ func TestCatalogManager_IndexExists_BeforeAndAfterCreation(t *testing.T) {
 
 	// Check that index doesn't exist yet
 	tx3 := setup.beginTx()
-	if setup.catalogMgr.IndexExists(tx3, "idx_test_exists") {
+	if setup.catalogMgr.NewIndexOps(tx3).IndexExists("idx_test_exists") {
 		t.Error("Index should not exist before creation")
 	}
 
 	// Create index
 	tx4 := setup.beginTx()
 	testIndexID := setup.generateIndexID("idx_exists_test", "idx_test_exists")
-	_, err = setup.catalogMgr.CreateIndex(tx4, testIndexID, "idx_test_exists", "idx_exists_test", "id", index.BTreeIndex)
+	_, err = setup.catalogMgr.NewIndexOps(tx4).CreateIndex(testIndexID, "idx_test_exists", "idx_exists_test", "id", index.BTreeIndex)
 	setup.commitTx(tx4)
 	if err != nil {
 		t.Fatalf("CreateIndex failed: %v", err)
@@ -413,7 +413,7 @@ func TestCatalogManager_IndexExists_BeforeAndAfterCreation(t *testing.T) {
 
 	// Check that index now exists
 	tx5 := setup.beginTx()
-	if !setup.catalogMgr.IndexExists(tx5, "idx_test_exists") {
+	if !setup.catalogMgr.NewIndexOps(tx5).IndexExists("idx_test_exists") {
 		t.Error("Index should exist after creation")
 	}
 }
@@ -429,7 +429,7 @@ func TestCatalogManager_GetIndexByName_InvalidName(t *testing.T) {
 	}
 
 	tx2 := setup.beginTx()
-	_, err := setup.catalogMgr.GetIndexByName(tx2, "nonexistent_index")
+	_, err := setup.catalogMgr.NewIndexOps(tx2).GetIndexByName("nonexistent_index")
 	if err == nil {
 		t.Error("GetIndexByName should fail for non-existent index")
 	}
