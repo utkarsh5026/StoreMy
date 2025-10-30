@@ -122,7 +122,7 @@ func (joo *JoinOrderOptimizer) initializeBaseRelations(
 			card = cardinality.DefaultTableCardinality
 		}
 		cost := joo.costModel.EstimatePlanCost(scanNode)
-		scanNode.SetCardinality(card)
+		scanNode.SetCardinality(int64(card))
 		scanNode.SetCost(cost)
 
 		// Add to DP table
@@ -130,7 +130,7 @@ func (joo *JoinOrderOptimizer) initializeBaseRelations(
 			RelationSet: rel.BitMask,
 			PlanNode:    scanNode,
 			Cost:        cost,
-			Cardinality: card,
+			Cardinality: int64(card),
 		}
 	}
 }
@@ -331,14 +331,14 @@ func (joo *JoinOrderOptimizer) createJoinPlan(
 		card = cardinality.DefaultTableCardinality
 	}
 	cost := joo.costModel.EstimatePlanCost(joinNode)
-	joinNode.SetCardinality(card)
+	joinNode.SetCardinality(int64(card))
 	joinNode.SetCost(cost)
 
 	return &JoinPlan{
 		RelationSet: relationSet,
 		PlanNode:    joinNode,
 		Cost:        cost,
-		Cardinality: card,
+		Cardinality: int64(card),
 		JoinMethod:  joinMethod,
 	}
 }

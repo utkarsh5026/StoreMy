@@ -147,7 +147,7 @@ func (ppo *PredicatePushdownOptimizer) optimizeJoin(
 		card = cardinality.DefaultTableCardinality
 	}
 	cost := ppo.costModel.EstimatePlanCost(newJoin)
-	newJoin.SetCardinality(card)
+	newJoin.SetCardinality(int64(card))
 	newJoin.SetCost(cost)
 
 	return newJoin
@@ -199,7 +199,7 @@ func (ppo *PredicatePushdownOptimizer) optimizeScan(
 		card = cardinality.DefaultTableCardinality
 	}
 	cost := ppo.costModel.EstimatePlanCost(newScan)
-	newScan.SetCardinality(card)
+	newScan.SetCardinality(int64(card))
 	newScan.SetCost(cost)
 
 	return newScan
@@ -228,7 +228,7 @@ func (ppo *PredicatePushdownOptimizer) optimizeProject(
 		card = cardinality.DefaultTableCardinality
 	}
 	cost := ppo.costModel.EstimatePlanCost(newProject)
-	newProject.SetCardinality(card)
+	newProject.SetCardinality(int64(card))
 	newProject.SetCost(cost)
 
 	return newProject

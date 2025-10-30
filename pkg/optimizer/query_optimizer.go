@@ -389,7 +389,7 @@ func (qo *QueryOptimizer) estimateFinalCosts(
 		card = cardinality.DefaultTableCardinality
 	}
 	cost := qo.costModel.EstimatePlanCost(planNode)
-	planNode.SetCardinality(card)
+	planNode.SetCardinality(int64(card))
 	planNode.SetCost(cost)
 }
 
