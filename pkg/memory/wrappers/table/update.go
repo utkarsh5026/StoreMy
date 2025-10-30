@@ -3,7 +3,6 @@ package table
 import (
 	"fmt"
 	"storemy/pkg/concurrency/transaction"
-	"storemy/pkg/storage/heap"
 	"storemy/pkg/storage/page"
 	"storemy/pkg/tuple"
 )
@@ -56,41 +55,32 @@ func (tm *TupleManager) NewUpdateOp(ctx *transaction.TransactionContext, dbFile 
 //   - oldTuples and newTuples have matching lengths
 //   - All old tuples have valid RecordIDs
 func (op *UpdateOp) Validate() error {
-	if op.executed {
-		return fmt.Errorf("update operation already executed")
+	if err := validateExecuted(op.executed, "update"); err != nil {
+		return err
 	}
 
-	if op.ctx == nil {
-		return fmt.Errorf("transaction context cannot be nil")
+	if err := validateTransactionContext(op.ctx); err != nil {
+		return err
 	}
 
-	if op.dbFile == nil {
-		return fmt.Errorf("dbFile cannot be nil")
+	if err := validateDbFile(op.dbFile); err != nil {
+		return err
 	}
 
-	if len(op.oldTuples) == 0 {
-		return fmt.Errorf("no tuples to update")
+	if err := validateTuplesNotEmpty(op.oldTuples, "update"); err != nil {
+		return err
 	}
 
-	if len(op.oldTuples) != len(op.newTuples) {
-		return fmt.Errorf("oldTuples and newTuples must have the same length")
+	if err := validateTupleSlicesMatchLength(op.oldTuples, op.newTuples, "oldTuples", "newTuples"); err != nil {
+		return err
 	}
 
-	// Validate all old tuples have RecordIDs
-	for i, t := range op.oldTuples {
-		if t == nil {
-			return fmt.Errorf("old tuple at index %d is nil", i)
-		}
-		if t.RecordID == nil {
-			return fmt.Errorf("old tuple at index %d has no RecordID", i)
-		}
+	if err := validateTuplesHaveRecordIDs(op.oldTuples, "old tuple"); err != nil {
+		return err
 	}
 
-	// Validate all new tuples are not nil
-	for i, t := range op.newTuples {
-		if t == nil {
-			return fmt.Errorf("new tuple at index %d is nil", i)
-		}
+	if err := validateTuplesNotNil(op.newTuples, "new tuple"); err != nil {
+		return err
 	}
 
 	return nil
@@ -100,12 +90,12 @@ func (op *UpdateOp) Validate() error {
 // This operation:
 //  1. Validates the operation
 //  2. Ensures transaction has logged BEGIN record
-//  3. For each tuple pair: deletes old version, inserts new version
-//  4. Updates indexes once after all updates
+//  3. Creates and executes a DeleteOp for all old tuples
+//  4. Creates and executes an InsertOp for all new tuples
 //  5. Records modification for statistics
 //
-// Updates are implemented as delete+insert pairs.
-// On failure at tuple i, tuples 0..i-1 are updated, tuple i and beyond are not modified.
+// Updates are implemented as delete+insert operations using DeleteOp and InsertOp.
+// If deletion succeeds but insertion fails, the old tuples remain deleted (transaction rollback will restore them).
 // The operation becomes marked as executed regardless of success/failure.
 func (op *UpdateOp) Execute() error {
 	if err := op.Validate(); err != nil {
@@ -118,47 +108,16 @@ func (op *UpdateOp) Execute() error {
 		return err
 	}
 
-	tableID := op.dbFile.GetID()
-	heapFile, ok := op.dbFile.(*heap.HeapFile)
-	if !ok {
-		return fmt.Errorf("dbFile must be a HeapFile")
+	deleteOp := op.tm.NewDeleteOp(op.ctx, op.dbFile, op.oldTuples)
+	if err := deleteOp.Execute(); err != nil {
+		return fmt.Errorf("failed to delete old tuples: %v", err)
 	}
 
-	// Perform updates as delete+insert pairs
-	for i := range op.oldTuples {
-		oldTuple := op.oldTuples[i]
-		newTuple := op.newTuples[i]
-
-		if op.tm.indexManager != nil {
-			if err := op.tm.indexManager.OnDelete(op.ctx, tableID, oldTuple); err != nil {
-				return fmt.Errorf("failed to update indexes on delete at index %d: %v", i, err)
-			}
-		}
-
-		modifiedPages, err := op.tm.handleDelete(op.ctx, op.dbFile, oldTuple)
-		if err != nil {
-			return fmt.Errorf("failed to delete old tuple at index %d: %v", i, err)
-		}
-		op.tm.markPagesAsDirty(op.ctx, modifiedPages)
-
-		// Insert new tuple
-		modifiedPages, err = op.tm.handleInsert(op.ctx, newTuple, heapFile)
-		if err != nil {
-			// Try to reinsert old tuple for rollback
-			op.tm.handleInsert(op.ctx, oldTuple, heapFile)
-			return fmt.Errorf("failed to insert new tuple at index %d: %v", i, err)
-		}
-		op.tm.markPagesAsDirty(op.ctx, modifiedPages)
-
-		// Insert index entry for new tuple
-		if op.tm.indexManager != nil {
-			if err := op.tm.indexManager.OnInsert(op.ctx, tableID, newTuple); err != nil {
-				return fmt.Errorf("failed to update indexes on insert at index %d: %v", i, err)
-			}
-		}
-
-		op.updatedCount++
+	insertOp := op.tm.NewInsertOp(op.ctx, op.dbFile, op.newTuples)
+	if err := insertOp.Execute(); err != nil {
+		return fmt.Errorf("failed to insert new tuples: %v", err)
 	}
 
+	op.updatedCount = len(op.oldTuples)
 	return nil
 }

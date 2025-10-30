@@ -3,6 +3,7 @@ package table
 import (
 	"fmt"
 	"storemy/pkg/concurrency/transaction"
+	"storemy/pkg/memory"
 	"storemy/pkg/storage/heap"
 	"storemy/pkg/storage/page"
 	"storemy/pkg/tuple"
@@ -17,7 +18,7 @@ import (
 type InsertOp struct {
 	tm     *TupleManager
 	ctx    *transaction.TransactionContext
-	dbFile page.DbFile
+	dbFile *heap.HeapFile
 	tuples []*tuple.Tuple
 
 	// Track execution state
@@ -35,7 +36,7 @@ type InsertOp struct {
 //
 // Returns:
 //   - *InsertOp: A new insert operation ready to be validated and executed
-func (tm *TupleManager) NewInsertOp(ctx *transaction.TransactionContext, dbFile page.DbFile, tuples []*tuple.Tuple) *InsertOp {
+func (tm *TupleManager) NewInsertOp(ctx *transaction.TransactionContext, dbFile *heap.HeapFile, tuples []*tuple.Tuple) *InsertOp {
 	return &InsertOp{
 		tm:             tm,
 		ctx:            ctx,
@@ -53,37 +54,24 @@ func (tm *TupleManager) NewInsertOp(ctx *transaction.TransactionContext, dbFile 
 //   - At least one tuple to insert
 //   - All tuples have matching schemas
 func (op *InsertOp) Validate() error {
-	if op.executed {
-		return fmt.Errorf("insert operation already executed")
+	if err := validateExecuted(op.executed, "insert"); err != nil {
+		return err
 	}
 
-	if op.ctx == nil {
-		return fmt.Errorf("transaction context cannot be nil")
+	if err := validateTransactionContext(op.ctx); err != nil {
+		return err
 	}
 
-	if op.dbFile == nil {
-		return fmt.Errorf("dbFile cannot be nil")
+	if err := validateDbFile(op.dbFile); err != nil {
+		return err
 	}
 
-	if len(op.tuples) == 0 {
-		return fmt.Errorf("no tuples to insert")
+	if err := validateTuplesNotEmpty(op.tuples, "insert"); err != nil {
+		return err
 	}
 
-	heapFile, ok := op.dbFile.(*heap.HeapFile)
-	if !ok {
-		return fmt.Errorf("dbFile must be a HeapFile for tuple insertion")
-	}
-
-	fileSchema := heapFile.GetTupleDesc()
-	if fileSchema != nil {
-		for i, t := range op.tuples {
-			if t == nil {
-				return fmt.Errorf("tuple at index %d is nil", i)
-			}
-			if !t.TupleDesc.Equals(fileSchema) {
-				return fmt.Errorf("tuple at index %d has incompatible schema", i)
-			}
-		}
+	if err := validateSchemaMatch(op.tuples, op.dbFile); err != nil {
+		return err
 	}
 
 	return nil
@@ -110,10 +98,9 @@ func (op *InsertOp) Execute() error {
 	}
 
 	tableID := op.dbFile.GetID()
-	heapFile := op.dbFile.(*heap.HeapFile)
 
 	for i, t := range op.tuples {
-		modifiedPages, err := op.tm.handleInsert(op.ctx, t, heapFile)
+		modifiedPages, err := op.handleInsert(t)
 		if err != nil {
 			return fmt.Errorf("failed to insert tuple at index %d: %v", i, err)
 		}
@@ -131,4 +118,140 @@ func (op *InsertOp) Execute() error {
 	}
 
 	return nil
+}
+
+// handleInsert executes the insert operation and logs it to WAL.
+// This helper:
+//   - Finds a page with available space (or allocates a new one)
+//   - Acquires exclusive lock on the page through GetPage
+//   - Logs page state to WAL before modification
+//   - Inserts tuple into the page
+//   - Returns all modified pages for dirty tracking
+//
+// Parameters:
+//   - ctx: Transaction context
+//   - t: Tuple to insert
+//   - dbFile: Target heap file
+//
+// Returns:
+//   - modifiedPages: All pages changed by the insert (for dirty tracking)
+//   - error: If insert or WAL logging fails
+func (op *InsertOp) handleInsert(t *tuple.Tuple) ([]*heap.HeapPage, error) {
+	modifiedPages, inserted, err := op.tryInsertIntoExistingPages(t)
+	if err != nil {
+		return nil, err
+	}
+	if inserted {
+		return modifiedPages, nil
+	}
+
+	return op.insertIntoNewPage(t)
+}
+
+// insertIntoNewPage allocates a new page at the end of the heap file and inserts the tuple.
+// This is called when no existing page has sufficient free space for the insertion.
+//
+// The function follows this sequence:
+//  1. Atomically allocate next page number (prevents concurrent allocation races)
+//  2. Create new HeapPage with fresh page buffer
+//  3. Add tuple to the new page
+//  4. Write page to disk through heap file
+//  5. Log operation to WAL for durability
+//  6. Mark page as dirty in transaction context
+func (op *InsertOp) insertIntoNewPage(t *tuple.Tuple) ([]*heap.HeapPage, error) {
+	p, err := op.createNewPage()
+	if err != nil {
+		return nil, err
+	}
+
+	if err := p.AddTuple(t); err != nil {
+		return nil, fmt.Errorf("failed to add tuple to new page: %v", err)
+	}
+
+	if err := op.dbFile.WritePage(p); err != nil {
+		return nil, fmt.Errorf("failed to write new page: %v", err)
+	}
+
+	if err := op.logInsert(p); err != nil {
+		return nil, err
+	}
+
+	p.MarkDirty(true, op.ctx.ID)
+	return []*heap.HeapPage{p}, nil
+}
+
+// tryInsertIntoExistingPages attempts to insert a tuple into any existing page with free space.
+// This scans all pages in the heap file sequentially, looking for the first page with at least
+// one empty slot that can accommodate the tuple.
+//
+// The function follows this sequence for each page:
+//  1. Construct page ID for current page number
+//  2. Acquire exclusive lock via GetPage (ReadWrite mode)
+//  3. Check if page has empty slots (bitmap-based check)
+//  4. Log operation to WAL with before-image
+//  5. Attempt tuple insertion
+//  6. Mark page dirty if insertion succeeds
+//  7. Return immediately on first successful insertion
+//
+// Concurrency Behavior:
+//   - Page-level locks prevent concurrent modifications to the same page
+//   - Multiple transactions can insert into different pages simultaneously
+//   - Lock acquisition may fail (deadlock, timeout) - these pages are skipped
+//   - First-fit strategy: returns first suitable page, not most optimal
+//
+// Performance Considerations:
+//   - O(n) scan of all pages in worst case (no free space found)
+//   - No free space tracking - future optimization opportunity
+//   - Lock contention possible on popular pages
+func (op *InsertOp) tryInsertIntoExistingPages(t *tuple.Tuple) ([]*heap.HeapPage, bool, error) {
+	f := op.dbFile
+	numPages, err := op.dbFile.NumPages()
+	if err != nil {
+		return nil, false, fmt.Errorf("failed to get number of pages: %v", err)
+	}
+
+	for i := range numPages {
+		pageID := page.NewPageDescriptor(f.GetID(), i)
+		pg, err := op.tm.pageProvider.GetPage(op.ctx, op.dbFile, pageID, transaction.ReadWrite)
+		if err != nil {
+			continue
+		}
+
+		heapPage, ok := pg.(*heap.HeapPage)
+		if !ok {
+			continue
+		}
+
+		if heapPage.GetNumEmptySlots() > 0 {
+			if err := op.logInsert(heapPage); err != nil {
+				return nil, false, err
+			}
+
+			if err := heapPage.AddTuple(t); err == nil {
+				heapPage.MarkDirty(true, op.ctx.ID)
+				return []*heap.HeapPage{heapPage}, true, nil
+			}
+		}
+	}
+
+	return nil, false, nil
+}
+
+func (op *InsertOp) createNewPage() (*heap.HeapPage, error) {
+	f := op.dbFile
+	newPageNo, err := f.AllocateNewPage()
+	if err != nil {
+		return nil, fmt.Errorf("failed to allocate new page: %v", err)
+	}
+
+	newPageID := page.NewPageDescriptor(f.GetID(), newPageNo)
+	newPage, err := heap.NewEmptyHeapPage(newPageID, f.GetTupleDesc())
+	if err != nil {
+		return nil, fmt.Errorf("failed to create new page: %v", err)
+	}
+	return newPage, err
+}
+
+func (op *InsertOp) logInsert(page *heap.HeapPage) error {
+	return op.tm.logOperation(memory.InsertOperation, op.ctx.ID, page.GetID(), page.GetPageData())
 }

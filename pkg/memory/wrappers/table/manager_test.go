@@ -539,155 +539,6 @@ func TestTransactionRollback_Insert(t *testing.T) {
 
 // TestTransactionRollback_Update tests rolling back an update operation
 
-// MockStatsRecorder is a mock implementation of StatsRecorder for testing
-type MockStatsRecorder struct {
-	modifications map[primitives.FileID]int
-}
-
-func NewMockStatsRecorder() *MockStatsRecorder {
-	return &MockStatsRecorder{
-		modifications: make(map[primitives.FileID]int),
-	}
-}
-
-func (m *MockStatsRecorder) RecordModification(tableID primitives.FileID) {
-	m.modifications[tableID]++
-}
-
-func (m *MockStatsRecorder) GetModificationCount(tableID primitives.FileID) int {
-	return m.modifications[tableID]
-}
-
-// TestStatsRecorder_Insert tests that stats are recorded on insert
-func TestStatsRecorder_Insert(t *testing.T) {
-	tm, heapFile, ps, cleanup := setupTestEnvironment(t)
-	defer cleanup()
-
-	mockStats := NewMockStatsRecorder()
-	tm.SetStatsManager(mockStats)
-
-	ctx := createTransactionContext(t)
-	testTuple := createTestTuple(heapFile.GetTupleDesc(), 1, "test")
-
-	err := tm.InsertTuple(ctx, heapFile, testTuple)
-	if err != nil {
-		t.Fatalf("InsertTuple failed: %v", err)
-	}
-
-	// Verify stats were recorded
-	count := mockStats.GetModificationCount(heapFile.GetID())
-	if count != 1 {
-		t.Errorf("Expected 1 modification recorded, got %d", count)
-	}
-
-	err = ps.CommitTransaction(ctx)
-	if err != nil {
-		t.Errorf("Failed to commit transaction: %v", err)
-	}
-}
-
-// TestStatsRecorder_Delete tests that stats are recorded on delete
-func TestStatsRecorder_Delete(t *testing.T) {
-	tm, heapFile, ps, cleanup := setupTestEnvironment(t)
-	defer cleanup()
-
-	mockStats := NewMockStatsRecorder()
-	tm.SetStatsManager(mockStats)
-
-	ctx := createTransactionContext(t)
-	testTuple := createTestTuple(heapFile.GetTupleDesc(), 1, "test")
-
-	// Insert
-	err := tm.InsertTuple(ctx, heapFile, testTuple)
-	if err != nil {
-		t.Fatalf("InsertTuple failed: %v", err)
-	}
-
-	// Delete
-	err = tm.DeleteTuple(ctx, heapFile, testTuple)
-	if err != nil {
-		t.Fatalf("DeleteTuple failed: %v", err)
-	}
-
-	// Verify stats were recorded twice (insert + delete)
-	count := mockStats.GetModificationCount(heapFile.GetID())
-	if count != 2 {
-		t.Errorf("Expected 2 modifications recorded, got %d", count)
-	}
-
-	err = ps.CommitTransaction(ctx)
-	if err != nil {
-		t.Errorf("Failed to commit transaction: %v", err)
-	}
-}
-
-// TestStatsRecorder_Update tests that stats are recorded on update
-func TestStatsRecorder_Update(t *testing.T) {
-	tm, heapFile, ps, cleanup := setupTestEnvironment(t)
-	defer cleanup()
-
-	mockStats := NewMockStatsRecorder()
-	tm.SetStatsManager(mockStats)
-
-	ctx := createTransactionContext(t)
-	oldTuple := createTestTuple(heapFile.GetTupleDesc(), 1, "old")
-
-	// Insert
-	err := tm.InsertTuple(ctx, heapFile, oldTuple)
-	if err != nil {
-		t.Fatalf("InsertTuple failed: %v", err)
-	}
-
-	// Update (delete + insert)
-	newTuple := createTestTuple(heapFile.GetTupleDesc(), 1, "new")
-	err = tm.UpdateTuple(ctx, heapFile, oldTuple, newTuple)
-	if err != nil {
-		t.Fatalf("UpdateTuple failed: %v", err)
-	}
-
-	// Verify stats were recorded 3 times (insert + delete + insert)
-	count := mockStats.GetModificationCount(heapFile.GetID())
-	if count != 3 {
-		t.Errorf("Expected 3 modifications recorded, got %d", count)
-	}
-
-	err = ps.CommitTransaction(ctx)
-	if err != nil {
-		t.Errorf("Failed to commit transaction: %v", err)
-	}
-}
-
-// TestStatsRecorder_MultipleOperations tests stats across multiple operations
-func TestStatsRecorder_MultipleOperations(t *testing.T) {
-	tm, heapFile, ps, cleanup := setupTestEnvironment(t)
-	defer cleanup()
-
-	mockStats := NewMockStatsRecorder()
-	tm.SetStatsManager(mockStats)
-
-	ctx := createTransactionContext(t)
-
-	// Insert 10 tuples
-	for i := 0; i < 10; i++ {
-		testTuple := createTestTuple(heapFile.GetTupleDesc(), int64(i), "test")
-		err := tm.InsertTuple(ctx, heapFile, testTuple)
-		if err != nil {
-			t.Fatalf("InsertTuple failed for tuple %d: %v", i, err)
-		}
-	}
-
-	// Verify stats
-	count := mockStats.GetModificationCount(heapFile.GetID())
-	if count != 10 {
-		t.Errorf("Expected 10 modifications recorded, got %d", count)
-	}
-
-	err := ps.CommitTransaction(ctx)
-	if err != nil {
-		t.Errorf("Failed to commit transaction: %v", err)
-	}
-}
-
 // TestConcurrentInserts tests concurrent insertions from multiple transactions
 func TestConcurrentInserts(t *testing.T) {
 	tm, heapFile, ps, cleanup := setupTestEnvironment(t)
@@ -999,8 +850,20 @@ func TestInsertOp_LargeBatch(t *testing.T) {
 	}
 }
 
-// TestInsertOp_ValidationErrors tests various validation failures
-func TestInsertOp_ValidationErrors(t *testing.T) {
+// testOperationValidation is a generic helper for testing batch operation validation.
+// It tests common validation scenarios: nil context, nil dbFile, empty tuples, nil tuple.
+// Additional operation-specific tests can be provided via setupAdditionalTests callback.
+type opFactory func(tm *TupleManager, ctx *transaction.TransactionContext, dbFile page.DbFile, tuples []*tuple.Tuple) TupleOperation
+
+type validationTestCase struct {
+	name      string
+	ctx       *transaction.TransactionContext
+	dbFile    page.DbFile
+	tuples    []*tuple.Tuple
+	wantError bool
+}
+
+func testOperationValidation(t *testing.T, factory opFactory, setupAdditionalTests func(*TupleManager, *heap.HeapFile, *transaction.TransactionContext) []validationTestCase) {
 	tm, heapFile, _, cleanup := setupTestEnvironment(t)
 	defer cleanup()
 
@@ -1009,13 +872,8 @@ func TestInsertOp_ValidationErrors(t *testing.T) {
 		createTestTuple(heapFile.GetTupleDesc(), 1, "test"),
 	}
 
-	tests := []struct {
-		name      string
-		ctx       *transaction.TransactionContext
-		dbFile    page.DbFile
-		tuples    []*tuple.Tuple
-		wantError bool
-	}{
+	// Common validation tests for all operations
+	tests := []validationTestCase{
 		{
 			name:      "nil context",
 			ctx:       nil,
@@ -1046,15 +904,27 @@ func TestInsertOp_ValidationErrors(t *testing.T) {
 		},
 	}
 
+	// Add operation-specific tests
+	if setupAdditionalTests != nil {
+		tests = append(tests, setupAdditionalTests(tm, heapFile, ctx)...)
+	}
+
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			insertOp := tm.NewInsertOp(tt.ctx, tt.dbFile, tt.tuples)
-			err := insertOp.Validate()
+			op := factory(tm, tt.ctx, tt.dbFile, tt.tuples)
+			err := op.Validate()
 			if (err != nil) != tt.wantError {
 				t.Errorf("Validate() error = %v, wantError %v", err, tt.wantError)
 			}
 		})
 	}
+}
+
+// TestInsertOp_ValidationErrors tests various validation failures
+func TestInsertOp_ValidationErrors(t *testing.T) {
+	testOperationValidation(t, func(tm *TupleManager, ctx *transaction.TransactionContext, dbFile page.DbFile, tuples []*tuple.Tuple) TupleOperation {
+		return tm.NewInsertOp(ctx, dbFile, tuples)
+	}, nil)
 }
 
 // TestInsertOp_SchemaMismatch tests batch insert with mismatched schema
@@ -1106,35 +976,6 @@ func TestInsertOp_PreventReexecution(t *testing.T) {
 	err = insertOp.Execute()
 	if err == nil {
 		t.Error("Expected error when executing operation twice")
-	}
-
-	ps.CommitTransaction(ctx)
-}
-
-// TestInsertOp_WithStatsRecorder tests batch insert records stats
-func TestInsertOp_WithStatsRecorder(t *testing.T) {
-	tm, heapFile, ps, cleanup := setupTestEnvironment(t)
-	defer cleanup()
-
-	mockStats := NewMockStatsRecorder()
-	tm.SetStatsManager(mockStats)
-
-	ctx := createTransactionContext(t)
-	tuples := make([]*tuple.Tuple, 5)
-	for i := 0; i < 5; i++ {
-		tuples[i] = createTestTuple(heapFile.GetTupleDesc(), int64(i), "test")
-	}
-
-	insertOp := tm.NewInsertOp(ctx, heapFile, tuples)
-	err := insertOp.Execute()
-	if err != nil {
-		t.Fatalf("Execute() failed: %v", err)
-	}
-
-	// Verify stats recorded once for the batch
-	count := mockStats.GetModificationCount(heapFile.GetID())
-	if count != 1 {
-		t.Errorf("Expected 1 modification recorded for batch, got %d", count)
 	}
 
 	ps.CommitTransaction(ctx)
@@ -1206,74 +1047,22 @@ func TestDeleteOp_LargeBatch(t *testing.T) {
 
 // TestDeleteOp_ValidationErrors tests various validation failures
 func TestDeleteOp_ValidationErrors(t *testing.T) {
-	tm, heapFile, _, cleanup := setupTestEnvironment(t)
-	defer cleanup()
+	testOperationValidation(t, func(tm *TupleManager, ctx *transaction.TransactionContext, dbFile page.DbFile, tuples []*tuple.Tuple) TupleOperation {
+		return tm.NewDeleteOp(ctx, dbFile, tuples)
+	}, func(tm *TupleManager, heapFile *heap.HeapFile, ctx *transaction.TransactionContext) []validationTestCase {
+		// Tuple without RecordID
+		noRecordIDTuple := createTestTuple(heapFile.GetTupleDesc(), 2, "test")
 
-	ctx := createTransactionContext(t)
-
-	// Create a valid tuple with RecordID
-	validTuple := createTestTuple(heapFile.GetTupleDesc(), 1, "test")
-	validTuple.RecordID = tuple.NewTupleRecordID(
-		page.NewPageDescriptor(heapFile.GetID(), 0),
-		0,
-	)
-
-	// Tuple without RecordID
-	noRecordIDTuple := createTestTuple(heapFile.GetTupleDesc(), 2, "test")
-
-	tests := []struct {
-		name      string
-		ctx       *transaction.TransactionContext
-		dbFile    page.DbFile
-		tuples    []*tuple.Tuple
-		wantError bool
-	}{
-		{
-			name:      "nil context",
-			ctx:       nil,
-			dbFile:    heapFile,
-			tuples:    []*tuple.Tuple{validTuple},
-			wantError: true,
-		},
-		{
-			name:      "nil dbFile",
-			ctx:       ctx,
-			dbFile:    nil,
-			tuples:    []*tuple.Tuple{validTuple},
-			wantError: true,
-		},
-		{
-			name:      "empty tuples",
-			ctx:       ctx,
-			dbFile:    heapFile,
-			tuples:    []*tuple.Tuple{},
-			wantError: true,
-		},
-		{
-			name:      "nil tuple in slice",
-			ctx:       ctx,
-			dbFile:    heapFile,
-			tuples:    []*tuple.Tuple{nil},
-			wantError: true,
-		},
-		{
-			name:      "tuple without RecordID",
-			ctx:       ctx,
-			dbFile:    heapFile,
-			tuples:    []*tuple.Tuple{noRecordIDTuple},
-			wantError: true,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			deleteOp := tm.NewDeleteOp(tt.ctx, tt.dbFile, tt.tuples)
-			err := deleteOp.Validate()
-			if (err != nil) != tt.wantError {
-				t.Errorf("Validate() error = %v, wantError %v", err, tt.wantError)
-			}
-		})
-	}
+		return []validationTestCase{
+			{
+				name:      "tuple without RecordID",
+				ctx:       ctx,
+				dbFile:    heapFile,
+				tuples:    []*tuple.Tuple{noRecordIDTuple},
+				wantError: true,
+			},
+		}
+	})
 }
 
 // TestDeleteOp_PreventReexecution tests that delete operations cannot be executed twice
@@ -1302,39 +1091,6 @@ func TestDeleteOp_PreventReexecution(t *testing.T) {
 	err = deleteOp.Execute()
 	if err == nil {
 		t.Error("Expected error when executing operation twice")
-	}
-
-	ps.CommitTransaction(ctx)
-}
-
-// TestDeleteOp_WithStatsRecorder tests batch delete records stats
-func TestDeleteOp_WithStatsRecorder(t *testing.T) {
-	tm, heapFile, ps, cleanup := setupTestEnvironment(t)
-	defer cleanup()
-
-	mockStats := NewMockStatsRecorder()
-	tm.SetStatsManager(mockStats)
-
-	ctx := createTransactionContext(t)
-
-	// Insert tuples
-	tuples := make([]*tuple.Tuple, 3)
-	for i := 0; i < 3; i++ {
-		tuples[i] = createTestTuple(heapFile.GetTupleDesc(), int64(i), "test")
-		tm.InsertTuple(ctx, heapFile, tuples[i])
-	}
-
-	// Batch delete
-	deleteOp := tm.NewDeleteOp(ctx, heapFile, tuples)
-	err := deleteOp.Execute()
-	if err != nil {
-		t.Fatalf("Execute() failed: %v", err)
-	}
-
-	// Verify stats recorded (3 inserts + 1 batch delete)
-	count := mockStats.GetModificationCount(heapFile.GetID())
-	if count != 4 {
-		t.Errorf("Expected 4 modifications recorded, got %d", count)
 	}
 
 	ps.CommitTransaction(ctx)
@@ -1542,41 +1298,6 @@ func TestUpdateOp_PreventReexecution(t *testing.T) {
 	err = updateOp.Execute()
 	if err == nil {
 		t.Error("Expected error when executing operation twice")
-	}
-
-	ps.CommitTransaction(ctx)
-}
-
-// TestUpdateOp_WithStatsRecorder tests batch update records stats
-func TestUpdateOp_WithStatsRecorder(t *testing.T) {
-	tm, heapFile, ps, cleanup := setupTestEnvironment(t)
-	defer cleanup()
-
-	mockStats := NewMockStatsRecorder()
-	tm.SetStatsManager(mockStats)
-
-	ctx := createTransactionContext(t)
-
-	// Insert old tuples
-	oldTuples := make([]*tuple.Tuple, 3)
-	newTuples := make([]*tuple.Tuple, 3)
-	for i := 0; i < 3; i++ {
-		oldTuples[i] = createTestTuple(heapFile.GetTupleDesc(), int64(i), "old")
-		tm.InsertTuple(ctx, heapFile, oldTuples[i])
-		newTuples[i] = createTestTuple(heapFile.GetTupleDesc(), int64(i), "new")
-	}
-
-	// Batch update
-	updateOp := tm.NewUpdateOp(ctx, heapFile, oldTuples, newTuples)
-	err := updateOp.Execute()
-	if err != nil {
-		t.Fatalf("Execute() failed: %v", err)
-	}
-
-	// Verify stats recorded (3 inserts + 1 batch update)
-	count := mockStats.GetModificationCount(heapFile.GetID())
-	if count != 4 {
-		t.Errorf("Expected 4 modifications recorded, got %d", count)
 	}
 
 	ps.CommitTransaction(ctx)

@@ -33,11 +33,6 @@ func (o OperationType) String() string {
 	return "UNKNOWN"
 }
 
-// StatsRecorder interface for recording table modifications (to avoid circular dependency)
-type StatsRecorder interface {
-	RecordModification(tableID primitives.FileID)
-}
-
 // TupleOperation defines the interface for batch tuple operations.
 // Each operation is scoped to a single transaction context and can operate on multiple tuples.
 type TupleOperation interface {
@@ -56,12 +51,10 @@ type TupleOperation interface {
 //   - WAL logging for all tuple operations
 //   - Transaction coordination for tuple operations
 //   - Index maintenance on all DML operations
-//   - Statistics tracking for query optimization
 
 type TupleManager struct {
 	pageProvider *memory.PageStore
 	wal          *wal.WAL
-	statsManager StatsRecorder
 	indexManager *indexmanager.IndexManager
 }
 
@@ -70,14 +63,8 @@ func NewTupleManager(store *memory.PageStore) *TupleManager {
 	return &TupleManager{
 		pageProvider: store,
 		wal:          store.GetWal(),
-		statsManager: nil,
 		indexManager: nil,
 	}
-}
-
-// SetStatsManager sets the statistics manager for tracking table modifications
-func (tm *TupleManager) SetStatsManager(sm StatsRecorder) {
-	tm.statsManager = sm
 }
 
 // SetIndexManager sets the index manager for maintaining indexes on tuple operations
@@ -90,7 +77,6 @@ func (tm *TupleManager) SetIndexManager(im *indexmanager.IndexManager) {
 //   - Logs the insert to WAL before modification (Write-Ahead Logging)
 //   - Acquires exclusive lock on target page(s)
 //   - Marks modified pages as dirty in transaction's write set
-//   - Records modification for statistics updates
 //
 // The tuple may span multiple pages if the table has large tuples or requires page splits.
 // All modified pages are tracked for commit/abort processing.
@@ -105,7 +91,6 @@ func (tm *TupleManager) InsertTuple(ctx *transaction.TransactionContext, dbFile 
 //   - Logs the delete to WAL with before-image
 //   - Acquires exclusive lock on the containing page
 //   - Marks tuple as deleted (may compact page or leave tombstone)
-//   - Records modification for statistics updates
 //
 // MVCC Consideration: The tuple may not be immediately removed from the page.
 // Older transactions may still need to see the deleted version for snapshot isolation.
@@ -185,7 +170,6 @@ func (tm *TupleManager) UpdateTuple(ctx *transaction.TransactionContext, dbFile 
 //  3. Log operation to WAL before page modification
 //  4. Mark modified pages as dirty
 //  5. Update all indexes for the table (automatic index maintenance)
-//  6. Record modification for statistics
 func (tm *TupleManager) performDataOperation(operation OperationType, ctx *transaction.TransactionContext, dbFile page.DbFile, tableID primitives.FileID, t *tuple.Tuple) error {
 	if ctx == nil {
 		return fmt.Errorf("transaction context cannot be nil")
@@ -224,10 +208,6 @@ func (tm *TupleManager) performDataOperation(operation OperationType, ctx *trans
 		if err := tm.indexManager.OnInsert(ctx, tableID, t); err != nil {
 			return fmt.Errorf("failed to update indexes on insert: %v", err)
 		}
-	}
-
-	if tm.statsManager != nil {
-		tm.statsManager.RecordModification(tableID)
 	}
 
 	return nil
@@ -447,7 +427,7 @@ func (tm *TupleManager) logOperation(operation memory.OperationType, tid *primit
 // Parameters:
 //   - ctx: Transaction context that modified the pages
 //   - pages: All pages that were modified
-func (tm *TupleManager) markPagesAsDirty(ctx *transaction.TransactionContext, pages []page.Page) {
+func (tm *TupleManager) markPagesAsDirty(ctx *transaction.TransactionContext, pages []*heap.HeapPage) {
 	for _, pg := range pages {
 		pg.MarkDirty(true, ctx.ID)
 		ctx.MarkPageDirty(pg.GetID())

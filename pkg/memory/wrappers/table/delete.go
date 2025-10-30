@@ -49,29 +49,24 @@ func (tm *TupleManager) NewDeleteOp(ctx *transaction.TransactionContext, dbFile 
 //   - At least one tuple to delete
 //   - All tuples have valid RecordIDs
 func (op *DeleteOp) Validate() error {
-	if op.executed {
-		return fmt.Errorf("delete operation already executed")
+	if err := validateExecuted(op.executed, "delete"); err != nil {
+		return err
 	}
 
-	if op.ctx == nil {
-		return fmt.Errorf("transaction context cannot be nil")
+	if err := validateTransactionContext(op.ctx); err != nil {
+		return err
 	}
 
-	if op.dbFile == nil {
-		return fmt.Errorf("dbFile cannot be nil")
+	if err := validateDbFile(op.dbFile); err != nil {
+		return err
 	}
 
-	if len(op.tuples) == 0 {
-		return fmt.Errorf("no tuples to delete")
+	if err := validateTuplesNotEmpty(op.tuples, "delete"); err != nil {
+		return err
 	}
 
-	for i, t := range op.tuples {
-		if t == nil {
-			return fmt.Errorf("tuple at index %d is nil", i)
-		}
-		if t.RecordID == nil {
-			return fmt.Errorf("tuple at index %d has no RecordID", i)
-		}
+	if err := validateTuplesHaveRecordIDs(op.tuples, "tuple"); err != nil {
+		return err
 	}
 
 	return nil
