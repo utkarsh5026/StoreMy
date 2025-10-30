@@ -122,7 +122,7 @@ func (p *DropTablePlan) dropTableIndexes(tableID primitives.FileID) error {
 			continue
 		}
 
-		if err := im.DeletePhysicalIndex(filePath); err != nil {
+		if err := im.NewFileOps(filePath).DeletePhysicalIndex(); err != nil {
 			fmt.Printf("Warning: failed to delete index file %s: %v\n", filePath, err)
 		}
 

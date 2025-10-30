@@ -78,3 +78,36 @@ func (r *ExplainResult) String() string {
 func (r *ExplainResult) Type() ResultType {
 	return ExplainResultType
 }
+
+// NewDDLResult creates a new DDL result with the given success status and message.
+func NewDDLResult(success bool, message string) *DDLResult {
+	return &DDLResult{
+		Success: success,
+		Message: message,
+	}
+}
+
+// NewDMLResult creates a new DML result with the given rows affected and message.
+func NewDMLResult(rowsAffected int, message string) *DMLResult {
+	return &DMLResult{
+		RowsAffected: rowsAffected,
+		Message:      message,
+	}
+}
+
+// NewSelectQueryResult creates a new SELECT query result with the given tuple description and tuples.
+func NewSelectQueryResult(tupleDesc *tuple.TupleDescription, tuples []*tuple.Tuple) *SelectQueryResult {
+	return &SelectQueryResult{
+		TupleDesc: tupleDesc,
+		Tuples:    tuples,
+	}
+}
+
+// NewExplainResult creates a new EXPLAIN result with the given plan, format, and analyze flag.
+func NewExplainResult(plan string, format string, analyze bool) *ExplainResult {
+	return &ExplainResult{
+		Plan:    plan,
+		Format:  format,
+		Analyze: analyze,
+	}
+}

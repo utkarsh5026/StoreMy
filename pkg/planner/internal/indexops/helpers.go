@@ -35,9 +35,9 @@ type IndexCreationConfig struct {
 //
 // Returns the actual index ID from the physical file.
 func createPhysicalIndexWithCleanup(cf *IndexCreationConfig) (primitives.FileID, error) {
-	im := cf.Ctx.IndexManager()
+	im := cf.Ctx.IndexManager().NewFileOps(cf.FilePath)
 
-	actualIndexID, err := im.CreatePhysicalIndex(cf.FilePath, cf.ColumnType, cf.IndexType)
+	actualIndexID, err := im.CreatePhysicalIndex(cf.ColumnType, cf.IndexType)
 	if err != nil {
 		return 0, fmt.Errorf("failed to create physical index: %v", err)
 	}

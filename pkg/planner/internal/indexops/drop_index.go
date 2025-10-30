@@ -72,10 +72,7 @@ func (p *DropIndexPlan) Execute() (result.Result, error) {
 
 	if !cm.IndexExists(p.tx, idxName) {
 		if p.Statement.IfExists {
-			return &result.DDLResult{
-				Success: true,
-				Message: fmt.Sprintf("Index %s does not exist (IF EXISTS)", idxName),
-			}, nil
+			return result.NewDDLResult(true, fmt.Sprintf("Index %s does not exist (IF EXISTS)", idxName)), nil
 		}
 		return nil, fmt.Errorf("index %s does not exist", idxName)
 	}
@@ -88,10 +85,7 @@ func (p *DropIndexPlan) Execute() (result.Result, error) {
 		return nil, err
 	}
 
-	return &result.DDLResult{
-		Success: true,
-		Message: fmt.Sprintf("Index %s dropped successfully", idxName),
-	}, nil
+	return result.NewDDLResult(true, fmt.Sprintf("Index %s dropped successfully", idxName)), nil
 }
 
 // deleteIndex removes the index from catalog and deletes its physical file.
@@ -114,8 +108,8 @@ func (p *DropIndexPlan) deleteIndex() error {
 		return fmt.Errorf("failed to drop index from catalog: %w", err)
 	}
 
-	im := p.ctx.IndexManager()
-	if err := im.DeletePhysicalIndex(filePath); err != nil {
+	im := p.ctx.IndexManager().NewFileOps(filePath)
+	if err := im.DeletePhysicalIndex(); err != nil {
 		fmt.Printf("Warning: failed to delete index file %s: %v\n", filePath, err)
 	}
 	return nil
@@ -153,6 +147,5 @@ func (p *DropIndexPlan) validateTable() error {
 				p.Statement.IndexName, tableName)
 		}
 	}
-
 	return nil
 }
