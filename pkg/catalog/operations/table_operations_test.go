@@ -479,7 +479,7 @@ func TestGetTableMetadataByName_Unicode(t *testing.T) {
 	}
 
 	for i, name := range unicodeNames {
-		tup := systemtable.Tables.CreateTuple(*createTableTuple(fid(i), name, fmt.Sprintf("/data/%d.dat", i), "id"))
+		tup := systemtable.Tables.CreateTuple(*createTableTuple(fid(i+1), name, fmt.Sprintf("/data/%d.dat", i), "id"))
 		mock.tuples[tableTableID] = append(mock.tuples[tableTableID], tup)
 	}
 
