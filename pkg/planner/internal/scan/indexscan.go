@@ -2,23 +2,24 @@ package scan
 
 import (
 	"fmt"
-	"math"
-	"storemy/pkg/catalog/systemtable"
+	"slices"
+	"storemy/pkg/catalog/schema"
 	"storemy/pkg/concurrency/transaction"
+	"storemy/pkg/execution/query"
 	"storemy/pkg/execution/scanner"
 	"storemy/pkg/iterator"
-	btreeindex "storemy/pkg/memory/wrappers/btree_index"
-	hashindex "storemy/pkg/memory/wrappers/hash_index"
 	"storemy/pkg/plan"
 	"storemy/pkg/primitives"
 	"storemy/pkg/registry"
-	"storemy/pkg/storage/heap"
-	"storemy/pkg/storage/index"
-	"storemy/pkg/storage/index/btree"
-	"storemy/pkg/storage/index/hash"
 	"storemy/pkg/types"
 	"strings"
 )
+
+type IndexScannerBuilder struct {
+	tx      *transaction.TransactionContext
+	ctx     *registry.DatabaseContext
+	tableID primitives.FileID
+}
 
 // tryBuildIndexScan attempts to construct an index scan operator for the given filter.
 // Returns (operator, true, nil) if index scan was successfully created.
@@ -30,211 +31,110 @@ import (
 //  2. Find an index on the filtered column
 //  3. Check if the predicate is index-friendly (=, <, >, <=, >=)
 //  4. Create appropriate IndexScan operator (equality or range)
-func tryBuildIndexScan(
-	tx *transaction.TransactionContext,
-	tableID primitives.FileID,
-	heapFile *heap.HeapFile,
+func (b *IndexScannerBuilder) TryBuildIndexScan(
 	filter *plan.FilterNode,
-	ctx *registry.DatabaseContext,
 ) (iterator.DbIterator, bool, error) {
-	cm := ctx.CatalogManager()
+	indexCol, err := b.getIndexColumn(filter)
+	if err != nil {
+		return nil, false, err
+	}
 
-	indexes, err := cm.GetIndexesByTable(tx, tableID)
-	if err != nil || len(indexes) == 0 {
+	if indexCol == primitives.InvalidColumnID {
 		return nil, false, nil
 	}
 
-	fieldName := extractFieldName(filter.Field)
-	var selectedIndex *systemtable.IndexMetadata
-	for _, idx := range indexes {
-		if strings.EqualFold(idx.ColumnName, fieldName) {
-			selectedIndex = idx
-			break
-		}
+	indexCfg, err := b.createIndexConfig(indexCol)
+	if err != nil {
+		return nil, false, err
+	}
+	pred, err := buildPredicateFromFilterNode(filter, indexCfg.HeapFile.GetTupleDesc())
+	if err != nil {
+		return nil, false, err
 	}
 
-	if selectedIndex == nil {
-		return nil, false, nil
-	}
-
-	// Step 3: Check if predicate is index-friendly and create appropriate scan
 	switch filter.Predicate {
 	case primitives.Equals:
-		// Can use index.Search() for both Hash and BTree indexes
-		return buildIndexEqualityScan(tx, heapFile, selectedIndex, filter, ctx)
+		return b.buildIndexEqualityScan(*indexCfg, *pred)
 
 	case primitives.GreaterThan, primitives.LessThan,
 		primitives.GreaterThanOrEqual, primitives.LessThanOrEqual:
-		// Can only use range search for BTree indexes
-		if selectedIndex.IndexType == index.BTreeIndex {
-			return buildIndexRangeScan(tx, heapFile, selectedIndex, filter, ctx)
-		}
+		return b.buildIndexRangeScan(*indexCfg, *pred)
 	}
-
-	// Predicate not suitable for index scan
 	return nil, false, nil
 }
 
 // buildIndexEqualityScan creates an IndexScan operator for equality predicates (=).
 // Works with both Hash and BTree indexes.
-func buildIndexEqualityScan(
-	tx *transaction.TransactionContext,
-	heapFile *heap.HeapFile,
-	indexMeta *systemtable.IndexMetadata,
-	filter *plan.FilterNode,
-	ctx *registry.DatabaseContext,
-) (iterator.DbIterator, bool, error) {
-	// Get the column type from the heap file schema
-	fieldName := extractFieldName(filter.Field)
-	fieldIndex, err := heapFile.GetTupleDesc().FindFieldIndex(fieldName)
-	if err != nil {
-		return nil, false, fmt.Errorf("field %s not found in schema: %w", fieldName, err)
-	}
-
-	fieldType, _ := heapFile.GetTupleDesc().TypeAtIndex(fieldIndex)
-
-	// Parse the search key value
-	searchKey, err := types.CreateFieldFromConstant(fieldType, filter.Constant)
-	if err != nil {
-		return nil, false, fmt.Errorf("failed to parse search key: %w", err)
-	}
-
-	// Load the index
-	idx, err := loadIndex(indexMeta, tx, ctx)
-	if err != nil {
-		return nil, false, fmt.Errorf("failed to load index: %w", err)
-	}
-
-	// Create index scan operator
-	indexScan, err := scanner.NewIndexEqualityScan(tx, idx, heapFile, ctx.PageStore(), searchKey)
+func (b *IndexScannerBuilder) buildIndexEqualityScan(cfg scanner.IndexScanConfig, pred query.Predicate) (iterator.DbIterator, bool, error) {
+	indexScan, err := scanner.NewIndexEqualityScan(cfg, pred.Value())
 	if err != nil {
 		return nil, false, fmt.Errorf("failed to create index scan: %w", err)
 	}
-
 	return indexScan, true, nil
 }
 
 // buildIndexRangeScan creates an IndexScan operator for range predicates (<, >, <=, >=).
 // Only works with BTree indexes.
-func buildIndexRangeScan(
-	tx *transaction.TransactionContext,
-	heapFile *heap.HeapFile,
-	indexMeta *systemtable.IndexMetadata,
-	filter *plan.FilterNode,
-	ctx *registry.DatabaseContext,
-) (iterator.DbIterator, bool, error) {
-	// Get the column type from the heap file schema
-	fieldName := extractFieldName(filter.Field)
-	fieldIndex, err := heapFile.GetTupleDesc().FindFieldIndex(fieldName)
+// For strict inequalities (< and >), a post-filter is applied to exclude the boundary value.
+func (b *IndexScannerBuilder) buildIndexRangeScan(cfg scanner.IndexScanConfig, pred query.Predicate) (iterator.DbIterator, bool, error) {
+	start, end, needsFilter, err := getRangeVal(pred.Operation(), pred.Value())
 	if err != nil {
-		return nil, false, fmt.Errorf("field %s not found in schema: %w", fieldName, err)
+		return nil, false, fmt.Errorf("failed to get range values: %w", err)
 	}
-
-	fieldType, _ := heapFile.GetTupleDesc().TypeAtIndex(fieldIndex)
-
-	// Parse the comparison value
-	compareValue, err := types.CreateFieldFromConstant(fieldType, filter.Constant)
-	if err != nil {
-		return nil, false, fmt.Errorf("failed to parse comparison value: %w", err)
-	}
-
-	// Determine the range bounds based on the predicate
-	var startKey, endKey types.Field
-	switch filter.Predicate {
-	case primitives.GreaterThan:
-		// WHERE x > 5: range is (5, max]
-		startKey = compareValue
-		endKey = getMaxValueForType(fieldType)
-	case primitives.GreaterThanOrEqual:
-		// WHERE x >= 5: range is [5, max]
-		startKey = compareValue
-		endKey = getMaxValueForType(fieldType)
-	case primitives.LessThan:
-		// WHERE x < 5: range is [min, 5)
-		startKey = getMinValueForType(fieldType)
-		endKey = compareValue
-	case primitives.LessThanOrEqual:
-		// WHERE x <= 5: range is [min, 5]
-		startKey = getMinValueForType(fieldType)
-		endKey = compareValue
-	default:
-		return nil, false, fmt.Errorf("unsupported range predicate: %v", filter.Predicate)
-	}
-
-	// Load the index
-	idx, err := loadIndex(indexMeta, tx, ctx)
-	if err != nil {
-		return nil, false, fmt.Errorf("failed to load index: %w", err)
-	}
-
-	// Create index scan operator
-	indexScan, err := scanner.NewIndexRangeScan(tx, idx, heapFile, ctx.PageStore(), startKey, endKey)
+	indexScan, err := scanner.NewIndexRangeScan(cfg, start, end)
 	if err != nil {
 		return nil, false, fmt.Errorf("failed to create range scan: %w", err)
+	}
+
+	// For strict inequalities (< or >), wrap with a filter to exclude boundary value
+	if needsFilter {
+		filterOp, err := query.NewFilter(&pred, indexScan)
+		if err != nil {
+			return nil, false, fmt.Errorf("failed to create boundary filter: %w", err)
+		}
+		return filterOp, true, nil
 	}
 
 	return indexScan, true, nil
 }
 
-// loadIndex loads an index from disk based on its metadata.
-// Returns an appropriate index wrapped in an adapter for interface compatibility.
-func loadIndex(indexMeta *systemtable.IndexMetadata, tx *transaction.TransactionContext, ctx *registry.DatabaseContext) (index.Index, error) {
-	switch indexMeta.IndexType {
-	case index.HashIndex:
-		// Open the hash index file
-		hashFile, err := hash.NewHashFile(indexMeta.FilePath, types.IntType, hash.DefaultBuckets)
-		if err != nil {
-			return nil, fmt.Errorf("failed to open hash index file: %w", err)
-		}
-		hashIdx := hashindex.NewHashIndex(indexMeta.IndexID, hashFile.GetKeyType(), hashFile, ctx.PageStore(), tx)
-		return hashIdx, nil
-
-	case index.BTreeIndex:
-		// Open the btree index file
-		btreeFile, err := btree.NewBTreeFile(indexMeta.FilePath, types.IntType)
-		if err != nil {
-			return nil, fmt.Errorf("failed to open btree index file: %w", err)
-		}
-		btreeIdx := btreeindex.NewBTree(indexMeta.IndexID, btreeFile.GetKeyType(), btreeFile, tx, ctx.PageStore())
-		return btreeIdx, nil
-
-	default:
-		return nil, fmt.Errorf("unsupported index type: %s", indexMeta.IndexType)
+func (b *IndexScannerBuilder) createIndexConfig(column primitives.ColumnID) (*scanner.IndexScanConfig, error) {
+	heapFile, err := getHeapFileForTable(b.ctx, b.tableID)
+	if err != nil {
+		return nil, err
 	}
+
+	loader := b.ctx.IndexManager().NewLoader(b.tx)
+	idx, err := loader.LoadIndexForCol(column, b.tableID)
+	if err != nil {
+		return nil, fmt.Errorf("error in loading index")
+	}
+
+	return &scanner.IndexScanConfig{
+		Tx:       b.tx,
+		Index:    idx,
+		HeapFile: heapFile,
+		Store:    b.ctx.PageStore(),
+	}, nil
 }
 
-// getMinValueForType returns the minimum value for a given type (for range queries).
-func getMinValueForType(t types.Type) types.Field {
-	switch t {
-	case types.IntType:
-		return types.NewIntField(math.MaxInt64) // math.MinInt64
-	case types.FloatType:
-		return types.NewFloat64Field(-math.MaxFloat64) // -math.MaxFloat64
-	case types.StringType:
-		return types.NewStringField("", types.StringMaxSize)
-	case types.BoolType:
-		return types.NewBoolField(false)
-	default:
-		return nil
+func (b *IndexScannerBuilder) getIndexColumn(filter *plan.FilterNode) (primitives.ColumnID, error) {
+	cm := b.ctx.CatalogManager()
+	sch, err := cm.GetTableSchema(b.tx, b.tableID)
+	if err != nil {
+		return primitives.InvalidColumnID, err
 	}
-}
 
-// getMaxValueForType returns the maximum value for a given type (for range queries).
-func getMaxValueForType(t types.Type) types.Field {
-	switch t {
-	case types.IntType:
-		return types.NewIntField(math.MaxInt64) // math.MaxInt64
-	case types.FloatType:
-		return types.NewFloat64Field(math.MaxFloat64) // math.MaxFloat64
-	case types.StringType:
-		// For strings, use a very high Unicode character repeated
-		maxStr := strings.Repeat("\U0010FFFF", types.StringMaxSize/4)
-		return types.NewStringField(maxStr, types.StringMaxSize)
-	case types.BoolType:
-		return types.NewBoolField(true)
-	default:
-		return nil
+	fieldName := extractFieldName(filter.Field)
+	indexCol := slices.IndexFunc(sch.Columns, func(c schema.ColumnMetadata) bool {
+		return fieldName == c.Name
+	})
+
+	if indexCol == -1 {
+		return primitives.InvalidColumnID, nil
 	}
+
+	return sch.Columns[indexCol].Position, nil
 }
 
 // extractFieldName extracts the field name from a qualified name.
@@ -242,4 +142,41 @@ func getMaxValueForType(t types.Type) types.Field {
 func extractFieldName(qualifiedName string) string {
 	parts := strings.Split(qualifiedName, ".")
 	return parts[len(parts)-1]
+}
+
+// getRangeVal converts a range predicate into start/end keys for index scanning.
+// Returns (startKey, endKey, needsPostFilter, error).
+// needsPostFilter is true for strict inequalities (< and >) which require filtering
+// the boundary value after the index scan.
+func getRangeVal(pred primitives.Predicate, compareValue types.Field) (types.Field, types.Field, bool, error) {
+	fieldType := compareValue.Type()
+	var startKey, endKey types.Field
+	var needsFilter bool
+
+	switch pred {
+	case primitives.GreaterThan:
+		// WHERE x > 5: scan [5, max] but filter out x == 5
+		startKey = compareValue
+		endKey = types.GetMaxValueFor(fieldType)
+		needsFilter = true
+	case primitives.GreaterThanOrEqual:
+		// WHERE x >= 5: scan [5, max]
+		startKey = compareValue
+		endKey = types.GetMaxValueFor(fieldType)
+		needsFilter = false
+	case primitives.LessThan:
+		// WHERE x < 5: scan [min, 5] but filter out x == 5
+		startKey = types.GetMinValueFor(fieldType)
+		endKey = compareValue
+		needsFilter = true
+	case primitives.LessThanOrEqual:
+		// WHERE x <= 5: scan [min, 5]
+		startKey = types.GetMinValueFor(fieldType)
+		endKey = compareValue
+		needsFilter = false
+	default:
+		return nil, nil, false, fmt.Errorf("unsupported range predicate: %v", pred)
+	}
+
+	return startKey, endKey, needsFilter, nil
 }

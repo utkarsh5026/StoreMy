@@ -40,7 +40,8 @@ func BuildScanWithFilter(tx *transaction.TransactionContext, tableID primitives.
 	}
 
 	if whereClause != nil {
-		indexOp, usedIndex, err := tryBuildIndexScan(tx, tableID, heapFile, whereClause, ctx)
+		idxBuilder := IndexScannerBuilder{tx: tx, ctx: ctx, tableID: tableID}
+		indexOp, usedIndex, err := idxBuilder.TryBuildIndexScan(whereClause)
 		if err != nil {
 			fmt.Printf("Warning: index scan failed, falling back to sequential scan: %v\n", err)
 		} else if usedIndex {
