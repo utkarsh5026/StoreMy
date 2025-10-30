@@ -125,3 +125,9 @@ func (im *IndexManager) NewLoader(tx *transaction.TransactionContext) *IndexLoad
 		store:   im.pageStore,
 	}
 }
+
+func (im *IndexManager) NewFileOps(filePath primitives.Filepath) *IndexFileOps {
+	return &IndexFileOps{
+		f: filePath,
+	}
+}
