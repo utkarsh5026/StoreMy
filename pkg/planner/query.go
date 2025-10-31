@@ -80,6 +80,10 @@ func (qp *QueryPlanner) Plan(stmt statements.Statement, tx TxContext) (Plan, err
 		stmtType = "SHOW_INDEXES"
 		log.Info("planning query", "statement_type", stmtType, "table", s.TableName)
 		return indexops.NewShowIndexesPlan(s, qp.ctx, tx), nil
+	case *statements.ExplainStatement:
+		stmtType = "EXPLAIN"
+		log.Info("planning query", "statement_type", stmtType)
+		return NewExplainPlan(s, qp.ctx, tx), nil
 	default:
 		log.Error("unsupported statement type", "type", fmt.Sprintf("%T", stmt))
 		return nil, fmt.Errorf("unsupported statement type: %T", stmt)

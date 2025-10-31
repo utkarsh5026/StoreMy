@@ -114,8 +114,11 @@ func (a *AggregateNode) GetChildren() []PlanNode {
 type SortNode struct {
 	BasePlanNode
 	Child      PlanNode // Input relation
-	SortKeys   []string // Sort key expressions
+	SortKey    string   // Sort key (for single column sorts)
+	SortKeys   []string // Sort key expressions (for multi-column sorts)
 	Directions []string // "ASC" or "DESC" for each key
+	Ascending  bool     // True for ASC, false for DESC (for single column)
+	Order      string   // "ASC" or "DESC" (for single column)
 }
 
 func (s *SortNode) GetNodeType() string {
@@ -205,4 +208,116 @@ func (d *DistinctNode) String() string {
 
 func (d *DistinctNode) GetChildren() []PlanNode {
 	return []PlanNode{d.Child}
+}
+
+// SetOpNode represents a set operation (UNION, INTERSECT, EXCEPT)
+type SetOpNode struct {
+	BasePlanNode
+	LeftChild  PlanNode // Left input relation
+	RightChild PlanNode // Right input relation
+	OpType     string   // "UNION", "INTERSECT", "EXCEPT", etc.
+}
+
+func (s *SetOpNode) GetNodeType() string {
+	return "SetOp"
+}
+
+func (s *SetOpNode) String() string {
+	var sb strings.Builder
+	sb.WriteString(fmt.Sprintf("SetOp(type=%s, cost=%.2f, rows=%d)\n",
+		s.OpType, s.Cost, s.Cardinality))
+	sb.WriteString(indent(s.LeftChild.String(), 2))
+	sb.WriteString(indent(s.RightChild.String(), 2))
+	return sb.String()
+}
+
+func (s *SetOpNode) GetChildren() []PlanNode {
+	return []PlanNode{s.LeftChild, s.RightChild}
+}
+
+// InsertNode represents an INSERT operation
+type InsertNode struct {
+	BasePlanNode
+	TableName string // Table to insert into
+	NumRows   int    // Number of rows to insert
+}
+
+func (i *InsertNode) GetNodeType() string {
+	return "Insert"
+}
+
+func (i *InsertNode) String() string {
+	return fmt.Sprintf("Insert(table=%s, rows=%d, cost=%.2f)\n",
+		i.TableName, i.NumRows, i.Cost)
+}
+
+func (i *InsertNode) GetChildren() []PlanNode {
+	return []PlanNode{}
+}
+
+// UpdateNode represents an UPDATE operation
+type UpdateNode struct {
+	BasePlanNode
+	Child     PlanNode // Input relation (scanned rows to update)
+	TableName string   // Table to update
+	SetFields int      // Number of fields being set
+}
+
+func (u *UpdateNode) GetNodeType() string {
+	return "Update"
+}
+
+func (u *UpdateNode) String() string {
+	var sb strings.Builder
+	sb.WriteString(fmt.Sprintf("Update(table=%s, fields=%d, cost=%.2f, rows=%d)\n",
+		u.TableName, u.SetFields, u.Cost, u.Cardinality))
+	sb.WriteString(indent(u.Child.String(), 2))
+	return sb.String()
+}
+
+func (u *UpdateNode) GetChildren() []PlanNode {
+	return []PlanNode{u.Child}
+}
+
+// DeleteNode represents a DELETE operation
+type DeleteNode struct {
+	BasePlanNode
+	Child     PlanNode // Input relation (scanned rows to delete)
+	TableName string   // Table to delete from
+}
+
+func (d *DeleteNode) GetNodeType() string {
+	return "Delete"
+}
+
+func (d *DeleteNode) String() string {
+	var sb strings.Builder
+	sb.WriteString(fmt.Sprintf("Delete(table=%s, cost=%.2f, rows=%d)\n",
+		d.TableName, d.Cost, d.Cardinality))
+	sb.WriteString(indent(d.Child.String(), 2))
+	return sb.String()
+}
+
+func (d *DeleteNode) GetChildren() []PlanNode {
+	return []PlanNode{d.Child}
+}
+
+// DDLNode represents a DDL operation (CREATE, DROP, ALTER)
+type DDLNode struct {
+	BasePlanNode
+	Operation  string // "CREATE TABLE", "DROP INDEX", etc.
+	ObjectName string // Name of object being created/dropped/altered
+}
+
+func (d *DDLNode) GetNodeType() string {
+	return "DDL"
+}
+
+func (d *DDLNode) String() string {
+	return fmt.Sprintf("DDL(operation=%s, object=%s, cost=%.2f)\n",
+		d.Operation, d.ObjectName, d.Cost)
+}
+
+func (d *DDLNode) GetChildren() []PlanNode {
+	return []PlanNode{}
 }
