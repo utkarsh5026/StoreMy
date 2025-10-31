@@ -131,3 +131,17 @@ func (im *IndexManager) NewFileOps(filePath primitives.Filepath) *IndexFileOps {
 		f: filePath,
 	}
 }
+
+// CreatePhysicalIndex creates a physical index file and returns its file ID.
+// This is a convenience wrapper that delegates to IndexFileOps.
+func (im *IndexManager) CreatePhysicalIndex(filePath primitives.Filepath, keyType types.Type, indexType index.IndexType) (primitives.FileID, error) {
+	ops := im.NewFileOps(filePath)
+	return ops.CreatePhysicalIndex(keyType, indexType)
+}
+
+// DeletePhysicalIndex removes a physical index file from disk.
+// This is a convenience wrapper that delegates to IndexFileOps.
+func (im *IndexManager) DeletePhysicalIndex(filePath primitives.Filepath) error {
+	ops := im.NewFileOps(filePath)
+	return ops.DeletePhysicalIndex()
+}
