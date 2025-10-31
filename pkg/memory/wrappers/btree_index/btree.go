@@ -70,6 +70,9 @@ func NewBTree(indexID primitives.FileID, keyType types.Type, file *BTreeFile, tx
 		store:   store,
 	}
 
+	// Set the index ID on the file to ensure page ID validation works correctly
+	file.SetIndexID(indexID)
+
 	// Register the BTreeFile with the PageStore so it can flush pages properly
 	store.RegisterDbFile(primitives.FileID(indexID), file)
 

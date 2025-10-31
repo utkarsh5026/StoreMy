@@ -70,6 +70,8 @@ type HashIndex struct {
 //
 // Returns a configured HashIndex ready for insert/search operations.
 func NewHashIndex(indexID primitives.FileID, keyType types.Type, file *hash.HashFile, store *memory.PageStore, tx *transaction.TransactionContext) *HashIndex {
+	// Set the index ID on the file to ensure page ID validation works correctly
+	file.SetIndexID(indexID)
 	store.RegisterDbFile(primitives.FileID(indexID), file)
 
 	return &HashIndex{
