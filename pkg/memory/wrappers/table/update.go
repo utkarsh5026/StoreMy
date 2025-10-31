@@ -63,6 +63,11 @@ func (op *UpdateOp) Validate() error {
 		return err
 	}
 
+	// Check for nil heap file before converting to interface
+	if op.dbFile == nil {
+		return fmt.Errorf("dbFile cannot be nil")
+	}
+
 	if err := validateDbFile(op.dbFile); err != nil {
 		return err
 	}

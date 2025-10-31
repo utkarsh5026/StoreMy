@@ -923,7 +923,12 @@ func testOperationValidation(t *testing.T, factory opFactory, setupAdditionalTes
 // TestInsertOp_ValidationErrors tests various validation failures
 func TestInsertOp_ValidationErrors(t *testing.T) {
 	testOperationValidation(t, func(tm *TupleManager, ctx *transaction.TransactionContext, dbFile page.DbFile, tuples []*tuple.Tuple) TupleOperation {
-		return tm.NewInsertOp(ctx, dbFile.(*heap.HeapFile), tuples)
+		// Handle nil dbFile case to avoid panic during type assertion
+		var heapFile *heap.HeapFile
+		if dbFile != nil {
+			heapFile = dbFile.(*heap.HeapFile)
+		}
+		return tm.NewInsertOp(ctx, heapFile, tuples)
 	}, nil)
 }
 
@@ -1048,7 +1053,12 @@ func TestDeleteOp_LargeBatch(t *testing.T) {
 // TestDeleteOp_ValidationErrors tests various validation failures
 func TestDeleteOp_ValidationErrors(t *testing.T) {
 	testOperationValidation(t, func(tm *TupleManager, ctx *transaction.TransactionContext, dbFile page.DbFile, tuples []*tuple.Tuple) TupleOperation {
-		return tm.NewDeleteOp(ctx, dbFile.(*heap.HeapFile), tuples)
+		// Handle nil dbFile case to avoid panic during type assertion
+		var heapFile *heap.HeapFile
+		if dbFile != nil {
+			heapFile = dbFile.(*heap.HeapFile)
+		}
+		return tm.NewDeleteOp(ctx, heapFile, tuples)
 	}, func(tm *TupleManager, heapFile *heap.HeapFile, ctx *transaction.TransactionContext) []validationTestCase {
 		// Tuple without RecordID
 		noRecordIDTuple := createTestTuple(heapFile.GetTupleDesc(), 2, "test")
