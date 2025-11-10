@@ -92,8 +92,8 @@ func (p *DropTablePlan) drop(tableID primitives.FileID) error {
 //   - nil on success (even if some index deletions fail)
 //   - Never returns error (failures are logged as warnings)
 func (p *DropTablePlan) dropTableIndexes(tableID primitives.FileID) error {
-	cm := p.ctx.CatalogManager()
-	ops := cm.NewIndexOps(p.tx)
+	ops := p.ctx.CatalogManager().NewIndexOps(p.tx)
+
 	indexes, err := ops.GetIndexesByTable(tableID)
 	if err != nil {
 		return nil

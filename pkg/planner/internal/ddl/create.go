@@ -41,14 +41,10 @@ func NewCreateTablePlan(stmt *statements.CreateStatement, ctx DbContext,
 //  5. If primary key is specified, creates a BTree index on the primary key column
 func (p *CreateTablePlan) Execute() (result.Result, error) {
 	cm := p.ctx.CatalogManager()
-	if cm.TableExists(p.TxContext, p.Statement.TableName) {
-		if p.Statement.IfNotExists {
-			return &result.DDLResult{
-				Success: true,
-				Message: fmt.Sprintf("Table %s already exists (IF NOT EXISTS)", p.Statement.TableName),
-			}, nil
-		}
-		return nil, fmt.Errorf("table %s already exists", p.Statement.TableName)
+
+	res, err := p.checkTableExists()
+	if err != nil || res != nil {
+		return res, err
 	}
 
 	tableSchema, err := p.makeTableSchema()
@@ -64,7 +60,6 @@ func (p *CreateTablePlan) Execute() (result.Result, error) {
 	var indexMessage string
 	if p.Statement.PrimaryKey != "" {
 		if err := p.createPrimaryKeyIndex(tableID, tableSchema); err != nil {
-			fmt.Printf("Warning: failed to create primary key index: %v\n", err)
 			indexMessage = fmt.Sprintf(" (primary key index creation failed: %v)", err)
 		} else {
 			indexMessage = fmt.Sprintf(" with BTree index on primary key %s", p.Statement.PrimaryKey)
@@ -77,26 +72,37 @@ func (p *CreateTablePlan) Execute() (result.Result, error) {
 	}, nil
 }
 
+func (p *CreateTablePlan) checkTableExists() (*result.DDLResult, error) {
+	cm := p.ctx.CatalogManager()
+	tableName := p.Statement.TableName
+	if cm.TableExists(p.TxContext, tableName) {
+		if p.Statement.IfNotExists {
+			msg := fmt.Sprintf("Table %s already exists (IF NOT EXISTS)", tableName)
+			return result.NewDDLResult(true, msg), nil
+		}
+		return nil, fmt.Errorf("table %s already exists", tableName)
+	}
+	return nil, nil
+}
+
 func (p *CreateTablePlan) makeTableSchema() (*schema.Schema, error) {
-	columns := make([]schema.ColumnMetadata, len(p.Statement.Fields))
-	for i, field := range p.Statement.Fields {
+	builder := schema.NewSchemaBuilder(primitives.InvalidFileID, p.Statement.TableName)
+	for _, field := range p.Statement.Fields {
 		isPrimary := field.Name == p.Statement.PrimaryKey
-		columns[i] = schema.ColumnMetadata{
-			Name:      field.Name,
-			FieldType: field.Type,
-			Position:  primitives.ColumnID(i),
-			IsPrimary: isPrimary,
-			IsAutoInc: field.AutoIncrement,
-			TableID:   0, // Will be set by CatalogManager
+
+		switch {
+		case isPrimary && field.AutoIncrement:
+			builder.AddAutoIncrement(field.Name)
+
+		case isPrimary:
+			builder.AddPrimaryKey(field.Name, field.Type)
+
+		default:
+			builder.AddColumn(field.Name, field.Type)
 		}
 	}
 
-	tableSchema, err := schema.NewSchema(0, p.Statement.TableName, columns)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create schema: %v", err)
-	}
-	tableSchema.PrimaryKey = p.Statement.PrimaryKey
-	return tableSchema, nil
+	return builder.Build()
 }
 
 // createPrimaryKeyIndex creates a BTree index on the primary key column.
@@ -112,22 +118,19 @@ func (p *CreateTablePlan) createPrimaryKeyIndex(tableID primitives.FileID, table
 	cm := p.ctx.CatalogManager()
 	indexOps := cm.NewIndexOps(p.TxContext)
 
-	pkColumnIndex, err := tableSchema.GetFieldIndex(p.Statement.PrimaryKey)
+	pkIndex, err := tableSchema.GetFieldIndex(p.Statement.PrimaryKey)
 	if err != nil {
 		return fmt.Errorf("primary key column %s not found in schema %w", p.Statement.PrimaryKey, err)
 	}
 
-	pkColumn := tableSchema.Columns[pkColumnIndex]
+	pkColumn := tableSchema.Columns[pkIndex]
 	indexName := fmt.Sprintf("pk_%s_%s", p.Statement.TableName, p.Statement.PrimaryKey)
 
 	if indexOps.IndexExists(indexName) {
 		return nil
 	}
 
-	// Generate file path using centralized helper
 	filePath := indexops.GenerateIndexFilePath(p.ctx, p.Statement.TableName, indexName)
-
-	// Step 1: Create physical index file and get actual ID
 	idxConfig := indexops.IndexCreationConfig{
 		Ctx:         p.ctx,
 		Tx:          p.TxContext,
@@ -136,7 +139,7 @@ func (p *CreateTablePlan) createPrimaryKeyIndex(tableID primitives.FileID, table
 		FilePath:    filePath,
 		TableID:     tableID,
 		TableName:   p.Statement.TableName,
-		ColumnIndex: pkColumnIndex,
+		ColumnIndex: pkIndex,
 		ColumnName:  p.Statement.PrimaryKey,
 		ColumnType:  pkColumn.FieldType,
 	}
@@ -151,9 +154,6 @@ func (p *CreateTablePlan) createPrimaryKeyIndex(tableID primitives.FileID, table
 		return fmt.Errorf("failed to register index in catalog: %v", err)
 	}
 
-	// Update config with actual ID for population
 	idxConfig.IndexID = actualIndexID
-
-	// Step 3: Populate the index
 	return indexops.PopulateIndexWithData(&idxConfig)
 }
