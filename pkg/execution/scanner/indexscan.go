@@ -75,76 +75,58 @@ func (cfg *IndexScanConfig) validate() error {
 }
 
 // NewIndexEqualityScan creates a new index scan operator for equality predicates.
-// This scan uses index.Search() to find tuples matching the exact key value.
 //
 // Parameters:
 //   - cfg: Configuration containing transaction, index, heap file, and page store
 //   - searchKey: The exact key value to search for (e.g., 5 for "WHERE id = 5")
 //
 // Returns a configured IndexScan operator or an error if initialization fails.
-func NewIndexEqualityScan(cfg IndexScanConfig, searchKey types.Field,
-) (*IndexScan, error) {
+func NewIndexEqualityScan(cfg IndexScanConfig, searchKey types.Field) (*IndexScan, error) {
 	if err := cfg.validate(); err != nil {
 		return nil, err
 	}
 
-	is := &IndexScan{
-		tx:         cfg.Tx,
-		idx:        cfg.Index,
-		heapFile:   cfg.HeapFile,
-		store:      cfg.Store,
-		tupleDesc:  cfg.HeapFile.GetTupleDesc(),
-		scanType:   EqualityScan,
-		searchKey:  searchKey,
-		currentPos: 0,
-	}
+	is := createIndexScan(&cfg, EqualityScan)
+	is.searchKey = searchKey
 
 	is.base = iterator.NewBaseIterator(is.readNext)
 	return is, nil
 }
 
-// NewIndexRangeScan creates a new index scan operator for range predicates.
-// This scan uses index.RangeSearch() to find tuples within a key range.
+// NewIndexRangeScan creates a new index scan operator for range predicates
 //
 // Parameters:
 //   - cfg: Configuration containing transaction, index, heap file, and page store
 //   - startKey: Lower bound of the range (inclusive)
 //   - endKey: Upper bound of the range (inclusive)
-//
-// Returns a configured IndexScan operator or an error if initialization fails.
-func NewIndexRangeScan(
-	cfg IndexScanConfig,
-	startKey types.Field,
-	endKey types.Field,
-) (*IndexScan, error) {
+func NewIndexRangeScan(cfg IndexScanConfig, start, end types.Field) (*IndexScan, error) {
 	if err := cfg.validate(); err != nil {
 		return nil, err
 	}
 
-	is := &IndexScan{
-		tx:         cfg.Tx,
-		idx:        cfg.Index,
-		heapFile:   cfg.HeapFile,
-		store:      cfg.Store,
-		tupleDesc:  cfg.HeapFile.GetTupleDesc(),
-		scanType:   RangeScan,
-		startKey:   startKey,
-		endKey:     endKey,
-		currentPos: 0,
-	}
+	is := createIndexScan(&cfg, RangeScan)
+	is.startKey = start
+	is.endKey = end
 
 	is.base = iterator.NewBaseIterator(is.readNext)
 	return is, nil
 }
 
+// createIndexScan creates IndexScan from config
+func createIndexScan(cfg *IndexScanConfig, scanType IndexScanType) *IndexScan {
+	return &IndexScan{
+		tx:        cfg.Tx,
+		idx:       cfg.Index,
+		heapFile:  cfg.HeapFile,
+		store:     cfg.Store,
+		tupleDesc: cfg.HeapFile.GetTupleDesc(),
+		scanType:  scanType,
+	}
+}
+
 // Open initializes the IndexScan operator by performing the index lookup.
 // This is where the actual index search happens - we get all matching RecordIDs
 // from the index, then fetch tuples from the heap file during iteration.
-//
-// Execution flow:
-//  1. Perform index search (equality or range)
-//  2. Store resulting RecordIDs in memory
-//  3. Reset position to start of results
 //
 // Returns an error if the index search fails.
 func (is *IndexScan) Open() error {
@@ -232,18 +214,18 @@ func (is *IndexScan) readNext() (*tuple.Tuple, error) {
 //   - The tuple at the given RID, or nil if the tuple has been deleted
 //   - An error if page fetch or tuple extraction fails
 func (is *IndexScan) fetchTupleByRID(rid RecID) (*tuple.Tuple, error) {
-	pageID := rid.PageID
-	page, err := is.store.GetPage(is.tx, is.heapFile, pageID.(*page.PageDescriptor), transaction.ReadOnly)
+	pageID := rid.PageID.(*page.PageDescriptor)
+	page, err := is.store.GetPageReadOnly(is.tx, is.heapFile, pageID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get page %v: %w", pageID, err)
 	}
 
-	heapPage, ok := page.(*heap.HeapPage)
+	hp, ok := page.(*heap.HeapPage)
 	if !ok {
 		return nil, fmt.Errorf("expected HeapPage, got %T", page)
 	}
 
-	tup, err := heapPage.GetTupleAt(rid.TupleNum)
+	tup, err := hp.GetTupleAt(rid.TupleNum)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get tuple at slot %d: %w", rid.TupleNum, err)
 	}

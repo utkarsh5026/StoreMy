@@ -397,3 +397,30 @@ func (p *PageStore) getDbFileForPage(pageID primitives.PageID) (page.PageIO, err
 func (p *PageStore) GetWal() *wal.WAL {
 	return p.wal
 }
+
+// GetPageReadOnly retrieves a page for read-only access
+//
+// Parameters:
+//   - ctx: Transaction context (must not be nil)
+//   - pageIO: Page I/O interface for reading the page from disk if not cached
+//   - pid: Page identifier (contains table ID and page number)
+//
+// Returns a read-only copy of the page that cannot modify the cache.
+func (p *PageStore) GetPageReadOnly(ctx TxContext, pageIO page.PageIO, pid *page.PageDescriptor) (page.Page, error) {
+	page, err := p.GetPage(ctx, pageIO, pid, transaction.ReadOnly)
+	if err != nil {
+		return nil, fmt.Errorf("error getting page for read-only operation %w", err)
+	}
+
+	return page, nil
+}
+
+// GetPageWriteOnly retrieves a page for write-only access with a write lock.
+//
+// Parameters:
+//   - ctx: Transaction context (must not be nil)
+//   - pageIO: Page I/O interface for reading the page from disk if not cached
+//   - pid: Page identifier (contains table ID and page number)
+func (p *PageStore) GetPageForWrite(ctx TxContext, pageIO page.PageIO, pid *page.PageDescriptor) (page.Page, error) {
+	return p.GetPage(ctx, pageIO, pid, transaction.ReadWrite)
+}
