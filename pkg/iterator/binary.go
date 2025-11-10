@@ -10,12 +10,6 @@ import (
 // It combines BaseIterator's caching logic with dual-child operator management,
 // eliminating boilerplate code in Join, Union, Intersect, and similar operators.
 //
-// BinaryOperator handles:
-// - Opening/closing both left and right child operators
-// - Delegating HasNext/Next to BaseIterator
-// - Providing FetchLeft/FetchRight helpers for reading from children
-// - Managing rewind operations for both children
-//
 // Operators that embed BinaryOperator only need to implement their specific
 // readNext logic - all lifecycle management is handled automatically.
 type BinaryOperator struct {
@@ -47,42 +41,45 @@ func NewBinaryOperator(leftChild, rightChild DbIterator, readNextFunc ReadNextFu
 // Returns the tuple if available, nil if no more tuples, or error.
 // Handles all the HasNext/Next ceremony internally.
 func (b *BinaryOperator) FetchLeft() (*tuple.Tuple, error) {
-	hasNext, err := b.leftChild.HasNext()
+	t, err := b.fetchChild(b.leftChild)
 	if err != nil {
-		return nil, fmt.Errorf("error checking if left child has next: %w", err)
+		return nil, fmt.Errorf("error fetching left child %w", err)
 	}
-
-	if !hasNext {
-		return nil, nil
-	}
-
-	leftTuple, err := b.leftChild.Next()
-	if err != nil {
-		return nil, fmt.Errorf("error getting next tuple from left child: %w", err)
-	}
-
-	return leftTuple, nil
+	return t, nil
 }
 
 // FetchRight retrieves the next tuple from the right child operator.
 // Returns the tuple if available, nil if no more tuples, or error.
 // Handles all the HasNext/Next ceremony internally.
 func (b *BinaryOperator) FetchRight() (*tuple.Tuple, error) {
-	hasNext, err := b.rightChild.HasNext()
+	t, err := b.fetchChild(b.rightChild)
 	if err != nil {
-		return nil, fmt.Errorf("error checking if right child has next: %w", err)
+		return nil, fmt.Errorf("error fetching right child tuple: %w", err)
+	}
+	return t, nil
+}
+
+// fetchChild retrieves the next tuple from a child iterator.
+// It first checks if the child iterator has a next tuple available using HasNext().
+// If a tuple is available, it fetches and returns it using Next().
+// Returns nil if the child iterator has no more tuples.
+// Returns an error if either HasNext() or Next() operations fail.
+func (b *BinaryOperator) fetchChild(child DbIterator) (*tuple.Tuple, error) {
+	hasNext, err := child.HasNext()
+	if err != nil {
+		return nil, fmt.Errorf("error checking if child has next: %w", err)
 	}
 
 	if !hasNext {
 		return nil, nil
 	}
 
-	rightTuple, err := b.rightChild.Next()
+	t, err := child.Next()
 	if err != nil {
-		return nil, fmt.Errorf("error getting next tuple from right child: %w", err)
+		return nil, fmt.Errorf("error getting next tuple from child: %w", err)
 	}
 
-	return rightTuple, nil
+	return t, nil
 }
 
 // Open opens both child operators and marks this operator as ready.
@@ -104,16 +101,12 @@ func (b *BinaryOperator) Open() error {
 func (b *BinaryOperator) Close() error {
 	var errs []error
 
-	if b.leftChild != nil {
-		if err := b.leftChild.Close(); err != nil {
-			errs = append(errs, fmt.Errorf("left child close: %w", err))
-		}
+	if err := b.leftChild.Close(); err != nil {
+		errs = append(errs, fmt.Errorf("left child close: %w", err))
 	}
 
-	if b.rightChild != nil {
-		if err := b.rightChild.Close(); err != nil {
-			errs = append(errs, fmt.Errorf("right child close: %w", err))
-		}
+	if err := b.rightChild.Close(); err != nil {
+		errs = append(errs, fmt.Errorf("right child close: %w", err))
 	}
 
 	if err := b.base.Close(); err != nil {
