@@ -11,22 +11,12 @@ import (
 	"storemy/pkg/tuple"
 	"storemy/pkg/types"
 	"strings"
+	"sync"
 )
 
 // ShowIndexesPlan represents the execution plan for SHOW INDEXES statement.
 // It retrieves index metadata from the CATALOG_INDEXES system table and returns
 // it as a result set.
-//
-// Execution flow:
-//  1. Validates optional table name if specified
-//  2. Retrieves index metadata from catalog
-//  3. Filters by table name if specified
-//  4. Converts metadata to tuples for display
-//  5. Returns SelectQueryResult with index information
-//
-// Transaction Semantics:
-//   - Read-only operation (uses shared locks on CATALOG_INDEXES)
-//   - No modifications to catalog or disk
 //
 // Example:
 //
@@ -44,10 +34,6 @@ type ShowIndexesPlan struct {
 //   - stmt: Parsed SHOW INDEXES statement containing optional table name
 //   - ctx: Database context providing access to CatalogManager
 //   - tx: Active transaction for catalog reads
-//
-// Returns:
-//
-//	Plan ready for execution via Execute() method
 func NewShowIndexesPlan(
 	stmt *statements.ShowIndexesStatement,
 	ctx *registry.DatabaseContext,
@@ -77,18 +63,15 @@ func (p *ShowIndexesPlan) Execute() (result.Result, error) {
 
 	if p.Statement.TableName != "" {
 		indexes, err = p.getIndexesForTable()
-		if err != nil {
-			return nil, err
-		}
 	} else {
 		indexes, err = p.getAllIndexes()
-		if err != nil {
-			return nil, fmt.Errorf("failed to retrieve indexes: %w", err)
-		}
+	}
+
+	if err != nil {
+		return nil, err
 	}
 
 	tupleDesc, tuples := p.createResultTuples(indexes)
-
 	return &result.SelectQueryResult{
 		TupleDesc: tupleDesc,
 		Tuples:    tuples,
@@ -131,13 +114,6 @@ func (p *ShowIndexesPlan) getAllIndexes() ([]*systemtable.IndexMetadata, error) 
 
 // createResultTuples converts index metadata into displayable tuples.
 //
-// Result schema:
-//   - index_name STRING
-//   - table_name STRING
-//   - column_name STRING
-//   - index_type STRING
-//   - created_at INT
-//
 // Parameters:
 //   - indexes: Slice of IndexMetadata to convert
 //
@@ -145,6 +121,28 @@ func (p *ShowIndexesPlan) getAllIndexes() ([]*systemtable.IndexMetadata, error) 
 //   - TupleDescription for the result schema
 //   - Slice of tuples containing index information
 func (p *ShowIndexesPlan) createResultTuples(indexes []*systemtable.IndexMetadata) (*tuple.TupleDescription, []*tuple.Tuple) {
+	sch := p.createIndexSchema()
+	var tuples []*tuple.Tuple
+
+	tupChan := make(chan *tuple.Tuple, len(indexes))
+
+	var wg sync.WaitGroup
+	for _, idx := range indexes {
+		wg.Go(func() {
+			p.createIndexTuple(idx, sch.TupleDesc, tupChan)
+		})
+	}
+
+	wg.Wait()
+	close(tupChan)
+
+	for t := range tupChan {
+		tuples = append(tuples, t)
+	}
+	return sch.TupleDesc, tuples
+}
+
+func (p *ShowIndexesPlan) createIndexSchema() *schema.Schema {
 	sch, _ := schema.NewSchemaBuilder(systemtable.InvalidTableID, "show_indexes_result").
 		AddColumn("index_name", types.StringType).
 		AddColumn("table_name", types.StringType).
@@ -152,28 +150,22 @@ func (p *ShowIndexesPlan) createResultTuples(indexes []*systemtable.IndexMetadat
 		AddColumn("index_type", types.StringType).
 		AddColumn("created_at", types.IntType).
 		Build()
+	return sch
+}
 
-	tupleDesc := sch.TupleDesc
-
-	var tuples []*tuple.Tuple
-	cm := p.ctx.CatalogManager()
-
-	for _, idx := range indexes {
-		tableName, err := cm.GetTableName(p.tx, idx.TableID)
-		if err != nil {
-			tableName = fmt.Sprintf("table_%d", idx.TableID)
-		}
-
-		t := tuple.NewBuilder(tupleDesc).
-			AddString(idx.IndexName).
-			AddString(tableName).
-			AddString(idx.ColumnName).
-			AddString(strings.ToUpper(string(idx.IndexType))).
-			AddTimestamp(idx.CreatedAt).
-			MustBuild()
-
-		tuples = append(tuples, t)
+func (p *ShowIndexesPlan) createIndexTuple(idx *systemtable.IndexMetadata, td *tuple.TupleDescription, tupChan chan<- *tuple.Tuple) {
+	tableName, err := p.ctx.CatalogManager().GetTableName(p.tx, idx.TableID)
+	if err != nil {
+		tableName = fmt.Sprintf("table_%d", idx.TableID)
 	}
 
-	return tupleDesc, tuples
+	t := tuple.NewBuilder(td).
+		AddString(idx.IndexName).
+		AddString(tableName).
+		AddString(idx.ColumnName).
+		AddString(strings.ToUpper(string(idx.IndexType))).
+		AddTimestamp(idx.CreatedAt).
+		MustBuild()
+
+	tupChan <- t
 }
