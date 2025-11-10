@@ -112,25 +112,7 @@ func (s *Sort) sortTuples(tuples []*tuple.Tuple) error {
 			return false
 		}
 
-		field1, err := tuples[i].GetField(s.sortField)
-		if err != nil || field1 == nil {
-			sortErr = fmt.Errorf("failed to get sort field from tuple %d: %w", i, err)
-			return false
-		}
-
-		field2, err := tuples[j].GetField(s.sortField)
-		if err != nil || field2 == nil {
-			sortErr = fmt.Errorf("failed to get sort field from tuple %d: %w", j, err)
-			return false
-		}
-
-		var lessThan bool
-		if s.ascending {
-			lessThan, err = field1.Compare(primitives.LessThan, field2)
-		} else {
-			lessThan, err = field2.Compare(primitives.LessThan, field1)
-		}
-
+		lessThan, err := s.compare(tuples, i, j)
 		if err != nil {
 			sortErr = fmt.Errorf("failed to compare fields: %w", err)
 			return false
@@ -140,6 +122,38 @@ func (s *Sort) sortTuples(tuples []*tuple.Tuple) error {
 	})
 
 	return sortErr
+}
+
+// compare compares two tuples at indices i and j based on the sort field.
+// It extracts the sort field from both tuples and performs a compares them
+//
+// Parameters:
+//   - tuples: slice of tuples to compare
+//   - i: index of the first tuple
+//   - j: index of the second tuple
+//
+// Returns:
+//   - bool: true if the first tuple should come before the second in sort order
+//   - error: any error encountered during field retrieval or comparison
+func (s *Sort) compare(tuples []*tuple.Tuple, i, j int) (bool, error) {
+	field1, err := tuples[i].GetField(s.sortField)
+	if err != nil || field1 == nil {
+		return false, fmt.Errorf("failed to get sort field from tuple %d: %w", i, err)
+	}
+
+	field2, err := tuples[j].GetField(s.sortField)
+	if err != nil || field2 == nil {
+		return false, fmt.Errorf("failed to get sort field from tuple %d: %w", j, err)
+	}
+
+	var lessThan bool
+	if s.ascending {
+		lessThan, err = field1.Compare(primitives.LessThan, field2)
+	} else {
+		lessThan, err = field2.Compare(primitives.LessThan, field1)
+	}
+
+	return lessThan, err
 }
 
 // readNext returns the next tuple from the sorted slice.
