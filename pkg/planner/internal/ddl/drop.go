@@ -2,9 +2,12 @@ package ddl
 
 import (
 	"fmt"
+	"storemy/pkg/catalog/catalogmanager"
 	"storemy/pkg/parser/statements"
 	"storemy/pkg/planner/internal/result"
 	"storemy/pkg/primitives"
+
+	"golang.org/x/sync/errgroup"
 )
 
 // DropTablePlan represents the execution plan for DROP TABLE statement.
@@ -43,14 +46,6 @@ func NewDropTablePlan(
 
 // Execute performs the DROP TABLE operation within the current transaction.
 //
-// Execution steps:
-//  1. Checks if table exists via CatalogManager.TableExists()
-//  2. If missing and IF EXISTS specified, returns success without error
-//  3. Retrieves table ID for cascade index deletion
-//  4. Drops all indexes associated with the table (CASCADE behavior)
-//  5. Removes table entry from CATALOG_TABLES
-//  6. CatalogManager handles heap file cleanup and buffer pool eviction
-//
 // Returns:
 //   - DDLResult with success message on completion
 //   - Error if table doesn't exist (without IF EXISTS) or operation fails
@@ -60,10 +55,7 @@ func (p *DropTablePlan) Execute() (result.Result, error) {
 
 	if !cm.TableExists(p.tx, tableName) {
 		if p.Statement.IfExists {
-			return &result.DDLResult{
-				Success: true,
-				Message: fmt.Sprintf("Table %s does not exist (IF EXISTS)", tableName),
-			}, nil
+			return result.NewDDLResult(true, fmt.Sprintf("Table %s does not exist (IF EXISTS)", tableName)), nil
 		}
 		return nil, fmt.Errorf("table %s does not exist", tableName)
 	}
@@ -73,62 +65,61 @@ func (p *DropTablePlan) Execute() (result.Result, error) {
 		return nil, fmt.Errorf("failed to get table ID: %w", err)
 	}
 
-	if err := p.dropTableIndexes(tableID); err != nil {
+	if err := p.drop(tableID); err != nil {
 		return nil, fmt.Errorf("failed to drop table indexes: %w", err)
 	}
 
-	if err := cm.DropTable(p.tx, tableName); err != nil {
-		return nil, fmt.Errorf("failed to drop table: %w", err)
+	return result.NewDDLResult(true, fmt.Sprintf("Table %s dropped successfully", tableName)), nil
+}
+
+func (p *DropTablePlan) drop(tableID primitives.FileID) error {
+	cm := p.ctx.CatalogManager()
+
+	if err := p.dropTableIndexes(tableID); err != nil {
+		return fmt.Errorf("failed to drop table indexes: %w", err)
 	}
 
-	return &result.DDLResult{
-		Success: true,
-		Message: fmt.Sprintf("Table %s dropped successfully", tableName),
-	}, nil
+	if err := cm.DropTable(p.tx, p.Statement.TableName); err != nil {
+		return fmt.Errorf("failed to drop table: %w", err)
+	}
+
+	return nil
 }
 
 // dropTableIndexes drops all indexes associated with a table (CASCADE semantics).
-//
-// This includes:
-//   - User-created indexes (CREATE INDEX statements)
-//   - Auto-generated primary key indexes (internal B+ trees)
-//   - Any unique constraint indexes (if implemented)
-//
-// Process:
-//  1. Retrieves all indexes for the table via CatalogManager.GetIndexesByTable()
-//  2. For each index:
-//     a. Removes from CATALOG_INDEXES via CatalogManager.DropIndex()
-//     b. Deletes physical index file via IndexManager.DeletePhysicalIndex()
-//  3. Logs warnings for failures but continues (best-effort cleanup)
 //
 // Returns:
 //   - nil on success (even if some index deletions fail)
 //   - Never returns error (failures are logged as warnings)
 func (p *DropTablePlan) dropTableIndexes(tableID primitives.FileID) error {
 	cm := p.ctx.CatalogManager()
-	im := p.ctx.IndexManager()
 	ops := cm.NewIndexOps(p.tx)
 	indexes, err := ops.GetIndexesByTable(tableID)
 	if err != nil {
-		fmt.Printf("Warning: failed to get indexes for table: %v\n", err)
 		return nil
 	}
 
-	var droppedCount int
+	var g errgroup.Group
 	for _, indexMeta := range indexes {
-		metadata, err := ops.DropIndex(indexMeta.IndexName)
-		if err != nil {
-			return fmt.Errorf("failed to drop index from catalog: %w", err)
-		}
-
-		if err := im.NewFileOps(metadata.FilePath).DeletePhysicalIndex(); err != nil {
-			return fmt.Errorf("failed to delete index file %s: %w", metadata.FilePath, err)
-		}
-		droppedCount++
+		g.Go(func() error {
+			return p.dropIndex(ops, indexMeta.IndexName)
+		})
 	}
 
-	if droppedCount > 0 {
-		fmt.Printf("Dropped %d index(es) associated with the table\n", droppedCount)
+	if err := g.Wait(); err != nil {
+		return fmt.Errorf("getting error when dropping index %w", err)
+	}
+	return nil
+}
+
+func (p *DropTablePlan) dropIndex(ops *catalogmanager.IndexCatalogOperation, indexName string) error {
+	metadata, err := ops.DropIndex(indexName)
+	if err != nil {
+		return fmt.Errorf("failed to drop index from catalog: %w", err)
+	}
+
+	if err := p.ctx.IndexManager().NewFileOps(metadata.FilePath).DeletePhysicalIndex(); err != nil {
+		return fmt.Errorf("failed to delete index file %s: %w", metadata.FilePath, err)
 	}
 
 	return nil
