@@ -4,7 +4,11 @@
     <option name="autoReloadType" value="SELECTIVE" />
   </component>
   <component name="CargoProjects">
-    <cargoProject FILE="$PROJECT_DIR$/storemy-rs/Cargo.toml" />
+    <cargoProject FILE="$PROJECT_DIR$/db/Cargo.toml">
+      <package file="$PROJECT_DIR$/db">
+        <feature name="default" enabled="true" />
+      </package>
+    </cargoProject>
   </component>
   <component name="ChangeListManager">
     <list default="true" id="e1ae0b87-b3c0-4220-9290-7c9133dd8700" name="Changes" comment="">
@@ -21,6 +25,7 @@
       <entry key="_C:/Users/Utkarsh Priyadarshi/GolandProjects/StoreMy" value="2yHjWhzUM15HlzzYAIbGsAubRat" />
     </persistenceIdMap>
   </component>
+  <component name="ExecutionTargetManager" SELECTED_TARGET="RsBuildProfile:dev" />
   <component name="FileTemplateManagerImpl">
     <option name="RECENT_TEMPLATES">
       <list>
@@ -45,6 +50,7 @@
   </component>
   <component name="PropertiesComponent"><![CDATA[{
   "keyToString": {
+    "Cargo.Run storemy.executor": "Run",
     "ModuleVcsDetector.initialDetectionPerformed": "true",
     "Python tests.pytest for test_bitmap_slot.TestBitmapSlotManager.executor": "Run",
     "Python tests.pytest for test_bitmap_slot.TestBitmapSlotManager.test_find_free_slot_empty_manager.executor": "Run",
@@ -145,7 +151,7 @@
     "node.js.selected.package.tslint": "(autodetect)",
     "nodejs_package_manager_path": "npm",
     "org.rust.cargo.project.model.PROJECT_DISCOVERY": "true",
-    "settings.editor.selected.configurable": "preferences.keymap",
+    "settings.editor.selected.configurable": "language.rust",
     "vue.rearranger.settings.migration": "true"
   }
 }]]></component>
@@ -158,7 +164,25 @@
       <recent name="C:\Users\Utkarsh Priyadarshi\WebstormProjects\StoreMy\app\primitives" />
     </key>
   </component>
-  <component name="RunManager" selected="Python tests.pytest for test_json.TestJsonExtraction.test_extract_and_clean_json_direct">
+  <component name="RunManager" selected="Cargo.Run storemy">
+    <configuration name="Run storemy" type="CargoCommandRunConfiguration" factoryName="Cargo Command" temporary="true">
+      <option name="buildProfileId" value="dev" />
+      <option name="command" value="run --package storemy --bin storemy" />
+      <option name="workingDirectory" value="file://$PROJECT_DIR$/db" />
+      <envs />
+      <option name="emulateTerminal" value="true" />
+      <option name="channel" value="DEFAULT" />
+      <option name="requiredFeatures" value="true" />
+      <option name="allFeatures" value="false" />
+      <option name="withSudo" value="false" />
+      <option name="buildTarget" value="REMOTE" />
+      <option name="backtrace" value="SHORT" />
+      <option name="isRedirectInput" value="false" />
+      <option name="redirectInputPath" value="" />
+      <method v="2">
+        <option name="CARGO.BUILD_TASK_PROVIDER" enabled="true" />
+      </method>
+    </configuration>
     <configuration name="pytest for test_json.TestJsonExtraction.test_extract_and_clean_json_direct" type="tests" factoryName="py.test" temporary="true" nameIsGenerated="true">
       <module name="StoreMy" />
       <option name="ENV_FILES" value="" />
@@ -192,24 +216,6 @@
       <option name="_new_parameters" value="&quot;&quot;" />
       <option name="_new_additionalArguments" value="&quot;&quot;" />
       <option name="_new_target" value="&quot;test_json.TestJsonExtraction.test_json_surrounded_by_noise&quot;" />
-      <option name="_new_targetType" value="&quot;PYTHON&quot;" />
-      <method v="2" />
-    </configuration>
-    <configuration name="pytest for test_json.TestJsonExtraction.test_json_with_comments_inside_strings" type="tests" factoryName="py.test" temporary="true" nameIsGenerated="true">
-      <module name="StoreMy" />
-      <option name="ENV_FILES" value="" />
-      <option name="INTERPRETER_OPTIONS" value="" />
-      <option name="PARENT_ENVS" value="true" />
-      <option name="SDK_HOME" value="" />
-      <option name="WORKING_DIRECTORY" value="$PROJECT_DIR$/tests/test_json" />
-      <option name="IS_MODULE_SDK" value="true" />
-      <option name="ADD_CONTENT_ROOTS" value="true" />
-      <option name="ADD_SOURCE_ROOTS" value="true" />
-      <option name="RUN_TOOL" value="" />
-      <option name="_new_keywords" value="&quot;&quot;" />
-      <option name="_new_parameters" value="&quot;&quot;" />
-      <option name="_new_additionalArguments" value="&quot;&quot;" />
-      <option name="_new_target" value="&quot;test_json.TestJsonExtraction.test_json_with_comments_inside_strings&quot;" />
       <option name="_new_targetType" value="&quot;PYTHON&quot;" />
       <method v="2" />
     </configuration>
@@ -251,16 +257,16 @@
     </configuration>
     <recent_temporary>
       <list>
+        <item itemvalue="Cargo.Run storemy" />
         <item itemvalue="Python tests.pytest for test_json.TestJsonExtraction.test_extract_and_clean_json_direct" />
         <item itemvalue="Python tests.pytest for test_json.TestJsonExtraction.test_json_with_very_long_strings" />
         <item itemvalue="Python tests.pytest for test_json.TestJsonExtraction.test_json_surrounded_by_noise" />
         <item itemvalue="Python tests.pytest for test_json.TestJsonExtraction.test_json_with_newlines_in_strings" />
-        <item itemvalue="Python tests.pytest for test_json.TestJsonExtraction.test_json_with_comments_inside_strings" />
       </list>
     </recent_temporary>
   </component>
   <component name="RustProjectSettings">
-    <option name="toolchainHomeDirectory" value="$USER_HOME$/.cargo/bin" />
+    <option name="toolchainHomeDirectory" value="//wsl.localhost/Ubuntu/home/utkarsh5026/.cargo/bin" />
   </component>
   <component name="SharedIndexes">
     <attachedChunks>
@@ -278,6 +284,8 @@
       <updated>1749498425788</updated>
       <workItem from="1768724975128" duration="101000" />
       <workItem from="1768726245360" duration="4182000" />
+      <workItem from="1768745244678" duration="98000" />
+      <workItem from="1768746442281" duration="726000" />
     </task>
     <servers />
   </component>
