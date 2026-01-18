@@ -1,0 +1,63 @@
+[package]
+name = "storemy"
+version = "0.1.0"
+edition = "2021"
+authors = ["Utkarsh Priyadarshi"]
+description = "A relational database management system built from scratch"
+license = "MIT"
+repository = "https://github.com/utkarsh-priyadarshi/storemy"
+keywords = ["database", "sql", "storage-engine", "btree"]
+categories = ["database-implementations"]
+
+[lib]
+name = "storemy"
+path = "src/lib.rs"
+
+[[bin]]
+name = "storemy"
+path = "src/main.rs"
+
+[dependencies]
+# Error handling
+thiserror = "1.0"
+anyhow = "1.0"
+
+# Serialization
+bytes = "1.5"
+byteorder = "1.5"
+
+# Concurrency
+parking_lot = "0.12"
+crossbeam = "0.8"
+
+# Collections
+hashbrown = "0.14"
+lru = "0.12"
+
+# TUI (Phase 7)
+ratatui = "0.26"
+crossterm = "0.27"
+
+# Logging
+tracing = "0.1"
+tracing-subscriber = "0.3"
+
+[dev-dependencies]
+# Testing
+proptest = "1.4"
+criterion = "0.5"
+tempfile = "3.10"
+rand = "0.8"
+
+[[bench]]
+name = "primitives"
+harness = false
+
+[profile.release]
+lto = true
+codegen-units = 1
+panic = "abort"
+
+[profile.bench]
+lto = true
+codegen-units = 1
