@@ -64,12 +64,12 @@ func main() {
 
 	iterations := 1000
 	if iter := os.Getenv("BENCHMARK_ITERATIONS"); iter != "" {
-		fmt.Sscanf(iter, "%d", &iterations)
+		_, _ = fmt.Sscanf(iter, "%d", &iterations)
 	}
 
 	concurrentQueries := 10
 	if conc := os.Getenv("BENCHMARK_CONCURRENT_QUERIES"); conc != "" {
-		fmt.Sscanf(conc, "%d", &concurrentQueries)
+		_, _ = fmt.Sscanf(conc, "%d", &concurrentQueries)
 	}
 
 	dbName := os.Getenv("DB_NAME")
@@ -87,8 +87,8 @@ func main() {
 		logDir = "/app/benchmark_logs"
 	}
 
-	os.MkdirAll(outputDir, 0o755)
-	os.MkdirAll(logDir, 0o755)
+	_ = os.MkdirAll(outputDir, 0o755)
+	_ = os.MkdirAll(logDir, 0o755)
 
 	walPath := fmt.Sprintf("%s/wal.log", logDir)
 
@@ -214,7 +214,7 @@ func setupBenchmarkData(db *database.Database) error {
 	shouldInsertData := true
 	if len(result.Rows) > 0 && len(result.Rows[0]) > 0 {
 		var count int64
-		fmt.Sscanf(result.Rows[0][0], "%d", &count)
+		_, _ = fmt.Sscanf(result.Rows[0][0], "%d", &count)
 		log.Printf("  Found %d existing records in users table", count)
 		if count >= 1000 {
 			log.Printf("  Skipping data insertion (already populated)")
@@ -229,14 +229,14 @@ func setupBenchmarkData(db *database.Database) error {
 				"INSERT INTO users (id, name, age, email) VALUES (%d, 'User%d', %d, 'user%d@example.com')",
 				i, i, 20+i%50, i,
 			)
-			db.ExecuteQuery(insertQuery)
+			_, _ = db.ExecuteQuery(insertQuery)
 
 			if i <= 500 {
 				orderQuery := fmt.Sprintf(
 					"INSERT INTO orders (id, user_id, amount, order_date) VALUES (%d, %d, '%d.99', '2025-01-%02d')",
 					i, i, 100+i%900, 1+i%28,
 				)
-				db.ExecuteQuery(orderQuery)
+				_, _ = db.ExecuteQuery(orderQuery)
 			}
 		}
 		log.Println("Sample data inserted successfully")
