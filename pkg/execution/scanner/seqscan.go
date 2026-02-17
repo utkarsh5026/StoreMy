@@ -141,13 +141,13 @@ func (ss *SequentialScan) readNext() (*tuple.Tuple, error) {
 
 	for {
 		ss.currentPage++
-		if ss.currentPage >= int64(numPages) {
+		if ss.currentPage >= int64(numPages) { // #nosec G115
 			return nil, nil
 		}
 
 		<-ss.prefetchDone
 
-		pid := page.NewPageDescriptor(ss.tableID, primitives.PageNumber(ss.currentPage))
+		pid := page.NewPageDescriptor(ss.tableID, primitives.PageNumber(ss.currentPage)) // #nosec G115
 		page, err := ss.store.GetPage(ss.tx, ss.dbFile, pid, transaction.ReadOnly)
 		if err != nil {
 			return nil, fmt.Errorf("failed to get page %d: %v", pid, err)
@@ -156,7 +156,7 @@ func (ss *SequentialScan) readNext() (*tuple.Tuple, error) {
 		hPage := page.(*heap.HeapPage)
 		tuples := hPage.GetTuples()
 
-		ss.prefetchNextPage(primitives.PageNumber(ss.currentPage + 1))
+		ss.prefetchNextPage(primitives.PageNumber(ss.currentPage + 1)) // #nosec G115
 
 		if len(tuples) == 0 {
 			continue

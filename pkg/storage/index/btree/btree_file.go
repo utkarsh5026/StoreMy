@@ -49,7 +49,7 @@ func (bf *BTreeFile) GetKeyType() types.Type {
 func (bf *BTreeFile) NumPages() int {
 	bf.mutex.RLock()
 	defer bf.mutex.RUnlock()
-	return int(bf.numPages)
+	return int(bf.numPages) // #nosec G115
 }
 
 // ReadBTreePage reads a B+Tree page from disk

@@ -131,9 +131,9 @@ func (hp *HashPage) MarkDirty(dirty bool, tid *primitives.TransactionID) {
 func (hp *HashPage) GetPageData() []byte {
 	buf := new(bytes.Buffer)
 
-	binary.Write(buf, binary.BigEndian, uint64(hp.bucketNum))
-	binary.Write(buf, binary.BigEndian, int32(hp.numEntries))
-	binary.Write(buf, binary.BigEndian, hp.overflowPage)
+	_ = binary.Write(buf, binary.BigEndian, uint64(hp.bucketNum)) // #nosec G115
+	_ = binary.Write(buf, binary.BigEndian, int32(hp.numEntries)) // #nosec G115
+	_ = binary.Write(buf, binary.BigEndian, hp.overflowPage)
 
 	for _, entry := range hp.entries {
 		if err := entry.Serialize(buf); err != nil {

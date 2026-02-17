@@ -294,10 +294,8 @@ func TestGetStatistics_ErrorHandling(t *testing.T) {
 		// Set error flag
 		left.hasError = true
 
-		// Open iterators
-		if err := left.Open(); err != nil {
-			// Open will fail, which is expected
-		}
+		// Open iterators (expected to fail, error intentionally ignored)
+		_ = left.Open()
 		right.Open()
 
 		stats, err := GetStatistics(left, right)
@@ -319,11 +317,9 @@ func TestGetStatistics_ErrorHandling(t *testing.T) {
 		// Set error flag
 		right.hasError = true
 
-		// Open iterators
+		// Open iterators (expected to fail, error intentionally ignored)
 		left.Open()
-		if err := right.Open(); err != nil {
-			// Open will fail, which is expected
-		}
+		_ = right.Open()
 
 		stats, err := GetStatistics(left, right)
 

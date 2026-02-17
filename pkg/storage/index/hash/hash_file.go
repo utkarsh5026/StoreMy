@@ -31,9 +31,9 @@ const (
 type HashFile struct {
 	*page.BaseFile
 	keyType      types.Type
-	numPages     primitives.PageNumber  // Physical page count
-	numBuckets   BucketNumber           // Logical bucket count
-	indexID      primitives.FileID      // Override index ID (set when file is associated with an index)
+	numPages     primitives.PageNumber // Physical page count
+	numBuckets   BucketNumber          // Logical bucket count
+	indexID      primitives.FileID     // Override index ID (set when file is associated with an index)
 	mutex        sync.RWMutex
 	bucketPageID map[BucketNumber]primitives.PageNumber // Maps bucket number to primary page number
 }
@@ -66,7 +66,7 @@ func NewHashFile(filePath primitives.Filepath, keyType types.Type, numBuckets Bu
 
 	numPages, err := baseFile.NumPages()
 	if err != nil {
-		baseFile.Close()
+		_ = baseFile.Close()
 		return nil, fmt.Errorf("failed to get page count: %w", err)
 	}
 
@@ -161,7 +161,7 @@ func (hf *HashFile) ReadPage(pageID *page.PageDescriptor) (page.Page, error) {
 		if err == io.EOF {
 			// Return a new empty page for unallocated pages
 			// Use page number as bucket number for initial pages
-			bucketNum := BucketNumber(pageID.PageNo())
+			bucketNum := BucketNumber(pageID.PageNo()) // #nosec G115
 			newPage := NewHashPage(pageID, bucketNum, hf.keyType)
 			return newPage, nil
 		}

@@ -22,12 +22,12 @@ type CreateTablePlan struct {
 }
 
 func NewCreateTablePlan(stmt *statements.CreateStatement, ctx DbContext,
-	TxContext TxContext,
+	txCtx TxContext,
 ) *CreateTablePlan {
 	return &CreateTablePlan{
 		Statement: stmt,
 		ctx:       ctx,
-		TxContext: TxContext,
+		TxContext: txCtx,
 	}
 }
 

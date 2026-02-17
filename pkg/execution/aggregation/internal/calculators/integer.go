@@ -146,7 +146,7 @@ func (ic *IntCalculator) GetFinalValue(groupKey string) (types.Field, error) {
 	if ic.op == core.Avg {
 		count := ic.groupToCount[groupKey]
 		if count > 0 {
-			aggValue = aggValue / count
+			aggValue /= count
 		}
 	}
 	return types.NewIntField(aggValue), nil

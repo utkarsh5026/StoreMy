@@ -22,7 +22,7 @@ type LogReader struct {
 
 // NewLogReader creates a new log reader for the specified file
 func NewLogReader(logPath string) (*LogReader, error) {
-	file, err := os.Open(logPath)
+	file, err := os.Open(logPath) // #nosec G304
 	if err != nil {
 		return nil, fmt.Errorf("failed to open log file: %w", err)
 	}
@@ -55,8 +55,8 @@ func (lr *LogReader) ReadNext() (*record.LogRecord, error) {
 		return nil, fmt.Errorf("failed to deserialize record at offset %d: %w", lr.offset, err)
 	}
 
-	rec.LSN = primitives.LSN(lr.offset)
-	lr.offset += int64(recLen)
+	rec.LSN = primitives.LSN(lr.offset) // #nosec G115
+	lr.offset += int64(recLen)           // #nosec G115
 	return rec, nil
 }
 

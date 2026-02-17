@@ -23,10 +23,10 @@ func DeserializeBTreePage(data []byte, pageID *page.PageDescriptor) (*BTreePage,
 
 	var ParentPage, NextLeaf, PrevLeaf uint64
 	var numEntries int32
-	binary.Read(buf, binary.BigEndian, &ParentPage)
-	binary.Read(buf, binary.BigEndian, &numEntries)
-	binary.Read(buf, binary.BigEndian, &NextLeaf)
-	binary.Read(buf, binary.BigEndian, &PrevLeaf)
+	_ = binary.Read(buf, binary.BigEndian, &ParentPage)
+	_ = binary.Read(buf, binary.BigEndian, &numEntries)
+	_ = binary.Read(buf, binary.BigEndian, &NextLeaf)
+	_ = binary.Read(buf, binary.BigEndian, &PrevLeaf)
 
 	btreePage := &BTreePage{
 		pageID:     pageID,
@@ -68,8 +68,8 @@ func DeserializeBTreePage(data []byte, pageID *page.PageDescriptor) (*BTreePage,
 			}
 
 			var fileID, pageNum uint64
-			binary.Read(buf, binary.BigEndian, &fileID)
-			binary.Read(buf, binary.BigEndian, &pageNum)
+			_ = binary.Read(buf, binary.BigEndian, &fileID)
+			_ = binary.Read(buf, binary.BigEndian, &pageNum)
 
 			childPtr := &BTreeChildPtr{
 				Key:      key,
@@ -91,13 +91,13 @@ func deserializeEntry(r *bytes.Reader) (*index.IndexEntry, error) {
 
 	// Read page ID type (kept for compatibility but not used anymore)
 	var pageIDType byte
-	binary.Read(r, binary.BigEndian, &pageIDType)
+	_ = binary.Read(r, binary.BigEndian, &pageIDType)
 
 	var fileID, pageNum uint64
 	var tupleNum uint16
-	binary.Read(r, binary.BigEndian, &fileID)
-	binary.Read(r, binary.BigEndian, &pageNum)
-	binary.Read(r, binary.BigEndian, &tupleNum)
+	_ = binary.Read(r, binary.BigEndian, &fileID)
+	_ = binary.Read(r, binary.BigEndian, &pageNum)
+	_ = binary.Read(r, binary.BigEndian, &tupleNum)
 
 	pageID := page.NewPageDescriptor(primitives.FileID(fileID), primitives.PageNumber(pageNum))
 

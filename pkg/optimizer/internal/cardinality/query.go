@@ -33,7 +33,7 @@ func (ce *CardinalityEstimator) estimateScan(node *plan.ScanNode) (Cardinality, 
 		return DefaultTableCardinality, nil
 	}
 
-	tableCard := Cardinality(tableStats.Cardinality)
+	tableCard := Cardinality(tableStats.Cardinality) // #nosec G115
 	if len(node.Predicates) == 0 {
 		return tableCard, nil
 	}

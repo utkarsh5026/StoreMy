@@ -122,15 +122,17 @@ func (p *ShowIndexesPlan) getAllIndexes() ([]*systemtable.IndexMetadata, error) 
 //   - Slice of tuples containing index information
 func (p *ShowIndexesPlan) createResultTuples(indexes []*systemtable.IndexMetadata) (*tuple.TupleDescription, []*tuple.Tuple) {
 	sch := p.createIndexSchema()
-	var tuples []*tuple.Tuple
+	tuples := make([]*tuple.Tuple, 0, len(indexes))
 
 	tupChan := make(chan *tuple.Tuple, len(indexes))
 
 	var wg sync.WaitGroup
 	for _, idx := range indexes {
-		wg.Go(func() {
+		wg.Add(1)
+		go func(idx *systemtable.IndexMetadata) {
+			defer wg.Done()
 			p.createIndexTuple(idx, sch.TupleDesc, tupChan)
-		})
+		}(idx)
 	}
 
 	wg.Wait()

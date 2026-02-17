@@ -19,7 +19,7 @@ import (
 )
 
 func createFilePath(dir string, filename string) primitives.Filepath {
-	return primitives.Filepath(createFilePath(dir, filename))
+	return primitives.Filepath(fmt.Sprintf("%s/%s", dir, filename))
 }
 
 // Mock CatalogReader for testing

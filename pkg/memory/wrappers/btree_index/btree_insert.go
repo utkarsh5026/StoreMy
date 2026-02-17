@@ -47,7 +47,9 @@ func (bt *BTree) insertIntoLeaf(leaf *BTreePage, e *index.IndexEntry) error {
 		insertPos = i + 1
 	}
 
-	leaf.InsertEntry(e, insertPos)
+	if err := leaf.InsertEntry(e, insertPos); err != nil {
+		return fmt.Errorf("failed to insert entry into leaf: %w", err)
+	}
 
 	if err := bt.addDirtyPage(leaf, memory.InsertOperation); err != nil {
 		return err
@@ -264,14 +266,18 @@ func (bt *BTree) insertIntoInternal(internalPage *BTreePage, key types.Field, ch
 	newChildPtr := btree.NewBtreeChildPtr(key, childPID)
 
 	// Insert at position
-	internalPage.AddChildPtr(newChildPtr, insertPos)
-	bt.addDirtyPage(internalPage, memory.InsertOperation)
+	if err := internalPage.AddChildPtr(newChildPtr, insertPos); err != nil {
+		return fmt.Errorf("failed to add child pointer: %w", err)
+	}
+	if err := bt.addDirtyPage(internalPage, memory.InsertOperation); err != nil {
+		return fmt.Errorf("failed to mark internal page dirty: %w", err)
+	}
 
 	// Update child's parent pointer
 	childPage, err := bt.getPage(childPID, transaction.ReadWrite)
 	if err == nil {
 		childPage.ParentPage = internalPage.PageNo()
-		bt.addDirtyPage(childPage, memory.UpdateOperation)
+		_ = bt.addDirtyPage(childPage, memory.UpdateOperation)
 	}
 
 	return bt.file.WritePage(internalPage)
@@ -305,7 +311,9 @@ func (bt *BTree) insertAndSplitInternal(internalPage *BTreePage, key types.Field
 	left, middleKey, right := splitInternalChildren(allChildren)
 
 	internalPage.InternalPages = left
-	bt.addDirtyPage(internalPage, memory.UpdateOperation)
+	if err := bt.addDirtyPage(internalPage, memory.UpdateOperation); err != nil {
+		return fmt.Errorf("failed to mark internal page dirty: %w", err)
+	}
 
 	rightPage, err := bt.file.AllocatePage(bt.tx.ID, bt.keyType, false, internalPage.ParentPage)
 	if err != nil {
@@ -313,7 +321,9 @@ func (bt *BTree) insertAndSplitInternal(internalPage *BTreePage, key types.Field
 	}
 
 	rightPage.InternalPages = right
-	bt.addDirtyPage(rightPage, memory.UpdateOperation)
+	if err := bt.addDirtyPage(rightPage, memory.UpdateOperation); err != nil {
+		return fmt.Errorf("failed to mark right page dirty: %w", err)
+	}
 
 	if err := bt.updateChildrenParentPointers(left, internalPage.PageNo()); err != nil {
 		return err
@@ -461,9 +471,9 @@ func (bt *BTree) createNewRoot(left *BTreePage, separatorKey types.Field, right 
 
 	bt.rootPageID = newRoot.GetID()
 
-	bt.addDirtyPage(left, memory.UpdateOperation)
-	bt.addDirtyPage(right, memory.UpdateOperation)
-	bt.addDirtyPage(newRoot, memory.UpdateOperation)
+	_ = bt.addDirtyPage(left, memory.UpdateOperation)
+	_ = bt.addDirtyPage(right, memory.UpdateOperation)
+	_ = bt.addDirtyPage(newRoot, memory.UpdateOperation)
 
 	return nil
 }

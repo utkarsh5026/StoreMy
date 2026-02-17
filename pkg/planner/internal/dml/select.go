@@ -283,7 +283,7 @@ func (p *SelectPlan) buildJoinRightSide(joinNode *plan.JoinNode) (iterator.DbIte
 // Example: ON users.id = orders.user_id
 //
 //	→ leftIndex=0 (users.id at position 0), rightIndex=2 (orders.user_id at position 2)
-func (p *SelectPlan) buildJoinPredicateFields(node *plan.JoinNode, l, r iterator.DbIterator) (primitives.ColumnID, primitives.ColumnID, primitives.Predicate, error) {
+func (p *SelectPlan) buildJoinPredicateFields(node *plan.JoinNode, l, r iterator.DbIterator) (leftIdx, rightIdx primitives.ColumnID, pred primitives.Predicate, err error) {
 	li, err := findFieldIndex(node.LeftField, l.GetTupleDesc())
 	if err != nil {
 		return 0, 0, 0, err

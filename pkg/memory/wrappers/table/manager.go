@@ -132,7 +132,7 @@ func (tm *TupleManager) DeleteTuple(ctx *transaction.TransactionContext, dbFile 
 //   - Insert operation fails (attempts rollback by reinserting oldTuple)
 //
 // Thread-safe: Uses page locks via Delete and Insert operations.
-func (tm *TupleManager) UpdateTuple(ctx *transaction.TransactionContext, dbFile page.DbFile, oldTuple *tuple.Tuple, newTuple *tuple.Tuple) error {
+func (tm *TupleManager) UpdateTuple(ctx *transaction.TransactionContext, dbFile page.DbFile, oldTuple, newTuple *tuple.Tuple) error {
 	if oldTuple == nil {
 		return fmt.Errorf("old tuple cannot be nil")
 	}
@@ -146,7 +146,7 @@ func (tm *TupleManager) UpdateTuple(ctx *transaction.TransactionContext, dbFile 
 	}
 
 	if err := tm.InsertTuple(ctx, dbFile, newTuple); err != nil {
-		tm.InsertTuple(ctx, dbFile, oldTuple)
+		_ = tm.InsertTuple(ctx, dbFile, oldTuple)
 		return fmt.Errorf("failed to insert updated tuple: %v", err)
 	}
 

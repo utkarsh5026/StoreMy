@@ -80,16 +80,11 @@ func (sm *StatisticsManager) UpdateStatisticsIfNeeded(tx *transaction.Transactio
 		return err
 	}
 
-	// Update column-level statistics
-	if err := sm.catalog.UpdateColumnStatistics(tx, tableID); err != nil {
-		// Non-fatal: log but continue
-		// In production, you'd use proper logging
-	}
+	// Update column-level statistics (non-fatal, ignore error)
+	_ = sm.catalog.UpdateColumnStatistics(tx, tableID)
 
-	// Update index statistics
-	if err := sm.catalog.UpdateIndexStatistics(tx, tableID); err != nil {
-		// Non-fatal: log but continue
-	}
+	// Update index statistics (non-fatal, ignore error)
+	_ = sm.catalog.UpdateIndexStatistics(tx, tableID)
 
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
@@ -105,15 +100,11 @@ func (sm *StatisticsManager) ForceUpdate(tx *transaction.TransactionContext, tab
 		return err
 	}
 
-	// Update column-level statistics
-	if err := sm.catalog.UpdateColumnStatistics(tx, tableID); err != nil {
-		// Non-fatal: log but continue
-	}
+	// Update column-level statistics (non-fatal, ignore error)
+	_ = sm.catalog.UpdateColumnStatistics(tx, tableID)
 
-	// Update index statistics
-	if err := sm.catalog.UpdateIndexStatistics(tx, tableID); err != nil {
-		// Non-fatal: log but continue
-	}
+	// Update index statistics (non-fatal, ignore error)
+	_ = sm.catalog.UpdateIndexStatistics(tx, tableID)
 
 	sm.mu.Lock()
 	defer sm.mu.Unlock()

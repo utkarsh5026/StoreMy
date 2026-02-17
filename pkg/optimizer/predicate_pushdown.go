@@ -77,10 +77,10 @@ func (ppo *PredicatePushdownOptimizer) optimizeFilter(
 	}
 
 	// Combine with existing predicates
-	allPredicates := append(existingPredicates, newPredicates...)
+	existingPredicates = append(existingPredicates, newPredicates...)
 
 	// Push predicates down to child
-	optimizedChild := ppo.pushPredicates(tx, node.Child, allPredicates)
+	optimizedChild := ppo.pushPredicates(tx, node.Child, existingPredicates)
 
 	// If all predicates were pushed down, we can eliminate this filter node
 	// Otherwise, keep the filter with remaining predicates
@@ -109,13 +109,14 @@ func (ppo *PredicatePushdownOptimizer) optimizeJoin(
 		canPushLeft := ppo.canPushToChild(predCtx, leftTables)
 		canPushRight := ppo.canPushToChild(predCtx, rightTables)
 
-		if canPushLeft && !canPushRight {
+		switch {
+		case canPushLeft && !canPushRight:
 			// Push to left child only
 			leftPredicates = append(leftPredicates, predCtx)
-		} else if canPushRight && !canPushLeft {
+		case canPushRight && !canPushLeft:
 			// Push to right child only
 			rightPredicates = append(rightPredicates, predCtx)
-		} else if !canPushLeft && !canPushRight {
+		case !canPushLeft && !canPushRight:
 			// Cannot push down, must remain at join level
 			joinPredicates = append(joinPredicates, *predCtx.Predicate)
 		}

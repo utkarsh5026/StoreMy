@@ -195,7 +195,8 @@ func (cm *CatalogManager) ClearCache() {
 			continue
 		}
 
-		if tableID, err := cm.tableCache.GetTableID(name); err == nil {
+		tableID, err := cm.tableCache.GetTableID(name)
+		if err == nil {
 			cm.mu.Lock()
 			heapFile, exists := cm.openFiles[tableID]
 			if exists {
@@ -204,11 +205,11 @@ func (cm *CatalogManager) ClearCache() {
 			cm.mu.Unlock()
 
 			if exists {
-				heapFile.Close()
+				_ = heapFile.Close()
 			}
 			cm.store.UnregisterDbFile(tableID)
 		}
-		cm.tableCache.RemoveTable(name)
+		_ = cm.tableCache.RemoveTable(name)
 	}
 
 }
@@ -222,7 +223,8 @@ func (cm *CatalogManager) ClearCache() {
 func (cm *CatalogManager) ClearCacheCompletely() {
 	tableNames := cm.tableCache.GetAllTableNames()
 	for _, name := range tableNames {
-		if tableID, err := cm.tableCache.GetTableID(name); err == nil {
+		tableID, err := cm.tableCache.GetTableID(name)
+		if err == nil {
 			cm.mu.Lock()
 			heapFile, exists := cm.openFiles[tableID]
 			if exists {
@@ -231,7 +233,7 @@ func (cm *CatalogManager) ClearCacheCompletely() {
 			cm.mu.Unlock()
 
 			if exists {
-				heapFile.Close()
+				_ = heapFile.Close()
 			}
 			cm.store.UnregisterDbFile(tableID)
 		}

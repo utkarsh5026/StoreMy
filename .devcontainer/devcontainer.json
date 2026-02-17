@@ -1,0 +1,31 @@
+{
+  "name": "StoreMy Development",
+  "image": "mcr.microsoft.com/devcontainers/go:1.25-bookworm",
+  "features": {
+    "ghcr.io/devcontainers/features/docker-in-docker:2": {},
+    "ghcr.io/devcontainers/features/python:1": { "version": "3.12" }
+  },
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "golang.go",
+        "ms-azuretools.vscode-docker",
+        "streetsidesoftware.code-spell-checker",
+        "EditorConfig.EditorConfig",
+        "eamodio.gitlens"
+      ],
+      "settings": {
+        "go.lintTool": "golangci-lint",
+        "editor.formatOnSave": true,
+        "[go]": { "editor.defaultFormatter": "golang.go" }
+      }
+    }
+  },
+  "postCreateCommand": "go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest && pip install pre-commit && pre-commit install",
+  "forwardPorts": [3000, 9090, 8080],
+  "portsAttributes": {
+    "3000": { "label": "Grafana" },
+    "9090": { "label": "Prometheus" },
+    "8080": { "label": "Metrics Exporter" }
+  }
+}

@@ -191,7 +191,7 @@ func (it *HeapFileIterator) Rewind() error {
 
 	// Close the current page iterator if it exists
 	if it.currentPageIter != nil {
-		it.currentPageIter.Close()
+		_ = it.currentPageIter.Close()
 	}
 
 	// Reset to the beginning

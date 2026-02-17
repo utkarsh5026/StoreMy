@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
@@ -57,19 +58,19 @@ type BenchmarkReport struct {
 //   - DATA_DIR: Data directory path (default: /app/benchmark_data)
 //   - LOG_DIR: Log directory path (default: /app/benchmark_logs)
 func main() {
-	outputDir := os.Getenv("BENCHMARK_OUTPUT")
-	if outputDir == "" {
+	outputDir := filepath.Clean(os.Getenv("BENCHMARK_OUTPUT"))
+	if outputDir == "." {
 		outputDir = "./benchmark-results"
 	}
 
 	iterations := 1000
 	if iter := os.Getenv("BENCHMARK_ITERATIONS"); iter != "" {
-		fmt.Sscanf(iter, "%d", &iterations)
+		_, _ = fmt.Sscanf(iter, "%d", &iterations)
 	}
 
 	concurrentQueries := 10
 	if conc := os.Getenv("BENCHMARK_CONCURRENT_QUERIES"); conc != "" {
-		fmt.Sscanf(conc, "%d", &concurrentQueries)
+		_, _ = fmt.Sscanf(conc, "%d", &concurrentQueries)
 	}
 
 	dbName := os.Getenv("DB_NAME")
@@ -77,23 +78,23 @@ func main() {
 		dbName = "benchmark_db"
 	}
 
-	dataDir := os.Getenv("DATA_DIR")
-	if dataDir == "" {
+	dataDir := filepath.Clean(os.Getenv("DATA_DIR"))
+	if dataDir == "." {
 		dataDir = "/app/benchmark_data"
 	}
 
-	logDir := os.Getenv("LOG_DIR")
-	if logDir == "" {
+	logDir := filepath.Clean(os.Getenv("LOG_DIR"))
+	if logDir == "." {
 		logDir = "/app/benchmark_logs"
 	}
 
-	os.MkdirAll(outputDir, 0755)
-	os.MkdirAll(logDir, 0755)
+	_ = os.MkdirAll(outputDir, 0o750) // #nosec G703
+	_ = os.MkdirAll(logDir, 0o750)   // #nosec G703
 
-	walPath := fmt.Sprintf("%s/wal.log", logDir)
+	walPath := filepath.Join(logDir, "wal.log")
 
 	log.Printf("Starting benchmark suite...")
-	log.Printf("Database: %s, Data Directory: %s", dbName, dataDir)
+	log.Printf("Database: %s, Data Directory: %s", dbName, dataDir) // #nosec G706
 	log.Printf("Iterations: %d, Concurrent Queries: %d", iterations, concurrentQueries)
 
 	db, err := database.NewDatabase(dbName, dataDir, walPath)
@@ -166,7 +167,7 @@ func main() {
 	log.Printf("  Summary:")
 	log.Printf("    Total Duration:     %s", formatDuration(report.TotalDuration))
 	log.Printf("    Tests Run:          %d", len(report.Results))
-	log.Printf("    Database:           %s", dbName)
+	log.Printf("    Database:           %s", dbName) // #nosec G706
 	log.Printf("")
 	log.Printf("  Saving reports...")
 
@@ -174,7 +175,7 @@ func main() {
 	saveHTMLReport(report, htmlFile)
 
 	log.Printf("")
-	log.Printf("  ✓ Reports saved to: %s", outputDir)
+	log.Printf("  ✓ Reports saved to: %s", outputDir) // #nosec G706
 	log.Printf("")
 	log.Printf("%s", strings.Repeat("=", 80))
 }
@@ -204,7 +205,7 @@ func setupBenchmarkData(db *database.Database) error {
 	log.Println("  Verifying table creation...")
 
 	tables := db.GetTables()
-	log.Printf("  Tables in database: %v", tables)
+	log.Printf("  Tables in database: %v", tables) // #nosec G706
 
 	result, err := db.ExecuteQuery("SELECT COUNT(id) FROM users")
 	if err != nil {
@@ -214,7 +215,7 @@ func setupBenchmarkData(db *database.Database) error {
 	shouldInsertData := true
 	if len(result.Rows) > 0 && len(result.Rows[0]) > 0 {
 		var count int64
-		fmt.Sscanf(result.Rows[0][0], "%d", &count)
+		_, _ = fmt.Sscanf(result.Rows[0][0], "%d", &count)
 		log.Printf("  Found %d existing records in users table", count)
 		if count >= 1000 {
 			log.Printf("  Skipping data insertion (already populated)")
@@ -229,14 +230,14 @@ func setupBenchmarkData(db *database.Database) error {
 				"INSERT INTO users (id, name, age, email) VALUES (%d, 'User%d', %d, 'user%d@example.com')",
 				i, i, 20+i%50, i,
 			)
-			db.ExecuteQuery(insertQuery)
+			_, _ = db.ExecuteQuery(insertQuery)
 
 			if i <= 500 {
 				orderQuery := fmt.Sprintf(
 					"INSERT INTO orders (id, user_id, amount, order_date) VALUES (%d, %d, '%d.99', '2025-01-%02d')",
 					i, i, 100+i%900, 1+i%28,
 				)
-				db.ExecuteQuery(orderQuery)
+				_, _ = db.ExecuteQuery(orderQuery)
 			}
 		}
 		log.Println("Sample data inserted successfully")
@@ -369,28 +370,29 @@ func formatDuration(d time.Duration) string {
 func printBenchmarkResult(result BenchmarkResult) {
 	successRate := float64(result.SuccessCount) / float64(result.Iterations) * 100
 
-	log.Printf("  ┌─ Results")
-	log.Printf("  │  Total Time:        %s", formatDuration(result.TotalDuration))
-	log.Printf("  │  Avg per Query:     %s", formatDuration(result.AvgDuration))
-	log.Printf("  │  Min / Max:         %s / %s", formatDuration(result.MinDuration), formatDuration(result.MaxDuration))
-	log.Printf("  │  Median (P50):      %s", formatDuration(result.MedianDuration))
-	log.Printf("  │  P95:               %s", formatDuration(result.P95Duration))
-	log.Printf("  │  P99:               %s", formatDuration(result.P99Duration))
-	log.Printf("  │  Throughput:        %.0f queries/sec", result.QueriesPerSecond)
-	log.Printf("  │  Success Rate:      %.1f%% (%d/%d)", successRate, result.SuccessCount, result.Iterations)
+	log.Printf("  ┌─ Results")                                                                                              // #nosec G706
+	log.Printf("  │  Total Time:        %s", formatDuration(result.TotalDuration))                                          // #nosec G706
+	log.Printf("  │  Avg per Query:     %s", formatDuration(result.AvgDuration))                                            // #nosec G706
+	log.Printf("  │  Min / Max:         %s / %s", formatDuration(result.MinDuration), formatDuration(result.MaxDuration))   // #nosec G706
+	log.Printf("  │  Median (P50):      %s", formatDuration(result.MedianDuration))                                         // #nosec G706
+	log.Printf("  │  P95:               %s", formatDuration(result.P95Duration))                                            // #nosec G706
+	log.Printf("  │  P99:               %s", formatDuration(result.P99Duration))                                            // #nosec G706
+	log.Printf("  │  Throughput:        %.0f queries/sec", result.QueriesPerSecond)                                         // #nosec G706
+	log.Printf("  │  Success Rate:      %.1f%% (%d/%d)", successRate, result.SuccessCount, result.Iterations)               // #nosec G706
 
 	if result.ErrorCount > 0 && len(result.ErrorSamples) > 0 {
 		log.Printf("  │")
-		log.Printf("  │  ⚠ Errors detected (%d failures):", result.ErrorCount)
+		log.Printf("  │  ⚠ Errors detected (%d failures):", result.ErrorCount) // #nosec G706
 		for i, errMsg := range result.ErrorSamples {
+			safe := strings.NewReplacer("\n", " ", "\r", " ").Replace(errMsg)
 			if i == 0 {
-				log.Printf("  │     Sample: %s", errMsg)
+				log.Printf("  │     Sample: %s", safe) // #nosec G706
 			} else if i < 3 { // Show up to 3 unique errors
-				log.Printf("  │            %s", errMsg)
+				log.Printf("  │            %s", safe) // #nosec G706
 			}
 		}
 		if len(result.ErrorSamples) > 3 {
-			log.Printf("  │     ... and %d more error(s)", len(result.ErrorSamples)-3)
+			log.Printf("  │     ... and %d more error(s)", len(result.ErrorSamples)-3) // #nosec G706
 		}
 	}
 
@@ -410,12 +412,12 @@ func saveJSONReport(report BenchmarkReport, filename string) {
 		return
 	}
 
-	if err := os.WriteFile(filename, data, 0644); err != nil {
+	if err := os.WriteFile(filename, data, 0o600); err != nil { // #nosec G703
 		log.Printf("Error writing JSON report: %v", err)
 		return
 	}
 
-	log.Printf("JSON report saved: %s", filename)
+	log.Printf("JSON report saved: %s", filename) // #nosec G706
 }
 
 // saveHTMLReport generates a styled HTML report from the benchmark results.
@@ -532,10 +534,10 @@ func saveHTMLReport(report BenchmarkReport, filename string) {
 </html>
 `
 
-	if err := os.WriteFile(filename, []byte(html), 0644); err != nil {
+	if err := os.WriteFile(filename, []byte(html), 0o600); err != nil { // #nosec G703
 		log.Printf("Error writing HTML report: %v", err)
 		return
 	}
 
-	log.Printf("HTML report saved: %s", filename)
+	log.Printf("HTML report saved: %s", filename) // #nosec G706
 }

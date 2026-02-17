@@ -168,7 +168,9 @@ func (nl *NestedLoopJoin) SupportsPredicateType(predicate common.JoinPredicate) 
 // This resets all iteration state and reloads the first left block.
 func (nl *NestedLoopJoin) Reset() error {
 	nl.blockIndex = 0
-	nl.ResetCommon()
+	if err := nl.ResetCommon(); err != nil {
+		return err
+	}
 
 	if err := nl.LeftChild().Rewind(); err != nil {
 		return err

@@ -135,7 +135,7 @@ func (hi *HashIndex) RangeSearch(startKey, endKey Field) ([]RecID, error) {
 	var results []RecID
 
 	for bucketNum := 0; bucketNum < hi.numBuckets; bucketNum++ {
-		if bucketNum >= int(hi.file.NumPages()) {
+		if bucketNum >= int(hi.file.NumPages()) { // #nosec G115
 			continue
 		}
 

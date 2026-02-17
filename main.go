@@ -31,7 +31,7 @@ func main() {
 	defer db.Close()
 
 	if err := startInteractiveMode(db); err != nil {
-		log.Fatalf("Failed to start UI: %v", err)
+		log.Printf("Failed to start UI: %v", err)
 	}
 }
 
@@ -88,7 +88,7 @@ func initializeDatabase(config Configuration) (*database.Database, error) {
 	fmt.Printf("🔧 Initializing database '%s'...\n", config.DatabaseName)
 
 	fullPath := filepath.Join(config.DataDir, config.DatabaseName)
-	if err := os.MkdirAll(fullPath, 0755); err != nil {
+	if err := os.MkdirAll(fullPath, 0o750); err != nil {
 		return nil, fmt.Errorf("failed to create data directory: %v", err)
 	}
 

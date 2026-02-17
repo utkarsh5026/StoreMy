@@ -71,7 +71,7 @@ func NewJoinGraph() *JoinGraph {
 
 // AddRelation adds a relation to the join graph
 func (jg *JoinGraph) AddRelation(rel *Relation) {
-	rel.BitMask = 1 << uint(rel.ID)
+	rel.BitMask = 1 << uint(rel.ID) // #nosec G115
 	jg.Relations[rel.ID] = rel
 }
 

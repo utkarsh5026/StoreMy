@@ -36,7 +36,7 @@ func DeserializeLogRecord(data []byte) (*LogRecord, error) {
 	}
 
 	recordSize := binary.BigEndian.Uint32(data[:RecordSize])
-	if recordSize != uint32(len(data)) {
+	if recordSize != uint32(len(data)) { // #nosec G115
 		return nil, fmt.Errorf("size mismatch: header indicates %d bytes, actual %d bytes", recordSize, len(data))
 	}
 

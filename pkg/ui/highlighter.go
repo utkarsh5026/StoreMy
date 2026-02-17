@@ -95,19 +95,20 @@ func (h *SQLHighlighter) Highlight(sql string) string {
 	for _, word := range words {
 		cleanWord := strings.TrimSuffix(strings.TrimSuffix(word, ","), ";")
 
-		if h.keywords[cleanWord] {
+		switch {
+		case h.keywords[cleanWord]:
 			highlighted = append(highlighted, h.keywordStyle.Render(word))
-		} else if h.functions[cleanWord] {
+		case h.functions[cleanWord]:
 			highlighted = append(highlighted, h.functionStyle.Render(word))
-		} else if strings.HasPrefix(word, "'") && strings.HasSuffix(word, "'") {
+		case strings.HasPrefix(word, "'") && strings.HasSuffix(word, "'"):
 			highlighted = append(highlighted, h.stringStyle.Render(word))
-		} else if isNumeric(word) {
+		case isNumeric(word):
 			highlighted = append(highlighted, h.numberStyle.Render(word))
-		} else if h.operators[word] {
+		case h.operators[word]:
 			highlighted = append(highlighted, h.operatorStyle.Render(word))
-		} else if strings.HasPrefix(word, "--") {
+		case strings.HasPrefix(word, "--"):
 			highlighted = append(highlighted, h.commentStyle.Render(word))
-		} else {
+		default:
 			highlighted = append(highlighted, word)
 		}
 	}
@@ -122,5 +123,5 @@ func isNumeric(s string) bool {
 			return false
 		}
 	}
-	return len(s) > 0
+	return s != ""
 }

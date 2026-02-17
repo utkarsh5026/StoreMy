@@ -85,7 +85,9 @@ func (hj *HashJoin) Next() (*tuple.Tuple, error) {
 // left child iterator is rewound to its beginning.
 func (hj *HashJoin) Reset() error {
 	hj.currentLeft = nil
-	hj.ResetCommon()
+	if err := hj.ResetCommon(); err != nil {
+		return err
+	}
 	return hj.LeftChild().Rewind()
 }
 

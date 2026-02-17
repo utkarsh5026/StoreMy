@@ -111,6 +111,7 @@ func parseDelimitedList[T any](
 ) ([]T, error) {
 	var items []T
 
+loop:
 	for {
 		item, err := parseItem(l)
 		if err != nil {
@@ -119,11 +120,12 @@ func parseDelimitedList[T any](
 		items = append(items, item)
 
 		token := l.NextToken()
-		if token.Type == delimiter {
+		switch token.Type {
+		case delimiter:
 			continue
-		} else if token.Type == terminator {
-			break
-		} else {
+		case terminator:
+			break loop
+		default:
 			return nil, fmt.Errorf("expected '%s' or '%s', got %s",
 				getTokenName(delimiter), getTokenName(terminator), token.Value)
 		}
@@ -140,6 +142,6 @@ func getTokenName(tokenType lexer.TokenType) string {
 	case lexer.RPAREN:
 		return ")"
 	default:
-		return string(rune(tokenType))
+		return string(rune(tokenType)) // #nosec G115
 	}
 }

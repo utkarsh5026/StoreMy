@@ -10,7 +10,9 @@ func CreateFieldFromConstant(t Type, constant string) (Field, error) {
 	switch t {
 	case IntType:
 		var intVal int64
-		fmt.Sscanf(constant, "%d", &intVal)
+		if _, err := fmt.Sscanf(constant, "%d", &intVal); err != nil {
+			return nil, fmt.Errorf("invalid integer constant %q: %w", constant, err)
+		}
 		return NewIntField(intVal), nil
 
 	case BoolType:
@@ -19,7 +21,9 @@ func CreateFieldFromConstant(t Type, constant string) (Field, error) {
 
 	case FloatType:
 		var floatVal float64
-		fmt.Sscanf(constant, "%f", &floatVal)
+		if _, err := fmt.Sscanf(constant, "%f", &floatVal); err != nil {
+			return nil, fmt.Errorf("invalid float constant %q: %w", constant, err)
+		}
 		return NewFloat64Field(floatVal), nil
 
 	case StringType:
@@ -36,12 +40,6 @@ func IsValidType(t Type) bool {
 }
 
 // GetMinValueFor returns the minimum value for a given Type as a Field.
-// This is mainly used for range queries to define the lower bound for each type.
-//   - For IntType: Should return the minimum int64 value (math.MinInt64), but currently uses MaxInt64 (potential bug).
-//   - For FloatType: Returns the minimum float64 value (-math.MaxFloat64).
-//   - For StringType: Returns an empty string as the minimum value.
-//   - For BoolType: Returns false as the minimum value.
-//   - For unsupported types: Returns nil.
 func GetMinValueFor(t Type) Field {
 	switch t {
 	case IntType:
@@ -58,12 +56,6 @@ func GetMinValueFor(t Type) Field {
 }
 
 // GetMaxValueFor returns the maximum value for a given Type as a Field.
-// This is mainly used for range queries to define the upper bound for each type.
-//   - For IntType: Returns the maximum int64 value (math.MaxInt64).
-//   - For FloatType: Returns the maximum float64 value (math.MaxFloat64).
-//   - For StringType: Returns a string composed of the largest Unicode character repeated up to StringMaxSize.
-//   - For BoolType: Returns true as the maximum value.
-//   - For unsupported types: Returns nil.
 func GetMaxValueFor(t Type) Field {
 	switch t {
 	case IntType:

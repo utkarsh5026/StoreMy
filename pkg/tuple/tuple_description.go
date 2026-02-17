@@ -56,7 +56,7 @@ func NewTupleDesc(fieldTypes []types.Type, fieldNames []string) (*TupleDescripti
 // Returns:
 //   - int: total number of fields in the schema
 func (td *TupleDescription) NumFields() primitives.ColumnID {
-	return primitives.ColumnID(len(td.Types))
+	return primitives.ColumnID(len(td.Types)) // #nosec G115
 }
 
 // GetFieldName returns the name of the ith field.
@@ -144,7 +144,7 @@ func (td *TupleDescription) Equals(other *TupleDescription) bool {
 // Returns:
 //   - string: comma-separated list of field descriptions
 func (td *TupleDescription) String() string {
-	var parts []string
+	parts := make([]string, 0, len(td.Types))
 
 	for i, fieldType := range td.Types {
 		var fieldName string

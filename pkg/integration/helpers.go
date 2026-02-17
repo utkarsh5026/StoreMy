@@ -29,7 +29,7 @@ func SetupTestDB(t *testing.T) *TestDatabase {
 
 	db, err := database.NewDatabase("testdb", dataDir, logDir)
 	if err != nil {
-		os.RemoveAll(tempDir)
+		_ = os.RemoveAll(tempDir)
 		t.Fatalf("failed to create database: %v", err)
 	}
 
@@ -94,7 +94,7 @@ func (td *TestDatabase) MustExecute(t *testing.T, query string) database.QueryRe
 func (td *TestDatabase) ExecuteSQLFile(t *testing.T, filepath string) []database.QueryResult {
 	t.Helper()
 
-	content, err := os.ReadFile(filepath)
+	content, err := os.ReadFile(filepath) // #nosec G304
 	if err != nil {
 		t.Fatalf("failed to read SQL file %s: %v", filepath, err)
 	}
@@ -217,5 +217,5 @@ func startsWithComment(s string) bool {
 }
 
 func endsWithSemicolon(s string) bool {
-	return len(s) > 0 && s[len(s)-1] == ';'
+	return s != "" && s[len(s)-1] == ';'
 }

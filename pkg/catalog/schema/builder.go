@@ -93,11 +93,12 @@ func (sb *SchemaBuilder) Build() (*Schema, error) {
 func BuildColumns(tableID primitives.FileID, tableName string, defs ...ColumnDef) (*Schema, error) {
 	builder := NewSchemaBuilder(tableID, tableName)
 	for _, def := range defs {
-		if def.IsAutoIncrement {
+		switch {
+		case def.IsAutoIncrement:
 			builder.AddAutoIncrement(def.Name)
-		} else if def.IsPrimaryKey {
+		case def.IsPrimaryKey:
 			builder.AddPrimaryKey(def.Name, def.Type)
-		} else {
+		default:
 			builder.AddColumn(def.Name, def.Type)
 		}
 	}

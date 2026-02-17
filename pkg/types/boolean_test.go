@@ -87,7 +87,7 @@ func TestBoolField_Hash(t *testing.T) {
 		value    bool
 		expected primitives.HashCode
 	}{
-		{"true value", true, primitives.HashCode(67918732)},  // FNV-1a hash of byte{1}
+		{"true value", true, primitives.HashCode(67918732)},   // FNV-1a hash of byte{1}
 		{"false value", false, primitives.HashCode(84696351)}, // FNV-1a hash of byte{0}
 	}
 

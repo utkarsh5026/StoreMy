@@ -149,7 +149,7 @@ func (fc *FloatCalculator) GetFinalValue(groupKey string) (types.Field, error) {
 	if fc.op == core.Avg {
 		count := fc.groupToCount[groupKey]
 		if count > 0 {
-			aggValue = aggValue / float64(count)
+			aggValue /= float64(count)
 		}
 	}
 

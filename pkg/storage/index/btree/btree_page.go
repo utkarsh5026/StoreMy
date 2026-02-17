@@ -57,11 +57,11 @@ func NewBtreeChildPtr(key types.Field, childPID *page.PageDescriptor) *BTreeChil
 }
 
 // NewBTreeLeafPage creates a new leaf page
-func NewBTreeLeafPage(pageID *page.PageDescriptor, keyType types.Type, ParentPage primitives.PageNumber) *BTreePage {
+func NewBTreeLeafPage(pageID *page.PageDescriptor, keyType types.Type, parentPage primitives.PageNumber) *BTreePage {
 	return &BTreePage{
 		pageID:        pageID,
 		pageType:      pageTypeLeaf,
-		ParentPage:    ParentPage,
+		ParentPage:    parentPage,
 		NextLeaf:      primitives.InvalidPageNumber,
 		PrevLeaf:      primitives.InvalidPageNumber,
 		keyType:       keyType,
@@ -72,11 +72,11 @@ func NewBTreeLeafPage(pageID *page.PageDescriptor, keyType types.Type, ParentPag
 }
 
 // NewBTreeInternalPage creates a new internal page
-func NewBTreeInternalPage(pageID *page.PageDescriptor, keyType types.Type, ParentPage primitives.PageNumber) *BTreePage {
+func NewBTreeInternalPage(pageID *page.PageDescriptor, keyType types.Type, parentPage primitives.PageNumber) *BTreePage {
 	return &BTreePage{
 		pageID:        pageID,
 		pageType:      pageTypeInternal,
-		ParentPage:    ParentPage,
+		ParentPage:    parentPage,
 		NextLeaf:      primitives.InvalidPageNumber,
 		PrevLeaf:      primitives.InvalidPageNumber,
 		keyType:       keyType,
@@ -113,10 +113,10 @@ func (p *BTreePage) GetPageData() []byte {
 	buf := new(bytes.Buffer)
 
 	buf.WriteByte(p.pageType)
-	binary.Write(buf, binary.BigEndian, uint64(p.ParentPage))
-	binary.Write(buf, binary.BigEndian, int32(p.GetNumEntries()))
-	binary.Write(buf, binary.BigEndian, uint64(p.NextLeaf))
-	binary.Write(buf, binary.BigEndian, uint64(p.PrevLeaf))
+	_ = binary.Write(buf, binary.BigEndian, uint64(p.ParentPage))
+	_ = binary.Write(buf, binary.BigEndian, int32(p.GetNumEntries())) // #nosec G115
+	_ = binary.Write(buf, binary.BigEndian, uint64(p.NextLeaf))
+	_ = binary.Write(buf, binary.BigEndian, uint64(p.PrevLeaf))
 
 	if p.IsLeafPage() {
 		for _, entry := range p.Entries {
@@ -133,8 +133,8 @@ func (p *BTreePage) GetPageData() []byte {
 					panic(fmt.Sprintf("failed to serialize key: %v", err))
 				}
 			}
-			binary.Write(buf, binary.BigEndian, uint64(child.ChildPID.FileID()))
-			binary.Write(buf, binary.BigEndian, uint64(child.ChildPID.PageNo()))
+			_ = binary.Write(buf, binary.BigEndian, uint64(child.ChildPID.FileID()))
+			_ = binary.Write(buf, binary.BigEndian, uint64(child.ChildPID.PageNo()))
 		}
 	}
 
@@ -301,16 +301,18 @@ func (p *BTreePage) serializeEntry(w io.Writer, entry *index.IndexEntry) error {
 	rid := entry.RID
 	// Write page ID type (kept for compatibility, always 0 now)
 	var pageIDType byte = 0
-	binary.Write(w, binary.BigEndian, pageIDType)
+	_ = binary.Write(w, binary.BigEndian, pageIDType)
 
-	binary.Write(w, binary.BigEndian, uint64(rid.PageID.FileID()))
-	binary.Write(w, binary.BigEndian, uint64(rid.PageID.PageNo()))
-	binary.Write(w, binary.BigEndian, uint16(rid.TupleNum))
+	_ = binary.Write(w, binary.BigEndian, uint64(rid.PageID.FileID()))
+	_ = binary.Write(w, binary.BigEndian, uint64(rid.PageID.PageNo()))
+	_ = binary.Write(w, binary.BigEndian, uint16(rid.TupleNum))
 	return nil
 }
 
 // serializeField writes a field to the buffer
 func (p *BTreePage) serializeField(w io.Writer, field types.Field) error {
-	binary.Write(w, binary.BigEndian, byte(field.Type()))
+	if err := binary.Write(w, binary.BigEndian, byte(field.Type())); err != nil { // #nosec G115
+		return err
+	}
 	return field.Serialize(w)
 }

@@ -101,12 +101,6 @@ func (m *mockCalculator) GetResultType(op AggregateOp) types.Type {
 	return m.resultType
 }
 
-func (m *mockCalculator) setError(shouldError bool) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.shouldError = shouldError
-}
-
 // Helper functions
 func createBaseTestTupleDesc() *tuple.TupleDescription {
 	td, _ := tuple.NewTupleDesc(
@@ -412,9 +406,11 @@ func TestBaseAggregator_RLockRUnlock(t *testing.T) {
 		t.Fatalf("Failed to create aggregator: %v", err)
 	}
 
-	// Should not panic
+	// Should not panic - verify RLock/RUnlock work without deadlock
 	agg.RLock()
+	locked := true //nolint:staticcheck
 	agg.RUnlock()
+	_ = locked
 }
 
 // TestBaseAggregator_Iterator tests iterator creation

@@ -174,7 +174,7 @@ func (io *IndexCatalogOperation) getTableIDUnsafe(tableName string) (primitives.
 // registerIndexWithTableID is an internal helper that creates an index when tableID is already known.
 // This is used by both CreateIndex (which looks up tableID) and RegisterTable (which already has tableID).
 // Caller must hold cm.mu lock.
-func (io *IndexCatalogOperation) registerIndexWithTableID(tableID primitives.FileID, indexID primitives.FileID, indexCol *indexCol) (filePath primitives.Filepath, err error) {
+func (io *IndexCatalogOperation) registerIndexWithTableID(tableID, indexID primitives.FileID, indexCol *indexCol) (filePath primitives.Filepath, err error) {
 	cols, err := io.colOps.LoadColumnMetadata(io.tx, tableID)
 	if err != nil {
 		return "", fmt.Errorf("failed to get table schema: %w", err)
@@ -224,7 +224,7 @@ func (io *IndexCatalogOperation) persistIndexMetadata(metadata systemtable.Index
 }
 
 // buildIndexMetadata constructs index metadata from components.
-func (io *IndexCatalogOperation) buildIndexMetadata(tableID primitives.FileID, indexID primitives.FileID, indexCol *indexCol) *systemtable.IndexMetadata {
+func (io *IndexCatalogOperation) buildIndexMetadata(tableID, indexID primitives.FileID, indexCol *indexCol) *systemtable.IndexMetadata {
 	fileName := fmt.Sprintf("%s_%s.idx", indexCol.tableName, indexCol.indexName)
 	filePath := filepath.Join(io.cm.dataDir, fileName)
 	return &systemtable.IndexMetadata{
@@ -414,4 +414,3 @@ func (io *IndexCatalogOperation) ValidateIndexDeletion(indexName, tableName stri
 
 	return metadata, nil
 }
-

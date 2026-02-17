@@ -133,13 +133,14 @@ func (h *Histogram) estimateGreaterThanSelectivity(value types.Field, inclusive 
 		ltUpper, _ := value.Compare(primitives.LessThan, bucket.UpperBound)
 		gtLower, _ := value.Compare(primitives.GreaterThan, bucket.LowerBound)
 
-		if ltUpper {
+		switch {
+		case ltUpper:
 			// value < bucket.UpperBound: all values in bucket are >= value
 			selectivity += bucket.BucketFraction
-		} else if gtLower {
+		case gtLower:
 			// value > bucket.LowerBound: no values in bucket satisfy predicate
 			continue
-		} else {
+		default:
 			// value is within bucket: estimate fraction
 			// Assume uniform distribution within bucket
 			fraction := h.estimateFractionInBucket(bucket, value, inclusive, true)
@@ -158,13 +159,14 @@ func (h *Histogram) estimateLessThanSelectivity(value types.Field, inclusive boo
 		ltLower, _ := value.Compare(primitives.LessThan, bucket.LowerBound)
 		gtUpper, _ := value.Compare(primitives.GreaterThan, bucket.UpperBound)
 
-		if ltLower {
+		switch {
+		case ltLower:
 			// value < bucket.LowerBound: no values in bucket satisfy predicate
 			continue
-		} else if gtUpper {
+		case gtUpper:
 			// value > bucket.UpperBound: all values in bucket are <= value
 			selectivity += bucket.BucketFraction
-		} else {
+		default:
 			// value is within bucket: estimate fraction
 			fraction := h.estimateFractionInBucket(bucket, value, inclusive, false)
 			selectivity += bucket.BucketFraction * fraction
@@ -176,7 +178,7 @@ func (h *Histogram) estimateLessThanSelectivity(value types.Field, inclusive boo
 
 // estimateFractionInBucket estimates what fraction of a bucket satisfies the predicate
 // greaterThan: true for > and >=, false for < and <=
-func (h *Histogram) estimateFractionInBucket(bucket HistogramBucket, value types.Field, inclusive bool, greaterThan bool) float64 {
+func (h *Histogram) estimateFractionInBucket(bucket HistogramBucket, value types.Field, inclusive, greaterThan bool) float64 {
 	switch v := value.(type) {
 	case *types.IntField:
 		return h.estimateIntFraction(bucket, v, inclusive, greaterThan)
@@ -188,7 +190,7 @@ func (h *Histogram) estimateFractionInBucket(bucket HistogramBucket, value types
 }
 
 // estimateIntFraction estimates fraction for integer fields using linear interpolation
-func (h *Histogram) estimateIntFraction(bucket HistogramBucket, value *types.IntField, inclusive bool, greaterThan bool) float64 {
+func (h *Histogram) estimateIntFraction(bucket HistogramBucket, value *types.IntField, inclusive, greaterThan bool) float64 {
 	lower, okLower := bucket.LowerBound.(*types.IntField)
 	upper, okUpper := bucket.UpperBound.(*types.IntField)
 
@@ -199,17 +201,10 @@ func (h *Histogram) estimateIntFraction(bucket HistogramBucket, value *types.Int
 	bucketRange := float64(upper.Value - lower.Value)
 	if bucketRange == 0 {
 		// All values in bucket are the same
-		if greaterThan {
-			if inclusive && value.Value == lower.Value {
-				return 1.0
-			}
-			return 0.0
-		} else {
-			if inclusive && value.Value == lower.Value {
-				return 1.0
-			}
-			return 0.0
+		if inclusive && value.Value == lower.Value {
+			return 1.0
 		}
+		return 0.0
 	}
 
 	// Position of value within bucket (0.0 to 1.0)
@@ -231,7 +226,7 @@ func (h *Histogram) estimateIntFraction(bucket HistogramBucket, value *types.Int
 }
 
 // estimateFloatFraction estimates fraction for float fields using linear interpolation
-func (h *Histogram) estimateFloatFraction(bucket HistogramBucket, value *types.Float64Field, inclusive bool, greaterThan bool) float64 {
+func (h *Histogram) estimateFloatFraction(bucket HistogramBucket, value *types.Float64Field, inclusive, greaterThan bool) float64 {
 	lower, okLower := bucket.LowerBound.(*types.Float64Field)
 	upper, okUpper := bucket.UpperBound.(*types.Float64Field)
 
@@ -242,17 +237,10 @@ func (h *Histogram) estimateFloatFraction(bucket HistogramBucket, value *types.F
 	bucketRange := upper.Value - lower.Value
 	if bucketRange == 0 || math.IsInf(bucketRange, 0) || math.IsNaN(bucketRange) {
 		// All values in bucket are the same or invalid range
-		if greaterThan {
-			if inclusive && value.Value == lower.Value {
-				return 1.0
-			}
-			return 0.0
-		} else {
-			if inclusive && value.Value == lower.Value {
-				return 1.0
-			}
-			return 0.0
+		if inclusive && value.Value == lower.Value {
+			return 1.0
 		}
+		return 0.0
 	}
 
 	// Position of value within bucket (0.0 to 1.0)

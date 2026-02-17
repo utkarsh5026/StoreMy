@@ -14,7 +14,7 @@ import (
 )
 
 func pgNum(id int) primitives.PageNumber {
-	return primitives.PageNumber(id)
+	return primitives.PageNumber(id) // #nosec G115
 }
 
 // mockPage implements page.Page interface for testing
@@ -135,7 +135,7 @@ func (m *mockDbFileForPageStore) AddTuple(tid *primitives.TransactionID, t *tupl
 	defer m.mutex.Unlock()
 
 	// Create a new page for the tuple
-	pageID := page.NewPageDescriptor(primitives.FileID(m.id), primitives.PageNumber(len(m.pages)))
+	pageID := page.NewPageDescriptor(primitives.FileID(m.id), primitives.PageNumber(len(m.pages))) // #nosec G115
 	newPage := newMockPage(pageID)
 	newPage.MarkDirty(true, tid)
 

@@ -1,11 +1,10 @@
 package types
 
 import (
-	"encoding/binary"
-	"hash/fnv"
-	"io"
 	"storemy/pkg/primitives"
 	"strconv"
+
+	"io"
 )
 
 // Int32Field represents a 32-bit signed integer field
@@ -18,10 +17,7 @@ func NewInt32Field(value int32) *Int32Field {
 }
 
 func (f *Int32Field) Serialize(w io.Writer) error {
-	bytes := make([]byte, 4)
-	binary.BigEndian.PutUint32(bytes, uint32(f.Value))
-	_, err := w.Write(bytes)
-	return err
+	return serializeUint32(w, uint32(f.Value)) // #nosec G115
 }
 
 func (f *Int32Field) Compare(op primitives.Predicate, other Field) (bool, error) {
@@ -29,7 +25,7 @@ func (f *Int32Field) Compare(op primitives.Predicate, other Field) (bool, error)
 	if !ok {
 		return false, nil
 	}
-	return compareInt32(f.Value, otherField.Value, op), nil
+	return compareOrdered(f.Value, otherField.Value, op), nil
 }
 
 func (f *Int32Field) Type() Type {
@@ -49,11 +45,7 @@ func (f *Int32Field) Equals(other Field) bool {
 }
 
 func (f *Int32Field) Hash() (primitives.HashCode, error) {
-	h := fnv.New32a()
-	bytes := make([]byte, 4)
-	binary.BigEndian.PutUint32(bytes, uint32(f.Value))
-	h.Write(bytes)
-	return primitives.HashCode(h.Sum32()), nil
+	return fnvHash(toBytes32(uint32(f.Value))), nil // #nosec G115
 }
 
 func (f *Int32Field) Length() uint32 {
@@ -70,10 +62,7 @@ func NewInt64Field(value int64) *Int64Field {
 }
 
 func (f *Int64Field) Serialize(w io.Writer) error {
-	bytes := make([]byte, 8)
-	binary.BigEndian.PutUint64(bytes, uint64(f.Value))
-	_, err := w.Write(bytes)
-	return err
+	return serializeUint64(w, uint64(f.Value)) // #nosec G115
 }
 
 func (f *Int64Field) Compare(op primitives.Predicate, other Field) (bool, error) {
@@ -81,7 +70,7 @@ func (f *Int64Field) Compare(op primitives.Predicate, other Field) (bool, error)
 	if !ok {
 		return false, nil
 	}
-	return compareInt64(f.Value, otherField.Value, op), nil
+	return compareOrdered(f.Value, otherField.Value, op), nil
 }
 
 func (f *Int64Field) Type() Type {
@@ -101,11 +90,7 @@ func (f *Int64Field) Equals(other Field) bool {
 }
 
 func (f *Int64Field) Hash() (primitives.HashCode, error) {
-	h := fnv.New32a()
-	bytes := make([]byte, 8)
-	binary.BigEndian.PutUint64(bytes, uint64(f.Value))
-	h.Write(bytes)
-	return primitives.HashCode(h.Sum32()), nil
+	return fnvHash(toBytes64(uint64(f.Value))), nil // #nosec G115
 }
 
 func (f *Int64Field) Length() uint32 {
@@ -122,10 +107,7 @@ func NewUint32Field(value uint32) *Uint32Field {
 }
 
 func (f *Uint32Field) Serialize(w io.Writer) error {
-	bytes := make([]byte, 4)
-	binary.BigEndian.PutUint32(bytes, f.Value)
-	_, err := w.Write(bytes)
-	return err
+	return serializeUint32(w, f.Value)
 }
 
 func (f *Uint32Field) Compare(op primitives.Predicate, other Field) (bool, error) {
@@ -133,7 +115,7 @@ func (f *Uint32Field) Compare(op primitives.Predicate, other Field) (bool, error
 	if !ok {
 		return false, nil
 	}
-	return compareUint32(f.Value, otherField.Value, op), nil
+	return compareOrdered(f.Value, otherField.Value, op), nil
 }
 
 func (f *Uint32Field) Type() Type {
@@ -153,11 +135,7 @@ func (f *Uint32Field) Equals(other Field) bool {
 }
 
 func (f *Uint32Field) Hash() (primitives.HashCode, error) {
-	h := fnv.New32a()
-	bytes := make([]byte, 4)
-	binary.BigEndian.PutUint32(bytes, f.Value)
-	h.Write(bytes)
-	return primitives.HashCode(h.Sum32()), nil
+	return fnvHash(toBytes32(f.Value)), nil
 }
 
 func (f *Uint32Field) Length() uint32 {
@@ -174,10 +152,7 @@ func NewUint64Field(value uint64) *Uint64Field {
 }
 
 func (f *Uint64Field) Serialize(w io.Writer) error {
-	bytes := make([]byte, 8)
-	binary.BigEndian.PutUint64(bytes, f.Value)
-	_, err := w.Write(bytes)
-	return err
+	return serializeUint64(w, f.Value)
 }
 
 func (f *Uint64Field) Compare(op primitives.Predicate, other Field) (bool, error) {
@@ -185,7 +160,7 @@ func (f *Uint64Field) Compare(op primitives.Predicate, other Field) (bool, error
 	if !ok {
 		return false, nil
 	}
-	return compareUint64(f.Value, otherField.Value, op), nil
+	return compareOrdered(f.Value, otherField.Value, op), nil
 }
 
 func (f *Uint64Field) Type() Type {
@@ -205,11 +180,7 @@ func (f *Uint64Field) Equals(other Field) bool {
 }
 
 func (f *Uint64Field) Hash() (primitives.HashCode, error) {
-	h := fnv.New32a()
-	bytes := make([]byte, 8)
-	binary.BigEndian.PutUint64(bytes, f.Value)
-	h.Write(bytes)
-	return primitives.HashCode(h.Sum32()), nil
+	return fnvHash(toBytes64(f.Value)), nil
 }
 
 func (f *Uint64Field) Length() uint32 {
@@ -226,10 +197,7 @@ func NewIntField(value int64) *IntField {
 }
 
 func (f *IntField) Serialize(w io.Writer) error {
-	bytes := make([]byte, 8)
-	binary.BigEndian.PutUint64(bytes, uint64(f.Value))
-	_, err := w.Write(bytes)
-	return err
+	return serializeUint64(w, uint64(f.Value)) // #nosec G115
 }
 
 func (f *IntField) Compare(op primitives.Predicate, other Field) (bool, error) {
@@ -237,7 +205,7 @@ func (f *IntField) Compare(op primitives.Predicate, other Field) (bool, error) {
 	if !ok {
 		return false, nil
 	}
-	return compareInt64(f.Value, otherIntField.Value, op), nil
+	return compareOrdered(f.Value, otherIntField.Value, op), nil
 }
 
 func (f *IntField) Type() Type {
@@ -257,93 +225,9 @@ func (f *IntField) Equals(other Field) bool {
 }
 
 func (f *IntField) Hash() (primitives.HashCode, error) {
-	h := fnv.New32a()
-	value := f.Value
-	bytes := make([]byte, 8)
-	for i := range 8 {
-		bytes[i] = byte(value >> (8 * i))
-	}
-	h.Write(bytes)
-	return primitives.HashCode(h.Sum32()), nil
+	return fnvHash(toBytes64(uint64(f.Value))), nil // #nosec G115
 }
 
 func (f *IntField) Length() uint32 {
 	return 8
-}
-
-// Helper comparison functions to keep code DRY
-func compareInt32(a, b int32, op primitives.Predicate) bool {
-	switch op {
-	case primitives.Equals:
-		return a == b
-	case primitives.LessThan:
-		return a < b
-	case primitives.GreaterThan:
-		return a > b
-	case primitives.LessThanOrEqual:
-		return a <= b
-	case primitives.GreaterThanOrEqual:
-		return a >= b
-	case primitives.NotEqual:
-		return a != b
-	default:
-		return false
-	}
-}
-
-func compareInt64(a, b int64, op primitives.Predicate) bool {
-	switch op {
-	case primitives.Equals:
-		return a == b
-	case primitives.LessThan:
-		return a < b
-	case primitives.GreaterThan:
-		return a > b
-	case primitives.LessThanOrEqual:
-		return a <= b
-	case primitives.GreaterThanOrEqual:
-		return a >= b
-	case primitives.NotEqual:
-		return a != b
-	default:
-		return false
-	}
-}
-
-func compareUint32(a, b uint32, op primitives.Predicate) bool {
-	switch op {
-	case primitives.Equals:
-		return a == b
-	case primitives.LessThan:
-		return a < b
-	case primitives.GreaterThan:
-		return a > b
-	case primitives.LessThanOrEqual:
-		return a <= b
-	case primitives.GreaterThanOrEqual:
-		return a >= b
-	case primitives.NotEqual:
-		return a != b
-	default:
-		return false
-	}
-}
-
-func compareUint64(a, b uint64, op primitives.Predicate) bool {
-	switch op {
-	case primitives.Equals:
-		return a == b
-	case primitives.LessThan:
-		return a < b
-	case primitives.GreaterThan:
-		return a > b
-	case primitives.LessThanOrEqual:
-		return a <= b
-	case primitives.GreaterThanOrEqual:
-		return a >= b
-	case primitives.NotEqual:
-		return a != b
-	default:
-		return false
-	}
 }

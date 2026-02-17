@@ -59,6 +59,6 @@ func (hpid *PageDescriptor) String() string {
 // HashCode returns a hash code for this heap page ID
 func (hpid *PageDescriptor) HashCode() primitives.HashCode {
 	h := fnv.New64a()
-	h.Write(hpid.Serialize())
+	_, _ = h.Write(hpid.Serialize())
 	return primitives.HashCode(h.Sum64())
 }

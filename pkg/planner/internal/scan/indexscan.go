@@ -156,35 +156,31 @@ func extractFieldName(qualifiedName string) string {
 // Returns (startKey, endKey, needsPostFilter, error).
 // needsPostFilter is true for strict inequalities (< and >) which require filtering
 // the boundary value after the index scan.
-func getRangeVal(pred primitives.Predicate, compareValue types.Field) (types.Field, types.Field, bool, error) {
+func getRangeVal(pred primitives.Predicate, compareValue types.Field) (startKey, endKey types.Field, needsPostFilter bool, err error) {
 	fieldType := compareValue.Type()
-	var startKey, endKey types.Field
-	var needsFilter bool
 
 	switch pred {
 	case primitives.GreaterThan:
 		// WHERE x > 5: scan [5, max] but filter out x == 5
 		startKey = compareValue
 		endKey = types.GetMaxValueFor(fieldType)
-		needsFilter = true
+		needsPostFilter = true
 	case primitives.GreaterThanOrEqual:
 		// WHERE x >= 5: scan [5, max]
 		startKey = compareValue
 		endKey = types.GetMaxValueFor(fieldType)
-		needsFilter = false
 	case primitives.LessThan:
 		// WHERE x < 5: scan [min, 5] but filter out x == 5
 		startKey = types.GetMinValueFor(fieldType)
 		endKey = compareValue
-		needsFilter = true
+		needsPostFilter = true
 	case primitives.LessThanOrEqual:
 		// WHERE x <= 5: scan [min, 5]
 		startKey = types.GetMinValueFor(fieldType)
 		endKey = compareValue
-		needsFilter = false
 	default:
 		return nil, nil, false, fmt.Errorf("unsupported range predicate: %v", pred)
 	}
 
-	return startKey, endKey, needsFilter, nil
+	return startKey, endKey, needsPostFilter, nil
 }

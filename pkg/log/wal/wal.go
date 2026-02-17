@@ -26,18 +26,18 @@ type WAL struct {
 
 // NewWAL creates a new WAL instance
 func NewWAL(logPath string, bufferSize int) (*WAL, error) {
-	file, err := os.OpenFile(logPath, os.O_CREATE|os.O_RDWR|os.O_SYNC, 0644)
+	file, err := os.OpenFile(logPath, os.O_CREATE|os.O_RDWR|os.O_SYNC, 0o600) // #nosec G304
 	if err != nil {
 		return nil, fmt.Errorf("failed to open WAL file: %v", err)
 	}
 
 	pos, err := file.Seek(0, io.SeekEnd)
 	if err != nil {
-		file.Close()
+		_ = file.Close()
 		return nil, fmt.Errorf("failed to seek to end of WAL: %v", err)
 	}
 
-	writer := NewLogWriter(file, bufferSize, primitives.LSN(pos), primitives.LSN(pos))
+	writer := NewLogWriter(file, bufferSize, primitives.LSN(pos), primitives.LSN(pos)) // #nosec G115
 
 	w := &WAL{
 		file:       file,

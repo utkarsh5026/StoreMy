@@ -84,11 +84,12 @@ func parseExplainOptions(l *lexer.Lexer) (statements.ExplainOptions, error) {
 		formatToken := l.NextToken()
 		var formatType string
 
-		if formatToken.Type == lexer.TEXT {
+		switch {
+		case formatToken.Type == lexer.TEXT:
 			formatType = "TEXT"
-		} else if formatToken.Type == lexer.IDENTIFIER && formatToken.Value == "JSON" {
+		case formatToken.Type == lexer.IDENTIFIER && formatToken.Value == "JSON":
 			formatType = "JSON"
-		} else {
+		default:
 			return options, fmt.Errorf("invalid format type: %s (must be TEXT or JSON)", formatToken.Value)
 		}
 

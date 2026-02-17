@@ -104,7 +104,7 @@ func createJoinTestTuple(tupleDesc *tuple.TupleDescription, values []interface{}
 		case string:
 			field = types.NewStringField(v, types.StringMaxSize)
 		}
-		tup.SetField(primitives.ColumnID(i), field)
+		_ = tup.SetField(primitives.ColumnID(i), field)
 	}
 	return tup
 }

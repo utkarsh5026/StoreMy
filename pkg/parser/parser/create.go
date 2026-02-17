@@ -82,6 +82,7 @@ func readPrimaryKey(l *lexer.Lexer, stmt *statements.CreateStatement) error {
 // Handles field definitions and table constraints like PRIMARY KEY.
 // Continues until closing parenthesis is found, expecting comma-separated definitions.
 func parseTableDefinition(l *lexer.Lexer, stmt *statements.CreateStatement) error {
+loop:
 	for {
 		token := l.NextToken()
 		var err error
@@ -102,11 +103,12 @@ func parseTableDefinition(l *lexer.Lexer, stmt *statements.CreateStatement) erro
 		}
 
 		token = l.NextToken()
-		if token.Type == lexer.COMMA {
+		switch token.Type {
+		case lexer.COMMA:
 			continue
-		} else if token.Type == lexer.RPAREN {
-			break
-		} else {
+		case lexer.RPAREN:
+			break loop
+		default:
 			return fmt.Errorf("expected ',' or ')', got %s", token.Value)
 		}
 	}

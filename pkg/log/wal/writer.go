@@ -38,7 +38,7 @@ func (w *LogWriter) Write(data []byte) (primitives.LSN, error) {
 			return 0, err
 		}
 
-		_, err := w.writer.WriteAt(data, int64(w.flushedLSN))
+		_, err := w.writer.WriteAt(data, int64(w.flushedLSN)) // #nosec G115
 		if err != nil {
 			return 0, err
 		}
@@ -78,7 +78,7 @@ func (w *LogWriter) flush() error {
 		return nil
 	}
 
-	_, err := w.writer.WriteAt(w.buffer[:w.bufferOffset], int64(w.flushedLSN))
+	_, err := w.writer.WriteAt(w.buffer[:w.bufferOffset], int64(w.flushedLSN)) // #nosec G115
 	if err != nil {
 		return err
 	}

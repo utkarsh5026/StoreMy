@@ -293,14 +293,14 @@ func (se *SelectivityEstimator) EstimateLike(pattern string) Selectivity {
 		return LikeSelectivity
 	}
 
-	if len(pattern) > 0 && pattern[0] != '%' && pattern[len(pattern)-1] == '%' {
+	switch {
+	case pattern != "" && pattern[0] != '%' && pattern[len(pattern)-1] == '%':
 		return 0.1
-	} else if len(pattern) > 0 && pattern[0] == '%' && pattern[len(pattern)-1] != '%' {
+	case pattern != "" && pattern[0] == '%' && pattern[len(pattern)-1] != '%':
 		return 0.3
-	} else if len(pattern) > 1 && pattern[0] == '%' && pattern[len(pattern)-1] == '%' {
+	case len(pattern) > 1 && pattern[0] == '%' && pattern[len(pattern)-1] == '%':
 		return 0.5
-	} else {
-
+	default:
 		return 0.01
 	}
 }
@@ -416,7 +416,7 @@ func (se *SelectivityEstimator) equalityNoHist(colStats *catalogmanager.ColumnSt
 
 	remainingFreq := math.Max(1.0-mcvTotalFreq, 0)
 
-	nonMCVDistinct := int(colStats.DistinctCount) - len(colStats.MostCommonVals)
+	nonMCVDistinct := int(colStats.DistinctCount) - len(colStats.MostCommonVals) // #nosec G115
 	if nonMCVDistinct <= 0 {
 		return Selectivity(1.0 / float64(colStats.DistinctCount))
 	}

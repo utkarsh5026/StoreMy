@@ -50,7 +50,7 @@ type HashFile = *hash.HashFile
 //   - Range queries are inefficient (O(n)) - scans all buckets
 type HashIndex struct {
 	indexID    primitives.FileID
-	numBuckets hash.BucketNumber  // Logical bucket count
+	numBuckets hash.BucketNumber // Logical bucket count
 	tx         *transaction.TransactionContext
 	keyType    types.Type
 	file       *hash.HashFile    // I/O layer only
@@ -182,7 +182,7 @@ func (hi *HashIndex) hashKey(key types.Field) (hash.BucketNumber, error) {
 	if err != nil {
 		return 0, fmt.Errorf("failed to hash key: %w", err)
 	}
-	return hash.BucketNumber(int(h) % int(hi.numBuckets)), nil
+	return hash.BucketNumber(int(h) % int(hi.numBuckets)), nil // #nosec G115
 }
 
 // validateKeyType checks if the provided key matches the index's key type.
@@ -288,12 +288,14 @@ func (hi *HashIndex) getPageFromStore(pid *page.PageDescriptor) (HashPage, error
 func (hi *HashIndex) removeEntry(entry *index.IndexEntry, bucketPage HashPage) error {
 	err := hi.traverseOverflowChain(bucketPage, func(hp HashPage) error {
 		if err := hp.RemoveEntry(entry); err == nil {
-			hi.pageStore.HandlePageChange(
+			if err := hi.pageStore.HandlePageChange(
 				hi.tx,
 				memory.DeleteOperation,
 				func() ([]page.Page, error) {
 					return []page.Page{hp}, nil
-				})
+				}); err != nil {
+				return err
+			}
 			return errSuccess
 		}
 		return nil

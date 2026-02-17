@@ -135,7 +135,7 @@ func (p *ExplainPlan) buildSelectPlan(stmt *statements.SelectStatement) (plan.Pl
 
 	// Apply LIMIT if present
 	if selectPlan.HasLimit() {
-		currentNode = p.buildLimitNode(currentNode, int(selectPlan.Limit()), int(selectPlan.Offset()))
+		currentNode = p.buildLimitNode(currentNode, int(selectPlan.Limit()), int(selectPlan.Offset())) // #nosec G115
 	}
 
 	return currentNode, nil
@@ -557,13 +557,126 @@ func (p *ExplainPlan) formatNodeDetails(node plan.PlanNode) string {
 	}
 }
 
+// formatPlanEducational formats the plan with explanations of what each node does,
+// intended to help users understand query execution.
+func (p *ExplainPlan) formatPlanEducational(planNode plan.PlanNode) string {
+	var sb strings.Builder
+	sb.WriteString("Educational Query Execution Plan:\n")
+	sb.WriteString(strings.Repeat("=", 60))
+	sb.WriteString("\n\n")
+	sb.WriteString("This output explains how the database will execute your query.\n")
+	sb.WriteString("Each step is performed in bottom-up order (innermost first).\n\n")
+	sb.WriteString(p.formatPlanEducationalRecursive(planNode, 0, 1))
+	sb.WriteString("\n")
+	sb.WriteString(strings.Repeat("=", 60))
+	sb.WriteString("\n")
+	sb.WriteString(fmt.Sprintf("\nTotal Estimated Cost: %.2f\n", planNode.GetCost()))
+	sb.WriteString(fmt.Sprintf("Estimated Output Rows: %d\n", planNode.GetCardinality()))
+	return sb.String()
+}
+
+// formatPlanEducationalRecursive recursively formats nodes with plain-language explanations.
+func (p *ExplainPlan) formatPlanEducationalRecursive(node plan.PlanNode, depth, step int) string {
+	if node == nil {
+		return ""
+	}
+
+	indent := strings.Repeat("  ", depth)
+	var sb strings.Builder
+
+	sb.WriteString(fmt.Sprintf("%sStep %d: %s\n", indent, step, p.educationalNodeExplanation(node)))
+	sb.WriteString(fmt.Sprintf("%s  Cost: %.2f | Estimated rows: %d\n\n", indent, node.GetCost(), node.GetCardinality()))
+
+	children := node.GetChildren()
+	for i, child := range children {
+		if child != nil {
+			sb.WriteString(p.formatPlanEducationalRecursive(child, depth+1, step+i+1))
+		}
+	}
+
+	return sb.String()
+}
+
+// educationalNodeExplanation returns a plain-language description of what a node does.
+func (p *ExplainPlan) educationalNodeExplanation(node plan.PlanNode) string {
+	switch n := node.(type) {
+	case *plan.ScanNode:
+		method := n.AccessMethod
+		if method == "" {
+			method = "seqscan"
+		}
+		if method == "seqscan" || method == "" {
+			desc := fmt.Sprintf("Sequential Scan on %q — reads every row in the table from disk", n.TableName)
+			if len(n.Predicates) > 0 {
+				desc += fmt.Sprintf(", then filters rows matching %d condition(s)", len(n.Predicates))
+			}
+			return desc
+		}
+		desc := fmt.Sprintf("Index Scan on %q using index %q — uses an index to find matching rows efficiently", n.TableName, n.IndexName)
+		return desc
+
+	case *plan.JoinNode:
+		joinType := n.JoinType
+		if joinType == "" {
+			joinType = "INNER"
+		}
+		return fmt.Sprintf("%s JOIN — combines rows from two inputs where %s = %s", strings.ToUpper(joinType), n.LeftColumn, n.RightColumn)
+
+	case *plan.FilterNode:
+		return fmt.Sprintf("Filter — evaluates %d predicate(s) and discards rows that do not match", len(n.Predicates))
+
+	case *plan.ProjectNode:
+		return fmt.Sprintf("Projection — selects only %d column(s) from the input, discarding the rest", len(n.Columns))
+
+	case *plan.AggregateNode:
+		desc := fmt.Sprintf("Aggregation — computes %s", strings.Join(n.AggFunctions, ", "))
+		if len(n.GroupByExprs) > 0 {
+			desc += fmt.Sprintf(" for each group defined by %s", strings.Join(n.GroupByExprs, ", "))
+		} else {
+			desc += " over all input rows"
+		}
+		return desc
+
+	case *plan.SortNode:
+		return fmt.Sprintf("Sort — orders all rows by %q %s (requires reading the full input before returning any rows)", n.SortKey, n.Order)
+
+	case *plan.LimitNode:
+		desc := fmt.Sprintf("Limit — returns at most %d row(s)", n.Limit)
+		if n.Offset > 0 {
+			desc += fmt.Sprintf(", skipping the first %d row(s)", n.Offset)
+		}
+		return desc
+
+	case *plan.DistinctNode:
+		return "Distinct — removes duplicate rows from the input"
+
+	case *plan.SetOpNode:
+		return fmt.Sprintf("%s — combines result sets from two sub-queries", n.OpType)
+
+	case *plan.InsertNode:
+		return fmt.Sprintf("Insert — writes %d new row(s) into %q", n.NumRows, n.TableName)
+
+	case *plan.UpdateNode:
+		return fmt.Sprintf("Update — modifies %d field(s) in matching rows of %q", n.SetFields, n.TableName)
+
+	case *plan.DeleteNode:
+		return fmt.Sprintf("Delete — removes matching rows from %q", n.TableName)
+
+	case *plan.DDLNode:
+		return fmt.Sprintf("DDL Operation: %s %q — modifies the schema, no rows are scanned", n.Operation, n.ObjectName)
+
+	default:
+		return fmt.Sprintf("%s (cost=%.2f, rows=%d)", node.GetNodeType(), node.GetCost(), node.GetCardinality())
+	}
+}
+
 // formatPlanJSON formats the plan as JSON (basic implementation).
 func (p *ExplainPlan) formatPlanJSON(planNode plan.PlanNode) string {
 	// For now, return a simple JSON representation
 	// A full implementation would use json.Marshal with proper structure
 	var sb strings.Builder
 	sb.WriteString("{\n")
-	sb.WriteString(fmt.Sprintf("  \"nodeType\": \"%s\",\n", planNode.GetNodeType()))
+	sb.WriteString(fmt.Sprintf("  \"nodeType\": %q,\n", planNode.GetNodeType()))
 	sb.WriteString(fmt.Sprintf("  \"cost\": %.2f,\n", planNode.GetCost()))
 	sb.WriteString(fmt.Sprintf("  \"rows\": %d,\n", planNode.GetCardinality()))
 	sb.WriteString("  \"children\": [\n")

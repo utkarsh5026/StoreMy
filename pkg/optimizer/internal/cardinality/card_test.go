@@ -1269,7 +1269,7 @@ func TestScanCardinalityWithActualCatalog(t *testing.T) {
 
 		age := int64(20 + (i % 49)) // Ages 20-68 (49 distinct values + 20 offset = values 20-68)
 
-		city := "NewYork" // No spaces to avoid potential issues
+		var city string
 		switch i % 3 {
 		case 0:
 			city = "LosAngeles"

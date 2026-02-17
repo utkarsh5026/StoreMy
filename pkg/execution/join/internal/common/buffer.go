@@ -69,12 +69,14 @@ func (jmb *JoinMatchBuffer) Add(t *tuple.Tuple) {
 	currentPos := jmb.iter.CurrentIndex()
 
 	// Append new tuple and create new iterator with updated data
-	newData := append(currentData, t)
-	jmb.iter = iterator.NewSliceIterator(newData)
+	currentData = append(currentData, t)
+	jmb.iter = iterator.NewSliceIterator(currentData)
 
 	// Manually restore the iteration position
 	for i := 0; i < currentPos; i++ {
-		jmb.iter.Next()
+		if _, err := jmb.iter.Next(); err != nil {
+			break
+		}
 	}
 }
 
@@ -89,7 +91,9 @@ func (jmb *JoinMatchBuffer) GetFirstAndAdvance() *tuple.Tuple {
 	if jmb.iter.Len() == 0 {
 		return nil
 	}
-	jmb.iter.Rewind()
+	if err := jmb.iter.Rewind(); err != nil {
+		return nil
+	}
 	first, err := jmb.iter.Next()
 	if err != nil {
 		return nil

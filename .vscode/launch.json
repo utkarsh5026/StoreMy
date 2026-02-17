@@ -1,0 +1,50 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Run StoreMy",
+            "type": "go",
+            "request": "launch",
+            "mode": "debug",
+            "program": "${workspaceFolder}",
+            "args": ["-db", "mydb", "-data", "./data"],
+            "env": {},
+            "console": "integratedTerminal",
+            "stopAtEntry": false
+        },
+        {
+            "name": "Run StoreMy (fresh data)",
+            "type": "go",
+            "request": "launch",
+            "mode": "debug",
+            "program": "${workspaceFolder}",
+            "args": ["-db", "testdb", "-data", "./tmp/data"],
+            "env": {},
+            "console": "integratedTerminal",
+            "stopAtEntry": false,
+            "preLaunchTask": "Shell: Clear fresh data"
+        },
+        {
+            "name": "Debug current test file",
+            "type": "go",
+            "request": "launch",
+            "mode": "test",
+            "program": "${fileDirname}",
+            "args": ["-v", "-count=1"],
+            "env": {},
+            "console": "integratedTerminal",
+            "stopAtEntry": false
+        },
+        {
+            "name": "Debug tests in package",
+            "type": "go",
+            "request": "launch",
+            "mode": "test",
+            "program": "${fileDirname}",
+            "args": ["-v", "-count=1", "-timeout", "120s"],
+            "env": {},
+            "console": "integratedTerminal",
+            "stopAtEntry": false
+        }
+    ]
+}

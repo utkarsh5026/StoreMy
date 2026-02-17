@@ -69,12 +69,6 @@ func (m *mockGroupAggregator) addGroup(key string, value types.Field) {
 	m.groups[key] = value
 }
 
-func (m *mockGroupAggregator) setError(shouldError bool) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.shouldError = shouldError
-}
-
 // Helper functions
 func createIteratorTestTupleDesc(grouped bool) *tuple.TupleDescription {
 	if grouped {

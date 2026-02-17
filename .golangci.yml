@@ -1,0 +1,85 @@
+run:
+  timeout: 5m
+  tests: true
+
+linters:
+  disable-all: true
+  enable:
+    - errcheck
+    - gosimple
+    - govet
+    - ineffassign
+    - staticcheck
+    - unused
+    - gofmt
+    - goimports
+    - misspell
+    - gocritic
+    - prealloc
+    - cyclop
+    - gocognit
+
+linters-settings:
+  cyclop:
+    max-complexity: 15
+  gocognit:
+    min-complexity: 30
+  gocritic:
+    enabled-tags:
+      - diagnostic
+      - style
+    disabled-checks:
+      - commentedOutCode
+      - ptrToRefParam
+  misspell:
+    locale: US
+  govet:
+    enable-all: true
+    disable:
+      - shadow
+      - fieldalignment
+
+issues:
+  max-issues-per-linter: 50
+  max-same-issues: 10
+  exclude-rules:
+    - path: _test\.go
+      linters:
+        - errcheck
+        - gocritic
+        - cyclop
+        - gocognit
+        - prealloc
+    - path: pkg/examples/
+      linters:
+        - errcheck
+    - linters:
+        - staticcheck
+      text: "SA1019"
+    # Inherently complex: lexer/token switch statements (readIdentifier, String)
+    - path: pkg/parser/lexer/
+      linters:
+        - cyclop
+        - gocognit
+    # Inherently complex: TUI event handlers and rendering
+    - path: pkg/debug/
+      linters:
+        - cyclop
+        - gocognit
+    - path: pkg/ui/model\.go
+      linters:
+        - cyclop
+        - gocognit
+    # Inherently complex: EXPLAIN formatter, SQL parser, B-tree, CREATE validator
+    - path: pkg/planner/explain\.go
+      linters:
+        - cyclop
+    - path: pkg/parser/parser/parser\.go
+      linters:
+        - cyclop
+    - path: pkg/memory/wrappers/btree_index/btree_delete\.go
+      linters:
+        - cyclop
+    - path: pkg/parser/statements/create\.go
+      linters:
+        - cyclop

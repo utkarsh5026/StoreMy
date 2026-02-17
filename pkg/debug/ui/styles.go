@@ -172,12 +172,12 @@ var NavigationKeys = NavigationKeyMap{
 
 // Helper functions - re-export from base package
 var (
-	PadString       = base.PadString
-	TruncateString  = base.TruncateString
-	Max             = base.Max
-	Min             = base.Min
-	CenterString    = base.CenterString
-	RightAlign      = base.RightAlign
+	PadString      = base.PadString
+	TruncateString = base.TruncateString
+	Max            = base.Max
+	Min            = base.Min
+	CenterString   = base.CenterString
+	RightAlign     = base.RightAlign
 )
 
 // RenderError renders an error message with instructions to quit

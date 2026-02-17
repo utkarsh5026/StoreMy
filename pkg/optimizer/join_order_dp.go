@@ -472,8 +472,8 @@ func (joo *JoinOrderOptimizer) optimizeGreedy(
 }
 
 // SetMaxRelations sets the maximum number of relations for full DP
-func (joo *JoinOrderOptimizer) SetMaxRelations(max int) {
-	joo.maxRelations = max
+func (joo *JoinOrderOptimizer) SetMaxRelations(maxRelations int) {
+	joo.maxRelations = maxRelations
 }
 
 // GetDPTableSize returns the size of the DP table (for debugging)

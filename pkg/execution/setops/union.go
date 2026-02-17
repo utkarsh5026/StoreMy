@@ -43,7 +43,8 @@ func NewUnion(left, right iterator.DbIterator, unionAll bool) (*Union, error) {
 	}
 
 	u := &Union{SetOp: base}
-	return u, u.setBinaryOperator(left, right, u.readNext)
+	err = u.setBinaryOperator(left, right, u.readNext)
+	return u, err
 }
 
 // readNext implements the UNION logic using streaming approach.

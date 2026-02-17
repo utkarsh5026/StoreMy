@@ -283,7 +283,9 @@ func (bt *BTree) updateParentKey(child *BTreePage, newKey types.Field) error {
 	childID := child.GetID()
 	for i := 1; i < len(children); i++ {
 		if children[i].ChildPID.Equals(childID) {
-			parent.UpdateChildrenKey(i, newKey)
+			if err := parent.UpdateChildrenKey(i, newKey); err != nil {
+				return fmt.Errorf("failed to update parent key: %w", err)
+			}
 			return bt.addDirtyPage(parent, memory.UpdateOperation)
 		}
 	}

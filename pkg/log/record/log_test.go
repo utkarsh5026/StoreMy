@@ -290,6 +290,10 @@ func TestTransactionLogInfo_EmptyTransaction(t *testing.T) {
 	if info.LastLSN != 0 {
 		t.Errorf("expected LastLSN to be 0, got %d", info.LastLSN)
 	}
+
+	if info.UndoNextLSN != 0 {
+		t.Errorf("expected UndoNextLSN to be 0, got %d", info.UndoNextLSN)
+	}
 }
 
 func TestLSN_Ordering(t *testing.T) {
