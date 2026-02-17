@@ -37,56 +37,43 @@ func (p *Parser) ExpectFields(count int) *Parser {
 	return p
 }
 
-// ReadInt reads an integer field at the current index and advances (backward compatible)
-func (p *Parser) ReadInt() int {
+// readTyped is a generic helper that reads a field of the expected type at the current index and advances.
+// F is the concrete field type (e.g. *types.IntField), V is the value type (e.g. int64).
+func readTyped[F types.Field, V any](p *Parser, extract func(F) V) V {
+	var zero V
 	if p.err != nil {
-		return 0
+		return zero
 	}
 	if p.currentIndex >= p.tuple.TupleDesc.NumFields() {
 		p.err = fmt.Errorf("read beyond tuple bounds at field %d", p.currentIndex)
-		return 0
+		return zero
 	}
 
 	field, err := p.tuple.GetField(p.currentIndex)
 	if err != nil {
 		p.err = fmt.Errorf("field %d: %w", p.currentIndex, err)
-		return 0
+		return zero
 	}
 
-	intField, ok := field.(*types.IntField)
+	typed, ok := field.(F)
 	if !ok {
-		p.err = fmt.Errorf("field %d: expected IntField, got %T", p.currentIndex, field)
-		return 0
+		var expected F
+		p.err = fmt.Errorf("field %d: expected %T, got %T", p.currentIndex, expected, field)
+		return zero
 	}
 
 	p.currentIndex++
-	return int(intField.Value)
+	return extract(typed)
+}
+
+// ReadInt reads an integer field at the current index and advances (backward compatible)
+func (p *Parser) ReadInt() int {
+	return readTyped(p, func(f *types.IntField) int { return int(f.Value) })
 }
 
 // ReadInt32 reads a 32-bit signed integer field at the current index and advances
 func (p *Parser) ReadInt32() int32 {
-	if p.err != nil {
-		return 0
-	}
-	if p.currentIndex >= p.tuple.TupleDesc.NumFields() {
-		p.err = fmt.Errorf("read beyond tuple bounds at field %d", p.currentIndex)
-		return 0
-	}
-
-	field, err := p.tuple.GetField(p.currentIndex)
-	if err != nil {
-		p.err = fmt.Errorf("field %d: %w", p.currentIndex, err)
-		return 0
-	}
-
-	int32Field, ok := field.(*types.Int32Field)
-	if !ok {
-		p.err = fmt.Errorf("field %d: expected Int32Field, got %T", p.currentIndex, field)
-		return 0
-	}
-
-	p.currentIndex++
-	return int32Field.Value
+	return readTyped(p, func(f *types.Int32Field) int32 { return f.Value })
 }
 
 // ReadInt64 reads a 64-bit signed integer field at the current index and advances
@@ -123,132 +110,27 @@ func (p *Parser) ReadInt64() int64 {
 
 // ReadUint32 reads a 32-bit unsigned integer field at the current index and advances
 func (p *Parser) ReadUint32() uint32 {
-	if p.err != nil {
-		return 0
-	}
-	if p.currentIndex >= p.tuple.TupleDesc.NumFields() {
-		p.err = fmt.Errorf("read beyond tuple bounds at field %d", p.currentIndex)
-		return 0
-	}
-
-	field, err := p.tuple.GetField(p.currentIndex)
-	if err != nil {
-		p.err = fmt.Errorf("field %d: %w", p.currentIndex, err)
-		return 0
-	}
-
-	uint32Field, ok := field.(*types.Uint32Field)
-	if !ok {
-		p.err = fmt.Errorf("field %d: expected Uint32Field, got %T", p.currentIndex, field)
-		return 0
-	}
-
-	p.currentIndex++
-	return uint32Field.Value
+	return readTyped(p, func(f *types.Uint32Field) uint32 { return f.Value })
 }
 
 // ReadUint64 reads a 64-bit unsigned integer field at the current index and advances
 func (p *Parser) ReadUint64() uint64 {
-	if p.err != nil {
-		return 0
-	}
-	if p.currentIndex >= p.tuple.TupleDesc.NumFields() {
-		p.err = fmt.Errorf("read beyond tuple bounds at field %d", p.currentIndex)
-		return 0
-	}
-
-	field, err := p.tuple.GetField(p.currentIndex)
-	if err != nil {
-		p.err = fmt.Errorf("field %d: %w", p.currentIndex, err)
-		return 0
-	}
-
-	uint64Field, ok := field.(*types.Uint64Field)
-	if !ok {
-		p.err = fmt.Errorf("field %d: expected Uint64Field, got %T", p.currentIndex, field)
-		return 0
-	}
-
-	p.currentIndex++
-	return uint64Field.Value
+	return readTyped(p, func(f *types.Uint64Field) uint64 { return f.Value })
 }
 
 // ReadString reads a string field at the current index and advances
 func (p *Parser) ReadString() string {
-	if p.err != nil {
-		return ""
-	}
-	if p.currentIndex >= p.tuple.TupleDesc.NumFields() {
-		p.err = fmt.Errorf("read beyond tuple bounds at field %d", p.currentIndex)
-		return ""
-	}
-
-	field, err := p.tuple.GetField(p.currentIndex)
-	if err != nil {
-		p.err = fmt.Errorf("field %d: %w", p.currentIndex, err)
-		return ""
-	}
-
-	strField, ok := field.(*types.StringField)
-	if !ok {
-		p.err = fmt.Errorf("field %d: expected StringField, got %T", p.currentIndex, field)
-		return ""
-	}
-
-	p.currentIndex++
-	return strField.Value
+	return readTyped(p, func(f *types.StringField) string { return f.Value })
 }
 
 // ReadBool reads a boolean field at the current index and advances
 func (p *Parser) ReadBool() bool {
-	if p.err != nil {
-		return false
-	}
-	if p.currentIndex >= p.tuple.TupleDesc.NumFields() {
-		p.err = fmt.Errorf("read beyond tuple bounds at field %d", p.currentIndex)
-		return false
-	}
-
-	field, err := p.tuple.GetField(p.currentIndex)
-	if err != nil {
-		p.err = fmt.Errorf("field %d: %w", p.currentIndex, err)
-		return false
-	}
-
-	boolField, ok := field.(*types.BoolField)
-	if !ok {
-		p.err = fmt.Errorf("field %d: expected BoolField, got %T", p.currentIndex, field)
-		return false
-	}
-
-	p.currentIndex++
-	return boolField.Value
+	return readTyped(p, func(f *types.BoolField) bool { return f.Value })
 }
 
 // ReadFloat reads a float field at the current index and advances
 func (p *Parser) ReadFloat() float64 {
-	if p.err != nil {
-		return 0.0
-	}
-	if p.currentIndex >= p.tuple.TupleDesc.NumFields() {
-		p.err = fmt.Errorf("read beyond tuple bounds at field %d", p.currentIndex)
-		return 0.0
-	}
-
-	field, err := p.tuple.GetField(p.currentIndex)
-	if err != nil {
-		p.err = fmt.Errorf("field %d: %w", p.currentIndex, err)
-		return 0.0
-	}
-
-	floatField, ok := field.(*types.Float64Field)
-	if !ok {
-		p.err = fmt.Errorf("field %d: expected Float64Field, got %T", p.currentIndex, field)
-		return 0.0
-	}
-
-	p.currentIndex++
-	return floatField.Value
+	return readTyped(p, func(f *types.Float64Field) float64 { return f.Value })
 }
 
 // ReadTimestamp reads a Unix timestamp field and returns it as time.Time
