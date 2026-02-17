@@ -77,8 +77,8 @@ func (p *CreateIndexPlan) Execute() (result.Result, error) {
 	// Step 3: Register in catalog using actual file ID
 	_, err = catalogOps.CreateIndex(physicalID, indexName, tableName, colName, idxType)
 	if err != nil {
-		// Rollback: Delete physical file
-		fileOps.DeletePhysicalIndex()
+		// Rollback: Delete physical file (best-effort, ignore error)
+		_ = fileOps.DeletePhysicalIndex()
 		return nil, fmt.Errorf("failed to register index in catalog: %w", err)
 	}
 
@@ -98,9 +98,9 @@ func (p *CreateIndexPlan) Execute() (result.Result, error) {
 	}
 
 	if err := PopulateIndexWithData(&idxConfig); err != nil {
-		// Rollback: Remove from catalog and delete physical file
-		catalogOps.DropIndex(indexName)
-		fileOps.DeletePhysicalIndex()
+		// Rollback: Remove from catalog and delete physical file (best-effort, ignore errors)
+		_, _ = catalogOps.DropIndex(indexName)
+		_ = fileOps.DeletePhysicalIndex()
 		return nil, fmt.Errorf("failed to populate index: %w", err)
 	}
 

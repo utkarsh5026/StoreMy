@@ -208,7 +208,7 @@ func (cm *CatalogManager) ClearCache() {
 			}
 			cm.store.UnregisterDbFile(tableID)
 		}
-		cm.tableCache.RemoveTable(name)
+		_ = cm.tableCache.RemoveTable(name)
 	}
 
 }

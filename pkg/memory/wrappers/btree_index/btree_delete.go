@@ -33,7 +33,9 @@ func (bt *BTree) deleteFromLeaf(leaf *BTreePage, ie *index.IndexEntry) error {
 	}
 
 	wasFirstKey := (deleteIdx == 0 && leaf.GetNumEntries() > 1)
-	leaf.RemoveEntry(deleteIdx)
+	if _, err := leaf.RemoveEntry(deleteIdx); err != nil {
+		return fmt.Errorf("failed to remove entry: %w", err)
+	}
 
 	if err := bt.addDirtyPage(leaf, memory.DeleteOperation); err != nil {
 		return err
@@ -151,7 +153,9 @@ func (bt *BTree) redistributeFromLeft(left, current, parent *BTreePage, pageIdx 
 			return fmt.Errorf("failed to insert entry into current page: %w", err)
 		}
 
-		parent.UpdateChildrenKey(pageIdx, (*deleted).Key)
+		if err := parent.UpdateChildrenKey(pageIdx, (*deleted).Key); err != nil {
+			return fmt.Errorf("failed to update parent key: %w", err)
+		}
 		return nil
 	}
 
@@ -162,14 +166,18 @@ func (bt *BTree) redistributeFromLeft(left, current, parent *BTreePage, pageIdx 
 
 	ch := btree.NewBtreeChildPtr(nil, (*moved).ChildPID)
 	if len(current.Children()) > 0 {
-		current.UpdateChildrenKey(0, parent.Children()[pageIdx].Key)
+		if err := current.UpdateChildrenKey(0, parent.Children()[pageIdx].Key); err != nil {
+			return fmt.Errorf("failed to update current key: %w", err)
+		}
 	}
 
 	if err := current.AddChildPtr(ch, -1); err != nil {
 		return fmt.Errorf("failed to add child pointer to current page: %w", err)
 	}
 
-	parent.UpdateChildrenKey(pageIdx, (*moved).Key)
+	if err := parent.UpdateChildrenKey(pageIdx, (*moved).Key); err != nil {
+		return fmt.Errorf("failed to update parent key: %w", err)
+	}
 
 	return nil
 }
@@ -201,7 +209,9 @@ func (bt *BTree) redistributeFromRight(current, right, parent *BTreePage, pageId
 			return fmt.Errorf("failed to insert entry into current page: %w", err)
 		}
 
-		parent.UpdateChildrenKey(pageIdx+1, right.Entries[rightStart].Key)
+		if err := parent.UpdateChildrenKey(pageIdx+1, right.Entries[rightStart].Key); err != nil {
+			return fmt.Errorf("failed to update parent key: %w", err)
+		}
 		return nil
 	}
 
@@ -216,8 +226,12 @@ func (bt *BTree) redistributeFromRight(current, right, parent *BTreePage, pageId
 	}
 
 	if len(right.Children()) > 0 {
-		parent.UpdateChildrenKey(pageIdx+1, right.Children()[0].Key)
-		right.UpdateChildrenKey(0, nil)
+		if err := parent.UpdateChildrenKey(pageIdx+1, right.Children()[0].Key); err != nil {
+			return fmt.Errorf("failed to update parent key: %w", err)
+		}
+		if err := right.UpdateChildrenKey(0, nil); err != nil {
+			return fmt.Errorf("failed to clear right child key: %w", err)
+		}
 	}
 
 	return nil

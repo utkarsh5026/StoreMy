@@ -113,7 +113,10 @@ func (lm *LockManager) attemptToAcquireLock(tid *primitives.TransactionID, pid p
 			return nil
 		}
 
-		lm.waitQueue.Add(tid, pid, lockType)
+		if err := lm.waitQueue.Add(tid, pid, lockType); err != nil {
+			lm.mutex.Unlock()
+			return err
+		}
 		lm.updateDependencies(tid, pid, lockType)
 
 		if lm.depGraph.HasCycle() {

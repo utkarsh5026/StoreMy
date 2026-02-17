@@ -599,10 +599,7 @@ func TestHeapPage_ConcurrentAccess(t *testing.T) {
 		go func() {
 			defer func() { done <- true }()
 
-			emptySlots := hp.GetNumEmptySlots()
-			if emptySlots < 0 {
-				t.Errorf("Invalid empty slots count: %d", emptySlots)
-			}
+			_ = hp.GetNumEmptySlots()
 
 			isDirty := hp.IsDirty()
 			_ = isDirty

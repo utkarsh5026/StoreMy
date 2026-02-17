@@ -162,7 +162,7 @@ func (hp *HeapPage) GetPageData() []byte {
 			if err != nil {
 				continue
 			}
-			field.Serialize(buffer)
+			_ = field.Serialize(buffer)
 		}
 	}
 
@@ -477,7 +477,7 @@ func (hp *HeapPage) Compact() int {
 			if err != nil {
 				continue
 			}
-			field.Serialize(buffer)
+			_ = field.Serialize(buffer)
 		}
 
 		activeTuples = append(activeTuples, tupleData{

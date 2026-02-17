@@ -86,7 +86,7 @@ func (s *SortMergeJoin) Next() (*tuple.Tuple, error) {
 	for s.leftIterator.HasNext() && s.rightIterator.HasNext() {
 		cmp, err := s.compareCurrentTuples()
 		if err != nil {
-			s.leftIterator.Next()
+			_, _ = s.leftIterator.Next()
 			continue
 		}
 
@@ -100,10 +100,10 @@ func (s *SortMergeJoin) Next() (*tuple.Tuple, error) {
 			}
 
 		case -1: // Left < Right
-			s.leftIterator.Next()
+			_, _ = s.leftIterator.Next()
 
 		case 1: // Left > Right
-			s.rightIterator.Next()
+			_, _ = s.rightIterator.Next()
 		}
 	}
 
@@ -113,10 +113,14 @@ func (s *SortMergeJoin) Next() (*tuple.Tuple, error) {
 // Reset resets the join to its initial state, allowing it to be re-executed.
 func (s *SortMergeJoin) Reset() error {
 	if s.leftIterator != nil {
-		s.leftIterator.Rewind()
+		if err := s.leftIterator.Rewind(); err != nil {
+			return err
+		}
 	}
 	if s.rightIterator != nil {
-		s.rightIterator.Rewind()
+		if err := s.rightIterator.Rewind(); err != nil {
+			return err
+		}
 	}
 	return s.ResetCommon()
 }
@@ -224,13 +228,13 @@ func (s *SortMergeJoin) processEqualKeys() error {
 	for s.rightIterator.HasNext() {
 		rt, err := s.rightIterator.Peek()
 		if err != nil {
-			s.rightIterator.Next()
+			_, _ = s.rightIterator.Next()
 			continue
 		}
 
 		rf, err := rt.GetField(s.Predicate().GetRightField())
 		if err != nil || rf == nil {
-			s.rightIterator.Next()
+			_, _ = s.rightIterator.Next()
 			continue
 		}
 
@@ -244,16 +248,16 @@ func (s *SortMergeJoin) processEqualKeys() error {
 			s.MatchBuffer().Add(combined)
 		}
 
-		s.rightIterator.Next()
+		_, _ = s.rightIterator.Next()
 	}
 
 	// Reset right iterator to the saved position
-	s.rightIterator.Rewind()
+	_ = s.rightIterator.Rewind()
 	for i := 0; i < rightStart; i++ {
-		s.rightIterator.Next()
+		_, _ = s.rightIterator.Next()
 	}
 
-	s.leftIterator.Next()
+	_, _ = s.leftIterator.Next()
 	return nil
 }
 

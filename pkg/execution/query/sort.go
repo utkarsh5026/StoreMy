@@ -227,7 +227,9 @@ func (s *Sort) Rewind() error {
 	}
 
 	if s.sorted != nil {
-		s.sorted.Rewind()
+		if err := s.sorted.Rewind(); err != nil {
+			return err
+		}
 	}
 
 	return s.base.Rewind()

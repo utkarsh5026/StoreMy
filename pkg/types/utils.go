@@ -10,7 +10,9 @@ func CreateFieldFromConstant(t Type, constant string) (Field, error) {
 	switch t {
 	case IntType:
 		var intVal int64
-		fmt.Sscanf(constant, "%d", &intVal)
+		if _, err := fmt.Sscanf(constant, "%d", &intVal); err != nil {
+			return nil, fmt.Errorf("invalid integer constant %q: %w", constant, err)
+		}
 		return NewIntField(intVal), nil
 
 	case BoolType:
@@ -19,7 +21,9 @@ func CreateFieldFromConstant(t Type, constant string) (Field, error) {
 
 	case FloatType:
 		var floatVal float64
-		fmt.Sscanf(constant, "%f", &floatVal)
+		if _, err := fmt.Sscanf(constant, "%f", &floatVal); err != nil {
+			return nil, fmt.Errorf("invalid float constant %q: %w", constant, err)
+		}
 		return NewFloat64Field(floatVal), nil
 
 	case StringType:

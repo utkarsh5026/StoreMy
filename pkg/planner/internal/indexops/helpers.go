@@ -54,7 +54,7 @@ func populateIndexWithCleanup(cf *IndexCreationConfig) error {
 
 	tableFile, err := cm.GetTableFile(cf.TableID)
 	if err != nil {
-		cf.FilePath.Remove()
+		_ = cf.FilePath.Remove()
 		if _, dropErr := cm.NewIndexOps(cf.Tx).DropIndex(cf.IndexName); dropErr != nil {
 			fmt.Printf("Warning: failed to cleanup catalog entry after file access failure: %v\n", dropErr)
 		}
@@ -62,7 +62,7 @@ func populateIndexWithCleanup(cf *IndexCreationConfig) error {
 	}
 
 	if err := im.PopulateIndex(cf.Tx, cf.FilePath, cf.IndexID, tableFile, cf.ColumnIndex, cf.ColumnType, cf.IndexType); err != nil {
-		cf.FilePath.Remove()
+		_ = cf.FilePath.Remove()
 		if _, dropErr := cm.NewIndexOps(cf.Tx).DropIndex(cf.IndexName); dropErr != nil {
 			fmt.Printf("Warning: failed to cleanup catalog entry after population failure: %v\n", dropErr)
 		}

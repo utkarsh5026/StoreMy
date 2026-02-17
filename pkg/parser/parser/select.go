@@ -122,8 +122,7 @@ func parseSelectField(l *lexer.Lexer, p *plan.SelectPlan, fieldToken lexer.Token
 	}
 
 	l.SetPos(nextToken.Position)
-	p.AddProjectField(strings.ToUpper(fieldToken.Value), "")
-	return nil
+	return p.AddProjectField(strings.ToUpper(fieldToken.Value), "")
 }
 
 // parseAggregateFunction parses aggregate function calls in SELECT clause.
@@ -156,8 +155,7 @@ func parseAggregateFunction(l *lexer.Lexer, p *plan.SelectPlan, funcToken lexer.
 		return fmt.Errorf("expected closing parenthesis in aggregate function")
 	}
 
-	p.AddProjectField(fieldName, aggOp)
-	return nil
+	return p.AddProjectField(fieldName, aggOp)
 }
 
 // parseGroupBy parses the optional GROUP BY clause.

@@ -124,13 +124,15 @@ func (agg *AggregateOperator) Open() error {
 	}
 
 	tupleCount := 0
-	iterator.ForEach(agg.source, func(t *tuple.Tuple) error {
+	if err := iterator.ForEach(agg.source, func(t *tuple.Tuple) error {
 		tupleCount++
 		if err := agg.aggregator.Merge(t); err != nil {
 			return fmt.Errorf("error merging tuple: %v", err)
 		}
 		return nil
-	})
+	}); err != nil {
+		return err
+	}
 
 	// For non-grouped aggregates (e.g., COUNT(*) with no GROUP BY),
 	// we need to return a single row even if there are no input tuples.

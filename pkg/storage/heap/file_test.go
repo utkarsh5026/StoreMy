@@ -51,11 +51,10 @@ func TestNewHeapFile(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Failed to create HeapFile: %v", err)
 		}
-		defer hf.Close()
-
 		if hf == nil {
 			t.Fatal("NewHeapFile returned nil")
 		}
+		defer hf.Close()
 
 		if hf.tupleDesc != td {
 			t.Error("HeapFile has incorrect tuple descriptor")

@@ -68,12 +68,19 @@ func (i *IndexEntry) Equals(other *IndexEntry) bool {
 //	data, err := entry.Serialize()
 func (i *IndexEntry) Serialize(w io.Writer) error {
 	rid := i.RID
-	binary.Write(w, binary.BigEndian, byte(i.Key.Type()))
-	i.Key.Serialize(w)
-	binary.Write(w, binary.BigEndian, rid.PageID.FileID())
-	binary.Write(w, binary.BigEndian, rid.PageID.PageNo())
-	binary.Write(w, binary.BigEndian, rid.TupleNum)
-	return nil
+	if err := binary.Write(w, binary.BigEndian, byte(i.Key.Type())); err != nil {
+		return err
+	}
+	if err := i.Key.Serialize(w); err != nil {
+		return err
+	}
+	if err := binary.Write(w, binary.BigEndian, rid.PageID.FileID()); err != nil {
+		return err
+	}
+	if err := binary.Write(w, binary.BigEndian, rid.PageID.PageNo()); err != nil {
+		return err
+	}
+	return binary.Write(w, binary.BigEndian, rid.TupleNum)
 }
 
 // DeserializeEntry reads a single hash entry from the byte stream.
@@ -100,9 +107,15 @@ func DeserializeEntry(r *bytes.Reader) (*IndexEntry, error) {
 	var pageNum primitives.PageNumber
 	var tupleNum primitives.SlotID
 
-	binary.Read(r, binary.BigEndian, &tableID)
-	binary.Read(r, binary.BigEndian, &pageNum)
-	binary.Read(r, binary.BigEndian, &tupleNum)
+	if err := binary.Read(r, binary.BigEndian, &tableID); err != nil {
+		return nil, err
+	}
+	if err := binary.Read(r, binary.BigEndian, &pageNum); err != nil {
+		return nil, err
+	}
+	if err := binary.Read(r, binary.BigEndian, &tupleNum); err != nil {
+		return nil, err
+	}
 
 	pageID := page.NewPageDescriptor(tableID, pageNum)
 	rid := tuple.NewTupleRecordID(pageID, tupleNum)

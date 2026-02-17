@@ -99,7 +99,7 @@ func NewCatalogManager(ps *memory.PageStore, dataDir string) *CatalogManager {
 //
 // Returns error if any system table cannot be created, loaded, or registered.
 func (cm *CatalogManager) Initialize(ctx TxContext) error {
-	defer cm.store.CommitTransaction(ctx)
+	defer func() { _ = cm.store.CommitTransaction(ctx) }()
 
 	systemTables := systemtable.AllSystemTables
 

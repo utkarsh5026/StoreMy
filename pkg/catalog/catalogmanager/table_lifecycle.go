@@ -382,7 +382,7 @@ func (cm *CatalogManager) RenameTable(tx TxContext, oldName, newName string) err
 		})
 
 	if err != nil {
-		cm.tableCache.RenameTable(newName, oldName)
+		_ = cm.tableCache.RenameTable(newName, oldName)
 		return fmt.Errorf("failed to insert new catalog entry: %w", err)
 	}
 	return nil

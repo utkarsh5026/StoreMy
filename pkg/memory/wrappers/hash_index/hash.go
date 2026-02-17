@@ -288,12 +288,14 @@ func (hi *HashIndex) getPageFromStore(pid *page.PageDescriptor) (HashPage, error
 func (hi *HashIndex) removeEntry(entry *index.IndexEntry, bucketPage HashPage) error {
 	err := hi.traverseOverflowChain(bucketPage, func(hp HashPage) error {
 		if err := hp.RemoveEntry(entry); err == nil {
-			hi.pageStore.HandlePageChange(
+			if err := hi.pageStore.HandlePageChange(
 				hi.tx,
 				memory.DeleteOperation,
 				func() ([]page.Page, error) {
 					return []page.Page{hp}, nil
-				})
+				}); err != nil {
+				return err
+			}
 			return errSuccess
 		}
 		return nil
