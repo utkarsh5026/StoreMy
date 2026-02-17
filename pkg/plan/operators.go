@@ -13,10 +13,10 @@ type FilterNode struct {
 	Predicates []PredicateInfo // Filter predicates
 
 	// Parser compatibility fields - for simple filter representation
-	Table     string                // Table name (parser usage)
-	Field     string                // Field name (parser usage)
-	Predicate primitives.Predicate  // Predicate operator (parser usage)
-	Constant  string                // Constant value (parser usage)
+	Table     string               // Table name (parser usage)
+	Field     string               // Field name (parser usage)
+	Predicate primitives.Predicate // Predicate operator (parser usage)
+	Constant  string               // Constant value (parser usage)
 }
 
 // NewFilterNode creates a new simple filter node for parser usage.

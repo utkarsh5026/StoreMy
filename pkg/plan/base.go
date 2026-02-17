@@ -74,12 +74,12 @@ const (
 // PredicateInfo represents a filter predicate applied in scan or filter nodes.
 // It supports different types of predicates with their specific requirements.
 type PredicateInfo struct {
-	Column    string                // Column name being filtered
-	Predicate primitives.Predicate  // Predicate operator (=, <, >, LIKE, etc.)
-	Value     string                // Primary value (for standard predicates and LIKE patterns)
-	Values    []string              // Multiple values (for IN predicates)
-	Type      PredicateType         // Type of predicate for specialized handling
-	IsNull    bool                  // For null checks: true for IS NULL, false for IS NOT NULL
+	Column    string               // Column name being filtered
+	Predicate primitives.Predicate // Predicate operator (=, <, >, LIKE, etc.)
+	Value     string               // Primary value (for standard predicates and LIKE patterns)
+	Values    []string             // Multiple values (for IN predicates)
+	Type      PredicateType        // Type of predicate for specialized handling
+	IsNull    bool                 // For null checks: true for IS NULL, false for IS NOT NULL
 }
 
 // JoinType represents the type of join operation

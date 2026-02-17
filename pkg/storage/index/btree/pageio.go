@@ -23,10 +23,10 @@ func DeserializeBTreePage(data []byte, pageID *page.PageDescriptor) (*BTreePage,
 
 	var ParentPage, NextLeaf, PrevLeaf uint64
 	var numEntries int32
-	binary.Read(buf, binary.BigEndian, &ParentPage)
-	binary.Read(buf, binary.BigEndian, &numEntries)
-	binary.Read(buf, binary.BigEndian, &NextLeaf)
-	binary.Read(buf, binary.BigEndian, &PrevLeaf)
+	_ = binary.Read(buf, binary.BigEndian, &ParentPage)
+	_ = binary.Read(buf, binary.BigEndian, &numEntries)
+	_ = binary.Read(buf, binary.BigEndian, &NextLeaf)
+	_ = binary.Read(buf, binary.BigEndian, &PrevLeaf)
 
 	btreePage := &BTreePage{
 		pageID:     pageID,

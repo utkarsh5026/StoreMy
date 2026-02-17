@@ -104,7 +104,7 @@ func NewSelectQueryResult(tupleDesc *tuple.TupleDescription, tuples []*tuple.Tup
 }
 
 // NewExplainResult creates a new EXPLAIN result with the given plan, format, and analyze flag.
-func NewExplainResult(plan string, format string, analyze bool) *ExplainResult {
+func NewExplainResult(plan, format string, analyze bool) *ExplainResult {
 	return &ExplainResult{
 		Plan:    plan,
 		Format:  format,

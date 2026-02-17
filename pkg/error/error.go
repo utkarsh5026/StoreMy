@@ -88,7 +88,7 @@ func New(category ErrorCategory, code, message string) *DBError {
 // Wrap wraps an existing error with database-specific context information.
 // If the error is already a DBError, it enriches the existing error with
 // operation and component context (only if not already set).
-func Wrap(err error, code string, operation, component string) *DBError {
+func Wrap(err error, code, operation, component string) *DBError {
 	if err == nil {
 		return nil
 	}

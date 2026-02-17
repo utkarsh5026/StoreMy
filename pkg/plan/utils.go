@@ -34,11 +34,12 @@ func (pv *PlanVisualizer) visualizeNode(node PlanNode, prefix string, isLast boo
 	var sb strings.Builder
 
 	// Current node connector
-	if prefix == "" {
+	switch {
+	case prefix == "":
 		sb.WriteString("") // Root node
-	} else if isLast {
+	case isLast:
 		sb.WriteString(prefix + "└── ")
-	} else {
+	default:
 		sb.WriteString(prefix + "├── ")
 	}
 
@@ -50,11 +51,12 @@ func (pv *PlanVisualizer) visualizeNode(node PlanNode, prefix string, isLast boo
 	children := node.GetChildren()
 	for i, child := range children {
 		childPrefix := prefix
-		if prefix == "" {
+		switch {
+		case prefix == "":
 			childPrefix = ""
-		} else if isLast {
+		case isLast:
 			childPrefix += "    "
-		} else {
+		default:
 			childPrefix += "│   "
 		}
 		sb.WriteString(pv.visualizeNode(child, childPrefix, i == len(children)-1))

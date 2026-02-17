@@ -187,7 +187,7 @@ func (p *PageStore) HandlePageChange(ctx TxContext, op OperationType, getDirtyPa
 		}
 
 		pg.MarkDirty(true, ctx.ID)
-		p.cache.Put(pid, pg)
+		_ = p.cache.Put(pid, pg)
 		ctx.MarkPageDirty(pid)
 	}
 	return nil
@@ -308,7 +308,7 @@ func (p *PageStore) flushPage(pageIO page.PageIO, pid primitives.PageID) error {
 	page.MarkDirty(false, nil)
 
 	p.mutex.Lock()
-	p.cache.Put(pid, page)
+	_ = p.cache.Put(pid, page)
 	p.mutex.Unlock()
 
 	return nil

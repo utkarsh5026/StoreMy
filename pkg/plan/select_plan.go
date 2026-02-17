@@ -83,7 +83,7 @@ func (sp *SelectPlan) AddOrderBy(field string, ascending bool) {
 }
 
 // AddScan adds a table scan to the FROM clause.
-func (sp *SelectPlan) AddScan(tableName string, alias string) {
+func (sp *SelectPlan) AddScan(tableName, alias string) {
 	scan := NewScanNode(tableName, alias)
 	sp.tables = append(sp.tables, scan)
 }
@@ -96,10 +96,11 @@ func (sp *SelectPlan) AddFilter(field string, pred primitives.Predicate, constan
 	var qualifiedField string
 
 	parts := strings.Split(field, ".")
-	if len(parts) == 2 {
+	switch len(parts) {
+	case 2:
 		table = parts[0]
 		qualifiedField = field
-	} else if len(parts) == 1 {
+	case 1:
 		if len(sp.tables) > 0 {
 			// Use the first table's alias if available, otherwise use table name
 			if sp.tables[0].Alias != "" {
@@ -112,7 +113,7 @@ func (sp *SelectPlan) AddFilter(field string, pred primitives.Predicate, constan
 			table = ""
 			qualifiedField = field
 		}
-	} else {
+	default:
 		return fmt.Errorf("invalid field name format: %s", field)
 	}
 

@@ -140,11 +140,12 @@ func (ce *CardinalityEstimator) estimateUnionCardinality(node *plan.UnionNode) (
 	if maxCard > 0 {
 		sizeRatio := minCard / maxCard
 
-		if sizeRatio < 0.1 {
+		switch {
+		case sizeRatio < 0.1:
 			overlapRatio = 0.5
-		} else if sizeRatio < 0.5 {
+		case sizeRatio < 0.5:
 			overlapRatio = 0.3
-		} else {
+		default:
 			overlapRatio = 0.15
 		}
 	} else {
@@ -238,11 +239,12 @@ func (ce *CardinalityEstimator) estimateIntersectCardinality(
 		if maxCard > 0 {
 			sizeRatio := minCard / maxCard
 
-			if sizeRatio < 0.1 {
+			switch {
+			case sizeRatio < 0.1:
 				intersectRatio = 0.7
-			} else if sizeRatio < 0.5 {
+			case sizeRatio < 0.5:
 				intersectRatio = 0.5
-			} else {
+			default:
 				intersectRatio = 0.3
 			}
 		} else {
@@ -257,11 +259,12 @@ func (ce *CardinalityEstimator) estimateIntersectCardinality(
 	if maxCard > 0 {
 		sizeRatio := minCard / maxCard
 
-		if sizeRatio < 0.1 {
+		switch {
+		case sizeRatio < 0.1:
 			intersectRatio = 0.6
-		} else if sizeRatio < 0.5 {
+		case sizeRatio < 0.5:
 			intersectRatio = 0.4
-		} else {
+		default:
 			intersectRatio = 0.25
 		}
 	} else {

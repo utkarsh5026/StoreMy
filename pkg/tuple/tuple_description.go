@@ -144,7 +144,7 @@ func (td *TupleDescription) Equals(other *TupleDescription) bool {
 // Returns:
 //   - string: comma-separated list of field descriptions
 func (td *TupleDescription) String() string {
-	var parts []string
+	parts := make([]string, 0, len(td.Types))
 
 	for i, fieldType := range td.Types {
 		var fieldName string

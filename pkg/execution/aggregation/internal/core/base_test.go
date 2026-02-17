@@ -101,12 +101,6 @@ func (m *mockCalculator) GetResultType(op AggregateOp) types.Type {
 	return m.resultType
 }
 
-func (m *mockCalculator) setError(shouldError bool) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.shouldError = shouldError
-}
-
 // Helper functions
 func createBaseTestTupleDesc() *tuple.TupleDescription {
 	td, _ := tuple.NewTupleDesc(

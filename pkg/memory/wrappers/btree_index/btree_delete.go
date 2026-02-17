@@ -153,7 +153,7 @@ func (bt *BTree) redistributeFromLeft(left, current, parent *BTreePage, pageIdx 
 			return fmt.Errorf("failed to insert entry into current page: %w", err)
 		}
 
-		if err := parent.UpdateChildrenKey(pageIdx, (*deleted).Key); err != nil {
+		if err := parent.UpdateChildrenKey(pageIdx, deleted.Key); err != nil {
 			return fmt.Errorf("failed to update parent key: %w", err)
 		}
 		return nil
@@ -164,7 +164,7 @@ func (bt *BTree) redistributeFromLeft(left, current, parent *BTreePage, pageIdx 
 		return fmt.Errorf("failed to remove entry from left sibling: %w", err)
 	}
 
-	ch := btree.NewBtreeChildPtr(nil, (*moved).ChildPID)
+	ch := btree.NewBtreeChildPtr(nil, moved.ChildPID)
 	if len(current.Children()) > 0 {
 		if err := current.UpdateChildrenKey(0, parent.Children()[pageIdx].Key); err != nil {
 			return fmt.Errorf("failed to update current key: %w", err)
@@ -175,7 +175,7 @@ func (bt *BTree) redistributeFromLeft(left, current, parent *BTreePage, pageIdx 
 		return fmt.Errorf("failed to add child pointer to current page: %w", err)
 	}
 
-	if err := parent.UpdateChildrenKey(pageIdx, (*moved).Key); err != nil {
+	if err := parent.UpdateChildrenKey(pageIdx, moved.Key); err != nil {
 		return fmt.Errorf("failed to update parent key: %w", err)
 	}
 
@@ -220,7 +220,7 @@ func (bt *BTree) redistributeFromRight(current, right, parent *BTreePage, pageId
 		return fmt.Errorf("failed to remove child pointer from right sibling: %w", err)
 	}
 
-	ch := btree.NewBtreeChildPtr(parent.Children()[pageIdx+1].Key, (*deleted).ChildPID)
+	ch := btree.NewBtreeChildPtr(parent.Children()[pageIdx+1].Key, deleted.ChildPID)
 	if err := current.AddChildPtr(ch, -1); err != nil {
 		return fmt.Errorf("failed to add child pointer to current page: %w", err)
 	}
@@ -268,28 +268,36 @@ func (bt *BTree) mergeWithRight(page, rightSibling, parentPage *BTreePage, pageI
 func (bt *BTree) mergePages(left, right, parent *BTreePage, childIdxToDelete int, separatorIdx int) error {
 	if left.IsLeafPage() {
 		for _, e := range right.Entries {
-			left.InsertEntry(e, -1)
+			if err := left.InsertEntry(e, -1); err != nil {
+				return fmt.Errorf("failed to insert entry during merge: %w", err)
+			}
 		}
 		left.NextLeaf = right.NextLeaf
-		bt.addDirtyPage(left, memory.UpdateOperation)
+		if err := bt.addDirtyPage(left, memory.UpdateOperation); err != nil {
+			return fmt.Errorf("failed to mark page dirty: %w", err)
+		}
 
 		if right.NextLeaf != primitives.InvalidPageNumber {
 			nextPageID := page.NewPageDescriptor(bt.indexID, right.NextLeaf)
 			nextPage, err := bt.getPage(nextPageID, transaction.ReadWrite)
 			if err == nil {
 				nextPage.PrevLeaf = left.PageNo()
-				bt.addDirtyPage(nextPage, memory.UpdateOperation)
+				_ = bt.addDirtyPage(nextPage, memory.UpdateOperation)
 			}
 
 		}
 	} else {
 		separatorKey := parent.Children()[separatorIdx].Key
 		if len(right.Children()) > 0 {
-			right.UpdateChildrenKey(0, separatorKey)
+			if err := right.UpdateChildrenKey(0, separatorKey); err != nil {
+				return fmt.Errorf("failed to update children key: %w", err)
+			}
 		}
 
 		for _, ch := range right.Children() {
-			left.AddChildPtr(ch, -1)
+			if err := left.AddChildPtr(ch, -1); err != nil {
+				return fmt.Errorf("failed to add child pointer during merge: %w", err)
+			}
 		}
 
 		bt.addDirtyPage(left, memory.InsertOperation)

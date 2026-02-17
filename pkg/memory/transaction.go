@@ -108,7 +108,7 @@ func (p *PageStore) handleCommit(dirtyPageIDs []primitives.PageID) error {
 	for _, pid := range dirtyPageIDs {
 		if page, exists := p.cache.Get(pid); exists {
 			page.SetBeforeImage()
-			p.cache.Put(pid, page)
+			_ = p.cache.Put(pid, page)
 		}
 	}
 	p.mutex.Unlock()
@@ -148,7 +148,7 @@ func (p *PageStore) handleAbort(dirtyPageIDs []primitives.PageID) error {
 		}
 
 		if beforeImage := page.GetBeforeImage(); beforeImage != nil {
-			p.cache.Put(pid, beforeImage)
+			_ = p.cache.Put(pid, beforeImage)
 		} else {
 			p.cache.Remove(pid)
 		}

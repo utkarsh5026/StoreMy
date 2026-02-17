@@ -19,9 +19,9 @@ type JoinNode struct {
 	ExtraFilters  []PredicateInfo      // Additional filters applied after join
 
 	// Parser compatibility fields
-	RightTable *ScanNode // For parser usage - references the right table scan
-	LeftField  string    // Alias for LeftColumn (parser compatibility)
-	RightField string    // Alias for RightColumn (parser compatibility)
+	RightTable *ScanNode            // For parser usage - references the right table scan
+	LeftField  string               // Alias for LeftColumn (parser compatibility)
+	RightField string               // Alias for RightColumn (parser compatibility)
 	Predicate  primitives.Predicate // Alias for JoinPredicate (parser compatibility)
 }
 
