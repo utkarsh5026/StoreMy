@@ -43,7 +43,7 @@ type Filepath string
 //	tableID := path.HashAsTableID() // Or get directly as TableID
 func (f Filepath) Hash() FileID {
 	h := fnv.New64a()
-	h.Write([]byte(f))
+	_, _ = h.Write([]byte(f))
 	return FileID(h.Sum64())
 }
 

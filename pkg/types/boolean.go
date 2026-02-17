@@ -115,9 +115,9 @@ func (b *BoolField) Equals(other Field) bool {
 func (b *BoolField) Hash() (primitives.HashCode, error) {
 	h := fnv.New32a()
 	if b.Value {
-		h.Write([]byte{1})
+		_, _ = h.Write([]byte{1})
 	} else {
-		h.Write([]byte{0})
+		_, _ = h.Write([]byte{0})
 	}
 	return primitives.HashCode(h.Sum32()), nil
 }

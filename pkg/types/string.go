@@ -144,7 +144,7 @@ func (s *StringField) Equals(other Field) bool {
 //   - error: Always returns nil for string fields
 func (s *StringField) Hash() (primitives.HashCode, error) {
 	h := fnv.New32a()
-	h.Write([]byte(s.Value))
+	_, _ = h.Write([]byte(s.Value))
 	return primitives.HashCode(h.Sum32()), nil
 }
 
