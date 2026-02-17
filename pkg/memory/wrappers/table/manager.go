@@ -146,7 +146,7 @@ func (tm *TupleManager) UpdateTuple(ctx *transaction.TransactionContext, dbFile 
 	}
 
 	if err := tm.InsertTuple(ctx, dbFile, newTuple); err != nil {
-		tm.InsertTuple(ctx, dbFile, oldTuple)
+		_ = tm.InsertTuple(ctx, dbFile, oldTuple)
 		return fmt.Errorf("failed to insert updated tuple: %v", err)
 	}
 

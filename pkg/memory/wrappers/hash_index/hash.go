@@ -50,7 +50,7 @@ type HashFile = *hash.HashFile
 //   - Range queries are inefficient (O(n)) - scans all buckets
 type HashIndex struct {
 	indexID    primitives.FileID
-	numBuckets hash.BucketNumber  // Logical bucket count
+	numBuckets hash.BucketNumber // Logical bucket count
 	tx         *transaction.TransactionContext
 	keyType    types.Type
 	file       *hash.HashFile    // I/O layer only

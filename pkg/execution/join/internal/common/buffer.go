@@ -69,8 +69,8 @@ func (jmb *JoinMatchBuffer) Add(t *tuple.Tuple) {
 	currentPos := jmb.iter.CurrentIndex()
 
 	// Append new tuple and create new iterator with updated data
-	newData := append(currentData, t)
-	jmb.iter = iterator.NewSliceIterator(newData)
+	currentData = append(currentData, t)
+	jmb.iter = iterator.NewSliceIterator(currentData)
 
 	// Manually restore the iteration position
 	for i := 0; i < currentPos; i++ {

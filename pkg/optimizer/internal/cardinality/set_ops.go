@@ -355,13 +355,14 @@ func (ce *CardinalityEstimator) estimateExceptCardinality(
 	if maxCard > 0 {
 		sizeRatio := minCard / maxCard
 
-		if sizeRatio < 0.1 {
+		switch {
+		case sizeRatio < 0.1:
 			// Right is much smaller - removes small portion of left
 			removalRatio = 0.2
-		} else if sizeRatio < 0.5 {
+		case sizeRatio < 0.5:
 			// Moderate size difference
 			removalRatio = 0.4
-		} else {
+		default:
 			// Similar sizes - assume significant overlap
 			removalRatio = 0.6
 		}

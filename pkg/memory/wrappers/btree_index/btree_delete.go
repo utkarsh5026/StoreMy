@@ -265,7 +265,7 @@ func (bt *BTree) mergeWithRight(page, rightSibling, parentPage *BTreePage, pageI
 //   - separatorIdx: Index of separator key in parent (for internal nodes)
 //
 // Returns an error if page operations fail.
-func (bt *BTree) mergePages(left, right, parent *BTreePage, childIdxToDelete int, separatorIdx int) error {
+func (bt *BTree) mergePages(left, right, parent *BTreePage, childIdxToDelete, separatorIdx int) error {
 	if left.IsLeafPage() {
 		for _, e := range right.Entries {
 			if err := left.InsertEntry(e, -1); err != nil {
@@ -300,20 +300,26 @@ func (bt *BTree) mergePages(left, right, parent *BTreePage, childIdxToDelete int
 			}
 		}
 
-		bt.addDirtyPage(left, memory.InsertOperation)
+		if err := bt.addDirtyPage(left, memory.InsertOperation); err != nil {
+			return fmt.Errorf("failed to mark left page dirty: %w", err)
+		}
 
 		// Update all children from right page to point to left page as their parent
 		for _, child := range right.Children() {
 			childPage, err := bt.getPage(child.ChildPID, transaction.ReadWrite)
 			if err == nil {
 				childPage.ParentPage = left.PageNo()
-				bt.addDirtyPage(childPage, memory.UpdateOperation)
+				_ = bt.addDirtyPage(childPage, memory.UpdateOperation)
 			}
 		}
 	}
 
-	parent.RemoveChildPtr(childIdxToDelete)
-	bt.addDirtyPage(parent, memory.DeleteOperation)
+	if _, err := parent.RemoveChildPtr(childIdxToDelete); err != nil {
+		return fmt.Errorf("failed to remove child ptr from parent: %w", err)
+	}
+	if err := bt.addDirtyPage(parent, memory.DeleteOperation); err != nil {
+		return fmt.Errorf("failed to mark parent dirty: %w", err)
+	}
 
 	if parent.HashLessThanRequired() && !parent.IsRoot() {
 		return bt.handleUnderflow(parent)
