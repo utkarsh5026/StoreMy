@@ -30,8 +30,7 @@ linters-settings:
       - style
     disabled-checks:
       - commentedOutCode
-      - hugeParam
-      - rangeValCopy
+      - ptrToRefParam
   misspell:
     locale: US
   govet:
@@ -50,9 +49,37 @@ issues:
         - gocritic
         - cyclop
         - gocognit
+        - prealloc
     - path: pkg/examples/
       linters:
         - errcheck
     - linters:
         - staticcheck
       text: "SA1019"
+    # Inherently complex: lexer/token switch statements (readIdentifier, String)
+    - path: pkg/parser/lexer/
+      linters:
+        - cyclop
+        - gocognit
+    # Inherently complex: TUI event handlers and rendering
+    - path: pkg/debug/
+      linters:
+        - cyclop
+        - gocognit
+    - path: pkg/ui/model\.go
+      linters:
+        - cyclop
+        - gocognit
+    # Inherently complex: EXPLAIN formatter, SQL parser, B-tree, CREATE validator
+    - path: pkg/planner/explain\.go
+      linters:
+        - cyclop
+    - path: pkg/parser/parser/parser\.go
+      linters:
+        - cyclop
+    - path: pkg/memory/wrappers/btree_index/btree_delete\.go
+      linters:
+        - cyclop
+    - path: pkg/parser/statements/create\.go
+      linters:
+        - cyclop
