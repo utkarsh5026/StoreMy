@@ -5,12 +5,17 @@ import (
 	"unicode"
 )
 
+// Lexer performs lexical analysis on SQL input strings, breaking them into a
+// sequence of tokens. It converts the input to uppercase during initialization
+// to enable case-insensitive keyword matching.
 type Lexer struct {
 	input  string
 	pos    int
 	length int
 }
 
+// NewLexer creates a new Lexer for the given SQL input string.
+// The input is trimmed and converted to uppercase for case-insensitive parsing.
 func NewLexer(input string) *Lexer {
 	processedInput := strings.ToUpper(strings.TrimSpace(input))
 	return &Lexer{
@@ -20,12 +25,16 @@ func NewLexer(input string) *Lexer {
 	}
 }
 
+// SetPos sets the lexer's current position to the given value.
+// The position is only updated if it falls within valid bounds [0, length).
 func (l *Lexer) SetPos(pos int) {
 	if pos >= 0 && pos < l.length {
 		l.pos = pos
 	}
 }
 
+// NextToken scans and returns the next token from the input.
+// It skips leading whitespace and returns an EOF token when the input is exhausted.
 func (l *Lexer) NextToken() Token {
 	l.skipWhitespace()
 
@@ -70,12 +79,14 @@ func (l *Lexer) NextToken() Token {
 	}
 }
 
+// skipWhitespace advances the position past any whitespace characters.
 func (l *Lexer) skipWhitespace() {
 	for l.pos < l.length && unicode.IsSpace(rune(l.input[l.pos])) {
 		l.pos++
 	}
 }
 
+// readOperator reads a comparison operator token (=, <, >, !=, <=, >=, <>, etc.).
 func (l *Lexer) readOperator(start int) Token {
 	op := ""
 	for l.pos < l.length && strings.ContainsRune("=<>!", rune(l.input[l.pos])) {
@@ -85,6 +96,7 @@ func (l *Lexer) readOperator(start int) Token {
 	return l.createToken(OPERATOR, op, start)
 }
 
+// readString reads a quoted string literal delimited by single or double quotes.
 func (l *Lexer) readString(start int) Token {
 	quote := l.input[l.pos]
 	l.pos++ // Skip opening quote
@@ -102,6 +114,7 @@ func (l *Lexer) readString(start int) Token {
 	return l.createToken(STRING, value, start)
 }
 
+// readNumber reads an integer numeric literal.
 func (l *Lexer) readNumber(start int) Token {
 	value := ""
 	for l.pos < l.length && unicode.IsDigit(rune(l.input[l.pos])) {
@@ -111,6 +124,7 @@ func (l *Lexer) readNumber(start int) Token {
 	return l.createToken(INT, value, start)
 }
 
+// createToken constructs a Token with the given type, value, and starting position.
 func (l *Lexer) createToken(t TokenType, value string, start int) Token {
 	return Token{
 		Type:     t,
@@ -119,6 +133,9 @@ func (l *Lexer) createToken(t TokenType, value string, start int) Token {
 	}
 }
 
+// readIdentifier reads an identifier or keyword token. It matches the value
+// against known SQL keywords and returns the appropriate token type, falling
+// back to IDENTIFIER for unrecognized words.
 func (l *Lexer) readIdentifier(start int) Token {
 	value := ""
 	for l.pos < l.length && (unicode.IsLetter(rune(l.input[l.pos])) || unicode.IsDigit(rune(l.input[l.pos])) || l.input[l.pos] == '_' || l.input[l.pos] == '.') {
