@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
@@ -57,8 +58,8 @@ type BenchmarkReport struct {
 //   - DATA_DIR: Data directory path (default: /app/benchmark_data)
 //   - LOG_DIR: Log directory path (default: /app/benchmark_logs)
 func main() {
-	outputDir := os.Getenv("BENCHMARK_OUTPUT")
-	if outputDir == "" {
+	outputDir := filepath.Clean(os.Getenv("BENCHMARK_OUTPUT"))
+	if outputDir == "." {
 		outputDir = "./benchmark-results"
 	}
 
@@ -77,13 +78,13 @@ func main() {
 		dbName = "benchmark_db"
 	}
 
-	dataDir := os.Getenv("DATA_DIR")
-	if dataDir == "" {
+	dataDir := filepath.Clean(os.Getenv("DATA_DIR"))
+	if dataDir == "." {
 		dataDir = "/app/benchmark_data"
 	}
 
-	logDir := os.Getenv("LOG_DIR")
-	if logDir == "" {
+	logDir := filepath.Clean(os.Getenv("LOG_DIR"))
+	if logDir == "." {
 		logDir = "/app/benchmark_logs"
 	}
 
@@ -166,7 +167,7 @@ func main() {
 	log.Printf("  Summary:")
 	log.Printf("    Total Duration:     %s", formatDuration(report.TotalDuration))
 	log.Printf("    Tests Run:          %d", len(report.Results))
-	log.Printf("    Database:           %s", dbName)
+	log.Printf("    Database:           %s", dbName) // #nosec G706
 	log.Printf("")
 	log.Printf("  Saving reports...")
 

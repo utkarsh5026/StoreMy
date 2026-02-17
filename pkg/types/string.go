@@ -98,7 +98,7 @@ func (s *StringField) Serialize(w io.Writer) error {
 	length := min(len(s.Value), s.MaxSize)
 
 	lengthBytes := make([]byte, 4)
-	binary.BigEndian.PutUint32(lengthBytes, uint32(length))
+	binary.BigEndian.PutUint32(lengthBytes, uint32(length)) // #nosec G115
 
 	if _, err := w.Write(lengthBytes); err != nil {
 		return err

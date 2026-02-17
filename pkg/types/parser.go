@@ -69,7 +69,7 @@ func parseIntField(r io.Reader, maxSize uint32) (*IntField, error) {
 		return nil, err
 	}
 
-	value := int64(binary.BigEndian.Uint64(bytes))
+	value := int64(binary.BigEndian.Uint64(bytes)) // #nosec G115
 	return NewIntField(value), nil
 }
 
@@ -142,7 +142,7 @@ func parseInt32Field(r io.Reader, maxSize uint32) (*Int32Field, error) {
 		return nil, err
 	}
 
-	value := int32(binary.BigEndian.Uint32(bytes))
+	value := int32(binary.BigEndian.Uint32(bytes)) // #nosec G115
 	return NewInt32Field(value), nil
 }
 
@@ -162,7 +162,7 @@ func parseInt64Field(r io.Reader, maxSize uint32) (*Int64Field, error) {
 		return nil, err
 	}
 
-	value := int64(binary.BigEndian.Uint64(bytes))
+	value := int64(binary.BigEndian.Uint64(bytes)) // #nosec G115
 	return NewInt64Field(value), nil
 }
 
