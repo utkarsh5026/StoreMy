@@ -57,11 +57,11 @@ func NewBtreeChildPtr(key types.Field, childPID *page.PageDescriptor) *BTreeChil
 }
 
 // NewBTreeLeafPage creates a new leaf page
-func NewBTreeLeafPage(pageID *page.PageDescriptor, keyType types.Type, ParentPage primitives.PageNumber) *BTreePage {
+func NewBTreeLeafPage(pageID *page.PageDescriptor, keyType types.Type, parentPage primitives.PageNumber) *BTreePage {
 	return &BTreePage{
 		pageID:        pageID,
 		pageType:      pageTypeLeaf,
-		ParentPage:    ParentPage,
+		ParentPage:    parentPage,
 		NextLeaf:      primitives.InvalidPageNumber,
 		PrevLeaf:      primitives.InvalidPageNumber,
 		keyType:       keyType,
@@ -72,11 +72,11 @@ func NewBTreeLeafPage(pageID *page.PageDescriptor, keyType types.Type, ParentPag
 }
 
 // NewBTreeInternalPage creates a new internal page
-func NewBTreeInternalPage(pageID *page.PageDescriptor, keyType types.Type, ParentPage primitives.PageNumber) *BTreePage {
+func NewBTreeInternalPage(pageID *page.PageDescriptor, keyType types.Type, parentPage primitives.PageNumber) *BTreePage {
 	return &BTreePage{
 		pageID:        pageID,
 		pageType:      pageTypeInternal,
-		ParentPage:    ParentPage,
+		ParentPage:    parentPage,
 		NextLeaf:      primitives.InvalidPageNumber,
 		PrevLeaf:      primitives.InvalidPageNumber,
 		keyType:       keyType,

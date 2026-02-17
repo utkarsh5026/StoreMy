@@ -186,13 +186,14 @@ func (m Model) View() string {
 	sections = append(sections, editorSection)
 
 	// Results or executing spinner
-	if m.executing {
+	switch {
+	case m.executing:
 		sections = append(sections, m.renderExecuting())
-	} else if m.lastError != nil {
+	case m.lastError != nil:
 		sections = append(sections, m.renderError())
-	} else if len(m.lastResult.Rows) > 0 {
+	case len(m.lastResult.Rows) > 0:
 		sections = append(sections, m.renderResultTable())
-	} else if m.lastResult.Message != "" {
+	case m.lastResult.Message != "":
 		sections = append(sections, m.renderMessage())
 	}
 

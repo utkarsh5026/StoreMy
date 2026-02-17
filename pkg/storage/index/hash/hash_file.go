@@ -31,9 +31,9 @@ const (
 type HashFile struct {
 	*page.BaseFile
 	keyType      types.Type
-	numPages     primitives.PageNumber  // Physical page count
-	numBuckets   BucketNumber           // Logical bucket count
-	indexID      primitives.FileID      // Override index ID (set when file is associated with an index)
+	numPages     primitives.PageNumber // Physical page count
+	numBuckets   BucketNumber          // Logical bucket count
+	indexID      primitives.FileID     // Override index ID (set when file is associated with an index)
 	mutex        sync.RWMutex
 	bucketPageID map[BucketNumber]primitives.PageNumber // Maps bucket number to primary page number
 }
