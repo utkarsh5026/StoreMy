@@ -414,4 +414,3 @@ func (io *IndexCatalogOperation) ValidateIndexDeletion(indexName, tableName stri
 
 	return metadata, nil
 }
-

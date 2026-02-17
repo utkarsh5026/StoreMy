@@ -97,13 +97,13 @@ func NewDatabase(name, dataDir, logDir string) (*Database, error) {
 	ctx := registry.NewDatabaseContext(pageStore, catalogMgr, walInstance, fullPath)
 
 	db := &Database{
-		catalogMgr: catalogMgr,
-		pageStore:  pageStore,
-		txRegistry: ctx.TransactionRegistry(),
-		walInstance:        walInstance,
-		name:       name,
-		dataDir:    fullPath,
-		stats:      &DatabaseStats{},
+		catalogMgr:  catalogMgr,
+		pageStore:   pageStore,
+		txRegistry:  ctx.TransactionRegistry(),
+		walInstance: walInstance,
+		name:        name,
+		dataDir:     fullPath,
+		stats:       &DatabaseStats{},
 	}
 
 	statsManager := catalog.NewStatisticsManager(catalogMgr, db)
@@ -281,7 +281,7 @@ func (db *Database) GetTables() []string {
 	defer db.mutex.RUnlock()
 
 	tx, _ := db.txRegistry.Begin()
-	defer db.pageStore.CommitTransaction(tx)
+	defer func() { _ = db.pageStore.CommitTransaction(tx) }()
 	names, _ := db.catalogMgr.ListAllTables(tx, true)
 	return names
 }
@@ -367,7 +367,7 @@ func (db *Database) GetTableStatistics(tableName string) (*systemtable.TableStat
 	}
 	defer func() {
 		if err != nil {
-			db.pageStore.AbortTransaction(tx)
+			_ = db.pageStore.AbortTransaction(tx)
 		}
 	}()
 

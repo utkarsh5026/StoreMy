@@ -228,7 +228,7 @@ type valueFrequency struct {
 
 // findMostCommonValues finds the top N most common values and their relative frequencies.
 // Returns two parallel slices: the values and their frequencies (as percentages of total).
-func findMostCommonValues(values []types.Field, n int) ([]types.Field, []float64) {
+func findMostCommonValues(values []types.Field, n int) (resultFields []types.Field, resultFrequencies []float64) {
 	if len(values) == 0 {
 		return nil, nil
 	}

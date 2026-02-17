@@ -539,19 +539,20 @@ func (m heapModel) renderTableData() string {
 		row := m.tableData[i]
 		rowStr := ""
 		for _, colIdx := range visibleCols {
-			if colIdx < len(row) {
-				cellContent := row[colIdx]
-				if len(cellContent) > maxColWidth {
-					cellContent = cellContent[:maxColWidth-3] + "..."
-				}
-				cellContent = padString(cellContent, colWidths[colIdx])
-				if i == m.rowCursor {
-					rowStr += ui.SelectedItemStyle.Render(cellContent)
-				} else {
-					rowStr += ui.CellStyle.Render(cellContent)
-				}
-				rowStr += " "
+			if colIdx >= len(row) {
+				continue
 			}
+			cellContent := row[colIdx]
+			if len(cellContent) > maxColWidth {
+				cellContent = cellContent[:maxColWidth-3] + "..."
+			}
+			cellContent = padString(cellContent, colWidths[colIdx])
+			if i == m.rowCursor {
+				rowStr += ui.SelectedItemStyle.Render(cellContent)
+			} else {
+				rowStr += ui.CellStyle.Render(cellContent)
+			}
+			rowStr += " "
 		}
 		b.WriteString(rowStr + "\n")
 	}
