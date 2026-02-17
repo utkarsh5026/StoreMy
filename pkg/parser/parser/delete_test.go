@@ -99,7 +99,7 @@ func TestParseStatement_DeleteWithAliasAndWhere(t *testing.T) {
 func TestParseDeleteStatement_MissingFrom(t *testing.T) {
 	lexer := NewLexer("users")
 
-	_, err := parseDeleteStatement(lexer)
+	_, err := (&DeleteParser{}).Parse(lexer)
 	if err == nil {
 		t.Error("expected error for missing FROM")
 	}
@@ -112,7 +112,7 @@ func TestParseDeleteStatement_MissingFrom(t *testing.T) {
 func TestParseDeleteStatement_MissingTableName(t *testing.T) {
 	lexer := NewLexer("FROM")
 
-	_, err := parseDeleteStatement(lexer)
+	_, err := (&DeleteParser{}).Parse(lexer)
 	if err == nil {
 		t.Error("expected error for missing table name")
 	}
@@ -125,7 +125,7 @@ func TestParseDeleteStatement_MissingTableName(t *testing.T) {
 func TestParseDeleteStatement_InvalidTableName(t *testing.T) {
 	lexer := NewLexer("FROM 123")
 
-	_, err := parseDeleteStatement(lexer)
+	_, err := (&DeleteParser{}).Parse(lexer)
 	if err == nil {
 		t.Error("expected error for invalid table name")
 	}

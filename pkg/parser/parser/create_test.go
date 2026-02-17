@@ -1,7 +1,6 @@
 package parser
 
 import (
-	"storemy/pkg/parser/lexer"
 	"storemy/pkg/parser/statements"
 	"storemy/pkg/types"
 	"testing"
@@ -156,19 +155,19 @@ func TestParseStatement_CreateTableAllDataTypes(t *testing.T) {
 
 func TestParseDataType_ValidTypes(t *testing.T) {
 	tests := []struct {
-		tokenType lexer.TokenType
+		tokenType TokenType
 		expected  types.Type
 	}{
-		{lexer.INT, types.IntType},
-		{lexer.VARCHAR, types.StringType},
-		{lexer.TEXT, types.StringType},
-		{lexer.BOOLEAN, types.BoolType},
-		{lexer.FLOAT, types.FloatType},
+		{INT, types.IntType},
+		{VARCHAR, types.StringType},
+		{TEXT, types.StringType},
+		{BOOLEAN, types.BoolType},
+		{FLOAT, types.FloatType},
 	}
 
 	for _, test := range tests {
-		token := lexer.Token{Type: test.tokenType, Value: "test"}
-		result, err := parseDataType(token)
+		token := Token{Type: test.tokenType, Value: "test"}
+		result, err := (&CreateStatementParser{}).parseDataType(token)
 		if err != nil {
 			t.Errorf("unexpected error for %v: %s", test.tokenType, err.Error())
 		}
@@ -180,8 +179,8 @@ func TestParseDataType_ValidTypes(t *testing.T) {
 }
 
 func TestParseDataType_InvalidType(t *testing.T) {
-	token := lexer.Token{Type: lexer.IDENTIFIER, Value: "INVALID"}
-	_, err := parseDataType(token)
+	token := Token{Type: IDENTIFIER, Value: "INVALID"}
+	_, err := (&CreateStatementParser{}).parseDataType(token)
 	if err == nil {
 		t.Error("expected error for invalid data type")
 	}
@@ -196,7 +195,7 @@ func TestParseDataType_InvalidType(t *testing.T) {
 func TestParseCreateStatement_MissingTable(t *testing.T) {
 	lexer := NewLexer("users (id INT)")
 
-	_, err := parseCreateStatement(lexer)
+	_, err := (&CreateStatementParser{}).Parse(lexer)
 	if err == nil {
 		t.Error("expected error for missing TABLE")
 	}
@@ -209,7 +208,7 @@ func TestParseCreateStatement_MissingTable(t *testing.T) {
 func TestParseCreateStatement_MissingTableName(t *testing.T) {
 	lexer := NewLexer("TABLE (id INT)")
 
-	_, err := parseCreateStatement(lexer)
+	_, err := (&CreateStatementParser{}).Parse(lexer)
 	if err == nil {
 		t.Error("expected error for missing table name")
 	}
@@ -222,7 +221,7 @@ func TestParseCreateStatement_MissingTableName(t *testing.T) {
 func TestParseCreateStatement_MissingLeftParen(t *testing.T) {
 	lexer := NewLexer("TABLE users id INT)")
 
-	_, err := parseCreateStatement(lexer)
+	_, err := (&CreateStatementParser{}).Parse(lexer)
 	if err == nil {
 		t.Error("expected error for missing left parenthesis")
 	}
@@ -235,7 +234,7 @@ func TestParseCreateStatement_MissingLeftParen(t *testing.T) {
 func TestParseCreateStatement_InvalidIfNotExists(t *testing.T) {
 	lexer := NewLexer("TABLE IF EXISTS users (id INT)")
 
-	_, err := parseCreateStatement(lexer)
+	_, err := (&CreateStatementParser{}).Parse(lexer)
 	if err == nil {
 		t.Error("expected error for invalid IF NOT EXISTS")
 	}
@@ -249,7 +248,7 @@ func TestReadPrimaryKey_MissingKey(t *testing.T) {
 	lexer := NewLexer("(id)")
 	stmt := statements.NewCreateStatement("users", false)
 
-	err := readPrimaryKey(lexer, stmt)
+	err := (&CreateStatementParser{}).readPrimaryKey(lexer, stmt)
 	if err == nil {
 		t.Error("expected error for missing KEY")
 	}
@@ -263,7 +262,7 @@ func TestReadPrimaryKey_MissingLeftParen(t *testing.T) {
 	lexer := NewLexer("KEY id)")
 	stmt := statements.NewCreateStatement("users", false)
 
-	err := readPrimaryKey(lexer, stmt)
+	err := (&CreateStatementParser{}).readPrimaryKey(lexer, stmt)
 	if err == nil {
 		t.Error("expected error for missing left parenthesis")
 	}
@@ -277,7 +276,7 @@ func TestReadPrimaryKey_MissingFieldName(t *testing.T) {
 	lexer := NewLexer("KEY ()")
 	stmt := statements.NewCreateStatement("users", false)
 
-	err := readPrimaryKey(lexer, stmt)
+	err := (&CreateStatementParser{}).readPrimaryKey(lexer, stmt)
 	if err == nil {
 		t.Error("expected error for missing field name")
 	}
@@ -291,7 +290,7 @@ func TestReadPrimaryKey_MissingRightParen(t *testing.T) {
 	lexer := NewLexer("KEY (id")
 	stmt := statements.NewCreateStatement("users", false)
 
-	err := readPrimaryKey(lexer, stmt)
+	err := (&CreateStatementParser{}).readPrimaryKey(lexer, stmt)
 	if err == nil {
 		t.Error("expected error for missing right parenthesis")
 	}

@@ -1,13 +1,8 @@
 package parser
 
 import (
-	"storemy/pkg/parser/lexer"
 	"testing"
 )
-
-func NewLexer(s string) *lexer.Lexer {
-	return lexer.NewLexer(s)
-}
 
 func TestParseStatement_EmptyStatement(t *testing.T) {
 	_, err := ParseStatement("")

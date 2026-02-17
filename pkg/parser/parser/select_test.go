@@ -1,7 +1,6 @@
 package parser
 
 import (
-	"storemy/pkg/parser/lexer"
 	"storemy/pkg/parser/statements"
 	"storemy/pkg/plan"
 	"testing"
@@ -268,7 +267,7 @@ func TestParseStatement_ComplexSelect(t *testing.T) {
 func TestParseSelectStatement_MissingFrom(t *testing.T) {
 	lexer := NewLexer("name")
 
-	_, err := parseSelectStatement(lexer)
+	_, err := (&SelectParser{}).Parse(lexer)
 	if err == nil {
 		t.Error("expected error for missing FROM")
 	}
@@ -281,7 +280,7 @@ func TestParseSelectStatement_MissingFrom(t *testing.T) {
 func TestParseSelectStatement_MissingTableName(t *testing.T) {
 	lexer := NewLexer("FROM")
 
-	_, err := parseSelectStatement(lexer)
+	_, err := (&SelectParser{}).Parse(lexer)
 	if err == nil {
 		t.Error("expected error for missing table name")
 	}
@@ -294,7 +293,7 @@ func TestParseSelectStatement_MissingTableName(t *testing.T) {
 func TestParseSelectStatement_InvalidFieldName(t *testing.T) {
 	lexer := NewLexer("123 FROM users")
 
-	_, err := parseSelectStatement(lexer)
+	_, err := (&SelectParser{}).Parse(lexer)
 	if err == nil {
 		t.Error("expected error for invalid field name")
 	}
@@ -310,7 +309,7 @@ func TestParseSelect_SingleField(t *testing.T) {
 	lexer := NewLexer("SELECT name FROM")
 	selectPlan := plan.NewSelectPlan()
 
-	err := parseSelect(lexer, selectPlan)
+	err := (&SelectParser{}).parseSelect(lexer, selectPlan)
 	if err != nil {
 		t.Fatalf("unexpected error: %s", err.Error())
 	}
@@ -328,7 +327,7 @@ func TestParseSelect_MultipleFields(t *testing.T) {
 	lexer := NewLexer("SELECT name, age, email FROM")
 	selectPlan := plan.NewSelectPlan()
 
-	err := parseSelect(lexer, selectPlan)
+	err := (&SelectParser{}).parseSelect(lexer, selectPlan)
 	if err != nil {
 		t.Fatalf("unexpected error: %s", err.Error())
 	}
@@ -348,9 +347,9 @@ func TestParseSelect_MultipleFields(t *testing.T) {
 func TestParseSelectField_RegularField(t *testing.T) {
 	l := NewLexer("FROM")
 	selectPlan := plan.NewSelectPlan()
-	fieldToken := lexer.Token{Type: lexer.IDENTIFIER, Value: "name"}
+	fieldToken := Token{Type: IDENTIFIER, Value: "name"}
 
-	err := parseSelectField(l, selectPlan, fieldToken)
+	err := (&SelectParser{}).parseSelectField(l, selectPlan, fieldToken)
 	if err != nil {
 		t.Fatalf("unexpected error: %s", err.Error())
 	}
@@ -371,9 +370,9 @@ func TestParseSelectField_RegularField(t *testing.T) {
 func TestParseSelectField_AggregateFunction(t *testing.T) {
 	l := NewLexer("(id)")
 	selectPlan := plan.NewSelectPlan()
-	fieldToken := lexer.Token{Type: lexer.IDENTIFIER, Value: "COUNT"}
+	fieldToken := Token{Type: IDENTIFIER, Value: "COUNT"}
 
-	err := parseSelectField(l, selectPlan, fieldToken)
+	err := (&SelectParser{}).parseSelectField(l, selectPlan, fieldToken)
 	if err != nil {
 		t.Fatalf("unexpected error: %s", err.Error())
 	}
@@ -395,7 +394,7 @@ func TestParseFrom_SingleTable(t *testing.T) {
 	lexer := NewLexer("FROM users")
 	selectPlan := plan.NewSelectPlan()
 
-	err := parseFrom(lexer, selectPlan)
+	err := (&SelectParser{}).parseFrom(lexer, selectPlan)
 	if err != nil {
 		t.Fatalf("unexpected error: %s", err.Error())
 	}
@@ -413,7 +412,7 @@ func TestParseTable_WithAlias(t *testing.T) {
 	lexer := NewLexer("users u")
 	selectPlan := plan.NewSelectPlan()
 
-	err := parseTable(lexer, selectPlan)
+	err := (&SelectParser{}).parseTable(lexer, selectPlan)
 	if err != nil {
 		t.Fatalf("unexpected error: %s", err.Error())
 	}
@@ -435,7 +434,7 @@ func TestParseWhere_NoWhereClause(t *testing.T) {
 	lexer := NewLexer("ORDER BY")
 	selectPlan := plan.NewSelectPlan()
 
-	err := parseWhere(lexer, selectPlan)
+	err := (&SelectParser{}).parseWhere(lexer, selectPlan)
 	if err != nil {
 		t.Fatalf("unexpected error: %s", err.Error())
 	}
@@ -472,7 +471,7 @@ func TestParseGroupBy_NoGroupBy(t *testing.T) {
 	lexer := NewLexer("ORDER BY")
 	selectPlan := plan.NewSelectPlan()
 
-	err := parseGroupBy(lexer, selectPlan)
+	err := (&SelectParser{}).parseGroupBy(lexer, selectPlan)
 	if err != nil {
 		t.Fatalf("unexpected error: %s", err.Error())
 	}
@@ -486,7 +485,7 @@ func TestParseGroupBy_WithGroupBy(t *testing.T) {
 	lexer := NewLexer("GROUP BY name")
 	selectPlan := plan.NewSelectPlan()
 
-	err := parseGroupBy(lexer, selectPlan)
+	err := (&SelectParser{}).parseGroupBy(lexer, selectPlan)
 	if err != nil {
 		t.Fatalf("unexpected error: %s", err.Error())
 	}
@@ -500,7 +499,7 @@ func TestParseOrderBy_NoOrderBy(t *testing.T) {
 	lexer := NewLexer("EOF")
 	selectPlan := plan.NewSelectPlan()
 
-	err := parseOrderBy(lexer, selectPlan)
+	err := (&SelectParser{}).parseOrderBy(lexer, selectPlan)
 	if err != nil {
 		t.Fatalf("unexpected error: %s", err.Error())
 	}
@@ -514,7 +513,7 @@ func TestParseOrderBy_WithOrderBy(t *testing.T) {
 	lexer := NewLexer("ORDER BY name DESC")
 	selectPlan := plan.NewSelectPlan()
 
-	err := parseOrderBy(lexer, selectPlan)
+	err := (&SelectParser{}).parseOrderBy(lexer, selectPlan)
 	if err != nil {
 		t.Fatalf("unexpected error: %s", err.Error())
 	}

@@ -3,7 +3,6 @@ package parser
 import (
 	"errors"
 	"fmt"
-	"storemy/pkg/parser/lexer"
 	"storemy/pkg/parser/statements"
 )
 
@@ -30,55 +29,54 @@ import (
 //   - statements.Statement: The parsed statement object implementing the Statement interface
 //   - error: An error if parsing fails or the statement type is unsupported
 func ParseStatement(sql string) (statements.Statement, error) {
-	l := lexer.NewLexer(sql)
+	l := NewLexer(sql)
 	token := l.NextToken()
-	if token.Type == lexer.EOF {
+	if token.Type == EOF {
 		return nil, errors.New("empty statement")
 	}
 
 	switch token.Type {
-	case lexer.INSERT:
+	case INSERT:
 		l.SetPos(0)
-		return parseInsertStatement(l)
-	case lexer.CREATE:
+		return (&InsertParser{}).Parse(l)
+	case CREATE:
 		secondToken := l.NextToken()
 		l.SetPos(0)
 		switch secondToken.Type {
-		case lexer.TABLE:
-			return parseCreateStatement(l)
-		case lexer.INDEX:
-			return parseCreateIndexStatement(l)
+		case TABLE:
+			return (&CreateStatementParser{}).Parse(l)
+		case INDEX:
+			return (&CreateIndexParser{}).Parse(l)
 		default:
 			return nil, fmt.Errorf("expected TABLE or INDEX after CREATE, got %s", secondToken.Value)
 		}
-	case lexer.DROP:
+	case DROP:
 		secondToken := l.NextToken()
 		l.SetPos(0)
 		switch secondToken.Type {
-		case lexer.TABLE:
-			return parseDropStatement(l)
-		case lexer.INDEX:
-			return parseDropIndexStatement(l)
+		case TABLE:
+			return (&DropStatementParser{}).Parse(l)
+		case INDEX:
+			return (&DropIndexParser{}).Parse(l)
 		default:
 			return nil, fmt.Errorf("expected TABLE or INDEX after DROP, got %s", secondToken.Value)
 		}
-	case lexer.DELETE:
+	case DELETE:
 		l.SetPos(0)
-		return parseDeleteStatement(l)
-	case lexer.UPDATE:
+		return (&DeleteParser{}).Parse(l)
+	case UPDATE:
 		l.SetPos(0)
-		return parseUpdateStatement(l)
-	case lexer.SELECT:
+		return (&UpdateParser{}).Parse(l)
+	case SELECT:
 		l.SetPos(0)
-		return parseSelectStatement(l)
-	case lexer.EXPLAIN:
+		return (&SelectParser{}).Parse(l)
+	case EXPLAIN:
 		l.SetPos(0)
-		return parseExplainStatement(l)
-	case lexer.SHOW:
+		return (&ExplainStatementParser{}).Parse(l)
+	case SHOW:
 		l.SetPos(0)
-		return parseShowStatement(l)
+		return (&ShowIndexesParser{}).Parse(l)
 	default:
 		return nil, fmt.Errorf("unsupported statement type: %s", token.Value)
 	}
-
 }

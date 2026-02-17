@@ -5,6 +5,7 @@ import (
 	"storemy/pkg/parser/statements"
 	"storemy/pkg/plan"
 	"storemy/pkg/primitives"
+	"storemy/pkg/types"
 	"strings"
 )
 
@@ -277,7 +278,7 @@ func (s *SelectParser) parseSelect(l *Lexer, p *plan.SelectPlan) error {
 			return err
 		}
 
-		token := l.NextToken()
+		token = l.NextToken()
 		if token.Type != COMMA {
 			l.SetPos(token.Position)
 			break
@@ -732,4 +733,54 @@ func parseWhereCondition(l *Lexer) (*plan.FilterNode, error) {
 	}
 
 	return plan.NewFilterNode("", fieldName, pred, constant), nil
+}
+
+// parseValueList parses a comma-separated list of values terminated by ')'.
+// Used when parsing INSERT value tuples without the surrounding parentheses.
+func parseValueList(l *Lexer) ([]types.Field, error) {
+	return parseDelimitedList(l, parseValue, COMMA, RPAREN)
+}
+
+// parseConditions parses one or more filter conditions (field op value) separated
+// by AND, without expecting a leading WHERE keyword. Used to test condition parsing
+// in isolation.
+func parseConditions(l *Lexer, p *plan.SelectPlan) error {
+	for {
+		fieldToken := l.NextToken()
+		if fieldToken.Type != IDENTIFIER {
+			l.SetPos(fieldToken.Position)
+			break
+		}
+
+		opToken := l.NextToken()
+		if err := expectToken(opToken, OPERATOR); err != nil {
+			return fmt.Errorf("expected operator, got %s", opToken.Value)
+		}
+
+		valueToken := l.NextToken()
+		var value string
+		switch valueToken.Type {
+		case STRING, BOOLEAN, INT, IDENTIFIER:
+			value = valueToken.Value
+		default:
+			return fmt.Errorf("expected value, got %s", valueToken.Value)
+		}
+
+		pred, err := parseOperator(opToken.Value)
+		if err != nil {
+			return err
+		}
+
+		if err := p.AddFilter(fieldToken.Value, pred, value); err != nil {
+			return err
+		}
+
+		nextToken := l.NextToken()
+		if nextToken.Type == AND {
+			continue
+		}
+		l.SetPos(nextToken.Position)
+		break
+	}
+	return nil
 }

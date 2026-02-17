@@ -144,3 +144,14 @@ func getTokenName(tokenType TokenType) string {
 		return string(rune(tokenType)) // #nosec G115
 	}
 }
+
+// consumeCommaIfPresent reads the next token; if it is a COMMA it is consumed and
+// true is returned. Otherwise the lexer position is restored and false is returned.
+func consumeCommaIfPresent(l *Lexer) bool {
+	token := l.NextToken()
+	if token.Type == COMMA {
+		return true
+	}
+	l.SetPos(token.Position)
+	return false
+}
