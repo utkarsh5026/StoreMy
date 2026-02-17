@@ -1,132 +1,101 @@
 # Makefile for StoreMy project
+# Thin interface — all logic lives in makefile.py
+# Usage: make <target>  or  python makefile.py <target>
 
-.PHONY: test test-tables test-all test-watch test-watch-tables clean install-tools examples \
-        docker-demo docker-import docker-fresh docker-test docker-build docker-clean docker-stop quickstart
+.DEFAULT_GOAL := help
 
-# Run all tests
+.PHONY: test test-tables test-coverage test-watch test-watch-tables \
+        install-tools clean build fmt vet lint lint-fix \
+        run run-fresh tidy coverage-html bench check examples help \
+        docker-demo docker-import docker-fresh docker-test \
+        docker-build docker-clean docker-stop quickstart
+
+# ── Testing ────────────────────────────────────────────────────────────────────
 test:
-	go test ./... -v
+	python makefile.py test
 
-# Run tests for tables package only
 test-tables:
-	go test ./pkg/tables/... -v
+	python makefile.py test-tables
 
-# Run tests with coverage
 test-coverage:
-	go test ./... -cover
+	python makefile.py test-coverage
 
-# Watch and run all tests when files change (requires inotify-tools)
 test-watch:
-	@echo "Watching for changes in Go files..."
-	@echo "Will run: go test ./... -v"
-	@echo "Press Ctrl+C to stop"
-	@echo ""
-	@go test ./... -v
-	@echo ""
-	@while inotifywait -e modify,create,delete -r . --include='.*\.go$$' 2>/dev/null; do \
-		echo "Files changed, running tests..."; \
-		echo "$$(date): Running go test ./... -v"; \
-		go test ./... -v; \
-		echo ""; \
-	done
+	python makefile.py test-watch
 
+test-watch-tables:
+	python makefile.py test-watch-tables
 
-# Install required tools
+# ── Tools ──────────────────────────────────────────────────────────────────────
 install-tools:
-	@echo "Installing file watching tools..."
-	sudo apt-get update && sudo apt-get install -y inotify-tools || true
-	go install github.com/mitranim/gow@latest || true
-	@echo "Tools installation complete!"
+	python makefile.py install-tools
 
-# Clean test cache
 clean:
-	go clean -testcache
+	python makefile.py clean
 
-# Build the project
+# ── Build ──────────────────────────────────────────────────────────────────────
 build:
-	go build -o bin/storemy ./
+	python makefile.py build
 
-# Format code
 fmt:
-	go fmt ./...
+	python makefile.py fmt
 
-# Vet code
 vet:
-	go vet ./...
+	python makefile.py vet
 
-# Run linter (requires golangci-lint)
 lint:
-	golangci-lint run || true
+	python makefile.py lint
 
-# Run all checks
-check: fmt vet test
+lint-fix:
+	python makefile.py lint-fix
 
-# Run WAL examples
+tidy:
+	python makefile.py tidy
+
+coverage-html:
+	python makefile.py coverage-html
+
+bench:
+	python makefile.py bench
+
+check:
+	python makefile.py check
+
+# ── Run ────────────────────────────────────────────────────────────────────────
+run:
+	python makefile.py run
+
+run-fresh:
+	python makefile.py run-fresh
+
 examples:
-	go run pkg/examples/main.go
+	python makefile.py examples
 
-# Help
-help:
-	@echo "StoreMy Database - Available Commands"
-	@echo ""
-	@echo "Docker Commands (Recommended for Testing):"
-	@echo "  make docker-demo      - Start database with demo data (easiest way to test)"
-	@echo "  make docker-import    - Start database and import sample SQL"
-	@echo "  make docker-fresh     - Start empty database"
-	@echo "  make docker-test      - Run automated CRUD tests"
-	@echo "  make docker-build     - Build Docker image"
-	@echo "  make docker-clean     - Stop containers and remove volumes"
-	@echo "  make docker-stop      - Stop Docker containers"
-	@echo "  make quickstart       - Build and run demo (one command)"
-	@echo ""
-	@echo "Local Development:"
-	@echo "  test              - Run all tests"
-	@echo "  test-tables       - Run table tests only"
-	@echo "  test-coverage     - Run tests with coverage"
-	@echo "  test-watch        - Watch and run all tests on file changes"
-	@echo "  test-watch-tables - Watch and run table tests on file changes"
-	@echo "  install-tools     - Install file watching tools"
-	@echo "  clean             - Clean test cache"
-	@echo "  build             - Build the project"
-	@echo "  fmt               - Format code"
-	@echo "  vet               - Vet code"
-	@echo "  lint              - Run linter"
-	@echo "  check             - Run fmt, vet, and test"
-	@echo "  examples          - Run WAL transaction examples"
-	@echo "  help              - Show this help"
-
-# ============================================
-# Docker Commands (For Recruiters/Testers)
-# ============================================
-
+# ── Docker ─────────────────────────────────────────────────────────────────────
 docker-demo:
-	@echo "🚀 Starting StoreMy with demo data..."
-	@echo "Use Ctrl+E to execute queries, Ctrl+H for help, Ctrl+Q to quit"
-	docker-compose up storemy-demo
+	python makefile.py docker-demo
 
 docker-import:
-	@echo "📥 Starting StoreMy with sample SQL import..."
-	docker-compose up storemy-import
+	python makefile.py docker-import
 
 docker-fresh:
-	@echo "🆕 Starting fresh StoreMy database..."
-	docker-compose up storemy-fresh
+	python makefile.py docker-fresh
 
 docker-test:
-	@echo "🧪 Running automated CRUD tests..."
-	docker-compose run --rm storemy-test
+	python makefile.py docker-test
 
 docker-build:
-	@echo "🔨 Building Docker image..."
-	docker-compose build
+	python makefile.py docker-build
 
 docker-clean:
-	@echo "🧹 Cleaning up Docker containers and volumes..."
-	docker-compose down -v
+	python makefile.py docker-clean
 
 docker-stop:
-	@echo "🛑 Stopping Docker containers..."
-	docker-compose down
+	python makefile.py docker-stop
 
-# Quick start for recruiters
-quickstart: docker-build docker-demo
+quickstart:
+	python makefile.py quickstart
+
+# ── Help ───────────────────────────────────────────────────────────────────────
+help:
+	@python makefile.py help
