@@ -18,14 +18,18 @@ linters:
     - misspell
     - gocritic
     - prealloc
+    - cyclop
+    - gocognit
   disable:
     - exhaustruct
     - wrapcheck
     - godot
     - funlen
-    - cyclop
-    - gocognit
   settings:
+    cyclop:
+      max-complexity: 15
+    gocognit:
+      min-complexity: 30
     gocritic:
       enabled-tags:
         - diagnostic
@@ -47,6 +51,8 @@ linters:
         linters:
           - errcheck
           - gocritic
+          - cyclop
+          - gocognit
       - path: pkg/examples/
         linters:
           - errcheck
