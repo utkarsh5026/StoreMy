@@ -1,0 +1,36 @@
+# Pre-commit hooks for StoreMy
+#
+# REQUIRES: Python and the pre-commit tool (https://pre-commit.com)
+#   Install: pip install pre-commit
+#   Activate: pre-commit install   (run once after cloning)
+#   Run manually: pre-commit run --all-files
+#
+# Python-less alternative: run `make check` before committing.
+
+default_install_hook_types: [pre-commit]
+
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v4.6.0
+    hooks:
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+      - id: check-yaml
+      - id: check-json
+
+  - repo: local
+    hooks:
+      - id: go-fmt
+        name: go fmt
+        language: system
+        entry: >-
+          bash -c 'unformatted=$(gofmt -l .); if [ -n "$unformatted" ]; then echo "Unformatted files:"; echo "$unformatted"; echo "Run: go fmt ./..."; exit 1; fi'
+        pass_filenames: false
+        types: [go]
+
+      - id: go-vet
+        name: go vet
+        language: system
+        entry: go vet ./...
+        pass_filenames: false
+        types: [go]
