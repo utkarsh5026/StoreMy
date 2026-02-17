@@ -606,13 +606,13 @@ func (p *ExplainPlan) educationalNodeExplanation(node plan.PlanNode) string {
 			method = "seqscan"
 		}
 		if method == "seqscan" || method == "" {
-			desc := fmt.Sprintf("Sequential Scan on \"%s\" — reads every row in the table from disk", n.TableName)
+			desc := fmt.Sprintf("Sequential Scan on %q — reads every row in the table from disk", n.TableName)
 			if len(n.Predicates) > 0 {
 				desc += fmt.Sprintf(", then filters rows matching %d condition(s)", len(n.Predicates))
 			}
 			return desc
 		}
-		desc := fmt.Sprintf("Index Scan on \"%s\" using index \"%s\" — uses an index to find matching rows efficiently", n.TableName, n.IndexName)
+		desc := fmt.Sprintf("Index Scan on %q using index %q — uses an index to find matching rows efficiently", n.TableName, n.IndexName)
 		return desc
 
 	case *plan.JoinNode:
@@ -638,7 +638,7 @@ func (p *ExplainPlan) educationalNodeExplanation(node plan.PlanNode) string {
 		return desc
 
 	case *plan.SortNode:
-		return fmt.Sprintf("Sort — orders all rows by \"%s\" %s (requires reading the full input before returning any rows)", n.SortKey, n.Order)
+		return fmt.Sprintf("Sort — orders all rows by %q %s (requires reading the full input before returning any rows)", n.SortKey, n.Order)
 
 	case *plan.LimitNode:
 		desc := fmt.Sprintf("Limit — returns at most %d row(s)", n.Limit)
@@ -654,16 +654,16 @@ func (p *ExplainPlan) educationalNodeExplanation(node plan.PlanNode) string {
 		return fmt.Sprintf("%s — combines result sets from two sub-queries", n.OpType)
 
 	case *plan.InsertNode:
-		return fmt.Sprintf("Insert — writes %d new row(s) into \"%s\"", n.NumRows, n.TableName)
+		return fmt.Sprintf("Insert — writes %d new row(s) into %q", n.NumRows, n.TableName)
 
 	case *plan.UpdateNode:
-		return fmt.Sprintf("Update — modifies %d field(s) in matching rows of \"%s\"", n.SetFields, n.TableName)
+		return fmt.Sprintf("Update — modifies %d field(s) in matching rows of %q", n.SetFields, n.TableName)
 
 	case *plan.DeleteNode:
-		return fmt.Sprintf("Delete — removes matching rows from \"%s\"", n.TableName)
+		return fmt.Sprintf("Delete — removes matching rows from %q", n.TableName)
 
 	case *plan.DDLNode:
-		return fmt.Sprintf("DDL Operation: %s \"%s\" — modifies the schema, no rows are scanned", n.Operation, n.ObjectName)
+		return fmt.Sprintf("DDL Operation: %s %q — modifies the schema, no rows are scanned", n.Operation, n.ObjectName)
 
 	default:
 		return fmt.Sprintf("%s (cost=%.2f, rows=%d)", node.GetNodeType(), node.GetCost(), node.GetCardinality())
@@ -676,7 +676,7 @@ func (p *ExplainPlan) formatPlanJSON(planNode plan.PlanNode) string {
 	// A full implementation would use json.Marshal with proper structure
 	var sb strings.Builder
 	sb.WriteString("{\n")
-	sb.WriteString(fmt.Sprintf("  \"nodeType\": \"%s\",\n", planNode.GetNodeType()))
+	sb.WriteString(fmt.Sprintf("  \"nodeType\": %q,\n", planNode.GetNodeType()))
 	sb.WriteString(fmt.Sprintf("  \"cost\": %.2f,\n", planNode.GetCost()))
 	sb.WriteString(fmt.Sprintf("  \"rows\": %d,\n", planNode.GetCardinality()))
 	sb.WriteString("  \"children\": [\n")
