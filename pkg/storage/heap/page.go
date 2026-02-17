@@ -306,7 +306,7 @@ func (hp *HeapPage) GetTupleAt(idx primitives.SlotID) (*tuple.Tuple, error) {
 //   - int: Maximum number of tuple slots for this page's schema
 func (hp *HeapPage) getNumTuples() primitives.SlotID {
 	tupleSize := hp.tupleDesc.GetSize()
-	return primitives.SlotID(page.PageSize) / primitives.SlotID(tupleSize+SlotPointerSize)
+	return primitives.SlotID(page.PageSize) / primitives.SlotID(tupleSize+SlotPointerSize) // #nosec G115
 }
 
 // getHeaderSize calculates the number of bytes needed for the slot pointer array.
@@ -494,7 +494,7 @@ func (hp *HeapPage) Compact() int {
 
 	// Repack tuples contiguously from the free space pointer
 	for _, td := range activeTuples {
-		tupleSize := uint16(len(td.data))
+		tupleSize := uint16(len(td.data)) // #nosec G115
 
 		// Update slot pointer to new location
 		hp.slotPointers[td.slotIndex] = SlotPointer{

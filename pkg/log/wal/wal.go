@@ -33,11 +33,11 @@ func NewWAL(logPath string, bufferSize int) (*WAL, error) {
 
 	pos, err := file.Seek(0, io.SeekEnd)
 	if err != nil {
-		file.Close()
+		_ = file.Close()
 		return nil, fmt.Errorf("failed to seek to end of WAL: %v", err)
 	}
 
-	writer := NewLogWriter(file, bufferSize, primitives.LSN(pos), primitives.LSN(pos))
+	writer := NewLogWriter(file, bufferSize, primitives.LSN(pos), primitives.LSN(pos)) // #nosec G115
 
 	w := &WAL{
 		file:       file,

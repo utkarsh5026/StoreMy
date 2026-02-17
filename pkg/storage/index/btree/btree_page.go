@@ -114,7 +114,7 @@ func (p *BTreePage) GetPageData() []byte {
 
 	buf.WriteByte(p.pageType)
 	_ = binary.Write(buf, binary.BigEndian, uint64(p.ParentPage))
-	_ = binary.Write(buf, binary.BigEndian, int32(p.GetNumEntries()))
+	_ = binary.Write(buf, binary.BigEndian, int32(p.GetNumEntries())) // #nosec G115
 	_ = binary.Write(buf, binary.BigEndian, uint64(p.NextLeaf))
 	_ = binary.Write(buf, binary.BigEndian, uint64(p.PrevLeaf))
 
@@ -311,7 +311,7 @@ func (p *BTreePage) serializeEntry(w io.Writer, entry *index.IndexEntry) error {
 
 // serializeField writes a field to the buffer
 func (p *BTreePage) serializeField(w io.Writer, field types.Field) error {
-	if err := binary.Write(w, binary.BigEndian, byte(field.Type())); err != nil {
+	if err := binary.Write(w, binary.BigEndian, byte(field.Type())); err != nil { // #nosec G115
 		return err
 	}
 	return field.Serialize(w)

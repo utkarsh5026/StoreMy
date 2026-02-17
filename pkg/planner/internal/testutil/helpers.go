@@ -24,7 +24,7 @@ func CreateTestContextWithCleanup(t *testing.T, dataDir string) (*registry.Datab
 	walPath := filepath.Join(tmpDir, "test.wal")
 	walInstance, err := wal.NewWAL(walPath, 8192)
 	if err != nil {
-		os.RemoveAll(tmpDir)
+		_ = os.RemoveAll(tmpDir)
 		if t != nil {
 			t.Fatalf("failed to create WAL: %v", err)
 		}
@@ -68,9 +68,9 @@ func CreateTestContextWithCleanup(t *testing.T, dataDir string) (*registry.Datab
 				catalogMgr.ClearCacheCompletely()
 			}
 			if walInstance != nil {
-				walInstance.Close()
+				_ = walInstance.Close()
 			}
-			os.RemoveAll(tmpDir)
+			_ = os.RemoveAll(tmpDir)
 		})
 	}
 

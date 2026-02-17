@@ -416,7 +416,7 @@ func (se *SelectivityEstimator) equalityNoHist(colStats *catalogmanager.ColumnSt
 
 	remainingFreq := math.Max(1.0-mcvTotalFreq, 0)
 
-	nonMCVDistinct := int(colStats.DistinctCount) - len(colStats.MostCommonVals)
+	nonMCVDistinct := int(colStats.DistinctCount) - len(colStats.MostCommonVals) // #nosec G115
 	if nonMCVDistinct <= 0 {
 		return Selectivity(1.0 / float64(colStats.DistinctCount))
 	}

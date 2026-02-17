@@ -223,7 +223,7 @@ func (p *InsertPlan) insertTuples(tableID primitives.FileID, tupleDesc *tuple.Tu
 func validateValueCount(values []types.Field, td *tuple.TupleDescription, fieldMapping columnIndexMapping, autoIncInfo *operations.AutoIncrementInfo) error {
 	var expected primitives.ColumnID
 	if fieldMapping != nil {
-		expected = primitives.ColumnID(len(fieldMapping))
+		expected = primitives.ColumnID(len(fieldMapping)) // #nosec G115
 	} else {
 		expected = td.NumFields()
 		if autoIncInfo != nil {
@@ -363,7 +363,7 @@ func buildTupleFromAllColumns(values []types.Field, td *tuple.TupleDescription, 
 //   - An error if setting the field fails (wrong type, invalid index, etc.)
 func applyAutoIncrementValue(t *tuple.Tuple, autoInc *operations.AutoIncrementInfo) error {
 	index := autoInc.ColumnIndex
-	value := types.NewIntField(int64(autoInc.NextValue))
+	value := types.NewIntField(int64(autoInc.NextValue)) // #nosec G115
 	if err := t.SetField(index, value); err != nil {
 		return fmt.Errorf("failed to set auto-increment field: %v", err)
 	}

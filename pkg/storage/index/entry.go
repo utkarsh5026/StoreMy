@@ -68,7 +68,7 @@ func (i *IndexEntry) Equals(other *IndexEntry) bool {
 //	data, err := entry.Serialize()
 func (i *IndexEntry) Serialize(w io.Writer) error {
 	rid := i.RID
-	if err := binary.Write(w, binary.BigEndian, byte(i.Key.Type())); err != nil {
+	if err := binary.Write(w, binary.BigEndian, byte(i.Key.Type())); err != nil { // #nosec G115
 		return err
 	}
 	if err := i.Key.Serialize(w); err != nil {

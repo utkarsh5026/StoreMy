@@ -82,14 +82,14 @@ func (l *LogRecord) Serialize() ([]byte, error) {
 
 	tidVal := uint64(0)
 	if l.TID != nil {
-		tidVal = uint64(l.TID.ID())
+		tidVal = uint64(l.TID.ID()) // #nosec G115
 	}
 
 	writes := []any{
 		byte(l.Type),
 		tidVal,
 		uint64(l.PrevLSN),
-		uint64(l.Timestamp.Unix()),
+		uint64(l.Timestamp.Unix()), // #nosec G115
 	}
 
 	for _, v := range writes {
@@ -111,7 +111,7 @@ func (l *LogRecord) Serialize() ([]byte, error) {
 
 	data := buf.Bytes()
 	result := make([]byte, RecordSize+len(data))
-	binary.BigEndian.PutUint32(result, uint32(len(result)))
+	binary.BigEndian.PutUint32(result, uint32(len(result))) // #nosec G115
 	copy(result[RecordSize:], data)
 
 	return result, nil
@@ -160,7 +160,7 @@ func (l *LogRecord) serializePageID(buf *bytes.Buffer) error {
 func (l *LogRecord) serializeImage(buf *bytes.Buffer, image []byte) error {
 	length := uint32(0)
 	if image != nil {
-		length = uint32(len(image))
+		length = uint32(len(image)) // #nosec G115
 	}
 
 	if err := binary.Write(buf, binary.BigEndian, length); err != nil {

@@ -29,7 +29,7 @@ func SetupTestDB(t *testing.T) *TestDatabase {
 
 	db, err := database.NewDatabase("testdb", dataDir, logDir)
 	if err != nil {
-		os.RemoveAll(tempDir)
+		_ = os.RemoveAll(tempDir)
 		t.Fatalf("failed to create database: %v", err)
 	}
 

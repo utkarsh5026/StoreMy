@@ -205,7 +205,7 @@ func (cm *CatalogManager) ClearCache() {
 			cm.mu.Unlock()
 
 			if exists {
-				heapFile.Close()
+				_ = heapFile.Close()
 			}
 			cm.store.UnregisterDbFile(tableID)
 		}
@@ -233,7 +233,7 @@ func (cm *CatalogManager) ClearCacheCompletely() {
 			cm.mu.Unlock()
 
 			if exists {
-				heapFile.Close()
+				_ = heapFile.Close()
 			}
 			cm.store.UnregisterDbFile(tableID)
 		}

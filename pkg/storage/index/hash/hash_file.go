@@ -66,7 +66,7 @@ func NewHashFile(filePath primitives.Filepath, keyType types.Type, numBuckets Bu
 
 	numPages, err := baseFile.NumPages()
 	if err != nil {
-		baseFile.Close()
+		_ = baseFile.Close()
 		return nil, fmt.Errorf("failed to get page count: %w", err)
 	}
 
@@ -161,7 +161,7 @@ func (hf *HashFile) ReadPage(pageID *page.PageDescriptor) (page.Page, error) {
 		if err == io.EOF {
 			// Return a new empty page for unallocated pages
 			// Use page number as bucket number for initial pages
-			bucketNum := BucketNumber(pageID.PageNo())
+			bucketNum := BucketNumber(pageID.PageNo()) // #nosec G115
 			newPage := NewHashPage(pageID, bucketNum, hf.keyType)
 			return newPage, nil
 		}

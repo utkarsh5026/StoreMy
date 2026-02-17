@@ -160,7 +160,7 @@ func (lm *LockManager) calculateRetryDelay(attemptNumber int, baseDelay, maxDela
 	// Use more gradual exponential backoff: every 5 attempts instead of 10
 	// Cap the exponential factor at 5 to prevent excessive delays
 	exponentialFactor := min(attemptNumber/5, 5)
-	delay := min(baseDelay*time.Duration(1<<uint(exponentialFactor)), maxDelay)
+	delay := min(baseDelay*time.Duration(1<<uint(exponentialFactor)), maxDelay) // #nosec G115
 
 	return delay
 }

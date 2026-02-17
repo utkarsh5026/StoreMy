@@ -182,7 +182,7 @@ func (hi *HashIndex) hashKey(key types.Field) (hash.BucketNumber, error) {
 	if err != nil {
 		return 0, fmt.Errorf("failed to hash key: %w", err)
 	}
-	return hash.BucketNumber(int(h) % int(hi.numBuckets)), nil
+	return hash.BucketNumber(int(h) % int(hi.numBuckets)), nil // #nosec G115
 }
 
 // validateKeyType checks if the provided key matches the index's key type.

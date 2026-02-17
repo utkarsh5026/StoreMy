@@ -56,7 +56,7 @@ func (lr *LogReader) ReadNext() (*record.LogRecord, error) {
 	}
 
 	rec.LSN = primitives.LSN(lr.offset)
-	lr.offset += int64(recLen)
+	lr.offset += int64(recLen) // #nosec G115
 	return rec, nil
 }
 

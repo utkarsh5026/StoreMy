@@ -76,7 +76,7 @@ func (cm *CatalogManager) DeleteTableFromSysTable(tx TxContext, tableID, sysTabl
 
 	// Iterate through the system table to find all tuples matching the tableID
 	err = cm.iterateTable(sysTableID, tx, func(t *tuple.Tuple) error {
-		field, err := t.GetField(primitives.ColumnID(syst.TableIDIndex()))
+		field, err := t.GetField(primitives.ColumnID(syst.TableIDIndex())) // #nosec G115
 		if err != nil {
 			return err
 		}

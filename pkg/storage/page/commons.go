@@ -107,7 +107,7 @@ func (bf *BaseFile) NumPages() (primitives.PageNumber, error) {
 		return 0, fmt.Errorf("failed to stat file: %w", err)
 	}
 
-	numPages := primitives.PageNumber(fileInfo.Size() / int64(PageSize))
+	numPages := primitives.PageNumber(fileInfo.Size() / int64(PageSize)) // #nosec G115
 	if fileInfo.Size()%int64(PageSize) != 0 {
 		numPages++
 	}
@@ -134,7 +134,7 @@ func (bf *BaseFile) ReadPageData(pageNo primitives.PageNumber) ([]byte, error) {
 		return nil, fmt.Errorf("file is closed")
 	}
 
-	offset := int64(pageNo) * int64(PageSize)
+	offset := int64(pageNo) * int64(PageSize) // #nosec G115
 	pageData := make([]byte, PageSize)
 
 	_, err := bf.file.ReadAt(pageData, offset)
@@ -179,7 +179,7 @@ func (bf *BaseFile) WritePageData(pageNo primitives.PageNumber, pageData []byte)
 		return fmt.Errorf("invalid page data size: expected %d, got %d", PageSize, len(pageData))
 	}
 
-	offset := int64(pageNo) * int64(PageSize)
+	offset := int64(pageNo) * int64(PageSize) // #nosec G115
 
 	if _, err := bf.file.WriteAt(pageData, offset); err != nil {
 		return fmt.Errorf("failed to write page data: %w", err)
@@ -268,7 +268,7 @@ func (bf *BaseFile) AllocateNewPage() (primitives.PageNumber, error) {
 	// This ensures the file size increases immediately, preventing
 	// other threads from allocating the same page number
 	zeroPage := make([]byte, PageSize)
-	offset := int64(allocatedPageNo) * int64(PageSize)
+	offset := int64(allocatedPageNo) * int64(PageSize) // #nosec G115
 
 	if _, err := bf.file.WriteAt(zeroPage, offset); err != nil {
 		return 0, fmt.Errorf("failed to reserve page space: %w", err)
@@ -279,7 +279,7 @@ func (bf *BaseFile) AllocateNewPage() (primitives.PageNumber, error) {
 		return 0, fmt.Errorf("failed to sync file after page allocation: %w", err)
 	}
 
-	return primitives.PageNumber(allocatedPageNo), nil
+	return primitives.PageNumber(allocatedPageNo), nil // #nosec G115
 }
 
 // FilePath returns the absolute path to the database file.

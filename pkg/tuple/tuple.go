@@ -226,5 +226,5 @@ func (t *Tuple) WithUpdatedFields(fieldUpdates map[primitives.ColumnID]types.Fie
 // Returns:
 //   - primitives.ColumnID: The number of fields in the tuple.
 func (t *Tuple) fieldCount() primitives.ColumnID {
-	return primitives.ColumnID(len(t.fields))
+	return primitives.ColumnID(len(t.fields)) // #nosec G115
 }

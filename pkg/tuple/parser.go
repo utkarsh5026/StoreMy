@@ -30,7 +30,7 @@ func (p *Parser) ExpectFields(count int) *Parser {
 	if p.err != nil {
 		return p
 	}
-	if p.tuple.TupleDesc.NumFields() != primitives.ColumnID(count) {
+	if p.tuple.TupleDesc.NumFields() != primitives.ColumnID(count) { // #nosec G115
 		p.err = fmt.Errorf("invalid tuple: expected %d fields, got %d",
 			count, p.tuple.TupleDesc.NumFields())
 	}

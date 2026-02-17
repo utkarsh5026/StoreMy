@@ -57,7 +57,7 @@ func (cm *CatalogManager) CreateTable(tx TxContext, sch TableSchema) (primitives
 	}
 
 	if err := cm.registerTable(tx, sch, heapFile.FilePath()); err != nil {
-		heapFile.Close()
+		_ = heapFile.Close()
 		return 0, fmt.Errorf("failed to register table in catalog: %w", err)
 	}
 
@@ -127,7 +127,7 @@ func (cm *CatalogManager) addTableToCache(tx TxContext, file *heap.HeapFile, sch
 		if deleteErr := cm.DeleteCatalogEntry(tx, sch.TableID); deleteErr != nil {
 			fmt.Printf("Warning: failed to rollback catalog entry after cache failure: %v\n", deleteErr)
 		}
-		file.Close()
+		_ = file.Close()
 		return fmt.Errorf("failed to add table to cache: %w", err)
 	}
 
@@ -192,7 +192,7 @@ func (cm *CatalogManager) DropTable(tx TxContext, tableName string) error {
 	cm.mu.Unlock()
 
 	if exists {
-		heapFile.Close()
+		_ = heapFile.Close()
 	}
 
 	// Step 3: Unregister from page store
@@ -290,7 +290,7 @@ func (cm *CatalogManager) openTable(filePath primitives.Filepath, sch TableSchem
 	}
 
 	if err := cm.tableCache.AddTable(heapFile, sch); err != nil {
-		heapFile.Close()
+		_ = heapFile.Close()
 		return fmt.Errorf("failed to add table to cache: %w", err)
 	}
 

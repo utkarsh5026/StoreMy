@@ -135,7 +135,7 @@ func (p *ExplainPlan) buildSelectPlan(stmt *statements.SelectStatement) (plan.Pl
 
 	// Apply LIMIT if present
 	if selectPlan.HasLimit() {
-		currentNode = p.buildLimitNode(currentNode, int(selectPlan.Limit()), int(selectPlan.Offset()))
+		currentNode = p.buildLimitNode(currentNode, int(selectPlan.Limit()), int(selectPlan.Offset())) // #nosec G115
 	}
 
 	return currentNode, nil

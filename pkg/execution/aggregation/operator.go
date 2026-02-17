@@ -69,10 +69,10 @@ func NewAggregateOperator(source iterator.DbIterator, aggregateField, groupByFie
 // Note: Close can be called multiple times safely
 func (agg *AggregateOperator) Close() error {
 	if agg.source != nil {
-		agg.source.Close()
+		_ = agg.source.Close()
 	}
 	if agg.aggIterator != nil {
-		agg.aggIterator.Close()
+		_ = agg.aggIterator.Close()
 	}
 
 	agg.opened = false

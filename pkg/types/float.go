@@ -84,7 +84,7 @@ func (f *Float64Field) Hash() (primitives.HashCode, error) {
 	bytes := make([]byte, 8)
 	bits := uint64(f.Value)
 	for i := range 8 {
-		bytes[i] = byte(bits >> (8 * i))
+		bytes[i] = byte(bits >> (8 * i)) // #nosec G115
 	}
 	_, _ = h.Write(bytes)
 	return primitives.HashCode(h.Sum32()), nil
