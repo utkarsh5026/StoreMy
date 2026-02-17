@@ -199,16 +199,16 @@ func (im *IndexManager) OnDelete(ctx TxCtx, tableID primitives.FileID, t *tuple.
 //   - ctx: Transaction context for the operation
 //   - tableID: The ID of the table where the tuple is being updated
 //   - old: The tuple before the update. Must be non-nil and have a valid RecordID
-//   - new: The tuple after the update. Must be non-nil and have a valid RecordID
+//   - updated: The tuple after the update. Must be non-nil and have a valid RecordID
 //
 // Returns:
 //   - error: nil if both deletion and insertion succeed, or an error describing the failure
-func (im *IndexManager) OnUpdate(ctx TxCtx, tableID primitives.FileID, old, new *tuple.Tuple) error {
+func (im *IndexManager) OnUpdate(ctx TxCtx, tableID primitives.FileID, old, updated *tuple.Tuple) error {
 	if err := im.OnDelete(ctx, tableID, old); err != nil {
 		return err
 	}
 
-	if err := im.OnInsert(ctx, tableID, new); err != nil {
+	if err := im.OnInsert(ctx, tableID, updated); err != nil {
 		_ = im.OnInsert(ctx, tableID, old)
 		return err
 	}

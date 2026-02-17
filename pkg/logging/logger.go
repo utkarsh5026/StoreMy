@@ -60,11 +60,11 @@ func Init(config Config) error {
 		writer = os.Stdout
 	} else {
 		logDir := filepath.Dir(config.OutputPath)
-		if err := os.MkdirAll(logDir, 0755); err != nil {
+		if err := os.MkdirAll(logDir, 0o755); err != nil {
 			return err
 		}
 
-		file, err := os.OpenFile(config.OutputPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+		file, err := os.OpenFile(config.OutputPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
 		if err != nil {
 			return err
 		}

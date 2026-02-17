@@ -217,5 +217,5 @@ func startsWithComment(s string) bool {
 }
 
 func endsWithSemicolon(s string) bool {
-	return len(s) > 0 && s[len(s)-1] == ';'
+	return s != "" && s[len(s)-1] == ';'
 }

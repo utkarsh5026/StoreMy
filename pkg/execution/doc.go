@@ -3,7 +3,7 @@
 // The engine uses the iterator (volcano) model: every operator implements a
 // common interface with Open / Next / Close methods. Operators are composed
 // into a tree; calling Next on the root pulls one row at a time through the
-// entire pipeline without materialising intermediate results.
+// entire pipeline without materializing intermediate results.
 //
 // # Sub-packages
 //

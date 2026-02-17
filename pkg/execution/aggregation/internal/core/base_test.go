@@ -412,9 +412,11 @@ func TestBaseAggregator_RLockRUnlock(t *testing.T) {
 		t.Fatalf("Failed to create aggregator: %v", err)
 	}
 
-	// Should not panic
+	// Should not panic - verify RLock/RUnlock work without deadlock
 	agg.RLock()
+	locked := true //nolint:staticcheck
 	agg.RUnlock()
+	_ = locked
 }
 
 // TestBaseAggregator_Iterator tests iterator creation

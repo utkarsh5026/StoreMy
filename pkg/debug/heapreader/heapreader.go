@@ -286,7 +286,7 @@ func formatField(field types.Field) string {
 	case *types.BoolField:
 		return fmt.Sprintf("%t", f.Value)
 	default:
-		return fmt.Sprintf("%v", field)
+		return field.String()
 	}
 }
 

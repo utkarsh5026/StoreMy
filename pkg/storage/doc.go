@@ -1,6 +1,6 @@
 // Package storage is the root of StoreMy's disk-based storage engine.
 //
-// Data is organised into fixed-size 4 KB pages that are read and written as
+// Data is organized into fixed-size 4 KB pages that are read and written as
 // atomic units. Higher-level sub-packages build on this foundation to provide
 // heap file storage, index structures, and page-level management.
 //
@@ -20,6 +20,6 @@
 //
 // Each page starts with a fixed header (page ID, LSN, flags) followed by a
 // slot directory that grows downward from the end of the page toward the
-// centre. Tuple data is packed from the start of the page toward the centre.
+// center. Tuple data is packed from the start of the page toward the center.
 // Pages are never partially written; the WAL ensures durability.
 package storage

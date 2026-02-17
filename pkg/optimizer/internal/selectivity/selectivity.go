@@ -293,9 +293,9 @@ func (se *SelectivityEstimator) EstimateLike(pattern string) Selectivity {
 		return LikeSelectivity
 	}
 
-	if len(pattern) > 0 && pattern[0] != '%' && pattern[len(pattern)-1] == '%' {
+	if pattern != "" && pattern[0] != '%' && pattern[len(pattern)-1] == '%' {
 		return 0.1
-	} else if len(pattern) > 0 && pattern[0] == '%' && pattern[len(pattern)-1] != '%' {
+	} else if pattern != "" && pattern[0] == '%' && pattern[len(pattern)-1] != '%' {
 		return 0.3
 	} else if len(pattern) > 1 && pattern[0] == '%' && pattern[len(pattern)-1] == '%' {
 		return 0.5

@@ -1,7 +1,7 @@
 // Package logging provides a process-wide structured logger for StoreMy.
 //
 // The package wraps [log/slog] and exposes a single global logger instance
-// that is initialised once and then retrieved via GetLogger. All subsystems
+// that is initialized once and then retrieved via GetLogger. All subsystems
 // should obtain a logger through this package rather than constructing their
 // own slog.Logger values, so that log level and output destination are
 // controlled from a single place.

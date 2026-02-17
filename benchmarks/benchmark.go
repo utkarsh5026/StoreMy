@@ -87,8 +87,8 @@ func main() {
 		logDir = "/app/benchmark_logs"
 	}
 
-	os.MkdirAll(outputDir, 0755)
-	os.MkdirAll(logDir, 0755)
+	os.MkdirAll(outputDir, 0o755)
+	os.MkdirAll(logDir, 0o755)
 
 	walPath := fmt.Sprintf("%s/wal.log", logDir)
 
@@ -410,7 +410,7 @@ func saveJSONReport(report BenchmarkReport, filename string) {
 		return
 	}
 
-	if err := os.WriteFile(filename, data, 0644); err != nil {
+	if err := os.WriteFile(filename, data, 0o644); err != nil {
 		log.Printf("Error writing JSON report: %v", err)
 		return
 	}
@@ -532,7 +532,7 @@ func saveHTMLReport(report BenchmarkReport, filename string) {
 </html>
 `
 
-	if err := os.WriteFile(filename, []byte(html), 0644); err != nil {
+	if err := os.WriteFile(filename, []byte(html), 0o644); err != nil {
 		log.Printf("Error writing HTML report: %v", err)
 		return
 	}

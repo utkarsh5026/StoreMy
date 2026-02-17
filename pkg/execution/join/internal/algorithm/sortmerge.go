@@ -273,8 +273,7 @@ func loadAndSort(iter iterator.DbIterator, fieldIndex primitives.ColumnID) ([]*t
 // sortTuplesByField sorts tuples by comparing values at the specified field.
 func sortTuplesByField(tuples []*tuple.Tuple, fieldIndex primitives.ColumnID) {
 	defer func() {
-		if r := recover(); r != nil {
-		}
+		_ = recover()
 	}()
 
 	sort.Slice(tuples, func(i, j int) bool {

@@ -30,7 +30,7 @@ type IndexFileOps struct {
 // Returns:
 //   - indexID: The actual file ID from the created index file (from BaseFile)
 func (i *IndexFileOps) CreatePhysicalIndex(keyType types.Type, indexType index.IndexType) (primitives.FileID, error) {
-	if err := i.f.MkdirAll(0755); err != nil {
+	if err := i.f.MkdirAll(0o755); err != nil {
 		return 0, fmt.Errorf("failed to create directory: %v", err)
 	}
 
