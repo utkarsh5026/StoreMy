@@ -1,11 +1,9 @@
-version: "2"
-
 run:
   timeout: 5m
   tests: true
 
 linters:
-  default: none
+  disable-all: true
   enable:
     - errcheck
     - gosimple
@@ -20,46 +18,41 @@ linters:
     - prealloc
     - cyclop
     - gocognit
-  disable:
-    - exhaustruct
-    - wrapcheck
-    - godot
-    - funlen
-  settings:
-    cyclop:
-      max-complexity: 15
-    gocognit:
-      min-complexity: 30
-    gocritic:
-      enabled-tags:
-        - diagnostic
-        - style
-      disabled-checks:
-        - commentedOutCode
-        - hugeParam
-        - rangeValCopy
-    misspell:
-      locale: US
-    govet:
-      enable-all: true
-      disable:
-        - shadow
-        - fieldalignment
-  exclusions:
-    rules:
-      - path: _test\.go
-        linters:
-          - errcheck
-          - gocritic
-          - cyclop
-          - gocognit
-      - path: pkg/examples/
-        linters:
-          - errcheck
-      - linters:
-          - staticcheck
-        text: "SA1019"
+
+linters-settings:
+  cyclop:
+    max-complexity: 15
+  gocognit:
+    min-complexity: 30
+  gocritic:
+    enabled-tags:
+      - diagnostic
+      - style
+    disabled-checks:
+      - commentedOutCode
+      - hugeParam
+      - rangeValCopy
+  misspell:
+    locale: US
+  govet:
+    enable-all: true
+    disable:
+      - shadow
+      - fieldalignment
 
 issues:
   max-issues-per-linter: 50
   max-same-issues: 10
+  exclude-rules:
+    - path: _test\.go
+      linters:
+        - errcheck
+        - gocritic
+        - cyclop
+        - gocognit
+    - path: pkg/examples/
+      linters:
+        - errcheck
+    - linters:
+        - staticcheck
+      text: "SA1019"
