@@ -158,7 +158,7 @@ func TestParseStatement_UpdateWithDifferentDataTypes(t *testing.T) {
 func TestParseUpdateStatement_MissingTableName(t *testing.T) {
 	lexer := NewLexer("SET name = 'John'")
 
-	_, err := parseUpdateStatement(lexer)
+	_, err := (&UpdateParser{}).Parse(lexer)
 	if err == nil {
 		t.Error("expected error for missing table name")
 	}
@@ -171,7 +171,7 @@ func TestParseUpdateStatement_MissingTableName(t *testing.T) {
 func TestParseUpdateStatement_MissingSetKeyword(t *testing.T) {
 	lexer := NewLexer("users name = 'John'")
 
-	_, err := parseUpdateStatement(lexer)
+	_, err := (&UpdateParser{}).Parse(lexer)
 	if err == nil {
 		t.Error("expected error for missing SET keyword")
 	}
@@ -184,7 +184,7 @@ func TestParseUpdateStatement_MissingSetKeyword(t *testing.T) {
 func TestParseUpdateStatement_MissingEqualSign(t *testing.T) {
 	lexer := NewLexer("users SET name 'John'")
 
-	_, err := parseUpdateStatement(lexer)
+	_, err := (&UpdateParser{}).Parse(lexer)
 	if err == nil {
 		t.Error("expected error for missing equals sign")
 	}
@@ -197,7 +197,7 @@ func TestParseUpdateStatement_MissingEqualSign(t *testing.T) {
 func TestParseUpdateStatement_MissingValue(t *testing.T) {
 	lexer := NewLexer("users SET name =")
 
-	_, err := parseUpdateStatement(lexer)
+	_, err := (&UpdateParser{}).Parse(lexer)
 	if err == nil {
 		t.Error("expected error for missing value")
 	}
@@ -210,7 +210,7 @@ func TestParseUpdateStatement_MissingValue(t *testing.T) {
 func TestParseUpdateStatement_InvalidTableName(t *testing.T) {
 	lexer := NewLexer("123 SET name = 'John'")
 
-	_, err := parseUpdateStatement(lexer)
+	_, err := (&UpdateParser{}).Parse(lexer)
 	if err == nil {
 		t.Error("expected error for invalid table name")
 	}
@@ -225,7 +225,7 @@ func TestParseSetClauses_SingleClause(t *testing.T) {
 	lexer := NewLexer("name = 'John'")
 	stmt := statements.NewUpdateStatement("USERS", "USERS")
 
-	err := parseSetClauses(lexer, stmt)
+	err := (&UpdateParser{}).parseSetClauses(lexer, stmt)
 	if err != nil {
 		t.Fatalf("unexpected error: %s", err.Error())
 	}
@@ -243,7 +243,7 @@ func TestParseSetClauses_MultipleClauses(t *testing.T) {
 	lexer := NewLexer("name = 'John', age = 25")
 	stmt := statements.NewUpdateStatement("USERS", "USERS")
 
-	err := parseSetClauses(lexer, stmt)
+	err := (&UpdateParser{}).parseSetClauses(lexer, stmt)
 	if err != nil {
 		t.Fatalf("unexpected error: %s", err.Error())
 	}
@@ -300,7 +300,7 @@ func TestParseOptionalWhereClause_NoWhere(t *testing.T) {
 	lexer := NewLexer("EOF")
 	stmt := statements.NewUpdateStatement("USERS", "USERS")
 
-	err := parseOptionalWhereClause(lexer, stmt)
+	err := (&UpdateParser{}).parseOptionalWhereClause(lexer, stmt)
 	if err != nil {
 		t.Fatalf("unexpected error: %s", err.Error())
 	}
@@ -314,7 +314,7 @@ func TestParseOptionalWhereClause_WithWhere(t *testing.T) {
 	lexer := NewLexer("WHERE id = 1")
 	stmt := statements.NewUpdateStatement("USERS", "USERS")
 
-	err := parseOptionalWhereClause(lexer, stmt)
+	err := (&UpdateParser{}).parseOptionalWhereClause(lexer, stmt)
 	if err != nil {
 		t.Fatalf("unexpected error: %s", err.Error())
 	}

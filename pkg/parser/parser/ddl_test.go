@@ -1,8 +1,8 @@
 package parser
 
 import (
-	"storemy/pkg/parser/lexer"
 	"storemy/pkg/parser/statements"
+	"storemy/pkg/storage/index"
 	"storemy/pkg/types"
 	"testing"
 )
@@ -156,19 +156,19 @@ func TestParseStatement_CreateTableAllDataTypes(t *testing.T) {
 
 func TestParseDataType_ValidTypes(t *testing.T) {
 	tests := []struct {
-		tokenType lexer.TokenType
+		tokenType TokenType
 		expected  types.Type
 	}{
-		{lexer.INT, types.IntType},
-		{lexer.VARCHAR, types.StringType},
-		{lexer.TEXT, types.StringType},
-		{lexer.BOOLEAN, types.BoolType},
-		{lexer.FLOAT, types.FloatType},
+		{INT, types.IntType},
+		{VARCHAR, types.StringType},
+		{TEXT, types.StringType},
+		{BOOLEAN, types.BoolType},
+		{FLOAT, types.FloatType},
 	}
 
 	for _, test := range tests {
-		token := lexer.Token{Type: test.tokenType, Value: "test"}
-		result, err := parseDataType(token)
+		token := Token{Type: test.tokenType, Value: "test"}
+		result, err := (&CreateStatementParser{}).parseDataType(token)
 		if err != nil {
 			t.Errorf("unexpected error for %v: %s", test.tokenType, err.Error())
 		}
@@ -180,8 +180,8 @@ func TestParseDataType_ValidTypes(t *testing.T) {
 }
 
 func TestParseDataType_InvalidType(t *testing.T) {
-	token := lexer.Token{Type: lexer.IDENTIFIER, Value: "INVALID"}
-	_, err := parseDataType(token)
+	token := Token{Type: IDENTIFIER, Value: "INVALID"}
+	_, err := (&CreateStatementParser{}).parseDataType(token)
 	if err == nil {
 		t.Error("expected error for invalid data type")
 	}
@@ -196,7 +196,7 @@ func TestParseDataType_InvalidType(t *testing.T) {
 func TestParseCreateStatement_MissingTable(t *testing.T) {
 	lexer := NewLexer("users (id INT)")
 
-	_, err := parseCreateStatement(lexer)
+	_, err := (&CreateStatementParser{}).Parse(lexer)
 	if err == nil {
 		t.Error("expected error for missing TABLE")
 	}
@@ -209,7 +209,7 @@ func TestParseCreateStatement_MissingTable(t *testing.T) {
 func TestParseCreateStatement_MissingTableName(t *testing.T) {
 	lexer := NewLexer("TABLE (id INT)")
 
-	_, err := parseCreateStatement(lexer)
+	_, err := (&CreateStatementParser{}).Parse(lexer)
 	if err == nil {
 		t.Error("expected error for missing table name")
 	}
@@ -222,7 +222,7 @@ func TestParseCreateStatement_MissingTableName(t *testing.T) {
 func TestParseCreateStatement_MissingLeftParen(t *testing.T) {
 	lexer := NewLexer("TABLE users id INT)")
 
-	_, err := parseCreateStatement(lexer)
+	_, err := (&CreateStatementParser{}).Parse(lexer)
 	if err == nil {
 		t.Error("expected error for missing left parenthesis")
 	}
@@ -235,7 +235,7 @@ func TestParseCreateStatement_MissingLeftParen(t *testing.T) {
 func TestParseCreateStatement_InvalidIfNotExists(t *testing.T) {
 	lexer := NewLexer("TABLE IF EXISTS users (id INT)")
 
-	_, err := parseCreateStatement(lexer)
+	_, err := (&CreateStatementParser{}).Parse(lexer)
 	if err == nil {
 		t.Error("expected error for invalid IF NOT EXISTS")
 	}
@@ -249,7 +249,7 @@ func TestReadPrimaryKey_MissingKey(t *testing.T) {
 	lexer := NewLexer("(id)")
 	stmt := statements.NewCreateStatement("users", false)
 
-	err := readPrimaryKey(lexer, stmt)
+	err := (&CreateStatementParser{}).readPrimaryKey(lexer, stmt)
 	if err == nil {
 		t.Error("expected error for missing KEY")
 	}
@@ -263,7 +263,7 @@ func TestReadPrimaryKey_MissingLeftParen(t *testing.T) {
 	lexer := NewLexer("KEY id)")
 	stmt := statements.NewCreateStatement("users", false)
 
-	err := readPrimaryKey(lexer, stmt)
+	err := (&CreateStatementParser{}).readPrimaryKey(lexer, stmt)
 	if err == nil {
 		t.Error("expected error for missing left parenthesis")
 	}
@@ -277,7 +277,7 @@ func TestReadPrimaryKey_MissingFieldName(t *testing.T) {
 	lexer := NewLexer("KEY ()")
 	stmt := statements.NewCreateStatement("users", false)
 
-	err := readPrimaryKey(lexer, stmt)
+	err := (&CreateStatementParser{}).readPrimaryKey(lexer, stmt)
 	if err == nil {
 		t.Error("expected error for missing field name")
 	}
@@ -291,7 +291,7 @@ func TestReadPrimaryKey_MissingRightParen(t *testing.T) {
 	lexer := NewLexer("KEY (id")
 	stmt := statements.NewCreateStatement("users", false)
 
-	err := readPrimaryKey(lexer, stmt)
+	err := (&CreateStatementParser{}).readPrimaryKey(lexer, stmt)
 	if err == nil {
 		t.Error("expected error for missing right parenthesis")
 	}
@@ -451,4 +451,279 @@ func containsHelper(s, substr string) bool {
 		}
 	}
 	return false
+}
+
+func TestParseCreateIndexStatement(t *testing.T) {
+	tests := []struct {
+		name        string
+		sql         string
+		wantErr     bool
+		indexName   string
+		tableName   string
+		columnName  string
+		indexType   index.IndexType
+		ifNotExists bool
+	}{
+		{
+			name:        "Basic CREATE INDEX with HASH",
+			sql:         "CREATE INDEX idx_users_email ON users(email) USING HASH",
+			wantErr:     false,
+			indexName:   "IDX_USERS_EMAIL",
+			tableName:   "USERS",
+			columnName:  "EMAIL",
+			indexType:   index.HashIndex,
+			ifNotExists: false,
+		},
+		{
+			name:        "CREATE INDEX with BTREE",
+			sql:         "CREATE INDEX idx_products_price ON products(price) USING BTREE",
+			wantErr:     false,
+			indexName:   "IDX_PRODUCTS_PRICE",
+			tableName:   "PRODUCTS",
+			columnName:  "PRICE",
+			indexType:   index.BTreeIndex,
+			ifNotExists: false,
+		},
+		{
+			name:        "CREATE INDEX without USING clause (defaults to HASH)",
+			sql:         "CREATE INDEX idx_orders_id ON orders(order_id)",
+			wantErr:     false,
+			indexName:   "IDX_ORDERS_ID",
+			tableName:   "ORDERS",
+			columnName:  "ORDER_ID",
+			indexType:   index.HashIndex,
+			ifNotExists: false,
+		},
+		{
+			name:        "CREATE INDEX IF NOT EXISTS",
+			sql:         "CREATE INDEX IF NOT EXISTS idx_users_name ON users(name) USING HASH",
+			wantErr:     false,
+			indexName:   "IDX_USERS_NAME",
+			tableName:   "USERS",
+			columnName:  "NAME",
+			indexType:   index.HashIndex,
+			ifNotExists: true,
+		},
+		{
+			name:        "CREATE INDEX IF NOT EXISTS without USING",
+			sql:         "CREATE INDEX IF NOT EXISTS idx_status ON tasks(status)",
+			wantErr:     false,
+			indexName:   "IDX_STATUS",
+			tableName:   "TASKS",
+			columnName:  "STATUS",
+			indexType:   index.HashIndex,
+			ifNotExists: true,
+		},
+		{
+			name:    "Missing index name",
+			sql:     "CREATE INDEX ON users(email)",
+			wantErr: true,
+		},
+		{
+			name:    "Missing table name",
+			sql:     "CREATE INDEX idx_test",
+			wantErr: true,
+		},
+		{
+			name:    "Missing column name",
+			sql:     "CREATE INDEX idx_test ON users",
+			wantErr: true,
+		},
+		{
+			name:    "Invalid index type",
+			sql:     "CREATE INDEX idx_test ON users(email) USING INVALID",
+			wantErr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			stmt, err := ParseStatement(tt.sql)
+
+			if tt.wantErr {
+				if err == nil {
+					t.Errorf("ParseStatement() expected error but got none")
+				}
+				return
+			}
+
+			if err != nil {
+				t.Errorf("ParseStatement() error = %v", err)
+				return
+			}
+
+			createIndexStmt, ok := stmt.(*statements.CreateIndexStatement)
+			if !ok {
+				t.Errorf("ParseStatement() returned wrong type, got %T, want *statements.CreateIndexStatement", stmt)
+				return
+			}
+
+			if createIndexStmt.IndexName != tt.indexName {
+				t.Errorf("IndexName = %v, want %v", createIndexStmt.IndexName, tt.indexName)
+			}
+
+			if createIndexStmt.TableName != tt.tableName {
+				t.Errorf("TableName = %v, want %v", createIndexStmt.TableName, tt.tableName)
+			}
+
+			if createIndexStmt.ColumnName != tt.columnName {
+				t.Errorf("ColumnName = %v, want %v", createIndexStmt.ColumnName, tt.columnName)
+			}
+
+			if createIndexStmt.IndexType != tt.indexType {
+				t.Errorf("IndexType = %v, want %v", createIndexStmt.IndexType, tt.indexType)
+			}
+
+			if createIndexStmt.IfNotExists != tt.ifNotExists {
+				t.Errorf("IfNotExists = %v, want %v", createIndexStmt.IfNotExists, tt.ifNotExists)
+			}
+
+			// Test validation
+			if err := createIndexStmt.Validate(); err != nil {
+				t.Errorf("Validate() error = %v", err)
+			}
+
+			// Test String() method
+			str := createIndexStmt.String()
+			if str == "" {
+				t.Errorf("String() returned empty string")
+			}
+		})
+	}
+}
+
+func TestParseDropIndexStatement(t *testing.T) {
+	tests := []struct {
+		name      string
+		sql       string
+		wantErr   bool
+		indexName string
+		tableName string
+		ifExists  bool
+	}{
+		{
+			name:      "Basic DROP INDEX",
+			sql:       "DROP INDEX idx_users_email",
+			wantErr:   false,
+			indexName: "IDX_USERS_EMAIL",
+			tableName: "",
+			ifExists:  false,
+		},
+		{
+			name:      "DROP INDEX with table name",
+			sql:       "DROP INDEX idx_users_email ON users",
+			wantErr:   false,
+			indexName: "IDX_USERS_EMAIL",
+			tableName: "USERS",
+			ifExists:  false,
+		},
+		{
+			name:      "DROP INDEX IF EXISTS",
+			sql:       "DROP INDEX IF EXISTS idx_products_price",
+			wantErr:   false,
+			indexName: "IDX_PRODUCTS_PRICE",
+			tableName: "",
+			ifExists:  true,
+		},
+		{
+			name:      "DROP INDEX IF EXISTS with table name",
+			sql:       "DROP INDEX IF EXISTS idx_orders_status ON orders",
+			wantErr:   false,
+			indexName: "IDX_ORDERS_STATUS",
+			tableName: "ORDERS",
+			ifExists:  true,
+		},
+		{
+			name:    "Missing index name",
+			sql:     "DROP INDEX",
+			wantErr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			stmt, err := ParseStatement(tt.sql)
+
+			if tt.wantErr {
+				if err == nil {
+					t.Errorf("ParseStatement() expected error but got none")
+				}
+				return
+			}
+
+			if err != nil {
+				t.Errorf("ParseStatement() error = %v", err)
+				return
+			}
+
+			dropIndexStmt, ok := stmt.(*statements.DropIndexStatement)
+			if !ok {
+				t.Errorf("ParseStatement() returned wrong type, got %T, want *statements.DropIndexStatement", stmt)
+				return
+			}
+
+			if dropIndexStmt.IndexName != tt.indexName {
+				t.Errorf("IndexName = %v, want %v", dropIndexStmt.IndexName, tt.indexName)
+			}
+
+			if dropIndexStmt.TableName != tt.tableName {
+				t.Errorf("TableName = %v, want %v", dropIndexStmt.TableName, tt.tableName)
+			}
+
+			if dropIndexStmt.IfExists != tt.ifExists {
+				t.Errorf("IfExists = %v, want %v", dropIndexStmt.IfExists, tt.ifExists)
+			}
+
+			// Test validation
+			if err := dropIndexStmt.Validate(); err != nil {
+				t.Errorf("Validate() error = %v", err)
+			}
+
+			// Test String() method
+			str := dropIndexStmt.String()
+			if str == "" {
+				t.Errorf("String() returned empty string")
+			}
+		})
+	}
+}
+
+func TestCreateIndexStatementType(t *testing.T) {
+	sql := "CREATE INDEX idx_test ON users(email) USING HASH"
+	stmt, err := ParseStatement(sql)
+	if err != nil {
+		t.Fatalf("ParseStatement() error = %v", err)
+	}
+
+	if stmt.GetType() != statements.CreateIndex {
+		t.Errorf("GetType() = %v, want %v", stmt.GetType(), statements.CreateIndex)
+	}
+
+	if stmt.GetType().String() != "CREATE INDEX" {
+		t.Errorf("GetType().String() = %v, want %v", stmt.GetType().String(), "CREATE INDEX")
+	}
+
+	if !stmt.GetType().IsDDL() {
+		t.Errorf("IsDDL() = false, want true")
+	}
+}
+
+func TestDropIndexStatementType(t *testing.T) {
+	sql := "DROP INDEX idx_test"
+	stmt, err := ParseStatement(sql)
+	if err != nil {
+		t.Fatalf("ParseStatement() error = %v", err)
+	}
+
+	if stmt.GetType() != statements.DropIndex {
+		t.Errorf("GetType() = %v, want %v", stmt.GetType(), statements.DropIndex)
+	}
+
+	if stmt.GetType().String() != "DROP INDEX" {
+		t.Errorf("GetType().String() = %v, want %v", stmt.GetType().String(), "DROP INDEX")
+	}
+
+	if !stmt.GetType().IsDDL() {
+		t.Errorf("IsDDL() = false, want true")
+	}
 }

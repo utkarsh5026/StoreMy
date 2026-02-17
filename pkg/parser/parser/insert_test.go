@@ -145,7 +145,7 @@ func TestParseValue_InvalidInteger(t *testing.T) {
 func TestParseFieldList_SingleField(t *testing.T) {
 	lexer := NewLexer("name)")
 
-	fields, err := parseFieldList(lexer)
+	fields, err := (&InsertParser{}).parseFieldList(lexer)
 	if err != nil {
 		t.Fatalf("unexpected error: %s", err.Error())
 	}
@@ -162,7 +162,7 @@ func TestParseFieldList_SingleField(t *testing.T) {
 func TestParseFieldList_MultipleFields(t *testing.T) {
 	lexer := NewLexer("name, age, email)")
 
-	fields, err := parseFieldList(lexer)
+	fields, err := (&InsertParser{}).parseFieldList(lexer)
 	if err != nil {
 		t.Fatalf("unexpected error: %s", err.Error())
 	}
@@ -182,7 +182,7 @@ func TestParseFieldList_MultipleFields(t *testing.T) {
 func TestParseInsertStatement_MissingInto(t *testing.T) {
 	lexer := NewLexer("users VALUES ('john')")
 
-	_, err := parseInsertStatement(lexer)
+	_, err := (&InsertParser{}).Parse(lexer)
 	if err == nil {
 		t.Error("expected error for missing INTO")
 	}
@@ -195,7 +195,7 @@ func TestParseInsertStatement_MissingInto(t *testing.T) {
 func TestParseInsertStatement_MissingTableName(t *testing.T) {
 	lexer := NewLexer("INTO VALUES ('john')")
 
-	_, err := parseInsertStatement(lexer)
+	_, err := (&InsertParser{}).Parse(lexer)
 	if err == nil {
 		t.Error("expected error for missing table name")
 	}
@@ -208,7 +208,7 @@ func TestParseInsertStatement_MissingTableName(t *testing.T) {
 func TestParseInsertStatement_MissingValues(t *testing.T) {
 	lexer := NewLexer("INTO users SELECT")
 
-	_, err := parseInsertStatement(lexer)
+	_, err := (&InsertParser{}).Parse(lexer)
 	if err == nil {
 		t.Error("expected error for missing VALUES")
 	}
@@ -231,7 +231,7 @@ func TestParseInsertValues_MissingLeftParen(t *testing.T) {
 	lexer := NewLexer("'john', 25)")
 	stmt := statements.NewInsertStatement("users")
 
-	_, err := parseInsertValues(lexer, stmt)
+	_, err := (&InsertParser{}).parseInsertValues(lexer, stmt)
 	if err == nil {
 		t.Error("expected error for missing left parenthesis")
 	}
