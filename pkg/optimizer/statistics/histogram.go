@@ -133,13 +133,14 @@ func (h *Histogram) estimateGreaterThanSelectivity(value types.Field, inclusive 
 		ltUpper, _ := value.Compare(primitives.LessThan, bucket.UpperBound)
 		gtLower, _ := value.Compare(primitives.GreaterThan, bucket.LowerBound)
 
-		if ltUpper {
+		switch {
+		case ltUpper:
 			// value < bucket.UpperBound: all values in bucket are >= value
 			selectivity += bucket.BucketFraction
-		} else if gtLower {
+		case gtLower:
 			// value > bucket.LowerBound: no values in bucket satisfy predicate
 			continue
-		} else {
+		default:
 			// value is within bucket: estimate fraction
 			// Assume uniform distribution within bucket
 			fraction := h.estimateFractionInBucket(bucket, value, inclusive, true)
@@ -158,13 +159,14 @@ func (h *Histogram) estimateLessThanSelectivity(value types.Field, inclusive boo
 		ltLower, _ := value.Compare(primitives.LessThan, bucket.LowerBound)
 		gtUpper, _ := value.Compare(primitives.GreaterThan, bucket.UpperBound)
 
-		if ltLower {
+		switch {
+		case ltLower:
 			// value < bucket.LowerBound: no values in bucket satisfy predicate
 			continue
-		} else if gtUpper {
+		case gtUpper:
 			// value > bucket.UpperBound: all values in bucket are <= value
 			selectivity += bucket.BucketFraction
-		} else {
+		default:
 			// value is within bucket: estimate fraction
 			fraction := h.estimateFractionInBucket(bucket, value, inclusive, false)
 			selectivity += bucket.BucketFraction * fraction

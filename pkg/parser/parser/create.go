@@ -102,13 +102,15 @@ func parseTableDefinition(l *lexer.Lexer, stmt *statements.CreateStatement) erro
 		}
 
 		token = l.NextToken()
-		if token.Type == lexer.COMMA {
+		switch token.Type {
+		case lexer.COMMA:
 			continue
-		} else if token.Type == lexer.RPAREN {
+		case lexer.RPAREN:
 			break
-		} else {
+		default:
 			return fmt.Errorf("expected ',' or ')', got %s", token.Value)
 		}
+		break
 	}
 	return nil
 }

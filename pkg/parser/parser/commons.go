@@ -119,14 +119,16 @@ func parseDelimitedList[T any](
 		items = append(items, item)
 
 		token := l.NextToken()
-		if token.Type == delimiter {
+		switch token.Type {
+		case delimiter:
 			continue
-		} else if token.Type == terminator {
+		case terminator:
 			break
-		} else {
+		default:
 			return nil, fmt.Errorf("expected '%s' or '%s', got %s",
 				getTokenName(delimiter), getTokenName(terminator), token.Value)
 		}
+		break
 	}
 
 	return items, nil
