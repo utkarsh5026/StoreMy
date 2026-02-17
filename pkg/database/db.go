@@ -73,7 +73,7 @@ func NewDatabase(name, dataDir, logDir string) (*Database, error) {
 	log.Info("initializing database", "data_dir", dataDir, "log_dir", logDir)
 
 	fullPath := filepath.Join(dataDir, name)
-	if err := os.MkdirAll(fullPath, 0o755); err != nil {
+	if err := os.MkdirAll(fullPath, 0o750); err != nil {
 		dbErr := dberror.Wrap(err, "DIR_CREATE_FAILED", "NewDatabase", "Database")
 		dbErr.Detail = fmt.Sprintf("Failed to create directory: %s", fullPath)
 		dbErr.Hint = "Check that the parent directory exists and you have write permissions"

@@ -88,7 +88,7 @@ func initializeDatabase(config Configuration) (*database.Database, error) {
 	fmt.Printf("🔧 Initializing database '%s'...\n", config.DatabaseName)
 
 	fullPath := filepath.Join(config.DataDir, config.DatabaseName)
-	if err := os.MkdirAll(fullPath, 0o755); err != nil {
+	if err := os.MkdirAll(fullPath, 0o750); err != nil {
 		return nil, fmt.Errorf("failed to create data directory: %v", err)
 	}
 

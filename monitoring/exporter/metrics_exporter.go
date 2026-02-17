@@ -164,7 +164,7 @@ func main() {
 		logDir = "/app/logs"
 	}
 
-	_ = os.MkdirAll(logDir, 0o755)
+	_ = os.MkdirAll(logDir, 0o750)
 	walPath := fmt.Sprintf("%s/wal.log", logDir)
 
 	metricsPort := os.Getenv("METRICS_PORT")

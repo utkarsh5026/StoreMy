@@ -291,7 +291,7 @@ func (bf *BaseFile) FilePath() primitives.Filepath {
 }
 
 func openFile(filename primitives.Filepath) (*os.File, error) {
-	file, err := os.OpenFile(string(filename), os.O_RDWR|os.O_CREATE, 0o644)
+	file, err := os.OpenFile(string(filename), os.O_RDWR|os.O_CREATE, 0o600)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open file %s: %v", filename, err)
 	}

@@ -90,7 +90,7 @@ func SetupTestDataDir(t *testing.T) string {
 	tmpDir := t.TempDir()
 	dataDir := filepath.Join(tmpDir, "data")
 
-	if err := os.MkdirAll(dataDir, 0o755); err != nil {
+	if err := os.MkdirAll(dataDir, 0o750); err != nil {
 		t.Fatalf("Failed to create data directory: %v", err)
 	}
 

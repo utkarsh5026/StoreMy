@@ -26,7 +26,7 @@ type WAL struct {
 
 // NewWAL creates a new WAL instance
 func NewWAL(logPath string, bufferSize int) (*WAL, error) {
-	file, err := os.OpenFile(logPath, os.O_CREATE|os.O_RDWR|os.O_SYNC, 0o644)
+	file, err := os.OpenFile(logPath, os.O_CREATE|os.O_RDWR|os.O_SYNC, 0o600)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open WAL file: %v", err)
 	}
