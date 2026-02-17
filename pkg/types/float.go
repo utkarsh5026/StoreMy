@@ -1,9 +1,7 @@
 package types
 
 import (
-	"encoding/binary"
 	"fmt"
-	"hash/fnv"
 	"io"
 	"math"
 	"storemy/pkg/primitives"
@@ -23,10 +21,7 @@ func NewFloat64Field(value float64) *Float64Field {
 }
 
 func (f *Float64Field) Serialize(w io.Writer) error {
-	bytes := make([]byte, 8)
-	binary.BigEndian.PutUint64(bytes, math.Float64bits(f.Value))
-	_, err := w.Write(bytes)
-	return err
+	return serializeUint64(w, math.Float64bits(f.Value))
 }
 
 func (f *Float64Field) Compare(op primitives.Predicate, other Field) (bool, error) {
@@ -80,14 +75,7 @@ func (f *Float64Field) Equals(other Field) bool {
 }
 
 func (f *Float64Field) Hash() (primitives.HashCode, error) {
-	h := fnv.New32a()
-	bytes := make([]byte, 8)
-	bits := uint64(f.Value)
-	for i := range 8 {
-		bytes[i] = byte(bits >> (8 * i)) // #nosec G115
-	}
-	_, _ = h.Write(bytes)
-	return primitives.HashCode(h.Sum32()), nil
+	return fnvHash(toBytes64(math.Float64bits(f.Value))), nil
 }
 
 func (f *Float64Field) Length() uint32 {

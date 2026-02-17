@@ -2,7 +2,6 @@ package types
 
 import (
 	"encoding/binary"
-	"hash/fnv"
 	"io"
 	"storemy/pkg/primitives"
 	"strings"
@@ -137,15 +136,13 @@ func (s *StringField) Equals(other Field) bool {
 	return s.Value == otherStringField.Value && s.MaxSize == otherStringField.MaxSize
 }
 
-// Hash returns a hash value for this string field using a simple polynomial hash function.
+// Hash returns a hash value for this string field using FNV-1a.
 //
 // Returns:
 //   - primitives.HashCode: The computed hash value for the string
 //   - error: Always returns nil for string fields
 func (s *StringField) Hash() (primitives.HashCode, error) {
-	h := fnv.New32a()
-	_, _ = h.Write([]byte(s.Value))
-	return primitives.HashCode(h.Sum32()), nil
+	return fnvHash([]byte(s.Value)), nil
 }
 
 // Length returns the total serialized size of this string field in bytes.

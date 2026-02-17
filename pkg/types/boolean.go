@@ -3,7 +3,6 @@ package types
 import (
 	"encoding/binary"
 	"fmt"
-	"hash/fnv"
 	"io"
 	"storemy/pkg/primitives"
 )
@@ -113,13 +112,10 @@ func (b *BoolField) Equals(other Field) bool {
 //   - primitives.HashCode: The FNV-1a hash of the boolean value
 //   - error: Always returns nil for boolean fields
 func (b *BoolField) Hash() (primitives.HashCode, error) {
-	h := fnv.New32a()
 	if b.Value {
-		_, _ = h.Write([]byte{1})
-	} else {
-		_, _ = h.Write([]byte{0})
+		return fnvHash([]byte{1}), nil
 	}
-	return primitives.HashCode(h.Sum32()), nil
+	return fnvHash([]byte{0}), nil
 }
 
 // Length returns the serialized size of this boolean field in bytes.
