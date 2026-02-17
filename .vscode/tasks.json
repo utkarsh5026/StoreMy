@@ -26,5 +26,68 @@
             },
             "problemMatcher": ["$go"]
         },
+        {
+            "label": "Go: Build",
+            "type": "shell",
+            "command": "go",
+            "args": ["build", "-o", "bin/storemy", "./"],
+            "group": {
+                "kind": "build",
+                "isDefault": true
+            },
+            "presentation": {
+                "reveal": "always",
+                "panel": "shared"
+            },
+            "problemMatcher": ["$go"]
+        },
+        {
+            "label": "Go: Lint",
+            "type": "shell",
+            "command": "golangci-lint",
+            "args": ["run"],
+            "group": "none",
+            "presentation": {
+                "reveal": "always",
+                "panel": "shared"
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "Go: Coverage HTML",
+            "type": "shell",
+            "command": "make",
+            "args": ["coverage-html"],
+            "group": "none",
+            "presentation": {
+                "reveal": "always",
+                "panel": "shared"
+            },
+            "problemMatcher": ["$go"]
+        },
+        {
+            "label": "Make: Run",
+            "type": "shell",
+            "command": "make",
+            "args": ["run"],
+            "group": "none",
+            "presentation": {
+                "reveal": "always",
+                "panel": "new"
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "Shell: Clear fresh data",
+            "type": "shell",
+            "command": "rm",
+            "args": ["-rf", "./tmp/data/testdb"],
+            "group": "none",
+            "presentation": {
+                "reveal": "silent",
+                "panel": "shared"
+            },
+            "problemMatcher": []
+        }
     ]
 }
