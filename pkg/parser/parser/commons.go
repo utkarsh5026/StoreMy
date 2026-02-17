@@ -3,14 +3,13 @@ package parser
 import (
 	"fmt"
 	"slices"
-	"storemy/pkg/parser/lexer"
 	"storemy/pkg/primitives"
 	"storemy/pkg/types"
 	"strconv"
 )
 
 // expectToken validates that the given token matches the expected token type.
-func expectToken(t lexer.Token, expected lexer.TokenType) error {
+func expectToken(t Token, expected TokenType) error {
 	if t.Type != expected {
 		return fmt.Errorf("expected %s, got %s", expected.String(), t.Value)
 	}
@@ -19,19 +18,19 @@ func expectToken(t lexer.Token, expected lexer.TokenType) error {
 
 // parseValue parses the next token from the lexer and converts it to a Field type.
 // Supports STRING, INT, and NULL token types.
-func parseValue(l *lexer.Lexer) (types.Field, error) {
+func parseValue(l *Lexer) (types.Field, error) {
 	token := l.NextToken()
 
 	switch token.Type {
-	case lexer.STRING:
+	case STRING:
 		return types.NewStringField(token.Value, types.StringMaxSize), nil
-	case lexer.INT:
+	case INT:
 		value, err := strconv.ParseInt(token.Value, 10, 64)
 		if err != nil {
 			return nil, fmt.Errorf("invalid integer value: %s", token.Value)
 		}
 		return types.NewIntField(value), nil
-	case lexer.NULL:
+	case NULL:
 		return nil, nil // NULL value
 	default:
 		return nil, fmt.Errorf("expected value, got %s", token.Value)
@@ -61,7 +60,7 @@ func parseOperator(op string) (primitives.Predicate, error) {
 
 // expectTokenSequence validates that the lexer produces a sequence of tokens
 // matching the expected token types in order.
-func expectTokenSequence(l *lexer.Lexer, expectedTypes ...lexer.TokenType) error {
+func expectTokenSequence(l *Lexer, expectedTypes ...TokenType) error {
 	for _, expectedType := range expectedTypes {
 		token := l.NextToken()
 		if err := expectToken(token, expectedType); err != nil {
@@ -73,9 +72,9 @@ func expectTokenSequence(l *lexer.Lexer, expectedTypes ...lexer.TokenType) error
 
 // parseTableWithAlias parses a table reference with optional alias from the lexer.
 // Example: "users u" returns ("users", "u", nil), "users" returns ("users", "users", nil)
-func parseTableWithAlias(l *lexer.Lexer) (tableName, alias string, err error) {
+func parseTableWithAlias(l *Lexer) (tableName, alias string, err error) {
 	token := l.NextToken()
-	if err := expectToken(token, lexer.IDENTIFIER); err != nil {
+	if err := expectToken(token, IDENTIFIER); err != nil {
 		return "", "", err
 	}
 
@@ -83,7 +82,7 @@ func parseTableWithAlias(l *lexer.Lexer) (tableName, alias string, err error) {
 	alias = tableName
 
 	nextToken := l.NextToken()
-	if nextToken.Type == lexer.IDENTIFIER {
+	if nextToken.Type == IDENTIFIER {
 		alias = nextToken.Value
 	} else {
 		l.SetPos(nextToken.Position)
@@ -93,7 +92,7 @@ func parseTableWithAlias(l *lexer.Lexer) (tableName, alias string, err error) {
 }
 
 // parseValueWithType parses the next token and validates it matches one of the accepted types.
-func parseValueWithType(l *lexer.Lexer, acceptedTypes ...lexer.TokenType) (string, error) {
+func parseValueWithType(l *Lexer, acceptedTypes ...TokenType) (string, error) {
 	token := l.NextToken()
 	if slices.Contains(acceptedTypes, token.Type) {
 		return token.Value, nil
@@ -104,10 +103,10 @@ func parseValueWithType(l *lexer.Lexer, acceptedTypes ...lexer.TokenType) (strin
 // parseDelimitedList is a generic helper for parsing comma-separated lists with terminators.
 // It repeatedly calls parseItem until it encounters the terminator token.
 func parseDelimitedList[T any](
-	l *lexer.Lexer,
-	parseItem func(*lexer.Lexer) (T, error),
-	delimiter lexer.TokenType,
-	terminator lexer.TokenType,
+	l *Lexer,
+	parseItem func(*Lexer) (T, error),
+	delimiter TokenType,
+	terminator TokenType,
 ) ([]T, error) {
 	var items []T
 
@@ -135,11 +134,11 @@ loop:
 }
 
 // getTokenName returns a human-readable name for common token types.
-func getTokenName(tokenType lexer.TokenType) string {
+func getTokenName(tokenType TokenType) string {
 	switch tokenType {
-	case lexer.COMMA:
+	case COMMA:
 		return ","
-	case lexer.RPAREN:
+	case RPAREN:
 		return ")"
 	default:
 		return string(rune(tokenType)) // #nosec G115
