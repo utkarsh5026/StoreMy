@@ -128,9 +128,11 @@ func (p *ShowIndexesPlan) createResultTuples(indexes []*systemtable.IndexMetadat
 
 	var wg sync.WaitGroup
 	for _, idx := range indexes {
-		wg.Go(func() {
+		wg.Add(1)
+		go func(idx *systemtable.IndexMetadata) {
+			defer wg.Done()
 			p.createIndexTuple(idx, sch.TupleDesc, tupChan)
-		})
+		}(idx)
 	}
 
 	wg.Wait()
