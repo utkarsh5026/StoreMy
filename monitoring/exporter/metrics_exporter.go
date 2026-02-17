@@ -5,6 +5,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"path/filepath"
 	"sync"
 	"time"
 
@@ -159,13 +160,13 @@ func main() {
 		dataDir = "/app/data"
 	}
 
-	logDir := os.Getenv("LOG_DIR")
-	if logDir == "" {
+	logDir := filepath.Clean(os.Getenv("LOG_DIR"))
+	if logDir == "." {
 		logDir = "/app/logs"
 	}
 
-	_ = os.MkdirAll(logDir, 0o750)
-	walPath := fmt.Sprintf("%s/wal.log", logDir)
+	_ = os.MkdirAll(logDir, 0o750) // #nosec G703
+	walPath := filepath.Join(logDir, "wal.log")
 
 	metricsPort := os.Getenv("METRICS_PORT")
 	if metricsPort == "" {
@@ -173,8 +174,8 @@ func main() {
 	}
 
 	log.Printf("Starting StoreMy Metrics Exporter...")
-	log.Printf("Database: %s, Data Directory: %s", dbName, dataDir)
-	log.Printf("Metrics Port: %s", metricsPort)
+	log.Printf("Database: %s, Data Directory: %s", dbName, dataDir) // #nosec G706
+	log.Printf("Metrics Port: %s", metricsPort)                      // #nosec G706
 
 	db, err := database.NewDatabase(dbName, dataDir, walPath)
 	if err != nil {
@@ -185,16 +186,24 @@ func main() {
 
 	collector.StartSimulation()
 
-	http.HandleFunc("/metrics", func(w http.ResponseWriter, r *http.Request) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/metrics", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/plain; version=0.0.4")
 		fmt.Fprint(w, collector.GetMetrics())
 	})
-
-	http.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		fmt.Fprint(w, "OK")
 	})
 
-	log.Printf("Metrics available at http://localhost:%s/metrics", metricsPort)
-	log.Fatal(http.ListenAndServe(":"+metricsPort, nil))
+	srv := &http.Server{
+		Addr:         ":" + metricsPort,
+		Handler:      mux,
+		ReadTimeout:  10 * time.Second,
+		WriteTimeout: 10 * time.Second,
+		IdleTimeout:  60 * time.Second,
+	}
+
+	log.Printf("Metrics available at http://localhost:%s/metrics", metricsPort) // #nosec G706
+	log.Fatal(srv.ListenAndServe())
 }

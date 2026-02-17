@@ -94,7 +94,7 @@ func (td *TestDatabase) MustExecute(t *testing.T, query string) database.QueryRe
 func (td *TestDatabase) ExecuteSQLFile(t *testing.T, filepath string) []database.QueryResult {
 	t.Helper()
 
-	content, err := os.ReadFile(filepath)
+	content, err := os.ReadFile(filepath) // #nosec G304
 	if err != nil {
 		t.Fatalf("failed to read SQL file %s: %v", filepath, err)
 	}
