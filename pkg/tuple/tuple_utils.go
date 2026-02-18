@@ -196,3 +196,184 @@ func (p *Parser) MustDone() {
 		panic(fmt.Sprintf("tuple parser error: %v", err))
 	}
 }
+
+// Builder provides a fluent interface for constructing tuples
+type Builder struct {
+	tuple        *Tuple
+	currentIndex primitives.ColumnID
+	err          error
+}
+
+// NewBuilder creates a new tuple builder with the given schema
+func NewBuilder(td *TupleDescription) *Builder {
+	return &Builder{
+		tuple:        NewTuple(td),
+		currentIndex: 0,
+		err:          nil,
+	}
+}
+
+// AddInt adds an integer field at the current index (backward compatible, uses int64)
+func (b *Builder) AddInt(value int64) *Builder {
+	return b.AddField(types.NewIntField(value))
+}
+
+// AddInt32 adds a 32-bit signed integer field at the current index
+func (b *Builder) AddInt32(value int32) *Builder {
+	return b.AddField(types.NewInt32Field(value))
+}
+
+// AddInt64 adds a 64-bit signed integer field at the current index
+func (b *Builder) AddInt64(value int64) *Builder {
+	return b.AddField(types.NewInt64Field(value))
+}
+
+// AddUint32 adds a 32-bit unsigned integer field at the current index
+func (b *Builder) AddUint32(value uint32) *Builder {
+	return b.AddField(types.NewUint32Field(value))
+}
+
+// AddUint64 adds a 64-bit unsigned integer field at the current index
+func (b *Builder) AddUint64(value uint64) *Builder {
+	return b.AddField(types.NewUint64Field(value))
+}
+
+// AddString adds a string field at the current index
+func (b *Builder) AddString(value string) *Builder {
+	return b.AddField(types.NewStringField(value, types.StringMaxSize))
+}
+
+// AddFloat adds a float field at the current index
+func (b *Builder) AddFloat(value float64) *Builder {
+	return b.AddField(types.NewFloat64Field(value))
+}
+
+// AddBool adds a boolean field at the current index
+func (b *Builder) AddBool(value bool) *Builder {
+	return b.AddField(types.NewBoolField(value))
+}
+
+// AddTimestamp adds a Unix timestamp field at the current index
+func (b *Builder) AddTimestamp(value time.Time) *Builder {
+	return b.AddInt(value.Unix())
+}
+
+// AddFloatAsScaledInt adds a float as a scaled integer (e.g., for clustering factor)
+// scale determines precision: 1000000 stores 6 decimal places
+func (b *Builder) AddFloatAsScaledInt(value float64, scale int64) *Builder {
+	return b.AddInt(int64(value * float64(scale)))
+}
+
+// AddField adds a generic field at the current index
+func (b *Builder) AddField(field types.Field) *Builder {
+	if b.err != nil {
+		return b
+	}
+	if err := b.tuple.SetField(b.currentIndex, field); err != nil {
+		b.err = fmt.Errorf("field %d: %w", b.currentIndex, err)
+		return b
+	}
+	b.currentIndex++
+	return b
+}
+
+// Build returns the constructed tuple or an error if any operation failed
+func (b *Builder) Build() (*Tuple, error) {
+	if b.err != nil {
+		return nil, b.err
+	}
+
+	if b.currentIndex != b.tuple.TupleDesc.NumFields() {
+		return nil, fmt.Errorf("incomplete tuple: expected %d fields, got %d",
+			b.tuple.TupleDesc.NumFields(), b.currentIndex)
+	}
+
+	return b.tuple, nil
+}
+
+// MustBuild returns the tuple or panics on error (use only when errors are impossible)
+func (b *Builder) MustBuild() *Tuple {
+	t, err := b.Build()
+	if err != nil {
+		panic(fmt.Sprintf("tuple builder error: %v", err))
+	}
+	return t
+}
+
+type Iterator struct {
+	tuples    []*Tuple
+	tupleDesc *TupleDescription
+	index     int
+	opened    bool
+}
+
+// NewIterator creates a new iterator for the given slice of tuples
+func NewIterator(tuples []*Tuple) *Iterator {
+	return &Iterator{
+		tuples: tuples,
+		index:  -1,
+		opened: false,
+	}
+}
+
+// NewIteratorWithDesc creates a new iterator with an associated TupleDescription.
+func NewIteratorWithDesc(tuples []*Tuple, desc *TupleDescription) *Iterator {
+	return &Iterator{
+		tuples:    tuples,
+		tupleDesc: desc,
+		index:     -1,
+		opened:    false,
+	}
+}
+
+// Open initializes the iterator for use. Must be called before calling HasNext or Next.
+func (it *Iterator) Open() error {
+	it.opened = true
+	it.index = -1
+	return nil
+}
+
+// Close releases any resources held by the iterator. After calling Close, the iterator should not be used.
+func (it *Iterator) Close() error {
+	it.opened = false
+	return nil
+}
+
+// HasNext checks if there are more tuples to iterate over. Returns an error if the iterator is not opened or not initialized.
+func (it *Iterator) HasNext() (bool, error) {
+	if !it.opened {
+		return false, fmt.Errorf("iterator not opened")
+	}
+	if it.tuples == nil {
+		return false, fmt.Errorf("iterator not initialized with tuples")
+	}
+	return it.index+1 < len(it.tuples), nil
+}
+
+// Next retrieves the next tuple from the iterator. Returns an error if the iterator is not opened or if there are no more tuples.
+func (it *Iterator) Next() (*Tuple, error) {
+	hasNext, err := it.HasNext()
+	if err != nil {
+		return nil, err
+	}
+	if !hasNext {
+		return nil, nil
+	}
+
+	it.index++
+	return it.tuples[it.index], nil
+}
+
+// Rewind resets the iterator to the beginning of the tuple slice. Returns an error if the iterator is not opened.
+func (it *Iterator) Rewind() error {
+	if !it.opened {
+		return fmt.Errorf("iterator not opened")
+	}
+	it.index = -1
+	return nil
+}
+
+// GetTupleDesc returns the TupleDescription associated with this iterator, if any.
+func (it *Iterator) GetTupleDesc() *TupleDescription {
+	return it.tupleDesc
+}
