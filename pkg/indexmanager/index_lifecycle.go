@@ -9,7 +9,6 @@ import (
 	"storemy/pkg/storage/heap"
 	"storemy/pkg/storage/index"
 	"storemy/pkg/storage/index/btree"
-	"storemy/pkg/storage/index/hash"
 	"storemy/pkg/storage/page"
 	"storemy/pkg/tuple"
 	"storemy/pkg/types"
@@ -124,7 +123,7 @@ func (im *IndexManager) PopulateIndex(
 
 	switch indexType {
 	case index.HashIndex:
-		hashFile, err := hash.NewHashFile(filePath, keyType, hash.DefaultBuckets)
+		hashFile, err := index.NewHashFile(filePath, keyType, index.DefaultBuckets)
 		if err != nil {
 			return fmt.Errorf("failed to open hash index: %v", err)
 		}

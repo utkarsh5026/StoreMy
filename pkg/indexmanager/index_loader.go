@@ -16,7 +16,6 @@ import (
 	"storemy/pkg/primitives"
 	"storemy/pkg/storage/index"
 	"storemy/pkg/storage/index/btree"
-	"storemy/pkg/storage/index/hash"
 	"storemy/pkg/types"
 )
 
@@ -218,7 +217,7 @@ func (il *IndexLoader) openBTreeIndex(m *IndexMetadata) (*btreeindex.BTree, erro
 //   - A HashIndex wrapper ready for use
 //   - An error if the file cannot be opened or initialized
 func (il *IndexLoader) openHashIndex(m *IndexMetadata) (*hashindex.HashIndex, error) {
-	file, err := hash.NewHashFile(m.FilePath, m.KeyType, hash.DefaultBuckets)
+	file, err := index.NewHashFile(m.FilePath, m.KeyType, index.DefaultBuckets)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open hash file: %v", err)
 	}

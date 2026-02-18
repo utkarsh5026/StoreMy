@@ -1,8 +1,7 @@
-package hash
+package index
 
 import (
 	"storemy/pkg/primitives"
-	"storemy/pkg/storage/index"
 	"storemy/pkg/storage/page"
 	"storemy/pkg/tuple"
 	"storemy/pkg/types"
@@ -38,14 +37,14 @@ func TestHashPageAddEntry(t *testing.T) {
 	hp := NewHashPage(pageID, 0, types.IntType)
 
 	// Create test entries
-	entry1 := &index.IndexEntry{
+	entry1 := &IndexEntry{
 		Key: types.NewIntField(100),
 		RID: &tuple.TupleRecordID{
 			PageID:   page.NewPageDescriptor(1, 5),
 			TupleNum: 10,
 		},
 	}
-	entry2 := &index.IndexEntry{
+	entry2 := &IndexEntry{
 		Key: types.NewIntField(200),
 		RID: &tuple.TupleRecordID{
 			PageID:   page.NewPageDescriptor(1, 6),
@@ -86,21 +85,21 @@ func TestHashPageRemoveEntry(t *testing.T) {
 	pageID := page.NewPageDescriptor(1, 0)
 	hp := NewHashPage(pageID, 0, types.IntType)
 
-	entry1 := &index.IndexEntry{
+	entry1 := &IndexEntry{
 		Key: types.NewIntField(100),
 		RID: &tuple.TupleRecordID{
 			PageID:   page.NewPageDescriptor(1, 5),
 			TupleNum: 10,
 		},
 	}
-	entry2 := &index.IndexEntry{
+	entry2 := &IndexEntry{
 		Key: types.NewIntField(200),
 		RID: &tuple.TupleRecordID{
 			PageID:   page.NewPageDescriptor(1, 6),
 			TupleNum: 15,
 		},
 	}
-	entry3 := &index.IndexEntry{
+	entry3 := &IndexEntry{
 		Key: types.NewIntField(300),
 		RID: &tuple.TupleRecordID{
 			PageID:   page.NewPageDescriptor(1, 7),
@@ -133,7 +132,7 @@ func TestHashPageRemoveEntry(t *testing.T) {
 	}
 
 	// Try to remove non-existent entry
-	nonExistent := &index.IndexEntry{
+	nonExistent := &IndexEntry{
 		Key: types.NewIntField(999),
 		RID: &tuple.TupleRecordID{
 			PageID:   page.NewPageDescriptor(1, 99),
@@ -152,21 +151,21 @@ func TestHashPageFindEntries(t *testing.T) {
 	key := types.NewIntField(100)
 
 	// Add multiple entries with same key (different RIDs)
-	entry1 := &index.IndexEntry{
+	entry1 := &IndexEntry{
 		Key: key,
 		RID: &tuple.TupleRecordID{
 			PageID:   page.NewPageDescriptor(1, 5),
 			TupleNum: 10,
 		},
 	}
-	entry2 := &index.IndexEntry{
+	entry2 := &IndexEntry{
 		Key: key,
 		RID: &tuple.TupleRecordID{
 			PageID:   page.NewPageDescriptor(1, 6),
 			TupleNum: 15,
 		},
 	}
-	entry3 := &index.IndexEntry{
+	entry3 := &IndexEntry{
 		Key: types.NewIntField(200), // Different key
 		RID: &tuple.TupleRecordID{
 			PageID:   page.NewPageDescriptor(1, 7),
@@ -229,7 +228,7 @@ func TestHashPageFullCapacity(t *testing.T) {
 
 	// Add entries up to capacity
 	for i := 0; i < maxHashEntriesPerPage; i++ {
-		entry := &index.IndexEntry{
+		entry := &IndexEntry{
 			Key: types.NewIntField(int64(i)),
 			RID: &tuple.TupleRecordID{
 				PageID:   page.NewPageDescriptor(1, 0),
@@ -249,7 +248,7 @@ func TestHashPageFullCapacity(t *testing.T) {
 	}
 
 	// Try to add one more entry
-	extraEntry := &index.IndexEntry{
+	extraEntry := &IndexEntry{
 		Key: types.NewIntField(9999),
 		RID: &tuple.TupleRecordID{
 			PageID:   page.NewPageDescriptor(1, 0),
@@ -267,14 +266,14 @@ func TestHashPageSerialization(t *testing.T) {
 	hp.SetOverflowPage(15)
 
 	// Add entries
-	entry1 := &index.IndexEntry{
+	entry1 := &IndexEntry{
 		Key: types.NewIntField(100),
 		RID: &tuple.TupleRecordID{
 			PageID:   page.NewPageDescriptor(2, 5),
 			TupleNum: 10,
 		},
 	}
-	entry2 := &index.IndexEntry{
+	entry2 := &IndexEntry{
 		Key: types.NewIntField(200),
 		RID: &tuple.TupleRecordID{
 			PageID:   page.NewPageDescriptor(2, 6),
@@ -292,7 +291,7 @@ func TestHashPageSerialization(t *testing.T) {
 	}
 
 	// Deserialize
-	deserializedPage, err := DeserializeHashPage(data, pageID)
+	deserializedPage, err := deserializeHashPage(data, pageID)
 	if err != nil {
 		t.Fatalf("Failed to deserialize page: %v", err)
 	}
@@ -334,14 +333,14 @@ func TestHashPageSerializationWithStringKeys(t *testing.T) {
 	pageID := page.NewPageDescriptor(1, 0)
 	hp := NewHashPage(pageID, 3, types.StringType)
 
-	entry1 := &index.IndexEntry{
+	entry1 := &IndexEntry{
 		Key: types.NewStringField("apple", types.StringMaxSize),
 		RID: &tuple.TupleRecordID{
 			PageID:   page.NewPageDescriptor(1, 10),
 			TupleNum: 5,
 		},
 	}
-	entry2 := &index.IndexEntry{
+	entry2 := &IndexEntry{
 		Key: types.NewStringField("banana", types.StringMaxSize),
 		RID: &tuple.TupleRecordID{
 			PageID:   page.NewPageDescriptor(1, 11),
@@ -356,7 +355,7 @@ func TestHashPageSerializationWithStringKeys(t *testing.T) {
 	data := hp.GetPageData()
 
 	// Deserialize
-	deserializedPage, err := DeserializeHashPage(data, pageID)
+	deserializedPage, err := deserializeHashPage(data, pageID)
 	if err != nil {
 		t.Fatalf("Failed to deserialize page with string keys: %v", err)
 	}
@@ -424,7 +423,7 @@ func TestHashPageBeforeImage(t *testing.T) {
 	hp.MarkDirty(true, txnID)
 
 	// Add an entry
-	entry := &index.IndexEntry{
+	entry := &IndexEntry{
 		Key: types.NewIntField(100),
 		RID: &tuple.TupleRecordID{
 			PageID:   page.NewPageDescriptor(1, 0),
@@ -455,7 +454,7 @@ func TestHashPageSetBeforeImage(t *testing.T) {
 	// Mark clean
 	hp.MarkDirty(false, nil)
 
-	entry := &index.IndexEntry{
+	entry := &IndexEntry{
 		Key: types.NewIntField(100),
 		RID: &tuple.TupleRecordID{
 			PageID:   page.NewPageDescriptor(1, 0),
@@ -471,7 +470,7 @@ func TestHashPageSetBeforeImage(t *testing.T) {
 	}
 
 	// Add another entry
-	entry2 := &index.IndexEntry{
+	entry2 := &IndexEntry{
 		Key: types.NewIntField(200),
 		RID: &tuple.TupleRecordID{
 			PageID:   page.NewPageDescriptor(1, 0),
@@ -512,7 +511,7 @@ func TestHashPageEmptySerialization(t *testing.T) {
 	data := hp.GetPageData()
 
 	// Deserialize
-	deserializedPage, err := DeserializeHashPage(data, pageID)
+	deserializedPage, err := deserializeHashPage(data, pageID)
 	if err != nil {
 		t.Fatalf("Failed to deserialize empty page: %v", err)
 	}
@@ -533,7 +532,7 @@ func TestHashPageDeserializationInvalidData(t *testing.T) {
 
 	// Test with too short data
 	shortData := make([]byte, 5)
-	_, err := DeserializeHashPage(shortData, pageID)
+	_, err := deserializeHashPage(shortData, pageID)
 	if err == nil {
 		t.Error("Should error on too short data")
 	}
@@ -544,7 +543,7 @@ func TestHashPageWithMultipleKeyTypes(t *testing.T) {
 	pageID := page.NewPageDescriptor(1, 0)
 	hp := NewHashPage(pageID, 0, types.FloatType)
 
-	entry := &index.IndexEntry{
+	entry := &IndexEntry{
 		Key: types.NewFloat64Field(3.14),
 		RID: &tuple.TupleRecordID{
 			PageID:   page.NewPageDescriptor(1, 0),
@@ -554,7 +553,7 @@ func TestHashPageWithMultipleKeyTypes(t *testing.T) {
 	hp.AddEntry(entry)
 
 	data := hp.GetPageData()
-	deserializedPage, err := DeserializeHashPage(data, pageID)
+	deserializedPage, err := deserializeHashPage(data, pageID)
 	if err != nil {
 		t.Fatalf("Failed to deserialize page with float keys: %v", err)
 	}

@@ -7,7 +7,6 @@ import (
 	"storemy/pkg/memory"
 	"storemy/pkg/primitives"
 	"storemy/pkg/storage/index"
-	"storemy/pkg/storage/index/hash"
 	"storemy/pkg/storage/page"
 	"storemy/pkg/tuple"
 	"storemy/pkg/types"
@@ -25,8 +24,8 @@ var (
 type TID = *primitives.TransactionID
 type RecID = *tuple.TupleRecordID
 type Field = types.Field
-type HashPage = *hash.HashPage
-type HashFile = *hash.HashFile
+type HashPage = *index.HashPage
+type HashFile = *index.HashFile
 
 // HashIndex implements a hash-based index structure for efficient key lookups.
 // It uses separate chaining with overflow pages to handle collisions.
@@ -50,10 +49,10 @@ type HashFile = *hash.HashFile
 //   - Range queries are inefficient (O(n)) - scans all buckets
 type HashIndex struct {
 	indexID    primitives.FileID
-	numBuckets hash.BucketNumber // Logical bucket count
+	numBuckets index.BucketNumber // Logical bucket count
 	tx         *transaction.TransactionContext
 	keyType    types.Type
-	file       *hash.HashFile    // I/O layer only
+	file       *index.HashFile   // I/O layer only
 	pageStore  *memory.PageStore // Page management layer
 }
 
@@ -69,7 +68,7 @@ type HashIndex struct {
 //   - pageStore: PageStore for page lifecycle management
 //
 // Returns a configured HashIndex ready for insert/search operations.
-func NewHashIndex(indexID primitives.FileID, keyType types.Type, file *hash.HashFile, store *memory.PageStore, tx *transaction.TransactionContext) *HashIndex {
+func NewHashIndex(indexID primitives.FileID, keyType types.Type, file *index.HashFile, store *memory.PageStore, tx *transaction.TransactionContext) *HashIndex {
 	// Set the index ID on the file to ensure page ID validation works correctly
 	file.SetIndexID(indexID)
 	store.RegisterDbFile(primitives.FileID(indexID), file)
@@ -92,11 +91,11 @@ func NewHashIndex(indexID primitives.FileID, keyType types.Type, file *hash.Hash
 //   - parentPage: Page to link the new overflow page to
 //
 // Returns the newly created overflow page or error on failure.
-func (hi *HashIndex) createAndLinkOverflowPage(bucketNum hash.BucketNumber, parentPage HashPage) (HashPage, error) {
+func (hi *HashIndex) createAndLinkOverflowPage(bucketNum index.BucketNumber, parentPage HashPage) (HashPage, error) {
 	pageNum := hi.file.AllocatePageNum()
 	pageID := page.NewPageDescriptor(hi.indexID, pageNum)
 
-	overflowPage := hash.NewHashPage(pageID, bucketNum, hi.keyType)
+	overflowPage := index.NewHashPage(pageID, bucketNum, hi.keyType)
 	overflowPage.MarkDirty(true, hi.tx.ID)
 
 	parentPage.SetOverflowPage(overflowPage.GetPageNo())
@@ -138,7 +137,7 @@ func (hi *HashIndex) readOverflowPage(p HashPage) (HashPage, error) {
 //   - bucketNum: Bucket number (0 to numBuckets-1)
 //
 // Returns the bucket page or error on failure.
-func (hi *HashIndex) getBucketPageByNum(bucketNum hash.BucketNumber) (HashPage, error) {
+func (hi *HashIndex) getBucketPageByNum(bucketNum index.BucketNumber) (HashPage, error) {
 	pageNum, err := hi.file.GetBucketPageNum(bucketNum)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get bucket page number: %w", err)
@@ -177,12 +176,12 @@ func (hi *HashIndex) Close() error {
 //   - key: Field to hash (IntType, StringType, BoolType, or FloatType)
 //
 // Returns bucket number in range [0, numBuckets) and error if hashing fails.
-func (hi *HashIndex) hashKey(key types.Field) (hash.BucketNumber, error) {
+func (hi *HashIndex) hashKey(key types.Field) (index.BucketNumber, error) {
 	h, err := key.Hash()
 	if err != nil {
 		return 0, fmt.Errorf("failed to hash key: %w", err)
 	}
-	return hash.BucketNumber(int(h) % int(hi.numBuckets)), nil // #nosec G115
+	return index.BucketNumber(int(h) % int(hi.numBuckets)), nil // #nosec G115
 }
 
 // validateKeyType checks if the provided key matches the index's key type.
@@ -262,7 +261,7 @@ func (hi *HashIndex) getPageFromStore(pid *page.PageDescriptor) (HashPage, error
 	if err != nil {
 		return nil, fmt.Errorf("failed to read overflow page %s: %w", pid, err)
 	}
-	hashPage, ok := page.(*hash.HashPage)
+	hashPage, ok := page.(*index.HashPage)
 	if !ok {
 		return nil, fmt.Errorf("invalid page type: expected HashPage")
 	}
@@ -392,7 +391,7 @@ func (hi *HashIndex) getEntriesInRange(start, end Field, bucketPage HashPage) ([
 //   - Returned page is guaranteed to have space (unless page creation fails)
 //
 // Used by: Insert operation to find where to place new index entries
-func (hi *HashIndex) findFirstEmptyPage(bucketPage HashPage, bucketNum hash.BucketNumber) (HashPage, error) {
+func (hi *HashIndex) findFirstEmptyPage(bucketPage HashPage, bucketNum index.BucketNumber) (HashPage, error) {
 	var err error
 	currentPage := bucketPage
 	for currentPage.IsFull() {

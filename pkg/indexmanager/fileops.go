@@ -5,7 +5,6 @@ import (
 	"storemy/pkg/primitives"
 	"storemy/pkg/storage/index"
 	"storemy/pkg/storage/index/btree"
-	"storemy/pkg/storage/index/hash"
 	"storemy/pkg/types"
 )
 
@@ -36,7 +35,7 @@ func (i *IndexFileOps) CreatePhysicalIndex(keyType types.Type, indexType index.I
 
 	switch indexType {
 	case index.HashIndex:
-		hashFile, err := hash.NewHashFile(i.f, keyType, hash.DefaultBuckets)
+		hashFile, err := index.NewHashFile(i.f, keyType, index.DefaultBuckets)
 		if err != nil {
 			return 0, fmt.Errorf("failed to create hash index file: %v", err)
 		}
