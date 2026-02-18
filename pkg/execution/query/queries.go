@@ -98,7 +98,6 @@ func (l *LimitOperator) Rewind() error {
 // skipOffset advances the child operator by the number of tuples specified
 // by the offset value, discarding those tuples. This prepares the limit
 // operator so the next retrieved tuple is the first one after the offset.
-// If there are fewer tuples than the offset value, it stops early.
 //
 // Returns:
 //   - error: If an error occurs while fetching the next tuple from the child operator.
@@ -180,8 +179,17 @@ type Project struct {
 
 // NewProject creates a new Project operator that selects specific fields from input tuples.
 func NewProject(projectedCols []primitives.ColumnID, projectedTypes []types.Type, source iterator.DbIterator) (*Project, error) {
-	if err := validateProjectInputs(projectedCols, projectedTypes, source); err != nil {
+	if err := validateChild(source); err != nil {
 		return nil, err
+	}
+
+	if len(projectedCols) == 0 {
+		return nil, fmt.Errorf("must project at least one field")
+	}
+
+	if len(projectedCols) != len(projectedTypes) {
+		return nil, fmt.Errorf("field list length (%d) must match types list length (%d)",
+			len(projectedCols), len(projectedTypes))
 	}
 
 	childTupleDesc := source.GetTupleDesc()
@@ -208,28 +216,6 @@ func NewProject(projectedCols []primitives.ColumnID, projectedTypes []types.Type
 	p.UnaryOperator = unaryOp
 
 	return p, nil
-}
-
-// validateProjectInputs performs basic validation of constructor parameters
-func validateProjectInputs(projectedCols []primitives.ColumnID, projectedTypes []types.Type, source iterator.DbIterator) error {
-	if source == nil {
-		return fmt.Errorf("source operator cannot be nil")
-	}
-
-	if len(projectedCols) != len(projectedTypes) {
-		return fmt.Errorf("field list length (%d) must match types list length (%d)",
-			len(projectedCols), len(projectedTypes))
-	}
-
-	if len(projectedCols) == 0 {
-		return fmt.Errorf("must project at least one field")
-	}
-
-	if source.GetTupleDesc() == nil {
-		return fmt.Errorf("source operator has nil tuple descriptor")
-	}
-
-	return nil
 }
 
 // GetTupleDesc returns the tuple description (schema) for tuples produced by this projection.
@@ -306,13 +292,11 @@ func validateFieldType(idx primitives.ColumnID, expected types.Type, td *tuple.T
 
 // Sort operator orders tuples by a specified field in ascending or descending order.
 type Sort struct {
-	base         *iterator.BaseIterator
-	child        iterator.DbIterator
-	sorted       *iterator.SliceIterator[*tuple.Tuple]
-	sortField    primitives.ColumnID // Index of field to sort by
-	ascending    bool                // Sort direction: true = ASC, false = DESC
-	opened       bool
-	materialized bool // Flag to track if tuples have been materialized
+	base                            *iterator.BaseIterator
+	child                           iterator.DbIterator
+	sorted                          *iterator.SliceIterator[*tuple.Tuple]
+	sortField                       primitives.ColumnID // Index of field to sort by
+	ascending, opened, materialized bool                // Sort direction: true = ASC, false = DESC
 }
 
 // NewSort creates a new Sort operator that orders tuples by the specified field.
@@ -349,26 +333,9 @@ func (s *Sort) materializeTuples() error {
 		return nil
 	}
 
-	tuples := make([]*tuple.Tuple, 0)
-	for {
-		hasNext, err := s.child.HasNext()
-		if err != nil {
-			return fmt.Errorf("error checking if child has next: %w", err)
-		}
-		if !hasNext {
-			break
-		}
-
-		t, err := s.child.Next()
-		if err != nil {
-			return fmt.Errorf("error fetching tuple from source: %w", err)
-		}
-
-		if t == nil {
-			break
-		}
-
-		tuples = append(tuples, t)
+	tuples, err := iterator.Collect(s.child)
+	if err != nil {
+		return fmt.Errorf("failed to read tuples from child operator: %w", err)
 	}
 
 	if err := s.sortTuples(tuples); err != nil {
@@ -389,48 +356,20 @@ func (s *Sort) sortTuples(tuples []*tuple.Tuple) error {
 			return false
 		}
 
-		lessThan, err := s.compare(tuples, i, j)
+		cmp, err := tuples[i].CompareAt(tuples[j], s.sortField)
 		if err != nil {
-			sortErr = fmt.Errorf("failed to compare fields: %w", err)
+			sortErr = fmt.Errorf("failed to compare tuples at field %d: %w", s.sortField, err)
 			return false
 		}
 
-		return lessThan
+		if s.ascending {
+			return cmp < 0
+		}
+
+		return cmp > 0
 	})
 
 	return sortErr
-}
-
-// compare compares two tuples at indices i and j based on the sort field.
-// It extracts the sort field from both tuples and performs a compares them
-//
-// Parameters:
-//   - tuples: slice of tuples to compare
-//   - i: index of the first tuple
-//   - j: index of the second tuple
-//
-// Returns:
-//   - bool: true if the first tuple should come before the second in sort order
-//   - error: any error encountered during field retrieval or comparison
-func (s *Sort) compare(tuples []*tuple.Tuple, i, j int) (bool, error) {
-	field1, err := tuples[i].GetField(s.sortField)
-	if err != nil || field1 == nil {
-		return false, fmt.Errorf("failed to get sort field from tuple %d: %w", i, err)
-	}
-
-	field2, err := tuples[j].GetField(s.sortField)
-	if err != nil || field2 == nil {
-		return false, fmt.Errorf("failed to get sort field from tuple %d: %w", j, err)
-	}
-
-	var lessThan bool
-	if s.ascending {
-		lessThan, err = field1.Compare(primitives.LessThan, field2)
-	} else {
-		lessThan, err = field2.Compare(primitives.LessThan, field1)
-	}
-
-	return lessThan, err
 }
 
 // readNext returns the next tuple from the sorted slice.

@@ -236,6 +236,46 @@ func (t *Tuple) Equals(other *Tuple) bool {
 	return true
 }
 
+// CompareAt compares this tuple with another tuple at the given field index.
+// Returns -1 if t < other, 0 if equal, and 1 if t > other at that field.
+//
+// Parameters:
+//   - other: The tuple to compare against
+//   - fieldIdx: The index of the field to compare (0-based)
+//
+// Returns:
+//   - int: -1 if this tuple's field is less than other's, 0 if equal, 1 if greater
+//   - error: Returns an error if the field index is out of bounds or comparison fails
+func (t *Tuple) CompareAt(other *Tuple, fieldIdx primitives.ColumnID) (int, error) {
+	f1, err := t.GetField(fieldIdx)
+	if err != nil {
+		return 0, fmt.Errorf("failed to get field %d from first tuple: %w", fieldIdx, err)
+	}
+
+	f2, err := other.GetField(fieldIdx)
+	if err != nil {
+		return 0, fmt.Errorf("failed to get field %d from second tuple: %w", fieldIdx, err)
+	}
+
+	lt, err := f1.Compare(primitives.LessThan, f2)
+	if err != nil {
+		return 0, fmt.Errorf("comparison failed at field %d: %w", fieldIdx, err)
+	}
+	if lt {
+		return -1, nil
+	}
+
+	eq, err := f1.Compare(primitives.Equals, f2)
+	if err != nil {
+		return 0, fmt.Errorf("comparison failed at field %d: %w", fieldIdx, err)
+	}
+	if eq {
+		return 0, nil
+	}
+
+	return 1, nil
+}
+
 // fieldCount returns the number of fields in the tuple.
 // This is an unexported helper method, used to get the count of stored field values.
 //
