@@ -6,7 +6,6 @@ import (
 	"storemy/pkg/execution/aggregation"
 	"storemy/pkg/execution/join"
 	"storemy/pkg/execution/query"
-	"storemy/pkg/execution/setops"
 	"storemy/pkg/iterator"
 	"storemy/pkg/parser/statements"
 	"storemy/pkg/plan"
@@ -374,7 +373,7 @@ func (p *SelectPlan) parseAggregationIndex(td *tuple.TupleDescription) (primitiv
 //
 // Returns Distinct operator wrapping input, or input unchanged if not DISTINCT.
 func (p *SelectPlan) applyDistinctIfNeeded(input iterator.DbIterator) (iterator.DbIterator, error) {
-	dnt, err := setops.NewDistinct(input)
+	dnt, err := query.NewDistinct(input)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create distinct operator: %w", err)
 	}
@@ -500,17 +499,17 @@ func (p *SelectPlan) createSetOp(l, r iterator.DbIterator) (iterator.DbIterator,
 	isAll := p.statement.Plan.SetOpAll()
 	switch p.statement.Plan.SetOpType() {
 	case plan.UnionOp:
-		setOp, err = setops.NewUnion(l, r, isAll)
+		setOp, err = query.NewUnion(l, r, isAll)
 		if err != nil {
 			return nil, fmt.Errorf("failed to create UNION operator: %v", err)
 		}
 	case plan.IntersectOp:
-		setOp, err = setops.NewIntersect(l, r, isAll)
+		setOp, err = query.NewIntersect(l, r, isAll)
 		if err != nil {
 			return nil, fmt.Errorf("failed to create INTERSECT operator: %v", err)
 		}
 	case plan.ExceptOp:
-		setOp, err = setops.NewExcept(l, r, isAll)
+		setOp, err = query.NewExcept(l, r, isAll)
 		if err != nil {
 			return nil, fmt.Errorf("failed to create EXCEPT operator: %v", err)
 		}

@@ -220,6 +220,22 @@ func (t *Tuple) WithUpdatedFields(fieldUpdates map[primitives.ColumnID]types.Fie
 	return newTup, nil
 }
 
+// Equals returns true if this tuple has the same number of fields and all
+// corresponding fields are equal to those in other.
+func (t *Tuple) Equals(other *Tuple) bool {
+	if t.TupleDesc.NumFields() != other.TupleDesc.NumFields() {
+		return false
+	}
+	for i := range t.TupleDesc.NumFields() {
+		f1, _ := t.GetField(i)
+		f2, _ := other.GetField(i)
+		if !f1.Equals(f2) {
+			return false
+		}
+	}
+	return true
+}
+
 // fieldCount returns the number of fields in the tuple.
 // This is an unexported helper method, used to get the count of stored field values.
 //
