@@ -34,12 +34,6 @@ type SlotPointer struct {
 //   - Slot Pointer Array: Array of (offset, length) pairs, one per slot (grows from start)
 //   - Free Space: Available space in the middle
 //   - Tuple Data: Actual tuple data (grows from end, backward)
-//
-// Benefits:
-//   - Stable RecordIDs even after page compaction
-//   - Variable-length tuple support
-//   - Efficient space reclamation
-//   - Better update performance (can reuse slots)
 type HeapPage struct {
 	pageID       *page.PageDescriptor
 	tupleDesc    *tuple.TupleDescription
@@ -96,9 +90,6 @@ func NewHeapPage(pid *page.PageDescriptor, data []byte, td *tuple.TupleDescripti
 
 // GetNumEmptySlots returns the count of unoccupied tuple slots on this page.
 // This is useful for determining if the page has capacity for insertions.
-//
-// Returns:
-//   - int: Number of empty slots available for new tuples
 func (hp *HeapPage) GetNumEmptySlots() primitives.SlotID {
 	hp.mutex.RLock()
 	defer hp.mutex.RUnlock()
@@ -181,10 +172,6 @@ func (hp *HeapPage) GetBeforeImage() page.Page {
 
 // SetBeforeImage captures the current page state as the before-image.
 // This should be called before the first modification in a transaction to enable rollback.
-//
-// Usage:
-//   - Call once at the beginning of a transaction before any modifications
-//   - Typically invoked by the buffer pool or transaction manager
 func (hp *HeapPage) SetBeforeImage() {
 	hp.oldData = hp.GetPageData()
 }
@@ -311,9 +298,6 @@ func (hp *HeapPage) getNumTuples() primitives.SlotID {
 
 // getHeaderSize calculates the number of bytes needed for the slot pointer array.
 // Each slot requires SlotPointerSize (4) bytes: 2 for offset, 2 for length.
-//
-// Returns:
-//   - int: Size in bytes of the slot pointer array
 func (hp *HeapPage) getHeaderSize() primitives.SlotID {
 	return hp.getNumTuples() * SlotPointerSize
 }
@@ -458,7 +442,6 @@ func (hp *HeapPage) Compact() int {
 	hp.mutex.Lock()
 	defer hp.mutex.Unlock()
 
-	// Serialize all tuples to a temporary buffer
 	type tupleData struct {
 		slotIndex primitives.SlotID
 		data      []byte
@@ -470,7 +453,6 @@ func (hp *HeapPage) Compact() int {
 			continue // Skip empty slots
 		}
 
-		// Serialize tuple
 		buffer := &bytes.Buffer{}
 		for j := primitives.ColumnID(0); j < hp.tupleDesc.NumFields(); j++ {
 			field, err := hp.tuples[i].GetField(j)
@@ -486,27 +468,18 @@ func (hp *HeapPage) Compact() int {
 		})
 	}
 
-	// Calculate space before compaction
 	spaceBefore := int(page.PageSize) - int(hp.freeSpacePtr)
-
-	// Reset free space pointer to start right after header
 	hp.freeSpacePtr = uint16(hp.getHeaderSize())
 
-	// Repack tuples contiguously from the free space pointer
 	for _, td := range activeTuples {
 		tupleSize := uint16(len(td.data)) // #nosec G115
-
-		// Update slot pointer to new location
 		hp.slotPointers[td.slotIndex] = SlotPointer{
 			Offset: primitives.SlotID(hp.freeSpacePtr),
 			Length: tupleSize,
 		}
-
-		// Advance free space pointer
 		hp.freeSpacePtr += tupleSize
 	}
 
-	// Calculate space after compaction
 	spaceAfter := int(page.PageSize) - int(hp.freeSpacePtr)
 	spaceReclaimed := spaceAfter - spaceBefore
 
@@ -519,4 +492,59 @@ func (hp *HeapPage) GetTupleDesc() *tuple.TupleDescription {
 	hp.mutex.RLock()
 	defer hp.mutex.RUnlock()
 	return hp.tupleDesc
+}
+
+// HeapPageIterator provides iteration over tuples in a HeapPage
+type HeapPageIterator struct {
+	page         *HeapPage
+	currentSlot  int
+	tuples       []*tuple.Tuple
+	currentIndex int
+}
+
+func NewHeapPageIterator(page *HeapPage) *HeapPageIterator {
+	return &HeapPageIterator{
+		page:         page,
+		currentSlot:  -1,
+		currentIndex: -1,
+	}
+}
+
+// Open initializes the iterator
+func (it *HeapPageIterator) Open() error {
+	it.tuples = it.page.GetTuples()
+	it.currentIndex = -1
+	return nil
+}
+
+// HasNext returns true if there are more tuples
+func (it *HeapPageIterator) HasNext() (bool, error) {
+	return it.currentIndex+1 < len(it.tuples), nil
+}
+
+// Next returns the next tuple
+func (it *HeapPageIterator) Next() (*tuple.Tuple, error) {
+	hasNext, err := it.HasNext()
+	if err != nil {
+		return nil, err
+	}
+
+	if !hasNext {
+		return nil, fmt.Errorf("no more tuples")
+	}
+
+	it.currentIndex++
+	return it.tuples[it.currentIndex], nil
+}
+
+// Rewind resets the iterator
+func (it *HeapPageIterator) Rewind() error {
+	return it.Open()
+}
+
+// Close releases iterator resources
+func (it *HeapPageIterator) Close() error {
+	it.tuples = nil
+	it.currentIndex = -1
+	return nil
 }
