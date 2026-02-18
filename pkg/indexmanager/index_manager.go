@@ -2,6 +2,8 @@ package indexmanager
 
 import (
 	"fmt"
+	"os"
+	"slices"
 	"storemy/pkg/catalog/schema"
 	"storemy/pkg/catalog/systemtable"
 	"storemy/pkg/concurrency/transaction"
@@ -120,14 +122,6 @@ func closeIndexFile(index index.Index) error {
 	}
 
 	return nil
-}
-
-func (im *IndexManager) NewLoader(tx *transaction.TransactionContext) *IndexLoader {
-	return &IndexLoader{
-		tx:      tx,
-		catalog: im.catalog,
-		store:   im.pageStore,
-	}
 }
 
 // CreatePhysicalIndex creates a physical index file and returns its file ID.
@@ -389,14 +383,6 @@ func (i *IndexManager) extractKey(t *tuple.Tuple, metadata *IndexMetadata) (type
 // The operation is atomic across all indexes - if any index insertion fails,
 // an error is returned. However, partial insertions may have occurred before
 // the failure, so callers should handle rollback at a higher level.
-//
-// Parameters:
-//   - ctx: Transaction context for the operation
-//   - tableID: The ID of the table where the tuple is being inserted
-//   - t: The tuple being inserted. Must be non-nil and have a valid RecordID
-//
-// Returns:
-//   - error: nil if all index insertions succeed, or an error describing the failure
 func (i *IndexManager) OnInsert(ctx TxCtx, tableID primitives.FileID, t *tuple.Tuple) error {
 	return i.processIndexOperation(ctx, tableID, t, insertOp)
 }
@@ -407,14 +393,6 @@ func (i *IndexManager) OnInsert(ctx TxCtx, tableID primitives.FileID, t *tuple.T
 //
 // The operation is atomic across all indexes - if any index deletion fails,
 // an error is returned. Partial deletions may have occurred before the failure.
-//
-// Parameters:
-//   - ctx: Transaction context for the operation
-//   - tableID: The ID of the table where the tuple is being deleted
-//   - t: The tuple being deleted. Must be non-nil and have a valid RecordID
-//
-// Returns:
-//   - error: nil if all index deletions succeed, or an error describing the failure
 func (im *IndexManager) OnDelete(ctx TxCtx, tableID primitives.FileID, t *tuple.Tuple) error {
 	return im.processIndexOperation(ctx, tableID, t, deleteOp)
 }
@@ -426,15 +404,6 @@ func (im *IndexManager) OnDelete(ctx TxCtx, tableID primitives.FileID, t *tuple.
 // If the insertion fails after deletion, the method attempts to re-insert
 // the old tuple to maintain consistency, though this rollback may also fail.
 // Callers should implement proper transaction rollback mechanisms.
-//
-// Parameters:
-//   - ctx: Transaction context for the operation
-//   - tableID: The ID of the table where the tuple is being updated
-//   - old: The tuple before the update. Must be non-nil and have a valid RecordID
-//   - updated: The tuple after the update. Must be non-nil and have a valid RecordID
-//
-// Returns:
-//   - error: nil if both deletion and insertion succeed, or an error describing the failure
 func (im *IndexManager) OnUpdate(ctx TxCtx, tableID primitives.FileID, old, updated *tuple.Tuple) error {
 	if err := im.OnDelete(ctx, tableID, old); err != nil {
 		return err
@@ -446,4 +415,146 @@ func (im *IndexManager) OnUpdate(ctx TxCtx, tableID primitives.FileID, old, upda
 	}
 
 	return nil
+}
+
+// loadAndOpenIndexes loads index metadata from catalog and opens all index files for a table.
+// This is the main entry point for initializing all indexes associated with a table.
+// It performs the following steps:
+//  1. Loads index metadata from the catalog
+//  2. Opens each index file
+//  3. Returns a slice of indexes with their metadata
+//
+// If an index file fails to open, a warning is printed but the process continues
+// with the remaining indexes.
+//
+// Parameters:
+//   - ctx: Transaction context for catalog operations
+//   - tableID: The ID of the table whose indexes should be loaded
+//
+// Returns:
+//   - A slice of indexWithMetadata containing successfully opened indexes
+//   - An error if catalog access fails
+func (i *IndexManager) LoadIndexes(tx *transaction.TransactionContext, tableID primitives.FileID) ([]*IndexWithMetadata, error) {
+	metadataList, err := i.loadFromCatalog(tx, tableID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get indexes from catalog: %v", err)
+	}
+
+	indexes := make([]*IndexWithMetadata, 0, len(metadataList))
+	for _, metadata := range metadataList {
+		idx, err := i.openIndex(tx, metadata.KeyType, metadata.FilePath, metadata.IndexType)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Warning: failed to open index %s: %v\n", metadata.IndexName, err)
+			continue
+		}
+
+		indexes = append(indexes, &IndexWithMetadata{
+			index:    idx,
+			metadata: metadata,
+		})
+	}
+
+	return indexes, nil
+}
+
+func (i *IndexManager) LoadIndexForCol(tx *transaction.TransactionContext, colID primitives.ColumnID, tableID primitives.FileID) (index.Index, error) {
+	indexes, err := i.loadFromCatalog(tx, tableID)
+	if err != nil {
+		return nil, err
+	}
+
+	colIdx := slices.IndexFunc(indexes, func(i *IndexMetadata) bool {
+		return i.ColumnIndex == colID
+	})
+	if colIdx == -1 {
+		return nil, fmt.Errorf("col %d not found", colID)
+	}
+
+	meta := indexes[colIdx]
+	return i.openIndex(tx, meta.KeyType, meta.FilePath, meta.IndexType)
+}
+
+// loadFromCatalog loads raw index info from catalog and resolves it
+// with schema information (ColumnIndex, KeyType) to create full IndexMetadata.
+// This method enriches the catalog metadata with schema-specific information
+// needed for index operations.
+//
+// Parameters:
+//   - tableID: The ID of the table whose index metadata should be loaded
+//
+// Returns:
+//   - A slice of complete IndexMetadata with resolved schema information
+//   - An error if catalog access or schema retrieval fails
+func (i *IndexManager) loadFromCatalog(tx *transaction.TransactionContext, tableID primitives.FileID) ([]*IndexMetadata, error) {
+	catalogIndexes, err := i.catalog.GetIndexesByTable(tx, tableID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get indexes from catalog: %v", err)
+	}
+
+	if len(catalogIndexes) == 0 {
+		return []*IndexMetadata{}, nil
+	}
+
+	schema, err := i.catalog.GetTableSchema(tableID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get table schema: %v", err)
+	}
+
+	return resolveIndexMetadata(catalogIndexes, schema), nil
+}
+
+// resolveIndexMetadata resolves catalog metadata with schema to create complete IndexMetadata.
+// It matches column names from the catalog with actual column positions and types
+// from the table schema.
+//
+// If a column referenced by an index is not found in the schema, a warning is printed
+// and that index is skipped.
+//
+// Parameters:
+//   - catalogIndexes: Raw index metadata from the catalog
+//   - schema: The table schema containing column information
+//
+// Returns a slice of IndexMetadata with resolved column indices and key types.
+func resolveIndexMetadata(catalogIndexes []*systemtable.IndexMetadata, schema *schema.Schema) []*IndexMetadata {
+	result := make([]*IndexMetadata, 0, len(catalogIndexes))
+
+	for _, catIdx := range catalogIndexes {
+		columnIndex, keyType, err := findColumnInfo(schema, catIdx.ColumnName)
+
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Warning: column %s not found in schema for index %s\n",
+				catIdx.ColumnName, catIdx.IndexName)
+			continue
+		}
+
+		result = append(result, &IndexMetadata{
+			IndexMetadata: *catIdx,
+			ColumnIndex:   columnIndex,
+			KeyType:       keyType,
+		})
+	}
+
+	return result
+}
+
+// findColumnInfo finds the column index and type in the schema.
+// This helper function searches for a column by name in the table schema.
+//
+// Parameters:
+//   - schema: The table schema to search
+//   - columnName: The name of the column to find
+//
+// Returns:
+//   - The zero-based index of the column in the schema
+//   - The data type of the column
+//   - Returns (-1, IntType) if the column is not found
+func findColumnInfo(schema *schema.Schema, columnName string) (primitives.ColumnID, types.Type, error) {
+	var i primitives.ColumnID
+	for i = 0; i < schema.TupleDesc.NumFields(); i++ {
+		fieldName, _ := schema.TupleDesc.GetFieldName(i)
+		if fieldName == columnName {
+			return i, schema.TupleDesc.Types[i], nil
+		}
+	}
+	return 0, types.IntType, fmt.Errorf("column %s not found", columnName)
 }

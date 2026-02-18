@@ -89,7 +89,7 @@ func (ic *indexCache) GetOrLoad(tableID primitives.FileID, loader func() ([]*Ind
 func (im *IndexManager) getIndexesForTable(ctx TxCtx, tableID primitives.FileID) ([]*IndexWithMetadata, error) {
 	// Temporarily disable caching to fix transaction context issues
 	// Always reload indexes for each transaction
-	return im.NewLoader(ctx).LoadIndexes(tableID)
+	return im.LoadIndexes(ctx, tableID)
 
 	// Old cached implementation (causes transaction ID errors):
 	// return im.cache.GetOrLoad(tableID, func() ([]*IndexWithMetadata, error) {

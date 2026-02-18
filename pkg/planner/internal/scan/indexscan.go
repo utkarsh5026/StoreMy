@@ -109,8 +109,7 @@ func (b *IndexScannerBuilder) createIndexConfig(column primitives.ColumnID) (*sc
 		return nil, err
 	}
 
-	loader := b.ctx.IndexManager().NewLoader(b.tx)
-	idx, err := loader.LoadIndexForCol(column, b.tableID)
+	idx, err := b.ctx.IndexManager().LoadIndexForCol(b.tx, column, b.tableID)
 	if err != nil {
 		return nil, fmt.Errorf("error in loading index")
 	}
