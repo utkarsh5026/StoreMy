@@ -201,11 +201,11 @@ func (bt *BTree) findLeafPage(currentPage *BTreePage, key types.Field) (*BTreePa
 //   - *page.PageDescriptor: Page ID of the child that should contain the key
 //   - nil: If page is not internal or has no children (should not happen)
 func (bt *BTree) findChildPointer(internalPage *BTreePage, key types.Field) *page.PageDescriptor {
-	if !internalPage.IsInternalPage() || len(internalPage.Children()) == 0 {
+	if !internalPage.IsInternalPage() || len(internalPage.InternalPages) == 0 {
 		return nil
 	}
 
-	children := internalPage.Children()
+	children := internalPage.InternalPages
 
 	// In B+Tree internal nodes:
 	// children[0] contains keys < children[1].Key
@@ -269,13 +269,13 @@ func (bt *BTree) updateParentKey(child *BTreePage, newKey types.Field) error {
 		return nil
 	}
 
-	parID := page.NewPageDescriptor(bt.indexID, child.Parent())
+	parID := page.NewPageDescriptor(bt.indexID, child.ParentPage)
 	parent, err := bt.getPage(parID, transaction.ReadWrite)
 	if err != nil {
 		return fmt.Errorf("failed to read parent page: %w", err)
 	}
 
-	children := parent.Children()
+	children := parent.InternalPages
 
 	// Find the child pointer and update its key
 	// Note: children[0] has no key in B+tree, so we start from index 1
@@ -372,7 +372,7 @@ func (bt *BTree) addDirtyPage(p *BTreePage, op memory.OperationType) error {
 //   - *BTreePage: The requested sibling page (locked for read-write)
 //   - error: Returns error if sibling doesn't exist or page fetch fails
 func (bt *BTree) getSiblingPage(parent *BTreePage, currIDx, direction int) (*BTreePage, error) {
-	children := parent.Children()
+	children := parent.InternalPages
 	sibPageID := children[currIDx+direction].ChildPID
 	return bt.getPage(sibPageID, transaction.ReadWrite)
 }

@@ -146,14 +146,6 @@ func (p *BTreePage) GetPageData() []byte {
 	return data
 }
 
-func (p *BTreePage) Children() []*BTreeChildPtr {
-	return p.InternalPages
-}
-
-func (p *BTreePage) Parent() primitives.PageNumber {
-	return p.ParentPage
-}
-
 func (p *BTreePage) PageNo() primitives.PageNumber {
 	return p.pageID.PageNo()
 }
@@ -222,10 +214,6 @@ func (p *BTreePage) SetBeforeImage() {
 	p.beforeImage = p.GetPageData()
 }
 
-func (p *BTreePage) SetParent(id primitives.PageNumber) {
-	p.ParentPage = id
-}
-
 // IsLeafPage returns true if this is a leaf page
 func (p *BTreePage) IsLeafPage() bool {
 	return p.pageType == pageTypeLeaf
@@ -233,14 +221,6 @@ func (p *BTreePage) IsLeafPage() bool {
 
 func (p *BTreePage) IsRoot() bool {
 	return p.ParentPage == primitives.InvalidPageNumber
-}
-
-func (p *BTreePage) HasNextLeaf() bool {
-	return p.NextLeaf != primitives.InvalidPageNumber
-}
-
-func (p *BTreePage) Leaves() (left, right primitives.PageNumber) {
-	return p.PrevLeaf, p.NextLeaf
 }
 
 func (p *BTreePage) UpdateChildrenKey(index int, key types.Field) error {

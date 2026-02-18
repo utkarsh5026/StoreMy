@@ -202,11 +202,11 @@ func (bt *BTree) RangeSearch(startKey, endKey types.Field) ([]*tuple.TupleRecord
 			}
 		}
 
-		if !leafPage.HasNextLeaf() {
+		if leafPage.NextLeaf == primitives.InvalidPageNumber {
 			break
 		}
 
-		_, nextLeaf := leafPage.Leaves()
+		nextLeaf := leafPage.NextLeaf
 		nextPageID := page.NewPageDescriptor(bt.indexID, nextLeaf)
 		leafPage, err = bt.getPage(nextPageID, transaction.ReadOnly)
 		if err != nil {

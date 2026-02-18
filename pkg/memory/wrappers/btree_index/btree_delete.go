@@ -71,25 +71,25 @@ func (bt *BTree) deleteFromLeaf(leaf *BTreePage, ie *index.IndexEntry) error {
 //
 // Returns an error if page operations fail.
 func (bt *BTree) handleUnderflow(underflowPage *BTreePage) error {
-	if underflowPage.IsRoot() && underflowPage.IsInternalPage() && underflowPage.GetNumEntries() == 0 && len(underflowPage.Children()) == 1 {
-		childPID := underflowPage.Children()[0].ChildPID
+	if underflowPage.IsRoot() && underflowPage.IsInternalPage() && underflowPage.GetNumEntries() == 0 && len(underflowPage.InternalPages) == 1 {
+		childPID := underflowPage.InternalPages[0].ChildPID
 		childPage, err := bt.getPage(childPID, transaction.ReadWrite)
 		if err != nil {
 			return err
 		}
-		childPage.SetParent(primitives.InvalidPageNumber)
+		childPage.ParentPage = primitives.InvalidPageNumber
 		bt.rootPageID = childPID
 		return bt.addDirtyPage(childPage, memory.UpdateOperation)
 	}
 
-	parentPageID := page.NewPageDescriptor(bt.indexID, underflowPage.Parent())
+	parentPageID := page.NewPageDescriptor(bt.indexID, underflowPage.ParentPage)
 	parent, err := bt.getPage(parentPageID, transaction.ReadWrite)
 	if err != nil {
 		return err
 	}
 
 	pageID := underflowPage.GetID()
-	childIdx := slices.IndexFunc(parent.Children(), func(pp *index.BTreeChildPtr) bool {
+	childIdx := slices.IndexFunc(parent.InternalPages, func(pp *index.BTreeChildPtr) bool {
 		return pp.ChildPID.Equals(pageID)
 	})
 
@@ -109,7 +109,7 @@ func (bt *BTree) handleUnderflow(underflowPage *BTreePage) error {
 
 	var right *BTreePage
 	var rerr error
-	if childIdx < len(parent.Children())-1 {
+	if childIdx < len(parent.InternalPages)-1 {
 		right, rerr = bt.getSiblingPage(parent, childIdx, 1)
 		if rerr == nil && right.HasMoreThanRequired() {
 			return bt.redistributeFromRight(underflowPage, right, parent, childIdx)
@@ -120,7 +120,7 @@ func (bt *BTree) handleUnderflow(underflowPage *BTreePage) error {
 		return bt.mergeWithLeft(left, underflowPage, parent, childIdx)
 	}
 
-	if childIdx < len(parent.Children())-1 && rerr == nil {
+	if childIdx < len(parent.InternalPages)-1 && rerr == nil {
 		return bt.mergeWithRight(underflowPage, right, parent, childIdx)
 	}
 
@@ -164,8 +164,8 @@ func (bt *BTree) redistributeFromLeft(left, current, parent *BTreePage, pageIdx 
 	}
 
 	ch := index.NewBtreeChildPtr(nil, moved.ChildPID)
-	if len(current.Children()) > 0 {
-		if err := current.UpdateChildrenKey(0, parent.Children()[pageIdx].Key); err != nil {
+	if len(current.InternalPages) > 0 {
+		if err := current.UpdateChildrenKey(0, parent.InternalPages[pageIdx].Key); err != nil {
 			return fmt.Errorf("failed to update current key: %w", err)
 		}
 	}
@@ -219,13 +219,13 @@ func (bt *BTree) redistributeFromRight(current, right, parent *BTreePage, pageId
 		return fmt.Errorf("failed to remove child pointer from right sibling: %w", err)
 	}
 
-	ch := index.NewBtreeChildPtr(parent.Children()[pageIdx+1].Key, deleted.ChildPID)
+	ch := index.NewBtreeChildPtr(parent.InternalPages[pageIdx+1].Key, deleted.ChildPID)
 	if err := current.AddChildPtr(ch, -1); err != nil {
 		return fmt.Errorf("failed to add child pointer to current page: %w", err)
 	}
 
-	if len(right.Children()) > 0 {
-		if err := parent.UpdateChildrenKey(pageIdx+1, right.Children()[0].Key); err != nil {
+	if len(right.InternalPages) > 0 {
+		if err := parent.UpdateChildrenKey(pageIdx+1, right.InternalPages[0].Key); err != nil {
 			return fmt.Errorf("failed to update parent key: %w", err)
 		}
 		if err := right.UpdateChildrenKey(0, nil); err != nil {
@@ -286,14 +286,14 @@ func (bt *BTree) mergePages(left, right, parent *BTreePage, childIdxToDelete, se
 
 		}
 	} else {
-		separatorKey := parent.Children()[separatorIdx].Key
-		if len(right.Children()) > 0 {
+		separatorKey := parent.InternalPages[separatorIdx].Key
+		if len(right.InternalPages) > 0 {
 			if err := right.UpdateChildrenKey(0, separatorKey); err != nil {
 				return fmt.Errorf("failed to update children key: %w", err)
 			}
 		}
 
-		for _, ch := range right.Children() {
+		for _, ch := range right.InternalPages {
 			if err := left.AddChildPtr(ch, -1); err != nil {
 				return fmt.Errorf("failed to add child pointer during merge: %w", err)
 			}
@@ -304,7 +304,7 @@ func (bt *BTree) mergePages(left, right, parent *BTreePage, childIdxToDelete, se
 		}
 
 		// Update all children from right page to point to left page as their parent
-		for _, child := range right.Children() {
+		for _, child := range right.InternalPages {
 			childPage, err := bt.getPage(child.ChildPID, transaction.ReadWrite)
 			if err == nil {
 				childPage.ParentPage = left.PageNo()

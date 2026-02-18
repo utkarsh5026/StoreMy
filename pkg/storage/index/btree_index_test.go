@@ -390,29 +390,29 @@ func TestPageRelations(t *testing.T) {
 	if btreePage.IsRoot() {
 		t.Error("Page with parent should not be root")
 	}
-	if btreePage.Parent() != 2 {
-		t.Errorf("Expected parent 2, got %d", btreePage.Parent())
+	if btreePage.ParentPage != 2 {
+		t.Errorf("Expected parent 2, got %d", btreePage.ParentPage)
 	}
 
 	// Set new parent
-	btreePage.SetParent(3)
-	if btreePage.Parent() != 3 {
-		t.Errorf("Expected parent 3, got %d", btreePage.Parent())
+	btreePage.ParentPage = 3
+	if btreePage.ParentPage != 3 {
+		t.Errorf("Expected parent 3, got %d", btreePage.ParentPage)
 	}
 
 	// Test leaf links
-	if btreePage.HasNextLeaf() {
+	if btreePage.NextLeaf != primitives.InvalidPageNumber {
 		t.Error("Should not have next leaf initially")
 	}
 
 	btreePage.PrevLeaf = 4
 	btreePage.NextLeaf = 6
 
-	if !btreePage.HasNextLeaf() {
+	if btreePage.NextLeaf == primitives.InvalidPageNumber {
 		t.Error("Should have next leaf")
 	}
 
-	left, right := btreePage.Leaves()
+	left, right := btreePage.PrevLeaf, btreePage.NextLeaf
 	if left != 4 || right != 6 {
 		t.Errorf("Expected leaves (4, 6), got (%d, %d)", left, right)
 	}
