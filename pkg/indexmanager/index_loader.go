@@ -15,7 +15,6 @@ import (
 	hashindex "storemy/pkg/memory/wrappers/hash_index"
 	"storemy/pkg/primitives"
 	"storemy/pkg/storage/index"
-	"storemy/pkg/storage/index/btree"
 	"storemy/pkg/types"
 )
 
@@ -197,7 +196,7 @@ func (il *IndexLoader) openIndex(m *IndexMetadata) (index.Index, error) {
 //   - A BTree index wrapper ready for use
 //   - An error if the file cannot be opened or initialized
 func (il *IndexLoader) openBTreeIndex(m *IndexMetadata) (*btreeindex.BTree, error) {
-	file, err := btree.NewBTreeFile(m.FilePath, m.KeyType)
+	file, err := index.NewBTreeFile(m.FilePath, m.KeyType)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open BTree file: %v", err)
 	}

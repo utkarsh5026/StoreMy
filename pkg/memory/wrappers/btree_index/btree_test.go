@@ -9,7 +9,6 @@ import (
 	"storemy/pkg/memory"
 	"storemy/pkg/primitives"
 	"storemy/pkg/storage/index"
-	"storemy/pkg/storage/index/btree"
 	"storemy/pkg/storage/page"
 	"storemy/pkg/tuple"
 	"storemy/pkg/types"
@@ -25,7 +24,7 @@ func setupTestBTree(t *testing.T, keyType types.Type) (*BTree, *memory.PageStore
 	filename := filepath.Join(tmpDir, fmt.Sprintf("btree_test_%d.dat", os.Getpid()))
 
 	// Create BTree file
-	file, err := btree.NewBTreeFile(primitives.Filepath(filename), keyType)
+	file, err := index.NewBTreeFile(primitives.Filepath(filename), keyType)
 	if err != nil {
 		t.Fatalf("Failed to create BTree file: %v", err)
 	}
@@ -578,7 +577,7 @@ func TestBTree_RangeSearch_MultiplePages(t *testing.T) {
 	defer cleanup()
 
 	// Insert enough entries to span multiple leaf pages (reduced for testing)
-	numEntries := btree.MaxEntriesPerPage * 2
+	numEntries := index.MaxEntriesPerPage * 2
 	pageID := page.NewPageDescriptor(1, 0)
 
 	for i := 0; i < numEntries; i++ {
@@ -590,8 +589,8 @@ func TestBTree_RangeSearch_MultiplePages(t *testing.T) {
 		}
 	}
 
-	startKey := types.NewIntField(btree.MaxEntriesPerPage - 10)
-	endKey := types.NewIntField(btree.MaxEntriesPerPage*2 + 10)
+	startKey := types.NewIntField(index.MaxEntriesPerPage - 10)
+	endKey := types.NewIntField(index.MaxEntriesPerPage*2 + 10)
 
 	results, err := bt.RangeSearch(startKey, endKey)
 	if err != nil {
@@ -599,7 +598,7 @@ func TestBTree_RangeSearch_MultiplePages(t *testing.T) {
 	}
 
 	// Only entries 140-299 exist (160 entries), even though we search up to 310
-	expectedCount := numEntries - (btree.MaxEntriesPerPage - 10)
+	expectedCount := numEntries - (index.MaxEntriesPerPage - 10)
 	if len(results) != expectedCount {
 		t.Errorf("Expected %d results, got %d", expectedCount, len(results))
 	}
@@ -809,8 +808,8 @@ func TestBTree_EdgeCase_Boundaries(t *testing.T) {
 		t.Fatalf("Failed to delete first entry: %v", err)
 	}
 
-	key2 := types.NewIntField(int64(btree.MaxEntriesPerPage))
-	rid2 := tuple.NewTupleRecordID(pageID, primitives.SlotID(btree.MaxEntriesPerPage))
+	key2 := types.NewIntField(int64(index.MaxEntriesPerPage))
+	rid2 := tuple.NewTupleRecordID(pageID, primitives.SlotID(index.MaxEntriesPerPage))
 	err = bt.Delete(key2, rid2)
 	if err != nil {
 		t.Fatalf("Failed to delete entry at page boundary: %v", err)

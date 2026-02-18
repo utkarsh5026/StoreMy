@@ -8,7 +8,6 @@ import (
 	"storemy/pkg/primitives"
 	"storemy/pkg/storage/heap"
 	"storemy/pkg/storage/index"
-	"storemy/pkg/storage/index/btree"
 	"storemy/pkg/storage/page"
 	"storemy/pkg/tuple"
 	"storemy/pkg/types"
@@ -136,7 +135,7 @@ func (im *IndexManager) PopulateIndex(
 		}
 
 	case index.BTreeIndex:
-		btreeFile, err := btree.NewBTreeFile(filePath, keyType)
+		btreeFile, err := index.NewBTreeFile(filePath, keyType)
 		if err != nil {
 			return fmt.Errorf("failed to open btree index: %v", err)
 		}

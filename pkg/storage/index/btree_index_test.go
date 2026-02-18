@@ -1,8 +1,7 @@
-package btree
+package index
 
 import (
 	"storemy/pkg/primitives"
-	"storemy/pkg/storage/index"
 	"storemy/pkg/storage/page"
 	"storemy/pkg/tuple"
 	"storemy/pkg/types"
@@ -57,21 +56,21 @@ func TestLeafPageEntryOperations(t *testing.T) {
 	btreePage := NewBTreeLeafPage(pageID, types.IntType, primitives.InvalidPageNumber)
 
 	// Create test entries
-	entry1 := &index.IndexEntry{
+	entry1 := &IndexEntry{
 		Key: types.NewIntField(10),
 		RID: &tuple.TupleRecordID{
 			PageID:   page.NewPageDescriptor(1, 0),
 			TupleNum: 0,
 		},
 	}
-	entry2 := &index.IndexEntry{
+	entry2 := &IndexEntry{
 		Key: types.NewIntField(20),
 		RID: &tuple.TupleRecordID{
 			PageID:   page.NewPageDescriptor(1, 0),
 			TupleNum: 1,
 		},
 	}
-	entry3 := &index.IndexEntry{
+	entry3 := &IndexEntry{
 		Key: types.NewIntField(15),
 		RID: &tuple.TupleRecordID{
 			PageID:   page.NewPageDescriptor(1, 0),
@@ -210,14 +209,14 @@ func TestPageSerialization(t *testing.T) {
 	btreePage.NextLeaf = 6
 	btreePage.PrevLeaf = 4
 
-	entry1 := &index.IndexEntry{
+	entry1 := &IndexEntry{
 		Key: types.NewIntField(100),
 		RID: &tuple.TupleRecordID{
 			PageID:   page.NewPageDescriptor(1, 10),
 			TupleNum: 5,
 		},
 	}
-	entry2 := &index.IndexEntry{
+	entry2 := &IndexEntry{
 		Key: types.NewIntField(200),
 		RID: &tuple.TupleRecordID{
 			PageID:   page.NewPageDescriptor(1, 11),
@@ -343,7 +342,7 @@ func TestDirtyTracking(t *testing.T) {
 	}
 
 	// Add an entry to modify the page
-	entry := &index.IndexEntry{
+	entry := &IndexEntry{
 		Key: types.NewIntField(10),
 		RID: &tuple.TupleRecordID{
 			PageID:   page.NewPageDescriptor(1, 0),
@@ -377,7 +376,7 @@ func TestPageCapacity(t *testing.T) {
 
 	// Add entries up to max
 	for i := 0; i < MaxEntriesPerPage; i++ {
-		entry := &index.IndexEntry{
+		entry := &IndexEntry{
 			Key: types.NewIntField(int64(i)),
 			RID: &tuple.TupleRecordID{
 				PageID:   page.NewPageDescriptor(1, 0),
@@ -442,14 +441,14 @@ func TestPageWithStringKeys(t *testing.T) {
 	pageID := page.NewPageDescriptor(1, 0)
 	btreePage := NewBTreeLeafPage(pageID, types.StringType, primitives.InvalidPageNumber)
 
-	entry1 := &index.IndexEntry{
+	entry1 := &IndexEntry{
 		Key: types.NewStringField("apple", types.StringMaxSize),
 		RID: &tuple.TupleRecordID{
 			PageID:   page.NewPageDescriptor(1, 0),
 			TupleNum: 0,
 		},
 	}
-	entry2 := &index.IndexEntry{
+	entry2 := &IndexEntry{
 		Key: types.NewStringField("banana", types.StringMaxSize),
 		RID: &tuple.TupleRecordID{
 			PageID:   page.NewPageDescriptor(1, 0),
@@ -484,7 +483,7 @@ func TestErrorConditions(t *testing.T) {
 	btreePage := NewBTreeLeafPage(pageID, types.IntType, primitives.InvalidPageNumber)
 
 	// Test invalid insert index
-	entry := &index.IndexEntry{
+	entry := &IndexEntry{
 		Key: types.NewIntField(10),
 		RID: &tuple.TupleRecordID{
 			PageID:   page.NewPageDescriptor(1, 0),

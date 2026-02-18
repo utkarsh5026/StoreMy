@@ -7,7 +7,6 @@ import (
 	"storemy/pkg/memory"
 	"storemy/pkg/primitives"
 	"storemy/pkg/storage/index"
-	"storemy/pkg/storage/index/btree"
 	"storemy/pkg/storage/page"
 )
 
@@ -48,7 +47,7 @@ func (bt *BTree) deleteFromLeaf(leaf *BTreePage, ie *index.IndexEntry) error {
 		}
 	}
 
-	minEntries := btree.MaxEntriesPerPage / 2
+	minEntries := index.MaxEntriesPerPage / 2
 	if leaf.GetNumEntries() < minEntries && !leaf.IsRoot() {
 		return bt.handleUnderflow(leaf)
 	}
@@ -90,7 +89,7 @@ func (bt *BTree) handleUnderflow(underflowPage *BTreePage) error {
 	}
 
 	pageID := underflowPage.GetID()
-	childIdx := slices.IndexFunc(parent.Children(), func(pp *btree.BTreeChildPtr) bool {
+	childIdx := slices.IndexFunc(parent.Children(), func(pp *index.BTreeChildPtr) bool {
 		return pp.ChildPID.Equals(pageID)
 	})
 
@@ -164,7 +163,7 @@ func (bt *BTree) redistributeFromLeft(left, current, parent *BTreePage, pageIdx 
 		return fmt.Errorf("failed to remove entry from left sibling: %w", err)
 	}
 
-	ch := btree.NewBtreeChildPtr(nil, moved.ChildPID)
+	ch := index.NewBtreeChildPtr(nil, moved.ChildPID)
 	if len(current.Children()) > 0 {
 		if err := current.UpdateChildrenKey(0, parent.Children()[pageIdx].Key); err != nil {
 			return fmt.Errorf("failed to update current key: %w", err)
@@ -220,7 +219,7 @@ func (bt *BTree) redistributeFromRight(current, right, parent *BTreePage, pageId
 		return fmt.Errorf("failed to remove child pointer from right sibling: %w", err)
 	}
 
-	ch := btree.NewBtreeChildPtr(parent.Children()[pageIdx+1].Key, deleted.ChildPID)
+	ch := index.NewBtreeChildPtr(parent.Children()[pageIdx+1].Key, deleted.ChildPID)
 	if err := current.AddChildPtr(ch, -1); err != nil {
 		return fmt.Errorf("failed to add child pointer to current page: %w", err)
 	}

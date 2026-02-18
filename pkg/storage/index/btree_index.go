@@ -1,4 +1,4 @@
-package btree
+package index
 
 import (
 	"bytes"
@@ -7,9 +7,10 @@ import (
 	"io"
 	"slices"
 	"storemy/pkg/primitives"
-	"storemy/pkg/storage/index"
 	"storemy/pkg/storage/page"
+	"storemy/pkg/tuple"
 	"storemy/pkg/types"
+	"sync"
 )
 
 const (
@@ -37,13 +38,12 @@ type BTreePage struct {
 	pageID                         *page.PageDescriptor
 	pageType                       byte
 	ParentPage, NextLeaf, PrevLeaf primitives.PageNumber // InvalidPageNumber if root/not linked
-
-	keyType       types.Type
-	Entries       []*index.IndexEntry // For leaf pages
-	InternalPages []*BTreeChildPtr    // For internal pages
-	isDirty       bool
-	dirtyTxn      *primitives.TransactionID
-	beforeImage   []byte
+	keyType                        types.Type
+	Entries                        []*IndexEntry    // For leaf pages
+	InternalPages                  []*BTreeChildPtr // For internal pages
+	isDirty                        bool
+	dirtyTxn                       *primitives.TransactionID
+	beforeImage                    []byte
 }
 
 // BTreeChildPtr represents a child pointer in an internal node
@@ -65,7 +65,7 @@ func NewBTreeLeafPage(pageID *page.PageDescriptor, keyType types.Type, parentPag
 		NextLeaf:      primitives.InvalidPageNumber,
 		PrevLeaf:      primitives.InvalidPageNumber,
 		keyType:       keyType,
-		Entries:       make([]*index.IndexEntry, 0, MaxEntriesPerPage),
+		Entries:       make([]*IndexEntry, 0, MaxEntriesPerPage),
 		InternalPages: nil,
 		isDirty:       false,
 	}
@@ -125,7 +125,6 @@ func (p *BTreePage) GetPageData() []byte {
 			}
 		}
 	} else {
-		// Write internal node InternalPages
 		for i, child := range p.InternalPages {
 			// For internal nodes: child[0] has no key, child[i] (i>0) has key
 			if i > 0 {
@@ -166,7 +165,7 @@ func (p *BTreePage) GetChildKey(index int) (types.Field, error) {
 	return p.InternalPages[index].Key, nil
 }
 
-func (p *BTreePage) InsertEntry(e *index.IndexEntry, index int) error {
+func (p *BTreePage) InsertEntry(e *IndexEntry, index int) error {
 	if index < -1 || index > len(p.Entries) {
 		return fmt.Errorf("invalid index %d for inserting element", index)
 	}
@@ -179,7 +178,7 @@ func (p *BTreePage) InsertEntry(e *index.IndexEntry, index int) error {
 	return nil
 }
 
-func (p *BTreePage) RemoveEntry(index int) (*index.IndexEntry, error) {
+func (p *BTreePage) RemoveEntry(index int) (*IndexEntry, error) {
 	if index < -1 || index >= len(p.Entries) {
 		return nil, fmt.Errorf("invalid index %d for removing element", index)
 	}
@@ -293,7 +292,7 @@ func (p *BTreePage) HashLessThanRequired() bool {
 }
 
 // serializeEntry writes an entry to the buffer
-func (p *BTreePage) serializeEntry(w io.Writer, entry *index.IndexEntry) error {
+func (p *BTreePage) serializeEntry(w io.Writer, entry *IndexEntry) error {
 	if err := p.serializeField(w, entry.Key); err != nil {
 		return err
 	}
@@ -315,4 +314,263 @@ func (p *BTreePage) serializeField(w io.Writer, field types.Field) error {
 		return err
 	}
 	return field.Serialize(w)
+}
+
+// DeserializeBTreePage reads a page from bytes
+func DeserializeBTreePage(data []byte, pageID *page.PageDescriptor) (*BTreePage, error) {
+	if len(data) < headerSize {
+		return nil, fmt.Errorf("invalid page data: too short")
+	}
+
+	buf := bytes.NewReader(data)
+
+	pageType, _ := buf.ReadByte()
+
+	var ParentPage, NextLeaf, PrevLeaf uint64
+	var numEntries int32
+	_ = binary.Read(buf, binary.BigEndian, &ParentPage)
+	_ = binary.Read(buf, binary.BigEndian, &numEntries)
+	_ = binary.Read(buf, binary.BigEndian, &NextLeaf)
+	_ = binary.Read(buf, binary.BigEndian, &PrevLeaf)
+
+	btreePage := &BTreePage{
+		pageID:     pageID,
+		pageType:   pageType,
+		ParentPage: primitives.PageNumber(ParentPage),
+		NextLeaf:   primitives.PageNumber(NextLeaf),
+		PrevLeaf:   primitives.PageNumber(PrevLeaf),
+		isDirty:    false,
+	}
+
+	// Deserialize Entries/InternalPages based on page type
+	if pageType == pageTypeLeaf {
+		btreePage.Entries = make([]*IndexEntry, 0, numEntries)
+		for i := 0; i < int(numEntries); i++ {
+			entry, err := deserializeEntry(buf)
+			if err != nil {
+				return nil, fmt.Errorf("failed to deserialize entry %d: %w", i, err)
+			}
+			btreePage.Entries = append(btreePage.Entries, entry)
+			if i == 0 && entry.Key != nil {
+				btreePage.keyType = entry.Key.Type()
+			}
+		}
+	} else {
+		btreePage.InternalPages = make([]*BTreeChildPtr, 0, numEntries+1)
+		for i := 0; i <= int(numEntries); i++ {
+			var key types.Field
+			var err error
+
+			// First child has no key
+			if i > 0 {
+				key, err = deserializeField(buf)
+				if err != nil {
+					return nil, fmt.Errorf("failed to deserialize key %d: %w", i, err)
+				}
+				if i == 1 && key != nil {
+					btreePage.keyType = key.Type()
+				}
+			}
+
+			var fileID, pageNum uint64
+			_ = binary.Read(buf, binary.BigEndian, &fileID)
+			_ = binary.Read(buf, binary.BigEndian, &pageNum)
+
+			childPtr := &BTreeChildPtr{
+				Key:      key,
+				ChildPID: page.NewPageDescriptor(primitives.FileID(fileID), primitives.PageNumber(pageNum)),
+			}
+			btreePage.InternalPages = append(btreePage.InternalPages, childPtr)
+		}
+	}
+
+	return btreePage, nil
+}
+
+// deserializeEntry reads an entry from the buffer
+func deserializeEntry(r *bytes.Reader) (*IndexEntry, error) {
+	key, err := deserializeField(r)
+	if err != nil {
+		return nil, err
+	}
+
+	// Read page ID type (kept for compatibility but not used anymore)
+	var pageIDType byte
+	_ = binary.Read(r, binary.BigEndian, &pageIDType)
+
+	var fileID, pageNum uint64
+	var tupleNum uint16
+	_ = binary.Read(r, binary.BigEndian, &fileID)
+	_ = binary.Read(r, binary.BigEndian, &pageNum)
+	_ = binary.Read(r, binary.BigEndian, &tupleNum)
+
+	pageID := page.NewPageDescriptor(primitives.FileID(fileID), primitives.PageNumber(pageNum))
+
+	rid := &tuple.TupleRecordID{
+		PageID:   pageID,
+		TupleNum: primitives.SlotID(tupleNum),
+	}
+
+	return &IndexEntry{
+		Key: key,
+		RID: rid,
+	}, nil
+}
+
+// BTreeFile represents a persistent B+Tree index file
+type BTreeFile struct {
+	*page.BaseFile
+	indexID  primitives.FileID
+	keyType  types.Type
+	numPages primitives.PageNumber
+	mutex    sync.RWMutex
+}
+
+// NewBTreeFile creates or opens a B+Tree index file
+func NewBTreeFile(filename primitives.Filepath, keyType types.Type) (*BTreeFile, error) {
+	baseFile, err := page.NewBaseFile(filename)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create base file: %w", err)
+	}
+
+	numPages, err := baseFile.NumPages()
+	if err != nil {
+		return nil, fmt.Errorf("failed to get num pages: %w", err)
+	}
+
+	bf := &BTreeFile{
+		BaseFile: baseFile,
+		indexID:  0, // Will be set by BTree
+		keyType:  keyType,
+		numPages: numPages,
+	}
+
+	return bf, nil
+}
+
+// GetKeyType returns the type of keys stored in this index
+func (bf *BTreeFile) GetKeyType() types.Type {
+	return bf.keyType
+}
+
+// NumPages returns the number of pages in this file
+func (bf *BTreeFile) NumPages() int {
+	bf.mutex.RLock()
+	defer bf.mutex.RUnlock()
+	return int(bf.numPages) // #nosec G115
+}
+
+// ReadBTreePage reads a B+Tree page from disk
+func (bf *BTreeFile) ReadBTreePage(pageID *page.PageDescriptor) (*BTreePage, error) {
+	if pageID == nil {
+		return nil, fmt.Errorf("page ID cannot be nil")
+	}
+
+	if pageID.FileID() != bf.indexID {
+		return nil, fmt.Errorf("page ID index mismatch")
+	}
+
+	pageData, err := bf.ReadPageData(pageID.PageNo())
+	if err != nil {
+		return nil, fmt.Errorf("failed to read page %d (numPages=%d): %w", pageID.PageNo(), bf.NumPages(), err)
+	}
+
+	btreePage, err := DeserializeBTreePage(pageData, pageID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to deserialize page: %w", err)
+	}
+	return btreePage, nil
+}
+
+// ReadPage implements the DbFile interface
+func (bf *BTreeFile) ReadPage(pageID *page.PageDescriptor) (page.Page, error) {
+	return bf.ReadBTreePage(pageID)
+}
+
+// WriteBTreePage writes a B+Tree page to disk
+func (bf *BTreeFile) WriteBTreePage(p *BTreePage) error {
+	if p == nil {
+		return fmt.Errorf("page cannot be nil")
+	}
+
+	bf.mutex.Lock()
+	defer bf.mutex.Unlock()
+
+	pageID := p.pageID
+	pageData := p.GetPageData()
+
+	if err := bf.WritePageData(pageID.PageNo(), pageData); err != nil {
+		return fmt.Errorf("failed to write page data: %w", err)
+	}
+
+	if pageID.PageNo() >= bf.numPages {
+		bf.numPages = pageID.PageNo() + 1
+	}
+
+	return nil
+}
+
+// WritePage implements the DbFile interface by accepting a generic Page
+// and delegating to WriteBTreePage
+func (bf *BTreeFile) WritePage(p page.Page) error {
+	btreePage, ok := p.(*BTreePage)
+	if !ok {
+		return fmt.Errorf("page must be a BTreePage, got %T", p)
+	}
+	return bf.WriteBTreePage(btreePage)
+}
+
+// AllocatePage allocates a new page in the file
+// Note: The page is marked dirty but NOT written to disk immediately.
+// The caller is responsible for adding it to the PageStore's dirty page tracking.
+func (bf *BTreeFile) AllocatePage(tid *primitives.TransactionID, keyType types.Type, isLeaf bool, parentPage primitives.PageNumber) (*BTreePage, error) {
+	bf.mutex.Lock()
+	pageNum := bf.numPages
+	bf.numPages++
+	bf.mutex.Unlock()
+
+	pageID := page.NewPageDescriptor(bf.indexID, pageNum)
+
+	var newPage *BTreePage
+	if isLeaf {
+		newPage = NewBTreeLeafPage(pageID, keyType, parentPage)
+	} else {
+		newPage = NewBTreeInternalPage(pageID, keyType, parentPage)
+	}
+
+	newPage.MarkDirty(true, tid)
+
+	return newPage, nil
+}
+
+// SetIndexID sets the index ID for this BTree file
+// This should be called when the file is associated with a specific index
+func (bf *BTreeFile) SetIndexID(indexID primitives.FileID) {
+	bf.mutex.Lock()
+	defer bf.mutex.Unlock()
+	bf.indexID = indexID
+}
+
+// GetIndexID returns the index ID for this BTree file
+func (bf *BTreeFile) GetIndexID() primitives.FileID {
+	bf.mutex.RLock()
+	defer bf.mutex.RUnlock()
+	return bf.indexID
+}
+
+// GetID implements the DbFile interface by returning the index ID if set,
+// otherwise returns the BaseFile's ID (hash of filename).
+// This allows the file to use its natural ID from BaseFile when not explicitly set.
+func (bf *BTreeFile) GetID() primitives.FileID {
+	bf.mutex.RLock()
+	defer bf.mutex.RUnlock()
+	if bf.indexID != 0 {
+		return bf.indexID
+	}
+	return bf.BaseFile.GetID()
+}
+
+func (bf *BTreeFile) GetTupleDesc() *tuple.TupleDescription {
+	td, _ := tuple.NewTupleDesc([]types.Type{bf.keyType}, []string{"key"})
+	return td
 }

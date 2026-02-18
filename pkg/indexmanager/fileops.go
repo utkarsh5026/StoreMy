@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"storemy/pkg/primitives"
 	"storemy/pkg/storage/index"
-	"storemy/pkg/storage/index/btree"
 	"storemy/pkg/types"
 )
 
@@ -46,7 +45,7 @@ func (i *IndexFileOps) CreatePhysicalIndex(keyType types.Type, indexType index.I
 		return indexID, nil
 
 	case index.BTreeIndex:
-		btreeFile, err := btree.NewBTreeFile(i.f, keyType)
+		btreeFile, err := index.NewBTreeFile(i.f, keyType)
 		if err != nil {
 			return 0, fmt.Errorf("failed to create btree index file: %v", err)
 		}

@@ -6,13 +6,12 @@ import (
 	"storemy/pkg/memory"
 	"storemy/pkg/primitives"
 	"storemy/pkg/storage/index"
-	"storemy/pkg/storage/index/btree"
 	"storemy/pkg/storage/page"
 	"storemy/pkg/types"
 )
 
-type BTreeFile = btree.BTreeFile
-type BTreePage = btree.BTreePage
+type BTreeFile = index.BTreeFile
+type BTreePage = index.BTreePage
 
 // BTree implements the Index interface for B+Tree indexes.
 // It provides an ordered index structure that supports efficient search, range queries,
