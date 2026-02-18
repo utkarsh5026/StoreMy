@@ -12,9 +12,6 @@ func TestNewHashPage(t *testing.T) {
 	pageID := page.NewPageDescriptor(1, 0)
 	hp := NewHashPage(pageID, 5, types.IntType)
 
-	if hp.GetBucketNum() != 5 {
-		t.Errorf("Expected bucket 5, got %d", hp.GetBucketNum())
-	}
 	if hp.GetNumEntries() != 0 {
 		t.Errorf("Expected 0 entries, got %d", hp.GetNumEntries())
 	}
@@ -297,9 +294,6 @@ func TestHashPageSerialization(t *testing.T) {
 	}
 
 	// Verify properties
-	if deserializedPage.GetBucketNum() != 5 {
-		t.Errorf("Expected bucket 5, got %d", deserializedPage.GetBucketNum())
-	}
 	if deserializedPage.GetNumEntries() != 2 {
 		t.Errorf("Expected 2 entries, got %d", deserializedPage.GetNumEntries())
 	}
@@ -516,9 +510,6 @@ func TestHashPageEmptySerialization(t *testing.T) {
 		t.Fatalf("Failed to deserialize empty page: %v", err)
 	}
 
-	if deserializedPage.GetBucketNum() != 7 {
-		t.Errorf("Expected bucket 7, got %d", deserializedPage.GetBucketNum())
-	}
 	if deserializedPage.GetNumEntries() != 0 {
 		t.Errorf("Expected 0 entries, got %d", deserializedPage.GetNumEntries())
 	}

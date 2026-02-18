@@ -175,11 +175,6 @@ func (hp *HashPage) GetNumEntries() int {
 	return hp.numEntries
 }
 
-// GetBucketNum returns the hash bucket number this page belongs to.
-func (hp *HashPage) GetBucketNum() BucketNumber {
-	return hp.bucketNum
-}
-
 // GetOverflowPage returns the page number of the linked overflow page.
 func (hp *HashPage) GetOverflowPageNum() primitives.PageNumber {
 	return hp.overflowPage
@@ -356,14 +351,6 @@ func (hf *HashFile) SetIndexID(indexID primitives.FileID) {
 	hf.mutex.Lock()
 	defer hf.mutex.Unlock()
 	hf.indexID = indexID
-}
-
-// GetIndexID returns the index ID for this hash file.
-// Returns 0 if no index ID has been set.
-func (hf *HashFile) GetIndexID() primitives.FileID {
-	hf.mutex.RLock()
-	defer hf.mutex.RUnlock()
-	return hf.indexID
 }
 
 // GetID implements the DbFile interface by returning the index ID if set,

@@ -171,22 +171,9 @@ func TestInternalPageChildOperations(t *testing.T) {
 		t.Errorf("Expected 2 entries with 3 children, got %d", btreePage.GetNumEntries())
 	}
 
-	// Test get child key
-	key, err := btreePage.GetChildKey(1)
-	if err != nil {
-		t.Fatalf("Failed to get child key: %v", err)
-	}
-	if eq, _ := key.Compare(primitives.Equals, types.NewIntField(10)); !eq {
-		t.Error("Got wrong child key")
-	}
-
 	// Test update child key
 	if err := btreePage.UpdateChildrenKey(1, types.NewIntField(15)); err != nil {
 		t.Fatalf("Failed to update child key: %v", err)
-	}
-	key, _ = btreePage.GetChildKey(1)
-	if eq, _ := key.Compare(primitives.Equals, types.NewIntField(15)); !eq {
-		t.Error("Child key not updated correctly")
 	}
 
 	// Test remove child
@@ -414,9 +401,6 @@ func TestPageRelations(t *testing.T) {
 	}
 
 	// Test leaf links
-	if btreePage.HasPreviousLeaf() {
-		t.Error("Should not have previous leaf initially")
-	}
 	if btreePage.HasNextLeaf() {
 		t.Error("Should not have next leaf initially")
 	}
@@ -424,9 +408,6 @@ func TestPageRelations(t *testing.T) {
 	btreePage.PrevLeaf = 4
 	btreePage.NextLeaf = 6
 
-	if !btreePage.HasPreviousLeaf() {
-		t.Error("Should have previous leaf")
-	}
 	if !btreePage.HasNextLeaf() {
 		t.Error("Should have next leaf")
 	}
@@ -514,8 +495,5 @@ func TestErrorConditions(t *testing.T) {
 
 	if err := internalPage.UpdateChildrenKey(0, types.NewIntField(10)); err == nil {
 		t.Error("Should error when trying to update key of first child")
-	}
-	if _, err := internalPage.GetChildKey(10); err == nil {
-		t.Error("Should error on invalid child index")
 	}
 }

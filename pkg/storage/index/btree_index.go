@@ -158,13 +158,6 @@ func (p *BTreePage) PageNo() primitives.PageNumber {
 	return p.pageID.PageNo()
 }
 
-func (p *BTreePage) GetChildKey(index int) (types.Field, error) {
-	if index < 0 || index >= len(p.InternalPages) {
-		return nil, fmt.Errorf("invalid index %d for getting child key", index)
-	}
-	return p.InternalPages[index].Key, nil
-}
-
 func (p *BTreePage) InsertEntry(e *IndexEntry, index int) error {
 	if index < -1 || index > len(p.Entries) {
 		return fmt.Errorf("invalid index %d for inserting element", index)
@@ -240,10 +233,6 @@ func (p *BTreePage) IsLeafPage() bool {
 
 func (p *BTreePage) IsRoot() bool {
 	return p.ParentPage == primitives.InvalidPageNumber
-}
-
-func (p *BTreePage) HasPreviousLeaf() bool {
-	return p.PrevLeaf != primitives.InvalidPageNumber
 }
 
 func (p *BTreePage) HasNextLeaf() bool {
@@ -549,13 +538,6 @@ func (bf *BTreeFile) SetIndexID(indexID primitives.FileID) {
 	bf.mutex.Lock()
 	defer bf.mutex.Unlock()
 	bf.indexID = indexID
-}
-
-// GetIndexID returns the index ID for this BTree file
-func (bf *BTreeFile) GetIndexID() primitives.FileID {
-	bf.mutex.RLock()
-	defer bf.mutex.RUnlock()
-	return bf.indexID
 }
 
 // GetID implements the DbFile interface by returning the index ID if set,
