@@ -5,12 +5,16 @@ import (
 	"storemy/pkg/catalog/schema"
 	"storemy/pkg/catalog/systemtable"
 	"storemy/pkg/concurrency/transaction"
+	"storemy/pkg/execution/scanner"
 	"storemy/pkg/log/wal"
 	"storemy/pkg/memory"
 	btreeindex "storemy/pkg/memory/wrappers/btree_index"
 	hashindex "storemy/pkg/memory/wrappers/hash_index"
 	"storemy/pkg/primitives"
+	"storemy/pkg/storage/heap"
 	"storemy/pkg/storage/index"
+	"storemy/pkg/storage/page"
+	"storemy/pkg/tuple"
 	"storemy/pkg/types"
 )
 
@@ -155,6 +159,290 @@ func (im *IndexManager) DeletePhysicalIndex(filePath primitives.Filepath) error 
 
 	if err := filePath.Remove(); err != nil {
 		return fmt.Errorf("failed to remove file %s: %v", filePath.String(), err)
+	}
+
+	return nil
+}
+
+// insertIntoIndex scans a table and inserts all tuples into an index.
+// It performs a sequential scan of the table file and for each tuple,
+// extracts the value at the specified column index and inserts it into
+// the index using the provided insert function.
+func (im *IndexManager) insertIntoIndex(tx *transaction.TransactionContext, tableFile *heap.HeapFile, col primitives.ColumnID, insertFunc func(key types.Field, rid *tuple.TupleRecordID) error) error {
+	seqScan, err := scanner.NewSeqScan(tx, tableFile.GetID(), tableFile, im.pageStore)
+	if err != nil {
+		return fmt.Errorf("failed to create sequential scan: %v", err)
+	}
+
+	if err := seqScan.Open(); err != nil {
+		return fmt.Errorf("failed to open sequential scan: %v", err)
+	}
+	defer seqScan.Close()
+
+	for {
+		t, err := seqScan.Next()
+		if t == nil {
+			break
+		}
+		if err != nil {
+			return fmt.Errorf("failed to scan tuple: %v", err)
+		}
+
+		key, err := t.GetField(col)
+		if err != nil {
+			return fmt.Errorf("failed to get field at index %d: %v", col, err)
+		}
+
+		if key == nil {
+			continue
+		}
+
+		if t.TableNotAssigned() {
+			return fmt.Errorf("tuple missing record ID")
+		}
+
+		if err := insertFunc(key, t.RecordID); err != nil {
+			return fmt.Errorf("failed to insert key into index: %v", err)
+		}
+	}
+
+	return nil
+}
+
+// PopulateIndex builds an index by scanning an existing table and inserting all tuples.
+// This method is typically called after creating a new index to populate it with
+// existing data from the table. It performs the following steps:
+//
+// The method validates that the column index is within the valid range for
+// the table's schema before beginning the population process.
+//
+// Parameters:
+//   - tx: Transaction context for the index population operation
+//   - filePath: Path to the physical index file on disk
+//   - tableFile: The database file containing the table data to index.
+//     Must be a heap file implementation.
+//   - columnIndex: Zero-based index of the column to create the index on.
+//     Must be within the valid range [0, numColumns-1].
+//   - keyType: The data type of the indexed column
+//   - indexType: The type of index structure (HashIndex or BTreeIndex)
+func (im *IndexManager) PopulateIndex(tx *transaction.TransactionContext, file primitives.Filepath, table page.DbFile, col primitives.ColumnID, keyType types.Type, indexType index.IndexType) error {
+	idx, err := im.openIndex(tx, keyType, file, indexType)
+	if err != nil {
+		return err
+	}
+
+	heapFile, ok := table.(*heap.HeapFile)
+	if !ok {
+		return fmt.Errorf("expected heap file for table, got %T", table)
+	}
+
+	tupleDesc := heapFile.GetTupleDesc()
+	if tupleDesc == nil {
+		return fmt.Errorf("table has no schema definition")
+	}
+
+	numFields := tupleDesc.NumFields()
+	if col >= numFields {
+		return fmt.Errorf("column index %d is out of range for table with %d columns", col, numFields)
+	}
+
+	return im.insertIntoIndex(tx, heapFile, col, func(key types.Field, rid *tuple.TupleRecordID) error {
+		return idx.Insert(key, rid)
+	})
+}
+
+func (im *IndexManager) openIndex(tx *transaction.TransactionContext, keyType types.Type, filePath primitives.Filepath, indexType index.IndexType) (index.Index, error) {
+	switch indexType {
+	case index.HashIndex:
+		hashFile, err := index.NewHashFile(filePath, keyType, index.DefaultBuckets)
+		if err != nil {
+			return nil, fmt.Errorf("failed to open hash index: %v", err)
+		}
+		defer hashFile.Close()
+
+		return hashindex.NewHashIndex(hashFile.GetID(), keyType, hashFile, im.pageStore, tx), nil
+
+	case index.BTreeIndex:
+		btreeFile, err := index.NewBTreeFile(filePath, keyType)
+		if err != nil {
+			return nil, fmt.Errorf("failed to open btree index: %v", err)
+		}
+		defer btreeFile.Close()
+
+		return btreeindex.NewBTree(btreeFile.GetID(), keyType, btreeFile, tx, im.pageStore), nil
+
+	default:
+		return nil, fmt.Errorf("unsupported index type: %s", indexType)
+	}
+}
+
+// operationType represents the type of operation being performed on an index.
+// It is used internally to distinguish between different DML operations
+// and route them to the appropriate index methods.
+type operationType int
+
+const (
+	insertOp operationType = iota
+	deleteOp
+)
+
+// String returns a human-readable string representation of the operation type.
+// This is useful for error messages and logging.
+func (op operationType) String() string {
+	switch op {
+	case insertOp:
+		return "insert"
+	case deleteOp:
+		return "delete"
+	default:
+		return "unknown"
+	}
+}
+
+// processIndexOperation performs a specified operation (insert or delete) on all indexes
+// associated with a table for a given tuple. This is the core method that coordinates
+// index maintenance across all index types.
+func (i *IndexManager) processIndexOperation(ctx TxCtx, tableID primitives.FileID, t *tuple.Tuple, opType operationType) error {
+	if t == nil || t.TableNotAssigned() {
+		return fmt.Errorf("tuple must be non-nil and have a RecordID")
+	}
+
+	indexes, err := i.getIndexesForTable(ctx, tableID)
+	if err != nil {
+		return fmt.Errorf("failed to get indexes for table %d: %v", tableID, err)
+	}
+
+	if len(indexes) == 0 {
+		return nil
+	}
+
+	for _, idx := range indexes {
+		key, err := i.extractKey(t, idx.metadata)
+		indexName := idx.metadata.IndexName
+		if err != nil {
+			return fmt.Errorf("failed to extract key for index %s: %v", indexName, err)
+		}
+
+		var opErr error
+		switch opType {
+		case insertOp:
+			opErr = i.applyIndexOperation(idx, key, t.RecordID, insertOp)
+		case deleteOp:
+			opErr = i.applyIndexOperation(idx, key, t.RecordID, deleteOp)
+		}
+
+		if opErr != nil {
+			return fmt.Errorf("failed to %s index %s: %v", opType.String(), indexName, opErr)
+		}
+	}
+
+	return nil
+}
+
+// applyIndexOperation applies a specific operation to a single index.
+// This function handles the type-specific logic for different index implementations
+// (B-Tree and Hash indexes) and delegates to their respective Insert or Delete methods.
+func (i *IndexManager) applyIndexOperation(idx *IndexWithMetadata, key types.Field, rid *tuple.TupleRecordID, opType operationType) error {
+	switch v := idx.index.(type) {
+	case *btreeindex.BTree:
+		if opType == insertOp {
+			return v.Insert(key, rid)
+		}
+		return v.Delete(key, rid)
+	case *hashindex.HashIndex:
+		if opType == insertOp {
+			return v.Insert(key, rid)
+		}
+		return v.Delete(key, rid)
+	default:
+		return fmt.Errorf("unsupported index type for %s", idx.metadata.IndexName)
+	}
+}
+
+// extractKey extracts the indexed column value from a tuple.
+// This method retrieves the field at the column position specified in the
+// index metadata and validates that it matches the expected type.
+func (i *IndexManager) extractKey(t *tuple.Tuple, metadata *IndexMetadata) (types.Field, error) {
+	colIndex := metadata.ColumnIndex
+	if colIndex >= t.TupleDesc.NumFields() {
+		return nil, fmt.Errorf("invalid column index %d for tuple with %d fields",
+			colIndex, t.TupleDesc.NumFields())
+	}
+
+	field, err := t.GetField(colIndex)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get field at index %d: %v", colIndex, err)
+	}
+
+	if field.Type() != metadata.KeyType {
+		return nil, fmt.Errorf("field type mismatch: expected %v, got %v",
+			metadata.KeyType, field.Type())
+	}
+
+	return field, nil
+}
+
+// OnInsert maintains all indexes for a table when a new tuple is inserted.
+// This method extracts the indexed column values from the tuple and inserts
+// them into all applicable indexes for the table.
+//
+// The operation is atomic across all indexes - if any index insertion fails,
+// an error is returned. However, partial insertions may have occurred before
+// the failure, so callers should handle rollback at a higher level.
+//
+// Parameters:
+//   - ctx: Transaction context for the operation
+//   - tableID: The ID of the table where the tuple is being inserted
+//   - t: The tuple being inserted. Must be non-nil and have a valid RecordID
+//
+// Returns:
+//   - error: nil if all index insertions succeed, or an error describing the failure
+func (i *IndexManager) OnInsert(ctx TxCtx, tableID primitives.FileID, t *tuple.Tuple) error {
+	return i.processIndexOperation(ctx, tableID, t, insertOp)
+}
+
+// OnDelete maintains all indexes for a table when a tuple is deleted.
+// This method extracts the indexed column values from the tuple being deleted
+// and removes the corresponding entries from all applicable indexes.
+//
+// The operation is atomic across all indexes - if any index deletion fails,
+// an error is returned. Partial deletions may have occurred before the failure.
+//
+// Parameters:
+//   - ctx: Transaction context for the operation
+//   - tableID: The ID of the table where the tuple is being deleted
+//   - t: The tuple being deleted. Must be non-nil and have a valid RecordID
+//
+// Returns:
+//   - error: nil if all index deletions succeed, or an error describing the failure
+func (im *IndexManager) OnDelete(ctx TxCtx, tableID primitives.FileID, t *tuple.Tuple) error {
+	return im.processIndexOperation(ctx, tableID, t, deleteOp)
+}
+
+// OnUpdate maintains all indexes for a table when a tuple is updated.
+// This is implemented as a delete-then-insert operation to ensure proper
+// index maintenance when indexed column values change.
+//
+// If the insertion fails after deletion, the method attempts to re-insert
+// the old tuple to maintain consistency, though this rollback may also fail.
+// Callers should implement proper transaction rollback mechanisms.
+//
+// Parameters:
+//   - ctx: Transaction context for the operation
+//   - tableID: The ID of the table where the tuple is being updated
+//   - old: The tuple before the update. Must be non-nil and have a valid RecordID
+//   - updated: The tuple after the update. Must be non-nil and have a valid RecordID
+//
+// Returns:
+//   - error: nil if both deletion and insertion succeed, or an error describing the failure
+func (im *IndexManager) OnUpdate(ctx TxCtx, tableID primitives.FileID, old, updated *tuple.Tuple) error {
+	if err := im.OnDelete(ctx, tableID, old); err != nil {
+		return err
+	}
+
+	if err := im.OnInsert(ctx, tableID, updated); err != nil {
+		_ = im.OnInsert(ctx, tableID, old)
+		return err
 	}
 
 	return nil

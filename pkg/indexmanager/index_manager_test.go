@@ -218,7 +218,7 @@ func TestPopulateIndex(t *testing.T) {
 	}
 
 	// Populate index (on empty table)
-	err = im.PopulateIndex(ctx, indexFilePath, 1, heapFile, 0, types.IntType, index.BTreeIndex)
+	err = im.PopulateIndex(ctx, indexFilePath, heapFile, 0, types.IntType, index.BTreeIndex)
 	if err != nil {
 		t.Fatalf("Failed to populate index: %v", err)
 	}
@@ -465,7 +465,7 @@ func TestPopulateIndex_WithData(t *testing.T) {
 	}
 
 	// Populate index
-	err = im.PopulateIndex(ctx, indexFilePath, 1, heapFile, 0, types.IntType, index.BTreeIndex)
+	err = im.PopulateIndex(ctx, indexFilePath, heapFile, 0, types.IntType, index.BTreeIndex)
 	if err != nil {
 		t.Fatalf("Failed to populate index: %v", err)
 	}
@@ -519,7 +519,7 @@ func TestPopulateIndex_HashIndex(t *testing.T) {
 	}
 
 	// Populate hash index
-	err = im.PopulateIndex(ctx, indexFilePath, 2, heapFile, 0, types.IntType, index.HashIndex)
+	err = im.PopulateIndex(ctx, indexFilePath, heapFile, 0, types.IntType, index.HashIndex)
 	if err != nil {
 		t.Fatalf("Failed to populate hash index: %v", err)
 	}
@@ -762,7 +762,7 @@ func TestIndexManager_Lifecycle_CompleteWorkflow(t *testing.T) {
 	}
 
 	// Step 3: Populate index
-	err = im.PopulateIndex(ctx, indexPath, 100, heapFile, 0, types.IntType, index.BTreeIndex)
+	err = im.PopulateIndex(ctx, indexPath, heapFile, 0, types.IntType, index.BTreeIndex)
 	if err != nil {
 		t.Fatalf("Step 3 failed - Populate index: %v", err)
 	}
