@@ -47,36 +47,23 @@ func (tm *TupleManager) NewInsertOp(ctx *transaction.TransactionContext, dbFile 
 }
 
 // Validate checks if the InsertOp is valid before execution.
-// This validates:
-//   - Operation has not already been executed
-//   - Transaction context is not nil
-//   - DbFile is not nil
-//   - At least one tuple to insert
-//   - All tuples have matching schemas
 func (op *InsertOp) Validate() error {
-	if err := validateExecuted(op.executed, "insert"); err != nil {
+	if err := validateBasic("insert", op.ctx, op.dbFile, op.tuples, op.executed); err != nil {
 		return err
 	}
 
-	if err := validateTransactionContext(op.ctx); err != nil {
-		return err
+	fileSchema := op.dbFile.GetTupleDesc()
+	if fileSchema == nil {
+		return nil
 	}
 
-	// Check for nil heap file before converting to interface
-	if op.dbFile == nil {
-		return fmt.Errorf("dbFile cannot be nil")
-	}
-
-	if err := validateDbFile(op.dbFile); err != nil {
-		return err
-	}
-
-	if err := validateTuplesNotEmpty(op.tuples, "insert"); err != nil {
-		return err
-	}
-
-	if err := validateSchemaMatch(op.tuples, op.dbFile); err != nil {
-		return err
+	for i, t := range op.tuples {
+		if t == nil {
+			return fmt.Errorf("tuple at index %d is nil", i)
+		}
+		if !t.TupleDesc.Equals(fileSchema) {
+			return fmt.Errorf("tuple at index %d has incompatible schema", i)
+		}
 	}
 
 	return nil

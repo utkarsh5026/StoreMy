@@ -10,11 +10,6 @@ import (
 )
 
 // DeleteOp handles batch deletion of tuples within a single transaction.
-// This operation allows deleting multiple tuples efficiently by:
-//   - Batching WAL writes
-//   - Processing tuples on the same page together
-//   - Updating indexes once after all deletions
-//   - Reducing lock acquisition overhead
 type DeleteOp struct {
 	tm     *TupleManager
 	ctx    *transaction.TransactionContext
@@ -44,39 +39,12 @@ func (tm *TupleManager) NewDeleteOp(ctx *transaction.TransactionContext, dbFile 
 }
 
 // Validate checks if the DeleteOp is valid before execution.
-// This validates:
-//   - Operation has not already been executed
-//   - Transaction context is not nil
-//   - DbFile is not nil
-//   - At least one tuple to delete
-//   - All tuples have valid RecordIDs
 func (op *DeleteOp) Validate() error {
-	if err := validateExecuted(op.executed, "delete"); err != nil {
+	if err := validateBasic("delete", op.ctx, op.dbFile, op.tuples, op.executed); err != nil {
 		return err
 	}
 
-	if err := validateTransactionContext(op.ctx); err != nil {
-		return err
-	}
-
-	// Check for nil heap file before converting to interface
-	if op.dbFile == nil {
-		return fmt.Errorf("dbFile cannot be nil")
-	}
-
-	if err := validateDbFile(op.dbFile); err != nil {
-		return err
-	}
-
-	if err := validateTuplesNotEmpty(op.tuples, "delete"); err != nil {
-		return err
-	}
-
-	if err := validateTuplesHaveRecordIDs(op.tuples, "tuple"); err != nil {
-		return err
-	}
-
-	return nil
+	return validateTuplesHaveRecordIDs(op.tuples, "tuple")
 }
 
 // Execute performs the batch delete operation.
@@ -140,7 +108,7 @@ func (op *DeleteOp) handleDelete(t *tuple.Tuple) ([]*heap.HeapPage, error) {
 	pageID := t.RecordID.PageID
 	hpid, ok := pageID.(*page.PageDescriptor)
 	if !ok {
-		return nil, fmt.Errorf("wrong poage id format")
+		return nil, fmt.Errorf("wrong page id format")
 	}
 
 	pg, err := op.tm.pageProvider.GetPage(op.ctx, op.dbFile, hpid, transaction.ReadWrite)
