@@ -126,22 +126,36 @@ func (im *IndexManager) NewLoader(tx *transaction.TransactionContext) *IndexLoad
 	}
 }
 
-func (im *IndexManager) NewFileOps(filePath primitives.Filepath) *IndexFileOps {
-	return &IndexFileOps{
-		f: filePath,
-	}
-}
-
 // CreatePhysicalIndex creates a physical index file and returns its file ID.
 // This is a convenience wrapper that delegates to IndexFileOps.
 func (im *IndexManager) CreatePhysicalIndex(filePath primitives.Filepath, keyType types.Type, indexType index.IndexType) (primitives.FileID, error) {
-	ops := im.NewFileOps(filePath)
-	return ops.CreatePhysicalIndex(keyType, indexType)
+	if err := filePath.MkdirAll(0o755); err != nil {
+		return 0, fmt.Errorf("failed to create directory: %v", err)
+	}
+
+	file, err := index.OpenFile(indexType, filePath, keyType)
+	if err != nil {
+		return 0, fmt.Errorf("failed to create index file: %v", err)
+	}
+
+	indexID := file.GetID()
+	if err := file.Close(); err != nil {
+		return 0, fmt.Errorf("failed to close index file: %v", err)
+	}
+
+	return indexID, nil
 }
 
 // DeletePhysicalIndex removes a physical index file from disk.
 // This is a convenience wrapper that delegates to IndexFileOps.
 func (im *IndexManager) DeletePhysicalIndex(filePath primitives.Filepath) error {
-	ops := im.NewFileOps(filePath)
-	return ops.DeletePhysicalIndex()
+	if !filePath.Exists() {
+		return nil
+	}
+
+	if err := filePath.Remove(); err != nil {
+		return fmt.Errorf("failed to remove file %s: %v", filePath.String(), err)
+	}
+
+	return nil
 }

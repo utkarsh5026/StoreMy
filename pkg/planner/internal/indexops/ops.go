@@ -53,7 +53,7 @@ func (i *IndexOps) DeleteIndexFromSystem(name string) error {
 		return fmt.Errorf("failed to drop index from catalog: %w", err)
 	}
 
-	if err := i.im.NewFileOps(metadata.FilePath).DeletePhysicalIndex(); err != nil {
+	if err := i.im.DeletePhysicalIndex(metadata.FilePath); err != nil {
 		return fmt.Errorf("failed to delete index file %s: %w", metadata.FilePath, err)
 	}
 	return nil

@@ -118,7 +118,7 @@ func (p *DropTablePlan) dropIndex(ops *catalogmanager.IndexCatalogOperation, ind
 		return fmt.Errorf("failed to drop index from catalog: %w", err)
 	}
 
-	if err := p.ctx.IndexManager().NewFileOps(metadata.FilePath).DeletePhysicalIndex(); err != nil {
+	if err := p.ctx.IndexManager().DeletePhysicalIndex(metadata.FilePath); err != nil {
 		return fmt.Errorf("failed to delete index file %s: %w", metadata.FilePath, err)
 	}
 
