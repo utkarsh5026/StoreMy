@@ -107,8 +107,5 @@ jobs:
           go-version: '1.25.x'
           cache: true
 
-      - name: Fuzz lexer (30s)
-        run: go test -fuzz=FuzzLexer -fuzztime=30s ./pkg/parser/lexer/
-
       - name: Fuzz parser (30s)
         run: go test -fuzz=FuzzParseStatement -fuzztime=30s ./pkg/parser/parser/

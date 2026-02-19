@@ -89,6 +89,7 @@ func (lm *LockManager) attemptToAcquireLock(tid *primitives.TransactionID, pid p
 	const maxRetryDelay = 50 * time.Millisecond
 	maxRetries := 100
 	retryDelay := time.Millisecond
+	addedToWaitQueue := false
 
 	for attempt := range maxRetries {
 		lm.mutex.Lock()
@@ -113,11 +114,14 @@ func (lm *LockManager) attemptToAcquireLock(tid *primitives.TransactionID, pid p
 			return nil
 		}
 
-		if err := lm.waitQueue.Add(tid, pid, lockType); err != nil {
-			lm.mutex.Unlock()
-			return err
+		if !addedToWaitQueue {
+			if err := lm.waitQueue.Add(tid, pid, lockType); err != nil {
+				lm.mutex.Unlock()
+				return err
+			}
+			lm.updateDependencies(tid, pid, lockType)
+			addedToWaitQueue = true
 		}
-		lm.updateDependencies(tid, pid, lockType)
 
 		if lm.depGraph.HasCycle() {
 			lm.waitQueue.RemoveRequest(tid, pid)
@@ -130,6 +134,11 @@ func (lm *LockManager) attemptToAcquireLock(tid *primitives.TransactionID, pid p
 		currentDelay := lm.calculateRetryDelay(attempt, retryDelay, maxRetryDelay)
 		time.Sleep(currentDelay)
 	}
+
+	lm.mutex.Lock()
+	lm.waitQueue.RemoveRequest(tid, pid)
+	lm.depGraph.RemoveTransaction(tid)
+	lm.mutex.Unlock()
 
 	return fmt.Errorf("timeout waiting for lock on page %v", pid)
 }
