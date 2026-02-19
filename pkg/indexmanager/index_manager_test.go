@@ -14,7 +14,6 @@ import (
 	"storemy/pkg/storage/page"
 	"storemy/pkg/tuple"
 	"storemy/pkg/types"
-	"sync"
 	"testing"
 )
 
@@ -306,32 +305,14 @@ func TestOnUpdate(t *testing.T) {
 	}
 }
 
-func TestInvalidateCache(t *testing.T) {
-	im, _, _, _, _ := setupTestEnvironment(t)
-
-	// Add something to cache
-	im.cache.Set(1, []*IndexWithMetadata{})
-
-	// Verify it's cached
-	if _, exists := im.cache.Get(1); !exists {
-		t.Error("Expected index to be cached")
-	}
-
-	// Invalidate
-	im.InvalidateCache(1)
-
-	// Verify it's removed
-	if _, exists := im.cache.Get(1); exists {
-		t.Error("Expected cache to be invalidated")
-	}
-}
-
 func TestClose(t *testing.T) {
 	im, _, _, _, _ := setupTestEnvironment(t)
 
 	// Add some mock data to cache
-	im.cache.Set(1, []*IndexWithMetadata{})
-	im.cache.Set(2, []*IndexWithMetadata{})
+	im.cacheMu.Lock()
+	im.cache[1] = []*IndexWithMetadata{}
+	im.cache[2] = []*IndexWithMetadata{}
+	im.cacheMu.Unlock()
 
 	err := im.Close()
 	if err != nil {
@@ -339,61 +320,15 @@ func TestClose(t *testing.T) {
 	}
 
 	// Verify cache is cleared
-	if _, exists := im.cache.Get(1); exists {
+	im.cacheMu.RLock()
+	_, exists1 := im.cache[1]
+	_, exists2 := im.cache[2]
+	im.cacheMu.RUnlock()
+	if exists1 {
 		t.Error("Cache should be cleared after Close")
 	}
-	if _, exists := im.cache.Get(2); exists {
+	if exists2 {
 		t.Error("Cache should be cleared after Close")
-	}
-}
-
-func TestIndexCache_GetOrLoad(t *testing.T) {
-	cache := newIndexCache()
-
-	loadCount := 0
-	loader := func() ([]*IndexWithMetadata, error) {
-		loadCount++
-		return []*IndexWithMetadata{}, nil
-	}
-
-	// First call should load
-	_, err := cache.GetOrLoad(1, loader)
-	if err != nil {
-		t.Fatalf("GetOrLoad failed: %v", err)
-	}
-
-	if loadCount != 1 {
-		t.Errorf("Expected loader to be called once, got %d", loadCount)
-	}
-
-	// Second call should use cache
-	_, err = cache.GetOrLoad(1, loader)
-	if err != nil {
-		t.Fatalf("GetOrLoad failed: %v", err)
-	}
-
-	if loadCount != 1 {
-		t.Errorf("Expected loader to not be called again, got %d calls", loadCount)
-	}
-}
-
-func TestIndexCache_Clear(t *testing.T) {
-	cache := newIndexCache()
-
-	// Add some items
-	cache.Set(1, []*IndexWithMetadata{})
-	cache.Set(2, []*IndexWithMetadata{})
-
-	// Clear
-	old := cache.Clear()
-
-	if len(old) != 2 {
-		t.Errorf("Expected 2 items in cleared cache, got %d", len(old))
-	}
-
-	// Verify cache is empty
-	if _, exists := cache.Get(1); exists {
-		t.Error("Cache should be empty after Clear")
 	}
 }
 
@@ -555,29 +490,6 @@ func TestOnUpdate_WithMultipleIndexes(t *testing.T) {
 	// The basic OnUpdate functionality is already tested in other tests
 }
 
-func TestInvalidateCache_MultipleTables(t *testing.T) {
-	im, _, _, _, _ := setupTestEnvironment(t)
-
-	// Add indexes for multiple tables to cache
-	im.cache.Set(1, []*IndexWithMetadata{})
-	im.cache.Set(2, []*IndexWithMetadata{})
-	im.cache.Set(3, []*IndexWithMetadata{})
-
-	// Invalidate one table
-	im.InvalidateCache(2)
-
-	// Verify only table 2 is removed
-	if _, exists := im.cache.Get(1); !exists {
-		t.Error("Table 1 should still be cached")
-	}
-	if _, exists := im.cache.Get(2); exists {
-		t.Error("Table 2 should be invalidated")
-	}
-	if _, exists := im.cache.Get(3); !exists {
-		t.Error("Table 3 should still be cached")
-	}
-}
-
 func TestClose_WithOpenIndexes(t *testing.T) {
 	im, _, _, _, tempDir := setupTestEnvironment(t)
 
@@ -596,8 +508,10 @@ func TestClose_WithOpenIndexes(t *testing.T) {
 	}
 
 	// Manually add some indexes to cache
-	im.cache.Set(1, []*IndexWithMetadata{})
-	im.cache.Set(2, []*IndexWithMetadata{})
+	im.cacheMu.Lock()
+	im.cache[1] = []*IndexWithMetadata{}
+	im.cache[2] = []*IndexWithMetadata{}
+	im.cacheMu.Unlock()
 
 	// Close should clear cache
 	err = im.Close()
@@ -606,70 +520,15 @@ func TestClose_WithOpenIndexes(t *testing.T) {
 	}
 
 	// Verify cache is cleared
-	if _, exists := im.cache.Get(1); exists {
+	im.cacheMu.RLock()
+	_, exists1 := im.cache[1]
+	_, exists2 := im.cache[2]
+	im.cacheMu.RUnlock()
+	if exists1 {
 		t.Error("Cache should be cleared after Close")
 	}
-	if _, exists := im.cache.Get(2); exists {
+	if exists2 {
 		t.Error("Cache should be cleared after Close")
-	}
-}
-
-func TestIndexCache_GetOrLoad_ConcurrentLoads(t *testing.T) {
-	cache := newIndexCache()
-
-	loadCount := int64(0)
-	var loadMu sync.Mutex
-
-	loader := func() ([]*IndexWithMetadata, error) {
-		loadMu.Lock()
-		loadCount++
-		loadMu.Unlock()
-		return []*IndexWithMetadata{}, nil
-	}
-
-	// Multiple goroutines try to load the same table
-	var wg sync.WaitGroup
-	for i := 0; i < 10; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			_, err := cache.GetOrLoad(1, loader)
-			if err != nil {
-				t.Errorf("GetOrLoad failed: %v", err)
-			}
-		}()
-	}
-	wg.Wait()
-
-	// Loader should be called at least once, but possibly more due to race conditions
-	// The double-check locking in Set prevents duplicate storage, but doesn't prevent concurrent loads
-	if loadCount == 0 {
-		t.Error("Loader should have been called at least once")
-	}
-}
-
-func TestIndexCache_Set_DoubleCheckLocking(t *testing.T) {
-	cache := newIndexCache()
-
-	indexes1 := []*IndexWithMetadata{{metadata: &IndexMetadata{IndexMetadata: systemtable.IndexMetadata{IndexID: 1}}}}
-	indexes2 := []*IndexWithMetadata{{metadata: &IndexMetadata{IndexMetadata: systemtable.IndexMetadata{IndexID: 2}}}}
-
-	// First set
-	result1 := cache.Set(1, indexes1)
-	if len(result1) != 1 || result1[0].metadata.IndexID != 1 {
-		t.Error("First set should return the set value")
-	}
-
-	// Second set should return the already-cached value
-	result2 := cache.Set(1, indexes2)
-	if len(result2) != 1 || result2[0].metadata.IndexID != 1 {
-		t.Error("Second set should return the already-cached value, not the new value")
-	}
-
-	// Verify cache still contains the first value
-	cached, exists := cache.Get(1)
-	if !exists || len(cached) != 1 || cached[0].metadata.IndexID != 1 {
-		t.Error("Cache should contain the first set value")
 	}
 }
 

@@ -18,9 +18,14 @@ import (
 	"storemy/pkg/storage/page"
 	"storemy/pkg/tuple"
 	"storemy/pkg/types"
+	"sync"
 )
 
+// TxCtx is a convenience alias for a transaction context pointer used throughout this package.
 type TxCtx = *transaction.TransactionContext
+
+// IndexType is a convenience alias for index.IndexType, re-exported so callers
+// do not need to import the storage/index package directly.
 type IndexType = index.IndexType
 
 // CatalogReader defines the interface for reading index metadata from the catalog.
@@ -41,7 +46,9 @@ type IndexMetadata struct {
 	KeyType     types.Type          // Type of the indexed column (resolved from schema)
 }
 
-// indexWithMetadata wraps an index (BTree or HashIndex) with its metadata
+// IndexWithMetadata pairs an open index instance with its fully resolved metadata.
+// The index field holds the concrete implementation (BTree or HashIndex) and
+// metadata holds the catalog entry enriched with the schema-resolved column position and key type.
 type IndexWithMetadata struct {
 	index    index.Index    // Either *btreeindex.BTree or *hashindex.HashIndex
 	metadata *IndexMetadata // Resolved metadata for this index
@@ -53,18 +60,13 @@ type IndexWithMetadata struct {
 //   - Opening and caching index files
 //   - Maintaining indexes on tuple insertions/deletions
 //   - Coordinating index operations with WAL
-//
-// Responsibilities:
-//   - Index lifecycle management (open, close, cache)
-//   - Index maintenance on DML operations
-//   - Transaction-aware index operations
-//   - Thread-safe access to index structures
 type IndexManager struct {
 	catalog   CatalogReader
 	pageStore *memory.PageStore
 	wal       *wal.WAL
 
-	cache *indexCache
+	cacheMu sync.RWMutex
+	cache   map[primitives.FileID][]*IndexWithMetadata
 }
 
 // NewIndexManager creates a new IndexManager instance.
@@ -76,30 +78,26 @@ type IndexManager struct {
 //
 // Returns a new IndexManager ready to manage indexes.
 func NewIndexManager(catalog CatalogReader, pageStore *memory.PageStore, wal *wal.WAL) *IndexManager {
-	im := &IndexManager{
+	return &IndexManager{
 		catalog:   catalog,
 		pageStore: pageStore,
 		wal:       wal,
+		cache:     make(map[primitives.FileID][]*IndexWithMetadata),
 	}
-
-	im.cache = newIndexCache()
-	return im
-}
-
-// InvalidateCache removes cached indexes for a table.
-// This is typically called when indexes are created or dropped for a table.
-func (im *IndexManager) InvalidateCache(tableID primitives.FileID) {
-	im.cache.Invalidate(tableID)
 }
 
 // Close releases all resources held by the IndexManager.
-func (im *IndexManager) Close() error {
+func (i *IndexManager) Close() error {
 	var firstError error
 
-	allIndexes := im.cache.Clear()
+	i.cacheMu.Lock()
+	allIndexes := i.cache
+	i.cache = make(map[primitives.FileID][]*IndexWithMetadata)
+	i.cacheMu.Unlock()
+
 	for tableID, indexes := range allIndexes {
 		for _, idxWithMeta := range indexes {
-			if err := closeIndexFile(idxWithMeta.index); err != nil && firstError == nil {
+			if err := idxWithMeta.index.Close(); err != nil && firstError == nil {
 				firstError = fmt.Errorf("failed to close index for table %d: %v", tableID, err)
 			}
 		}
@@ -108,25 +106,10 @@ func (im *IndexManager) Close() error {
 	return firstError
 }
 
-func closeIndexFile(index index.Index) error {
-	if hashIdx, ok := index.(*hashindex.HashIndex); ok {
-		if err := hashIdx.Close(); err != nil {
-			return fmt.Errorf("failed to close hash index: %v", err)
-		}
-	}
-
-	if btreeIdx, ok := index.(*btreeindex.BTree); ok {
-		if err := btreeIdx.Close(); err != nil {
-			return fmt.Errorf("failed to close btree index: %v", err)
-		}
-	}
-
-	return nil
-}
-
-// CreatePhysicalIndex creates a physical index file and returns its file ID.
-// This is a convenience wrapper that delegates to IndexFileOps.
-func (im *IndexManager) CreatePhysicalIndex(filePath primitives.Filepath, keyType types.Type, indexType index.IndexType) (primitives.FileID, error) {
+// CreatePhysicalIndex creates a new on-disk index file and returns the file ID assigned to it.
+// The file is opened to obtain its ID and then immediately closed; the caller is responsible
+// for registering the returned ID in the catalog before the index is used.
+func (i *IndexManager) CreatePhysicalIndex(filePath primitives.Filepath, keyType types.Type, indexType index.IndexType) (primitives.FileID, error) {
 	if err := filePath.MkdirAll(0o755); err != nil {
 		return 0, fmt.Errorf("failed to create directory: %v", err)
 	}
@@ -145,8 +128,9 @@ func (im *IndexManager) CreatePhysicalIndex(filePath primitives.Filepath, keyTyp
 }
 
 // DeletePhysicalIndex removes a physical index file from disk.
-// This is a convenience wrapper that delegates to IndexFileOps.
-func (im *IndexManager) DeletePhysicalIndex(filePath primitives.Filepath) error {
+// It is a no-op if the file does not exist, making it safe to call
+// during cleanup even when index creation was only partially completed.
+func (i *IndexManager) DeletePhysicalIndex(filePath primitives.Filepath) error {
 	if !filePath.Exists() {
 		return nil
 	}
@@ -162,8 +146,8 @@ func (im *IndexManager) DeletePhysicalIndex(filePath primitives.Filepath) error 
 // It performs a sequential scan of the table file and for each tuple,
 // extracts the value at the specified column index and inserts it into
 // the index using the provided insert function.
-func (im *IndexManager) insertIntoIndex(tx *transaction.TransactionContext, tableFile *heap.HeapFile, col primitives.ColumnID, insertFunc func(key types.Field, rid *tuple.TupleRecordID) error) error {
-	seqScan, err := scanner.NewSeqScan(tx, tableFile.GetID(), tableFile, im.pageStore)
+func (i *IndexManager) insertIntoIndex(tx *transaction.TransactionContext, tableFile *heap.HeapFile, col primitives.ColumnID, insertFunc func(key types.Field, rid *tuple.TupleRecordID) error) error {
+	seqScan, err := scanner.NewSeqScan(tx, tableFile.GetID(), tableFile, i.pageStore)
 	if err != nil {
 		return fmt.Errorf("failed to create sequential scan: %v", err)
 	}
@@ -204,23 +188,13 @@ func (im *IndexManager) insertIntoIndex(tx *transaction.TransactionContext, tabl
 }
 
 // PopulateIndex builds an index by scanning an existing table and inserting all tuples.
-// This method is typically called after creating a new index to populate it with
-// existing data from the table. It performs the following steps:
-//
-// The method validates that the column index is within the valid range for
-// the table's schema before beginning the population process.
-//
-// Parameters:
-//   - tx: Transaction context for the index population operation
-//   - filePath: Path to the physical index file on disk
-//   - tableFile: The database file containing the table data to index.
-//     Must be a heap file implementation.
-//   - columnIndex: Zero-based index of the column to create the index on.
-//     Must be within the valid range [0, numColumns-1].
-//   - keyType: The data type of the indexed column
-//   - indexType: The type of index structure (HashIndex or BTreeIndex)
-func (im *IndexManager) PopulateIndex(tx *transaction.TransactionContext, file primitives.Filepath, table page.DbFile, col primitives.ColumnID, keyType types.Type, indexType index.IndexType) error {
-	idx, err := im.openIndex(tx, keyType, file, indexType)
+// This is called after a new index is created on a non-empty table to backfill
+// existing rows. Steps:
+//  1. Opens the index file at the given path
+//  2. Validates the table file is a HeapFile and that col is within range
+//  3. Sequentially scans the table and inserts each row's key into the index
+func (i *IndexManager) PopulateIndex(tx *transaction.TransactionContext, file primitives.Filepath, table page.DbFile, col primitives.ColumnID, keyType types.Type, indexType index.IndexType) error {
+	idx, err := i.openIndex(tx, keyType, file, indexType)
 	if err != nil {
 		return err
 	}
@@ -240,12 +214,15 @@ func (im *IndexManager) PopulateIndex(tx *transaction.TransactionContext, file p
 		return fmt.Errorf("column index %d is out of range for table with %d columns", col, numFields)
 	}
 
-	return im.insertIntoIndex(tx, heapFile, col, func(key types.Field, rid *tuple.TupleRecordID) error {
+	return i.insertIntoIndex(tx, heapFile, col, func(key types.Field, rid *tuple.TupleRecordID) error {
 		return idx.Insert(key, rid)
 	})
 }
 
-func (im *IndexManager) openIndex(tx *transaction.TransactionContext, keyType types.Type, filePath primitives.Filepath, indexType index.IndexType) (index.Index, error) {
+// openIndex opens an existing index file and returns a ready-to-use index instance.
+// The raw index file is opened solely to obtain its FileID, then closed; the returned
+// index.Index is backed by the shared PageStore rather than the file handle directly.
+func (i *IndexManager) openIndex(tx *transaction.TransactionContext, keyType types.Type, filePath primitives.Filepath, indexType index.IndexType) (index.Index, error) {
 	switch indexType {
 	case index.HashIndex:
 		hashFile, err := index.NewHashFile(filePath, keyType, index.DefaultBuckets)
@@ -254,7 +231,7 @@ func (im *IndexManager) openIndex(tx *transaction.TransactionContext, keyType ty
 		}
 		defer hashFile.Close()
 
-		return hashindex.NewHashIndex(hashFile.GetID(), keyType, hashFile, im.pageStore, tx), nil
+		return hashindex.NewHashIndex(hashFile.GetID(), keyType, hashFile, i.pageStore, tx), nil
 
 	case index.BTreeIndex:
 		btreeFile, err := index.NewBTreeFile(filePath, keyType)
@@ -263,7 +240,7 @@ func (im *IndexManager) openIndex(tx *transaction.TransactionContext, keyType ty
 		}
 		defer btreeFile.Close()
 
-		return btreeindex.NewBTree(btreeFile.GetID(), keyType, btreeFile, tx, im.pageStore), nil
+		return btreeindex.NewBTree(btreeFile.GetID(), keyType, btreeFile, tx, i.pageStore), nil
 
 	default:
 		return nil, fmt.Errorf("unsupported index type: %s", indexType)
@@ -276,8 +253,8 @@ func (im *IndexManager) openIndex(tx *transaction.TransactionContext, keyType ty
 type operationType int
 
 const (
-	insertOp operationType = iota
-	deleteOp
+	insertOp operationType = iota // index entry should be added
+	deleteOp                      // index entry should be removed
 )
 
 // String returns a human-readable string representation of the operation type.
@@ -301,7 +278,7 @@ func (i *IndexManager) processIndexOperation(ctx TxCtx, tableID primitives.FileI
 		return fmt.Errorf("tuple must be non-nil and have a RecordID")
 	}
 
-	indexes, err := i.getIndexesForTable(ctx, tableID)
+	indexes, err := i.LoadIndexes(ctx, tableID)
 	if err != nil {
 		return fmt.Errorf("failed to get indexes for table %d: %v", tableID, err)
 	}
@@ -393,8 +370,8 @@ func (i *IndexManager) OnInsert(ctx TxCtx, tableID primitives.FileID, t *tuple.T
 //
 // The operation is atomic across all indexes - if any index deletion fails,
 // an error is returned. Partial deletions may have occurred before the failure.
-func (im *IndexManager) OnDelete(ctx TxCtx, tableID primitives.FileID, t *tuple.Tuple) error {
-	return im.processIndexOperation(ctx, tableID, t, deleteOp)
+func (i *IndexManager) OnDelete(ctx TxCtx, tableID primitives.FileID, t *tuple.Tuple) error {
+	return i.processIndexOperation(ctx, tableID, t, deleteOp)
 }
 
 // OnUpdate maintains all indexes for a table when a tuple is updated.
@@ -404,36 +381,32 @@ func (im *IndexManager) OnDelete(ctx TxCtx, tableID primitives.FileID, t *tuple.
 // If the insertion fails after deletion, the method attempts to re-insert
 // the old tuple to maintain consistency, though this rollback may also fail.
 // Callers should implement proper transaction rollback mechanisms.
-func (im *IndexManager) OnUpdate(ctx TxCtx, tableID primitives.FileID, old, updated *tuple.Tuple) error {
-	if err := im.OnDelete(ctx, tableID, old); err != nil {
+func (i *IndexManager) OnUpdate(ctx TxCtx, tableID primitives.FileID, old, updated *tuple.Tuple) error {
+	if err := i.OnDelete(ctx, tableID, old); err != nil {
 		return err
 	}
 
-	if err := im.OnInsert(ctx, tableID, updated); err != nil {
-		_ = im.OnInsert(ctx, tableID, old)
+	if err := i.OnInsert(ctx, tableID, updated); err != nil {
+		_ = i.OnInsert(ctx, tableID, old)
 		return err
 	}
 
 	return nil
 }
 
-// loadAndOpenIndexes loads index metadata from catalog and opens all index files for a table.
-// This is the main entry point for initializing all indexes associated with a table.
-// It performs the following steps:
-//  1. Loads index metadata from the catalog
-//  2. Opens each index file
-//  3. Returns a slice of indexes with their metadata
-//
-// If an index file fails to open, a warning is printed but the process continues
-// with the remaining indexes.
+// LoadIndexes loads and opens all indexes registered for a table.
+// Index metadata is fetched from the catalog and each file is opened via the PageStore.
+// If a single index file cannot be opened a warning is written to stderr and that index
+// is skipped; the remaining indexes are still returned. This allows the database to
+// remain operational even when an index file is missing or corrupt.
 //
 // Parameters:
-//   - ctx: Transaction context for catalog operations
-//   - tableID: The ID of the table whose indexes should be loaded
+//   - tx: Transaction context used for catalog reads
+//   - tableID: ID of the table whose indexes should be loaded
 //
 // Returns:
-//   - A slice of indexWithMetadata containing successfully opened indexes
-//   - An error if catalog access fails
+//   - []*IndexWithMetadata: Successfully opened indexes with their resolved metadata
+//   - error: Non-nil only when the catalog itself cannot be read
 func (i *IndexManager) LoadIndexes(tx *transaction.TransactionContext, tableID primitives.FileID) ([]*IndexWithMetadata, error) {
 	metadataList, err := i.loadFromCatalog(tx, tableID)
 	if err != nil {
@@ -441,22 +414,26 @@ func (i *IndexManager) LoadIndexes(tx *transaction.TransactionContext, tableID p
 	}
 
 	indexes := make([]*IndexWithMetadata, 0, len(metadataList))
-	for _, metadata := range metadataList {
-		idx, err := i.openIndex(tx, metadata.KeyType, metadata.FilePath, metadata.IndexType)
+	for _, m := range metadataList {
+		idx, err := i.openIndex(tx, m.KeyType, m.FilePath, m.IndexType)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "Warning: failed to open index %s: %v\n", metadata.IndexName, err)
+			fmt.Fprintf(os.Stderr, "Warning: failed to open index %s: %v\n", m.IndexName, err)
 			continue
 		}
 
 		indexes = append(indexes, &IndexWithMetadata{
 			index:    idx,
-			metadata: metadata,
+			metadata: m,
 		})
 	}
 
 	return indexes, nil
 }
 
+// LoadIndexForCol opens the index on the specified column of a table.
+// Returns an error if no index exists for that column or if the file cannot be opened.
+// Unlike LoadIndexes, this method returns exactly one index targeted at a specific
+// column — it is used by the planner when an index scan has already been chosen.
 func (i *IndexManager) LoadIndexForCol(tx *transaction.TransactionContext, colID primitives.ColumnID, tableID primitives.FileID) (index.Index, error) {
 	indexes, err := i.loadFromCatalog(tx, tableID)
 	if err != nil {
@@ -478,13 +455,6 @@ func (i *IndexManager) LoadIndexForCol(tx *transaction.TransactionContext, colID
 // with schema information (ColumnIndex, KeyType) to create full IndexMetadata.
 // This method enriches the catalog metadata with schema-specific information
 // needed for index operations.
-//
-// Parameters:
-//   - tableID: The ID of the table whose index metadata should be loaded
-//
-// Returns:
-//   - A slice of complete IndexMetadata with resolved schema information
-//   - An error if catalog access or schema retrieval fails
 func (i *IndexManager) loadFromCatalog(tx *transaction.TransactionContext, tableID primitives.FileID) ([]*IndexMetadata, error) {
 	catalogIndexes, err := i.catalog.GetIndexesByTable(tx, tableID)
 	if err != nil {
@@ -506,15 +476,6 @@ func (i *IndexManager) loadFromCatalog(tx *transaction.TransactionContext, table
 // resolveIndexMetadata resolves catalog metadata with schema to create complete IndexMetadata.
 // It matches column names from the catalog with actual column positions and types
 // from the table schema.
-//
-// If a column referenced by an index is not found in the schema, a warning is printed
-// and that index is skipped.
-//
-// Parameters:
-//   - catalogIndexes: Raw index metadata from the catalog
-//   - schema: The table schema containing column information
-//
-// Returns a slice of IndexMetadata with resolved column indices and key types.
 func resolveIndexMetadata(catalogIndexes []*systemtable.IndexMetadata, schema *schema.Schema) []*IndexMetadata {
 	result := make([]*IndexMetadata, 0, len(catalogIndexes))
 
