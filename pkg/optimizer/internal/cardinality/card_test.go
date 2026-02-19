@@ -5,7 +5,6 @@ import (
 	"path/filepath"
 	"storemy/pkg/catalog/catalogmanager"
 	"storemy/pkg/catalog/schema"
-	"storemy/pkg/catalog/tablecache"
 	"storemy/pkg/concurrency/transaction"
 	"storemy/pkg/log/wal"
 	"storemy/pkg/memory"
@@ -20,7 +19,6 @@ import (
 // testCatalogSetup holds all components needed for testing with a real catalog
 type testCatalogSetup struct {
 	catalog    *catalogmanager.CatalogManager
-	cache      *tablecache.TableCache
 	txRegistry *transaction.TransactionRegistry
 	store      *memory.PageStore
 	tempDir    string
@@ -47,7 +45,6 @@ func setupTestCatalogWithData(t *testing.T) *testCatalogSetup {
 
 	store := memory.NewPageStore(wal)
 	txRegistry := transaction.NewTransactionRegistry(wal)
-	cache := tablecache.NewTableCache()
 	cat := catalogmanager.NewCatalogManager(store, tempDir)
 
 	// Initialize catalog
@@ -66,7 +63,6 @@ func setupTestCatalogWithData(t *testing.T) *testCatalogSetup {
 
 	return &testCatalogSetup{
 		catalog:    cat,
-		cache:      cache,
 		txRegistry: txRegistry,
 		store:      store,
 		tempDir:    tempDir,
@@ -96,14 +92,7 @@ func (tcs *testCatalogSetup) createTestTable(t *testing.T, tableName string, col
 		t.Fatalf("failed to create table: %v", err)
 	}
 
-	// Get the created heap file from cache to register with page store
-	heapFile, err := tcs.cache.GetDbFile(tableID)
-	if err != nil {
-		t.Fatalf("failed to get heap file from cache: %v", err)
-	}
-
-	tcs.store.RegisterDbFile(tableID, heapFile)
-
+	// CreateTable already registers the file with the page store, so no additional work needed
 	return tableID
 }
 
@@ -117,20 +106,20 @@ func (tcs *testCatalogSetup) insertTestData(t *testing.T, tableID primitives.Fil
 	}
 	defer tcs.store.CommitTransaction(tx)
 
-	dbFile, err := tcs.cache.GetDbFile(tableID)
+	dbFile, err := tcs.catalog.GetTableFile(tableID)
 	if err != nil {
 		t.Fatalf("failed to get db file: %v", err)
 	}
 
-	tableInfo, err := tcs.cache.GetTableInfo(tableID)
+	tableSchema, err := tcs.catalog.GetTableSchema(tx, tableID)
 	if err != nil {
-		t.Fatalf("failed to get table info: %v", err)
+		t.Fatalf("failed to get table schema: %v", err)
 	}
 
 	tupMgr := table.NewTupleManager(tcs.store)
 
 	for _, row := range rows {
-		tup := tuple.NewTuple(tableInfo.Schema.TupleDesc)
+		tup := tuple.NewTuple(tableSchema.TupleDesc)
 		for i, field := range row {
 			if err := tup.SetField(primitives.ColumnID(i), field); err != nil {
 				t.Fatalf("failed to set field %d: %v", i, err)
