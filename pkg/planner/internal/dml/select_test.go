@@ -6,7 +6,7 @@ import (
 	"storemy/pkg/parser/statements"
 	"storemy/pkg/plan"
 	"storemy/pkg/planner/internal/ddl"
-	"storemy/pkg/planner/internal/result"
+	"storemy/pkg/planner/internal/shared"
 	"storemy/pkg/planner/internal/testutil"
 	"storemy/pkg/primitives"
 	"storemy/pkg/registry"
@@ -40,7 +40,7 @@ func setupSelectTestWithData(t *testing.T) (*registry.DatabaseContext, *transact
 	return ctx, tx, cleanup
 }
 
-func executeSelectPlan(t *testing.T, plan *SelectPlan) (*result.SelectQueryResult, error) {
+func executeSelectPlan(t *testing.T, plan *SelectPlan) (*shared.SelectQueryResult, error) {
 	resultAny, err := plan.Execute()
 	if err != nil {
 		return nil, err
@@ -50,7 +50,7 @@ func executeSelectPlan(t *testing.T, plan *SelectPlan) (*result.SelectQueryResul
 		return nil, nil
 	}
 
-	result, ok := resultAny.(*result.SelectQueryResult)
+	result, ok := resultAny.(*shared.SelectQueryResult)
 	if !ok {
 		t.Fatalf("Result is not a result.SelectQueryResult, got %T", resultAny)
 	}

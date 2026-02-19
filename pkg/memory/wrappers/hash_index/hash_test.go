@@ -77,7 +77,6 @@ import (
 	"storemy/pkg/memory"
 	"storemy/pkg/primitives"
 	"storemy/pkg/storage/index"
-	"storemy/pkg/storage/index/hash"
 	"storemy/pkg/storage/page"
 	"storemy/pkg/tuple"
 	"storemy/pkg/types"
@@ -107,9 +106,9 @@ func setupTestHashIndex(t *testing.T, keyType types.Type, numBuckets int) (*Hash
 
 	// Create hash file
 	if numBuckets <= 0 {
-		numBuckets = hash.DefaultBuckets
+		numBuckets = index.DefaultBuckets
 	}
-	file, err := hash.NewHashFile(primitives.Filepath(filename), keyType, numBuckets)
+	file, err := index.NewHashFile(primitives.Filepath(filename), keyType, numBuckets)
 	if err != nil {
 		t.Fatalf("Failed to create hash file: %v", err)
 	}
@@ -178,7 +177,7 @@ func TestNewHashIndex(t *testing.T) {
 
 			expectedBuckets := tt.numBuckets
 			if expectedBuckets <= 0 {
-				expectedBuckets = hash.DefaultBuckets
+				expectedBuckets = index.DefaultBuckets
 			}
 			if hi.numBuckets != expectedBuckets {
 				t.Errorf("Expected %d buckets, got %d", expectedBuckets, hi.numBuckets)

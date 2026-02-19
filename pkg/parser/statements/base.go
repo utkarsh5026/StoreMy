@@ -1,5 +1,27 @@
 package statements
 
+import "strings"
+
+// statementBuilder wraps strings.Builder with helpers that eliminate
+// the repetitive if-then-WriteString pattern in Statement.String() methods.
+type statementBuilder struct {
+	strings.Builder
+}
+
+// writeIf appends s only when cond is true.
+func (b *statementBuilder) writeIf(cond bool, s string) {
+	if cond {
+		b.WriteString(s)
+	}
+}
+
+// writeClause appends " keyword value" only when value is non-empty.
+func (b *statementBuilder) writeClause(keyword, value string) {
+	if value != "" {
+		b.WriteString(" " + keyword + " " + value)
+	}
+}
+
 // BaseStatement provides common functionality for all statement types
 type BaseStatement struct {
 	stmtType StatementType
@@ -45,4 +67,21 @@ func (ts *TableStatement) GetAlias() string {
 // HasAlias returns true if the statement has an alias different from the table name
 func (ts *TableStatement) HasAlias() bool {
 	return ts.Alias != "" && ts.Alias != ts.TableName
+}
+
+// requireNonEmpty returns a ValidationError when value is empty.
+// It mirrors the statementBuilder pattern used in String() methods.
+func (bs *BaseStatement) requireNonEmpty(fieldName, value, msg string) error {
+	if value == "" {
+		return NewValidationError(bs.stmtType, fieldName, msg)
+	}
+	return nil
+}
+
+// requireNonEmptySlice returns a ValidationError when length is zero.
+func (bs *BaseStatement) requireNonEmptySlice(fieldName string, length int, msg string) error {
+	if length == 0 {
+		return NewValidationError(bs.stmtType, fieldName, msg)
+	}
+	return nil
 }

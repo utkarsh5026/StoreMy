@@ -6,7 +6,6 @@ import (
 	"storemy/pkg/memory"
 	"storemy/pkg/primitives"
 	"storemy/pkg/storage/index"
-	"storemy/pkg/storage/index/btree"
 	"storemy/pkg/storage/page"
 	"storemy/pkg/tuple"
 	"storemy/pkg/types"
@@ -263,7 +262,7 @@ func (bt *BTree) insertIntoInternal(internalPage *BTreePage, key types.Field, ch
 	}
 
 	// Create new child pointer
-	newChildPtr := btree.NewBtreeChildPtr(key, childPID)
+	newChildPtr := index.NewBtreeChildPtr(key, childPID)
 
 	// Insert at position
 	if err := internalPage.AddChildPtr(newChildPtr, insertPos); err != nil {
@@ -344,7 +343,7 @@ func (bt *BTree) insertAndSplitInternal(internalPage *BTreePage, key types.Field
 //
 // Returns:
 //   - error: Returns error if any child pointer update fails
-func (bt *BTree) updateChildrenParentPointers(children []*btree.BTreeChildPtr, parentPageNo primitives.PageNumber) error {
+func (bt *BTree) updateChildrenParentPointers(children []*index.BTreeChildPtr, parentPageNo primitives.PageNumber) error {
 	for _, child := range children {
 		if err := bt.updateChildParentPointer(child.ChildPID, parentPageNo); err != nil {
 			return fmt.Errorf("failed to update child parent pointer: %w", err)
@@ -384,23 +383,23 @@ func (bt *BTree) updateChildParentPointer(childPID *page.PageDescriptor, parentP
 //   - childPID: The page ID of the new child
 //
 // Returns:
-//   - []*btree.BTreeChildPtr: New slice with all child pointers in sorted order
-func mergeChildPtrIntoSorted(children []*btree.BTreeChildPtr, key types.Field, childPID *page.PageDescriptor) []*btree.BTreeChildPtr {
-	allChildren := make([]*btree.BTreeChildPtr, 0, len(children)+1)
+//   - []*index.BTreeChildPtr: New slice with all child pointers in sorted order
+func mergeChildPtrIntoSorted(children []*index.BTreeChildPtr, key types.Field, childPID *page.PageDescriptor) []*index.BTreeChildPtr {
+	allChildren := make([]*index.BTreeChildPtr, 0, len(children)+1)
 	inserted := false
 
 	allChildren = append(allChildren, children[0])
 	for i := 1; i < len(children); i++ {
 		child := children[i]
 		if !inserted && compareKeys(key, child.Key) < 0 {
-			allChildren = append(allChildren, btree.NewBtreeChildPtr(key, childPID))
+			allChildren = append(allChildren, index.NewBtreeChildPtr(key, childPID))
 			inserted = true
 		}
 		allChildren = append(allChildren, child)
 	}
 
 	if !inserted {
-		allChildren = append(allChildren, btree.NewBtreeChildPtr(key, childPID))
+		allChildren = append(allChildren, index.NewBtreeChildPtr(key, childPID))
 	}
 
 	return allChildren
@@ -421,7 +420,7 @@ func mergeChildPtrIntoSorted(children []*btree.BTreeChildPtr, key types.Field, c
 //   - left: Child pointers for the left page
 //   - middleKey: The separator key to push up to parent
 //   - right: Child pointers for the right page (first child has nil key)
-func splitInternalChildren(children []*btree.BTreeChildPtr) (left []*btree.BTreeChildPtr, middleKey types.Field, right []*btree.BTreeChildPtr) {
+func splitInternalChildren(children []*index.BTreeChildPtr) (left []*index.BTreeChildPtr, middleKey types.Field, right []*index.BTreeChildPtr) {
 	midPoint := len(children) / 2
 
 	left = children[:midPoint]
@@ -461,7 +460,7 @@ func (bt *BTree) createNewRoot(left *BTreePage, separatorKey types.Field, right 
 		return fmt.Errorf("failed to allocate new root: %w", err)
 	}
 
-	newRoot.InternalPages = []*btree.BTreeChildPtr{
+	newRoot.InternalPages = []*index.BTreeChildPtr{
 		{Key: nil, ChildPID: left.GetID()},
 		{Key: separatorKey, ChildPID: right.GetID()},
 	}

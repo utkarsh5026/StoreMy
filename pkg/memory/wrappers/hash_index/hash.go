@@ -7,7 +7,6 @@ import (
 	"storemy/pkg/memory"
 	"storemy/pkg/primitives"
 	"storemy/pkg/storage/index"
-	"storemy/pkg/storage/index/hash"
 	"storemy/pkg/storage/page"
 	"storemy/pkg/tuple"
 	"storemy/pkg/types"
@@ -25,8 +24,8 @@ var (
 type TID = *primitives.TransactionID
 type RecID = *tuple.TupleRecordID
 type Field = types.Field
-type HashPage = *hash.HashPage
-type HashFile = *hash.HashFile
+type HashPage = *index.HashPage
+type HashFile = *index.HashFile
 
 // HashIndex implements a hash-based index structure for efficient key lookups.
 // It uses separate chaining with overflow pages to handle collisions.
@@ -50,10 +49,10 @@ type HashFile = *hash.HashFile
 //   - Range queries are inefficient (O(n)) - scans all buckets
 type HashIndex struct {
 	indexID    primitives.FileID
-	numBuckets hash.BucketNumber // Logical bucket count
+	numBuckets index.BucketNumber // Logical bucket count
 	tx         *transaction.TransactionContext
 	keyType    types.Type
-	file       *hash.HashFile    // I/O layer only
+	file       *index.HashFile   // I/O layer only
 	pageStore  *memory.PageStore // Page management layer
 }
 
@@ -69,7 +68,7 @@ type HashIndex struct {
 //   - pageStore: PageStore for page lifecycle management
 //
 // Returns a configured HashIndex ready for insert/search operations.
-func NewHashIndex(indexID primitives.FileID, keyType types.Type, file *hash.HashFile, store *memory.PageStore, tx *transaction.TransactionContext) *HashIndex {
+func NewHashIndex(indexID primitives.FileID, keyType types.Type, file *index.HashFile, store *memory.PageStore, tx *transaction.TransactionContext) *HashIndex {
 	// Set the index ID on the file to ensure page ID validation works correctly
 	file.SetIndexID(indexID)
 	store.RegisterDbFile(primitives.FileID(indexID), file)
@@ -92,11 +91,11 @@ func NewHashIndex(indexID primitives.FileID, keyType types.Type, file *hash.Hash
 //   - parentPage: Page to link the new overflow page to
 //
 // Returns the newly created overflow page or error on failure.
-func (hi *HashIndex) createAndLinkOverflowPage(bucketNum hash.BucketNumber, parentPage HashPage) (HashPage, error) {
+func (hi *HashIndex) createAndLinkOverflowPage(bucketNum index.BucketNumber, parentPage HashPage) (HashPage, error) {
 	pageNum := hi.file.AllocatePageNum()
 	pageID := page.NewPageDescriptor(hi.indexID, pageNum)
 
-	overflowPage := hash.NewHashPage(pageID, bucketNum, hi.keyType)
+	overflowPage := index.NewHashPage(pageID, bucketNum, hi.keyType)
 	overflowPage.MarkDirty(true, hi.tx.ID)
 
 	parentPage.SetOverflowPage(overflowPage.GetPageNo())
@@ -138,7 +137,7 @@ func (hi *HashIndex) readOverflowPage(p HashPage) (HashPage, error) {
 //   - bucketNum: Bucket number (0 to numBuckets-1)
 //
 // Returns the bucket page or error on failure.
-func (hi *HashIndex) getBucketPageByNum(bucketNum hash.BucketNumber) (HashPage, error) {
+func (hi *HashIndex) getBucketPageByNum(bucketNum index.BucketNumber) (HashPage, error) {
 	pageNum, err := hi.file.GetBucketPageNum(bucketNum)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get bucket page number: %w", err)
@@ -177,12 +176,12 @@ func (hi *HashIndex) Close() error {
 //   - key: Field to hash (IntType, StringType, BoolType, or FloatType)
 //
 // Returns bucket number in range [0, numBuckets) and error if hashing fails.
-func (hi *HashIndex) hashKey(key types.Field) (hash.BucketNumber, error) {
+func (hi *HashIndex) hashKey(key types.Field) (index.BucketNumber, error) {
 	h, err := key.Hash()
 	if err != nil {
 		return 0, fmt.Errorf("failed to hash key: %w", err)
 	}
-	return hash.BucketNumber(int(h) % int(hi.numBuckets)), nil // #nosec G115
+	return index.BucketNumber(int(h) % int(hi.numBuckets)), nil // #nosec G115
 }
 
 // validateKeyType checks if the provided key matches the index's key type.
@@ -262,7 +261,7 @@ func (hi *HashIndex) getPageFromStore(pid *page.PageDescriptor) (HashPage, error
 	if err != nil {
 		return nil, fmt.Errorf("failed to read overflow page %s: %w", pid, err)
 	}
-	hashPage, ok := page.(*hash.HashPage)
+	hashPage, ok := page.(*index.HashPage)
 	if !ok {
 		return nil, fmt.Errorf("invalid page type: expected HashPage")
 	}
@@ -392,7 +391,7 @@ func (hi *HashIndex) getEntriesInRange(start, end Field, bucketPage HashPage) ([
 //   - Returned page is guaranteed to have space (unless page creation fails)
 //
 // Used by: Insert operation to find where to place new index entries
-func (hi *HashIndex) findFirstEmptyPage(bucketPage HashPage, bucketNum hash.BucketNumber) (HashPage, error) {
+func (hi *HashIndex) findFirstEmptyPage(bucketPage HashPage, bucketNum index.BucketNumber) (HashPage, error) {
 	var err error
 	currentPage := bucketPage
 	for currentPage.IsFull() {
@@ -409,4 +408,156 @@ func (hi *HashIndex) findFirstEmptyPage(bucketPage HashPage, bucketNum hash.Buck
 		}
 	}
 	return currentPage, nil
+}
+
+// Insert adds a key-value pair to the hash index.
+// If the target bucket is full, creates or traverses overflow pages.
+//
+// Parameters:
+//   - hi.tx: Transaction context for lock coordination and page tracking
+//   - key: Index key (must match keyType)
+//   - rid: Tuple record ID pointing to actual data
+//
+// Returns error if:
+//   - Key type doesn't match index keyType
+//   - Page allocation fails
+//   - Write operation fails
+//
+// Behavior:
+//   - Hashes key to determine target bucket
+//   - Traverses overflow chain if bucket is full
+//   - Creates new overflow page if needed
+//   - Marks pages dirty (PageStore handles actual writes on commit)
+func (hi *HashIndex) Insert(key Field, rid RecID) error {
+	if err := hi.validateKeyType(key); err != nil {
+		return err
+	}
+
+	bucketNum, err := hi.hashKey(key)
+	if err != nil {
+		return err
+	}
+
+	bucketPage, err := hi.getBucketPage(key)
+	if err != nil {
+		return fmt.Errorf("failed to get bucket page: %w", err)
+	}
+
+	currentPage, err := hi.findFirstEmptyPage(bucketPage, bucketNum)
+	if err != nil {
+		return err
+	}
+
+	entry := index.NewIndexEntry(key, rid)
+	if err := currentPage.AddEntry(entry); err != nil {
+		return fmt.Errorf("failed to add entry: %w", err)
+	}
+
+	return hi.pageStore.HandlePageChange(
+		hi.tx,
+		memory.InsertOperation,
+		func() ([]page.Page, error) {
+			return []page.Page{currentPage}, nil
+		})
+}
+
+// Delete removes a key-value pair from the hash index.
+// Traverses overflow chain to find and remove the matching entry.
+//
+// Parameters:
+//   - hi.tx: Transaction context for page access
+//   - key: Index key to delete
+//   - rid: Tuple record ID to delete (must match exactly)
+//
+// Returns error if:
+//   - Key type doesn't match index keyType
+//   - Entry not found in bucket or overflow chain
+//   - Write operation fails
+//
+// Note: Only removes the first matching entry if duplicates exist.
+func (hi *HashIndex) Delete(key Field, rid RecID) error {
+	if err := hi.validateKeyType(key); err != nil {
+		return err
+	}
+
+	bucketPage, err := hi.getBucketPage(key)
+	if err != nil {
+		return fmt.Errorf("failed to get bucket page: %w", err)
+	}
+
+	entry := index.NewIndexEntry(key, rid)
+	return hi.removeEntry(entry, bucketPage)
+}
+
+// Search finds all tuple locations for a given key.
+// Traverses the entire overflow chain to find all matching entries.
+//
+// Parameters:
+//   - hi.tx: Transaction context for page access
+//   - key: Index key to search for
+//
+// Returns:
+//   - Slice of TupleRecordIDs pointing to matching tuples
+//   - Error if key type is invalid or page read fails
+//
+// Performance: O(1) average case, O(k) where k is overflow chain length.
+func (hi *HashIndex) Search(key Field) ([]RecID, error) {
+	if err := hi.validateKeyType(key); err != nil {
+		return nil, err
+	}
+
+	bucketPage, err := hi.getBucketPage(key)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get bucket page: %w", err)
+	}
+
+	return hi.getMatchingEntries(key, bucketPage)
+}
+
+// RangeSearch finds all tuples where key is in [startKey, endKey].
+//
+// WARNING: Hash indexes do not efficiently support range queries.
+// This implementation scans ALL buckets and overflow chains.
+//
+// Parameters:
+//   - hi.tx: Transaction context for page access
+//   - startKey: Lower bound (inclusive)
+//   - endKey: Upper bound (inclusive)
+//
+// Returns:
+//   - Slice of TupleRecordIDs for tuples in range
+//   - Error if key types don't match or page reads fail
+//
+// Performance: O(n) where n is total number of index entries.
+// Consider using B-Tree index for efficient range queries.
+func (hi *HashIndex) RangeSearch(startKey, endKey Field) ([]RecID, error) {
+	if startKey.Type() != hi.keyType || endKey.Type() != hi.keyType {
+		return nil, fmt.Errorf("key type mismatch")
+	}
+
+	var results []RecID
+
+	for bucketNum := 0; bucketNum < hi.numBuckets; bucketNum++ {
+		if bucketNum >= int(hi.file.NumPages()) { // #nosec G115
+			continue
+		}
+
+		bucketPage, err := hi.getBucketPageByNum(bucketNum)
+		if err != nil {
+			return nil, fmt.Errorf("failed to get bucket page %d: %w", bucketNum, err)
+		}
+
+		if bucketPage.GetNumEntries() == 0 {
+			continue
+		}
+
+		entries, err := hi.getEntriesInRange(startKey, endKey, bucketPage)
+		if err != nil {
+			return nil, fmt.Errorf("error during overflow chain traversal: %w", err)
+		}
+
+		results = append(results, entries...)
+	}
+
+	return results, nil
 }

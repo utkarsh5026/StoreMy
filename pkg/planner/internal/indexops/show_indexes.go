@@ -6,7 +6,7 @@ import (
 	"storemy/pkg/catalog/systemtable"
 	"storemy/pkg/concurrency/transaction"
 	"storemy/pkg/parser/statements"
-	"storemy/pkg/planner/internal/result"
+	"storemy/pkg/planner/internal/shared"
 	"storemy/pkg/registry"
 	"storemy/pkg/tuple"
 	"storemy/pkg/types"
@@ -57,7 +57,7 @@ func NewShowIndexesPlan(
 // Returns:
 //   - SelectQueryResult with index metadata on success
 //   - Error if table doesn't exist or catalog read fails
-func (p *ShowIndexesPlan) Execute() (result.Result, error) {
+func (p *ShowIndexesPlan) Execute() (shared.Result, error) {
 	var indexes []*systemtable.IndexMetadata
 	var err error
 
@@ -72,7 +72,7 @@ func (p *ShowIndexesPlan) Execute() (result.Result, error) {
 	}
 
 	tupleDesc, tuples := p.createResultTuples(indexes)
-	return &result.SelectQueryResult{
+	return &shared.SelectQueryResult{
 		TupleDesc: tupleDesc,
 		Tuples:    tuples,
 	}, nil

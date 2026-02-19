@@ -175,7 +175,7 @@ func main() {
 
 	log.Printf("Starting StoreMy Metrics Exporter...")
 	log.Printf("Database: %s, Data Directory: %s", dbName, dataDir) // #nosec G706
-	log.Printf("Metrics Port: %s", metricsPort)                      // #nosec G706
+	log.Printf("Metrics Port: %s", metricsPort)                     // #nosec G706
 
 	db, err := database.NewDatabase(dbName, dataDir, walPath)
 	if err != nil {

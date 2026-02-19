@@ -89,7 +89,7 @@ func main() {
 	}
 
 	_ = os.MkdirAll(outputDir, 0o750) // #nosec G703
-	_ = os.MkdirAll(logDir, 0o750)   // #nosec G703
+	_ = os.MkdirAll(logDir, 0o750)    // #nosec G703
 
 	walPath := filepath.Join(logDir, "wal.log")
 
@@ -370,15 +370,15 @@ func formatDuration(d time.Duration) string {
 func printBenchmarkResult(result BenchmarkResult) {
 	successRate := float64(result.SuccessCount) / float64(result.Iterations) * 100
 
-	log.Printf("  ┌─ Results")                                                                                              // #nosec G706
-	log.Printf("  │  Total Time:        %s", formatDuration(result.TotalDuration))                                          // #nosec G706
-	log.Printf("  │  Avg per Query:     %s", formatDuration(result.AvgDuration))                                            // #nosec G706
-	log.Printf("  │  Min / Max:         %s / %s", formatDuration(result.MinDuration), formatDuration(result.MaxDuration))   // #nosec G706
-	log.Printf("  │  Median (P50):      %s", formatDuration(result.MedianDuration))                                         // #nosec G706
-	log.Printf("  │  P95:               %s", formatDuration(result.P95Duration))                                            // #nosec G706
-	log.Printf("  │  P99:               %s", formatDuration(result.P99Duration))                                            // #nosec G706
-	log.Printf("  │  Throughput:        %.0f queries/sec", result.QueriesPerSecond)                                         // #nosec G706
-	log.Printf("  │  Success Rate:      %.1f%% (%d/%d)", successRate, result.SuccessCount, result.Iterations)               // #nosec G706
+	log.Printf("  ┌─ Results")                                                                                            // #nosec G706
+	log.Printf("  │  Total Time:        %s", formatDuration(result.TotalDuration))                                        // #nosec G706
+	log.Printf("  │  Avg per Query:     %s", formatDuration(result.AvgDuration))                                          // #nosec G706
+	log.Printf("  │  Min / Max:         %s / %s", formatDuration(result.MinDuration), formatDuration(result.MaxDuration)) // #nosec G706
+	log.Printf("  │  Median (P50):      %s", formatDuration(result.MedianDuration))                                       // #nosec G706
+	log.Printf("  │  P95:               %s", formatDuration(result.P95Duration))                                          // #nosec G706
+	log.Printf("  │  P99:               %s", formatDuration(result.P99Duration))                                          // #nosec G706
+	log.Printf("  │  Throughput:        %.0f queries/sec", result.QueriesPerSecond)                                       // #nosec G706
+	log.Printf("  │  Success Rate:      %.1f%% (%d/%d)", successRate, result.SuccessCount, result.Iterations)             // #nosec G706
 
 	if result.ErrorCount > 0 && len(result.ErrorSamples) > 0 {
 		log.Printf("  │")

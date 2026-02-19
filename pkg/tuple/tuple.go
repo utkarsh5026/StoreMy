@@ -7,6 +7,31 @@ import (
 	"strings"
 )
 
+// TupleRecordID represents a reference to a specific tuple on a specific page
+type TupleRecordID struct {
+	PageID   primitives.PageID // The page containing this tuple
+	TupleNum primitives.SlotID // The tuple number within the page
+}
+
+// NewTupleRecordID creates a new TupleRecordID
+func NewTupleRecordID(pageID primitives.PageID, tupleNum primitives.SlotID) *TupleRecordID {
+	return &TupleRecordID{
+		PageID:   pageID,
+		TupleNum: tupleNum,
+	}
+}
+
+func (rid *TupleRecordID) Equals(other *TupleRecordID) bool {
+	if other == nil {
+		return false
+	}
+	return rid.PageID.Equals(other.PageID) && rid.TupleNum == other.TupleNum
+}
+
+func (rid *TupleRecordID) String() string {
+	return fmt.Sprintf("TupleRecordID(page=%s, tuple=%d)", rid.PageID.String(), rid.TupleNum)
+}
+
 // Tuple represents a row of data in the database.
 // Each tuple contains a collection of fields that conform to a schema (TupleDescription).
 // Tuples are the fundamental unit of data storage and retrieval in the database.
@@ -218,6 +243,121 @@ func (t *Tuple) WithUpdatedFields(fieldUpdates map[primitives.ColumnID]types.Fie
 	}
 
 	return newTup, nil
+}
+
+// Equals returns true if this tuple has the same number of fields and all
+// corresponding fields are equal to those in other.
+func (t *Tuple) Equals(other *Tuple) bool {
+	if t.TupleDesc.NumFields() != other.TupleDesc.NumFields() {
+		return false
+	}
+	for i := range t.TupleDesc.NumFields() {
+		f1, _ := t.GetField(i)
+		f2, _ := other.GetField(i)
+		if !f1.Equals(f2) {
+			return false
+		}
+	}
+	return true
+}
+
+// CompareAt compares this tuple with another tuple at the given field index.
+// Returns -1 if t < other, 0 if equal, and 1 if t > other at that field.
+//
+// Parameters:
+//   - other: The tuple to compare against
+//   - fieldIdx: The index of the field to compare (0-based)
+//
+// Returns:
+//   - int: -1 if this tuple's field is less than other's, 0 if equal, 1 if greater
+//   - error: Returns an error if the field index is out of bounds or comparison fails
+func (t *Tuple) CompareAt(other *Tuple, fieldIdx primitives.ColumnID) (int, error) {
+	f1, err := t.GetField(fieldIdx)
+	if err != nil {
+		return 0, fmt.Errorf("failed to get field %d from first tuple: %w", fieldIdx, err)
+	}
+
+	f2, err := other.GetField(fieldIdx)
+	if err != nil {
+		return 0, fmt.Errorf("failed to get field %d from second tuple: %w", fieldIdx, err)
+	}
+
+	lt, err := f1.Compare(primitives.LessThan, f2)
+	if err != nil {
+		return 0, fmt.Errorf("comparison failed at field %d: %w", fieldIdx, err)
+	}
+	if lt {
+		return -1, nil
+	}
+
+	eq, err := f1.Compare(primitives.Equals, f2)
+	if err != nil {
+		return 0, fmt.Errorf("comparison failed at field %d: %w", fieldIdx, err)
+	}
+	if eq {
+		return 0, nil
+	}
+
+	return 1, nil
+}
+
+// Hash computes a polynomial rolling hash over all fields of the tuple.
+// Uses h = h*31 + fieldHash for each field, matching the hashTuple convention
+// used in set-operation operators.
+func (t *Tuple) Hash() (primitives.HashCode, error) {
+	var hash primitives.HashCode
+	for i := primitives.ColumnID(0); i < t.fieldCount(); i++ {
+		field, err := t.GetField(i)
+		if err != nil {
+			return 0, fmt.Errorf("failed to hash field %d: %w", i, err)
+		}
+		if field == nil {
+			continue
+		}
+		fieldHash, err := field.Hash()
+		if err != nil {
+			return 0, fmt.Errorf("failed to hash field %d: %w", i, err)
+		}
+		hash = hash*31 + fieldHash
+	}
+	return hash, nil
+}
+
+// Project creates a new tuple containing only the fields at the given column
+// indices (in the order provided). resultDesc must describe exactly len(cols)
+// fields. The RecordID of the source tuple is preserved on the result.
+func (t *Tuple) Project(cols []primitives.ColumnID, resultDesc *TupleDescription) (*Tuple, error) {
+	if primitives.ColumnID(len(cols)) != resultDesc.NumFields() { // #nosec G115
+		return nil, fmt.Errorf("project: cols length %d does not match resultDesc field count %d",
+			len(cols), resultDesc.NumFields())
+	}
+	result := NewTuple(resultDesc)
+	for i, srcIdx := range cols {
+		field, err := t.GetField(srcIdx)
+		if err != nil {
+			return nil, fmt.Errorf("project: failed to get field %d: %w", srcIdx, err)
+		}
+		if err := result.SetField(primitives.ColumnID(i), field); err != nil { // #nosec G115
+			return nil, fmt.Errorf("project: failed to set field %d: %w", i, err)
+		}
+	}
+	result.RecordID = t.RecordID
+	return result, nil
+}
+
+// ToStringSlice returns all field values as strings in order.
+// Nil fields are represented as "NULL".
+func (t *Tuple) ToStringSlice() []string {
+	out := make([]string, t.fieldCount())
+	for i := primitives.ColumnID(0); i < t.fieldCount(); i++ {
+		field := t.fields[i]
+		if field == nil {
+			out[i] = "NULL"
+		} else {
+			out[i] = field.String()
+		}
+	}
+	return out
 }
 
 // fieldCount returns the number of fields in the tuple.

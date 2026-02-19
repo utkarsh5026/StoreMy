@@ -6,7 +6,7 @@ import (
 	"storemy/pkg/concurrency/transaction"
 	"storemy/pkg/parser/statements"
 	"storemy/pkg/planner/internal/indexops"
-	"storemy/pkg/planner/internal/result"
+	"storemy/pkg/planner/internal/shared"
 	"storemy/pkg/primitives"
 	"storemy/pkg/registry"
 	"storemy/pkg/storage/index"
@@ -39,7 +39,7 @@ func NewCreateTablePlan(stmt *statements.CreateStatement, ctx DbContext,
 //  3. Creates table entry in catalog with schema
 //  4. CatalogManager handles file path generation and persistence
 //  5. If primary key is specified, creates a BTree index on the primary key column
-func (p *CreateTablePlan) Execute() (result.Result, error) {
+func (p *CreateTablePlan) Execute() (shared.Result, error) {
 	cm := p.ctx.CatalogManager()
 
 	res, err := p.checkTableExists()
@@ -66,19 +66,19 @@ func (p *CreateTablePlan) Execute() (result.Result, error) {
 		}
 	}
 
-	return &result.DDLResult{
+	return &shared.DDLResult{
 		Success: true,
 		Message: fmt.Sprintf("Table %s created successfully%s", p.Statement.TableName, indexMessage),
 	}, nil
 }
 
-func (p *CreateTablePlan) checkTableExists() (*result.DDLResult, error) {
+func (p *CreateTablePlan) checkTableExists() (*shared.DDLResult, error) {
 	cm := p.ctx.CatalogManager()
 	tableName := p.Statement.TableName
 	if cm.TableExists(p.TxContext, tableName) {
 		if p.Statement.IfNotExists {
 			msg := fmt.Sprintf("Table %s already exists (IF NOT EXISTS)", tableName)
-			return result.NewDDLResult(true, msg), nil
+			return shared.NewDDLResult(true, msg), nil
 		}
 		return nil, fmt.Errorf("table %s already exists", tableName)
 	}

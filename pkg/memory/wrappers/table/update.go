@@ -55,37 +55,22 @@ func (tm *TupleManager) NewUpdateOp(ctx *transaction.TransactionContext, dbFile 
 //   - oldTuples and newTuples have matching lengths
 //   - All old tuples have valid RecordIDs
 func (op *UpdateOp) Validate() error {
-	if err := validateExecuted(op.executed, "update"); err != nil {
+	if err := validateBasic("update", op.ctx, op.dbFile, op.oldTuples, op.executed); err != nil {
 		return err
 	}
 
-	if err := validateTransactionContext(op.ctx); err != nil {
-		return err
-	}
-
-	// Check for nil heap file before converting to interface
-	if op.dbFile == nil {
-		return fmt.Errorf("dbFile cannot be nil")
-	}
-
-	if err := validateDbFile(op.dbFile); err != nil {
-		return err
-	}
-
-	if err := validateTuplesNotEmpty(op.oldTuples, "update"); err != nil {
-		return err
-	}
-
-	if err := validateTupleSlicesMatchLength(op.oldTuples, op.newTuples, "oldTuples", "newTuples"); err != nil {
-		return err
+	if len(op.oldTuples) != len(op.newTuples) {
+		return fmt.Errorf("oldTuples and newTuples must have the same length")
 	}
 
 	if err := validateTuplesHaveRecordIDs(op.oldTuples, "old tuple"); err != nil {
 		return err
 	}
 
-	if err := validateTuplesNotNil(op.newTuples, "new tuple"); err != nil {
-		return err
+	for i, t := range op.newTuples {
+		if t == nil {
+			return fmt.Errorf("new tuple at index %d is nil", i)
+		}
 	}
 
 	return nil

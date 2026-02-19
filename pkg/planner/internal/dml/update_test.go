@@ -6,8 +6,7 @@ import (
 	"storemy/pkg/parser/statements"
 	"storemy/pkg/plan"
 	"storemy/pkg/planner/internal/ddl"
-	"storemy/pkg/planner/internal/metadata"
-	"storemy/pkg/planner/internal/result"
+	"storemy/pkg/planner/internal/shared"
 	"storemy/pkg/planner/internal/testutil"
 	"storemy/pkg/primitives"
 	"storemy/pkg/registry"
@@ -35,7 +34,7 @@ func setupUpdateTest(t *testing.T) (*registry.DatabaseContext, *transaction.Tran
 	return ctx, tx, cleanup
 }
 
-func executeUpdatePlan(t *testing.T, plan *UpdatePlan) (*result.DMLResult, error) {
+func executeUpdatePlan(t *testing.T, plan *UpdatePlan) (*shared.DMLResult, error) {
 	resultAny, err := plan.Execute()
 	if err != nil {
 		return nil, err
@@ -45,7 +44,7 @@ func executeUpdatePlan(t *testing.T, plan *UpdatePlan) (*result.DMLResult, error
 		return nil, nil
 	}
 
-	result, ok := resultAny.(*result.DMLResult)
+	result, ok := resultAny.(*shared.DMLResult)
 	if !ok {
 		t.Fatalf("Result is not a result.DMLResult, got %T", resultAny)
 	}
@@ -485,7 +484,7 @@ func TestUpdatePlan_getTableMetadata(t *testing.T) {
 
 	stmt := statements.NewUpdateStatement("users", "users")
 
-	md, err := metadata.ResolveTableMetadata(stmt.TableName, tx, ctx)
+	md, err := shared.ResolveTableMetadata(stmt.TableName, tx, ctx)
 	tableID := md.TableID
 	tupleDesc := md.TupleDesc
 
@@ -516,7 +515,7 @@ func TestUpdatePlan_findFieldIndex(t *testing.T) {
 
 	stmt := statements.NewUpdateStatement("users", "users")
 
-	md, err := metadata.ResolveTableMetadata(stmt.TableName, tx, ctx)
+	md, err := shared.ResolveTableMetadata(stmt.TableName, tx, ctx)
 	if err != nil {
 		t.Fatalf("getTableMetadata failed: %v", err)
 	}
@@ -566,7 +565,7 @@ func TestUpdatePlan_buildUpdateMap(t *testing.T) {
 
 	updatePlan := NewUpdatePlan(stmt, tx, ctx)
 
-	md, err := metadata.ResolveTableMetadata(stmt.TableName, tx, ctx)
+	md, err := shared.ResolveTableMetadata(stmt.TableName, tx, ctx)
 	if err != nil {
 		t.Fatalf("getTableMetadata failed: %v", err)
 	}

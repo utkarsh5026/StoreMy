@@ -181,6 +181,54 @@ func (td *TupleDescription) FindFieldIndex(fieldName string) (primitives.ColumnI
 	return 0, fmt.Errorf("column %s not found", fieldName)
 }
 
+// IsCompatibleWith reports whether other has the same number of fields and the
+// same field types in the same order. Field names are not compared.
+// Returns false if other is nil.
+func (td *TupleDescription) IsCompatibleWith(other *TupleDescription) bool {
+	if other == nil {
+		return false
+	}
+	if td.NumFields() != other.NumFields() {
+		return false
+	}
+	for i := primitives.ColumnID(0); i < td.NumFields(); i++ {
+		lt, _ := td.TypeAtIndex(i)
+		rt, _ := other.TypeAtIndex(i)
+		if lt != rt {
+			return false
+		}
+	}
+	return true
+}
+
+// FindFieldWithType finds a field by name and returns both its zero-based index
+// and data type in a single call. Returns an error if the field is not found.
+func (td *TupleDescription) FindFieldWithType(name string) (primitives.ColumnID, types.Type, error) {
+	idx, err := td.FindFieldIndex(name)
+	if err != nil {
+		return 0, 0, err
+	}
+	t, err := td.TypeAtIndex(idx)
+	if err != nil {
+		return 0, 0, err
+	}
+	return idx, t, nil
+}
+
+// ColumnNames returns all field names in order.
+// Fields without a name use "col_N" (zero-based index) as a fallback.
+func (td *TupleDescription) ColumnNames() []string {
+	names := make([]string, td.NumFields())
+	for i := primitives.ColumnID(0); i < td.NumFields(); i++ {
+		name, _ := td.GetFieldName(i)
+		if name == "" {
+			name = fmt.Sprintf("col_%d", i)
+		}
+		names[i] = name
+	}
+	return names
+}
+
 // Combine merges two TupleDescriptions into one.
 // The resulting descriptor contains all fields from td1 followed by all fields from td2.
 // If either descriptor is nil, returns the other descriptor.

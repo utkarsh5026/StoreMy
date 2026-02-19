@@ -8,7 +8,8 @@
         install-tools clean build fmt vet lint lint-fix \
         run run-fresh tidy coverage-html bench check examples help \
         docker-demo docker-import docker-fresh docker-test \
-        docker-build docker-clean docker-stop quickstart
+        docker-build docker-clean docker-stop quickstart \
+        security security-vuln security-scan
 
 # ── Testing ────────────────────────────────────────────────────────────────────
 test:
@@ -95,6 +96,16 @@ docker-stop:
 
 quickstart:
 	python makefile.py quickstart
+
+# ── Security ───────────────────────────────────────────────────────────────────
+security:
+	python makefile.py security
+
+security-vuln:
+	python makefile.py security-vuln
+
+security-scan:
+	python makefile.py security-scan
 
 # ── Help ───────────────────────────────────────────────────────────────────────
 help:

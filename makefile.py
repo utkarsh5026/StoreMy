@@ -120,6 +120,16 @@ def target_install_tools():
         )
     print_step("Installing gow (cross-platform Go file watcher)...")
     run_cmd(["go", "install", "github.com/mitranim/gow@latest"], allow_failure=True)
+    print_step("Installing govulncheck (Go vulnerability scanner)...")
+    run_cmd(
+        ["go", "install", "golang.org/x/vuln/cmd/govulncheck@latest"],
+        allow_failure=True,
+    )
+    print_step("Installing gosec (Go security analyser)...")
+    run_cmd(
+        ["go", "install", "github.com/securego/gosec/v2/cmd/gosec@latest"],
+        allow_failure=True,
+    )
     print_success("Tools installation complete!")
 
 
@@ -245,6 +255,33 @@ def target_quickstart():
     target_docker_demo()
 
 
+# ── Security ────────────────────────────────────────────────────────────────────
+
+def target_security_vuln():
+    print_header("Go Vulnerability Check (govulncheck)")
+    run_cmd(["govulncheck", "./..."])
+
+
+def target_security_scan():
+    print_header("Go Security Analysis (gosec)")
+    run_cmd(
+        [
+            "gosec",
+            "-severity", "medium",
+            "-confidence", "medium",
+            "-exclude-dir=pkg/examples",
+            "./...",
+        ],
+        allow_failure=True,
+    )
+
+
+def target_security():
+    print_header("Full Security Check: govulncheck + gosec")
+    target_security_vuln()
+    target_security_scan()
+
+
 TARGETS = {
     "test": (target_test, "Run all tests", "Testing"),
     "test-tables": (target_test_tables, "Run table tests only", "Testing"),
@@ -297,6 +334,9 @@ TARGETS = {
         "docker-build + docker-demo (one command)",
         "Docker",
     ),
+    "security": (target_security, "govulncheck + gosec (full security check)", "Security"),
+    "security-vuln": (target_security_vuln, "Run govulncheck (known CVEs)", "Security"),
+    "security-scan": (target_security_scan, "Run gosec (static security analysis)", "Security"),
     "help": (None, "Show this help message", "Meta"),
 }
 
@@ -315,7 +355,7 @@ def target_help():
     groups = defaultdict(list)
     for name, (_, desc, group) in TARGETS.items():
         groups[group].append((name, desc))
-    group_order = ["Docker", "Testing", "Build", "Run", "Tools", "Meta"]
+    group_order = ["Docker", "Testing", "Build", "Run", "Security", "Tools", "Meta"]
     for group in group_order:
         if group not in groups:
             continue

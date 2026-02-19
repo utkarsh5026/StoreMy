@@ -2,17 +2,6 @@ package iterator
 
 import "storemy/pkg/tuple"
 
-// TupleIterator is a minimal interface that captures the common iteration methods
-// shared by both DbIterator and DbFileIterator. This allows writing generic
-// utility functions that work with any iterator type.
-type TupleIterator interface {
-	// HasNext checks if there are more tuples available without consuming them.
-	HasNext() (bool, error)
-
-	// Next retrieves and returns the next tuple from the iterator.
-	Next() (*tuple.Tuple, error)
-}
-
 // Iterate is a generic helper function that encapsulates the common iteration pattern.
 // It handles HasNext/Next logic and skips nil tuples automatically.
 // The processFunc receives each tuple and can control iteration flow:

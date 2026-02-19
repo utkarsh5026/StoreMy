@@ -5,8 +5,7 @@ import (
 	"storemy/pkg/catalog/schema"
 	"storemy/pkg/concurrency/transaction"
 	"storemy/pkg/parser/statements"
-	"storemy/pkg/planner/internal/metadata"
-	"storemy/pkg/planner/internal/result"
+	"storemy/pkg/planner/internal/shared"
 	"storemy/pkg/planner/internal/testutil"
 	"storemy/pkg/primitives"
 	"storemy/pkg/registry"
@@ -15,7 +14,7 @@ import (
 )
 
 // Helper function to execute insert plan and cast result to result.DMLResult
-func executeInsertPlan(t *testing.T, plan *InsertPlan) (*result.DMLResult, error) {
+func executeInsertPlan(t *testing.T, plan *InsertPlan) (*shared.DMLResult, error) {
 	resultAny, err := plan.Execute()
 	if err != nil {
 		return nil, err
@@ -25,7 +24,7 @@ func executeInsertPlan(t *testing.T, plan *InsertPlan) (*result.DMLResult, error
 		return nil, nil
 	}
 
-	res, ok := resultAny.(*result.DMLResult)
+	res, ok := resultAny.(*shared.DMLResult)
 	if !ok {
 		t.Fatalf("Result is not a result.DMLResult, got %T", resultAny)
 	}
@@ -452,7 +451,7 @@ func TestInsertPlan_getTableID(t *testing.T) {
 
 	stmt := statements.NewInsertStatement("test_table")
 
-	tableID, err := metadata.ResolveTableID(stmt.TableName, transCtx, ctx)
+	tableID, err := shared.ResolveTableID(stmt.TableName, transCtx, ctx)
 
 	if err != nil {
 		t.Fatalf("getTableID failed: %v", err)
@@ -479,7 +478,7 @@ func TestInsertPlan_getTupleDesc(t *testing.T) {
 
 	stmt := statements.NewInsertStatement("test_table")
 
-	md, err := metadata.ResolveTableMetadata(stmt.TableName, transCtx, ctx)
+	md, err := shared.ResolveTableMetadata(stmt.TableName, transCtx, ctx)
 	tupleDesc := md.TupleDesc
 
 	if err != nil {
@@ -512,7 +511,7 @@ func TestInsertPlan_createFieldMapping(t *testing.T) {
 	stmt.AddFieldNames([]string{"name", "id"})
 	plan := NewInsertPlan(stmt, transCtx, ctx)
 
-	md, err := metadata.ResolveTableMetadata(stmt.TableName, transCtx, ctx)
+	md, err := shared.ResolveTableMetadata(stmt.TableName, transCtx, ctx)
 	tupleDesc := md.TupleDesc
 	if err != nil {
 		t.Fatalf("getTupleDesc failed: %v", err)
@@ -553,7 +552,7 @@ func TestInsertPlan_createFieldMapping_EmptyFields(t *testing.T) {
 	stmt := statements.NewInsertStatement("test_table")
 	plan := NewInsertPlan(stmt, transCtx, ctx)
 
-	md, err := metadata.ResolveTableMetadata(stmt.TableName, transCtx, ctx)
+	md, err := shared.ResolveTableMetadata(stmt.TableName, transCtx, ctx)
 	tupleDesc := md.TupleDesc
 	if err != nil {
 		t.Fatalf("getTupleDesc failed: %v", err)
@@ -585,7 +584,7 @@ func TestInsertPlan_validateValueCount(t *testing.T) {
 
 	stmt := statements.NewInsertStatement("test_table")
 
-	md, err := metadata.ResolveTableMetadata(stmt.TableName, transCtx, ctx)
+	md, err := shared.ResolveTableMetadata(stmt.TableName, transCtx, ctx)
 	tupleDesc := md.TupleDesc
 	if err != nil {
 		t.Fatalf("getTupleDesc failed: %v", err)
@@ -616,7 +615,7 @@ func TestInsertPlan_validateValueCount(t *testing.T) {
 }
 
 func TestDMLResult_String(t *testing.T) {
-	result := &result.DMLResult{
+	result := &shared.DMLResult{
 		RowsAffected: 5,
 		Message:      "Test message",
 	}
@@ -642,7 +641,7 @@ func TestDMLResult_Values(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := &result.DMLResult{
+			result := &shared.DMLResult{
 				RowsAffected: tt.rowsAffected,
 				Message:      tt.message,
 			}

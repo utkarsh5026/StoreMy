@@ -4,9 +4,7 @@ import (
 	"fmt"
 	"storemy/pkg/concurrency/transaction"
 	"storemy/pkg/parser/statements"
-	"storemy/pkg/planner/internal/metadata"
-	"storemy/pkg/planner/internal/result"
-	"storemy/pkg/planner/internal/scan"
+	"storemy/pkg/planner/internal/shared"
 	"storemy/pkg/primitives"
 	"storemy/pkg/registry"
 	"storemy/pkg/tuple"
@@ -54,8 +52,8 @@ func NewUpdatePlan(statement *statements.UpdateStatement, tx *transaction.Transa
 //
 // Returns a DMLResult with the count of modified rows.
 // All operations are atomic within the transaction - failures trigger rollback.
-func (p *UpdatePlan) Execute() (result.Result, error) {
-	md, err := metadata.ResolveTableMetadata(p.statement.TableName, p.tx, p.ctx)
+func (p *UpdatePlan) Execute() (shared.Result, error) {
+	md, err := shared.ResolveTableMetadata(p.statement.TableName, p.tx, p.ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -65,12 +63,12 @@ func (p *UpdatePlan) Execute() (result.Result, error) {
 		return nil, err
 	}
 
-	queryPlan, err := scan.BuildScanWithFilter(p.tx, md.TableID, p.statement.WhereClause, p.ctx)
+	queryPlan, err := BuildScanWithFilter(p.tx, md.TableID, p.statement.WhereClause, p.ctx)
 	if err != nil {
 		return nil, err
 	}
 
-	tuplesToUpdate, err := metadata.CollectAllTuples(queryPlan)
+	tuplesToUpdate, err := shared.CollectAllTuples(queryPlan)
 	if err != nil {
 		return nil, err
 	}
@@ -80,7 +78,7 @@ func (p *UpdatePlan) Execute() (result.Result, error) {
 		return nil, err
 	}
 
-	return &result.DMLResult{
+	return &shared.DMLResult{
 		RowsAffected: len(tuplesToUpdate),
 		Message:      fmt.Sprintf("%d row(s) updated", len(tuplesToUpdate)),
 	}, nil
