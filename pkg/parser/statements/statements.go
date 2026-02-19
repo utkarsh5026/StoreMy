@@ -27,10 +27,7 @@ func NewDropStatement(tableName string, ifExists bool) *DropStatement {
 // Validate checks if the statement is valid
 // For DROP TABLE, we just need to ensure that the table name is not empty
 func (dts *DropStatement) Validate() error {
-	if dts.TableName == "" {
-		return NewValidationError(DropTable, "TableName", "table name cannot be empty")
-	}
-	return nil
+	return dts.requireNonEmpty("TableName", dts.TableName, "table name cannot be empty")
 }
 
 // String returns a string representation of the DROP TABLE statement
@@ -113,17 +110,15 @@ func (u *UpdateStatement) HasWhereClause() bool {
 
 // Validate checks if the statement is valid
 func (u *UpdateStatement) Validate() error {
-	if u.TableName == "" {
-		return NewValidationError(Update, "TableName", "table name cannot be empty")
+	if err := u.requireNonEmpty("TableName", u.TableName, "table name cannot be empty"); err != nil {
+		return err
 	}
-
-	if len(u.SetClauses) == 0 {
-		return NewValidationError(Update, "SetClauses", "at least one SET clause is required")
+	if err := u.requireNonEmptySlice("SetClauses", len(u.SetClauses), "at least one SET clause is required"); err != nil {
+		return err
 	}
-
 	for i, clause := range u.SetClauses {
-		if clause.FieldName == "" {
-			return NewValidationError(Update, fmt.Sprintf("SetClauses[%d].FieldName", i), "field name cannot be empty")
+		if err := u.requireNonEmpty(fmt.Sprintf("SetClauses[%d].FieldName", i), clause.FieldName, "field name cannot be empty"); err != nil {
+			return err
 		}
 		if clause.Value == nil {
 			return NewValidationError(Update, fmt.Sprintf("SetClauses[%d].Value", i), "value cannot be nil")
@@ -183,12 +178,11 @@ func (s *InsertStatement) ValueCount() int {
 
 // Validate checks if the statement is valid
 func (s *InsertStatement) Validate() error {
-	if s.TableName == "" {
-		return NewValidationError(Insert, "TableName", "table name cannot be empty")
+	if err := s.requireNonEmpty("TableName", s.TableName, "table name cannot be empty"); err != nil {
+		return err
 	}
-
-	if len(s.Values) == 0 {
-		return NewValidationError(Insert, "Values", "at least one row of values is required")
+	if err := s.requireNonEmptySlice("Values", len(s.Values), "at least one row of values is required"); err != nil {
+		return err
 	}
 
 	if len(s.Fields) > 0 {
@@ -275,10 +269,7 @@ func (ds *DeleteStatement) HasWhereClause() bool {
 }
 
 func (ds *DeleteStatement) Validate() error {
-	if ds.TableName == "" {
-		return NewValidationError(Delete, "TableName", "table name cannot be empty")
-	}
-	return nil
+	return ds.requireNonEmpty("TableName", ds.TableName, "table name cannot be empty")
 }
 
 func (ds *DeleteStatement) String() string {
@@ -394,22 +385,20 @@ func (cts *CreateStatement) AddFieldWithAutoInc(name string, fieldType types.Typ
 }
 
 func (cts *CreateStatement) Validate() error {
-	if cts.TableName == "" {
-		return NewValidationError(CreateTable, "TableName", "table name cannot be empty")
+	if err := cts.requireNonEmpty("TableName", cts.TableName, "table name cannot be empty"); err != nil {
+		return err
 	}
-
-	if len(cts.Fields) == 0 {
-		return NewValidationError(CreateTable, "Fields", "at least one field is required")
+	if err := cts.requireNonEmptySlice("Fields", len(cts.Fields), "at least one field is required"); err != nil {
+		return err
 	}
 
 	fieldNames := make(map[string]bool)
 	for i, field := range cts.Fields {
-		if field.Name == "" {
-			return NewValidationError(CreateTable, fmt.Sprintf("Fields[%d].Name", i), "field name cannot be empty")
+		if err := cts.requireNonEmpty(fmt.Sprintf("Fields[%d].Name", i), field.Name, "field name cannot be empty"); err != nil {
+			return err
 		}
-
-		if field.Type.String() == "" {
-			return NewValidationError(CreateTable, fmt.Sprintf("Fields[%d].Type", i), "field type cannot be empty")
+		if err := cts.requireNonEmpty(fmt.Sprintf("Fields[%d].Type", i), field.Type.String(), "field type cannot be empty"); err != nil {
+			return err
 		}
 
 		if fieldNames[field.Name] {
@@ -496,16 +485,14 @@ func NewCreateIndexStatement(indexName, tableName, columnName string, indexType 
 
 // Validate checks if the CREATE INDEX statement is valid
 func (cis *CreateIndexStatement) Validate() error {
-	if cis.IndexName == "" {
-		return NewValidationError(CreateIndex, "IndexName", "index name cannot be empty")
+	if err := cis.requireNonEmpty("IndexName", cis.IndexName, "index name cannot be empty"); err != nil {
+		return err
 	}
-
-	if cis.TableName == "" {
-		return NewValidationError(CreateIndex, "TableName", "table name cannot be empty")
+	if err := cis.requireNonEmpty("TableName", cis.TableName, "table name cannot be empty"); err != nil {
+		return err
 	}
-
-	if cis.ColumnName == "" {
-		return NewValidationError(CreateIndex, "ColumnName", "column name cannot be empty")
+	if err := cis.requireNonEmpty("ColumnName", cis.ColumnName, "column name cannot be empty"); err != nil {
+		return err
 	}
 
 	if cis.IndexType == "" {
@@ -548,11 +535,7 @@ func NewDropIndexStatement(indexName, tableName string, ifExists bool) *DropInde
 }
 
 func (dis *DropIndexStatement) Validate() error {
-	if dis.IndexName == "" {
-		return NewValidationError(DropIndex, "IndexName", "index name cannot be empty")
-	}
-
-	return nil
+	return dis.requireNonEmpty("IndexName", dis.IndexName, "index name cannot be empty")
 }
 
 func (dis *DropIndexStatement) String() string {

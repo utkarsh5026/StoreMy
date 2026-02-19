@@ -68,3 +68,20 @@ func (ts *TableStatement) GetAlias() string {
 func (ts *TableStatement) HasAlias() bool {
 	return ts.Alias != "" && ts.Alias != ts.TableName
 }
+
+// requireNonEmpty returns a ValidationError when value is empty.
+// It mirrors the statementBuilder pattern used in String() methods.
+func (bs *BaseStatement) requireNonEmpty(fieldName, value, msg string) error {
+	if value == "" {
+		return NewValidationError(bs.stmtType, fieldName, msg)
+	}
+	return nil
+}
+
+// requireNonEmptySlice returns a ValidationError when length is zero.
+func (bs *BaseStatement) requireNonEmptySlice(fieldName string, length int, msg string) error {
+	if length == 0 {
+		return NewValidationError(bs.stmtType, fieldName, msg)
+	}
+	return nil
+}
