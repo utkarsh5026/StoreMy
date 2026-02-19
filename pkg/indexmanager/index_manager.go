@@ -198,6 +198,7 @@ func (i *IndexManager) PopulateIndex(tx *transaction.TransactionContext, file pr
 	if err != nil {
 		return err
 	}
+	defer idx.Close()
 
 	heapFile, ok := table.(*heap.HeapFile)
 	if !ok {
@@ -220,8 +221,8 @@ func (i *IndexManager) PopulateIndex(tx *transaction.TransactionContext, file pr
 }
 
 // openIndex opens an existing index file and returns a ready-to-use index instance.
-// The raw index file is opened solely to obtain its FileID, then closed; the returned
-// index.Index is backed by the shared PageStore rather than the file handle directly.
+// File ownership is transferred to the returned index; callers must call Close() on
+// the returned index to release the file descriptor and unregister from PageStore.
 func (i *IndexManager) openIndex(tx *transaction.TransactionContext, keyType types.Type, filePath primitives.Filepath, indexType index.IndexType) (index.Index, error) {
 	switch indexType {
 	case index.HashIndex:
@@ -229,7 +230,6 @@ func (i *IndexManager) openIndex(tx *transaction.TransactionContext, keyType typ
 		if err != nil {
 			return nil, fmt.Errorf("failed to open hash index: %v", err)
 		}
-		defer hashFile.Close()
 
 		return hashindex.NewHashIndex(hashFile.GetID(), keyType, hashFile, i.pageStore, tx), nil
 
@@ -238,7 +238,6 @@ func (i *IndexManager) openIndex(tx *transaction.TransactionContext, keyType typ
 		if err != nil {
 			return nil, fmt.Errorf("failed to open btree index: %v", err)
 		}
-		defer btreeFile.Close()
 
 		return btreeindex.NewBTree(btreeFile.GetID(), keyType, btreeFile, tx, i.pageStore), nil
 
