@@ -141,15 +141,16 @@ func (l *LogRecord) serializeCLR(buf *bytes.Buffer) error {
 	return l.serializeImage(buf, l.AfterImage)
 }
 
-// serializePageID serializes a PageID by calling its Serialize() method.
+// serializePageID serializes a PageID as two uint32 fields: FileID and PageNo.
 func (l *LogRecord) serializePageID(buf *bytes.Buffer) error {
 	if l.PageID == nil {
 		return nil
 	}
-	for _, b := range l.PageID.Serialize() {
-		if err := binary.Write(buf, binary.BigEndian, uint32(b)); err != nil {
-			return fmt.Errorf("failed to write PageID: %w", err)
-		}
+	if err := binary.Write(buf, binary.BigEndian, uint32(l.PageID.FileID())); err != nil {
+		return fmt.Errorf("failed to write PageID fileID: %w", err)
+	}
+	if err := binary.Write(buf, binary.BigEndian, uint32(l.PageID.PageNo())); err != nil {
+		return fmt.Errorf("failed to write PageID pageNo: %w", err)
 	}
 	return nil
 }
