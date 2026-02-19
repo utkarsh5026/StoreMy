@@ -301,6 +301,65 @@ func (t *Tuple) CompareAt(other *Tuple, fieldIdx primitives.ColumnID) (int, erro
 	return 1, nil
 }
 
+// Hash computes a polynomial rolling hash over all fields of the tuple.
+// Uses h = h*31 + fieldHash for each field, matching the hashTuple convention
+// used in set-operation operators.
+func (t *Tuple) Hash() (primitives.HashCode, error) {
+	var hash primitives.HashCode
+	for i := primitives.ColumnID(0); i < t.fieldCount(); i++ {
+		field, err := t.GetField(i)
+		if err != nil {
+			return 0, fmt.Errorf("failed to hash field %d: %w", i, err)
+		}
+		if field == nil {
+			continue
+		}
+		fieldHash, err := field.Hash()
+		if err != nil {
+			return 0, fmt.Errorf("failed to hash field %d: %w", i, err)
+		}
+		hash = hash*31 + fieldHash
+	}
+	return hash, nil
+}
+
+// Project creates a new tuple containing only the fields at the given column
+// indices (in the order provided). resultDesc must describe exactly len(cols)
+// fields. The RecordID of the source tuple is preserved on the result.
+func (t *Tuple) Project(cols []primitives.ColumnID, resultDesc *TupleDescription) (*Tuple, error) {
+	if primitives.ColumnID(len(cols)) != resultDesc.NumFields() { // #nosec G115
+		return nil, fmt.Errorf("project: cols length %d does not match resultDesc field count %d",
+			len(cols), resultDesc.NumFields())
+	}
+	result := NewTuple(resultDesc)
+	for i, srcIdx := range cols {
+		field, err := t.GetField(srcIdx)
+		if err != nil {
+			return nil, fmt.Errorf("project: failed to get field %d: %w", srcIdx, err)
+		}
+		if err := result.SetField(primitives.ColumnID(i), field); err != nil { // #nosec G115
+			return nil, fmt.Errorf("project: failed to set field %d: %w", i, err)
+		}
+	}
+	result.RecordID = t.RecordID
+	return result, nil
+}
+
+// ToStringSlice returns all field values as strings in order.
+// Nil fields are represented as "NULL".
+func (t *Tuple) ToStringSlice() []string {
+	out := make([]string, t.fieldCount())
+	for i := primitives.ColumnID(0); i < t.fieldCount(); i++ {
+		field := t.fields[i]
+		if field == nil {
+			out[i] = "NULL"
+		} else {
+			out[i] = field.String()
+		}
+	}
+	return out
+}
+
 // fieldCount returns the number of fields in the tuple.
 // This is an unexported helper method, used to get the count of stored field values.
 //

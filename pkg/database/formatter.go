@@ -45,28 +45,11 @@ func formatSelect(result *planner.SelectQueryResult) QueryResult {
 		}
 	}
 
-	numFields := result.TupleDesc.NumFields()
-	columns := make([]string, numFields)
-	for i := range numFields {
-		name, _ := result.TupleDesc.GetFieldName(i)
-		if name == "" {
-			name = fmt.Sprintf("col_%d", i)
-		}
-		columns[i] = name
-	}
+	columns := result.TupleDesc.ColumnNames()
 
 	rows := make([][]string, 0, len(result.Tuples))
-	for _, tuple := range result.Tuples {
-		row := make([]string, numFields)
-		for i := range numFields {
-			field, err := tuple.GetField(i)
-			if err != nil || field == nil {
-				row[i] = "NULL"
-			} else {
-				row[i] = field.String()
-			}
-		}
-		rows = append(rows, row)
+	for _, tup := range result.Tuples {
+		rows = append(rows, tup.ToStringSlice())
 	}
 
 	return QueryResult{

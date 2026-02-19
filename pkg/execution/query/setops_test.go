@@ -371,8 +371,8 @@ func TestHashFunctionConsistency(t *testing.T) {
 	tuple1 := createSetOpTestTuple(desc, 1, "Alice")
 	tuple2 := createSetOpTestTuple(desc, 1, "Alice") // Same content
 
-	hash1 := hashTuple(tuple1)
-	hash2 := hashTuple(tuple2)
+	hash1, _ := tuple1.Hash()
+	hash2, _ := tuple2.Hash()
 
 	if hash1 != hash2 {
 		t.Error("Same tuples should have same hash")
@@ -380,7 +380,7 @@ func TestHashFunctionConsistency(t *testing.T) {
 
 	// Different tuple should (probably) have different hash
 	tuple3 := createSetOpTestTuple(desc, 2, "Bob")
-	hash3 := hashTuple(tuple3)
+	hash3, _ := tuple3.Hash()
 
 	// Note: This could theoretically fail if there's a collision, but unlikely
 	if hash1 == hash3 {

@@ -519,7 +519,7 @@ func resolveIndexMetadata(catalogIndexes []*systemtable.IndexMetadata, schema *s
 	result := make([]*IndexMetadata, 0, len(catalogIndexes))
 
 	for _, catIdx := range catalogIndexes {
-		columnIndex, keyType, err := findColumnInfo(schema, catIdx.ColumnName)
+		columnIndex, keyType, err := schema.TupleDesc.FindFieldWithType(catIdx.ColumnName)
 
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Warning: column %s not found in schema for index %s\n",
@@ -535,26 +535,4 @@ func resolveIndexMetadata(catalogIndexes []*systemtable.IndexMetadata, schema *s
 	}
 
 	return result
-}
-
-// findColumnInfo finds the column index and type in the schema.
-// This helper function searches for a column by name in the table schema.
-//
-// Parameters:
-//   - schema: The table schema to search
-//   - columnName: The name of the column to find
-//
-// Returns:
-//   - The zero-based index of the column in the schema
-//   - The data type of the column
-//   - Returns (-1, IntType) if the column is not found
-func findColumnInfo(schema *schema.Schema, columnName string) (primitives.ColumnID, types.Type, error) {
-	var i primitives.ColumnID
-	for i = 0; i < schema.TupleDesc.NumFields(); i++ {
-		fieldName, _ := schema.TupleDesc.GetFieldName(i)
-		if fieldName == columnName {
-			return i, schema.TupleDesc.Types[i], nil
-		}
-	}
-	return 0, types.IntType, fmt.Errorf("column %s not found", columnName)
 }

@@ -38,19 +38,8 @@ func newSetOp(left, right iterator.DbIterator, opType SetOperationType, preserve
 	ld := left.GetTupleDesc()
 	rd := right.GetTupleDesc()
 
-	if ld.NumFields() != rd.NumFields() {
-		return nil, fmt.Errorf("schema mismatch: left has %d fields, right has %d fields",
-			ld.NumFields(), rd.NumFields())
-	}
-
-	var i primitives.ColumnID
-	for i = 0; i < ld.NumFields(); i++ {
-		lt, _ := ld.TypeAtIndex(i)
-		rt, _ := rd.TypeAtIndex(i)
-		if lt != rt {
-			return nil, fmt.Errorf("schema mismatch at field %d: left type %v, right type %v",
-				i, lt, rt)
-		}
+	if !ld.IsCompatibleWith(rd) {
+		return nil, fmt.Errorf("schema mismatch: left and right inputs have incompatible schemas")
 	}
 
 	return &SetOp{
@@ -144,18 +133,6 @@ func NewTupleSet(preserveAll bool) *TupleSet {
 	}
 }
 
-// hashTuple computes a hash for a tuple based on all its fields.
-func hashTuple(t *tuple.Tuple) primitives.HashCode {
-	var hash primitives.HashCode = 0
-	var i primitives.ColumnID
-	for i = 0; i < t.TupleDesc.NumFields(); i++ {
-		field, _ := t.GetField(i)
-		fieldHash, _ := field.Hash()
-		hash = hash*31 + fieldHash
-	}
-	return hash
-}
-
 // findTupleInList searches for a tuple in a list of tuples.
 // Returns the index if found, -1 otherwise.
 func findTupleInList(t *tuple.Tuple, list []*tuple.Tuple) int {
@@ -168,7 +145,7 @@ func findTupleInList(t *tuple.Tuple, list []*tuple.Tuple) int {
 // Add adds a tuple to the set with collision detection.
 // Returns true if the tuple was added (or count incremented for bag semantics).
 func (ts *TupleSet) Add(t *tuple.Tuple) bool {
-	hash := hashTuple(t)
+	hash, _ := t.Hash()
 
 	existingTuples, hasHash := ts.tuples[hash]
 
@@ -197,7 +174,7 @@ func (ts *TupleSet) Add(t *tuple.Tuple) bool {
 // Contains checks if a tuple exists in the set with collision detection.
 // For bag semantics, returns true if count > 0.
 func (ts *TupleSet) Contains(t *tuple.Tuple) bool {
-	hash := hashTuple(t)
+	hash, _ := t.Hash()
 	existingTuples, hasHash := ts.tuples[hash]
 
 	if !hasHash {
@@ -211,14 +188,14 @@ func (ts *TupleSet) Contains(t *tuple.Tuple) bool {
 // GetCount returns the count of a tuple in the set.
 // For set semantics, returns 1 if present, 0 otherwise.
 func (ts *TupleSet) GetCount(t *tuple.Tuple) int {
-	hash := hashTuple(t)
+	hash, _ := t.Hash()
 	return ts.hashes[hash]
 }
 
 // Decrement reduces the count of a tuple by 1.
 // Returns true if the tuple still exists after decrement.
 func (ts *TupleSet) Decrement(t *tuple.Tuple) bool {
-	hash := hashTuple(t)
+	hash, _ := t.Hash()
 	count, exists := ts.hashes[hash]
 
 	if !exists || count <= 0 {
@@ -231,7 +208,7 @@ func (ts *TupleSet) Decrement(t *tuple.Tuple) bool {
 
 // Remove completely removes a tuple from the set (sets count to 0).
 func (ts *TupleSet) Remove(t *tuple.Tuple) {
-	hash := hashTuple(t)
+	hash, _ := t.Hash()
 	ts.hashes[hash] = 0
 }
 

@@ -233,20 +233,7 @@ func (p *Project) readNext() (*tuple.Tuple, error) {
 		return t, err
 	}
 
-	projected := tuple.NewTuple(p.tupleDesc)
-	for i, fieldIndex := range p.projectedCols {
-		field, err := t.GetField(fieldIndex)
-		if err != nil {
-			return nil, fmt.Errorf("failed to get field %d from source tuple: %v", fieldIndex, err)
-		}
-
-		if err := projected.SetField(primitives.ColumnID(i), field); err != nil {
-			return nil, fmt.Errorf("failed to set field %d in projected tuple: %v", i, err)
-		}
-	}
-
-	projected.RecordID = t.RecordID
-	return projected, nil
+	return t.Project(p.projectedCols, p.tupleDesc)
 }
 
 // validateAndExtractFieldNames validates field indices and extracts corresponding field names
