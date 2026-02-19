@@ -1,5 +1,27 @@
 package statements
 
+import "strings"
+
+// statementBuilder wraps strings.Builder with helpers that eliminate
+// the repetitive if-then-WriteString pattern in Statement.String() methods.
+type statementBuilder struct {
+	strings.Builder
+}
+
+// writeIf appends s only when cond is true.
+func (b *statementBuilder) writeIf(cond bool, s string) {
+	if cond {
+		b.WriteString(s)
+	}
+}
+
+// writeClause appends " keyword value" only when value is non-empty.
+func (b *statementBuilder) writeClause(keyword, value string) {
+	if value != "" {
+		b.WriteString(" " + keyword + " " + value)
+	}
+}
+
 // BaseStatement provides common functionality for all statement types
 type BaseStatement struct {
 	stmtType StatementType
