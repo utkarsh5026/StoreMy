@@ -139,7 +139,9 @@ func (u *UpdateStatement) String() string {
 		}
 		fmt.Fprintf(&sb, "%s = %s", setClause.FieldName, setClause.Value.String())
 	}
-	sb.writeIf(u.HasWhereClause(), fmt.Sprintf(" WHERE %s", u.WhereClause.String()))
+	if u.HasWhereClause() {
+		fmt.Fprintf(&sb, " WHERE %s", u.WhereClause.String())
+	}
 	return sb.String()
 }
 
