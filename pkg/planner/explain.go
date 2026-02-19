@@ -5,7 +5,7 @@ import (
 	"storemy/pkg/optimizer"
 	"storemy/pkg/parser/statements"
 	"storemy/pkg/plan"
-	"storemy/pkg/planner/internal/result"
+	"storemy/pkg/planner/internal/shared"
 	"strings"
 )
 
@@ -28,7 +28,7 @@ func NewExplainPlan(stmt *statements.ExplainStatement, ctx DbContext, tx TxConte
 }
 
 // Execute builds the query plan and returns an ExplainResult with the plan representation.
-func (p *ExplainPlan) Execute() (result.Result, error) {
+func (p *ExplainPlan) Execute() (shared.Result, error) {
 	// Build the logical plan for the underlying statement
 	planNode, err := p.buildLogicalPlan()
 	if err != nil {
@@ -48,7 +48,7 @@ func (p *ExplainPlan) Execute() (result.Result, error) {
 	planText := p.formatPlan(optimizedPlan)
 
 	// Return the explain result
-	return result.NewExplainResult(
+	return shared.NewExplainResult(
 		planText,
 		p.statement.Options.Format,
 		p.statement.Options.Analyze,

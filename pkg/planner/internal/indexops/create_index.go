@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"storemy/pkg/concurrency/transaction"
 	"storemy/pkg/parser/statements"
-	"storemy/pkg/planner/internal/result"
+	"storemy/pkg/planner/internal/shared"
 	"storemy/pkg/registry"
 )
 
@@ -46,7 +46,7 @@ func NewCreateIndexPlan(
 //  4. Registers index in catalog (CATALOG_INDEXES)
 //  5. Populates index with existing data from the table
 //  6. Returns success result
-func (p *CreateIndexPlan) Execute() (result.Result, error) {
+func (p *CreateIndexPlan) Execute() (shared.Result, error) {
 	tableName, indexName, colName := p.Statement.TableName, p.Statement.IndexName, p.Statement.ColumnName
 	idxType := p.Statement.IndexType
 
@@ -57,7 +57,7 @@ func (p *CreateIndexPlan) Execute() (result.Result, error) {
 	if err != nil {
 		// Handle IF NOT EXISTS for already-existing index
 		if p.Statement.IfNotExists && fmt.Sprintf("%v", err) == fmt.Sprintf("index %s already exists", indexName) {
-			return &result.DDLResult{
+			return &shared.DDLResult{
 				Success: true,
 				Message: fmt.Sprintf("Index %s already exists (IF NOT EXISTS)", indexName),
 			}, nil
@@ -101,7 +101,7 @@ func (p *CreateIndexPlan) Execute() (result.Result, error) {
 		return nil, fmt.Errorf("failed to populate index: %w", err)
 	}
 
-	return &result.DDLResult{
+	return &shared.DDLResult{
 		Success: true,
 		Message: fmt.Sprintf("Index %s created successfully on %s(%s) using %s",
 			indexName, tableName, colName, idxType),

@@ -6,7 +6,7 @@ import (
 	"path/filepath"
 	"storemy/pkg/catalog/systemtable"
 	"storemy/pkg/parser/statements"
-	"storemy/pkg/planner/internal/result"
+	"storemy/pkg/planner/internal/shared"
 	"storemy/pkg/planner/internal/testutil"
 	"storemy/pkg/storage/index"
 	"storemy/pkg/types"
@@ -15,7 +15,7 @@ import (
 )
 
 // Helper function to execute plan and cast result to DDLResult
-func executePlan(t *testing.T, plan *CreateTablePlan) (*result.DDLResult, error) {
+func executePlan(t *testing.T, plan *CreateTablePlan) (*shared.DDLResult, error) {
 	res, err := plan.Execute()
 	if err != nil {
 		return nil, err
@@ -25,7 +25,7 @@ func executePlan(t *testing.T, plan *CreateTablePlan) (*result.DDLResult, error)
 		return nil, nil
 	}
 
-	if ddlResult, ok := res.(*result.DDLResult); ok {
+	if ddlResult, ok := res.(*shared.DDLResult); ok {
 		return ddlResult, nil
 	}
 
@@ -387,7 +387,7 @@ func TestCreateTablePlan_Execute_FileCreation(t *testing.T) {
 }
 
 func TestDDLResult_String(t *testing.T) {
-	result := &result.DDLResult{
+	result := &shared.DDLResult{
 		Success: true,
 		Message: "Test message",
 	}
@@ -412,7 +412,7 @@ func TestDDLResult_Values(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := &result.DDLResult{
+			result := &shared.DDLResult{
 				Success: tt.success,
 				Message: tt.message,
 			}

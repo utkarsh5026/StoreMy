@@ -7,12 +7,12 @@ import (
 	"storemy/pkg/planner/internal/ddl"
 	"storemy/pkg/planner/internal/dml"
 	"storemy/pkg/planner/internal/indexops"
-	"storemy/pkg/planner/internal/result"
+	"storemy/pkg/planner/internal/shared"
 )
 
 // Plan represents an executable query plan that can be executed to produce a result.
 type Plan interface {
-	Execute() (result.Result, error)
+	Execute() (shared.Result, error)
 }
 
 // QueryPlanner is responsible for converting parsed SQL statements into executable plans.

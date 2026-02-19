@@ -4,9 +4,7 @@ import (
 	"storemy/pkg/concurrency/transaction"
 	"storemy/pkg/parser/statements"
 	"storemy/pkg/plan"
-	"storemy/pkg/planner/internal/metadata"
-	"storemy/pkg/planner/internal/result"
-	"storemy/pkg/planner/internal/scan"
+	"storemy/pkg/planner/internal/shared"
 	"storemy/pkg/planner/internal/testutil"
 	"storemy/pkg/primitives"
 	"storemy/pkg/registry"
@@ -23,7 +21,7 @@ func setupDeleteTest(t *testing.T) (string, *registry.DatabaseContext, *transact
 }
 
 // Helper function to execute delete plan and cast result to result.DMLResult
-func executeDeletePlan(t *testing.T, plan *DeletePlan) (*result.DMLResult, error) {
+func executeDeletePlan(t *testing.T, plan *DeletePlan) (*shared.DMLResult, error) {
 	resultAny, err := plan.Execute()
 	if err != nil {
 		return nil, err
@@ -33,7 +31,7 @@ func executeDeletePlan(t *testing.T, plan *DeletePlan) (*result.DMLResult, error
 		return nil, nil
 	}
 
-	result, ok := resultAny.(*result.DMLResult)
+	result, ok := resultAny.(*shared.DMLResult)
 	if !ok {
 		t.Fatalf("Result is not a result.DMLResult, got %T", resultAny)
 	}
@@ -339,12 +337,12 @@ func TestDeletePlan_createTableScan(t *testing.T) {
 
 	stmt := statements.NewDeleteStatement("test_table", "")
 
-	tableID, err := metadata.ResolveTableID(stmt.TableName, tx, ctx)
+	tableID, err := shared.ResolveTableID(stmt.TableName, tx, ctx)
 	if err != nil {
 		t.Fatalf("getTableID failed: %v", err)
 	}
 
-	scanOp, err := scan.BuildScanWithFilter(tx, tableID, nil, ctx)
+	scanOp, err := BuildScanWithFilter(tx, tableID, nil, ctx)
 
 	if err != nil {
 		t.Fatalf("createTableScan failed: %v", err)
@@ -375,12 +373,12 @@ func TestDeletePlan_addWhereFilter(t *testing.T) {
 	stmt := statements.NewDeleteStatement("test_table", "")
 	stmt.SetWhereClause(whereClause)
 
-	tableID, err := metadata.ResolveTableID(stmt.TableName, tx, ctx)
+	tableID, err := shared.ResolveTableID(stmt.TableName, tx, ctx)
 	if err != nil {
 		t.Fatalf("getTableID failed: %v", err)
 	}
 
-	filterOp, err := scan.BuildScanWithFilter(tx, tableID, whereClause, ctx)
+	filterOp, err := BuildScanWithFilter(tx, tableID, whereClause, ctx)
 
 	if err != nil {
 		t.Fatalf("addWhereFilter failed: %v", err)
@@ -404,17 +402,17 @@ func TestDeletePlan_collectTuplesToDelete(t *testing.T) {
 
 	stmt := statements.NewDeleteStatement("test_table", "")
 
-	tableID, err := metadata.ResolveTableID(stmt.TableName, tx, ctx)
+	tableID, err := shared.ResolveTableID(stmt.TableName, tx, ctx)
 	if err != nil {
 		t.Fatalf("getTableID failed: %v", err)
 	}
 
-	query, err := scan.BuildScanWithFilter(tx, tableID, nil, ctx)
+	query, err := BuildScanWithFilter(tx, tableID, nil, ctx)
 	if err != nil {
 		t.Fatalf("createQuery failed: %v", err)
 	}
 
-	tuplesToDelete, err := metadata.CollectAllTuples(query)
+	tuplesToDelete, err := shared.CollectAllTuples(query)
 
 	if err != nil {
 		t.Fatalf("collectAllTuples failed: %v", err)
@@ -438,12 +436,12 @@ func TestDeletePlan_createQuery_NoWhere(t *testing.T) {
 
 	stmt := statements.NewDeleteStatement("test_table", "")
 
-	tableID, err := metadata.ResolveTableID(stmt.TableName, tx, ctx)
+	tableID, err := shared.ResolveTableID(stmt.TableName, tx, ctx)
 	if err != nil {
 		t.Fatalf("getTableID failed: %v", err)
 	}
 
-	query, err := scan.BuildScanWithFilter(tx, tableID, nil, ctx)
+	query, err := BuildScanWithFilter(tx, tableID, nil, ctx)
 
 	if err != nil {
 		t.Fatalf("createQuery failed: %v", err)
@@ -474,12 +472,12 @@ func TestDeletePlan_createQuery_WithWhere(t *testing.T) {
 	stmt := statements.NewDeleteStatement("test_table", "")
 	stmt.SetWhereClause(whereClause)
 
-	tableID, err := metadata.ResolveTableID(stmt.TableName, tx, ctx)
+	tableID, err := shared.ResolveTableID(stmt.TableName, tx, ctx)
 	if err != nil {
 		t.Fatalf("getTableID failed: %v", err)
 	}
 
-	query, err := scan.BuildScanWithFilter(tx, tableID, whereClause, ctx)
+	query, err := BuildScanWithFilter(tx, tableID, whereClause, ctx)
 
 	if err != nil {
 		t.Fatalf("createQuery failed: %v", err)

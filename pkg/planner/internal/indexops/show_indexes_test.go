@@ -2,7 +2,7 @@ package indexops
 
 import (
 	"storemy/pkg/parser/statements"
-	"storemy/pkg/planner/internal/result"
+	"storemy/pkg/planner/internal/shared"
 	"storemy/pkg/planner/internal/testutil"
 	"storemy/pkg/storage/index"
 	"storemy/pkg/types"
@@ -27,7 +27,7 @@ func TestShowIndexesPlan_Execute_NoIndexes(t *testing.T) {
 	}
 
 	// Verify res type
-	selectResult, ok := res.(*result.SelectQueryResult)
+	selectResult, ok := res.(*shared.SelectQueryResult)
 	if !ok {
 		t.Fatalf("Expected SelectQueryResult, got: %T", res)
 	}
@@ -78,7 +78,7 @@ func TestShowIndexesPlan_Execute_WithIndexes(t *testing.T) {
 	}
 
 	// Verify res type
-	selectResult, ok := res.(*result.SelectQueryResult)
+	selectResult, ok := res.(*shared.SelectQueryResult)
 	if !ok {
 		t.Fatalf("Expected SelectQueryResult, got: %T", res)
 	}
@@ -209,7 +209,7 @@ func TestShowIndexesPlan_Execute_FilterByTable(t *testing.T) {
 		t.Fatalf("Expected no error, got: %v", err)
 	}
 
-	selectResult, ok := res.(*result.SelectQueryResult)
+	selectResult, ok := res.(*shared.SelectQueryResult)
 	if !ok {
 		t.Fatalf("Expected SelectQueryResult, got: %T", res)
 	}

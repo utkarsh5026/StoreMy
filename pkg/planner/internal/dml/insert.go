@@ -6,8 +6,7 @@ import (
 	"storemy/pkg/catalog/operations"
 	"storemy/pkg/concurrency/transaction"
 	"storemy/pkg/parser/statements"
-	"storemy/pkg/planner/internal/metadata"
-	"storemy/pkg/planner/internal/result"
+	"storemy/pkg/planner/internal/shared"
 	"storemy/pkg/primitives"
 	"storemy/pkg/registry"
 	"storemy/pkg/tuple"
@@ -76,8 +75,8 @@ func NewInsertPlan(stmt *statements.InsertStatement, tx *transaction.Transaction
 //   - Value count mismatch
 //   - Type conversion errors
 //   - Storage layer errors
-func (p *InsertPlan) Execute() (result.Result, error) {
-	md, err := metadata.ResolveTableMetadata(p.statement.TableName, p.tx, p.ctx)
+func (p *InsertPlan) Execute() (shared.Result, error) {
+	md, err := shared.ResolveTableMetadata(p.statement.TableName, p.tx, p.ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -97,7 +96,7 @@ func (p *InsertPlan) Execute() (result.Result, error) {
 		return nil, err
 	}
 
-	return &result.DMLResult{
+	return &shared.DMLResult{
 		RowsAffected: insertedCount,
 		Message:      fmt.Sprintf("%d row(s) inserted", insertedCount),
 	}, nil

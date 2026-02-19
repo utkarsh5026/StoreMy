@@ -6,7 +6,7 @@ import (
 	"storemy/pkg/catalog/schema"
 	"storemy/pkg/concurrency/transaction"
 	"storemy/pkg/parser/statements"
-	"storemy/pkg/planner/internal/result"
+	"storemy/pkg/planner/internal/shared"
 	"storemy/pkg/planner/internal/testutil"
 	"storemy/pkg/registry"
 	"storemy/pkg/storage/index"
@@ -41,7 +41,7 @@ func createTestTableForIndex(t *testing.T, ctx *registry.DatabaseContext, transC
 }
 
 // Helper function to execute CREATE INDEX plan
-func executeCreateIndexPlan(t *testing.T, plan *CreateIndexPlan) (*result.DDLResult, error) {
+func executeCreateIndexPlan(t *testing.T, plan *CreateIndexPlan) (*shared.DDLResult, error) {
 	resultAny, err := plan.Execute()
 	if err != nil {
 		return nil, err
@@ -51,7 +51,7 @@ func executeCreateIndexPlan(t *testing.T, plan *CreateIndexPlan) (*result.DDLRes
 		return nil, nil
 	}
 
-	result, ok := resultAny.(*result.DDLResult)
+	result, ok := resultAny.(*shared.DDLResult)
 	if !ok {
 		t.Fatalf("Result is not a DDLResult, got %T", resultAny)
 	}
@@ -60,7 +60,7 @@ func executeCreateIndexPlan(t *testing.T, plan *CreateIndexPlan) (*result.DDLRes
 }
 
 // Helper function to execute DROP INDEX plan
-func executeDropIndexPlan(t *testing.T, plan *DropIndexPlan) (*result.DDLResult, error) {
+func executeDropIndexPlan(t *testing.T, plan *DropIndexPlan) (*shared.DDLResult, error) {
 	resultAny, err := plan.Execute()
 	if err != nil {
 		return nil, err
@@ -70,7 +70,7 @@ func executeDropIndexPlan(t *testing.T, plan *DropIndexPlan) (*result.DDLResult,
 		return nil, nil
 	}
 
-	result, ok := resultAny.(*result.DDLResult)
+	result, ok := resultAny.(*shared.DDLResult)
 	if !ok {
 		t.Fatalf("Result is not a DDLResult, got %T", resultAny)
 	}

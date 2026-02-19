@@ -4,7 +4,7 @@ import (
 	"storemy/pkg/concurrency/transaction"
 	"storemy/pkg/parser/statements"
 	"storemy/pkg/planner/internal/indexops"
-	"storemy/pkg/planner/internal/result"
+	"storemy/pkg/planner/internal/shared"
 	"storemy/pkg/planner/internal/testutil"
 	"storemy/pkg/primitives"
 	"storemy/pkg/registry"
@@ -31,7 +31,7 @@ func createTestTableForDrop(t *testing.T, ctx *registry.DatabaseContext, transCt
 }
 
 // Helper function to execute DROP TABLE plan
-func executeDropTablePlan(t *testing.T, plan *DropTablePlan) (*result.DDLResult, error) {
+func executeDropTablePlan(t *testing.T, plan *DropTablePlan) (*shared.DDLResult, error) {
 	t.Helper()
 	res, err := plan.Execute()
 	if err != nil {
@@ -40,7 +40,7 @@ func executeDropTablePlan(t *testing.T, plan *DropTablePlan) (*result.DDLResult,
 	if res == nil {
 		return nil, nil
 	}
-	ddlResult, ok := res.(*result.DDLResult)
+	ddlResult, ok := res.(*shared.DDLResult)
 	if !ok {
 		t.Fatalf("Expected *DDLResult, got %T", res)
 	}
@@ -536,7 +536,7 @@ func TestDDLResult_DropTable(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := &result.DDLResult{
+			result := &shared.DDLResult{
 				Success: tt.success,
 				Message: tt.message,
 			}

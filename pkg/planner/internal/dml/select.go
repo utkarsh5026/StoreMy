@@ -9,9 +9,7 @@ import (
 	"storemy/pkg/iterator"
 	"storemy/pkg/parser/statements"
 	"storemy/pkg/plan"
-	"storemy/pkg/planner/internal/metadata"
-	"storemy/pkg/planner/internal/result"
-	"storemy/pkg/planner/internal/scan"
+	"storemy/pkg/planner/internal/shared"
 	"storemy/pkg/primitives"
 	"storemy/pkg/registry"
 	"storemy/pkg/tuple"
@@ -50,7 +48,7 @@ func NewSelectPlan(stmt *statements.SelectStatement, tx *transaction.Transaction
 //  9. Apply LIMIT/OFFSET (if specified)
 //
 // 10. Materialize all results via collectAllTuples()
-func (p *SelectPlan) Execute() (result.Result, error) {
+func (p *SelectPlan) Execute() (shared.Result, error) {
 	if p.statement.Plan.IsSetOperation() {
 		return p.executeSetOperation()
 	}
@@ -60,12 +58,12 @@ func (p *SelectPlan) Execute() (result.Result, error) {
 		return nil, err
 	}
 
-	results, err := metadata.CollectAllTuples(iter)
+	results, err := shared.CollectAllTuples(iter)
 	if err != nil {
 		return nil, err
 	}
 
-	return &result.SelectQueryResult{
+	return &shared.SelectQueryResult{
 		TupleDesc: iter.GetTupleDesc(),
 		Tuples:    results,
 	}, nil
@@ -145,7 +143,7 @@ func (p *SelectPlan) buildScanOperator() (iterator.DbIterator, error) {
 	}
 
 	firstTable := tables[0]
-	metadata, err := metadata.ResolveTableMetadata(firstTable.TableName, p.tx, p.ctx)
+	md, err := shared.ResolveTableMetadata(firstTable.TableName, p.tx, p.ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -156,7 +154,7 @@ func (p *SelectPlan) buildScanOperator() (iterator.DbIterator, error) {
 		filter = filters[0]
 	}
 
-	scanOp, err := scan.BuildScanWithFilter(p.tx, metadata.TableID, filter, p.ctx)
+	scanOp, err := BuildScanWithFilter(p.tx, md.TableID, filter, p.ctx)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create table scan: %w", err)
 	}
@@ -258,12 +256,12 @@ func (p *SelectPlan) applyJoinsIfNeeded(input iterator.DbIterator) (iterator.DbI
 // Each join's right side is a fresh scan of a table (no filter optimization currently).
 func (p *SelectPlan) buildJoinRightSide(joinNode *plan.JoinNode) (iterator.DbIterator, error) {
 	table := joinNode.RightTable
-	md, err := metadata.ResolveTableMetadata(table.TableName, p.tx, p.ctx)
+	md, err := shared.ResolveTableMetadata(table.TableName, p.tx, p.ctx)
 	if err != nil {
 		return nil, err
 	}
 
-	scanOp, err := scan.BuildScanWithFilter(p.tx, md.TableID, nil, p.ctx)
+	scanOp, err := BuildScanWithFilter(p.tx, md.TableID, nil, p.ctx)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create scan for table %s: %w", table.TableName, err)
 	}
@@ -451,7 +449,7 @@ func (p *SelectPlan) applyLimitIfNeeded(input iterator.DbIterator) (iterator.DbI
 //  4. Materialize final results once
 //
 // This approach avoids the wasteful Iterator → Array → Iterator → Array conversion.
-func (p *SelectPlan) executeSetOperation() (result.Result, error) {
+func (p *SelectPlan) executeSetOperation() (shared.Result, error) {
 	pl := p.statement.Plan
 
 	leftIter, err := p.createPlanIter(pl.LeftPlan())
@@ -469,12 +467,12 @@ func (p *SelectPlan) executeSetOperation() (result.Result, error) {
 		return nil, fmt.Errorf("failed to create set operation iterator: %v", err)
 	}
 
-	results, err := metadata.CollectAllTuples(setOp)
+	results, err := shared.CollectAllTuples(setOp)
 	if err != nil {
 		return nil, err
 	}
 
-	return &result.SelectQueryResult{
+	return &shared.SelectQueryResult{
 		TupleDesc: setOp.GetTupleDesc(),
 		Tuples:    results,
 	}, nil

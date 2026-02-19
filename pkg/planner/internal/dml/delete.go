@@ -4,9 +4,7 @@ import (
 	"fmt"
 	"storemy/pkg/concurrency/transaction"
 	"storemy/pkg/parser/statements"
-	"storemy/pkg/planner/internal/metadata"
-	"storemy/pkg/planner/internal/result"
-	"storemy/pkg/planner/internal/scan"
+	"storemy/pkg/planner/internal/shared"
 	"storemy/pkg/primitives"
 	"storemy/pkg/registry"
 	"storemy/pkg/tuple"
@@ -56,18 +54,18 @@ func NewDeletePlan(
 // Returns:
 //   - DMLResult containing the number of rows deleted
 //   - error if any step fails (table not found, invalid WHERE clause, deletion failure, etc.)
-func (p *DeletePlan) Execute() (result.Result, error) {
-	tableID, err := metadata.ResolveTableID(p.statement.TableName, p.tx, p.ctx)
+func (p *DeletePlan) Execute() (shared.Result, error) {
+	tableID, err := shared.ResolveTableID(p.statement.TableName, p.tx, p.ctx)
 	if err != nil {
 		return nil, err
 	}
 
-	query, err := scan.BuildScanWithFilter(p.tx, tableID, p.statement.WhereClause, p.ctx)
+	query, err := BuildScanWithFilter(p.tx, tableID, p.statement.WhereClause, p.ctx)
 	if err != nil {
 		return nil, err
 	}
 
-	tuplesToDelete, err := metadata.CollectAllTuples(query)
+	tuplesToDelete, err := shared.CollectAllTuples(query)
 	if err != nil {
 		return nil, err
 	}
@@ -77,7 +75,7 @@ func (p *DeletePlan) Execute() (result.Result, error) {
 		return nil, err
 	}
 
-	return &result.DMLResult{
+	return &shared.DMLResult{
 		RowsAffected: len(tuplesToDelete),
 		Message:      fmt.Sprintf("%d row(s) deleted", len(tuplesToDelete)),
 	}, nil

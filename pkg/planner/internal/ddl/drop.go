@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"storemy/pkg/catalog/catalogmanager"
 	"storemy/pkg/parser/statements"
-	"storemy/pkg/planner/internal/result"
+	"storemy/pkg/planner/internal/shared"
 	"storemy/pkg/primitives"
 
 	"golang.org/x/sync/errgroup"
@@ -49,13 +49,13 @@ func NewDropTablePlan(
 // Returns:
 //   - DDLResult with success message on completion
 //   - Error if table doesn't exist (without IF EXISTS) or operation fails
-func (p *DropTablePlan) Execute() (result.Result, error) {
+func (p *DropTablePlan) Execute() (shared.Result, error) {
 	cm := p.ctx.CatalogManager()
 	tableName := p.Statement.TableName
 
 	if !cm.TableExists(p.tx, tableName) {
 		if p.Statement.IfExists {
-			return result.NewDDLResult(true, fmt.Sprintf("Table %s does not exist (IF EXISTS)", tableName)), nil
+			return shared.NewDDLResult(true, fmt.Sprintf("Table %s does not exist (IF EXISTS)", tableName)), nil
 		}
 		return nil, fmt.Errorf("table %s does not exist", tableName)
 	}
@@ -69,7 +69,7 @@ func (p *DropTablePlan) Execute() (result.Result, error) {
 		return nil, fmt.Errorf("failed to drop table indexes: %w", err)
 	}
 
-	return result.NewDDLResult(true, fmt.Sprintf("Table %s dropped successfully", tableName)), nil
+	return shared.NewDDLResult(true, fmt.Sprintf("Table %s dropped successfully", tableName)), nil
 }
 
 func (p *DropTablePlan) drop(tableID primitives.FileID) error {

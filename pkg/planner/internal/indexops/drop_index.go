@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"storemy/pkg/concurrency/transaction"
 	"storemy/pkg/parser/statements"
-	"storemy/pkg/planner/internal/result"
+	"storemy/pkg/planner/internal/shared"
 	"storemy/pkg/registry"
 )
 
@@ -65,7 +65,7 @@ func NewDropIndexPlan(
 // Returns:
 //   - DDLResult with success message on completion
 //   - Error if index doesn't exist (without IF EXISTS) or validation fails
-func (p *DropIndexPlan) Execute() (result.Result, error) {
+func (p *DropIndexPlan) Execute() (shared.Result, error) {
 	idxName := p.Statement.IndexName
 	tableName := p.Statement.TableName
 
@@ -76,7 +76,7 @@ func (p *DropIndexPlan) Execute() (result.Result, error) {
 	if err != nil {
 		// Handle IF EXISTS for non-existent index
 		if p.Statement.IfExists {
-			return result.NewDDLResult(true, fmt.Sprintf("Index %s does not exist (IF EXISTS)", idxName)), nil
+			return shared.NewDDLResult(true, fmt.Sprintf("Index %s does not exist (IF EXISTS)", idxName)), nil
 		}
 		return nil, err
 	}
@@ -87,5 +87,5 @@ func (p *DropIndexPlan) Execute() (result.Result, error) {
 		return nil, fmt.Errorf("failed to drop index: %w", err)
 	}
 
-	return result.NewDDLResult(true, fmt.Sprintf("Index %s dropped successfully", idxName)), nil
+	return shared.NewDDLResult(true, fmt.Sprintf("Index %s dropped successfully", idxName)), nil
 }
