@@ -17,6 +17,7 @@ type StatisticsManager struct {
 	updateThreshold   int            // Number of modifications before forcing stats update
 	updateInterval    time.Duration  // Minimum time between stats updates
 	stopChan          chan struct{}  // Channel to signal background worker to stop
+	stopOnce          sync.Once      // Ensures Stop() is idempotent
 	wg                sync.WaitGroup // WaitGroup to track background worker
 	db                interface {
 		BeginTransaction() (*transaction.TransactionContext, error)
@@ -226,6 +227,8 @@ func (sm *StatisticsManager) updateTableInSeparateTransaction(tableID primitives
 
 // Stop gracefully stops the background updater
 func (sm *StatisticsManager) Stop() {
-	close(sm.stopChan)
+	sm.stopOnce.Do(func() {
+		close(sm.stopChan)
+	})
 	sm.wg.Wait()
 }
