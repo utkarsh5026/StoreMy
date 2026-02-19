@@ -126,6 +126,10 @@ type Filter struct {
 // The Filter will evaluate the predicate against each tuple from the source operator,
 // passing through only those tuples that satisfy the condition.
 func NewFilter(predicate *Predicate, source iterator.DbIterator) (*Filter, error) {
+	if predicate == nil {
+		return nil, fmt.Errorf("predicate cannot be nil")
+	}
+
 	if err := validateChild(source); err != nil {
 		return nil, err
 	}
