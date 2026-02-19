@@ -5,6 +5,7 @@ import (
 	"storemy/pkg/concurrency/transaction"
 	"storemy/pkg/storage/page"
 	"storemy/pkg/tuple"
+	"storemy/pkg/utils"
 )
 
 // validateTuplesHaveRecordIDs checks if all tuples have valid RecordIDs.
@@ -29,7 +30,12 @@ func validateBasic(opType string, tx *transaction.TransactionContext, dbFile pag
 		return fmt.Errorf("transaction context cannot be nil")
 	}
 
-	if dbFile == nil {
+	// CRITICAL: Must use IsNilInterface instead of dbFile == nil
+	// In Go, an interface wrapping a nil pointer is NOT equal to nil.
+	// When a nil *heap.HeapFile is passed as page.DbFile interface,
+	// dbFile == nil returns false (interface has type info), but the
+	// underlying value is nil, causing panics when methods are called.
+	if utils.IsNilInterface(dbFile) {
 		return fmt.Errorf("dbFile cannot be nil")
 	}
 
