@@ -384,11 +384,7 @@ func (hf *HashFile) ReadPage(pageID *page.PageDescriptor) (page.Page, error) {
 	pageData, err := hf.ReadPageData(pageID.PageNo())
 	if err != nil {
 		if err == io.EOF {
-			// Return a new empty page for unallocated pages
-			// Use page number as bucket number for initial pages
-			bucketNum := BucketNumber(pageID.PageNo()) // #nosec G115
-			newPage := NewHashPage(pageID, bucketNum, hf.keyType)
-			return newPage, nil
+			return NewHashPage(pageID, BucketNumber(pageID.PageNo()), hf.keyType), nil
 		}
 		return nil, fmt.Errorf("failed to read page data: %w", err)
 	}
@@ -442,8 +438,6 @@ func (hf *HashFile) WritePage(p page.Page) error {
 //
 // Returns:
 //   - int: The newly allocated page number
-//
-// Thread-safe: Uses mutex to ensure atomic page number allocation.
 func (hf *HashFile) AllocatePageNum() primitives.PageNumber {
 	hf.mutex.Lock()
 	defer hf.mutex.Unlock()
@@ -473,6 +467,9 @@ func (hf *HashFile) GetBucketPageNum(bucketNum BucketNumber) (primitives.PageNum
 	return pageNum, nil
 }
 
+// GetTupleDesc returns the tuple description for this index.
+// Since hash indexes don't store full tuples, this returns nil.
+// The schema of the indexed table should be obtained from the table metadata, not the index.
 func (hf *HashFile) GetTupleDesc() *tuple.TupleDescription {
 	return nil
 }
@@ -487,12 +484,6 @@ func (hf *HashFile) GetTupleDesc() *tuple.TupleDescription {
 // Returns:
 //   - Reconstructed HashPage with all entries
 //   - Error if data is corrupted or too short
-//
-// Behavior:
-//   - Parses header (bucket number as uint64, entry count as int32, overflow page as uint64)
-//   - Deserializes each entry
-//   - Infers keyType from first entry's key
-//   - Marks page as clean (not dirty)
 func deserializeHashPage(data []byte, pageID *page.PageDescriptor) (*HashPage, error) {
 	if len(data) < hashHeaderSize {
 		return nil, fmt.Errorf("invalid page data: too short")
