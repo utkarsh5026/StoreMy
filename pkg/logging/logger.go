@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"testing"
 )
 
 // Global logger instance and synchronization
@@ -113,7 +114,12 @@ func InitDefault() {
 		return
 	}
 
-	Logger = slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{
+	var writer io.Writer = os.Stdout
+	if testing.Testing() {
+		writer = io.Discard
+	}
+
+	Logger = slog.New(slog.NewTextHandler(writer, &slog.HandlerOptions{
 		Level: slog.LevelInfo,
 	}))
 	isInited = true
