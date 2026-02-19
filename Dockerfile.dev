@@ -1,5 +1,5 @@
 # Development Dockerfile with Go toolchain for benchmarking and testing
-FROM golang:1.24-alpine
+FROM golang:1.25-alpine
 
 # Install additional tools
 RUN apk add --no-cache git make bash ca-certificates
