@@ -282,7 +282,7 @@ func (db *Database) GetTables() []string {
 
 	tx, _ := db.txRegistry.Begin()
 	defer func() { _ = db.pageStore.CommitTransaction(tx) }()
-	names, _ := db.catalogMgr.ListAllTables(tx, true)
+	names, _ := db.catalogMgr.ListAllTables(tx, false)
 	return names
 }
 
@@ -450,7 +450,7 @@ func (db *Database) Close() error {
 	}
 
 	log.Debug("clearing catalog cache")
-	db.catalogMgr.ClearCache()
+	db.catalogMgr.ClearCacheCompletely()
 
 	log.Info("database closed successfully")
 	return nil

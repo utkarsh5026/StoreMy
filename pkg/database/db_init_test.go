@@ -147,9 +147,9 @@ func TestDatabase_GetTables_Empty(t *testing.T) {
 	defer cleanup()
 
 	tables := db.GetTables()
-	// Should have exactly 3 catalog tables (CATALOG_TABLES and CATALOG_COLUMNS)
-	if len(tables) != 3 {
-		t.Errorf("expected 3 catalog tables, got %d", len(tables))
+	// Should have exactly 6 catalog tables (CATALOG_TABLES, CATALOG_COLUMNS, CATALOG_INDEXES, CATALOG_STATISTICS, CATALOG_COLUMN_STATISTICS, CATALOG_INDEX_STATISTICS)
+	if len(tables) != 6 {
+		t.Errorf("expected 6 catalog tables, got %d", len(tables))
 	}
 
 	// Verify they are the catalog tables
@@ -203,9 +203,9 @@ func TestDatabase_LoadExistingTables_NoCatalogFile(t *testing.T) {
 	defer cleanup()
 
 	tables := db.GetTables()
-	// Should have exactly 3 catalog tables (CATALOG_TABLES and CATALOG_COLUMNS)
-	if len(tables) != 3 {
-		t.Errorf("expected 2 catalog tables, got %d", len(tables))
+	// Should have exactly 6 catalog tables
+	if len(tables) != 6 {
+		t.Errorf("expected 6 catalog tables, got %d", len(tables))
 	}
 }
 
