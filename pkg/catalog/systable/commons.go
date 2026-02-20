@@ -1,4 +1,4 @@
-package operations
+package systable
 
 import (
 	"errors"
@@ -7,7 +7,22 @@ import (
 	"storemy/pkg/concurrency/transaction"
 	"storemy/pkg/primitives"
 	"storemy/pkg/tuple"
+	"storemy/pkg/types"
 )
+
+const (
+	InvalidTableID primitives.FileID = 0 // Represents an invalid or uninitialized table ID
+)
+
+func getIntField(tup *tuple.Tuple, index primitives.ColumnID) int {
+	field, _ := tup.GetField(index)
+	return int(field.(*types.IntField).Value)
+}
+
+func getUint64Field(tup *tuple.Tuple, index primitives.ColumnID) uint64 {
+	field, _ := tup.GetField(index)
+	return field.(*types.Uint64Field).Value
+}
 
 type (
 	TxContext = *transaction.TransactionContext
@@ -21,7 +36,7 @@ var (
 // BaseOperations provides common CRUD operations for catalog tables.
 // It uses Go generics to provide type-safe operations across different catalog entity types.
 //
-// Type parameter T represents the parsed entity type (e.g., *systemtable.TableStatistics).
+// Type parameter T represents the parsed entity type (e.g., *TableStatistics).
 //
 // This eliminates repetitive iterate-parse-process patterns across all operation structs.
 type BaseOperations[T any] struct {
@@ -43,15 +58,14 @@ type BaseOperations[T any] struct {
 func NewBaseOperations[T any](
 	access catalogio.CatalogAccess,
 	tableID primitives.FileID,
-	parser func(*tuple.Tuple) (T, error),
-	creator func(T) *tuple.Tuple,
+	descriptor SystemTableDescriptor[T],
 ) *BaseOperations[T] {
 	return &BaseOperations[T]{
 		reader:  access,
 		writer:  access,
 		tableID: tableID,
-		parser:  parser,
-		creator: creator,
+		parser:  descriptor.ParseTuple,
+		creator: descriptor.CreateTuple,
 	}
 }
 

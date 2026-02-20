@@ -1,16 +1,15 @@
-package operations
+package systable
 
 import (
 	"fmt"
-	"storemy/pkg/catalog/systemtable"
 	"storemy/pkg/primitives"
 	"storemy/pkg/tuple"
 	"testing"
 )
 
 // Helper to create table metadata tuple
-func createTableTuple(tableID primitives.FileID, tableName, filePath, primaryKey string) *systemtable.TableMetadata {
-	return &systemtable.TableMetadata{
+func createTableTuple(tableID primitives.FileID, tableName, filePath, primaryKey string) *TableMetadata {
+	return &TableMetadata{
 		TableID:       tableID,
 		TableName:     tableName,
 		FilePath:      primitives.Filepath(filePath),
@@ -24,15 +23,15 @@ func TestGetTableMetadataByID(t *testing.T) {
 
 	// Add table tuples
 	mock.tuples[tableTableID] = []*tuple.Tuple{
-		systemtable.Tables.CreateTuple(*createTableTuple(10, "users", "/data/users.dat", "id")),
-		systemtable.Tables.CreateTuple(*createTableTuple(20, "products", "/data/products.dat", "sku")),
-		systemtable.Tables.CreateTuple(*createTableTuple(30, "orders", "/data/orders.dat", "order_id")),
+		TablesTableDescriptor.CreateTuple(*createTableTuple(10, "users", "/data/users.dat", "id")),
+		TablesTableDescriptor.CreateTuple(*createTableTuple(20, "products", "/data/products.dat", "sku")),
+		TablesTableDescriptor.CreateTuple(*createTableTuple(30, "orders", "/data/orders.dat", "order_id")),
 	}
 
-	ops := NewTableOperations(mock, tableTableID)
+	ops := NewTablesTable(mock, tableTableID)
 
 	// Test: Find by ID
-	tm, err := ops.GetTableMetadataByID(nil, 20)
+	tm, err := ops.GetByID(nil, 20)
 	if err != nil {
 		t.Fatalf("Failed to get table by ID: %v", err)
 	}
@@ -48,7 +47,7 @@ func TestGetTableMetadataByID(t *testing.T) {
 	}
 
 	// Test: Non-existent ID
-	_, err = ops.GetTableMetadataByID(nil, 999)
+	_, err = ops.GetByID(nil, 999)
 	if err == nil {
 		t.Error("Expected error for non-existent table ID")
 	}
@@ -59,14 +58,14 @@ func TestGetTableMetadataByName(t *testing.T) {
 	tableTableID := primitives.FileID(100)
 
 	mock.tuples[tableTableID] = []*tuple.Tuple{
-		systemtable.Tables.CreateTuple(*createTableTuple(10, "users", "/data/users.dat", "id")),
-		systemtable.Tables.CreateTuple(*createTableTuple(20, "Products", "/data/products.dat", "sku")),
+		TablesTableDescriptor.CreateTuple(*createTableTuple(10, "users", "/data/users.dat", "id")),
+		TablesTableDescriptor.CreateTuple(*createTableTuple(20, "Products", "/data/products.dat", "sku")),
 	}
 
-	ops := NewTableOperations(mock, tableTableID)
+	ops := NewTablesTable(mock, tableTableID)
 
 	// Test: Find by name (case-insensitive)
-	tm, err := ops.GetTableMetadataByName(nil, "USERS")
+	tm, err := ops.GetByName(nil, "USERS")
 	if err != nil {
 		t.Fatalf("Failed to get table by name: %v", err)
 	}
@@ -79,7 +78,7 @@ func TestGetTableMetadataByName(t *testing.T) {
 	}
 
 	// Test: Case insensitivity for Products
-	tm, err = ops.GetTableMetadataByName(nil, "products")
+	tm, err = ops.GetByName(nil, "products")
 	if err != nil {
 		t.Fatalf("Failed to get table by name (case-insensitive): %v", err)
 	}
@@ -88,7 +87,7 @@ func TestGetTableMetadataByName(t *testing.T) {
 	}
 
 	// Test: Non-existent table
-	_, err = ops.GetTableMetadataByName(nil, "nonexistent")
+	_, err = ops.GetByName(nil, "nonexistent")
 	if err == nil {
 		t.Error("Expected error for non-existent table name")
 	}
@@ -100,16 +99,16 @@ func TestGetAllTables(t *testing.T) {
 
 	// Add multiple tables
 	mock.tuples[tableTableID] = []*tuple.Tuple{
-		systemtable.Tables.CreateTuple(*createTableTuple(10, "users", "/data/users.dat", "id")),
-		systemtable.Tables.CreateTuple(*createTableTuple(20, "products", "/data/products.dat", "sku")),
-		systemtable.Tables.CreateTuple(*createTableTuple(30, "orders", "/data/orders.dat", "order_id")),
-		systemtable.Tables.CreateTuple(*createTableTuple(40, "customers", "/data/customers.dat", "customer_id")),
+		TablesTableDescriptor.CreateTuple(*createTableTuple(10, "users", "/data/users.dat", "id")),
+		TablesTableDescriptor.CreateTuple(*createTableTuple(20, "products", "/data/products.dat", "sku")),
+		TablesTableDescriptor.CreateTuple(*createTableTuple(30, "orders", "/data/orders.dat", "order_id")),
+		TablesTableDescriptor.CreateTuple(*createTableTuple(40, "customers", "/data/customers.dat", "customer_id")),
 	}
 
-	ops := NewTableOperations(mock, tableTableID)
+	ops := NewTablesTable(mock, tableTableID)
 
 	// Test: Get all tables
-	tables, err := ops.GetAllTables(nil)
+	tables, err := ops.GetAll(nil)
 	if err != nil {
 		t.Fatalf("Failed to get all tables: %v", err)
 	}
@@ -142,10 +141,10 @@ func TestGetAllTables_EmptyTable(t *testing.T) {
 	tableTableID := primitives.FileID(100)
 	mock.tuples[tableTableID] = []*tuple.Tuple{} // Empty table
 
-	ops := NewTableOperations(mock, tableTableID)
+	ops := NewTablesTable(mock, tableTableID)
 
 	// Test: Get all tables from empty catalog
-	tables, err := ops.GetAllTables(nil)
+	tables, err := ops.GetAll(nil)
 	if err != nil {
 		t.Fatalf("Should not error on empty table: %v", err)
 	}
@@ -159,10 +158,10 @@ func TestGetTableMetadataByName_CaseInsensitive(t *testing.T) {
 	tableTableID := primitives.FileID(100)
 
 	mock.tuples[tableTableID] = []*tuple.Tuple{
-		systemtable.Tables.CreateTuple(*createTableTuple(10, "MyTableName", "/data/mytable.dat", "id")),
+		TablesTableDescriptor.CreateTuple(*createTableTuple(10, "MyTableName", "/data/mytable.dat", "id")),
 	}
 
-	ops := NewTableOperations(mock, tableTableID)
+	ops := NewTablesTable(mock, tableTableID)
 
 	testCases := []string{
 		"mytablename",
@@ -172,7 +171,7 @@ func TestGetTableMetadataByName_CaseInsensitive(t *testing.T) {
 	}
 
 	for _, testName := range testCases {
-		tm, err := ops.GetTableMetadataByName(nil, testName)
+		tm, err := ops.GetByName(nil, testName)
 		if err != nil {
 			t.Errorf("Failed to find table with name '%s': %v", testName, err)
 		}
@@ -187,11 +186,11 @@ func TestGetTableMetadataByID_EdgeCases(t *testing.T) {
 	tableTableID := primitives.FileID(100)
 
 	mock.tuples[tableTableID] = []*tuple.Tuple{
-		systemtable.Tables.CreateTuple(*createTableTuple(1, "table_1", "/data/t1.dat", "id")),
-		systemtable.Tables.CreateTuple(*createTableTuple(999999, "table_large", "/data/tlarge.dat", "id")),
+		TablesTableDescriptor.CreateTuple(*createTableTuple(1, "table_1", "/data/t1.dat", "id")),
+		TablesTableDescriptor.CreateTuple(*createTableTuple(999999, "table_large", "/data/tlarge.dat", "id")),
 	}
 
-	ops := NewTableOperations(mock, tableTableID)
+	ops := NewTablesTable(mock, tableTableID)
 
 	// Test valid IDs
 	testCases := []struct {
@@ -206,7 +205,7 @@ func TestGetTableMetadataByID_EdgeCases(t *testing.T) {
 	}
 
 	for _, tc := range testCases {
-		tm, err := ops.GetTableMetadataByID(nil, tc.id)
+		tm, err := ops.GetByID(nil, tc.id)
 		if tc.expectFound {
 			if err != nil {
 				t.Errorf("Expected to find table with ID %d: %v", tc.id, err)
@@ -236,16 +235,17 @@ func TestGetTableMetadataByName_SpecialCharacters(t *testing.T) {
 	}
 
 	// Create tuples for each special name
+
 	for i, name := range specialNames {
-		tup := systemtable.Tables.CreateTuple(*createTableTuple(fid(i+1), name, fmt.Sprintf("/data/%d.dat", i), "id"))
+		tup := TablesTableDescriptor.CreateTuple(*createTableTuple(fid(i+1), name, fmt.Sprintf("/data/%d.dat", i), "id"))
 		mock.tuples[tableTableID] = append(mock.tuples[tableTableID], tup)
 	}
 
-	ops := NewTableOperations(mock, tableTableID)
+	ops := NewTablesTable(mock, tableTableID)
 
 	// Test each special name can be found
 	for i, name := range specialNames {
-		tm, err := ops.GetTableMetadataByName(nil, name)
+		tm, err := ops.GetByName(nil, name)
 		if err != nil {
 			t.Errorf("Failed to find table with name '%s': %v", name, err)
 		}
@@ -259,14 +259,16 @@ func TestGetTableMetadataByName_EmptyName(t *testing.T) {
 	mock := newMockCatalogAccess()
 	tableTableID := primitives.FileID(100)
 
+	// Add a valid table to ensure the system is working
+
 	mock.tuples[tableTableID] = []*tuple.Tuple{
-		systemtable.Tables.CreateTuple(*createTableTuple(10, "valid_name", "/data/valid.dat", "id")),
+		TablesTableDescriptor.CreateTuple(*createTableTuple(10, "valid_name", "/data/valid.dat", "id")),
 	}
 
-	ops := NewTableOperations(mock, tableTableID)
+	ops := NewTablesTable(mock, tableTableID)
 
 	// Try to find by empty name
-	_, err := ops.GetTableMetadataByName(nil, "")
+	_, err := ops.GetByName(nil, "")
 	if err == nil {
 		t.Error("Expected error when searching for empty table name")
 	}
@@ -278,15 +280,15 @@ func TestTableOperations_WithPrimaryKeys(t *testing.T) {
 
 	// Tables with different primary key configurations
 	mock.tuples[tableTableID] = []*tuple.Tuple{
-		systemtable.Tables.CreateTuple(*createTableTuple(10, "with_pk", "/data/with_pk.dat", "id")),
-		systemtable.Tables.CreateTuple(*createTableTuple(20, "no_pk", "/data/no_pk.dat", "")),
-		systemtable.Tables.CreateTuple(*createTableTuple(30, "composite_pk", "/data/composite_pk.dat", "user_id,order_id")),
+		TablesTableDescriptor.CreateTuple(*createTableTuple(10, "with_pk", "/data/with_pk.dat", "id")),
+		TablesTableDescriptor.CreateTuple(*createTableTuple(20, "no_pk", "/data/no_pk.dat", "")),
+		TablesTableDescriptor.CreateTuple(*createTableTuple(30, "composite_pk", "/data/composite_pk.dat", "user_id,order_id")),
 	}
 
-	ops := NewTableOperations(mock, tableTableID)
+	ops := NewTablesTable(mock, tableTableID)
 
 	// Test table with primary key
-	tm, err := ops.GetTableMetadataByName(nil, "with_pk")
+	tm, err := ops.GetByName(nil, "with_pk")
 	if err != nil {
 		t.Fatalf("Failed to get table with primary key: %v", err)
 	}
@@ -295,7 +297,7 @@ func TestTableOperations_WithPrimaryKeys(t *testing.T) {
 	}
 
 	// Test table without primary key
-	tm, err = ops.GetTableMetadataByName(nil, "no_pk")
+	tm, err = ops.GetByName(nil, "no_pk")
 	if err != nil {
 		t.Fatalf("Failed to get table without primary key: %v", err)
 	}
@@ -304,7 +306,7 @@ func TestTableOperations_WithPrimaryKeys(t *testing.T) {
 	}
 
 	// Test table with composite primary key
-	tm, err = ops.GetTableMetadataByName(nil, "composite_pk")
+	tm, err = ops.GetByName(nil, "composite_pk")
 	if err != nil {
 		t.Fatalf("Failed to get table with composite primary key: %v", err)
 	}
@@ -319,7 +321,7 @@ func TestGetAllTables_LargeNumberOfTables(t *testing.T) {
 
 	// Create 100 tables
 	for i := 1; i <= 100; i++ {
-		tup := systemtable.Tables.CreateTuple(*createTableTuple(
+		tup := TablesTableDescriptor.CreateTuple(*createTableTuple(
 			fid(i),
 			fmt.Sprintf("table_%d", i),
 			fmt.Sprintf("/data/table_%d.dat", i),
@@ -328,9 +330,9 @@ func TestGetAllTables_LargeNumberOfTables(t *testing.T) {
 		mock.tuples[tableTableID] = append(mock.tuples[tableTableID], tup)
 	}
 
-	ops := NewTableOperations(mock, tableTableID)
+	ops := NewTablesTable(mock, tableTableID)
 
-	tables, err := ops.GetAllTables(nil)
+	tables, err := ops.GetAll(nil)
 	if err != nil {
 		t.Fatalf("Failed to get all tables: %v", err)
 	}
@@ -358,14 +360,14 @@ func TestGetTableMetadataByName_DuplicateNames(t *testing.T) {
 
 	// Create tables with same name but different IDs (edge case)
 	mock.tuples[tableTableID] = []*tuple.Tuple{
-		systemtable.Tables.CreateTuple(*createTableTuple(10, "duplicate", "/data/dup1.dat", "id")),
-		systemtable.Tables.CreateTuple(*createTableTuple(20, "duplicate", "/data/dup2.dat", "id")),
+		TablesTableDescriptor.CreateTuple(*createTableTuple(10, "duplicate", "/data/dup1.dat", "id")),
+		TablesTableDescriptor.CreateTuple(*createTableTuple(20, "duplicate", "/data/dup2.dat", "id")),
 	}
 
-	ops := NewTableOperations(mock, tableTableID)
+	ops := NewTablesTable(mock, tableTableID)
 
-	// GetTableMetadataByName should return the first match
-	tm, err := ops.GetTableMetadataByName(nil, "duplicate")
+	// GetByName should return the first match
+	tm, err := ops.GetByName(nil, "duplicate")
 	if err != nil {
 		t.Fatalf("Failed to get table by name: %v", err)
 	}
@@ -382,18 +384,18 @@ func TestGetTableMetadataByID_SystemTables(t *testing.T) {
 
 	// Simulate system catalog tables
 	systemTables := []*tuple.Tuple{
-		systemtable.Tables.CreateTuple(*createTableTuple(1, "CATALOG_TABLES", "catalog_tables.dat", "table_id")),
-		systemtable.Tables.CreateTuple(*createTableTuple(2, "CATALOG_COLUMNS", "catalog_columns.dat", "column_id")),
-		systemtable.Tables.CreateTuple(*createTableTuple(3, "CATALOG_INDEXES", "catalog_indexes.dat", "index_id")),
+		TablesTableDescriptor.CreateTuple(*createTableTuple(1, "CATALOG_TABLES", "catalog_tables.dat", "table_id")),
+		TablesTableDescriptor.CreateTuple(*createTableTuple(2, "CATALOG_COLUMNS", "catalog_columns.dat", "column_id")),
+		TablesTableDescriptor.CreateTuple(*createTableTuple(3, "CATALOG_INDEXES", "catalog_indexes.dat", "index_id")),
 	}
 
 	mock.tuples[tableTableID] = systemTables
 
-	ops := NewTableOperations(mock, tableTableID)
+	ops := NewTablesTable(mock, tableTableID)
 
 	// Test retrieving system tables
 	for _, expectedID := range []primitives.FileID{1, 2, 3} {
-		tm, err := ops.GetTableMetadataByID(nil, expectedID)
+		tm, err := ops.GetByID(nil, expectedID)
 		if err != nil {
 			t.Errorf("Failed to get system table with ID %d: %v", expectedID, err)
 		}
@@ -420,15 +422,15 @@ func TestTableOperations_FilePaths(t *testing.T) {
 	}
 
 	for i, fp := range filePaths {
-		tup := systemtable.Tables.CreateTuple(*createTableTuple(primitives.FileID(i+1), fmt.Sprintf("table_%d", i), fp.path, "id"))
+		tup := TablesTableDescriptor.CreateTuple(*createTableTuple(primitives.FileID(i+1), fmt.Sprintf("table_%d", i), fp.path, "id"))
 		mock.tuples[tableTableID] = append(mock.tuples[tableTableID], tup)
 	}
 
-	ops := NewTableOperations(mock, tableTableID)
+	ops := NewTablesTable(mock, tableTableID)
 
 	// Verify all file paths are preserved correctly
 	for i, fp := range filePaths {
-		tm, err := ops.GetTableMetadataByID(nil, primitives.FileID(i+1))
+		tm, err := ops.GetByID(nil, primitives.FileID(i+1))
 		if err != nil {
 			t.Errorf("Failed to get table with ID %d: %v", i+1, err)
 		}
@@ -439,22 +441,20 @@ func TestTableOperations_FilePaths(t *testing.T) {
 }
 
 func TestTableOperations_Isolation(t *testing.T) {
-	// This test demonstrates that TableOperations only depends on interfaces
-	// and doesn't require the full SystemCatalog
-
 	mock := newMockCatalogAccess()
 	tableTableID := primitives.FileID(100)
 
 	// Add some data
+
 	mock.tuples[tableTableID] = []*tuple.Tuple{
-		systemtable.Tables.CreateTuple(*createTableTuple(10, "test_table", "/data/test.dat", "id")),
+		TablesTableDescriptor.CreateTuple(*createTableTuple(10, "test_table", "/data/test.dat", "id")),
 	}
 
 	// Create operations with just the interface
-	ops := NewTableOperations(mock, tableTableID)
+	ops := NewTablesTable(mock, tableTableID)
 
 	// Should work without any SystemCatalog dependencies
-	tm, err := ops.GetTableMetadataByID(nil, 10)
+	tm, err := ops.GetByID(nil, 10)
 	if err != nil {
 		t.Fatalf("Failed with interface-only dependency: %v", err)
 	}
@@ -479,15 +479,15 @@ func TestGetTableMetadataByName_Unicode(t *testing.T) {
 	}
 
 	for i, name := range unicodeNames {
-		tup := systemtable.Tables.CreateTuple(*createTableTuple(fid(i+1), name, fmt.Sprintf("/data/%d.dat", i), "id"))
+		tup := TablesTableDescriptor.CreateTuple(*createTableTuple(fid(i+1), name, fmt.Sprintf("/data/%d.dat", i), "id"))
 		mock.tuples[tableTableID] = append(mock.tuples[tableTableID], tup)
 	}
 
-	ops := NewTableOperations(mock, tableTableID)
+	ops := NewTablesTable(mock, tableTableID)
 
 	// Test each unicode name can be found
 	for i, name := range unicodeNames {
-		tm, err := ops.GetTableMetadataByName(nil, name)
+		tm, err := ops.GetByName(nil, name)
 		if err != nil {
 			t.Errorf("Failed to find table with unicode name '%s': %v", name, err)
 		}
@@ -502,15 +502,16 @@ func TestGetAllTables_OrderPreservation(t *testing.T) {
 	tableTableID := primitives.FileID(100)
 
 	// Add tables in specific order
+
 	tableIDs := []primitives.FileID{5, 1, 10, 3, 7}
 	for _, id := range tableIDs {
-		tup := systemtable.Tables.CreateTuple(*createTableTuple(id, fmt.Sprintf("table_%d", id), fmt.Sprintf("/data/%d.dat", id), "id"))
+		tup := TablesTableDescriptor.CreateTuple(*createTableTuple(id, fmt.Sprintf("table_%d", id), fmt.Sprintf("/data/%d.dat", id), "id"))
 		mock.tuples[tableTableID] = append(mock.tuples[tableTableID], tup)
 	}
 
-	ops := NewTableOperations(mock, tableTableID)
+	ops := NewTablesTable(mock, tableTableID)
 
-	tables, err := ops.GetAllTables(nil)
+	tables, err := ops.GetAll(nil)
 	if err != nil {
 		t.Fatalf("Failed to get all tables: %v", err)
 	}
@@ -525,5 +526,111 @@ func TestGetAllTables_OrderPreservation(t *testing.T) {
 		if !foundIDs[id] {
 			t.Errorf("Table ID %d not found in results", id)
 		}
+	}
+}
+
+// TestTablesTable_RoundTrip tests CreateTuple and Parse for TablesTable
+func TestTablesTable_RoundTrip(t *testing.T) {
+
+	metadata := TableMetadata{
+		TableID:       1,
+		TableName:     "users",
+		FilePath:      "users.dat",
+		PrimaryKeyCol: "id",
+	}
+
+	// Create tuple
+	tup := TablesTableDescriptor.CreateTuple(metadata)
+	if tup == nil {
+		t.Fatal("CreateTuple returned nil")
+	}
+
+	// Parse it back
+	parsed, err := TablesTableDescriptor.ParseTuple(tup)
+	if err != nil {
+		t.Fatalf("Parse failed: %v", err)
+	}
+
+	// Verify fields
+	if parsed.TableID != metadata.TableID {
+		t.Errorf("TableID mismatch: expected %d, got %d", metadata.TableID, parsed.TableID)
+	}
+	if parsed.TableName != metadata.TableName {
+		t.Errorf("TableName mismatch: expected %s, got %s", metadata.TableName, parsed.TableName)
+	}
+	if parsed.FilePath != metadata.FilePath {
+		t.Errorf("FilePath mismatch: expected %s, got %s", metadata.FilePath, parsed.FilePath)
+	}
+	if parsed.PrimaryKeyCol != metadata.PrimaryKeyCol {
+		t.Errorf("PrimaryKeyCol mismatch: expected %s, got %s", metadata.PrimaryKeyCol, parsed.PrimaryKeyCol)
+	}
+}
+
+// TestTablesTable_ParseValidation tests validation in Parse method
+func TestTablesTable_ParseValidation(t *testing.T) {
+
+	tests := []struct {
+		name      string
+		metadata  TableMetadata
+		shouldErr bool
+		errMsg    string
+	}{
+		{
+			name: "valid metadata",
+			metadata: TableMetadata{
+				TableID:       1,
+				TableName:     "users",
+				FilePath:      "users.dat",
+				PrimaryKeyCol: "id",
+			},
+			shouldErr: false,
+		},
+		{
+			name: "invalid table_id",
+			metadata: TableMetadata{
+				TableID:       InvalidTableID,
+				TableName:     "users",
+				FilePath:      "users.dat",
+				PrimaryKeyCol: "id",
+			},
+			shouldErr: true,
+			errMsg:    "invalid table_id",
+		},
+		{
+			name: "empty table_name",
+			metadata: TableMetadata{
+				TableID:       1,
+				TableName:     "",
+				FilePath:      "users.dat",
+				PrimaryKeyCol: "id",
+			},
+			shouldErr: true,
+			errMsg:    "table_name cannot be empty",
+		},
+		{
+			name: "empty file_path",
+			metadata: TableMetadata{
+				TableID:       1,
+				TableName:     "users",
+				FilePath:      "",
+				PrimaryKeyCol: "id",
+			},
+			shouldErr: true,
+			errMsg:    "file_path cannot be empty",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			tup := TablesTableDescriptor.CreateTuple(tc.metadata)
+			_, err := TablesTableDescriptor.ParseTuple(tup)
+
+			if tc.shouldErr && err == nil {
+				t.Errorf("expected error containing '%s', got nil", tc.errMsg)
+			}
+			if !tc.shouldErr && err != nil {
+				t.Errorf("expected no error, got %v", err)
+			}
+		})
 	}
 }

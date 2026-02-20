@@ -1,16 +1,78 @@
-package operations
+package systable
 
 import (
 	"fmt"
 	"sort"
 	"storemy/pkg/catalog/catalogio"
-	"storemy/pkg/catalog/systemtable"
 	"storemy/pkg/optimizer/statistics"
 	"storemy/pkg/primitives"
 	"storemy/pkg/tuple"
 	"storemy/pkg/types"
 	"time"
 )
+
+// ColumnStatisticsRow represents a row in the CATALOG_COLUMN_STATISTICS table
+// Note: Histogram and MCV data are stored separately due to size constraints
+type ColumnStatisticsRow struct {
+	TableID       primitives.FileID   // Table identifier
+	ColumnName    string              // Column name
+	ColumnIndex   primitives.ColumnID // Column position (0-based)
+	DistinctCount uint64              // Number of distinct values
+	NullCount     uint64              // Number of NULL values
+	MinValue      string              // Minimum value (as string)
+	MaxValue      string              // Maximum value (as string)
+	AvgWidth      uint64              // Average width in bytes
+	LastUpdated   time.Time           // Last update timestamp
+}
+
+type ColumnStatsTable struct {
+	fileGetter FileGetter
+	*BaseOperations[ColumnStatisticsRow]
+	colOps *ColumnsTable
+}
+
+// NewColStatsOperations creates a new ColumnStatsTable instance.
+//
+// Parameters:
+//   - access: CatalogAccess interface providing both read and write capabilities
+//   - id: The table ID of the CATALOG_COLUMN_STATISTICS system table
+//   - fileGetter: Function to retrieve database files by table ID
+//   - colOps: ColumnsTable instance for accessing column metadata
+//
+// Returns a configured ColumnStatsTable ready to collect and manage column statistics.
+func NewColStatsOperations(
+	access catalogio.CatalogAccess,
+	id primitives.FileID,
+	f FileGetter,
+	c *ColumnsTable,
+) *ColumnStatsTable {
+	ct := &ColumnStatsTable{
+		fileGetter: f,
+		colOps:     c,
+	}
+
+	ct.BaseOperations = NewBaseOperations(
+		access,
+		id,
+		ColumnStatisticsTableDescriptor,
+	)
+
+	return ct
+}
+
+// GetTableID extracts the table ID from a column statistics tuple
+func (cst *ColumnStatsTable) GetTableID(t *tuple.Tuple) (primitives.FileID, error) {
+	if t.TupleDesc.NumFields() != 9 {
+		return 0, fmt.Errorf("invalid tuple: expected 9 fields, got %d", t.TupleDesc.NumFields())
+	}
+
+	tableID := primitives.FileID(getUint64Field(t, 0))
+	if tableID == InvalidTableID {
+		return 0, fmt.Errorf("invalid table_id: cannot be InvalidTableID (%d)", InvalidTableID)
+	}
+
+	return tableID, nil
+}
 
 const (
 	// DefaultHistogramBuckets is the default number of histogram buckets for column statistics
@@ -19,51 +81,12 @@ const (
 	DefaultMCVCount = 5
 )
 
-type colStats = systemtable.ColumnStatisticsRow
-
 // ColStatsInfo contains column statistics along with histogram and most common values
 type ColStatsInfo struct {
-	colStats
+	*ColumnStatisticsRow
 	Histogram      *statistics.Histogram
 	MostCommonVals []types.Field
 	MCVFreqs       []float64
-}
-
-type ColStatsOperations struct {
-	fileGetter FileGetter
-	BaseOperations[*colStats]
-	colOps *ColumnOperations
-}
-
-// NewColStatsOperations creates a new ColStatsOperations instance.
-//
-// Parameters:
-//   - access: CatalogAccess interface providing both read and write capabilities
-//   - colStatsTableID: The table ID of the CATALOG_COLUMN_STATISTICS system table
-//   - fileGetter: Function to retrieve database files by table ID
-//   - colOps: ColumnOperations instance for accessing column metadata
-//
-// Returns a configured ColStatsOperations ready to collect and manage column statistics.
-func NewColStatsOperations(
-	access catalogio.CatalogAccess,
-	colStatsTableID primitives.FileID,
-	fileGetter FileGetter,
-	colOps *ColumnOperations,
-) *ColStatsOperations {
-	base := NewBaseOperations(
-		access,
-		colStatsTableID,
-		systemtable.ColumnStats.Parse,
-		func(cs *colStats) *Tuple {
-			return systemtable.ColumnStats.CreateTuple(cs)
-		},
-	)
-
-	return &ColStatsOperations{
-		fileGetter:     fileGetter,
-		BaseOperations: *base,
-		colOps:         colOps,
-	}
 }
 
 // CollectColumnStatistics collects statistics for a specific column in a table.
@@ -71,7 +94,7 @@ func NewColStatsOperations(
 // - Null count, distinct count, min/max values, average width
 // - Histogram distribution
 // - Most common values (MCV) and their frequencies
-func (co *ColStatsOperations) CollectColumnStatistics(tx TxContext, colName string, tableID primitives.FileID, columnIndex primitives.ColumnID, histogramBuckets, mcvCount int) (*ColStatsInfo, error) {
+func (co *ColumnStatsTable) CollectColumnStatistics(tx TxContext, colName string, tableID primitives.FileID, columnIndex primitives.ColumnID, histogramBuckets, mcvCount int) (*ColStatsInfo, error) {
 	if _, err := co.fileGetter(tableID); err != nil {
 		return nil, fmt.Errorf("failed to get db file: %w", err)
 	}
@@ -114,7 +137,7 @@ func (co *ColStatsOperations) CollectColumnStatistics(tx TxContext, colName stri
 	}
 
 	// Initialize base statistics
-	stats := &colStats{
+	stats := &ColumnStatisticsRow{
 		TableID:     tableID,
 		ColumnName:  colName,
 		ColumnIndex: columnIndex,
@@ -126,7 +149,7 @@ func (co *ColStatsOperations) CollectColumnStatistics(tx TxContext, colName stri
 	if len(values) == 0 {
 		stats.DistinctCount = 0
 		stats.AvgWidth = 0
-		return &ColStatsInfo{colStats: *stats}, nil
+		return &ColStatsInfo{ColumnStatisticsRow: stats}, nil
 	}
 
 	// Sort values for min/max and distinct counting
@@ -143,8 +166,8 @@ func (co *ColStatsOperations) CollectColumnStatistics(tx TxContext, colName stri
 
 	// Build comprehensive statistics info
 	statsInfo := &ColStatsInfo{
-		colStats:  *stats,
-		Histogram: statistics.NewHistogram(values, histogramBuckets),
+		ColumnStatisticsRow: stats,
+		Histogram:           statistics.NewHistogram(values, histogramBuckets),
 	}
 	statsInfo.MostCommonVals, statsInfo.MCVFreqs = findMostCommonValues(values, mcvCount)
 
@@ -152,7 +175,7 @@ func (co *ColStatsOperations) CollectColumnStatistics(tx TxContext, colName stri
 }
 
 // UpdateColumnStatistics updates statistics for all columns in a table
-func (co *ColStatsOperations) UpdateColumnStatistics(tx TxContext, tableID primitives.FileID) error {
+func (co *ColumnStatsTable) UpdateColumnStatistics(tx TxContext, tableID primitives.FileID) error {
 	columns, err := co.colOps.LoadColumnMetadata(tx, tableID)
 	if err != nil {
 		return fmt.Errorf("failed to load column metadata: %w", err)
@@ -164,7 +187,7 @@ func (co *ColStatsOperations) UpdateColumnStatistics(tx TxContext, tableID primi
 			return fmt.Errorf("failed to collect statistics for column %s: %w", col.Name, err)
 		}
 
-		if err := co.storeColumnStatistics(tx, &stats.colStats); err != nil {
+		if err := co.storeColumnStatistics(tx, *stats.ColumnStatisticsRow); err != nil {
 			return fmt.Errorf("failed to store statistics for column %s: %w", col.Name, err)
 		}
 	}
@@ -173,8 +196,8 @@ func (co *ColStatsOperations) UpdateColumnStatistics(tx TxContext, tableID primi
 }
 
 // storeColumnStatistics stores column statistics in CATALOG_COLUMN_STATISTICS system table
-func (co *ColStatsOperations) storeColumnStatistics(tx TxContext, stats *colStats) error {
-	err := co.DeleteBy(tx, func(cs *colStats) bool {
+func (co *ColumnStatsTable) storeColumnStatistics(tx TxContext, stats ColumnStatisticsRow) error {
+	err := co.DeleteBy(tx, func(cs ColumnStatisticsRow) bool {
 		return cs.TableID == stats.TableID && cs.ColumnName == stats.ColumnName
 	})
 
@@ -190,13 +213,13 @@ func (co *ColStatsOperations) storeColumnStatistics(tx TxContext, stats *colStat
 }
 
 // GetColumnStatistics retrieves statistics for a specific column from CATALOG_COLUMN_STATISTICS
-func (co *ColStatsOperations) GetColumnStatistics(tx TxContext, tableID primitives.FileID, columnName string) (*colStats, error) {
-	stats, err := co.FindOne(tx, func(cs *colStats) bool {
+func (co *ColumnStatsTable) GetColumnStatistics(tx TxContext, tableID primitives.FileID, columnName string) (ColumnStatisticsRow, error) {
+	stats, err := co.FindOne(tx, func(cs ColumnStatisticsRow) bool {
 		return cs.TableID == tableID && cs.ColumnName == columnName
 	})
 
 	if err != nil {
-		return nil, fmt.Errorf("column statistics not found for table %d, column %s", tableID, columnName)
+		return ColumnStatisticsRow{}, fmt.Errorf("column statistics not found for table %d, column %s", tableID, columnName)
 	}
 
 	return stats, nil

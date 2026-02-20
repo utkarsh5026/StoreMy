@@ -1,9 +1,9 @@
-package operations
+package systable
 
 import (
 	"fmt"
 	"storemy/pkg/catalog/catalogio"
-	"storemy/pkg/catalog/systemtable"
+	"storemy/pkg/concurrency/transaction"
 	"storemy/pkg/primitives"
 	"storemy/pkg/storage/heap"
 	"storemy/pkg/storage/page"
@@ -11,80 +11,56 @@ import (
 	"time"
 )
 
-type tableStats = systemtable.TableStatistics
+// TableStatistics holds statistics about a table for query optimization
+type TableStatistics struct {
+	TableID        primitives.FileID     // Table identifier
+	Cardinality    uint64                // Number of tuples in the table
+	PageCount      primitives.PageNumber // Number of pages used by the table
+	AvgTupleSize   uint64                // Average tuple size in bytes
+	LastUpdated    time.Time             // When statistics were last updated
+	DistinctValues uint64                // Approximate number of distinct values (for primary key)
+	NullCount      uint64                // Number of null values
+	MinValue       string                // Min value for primary key (if applicable)
+	MaxValue       string                // Max value for primary key (if applicable)
+}
+
+type StatsTable struct {
+	*BaseOperations[TableStatistics]
+	reader     catalogio.CatalogReader // Reads tuples from catalog tables
+	fileGetter FileGetter              // Retrieves DbFile for a table ID
+	cache      StatsCacheSetter        // Optional statistics cache
+	colsTable  *ColumnsTable
+}
+
 type FileGetter = func(tableID primitives.FileID) (page.DbFile, error)
 
 // StatsCacheSetter defines the interface for caching table statistics.
 // Implementations should handle concurrent access safely.
 type StatsCacheSetter interface {
-	SetCachedStatistics(tableID primitives.FileID, stats *tableStats) error
+	SetCachedStatistics(tableID primitives.FileID, stats *TableStatistics) error
 }
 
-// StatsOperations manages table statistics in the CATALOG_STATISTICS system table.
-// It provides functionality to collect, update, and retrieve table statistics including:
-//   - Cardinality (number of tuples)
-//   - Page count
-//   - Average tuple size
-//   - Distinct values (sampled from primary key column)
-//
-// Statistics are persisted to disk and optionally cached for performance.
-// All operations respect transaction boundaries through the provided TxContext.
-type StatsOperations struct {
-	*BaseOperations[*tableStats]
-	reader         catalogio.CatalogReader // Reads tuples from catalog tables
-	fileGetter     FileGetter              // Retrieves DbFile for a table ID
-	cache          StatsCacheSetter        // Optional statistics cache
-	columnsTableID primitives.FileID       // ID of CATALOG_COLUMNS table for schema lookup
-}
-
-// NewStatsOperations creates a new StatsOperations instance.
-//
-// Parameters:
-//   - access: CatalogAccess implementation (typically SystemCatalog)
-//   - statsTableID: ID of the CATALOG_STATISTICS system table
-//   - columnsTableID: ID of the CATALOG_COLUMNS system table (for primary key lookup)
-//   - fileGetter: Function to retrieve DbFile by table ID
-//   - cache: Optional cache for storing statistics (can be nil)
-//
-// Returns:
-//   - *StatsOperations: Configured operations instance
-func NewStatsOperations(access catalogio.CatalogAccess, statsTableID, columnsTableID primitives.FileID, f FileGetter, cache StatsCacheSetter) *StatsOperations {
-	base := NewBaseOperations(
-		access,
-		statsTableID,
-		systemtable.Stats.Parse,
-		systemtable.Stats.CreateTuple,
-	)
-
-	return &StatsOperations{
-		BaseOperations: base,
+// NewStatsOperations creates a new StatsTable instance.
+func NewStatsOperations(access catalogio.CatalogAccess, id primitives.FileID, f FileGetter, cache StatsCacheSetter, colsTable *ColumnsTable) *StatsTable {
+	return &StatsTable{
 		reader:         access,
 		fileGetter:     f,
 		cache:          cache,
-		columnsTableID: columnsTableID,
+		colsTable:      colsTable,
+		BaseOperations: NewBaseOperations(access, id, CatalogStatisticsTableDescriptor),
 	}
 }
 
 // UpdateTableStatistics collects fresh statistics for a table and persists them.
 // If statistics already exist, they are updated; otherwise, new statistics are inserted.
-// The cache is automatically updated with fresh statistics if a cache is configured.
-//
-// This operation performs a full table scan to collect accurate statistics.
-//
-// Parameters:
-//   - tx: Transaction context for the operation
-//   - tableID: ID of the table to update statistics for
-//
-// Returns:
-//   - error: nil on success, or error if collection/persistence fails
-func (so *StatsOperations) UpdateTableStatistics(tx TxContext, tableID primitives.FileID) error {
+func (so *StatsTable) UpdateTableStatistics(tx *transaction.TransactionContext, tableID primitives.FileID) error {
 	stats, err := so.collectStats(tx, tableID)
 	if err != nil {
 		return fmt.Errorf("failed to collect statistics for table %d: %w", tableID, err)
 	}
 
 	existingStats, err := so.GetTableStatistics(tx, tableID)
-	if err == nil && existingStats != nil {
+	if err == nil && existingStats != (TableStatistics{}) {
 		if err := so.update(tx, tableID, stats); err != nil {
 			return err
 		}
@@ -95,7 +71,7 @@ func (so *StatsOperations) UpdateTableStatistics(tx TxContext, tableID primitive
 	}
 
 	if so.cache != nil {
-		_ = so.cache.SetCachedStatistics(tableID, stats)
+		_ = so.cache.SetCachedStatistics(tableID, &stats)
 	}
 	return nil
 }
@@ -110,11 +86,11 @@ func (so *StatsOperations) UpdateTableStatistics(tx TxContext, tableID primitive
 // Returns:
 //   - int: Column index of the primary key, or -1 if not found
 //   - error: nil on success, or error if catalog read fails
-func (so *StatsOperations) getPrimaryKeyIndex(tx TxContext, tableID primitives.FileID) (primitives.ColumnID, error) {
+func (so *StatsTable) getPrimaryKeyIndex(tx TxContext, tableID primitives.FileID) (primitives.ColumnID, error) {
 	var primaryKeyIndex primitives.ColumnID = 0
 
-	err := so.reader.IterateTable(so.columnsTableID, tx, func(t *tuple.Tuple) error {
-		col, err := systemtable.Columns.Parse(t)
+	err := so.reader.IterateTable(so.colsTable.TableID(), tx, func(t *tuple.Tuple) error {
+		col, err := ColumnsTableDescriptor.ParseTuple(t)
 		if err != nil {
 			return nil
 		}
@@ -151,25 +127,26 @@ func (so *StatsOperations) getPrimaryKeyIndex(tx TxContext, tableID primitives.F
 //   - tableID: ID of the table to scan
 //
 // Returns:
-//   - *tableStats: Collected statistics
+//   - *TableStatistics: Collected statistics
 //   - error: nil on success, or error if scan fails
-func (so *StatsOperations) collectStats(tx TxContext, tableID primitives.FileID) (*tableStats, error) {
+func (so *StatsTable) collectStats(tx TxContext, tableID primitives.FileID) (TableStatistics, error) {
 	file, err := so.fileGetter(tableID)
+	var zero TableStatistics
 	if err != nil {
-		return nil, err
+		return zero, err
 	}
 
 	pageCount, err := getHeapPageCount(file)
 	if err != nil {
-		return nil, err
+		return zero, err
 	}
 
 	primaryKeyIndex, err := so.getPrimaryKeyIndex(tx, tableID)
 	if err != nil {
-		return nil, fmt.Errorf("failed to get primary key index: %w", err)
+		return zero, fmt.Errorf("failed to get primary key index: %w", err)
 	}
 
-	stats := &tableStats{
+	stats := &TableStatistics{
 		TableID:     tableID,
 		Cardinality: 0,
 		PageCount:   pageCount,
@@ -205,7 +182,7 @@ func (so *StatsOperations) collectStats(tx TxContext, tableID primitives.FileID)
 	})
 
 	if err != nil {
-		return nil, err
+		return zero, err
 	}
 
 	if stats.Cardinality > 0 {
@@ -213,7 +190,7 @@ func (so *StatsOperations) collectStats(tx TxContext, tableID primitives.FileID)
 	}
 	stats.DistinctValues = uint64(len(distinctMap))
 
-	return stats, nil
+	return *stats, nil
 }
 
 // GetTableStatistics retrieves persisted statistics for a table.
@@ -224,15 +201,15 @@ func (so *StatsOperations) collectStats(tx TxContext, tableID primitives.FileID)
 //   - tableID: ID of the table
 //
 // Returns:
-//   - *tableStats: Statistics record if found
+//   - *TableStatistics: Statistics record if found
 //   - error: error if statistics not found or read fails
-func (so *StatsOperations) GetTableStatistics(tx TxContext, tableID primitives.FileID) (*tableStats, error) {
-	result, err := so.FindOne(tx, func(t *tableStats) bool {
+func (so *StatsTable) GetTableStatistics(tx TxContext, tableID primitives.FileID) (TableStatistics, error) {
+	result, err := so.FindOne(tx, func(t TableStatistics) bool {
 		return t.TableID == tableID
 	})
 
 	if err != nil {
-		return nil, fmt.Errorf("statistics for table %d not found", tableID)
+		return TableStatistics{}, fmt.Errorf("statistics for table %d not found", tableID)
 	}
 
 	return result, nil
@@ -246,7 +223,7 @@ func (so *StatsOperations) GetTableStatistics(tx TxContext, tableID primitives.F
 //
 // Returns:
 //   - error: nil on success, or error if insertion fails
-func (so *StatsOperations) insert(tx TxContext, stats *tableStats) error {
+func (so *StatsTable) insert(tx TxContext, stats TableStatistics) error {
 	if err := so.Insert(tx, stats); err != nil {
 		return fmt.Errorf("failed to insert statistics: %w", err)
 	}
@@ -262,8 +239,8 @@ func (so *StatsOperations) insert(tx TxContext, stats *tableStats) error {
 //
 // Returns:
 //   - error: nil on success, or error if update fails
-func (so *StatsOperations) update(tx TxContext, tableID primitives.FileID, stats *tableStats) error {
-	err := so.Upsert(tx, func(t *tableStats) bool {
+func (so *StatsTable) update(tx TxContext, tableID primitives.FileID, stats TableStatistics) error {
+	err := so.Upsert(tx, func(t TableStatistics) bool {
 		return t.TableID == tableID
 	}, stats)
 

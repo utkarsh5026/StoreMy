@@ -1,8 +1,7 @@
-package operations
+package systable
 
 import (
 	"fmt"
-	"storemy/pkg/catalog/systemtable"
 	"storemy/pkg/concurrency/transaction"
 	"storemy/pkg/primitives"
 	"storemy/pkg/storage/index"
@@ -67,14 +66,14 @@ func (m *MockCatalogAccess) DeleteRow(
 	}
 
 	// Parse the tuple to delete for comparison
-	toDelete, err := systemtable.Indexes.Parse(tup)
+	toDelete, err := IndexesTableDescriptor.ParseTuple(tup)
 	if err != nil {
 		return fmt.Errorf("failed to parse tuple to delete: %w", err)
 	}
 
 	// Find and remove the tuple by comparing IndexID
 	for i, t := range tuples {
-		existing, err := systemtable.Indexes.Parse(t)
+		existing, err := IndexesTableDescriptor.ParseTuple(t)
 		if err != nil {
 			continue
 		}
@@ -88,7 +87,7 @@ func (m *MockCatalogAccess) DeleteRow(
 
 // Helper to create index metadata tuple
 func createIndexTuple(indexID, tableID primitives.FileID, indexName, columnName string, indexType index.IndexType) *tuple.Tuple {
-	metadata := systemtable.IndexMetadata{
+	metadata := IndexMetadata{
 		IndexID:    indexID,
 		IndexName:  indexName,
 		TableID:    tableID,
@@ -97,7 +96,7 @@ func createIndexTuple(indexID, tableID primitives.FileID, indexName, columnName 
 		FilePath:   primitives.Filepath(fmt.Sprintf("/data/idx_%d.dat", indexID)),
 		CreatedAt:  time.Now(),
 	}
-	return systemtable.Indexes.CreateTuple(metadata)
+	return IndexesTableDescriptor.CreateTuple(metadata)
 }
 
 func TestGetIndexesByTable(t *testing.T) {

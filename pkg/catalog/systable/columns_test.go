@@ -1,83 +1,12 @@
-package operations
+package systable
 
 import (
 	"storemy/pkg/catalog/schema"
-	"storemy/pkg/catalog/systemtable"
 	"storemy/pkg/concurrency/transaction"
-	"storemy/pkg/primitives"
 	"storemy/pkg/tuple"
 	"storemy/pkg/types"
 	"testing"
 )
-
-// mockCatalogAccess implements both CatalogReader and CatalogWriter for testing
-type mockCatalogAccess struct {
-	tuples map[primitives.FileID][]*tuple.Tuple // tableID -> tuples
-}
-
-func newMockCatalogAccess() *mockCatalogAccess {
-	return &mockCatalogAccess{
-		tuples: make(map[primitives.FileID][]*tuple.Tuple),
-	}
-}
-
-func (m *mockCatalogAccess) IterateTable(tableID primitives.FileID, tx TxContext, fn func(*tuple.Tuple) error) error {
-	for _, t := range m.tuples[tableID] {
-		if err := fn(t); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func (m *mockCatalogAccess) InsertRow(tableID primitives.FileID, tx TxContext, t *tuple.Tuple) error {
-	m.tuples[tableID] = append(m.tuples[tableID], t)
-	return nil
-}
-
-func (m *mockCatalogAccess) DeleteRow(tableID primitives.FileID, tx TxContext, t *tuple.Tuple) error {
-	tuples := m.tuples[tableID]
-	for i, existing := range tuples {
-		if tuplesEqual(existing, t) {
-			m.tuples[tableID] = append(tuples[:i], tuples[i+1:]...)
-			return nil
-		}
-	}
-	return nil
-}
-
-func tuplesEqual(t1, t2 *tuple.Tuple) bool {
-	numFields := t1.TupleDesc.NumFields()
-	if numFields != t2.TupleDesc.NumFields() {
-		return false
-	}
-
-	var i primitives.ColumnID
-	for i = 0; i < numFields; i++ {
-		f1, _ := t1.GetField(i)
-		f2, _ := t2.GetField(i)
-		if f1.Type() != f2.Type() {
-			return false
-		}
-		// Simple comparison - in real implementation would compare values
-		if f1.String() != f2.String() {
-			return false
-		}
-	}
-	return true
-}
-
-func createColumnTuple(tableID primitives.FileID, name string, position primitives.ColumnID, fieldType types.Type, isAutoInc bool, nextAutoValue uint64) *tuple.Tuple {
-	col := schema.ColumnMetadata{
-		TableID:       tableID,
-		Name:          name,
-		Position:      position,
-		FieldType:     fieldType,
-		IsAutoInc:     isAutoInc,
-		NextAutoValue: nextAutoValue,
-	}
-	return systemtable.Columns.CreateTuple(col)
-}
 
 func TestGetAutoIncrementColumn_NoAutoIncrement(t *testing.T) {
 	mock := newMockCatalogAccess()
@@ -248,7 +177,7 @@ func TestIncrementAutoIncrementValue(t *testing.T) {
 	}
 
 	// Parse and verify the new tuple
-	col, err := systemtable.Columns.Parse(tuples[0])
+	col, err := ColumnsTableDescriptor.ParseTuple(tuples[0])
 	if err != nil {
 		t.Fatalf("failed to parse column: %v", err)
 	}
@@ -312,5 +241,54 @@ func TestNewColumnOperations(t *testing.T) {
 
 	if co.TableID() != 42 {
 		t.Errorf("expected columnsTableID 42, got %d", co.TableID())
+	}
+}
+
+// TestColumnsTable_RoundTrip tests CreateTuple and Parse for ColumnsTable
+func TestColumnsTable_RoundTrip(t *testing.T) {
+
+	colMeta := schema.ColumnMetadata{
+		TableID:       1,
+		Name:          "id",
+		FieldType:     types.IntType,
+		Position:      0,
+		IsPrimary:     true,
+		IsAutoInc:     true,
+		NextAutoValue: 100,
+	}
+
+	// Create tuple
+	tup := ColumnsTableDescriptor.CreateTuple(colMeta)
+	if tup == nil {
+		t.Fatal("CreateTuple returned nil")
+	}
+
+	// Parse it back
+	parsed, err := ColumnsTableDescriptor.ParseTuple(tup)
+	if err != nil {
+		t.Fatalf("Parse failed: %v", err)
+	}
+
+	// Verify fields
+	if parsed.TableID != colMeta.TableID {
+		t.Errorf("TableID mismatch: expected %d, got %d", colMeta.TableID, parsed.TableID)
+	}
+	if parsed.Name != colMeta.Name {
+		t.Errorf("Name mismatch: expected %s, got %s", colMeta.Name, parsed.Name)
+	}
+	if parsed.FieldType != colMeta.FieldType {
+		t.Errorf("FieldType mismatch: expected %v, got %v", colMeta.FieldType, parsed.FieldType)
+	}
+	if parsed.Position != colMeta.Position {
+		t.Errorf("Position mismatch: expected %d, got %d", colMeta.Position, parsed.Position)
+	}
+	if parsed.IsPrimary != colMeta.IsPrimary {
+		t.Errorf("IsPrimary mismatch: expected %v, got %v", colMeta.IsPrimary, parsed.IsPrimary)
+	}
+	if parsed.IsAutoInc != colMeta.IsAutoInc {
+		t.Errorf("IsAutoInc mismatch: expected %v, got %v", colMeta.IsAutoInc, parsed.IsAutoInc)
+	}
+	if parsed.NextAutoValue != colMeta.NextAutoValue {
+		t.Errorf("NextAutoValue mismatch: expected %d, got %d", colMeta.NextAutoValue, parsed.NextAutoValue)
 	}
 }
