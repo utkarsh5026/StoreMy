@@ -171,7 +171,7 @@ func (bt *BTree) getRootPage(perm transaction.Permissions) (*BTreePage, error) {
 // Returns:
 //   - *BTreePage: The leaf page where the key belongs (may or may not contain it)
 //   - error: Returns error if child page read fails or structure is invalid
-func (bt *BTree) findLeafPage(currentPage *BTreePage, key types.Field) (*BTreePage, error) {
+func (bt *BTree) findLeafPage(currentPage *BTreePage, key types.Field, perm transaction.Permissions) (*BTreePage, error) {
 	if currentPage.IsLeafPage() {
 		return currentPage, nil
 	}
@@ -181,12 +181,12 @@ func (bt *BTree) findLeafPage(currentPage *BTreePage, key types.Field) (*BTreePa
 		return nil, fmt.Errorf("failed to find child pointer for key")
 	}
 
-	childPage, err := bt.getPage(childPID, transaction.ReadOnly)
+	childPage, err := bt.getPage(childPID, perm)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read child page: %w", err)
 	}
 
-	return bt.findLeafPage(childPage, key)
+	return bt.findLeafPage(childPage, key, perm)
 }
 
 // findChildPointer finds the appropriate child pointer for a given key in an internal node.

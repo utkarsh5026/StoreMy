@@ -45,7 +45,7 @@ func (bt *BTree) Insert(key types.Field, rid *tuple.TupleRecordID) error {
 		return bt.insertIntoLeaf(rootPage, entry)
 	}
 
-	leafPage, err := bt.findLeafPage(rootPage, key)
+	leafPage, err := bt.findLeafPage(rootPage, key, transaction.ReadWrite)
 	if err != nil {
 		return fmt.Errorf("failed to find leaf page: %w", err)
 	}
@@ -87,7 +87,7 @@ func (bt *BTree) Delete(key types.Field, rid *tuple.TupleRecordID) error {
 	}
 
 	entry := index.NewIndexEntry(key, rid)
-	leafPage, err := bt.findLeafPage(rootPage, key)
+	leafPage, err := bt.findLeafPage(rootPage, key, transaction.ReadWrite)
 	if err != nil {
 		return fmt.Errorf("failed to find leaf page: %w", err)
 	}
@@ -129,7 +129,7 @@ func (bt *BTree) Search(key types.Field) ([]*tuple.TupleRecordID, error) {
 		return []*tuple.TupleRecordID{}, nil
 	}
 
-	leafPage, err := bt.findLeafPage(rootPage, key)
+	leafPage, err := bt.findLeafPage(rootPage, key, transaction.ReadOnly)
 	if err != nil {
 		return nil, fmt.Errorf("failed to find leaf page: %w", err)
 	}
@@ -183,7 +183,7 @@ func (bt *BTree) RangeSearch(startKey, endKey types.Field) ([]*tuple.TupleRecord
 		return []*tuple.TupleRecordID{}, nil
 	}
 
-	leafPage, err := bt.findLeafPage(rootPage, startKey)
+	leafPage, err := bt.findLeafPage(rootPage, startKey, transaction.ReadOnly)
 	if err != nil {
 		return nil, fmt.Errorf("failed to find start leaf page: %w", err)
 	}
