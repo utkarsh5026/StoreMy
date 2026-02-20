@@ -22,29 +22,29 @@ import (
 // Returns:
 //   - int: The auto-generated table ID
 //   - error: nil on success, error describing the failure otherwise
-func (cm *CatalogManager) CreateTable(tx *transaction.TransactionContext, sch *schema.Schema) (primitives.FileID, error) {
+func (c *CatalogManager) CreateTable(tx *transaction.TransactionContext, sch *schema.Schema) (primitives.FileID, error) {
 	if sch == nil {
 		return 0, fmt.Errorf("schema cannot be nil")
 	}
 
-	cm.mu.Lock()
-	defer cm.mu.Unlock()
+	c.mu.Lock()
+	defer c.mu.Unlock()
 
-	if cm.TableExists(tx, sch.TableName) {
+	if c.TableExists(tx, sch.TableName) {
 		return 0, fmt.Errorf("table %s already exists", sch.TableName)
 	}
 
-	heapFile, err := cm.createTableFile(sch)
+	heapFile, err := c.createTableFile(sch)
 	if err != nil {
 		return 0, err
 	}
 
-	if err := cm.registerTable(tx, sch, heapFile.FilePath()); err != nil {
+	if err := c.registerTable(tx, sch, heapFile.FilePath()); err != nil {
 		_ = heapFile.Close()
 		return 0, fmt.Errorf("failed to register table in catalog: %w", err)
 	}
 
-	if err := cm.addTableToCacheUnsafe(tx, heapFile, sch); err != nil {
+	if err := c.addTableToCacheUnsafe(tx, heapFile, sch); err != nil {
 		return 0, err
 	}
 
@@ -85,9 +85,6 @@ func (cm *CatalogManager) createTableFile(sch *schema.Schema) (*heap.HeapFile, e
 }
 
 // addTableToCache adds a newly created table to the in-memory cache.
-//
-// This is an internal method called by CreateTable. It assumes the caller
-// holds the cm.mu lock for thread safety.
 //
 // Parameters:
 //   - tx: Transaction context for potential rollback operations
@@ -186,17 +183,6 @@ func (cm *CatalogManager) DropTable(tx *transaction.TransactionContext, tableNam
 
 // LoadTable loads a table from disk into memory on-demand.
 //
-// This is used for lazy loading - tables are only loaded when first accessed
-// rather than all at startup. If the table is already in cache, this is a no-op.
-//
-// Steps performed:
-//  1. Checks if table already exists in cache
-//  2. Reads table metadata from CATALOG_TABLES
-//  3. Reconstructs the schema from CATALOG_COLUMNS
-//  4. Opens the heap file from disk
-//  5. Adds table to in-memory cache
-//  6. Registers with the page store
-//
 // Parameters:
 //   - tx: Transaction context for reading catalog
 //   - tableName: Name of the table to load
@@ -208,57 +194,17 @@ func (cm *CatalogManager) LoadTable(tx *transaction.TransactionContext, tableNam
 		return nil
 	}
 
-	sch, filePath, err := cm.loadFromDisk(tx, tableName)
-	if err != nil {
-		return err
-	}
-
-	return cm.openTable(filePath, sch)
-}
-
-// loadFromDisk retrieves table metadata and schema from the catalog.
-//
-// This is an internal helper method that reads from CATALOG_TABLES and
-// CATALOG_COLUMNS to reconstruct a complete *schema.Schema object.
-//
-// Parameters:
-//   - tx: Transaction context for reading catalog
-//   - tableName: Name of the table to load
-//
-// Returns:
-//   - *schema.Schema: The reconstructed schema with columns and tuple descriptor
-//   - string: The file path to the heap file
-//   - error: nil on success, error if metadata cannot be read
-func (cm *CatalogManager) loadFromDisk(tx *transaction.TransactionContext, tableName string) (*schema.Schema, primitives.Filepath, error) {
 	tm, err := cm.TablesTable.GetByName(tx, tableName)
 	if err != nil {
-		return nil, "", fmt.Errorf("failed to get table metadata: %w", err)
+		return fmt.Errorf("failed to get table metadata: %w", err)
 	}
 
 	sch, err := cm.LoadTableSchema(tx, tm.TableID)
 	if err != nil {
-		return nil, "", fmt.Errorf("failed to load schema: %w", err)
+		return fmt.Errorf("failed to load schema: %w", err)
 	}
 
-	return sch, tm.FilePath, nil
-}
-
-// registerTable opens a heap file and registers it with the cache and page store.
-//
-// This is an internal helper method used during table loading. It handles
-// the physical file opening and registration with all necessary components.
-//
-// If adding to cache fails, the heap file is automatically closed to prevent
-// resource leaks.
-//
-// Parameters:
-//   - filePath: Absolute path to the heap file
-//   - sch: The table schema
-//
-// Returns:
-//   - error: nil on success, error if file cannot be opened or registered
-func (cm *CatalogManager) openTable(filePath primitives.Filepath, sch *schema.Schema) error {
-	heapFile, err := heap.NewHeapFile(filePath, sch.TupleDesc)
+	heapFile, err := heap.NewHeapFile(tm.FilePath, sch.TupleDesc)
 	if err != nil {
 		return fmt.Errorf("failed to open heap file: %w", err)
 	}
@@ -277,15 +223,6 @@ func (cm *CatalogManager) openTable(filePath primitives.Filepath, sch *schema.Sc
 }
 
 // LoadAllTables loads all user tables from disk into memory during database startup.
-//
-// This reads CATALOG_TABLES, reconstructs schemas from CATALOG_COLUMNS,
-// opens heap files, and registers everything with the page store.
-//
-// System tables (CATALOG_TABLES, CATALOG_COLUMNS) are not loaded by this
-// method as they are managed separately.
-//
-// The operation stops at the first error encountered. Previously loaded
-// tables remain in memory.
 //
 // Parameters:
 //   - tx: Transaction context for reading catalog

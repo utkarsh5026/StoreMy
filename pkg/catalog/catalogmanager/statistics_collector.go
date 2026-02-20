@@ -96,7 +96,20 @@ func (cm *CatalogManager) CollectColumnStatistics(
 	if err != nil {
 		return nil, err
 	}
-	return toColumnStatistics(info), nil
+	return &ColumnStatistics{
+		TableID:        info.TableID,
+		ColumnName:     info.ColumnName,
+		ColumnIndex:    info.ColumnIndex,
+		DistinctCount:  info.DistinctCount,
+		NullCount:      info.NullCount,
+		MinValue:       info.MinField,
+		MaxValue:       info.MaxField,
+		AvgWidth:       info.AvgWidth,
+		Histogram:      info.Histogram,
+		MostCommonVals: info.MostCommonVals,
+		MCVFreqs:       info.MCVFreqs,
+		LastUpdated:    info.LastUpdated,
+	}, nil
 }
 
 // UpdateColumnStatistics updates statistics for all columns in a table.
@@ -141,20 +154,18 @@ func (cm *CatalogManager) GetColumnStatistics(
 		return nil, nil
 	}
 
-	// Convert row to ColumnStatistics (Histogram and MCVs will be nil)
+	// Convert row to ColumnStatistics (Histogram and MCVs will be nil).
+	// MinValue/MaxValue are also nil here: the persisted strings lack type info
+	// needed to reconstruct the correct Field type. Callers that need typed
+	// min/max should use CollectColumnStatistics instead.
 	return &ColumnStatistics{
-		TableID:        row.TableID,
-		ColumnName:     row.ColumnName,
-		ColumnIndex:    row.ColumnIndex,
-		DistinctCount:  row.DistinctCount,
-		NullCount:      row.NullCount,
-		MinValue:       stringToField(row.MinValue),
-		MaxValue:       stringToField(row.MaxValue),
-		AvgWidth:       row.AvgWidth,
-		Histogram:      nil, // Not stored in system table
-		MostCommonVals: nil, // Not stored in system table
-		MCVFreqs:       nil, // Not stored in system table
-		LastUpdated:    row.LastUpdated,
+		TableID:       row.TableID,
+		ColumnName:    row.ColumnName,
+		ColumnIndex:   row.ColumnIndex,
+		DistinctCount: row.DistinctCount,
+		NullCount:     row.NullCount,
+		AvgWidth:      row.AvgWidth,
+		LastUpdated:   row.LastUpdated,
 	}, nil
 }
 

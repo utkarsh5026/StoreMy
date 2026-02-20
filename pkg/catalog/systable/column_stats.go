@@ -81,9 +81,13 @@ const (
 	DefaultMCVCount = 5
 )
 
-// ColStatsInfo contains column statistics along with histogram and most common values
+// ColStatsInfo contains column statistics along with histogram and most common values.
+// MinField and MaxField carry the typed values directly — use these instead of
+// ColumnStatisticsRow.MinValue/MaxValue (which are string serialisations for disk storage).
 type ColStatsInfo struct {
 	*ColumnStatisticsRow
+	MinField       types.Field
+	MaxField       types.Field
 	Histogram      *statistics.Histogram
 	MostCommonVals []types.Field
 	MCVFreqs       []float64
@@ -159,14 +163,18 @@ func (co *ColumnStatsTable) CollectColumnStatistics(tx TxContext, colName string
 	})
 
 	// Compute derived statistics
+	minField := values[0]
+	maxField := values[len(values)-1]
 	stats.DistinctCount = countDistinct(values)
-	stats.MinValue = values[0].String()
-	stats.MaxValue = values[len(values)-1].String()
+	stats.MinValue = minField.String()
+	stats.MaxValue = maxField.String()
 	stats.AvgWidth = totalWidth / uint64(len(values))
 
 	// Build comprehensive statistics info
 	statsInfo := &ColStatsInfo{
 		ColumnStatisticsRow: stats,
+		MinField:            minField,
+		MaxField:            maxField,
 		Histogram:           statistics.NewHistogram(values, histogramBuckets),
 	}
 	statsInfo.MostCommonVals, statsInfo.MCVFreqs = findMostCommonValues(values, mcvCount)
