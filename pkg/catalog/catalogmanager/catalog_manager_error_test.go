@@ -6,10 +6,6 @@ import (
 	"testing"
 )
 
-// ========================================
-// Error Recovery and Validation Tests
-// ========================================
-
 // TestCatalogManager_CreateTable_VerifyImmediateAvailability tests that created table is immediately usable
 func TestCatalogManager_CreateTable_VerifyImmediateAvailability(t *testing.T) {
 	setup := setupTest(t)
@@ -496,7 +492,7 @@ func TestCatalogManager_AutoIncrement_MultipleColumns(t *testing.T) {
 	// If creation succeeds, verify auto-increment column
 	if err == nil {
 		tx3 := setup.beginTx()
-		autoInc, err := setup.catalogMgr.GetAutoIncrementColumn(tx3, tableID)
+		autoInc, err := setup.catalogMgr.ColumnTable.GetAutoIncrementColumn(tx3, tableID)
 		if err != nil {
 			t.Fatalf("GetAutoIncrementColumn failed: %v", err)
 		}
@@ -531,7 +527,7 @@ func TestCatalogManager_IncrementAutoIncrement_InvalidColumn(t *testing.T) {
 
 	// Try to increment auto-increment on non-auto-increment column
 	tx3 := setup.beginTx()
-	err = setup.catalogMgr.IncrementAutoIncrementValue(tx3, tableID, "id", 10)
+	err = setup.catalogMgr.ColumnTable.IncrementAutoIncrementValue(tx3, tableID, "id", 10)
 	setup.commitTx(tx3)
 
 	// This should fail or be a no-op

@@ -2,9 +2,9 @@ package catalogmanager
 
 import (
 	"fmt"
-	"storemy/pkg/catalog/operations"
 	"storemy/pkg/catalog/schema"
-	"storemy/pkg/catalog/systemtable"
+	"storemy/pkg/catalog/systable"
+	"storemy/pkg/concurrency/transaction"
 	"storemy/pkg/execution/scanner"
 	"storemy/pkg/iterator"
 	"storemy/pkg/primitives"
@@ -20,18 +20,18 @@ import (
 // both catalog metadata and physical index files are created together.
 //
 // This is an internal helper used by CreateTable.
-func (cm *CatalogManager) registerTable(tx TxContext, sch *schema.Schema, filepath primitives.Filepath) error {
-	tm := &systemtable.TableMetadata{
+func (cm *CatalogManager) registerTable(tx *transaction.TransactionContext, sch *schema.Schema, filepath primitives.Filepath) error {
+	tm := systable.TableMetadata{
 		TableName:     sch.TableName,
 		TableID:       sch.TableID,
 		FilePath:      filepath,
 		PrimaryKeyCol: sch.PrimaryKey,
 	}
-	if err := cm.tableOps.Insert(tx, tm); err != nil {
+	if err := cm.TablesTable.Insert(tx, tm); err != nil {
 		return err
 	}
 
-	if err := cm.colOps.InsertColumns(tx, sch.Columns); err != nil {
+	if err := cm.ColumnTable.InsertColumns(tx, sch.Columns); err != nil {
 		return err
 	}
 
@@ -43,31 +43,41 @@ func (cm *CatalogManager) registerTable(tx TxContext, sch *schema.Schema, filepa
 //
 // This is typically called as part of a DROP TABLE operation.
 // Note: This only removes catalog entries - the heap file must be deleted separately.
-func (cm *CatalogManager) DeleteCatalogEntry(tx TxContext, tableID primitives.FileID) error {
-	sysTableIDs := []primitives.FileID{
-		cm.SystemTabs.TablesTableID,
-		cm.SystemTabs.ColumnsTableID,
-		cm.SystemTabs.StatisticsTableID,
-		cm.SystemTabs.IndexesTableID,
+func (cm *CatalogManager) DeleteCatalogEntry(tx *transaction.TransactionContext, tableID primitives.FileID) error {
+	if err := cm.TablesTable.DeleteTable(tx, tableID); err != nil {
+		return fmt.Errorf("failed to delete from CATALOG_TABLES: %w", err)
 	}
 
-	for _, id := range sysTableIDs {
-		if err := cm.DeleteTableFromSysTable(tx, tableID, id); err != nil {
-			return err
-		}
+	if err := cm.ColumnTable.DeleteBy(tx, func(c schema.ColumnMetadata) bool {
+		return c.TableID == tableID
+	}); err != nil {
+		return fmt.Errorf("failed to delete from CATALOG_COLUMNS: %w", err)
 	}
+
+	if err := cm.StatsTable.DeleteBy(tx, func(s systable.TableStatistics) bool {
+		return s.TableID == tableID
+	}); err != nil {
+		return fmt.Errorf("failed to delete from CATALOG_STATISTICS: %w", err)
+	}
+
+	if err := cm.IndexTable.DeleteBy(tx, func(i systable.IndexMetadata) bool {
+		return i.TableID == tableID
+	}); err != nil {
+		return fmt.Errorf("failed to delete from CATALOG_INDEXES: %w", err)
+	}
+
 	return nil
 }
 
 // DeleteTableFromSysTable removes all entries for a specific table from a given system table.
 // Due to MVCC, there may be multiple versions of tuples for the same table - this deletes all.
-func (cm *CatalogManager) DeleteTableFromSysTable(tx TxContext, tableID, sysTableID primitives.FileID) error {
+func (cm *CatalogManager) DeleteTableFromSysTable(tx *transaction.TransactionContext, tableID, sysTableID primitives.FileID) error {
 	tableInfo, err := cm.tableCache.GetTableInfo(sysTableID)
 	if err != nil {
 		return err
 	}
 
-	syst, err := cm.SystemTabs.GetSysTable(sysTableID)
+	syst, err := cm.getSystemTableByID(sysTableID)
 	if err != nil {
 		return nil
 	}
@@ -105,33 +115,15 @@ func (cm *CatalogManager) DeleteTableFromSysTable(tx TxContext, tableID, sysTabl
 	return nil
 }
 
-// GetTableMetadataByID retrieves complete table metadata from CATALOG_TABLES by table ID.
-// Returns TableMetadata or an error if the table is not found.
-func (cm *CatalogManager) GetTableMetadataByID(tx TxContext, tableID primitives.FileID) (*systemtable.TableMetadata, error) {
-	return cm.tableOps.GetTableMetadataByID(tx, tableID)
-}
-
-// GetTableMetadataByName retrieves complete table metadata from CATALOG_TABLES by table name.
-// Table name matching is case-insensitive.
-func (cm *CatalogManager) GetTableMetadataByName(tx TxContext, tableName string) (*systemtable.TableMetadata, error) {
-	return cm.tableOps.GetTableMetadataByName(tx, tableName)
-}
-
-// GetAllTables retrieves metadata for all tables registered in the catalog.
-// This includes both user tables and system catalog tables.
-func (cm *CatalogManager) GetAllTables(tx TxContext) ([]*systemtable.TableMetadata, error) {
-	return cm.tableOps.GetAllTables(tx)
-}
-
 // LoadTableSchema reconstructs the complete schema for a table from CATALOG_COLUMNS.
 // This includes column definitions, types, and constraints.
-func (cm *CatalogManager) LoadTableSchema(tx TxContext, tableID primitives.FileID) (*schema.Schema, error) {
-	tm, err := cm.GetTableMetadataByID(tx, tableID)
+func (cm *CatalogManager) LoadTableSchema(tx *transaction.TransactionContext, tableID primitives.FileID) (*schema.Schema, error) {
+	tm, err := cm.TablesTable.GetByID(tx, tableID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get table metadata: %w", err)
 	}
 
-	columns, err := cm.colOps.LoadColumnMetadata(tx, tableID)
+	columns, err := cm.ColumnTable.LoadColumnMetadata(tx, tableID)
 	if err != nil {
 		return nil, err
 	}
@@ -150,7 +142,7 @@ func (cm *CatalogManager) LoadTableSchema(tx TxContext, tableID primitives.FileI
 
 // iterateTable scans all tuples in a table and applies a processing function to each.
 // This is the core primitive for catalog queries, handling MVCC visibility and locking.
-func (cm *CatalogManager) iterateTable(tableID primitives.FileID, tx TxContext, processFunc func(*tuple.Tuple) error) error {
+func (cm *CatalogManager) iterateTable(tableID primitives.FileID, tx *transaction.TransactionContext, processFunc func(*tuple.Tuple) error) error {
 	file, err := cm.tableCache.GetDbFile(tableID)
 	if err != nil {
 		return fmt.Errorf("failed to get table file: %w", err)
@@ -173,25 +165,25 @@ func (cm *CatalogManager) iterateTable(tableID primitives.FileID, tx TxContext, 
 
 // IterateTable implements CatalogReader interface by delegating to CatalogIO.
 // Scans all tuples in a table and applies a processing function to each.
-func (cm *CatalogManager) IterateTable(tableID primitives.FileID, tx TxContext, processFunc func(Tuple) error) error {
+func (cm *CatalogManager) IterateTable(tableID primitives.FileID, tx *transaction.TransactionContext, processFunc func(*tuple.Tuple) error) error {
 	return cm.io.IterateTable(tableID, tx, processFunc)
 }
 
 // InsertRow implements CatalogWriter interface by delegating to CatalogIO.
 // Inserts a tuple into a table within a transaction.
-func (cm *CatalogManager) InsertRow(tableID primitives.FileID, tx TxContext, tup Tuple) error {
+func (cm *CatalogManager) InsertRow(tableID primitives.FileID, tx *transaction.TransactionContext, tup *tuple.Tuple) error {
 	return cm.io.InsertRow(tableID, tx, tup)
 }
 
 // DeleteRow implements CatalogWriter interface by delegating to CatalogIO.
 // Deletes a tuple from a table within a transaction.
-func (cm *CatalogManager) DeleteRow(tableID primitives.FileID, tx TxContext, tup Tuple) error {
+func (cm *CatalogManager) DeleteRow(tableID primitives.FileID, tx *transaction.TransactionContext, tup *tuple.Tuple) error {
 	return cm.io.DeleteRow(tableID, tx, tup)
 }
 
 // toColumnStatistics converts operations.ColStatsInfo to catalogmanager.ColumnStatistics.
 // This is an internal helper for statistics collection methods.
-func toColumnStatistics(info *operations.ColStatsInfo) *ColumnStatistics {
+func toColumnStatistics(info *systable.ColStatsInfo) *ColumnStatistics {
 	if info == nil {
 		return nil
 	}

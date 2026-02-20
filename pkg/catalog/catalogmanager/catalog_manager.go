@@ -4,15 +4,26 @@ import (
 	"fmt"
 	"path/filepath"
 	"storemy/pkg/catalog/catalogio"
-	ops "storemy/pkg/catalog/operations"
-	"storemy/pkg/catalog/systemtable"
+	"storemy/pkg/catalog/systable"
 	"storemy/pkg/catalog/tablecache"
+	"storemy/pkg/concurrency/transaction"
 	"storemy/pkg/memory"
 	"storemy/pkg/memory/wrappers/table"
 	"storemy/pkg/primitives"
 	"storemy/pkg/storage/heap"
 	"sync"
 )
+
+type SysTables struct {
+	tableIdsMap map[string]primitives.FileID
+
+	IndexTable        *systable.IndexesTable
+	ColumnTable       *systable.ColumnsTable
+	StatsTable        *systable.StatsTable
+	TablesTable       *systable.TablesTable
+	ColumnStatsTable  *systable.ColumnStatsTable
+	IndexesStatsTable *systable.IndexStatsTable
+}
 
 // CatalogManager manages all database metadata including tables, columns, indexes, and statistics.
 // This is the unified catalog layer that handles both persistence and caching.
@@ -40,19 +51,13 @@ type CatalogManager struct {
 	tableCache *tablecache.TableCache
 	tupMgr     *table.TupleManager
 	dataDir    string
-	SystemTabs SystemTableIDs
 
 	// File ownership - tracks all open table files for lifecycle management
 	mu        sync.RWMutex // protects openFiles and concurrent operations
 	openFiles map[primitives.FileID]*heap.HeapFile
 
 	// Domain-specific operation handlers
-	indexOps      *ops.IndexOperations
-	colOps        *ops.ColumnOperations
-	statsOps      *ops.StatsOperations
-	tableOps      *ops.TableOperations
-	colStatsOps   *ops.ColStatsOperations
-	indexStatsOps *ops.IndexStatsOperations
+	SysTables
 }
 
 // NewCatalogManager creates a new CatalogManager instance.
@@ -75,6 +80,9 @@ func NewCatalogManager(ps *memory.PageStore, dataDir string) *CatalogManager {
 		dataDir:    dataDir,
 		tupMgr:     table.NewTupleManager(ps),
 		openFiles:  make(map[primitives.FileID]*heap.HeapFile),
+		SysTables: SysTables{
+			tableIdsMap: make(map[string]primitives.FileID),
+		},
 	}
 }
 
@@ -83,14 +91,6 @@ func NewCatalogManager(ps *memory.PageStore, dataDir string) *CatalogManager {
 // This must be called before any other catalog operations.
 // Works for both new and existing databases - heap.NewHeapFile handles both creation and loading.
 //
-// System tables created/loaded:
-//   - CATALOG_TABLES: table metadata (ID, name, file path, primary key)
-//   - CATALOG_COLUMNS: column definitions (table ID, name, type, position, is_primary)
-//   - CATALOG_STATISTICS: table statistics for query optimization
-//   - CATALOG_INDEXES: index metadata (ID, name, table ID, column, type, file path)
-//   - CATALOG_COLUMN_STATISTICS: column-level statistics for selectivity estimation
-//   - CATALOG_INDEX_STATISTICS: index statistics for query optimization
-//
 // The operation handlers are initialized after system tables are created.
 // The transaction is committed upon successful completion.
 //
@@ -98,10 +98,10 @@ func NewCatalogManager(ps *memory.PageStore, dataDir string) *CatalogManager {
 //   - ctx: Transaction context for all catalog initialization operations
 //
 // Returns error if any system table cannot be created, loaded, or registered.
-func (cm *CatalogManager) Initialize(ctx TxContext) error {
+func (cm *CatalogManager) Initialize(ctx *transaction.TransactionContext) error {
 	defer func() { _ = cm.store.CommitTransaction(ctx) }()
 
-	systemTables := systemtable.AllSystemTables
+	systemTables := systable.AllSystemTables
 
 	for _, table := range systemTables {
 		sch := table.Schema()
@@ -116,7 +116,7 @@ func (cm *CatalogManager) Initialize(ctx TxContext) error {
 			return fmt.Errorf("failed to register %s: %w", table.TableName(), err)
 		}
 
-		cm.SystemTabs.SetSystemTableID(table.TableName(), f.GetID())
+		cm.tableIdsMap[table.TableName()] = f.GetID()
 		cm.mu.Lock()
 		cm.openFiles[f.GetID()] = f
 		cm.mu.Unlock()
@@ -128,31 +128,57 @@ func (cm *CatalogManager) Initialize(ctx TxContext) error {
 }
 
 // setupSysTables initializes all domain-specific operation handlers with their respective system table IDs.
-//
-// This method is called during Initialize() after all system catalog tables have been created/loaded.
-// It wires up the operation handlers that provide high-level business logic for catalog operations.
-//
-// Operation handlers initialized:
-//   - indexOps: Manages index metadata in CATALOG_INDEXES
-//   - colOps: Manages column definitions in CATALOG_COLUMNS
-//   - statsOps: Manages table statistics in CATALOG_STATISTICS
-//   - tableOps: Manages table metadata in CATALOG_TABLES
-//   - colStatsOps: Manages column statistics in CATALOG_COLUMN_STATISTICS
-//   - indexStatsOps: Manages index statistics in CATALOG_INDEX_STATISTICS
-//
-// Dependencies:
-//   - All handlers depend on CatalogIO for low-level read/write operations
-//   - Stats handlers require access to DbFile instances via tableCache.GetDbFile
-//   - Index stats depends on statsOps for table-level statistics
-//   - Column stats depends on colOps for column metadata
-//
-// This separation allows each operation handler to focus on a single domain
-// while sharing common infrastructure through CatalogIO and TableCache.
 func (cm *CatalogManager) setupSysTables() {
-	cm.indexOps = ops.NewIndexOperations(cm.io, cm.SystemTabs.IndexesTableID)
-	cm.colOps = ops.NewColumnOperations(cm.io, cm.SystemTabs.ColumnsTableID)
-	cm.statsOps = ops.NewStatsOperations(cm.io, cm.SystemTabs.StatisticsTableID, cm.SystemTabs.ColumnsTableID, cm.tableCache.GetDbFile, cm.tableCache)
-	cm.tableOps = ops.NewTableOperations(cm.io, cm.SystemTabs.TablesTableID)
-	cm.colStatsOps = ops.NewColStatsOperations(cm.io, cm.SystemTabs.ColumnStatisticsTableID, cm.tableCache.GetDbFile, cm.colOps)
-	cm.indexStatsOps = ops.NewIndexStatsOperations(cm.io, cm.SystemTabs.IndexStatisticsTableID, cm.SystemTabs.IndexesTableID, cm.tableCache.GetDbFile, cm.statsOps)
+	var systables SysTables
+	systables.IndexTable = systable.NewIndexOperations(cm.io, cm.tableIdsMap[systable.IndexesTableDescriptor.TableName()])
+
+	systables.TablesTable = systable.NewTablesTable(cm.io, cm.tableIdsMap[systable.TablesTableDescriptor.TableName()])
+
+	systables.ColumnTable = systable.NewColumnOperations(cm.io,
+		cm.tableIdsMap[systable.ColumnsTableDescriptor.TableName()])
+
+	systables.ColumnStatsTable = systable.NewColStatsOperations(cm.io, cm.tableIdsMap[systable.ColumnStatisticsTableDescriptor.TableName()], cm.tableCache.GetDbFile, systables.ColumnTable)
+
+	systables.StatsTable = systable.NewStatsOperations(cm.io, cm.tableIdsMap[systable.CatalogStatisticsTableDescriptor.TableName()], cm.tableCache.GetDbFile, nil, systables.ColumnTable)
+
+	systables.IndexesStatsTable = systable.NewIndexStatsOperations(cm.io, cm.tableIdsMap[systable.IndexStatisticsTableDescriptor.TableName()], cm.tableIdsMap[systable.IndexesTableDescriptor.TableName()], cm.tableCache.GetDbFile, systables.StatsTable, systables.IndexTable)
+
+	systables.tableIdsMap = cm.tableIdsMap
+	cm.SysTables = systables
+}
+
+func (cm *CatalogManager) getSystemTable(tableName string) (systable.SystemTable, error) {
+	switch tableName {
+	case systable.TablesTableDescriptor.TableName():
+		return &systable.TablesTableDescriptor, nil
+
+	case systable.ColumnsTableDescriptor.TableName():
+		return &systable.ColumnsTableDescriptor, nil
+
+	case systable.CatalogStatisticsTableDescriptor.TableName():
+		return &systable.CatalogStatisticsTableDescriptor, nil
+
+	case systable.ColumnStatisticsTableDescriptor.TableName():
+		return &systable.ColumnStatisticsTableDescriptor, nil
+
+	case systable.IndexesTableDescriptor.TableName():
+		return &systable.IndexesTableDescriptor, nil
+
+	case systable.IndexStatisticsTableDescriptor.TableName():
+		return &systable.IndexStatisticsTableDescriptor, nil
+
+	default:
+		return nil, fmt.Errorf("unknown system table: %s", tableName)
+	}
+}
+
+// getSystemTableByID looks up a system table descriptor by its FileID.
+// Used to reverse-map a known system table ID back to its descriptor.
+func (cm *CatalogManager) getSystemTableByID(tableID primitives.FileID) (systable.SystemTable, error) {
+	for name, id := range cm.tableIdsMap {
+		if id == tableID {
+			return cm.getSystemTable(name)
+		}
+	}
+	return nil, fmt.Errorf("system table with ID %d not found", tableID)
 }

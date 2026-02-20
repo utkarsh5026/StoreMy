@@ -2,7 +2,9 @@ package catalogmanager
 
 import (
 	"fmt"
-	"storemy/pkg/catalog/systemtable"
+	"storemy/pkg/catalog/schema"
+	"storemy/pkg/catalog/systable"
+	"storemy/pkg/concurrency/transaction"
 	"storemy/pkg/primitives"
 	"storemy/pkg/storage/heap"
 )
@@ -13,33 +15,14 @@ import (
 // and the catalog metadata entries. The operation is atomic - if any step fails,
 // the table will not be created.
 //
-// Steps performed:
-//  1. Validates that the schema is not nil
-//  2. Acquires a lock to prevent race conditions during creation
-//  3. Checks if a table with the same name already exists
-//  4. Creates the physical heap file on disk
-//  5. Registers the table metadata in the catalog (CATALOG_TABLES and CATALOG_COLUMNS)
-//  6. Adds the table to the in-memory cache
-//  7. Registers the heap file with the page store
-//
-// The function is thread-safe and uses cm.mu to synchronize access.
-//
 // Parameters:
 //   - tx: Transaction context for catalog operations
-//   - sch: TableSchema containing table name, columns, and tuple descriptor
+//   - sch: *schema.Schema containing table name, columns, and tuple descriptor
 //
 // Returns:
 //   - int: The auto-generated table ID
 //   - error: nil on success, error describing the failure otherwise
-//
-// Example:
-//
-//	schema := NewTableSchema("users", columns, tupleDesc)
-//	tableID, err := cm.CreateTable(tx, schema)
-//	if err != nil {
-//	    log.Fatal(err)
-//	}
-func (cm *CatalogManager) CreateTable(tx TxContext, sch TableSchema) (primitives.FileID, error) {
+func (cm *CatalogManager) CreateTable(tx *transaction.TransactionContext, sch *schema.Schema) (primitives.FileID, error) {
 	if sch == nil {
 		return 0, fmt.Errorf("schema cannot be nil")
 	}
@@ -61,7 +44,7 @@ func (cm *CatalogManager) CreateTable(tx TxContext, sch TableSchema) (primitives
 		return 0, fmt.Errorf("failed to register table in catalog: %w", err)
 	}
 
-	if err := cm.addTableToCache(tx, heapFile, sch); err != nil {
+	if err := cm.addTableToCacheUnsafe(tx, heapFile, sch); err != nil {
 		return 0, err
 	}
 
@@ -77,12 +60,12 @@ func (cm *CatalogManager) CreateTable(tx TxContext, sch TableSchema) (primitives
 // to match the auto-generated ID from the heap file.
 //
 // Parameters:
-//   - sch: TableSchema containing the table structure
+//   - sch: *schema.Schema containing the table structure
 //
 // Returns:
 //   - *heap.HeapFile: The newly created heap file
 //   - error: nil on success, error if file creation fails
-func (cm *CatalogManager) createTableFile(sch TableSchema) (*heap.HeapFile, error) {
+func (cm *CatalogManager) createTableFile(sch *schema.Schema) (*heap.HeapFile, error) {
 	fileName := sch.TableName + ".dat"
 	fullPath := primitives.Filepath(cm.dataDir).Join(fileName)
 
@@ -106,15 +89,6 @@ func (cm *CatalogManager) createTableFile(sch TableSchema) (*heap.HeapFile, erro
 // This is an internal method called by CreateTable. It assumes the caller
 // holds the cm.mu lock for thread safety.
 //
-// If adding to cache fails, the method attempts to rollback by:
-//  1. Deleting the catalog entry
-//  2. Closing the heap file
-//
-// The method also:
-//   - Tracks the open file in cm.openFiles
-//   - Registers the file with the page store
-//   - Verifies the cache entry was successfully added
-//
 // Parameters:
 //   - tx: Transaction context for potential rollback operations
 //   - file: The heap file to cache
@@ -122,7 +96,7 @@ func (cm *CatalogManager) createTableFile(sch TableSchema) (*heap.HeapFile, erro
 //
 // Returns:
 //   - error: nil on success, error if caching or verification fails
-func (cm *CatalogManager) addTableToCache(tx TxContext, file *heap.HeapFile, sch TableSchema) error {
+func (cm *CatalogManager) addTableToCacheUnsafe(tx *transaction.TransactionContext, file *heap.HeapFile, sch *schema.Schema) error {
 	if err := cm.tableCache.AddTable(file, sch); err != nil {
 		if deleteErr := cm.DeleteCatalogEntry(tx, sch.TableID); deleteErr != nil {
 			fmt.Printf("Warning: failed to rollback catalog entry after cache failure: %v\n", deleteErr)
@@ -166,7 +140,7 @@ func (cm *CatalogManager) addTableToCache(tx TxContext, file *heap.HeapFile, sch
 //
 // Returns:
 //   - error: nil on success, error if table not found or deletion fails
-func (cm *CatalogManager) DropTable(tx TxContext, tableName string) error {
+func (cm *CatalogManager) DropTable(tx *transaction.TransactionContext, tableName string) error {
 	tableID, err := cm.GetTableID(tx, tableName)
 	if err != nil {
 		return fmt.Errorf("table %s not found: %w", tableName, err)
@@ -229,7 +203,7 @@ func (cm *CatalogManager) DropTable(tx TxContext, tableName string) error {
 //
 // Returns:
 //   - error: nil on success, error if table doesn't exist or loading fails
-func (cm *CatalogManager) LoadTable(tx TxContext, tableName string) error {
+func (cm *CatalogManager) LoadTable(tx *transaction.TransactionContext, tableName string) error {
 	if cm.tableCache.TableExists(tableName) {
 		return nil
 	}
@@ -245,18 +219,18 @@ func (cm *CatalogManager) LoadTable(tx TxContext, tableName string) error {
 // loadFromDisk retrieves table metadata and schema from the catalog.
 //
 // This is an internal helper method that reads from CATALOG_TABLES and
-// CATALOG_COLUMNS to reconstruct a complete TableSchema object.
+// CATALOG_COLUMNS to reconstruct a complete *schema.Schema object.
 //
 // Parameters:
 //   - tx: Transaction context for reading catalog
 //   - tableName: Name of the table to load
 //
 // Returns:
-//   - TableSchema: The reconstructed schema with columns and tuple descriptor
+//   - *schema.Schema: The reconstructed schema with columns and tuple descriptor
 //   - string: The file path to the heap file
 //   - error: nil on success, error if metadata cannot be read
-func (cm *CatalogManager) loadFromDisk(tx TxContext, tableName string) (TableSchema, primitives.Filepath, error) {
-	tm, err := cm.GetTableMetadataByName(tx, tableName)
+func (cm *CatalogManager) loadFromDisk(tx *transaction.TransactionContext, tableName string) (*schema.Schema, primitives.Filepath, error) {
+	tm, err := cm.TablesTable.GetByName(tx, tableName)
 	if err != nil {
 		return nil, "", fmt.Errorf("failed to get table metadata: %w", err)
 	}
@@ -283,7 +257,7 @@ func (cm *CatalogManager) loadFromDisk(tx TxContext, tableName string) (TableSch
 //
 // Returns:
 //   - error: nil on success, error if file cannot be opened or registered
-func (cm *CatalogManager) openTable(filePath primitives.Filepath, sch TableSchema) error {
+func (cm *CatalogManager) openTable(filePath primitives.Filepath, sch *schema.Schema) error {
 	heapFile, err := heap.NewHeapFile(filePath, sch.TupleDesc)
 	if err != nil {
 		return fmt.Errorf("failed to open heap file: %w", err)
@@ -318,8 +292,8 @@ func (cm *CatalogManager) openTable(filePath primitives.Filepath, sch TableSchem
 //
 // Returns:
 //   - error: nil if all tables loaded successfully, error describing which table failed
-func (cm *CatalogManager) LoadAllTables(tx TxContext) error {
-	tables, err := cm.tableOps.GetAllTables(tx)
+func (cm *CatalogManager) LoadAllTables(tx *transaction.TransactionContext) error {
+	tables, err := cm.TablesTable.GetAll(tx)
 	if err != nil {
 		return fmt.Errorf("failed to read tables from catalog: %w", err)
 	}
@@ -340,13 +314,6 @@ func (cm *CatalogManager) LoadAllTables(tx TxContext) error {
 //  2. CATALOG_TABLES entry on disk
 //
 // If any step fails, the in-memory rename is rolled back to maintain consistency.
-//
-// Steps performed:
-//  1. Validates new name is not already taken
-//  2. Renames in in-memory cache
-//  3. Updates CATALOG_TABLES entry (via UpdateBy operation)
-//  4. On failure, reverts the in-memory rename
-//
 // The physical heap file is NOT renamed - only the logical table name changes.
 //
 // Parameters:
@@ -356,14 +323,7 @@ func (cm *CatalogManager) LoadAllTables(tx TxContext) error {
 //
 // Returns:
 //   - error: nil on success, error if validation fails or rename cannot complete
-//
-// Example:
-//
-//	err := cm.RenameTable(tx, "users", "customers")
-//	if err != nil {
-//	    log.Printf("Rename failed: %v", err)
-//	}
-func (cm *CatalogManager) RenameTable(tx TxContext, oldName, newName string) error {
+func (cm *CatalogManager) RenameTable(tx *transaction.TransactionContext, oldName, newName string) error {
 	if cm.TableExists(tx, newName) {
 		return fmt.Errorf("table %s already exists", newName)
 	}
@@ -372,14 +332,16 @@ func (cm *CatalogManager) RenameTable(tx TxContext, oldName, newName string) err
 		return fmt.Errorf("failed to rename in memory: %w", err)
 	}
 
-	err := cm.tableOps.UpdateBy(tx,
-		func(tm *systemtable.TableMetadata) bool {
-			return tm.TableName == oldName
-		},
-		func(tm *systemtable.TableMetadata) *systemtable.TableMetadata {
-			tm.TableName = newName
-			return tm
-		})
+	predicate := func(tm systable.TableMetadata) bool {
+		return tm.TableName == oldName
+	}
+
+	updateFunc := func(tm systable.TableMetadata) systable.TableMetadata {
+		tm.TableName = newName
+		return tm
+	}
+
+	err := cm.TablesTable.UpdateBy(tx, predicate, updateFunc)
 
 	if err != nil {
 		_ = cm.tableCache.RenameTable(newName, oldName)

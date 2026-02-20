@@ -7,6 +7,7 @@ import (
 	"storemy/pkg/storage/index"
 	"storemy/pkg/tuple"
 	"storemy/pkg/types"
+	"strings"
 )
 
 // SystemTableDescriptor holds all static, compile-time metadata for a system table.
@@ -42,6 +43,10 @@ func (std *SystemTableDescriptor[T]) CreateTuple(data T) *tuple.Tuple {
 
 func (std *SystemTableDescriptor[T]) ParseTuple(t *tuple.Tuple) (T, error) {
 	return std.parseTupleFn(t)
+}
+
+func (std *SystemTableDescriptor[T]) FileName() string {
+	return strings.ToLower(std.TableName()) + ".dat"
 }
 
 var TablesTableDescriptor = SystemTableDescriptor[TableMetadata]{
@@ -518,15 +523,16 @@ var IndexStatisticsTableDescriptor = SystemTableDescriptor[IndexStatisticsRow]{
 }
 
 // SystemTableBase defines common operations for all system tables
-type SystemTableBase interface {
+type SystemTable interface {
 	Schema() *schema.Schema
 	TableName() string
 	PrimaryKey() string
 	TableIDIndex() int
+	FileName() string
 }
 
 // AllSystemTables returns all system table descriptors
-var AllSystemTables = []SystemTableBase{
+var AllSystemTables = []SystemTable{
 	&TablesTableDescriptor,
 	&ColumnsTableDescriptor,
 	&IndexesTableDescriptor,

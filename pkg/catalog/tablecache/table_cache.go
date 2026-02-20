@@ -6,7 +6,6 @@ import (
 	"maps"
 	"slices"
 	"storemy/pkg/catalog/schema"
-	"storemy/pkg/catalog/systemtable"
 	"storemy/pkg/primitives"
 	"storemy/pkg/storage/page"
 	"strings"
@@ -15,14 +14,11 @@ import (
 	"time"
 )
 
-type TableStatistics = systemtable.TableStatistics
-
 // TableInfo holds metadata about a table in the cache
 // Enhanced with statistics caching and pre-computed metadata
 type TableInfo struct {
 	File         page.DbFile
 	Schema       *schema.Schema
-	Stats        *TableStatistics
 	StatsExpiry  time.Time
 	LastAccessed time.Time
 	lruElement   *list.Element
@@ -369,44 +365,4 @@ func (tc *TableCache) markAsUsed(info *TableInfo) {
 		tc.lruList.MoveToFront(info.lruElement)
 	}
 	info.LastAccessed = time.Now()
-}
-
-// Statistics Caching Methods
-// These methods handle caching of table statistics
-
-// getCachedStatistics retrieves cached statistics for a table if available and not expired.
-// Returns nil if not cached or expired.
-func (tc *TableCache) GetCachedStatistics(tableID primitives.FileID) (*TableStatistics, bool) {
-	tc.mutex.RLock()
-	defer tc.mutex.RUnlock()
-
-	info, exists := tc.idToTable[tableID]
-	if !exists {
-		return nil, false
-	}
-
-	// Check if statistics are cached and not expired
-	if info.Stats == nil || time.Now().After(info.StatsExpiry) {
-		tc.metrics.statsMisses.Add(1)
-		return nil, false
-	}
-
-	tc.metrics.statsHits.Add(1)
-	return info.Stats, true
-}
-
-// setCachedStatistics stores statistics in the cache with TTL.
-// Must be called after acquiring write lock or during table addition.
-func (tc *TableCache) SetCachedStatistics(tableID primitives.FileID, stats *TableStatistics) error {
-	tc.mutex.Lock()
-	defer tc.mutex.Unlock()
-
-	info, exists := tc.idToTable[tableID]
-	if !exists {
-		return fmt.Errorf("table with ID %d not found", tableID)
-	}
-
-	info.Stats = stats
-	info.StatsExpiry = time.Now().Add(tc.ttl.StatsTTL)
-	return nil
 }

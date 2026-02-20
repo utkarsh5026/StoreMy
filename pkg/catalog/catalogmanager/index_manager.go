@@ -4,9 +4,8 @@ import (
 	"fmt"
 	"path/filepath"
 	"slices"
-	"storemy/pkg/catalog/operations"
 	"storemy/pkg/catalog/schema"
-	"storemy/pkg/catalog/systemtable"
+	"storemy/pkg/catalog/systable"
 	"storemy/pkg/catalog/tablecache"
 	"storemy/pkg/concurrency/transaction"
 	"storemy/pkg/primitives"
@@ -26,19 +25,18 @@ type indexCol struct {
 // catalog operations, validation, and the CatalogManager's state management.
 // The CatalogManager owns all locks and mutable state.
 type IndexCatalogOperation struct {
-	tx           *transaction.TransactionContext
-	cache        *tablecache.TableCache
-	indexOps     *operations.IndexOperations
-	colOps       *operations.ColumnOperations
-	indexTableID primitives.FileID
-	cm           *CatalogManager
+	tx       *transaction.TransactionContext
+	cache    *tablecache.TableCache
+	indexOps *systable.IndexesTable
+	colOps   *systable.ColumnsTable
+	cm       *CatalogManager
 }
 
 // DropIndex removes an index from the catalog.
 //
 // Returns the metadata so caller can handle physical file cleanup.
 // CatalogManager's lock is used for thread safety.
-func (ic *IndexCatalogOperation) DropIndex(name string) (*systemtable.IndexMetadata, error) {
+func (ic *IndexCatalogOperation) DropIndex(name string) (*systable.IndexMetadata, error) {
 	if name == "" {
 		return nil, fmt.Errorf("index name cannot be empty")
 	}
@@ -54,7 +52,7 @@ func (ic *IndexCatalogOperation) DropIndex(name string) (*systemtable.IndexMetad
 	if err := ic.indexOps.DeleteIndexFromCatalog(ic.tx, metadata.IndexID); err != nil {
 		return nil, fmt.Errorf("failed to remove index from catalog: %w", err)
 	}
-	return metadata, nil
+	return &metadata, nil
 }
 
 // GetIndexByName retrieves index metadata by index name.
@@ -68,21 +66,24 @@ func (ic *IndexCatalogOperation) DropIndex(name string) (*systemtable.IndexMetad
 // Returns:
 //   - *IndexMetadata: Index metadata
 //   - error: Error if index not found
-func (ic *IndexCatalogOperation) GetIndexByName(indexName string) (*systemtable.IndexMetadata, error) {
+func (ic *IndexCatalogOperation) GetIndexByName(indexName string) (*systable.IndexMetadata, error) {
 	ic.cm.mu.RLock()
 	defer ic.cm.mu.RUnlock()
 
-	return ic.indexOps.GetIndexByName(ic.tx, indexName)
+	m, err := ic.indexOps.GetIndexByName(ic.tx, indexName)
+	if err != nil {
+		return nil, err
+	}
+	return &m, nil
 }
 
 func (cm *CatalogManager) NewIndexOps(tx *transaction.TransactionContext) *IndexCatalogOperation {
 	return &IndexCatalogOperation{
-		tx:           tx,
-		cache:        cm.tableCache,
-		indexOps:     cm.indexOps,
-		colOps:       cm.colOps,
-		indexTableID: cm.SystemTabs.IndexesTableID,
-		cm:           cm,
+		tx:       tx,
+		cache:    cm.tableCache,
+		indexOps: cm.IndexTable,
+		colOps:   cm.ColumnTable,
+		cm:       cm,
 	}
 }
 
@@ -117,7 +118,7 @@ func (io *IndexCatalogOperation) CreateIndex(indexID primitives.FileID, indexNam
 	io.cm.mu.Lock()
 	defer io.cm.mu.Unlock()
 
-	if exists, _ := io.indexOps.GetIndexByName(io.tx, indexName); exists != nil {
+	if _, err := io.indexOps.GetIndexByName(io.tx, indexName); err == nil {
 		return "", fmt.Errorf("index %s already exists", indexName)
 	}
 
@@ -126,13 +127,13 @@ func (io *IndexCatalogOperation) CreateIndex(indexID primitives.FileID, indexNam
 		return "", fmt.Errorf("table %s not found: %w", tableName, err)
 	}
 
-	indexCol := &indexCol{
+	ic := &indexCol{
 		indexName:  indexName,
 		tableName:  tableName,
 		columnName: columnName,
 		indexType:  indexType,
 	}
-	return io.registerIndexWithTableID(tableID, indexID, indexCol)
+	return io.registerIndexWithTableID(tableID, indexID, ic)
 }
 
 // validateCreateIndexInput validates all input parameters.
@@ -164,7 +165,7 @@ func (io *IndexCatalogOperation) getTableIDUnsafe(tableName string) (primitives.
 		return id, nil
 	}
 
-	metadata, err := io.cm.tableOps.GetTableMetadataByName(io.tx, tableName)
+	metadata, err := io.cm.TablesTable.GetByName(io.tx, tableName)
 	if err != nil {
 		return 0, err
 	}
@@ -174,17 +175,17 @@ func (io *IndexCatalogOperation) getTableIDUnsafe(tableName string) (primitives.
 // registerIndexWithTableID is an internal helper that creates an index when tableID is already known.
 // This is used by both CreateIndex (which looks up tableID) and RegisterTable (which already has tableID).
 // Caller must hold cm.mu lock.
-func (io *IndexCatalogOperation) registerIndexWithTableID(tableID, indexID primitives.FileID, indexCol *indexCol) (filePath primitives.Filepath, err error) {
+func (io *IndexCatalogOperation) registerIndexWithTableID(tableID, indexID primitives.FileID, ic *indexCol) (filePath primitives.Filepath, err error) {
 	cols, err := io.colOps.LoadColumnMetadata(io.tx, tableID)
 	if err != nil {
 		return "", fmt.Errorf("failed to get table schema: %w", err)
 	}
 
-	if err := io.validateColumnExists(cols, indexCol); err != nil {
+	if err := io.validateColumnExists(cols, ic); err != nil {
 		return "", err
 	}
 
-	metadata := io.buildIndexMetadata(tableID, indexID, indexCol)
+	metadata := io.buildIndexMetadata(tableID, indexID, ic)
 
 	if err := io.persistIndexMetadata(*metadata); err != nil {
 		return "", fmt.Errorf("failed to register index in catalog: %w", err)
@@ -195,13 +196,13 @@ func (io *IndexCatalogOperation) registerIndexWithTableID(tableID, indexID primi
 
 // validateColumnExists validates that the column exists in the table.
 // Caller must hold cm.mu lock.
-func (io *IndexCatalogOperation) validateColumnExists(cols []schema.ColumnMetadata, indexCol *indexCol) error {
+func (io *IndexCatalogOperation) validateColumnExists(cols []schema.ColumnMetadata, ic *indexCol) error {
 	columnExists := slices.ContainsFunc(cols, func(col schema.ColumnMetadata) bool {
-		return col.Name == indexCol.columnName
+		return col.Name == ic.columnName
 	})
 
 	if !columnExists {
-		return fmt.Errorf("column %s does not exist in table %s", indexCol.columnName, indexCol.tableName)
+		return fmt.Errorf("column %s does not exist in table %s", ic.columnName, ic.tableName)
 	}
 
 	return nil
@@ -209,30 +210,23 @@ func (io *IndexCatalogOperation) validateColumnExists(cols []schema.ColumnMetada
 
 // persistIndexMetadata writes index metadata to catalog.
 // Caller must hold cm.mu lock.
-func (io *IndexCatalogOperation) persistIndexMetadata(metadata systemtable.IndexMetadata) error {
-	indexesFile, err := io.cache.GetDbFile(io.indexTableID)
-	if err != nil {
-		return fmt.Errorf("failed to get indexes catalog file: %w", err)
-	}
-
-	tup := systemtable.Indexes.CreateTuple(metadata)
-	if err := io.cm.tupMgr.InsertTuple(io.tx, indexesFile, tup); err != nil {
+func (io *IndexCatalogOperation) persistIndexMetadata(metadata systable.IndexMetadata) error {
+	if err := io.indexOps.Insert(io.tx, metadata); err != nil {
 		return fmt.Errorf("failed to insert index tuple: %w", err)
 	}
-
 	return nil
 }
 
 // buildIndexMetadata constructs index metadata from components.
-func (io *IndexCatalogOperation) buildIndexMetadata(tableID, indexID primitives.FileID, indexCol *indexCol) *systemtable.IndexMetadata {
-	fileName := fmt.Sprintf("%s_%s.idx", indexCol.tableName, indexCol.indexName)
+func (io *IndexCatalogOperation) buildIndexMetadata(tableID, indexID primitives.FileID, ic *indexCol) *systable.IndexMetadata {
+	fileName := fmt.Sprintf("%s_%s.idx", ic.tableName, ic.indexName)
 	filePath := filepath.Join(io.cm.dataDir, fileName)
-	return &systemtable.IndexMetadata{
+	return &systable.IndexMetadata{
 		IndexID:    indexID,
-		IndexName:  indexCol.indexName,
+		IndexName:  ic.indexName,
 		TableID:    tableID,
-		ColumnName: indexCol.columnName,
-		IndexType:  indexCol.indexType,
+		ColumnName: ic.columnName,
+		IndexType:  ic.indexType,
 		FilePath:   primitives.Filepath(filePath),
 		CreatedAt:  time.Now(),
 	}
@@ -246,13 +240,22 @@ func (io *IndexCatalogOperation) buildIndexMetadata(tableID, indexID primitives.
 //   - tableID: ID of the table
 //
 // Returns:
-//   - []*IndexMetadata: List of index metadata
+//   - []*IndexMetadata: List of index metadata pointers
 //   - error: Error if catalog read fails
-func (io *IndexCatalogOperation) GetIndexesByTable(tableID primitives.FileID) ([]*systemtable.IndexMetadata, error) {
+func (io *IndexCatalogOperation) GetIndexesByTable(tableID primitives.FileID) ([]*systable.IndexMetadata, error) {
 	io.cm.mu.RLock()
 	defer io.cm.mu.RUnlock()
 
-	return io.indexOps.GetIndexesByTable(io.tx, tableID)
+	results, err := io.indexOps.GetIndexesByTable(io.tx, tableID)
+	if err != nil {
+		return nil, err
+	}
+	ptrs := make([]*systable.IndexMetadata, len(results))
+	for i := range results {
+		r := results[i]
+		ptrs[i] = &r
+	}
+	return ptrs, nil
 }
 
 // GetAllIndexes retrieves all indexes from the catalog.
@@ -260,15 +263,24 @@ func (io *IndexCatalogOperation) GetIndexesByTable(tableID primitives.FileID) ([
 // Uses CatalogManager's read lock for thread safety.
 //
 // Returns:
-//   - []*IndexMetadata: List of all index metadata
+//   - []*IndexMetadata: List of all index metadata pointers
 //   - error: Error if catalog read fails
-func (io *IndexCatalogOperation) GetAllIndexes() ([]*systemtable.IndexMetadata, error) {
+func (io *IndexCatalogOperation) GetAllIndexes() ([]*systable.IndexMetadata, error) {
 	io.cm.mu.RLock()
 	defer io.cm.mu.RUnlock()
 
-	return io.indexOps.FindAll(io.tx, func(_ *systemtable.IndexMetadata) bool {
+	results, err := io.indexOps.FindAll(io.tx, func(_ systable.IndexMetadata) bool {
 		return true
 	})
+	if err != nil {
+		return nil, err
+	}
+	ptrs := make([]*systable.IndexMetadata, len(results))
+	for i := range results {
+		r := results[i]
+		ptrs[i] = &r
+	}
+	return ptrs, nil
 }
 
 // IndexExists checks if an index with the given name exists.
@@ -330,7 +342,7 @@ func (io *IndexCatalogOperation) ValidateIndexCreation(indexName, tableName, col
 	defer io.cm.mu.RUnlock()
 
 	// Check index name is unique
-	if exists, _ := io.indexOps.GetIndexByName(io.tx, indexName); exists != nil {
+	if _, err := io.indexOps.GetIndexByName(io.tx, indexName); err == nil {
 		return nil, fmt.Errorf("index %s already exists", indexName)
 	}
 
@@ -385,9 +397,9 @@ func (io *IndexCatalogOperation) ValidateIndexCreation(indexName, tableName, col
 //   - tableName: Optional table name for ownership validation (empty string to skip)
 //
 // Returns:
-//   - *systemtable.IndexMetadata: Metadata of the index to be dropped
+//   - *systable.IndexMetadata: Metadata of the index to be dropped
 //   - error: Validation failure with descriptive message
-func (io *IndexCatalogOperation) ValidateIndexDeletion(indexName, tableName string) (*systemtable.IndexMetadata, error) {
+func (io *IndexCatalogOperation) ValidateIndexDeletion(indexName, tableName string) (*systable.IndexMetadata, error) {
 	if indexName == "" {
 		return nil, fmt.Errorf("index name cannot be empty")
 	}
@@ -403,7 +415,7 @@ func (io *IndexCatalogOperation) ValidateIndexDeletion(indexName, tableName stri
 
 	// Validate table ownership if specified
 	if tableName != "" {
-		tableMetadata, err := io.cm.tableOps.GetTableMetadataByID(io.tx, metadata.TableID)
+		tableMetadata, err := io.cm.TablesTable.GetByID(io.tx, metadata.TableID)
 		if err != nil {
 			return nil, fmt.Errorf("failed to verify table ownership: %w", err)
 		}
@@ -412,5 +424,5 @@ func (io *IndexCatalogOperation) ValidateIndexDeletion(indexName, tableName stri
 		}
 	}
 
-	return metadata, nil
+	return &metadata, nil
 }

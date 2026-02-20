@@ -484,102 +484,6 @@ func TestGetTableInfo(t *testing.T) {
 	}
 }
 
-// TestStatisticsCaching tests statistics caching functionality
-func TestStatisticsCaching(t *testing.T) {
-	cache := NewTableCache()
-	testSchema := createTestSchema("users", 1, []string{"id"})
-	mockFile := newMockDbFile(1, testSchema.FieldTypes(), testSchema.FieldNames())
-
-	cache.AddTable(mockFile, testSchema)
-
-	// Initially, no cached statistics
-	stats, found := cache.GetCachedStatistics(primitives.FileID(1))
-	if found {
-		t.Error("Should not have cached statistics initially")
-	}
-	if stats != nil {
-		t.Error("Stats should be nil when not found")
-	}
-
-	// Set cached statistics
-	testStats := &TableStatistics{
-		TableID:     primitives.FileID(1),
-		Cardinality: 1000,
-		PageCount:   10,
-	}
-
-	err := cache.SetCachedStatistics(primitives.FileID(1), testStats)
-	if err != nil {
-		t.Fatalf("SetCachedStatistics failed: %v", err)
-	}
-
-	// Retrieve cached statistics
-	cachedStats, found := cache.GetCachedStatistics(primitives.FileID(1))
-	if !found {
-		t.Error("Should have found cached statistics")
-	}
-	if cachedStats == nil {
-		t.Fatal("Cached stats should not be nil")
-	}
-	if cachedStats.Cardinality != 1000 {
-		t.Errorf("Expected cardinality 1000, got %d", cachedStats.Cardinality)
-	}
-}
-
-// TestStatisticsCaching_Expiry tests that statistics expire after TTL
-func TestStatisticsCaching_Expiry(t *testing.T) {
-	cache := NewTableCache()
-	cache.ttl.StatsTTL = 100 * time.Millisecond // Short TTL for testing
-
-	testSchema := createTestSchema("users", 1, []string{"id"})
-	mockFile := newMockDbFile(1, testSchema.FieldTypes(), testSchema.FieldNames())
-	cache.AddTable(mockFile, testSchema)
-
-	// Set cached statistics
-	testStats := &TableStatistics{
-		TableID:     primitives.FileID(1),
-		Cardinality: 1000,
-	}
-	cache.SetCachedStatistics(primitives.FileID(1), testStats)
-
-	// Should be available immediately
-	_, found := cache.GetCachedStatistics(primitives.FileID(1))
-	if !found {
-		t.Error("Should have found cached statistics immediately")
-	}
-
-	// Wait for expiry
-	time.Sleep(150 * time.Millisecond)
-
-	// Should be expired now
-	_, found = cache.GetCachedStatistics(primitives.FileID(1))
-	if found {
-		t.Error("Statistics should have expired")
-	}
-}
-
-// TestStatisticsCaching_NotFound tests getting statistics for non-existent table
-func TestStatisticsCaching_NotFound(t *testing.T) {
-	cache := NewTableCache()
-
-	// Try to set statistics for non-existent table
-	testStats := &TableStatistics{
-		TableID:     primitives.FileID(999),
-		Cardinality: 1000,
-	}
-
-	err := cache.SetCachedStatistics(primitives.FileID(999), testStats)
-	if err == nil {
-		t.Error("SetCachedStatistics should return error for non-existent table")
-	}
-
-	// Try to get statistics for non-existent table
-	_, found := cache.GetCachedStatistics(primitives.FileID(999))
-	if found {
-		t.Error("Should not find statistics for non-existent table")
-	}
-}
-
 // TestLRU_Eviction tests LRU eviction when cache is full
 func TestLRU_Eviction(t *testing.T) {
 	cache := NewTableCache()
@@ -694,38 +598,6 @@ func TestMetrics(t *testing.T) {
 	cache.GetDbFile(1)
 	if cache.metrics.hits.Load() != 2 {
 		t.Errorf("Expected 2 hits, got %d", cache.metrics.hits.Load())
-	}
-}
-
-// TestStatsMetrics tests statistics cache metrics
-func TestStatsMetrics(t *testing.T) {
-	cache := NewTableCache()
-	testSchema := createTestSchema("users", 1, []string{"id"})
-	mockFile := newMockDbFile(1, testSchema.FieldTypes(), testSchema.FieldNames())
-	cache.AddTable(mockFile, testSchema)
-
-	// Initial stats metrics should be zero
-	if cache.metrics.statsHits.Load() != 0 {
-		t.Errorf("Expected 0 stats hits initially, got %d", cache.metrics.statsHits.Load())
-	}
-	if cache.metrics.statsMisses.Load() != 0 {
-		t.Errorf("Expected 0 stats misses initially, got %d", cache.metrics.statsMisses.Load())
-	}
-
-	// Get statistics when not cached (should increment stats misses)
-	cache.GetCachedStatistics(1)
-	if cache.metrics.statsMisses.Load() != 1 {
-		t.Errorf("Expected 1 stats miss, got %d", cache.metrics.statsMisses.Load())
-	}
-
-	// Set statistics
-	testStats := &TableStatistics{TableID: 1, Cardinality: 100}
-	cache.SetCachedStatistics(1, testStats)
-
-	// Get statistics when cached (should increment stats hits)
-	cache.GetCachedStatistics(1)
-	if cache.metrics.statsHits.Load() != 1 {
-		t.Errorf("Expected 1 stats hit, got %d", cache.metrics.statsHits.Load())
 	}
 }
 
@@ -863,10 +735,6 @@ func TestNewTableInfo(t *testing.T) {
 
 	if info.Schema != testSchema {
 		t.Error("Schema not set correctly")
-	}
-
-	if info.Stats != nil {
-		t.Error("Stats should be nil initially")
 	}
 
 	if info.LastAccessed.IsZero() {

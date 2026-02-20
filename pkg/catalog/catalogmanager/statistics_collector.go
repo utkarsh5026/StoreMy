@@ -1,6 +1,7 @@
 package catalogmanager
 
 import (
+	"storemy/pkg/concurrency/transaction"
 	"storemy/pkg/primitives"
 	"storemy/pkg/storage/index"
 )
@@ -19,34 +20,27 @@ import (
 //   - tableID: ID of the table
 //
 // Returns error if statistics collection or update fails.
-func (cm *CatalogManager) UpdateTableStatistics(tx TxContext, tableID primitives.FileID) error {
-	return cm.statsOps.UpdateTableStatistics(tx, tableID)
+func (cm *CatalogManager) UpdateTableStatistics(tx *transaction.TransactionContext, tableID primitives.FileID) error {
+	return cm.StatsTable.UpdateTableStatistics(tx, tableID)
 }
 
 // GetTableStatistics retrieves statistics for a given table.
 //
-// This checks the in-memory cache first, then falls back to disk if not cached.
-// Retrieved statistics are cached for future use.
+// This reads directly from disk via CATALOG_STATISTICS.
 //
 // Parameters:
-//   - tx: Transaction context for reading catalog (only used if cache miss)
+//   - tx: Transaction context for reading catalog
 //   - tableID: ID of the table
 //
 // Returns:
 //   - *TableStatistics: Table statistics
 //   - error: Error if statistics cannot be retrieved
-func (cm *CatalogManager) GetTableStatistics(tx TxContext, tableID primitives.FileID) (*TableStatistics, error) {
-	if stats, found := cm.tableCache.GetCachedStatistics(tableID); found {
-		return stats, nil
-	}
-
-	stats, err := cm.statsOps.GetTableStatistics(tx, tableID)
+func (cm *CatalogManager) GetTableStatistics(tx *transaction.TransactionContext, tableID primitives.FileID) (*TableStatistics, error) {
+	stats, err := cm.StatsTable.GetTableStatistics(tx, tableID)
 	if err != nil {
 		return nil, err
 	}
-
-	_ = cm.tableCache.SetCachedStatistics(tableID, stats)
-	return stats, nil
+	return &stats, nil
 }
 
 // RefreshStatistics updates statistics for a table and returns the updated stats.
@@ -60,7 +54,7 @@ func (cm *CatalogManager) GetTableStatistics(tx TxContext, tableID primitives.Fi
 // Returns:
 //   - *TableStatistics: Updated table statistics
 //   - error: Error if update or retrieval fails
-func (cm *CatalogManager) RefreshStatistics(tx TxContext, tableID primitives.FileID) (*TableStatistics, error) {
+func (cm *CatalogManager) RefreshStatistics(tx *transaction.TransactionContext, tableID primitives.FileID) (*TableStatistics, error) {
 	if err := cm.UpdateTableStatistics(tx, tableID); err != nil {
 		return nil, err
 	}
@@ -91,14 +85,14 @@ func (cm *CatalogManager) RefreshStatistics(tx TxContext, tableID primitives.Fil
 //   - *ColumnStatistics: Collected column statistics
 //   - error: Error if collection fails
 func (cm *CatalogManager) CollectColumnStatistics(
-	tx TxContext,
+	tx *transaction.TransactionContext,
 	tableID primitives.FileID,
 	columnName string,
 	columnIndex primitives.ColumnID,
 	histogramBuckets int,
 	mcvCount int,
 ) (*ColumnStatistics, error) {
-	info, err := cm.colStatsOps.CollectColumnStatistics(tx, columnName, tableID, columnIndex, histogramBuckets, mcvCount)
+	info, err := cm.ColumnStatsTable.CollectColumnStatistics(tx, columnName, tableID, columnIndex, histogramBuckets, mcvCount)
 	if err != nil {
 		return nil, err
 	}
@@ -108,15 +102,15 @@ func (cm *CatalogManager) CollectColumnStatistics(
 // UpdateColumnStatistics updates statistics for all columns in a table.
 //
 // This calls CollectColumnStatistics for each column in the table.
-// Histogram and MCV collection are delegated to the ColStatsOperations implementation.
+// Histogram and MCV collection are delegated to the ColumnStatsTable implementation.
 //
 // Parameters:
 //   - tx: Transaction context for catalog update
 //   - tableID: ID of the table
 //
 // Returns error if any column statistics update fails.
-func (cm *CatalogManager) UpdateColumnStatistics(tx TxContext, tableID primitives.FileID) error {
-	return cm.colStatsOps.UpdateColumnStatistics(tx, tableID)
+func (cm *CatalogManager) UpdateColumnStatistics(tx *transaction.TransactionContext, tableID primitives.FileID) error {
+	return cm.ColumnStatsTable.UpdateColumnStatistics(tx, tableID)
 }
 
 // GetColumnStatistics retrieves statistics for a specific column from CATALOG_COLUMN_STATISTICS.
@@ -130,22 +124,20 @@ func (cm *CatalogManager) UpdateColumnStatistics(tx TxContext, tableID primitive
 //   - columnName: Name of the column
 //
 // Returns:
-//   - *ColumnStatistics: Column statistics (with nil histogram and MCVs)
-//   - error: Error if statistics cannot be retrieved
+//   - *ColumnStatistics: Column statistics (with nil histogram and MCVs), or nil if not found
+//   - error: Error if statistics retrieval fails unexpectedly
 func (cm *CatalogManager) GetColumnStatistics(
-	tx TxContext,
+	tx *transaction.TransactionContext,
 	tableID primitives.FileID,
 	columnName string,
 ) (*ColumnStatistics, error) {
-	if cm.colStatsOps == nil {
+	if cm.ColumnStatsTable == nil {
 		return nil, nil
 	}
 
-	row, err := cm.colStatsOps.GetColumnStatistics(tx, tableID, columnName)
+	row, err := cm.ColumnStatsTable.GetColumnStatistics(tx, tableID, columnName)
 	if err != nil {
-		return nil, err
-	}
-	if row == nil {
+		// Not found is acceptable - return nil without error
 		return nil, nil
 	}
 
@@ -188,14 +180,18 @@ func (cm *CatalogManager) GetColumnStatistics(
 //   - *IndexStatistics: Collected index statistics
 //   - error: Error if collection fails
 func (cm *CatalogManager) CollectIndexStatistics(
-	tx TxContext,
+	tx *transaction.TransactionContext,
 	indexID primitives.FileID,
 	tableID primitives.FileID,
 	indexName string,
 	indexType index.IndexType,
 	columnName string,
 ) (*IndexStatistics, error) {
-	return cm.indexStatsOps.CollectIndexStatistics(tx, indexID, tableID, indexName, indexType, columnName)
+	stats, err := cm.IndexesStatsTable.CollectIndexStatistics(tx, indexID, tableID, indexName, indexType, columnName)
+	if err != nil {
+		return nil, err
+	}
+	return &stats, nil
 }
 
 // UpdateIndexStatistics updates statistics for all indexes on a table.
@@ -207,8 +203,8 @@ func (cm *CatalogManager) CollectIndexStatistics(
 //   - tableID: ID of the table
 //
 // Returns error if any index statistics update fails.
-func (cm *CatalogManager) UpdateIndexStatistics(tx TxContext, tableID primitives.FileID) error {
-	return cm.indexStatsOps.UpdateIndexStatistics(tx, tableID)
+func (cm *CatalogManager) UpdateIndexStatistics(tx *transaction.TransactionContext, tableID primitives.FileID) error {
+	return cm.IndexesStatsTable.UpdateIndexStatistics(tx, tableID)
 }
 
 // GetIndexStatistics retrieves statistics for a specific index from CATALOG_INDEX_STATISTICS.
@@ -221,8 +217,12 @@ func (cm *CatalogManager) UpdateIndexStatistics(tx TxContext, tableID primitives
 //   - *IndexStatistics: Index statistics
 //   - error: Error if statistics cannot be retrieved
 func (cm *CatalogManager) GetIndexStatistics(
-	tx TxContext,
+	tx *transaction.TransactionContext,
 	indexID primitives.FileID,
 ) (*IndexStatistics, error) {
-	return cm.indexStatsOps.GetIndexStatistics(tx, indexID)
+	stats, err := cm.IndexesStatsTable.GetIndexStatistics(tx, indexID)
+	if err != nil {
+		return nil, err
+	}
+	return &stats, nil
 }

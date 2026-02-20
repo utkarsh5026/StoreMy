@@ -3,7 +3,8 @@ package catalogmanager
 import (
 	"fmt"
 	"storemy/pkg/catalog/schema"
-	"storemy/pkg/catalog/systemtable"
+	"storemy/pkg/catalog/systable"
+	"storemy/pkg/concurrency/transaction"
 	"storemy/pkg/primitives"
 	"storemy/pkg/storage/page"
 	"storemy/pkg/utils/functools"
@@ -20,12 +21,12 @@ import (
 // Returns:
 //   - tableID: The table's ID
 //   - error: Error if table is not found
-func (cm *CatalogManager) GetTableID(tx TxContext, tableName string) (primitives.FileID, error) {
+func (cm *CatalogManager) GetTableID(tx *transaction.TransactionContext, tableName string) (primitives.FileID, error) {
 	if id, err := cm.tableCache.GetTableID(tableName); err == nil {
 		return id, nil
 	}
 
-	if md, err := cm.GetTableMetadataByName(tx, tableName); err == nil {
+	if md, err := cm.TablesTable.GetByName(tx, tableName); err == nil {
 		return md.TableID, nil
 	}
 
@@ -43,12 +44,12 @@ func (cm *CatalogManager) GetTableID(tx TxContext, tableName string) (primitives
 // Returns:
 //   - tableName: The table's name
 //   - error: Error if table is not found
-func (cm *CatalogManager) GetTableName(tx TxContext, tableID primitives.FileID) (string, error) {
+func (cm *CatalogManager) GetTableName(tx *transaction.TransactionContext, tableID primitives.FileID) (string, error) {
 	if info, err := cm.tableCache.GetTableInfo(tableID); err == nil {
 		return info.Schema.TableName, nil
 	}
 
-	if md, err := cm.GetTableMetadataByID(tx, tableID); err == nil {
+	if md, err := cm.TablesTable.GetByID(tx, tableID); err == nil {
 		return md.TableName, nil
 	}
 
@@ -66,7 +67,7 @@ func (cm *CatalogManager) GetTableName(tx TxContext, tableID primitives.FileID) 
 // Returns:
 //   - schema: The table's schema definition
 //   - error: Error if schema cannot be retrieved
-func (cm *CatalogManager) GetTableSchema(tx TxContext, tableID primitives.FileID) (*schema.Schema, error) {
+func (cm *CatalogManager) GetTableSchema(tx *transaction.TransactionContext, tableID primitives.FileID) (*schema.Schema, error) {
 	if info, err := cm.tableCache.GetTableInfo(tableID); err == nil {
 		return info.Schema, nil
 	}
@@ -109,11 +110,11 @@ func (cm *CatalogManager) GetTableFile(tableID primitives.FileID) (page.DbFile, 
 //
 // Returns:
 //   - bool: true if table exists, false otherwise
-func (cm *CatalogManager) TableExists(tx TxContext, tableName string) bool {
+func (cm *CatalogManager) TableExists(tx *transaction.TransactionContext, tableName string) bool {
 	if cm.tableCache.TableExists(tableName) {
 		return true
 	}
-	_, err := cm.GetTableMetadataByName(tx, tableName)
+	_, err := cm.TablesTable.GetByName(tx, tableName)
 	return err == nil
 }
 
@@ -127,20 +128,21 @@ func (cm *CatalogManager) TableExists(tx TxContext, tableName string) bool {
 // Returns:
 //   - []string: List of table names
 //   - error: Error if disk scan fails (only when refreshFromDisk=true)
-func (cm *CatalogManager) ListAllTables(tx TxContext, refreshFromDisk bool) ([]string, error) {
+func (cm *CatalogManager) ListAllTables(tx *transaction.TransactionContext, refreshFromDisk bool) ([]string, error) {
 	if !refreshFromDisk {
 		return cm.tableCache.GetAllTableNames(), nil
 	}
 
-	tables, err := cm.GetAllTables(tx)
+	tables, err := cm.TablesTable.GetAll(tx)
 	if err != nil {
 		return nil, err
 	}
 
-	tableNames := functools.Map(tables,
-		func(t *systemtable.TableMetadata) string { return t.TableName })
+	nameMapper := func(t systable.TableMetadata) string {
+		return t.TableName
+	}
 
-	return tableNames, nil
+	return functools.Map(tables, nameMapper), nil
 }
 
 // ValidateIntegrity checks consistency between memory and disk catalog.
@@ -153,14 +155,14 @@ func (cm *CatalogManager) ListAllTables(tx TxContext, refreshFromDisk bool) ([]s
 //   - tx: Transaction context for reading catalog
 //
 // Returns error if any inconsistencies are found.
-func (cm *CatalogManager) ValidateIntegrity(tx TxContext) error {
+func (cm *CatalogManager) ValidateIntegrity(tx *transaction.TransactionContext) error {
 	if err := cm.tableCache.ValidateIntegrity(); err != nil {
 		return fmt.Errorf("cache integrity error: %w", err)
 	}
 
 	names := cm.tableCache.GetAllTableNames()
 	for _, n := range names {
-		if _, err := cm.GetTableMetadataByName(tx, n); err != nil {
+		if _, err := cm.TablesTable.GetByName(tx, n); err != nil {
 			return fmt.Errorf("table %s exists in memory but not in disk catalog", n)
 		}
 	}
@@ -214,6 +216,17 @@ func (cm *CatalogManager) ClearCache() {
 
 }
 
+// GetAutoIncrementColumn retrieves auto-increment column info for a table.
+// Returns nil if the table has no auto-increment column.
+func (cm *CatalogManager) GetAutoIncrementColumn(tx *transaction.TransactionContext, tableID primitives.FileID) (*systable.AutoIncrementInfo, error) {
+	return cm.ColumnTable.GetAutoIncrementColumn(tx, tableID)
+}
+
+// IncrementAutoIncrementValue updates the next auto-increment value for a column.
+func (cm *CatalogManager) IncrementAutoIncrementValue(tx *transaction.TransactionContext, tableID primitives.FileID, colName string, newValue uint64) error {
+	return cm.ColumnTable.IncrementAutoIncrementValue(tx, tableID, colName, newValue)
+}
+
 // ClearCacheCompletely removes ALL tables from memory cache including system tables.
 //
 // WARNING: This will make the catalog manager unable to query the catalog until
@@ -240,34 +253,4 @@ func (cm *CatalogManager) ClearCacheCompletely() {
 	}
 
 	cm.tableCache.Clear()
-}
-
-// GetAutoIncrementColumn retrieves auto-increment column information for a table.
-//
-// Returns nil if the table has no auto-increment column.
-//
-// Parameters:
-//   - tx: Transaction context for reading catalog
-//   - tableID: ID of the table
-//
-// Returns:
-//   - AutoIncrementInfo: Auto-increment metadata (nil if none)
-//   - error: Error if catalog read fails
-func (cm *CatalogManager) GetAutoIncrementColumn(tx TxContext, tableID primitives.FileID) (AutoIncrementInfo, error) {
-	return cm.colOps.GetAutoIncrementColumn(tx, tableID)
-}
-
-// IncrementAutoIncrementValue updates the next auto-increment value for a table's auto-increment column.
-//
-// This implements MVCC by deleting the old tuple and inserting a new one with the updated value.
-//
-// Parameters:
-//   - tx: Transaction context for catalog update
-//   - tableID: ID of the table
-//   - columnName: Name of the auto-increment column
-//   - newValue: The new next_auto_value to set
-//
-// Returns error if the update fails.
-func (cm *CatalogManager) IncrementAutoIncrementValue(tx TxContext, tableID primitives.FileID, columnName string, newValue uint64) error {
-	return cm.colOps.IncrementAutoIncrementValue(tx, tableID, columnName, newValue)
 }
