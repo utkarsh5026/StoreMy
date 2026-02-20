@@ -216,6 +216,26 @@ func (sp *SelectPlan) RightPlan() *SelectPlan {
 	return sp.rightPlan
 }
 
+// AggSpec represents a single aggregation operation from the SELECT clause.
+type AggSpec struct {
+	Op    string
+	Field string
+}
+
+// AggSpecs returns all aggregation operations from the SELECT clause in order.
+// Unlike AggOp()/AggField() which only reflect the last aggregate added,
+// this returns all aggregates, enabling multi-aggregate queries like
+// SELECT MIN(x), MAX(x) FROM t.
+func (sp *SelectPlan) AggSpecs() []AggSpec {
+	var specs []AggSpec
+	for _, node := range sp.selectList {
+		if node.AggOp != "" {
+			specs = append(specs, AggSpec{Op: node.AggOp, Field: node.FieldName})
+		}
+	}
+	return specs
+}
+
 // SetDistinct sets whether this is a SELECT DISTINCT query.
 func (sp *SelectPlan) SetDistinct(distinct bool) {
 	sp.distinct = distinct

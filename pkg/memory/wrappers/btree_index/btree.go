@@ -8,6 +8,7 @@ import (
 	"storemy/pkg/storage/index"
 	"storemy/pkg/storage/page"
 	"storemy/pkg/types"
+	"sync"
 )
 
 type BTreeFile = index.BTreeFile
@@ -30,11 +31,13 @@ type BTreePage = index.BTreePage
 //   - rootPageID: Page ID of the current root (nil if tree is empty)
 //   - tx: Transaction context for concurrency control and rollback
 //   - store: PageStore for buffer pool management and page locking
+//   - rootMu: Protects rootPageID from concurrent reads/writes
 type BTree struct {
 	indexID    primitives.FileID
 	keyType    types.Type
 	file       *BTreeFile
 	rootPageID *page.PageDescriptor
+	rootMu     sync.RWMutex
 	tx         *transaction.TransactionContext
 	store      *memory.PageStore
 }
@@ -123,8 +126,12 @@ func (bt *BTree) Close() error {
 //   - *BTreePage: The root page of the tree
 //   - error: Returns error if page fetch/allocation fails
 func (bt *BTree) getRootPage(perm transaction.Permissions) (*BTreePage, error) {
-	if bt.rootPageID != nil {
-		return bt.getPage(bt.rootPageID, perm)
+	bt.rootMu.RLock()
+	rootPageID := bt.rootPageID
+	bt.rootMu.RUnlock()
+
+	if rootPageID != nil {
+		return bt.getPage(rootPageID, perm)
 	}
 
 	root, err := bt.file.AllocatePage(bt.tx.ID, bt.keyType, true, primitives.InvalidPageNumber)
@@ -132,10 +139,13 @@ func (bt *BTree) getRootPage(perm transaction.Permissions) (*BTreePage, error) {
 		return nil, fmt.Errorf("failed to allocate root page: %w", err)
 	}
 
-	bt.rootPageID = root.GetID()
 	if err := bt.addDirtyPage(root, memory.InsertOperation); err != nil {
 		return nil, fmt.Errorf("failed to mark root page as dirty: %w", err)
 	}
+
+	bt.rootMu.Lock()
+	bt.rootPageID = root.GetID()
+	bt.rootMu.Unlock()
 
 	return root, nil
 }

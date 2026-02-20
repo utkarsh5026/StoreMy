@@ -3,7 +3,7 @@ package registry
 import (
 	"storemy/pkg/catalog/catalogmanager"
 	"storemy/pkg/catalog/schema"
-	"storemy/pkg/catalog/systemtable"
+	"storemy/pkg/catalog/systable"
 	"storemy/pkg/concurrency/transaction"
 	"storemy/pkg/indexmanager"
 	"storemy/pkg/log/wal"
@@ -29,8 +29,8 @@ type catalogAdapter struct {
 	cm *catalogmanager.CatalogManager
 }
 
-func (ca *catalogAdapter) GetIndexesByTable(tx *transaction.TransactionContext, tableID primitives.FileID) ([]*systemtable.IndexMetadata, error) {
-	return ca.cm.NewIndexOps(tx).GetIndexesByTable(tableID)
+func (ca *catalogAdapter) GetIndexesByTable(tx *transaction.TransactionContext, tableID primitives.FileID) ([]*systable.IndexMetadata, error) {
+	return ca.cm.GetIndexesByTable(tx, tableID)
 }
 
 func (ca *catalogAdapter) GetTableSchema(tableID primitives.FileID) (*schema.Schema, error) {
@@ -48,7 +48,7 @@ func NewDatabaseContext(
 	adapter := &catalogAdapter{cm: catalogMgr}
 	indexMgr := indexmanager.NewIndexManager(adapter, pageStore, wal)
 
-	tupleManager.SetIndexManager(indexMgr)
+	tupleManager.SetIndexMaintainer(indexMgr)
 
 	return &DatabaseContext{
 		pageStore:    pageStore,

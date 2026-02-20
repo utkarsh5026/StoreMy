@@ -105,6 +105,28 @@ func (p *PageStore) UnregisterDbFile(tableID primitives.FileID) {
 	delete(p.dbFiles, tableID)
 }
 
+// EvictAndCloseFile evicts all cached pages for a file and closes its registered PageIO handle.
+// This must be called before deleting a file on disk (especially on Windows, where open file
+// handles prevent deletion via os.Remove).
+func (p *PageStore) EvictAndCloseFile(fileID primitives.FileID) {
+	p.mutex.Lock()
+	defer p.mutex.Unlock()
+
+	for _, pid := range p.cache.GetAll() {
+		if pid.FileID() == fileID {
+			p.cache.Remove(pid)
+		}
+	}
+
+	if pageIO, ok := p.dbFiles[fileID]; ok {
+		type ioCloser interface{ Close() error }
+		if c, ok := pageIO.(ioCloser); ok {
+			_ = c.Close()
+		}
+		delete(p.dbFiles, fileID)
+	}
+}
+
 // GetPage retrieves a page with specified permissions for a transaction.
 // This is the main entry point for all page access in the database, enforcing:
 //   - Lock acquisition through LockManager (shared for READ, exclusive for READ_WRITE)

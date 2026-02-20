@@ -26,10 +26,12 @@ const (
 	// 8 bytes: prev leaf (for leaf pages, InvalidPageNumber for internal)
 	headerSize = 29
 
-	// Maximum number of Entries per page (conservative estimate)
-	// For 4KB pages: (4096 - 29) / (8 + 8 + 4 + 4) ≈ 169 Entries for int keys
-	// We'll use a more conservative number to handle string keys
-	MaxEntriesPerPage = 150
+	// intLeafEntrySize is the serialized size of one leaf entry with an INT key:
+	// 1 (type byte) + 8 (int64 key) + 1 (pageIDType) + 8 (fileID) + 8 (pageNo) + 2 (tupleNum)
+	intLeafEntrySize = 28
+
+	// MaxEntriesPerPage is the maximum number of INT-key entries that fit in a single leaf page.
+	MaxEntriesPerPage = (page.PageSize - headerSize) / intLeafEntrySize
 )
 
 // BTreePage represents a page in a B+Tree index
@@ -65,7 +67,7 @@ func NewBTreeLeafPage(pageID *page.PageDescriptor, keyType types.Type, parentPag
 		NextLeaf:      primitives.InvalidPageNumber,
 		PrevLeaf:      primitives.InvalidPageNumber,
 		keyType:       keyType,
-		Entries:       make([]*IndexEntry, 0, MaxEntriesPerPage),
+		Entries:       make([]*IndexEntry, 0),
 		InternalPages: nil,
 		isDirty:       false,
 	}
@@ -81,7 +83,7 @@ func NewBTreeInternalPage(pageID *page.PageDescriptor, keyType types.Type, paren
 		PrevLeaf:      primitives.InvalidPageNumber,
 		keyType:       keyType,
 		Entries:       nil,
-		InternalPages: make([]*BTreeChildPtr, 0, MaxEntriesPerPage+1),
+		InternalPages: make([]*BTreeChildPtr, 0),
 		isDirty:       false,
 	}
 }
@@ -236,9 +238,29 @@ func (p *BTreePage) IsInternalPage() bool {
 	return p.pageType == pageTypeInternal
 }
 
+// maxEntriesPerPage computes the maximum number of entries that fit in a 4KB page
+// based on the key type and page type (leaf vs internal).
+func (p *BTreePage) maxEntriesPerPage() int {
+	keySize := int(p.keyType.Size())
+	var entrySize int
+	if p.IsLeafPage() {
+		// serializeField: 1 (type byte) + keySize
+		// RID: 1 (pageIDType) + 8 (fileID) + 8 (pageNo) + 2 (tupleNum)
+		entrySize = 1 + keySize + 1 + 8 + 8 + 2
+	} else {
+		// serializeField: 1 (type byte) + keySize
+		// child ptr: 8 (fileID) + 8 (pageNo)
+		entrySize = 1 + keySize + 8 + 8
+	}
+	if entrySize <= 0 {
+		return 100
+	}
+	return (page.PageSize - headerSize) / entrySize
+}
+
 // IsFull returns true if the page cannot accept more Entries
 func (p *BTreePage) IsFull() bool {
-	return p.GetNumEntries() >= MaxEntriesPerPage
+	return p.GetNumEntries() >= p.maxEntriesPerPage()
 }
 
 // GetNumEntries returns the number of Entries in this page
@@ -253,11 +275,11 @@ func (p *BTreePage) GetNumEntries() int {
 }
 
 func (p *BTreePage) HasMoreThanRequired() bool {
-	return p.GetNumEntries() > MaxEntriesPerPage/2
+	return p.GetNumEntries() > p.maxEntriesPerPage()/2
 }
 
 func (p *BTreePage) HashLessThanRequired() bool {
-	return p.GetNumEntries() < MaxEntriesPerPage/2
+	return p.GetNumEntries() < p.maxEntriesPerPage()/2
 }
 
 // serializeEntry writes an entry to the buffer

@@ -93,6 +93,11 @@ func (p *SelectPlan) ExecuteIterator() (iterator.DbIterator, error) {
 		return nil, err
 	}
 
+	currentOp, err = p.applyFiltersAfterJoin(currentOp)
+	if err != nil {
+		return nil, err
+	}
+
 	currentOp, err = p.applyAggregationIfNeeded(currentOp)
 	if err != nil {
 		return nil, err
@@ -130,9 +135,13 @@ func (p *SelectPlan) ExecuteIterator() (iterator.DbIterator, error) {
 //
 // Process:
 //  1. Resolve first table from FROM clause via TableManager
-//  2. Extract WHERE filter conditions (if present)
+//  2. Extract WHERE filter conditions (if present and no JOINs)
 //  3. Create SeqScan operator (acquires page locks via LockManager)
-//  4. Wrap in Filter operator if WHERE clause exists
+//  4. Wrap in Filter operator if WHERE clause exists and there are no JOINs
+//
+// When JOINs are present, filters are NOT pushed down to the scan level because
+// the WHERE clause may reference columns from the joined (right) table. In that
+// case, applyFiltersAfterJoin applies the filters on the combined JOIN output.
 //
 // Returns iterator.DbIterator ready to produce tuples from base table.
 // Errors if table doesn't exist or scan creation fails.
@@ -148,9 +157,13 @@ func (p *SelectPlan) buildScanOperator() (iterator.DbIterator, error) {
 		return nil, err
 	}
 
+	// Only push the first filter down to scan level when there are no JOINs.
+	// With JOINs, the WHERE clause may reference columns from the joined table,
+	// so filters are applied post-join by applyFiltersAfterJoin.
 	var filter *plan.FilterNode
 	filters := p.statement.Plan.Filters()
-	if len(filters) > 0 {
+	joins := p.statement.Plan.Joins()
+	if len(filters) > 0 && len(joins) == 0 {
 		filter = filters[0]
 	}
 
@@ -252,6 +265,29 @@ func (p *SelectPlan) applyJoinsIfNeeded(input iterator.DbIterator) (iterator.DbI
 	return currentOp, nil
 }
 
+// applyFiltersAfterJoin applies WHERE filters to the output of a JOIN operation.
+// This is only active when JOINs are present; for simple single-table queries the
+// filter is already pushed down to the scan level in buildScanOperator.
+//
+// Using createFilter here is safe because buildPredicateFromFilterNode strips the
+// table qualifier (e.g. "orders.status" → "status") and looks up the field in the
+// combined JOIN schema, which contains columns from both tables.
+func (p *SelectPlan) applyFiltersAfterJoin(input iterator.DbIterator) (iterator.DbIterator, error) {
+	if len(p.statement.Plan.Joins()) == 0 {
+		return input, nil // filters already handled at scan level
+	}
+
+	current := input
+	for _, filter := range p.statement.Plan.Filters() {
+		var err error
+		current, err = createFilter(current, filter)
+		if err != nil {
+			return nil, fmt.Errorf("failed to create join filter: %w", err)
+		}
+	}
+	return current, nil
+}
+
 // buildJoinRightSide creates a scan operator for the right side of a JOIN.
 // Each join's right side is a fresh scan of a table (no filter optimization currently).
 func (p *SelectPlan) buildJoinRightSide(joinNode *plan.JoinNode) (iterator.DbIterator, error) {
@@ -305,6 +341,10 @@ func (p *SelectPlan) buildJoinPredicateFields(node *plan.JoinNode, l, r iterator
 //     - Applies aggregate function to each group
 //     - Outputs one tuple per group
 //
+// For queries with multiple aggregates (e.g., SELECT MIN(x), MAX(x)),
+// all source tuples are materialized and each aggregate is computed
+// separately, then combined into a single output tuple.
+//
 // Example: SELECT dept, COUNT(id) FROM employees GROUP BY dept
 //
 //	→ Groups by dept field, counts id field per group
@@ -316,17 +356,25 @@ func (p *SelectPlan) applyAggregationIfNeeded(input iterator.DbIterator) (iterat
 		return input, nil
 	}
 
-	aggFieldIndex, err := p.parseAggregationIndex(input.GetTupleDesc())
-	if err != nil {
-		return nil, err
-	}
-
+	var err error
 	groupIndex := aggregation.NoGrouping
 	if pl.GroupByField() != "" {
 		groupIndex, err = findFieldIndex(pl.GroupByField(), input.GetTupleDesc())
 		if err != nil {
-			return nil, fmt.Errorf("group by field %s not found: %w", p.statement.Plan.GroupByField(), err)
+			return nil, fmt.Errorf("group by field %s not found: %w", pl.GroupByField(), err)
 		}
+	}
+
+	specs := pl.AggSpecs()
+	if len(specs) > 1 && groupIndex == aggregation.NoGrouping {
+		// Multi-aggregate without GROUP BY: e.g. SELECT MIN(x), MAX(x) FROM t
+		return p.buildMultiAggregateResult(input, specs, groupIndex)
+	}
+
+	// Single aggregate path (original logic)
+	aggFieldIndex, err := p.parseAggregationIndex(input.GetTupleDesc())
+	if err != nil {
+		return nil, err
 	}
 
 	aggOp, err := aggregation.ParseAggregateOp(pl.AggOp())
@@ -340,6 +388,98 @@ func (p *SelectPlan) applyAggregationIfNeeded(input iterator.DbIterator) (iterat
 	}
 
 	return aggOperator, nil
+}
+
+// buildMultiAggregateResult handles queries with multiple aggregate functions,
+// e.g. SELECT MIN(amount), MAX(amount) FROM sales.
+//
+// It materializes all source tuples once, then runs each aggregate independently
+// over the same materialized data, combining the results into a single output tuple.
+func (p *SelectPlan) buildMultiAggregateResult(input iterator.DbIterator, specs []plan.AggSpec, groupIndex primitives.ColumnID) (iterator.DbIterator, error) {
+	inputTupleDesc := input.GetTupleDesc()
+
+	allTuples, err := shared.CollectAllTuples(input)
+	if err != nil {
+		return nil, fmt.Errorf("failed to materialize tuples for multi-aggregate: %w", err)
+	}
+
+	resultFields := make([]types.Field, 0, len(specs))
+	resultTypes := make([]types.Type, 0, len(specs))
+	resultNames := make([]string, 0, len(specs))
+
+	for _, spec := range specs {
+		fieldName := extractFieldName(spec.Field)
+		var fieldIdx primitives.ColumnID
+		if fieldName == "*" {
+			fieldIdx = 0
+		} else {
+			fieldIdx, err = inputTupleDesc.FindFieldIndex(fieldName)
+			if err != nil {
+				return nil, fmt.Errorf("aggregate field %s not found: %w", spec.Field, err)
+			}
+		}
+
+		aggOp, err := aggregation.ParseAggregateOp(spec.Op)
+		if err != nil {
+			return nil, err
+		}
+
+		sliceIter := tuple.NewIteratorWithDesc(allTuples, inputTupleDesc)
+		aggOperator, err := aggregation.NewAggregateOperator(sliceIter, fieldIdx, groupIndex, aggOp)
+		if err != nil {
+			return nil, fmt.Errorf("failed to create aggregate operator for %s(%s): %w", spec.Op, spec.Field, err)
+		}
+
+		if err := aggOperator.Open(); err != nil {
+			return nil, fmt.Errorf("failed to open aggregate operator for %s(%s): %w", spec.Op, spec.Field, err)
+		}
+
+		hasNext, err := aggOperator.HasNext()
+		if err != nil {
+			_ = aggOperator.Close()
+			return nil, fmt.Errorf("failed to check aggregate result for %s(%s): %w", spec.Op, spec.Field, err)
+		}
+		if !hasNext {
+			_ = aggOperator.Close()
+			return nil, fmt.Errorf("aggregate %s(%s) returned no results", spec.Op, spec.Field)
+		}
+
+		resultTuple, err := aggOperator.Next()
+		_ = aggOperator.Close()
+		if err != nil {
+			return nil, fmt.Errorf("failed to get aggregate result for %s(%s): %w", spec.Op, spec.Field, err)
+		}
+
+		// For no-grouping: result has one field (the aggregate value) at index 0.
+		// For grouping: result has two fields (group key at 0, aggregate at 1).
+		aggValueIdx := primitives.ColumnID(0)
+		if groupIndex != aggregation.NoGrouping {
+			aggValueIdx = 1
+		}
+
+		aggValue, err := resultTuple.GetField(aggValueIdx)
+		if err != nil {
+			return nil, fmt.Errorf("failed to get aggregate value for %s(%s): %w", spec.Op, spec.Field, err)
+		}
+
+		resultFields = append(resultFields, aggValue)
+		resultTypes = append(resultTypes, aggValue.Type())
+		resultNames = append(resultNames, spec.Op+"("+extractFieldName(spec.Field)+")")
+	}
+
+	resultTupleDesc, err := tuple.NewTupleDesc(resultTypes, resultNames)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create multi-aggregate result schema: %w", err)
+	}
+
+	combinedTuple := tuple.NewTuple(resultTupleDesc)
+	for i, field := range resultFields {
+		if err := combinedTuple.SetField(primitives.ColumnID(i), field); err != nil {
+			return nil, fmt.Errorf("failed to set aggregate result field %d: %w", i, err)
+		}
+	}
+
+	return tuple.NewIteratorWithDesc([]*tuple.Tuple{combinedTuple}, resultTupleDesc), nil
 }
 
 func (p *SelectPlan) parseAggregationIndex(td *tuple.TupleDescription) (primitives.ColumnID, error) {

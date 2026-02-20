@@ -69,10 +69,10 @@ func (p *DropIndexPlan) Execute() (shared.Result, error) {
 	idxName := p.Statement.IndexName
 	tableName := p.Statement.TableName
 
-	catalogOps := p.ctx.CatalogManager().NewIndexOps(p.tx)
+	cm := p.ctx.CatalogManager()
 
 	// Step 1: Validate via catalog (single consolidated call)
-	_, err := catalogOps.ValidateIndexDeletion(idxName, tableName)
+	_, err := cm.ValidateIndexDeletion(p.tx, idxName, tableName)
 	if err != nil {
 		// Handle IF EXISTS for non-existent index
 		if p.Statement.IfExists {

@@ -377,12 +377,9 @@ func (ce *CardinalityEstimator) getColumnType(tableID primitives.FileID, columnN
 		}
 	}
 
-	tableMetadata, err := ce.catalog.GetTableMetadataByID(ce.tx, tableID)
+	_, err = ce.catalog.TablesTable.GetByID(ce.tx, tableID)
 	if err != nil {
 		return 0, fmt.Errorf("failed to get table metadata for table %d: %w", tableID, err)
-	}
-	if tableMetadata == nil {
-		return 0, fmt.Errorf("table metadata not found for table %d", tableID)
 	}
 
 	schema, err := ce.catalog.LoadTableSchema(ce.tx, tableID)

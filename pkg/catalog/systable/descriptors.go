@@ -11,7 +11,11 @@ import (
 )
 
 // SystemTableDescriptor holds all static, compile-time metadata for a system table.
-// It has NO dependency on CatalogAccess or any I/O layer.
+// It is generic over T, the domain type that rows in the table deserialize into.
+//
+// Descriptors are pure data — they have no dependency on CatalogAccess or any I/O
+// layer and can therefore be declared as package-level variables and shared freely
+// across goroutines without synchronization.
 type SystemTableDescriptor[T any] struct {
 	name          string
 	primaryKey    string
@@ -21,34 +25,54 @@ type SystemTableDescriptor[T any] struct {
 	parseTupleFn  func(t *tuple.Tuple) (T, error)
 }
 
+// Schema returns the relational schema for this system table, including column
+// names, types, and primary-key information.
 func (std *SystemTableDescriptor[T]) Schema() *schema.Schema {
 	return std.schemaFn()
 }
 
+// TableName returns the canonical (upper-case) name of the system table,
+// e.g. "CATALOG_TABLES".
 func (std *SystemTableDescriptor[T]) TableName() string {
 	return std.name
 }
 
+// PrimaryKey returns the name of the primary-key column for this table, or an
+// empty string when the table uses a composite key.
 func (std *SystemTableDescriptor[T]) PrimaryKey() string {
 	return std.primaryKey
 }
 
+// TableIDIndex returns the zero-based column position of the "table_id" field
+// within this table's schema. This is used by catalog I/O to filter rows by
+// owning table without a full schema scan.
 func (std *SystemTableDescriptor[T]) TableIDIndex() int {
 	return std.tableIdIndex
 }
 
+// CreateTuple serializes a domain value of type T into a [tuple.Tuple] using
+// the descriptor's schema. The returned tuple is ready to be written to disk.
 func (std *SystemTableDescriptor[T]) CreateTuple(data T) *tuple.Tuple {
 	return std.createTupleFn(std.Schema().TupleDesc, data)
 }
 
+// ParseTuple deserializes a raw [tuple.Tuple] read from disk into the domain
+// type T. It returns an error if any field is missing, has an unexpected type,
+// or violates a semantic invariant (e.g. an empty name or an invalid enum value).
 func (std *SystemTableDescriptor[T]) ParseTuple(t *tuple.Tuple) (T, error) {
 	return std.parseTupleFn(t)
 }
 
+// FileName returns the on-disk filename for this system table, derived by
+// lower-casing the table name and appending ".dat" (e.g. "catalog_tables.dat").
 func (std *SystemTableDescriptor[T]) FileName() string {
 	return strings.ToLower(std.TableName()) + ".dat"
 }
 
+// TablesTableDescriptor is the compile-time descriptor for CATALOG_TABLES, the
+// root system table that records every user-visible and system table known to
+// the catalog. Each row maps a numeric table_id to its name, heap file path,
+// and primary-key column.
 var TablesTableDescriptor = SystemTableDescriptor[TableMetadata]{
 	name:         "CATALOG_TABLES",
 	primaryKey:   "table_id",
@@ -104,6 +128,10 @@ var TablesTableDescriptor = SystemTableDescriptor[TableMetadata]{
 	},
 }
 
+// ColumnsTableDescriptor is the compile-time descriptor for CATALOG_COLUMNS,
+// which stores one row per column for every table in the catalog. The effective
+// primary key is the composite (table_id, column_name); the primaryKey field is
+// left empty to signal this to catalog I/O helpers.
 var ColumnsTableDescriptor = SystemTableDescriptor[schema.ColumnMetadata]{
 	name:         "CATALOG_COLUMNS",
 	primaryKey:   "", // composite key of (table_id, column_name)
@@ -179,6 +207,10 @@ var ColumnsTableDescriptor = SystemTableDescriptor[schema.ColumnMetadata]{
 	},
 }
 
+// IndexesTableDescriptor is the compile-time descriptor for CATALOG_INDEXES,
+// which tracks every secondary index created by users. Note that table_id sits
+// at column position 2 (tableIdIndex = 2), not position 0, because index_id
+// occupies the primary-key slot.
 var IndexesTableDescriptor = SystemTableDescriptor[IndexMetadata]{
 	name:         "CATALOG_INDEXES",
 	primaryKey:   "index_id",
@@ -259,6 +291,10 @@ var IndexesTableDescriptor = SystemTableDescriptor[IndexMetadata]{
 	},
 }
 
+// CatalogStatisticsTableDescriptor is the compile-time descriptor for
+// CATALOG_STATISTICS, which stores table-level statistics used by the cost-based
+// query optimizer (cardinality, page count, average tuple size, value range,
+// etc.). Rows are keyed by table_id and updated by the statistics manager.
 var CatalogStatisticsTableDescriptor = SystemTableDescriptor[TableStatistics]{
 	name:         "CATALOG_STATISTICS",
 	primaryKey:   "table_id",
@@ -339,6 +375,10 @@ var CatalogStatisticsTableDescriptor = SystemTableDescriptor[TableStatistics]{
 	},
 }
 
+// ColumnStatisticsTableDescriptor is the compile-time descriptor for
+// CATALOG_COLUMN_STATISTICS, which stores per-column statistics (distinct count,
+// null count, min/max value, average width) used by the selectivity estimator.
+// The effective primary key is the composite (table_id, column_name).
 var ColumnStatisticsTableDescriptor = SystemTableDescriptor[ColumnStatisticsRow]{
 	name:         "CATALOG_COLUMN_STATISTICS",
 	primaryKey:   "", // composite key of (table_id, column_name)
@@ -411,6 +451,11 @@ var ColumnStatisticsTableDescriptor = SystemTableDescriptor[ColumnStatisticsRow]
 	},
 }
 
+// IndexStatisticsTableDescriptor is the compile-time descriptor for
+// CATALOG_INDEX_STATISTICS, which stores per-index statistics (number of
+// entries, pages, B+ tree height, distinct keys, clustering factor, average key
+// size) consumed by the index-scan cost model. The clustering_factor is stored
+// as a scaled integer (value × 1_000_000) to avoid floating-point serialization.
 var IndexStatisticsTableDescriptor = SystemTableDescriptor[IndexStatisticsRow]{
 	name:         "CATALOG_INDEX_STATISTICS",
 	primaryKey:   "index_id",
@@ -522,7 +567,9 @@ var IndexStatisticsTableDescriptor = SystemTableDescriptor[IndexStatisticsRow]{
 	},
 }
 
-// SystemTableBase defines common operations for all system tables
+// SystemTable is the common interface implemented by every
+// [SystemTableDescriptor]. It exposes the metadata that catalog I/O helpers
+// need without requiring access to the generic type parameter T.
 type SystemTable interface {
 	Schema() *schema.Schema
 	TableName() string
@@ -531,7 +578,9 @@ type SystemTable interface {
 	FileName() string
 }
 
-// AllSystemTables returns all system table descriptors
+// AllSystemTables is the ordered list of every system table descriptor. It is
+// used during database initialization to create or verify all catalog files and
+// during catalog bootstrap to register their schemas.
 var AllSystemTables = []SystemTable{
 	&TablesTableDescriptor,
 	&ColumnsTableDescriptor,

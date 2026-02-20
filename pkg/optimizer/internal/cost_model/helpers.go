@@ -2,12 +2,12 @@ package costmodel
 
 import (
 	"math"
-	"storemy/pkg/catalog/systemtable"
+	"storemy/pkg/catalog/systable"
 )
 
 // calculateTuplesPerPage estimates how many tuples fit in a page
 // based on average tuple size from table statistics
-func calculateTuplesPerPage(stats *systemtable.TableStatistics, pageSize int) float64 {
+func calculateTuplesPerPage(stats *systable.TableStatistics, pageSize int) float64 {
 	if stats == nil || stats.AvgTupleSize <= 0 {
 		return DefaultTuplesPerPage
 	}

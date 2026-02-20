@@ -47,8 +47,7 @@ func (bt *BTree) deleteFromLeaf(leaf *BTreePage, ie *index.IndexEntry) error {
 		}
 	}
 
-	minEntries := index.MaxEntriesPerPage / 2
-	if leaf.GetNumEntries() < minEntries && !leaf.IsRoot() {
+	if leaf.HashLessThanRequired() && !leaf.IsRoot() {
 		return bt.handleUnderflow(leaf)
 	}
 

@@ -163,24 +163,6 @@ func (cm *CatalogManager) iterateTable(tableID primitives.FileID, tx *transactio
 	return iterator.ForEach(iter, processFunc)
 }
 
-// IterateTable implements CatalogReader interface by delegating to CatalogIO.
-// Scans all tuples in a table and applies a processing function to each.
-func (cm *CatalogManager) IterateTable(tableID primitives.FileID, tx *transaction.TransactionContext, processFunc func(*tuple.Tuple) error) error {
-	return cm.io.IterateTable(tableID, tx, processFunc)
-}
-
-// InsertRow implements CatalogWriter interface by delegating to CatalogIO.
-// Inserts a tuple into a table within a transaction.
-func (cm *CatalogManager) InsertRow(tableID primitives.FileID, tx *transaction.TransactionContext, tup *tuple.Tuple) error {
-	return cm.io.InsertRow(tableID, tx, tup)
-}
-
-// DeleteRow implements CatalogWriter interface by delegating to CatalogIO.
-// Deletes a tuple from a table within a transaction.
-func (cm *CatalogManager) DeleteRow(tableID primitives.FileID, tx *transaction.TransactionContext, tup *tuple.Tuple) error {
-	return cm.io.DeleteRow(tableID, tx, tup)
-}
-
 // toColumnStatistics converts operations.ColStatsInfo to catalogmanager.ColumnStatistics.
 // This is an internal helper for statistics collection methods.
 func toColumnStatistics(info *systable.ColStatsInfo) *ColumnStatistics {

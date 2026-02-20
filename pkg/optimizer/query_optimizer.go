@@ -3,7 +3,7 @@ package optimizer
 import (
 	"fmt"
 	"storemy/pkg/catalog/catalogmanager"
-	"storemy/pkg/catalog/systemtable"
+	"storemy/pkg/catalog/systable"
 	"storemy/pkg/concurrency/transaction"
 	"storemy/pkg/optimizer/internal/cardinality"
 	costmodel "storemy/pkg/optimizer/internal/cost_model"
@@ -300,7 +300,7 @@ func (qo *QueryOptimizer) chooseBestAccessMethod(
 	}
 
 	// Get available indexes for this table
-	indexes, err := qo.catalog.NewIndexOps(tx).GetIndexesByTable(scan.TableID)
+	indexes, err := qo.catalog.GetIndexesByTable(tx, scan.TableID)
 	if err != nil || len(indexes) == 0 {
 		// No indexes available, use sequential scan
 		scan.AccessMethod = "seqscan"
@@ -361,7 +361,7 @@ func (qo *QueryOptimizer) chooseBestAccessMethod(
 // predicateMatchesIndex checks if a predicate can use an index
 func (qo *QueryOptimizer) predicateMatchesIndex(
 	pred plan.PredicateInfo,
-	index *systemtable.IndexMetadata,
+	index *systable.IndexMetadata,
 ) bool {
 	// Check if the predicate column matches the index key column
 	// This is simplified - real implementation would handle multi-column indexes

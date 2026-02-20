@@ -50,10 +50,10 @@ func (p *CreateIndexPlan) Execute() (shared.Result, error) {
 	tableName, indexName, colName := p.Statement.TableName, p.Statement.IndexName, p.Statement.ColumnName
 	idxType := p.Statement.IndexType
 
-	catalogOps := p.ctx.CatalogManager().NewIndexOps(p.tx)
+	cm := p.ctx.CatalogManager()
 
 	// Step 1: Validate via catalog (single consolidated call)
-	validation, err := catalogOps.ValidateIndexCreation(indexName, tableName, colName)
+	validation, err := cm.ValidateIndexCreation(p.tx, indexName, tableName, colName)
 	if err != nil {
 		// Handle IF NOT EXISTS for already-existing index
 		if p.Statement.IfNotExists && fmt.Sprintf("%v", err) == fmt.Sprintf("index %s already exists", indexName) {
@@ -72,7 +72,7 @@ func (p *CreateIndexPlan) Execute() (shared.Result, error) {
 	}
 
 	// Step 3: Register in catalog using actual file ID
-	_, err = catalogOps.CreateIndex(physicalID, indexName, tableName, colName, idxType)
+	_, err = cm.CreateIndex(p.tx, physicalID, indexName, tableName, colName, idxType)
 	if err != nil {
 		// Rollback: Delete physical file (best-effort, ignore error)
 		_ = p.ctx.IndexManager().DeletePhysicalIndex(filePath)
@@ -96,7 +96,7 @@ func (p *CreateIndexPlan) Execute() (shared.Result, error) {
 
 	if err := PopulateIndexWithData(&idxConfig); err != nil {
 		// Rollback: Remove from catalog and delete physical file (best-effort, ignore errors)
-		_, _ = catalogOps.DropIndex(indexName)
+		_, _ = cm.DropIndex(p.tx, indexName)
 		_ = p.ctx.IndexManager().DeletePhysicalIndex(filePath)
 		return nil, fmt.Errorf("failed to populate index: %w", err)
 	}

@@ -3,7 +3,7 @@ package dml
 import (
 	"fmt"
 	"slices"
-	"storemy/pkg/catalog/operations"
+	"storemy/pkg/catalog/systable"
 	"storemy/pkg/concurrency/transaction"
 	"storemy/pkg/parser/statements"
 	"storemy/pkg/planner/internal/shared"
@@ -37,7 +37,7 @@ type InsertPlan struct {
 
 // NewInsertPlan creates a new InsertPlan instance with the provided components.
 // This constructor initializes the plan with all necessary dependencies for
-// executing INSERT operations within a transactional context.
+// executing INSERT systable within a transactional context.
 //
 // Parameters:
 //   - stmt: The parsed INSERT statement containing table name, fields, and values
@@ -86,7 +86,7 @@ func (p *InsertPlan) Execute() (shared.Result, error) {
 		return nil, err
 	}
 
-	autoIncInfo, err := p.ctx.CatalogManager().GetAutoIncrementColumn(p.tx, md.TableID)
+	autoIncInfo, err := p.ctx.CatalogManager().ColumnTable.GetAutoIncrementColumn(p.tx, md.TableID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get auto-increment info: %v", err)
 	}
@@ -159,7 +159,7 @@ func (p *InsertPlan) buildColumnIndexMapping(td *tuple.TupleDescription) (column
 // Returns:
 //   - The number of successfully inserted tuples
 //   - An error if validation fails or any insertion fails (all inserts are rolled back)
-func (p *InsertPlan) insertTuples(tableID primitives.FileID, tupleDesc *tuple.TupleDescription, fieldMapping columnIndexMapping, autoIncInfo *operations.AutoIncrementInfo) (int, error) {
+func (p *InsertPlan) insertTuples(tableID primitives.FileID, tupleDesc *tuple.TupleDescription, fieldMapping columnIndexMapping, autoIncInfo *systable.AutoIncrementInfo) (int, error) {
 	cm := p.ctx.CatalogManager()
 	dbFile, err := cm.GetTableFile(tableID)
 	if err != nil {
@@ -184,7 +184,7 @@ func (p *InsertPlan) insertTuples(tableID primitives.FileID, tupleDesc *tuple.Tu
 		// Update auto-increment counter if column is auto-incremented
 		if autoIncInfo != nil {
 			newValue := autoIncInfo.NextValue + 1
-			if err := p.ctx.CatalogManager().IncrementAutoIncrementValue(p.tx, tableID, autoIncInfo.ColumnName, newValue); err != nil {
+			if err := p.ctx.CatalogManager().ColumnTable.IncrementAutoIncrementValue(p.tx, tableID, autoIncInfo.ColumnName, newValue); err != nil {
 				return 0, fmt.Errorf("failed to update auto-increment value: %v", err)
 			}
 			autoIncInfo.NextValue = newValue
@@ -219,7 +219,7 @@ func (p *InsertPlan) insertTuples(tableID primitives.FileID, tupleDesc *tuple.Tu
 //	INSERT INTO table VALUES ('John', 'john@example.com') - expects 2 values
 //	INSERT INTO table (name, email) VALUES ('John', 'john@example.com') - expects 2 values
 //	INSERT INTO table (id, name, email) VALUES (1, 'John', 'john@example.com') - expects 3 values
-func validateValueCount(values []types.Field, td *tuple.TupleDescription, fieldMapping columnIndexMapping, autoIncInfo *operations.AutoIncrementInfo) error {
+func validateValueCount(values []types.Field, td *tuple.TupleDescription, fieldMapping columnIndexMapping, autoIncInfo *systable.AutoIncrementInfo) error {
 	var expected primitives.ColumnID
 	if fieldMapping != nil {
 		expected = primitives.ColumnID(len(fieldMapping)) // #nosec G115
@@ -254,7 +254,7 @@ func validateValueCount(values []types.Field, td *tuple.TupleDescription, fieldM
 // Returns:
 //   - A fully constructed tuple ready for insertion
 //   - An error if tuple construction fails (type mismatch, missing fields, etc.)
-func createTuple(values []types.Field, tupleDesc *tuple.TupleDescription, fieldMapping columnIndexMapping, autoIncInfo *operations.AutoIncrementInfo) (*tuple.Tuple, error) {
+func createTuple(values []types.Field, tupleDesc *tuple.TupleDescription, fieldMapping columnIndexMapping, autoIncInfo *systable.AutoIncrementInfo) (*tuple.Tuple, error) {
 	if fieldMapping != nil {
 		return buildTupleWithPartialColumns(values, tupleDesc, fieldMapping, autoIncInfo)
 	}
@@ -286,7 +286,7 @@ func createTuple(values []types.Field, tupleDesc *tuple.TupleDescription, fieldM
 //	INSERT INTO table (email, name) VALUES ('john@example.com', 'John')
 //	mapping: [2, 1] (email=index 2, name=index 1)
 //	Result: tuple with id=auto, name='John', email='john@example.com', age=error (missing)
-func buildTupleWithPartialColumns(values []types.Field, td *tuple.TupleDescription, mapping columnIndexMapping, autoInc *operations.AutoIncrementInfo) (*tuple.Tuple, error) {
+func buildTupleWithPartialColumns(values []types.Field, td *tuple.TupleDescription, mapping columnIndexMapping, autoInc *systable.AutoIncrementInfo) (*tuple.Tuple, error) {
 	newTuple := tuple.NewTuple(td)
 	if err := populateMappedColumns(newTuple, values, mapping); err != nil {
 		return nil, err
@@ -326,7 +326,7 @@ func buildTupleWithPartialColumns(values []types.Field, td *tuple.TupleDescripti
 //	Table schema: [id (auto), name, email, age]
 //	INSERT INTO table VALUES ('John', 'john@example.com', 25)
 //	Result: tuple with id=auto, name='John', email='john@example.com', age=25
-func buildTupleFromAllColumns(values []types.Field, td *tuple.TupleDescription, autoInc *operations.AutoIncrementInfo) (*tuple.Tuple, error) {
+func buildTupleFromAllColumns(values []types.Field, td *tuple.TupleDescription, autoInc *systable.AutoIncrementInfo) (*tuple.Tuple, error) {
 	newTuple := tuple.NewTuple(td)
 	valueIndex := 0
 	var i primitives.ColumnID
@@ -360,7 +360,7 @@ func buildTupleFromAllColumns(values []types.Field, td *tuple.TupleDescription, 
 // Returns:
 //   - nil on success
 //   - An error if setting the field fails (wrong type, invalid index, etc.)
-func applyAutoIncrementValue(t *tuple.Tuple, autoInc *operations.AutoIncrementInfo) error {
+func applyAutoIncrementValue(t *tuple.Tuple, autoInc *systable.AutoIncrementInfo) error {
 	index := autoInc.ColumnIndex
 	value := types.NewIntField(int64(autoInc.NextValue)) // #nosec G115
 	if err := t.SetField(index, value); err != nil {
@@ -419,7 +419,7 @@ func populateMappedColumns(tup *tuple.Tuple, values []types.Field, mp columnInde
 //	Table: [id (auto), name, email, age]
 //	Mapping: [1, 2] (name, email provided)
 //	Result: Error - missing value for field index 3 (age)
-func ensureAllColumnsProvided(td *tuple.TupleDescription, fieldMapping columnIndexMapping, autoInc *operations.AutoIncrementInfo) error {
+func ensureAllColumnsProvided(td *tuple.TupleDescription, fieldMapping columnIndexMapping, autoInc *systable.AutoIncrementInfo) error {
 	var i primitives.ColumnID
 	for i = 0; i < td.NumFields(); i++ {
 		if autoInc != nil && i == autoInc.ColumnIndex {

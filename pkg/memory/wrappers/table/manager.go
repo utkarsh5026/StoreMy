@@ -3,7 +3,6 @@ package table
 import (
 	"fmt"
 	"storemy/pkg/concurrency/transaction"
-	"storemy/pkg/indexmanager"
 	"storemy/pkg/log/wal"
 	"storemy/pkg/memory"
 	"storemy/pkg/primitives"
@@ -40,6 +39,13 @@ type TupleOperation interface {
 	Validate() error
 }
 
+// IndexMaintainer defines the interface for maintaining indexes during tuple operations.
+// This interface breaks the import cycle between pkg/memory/wrappers/table and pkg/indexmanager.
+type IndexMaintainer interface {
+	OnInsert(ctx *transaction.TransactionContext, tableID primitives.FileID, t *tuple.Tuple) error
+	OnDelete(ctx *transaction.TransactionContext, tableID primitives.FileID, t *tuple.Tuple) error
+}
+
 // TupleManager handles tuple-level operations (insert, delete, update) on tables.
 // It sits above the buffer pool layer and provides high-level tuple manipulation
 // while delegating page-level concerns to the buffer pool.
@@ -53,23 +59,23 @@ type TupleOperation interface {
 //   - Index maintenance on all DML operations
 
 type TupleManager struct {
-	pageProvider *memory.PageStore
-	wal          *wal.WAL
-	indexManager *indexmanager.IndexManager
+	pageProvider    *memory.PageStore
+	wal             *wal.WAL
+	indexMaintainer IndexMaintainer
 }
 
 // NewTupleManager creates a new TupleManager instance
 func NewTupleManager(store *memory.PageStore) *TupleManager {
 	return &TupleManager{
-		pageProvider: store,
-		wal:          store.GetWal(),
-		indexManager: nil,
+		pageProvider:    store,
+		wal:             store.GetWal(),
+		indexMaintainer: nil,
 	}
 }
 
-// SetIndexManager sets the index manager for maintaining indexes on tuple operations
-func (tm *TupleManager) SetIndexManager(im *indexmanager.IndexManager) {
-	tm.indexManager = im
+// SetIndexMaintainer sets the index maintainer for maintaining indexes on tuple operations
+func (tm *TupleManager) SetIndexMaintainer(im IndexMaintainer) {
+	tm.indexMaintainer = im
 }
 
 // InsertTuple adds a new tuple to the specified table within the given transaction context.

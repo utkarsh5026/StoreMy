@@ -352,8 +352,7 @@ func TestCatalogManager_CreateIndex(t *testing.T) {
 	// Create an index
 	tx3 := setup.beginTx()
 	testIndexID := setup.generateIndexID("indexed_table", "idx_name")
-	indexOps := setup.catalogMgr.NewIndexOps(tx3)
-	filePath, err := indexOps.CreateIndex(testIndexID, "idx_name", "indexed_table", "name", index.BTreeIndex)
+	filePath, err := setup.catalogMgr.CreateIndex(tx3, testIndexID, "idx_name", "indexed_table", "name", index.BTreeIndex)
 	setup.commitTx(tx3)
 	if err != nil {
 		t.Fatalf("CreateIndex failed: %v", err)
@@ -374,12 +373,12 @@ func TestCatalogManager_CreateIndex(t *testing.T) {
 
 	// Verify index exists
 	tx4 := setup.beginTx()
-	if !setup.catalogMgr.NewIndexOps(tx4).IndexExists("idx_name") {
+	if !setup.catalogMgr.IndexExists(tx4, "idx_name") {
 		t.Error("Index should exist after creation")
 	}
 
 	// Get index metadata
-	metadata, err := setup.catalogMgr.NewIndexOps(tx4).GetIndexByName("idx_name")
+	metadata, err := setup.catalogMgr.GetIndexByName(tx4, "idx_name")
 	if err != nil {
 		t.Fatalf("GetIndexByName failed: %v", err)
 	}
@@ -425,8 +424,7 @@ func TestCatalogManager_CreateIndex_DuplicateName(t *testing.T) {
 	// Create first index
 	tx3 := setup.beginTx()
 	testIndexID := setup.generateIndexID("idx_test", "idx_duplicate")
-	indexOps := setup.catalogMgr.NewIndexOps(tx3)
-	_, err = indexOps.CreateIndex(testIndexID, "idx_duplicate", "idx_test", "name", index.BTreeIndex)
+	_, err = setup.catalogMgr.CreateIndex(tx3, testIndexID, "idx_duplicate", "idx_test", "name", index.BTreeIndex)
 	setup.commitTx(tx3)
 	if err != nil {
 		t.Fatalf("First CreateIndex failed: %v", err)
@@ -435,8 +433,7 @@ func TestCatalogManager_CreateIndex_DuplicateName(t *testing.T) {
 	// Try to create index with same name
 	tx4 := setup.beginTx()
 	testIndexID2 := setup.generateIndexID("idx_test", "idx_duplicate")
-	indexOps2 := setup.catalogMgr.NewIndexOps(tx4)
-	_, err = indexOps2.CreateIndex(testIndexID2, "idx_duplicate", "idx_test", "id", index.BTreeIndex)
+	_, err = setup.catalogMgr.CreateIndex(tx4, testIndexID2, "idx_duplicate", "idx_test", "id", index.BTreeIndex)
 	if err == nil {
 		t.Error("CreateIndex should fail for duplicate index name")
 	}
@@ -454,8 +451,7 @@ func TestCatalogManager_CreateIndex_InvalidTable(t *testing.T) {
 
 	tx2 := setup.beginTx()
 	testIndexID := setup.generateIndexID("nonexistent_table", "idx_invalid")
-	indexOps := setup.catalogMgr.NewIndexOps(tx2)
-	_, err := indexOps.CreateIndex(testIndexID, "idx_invalid", "nonexistent_table", "col", index.BTreeIndex)
+	_, err := setup.catalogMgr.CreateIndex(tx2, testIndexID, "idx_invalid", "nonexistent_table", "col", index.BTreeIndex)
 	if err == nil {
 		t.Error("CreateIndex should fail for non-existent table")
 	}
@@ -485,8 +481,7 @@ func TestCatalogManager_CreateIndex_InvalidColumn(t *testing.T) {
 	// Try to create index on non-existent column
 	tx3 := setup.beginTx()
 	testIndexID := setup.generateIndexID("idx_col_test", "idx_bad_col")
-	indexOps := setup.catalogMgr.NewIndexOps(tx3)
-	_, err = indexOps.CreateIndex(testIndexID, "idx_bad_col", "idx_col_test", "nonexistent_col", index.BTreeIndex)
+	_, err = setup.catalogMgr.CreateIndex(tx3, testIndexID, "idx_bad_col", "idx_col_test", "nonexistent_col", index.BTreeIndex)
 	if err == nil {
 		t.Error("CreateIndex should fail for non-existent column")
 	}
@@ -515,8 +510,7 @@ func TestCatalogManager_DropIndex(t *testing.T) {
 
 	tx3 := setup.beginTx()
 	testIndexID := setup.generateIndexID("drop_idx_test", "idx_to_drop")
-	indexOps := setup.catalogMgr.NewIndexOps(tx3)
-	filePath, err := indexOps.CreateIndex(testIndexID, "idx_to_drop", "drop_idx_test", "id", index.BTreeIndex)
+	filePath, err := setup.catalogMgr.CreateIndex(tx3, testIndexID, "idx_to_drop", "drop_idx_test", "id", index.BTreeIndex)
 	setup.commitTx(tx3)
 	if err != nil {
 		t.Fatalf("CreateIndex failed: %v", err)
@@ -524,14 +518,14 @@ func TestCatalogManager_DropIndex(t *testing.T) {
 
 	// Verify index exists
 	tx4 := setup.beginTx()
-	if !setup.catalogMgr.NewIndexOps(tx4).IndexExists("idx_to_drop") {
+	if !setup.catalogMgr.IndexExists(tx4, "idx_to_drop") {
 		t.Fatal("Index should exist before drop")
 	}
 	setup.commitTx(tx4)
 
 	// Drop the index
 	tx5 := setup.beginTx()
-	returned, err := setup.catalogMgr.NewIndexOps(tx5).DropIndex("idx_to_drop")
+	returned, err := setup.catalogMgr.DropIndex(tx5, "idx_to_drop")
 	setup.commitTx(tx5)
 	if err != nil {
 		t.Fatalf("DropIndex failed: %v", err)
@@ -548,7 +542,7 @@ func TestCatalogManager_DropIndex(t *testing.T) {
 
 	// Verify index no longer exists
 	tx6 := setup.beginTx()
-	if setup.catalogMgr.NewIndexOps(tx6).IndexExists("idx_to_drop") {
+	if setup.catalogMgr.IndexExists(tx6, "idx_to_drop") {
 		t.Error("Index should not exist after drop")
 	}
 	setup.commitTx(tx6)
@@ -565,7 +559,7 @@ func TestCatalogManager_DropIndex_NonExistent(t *testing.T) {
 	}
 
 	tx2 := setup.beginTx()
-	_, err := setup.catalogMgr.NewIndexOps(tx2).DropIndex("nonexistent_index")
+	_, err := setup.catalogMgr.DropIndex(tx2, "nonexistent_index")
 	if err == nil {
 		t.Error("DropIndex should fail for non-existent index")
 	}
@@ -599,8 +593,7 @@ func TestCatalogManager_GetIndexesByTable(t *testing.T) {
 	// Create multiple indexes
 	tx3 := setup.beginTx()
 	testIndexID := setup.generateIndexID("multi_idx_table", "idx_name")
-	indexOps := setup.catalogMgr.NewIndexOps(tx3)
-	_, err = indexOps.CreateIndex(testIndexID, "idx_name", "multi_idx_table", "name", index.BTreeIndex)
+	_, err = setup.catalogMgr.CreateIndex(tx3, testIndexID, "idx_name", "multi_idx_table", "name", index.BTreeIndex)
 	setup.commitTx(tx3)
 	if err != nil {
 		t.Fatalf("CreateIndex 1 failed: %v", err)
@@ -608,8 +601,7 @@ func TestCatalogManager_GetIndexesByTable(t *testing.T) {
 
 	tx4 := setup.beginTx()
 	testIndexID2 := setup.generateIndexID("multi_idx_table", "idx_email")
-	indexOps2 := setup.catalogMgr.NewIndexOps(tx4)
-	_, err = indexOps2.CreateIndex(testIndexID2, "idx_email", "multi_idx_table", "email", index.HashIndex)
+	_, err = setup.catalogMgr.CreateIndex(tx4, testIndexID2, "idx_email", "multi_idx_table", "email", index.HashIndex)
 	setup.commitTx(tx4)
 	if err != nil {
 		t.Fatalf("CreateIndex 2 failed: %v", err)
@@ -617,7 +609,7 @@ func TestCatalogManager_GetIndexesByTable(t *testing.T) {
 
 	// Get all indexes for the table
 	tx5 := setup.beginTx()
-	indexes, err := setup.catalogMgr.NewIndexOps(tx5).GetIndexesByTable(tableID)
+	indexes, err := setup.catalogMgr.GetIndexesByTable(tx5, tableID)
 	if err != nil {
 		t.Fatalf("GetIndexesByTable failed: %v", err)
 	}
@@ -664,8 +656,7 @@ func TestCatalogManager_GetIndexesForTable(t *testing.T) {
 
 	tx3 := setup.beginTx()
 	testIndexID := setup.generateIndexID("idx_info_test", "idx_test")
-	indexOps := setup.catalogMgr.NewIndexOps(tx3)
-	_, err = indexOps.CreateIndex(testIndexID, "idx_test", "idx_info_test", "id", index.BTreeIndex)
+	_, err = setup.catalogMgr.CreateIndex(tx3, testIndexID, "idx_test", "idx_info_test", "id", index.BTreeIndex)
 	setup.commitTx(tx3)
 	if err != nil {
 		t.Fatalf("CreateIndex failed: %v", err)
@@ -673,7 +664,7 @@ func TestCatalogManager_GetIndexesForTable(t *testing.T) {
 
 	// Get indexes by table
 	tx4 := setup.beginTx()
-	indexInfos, err := setup.catalogMgr.NewIndexOps(tx4).GetIndexesByTable(tableID)
+	indexInfos, err := setup.catalogMgr.GetIndexesByTable(tx4, tableID)
 	if err != nil {
 		t.Fatalf("GetIndexesByTable failed: %v", err)
 	}
@@ -721,8 +712,7 @@ func TestCatalogManager_GetAllIndexes(t *testing.T) {
 
 	tx3 := setup.beginTx()
 	testIndexID := setup.generateIndexID("table_a", "idx_a")
-	indexOps := setup.catalogMgr.NewIndexOps(tx3)
-	_, err = indexOps.CreateIndex(testIndexID, "idx_a", "table_a", "id", index.BTreeIndex)
+	_, err = setup.catalogMgr.CreateIndex(tx3, testIndexID, "idx_a", "table_a", "id", index.BTreeIndex)
 	setup.commitTx(tx3)
 	if err != nil {
 		t.Fatalf("CreateIndex 1 failed: %v", err)
@@ -738,8 +728,7 @@ func TestCatalogManager_GetAllIndexes(t *testing.T) {
 
 	tx5 := setup.beginTx()
 	testIndexID2 := setup.generateIndexID("table_b", "idx_b")
-	indexOps2 := setup.catalogMgr.NewIndexOps(tx5)
-	_, err = indexOps2.CreateIndex(testIndexID2, "idx_b", "table_b", "id", index.HashIndex)
+	_, err = setup.catalogMgr.CreateIndex(tx5, testIndexID2, "idx_b", "table_b", "id", index.HashIndex)
 	setup.commitTx(tx5)
 	if err != nil {
 		t.Fatalf("CreateIndex 2 failed: %v", err)
@@ -747,7 +736,7 @@ func TestCatalogManager_GetAllIndexes(t *testing.T) {
 
 	// Get all indexes
 	tx6 := setup.beginTx()
-	allIndexes, err := setup.catalogMgr.NewIndexOps(tx6).GetAllIndexes()
+	allIndexes, err := setup.catalogMgr.GetAllIndexes(tx6)
 	if err != nil {
 		t.Fatalf("GetAllIndexes failed: %v", err)
 	}
@@ -973,8 +962,7 @@ func TestCatalogManager_MultipleTableOperationsSequence(t *testing.T) {
 	// Create index
 	tx3 := setup.beginTx()
 	testIndexID := setup.generateIndexID("sequence_test", "idx_seq_name")
-	indexOps := setup.catalogMgr.NewIndexOps(tx3)
-	_, err = indexOps.CreateIndex(testIndexID, "idx_seq_name", "sequence_test", "name", index.BTreeIndex)
+	_, err = setup.catalogMgr.CreateIndex(tx3, testIndexID, "idx_seq_name", "sequence_test", "name", index.BTreeIndex)
 	setup.commitTx(tx3)
 	if err != nil {
 		t.Fatalf("CreateIndex failed: %v", err)
@@ -1006,7 +994,7 @@ func TestCatalogManager_MultipleTableOperationsSequence(t *testing.T) {
 	}
 
 	// Get indexes (should still exist with old table reference)
-	indexes, err := setup.catalogMgr.NewIndexOps(tx6).GetIndexesByTable(tableID)
+	indexes, err := setup.catalogMgr.GetIndexesByTable(tx6, tableID)
 	if err != nil {
 		t.Fatalf("GetIndexesByTable failed: %v", err)
 	}
@@ -1018,7 +1006,7 @@ func TestCatalogManager_MultipleTableOperationsSequence(t *testing.T) {
 
 	// Drop index
 	tx7 := setup.beginTx()
-	_, err = setup.catalogMgr.NewIndexOps(tx7).DropIndex("idx_seq_name")
+	_, err = setup.catalogMgr.DropIndex(tx7, "idx_seq_name")
 	setup.commitTx(tx7)
 	if err != nil {
 		t.Fatalf("DropIndex failed: %v", err)

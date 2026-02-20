@@ -5,7 +5,7 @@ import (
 	"os"
 	"slices"
 	"storemy/pkg/catalog/schema"
-	"storemy/pkg/catalog/systemtable"
+	"storemy/pkg/catalog/systable"
 	"storemy/pkg/concurrency/transaction"
 	"storemy/pkg/execution/scanner"
 	"storemy/pkg/log/wal"
@@ -32,7 +32,7 @@ type IndexType = index.IndexType
 // This avoids circular dependencies with the catalog package.
 type CatalogReader interface {
 	// GetIndexesByTable retrieves index information from the catalog
-	GetIndexesByTable(tx *transaction.TransactionContext, tableID primitives.FileID) ([]*systemtable.IndexMetadata, error)
+	GetIndexesByTable(tx *transaction.TransactionContext, tableID primitives.FileID) ([]*systable.IndexMetadata, error)
 
 	// GetTableSchema retrieves the schema for a table
 	GetTableSchema(tableID primitives.FileID) (*schema.Schema, error)
@@ -41,7 +41,7 @@ type CatalogReader interface {
 // IndexMetadata represents complete, resolved metadata for a database index.
 // This extends systemtable.IndexMetadata with resolved schema information needed for index operations.
 type IndexMetadata struct {
-	systemtable.IndexMetadata
+	systable.IndexMetadata
 	ColumnIndex primitives.ColumnID // Field index in tuple (0-based, resolved from schema)
 	KeyType     types.Type          // Type of the indexed column (resolved from schema)
 }
@@ -130,10 +130,16 @@ func (i *IndexManager) CreatePhysicalIndex(filePath primitives.Filepath, keyType
 // DeletePhysicalIndex removes a physical index file from disk.
 // It is a no-op if the file does not exist, making it safe to call
 // during cleanup even when index creation was only partially completed.
+// On Windows, open file handles prevent deletion, so this method first
+// closes any registered handle in the PageStore before removing the file.
 func (i *IndexManager) DeletePhysicalIndex(filePath primitives.Filepath) error {
 	if !filePath.Exists() {
 		return nil
 	}
+
+	// Close any open PageStore handle for this file before deletion.
+	// On Windows, os.Remove fails if the file has open handles.
+	i.pageStore.EvictAndCloseFile(filePath.Hash())
 
 	if err := filePath.Remove(); err != nil {
 		return fmt.Errorf("failed to remove file %s: %v", filePath.String(), err)
@@ -475,7 +481,7 @@ func (i *IndexManager) loadFromCatalog(tx *transaction.TransactionContext, table
 // resolveIndexMetadata resolves catalog metadata with schema to create complete IndexMetadata.
 // It matches column names from the catalog with actual column positions and types
 // from the table schema.
-func resolveIndexMetadata(catalogIndexes []*systemtable.IndexMetadata, schema *schema.Schema) []*IndexMetadata {
+func resolveIndexMetadata(catalogIndexes []*systable.IndexMetadata, schema *schema.Schema) []*IndexMetadata {
 	result := make([]*IndexMetadata, 0, len(catalogIndexes))
 
 	for _, catIdx := range catalogIndexes {

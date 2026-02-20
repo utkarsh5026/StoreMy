@@ -3,7 +3,7 @@ package indexops
 import (
 	"fmt"
 	"storemy/pkg/catalog/schema"
-	"storemy/pkg/catalog/systemtable"
+	"storemy/pkg/catalog/systable"
 	"storemy/pkg/concurrency/transaction"
 	"storemy/pkg/parser/statements"
 	"storemy/pkg/planner/internal/shared"
@@ -58,7 +58,7 @@ func NewShowIndexesPlan(
 //   - SelectQueryResult with index metadata on success
 //   - Error if table doesn't exist or catalog read fails
 func (p *ShowIndexesPlan) Execute() (shared.Result, error) {
-	var indexes []*systemtable.IndexMetadata
+	var indexes []*systable.IndexMetadata
 	var err error
 
 	if p.Statement.TableName != "" {
@@ -84,9 +84,9 @@ func (p *ShowIndexesPlan) Execute() (shared.Result, error) {
 // index metadata from the catalog. It's used when SHOW INDEXES FROM <table> is executed.
 //
 // Returns:
-//   - Slice of IndexMetadata for the specified table
+//   - Slice of IndexMetadata pointers for the specified table
 //   - Error if table doesn't exist or catalog read fails
-func (p *ShowIndexesPlan) getIndexesForTable() ([]*systemtable.IndexMetadata, error) {
+func (p *ShowIndexesPlan) getIndexesForTable() ([]*systable.IndexMetadata, error) {
 	cm := p.ctx.CatalogManager()
 	tableName := p.Statement.TableName
 
@@ -95,7 +95,7 @@ func (p *ShowIndexesPlan) getIndexesForTable() ([]*systemtable.IndexMetadata, er
 		return nil, fmt.Errorf("table %s does not exist", tableName)
 	}
 
-	indexes, err := cm.NewIndexOps(p.tx).GetIndexesByTable(tableID)
+	indexes, err := cm.GetIndexesByTable(p.tx, tableID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to retrieve indexes for table %s: %w", tableName, err)
 	}
@@ -105,22 +105,22 @@ func (p *ShowIndexesPlan) getIndexesForTable() ([]*systemtable.IndexMetadata, er
 // getAllIndexes retrieves all indexes from the catalog.
 //
 // Returns:
-//   - Slice of all IndexMetadata entries
+//   - Slice of all IndexMetadata pointer entries
 //   - Error if catalog read fails
-func (p *ShowIndexesPlan) getAllIndexes() ([]*systemtable.IndexMetadata, error) {
+func (p *ShowIndexesPlan) getAllIndexes() ([]*systable.IndexMetadata, error) {
 	cm := p.ctx.CatalogManager()
-	return cm.NewIndexOps(p.tx).GetAllIndexes()
+	return cm.GetAllIndexes(p.tx)
 }
 
 // createResultTuples converts index metadata into displayable tuples.
 //
 // Parameters:
-//   - indexes: Slice of IndexMetadata to convert
+//   - indexes: Slice of IndexMetadata pointers to convert
 //
 // Returns:
 //   - TupleDescription for the result schema
 //   - Slice of tuples containing index information
-func (p *ShowIndexesPlan) createResultTuples(indexes []*systemtable.IndexMetadata) (*tuple.TupleDescription, []*tuple.Tuple) {
+func (p *ShowIndexesPlan) createResultTuples(indexes []*systable.IndexMetadata) (*tuple.TupleDescription, []*tuple.Tuple) {
 	sch := p.createIndexSchema()
 	tuples := make([]*tuple.Tuple, 0, len(indexes))
 
@@ -129,9 +129,9 @@ func (p *ShowIndexesPlan) createResultTuples(indexes []*systemtable.IndexMetadat
 	var wg sync.WaitGroup
 	for _, idx := range indexes {
 		wg.Add(1)
-		go func(idx *systemtable.IndexMetadata) {
+		go func(idx *systable.IndexMetadata) {
 			defer wg.Done()
-			p.createIndexTuple(idx, sch.TupleDesc, tupChan)
+			p.createIndexTuple(*idx, sch.TupleDesc, tupChan)
 		}(idx)
 	}
 
@@ -145,7 +145,7 @@ func (p *ShowIndexesPlan) createResultTuples(indexes []*systemtable.IndexMetadat
 }
 
 func (p *ShowIndexesPlan) createIndexSchema() *schema.Schema {
-	sch, _ := schema.NewSchemaBuilder(systemtable.InvalidTableID, "show_indexes_result").
+	sch, _ := schema.NewSchemaBuilder(systable.InvalidTableID, "show_indexes_result").
 		AddColumn("index_name", types.StringType).
 		AddColumn("table_name", types.StringType).
 		AddColumn("column_name", types.StringType).
@@ -155,7 +155,7 @@ func (p *ShowIndexesPlan) createIndexSchema() *schema.Schema {
 	return sch
 }
 
-func (p *ShowIndexesPlan) createIndexTuple(idx *systemtable.IndexMetadata, td *tuple.TupleDescription, tupChan chan<- *tuple.Tuple) {
+func (p *ShowIndexesPlan) createIndexTuple(idx systable.IndexMetadata, td *tuple.TupleDescription, tupChan chan<- *tuple.Tuple) {
 	tableName, err := p.ctx.CatalogManager().GetTableName(p.tx, idx.TableID)
 	if err != nil {
 		tableName = fmt.Sprintf("table_%d", idx.TableID)

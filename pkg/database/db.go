@@ -6,7 +6,7 @@ import (
 	"path/filepath"
 	"storemy/pkg/catalog"
 	"storemy/pkg/catalog/catalogmanager"
-	"storemy/pkg/catalog/systemtable"
+	"storemy/pkg/catalog/systable"
 	"storemy/pkg/concurrency/transaction"
 	dberror "storemy/pkg/error"
 	"storemy/pkg/log/wal"
@@ -357,7 +357,7 @@ func (db *Database) UpdateTableStatistics(tableName string) error {
 }
 
 // GetTableStatistics returns statistics for a specific table
-func (db *Database) GetTableStatistics(tableName string) (*systemtable.TableStatistics, error) {
+func (db *Database) GetTableStatistics(tableName string) (*systable.TableStatistics, error) {
 	tx, err := db.txRegistry.Begin()
 	if err != nil {
 		dbErr := dberror.Wrap(err, "TX_BEGIN_FAILED", "GetTableStatistics", "TransactionRegistry")

@@ -2,7 +2,6 @@ package ddl
 
 import (
 	"fmt"
-	"storemy/pkg/catalog/catalogmanager"
 	"storemy/pkg/parser/statements"
 	"storemy/pkg/planner/internal/shared"
 	"storemy/pkg/primitives"
@@ -92,9 +91,9 @@ func (p *DropTablePlan) drop(tableID primitives.FileID) error {
 //   - nil on success (even if some index deletions fail)
 //   - Never returns error (failures are logged as warnings)
 func (p *DropTablePlan) dropTableIndexes(tableID primitives.FileID) error {
-	ops := p.ctx.CatalogManager().NewIndexOps(p.tx)
+	cm := p.ctx.CatalogManager()
 
-	indexes, err := ops.GetIndexesByTable(tableID)
+	indexes, err := cm.GetIndexesByTable(p.tx, tableID)
 	if err != nil {
 		return nil
 	}
@@ -102,7 +101,7 @@ func (p *DropTablePlan) dropTableIndexes(tableID primitives.FileID) error {
 	var g errgroup.Group
 	for _, indexMeta := range indexes {
 		g.Go(func() error {
-			return p.dropIndex(ops, indexMeta.IndexName)
+			return p.dropIndex(indexMeta.IndexName)
 		})
 	}
 
@@ -112,8 +111,8 @@ func (p *DropTablePlan) dropTableIndexes(tableID primitives.FileID) error {
 	return nil
 }
 
-func (p *DropTablePlan) dropIndex(ops *catalogmanager.IndexCatalogOperation, indexName string) error {
-	metadata, err := ops.DropIndex(indexName)
+func (p *DropTablePlan) dropIndex(indexName string) error {
+	metadata, err := p.ctx.CatalogManager().DropIndex(p.tx, indexName)
 	if err != nil {
 		return fmt.Errorf("failed to drop index from catalog: %w", err)
 	}

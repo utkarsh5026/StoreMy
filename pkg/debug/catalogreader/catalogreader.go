@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"os"
 	"storemy/pkg/catalog/catalogmanager"
-	"storemy/pkg/catalog/systemtable"
+	"storemy/pkg/catalog/systable"
 	"storemy/pkg/concurrency/transaction"
 	"storemy/pkg/debug/ui"
 	"storemy/pkg/memory"
@@ -21,9 +21,9 @@ import (
 
 var (
 	catalogKeys = ui.CommonKeys
-	statsTable  = systemtable.Stats.TableName()
-	colsTable   = systemtable.Columns.TableName()
-	tablesTable = systemtable.Tables.TableName()
+	statsTable  = systable.CatalogStatisticsTableDescriptor.TableName()
+	colsTable   = systable.ColumnsTableDescriptor.TableName()
+	tablesTable = systable.TablesTableDescriptor.TableName()
 )
 
 type catalogModel struct {

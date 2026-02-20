@@ -1,7 +1,7 @@
 package costmodel
 
 import (
-	"storemy/pkg/catalog/systemtable"
+	"storemy/pkg/catalog/systable"
 	"storemy/pkg/plan"
 	"storemy/pkg/storage/page"
 )
@@ -52,7 +52,7 @@ func (cm *CostModel) estimateScanCost(node *plan.ScanNode) float64 {
 //
 // Returns:
 //   - float64: Total estimated cost (I/O + CPU)
-func (cm *CostModel) estimateSeqScanCost(stats *systemtable.TableStatistics) float64 {
+func (cm *CostModel) estimateSeqScanCost(stats *systable.TableStatistics) float64 {
 	ioCost := float64(stats.PageCount) * cm.IOCostPerPage * SequentialIoCostFactor
 
 	ioCost = cm.applyCacheFactor(stats.TableID, ioCost)
@@ -90,7 +90,7 @@ func (cm *CostModel) estimateSeqScanCost(stats *systemtable.TableStatistics) flo
 // Returns:
 //   - float64: Total estimated cost (index + table I/O + CPU)
 //   - Falls back to sequential scan cost if index statistics unavailable
-func (cm *CostModel) estimateIndexScanCost(node *plan.ScanNode, stats *systemtable.TableStatistics) float64 {
+func (cm *CostModel) estimateIndexScanCost(node *plan.ScanNode, stats *systable.TableStatistics) float64 {
 	indexStats, err := cm.catalog.GetIndexStatistics(cm.tx, node.IndexID)
 	if err != nil || indexStats == nil {
 		return cm.estimateSeqScanCost(stats)
@@ -147,7 +147,7 @@ func (cm *CostModel) estimateIndexScanCost(node *plan.ScanNode, stats *systemtab
 // Returns:
 //   - float64: Total estimated cost (index I/O + reduced CPU)
 //   - Falls back to sequential scan if index statistics unavailable
-func (cm *CostModel) estimateIndexOnlyScanCost(node *plan.ScanNode, tableStats *systemtable.TableStatistics) float64 {
+func (cm *CostModel) estimateIndexOnlyScanCost(node *plan.ScanNode, tableStats *systable.TableStatistics) float64 {
 	indexStats, err := cm.catalog.GetIndexStatistics(cm.tx, node.IndexID)
 	if err != nil || indexStats == nil {
 		return cm.estimateSeqScanCost(tableStats)

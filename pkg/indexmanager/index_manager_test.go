@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"os"
 	"storemy/pkg/catalog/schema"
-	"storemy/pkg/catalog/systemtable"
+	"storemy/pkg/catalog/systable"
 	"storemy/pkg/concurrency/transaction"
 	"storemy/pkg/log/wal"
 	"storemy/pkg/memory"
@@ -23,11 +23,11 @@ func createFilePath(dir string, filename string) primitives.Filepath {
 
 // Mock CatalogReader for testing
 type mockCatalogReader struct {
-	indexes []*systemtable.IndexMetadata
+	indexes []*systable.IndexMetadata
 	schema  *schema.Schema
 }
 
-func (m *mockCatalogReader) GetIndexesByTable(tx *transaction.TransactionContext, tableID primitives.FileID) ([]*systemtable.IndexMetadata, error) {
+func (m *mockCatalogReader) GetIndexesByTable(tx *transaction.TransactionContext, tableID primitives.FileID) ([]*systable.IndexMetadata, error) {
 	return m.indexes, nil
 }
 
@@ -67,7 +67,7 @@ func setupTestEnvironment(t *testing.T) (*IndexManager, *memory.PageStore, *tran
 
 	// Create mock catalog
 	catalog := &mockCatalogReader{
-		indexes: []*systemtable.IndexMetadata{},
+		indexes: []*systable.IndexMetadata{},
 		schema:  testSchema,
 	}
 
@@ -109,7 +109,7 @@ func setupTestEnvironment(t *testing.T) (*IndexManager, *memory.PageStore, *tran
 
 func TestNewIndexManager(t *testing.T) {
 	catalog := &mockCatalogReader{
-		indexes: []*systemtable.IndexMetadata{},
+		indexes: []*systable.IndexMetadata{},
 		schema:  &schema.Schema{},
 	}
 	pageStore := memory.NewPageStore(nil)

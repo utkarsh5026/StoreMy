@@ -101,9 +101,9 @@ func (op *InsertOp) Execute() error {
 		op.insertedTuples = append(op.insertedTuples, t)
 	}
 
-	if op.tm.indexManager != nil {
+	if op.tm.indexMaintainer != nil {
 		for _, t := range op.insertedTuples {
-			if err := op.tm.indexManager.OnInsert(op.ctx, tableID, t); err != nil {
+			if err := op.tm.indexMaintainer.OnInsert(op.ctx, tableID, t); err != nil {
 				return fmt.Errorf("failed to update indexes on insert: %v", err)
 			}
 		}

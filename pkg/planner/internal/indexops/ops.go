@@ -38,7 +38,7 @@ func NewIndexOps(tx *transaction.TransactionContext, cm *catalogmanager.CatalogM
 // DeleteIndexFromSystem removes the index from catalog and deletes its physical file.
 //
 // Process:
-//  1. Calls IndexCatalogOperation.DropIndex() to remove from CATALOG_INDEXES
+//  1. Calls CatalogManager.DropIndex() to remove from CATALOG_INDEXES
 //  2. DropIndex returns the file path of the index to delete
 //  3. Uses IndexManager.DeletePhysicalIndex() to remove file
 //
@@ -46,9 +46,7 @@ func NewIndexOps(tx *transaction.TransactionContext, cm *catalogmanager.CatalogM
 //   - nil on success
 //   - Error if catalog update or file deletion fails
 func (i *IndexOps) DeleteIndexFromSystem(name string) error {
-	catalogOps := i.cm.NewIndexOps(i.tx)
-
-	metadata, err := catalogOps.DropIndex(name)
+	metadata, err := i.cm.DropIndex(i.tx, name)
 	if err != nil {
 		return fmt.Errorf("failed to drop index from catalog: %w", err)
 	}

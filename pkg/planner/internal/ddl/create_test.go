@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"storemy/pkg/catalog/systemtable"
+	"storemy/pkg/catalog/systable"
 	"storemy/pkg/parser/statements"
 	"storemy/pkg/planner/internal/shared"
 	"storemy/pkg/planner/internal/testutil"
@@ -470,7 +470,7 @@ func TestCreateTablePlan_Execute_PrimaryKeyIndex_Created(t *testing.T) {
 	}
 
 	// Verify primary key index was created
-	indexes, err := ctx.CatalogManager().NewIndexOps(transCtx).GetIndexesByTable(tableID)
+	indexes, err := ctx.CatalogManager().GetIndexesByTable(transCtx, tableID)
 	if err != nil {
 		t.Fatalf("Failed to get indexes: %v", err)
 	}
@@ -480,7 +480,7 @@ func TestCreateTablePlan_Execute_PrimaryKeyIndex_Created(t *testing.T) {
 	}
 
 	// Verify index properties
-	var pkIndex *systemtable.IndexMetadata
+	var pkIndex *systable.IndexMetadata
 	for _, idx := range indexes {
 		if idx.ColumnName == "id" && idx.IndexType == index.BTreeIndex {
 			pkIndex = idx
@@ -539,7 +539,7 @@ func TestCreateTablePlan_Execute_NoPrimaryKey_NoIndex(t *testing.T) {
 	}
 
 	// Verify no index was created
-	indexes, err := ctx.CatalogManager().NewIndexOps(transCtx).GetIndexesByTable(tableID)
+	indexes, err := ctx.CatalogManager().GetIndexesByTable(transCtx, tableID)
 	if err != nil {
 		t.Fatalf("Failed to get indexes: %v", err)
 	}
@@ -599,7 +599,7 @@ func TestCreateTablePlan_Execute_PrimaryKeyIndex_DifferentTypes(t *testing.T) {
 
 			// Verify index was created
 			tableID, _ := ctx.CatalogManager().GetTableID(transCtx, tt.tableName)
-			indexes, _ := ctx.CatalogManager().NewIndexOps(transCtx).GetIndexesByTable(tableID)
+			indexes, _ := ctx.CatalogManager().GetIndexesByTable(transCtx, tableID)
 
 			if len(indexes) == 0 {
 				t.Error("No index was created")
@@ -645,7 +645,7 @@ func TestCreateTablePlan_Execute_PrimaryKeyIndex_MultipleColumns(t *testing.T) {
 
 	// Verify only one index was created (on the primary key column)
 	tableID, _ := ctx.CatalogManager().GetTableID(transCtx, "products")
-	indexes, _ := ctx.CatalogManager().NewIndexOps(transCtx).GetIndexesByTable(tableID)
+	indexes, _ := ctx.CatalogManager().GetIndexesByTable(transCtx, tableID)
 
 	if len(indexes) != 1 {
 		t.Errorf("Expected exactly 1 index, got %d", len(indexes))
@@ -697,7 +697,7 @@ func TestCreateTablePlan_Execute_PrimaryKeyIndex_IndexNameConvention(t *testing.
 
 			// Verify index name follows convention
 			tableID, _ := ctx.CatalogManager().GetTableID(transCtx, tt.tableName)
-			indexes, _ := ctx.CatalogManager().NewIndexOps(transCtx).GetIndexesByTable(tableID)
+			indexes, _ := ctx.CatalogManager().GetIndexesByTable(transCtx, tableID)
 
 			if len(indexes) > 0 {
 				if indexes[0].IndexName != tt.expectedIndexName {
@@ -734,7 +734,7 @@ func TestCreateTablePlan_Execute_PrimaryKeyIndex_FileLocation(t *testing.T) {
 
 	// Verify index file is in the correct location
 	tableID, _ := ctx.CatalogManager().GetTableID(transCtx, "test_table")
-	indexes, _ := ctx.CatalogManager().NewIndexOps(transCtx).GetIndexesByTable(tableID)
+	indexes, _ := ctx.CatalogManager().GetIndexesByTable(transCtx, tableID)
 
 	if len(indexes) > 0 {
 		idx := indexes[0]
@@ -786,7 +786,7 @@ func TestCreateTablePlan_Execute_PrimaryKeyIndex_WithAutoIncrement(t *testing.T)
 
 	// Verify index was created even with auto-increment
 	tableID, _ := ctx.CatalogManager().GetTableID(transCtx, "auto_inc_table")
-	indexes, _ := ctx.CatalogManager().NewIndexOps(transCtx).GetIndexesByTable(tableID)
+	indexes, _ := ctx.CatalogManager().GetIndexesByTable(transCtx, tableID)
 
 	if len(indexes) == 0 {
 		t.Error("No index was created for auto-increment primary key")

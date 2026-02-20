@@ -468,11 +468,15 @@ func (bt *BTree) createNewRoot(left *BTreePage, separatorKey types.Field, right 
 	left.ParentPage = newRoot.PageNo()
 	right.ParentPage = newRoot.PageNo()
 
-	bt.rootPageID = newRoot.GetID()
-
+	// Add all pages to cache BEFORE updating rootPageID so concurrent readers
+	// that observe the new root ID always find the page already in the buffer pool.
 	_ = bt.addDirtyPage(left, memory.UpdateOperation)
 	_ = bt.addDirtyPage(right, memory.UpdateOperation)
 	_ = bt.addDirtyPage(newRoot, memory.UpdateOperation)
+
+	bt.rootMu.Lock()
+	bt.rootPageID = newRoot.GetID()
+	bt.rootMu.Unlock()
 
 	return nil
 }

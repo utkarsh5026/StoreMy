@@ -149,7 +149,7 @@ func TestDropTablePlan_Execute_WithPrimaryKeyIndex(t *testing.T) {
 	}
 
 	// Verify primary key index was created
-	indexes, err := ctx.CatalogManager().NewIndexOps(transCtx).GetIndexesByTable(tableID)
+	indexes, err := ctx.CatalogManager().GetIndexesByTable(transCtx, tableID)
 	if err != nil {
 		t.Fatalf("Failed to get indexes: %v", err)
 	}
@@ -212,7 +212,7 @@ func TestDropTablePlan_Execute_WithMultipleIndexes(t *testing.T) {
 
 	// Verify all indexes exist
 	tableID, _ := ctx.CatalogManager().GetTableID(transCtx, "users")
-	indexes, err := ctx.CatalogManager().NewIndexOps(transCtx).GetIndexesByTable(tableID)
+	indexes, err := ctx.CatalogManager().GetIndexesByTable(transCtx, tableID)
 	if err != nil {
 		t.Fatalf("Failed to get indexes: %v", err)
 	}
@@ -251,7 +251,7 @@ func TestDropTablePlan_Execute_WithMultipleIndexes(t *testing.T) {
 
 	// Verify all indexes no longer exist in catalog
 	for _, indexName := range indexNames {
-		if ctx.CatalogManager().NewIndexOps(transCtx).IndexExists(indexName) {
+		if ctx.CatalogManager().IndexExists(transCtx, indexName) {
 			t.Errorf("Index %s still exists in catalog after table drop", indexName)
 		}
 	}
@@ -366,7 +366,7 @@ func TestDropTablePlan_Execute_WithIndexFilesMissing(t *testing.T) {
 
 	// Get indexes and manually delete their files
 	tableID, _ := ctx.CatalogManager().GetTableID(transCtx, "users")
-	indexes, _ := ctx.CatalogManager().NewIndexOps(transCtx).GetIndexesByTable(tableID)
+	indexes, _ := ctx.CatalogManager().GetIndexesByTable(transCtx, tableID)
 
 	for _, idx := range indexes {
 		idx.FilePath.Remove()
@@ -463,7 +463,7 @@ func TestDropTablePlan_Execute_CascadeMultipleTables(t *testing.T) {
 		t.Error("Users table still exists")
 	}
 
-	if ctx.CatalogManager().NewIndexOps(transCtx).IndexExists("idx_users_email") {
+	if ctx.CatalogManager().IndexExists(transCtx, "idx_users_email") {
 		t.Error("Users index still exists")
 	}
 
@@ -476,11 +476,11 @@ func TestDropTablePlan_Execute_CascadeMultipleTables(t *testing.T) {
 		t.Error("Orders table should still exist")
 	}
 
-	if !ctx.CatalogManager().NewIndexOps(transCtx).IndexExists("idx_products_name") {
+	if !ctx.CatalogManager().IndexExists(transCtx, "idx_products_name") {
 		t.Error("Products index should still exist")
 	}
 
-	if !ctx.CatalogManager().NewIndexOps(transCtx).IndexExists("idx_orders_email") {
+	if !ctx.CatalogManager().IndexExists(transCtx, "idx_orders_email") {
 		t.Error("Orders index should still exist")
 	}
 

@@ -69,9 +69,9 @@ func (op *DeleteOp) Execute() error {
 
 	tableID := op.dbFile.GetID()
 
-	if op.tm.indexManager != nil {
+	if op.tm.indexMaintainer != nil {
 		for i, t := range op.tuples {
-			if err := op.tm.indexManager.OnDelete(op.ctx, tableID, t); err != nil {
+			if err := op.tm.indexMaintainer.OnDelete(op.ctx, tableID, t); err != nil {
 				return fmt.Errorf("failed to update indexes on delete at index %d: %v", i, err)
 			}
 		}

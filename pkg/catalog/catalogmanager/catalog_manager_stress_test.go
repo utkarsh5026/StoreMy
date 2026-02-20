@@ -159,7 +159,7 @@ func TestCatalogManager_ConcurrentIndexCreation(t *testing.T) {
 
 			tx := setup.beginTx()
 			testIndexID := setup.generateIndexID("concurrent_idx_table", indexName)
-			_, err := setup.catalogMgr.NewIndexOps(tx).CreateIndex(testIndexID, indexName, "concurrent_idx_table", columnName, index.BTreeIndex)
+			_, err := setup.catalogMgr.CreateIndex(tx, testIndexID, indexName, "concurrent_idx_table", columnName, index.BTreeIndex)
 			if err != nil {
 				errors <- fmt.Errorf("index %s creation failed: %w", indexName, err)
 				return
@@ -188,7 +188,7 @@ func TestCatalogManager_ConcurrentIndexCreation(t *testing.T) {
 
 	// Verify all indexes were created (including auto-created PK index)
 	tx3 := setup.beginTx()
-	indexes, err := setup.catalogMgr.NewIndexOps(tx3).GetIndexesByTable(tableID)
+	indexes, err := setup.catalogMgr.GetIndexesByTable(tx3, tableID)
 	setup.commitTx(tx3)
 	if err != nil {
 		t.Fatalf("GetIndexesByTable failed: %v", err)
@@ -438,7 +438,7 @@ func TestCatalogManager_StressTest_ManyIndexes(t *testing.T) {
 
 		tx := setup.beginTx()
 		testIndexID := setup.generateIndexID("many_idx_table", indexName)
-		_, err := setup.catalogMgr.NewIndexOps(tx).CreateIndex(testIndexID, indexName, "many_idx_table", columnName, index.BTreeIndex)
+		_, err := setup.catalogMgr.CreateIndex(tx, testIndexID, indexName, "many_idx_table", columnName, index.BTreeIndex)
 		setup.commitTx(tx)
 		if err != nil {
 			t.Fatalf("CreateIndex %d failed: %v", i, err)
@@ -451,7 +451,7 @@ func TestCatalogManager_StressTest_ManyIndexes(t *testing.T) {
 
 	// Verify all indexes were created (including auto-created PK index)
 	tx3 := setup.beginTx()
-	indexes, err := setup.catalogMgr.NewIndexOps(tx3).GetIndexesByTable(tableID)
+	indexes, err := setup.catalogMgr.GetIndexesByTable(tx3, tableID)
 	if err != nil {
 		t.Fatalf("GetIndexesByTable failed: %v", err)
 	}
