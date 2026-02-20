@@ -255,7 +255,7 @@ func TestWaitQueueRemoveLastRequest(t *testing.T) {
 	}
 
 	// Verify internal cleanup - page should be removed from map
-	if _, exists := wq.pageWaitQueue[pid]; exists {
+	if _, exists := wq.pageWaitQueue[pid.HashCode()]; exists {
 		t.Error("Page should be completely removed from pageWaitQueue when empty")
 	}
 
@@ -441,7 +441,7 @@ func TestWaitQueueConsistency(t *testing.T) {
 			waitingPages := wq.GetPagesRequestedFor(req.TID)
 			found := false
 			for _, waitingPid := range waitingPages {
-				if waitingPid.Equals(pid) {
+				if waitingPid.HashCode() == pid {
 					found = true
 					break
 				}

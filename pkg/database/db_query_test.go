@@ -404,8 +404,8 @@ func TestExecuteQuery_ParseError(t *testing.T) {
 				return
 			}
 
-			if !strings.Contains(err.Error(), "parse error") {
-				t.Errorf("expected 'parse error', got: %v", err)
+			if !strings.Contains(err.Error(), "PARSE_ERROR") {
+				t.Errorf("expected 'PARSE_ERROR', got: %v", err)
 			}
 
 			// Verify error was recorded

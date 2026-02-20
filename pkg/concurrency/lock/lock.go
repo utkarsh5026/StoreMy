@@ -105,21 +105,23 @@ func (lg *LockGrantor) CanUpgradeLock(tid *primitives.TransactionID, pid primiti
 //
 // The WaitQueue maintains two critical data structures:
 //
-//   - pageWaitQueue: A map from PageID to an ordered slice of LockRequest pointers, representing
+//   - pageWaitQueue: A map from HashCode to an ordered slice of LockRequest pointers, representing
 //     the FIFO queue of transactions waiting to acquire locks on each page. The order matters
 //     as it determines which transaction gets the lock next when it becomes available.
+//     Uses HashCode (content-based) rather than PageID (pointer-based) to ensure different
+//     *PageDescriptor instances for the same logical page are treated as equivalent.
 //
 //   - transactionWaiting: A reverse index mapping each TransactionID to all PageIDs it's currently
 //     waiting for. This enables efficient transaction cleanup and deadlock cycle detection.
 type WaitQueue struct {
-	pageWaitQueue      map[primitives.PageID][]*LockRequest
+	pageWaitQueue      map[primitives.HashCode][]*LockRequest
 	transactionWaiting map[*primitives.TransactionID][]primitives.PageID
 }
 
 // NewWaitQueue creates and initializes a new WaitQueue instance with empty internal maps.
 func NewWaitQueue() *WaitQueue {
 	return &WaitQueue{
-		pageWaitQueue:      make(map[primitives.PageID][]*LockRequest),
+		pageWaitQueue:      make(map[primitives.HashCode][]*LockRequest),
 		transactionWaiting: make(map[*primitives.TransactionID][]primitives.PageID),
 	}
 }
@@ -139,7 +141,8 @@ func (wq *WaitQueue) Add(tid *primitives.TransactionID, pid primitives.PageID, l
 	}
 
 	request := NewLockRequest(tid, lockType)
-	wq.pageWaitQueue[pid] = append(wq.pageWaitQueue[pid], request)
+	hash := pid.HashCode()
+	wq.pageWaitQueue[hash] = append(wq.pageWaitQueue[hash], request)
 	wq.transactionWaiting[tid] = append(wq.transactionWaiting[tid], pid)
 	return nil
 }
@@ -175,7 +178,7 @@ func (wq *WaitQueue) RemoveAllForTransaction(tid *primitives.TransactionID) {
 
 // GetRequests returns an ordered slice of all lock requests waiting for the specified page.
 func (wq *WaitQueue) GetRequests(pid primitives.PageID) []*LockRequest {
-	return slices.Clone(wq.pageWaitQueue[pid])
+	return slices.Clone(wq.pageWaitQueue[pid.HashCode()])
 }
 
 // GetPagesRequestedFor returns all pages that a specific transaction is currently waiting
@@ -187,7 +190,8 @@ func (wq *WaitQueue) GetPagesRequestedFor(tid *primitives.TransactionID) []primi
 // removeFromPageQueue removes a specific transaction from a page's wait queue while preserving
 // FIFO ordering for remaining requests.
 func (wq *WaitQueue) removeFromPageQueue(tid *primitives.TransactionID, pid primitives.PageID) {
-	requestQueue, exists := wq.pageWaitQueue[pid]
+	hash := pid.HashCode()
+	requestQueue, exists := wq.pageWaitQueue[hash]
 	if !exists {
 		return
 	}
@@ -195,7 +199,7 @@ func (wq *WaitQueue) removeFromPageQueue(tid *primitives.TransactionID, pid prim
 	newQueue := slices.DeleteFunc(slices.Clone(requestQueue), func(req *LockRequest) bool {
 		return req.TID == tid
 	})
-	updateOrDelete(wq.pageWaitQueue, pid, newQueue)
+	updateOrDelete(wq.pageWaitQueue, hash, newQueue)
 }
 
 // removeFromTransactionQueue removes a specific page from a transaction's waiting list,
@@ -215,7 +219,7 @@ func (wq *WaitQueue) removeFromTransactionQueue(tid *primitives.TransactionID, p
 // alreadyInPageQueue checks if a transaction already has a pending lock request in the
 // specified page's wait queue.
 func (wq *WaitQueue) alreadyInPageQueue(tid *primitives.TransactionID, pid primitives.PageID) bool {
-	queue, exists := wq.pageWaitQueue[pid]
+	queue, exists := wq.pageWaitQueue[pid.HashCode()]
 	if !exists {
 		return false
 	}
@@ -416,6 +420,8 @@ func (lm *LockManager) UnlockPage(tid *primitives.TransactionID, pid primitives.
 
 // processWaitQueue processes pending lock requests for a page after a lock is released.
 // Grants locks to waiting transactions in FIFO order when possible.
+// pid is passed to CanGrantImmediately and GrantLock for conflict checking; the
+// wait queue is keyed by HashCode internally.
 func (lm *LockManager) processWaitQueue(pid primitives.PageID) {
 	requests := lm.waitQueue.GetRequests(pid)
 	if len(requests) == 0 {

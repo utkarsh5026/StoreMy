@@ -327,7 +327,7 @@ func TestDeadlockDetection(t *testing.T) {
 	deadlockDetected := false
 	timeout := time.After(1 * time.Second)
 
-	for i := 0; i < 2; i++ {
+	for range 2 {
 		select {
 		case err1 := <-done1:
 			if err1 != nil {
