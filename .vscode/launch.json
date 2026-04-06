@@ -1,0 +1,41 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "type": "lldb",
+            "request": "launch",
+            "name": "Rust: Debug storemy binary",
+            "cargo": {
+                "args": ["build", "--bin=storemy"],
+                "filter": { "name": "storemy", "kind": "bin" }
+            },
+            "args": [],
+            "cwd": "${workspaceFolder}/db",
+            "sourceLanguages": ["rust"]
+        },
+        {
+            "type": "lldb",
+            "request": "launch",
+            "name": "Rust: Debug unit tests",
+            "cargo": {
+                "args": ["test", "--no-run", "--lib"],
+                "filter": { "name": "storemy", "kind": "lib" }
+            },
+            "args": ["--nocapture"],
+            "cwd": "${workspaceFolder}/db",
+            "sourceLanguages": ["rust"]
+        },
+        {
+            "type": "lldb",
+            "request": "launch",
+            "name": "Rust: Debug current test file",
+            "cargo": {
+                "args": ["test", "--no-run", "--lib", "${fileBasenameNoExtension}"],
+                "filter": { "name": "storemy", "kind": "lib" }
+            },
+            "args": ["--nocapture"],
+            "cwd": "${workspaceFolder}/db",
+            "sourceLanguages": ["rust"]
+        }
+    ]
+}
