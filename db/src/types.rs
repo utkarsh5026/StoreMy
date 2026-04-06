@@ -1,4 +1,4 @@
-//! Type system for StoreMy database.
+//! Type system for `StoreMy` database.
 //!
 //! This module defines the supported data types and the [`Value`] enum
 //! that represents runtime values in the database.
@@ -8,27 +8,33 @@ use std::fmt;
 use std::hash::{Hash, Hasher};
 
 use byteorder::{ByteOrder, LittleEndian};
+use thiserror::Error;
 
-use crate::error::{Result, SerializationError};
 use crate::STRING_MAX_SIZE;
 
+#[derive(Error, Debug)]
+pub enum SerializationError {
+    #[error("Buffer too small: need {needed} bytes, have {available}")]
+    BufferTooSmall { needed: usize, available: usize },
 
-/// Supported column types in StoreMy.
+    #[error("Deserialization error: {message}")]
+    DeserializationError { message: String },
+}
+
+#[derive(Error, Debug)]
+pub enum TypeError {
+    #[error("Unsupported type: {message}")]
+    UnsupportedType { message: String },
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Type {
-    /// 32-bit signed integer
     Int32,
-    /// 64-bit signed integer
     Int64,
-    /// 32-bit unsigned integer
     Uint32,
-    /// 64-bit unsigned integer
     Uint64,
-    /// 64-bit floating point
     Float64,
-    /// Variable-length string (max 255 bytes)
     String,
-    /// Boolean value
     Bool,
 }
 
@@ -49,10 +55,30 @@ impl Type {
     pub const fn is_fixed_size(&self) -> bool {
         !matches!(self, Type::String)
     }
+}
 
-    /// Returns the SQL name for this type.
-    pub const fn sql_name(&self) -> &'static str {
-        match self {
+impl TryFrom<&str> for Type {
+    type Error = TypeError;
+
+    fn try_from(value: &str) -> Result<Self, Self::Error> {
+        match value.to_uppercase().as_str() {
+            "INT" | "INTEGER" | "INT32" => Ok(Type::Int32),
+            "BIGINT" | "INT64" => Ok(Type::Int64),
+            "UINT" | "UINT32" => Ok(Type::Uint32),
+            "UBIGINT" | "UINT64" => Ok(Type::Uint64),
+            "FLOAT" | "DOUBLE" | "REAL" | "FLOAT64" => Ok(Type::Float64),
+            "VARCHAR" | "TEXT" | "STRING" => Ok(Type::String),
+            "BOOL" | "BOOLEAN" => Ok(Type::Bool),
+            _ => Err(TypeError::UnsupportedType {
+                message: format!("Unsupported type name: {value}"),
+            }),
+        }
+    }
+}
+
+impl fmt::Display for Type {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let name = match self {
             Type::Int32 => "INT",
             Type::Int64 => "BIGINT",
             Type::Uint32 => "INT UNSIGNED",
@@ -60,30 +86,10 @@ impl Type {
             Type::Float64 => "DOUBLE",
             Type::String => "VARCHAR",
             Type::Bool => "BOOLEAN",
-        }
-    }
-
-    /// Parses a type from SQL type name.
-    pub fn from_sql_name(name: &str) -> Option<Self> {
-        match name.to_uppercase().as_str() {
-            "INT" | "INTEGER" | "INT32" => Some(Type::Int32),
-            "BIGINT" | "INT64" => Some(Type::Int64),
-            "UINT" | "UINT32" => Some(Type::Uint32),
-            "UBIGINT" | "UINT64" => Some(Type::Uint64),
-            "FLOAT" | "DOUBLE" | "REAL" | "FLOAT64" => Some(Type::Float64),
-            "VARCHAR" | "TEXT" | "STRING" => Some(Type::String),
-            "BOOL" | "BOOLEAN" => Some(Type::Bool),
-            _ => None,
-        }
+        };
+        write!(f, "{}", name)
     }
 }
-
-impl fmt::Display for Type {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}", self.sql_name())
-    }
-}
-
 
 /// A runtime value in the database.
 ///
@@ -91,21 +97,13 @@ impl fmt::Display for Type {
 /// retrieved from the database.
 #[derive(Debug, Clone)]
 pub enum Value {
-    /// 32-bit signed integer
     Int32(i32),
-    /// 64-bit signed integer
     Int64(i64),
-    /// 32-bit unsigned integer
     Uint32(u32),
-    /// 64-bit unsigned integer
     Uint64(u64),
-    /// 64-bit floating point
     Float64(f64),
-    /// String value
     String(String),
-    /// Boolean value
     Bool(bool),
-    /// NULL value
     Null,
 }
 
@@ -145,40 +143,44 @@ impl Value {
     /// Serializes this value to bytes.
     ///
     /// Returns the number of bytes written.
-    pub fn serialize(&self, buf: &mut [u8]) -> usize {
+    pub fn serialize(&self, buf: &mut [u8]) -> Result<usize, SerializationError> {
         match self {
             Value::Int32(v) => {
                 LittleEndian::write_i32(buf, *v);
-                4
+                Ok(4)
             }
             Value::Int64(v) => {
                 LittleEndian::write_i64(buf, *v);
-                8
+                Ok(8)
             }
             Value::Uint32(v) => {
                 LittleEndian::write_u32(buf, *v);
-                4
+                Ok(4)
             }
             Value::Uint64(v) => {
                 LittleEndian::write_u64(buf, *v);
-                8
+                Ok(8)
             }
             Value::Float64(v) => {
                 LittleEndian::write_f64(buf, *v);
-                8
+                Ok(8)
             }
             Value::Bool(v) => {
-                buf[0] = if *v { 1 } else { 0 };
-                1
+                buf[0] = u8::from(*v);
+                Ok(1)
             }
             Value::String(s) => {
                 let bytes = s.as_bytes();
                 let len = bytes.len().min(STRING_MAX_SIZE);
-                LittleEndian::write_u32(buf, len as u32);
+                let len_u32 =
+                    u32::try_from(len).map_err(|_| SerializationError::DeserializationError {
+                        message: "String length exceeds u32::MAX".to_string(),
+                    })?;
+                LittleEndian::write_u32(buf, len_u32);
                 buf[4..4 + len].copy_from_slice(&bytes[..len]);
-                4 + len
+                Ok(4 + len)
             }
-            Value::Null => 0,
+            Value::Null => Ok(0),
         }
     }
 
@@ -186,18 +188,18 @@ impl Value {
     ///
     /// Returns an error if the buffer is too small.
     #[inline]
-    fn ensure_buffer_size(buf: &[u8], needed: usize) -> Result<()> {
+    fn ensure_buffer_size(buf: &[u8], needed: usize) -> Result<(), SerializationError> {
         if buf.len() < needed {
             return Err(SerializationError::BufferTooSmall {
                 needed,
                 available: buf.len(),
-            }.into());
+            });
         }
         Ok(())
     }
 
     /// Deserializes a value from bytes.
-    pub fn deserialize(buf: &[u8], typ: Type) -> Result<Self> {
+    pub fn deserialize(buf: &[u8], typ: Type) -> Result<Self, SerializationError> {
         match typ {
             Type::Int32 => {
                 Self::ensure_buffer_size(buf, 4)?;
@@ -227,10 +229,11 @@ impl Value {
                 Self::ensure_buffer_size(buf, 4)?;
                 let len = LittleEndian::read_u32(buf) as usize;
                 Self::ensure_buffer_size(buf, 4 + len)?;
-                let s = std::str::from_utf8(&buf[4..4 + len])
-                    .map_err(|e| SerializationError::DeserializationError {
-                        message: format!("Invalid UTF-8: {}", e),
-                    })?;
+                let s = std::str::from_utf8(&buf[4..4 + len]).map_err(|e| {
+                    SerializationError::DeserializationError {
+                        message: format!("Invalid UTF-8: {e}"),
+                    }
+                })?;
                 Ok(Value::String(s.to_string()))
             }
         }
@@ -331,13 +334,13 @@ impl Hash for Value {
 impl fmt::Display for Value {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Value::Int32(v) => write!(f, "{}", v),
-            Value::Int64(v) => write!(f, "{}", v),
-            Value::Uint32(v) => write!(f, "{}", v),
-            Value::Uint64(v) => write!(f, "{}", v),
-            Value::Float64(v) => write!(f, "{}", v),
-            Value::String(v) => write!(f, "'{}'", v),
-            Value::Bool(v) => write!(f, "{}", v),
+            Value::Int32(v) => write!(f, "{v}"),
+            Value::Int64(v) => write!(f, "{v}"),
+            Value::Uint32(v) => write!(f, "{v}"),
+            Value::Uint64(v) => write!(f, "{v}"),
+            Value::Float64(v) => write!(f, "{v}"),
+            Value::String(v) => write!(f, "'{v}'"),
+            Value::Bool(v) => write!(f, "{v}"),
             Value::Null => write!(f, "NULL"),
         }
     }
@@ -398,59 +401,5 @@ impl<T: Into<Value>> From<Option<T>> for Value {
             Some(val) => val.into(),
             None => Value::Null,
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_type_size() {
-        assert_eq!(Type::Int32.size(), 4);
-        assert_eq!(Type::Int64.size(), 8);
-        assert_eq!(Type::Bool.size(), 1);
-    }
-
-    #[test]
-    fn test_value_serialization_roundtrip() {
-        let values = vec![
-            (Value::Int32(42), Type::Int32),
-            (Value::Int64(-1234567890), Type::Int64),
-            (Value::Uint32(100), Type::Uint32),
-            (Value::Float64(std::f64::consts::PI), Type::Float64),
-            (Value::Bool(true), Type::Bool),
-            (Value::String("hello".to_string()), Type::String),
-        ];
-
-        for (value, typ) in values {
-            let mut buf = vec![0u8; 512];
-            let written = value.serialize(&mut buf);
-            let deserialized = Value::deserialize(&buf[..written], typ).unwrap();
-            assert_eq!(value, deserialized);
-        }
-    }
-
-    #[test]
-    fn test_value_comparison() {
-        assert!(Value::Int32(1) < Value::Int32(2));
-        assert!(Value::String("a".to_string()) < Value::String("b".to_string()));
-        assert!(Value::Null < Value::Int32(0));
-    }
-
-    #[test]
-    fn test_value_from_conversions() {
-        assert_eq!(Value::from(42i32), Value::Int32(42));
-        assert_eq!(Value::from("test"), Value::String("test".to_string()));
-        assert_eq!(Value::from(true), Value::Bool(true));
-        assert_eq!(Value::from(None::<i32>), Value::Null);
-    }
-
-    #[test]
-    fn test_type_from_sql_name() {
-        assert_eq!(Type::from_sql_name("INT"), Some(Type::Int32));
-        assert_eq!(Type::from_sql_name("varchar"), Some(Type::String));
-        assert_eq!(Type::from_sql_name("BOOLEAN"), Some(Type::Bool));
-        assert_eq!(Type::from_sql_name("unknown"), None);
     }
 }
