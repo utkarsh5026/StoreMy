@@ -195,6 +195,29 @@ impl TupleSchema {
         self.fields.iter().map(|f| f.field_type.size()).sum()
     }
 
+    /// Returns the exact number of bytes [`Tuple::serialize`] writes for this schema.
+    ///
+    /// This is [`tuple_size`](Self::tuple_size) plus a null bitmap: one bit per
+    /// field, rounded up to the nearest byte. Use this — not `tuple_size` — whenever
+    /// sizing a buffer for on-disk storage.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use db::tuple::{Field, TupleSchema};
+    /// use db::types::Type;
+    ///
+    /// let schema = TupleSchema::new(vec![
+    ///     Field::new("id", Type::Int32),   // 4 bytes
+    ///     Field::new("ok", Type::Bool),    // 1 byte
+    /// ]);
+    /// // 2 fields → 1-byte bitmap; 4 + 1 field bytes = 6 total
+    /// assert_eq!(schema.serialized_size(), 6);
+    /// ```
+    pub fn serialized_size(&self) -> usize {
+        self.num_fields().div_ceil(8) + self.tuple_size()
+    }
+
     /// Creates a new schema by appending all fields from `other` after the
     /// fields in `self`.
     ///
