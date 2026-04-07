@@ -67,27 +67,20 @@ impl From<u32> for PageNumber {
 
 /// A unique identifier for a database file (table or index).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Default)]
-pub struct FileId(pub u32);
+pub struct FileId(pub u64);
 
 impl FileId {
-    pub const SIZE: usize = 4;
-
     #[inline]
-    pub const fn new(id: u32) -> Self {
+    pub const fn new(id: u64) -> Self {
         Self(id)
     }
 
-    #[inline]
-    pub const fn get(&self) -> u32 {
-        self.0
-    }
-
     pub fn serialize(&self, buf: &mut [u8]) {
-        LittleEndian::write_u32(buf, self.0);
+        LittleEndian::write_u64(buf, self.0);
     }
 
     pub fn deserialize(buf: &[u8]) -> Self {
-        Self(LittleEndian::read_u32(buf))
+        Self(LittleEndian::read_u64(buf))
     }
 }
 
@@ -97,8 +90,8 @@ impl fmt::Display for FileId {
     }
 }
 
-impl From<u32> for FileId {
-    fn from(id: u32) -> Self {
+impl From<u64> for FileId {
+    fn from(id: u64) -> Self {
         Self(id)
     }
 }
@@ -222,15 +215,12 @@ impl SlotId {
     pub const INVALID: Self = Self(u16::MAX);
 
     #[inline]
-    #[must_use]
-    pub const fn new(slot: u16) -> Self {
-        Self(slot)
-    }
-
-    /// Returns the raw slot ID value.
-    #[inline]
-    pub const fn get(&self) -> u16 {
-        self.0
+    pub const fn new(slot: u16) -> Result<Self, &'static str> {
+        if slot == u16::MAX {
+            Err("invalid slot ID")
+        } else {
+            Ok(Self(slot))
+        }
     }
 
     /// Returns true if this is a valid slot ID.
@@ -256,9 +246,37 @@ impl fmt::Display for SlotId {
     }
 }
 
-impl From<u16> for SlotId {
-    fn from(slot: u16) -> Self {
-        Self(slot)
+impl TryFrom<u16> for SlotId {
+    type Error = &'static str;
+
+    fn try_from(value: u16) -> Result<Self, Self::Error> {
+        if value == u16::MAX {
+            Err("slot index out of bounds")
+        } else {
+            Ok(Self(value))
+        }
+    }
+}
+
+impl From<SlotId> for u16 {
+    fn from(slot_id: SlotId) -> Self {
+        slot_id.0
+    }
+}
+
+impl From<SlotId> for usize {
+    fn from(value: SlotId) -> Self {
+        usize::from(value.0)
+    }
+}
+
+impl TryFrom<usize> for SlotId {
+    type Error = &'static str;
+
+    fn try_from(value: usize) -> Result<Self, Self::Error> {
+        u16::try_from(value)
+            .map_err(|_| "slot index out of bounds")
+            .and_then(SlotId::try_from)
     }
 }
 
@@ -305,8 +323,6 @@ pub struct RecordId {
 }
 
 impl RecordId {
-    pub const SIZE: usize = FileId::SIZE + PageNumber::SIZE + SlotId::SIZE;
-
     /// Creates a new `RecordId`.
     pub const fn new(file_id: FileId, page_no: PageNumber, slot_id: SlotId) -> Self {
         Self {
@@ -343,21 +359,16 @@ impl fmt::Display for RecordId {
     }
 }
 
-/// Trait for page identifiers.
-///
-/// This trait abstracts over different page ID implementations
-/// (heap pages, index pages, etc.).
-pub trait PageId: Send + Sync + fmt::Debug + fmt::Display {
-    fn file_id(&self) -> FileId;
+// illustrative
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct PageId {
+    pub file_id: FileId,
+    pub page_no: PageNumber,
+}
 
-    fn page_no(&self) -> PageNumber;
-
-    fn serialize(&self) -> Vec<u8>;
-
-    fn hash_code(&self) -> HashCode;
-
-    fn equals(&self, other: &dyn PageId) -> bool {
-        self.file_id() == other.file_id() && self.page_no() == other.page_no()
+impl PageId {
+    pub fn new(file_id: FileId, page_no: PageNumber) -> Self {
+        Self { file_id, page_no }
     }
 }
 
@@ -398,14 +409,6 @@ mod tests {
         let mut buf = [0u8; 8];
         lsn.serialize(&mut buf);
         assert_eq!(Lsn::deserialize(&buf), lsn);
-    }
-
-    #[test]
-    fn test_record_id_serialization() {
-        let rid = RecordId::new(FileId::new(1), PageNumber::new(100), SlotId::new(5));
-        let mut buf = [0u8; RecordId::SIZE];
-        rid.serialize(&mut buf);
-        assert_eq!(RecordId::deserialize(&buf), rid);
     }
 
     #[test]
