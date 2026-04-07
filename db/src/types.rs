@@ -146,7 +146,6 @@ impl Type {
 /// assert_eq!(Type::try_from("bigint").unwrap(), Type::Int64);
 /// assert!(Type::try_from("uuid").is_err());
 /// ```
-
 impl TryFrom<&str> for Type {
     type Error = TypeError;
 
@@ -181,7 +180,7 @@ impl fmt::Display for Type {
             Type::String => "VARCHAR",
             Type::Bool => "BOOLEAN",
         };
-        write!(f, "{}", name)
+        write!(f, "{name}")
     }
 }
 
@@ -412,9 +411,9 @@ impl Value {
     /// ```
     pub fn as_i64(&self) -> Option<i64> {
         match self {
-            Value::Int32(v) => Some(*v as i64),
+            Value::Int32(v) => Some(i64::from(*v)),
             Value::Int64(v) => Some(*v),
-            Value::Uint32(v) => Some(*v as i64),
+            Value::Uint32(v) => Some(i64::from(*v)),
             Value::Uint64(v) => i64::try_from(*v).ok(),
             _ => None,
         }
@@ -435,12 +434,11 @@ impl Value {
     /// assert_eq!(Value::Float64(2.5).as_f64(), Some(2.5));
     /// assert_eq!(Value::Bool(true).as_f64(), None);
     /// ```
+    #[allow(clippy::cast_precision_loss)]
     pub fn as_f64(&self) -> Option<f64> {
         match self {
-            Value::Int32(v) => Some(*v as f64),
-            Value::Int64(v) => Some(*v as f64),
-            Value::Uint32(v) => Some(*v as f64),
-            Value::Uint64(v) => Some(*v as f64),
+            Value::Int32(v) => Some(f64::from(*v)),
+            Value::Uint32(v) => Some(f64::from(*v)),
             Value::Float64(v) => Some(*v),
             _ => None,
         }
