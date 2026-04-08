@@ -1,6 +1,6 @@
 use std::fmt::Display;
 
-use crate::{primitives::Predicate, storage::index::Index};
+use crate::{primitives::Predicate, storage::index::Index, types::Value};
 
 pub enum Statement {
     Drop(DropStatement),
@@ -8,6 +8,8 @@ pub enum Statement {
     CreateIndex(CreateIndexStatement),
     DropIndex(DropIndexStatement),
     Delete(DeleteStatement),
+    Insert(InsertStatement),
+    Update(UpdateStatement),
 }
 
 impl Statement {
@@ -52,6 +54,32 @@ impl Statement {
         DeleteStatement {
             table_name: table_name.into(),
             alias,
+            where_clause,
+        }
+    }
+
+    pub(super) fn insert(
+        table_name: impl Into<String>,
+        columns: Option<Vec<String>>,
+        values: Vec<Vec<Value>>,
+    ) -> InsertStatement {
+        InsertStatement {
+            table_name: table_name.into(),
+            columns,
+            values,
+        }
+    }
+
+    pub(super) fn update(
+        table_name: impl Into<String>,
+        alias: Option<String>,
+        assignments: Vec<Assignment>,
+        where_clause: Option<WhereCondition>,
+    ) -> UpdateStatement {
+        UpdateStatement {
+            table_name: table_name.into(),
+            alias,
+            assignments,
             where_clause,
         }
     }
@@ -156,6 +184,70 @@ impl WhereCondition {
             op,
             value,
         }
+    }
+}
+
+/// Represents `INSERT INTO table (col, ...) VALUES (val, ...), (val, ...)`.
+#[derive(Debug, Clone)]
+pub struct InsertStatement {
+    pub table_name: String,
+    pub columns: Option<Vec<String>>,
+    pub values: Vec<Vec<Value>>,
+}
+
+impl Display for InsertStatement {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "INSERT INTO {}", self.table_name)?;
+        if let Some(cols) = &self.columns {
+            write!(f, " ({})", cols.join(", "))?;
+        }
+
+        let rows: Vec<String> = self
+            .values
+            .iter()
+            .map(|row| {
+                let vals: Vec<String> = row.iter().map(ToString::to_string).collect();
+                format!("({})", vals.join(", "))
+            })
+            .collect();
+        write!(f, " VALUES {}", rows.join(", "))
+    }
+}
+
+/// A single `col = val` pair in an `UPDATE SET` clause.
+#[derive(Debug, Clone)]
+pub struct Assignment {
+    pub column: String,
+    pub value: Value,
+}
+
+impl Display for Assignment {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{} = {}", self.column, self.value)
+    }
+}
+
+/// Represents `UPDATE table SET col = val, ... WHERE condition`.
+#[derive(Debug, Clone)]
+pub struct UpdateStatement {
+    pub table_name: String,
+    pub alias: Option<String>,
+    pub assignments: Vec<Assignment>,
+    pub where_clause: Option<WhereCondition>,
+}
+
+impl Display for UpdateStatement {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "UPDATE {}", self.table_name)?;
+        if let Some(alias) = &self.alias {
+            write!(f, " AS {alias}")?;
+        }
+        let sets: Vec<String> = self.assignments.iter().map(ToString::to_string).collect();
+        write!(f, " SET {}", sets.join(", "))?;
+        if let Some(where_clause) = &self.where_clause {
+            write!(f, " WHERE {where_clause}")?;
+        }
+        Ok(())
     }
 }
 
