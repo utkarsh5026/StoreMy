@@ -10,7 +10,7 @@
 
 use std::fmt;
 use std::hash::{Hash, Hasher};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use byteorder::{ByteOrder, LittleEndian};
 
@@ -96,6 +96,15 @@ impl From<u64> for FileId {
     }
 }
 
+impl From<&Path> for FileId {
+    fn from(path: &Path) -> Self {
+        use std::collections::hash_map::DefaultHasher;
+        let mut hasher = DefaultHasher::new();
+        path.hash(&mut hasher);
+        Self(hasher.finish())
+    }
+}
+
 /// A unique identifier for a database transaction.
 ///
 /// Transaction IDs are monotonically increasing and never reused.
@@ -112,12 +121,6 @@ impl TransactionId {
     #[inline]
     pub const fn new(id: u64) -> Self {
         Self(id)
-    }
-
-    /// Returns the raw transaction ID value.
-    #[inline]
-    pub const fn get(&self) -> u64 {
-        self.0
     }
 
     /// Returns true if this is a valid transaction ID.
@@ -369,6 +372,53 @@ pub struct PageId {
 impl PageId {
     pub fn new(file_id: FileId, page_no: PageNumber) -> Self {
         Self { file_id, page_no }
+    }
+}
+
+/// A comparison operator used in SQL WHERE clauses and JOIN conditions.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Predicate {
+    Equals,
+    LessThan,
+    GreaterThan,
+    LessThanOrEqual,
+    GreaterThanOrEqual,
+    NotEqual,
+    NotEqualBracket,
+    Like,
+}
+
+impl fmt::Display for Predicate {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let s = match self {
+            Predicate::Equals => "=",
+            Predicate::LessThan => "<",
+            Predicate::GreaterThan => ">",
+            Predicate::LessThanOrEqual => "<=",
+            Predicate::GreaterThanOrEqual => ">=",
+            Predicate::NotEqual => "!=",
+            Predicate::NotEqualBracket => "<>",
+            Predicate::Like => "LIKE",
+        };
+        write!(f, "{s}")
+    }
+}
+
+impl TryFrom<&str> for Predicate {
+    type Error = String;
+
+    fn try_from(s: &str) -> Result<Self, Self::Error> {
+        match s {
+            "=" => Ok(Predicate::Equals),
+            "<" => Ok(Predicate::LessThan),
+            ">" => Ok(Predicate::GreaterThan),
+            "<=" => Ok(Predicate::LessThanOrEqual),
+            ">=" => Ok(Predicate::GreaterThanOrEqual),
+            "!=" => Ok(Predicate::NotEqual),
+            "<>" => Ok(Predicate::NotEqualBracket),
+            "LIKE" | "like" => Ok(Predicate::Like),
+            _ => Err(format!("unknown predicate operator: {s}")),
+        }
     }
 }
 

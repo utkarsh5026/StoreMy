@@ -1,4 +1,5 @@
 pub mod heap;
+pub mod index;
 
 pub const PAGE_SIZE: usize = 4096;
 pub const MAX_TUPLE_SIZE: usize = 65535;

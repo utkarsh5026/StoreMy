@@ -1,5 +1,7 @@
 use std::fmt;
 
+use crate::Type;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum TokenType {
     Create,
@@ -154,7 +156,7 @@ impl fmt::Display for TokenType {
             TokenType::Invalid => "INVALID",
             TokenType::Eof => "EOF",
         };
-        write!(f, "{}", s)
+        write!(f, "{s}")
     }
 }
 
@@ -163,6 +165,56 @@ pub struct Token {
     pub kind: TokenType,
     pub value: String,
     pub position: usize,
+}
+
+impl fmt::Display for Token {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "{}({:?}) at position {}",
+            self.kind, self.value, self.position
+        )
+    }
+}
+
+impl Token {
+    pub fn is(&self, kind: TokenType) -> bool {
+        kind == self.kind
+    }
+
+    pub fn is_not(&self, kind: TokenType) -> bool {
+        !self.is(kind)
+    }
+}
+
+impl From<(TokenType, String, usize)> for Token {
+    fn from(tuple: (TokenType, String, usize)) -> Self {
+        Token {
+            kind: tuple.0,
+            value: tuple.1,
+            position: tuple.2,
+        }
+    }
+}
+
+// Teach String how to be created FROM a reference to a Token
+impl From<&Token> for String {
+    fn from(token: &Token) -> Self {
+        token.value.clone()
+    }
+}
+
+impl TryFrom<Token> for Type {
+    type Error = String;
+    fn try_from(value: Token) -> Result<Self, Self::Error> {
+        match value.kind {
+            TokenType::Int => Ok(Type::Int64),
+            TokenType::Varchar | TokenType::Text => Ok(Type::String),
+            TokenType::Boolean => Ok(Type::Bool),
+            TokenType::Float => Ok(Type::Float64),
+            _ => Err(format!("unknown data type: {0}", value.kind)),
+        }
+    }
 }
 
 impl std::str::FromStr for TokenType {
