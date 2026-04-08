@@ -1,7 +1,37 @@
+//! Tokens produced by the SQL lexer.
+//!
+//! A [`Token`] is the smallest meaningful unit of SQL text — a keyword, literal,
+//! punctuation mark, or identifier. The lexer scans raw input and emits a stream
+//! of tokens; the parser then consumes that stream to build an AST.
+//!
+//! Two types are defined here:
+//!
+//! - [`TokenType`] — a tag describing what category a token belongs to.
+//! - [`Token`] — an owned token carrying its type, raw text, and source position.
+//!
+//! Several conversion traits are implemented so tokens can be cheaply turned into
+//! higher-level values:
+//!
+//! - [`TryFrom<Token>`] for [`crate::Type`] — interprets a type-keyword token as a
+//!   column data type.
+//! - [`TryFrom<Token>`] for [`crate::Value`] — interprets a literal token (`INT`,
+//!   `STRING`, `NULL`, or a boolean identifier) as a runtime value.
+//! - [`std::str::FromStr`] for [`TokenType`] — maps an uppercase keyword string to
+//!   the corresponding variant (used by the lexer's identifier scanner).
+
 use std::fmt;
 
 use crate::Type;
+use crate::Value;
 
+/// The category of a SQL token.
+///
+/// Each variant corresponds to either a SQL keyword, a literal kind, a
+/// punctuation character, or a special sentinel (`Invalid`, `Eof`).
+///
+/// Variants for individual keywords (e.g. `Select`, `Distinct`) are not
+/// individually documented here; their meaning matches the standard SQL keyword
+/// of the same name.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum TokenType {
     Create,
@@ -71,18 +101,16 @@ pub enum TokenType {
     Operator,
     String,
     Identifier,
-
     Comma,
     Semicolon,
     Lparen,
     Rparen,
     Asterisk,
-
     Invalid,
     Eof,
 }
 
-// 2. We use the `Display` trait instead of a runtime HashMap.
+// We use the `Display` trait instead of a runtime HashMap.
 // This compiles down to a highly optimized jump table, requiring zero heap allocations.
 impl fmt::Display for TokenType {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -160,13 +188,21 @@ impl fmt::Display for TokenType {
     }
 }
 
+/// A single token produced by the lexer.
+///
+/// Each token records what kind it is, the exact slice of source text that
+/// produced it, and the byte offset where it starts in the original input.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Token {
+    /// The category of this token.
     pub kind: TokenType,
+    /// The raw source text of this token (e.g. `"SELECT"`, `"42"`, `"'hello'"`).
     pub value: String,
+    /// Byte offset of the first character of this token in the original input.
     pub position: usize,
 }
 
+/// Formats the token as `KIND("value") at position N`.
 impl fmt::Display for Token {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
@@ -178,15 +214,18 @@ impl fmt::Display for Token {
 }
 
 impl Token {
+    /// Returns `true` if this token's kind equals `kind`.
     pub fn is(&self, kind: TokenType) -> bool {
         kind == self.kind
     }
 
+    /// Returns `true` if this token's kind does not equal `kind`.
     pub fn is_not(&self, kind: TokenType) -> bool {
         !self.is(kind)
     }
 }
 
+/// Constructs a [`Token`] from a `(kind, value, position)` tuple.
 impl From<(TokenType, String, usize)> for Token {
     fn from(tuple: (TokenType, String, usize)) -> Self {
         Token {
@@ -197,6 +236,7 @@ impl From<(TokenType, String, usize)> for Token {
     }
 }
 
+/// Clones the raw source text out of a token reference as an owned `String`.
 // Teach String how to be created FROM a reference to a Token
 impl From<&Token> for String {
     fn from(token: &Token) -> Self {
@@ -204,6 +244,20 @@ impl From<&Token> for String {
     }
 }
 
+/// Interprets a type-keyword token as a column [`Type`].
+///
+/// Only tokens whose kind is a SQL type keyword are accepted:
+///
+/// | `TokenType`            | `Type`          |
+/// |------------------------|-----------------|
+/// | `Int`                  | `Type::Int64`   |
+/// | `Varchar` \| `Text`    | `Type::String`  |
+/// | `Boolean`              | `Type::Bool`    |
+/// | `Float`                | `Type::Float64` |
+///
+/// # Errors
+///
+/// Returns an error string for any other token kind.
 impl TryFrom<Token> for Type {
     type Error = String;
     fn try_from(value: Token) -> Result<Self, Self::Error> {
@@ -217,6 +271,64 @@ impl TryFrom<Token> for Type {
     }
 }
 
+/// Interprets a literal token as a runtime [`Value`].
+///
+/// The following token kinds are recognized:
+///
+/// | `TokenType`  | Produces                                              |
+/// |--------------|-------------------------------------------------------|
+/// | `Int`        | `Value::Int64` — the value string parsed as `i64`    |
+/// | `String`     | `Value::String` — the raw (unquoted) value string    |
+/// | `Null`       | `Value::Null`                                         |
+/// | `Identifier` | `Value::Bool(true/false)` when the text is `"true"` or `"false"` (case-insensitive) |
+///
+/// # Errors
+///
+/// Returns an error string when:
+/// - An `Int` token's value cannot be parsed as `i64`.
+/// - An `Identifier` token's value is not `"true"` or `"false"`.
+/// - Any other token kind is passed.
+impl TryFrom<Token> for Value {
+    type Error = String; // or a proper error type
+
+    fn try_from(token: Token) -> Result<Self, Self::Error> {
+        match token.kind {
+            TokenType::Int => token
+                .value
+                .parse::<i64>()
+                .map(Value::Int64)
+                .map_err(|e| format!("invalid integer literal '{}': {e}", token.value)),
+
+            TokenType::String => Ok(Value::String(token.value)),
+
+            TokenType::Null => Ok(Value::Null),
+
+            TokenType::Identifier => match token.value.to_ascii_lowercase().as_str() {
+                "true" => Ok(Value::Bool(true)),
+                "false" => Ok(Value::Bool(false)),
+                _ => Err(format!(
+                    "identifier '{}' is not a literal value",
+                    token.value
+                )),
+            },
+
+            _ => Err(format!(
+                "token {} cannot be converted to a Value",
+                token.kind
+            )),
+        }
+    }
+}
+
+/// Parses an uppercase SQL keyword string into a [`TokenType`].
+///
+/// The input is converted to uppercase before matching, so `"select"` and
+/// `"SELECT"` both produce [`TokenType::Select`].
+///
+/// # Errors
+///
+/// Returns `Err("Cannot find any keyword related to this")` for any string that
+/// does not match a known keyword.
 impl std::str::FromStr for TokenType {
     type Err = &'static str;
 
