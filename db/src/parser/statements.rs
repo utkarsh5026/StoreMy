@@ -10,6 +10,8 @@ pub enum Statement {
     Delete(DeleteStatement),
     Insert(InsertStatement),
     Update(UpdateStatement),
+    Select(SelectStatement),
+    ShowIndexes(ShowIndexesStatement),
 }
 
 impl Statement {
@@ -83,6 +85,24 @@ impl Statement {
             where_clause,
         }
     }
+
+    pub(super) fn create_table(
+        table_name: impl Into<String>,
+        if_not_exists: bool,
+        columns: Vec<ColumnDef>,
+        primary_key: Option<String>,
+    ) -> CreateTableStatement {
+        CreateTableStatement {
+            table_name: table_name.into(),
+            if_not_exists,
+            columns,
+            primary_key,
+        }
+    }
+
+    pub(super) fn show_indexes(table_name: Option<String>) -> ShowIndexesStatement {
+        ShowIndexesStatement(table_name)
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -101,7 +121,60 @@ impl Display for DropStatement {
     }
 }
 
-pub struct CreateTableStatement {}
+/// A single column definition inside `CREATE TABLE`.
+#[derive(Debug, Clone)]
+pub struct ColumnDef {
+    pub name: String,
+    pub col_type: crate::types::Type,
+    pub nullable: bool,
+    pub primary_key: bool,
+    pub auto_increment: bool,
+    pub default: Option<Value>,
+}
+
+impl Display for ColumnDef {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{} {}", self.name, self.col_type)?;
+        if !self.nullable {
+            write!(f, " NOT NULL")?;
+        }
+        if self.primary_key {
+            write!(f, " PRIMARY KEY")?;
+        }
+        if self.auto_increment {
+            write!(f, " AUTO_INCREMENT")?;
+        }
+        if let Some(default) = &self.default {
+            write!(f, " DEFAULT {default}")?;
+        }
+        Ok(())
+    }
+}
+
+/// Represents `CREATE TABLE [IF NOT EXISTS] name (col_def, ..., [PRIMARY KEY (col)])`.
+#[derive(Debug, Clone)]
+pub struct CreateTableStatement {
+    pub table_name: String,
+    pub if_not_exists: bool,
+    pub columns: Vec<ColumnDef>,
+    pub primary_key: Option<String>,
+}
+
+impl Display for CreateTableStatement {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "CREATE TABLE")?;
+        if self.if_not_exists {
+            write!(f, " IF NOT EXISTS")?;
+        }
+        write!(f, " {} (", self.table_name)?;
+        let cols: Vec<String> = self.columns.iter().map(ToString::to_string).collect();
+        write!(f, "{}", cols.join(", "))?;
+        if let Some(pk) = &self.primary_key {
+            write!(f, ", PRIMARY KEY ({pk})")?;
+        }
+        write!(f, ")")
+    }
+}
 
 pub struct CreateIndexStatement {
     index_name: String,
@@ -161,28 +234,41 @@ impl Display for Literal {
     }
 }
 
-/// A simple WHERE predicate: `field op value`, e.g. `id = 1` or `name = 'Alice'`.
+/// A WHERE condition, either a single predicate or a logical combination.
 ///
-/// The field may be unqualified (`id`) or alias-qualified (`u.id`).
+/// AND binds tighter than OR, matching standard SQL precedence.
 #[derive(Debug, Clone, PartialEq)]
-pub struct WhereCondition {
-    pub field: String,
-    pub op: Predicate,
-    pub value: Literal,
+pub enum WhereCondition {
+    /// A single predicate: `field op value`, e.g. `id = 1` or `name = 'Alice'`.
+    Predicate {
+        field: String,
+        op: Predicate,
+        value: Literal,
+    },
+    /// `left AND right`
+    And(Box<WhereCondition>, Box<WhereCondition>),
+    /// `left OR right`
+    Or(Box<WhereCondition>, Box<WhereCondition>),
+}
+
+impl WhereCondition {
+    pub fn predicate(field: impl Into<String>, op: Predicate, value: Literal) -> Self {
+        Self::Predicate {
+            field: field.into(),
+            op,
+            value,
+        }
+    }
 }
 
 impl Display for WhereCondition {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{} {} {}", self.field, self.op, self.value)
-    }
-}
-
-impl WhereCondition {
-    pub fn new(field: impl Into<String>, op: Predicate, value: Literal) -> Self {
-        Self {
-            field: field.into(),
-            op,
-            value,
+        match self {
+            WhereCondition::Predicate { field, op, value } => {
+                write!(f, "{field} {op} {value}")
+            }
+            WhereCondition::And(l, r) => write!(f, "({l} AND {r})"),
+            WhereCondition::Or(l, r) => write!(f, "({l} OR {r})"),
         }
     }
 }
@@ -266,6 +352,209 @@ impl Display for DeleteStatement {
         }
         if let Some(where_clause) = &self.where_clause {
             write!(f, " WHERE {where_clause}")?;
+        }
+        Ok(())
+    }
+}
+
+/// An aggregate function used in a SELECT expression.
+#[derive(Debug, Clone, PartialEq)]
+pub enum AggFunc {
+    Count,
+    Sum,
+    Avg,
+    Min,
+    Max,
+}
+
+impl Display for AggFunc {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            AggFunc::Count => write!(f, "COUNT"),
+            AggFunc::Sum => write!(f, "SUM"),
+            AggFunc::Avg => write!(f, "AVG"),
+            AggFunc::Min => write!(f, "MIN"),
+            AggFunc::Max => write!(f, "MAX"),
+        }
+    }
+}
+
+impl TryFrom<&str> for AggFunc {
+    type Error = String;
+
+    fn try_from(s: &str) -> Result<Self, Self::Error> {
+        match s {
+            "COUNT" => Ok(AggFunc::Count),
+            "SUM" => Ok(AggFunc::Sum),
+            "AVG" => Ok(AggFunc::Avg),
+            "MIN" => Ok(AggFunc::Min),
+            "MAX" => Ok(AggFunc::Max),
+            other => Err(format!("unknown aggregate function: {other}")),
+        }
+    }
+}
+
+/// A single expression in a SELECT list: a plain column, an aggregate call, or `COUNT(*)`.
+#[derive(Debug, Clone, PartialEq)]
+pub enum SelectExpr {
+    /// A plain column reference, e.g. `name`.
+    Column(String),
+    /// An aggregate call, e.g. `SUM(amount)` or `COUNT(id)`.
+    Agg(AggFunc, String),
+    /// The special `COUNT(*)` form.
+    CountStar,
+}
+
+impl Display for SelectExpr {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            SelectExpr::Column(col) => write!(f, "{col}"),
+            SelectExpr::Agg(func, col) => write!(f, "{func}({col})"),
+            SelectExpr::CountStar => write!(f, "COUNT(*)"),
+        }
+    }
+}
+
+/// Which columns to project in a SELECT.
+#[derive(Debug, Clone)]
+pub enum SelectColumns {
+    /// `SELECT *`
+    All,
+    /// `SELECT expr1, expr2, ...`
+    Exprs(Vec<SelectExpr>),
+}
+
+impl Display for SelectColumns {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            SelectColumns::All => write!(f, "*"),
+            SelectColumns::Exprs(exprs) => {
+                let s: Vec<String> = exprs.iter().map(ToString::to_string).collect();
+                write!(f, "{}", s.join(", "))
+            }
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum OrderDirection {
+    Asc,
+    Desc,
+}
+
+impl Display for OrderDirection {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            OrderDirection::Asc => write!(f, "ASC"),
+            OrderDirection::Desc => write!(f, "DESC"),
+        }
+    }
+}
+
+/// A single `ORDER BY col ASC/DESC` clause.
+#[derive(Debug, Clone)]
+pub struct OrderBy(pub String, pub OrderDirection);
+
+impl Display for OrderBy {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{} {}", self.0, self.1)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum JoinKind {
+    Inner,
+    Left,
+    Right,
+}
+
+impl Display for JoinKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            JoinKind::Inner => write!(f, "INNER JOIN"),
+            JoinKind::Left => write!(f, "LEFT JOIN"),
+            JoinKind::Right => write!(f, "RIGHT JOIN"),
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct Join {
+    pub kind: JoinKind,
+    pub table: String,
+    pub alias: Option<String>,
+    pub on: WhereCondition,
+}
+
+impl Display for Join {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{} {}", self.kind, self.table)?;
+        if let Some(alias) = &self.alias {
+            write!(f, " {alias}")?;
+        }
+        write!(f, " ON {}", self.on)
+    }
+}
+
+/// Represents a full SELECT statement.
+///
+/// Clause order mirrors SQL standard:
+/// `SELECT [DISTINCT] … FROM … [alias] [JOIN …] [WHERE …] [GROUP BY …] [HAVING …] [ORDER BY …] [LIMIT n [OFFSET n]]`
+#[derive(Debug, Clone)]
+pub struct SelectStatement {
+    pub distinct: bool,
+    pub columns: SelectColumns,
+    pub table_name: String,
+    pub alias: Option<String>,
+    pub joins: Vec<Join>,
+    pub where_clause: Option<WhereCondition>,
+    pub group_by: Vec<String>,
+    pub having: Option<WhereCondition>,
+    pub order_by: Option<OrderBy>,
+    pub limit_offset: Option<(u64, u64)>,
+}
+
+impl Display for SelectStatement {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        if self.distinct {
+            write!(f, "SELECT DISTINCT {} FROM {}", self.columns, self.table_name)?;
+        } else {
+            write!(f, "SELECT {} FROM {}", self.columns, self.table_name)?;
+        }
+        if let Some(alias) = &self.alias {
+            write!(f, " {alias}")?;
+        }
+        for join in &self.joins {
+            write!(f, " {join}")?;
+        }
+        if let Some(where_clause) = &self.where_clause {
+            write!(f, " WHERE {where_clause}")?;
+        }
+        if !self.group_by.is_empty() {
+            write!(f, " GROUP BY {}", self.group_by.join(", "))?;
+        }
+        if let Some(having) = &self.having {
+            write!(f, " HAVING {having}")?;
+        }
+        if let Some(order_by) = &self.order_by {
+            write!(f, " ORDER BY {order_by}")?;
+        }
+        if let Some((limit, offset)) = self.limit_offset {
+            write!(f, " LIMIT {limit} OFFSET {offset}")?;
+        }
+        Ok(())
+    }
+}
+
+/// Represents `SHOW INDEXES [FROM table]`.
+#[derive(Debug, Clone)]
+pub struct ShowIndexesStatement(pub Option<String>);
+
+impl Display for ShowIndexesStatement {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "SHOW INDEXES")?;
+        if let Some(table) = &self.0 {
+            write!(f, " FROM {table}")?;
         }
         Ok(())
     }
