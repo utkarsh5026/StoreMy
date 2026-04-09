@@ -12,7 +12,11 @@ use std::fmt;
 use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
 
-use byteorder::{ByteOrder, LittleEndian};
+use std::io::{Read, Write};
+
+use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
+
+use crate::codec::{CodecError, Decode, Encode};
 
 /// A page number within a database file.
 ///
@@ -31,14 +35,6 @@ impl PageNumber {
     #[inline]
     pub const fn get(&self) -> u32 {
         self.0
-    }
-
-    pub fn serialize(&self, buf: &mut [u8]) {
-        LittleEndian::write_u32(buf, self.0);
-    }
-
-    pub fn deserialize(buf: &[u8]) -> Self {
-        Self(LittleEndian::read_u32(buf))
     }
 
     #[inline]
@@ -65,6 +61,19 @@ impl From<u32> for PageNumber {
     }
 }
 
+impl Encode for PageNumber {
+    fn encode<W: Write>(&self, writer: &mut W) -> Result<(), CodecError> {
+        writer.write_u32::<LittleEndian>(self.0)?;
+        Ok(())
+    }
+}
+
+impl Decode for PageNumber {
+    fn decode<R: Read>(reader: &mut R) -> Result<Self, CodecError> {
+        Ok(Self(reader.read_u32::<LittleEndian>()?))
+    }
+}
+
 /// A unique identifier for a database file (table or index).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Default)]
 pub struct FileId(pub u64);
@@ -73,14 +82,6 @@ impl FileId {
     #[inline]
     pub const fn new(id: u64) -> Self {
         Self(id)
-    }
-
-    pub fn serialize(&self, buf: &mut [u8]) {
-        LittleEndian::write_u64(buf, self.0);
-    }
-
-    pub fn deserialize(buf: &[u8]) -> Self {
-        Self(LittleEndian::read_u64(buf))
     }
 }
 
@@ -102,6 +103,19 @@ impl From<&Path> for FileId {
         let mut hasher = DefaultHasher::new();
         path.hash(&mut hasher);
         Self(hasher.finish())
+    }
+}
+
+impl Encode for FileId {
+    fn encode<W: Write>(&self, writer: &mut W) -> Result<(), CodecError> {
+        writer.write_u64::<LittleEndian>(self.0)?;
+        Ok(())
+    }
+}
+
+impl Decode for FileId {
+    fn decode<R: Read>(reader: &mut R) -> Result<Self, CodecError> {
+        Ok(Self(reader.read_u64::<LittleEndian>()?))
     }
 }
 
@@ -128,16 +142,6 @@ impl TransactionId {
     pub const fn is_valid(&self) -> bool {
         self.0 != 0
     }
-
-    /// Serializes the transaction ID to bytes.
-    pub fn serialize(&self, buf: &mut [u8]) {
-        LittleEndian::write_u64(buf, self.0);
-    }
-
-    /// Deserializes a transaction ID from bytes.
-    pub fn deserialize(buf: &[u8]) -> Self {
-        Self(LittleEndian::read_u64(buf))
-    }
 }
 
 impl fmt::Display for TransactionId {
@@ -149,6 +153,19 @@ impl fmt::Display for TransactionId {
 impl From<u64> for TransactionId {
     fn from(id: u64) -> Self {
         Self(id)
+    }
+}
+
+impl Encode for TransactionId {
+    fn encode<W: Write>(&self, writer: &mut W) -> Result<(), CodecError> {
+        writer.write_u64::<LittleEndian>(self.0)?;
+        Ok(())
+    }
+}
+
+impl Decode for TransactionId {
+    fn decode<R: Read>(reader: &mut R) -> Result<Self, CodecError> {
+        Ok(Self(reader.read_u64::<LittleEndian>()?))
     }
 }
 
@@ -178,14 +195,6 @@ impl Lsn {
         self.0 != 0
     }
 
-    pub fn serialize(&self, buf: &mut [u8]) {
-        LittleEndian::write_u64(buf, self.0);
-    }
-
-    pub fn deserialize(buf: &[u8]) -> Self {
-        Self(LittleEndian::read_u64(buf))
-    }
-
     #[inline]
     #[must_use]
     pub const fn next(&self) -> Self {
@@ -202,6 +211,19 @@ impl fmt::Display for Lsn {
 impl From<u64> for Lsn {
     fn from(lsn: u64) -> Self {
         Self(lsn)
+    }
+}
+
+impl Encode for Lsn {
+    fn encode<W: Write>(&self, writer: &mut W) -> Result<(), CodecError> {
+        writer.write_u64::<LittleEndian>(self.0)?;
+        Ok(())
+    }
+}
+
+impl Decode for Lsn {
+    fn decode<R: Read>(reader: &mut R) -> Result<Self, CodecError> {
+        Ok(Self(reader.read_u64::<LittleEndian>()?))
     }
 }
 
@@ -230,16 +252,6 @@ impl SlotId {
     #[inline]
     pub const fn is_valid(&self) -> bool {
         self.0 != u16::MAX
-    }
-
-    /// Serializes the slot ID to bytes.
-    pub fn serialize(&self, buf: &mut [u8]) {
-        LittleEndian::write_u16(buf, self.0);
-    }
-
-    /// Deserializes a slot ID from bytes.
-    pub fn deserialize(buf: &[u8]) -> Self {
-        Self(LittleEndian::read_u16(buf))
     }
 }
 
@@ -283,6 +295,19 @@ impl TryFrom<usize> for SlotId {
     }
 }
 
+impl Encode for SlotId {
+    fn encode<W: Write>(&self, writer: &mut W) -> Result<(), CodecError> {
+        writer.write_u16::<LittleEndian>(self.0)?;
+        Ok(())
+    }
+}
+
+impl Decode for SlotId {
+    fn decode<R: Read>(reader: &mut R) -> Result<Self, CodecError> {
+        Ok(Self(reader.read_u16::<LittleEndian>()?))
+    }
+}
+
 /// A hash code value used for hash indexing.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct HashCode(pub u64);
@@ -315,6 +340,19 @@ impl fmt::Display for HashCode {
     }
 }
 
+impl Encode for HashCode {
+    fn encode<W: Write>(&self, writer: &mut W) -> Result<(), CodecError> {
+        writer.write_u64::<LittleEndian>(self.0)?;
+        Ok(())
+    }
+}
+
+impl Decode for HashCode {
+    fn decode<R: Read>(reader: &mut R) -> Result<Self, CodecError> {
+        Ok(Self(reader.read_u64::<LittleEndian>()?))
+    }
+}
+
 /// A record identifier that uniquely identifies a tuple in the database.
 ///
 /// Combines file ID, page number, and slot ID.
@@ -334,22 +372,6 @@ impl RecordId {
             slot_id,
         }
     }
-
-    /// Serializes the record ID to bytes.
-    pub fn serialize(&self, buf: &mut [u8]) {
-        self.file_id.serialize(&mut buf[0..4]);
-        self.page_no.serialize(&mut buf[4..8]);
-        self.slot_id.serialize(&mut buf[8..10]);
-    }
-
-    /// Deserializes a record ID from bytes.
-    pub fn deserialize(buf: &[u8]) -> Self {
-        Self {
-            file_id: FileId::deserialize(&buf[0..4]),
-            page_no: PageNumber::deserialize(&buf[4..8]),
-            slot_id: SlotId::deserialize(&buf[8..10]),
-        }
-    }
 }
 
 impl fmt::Display for RecordId {
@@ -359,6 +381,25 @@ impl fmt::Display for RecordId {
             "RID({}, {}, {})",
             self.file_id.0, self.page_no.0, self.slot_id.0
         )
+    }
+}
+
+impl Encode for RecordId {
+    fn encode<W: Write>(&self, writer: &mut W) -> Result<(), CodecError> {
+        self.file_id.encode(writer)?;
+        self.page_no.encode(writer)?;
+        self.slot_id.encode(writer)?;
+        Ok(())
+    }
+}
+
+impl Decode for RecordId {
+    fn decode<R: Read>(reader: &mut R) -> Result<Self, CodecError> {
+        Ok(Self {
+            file_id: FileId::decode(reader)?,
+            page_no: PageNumber::decode(reader)?,
+            slot_id: SlotId::decode(reader)?,
+        })
     }
 }
 
@@ -372,6 +413,23 @@ pub struct PageId {
 impl PageId {
     pub fn new(file_id: FileId, page_no: PageNumber) -> Self {
         Self { file_id, page_no }
+    }
+}
+
+impl Encode for PageId {
+    fn encode<W: Write>(&self, writer: &mut W) -> Result<(), CodecError> {
+        self.file_id.encode(writer)?;
+        self.page_no.encode(writer)?;
+        Ok(())
+    }
+}
+
+impl Decode for PageId {
+    fn decode<R: Read>(reader: &mut R) -> Result<Self, CodecError> {
+        Ok(Self {
+            file_id: FileId::decode(reader)?,
+            page_no: PageNumber::decode(reader)?,
+        })
     }
 }
 
@@ -422,43 +480,72 @@ impl TryFrom<&str> for Predicate {
     }
 }
 
+impl Encode for Predicate {
+    fn encode<W: Write>(&self, writer: &mut W) -> Result<(), CodecError> {
+        let discriminant: u8 = match self {
+            Predicate::Equals => 0,
+            Predicate::LessThan => 1,
+            Predicate::GreaterThan => 2,
+            Predicate::LessThanOrEqual => 3,
+            Predicate::GreaterThanOrEqual => 4,
+            Predicate::NotEqual => 5,
+            Predicate::NotEqualBracket => 6,
+            Predicate::Like => 7,
+        };
+        writer.write_u8(discriminant)?;
+        Ok(())
+    }
+}
+
+impl Decode for Predicate {
+    fn decode<R: Read>(reader: &mut R) -> Result<Self, CodecError> {
+        match reader.read_u8()? {
+            0 => Ok(Predicate::Equals),
+            1 => Ok(Predicate::LessThan),
+            2 => Ok(Predicate::GreaterThan),
+            3 => Ok(Predicate::LessThanOrEqual),
+            4 => Ok(Predicate::GreaterThanOrEqual),
+            5 => Ok(Predicate::NotEqual),
+            6 => Ok(Predicate::NotEqualBracket),
+            7 => Ok(Predicate::Like),
+            other => Err(CodecError::UnknownDiscriminant(other)),
+        }
+    }
+}
+
 /// Type alias for file paths.
 pub type Filepath = PathBuf;
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::codec::{Decode, Encode};
 
     #[test]
     fn test_page_number_serialization() {
         let pn = PageNumber::new(12345);
-        let mut buf = [0u8; 4];
-        pn.serialize(&mut buf);
-        assert_eq!(PageNumber::deserialize(&buf), pn);
+        assert_eq!(PageNumber::from_bytes(&pn.to_bytes().unwrap()).unwrap(), pn);
     }
 
     #[test]
     fn test_file_id_serialization() {
         let fid = FileId::new(42);
-        let mut buf = [0u8; 4];
-        fid.serialize(&mut buf);
-        assert_eq!(FileId::deserialize(&buf), fid);
+        assert_eq!(FileId::from_bytes(&fid.to_bytes().unwrap()).unwrap(), fid);
     }
 
     #[test]
     fn test_transaction_id_serialization() {
         let txn = TransactionId::new(999_999);
-        let mut buf = [0u8; 8];
-        txn.serialize(&mut buf);
-        assert_eq!(TransactionId::deserialize(&buf), txn);
+        assert_eq!(
+            TransactionId::from_bytes(&txn.to_bytes().unwrap()).unwrap(),
+            txn
+        );
     }
 
     #[test]
     fn test_lsn_serialization() {
         let lsn = Lsn::new(0xDEAD_BEEF);
-        let mut buf = [0u8; 8];
-        lsn.serialize(&mut buf);
-        assert_eq!(Lsn::deserialize(&buf), lsn);
+        assert_eq!(Lsn::from_bytes(&lsn.to_bytes().unwrap()).unwrap(), lsn);
     }
 
     #[test]
