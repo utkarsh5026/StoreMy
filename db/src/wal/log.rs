@@ -374,7 +374,7 @@ mod tests {
     #[test]
     fn header_size_constant_matches_encoded_size() {
         let header = LogRecordHeader {
-            lsn: Lsn::new(1),
+            lsn: Lsn(1),
             prev_lsn: Lsn::INVALID,
             tid: TransactionId::new(1),
             record_type: LogRecordType::Begin,
@@ -390,8 +390,8 @@ mod tests {
     #[test]
     fn header_roundtrip() {
         let header = LogRecordHeader {
-            lsn: Lsn::new(42),
-            prev_lsn: Lsn::new(10),
+            lsn: Lsn(42),
+            prev_lsn: Lsn(10),
             tid: TransactionId::new(7),
             record_type: LogRecordType::Update,
             timestamp: UNIX_EPOCH + std::time::Duration::from_secs(1_700_000_000),
@@ -412,7 +412,7 @@ mod tests {
     #[test]
     fn begin_record_roundtrip() {
         let rec = LogRecord::new(
-            Lsn::new(1),
+            Lsn(1),
             Lsn::INVALID,
             TransactionId::new(10),
             UNIX_EPOCH,
@@ -420,7 +420,7 @@ mod tests {
         )
         .unwrap();
         let decoded = roundtrip(&rec);
-        assert_eq!(decoded.header.lsn, Lsn::new(1));
+        assert_eq!(decoded.header.lsn, Lsn(1));
         assert_eq!(decoded.header.record_type, LogRecordType::Begin);
         assert_eq!(decoded.header.tid, TransactionId::new(10));
         assert!(matches!(decoded.body, LogRecordBody::Begin));
@@ -429,8 +429,8 @@ mod tests {
     #[test]
     fn commit_record_roundtrip() {
         let rec = LogRecord::new(
-            Lsn::new(5),
-            Lsn::new(2),
+            Lsn(5),
+            Lsn(2),
             TransactionId::new(3),
             UNIX_EPOCH,
             LogRecordBody::Commit,
@@ -444,8 +444,8 @@ mod tests {
     #[test]
     fn abort_record_roundtrip() {
         let rec = LogRecord::new(
-            Lsn::new(7),
-            Lsn::new(6),
+            Lsn(7),
+            Lsn(6),
             TransactionId::new(99),
             UNIX_EPOCH,
             LogRecordBody::Abort,
@@ -458,8 +458,8 @@ mod tests {
     #[test]
     fn update_record_roundtrip() {
         let rec = LogRecord::new(
-            Lsn::new(20),
-            Lsn::new(15),
+            Lsn(20),
+            Lsn(15),
             TransactionId::new(5),
             UNIX_EPOCH,
             LogRecordBody::Update {
@@ -488,8 +488,8 @@ mod tests {
     #[test]
     fn insert_record_roundtrip() {
         let rec = LogRecord::new(
-            Lsn::new(30),
-            Lsn::new(25),
+            Lsn(30),
+            Lsn(25),
             TransactionId::new(7),
             UNIX_EPOCH,
             LogRecordBody::Insert {
@@ -508,8 +508,8 @@ mod tests {
     #[test]
     fn delete_record_roundtrip() {
         let rec = LogRecord::new(
-            Lsn::new(40),
-            Lsn::new(35),
+            Lsn(40),
+            Lsn(35),
             TransactionId::new(8),
             UNIX_EPOCH,
             LogRecordBody::Delete {
@@ -528,21 +528,21 @@ mod tests {
     #[test]
     fn clr_record_roundtrip() {
         let rec = LogRecord::new(
-            Lsn::new(50),
-            Lsn::new(45),
+            Lsn(50),
+            Lsn(45),
             TransactionId::new(12),
             UNIX_EPOCH,
             LogRecordBody::Clr {
                 page_id: make_page_id(),
                 after: vec![0xAA],
-                undo_next_lsn: Lsn::new(10),
+                undo_next_lsn: Lsn(10),
             },
         )
         .unwrap();
         let decoded = roundtrip(&rec);
         match decoded.body {
             LogRecordBody::Clr { undo_next_lsn, .. } => {
-                assert_eq!(undo_next_lsn, Lsn::new(10));
+                assert_eq!(undo_next_lsn, Lsn(10));
             }
             _ => panic!("wrong body variant"),
         }
@@ -551,7 +551,7 @@ mod tests {
     #[test]
     fn checkpoint_begin_roundtrip() {
         let rec = LogRecord::new(
-            Lsn::new(100),
+            Lsn(100),
             Lsn::INVALID,
             TransactionId::INVALID,
             UNIX_EPOCH,
@@ -565,22 +565,22 @@ mod tests {
     #[test]
     fn checkpoint_end_roundtrip() {
         let rec = LogRecord::new(
-            Lsn::new(101),
-            Lsn::new(100),
+            Lsn(101),
+            Lsn(100),
             TransactionId::INVALID,
             UNIX_EPOCH,
             LogRecordBody::CheckpointEnd,
         )
         .unwrap();
         let decoded = roundtrip(&rec);
-        assert_eq!(decoded.header.prev_lsn, Lsn::new(100));
+        assert_eq!(decoded.header.prev_lsn, Lsn(100));
         assert!(matches!(decoded.body, LogRecordBody::CheckpointEnd));
     }
 
     #[test]
     fn new_sets_body_len_and_checksum() {
         let rec = LogRecord::new(
-            Lsn::new(1),
+            Lsn(1),
             Lsn::INVALID,
             TransactionId::new(1),
             UNIX_EPOCH,
@@ -604,7 +604,7 @@ mod tests {
     fn timestamp_preserved_at_second_precision() {
         let ts = UNIX_EPOCH + std::time::Duration::from_secs(1_700_000_000);
         let rec = LogRecord::new(
-            Lsn::new(1),
+            Lsn(1),
             Lsn::INVALID,
             TransactionId::new(1),
             ts,
@@ -642,7 +642,7 @@ mod tests {
     #[test]
     fn decode_rejects_unknown_record_type() {
         let rec = LogRecord::new(
-            Lsn::new(1),
+            Lsn(1),
             Lsn::INVALID,
             TransactionId::new(1),
             UNIX_EPOCH,
@@ -659,7 +659,7 @@ mod tests {
     #[test]
     fn decode_fails_on_truncated_input() {
         let rec = LogRecord::new(
-            Lsn::new(1),
+            Lsn(1),
             Lsn::INVALID,
             TransactionId::new(1),
             UNIX_EPOCH,
