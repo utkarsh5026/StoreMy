@@ -9,18 +9,15 @@ use crate::primitives::{Lsn, PageId, TransactionId};
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
 pub enum LogRecordType {
-    Begin,
-    Commit,
-    Abort,
-
-    Update,
-    Insert,
-    Delete,
-
-    CheckpointBegin,
-    CheckpointEnd,
-
-    Clr,
+    Begin = 0,
+    Commit = 1,
+    Abort = 2,
+    Update = 3,
+    Insert = 4,
+    Delete = 5,
+    CheckpointBegin = 6,
+    CheckpointEnd = 7,
+    Clr = 8,
 }
 
 impl TryFrom<u8> for LogRecordType {
@@ -42,86 +39,272 @@ impl TryFrom<u8> for LogRecordType {
     }
 }
 
-pub struct LogRecord {
+/// Fixed-size prefix written before every log record body.
+///
+/// Because the header is fixed-size the WAL reader can always read exactly
+/// `LogRecordHeader::SIZE` bytes, parse the header, and then read exactly
+/// `body_len` more bytes for the body — no guessing, no scanning.
+///
+/// `checksum` covers only the body bytes. This avoids the circularity of
+/// checksumming a field that is itself part of the checksum region.
+pub struct LogRecordHeader {
     pub lsn: Lsn,
-    pub record_type: LogRecordType,
-    pub tid: Option<TransactionId>,
     pub prev_lsn: Lsn,
-
-    pub page_id: Option<PageId>,       // only for data records
-    pub before_image: Option<Vec<u8>>, // UNDO image (Update/Delete)
-    pub after_image: Option<Vec<u8>>,  // REDO image (Update/Insert)
-
-    pub undo_next_lsn: Option<Lsn>, // only for CLR records
+    pub tid: TransactionId,
+    pub record_type: LogRecordType,
     pub timestamp: SystemTime,
+    pub body_len: u32,
+    pub checksum: u32,
 }
 
-impl Encode for LogRecord {
+impl LogRecordHeader {
+    /// On-disk size of a serialized header, in bytes.
+    ///
+    /// Layout:
+    /// ```text
+    /// record_type : u8       =  1
+    /// lsn         : u64 LE   =  8
+    /// prev_lsn    : u64 LE   =  8
+    /// tid         : u64 LE   =  8
+    /// timestamp   : u64 LE   =  8
+    /// body_len    : u32 LE   =  4
+    /// checksum    : u32 LE   =  4
+    ///                          ──
+    ///                          41
+    /// ```
+    pub const SIZE: usize = 41;
+}
+
+impl Encode for LogRecordHeader {
     fn encode<W: Write>(&self, writer: &mut W) -> Result<(), CodecError> {
         writer.write_u8(self.record_type as u8)?;
-
         self.lsn.encode(writer)?;
-        self.tid.unwrap_or(TransactionId::INVALID).encode(writer)?;
         self.prev_lsn.encode(writer)?;
-
+        self.tid.encode(writer)?;
         let secs = self
             .timestamp
             .duration_since(UNIX_EPOCH)
             .unwrap_or_default()
             .as_secs();
         writer.write_u64::<LittleEndian>(secs)?;
+        writer.write_u32::<LittleEndian>(self.body_len)?;
+        writer.write_u32::<LittleEndian>(self.checksum)?;
+        Ok(())
+    }
+}
 
-        match self.page_id {
-            Some(p) => {
-                writer.write_u8(1)?;
-                p.encode(writer)?;
-            }
-            None => writer.write_u8(0)?,
+impl Decode for LogRecordHeader {
+    fn decode<R: Read>(reader: &mut R) -> Result<Self, CodecError> {
+        let record_type =
+            LogRecordType::try_from(reader.read_u8()?).map_err(CodecError::UnknownDiscriminant)?;
+        let lsn = Lsn::decode(reader)?;
+        let prev_lsn = Lsn::decode(reader)?;
+        let tid = TransactionId::decode(reader)?;
+        let secs = reader.read_u64::<LittleEndian>()?;
+        let timestamp = UNIX_EPOCH + std::time::Duration::from_secs(secs);
+        let body_len = reader.read_u32::<LittleEndian>()?;
+        let checksum = reader.read_u32::<LittleEndian>()?;
+        Ok(Self {
+            lsn,
+            prev_lsn,
+            tid,
+            record_type,
+            timestamp,
+            body_len,
+            checksum,
+        })
+    }
+}
+
+/// The variable-length, type-specific payload of a log record.
+///
+/// Each variant holds exactly the fields that record type requires — no
+/// `Option` fields that are only meaningful for some types.
+pub enum LogRecordBody {
+    Begin,
+    Commit,
+    Abort,
+    Update {
+        page_id: PageId,
+        before: Vec<u8>,
+        after: Vec<u8>,
+    },
+    Insert {
+        page_id: PageId,
+        after: Vec<u8>,
+    },
+    Delete {
+        page_id: PageId,
+        before: Vec<u8>,
+    },
+    Clr {
+        page_id: PageId,
+        after: Vec<u8>,
+        undo_next_lsn: Lsn,
+    },
+    CheckpointBegin,
+    CheckpointEnd,
+}
+
+impl LogRecordBody {
+    fn record_type(&self) -> LogRecordType {
+        match self {
+            Self::Begin => LogRecordType::Begin,
+            Self::Commit => LogRecordType::Commit,
+            Self::Abort => LogRecordType::Abort,
+            Self::Update { .. } => LogRecordType::Update,
+            Self::Insert { .. } => LogRecordType::Insert,
+            Self::Delete { .. } => LogRecordType::Delete,
+            Self::Clr { .. } => LogRecordType::Clr,
+            Self::CheckpointBegin => LogRecordType::CheckpointBegin,
+            Self::CheckpointEnd => LogRecordType::CheckpointEnd,
         }
+    }
+}
 
-        self.undo_next_lsn.unwrap_or(Lsn::INVALID).encode(writer)?;
-        encode_image(writer, self.before_image.as_deref())?;
-        encode_image(writer, self.after_image.as_deref())?;
+impl Encode for LogRecordBody {
+    fn encode<W: Write>(&self, writer: &mut W) -> Result<(), CodecError> {
+        match self {
+            Self::Begin
+            | Self::Commit
+            | Self::Abort
+            | Self::CheckpointBegin
+            | Self::CheckpointEnd => {}
 
+            Self::Update {
+                page_id,
+                before,
+                after,
+            } => {
+                page_id.encode(writer)?;
+                encode_image(writer, Some(before))?;
+                encode_image(writer, Some(after))?;
+            }
+
+            Self::Insert { page_id, after } => {
+                page_id.encode(writer)?;
+                encode_image(writer, Some(after))?;
+            }
+
+            Self::Delete { page_id, before } => {
+                page_id.encode(writer)?;
+                encode_image(writer, Some(before))?;
+            }
+
+            Self::Clr {
+                page_id,
+                after,
+                undo_next_lsn,
+            } => {
+                page_id.encode(writer)?;
+                encode_image(writer, Some(after))?;
+                undo_next_lsn.encode(writer)?;
+            }
+        }
+        Ok(())
+    }
+}
+
+impl LogRecordBody {
+    /// Decode a body given an already-decoded `record_type` from the header.
+    fn decode_for_type<R: Read>(
+        record_type: LogRecordType,
+        reader: &mut R,
+    ) -> Result<Self, CodecError> {
+        match record_type {
+            LogRecordType::Begin => Ok(Self::Begin),
+            LogRecordType::Commit => Ok(Self::Commit),
+            LogRecordType::Abort => Ok(Self::Abort),
+            LogRecordType::CheckpointBegin => Ok(Self::CheckpointBegin),
+            LogRecordType::CheckpointEnd => Ok(Self::CheckpointEnd),
+
+            LogRecordType::Update => Ok(Self::Update {
+                page_id: PageId::decode(reader)?,
+                before: decode_image(reader)?.unwrap_or_default(),
+                after: decode_image(reader)?.unwrap_or_default(),
+            }),
+
+            LogRecordType::Insert => Ok(Self::Insert {
+                page_id: PageId::decode(reader)?,
+                after: decode_image(reader)?.unwrap_or_default(),
+            }),
+
+            LogRecordType::Delete => Ok(Self::Delete {
+                page_id: PageId::decode(reader)?,
+                before: decode_image(reader)?.unwrap_or_default(),
+            }),
+
+            LogRecordType::Clr => Ok(Self::Clr {
+                page_id: PageId::decode(reader)?,
+                after: decode_image(reader)?.unwrap_or_default(),
+                undo_next_lsn: Lsn::decode(reader)?,
+            }),
+        }
+    }
+}
+
+// ── LogRecord ────────────────────────────────────────────────────────────────
+
+/// A complete WAL record: a fixed-size header followed by a variable-size body.
+///
+/// # On-disk layout
+///
+/// ```text
+/// ┌─────────────────────────────────┐
+/// │  LogRecordHeader  (41 bytes)    │  ← fixed, always present
+/// ├─────────────────────────────────┤
+/// │  body bytes  (header.body_len)  │  ← variable, type-specific
+/// └─────────────────────────────────┘
+/// ```
+///
+/// The header's `checksum` field is a CRC32 computed over the body bytes only.
+/// Framing (writing the header then body, verifying the checksum) is the
+/// responsibility of `WalWriter`/`WalReader`, not of this type's codec impls.
+pub struct LogRecord {
+    pub header: LogRecordHeader,
+    pub body: LogRecordBody,
+}
+
+impl LogRecord {
+    /// Construct a `LogRecord`, computing `body_len` and `checksum` automatically.
+    pub fn new(
+        lsn: Lsn,
+        prev_lsn: Lsn,
+        tid: TransactionId,
+        timestamp: SystemTime,
+        body: LogRecordBody,
+    ) -> Result<Self, CodecError> {
+        let body_bytes = {
+            let mut buf = Vec::new();
+            body.encode(&mut buf)?;
+            buf
+        };
+        let header = LogRecordHeader {
+            lsn,
+            prev_lsn,
+            tid,
+            record_type: body.record_type(),
+            timestamp,
+            body_len: body_bytes.len() as u32,
+            checksum: crc32fast::hash(&body_bytes),
+        };
+        Ok(Self { header, body })
+    }
+}
+
+impl Encode for LogRecord {
+    fn encode<W: Write>(&self, writer: &mut W) -> Result<(), CodecError> {
+        self.header.encode(writer)?;
+        self.body.encode(writer)?;
         Ok(())
     }
 }
 
 impl Decode for LogRecord {
     fn decode<R: Read>(reader: &mut R) -> Result<Self, CodecError> {
-        let record_type =
-            LogRecordType::try_from(reader.read_u8()?).map_err(CodecError::UnknownDiscriminant)?;
-
-        let lsn = Lsn::decode(reader)?;
-        let raw_tid = TransactionId::decode(reader)?;
-        let tid = raw_tid.is_valid().then_some(raw_tid);
-        let prev_lsn = Lsn::decode(reader)?;
-
-        let secs = reader.read_u64::<LittleEndian>()?;
-        let timestamp = UNIX_EPOCH + std::time::Duration::from_secs(secs);
-
-        let page_id = match reader.read_u8()? {
-            1 => Some(PageId::decode(reader)?),
-            _ => None,
-        };
-
-        let undo_lsn = Lsn::decode(reader)?;
-        let undo_next_lsn = undo_lsn.is_valid().then_some(undo_lsn);
-
-        let before_image = decode_image(reader)?;
-        let after_image = decode_image(reader)?;
-
-        Ok(LogRecord {
-            lsn,
-            record_type,
-            tid,
-            prev_lsn,
-            page_id,
-            before_image,
-            after_image,
-            undo_next_lsn,
-            timestamp,
-        })
+        let header = LogRecordHeader::decode(reader)?;
+        let body = LogRecordBody::decode_for_type(header.record_type, reader)?;
+        Ok(Self { header, body })
     }
 }
 
@@ -164,8 +347,6 @@ mod tests {
         LogRecord::decode(&mut Cursor::new(buf)).expect("decode failed")
     }
 
-    // ── LogRecordType ────────────────────────────────────────────────────────
-
     #[test]
     fn record_type_roundtrips_all_variants() {
         let variants = [
@@ -180,8 +361,7 @@ mod tests {
             LogRecordType::Clr,
         ];
         for v in variants {
-            let byte = v as u8;
-            assert_eq!(LogRecordType::try_from(byte).unwrap(), v);
+            assert_eq!(LogRecordType::try_from(v as u8).unwrap(), v);
         }
     }
 
@@ -191,251 +371,256 @@ mod tests {
         assert_eq!(LogRecordType::try_from(255u8), Err(255u8));
     }
 
-    // ── Begin / Commit / Abort (no page, no images) ──────────────────────────
+    #[test]
+    fn header_size_constant_matches_encoded_size() {
+        let header = LogRecordHeader {
+            lsn: Lsn::new(1),
+            prev_lsn: Lsn::INVALID,
+            tid: TransactionId::new(1),
+            record_type: LogRecordType::Begin,
+            timestamp: UNIX_EPOCH,
+            body_len: 0,
+            checksum: 0,
+        };
+        let mut buf = Vec::new();
+        header.encode(&mut buf).unwrap();
+        assert_eq!(buf.len(), LogRecordHeader::SIZE);
+    }
+
+    #[test]
+    fn header_roundtrip() {
+        let header = LogRecordHeader {
+            lsn: Lsn::new(42),
+            prev_lsn: Lsn::new(10),
+            tid: TransactionId::new(7),
+            record_type: LogRecordType::Update,
+            timestamp: UNIX_EPOCH + std::time::Duration::from_secs(1_700_000_000),
+            body_len: 128,
+            checksum: 0xDEAD_BEEF,
+        };
+        let mut buf = Vec::new();
+        header.encode(&mut buf).unwrap();
+        let decoded = LogRecordHeader::decode(&mut Cursor::new(&buf)).unwrap();
+        assert_eq!(decoded.lsn, header.lsn);
+        assert_eq!(decoded.prev_lsn, header.prev_lsn);
+        assert_eq!(decoded.tid, header.tid);
+        assert_eq!(decoded.record_type, header.record_type);
+        assert_eq!(decoded.body_len, header.body_len);
+        assert_eq!(decoded.checksum, header.checksum);
+    }
 
     #[test]
     fn begin_record_roundtrip() {
-        let rec = LogRecord {
-            lsn: Lsn::new(1),
-            record_type: LogRecordType::Begin,
-            tid: Some(TransactionId::new(10)),
-            prev_lsn: Lsn::INVALID,
-            page_id: None,
-            before_image: None,
-            after_image: None,
-            undo_next_lsn: None,
-            timestamp: UNIX_EPOCH,
-        };
+        let rec = LogRecord::new(
+            Lsn::new(1),
+            Lsn::INVALID,
+            TransactionId::new(10),
+            UNIX_EPOCH,
+            LogRecordBody::Begin,
+        )
+        .unwrap();
         let decoded = roundtrip(&rec);
-        assert_eq!(decoded.lsn, rec.lsn);
-        assert_eq!(decoded.record_type, rec.record_type);
-        assert_eq!(decoded.tid, rec.tid);
-        assert_eq!(decoded.prev_lsn, rec.prev_lsn);
-        assert!(decoded.page_id.is_none());
-        assert!(decoded.before_image.is_none());
-        assert!(decoded.after_image.is_none());
-        assert!(decoded.undo_next_lsn.is_none());
+        assert_eq!(decoded.header.lsn, Lsn::new(1));
+        assert_eq!(decoded.header.record_type, LogRecordType::Begin);
+        assert_eq!(decoded.header.tid, TransactionId::new(10));
+        assert!(matches!(decoded.body, LogRecordBody::Begin));
     }
 
     #[test]
     fn commit_record_roundtrip() {
-        let rec = LogRecord {
-            lsn: Lsn::new(5),
-            record_type: LogRecordType::Commit,
-            tid: Some(TransactionId::new(3)),
-            prev_lsn: Lsn::new(2),
-            page_id: None,
-            before_image: None,
-            after_image: None,
-            undo_next_lsn: None,
-            timestamp: UNIX_EPOCH,
-        };
+        let rec = LogRecord::new(
+            Lsn::new(5),
+            Lsn::new(2),
+            TransactionId::new(3),
+            UNIX_EPOCH,
+            LogRecordBody::Commit,
+        )
+        .unwrap();
         let decoded = roundtrip(&rec);
-        assert_eq!(decoded.record_type, LogRecordType::Commit);
-        assert_eq!(decoded.tid, Some(TransactionId::new(3)));
-        assert_eq!(decoded.prev_lsn, Lsn::new(2));
+        assert_eq!(decoded.header.record_type, LogRecordType::Commit);
+        assert!(matches!(decoded.body, LogRecordBody::Commit));
     }
 
     #[test]
     fn abort_record_roundtrip() {
-        let rec = LogRecord {
-            lsn: Lsn::new(7),
-            record_type: LogRecordType::Abort,
-            tid: Some(TransactionId::new(99)),
-            prev_lsn: Lsn::new(6),
-            page_id: None,
-            before_image: None,
-            after_image: None,
-            undo_next_lsn: None,
-            timestamp: UNIX_EPOCH,
-        };
+        let rec = LogRecord::new(
+            Lsn::new(7),
+            Lsn::new(6),
+            TransactionId::new(99),
+            UNIX_EPOCH,
+            LogRecordBody::Abort,
+        )
+        .unwrap();
         let decoded = roundtrip(&rec);
-        assert_eq!(decoded.record_type, LogRecordType::Abort);
+        assert!(matches!(decoded.body, LogRecordBody::Abort));
     }
-
-    // ── Data records (Update / Insert / Delete) ───────────────────────────────
 
     #[test]
     fn update_record_roundtrip() {
-        let rec = LogRecord {
-            lsn: Lsn::new(20),
-            record_type: LogRecordType::Update,
-            tid: Some(TransactionId::new(5)),
-            prev_lsn: Lsn::new(15),
-            page_id: Some(make_page_id()),
-            before_image: Some(vec![0xDE, 0xAD]),
-            after_image: Some(vec![0xBE, 0xEF, 0xFF]),
-            undo_next_lsn: None,
-            timestamp: UNIX_EPOCH,
-        };
+        let rec = LogRecord::new(
+            Lsn::new(20),
+            Lsn::new(15),
+            TransactionId::new(5),
+            UNIX_EPOCH,
+            LogRecordBody::Update {
+                page_id: make_page_id(),
+                before: vec![0xDE, 0xAD],
+                after: vec![0xBE, 0xEF, 0xFF],
+            },
+        )
+        .unwrap();
         let decoded = roundtrip(&rec);
-        assert_eq!(decoded.record_type, LogRecordType::Update);
-        assert_eq!(decoded.page_id, rec.page_id);
-        assert_eq!(decoded.before_image, Some(vec![0xDE, 0xAD]));
-        assert_eq!(decoded.after_image, Some(vec![0xBE, 0xEF, 0xFF]));
-        assert!(decoded.undo_next_lsn.is_none());
+        assert_eq!(decoded.header.record_type, LogRecordType::Update);
+        match decoded.body {
+            LogRecordBody::Update {
+                page_id,
+                before,
+                after,
+            } => {
+                assert_eq!(page_id, make_page_id());
+                assert_eq!(before, vec![0xDE, 0xAD]);
+                assert_eq!(after, vec![0xBE, 0xEF, 0xFF]);
+            }
+            _ => panic!("wrong body variant"),
+        }
     }
 
     #[test]
-    fn insert_record_has_only_after_image() {
-        let rec = LogRecord {
-            lsn: Lsn::new(30),
-            record_type: LogRecordType::Insert,
-            tid: Some(TransactionId::new(7)),
-            prev_lsn: Lsn::new(25),
-            page_id: Some(make_page_id()),
-            before_image: None,
-            after_image: Some(vec![1, 2, 3, 4]),
-            undo_next_lsn: None,
-            timestamp: UNIX_EPOCH,
-        };
+    fn insert_record_roundtrip() {
+        let rec = LogRecord::new(
+            Lsn::new(30),
+            Lsn::new(25),
+            TransactionId::new(7),
+            UNIX_EPOCH,
+            LogRecordBody::Insert {
+                page_id: make_page_id(),
+                after: vec![1, 2, 3, 4],
+            },
+        )
+        .unwrap();
         let decoded = roundtrip(&rec);
-        assert_eq!(decoded.record_type, LogRecordType::Insert);
-        assert!(decoded.before_image.is_none());
-        assert_eq!(decoded.after_image, Some(vec![1, 2, 3, 4]));
+        match decoded.body {
+            LogRecordBody::Insert { after, .. } => assert_eq!(after, vec![1, 2, 3, 4]),
+            _ => panic!("wrong body variant"),
+        }
     }
 
     #[test]
-    fn delete_record_has_only_before_image() {
-        let rec = LogRecord {
-            lsn: Lsn::new(40),
-            record_type: LogRecordType::Delete,
-            tid: Some(TransactionId::new(8)),
-            prev_lsn: Lsn::new(35),
-            page_id: Some(make_page_id()),
-            before_image: Some(vec![9, 8, 7]),
-            after_image: None,
-            undo_next_lsn: None,
-            timestamp: UNIX_EPOCH,
-        };
+    fn delete_record_roundtrip() {
+        let rec = LogRecord::new(
+            Lsn::new(40),
+            Lsn::new(35),
+            TransactionId::new(8),
+            UNIX_EPOCH,
+            LogRecordBody::Delete {
+                page_id: make_page_id(),
+                before: vec![9, 8, 7],
+            },
+        )
+        .unwrap();
         let decoded = roundtrip(&rec);
-        assert_eq!(decoded.record_type, LogRecordType::Delete);
-        assert_eq!(decoded.before_image, Some(vec![9, 8, 7]));
-        assert!(decoded.after_image.is_none());
+        match decoded.body {
+            LogRecordBody::Delete { before, .. } => assert_eq!(before, vec![9, 8, 7]),
+            _ => panic!("wrong body variant"),
+        }
     }
-
-    // ── CLR record ───────────────────────────────────────────────────────────
 
     #[test]
-    fn clr_record_preserves_undo_next_lsn() {
-        let rec = LogRecord {
-            lsn: Lsn::new(50),
-            record_type: LogRecordType::Clr,
-            tid: Some(TransactionId::new(12)),
-            prev_lsn: Lsn::new(45),
-            page_id: Some(make_page_id()),
-            before_image: None,
-            after_image: Some(vec![0xAA]),
-            undo_next_lsn: Some(Lsn::new(10)),
-            timestamp: UNIX_EPOCH,
-        };
+    fn clr_record_roundtrip() {
+        let rec = LogRecord::new(
+            Lsn::new(50),
+            Lsn::new(45),
+            TransactionId::new(12),
+            UNIX_EPOCH,
+            LogRecordBody::Clr {
+                page_id: make_page_id(),
+                after: vec![0xAA],
+                undo_next_lsn: Lsn::new(10),
+            },
+        )
+        .unwrap();
         let decoded = roundtrip(&rec);
-        assert_eq!(decoded.record_type, LogRecordType::Clr);
-        assert_eq!(decoded.undo_next_lsn, Some(Lsn::new(10)));
+        match decoded.body {
+            LogRecordBody::Clr { undo_next_lsn, .. } => {
+                assert_eq!(undo_next_lsn, Lsn::new(10));
+            }
+            _ => panic!("wrong body variant"),
+        }
     }
-
-    // ── Checkpoint records ───────────────────────────────────────────────────
 
     #[test]
     fn checkpoint_begin_roundtrip() {
-        let rec = LogRecord {
-            lsn: Lsn::new(100),
-            record_type: LogRecordType::CheckpointBegin,
-            tid: None,
-            prev_lsn: Lsn::INVALID,
-            page_id: None,
-            before_image: None,
-            after_image: None,
-            undo_next_lsn: None,
-            timestamp: UNIX_EPOCH,
-        };
+        let rec = LogRecord::new(
+            Lsn::new(100),
+            Lsn::INVALID,
+            TransactionId::INVALID,
+            UNIX_EPOCH,
+            LogRecordBody::CheckpointBegin,
+        )
+        .unwrap();
         let decoded = roundtrip(&rec);
-        assert_eq!(decoded.record_type, LogRecordType::CheckpointBegin);
-        assert!(decoded.tid.is_none());
+        assert!(matches!(decoded.body, LogRecordBody::CheckpointBegin));
     }
 
     #[test]
     fn checkpoint_end_roundtrip() {
-        let rec = LogRecord {
-            lsn: Lsn::new(101),
-            record_type: LogRecordType::CheckpointEnd,
-            tid: None,
-            prev_lsn: Lsn::new(100),
-            page_id: None,
-            before_image: None,
-            after_image: None,
-            undo_next_lsn: None,
-            timestamp: UNIX_EPOCH,
-        };
+        let rec = LogRecord::new(
+            Lsn::new(101),
+            Lsn::new(100),
+            TransactionId::INVALID,
+            UNIX_EPOCH,
+            LogRecordBody::CheckpointEnd,
+        )
+        .unwrap();
         let decoded = roundtrip(&rec);
-        assert_eq!(decoded.record_type, LogRecordType::CheckpointEnd);
-        assert_eq!(decoded.prev_lsn, Lsn::new(100));
-    }
-
-    // ── Optional field sentinels ─────────────────────────────────────────────
-
-    #[test]
-    fn no_tid_decoded_as_none() {
-        let rec = LogRecord {
-            lsn: Lsn::new(200),
-            record_type: LogRecordType::CheckpointBegin,
-            tid: None,
-            prev_lsn: Lsn::INVALID,
-            page_id: None,
-            before_image: None,
-            after_image: None,
-            undo_next_lsn: None,
-            timestamp: UNIX_EPOCH,
-        };
-        let decoded = roundtrip(&rec);
-        assert!(decoded.tid.is_none());
+        assert_eq!(decoded.header.prev_lsn, Lsn::new(100));
+        assert!(matches!(decoded.body, LogRecordBody::CheckpointEnd));
     }
 
     #[test]
-    fn invalid_undo_next_lsn_decoded_as_none() {
-        let rec = LogRecord {
-            lsn: Lsn::new(300),
-            record_type: LogRecordType::Update,
-            tid: Some(TransactionId::new(1)),
-            prev_lsn: Lsn::new(1),
-            page_id: None,
-            before_image: None,
-            after_image: None,
-            undo_next_lsn: None,
-            timestamp: UNIX_EPOCH,
-        };
-        let decoded = roundtrip(&rec);
-        assert!(decoded.undo_next_lsn.is_none());
-    }
+    fn new_sets_body_len_and_checksum() {
+        let rec = LogRecord::new(
+            Lsn::new(1),
+            Lsn::INVALID,
+            TransactionId::new(1),
+            UNIX_EPOCH,
+            LogRecordBody::Insert {
+                page_id: make_page_id(),
+                after: vec![1, 2, 3],
+            },
+        )
+        .unwrap();
 
-    // ── Timestamp preservation ───────────────────────────────────────────────
+        // body_len must match the actual encoded body size
+        let mut body_buf = Vec::new();
+        rec.body.encode(&mut body_buf).unwrap();
+        assert_eq!(rec.header.body_len, body_buf.len() as u32);
+
+        // checksum must match a freshly computed CRC over those bytes
+        assert_eq!(rec.header.checksum, crc32fast::hash(&body_buf));
+    }
 
     #[test]
     fn timestamp_preserved_at_second_precision() {
         let ts = UNIX_EPOCH + std::time::Duration::from_secs(1_700_000_000);
-        let rec = LogRecord {
-            lsn: Lsn::new(1),
-            record_type: LogRecordType::Begin,
-            tid: Some(TransactionId::new(1)),
-            prev_lsn: Lsn::INVALID,
-            page_id: None,
-            before_image: None,
-            after_image: None,
-            undo_next_lsn: None,
-            timestamp: ts,
-        };
+        let rec = LogRecord::new(
+            Lsn::new(1),
+            Lsn::INVALID,
+            TransactionId::new(1),
+            ts,
+            LogRecordBody::Begin,
+        )
+        .unwrap();
         let decoded = roundtrip(&rec);
-        // Timestamps are stored as whole seconds, so sub-second precision is lost.
-        let expected_secs = ts.duration_since(UNIX_EPOCH).unwrap().as_secs();
-        let got_secs = decoded
+        let expected = ts.duration_since(UNIX_EPOCH).unwrap().as_secs();
+        let got = decoded
+            .header
             .timestamp
             .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_secs();
-        assert_eq!(got_secs, expected_secs);
+        assert_eq!(got, expected);
     }
-
-    // ── Image encoding helpers ───────────────────────────────────────────────
 
     #[test]
     fn encode_decode_image_empty() {
@@ -456,38 +641,31 @@ mod tests {
 
     #[test]
     fn decode_rejects_unknown_record_type() {
-        // Build a valid Begin record then corrupt the first byte (record type).
-        let rec = LogRecord {
-            lsn: Lsn::new(1),
-            record_type: LogRecordType::Begin,
-            tid: Some(TransactionId::new(1)),
-            prev_lsn: Lsn::INVALID,
-            page_id: None,
-            before_image: None,
-            after_image: None,
-            undo_next_lsn: None,
-            timestamp: UNIX_EPOCH,
-        };
+        let rec = LogRecord::new(
+            Lsn::new(1),
+            Lsn::INVALID,
+            TransactionId::new(1),
+            UNIX_EPOCH,
+            LogRecordBody::Begin,
+        )
+        .unwrap();
         let mut buf = Vec::new();
         rec.encode(&mut buf).unwrap();
-        buf[0] = 99; // unknown discriminant
+        buf[0] = 99; // corrupt record_type (first byte of header)
         let err = LogRecord::decode(&mut Cursor::new(buf));
-        assert!(err.is_err());
+        assert!(matches!(err, Err(CodecError::UnknownDiscriminant(99))));
     }
 
     #[test]
     fn decode_fails_on_truncated_input() {
-        let rec = LogRecord {
-            lsn: Lsn::new(1),
-            record_type: LogRecordType::Commit,
-            tid: Some(TransactionId::new(2)),
-            prev_lsn: Lsn::INVALID,
-            page_id: None,
-            before_image: None,
-            after_image: None,
-            undo_next_lsn: None,
-            timestamp: UNIX_EPOCH,
-        };
+        let rec = LogRecord::new(
+            Lsn::new(1),
+            Lsn::INVALID,
+            TransactionId::new(1),
+            UNIX_EPOCH,
+            LogRecordBody::Commit,
+        )
+        .unwrap();
         let mut buf = Vec::new();
         rec.encode(&mut buf).unwrap();
         let truncated = &buf[..buf.len() / 2];
