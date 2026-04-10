@@ -176,30 +176,7 @@ impl Decode for TransactionId {
 pub struct Lsn(pub u64);
 
 impl Lsn {
-    pub const SIZE: usize = 8;
-
     pub const INVALID: Self = Self(0);
-
-    #[inline]
-    pub const fn new(lsn: u64) -> Self {
-        Self(lsn)
-    }
-
-    #[inline]
-    pub const fn get(&self) -> u64 {
-        self.0
-    }
-
-    #[inline]
-    pub const fn is_valid(&self) -> bool {
-        self.0 != 0
-    }
-
-    #[inline]
-    #[must_use]
-    pub const fn next(&self) -> Self {
-        Self(self.0 + 1)
-    }
 }
 
 impl fmt::Display for Lsn {
@@ -211,6 +188,12 @@ impl fmt::Display for Lsn {
 impl From<u64> for Lsn {
     fn from(lsn: u64) -> Self {
         Self(lsn)
+    }
+}
+
+impl From<Lsn> for u64 {
+    fn from(lsn: Lsn) -> u64 {
+        lsn.0
     }
 }
 
@@ -544,7 +527,7 @@ mod tests {
 
     #[test]
     fn test_lsn_serialization() {
-        let lsn = Lsn::new(0xDEAD_BEEF);
+        let lsn = Lsn(0xDEAD_BEEF);
         assert_eq!(Lsn::from_bytes(&lsn.to_bytes().unwrap()).unwrap(), lsn);
     }
 
@@ -557,7 +540,6 @@ mod tests {
     #[test]
     fn test_invalid_sentinels() {
         assert!(!TransactionId::INVALID.is_valid());
-        assert!(!Lsn::INVALID.is_valid());
         assert!(!SlotId::INVALID.is_valid());
     }
 
@@ -566,6 +548,6 @@ mod tests {
         assert_eq!(PageNumber::new(42).to_string(), "Page(42)");
         assert_eq!(FileId::new(1).to_string(), "File(1)");
         assert_eq!(TransactionId::new(100).to_string(), "Txn(100)");
-        assert_eq!(Lsn::new(500).to_string(), "LSN(500)");
+        assert_eq!(Lsn(500).to_string(), "LSN(500)");
     }
 }

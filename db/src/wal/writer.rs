@@ -65,7 +65,7 @@ impl Wal {
             .open(path)?;
 
         let end = file.seek(std::io::SeekFrom::End(0))?;
-        let start_lsn = Lsn::new(end);
+        let start_lsn = Lsn(end);
 
         Ok(Self {
             file,
