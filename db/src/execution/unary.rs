@@ -1,3 +1,18 @@
+//! Single-child (unary) execution operators.
+//!
+//! Each operator in this module wraps one child [`PlanNode`] and transforms
+//! the stream of tuples it produces without combining multiple inputs.
+//!
+//! | Operator | SQL equivalent              |
+//! |----------|-----------------------------|
+//! | [`Filter`]  | `WHERE <predicate>`      |
+//! | [`Project`] | `SELECT col1, col2, …`   |
+//! | [`Sort`]    | `ORDER BY col [ASC|DESC]` |
+//! | [`Limit`]   | `LIMIT n OFFSET m`        |
+//!
+//! All operators implement [`Executor`] (and therefore [`FallibleIterator`]),
+//! so they can be composed freely into a plan tree via `Box<PlanNode>`.
+
 use std::cmp::Ordering;
 
 use fallible_iterator::FallibleIterator;
@@ -11,6 +26,14 @@ use crate::{
 
 use super::{ExecutionError, Executor};
 
+/// Keeps only the tuples from its child that satisfy a single column predicate.
+///
+/// Corresponds to a SQL `WHERE` clause of the form `col <op> value`, where
+/// `op` is one of the comparisons in [`Predicate`]. Multi-column or compound
+/// predicates are expressed by chaining multiple `Filter` nodes.
+///
+/// The output schema is identical to the child's — no columns are added or
+/// removed by filtering.
 #[derive(Debug)]
 pub struct Filter {
     child: Box<PlanNode>,
@@ -20,6 +43,10 @@ pub struct Filter {
 }
 
 impl Filter {
+    /// Returns `true` if `tuple` satisfies the filter predicate.
+    ///
+    /// Returns `false` when the column index is out of bounds for the tuple,
+    /// or when a `LIKE` pattern is applied to non-string values.
     fn eval(&self, tuple: &Tuple) -> bool {
         let col_index = usize::from(self.col_id);
         let Some(val) = tuple.get(col_index) else {
@@ -43,6 +70,14 @@ impl Filter {
         }
     }
 
+    /// Checks whether `s` matches the SQL `LIKE` pattern in `pattern`.
+    ///
+    /// Supports two wildcards:
+    /// - `%` — matches any sequence of zero or more characters.
+    /// - `_` — matches exactly one character.
+    ///
+    /// Uses a DP approach over the pattern to handle overlapping `%` spans
+    /// correctly and in O(|s| × |p|) time.
     fn like_match(s: &str, pattern: &str) -> bool {
         let s = s.as_bytes();
         let p = pattern.as_bytes();
@@ -70,6 +105,23 @@ impl Filter {
     }
 }
 
+impl Filter {
+    /// Creates a new `Filter` operator.
+    ///
+    /// - `child` — the upstream operator to filter.
+    /// - `col_id` — the column to test against `operand`.
+    /// - `op` — the comparison predicate.
+    /// - `operand` — the right-hand value of the comparison.
+    pub fn new(
+        child: Box<PlanNode>,
+        col_id: primitives::ColumnId,
+        op: Predicate,
+        operand: Value,
+    ) -> Self {
+        Self { child, col_id, op, operand }
+    }
+}
+
 impl FallibleIterator for Filter {
     type Item = Tuple;
     type Error = ExecutionError;
@@ -94,6 +146,14 @@ impl Executor for Filter {
     }
 }
 
+/// Picks a subset of columns from each tuple produced by its child.
+///
+/// Corresponds to the column list in a SQL `SELECT`, e.g.
+/// `SELECT id, name FROM …` projects two columns out of however many the
+/// child exposes.
+///
+/// The output schema contains only the projected fields, in the order given
+/// by `col_ids` at construction time.
 #[derive(Debug)]
 pub struct Project {
     child: Box<PlanNode>,
@@ -102,11 +162,25 @@ pub struct Project {
 }
 
 impl Project {
+    /// Creates a new `Project` operator that selects `col_ids` from each tuple.
+    ///
+    /// Column indices are validated against the child's schema immediately —
+    /// any out-of-bounds `ColumnId` causes an error here rather than silently
+    /// dropping values during iteration.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ExecutionError::TypeError`] if any `ColumnId` in `col_ids`
+    /// refers to a column index that does not exist in the child's schema.
     pub fn new(
         child: Box<PlanNode>,
-        col_ids: Vec<primitives::ColumnId>,
+        col_ids: &[primitives::ColumnId],
     ) -> Result<Self, ExecutionError> {
-        let col_indices: Vec<usize> = col_ids.iter().map(|&c| usize::from(c)).collect();
+        let col_indices = col_ids
+            .iter()
+            .map(|&c| usize::from(c))
+            .collect::<Vec<usize>>();
+
         let output_schema = child
             .schema()
             .project(&col_indices)
@@ -141,6 +215,14 @@ impl Executor for Project {
     }
 }
 
+/// Sorts all tuples from its child by a single column, either ascending or descending.
+///
+/// Corresponds to `ORDER BY col [ASC | DESC]` in SQL. Because sorting requires
+/// seeing the full input before producing any output, `Sort` is a **blocking**
+/// operator: on the first call to `next` it drains the child completely into
+/// memory, sorts the collected tuples, and then yields them one by one.
+///
+/// The output schema is identical to the child's.
 #[derive(Debug)]
 pub struct Sort {
     ascending: bool,
@@ -152,6 +234,11 @@ pub struct Sort {
 }
 
 impl Sort {
+    /// Creates a new `Sort` operator.
+    ///
+    /// - `ascending` — pass `true` for `ASC`, `false` for `DESC`.
+    /// - `col_id` — the column to sort by.
+    /// - `child` — the upstream operator to drain.
     pub fn new(ascending: bool, col_id: primitives::ColumnId, child: Box<PlanNode>) -> Self {
         Self {
             ascending,
@@ -163,6 +250,16 @@ impl Sort {
         }
     }
 
+    /// Drains the child into `self.sorted` and sorts it, but only on the first call.
+    ///
+    /// Subsequent calls return immediately because `self.materialized` is `true`.
+    ///
+    /// `NULL` values sort before all non-null values. Incomparable non-null values
+    /// (which should not arise for well-typed data) are treated as equal.
+    ///
+    /// # Errors
+    ///
+    /// Propagates any error returned by the child's `next`.
     fn materialize_tuples(&mut self) -> Result<(), ExecutionError> {
         if self.materialized {
             return Ok(());
@@ -214,6 +311,13 @@ impl Executor for Sort {
     }
 }
 
+/// Restricts the number of tuples produced by its child, with an optional starting offset.
+///
+/// Corresponds to `LIMIT n OFFSET m` in SQL. The first `offset` tuples from the
+/// child are consumed and discarded on the initial `next` call; after that, at
+/// most `limit` tuples are returned before the operator signals end-of-stream.
+///
+/// The output schema is identical to the child's.
 #[derive(Debug)]
 #[allow(clippy::struct_field_names)]
 pub struct Limit {
@@ -225,6 +329,24 @@ pub struct Limit {
 }
 
 impl Limit {
+    /// Creates a new `Limit` operator.
+    ///
+    /// - `child` — the upstream operator to restrict.
+    /// - `limit` — maximum number of tuples to return.
+    /// - `offset` — number of leading tuples to skip before counting starts.
+    pub fn new(child: Box<PlanNode>, limit: u64, offset: u64) -> Self {
+        Self { child, limit, offset, count: 0, initialized: false }
+    }
+
+    /// Skips the first `self.offset` tuples from the child, but only once.
+    ///
+    /// If the child is exhausted before the full offset is consumed, the skip
+    /// stops early and the operator will immediately return `None` on the next
+    /// `next` call.
+    ///
+    /// # Errors
+    ///
+    /// Propagates any error returned by the child's `next`.
     fn skip_offset(&mut self) -> Result<(), ExecutionError> {
         if self.initialized {
             return Ok(());
@@ -264,6 +386,8 @@ impl Executor for Limit {
         self.child.schema()
     }
     fn rewind(&mut self) -> Result<(), ExecutionError> {
-        self.skip_offset()
+        self.count = 0;
+        self.initialized = false;
+        self.child.rewind()
     }
 }
