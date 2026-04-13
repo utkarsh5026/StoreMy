@@ -608,6 +608,57 @@ impl From<bool> for Value {
     }
 }
 
+/// Adds two values, widening integers to `Int64` and floats to `Float64`.
+///
+/// Mixed integer/float combinations widen to `Float64`. Any unsupported
+/// combination (e.g. adding a string to a number) returns [`Value::Null`].
+///
+/// Note: `NULL + anything` returns `NULL`. Callers that want SQL NULL-skip
+/// behavior (like `SUM`) should check [`Value::is_null`] before calling `+`.
+impl std::ops::Add<&Value> for Value {
+    type Output = Value;
+
+    fn add(self, rhs: &Value) -> Value {
+        match (self, rhs) {
+            (Value::Int32(x), Value::Int32(y)) => Value::Int64(i64::from(x) + i64::from(*y)),
+            (Value::Int64(x), Value::Int32(y)) => Value::Int64(x + i64::from(*y)),
+            (Value::Int32(x), Value::Int64(y)) => Value::Int64(i64::from(x) + y),
+            (Value::Int64(x), Value::Int64(y)) => Value::Int64(x + y),
+            (Value::Uint32(x), Value::Uint32(y)) => Value::Int64(i64::from(x) + i64::from(*y)),
+            #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+            (Value::Uint64(x), Value::Uint64(y)) => {
+                Value::Int64(x.cast_signed() + (*y).cast_signed())
+            }
+            (Value::Float64(x), Value::Float64(y)) => Value::Float64(x + y),
+            (Value::Float64(x), Value::Int32(y)) => Value::Float64(x + f64::from(*y)),
+            #[allow(clippy::cast_precision_loss)]
+            (Value::Float64(x), Value::Int64(y)) => Value::Float64(x + *y as f64),
+            _ => Value::Null,
+        }
+    }
+}
+
+/// Converts a numeric [`Value`] to `f64`, returning `Err(())` for non-numeric or `NULL` values.
+///
+/// All integer variants are cast to `f64` (which may lose precision for very
+/// large 64-bit integers). Strings, booleans, and `NULL` always return `Err(())`.
+impl TryFrom<&Value> for f64 {
+    type Error = ();
+
+    fn try_from(val: &Value) -> Result<f64, ()> {
+        match val {
+            Value::Int32(v) => Ok(f64::from(*v)),
+            Value::Uint32(v) => Ok(f64::from(*v)),
+            Value::Float64(v) => Ok(*v),
+            #[allow(clippy::cast_precision_loss)]
+            Value::Int64(v) => Ok(*v as f64),
+            #[allow(clippy::cast_precision_loss)]
+            Value::Uint64(v) => Ok(*v as f64),
+            _ => Err(()),
+        }
+    }
+}
+
 /// Converts an `Option<T>` into a `Value`, mapping `None` to [`Value::Null`].
 ///
 /// This lets you write `Value::from(some_option)` for any `T: Into<Value>`.
