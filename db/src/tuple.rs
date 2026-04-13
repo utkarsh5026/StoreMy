@@ -311,7 +311,7 @@ impl fmt::Display for TupleSchema {
 /// Values are stored in the same order as the fields in the corresponding
 /// [`TupleSchema`]. Use [`TupleSchema::validate`] to check that a tuple is
 /// well-formed before persisting it.
-#[derive(Debug, Clone, PartialEq, Default)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Default)]
 pub struct Tuple {
     values: Vec<Value>,
 }
@@ -486,5 +486,392 @@ impl<'a> IntoIterator for &'a Tuple {
 
     fn into_iter(self) -> Self::IntoIter {
         self.values.iter()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::types::{Type, Value};
+
+    fn schema_id_name_age() -> TupleSchema {
+        TupleSchema::new(vec![
+            Field::new("id", Type::Int32).not_null(),
+            Field::new("name", Type::String),
+            Field::new("age", Type::Int32),
+        ])
+    }
+
+    fn tuple_42_alice_30() -> Tuple {
+        Tuple::new(vec![
+            Value::Int32(42),
+            Value::String("alice".into()),
+            Value::Int32(30),
+        ])
+    }
+
+    #[test]
+    fn field_new_is_nullable() {
+        let f = Field::new("score", Type::Float64);
+        assert_eq!(f.name, "score");
+        assert_eq!(f.field_type, Type::Float64);
+        assert!(f.nullable);
+    }
+
+    #[test]
+    fn field_not_null_clears_flag() {
+        let f = Field::new("id", Type::Int64).not_null();
+        assert!(!f.nullable);
+    }
+
+    #[test]
+    fn field_display_nullable() {
+        let f = Field::new("score", Type::Int32);
+        assert_eq!(f.to_string(), "score INT");
+    }
+
+    #[test]
+    fn field_display_not_null() {
+        let f = Field::new("id", Type::Int64).not_null();
+        assert_eq!(f.to_string(), "id BIGINT NOT NULL");
+    }
+
+    #[test]
+    fn schema_num_fields_and_is_empty() {
+        let empty = TupleSchema::new(vec![]);
+        assert!(empty.is_empty());
+        assert_eq!(empty.num_fields(), 0);
+
+        let schema = schema_id_name_age();
+        assert!(!schema.is_empty());
+        assert_eq!(schema.num_fields(), 3);
+    }
+
+    #[test]
+    fn schema_field_by_index() {
+        let schema = schema_id_name_age();
+        assert_eq!(schema.field(0).unwrap().name, "id");
+        assert_eq!(schema.field(1).unwrap().name, "name");
+        assert_eq!(schema.field(2).unwrap().name, "age");
+        assert!(schema.field(3).is_none());
+    }
+
+    #[test]
+    fn schema_field_by_name() {
+        let schema = schema_id_name_age();
+
+        let (idx, field) = schema.field_by_name("name").unwrap();
+        assert_eq!(idx, 1);
+        assert_eq!(field.field_type, Type::String);
+
+        assert!(schema.field_by_name("missing").is_none());
+    }
+
+    #[test]
+    fn schema_fields_iterator_order() {
+        let schema = schema_id_name_age();
+        let names: Vec<&str> = schema.fields().map(|f| f.name.as_str()).collect();
+        assert_eq!(names, ["id", "name", "age"]);
+    }
+
+    #[test]
+    fn schema_tuple_size() {
+        // Int32 = 4, String = 4+255, Int32 = 4  → 267
+        let schema = schema_id_name_age();
+        assert_eq!(schema.tuple_size(), 4 + (4 + 255) + 4);
+    }
+
+    #[test]
+    fn schema_serialized_size() {
+        // 3 fields → 1-byte bitmap; payload = 267 → total 268
+        let schema = schema_id_name_age();
+        assert_eq!(schema.serialized_size(), 1 + schema.tuple_size());
+    }
+
+    #[test]
+    fn schema_serialized_size_bitmap_grows_at_9_fields() {
+        // 9 fields → 2-byte bitmap
+        let fields: Vec<Field> = (0..9)
+            .map(|i| Field::new(format!("c{i}"), Type::Bool))
+            .collect();
+        let schema = TupleSchema::new(fields);
+        assert_eq!(schema.serialized_size(), 2 + 9); // 2-byte bitmap + 9 Bool bytes
+    }
+
+    #[test]
+    fn schema_merge() {
+        let left = TupleSchema::new(vec![Field::new("a", Type::Int32)]);
+        let right = TupleSchema::new(vec![Field::new("b", Type::Int64)]);
+        let merged = left.merge(&right);
+
+        assert_eq!(merged.num_fields(), 2);
+        assert_eq!(merged.field(0).unwrap().name, "a");
+        assert_eq!(merged.field(1).unwrap().name, "b");
+    }
+
+    #[test]
+    fn schema_project_valid_indices() {
+        let schema = schema_id_name_age();
+        let projected = schema.project(&[2, 0]).unwrap();
+
+        assert_eq!(projected.num_fields(), 2);
+        assert_eq!(projected.field(0).unwrap().name, "age");
+        assert_eq!(projected.field(1).unwrap().name, "id");
+    }
+
+    #[test]
+    fn schema_project_out_of_bounds_returns_error() {
+        let schema = schema_id_name_age();
+        let err = schema.project(&[0, 99]).unwrap_err();
+        assert!(matches!(
+            err,
+            TupleError::FieldIndexOutOfBounds { index: 99 }
+        ));
+    }
+
+    #[test]
+    fn schema_display() {
+        let schema = TupleSchema::new(vec![
+            Field::new("id", Type::Int32).not_null(),
+            Field::new("flag", Type::Bool),
+        ]);
+        assert_eq!(schema.to_string(), "(id INT NOT NULL, flag BOOLEAN)");
+    }
+
+    #[test]
+    fn validate_ok() {
+        let schema = schema_id_name_age();
+        let tuple = tuple_42_alice_30();
+        assert!(schema.validate(&tuple).is_ok());
+    }
+
+    #[test]
+    fn validate_null_in_nullable_column_ok() {
+        let schema = schema_id_name_age(); // name and age are nullable
+        let tuple = Tuple::new(vec![Value::Int32(1), Value::Null, Value::Null]);
+        assert!(schema.validate(&tuple).is_ok());
+    }
+
+    #[test]
+    fn validate_field_count_mismatch() {
+        let schema = schema_id_name_age();
+        let tuple = Tuple::new(vec![Value::Int32(1)]);
+        let err = schema.validate(&tuple).unwrap_err();
+        assert!(matches!(
+            err,
+            TupleError::FieldCountMismatch {
+                expected: 3,
+                actual: 1
+            }
+        ));
+    }
+
+    #[test]
+    fn validate_null_not_allowed() {
+        let schema = schema_id_name_age(); // "id" is NOT NULL
+        let tuple = Tuple::new(vec![Value::Null, Value::Null, Value::Null]);
+        let err = schema.validate(&tuple).unwrap_err();
+        assert!(matches!(err, TupleError::NullNotAllowed { column } if column == "id"));
+    }
+
+    #[test]
+    fn validate_type_mismatch() {
+        let schema = schema_id_name_age(); // id is Int32
+        let tuple = Tuple::new(vec![
+            Value::Bool(true), // wrong type
+            Value::Null,
+            Value::Null,
+        ]);
+        let err = schema.validate(&tuple).unwrap_err();
+        assert!(matches!(
+            err,
+            TupleError::TypeMismatch { ref column, expected: Type::Int32, actual: Type::Bool }
+            if column == "id"
+        ));
+    }
+
+    #[test]
+    fn tuple_get_and_get_mut() {
+        let mut tuple = tuple_42_alice_30();
+        assert_eq!(tuple.get(0), Some(&Value::Int32(42)));
+        assert!(tuple.get(99).is_none());
+
+        *tuple.get_mut(0).unwrap() = Value::Int32(99);
+        assert_eq!(tuple.get(0), Some(&Value::Int32(99)));
+    }
+
+    #[test]
+    fn tuple_project_keeps_order() {
+        let tuple = tuple_42_alice_30();
+        let projected = tuple.project(&[2, 0]);
+        assert_eq!(projected.get(0), Some(&Value::Int32(30)));
+        assert_eq!(projected.get(1), Some(&Value::Int32(42)));
+    }
+
+    #[test]
+    fn tuple_project_skips_oob_silently() {
+        let tuple = tuple_42_alice_30();
+        let projected = tuple.project(&[0, 999]);
+        assert_eq!(projected.get(0), Some(&Value::Int32(42)));
+        assert!(projected.get(1).is_none());
+    }
+
+    #[test]
+    fn tuple_iter() {
+        let tuple = Tuple::new(vec![Value::Int32(1), Value::Bool(true)]);
+        let vals: Vec<&Value> = tuple.iter().collect();
+        assert_eq!(vals, [&Value::Int32(1), &Value::Bool(true)]);
+    }
+
+    #[test]
+    fn tuple_concat() {
+        let left = Tuple::new(vec![Value::Int32(1)]);
+        let right = Tuple::new(vec![Value::Bool(false), Value::Int64(99)]);
+        let joined = left.concat(&right);
+        assert_eq!(joined.get(0), Some(&Value::Int32(1)));
+        assert_eq!(joined.get(1), Some(&Value::Bool(false)));
+        assert_eq!(joined.get(2), Some(&Value::Int64(99)));
+    }
+
+    #[test]
+    fn tuple_from_vec() {
+        let t: Tuple = vec![Value::Int32(7)].into();
+        assert_eq!(t.get(0), Some(&Value::Int32(7)));
+    }
+
+    #[test]
+    fn tuple_into_iter_consuming() {
+        let tuple = Tuple::new(vec![Value::Int32(1), Value::Int32(2)]);
+        let vals: Vec<Value> = tuple.into_iter().collect();
+        assert_eq!(vals, [Value::Int32(1), Value::Int32(2)]);
+    }
+
+    #[test]
+    fn tuple_into_iter_ref() {
+        let tuple = Tuple::new(vec![Value::Int32(1), Value::Int32(2)]);
+        let vals: Vec<&Value> = (&tuple).into_iter().collect();
+        assert_eq!(vals, [&Value::Int32(1), &Value::Int32(2)]);
+    }
+
+    #[test]
+    fn tuple_display() {
+        let tuple = Tuple::new(vec![
+            Value::Int32(1),
+            Value::String("hi".into()),
+            Value::Null,
+        ]);
+        assert_eq!(tuple.to_string(), "(1, 'hi', NULL)");
+    }
+
+    fn roundtrip(schema: &TupleSchema, tuple: &Tuple) -> Tuple {
+        let size = schema.serialized_size();
+        let mut buf = vec![0u8; size];
+        tuple.serialize(schema, &mut buf).unwrap();
+        Tuple::deserialize(schema, &buf).unwrap()
+    }
+
+    #[test]
+    fn serialize_deserialize_all_fixed_types() {
+        let schema = TupleSchema::new(vec![
+            Field::new("i32", Type::Int32),
+            Field::new("i64", Type::Int64),
+            Field::new("u32", Type::Uint32),
+            Field::new("u64", Type::Uint64),
+            Field::new("f64", Type::Float64),
+            Field::new("b", Type::Bool),
+        ]);
+        let tuple = Tuple::new(vec![
+            Value::Int32(-1),
+            Value::Int64(i64::MIN),
+            Value::Uint32(u32::MAX),
+            Value::Uint64(u64::MAX),
+            Value::Float64(1.5),
+            Value::Bool(true),
+        ]);
+        assert_eq!(roundtrip(&schema, &tuple), tuple);
+    }
+
+    #[test]
+    fn serialize_deserialize_string() {
+        let schema = TupleSchema::new(vec![Field::new("s", Type::String)]);
+        let tuple = Tuple::new(vec![Value::String("hello, world".into())]);
+        assert_eq!(roundtrip(&schema, &tuple), tuple);
+    }
+
+    #[test]
+    fn serialize_deserialize_with_nulls() {
+        let schema = TupleSchema::new(vec![
+            Field::new("a", Type::Int32),
+            Field::new("b", Type::Int32),
+            Field::new("c", Type::Int32),
+        ]);
+        // middle value is NULL
+        let tuple = Tuple::new(vec![Value::Int32(1), Value::Null, Value::Int32(3)]);
+        assert_eq!(roundtrip(&schema, &tuple), tuple);
+    }
+
+    #[test]
+    fn serialize_deserialize_all_nulls() {
+        let schema = TupleSchema::new(vec![
+            Field::new("x", Type::Bool),
+            Field::new("y", Type::Int64),
+        ]);
+        let tuple = Tuple::new(vec![Value::Null, Value::Null]);
+        assert_eq!(roundtrip(&schema, &tuple), tuple);
+    }
+
+    #[test]
+    fn serialize_returns_bytes_written() {
+        // Int32(7) + Bool(true) → 1-byte bitmap + 4 + 1 = 6 bytes
+        let schema = TupleSchema::new(vec![
+            Field::new("n", Type::Int32),
+            Field::new("b", Type::Bool),
+        ]);
+        let tuple = Tuple::new(vec![Value::Int32(7), Value::Bool(true)]);
+        let mut buf = vec![0u8; schema.serialized_size()];
+        let written = tuple.serialize(&schema, &mut buf).unwrap();
+        assert_eq!(written, 6);
+    }
+
+    #[test]
+    fn serialize_buffer_too_small_returns_error() {
+        let schema = TupleSchema::new(vec![Field::new("a", Type::Int32)]);
+        let tuple = Tuple::new(vec![Value::Int32(1)]);
+        let mut buf: Vec<u8> = vec![]; // no room even for the 1-byte bitmap
+        let err = tuple.serialize(&schema, &mut buf).unwrap_err();
+        assert!(matches!(err, SerializationError::BufferTooSmall { .. }));
+    }
+
+    #[test]
+    fn deserialize_buffer_too_small_returns_error() {
+        let schema = TupleSchema::new(vec![Field::new("a", Type::Int32)]);
+        let err = Tuple::deserialize(&schema, &[]).unwrap_err();
+        assert!(matches!(err, SerializationError::BufferTooSmall { .. }));
+    }
+
+    #[test]
+    fn null_bitmap_encoding_correctness() {
+        // 8 fields; set bits 0, 3, 7 as null → bitmap byte = 0b10001001 = 0x89
+        let fields: Vec<Field> = (0..8)
+            .map(|i| Field::new(format!("c{i}"), Type::Bool))
+            .collect();
+        let schema = TupleSchema::new(fields);
+
+        let mut values: Vec<Value> = (0..8).map(|_| Value::Bool(false)).collect();
+        values[0] = Value::Null;
+        values[3] = Value::Null;
+        values[7] = Value::Null;
+
+        let tuple = Tuple::new(values);
+        let mut buf = vec![0u8; schema.serialized_size()];
+        tuple.serialize(&schema, &mut buf).unwrap();
+
+        assert_eq!(buf[0], 0b1000_1001, "null bitmap byte mismatch");
+
+        let restored = Tuple::deserialize(&schema, &buf).unwrap();
+        assert_eq!(restored.get(0), Some(&Value::Null));
+        assert_eq!(restored.get(3), Some(&Value::Null));
+        assert_eq!(restored.get(7), Some(&Value::Null));
+        assert_eq!(restored.get(1), Some(&Value::Bool(false)));
     }
 }
