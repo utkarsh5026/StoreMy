@@ -291,6 +291,88 @@ impl Decode for SlotId {
     }
 }
 
+/// A column identifier within a table schema.
+///
+/// Columns are numbered sequentially starting from 0.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Default)]
+pub struct ColumnId(pub u32);
+
+impl ColumnId {
+    pub const SIZE: usize = 4;
+
+    /// Invalid column ID (used as sentinel).
+    pub const INVALID: Self = Self(u32::MAX);
+
+    /// Creates a new `ColumnId`, returning an error if the value is the sentinel.
+    #[inline]
+    pub const fn new(id: u32) -> Result<Self, &'static str> {
+        if id == u32::MAX {
+            Err("invalid column ID")
+        } else {
+            Ok(Self(id))
+        }
+    }
+
+    /// Returns true if this is a valid column ID.
+    #[inline]
+    pub const fn is_valid(&self) -> bool {
+        self.0 != u32::MAX
+    }
+}
+
+impl fmt::Display for ColumnId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "Col({})", self.0)
+    }
+}
+
+impl TryFrom<u32> for ColumnId {
+    type Error = &'static str;
+
+    fn try_from(value: u32) -> Result<Self, Self::Error> {
+        if value == u32::MAX {
+            Err("column index out of bounds")
+        } else {
+            Ok(Self(value))
+        }
+    }
+}
+
+impl From<ColumnId> for u32 {
+    fn from(col: ColumnId) -> Self {
+        col.0
+    }
+}
+
+impl From<ColumnId> for usize {
+    fn from(col: ColumnId) -> Self {
+        col.0 as usize
+    }
+}
+
+impl TryFrom<usize> for ColumnId {
+    type Error = &'static str;
+
+    fn try_from(value: usize) -> Result<Self, Self::Error> {
+        u32::try_from(value)
+            .map_err(|_| "column index out of bounds")
+            .and_then(ColumnId::try_from)
+    }
+}
+
+impl Encode for ColumnId {
+    fn encode<W: Write>(&self, writer: &mut W) -> Result<(), CodecError> {
+        writer.write_u32::<LittleEndian>(self.0)?;
+        Ok(())
+    }
+}
+
+impl Decode for ColumnId {
+    fn decode<R: Read>(reader: &mut R) -> Result<Self, CodecError> {
+        Ok(Self(reader.read_u32::<LittleEndian>()?))
+    }
+}
+
 /// A hash code value used for hash indexing.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct HashCode(pub u64);
@@ -549,5 +631,27 @@ mod tests {
         assert_eq!(FileId::new(1).to_string(), "File(1)");
         assert_eq!(TransactionId::new(100).to_string(), "Txn(100)");
         assert_eq!(Lsn(500).to_string(), "LSN(500)");
+        assert_eq!(ColumnId::try_from(7u32).unwrap().to_string(), "Col(7)");
+    }
+
+    #[test]
+    fn test_column_id_invalid_sentinel() {
+        assert!(!ColumnId::INVALID.is_valid());
+        assert!(ColumnId::try_from(u32::MAX).is_err());
+        assert!(ColumnId::try_from(usize::MAX).is_err());
+    }
+
+    #[test]
+    fn test_column_id_serialization() {
+        let col = ColumnId::try_from(42u32).unwrap();
+        assert_eq!(ColumnId::from_bytes(&col.to_bytes().unwrap()).unwrap(), col);
+    }
+
+    #[test]
+    fn test_column_id_conversions() {
+        let col = ColumnId::try_from(3u32).unwrap();
+        assert_eq!(u32::from(col), 3u32);
+        assert_eq!(usize::from(col), 3usize);
+        assert_eq!(ColumnId::try_from(3usize).unwrap(), col);
     }
 }
