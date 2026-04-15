@@ -431,56 +431,6 @@ impl Value {
         }
     }
 
-    /// Converts this value to an `i64` if it holds any integer type.
-    ///
-    /// Returns `None` for [`Value::Float64`], [`Value::String`], [`Value::Bool`],
-    /// and [`Value::Null`]. For [`Value::Uint64`], returns `None` if the value
-    /// exceeds `i64::MAX`.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use db::types::Value;
-    ///
-    /// assert_eq!(Value::Int32(-1).as_i64(), Some(-1));
-    /// assert_eq!(Value::Uint32(100).as_i64(), Some(100));
-    /// assert_eq!(Value::Float64(1.5).as_i64(), None);
-    /// ```
-    pub fn as_i64(&self) -> Option<i64> {
-        match self {
-            Value::Int32(v) => Some(i64::from(*v)),
-            Value::Int64(v) => Some(*v),
-            Value::Uint32(v) => Some(i64::from(*v)),
-            Value::Uint64(v) => i64::try_from(*v).ok(),
-            _ => None,
-        }
-    }
-
-    /// Converts this value to an `f64` if it holds any numeric type.
-    ///
-    /// All integer variants are cast to `f64` (which may lose precision for
-    /// very large 64-bit integers). Returns `None` for [`Value::String`],
-    /// [`Value::Bool`], and [`Value::Null`].
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use db::types::Value;
-    ///
-    /// assert_eq!(Value::Int32(3).as_f64(), Some(3.0));
-    /// assert_eq!(Value::Float64(2.5).as_f64(), Some(2.5));
-    /// assert_eq!(Value::Bool(true).as_f64(), None);
-    /// ```
-    #[allow(clippy::cast_precision_loss)]
-    pub fn as_f64(&self) -> Option<f64> {
-        match self {
-            Value::Int32(v) => Some(f64::from(*v)),
-            Value::Uint32(v) => Some(f64::from(*v)),
-            Value::Float64(v) => Some(*v),
-            _ => None,
-        }
-    }
-
     /// Borrows the inner string slice if this value is a [`Value::String`].
     ///
     /// Returns `None` for all other variants.
@@ -502,147 +452,131 @@ impl Value {
     }
 }
 
-/// Compares two values for equality.
-///
-/// Two values are equal only when they are the same variant holding the same
-/// data. Comparisons across different non-null variants always return `false`.
-/// `NULL == NULL` returns `true` (unlike SQL semantics, which return `UNKNOWN`).
-impl PartialEq for Value {
-    fn eq(&self, other: &Self) -> bool {
-        match (self, other) {
-            (Value::Int32(a), Value::Int32(b)) => a == b,
-            (Value::Int64(a), Value::Int64(b)) => a == b,
-            (Value::Uint32(a), Value::Uint32(b)) => a == b,
-            (Value::Uint64(a), Value::Uint64(b)) => a == b,
-            (Value::Float64(a), Value::Float64(b)) => a == b,
-            (Value::String(a), Value::String(b)) => a == b,
-            (Value::Bool(a), Value::Bool(b)) => a == b,
-            (Value::Null, Value::Null) => true,
-            _ => false,
+macro_rules! impl_value_cmp {
+    ($($variant:ident),* $(,)?) => {
+        /// Compares two values for equality.
+        ///
+        /// Two values are equal only when they are the same variant holding the same
+        /// data. Comparisons across different non-null variants always return `false`.
+        /// `NULL == NULL` returns `true` (unlike SQL semantics, which return `UNKNOWN`).
+        impl PartialEq for Value {
+            fn eq(&self, other: &Self) -> bool {
+                match (self, other) {
+                    $(
+                        (Value::$variant(a), Value::$variant(b)) => a == b,
+                    )*
+                    (Value::Null, Value::Null) => true,
+                    _ => false,
+                }
+            }
         }
-    }
+
+        /// Orders values within the same type, with `NULL` sorting before everything else.
+        ///
+        /// Comparisons between different non-null types return `None` (incomparable).
+        /// `Float64` ordering follows [`f64::partial_cmp`], so `NaN` produces `None`.
+        impl PartialOrd for Value {
+            fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+                match (self, other) {
+                    $((Value::$variant(a), Value::$variant(b)) => a.partial_cmp(b),)*
+                    (Value::Null, Value::Null) => Some(Ordering::Equal),
+                    (Value::Null, _)           => Some(Ordering::Less),
+                    (_, Value::Null)           => Some(Ordering::Greater),
+                    _ => None,
+                }
+            }
+        }
+    };
 }
+
+impl_value_cmp! { Int32, Int64, Uint32, Uint64, Float64, String, Bool }
 
 impl Eq for Value {}
 
-/// Orders values within the same type, with `NULL` sorting before everything else.
-///
-/// Comparisons between different non-null types return `None` (incomparable).
-/// `Float64` ordering follows [`f64::partial_cmp`], so `NaN` produces `None`.
-impl PartialOrd for Value {
-    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        match (self, other) {
-            (Value::Int32(a), Value::Int32(b)) => a.partial_cmp(b),
-            (Value::Int64(a), Value::Int64(b)) => a.partial_cmp(b),
-            (Value::Uint32(a), Value::Uint32(b)) => a.partial_cmp(b),
-            (Value::Uint64(a), Value::Uint64(b)) => a.partial_cmp(b),
-            (Value::Float64(a), Value::Float64(b)) => a.partial_cmp(b),
-            (Value::String(a), Value::String(b)) => a.partial_cmp(b),
-            (Value::Bool(a), Value::Bool(b)) => a.partial_cmp(b),
-            (Value::Null, Value::Null) => Some(Ordering::Equal),
-            (Value::Null, _) => Some(Ordering::Less), // NULL sorts first
-            (_, Value::Null) => Some(Ordering::Greater),
-            _ => None, // Different types are not comparable
+macro_rules! impl_value_hash_display {
+    (
+        hash_default { $( $hd_variant:ident ),* $(,)? }
+        hash_custom { $( $hc_variant:ident => |$hc_v:ident, $hc_state:ident| $hc_body:expr ),* $(,)? }
+        display_default { $( $dd_variant:ident ),* $(,)? }
+        display_custom { $( $dc_variant:ident => |$dc_v:ident, $dc_f:ident| $dc_body:expr ),* $(,)? }
+    ) => {
+        /// Hashes a value consistently with its [`PartialEq`] implementation.
+        ///
+        /// `Float64` is hashed by its bit pattern (`f64::to_bits`), so two `NaN`
+        /// values with the same bit pattern hash equal, even though `NaN != NaN`
+        /// under IEEE 754. The discriminant is always mixed in first so that, e.g.,
+        /// `Int32(1)` and `Int64(1)` produce different hashes.
+        impl Hash for Value {
+            fn hash<H: Hasher>(&self, state: &mut H) {
+                std::mem::discriminant(self).hash(state);
+                match self {
+                    $(
+                        Value::$hd_variant(v) => v.hash(state),
+                    )*
+                    $(
+                        Value::$hc_variant($hc_v) => { let $hc_state = state; $hc_body }
+                    ),*
+                    Value::Null => {}
+                }
+            }
         }
-    }
-}
 
-/// Hashes a value consistently with its [`PartialEq`] implementation.
-///
-/// `Float64` is hashed by its bit pattern (`f64::to_bits`), so two `NaN`
-/// values with the same bit pattern hash equal, even though `NaN != NaN`
-/// under IEEE 754. The discriminant is always mixed in first so that, e.g.,
-/// `Int32(1)` and `Int64(1)` produce different hashes.
-impl Hash for Value {
-    fn hash<H: Hasher>(&self, state: &mut H) {
-        std::mem::discriminant(self).hash(state);
-        match self {
-            Value::Int32(v) => v.hash(state),
-            Value::Int64(v) => v.hash(state),
-            Value::Uint32(v) => v.hash(state),
-            Value::Uint64(v) => v.hash(state),
-            Value::Float64(v) => v.to_bits().hash(state),
-            Value::String(v) => v.hash(state),
-            Value::Bool(v) => v.hash(state),
-            Value::Null => {}
+        /// Formats the value in a SQL-like representation.
+        ///
+        /// Strings are wrapped in single quotes (`'hello'`). `NULL` is printed as
+        /// the literal `NULL`. All numeric and boolean variants use their standard
+        /// Rust `Display` format.
+        impl fmt::Display for Value {
+            fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                match self {
+                    $(
+                        Value::$dd_variant(v) => write!(f, "{v}"),
+                    )*
+                    $(
+                        Value::$dc_variant($dc_v) => { let $dc_f = f; $dc_body }
+                    ),*
+                    Value::Null => write!(f, "NULL"),
+                }
+            }
         }
+    };
+}
+
+impl_value_hash_display! {
+    hash_default { Int32, Int64, Uint32, Uint64, String, Bool }
+    hash_custom {
+        Float64 => |v, state| v.to_bits().hash(state),
+    }
+    display_default { Int32, Int64, Uint32, Uint64, Float64, Bool }
+    display_custom {
+        String => |v, f| write!(f, "'{v}'"),
     }
 }
 
-/// Formats the value in a SQL-like representation.
+/// Implements `From<T>` for [`Value`] for a list of Rust types.
 ///
-/// Strings are wrapped in single quotes (`'hello'`). `NULL` is printed as
-/// the literal `NULL`. All numeric and boolean variants use their standard
-/// Rust `Display` format.
-impl fmt::Display for Value {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Value::Int32(v) => write!(f, "{v}"),
-            Value::Int64(v) => write!(f, "{v}"),
-            Value::Uint32(v) => write!(f, "{v}"),
-            Value::Uint64(v) => write!(f, "{v}"),
-            Value::Float64(v) => write!(f, "{v}"),
-            Value::String(v) => write!(f, "'{v}'"),
-            Value::Bool(v) => write!(f, "{v}"),
-            Value::Null => write!(f, "NULL"),
-        }
-    }
+/// The macro expects each mapping as `<rust_type> => <ValueVariant>`.
+macro_rules! impl_from_value {
+    ($($rust_type:ty => $variant:ident),* $(,)?) => {
+        $(
+            impl From<$rust_type> for Value {
+                #[inline]
+                fn from(v: $rust_type) -> Self {
+                    Value::$variant(v)
+                }
+            }
+        )*
+    };
 }
 
-/// Wraps an `i32` as [`Value::Int32`].
-impl From<i32> for Value {
-    fn from(v: i32) -> Self {
-        Value::Int32(v)
-    }
-}
-
-/// Wraps an `i64` as [`Value::Int64`].
-impl From<i64> for Value {
-    fn from(v: i64) -> Self {
-        Value::Int64(v)
-    }
-}
-
-/// Wraps a `u32` as [`Value::Uint32`].
-impl From<u32> for Value {
-    fn from(v: u32) -> Self {
-        Value::Uint32(v)
-    }
-}
-
-/// Wraps a `u64` as [`Value::Uint64`].
-impl From<u64> for Value {
-    fn from(v: u64) -> Self {
-        Value::Uint64(v)
-    }
-}
-
-/// Wraps an `f64` as [`Value::Float64`].
-impl From<f64> for Value {
-    fn from(v: f64) -> Self {
-        Value::Float64(v)
-    }
-}
-
-/// Converts an owned `String` into [`Value::String`].
-impl From<String> for Value {
-    fn from(v: String) -> Self {
-        Value::String(v)
-    }
-}
-
-/// Converts a string slice into [`Value::String`] by cloning the contents.
-impl From<&str> for Value {
-    fn from(v: &str) -> Self {
-        Value::String(v.to_string())
-    }
-}
-
-/// Wraps a `bool` as [`Value::Bool`].
-impl From<bool> for Value {
-    fn from(v: bool) -> Self {
-        Value::Bool(v)
-    }
+impl_from_value! {
+    i32   => Int32,
+    i64   => Int64,
+    u32   => Uint32,
+    u64   => Uint64,
+    f64   => Float64,
+    String => String,
+    bool  => Bool,
 }
 
 /// Adds two values, widening integers to `Int64` and floats to `Float64`.
