@@ -75,6 +75,43 @@ pub enum Type {
     Bool,
 }
 
+/// Converts a `u32` to a [`Type`] by matching a numeric tag to the corresponding variant.
+///
+/// Returns a [`TypeError::UnsupportedType`] if the value does not correspond to any known tag.
+impl TryFrom<u32> for Type {
+    type Error = TypeError;
+
+    fn try_from(value: u32) -> Result<Self, Self::Error> {
+        match value {
+            0 => Ok(Type::Int32),
+            1 => Ok(Type::Int64),
+            2 => Ok(Type::Uint32),
+            3 => Ok(Type::Uint64),
+            4 => Ok(Type::Float64),
+            5 => Ok(Type::String),
+            6 => Ok(Type::Bool),
+            _ => Err(TypeError::UnsupportedType {
+                message: format!("Unsupported type: {value}"),
+            }),
+        }
+    }
+}
+
+/// Converts a [`Type`] to its corresponding `u32` tag.
+impl From<Type> for u32 {
+    fn from(value: Type) -> Self {
+        match value {
+            Type::Int32 => 0,
+            Type::Int64 => 1,
+            Type::Uint32 => 2,
+            Type::Uint64 => 3,
+            Type::Float64 => 4,
+            Type::String => 5,
+            Type::Bool => 6,
+        }
+    }
+}
+
 impl Type {
     /// Returns the on-disk size of this type in bytes.
     ///
