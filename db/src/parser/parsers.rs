@@ -1,3 +1,12 @@
+//! SQL statement parser.
+//!
+//! This module implements a recursive-descent parser that turns a stream of
+//! [`Token`]s produced by [`crate::parser::lexer`] into typed [`Statement`]
+//! AST nodes.  Each `parse_*` method handles one grammar production.
+//!
+//! The entry point is [`Parser::parse`], which dispatches to the appropriate
+//! sub-parser based on the first keyword in the input.
+
 use thiserror::Error;
 
 use crate::{
@@ -17,31 +26,50 @@ use crate::{
     storage::index::Index,
 };
 
+/// Errors that can occur while parsing a SQL statement.
 #[derive(Error, Debug, Clone, PartialEq, Eq)]
 pub enum ParserError {
+    /// The parser required another token but the token stream was exhausted.
     #[error("Wanted Token")]
     WantedToken,
 
+    /// The next token had the wrong kind.
     #[error("expected {expected}, but found {found:?}")]
     UnexpectedToken {
+        /// The token kind the parser needed.
         expected: TokenType,
+        /// The token kind that was actually present.
         found: TokenType,
     },
 
+    /// A higher-level grammar rule was violated.
+    ///
+    /// The inner `String` describes what went wrong.
     #[error("parsing error from {0}")]
     ParsingError(String),
 
+    /// A lexer error bubbled up during parsing.
     #[error(transparent)]
     LexError(#[from] LexError),
 }
 
 impl ParserError {
+    /// Constructs an [`UnexpectedToken`](ParserError::UnexpectedToken) error.
     fn unexpected(expected: TokenType, found: TokenType) -> Self {
         Self::UnexpectedToken { expected, found }
     }
 }
 
 impl Parser {
+    /// Parses a complete SQL statement from the token stream.
+    ///
+    /// Peeks at the first token to decide which sub-parser to call, then
+    /// rewinds so the sub-parser can consume it normally.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ParserError`] if the token stream is empty, starts with an
+    /// unrecognized keyword, or any sub-parser fails.
     pub fn parse(&mut self) -> Result<Statement, ParserError> {
         let tok = self.ensure_next_token()?;
         self.lexer.backtrack()?;
@@ -55,8 +83,7 @@ impl Parser {
             TokenType::Drop => {
                 self.ensure_next_token()?; // consume DROP
                 let next = self.ensure_next_token()?;
-                self.lexer.backtrack()?; // put next back
-                self.lexer.backtrack()?; // put DROP back
+                self.lexer.backtrack()?; // put TABLE/INDEX back
 
                 match next.kind {
                     TokenType::Index => Ok(Statement::DropIndex(self.parse_drop_index()?)),
@@ -68,11 +95,9 @@ impl Parser {
                 }
             }
             TokenType::Create => {
-                // peek one more token to distinguish CREATE TABLE vs CREATE INDEX
-                self.ensure_next_token()?; // consume CREATE
+                self.ensure_next_token()?;
                 let next = self.ensure_next_token()?;
-                self.lexer.backtrack()?; // put next back
-                self.lexer.backtrack()?; // put CREATE back
+                self.lexer.backtrack()?;
 
                 match next.kind {
                     TokenType::Index => Ok(Statement::CreateIndex(self.parse_create_index()?)),
@@ -90,6 +115,15 @@ impl Parser {
         }
     }
 
+    /// Consumes tokens one-by-one, checking that each matches the expected kind.
+    ///
+    /// Fails on the first mismatch. Useful for consuming fixed keyword sequences
+    /// like `DROP TABLE` or `ORDER BY`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ParserError::UnexpectedToken`] if any token doesn't match, or
+    /// [`ParserError::WantedToken`] if the stream ends early.
     fn expect_token_sequence(&mut self, expected: &[TokenType]) -> Result<(), ParserError> {
         for &kind in expected {
             self.ensure_next_of_kind(kind)?;
@@ -97,6 +131,14 @@ impl Parser {
         Ok(())
     }
 
+    /// Checks whether the next token has the given `kind` without consuming it.
+    ///
+    /// Returns `false` if the stream is exhausted.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ParserError::LexError`] if the lexer encounters an invalid
+    /// token sequence while peeking.
     fn is_peek_token(&mut self, kind: TokenType) -> Result<bool, ParserError> {
         match self.lexer.next() {
             None => Ok(false),
@@ -109,6 +151,12 @@ impl Parser {
         }
     }
 
+    /// Advances the lexer and returns the next token.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ParserError::WantedToken`] if the stream is exhausted, or
+    /// [`ParserError::LexError`] on a lex failure.
     fn ensure_next_token(&mut self) -> Result<Token, ParserError> {
         self.lexer
             .next()
@@ -116,6 +164,12 @@ impl Parser {
             .map_err(ParserError::from)
     }
 
+    /// Advances the lexer, checks the token kind, and returns the token.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ParserError::UnexpectedToken`] if the token kind doesn't match
+    /// `expected`, or propagates errors from [`ensure_next_token`](Self::ensure_next_token).
     fn ensure_next_of_kind(&mut self, expected: TokenType) -> Result<Token, ParserError> {
         let tok = self.ensure_next_token()?;
         if tok.is_not(expected) {
@@ -127,15 +181,30 @@ impl Parser {
         Ok(tok)
     }
 
+    /// Parses `DROP TABLE [IF EXISTS] <name>`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ParserError`] if the keyword sequence or table name is missing.
     fn parse_drop(&mut self) -> Result<DropStatement, ParserError> {
-        self.expect_token_sequence(&[TokenType::Drop, TokenType::Table])?;
+        self.expect_token_sequence(&[TokenType::Table])?;
         let if_exists = self.parse_if_exists(false)?;
         let tok = self.ensure_next_of_kind(TokenType::Identifier)?;
         Ok(Statement::drop(&tok, if_exists))
     }
 
+    /// Parses `CREATE TABLE [IF NOT EXISTS] <name> (<columns>)`.
+    ///
+    /// Handles column definitions (type, nullability, `PRIMARY KEY`,
+    /// `AUTO_INCREMENT`, `DEFAULT`) as well as a trailing `PRIMARY KEY (<col>)`
+    /// clause.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ParserError`] if the syntax is malformed, a type token is
+    /// unrecognized, or a default value can't be parsed.
     fn parse_create(&mut self) -> Result<Statement, ParserError> {
-        self.expect_token_sequence(&[TokenType::Create, TokenType::Table])?;
+        self.expect_token_sequence(&[TokenType::Table])?;
         let if_not_exists = self.parse_if_exists(true)?;
         let table_name = self.ensure_next_of_kind(TokenType::Identifier)?.value;
         self.ensure_next_of_kind(TokenType::Lparen)?;
@@ -175,21 +244,19 @@ impl Parser {
 
                         match next_kind {
                             TokenType::Not => {
-                                self.ensure_next_token()?; // consume NOT
-                                self.ensure_next_of_kind(TokenType::Null)?;
+                                self.expect_token_sequence(&[TokenType::Not, TokenType::Null])?;
                                 nullable = false;
                             }
                             TokenType::Primary => {
-                                self.ensure_next_token()?; // consume PRIMARY
-                                self.ensure_next_of_kind(TokenType::Key)?;
+                                self.expect_token_sequence(&[TokenType::Primary, TokenType::Key])?;
                                 is_primary_key = true;
                             }
                             TokenType::AutoIncrement => {
-                                self.ensure_next_token()?; // consume AUTO_INCREMENT
+                                self.ensure_next_token()?;
                                 auto_increment = true;
                             }
                             TokenType::Default => {
-                                self.ensure_next_token()?; // consume DEFAULT
+                                self.ensure_next_token()?;
                                 let val_tok = self.ensure_next_token()?;
                                 default = Some(
                                     Value::try_from(val_tok).map_err(ParserError::ParsingError)?,
@@ -216,14 +283,11 @@ impl Parser {
                 }
             }
 
-            let delimiter = self.ensure_next_token()?;
-            if delimiter.is(TokenType::Comma) {
-                continue;
+            match self.ensure_next_token()?.kind {
+                TokenType::Rparen => break,
+                TokenType::Comma => {}
+                _ => return Err(ParserError::ParsingError("expected , or )".to_owned())),
             }
-            if delimiter.is(TokenType::Rparen) {
-                break;
-            }
-            return Err(ParserError::ParsingError("expected , or )".to_owned()));
         }
 
         Ok(Statement::CreateTable(Statement::create_table(
@@ -234,6 +298,16 @@ impl Parser {
         )))
     }
 
+    /// Tries to consume an optional `IF [NOT] EXISTS` clause.
+    ///
+    /// When `with_not` is `true` the expected form is `IF NOT EXISTS`
+    /// (used for `CREATE`).  When `false` the expected form is `IF EXISTS`
+    /// (used for `DROP`).  Returns `false` and backtracks if `IF` is absent.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ParserError`] if `IF` is present but the rest of the clause is
+    /// malformed.
     fn parse_if_exists(&mut self, with_not: bool) -> Result<bool, ParserError> {
         let if_tok = self.ensure_next_token()?;
         if if_tok.is_not(TokenType::If) {
@@ -249,8 +323,16 @@ impl Parser {
         Ok(true)
     }
 
+    /// Parses `CREATE INDEX [IF NOT EXISTS] <name> (<col>) [USING HASH|BTREE]`.
+    ///
+    /// Defaults to [`Index::Hash`] when no `USING` clause is present.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ParserError`] if required tokens are missing or the index type
+    /// after `USING` is not `HASH` or `BTREE`.
     fn parse_create_index(&mut self) -> Result<CreateIndexStatement, ParserError> {
-        self.expect_token_sequence(&[TokenType::Create, TokenType::Index])?;
+        self.expect_token_sequence(&[TokenType::Index])?;
         let if_not_exists = self.parse_if_exists(true)?;
 
         let index_name = self.ensure_next_of_kind(TokenType::Identifier)?;
@@ -259,20 +341,18 @@ impl Parser {
         let col_name = self.ensure_next_of_kind(TokenType::Identifier)?;
         self.expect_token_sequence(&[TokenType::Rparen])?;
 
-        let tok = self.ensure_next_token()?;
-        let index_type = if tok.is(TokenType::Using) {
-            match tok.kind {
-                TokenType::Hash => Index::Hash,
-                TokenType::Btree => Index::Btree,
-                _ => {
-                    return Err(ParserError::ParsingError(format!(
-                        "expected HASH or BTREE after USING, got {tok}"
-                    )));
+        let index_type = self
+            .on_peek_token(TokenType::Using, |p| {
+                let type_tok = p.ensure_next_token()?;
+                match type_tok.kind {
+                    TokenType::Hash => Ok(Index::Hash),
+                    TokenType::Btree => Ok(Index::Btree),
+                    _ => Err(ParserError::ParsingError(format!(
+                        "expected HASH or BTREE after USING, got {type_tok}"
+                    ))),
                 }
-            }
-        } else {
-            Index::Hash
-        };
+            })?
+            .unwrap_or(Index::Hash);
 
         Ok(Statement::create_index(
             &index_name,
@@ -282,8 +362,16 @@ impl Parser {
         ))
     }
 
+    /// Parses `DROP INDEX [IF EXISTS] <name> [ON <table>]`.
+    ///
+    /// The `ON <table>` clause is optional; an empty string is stored when it
+    /// is absent.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ParserError`] if the keyword sequence or index name is missing.
     fn parse_drop_index(&mut self) -> Result<DropIndexStatement, ParserError> {
-        self.expect_token_sequence(&[TokenType::Drop, TokenType::Index])?;
+        self.expect_token_sequence(&[TokenType::Index])?;
         let if_exists = self.parse_if_exists(false)?;
 
         let index_name = self.ensure_next_of_kind(TokenType::Identifier)?;
@@ -297,6 +385,14 @@ impl Parser {
         Ok(Statement::drop_index(table_name, &index_name, if_exists))
     }
 
+    /// Parses `SHOW INDEXES [FROM <table>]`.
+    ///
+    /// The `FROM <table>` clause is optional; when absent the statement shows
+    /// indexes for all tables.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ParserError`] if the `SHOW INDEXES` keyword sequence is missing.
     fn parse_show_index(&mut self) -> Result<ShowIndexesStatement, ParserError> {
         self.expect_token_sequence(&[TokenType::Show, TokenType::Indexes])?;
 
@@ -313,6 +409,15 @@ impl Parser {
         Ok(Statement::show_indexes(table_name))
     }
 
+    /// Parses `<table> [<alias>]`, returning the table name and an optional alias.
+    ///
+    /// The alias is a bare identifier immediately following the table name.  If
+    /// the next token is not an identifier the alias is `None` and the token is
+    /// left on the stream.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ParserError`] if no table name identifier is present.
     fn parse_table_with_alias(&mut self) -> Result<(String, Option<String>), ParserError> {
         let table = self.ensure_next_of_kind(TokenType::Identifier)?;
         let alias = if self.is_peek_token(TokenType::Identifier)? {
@@ -324,6 +429,12 @@ impl Parser {
         Ok((String::from(&table), alias))
     }
 
+    /// Parses `DELETE FROM <table> [<alias>] [WHERE <condition>]`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ParserError`] if `DELETE FROM` or the table name is missing,
+    /// or if the `WHERE` clause is malformed.
     fn parse_delete(&mut self) -> Result<DeleteStatement, ParserError> {
         self.expect_token_sequence(&[TokenType::Delete, TokenType::From])?;
         let (table_name, alias) = self.parse_table_with_alias()?;
@@ -336,12 +447,19 @@ impl Parser {
         Ok(Statement::delete(table_name, alias, where_clause))
     }
 
+    /// Parses `INSERT INTO <table> [(<cols>)] VALUES (<row>)[, (<row>)...]`.
+    ///
+    /// The column list is optional.  Multiple value rows are supported.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ParserError`] if the syntax is malformed or a value token
+    /// can't be converted to a [`Value`].
     fn parse_insert(&mut self) -> Result<InsertStatement, ParserError> {
-        self.expect_token_sequence(&[TokenType::Delete, TokenType::From])?;
+        self.expect_token_sequence(&[TokenType::Insert, TokenType::Into])?;
         let (table_name, _) = self.parse_table_with_alias()?;
 
         let columns = self.on_peek_token(TokenType::Lparen, |p| {
-            p.ensure_next_token()?;
             p.parse_delimited_list(TokenType::Comma, TokenType::Rparen, |p| {
                 let t = p.ensure_next_of_kind(TokenType::Identifier)?;
                 Ok(t.value)
@@ -357,7 +475,7 @@ impl Parser {
                 Value::try_from(t).map_err(ParserError::ParsingError)
             })?;
             values.push(row);
-            if !self.is_peek_token(TokenType::Comma)? {
+            if self.on_peek_token(TokenType::Comma, |_| Ok(()))?.is_none() {
                 break;
             }
         }
@@ -365,6 +483,14 @@ impl Parser {
         Ok(Statement::insert(table_name, columns, values))
     }
 
+    /// Parses `UPDATE <table> [<alias>] SET <col>=<val>[, ...] [WHERE <condition>]`.
+    ///
+    /// Only `=` is accepted as the assignment operator.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ParserError`] if any keyword is missing, a non-`=` operator is
+    /// used, or a value token can't be converted to a [`Value`].
     fn parse_update(&mut self) -> Result<UpdateStatement, ParserError> {
         self.ensure_next_of_kind(TokenType::Update)?;
         let (table_name, alias) = self.parse_table_with_alias()?;
@@ -387,7 +513,7 @@ impl Parser {
                 value: val,
             });
 
-            if !self.is_peek_token(TokenType::Comma)? {
+            if self.on_peek_token(TokenType::Comma, |_| Ok(()))?.is_none() {
                 break;
             }
         }
@@ -401,13 +527,31 @@ impl Parser {
         ))
     }
 
+    /// Parses a full `SELECT` statement including all optional clauses.
+    ///
+    /// Grammar (simplified):
+    /// ```text
+    /// SELECT [DISTINCT] (* | <expr>[, ...])
+    ///   FROM <table> [<alias>]
+    ///   [<join> ...]
+    ///   [WHERE <condition>]
+    ///   [GROUP BY <col>]
+    ///   [ORDER BY <col> [ASC|DESC]]
+    ///   [LIMIT <n> [OFFSET <m>]]
+    /// ```
+    ///
+    /// Aggregate functions (`COUNT(*)`, `SUM`, `AVG`, `MIN`, `MAX`) are
+    /// supported in the select list.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ParserError`] if any required token is missing or an aggregate
+    /// function name is unrecognized.
     fn parse_select(&mut self) -> Result<SelectStatement, ParserError> {
         self.ensure_next_of_kind(TokenType::Select)?;
 
         let distinct = self
-            .on_peek_token(TokenType::Distinct, |p| {
-                p.ensure_next_of_kind(TokenType::Distinct).map(|_| true)
-            })?
+            .on_peek_token(TokenType::Distinct, |_p| Ok(true))?
             .unwrap_or(false);
 
         let columns = if self.is_peek_token(TokenType::Asterisk)? {
@@ -450,21 +594,21 @@ impl Parser {
 
         let group_by = self
             .on_peek_token(TokenType::Group, |p| {
-                p.expect_token_sequence(&[TokenType::Group, TokenType::By])?;
+                p.ensure_next_of_kind(TokenType::By)?;
                 let column = p.ensure_next_of_kind(TokenType::Identifier)?;
                 Ok(vec![column.value])
             })?
             .unwrap_or_default();
 
         let order_by = self.on_peek_token(TokenType::Order, |p| {
-            p.expect_token_sequence(&[TokenType::Order, TokenType::By])?;
+            p.ensure_next_of_kind(TokenType::By)?;
             let order_col = p.ensure_next_of_kind(TokenType::Identifier)?;
 
             let dir = if p.is_peek_token(TokenType::Desc)? {
                 p.ensure_next_of_kind(TokenType::Desc)?;
                 OrderDirection::Desc
             } else {
-                p.on_peek_token(TokenType::Asc, |p| p.ensure_next_of_kind(TokenType::Asc))?;
+                p.on_peek_token(TokenType::Asc, |_p| Ok(()))?;
                 OrderDirection::Asc
             };
 
@@ -472,14 +616,10 @@ impl Parser {
         })?;
 
         let limit_offset = self.on_peek_token(TokenType::Limit, |p| {
-            p.ensure_next_of_kind(TokenType::Limit)?;
             let limit = p.parse_int("limit")?;
 
             let offset = p
-                .on_peek_token(TokenType::Offset, |p| {
-                    p.ensure_next_of_kind(TokenType::Offset)?;
-                    p.parse_int("offset")
-                })?
+                .on_peek_token(TokenType::Offset, |p| p.parse_int("offset"))?
                 .unwrap_or(0);
 
             Ok((limit, offset))
@@ -499,6 +639,16 @@ impl Parser {
         })
     }
 
+    /// Parses zero or more JOIN clauses following a `FROM` target.
+    ///
+    /// Supports `[INNER] JOIN`, `LEFT JOIN`, and `RIGHT JOIN`.  Each clause
+    /// must include an `ON <condition>` predicate.  Parsing stops when no
+    /// recognized join keyword is found next.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ParserError`] if a join keyword is present but the rest of the
+    /// clause (`JOIN <table> ON <condition>`) is malformed.
     fn parse_joins(&mut self) -> Result<Vec<Join>, ParserError> {
         let mut joins = vec![];
 
@@ -534,6 +684,16 @@ impl Parser {
         Ok(joins)
     }
 
+    /// Consumes the next token and parses it as a non-negative integer.
+    ///
+    /// `name` is used only in the error message to identify which integer was
+    /// expected (e.g. `"limit"` or `"offset"`).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ParserError::UnexpectedToken`] if the token is not an
+    /// [`TokenType::Int`], or [`ParserError::ParsingError`] if the integer
+    /// value overflows `u64`.
     fn parse_int(&mut self, name: &str) -> Result<u64, ParserError> {
         let tok = self.ensure_next_of_kind(TokenType::Int)?;
         tok.value
@@ -541,6 +701,16 @@ impl Parser {
             .map_err(|e| ParserError::ParsingError(format!("invalid {name}: {e}")))
     }
 
+    /// Runs `exec` only if the next token matches `expected`, consuming nothing
+    /// when it doesn't.
+    ///
+    /// Returns `Some(T)` when `exec` ran successfully, or `None` when the peek
+    /// didn't match.  The token is never consumed by this method itself — `exec`
+    /// is responsible for consuming the tokens it needs.
+    ///
+    /// # Errors
+    ///
+    /// Returns any error produced by the peek check or by `exec`.
     fn on_peek_token<T, K>(
         &mut self,
         expected: TokenType,
@@ -554,6 +724,7 @@ impl Parser {
             if !ok {
                 return Ok(None);
             }
+            self.ensure_next_token()?;
             let t = exec(self)?;
             Ok(Some(t))
         })
@@ -564,18 +735,13 @@ impl Parser {
     /// Strategy: collect predicates into AND-groups separated by OR, then fold both levels.
     /// e.g. `a=1 OR b=2 AND c=3` → `a=1 OR (b=2 AND c=3)`
     fn parse_where(&mut self) -> Result<WhereCondition, ParserError> {
-        self.ensure_next_of_kind(TokenType::Where)?;
-
-        // Each inner Vec is a chain of ANDs; the outer Vec is joined by OR.
-        let mut or_groups: Vec<Vec<WhereCondition>> = vec![vec![self.parse_predicate()?]];
+        let mut or_groups = vec![vec![self.parse_predicate()?]];
 
         loop {
-            if self.on_peek_token(TokenType::And, |_| Ok(()))?.is_some() {
-                self.ensure_next_of_kind(TokenType::And)?;
-                or_groups.last_mut().unwrap().push(self.parse_predicate()?);
-            } else if self.on_peek_token(TokenType::Or, |_| Ok(()))?.is_some() {
-                self.ensure_next_of_kind(TokenType::Or)?;
-                or_groups.push(vec![self.parse_predicate()?]);
+            if let Some(pred) = self.on_peek_token(TokenType::And, Self::parse_predicate)? {
+                or_groups.last_mut().unwrap().push(pred);
+            } else if let Some(pred) = self.on_peek_token(TokenType::Or, Self::parse_predicate)? {
+                or_groups.push(vec![pred]);
             } else {
                 break;
             }
@@ -594,6 +760,15 @@ impl Parser {
     }
 
     /// Parses a single `field op value` predicate.
+    /// Parses a single `<field> <op> <value>` predicate.
+    ///
+    /// The value token is interpreted as an `i64` integer when it parses as
+    /// one, otherwise it is stored as a string literal.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ParserError`] if the field or operator tokens are missing, or
+    /// the operator string is not a recognized [`Predicate`] variant.
     fn parse_predicate(&mut self) -> Result<WhereCondition, ParserError> {
         let field = self.ensure_next_of_kind(TokenType::Identifier)?;
         let op = self.ensure_next_of_kind(TokenType::Operator)?;
@@ -609,6 +784,17 @@ impl Parser {
         Ok(WhereCondition::predicate(field.value, op, value))
     }
 
+    /// Parses a non-empty list of items separated by `delimiter` and ended by
+    /// `terminator`, calling `parse` for each item.
+    ///
+    /// Both the `delimiter` and `terminator` tokens are consumed.  The
+    /// `terminator` token is not included in the returned `Vec`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ParserError`] if `parse` fails, the list is empty, or a token
+    /// that is neither `delimiter` nor `terminator` appears where one was
+    /// expected.
     fn parse_delimited_list<T, W>(
         &mut self,
         delimiter: TokenType,

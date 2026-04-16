@@ -1,20 +1,45 @@
+//! SQL statement AST types produced by the parser.
+//!
+//! Each variant of [`Statement`] maps to one SQL command (e.g. `CREATE TABLE`,
+//! `SELECT`, `INSERT`). The parser converts raw tokens into these structs, and
+//! downstream execution code pattern-matches on them to drive query planning
+//! and execution.
+//!
+//! Every statement type implements [`Display`] so it can be pretty-printed back
+//! into a SQL-like string, which is useful for logging and debugging.
+
 use std::fmt::Display;
 
 use crate::{primitives::Predicate, storage::index::Index, types::Value};
 
+/// Top-level SQL statement returned by the parser.
+///
+/// Each variant wraps a dedicated struct that holds the parsed clause data.
+/// Factory methods on `Statement` are `pub(super)` so only the parser module
+/// can construct them, keeping AST creation private.
 pub enum Statement {
+    /// `DROP TABLE …`
     Drop(DropStatement),
+    /// `CREATE TABLE …`
     CreateTable(CreateTableStatement),
+    /// `CREATE INDEX …`
     CreateIndex(CreateIndexStatement),
+    /// `DROP INDEX …`
     DropIndex(DropIndexStatement),
+    /// `DELETE FROM …`
     Delete(DeleteStatement),
+    /// `INSERT INTO …`
     Insert(InsertStatement),
+    /// `UPDATE … SET …`
     Update(UpdateStatement),
+    /// `SELECT …`
     Select(SelectStatement),
+    /// `SHOW INDEXES …`
     ShowIndexes(ShowIndexesStatement),
 }
 
 impl Statement {
+    /// Build a `DROP TABLE` statement.
     pub(super) fn drop(table_name: impl Into<String>, if_exists: bool) -> DropStatement {
         DropStatement {
             table_name: table_name.into(),
@@ -22,6 +47,7 @@ impl Statement {
         }
     }
 
+    /// Build a `CREATE INDEX` statement.
     pub(super) fn create_index(
         index_name: impl Into<String>,
         col_name: impl Into<String>,
@@ -36,6 +62,7 @@ impl Statement {
         }
     }
 
+    /// Build a `DROP INDEX` statement.
     pub(super) fn drop_index(
         table_name: impl Into<String>,
         index_name: impl Into<String>,
@@ -48,6 +75,7 @@ impl Statement {
         }
     }
 
+    /// Build a `DELETE FROM` statement.
     pub(super) fn delete(
         table_name: impl Into<String>,
         alias: Option<String>,
@@ -60,6 +88,7 @@ impl Statement {
         }
     }
 
+    /// Build an `INSERT INTO` statement with one or more value rows.
     pub(super) fn insert(
         table_name: impl Into<String>,
         columns: Option<Vec<String>>,
@@ -72,6 +101,7 @@ impl Statement {
         }
     }
 
+    /// Build an `UPDATE … SET` statement.
     pub(super) fn update(
         table_name: impl Into<String>,
         alias: Option<String>,
@@ -86,6 +116,7 @@ impl Statement {
         }
     }
 
+    /// Build a `CREATE TABLE` statement.
     pub(super) fn create_table(
         table_name: impl Into<String>,
         if_not_exists: bool,
@@ -100,14 +131,19 @@ impl Statement {
         }
     }
 
+    /// Build a `SHOW INDEXES` statement, optionally scoped to one table.
     pub(super) fn show_indexes(table_name: Option<String>) -> ShowIndexesStatement {
         ShowIndexesStatement(table_name)
     }
 }
 
+/// Parsed `DROP TABLE [IF EXISTS] <name>` statement.
 #[derive(Debug, Clone)]
 pub struct DropStatement {
+    /// Name of the table to drop.
     table_name: String,
+    /// When `true`, the statement includes `IF EXISTS` and should not error
+    /// if the table is missing.
     if_exists: bool,
 }
 
@@ -124,11 +160,17 @@ impl Display for DropStatement {
 /// A single column definition inside `CREATE TABLE`.
 #[derive(Debug, Clone)]
 pub struct ColumnDef {
+    /// Column name.
     pub name: String,
+    /// Data type of the column (e.g. `INT`, `VARCHAR(255)`).
     pub col_type: crate::types::Type,
+    /// Whether the column accepts `NULL` values.
     pub nullable: bool,
+    /// Whether this column is declared as `PRIMARY KEY` inline.
     pub primary_key: bool,
+    /// Whether the column auto-increments on insert.
     pub auto_increment: bool,
+    /// Optional default value used when no explicit value is provided.
     pub default: Option<Value>,
 }
 
@@ -151,12 +193,17 @@ impl Display for ColumnDef {
     }
 }
 
-/// Represents `CREATE TABLE [IF NOT EXISTS] name (col_def, ..., [PRIMARY KEY (col)])`.
+/// Parsed `CREATE TABLE [IF NOT EXISTS] name (col_def, ..., [PRIMARY KEY (col)])`.
 #[derive(Debug, Clone)]
 pub struct CreateTableStatement {
+    /// Name of the table to create.
     pub table_name: String,
+    /// When `true`, suppress errors if the table already exists.
     pub if_not_exists: bool,
+    /// Column definitions in declaration order.
     pub columns: Vec<ColumnDef>,
+    /// Optional table-level primary key column name (as opposed to an inline
+    /// `PRIMARY KEY` on a [`ColumnDef`]).
     pub primary_key: Option<String>,
 }
 
@@ -176,10 +223,15 @@ impl Display for CreateTableStatement {
     }
 }
 
+/// Parsed `CREATE INDEX [IF NOT EXISTS] <name> ON (<col>) USING <type>`.
 pub struct CreateIndexStatement {
+    /// Name of the index being created.
     index_name: String,
+    /// Column the index covers.
     col_name: String,
+    /// Index structure — hash or B-tree.
     index_type: Index,
+    /// When `true`, suppress errors if the index already exists.
     if_not_exists: bool,
 }
 
@@ -201,10 +253,14 @@ impl Display for CreateIndexStatement {
     }
 }
 
+/// Parsed `DROP INDEX [IF EXISTS] <index> ON <table>`.
 #[derive(Debug, Clone)]
 pub struct DropIndexStatement {
+    /// Table the index belongs to.
     table_name: String,
+    /// Name of the index to drop.
     index_name: String,
+    /// When `true`, suppress errors if the index does not exist.
     if_exists: bool,
 }
 
@@ -218,10 +274,12 @@ impl Display for DropIndexStatement {
     }
 }
 
-/// The right-hand side value in a WHERE condition.
+/// A literal value on the right-hand side of a `WHERE` predicate.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Literal {
+    /// An integer literal, e.g. `42`.
     Int(i64),
+    /// A string literal, e.g. `'hello'`.
     Str(String),
 }
 
@@ -234,24 +292,30 @@ impl Display for Literal {
     }
 }
 
-/// A WHERE condition, either a single predicate or a logical combination.
+/// A `WHERE` condition tree.
 ///
-/// AND binds tighter than OR, matching standard SQL precedence.
+/// Conditions are either a single predicate (`field op value`) or a logical
+/// combination via `AND` / `OR`. `AND` binds tighter than `OR`, matching
+/// standard SQL precedence.
 #[derive(Debug, Clone, PartialEq)]
 pub enum WhereCondition {
-    /// A single predicate: `field op value`, e.g. `id = 1` or `name = 'Alice'`.
+    /// A single comparison: `field op value`, e.g. `id = 1` or `name = 'Alice'`.
     Predicate {
+        /// Column name on the left-hand side.
         field: String,
+        /// Comparison operator (`=`, `<`, `>`, etc.).
         op: Predicate,
+        /// Literal value on the right-hand side.
         value: Literal,
     },
-    /// `left AND right`
+    /// `left AND right` — both conditions must hold.
     And(Box<WhereCondition>, Box<WhereCondition>),
-    /// `left OR right`
+    /// `left OR right` — at least one condition must hold.
     Or(Box<WhereCondition>, Box<WhereCondition>),
 }
 
 impl WhereCondition {
+    /// Create a leaf predicate node.
     pub fn predicate(field: impl Into<String>, op: Predicate, value: Literal) -> Self {
         Self::Predicate {
             field: field.into(),
@@ -273,11 +337,15 @@ impl Display for WhereCondition {
     }
 }
 
-/// Represents `INSERT INTO table (col, ...) VALUES (val, ...), (val, ...)`.
+/// Parsed `INSERT INTO table [(col, …)] VALUES (val, …), …`.
 #[derive(Debug, Clone)]
 pub struct InsertStatement {
+    /// Target table name.
     pub table_name: String,
+    /// Optional explicit column list. When `None`, values are assumed to match
+    /// the table's column order.
     pub columns: Option<Vec<String>>,
+    /// One or more rows of values to insert. Each inner `Vec` is one row.
     pub values: Vec<Vec<Value>>,
 }
 
@@ -300,10 +368,12 @@ impl Display for InsertStatement {
     }
 }
 
-/// A single `col = val` pair in an `UPDATE SET` clause.
+/// A single `col = val` pair in an `UPDATE … SET` clause.
 #[derive(Debug, Clone)]
 pub struct Assignment {
+    /// Column being assigned to.
     pub column: String,
+    /// New value for the column.
     pub value: Value,
 }
 
@@ -313,12 +383,16 @@ impl Display for Assignment {
     }
 }
 
-/// Represents `UPDATE table SET col = val, ... WHERE condition`.
+/// Parsed `UPDATE table [alias] SET col = val, … [WHERE …]`.
 #[derive(Debug, Clone)]
 pub struct UpdateStatement {
+    /// Target table name.
     pub table_name: String,
+    /// Optional table alias (e.g. `UPDATE users u SET …`).
     pub alias: Option<String>,
+    /// One or more column assignments.
     pub assignments: Vec<Assignment>,
+    /// Optional `WHERE` filter; when `None`, all rows are updated.
     pub where_clause: Option<WhereCondition>,
 }
 
@@ -337,10 +411,14 @@ impl Display for UpdateStatement {
     }
 }
 
+/// Parsed `DELETE FROM table [alias] [WHERE …]`.
 #[derive(Debug, Clone)]
 pub struct DeleteStatement {
+    /// Target table name.
     pub table_name: String,
+    /// Optional table alias.
     pub alias: Option<String>,
+    /// Optional `WHERE` filter; when `None`, all rows are deleted.
     pub where_clause: Option<WhereCondition>,
 }
 
@@ -357,13 +435,18 @@ impl Display for DeleteStatement {
     }
 }
 
-/// An aggregate function used in a SELECT expression.
+/// An SQL aggregate function used in a `SELECT` expression.
 #[derive(Debug, Clone, PartialEq)]
 pub enum AggFunc {
+    /// `COUNT(col)` — number of non-null values.
     Count,
+    /// `SUM(col)` — total of numeric values.
     Sum,
+    /// `AVG(col)` — arithmetic mean of numeric values.
     Avg,
+    /// `MIN(col)` — smallest value.
     Min,
+    /// `MAX(col)` — largest value.
     Max,
 }
 
@@ -382,6 +465,12 @@ impl Display for AggFunc {
 impl TryFrom<&str> for AggFunc {
     type Error = String;
 
+    /// Parse an aggregate function name from its uppercase SQL keyword.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error string if `s` is not one of the recognized aggregate
+    /// names (`COUNT`, `SUM`, `AVG`, `MIN`, `MAX`).
     fn try_from(s: &str) -> Result<Self, Self::Error> {
         match s {
             "COUNT" => Ok(AggFunc::Count),
@@ -394,14 +483,14 @@ impl TryFrom<&str> for AggFunc {
     }
 }
 
-/// A single expression in a SELECT list: a plain column, an aggregate call, or `COUNT(*)`.
+/// A single expression in a `SELECT` list.
 #[derive(Debug, Clone, PartialEq)]
 pub enum SelectExpr {
     /// A plain column reference, e.g. `name`.
     Column(String),
-    /// An aggregate call, e.g. `SUM(amount)` or `COUNT(id)`.
+    /// An aggregate call on a named column, e.g. `SUM(amount)` or `COUNT(id)`.
     Agg(AggFunc, String),
-    /// The special `COUNT(*)` form.
+    /// The special `COUNT(*)` form that counts all rows.
     CountStar,
 }
 
@@ -415,12 +504,12 @@ impl Display for SelectExpr {
     }
 }
 
-/// Which columns to project in a SELECT.
+/// Which columns to project in a `SELECT`.
 #[derive(Debug, Clone)]
 pub enum SelectColumns {
-    /// `SELECT *`
+    /// `SELECT *` — all columns from the source table(s).
     All,
-    /// `SELECT expr1, expr2, ...`
+    /// `SELECT expr1, expr2, …` — an explicit list of expressions.
     Exprs(Vec<SelectExpr>),
 }
 
@@ -436,9 +525,12 @@ impl Display for SelectColumns {
     }
 }
 
+/// Sort direction for an `ORDER BY` clause.
 #[derive(Debug, Clone, PartialEq)]
 pub enum OrderDirection {
+    /// Ascending order (smallest first).
     Asc,
+    /// Descending order (largest first).
     Desc,
 }
 
@@ -451,7 +543,7 @@ impl Display for OrderDirection {
     }
 }
 
-/// A single `ORDER BY col ASC/DESC` clause.
+/// A single `ORDER BY <column> <direction>` clause.
 #[derive(Debug, Clone)]
 pub struct OrderBy(pub String, pub OrderDirection);
 
@@ -461,10 +553,16 @@ impl Display for OrderBy {
     }
 }
 
+/// The type of join between two tables.
 #[derive(Debug, Clone, PartialEq)]
 pub enum JoinKind {
+    /// `INNER JOIN` — only matching rows from both sides.
     Inner,
+    /// `LEFT JOIN` — all rows from the left table, with `NULL` fill for
+    /// non-matching right rows.
     Left,
+    /// `RIGHT JOIN` — all rows from the right table, with `NULL` fill for
+    /// non-matching left rows.
     Right,
 }
 
@@ -478,11 +576,16 @@ impl Display for JoinKind {
     }
 }
 
+/// A parsed join clause: `<kind> JOIN <table> [alias] ON <condition>`.
 #[derive(Debug, Clone)]
 pub struct Join {
+    /// Type of join (inner, left, right).
     pub kind: JoinKind,
+    /// Name of the table being joined.
     pub table: String,
+    /// Optional alias for the joined table.
     pub alias: Option<String>,
+    /// Join condition (the `ON` clause).
     pub on: WhereCondition,
 }
 
@@ -496,28 +599,43 @@ impl Display for Join {
     }
 }
 
-/// Represents a full SELECT statement.
+/// A full `SELECT` statement.
 ///
-/// Clause order mirrors SQL standard:
-/// `SELECT [DISTINCT] … FROM … [alias] [JOIN …] [WHERE …] [GROUP BY …] [HAVING …] [ORDER BY …] [LIMIT n [OFFSET n]]`
+/// Clause order mirrors the SQL standard:
+/// `SELECT [DISTINCT] … FROM … [alias] [JOIN …] [WHERE …] [GROUP BY …]
+///  [HAVING …] [ORDER BY …] [LIMIT n [OFFSET n]]`
 #[derive(Debug, Clone)]
 pub struct SelectStatement {
+    /// Whether `DISTINCT` was specified.
     pub distinct: bool,
+    /// The projection list (`*` or explicit expressions).
     pub columns: SelectColumns,
+    /// Primary table in the `FROM` clause.
     pub table_name: String,
+    /// Optional alias for the primary table.
     pub alias: Option<String>,
+    /// Zero or more `JOIN` clauses.
     pub joins: Vec<Join>,
+    /// Optional `WHERE` filter.
     pub where_clause: Option<WhereCondition>,
+    /// Columns listed in `GROUP BY`, if any.
     pub group_by: Vec<String>,
+    /// Optional `HAVING` filter applied after grouping.
     pub having: Option<WhereCondition>,
+    /// Optional `ORDER BY` clause (column + direction).
     pub order_by: Option<OrderBy>,
+    /// Optional `LIMIT` and `OFFSET` as `(limit, offset)`.
     pub limit_offset: Option<(u64, u64)>,
 }
 
 impl Display for SelectStatement {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         if self.distinct {
-            write!(f, "SELECT DISTINCT {} FROM {}", self.columns, self.table_name)?;
+            write!(
+                f,
+                "SELECT DISTINCT {} FROM {}",
+                self.columns, self.table_name
+            )?;
         } else {
             write!(f, "SELECT {} FROM {}", self.columns, self.table_name)?;
         }
@@ -546,7 +664,10 @@ impl Display for SelectStatement {
     }
 }
 
-/// Represents `SHOW INDEXES [FROM table]`.
+/// Parsed `SHOW INDEXES [FROM <table>]`.
+///
+/// The inner `Option<String>` holds the table name when `FROM` is specified;
+/// `None` means show indexes for all tables.
 #[derive(Debug, Clone)]
 pub struct ShowIndexesStatement(pub Option<String>);
 
