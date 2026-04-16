@@ -31,22 +31,17 @@ use crate::buffer_pool::page_store::{PageStore, PageStoreError};
 use crate::primitives::TransactionId;
 use crate::wal::writer::{Wal, WalError};
 
-/// Errors that can occur during transaction operations.
 #[derive(Debug, Error)]
 pub enum TransactionError {
-    /// A WAL write failed while logging the begin, commit, or abort record.
     #[error("wal: {0}")]
     Wal(#[from] WalError),
 
-    /// The page store returned an error while releasing locks.
     #[error("store: {0}")]
     Store(#[from] PageStoreError),
 
-    /// An operation was attempted on a transaction that is not in the Active state.
     #[error("transaction {0} is not active")]
     NotActive(TransactionId),
 
-    /// An operation was attempted on a transaction that has already committed or aborted.
     #[error("transaction {0} already committed or aborted")]
     AlreadyFinished(TransactionId),
 }
@@ -60,11 +55,8 @@ pub enum TransactionError {
 /// Typically one `TransactionManager` exists per database instance and is
 /// shared across threads.
 pub struct TransactionManager {
-    /// Monotonic counter used to assign unique transaction IDs.
     next_txn_id: AtomicU64,
-    /// Write-ahead log used to record transaction lifecycle events.
     wal: Arc<Wal>,
-    /// Page store used to release page locks when a transaction ends.
     store: Arc<PageStore>,
 }
 
@@ -121,11 +113,8 @@ impl TransactionManager {
 /// The current lifecycle state of a transaction.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TransactionState {
-    /// The transaction is in progress and has not yet committed or aborted.
     Active,
-    /// The transaction committed successfully.
     Committed,
-    /// The transaction was aborted, either explicitly or due to an error.
     Aborted,
 }
 
@@ -148,13 +137,9 @@ impl fmt::Display for TransactionState {
 /// Dropping a `Transaction` while it is still [`TransactionState::Active`]
 /// automatically triggers an abort so that no locks are left dangling.
 pub struct Transaction<'a> {
-    /// Current lifecycle state; used by `Drop` to detect an uncommitted transaction.
     state: TransactionState,
-    /// The manager that created this transaction and will finalize it.
     manager: &'a TransactionManager,
-    /// Unique identifier assigned at begin time.
     id: TransactionId,
-    /// Wall-clock time when the transaction started, used to compute duration.
     start_time: time::Instant,
 }
 
@@ -211,6 +196,14 @@ impl<'a> Transaction<'a> {
             end_time: time::Instant::now(),
         })
     }
+
+    /// Returns the unique transaction identifier assigned to this transaction.
+    ///
+    /// This ID uniquely identifies the transaction within the database system,
+    /// and can be used for logging, tracking, and isolation purposes.
+    pub fn transaction_id(&self) -> TransactionId {
+        self.id
+    }
 }
 
 impl Drop for Transaction<'_> {
@@ -232,13 +225,9 @@ impl Drop for Transaction<'_> {
 /// the final state, the assigned ID, and the start/end timestamps so callers
 /// can measure how long the transaction ran.
 pub struct CompletedTransaction {
-    /// The unique ID that was assigned to this transaction when it began.
     pub id: TransactionId,
-    /// Whether the transaction committed or was aborted.
     pub state: TransactionState,
-    /// Wall-clock time when the transaction started.
     pub start_time: time::Instant,
-    /// Wall-clock time when the transaction finished.
     pub end_time: time::Instant,
 }
 
