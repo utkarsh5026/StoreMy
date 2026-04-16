@@ -10,6 +10,9 @@ pub enum CatalogError {
     #[error(transparent)]
     Io(#[from] std::io::Error),
 
+    #[error(transparent)]
+    Heap(#[from] crate::heap::file::HeapError),
+
     #[error("table not found")]
     TableNotFound { table_name: String },
 
@@ -31,14 +34,14 @@ pub enum CatalogError {
     #[error("invalid catalog row: {message}")]
     InvalidCatalogRow { message: String },
 
+    #[error("heap file not found for file_id {file_id}")]
+    HeapNotFound { file_id: crate::FileId },
+
     #[error("file too large to fit page count in u32")]
     FileTooLarge,
 
     #[error("corruption detected in system table '{table}': {message}")]
-    Corruption {
-        table: &'static str,
-        message: String,
-    },
+    Corruption { table: String, message: String },
 }
 
 impl CatalogError {
@@ -48,9 +51,9 @@ impl CatalogError {
         }
     }
 
-    pub(super) fn corruption(table: &'static str, message: impl Into<String>) -> Self {
+    pub(super) fn corruption(table: impl Into<String>, message: impl Into<String>) -> Self {
         Self::Corruption {
-            table,
+            table: table.into(),
             message: message.into(),
         }
     }
@@ -85,5 +88,9 @@ impl CatalogError {
         Self::TableAlreadyExists {
             table_name: table_name.into(),
         }
+    }
+
+    pub(super) fn heap_not_found(file_id: crate::FileId) -> Self {
+        Self::HeapNotFound { file_id }
     }
 }
