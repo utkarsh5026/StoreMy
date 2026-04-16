@@ -45,6 +45,9 @@ pub enum CodecError {
     /// validation.
     #[error("Invalid UTF-8: {0}")]
     InvalidUtf8(#[from] std::str::Utf8Error),
+
+    #[error("numeric value {value} does not fit in {target}")]
+    NumericDoesNotFit { value: u64, target: &'static str },
 }
 
 /// Encodes a value into a binary format.

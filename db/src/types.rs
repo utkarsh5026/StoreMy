@@ -15,34 +15,13 @@
 use std::cmp::Ordering;
 use std::fmt;
 use std::hash::{Hash, Hasher};
+use std::io::{Read, Write};
 
-use byteorder::{ByteOrder, LittleEndian};
+use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
 use thiserror::Error;
 
 use crate::STRING_MAX_SIZE;
-
-/// Errors that can occur while serializing or deserializing a [`Value`].
-#[derive(Error, Debug)]
-pub enum SerializationError {
-    /// The destination buffer is too small to hold the encoded value.
-    #[error("Buffer too small: need {needed} bytes, have {available}")]
-    BufferTooSmall {
-        /// Number of bytes required.
-        needed: usize,
-        /// Number of bytes actually available.
-        available: usize,
-    },
-
-    /// The byte slice could not be interpreted as the expected type.
-    ///
-    /// This covers cases like an invalid UTF-8 sequence inside a string field
-    /// or a length prefix that claims more bytes than the buffer contains.
-    #[error("Deserialization error: {message}")]
-    DeserializationError {
-        /// Human-readable description of what went wrong.
-        message: String,
-    },
-}
+use crate::codec::{CodecError, Decode, Encode};
 
 /// Errors related to the type system and value conversions.
 #[derive(Error, Debug)]
@@ -270,167 +249,6 @@ impl Value {
         matches!(self, Value::Null)
     }
 
-    /// Returns the number of bytes this value occupies when serialized.
-    ///
-    /// For strings, this is `4 + string.len()` (length prefix plus payload),
-    /// which may be smaller than [`Type::String.size()`] if the string is
-    /// shorter than the maximum. For `NULL`, this is `0`.
-    pub fn serialized_size(&self) -> usize {
-        match self {
-            Value::Int32(_) | Value::Uint32(_) => 4,
-            Value::Int64(_) | Value::Uint64(_) | Value::Float64(_) => 8,
-            Value::Bool(_) => 1,
-            Value::String(s) => 4 + s.len(), // 4-byte length prefix
-            Value::Null => 0,
-        }
-    }
-
-    /// Writes this value into `buf` using little-endian encoding.
-    ///
-    /// Returns the number of bytes written. The caller is responsible for
-    /// ensuring `buf` is at least [`Value::serialized_size`] bytes long; if
-    /// `buf` is too small the write will panic (via `byteorder`'s slice
-    /// operations) or produce a truncated string.
-    ///
-    /// `NULL` writes zero bytes and returns `Ok(0)`.
-    ///
-    /// Strings are truncated to [`crate::STRING_MAX_SIZE`] bytes silently if
-    /// they exceed the limit.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`SerializationError::DeserializationError`] if the string
-    /// length cannot be represented as a `u32` (i.e. it exceeds `u32::MAX`
-    /// bytes before truncation — not possible in practice given
-    /// `STRING_MAX_SIZE`, but checked for correctness).
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use db::types::Value;
-    ///
-    /// let mut buf = [0u8; 4];
-    /// let written = Value::Int32(7).serialize(&mut buf).unwrap();
-    /// assert_eq!(written, 4);
-    /// assert_eq!(buf, [7, 0, 0, 0]); // little-endian
-    /// ```
-    pub fn serialize(&self, buf: &mut [u8]) -> Result<usize, SerializationError> {
-        match self {
-            Value::Int32(v) => {
-                LittleEndian::write_i32(buf, *v);
-                Ok(4)
-            }
-            Value::Int64(v) => {
-                LittleEndian::write_i64(buf, *v);
-                Ok(8)
-            }
-            Value::Uint32(v) => {
-                LittleEndian::write_u32(buf, *v);
-                Ok(4)
-            }
-            Value::Uint64(v) => {
-                LittleEndian::write_u64(buf, *v);
-                Ok(8)
-            }
-            Value::Float64(v) => {
-                LittleEndian::write_f64(buf, *v);
-                Ok(8)
-            }
-            Value::Bool(v) => {
-                buf[0] = u8::from(*v);
-                Ok(1)
-            }
-            Value::String(s) => {
-                let bytes = s.as_bytes();
-                let len = bytes.len().min(STRING_MAX_SIZE);
-                let len_u32 =
-                    u32::try_from(len).map_err(|_| SerializationError::DeserializationError {
-                        message: "String length exceeds u32::MAX".to_string(),
-                    })?;
-                LittleEndian::write_u32(buf, len_u32);
-                buf[4..4 + len].copy_from_slice(&bytes[..len]);
-                Ok(4 + len)
-            }
-            Value::Null => Ok(0),
-        }
-    }
-
-    /// Checks that `buf` contains at least `needed` bytes.
-    ///
-    /// Returns an error if the buffer is too small.
-    #[inline]
-    fn ensure_buffer_size(buf: &[u8], needed: usize) -> Result<(), SerializationError> {
-        if buf.len() < needed {
-            return Err(SerializationError::BufferTooSmall {
-                needed,
-                available: buf.len(),
-            });
-        }
-        Ok(())
-    }
-
-    /// Reads a value of the given [`Type`] from the front of `buf`.
-    ///
-    /// The bytes are interpreted using little-endian encoding, matching the
-    /// format written by [`Value::serialize`]. For strings, the first 4 bytes
-    /// are a little-endian `u32` length, followed by that many UTF-8 bytes.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`SerializationError::BufferTooSmall`] when `buf` does not
-    /// contain enough bytes for the requested type, or
-    /// [`SerializationError::DeserializationError`] when a string payload
-    /// contains invalid UTF-8.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use db::types::{Type, Value};
-    ///
-    /// let buf = [42u8, 0, 0, 0];
-    /// let v = Value::deserialize(&buf, Type::Int32).unwrap();
-    /// assert_eq!(v, Value::Int32(42));
-    /// ```
-    pub fn deserialize(buf: &[u8], typ: Type) -> Result<Self, SerializationError> {
-        match typ {
-            Type::Int32 => {
-                Self::ensure_buffer_size(buf, 4)?;
-                Ok(Value::Int32(LittleEndian::read_i32(buf)))
-            }
-            Type::Int64 => {
-                Self::ensure_buffer_size(buf, 8)?;
-                Ok(Value::Int64(LittleEndian::read_i64(buf)))
-            }
-            Type::Uint32 => {
-                Self::ensure_buffer_size(buf, 4)?;
-                Ok(Value::Uint32(LittleEndian::read_u32(buf)))
-            }
-            Type::Uint64 => {
-                Self::ensure_buffer_size(buf, 8)?;
-                Ok(Value::Uint64(LittleEndian::read_u64(buf)))
-            }
-            Type::Float64 => {
-                Self::ensure_buffer_size(buf, 8)?;
-                Ok(Value::Float64(LittleEndian::read_f64(buf)))
-            }
-            Type::Bool => {
-                Self::ensure_buffer_size(buf, 1)?;
-                Ok(Value::Bool(buf[0] != 0))
-            }
-            Type::String => {
-                Self::ensure_buffer_size(buf, 4)?;
-                let len = LittleEndian::read_u32(buf) as usize;
-                Self::ensure_buffer_size(buf, 4 + len)?;
-                let s = std::str::from_utf8(&buf[4..4 + len]).map_err(|e| {
-                    SerializationError::DeserializationError {
-                        message: format!("Invalid UTF-8: {e}"),
-                    }
-                })?;
-                Ok(Value::String(s.to_string()))
-            }
-        }
-    }
-
     /// Borrows the inner string slice if this value is a [`Value::String`].
     ///
     /// Returns `None` for all other variants.
@@ -638,6 +456,91 @@ impl<T: Into<Value>> From<Option<T>> for Value {
         match v {
             Some(val) => val.into(),
             None => Value::Null,
+        }
+    }
+}
+
+/// Encodes a [`Value`] in a self-describing binary format.
+///
+/// The encoding is a 1-byte discriminant followed by the payload:
+///
+/// | Discriminant | Variant   | Payload                              |
+/// |:---:|-----------|--------------------------------------|
+/// | 0   | `Null`    | *(none)*                             |
+/// | 1   | `Int32`   | 4 bytes, little-endian `i32`         |
+/// | 2   | `Int64`   | 8 bytes, little-endian `i64`         |
+/// | 3   | `Uint32`  | 4 bytes, little-endian `u32`         |
+/// | 4   | `Uint64`  | 8 bytes, little-endian `u64`         |
+/// | 5   | `Float64` | 8 bytes, little-endian `f64`         |
+/// | 6   | `Bool`    | 1 byte (`0` = false, `1` = true)     |
+/// | 7   | `String`  | 4-byte LE length + UTF-8 bytes       |
+///
+/// Strings are silently truncated to [`crate::STRING_MAX_SIZE`] bytes.
+impl Encode for Value {
+    fn encode<W: Write>(&self, writer: &mut W) -> Result<(), CodecError> {
+        match self {
+            Value::Null => writer.write_u8(0)?,
+            Value::Int32(v) => {
+                writer.write_u8(1)?;
+                writer.write_i32::<LittleEndian>(*v)?;
+            }
+            Value::Int64(v) => {
+                writer.write_u8(2)?;
+                writer.write_i64::<LittleEndian>(*v)?;
+            }
+            Value::Uint32(v) => {
+                writer.write_u8(3)?;
+                writer.write_u32::<LittleEndian>(*v)?;
+            }
+            Value::Uint64(v) => {
+                writer.write_u8(4)?;
+                writer.write_u64::<LittleEndian>(*v)?;
+            }
+            Value::Float64(v) => {
+                writer.write_u8(5)?;
+                writer.write_f64::<LittleEndian>(*v)?;
+            }
+            Value::Bool(v) => {
+                writer.write_u8(6)?;
+                writer.write_u8(u8::from(*v))?;
+            }
+            Value::String(s) => {
+                let bytes = s.as_bytes();
+                let len = bytes.len().min(STRING_MAX_SIZE);
+                writer.write_u8(7)?;
+                let len_u32 = u32::try_from(len).map_err(|_| CodecError::NumericDoesNotFit {
+                    value: len as u64,
+                    target: "u32",
+                })?;
+                writer.write_u32::<LittleEndian>(len_u32)?;
+                writer.write_all(&bytes[..len])?;
+            }
+        }
+        Ok(())
+    }
+}
+
+/// Decodes a [`Value`] written by [`Encode for Value`].
+///
+/// Reads the 1-byte discriminant and then the corresponding payload.
+/// Returns [`CodecError::UnknownDiscriminant`] for any unrecognized byte.
+impl Decode for Value {
+    fn decode<R: Read>(reader: &mut R) -> Result<Self, CodecError> {
+        match reader.read_u8()? {
+            0 => Ok(Value::Null),
+            1 => Ok(Value::Int32(reader.read_i32::<LittleEndian>()?)),
+            2 => Ok(Value::Int64(reader.read_i64::<LittleEndian>()?)),
+            3 => Ok(Value::Uint32(reader.read_u32::<LittleEndian>()?)),
+            4 => Ok(Value::Uint64(reader.read_u64::<LittleEndian>()?)),
+            5 => Ok(Value::Float64(reader.read_f64::<LittleEndian>()?)),
+            6 => Ok(Value::Bool(reader.read_u8()? != 0)),
+            7 => {
+                let len = reader.read_u32::<LittleEndian>()? as usize;
+                let mut buf = vec![0u8; len];
+                reader.read_exact(&mut buf)?;
+                Ok(Value::String(std::str::from_utf8(&buf)?.to_string()))
+            }
+            other => Err(CodecError::UnknownDiscriminant(other)),
         }
     }
 }
