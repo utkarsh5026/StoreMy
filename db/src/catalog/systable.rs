@@ -227,6 +227,31 @@ impl ColumnRow {
             nullable,
         })
     }
+
+    /// Builds one [`ColumnRow`] per field in `schema` for catalog `CATALOG_COLUMNS`.
+    pub(super) fn from_schema(
+        table_id: FileId,
+        schema: &TupleSchema,
+    ) -> Result<Vec<ColumnRow>, CatalogError> {
+        schema
+            .fields()
+            .enumerate()
+            .map(|(i, field)| {
+                let position = i32::try_from(i).map_err(|_| {
+                    CatalogError::invalid_catalog_row(format!(
+                        "column position {i} does not fit in i32"
+                    ))
+                })?;
+                Self::new(
+                    table_id.0.cast_signed(),
+                    field.name.clone(),
+                    field.field_type,
+                    position,
+                    field.nullable,
+                )
+            })
+            .collect()
+    }
 }
 
 impl TryFrom<&Tuple> for ColumnRow {
