@@ -10,7 +10,8 @@
 //! 1. Define fields and collect them into a [`TupleSchema`].
 //! 2. Build a [`Tuple`] from a `Vec<Value>` and call [`TupleSchema::validate`]
 //!    to check nullability and type constraints before storing.
-//! 3. Use [`Tuple::serialize`] / [`Tuple::deserialize`] for on-disk I/O.
+//! 3. Use [`Tuple::serialize`] / [`Tuple::deserialize`], or [`Encode`] on
+//!    `(&TupleSchema, &Tuple)` and pass the same bytes to [`Tuple::deserialize`].
 //!
 //! # Module contents
 //!
@@ -21,8 +22,10 @@
 
 use std::collections::HashMap;
 use std::fmt;
+use std::io::{Cursor, Read, Write};
 
-use crate::types::{SerializationError, Type, Value};
+use crate::codec::{CodecError, Decode, Encode};
+use crate::types::{Type, Value};
 
 use thiserror::Error;
 
@@ -195,11 +198,12 @@ impl TupleSchema {
         self.fields.iter().map(|f| f.field_type.size()).sum()
     }
 
-    /// Returns the exact number of bytes [`Tuple::serialize`] writes for this schema.
+    /// Returns the exact number of bytes [`Tuple::serialize`] writes for this schema
+    /// in the worst case (all fields non-null).
     ///
-    /// This is [`tuple_size`](Self::tuple_size) plus a null bitmap: one bit per
-    /// field, rounded up to the nearest byte. Use this — not `tuple_size` — whenever
-    /// sizing a buffer for on-disk storage.
+    /// Layout: null bitmap (`ceil(n/8)` bytes) + one 1-byte discriminant per field
+    /// + the raw payload bytes for every field type. Use this — not `tuple_size` —
+    ///   when ever sizing a buffer for on-disk storage.
     ///
     /// # Examples
     ///
@@ -208,14 +212,14 @@ impl TupleSchema {
     /// use db::types::Type;
     ///
     /// let schema = TupleSchema::new(vec![
-    ///     Field::new("id", Type::Int32),   // 4 bytes
-    ///     Field::new("ok", Type::Bool),    // 1 byte
+    ///     Field::new("id", Type::Int32),   // 1 disc + 4 bytes
+    ///     Field::new("ok", Type::Bool),    // 1 disc + 1 byte
     /// ]);
-    /// // 2 fields → 1-byte bitmap; 4 + 1 field bytes = 6 total
-    /// assert_eq!(schema.serialized_size(), 6);
+    /// // 2 fields → 1-byte bitmap + 2 discriminants + 5 payload = 8 total
+    /// assert_eq!(schema.serialized_size(), 8);
     /// ```
     pub fn serialized_size(&self) -> usize {
-        self.num_fields().div_ceil(8) + self.tuple_size()
+        self.num_fields().div_ceil(8) + self.num_fields() + self.tuple_size()
     }
 
     /// Creates a new schema by appending all fields from `other` after the
@@ -306,6 +310,27 @@ impl fmt::Display for TupleSchema {
     }
 }
 
+/// Encodes the tuple using `schema` for layout: null bitmap, then each
+/// non-null value encoded via [`Encode for Value`] (discriminant + payload).
+/// The schema itself is **not** written — only the row bytes.
+impl Encode for (&TupleSchema, &Tuple) {
+    fn encode<W: Write>(&self, writer: &mut W) -> Result<(), CodecError> {
+        let (schema, tuple) = *self;
+        let bitmap_size = schema.num_fields().div_ceil(8);
+        let mut bitmap = vec![0u8; bitmap_size];
+        for (i, value) in tuple.values.iter().enumerate() {
+            if value.is_null() {
+                bitmap[i / 8] |= 1 << (i % 8);
+            }
+        }
+        writer.write_all(&bitmap)?;
+        for value in tuple.values.iter().filter(|v| !v.is_null()) {
+            value.encode(writer)?;
+        }
+        Ok(())
+    }
+}
+
 /// A single row of [`Value`]s.
 ///
 /// Values are stored in the same order as the fields in the corresponding
@@ -371,76 +396,49 @@ impl Tuple {
     /// The on-disk format is:
     /// 1. A null bitmap — one bit per field, packed into `ceil(n / 8)` bytes.
     ///    Bit `i` is set when field `i` is `NULL`.
-    /// 2. The serialized bytes of each non-null value, in field order.
+    /// 2. Each non-null value encoded via [`Encode for Value`]: a 1-byte
+    ///    discriminant followed by the little-endian payload.
     ///
     /// Returns the total number of bytes written into `buf`.
     ///
     /// # Errors
     ///
-    /// Returns [`SerializationError::BufferTooSmall`] if `buf` is shorter than
-    /// the null bitmap alone. Individual value serialization errors are
-    /// propagated as-is.
-    pub fn serialize(
-        &self,
-        schema: &TupleSchema,
-        buf: &mut [u8],
-    ) -> Result<usize, SerializationError> {
-        let bitmap_size = schema.num_fields().div_ceil(8);
-        if buf.len() < bitmap_size {
-            return Err(SerializationError::BufferTooSmall {
-                needed: bitmap_size,
-                available: buf.len(),
-            });
-        }
-
-        buf[..bitmap_size].fill(0);
-        for (i, value) in self.values.iter().enumerate() {
-            if value.is_null() {
-                buf[i / 8] |= 1 << (i % 8);
-            }
-        }
-
-        let mut offset = bitmap_size;
-        for value in self.values.iter().filter(|v| !v.is_null()) {
-            let written = value.serialize(&mut buf[offset..])?;
-            offset += written;
-        }
-
-        Ok(offset)
+    /// Returns [`CodecError::Io`] if `buf` is too small to hold the output.
+    pub fn serialize(&self, schema: &TupleSchema, buf: &mut [u8]) -> Result<usize, CodecError> {
+        let mut cursor = Cursor::new(buf);
+        (schema, self).encode(&mut cursor)?;
+        let pos = cursor.position();
+        let written = usize::try_from(pos).map_err(|_| CodecError::NumericDoesNotFit {
+            value: pos,
+            target: "usize",
+        })?;
+        Ok(written)
     }
 
     /// Deserializes a tuple from `buf` using the layout described by `schema`.
     ///
-    /// Reads the null bitmap first, then reconstructs each value in field
-    /// order — inserting [`Value::Null`] for any field whose bitmap bit is set.
+    /// Reads the null bitmap first, then decodes each non-null value via
+    /// [`Decode for Value`] (reads discriminant + payload). The schema is only
+    /// needed for the field count; the type comes from the encoded discriminant.
     ///
     /// # Errors
     ///
-    /// Returns [`SerializationError::BufferTooSmall`] if `buf` is shorter than
-    /// the null bitmap. Individual value deserialization errors are propagated
-    /// as-is.
-    pub fn deserialize(schema: &TupleSchema, buf: &[u8]) -> Result<Self, SerializationError> {
-        let mut values = Vec::with_capacity(schema.num_fields());
+    /// Returns [`CodecError::Io`] if `buf` is too short, or
+    /// [`CodecError::UnknownDiscriminant`] / [`CodecError::InvalidUtf8`] on
+    /// corrupt data.
+    pub fn deserialize(schema: &TupleSchema, buf: &[u8]) -> Result<Self, CodecError> {
+        let mut reader = Cursor::new(buf);
         let bitmap_size = schema.num_fields().div_ceil(8);
+        let mut bitmap = vec![0u8; bitmap_size];
+        reader.read_exact(&mut bitmap)?;
 
-        if buf.len() < bitmap_size {
-            return Err(SerializationError::BufferTooSmall {
-                needed: bitmap_size,
-                available: buf.len(),
-            });
-        }
-
-        let mut offset = bitmap_size;
-
-        for (i, field) in schema.fields().enumerate() {
-            let is_null = (buf[i / 8] & (1 << (i % 8))) != 0;
-
+        let mut values = Vec::with_capacity(schema.num_fields());
+        for i in 0..schema.num_fields() {
+            let is_null = (bitmap[i / 8] & (1 << (i % 8))) != 0;
             if is_null {
                 values.push(Value::Null);
             } else {
-                let value = Value::deserialize(&buf[offset..], field.field_type)?;
-                offset += value.serialized_size();
-                values.push(value);
+                values.push(Value::decode(&mut reader)?);
             }
         }
 
@@ -492,6 +490,7 @@ impl<'a> IntoIterator for &'a Tuple {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::codec::{CodecError, Encode};
     use crate::types::{Type, Value};
 
     fn schema_id_name_age() -> TupleSchema {
@@ -583,19 +582,19 @@ mod tests {
 
     #[test]
     fn schema_serialized_size() {
-        // 3 fields → 1-byte bitmap; payload = 267 → total 268
+        // 3 fields → 1-byte bitmap + 3 discriminants + 267 payload = 271
         let schema = schema_id_name_age();
-        assert_eq!(schema.serialized_size(), 1 + schema.tuple_size());
+        assert_eq!(schema.serialized_size(), 1 + 3 + schema.tuple_size());
     }
 
     #[test]
     fn schema_serialized_size_bitmap_grows_at_9_fields() {
-        // 9 fields → 2-byte bitmap
+        // 9 fields → 2-byte bitmap + 9 discriminants + 9 Bool bytes = 20
         let fields: Vec<Field> = (0..9)
             .map(|i| Field::new(format!("c{i}"), Type::Bool))
             .collect();
         let schema = TupleSchema::new(fields);
-        assert_eq!(schema.serialized_size(), 2 + 9); // 2-byte bitmap + 9 Bool bytes
+        assert_eq!(schema.serialized_size(), 2 + 9 + 9);
     }
 
     #[test]
@@ -771,6 +770,24 @@ mod tests {
     }
 
     #[test]
+    fn encode_matches_serialize_then_deserialize() {
+        let schema = schema_id_name_age();
+        let tuple = tuple_42_alice_30();
+
+        // Both paths must produce identical bytes.
+        let mut enc = Vec::new();
+        (&schema, &tuple).encode(&mut enc).unwrap();
+
+        let mut buf = vec![0u8; schema.serialized_size()];
+        let n = tuple.serialize(&schema, &mut buf).unwrap();
+        assert_eq!(enc, &buf[..n]);
+
+        // Round-trip via both entry points must recover the original tuple.
+        assert_eq!(Tuple::deserialize(&schema, &enc).unwrap(), tuple);
+        assert_eq!(Tuple::deserialize(&schema, &buf[..n]).unwrap(), tuple);
+    }
+
+    #[test]
     fn serialize_deserialize_all_fixed_types() {
         let schema = TupleSchema::new(vec![
             Field::new("i32", Type::Int32),
@@ -822,7 +839,7 @@ mod tests {
 
     #[test]
     fn serialize_returns_bytes_written() {
-        // Int32(7) + Bool(true) → 1-byte bitmap + 4 + 1 = 6 bytes
+        // Int32(7) + Bool(true) → 1-byte bitmap + (1 disc + 4) + (1 disc + 1) = 8 bytes
         let schema = TupleSchema::new(vec![
             Field::new("n", Type::Int32),
             Field::new("b", Type::Bool),
@@ -830,7 +847,7 @@ mod tests {
         let tuple = Tuple::new(vec![Value::Int32(7), Value::Bool(true)]);
         let mut buf = vec![0u8; schema.serialized_size()];
         let written = tuple.serialize(&schema, &mut buf).unwrap();
-        assert_eq!(written, 6);
+        assert_eq!(written, 8);
     }
 
     #[test]
@@ -839,14 +856,14 @@ mod tests {
         let tuple = Tuple::new(vec![Value::Int32(1)]);
         let mut buf: Vec<u8> = vec![]; // no room even for the 1-byte bitmap
         let err = tuple.serialize(&schema, &mut buf).unwrap_err();
-        assert!(matches!(err, SerializationError::BufferTooSmall { .. }));
+        assert!(matches!(err, CodecError::Io(_)));
     }
 
     #[test]
     fn deserialize_buffer_too_small_returns_error() {
         let schema = TupleSchema::new(vec![Field::new("a", Type::Int32)]);
         let err = Tuple::deserialize(&schema, &[]).unwrap_err();
-        assert!(matches!(err, SerializationError::BufferTooSmall { .. }));
+        assert!(matches!(err, CodecError::Io(_)));
     }
 
     #[test]
