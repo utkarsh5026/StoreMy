@@ -1,3 +1,16 @@
+//! Heap page layout and management for fixed-schema tuple storage.
+//!
+//! A [`HeapPage`] wraps a raw `PAGE_SIZE`-byte buffer and interprets it as a
+//! slotted page: a compact header of [`SlotPointer`] entries at the front,
+//! followed by tuple data growing upward from the end of the header.
+//!
+//! Each slot pointer records where a tuple lives inside the page (byte offset
+//! and byte length). A slot whose `length` is zero is considered empty and can
+//! be reused by the next insert.
+//!
+//! The page holds a before-image copy of its raw bytes at construction time
+//! so that callers can produce WAL undo records when needed.
+
 use std::vec;
 
 use byteorder::{ByteOrder, LittleEndian};
@@ -8,6 +21,9 @@ use crate::{
     tuple::{Tuple, TupleSchema},
 };
 
+/// Number of bytes occupied by one slot pointer in the page header.
+///
+/// Each slot pointer is two `u16` fields: offset and length.
 const SLOT_POINTER_SIZE: usize = 4;
 
 const _: () = assert!(PAGE_SIZE <= u16::MAX as usize, "PAGE_SIZE must fit in u16");
@@ -16,23 +32,65 @@ const _: () = assert!(
     "MAX_TUPLE_SIZE must fit in u16"
 );
 
+/// Location and size of one tuple inside a [`HeapPage`].
+///
+/// `offset` is the byte position of the tuple's first byte within the page
+/// buffer. `length` is the number of bytes the serialized tuple occupies.
+/// A slot pointer whose `length` is `0` marks an empty (deleted or never-used)
+/// slot.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
 struct SlotPointer {
+    /// Byte offset of the tuple data from the start of the page buffer.
     offset: u16,
+    /// Byte length of the serialized tuple. Zero means the slot is empty.
     length: u16,
 }
 
+/// A fixed-size page that stores tuples according to a given schema.
+///
+/// `HeapPage` manages a `PAGE_SIZE`-byte region of storage as a slotted page.
+/// The front of the buffer holds a dense array of [`SlotPointer`] entries (one
+/// per logical slot). Tuple data is written immediately after the header and
+/// grows toward the end of the buffer.
+///
+/// The page is parameterized by a schema lifetime `'a`; the [`TupleSchema`]
+/// must outlive the page.
 pub struct HeapPage<'a> {
+    /// Identifier of this page within its heap file.
     page_id: PageId,
+    /// Schema that describes the shape of every tuple on this page.
     schema: &'a TupleSchema,
+    /// In-memory decoded tuples, indexed by slot number. `None` means the
+    /// slot is empty.
     tuples: Vec<Option<Tuple>>,
+    /// Parallel array of slot pointers that mirrors `tuples`.
     slot_pointers: Vec<SlotPointer>,
+    /// Byte offset of the next free byte available for tuple data.
     free_space_offset: usize,
+    /// Snapshot of the raw page bytes taken when the page was first loaded,
+    /// used as the WAL before-image.
     old_data: [u8; PAGE_SIZE],
+    /// Total number of slots (both occupied and empty) on this page.
     num_slots: u16,
 }
 
 impl<'a> HeapPage<'a> {
+    /// Loads a heap page from a raw byte slice, decoding all slot pointers and
+    /// stored tuples.
+    ///
+    /// `data` must be exactly `PAGE_SIZE` bytes. The first
+    /// `num_slots × SLOT_POINTER_SIZE` bytes are interpreted as slot pointers;
+    /// the tuple bytes they reference are deserialized according to `schema`.
+    ///
+    /// A freshly zeroed buffer (e.g. `[0u8; PAGE_SIZE]`) produces an empty
+    /// page ready for inserts.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`StorageError::InvalidPageSize`] if `data.len() != PAGE_SIZE`.
+    ///
+    /// Returns [`StorageError::ParseError`] if any slot pointer or tuple data
+    /// is malformed or out of bounds.
     pub fn new(
         page_id: PageId,
         data: &[u8],
@@ -60,6 +118,11 @@ impl<'a> HeapPage<'a> {
         Ok(hp)
     }
 
+    /// Checks that `slot_id` refers to an existing slot on this page.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`StorageError::SlotOutOfBounds`] when `slot_id >= num_slots`.
     fn check_slot_bounds(&self, slot_id: SlotId) -> Result<(), StorageError> {
         if u16::from(slot_id) >= self.num_slots {
             return Err(StorageError::slot_out_of_bounds(slot_id, self.num_slots));
@@ -67,10 +130,21 @@ impl<'a> HeapPage<'a> {
         Ok(())
     }
 
-    pub(crate) fn tuples(&self) -> impl Iterator<Item = &Tuple> {
-        self.tuples.iter().filter_map(|t| t.as_ref())
+    /// Returns an iterator over every occupied slot, yielding `(SlotId, &Tuple)` pairs.
+    ///
+    /// Empty (deleted) slots are skipped. The order of iteration follows slot
+    /// number from lowest to highest.
+    pub(crate) fn live_tuples(&self) -> impl Iterator<Item = (SlotId, &Tuple)> {
+        self.tuples.iter().enumerate().filter_map(|(i, slot)| {
+            let slot_id = u16::try_from(i).ok()?;
+            slot.as_ref().map(|tuple| (SlotId(slot_id), tuple))
+        })
     }
 
+    /// Returns the number of slots that currently hold no tuple.
+    ///
+    /// This is the number of slots available for future inserts without
+    /// growing the page.
     pub fn empty_slots(&self) -> usize {
         self.slot_pointers
             .iter()
@@ -78,6 +152,19 @@ impl<'a> HeapPage<'a> {
             .count()
     }
 
+    /// Writes `tuple` into the first available empty slot and returns its [`SlotId`].
+    ///
+    /// The tuple is validated against the page schema before insertion. The
+    /// slot pointer is updated in memory; call [`Page::page_data`] to obtain
+    /// the updated raw bytes for flushing to disk.
+    ///
+    /// # Errors
+    ///
+    /// - [`StorageError::SchemaMismatch`] — tuple does not match this page's schema.
+    /// - [`StorageError::PageFull`] — no empty slots remain, or the remaining
+    ///   free bytes in the page buffer are insufficient.
+    /// - [`StorageError::TupleTooLarge`] — the serialized tuple exceeds
+    ///   `MAX_TUPLE_SIZE`.
     pub(crate) fn insert_tuple(&mut self, tuple: Tuple) -> Result<SlotId, StorageError> {
         self.schema
             .validate(&tuple)
@@ -120,6 +207,16 @@ impl<'a> HeapPage<'a> {
             })
     }
 
+    /// Marks the tuple at `slot_id` as deleted by zeroing its slot pointer.
+    ///
+    /// The slot becomes available for future inserts. The tuple bytes in the
+    /// page buffer are not zeroed out, but they will be overwritten on the next
+    /// insert that claims the slot.
+    ///
+    /// # Errors
+    ///
+    /// - [`StorageError::SlotOutOfBounds`] — `slot_id` is beyond the last slot.
+    /// - [`StorageError::SlotAlreadyEmpty`] — the slot is already empty.
     pub(crate) fn delete_tuple(&mut self, slot_id: SlotId) -> Result<(), StorageError> {
         self.check_slot_bounds(slot_id)?;
 
@@ -132,11 +229,26 @@ impl<'a> HeapPage<'a> {
         Ok(())
     }
 
+    /// Returns `true` if the slot at `slot_id` holds no tuple.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`StorageError::SlotOutOfBounds`] if `slot_id` is out of range.
     fn is_slot_empty(&self, slot_id: SlotId) -> Result<bool, StorageError> {
         self.check_slot_bounds(slot_id)?;
         Ok(self.slot_pointers[usize::from(slot_id)].length == 0)
     }
 
+    /// Reads all slot pointers and tuple data from the raw `data` buffer into
+    /// `self`.
+    ///
+    /// Called once from [`HeapPage::new`] after the struct is initialized.
+    /// Updates `free_space_offset` to account for any existing tuple data.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`StorageError::ParseError`] if a slot pointer or its
+    /// referenced tuple data falls outside `data`.
     fn parse_data(&mut self, data: &[u8]) -> Result<(), StorageError> {
         for i in 0..usize::from(self.num_slots) {
             let data_offset = i * SLOT_POINTER_SIZE;
@@ -178,6 +290,16 @@ impl<'a> HeapPage<'a> {
 }
 
 impl Page for HeapPage<'_> {
+    /// Serializes the current page state into a fresh `PAGE_SIZE`-byte array.
+    ///
+    /// The slot pointer header is written first (little-endian `u16` pairs),
+    /// followed by each live tuple serialized at the byte range its slot
+    /// pointer describes.
+    ///
+    /// # Panics
+    ///
+    /// Panics if serializing any tuple fails — this should not happen for
+    /// tuples that were already validated on insert.
     fn page_data(&self) -> [u8; PAGE_SIZE] {
         let mut bytes = [0u8; PAGE_SIZE];
         for (i, sp) in self.slot_pointers.iter().enumerate() {
@@ -198,6 +320,9 @@ impl Page for HeapPage<'_> {
         bytes
     }
 
+    /// Returns the raw bytes the page had when it was first constructed.
+    ///
+    /// Used as the WAL before-image for undo logging.
     fn before_image(&self) -> Option<[u8; PAGE_SIZE]> {
         self.old_data.into()
     }
@@ -239,7 +364,7 @@ mod tests {
     fn new_empty_page_has_no_tuples() {
         let s = schema();
         let page = empty_page(&s);
-        assert_eq!(page.tuples().count(), 0);
+        assert_eq!(page.live_tuples().count(), 0);
     }
 
     #[test]
@@ -262,7 +387,7 @@ mod tests {
         let s = schema();
         let mut page = empty_page(&s);
         page.insert_tuple(make_tuple(42, false)).unwrap();
-        assert_eq!(page.tuples().count(), 1);
+        assert_eq!(page.live_tuples().count(), 1);
     }
 
     #[test]
@@ -272,7 +397,7 @@ mod tests {
         for i in 0..5 {
             page.insert_tuple(make_tuple(i, i % 2 == 0)).unwrap();
         }
-        assert_eq!(page.tuples().count(), 5);
+        assert_eq!(page.live_tuples().count(), 5);
     }
 
     #[test]
@@ -286,15 +411,13 @@ mod tests {
         ));
     }
 
-    // ── delete ───────────────────────────────────────────────────────────────
-
     #[test]
     fn delete_removes_tuple() {
         let s = schema();
         let mut page = empty_page(&s);
         let slot = page.insert_tuple(make_tuple(7, true)).unwrap();
         page.delete_tuple(slot).unwrap();
-        assert_eq!(page.tuples().count(), 0);
+        assert_eq!(page.live_tuples().count(), 0);
     }
 
     #[test]
@@ -320,8 +443,6 @@ mod tests {
         ));
     }
 
-    // ── round-trip ───────────────────────────────────────────────────────────
-
     #[test]
     fn page_data_roundtrip() {
         let s = schema();
@@ -334,7 +455,7 @@ mod tests {
         let bytes = page.page_data();
         let restored = HeapPage::new(page_id(), &bytes, &s).unwrap();
 
-        let tuples: Vec<&Tuple> = restored.tuples().collect();
+        let tuples: Vec<&Tuple> = restored.live_tuples().map(|(_, t)| t).collect();
         assert_eq!(tuples.len(), 2);
         assert!(tuples.contains(&&t1));
         assert!(tuples.contains(&&t2));

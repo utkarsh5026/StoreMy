@@ -265,6 +265,33 @@ impl HeapFile {
     pub fn scan(&self, transaction_id: TransactionId) -> Result<HeapScan<'_>, HeapError> {
         Ok(HeapScan::new(self, transaction_id))
     }
+
+    /// Deletes all tuples matching `predicate` and returns the number deleted.
+    /// Deletes all tuples in the heap file that match the provided predicate.
+    ///
+    /// Iterates over all live tuples in the file, applies the `predicate` function to each,
+    /// and deletes every tuple for which the predicate returns `true`.
+    pub fn delete_if<F>(
+        &self,
+        transaction_id: TransactionId,
+        predicate: F,
+    ) -> Result<u32, HeapError>
+    where
+        F: Fn(&Tuple) -> bool,
+    {
+        let to_delete: Vec<RecordId> = self
+            .scan(transaction_id)?
+            .filter(|(_, tuple)| predicate(tuple))
+            .map(|(record_id, _)| record_id)
+            .collect();
+
+        let mut count: u32 = 0;
+        for record_id in to_delete {
+            self.delete_tuple(transaction_id, record_id)?;
+            count += 1;
+        }
+        Ok(count)
+    }
 }
 
 /// Iterator over all live tuples in a `HeapFile`.
@@ -275,7 +302,7 @@ pub struct HeapScan<'a> {
     file: &'a HeapFile,
     txn: TransactionId,
     current_page: u32,
-    page_tuples: Vec<Tuple>,
+    page_tuples: Vec<(RecordId, Tuple)>,
     tuple_idx: usize,
 }
 
@@ -304,14 +331,24 @@ impl<'a> HeapScan<'a> {
             .buffer_pool
             .fetch_page(LockRequest::shared(self.txn, page_id))?;
         let page = HeapPage::new(page_id, &guard.read(), &self.file.schema)?;
-        self.page_tuples = page.tuples().cloned().collect();
+        self.page_tuples = page
+            .live_tuples()
+            .map(|(slot_id, tuple)| {
+                let record_id = RecordId {
+                    file_id: self.file.file_id,
+                    page_no: self.current_page.into(),
+                    slot_id,
+                };
+                (record_id, tuple.clone())
+            })
+            .collect();
         self.tuple_idx = 0;
         Ok(())
     }
 }
 
 impl Iterator for HeapScan<'_> {
-    type Item = Tuple;
+    type Item = (RecordId, Tuple);
 
     /// Advances to the next live tuple, loading new pages as needed.
     ///
@@ -320,9 +357,9 @@ impl Iterator for HeapScan<'_> {
     fn next(&mut self) -> Option<Self::Item> {
         loop {
             if self.tuple_idx < self.page_tuples.len() {
-                let t = self.page_tuples[self.tuple_idx].clone();
+                let item = self.page_tuples[self.tuple_idx].clone();
                 self.tuple_idx += 1;
-                return Some(t);
+                return Some(item);
             }
 
             if self.current_page >= self.file.num_pages() {
@@ -477,7 +514,7 @@ mod tests {
         let t = make_tuple(99, true);
         heap.insert_tuple(txn, &t).unwrap();
 
-        let tuples: Vec<Tuple> = heap.scan(txn).unwrap().collect();
+        let tuples: Vec<Tuple> = heap.scan(txn).unwrap().map(|(_, t)| t).collect();
         assert_eq!(tuples.len(), 1);
         assert_eq!(tuples[0], t);
     }
@@ -493,7 +530,7 @@ mod tests {
             heap.insert_tuple(txn, &make_tuple(i, i % 2 == 0)).unwrap();
         }
 
-        let tuples: Vec<Tuple> = heap.scan(txn).unwrap().collect();
+        let tuples: Vec<Tuple> = heap.scan(txn).unwrap().map(|(_, t)| t).collect();
         assert_eq!(tuples.len(), count);
     }
 
@@ -504,7 +541,7 @@ mod tests {
         let rid = heap.insert_tuple(txn, &make_tuple(1, true)).unwrap();
         heap.delete_tuple(txn, rid).unwrap();
 
-        let tuples: Vec<Tuple> = heap.scan(txn).unwrap().collect();
+        let tuples: Vec<Tuple> = heap.scan(txn).unwrap().map(|(_, t)| t).collect();
         assert_eq!(tuples.len(), 0, "deleted tuple must not be visible");
     }
 
@@ -517,7 +554,7 @@ mod tests {
         let new_tuple = make_tuple(1, true);
         heap.update_tuple(txn, rid, &new_tuple).unwrap();
 
-        let tuples: Vec<Tuple> = heap.scan(txn).unwrap().collect();
+        let tuples: Vec<Tuple> = heap.scan(txn).unwrap().map(|(_, t)| t).collect();
         // exactly one live tuple
         assert_eq!(tuples.len(), 1);
         assert_eq!(tuples[0], new_tuple);
@@ -534,7 +571,7 @@ mod tests {
 
         heap.delete_tuple(txn, to_delete).unwrap();
 
-        let tuples: Vec<Tuple> = heap.scan(txn).unwrap().collect();
+        let tuples: Vec<Tuple> = heap.scan(txn).unwrap().map(|(_, t)| t).collect();
         assert_eq!(tuples.len(), 2);
     }
 
