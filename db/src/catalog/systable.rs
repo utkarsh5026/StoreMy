@@ -134,10 +134,10 @@ macro_rules! read_as {
 }
 
 pub(super) struct TableRow {
-    table_id: FileId,
-    table_name: String,
-    file_path: PathBuf,
-    primary_key: Option<String>,
+    pub(super) table_id: FileId,
+    pub(super) table_name: String,
+    pub(super) file_path: PathBuf,
+    pub(super) primary_key: Option<String>,
 }
 
 impl TryFrom<&Tuple> for TableRow {
@@ -167,11 +167,11 @@ impl From<&TableRow> for Tuple {
 }
 
 pub(super) struct ColumnRow {
-    table_id: i64,
-    column_name: String,
-    column_type: Type,
-    position: i32,
-    nullable: bool,
+    pub(super) table_id: i64,
+    pub(super) column_name: String,
+    pub(super) column_type: Type,
+    pub(super) position: i32,
+    pub(super) nullable: bool,
 }
 
 impl TryFrom<&Tuple> for ColumnRow {
@@ -216,11 +216,11 @@ impl From<Vec<ColumnRow>> for TupleSchema {
 }
 
 pub(super) struct IndexRow {
-    index_id: i64,
-    index_name: String,
-    table_id: FileId,
-    column_name: String,
-    index_type: Index,
+    pub(super) index_id: i64,
+    pub(super) index_name: String,
+    pub(super) table_id: FileId,
+    pub(super) column_name: String,
+    pub(super) index_type: Index,
 }
 
 impl TryFrom<&Tuple> for IndexRow {
