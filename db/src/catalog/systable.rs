@@ -133,6 +133,15 @@ macro_rules! read_as {
     };
 }
 
+fn non_empty(value: &str, field: &str) -> Result<(), CatalogError> {
+    if value.is_empty() {
+        return Err(CatalogError::invalid_catalog_row(format!(
+            "{field} must not be empty"
+        )));
+    }
+    Ok(())
+}
+
 pub(super) struct TableRow {
     pub(super) table_id: FileId,
     pub(super) table_name: String,
@@ -140,16 +149,38 @@ pub(super) struct TableRow {
     pub(super) primary_key: Option<String>,
 }
 
+impl TableRow {
+    pub(super) fn new(
+        table_id: FileId,
+        table_name: String,
+        file_path: PathBuf,
+        primary_key: Option<String>,
+    ) -> Result<Self, CatalogError> {
+        non_empty(&table_name, "table_name")?;
+        non_empty(&file_path.as_os_str().to_string_lossy(), "file_path")?;
+        if let Some(ref pk) = primary_key {
+            non_empty(pk, "primary_key")?;
+        }
+
+        Ok(Self {
+            table_id,
+            table_name,
+            file_path,
+            primary_key,
+        })
+    }
+}
+
 impl TryFrom<&Tuple> for TableRow {
     type Error = CatalogError;
 
     fn try_from(t: &Tuple) -> Result<Self, Self::Error> {
-        Ok(TableRow {
-            table_id: FileId::from(read_as!(t, 0 => u64 => u64)),
-            table_name: read_as!(t, 1),
-            file_path: PathBuf::from(read_as!(t, 2 => String => String)),
-            primary_key: read_as!(t, 3 => String => Option<String>),
-        })
+        Self::new(
+            FileId::from(read_as!(t, 0 => u64 => u64)),
+            read_as!(t, 1),
+            PathBuf::from(read_as!(t, 2 => String => String)),
+            read_as!(t, 3 => String => Option<String>),
+        )
     }
 }
 
@@ -174,18 +205,42 @@ pub(super) struct ColumnRow {
     pub(super) nullable: bool,
 }
 
+impl ColumnRow {
+    pub(super) fn new(
+        table_id: i64,
+        column_name: String,
+        column_type: Type,
+        position: i32,
+        nullable: bool,
+    ) -> Result<Self, CatalogError> {
+        non_empty(&column_name, "column_name")?;
+        if position < 0 {
+            return Err(CatalogError::invalid_catalog_row(format!(
+                "position must be non-negative, got {position}"
+            )));
+        }
+        Ok(Self {
+            table_id,
+            column_name,
+            column_type,
+            position,
+            nullable,
+        })
+    }
+}
+
 impl TryFrom<&Tuple> for ColumnRow {
     type Error = CatalogError;
 
     fn try_from(t: &Tuple) -> Result<Self, Self::Error> {
-        Ok(ColumnRow {
-            table_id: read_as!(t, 0),
-            column_name: read_as!(t, 1),
-            column_type: Type::try_from(read_as!(t, 2 => u32 => u32))
+        Self::new(
+            read_as!(t, 0),
+            read_as!(t, 1),
+            Type::try_from(read_as!(t, 2 => u32 => u32))
                 .map_err(|e| CatalogError::invalid_catalog_row(e.to_string()))?,
-            position: read_as!(t, 3),
-            nullable: read_as!(t, 4),
-        })
+            read_as!(t, 3),
+            read_as!(t, 4),
+        )
     }
 }
 
@@ -223,18 +278,38 @@ pub(super) struct IndexRow {
     pub(super) index_type: Index,
 }
 
+impl IndexRow {
+    pub(super) fn new(
+        index_id: i64,
+        index_name: String,
+        table_id: FileId,
+        column_name: String,
+        index_type: Index,
+    ) -> Result<Self, CatalogError> {
+        non_empty(&index_name, "index_name")?;
+        non_empty(&column_name, "column_name")?;
+        Ok(Self {
+            index_id,
+            index_name,
+            table_id,
+            column_name,
+            index_type,
+        })
+    }
+}
+
 impl TryFrom<&Tuple> for IndexRow {
     type Error = CatalogError;
 
     fn try_from(t: &Tuple) -> Result<Self, Self::Error> {
-        Ok(IndexRow {
-            index_id: read_as!(t, 0),
-            index_name: read_as!(t, 1),
-            table_id: FileId::from(read_as!(t, 2 => u64 => u64)),
-            column_name: read_as!(t, 3),
-            index_type: Index::try_from(read_as!(t, 4 => u32 => u32))
+        Self::new(
+            read_as!(t, 0),
+            read_as!(t, 1),
+            FileId::from(read_as!(t, 2 => u64 => u64)),
+            read_as!(t, 3),
+            Index::try_from(read_as!(t, 4 => u32 => u32))
                 .map_err(|e| CatalogError::invalid_catalog_row(e.to_string()))?,
-        })
+        )
     }
 }
 
