@@ -400,3 +400,472 @@ impl std::str::FromStr for TokenType {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::str::FromStr;
+
+    fn make_token(kind: TokenType, value: &str) -> Token {
+        Token {
+            kind,
+            value: value.to_string(),
+            position: 0,
+        }
+    }
+
+    // From<(TokenType, String, usize)> maps fields correctly
+    #[test]
+    fn test_token_from_tuple_fields() {
+        let token = Token::from((TokenType::Select, "SELECT".to_string(), 42));
+        assert_eq!(token.kind, TokenType::Select);
+        assert_eq!(token.value, "SELECT");
+        assert_eq!(token.position, 42);
+    }
+
+    // From<&Token> for String clones the value field
+    #[test]
+    fn test_string_from_token_ref() {
+        let token = make_token(TokenType::Identifier, "my_table");
+        let s = String::from(&token);
+        assert_eq!(s, "my_table");
+    }
+
+    // is() returns true when kind matches
+    #[test]
+    fn test_token_is_matching_kind() {
+        let token = make_token(TokenType::Select, "SELECT");
+        assert!(token.is(TokenType::Select));
+    }
+
+    // is() returns false when kind differs
+    #[test]
+    fn test_token_is_wrong_kind() {
+        let token = make_token(TokenType::Select, "SELECT");
+        assert!(!token.is(TokenType::From));
+    }
+
+    // is_not() is the inverse of is()
+    #[test]
+    fn test_token_is_not() {
+        let token = make_token(TokenType::Comma, ",");
+        assert!(token.is_not(TokenType::Semicolon));
+        assert!(!token.is_not(TokenType::Comma));
+    }
+
+    // Display format is KIND("value") at position N
+    #[test]
+    fn test_token_display_format() {
+        let token = Token {
+            kind: TokenType::Identifier,
+            value: "foo".to_string(),
+            position: 7,
+        };
+        assert_eq!(format!("{token}"), r#"IDENTIFIER("foo") at position 7"#);
+    }
+
+    // Every keyword variant stringifies to its SQL spelling
+    #[test]
+    fn test_token_type_display_keywords() {
+        let cases = [
+            (TokenType::Select, "SELECT"),
+            (TokenType::Distinct, "DISTINCT"),
+            (TokenType::From, "FROM"),
+            (TokenType::Where, "WHERE"),
+            (TokenType::Join, "JOIN"),
+            (TokenType::Inner, "INNER"),
+            (TokenType::Left, "LEFT"),
+            (TokenType::Right, "RIGHT"),
+            (TokenType::Outer, "OUTER"),
+            (TokenType::On, "ON"),
+            (TokenType::Group, "GROUP"),
+            (TokenType::Order, "ORDER"),
+            (TokenType::By, "BY"),
+            (TokenType::Limit, "LIMIT"),
+            (TokenType::Offset, "OFFSET"),
+            (TokenType::Asc, "ASC"),
+            (TokenType::Desc, "DESC"),
+            (TokenType::And, "AND"),
+            (TokenType::Or, "OR"),
+            (TokenType::Create, "CREATE"),
+            (TokenType::Table, "TABLE"),
+            (TokenType::Drop, "DROP"),
+            (TokenType::If, "IF"),
+            (TokenType::Not, "NOT"),
+            (TokenType::Exists, "EXISTS"),
+            (TokenType::Primary, "PRIMARY"),
+            (TokenType::Key, "KEY"),
+            (TokenType::Default, "DEFAULT"),
+            (TokenType::Null, "NULL"),
+            (TokenType::AutoIncrement, "AUTO_INCREMENT"),
+            (TokenType::Insert, "INSERT"),
+            (TokenType::Into, "INTO"),
+            (TokenType::Values, "VALUES"),
+            (TokenType::Update, "UPDATE"),
+            (TokenType::Set, "SET"),
+            (TokenType::Delete, "DELETE"),
+            (TokenType::Begin, "BEGIN"),
+            (TokenType::Commit, "COMMIT"),
+            (TokenType::Rollback, "ROLLBACK"),
+            (TokenType::Transaction, "TRANSACTION"),
+            (TokenType::Explain, "EXPLAIN"),
+            (TokenType::Analyze, "ANALYZE"),
+            (TokenType::Format, "FORMAT"),
+            (TokenType::Show, "SHOW"),
+            (TokenType::Indexes, "INDEXES"),
+            (TokenType::Index, "INDEX"),
+            (TokenType::Using, "USING"),
+            (TokenType::Hash, "HASH"),
+            (TokenType::Btree, "BTREE"),
+            (TokenType::Union, "UNION"),
+            (TokenType::Intersect, "INTERSECT"),
+            (TokenType::Except, "EXCEPT"),
+            (TokenType::All, "ALL"),
+        ];
+        for (kind, expected) in cases {
+            assert_eq!(kind.to_string(), expected, "failed for {kind:?}");
+        }
+    }
+
+    // Type and literal sentinel variants
+    #[test]
+    fn test_token_type_display_type_and_sentinel_variants() {
+        assert_eq!(TokenType::Int.to_string(), "INT");
+        assert_eq!(TokenType::Varchar.to_string(), "VARCHAR");
+        assert_eq!(TokenType::Text.to_string(), "TEXT");
+        assert_eq!(TokenType::Boolean.to_string(), "BOOLEAN");
+        assert_eq!(TokenType::Float.to_string(), "FLOAT");
+        assert_eq!(TokenType::Operator.to_string(), "OPERATOR");
+        assert_eq!(TokenType::String.to_string(), "STRING");
+        assert_eq!(TokenType::Identifier.to_string(), "IDENTIFIER");
+        assert_eq!(TokenType::Comma.to_string(), "COMMA");
+        assert_eq!(TokenType::Semicolon.to_string(), "SEMICOLON");
+        assert_eq!(TokenType::Lparen.to_string(), "LPAREN");
+        assert_eq!(TokenType::Rparen.to_string(), "RPAREN");
+        assert_eq!(TokenType::Asterisk.to_string(), "ASTERISK");
+        assert_eq!(TokenType::Invalid.to_string(), "INVALID");
+        assert_eq!(TokenType::Eof.to_string(), "EOF");
+    }
+
+    // Canonical uppercase keyword strings parse correctly
+    #[test]
+    fn test_from_str_canonical_keywords() {
+        let cases = [
+            ("SELECT", TokenType::Select),
+            ("FROM", TokenType::From),
+            ("WHERE", TokenType::Where),
+            ("CREATE", TokenType::Create),
+            ("INSERT", TokenType::Insert),
+            ("UPDATE", TokenType::Update),
+            ("DELETE", TokenType::Delete),
+            ("BEGIN", TokenType::Begin),
+            ("COMMIT", TokenType::Commit),
+            ("ROLLBACK", TokenType::Rollback),
+            ("EXPLAIN", TokenType::Explain),
+            ("SHOW", TokenType::Show),
+            ("INDEXES", TokenType::Indexes),
+        ];
+        for (s, expected) in cases {
+            assert_eq!(TokenType::from_str(s).unwrap(), expected, "failed for {s}");
+        }
+    }
+
+    // Lowercase input is normalized to uppercase before matching
+    #[test]
+    fn test_from_str_case_insensitive() {
+        assert_eq!(TokenType::from_str("select").unwrap(), TokenType::Select);
+        assert_eq!(TokenType::from_str("Select").unwrap(), TokenType::Select);
+        assert_eq!(TokenType::from_str("fRoM").unwrap(), TokenType::From);
+    }
+
+    // Keyword aliases map to the correct canonical variant
+    #[test]
+    fn test_from_str_aliases() {
+        assert_eq!(TokenType::from_str("INTEGER").unwrap(), TokenType::Int);
+        assert_eq!(TokenType::from_str("BOOL").unwrap(), TokenType::Boolean);
+        assert_eq!(TokenType::from_str("REAL").unwrap(), TokenType::Float);
+        assert_eq!(TokenType::from_str("DOUBLE").unwrap(), TokenType::Float);
+        assert_eq!(TokenType::from_str("VARCHAR").unwrap(), TokenType::Varchar);
+        assert_eq!(TokenType::from_str("STRING").unwrap(), TokenType::Varchar);
+    }
+
+    // Unrecognized strings return Err
+    #[test]
+    fn test_from_str_unknown_keyword() {
+        assert!(TokenType::from_str("FOOBAR").is_err());
+        assert!(TokenType::from_str("").is_err());
+        assert!(TokenType::from_str("123").is_err());
+    }
+
+    // Every token type whose Display spelling is also a valid FromStr input
+    // round-trips back to itself.
+    #[test]
+    fn test_display_from_str_round_trip() {
+        let keyword_types = [
+            TokenType::Select,
+            TokenType::Distinct,
+            TokenType::From,
+            TokenType::Where,
+            TokenType::Join,
+            TokenType::Inner,
+            TokenType::Left,
+            TokenType::Right,
+            TokenType::Outer,
+            TokenType::On,
+            TokenType::Group,
+            TokenType::Order,
+            TokenType::By,
+            TokenType::Limit,
+            TokenType::Offset,
+            TokenType::Asc,
+            TokenType::Desc,
+            TokenType::And,
+            TokenType::Or,
+            TokenType::Create,
+            TokenType::Table,
+            TokenType::Drop,
+            TokenType::If,
+            TokenType::Not,
+            TokenType::Exists,
+            TokenType::Primary,
+            TokenType::Key,
+            TokenType::Default,
+            TokenType::Null,
+            TokenType::AutoIncrement,
+            TokenType::Insert,
+            TokenType::Into,
+            TokenType::Values,
+            TokenType::Update,
+            TokenType::Set,
+            TokenType::Delete,
+            TokenType::Begin,
+            TokenType::Commit,
+            TokenType::Rollback,
+            TokenType::Transaction,
+            TokenType::Explain,
+            TokenType::Analyze,
+            TokenType::Format,
+            TokenType::Show,
+            TokenType::Indexes,
+            TokenType::Index,
+            TokenType::Using,
+            TokenType::Hash,
+            TokenType::Btree,
+            TokenType::Union,
+            TokenType::Intersect,
+            TokenType::Except,
+            TokenType::All,
+            TokenType::Int,
+            TokenType::Text,
+            TokenType::Boolean,
+            TokenType::Float,
+        ];
+        for tt in keyword_types {
+            let displayed = tt.to_string();
+            let parsed = TokenType::from_str(&displayed).unwrap_or_else(|_| {
+                panic!("round-trip failed for {tt:?}: Display produced {displayed:?}")
+            });
+            assert_eq!(parsed, tt, "round-trip mismatch for {tt:?}");
+        }
+    }
+
+    // Each SQL type keyword token converts to the correct Type variant
+    #[test]
+    fn test_try_from_token_for_type_happy() {
+        assert_eq!(
+            Type::try_from(make_token(TokenType::Int, "INT")).unwrap(),
+            Type::Int64
+        );
+        assert_eq!(
+            Type::try_from(make_token(TokenType::Varchar, "VARCHAR")).unwrap(),
+            Type::String
+        );
+        assert_eq!(
+            Type::try_from(make_token(TokenType::Text, "TEXT")).unwrap(),
+            Type::String
+        );
+        assert_eq!(
+            Type::try_from(make_token(TokenType::Boolean, "BOOLEAN")).unwrap(),
+            Type::Bool
+        );
+        assert_eq!(
+            Type::try_from(make_token(TokenType::Float, "FLOAT")).unwrap(),
+            Type::Float64
+        );
+    }
+
+    // Non-type tokens produce an error containing the token kind name
+    #[test]
+    fn test_try_from_token_for_type_error_on_keyword() {
+        let result = Type::try_from(make_token(TokenType::Select, "SELECT"));
+        assert!(result.is_err());
+        let msg = result.unwrap_err();
+        assert!(
+            msg.contains("SELECT"),
+            "error message should name the bad kind: {msg}"
+        );
+    }
+
+    #[test]
+    fn test_try_from_token_for_type_error_on_identifier() {
+        let result = Type::try_from(make_token(TokenType::Identifier, "mytype"));
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_try_from_token_for_type_error_on_eof() {
+        let result = Type::try_from(make_token(TokenType::Eof, ""));
+        assert!(result.is_err());
+    }
+
+    // Int token with a valid i64 string produces Value::Int64
+    #[test]
+    fn test_try_from_token_for_value_int_positive() {
+        let result = Value::try_from(make_token(TokenType::Int, "42")).unwrap();
+        assert_eq!(result, Value::Int64(42));
+    }
+
+    #[test]
+    fn test_try_from_token_for_value_int_negative() {
+        let result = Value::try_from(make_token(TokenType::Int, "-7")).unwrap();
+        assert_eq!(result, Value::Int64(-7));
+    }
+
+    #[test]
+    fn test_try_from_token_for_value_int_zero() {
+        let result = Value::try_from(make_token(TokenType::Int, "0")).unwrap();
+        assert_eq!(result, Value::Int64(0));
+    }
+
+    // i64::MAX and i64::MIN are valid
+    #[test]
+    fn test_try_from_token_for_value_int_boundary() {
+        let max = i64::MAX.to_string();
+        let min = i64::MIN.to_string();
+        assert_eq!(
+            Value::try_from(make_token(TokenType::Int, &max)).unwrap(),
+            Value::Int64(i64::MAX)
+        );
+        assert_eq!(
+            Value::try_from(make_token(TokenType::Int, &min)).unwrap(),
+            Value::Int64(i64::MIN)
+        );
+    }
+
+    // String token produces Value::String with the raw value
+    #[test]
+    fn test_try_from_token_for_value_string() {
+        let result = Value::try_from(make_token(TokenType::String, "hello world")).unwrap();
+        assert_eq!(result, Value::String("hello world".to_string()));
+    }
+
+    // Empty string is a valid String token
+    #[test]
+    fn test_try_from_token_for_value_string_empty() {
+        let result = Value::try_from(make_token(TokenType::String, "")).unwrap();
+        assert_eq!(result, Value::String(String::new()));
+    }
+
+    // Null token always produces Value::Null regardless of value text
+    #[test]
+    fn test_try_from_token_for_value_null() {
+        let result = Value::try_from(make_token(TokenType::Null, "NULL")).unwrap();
+        assert_eq!(result, Value::Null);
+    }
+
+    // Identifier "true"/"false" are case-insensitive
+    #[test]
+    fn test_try_from_token_for_value_bool_lowercase() {
+        let t = Value::try_from(make_token(TokenType::Identifier, "true")).unwrap();
+        let f = Value::try_from(make_token(TokenType::Identifier, "false")).unwrap();
+        assert_eq!(t, Value::Bool(true));
+        assert_eq!(f, Value::Bool(false));
+    }
+
+    #[test]
+    fn test_try_from_token_for_value_bool_uppercase() {
+        let t = Value::try_from(make_token(TokenType::Identifier, "TRUE")).unwrap();
+        let f = Value::try_from(make_token(TokenType::Identifier, "FALSE")).unwrap();
+        assert_eq!(t, Value::Bool(true));
+        assert_eq!(f, Value::Bool(false));
+    }
+
+    #[test]
+    fn test_try_from_token_for_value_bool_mixed_case() {
+        let t = Value::try_from(make_token(TokenType::Identifier, "True")).unwrap();
+        let f = Value::try_from(make_token(TokenType::Identifier, "FaLsE")).unwrap();
+        assert_eq!(t, Value::Bool(true));
+        assert_eq!(f, Value::Bool(false));
+    }
+
+    // Int token with non-numeric text produces a parse error
+    #[test]
+    fn test_try_from_token_for_value_int_bad_string() {
+        let result = Value::try_from(make_token(TokenType::Int, "not_a_number"));
+        assert!(result.is_err());
+        let msg = result.unwrap_err();
+        assert!(
+            msg.contains("not_a_number"),
+            "error message should echo the bad value: {msg}"
+        );
+    }
+
+    // Int token with value exceeding i64 range produces an error
+    #[test]
+    fn test_try_from_token_for_value_int_overflow() {
+        let overflow = "99999999999999999999999999999";
+        let result = Value::try_from(make_token(TokenType::Int, overflow));
+        assert!(result.is_err());
+    }
+
+    // Identifier that is neither "true" nor "false" produces an error
+    #[test]
+    fn test_try_from_token_for_value_identifier_non_bool() {
+        let result = Value::try_from(make_token(TokenType::Identifier, "my_column"));
+        assert!(result.is_err());
+        let msg = result.unwrap_err();
+        assert!(
+            msg.contains("my_column"),
+            "error message should name the identifier: {msg}"
+        );
+    }
+
+    // A keyword token (Select, From, …) is not a valid Value
+    #[test]
+    fn test_try_from_token_for_value_keyword_is_error() {
+        let result = Value::try_from(make_token(TokenType::Select, "SELECT"));
+        assert!(result.is_err());
+    }
+
+    // Eof token is not a valid Value
+    #[test]
+    fn test_try_from_token_for_value_eof_is_error() {
+        let result = Value::try_from(make_token(TokenType::Eof, ""));
+        assert!(result.is_err());
+    }
+
+    // Operator token is not a valid Value
+    #[test]
+    fn test_try_from_token_for_value_operator_is_error() {
+        let result = Value::try_from(make_token(TokenType::Operator, "="));
+        assert!(result.is_err());
+    }
+
+    // PartialEq and Copy are derived; verify a copied value compares equal
+    #[test]
+    fn test_token_type_copy_and_eq() {
+        let a = TokenType::Join;
+        let b = a; // Copy
+        assert_eq!(a, b);
+    }
+
+    // Hash is derived; verify two equal values hash the same way via HashMap
+    #[test]
+    fn test_token_type_hash_in_map() {
+        use std::collections::HashMap;
+        let mut map = HashMap::new();
+        map.insert(TokenType::Select, "select");
+        assert_eq!(map[&TokenType::Select], "select");
+        assert!(!map.contains_key(&TokenType::From));
+    }
+}
