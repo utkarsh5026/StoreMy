@@ -1,61 +1,145 @@
+//! Write-Ahead Log (WAL) writer.
+//!
+//! This module provides [`Wal`], the component responsible for durably recording
+//! every database change before it touches any heap page. The WAL is the primary
+//! mechanism for crash recovery: on restart the log can be replayed to bring the
+//! database back to a consistent state.
+//!
+//! # Design overview
+//!
+//! Records are appended sequentially to a single file. Each record is assigned a
+//! monotonically increasing [`Lsn`] (Log Sequence Number) that equals the byte
+//! offset at which the record begins. This means LSNs double as file positions,
+//! making random-access replay straightforward.
+//!
+//! Writes are first accumulated in an in-memory buffer. The buffer is flushed to
+//! disk either explicitly (via [`Wal::force`]) or by the background [`Wal::flush_loop`]
+//! thread. Records larger than the buffer bypass it and are written directly.
+//!
+//! # Thread safety
+//!
+//! All mutable state is guarded by a [`Mutex`]. The flush condvar coordinates
+//! between callers that need durability guarantees (e.g. [`Wal::log_commit`]) and
+//! the background flush thread.
+
 use std::collections::HashMap;
 use std::fs;
 use std::io::Seek;
 use std::os::unix::fs::FileExt;
 use std::path::Path;
-use std::sync::{Condvar, Mutex};
+use parking_lot::{Condvar, Mutex};
 use std::time::SystemTime;
 
 use crate::codec::{CodecError, Encode};
 use crate::primitives::{Lsn, PageId, TransactionId};
+use crate::storage::Page;
 use crate::wal::log::{LogRecord, LogRecordBody};
 
 use thiserror::Error;
 
+/// Errors that can occur during WAL operations.
 #[derive(Debug, Error)]
 pub enum WalError {
+    /// An I/O failure while reading or writing the WAL file.
     #[error("WAL I/O error: {0}")]
     Io(#[from] std::io::Error),
 
+    /// A failure while encoding a log record into bytes.
     #[error("WAL codec error: {0}")]
     Codec(#[from] CodecError),
 
+    /// An operation was attempted on a transaction ID that has no active entry.
+    ///
+    /// This typically means the transaction was never begun, or it was already
+    /// committed or removed.
     #[error("unknown transaction: {0}")]
     UnknownTransaction(TransactionId),
+
+    /// A page-level WAL operation required a before-image but the page
+    /// returned `None` from [`Page::before_image`].
+    #[error("missing before-image for page {0:?}")]
+    MissingBeforeImage(PageId),
 }
 
+/// Per-transaction bookkeeping kept in memory while a transaction is active.
 struct TxnInfo {
+    /// LSN of the first record written for this transaction (the `Begin` record).
     first: Lsn,
+    /// LSN of the most recent record written for this transaction.
     last: Lsn,
+    /// LSN of the next record to process during undo (set when an `Abort` is logged).
     undo_next: Lsn,
 }
 
+/// Mutable WAL state, protected as a unit by a single [`Mutex`].
 struct WalState {
+    /// Active (not yet committed or fully undone) transactions, keyed by ID.
     active_txns: HashMap<TransactionId, TxnInfo>,
+    /// Pages modified by buffered or in-flight records, mapped to the LSN of
+    /// the *first* write to that page. The buffer pool uses this to determine
+    /// the oldest LSN a page must be flushed before a checkpoint.
     dirty_pages: HashMap<PageId, Lsn>,
+    /// In-memory write buffer. Records are staged here before being written to
+    /// the file in batches.
     buffer: Vec<u8>,
+    /// Number of valid bytes currently in `buffer`.
     buf_offset: usize,
+    /// LSN that will be assigned to the *next* record written.
     current_at: Lsn,
+    /// LSN up to which data has been durably written (and synced) to the file.
     flushed_till: Lsn,
 }
 
 impl WalState {
+    /// Returns `true` when the write buffer holds no unflushed data.
     pub(super) const fn is_empty(&self) -> bool {
         self.buf_offset == 0
     }
 
+    /// Returns the total capacity of the write buffer in bytes.
     pub(super) const fn len(&self) -> usize {
         self.buffer.len()
     }
 }
 
+/// Append-only Write-Ahead Log backed by a single file.
+///
+/// `Wal` serializes log records for every database mutation and ensures they
+/// reach durable storage before the corresponding heap pages are considered
+/// committed. It tracks active transactions and the dirty-page table needed by
+/// the buffer pool for checkpointing.
+///
+/// Construct a `Wal` with [`Wal::new`], then spawn a background thread running
+/// [`Wal::flush_loop`] to handle asynchronous flushing. Operations that require
+/// durability (like [`Wal::log_commit`]) will block until the background thread
+/// has flushed the relevant records.
 pub struct Wal {
+    /// The underlying WAL file. Accessed via `write_at` for positioned I/O so
+    /// the file cursor does not need to be kept in sync with concurrent writes.
     file: fs::File,
+    /// All mutable state, serialised under a single lock.
     state: Mutex<WalState>,
+    /// Notifies the flush loop that new data is available, and notifies waiters
+    /// (e.g. callers of [`Wal::force`]) that data has been flushed.
     flush_cond: Condvar,
 }
 
 impl Wal {
+    /// Opens (or creates) the WAL file at `path` and returns a ready-to-use `Wal`.
+    ///
+    /// The file is opened in read/write mode without truncation so that an
+    /// existing log is preserved for crash recovery. The initial LSN is set to
+    /// the current end of the file, so new records are appended after any
+    /// previously written data.
+    ///
+    /// `buf_size` controls the in-memory write buffer size in bytes. A value of
+    /// `0` disables buffering — every record is written directly to the file,
+    /// which is useful in tests to avoid needing a background flush thread.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`WalError::Io`] if the file cannot be opened or its length
+    /// cannot be determined.
     pub fn new(path: &Path, buf_size: usize) -> Result<Self, WalError> {
         let mut file = fs::OpenOptions::new()
             .read(true)
@@ -81,8 +165,18 @@ impl Wal {
         })
     }
 
+    /// Logs a `Begin` record for `tid` and registers it as an active transaction.
+    ///
+    /// This must be called before any data-modification records (`log_insert`,
+    /// `log_update`, `log_delete`) for the given transaction ID.
+    ///
+    /// Returns the LSN assigned to the `Begin` record.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`WalError::Io`] or [`WalError::Codec`] if writing the record fails.
     pub fn log_begin(&self, tid: TransactionId) -> Result<Lsn, WalError> {
-        let mut state = self.state.lock().unwrap();
+        let mut state = self.state.lock();
         let lsn = Self::write_record(
             &self.file,
             &mut state,
@@ -101,9 +195,20 @@ impl Wal {
         Ok(lsn)
     }
 
+    /// Logs a `Commit` record for `tid` and waits until it is durably flushed.
+    ///
+    /// After this call returns successfully the transaction is no longer tracked
+    /// as active. The caller is guaranteed that the commit record has reached
+    /// stable storage.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`WalError::UnknownTransaction`] if `tid` was never begun or has
+    /// already been committed. Returns [`WalError::Io`] or [`WalError::Codec`]
+    /// on write failures.
     pub fn log_commit(&self, tid: TransactionId) -> Result<Lsn, WalError> {
         let lsn = {
-            let mut state = self.state.lock().unwrap();
+            let mut state = self.state.lock();
             let prev = state
                 .active_txns
                 .get(&tid)
@@ -115,12 +220,24 @@ impl Wal {
         };
         self.force(lsn)?;
 
-        self.state.lock().unwrap().active_txns.remove(&tid);
+        self.state.lock().active_txns.remove(&tid);
         Ok(lsn)
     }
 
+    /// Logs an `Abort` record for `tid` and sets up its undo chain.
+    ///
+    /// Unlike `log_commit`, the transaction is **not** removed from the active
+    /// set after this call — it remains registered so that the recovery manager
+    /// can walk the undo chain via `undo_next` and roll back its changes.
+    ///
+    /// Returns the LSN of the `Abort` record.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`WalError::UnknownTransaction`] if `tid` is not active.
+    /// Returns [`WalError::Io`] or [`WalError::Codec`] on write failures.
     pub fn log_abort(&self, tid: TransactionId) -> Result<Lsn, WalError> {
-        let mut state = self.state.lock().unwrap();
+        let mut state = self.state.lock();
         let prev = state
             .active_txns
             .get(&tid)
@@ -133,6 +250,18 @@ impl Wal {
         Ok(lsn)
     }
 
+    /// Logs an `Update` record describing an in-place change to a page.
+    ///
+    /// `before` is the page image before the change; `after` is the image after.
+    /// Both images are needed so that the record can be used for both redo and
+    /// undo during recovery.
+    ///
+    /// The page is added to the dirty-page table if it is not already present.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`WalError::UnknownTransaction`] if `tid` is not active.
+    /// Returns [`WalError::Io`] or [`WalError::Codec`] on write failures.
     pub fn log_update(
         &self,
         tid: TransactionId,
@@ -151,6 +280,16 @@ impl Wal {
         )
     }
 
+    /// Logs an `Insert` record for a new tuple written to `page_id`.
+    ///
+    /// `after` is the encoded tuple that was inserted.
+    ///
+    /// The page is added to the dirty-page table if it is not already present.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`WalError::UnknownTransaction`] if `tid` is not active.
+    /// Returns [`WalError::Io`] or [`WalError::Codec`] on write failures.
     pub fn log_insert(
         &self,
         tid: TransactionId,
@@ -160,6 +299,17 @@ impl Wal {
         self.log_data_op(tid, page_id, LogRecordBody::Insert { page_id, after })
     }
 
+    /// Logs a `Delete` record for a tuple removed from `page_id`.
+    ///
+    /// `before` is the encoded tuple that was deleted, needed to undo the
+    /// operation during recovery.
+    ///
+    /// The page is added to the dirty-page table if it is not already present.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`WalError::UnknownTransaction`] if `tid` is not active.
+    /// Returns [`WalError::Io`] or [`WalError::Codec`] on write failures.
     pub fn log_delete(
         &self,
         tid: TransactionId,
@@ -169,32 +319,106 @@ impl Wal {
         self.log_data_op(tid, page_id, LogRecordBody::Delete { page_id, before })
     }
 
+    /// Logs an `Insert` record by reading the after-image directly from `page`.
+    ///
+    /// Equivalent to calling [`Self::log_insert`] with `page.page_data()`.
+    pub fn log_page_insert(
+        &self,
+        tid: TransactionId,
+        page_id: PageId,
+        page: &impl Page,
+    ) -> Result<Lsn, WalError> {
+        self.log_insert(tid, page_id, page.page_data().to_vec())
+    }
+
+    /// Logs a `Delete` record by reading the before-image directly from `page`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`WalError::MissingBeforeImage`] if the page has no before-image.
+    pub fn log_page_delete(
+        &self,
+        tid: TransactionId,
+        page_id: PageId,
+        page: &impl Page,
+    ) -> Result<Lsn, WalError> {
+        let before = page
+            .before_image()
+            .ok_or(WalError::MissingBeforeImage(page_id))?
+            .to_vec();
+        self.log_delete(tid, page_id, before)
+    }
+
+    /// Logs an `Update` record by reading both images directly from `page`.
+    ///
+    /// `before_image()` provides the undo image and `page_data()` the redo image.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`WalError::MissingBeforeImage`] if the page has no before-image.
+    pub fn log_page_update(
+        &self,
+        tid: TransactionId,
+        page_id: PageId,
+        page: &impl Page,
+    ) -> Result<Lsn, WalError> {
+        let before = page
+            .before_image()
+            .ok_or(WalError::MissingBeforeImage(page_id))?
+            .to_vec();
+        self.log_update(tid, page_id, before, page.page_data().to_vec())
+    }
+
+    /// Blocks until all records up to (and including) `target` have been flushed
+    /// to stable storage.
+    ///
+    /// If the WAL is already flushed past `target` the call returns immediately.
+    /// Otherwise it wakes the flush loop and waits on the condvar until
+    /// `flushed_till >= target`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`WalError::Io`] if a flush triggered by this call fails.
     pub fn force(&self, target: Lsn) -> Result<(), WalError> {
-        let mut state = self.state.lock().unwrap();
+        let mut state = self.state.lock();
         if state.flushed_till >= target {
             return Ok(());
         }
 
         self.flush_cond.notify_all();
         while state.flushed_till < target {
-            state = self.flush_cond.wait(state).unwrap();
+            self.flush_cond.wait(&mut state);
         }
         Ok(())
     }
 
+    /// Flushes any buffered records and closes the WAL.
+    ///
+    /// Consumes `self`, so no further writes are possible after this call.
+    /// Intended for clean shutdown when no background flush thread is running,
+    /// or to guarantee all buffered data is on disk before process exit.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`WalError::Io`] if the final flush fails.
     pub fn close(self) -> Result<(), WalError> {
-        let mut state = self.state.lock().unwrap();
+        let mut state = self.state.lock();
         Self::flush_state(&self.file, &mut state)?;
         Ok(())
     }
 
+    /// Writes a data-modification record and updates transaction and dirty-page state.
+    ///
+    /// Shared implementation used by [`log_insert`], [`log_update`], and [`log_delete`].
+    /// Looks up the previous LSN for `tid`, delegates to [`write_record`], then
+    /// records the page as dirty using the LSN of the *first* write to that page.
     fn log_data_op(
         &self,
         tid: TransactionId,
         page_id: PageId,
         body: LogRecordBody,
     ) -> Result<Lsn, WalError> {
-        let mut state = self.state.lock().unwrap();
+        let mut state = self.state.lock();
         let prev = state
             .active_txns
             .get(&tid)
@@ -206,6 +430,15 @@ impl Wal {
         Ok(lsn)
     }
 
+    /// Encodes one log record and appends it to the buffer or the file directly.
+    ///
+    /// If the encoded record exceeds the buffer capacity the buffer is flushed
+    /// first and the record is written directly via `write_at`. Otherwise the
+    /// record is copied into the buffer (flushing first if there is not enough
+    /// room). In both cases `current_at` is advanced by the record's byte length.
+    ///
+    /// Returns the LSN assigned to the record, which equals `state.current_at`
+    /// at the time of the call.
     fn write_record(
         file: &fs::File,
         state: &mut WalState,
@@ -235,6 +468,10 @@ impl Wal {
         Ok(assigned_lsn)
     }
 
+    /// Writes the buffered bytes to the file at `flushed_till` and resets the buffer.
+    ///
+    /// Does nothing if the buffer is empty. After a successful write, `flushed_till`
+    /// is advanced to `current_at` and `buf_offset` is reset to zero.
     fn flush_state(file: &fs::File, state: &mut WalState) -> Result<(), WalError> {
         if state.is_empty() {
             return Ok(());
@@ -246,11 +483,31 @@ impl Wal {
         Ok(())
     }
 
+    /// Runs the background flush loop — intended to be executed on a dedicated thread.
+    ///
+    /// The loop waits until the buffer is non-empty, snapshots the buffered bytes,
+    /// releases the lock, writes and syncs the data to the file, then re-acquires
+    /// the lock to update `flushed_till` and compact any bytes written concurrently
+    /// while the lock was released.
+    ///
+    /// After each flush all waiters blocked in [`Wal::force`] are notified via the
+    /// condvar.
+    ///
+    /// This method runs forever and should be spawned as a background thread:
+    ///
+    /// ```no_run
+    /// # use std::sync::Arc;
+    /// # use std::path::Path;
+    /// # use db::wal::writer::Wal;
+    /// let wal = Arc::new(Wal::new(Path::new("wal.log"), 65536).unwrap());
+    /// let wal_bg = Arc::clone(&wal);
+    /// std::thread::spawn(move || wal_bg.flush_loop());
+    /// ```
     pub fn flush_loop(&self) {
         loop {
-            let mut state = self.state.lock().unwrap();
+            let mut state = self.state.lock();
             while state.is_empty() {
-                state = self.flush_cond.wait(state).unwrap();
+                self.flush_cond.wait(&mut state);
             }
 
             let (buff_offset, at) = (state.buf_offset, state.flushed_till);
@@ -260,7 +517,7 @@ impl Wal {
             self.file.write_at(&data, u64::from(at)).unwrap();
             self.file.sync_all().unwrap();
 
-            let mut state = self.state.lock().unwrap();
+            let mut state = self.state.lock();
             state.flushed_till = Lsn::from(u64::from(at) + buff_offset as u64);
             let remaining = state.buf_offset - buff_offset;
 
@@ -299,7 +556,6 @@ mod tests {
     fn active_txns(wal: &Wal) -> Vec<TransactionId> {
         wal.state
             .lock()
-            .unwrap()
             .active_txns
             .keys()
             .copied()
@@ -307,15 +563,15 @@ mod tests {
     }
 
     fn dirty_pages(wal: &Wal) -> HashMap<PageId, Lsn> {
-        wal.state.lock().unwrap().dirty_pages.clone()
+        wal.state.lock().dirty_pages.clone()
     }
 
     fn txn_last_lsn(wal: &Wal, tid: TransactionId) -> Lsn {
-        wal.state.lock().unwrap().active_txns[&tid].last
+        wal.state.lock().active_txns[&tid].last
     }
 
     fn txn_undo_next(wal: &Wal, tid: TransactionId) -> Lsn {
-        wal.state.lock().unwrap().active_txns[&tid].undo_next
+        wal.state.lock().active_txns[&tid].undo_next
     }
 
     #[test]

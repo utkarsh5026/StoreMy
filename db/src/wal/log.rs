@@ -1,3 +1,20 @@
+//! Write-ahead log record types and encoding.
+//!
+//! This module defines the on-disk representation of WAL (Write-Ahead Log)
+//! records.  Every database mutation is first written here before being applied
+//! to data pages, which guarantees durability and enables crash recovery.
+//!
+//! A WAL record has two parts:
+//!
+//! 1. A fixed-size [`LogRecordHeader`] that contains the LSN, transaction ID,
+//!    record type, timestamp, and a CRC32 checksum of the body.
+//! 2. A variable-size [`LogRecordBody`] whose layout depends on the record type.
+//!
+//! [`LogRecord`] bundles both parts and provides [`Encode`]/[`Decode`] impls
+//! for writing to and reading from an `io::Write`/`io::Read` stream.  Building
+//! a complete record is done through [`LogRecord::new`], which automatically
+//! fills in `body_len` and `checksum`.
+
 use std::io::{Read, Write};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -6,20 +23,38 @@ use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
 use crate::codec::{CodecError, Decode, Encode};
 use crate::primitives::{Lsn, PageId, TransactionId};
 
+/// Identifies which operation a [`LogRecord`] represents.
+///
+/// The discriminant is stored as a single `u8` on disk (see [`TryFrom<u8>`]).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
 pub enum LogRecordType {
+    /// Marks the beginning of a transaction.
     Begin = 0,
+    /// Marks the successful end of a transaction (all changes are durable).
     Commit = 1,
+    /// Marks an aborted transaction (all changes must be rolled back).
     Abort = 2,
+    /// An in-place modification of an existing page slot.
     Update = 3,
+    /// A new row was inserted into a page.
     Insert = 4,
+    /// A row was deleted from a page.
     Delete = 5,
+    /// Signals the start of a fuzzy checkpoint sweep.
     CheckpointBegin = 6,
+    /// Signals the end of a fuzzy checkpoint sweep.
     CheckpointEnd = 7,
+    /// Compensation Log Record — written during undo to record a compensating action.
     Clr = 8,
 }
 
+/// Converts a raw `u8` discriminant back into a [`LogRecordType`].
+///
+/// # Errors
+///
+/// Returns the original byte value as `Err` if it does not correspond to any
+/// known variant.
 impl TryFrom<u8> for LogRecordType {
     type Error = u8;
 
@@ -42,18 +77,26 @@ impl TryFrom<u8> for LogRecordType {
 /// Fixed-size prefix written before every log record body.
 ///
 /// Because the header is fixed-size the WAL reader can always read exactly
-/// `LogRecordHeader::SIZE` bytes, parse the header, and then read exactly
+/// [`LogRecordHeader::SIZE`] bytes, parse the header, and then read exactly
 /// `body_len` more bytes for the body — no guessing, no scanning.
 ///
 /// `checksum` covers only the body bytes. This avoids the circularity of
 /// checksumming a field that is itself part of the checksum region.
 pub struct LogRecordHeader {
+    /// The log sequence number assigned to this record.
     pub lsn: Lsn,
+    /// LSN of the previous record written by the same transaction, or
+    /// [`Lsn::INVALID`] for the first record of a transaction.
     pub prev_lsn: Lsn,
+    /// The transaction that produced this record.
     pub tid: TransactionId,
+    /// Which operation this record represents.
     pub record_type: LogRecordType,
+    /// Wall-clock time when this record was created, stored at second precision.
     pub timestamp: SystemTime,
+    /// Number of bytes in the body that follows this header on disk.
     pub body_len: u32,
+    /// CRC32 checksum computed over the encoded body bytes.
     pub checksum: u32,
 }
 
@@ -75,6 +118,13 @@ impl LogRecordHeader {
     pub const SIZE: usize = 41;
 }
 
+/// Writes the header to `writer` in the canonical on-disk layout.
+///
+/// See [`LogRecordHeader::SIZE`] for the exact byte layout.
+///
+/// # Errors
+///
+/// Propagates any I/O error from `writer`.
 impl Encode for LogRecordHeader {
     fn encode<W: Write>(&self, writer: &mut W) -> Result<(), CodecError> {
         writer.write_u8(self.record_type as u8)?;
@@ -93,6 +143,12 @@ impl Encode for LogRecordHeader {
     }
 }
 
+/// Reads a header from `reader`, expecting the canonical on-disk layout.
+///
+/// # Errors
+///
+/// Returns [`CodecError::UnknownDiscriminant`] if the `record_type` byte does
+/// not match any [`LogRecordType`] variant.  Propagates any other I/O error.
 impl Decode for LogRecordHeader {
     fn decode<R: Read>(reader: &mut R) -> Result<Self, CodecError> {
         let record_type =
@@ -121,32 +177,56 @@ impl Decode for LogRecordHeader {
 /// Each variant holds exactly the fields that record type requires — no
 /// `Option` fields that are only meaningful for some types.
 pub enum LogRecordBody {
+    /// Transaction begin — no payload.
     Begin,
+    /// Transaction commit — no payload.
     Commit,
+    /// Transaction abort — no payload.
     Abort,
+    /// An existing page slot was overwritten.
     Update {
+        /// The page that was modified.
         page_id: PageId,
+        /// The page image before the update (used for undo).
         before: Vec<u8>,
+        /// The page image after the update (used for redo).
         after: Vec<u8>,
     },
+    /// A new row was inserted.
     Insert {
+        /// The page that received the new row.
         page_id: PageId,
+        /// The page image after the insert (used for redo).
         after: Vec<u8>,
     },
+    /// A row was deleted.
     Delete {
+        /// The page from which the row was removed.
         page_id: PageId,
+        /// The page image before the delete (used for undo).
         before: Vec<u8>,
     },
+    /// Compensation Log Record written during undo of an `Update` or `Insert`.
     Clr {
+        /// The page that was compensated.
         page_id: PageId,
+        /// The page image after applying the compensation (used for redo).
         after: Vec<u8>,
+        /// LSN of the next record to undo for this transaction, skipping the
+        /// record that this CLR compensates.
         undo_next_lsn: Lsn,
     },
+    /// Fuzzy checkpoint start — no payload.
     CheckpointBegin,
+    /// Fuzzy checkpoint end — no payload.
     CheckpointEnd,
 }
 
 impl LogRecordBody {
+    /// Returns the [`LogRecordType`] discriminant that corresponds to this body variant.
+    ///
+    /// Used by [`LogRecord::new`] to fill in the header's `record_type` field
+    /// without requiring the caller to specify it separately.
     fn record_type(&self) -> LogRecordType {
         match self {
             Self::Begin => LogRecordType::Begin,
@@ -162,6 +242,15 @@ impl LogRecordBody {
     }
 }
 
+/// Writes the body payload to `writer`.
+///
+/// Variants with no payload (`Begin`, `Commit`, `Abort`, `CheckpointBegin`,
+/// `CheckpointEnd`) write zero bytes.  All other variants write a
+/// [`PageId`] followed by one or two length-prefixed byte images.
+///
+/// # Errors
+///
+/// Propagates any I/O error from `writer`.
 impl Encode for LogRecordBody {
     fn encode<W: Write>(&self, writer: &mut W) -> Result<(), CodecError> {
         match self {
@@ -206,7 +295,15 @@ impl Encode for LogRecordBody {
 }
 
 impl LogRecordBody {
-    /// Decode a body given an already-decoded `record_type` from the header.
+    /// Reads a body from `reader` using `record_type` to select the right layout.
+    ///
+    /// This is called by [`LogRecord`]'s [`Decode`] impl after the header has
+    /// already been read, so `record_type` is known before any body bytes are
+    /// consumed.
+    ///
+    /// # Errors
+    ///
+    /// Propagates any I/O error from `reader`.
     fn decode_for_type<R: Read>(
         record_type: LogRecordType,
         reader: &mut R,
@@ -261,12 +358,22 @@ impl LogRecordBody {
 /// Framing (writing the header then body, verifying the checksum) is the
 /// responsibility of `WalWriter`/`WalReader`, not of this type's codec impls.
 pub struct LogRecord {
+    /// The fixed-size prefix describing this record.
     pub header: LogRecordHeader,
+    /// The type-specific payload.
     pub body: LogRecordBody,
 }
 
 impl LogRecord {
-    /// Construct a `LogRecord`, computing `body_len` and `checksum` automatically.
+    /// Builds a complete [`LogRecord`], filling in `body_len` and `checksum` automatically.
+    ///
+    /// The body is encoded into a temporary buffer so that its length and CRC32
+    /// can be computed before the header is constructed.  The caller only needs
+    /// to supply the LSN, previous LSN, transaction ID, timestamp, and body.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`CodecError`] if encoding the body fails.
     pub fn new(
         lsn: Lsn,
         prev_lsn: Lsn,
@@ -285,13 +392,18 @@ impl LogRecord {
             tid,
             record_type: body.record_type(),
             timestamp,
-            body_len: body_bytes.len() as u32,
+            body_len: encoded_len_u32(body_bytes.len())?,
             checksum: crc32fast::hash(&body_bytes),
         };
         Ok(Self { header, body })
     }
 }
 
+/// Writes the full record (header then body) to `writer`.
+///
+/// # Errors
+///
+/// Propagates any I/O error from `writer`.
 impl Encode for LogRecord {
     fn encode<W: Write>(&self, writer: &mut W) -> Result<(), CodecError> {
         self.header.encode(writer)?;
@@ -300,6 +412,12 @@ impl Encode for LogRecord {
     }
 }
 
+/// Reads a full record (header then body) from `reader`.
+///
+/// # Errors
+///
+/// Returns [`CodecError::UnknownDiscriminant`] if the header's `record_type`
+/// byte is unrecognized.  Propagates any other I/O error.
 impl Decode for LogRecord {
     fn decode<R: Read>(reader: &mut R) -> Result<Self, CodecError> {
         let header = LogRecordHeader::decode(reader)?;
@@ -308,11 +426,25 @@ impl Decode for LogRecord {
     }
 }
 
+/// WAL and framing use `u32` length prefixes; returns an error if `n` does not fit.
+fn encoded_len_u32(n: usize) -> Result<u32, CodecError> {
+    u32::try_from(n).map_err(|_| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "encoded length exceeds u32::MAX",
+        )
+        .into()
+    })
+}
+
+/// Writes a length-prefixed byte image to `writer`.
+///
+/// A `u32` little-endian length is written first, followed by the image bytes.
+/// If `image` is `None`, a zero-length prefix is written and no payload bytes follow.
 fn encode_image<W: Write>(writer: &mut W, image: Option<&[u8]>) -> Result<(), CodecError> {
     match image {
         Some(img) => {
-            #[allow(clippy::cast_possible_truncation)]
-            writer.write_u32::<LittleEndian>(img.len() as u32)?;
+            writer.write_u32::<LittleEndian>(encoded_len_u32(img.len())?)?;
             writer.write_all(img)?;
         }
         None => writer.write_u32::<LittleEndian>(0)?,
@@ -320,6 +452,10 @@ fn encode_image<W: Write>(writer: &mut W, image: Option<&[u8]>) -> Result<(), Co
     Ok(())
 }
 
+/// Reads a length-prefixed byte image from `reader`.
+///
+/// Returns `None` when the length prefix is zero (matching what [`encode_image`]
+/// writes for `None`), or `Some(bytes)` otherwise.
 fn decode_image<R: Read>(reader: &mut R) -> Result<Option<Vec<u8>>, CodecError> {
     let len = reader.read_u32::<LittleEndian>()? as usize;
     if len == 0 {
@@ -594,7 +730,10 @@ mod tests {
         // body_len must match the actual encoded body size
         let mut body_buf = Vec::new();
         rec.body.encode(&mut body_buf).unwrap();
-        assert_eq!(rec.header.body_len, body_buf.len() as u32);
+        assert_eq!(
+            rec.header.body_len,
+            u32::try_from(body_buf.len()).expect("test body fits in u32")
+        );
 
         // checksum must match a freshly computed CRC over those bytes
         assert_eq!(rec.header.checksum, crc32fast::hash(&body_buf));
