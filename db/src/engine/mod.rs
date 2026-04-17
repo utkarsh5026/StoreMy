@@ -155,6 +155,6 @@ pub fn execute_statement(
     match statement {
         Statement::CreateTable(statement) => create_table(catalog, txn_manager, statement),
         Statement::Drop(statement) => drop_table(catalog, txn_manager, statement),
-        _ => Err(EngineError::Unsupported(statement.into())),
+        _ => Err(EngineError::Unsupported(statement.to_string())),
     }
 }
