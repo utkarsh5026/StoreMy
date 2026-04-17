@@ -10,7 +10,12 @@
 
 use std::fmt::Display;
 
-use crate::{primitives::Predicate, storage::index::Index, types::Value};
+use crate::{
+    primitives::Predicate,
+    storage::index::Index,
+    tuple::{Field, TupleSchema},
+    types::Value,
+};
 
 /// Top-level SQL statement returned by the parser.
 ///
@@ -18,28 +23,45 @@ use crate::{primitives::Predicate, storage::index::Index, types::Value};
 /// Factory methods on `Statement` are `pub(super)` so only the parser module
 /// can construct them, keeping AST creation private.
 pub enum Statement {
-    /// `DROP TABLE …`
     Drop(DropStatement),
-    /// `CREATE TABLE …`
     CreateTable(CreateTableStatement),
-    /// `CREATE INDEX …`
     CreateIndex(CreateIndexStatement),
-    /// `DROP INDEX …`
     DropIndex(DropIndexStatement),
-    /// `DELETE FROM …`
     Delete(DeleteStatement),
-    /// `INSERT INTO …`
     Insert(InsertStatement),
-    /// `UPDATE … SET …`
     Update(UpdateStatement),
-    /// `SELECT …`
     Select(SelectStatement),
-    /// `SHOW INDEXES …`
     ShowIndexes(ShowIndexesStatement),
 }
 
+/// Pretty-prints the statement as a SQL-like string.
+///
+/// # Examples
+///
+/// ```
+/// use crate::parser::statements::Statement;
+///
+/// let statement = Statement::create_table("users", false, vec![ColumnDef::new("id", Type::Int, false, false, false, None)], None);
+/// assert_eq!(statement.to_string(), "CREATE TABLE users (id INT NOT NULL)");
+/// ```
+impl Display for Statement {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Statement::Drop(statement) => write!(f, "{statement}"),
+            Statement::CreateTable(statement) => write!(f, "{statement}"),
+            Statement::CreateIndex(statement) => write!(f, "{statement}"),
+            Statement::DropIndex(statement) => write!(f, "{statement}"),
+            Statement::Delete(statement) => write!(f, "{statement}"),
+            Statement::Insert(statement) => write!(f, "{statement}"),
+            Statement::Update(statement) => write!(f, "{statement}"),
+            Statement::Select(statement) => write!(f, "{statement}"),
+            Statement::ShowIndexes(statement) => write!(f, "{statement}"),
+        }
+    }
+}
+
+/// Builds a statement from its components.
 impl Statement {
-    /// Build a `DROP TABLE` statement.
     pub(super) fn drop(table_name: impl Into<String>, if_exists: bool) -> DropStatement {
         DropStatement {
             table_name: table_name.into(),
@@ -47,7 +69,6 @@ impl Statement {
         }
     }
 
-    /// Build a `CREATE INDEX` statement.
     pub(super) fn create_index(
         index_name: impl Into<String>,
         col_name: impl Into<String>,
@@ -62,7 +83,6 @@ impl Statement {
         }
     }
 
-    /// Build a `DROP INDEX` statement.
     pub(super) fn drop_index(
         table_name: impl Into<String>,
         index_name: impl Into<String>,
@@ -75,7 +95,6 @@ impl Statement {
         }
     }
 
-    /// Build a `DELETE FROM` statement.
     pub(super) fn delete(
         table_name: impl Into<String>,
         alias: Option<String>,
@@ -88,7 +107,6 @@ impl Statement {
         }
     }
 
-    /// Build an `INSERT INTO` statement with one or more value rows.
     pub(super) fn insert(
         table_name: impl Into<String>,
         columns: Option<Vec<String>>,
@@ -101,7 +119,6 @@ impl Statement {
         }
     }
 
-    /// Build an `UPDATE … SET` statement.
     pub(super) fn update(
         table_name: impl Into<String>,
         alias: Option<String>,
@@ -116,7 +133,6 @@ impl Statement {
         }
     }
 
-    /// Build a `CREATE TABLE` statement.
     pub(super) fn create_table(
         table_name: impl Into<String>,
         if_not_exists: bool,
@@ -131,7 +147,6 @@ impl Statement {
         }
     }
 
-    /// Build a `SHOW INDEXES` statement, optionally scoped to one table.
     pub(super) fn show_indexes(table_name: Option<String>) -> ShowIndexesStatement {
         ShowIndexesStatement(table_name)
     }
@@ -141,10 +156,10 @@ impl Statement {
 #[derive(Debug, Clone)]
 pub struct DropStatement {
     /// Name of the table to drop.
-    table_name: String,
+    pub table_name: String,
     /// When `true`, the statement includes `IF EXISTS` and should not error
     /// if the table is missing.
-    if_exists: bool,
+    pub if_exists: bool,
 }
 
 impl Display for DropStatement {
@@ -193,6 +208,31 @@ impl Display for ColumnDef {
     }
 }
 
+/// Builds a [`TupleSchema`] from a `CREATE TABLE` column list (same as
+/// [`CreateTableStatement::columns`]).
+///
+/// Maps name, type, and nullability in vector order. A column declared `PRIMARY KEY`
+/// is stored as non-nullable regardless of the `nullable` flag, matching SQL semantics.
+/// `auto_increment`, `default`, and table-level primary keys are not part of [`Field`]
+/// and are ignored here.
+impl From<Vec<&ColumnDef>> for TupleSchema {
+    fn from(columns: Vec<&ColumnDef>) -> Self {
+        TupleSchema::new(
+            columns
+                .into_iter()
+                .map(|col| {
+                    let field_nullable = col.nullable && !col.primary_key;
+                    let mut field = Field::new(col.name.clone(), col.col_type);
+                    if !field_nullable {
+                        field = field.not_null();
+                    }
+                    field
+                })
+                .collect(),
+        )
+    }
+}
+
 /// Parsed `CREATE TABLE [IF NOT EXISTS] name (col_def, ..., [PRIMARY KEY (col)])`.
 #[derive(Debug, Clone)]
 pub struct CreateTableStatement {
@@ -224,6 +264,7 @@ impl Display for CreateTableStatement {
 }
 
 /// Parsed `CREATE INDEX [IF NOT EXISTS] <name> ON (<col>) USING <type>`.
+#[derive(Debug, Clone)]
 pub struct CreateIndexStatement {
     /// Name of the index being created.
     index_name: String,
