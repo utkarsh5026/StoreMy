@@ -1,8 +1,18 @@
+//! Core catalog types and infrastructure for managing tables.
+//!
+//! This module defines [`Catalog`], the central registry that maps table names
+//! to their metadata and open heap files. It owns the three system tables
+//! (`Tables`, `Columns`, `Indexes`) and exposes the low-level helpers used by
+//! the higher-level operations in the sibling `table` and `systable` modules.
+
 use std::{
     collections::HashMap,
     fs::File,
     path::{Path, PathBuf},
-    sync::{Arc, atomic::AtomicU64},
+    sync::{
+        Arc,
+        atomic::{AtomicU64, Ordering},
+    },
 };
 
 use parking_lot::RwLock;
@@ -12,28 +22,40 @@ use crate::{
     buffer_pool::page_store::PageStore,
     catalog::{CatalogError, systable::SystemTable},
     heap::file::HeapFile,
-    tuple::TupleSchema,
+    transaction::Transaction,
+    tuple::{Tuple, TupleSchema},
     wal::writer::Wal,
 };
 
+/// Metadata for a single user table held in the catalog's in-memory cache.
+#[derive(Clone, Debug)]
 pub struct TableInfo {
+    /// Logical name of the table (matches the key in the `tables` map).
     pub name: String,
+    /// Column layout used to encode and decode tuples in this table's heap.
     pub schema: TupleSchema,
+    /// Stable numeric identifier for the backing heap file.
     pub file_id: FileId,
+    /// Absolute path to the `.dat` file on disk.
     pub file_path: PathBuf,
+    /// Zero-based column indices of the primary key, if one was declared.
+    ///
+    /// `None` means no primary key. Only single-element vecs are produced
+    /// today; composite keys are not yet supported.
     pub primary_key: Option<Vec<usize>>,
 }
 
 impl TableInfo {
-    fn new(
-        name: String,
+    /// Constructs a [`TableInfo`] from its component parts.
+    pub(super) fn new(
+        name: impl Into<String>,
         schema: TupleSchema,
         file_id: FileId,
         file_path: PathBuf,
         primary_key: Option<Vec<usize>>,
     ) -> Self {
         Self {
-            name,
+            name: name.into(),
             schema,
             file_id,
             file_path,
@@ -42,15 +64,20 @@ impl TableInfo {
     }
 }
 
+/// Holds the three open system-table heap files used by the catalog.
+///
+/// Stored directly (not behind `Arc`) because only [`Catalog`] ever needs them
+/// and they are protected by the catalog's own locking discipline.
 #[derive(Default)]
-struct SystemHeaps {
+pub(super) struct SystemHeaps {
     tables: Option<HeapFile>,
     columns: Option<HeapFile>,
     indexes: Option<HeapFile>,
 }
 
 impl SystemHeaps {
-    fn insert(&mut self, table: SystemTable, file: HeapFile) {
+    /// Registers `file` as the heap for `table`, replacing any prior entry.
+    pub(super) fn insert(&mut self, table: SystemTable, file: HeapFile) {
         match table {
             SystemTable::Tables => self.tables = Some(file),
             SystemTable::Columns => self.columns = Some(file),
@@ -58,7 +85,8 @@ impl SystemHeaps {
         }
     }
 
-    fn get(&self, table: SystemTable) -> Option<&HeapFile> {
+    /// Returns a reference to the heap for `table`, or `None` if not yet registered.
+    pub(super) fn get(&self, table: SystemTable) -> Option<&HeapFile> {
         match table {
             SystemTable::Tables => self.tables.as_ref(),
             SystemTable::Columns => self.columns.as_ref(),
@@ -67,20 +95,40 @@ impl SystemHeaps {
     }
 }
 
+/// The system catalog: the single source of truth for table metadata and open heap files.
+///
+/// `Catalog` is `Send + Sync` — all mutable state is guarded by [`RwLock`] or
+/// [`AtomicU64`]. Callers hold a shared `&Catalog` reference and pass a
+/// [`Transaction`] into each write operation so that changes are durable and
+/// recoverable via the WAL.
 pub struct Catalog {
     wal: Arc<Wal>,
     buffer_pool: Arc<PageStore>,
     data_dir: PathBuf,
     next_file_id: AtomicU64,
-    tables: RwLock<HashMap<String, TableInfo>>,
-    system: SystemHeaps,
+    /// Cache of user-table metadata, keyed by table name.
+    pub(super) user_tables: RwLock<HashMap<String, TableInfo>>,
+    pub(super) open_heaps: RwLock<HashMap<FileId, Arc<HeapFile>>>,
+    pub(super) system: SystemHeaps,
 }
 
 impl Catalog {
-    pub fn data_dir(&self) -> &Path {
-        &self.data_dir
-    }
-
+    /// Opens or creates the catalog at `data_dir`, initializing all system tables.
+    ///
+    /// For each of the three system tables (`Tables`, `Columns`, `Indexes`),
+    /// this function creates the heap file if it does not exist, or opens it if
+    /// it does. Every existing tuple is then validated against the expected
+    /// schema so that a corrupt catalog is detected at startup rather than at
+    /// query time.
+    ///
+    /// The first user-assigned [`FileId`] starts at `100`, leaving the range
+    /// `0..100` reserved for system tables.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CatalogError::Io`] if any heap file cannot be created or read.
+    /// Returns [`CatalogError::Corruption`] or [`CatalogError::InvalidCatalogRow`]
+    /// if an existing system table contains malformed tuples.
     pub fn initialize(
         buffer_pool: &Arc<PageStore>,
         wal: &Arc<Wal>,
@@ -92,21 +140,10 @@ impl Catalog {
         for table in SystemTable::ALL {
             let schema = table.schema();
             let file_path = data_dir.join(table.file_name());
-
             let file_id = table.file_id();
-            let pages = Self::create_file_if_not_exists(&file_path)?;
 
-            buffer_pool
-                .register_file(file_id, &file_path)
-                .map_err(|_| CatalogError::Io(std::io::Error::other("failed to register file")))?;
-
-            let file = HeapFile::new(
-                file_id,
-                schema.clone(),
-                buffer_pool.clone(),
-                pages,
-                wal.clone(),
-            );
+            let file =
+                Self::create_heap_file(file_id, &file_path, schema.clone(), buffer_pool, wal)?;
 
             Self::verify_system_heap(*table, &file)?;
 
@@ -127,9 +164,105 @@ impl Catalog {
             buffer_pool: buffer_pool.clone(),
             data_dir: data_dir.to_path_buf(),
             next_file_id: AtomicU64::new(100),
-            tables: RwLock::new(tables),
+            user_tables: RwLock::new(tables),
+            open_heaps: RwLock::new(HashMap::new()),
             system,
         })
+    }
+
+    /// Creates a heap file at `file_path` and registers it with the buffer pool.
+    ///
+    /// If the file does not yet exist it is created on disk. Page count is
+    /// derived from the file size for existing files, and assumed to be `1`
+    /// for brand-new files (the buffer pool materialises page 0 on first
+    /// access). Used by both `initialize` (system tables) and `create_table`
+    /// (user tables).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CatalogError::Io`] if the file cannot be created or its
+    /// metadata cannot be read. Returns [`CatalogError::FileTooLarge`] if the
+    /// file size overflows `u32` pages. Propagates buffer-pool registration
+    /// failures as [`CatalogError::Io`].
+    pub(super) fn create_heap_file(
+        file_id: FileId,
+        file_path: &Path,
+        schema: TupleSchema,
+        buffer_pool: &Arc<PageStore>,
+        wal: &Arc<Wal>,
+    ) -> Result<HeapFile, CatalogError> {
+        let fresh = !file_path.exists();
+        if fresh {
+            File::create(file_path)?;
+        }
+
+        buffer_pool
+            .register_file(file_id, file_path)
+            .map_err(|_| CatalogError::Io(std::io::Error::other("failed to register file")))?;
+
+        // A freshly created file is empty but the buffer pool will materialize
+        // page 0 on first access, so we start with 1 page. For existing files
+        // we derive the page count from the file size.
+        let pages = if fresh {
+            1
+        } else {
+            let bytes = std::fs::metadata(file_path)?.len();
+            let p = u32::try_from(bytes.div_ceil(PAGE_SIZE as u64))
+                .map_err(|_| CatalogError::FileTooLarge)?;
+            p.max(1)
+        };
+
+        Ok(HeapFile::new(
+            file_id,
+            schema,
+            buffer_pool.clone(),
+            pages,
+            wal.clone(),
+        ))
+    }
+
+    /// Opens an existing heap file at `file_path` and registers it with the buffer pool.
+    ///
+    /// Unlike [`create_heap_file`], a missing file is treated as catalog
+    /// corruption rather than a normal "first open" situation.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CatalogError::Corruption`] if the file does not exist.
+    /// Returns [`CatalogError::Io`] if metadata cannot be read or the file
+    /// cannot be registered. Returns [`CatalogError::FileTooLarge`] if the
+    /// file size overflows `u32` pages.
+    pub(super) fn open_existing_heap(
+        &self,
+        file_id: FileId,
+        file_path: &Path,
+        table_name: &str,
+        schema: TupleSchema,
+    ) -> Result<HeapFile, CatalogError> {
+        if !file_path.exists() {
+            return Err(CatalogError::corruption(
+                table_name,
+                format!("data file missing: {}", file_path.display()),
+            ));
+        }
+
+        let bytes = std::fs::metadata(file_path)?.len();
+        let pages = u32::try_from(bytes.div_ceil(PAGE_SIZE as u64))
+            .map_err(|_| CatalogError::FileTooLarge)?;
+
+        if self.get_heap(file_id).is_none() {
+            self.buffer_pool
+                .register_file(file_id, file_path)
+                .map_err(|_| CatalogError::Io(std::io::Error::other("failed to register file")))?;
+        }
+
+        Ok(HeapFile::new(
+            file_id,
+            schema,
+            self.buffer_pool.clone(),
+            pages,
+            self.wal.clone(),
+        ))
     }
 
     /// Scans every tuple in `heap` and validates it against `table`'s schema and
@@ -144,23 +277,134 @@ impl Catalog {
             .scan(TransactionId::new(1))
             .map_err(|e| CatalogError::corruption(table.table_name(), e.to_string()))?;
 
-        for tuple in scan {
+        for (_, tuple) in scan {
             table.validate_row(&tuple)?;
         }
 
         Ok(())
     }
 
-    fn create_file_if_not_exists(path: &Path) -> Result<u32, CatalogError> {
-        if !path.exists() {
-            File::create(path)?;
-            return Ok(0);
-        }
-        let bytes = std::fs::metadata(path)?.len();
-        let page_size = PAGE_SIZE as u64;
-        let pages = bytes.div_ceil(page_size);
-        let pages = u32::try_from(pages).map_err(|_| CatalogError::FileTooLarge)?;
-        Ok(pages)
+    /// Scans all tuples in `table` and deserializes them into `Vec<T>`.
+    ///
+    /// `T` must implement `TryFrom<&Tuple, Error = CatalogError>`. The scan
+    /// uses `txn`'s visibility so only committed tuples visible to the
+    /// transaction are returned.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CatalogError::Corruption`] if the system table heap is not
+    /// open. Propagates heap scan errors and any deserialization error from
+    /// `T::try_from`.
+    pub(super) fn scan_system_table<T>(
+        &self,
+        txn: &Transaction<'_>,
+        table: SystemTable,
+    ) -> Result<Vec<T>, CatalogError>
+    where
+        for<'a> T: TryFrom<&'a Tuple, Error = CatalogError>,
+    {
+        let heap = self.get_system_heap(table)?;
+
+        let scan = heap
+            .scan(txn.transaction_id())
+            .map_err(CatalogError::from)?;
+
+        scan.map(|(_, tuple)| T::try_from(&tuple)).collect()
+    }
+
+    /// Inserts `tuple` into the heap for `table` under `txn`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CatalogError::Corruption`] if the system table heap is not
+    /// open. Propagates heap insertion errors as [`CatalogError`].
+    pub(super) fn insert_systable_tuple(
+        &self,
+        txn: &Transaction<'_>,
+        table: SystemTable,
+        tuple: impl Into<Tuple>,
+    ) -> Result<(), CatalogError> {
+        let heap = self.get_system_heap(table)?;
+        let tuple = tuple.into();
+        heap.insert_tuple(txn.transaction_id(), &tuple)?;
+        Ok(())
+    }
+
+    /// Deletes every tuple in `table` for which `predicate` returns `true`.
+    ///
+    /// The deletion is recorded in `txn` and will be rolled back if the
+    /// transaction aborts.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CatalogError::Corruption`] if the system table heap is not
+    /// open. Propagates heap deletion errors as [`CatalogError`].
+    pub(super) fn delete_systable_rows<F>(
+        &self,
+        txn: &Transaction<'_>,
+        table: SystemTable,
+        predicate: F,
+    ) -> Result<(), CatalogError>
+    where
+        F: Fn(&Tuple) -> bool,
+    {
+        let heap = self.get_system_heap(table)?;
+        heap.delete_if(txn.transaction_id(), predicate)
+            .map(|_| ())
+            .map_err(CatalogError::from)
+    }
+
+    /// Returns the open [`HeapFile`] for `table`, or `None` if not registered.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CatalogError::Corruption`] if the system table heap is not
+    /// open.
+    #[inline]
+    fn get_system_heap(&self, table: SystemTable) -> Result<&HeapFile, CatalogError> {
+        self.system
+            .get(table)
+            .ok_or_else(|| CatalogError::corruption(table.table_name(), "system table not found"))
+    }
+
+    /// Returns the directory where all catalog and table files are stored.
+    #[inline]
+    pub fn data_dir(&self) -> &Path {
+        &self.data_dir
+    }
+
+    /// Returns a reference to the shared buffer pool.
+    pub(super) fn buffer_pool(&self) -> &Arc<PageStore> {
+        &self.buffer_pool
+    }
+
+    /// Returns a reference to the shared write-ahead log.
+    pub(super) fn wal(&self) -> &Arc<Wal> {
+        &self.wal
+    }
+
+    /// Atomically allocates and returns the next unique [`FileId`].
+    ///
+    /// Uses relaxed ordering — callers must not assume any happens-before
+    /// relationship with other threads beyond the uniqueness guarantee.
+    pub(super) fn next_file_id(&self) -> FileId {
+        FileId(self.next_file_id.fetch_add(1, Ordering::Relaxed))
+    }
+
+    /// Returns the open [`HeapFile`] for `file_id`, or `None` if not registered.
+    pub fn get_heap(&self, file_id: FileId) -> Option<Arc<HeapFile>> {
+        self.open_heaps.read().get(&file_id).cloned()
+    }
+
+    /// Wraps `heap` in an `Arc` and inserts it into the heap registry under `file_id`.
+    pub(super) fn register_heap(&self, file_id: FileId, heap: HeapFile) {
+        self.open_heaps.write().insert(file_id, Arc::new(heap));
+    }
+
+    /// Returns the canonical path for a table file: `<data_dir>/<name>.dat`.
+    #[inline]
+    pub(super) fn file_name(&self, name: &str) -> PathBuf {
+        self.data_dir.join(format!("{name}.dat"))
     }
 }
 
@@ -172,8 +416,14 @@ mod tests {
     use tempfile::tempdir;
 
     use crate::{
+        Value,
         buffer_pool::page_store::PageStore,
-        catalog::{CatalogError, systable::SystemTable},
+        catalog::{
+            CatalogError,
+            systable::{ColumnRow, SystemTable, TableRow},
+        },
+        transaction::TransactionManager,
+        tuple::Tuple,
         wal::writer::Wal,
     };
 
@@ -257,5 +507,207 @@ mod tests {
             Err(CatalogError::Io(_)) => {}
             Err(e) => panic!("expected CatalogError::Io, got: {e}"),
         }
+    }
+
+    // create_heap_file must create the file on disk when it does not exist.
+    #[test]
+    fn test_create_heap_file_creates_file() {
+        let dir = tempdir().unwrap();
+        let (wal, bp) = make_infra(dir.path());
+        let path = dir.path().join("test_table.dat");
+        let schema = SystemTable::Tables.schema();
+
+        assert!(!path.exists());
+        let heap = Catalog::create_heap_file(FileId(100), &path, schema, &bp, &wal);
+        assert!(heap.is_ok());
+        assert!(path.exists());
+    }
+
+    // create_heap_file must succeed when the file already exists.
+    #[test]
+    fn test_create_heap_file_existing_file_ok() {
+        let dir = tempdir().unwrap();
+        let (wal, bp) = make_infra(dir.path());
+        let path = dir.path().join("test_table.dat");
+        let schema = SystemTable::Tables.schema();
+
+        File::create(&path).unwrap();
+        assert!(path.exists());
+        let heap = Catalog::create_heap_file(FileId(100), &path, schema, &bp, &wal);
+        assert!(heap.is_ok());
+    }
+
+    // create_heap_file must return Io error when the parent directory doesn't exist.
+    #[test]
+    fn test_create_heap_file_bad_parent_returns_io_error() {
+        let dir = tempdir().unwrap();
+        let (wal, bp) = make_infra(dir.path());
+        let path = dir.path().join("no_such_dir").join("table.dat");
+        let schema = SystemTable::Tables.schema();
+
+        let result = Catalog::create_heap_file(FileId(100), &path, schema, &bp, &wal);
+        assert!(result.is_err(), "expected Io error for bad parent dir");
+        match result.err().unwrap() {
+            CatalogError::Io(_) => {}
+            e => panic!("expected CatalogError::Io, got: {e}"),
+        }
+    }
+
+    // open_existing_heap must return Corruption when the file is missing.
+    #[test]
+    fn test_open_existing_heap_missing_file_yields_corruption() {
+        let dir = tempdir().unwrap();
+        let (wal, bp) = make_infra(dir.path());
+        let catalog = Catalog::initialize(&bp, &wal, dir.path()).unwrap();
+
+        let ghost = dir.path().join("ghost.dat");
+        let schema = SystemTable::Tables.schema();
+
+        let result = catalog.open_existing_heap(FileId(100), &ghost, "ghost_table", schema);
+        assert!(result.is_err(), "expected Corruption for missing file");
+        match result.err().unwrap() {
+            CatalogError::Corruption { .. } => {}
+            e => panic!("expected CatalogError::Corruption, got: {e}"),
+        }
+    }
+
+    // open_existing_heap must succeed when the file exists on disk.
+    #[test]
+    fn test_open_existing_heap_valid_file_succeeds() {
+        let dir = tempdir().unwrap();
+        let (wal, bp) = make_infra(dir.path());
+        let catalog = Catalog::initialize(&bp, &wal, dir.path()).unwrap();
+
+        let path = dir.path().join("users.dat");
+        File::create(&path).unwrap();
+        let schema = SystemTable::Tables.schema();
+
+        let heap = catalog.open_existing_heap(FileId(100), &path, "users", schema);
+        assert!(heap.is_ok());
+    }
+
+    fn make_catalog_and_txn_mgr(dir: &Path) -> (Catalog, TransactionManager) {
+        let (wal, bp) = make_infra(dir);
+        let catalog = Catalog::initialize(&bp, &wal, dir).unwrap();
+        let txn_mgr = TransactionManager::new(wal, bp);
+        (catalog, txn_mgr)
+    }
+
+    // Scanning an empty system table must return an empty vec.
+    #[test]
+    fn test_scan_system_table_empty_returns_empty_vec() {
+        let dir = tempdir().unwrap();
+        let (catalog, txn_mgr) = make_catalog_and_txn_mgr(dir.path());
+        let txn = txn_mgr.begin().unwrap();
+
+        let rows: Vec<TableRow> = catalog
+            .scan_system_table(&txn, SystemTable::Tables)
+            .unwrap();
+        assert!(rows.is_empty());
+
+        txn.commit().unwrap();
+    }
+
+    // After inserting a tuple, scan_system_table must return it deserialized.
+    #[test]
+    fn test_scan_system_table_returns_inserted_row() {
+        let dir = tempdir().unwrap();
+        let (catalog, txn_mgr) = make_catalog_and_txn_mgr(dir.path());
+
+        let heap = catalog.system.get(SystemTable::Tables).unwrap();
+        let tuple = Tuple::new(vec![
+            Value::Uint64(42),
+            Value::String("users".into()),
+            Value::String("/data/users.dat".into()),
+            Value::Null,
+        ]);
+
+        let insert_txn = txn_mgr.begin().unwrap();
+        heap.insert_tuple(insert_txn.transaction_id(), &tuple)
+            .unwrap();
+        insert_txn.commit().unwrap();
+
+        let txn = txn_mgr.begin().unwrap();
+        let rows: Vec<TableRow> = catalog
+            .scan_system_table(&txn, SystemTable::Tables)
+            .unwrap();
+
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].table_name, "users");
+        assert_eq!(rows[0].table_id, FileId(42));
+
+        txn.commit().unwrap();
+    }
+
+    // scan_system_table must deserialize multiple rows correctly.
+    #[test]
+    fn test_scan_system_table_multiple_rows() {
+        let dir = tempdir().unwrap();
+        let (catalog, txn_mgr) = make_catalog_and_txn_mgr(dir.path());
+
+        let heap = catalog.system.get(SystemTable::Columns).unwrap();
+        let tuples = vec![
+            Tuple::new(vec![
+                Value::Int64(1),
+                Value::String("id".into()),
+                Value::Uint32(3), // Type::Int64
+                Value::Int32(0),
+                Value::Bool(false),
+            ]),
+            Tuple::new(vec![
+                Value::Int64(1),
+                Value::String("name".into()),
+                Value::Uint32(5), // Type::String
+                Value::Int32(1),
+                Value::Bool(true),
+            ]),
+        ];
+
+        let insert_txn = txn_mgr.begin().unwrap();
+        for t in &tuples {
+            heap.insert_tuple(insert_txn.transaction_id(), t).unwrap();
+        }
+        insert_txn.commit().unwrap();
+
+        let txn = txn_mgr.begin().unwrap();
+        let rows: Vec<ColumnRow> = catalog
+            .scan_system_table(&txn, SystemTable::Columns)
+            .unwrap();
+
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0].column_name, "id");
+        assert_eq!(rows[1].column_name, "name");
+        assert!(rows[1].nullable);
+
+        txn.commit().unwrap();
+    }
+
+    // scan_system_table must propagate deserialization errors.
+    #[test]
+    fn test_scan_system_table_bad_tuple_returns_error() {
+        let dir = tempdir().unwrap();
+        let (catalog, txn_mgr) = make_catalog_and_txn_mgr(dir.path());
+
+        let heap = catalog.system.get(SystemTable::Columns).unwrap();
+        // Invalid: column_type 999 has no Type variant
+        let bad_tuple = Tuple::new(vec![
+            Value::Int64(1),
+            Value::String("col".into()),
+            Value::Uint32(999),
+            Value::Int32(0),
+            Value::Bool(false),
+        ]);
+
+        let insert_txn = txn_mgr.begin().unwrap();
+        heap.insert_tuple(insert_txn.transaction_id(), &bad_tuple)
+            .unwrap();
+        insert_txn.commit().unwrap();
+
+        let txn = txn_mgr.begin().unwrap();
+        let result: Result<Vec<ColumnRow>, _> =
+            catalog.scan_system_table(&txn, SystemTable::Columns);
+        assert!(result.is_err());
+
+        // txn auto-aborts on drop
     }
 }
