@@ -179,7 +179,7 @@ impl TryFrom<&Tuple> for TableRow {
             FileId::from(read_as!(t, 0 => u64 => u64)),
             read_as!(t, 1),
             PathBuf::from(read_as!(t, 2 => String => String)),
-            read_as!(t, 3 => String => Option<String>),
+            TupleReader::read::<Option<String>>(t, 3)?,
         )
     }
 }
