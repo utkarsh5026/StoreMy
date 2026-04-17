@@ -22,6 +22,11 @@ path = "src/main.rs"
 thiserror = "1.0"
 anyhow = "1.0"
 
+# REPL / richer output
+rustyline = "14"
+comfy-table = "7"
+owo-colors = "4"
+
 # Fallible iteration
 fallible-iterator = "0.3"
 
