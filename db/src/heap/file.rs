@@ -124,6 +124,14 @@ impl HeapFile {
         self.num_pages.load(Ordering::Acquire)
     }
 
+    /// Returns the schema of the file.
+    /// # Returns
+    ///
+    /// The schema of the file.
+    pub fn schema(&self) -> &TupleSchema {
+        &self.schema
+    }
+
     /// Inserts `tuple` into the first page that has room, allocating a new page if necessary.
     ///
     /// The search visits pages `0..=num_pages` in order. If every existing page
@@ -529,6 +537,25 @@ impl Iterator for HeapScan<'_> {
                 return None;
             }
 
+            self.current_page += 1;
+        }
+    }
+}
+
+impl fallible_iterator::FallibleIterator for HeapScan<'_> {
+    type Item = (RecordId, Tuple);
+    type Error = HeapError;
+    fn next(&mut self) -> Result<Option<Self::Item>, Self::Error> {
+        loop {
+            if self.tuple_idx < self.page_tuples.len() {
+                let item = self.page_tuples[self.tuple_idx].clone();
+                self.tuple_idx += 1;
+                return Ok(Some(item));
+            }
+            if self.current_page >= self.file.num_pages() {
+                return Ok(None);
+            }
+            self.load_page()?;
             self.current_page += 1;
         }
     }
