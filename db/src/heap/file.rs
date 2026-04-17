@@ -9,11 +9,25 @@
 //! filesystem directly. Every mutating operation writes a WAL record before
 //! updating the page so that a crash mid-write can be recovered.
 //!
+//! # Page allocation
+//!
+//! Pages are numbered starting at zero. [`HeapFile`] tracks the current page
+//! count with an atomic counter so it knows which pages to probe during an
+//! insert. When all existing pages are full a new page number is claimed with
+//! a single atomic fetch-add, and the tuple lands there.
+//!
 //! # Concurrency
 //!
 //! Each mutating call acquires an *exclusive* page lock for the duration of the
 //! call. [`HeapScan`] acquires *shared* page locks one page at a time and
 //! releases each lock before moving to the next page.
+//!
+//! # WAL ordering
+//!
+//! Every mutating method writes a WAL record *before* calling
+//! [`PageGuard::write`] so the page image is never newer than the log. On
+//! recovery the WAL can therefore redo any update that was flushed to the log
+//! but whose dirty page was evicted before a crash.
 
 use std::sync::{
     Arc,
@@ -23,13 +37,13 @@ use std::sync::{
 use thiserror::Error;
 
 use crate::{
-    FileId, TransactionId,
+    FileId, PageNumber, TransactionId,
     buffer_pool::{
         LockRequest,
-        page_store::{PageStore, PageStoreError},
+        page_store::{PageGuard, PageStore, PageStoreError},
     },
     heap::page::HeapPage,
-    primitives::{PageId, RecordId},
+    primitives::{PageId, RecordId, SlotId},
     storage::{Page, StorageError},
     tuple::{Tuple, TupleSchema},
     wal::writer::{Wal, WalError},
@@ -38,32 +52,31 @@ use crate::{
 /// Errors that can occur during heap file operations.
 #[derive(Debug, Error)]
 pub enum HeapError {
+    /// The buffer-pool page store returned an error (e.g. unregistered file,
+    /// lock contention, or I/O failure).
     #[error("page store: {0}")]
     Store(#[from] PageStoreError),
 
+    /// A page-layout or slot-level error was returned by the storage layer
+    /// (e.g. the requested slot index is out of range).
     #[error("storage: {0}")]
     Storage(#[from] StorageError),
 
+    /// Writing a WAL record failed.
     #[error("wal: {0}")]
     Wal(#[from] WalError),
 
+    /// The slot referenced by the [`RecordId`] has no live tuple — it was
+    /// never written or has already been deleted.
     #[error("record {0} not found")]
     NotFound(RecordId),
 
+    /// A freshly allocated page has no room for the tuple being inserted.
+    /// Under normal conditions this should never happen; it indicates the
+    /// tuple is larger than an entire page.
     #[error("page is full")]
     PageFull,
 }
-
-// HeapFile: multi-page heap table management.
-//
-// Wraps PageStore and HeapPage to provide tuple-level operations:
-//   - insert(txn, tuple) -> (PageNumber, SlotId)
-//   - delete(txn, page_no, slot_id)
-//   - update(txn, page_no, slot_id, new_tuple)
-//   - scan(txn) -> impl Iterator<Item = Tuple>
-//
-// Knows its FileId and TupleSchema. Does not touch disk directly —
-// all I/O goes through PageStore.
 
 /// Unordered, multi-page storage for a single table's tuples.
 ///
@@ -105,7 +118,8 @@ impl HeapFile {
         }
     }
 
-    /// Returns the number of pages currently allocated to this file.
+    /// Returns the current page count with acquire ordering so the caller
+    /// sees all pages initialized by prior atomic stores.
     fn num_pages(&self) -> u32 {
         self.num_pages.load(Ordering::Acquire)
     }
@@ -129,14 +143,14 @@ impl HeapFile {
         tuple: &Tuple,
     ) -> Result<RecordId, HeapError> {
         for page_no in 0..=self.num_pages() {
-            let page_id = PageId::new(self.file_id, page_no.into());
+            let page_id = self.page_id(page_no);
             if let Some(record_id) = self.insert_into_page(transaction_id, page_id, tuple)? {
                 return Ok(record_id);
             }
         }
 
         let new_page_no = self.num_pages.fetch_add(1, Ordering::AcqRel);
-        let page_id = PageId::new(self.file_id, new_page_no.into());
+        let page_id = self.page_id(new_page_no);
         if let Some(record_id) = self.insert_into_page(transaction_id, page_id, tuple)? {
             return Ok(record_id);
         }
@@ -161,18 +175,12 @@ impl HeapFile {
         transaction_id: TransactionId,
         record_id: RecordId,
     ) -> Result<(), HeapError> {
-        let page_id = PageId::new(self.file_id, record_id.page_no);
-        let guard = self
-            .buffer_pool
-            .fetch_page(LockRequest::exclusive(transaction_id, page_id))?;
+        let page_id = self.page_id(record_id.page_no);
+        let guard = self.guard(page_id, transaction_id, true)?;
 
-        let mut page = HeapPage::new(page_id, &guard.read(), &self.schema)?;
+        let mut page = self.h_page(&guard.read())?;
         page.delete_tuple(record_id.slot_id)?;
-        let before = page
-            .before_image()
-            .ok_or(HeapError::NotFound(record_id))?
-            .to_vec();
-        let lsn = self.wal.log_delete(transaction_id, page_id, before)?;
+        let lsn = self.wal.log_page_delete(transaction_id, page_id, &page)?;
         guard.write(&page.page_data(), lsn);
         Ok(())
     }
@@ -196,20 +204,12 @@ impl HeapFile {
         record_id: RecordId,
         tuple: &Tuple,
     ) -> Result<(), HeapError> {
-        let page_id = PageId::new(self.file_id, record_id.page_no);
-        let guard = self
-            .buffer_pool
-            .fetch_page(LockRequest::exclusive(transaction_id, page_id))?;
-        let mut page = HeapPage::new(page_id, &guard.read(), &self.schema)?;
+        let page_id = self.page_id(record_id.page_no);
+        let guard = self.guard(page_id, transaction_id, true)?;
+        let mut page = self.h_page(&guard.read())?;
         page.delete_tuple(record_id.slot_id)?;
         page.insert_tuple(tuple.clone())?;
-        let before = page
-            .before_image()
-            .ok_or(HeapError::NotFound(record_id))?
-            .to_vec();
-        let lsn =
-            self.wal
-                .log_update(transaction_id, page_id, before, page.page_data().to_vec())?;
+        let lsn = self.wal.log_page_update(transaction_id, page_id, &page)?;
         guard.write(&page.page_data(), lsn);
         Ok(())
     }
@@ -231,23 +231,11 @@ impl HeapFile {
         page_id: PageId,
         tuple: &Tuple,
     ) -> Result<Option<RecordId>, HeapError> {
-        let guard = self
-            .buffer_pool
-            .fetch_page(LockRequest::exclusive(transaction_id, page_id))?;
-
-        let data = guard.read();
-        let mut page = HeapPage::new(page_id, &data, &self.schema)?;
-
-        match page.insert_tuple(tuple.clone()) {
-            Ok(slot_id) => {
-                let after = page.page_data().to_vec();
-                let lsn = self.wal.log_insert(transaction_id, page_id, after)?;
-                guard.write(&page.page_data(), lsn);
-                Ok(Some(RecordId::new(self.file_id, page_id.page_no, slot_id)))
-            }
-            Err(StorageError::PageFull) => Ok(None),
-            Err(e) => Err(e.into()),
-        }
+        let mut once = std::iter::once(tuple.clone());
+        Ok(self
+            .fill_page(transaction_id, page_id, &mut once)?
+            .into_iter()
+            .next())
     }
 
     /// Returns an iterator over all live tuples in the file.
@@ -292,17 +280,208 @@ impl HeapFile {
         }
         Ok(count)
     }
+
+    /// Inserts as many tuples from `tuples` into `page_id` as will fit.
+    ///
+    /// Acquires an exclusive lock on the page, calls [`HeapPage::insert_many`]
+    /// to pack tuples until the page is full, then writes a single INSERT WAL
+    /// record for the whole batch and flushes the page. Returns the number of
+    /// tuples that were actually inserted.
+    ///
+    /// # Errors
+    ///
+    /// - [`HeapError::Store`] — the page could not be fetched or locked.
+    /// - [`HeapError::Storage`] — an unexpected page-layout error occurred.
+    /// - [`HeapError::Wal`] — the WAL record could not be written.
+    fn fill_page<I>(
+        &self,
+        transaction_id: TransactionId,
+        page_id: PageId,
+        tuples: &mut I,
+    ) -> Result<Vec<RecordId>, HeapError>
+    where
+        I: Iterator<Item = Tuple>,
+    {
+        let guard = self.guard(page_id, transaction_id, true)?;
+        let mut page = self.h_page(&guard.read())?;
+
+        let inserted = page.insert_many(tuples)?;
+        if inserted.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let lsn = self.wal.log_page_insert(transaction_id, page_id, &page)?;
+        guard.write(&page.page_data(), lsn);
+        self.num_pages
+            .fetch_max(page_id.page_no.0 + 1, Ordering::AcqRel);
+
+        let page_no = page_id.page_no;
+        Ok(inserted
+            .into_iter()
+            .map(|slot_id| self.record_id(page_no, slot_id))
+            .collect())
+    }
+
+    /// Inserts a batch of tuples as efficiently as possible, filling existing
+    /// pages before allocating new ones.
+    ///
+    /// Iterates through pages `0..=num_pages` and calls [`Self::fill_page`] on
+    /// each. If the iterator is not yet exhausted after all existing pages have
+    /// been tried, new pages are claimed atomically until every tuple has been
+    /// stored. Returns the total number of tuples inserted.
+    ///
+    /// This is more efficient than repeated [`Self::insert_tuple`] calls
+    /// because it batches WAL writes: one WAL record is written per page
+    /// rather than one per tuple.
+    ///
+    /// # Errors
+    ///
+    /// Propagates any [`HeapError`] returned by [`Self::fill_page`].
+    pub fn bulk_insert<I>(&self, txn: TransactionId, tuples: I) -> Result<Vec<RecordId>, HeapError>
+    where
+        I: IntoIterator<Item = Tuple>,
+    {
+        let mut iter = tuples.into_iter().peekable();
+        let mut record_ids = Vec::new();
+
+        for page_no in 0..=self.num_pages() {
+            if iter.peek().is_none() {
+                break;
+            }
+            let page_id = self.page_id(page_no);
+            record_ids.extend(self.fill_page(txn, page_id, &mut iter)?);
+        }
+
+        while iter.peek().is_some() {
+            let page_no = self.num_pages.fetch_add(1, Ordering::AcqRel);
+            let page_id = self.page_id(page_no);
+            record_ids.extend(self.fill_page(txn, page_id, &mut iter)?);
+        }
+
+        Ok(record_ids)
+    }
+
+    /// Deletes every tuple for which `predicate` returns `true` and returns
+    /// the number of tuples deleted.
+    ///
+    /// Performs a full scan to collect matching [`RecordId`]s, then deletes
+    /// them one by one. The scan and the deletions run in the same transaction
+    /// but each deletion acquires its own exclusive page lock, so other
+    /// transactions interleaved between the scan and the deletions may observe
+    /// a partially-deleted state.
+    ///
+    /// # Errors
+    ///
+    /// - [`HeapError::Store`] — a page could not be fetched or locked.
+    /// - [`HeapError::Storage`] — a slot was out of range.
+    /// - [`HeapError::Wal`] — a DELETE WAL record could not be written.
+    pub fn bulk_delete<F>(
+        &self,
+        transaction_id: TransactionId,
+        predicate: F,
+    ) -> Result<u32, HeapError>
+    where
+        F: Fn(&Tuple) -> bool,
+    {
+        let to_delete: Vec<RecordId> = self
+            .scan(transaction_id)?
+            .filter(|(_, tuple)| predicate(tuple))
+            .map(|(record_id, _)| record_id)
+            .collect();
+
+        let mut count: u32 = 0;
+        for record_id in to_delete {
+            self.delete_tuple(transaction_id, record_id)?;
+            count += 1;
+        }
+        Ok(count)
+    }
+
+    /// Wraps raw page `data` in a [`HeapPage`] view bound to this file's schema.
+    #[inline]
+    fn h_page(&self, data: &[u8]) -> Result<HeapPage<'_>, StorageError> {
+        HeapPage::new(data, &self.schema)
+    }
+
+    /// Creates a new `PageId` for the given page number.
+    #[inline]
+    fn page_id(&self, page_no: impl Into<PageNumber>) -> PageId {
+        PageId::new(self.file_id, page_no.into())
+    }
+
+    /// Creates a new `RecordId` for the given page number and slot ID.
+    #[inline]
+    fn record_id(&self, page_no: impl Into<PageNumber>, slot_id: SlotId) -> RecordId {
+        RecordId::new(self.file_id, page_no.into(), slot_id)
+    }
+
+    /// Fetches `page_id` from the buffer pool and returns a [`PageGuard`].
+    ///
+    /// Requests an exclusive lock when `exclusive` is `true`, or a shared lock
+    /// otherwise. The guard keeps the page pinned in the buffer pool until it
+    /// is dropped.
+    fn guard(
+        &self,
+        page_id: PageId,
+        transaction_id: TransactionId,
+        exclusive: bool,
+    ) -> Result<PageGuard<'_>, PageStoreError> {
+        let req = if exclusive {
+            LockRequest::exclusive(transaction_id, page_id)
+        } else {
+            LockRequest::shared(transaction_id, page_id)
+        };
+        self.buffer_pool.fetch_page(req)
+    }
+
+    /// Reads all live tuples from the given page number.
+    ///
+    /// # Errors
+    ///
+    /// - [`HeapError::Store`] — the page could not be fetched or locked.
+    /// - [`HeapError::Storage`] — a slot was out of range.
+    ///
+    /// # Returns
+    ///
+    /// A vector of `(RecordId, Tuple)` pairs.
+    pub(super) fn read_live_tuples(
+        &self,
+        page_no: impl Into<PageNumber> + Copy,
+        transaction_id: TransactionId,
+    ) -> Result<Vec<(RecordId, Tuple)>, HeapError> {
+        let page_id = self.page_id(page_no);
+        let guard = self.guard(page_id, transaction_id, false)?;
+        let page = self.h_page(&guard.read())?;
+        Ok(page
+            .live_tuples()
+            .map(|(slot_id, tuple)| (self.record_id(page_no, slot_id), tuple.clone()))
+            .collect())
+    }
 }
 
 /// Iterator over all live tuples in a `HeapFile`.
 ///
 /// Tuples are materialized one page at a time — a `PageGuard` is pinned only
 /// long enough to copy the tuples out, then released before moving on.
+///
+/// The lifetime `'a` ties this iterator to the [`HeapFile`] it was created
+/// from, borrowing the file to access the buffer pool and schema without
+/// cloning them.
 pub struct HeapScan<'a> {
+    /// The heap file being scanned.
     file: &'a HeapFile,
+    /// Transaction under whose context pages are locked.
     txn: TransactionId,
+    /// Index of the page that will be loaded on the next [`HeapScan::load_page`] call.
+    ///
+    /// Incremented each time the current `page_tuples` buffer is exhausted.
     current_page: u32,
+    /// Tuples copied out of the most recently loaded page.
+    ///
+    /// Held in a `Vec` so the page lock can be released immediately after the
+    /// copy, rather than being held for the lifetime of the iterator.
     page_tuples: Vec<(RecordId, Tuple)>,
+    /// Position within `page_tuples` for the next call to [`Iterator::next`].
     tuple_idx: usize,
 }
 
@@ -320,28 +499,12 @@ impl<'a> HeapScan<'a> {
         }
     }
 
-    /// Fetches `current_page` from the buffer pool and copies its live tuples into `page_tuples`.
+    /// Fetches the current page from the buffer pool and copies its live tuples into `page_tuples`.
     ///
     /// The shared page lock is held only for the duration of this call; the
     /// guard is dropped before returning, freeing the lock.
     fn load_page(&mut self) -> Result<(), HeapError> {
-        let page_id = PageId::new(self.file.file_id, self.current_page.into());
-        let guard = self
-            .file
-            .buffer_pool
-            .fetch_page(LockRequest::shared(self.txn, page_id))?;
-        let page = HeapPage::new(page_id, &guard.read(), &self.file.schema)?;
-        self.page_tuples = page
-            .live_tuples()
-            .map(|(slot_id, tuple)| {
-                let record_id = RecordId {
-                    file_id: self.file.file_id,
-                    page_no: self.current_page.into(),
-                    slot_id,
-                };
-                (record_id, tuple.clone())
-            })
-            .collect();
+        self.page_tuples = self.file.read_live_tuples(self.current_page, self.txn)?;
         self.tuple_idx = 0;
         Ok(())
     }
@@ -362,11 +525,7 @@ impl Iterator for HeapScan<'_> {
                 return Some(item);
             }
 
-            if self.current_page >= self.file.num_pages() {
-                return None;
-            }
-
-            if self.load_page().is_err() {
+            if self.current_page >= self.file.num_pages() || self.load_page().is_err() {
                 return None;
             }
 
@@ -577,19 +736,18 @@ mod tests {
 
     // ── edge cases ───────────────────────────────────────────────────────────
 
-    // num_pages counter is only incremented via the new-page fallback path in
-    // insert_tuple, not when the insert lands in an existing slot found by the loop.
-    // When starting from 0 pages the loop covers page 0 (0..=0) and inserts there
-    // without touching the counter, so it stays at 0 after the first insert.
+    // num_pages counter must reflect the highest page that's been written to,
+    // regardless of which insert path (for-loop or fetch_add fallback) placed
+    // the tuple. This guarantees scan sees pages that hold live tuples.
     #[test]
-    fn test_num_pages_stays_zero_after_loop_path_insert() {
+    fn test_num_pages_reflects_highest_written_page() {
         let (heap, wal, _dir) = make_heap_file(0);
         assert_eq!(heap.num_pages(), 0);
         let txn = begin_txn(&wal, 1);
         heap.insert_tuple(txn, &make_tuple(1, true)).unwrap();
-        // Counter unchanged — insert went through the 0..=num_pages loop, not the
-        // fetch_add fallback.
-        assert_eq!(heap.num_pages(), 0);
+        // Insert landed on page 0 via the for-loop path; counter must bump to 1
+        // so HeapScan visits page 0.
+        assert_eq!(heap.num_pages(), 1);
     }
 
     // Constructing with existing_pages > 0 reflects in num_pages()
@@ -657,6 +815,130 @@ mod tests {
     }
 
     // ── HeapError Display ────────────────────────────────────────────────────
+
+    // ── bulk_insert ──────────────────────────────────────────────────────────
+
+    #[test]
+    fn test_bulk_insert_empty_iterator_returns_zero() {
+        let (heap, wal, _dir) = make_heap_file(0);
+        let txn = begin_txn(&wal, 1);
+        let record_ids = heap.bulk_insert(txn, std::iter::empty()).unwrap();
+        assert_eq!(record_ids.len(), 0);
+        assert_eq!(heap.scan(txn).unwrap().count(), 0);
+    }
+
+    #[test]
+    fn test_bulk_insert_returns_count_matching_input() {
+        let (heap, wal, _dir) = make_heap_file(0);
+        let txn = begin_txn(&wal, 1);
+        let tuples: Vec<Tuple> = (0..50).map(|i| make_tuple(i, i % 2 == 0)).collect();
+        let count = heap.bulk_insert(txn, tuples).unwrap();
+        assert_eq!(count.len(), 50);
+    }
+
+    #[test]
+    fn test_bulk_insert_all_tuples_visible_in_scan() {
+        let (heap, wal, _dir) = make_heap_file(0);
+        let txn = begin_txn(&wal, 1);
+        let tuples: Vec<Tuple> = (0..25).map(|i| make_tuple(i, true)).collect();
+        heap.bulk_insert(txn, tuples.clone()).unwrap();
+
+        let scanned: Vec<Tuple> = heap.scan(txn).unwrap().map(|(_, t)| t).collect();
+        assert_eq!(scanned.len(), tuples.len());
+        for t in &tuples {
+            assert!(scanned.contains(t), "missing tuple {t:?}");
+        }
+    }
+
+    #[test]
+    fn test_bulk_insert_fills_existing_page_before_allocating() {
+        let (heap, wal, _dir) = make_heap_file(0);
+        let txn = begin_txn(&wal, 1);
+        heap.insert_tuple(txn, &make_tuple(1, true)).unwrap();
+        let before_pages = heap.num_pages();
+
+        heap.bulk_insert(txn, vec![make_tuple(2, false), make_tuple(3, true)])
+            .unwrap();
+
+        // A couple of small tuples should fit on page 0, not force a new page.
+        assert_eq!(heap.num_pages(), before_pages);
+        assert_eq!(heap.scan(txn).unwrap().count(), 3);
+    }
+
+    #[test]
+    fn test_bulk_insert_then_additional_inserts_coexist() {
+        let (heap, wal, _dir) = make_heap_file(0);
+        let txn = begin_txn(&wal, 1);
+        heap.bulk_insert(txn, (0..10).map(|i| make_tuple(i, true)))
+            .unwrap();
+        heap.insert_tuple(txn, &make_tuple(100, false)).unwrap();
+        assert_eq!(heap.scan(txn).unwrap().count(), 11);
+    }
+
+    // ── bulk_delete ──────────────────────────────────────────────────────────
+
+    #[test]
+    fn test_bulk_delete_empty_file_returns_zero() {
+        let (heap, wal, _dir) = make_heap_file(0);
+        let txn = begin_txn(&wal, 1);
+        let count = heap.bulk_delete(txn, |_| true).unwrap();
+        assert_eq!(count, 0);
+    }
+
+    #[test]
+    fn test_bulk_delete_no_matches_returns_zero() {
+        let (heap, wal, _dir) = make_heap_file(0);
+        let txn = begin_txn(&wal, 1);
+        for i in 0..5 {
+            heap.insert_tuple(txn, &make_tuple(i, true)).unwrap();
+        }
+        let count = heap.bulk_delete(txn, |_| false).unwrap();
+        assert_eq!(count, 0);
+        assert_eq!(heap.scan(txn).unwrap().count(), 5);
+    }
+
+    #[test]
+    fn test_bulk_delete_all_matches_clears_file() {
+        let (heap, wal, _dir) = make_heap_file(0);
+        let txn = begin_txn(&wal, 1);
+        for i in 0..8 {
+            heap.insert_tuple(txn, &make_tuple(i, true)).unwrap();
+        }
+        let count = heap.bulk_delete(txn, |_| true).unwrap();
+        assert_eq!(count, 8);
+        assert_eq!(heap.scan(txn).unwrap().count(), 0);
+    }
+
+    #[test]
+    fn test_bulk_delete_predicate_filters_correctly() {
+        let (heap, wal, _dir) = make_heap_file(0);
+        let txn = begin_txn(&wal, 1);
+        for i in 0..10 {
+            heap.insert_tuple(txn, &make_tuple(i, i % 2 == 0)).unwrap();
+        }
+        let count = heap
+            .bulk_delete(txn, |t| matches!(t.get(1), Some(Value::Bool(true))))
+            .unwrap();
+        assert_eq!(count, 5);
+
+        let remaining: Vec<Tuple> = heap.scan(txn).unwrap().map(|(_, t)| t).collect();
+        assert_eq!(remaining.len(), 5);
+        for t in &remaining {
+            assert!(matches!(t.get(1), Some(Value::Bool(false))));
+        }
+    }
+
+    #[test]
+    fn test_bulk_insert_then_bulk_delete_round_trip() {
+        let (heap, wal, _dir) = make_heap_file(0);
+        let txn = begin_txn(&wal, 1);
+        let inserted = heap
+            .bulk_insert(txn, (0..50).map(|i| make_tuple(i, true)))
+            .unwrap();
+        let deleted = heap.bulk_delete(txn, |_| true).unwrap();
+        assert_eq!(inserted.len(), usize::try_from(deleted).unwrap());
+        assert_eq!(heap.scan(txn).unwrap().count(), 0);
+    }
 
     // HeapError variants format without panicking (smoke test for derive(Error))
     #[test]

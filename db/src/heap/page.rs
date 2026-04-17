@@ -4,6 +4,29 @@
 //! slotted page: a compact header of [`SlotPointer`] entries at the front,
 //! followed by tuple data growing upward from the end of the header.
 //!
+//! ## In-memory layout  (one `PAGE_SIZE`-byte buffer)
+//!
+//! ```text
+//!  byte 0                                                          PAGE_SIZE - 1
+//!  |                                                                           |
+//!  +---------------------------+---------------------------+--------------------+
+//!  |   Slot-pointer header     |   Tuple data (packed)     |    Free space      |
+//!  |   (num_slots x 4 bytes)   |   grows ------------->    |    (unused)        |
+//!  +---------------------------+---------------------------+--------------------+
+//!  ^                           ^                           ^                   ^
+//!  byte 0          num_slots x SLOT_POINTER_SIZE    free_space_offset     PAGE_SIZE
+//!
+//!
+//!  Slot i occupies bytes [i*4 .. i*4+4) in the header:
+//!
+//!  +---- byte i*4 -------+---- byte i*4+2 ------+
+//!  |   offset  (u16 LE)  |   length  (u16 LE)   |
+//!  +---------------------+----------------------+
+//!         |                      |
+//!         |                      +-- 0  =>  slot is empty (deleted or unused)
+//!         +-- byte position of this tuple's first byte within the page
+//! ```
+//!
 //! Each slot pointer records where a tuple lives inside the page (byte offset
 //! and byte length). A slot whose `length` is zero is considered empty and can
 //! be reused by the next insert.
@@ -16,7 +39,7 @@ use std::vec;
 use byteorder::{ByteOrder, LittleEndian};
 
 use crate::{
-    primitives::{PageId, SlotId},
+    primitives::SlotId,
     storage::{MAX_TUPLE_SIZE, PAGE_SIZE, Page, StorageError},
     tuple::{Tuple, TupleSchema},
 };
@@ -56,21 +79,11 @@ struct SlotPointer {
 /// The page is parameterized by a schema lifetime `'a`; the [`TupleSchema`]
 /// must outlive the page.
 pub struct HeapPage<'a> {
-    /// Identifier of this page within its heap file.
-    page_id: PageId,
-    /// Schema that describes the shape of every tuple on this page.
     schema: &'a TupleSchema,
-    /// In-memory decoded tuples, indexed by slot number. `None` means the
-    /// slot is empty.
     tuples: Vec<Option<Tuple>>,
-    /// Parallel array of slot pointers that mirrors `tuples`.
     slot_pointers: Vec<SlotPointer>,
-    /// Byte offset of the next free byte available for tuple data.
     free_space_offset: usize,
-    /// Snapshot of the raw page bytes taken when the page was first loaded,
-    /// used as the WAL before-image.
     old_data: [u8; PAGE_SIZE],
-    /// Total number of slots (both occupied and empty) on this page.
     num_slots: u16,
 }
 
@@ -91,11 +104,7 @@ impl<'a> HeapPage<'a> {
     ///
     /// Returns [`StorageError::ParseError`] if any slot pointer or tuple data
     /// is malformed or out of bounds.
-    pub fn new(
-        page_id: PageId,
-        data: &[u8],
-        schema: &'a TupleSchema,
-    ) -> Result<Self, StorageError> {
+    pub fn new(data: &[u8], schema: &'a TupleSchema) -> Result<Self, StorageError> {
         if data.len() != PAGE_SIZE {
             return Err(StorageError::InvalidPageSize { got: data.len() });
         }
@@ -105,7 +114,6 @@ impl<'a> HeapPage<'a> {
         let slot_pointers = vec![SlotPointer::default(); num_tuples];
 
         let mut hp = Self {
-            page_id,
             schema,
             old_data: data.try_into().unwrap(),
             tuples,
@@ -188,11 +196,13 @@ impl<'a> HeapPage<'a> {
             return Err(StorageError::PageFull);
         }
 
+        let offset = self.free_space_offset; // 16 ← start of this tuple
         self.free_space_offset += tup_size;
 
-        let offset = u16::try_from(self.free_space_offset).map_err(|_| {
+        let offset = u16::try_from(offset).map_err(|_| {
             StorageError::ParseError("free space offset overflowed u16".to_string())
         })?;
+
         let length =
             u16::try_from(tup_size).map_err(|_| StorageError::tuple_too_large(tup_size))?;
 
@@ -220,8 +230,9 @@ impl<'a> HeapPage<'a> {
     pub(crate) fn delete_tuple(&mut self, slot_id: SlotId) -> Result<(), StorageError> {
         self.check_slot_bounds(slot_id)?;
 
-        self.is_slot_empty(slot_id)
-            .map_err(|_| StorageError::slot_already_empty(slot_id))?;
+        if self.is_slot_empty(slot_id)? {
+            return Err(StorageError::slot_already_empty(slot_id));
+        }
 
         let index = usize::from(slot_id);
         self.slot_pointers[index] = SlotPointer::default();
@@ -287,6 +298,54 @@ impl<'a> HeapPage<'a> {
 
         Ok(())
     }
+
+    /// Marks multiple slots as deleted by zeroing their slot pointers.
+    ///
+    /// The slots become available for future inserts. The tuple bytes in the
+    /// page buffer are not zeroed out, but they will be overwritten on the next
+    /// insert that claims the slot.
+    ///
+    /// # Errors
+    ///
+    /// - [`StorageError::SlotOutOfBounds`] — any of the `slots` is out of bounds.
+    /// - [`StorageError::SlotAlreadyEmpty`] — any of the `slots` is already empty.
+    ///
+    /// # Returns
+    ///
+    /// The number of slots that were deleted.
+    pub fn delete_many(&mut self, slots: &[SlotId]) -> Result<u32, StorageError> {
+        let mut count = 0u32;
+        for &slot_id in slots {
+            self.delete_tuple(slot_id)?;
+            count += 1;
+        }
+        Ok(count)
+    }
+
+    /// Inserts multiple tuples into the first available empty slots and returns their [`SlotId`]s.
+    ///
+    /// The tuples are validated against the page schema before insertion. The
+    /// slot pointers are updated in memory; call [`Page::page_data`] to obtain
+    /// the updated raw bytes for flushing to disk.
+    ///
+    /// # Errors
+    ///
+    /// - [`StorageError::SchemaMismatch`] — any of the `tuples` does not match this page's schema.
+    /// - [`StorageError::PageFull`] — no empty slots remain, or the remaining
+    ///   free bytes in the page buffer are insufficient.
+    /// - [`StorageError::TupleTooLarge`] — the serialized tuple exceeds
+    ///   `MAX_TUPLE_SIZE`.
+    pub fn insert_many<I>(&mut self, tuples: &mut I) -> Result<Vec<SlotId>, StorageError>
+    where
+        I: Iterator<Item = Tuple>,
+    {
+        let mut inserted = Vec::new();
+        for tuple in tuples.take(self.empty_slots()) {
+            let slot_id = self.insert_tuple(tuple)?;
+            inserted.push(slot_id);
+        }
+        Ok(inserted)
+    }
 }
 
 impl Page for HeapPage<'_> {
@@ -327,8 +386,9 @@ impl Page for HeapPage<'_> {
         self.old_data.into()
     }
 
+    /// Updates the before-image to the current page state.
     fn set_before_image(&mut self) {
-        // No-op since we don't track before images for heap pages
+        self.old_data = self.page_data();
     }
 }
 
@@ -336,7 +396,6 @@ impl Page for HeapPage<'_> {
 mod tests {
     use super::*;
     use crate::{
-        primitives::{FileId, PageId, PageNumber},
         tuple::{Field, TupleSchema},
         types::{Type, Value},
     };
@@ -348,16 +407,12 @@ mod tests {
         ])
     }
 
-    fn page_id() -> PageId {
-        PageId::new(FileId(1), PageNumber(0))
-    }
-
     fn make_tuple(id: i32, flag: bool) -> Tuple {
         Tuple::new(vec![Value::Int32(id), Value::Bool(flag)])
     }
 
     fn empty_page(schema: &TupleSchema) -> HeapPage<'_> {
-        HeapPage::new(page_id(), &[0u8; PAGE_SIZE], schema).unwrap()
+        HeapPage::new(&[0u8; PAGE_SIZE], schema).unwrap()
     }
 
     #[test]
@@ -370,7 +425,7 @@ mod tests {
     #[test]
     fn new_rejects_wrong_size_data() {
         let s = schema();
-        let result = HeapPage::new(page_id(), &[0u8; 100], &s);
+        let result = HeapPage::new(&[0u8; 100], &s);
         assert!(matches!(result, Err(StorageError::InvalidPageSize { .. })));
     }
 
@@ -453,12 +508,59 @@ mod tests {
         page.insert_tuple(t2.clone()).unwrap();
 
         let bytes = page.page_data();
-        let restored = HeapPage::new(page_id(), &bytes, &s).unwrap();
+        let restored = HeapPage::new(&bytes, &s).unwrap();
 
         let tuples: Vec<&Tuple> = restored.live_tuples().map(|(_, t)| t).collect();
         assert_eq!(tuples.len(), 2);
         assert!(tuples.contains(&&t1));
         assert!(tuples.contains(&&t2));
+    }
+
+    #[test]
+    fn page_data_does_not_overflow_when_page_is_full() {
+        let s = schema();
+        let mut page = empty_page(&s);
+        let capacity = page.empty_slots();
+
+        let mut tuples = (0i32..)
+            .take(capacity)
+            .map(|i| make_tuple(i, i % 2 == 0))
+            .collect::<Vec<_>>()
+            .into_iter();
+
+        page.insert_many(&mut tuples).unwrap();
+        assert_eq!(page.empty_slots(), 0);
+
+        // Must not panic — this is where the offset overflow bug manifests.
+        let bytes = page.page_data();
+
+        let restored = HeapPage::new(&bytes, &s).unwrap();
+        assert_eq!(restored.live_tuples().count(), capacity);
+    }
+
+    #[test]
+    fn insert_tuple_full_page_roundtrip_preserves_all_data() {
+        let s = schema();
+        let mut page = empty_page(&s);
+        let capacity = page.empty_slots();
+
+        let input: Vec<_> = (0i32..)
+            .take(capacity)
+            .map(|i| make_tuple(i, i % 2 == 0))
+            .collect();
+
+        for t in &input {
+            page.insert_tuple(t.clone()).unwrap();
+        }
+
+        let bytes = page.page_data();
+        let restored = HeapPage::new(&bytes, &s).unwrap();
+
+        let live: Vec<&Tuple> = restored.live_tuples().map(|(_, t)| t).collect();
+        assert_eq!(live.len(), capacity);
+        for t in &input {
+            assert!(live.contains(&t), "missing tuple after roundtrip: {t:?}");
+        }
     }
 
     #[test]
@@ -478,5 +580,313 @@ mod tests {
         let slot = page.insert_tuple(make_tuple(1, true)).unwrap();
         page.delete_tuple(slot).unwrap();
         assert_eq!(page.empty_slots(), before);
+    }
+
+    // --- insert_many: happy path ---
+
+    #[test]
+    fn insert_many_inserts_all_when_capacity_sufficient() {
+        let s = schema();
+        let mut page = empty_page(&s);
+        let mut tuples = vec![
+            make_tuple(1, true),
+            make_tuple(2, false),
+            make_tuple(3, true),
+        ]
+        .into_iter();
+
+        let ids = page.insert_many(&mut tuples).unwrap();
+        assert_eq!(ids.len(), 3);
+        assert_eq!(page.live_tuples().count(), 3);
+    }
+
+    #[test]
+    fn insert_many_returns_distinct_in_bounds_slot_ids() {
+        let s = schema();
+        let mut page = empty_page(&s);
+        let mut tuples = vec![make_tuple(10, true), make_tuple(20, false)].into_iter();
+
+        let ids = page.insert_many(&mut tuples).unwrap();
+        for id in &ids {
+            assert!(u16::from(*id) < page.num_slots);
+        }
+        let mut sorted = ids.clone();
+        sorted.sort();
+        sorted.dedup();
+        assert_eq!(sorted.len(), ids.len());
+    }
+
+    #[test]
+    fn insert_many_all_inserted_tuples_are_visible() {
+        let s = schema();
+        let mut page = empty_page(&s);
+        let input = vec![
+            make_tuple(5, true),
+            make_tuple(6, false),
+            make_tuple(7, true),
+        ];
+        let mut iter = input.clone().into_iter();
+
+        page.insert_many(&mut iter).unwrap();
+
+        let live: Vec<&Tuple> = page.live_tuples().map(|(_, t)| t).collect();
+        for t in &input {
+            assert!(live.contains(&t));
+        }
+    }
+
+    // --- insert_many: edge cases ---
+
+    #[test]
+    fn insert_many_empty_iterator_returns_empty_vec() {
+        let s = schema();
+        let mut page = empty_page(&s);
+        let mut empty: std::vec::IntoIter<Tuple> = vec![].into_iter();
+
+        let ids = page.insert_many(&mut empty).unwrap();
+        assert!(ids.is_empty());
+        assert_eq!(page.live_tuples().count(), 0);
+    }
+
+    #[test]
+    fn insert_many_single_tuple_works() {
+        let s = schema();
+        let mut page = empty_page(&s);
+        let mut single = vec![make_tuple(42, true)].into_iter();
+
+        let ids = page.insert_many(&mut single).unwrap();
+        assert_eq!(ids.len(), 1);
+        assert_eq!(page.live_tuples().count(), 1);
+    }
+
+    #[test]
+    fn insert_many_caps_at_empty_slots() {
+        let s = schema();
+        let mut page = empty_page(&s);
+
+        let initial_capacity = page.empty_slots();
+        let extras = 5;
+        let mut tuples = (0i32..)
+            .take(initial_capacity + extras)
+            .map(|i| make_tuple(i, i % 2 == 0))
+            .collect::<Vec<_>>()
+            .into_iter();
+
+        let ids = page.insert_many(&mut tuples).unwrap();
+        assert_eq!(ids.len(), initial_capacity);
+        assert_eq!(page.live_tuples().count(), initial_capacity);
+    }
+
+    #[test]
+    fn insert_many_does_not_exhaust_iterator_past_capacity() {
+        let s = schema();
+        let mut page = empty_page(&s);
+
+        let capacity = page.empty_slots();
+        let all_tuples: Vec<Tuple> = (0i32..)
+            .take(capacity + 3)
+            .map(|i| make_tuple(i, true))
+            .collect();
+        let mut iter = all_tuples.into_iter();
+
+        page.insert_many(&mut iter).unwrap();
+
+        let remaining: Vec<Tuple> = iter.collect();
+        assert_eq!(remaining.len(), 3);
+    }
+
+    #[test]
+    fn insert_many_on_full_page_returns_empty_vec() {
+        let s = schema();
+        let mut page = empty_page(&s);
+
+        let cap = page.empty_slots();
+        let mut fill = (0i32..)
+            .take(cap)
+            .map(|i| make_tuple(i, true))
+            .collect::<Vec<_>>()
+            .into_iter();
+        page.insert_many(&mut fill).unwrap();
+        assert_eq!(page.empty_slots(), 0);
+
+        let mut more = vec![make_tuple(999, false)].into_iter();
+        let ids = page.insert_many(&mut more).unwrap();
+        assert!(ids.is_empty());
+    }
+
+    #[test]
+    fn insert_many_fills_reclaimed_slots_after_delete() {
+        let s = schema();
+        let mut page = empty_page(&s);
+
+        let mut first_batch = vec![make_tuple(1, true), make_tuple(2, false)].into_iter();
+        let slot_ids = page.insert_many(&mut first_batch).unwrap();
+        let before = page.live_tuples().count();
+
+        page.delete_tuple(slot_ids[0]).unwrap();
+        assert_eq!(page.live_tuples().count(), before - 1);
+
+        let mut second_batch = vec![make_tuple(3, true)].into_iter();
+        let new_ids = page.insert_many(&mut second_batch).unwrap();
+        assert_eq!(new_ids.len(), 1);
+        assert_eq!(page.live_tuples().count(), before);
+    }
+
+    // --- insert_many: error paths ---
+
+    #[test]
+    fn insert_many_schema_mismatch_returns_error() {
+        let s = schema();
+        let mut page = empty_page(&s);
+        let mut bad = vec![Tuple::new(vec![Value::Int32(1)])].into_iter();
+        assert!(matches!(
+            page.insert_many(&mut bad),
+            Err(StorageError::SchemaMismatch)
+        ));
+    }
+
+    #[test]
+    fn insert_many_schema_mismatch_mid_batch_leaves_prior_inserts() {
+        let s = schema();
+        let mut page = empty_page(&s);
+
+        let good1 = make_tuple(1, true);
+        let good2 = make_tuple(2, false);
+        let bad = Tuple::new(vec![Value::Int32(99)]); // missing Bool field
+
+        let mut batch = vec![good1, good2, bad].into_iter();
+        let result = page.insert_many(&mut batch);
+
+        assert!(result.is_err());
+        // The two valid tuples were already committed — no rollback
+        assert_eq!(page.live_tuples().count(), 2);
+    }
+
+    // --- delete_many ---
+
+    #[test]
+    fn delete_many_removes_all_specified_slots() {
+        let s = schema();
+        let mut page = empty_page(&s);
+        let s0 = page.insert_tuple(make_tuple(1, true)).unwrap();
+        let s1 = page.insert_tuple(make_tuple(2, false)).unwrap();
+        let s2 = page.insert_tuple(make_tuple(3, true)).unwrap();
+
+        let count = page.delete_many(&[s0, s2]).unwrap();
+        assert_eq!(count, 2);
+        assert_eq!(page.live_tuples().count(), 1);
+        let remaining: Vec<(SlotId, &Tuple)> = page.live_tuples().collect();
+        assert_eq!(remaining[0].0, s1);
+    }
+
+    #[test]
+    fn delete_many_empty_slice_deletes_nothing() {
+        let s = schema();
+        let mut page = empty_page(&s);
+        page.insert_tuple(make_tuple(1, true)).unwrap();
+
+        let count = page.delete_many(&[]).unwrap();
+        assert_eq!(count, 0);
+        assert_eq!(page.live_tuples().count(), 1);
+    }
+
+    #[test]
+    fn delete_many_single_slot() {
+        let s = schema();
+        let mut page = empty_page(&s);
+        let slot = page.insert_tuple(make_tuple(5, false)).unwrap();
+
+        let count = page.delete_many(&[slot]).unwrap();
+        assert_eq!(count, 1);
+        assert_eq!(page.live_tuples().count(), 0);
+    }
+
+    #[test]
+    fn delete_many_out_of_bounds_errors() {
+        let s = schema();
+        let mut page = empty_page(&s);
+        page.insert_tuple(make_tuple(1, true)).unwrap();
+
+        let result = page.delete_many(&[SlotId(9999)]);
+        assert!(matches!(result, Err(StorageError::SlotOutOfBounds { .. })));
+    }
+
+    #[test]
+    fn delete_many_already_empty_slot_errors() {
+        let s = schema();
+        let mut page = empty_page(&s);
+        let slot = page.insert_tuple(make_tuple(1, true)).unwrap();
+        page.delete_tuple(slot).unwrap();
+
+        let result = page.delete_many(&[slot]);
+        assert!(matches!(result, Err(StorageError::SlotAlreadyEmpty { .. })));
+    }
+
+    #[test]
+    fn delete_many_stops_on_first_error_partial() {
+        let s = schema();
+        let mut page = empty_page(&s);
+        let s0 = page.insert_tuple(make_tuple(1, true)).unwrap();
+        page.insert_tuple(make_tuple(2, false)).unwrap();
+
+        // s0 is valid, SlotId(9999) is out of bounds — first delete succeeds, second fails
+        let result = page.delete_many(&[s0, SlotId(9999)]);
+        assert!(result.is_err());
+        // s0 was already deleted before the error
+        assert_eq!(page.live_tuples().count(), 1);
+    }
+
+    #[test]
+    fn delete_many_reclaims_slots_for_reuse() {
+        let s = schema();
+        let mut page = empty_page(&s);
+        let s0 = page.insert_tuple(make_tuple(1, true)).unwrap();
+        let s1 = page.insert_tuple(make_tuple(2, false)).unwrap();
+        let empty_before = page.empty_slots();
+
+        page.delete_many(&[s0, s1]).unwrap();
+        assert_eq!(page.empty_slots(), empty_before + 2);
+    }
+
+    // --- set_before_image ---
+
+    #[test]
+    fn before_image_captures_construction_state() {
+        let s = schema();
+        let mut page = empty_page(&s);
+        let before = page.before_image().unwrap();
+
+        page.insert_tuple(make_tuple(1, true)).unwrap();
+        // before_image still returns the original empty page
+        assert_eq!(page.before_image().unwrap(), before);
+    }
+
+    #[test]
+    fn set_before_image_snapshots_current_state() {
+        let s = schema();
+        let mut page = empty_page(&s);
+        page.insert_tuple(make_tuple(1, true)).unwrap();
+
+        let after_insert = page.page_data();
+        page.set_before_image();
+
+        // before_image now matches the post-insert state
+        assert_eq!(page.before_image().unwrap(), after_insert);
+    }
+
+    #[test]
+    fn set_before_image_then_mutate_preserves_snapshot() {
+        let s = schema();
+        let mut page = empty_page(&s);
+        let slot = page.insert_tuple(make_tuple(1, true)).unwrap();
+
+        page.set_before_image();
+        let snapshot = page.before_image().unwrap();
+
+        page.delete_tuple(slot).unwrap();
+        // before_image is still the pre-delete snapshot
+        assert_eq!(page.before_image().unwrap(), snapshot);
+        // but page_data has changed
+        assert_ne!(page.page_data(), snapshot);
     }
 }
