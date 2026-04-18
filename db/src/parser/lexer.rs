@@ -76,6 +76,10 @@ pub(super) struct Lexer {
     /// The last token returned by [`next_token`](Self::next_token), used by
     /// [`backtrack`](Self::backtrack) to reset `position`.
     curr_token: Option<Token>,
+    /// Set to `true` after the iterator yields a [`LexError`].  Once poisoned,
+    /// the [`Iterator`] impl returns `None` to prevent infinite loops on
+    /// non-advancing errors (e.g. an invalid character).
+    poisoned: bool,
 }
 
 impl Lexer {
@@ -89,6 +93,7 @@ impl Lexer {
             position: 0,
             length: input.len(),
             curr_token: None,
+            poisoned: false,
         }
     }
 
@@ -119,37 +124,32 @@ impl Lexer {
     /// quoted string is never closed.
     pub fn next_token(&mut self) -> Result<Option<Token>, LexError> {
         self.read_while(char::is_whitespace, false);
-        if self.position >= self.length {
+        if self.exhausted() {
             return Ok(None);
         }
 
         let start = self.position;
-        let ch = self.input.get(start).unwrap();
+        let ch = self.curr_char();
 
         match ch {
             '=' | '<' | '>' | '!' => Ok(Some(
                 (TokenType::Operator, self.read_operator(), start).into(),
             )),
-            '\'' | '"' => {
-                let s = self.read_string()?;
-                Ok(Some((TokenType::String, s, start).into()))
-            }
+
+            '\'' | '"' => Ok(Some((TokenType::String, self.read_string()?, start).into())),
+
             c if c.is_ascii_digit() => {
-                let num = self.read_while(|c| c.is_ascii_digit(), true).unwrap();
-                Ok(Some(self.create_token(TokenType::Int, num, start)))
+                let (num, token_type) = self.read_number();
+                Ok(Some((token_type, num, start).into()))
             }
-            c if c.is_ascii_alphabetic() || *c == '_' => {
-                let ident = self
-                    .read_while(|ch| ch.is_alphanumeric() || ch == '_', true)
-                    .unwrap();
-                let token_type = match ident.parse::<TokenType>() {
-                    Ok(t) => t,
-                    Err(_) => TokenType::Identifier,
-                };
-                Ok(Some(self.create_token(token_type, ident, start)))
+
+            c if c.is_ascii_alphabetic() || c == '_' => {
+                let (ident, token_type) = self.read_identifier();
+                Ok(Some((token_type, ident, start).into()))
             }
+
             ',' | ';' | '(' | ')' | '*' => {
-                self.position += 1;
+                self.advance_pos();
                 let token_type = match ch {
                     ',' => TokenType::Comma,
                     ';' => TokenType::Semicolon,
@@ -162,7 +162,7 @@ impl Lexer {
             }
 
             _ => Err(LexError::InvalidCharacter {
-                ch: *ch,
+                ch,
                 position: start,
             }),
         }
@@ -193,19 +193,57 @@ impl Lexer {
     /// Two-character operators (`<=`, `>=`, `!=`, `<>`) are consumed in full.
     /// All other first characters (`=`, isolated `<`, `>`, `!`) are returned as-is.
     fn read_operator(&mut self) -> String {
-        let first = self.input[self.position];
-        self.position += 1;
+        let first = self.take_char();
 
-        if let Some(next) = self.input.get(self.position) {
+        if let Some(&next) = self.input.get(self.position) {
             match (first, next) {
                 ('<' | '>' | '!', '=') | ('<', '>') => {
-                    self.position += 1;
+                    self.advance_pos();
                     format!("{first}{next}")
                 }
                 _ => first.to_string(),
             }
         } else {
             first.to_string()
+        }
+    }
+
+    /// Consumes a run of alphanumeric characters and underscores.
+    ///
+    /// If the text matches a known keyword, returns that [`TokenType`];
+    /// otherwise returns [`TokenType::Identifier`].
+    fn read_identifier(&mut self) -> (String, TokenType) {
+        let ident = self
+            .read_while(|ch| ch.is_alphanumeric() || ch == '_', true)
+            .unwrap();
+        let token_type = match ident.parse::<TokenType>() {
+            Ok(t) => t,
+            Err(_) => TokenType::Identifier,
+        };
+        (ident, token_type)
+    }
+
+    /// Consumes a decimal integer, or a floating literal when a dot is followed by a digit.
+    ///
+    /// A lone `.` after digits is not consumed as part of the number (e.g. `12.` stops at
+    /// [`TokenType::Int`] `"12"`).  Sequences like `3.14` become [`TokenType::FloatLit`].
+    fn read_number(&mut self) -> (String, TokenType) {
+        let mut num = self.read_while(|c| c.is_ascii_digit(), true).unwrap();
+        let has_fraction = !self.exhausted()
+            && self.curr_char() == '.'
+            && self
+                .input
+                .get(self.position + 1)
+                .is_some_and(char::is_ascii_digit);
+
+        if has_fraction {
+            num.push('.');
+            self.advance_pos();
+            let frac = self.read_while(|c| c.is_ascii_digit(), true).unwrap();
+            num.push_str(&frac);
+            (num, TokenType::FloatLit)
+        } else {
+            (num, TokenType::Int)
         }
     }
 
@@ -220,18 +258,16 @@ impl Lexer {
     /// Returns [`LexError::UnexpectedEof`] if the input ends before the closing
     /// quote is found.
     fn read_string(&mut self) -> Result<String, LexError> {
-        let quote_char = self.input[self.position];
-        self.position += 1;
+        let quote_char = self.take_char();
         let mut value = String::new();
 
-        while self.position < self.length {
-            let curr = self.input[self.position];
+        while !self.exhausted() {
+            let curr = self.take_char();
+
             if curr == quote_char {
-                self.position += 1;
                 return Ok(value);
             }
             value.push(curr);
-            self.position += 1;
         }
 
         Err(LexError::UnexpectedEof {
@@ -245,16 +281,60 @@ impl Lexer {
     /// `String` and returned as `Some(String)`.  When `collect` is `false` the
     /// characters are discarded and `None` is returned (useful for skipping
     /// whitespace without allocating).
-    fn read_while(&mut self, condition: impl Fn(char) -> bool, collect: bool) -> Option<String> {
+    fn read_while<F>(&mut self, condition: F, collect: bool) -> Option<String>
+    where
+        F: Fn(char) -> bool,
+    {
         let mut result = String::new();
-        while self.position < self.length && condition(self.input[self.position]) {
+        while !self.exhausted() && condition(self.curr_char()) {
+            let ch = self.take_char();
             if collect {
-                result.push(self.input[self.position]);
+                result.push(ch);
             }
-            self.position += 1;
         }
 
         if collect { Some(result) } else { None }
+    }
+
+    /// Returns the current character without advancing the position.
+    /// # Panics
+    /// Panics if the position is out of bounds.
+    #[inline]
+    fn curr_char(&self) -> char {
+        *self.input.get(self.position).unwrap_or_else(|| {
+            panic!("position out of bounds: {}", self.position);
+        })
+    }
+
+    /// Advances the position by 1.
+    /// # Panics
+    /// Panics if the position is out of bounds.
+    #[inline]
+    fn advance_pos(&mut self) {
+        self.position = self.position.checked_add(1).unwrap_or_else(|| {
+            panic!("position out of bounds: {}", self.position);
+        });
+    }
+
+    /// Returns the current character and advances the position by one.
+    ///
+    /// # Panics
+    /// Panics if the position is out of bounds when attempting to read or advance.
+    #[inline]
+    fn take_char(&mut self) -> char {
+        let ch = self.curr_char();
+        self.advance_pos();
+        ch
+    }
+
+    /// Returns `true` if the lexer has consumed all input or is in a poisoned (error) state.
+    ///
+    /// # Returns
+    /// * `true` if `self.position` is greater than or equal to the total input `self.length`,
+    ///   or if `self.poisoned` is `true` due to a lexing error.
+    #[inline]
+    fn exhausted(&self) -> bool {
+        self.position >= self.length || self.poisoned
     }
 }
 
@@ -269,11 +349,15 @@ impl Iterator for Lexer {
     type Item = Result<super::token::Token, LexError>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        if self.position >= self.length {
+        if self.exhausted() {
             return None;
         }
 
-        self.next_token().transpose() // Convert Result<Option<Token>, LexError> to Option<Result<Token, LexError>>
+        let item = self.next_token().transpose();
+        if matches!(item, Some(Err(_))) {
+            self.poisoned = true;
+        }
+        item
     }
 }
 
@@ -326,6 +410,45 @@ mod tests {
                 tok(TokenType::Int, "1", 0),
                 tok(TokenType::Int, "22", 2),
                 tok(TokenType::Int, "333", 5),
+            ]
+        );
+    }
+
+    #[test]
+    fn simple_float_literal() {
+        assert_eq!(lex("3.14"), vec![tok(TokenType::FloatLit, "3.14", 0)]);
+    }
+
+    #[test]
+    fn float_literal_zero_fraction() {
+        assert_eq!(lex("0.5"), vec![tok(TokenType::FloatLit, "0.5", 0)]);
+    }
+
+    #[test]
+    fn trailing_dot_is_not_consumed_as_float() {
+        // "1." should lex as Int("1") first; the dangling "." is not part
+        // of the number.  We only assert on the first token — what comes
+        // after depends on how "." is handled elsewhere.
+        let mut lexer = Lexer::new("1.");
+        let first = lexer.next().unwrap().unwrap();
+        assert_eq!(first, tok(TokenType::Int, "1", 0));
+    }
+
+    #[test]
+    fn digit_dot_alpha_does_not_lex_as_float() {
+        // "1.foo" — the "1" must not swallow the "." because no digit follows.
+        let mut lexer = Lexer::new("1.foo");
+        let first = lexer.next().unwrap().unwrap();
+        assert_eq!(first, tok(TokenType::Int, "1", 0));
+    }
+
+    #[test]
+    fn float_literal_then_comma() {
+        assert_eq!(
+            lex("2.5,"),
+            vec![
+                tok(TokenType::FloatLit, "2.5", 0),
+                tok(TokenType::Comma, ",", 3),
             ]
         );
     }
