@@ -62,7 +62,7 @@ impl Parser {
     /// Returns [`ParserError`] if the token stream is empty, starts with an
     /// unrecognized keyword, or any sub-parser fails.
     pub fn parse(&mut self) -> Result<Statement, ParserError> {
-        let tok = self.ensure_next_token()?;
+        let tok = self.bump()?;
         self.lexer.backtrack()?;
 
         match tok.kind {
@@ -72,8 +72,8 @@ impl Parser {
             TokenType::Show => Ok(Statement::ShowIndexes(self.parse_show_index()?)),
             TokenType::Select => Ok(Statement::Select(self.parse_select()?)),
             TokenType::Drop => {
-                self.ensure_next_token()?; // consume DROP
-                let next = self.ensure_next_token()?;
+                self.bump()?; // consume DROP
+                let next = self.bump()?;
                 self.lexer.backtrack()?; // put TABLE/INDEX back
 
                 match next.kind {
@@ -86,8 +86,8 @@ impl Parser {
                 }
             }
             TokenType::Create => {
-                self.ensure_next_token()?;
-                let next = self.ensure_next_token()?;
+                self.bump()?;
+                let next = self.bump()?;
                 self.lexer.backtrack()?;
 
                 match next.kind {
@@ -115,9 +115,9 @@ impl Parser {
     ///
     /// Returns [`ParserError::UnexpectedToken`] if any token doesn't match, or
     /// [`ParserError::WantedToken`] if the stream ends early.
-    fn expect_token_sequence(&mut self, expected: &[TokenType]) -> Result<(), ParserError> {
+    fn expect_seq(&mut self, expected: &[TokenType]) -> Result<(), ParserError> {
         for &kind in expected {
-            self.ensure_next_of_kind(kind)?;
+            self.expect(kind)?;
         }
         Ok(())
     }
@@ -130,7 +130,7 @@ impl Parser {
     ///
     /// Returns [`ParserError::LexError`] if the lexer encounters an invalid
     /// token sequence while peeking.
-    fn is_peek_token(&mut self, kind: TokenType) -> Result<bool, ParserError> {
+    fn peek_is(&mut self, kind: TokenType) -> Result<bool, ParserError> {
         match self.lexer.next() {
             None => Ok(false),
             Some(Err(e)) => Err(ParserError::from(e)),
@@ -148,7 +148,7 @@ impl Parser {
     ///
     /// Returns [`ParserError::WantedToken`] if the stream is exhausted, or
     /// [`ParserError::LexError`] on a lex failure.
-    fn ensure_next_token(&mut self) -> Result<Token, ParserError> {
+    fn bump(&mut self) -> Result<Token, ParserError> {
         self.lexer
             .next()
             .ok_or(ParserError::WantedToken)?
@@ -160,9 +160,9 @@ impl Parser {
     /// # Errors
     ///
     /// Returns [`ParserError::UnexpectedToken`] if the token kind doesn't match
-    /// `expected`, or propagates errors from [`ensure_next_token`](Self::ensure_next_token).
-    fn ensure_next_of_kind(&mut self, expected: TokenType) -> Result<Token, ParserError> {
-        let tok = self.ensure_next_token()?;
+    /// `expected`, or propagates errors from [`bump`](Self::bump).
+    fn expect(&mut self, expected: TokenType) -> Result<Token, ParserError> {
+        let tok = self.bump()?;
         if tok.is_not(expected) {
             return Err(ParserError::UnexpectedToken {
                 expected,
@@ -182,9 +182,9 @@ impl Parser {
     ///
     /// Returns [`ParserError`] if no table name identifier is present.
     fn parse_table_with_alias(&mut self) -> Result<(String, Option<String>), ParserError> {
-        let table = self.ensure_next_of_kind(TokenType::Identifier)?;
-        let alias = if self.is_peek_token(TokenType::Identifier)? {
-            Some(String::from(&self.ensure_next_token()?))
+        let table = self.expect(TokenType::Identifier)?;
+        let alias = if self.peek_is(TokenType::Identifier)? {
+            Some(String::from(&self.bump()?))
         } else {
             None
         };
@@ -211,11 +211,11 @@ impl Parser {
         T: Sized,
         K: FnMut(&mut Self) -> Result<T, ParserError>,
     {
-        self.is_peek_token(expected).and_then(|ok| {
+        self.peek_is(expected).and_then(|ok| {
             if !ok {
                 return Ok(None);
             }
-            self.ensure_next_token()?;
+            self.bump()?;
             let t = exec(self)?;
             Ok(Some(t))
         })
@@ -261,11 +261,11 @@ impl Parser {
     /// Returns [`ParserError`] if the field or operator tokens are missing, or
     /// the operator string is not a recognized [`Predicate`] variant.
     fn parse_predicate(&mut self) -> Result<WhereCondition, ParserError> {
-        let field = self.ensure_next_of_kind(TokenType::Identifier)?;
-        let op = self.ensure_next_of_kind(TokenType::Operator)?;
+        let field = self.expect(TokenType::Identifier)?;
+        let op = self.expect(TokenType::Operator)?;
         let op = Predicate::try_from(op.value.as_str()).map_err(ParserError::ParsingError)?;
 
-        let val_tok = self.ensure_next_token()?;
+        let val_tok = self.bump()?;
         let value = if let Ok(n) = val_tok.value.parse::<i64>() {
             Value::Int64(n)
         } else {
@@ -301,7 +301,7 @@ impl Parser {
             let item = parse(self)?;
             items.push(item);
 
-            let t = self.ensure_next_token()?;
+            let t = self.bump()?;
             match t.kind {
                 _ if t.is(delimiter) => {}
                 _ if t.is(terminator) => break,
