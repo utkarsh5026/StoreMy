@@ -250,27 +250,23 @@ impl Parser {
             .unwrap())
     }
 
-    /// Parses a single `field op value` predicate.
     /// Parses a single `<field> <op> <value>` predicate.
     ///
-    /// The value token is interpreted as an `i64` integer when it parses as
-    /// one, otherwise it is stored as a string literal.
+    /// The value token is converted to a [`Value`] via [`Value::try_from`],
+    /// which handles integer, float, string, `NULL`, and boolean literals.
     ///
     /// # Errors
     ///
-    /// Returns [`ParserError`] if the field or operator tokens are missing, or
-    /// the operator string is not a recognized [`Predicate`] variant.
+    /// Returns [`ParserError`] if the field or operator tokens are missing,
+    /// the operator string is not a recognized [`Predicate`] variant, or the
+    /// value token cannot be interpreted as a literal.
     fn parse_predicate(&mut self) -> Result<WhereCondition, ParserError> {
         let field = self.expect(TokenType::Identifier)?;
         let op = self.expect(TokenType::Operator)?;
         let op = Predicate::try_from(op.value.as_str()).map_err(ParserError::ParsingError)?;
 
         let val_tok = self.bump()?;
-        let value = if let Ok(n) = val_tok.value.parse::<i64>() {
-            Value::Int64(n)
-        } else {
-            Value::String(val_tok.value.clone())
-        };
+        let value = Value::try_from(val_tok).map_err(ParserError::ParsingError)?;
 
         Ok(WhereCondition::predicate(field.value, op, value))
     }

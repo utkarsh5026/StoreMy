@@ -402,6 +402,47 @@ mod tests {
     }
 
     #[test]
+    fn test_parse_select_where_float_literal() {
+        let s = select("SELECT * FROM t WHERE price = 2.5").unwrap();
+        let wc = s.where_clause.as_ref().unwrap();
+        let WhereCondition::Predicate { field, value, .. } = wc else {
+            panic!("expected predicate");
+        };
+        assert_eq!(field, "price");
+        assert_eq!(*value, Value::Float64(2.5));
+    }
+
+    #[test]
+    fn test_parse_select_where_string_literal() {
+        let s = select("SELECT * FROM t WHERE name = 'alice'").unwrap();
+        let wc = s.where_clause.as_ref().unwrap();
+        let WhereCondition::Predicate { value, .. } = wc else {
+            panic!("expected predicate");
+        };
+        assert_eq!(*value, Value::String("alice".to_string()));
+    }
+
+    #[test]
+    fn test_parse_select_where_null_literal() {
+        let s = select("SELECT * FROM t WHERE deleted_at = NULL").unwrap();
+        let wc = s.where_clause.as_ref().unwrap();
+        let WhereCondition::Predicate { value, .. } = wc else {
+            panic!("expected predicate");
+        };
+        assert_eq!(*value, Value::Null);
+    }
+
+    #[test]
+    fn test_parse_select_where_bool_literal() {
+        let s = select("SELECT * FROM t WHERE active = true").unwrap();
+        let wc = s.where_clause.as_ref().unwrap();
+        let WhereCondition::Predicate { value, .. } = wc else {
+            panic!("expected predicate");
+        };
+        assert_eq!(*value, Value::Bool(true));
+    }
+
+    #[test]
     fn test_parse_select_where_and_or_structure() {
         let s = select("SELECT * FROM t WHERE a = 1 OR b = 2 AND c = 3").unwrap();
         let wc = s.where_clause.as_ref().unwrap();

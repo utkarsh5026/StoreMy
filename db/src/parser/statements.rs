@@ -340,24 +340,18 @@ impl Display for Literal {
 /// standard SQL precedence.
 #[derive(Debug, Clone, PartialEq)]
 pub enum WhereCondition {
-    /// A single comparison: `field op value`, e.g. `id = 1` or `name = 'Alice'`.
     Predicate {
-        /// Column name on the left-hand side.
         field: String,
-        /// Comparison operator (`=`, `<`, `>`, etc.).
         op: Predicate,
-        /// Literal value on the right-hand side.
-        value: Literal,
+        value: Value,
     },
-    /// `left AND right` — both conditions must hold.
     And(Box<WhereCondition>, Box<WhereCondition>),
-    /// `left OR right` — at least one condition must hold.
     Or(Box<WhereCondition>, Box<WhereCondition>),
 }
 
 impl WhereCondition {
     /// Create a leaf predicate node.
-    pub fn predicate(field: impl Into<String>, op: Predicate, value: Literal) -> Self {
+    pub fn predicate(field: impl Into<String>, op: Predicate, value: Value) -> Self {
         Self::Predicate {
             field: field.into(),
             op,
@@ -381,12 +375,8 @@ impl Display for WhereCondition {
 /// Parsed `INSERT INTO table [(col, …)] VALUES (val, …), …`.
 #[derive(Debug, Clone)]
 pub struct InsertStatement {
-    /// Target table name.
     pub table_name: String,
-    /// Optional explicit column list. When `None`, values are assumed to match
-    /// the table's column order.
     pub columns: Option<Vec<String>>,
-    /// One or more rows of values to insert. Each inner `Vec` is one row.
     pub values: Vec<Vec<Value>>,
 }
 

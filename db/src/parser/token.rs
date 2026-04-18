@@ -98,6 +98,7 @@ pub enum TokenType {
     Text,
     Boolean,
     Float,
+    FloatLit,
     Operator,
     String,
     Identifier,
@@ -173,6 +174,7 @@ impl fmt::Display for TokenType {
             TokenType::Text => "TEXT",
             TokenType::Boolean => "BOOLEAN",
             TokenType::Float => "FLOAT",
+            TokenType::FloatLit => "FLOAT_LIT",
             TokenType::Operator => "OPERATOR",
             TokenType::String => "STRING",
             TokenType::Identifier => "IDENTIFIER",
@@ -298,6 +300,12 @@ impl TryFrom<Token> for Value {
                 .parse::<i64>()
                 .map(Value::Int64)
                 .map_err(|e| format!("invalid integer literal '{}': {e}", token.value)),
+
+            TokenType::FloatLit => token
+                .value
+                .parse::<f64>()
+                .map(Value::Float64)
+                .map_err(|e| format!("invalid float literal '{}': {e}", token.value)),
 
             TokenType::String => Ok(Value::String(token.value)),
 
@@ -749,6 +757,30 @@ mod tests {
         assert_eq!(
             Value::try_from(make_token(TokenType::Int, &min)).unwrap(),
             Value::Int64(i64::MIN)
+        );
+    }
+
+    // FloatLit token produces Value::Float64
+    #[test]
+    fn test_try_from_token_for_value_float_positive() {
+        let result = Value::try_from(make_token(TokenType::FloatLit, "2.5")).unwrap();
+        assert_eq!(result, Value::Float64(2.5));
+    }
+
+    #[test]
+    fn test_try_from_token_for_value_float_zero() {
+        let result = Value::try_from(make_token(TokenType::FloatLit, "0.0")).unwrap();
+        assert_eq!(result, Value::Float64(0.0));
+    }
+
+    #[test]
+    fn test_try_from_token_for_value_float_bad_string() {
+        let result = Value::try_from(make_token(TokenType::FloatLit, "not_a_float"));
+        assert!(result.is_err());
+        let msg = result.unwrap_err();
+        assert!(
+            msg.contains("not_a_float"),
+            "error message should echo the bad value: {msg}"
         );
     }
 
