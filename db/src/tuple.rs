@@ -8,10 +8,10 @@
 //! # Typical workflow
 //!
 //! 1. Define fields and collect them into a [`TupleSchema`].
-//! 2. Build a [`Tuple`] from a `Vec<Value>` and call [`TupleSchema::validate`]
-//!    to check nullability and type constraints before storing.
-//! 3. Use [`Tuple::serialize`] / [`Tuple::deserialize`], or [`Encode`] on
-//!    `(&TupleSchema, &Tuple)` and pass the same bytes to [`Tuple::deserialize`].
+//! 2. Build a [`Tuple`] from a `Vec<Value>` and call [`TupleSchema::validate`] to check nullability
+//!    and type constraints before storing.
+//! 3. Use [`Tuple::serialize`] / [`Tuple::deserialize`], or [`Encode`] on `(&TupleSchema, &Tuple)`
+//!    and pass the same bytes to [`Tuple::deserialize`].
 //!
 //! # Module contents
 //!
@@ -20,14 +20,18 @@
 //! - [`Tuple`] — a row of [`Value`]s
 //! - [`TupleError`] — errors produced by schema validation and index operations
 
-use std::collections::HashMap;
-use std::fmt;
-use std::io::{Cursor, Read, Write};
-
-use crate::codec::{CodecError, Decode, Encode};
-use crate::types::{Type, Value};
+use std::{
+    collections::HashMap,
+    fmt,
+    io::{Cursor, Read, Write},
+};
 
 use thiserror::Error;
+
+use crate::{
+    codec::{CodecError, Decode, Encode},
+    types::{Type, Value},
+};
 
 /// Errors that can occur when working with tuples and schemas.
 #[derive(Debug, Error)]
@@ -86,8 +90,7 @@ impl Field {
     /// # Examples
     ///
     /// ```
-    /// use db::tuple::Field;
-    /// use db::types::Type;
+    /// use storemy::{tuple::Field, types::Type};
     ///
     /// let f = Field::new("age", Type::Int32);
     /// assert_eq!(f.name, "age");
@@ -106,8 +109,7 @@ impl Field {
     /// Intended for use in builder-style chains:
     ///
     /// ```
-    /// use db::tuple::Field;
-    /// use db::types::Type;
+    /// use storemy::{tuple::Field, types::Type};
     ///
     /// let f = Field::new("id", Type::Int64).not_null();
     /// assert!(!f.nullable);
@@ -199,18 +201,20 @@ impl TupleSchema {
     /// in the worst case (all fields non-null).
     ///
     /// Layout: null bitmap (`ceil(n/8)` bytes) + one 1-byte discriminant per field
-    /// + the raw payload bytes for every field type. Use this — not `tuple_size` —
-    ///   when ever sizing a buffer for on-disk storage.
+    /// + the raw payload bytes for every field type. Use this — not `tuple_size` — when ever sizing
+    ///   a buffer for on-disk storage.
     ///
     /// # Examples
     ///
     /// ```
-    /// use db::tuple::{Field, TupleSchema};
-    /// use db::types::Type;
+    /// use storemy::{
+    ///     tuple::{Field, TupleSchema},
+    ///     types::Type,
+    /// };
     ///
     /// let schema = TupleSchema::new(vec![
-    ///     Field::new("id", Type::Int32),   // 1 disc + 4 bytes
-    ///     Field::new("ok", Type::Bool),    // 1 disc + 1 byte
+    ///     Field::new("id", Type::Int32), // 1 disc + 4 bytes
+    ///     Field::new("ok", Type::Bool),  // 1 disc + 1 byte
     /// ]);
     /// // 2 fields → 1-byte bitmap + 2 discriminants + 5 payload = 8 total
     /// assert_eq!(schema.serialized_size(), 8);
@@ -395,10 +399,10 @@ impl Tuple {
     /// Serializes the tuple into `buf` using the layout described by `schema`.
     ///
     /// The on-disk format is:
-    /// 1. A null bitmap — one bit per field, packed into `ceil(n / 8)` bytes.
-    ///    Bit `i` is set when field `i` is `NULL`.
-    /// 2. Each non-null value encoded via [`Encode for Value`]: a 1-byte
-    ///    discriminant followed by the little-endian payload.
+    /// 1. A null bitmap — one bit per field, packed into `ceil(n / 8)` bytes. Bit `i` is set when
+    ///    field `i` is `NULL`.
+    /// 2. Each non-null value encoded via [`Encode for Value`]: a 1-byte discriminant followed by
+    ///    the little-endian payload.
     ///
     /// Returns the total number of bytes written into `buf`.
     ///
@@ -456,7 +460,8 @@ impl Tuple {
     /// - [`TupleError::FieldIndexOutOfBounds`] — `index` is not a valid field index for `schema`,
     ///   or is past the end of this tuple's values.
     /// - [`TupleError::NullNotAllowed`] — `value` is `NULL` but the field is `NOT NULL`.
-    /// - [`TupleError::TypeMismatch`] — non-null `value` has a different runtime type than the field.
+    /// - [`TupleError::TypeMismatch`] — non-null `value` has a different runtime type than the
+    ///   field.
     pub fn set_field(
         &mut self,
         index: usize,
@@ -535,8 +540,10 @@ impl<'a> IntoIterator for &'a Tuple {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::codec::{CodecError, Encode};
-    use crate::types::{Type, Value};
+    use crate::{
+        codec::{CodecError, Encode},
+        types::{Type, Value},
+    };
 
     fn schema_id_name_age() -> TupleSchema {
         TupleSchema::new(vec![
@@ -667,10 +674,9 @@ mod tests {
     fn schema_project_out_of_bounds_returns_error() {
         let schema = schema_id_name_age();
         let err = schema.project(&[0, 99]).unwrap_err();
-        assert!(matches!(
-            err,
-            TupleError::FieldIndexOutOfBounds { index: 99 }
-        ));
+        assert!(matches!(err, TupleError::FieldIndexOutOfBounds {
+            index: 99
+        }));
     }
 
     #[test]
@@ -701,13 +707,10 @@ mod tests {
         let schema = schema_id_name_age();
         let tuple = Tuple::new(vec![Value::Int32(1)]);
         let err = schema.validate(&tuple).unwrap_err();
-        assert!(matches!(
-            err,
-            TupleError::FieldCountMismatch {
-                expected: 3,
-                actual: 1
-            }
-        ));
+        assert!(matches!(err, TupleError::FieldCountMismatch {
+            expected: 3,
+            actual: 1
+        }));
     }
 
     #[test]
@@ -768,10 +771,9 @@ mod tests {
         let schema = schema_id_name_age();
         let mut tuple = tuple_42_alice_30();
         let err = tuple.set_field(99, Value::Int32(1), &schema).unwrap_err();
-        assert!(matches!(
-            err,
-            TupleError::FieldIndexOutOfBounds { index: 99 }
-        ));
+        assert!(matches!(err, TupleError::FieldIndexOutOfBounds {
+            index: 99
+        }));
     }
 
     #[test]

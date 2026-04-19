@@ -1,48 +1,71 @@
-//! Core primitive types for `StoreMy` database.
+//! Core primitive types for the database engine.
 //!
-//! This module defines the fundamental types used throughout the database:
-//! - [`PageNumber`] - Page number within a file
-//! - [`FileId`] - Unique identifier for a database file
-//! - [`TransactionId`] - Unique identifier for a transaction
-//! - [`Lsn`] - Log Sequence Number for WAL
-//! - [`SlotId`] - Slot number within a page
-//! - [`HashCode`] - Hash value for indexing
+//! These types name storage locations, transactions, log positions, and
+//! simple SQL comparison operators. Most of them implement
+//! [`Encode`](crate::codec::Encode) and [`Decode`](crate::codec::Decode) so
+//! they can be stored in pages or log records with a fixed, little-endian
+//! layout.
+//!
+//! Included definitions:
+//!
+//! - [`PageNumber`] — index of a page inside a file
+//! - [`FileId`] — identifies a heap or index file
+//! - [`TransactionId`] — identifies a transaction (monotonic, not reused)
+//! - [`Lsn`] — log sequence number for the write-ahead log
+//! - [`SlotId`] — tuple slot index on a slotted page
+//! - [`ColumnId`] — column index in a table schema
+//! - [`HashCode`] — hash value used for hash indexes
+//! - [`RecordId`] — full tuple address (`file`, `page`, `slot`)
+//! - [`PageId`] — page address without a slot (`file`, `page`)
+//! - [`Predicate`] — comparison operators used in `WHERE` / join conditions
+//! - [`Filepath`] — type alias for [`PathBuf`](std::path::PathBuf) in APIs
 
-use std::fmt;
-use std::hash::{Hash, Hasher};
-use std::path::{Path, PathBuf};
-
-use std::io::{Read, Write};
+use std::{
+    fmt,
+    hash::{Hash, Hasher},
+    io::{Read, Write},
+    path::{Path, PathBuf},
+};
 
 use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
 
 use crate::codec::{CodecError, Decode, Encode};
 
-/// A page number within a database file.
+/// Index of a page inside a database file.
 ///
-/// Pages are numbered sequentially starting from 0.
+/// Page numbers start at zero and increase by one for each successive page.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Default)]
-pub struct PageNumber(pub u32);
+pub struct PageNumber(
+    /// Zero-based page index.
+    pub u32,
+);
 
 impl PageNumber {
+    /// Size of the on-disk encoding in bytes (`u32` little-endian).
     pub const SIZE: usize = 4;
 
+    /// Wraps a raw page index.
     #[inline]
     pub const fn new(n: u32) -> Self {
         Self(n)
     }
 
+    /// Returns the raw page index.
     #[inline]
     pub const fn get(&self) -> u32 {
         self.0
     }
 
+    /// Returns the next page number.
+    ///
+    /// On `u32::MAX`, this wraps on overflow (same as `u32` addition).
     #[inline]
     #[must_use]
     pub const fn next(&self) -> Self {
         Self(self.0 + 1)
     }
 
+    /// Byte offset of this page from the start of the file.
     #[inline]
     pub const fn offset(&self, page_size: usize) -> u64 {
         self.0 as u64 * page_size as u64
@@ -74,11 +97,15 @@ impl Decode for PageNumber {
     }
 }
 
-/// A unique identifier for a database file (table or index).
+/// Unique identifier for a database file (for example a table heap or index).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Default)]
-pub struct FileId(pub u64);
+pub struct FileId(
+    /// Opaque numeric file key.
+    pub u64,
+);
 
 impl FileId {
+    /// Wraps a raw file id.
     #[inline]
     pub const fn new(id: u64) -> Self {
         Self(id)
@@ -98,6 +125,9 @@ impl From<u64> for FileId {
 }
 
 impl From<&Path> for FileId {
+    /// Derives a stable-ish id from a path using the standard library hasher.
+    ///
+    /// This is not a cryptographic hash; two different paths could collide.
     fn from(path: &Path) -> Self {
         use std::collections::hash_map::DefaultHasher;
         let mut hasher = DefaultHasher::new();
@@ -119,25 +149,29 @@ impl Decode for FileId {
     }
 }
 
-/// A unique identifier for a database transaction.
+/// Unique identifier for a database transaction.
 ///
-/// Transaction IDs are monotonically increasing and never reused.
+/// IDs increase over time and are not reused after commit or abort.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Default)]
-pub struct TransactionId(pub u64);
+pub struct TransactionId(
+    /// Raw transaction id; zero is reserved (see [`TransactionId::INVALID`]).
+    pub u64,
+);
 
 impl TransactionId {
+    /// Size of the on-disk encoding in bytes (`u64` little-endian).
     pub const SIZE: usize = 8;
 
-    /// Invalid transaction ID (used as sentinel).
+    /// Sentinel meaning “no transaction” or “invalid”.
     pub const INVALID: Self = Self(0);
 
-    /// Creates a new `TransactionId`.
+    /// Wraps a raw transaction id (callers may use [`TransactionId::INVALID`]).
     #[inline]
     pub const fn new(id: u64) -> Self {
         Self(id)
     }
 
-    /// Returns true if this is a valid transaction ID.
+    /// Returns `true` when this id is not [`TransactionId::INVALID`].
     #[inline]
     pub const fn is_valid(&self) -> bool {
         self.0 != 0
@@ -169,13 +203,17 @@ impl Decode for TransactionId {
     }
 }
 
-/// A Log Sequence Number for write-ahead logging.
+/// Log sequence number: a position in the write-ahead log.
 ///
-/// LSNs are monotonically increasing and identify log records uniquely.
+/// Values increase over time and uniquely identify log records.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Default)]
-pub struct Lsn(pub u64);
+pub struct Lsn(
+    /// Raw LSN value; zero is reserved (see [`Lsn::INVALID`]).
+    pub u64,
+);
 
 impl Lsn {
+    /// Sentinel meaning “no LSN” or “invalid”.
     pub const INVALID: Self = Self(0);
 }
 
@@ -210,18 +248,27 @@ impl Decode for Lsn {
     }
 }
 
-/// A slot number within a page.
+/// Slot index for a tuple inside a slotted page.
 ///
-/// Slots identify tuple positions within a slotted page.
+/// [`SlotId::INVALID`] is reserved and must not name a real slot.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Default)]
-pub struct SlotId(pub u16);
+pub struct SlotId(
+    /// Slot index; [`SlotId::INVALID`] uses `u16::MAX`.
+    pub u16,
+);
 
 impl SlotId {
+    /// Size of the on-disk encoding in bytes (`u16` little-endian).
     pub const SIZE: usize = 2;
 
-    /// Invalid slot ID.
+    /// Sentinel meaning “no slot” or “invalid”.
     pub const INVALID: Self = Self(u16::MAX);
 
+    /// Builds a slot id, rejecting the reserved value `u16::MAX`.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Err("invalid slot ID")` when `slot == u16::MAX`.
     #[inline]
     pub const fn new(slot: u16) -> Result<Self, &'static str> {
         if slot == u16::MAX {
@@ -231,7 +278,7 @@ impl SlotId {
         }
     }
 
-    /// Returns true if this is a valid slot ID.
+    /// Returns `true` when this is not [`SlotId::INVALID`].
     #[inline]
     pub const fn is_valid(&self) -> bool {
         self.0 != u16::MAX
@@ -247,6 +294,9 @@ impl fmt::Display for SlotId {
 impl TryFrom<u16> for SlotId {
     type Error = &'static str;
 
+    /// # Errors
+    ///
+    /// Returns `Err("slot index out of bounds")` when `value == u16::MAX`.
     fn try_from(value: u16) -> Result<Self, Self::Error> {
         if value == u16::MAX {
             Err("slot index out of bounds")
@@ -271,6 +321,9 @@ impl From<SlotId> for usize {
 impl TryFrom<usize> for SlotId {
     type Error = &'static str;
 
+    /// # Errors
+    ///
+    /// Returns an error when `value` does not fit in `u16` or equals `u16::MAX`.
     fn try_from(value: usize) -> Result<Self, Self::Error> {
         u16::try_from(value)
             .map_err(|_| "slot index out of bounds")
@@ -291,19 +344,27 @@ impl Decode for SlotId {
     }
 }
 
-/// A column identifier within a table schema.
+/// Column index inside a table schema.
 ///
-/// Columns are numbered sequentially starting from 0.
+/// [`ColumnId::INVALID`] is reserved and must not name a real column.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Default)]
-pub struct ColumnId(pub u32);
+pub struct ColumnId(
+    /// Zero-based column index; [`ColumnId::INVALID`] uses `u32::MAX`.
+    pub u32,
+);
 
 impl ColumnId {
+    /// Size of the on-disk encoding in bytes (`u32` little-endian).
     pub const SIZE: usize = 4;
 
-    /// Invalid column ID (used as sentinel).
+    /// Sentinel meaning “no column” or “invalid”.
     pub const INVALID: Self = Self(u32::MAX);
 
-    /// Creates a new `ColumnId`, returning an error if the value is the sentinel.
+    /// Builds a column id, rejecting the reserved value `u32::MAX`.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Err("invalid column ID")` when `id == u32::MAX`.
     #[inline]
     pub const fn new(id: u32) -> Result<Self, &'static str> {
         if id == u32::MAX {
@@ -313,7 +374,7 @@ impl ColumnId {
         }
     }
 
-    /// Returns true if this is a valid column ID.
+    /// Returns `true` when this is not [`ColumnId::INVALID`].
     #[inline]
     pub const fn is_valid(&self) -> bool {
         self.0 != u32::MAX
@@ -329,6 +390,9 @@ impl fmt::Display for ColumnId {
 impl TryFrom<u32> for ColumnId {
     type Error = &'static str;
 
+    /// # Errors
+    ///
+    /// Returns `Err("column index out of bounds")` when `value == u32::MAX`.
     fn try_from(value: u32) -> Result<Self, Self::Error> {
         if value == u32::MAX {
             Err("column index out of bounds")
@@ -353,6 +417,9 @@ impl From<ColumnId> for usize {
 impl TryFrom<usize> for ColumnId {
     type Error = &'static str;
 
+    /// # Errors
+    ///
+    /// Returns an error when `value` does not fit in `u32` or equals `u32::MAX`.
     fn try_from(value: usize) -> Result<Self, Self::Error> {
         u32::try_from(value)
             .map_err(|_| "column index out of bounds")
@@ -373,24 +440,35 @@ impl Decode for ColumnId {
     }
 }
 
-/// A hash code value used for hash indexing.
+/// 64-bit hash value used for hash-based indexes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub struct HashCode(pub u64);
+pub struct HashCode(
+    /// Raw hash bits (not guaranteed stable across Rust versions for [`HashCode::from_bytes`]).
+    pub u64,
+);
 
 impl HashCode {
-    /// Creates a new `HashCode`.
+    /// Wraps a precomputed hash code.
     #[inline]
     pub const fn new(hash: u64) -> Self {
         Self(hash)
     }
 
-    /// Returns the raw hash value.
+    /// Returns the underlying `u64`.
     #[inline]
     pub const fn get(&self) -> u64 {
         self.0
     }
 
-    /// Computes hash code for a byte slice.
+    /// Hashes arbitrary bytes with the standard library’s default hasher.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use storemy::primitives::HashCode;
+    /// let h = HashCode::from_bytes(b"hello");
+    /// assert_eq!(h.get(), HashCode::from_bytes(b"hello").get());
+    /// ```
     pub fn from_bytes(data: &[u8]) -> Self {
         use std::collections::hash_map::DefaultHasher;
         let mut hasher = DefaultHasher::new();
@@ -418,18 +496,26 @@ impl Decode for HashCode {
     }
 }
 
-/// A record identifier that uniquely identifies a tuple in the database.
-///
-/// Combines file ID, page number, and slot ID.
+/// Physical address of a single tuple: file, page, and slot.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct RecordId {
+    /// Heap or index file that owns the page.
     pub file_id: FileId,
+    /// Page within that file.
     pub page_no: PageNumber,
+    /// Tuple slot on the page.
     pub slot_id: SlotId,
 }
 
 impl RecordId {
-    /// Creates a new `RecordId`.
+    /// Builds a record id from its three parts.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use storemy::primitives::{FileId, PageNumber, RecordId, SlotId};
+    /// let rid = RecordId::new(FileId::new(1), PageNumber::new(0), SlotId::new(3).unwrap());
+    /// ```
     pub const fn new(file_id: FileId, page_no: PageNumber, slot_id: SlotId) -> Self {
         Self {
             file_id,
@@ -469,13 +555,20 @@ impl Decode for RecordId {
 }
 
 // illustrative
+/// Page location without a slot (file plus page number).
+///
+/// Use [`RecordId`] when you need the exact tuple; use `PageId` when the whole
+/// page is the unit of work (for example buffer fixes or page-level I/O).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct PageId {
+    /// File that contains the page.
     pub file_id: FileId,
+    /// Page index inside that file.
     pub page_no: PageNumber,
 }
 
 impl PageId {
+    /// Builds a page id from file and page number.
     pub fn new(file_id: FileId, page_no: PageNumber) -> Self {
         Self { file_id, page_no }
     }
@@ -498,16 +591,24 @@ impl Decode for PageId {
     }
 }
 
-/// A comparison operator used in SQL WHERE clauses and JOIN conditions.
+/// SQL-style comparison operator (equality, ordering, pattern match).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Predicate {
+    /// `=`
     Equals,
+    /// `<`
     LessThan,
+    /// `>`
     GreaterThan,
+    /// `<=`
     LessThanOrEqual,
+    /// `>=`
     GreaterThanOrEqual,
+    /// `!=`
     NotEqual,
+    /// `<>` (SQL not-equal)
     NotEqualBracket,
+    /// `LIKE`
     Like,
 }
 
@@ -530,6 +631,22 @@ impl fmt::Display for Predicate {
 impl TryFrom<&str> for Predicate {
     type Error = String;
 
+    /// Parses a single SQL operator token (case-insensitive only for `"LIKE"` / `"like"`).
+    ///
+    /// # Errors
+    ///
+    /// Returns `Err` with a short message when `s` is not one of the supported spellings.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use storemy::primitives::Predicate;
+    /// assert_eq!(
+    ///     Predicate::try_from("<=").unwrap(),
+    ///     Predicate::LessThanOrEqual
+    /// );
+    /// assert!(Predicate::try_from("??").is_err());
+    /// ```
     fn try_from(s: &str) -> Result<Self, Self::Error> {
         match s {
             "=" => Ok(Predicate::Equals),
@@ -563,6 +680,10 @@ impl Encode for Predicate {
 }
 
 impl Decode for Predicate {
+    /// # Errors
+    ///
+    /// Returns [`CodecError::UnknownDiscriminant`](crate::codec::CodecError::UnknownDiscriminant)
+    /// when the stored discriminant is not in `0..=7`.
     fn decode<R: Read>(reader: &mut R) -> Result<Self, CodecError> {
         match reader.read_u8()? {
             0 => Ok(Predicate::Equals),
@@ -578,7 +699,7 @@ impl Decode for Predicate {
     }
 }
 
-/// Type alias for file paths.
+/// Convenience alias for owning file paths in engine APIs.
 pub type Filepath = PathBuf;
 
 #[cfg(test)]
