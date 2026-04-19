@@ -73,13 +73,10 @@ pub enum TupleError {
 /// Each field has a name, a [`Type`] that every stored value must conform to,
 /// and a flag indicating whether `NULL` is permitted. Fields default to
 /// nullable; call [`Field::not_null`] to tighten the constraint.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Field {
-    /// The column name, unique within a schema.
     pub name: String,
-    /// The declared storage type for this column.
     pub field_type: Type,
-    /// Whether this column accepts `NULL` values.
     pub nullable: bool,
 }
 
@@ -295,6 +292,10 @@ impl TupleSchema {
 
         Ok(())
     }
+
+    pub fn field_indices(&self) -> &HashMap<String, usize> {
+        &self.field_indices
+    }
 }
 
 impl fmt::Display for TupleSchema {
@@ -443,6 +444,50 @@ impl Tuple {
         }
 
         Ok(Self { values })
+    }
+
+    /// Sets the value of the field at the given `index` to `value`.
+    ///
+    /// Uses the same rules as [`TupleSchema::validate`]: `NULL` is allowed only when the field
+    /// is nullable, and non-null values must match the field's declared [`Type`].
+    ///
+    /// # Errors
+    ///
+    /// - [`TupleError::FieldIndexOutOfBounds`] — `index` is not a valid field index for `schema`,
+    ///   or is past the end of this tuple's values.
+    /// - [`TupleError::NullNotAllowed`] — `value` is `NULL` but the field is `NOT NULL`.
+    /// - [`TupleError::TypeMismatch`] — non-null `value` has a different runtime type than the field.
+    pub fn set_field(
+        &mut self,
+        index: usize,
+        value: Value,
+        schema: &TupleSchema,
+    ) -> Result<(), TupleError> {
+        let field = schema
+            .field(index)
+            .ok_or(TupleError::FieldIndexOutOfBounds { index })?;
+        if index >= self.values.len() {
+            return Err(TupleError::FieldIndexOutOfBounds { index });
+        }
+
+        if value.is_null() && !field.nullable {
+            return Err(TupleError::NullNotAllowed {
+                column: field.name.clone(),
+            });
+        }
+
+        if let Some(value_type) = value.get_type()
+            && value_type != field.field_type
+        {
+            return Err(TupleError::TypeMismatch {
+                column: field.name.clone(),
+                expected: field.field_type,
+                actual: value_type,
+            });
+        }
+
+        self.values[index] = value;
+        Ok(())
     }
 }
 
@@ -697,6 +742,70 @@ mod tests {
 
         *tuple.get_mut(0).unwrap() = Value::Int32(99);
         assert_eq!(tuple.get(0), Some(&Value::Int32(99)));
+    }
+
+    #[test]
+    fn set_field_updates_compatible_value() {
+        let schema = schema_id_name_age();
+        let mut tuple = tuple_42_alice_30();
+        tuple
+            .set_field(1, Value::String("bob".into()), &schema)
+            .unwrap();
+        assert_eq!(tuple.get(1), Some(&Value::String("bob".into())));
+        assert_eq!(tuple.get(0), Some(&Value::Int32(42)));
+    }
+
+    #[test]
+    fn set_field_updates_int_in_place() {
+        let schema = schema_id_name_age();
+        let mut tuple = tuple_42_alice_30();
+        tuple.set_field(2, Value::Int32(31), &schema).unwrap();
+        assert_eq!(tuple.get(2), Some(&Value::Int32(31)));
+    }
+
+    #[test]
+    fn set_field_index_out_of_bounds() {
+        let schema = schema_id_name_age();
+        let mut tuple = tuple_42_alice_30();
+        let err = tuple.set_field(99, Value::Int32(1), &schema).unwrap_err();
+        assert!(matches!(
+            err,
+            TupleError::FieldIndexOutOfBounds { index: 99 }
+        ));
+    }
+
+    #[test]
+    fn set_field_type_mismatch() {
+        let schema = schema_id_name_age();
+        let mut tuple = tuple_42_alice_30();
+        let err = tuple.set_field(0, Value::Int64(1), &schema).unwrap_err();
+        assert!(matches!(
+            err,
+            TupleError::TypeMismatch {
+                ref column,
+                expected: Type::Int32,
+                actual: Type::Int64
+            } if column == "id"
+        ));
+    }
+
+    #[test]
+    fn set_field_null_into_nullable_column_ok() {
+        let schema = schema_id_name_age();
+        let mut tuple = tuple_42_alice_30();
+        tuple.set_field(1, Value::Null, &schema).unwrap();
+        assert_eq!(tuple.get(1), Some(&Value::Null));
+    }
+
+    #[test]
+    fn set_field_null_into_not_null_column_rejected() {
+        let schema = schema_id_name_age();
+        let mut tuple = tuple_42_alice_30();
+        let err = tuple.set_field(0, Value::Null, &schema).unwrap_err();
+        assert!(matches!(
+            err,
+            TupleError::NullNotAllowed { column } if column == "id"
+        ));
     }
 
     #[test]
