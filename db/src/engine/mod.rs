@@ -6,13 +6,14 @@ use crate::{
     FileId,
     buffer_pool::page_store::PageStoreError,
     catalog::{CatalogError, manager::Catalog},
-    engine::ddl::{create_table, drop_table},
     heap::file::HeapError,
     parser::statements::Statement,
     transaction::{Transaction, TransactionError, TransactionManager},
+    tuple::Tuple,
 };
 
 mod ddl;
+mod dml;
 
 #[derive(Debug)]
 pub enum StatementResult {
@@ -27,6 +28,18 @@ pub enum StatementResult {
     Inserted {
         table: String,
         rows: usize,
+    },
+    Deleted {
+        table: String,
+        rows: usize,
+    },
+    Updated {
+        table: String,
+        rows: usize,
+    },
+    Selected {
+        table: String,
+        rows: Vec<Tuple>,
     },
 }
 
@@ -49,6 +62,27 @@ impl StatementResult {
 
     pub(super) fn inserted(table: impl Into<String>, rows: usize) -> Self {
         Self::Inserted {
+            table: table.into(),
+            rows,
+        }
+    }
+
+    pub(super) fn deleted(table: impl Into<String>, rows: usize) -> Self {
+        Self::Deleted {
+            table: table.into(),
+            rows,
+        }
+    }
+
+    pub(super) fn updated(table: impl Into<String>, rows: usize) -> Self {
+        Self::Updated {
+            table: table.into(),
+            rows,
+        }
+    }
+
+    pub(super) fn selected(table: impl Into<String>, rows: Vec<Tuple>) -> Self {
+        Self::Selected {
             table: table.into(),
             rows,
         }
@@ -84,6 +118,28 @@ impl fmt::Display for StatementResult {
                 write!(
                     f,
                     "INSERT completed: wrote {rows} {row_word} into heap table '{table}'",
+                )
+            }
+            StatementResult::Deleted { table, rows } => {
+                let row_word = if *rows == 1 { "row" } else { "rows" };
+                write!(
+                    f,
+                    "DELETE completed: removed {rows} {row_word} from heap table '{table}'",
+                )
+            }
+            StatementResult::Updated { table, rows } => {
+                let row_word = if *rows == 1 { "row" } else { "rows" };
+                write!(
+                    f,
+                    "UPDATE completed: modified {rows} {row_word} in heap table '{table}'",
+                )
+            }
+            StatementResult::Selected { table, rows } => {
+                let row_word = if rows.len() == 1 { "row" } else { "rows" };
+                write!(
+                    f,
+                    "SELECT completed: returned {} {row_word} from '{table}'",
+                    rows.len()
                 )
             }
         }
@@ -135,6 +191,34 @@ pub enum EngineError {
         expected: String,
         got: String,
     },
+
+    #[error("type error: {0}")]
+    TypeError(String),
+}
+
+impl EngineError {
+    pub(super) fn column_not_found(table: impl Into<String>, column: impl Into<String>) -> Self {
+        Self::ColumnNotFound {
+            table: table.into(),
+            column: column.into(),
+        }
+    }
+
+    pub(super) fn wrong_column_count(
+        table: impl Into<String>,
+        expected: usize,
+        got: usize,
+    ) -> Self {
+        Self::WrongColumnCount {
+            table: table.into(),
+            expected,
+            got,
+        }
+    }
+
+    pub(super) fn type_error(message: impl Into<String>) -> Self {
+        Self::TypeError(message.into())
+    }
 }
 
 pub(super) fn with_txn<T, F>(f: F, txn_manager: &TransactionManager) -> Result<T, EngineError>
@@ -153,8 +237,11 @@ pub fn execute_statement(
     txn_manager: &TransactionManager,
 ) -> Result<StatementResult, EngineError> {
     match statement {
-        Statement::CreateTable(statement) => create_table(catalog, txn_manager, statement),
-        Statement::Drop(statement) => drop_table(catalog, txn_manager, statement),
+        Statement::CreateTable(s) => ddl::create_table(catalog, txn_manager, s),
+        Statement::Drop(s) => ddl::drop_table(catalog, txn_manager, s),
+        Statement::Insert(s) => dml::insert(catalog, txn_manager, s),
+        Statement::Delete(s) => dml::delete(catalog, txn_manager, s),
+        Statement::Update(s) => dml::update(catalog, txn_manager, s),
         _ => Err(EngineError::Unsupported(statement.to_string())),
     }
 }
