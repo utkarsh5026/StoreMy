@@ -10,103 +10,114 @@
 //! - Translating a parsed column list into a [`TupleSchema`].
 //! - Resolving a primary-key declaration into column indices when possible.
 
-use crate::{
-    catalog::manager::Catalog,
-    engine::{EngineError, StatementResult},
-    parser::statements::{ColumnDef, CreateTableStatement, DropStatement},
-    transaction::TransactionManager,
-    tuple::TupleSchema,
-};
+pub(super) mod create_table {
+    use crate::{
+        catalog::manager::Catalog,
+        engine::{EngineError, StatementResult},
+        parser::statements::{ColumnDef, CreateTableStatement},
+        transaction::TransactionManager,
+        tuple::TupleSchema,
+    };
 
-/// Creates a heap table and registers it in the catalog.
-///
-/// Honors `IF NOT EXISTS`: when the table already exists, this returns a
-/// `TableCreated` result with `already_exists = true` and the existing table's
-/// `file_id`.
-///
-/// Primary key resolution follows SQL-style precedence:
-/// - If any column is declared inline as `PRIMARY KEY`, that column name is used.
-/// - Otherwise, the statement's table-level `PRIMARY KEY (col)` is used.
-/// - If the chosen column name is not present in the computed schema, the table
-///   is still created but without a primary key.
-///
-/// # Errors
-///
-/// Returns an [`EngineError`] if starting the transaction fails, if catalog
-/// metadata cannot be read, or if the catalog rejects the create operation (for
-/// example, when the table already exists and `IF NOT EXISTS` is not set).
-pub(super) fn create_table(
-    catalog: &Catalog,
-    txn_manager: &TransactionManager,
-    statement: CreateTableStatement,
-) -> Result<StatementResult, EngineError> {
-    let table_name = statement.table_name;
+    /// Creates a heap table and registers it in the catalog.
+    ///
+    /// Honors `IF NOT EXISTS`: when the table already exists, this returns a
+    /// `TableCreated` result with `already_exists = true` and the existing table's
+    /// `file_id`.
+    ///
+    /// Primary key resolution follows SQL-style precedence:
+    /// - If any column is declared inline as `PRIMARY KEY`, that column name is used.
+    /// - Otherwise, the statement's table-level `PRIMARY KEY (col)` is used.
+    /// - If the chosen column name is not present in the computed schema, the table
+    ///   is still created but without a primary key.
+    ///
+    /// # Errors
+    ///
+    /// Returns an [`EngineError`] if starting the transaction fails, if catalog
+    /// metadata cannot be read, or if the catalog rejects the create operation (for
+    /// example, when the table already exists and `IF NOT EXISTS` is not set).
+    pub fn execute(
+        catalog: &Catalog,
+        txn_manager: &TransactionManager,
+        statement: CreateTableStatement,
+    ) -> Result<StatementResult, EngineError> {
+        let table_name = statement.table_name;
 
-    if statement.if_not_exists && catalog.table_exists(&table_name) {
-        let file_id = super::with_txn(
+        if statement.if_not_exists && catalog.table_exists(&table_name) {
+            let file_id = crate::engine::with_txn(
+                |txn| {
+                    catalog
+                        .get_table_info(txn, &table_name)
+                        .map_err(Into::into)
+                        .map(|t| t.file_id)
+                },
+                txn_manager,
+            )?;
+            return Ok(StatementResult::table_created(table_name, file_id, true));
+        }
+
+        let schema = TupleSchema::from(statement.columns.iter().collect::<Vec<&ColumnDef>>());
+
+        let pk_col_name = statement
+            .columns
+            .iter()
+            .find(|c| c.primary_key)
+            .map(|c| c.name.clone())
+            .or(statement.primary_key.clone());
+
+        let primary_key = pk_col_name
+            .as_deref()
+            .and_then(|name| schema.field_by_name(name).map(|(i, _)| vec![i]));
+
+        let file_id = crate::engine::with_txn(
             |txn| {
                 catalog
-                    .get_table_info(txn, &table_name)
+                    .create_table(txn, &table_name, schema, primary_key)
                     .map_err(Into::into)
-                    .map(|t| t.file_id)
             },
             txn_manager,
         )?;
-        return Ok(StatementResult::table_created(table_name, file_id, true));
+
+        Ok(StatementResult::table_created(table_name, file_id, false))
     }
-
-    let schema = TupleSchema::from(statement.columns.iter().collect::<Vec<&ColumnDef>>());
-
-    let pk_col_name = statement
-        .columns
-        .iter()
-        .find(|c| c.primary_key)
-        .map(|c| c.name.clone())
-        .or(statement.primary_key.clone());
-
-    let primary_key = pk_col_name
-        .as_deref()
-        .and_then(|name| schema.field_by_name(name).map(|(i, _)| vec![i]));
-
-    let file_id = super::with_txn(
-        |txn| {
-            catalog
-                .create_table(txn, &table_name, schema, primary_key)
-                .map_err(Into::into)
-        },
-        txn_manager,
-    )?;
-
-    Ok(StatementResult::table_created(table_name, file_id, false))
 }
 
-/// Drops a heap table and removes its metadata from the catalog.
-///
-/// Honors `IF EXISTS`: when the table does not exist, this returns `Ok` with a
-/// `TableDropped` result instead of failing.
-///
-/// # Errors
-///
-/// Returns an [`EngineError`] if the catalog drop fails (for example, dropping a
-/// non-existent table without `IF EXISTS`) or if starting/committing the
-/// transaction fails.
-pub(super) fn drop_table(
-    catalog: &Catalog,
-    txn_manager: &TransactionManager,
-    statement: DropStatement,
-) -> Result<StatementResult, EngineError> {
-    let table_name = statement.table_name;
+pub(super) mod drop_table {
+    use crate::{
+        catalog::manager::Catalog,
+        engine::{EngineError, StatementResult},
+        parser::statements::DropStatement,
+        transaction::TransactionManager,
+    };
 
-    if statement.if_exists && !catalog.table_exists(&table_name) {
-        return Ok(StatementResult::table_dropped(table_name));
+    /// Drops a heap table and removes its metadata from the catalog.
+    ///
+    /// Honors `IF EXISTS`: when the table does not exist, this returns `Ok` with a
+    /// `TableDropped` result instead of failing.
+    ///
+    /// # Errors
+    ///
+    /// Returns an [`EngineError`] if the catalog drop fails (for example, dropping a
+    /// non-existent table without `IF EXISTS`) or if starting/committing the
+    /// transaction fails.
+    pub fn execute(
+        catalog: &Catalog,
+        txn_manager: &TransactionManager,
+        statement: DropStatement,
+    ) -> Result<StatementResult, EngineError> {
+        let table_name = statement.table_name;
+
+        if statement.if_exists && !catalog.table_exists(&table_name) {
+            return Ok(StatementResult::table_dropped(table_name));
+        }
+
+        crate::engine::with_txn(
+            |txn| catalog.drop_table(txn, &table_name).map_err(Into::into),
+            txn_manager,
+        )?;
+
+        Ok(StatementResult::table_dropped(table_name))
     }
-
-    super::with_txn(
-        |txn| catalog.drop_table(txn, &table_name).map_err(Into::into),
-        txn_manager,
-    )?;
-
-    Ok(StatementResult::table_dropped(table_name))
 }
 
 #[cfg(test)]
@@ -122,6 +133,7 @@ mod tests {
         Type,
         buffer_pool::page_store::PageStore,
         catalog::{CatalogError, manager::Catalog},
+        engine::{EngineError, StatementResult},
         parser::statements::{ColumnDef, CreateTableStatement, DropStatement},
         transaction::TransactionManager,
         tuple::TupleSchema,
@@ -183,7 +195,7 @@ mod tests {
             None,
         );
 
-        let result = create_table(&catalog, &txn_mgr, stmt).unwrap();
+        let result = create_table::execute(&catalog, &txn_mgr, stmt).unwrap();
 
         match result {
             StatementResult::TableCreated {
@@ -212,13 +224,13 @@ mod tests {
             vec![col("id", Type::Uint64, false, false)],
             None,
         );
-        create_table(&catalog, &txn_mgr, stmt_create).unwrap();
+        create_table::execute(&catalog, &txn_mgr, stmt_create).unwrap();
 
         let stmt_drop = DropStatement {
             table_name: "t1".to_string(),
             if_exists: false,
         };
-        let result = drop_table(&catalog, &txn_mgr, stmt_drop).unwrap();
+        let result = drop_table::execute(&catalog, &txn_mgr, stmt_drop).unwrap();
 
         match result {
             StatementResult::TableDropped { name } => assert_eq!(name, "t1"),
@@ -239,7 +251,7 @@ mod tests {
             vec![col("id", Type::Uint64, false, false)],
             None,
         );
-        create_table(&catalog, &txn_mgr, stmt_create).unwrap();
+        create_table::execute(&catalog, &txn_mgr, stmt_create).unwrap();
 
         let txn = txn_mgr.begin().unwrap();
         let existing_info = catalog.get_table_info(&txn, "dup").unwrap();
@@ -251,7 +263,7 @@ mod tests {
             vec![col("id", Type::Uint64, false, false)],
             None,
         );
-        let result = create_table(&catalog, &txn_mgr, stmt_if_not_exists).unwrap();
+        let result = create_table::execute(&catalog, &txn_mgr, stmt_if_not_exists).unwrap();
 
         match result {
             StatementResult::TableCreated {
@@ -282,7 +294,7 @@ mod tests {
             ],
             None,
         );
-        create_table(&catalog, &txn_mgr, stmt).unwrap();
+        create_table::execute(&catalog, &txn_mgr, stmt).unwrap();
 
         let txn = txn_mgr.begin().unwrap();
         let info = catalog.get_table_info(&txn, "pk_inline").unwrap();
@@ -306,7 +318,7 @@ mod tests {
             ],
             Some("name"),
         );
-        create_table(&catalog, &txn_mgr, stmt).unwrap();
+        create_table::execute(&catalog, &txn_mgr, stmt).unwrap();
 
         let txn = txn_mgr.begin().unwrap();
         let info = catalog.get_table_info(&txn, "pk_precedence").unwrap();
@@ -330,7 +342,7 @@ mod tests {
             ],
             Some("k"),
         );
-        create_table(&catalog, &txn_mgr, stmt).unwrap();
+        create_table::execute(&catalog, &txn_mgr, stmt).unwrap();
 
         let txn = txn_mgr.begin().unwrap();
         let info = catalog.get_table_info(&txn, "pk_table_level").unwrap();
@@ -351,7 +363,7 @@ mod tests {
             vec![col("id", Type::Uint64, false, false)],
             Some("nope"),
         );
-        create_table(&catalog, &txn_mgr, stmt).unwrap();
+        create_table::execute(&catalog, &txn_mgr, stmt).unwrap();
 
         let txn = txn_mgr.begin().unwrap();
         let info = catalog.get_table_info(&txn, "pk_missing").unwrap();
@@ -373,7 +385,7 @@ mod tests {
             vec![col("id", Type::Uint64, false, false)],
             None,
         );
-        create_table(&catalog, &txn_mgr, stmt1).unwrap();
+        create_table::execute(&catalog, &txn_mgr, stmt1).unwrap();
 
         let stmt2 = statement_create(
             "dup_err",
@@ -381,7 +393,7 @@ mod tests {
             vec![col("id", Type::Uint64, false, false)],
             None,
         );
-        let err = create_table(&catalog, &txn_mgr, stmt2).unwrap_err();
+        let err = create_table::execute(&catalog, &txn_mgr, stmt2).unwrap_err();
 
         assert!(
             matches!(
@@ -402,7 +414,7 @@ mod tests {
             table_name: "ghost".to_string(),
             if_exists: false,
         };
-        let err = drop_table(&catalog, &txn_mgr, stmt_drop).unwrap_err();
+        let err = drop_table::execute(&catalog, &txn_mgr, stmt_drop).unwrap_err();
 
         assert!(
             matches!(
@@ -423,7 +435,7 @@ mod tests {
             table_name: "ghost".to_string(),
             if_exists: true,
         };
-        let result = drop_table(&catalog, &txn_mgr, stmt_drop).unwrap();
+        let result = drop_table::execute(&catalog, &txn_mgr, stmt_drop).unwrap();
 
         match result {
             StatementResult::TableDropped { name } => assert_eq!(name, "ghost"),
@@ -450,7 +462,7 @@ mod tests {
             columns: cols,
             primary_key: None,
         };
-        create_table(&catalog, &txn_mgr, stmt).unwrap();
+        create_table::execute(&catalog, &txn_mgr, stmt).unwrap();
 
         let txn = txn_mgr.begin().unwrap();
         let info = catalog.get_table_info(&txn, "schema_check").unwrap();

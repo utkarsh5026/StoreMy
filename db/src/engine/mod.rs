@@ -175,6 +175,9 @@ pub enum EngineError {
     #[error("column '{column}' not found in table '{table}'")]
     ColumnNotFound { table: String, column: String },
 
+    #[error("column '{column}' appears more than once in INSERT into '{table}'")]
+    DuplicateInsertColumn { table: String, column: String },
+
     #[error("wrong number of values for table '{table}': expected {expected}, got {got}")]
     WrongColumnCount {
         table: String,
@@ -182,8 +185,8 @@ pub enum EngineError {
         got: usize,
     },
 
-    #[error("null value in NOT NULL column '{column}'")]
-    NullViolation { column: String },
+    #[error("null value in NOT NULL column '{column}' in table '{table}'")]
+    NullViolation { table: String, column: String },
 
     #[error("type mismatch for column '{column}': expected {expected}, got {got}")]
     TypeMismatch {
@@ -204,6 +207,16 @@ impl EngineError {
         }
     }
 
+    pub(super) fn column_already_exists(
+        table: impl Into<String>,
+        column: impl Into<String>,
+    ) -> Self {
+        Self::DuplicateInsertColumn {
+            table: table.into(),
+            column: column.into(),
+        }
+    }
+
     pub(super) fn wrong_column_count(
         table: impl Into<String>,
         expected: usize,
@@ -218,6 +231,13 @@ impl EngineError {
 
     pub(super) fn type_error(message: impl Into<String>) -> Self {
         Self::TypeError(message.into())
+    }
+
+    pub(super) fn null_violation(table: impl Into<String>, column: impl Into<String>) -> Self {
+        Self::NullViolation {
+            table: table.into(),
+            column: column.into(),
+        }
     }
 }
 
@@ -237,11 +257,11 @@ pub fn execute_statement(
     txn_manager: &TransactionManager,
 ) -> Result<StatementResult, EngineError> {
     match statement {
-        Statement::CreateTable(s) => ddl::create_table(catalog, txn_manager, s),
-        Statement::Drop(s) => ddl::drop_table(catalog, txn_manager, s),
-        Statement::Insert(s) => dml::insert(catalog, txn_manager, s),
-        Statement::Delete(s) => dml::delete(catalog, txn_manager, s),
-        Statement::Update(s) => dml::update(catalog, txn_manager, s),
+        Statement::CreateTable(s) => ddl::create_table::execute(catalog, txn_manager, s),
+        Statement::Drop(s) => ddl::drop_table::execute(catalog, txn_manager, s),
+        Statement::Insert(s) => dml::insert::execute(catalog, txn_manager, s),
+        Statement::Delete(s) => dml::delete::execute(catalog, txn_manager, s),
+        Statement::Update(s) => dml::update::execute(catalog, txn_manager, s),
         _ => Err(EngineError::Unsupported(statement.to_string())),
     }
 }
