@@ -107,6 +107,7 @@ pub enum TokenType {
     Lparen,
     Rparen,
     Asterisk,
+    Dot,
     Invalid,
     Eof,
 }
@@ -184,6 +185,7 @@ impl fmt::Display for TokenType {
             TokenType::Lparen => "LPAREN",
             TokenType::Rparen => "RPAREN",
             TokenType::Asterisk => "ASTERISK",
+            TokenType::Dot => "DOT",
             TokenType::Invalid => "INVALID",
             TokenType::Eof => "EOF",
         };

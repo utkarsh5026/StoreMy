@@ -2,7 +2,7 @@ use super::ParserError;
 use crate::parser::{
     Parser,
     statements::{
-        AggFunc, Join, JoinKind, OrderBy, OrderDirection, SelectColumns, SelectExpr,
+        AggFunc, ColumnRef, Join, JoinKind, OrderBy, OrderDirection, SelectColumns, SelectExpr,
         SelectStatement, TableRef, TableWithJoins,
     },
     token::TokenType,
@@ -124,7 +124,7 @@ impl Parser {
                 p.expect(TokenType::Rparen)?;
                 Ok(SelectExpr::Agg(agg, col_tok.value))
             } else {
-                Ok(SelectExpr::Column(name_tok.value))
+                Ok(SelectExpr::Column(p.parse_column_ref()?))
             }
         };
 
@@ -146,8 +146,7 @@ impl Parser {
     fn parse_order_by(&mut self) -> Result<Option<OrderBy>, ParserError> {
         self.on_peek_token(TokenType::Order, |p| {
             p.expect(TokenType::By)?;
-            let order_col = p.expect(TokenType::Identifier)?;
-
+            let order_col = p.parse_column_ref()?;
             let dir = if p.if_peek_then_consume(TokenType::Desc)? {
                 OrderDirection::Desc
             } else {
@@ -155,7 +154,7 @@ impl Parser {
                 OrderDirection::Asc
             };
 
-            Ok(OrderBy(order_col.value, dir))
+            Ok(OrderBy(order_col, dir))
         })
     }
 
@@ -171,12 +170,12 @@ impl Parser {
     ///
     /// Returns [`ParserError`] if `GROUP` is present but `BY` does not follow
     /// it, or if no column identifier follows `GROUP BY`.
-    fn parse_group_by(&mut self) -> Result<Vec<String>, ParserError> {
+    fn parse_group_by(&mut self) -> Result<Vec<ColumnRef>, ParserError> {
         let group_by = self
             .on_peek_token(TokenType::Group, |p| {
                 p.expect(TokenType::By)?;
-                let column = p.expect(TokenType::Identifier)?;
-                Ok(vec![column.value])
+                let column = p.parse_column_ref()?;
+                Ok(vec![column])
             })?
             .unwrap_or_default();
 
@@ -273,7 +272,7 @@ mod tests {
             Parser,
             parsers::ParserError,
             statements::{
-                AggFunc, JoinKind, OrderBy, OrderDirection, SelectColumns, SelectExpr,
+                AggFunc, ColumnRef, JoinKind, OrderBy, OrderDirection, SelectColumns, SelectExpr,
                 SelectStatement, Statement, WhereCondition,
             },
         },
@@ -322,7 +321,9 @@ mod tests {
     fn test_parse_select_single_column_projection() {
         let s = select("SELECT id FROM orders").unwrap();
         match &s.columns {
-            SelectColumns::Exprs(v) => assert_eq!(v, &vec![SelectExpr::Column("id".into())]),
+            SelectColumns::Exprs(v) => {
+                assert_eq!(v, &vec![SelectExpr::Column("id".into())]);
+            }
             SelectColumns::All => panic!("expected Exprs, got All"),
         }
     }
@@ -399,7 +400,7 @@ mod tests {
         let WhereCondition::Predicate { field, op, value } = &j.on else {
             panic!("expected predicate ON");
         };
-        assert_eq!(field, "id");
+        assert_eq!(field, &ColumnRef::from("id"));
         assert_eq!(op, &Predicate::Equals);
         assert_eq!(value, &Value::Int64(1));
     }
@@ -437,7 +438,7 @@ mod tests {
         let WhereCondition::Predicate { field, op, value } = wc else {
             panic!("expected predicate");
         };
-        assert_eq!(field, "status");
+        assert_eq!(field, &ColumnRef::from("status"));
         assert_eq!(*op, Predicate::Equals);
         assert_eq!(*value, Value::Int64(1));
     }
@@ -449,7 +450,7 @@ mod tests {
         let WhereCondition::Predicate { field, value, .. } = wc else {
             panic!("expected predicate");
         };
-        assert_eq!(field, "price");
+        assert_eq!(field, &ColumnRef::from("price"));
         assert_eq!(*value, Value::Float64(2.5));
     }
 
@@ -500,7 +501,7 @@ mod tests {
     #[test]
     fn test_parse_select_group_by_single_column() {
         let s = select("SELECT a FROM t GROUP BY a").unwrap();
-        assert_eq!(s.group_by, vec!["a".to_string()]);
+        assert_eq!(s.group_by, vec!["a".into()]);
     }
 
     #[test]
@@ -509,7 +510,7 @@ mod tests {
         let Some(OrderBy(col, dir)) = &s.order_by else {
             panic!("expected order_by");
         };
-        assert_eq!(col, "name");
+        assert_eq!(col, &ColumnRef::from("name"));
         assert_eq!(*dir, OrderDirection::Asc);
     }
 
@@ -519,7 +520,7 @@ mod tests {
         let Some(OrderBy(col, dir)) = &s.order_by else {
             panic!("expected order_by");
         };
-        assert_eq!(col, "score");
+        assert_eq!(col, &ColumnRef::from("score"));
         assert_eq!(*dir, OrderDirection::Desc);
     }
 
@@ -529,7 +530,7 @@ mod tests {
         let Some(OrderBy(col, dir)) = &s.order_by else {
             panic!("expected order_by");
         };
-        assert_eq!(col, "z");
+        assert_eq!(col, &ColumnRef::from("z"));
         assert_eq!(*dir, OrderDirection::Asc);
     }
 
@@ -554,11 +555,11 @@ mod tests {
         assert!(s.distinct);
         assert_eq!(s.from[0].table.alias.as_deref(), Some("uu"));
         assert_eq!(s.from[0].joins.len(), 1);
-        assert_eq!(s.group_by, vec!["x".to_string()]);
+        assert_eq!(s.group_by, vec!["x".into()]);
         let Some(OrderBy(col, dir)) = &s.order_by else {
             panic!("expected order_by");
         };
-        assert_eq!(col, "x");
+        assert_eq!(col, &ColumnRef::from("x"));
         assert_eq!(*dir, OrderDirection::Desc);
         assert_eq!(s.limit_offset, Some((3, 1)));
     }

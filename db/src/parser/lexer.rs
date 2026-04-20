@@ -152,7 +152,7 @@ impl Lexer {
                 Ok(Some(self.create_token(token_type, ident, start)))
             }
 
-            ',' | ';' | '(' | ')' | '*' => {
+            ',' | ';' | '(' | ')' | '*' | '.' => {
                 self.advance_pos();
                 let token_type = match ch {
                     ',' => TokenType::Comma,
@@ -160,6 +160,7 @@ impl Lexer {
                     '(' => TokenType::Lparen,
                     ')' => TokenType::Rparen,
                     '*' => TokenType::Asterisk,
+                    '.' => TokenType::Dot,
                     _ => unreachable!(),
                 };
                 Ok(Some(self.create_token(token_type, ch.to_string(), start)))

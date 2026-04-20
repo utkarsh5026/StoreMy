@@ -175,10 +175,7 @@ impl Statement {
 /// Parsed `DROP TABLE [IF EXISTS] <name>` statement.
 #[derive(Debug, Clone)]
 pub struct DropStatement {
-    /// Name of the table to drop.
     pub table_name: String,
-    /// When `true`, the statement includes `IF EXISTS` and should not error
-    /// if the table is missing.
     pub if_exists: bool,
 }
 
@@ -195,17 +192,11 @@ impl Display for DropStatement {
 /// A single column definition inside `CREATE TABLE`.
 #[derive(Debug, Clone)]
 pub struct ColumnDef {
-    /// Column name.
     pub name: String,
-    /// Data type of the column (e.g. `INT`, `VARCHAR(255)`).
     pub col_type: crate::types::Type,
-    /// Whether the column accepts `NULL` values.
     pub nullable: bool,
-    /// Whether this column is declared as `PRIMARY KEY` inline.
     pub primary_key: bool,
-    /// Whether the column auto-increments on insert.
     pub auto_increment: bool,
-    /// Optional default value used when no explicit value is provided.
     pub default: Option<Value>,
 }
 
@@ -256,17 +247,13 @@ impl From<Vec<&ColumnDef>> for TupleSchema {
 /// Parsed `CREATE TABLE [IF NOT EXISTS] name (col_def, ..., [PRIMARY KEY (col)])`.
 #[derive(Debug, Clone)]
 pub struct CreateTableStatement {
-    /// Name of the table to create.
     pub table_name: String,
-    /// When `true`, suppress errors if the table already exists.
     pub if_not_exists: bool,
-    /// Column definitions in declaration order.
     pub columns: Vec<ColumnDef>,
-    /// Optional table-level primary key column name (as opposed to an inline
-    /// `PRIMARY KEY` on a [`ColumnDef`]).
     pub primary_key: Option<String>,
 }
 
+/// Pretty-prints the statement as a SQL-like string.
 impl Display for CreateTableStatement {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "CREATE TABLE")?;
@@ -335,24 +322,6 @@ impl Display for DropIndexStatement {
     }
 }
 
-/// A literal value on the right-hand side of a `WHERE` predicate.
-#[derive(Debug, Clone, PartialEq)]
-pub enum Literal {
-    /// An integer literal, e.g. `42`.
-    Int(i64),
-    /// A string literal, e.g. `'hello'`.
-    Str(String),
-}
-
-impl Display for Literal {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Literal::Int(n) => write!(f, "{n}"),
-            Literal::Str(s) => write!(f, "'{s}'"),
-        }
-    }
-}
-
 /// A `WHERE` condition tree.
 ///
 /// Conditions are either a single predicate (`field op value`) or a logical
@@ -361,7 +330,7 @@ impl Display for Literal {
 #[derive(Debug, Clone, PartialEq)]
 pub enum WhereCondition {
     Predicate {
-        field: String,
+        field: ColumnRef,
         op: Predicate,
         value: Value,
     },
@@ -370,13 +339,8 @@ pub enum WhereCondition {
 }
 
 impl WhereCondition {
-    /// Create a leaf predicate node.
-    pub fn predicate(field: impl Into<String>, op: Predicate, value: Value) -> Self {
-        Self::Predicate {
-            field: field.into(),
-            op,
-            value,
-        }
+    pub fn predicate(field: ColumnRef, op: Predicate, value: Value) -> Self {
+        Self::Predicate { field, op, value }
     }
 }
 
@@ -534,11 +498,42 @@ impl TryFrom<&str> for AggFunc {
     }
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub struct ColumnRef {
+    pub qualifier: Option<String>, // table name or alias
+    pub name: String,
+}
+
+impl From<&str> for ColumnRef {
+    fn from(s: &str) -> Self {
+        let parts = s.split('.').collect::<Vec<&str>>();
+        if parts.len() == 1 {
+            return Self {
+                qualifier: None,
+                name: parts[0].to_string(),
+            };
+        }
+        Self {
+            qualifier: Some(parts[0].to_string()),
+            name: parts[1].to_string(),
+        }
+    }
+}
+
+impl Display for ColumnRef {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        if let Some(qualifier) = &self.qualifier {
+            write!(f, "{qualifier}.")?;
+        }
+        write!(f, "{}", self.name)
+    }
+}
+
 /// A single expression in a `SELECT` list.
 #[derive(Debug, Clone, PartialEq)]
 pub enum SelectExpr {
     /// A plain column reference, e.g. `name`.
-    Column(String),
+    Column(ColumnRef),
     /// An aggregate call on a named column, e.g. `SUM(amount)` or `COUNT(id)`.
     Agg(AggFunc, String),
     /// The special `COUNT(*)` form that counts all rows.
@@ -579,9 +574,7 @@ impl Display for SelectColumns {
 /// Sort direction for an `ORDER BY` clause.
 #[derive(Debug, Clone, PartialEq)]
 pub enum OrderDirection {
-    /// Ascending order (smallest first).
     Asc,
-    /// Descending order (largest first).
     Desc,
 }
 
@@ -594,9 +587,8 @@ impl Display for OrderDirection {
     }
 }
 
-/// A single `ORDER BY <column> <direction>` clause.
 #[derive(Debug, Clone)]
-pub struct OrderBy(pub String, pub OrderDirection);
+pub struct OrderBy(pub ColumnRef, pub OrderDirection);
 
 impl Display for OrderBy {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -624,6 +616,45 @@ impl Display for JoinKind {
             JoinKind::Left => write!(f, "LEFT JOIN"),
             JoinKind::Right => write!(f, "RIGHT JOIN"),
         }
+    }
+}
+
+/// A table reference in a `FROM` clause: `<name> [alias]`.
+#[derive(Debug, Clone)]
+pub struct TableRef {
+    /// Table name.
+    pub name: String,
+    /// Optional alias (e.g. `users u`).
+    pub alias: Option<String>,
+}
+
+impl Display for TableRef {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.name)?;
+        if let Some(alias) = &self.alias {
+            write!(f, " {alias}")?;
+        }
+        Ok(())
+    }
+}
+
+/// A single entry in a comma-separated `FROM` list: a table plus any JOINs
+/// chained onto it. `FROM a JOIN b ON …, c` is two `TableWithJoins` entries.
+#[derive(Debug, Clone)]
+pub struct TableWithJoins {
+    /// The primary table for this FROM entry.
+    pub table: TableRef,
+    /// JOIN clauses chained onto `table`.
+    pub joins: Vec<Join>,
+}
+
+impl Display for TableWithJoins {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.table)?;
+        for join in &self.joins {
+            write!(f, " {join}")?;
+        }
+        Ok(())
     }
 }
 
@@ -657,50 +688,38 @@ impl Display for Join {
 ///  [HAVING …] [ORDER BY …] [LIMIT n [OFFSET n]]`
 #[derive(Debug, Clone)]
 pub struct SelectStatement {
-    /// Whether `DISTINCT` was specified.
     pub distinct: bool,
-    /// The projection list (`*` or explicit expressions).
     pub columns: SelectColumns,
-    /// Primary table in the `FROM` clause.
-    pub table_name: String,
-    /// Optional alias for the primary table.
-    pub alias: Option<String>,
-    /// Zero or more `JOIN` clauses.
-    pub joins: Vec<Join>,
-    /// Optional `WHERE` filter.
+    pub from: Vec<TableWithJoins>,
     pub where_clause: Option<WhereCondition>,
-    /// Columns listed in `GROUP BY`, if any.
-    pub group_by: Vec<String>,
-    /// Optional `HAVING` filter applied after grouping.
+    pub group_by: Vec<ColumnRef>,
     pub having: Option<WhereCondition>,
-    /// Optional `ORDER BY` clause (column + direction).
     pub order_by: Option<OrderBy>,
-    /// Optional `LIMIT` and `OFFSET` as `(limit, offset)`.
     pub limit_offset: Option<(u64, u64)>,
 }
 
 impl Display for SelectStatement {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         if self.distinct {
-            write!(
-                f,
-                "SELECT DISTINCT {} FROM {}",
-                self.columns, self.table_name
-            )?;
+            write!(f, "SELECT DISTINCT {} FROM ", self.columns)?;
         } else {
-            write!(f, "SELECT {} FROM {}", self.columns, self.table_name)?;
+            write!(f, "SELECT {} FROM ", self.columns)?;
         }
-        if let Some(alias) = &self.alias {
-            write!(f, " {alias}")?;
-        }
-        for join in &self.joins {
-            write!(f, " {join}")?;
-        }
+        let parts: Vec<String> = self.from.iter().map(ToString::to_string).collect();
+        write!(f, "{}", parts.join(", "))?;
         if let Some(where_clause) = &self.where_clause {
             write!(f, " WHERE {where_clause}")?;
         }
         if !self.group_by.is_empty() {
-            write!(f, " GROUP BY {}", self.group_by.join(", "))?;
+            write!(
+                f,
+                " GROUP BY {}",
+                self.group_by
+                    .iter()
+                    .map(std::string::ToString::to_string)
+                    .collect::<Vec<String>>()
+                    .join(", ")
+            )?;
         }
         if let Some(having) = &self.having {
             write!(f, " HAVING {having}")?;

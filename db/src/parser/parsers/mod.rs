@@ -18,7 +18,7 @@ use crate::{
     Value,
     parser::{
         lexer::LexError,
-        statements::{Statement, WhereCondition},
+        statements::{ColumnRef, Statement, WhereCondition},
         token::{Token, TokenType},
     },
     primitives::Predicate,
@@ -282,14 +282,37 @@ impl Parser {
     /// the operator string is not a recognized [`Predicate`] variant, or the
     /// value token cannot be interpreted as a literal.
     fn parse_predicate(&mut self) -> Result<WhereCondition, ParserError> {
-        let field = self.expect(TokenType::Identifier)?;
+        let field = self.parse_column_ref()?;
         let op = self.expect(TokenType::Operator)?;
         let op = Predicate::try_from(op.value.as_str()).map_err(ParserError::ParsingError)?;
 
         let val_tok = self.bump()?;
         let value = Value::try_from(val_tok).map_err(ParserError::ParsingError)?;
 
-        Ok(WhereCondition::predicate(field.value, op, value))
+        Ok(WhereCondition::predicate(field, op, value))
+    }
+
+    /// Parses a possibly qualified column reference, e.g., `col` or `tbl.col`.
+    ///
+    /// Handles a column identifier, optionally preceded by a qualifier and dot
+    /// (e.g., `table.col`). The method expects either:
+    ///   - A bare column name: consumes a single identifier token as the column name.
+    ///   - A qualified column name: expects a dot, then two identifier tokens (qualifier and column
+    ///     name).
+    ///
+    /// # Returns
+    /// - [`Ok(ColumnRef)`]: with the parsed qualifier (if present) and column name.
+    /// - [`Err(ParserError)`]: if any identifier token is missing or malformed.
+    pub(super) fn parse_column_ref(&mut self) -> Result<ColumnRef, ParserError> {
+        let qualifier = if self.if_peek_then_consume(TokenType::Dot)? {
+            Some(self.expect(TokenType::Identifier)?.value)
+        } else {
+            None
+        };
+        Ok(ColumnRef {
+            qualifier,
+            name: self.expect(TokenType::Identifier)?.value,
+        })
     }
 
     /// Parses a non-empty list of items separated by `delimiter` and ended by

@@ -141,7 +141,7 @@ mod tests {
         let WhereCondition::Predicate { field, op, value } = wc else {
             panic!("expected Predicate");
         };
-        assert_eq!(field, "id");
+        assert_eq!(field, &"id".into());
         assert_eq!(*op, Predicate::Equals);
         assert_eq!(*value, Value::Int64(7));
     }
@@ -192,7 +192,7 @@ mod tests {
         let WhereCondition::Predicate { field, op, value } = wc else {
             panic!("expected Predicate");
         };
-        assert_eq!(field, "id");
+        assert_eq!(field, &"id".into());
         assert_eq!(*op, Predicate::Equals);
         assert_eq!(*value, Value::Int64(2));
     }
@@ -446,7 +446,7 @@ mod tests {
         let WhereCondition::Predicate { field, .. } = left.as_ref() else {
             panic!("expected left predicate");
         };
-        assert_eq!(field, "a");
+        assert_eq!(field, &"a".into());
         let WhereCondition::And(..) = right.as_ref() else {
             panic!("expected AND group on right");
         };
