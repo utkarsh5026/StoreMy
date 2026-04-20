@@ -81,11 +81,11 @@ impl SystemTable {
     ///
     /// Two layers of checks are applied:
     ///
-    /// 1. **Structural** — [`TupleSchema::validate`] verifies the field count,
-    ///    NOT NULL constraints, and declared types.
-    /// 2. **Semantic** — the row-specific `TryFrom<&Tuple>` impl checks that
-    ///    stored discriminant values map to known variants (e.g. a `column_type`
-    ///    field must be a recognized [`Type`] code).
+    /// 1. **Structural** — [`TupleSchema::validate`] verifies the field count, NOT NULL
+    ///    constraints, and declared types.
+    /// 2. **Semantic** — the row-specific `TryFrom<&Tuple>` impl checks that stored discriminant
+    ///    values map to known variants (e.g. a `column_type` field must be a recognized [`Type`]
+    ///    code).
     ///
     /// # Errors
     ///

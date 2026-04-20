@@ -22,20 +22,19 @@
 //! between callers that need durability guarantees (e.g. [`Wal::log_commit`]) and
 //! the background flush thread.
 
-use std::collections::HashMap;
-use std::fs;
-use std::io::Seek;
-use std::os::unix::fs::FileExt;
-use std::path::Path;
+use std::{
+    collections::HashMap, fs, io::Seek, os::unix::fs::FileExt, path::Path, time::SystemTime,
+};
+
 use parking_lot::{Condvar, Mutex};
-use std::time::SystemTime;
-
-use crate::codec::{CodecError, Encode};
-use crate::primitives::{Lsn, PageId, TransactionId};
-use crate::storage::Page;
-use crate::wal::log::{LogRecord, LogRecordBody};
-
 use thiserror::Error;
+
+use crate::{
+    codec::{CodecError, Encode},
+    primitives::{Lsn, PageId, TransactionId},
+    storage::Page,
+    wal::log::{LogRecord, LogRecordBody},
+};
 
 /// Errors that can occur during WAL operations.
 #[derive(Debug, Error)]
@@ -64,6 +63,7 @@ pub enum WalError {
 /// Per-transaction bookkeeping kept in memory while a transaction is active.
 struct TxnInfo {
     /// LSN of the first record written for this transaction (the `Begin` record).
+    #[allow(dead_code)]
     first: Lsn,
     /// LSN of the most recent record written for this transaction.
     last: Lsn,
@@ -184,14 +184,11 @@ impl Wal {
             Lsn::INVALID,
             LogRecordBody::Begin,
         )?;
-        state.active_txns.insert(
-            tid,
-            TxnInfo {
-                first: lsn,
-                last: lsn,
-                undo_next: Lsn::INVALID,
-            },
-        );
+        state.active_txns.insert(tid, TxnInfo {
+            first: lsn,
+            last: lsn,
+            undo_next: Lsn::INVALID,
+        });
         Ok(lsn)
     }
 
@@ -269,15 +266,11 @@ impl Wal {
         before: Vec<u8>,
         after: Vec<u8>,
     ) -> Result<Lsn, WalError> {
-        self.log_data_op(
-            tid,
+        self.log_data_op(tid, page_id, LogRecordBody::Update {
             page_id,
-            LogRecordBody::Update {
-                page_id,
-                before,
-                after,
-            },
-        )
+            before,
+            after,
+        })
     }
 
     /// Logs an `Insert` record for a new tuple written to `page_id`.
@@ -498,7 +491,7 @@ impl Wal {
     /// ```no_run
     /// # use std::sync::Arc;
     /// # use std::path::Path;
-    /// # use db::wal::writer::Wal;
+    /// # use storemy::wal::writer::Wal;
     /// let wal = Arc::new(Wal::new(Path::new("wal.log"), 65536).unwrap());
     /// let wal_bg = Arc::clone(&wal);
     /// std::thread::spawn(move || wal_bg.flush_loop());
@@ -532,10 +525,12 @@ impl Wal {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
+    use tempfile::tempdir;
+
     use super::*;
     use crate::primitives::{FileId, PageNumber};
-    use std::sync::Arc;
-    use tempfile::tempdir;
 
     /// `buf_size=0` forces every record through the direct-write path,
     /// advancing `flushed_till` immediately. `force()` returns without waiting,
@@ -554,12 +549,7 @@ mod tests {
 
     // Access private state from tests in the same module.
     fn active_txns(wal: &Wal) -> Vec<TransactionId> {
-        wal.state
-            .lock()
-            .active_txns
-            .keys()
-            .copied()
-            .collect()
+        wal.state.lock().active_txns.keys().copied().collect()
     }
 
     fn dirty_pages(wal: &Wal) -> HashMap<PageId, Lsn> {

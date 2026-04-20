@@ -58,26 +58,6 @@ impl CatalogError {
         }
     }
 
-    pub(super) fn column_not_found(
-        table_name: impl Into<String>,
-        column_name: impl Into<String>,
-    ) -> Self {
-        Self::ColumnNotFound {
-            table_name: table_name.into(),
-            column_name: column_name.into(),
-        }
-    }
-
-    pub(super) fn index_not_found(
-        table_name: impl Into<String>,
-        index_name: impl Into<String>,
-    ) -> Self {
-        Self::IndexNotFound {
-            table_name: table_name.into(),
-            index_name: index_name.into(),
-        }
-    }
-
     pub(super) fn table_not_found(table_name: impl Into<String>) -> Self {
         Self::TableNotFound {
             table_name: table_name.into(),

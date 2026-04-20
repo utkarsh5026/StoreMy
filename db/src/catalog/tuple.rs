@@ -18,9 +18,7 @@
 //! All conversions fail with [`CatalogError`] when the index is out of bounds
 //! or the stored [`Value`] variant does not match the requested type.
 
-use crate::catalog::CatalogError;
-use crate::tuple::Tuple;
-use crate::types::Value;
+use crate::{catalog::CatalogError, tuple::Tuple, types::Value};
 
 /// A cursor into a single field of a [`Tuple`].
 ///
@@ -46,10 +44,10 @@ impl<'a> TupleReader<'a> {
     ///
     /// # Errors
     ///
-    /// - [`CatalogError`] with message `"field index out of bounds"` when the
-    ///   index is past the last field in the tuple.
-    /// - [`CatalogError`] with message `"field N: expected <expected>, got
-    ///   <value>"` (1-indexed) when `extractor` returns `None`.
+    /// - [`CatalogError`] with message `"field index out of bounds"` when the index is past the
+    ///   last field in the tuple.
+    /// - [`CatalogError`] with message `"field N: expected <expected>, got <value>"` (1-indexed)
+    ///   when `extractor` returns `None`.
     pub(super) fn extract<T, E>(&self, expected: &str, extractor: E) -> Result<T, CatalogError>
     where
         E: FnOnce(&Value) -> Option<T>,
@@ -154,8 +152,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::tuple::Tuple;
-    use crate::types::Value;
+    use crate::{tuple::Tuple, types::Value};
 
     fn tuple(values: Vec<Value>) -> Tuple {
         Tuple::new(values)

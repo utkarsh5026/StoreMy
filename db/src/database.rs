@@ -1,5 +1,7 @@
-use std::sync::{Arc, mpsc};
-use std::thread;
+use std::{
+    sync::{Arc, mpsc},
+    thread,
+};
 
 use parking_lot::Mutex;
 

@@ -410,11 +410,11 @@ impl Catalog {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-
     use std::sync::Arc;
+
     use tempfile::tempdir;
 
+    use super::*;
     use crate::{
         Value,
         buffer_pool::page_store::PageStore,

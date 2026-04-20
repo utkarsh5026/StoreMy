@@ -80,13 +80,6 @@ impl StatementResult {
             rows,
         }
     }
-
-    pub(super) fn selected(table: impl Into<String>, rows: Vec<Tuple>) -> Self {
-        Self::Selected {
-            table: table.into(),
-            rows,
-        }
-    }
 }
 
 impl fmt::Display for StatementResult {

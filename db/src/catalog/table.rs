@@ -7,13 +7,17 @@
 
 use std::sync::Arc;
 
-use crate::FileId;
-use crate::catalog::CatalogError;
-use crate::catalog::manager::{Catalog, TableInfo};
-use crate::catalog::systable::{ColumnRow, SystemTable, TableRow};
-use crate::heap::file::HeapFile;
-use crate::transaction::Transaction;
-use crate::tuple::TupleSchema;
+use crate::{
+    FileId,
+    catalog::{
+        CatalogError,
+        manager::{Catalog, TableInfo},
+        systable::{ColumnRow, SystemTable, TableRow},
+    },
+    heap::file::HeapFile,
+    transaction::Transaction,
+    tuple::TupleSchema,
+};
 
 impl Catalog {
     /// Returns metadata for a table by name, loading it from disk if not cached.
@@ -39,6 +43,13 @@ impl Catalog {
             .write()
             .insert(name.to_string(), info.clone());
         Ok(info)
+    }
+
+    /// Returns true if a table with the given name exists in the catalog.
+    ///
+    /// This function does not perform any I/O or disk operations.
+    pub fn table_exists(&self, name: &str) -> bool {
+        self.user_tables.read().contains_key(name)
     }
 
     /// Returns the [`HeapFile`] for a table identified by its `file_id`.
@@ -68,10 +79,10 @@ impl Catalog {
     ///
     /// # Errors
     ///
-    /// - [`CatalogError::TableAlreadyExists`] if a table named `name` is already
-    ///   in the in-memory cache.
-    /// - [`CatalogError::InvalidCatalogRow`] if a primary key index is out of
-    ///   bounds, or if more than one index is provided.
+    /// - [`CatalogError::TableAlreadyExists`] if a table named `name` is already in the in-memory
+    ///   cache.
+    /// - [`CatalogError::InvalidCatalogRow`] if a primary key index is out of bounds, or if more
+    ///   than one index is provided.
     /// - Propagates heap creation and system table insertion errors.
     pub fn create_table(
         &self,
@@ -235,12 +246,11 @@ impl Catalog {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use std::{path::Path, sync::Arc};
 
-    use std::path::Path;
-    use std::sync::Arc;
     use tempfile::tempdir;
 
+    use super::*;
     use crate::{
         FileId, Type,
         buffer_pool::page_store::PageStore,

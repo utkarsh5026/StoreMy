@@ -1,3 +1,4 @@
+use super::ParserError;
 use crate::{
     Value,
     parser::{
@@ -6,8 +7,6 @@ use crate::{
         token::TokenType,
     },
 };
-
-use super::ParserError;
 
 impl Parser {
     /// Parses `DELETE FROM <table> [<alias>] [WHERE <condition>]`.
@@ -110,12 +109,12 @@ impl Parser {
 
 #[cfg(test)]
 mod tests {
-    use super::Parser;
-    use super::ParserError;
-    use crate::Value;
-    use crate::parser::statements::WhereCondition;
-    use crate::parser::token::TokenType;
-    use crate::primitives::Predicate;
+    use super::{Parser, ParserError};
+    use crate::{
+        Value,
+        parser::{statements::WhereCondition, token::TokenType},
+        primitives::Predicate,
+    };
 
     #[test]
     fn test_parse_delete_basic() {
@@ -218,13 +217,10 @@ mod tests {
         let mut p = Parser::new("INSERT INTO t () VALUES (1)");
         let err = p.parse_insert().unwrap_err();
         assert!(
-            matches!(
-                err,
-                ParserError::UnexpectedToken {
-                    expected: TokenType::Identifier,
-                    ..
-                }
-            ),
+            matches!(err, ParserError::UnexpectedToken {
+                expected: TokenType::Identifier,
+                ..
+            }),
             "got {err:?}"
         );
     }
@@ -253,13 +249,10 @@ mod tests {
         let mut p = Parser::new("DELETE users");
         let err = p.parse_delete().unwrap_err();
         assert!(
-            matches!(
-                err,
-                ParserError::UnexpectedToken {
-                    expected: TokenType::From,
-                    ..
-                }
-            ),
+            matches!(err, ParserError::UnexpectedToken {
+                expected: TokenType::From,
+                ..
+            }),
             "got {err:?}"
         );
     }
@@ -275,13 +268,10 @@ mod tests {
         let mut p = Parser::new("SELECT * FROM t");
         let err = p.parse_delete().unwrap_err();
         assert!(
-            matches!(
-                err,
-                ParserError::UnexpectedToken {
-                    expected: TokenType::Delete,
-                    ..
-                }
-            ),
+            matches!(err, ParserError::UnexpectedToken {
+                expected: TokenType::Delete,
+                ..
+            }),
             "got {err:?}"
         );
     }
@@ -301,13 +291,10 @@ mod tests {
         let mut p = Parser::new("INSERT users VALUES (1)");
         let err = p.parse_insert().unwrap_err();
         assert!(
-            matches!(
-                err,
-                ParserError::UnexpectedToken {
-                    expected: TokenType::Into,
-                    ..
-                }
-            ),
+            matches!(err, ParserError::UnexpectedToken {
+                expected: TokenType::Into,
+                ..
+            }),
             "got {err:?}"
         );
     }
@@ -317,13 +304,10 @@ mod tests {
         let mut p = Parser::new("INSERT INTO t (a) (1)");
         let err = p.parse_insert().unwrap_err();
         assert!(
-            matches!(
-                err,
-                ParserError::UnexpectedToken {
-                    expected: TokenType::Values,
-                    ..
-                }
-            ),
+            matches!(err, ParserError::UnexpectedToken {
+                expected: TokenType::Values,
+                ..
+            }),
             "got {err:?}"
         );
     }
@@ -340,13 +324,10 @@ mod tests {
         let mut p = Parser::new("INSERT INTO VALUES (1)");
         let err = p.parse_insert().unwrap_err();
         assert!(
-            matches!(
-                err,
-                ParserError::UnexpectedToken {
-                    expected: TokenType::Identifier,
-                    ..
-                }
-            ),
+            matches!(err, ParserError::UnexpectedToken {
+                expected: TokenType::Identifier,
+                ..
+            }),
             "got {err:?}"
         );
     }
@@ -356,13 +337,10 @@ mod tests {
         let mut p = Parser::new("INSERT INTO t VALUES 1");
         let err = p.parse_insert().unwrap_err();
         assert!(
-            matches!(
-                err,
-                ParserError::UnexpectedToken {
-                    expected: TokenType::Lparen,
-                    ..
-                }
-            ),
+            matches!(err, ParserError::UnexpectedToken {
+                expected: TokenType::Lparen,
+                ..
+            }),
             "got {err:?}"
         );
     }
@@ -382,13 +360,10 @@ mod tests {
         let mut p = Parser::new("SET x = 1");
         let err = p.parse_update().unwrap_err();
         assert!(
-            matches!(
-                err,
-                ParserError::UnexpectedToken {
-                    expected: TokenType::Update,
-                    ..
-                }
-            ),
+            matches!(err, ParserError::UnexpectedToken {
+                expected: TokenType::Update,
+                ..
+            }),
             "got {err:?}"
         );
     }
@@ -398,13 +373,10 @@ mod tests {
         let mut p = Parser::new("UPDATE SET x = 1");
         let err = p.parse_update().unwrap_err();
         assert!(
-            matches!(
-                err,
-                ParserError::UnexpectedToken {
-                    expected: TokenType::Identifier,
-                    ..
-                }
-            ),
+            matches!(err, ParserError::UnexpectedToken {
+                expected: TokenType::Identifier,
+                ..
+            }),
             "got {err:?}"
         );
     }
@@ -430,13 +402,10 @@ mod tests {
         let mut p = Parser::new("UPDATE t SET x < 1");
         let err = p.parse_update().unwrap_err();
         assert!(
-            matches!(
-                err,
-                ParserError::UnexpectedToken {
-                    expected: TokenType::Operator,
-                    found: TokenType::Operator,
-                }
-            ),
+            matches!(err, ParserError::UnexpectedToken {
+                expected: TokenType::Operator,
+                found: TokenType::Operator,
+            }),
             "got {err:?}"
         );
     }
@@ -456,13 +425,10 @@ mod tests {
         let mut p = Parser::new("UPDATE t x = 1");
         let err = p.parse_update().unwrap_err();
         assert!(
-            matches!(
-                err,
-                ParserError::UnexpectedToken {
-                    expected: TokenType::Set,
-                    found: TokenType::Operator,
-                }
-            ),
+            matches!(err, ParserError::UnexpectedToken {
+                expected: TokenType::Set,
+                found: TokenType::Operator,
+            }),
             "got {err:?}"
         );
     }
@@ -481,7 +447,7 @@ mod tests {
             panic!("expected left predicate");
         };
         assert_eq!(field, "a");
-        let WhereCondition::And(_, _) = right.as_ref() else {
+        let WhereCondition::And(..) = right.as_ref() else {
             panic!("expected AND group on right");
         };
     }

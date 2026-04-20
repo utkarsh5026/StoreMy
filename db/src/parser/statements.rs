@@ -39,10 +39,30 @@ pub enum Statement {
 /// # Examples
 ///
 /// ```
-/// use crate::parser::statements::Statement;
+/// use storemy::{
+///     parser::statements::{ColumnDef, CreateTableStatement, Statement},
+///     types::Type,
+/// };
 ///
-/// let statement = Statement::create_table("users", false, vec![ColumnDef::new("id", Type::Int, false, false, false, None)], None);
-/// assert_eq!(statement.to_string(), "CREATE TABLE users (id INT NOT NULL)");
+/// let col = ColumnDef {
+///     name: "id".into(),
+///     col_type: Type::Int32,
+///     nullable: false,
+///     primary_key: true,
+///     auto_increment: false,
+///     default: None,
+/// };
+/// let inner = CreateTableStatement {
+///     table_name: "users".into(),
+///     if_not_exists: false,
+///     columns: vec![col],
+///     primary_key: None,
+/// };
+/// let statement = Statement::CreateTable(inner);
+/// assert_eq!(
+///     statement.to_string(),
+///     "CREATE TABLE users (id INT NOT NULL PRIMARY KEY)"
+/// );
 /// ```
 impl Display for Statement {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {

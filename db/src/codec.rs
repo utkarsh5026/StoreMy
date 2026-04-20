@@ -17,6 +17,7 @@
 //! manage a writer or cursor manually.
 
 use std::io::{Read, Write};
+
 use thiserror::Error;
 
 /// Errors that can occur during encoding or decoding.

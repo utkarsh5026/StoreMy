@@ -93,12 +93,13 @@ pub(super) mod insert {
     ///
     /// # Errors
     ///
-    /// - [`EngineError::column_not_found`](crate::engine::EngineError::column_not_found) — a
-    ///   listed name is not a column of `schema`.
-    /// - [`EngineError::column_already_exists`](crate::engine::EngineError::column_already_exists) —
-    ///   the same column name appears twice in `cols`.
+    /// - [`EngineError::column_not_found`](crate::engine::EngineError::column_not_found) — a listed
+    ///   name is not a column of `schema`.
+    /// - [`EngineError::column_already_exists`](crate::engine::EngineError::column_already_exists)
+    ///   — the same column name appears twice in `cols`.
     /// - [`EngineError::wrong_column_count`](crate::engine::EngineError::wrong_column_count) —
-    ///   `cols` does not name every field exactly once (too few or too many entries after uniqueness).
+    ///   `cols` does not name every field exactly once (too few or too many entries after
+    ///   uniqueness).
     pub(super) fn values_to_schema_projection(
         cols: Option<&[String]>,
         schema: &TupleSchema,
@@ -151,12 +152,12 @@ pub(super) mod insert {
     ///
     /// # Errors
     ///
-    /// - [`EngineError::wrong_column_count`](crate::engine::EngineError::wrong_column_count) —
-    ///   a `VALUES` row has the wrong number of values.
-    /// - [`EngineError::type_error`](crate::engine::EngineError::type_error) — a non-null
-    ///   literal cannot be coerced to the column type.
-    /// - [`EngineError::null_violation`](crate::engine::EngineError::null_violation) — `NULL`
-    ///   for a column that is not nullable.
+    /// - [`EngineError::wrong_column_count`](crate::engine::EngineError::wrong_column_count) — a
+    ///   `VALUES` row has the wrong number of values.
+    /// - [`EngineError::type_error`](crate::engine::EngineError::type_error) — a non-null literal
+    ///   cannot be coerced to the column type.
+    /// - [`EngineError::null_violation`](crate::engine::EngineError::null_violation) — `NULL` for a
+    ///   column that is not nullable.
     pub(super) fn materialize_insert_tuples(
         values: Vec<Vec<Value>>,
         schema: &TupleSchema,
@@ -425,11 +426,8 @@ fn resolve_where_clause(
 
 #[cfg(test)]
 mod tests {
-    use super::update::resolve_assignments;
-    use super::*;
-    use crate::primitives::Predicate;
-    use crate::tuple::Field;
-    use crate::types::Type;
+    use super::{update::resolve_assignments, *};
+    use crate::{primitives::Predicate, tuple::Field, types::Type};
 
     fn schema() -> TupleSchema {
         TupleSchema::new(vec![
@@ -445,8 +443,6 @@ mod tests {
             value,
         }
     }
-
-    // --- resolve_assignments: happy path ---
 
     // maps each column name to its schema index, preserving assignment order
     #[test]
@@ -581,8 +577,6 @@ mod tests {
         ));
     }
 
-    // --- resolve_where_clause: error paths ---
-
     // unknown field in a leaf predicate -> ColumnNotFound (table is the "?" placeholder)
     #[test]
     fn test_resolve_where_unknown_field() {
@@ -630,8 +624,10 @@ mod tests {
 
     // --- INSERT helpers ---
     mod insert_helpers {
-        use super::super::insert::{materialize_insert_tuples, values_to_schema_projection};
-        use super::*;
+        use super::{
+            super::insert::{materialize_insert_tuples, values_to_schema_projection},
+            *,
+        };
 
         fn nn_schema() -> TupleSchema {
             // (id Int32 NOT NULL, name String) — same field order as `schema()` but id is non-null
@@ -640,8 +636,6 @@ mod tests {
                 Field::new("name", Type::String),
             ])
         }
-
-        // --- values_to_schema_projection ---
 
         // None columns -> identity projection [0..n]
         #[test]
@@ -708,8 +702,6 @@ mod tests {
             }
         }
 
-        // --- materialize_insert_tuples ---
-
         // Happy path with reordered projection produces tuples in schema order
         #[test]
         fn test_materialize_reorders_via_projection() {
@@ -729,9 +721,7 @@ mod tests {
             let projection = vec![0, 1];
             let rows = vec![vec![Value::Int64(1)]];
             match materialize_insert_tuples(rows, &s, "t", &projection).unwrap_err() {
-                EngineError::WrongColumnCount {
-                    expected, got, ..
-                } => {
+                EngineError::WrongColumnCount { expected, got, .. } => {
                     assert_eq!(expected, 2);
                     assert_eq!(got, 1);
                 }
@@ -750,9 +740,7 @@ mod tests {
                 Value::Int64(99),
             ]];
             match materialize_insert_tuples(rows, &s, "t", &projection).unwrap_err() {
-                EngineError::WrongColumnCount {
-                    expected, got, ..
-                } => {
+                EngineError::WrongColumnCount { expected, got, .. } => {
                     assert_eq!(expected, 2);
                     assert_eq!(got, 3);
                 }

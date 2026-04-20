@@ -13,6 +13,7 @@ mod query;
 
 use thiserror::Error;
 
+use super::Parser;
 use crate::{
     Value,
     parser::{
@@ -22,8 +23,6 @@ use crate::{
     },
     primitives::Predicate,
 };
-
-use super::Parser;
 
 /// Errors that can occur while parsing a SQL statement.
 #[derive(Error, Debug, Clone, PartialEq, Eq)]

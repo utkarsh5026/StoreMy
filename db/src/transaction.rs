@@ -21,15 +21,22 @@
 //!         → drop() while Active   → implicit abort
 //! ```
 
-use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::{fmt, time};
+use std::{
+    fmt,
+    sync::{
+        Arc,
+        atomic::{AtomicU64, Ordering},
+    },
+    time,
+};
 
 use thiserror::Error;
 
-use crate::buffer_pool::page_store::{PageStore, PageStoreError};
-use crate::primitives::TransactionId;
-use crate::wal::writer::{Wal, WalError};
+use crate::{
+    buffer_pool::page_store::{PageStore, PageStoreError},
+    primitives::TransactionId,
+    wal::writer::{Wal, WalError},
+};
 
 #[derive(Debug, Error)]
 pub enum TransactionError {

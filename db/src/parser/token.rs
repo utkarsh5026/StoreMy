@@ -12,17 +12,16 @@
 //! Several conversion traits are implemented so tokens can be cheaply turned into
 //! higher-level values:
 //!
-//! - [`TryFrom<Token>`] for [`crate::Type`] — interprets a type-keyword token as a
-//!   column data type.
-//! - [`TryFrom<Token>`] for [`crate::Value`] — interprets a literal token (`INT`,
-//!   `STRING`, `NULL`, or a boolean identifier) as a runtime value.
-//! - [`std::str::FromStr`] for [`TokenType`] — maps an uppercase keyword string to
-//!   the corresponding variant (used by the lexer's identifier scanner).
+//! - [`TryFrom<Token>`] for [`crate::Type`] — interprets a type-keyword token as a column data
+//!   type.
+//! - [`TryFrom<Token>`] for [`crate::Value`] — interprets a literal token (`INT`, `STRING`, `NULL`,
+//!   or a boolean identifier) as a runtime value.
+//! - [`std::str::FromStr`] for [`TokenType`] — maps an uppercase keyword string to the
+//!   corresponding variant (used by the lexer's identifier scanner).
 
 use std::fmt;
 
-use crate::Type;
-use crate::Value;
+use crate::{Type, Value};
 
 /// The category of a SQL token.
 ///
@@ -411,8 +410,9 @@ impl std::str::FromStr for TokenType {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use std::str::FromStr;
+
+    use super::*;
 
     fn make_token(kind: TokenType, value: &str) -> Token {
         Token {

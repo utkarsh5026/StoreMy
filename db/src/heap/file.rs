@@ -143,8 +143,8 @@ impl HeapFile {
     ///
     /// - [`HeapError::Store`] — the page store could not fetch or lock a page.
     /// - [`HeapError::Wal`] — the INSERT WAL record could not be written.
-    /// - [`HeapError::PageFull`] — the newly allocated page was also full
-    ///   (should not happen under normal conditions).
+    /// - [`HeapError::PageFull`] — the newly allocated page was also full (should not happen under
+    ///   normal conditions).
     pub fn insert_tuple(
         &self,
         transaction_id: TransactionId,
@@ -202,8 +202,8 @@ impl HeapFile {
     /// # Errors
     ///
     /// - [`HeapError::Store`] — the page store could not fetch or lock the page.
-    /// - [`HeapError::Storage`] — the slot index in `record_id` is out of range,
-    ///   or the new tuple does not fit in the page after the old one is deleted.
+    /// - [`HeapError::Storage`] — the slot index in `record_id` is out of range, or the new tuple
+    ///   does not fit in the page after the old one is deleted.
     /// - [`HeapError::NotFound`] — the slot had no before-image (already deleted).
     /// - [`HeapError::Wal`] — the UPDATE WAL record could not be written.
     pub fn update_tuple(

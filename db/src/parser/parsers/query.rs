@@ -1,3 +1,4 @@
+use super::ParserError;
 use crate::parser::{
     Parser,
     statements::{
@@ -6,8 +7,6 @@ use crate::parser::{
     },
     token::TokenType,
 };
-
-use super::ParserError;
 
 impl Parser {
     /// Parses a full `SELECT` statement including all optional clauses.
@@ -228,14 +227,18 @@ impl Parser {
 
 #[cfg(test)]
 mod tests {
-    use crate::parser::Parser;
-    use crate::parser::parsers::ParserError;
-    use crate::parser::statements::{
-        AggFunc, JoinKind, OrderBy, OrderDirection, SelectColumns, SelectExpr, SelectStatement,
-        Statement, WhereCondition,
+    use crate::{
+        parser::{
+            Parser,
+            parsers::ParserError,
+            statements::{
+                AggFunc, JoinKind, OrderBy, OrderDirection, SelectColumns, SelectExpr,
+                SelectStatement, Statement, WhereCondition,
+            },
+        },
+        primitives::Predicate,
+        types::Value,
     };
-    use crate::primitives::Predicate;
-    use crate::types::Value;
 
     fn select(sql: &str) -> Result<SelectStatement, ParserError> {
         match Parser::new(sql).parse()? {
@@ -289,14 +292,11 @@ mod tests {
         let SelectColumns::Exprs(v) = &s.columns else {
             panic!("expected Exprs");
         };
-        assert_eq!(
-            v,
-            &vec![
-                SelectExpr::Column("a".into()),
-                SelectExpr::Column("b".into()),
-                SelectExpr::Column("c".into()),
-            ]
-        );
+        assert_eq!(v, &vec![
+            SelectExpr::Column("a".into()),
+            SelectExpr::Column("b".into()),
+            SelectExpr::Column("c".into()),
+        ]);
     }
 
     #[test]
@@ -451,7 +451,7 @@ mod tests {
             panic!("expected Or at top");
         };
         assert!(matches!(**l, WhereCondition::Predicate { .. }));
-        let WhereCondition::And(_, _) = **r else {
+        let WhereCondition::And(..) = **r else {
             panic!("expected And on rhs");
         };
     }

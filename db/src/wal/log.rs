@@ -6,8 +6,8 @@
 //!
 //! A WAL record has two parts:
 //!
-//! 1. A fixed-size [`LogRecordHeader`] that contains the LSN, transaction ID,
-//!    record type, timestamp, and a CRC32 checksum of the body.
+//! 1. A fixed-size [`LogRecordHeader`] that contains the LSN, transaction ID, record type,
+//!    timestamp, and a CRC32 checksum of the body.
 //! 2. A variable-size [`LogRecordBody`] whose layout depends on the record type.
 //!
 //! [`LogRecord`] bundles both parts and provides [`Encode`]/[`Decode`] impls
@@ -15,13 +15,17 @@
 //! a complete record is done through [`LogRecord::new`], which automatically
 //! fills in `body_len` and `checksum`.
 
-use std::io::{Read, Write};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::{
+    io::{Read, Write},
+    time::{SystemTime, UNIX_EPOCH},
+};
 
 use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
 
-use crate::codec::{CodecError, Decode, Encode};
-use crate::primitives::{Lsn, PageId, TransactionId};
+use crate::{
+    codec::{CodecError, Decode, Encode},
+    primitives::{Lsn, PageId, TransactionId},
+};
 
 /// Identifies which operation a [`LogRecord`] represents.
 ///
@@ -468,10 +472,13 @@ fn decode_image<R: Read>(reader: &mut R) -> Result<Option<Vec<u8>>, CodecError> 
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::codec::{Decode, Encode};
-    use crate::primitives::{FileId, PageNumber};
     use std::io::Cursor;
+
+    use super::*;
+    use crate::{
+        codec::{Decode, Encode},
+        primitives::{FileId, PageNumber},
+    };
 
     fn make_page_id() -> PageId {
         PageId::new(FileId::new(1), PageNumber::new(42))

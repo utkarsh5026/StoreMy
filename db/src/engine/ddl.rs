@@ -28,8 +28,8 @@ pub(super) mod create_table {
     /// Primary key resolution follows SQL-style precedence:
     /// - If any column is declared inline as `PRIMARY KEY`, that column name is used.
     /// - Otherwise, the statement's table-level `PRIMARY KEY (col)` is used.
-    /// - If the chosen column name is not present in the computed schema, the table
-    ///   is still created but without a primary key.
+    /// - If the chosen column name is not present in the computed schema, the table is still
+    ///   created but without a primary key.
     ///
     /// # Errors
     ///
@@ -122,13 +122,11 @@ pub(super) mod drop_table {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-
-    use std::path::Path;
-    use std::sync::Arc;
+    use std::{path::Path, sync::Arc};
 
     use tempfile::tempdir;
 
+    use super::*;
     use crate::{
         Type,
         buffer_pool::page_store::PageStore,
@@ -351,7 +349,8 @@ mod tests {
         assert_eq!(info.primary_key, Some(vec![1]));
     }
 
-    // If the primary key name doesn't exist in schema, primary_key becomes None and table still creates.
+    // If the primary key name doesn't exist in schema, primary_key becomes None and table still
+    // creates.
     #[test]
     fn test_create_table_primary_key_name_missing_creates_table_without_pk() {
         let dir = tempdir().unwrap();

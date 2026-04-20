@@ -169,10 +169,9 @@ impl<'a> HeapPage<'a> {
     /// # Errors
     ///
     /// - [`StorageError::SchemaMismatch`] — tuple does not match this page's schema.
-    /// - [`StorageError::PageFull`] — no empty slots remain, or the remaining
-    ///   free bytes in the page buffer are insufficient.
-    /// - [`StorageError::TupleTooLarge`] — the serialized tuple exceeds
-    ///   `MAX_TUPLE_SIZE`.
+    /// - [`StorageError::PageFull`] — no empty slots remain, or the remaining free bytes in the
+    ///   page buffer are insufficient.
+    /// - [`StorageError::TupleTooLarge`] — the serialized tuple exceeds `MAX_TUPLE_SIZE`.
     pub(crate) fn insert_tuple(&mut self, tuple: Tuple) -> Result<SlotId, StorageError> {
         self.schema
             .validate(&tuple)
@@ -331,10 +330,9 @@ impl<'a> HeapPage<'a> {
     /// # Errors
     ///
     /// - [`StorageError::SchemaMismatch`] — any of the `tuples` does not match this page's schema.
-    /// - [`StorageError::PageFull`] — no empty slots remain, or the remaining
-    ///   free bytes in the page buffer are insufficient.
-    /// - [`StorageError::TupleTooLarge`] — the serialized tuple exceeds
-    ///   `MAX_TUPLE_SIZE`.
+    /// - [`StorageError::PageFull`] — no empty slots remain, or the remaining free bytes in the
+    ///   page buffer are insufficient.
+    /// - [`StorageError::TupleTooLarge`] — the serialized tuple exceeds `MAX_TUPLE_SIZE`.
     pub fn insert_many<I>(&mut self, tuples: &mut I) -> Result<Vec<SlotId>, StorageError>
     where
         I: Iterator<Item = Tuple>,

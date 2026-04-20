@@ -1,3 +1,4 @@
+use super::ParserError;
 use crate::{
     Type, Value,
     parser::{
@@ -10,8 +11,6 @@ use crate::{
     },
     storage::index::Index,
 };
-
-use super::ParserError;
 
 impl Parser {
     /// Parses `DROP TABLE [IF EXISTS] <name>`.
@@ -86,8 +85,8 @@ impl Parser {
     ///
     /// Recognized qualifiers:
     /// - `NOT NULL` — column is not nullable (default is nullable).
-    /// - `PRIMARY KEY` — marks this column as the row's primary key in the
-    ///   column list (separate from a trailing table-level `PRIMARY KEY (...)`).
+    /// - `PRIMARY KEY` — marks this column as the row's primary key in the column list (separate
+    ///   from a trailing table-level `PRIMARY KEY (...)`).
     /// - `AUTO_INCREMENT`
     /// - `DEFAULT` and a literal token — must convert via [`Value::try_from`].
     ///
@@ -262,11 +261,10 @@ impl Parser {
 
 #[cfg(test)]
 mod tests {
-    use crate::parser::Parser;
-    use crate::parser::parsers::ParserError;
-    use crate::parser::statements::Statement;
-    use crate::parser::token::TokenType;
-    use crate::types::{Type, Value};
+    use crate::{
+        parser::{Parser, parsers::ParserError, statements::Statement, token::TokenType},
+        types::{Type, Value},
+    };
 
     fn parse(sql: &str) -> Result<Statement, ParserError> {
         Parser::new(sql).parse()
@@ -311,13 +309,10 @@ mod tests {
         let Err(err) = parse("DROP TABLE IF users") else {
             panic!("expected error");
         };
-        assert!(matches!(
-            err,
-            ParserError::UnexpectedToken {
-                expected: TokenType::Exists,
-                ..
-            }
-        ));
+        assert!(matches!(err, ParserError::UnexpectedToken {
+            expected: TokenType::Exists,
+            ..
+        }));
     }
 
     #[test]
@@ -325,13 +320,10 @@ mod tests {
         let Err(err) = parse("DROP TABLE IF NOT EXISTS users") else {
             panic!("expected error");
         };
-        assert!(matches!(
-            err,
-            ParserError::UnexpectedToken {
-                expected: TokenType::Exists,
-                found: TokenType::Not,
-            }
-        ));
+        assert!(matches!(err, ParserError::UnexpectedToken {
+            expected: TokenType::Exists,
+            found: TokenType::Not
+        }));
     }
 
     #[test]
@@ -480,13 +472,10 @@ mod tests {
         let Err(err) = parse("CREATE TABLE IF EXISTS t (id INT)") else {
             panic!("expected error");
         };
-        assert!(matches!(
-            err,
-            ParserError::UnexpectedToken {
-                expected: TokenType::Not,
-                found: TokenType::Exists,
-            }
-        ));
+        assert!(matches!(err, ParserError::UnexpectedToken {
+            expected: TokenType::Not,
+            found: TokenType::Exists
+        }));
     }
 
     #[test]
@@ -495,13 +484,10 @@ mod tests {
             panic!("expected error");
         };
         // After `IF NOT`, parser requires `EXISTS` before the table name.
-        assert!(matches!(
-            err,
-            ParserError::UnexpectedToken {
-                expected: TokenType::Exists,
-                found: TokenType::Identifier,
-            }
-        ));
+        assert!(matches!(err, ParserError::UnexpectedToken {
+            expected: TokenType::Exists,
+            found: TokenType::Identifier,
+        }));
     }
 
     // --- happy path: parse_create_index ---
@@ -602,13 +588,10 @@ mod tests {
         let Err(err) = parse("DROP INDEX IF ix") else {
             panic!("expected error");
         };
-        assert!(matches!(
-            err,
-            ParserError::UnexpectedToken {
-                expected: TokenType::Exists,
-                ..
-            }
-        ));
+        assert!(matches!(err, ParserError::UnexpectedToken {
+            expected: TokenType::Exists,
+            ..
+        }));
     }
 
     // --- happy path: parse_show_index ---
