@@ -7,12 +7,19 @@
 use thiserror::Error;
 
 use crate::{
+    Value,
     catalog::{CatalogError, manager::Catalog},
+    execution::unary::BooleanExpression,
     parser::statements::Statement,
     transaction::Transaction,
 };
 
-mod binders;
+mod ddl;
+mod dml;
+pub mod expr;
+mod scope;
+
+pub use expr::BoundExpr;
 
 #[derive(Debug, Error)]
 #[non_exhaustive]
@@ -41,6 +48,19 @@ pub enum BindError {
 
     #[error(transparent)]
     Catalog(#[from] CatalogError),
+
+    #[error("null value not allowed for column '{column}'")]
+    NullViolation { table: String, column: String },
+
+    #[error("column '{column}' appears more than once in INSERT into '{table}'")]
+    DuplicateInsertColumn { table: String, column: String },
+
+    #[error("wrong number of values for table '{table}': expected {expected}, got {got}")]
+    WrongColumnCount {
+        table: String,
+        expected: usize,
+        got: usize,
+    },
 }
 
 impl BindError {
@@ -63,6 +83,8 @@ use crate::{FileId, tuple::TupleSchema};
 pub enum Bound {
     Drop(BoundDrop),
     CreateTable(BoundCreateTable),
+    Delete(BoundDelete),
+    Insert(BoundInsert),
 }
 
 /// Outcome of binding a `DROP TABLE`. Either the table was resolved (drop it)
@@ -89,6 +111,29 @@ pub enum BoundCreateTable {
     },
 }
 
+pub struct BoundDelete {
+    pub name: String,
+    pub file_id: FileId,
+    pub filter: Option<BooleanExpression>,
+}
+
+pub struct BoundUpdate {
+    pub name: String,
+    pub file_id: FileId,
+    pub schema: TupleSchema,
+    pub assignments: Vec<(usize, Value)>,
+    pub filter: Option<BooleanExpression>,
+}
+
+pub struct BoundInsert {
+    pub name: String,
+    pub file_id: FileId,
+    pub schema: TupleSchema,
+    /// One row per `VALUES (...)` tuple, already reordered into schema order.
+    /// `rows[r][c]` is the expression for column `c` of row `r`.
+    pub rows: Vec<Vec<BoundExpr>>,
+}
+
 /// Resolves `stmt` against `catalog` inside `txn`.
 ///
 /// The transaction is required because catalog lookups may read system tables
@@ -96,14 +141,14 @@ pub enum BoundCreateTable {
 /// that the bound plan reflects the same catalog snapshot the executor sees.
 pub fn bind(stmt: Statement, catalog: &Catalog, txn: &Transaction<'_>) -> Result<Bound, BindError> {
     match stmt {
-        Statement::Drop(s) => Ok(Bound::Drop(binders::ddl::bind_drop(&s, catalog, txn)?)),
-        Statement::CreateTable(s) => Ok(Bound::CreateTable(binders::ddl::bind_create_table(
+        Statement::Drop(s) => Ok(Bound::Drop(ddl::bind_drop(&s, catalog, txn)?)),
+        Statement::CreateTable(s) => Ok(Bound::CreateTable(ddl::bind_create_table(
             &s, catalog, txn,
         )?)),
         Statement::CreateIndex(_) => todo!("bind_create_index"),
         Statement::DropIndex(_) => todo!("bind_drop_index"),
-        Statement::Delete(_) => todo!("bind_delete"),
-        Statement::Insert(_) => todo!("bind_insert"),
+        Statement::Delete(s) => Ok(Bound::Delete(dml::bind_delete(s, catalog, txn)?)),
+        Statement::Insert(s) => Ok(Bound::Insert(dml::bind_insert(s, catalog, txn)?)),
         Statement::Update(_) => todo!("bind_update"),
         Statement::Select(_) => todo!("bind_select"),
         Statement::ShowIndexes(_) => todo!("bind_show_indexes"),
