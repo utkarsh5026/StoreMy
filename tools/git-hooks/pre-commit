@@ -1,0 +1,50 @@
+#!/usr/bin/env bash
+# StoreMy pre-commit hook — runs fmt-check + clippy on staged Rust changes.
+#
+# Install once per clone:
+#     make install-hooks
+# (equivalent to: `git config core.hooksPath tools/git-hooks`)
+#
+# Skip for a single commit if you know what you're doing:
+#     SKIP_HOOKS=1 git commit ...
+
+set -euo pipefail
+
+if [[ "${SKIP_HOOKS:-0}" == "1" ]]; then
+  echo "pre-commit: SKIP_HOOKS=1, bypassing checks." >&2
+  exit 0
+fi
+
+
+staged_rs=$(git diff --cached --name-only --diff-filter=ACMR -- '*.rs' || true)
+
+if [[ -z "$staged_rs" ]]; then
+  exit 0
+fi
+
+echo "pre-commit: staged Rust files detected, running checks…" >&2
+
+
+RUSTFMT_TOOLCHAIN="${RUSTFMT_TOOLCHAIN:-nightly-2026-04-01}"
+
+if ! rustup run "$RUSTFMT_TOOLCHAIN" rustfmt --version >/dev/null 2>&1; then
+  echo "pre-commit: $RUSTFMT_TOOLCHAIN not installed." >&2
+  echo "            Run: make rust-fmt-install" >&2
+  exit 1
+fi
+
+if ! cargo "+$RUSTFMT_TOOLCHAIN" fmt --all -- --check; then
+  echo >&2
+  echo "pre-commit: formatting issues detected." >&2
+  echo "            Fix with: make rust-fmt" >&2
+  exit 1
+fi
+
+if ! cargo clippy --workspace --all-targets --quiet -- -D warnings; then
+  echo >&2
+  echo "pre-commit: clippy reported warnings (treated as errors)." >&2
+  echo "            Fix the warnings above, or run: make clippy" >&2
+  exit 1
+fi
+
+echo "pre-commit: OK" >&2
