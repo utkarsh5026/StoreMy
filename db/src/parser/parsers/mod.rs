@@ -141,6 +141,22 @@ impl Parser {
         }
     }
 
+    /// Checks whether the next token has the given `kind` and consumes it if it does.
+    ///
+    /// Returns `false` if the stream is exhausted.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ParserError::LexError`] if the lexer encounters an invalid
+    /// token sequence while peeking.
+    fn if_peek_then_consume(&mut self, kind: TokenType) -> Result<bool, ParserError> {
+        let matches = self.peek_is(kind)?;
+        if matches {
+            self.bump()?;
+        }
+        Ok(matches)
+    }
+
     /// Advances the lexer and returns the next token.
     ///
     /// # Errors
@@ -171,18 +187,24 @@ impl Parser {
         Ok(tok)
     }
 
-    /// Parses `<table> [<alias>]`, returning the table name and an optional alias.
+    /// Parses `<table> [[AS] <alias>]`, returning the table name and an optional alias.
     ///
-    /// The alias is a bare identifier immediately following the table name.  If
-    /// the next token is not an identifier the alias is `None` and the token is
-    /// left on the stream.
+    /// The alias may be introduced by an explicit `AS` keyword or appear as a
+    /// bare identifier immediately following the table name. When `AS` is
+    /// present, an identifier must follow it.
     ///
     /// # Errors
     ///
-    /// Returns [`ParserError`] if no table name identifier is present.
+    /// Returns [`ParserError`] if no table name identifier is present, or if
+    /// `AS` is not followed by an identifier.
     fn parse_table_with_alias(&mut self) -> Result<(String, Option<String>), ParserError> {
         let table = self.expect(TokenType::Identifier)?;
-        let alias = if self.peek_is(TokenType::Identifier)? {
+
+        let saw_as = self.on_peek_token(TokenType::As, |_| Ok(()))?.is_some();
+
+        let alias = if saw_as {
+            Some(String::from(&self.expect(TokenType::Identifier)?))
+        } else if self.peek_is(TokenType::Identifier)? {
             Some(String::from(&self.bump()?))
         } else {
             None

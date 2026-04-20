@@ -3,7 +3,7 @@ use crate::parser::{
     Parser,
     statements::{
         AggFunc, Join, JoinKind, OrderBy, OrderDirection, SelectColumns, SelectExpr,
-        SelectStatement,
+        SelectStatement, TableRef, TableWithJoins,
     },
     token::TokenType,
 };
@@ -37,41 +37,62 @@ impl Parser {
             .unwrap_or(false);
 
         let columns = if self.peek_is(TokenType::Asterisk)? {
-            self.expect(TokenType::Asterisk)?;
-            self.expect(TokenType::From)?;
+            self.expect_seq(&[TokenType::Asterisk, TokenType::From])?;
             SelectColumns::All
         } else {
-            // `parse_select_list` consumes the closing `FROM` via `parse_delimited_list`.
             SelectColumns::Exprs(self.parse_select_list()?)
         };
-        let (table_name, alias) = self.parse_table_with_alias()?;
 
-        let joins = self.parse_joins()?;
+        let from = self.parse_tables()?;
         let where_clause = self.on_peek_token(TokenType::Where, Parser::parse_where)?;
 
-        let group_by = self
-            .on_peek_token(TokenType::Group, |p| {
-                p.expect(TokenType::By)?;
-                let column = p.expect(TokenType::Identifier)?;
-                Ok(vec![column.value])
-            })?
-            .unwrap_or_default();
-
+        let group_by = self.parse_group_by()?;
         let order_by = self.parse_order_by()?;
         let limit_offset = self.parse_limit_offset()?;
 
         Ok(SelectStatement {
             distinct,
             columns,
-            table_name,
-            alias,
-            joins,
+            from,
             where_clause,
-            group_by,
             having: None,
+            group_by,
             order_by,
             limit_offset,
         })
+    }
+
+    /// Parses the comma-separated table list that follows the `FROM` keyword.
+    ///
+    /// Each entry is a table name with an optional alias (via
+    /// [`parse_table_with_alias`]) followed by zero or more JOIN clauses (via
+    /// [`parse_joins`]).  Parsing stops as soon as the next token is not a
+    /// comma, leaving that token on the stream for the caller.
+    ///
+    /// ```text
+    /// <tables> ::= <table_with_joins> ( "," <table_with_joins> )*
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ParserError`] if any table name is missing, an alias is
+    /// malformed, or a JOIN clause cannot be parsed.
+    fn parse_tables(&mut self) -> Result<Vec<TableWithJoins>, ParserError> {
+        let mut tables = vec![];
+
+        loop {
+            let (name, alias) = self.parse_table_with_alias()?;
+            let joins = self.parse_joins()?;
+            tables.push(TableWithJoins {
+                table: TableRef { name, alias },
+                joins,
+            });
+
+            if !self.peek_is(TokenType::Comma)? {
+                return Ok(tables);
+            }
+            self.expect(TokenType::Comma)?;
+        }
     }
 
     /// Parses a comma-separated `SELECT` projection list up to but not
@@ -88,28 +109,26 @@ impl Parser {
     /// or the terminating `FROM` are wrong, parentheses or `COUNT(*)` are
     /// malformed, or the aggregate name is not recognized.
     fn parse_select_list(&mut self) -> Result<Vec<SelectExpr>, ParserError> {
-        self.parse_delimited_list(TokenType::Comma, TokenType::From, |p| {
+        let parse_select_expr = |p: &mut Parser| -> Result<SelectExpr, ParserError> {
             let name_tok = p.expect(TokenType::Identifier)?;
             let name = name_tok.value.to_uppercase();
 
-            if p.peek_is(TokenType::Lparen)? {
-                p.expect(TokenType::Lparen)?;
-
-                if name == "COUNT" && p.peek_is(TokenType::Asterisk)? {
-                    p.expect(TokenType::Asterisk)?;
+            if p.if_peek_then_consume(TokenType::Lparen)? {
+                if name == "COUNT" && p.if_peek_then_consume(TokenType::Asterisk)? {
                     p.expect(TokenType::Rparen)?;
                     return Ok(SelectExpr::CountStar);
                 }
 
                 let agg = AggFunc::try_from(name.as_str()).map_err(ParserError::ParsingError)?;
-
                 let col_tok = p.expect(TokenType::Identifier)?;
                 p.expect(TokenType::Rparen)?;
                 Ok(SelectExpr::Agg(agg, col_tok.value))
             } else {
                 Ok(SelectExpr::Column(name_tok.value))
             }
-        })
+        };
+
+        self.parse_delimited_list(TokenType::Comma, TokenType::From, parse_select_expr)
     }
 
     /// Parses an optional `ORDER BY` clause when `ORDER` is the next token.
@@ -129,8 +148,7 @@ impl Parser {
             p.expect(TokenType::By)?;
             let order_col = p.expect(TokenType::Identifier)?;
 
-            let dir = if p.peek_is(TokenType::Desc)? {
-                p.expect(TokenType::Desc)?;
+            let dir = if p.if_peek_then_consume(TokenType::Desc)? {
                 OrderDirection::Desc
             } else {
                 p.on_peek_token(TokenType::Asc, |_p| Ok(()))?;
@@ -139,6 +157,30 @@ impl Parser {
 
             Ok(OrderBy(order_col.value, dir))
         })
+    }
+
+    /// Parses an optional `GROUP BY <column>` clause.
+    ///
+    /// If the next token is `GROUP`, the parser consumes `GROUP BY` and
+    /// returns a single-element vec containing the column name.  If there is
+    /// no `GROUP` token the clause is absent and an empty vec is returned.
+    ///
+    /// > **Note:** only a single grouping column is currently supported.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ParserError`] if `GROUP` is present but `BY` does not follow
+    /// it, or if no column identifier follows `GROUP BY`.
+    fn parse_group_by(&mut self) -> Result<Vec<String>, ParserError> {
+        let group_by = self
+            .on_peek_token(TokenType::Group, |p| {
+                p.expect(TokenType::By)?;
+                let column = p.expect(TokenType::Identifier)?;
+                Ok(vec![column.value])
+            })?
+            .unwrap_or_default();
+
+        Ok(group_by)
     }
 
     /// Parses an optional `LIMIT` / `OFFSET` tail when `LIMIT` is the next token.
@@ -193,22 +235,21 @@ impl Parser {
         let mut joins = vec![];
 
         loop {
-            let kind = if self.peek_is(TokenType::Inner)? {
-                self.expect(TokenType::Inner)?;
+            let kind = if self.if_peek_then_consume(TokenType::Inner)? {
+                self.expect(TokenType::Join)?;
                 JoinKind::Inner
-            } else if self.peek_is(TokenType::Left)? {
-                self.expect(TokenType::Left)?;
+            } else if self.if_peek_then_consume(TokenType::Left)? {
+                self.expect(TokenType::Join)?;
                 JoinKind::Left
-            } else if self.peek_is(TokenType::Right)? {
-                self.expect(TokenType::Right)?;
+            } else if self.if_peek_then_consume(TokenType::Right)? {
+                self.expect(TokenType::Join)?;
                 JoinKind::Right
-            } else if self.peek_is(TokenType::Join)? {
+            } else if self.if_peek_then_consume(TokenType::Join)? {
                 JoinKind::Inner
             } else {
                 break;
             };
 
-            self.expect(TokenType::Join)?;
             let (table, alias) = self.parse_table_with_alias()?;
             self.expect(TokenType::On)?;
             let on = self.parse_where()?;
@@ -259,9 +300,9 @@ mod tests {
         let s = select("SELECT * FROM users").unwrap();
         assert!(!s.distinct);
         assert!(matches!(s.columns, SelectColumns::All));
-        assert_eq!(s.table_name, "users");
-        assert!(s.alias.is_none());
-        assert!(s.joins.is_empty());
+        assert_eq!(s.from[0].table.name, "users");
+        assert!(s.from[0].table.alias.is_none());
+        assert!(s.from[0].joins.is_empty());
         assert!(s.where_clause.is_none());
         assert!(s.group_by.is_empty());
         assert!(s.order_by.is_none());
@@ -274,7 +315,7 @@ mod tests {
         let s = select("SELECT DISTINCT * FROM items").unwrap();
         assert!(s.distinct);
         assert!(matches!(s.columns, SelectColumns::All));
-        assert_eq!(s.table_name, "items");
+        assert_eq!(s.from[0].table.name, "items");
     }
 
     #[test]
@@ -343,15 +384,15 @@ mod tests {
     #[test]
     fn test_parse_select_from_table_alias() {
         let s = select("SELECT * FROM users u").unwrap();
-        assert_eq!(s.table_name, "users");
-        assert_eq!(s.alias.as_deref(), Some("u"));
+        assert_eq!(s.from[0].table.name, "users");
+        assert_eq!(s.from[0].table.alias.as_deref(), Some("u"));
     }
 
     #[test]
     fn test_parse_select_inner_join_explicit_on_condition() {
         let s = select("SELECT * FROM a INNER JOIN b ON id = 1").unwrap();
-        assert_eq!(s.joins.len(), 1);
-        let j = &s.joins[0];
+        assert_eq!(s.from[0].joins.len(), 1);
+        let j = &s.from[0].joins[0];
         assert_eq!(j.kind, JoinKind::Inner);
         assert_eq!(j.table, "b");
         assert!(j.alias.is_none());
@@ -359,34 +400,34 @@ mod tests {
             panic!("expected predicate ON");
         };
         assert_eq!(field, "id");
-        assert_eq!(*op, Predicate::Equals);
-        assert_eq!(*value, Value::Int64(1));
+        assert_eq!(op, &Predicate::Equals);
+        assert_eq!(value, &Value::Int64(1));
     }
 
     #[test]
     fn test_parse_select_bare_join_defaults_to_inner() {
         let s = select("SELECT * FROM a JOIN b ON x = 2").unwrap();
-        assert_eq!(s.joins.len(), 1);
-        assert_eq!(s.joins[0].kind, JoinKind::Inner);
-        assert_eq!(s.joins[0].table, "b");
+        assert_eq!(s.from[0].joins.len(), 1);
+        assert_eq!(s.from[0].joins[0].kind, JoinKind::Inner);
+        assert_eq!(s.from[0].joins[0].table, "b");
     }
 
     #[test]
     fn test_parse_select_left_and_right_join() {
         let s = select("SELECT * FROM a LEFT JOIN b ON i = 0 RIGHT JOIN c ON j = 3").unwrap();
-        assert_eq!(s.joins.len(), 2);
-        assert_eq!(s.joins[0].kind, JoinKind::Left);
-        assert_eq!(s.joins[0].table, "b");
-        assert_eq!(s.joins[1].kind, JoinKind::Right);
-        assert_eq!(s.joins[1].table, "c");
+        assert_eq!(s.from[0].joins.len(), 2);
+        assert_eq!(s.from[0].joins[0].kind, JoinKind::Left);
+        assert_eq!(s.from[0].joins[0].table, "b");
+        assert_eq!(s.from[0].joins[1].kind, JoinKind::Right);
+        assert_eq!(s.from[0].joins[1].table, "c");
     }
 
     #[test]
     fn test_parse_select_join_with_table_alias() {
         let s = select("SELECT * FROM orders o JOIN customers c ON cid = 1").unwrap();
-        assert_eq!(s.joins[0].alias.as_deref(), Some("c"));
-        assert_eq!(s.table_name, "orders");
-        assert_eq!(s.alias.as_deref(), Some("o"));
+        assert_eq!(s.from[0].joins[0].alias.as_deref(), Some("c"));
+        assert_eq!(s.from[0].table.name, "orders");
+        assert_eq!(s.from[0].table.alias.as_deref(), Some("o"));
     }
 
     #[test]
@@ -511,8 +552,8 @@ mod tests {
         )
         .unwrap();
         assert!(s.distinct);
-        assert_eq!(s.alias.as_deref(), Some("uu"));
-        assert_eq!(s.joins.len(), 1);
+        assert_eq!(s.from[0].table.alias.as_deref(), Some("uu"));
+        assert_eq!(s.from[0].joins.len(), 1);
         assert_eq!(s.group_by, vec!["x".to_string()]);
         let Some(OrderBy(col, dir)) = &s.order_by else {
             panic!("expected order_by");

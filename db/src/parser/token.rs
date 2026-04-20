@@ -72,6 +72,7 @@ pub enum TokenType {
     Desc,
     And,
     Or,
+    As,
 
     Insert,
     Into,
@@ -153,6 +154,7 @@ impl fmt::Display for TokenType {
             TokenType::Desc => "DESC",
             TokenType::And => "AND",
             TokenType::Or => "OR",
+            TokenType::As => "AS",
             TokenType::Insert => "INSERT",
             TokenType::Into => "INTO",
             TokenType::Values => "VALUES",
@@ -362,6 +364,7 @@ impl std::str::FromStr for TokenType {
             "DESC" => Ok(TokenType::Desc),
             "AND" => Ok(TokenType::And),
             "OR" => Ok(TokenType::Or),
+            "AS" => Ok(TokenType::As),
             "CREATE" => Ok(TokenType::Create),
             "TABLE" => Ok(TokenType::Table),
             "DROP" => Ok(TokenType::Drop),
