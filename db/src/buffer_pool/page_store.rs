@@ -26,17 +26,14 @@
 //! [`LockRequest`] (shared or exclusive) when fetching a page; locks are held for
 //! the lifetime of the transaction and released in bulk via [`PageStore::release_all`].
 
-use std::os::unix::fs::FileExt;
-use std::{collections::HashMap, fs::File, path::Path, sync::Arc};
+use std::{collections::HashMap, fs::File, os::unix::fs::FileExt, path::Path, sync::Arc};
 
 use parking_lot::{Mutex, RwLock};
 use thiserror::Error;
 
-use crate::TransactionId;
-use crate::buffer_pool::lock::LockRequest;
 use crate::{
-    FileId, Lsn, PAGE_SIZE,
-    buffer_pool::lock::{LockError, LockManager},
+    FileId, Lsn, PAGE_SIZE, TransactionId,
+    buffer_pool::lock::{LockError, LockManager, LockRequest},
     primitives::PageId,
     wal::writer::{Wal, WalError},
 };
@@ -83,8 +80,7 @@ struct FramePool {
 ///
 /// `PageStore` combines four concerns:
 /// 1. **Frame management** — allocating and evicting frames via clock-sweep.
-/// 2. **File registry** — tracking which [`FileId`]s are open and where on disk
-///    they live.
+/// 2. **File registry** — tracking which [`FileId`]s are open and where on disk they live.
 /// 3. **Page-level locking** — forwarding lock requests to a [`LockManager`].
 /// 4. **WAL integration** — forcing log records before flushing dirty pages.
 ///
@@ -165,12 +161,10 @@ impl PageStore {
     /// # Errors
     ///
     /// - [`PageStoreError::FileNotRegistered`] if the file has not been registered.
-    /// - [`PageStoreError::PoolExhausted`] if all frames are pinned and cannot be
-    ///   evicted.
-    /// - [`PageStoreError::Lock`] if the lock manager denies the request (e.g. a
-    ///   conflicting lock is held by another transaction).
-    /// - [`PageStoreError::Wal`] if flushing the WAL before evicting a dirty frame
-    ///   fails.
+    /// - [`PageStoreError::PoolExhausted`] if all frames are pinned and cannot be evicted.
+    /// - [`PageStoreError::Lock`] if the lock manager denies the request (e.g. a conflicting lock
+    ///   is held by another transaction).
+    /// - [`PageStoreError::Wal`] if flushing the WAL before evicting a dirty frame fails.
     /// - [`PageStoreError::Io`] if reading the page from disk fails.
     pub fn fetch_page(
         &'_ self,
@@ -267,11 +261,10 @@ impl PageStore {
     ///
     /// # Errors
     ///
-    /// - [`PageStoreError::FileInUse`] if any page from this file is currently
-    ///   pinned (i.e. a [`PageGuard`] for it is still alive).
+    /// - [`PageStoreError::FileInUse`] if any page from this file is currently pinned (i.e. a
+    ///   [`PageGuard`] for it is still alive).
     /// - [`PageStoreError::FileNotRegistered`] if `file_id` is unknown.
-    /// - [`PageStoreError::Wal`] or [`PageStoreError::Io`] if flushing dirty
-    ///   pages fails.
+    /// - [`PageStoreError::Wal`] or [`PageStoreError::Io`] if flushing dirty pages fails.
     pub fn unregister_file(&self, file_id: FileId) -> Result<(), PageStoreError> {
         let mut pool = self.pool.lock();
         let has_pinned = pool.frames.iter().any(|f| {
@@ -340,10 +333,9 @@ impl PageStore {
     ///
     /// The hand makes at most two full sweeps. On each pass:
     /// - Frames with no page or a non-zero pin count are skipped.
-    /// - A frame with `ref_bit = true` has its bit cleared and is given a second
-    ///   chance.
-    /// - A frame with `ref_bit = false` is selected as the victim: if dirty it is
-    ///   flushed, then the frame is reset.
+    /// - A frame with `ref_bit = true` has its bit cleared and is given a second chance.
+    /// - A frame with `ref_bit = false` is selected as the victim: if dirty it is flushed, then the
+    ///   frame is reset.
     ///
     /// Returns `Some(frame_idx)` when a victim is found, or `None` if every frame
     /// is pinned.
@@ -436,8 +428,8 @@ impl PageStore {
     ///
     /// # Errors
     ///
-    /// - [`PageStoreError::FileNotRegistered`] if a dirty frame belongs to a file
-    ///   that is no longer registered.
+    /// - [`PageStoreError::FileNotRegistered`] if a dirty frame belongs to a file that is no longer
+    ///   registered.
     /// - [`PageStoreError::Wal`] or [`PageStoreError::Io`] if any flush fails.
     pub fn flush_all(&self) -> Result<(), PageStoreError> {
         let mut pool = self.pool.lock();
@@ -518,6 +510,7 @@ impl Drop for PageGuard<'_> {
 #[cfg(test)]
 mod tests {
     use std::{os::unix::fs::FileExt, sync::Arc};
+
     use tempfile::tempdir;
 
     use super::*;

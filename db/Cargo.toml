@@ -17,6 +17,10 @@ path = "src/lib.rs"
 name = "storemy"
 path = "src/main.rs"
 
+[[bench]]
+name = "storemy_bench"
+harness = false
+
 [dependencies]
 # Error handling
 thiserror = "1.0"
@@ -57,13 +61,3 @@ proptest = "1.4"
 criterion = "0.5"
 tempfile = "3.10"
 rand = "0.8"
-
-
-[profile.release]
-lto = true
-codegen-units = 1
-panic = "abort"
-
-[profile.bench]
-lto = true
-codegen-units = 1

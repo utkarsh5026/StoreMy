@@ -1,0 +1,37 @@
+# cargo-nextest config. Invoked automatically when nextest is run from the
+# workspace root. Docs: https://nexte.st/book/configuration.html
+
+[profile.default]
+# Surface slow tests early. After 30s a test is marked SLOW; after two slow
+# intervals (60s total) nextest terminates it so a hung test can't wedge CI.
+slow-timeout = { period = "30s", terminate-after = 2 }
+
+# Print failures as they happen AND again at the end (easier to scan in long runs).
+failure-output = "immediate-final"
+
+# Don't stop the whole run on the first failure — locally you usually want to
+# see every failing test at once, not fix-rerun-fix-rerun.
+fail-fast = false
+
+# No auto-retries locally — a flaky test should fail loudly, not hide behind a retry.
+retries = 0
+
+# Show output for passed tests only on request (`--success-output immediate`).
+status-level = "pass"
+final-status-level = "flaky"
+
+[profile.ci]
+# Inherits from default, then overrides.
+failure-output = "final"       # less noisy in CI logs; summary at the end
+fail-fast = false
+retries = 0                    # fail honestly; don't paper over flakes
+
+# In CI, archive JUnit XML for GitHub's test-summary action if you add one later.
+# [profile.ci.junit]
+# path = "junit.xml"
+
+# Group heavy / slow tests separately so you can run just them with
+# `cargo nextest run --profile default -E 'test(slow::)'`.
+[[profile.default.overrides]]
+filter = 'test(slow::) | test(bench::)'
+slow-timeout = { period = "120s", terminate-after = 3 }
