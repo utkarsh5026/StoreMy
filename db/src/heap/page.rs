@@ -1,35 +1,51 @@
-//! Heap page layout and management for fixed-schema tuple storage.
+//! Heap page layout and management for slotted tuple storage.
 //!
 //! A [`HeapPage`] wraps a raw `PAGE_SIZE`-byte buffer and interprets it as a
-//! slotted page: a compact header of [`SlotPointer`] entries at the front,
-//! followed by tuple data growing upward from the end of the header.
+//! bidirectional slotted page: a fixed header followed by a slot-pointer array
+//! growing from the low end, and tuple data growing from the high end toward
+//! the middle.
 //!
 //! ## In-memory layout  (one `PAGE_SIZE`-byte buffer)
 //!
 //! ```text
-//!  byte 0                                                          PAGE_SIZE - 1
-//!  |                                                                           |
-//!  +---------------------------+---------------------------+--------------------+
-//!  |   Slot-pointer header     |   Tuple data (packed)     |    Free space      |
-//!  |   (num_slots x 4 bytes)   |   grows ------------->    |    (unused)        |
-//!  +---------------------------+---------------------------+--------------------+
-//!  ^                           ^                           ^                   ^
-//!  byte 0          num_slots x SLOT_POINTER_SIZE    free_space_offset     PAGE_SIZE
+//!  byte 0                                                          PAGE_SIZE
+//!  |                                                                        |
+//!  +--------+------------------+---------...---------+--------------------+
+//!  | header | slot pointers -> |      free space     | <- tuple data      |
+//!  +--------+------------------+---------...---------+--------------------+
+//!  ^        ^                  ^                     ^                    ^
+//!  0    PAGE_HDR_SIZE   slot_array_end          tuple_start            PAGE_SIZE
 //!
 //!
-//!  Slot i occupies bytes [i*4 .. i*4+4) in the header:
+//!  Fixed header (first PAGE_HDR_SIZE bytes):
 //!
-//!  +---- byte i*4 -------+---- byte i*4+2 ------+
-//!  |   offset  (u16 LE)  |   length  (u16 LE)   |
+//!  +------- byte 0 -------+------ byte 2 --------+
+//!  |   num_slots (u16 LE) |  tuple_start (u16 LE)|
+//!  +----------------------+----------------------+
+//!        |                        |
+//!        |                        +-- left edge of the tuple region; tuples
+//!        |                            occupy [tuple_start .. PAGE_SIZE)
+//!        +-- number of slot pointers that follow the header
+//!
+//!
+//!  Slot i occupies bytes [PAGE_HDR_SIZE + i*4 .. PAGE_HDR_SIZE + i*4 + 4):
+//!
+//!  +---- offset ---------+---- length ----------+
+//!  |        (u16 LE)     |         (u16 LE)     |
 //!  +---------------------+----------------------+
 //!         |                      |
 //!         |                      +-- 0  =>  slot is empty (deleted or unused)
 //!         +-- byte position of this tuple's first byte within the page
 //! ```
 //!
-//! Each slot pointer records where a tuple lives inside the page (byte offset
-//! and byte length). A slot whose `length` is zero is considered empty and can
-//! be reused by the next insert.
+//! The slot array grows forward as new slots are allocated; the tuple region
+//! grows backward as new tuples are written. The page is full when inserting
+//! would make the two regions meet. Deletion marks a slot empty (tombstone)
+//! without reclaiming its bytes — the hole sits in the middle of the tuple
+//! region until a future compaction pass rewrites the page.
+//!
+//! A freshly zeroed buffer (`num_slots = 0`, `tuple_start = 0`) is treated as
+//! an empty page with `tuple_start = PAGE_SIZE`.
 //!
 //! The page holds a before-image copy of its raw bytes at construction time
 //! so that callers can produce WAL undo records when needed.
@@ -44,7 +60,10 @@ use crate::{
     tuple::{Tuple, TupleSchema},
 };
 
-/// Number of bytes occupied by one slot pointer in the page header.
+/// Size of the fixed page header: `num_slots` (u16) + `tuple_start` (u16).
+const PAGE_HDR_SIZE: usize = 4;
+
+/// Number of bytes occupied by one slot pointer.
 ///
 /// Each slot pointer is two `u16` fields: offset and length.
 const SLOT_POINTER_SIZE: usize = 4;
@@ -61,7 +80,7 @@ const _: () = assert!(
 /// buffer. `length` is the number of bytes the serialized tuple occupies.
 /// A slot pointer whose `length` is `0` marks an empty (deleted or never-used)
 /// slot.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
 struct SlotPointer {
     /// Byte offset of the tuple data from the start of the page buffer.
     offset: u16,
@@ -69,12 +88,26 @@ struct SlotPointer {
     length: u16,
 }
 
+impl SlotPointer {
+    /// Returns `true` if the slot pointer marks the slot as empty (tombstone).
+    ///
+    /// In the slotted page design, a slot is considered empty (either never
+    /// used or deleted) when its `length` field is zero. This function allows
+    /// slot scanning and tuple management code to efficiently skip over
+    /// unused or deleted slots.
+    #[inline]
+    pub(super) fn is_tombstone(self) -> bool {
+        self.length == 0
+    }
+}
+
 /// A fixed-size page that stores tuples according to a given schema.
 ///
-/// `HeapPage` manages a `PAGE_SIZE`-byte region of storage as a slotted page.
-/// The front of the buffer holds a dense array of [`SlotPointer`] entries (one
-/// per logical slot). Tuple data is written immediately after the header and
-/// grows toward the end of the buffer.
+/// `HeapPage` manages a `PAGE_SIZE`-byte region of storage as a bidirectional
+/// slotted page. The slot-pointer array grows forward from the end of the
+/// header; tuple data grows backward from the end of the buffer. The number
+/// of slots is persisted in the page header, so slots can be added
+/// dynamically as tuples are inserted.
 ///
 /// The page is parameterized by a schema lifetime `'a`; the [`TupleSchema`]
 /// must outlive the page.
@@ -82,48 +115,84 @@ pub struct HeapPage<'a> {
     schema: &'a TupleSchema,
     tuples: Vec<Option<Tuple>>,
     slot_pointers: Vec<SlotPointer>,
-    free_space_offset: usize,
+    /// Left edge of the tuple region. Tuples occupy `[tuple_start .. PAGE_SIZE)`.
+    /// Shrinks on insert; unchanged on delete (holes are left in place until
+    /// a future compaction rewrites the page).
+    tuple_start: usize,
     old_data: [u8; PAGE_SIZE],
-    num_slots: u16,
 }
 
 impl<'a> HeapPage<'a> {
-    /// Loads a heap page from a raw byte slice, decoding all slot pointers and
-    /// stored tuples.
+    /// Loads a heap page from a raw byte slice, decoding the page header, slot
+    /// pointers, and stored tuples.
     ///
-    /// `data` must be exactly `PAGE_SIZE` bytes. The first
+    /// `data` must be exactly `PAGE_SIZE` bytes. The first [`PAGE_HDR_SIZE`]
+    /// bytes hold `num_slots` and `tuple_start`; the next
     /// `num_slots × SLOT_POINTER_SIZE` bytes are interpreted as slot pointers;
     /// the tuple bytes they reference are deserialized according to `schema`.
     ///
     /// A freshly zeroed buffer (e.g. `[0u8; PAGE_SIZE]`) produces an empty
-    /// page ready for inserts.
+    /// page ready for inserts: `num_slots = 0`, `tuple_start = PAGE_SIZE`.
     ///
     /// # Errors
     ///
     /// Returns [`StorageError::InvalidPageSize`] if `data.len() != PAGE_SIZE`.
     ///
-    /// Returns [`StorageError::ParseError`] if any slot pointer or tuple data
-    /// is malformed or out of bounds.
+    /// Returns [`StorageError::ParseError`] if the header, any slot pointer,
+    /// or any tuple data is malformed or out of bounds.
     pub fn new(data: &[u8], schema: &'a TupleSchema) -> Result<Self, StorageError> {
         if data.len() != PAGE_SIZE {
             return Err(StorageError::InvalidPageSize { got: data.len() });
         }
 
-        let num_tuples = data.len() / (schema.serialized_size() + SLOT_POINTER_SIZE);
-        let tuples = vec![None; num_tuples];
-        let slot_pointers = vec![SlotPointer::default(); num_tuples];
+        let num_slots = LittleEndian::read_u16(&data[0..]) as usize;
+        let stored_tuple_start = LittleEndian::read_u16(&data[2..]) as usize;
+
+        let tuple_start = if num_slots == 0 && stored_tuple_start == 0 {
+            PAGE_SIZE
+        } else {
+            stored_tuple_start
+        };
+
+        let slot_end = Self::slot_array_end(num_slots);
+        if tuple_start < slot_end || tuple_start > PAGE_SIZE {
+            return Err(StorageError::ParseError(format!(
+                "invalid tuple_start={tuple_start}, slot_end={slot_end}"
+            )));
+        }
 
         let mut hp = Self {
             schema,
             old_data: data.try_into().unwrap(),
-            tuples,
-            slot_pointers,
-            free_space_offset: num_tuples * SLOT_POINTER_SIZE,
-            num_slots: num_tuples.try_into().unwrap(),
+            tuples: vec![None; num_slots],
+            slot_pointers: vec![SlotPointer::default(); num_slots],
+            tuple_start,
         };
 
         hp.parse_data(data)?;
         Ok(hp)
+    }
+
+    /// End byte (exclusive) of the slot-pointer array given a slot count.
+    #[inline]
+    fn slot_array_end(n_slots: usize) -> usize {
+        PAGE_HDR_SIZE + n_slots * SLOT_POINTER_SIZE
+    }
+
+    /// Bytes currently free between the end of the slot array and the start
+    /// of the tuple region.
+    ///
+    /// Saturates to 0 on underflow — a "full" page reads as 0, never panics.
+    #[inline]
+    fn free_bytes(&self) -> usize {
+        self.tuple_start
+            .saturating_sub(Self::slot_array_end(self.slot_pointers.len()))
+    }
+
+    /// Current number of slots on this page (both occupied and empty).
+    #[inline]
+    fn num_slots(&self) -> u16 {
+        u16::try_from(self.slot_pointers.len()).unwrap_or(u16::MAX)
     }
 
     /// Checks that `slot_id` refers to an existing slot on this page.
@@ -132,8 +201,9 @@ impl<'a> HeapPage<'a> {
     ///
     /// Returns [`StorageError::SlotOutOfBounds`] when `slot_id >= num_slots`.
     fn check_slot_bounds(&self, slot_id: SlotId) -> Result<(), StorageError> {
-        if u16::from(slot_id) >= self.num_slots {
-            return Err(StorageError::slot_out_of_bounds(slot_id, self.num_slots));
+        let n = self.num_slots();
+        if u16::from(slot_id) >= n {
+            return Err(StorageError::slot_out_of_bounds(slot_id, n));
         }
         Ok(())
     }
@@ -149,39 +219,63 @@ impl<'a> HeapPage<'a> {
         })
     }
 
-    /// Returns the number of slots that currently hold no tuple.
+    /// Returns the number of existing slots that currently hold no tuple.
     ///
-    /// This is the number of slots available for future inserts without
-    /// growing the page.
+    /// These are tombstoned slots that can be reused by a future insert
+    /// without growing the slot array. This is *not* the total remaining
+    /// capacity of the page — for that see [`HeapPage::remaining_capacity`].
     pub fn empty_slots(&self) -> usize {
         self.slot_pointers
             .iter()
-            .filter(|sp| sp.length == 0)
+            .filter(|sp| sp.is_tombstone())
             .count()
     }
 
-    /// Writes `tuple` into the first available empty slot and returns its [`SlotId`].
+    /// Returns the number of tuples that can be inserted into this page
+    /// before running out of space, taking into account both reusable (empty)
+    /// slots and the space required for new slot entries.
     ///
-    /// The tuple is validated against the page schema before insertion. The
-    /// slot pointer is updated in memory; call [`Page::page_data`] to obtain
-    /// the updated raw bytes for flushing to disk.
+    /// - First, reuses space from any existing empty (tombstoned) slots; reusing such a slot only
+    ///   needs to allocate tuple space.
+    /// - Any remaining space after that must be split for both a new slot entry
+    ///   (`SLOT_POINTER_SIZE`) and the tuple blob.
+    ///
+    /// Returns 0 if the tuple size is 0 (should not occur in real use).
+    pub fn remaining_capacity(&self) -> usize {
+        let tup = self.schema.serialized_size();
+        if tup == 0 {
+            return 0;
+        }
+
+        let free = self.free_bytes();
+        let empty = self.empty_slots();
+
+        let reuse = empty.min(free / tup);
+        let free_after_reuse = free - reuse * tup;
+
+        let grow = free_after_reuse / (tup + SLOT_POINTER_SIZE);
+        reuse + grow
+    }
+
+    /// Writes `tuple` into an available slot and returns its [`SlotId`].
+    ///
+    /// An empty tombstoned slot is reused if one exists; otherwise a new slot
+    /// is appended to the slot array. The tuple bytes are placed at the high
+    /// end of the free region, and `tuple_start` is moved downward.
+    ///
+    /// Call [`Page::page_data`] to obtain the updated raw bytes for flushing
+    /// to disk.
     ///
     /// # Errors
     ///
     /// - [`StorageError::SchemaMismatch`] — tuple does not match this page's schema.
-    /// - [`StorageError::PageFull`] — no empty slots remain, or the remaining free bytes in the
-    ///   page buffer are insufficient.
+    /// - [`StorageError::PageFull`] — the slot array and tuple region cannot both grow to
+    ///   accommodate this tuple.
     /// - [`StorageError::TupleTooLarge`] — the serialized tuple exceeds `MAX_TUPLE_SIZE`.
     pub(crate) fn insert_tuple(&mut self, tuple: Tuple) -> Result<SlotId, StorageError> {
         self.schema
             .validate(&tuple)
             .map_err(|_| StorageError::SchemaMismatch)?;
-
-        let empty_slot = self
-            .slot_pointers
-            .iter()
-            .position(|sp| sp.length == 0)
-            .ok_or(StorageError::PageFull)?;
 
         let tup_size = self.schema.serialized_size();
         if tup_size > MAX_TUPLE_SIZE {
@@ -191,36 +285,50 @@ impl<'a> HeapPage<'a> {
             });
         }
 
-        if self.free_space_offset + tup_size > PAGE_SIZE {
+        let reused = self.slot_pointers.iter().position(|sp| sp.is_tombstone());
+        let needs_new_slot = reused.is_none();
+
+        let slot_growth = if needs_new_slot { SLOT_POINTER_SIZE } else { 0 };
+        let new_slot_end = Self::slot_array_end(self.slot_pointers.len()) + slot_growth;
+        let new_tuple_start = self
+            .tuple_start
+            .checked_sub(tup_size)
+            .ok_or(StorageError::PageFull)?;
+        if new_slot_end > new_tuple_start {
             return Err(StorageError::PageFull);
         }
 
-        let offset = self.free_space_offset; // 16 ← start of this tuple
-        self.free_space_offset += tup_size;
-
-        let offset = u16::try_from(offset).map_err(|_| {
-            StorageError::ParseError("free space offset overflowed u16".to_string())
-        })?;
-
+        self.tuple_start = new_tuple_start;
+        let offset = u16::try_from(new_tuple_start)
+            .map_err(|_| StorageError::ParseError("tuple_start overflowed u16".to_string()))?;
         let length =
             u16::try_from(tup_size).map_err(|_| StorageError::tuple_too_large(tup_size))?;
+        let sp = SlotPointer { offset, length };
 
-        self.slot_pointers[empty_slot] = SlotPointer { offset, length };
+        let slot_index = if let Some(i) = reused {
+            self.slot_pointers[i] = sp;
+            self.tuples[i] = Some(tuple);
+            i
+        } else {
+            self.slot_pointers.push(sp);
+            self.tuples.push(Some(tuple));
+            self.slot_pointers.len() - 1
+        };
 
-        self.tuples[empty_slot] = Some(tuple);
-        empty_slot
-            .try_into()
+        u16::try_from(slot_index)
+            .map(SlotId)
             .map_err(|_| StorageError::SlotOutOfBounds {
-                slot: u16::try_from(empty_slot).unwrap_or(u16::MAX),
-                num_slots: self.num_slots,
+                slot: u16::MAX,
+                num_slots: self.num_slots(),
             })
     }
 
     /// Marks the tuple at `slot_id` as deleted by zeroing its slot pointer.
     ///
     /// The slot becomes available for future inserts. The tuple bytes in the
-    /// page buffer are not zeroed out, but they will be overwritten on the next
-    /// insert that claims the slot.
+    /// page buffer are not zeroed out and `tuple_start` is not moved — the
+    /// hole sits in the tuple region until a future compaction rewrites the
+    /// page. New inserts go to a fresh position at `tuple_start - size`.
     ///
     /// # Errors
     ///
@@ -246,56 +354,72 @@ impl<'a> HeapPage<'a> {
     /// Returns [`StorageError::SlotOutOfBounds`] if `slot_id` is out of range.
     fn is_slot_empty(&self, slot_id: SlotId) -> Result<bool, StorageError> {
         self.check_slot_bounds(slot_id)?;
-        Ok(self.slot_pointers[usize::from(slot_id)].length == 0)
+        Ok(self.slot_pointers[usize::from(slot_id)].is_tombstone())
     }
 
     /// Reads all slot pointers and tuple data from the raw `data` buffer into
     /// `self`.
     ///
     /// Called once from [`HeapPage::new`] after the struct is initialized.
-    /// Updates `free_space_offset` to account for any existing tuple data.
+    /// `self.tuple_start` must already be set from the page header.
     ///
     /// # Errors
     ///
     /// Returns [`StorageError::ParseError`] if a slot pointer or its
-    /// referenced tuple data falls outside `data`.
+    /// referenced tuple data falls outside `data` or the tuple region.
     fn parse_data(&mut self, data: &[u8]) -> Result<(), StorageError> {
-        for i in 0..usize::from(self.num_slots) {
-            let data_offset = i * SLOT_POINTER_SIZE;
-            if data_offset + SLOT_POINTER_SIZE > data.len() {
+        for i in 0..self.slot_pointers.len() {
+            let off = PAGE_HDR_SIZE + i * SLOT_POINTER_SIZE;
+            if off + SLOT_POINTER_SIZE > data.len() {
                 return Err(StorageError::ParseError(format!(
                     "slot pointer {i} out of bounds",
                 )));
             }
 
-            let offset = LittleEndian::read_u16(&data[data_offset..]);
-            let length = LittleEndian::read_u16(&data[data_offset + 2..]);
-
+            let offset = LittleEndian::read_u16(&data[off..]);
+            let length = LittleEndian::read_u16(&data[off + 2..]);
             self.slot_pointers[i] = SlotPointer { offset, length };
-            self.free_space_offset = self.free_space_offset.max(usize::from(offset + length));
-        }
-
-        for (i, sp) in self.slot_pointers.iter().enumerate() {
-            if sp.length == 0 {
-                continue;
-            }
-
-            if usize::from(sp.length + sp.offset) > data.len() {
-                return Err(StorageError::ParseError(format!(
-                    "tuple data for slot with offset {} and length {} out of bounds",
-                    sp.offset, sp.length
-                )));
-            }
-
-            let start = usize::from(sp.offset);
-            let end = start + usize::from(sp.length);
-            let tuple_data = &data[start..end];
-            let tup = Tuple::deserialize(self.schema, tuple_data)
-                .map_err(|e| StorageError::ParseError(format!("failed to parse tuple: {e}")))?;
-            self.tuples[i] = Some(tup);
+            self.tuples[i] = self.parse_tuple(data, i)?;
         }
 
         Ok(())
+    }
+
+    /// Deserializes the tuple for `slot_index` using [`Self::slot_pointers`]
+    /// and the raw page bytes in `data`.
+    ///
+    /// An empty slot (`length == 0`) yields [`None`]. Otherwise the slot
+    /// pointer's `[offset, offset + length)` range must lie within `data` and
+    /// must not start before [`Self::tuple_start`] (tuple bytes live in the
+    /// lower-address region of the page).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`StorageError::ParseError`] if the slot byte range overflows,
+    /// extends past `data`, starts before the tuple region, or if
+    /// [`Tuple::deserialize`] fails for the slice.
+    fn parse_tuple(&self, data: &[u8], slot_index: usize) -> Result<Option<Tuple>, StorageError> {
+        let slot = self.slot_pointers[slot_index];
+
+        if slot.is_tombstone() {
+            return Ok(None);
+        }
+
+        let start = slot.offset as usize;
+        let end = start
+            .checked_add(slot.length as usize)
+            .ok_or_else(|| StorageError::ParseError("slot range overflow".to_string()))?;
+
+        if end > data.len() || start < self.tuple_start {
+            return Err(StorageError::ParseError(format!(
+                "tuple data for slot {slot_index} out of range [{start},{end})"
+            )));
+        }
+
+        let tuple_data = &data[start..end];
+        Tuple::deserialize(self.schema, tuple_data)
+            .map(Some)
+            .map_err(|e| StorageError::ParseError(format!("failed to parse tuple: {e}")))
     }
 
     /// Marks multiple slots as deleted by zeroing their slot pointers.
@@ -321,37 +445,67 @@ impl<'a> HeapPage<'a> {
         Ok(count)
     }
 
-    /// Inserts multiple tuples into the first available empty slots and returns their [`SlotId`]s.
+    /// Inserts multiple tuples into available slots and returns their [`SlotId`]s.
     ///
-    /// The tuples are validated against the page schema before insertion. The
-    /// slot pointers are updated in memory; call [`Page::page_data`] to obtain
-    /// the updated raw bytes for flushing to disk.
+    /// Takes at most [`HeapPage::remaining_capacity`] tuples from the iterator,
+    /// so the caller can keep using the iterator for any tuples that didn't fit.
     ///
     /// # Errors
     ///
     /// - [`StorageError::SchemaMismatch`] — any of the `tuples` does not match this page's schema.
-    /// - [`StorageError::PageFull`] — no empty slots remain, or the remaining free bytes in the
-    ///   page buffer are insufficient.
+    /// - [`StorageError::PageFull`] — insert fails mid-batch due to space.
     /// - [`StorageError::TupleTooLarge`] — the serialized tuple exceeds `MAX_TUPLE_SIZE`.
     pub fn insert_many<I>(&mut self, tuples: &mut I) -> Result<Vec<SlotId>, StorageError>
     where
         I: Iterator<Item = Tuple>,
     {
         let mut inserted = Vec::new();
-        for tuple in tuples.take(self.empty_slots()) {
+        let cap = self.remaining_capacity();
+        for tuple in tuples.take(cap) {
             let slot_id = self.insert_tuple(tuple)?;
             inserted.push(slot_id);
         }
         Ok(inserted)
+    }
+
+    /// Compacts the page by rewriting live tuples to remove holes and recover space.
+    ///
+    /// Iterates over the slot pointers and corresponding tuple entries, moving all
+    /// present (live) tuples to the lowest contiguous region at the end of the page buffer.
+    /// Empty slots are zeroed out (set to tombstone).
+    ///
+    /// This operation updates slot pointers and `tuple_start` so that all live tuples
+    /// are packed tightly, making free space available for future inserts.
+    ///
+    /// # Errors
+    ///
+    /// - [`StorageError::ParseError`] if moving tuples would underflow or overflow the offset.
+    pub fn compact(&mut self) -> Result<(), StorageError> {
+        let mut cursor = PAGE_SIZE;
+        for (sp, tup) in self.slot_pointers.iter_mut().zip(self.tuples.iter()) {
+            if tup.is_none() {
+                *sp = SlotPointer::default();
+                continue;
+            }
+            let len = sp.length as usize;
+            cursor = cursor
+                .checked_sub(len)
+                .ok_or_else(|| StorageError::ParseError("compact underflow".into()))?;
+
+            sp.offset = u16::try_from(cursor)
+                .map_err(|_| StorageError::ParseError("offset overflow".to_string()))?;
+        }
+        self.tuple_start = cursor;
+        Ok(())
     }
 }
 
 impl Page for HeapPage<'_> {
     /// Serializes the current page state into a fresh `PAGE_SIZE`-byte array.
     ///
-    /// The slot pointer header is written first (little-endian `u16` pairs),
-    /// followed by each live tuple serialized at the byte range its slot
-    /// pointer describes.
+    /// Writes the page header (`num_slots`, `tuple_start`), the slot-pointer
+    /// array, and every live tuple at the byte range its slot pointer
+    /// describes.
     ///
     /// # Panics
     ///
@@ -359,11 +513,22 @@ impl Page for HeapPage<'_> {
     /// tuples that were already validated on insert.
     fn page_data(&self) -> [u8; PAGE_SIZE] {
         let mut bytes = [0u8; PAGE_SIZE];
-        for (i, sp) in self.slot_pointers.iter().enumerate() {
-            let offset = i * SLOT_POINTER_SIZE;
-            LittleEndian::write_u16(&mut bytes[offset..], sp.offset);
-            LittleEndian::write_u16(&mut bytes[offset + 2..], sp.length);
-        }
+        let mut write_u16 = |offset: usize, values: &[u16]| {
+            for (i, value) in values.iter().enumerate() {
+                LittleEndian::write_u16(&mut bytes[offset + i * 2..], *value);
+            }
+        };
+
+        write_u16(0, &[
+            self.num_slots(),
+            u16::try_from(self.tuple_start).expect("tuple_start <= PAGE_SIZE <= u16::MAX"),
+        ]);
+
+        self.slot_pointers.iter().copied().enumerate().for_each(
+            |(i, SlotPointer { offset, length })| {
+                write_u16(PAGE_HDR_SIZE + i * SLOT_POINTER_SIZE, &[offset, length]);
+            },
+        );
 
         for (sp, tup) in self.slot_pointers.iter().zip(self.tuples.iter()) {
             if let Some(t) = tup {
@@ -421,6 +586,14 @@ mod tests {
     }
 
     #[test]
+    fn new_empty_page_has_zero_slots() {
+        let s = schema();
+        let page = empty_page(&s);
+        assert_eq!(page.num_slots(), 0);
+        assert_eq!(page.tuple_start, PAGE_SIZE);
+    }
+
+    #[test]
     fn new_rejects_wrong_size_data() {
         let s = schema();
         let result = HeapPage::new(&[0u8; 100], &s);
@@ -433,6 +606,27 @@ mod tests {
         let mut page = empty_page(&s);
         let slot = page.insert_tuple(make_tuple(1, true));
         assert!(slot.is_ok());
+    }
+
+    #[test]
+    fn insert_grows_slot_array() {
+        let s = schema();
+        let mut page = empty_page(&s);
+        assert_eq!(page.num_slots(), 0);
+        page.insert_tuple(make_tuple(1, true)).unwrap();
+        assert_eq!(page.num_slots(), 1);
+        page.insert_tuple(make_tuple(2, false)).unwrap();
+        assert_eq!(page.num_slots(), 2);
+    }
+
+    #[test]
+    fn insert_moves_tuple_start_downward() {
+        let s = schema();
+        let mut page = empty_page(&s);
+        let before = page.tuple_start;
+        page.insert_tuple(make_tuple(1, true)).unwrap();
+        assert!(page.tuple_start < before);
+        assert_eq!(before - page.tuple_start, s.serialized_size());
     }
 
     #[test]
@@ -471,6 +665,19 @@ mod tests {
         let slot = page.insert_tuple(make_tuple(7, true)).unwrap();
         page.delete_tuple(slot).unwrap();
         assert_eq!(page.live_tuples().count(), 0);
+    }
+
+    #[test]
+    fn delete_does_not_shrink_slot_array() {
+        let s = schema();
+        let mut page = empty_page(&s);
+        page.insert_tuple(make_tuple(1, true)).unwrap();
+        let slot = page.insert_tuple(make_tuple(2, false)).unwrap();
+        assert_eq!(page.num_slots(), 2);
+        page.delete_tuple(slot).unwrap();
+        // slot array keeps its size; the deleted slot becomes a tombstone.
+        assert_eq!(page.num_slots(), 2);
+        assert_eq!(page.empty_slots(), 1);
     }
 
     #[test]
@@ -515,10 +722,25 @@ mod tests {
     }
 
     #[test]
+    fn page_data_roundtrip_preserves_num_slots_and_tuple_start() {
+        let s = schema();
+        let mut page = empty_page(&s);
+        page.insert_tuple(make_tuple(1, true)).unwrap();
+        page.insert_tuple(make_tuple(2, false)).unwrap();
+        page.insert_tuple(make_tuple(3, true)).unwrap();
+
+        let bytes = page.page_data();
+        let restored = HeapPage::new(&bytes, &s).unwrap();
+
+        assert_eq!(restored.num_slots(), page.num_slots());
+        assert_eq!(restored.tuple_start, page.tuple_start);
+    }
+
+    #[test]
     fn page_data_does_not_overflow_when_page_is_full() {
         let s = schema();
         let mut page = empty_page(&s);
-        let capacity = page.empty_slots();
+        let capacity = page.remaining_capacity();
 
         let mut tuples = (0i32..)
             .take(capacity)
@@ -527,9 +749,9 @@ mod tests {
             .into_iter();
 
         page.insert_many(&mut tuples).unwrap();
-        assert_eq!(page.empty_slots(), 0);
+        assert_eq!(page.remaining_capacity(), 0);
 
-        // Must not panic — this is where the offset overflow bug manifests.
+        // Must not panic.
         let bytes = page.page_data();
 
         let restored = HeapPage::new(&bytes, &s).unwrap();
@@ -540,7 +762,7 @@ mod tests {
     fn insert_tuple_full_page_roundtrip_preserves_all_data() {
         let s = schema();
         let mut page = empty_page(&s);
-        let capacity = page.empty_slots();
+        let capacity = page.remaining_capacity();
 
         let input: Vec<_> = (0i32..)
             .take(capacity)
@@ -562,22 +784,42 @@ mod tests {
     }
 
     #[test]
-    fn empty_slots_decreases_on_insert() {
+    fn delete_leaves_hole_then_roundtrips() {
         let s = schema();
         let mut page = empty_page(&s);
-        let before = page.empty_slots();
+        let s0 = page.insert_tuple(make_tuple(1, true)).unwrap();
+        let _s1 = page.insert_tuple(make_tuple(2, false)).unwrap();
+        let s2 = page.insert_tuple(make_tuple(3, true)).unwrap();
+
+        page.delete_tuple(s0).unwrap();
+        page.delete_tuple(s2).unwrap();
+
+        let bytes = page.page_data();
+        let restored = HeapPage::new(&bytes, &s).unwrap();
+
+        // One tuple survives, in the middle slot.
+        assert_eq!(restored.live_tuples().count(), 1);
+        assert_eq!(restored.num_slots(), 3);
+        assert_eq!(restored.empty_slots(), 2);
+    }
+
+    #[test]
+    fn remaining_capacity_decreases_on_insert() {
+        let s = schema();
+        let mut page = empty_page(&s);
+        let before = page.remaining_capacity();
         page.insert_tuple(make_tuple(1, true)).unwrap();
-        assert_eq!(page.empty_slots(), before - 1);
+        assert_eq!(page.remaining_capacity(), before - 1);
     }
 
     #[test]
     fn empty_slots_recovers_on_delete() {
         let s = schema();
         let mut page = empty_page(&s);
-        let before = page.empty_slots();
         let slot = page.insert_tuple(make_tuple(1, true)).unwrap();
+        assert_eq!(page.empty_slots(), 0);
         page.delete_tuple(slot).unwrap();
-        assert_eq!(page.empty_slots(), before);
+        assert_eq!(page.empty_slots(), 1);
     }
 
     // --- insert_many: happy path ---
@@ -606,7 +848,7 @@ mod tests {
 
         let ids = page.insert_many(&mut tuples).unwrap();
         for id in &ids {
-            assert!(u16::from(*id) < page.num_slots);
+            assert!(u16::from(*id) < page.num_slots());
         }
         let mut sorted = ids.clone();
         sorted.sort();
@@ -658,11 +900,11 @@ mod tests {
     }
 
     #[test]
-    fn insert_many_caps_at_empty_slots() {
+    fn insert_many_caps_at_remaining_capacity() {
         let s = schema();
         let mut page = empty_page(&s);
 
-        let initial_capacity = page.empty_slots();
+        let initial_capacity = page.remaining_capacity();
         let extras = 5;
         let mut tuples = (0i32..)
             .take(initial_capacity + extras)
@@ -680,7 +922,7 @@ mod tests {
         let s = schema();
         let mut page = empty_page(&s);
 
-        let capacity = page.empty_slots();
+        let capacity = page.remaining_capacity();
         let all_tuples: Vec<Tuple> = (0i32..)
             .take(capacity + 3)
             .map(|i| make_tuple(i, true))
@@ -698,14 +940,14 @@ mod tests {
         let s = schema();
         let mut page = empty_page(&s);
 
-        let cap = page.empty_slots();
+        let cap = page.remaining_capacity();
         let mut fill = (0i32..)
             .take(cap)
             .map(|i| make_tuple(i, true))
             .collect::<Vec<_>>()
             .into_iter();
         page.insert_many(&mut fill).unwrap();
-        assert_eq!(page.empty_slots(), 0);
+        assert_eq!(page.remaining_capacity(), 0);
 
         let mut more = vec![make_tuple(999, false)].into_iter();
         let ids = page.insert_many(&mut more).unwrap();
@@ -728,6 +970,8 @@ mod tests {
         let new_ids = page.insert_many(&mut second_batch).unwrap();
         assert_eq!(new_ids.len(), 1);
         assert_eq!(page.live_tuples().count(), before);
+        // The reclaimed slot should have been reused — num_slots unchanged.
+        assert_eq!(page.num_slots(), 2);
     }
 
     // --- insert_many: error paths ---
@@ -886,5 +1130,209 @@ mod tests {
         assert_eq!(page.before_image().unwrap(), snapshot);
         // but page_data has changed
         assert_ne!(page.page_data(), snapshot);
+    }
+
+    #[test]
+    fn compact_on_empty_page_is_noop() {
+        let s = schema();
+        let mut page = empty_page(&s);
+        let tuple_start_before = page.tuple_start;
+        page.compact().unwrap();
+        assert_eq!(page.tuple_start, tuple_start_before);
+        assert_eq!(page.live_tuples().count(), 0);
+        assert_eq!(page.num_slots(), 0);
+    }
+
+    #[test]
+    fn compact_with_no_holes_is_noop() {
+        let s = schema();
+        let mut page = empty_page(&s);
+        page.insert_tuple(make_tuple(1, true)).unwrap();
+        page.insert_tuple(make_tuple(2, false)).unwrap();
+        page.insert_tuple(make_tuple(3, true)).unwrap();
+        let tuple_start_before = page.tuple_start;
+
+        page.compact().unwrap();
+
+        assert_eq!(page.tuple_start, tuple_start_before);
+        assert_eq!(page.live_tuples().count(), 3);
+    }
+
+    #[test]
+    fn compact_recovers_space_after_middle_delete() {
+        let s = schema();
+        let mut page = empty_page(&s);
+        let _s0 = page.insert_tuple(make_tuple(1, true)).unwrap();
+        let s1 = page.insert_tuple(make_tuple(2, false)).unwrap();
+        let _s2 = page.insert_tuple(make_tuple(3, true)).unwrap();
+        let tup_size = s.serialized_size();
+        let before = page.tuple_start;
+
+        page.delete_tuple(s1).unwrap();
+        // delete does not move tuple_start
+        assert_eq!(page.tuple_start, before);
+
+        page.compact().unwrap();
+        // one tuple's worth of bytes recovered
+        assert_eq!(page.tuple_start, before + tup_size);
+    }
+
+    #[test]
+    fn compact_recovers_space_after_head_delete() {
+        let s = schema();
+        let mut page = empty_page(&s);
+        let s0 = page.insert_tuple(make_tuple(1, true)).unwrap();
+        page.insert_tuple(make_tuple(2, false)).unwrap();
+        let tup_size = s.serialized_size();
+        let before = page.tuple_start;
+
+        page.delete_tuple(s0).unwrap();
+        page.compact().unwrap();
+        assert_eq!(page.tuple_start, before + tup_size);
+    }
+
+    #[test]
+    fn compact_recovers_space_after_tail_delete() {
+        let s = schema();
+        let mut page = empty_page(&s);
+        page.insert_tuple(make_tuple(1, true)).unwrap();
+        let s1 = page.insert_tuple(make_tuple(2, false)).unwrap();
+        let tup_size = s.serialized_size();
+        let before = page.tuple_start;
+
+        page.delete_tuple(s1).unwrap();
+        page.compact().unwrap();
+        assert_eq!(page.tuple_start, before + tup_size);
+    }
+
+    #[test]
+    fn compact_preserves_slot_ids_for_live_tuples() {
+        let s = schema();
+        let mut page = empty_page(&s);
+        let s0 = page.insert_tuple(make_tuple(10, true)).unwrap();
+        let s1 = page.insert_tuple(make_tuple(20, false)).unwrap();
+        let s2 = page.insert_tuple(make_tuple(30, true)).unwrap();
+
+        page.delete_tuple(s1).unwrap();
+        page.compact().unwrap();
+
+        let live: Vec<(SlotId, &Tuple)> = page.live_tuples().collect();
+        assert_eq!(live.len(), 2);
+        let ids: Vec<SlotId> = live.iter().map(|(id, _)| *id).collect();
+        assert!(ids.contains(&s0));
+        assert!(ids.contains(&s2));
+        // tombstone in the middle remains — slot identity preserved
+        assert_eq!(page.num_slots(), 3);
+        assert_eq!(page.empty_slots(), 1);
+    }
+
+    #[test]
+    fn compact_preserves_tuple_values() {
+        let s = schema();
+        let mut page = empty_page(&s);
+        let s0 = page.insert_tuple(make_tuple(10, true)).unwrap();
+        let _s1 = page.insert_tuple(make_tuple(20, false)).unwrap();
+        let s2 = page.insert_tuple(make_tuple(30, true)).unwrap();
+
+        page.delete_tuple(s0).unwrap();
+        page.compact().unwrap();
+
+        let live: std::collections::HashMap<SlotId, &Tuple> = page.live_tuples().collect();
+        assert_eq!(live[&s2], &make_tuple(30, true));
+    }
+
+    #[test]
+    fn compact_roundtrips_through_page_data() {
+        let s = schema();
+        let mut page = empty_page(&s);
+        let s0 = page.insert_tuple(make_tuple(1, true)).unwrap();
+        let s1 = page.insert_tuple(make_tuple(2, false)).unwrap();
+        page.insert_tuple(make_tuple(3, true)).unwrap();
+        page.delete_tuple(s0).unwrap();
+        page.delete_tuple(s1).unwrap();
+
+        page.compact().unwrap();
+        let bytes = page.page_data();
+        let restored = HeapPage::new(&bytes, &s).unwrap();
+
+        assert_eq!(restored.live_tuples().count(), 1);
+        assert_eq!(restored.num_slots(), 3);
+        assert_eq!(restored.empty_slots(), 2);
+        assert_eq!(restored.tuple_start, page.tuple_start);
+    }
+
+    #[test]
+    fn compact_then_insert_uses_recovered_space() {
+        let s = schema();
+        let mut page = empty_page(&s);
+        let s0 = page.insert_tuple(make_tuple(1, true)).unwrap();
+        page.insert_tuple(make_tuple(2, false)).unwrap();
+        let cap_before_delete = page.remaining_capacity();
+
+        page.delete_tuple(s0).unwrap();
+        page.compact().unwrap();
+
+        // Reclaimed both the slot and its bytes — capacity is strictly higher
+        // than it was before the delete (delete alone leaks the bytes).
+        assert!(page.remaining_capacity() > cap_before_delete);
+    }
+
+    #[test]
+    fn compact_is_idempotent() {
+        let s = schema();
+        let mut page = empty_page(&s);
+        let s0 = page.insert_tuple(make_tuple(1, true)).unwrap();
+        page.insert_tuple(make_tuple(2, false)).unwrap();
+        page.delete_tuple(s0).unwrap();
+
+        page.compact().unwrap();
+        let bytes_after_first = page.page_data();
+        let tuple_start_after_first = page.tuple_start;
+
+        page.compact().unwrap();
+        assert_eq!(page.page_data(), bytes_after_first);
+        assert_eq!(page.tuple_start, tuple_start_after_first);
+    }
+
+    #[test]
+    fn compact_moves_tuple_start_to_pagesize_when_all_deleted() {
+        let s = schema();
+        let mut page = empty_page(&s);
+        let s0 = page.insert_tuple(make_tuple(1, true)).unwrap();
+        let s1 = page.insert_tuple(make_tuple(2, false)).unwrap();
+
+        page.delete_tuple(s0).unwrap();
+        page.delete_tuple(s1).unwrap();
+        page.compact().unwrap();
+
+        assert_eq!(page.tuple_start, PAGE_SIZE);
+        assert_eq!(page.live_tuples().count(), 0);
+        // tombstones still present — slot identity preserved
+        assert_eq!(page.num_slots(), 2);
+    }
+
+    #[test]
+    fn compact_packs_tuples_contiguously_against_pagesize() {
+        let s = schema();
+        let mut page = empty_page(&s);
+        let s0 = page.insert_tuple(make_tuple(1, true)).unwrap();
+        page.insert_tuple(make_tuple(2, false)).unwrap();
+        page.insert_tuple(make_tuple(3, true)).unwrap();
+        let tup_size = s.serialized_size();
+
+        page.delete_tuple(s0).unwrap();
+        page.compact().unwrap();
+
+        let mut live_offsets: Vec<usize> = page
+            .slot_pointers
+            .iter()
+            .filter(|sp| !sp.is_tombstone())
+            .map(|sp| sp.offset as usize)
+            .collect();
+        live_offsets.sort_unstable();
+        assert_eq!(live_offsets.len(), 2);
+        assert_eq!(live_offsets[1] + tup_size, PAGE_SIZE);
+        assert_eq!(live_offsets[0] + tup_size, live_offsets[1]);
+        assert_eq!(page.tuple_start, live_offsets[0]);
     }
 }
