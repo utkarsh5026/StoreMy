@@ -124,7 +124,18 @@ impl Parser {
                 p.expect(TokenType::Rparen)?;
                 Ok(SelectExpr::Agg(agg, col_tok.value))
             } else {
-                Ok(SelectExpr::Column(p.parse_column_ref()?))
+                let cref = if p.if_peek_then_consume(TokenType::Dot)? {
+                    ColumnRef {
+                        qualifier: Some(name_tok.value),
+                        name: p.expect(TokenType::Identifier)?.value,
+                    }
+                } else {
+                    ColumnRef {
+                        qualifier: None,
+                        name: name_tok.value,
+                    }
+                };
+                Ok(SelectExpr::Column(cref))
             }
         };
 

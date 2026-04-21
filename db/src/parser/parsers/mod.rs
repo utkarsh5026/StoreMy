@@ -304,15 +304,19 @@ impl Parser {
     /// - [`Ok(ColumnRef)`]: with the parsed qualifier (if present) and column name.
     /// - [`Err(ParserError)`]: if any identifier token is missing or malformed.
     pub(super) fn parse_column_ref(&mut self) -> Result<ColumnRef, ParserError> {
-        let qualifier = if self.if_peek_then_consume(TokenType::Dot)? {
-            Some(self.expect(TokenType::Identifier)?.value)
+        let first = self.expect(TokenType::Identifier)?.value;
+        if self.if_peek_then_consume(TokenType::Dot)? {
+            let name = self.expect(TokenType::Identifier)?.value;
+            Ok(ColumnRef {
+                qualifier: Some(first),
+                name,
+            })
         } else {
-            None
-        };
-        Ok(ColumnRef {
-            qualifier,
-            name: self.expect(TokenType::Identifier)?.value,
-        })
+            Ok(ColumnRef {
+                qualifier: None,
+                name: first,
+            })
+        }
     }
 
     /// Parses a non-empty list of items separated by `delimiter` and ended by
