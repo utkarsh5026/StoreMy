@@ -12,16 +12,20 @@
 //! encoding (via the `byteorder` crate). Strings are stored as a 4-byte length prefix
 //! followed by the UTF-8 bytes, capped at [`crate::STRING_MAX_SIZE`].
 
-use std::cmp::Ordering;
-use std::fmt;
-use std::hash::{Hash, Hasher};
-use std::io::{Read, Write};
+use std::{
+    cmp::Ordering,
+    fmt,
+    hash::{Hash, Hasher},
+    io::{Read, Write},
+};
 
 use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
 use thiserror::Error;
 
-use crate::STRING_MAX_SIZE;
-use crate::codec::{CodecError, Decode, Encode};
+use crate::{
+    STRING_MAX_SIZE,
+    codec::{CodecError, Decode, Encode},
+};
 
 /// Errors related to the type system and value conversions.
 #[derive(Error, Debug)]
@@ -102,7 +106,7 @@ impl Type {
     /// # Examples
     ///
     /// ```
-    /// use db::types::Type;
+    /// use storemy::types::Type;
     ///
     /// assert_eq!(Type::Int32.size(), 4);
     /// assert_eq!(Type::Float64.size(), 8);
@@ -125,7 +129,7 @@ impl Type {
     /// # Examples
     ///
     /// ```
-    /// use db::types::Type;
+    /// use storemy::types::Type;
     ///
     /// assert!(Type::Int64.is_fixed_size());
     /// assert!(!Type::String.is_fixed_size());
@@ -157,7 +161,7 @@ impl Type {
 /// # Examples
 ///
 /// ```
-/// use db::types::Type;
+/// use storemy::types::Type;
 ///
 /// assert_eq!(Type::try_from("bigint").unwrap(), Type::Int64);
 /// assert!(Type::try_from("uuid").is_err());
@@ -226,7 +230,7 @@ impl Value {
     /// # Examples
     ///
     /// ```
-    /// use db::types::{Type, Value};
+    /// use storemy::types::{Type, Value};
     ///
     /// assert_eq!(Value::Int32(42).get_type(), Some(Type::Int32));
     /// assert_eq!(Value::Null.get_type(), None);
@@ -266,6 +270,59 @@ impl Value {
         match self {
             Value::Bool(b) => Some(*b),
             _ => None,
+        }
+    }
+}
+
+/// Coerces a literal (for example from a parsed `WHERE` constant) into a value of
+/// `target`, which is typically a column’s declared type.
+///
+/// Integer literals are parsed as [`Value::Int64`]; this conversion narrows or
+/// reinterprets them when the column is a smaller integer or unsigned type.
+/// When the value’s [`Value::get_type`] already equals `target`, the value is
+/// cloned unchanged.
+///
+/// # Errors
+///
+/// Returns [`TypeError::InvalidConversion`] when the value cannot be represented
+/// in `target` (including out-of-range integers and unsupported combinations such
+/// as comparing a string literal to a numeric column without a conversion rule).
+impl TryFrom<(&Value, Type)> for Value {
+    type Error = TypeError;
+
+    fn try_from((v, target): (&Value, Type)) -> Result<Self, Self::Error> {
+        match (v, target) {
+            (Value::Int64(n), Type::Int32) => {
+                i32::try_from(*n)
+                    .map(Value::Int32)
+                    .map_err(|_| TypeError::InvalidConversion {
+                        from: n.to_string(),
+                        to: Type::Int32.to_string(),
+                    })
+            }
+            (Value::Int64(n), Type::Int64) => Ok(Value::Int64(*n)),
+            (Value::Int64(n), Type::Uint32) => {
+                u32::try_from(*n)
+                    .map(Value::Uint32)
+                    .map_err(|_| TypeError::InvalidConversion {
+                        from: n.to_string(),
+                        to: Type::Uint32.to_string(),
+                    })
+            }
+            (Value::Int64(n), Type::Uint64) => {
+                u64::try_from(*n)
+                    .map(Value::Uint64)
+                    .map_err(|_| TypeError::InvalidConversion {
+                        from: n.to_string(),
+                        to: Type::Uint64.to_string(),
+                    })
+            }
+            (Value::String(s), Type::String) => Ok(Value::String(s.clone())),
+            (v, ty) if v.get_type() == Some(ty) => Ok(v.clone()),
+            (v, ty) => Err(TypeError::InvalidConversion {
+                from: v.to_string(),
+                to: ty.to_string(),
+            }),
         }
     }
 }
@@ -541,6 +598,74 @@ impl Decode for Value {
                 Ok(Value::String(std::str::from_utf8(&buf)?.to_string()))
             }
             other => Err(CodecError::UnknownDiscriminant(other)),
+        }
+    }
+}
+
+#[cfg(test)]
+mod coerce_to_type_tests {
+    use super::{Type, TypeError, Value};
+
+    #[test]
+    fn int64_literal_to_int32() {
+        let v = Value::Int64(42);
+        assert_eq!(
+            Value::try_from((&v, Type::Int32)).unwrap(),
+            Value::Int32(42)
+        );
+    }
+
+    #[test]
+    fn int64_out_of_range_for_int32() {
+        let v = Value::Int64(i64::from(i32::MAX) + 1);
+        let err = Value::try_from((&v, Type::Int32)).unwrap_err();
+        assert!(matches!(err, TypeError::InvalidConversion { .. }));
+    }
+
+    #[test]
+    fn negative_int64_to_uint64_fails() {
+        let v = Value::Int64(-1);
+        assert!(Value::try_from((&v, Type::Uint64)).is_err());
+    }
+
+    #[test]
+    fn string_to_varchar_column() {
+        let v = Value::String("x".to_string());
+        assert_eq!(
+            Value::try_from((&v, Type::String)).unwrap(),
+            Value::String("x".to_string())
+        );
+    }
+
+    #[test]
+    fn bool_same_type_unchanged() {
+        let v = Value::Bool(true);
+        assert_eq!(
+            Value::try_from((&v, Type::Bool)).unwrap(),
+            Value::Bool(true)
+        );
+    }
+
+    #[test]
+    fn string_literal_to_int_column_fails() {
+        let v = Value::String("1".to_string());
+        assert!(Value::try_from((&v, Type::Int32)).is_err());
+    }
+}
+
+#[cfg(test)]
+mod value_codec_proptest {
+    use proptest::prelude::*;
+
+    use super::Value;
+    use crate::codec::{Decode, Encode};
+
+    proptest! {
+        #[test]
+        fn value_int32_roundtrip(v in any::<i32>()) {
+            let val = Value::Int32(v);
+            let bytes = val.to_bytes().unwrap();
+            prop_assert_eq!(Value::from_bytes(&bytes).unwrap(), val);
         }
     }
 }
