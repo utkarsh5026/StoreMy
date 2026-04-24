@@ -19,16 +19,16 @@
 //!
 //! ## Modules
 //!
-//! - [`scan`]      — sequential and index scans
-//! - [`filter`]    — predicate filtering
-//! - [`project`]   — column projection
-//! - [`sort`]      — in-memory sort
-//! - [`limit`]     — row-count limiting
-//! - [`join`]      — nested-loop, hash, and sort-merge joins
-//! - [`setops`]    — union, intersect, except, distinct
-//! - [`aggregate`] — grouping and aggregation
+//! - [`scan`]       — sequential and index scans
+//! - [`unary`]      — `Filter`, `Project`, `Sort`, `Limit`
+//! - [`join`]       — nested-loop, hash, and sort-merge joins
+//! - [`setops`]     — union, intersect, except, distinct
+//! - [`aggregate`]  — grouping and aggregation
+//! - [`expression`] — `BooleanExpression`, the predicate primitive shared by filter and join
+//!   operators
 
 pub mod aggregate;
+pub mod expression;
 pub mod join;
 pub mod scan;
 pub mod setops;
@@ -39,7 +39,7 @@ use thiserror::Error;
 
 use crate::{
     TransactionId,
-    execution::unary::BooleanExpression,
+    execution::expression::BooleanExpression,
     heap::file::HeapFile,
     tuple::{Tuple, TupleSchema},
 };
@@ -47,15 +47,12 @@ use crate::{
 /// Errors produced by the execution engine.
 #[derive(Debug, Error)]
 pub enum ExecutionError {
-    /// An operator does not support rewinding (e.g. hash join).
     #[error("this operator does not support rewind")]
     RewindNotSupported,
 
-    /// A type mismatch or invalid value was encountered during execution.
     #[error("type error: {0}")]
     TypeError(String),
 
-    /// An I/O error from the storage layer.
     #[error("storage error: {0}")]
     Storage(String),
 }
@@ -123,6 +120,23 @@ impl<'a> PlanNode<'a> {
     }
 }
 
+/// Helper macro to delegate method calls to the correct operator in a `PlanNode`.
+///
+/// This macro matches on the concrete variant of `PlanNode` and calls the specified
+/// method (`$method`) with the given arguments (`$($arg),*`). It is used to uniformly
+/// dispatch trait method implementations (such as `next`, `rewind`, or `schema`) to
+/// the correct wrapped operator, so that `PlanNode` can transparently forward calls
+/// without manual match boilerplate everywhere.
+///
+/// # Example
+///
+/// ```ignore
+/// impl FallibleIterator for PlanNode<'_> {
+///     fn next(&mut self) -> Result<Option<Tuple>, ExecutionError> {
+///         dispatch!(self, next())
+///     }
+/// }
+/// ```
 macro_rules! dispatch {
     ($self:expr, $method:ident($($arg:expr),*)) => {
         match $self {
@@ -144,20 +158,43 @@ macro_rules! dispatch {
     };
 }
 
+/// Implements the [`FallibleIterator`] trait for [`PlanNode`].
+///
+/// This allows `PlanNode` to be used as a fallible iterator over [`Tuple`]s
+/// (with [`ExecutionError`] as the error type), abstracting over all physical
+/// operator variants. The actual implementation for each operator is delegated
+/// using the `dispatch!` macro, which forwards the method call to the
+/// concrete child operator wrapped by this `PlanNode`.
 impl FallibleIterator for PlanNode<'_> {
     type Item = Tuple;
     type Error = ExecutionError;
 
+    /// Advances the iterator and returns the next tuple produced by this
+    /// plan node, or `None` when iteration is finished. Any execution error
+    /// encountered during operator execution is returned as an error.
+    ///
+    /// The call is dispatched to the concrete operator implementation.
     fn next(&mut self) -> Result<Option<Tuple>, ExecutionError> {
         dispatch!(self, next())
     }
 }
 
+/// Implements the [`Executor`] trait for [`PlanNode`].
+///
+/// This enables every `PlanNode` to expose its output schema and to be
+/// rewound ("reset" for re-execution) in a uniform way by forwarding
+/// calls to the appropriate child operator via the `dispatch!` macro.
 impl Executor for PlanNode<'_> {
+    /// Returns a reference to the [`TupleSchema`] describing the output
+    /// columns produced by this node. Calls the `schema` method of the
+    /// inner operator.
     fn schema(&self) -> &TupleSchema {
         dispatch!(self, schema())
     }
 
+    /// Resets the plan node so that iteration may start again from the
+    /// beginning. The actual rewinding logic is implemented by each
+    /// concrete operator.
     fn rewind(&mut self) -> Result<(), ExecutionError> {
         dispatch!(self, rewind())
     }
