@@ -17,9 +17,8 @@ use std::collections::HashSet;
 
 use fallible_iterator::FallibleIterator;
 
-use crate::tuple::{Tuple, TupleSchema};
-
 use super::{ExecutionError, Executor, PlanNode};
+use crate::tuple::{Tuple, TupleSchema};
 
 /// Streams the `UNION` of two child executors.
 ///
@@ -30,9 +29,9 @@ use super::{ExecutionError, Executor, PlanNode};
 /// The left child is exhausted first; once it signals end-of-stream the operator switches
 /// to the right child.
 #[derive(Debug)]
-pub struct Union {
-    left: Box<PlanNode>,
-    right: Box<PlanNode>,
+pub struct Union<'a> {
+    left: Box<PlanNode<'a>>,
+    right: Box<PlanNode<'a>>,
     /// `true` once the left child has returned `None`.
     left_done: bool,
     /// When `true`, emit every tuple without deduplication (`UNION ALL`).
@@ -41,12 +40,12 @@ pub struct Union {
     seen: HashSet<Tuple>,
 }
 
-impl Union {
+impl<'a> Union<'a> {
     /// Creates a new `Union` operator over `left` and `right`.
     ///
     /// Set `all` to `true` for `UNION ALL` (no deduplication) or `false` for `UNION`
     /// (duplicates suppressed).
-    pub fn new(left: Box<PlanNode>, right: Box<PlanNode>, all: bool) -> Self {
+    pub fn new(left: Box<PlanNode<'a>>, right: Box<PlanNode<'a>>, all: bool) -> Self {
         Self {
             left,
             right,
@@ -57,7 +56,7 @@ impl Union {
     }
 }
 
-impl FallibleIterator for Union {
+impl FallibleIterator for Union<'_> {
     type Item = Tuple;
     type Error = ExecutionError;
 
@@ -90,7 +89,7 @@ impl FallibleIterator for Union {
     }
 }
 
-impl Executor for Union {
+impl Executor for Union<'_> {
     fn schema(&self) -> &TupleSchema {
         self.left.schema()
     }
@@ -116,9 +115,9 @@ impl Executor for Union {
 /// `right_set`. Subsequent calls stream the left child and either keep (`exclude = false`)
 /// or discard (`exclude = true`) tuples that are present in `right_set`.
 #[derive(Debug)]
-struct MembershipFilter {
-    left: Box<PlanNode>,
-    right: Box<PlanNode>,
+struct MembershipFilter<'a> {
+    left: Box<PlanNode<'a>>,
+    right: Box<PlanNode<'a>>,
     /// All tuples from the right child, populated lazily on first call to `next`.
     right_set: HashSet<Tuple>,
     /// `true` once the right child has been fully consumed into `right_set`.
@@ -128,8 +127,8 @@ struct MembershipFilter {
     exclude: bool,
 }
 
-impl MembershipFilter {
-    fn new(left: Box<PlanNode>, right: Box<PlanNode>, exclude: bool) -> Self {
+impl<'a> MembershipFilter<'a> {
+    fn new(left: Box<PlanNode<'a>>, right: Box<PlanNode<'a>>, exclude: bool) -> Self {
         Self {
             left,
             right,
@@ -156,7 +155,7 @@ impl MembershipFilter {
     }
 }
 
-impl FallibleIterator for MembershipFilter {
+impl FallibleIterator for MembershipFilter<'_> {
     type Item = Tuple;
     type Error = ExecutionError;
 
@@ -179,7 +178,7 @@ impl FallibleIterator for MembershipFilter {
     }
 }
 
-impl Executor for MembershipFilter {
+impl Executor for MembershipFilter<'_> {
     fn schema(&self) -> &TupleSchema {
         self.left.schema()
     }
@@ -205,16 +204,16 @@ impl Executor for MembershipFilter {
 /// full before streaming begins; the left child is then streamed and only tuples present
 /// in the right set are returned.
 #[derive(Debug)]
-pub struct Intersect(MembershipFilter);
+pub struct Intersect<'a>(MembershipFilter<'a>);
 
-impl Intersect {
+impl<'a> Intersect<'a> {
     /// Creates a new `Intersect` operator over `left` and `right`.
-    pub fn new(left: Box<PlanNode>, right: Box<PlanNode>) -> Self {
+    pub fn new(left: Box<PlanNode<'a>>, right: Box<PlanNode<'a>>) -> Self {
         Self(MembershipFilter::new(left, right, false))
     }
 }
 
-impl FallibleIterator for Intersect {
+impl FallibleIterator for Intersect<'_> {
     type Item = Tuple;
     type Error = ExecutionError;
 
@@ -228,7 +227,7 @@ impl FallibleIterator for Intersect {
     }
 }
 
-impl Executor for Intersect {
+impl Executor for Intersect<'_> {
     fn schema(&self) -> &TupleSchema {
         self.0.schema()
     }
@@ -249,16 +248,16 @@ impl Executor for Intersect {
 /// full before streaming begins; the left child is then streamed and only tuples absent
 /// from the right set are returned.
 #[derive(Debug)]
-pub struct Except(MembershipFilter);
+pub struct Except<'a>(MembershipFilter<'a>);
 
-impl Except {
+impl<'a> Except<'a> {
     /// Creates a new `Except` operator over `left` and `right`.
-    pub fn new(left: Box<PlanNode>, right: Box<PlanNode>) -> Self {
+    pub fn new(left: Box<PlanNode<'a>>, right: Box<PlanNode<'a>>) -> Self {
         Self(MembershipFilter::new(left, right, true))
     }
 }
 
-impl FallibleIterator for Except {
+impl FallibleIterator for Except<'_> {
     type Item = Tuple;
     type Error = ExecutionError;
 
@@ -272,7 +271,7 @@ impl FallibleIterator for Except {
     }
 }
 
-impl Executor for Except {
+impl Executor for Except<'_> {
     fn schema(&self) -> &TupleSchema {
         self.0.schema()
     }
@@ -293,14 +292,14 @@ impl Executor for Except {
 /// already been seen. Memory use is proportional to the number of distinct tuples in the
 /// child's output.
 #[derive(Debug)]
-pub struct Distinct {
-    child: Box<PlanNode>,
+pub struct Distinct<'a> {
+    child: Box<PlanNode<'a>>,
     seen: HashSet<Tuple>,
 }
 
-impl Distinct {
+impl<'a> Distinct<'a> {
     /// Creates a new `Distinct` operator wrapping `child`.
-    pub fn new(child: Box<PlanNode>) -> Self {
+    pub fn new(child: Box<PlanNode<'a>>) -> Self {
         Self {
             child,
             seen: HashSet::new(),
@@ -308,7 +307,7 @@ impl Distinct {
     }
 }
 
-impl FallibleIterator for Distinct {
+impl FallibleIterator for Distinct<'_> {
     type Item = Tuple;
     type Error = ExecutionError;
 
@@ -330,7 +329,7 @@ impl FallibleIterator for Distinct {
     }
 }
 
-impl Executor for Distinct {
+impl Executor for Distinct<'_> {
     fn schema(&self) -> &TupleSchema {
         self.child.schema()
     }
@@ -345,5 +344,340 @@ impl Executor for Distinct {
     fn rewind(&mut self) -> Result<(), ExecutionError> {
         self.seen.clear();
         self.child.rewind()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use tempfile::tempdir;
+
+    use super::*;
+    use crate::{
+        FileId, TransactionId,
+        buffer_pool::page_store::PageStore,
+        execution::scan::SeqScan,
+        heap::file::HeapFile,
+        tuple::{Field, Tuple, TupleSchema},
+        types::{Type, Value},
+        wal::writer::Wal,
+    };
+
+    fn schema_ab() -> TupleSchema {
+        TupleSchema::new(vec![
+            Field::new("a", Type::Int32),
+            Field::new("b", Type::Int32),
+        ])
+    }
+
+    fn tup(a: i32, b: i32) -> Tuple {
+        Tuple::new(vec![Value::Int32(a), Value::Int32(b)])
+    }
+
+    struct HeapHarness {
+        heap: HeapFile,
+        #[allow(dead_code)]
+        wal: Arc<Wal>,
+        _dir: tempfile::TempDir,
+        txn: TransactionId,
+    }
+
+    fn build_heap(id: u64, tuples: &[Tuple]) -> HeapHarness {
+        let dir = tempdir().unwrap();
+        let wal = Arc::new(Wal::new(&dir.path().join(format!("w{id}.wal")), 0).unwrap());
+        let store = Arc::new(PageStore::new(16, Arc::clone(&wal)));
+
+        let file_id = FileId::new(id);
+        let path = dir.path().join(format!("h{id}.db"));
+        let file = std::fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .open(&path)
+            .unwrap();
+        file.set_len((4 * crate::storage::PAGE_SIZE) as u64)
+            .unwrap();
+        drop(file);
+        store.register_file(file_id, &path).unwrap();
+
+        let heap = HeapFile::new(
+            file_id,
+            schema_ab(),
+            Arc::clone(&store),
+            0,
+            Arc::clone(&wal),
+        );
+
+        let txn = TransactionId::new(id);
+        wal.log_begin(txn).unwrap();
+        for t in tuples {
+            heap.insert_tuple(txn, t).unwrap();
+        }
+        HeapHarness {
+            heap,
+            wal,
+            _dir: dir,
+            txn,
+        }
+    }
+
+    fn scan(h: &HeapHarness) -> Box<PlanNode<'_>> {
+        Box::new(PlanNode::SeqScan(SeqScan::new(&h.heap, h.txn)))
+    }
+
+    fn drain<I: FallibleIterator<Item = Tuple, Error = ExecutionError>>(
+        iter: &mut I,
+    ) -> Vec<Tuple> {
+        let mut out = Vec::new();
+        while let Some(t) = iter.next().unwrap() {
+            out.push(t);
+        }
+        out
+    }
+
+    fn sorted_pairs(tuples: &[Tuple]) -> Vec<(i32, i32)> {
+        let mut v: Vec<(i32, i32)> = tuples
+            .iter()
+            .map(|t| match (t.get(0), t.get(1)) {
+                (Some(Value::Int32(a)), Some(Value::Int32(b))) => (*a, *b),
+                other => panic!("unexpected tuple contents: {other:?}"),
+            })
+            .collect();
+        v.sort_unstable();
+        v
+    }
+
+    // UNION suppresses duplicates across both sides
+    #[test]
+    fn test_union_dedup() {
+        let left = build_heap(201, &[tup(1, 1), tup(2, 2)]);
+        let right = build_heap(202, &[tup(2, 2), tup(3, 3)]);
+        let mut u = Union::new(scan(&left), scan(&right), false);
+        let out = drain(&mut u);
+        assert_eq!(sorted_pairs(&out), vec![(1, 1), (2, 2), (3, 3)]);
+    }
+
+    // UNION ALL preserves every duplicate
+    #[test]
+    fn test_union_all_preserves_duplicates() {
+        let left = build_heap(203, &[tup(1, 1), tup(2, 2)]);
+        let right = build_heap(204, &[tup(2, 2), tup(3, 3)]);
+        let mut u = Union::new(scan(&left), scan(&right), true);
+        let out = drain(&mut u);
+        assert_eq!(sorted_pairs(&out), vec![(1, 1), (2, 2), (2, 2), (3, 3)]);
+    }
+
+    // internal duplicates within one side also get deduped
+    #[test]
+    fn test_union_dedup_within_single_side() {
+        let left = build_heap(205, &[tup(1, 1), tup(1, 1), tup(2, 2)]);
+        let right = build_heap(206, &[]);
+        let mut u = Union::new(scan(&left), scan(&right), false);
+        let out = drain(&mut u);
+        assert_eq!(sorted_pairs(&out), vec![(1, 1), (2, 2)]);
+    }
+
+    // empty inputs on either side
+    #[test]
+    fn test_union_empty_left() {
+        let left = build_heap(207, &[]);
+        let right = build_heap(208, &[tup(1, 1)]);
+        let mut u = Union::new(scan(&left), scan(&right), false);
+        assert_eq!(sorted_pairs(&drain(&mut u)), vec![(1, 1)]);
+    }
+
+    #[test]
+    fn test_union_both_empty() {
+        let left = build_heap(209, &[]);
+        let right = build_heap(210, &[]);
+        let mut u = Union::new(scan(&left), scan(&right), false);
+        assert!(u.next().unwrap().is_none());
+    }
+
+    // rewind clears `seen` so dedup state is reset between passes
+    #[test]
+    fn test_union_rewind_replays() {
+        let left = build_heap(211, &[tup(1, 1)]);
+        let right = build_heap(212, &[tup(1, 1), tup(2, 2)]);
+        let mut u = Union::new(scan(&left), scan(&right), false);
+        let first = drain(&mut u).len();
+        u.rewind().unwrap();
+        let second = drain(&mut u).len();
+        assert_eq!(first, 2);
+        assert_eq!(first, second);
+    }
+
+    // schema is the left child's schema
+    #[test]
+    fn test_union_schema_from_left() {
+        let left = build_heap(213, &[]);
+        let right = build_heap(214, &[]);
+        let u = Union::new(scan(&left), scan(&right), false);
+        assert_eq!(u.schema().num_fields(), 2);
+    }
+
+    // ===== Intersect =====
+
+    // tuples in both sides are returned; tuples in only one are dropped
+    #[test]
+    fn test_intersect_basic() {
+        let left = build_heap(215, &[tup(1, 1), tup(2, 2), tup(3, 3)]);
+        let right = build_heap(216, &[tup(2, 2), tup(3, 3), tup(4, 4)]);
+        let mut i = Intersect::new(scan(&left), scan(&right));
+        assert_eq!(sorted_pairs(&drain(&mut i)), vec![(2, 2), (3, 3)]);
+    }
+
+    // no overlap -> empty
+    #[test]
+    fn test_intersect_disjoint() {
+        let left = build_heap(217, &[tup(1, 1)]);
+        let right = build_heap(218, &[tup(2, 2)]);
+        let mut i = Intersect::new(scan(&left), scan(&right));
+        assert!(i.next().unwrap().is_none());
+    }
+
+    // empty right -> empty result even if left is non-empty
+    #[test]
+    fn test_intersect_empty_right() {
+        let left = build_heap(219, &[tup(1, 1), tup(2, 2)]);
+        let right = build_heap(220, &[]);
+        let mut i = Intersect::new(scan(&left), scan(&right));
+        assert!(i.next().unwrap().is_none());
+    }
+
+    // Intersect doesn't dedup the left stream: duplicate left rows both pass through
+    // when present on the right. (This matches bag-semantics for the left side.)
+    #[test]
+    fn test_intersect_keeps_left_duplicates() {
+        let left = build_heap(221, &[tup(1, 1), tup(1, 1), tup(2, 2)]);
+        let right = build_heap(222, &[tup(1, 1)]);
+        let mut i = Intersect::new(scan(&left), scan(&right));
+        let out = drain(&mut i);
+        assert_eq!(sorted_pairs(&out), vec![(1, 1), (1, 1)]);
+    }
+
+    // rewind clears materialized set and re-reads both sides
+    #[test]
+    fn test_intersect_rewind_replays() {
+        let left = build_heap(223, &[tup(1, 1), tup(2, 2)]);
+        let right = build_heap(224, &[tup(2, 2)]);
+        let mut i = Intersect::new(scan(&left), scan(&right));
+        let first = drain(&mut i).len();
+        i.rewind().unwrap();
+        let second = drain(&mut i).len();
+        assert_eq!(first, 1);
+        assert_eq!(first, second);
+    }
+
+    // ===== Except =====
+
+    // keeps left-only tuples
+    #[test]
+    fn test_except_basic() {
+        let left = build_heap(225, &[tup(1, 1), tup(2, 2), tup(3, 3)]);
+        let right = build_heap(226, &[tup(2, 2)]);
+        let mut e = Except::new(scan(&left), scan(&right));
+        assert_eq!(sorted_pairs(&drain(&mut e)), vec![(1, 1), (3, 3)]);
+    }
+
+    // every left tuple present in right -> empty
+    #[test]
+    fn test_except_all_filtered() {
+        let left = build_heap(227, &[tup(1, 1), tup(2, 2)]);
+        let right = build_heap(228, &[tup(1, 1), tup(2, 2)]);
+        let mut e = Except::new(scan(&left), scan(&right));
+        assert!(e.next().unwrap().is_none());
+    }
+
+    // empty right passes every left tuple through unchanged
+    #[test]
+    fn test_except_empty_right() {
+        let left = build_heap(229, &[tup(1, 1), tup(2, 2)]);
+        let right = build_heap(230, &[]);
+        let mut e = Except::new(scan(&left), scan(&right));
+        assert_eq!(sorted_pairs(&drain(&mut e)), vec![(1, 1), (2, 2)]);
+    }
+
+    // empty left -> empty
+    #[test]
+    fn test_except_empty_left() {
+        let left = build_heap(231, &[]);
+        let right = build_heap(232, &[tup(1, 1)]);
+        let mut e = Except::new(scan(&left), scan(&right));
+        assert!(e.next().unwrap().is_none());
+    }
+
+    // Except also keeps left-side duplicates (bag semantics on the left)
+    #[test]
+    fn test_except_keeps_left_duplicates() {
+        let left = build_heap(233, &[tup(1, 1), tup(1, 1), tup(2, 2)]);
+        let right = build_heap(234, &[tup(2, 2)]);
+        let mut e = Except::new(scan(&left), scan(&right));
+        assert_eq!(sorted_pairs(&drain(&mut e)), vec![(1, 1), (1, 1)]);
+    }
+
+    // rewind replays
+    #[test]
+    fn test_except_rewind_replays() {
+        let left = build_heap(235, &[tup(1, 1), tup(2, 2)]);
+        let right = build_heap(236, &[tup(2, 2)]);
+        let mut e = Except::new(scan(&left), scan(&right));
+        let first = drain(&mut e).len();
+        e.rewind().unwrap();
+        let second = drain(&mut e).len();
+        assert_eq!(first, 1);
+        assert_eq!(first, second);
+    }
+
+    // dedups consecutive and non-consecutive duplicates
+    #[test]
+    fn test_distinct_removes_duplicates() {
+        let child = build_heap(237, &[
+            tup(1, 1),
+            tup(2, 2),
+            tup(1, 1),
+            tup(2, 2),
+            tup(3, 3),
+        ]);
+        let mut d = Distinct::new(scan(&child));
+        assert_eq!(sorted_pairs(&drain(&mut d)), vec![(1, 1), (2, 2), (3, 3)]);
+    }
+
+    // all-same input collapses to one
+    #[test]
+    fn test_distinct_all_same() {
+        let child = build_heap(238, &[tup(7, 7), tup(7, 7), tup(7, 7)]);
+        let mut d = Distinct::new(scan(&child));
+        let out = drain(&mut d);
+        assert_eq!(out.len(), 1);
+    }
+
+    // all-distinct input passes through unchanged
+    #[test]
+    fn test_distinct_all_unique() {
+        let child = build_heap(239, &[tup(1, 1), tup(2, 2), tup(3, 3)]);
+        let mut d = Distinct::new(scan(&child));
+        assert_eq!(sorted_pairs(&drain(&mut d)), vec![(1, 1), (2, 2), (3, 3)]);
+    }
+
+    // empty input -> empty output
+    #[test]
+    fn test_distinct_empty() {
+        let child = build_heap(240, &[]);
+        let mut d = Distinct::new(scan(&child));
+        assert!(d.next().unwrap().is_none());
+    }
+
+    // rewind clears `seen` so the same output is produced again
+    #[test]
+    fn test_distinct_rewind_replays() {
+        let child = build_heap(241, &[tup(1, 1), tup(1, 1), tup(2, 2)]);
+        let mut d = Distinct::new(scan(&child));
+        let first = drain(&mut d).len();
+        d.rewind().unwrap();
+        let second = drain(&mut d).len();
+        assert_eq!(first, 2);
+        assert_eq!(first, second);
     }
 }
