@@ -37,7 +37,12 @@ pub mod unary;
 use fallible_iterator::FallibleIterator;
 use thiserror::Error;
 
-use crate::tuple::{Tuple, TupleSchema};
+use crate::{
+    TransactionId,
+    execution::unary::BooleanExpression,
+    heap::file::HeapFile,
+    tuple::{Tuple, TupleSchema},
+};
 
 /// Errors produced by the execution engine.
 #[derive(Debug, Error)]
@@ -87,29 +92,35 @@ pub trait Executor: FallibleIterator<Item = Tuple, Error = ExecutionError> {
 /// operator structs can hold their children as `Box<PlanNode>` and call
 /// `.next()` / `.rewind()` directly.
 #[derive(Debug)]
-pub enum PlanNode {
-    // ── Scans ────────────────────────────────────────────────────────────
-    SeqScan(scan::SeqScan),
+pub enum PlanNode<'a> {
+    SeqScan(scan::SeqScan<'a>),
     IndexScan(scan::IndexScan),
 
-    // ── Unary operators ──────────────────────────────────────────────────
-    Filter(unary::Filter),
-    Project(unary::Project),
-    Sort(unary::Sort),
-    Limit(unary::Limit),
+    Filter(unary::Filter<'a>),
+    Project(unary::Project<'a>),
+    Sort(unary::Sort<'a>),
+    Limit(unary::Limit<'a>),
 
-    // ── Joins ────────────────────────────────────────────────────────────
-    NestedLoopJoin(join::NestedLoopJoin),
-    HashJoin(join::HashJoin),
-    SortMergeJoin(join::SortMergeJoin),
+    NestedLoopJoin(join::NestedLoopJoin<'a>),
+    HashJoin(join::HashJoin<'a>),
+    SortMergeJoin(join::SortMergeJoin<'a>),
 
-    // ── Set operations ───────────────────────────────────────────────────
-    Union(setops::Union),
-    Intersect(setops::Intersect),
-    Except(setops::Except),
-    Distinct(setops::Distinct),
+    Union(setops::Union<'a>),
+    Intersect(setops::Intersect<'a>),
+    Except(setops::Except<'a>),
+    Distinct(setops::Distinct<'a>),
 
-    Aggregate(aggregate::Aggregate),
+    Aggregate(aggregate::Aggregate<'a>),
+}
+
+impl<'a> PlanNode<'a> {
+    pub fn seq_scan(file: &'a HeapFile, txn: TransactionId) -> Self {
+        Self::SeqScan(scan::SeqScan::new(file, txn))
+    }
+
+    pub fn filter(child: Self, predicate: BooleanExpression) -> Self {
+        Self::Filter(unary::Filter::new(Box::new(child), predicate))
+    }
 }
 
 macro_rules! dispatch {
@@ -133,7 +144,7 @@ macro_rules! dispatch {
     };
 }
 
-impl FallibleIterator for PlanNode {
+impl FallibleIterator for PlanNode<'_> {
     type Item = Tuple;
     type Error = ExecutionError;
 
@@ -142,7 +153,7 @@ impl FallibleIterator for PlanNode {
     }
 }
 
-impl Executor for PlanNode {
+impl Executor for PlanNode<'_> {
     fn schema(&self) -> &TupleSchema {
         dispatch!(self, schema())
     }
