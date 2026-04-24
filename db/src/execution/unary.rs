@@ -17,14 +17,13 @@ use std::cmp::Ordering;
 
 use fallible_iterator::FallibleIterator;
 
+use super::{ExecutionError, Executor};
 use crate::{
     execution::PlanNode,
     primitives::{self, Predicate},
     tuple::{Tuple, TupleSchema},
     types::Value,
 };
-
-use super::{ExecutionError, Executor};
 
 /// A boolean expression that can be evaluated against a tuple.
 /// The expression is evaluated using the `eval` method.
@@ -430,7 +429,7 @@ mod tests {
     use crate::{
         FileId, TransactionId,
         buffer_pool::page_store::PageStore,
-        execution::{scan::SeqScan, PlanNode},
+        execution::{PlanNode, scan::SeqScan},
         heap::file::HeapFile,
         primitives::ColumnId,
         tuple::{Field, Tuple, TupleSchema},
@@ -497,8 +496,6 @@ mod tests {
         let tuple = Tuple::new(vec![Value::String(s.to_string())]);
         expr.eval(&tuple)
     }
-
-    // --- happy path: BooleanExpression::eval ---
 
     #[test]
     fn test_boolean_expression_eval_leaf_equals() {
@@ -578,14 +575,16 @@ mod tests {
         };
 
         assert!(BooleanExpression::And(Box::new(a.clone()), Box::new(b.clone())).eval(&t));
-        assert!(!BooleanExpression::And(Box::new(a.clone()), Box::new(b.clone())).eval(&Tuple::new(
-            vec![Value::Bool(true), Value::Bool(true)]
-        )));
+        assert!(
+            !BooleanExpression::And(Box::new(a.clone()), Box::new(b.clone()))
+                .eval(&Tuple::new(vec![Value::Bool(true), Value::Bool(true)]))
+        );
 
         assert!(BooleanExpression::Or(Box::new(b.clone()), Box::new(a.clone())).eval(&t));
-        assert!(BooleanExpression::Or(Box::new(a.clone()), Box::new(b.clone())).eval(&Tuple::new(
-            vec![Value::Bool(false), Value::Bool(false)]
-        )));
+        assert!(
+            BooleanExpression::Or(Box::new(a.clone()), Box::new(b.clone()))
+                .eval(&Tuple::new(vec![Value::Bool(false), Value::Bool(false)]))
+        );
 
         assert!(!BooleanExpression::Not(Box::new(a.clone())).eval(&t));
 
@@ -699,10 +698,7 @@ mod tests {
             op: Predicate::Equals,
             operand: Value::Bool(true),
         };
-        let mut filter = Filter::new(
-            Box::new(PlanNode::SeqScan(SeqScan::new(&heap, txn))),
-            pred,
-        );
+        let mut filter = Filter::new(Box::new(PlanNode::SeqScan(SeqScan::new(&heap, txn))), pred);
 
         let mut out = Vec::new();
         while let Some(t) = filter.next().unwrap() {
@@ -719,23 +715,17 @@ mod tests {
         let txn = begin_txn(&wal, 1);
         heap.insert_tuple(txn, &make_scan_tuple(42, false)).unwrap();
 
-        let mut proj = Project::new(
-            Box::new(PlanNode::SeqScan(SeqScan::new(&heap, txn))),
-            &[
-                ColumnId::try_from(1u32).unwrap(),
-                ColumnId::try_from(0u32).unwrap(),
-            ],
-        )
+        let mut proj = Project::new(Box::new(PlanNode::SeqScan(SeqScan::new(&heap, txn))), &[
+            ColumnId::try_from(1u32).unwrap(),
+            ColumnId::try_from(0u32).unwrap(),
+        ])
         .unwrap();
 
         assert_eq!(proj.schema().field(0).unwrap().name, "flag");
         assert_eq!(proj.schema().field(1).unwrap().name, "id");
 
         let row = proj.next().unwrap().unwrap();
-        assert_eq!(
-            row,
-            Tuple::new(vec![Value::Bool(false), Value::Int32(42)])
-        );
+        assert_eq!(row, Tuple::new(vec![Value::Bool(false), Value::Int32(42)]));
     }
 
     #[test]
@@ -791,17 +781,9 @@ mod tests {
     fn test_sort_null_sorts_before_non_null() {
         let (heap, wal, _dir) = make_registered_heap_file(0);
         let txn = begin_txn(&wal, 1);
-        heap
-            .insert_tuple(
-                txn,
-                &Tuple::new(vec![Value::Int32(10), Value::Bool(true)]),
-            )
+        heap.insert_tuple(txn, &Tuple::new(vec![Value::Int32(10), Value::Bool(true)]))
             .unwrap();
-        heap
-            .insert_tuple(
-                txn,
-                &Tuple::new(vec![Value::Null, Value::Bool(false)]),
-            )
+        heap.insert_tuple(txn, &Tuple::new(vec![Value::Null, Value::Bool(false)]))
             .unwrap();
 
         let mut sort = Sort::new(
@@ -823,11 +805,7 @@ mod tests {
             heap.insert_tuple(txn, &make_scan_tuple(id, true)).unwrap();
         }
 
-        let mut lim = Limit::new(
-            Box::new(PlanNode::SeqScan(SeqScan::new(&heap, txn))),
-            1,
-            1,
-        );
+        let mut lim = Limit::new(Box::new(PlanNode::SeqScan(SeqScan::new(&heap, txn))), 1, 1);
         assert_eq!(lim.next().unwrap(), Some(make_scan_tuple(2, true)));
         assert_eq!(lim.next().unwrap(), None);
     }
@@ -853,10 +831,9 @@ mod tests {
     fn test_project_new_invalid_column_id_returns_type_error() {
         let (heap, wal, _dir) = make_registered_heap_file(0);
         let txn = begin_txn(&wal, 1);
-        let err = Project::new(
-            Box::new(PlanNode::SeqScan(SeqScan::new(&heap, txn))),
-            &[ColumnId::try_from(99u32).unwrap()],
-        )
+        let err = Project::new(Box::new(PlanNode::SeqScan(SeqScan::new(&heap, txn))), &[
+            ColumnId::try_from(99u32).unwrap(),
+        ])
         .unwrap_err();
         assert!(matches!(err, ExecutionError::TypeError(_)));
     }
@@ -879,11 +856,7 @@ mod tests {
         let txn = begin_txn(&wal, 1);
         heap.insert_tuple(txn, &make_scan_tuple(1, true)).unwrap();
 
-        let mut lim = Limit::new(
-            Box::new(PlanNode::SeqScan(SeqScan::new(&heap, txn))),
-            0,
-            0,
-        );
+        let mut lim = Limit::new(Box::new(PlanNode::SeqScan(SeqScan::new(&heap, txn))), 0, 0);
         assert_eq!(lim.next().unwrap(), None);
     }
 
@@ -893,11 +866,7 @@ mod tests {
         let txn = begin_txn(&wal, 1);
         heap.insert_tuple(txn, &make_scan_tuple(1, true)).unwrap();
 
-        let mut lim = Limit::new(
-            Box::new(PlanNode::SeqScan(SeqScan::new(&heap, txn))),
-            5,
-            10,
-        );
+        let mut lim = Limit::new(Box::new(PlanNode::SeqScan(SeqScan::new(&heap, txn))), 5, 10);
         assert_eq!(lim.next().unwrap(), None);
     }
 
@@ -928,14 +897,19 @@ mod tests {
         let txn = begin_txn(&wal, 1);
         heap.insert_tuple(txn, &make_scan_tuple(1, false)).unwrap();
 
-        let mut proj = Project::new(
-            Box::new(PlanNode::SeqScan(SeqScan::new(&heap, txn))),
-            &[ColumnId::try_from(0u32).unwrap()],
-        )
+        let mut proj = Project::new(Box::new(PlanNode::SeqScan(SeqScan::new(&heap, txn))), &[
+            ColumnId::try_from(0u32).unwrap(),
+        ])
         .unwrap();
-        assert_eq!(proj.next().unwrap(), Some(Tuple::new(vec![Value::Int32(1)])));
+        assert_eq!(
+            proj.next().unwrap(),
+            Some(Tuple::new(vec![Value::Int32(1)]))
+        );
         proj.rewind().unwrap();
-        assert_eq!(proj.next().unwrap(), Some(Tuple::new(vec![Value::Int32(1)])));
+        assert_eq!(
+            proj.next().unwrap(),
+            Some(Tuple::new(vec![Value::Int32(1)]))
+        );
     }
 
     #[test]
@@ -971,11 +945,7 @@ mod tests {
             heap.insert_tuple(txn, &make_scan_tuple(id, true)).unwrap();
         }
 
-        let mut lim = Limit::new(
-            Box::new(PlanNode::SeqScan(SeqScan::new(&heap, txn))),
-            1,
-            1,
-        );
+        let mut lim = Limit::new(Box::new(PlanNode::SeqScan(SeqScan::new(&heap, txn))), 1, 1);
         assert_eq!(lim.next().unwrap(), Some(make_scan_tuple(2, true)));
         assert_eq!(lim.next().unwrap(), None);
         lim.rewind().unwrap();
