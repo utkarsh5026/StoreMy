@@ -13,110 +13,14 @@
 //! All operators implement [`Executor`] (and therefore [`FallibleIterator`]),
 //! so they can be composed freely into a plan tree via `Box<PlanNode>`.
 
-use std::cmp::Ordering;
-
 use fallible_iterator::FallibleIterator;
 
-use super::{ExecutionError, Executor};
+use super::{ExecutionError, Executor, expression::BooleanExpression};
 use crate::{
     execution::PlanNode,
-    primitives::{self, Predicate},
+    primitives,
     tuple::{Tuple, TupleSchema},
-    types::Value,
 };
-
-/// A boolean expression that can be evaluated against a tuple.
-/// The expression is evaluated using the `eval` method.
-#[derive(Debug, Clone)]
-pub enum BooleanExpression {
-    And(Box<BooleanExpression>, Box<BooleanExpression>),
-    Or(Box<BooleanExpression>, Box<BooleanExpression>),
-    Not(Box<BooleanExpression>),
-    Leaf {
-        col_index: usize,
-        op: Predicate,
-        operand: Value,
-    },
-}
-
-impl BooleanExpression {
-    /// Evaluates the boolean expression against a tuple.
-    ///
-    /// Returns `true` if the expression is satisfied, `false` otherwise.
-    ///
-    /// # Errors
-    ///
-    /// Returns `false` if the column index is out of bounds for the tuple,
-    /// or when a `LIKE` pattern is applied to non-string values.
-    pub fn eval(&self, tuple: &Tuple) -> bool {
-        match self {
-            Self::Leaf {
-                col_index,
-                op,
-                operand,
-            } => {
-                let Some(val) = tuple.get(*col_index) else {
-                    return false;
-                };
-
-                match op {
-                    Predicate::Equals => val == operand,
-                    Predicate::NotEqual | Predicate::NotEqualBracket => val != operand,
-                    Predicate::LessThan => val.partial_cmp(operand).is_some_and(Ordering::is_lt),
-                    Predicate::LessThanOrEqual => {
-                        val.partial_cmp(operand).is_some_and(Ordering::is_le)
-                    }
-                    Predicate::GreaterThan => val.partial_cmp(operand).is_some_and(Ordering::is_gt),
-                    Predicate::GreaterThanOrEqual => {
-                        val.partial_cmp(operand).is_some_and(Ordering::is_ge)
-                    }
-                    Predicate::Like => match (val, operand) {
-                        (Value::String(s), Value::String(p)) => Self::like_match(s, p),
-                        _ => false,
-                    },
-                }
-            }
-            Self::And(left, right) => left.eval(tuple) && right.eval(tuple),
-            Self::Or(left, right) => left.eval(tuple) || right.eval(tuple),
-            Self::Not(expr) => !expr.eval(tuple),
-        }
-    }
-
-    /// Checks whether `s` matches the SQL `LIKE` pattern in `pattern`.
-    ///
-    /// Supports two wildcards:
-    /// - `%` — matches any sequence of zero or more characters.
-    /// - `_` — matches exactly one character.
-    ///
-    /// Uses a DP approach over the pattern to handle overlapping `%` spans
-    /// correctly and in O(|s| × |p|) time.
-    fn like_match(s: &str, p: &str) -> bool {
-        let s: Vec<char> = s.chars().collect();
-        let p: Vec<char> = p.chars().collect();
-        let n = s.len();
-        let m = p.len();
-        let mut dp = vec![vec![false; m + 1]; n + 1];
-        dp[0][0] = true;
-        for j in 1..=m {
-            if p[j - 1] == '%' {
-                dp[0][j] = dp[0][j - 1];
-            }
-        }
-        for i in 1..=n {
-            for j in 1..=m {
-                let pc = p[j - 1];
-                dp[i][j] = if pc == '%' {
-                    dp[i][j - 1] || dp[i - 1][j]
-                } else if pc == '_' {
-                    dp[i - 1][j - 1]
-                } else {
-                    dp[i - 1][j - 1] && s[i - 1] == pc
-                };
-            }
-        }
-        dp[n][m]
-    }
-}
 
 /// Keeps only the tuples from its child that satisfy a single column predicate.
 ///
@@ -148,7 +52,7 @@ impl FallibleIterator for Filter<'_> {
 
     fn next(&mut self) -> Result<Option<Tuple>, ExecutionError> {
         while let Some(tuple) = self.child.next()? {
-            if self.predicate.eval(&tuple) {
+            if self.predicate.eval(&tuple)? {
                 return Ok(Some(tuple));
             }
         }
@@ -431,13 +335,11 @@ mod tests {
         buffer_pool::page_store::PageStore,
         execution::{PlanNode, scan::SeqScan},
         heap::file::HeapFile,
-        primitives::ColumnId,
+        primitives::{ColumnId, Predicate},
         tuple::{Field, Tuple, TupleSchema},
         types::{Type, Value},
         wal::writer::Wal,
     };
-
-    // --- test helpers (SeqScan + heap; mirrors execution/scan.rs) ---
 
     fn scan_schema() -> TupleSchema {
         TupleSchema::new(vec![
@@ -487,204 +389,6 @@ mod tests {
         (heap, wal, dir)
     }
 
-    fn eval_like(s: &str, pattern: &str) -> bool {
-        let expr = BooleanExpression::Leaf {
-            col_index: 0,
-            op: Predicate::Like,
-            operand: Value::String(pattern.to_string()),
-        };
-        let tuple = Tuple::new(vec![Value::String(s.to_string())]);
-        expr.eval(&tuple)
-    }
-
-    #[test]
-    fn test_boolean_expression_eval_leaf_equals() {
-        let e = BooleanExpression::Leaf {
-            col_index: 0,
-            op: Predicate::Equals,
-            operand: Value::Int32(7),
-        };
-        assert!(e.eval(&Tuple::new(vec![Value::Int32(7), Value::Bool(true)])));
-        assert!(!e.eval(&Tuple::new(vec![Value::Int32(8), Value::Bool(true)])));
-    }
-
-    #[test]
-    fn test_boolean_expression_eval_leaf_ordered_preds() {
-        let tup = Tuple::new(vec![Value::Int32(5), Value::Bool(false)]);
-
-        let lt = BooleanExpression::Leaf {
-            col_index: 0,
-            op: Predicate::LessThan,
-            operand: Value::Int32(10),
-        };
-        assert!(lt.eval(&tup));
-
-        let le = BooleanExpression::Leaf {
-            col_index: 0,
-            op: Predicate::LessThanOrEqual,
-            operand: Value::Int32(5),
-        };
-        assert!(le.eval(&tup));
-
-        let gt = BooleanExpression::Leaf {
-            col_index: 0,
-            op: Predicate::GreaterThan,
-            operand: Value::Int32(1),
-        };
-        assert!(gt.eval(&tup));
-
-        let ge = BooleanExpression::Leaf {
-            col_index: 0,
-            op: Predicate::GreaterThanOrEqual,
-            operand: Value::Int32(5),
-        };
-        assert!(ge.eval(&tup));
-    }
-
-    #[test]
-    fn test_boolean_expression_eval_leaf_not_equal_and_bracket() {
-        let tup = Tuple::new(vec![Value::Int32(1), Value::Bool(true)]);
-        let ne = BooleanExpression::Leaf {
-            col_index: 0,
-            op: Predicate::NotEqual,
-            operand: Value::Int32(2),
-        };
-        let neb = BooleanExpression::Leaf {
-            col_index: 0,
-            op: Predicate::NotEqualBracket,
-            operand: Value::Int32(2),
-        };
-        assert!(ne.eval(&tup));
-        assert!(neb.eval(&tup));
-        assert!(!ne.eval(&Tuple::new(vec![Value::Int32(2), Value::Bool(true)])));
-    }
-
-    #[test]
-    fn test_boolean_expression_eval_and_or_not() {
-        let t = Tuple::new(vec![Value::Bool(true), Value::Bool(false)]);
-
-        let a = BooleanExpression::Leaf {
-            col_index: 0,
-            op: Predicate::Equals,
-            operand: Value::Bool(true),
-        };
-        let b = BooleanExpression::Leaf {
-            col_index: 1,
-            op: Predicate::Equals,
-            operand: Value::Bool(false),
-        };
-
-        assert!(BooleanExpression::And(Box::new(a.clone()), Box::new(b.clone())).eval(&t));
-        assert!(
-            !BooleanExpression::And(Box::new(a.clone()), Box::new(b.clone()))
-                .eval(&Tuple::new(vec![Value::Bool(true), Value::Bool(true)]))
-        );
-
-        assert!(BooleanExpression::Or(Box::new(b.clone()), Box::new(a.clone())).eval(&t));
-        assert!(
-            BooleanExpression::Or(Box::new(a.clone()), Box::new(b.clone()))
-                .eval(&Tuple::new(vec![Value::Bool(false), Value::Bool(false)]))
-        );
-
-        assert!(!BooleanExpression::Not(Box::new(a.clone())).eval(&t));
-
-        let col0_false = BooleanExpression::Leaf {
-            col_index: 0,
-            op: Predicate::Equals,
-            operand: Value::Bool(false),
-        };
-        assert!(BooleanExpression::Not(Box::new(col0_false)).eval(&t));
-    }
-
-    // --- edge cases: BooleanExpression::eval ---
-
-    #[test]
-    fn test_boolean_expression_eval_leaf_column_out_of_bounds_returns_false() {
-        let e = BooleanExpression::Leaf {
-            col_index: 99,
-            op: Predicate::Equals,
-            operand: Value::Int32(0),
-        };
-        assert!(!e.eval(&Tuple::new(vec![Value::Int32(0)])));
-    }
-
-    #[test]
-    fn test_boolean_expression_eval_leaf_like_non_string_returns_false() {
-        let e = BooleanExpression::Leaf {
-            col_index: 0,
-            op: Predicate::Like,
-            operand: Value::String("%".to_string()),
-        };
-        assert!(!e.eval(&Tuple::new(vec![Value::Int32(1)])));
-    }
-
-    #[test]
-    fn test_boolean_expression_eval_ordered_pred_incomparable_returns_false() {
-        let cross = BooleanExpression::Leaf {
-            col_index: 0,
-            op: Predicate::LessThan,
-            operand: Value::Int64(100),
-        };
-        assert!(!cross.eval(&Tuple::new(vec![Value::Int32(1)])));
-
-        let nan_cmp = BooleanExpression::Leaf {
-            col_index: 0,
-            op: Predicate::LessThan,
-            operand: Value::Float64(0.0),
-        };
-        assert!(!nan_cmp.eval(&Tuple::new(vec![Value::Float64(f64::NAN)])));
-    }
-
-    // --- happy path: LIKE via eval ---
-
-    #[test]
-    fn test_boolean_expression_eval_like_exact_and_percent() {
-        assert!(eval_like("hello", "hello"));
-        assert!(eval_like("hello", "h%o"));
-        assert!(eval_like("hello", "%ello"));
-        assert!(eval_like("hello", "hel%"));
-        assert!(eval_like("hello", "%ell%"));
-        assert!(!eval_like("hello", "h%xo"));
-    }
-
-    #[test]
-    fn test_boolean_expression_eval_like_underscore() {
-        assert!(eval_like("a", "_"));
-        assert!(eval_like("ab", "__"));
-        assert!(eval_like("axb", "a_b"));
-        assert!(!eval_like("ab", "___"));
-        assert!(!eval_like("", "_"));
-    }
-
-    #[test]
-    fn test_boolean_expression_eval_like_empty_string_patterns() {
-        assert!(eval_like("", ""));
-        assert!(eval_like("", "%"));
-        assert!(eval_like("", "%%"));
-        assert!(!eval_like("", "_"));
-    }
-
-    #[test]
-    fn test_boolean_expression_eval_like_consecutive_percent() {
-        assert!(eval_like("abc", "a%%bc"));
-        assert!(eval_like("x", "%_%"));
-    }
-
-    #[test]
-    fn test_boolean_expression_eval_like_pattern_longer_than_string() {
-        assert!(!eval_like("hi", "hello"));
-        assert!(!eval_like("a", "__"));
-    }
-
-    #[test]
-    fn test_boolean_expression_eval_like_unicode_scalar() {
-        assert!(eval_like("café", "caf_"));
-        assert!(eval_like("café", "%é"));
-        assert!(!eval_like("caf", "caf_"));
-    }
-
-    // --- happy path: operators + SeqScan ---
-
     #[test]
     fn test_filter_next_yields_matching_tuples_only() {
         let (heap, wal, _dir) = make_registered_heap_file(0);
@@ -693,11 +397,7 @@ mod tests {
         heap.insert_tuple(txn, &make_scan_tuple(2, false)).unwrap();
         heap.insert_tuple(txn, &make_scan_tuple(3, true)).unwrap();
 
-        let pred = BooleanExpression::Leaf {
-            col_index: 1,
-            op: Predicate::Equals,
-            operand: Value::Bool(true),
-        };
+        let pred = BooleanExpression::col_op_lit(1, Predicate::Equals, Value::Bool(true));
         let mut filter = Filter::new(Box::new(PlanNode::SeqScan(SeqScan::new(&heap, txn))), pred);
 
         let mut out = Vec::new();
@@ -818,11 +518,7 @@ mod tests {
         let txn = begin_txn(&wal, 1);
         let mut filter = Filter::new(
             Box::new(PlanNode::SeqScan(SeqScan::new(&heap, txn))),
-            BooleanExpression::Leaf {
-                col_index: 0,
-                op: Predicate::Equals,
-                operand: Value::Int32(0),
-            },
+            BooleanExpression::col_op_lit(0, Predicate::Equals, Value::Int32(0)),
         );
         assert_eq!(filter.next().unwrap(), None);
     }
@@ -880,11 +576,7 @@ mod tests {
 
         let mut filter = Filter::new(
             Box::new(PlanNode::SeqScan(SeqScan::new(&heap, txn))),
-            BooleanExpression::Leaf {
-                col_index: 0,
-                op: Predicate::Equals,
-                operand: Value::Int32(7),
-            },
+            BooleanExpression::col_op_lit(0, Predicate::Equals, Value::Int32(7)),
         );
         assert_eq!(filter.next().unwrap(), Some(make_scan_tuple(7, true)));
         filter.rewind().unwrap();
