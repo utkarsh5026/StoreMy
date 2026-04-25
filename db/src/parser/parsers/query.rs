@@ -2,8 +2,8 @@ use super::ParserError;
 use crate::parser::{
     Parser,
     statements::{
-        AggFunc, ColumnRef, Join, JoinKind, OrderBy, OrderDirection, SelectColumns, SelectExpr,
-        SelectStatement, TableRef, TableWithJoins,
+        AggFunc, ColumnRef, Join, JoinKind, LimitClause, OrderBy, OrderDirection, SelectColumns,
+        SelectExpr, SelectItem, SelectStatement, TableRef, TableWithJoins,
     },
     token::TokenType,
 };
@@ -45,10 +45,9 @@ impl Parser {
 
         let from = self.parse_tables()?;
         let where_clause = self.on_peek_token(TokenType::Where, Parser::parse_where)?;
-
         let group_by = self.parse_group_by()?;
         let order_by = self.parse_order_by()?;
-        let limit_offset = self.parse_limit_offset()?;
+        let limit = self.parse_limit_offset()?;
 
         Ok(SelectStatement {
             distinct,
@@ -58,7 +57,7 @@ impl Parser {
             having: None,
             group_by,
             order_by,
-            limit_offset,
+            limit,
         })
     }
 
@@ -108,38 +107,65 @@ impl Parser {
     /// Returns [`ParserError`] if a projection is missing or invalid, commas
     /// or the terminating `FROM` are wrong, parentheses or `COUNT(*)` are
     /// malformed, or the aggregate name is not recognized.
-    fn parse_select_list(&mut self) -> Result<Vec<SelectExpr>, ParserError> {
-        let parse_select_expr = |p: &mut Parser| -> Result<SelectExpr, ParserError> {
-            let name_tok = p.expect(TokenType::Identifier)?;
-            let name = name_tok.value.to_uppercase();
-
-            if p.if_peek_then_consume(TokenType::Lparen)? {
-                if name == "COUNT" && p.if_peek_then_consume(TokenType::Asterisk)? {
-                    p.expect(TokenType::Rparen)?;
-                    return Ok(SelectExpr::CountStar);
-                }
-
-                let agg = AggFunc::try_from(name.as_str()).map_err(ParserError::ParsingError)?;
-                let col_tok = p.expect(TokenType::Identifier)?;
-                p.expect(TokenType::Rparen)?;
-                Ok(SelectExpr::Agg(agg, col_tok.value))
-            } else {
-                let cref = if p.if_peek_then_consume(TokenType::Dot)? {
-                    ColumnRef {
-                        qualifier: Some(name_tok.value),
-                        name: p.expect(TokenType::Identifier)?.value,
-                    }
+    fn parse_select_list(&mut self) -> Result<Vec<SelectItem>, ParserError> {
+        let parse_select_item = |p: &mut Parser| -> Result<SelectItem, ParserError> {
+            let expr = Self::parse_projection_expr(p)?;
+            let alias =
+                if p.if_peek_then_consume(TokenType::As)? || p.peek_is(TokenType::Identifier)? {
+                    let tok = p.expect(TokenType::Identifier)?;
+                    Some(tok.value)
                 } else {
-                    ColumnRef {
-                        qualifier: None,
-                        name: name_tok.value,
-                    }
+                    None
                 };
-                Ok(SelectExpr::Column(cref))
-            }
+            Ok(SelectItem { expr, alias })
         };
+        self.parse_delimited_list(TokenType::Comma, TokenType::From, parse_select_item)
+    }
 
-        self.parse_delimited_list(TokenType::Comma, TokenType::From, parse_select_expr)
+    /// Parses the expression part of one `SELECT` projection item.
+    ///
+    /// Supported forms are:
+    /// - `<column>`
+    /// - `<table>.<column>`
+    /// - `COUNT(*)`
+    /// - `<AGG>(<column>)` where `<AGG>` is parsed through [`AggFunc`]
+    ///
+    /// This helper only parses the projection expression itself. Any optional
+    /// alias (`AS name` or implicit alias) is handled by [`Self::parse_select_list`].
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ParserError`] when the leading identifier is missing, when
+    /// aggregate-call syntax is malformed (missing argument or `)`), or when
+    /// a function-like name is not a recognized aggregate.
+    fn parse_projection_expr(p: &mut Parser) -> Result<SelectExpr, ParserError> {
+        let name_tok = p.expect(TokenType::Identifier)?;
+        let name = name_tok.value.to_uppercase();
+
+        if p.if_peek_then_consume(TokenType::Lparen)? {
+            if name == "COUNT" && p.if_peek_then_consume(TokenType::Asterisk)? {
+                p.expect(TokenType::Rparen)?;
+                return Ok(SelectExpr::CountStar);
+            }
+
+            let agg = AggFunc::try_from(name.as_str()).map_err(ParserError::ParsingError)?;
+            let col_tok = p.expect(TokenType::Identifier)?;
+            p.expect(TokenType::Rparen)?;
+            Ok(SelectExpr::Agg(agg, col_tok.value))
+        } else {
+            let cref = if p.if_peek_then_consume(TokenType::Dot)? {
+                ColumnRef {
+                    qualifier: Some(name_tok.value),
+                    name: p.expect(TokenType::Identifier)?.value,
+                }
+            } else {
+                ColumnRef {
+                    qualifier: None,
+                    name: name_tok.value,
+                }
+            };
+            Ok(SelectExpr::Column(cref))
+        }
     }
 
     /// Parses an optional `ORDER BY` clause when `ORDER` is the next token.
@@ -193,25 +219,23 @@ impl Parser {
         Ok(group_by)
     }
 
-    /// Parses an optional `LIMIT` / `OFFSET` tail when `LIMIT` is the next token.
+    /// Parses an optional `LIMIT` / `OFFSET` tail.
     ///
-    /// Expects `LIMIT` followed by a non-negative integer literal, then
-    /// optionally `OFFSET` and another integer.  If `OFFSET` is omitted, the
-    /// offset is `0`.  On success returns [`Some`] `(limit, offset)`.
+    /// Three accepted forms:
+    /// - `LIMIT n`              → `LimitClause { limit: Some(n), offset: 0 }`
+    /// - `LIMIT n OFFSET m`     → `LimitClause { limit: Some(n), offset: m }`
+    /// - `OFFSET m`             → `LimitClause { limit: None,    offset: m }`
     ///
-    /// If the next token is not `LIMIT`, returns [`None`] without consuming
-    /// input.
+    /// If neither keyword is the next token, returns [`None`] without
+    /// consuming input. Note that `LIMIT 0` (return zero rows) is a distinct
+    /// state from "no limit" — the AST encodes the difference via
+    /// `Option<u64>` so the executor cannot conflate them.
     ///
     /// # Errors
     ///
-    /// Returns [`ParserError`] when `LIMIT` is present but the limit value is
-    /// not an [`TokenType::Int`] or does not fit in `u64`, or when `OFFSET` is
-    /// present but its value is invalid for the same reasons.
-    fn parse_limit_offset(&mut self) -> Result<Option<(u64, u64)>, ParserError> {
-        if !self.peek_is(TokenType::Limit)? {
-            return Ok(None);
-        }
-
+    /// Returns [`ParserError`] when a numeric value following `LIMIT` or
+    /// `OFFSET` is not an [`TokenType::Int`] or does not fit in `u64`.
+    fn parse_limit_offset(&mut self) -> Result<Option<LimitClause>, ParserError> {
         let parse_int = |name: &str, p: &mut Parser| {
             p.expect(TokenType::Int)?.value.parse::<u64>().map_err(|e| {
                 ParserError::ParsingError(format!(
@@ -220,15 +244,26 @@ impl Parser {
             })
         };
 
-        self.on_peek_token(TokenType::Limit, |p| {
-            let limit = parse_int("limit", p)?;
-
-            let offset = p
+        if self.if_peek_then_consume(TokenType::Limit)? {
+            let limit = parse_int("limit", self)?;
+            let offset = self
                 .on_peek_token(TokenType::Offset, |p| parse_int("offset", p))?
                 .unwrap_or(0);
+            return Ok(Some(LimitClause {
+                limit: Some(limit),
+                offset,
+            }));
+        }
 
-            Ok((limit, offset))
-        })
+        if self.if_peek_then_consume(TokenType::Offset)? {
+            let offset = parse_int("offset", self)?;
+            return Ok(Some(LimitClause {
+                limit: None,
+                offset,
+            }));
+        }
+
+        Ok(None)
     }
 
     /// Parses zero or more JOIN clauses following a `FROM` target.
@@ -283,8 +318,8 @@ mod tests {
             Parser,
             parsers::ParserError,
             statements::{
-                AggFunc, ColumnRef, JoinKind, OrderBy, OrderDirection, SelectColumns, SelectExpr,
-                SelectStatement, Statement, WhereCondition,
+                AggFunc, ColumnRef, JoinKind, LimitClause, OrderBy, OrderDirection, SelectColumns,
+                SelectExpr, SelectItem, SelectStatement, Statement, WhereCondition,
             },
         },
         primitives::Predicate,
@@ -316,7 +351,7 @@ mod tests {
         assert!(s.where_clause.is_none());
         assert!(s.group_by.is_empty());
         assert!(s.order_by.is_none());
-        assert_eq!(s.limit_offset, None);
+        assert_eq!(s.limit, None);
         assert!(s.having.is_none());
     }
 
@@ -333,7 +368,7 @@ mod tests {
         let s = select("SELECT id FROM orders").unwrap();
         match &s.columns {
             SelectColumns::Exprs(v) => {
-                assert_eq!(v, &vec![SelectExpr::Column("id".into())]);
+                assert_eq!(v, &vec![SelectItem::bare(SelectExpr::Column("id".into()))]);
             }
             SelectColumns::All => panic!("expected Exprs, got All"),
         }
@@ -346,9 +381,9 @@ mod tests {
             panic!("expected Exprs");
         };
         assert_eq!(v, &vec![
-            SelectExpr::Column("a".into()),
-            SelectExpr::Column("b".into()),
-            SelectExpr::Column("c".into()),
+            SelectItem::bare(SelectExpr::Column("a".into())),
+            SelectItem::bare(SelectExpr::Column("b".into())),
+            SelectItem::bare(SelectExpr::Column("c".into())),
         ]);
     }
 
@@ -358,7 +393,7 @@ mod tests {
         let SelectColumns::Exprs(v) = &s.columns else {
             panic!("expected Exprs");
         };
-        assert_eq!(v, &vec![SelectExpr::CountStar]);
+        assert_eq!(v, &vec![SelectItem::bare(SelectExpr::CountStar)]);
     }
 
     #[test]
@@ -367,7 +402,10 @@ mod tests {
         let SelectColumns::Exprs(v) = &s.columns else {
             panic!("expected Exprs");
         };
-        assert_eq!(v, &vec![SelectExpr::Agg(AggFunc::Count, "user_id".into())]);
+        assert_eq!(v, &vec![SelectItem::bare(SelectExpr::Agg(
+            AggFunc::Count,
+            "user_id".into()
+        ))]);
     }
 
     #[test]
@@ -376,7 +414,10 @@ mod tests {
         let SelectColumns::Exprs(v) = &s.columns else {
             panic!("expected Exprs");
         };
-        assert_eq!(v, &vec![SelectExpr::Agg(AggFunc::Sum, "amount".into())]);
+        assert_eq!(v, &vec![SelectItem::bare(SelectExpr::Agg(
+            AggFunc::Sum,
+            "amount".into()
+        ))]);
     }
 
     #[test]
@@ -387,10 +428,11 @@ mod tests {
             panic!("expected Exprs");
         };
         assert_eq!(v.len(), 4);
-        assert_eq!(v[0], SelectExpr::Agg(AggFunc::Sum, "x".into()));
-        assert_eq!(v[1], SelectExpr::Agg(AggFunc::Avg, "x".into()));
-        assert_eq!(v[2], SelectExpr::Agg(AggFunc::Min, "x".into()));
-        assert_eq!(v[3], SelectExpr::Agg(AggFunc::Max, "x".into()));
+        assert_eq!(v[0].expr, SelectExpr::Agg(AggFunc::Sum, "x".into()));
+        assert_eq!(v[1].expr, SelectExpr::Agg(AggFunc::Avg, "x".into()));
+        assert_eq!(v[2].expr, SelectExpr::Agg(AggFunc::Min, "x".into()));
+        assert_eq!(v[3].expr, SelectExpr::Agg(AggFunc::Max, "x".into()));
+        assert!(v.iter().all(|item| item.alias.is_none()));
     }
 
     #[test]
@@ -548,13 +590,25 @@ mod tests {
     #[test]
     fn test_parse_select_limit_only() {
         let s = select("SELECT * FROM t LIMIT 10").unwrap();
-        assert_eq!(s.limit_offset, Some((10, 0)));
+        assert_eq!(
+            s.limit,
+            Some(LimitClause {
+                limit: Some(10),
+                offset: 0
+            })
+        );
     }
 
     #[test]
     fn test_parse_select_limit_with_offset() {
         let s = select("SELECT * FROM t LIMIT 5 OFFSET 2").unwrap();
-        assert_eq!(s.limit_offset, Some((5, 2)));
+        assert_eq!(
+            s.limit,
+            Some(LimitClause {
+                limit: Some(5),
+                offset: 2
+            })
+        );
     }
 
     #[test]
@@ -572,7 +626,13 @@ mod tests {
         };
         assert_eq!(col, &ColumnRef::from("x"));
         assert_eq!(*dir, OrderDirection::Desc);
-        assert_eq!(s.limit_offset, Some((3, 1)));
+        assert_eq!(
+            s.limit,
+            Some(LimitClause {
+                limit: Some(3),
+                offset: 1
+            })
+        );
     }
 
     #[test]
@@ -582,7 +642,9 @@ mod tests {
         let SelectColumns::Exprs(v) = &s.columns else {
             panic!("expected Exprs");
         };
-        assert_eq!(v, &vec![SelectExpr::Column("count".into())]);
+        assert_eq!(v, &vec![SelectItem::bare(SelectExpr::Column(
+            "count".into()
+        ))]);
     }
 
     #[test]
@@ -608,7 +670,9 @@ mod tests {
 
     #[test]
     fn test_parse_select_projection_list_bad_delimiter() {
-        assert!(select("SELECT a b FROM t").is_err());
+        // `SELECT a b FROM t` is now valid (implicit alias), so test with a
+        // non-identifier token that can't be an alias.
+        assert!(select("SELECT a 1 FROM t").is_err());
     }
 
     #[test]
@@ -627,6 +691,43 @@ mod tests {
     }
 
     #[test]
+    fn test_parse_select_offset_only() {
+        let s = select("SELECT * FROM t OFFSET 5").unwrap();
+        assert_eq!(
+            s.limit,
+            Some(LimitClause {
+                limit: None,
+                offset: 5
+            })
+        );
+    }
+
+    #[test]
+    fn test_parse_select_limit_zero_distinct_from_no_limit() {
+        // `LIMIT 0` (return zero rows) must be representable separately from
+        // "no limit at all." The AST encodes the difference via Option<u64>.
+        let zero = select("SELECT * FROM t LIMIT 0").unwrap();
+        assert_eq!(
+            zero.limit,
+            Some(LimitClause {
+                limit: Some(0),
+                offset: 0
+            })
+        );
+
+        let none = select("SELECT * FROM t").unwrap();
+        assert_eq!(none.limit, None);
+
+        let offset_only = select("SELECT * FROM t OFFSET 3").unwrap();
+        assert!(offset_only.limit.unwrap().limit.is_none());
+    }
+
+    #[test]
+    fn test_parse_select_offset_requires_integer() {
+        assert!(select("SELECT * FROM t OFFSET foo").is_err());
+    }
+
+    #[test]
     fn test_parse_select_malformed_count_star_missing_paren() {
         assert!(select("SELECT COUNT(* FROM t").is_err());
     }
@@ -634,5 +735,90 @@ mod tests {
     #[test]
     fn test_parse_select_join_missing_on() {
         assert!(select("SELECT * FROM a JOIN b").is_err());
+    }
+
+    #[test]
+    fn test_parse_select_alias_with_as() {
+        let s = select("SELECT a AS x FROM t").unwrap();
+        let SelectColumns::Exprs(v) = &s.columns else {
+            panic!("expected Exprs");
+        };
+        assert_eq!(v[0].expr, SelectExpr::Column("a".into()));
+        assert_eq!(v[0].alias.as_deref(), Some("x"));
+    }
+
+    #[test]
+    fn test_parse_select_alias_without_as() {
+        let s = select("SELECT a x FROM t").unwrap();
+        let SelectColumns::Exprs(v) = &s.columns else {
+            panic!("expected Exprs");
+        };
+        assert_eq!(v[0].expr, SelectExpr::Column("a".into()));
+        assert_eq!(v[0].alias.as_deref(), Some("x"));
+    }
+
+    #[test]
+    fn test_parse_select_alias_on_aggregate() {
+        let s = select("SELECT SUM(amt) AS total FROM t").unwrap();
+        let SelectColumns::Exprs(v) = &s.columns else {
+            panic!("expected Exprs");
+        };
+        assert_eq!(v[0].expr, SelectExpr::Agg(AggFunc::Sum, "amt".into()));
+        assert_eq!(v[0].alias.as_deref(), Some("total"));
+    }
+
+    #[test]
+    fn test_parse_select_alias_on_count_star() {
+        let s = select("SELECT COUNT(*) AS n FROM t").unwrap();
+        let SelectColumns::Exprs(v) = &s.columns else {
+            panic!("expected Exprs");
+        };
+        assert_eq!(v[0].expr, SelectExpr::CountStar);
+        assert_eq!(v[0].alias.as_deref(), Some("n"));
+    }
+
+    #[test]
+    fn test_parse_select_alias_on_qualified_column() {
+        let s = select("SELECT u.name AS who FROM users u").unwrap();
+        let SelectColumns::Exprs(v) = &s.columns else {
+            panic!("expected Exprs");
+        };
+        assert_eq!(
+            v[0].expr,
+            SelectExpr::Column(ColumnRef {
+                qualifier: Some("u".into()),
+                name: "name".into()
+            })
+        );
+        assert_eq!(v[0].alias.as_deref(), Some("who"));
+    }
+
+    #[test]
+    fn test_parse_select_mixed_aliased_and_bare() {
+        let s = select("SELECT a, b AS bb, c cc FROM t").unwrap();
+        let SelectColumns::Exprs(v) = &s.columns else {
+            panic!("expected Exprs");
+        };
+        assert_eq!(v.len(), 3);
+        assert!(v[0].alias.is_none());
+        assert_eq!(v[1].alias.as_deref(), Some("bb"));
+        assert_eq!(v[2].alias.as_deref(), Some("cc"));
+    }
+
+    #[test]
+    fn test_parse_select_as_without_alias_errors() {
+        assert!(select("SELECT a AS FROM t").is_err());
+    }
+
+    #[test]
+    fn test_parse_select_alias_does_not_swallow_keyword() {
+        // 'WHERE' is a reserved keyword, not an Identifier, so it must not be
+        // consumed as an alias for `a`.
+        let s = select("SELECT a FROM t WHERE a = 1").unwrap();
+        let SelectColumns::Exprs(v) = &s.columns else {
+            panic!("expected Exprs");
+        };
+        assert!(v[0].alias.is_none());
+        assert!(s.where_clause.is_some());
     }
 }
