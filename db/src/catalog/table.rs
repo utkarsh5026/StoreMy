@@ -52,6 +52,25 @@ impl Catalog {
         self.user_tables.read().contains_key(name)
     }
 
+    /// Returns metadata for every user table currently registered in the catalog.
+    ///
+    /// Scans the `Tables` system table inside `txn` (system tables themselves
+    /// are not recorded there, so the result excludes them by construction)
+    /// and resolves each row through [`get_table_info`], which warms the
+    /// in-memory cache as a side effect.
+    ///
+    /// The returned vector is sorted by table name for stable, user-friendly
+    /// listings — `\dt` and similar tools rely on a deterministic order.
+    pub fn list_tables(&self, txn: &Transaction<'_>) -> Result<Vec<TableInfo>, CatalogError> {
+        let rows = self.scan_system_table::<TableRow>(txn, SystemTable::Tables)?;
+        let mut out = Vec::with_capacity(rows.len());
+        for row in rows {
+            out.push(self.get_table_info(txn, &row.table_name)?);
+        }
+        out.sort_by(|a, b| a.name.cmp(&b.name));
+        Ok(out)
+    }
+
     /// Returns the [`HeapFile`] for a table identified by its `file_id`.
     ///
     /// # Errors
