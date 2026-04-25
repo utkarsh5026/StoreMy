@@ -1,12 +1,70 @@
-//! SQL statement AST types produced by the parser.
+//! SQL statement AST — the unbound shape of every command the parser accepts.
 //!
-//! Each variant of [`Statement`] maps to one SQL command (e.g. `CREATE TABLE`,
-//! `SELECT`, `INSERT`). The parser converts raw tokens into these structs, and
-//! downstream execution code pattern-matches on them to drive query planning
-//! and execution.
+//! These types are the bridge between the lexer/parser and the rest of the
+//! database. The parser tokenises a SQL string and constructs one of the
+//! [`Statement`] variants here; the binder then resolves names against the
+//! catalog and lowers the AST into something the executor can run. Nothing in
+//! this module touches the catalog, the buffer pool, or the executor — every
+//! field is a raw, unresolved fragment of SQL syntax.
 //!
-//! Every statement type implements [`Display`] so it can be pretty-printed back
-//! into a SQL-like string, which is useful for logging and debugging.
+//! Every statement type implements [`Display`] and round-trips back into a
+//! SQL-like string, which is the format used in tracing, error messages, and
+//! debug logs.
+//!
+//! # SQL coverage
+//!
+//! The covered surface, by clause:
+//!
+//! - DDL — `CREATE TABLE`, `DROP TABLE`, `CREATE INDEX`, `DROP INDEX`, `SHOW INDEXES`.
+//! - DML — `INSERT … VALUES`, `UPDATE … SET … WHERE`, `DELETE FROM … WHERE`.
+//! - Queries — `SELECT [DISTINCT] … FROM … [JOIN …] [WHERE …] [GROUP BY …] [HAVING …] [ORDER BY …]
+//!   [LIMIT n [OFFSET m]]`.
+//!
+//! Aggregates supported in `SELECT`: `COUNT(*)`, `COUNT(col)`, `SUM`, `AVG`,
+//! `MIN`, `MAX`. `WHERE`/`HAVING` predicates are conjunctions/disjunctions of
+//! `<column> <op> <literal>` leaves; `IS NULL` / `BETWEEN` / subqueries are not
+//! modeled at this layer.
+//!
+//! # Shape
+//!
+//! - [`Statement`] — top-level dispatch enum, one variant per SQL command.
+//! - [`ColumnRef`] — possibly-qualified column reference (`t.c` or `c`), shared by every clause
+//!   that names a column.
+//! - [`WhereCondition`] — predicate tree used by `WHERE`, `HAVING`, and `JOIN … ON`.
+//! - [`AggFunc`] — aggregate function tag used by [`SelectExpr::Agg`].
+//! - DDL: [`CreateTableStatement`], [`DropStatement`], [`CreateIndexStatement`],
+//!   [`DropIndexStatement`], [`ShowIndexesStatement`], [`ColumnDef`].
+//! - DML: [`InsertStatement`], [`UpdateStatement`] (with [`Assignment`]), [`DeleteStatement`].
+//! - Query: [`SelectStatement`], [`SelectColumns`], [`SelectItem`], [`SelectExpr`],
+//!   [`TableWithJoins`], [`TableRef`], [`Join`], [`JoinKind`], [`OrderBy`], [`OrderDirection`],
+//!   [`LimitClause`].
+//!
+//! # Fixed schema for examples
+//!
+//! Throughout the docs in this module, examples use:
+//!
+//! ```sql
+//! CREATE TABLE users  (id INT PRIMARY KEY, name VARCHAR, age INT);
+//! CREATE TABLE orders (order_id INT PRIMARY KEY, user_id INT, total INT);
+//! ```
+//!
+//! Column indices after binding are `users(id → 0, name → 1, age → 2)` and
+//! `orders(order_id → 0, user_id → 1, total → 2)`.
+//!
+//! # NULL semantics
+//!
+//! The AST itself is value-neutral — `NULL` literals are stored as
+//! [`Value::Null`](crate::types::Value::Null). Three-valued logic in `WHERE` is
+//! the executor's concern; see [`crate::execution::expression`] for how
+//! predicates collapse `NULL` to `false`.
+//!
+//! # File layout
+//!
+//! 1. **Top-level dispatch** — the [`Statement`] enum and its factories.
+//! 2. **Shared AST primitives** — [`ColumnRef`], [`WhereCondition`], [`AggFunc`].
+//! 3. **DDL** — `CREATE` / `DROP` / `SHOW` statements.
+//! 4. **DML** — `INSERT` / `UPDATE` / `DELETE` statements.
+//! 5. **SELECT** — projection, `FROM`, joins, `ORDER BY`, `LIMIT`, and [`SelectStatement`] itself.
 
 use std::fmt::Display;
 
@@ -17,11 +75,42 @@ use crate::{
     types::Value,
 };
 
-/// Top-level SQL statement returned by the parser.
+/// Top-level SQL statement returned by the parser — one variant per command.
 ///
 /// Each variant wraps a dedicated struct that holds the parsed clause data.
 /// Factory methods on `Statement` are `pub(super)` so only the parser module
 /// can construct them, keeping AST creation private.
+///
+/// # SQL → variant mapping
+///
+/// ```sql
+/// -- CREATE TABLE users (id INT PRIMARY KEY, name VARCHAR, age INT);
+/// --   Statement::CreateTable(CreateTableStatement { … })
+///
+/// -- DROP TABLE IF EXISTS users;
+/// --   Statement::Drop(DropStatement { table_name: "users", if_exists: true })
+///
+/// -- CREATE INDEX idx_age ON users(age) USING BTREE;
+/// --   Statement::CreateIndex(CreateIndexStatement { … })
+///
+/// -- DROP INDEX idx_age ON users;
+/// --   Statement::DropIndex(DropIndexStatement { … })
+///
+/// -- SHOW INDEXES FROM users;
+/// --   Statement::ShowIndexes(ShowIndexesStatement(Some("users")))
+///
+/// -- INSERT INTO users (id, name, age) VALUES (1, 'a', 30);
+/// --   Statement::Insert(InsertStatement { … })
+///
+/// -- UPDATE users SET age = 31 WHERE id = 1;
+/// --   Statement::Update(UpdateStatement { … })
+///
+/// -- DELETE FROM users WHERE age < 18;
+/// --   Statement::Delete(DeleteStatement { … })
+///
+/// -- SELECT name FROM users WHERE age >= 18;
+/// --   Statement::Select(SelectStatement { … })
+/// ```
 pub enum Statement {
     Drop(DropStatement),
     CreateTable(CreateTableStatement),
@@ -80,8 +169,23 @@ impl Display for Statement {
     }
 }
 
-/// Builds a statement from its components.
 impl Statement {
+    /// Short, stable identifier for the variant — used in tracing spans and
+    /// metrics where the full `Display` form would be too noisy.
+    pub fn kind_name(&self) -> &'static str {
+        match self {
+            Statement::Drop(_) => "Drop",
+            Statement::CreateTable(_) => "CreateTable",
+            Statement::CreateIndex(_) => "CreateIndex",
+            Statement::DropIndex(_) => "DropIndex",
+            Statement::Delete(_) => "Delete",
+            Statement::Insert(_) => "Insert",
+            Statement::Update(_) => "Update",
+            Statement::Select(_) => "Select",
+            Statement::ShowIndexes(_) => "ShowIndexes",
+        }
+    }
+
     pub(super) fn drop(table_name: impl Into<String>, if_exists: bool) -> DropStatement {
         DropStatement {
             table_name: table_name.into(),
@@ -172,7 +276,214 @@ impl Statement {
     }
 }
 
-/// Parsed `DROP TABLE [IF EXISTS] <name>` statement.
+/// A column reference — `col` or `qualifier.col`.
+///
+/// Used everywhere a column name appears in SQL: `SELECT` projections,
+/// `WHERE` / `HAVING` predicates, `ORDER BY`, `GROUP BY`, and `JOIN … ON`. The
+/// `qualifier` is whatever literal token preceded the dot — it might be a
+/// table name (`users.age`) or an alias (`u.age`); this struct does not
+/// distinguish them. The binder is responsible for resolving the qualifier
+/// against the active scope.
+///
+/// # SQL examples
+///
+/// ```sql
+/// -- SELECT name FROM users
+/// --   ColumnRef { qualifier: None,            name: "name" }
+///
+/// -- SELECT u.age FROM users u
+/// --   ColumnRef { qualifier: Some("u"),       name: "age" }
+///
+/// -- ORDER BY users.id
+/// --   ColumnRef { qualifier: Some("users"),   name: "id" }
+///
+/// -- ON users.id = orders.user_id
+/// --   left  = ColumnRef { qualifier: Some("users"),  name: "id" }
+/// --   right = ColumnRef { qualifier: Some("orders"), name: "user_id" }
+/// ```
+#[derive(Debug, Clone, PartialEq)]
+pub struct ColumnRef {
+    pub qualifier: Option<String>, // table name or alias
+    pub name: String,
+}
+
+impl From<&str> for ColumnRef {
+    fn from(s: &str) -> Self {
+        let parts = s.split('.').collect::<Vec<&str>>();
+        if parts.len() == 1 {
+            return Self {
+                qualifier: None,
+                name: parts[0].to_string(),
+            };
+        }
+        Self {
+            qualifier: Some(parts[0].to_string()),
+            name: parts[1].to_string(),
+        }
+    }
+}
+
+impl Display for ColumnRef {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        if let Some(qualifier) = &self.qualifier {
+            write!(f, "{qualifier}.")?;
+        }
+        write!(f, "{}", self.name)
+    }
+}
+
+/// A `WHERE` / `HAVING` / `JOIN ON` predicate tree.
+///
+/// Leaves are `<column> <op> <literal>` comparisons; interior nodes combine
+/// children with `AND` / `OR`. The parser respects standard SQL precedence —
+/// `AND` binds tighter than `OR` — so `a OR b AND c` parses as
+/// `Or(a, And(b, c))`.
+///
+/// Only column-vs-literal leaves are produced at parse time. Column-vs-column
+/// comparisons (used by join residuals) are introduced later by the binder
+/// when it lowers `JOIN … ON` clauses to executor expressions.
+///
+/// # SQL examples
+///
+/// ```sql
+/// -- WHERE age = 30
+/// --   WhereCondition::Predicate {
+/// --       field: ColumnRef { qualifier: None, name: "age" },
+/// --       op:    Predicate::Equals,
+/// --       value: Value::Int32(30),
+/// --   }
+///
+/// -- WHERE age >= 18 AND name = 'alice'
+/// --   And(
+/// --       Predicate { field: age, op: GreaterThanOrEqual, value: Int32(18)   },
+/// --       Predicate { field: name, op: Equals,            value: String("alice") },
+/// --   )
+///
+/// -- WHERE age < 18 OR age > 65
+/// --   Or(
+/// --       Predicate { field: age, op: LessThan,    value: Int32(18) },
+/// --       Predicate { field: age, op: GreaterThan, value: Int32(65) },
+/// --   )
+///
+/// -- ON users.id = orders.user_id      (post-bind, this becomes the join residual)
+/// --   Predicate { field: ColumnRef { qualifier: Some("users"), name: "id" },
+/// --               op: Predicate::Equals,
+/// --               value: <bound to orders.user_id by the binder> }
+/// ```
+#[derive(Debug, Clone, PartialEq)]
+pub enum WhereCondition {
+    Predicate {
+        field: ColumnRef,
+        op: Predicate,
+        value: Value,
+    },
+    And(Box<WhereCondition>, Box<WhereCondition>),
+    Or(Box<WhereCondition>, Box<WhereCondition>),
+}
+
+impl WhereCondition {
+    /// Builds a single `<column> <op> <literal>` leaf.
+    ///
+    /// ```sql
+    /// -- WHERE age = 30
+    /// --   WhereCondition::predicate("age".into(), Predicate::Equals, Value::Int32(30))
+    ///
+    /// -- WHERE name <> 'guest'
+    /// --   WhereCondition::predicate("name".into(), Predicate::NotEqual, Value::String("guest".into()))
+    /// ```
+    pub fn predicate(field: ColumnRef, op: Predicate, value: Value) -> Self {
+        Self::Predicate { field, op, value }
+    }
+}
+
+impl Display for WhereCondition {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            WhereCondition::Predicate { field, op, value } => {
+                write!(f, "{field} {op} {value}")
+            }
+            WhereCondition::And(l, r) => write!(f, "({l} AND {r})"),
+            WhereCondition::Or(l, r) => write!(f, "({l} OR {r})"),
+        }
+    }
+}
+
+/// An SQL aggregate function tag — the function name in `SELECT f(col)`.
+///
+/// Pairs with a column name (or `*` for `COUNT`) inside [`SelectExpr::Agg`] /
+/// [`SelectExpr::CountStar`] to form a complete projection like `SUM(total)`.
+///
+/// # SQL examples
+///
+/// ```sql
+/// -- SELECT COUNT(*)              FROM users;   --> SelectExpr::CountStar
+/// -- SELECT COUNT(name)           FROM users;   --> SelectExpr::Agg(AggFunc::Count, "name")
+/// -- SELECT AVG(age)              FROM users;   --> SelectExpr::Agg(AggFunc::Avg,   "age")
+/// -- SELECT MIN(age), MAX(age)    FROM users;   --> two SelectExprs with AggFunc::Min / AggFunc::Max
+/// -- SELECT SUM(total) FROM orders GROUP BY user_id;
+/// --                                            --> SelectExpr::Agg(AggFunc::Sum,   "total")
+/// ```
+#[derive(Debug, Clone, PartialEq)]
+pub enum AggFunc {
+    /// `COUNT(col)` — number of non-null values.
+    Count,
+    /// `SUM(col)` — total of numeric values.
+    Sum,
+    /// `AVG(col)` — arithmetic mean of numeric values.
+    Avg,
+    /// `MIN(col)` — smallest value.
+    Min,
+    /// `MAX(col)` — largest value.
+    Max,
+}
+
+impl Display for AggFunc {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            AggFunc::Count => write!(f, "COUNT"),
+            AggFunc::Sum => write!(f, "SUM"),
+            AggFunc::Avg => write!(f, "AVG"),
+            AggFunc::Min => write!(f, "MIN"),
+            AggFunc::Max => write!(f, "MAX"),
+        }
+    }
+}
+
+impl TryFrom<&str> for AggFunc {
+    type Error = String;
+
+    /// Parse an aggregate function name from its uppercase SQL keyword.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error string if `s` is not one of the recognized aggregate
+    /// names (`COUNT`, `SUM`, `AVG`, `MIN`, `MAX`).
+    fn try_from(s: &str) -> Result<Self, Self::Error> {
+        match s {
+            "COUNT" => Ok(AggFunc::Count),
+            "SUM" => Ok(AggFunc::Sum),
+            "AVG" => Ok(AggFunc::Avg),
+            "MIN" => Ok(AggFunc::Min),
+            "MAX" => Ok(AggFunc::Max),
+            other => Err(format!("unknown aggregate function: {other}")),
+        }
+    }
+}
+
+/// Parsed `DROP TABLE [IF EXISTS] <name>`.
+///
+/// # SQL examples
+///
+/// ```sql
+/// -- DROP TABLE users;
+/// --   DropStatement { table_name: "users", if_exists: false }
+///
+/// -- DROP TABLE IF EXISTS users;
+/// --   DropStatement { table_name: "users", if_exists: true }
+/// ```
+///
+/// With `if_exists = false`, executing the statement against a non-existent
+/// table is an error; with `if_exists = true`, it's a no-op.
 #[derive(Debug, Clone)]
 pub struct DropStatement {
     pub table_name: String,
@@ -190,6 +501,33 @@ impl Display for DropStatement {
 }
 
 /// A single column definition inside `CREATE TABLE`.
+///
+/// Captures the surface syntax of one column: name, declared type, and any
+/// inline modifiers (`NOT NULL`, `PRIMARY KEY`, `AUTO_INCREMENT`, `DEFAULT`).
+/// Table-level constraints like `PRIMARY KEY (col)` are stored separately on
+/// [`CreateTableStatement::primary_key`].
+///
+/// # SQL examples
+///
+/// ```sql
+/// -- id INT NOT NULL PRIMARY KEY AUTO_INCREMENT
+/// --   ColumnDef {
+/// --       name: "id", col_type: Type::Int32,
+/// --       nullable: false, primary_key: true,
+/// --       auto_increment: true, default: None,
+/// --   }
+///
+/// -- name VARCHAR
+/// --   ColumnDef { name: "name", col_type: Type::String,
+/// --               nullable: true, primary_key: false,
+/// --               auto_increment: false, default: None }
+///
+/// -- age INT DEFAULT 0
+/// --   ColumnDef { name: "age", col_type: Type::Int32,
+/// --               nullable: true, primary_key: false,
+/// --               auto_increment: false,
+/// --               default: Some(Value::Int32(0)) }
+/// ```
 #[derive(Debug, Clone)]
 pub struct ColumnDef {
     pub name: String,
@@ -245,6 +583,34 @@ impl From<Vec<&ColumnDef>> for TupleSchema {
 }
 
 /// Parsed `CREATE TABLE [IF NOT EXISTS] name (col_def, ..., [PRIMARY KEY (col)])`.
+///
+/// `primary_key` is `Some(col)` only when the user wrote a *table-level*
+/// constraint like `PRIMARY KEY (id)`. If the primary key was declared
+/// inline on a column (`id INT PRIMARY KEY`), it lives on the relevant
+/// [`ColumnDef::primary_key`] flag instead and `primary_key` here is `None`.
+///
+/// # SQL examples
+///
+/// ```sql
+/// -- CREATE TABLE users (id INT PRIMARY KEY, name VARCHAR, age INT);
+/// --   CreateTableStatement {
+/// --       table_name: "users",
+/// --       if_not_exists: false,
+/// --       columns: vec![ /* id (PK inline), name, age */ ],
+/// --       primary_key: None,
+/// --   }
+///
+/// -- CREATE TABLE IF NOT EXISTS orders (
+/// --     order_id INT, user_id INT, total INT,
+/// --     PRIMARY KEY (order_id)
+/// -- );
+/// --   CreateTableStatement {
+/// --       table_name: "orders",
+/// --       if_not_exists: true,
+/// --       columns: vec![ /* order_id, user_id, total — none with primary_key=true */ ],
+/// --       primary_key: Some("order_id"),
+/// --   }
+/// ```
 #[derive(Debug, Clone)]
 pub struct CreateTableStatement {
     pub table_name: String,
@@ -271,15 +637,29 @@ impl Display for CreateTableStatement {
 }
 
 /// Parsed `CREATE INDEX [IF NOT EXISTS] <name> ON (<col>) USING <type>`.
+///
+/// Single-column indexes only at this stage; composite indexes are not modeled.
+///
+/// # SQL examples
+///
+/// ```sql
+/// -- CREATE INDEX idx_age ON users(age) USING BTREE;
+/// --   CreateIndexStatement {
+/// --       index_name: "idx_age", col_name: "age",
+/// --       index_type: Index::Btree, if_not_exists: false,
+/// --   }
+///
+/// -- CREATE INDEX IF NOT EXISTS idx_user ON orders(user_id) USING HASH;
+/// --   CreateIndexStatement {
+/// --       index_name: "idx_user", col_name: "user_id",
+/// --       index_type: Index::Hash, if_not_exists: true,
+/// --   }
+/// ```
 #[derive(Debug, Clone)]
 pub struct CreateIndexStatement {
-    /// Name of the index being created.
     index_name: String,
-    /// Column the index covers.
     col_name: String,
-    /// Index structure — hash or B-tree.
     index_type: Index,
-    /// When `true`, suppress errors if the index already exists.
     if_not_exists: bool,
 }
 
@@ -302,13 +682,24 @@ impl Display for CreateIndexStatement {
 }
 
 /// Parsed `DROP INDEX [IF EXISTS] <index> ON <table>`.
+///
+/// # SQL examples
+///
+/// ```sql
+/// -- DROP INDEX idx_age ON users;
+/// --   DropIndexStatement {
+/// --       table_name: "users", index_name: "idx_age", if_exists: false,
+/// --   }
+///
+/// -- DROP INDEX IF EXISTS idx_age ON users;
+/// --   DropIndexStatement {
+/// --       table_name: "users", index_name: "idx_age", if_exists: true,
+/// --   }
+/// ```
 #[derive(Debug, Clone)]
 pub struct DropIndexStatement {
-    /// Table the index belongs to.
     table_name: String,
-    /// Name of the index to drop.
     index_name: String,
-    /// When `true`, suppress errors if the index does not exist.
     if_exists: bool,
 }
 
@@ -322,41 +713,66 @@ impl Display for DropIndexStatement {
     }
 }
 
-/// A `WHERE` condition tree.
+/// Parsed `SHOW INDEXES [FROM <table>]`.
 ///
-/// Conditions are either a single predicate (`field op value`) or a logical
-/// combination via `AND` / `OR`. `AND` binds tighter than `OR`, matching
-/// standard SQL precedence.
-#[derive(Debug, Clone, PartialEq)]
-pub enum WhereCondition {
-    Predicate {
-        field: ColumnRef,
-        op: Predicate,
-        value: Value,
-    },
-    And(Box<WhereCondition>, Box<WhereCondition>),
-    Or(Box<WhereCondition>, Box<WhereCondition>),
-}
+/// The inner `Option<String>` holds the table name when `FROM` is specified;
+/// `None` means show indexes for all tables.
+///
+/// # SQL examples
+///
+/// ```sql
+/// -- SHOW INDEXES;
+/// --   ShowIndexesStatement(None)
+///
+/// -- SHOW INDEXES FROM users;
+/// --   ShowIndexesStatement(Some("users"))
+/// ```
+#[derive(Debug, Clone)]
+pub struct ShowIndexesStatement(pub Option<String>);
 
-impl WhereCondition {
-    pub fn predicate(field: ColumnRef, op: Predicate, value: Value) -> Self {
-        Self::Predicate { field, op, value }
-    }
-}
-
-impl Display for WhereCondition {
+impl Display for ShowIndexesStatement {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            WhereCondition::Predicate { field, op, value } => {
-                write!(f, "{field} {op} {value}")
-            }
-            WhereCondition::And(l, r) => write!(f, "({l} AND {r})"),
-            WhereCondition::Or(l, r) => write!(f, "({l} OR {r})"),
+        write!(f, "SHOW INDEXES")?;
+        if let Some(table) = &self.0 {
+            write!(f, " FROM {table}")?;
         }
+        Ok(())
     }
 }
 
 /// Parsed `INSERT INTO table [(col, …)] VALUES (val, …), …`.
+///
+/// `columns = None` means the user omitted the column list, so values must
+/// match the table's declared column order. `columns = Some(_)` means the
+/// user gave an explicit list and the binder will reorder/null-fill against
+/// the schema. `values` always carries one inner `Vec<Value>` per row, even
+/// for single-row inserts.
+///
+/// # SQL examples
+///
+/// ```sql
+/// -- INSERT INTO users VALUES (1, 'alice', 30);
+/// --   InsertStatement {
+/// --       table_name: "users", columns: None,
+/// --       values: vec![vec![Int32(1), String("alice"), Int32(30)]],
+/// --   }
+///
+/// -- INSERT INTO users (id, name) VALUES (2, 'bob');
+/// --   InsertStatement {
+/// --       table_name: "users",
+/// --       columns: Some(vec!["id", "name"]),
+/// --       values: vec![vec![Int32(2), String("bob")]],
+/// --   }
+///
+/// -- INSERT INTO users VALUES (3, 'c', 25), (4, 'd', 40);
+/// --   InsertStatement {
+/// --       table_name: "users", columns: None,
+/// --       values: vec![
+/// --           vec![Int32(3), String("c"), Int32(25)],
+/// --           vec![Int32(4), String("d"), Int32(40)],
+/// --       ],
+/// --   }
+/// ```
 #[derive(Debug, Clone)]
 pub struct InsertStatement {
     pub table_name: String,
@@ -384,11 +800,22 @@ impl Display for InsertStatement {
 }
 
 /// A single `col = val` pair in an `UPDATE … SET` clause.
+///
+/// Right-hand sides are literal [`Value`]s only — column-to-column or
+/// expression assignments (`SET total = total + 1`) are not modeled yet.
+///
+/// # SQL examples
+///
+/// ```sql
+/// -- SET age = 31
+/// --   Assignment { column: "age",  value: Value::Int32(31) }
+///
+/// -- SET name = 'alice'
+/// --   Assignment { column: "name", value: Value::String("alice".into()) }
+/// ```
 #[derive(Debug, Clone)]
 pub struct Assignment {
-    /// Column being assigned to.
     pub column: String,
-    /// New value for the column.
     pub value: Value,
 }
 
@@ -399,15 +826,34 @@ impl Display for Assignment {
 }
 
 /// Parsed `UPDATE table [alias] SET col = val, … [WHERE …]`.
+///
+/// `alias` is the optional `AS u` form, which is what `WHERE` predicates can
+/// use to qualify column references in self-referential statements.
+/// `where_clause = None` means the update applies to *every* row in the
+/// table — same as SQL.
+///
+/// # SQL examples
+///
+/// ```sql
+/// -- UPDATE users SET age = 31 WHERE id = 1;
+/// --   UpdateStatement {
+/// --       table_name: "users", alias: None,
+/// --       assignments: vec![Assignment { column: "age", value: Int32(31) }],
+/// --       where_clause: Some(Predicate { id, Equals, Int32(1) }),
+/// --   }
+///
+/// -- UPDATE users u SET name = 'admin', age = 99;
+/// --   UpdateStatement {
+/// --       table_name: "users", alias: Some("u"),
+/// --       assignments: vec![ /* name = 'admin', age = 99 */ ],
+/// --       where_clause: None,
+/// --   }
+/// ```
 #[derive(Debug, Clone)]
 pub struct UpdateStatement {
-    /// Target table name.
     pub table_name: String,
-    /// Optional table alias (e.g. `UPDATE users u SET …`).
     pub alias: Option<String>,
-    /// One or more column assignments.
     pub assignments: Vec<Assignment>,
-    /// Optional `WHERE` filter; when `None`, all rows are updated.
     pub where_clause: Option<WhereCondition>,
 }
 
@@ -427,13 +873,34 @@ impl Display for UpdateStatement {
 }
 
 /// Parsed `DELETE FROM table [alias] [WHERE …]`.
+///
+/// `where_clause = None` means *delete every row* — same as SQL.
+///
+/// # SQL examples
+///
+/// ```sql
+/// -- DELETE FROM users WHERE age < 18;
+/// --   DeleteStatement {
+/// --       table_name: "users", alias: None,
+/// --       where_clause: Some(Predicate { age, LessThan, Int32(18) }),
+/// --   }
+///
+/// -- DELETE FROM users u WHERE u.id = 7;
+/// --   DeleteStatement {
+/// --       table_name: "users", alias: Some("u"),
+/// --       where_clause: Some(Predicate { ColumnRef { qualifier: Some("u"), name: "id" },
+/// --                                      Equals, Int32(7) }),
+/// --   }
+///
+/// -- DELETE FROM users;            -- (truncate-everything form)
+/// --   DeleteStatement {
+/// --       table_name: "users", alias: None, where_clause: None,
+/// --   }
+/// ```
 #[derive(Debug, Clone)]
 pub struct DeleteStatement {
-    /// Target table name.
     pub table_name: String,
-    /// Optional table alias.
     pub alias: Option<String>,
-    /// Optional `WHERE` filter; when `None`, all rows are deleted.
     pub where_clause: Option<WhereCondition>,
 }
 
@@ -450,93 +917,29 @@ impl Display for DeleteStatement {
     }
 }
 
-/// An SQL aggregate function used in a `SELECT` expression.
-#[derive(Debug, Clone, PartialEq)]
-pub enum AggFunc {
-    /// `COUNT(col)` — number of non-null values.
-    Count,
-    /// `SUM(col)` — total of numeric values.
-    Sum,
-    /// `AVG(col)` — arithmetic mean of numeric values.
-    Avg,
-    /// `MIN(col)` — smallest value.
-    Min,
-    /// `MAX(col)` — largest value.
-    Max,
-}
-
-impl Display for AggFunc {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            AggFunc::Count => write!(f, "COUNT"),
-            AggFunc::Sum => write!(f, "SUM"),
-            AggFunc::Avg => write!(f, "AVG"),
-            AggFunc::Min => write!(f, "MIN"),
-            AggFunc::Max => write!(f, "MAX"),
-        }
-    }
-}
-
-impl TryFrom<&str> for AggFunc {
-    type Error = String;
-
-    /// Parse an aggregate function name from its uppercase SQL keyword.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error string if `s` is not one of the recognized aggregate
-    /// names (`COUNT`, `SUM`, `AVG`, `MIN`, `MAX`).
-    fn try_from(s: &str) -> Result<Self, Self::Error> {
-        match s {
-            "COUNT" => Ok(AggFunc::Count),
-            "SUM" => Ok(AggFunc::Sum),
-            "AVG" => Ok(AggFunc::Avg),
-            "MIN" => Ok(AggFunc::Min),
-            "MAX" => Ok(AggFunc::Max),
-            other => Err(format!("unknown aggregate function: {other}")),
-        }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub struct ColumnRef {
-    pub qualifier: Option<String>, // table name or alias
-    pub name: String,
-}
-
-impl From<&str> for ColumnRef {
-    fn from(s: &str) -> Self {
-        let parts = s.split('.').collect::<Vec<&str>>();
-        if parts.len() == 1 {
-            return Self {
-                qualifier: None,
-                name: parts[0].to_string(),
-            };
-        }
-        Self {
-            qualifier: Some(parts[0].to_string()),
-            name: parts[1].to_string(),
-        }
-    }
-}
-
-impl Display for ColumnRef {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        if let Some(qualifier) = &self.qualifier {
-            write!(f, "{qualifier}.")?;
-        }
-        write!(f, "{}", self.name)
-    }
-}
-
-/// A single expression in a `SELECT` list.
+/// A single expression inside a `SELECT` list.
+///
+/// `Column` is a plain projection; `Agg` is `f(col)` for any non-`*` aggregate;
+/// `CountStar` is the special `COUNT(*)` form (which counts rows rather than
+/// non-null values of a specific column).
+///
+/// # SQL examples
+///
+/// ```sql
+/// -- SELECT name           -->  SelectExpr::Column(ColumnRef { None, "name" })
+/// -- SELECT u.age          -->  SelectExpr::Column(ColumnRef { Some("u"), "age" })
+/// -- SELECT COUNT(*)       -->  SelectExpr::CountStar
+/// -- SELECT COUNT(name)    -->  SelectExpr::Agg(AggFunc::Count, "name")
+/// -- SELECT AVG(age)       -->  SelectExpr::Agg(AggFunc::Avg,   "age")
+/// ```
+///
+/// The aggregate column is stored as a bare `String` (not a [`ColumnRef`])
+/// because `f(qualifier.col)` is not supported by the parser today; the
+/// argument to an aggregate is always a single unqualified identifier.
 #[derive(Debug, Clone, PartialEq)]
 pub enum SelectExpr {
-    /// A plain column reference, e.g. `name`.
     Column(ColumnRef),
-    /// An aggregate call on a named column, e.g. `SUM(amount)` or `COUNT(id)`.
     Agg(AggFunc, String),
-    /// The special `COUNT(*)` form that counts all rows.
     CountStar,
 }
 
@@ -550,28 +953,101 @@ impl Display for SelectExpr {
     }
 }
 
-/// Which columns to project in a `SELECT`.
+/// One projection in a `SELECT` list, with its optional output alias.
+///
+/// Aliases come from either the explicit `SELECT expr AS name` form or the
+/// implicit `SELECT expr name` form. Both are stored the same way; the surface
+/// syntax is irrelevant once parsed.
+///
+/// # SQL examples
+///
+/// ```sql
+/// -- SELECT name
+/// --   SelectItem { expr: SelectExpr::Column("name".into()), alias: None }
+///
+/// -- SELECT age AS years
+/// --   SelectItem { expr: SelectExpr::Column("age".into()),  alias: Some("years") }
+///
+/// -- SELECT COUNT(*) AS n
+/// --   SelectItem { expr: SelectExpr::CountStar,             alias: Some("n") }
+///
+/// -- SELECT AVG(age) avg_age
+/// --   SelectItem { expr: SelectExpr::Agg(AggFunc::Avg, "age"), alias: Some("avg_age") }
+/// ```
+#[derive(Debug, Clone, PartialEq)]
+pub struct SelectItem {
+    pub expr: SelectExpr,
+    pub alias: Option<String>,
+}
+
+impl SelectItem {
+    /// Wraps an expression with no alias. Convenient for tests and for callers
+    /// that synthesise projections (e.g. `SELECT *` expansion).
+    pub fn bare(expr: SelectExpr) -> Self {
+        Self { expr, alias: None }
+    }
+}
+
+impl From<SelectExpr> for SelectItem {
+    fn from(expr: SelectExpr) -> Self {
+        Self::bare(expr)
+    }
+}
+
+impl Display for SelectItem {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.expr)?;
+        if let Some(alias) = &self.alias {
+            write!(f, " AS {alias}")?;
+        }
+        Ok(())
+    }
+}
+
+/// The projection list of a `SELECT` — either `*` or an explicit set of items.
+///
+/// # SQL examples
+///
+/// ```sql
+/// -- SELECT *           FROM users
+/// --   SelectColumns::All
+///
+/// -- SELECT id, name    FROM users
+/// --   SelectColumns::Exprs(vec![
+/// --       SelectItem::bare(SelectExpr::Column("id".into())),
+/// --       SelectItem::bare(SelectExpr::Column("name".into())),
+/// --   ])
+///
+/// -- SELECT COUNT(*) AS n FROM users
+/// --   SelectColumns::Exprs(vec![
+/// --       SelectItem { expr: SelectExpr::CountStar, alias: Some("n") },
+/// --   ])
+/// ```
 #[derive(Debug, Clone)]
 pub enum SelectColumns {
-    /// `SELECT *` — all columns from the source table(s).
     All,
-    /// `SELECT expr1, expr2, …` — an explicit list of expressions.
-    Exprs(Vec<SelectExpr>),
+    Exprs(Vec<SelectItem>),
 }
 
 impl Display for SelectColumns {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             SelectColumns::All => write!(f, "*"),
-            SelectColumns::Exprs(exprs) => {
-                let s: Vec<String> = exprs.iter().map(ToString::to_string).collect();
+            SelectColumns::Exprs(items) => {
+                let s: Vec<String> = items.iter().map(ToString::to_string).collect();
                 write!(f, "{}", s.join(", "))
             }
         }
     }
 }
 
-/// Sort direction for an `ORDER BY` clause.
+/// Sort direction for an `ORDER BY` clause — `ASC` or `DESC`.
+///
+/// ```sql
+/// -- ORDER BY age ASC          -->  OrderDirection::Asc
+/// -- ORDER BY age DESC         -->  OrderDirection::Desc
+/// -- ORDER BY age              -->  OrderDirection::Asc      (default when omitted)
+/// ```
 #[derive(Debug, Clone, PartialEq)]
 pub enum OrderDirection {
     Asc,
@@ -587,6 +1063,19 @@ impl Display for OrderDirection {
     }
 }
 
+/// Parsed `ORDER BY <col> [ASC|DESC]` — single key only.
+///
+/// Multi-column sorts (`ORDER BY a, b DESC`) are not modeled at this layer.
+///
+/// # SQL examples
+///
+/// ```sql
+/// -- ORDER BY age
+/// --   OrderBy(ColumnRef { qualifier: None, name: "age" }, OrderDirection::Asc)
+///
+/// -- ORDER BY users.id DESC
+/// --   OrderBy(ColumnRef { qualifier: Some("users"), name: "id" }, OrderDirection::Desc)
+/// ```
 #[derive(Debug, Clone)]
 pub struct OrderBy(pub ColumnRef, pub OrderDirection);
 
@@ -596,16 +1085,18 @@ impl Display for OrderBy {
     }
 }
 
-/// The type of join between two tables.
+/// The type of join between two tables — controls how unmatched rows are handled.
+///
+/// ```sql
+/// -- a INNER JOIN b ON …      -->  JoinKind::Inner   (drop unmatched on both sides)
+/// -- a LEFT  JOIN b ON …      -->  JoinKind::Left    (keep unmatched left rows, NULL-pad right)
+/// -- a RIGHT JOIN b ON …      -->  JoinKind::Right   (keep unmatched right rows, NULL-pad left)
+/// -- a JOIN b ON …            -->  JoinKind::Inner   (default when omitted)
+/// ```
 #[derive(Debug, Clone, PartialEq)]
 pub enum JoinKind {
-    /// `INNER JOIN` — only matching rows from both sides.
     Inner,
-    /// `LEFT JOIN` — all rows from the left table, with `NULL` fill for
-    /// non-matching right rows.
     Left,
-    /// `RIGHT JOIN` — all rows from the right table, with `NULL` fill for
-    /// non-matching left rows.
     Right,
 }
 
@@ -620,11 +1111,22 @@ impl Display for JoinKind {
 }
 
 /// A table reference in a `FROM` clause: `<name> [alias]`.
+///
+/// # SQL examples
+///
+/// ```sql
+/// -- FROM users
+/// --   TableRef { name: "users", alias: None }
+///
+/// -- FROM users u
+/// --   TableRef { name: "users", alias: Some("u") }
+///
+/// -- FROM users AS u                 (the AS keyword is optional in the surface syntax)
+/// --   TableRef { name: "users", alias: Some("u") }
+/// ```
 #[derive(Debug, Clone)]
 pub struct TableRef {
-    /// Table name.
     pub name: String,
-    /// Optional alias (e.g. `users u`).
     pub alias: Option<String>,
 }
 
@@ -638,13 +1140,38 @@ impl Display for TableRef {
     }
 }
 
-/// A single entry in a comma-separated `FROM` list: a table plus any JOINs
-/// chained onto it. `FROM a JOIN b ON …, c` is two `TableWithJoins` entries.
+/// One entry in a comma-separated `FROM` list — a base table plus a chain of
+/// `JOIN`s onto it.
+///
+/// `FROM a JOIN b ON …, c` is two `TableWithJoins` entries. The first carries
+/// `a` and one `Join` for `b`; the second carries `c` with no joins. The
+/// comma-separated form is treated by the binder as a cross product (an
+/// implicit inner join with no `ON` predicate).
+///
+/// # SQL examples
+///
+/// ```sql
+/// -- FROM users
+/// --   TableWithJoins {
+/// --       table: TableRef { name: "users", alias: None },
+/// --       joins: vec![],
+/// --   }
+///
+/// -- FROM users u INNER JOIN orders o ON u.id = o.user_id
+/// --   TableWithJoins {
+/// --       table: TableRef { name: "users", alias: Some("u") },
+/// --       joins: vec![ Join { kind: JoinKind::Inner,
+/// --                           table: "orders", alias: Some("o"),
+/// --                           on: Predicate { u.id = o.user_id } } ],
+/// --   }
+///
+/// -- FROM a JOIN b ON …, c        (becomes two entries in SelectStatement::from)
+/// --   [ TableWithJoins { table: a, joins: [ Join(b, …) ] },
+/// --     TableWithJoins { table: c, joins: []           } ]
+/// ```
 #[derive(Debug, Clone)]
 pub struct TableWithJoins {
-    /// The primary table for this FROM entry.
     pub table: TableRef,
-    /// JOIN clauses chained onto `table`.
     pub joins: Vec<Join>,
 }
 
@@ -659,15 +1186,33 @@ impl Display for TableWithJoins {
 }
 
 /// A parsed join clause: `<kind> JOIN <table> [alias] ON <condition>`.
+///
+/// `on` is required at parse time — implicit / cross joins are expressed at
+/// the [`TableWithJoins`] level (separate `FROM` entries), not via an
+/// optional join condition.
+///
+/// # SQL examples
+///
+/// ```sql
+/// -- INNER JOIN orders o ON users.id = o.user_id
+/// --   Join {
+/// --       kind:  JoinKind::Inner,
+/// --       table: "orders", alias: Some("o"),
+/// --       on:    WhereCondition::Predicate {
+/// --           field: ColumnRef { qualifier: Some("users"), name: "id" },
+/// --           op:    Predicate::Equals,
+/// --           value: <bound to o.user_id by the binder>,
+/// --       },
+/// --   }
+///
+/// -- LEFT JOIN orders ON users.id = orders.user_id
+/// --   Join { kind: JoinKind::Left, table: "orders", alias: None, on: <…> }
+/// ```
 #[derive(Debug, Clone)]
 pub struct Join {
-    /// Type of join (inner, left, right).
     pub kind: JoinKind,
-    /// Name of the table being joined.
     pub table: String,
-    /// Optional alias for the joined table.
     pub alias: Option<String>,
-    /// Join condition (the `ON` clause).
     pub on: WhereCondition,
 }
 
@@ -681,11 +1226,134 @@ impl Display for Join {
     }
 }
 
-/// A full `SELECT` statement.
+/// `LIMIT [n] [OFFSET m]` — row-count cap and skip applied after ordering.
+///
+/// `limit = None` means *no upper bound* on rows returned (e.g. `OFFSET 5`
+/// alone, or no clause at all if the surrounding `Option<LimitClause>` is
+/// `Some`). `limit = Some(0)` means *return zero rows* — distinct from "no
+/// limit." `offset` defaults to `0` when the user only wrote `LIMIT`.
+///
+/// # SQL examples
+///
+/// ```sql
+/// -- LIMIT 10
+/// --   LimitClause { limit: Some(10), offset: 0 }
+///
+/// -- LIMIT 10 OFFSET 20
+/// --   LimitClause { limit: Some(10), offset: 20 }
+///
+/// -- OFFSET 5                   (skip 5 rows, no upper bound)
+/// --   LimitClause { limit: None, offset: 5 }
+///
+/// -- LIMIT 0                    (return nothing — useful for schema probes)
+/// --   LimitClause { limit: Some(0), offset: 0 }
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LimitClause {
+    pub limit: Option<u64>,
+    pub offset: u64,
+}
+
+impl Display for LimitClause {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        if let Some(n) = self.limit {
+            write!(f, "LIMIT {n}")?;
+            if self.offset != 0 {
+                write!(f, " OFFSET {}", self.offset)?;
+            }
+        } else {
+            write!(f, "OFFSET {}", self.offset)?;
+        }
+        Ok(())
+    }
+}
+
+/// A full `SELECT` statement — every supported clause in one struct.
 ///
 /// Clause order mirrors the SQL standard:
 /// `SELECT [DISTINCT] … FROM … [alias] [JOIN …] [WHERE …] [GROUP BY …]
 ///  [HAVING …] [ORDER BY …] [LIMIT n [OFFSET n]]`
+///
+/// # SQL → struct mapping
+///
+/// ```sql
+/// -- 1. SELECT *
+/// --
+/// --     SELECT * FROM users;
+/// --
+/// --     SelectStatement {
+/// --         distinct: false,
+/// --         columns:  SelectColumns::All,
+/// --         from:     vec![ TableWithJoins { table: "users", joins: [] } ],
+/// --         where_clause: None, group_by: vec![],
+/// --         having: None, order_by: None, limit: None,
+/// --     }
+///
+/// -- 2. WHERE + ORDER BY + LIMIT
+/// --
+/// --     SELECT name FROM users WHERE age >= 18 ORDER BY age DESC LIMIT 10;
+/// --
+/// --     SelectStatement {
+/// --         distinct: false,
+/// --         columns:  SelectColumns::Exprs(vec![ SelectItem::bare(Column("name")) ]),
+/// --         from:     vec![ TableWithJoins { table: "users", joins: [] } ],
+/// --         where_clause: Some(Predicate { age, GreaterThanOrEqual, Int32(18) }),
+/// --         group_by: vec![],
+/// --         having: None,
+/// --         order_by: Some(OrderBy(age, OrderDirection::Desc)),
+/// --         limit: Some(LimitClause { limit: Some(10), offset: 0 }),
+/// --     }
+///
+/// -- 3. GROUP BY with HAVING
+/// --
+/// --     SELECT user_id, SUM(total) FROM orders
+/// --     GROUP BY user_id HAVING SUM(total) > 100;
+/// --
+/// --     SelectStatement {
+/// --         distinct: false,
+/// --         columns: SelectColumns::Exprs(vec![
+/// --             SelectItem::bare(Column("user_id")),
+/// --             SelectItem::bare(Agg(AggFunc::Sum, "total")),
+/// --         ]),
+/// --         from:    vec![ TableWithJoins { table: "orders", joins: [] } ],
+/// --         where_clause: None,
+/// --         group_by: vec![ ColumnRef { None, "user_id" } ],
+/// --         having: Some(Predicate { /* SUM(total) > 100 — modeled as a Predicate node */ }),
+/// --         order_by: None, limit: None,
+/// --     }
+///
+/// -- 4. JOIN
+/// --
+/// --     SELECT u.name, o.total
+/// --     FROM   users u INNER JOIN orders o ON u.id = o.user_id;
+/// --
+/// --     SelectStatement {
+/// --         columns: SelectColumns::Exprs(vec![
+/// --             SelectItem::bare(Column(ColumnRef { Some("u"), "name"  })),
+/// --             SelectItem::bare(Column(ColumnRef { Some("o"), "total" })),
+/// --         ]),
+/// --         from: vec![
+/// --             TableWithJoins {
+/// --                 table: TableRef { name: "users", alias: Some("u") },
+/// --                 joins: vec![ Join { kind: Inner, table: "orders",
+/// --                                     alias: Some("o"), on: <u.id = o.user_id> } ],
+/// --             },
+/// --         ],
+/// --         /* other clauses default */
+/// --     }
+///
+/// -- 5. DISTINCT
+/// --
+/// --     SELECT DISTINCT age FROM users;
+/// --
+/// --     SelectStatement { distinct: true, columns: …age…, /* … */ }
+/// ```
+///
+/// # NULL semantics
+///
+/// `NULL` literals in `WHERE`/`HAVING` predicates collapse to `false` per the
+/// executor's two-valued model — see [`crate::execution::expression`]. The
+/// AST itself just carries [`Value::Null`](crate::types::Value::Null).
 #[derive(Debug, Clone)]
 pub struct SelectStatement {
     pub distinct: bool,
@@ -695,57 +1363,53 @@ pub struct SelectStatement {
     pub group_by: Vec<ColumnRef>,
     pub having: Option<WhereCondition>,
     pub order_by: Option<OrderBy>,
-    pub limit_offset: Option<(u64, u64)>,
+    pub limit: Option<LimitClause>,
+}
+
+impl SelectStatement {
+    /// Renders the comma-separated `FROM` list. Extracted from `Display` to
+    /// keep the main format function readable.
+    fn fmt_from(&self) -> String {
+        self.from
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+            .join(", ")
+    }
+
+    /// Renders the comma-separated `GROUP BY` column list.
+    fn fmt_group_by(&self) -> String {
+        self.group_by
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+            .join(", ")
+    }
 }
 
 impl Display for SelectStatement {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        if self.distinct {
-            write!(f, "SELECT DISTINCT {} FROM ", self.columns)?;
+        let prefix = if self.distinct {
+            "SELECT DISTINCT"
         } else {
-            write!(f, "SELECT {} FROM ", self.columns)?;
-        }
-        let parts: Vec<String> = self.from.iter().map(ToString::to_string).collect();
-        write!(f, "{}", parts.join(", "))?;
-        if let Some(where_clause) = &self.where_clause {
-            write!(f, " WHERE {where_clause}")?;
+            "SELECT"
+        };
+        write!(f, "{prefix} {} FROM {}", self.columns, self.fmt_from())?;
+
+        if let Some(w) = &self.where_clause {
+            write!(f, " WHERE {w}")?;
         }
         if !self.group_by.is_empty() {
-            write!(
-                f,
-                " GROUP BY {}",
-                self.group_by
-                    .iter()
-                    .map(std::string::ToString::to_string)
-                    .collect::<Vec<String>>()
-                    .join(", ")
-            )?;
+            write!(f, " GROUP BY {}", self.fmt_group_by())?;
         }
-        if let Some(having) = &self.having {
-            write!(f, " HAVING {having}")?;
+        if let Some(h) = &self.having {
+            write!(f, " HAVING {h}")?;
         }
-        if let Some(order_by) = &self.order_by {
-            write!(f, " ORDER BY {order_by}")?;
+        if let Some(o) = &self.order_by {
+            write!(f, " ORDER BY {o}")?;
         }
-        if let Some((limit, offset)) = self.limit_offset {
-            write!(f, " LIMIT {limit} OFFSET {offset}")?;
-        }
-        Ok(())
-    }
-}
-
-/// Parsed `SHOW INDEXES [FROM <table>]`.
-///
-/// The inner `Option<String>` holds the table name when `FROM` is specified;
-/// `None` means show indexes for all tables.
-#[derive(Debug, Clone)]
-pub struct ShowIndexesStatement(pub Option<String>);
-
-impl Display for ShowIndexesStatement {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "SHOW INDEXES")?;
-        if let Some(table) = &self.0 {
-            write!(f, " FROM {table}")?;
+        if let Some(l) = self.limit {
+            write!(f, " {l}")?;
         }
         Ok(())
     }
