@@ -1,3 +1,5 @@
+use tracing::{debug, instrument, trace, warn};
+
 use super::ParserError;
 use crate::{
     Type, Value,
@@ -19,10 +21,16 @@ impl Parser {
     /// # Errors
     ///
     /// Returns [`ParserError`] if the keyword sequence or table name is missing.
+    #[instrument(
+        skip(self),
+        fields(component = "parser", statement = "drop_table"),
+        err(Debug)
+    )]
     pub(super) fn parse_drop(&mut self) -> Result<DropStatement, ParserError> {
         self.expect_seq(&[TokenType::Table])?;
         let if_exists = self.parse_if_exists(false)?;
         let table_name = self.expect_ident()?;
+        debug!(table = %table_name, if_exists, "parsed DROP TABLE statement");
         Ok(DropStatement {
             table_name,
             if_exists,
@@ -47,12 +55,30 @@ impl Parser {
     ///
     /// Returns a [`ParserError`] if any part of the statement is malformed or an expected token is
     /// missing.
+    #[instrument(
+        skip(self),
+        fields(component = "parser", statement = "alter_table"),
+        err(Debug)
+    )]
     pub(super) fn parse_alter_table(&mut self) -> Result<AlterTableStatement, ParserError> {
         self.expect_seq(&[TokenType::Alter, TokenType::Table])?;
         let if_exists = self.parse_if_exists(false)?;
 
         let table_name = self.expect_ident()?;
         let action = self.parse_alter_action()?;
+
+        let action_kind = match &action {
+            AlterAction::AddColumn(_) => "add_column",
+            AlterAction::DropColumn { .. } => "drop_column",
+            AlterAction::RenameColumn { .. } => "rename_column",
+            AlterAction::RenameTable { .. } => "rename_table",
+        };
+        debug!(
+            table = %table_name,
+            if_exists,
+            action = action_kind,
+            "parsed ALTER TABLE statement"
+        );
         Ok(AlterTableStatement {
             table_name,
             if_exists,
@@ -76,6 +102,11 @@ impl Parser {
     ///
     /// Returns a [`ParserError`] if the clause is syntactically incorrect or an expected token is
     /// missing.
+    #[instrument(
+        skip(self),
+        fields(component = "parser", clause = "alter_action"),
+        err(Debug)
+    )]
     fn parse_alter_action(&mut self) -> Result<AlterAction, ParserError> {
         let action_token = self.bump()?;
         match action_token.kind {
@@ -109,10 +140,17 @@ impl Parser {
                 }
             }
 
-            _ => Err(ParserError::ParsingError(format!(
-                "expected ADD COLUMN, DROP COLUMN, RENAME COLUMN, or RENAME TABLE, got {}",
-                action_token.value
-            ))),
+            _ => {
+                warn!(
+                    found = ?action_token.kind,
+                    value = %action_token.value,
+                    "invalid ALTER TABLE action"
+                );
+                Err(ParserError::ParsingError(format!(
+                    "expected ADD COLUMN, DROP COLUMN, RENAME COLUMN, or RENAME TABLE, got {}",
+                    action_token.value
+                )))
+            }
         }
     }
 
@@ -126,6 +164,11 @@ impl Parser {
     ///
     /// Returns [`ParserError`] if the syntax is malformed, a type token is
     /// unrecognized, or a default value can't be parsed.
+    #[instrument(
+        skip(self),
+        fields(component = "parser", statement = "create_table"),
+        err(Debug)
+    )]
     pub(super) fn parse_create(&mut self) -> Result<CreateTableStatement, ParserError> {
         self.expect_seq(&[TokenType::Table])?;
         let if_not_exists = self.parse_if_exists(true)?;
@@ -146,6 +189,12 @@ impl Parser {
                     columns.push(self.parse_column_definition(curr_tok.value)?);
                 }
                 _ => {
+                    warn!(
+                        expected = "column definition or PRIMARY KEY",
+                        found = ?curr_tok.kind,
+                        value = %curr_tok.value,
+                        "invalid CREATE TABLE body item"
+                    );
                     return Err(ParserError::ParsingError(format!(
                         "expected column definition or PRIMARY KEY, got {}",
                         curr_tok.value
@@ -156,10 +205,20 @@ impl Parser {
             match self.bump()?.kind {
                 TokenType::Rparen => break,
                 TokenType::Comma => {}
-                _ => return Err(ParserError::ParsingError("expected , or )".to_owned())),
+                other => {
+                    warn!(found = ?other, "expected comma or ')' in CREATE TABLE body");
+                    return Err(ParserError::ParsingError("expected , or )".to_owned()));
+                }
             }
         }
 
+        debug!(
+            table = %table_name,
+            if_not_exists,
+            column_count = columns.len(),
+            primary_key_count = primary_key.len(),
+            "parsed CREATE TABLE statement"
+        );
         Ok(CreateTableStatement {
             table_name,
             if_not_exists,
@@ -184,9 +243,17 @@ impl Parser {
     /// Returns [`ParserError`] if the type token is not a valid [`Type`], a
     /// qualifier sequence is malformed, the default literal is invalid, or the
     /// lexer fails while peeking ahead.
+    #[instrument(
+        skip(self),
+        fields(component = "parser", clause = "column_definition"),
+        err(Debug)
+    )]
     fn parse_column_definition(&mut self, col_name: String) -> Result<ColumnDef, ParserError> {
         let type_tok = self.bump()?;
-        let col_type = Type::try_from(type_tok).map_err(ParserError::ParsingError)?;
+        let col_type = Type::try_from(type_tok).map_err(|msg| {
+            warn!(column = %col_name, reason = %msg, "invalid column type");
+            ParserError::ParsingError(msg)
+        })?;
 
         let mut nullable = true;
         let mut is_primary_key = false;
@@ -216,16 +283,36 @@ impl Parser {
                 TokenType::AutoIncrement => {
                     self.bump()?;
                     auto_increment = true;
+                    trace!(column = %col_name, "saw AUTO_INCREMENT");
                 }
                 TokenType::Default => {
                     self.bump()?;
                     let val_tok = self.bump()?;
-                    default = Some(Value::try_from(val_tok).map_err(ParserError::ParsingError)?);
+                    let value_kind = val_tok.kind;
+                    let value_position = val_tok.position;
+                    default = Some(Value::try_from(val_tok).map_err(|msg| {
+                        warn!(
+                            column = %col_name,
+                            value_token_kind = ?value_kind,
+                            value_position,
+                            reason = %msg,
+                            "invalid DEFAULT literal"
+                        );
+                        ParserError::ParsingError(msg)
+                    })?);
                 }
                 _ => break,
             }
         }
 
+        debug!(
+            column = %col_name,
+            nullable,
+            primary_key = is_primary_key,
+            auto_increment,
+            has_default = default.is_some(),
+            "parsed column definition"
+        );
         Ok(ColumnDef {
             name: col_name,
             col_type,
@@ -271,6 +358,11 @@ impl Parser {
     ///
     /// Returns [`ParserError`] if required tokens are missing, the column list
     /// is empty, or the index type after `USING` is not `HASH` or `BTREE`.
+    #[instrument(
+        skip(self),
+        fields(component = "parser", statement = "create_index"),
+        err(Debug)
+    )]
     pub(super) fn parse_create_index(&mut self) -> Result<CreateIndexStatement, ParserError> {
         self.expect(TokenType::Index)?;
         let if_not_exists = self.parse_if_exists(true)?;
@@ -286,13 +378,28 @@ impl Parser {
                 match type_tok.kind {
                     TokenType::Hash => Ok(Index::Hash),
                     TokenType::Btree => Ok(Index::Btree),
-                    _ => Err(ParserError::ParsingError(format!(
-                        "expected HASH or BTREE after USING, got {type_tok}"
-                    ))),
+                    _ => {
+                        warn!(
+                            found = ?type_tok.kind,
+                            value = %type_tok.value,
+                            "invalid index type after USING"
+                        );
+                        Err(ParserError::ParsingError(format!(
+                            "expected HASH or BTREE after USING, got {type_tok}"
+                        )))
+                    }
                 }
             })?
             .unwrap_or(Index::Hash);
 
+        debug!(
+            index = %index_name,
+            table = %table_name,
+            if_not_exists,
+            column_count = columns.len(),
+            index_type = ?index_type,
+            "parsed CREATE INDEX statement"
+        );
         Ok(CreateIndexStatement {
             index_name,
             table_name,
@@ -310,6 +417,11 @@ impl Parser {
     /// # Errors
     ///
     /// Returns [`ParserError`] if the keyword sequence or index name is missing.
+    #[instrument(
+        skip(self),
+        fields(component = "parser", statement = "drop_index"),
+        err(Debug)
+    )]
     pub(super) fn parse_drop_index(&mut self) -> Result<DropIndexStatement, ParserError> {
         self.expect(TokenType::Index)?;
         let if_exists = self.parse_if_exists(false)?;
@@ -322,6 +434,12 @@ impl Parser {
             String::new()
         };
 
+        debug!(
+            index = %index_name,
+            if_exists,
+            has_table = !table_name.is_empty(),
+            "parsed DROP INDEX statement"
+        );
         Ok(DropIndexStatement {
             table_name,
             index_name,
@@ -337,6 +455,11 @@ impl Parser {
     /// # Errors
     ///
     /// Returns [`ParserError`] if the `SHOW INDEXES` keyword sequence is missing.
+    #[instrument(
+        skip(self),
+        fields(component = "parser", statement = "show_indexes"),
+        err(Debug)
+    )]
     pub(super) fn parse_show_index(&mut self) -> Result<ShowIndexesStatement, ParserError> {
         self.expect_seq(&[TokenType::Show, TokenType::Indexes])?;
 
@@ -349,6 +472,10 @@ impl Parser {
             }
         })?;
 
+        debug!(
+            has_table_filter = table_name.is_some(),
+            "parsed SHOW INDEXES statement"
+        );
         Ok(Statement::show_indexes(table_name))
     }
 }

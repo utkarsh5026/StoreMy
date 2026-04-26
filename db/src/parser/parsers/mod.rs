@@ -12,6 +12,7 @@ mod dml;
 mod query;
 
 use thiserror::Error;
+use tracing::{debug, instrument, trace, warn};
 
 use super::Parser;
 use crate::{
@@ -60,9 +61,15 @@ impl Parser {
     ///
     /// Returns [`ParserError`] if the token stream is empty, starts with an
     /// unrecognized keyword, or any sub-parser fails.
+    #[instrument(
+        skip(self),
+        fields(component = "parser", rule = "statement_dispatch"),
+        err(Debug)
+    )]
     pub fn parse(&mut self) -> Result<Statement, ParserError> {
         let tok = self.bump()?;
         self.lexer.backtrack()?;
+        trace!(start_token = ?tok.kind, start_value = %tok.value, "dispatching parser");
 
         let stmt = match tok.kind {
             TokenType::Delete => Statement::Delete(self.parse_delete()?),
@@ -79,6 +86,12 @@ impl Parser {
                     TokenType::Index => Statement::DropIndex(self.parse_drop_index()?),
                     TokenType::Table => Statement::Drop(self.parse_drop()?),
                     _ => {
+                        warn!(
+                            expected = "TABLE or INDEX",
+                            found = ?next.kind,
+                            found_value = %next.value,
+                            "invalid DROP target"
+                        );
                         return Err(ParserError::ParsingError(format!(
                             "expected TABLE or INDEX after DROP, got {}",
                             next.value
@@ -95,6 +108,12 @@ impl Parser {
                     TokenType::Index => Statement::CreateIndex(self.parse_create_index()?),
                     TokenType::Table => Statement::CreateTable(self.parse_create()?),
                     _ => {
+                        warn!(
+                            expected = "TABLE or INDEX",
+                            found = ?next.kind,
+                            found_value = %next.value,
+                            "invalid CREATE target"
+                        );
                         return Err(ParserError::ParsingError(format!(
                             "expected TABLE or INDEX after CREATE, got {}",
                             next.value
@@ -104,6 +123,11 @@ impl Parser {
             }
             TokenType::Alter => Statement::AlterTable(self.parse_alter_table()?),
             _ => {
+                warn!(
+                    start_token = ?tok.kind,
+                    start_value = %tok.value,
+                    "unexpected leading token for statement"
+                );
                 return Err(ParserError::ParsingError(format!(
                     "unexpected statement start: {}",
                     tok.value
@@ -112,6 +136,10 @@ impl Parser {
         };
 
         self.expect_end()?;
+        debug!(
+            statement_kind = statement_kind(&stmt),
+            "statement parsed successfully"
+        );
         Ok(stmt)
     }
 
@@ -127,15 +155,28 @@ impl Parser {
     /// Returns [`ParserError::ParsingError`] when an unexpected token follows
     /// the statement (after an optional trailing `;`), or propagates a
     /// [`LexError`] from the lexer.
+    #[instrument(
+        skip(self),
+        fields(component = "parser", rule = "expect_end"),
+        err(Debug)
+    )]
     fn expect_end(&mut self) -> Result<(), ParserError> {
-        self.if_peek_then_consume(TokenType::Semicolon)?;
+        let consumed_semicolon = self.if_peek_then_consume(TokenType::Semicolon)?;
+        trace!(consumed_semicolon, "checked optional statement terminator");
 
         match self.lexer.next() {
             None => Ok(()),
             Some(Err(e)) => Err(ParserError::from(e)),
-            Some(Ok(tok)) => Err(ParserError::ParsingError(format!(
-                "unexpected token {tok} after end of statement"
-            ))),
+            Some(Ok(tok)) => {
+                warn!(
+                    token = ?tok.kind,
+                    value = %tok.value,
+                    "unexpected trailing input after statement end"
+                );
+                Err(ParserError::ParsingError(format!(
+                    "unexpected token {tok} after end of statement"
+                )))
+            }
         }
     }
 
@@ -280,19 +321,26 @@ impl Parser {
     ///
     /// Strategy: collect predicates into AND-groups separated by OR, then fold both levels.
     /// e.g. `a=1 OR b=2 AND c=3` → `a=1 OR (b=2 AND c=3)`
+    #[instrument(skip(self), fields(component = "parser", clause = "where"), err(Debug))]
     fn parse_where(&mut self) -> Result<WhereCondition, ParserError> {
         let mut or_groups = vec![vec![self.parse_predicate()?]];
+        let mut predicate_count: usize = 1;
 
         loop {
             if let Some(pred) = self.on_peek_token(TokenType::And, Self::parse_predicate)? {
                 or_groups.last_mut().unwrap().push(pred);
+                predicate_count += 1;
+                trace!("parsed AND predicate");
             } else if let Some(pred) = self.on_peek_token(TokenType::Or, Self::parse_predicate)? {
                 or_groups.push(vec![pred]);
+                predicate_count += 1;
+                trace!("parsed OR predicate");
             } else {
                 break;
             }
         }
 
+        let or_group_count = or_groups.len();
         let or_terms = or_groups.into_iter().map(|group| {
             group
                 .into_iter()
@@ -300,9 +348,14 @@ impl Parser {
                 .unwrap()
         });
 
-        Ok(or_terms
+        let condition = or_terms
             .reduce(|l, r| WhereCondition::Or(Box::new(l), Box::new(r)))
-            .unwrap())
+            .unwrap();
+        debug!(
+            predicate_count,
+            or_group_count, "parsed WHERE/HAVING condition"
+        );
+        Ok(condition)
     }
 
     /// Parses a single `<field> <op> <value>` predicate.
@@ -315,14 +368,33 @@ impl Parser {
     /// Returns [`ParserError`] if the field or operator tokens are missing,
     /// the operator string is not a recognized [`Predicate`] variant, or the
     /// value token cannot be interpreted as a literal.
+    #[instrument(
+        skip(self),
+        fields(component = "parser", rule = "predicate"),
+        err(Debug)
+    )]
     fn parse_predicate(&mut self) -> Result<WhereCondition, ParserError> {
         let field = self.parse_column_ref()?;
         let op = self.expect(TokenType::Operator)?;
-        let op = Predicate::try_from(op.value.as_str()).map_err(ParserError::ParsingError)?;
+        let op = Predicate::try_from(op.value.as_str()).map_err(|msg| {
+            warn!(operator = %op.value, reason = %msg, "invalid predicate operator");
+            ParserError::ParsingError(msg)
+        })?;
 
         let val_tok = self.bump()?;
-        let value = Value::try_from(val_tok).map_err(ParserError::ParsingError)?;
+        let value_kind = val_tok.kind;
+        let value_position = val_tok.position;
+        let value = Value::try_from(val_tok).map_err(|msg| {
+            warn!(
+                value_token_kind = ?value_kind,
+                value_position,
+                reason = %msg,
+                "invalid predicate literal"
+            );
+            ParserError::ParsingError(msg)
+        })?;
 
+        trace!(field = %field, predicate = ?op, "parsed predicate");
         Ok(WhereCondition::predicate(field, op, value))
     }
 
@@ -384,6 +456,13 @@ impl Parser {
                 _ if t.is(delimiter) => {}
                 _ if t.is(terminator) => break,
                 _ => {
+                    warn!(
+                        expected_delimiter = ?delimiter,
+                        expected_terminator = ?terminator,
+                        found = ?t.kind,
+                        value = %t.value,
+                        "malformed delimited list"
+                    );
                     return Err(ParserError::ParsingError(format!(
                         "expected {:?} or {:?}, got {}",
                         delimiter, terminator, t.value
@@ -471,5 +550,20 @@ impl Parser {
         F: FnMut(&mut Self) -> Result<T, ParserError>,
     {
         self.parens(|p| p.parse_comma_sep(item))
+    }
+}
+
+fn statement_kind(stmt: &Statement) -> &'static str {
+    match stmt {
+        Statement::Delete(_) => "delete",
+        Statement::Insert(_) => "insert",
+        Statement::Update(_) => "update",
+        Statement::ShowIndexes(_) => "show_indexes",
+        Statement::Select(_) => "select",
+        Statement::Drop(_) => "drop_table",
+        Statement::DropIndex(_) => "drop_index",
+        Statement::CreateIndex(_) => "create_index",
+        Statement::CreateTable(_) => "create_table",
+        Statement::AlterTable(_) => "alter_table",
     }
 }

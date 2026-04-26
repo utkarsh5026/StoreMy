@@ -1,11 +1,16 @@
+use tracing::{debug, instrument, trace, warn};
+
 use super::ParserError;
-use crate::parser::{
-    Parser,
-    statements::{
-        AggFunc, ColumnRef, Join, JoinKind, LimitClause, OrderBy, OrderDirection, SelectColumns,
-        SelectExpr, SelectItem, SelectStatement, TableRef, TableWithJoins,
+use crate::{
+    parser::{
+        Parser,
+        statements::{
+            AggFunc, ColumnRef, Expr, Join, JoinKind, LimitClause, OrderBy, OrderDirection,
+            SelectColumns, SelectItem, SelectStatement, TableRef, TableWithJoins,
+        },
+        token::TokenType,
     },
-    token::TokenType,
+    types::Value,
 };
 
 impl Parser {
@@ -29,6 +34,11 @@ impl Parser {
     ///
     /// Returns [`ParserError`] if any required token is missing or an aggregate
     /// function name is unrecognized.
+    #[instrument(
+        skip(self),
+        fields(component = "parser", statement = "select"),
+        err(Debug)
+    )]
     pub(super) fn parse_select(&mut self) -> Result<SelectStatement, ParserError> {
         self.expect(TokenType::Select)?;
 
@@ -46,16 +56,36 @@ impl Parser {
         let from = self.parse_tables()?;
         let where_clause = self.on_peek_token(TokenType::Where, Parser::parse_where)?;
         let group_by = self.parse_group_by()?;
+        let having = self.on_peek_token(TokenType::Having, Parser::parse_where)?;
         let order_by = self.parse_order_by()?;
         let limit = self.parse_limit_offset()?;
+
+        let join_count: usize = from.iter().map(|t| t.joins.len()).sum();
+        let projection_count = match &columns {
+            SelectColumns::All => 0,
+            SelectColumns::Exprs(exprs) => exprs.len(),
+        };
+        debug!(
+            distinct,
+            select_all = matches!(columns, SelectColumns::All),
+            projection_count,
+            from_count = from.len(),
+            join_count,
+            has_where = where_clause.is_some(),
+            group_by_count = group_by.len(),
+            has_having = having.is_some(),
+            order_by_count = order_by.len(),
+            has_limit = limit.is_some(),
+            "parsed SELECT statement"
+        );
 
         Ok(SelectStatement {
             distinct,
             columns,
             from,
             where_clause,
-            having: None,
             group_by,
+            having,
             order_by,
             limit,
         })
@@ -125,33 +155,56 @@ impl Parser {
     /// Parses the expression part of one `SELECT` projection item.
     ///
     /// Supported forms are:
-    /// - `<column>`
-    /// - `<table>.<column>`
+    /// - integer / float / string / `NULL` literal — `SELECT 1`, `SELECT 'x'`, `SELECT NULL`
+    /// - `<column>` or `<table>.<column>`
     /// - `COUNT(*)`
     /// - `<AGG>(<column>)` where `<AGG>` is parsed through [`AggFunc`]
+    ///
+    /// Boolean literals (`true`/`false`) are not yet recognized here because
+    /// the lexer classifies them as identifiers and disambiguating them from
+    /// columns named `true`/`false` is the binder's job, not the parser's.
     ///
     /// This helper only parses the projection expression itself. Any optional
     /// alias (`AS name` or implicit alias) is handled by [`Self::parse_select_list`].
     ///
     /// # Errors
     ///
-    /// Returns [`ParserError`] when the leading identifier is missing, when
-    /// aggregate-call syntax is malformed (missing argument or `)`), or when
-    /// a function-like name is not a recognized aggregate.
-    fn parse_projection_expr(p: &mut Parser) -> Result<SelectExpr, ParserError> {
+    /// Returns [`ParserError`] when the leading token is not a literal or
+    /// identifier, when aggregate-call syntax is malformed (missing argument
+    /// or `)`), or when a function-like name is not a recognized aggregate.
+    fn parse_projection_expr(p: &mut Parser) -> Result<Expr, ParserError> {
+        for kind in [
+            TokenType::Int,
+            TokenType::FloatLit,
+            TokenType::String,
+            TokenType::Null,
+        ] {
+            if p.peek_is(kind)? {
+                let tok = p.bump()?;
+                let value = Value::try_from(tok).map_err(ParserError::ParsingError)?;
+                return Ok(Expr::Literal(value));
+            }
+        }
+
         let name_tok = p.expect(TokenType::Identifier)?;
         let name = name_tok.value.to_uppercase();
 
         if p.if_peek_then_consume(TokenType::Lparen)? {
             if name == "COUNT" && p.if_peek_then_consume(TokenType::Asterisk)? {
                 p.expect(TokenType::Rparen)?;
-                return Ok(SelectExpr::CountStar);
+                return Ok(Expr::CountStar);
             }
 
-            let agg = AggFunc::try_from(name.as_str()).map_err(ParserError::ParsingError)?;
+            let agg = AggFunc::try_from(name.as_str()).map_err(|msg| {
+                warn!(function = %name_tok.value, reason = %msg, "unknown aggregate function");
+                ParserError::ParsingError(msg)
+            })?;
             let col_tok = p.expect(TokenType::Identifier)?;
             p.expect(TokenType::Rparen)?;
-            Ok(SelectExpr::Agg(agg, col_tok.value))
+            Ok(Expr::agg(
+                agg,
+                Expr::Column(ColumnRef::from(col_tok.value.as_str())),
+            ))
         } else {
             let cref = if p.if_peek_then_consume(TokenType::Dot)? {
                 ColumnRef {
@@ -164,59 +217,92 @@ impl Parser {
                     name: name_tok.value,
                 }
             };
-            Ok(SelectExpr::Column(cref))
+            Ok(Expr::Column(cref))
         }
     }
 
-    /// Parses an optional `ORDER BY` clause when `ORDER` is the next token.
+    /// Parses an optional `ORDER BY` clause with one or more sort keys.
     ///
-    /// Expects `ORDER BY`, a column identifier, then optionally `DESC` or
-    /// `ASC`.  If neither direction keyword is present, [`OrderDirection::Asc`]
-    /// is used.
-    /// If the next token is not `ORDER`, returns [`None`] without consuming
-    /// input.
+    /// Each key is `<column> [ASC|DESC]`; keys are separated by commas and
+    /// listed in priority order (the first key is the primary sort). When a
+    /// direction keyword is omitted, [`OrderDirection::Asc`] is used.
+    ///
+    /// If the next token is not `ORDER`, returns an empty vec without
+    /// consuming input. An empty vec therefore encodes "no clause".
+    ///
+    /// ```text
+    /// <order_by> ::= "ORDER" "BY" <key> ( "," <key> )*
+    /// <key>      ::= <column> [ "ASC" | "DESC" ]
+    /// ```
     ///
     /// # Errors
     ///
-    /// Returns [`ParserError`] when `ORDER` is present but `BY`, the sort
-    /// column, or an explicit `ASC`/`DESC` sequence is malformed.
-    fn parse_order_by(&mut self) -> Result<Option<OrderBy>, ParserError> {
-        self.on_peek_token(TokenType::Order, |p| {
-            p.expect(TokenType::By)?;
-            let order_col = p.parse_column_ref()?;
+    /// Returns [`ParserError`] when `ORDER` is present but `BY`, any sort
+    /// column, or an explicit `ASC`/`DESC` token is malformed.
+    #[instrument(
+        skip(self),
+        fields(component = "parser", clause = "order_by"),
+        err(Debug)
+    )]
+    fn parse_order_by(&mut self) -> Result<Vec<OrderBy>, ParserError> {
+        let parse_key = |p: &mut Parser| -> Result<OrderBy, ParserError> {
+            let col = p.parse_column_ref()?;
             let dir = if p.if_peek_then_consume(TokenType::Desc)? {
                 OrderDirection::Desc
             } else {
                 p.on_peek_token(TokenType::Asc, |_p| Ok(()))?;
                 OrderDirection::Asc
             };
+            Ok(OrderBy(col, dir))
+        };
 
-            Ok(OrderBy(order_col, dir))
-        })
+        let keys = self
+            .on_peek_token(TokenType::Order, |p| {
+                p.expect(TokenType::By)?;
+                let mut keys = vec![parse_key(p)?];
+                while p.if_peek_then_consume(TokenType::Comma)? {
+                    keys.push(parse_key(p)?);
+                }
+                Ok(keys)
+            })?
+            .unwrap_or_default();
+
+        debug!(key_count = keys.len(), "parsed ORDER BY clause");
+        Ok(keys)
     }
 
-    /// Parses an optional `GROUP BY <column>` clause.
+    /// Parses an optional `GROUP BY` clause with one or more grouping columns.
     ///
-    /// If the next token is `GROUP`, the parser consumes `GROUP BY` and
-    /// returns a single-element vec containing the column name.  If there is
-    /// no `GROUP` token the clause is absent and an empty vec is returned.
+    /// Columns are comma-separated. If the next token is not `GROUP`, returns
+    /// an empty vec without consuming input — empty encodes "no clause".
     ///
-    /// > **Note:** only a single grouping column is currently supported.
+    /// ```text
+    /// <group_by> ::= "GROUP" "BY" <column> ( "," <column> )*
+    /// ```
     ///
     /// # Errors
     ///
     /// Returns [`ParserError`] if `GROUP` is present but `BY` does not follow
-    /// it, or if no column identifier follows `GROUP BY`.
+    /// it, or if any column identifier in the list is missing or malformed.
+    #[instrument(
+        skip(self),
+        fields(component = "parser", clause = "group_by"),
+        err(Debug)
+    )]
     fn parse_group_by(&mut self) -> Result<Vec<ColumnRef>, ParserError> {
-        let group_by = self
+        let cols = self
             .on_peek_token(TokenType::Group, |p| {
                 p.expect(TokenType::By)?;
-                let column = p.parse_column_ref()?;
-                Ok(vec![column])
+                let mut cols = vec![p.parse_column_ref()?];
+                while p.if_peek_then_consume(TokenType::Comma)? {
+                    cols.push(p.parse_column_ref()?);
+                }
+                Ok(cols)
             })?
             .unwrap_or_default();
 
-        Ok(group_by)
+        debug!(column_count = cols.len(), "parsed GROUP BY clause");
+        Ok(cols)
     }
 
     /// Parses an optional `LIMIT` / `OFFSET` tail.
@@ -235,9 +321,15 @@ impl Parser {
     ///
     /// Returns [`ParserError`] when a numeric value following `LIMIT` or
     /// `OFFSET` is not an [`TokenType::Int`] or does not fit in `u64`.
+    #[instrument(
+        skip(self),
+        fields(component = "parser", clause = "limit_offset"),
+        err(Debug)
+    )]
     fn parse_limit_offset(&mut self) -> Result<Option<LimitClause>, ParserError> {
         let parse_int = |name: &str, p: &mut Parser| {
             p.expect(TokenType::Int)?.value.parse::<u64>().map_err(|e| {
+                warn!(kind = name, reason = %e, "invalid LIMIT/OFFSET literal");
                 ParserError::ParsingError(format!(
                     "invalid {name}: {e} expected non-negative integer like 1, 2, 3, etc."
                 ))
@@ -249,6 +341,7 @@ impl Parser {
             let offset = self
                 .on_peek_token(TokenType::Offset, |p| parse_int("offset", p))?
                 .unwrap_or(0);
+            debug!(limit, offset, "parsed LIMIT/OFFSET clause");
             return Ok(Some(LimitClause {
                 limit: Some(limit),
                 offset,
@@ -257,12 +350,14 @@ impl Parser {
 
         if self.if_peek_then_consume(TokenType::Offset)? {
             let offset = parse_int("offset", self)?;
+            debug!(offset, "parsed OFFSET-only clause");
             return Ok(Some(LimitClause {
                 limit: None,
                 offset,
             }));
         }
 
+        trace!("no LIMIT/OFFSET clause");
         Ok(None)
     }
 
@@ -276,6 +371,7 @@ impl Parser {
     ///
     /// Returns [`ParserError`] if a join keyword is present but the rest of the
     /// clause (`JOIN <table> ON <condition>`) is malformed.
+    #[instrument(skip(self), fields(component = "parser", clause = "joins"), err(Debug))]
     fn parse_joins(&mut self) -> Result<Vec<Join>, ParserError> {
         let mut joins = vec![];
 
@@ -307,6 +403,7 @@ impl Parser {
             });
         }
 
+        debug!(join_count = joins.len(), "parsed JOIN chain");
         Ok(joins)
     }
 }
@@ -318,8 +415,8 @@ mod tests {
             Parser,
             parsers::ParserError,
             statements::{
-                AggFunc, ColumnRef, JoinKind, LimitClause, OrderBy, OrderDirection, SelectColumns,
-                SelectExpr, SelectItem, SelectStatement, Statement, WhereCondition,
+                AggFunc, ColumnRef, Expr, JoinKind, LimitClause, OrderBy, OrderDirection,
+                SelectColumns, SelectItem, SelectStatement, Statement, WhereCondition,
             },
         },
         primitives::Predicate,
@@ -337,6 +434,7 @@ mod tests {
             Statement::DropIndex(_) => panic!("expected Statement::Select, got DropIndex"),
             Statement::CreateIndex(_) => panic!("expected Statement::Select, got CreateIndex"),
             Statement::CreateTable(_) => panic!("expected Statement::Select, got CreateTable"),
+            Statement::AlterTable(_) => panic!("expected Statement::Select, got AlterTable"),
         }
     }
 
@@ -350,7 +448,7 @@ mod tests {
         assert!(s.from[0].joins.is_empty());
         assert!(s.where_clause.is_none());
         assert!(s.group_by.is_empty());
-        assert!(s.order_by.is_none());
+        assert!(s.order_by.is_empty());
         assert_eq!(s.limit, None);
         assert!(s.having.is_none());
     }
@@ -368,7 +466,7 @@ mod tests {
         let s = select("SELECT id FROM orders").unwrap();
         match &s.columns {
             SelectColumns::Exprs(v) => {
-                assert_eq!(v, &vec![SelectItem::bare(SelectExpr::Column("id".into()))]);
+                assert_eq!(v, &vec![SelectItem::bare(Expr::Column("id".into()))]);
             }
             SelectColumns::All => panic!("expected Exprs, got All"),
         }
@@ -381,9 +479,9 @@ mod tests {
             panic!("expected Exprs");
         };
         assert_eq!(v, &vec![
-            SelectItem::bare(SelectExpr::Column("a".into())),
-            SelectItem::bare(SelectExpr::Column("b".into())),
-            SelectItem::bare(SelectExpr::Column("c".into())),
+            SelectItem::bare(Expr::Column("a".into())),
+            SelectItem::bare(Expr::Column("b".into())),
+            SelectItem::bare(Expr::Column("c".into())),
         ]);
     }
 
@@ -393,7 +491,7 @@ mod tests {
         let SelectColumns::Exprs(v) = &s.columns else {
             panic!("expected Exprs");
         };
-        assert_eq!(v, &vec![SelectItem::bare(SelectExpr::CountStar)]);
+        assert_eq!(v, &vec![SelectItem::bare(Expr::CountStar)]);
     }
 
     #[test]
@@ -402,9 +500,9 @@ mod tests {
         let SelectColumns::Exprs(v) = &s.columns else {
             panic!("expected Exprs");
         };
-        assert_eq!(v, &vec![SelectItem::bare(SelectExpr::Agg(
+        assert_eq!(v, &vec![SelectItem::bare(Expr::agg(
             AggFunc::Count,
-            "user_id".into()
+            Expr::Column("user_id".into())
         ))]);
     }
 
@@ -414,9 +512,9 @@ mod tests {
         let SelectColumns::Exprs(v) = &s.columns else {
             panic!("expected Exprs");
         };
-        assert_eq!(v, &vec![SelectItem::bare(SelectExpr::Agg(
+        assert_eq!(v, &vec![SelectItem::bare(Expr::agg(
             AggFunc::Sum,
-            "amount".into()
+            Expr::Column("amount".into())
         ))]);
     }
 
@@ -428,10 +526,11 @@ mod tests {
             panic!("expected Exprs");
         };
         assert_eq!(v.len(), 4);
-        assert_eq!(v[0].expr, SelectExpr::Agg(AggFunc::Sum, "x".into()));
-        assert_eq!(v[1].expr, SelectExpr::Agg(AggFunc::Avg, "x".into()));
-        assert_eq!(v[2].expr, SelectExpr::Agg(AggFunc::Min, "x".into()));
-        assert_eq!(v[3].expr, SelectExpr::Agg(AggFunc::Max, "x".into()));
+        let x = || Expr::Column("x".into());
+        assert_eq!(v[0].expr, Expr::agg(AggFunc::Sum, x()));
+        assert_eq!(v[1].expr, Expr::agg(AggFunc::Avg, x()));
+        assert_eq!(v[2].expr, Expr::agg(AggFunc::Min, x()));
+        assert_eq!(v[3].expr, Expr::agg(AggFunc::Max, x()));
         assert!(v.iter().all(|item| item.alias.is_none()));
     }
 
@@ -560,9 +659,8 @@ mod tests {
     #[test]
     fn test_parse_select_order_by_default_asc() {
         let s = select("SELECT * FROM t ORDER BY name").unwrap();
-        let Some(OrderBy(col, dir)) = &s.order_by else {
-            panic!("expected order_by");
-        };
+        assert_eq!(s.order_by.len(), 1);
+        let OrderBy(col, dir) = &s.order_by[0];
         assert_eq!(col, &ColumnRef::from("name"));
         assert_eq!(*dir, OrderDirection::Asc);
     }
@@ -570,9 +668,8 @@ mod tests {
     #[test]
     fn test_parse_select_order_by_desc() {
         let s = select("SELECT * FROM t ORDER BY score DESC").unwrap();
-        let Some(OrderBy(col, dir)) = &s.order_by else {
-            panic!("expected order_by");
-        };
+        assert_eq!(s.order_by.len(), 1);
+        let OrderBy(col, dir) = &s.order_by[0];
         assert_eq!(col, &ColumnRef::from("score"));
         assert_eq!(*dir, OrderDirection::Desc);
     }
@@ -580,9 +677,8 @@ mod tests {
     #[test]
     fn test_parse_select_order_by_explicit_asc() {
         let s = select("SELECT * FROM t ORDER BY z ASC").unwrap();
-        let Some(OrderBy(col, dir)) = &s.order_by else {
-            panic!("expected order_by");
-        };
+        assert_eq!(s.order_by.len(), 1);
+        let OrderBy(col, dir) = &s.order_by[0];
         assert_eq!(col, &ColumnRef::from("z"));
         assert_eq!(*dir, OrderDirection::Asc);
     }
@@ -621,9 +717,8 @@ mod tests {
         assert_eq!(s.from[0].table.alias.as_deref(), Some("uu"));
         assert_eq!(s.from[0].joins.len(), 1);
         assert_eq!(s.group_by, vec!["x".into()]);
-        let Some(OrderBy(col, dir)) = &s.order_by else {
-            panic!("expected order_by");
-        };
+        assert_eq!(s.order_by.len(), 1);
+        let OrderBy(col, dir) = &s.order_by[0];
         assert_eq!(col, &ColumnRef::from("x"));
         assert_eq!(*dir, OrderDirection::Desc);
         assert_eq!(
@@ -642,14 +737,69 @@ mod tests {
         let SelectColumns::Exprs(v) = &s.columns else {
             panic!("expected Exprs");
         };
-        assert_eq!(v, &vec![SelectItem::bare(SelectExpr::Column(
-            "count".into()
-        ))]);
+        assert_eq!(v, &vec![SelectItem::bare(Expr::Column("count".into()))]);
     }
 
     #[test]
-    fn test_parse_select_integer_literal_projection_rejected() {
-        assert!(select("SELECT 1 FROM dual").is_err());
+    fn test_parse_select_integer_literal_projection() {
+        let s = select("SELECT 1 FROM dual").unwrap();
+        let SelectColumns::Exprs(v) = &s.columns else {
+            panic!("expected Exprs");
+        };
+        assert_eq!(v[0].expr, Expr::Literal(Value::Int64(1)));
+        assert!(v[0].alias.is_none());
+    }
+
+    #[test]
+    fn test_parse_select_string_literal_projection() {
+        let s = select("SELECT 'hello' FROM t").unwrap();
+        let SelectColumns::Exprs(v) = &s.columns else {
+            panic!("expected Exprs");
+        };
+        assert_eq!(v[0].expr, Expr::Literal(Value::String("hello".into())));
+    }
+
+    #[test]
+    fn test_parse_select_null_literal_projection() {
+        let s = select("SELECT NULL FROM t").unwrap();
+        let SelectColumns::Exprs(v) = &s.columns else {
+            panic!("expected Exprs");
+        };
+        assert_eq!(v[0].expr, Expr::Literal(Value::Null));
+    }
+
+    #[test]
+    fn test_parse_select_float_literal_projection() {
+        let s = select("SELECT 3.12 FROM t").unwrap();
+        let SelectColumns::Exprs(v) = &s.columns else {
+            panic!("expected Exprs");
+        };
+        assert_eq!(v[0].expr, Expr::Literal(Value::Float64(3.12)));
+    }
+
+    #[test]
+    fn test_parse_select_literal_with_alias() {
+        let s = select("SELECT 1 AS one, 'hi' greeting FROM t").unwrap();
+        let SelectColumns::Exprs(v) = &s.columns else {
+            panic!("expected Exprs");
+        };
+        assert_eq!(v.len(), 2);
+        assert_eq!(v[0].expr, Expr::Literal(Value::Int64(1)));
+        assert_eq!(v[0].alias.as_deref(), Some("one"));
+        assert_eq!(v[1].expr, Expr::Literal(Value::String("hi".into())));
+        assert_eq!(v[1].alias.as_deref(), Some("greeting"));
+    }
+
+    #[test]
+    fn test_parse_select_mixed_literals_and_columns() {
+        let s = select("SELECT id, 1, name FROM users").unwrap();
+        let SelectColumns::Exprs(v) = &s.columns else {
+            panic!("expected Exprs");
+        };
+        assert_eq!(v.len(), 3);
+        assert_eq!(v[0].expr, Expr::Column("id".into()));
+        assert_eq!(v[1].expr, Expr::Literal(Value::Int64(1)));
+        assert_eq!(v[2].expr, Expr::Column("name".into()));
     }
 
     #[test]
@@ -743,7 +893,7 @@ mod tests {
         let SelectColumns::Exprs(v) = &s.columns else {
             panic!("expected Exprs");
         };
-        assert_eq!(v[0].expr, SelectExpr::Column("a".into()));
+        assert_eq!(v[0].expr, Expr::Column("a".into()));
         assert_eq!(v[0].alias.as_deref(), Some("x"));
     }
 
@@ -753,7 +903,7 @@ mod tests {
         let SelectColumns::Exprs(v) = &s.columns else {
             panic!("expected Exprs");
         };
-        assert_eq!(v[0].expr, SelectExpr::Column("a".into()));
+        assert_eq!(v[0].expr, Expr::Column("a".into()));
         assert_eq!(v[0].alias.as_deref(), Some("x"));
     }
 
@@ -763,7 +913,10 @@ mod tests {
         let SelectColumns::Exprs(v) = &s.columns else {
             panic!("expected Exprs");
         };
-        assert_eq!(v[0].expr, SelectExpr::Agg(AggFunc::Sum, "amt".into()));
+        assert_eq!(
+            v[0].expr,
+            Expr::agg(AggFunc::Sum, Expr::Column("amt".into()))
+        );
         assert_eq!(v[0].alias.as_deref(), Some("total"));
     }
 
@@ -773,7 +926,7 @@ mod tests {
         let SelectColumns::Exprs(v) = &s.columns else {
             panic!("expected Exprs");
         };
-        assert_eq!(v[0].expr, SelectExpr::CountStar);
+        assert_eq!(v[0].expr, Expr::CountStar);
         assert_eq!(v[0].alias.as_deref(), Some("n"));
     }
 
@@ -785,7 +938,7 @@ mod tests {
         };
         assert_eq!(
             v[0].expr,
-            SelectExpr::Column(ColumnRef {
+            Expr::Column(ColumnRef {
                 qualifier: Some("u".into()),
                 name: "name".into()
             })
@@ -808,6 +961,115 @@ mod tests {
     #[test]
     fn test_parse_select_as_without_alias_errors() {
         assert!(select("SELECT a AS FROM t").is_err());
+    }
+
+    #[test]
+    fn test_parse_select_group_by_multiple_columns() {
+        let s = select("SELECT a, b FROM t GROUP BY a, b").unwrap();
+        assert_eq!(s.group_by, vec!["a".into(), "b".into()]);
+    }
+
+    #[test]
+    fn test_parse_select_group_by_qualified_columns() {
+        let s = select("SELECT * FROM t GROUP BY t.a, t.b").unwrap();
+        assert_eq!(s.group_by.len(), 2);
+        assert_eq!(s.group_by[0].qualifier.as_deref(), Some("t"));
+        assert_eq!(s.group_by[0].name, "a");
+        assert_eq!(s.group_by[1].qualifier.as_deref(), Some("t"));
+        assert_eq!(s.group_by[1].name, "b");
+    }
+
+    #[test]
+    fn test_parse_select_group_by_trailing_comma_errors() {
+        // `GROUP BY a,` should fail — there must be a column after the comma.
+        assert!(select("SELECT a FROM t GROUP BY a,").is_err());
+    }
+
+    #[test]
+    fn test_parse_select_order_by_multiple_keys() {
+        // Mixed directions, in priority order: a ASC, b DESC, c ASC (default).
+        let s = select("SELECT * FROM t ORDER BY a, b DESC, c").unwrap();
+        assert_eq!(s.order_by.len(), 3);
+        assert_eq!(s.order_by[0].0, ColumnRef::from("a"));
+        assert_eq!(s.order_by[0].1, OrderDirection::Asc);
+        assert_eq!(s.order_by[1].0, ColumnRef::from("b"));
+        assert_eq!(s.order_by[1].1, OrderDirection::Desc);
+        assert_eq!(s.order_by[2].0, ColumnRef::from("c"));
+        assert_eq!(s.order_by[2].1, OrderDirection::Asc);
+    }
+
+    #[test]
+    fn test_parse_select_order_by_qualified_keys() {
+        let s = select("SELECT * FROM users u ORDER BY u.name ASC, u.id DESC").unwrap();
+        assert_eq!(s.order_by.len(), 2);
+        assert_eq!(s.order_by[0].0.qualifier.as_deref(), Some("u"));
+        assert_eq!(s.order_by[0].0.name, "name");
+        assert_eq!(s.order_by[1].0.qualifier.as_deref(), Some("u"));
+        assert_eq!(s.order_by[1].1, OrderDirection::Desc);
+    }
+
+    #[test]
+    fn test_parse_select_order_by_multi_key_with_limit() {
+        // The trailing LIMIT terminates the ORDER BY list cleanly.
+        let s = select("SELECT * FROM t ORDER BY a, b DESC LIMIT 5").unwrap();
+        assert_eq!(s.order_by.len(), 2);
+        assert_eq!(s.limit.as_ref().unwrap().limit, Some(5));
+    }
+
+    #[test]
+    fn test_parse_select_order_by_trailing_comma_errors() {
+        assert!(select("SELECT * FROM t ORDER BY a,").is_err());
+    }
+
+    #[test]
+    fn test_parse_select_having_simple_predicate() {
+        // HAVING with a column predicate. Aggregate predicates like
+        // `HAVING SUM(x) > 10` will land once `WhereCondition::Predicate`
+        // is generalized to `Expr` on both sides.
+        let s = select("SELECT a FROM t GROUP BY a HAVING a = 1").unwrap();
+        let h = s.having.as_ref().expect("expected having");
+        let WhereCondition::Predicate { field, op, value } = h else {
+            panic!("expected predicate");
+        };
+        assert_eq!(field, &ColumnRef::from("a"));
+        assert_eq!(*op, Predicate::Equals);
+        assert_eq!(*value, Value::Int64(1));
+    }
+
+    #[test]
+    fn test_parse_select_having_reuses_where_boolean_grammar() {
+        // AND binds tighter than OR — same as WHERE.
+        let s = select("SELECT a FROM t GROUP BY a HAVING a = 1 OR b = 2 AND c = 3").unwrap();
+        let h = s.having.as_ref().unwrap();
+        let WhereCondition::Or(_, r) = h else {
+            panic!("expected Or at top");
+        };
+        assert!(matches!(**r, WhereCondition::And(..)));
+    }
+
+    #[test]
+    fn test_parse_select_having_without_group_by_is_parser_ok() {
+        // The parser accepts HAVING without GROUP BY; rejecting that
+        // combination is the binder's job (it needs aggregate context).
+        let s = select("SELECT a FROM t HAVING a = 1").unwrap();
+        assert!(s.having.is_some());
+        assert!(s.group_by.is_empty());
+    }
+
+    #[test]
+    fn test_parse_select_having_sits_between_group_by_and_order_by() {
+        let s = select("SELECT a FROM t GROUP BY a HAVING a = 1 ORDER BY a DESC LIMIT 5").unwrap();
+        assert!(s.having.is_some());
+        assert_eq!(s.order_by.len(), 1);
+        let OrderBy(col, dir) = &s.order_by[0];
+        assert_eq!(col, &ColumnRef::from("a"));
+        assert_eq!(*dir, OrderDirection::Desc);
+        assert_eq!(s.limit.as_ref().unwrap().limit, Some(5));
+    }
+
+    #[test]
+    fn test_parse_select_having_missing_predicate_errors() {
+        assert!(select("SELECT a FROM t GROUP BY a HAVING").is_err());
     }
 
     #[test]

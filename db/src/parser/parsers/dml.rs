@@ -1,3 +1,5 @@
+use tracing::{debug, instrument, trace, warn};
+
 use super::ParserError;
 use crate::{
     Value,
@@ -17,15 +19,32 @@ impl Parser {
     ///
     /// Returns [`ParserError`] if `DELETE FROM` or the table name is missing,
     /// or if the `WHERE` clause is malformed.
+    #[instrument(
+        skip(self),
+        fields(component = "parser", statement = "delete"),
+        err(Debug)
+    )]
     pub(super) fn parse_delete(&mut self) -> Result<DeleteStatement, ParserError> {
         self.expect_seq(&[TokenType::Delete, TokenType::From])?;
         let (table_name, alias) = self.parse_table_with_alias()?;
 
         if !self.peek_is(TokenType::Where)? {
+            debug!(
+                table = %table_name,
+                has_alias = alias.is_some(),
+                has_where = false,
+                "parsed DELETE statement"
+            );
             return Ok(Statement::delete(table_name, alias, None));
         }
 
         let where_clause = self.on_peek_token(TokenType::Where, Parser::parse_where)?;
+        debug!(
+            table = %table_name,
+            has_alias = alias.is_some(),
+            has_where = where_clause.is_some(),
+            "parsed DELETE statement"
+        );
         Ok(Statement::delete(table_name, alias, where_clause))
     }
 
@@ -43,6 +62,11 @@ impl Parser {
     ///
     /// Returns [`ParserError`] if the syntax is malformed or a value token
     /// can't be converted to a [`Value`].
+    #[instrument(
+        skip(self),
+        fields(component = "parser", statement = "insert"),
+        err(Debug)
+    )]
     pub(super) fn parse_insert(&mut self) -> Result<InsertStatement, ParserError> {
         self.expect_seq(&[TokenType::Insert, TokenType::Into])?;
         let (table_name, _) = self.parse_table_with_alias()?;
@@ -52,6 +76,12 @@ impl Parser {
         // VALUES expectation below rather than being silently accepted.
         if self.peek_is(TokenType::Default)? {
             self.expect_seq(&[TokenType::Default, TokenType::Values])?;
+            debug!(
+                table = %table_name,
+                column_count = 0,
+                source = "default_values",
+                "parsed INSERT statement"
+            );
             return Ok(Statement::insert(
                 table_name,
                 None,
@@ -64,6 +94,22 @@ impl Parser {
         })?;
 
         let source = self.parse_insert_source()?;
+        let row_count = match &source {
+            InsertSource::Values(rows) => rows.len(),
+            InsertSource::Select(_) | InsertSource::DefaultValues => 0,
+        };
+        let source_kind = match &source {
+            InsertSource::Values(_) => "values",
+            InsertSource::Select(_) => "select",
+            InsertSource::DefaultValues => "default_values",
+        };
+        debug!(
+            table = %table_name,
+            column_count = columns.as_ref().map_or(0, Vec::len),
+            source = source_kind,
+            row_count,
+            "parsed INSERT statement"
+        );
         Ok(Statement::insert(table_name, columns, source))
     }
 
@@ -83,8 +129,14 @@ impl Parser {
     ///   - A row value list is malformed (missing parens, bad token, etc).
     ///   - A value cannot be converted to a [`Value`] type.
     ///   - `SELECT` parsing fails.
+    #[instrument(
+        skip(self),
+        fields(component = "parser", clause = "insert_source"),
+        err(Debug)
+    )]
     fn parse_insert_source(&mut self) -> Result<InsertSource, ParserError> {
         if self.peek_is(TokenType::Select)? {
+            trace!("INSERT source is SELECT");
             Ok(InsertSource::Select(Box::new(self.parse_select()?)))
         } else {
             self.expect(TokenType::Values)?;
@@ -92,7 +144,17 @@ impl Parser {
             loop {
                 let row = self.paren_list(|p| {
                     let t = p.bump()?;
-                    Value::try_from(t).map_err(ParserError::ParsingError)
+                    let value_kind = t.kind;
+                    let value_position = t.position;
+                    Value::try_from(t).map_err(|msg| {
+                        warn!(
+                            value_token_kind = ?value_kind,
+                            value_position,
+                            reason = %msg,
+                            "invalid INSERT literal"
+                        );
+                        ParserError::ParsingError(msg)
+                    })
                 })?;
 
                 rows.push(row);
@@ -101,6 +163,7 @@ impl Parser {
                 }
                 break;
             }
+            debug!(row_count = rows.len(), "parsed VALUES source");
             Ok(InsertSource::Values(rows))
         }
     }
@@ -113,6 +176,11 @@ impl Parser {
     ///
     /// Returns [`ParserError`] if any keyword is missing, a non-`=` operator is
     /// used, or a value token can't be converted to a [`Value`].
+    #[instrument(
+        skip(self),
+        fields(component = "parser", statement = "update"),
+        err(Debug)
+    )]
     pub(super) fn parse_update(&mut self) -> Result<UpdateStatement, ParserError> {
         self.expect(TokenType::Update)?;
         let (table_name, alias) = self.parse_table_with_alias()?;
@@ -124,11 +192,22 @@ impl Parser {
             let op = self.expect(TokenType::Operator)?;
 
             if op.value.ne("=") {
+                warn!(operator = %op.value, "UPDATE assignment must use '='");
                 return Err(ParserError::unexpected(TokenType::Operator, op.kind));
             }
 
             let t = self.bump()?;
-            let val = Value::try_from(t).map_err(ParserError::ParsingError)?;
+            let value_kind = t.kind;
+            let value_position = t.position;
+            let val = Value::try_from(t).map_err(|msg| {
+                warn!(
+                    value_token_kind = ?value_kind,
+                    value_position,
+                    reason = %msg,
+                    "invalid UPDATE assignment literal"
+                );
+                ParserError::ParsingError(msg)
+            })?;
 
             assignments.push(Assignment {
                 column: field.value,
@@ -141,6 +220,13 @@ impl Parser {
         }
 
         let where_clause = self.on_peek_token(TokenType::Where, Parser::parse_where)?;
+        debug!(
+            table = %table_name,
+            has_alias = alias.is_some(),
+            assignment_count = assignments.len(),
+            has_where = where_clause.is_some(),
+            "parsed UPDATE statement"
+        );
         Ok(Statement::update(
             table_name,
             alias,
