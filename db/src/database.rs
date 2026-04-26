@@ -1,3 +1,10 @@
+//! Runs SQL statements through a small worker-backed database facade.
+//!
+//! This module provides [`Database`], which accepts SQL text, schedules work on
+//! background threads, and exposes helper methods for read-only catalog queries.
+//! It is the high-level entry point used by callers that want to execute parsed
+//! SQL without managing parser and execution wiring directly.
+
 use std::{
     sync::{Arc, mpsc},
     thread,
@@ -6,11 +13,12 @@ use std::{
 use parking_lot::Mutex;
 
 use crate::{
-    catalog::manager::Catalog,
+    catalog::manager::{Catalog, TableInfo},
     engine::{self, EngineError, StatementResult},
     parser::Parser,
 };
 
+/// Alias for the result type returned by SQL execution.
 pub type QueryResult = Result<StatementResult, EngineError>;
 
 struct Job {
@@ -35,6 +43,23 @@ pub struct Database {
 
 impl Database {
     /// Creates a new `Database` with `workers` background worker threads.
+    ///
+    /// # Panics
+    ///
+    /// Panics if a worker thread cannot be spawned.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use std::sync::Arc;
+    ///
+    /// use db::{catalog::manager::Catalog, database::Database, transaction::TransactionManager};
+    ///
+    /// # fn example(catalog: Arc<Catalog>, txn_manager: Arc<TransactionManager>) {
+    /// let db = Database::new(catalog, txn_manager, 4);
+    /// let _ = db;
+    /// # }
+    /// ```
     pub fn new(
         catalog: Arc<Catalog>,
         txn_manager: Arc<crate::transaction::TransactionManager>,
@@ -74,6 +99,21 @@ impl Database {
     /// Executes a single SQL statement on the worker pool.
     ///
     /// Returns a receiver that yields exactly one `QueryResult`.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// # use std::sync::Arc;
+    /// # use db::catalog::manager::Catalog;
+    /// # use db::database::Database;
+    /// # use db::transaction::TransactionManager;
+    /// # fn example(catalog: Arc<Catalog>, txn_manager: Arc<TransactionManager>) {
+    /// let db = Database::new(catalog, txn_manager, 2);
+    /// let rx = db.execute("SELECT * FROM users");
+    /// let result = rx.recv().expect("worker should send one result");
+    /// let _ = result;
+    /// # }
+    /// ```
     pub fn execute(&self, sql: impl Into<String>) -> mpsc::Receiver<QueryResult> {
         let (reply_tx, reply_rx) = mpsc::channel::<QueryResult>();
         let job = Job {
@@ -83,6 +123,36 @@ impl Database {
 
         let _ = self.inner.queue_tx.send(job);
         reply_rx
+    }
+
+    /// Returns metadata for every user table, sorted by name.
+    ///
+    /// Runs synchronously on the calling thread — this is read-only catalog
+    /// I/O (no executor work), so it doesn't go through the worker pool.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if starting a transaction fails, reading table metadata
+    /// from the catalog fails, or committing the transaction fails.
+    pub fn list_user_tables(&self) -> Result<Vec<TableInfo>, EngineError> {
+        let txn = self.inner.txn_manager.begin()?;
+        let result = self.inner.catalog.list_tables(&txn)?;
+        txn.commit()?;
+        Ok(result)
+    }
+
+    /// Returns metadata for a single user table by name, or
+    /// [`EngineError::Catalog`] if no such table exists.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if starting a transaction fails, looking up the table
+    /// fails, or committing the transaction fails.
+    pub fn describe_table(&self, name: &str) -> Result<TableInfo, EngineError> {
+        let txn = self.inner.txn_manager.begin()?;
+        let result = self.inner.catalog.get_table_info(&txn, name)?;
+        txn.commit()?;
+        Ok(result)
     }
 }
 
