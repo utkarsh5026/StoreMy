@@ -289,7 +289,7 @@ impl Parser {
                     self.bump()?;
                     let val_tok = self.bump()?;
                     let value_kind = val_tok.kind;
-                    let value_position = val_tok.position;
+                    let value_position = val_tok.span.start;
                     default = Some(Value::try_from(val_tok).map_err(|msg| {
                         warn!(
                             column = %col_name,
@@ -530,10 +530,13 @@ mod tests {
         let Err(err) = parse("DROP TABLE IF users") else {
             panic!("expected error");
         };
-        assert!(matches!(err, ParserError::UnexpectedToken {
-            expected: TokenType::Exists,
-            ..
-        }));
+        assert!(matches!(
+            err,
+            ParserError::UnexpectedToken {
+                expected: TokenType::Exists,
+                ..
+            }
+        ));
     }
 
     #[test]
@@ -541,10 +544,13 @@ mod tests {
         let Err(err) = parse("DROP TABLE IF NOT EXISTS users") else {
             panic!("expected error");
         };
-        assert!(matches!(err, ParserError::UnexpectedToken {
-            expected: TokenType::Exists,
-            found: TokenType::Not
-        }));
+        assert!(matches!(
+            err,
+            ParserError::UnexpectedToken {
+                expected: TokenType::Exists,
+                found: TokenType::Not
+            }
+        ));
     }
 
     #[test]
@@ -693,10 +699,13 @@ mod tests {
         let Err(err) = parse("CREATE TABLE IF EXISTS t (id INT)") else {
             panic!("expected error");
         };
-        assert!(matches!(err, ParserError::UnexpectedToken {
-            expected: TokenType::Not,
-            found: TokenType::Exists
-        }));
+        assert!(matches!(
+            err,
+            ParserError::UnexpectedToken {
+                expected: TokenType::Not,
+                found: TokenType::Exists
+            }
+        ));
     }
 
     #[test]
@@ -705,10 +714,13 @@ mod tests {
             panic!("expected error");
         };
         // After `IF NOT`, parser requires `EXISTS` before the table name.
-        assert!(matches!(err, ParserError::UnexpectedToken {
-            expected: TokenType::Exists,
-            found: TokenType::Identifier,
-        }));
+        assert!(matches!(
+            err,
+            ParserError::UnexpectedToken {
+                expected: TokenType::Exists,
+                found: TokenType::Identifier,
+            }
+        ));
     }
 
     #[test]
@@ -774,10 +786,13 @@ mod tests {
         let Err(err) = parse("CREATE INDEX ix ON t ()") else {
             panic!("expected error");
         };
-        assert!(matches!(err, ParserError::UnexpectedToken {
-            expected: TokenType::Identifier,
-            found: TokenType::Rparen,
-        }));
+        assert!(matches!(
+            err,
+            ParserError::UnexpectedToken {
+                expected: TokenType::Identifier,
+                found: TokenType::Rparen,
+            }
+        ));
     }
 
     #[test]
@@ -800,10 +815,13 @@ mod tests {
         let Err(err) = parse("CREATE INDEX ix (c)") else {
             panic!("expected error");
         };
-        assert!(matches!(err, ParserError::UnexpectedToken {
-            expected: TokenType::On,
-            ..
-        }));
+        assert!(matches!(
+            err,
+            ParserError::UnexpectedToken {
+                expected: TokenType::On,
+                ..
+            }
+        ));
     }
 
     #[test]
@@ -861,10 +879,13 @@ mod tests {
         let Err(err) = parse("DROP INDEX IF ix") else {
             panic!("expected error");
         };
-        assert!(matches!(err, ParserError::UnexpectedToken {
-            expected: TokenType::Exists,
-            ..
-        }));
+        assert!(matches!(
+            err,
+            ParserError::UnexpectedToken {
+                expected: TokenType::Exists,
+                ..
+            }
+        ));
     }
 
     // --- happy path: parse_show_index ---
@@ -1027,10 +1048,13 @@ mod tests {
         let Err(err) = parse("ALTER TABLE users ADD age INT") else {
             panic!("expected error");
         };
-        assert!(matches!(err, ParserError::UnexpectedToken {
-            expected: TokenType::Column,
-            ..
-        }));
+        assert!(matches!(
+            err,
+            ParserError::UnexpectedToken {
+                expected: TokenType::Column,
+                ..
+            }
+        ));
     }
 
     #[test]
@@ -1038,10 +1062,13 @@ mod tests {
         let Err(err) = parse("ALTER TABLE users DROP bio") else {
             panic!("expected error");
         };
-        assert!(matches!(err, ParserError::UnexpectedToken {
-            expected: TokenType::Column,
-            ..
-        }));
+        assert!(matches!(
+            err,
+            ParserError::UnexpectedToken {
+                expected: TokenType::Column,
+                ..
+            }
+        ));
     }
 
     #[test]
@@ -1049,10 +1076,13 @@ mod tests {
         let Err(err) = parse("ALTER TABLE users RENAME COLUMN name full_name") else {
             panic!("expected error");
         };
-        assert!(matches!(err, ParserError::UnexpectedToken {
-            expected: TokenType::To,
-            ..
-        }));
+        assert!(matches!(
+            err,
+            ParserError::UnexpectedToken {
+                expected: TokenType::To,
+                ..
+            }
+        ));
     }
 
     #[test]
@@ -1060,10 +1090,13 @@ mod tests {
         let Err(err) = parse("ALTER TABLE users RENAME accounts") else {
             panic!("expected error");
         };
-        assert!(matches!(err, ParserError::UnexpectedToken {
-            expected: TokenType::To,
-            ..
-        }));
+        assert!(matches!(
+            err,
+            ParserError::UnexpectedToken {
+                expected: TokenType::To,
+                ..
+            }
+        ));
     }
 
     #[test]

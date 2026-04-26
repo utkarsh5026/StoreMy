@@ -383,7 +383,7 @@ impl Parser {
 
         let val_tok = self.bump()?;
         let value_kind = val_tok.kind;
-        let value_position = val_tok.position;
+        let value_position = val_tok.span.start;
         let value = Value::try_from(val_tok).map_err(|msg| {
             warn!(
                 value_token_kind = ?value_kind,

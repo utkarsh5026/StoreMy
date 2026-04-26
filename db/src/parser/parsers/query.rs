@@ -478,11 +478,14 @@ mod tests {
         let SelectColumns::Exprs(v) = &s.columns else {
             panic!("expected Exprs");
         };
-        assert_eq!(v, &vec![
-            SelectItem::bare(Expr::Column("a".into())),
-            SelectItem::bare(Expr::Column("b".into())),
-            SelectItem::bare(Expr::Column("c".into())),
-        ]);
+        assert_eq!(
+            v,
+            &vec![
+                SelectItem::bare(Expr::Column("a".into())),
+                SelectItem::bare(Expr::Column("b".into())),
+                SelectItem::bare(Expr::Column("c".into())),
+            ]
+        );
     }
 
     #[test]
@@ -500,10 +503,13 @@ mod tests {
         let SelectColumns::Exprs(v) = &s.columns else {
             panic!("expected Exprs");
         };
-        assert_eq!(v, &vec![SelectItem::bare(Expr::agg(
-            AggFunc::Count,
-            Expr::Column("user_id".into())
-        ))]);
+        assert_eq!(
+            v,
+            &vec![SelectItem::bare(Expr::agg(
+                AggFunc::Count,
+                Expr::Column("user_id".into())
+            ))]
+        );
     }
 
     #[test]
@@ -512,10 +518,13 @@ mod tests {
         let SelectColumns::Exprs(v) = &s.columns else {
             panic!("expected Exprs");
         };
-        assert_eq!(v, &vec![SelectItem::bare(Expr::agg(
-            AggFunc::Sum,
-            Expr::Column("amount".into())
-        ))]);
+        assert_eq!(
+            v,
+            &vec![SelectItem::bare(Expr::agg(
+                AggFunc::Sum,
+                Expr::Column("amount".into())
+            ))]
+        );
     }
 
     #[test]

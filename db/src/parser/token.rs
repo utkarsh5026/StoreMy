@@ -23,6 +23,56 @@ use std::fmt;
 
 use crate::{Type, Value};
 
+/// A half-open byte range `[start, end)` into the original input.
+///
+/// `start == end` represents a zero-length point — useful for "unexpected end
+/// of input" errors where there is no real token to point at.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct Span {
+    /// Byte offset of the first character of the span.
+    pub start: usize,
+    /// Byte offset one past the last character of the span.
+    pub end: usize,
+}
+
+impl Span {
+    /// Creates a span covering `[start, end)`.
+    ///
+    /// In debug builds, panics if `start > end`.
+    pub fn new(start: usize, end: usize) -> Self {
+        debug_assert!(start <= end, "span start ({start}) must be <= end ({end})");
+        Self { start, end }
+    }
+
+    /// Creates a zero-length span at `pos`.
+    ///
+    /// Useful when there is no token to attach an error to — for example,
+    /// "unexpected end of input" sets the span to a point at the end offset.
+    pub fn point(pos: usize) -> Self {
+        Self {
+            start: pos,
+            end: pos,
+        }
+    }
+
+    /// Number of bytes covered by this span.
+    pub fn len(&self) -> usize {
+        self.end - self.start
+    }
+
+    /// Returns `true` if this span covers zero bytes.
+    pub fn is_empty(&self) -> bool {
+        self.start == self.end
+    }
+}
+
+/// Formats the span as `start..end`.
+impl fmt::Display for Span {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}..{}", self.start, self.end)
+    }
+}
+
 /// The category of a SQL token.
 ///
 /// Each variant corresponds to either a SQL keyword, a literal kind, a
@@ -209,25 +259,21 @@ impl fmt::Display for TokenType {
 /// A single token produced by the lexer.
 ///
 /// Each token records what kind it is, the exact slice of source text that
-/// produced it, and the byte offset where it starts in the original input.
+/// produced it, and the byte range it occupies in the original input.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Token {
     /// The category of this token.
     pub kind: TokenType,
     /// The raw source text of this token (e.g. `"SELECT"`, `"42"`, `"'hello'"`).
     pub value: String,
-    /// Byte offset of the first character of this token in the original input.
-    pub position: usize,
+    /// Byte range covered by this token in the original input.
+    pub span: Span,
 }
 
-/// Formats the token as `KIND("value") at position N`.
+/// Formats the token as `KIND("value") at SPAN`.
 impl fmt::Display for Token {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
-            f,
-            "{}({:?}) at position {}",
-            self.kind, self.value, self.position
-        )
+        write!(f, "{}({:?}) at {}", self.kind, self.value, self.span)
     }
 }
 
@@ -243,13 +289,13 @@ impl Token {
     }
 }
 
-/// Constructs a [`Token`] from a `(kind, value, position)` tuple.
-impl From<(TokenType, String, usize)> for Token {
-    fn from(tuple: (TokenType, String, usize)) -> Self {
+/// Constructs a [`Token`] from a `(kind, value, span)` tuple.
+impl From<(TokenType, String, Span)> for Token {
+    fn from(tuple: (TokenType, String, Span)) -> Self {
         Token {
             kind: tuple.0,
             value: tuple.1,
-            position: tuple.2,
+            span: tuple.2,
         }
     }
 }
@@ -438,21 +484,69 @@ mod tests {
 
     use super::*;
 
+    // ---------- Span ----------
+
+    #[test]
+    fn span_new_constructs_range() {
+        let s = Span::new(3, 7);
+        assert_eq!(s.start, 3);
+        assert_eq!(s.end, 7);
+        assert_eq!(s.len(), 4);
+        assert!(!s.is_empty());
+    }
+
+    #[test]
+    fn span_point_is_zero_length() {
+        let s = Span::point(5);
+        assert_eq!(s.start, 5);
+        assert_eq!(s.end, 5);
+        assert_eq!(s.len(), 0);
+        assert!(s.is_empty());
+    }
+
+    #[test]
+    fn span_equal_endpoints_allowed() {
+        let s = Span::new(4, 4);
+        assert!(s.is_empty());
+    }
+
+    #[test]
+    #[should_panic(expected = "span start")]
+    fn span_reversed_range_panics_in_debug() {
+        let _ = Span::new(7, 3);
+    }
+
+    #[test]
+    fn span_display_format() {
+        assert_eq!(Span::new(2, 5).to_string(), "2..5");
+        assert_eq!(Span::point(9).to_string(), "9..9");
+    }
+
+    #[test]
+    fn span_copy_semantics() {
+        let a = Span::new(1, 4);
+        let b = a;
+        assert_eq!(a, b);
+    }
+
+    // ---------- Token ----------
+
     fn make_token(kind: TokenType, value: &str) -> Token {
         Token {
             kind,
             value: value.to_string(),
-            position: 0,
+            span: Span::point(0),
         }
     }
 
-    // From<(TokenType, String, usize)> maps fields correctly
+    // From<(TokenType, String, Span)> maps fields correctly
     #[test]
     fn test_token_from_tuple_fields() {
-        let token = Token::from((TokenType::Select, "SELECT".to_string(), 42));
+        let span = Span::new(42, 48);
+        let token = Token::from((TokenType::Select, "SELECT".to_string(), span));
         assert_eq!(token.kind, TokenType::Select);
         assert_eq!(token.value, "SELECT");
-        assert_eq!(token.position, 42);
+        assert_eq!(token.span, span);
     }
 
     // From<&Token> for String clones the value field
@@ -485,15 +579,15 @@ mod tests {
         assert!(!token.is_not(TokenType::Comma));
     }
 
-    // Display format is KIND("value") at position N
+    // Display format is KIND("value") at start..end
     #[test]
     fn test_token_display_format() {
         let token = Token {
             kind: TokenType::Identifier,
             value: "foo".to_string(),
-            position: 7,
+            span: Span::new(7, 10),
         };
-        assert_eq!(format!("{token}"), r#"IDENTIFIER("foo") at position 7"#);
+        assert_eq!(format!("{token}"), r#"IDENTIFIER("foo") at 7..10"#);
     }
 
     // Every keyword variant stringifies to its SQL spelling

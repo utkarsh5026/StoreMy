@@ -16,29 +16,29 @@
 
 use thiserror::Error;
 
-use crate::parser::token::{Token, TokenType};
+use crate::parser::token::{Span, Token, TokenType};
 
 /// Errors that can occur while lexing a SQL string.
 #[derive(Error, Debug, Clone, PartialEq, Eq)]
 pub enum LexError {
     /// A character was found that is not part of any valid SQL token.
-    #[error("invalid character '{ch}' found at position {position}")]
+    #[error("invalid character '{ch}' at {span}")]
     InvalidCharacter {
         /// The offending character.
         ch: char,
-        /// Byte offset in the original input string.
-        position: usize,
+        /// Byte range of the offending character in the original input.
+        span: Span,
     },
 
     /// The lexer expected a particular token kind but found something else.
-    #[error("expected {expected}, but found {found:?} at position {position}")]
+    #[error("expected {expected}, but found {found:?} at {span}")]
     UnexpectedToken {
         /// Description of what was expected (e.g. `"closing parenthesis"`).
         expected: String,
         /// The token kind that was actually found.
         found: super::token::TokenType,
-        /// Byte offset in the original input string.
-        position: usize,
+        /// Byte range of the offending token.
+        span: Span,
     },
 
     /// The input ended before a required token was found.
@@ -46,6 +46,8 @@ pub enum LexError {
     UnexpectedEof {
         /// Description of what was expected (e.g. `"closing quote '''"`).
         expected: String,
+        /// Zero-length span at the end of the input.
+        span: Span,
     },
 
     /// An identifier was parsed but does not match any known keyword.
@@ -101,9 +103,10 @@ impl Lexer {
     ///
     /// Every path that produces a token (except string and operator literals)
     /// goes through here so that `backtrack` always has something to restore.
-    fn create_token(&mut self, kind: TokenType, val: String, pos: usize) -> Token {
-        self.curr_token = Some((kind, val.clone(), pos).into());
-        (kind, val, pos).into()
+    fn create_token(&mut self, kind: TokenType, val: String, start: usize) -> Token {
+        let span = Span::new(start, self.position);
+        self.curr_token = Some((kind, val.clone(), span).into());
+        (kind, val, span).into()
     }
 
     /// Reads and returns the next token from the input, or `None` at end-of-input.
@@ -168,7 +171,7 @@ impl Lexer {
 
             _ => Err(LexError::InvalidCharacter {
                 ch,
-                position: start,
+                span: Span::new(start, start + ch.len_utf8()),
             }),
         }
     }
@@ -186,7 +189,7 @@ impl Lexer {
     pub fn backtrack(&mut self) -> Result<(), LexError> {
         match &self.curr_token {
             Some(tok) => {
-                self.position = tok.position;
+                self.position = tok.span.start;
                 Ok(())
             }
             None => Err(LexError::BackTrack),
@@ -277,6 +280,7 @@ impl Lexer {
 
         Err(LexError::UnexpectedEof {
             expected: format!("closing quote '{quote_char}'"),
+            span: Span::point(self.length),
         })
     }
 
@@ -380,10 +384,16 @@ mod tests {
     }
 
     fn tok(kind: TokenType, value: &str, position: usize) -> Token {
+        // For most tokens the span length equals value.len() — true for
+        // keywords, identifiers, integers, operators, and punctuation. String
+        // literals are the exception (the span includes surrounding quotes);
+        // tests that exercise strings either don't assert the span or build
+        // the token explicitly.
+        let end = position + value.len();
         Token {
             kind,
             value: value.to_string(),
-            position,
+            span: Span::new(position, end),
         }
     }
 
@@ -409,11 +419,14 @@ mod tests {
 
     #[test]
     fn multiple_integers() {
-        assert_eq!(lex("1 22 333"), vec![
-            tok(TokenType::Int, "1", 0),
-            tok(TokenType::Int, "22", 2),
-            tok(TokenType::Int, "333", 5),
-        ]);
+        assert_eq!(
+            lex("1 22 333"),
+            vec![
+                tok(TokenType::Int, "1", 0),
+                tok(TokenType::Int, "22", 2),
+                tok(TokenType::Int, "333", 5),
+            ]
+        );
     }
 
     #[test]
@@ -446,48 +459,65 @@ mod tests {
 
     #[test]
     fn float_literal_then_comma() {
-        assert_eq!(lex("2.5,"), vec![
-            tok(TokenType::FloatLit, "2.5", 0),
-            tok(TokenType::Comma, ",", 3),
-        ]);
+        assert_eq!(
+            lex("2.5,"),
+            vec![
+                tok(TokenType::FloatLit, "2.5", 0),
+                tok(TokenType::Comma, ",", 3),
+            ]
+        );
+    }
+
+    /// Build a String-literal token whose span covers the surrounding quotes,
+    /// while `value` is the unquoted contents.
+    fn str_tok(value: &str, start: usize) -> Token {
+        Token {
+            kind: TokenType::String,
+            value: value.to_string(),
+            span: Span::new(start, start + value.len() + 2),
+        }
     }
 
     #[test]
     fn single_quoted_string() {
-        assert_eq!(lex("'hello'"), vec![tok(TokenType::String, "hello", 0)]);
+        assert_eq!(lex("'hello'"), vec![str_tok("hello", 0)]);
     }
 
     #[test]
     fn double_quoted_string() {
-        assert_eq!(lex("\"world\""), vec![tok(TokenType::String, "world", 0)]);
+        assert_eq!(lex("\"world\""), vec![str_tok("world", 0)]);
     }
 
     #[test]
     fn string_with_spaces_inside() {
-        assert_eq!(lex("'hello world'"), vec![tok(
-            TokenType::String,
-            "hello world",
-            0
-        )]);
+        assert_eq!(lex("'hello world'"), vec![str_tok("hello world", 0)]);
     }
 
     #[test]
     fn empty_string_literal() {
-        assert_eq!(lex("''"), vec![tok(TokenType::String, "", 0)]);
+        assert_eq!(lex("''"), vec![str_tok("", 0)]);
     }
 
     #[test]
     fn unterminated_single_quoted_string() {
-        assert_eq!(try_lex("'oops").unwrap_err(), LexError::UnexpectedEof {
-            expected: "closing quote '''".to_string()
-        });
+        assert_eq!(
+            try_lex("'oops").unwrap_err(),
+            LexError::UnexpectedEof {
+                expected: "closing quote '''".to_string(),
+                span: Span::point("'oops".len()),
+            }
+        );
     }
 
     #[test]
     fn unterminated_double_quoted_string() {
-        assert_eq!(try_lex("\"oops").unwrap_err(), LexError::UnexpectedEof {
-            expected: "closing quote '\"'".to_string()
-        });
+        assert_eq!(
+            try_lex("\"oops").unwrap_err(),
+            LexError::UnexpectedEof {
+                expected: "closing quote '\"'".to_string(),
+                span: Span::point("\"oops".len()),
+            }
+        );
     }
 
     #[test]
@@ -534,10 +564,13 @@ mod tests {
     fn double_operator_consumes_both_chars() {
         // position after `<=` should be 2, leaving `42` at position 2
         let tokens = lex("<= 42");
-        assert_eq!(tokens, vec![
-            tok(TokenType::Operator, "<=", 0),
-            tok(TokenType::Int, "42", 3),
-        ]);
+        assert_eq!(
+            tokens,
+            vec![
+                tok(TokenType::Operator, "<=", 0),
+                tok(TokenType::Int, "42", 3),
+            ]
+        );
     }
 
     #[test]
@@ -600,11 +633,10 @@ mod tests {
 
     #[test]
     fn keyword_auto_increment() {
-        assert_eq!(lex("AUTO_INCREMENT"), vec![tok(
-            TokenType::AutoIncrement,
-            "AUTO_INCREMENT",
-            0
-        )]);
+        assert_eq!(
+            lex("AUTO_INCREMENT"),
+            vec![tok(TokenType::AutoIncrement, "AUTO_INCREMENT", 0)]
+        );
     }
 
     #[test]
@@ -634,11 +666,10 @@ mod tests {
 
     #[test]
     fn identifier_with_underscore() {
-        assert_eq!(lex("user_id"), vec![tok(
-            TokenType::Identifier,
-            "user_id",
-            0
-        )]);
+        assert_eq!(
+            lex("user_id"),
+            vec![tok(TokenType::Identifier, "user_id", 0)]
+        );
     }
 
     #[test]
@@ -653,10 +684,13 @@ mod tests {
 
     #[test]
     fn invalid_character_returns_error() {
-        assert_eq!(try_lex("@foo").unwrap_err(), LexError::InvalidCharacter {
-            ch: '@',
-            position: 0
-        });
+        assert_eq!(
+            try_lex("@foo").unwrap_err(),
+            LexError::InvalidCharacter {
+                ch: '@',
+                span: Span::new(0, 1),
+            }
+        );
     }
 
     #[test]
@@ -668,52 +702,67 @@ mod tests {
 
     #[test]
     fn select_star_from() {
-        assert_eq!(lex("SELECT * FROM"), vec![
-            tok(TokenType::Select, "SELECT", 0),
-            tok(TokenType::Asterisk, "*", 7),
-            tok(TokenType::From, "FROM", 9),
-        ]);
+        assert_eq!(
+            lex("SELECT * FROM"),
+            vec![
+                tok(TokenType::Select, "SELECT", 0),
+                tok(TokenType::Asterisk, "*", 7),
+                tok(TokenType::From, "FROM", 9),
+            ]
+        );
     }
 
     #[test]
     fn where_clause_with_operator_and_integer() {
-        assert_eq!(lex("WHERE age > 18"), vec![
-            tok(TokenType::Where, "WHERE", 0),
-            tok(TokenType::Identifier, "age", 6),
-            tok(TokenType::Operator, ">", 10),
-            tok(TokenType::Int, "18", 12),
-        ]);
+        assert_eq!(
+            lex("WHERE age > 18"),
+            vec![
+                tok(TokenType::Where, "WHERE", 0),
+                tok(TokenType::Identifier, "age", 6),
+                tok(TokenType::Operator, ">", 10),
+                tok(TokenType::Int, "18", 12),
+            ]
+        );
     }
 
     #[test]
     fn where_clause_with_string_literal() {
-        assert_eq!(lex("WHERE name = 'Alice'"), vec![
-            tok(TokenType::Where, "WHERE", 0),
-            tok(TokenType::Identifier, "name", 6),
-            tok(TokenType::Operator, "=", 11),
-            tok(TokenType::String, "Alice", 13),
-        ]);
+        assert_eq!(
+            lex("WHERE name = 'Alice'"),
+            vec![
+                tok(TokenType::Where, "WHERE", 0),
+                tok(TokenType::Identifier, "name", 6),
+                tok(TokenType::Operator, "=", 11),
+                str_tok("Alice", 13),
+            ]
+        );
     }
 
     #[test]
     fn function_call_like_sequence() {
-        assert_eq!(lex("count(id)"), vec![
-            tok(TokenType::Identifier, "count", 0),
-            tok(TokenType::Lparen, "(", 5),
-            tok(TokenType::Identifier, "id", 6),
-            tok(TokenType::Rparen, ")", 8),
-        ]);
+        assert_eq!(
+            lex("count(id)"),
+            vec![
+                tok(TokenType::Identifier, "count", 0),
+                tok(TokenType::Lparen, "(", 5),
+                tok(TokenType::Identifier, "id", 6),
+                tok(TokenType::Rparen, ")", 8),
+            ]
+        );
     }
 
     #[test]
     fn column_list_with_commas() {
-        assert_eq!(lex("a, b, c"), vec![
-            tok(TokenType::Identifier, "a", 0),
-            tok(TokenType::Comma, ",", 1),
-            tok(TokenType::Identifier, "b", 3),
-            tok(TokenType::Comma, ",", 4),
-            tok(TokenType::Identifier, "c", 6),
-        ]);
+        assert_eq!(
+            lex("a, b, c"),
+            vec![
+                tok(TokenType::Identifier, "a", 0),
+                tok(TokenType::Comma, ",", 1),
+                tok(TokenType::Identifier, "b", 3),
+                tok(TokenType::Comma, ",", 4),
+                tok(TokenType::Identifier, "c", 6),
+            ]
+        );
     }
 
     #[test]
