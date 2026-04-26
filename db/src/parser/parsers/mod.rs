@@ -64,24 +64,26 @@ impl Parser {
         let tok = self.bump()?;
         self.lexer.backtrack()?;
 
-        match tok.kind {
-            TokenType::Delete => Ok(Statement::Delete(self.parse_delete()?)),
-            TokenType::Insert => Ok(Statement::Insert(self.parse_insert()?)),
-            TokenType::Update => Ok(Statement::Update(self.parse_update()?)),
-            TokenType::Show => Ok(Statement::ShowIndexes(self.parse_show_index()?)),
-            TokenType::Select => Ok(Statement::Select(self.parse_select()?)),
+        let stmt = match tok.kind {
+            TokenType::Delete => Statement::Delete(self.parse_delete()?),
+            TokenType::Insert => Statement::Insert(self.parse_insert()?),
+            TokenType::Update => Statement::Update(self.parse_update()?),
+            TokenType::Show => Statement::ShowIndexes(self.parse_show_index()?),
+            TokenType::Select => Statement::Select(self.parse_select()?),
             TokenType::Drop => {
                 self.bump()?; // consume DROP
                 let next = self.bump()?;
                 self.lexer.backtrack()?; // put TABLE/INDEX back
 
                 match next.kind {
-                    TokenType::Index => Ok(Statement::DropIndex(self.parse_drop_index()?)),
-                    TokenType::Table => Ok(Statement::Drop(self.parse_drop()?)),
-                    _ => Err(ParserError::ParsingError(format!(
-                        "expected TABLE or INDEX after DROP, got {}",
-                        next.value
-                    ))),
+                    TokenType::Index => Statement::DropIndex(self.parse_drop_index()?),
+                    TokenType::Table => Statement::Drop(self.parse_drop()?),
+                    _ => {
+                        return Err(ParserError::ParsingError(format!(
+                            "expected TABLE or INDEX after DROP, got {}",
+                            next.value
+                        )));
+                    }
                 }
             }
             TokenType::Create => {
@@ -90,17 +92,49 @@ impl Parser {
                 self.lexer.backtrack()?;
 
                 match next.kind {
-                    TokenType::Index => Ok(Statement::CreateIndex(self.parse_create_index()?)),
-                    TokenType::Table => Ok(Statement::CreateTable(self.parse_create()?)),
-                    _ => Err(ParserError::ParsingError(format!(
-                        "expected TABLE or INDEX after CREATE, got {}",
-                        next.value
-                    ))),
+                    TokenType::Index => Statement::CreateIndex(self.parse_create_index()?),
+                    TokenType::Table => Statement::CreateTable(self.parse_create()?),
+                    _ => {
+                        return Err(ParserError::ParsingError(format!(
+                            "expected TABLE or INDEX after CREATE, got {}",
+                            next.value
+                        )));
+                    }
                 }
             }
-            _ => Err(ParserError::ParsingError(format!(
-                "unexpected statement start: {}",
-                tok.value
+            TokenType::Alter => Statement::AlterTable(self.parse_alter_table()?),
+            _ => {
+                return Err(ParserError::ParsingError(format!(
+                    "unexpected statement start: {}",
+                    tok.value
+                )));
+            }
+        };
+
+        self.expect_end()?;
+        Ok(stmt)
+    }
+
+    /// Consumes an optional trailing `;` and asserts the token stream is exhausted.
+    ///
+    /// Used at the end of [`Parser::parse`] to reject extra tokens after a
+    /// successful statement parse — `SELECT 1 garbage` should fail, not silently
+    /// truncate. Multi-statement input would need a separate API that loops
+    /// until EOF; `parse` is strictly single-statement.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ParserError::ParsingError`] when an unexpected token follows
+    /// the statement (after an optional trailing `;`), or propagates a
+    /// [`LexError`] from the lexer.
+    fn expect_end(&mut self) -> Result<(), ParserError> {
+        self.if_peek_then_consume(TokenType::Semicolon)?;
+
+        match self.lexer.next() {
+            None => Ok(()),
+            Some(Err(e)) => Err(ParserError::from(e)),
+            Some(Ok(tok)) => Err(ParserError::ParsingError(format!(
+                "unexpected token {tok} after end of statement"
             ))),
         }
     }
@@ -373,10 +407,10 @@ impl Parser {
     /// # Example
     ///
     /// Used to parse lists like column definitions: `a, b, c`
-    fn parse_comma_sep<T>(
-        &mut self,
-        mut item: impl FnMut(&mut Self) -> Result<T, ParserError>,
-    ) -> Result<Vec<T>, ParserError> {
+    fn parse_comma_sep<T, F>(&mut self, mut item: F) -> Result<Vec<T>, ParserError>
+    where
+        F: FnMut(&mut Self) -> Result<T, ParserError>,
+    {
         let mut out = vec![item(self)?];
         while self.if_peek_then_consume(TokenType::Comma)? {
             out.push(item(self)?);
@@ -398,10 +432,10 @@ impl Parser {
     /// # Example
     ///
     /// Used to parse parenthesized lists or expressions, e.g. `(a, b, c)`
-    fn parens<T>(
-        &mut self,
-        inner: impl FnOnce(&mut Self) -> Result<T, ParserError>,
-    ) -> Result<T, ParserError> {
+    fn parens<T, F>(&mut self, inner: F) -> Result<T, ParserError>
+    where
+        F: FnOnce(&mut Self) -> Result<T, ParserError>,
+    {
         self.expect(TokenType::Lparen)?;
         let v = inner(self)?;
         self.expect(TokenType::Rparen)?;
@@ -432,10 +466,10 @@ impl Parser {
     ///
     /// Used to parse lists such as column definitions or value tuples:
     /// `(a, b, c)`
-    fn paren_list<T>(
-        &mut self,
-        item: impl FnMut(&mut Self) -> Result<T, ParserError>,
-    ) -> Result<Vec<T>, ParserError> {
+    fn paren_list<T, F>(&mut self, item: F) -> Result<Vec<T>, ParserError>
+    where
+        F: FnMut(&mut Self) -> Result<T, ParserError>,
+    {
         self.parens(|p| p.parse_comma_sep(item))
     }
 }
