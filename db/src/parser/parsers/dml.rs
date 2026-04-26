@@ -3,7 +3,9 @@ use crate::{
     Value,
     parser::{
         Parser,
-        statements::{Assignment, DeleteStatement, InsertStatement, Statement, UpdateStatement},
+        statements::{
+            Assignment, DeleteStatement, InsertSource, InsertStatement, Statement, UpdateStatement,
+        },
         token::TokenType,
     },
 };
@@ -27,9 +29,15 @@ impl Parser {
         Ok(Statement::delete(table_name, alias, where_clause))
     }
 
-    /// Parses `INSERT INTO <table> [(<cols>)] VALUES (<row>)[, (<row>)...]`.
+    /// Parses one of:
+    ///   `INSERT INTO <table> [(<cols>)] VALUES (<row>)[, (<row>)]*`
+    ///   `INSERT INTO <table> [(<cols>)] SELECT ...`
+    ///   `INSERT INTO <table> DEFAULT VALUES`
     ///
-    /// The column list is optional.  Multiple value rows are supported.
+    /// The column list is optional for `VALUES` and `SELECT`. For
+    /// `DEFAULT VALUES` the column list is forbidden — if a `(` is present
+    /// it parses as a column list and the following `DEFAULT` then fails
+    /// the `expect(VALUES)` check, matching the error a user would expect.
     ///
     /// # Errors
     ///
@@ -39,27 +47,62 @@ impl Parser {
         self.expect_seq(&[TokenType::Insert, TokenType::Into])?;
         let (table_name, _) = self.parse_table_with_alias()?;
 
-        let columns = self.on_peek_token(TokenType::Lparen, |p| {
-            p.parse_delimited_list(TokenType::Comma, TokenType::Rparen, |p| {
-                Ok(p.expect(TokenType::Identifier)?.value)
-            })
-        })?;
-
-        self.expect(TokenType::Values)?;
-        let mut values = Vec::new();
-        loop {
-            self.expect(TokenType::Lparen)?;
-            let row = self.parse_delimited_list(TokenType::Comma, TokenType::Rparen, |p| {
-                let t = p.bump()?;
-                Value::try_from(t).map_err(ParserError::ParsingError)
-            })?;
-            values.push(row);
-            if self.on_peek_token(TokenType::Comma, |_| Ok(()))?.is_none() {
-                break;
-            }
+        // INSERT INTO t DEFAULT VALUES — branches before the optional column
+        // list, so `INSERT INTO t (a) DEFAULT VALUES` ends up failing the
+        // VALUES expectation below rather than being silently accepted.
+        if self.peek_is(TokenType::Default)? {
+            self.expect_seq(&[TokenType::Default, TokenType::Values])?;
+            return Ok(Statement::insert(
+                table_name,
+                None,
+                InsertSource::DefaultValues,
+            ));
         }
 
-        Ok(Statement::insert(table_name, columns, values))
+        let columns = self.on_peek_token(TokenType::Lparen, |p| {
+            p.parse_delimited_list(TokenType::Comma, TokenType::Rparen, Parser::expect_ident)
+        })?;
+
+        let source = self.parse_insert_source()?;
+        Ok(Statement::insert(table_name, columns, source))
+    }
+
+    /// Parses the data source for an `INSERT` statement.
+    ///
+    /// Handles two forms:
+    ///   - `VALUES (<row>)[, (<row>)]*`: parses one or more parenthesized row value lists.
+    ///   - `SELECT ...`: parses an arbitrary `SELECT` statement (subquery).
+    ///
+    /// This function assumes the preceding context is valid for an `INSERT` source:
+    /// after the table name (and optional columns).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ParserError`] if:
+    ///   - The next token is not `VALUES` or `SELECT`.
+    ///   - A row value list is malformed (missing parens, bad token, etc).
+    ///   - A value cannot be converted to a [`Value`] type.
+    ///   - `SELECT` parsing fails.
+    fn parse_insert_source(&mut self) -> Result<InsertSource, ParserError> {
+        if self.peek_is(TokenType::Select)? {
+            Ok(InsertSource::Select(Box::new(self.parse_select()?)))
+        } else {
+            self.expect(TokenType::Values)?;
+            let mut rows = Vec::new();
+            loop {
+                let row = self.paren_list(|p| {
+                    let t = p.bump()?;
+                    Value::try_from(t).map_err(ParserError::ParsingError)
+                })?;
+
+                rows.push(row);
+                if self.if_peek_then_consume(TokenType::Comma)? {
+                    continue;
+                }
+                break;
+            }
+            Ok(InsertSource::Values(rows))
+        }
     }
 
     /// Parses `UPDATE <table> [<alias>] SET <col>=<val>[, ...] [WHERE <condition>]`.
@@ -112,9 +155,19 @@ mod tests {
     use super::{Parser, ParserError};
     use crate::{
         Value,
-        parser::{statements::WhereCondition, token::TokenType},
+        parser::{
+            statements::{InsertSource, WhereCondition},
+            token::TokenType,
+        },
         primitives::Predicate,
     };
+
+    fn insert_rows(src: &InsertSource) -> &Vec<Vec<Value>> {
+        match src {
+            InsertSource::Values(rows) => rows,
+            other => panic!("expected InsertSource::Values, got {other:?}"),
+        }
+    }
 
     #[test]
     fn test_parse_delete_basic() {
@@ -152,8 +205,9 @@ mod tests {
         let i = p.parse_insert().unwrap();
         assert_eq!(i.table_name, "items");
         assert!(i.columns.is_none());
-        assert_eq!(i.values.len(), 1);
-        assert_eq!(i.values[0], vec![Value::Int64(42)]);
+        let rows = insert_rows(&i.source);
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0], vec![Value::Int64(42)]);
     }
 
     #[test]
@@ -165,9 +219,10 @@ mod tests {
             i.columns.as_deref(),
             Some(&["a".to_string(), "b".to_string()][..])
         );
-        assert_eq!(i.values.len(), 2);
-        assert_eq!(i.values[0][0], Value::Int64(1));
-        assert_eq!(i.values[1][1], Value::String("y".into()));
+        let rows = insert_rows(&i.source);
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0][0], Value::Int64(1));
+        assert_eq!(rows[1][1], Value::String("y".into()));
     }
 
     #[test]
@@ -202,7 +257,7 @@ mod tests {
         let mut p = Parser::new("INSERT INTO t (k) VALUES (0)");
         let i = p.parse_insert().unwrap();
         assert_eq!(i.columns.as_ref().unwrap().as_slice(), ["k"]);
-        assert_eq!(i.values[0], vec![Value::Int64(0)]);
+        assert_eq!(insert_rows(&i.source)[0], vec![Value::Int64(0)]);
     }
 
     #[test]
@@ -229,7 +284,9 @@ mod tests {
     fn test_parse_insert_row_with_only_string_literal() {
         let mut p = Parser::new("INSERT INTO t VALUES ('only')");
         let i = p.parse_insert().unwrap();
-        assert_eq!(i.values[0], vec![Value::String("only".into())]);
+        assert_eq!(insert_rows(&i.source)[0], vec![Value::String(
+            "only".into()
+        )]);
     }
 
     #[test]
@@ -434,6 +491,97 @@ mod tests {
     }
 
     // --- property / invariant: WHERE shape matches parse_predicate folding ---
+
+    // --- DEFAULT VALUES ---
+
+    #[test]
+    fn test_parse_insert_default_values() {
+        let mut p = Parser::new("INSERT INTO logs DEFAULT VALUES");
+        let i = p.parse_insert().unwrap();
+        assert_eq!(i.table_name, "logs");
+        assert!(i.columns.is_none());
+        assert!(matches!(i.source, InsertSource::DefaultValues));
+    }
+
+    #[test]
+    fn test_parse_insert_default_without_values_keyword() {
+        // Bare `DEFAULT` at end-of-input surfaces as WantedToken (no more tokens).
+        // `DEFAULT <something-else>` would give UnexpectedToken { expected: Values }.
+        let mut p = Parser::new("INSERT INTO logs DEFAULT");
+        let err = p.parse_insert().unwrap_err();
+        assert!(
+            matches!(
+                err,
+                ParserError::WantedToken
+                    | ParserError::UnexpectedToken {
+                        expected: TokenType::Values,
+                        ..
+                    }
+            ),
+            "got {err:?}"
+        );
+    }
+
+    #[test]
+    fn test_parse_insert_default_values_rejects_column_list() {
+        // `(a)` parses as a column list; the following DEFAULT then fails the
+        // VALUES expectation. We accept either an UnexpectedToken { expected: Values }
+        // or a ParsingError depending on lexer routing for the literal-conversion path.
+        let mut p = Parser::new("INSERT INTO t (a) DEFAULT VALUES");
+        let err = p.parse_insert().unwrap_err();
+        assert!(
+            matches!(err, ParserError::UnexpectedToken {
+                expected: TokenType::Values,
+                ..
+            }),
+            "got {err:?}"
+        );
+    }
+
+    // --- INSERT … SELECT … ---
+
+    #[test]
+    fn test_parse_insert_select_star() {
+        let mut p = Parser::new("INSERT INTO archive SELECT * FROM users");
+        let i = p.parse_insert().unwrap();
+        assert_eq!(i.table_name, "archive");
+        assert!(i.columns.is_none());
+        let InsertSource::Select(sel) = &i.source else {
+            panic!("expected Select source, got {:?}", i.source);
+        };
+        assert_eq!(sel.from.len(), 1);
+    }
+
+    #[test]
+    fn test_parse_insert_select_with_column_list_and_where() {
+        let mut p = Parser::new(
+            "INSERT INTO archive (id, name) SELECT id, name FROM users WHERE deleted = true",
+        );
+        let i = p.parse_insert().unwrap();
+        assert_eq!(
+            i.columns.as_deref(),
+            Some(&["id".to_string(), "name".to_string()][..])
+        );
+        let InsertSource::Select(sel) = &i.source else {
+            panic!("expected Select source, got {:?}", i.source);
+        };
+        assert!(sel.where_clause.is_some());
+    }
+
+    #[test]
+    fn test_parse_insert_neither_values_nor_select() {
+        // After a column list we expect VALUES (or SELECT). A bare integer
+        // should surface as an UnexpectedToken pointing at VALUES.
+        let mut p = Parser::new("INSERT INTO t (a) 1");
+        let err = p.parse_insert().unwrap_err();
+        assert!(
+            matches!(err, ParserError::UnexpectedToken {
+                expected: TokenType::Values,
+                ..
+            }),
+            "got {err:?}"
+        );
+    }
 
     #[test]
     fn test_parse_delete_where_and_binds_tighter_than_or() {

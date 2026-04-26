@@ -204,12 +204,12 @@ impl Statement {
     pub(super) fn insert(
         table_name: impl Into<String>,
         columns: Option<Vec<String>>,
-        values: Vec<Vec<Value>>,
+        source: InsertSource,
     ) -> InsertStatement {
         InsertStatement {
             table_name: table_name.into(),
             columns,
-            values,
+            source,
         }
     }
 
@@ -835,11 +835,25 @@ impl Display for AlterAction {
 /// --       ],
 /// --   }
 /// ```
+/// Where the rows for an `INSERT` come from.
+///
+/// SQL allows three row sources: an explicit `VALUES` list, the special
+/// `DEFAULT VALUES` form, or a sub-query (`INSERT … SELECT …`). Modeling
+/// these as an enum keeps invalid combinations unrepresentable — the parser
+/// can only ever build one shape, and downstream consumers are forced by
+/// the compiler to handle every case.
+#[derive(Debug, Clone)]
+pub enum InsertSource {
+    Values(Vec<Vec<Value>>),
+    DefaultValues,
+    Select(Box<SelectStatement>),
+}
+
 #[derive(Debug, Clone)]
 pub struct InsertStatement {
     pub table_name: String,
     pub columns: Option<Vec<String>>,
-    pub values: Vec<Vec<Value>>,
+    pub source: InsertSource,
 }
 
 impl Display for InsertStatement {
@@ -849,15 +863,20 @@ impl Display for InsertStatement {
             write!(f, " ({})", cols.join(", "))?;
         }
 
-        let rows: Vec<String> = self
-            .values
-            .iter()
-            .map(|row| {
-                let vals: Vec<String> = row.iter().map(ToString::to_string).collect();
-                format!("({})", vals.join(", "))
-            })
-            .collect();
-        write!(f, " VALUES {}", rows.join(", "))
+        match &self.source {
+            InsertSource::DefaultValues => write!(f, " DEFAULT VALUES"),
+            InsertSource::Select(sel) => write!(f, " {sel}"),
+            InsertSource::Values(rows) => {
+                let rendered: Vec<String> = rows
+                    .iter()
+                    .map(|row| {
+                        let vals: Vec<String> = row.iter().map(ToString::to_string).collect();
+                        format!("({})", vals.join(", "))
+                    })
+                    .collect();
+                write!(f, " VALUES {}", rendered.join(", "))
+            }
+        }
     }
 }
 
@@ -879,12 +898,6 @@ impl Display for InsertStatement {
 pub struct Assignment {
     pub column: String,
     pub value: Value,
-}
-
-impl Display for Assignment {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{} = {}", self.column, self.value)
-    }
 }
 
 /// Parsed `UPDATE table [alias] SET col = val, … [WHERE …]`.
@@ -925,8 +938,13 @@ impl Display for UpdateStatement {
         if let Some(alias) = &self.alias {
             write!(f, " AS {alias}")?;
         }
-        let sets: Vec<String> = self.assignments.iter().map(ToString::to_string).collect();
-        write!(f, " SET {}", sets.join(", "))?;
+        write!(f, " SET ")?;
+        for (i, assignment) in self.assignments.iter().enumerate() {
+            if i > 0 {
+                write!(f, ", ")?;
+            }
+            write!(f, "{} = {}", assignment.column, assignment.value)?;
+        }
         if let Some(where_clause) = &self.where_clause {
             write!(f, " WHERE {where_clause}")?;
         }
