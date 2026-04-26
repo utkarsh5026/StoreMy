@@ -4,8 +4,9 @@ use crate::{
     parser::{
         Parser,
         statements::{
-            ColumnDef, CreateIndexStatement, CreateTableStatement, DropIndexStatement,
-            DropStatement, ShowIndexesStatement, Statement,
+            AlterAction, AlterTableStatement, ColumnDef, CreateIndexStatement,
+            CreateTableStatement, DropIndexStatement, DropStatement, ShowIndexesStatement,
+            Statement,
         },
         token::TokenType,
     },
@@ -26,6 +27,93 @@ impl Parser {
             table_name,
             if_exists,
         })
+    }
+
+    /// Parses an `ALTER TABLE` statement.
+    ///
+    /// Expects the token sequence `ALTER TABLE [IF EXISTS] <table_name> <action>`.
+    ///
+    /// Parses:
+    /// - the `ALTER TABLE` keywords,
+    /// - an optional `IF EXISTS`,
+    /// - the target table name,
+    /// - and an alter action (add, drop, or rename column/table).
+    ///
+    /// # Returns
+    ///
+    /// An [`AlterTableStatement`] containing the table name, `if_exists` flag, and the action.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`ParserError`] if any part of the statement is malformed or an expected token is
+    /// missing.
+    pub(super) fn parse_alter_table(&mut self) -> Result<AlterTableStatement, ParserError> {
+        self.expect_seq(&[TokenType::Alter, TokenType::Table])?;
+        let if_exists = self.parse_if_exists(false)?;
+
+        let table_name = self.expect_ident()?;
+        let action = self.parse_alter_action()?;
+        Ok(AlterTableStatement {
+            table_name,
+            if_exists,
+            action,
+        })
+    }
+
+    /// Parses the action clause for an `ALTER TABLE` statement.
+    ///
+    /// Supported actions are:
+    /// - `ADD COLUMN <column_definition>` — Add a new column to the table.
+    /// - `DROP COLUMN [IF EXISTS] <name>` — Remove a column by name, optionally only if it exists.
+    /// - `RENAME COLUMN <from> TO <to>` — Rename a column.
+    /// - `RENAME TABLE TO <to>` — Rename the whole table.
+    ///
+    /// # Returns
+    ///
+    /// An [`AlterAction`] describing the type of alteration.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`ParserError`] if the clause is syntactically incorrect or an expected token is
+    /// missing.
+    fn parse_alter_action(&mut self) -> Result<AlterAction, ParserError> {
+        let action_token = self.bump()?;
+        match action_token.kind {
+            TokenType::Add => {
+                // ADD COLUMN <name> <type and constraints>
+                self.expect_seq(&[TokenType::Column])?;
+                let name = self.expect_ident()?;
+                let column_def = self.parse_column_definition(name)?;
+                Ok(AlterAction::AddColumn(column_def))
+            }
+
+            TokenType::Drop => {
+                // DROP COLUMN [IF EXISTS] <name>
+                self.expect_seq(&[TokenType::Column])?;
+                let if_exists = self.parse_if_exists(false)?;
+                let name = self.expect_ident()?;
+                Ok(AlterAction::DropColumn { name, if_exists })
+            }
+
+            TokenType::Rename => {
+                // RENAME COLUMN <from> TO <to> | RENAME TO <to>
+                if self.if_peek_then_consume(TokenType::Column)? {
+                    let from = self.expect_ident()?;
+                    self.expect(TokenType::To)?;
+                    let to = self.expect_ident()?;
+                    Ok(AlterAction::RenameColumn { from, to })
+                } else {
+                    self.expect(TokenType::To)?;
+                    let to = self.expect_ident()?;
+                    Ok(AlterAction::RenameTable { to })
+                }
+            }
+
+            _ => Err(ParserError::ParsingError(format!(
+                "expected ADD COLUMN, DROP COLUMN, RENAME COLUMN, or RENAME TABLE, got {}",
+                action_token.value
+            ))),
+        }
     }
 
     /// Parses `CREATE TABLE [IF NOT EXISTS] <name> (<columns>)`.
@@ -696,5 +784,182 @@ mod tests {
         assert!(out.contains("INT"));
         assert!(out.contains("NOT NULL"));
         assert!(out.contains("PRIMARY KEY"));
+    }
+
+    use crate::parser::statements::AlterAction;
+
+    #[test]
+    fn test_parse_alter_add_column_simple() {
+        let stmt = parse("ALTER TABLE users ADD COLUMN age INT").unwrap();
+        let Statement::AlterTable(a) = stmt else {
+            panic!("expected AlterTable");
+        };
+        assert_eq!(a.table_name, "users");
+        assert!(!a.if_exists);
+        let AlterAction::AddColumn(col) = a.action else {
+            panic!("expected AddColumn");
+        };
+        assert_eq!(col.name, "age");
+        assert_eq!(col.col_type, Type::Int64);
+        assert!(col.nullable);
+        assert!(!col.primary_key);
+        assert!(col.default.is_none());
+    }
+
+    #[test]
+    fn test_parse_alter_add_column_with_qualifiers() {
+        let stmt = parse("ALTER TABLE users ADD COLUMN age INT NOT NULL DEFAULT 0").unwrap();
+        let Statement::AlterTable(a) = stmt else {
+            panic!("expected AlterTable");
+        };
+        let AlterAction::AddColumn(col) = a.action else {
+            panic!("expected AddColumn");
+        };
+        assert_eq!(col.name, "age");
+        assert!(!col.nullable);
+        assert_eq!(col.default, Some(Value::Int64(0)));
+    }
+
+    #[test]
+    fn test_parse_alter_drop_column() {
+        let stmt = parse("ALTER TABLE users DROP COLUMN bio").unwrap();
+        let Statement::AlterTable(a) = stmt else {
+            panic!("expected AlterTable");
+        };
+        let AlterAction::DropColumn { name, if_exists } = a.action else {
+            panic!("expected DropColumn");
+        };
+        assert_eq!(name, "bio");
+        assert!(!if_exists);
+    }
+
+    #[test]
+    fn test_parse_alter_drop_column_if_exists() {
+        let stmt = parse("ALTER TABLE users DROP COLUMN IF EXISTS bio").unwrap();
+        let Statement::AlterTable(a) = stmt else {
+            panic!("expected AlterTable");
+        };
+        let AlterAction::DropColumn { name, if_exists } = a.action else {
+            panic!("expected DropColumn");
+        };
+        assert_eq!(name, "bio");
+        assert!(if_exists);
+    }
+
+    #[test]
+    fn test_parse_alter_rename_column() {
+        let stmt = parse("ALTER TABLE users RENAME COLUMN name TO full_name").unwrap();
+        let Statement::AlterTable(a) = stmt else {
+            panic!("expected AlterTable");
+        };
+        let AlterAction::RenameColumn { from, to } = a.action else {
+            panic!("expected RenameColumn");
+        };
+        assert_eq!(from, "name");
+        assert_eq!(to, "full_name");
+    }
+
+    #[test]
+    fn test_parse_alter_rename_table() {
+        let stmt = parse("ALTER TABLE users RENAME TO accounts").unwrap();
+        let Statement::AlterTable(a) = stmt else {
+            panic!("expected AlterTable");
+        };
+        assert_eq!(a.table_name, "users");
+        let AlterAction::RenameTable { to } = a.action else {
+            panic!("expected RenameTable");
+        };
+        assert_eq!(to, "accounts");
+    }
+
+    #[test]
+    fn test_parse_alter_outer_if_exists() {
+        let stmt = parse("ALTER TABLE IF EXISTS users RENAME TO accounts").unwrap();
+        let Statement::AlterTable(a) = stmt else {
+            panic!("expected AlterTable");
+        };
+        assert_eq!(a.table_name, "users");
+        assert!(a.if_exists);
+        assert!(matches!(a.action, AlterAction::RenameTable { .. }));
+    }
+
+    #[test]
+    fn test_parse_alter_display_round_trip() {
+        let stmt = parse("ALTER TABLE users ADD COLUMN age INT NOT NULL").unwrap();
+        let rendered = stmt.to_string();
+        assert!(rendered.starts_with("ALTER TABLE users"));
+        assert!(rendered.contains("ADD COLUMN"));
+        assert!(rendered.contains("age"));
+        assert!(rendered.contains("NOT NULL"));
+    }
+
+    // --- error paths: parse_alter_table ---
+
+    #[test]
+    fn test_parse_alter_add_missing_column_keyword() {
+        let Err(err) = parse("ALTER TABLE users ADD age INT") else {
+            panic!("expected error");
+        };
+        assert!(matches!(err, ParserError::UnexpectedToken {
+            expected: TokenType::Column,
+            ..
+        }));
+    }
+
+    #[test]
+    fn test_parse_alter_drop_missing_column_keyword() {
+        let Err(err) = parse("ALTER TABLE users DROP bio") else {
+            panic!("expected error");
+        };
+        assert!(matches!(err, ParserError::UnexpectedToken {
+            expected: TokenType::Column,
+            ..
+        }));
+    }
+
+    #[test]
+    fn test_parse_alter_rename_column_missing_to() {
+        let Err(err) = parse("ALTER TABLE users RENAME COLUMN name full_name") else {
+            panic!("expected error");
+        };
+        assert!(matches!(err, ParserError::UnexpectedToken {
+            expected: TokenType::To,
+            ..
+        }));
+    }
+
+    #[test]
+    fn test_parse_alter_rename_table_missing_to() {
+        let Err(err) = parse("ALTER TABLE users RENAME accounts") else {
+            panic!("expected error");
+        };
+        assert!(matches!(err, ParserError::UnexpectedToken {
+            expected: TokenType::To,
+            ..
+        }));
+    }
+
+    #[test]
+    fn test_parse_alter_unknown_action() {
+        let Err(ParserError::ParsingError(msg)) = parse("ALTER TABLE users FLIP COLUMN x") else {
+            panic!("expected ParsingError");
+        };
+        assert!(msg.contains("ADD") || msg.contains("expected"));
+    }
+
+    #[test]
+    fn test_parse_alter_missing_action() {
+        assert!(matches!(
+            parse("ALTER TABLE users"),
+            Err(ParserError::WantedToken)
+        ));
+    }
+
+    #[test]
+    fn test_parse_alter_missing_table_name() {
+        assert!(matches!(
+            parse("ALTER TABLE"),
+            Err(ParserError::WantedToken)
+        ));
     }
 }
