@@ -91,7 +91,7 @@ impl Parser {
 
                 match next.kind {
                     TokenType::Index => Ok(Statement::CreateIndex(self.parse_create_index()?)),
-                    TokenType::Table => self.parse_create(),
+                    TokenType::Table => Ok(Statement::CreateTable(self.parse_create()?)),
                     _ => Err(ParserError::ParsingError(format!(
                         "expected TABLE or INDEX after CREATE, got {}",
                         next.value
@@ -358,5 +358,84 @@ impl Parser {
             }
         }
         Ok(items)
+    }
+
+    /// Parses a comma-separated sequence of items.
+    ///
+    /// This method expects the first item to be present (i.e., the sequence is not empty).
+    /// It uses the provided `item` closure to parse each element. After parsing each item,
+    /// it checks for a comma; if a comma is found, parsing continues, otherwise the process stops.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ParserError`] if parsing any item fails.
+    ///
+    /// # Example
+    ///
+    /// Used to parse lists like column definitions: `a, b, c`
+    fn parse_comma_sep<T>(
+        &mut self,
+        mut item: impl FnMut(&mut Self) -> Result<T, ParserError>,
+    ) -> Result<Vec<T>, ParserError> {
+        let mut out = vec![item(self)?];
+        while self.if_peek_then_consume(TokenType::Comma)? {
+            out.push(item(self)?);
+        }
+        Ok(out)
+    }
+
+    /// Parses a construct enclosed in parentheses.
+    ///
+    /// This method expects the next token to be `'('`, then parses the content using the given
+    /// `inner` closure, and finally expects a closing `')'`. The result of parsing the inner
+    /// content is returned.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ParserError`] if the opening or closing parenthesis is missing,
+    /// or if parsing the inner content fails.
+    ///
+    /// # Example
+    ///
+    /// Used to parse parenthesized lists or expressions, e.g. `(a, b, c)`
+    fn parens<T>(
+        &mut self,
+        inner: impl FnOnce(&mut Self) -> Result<T, ParserError>,
+    ) -> Result<T, ParserError> {
+        self.expect(TokenType::Lparen)?;
+        let v = inner(self)?;
+        self.expect(TokenType::Rparen)?;
+        Ok(v)
+    }
+
+    /// Expects the next token to be an identifier and returns its value as a `String`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ParserError`] if the next token is not an identifier.
+    #[inline]
+    fn expect_ident(&mut self) -> Result<String, ParserError> {
+        Ok(self.expect(TokenType::Identifier)?.value)
+    }
+
+    /// Parses a parenthesized, comma-separated list of items.
+    ///
+    /// This method expects the next token to be `'('`, then repeatedly parses items using the given
+    /// `item` closure separated by commas, and finally expects a closing `')'`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ParserError`] if the opening or closing parenthesis is missing,
+    /// if any item fails to parse, or if the comma separation is malformed.
+    ///
+    /// # Example
+    ///
+    /// Used to parse lists such as column definitions or value tuples:
+    /// `(a, b, c)`
+    fn paren_list<T>(
+        &mut self,
+        item: impl FnMut(&mut Self) -> Result<T, ParserError>,
+    ) -> Result<Vec<T>, ParserError> {
+        self.parens(|p| p.parse_comma_sep(item))
     }
 }

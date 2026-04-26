@@ -4,8 +4,8 @@ use crate::{
     parser::{
         Parser,
         statements::{
-            ColumnDef, CreateIndexStatement, DropIndexStatement, DropStatement,
-            ShowIndexesStatement, Statement,
+            ColumnDef, CreateIndexStatement, CreateTableStatement, DropIndexStatement,
+            DropStatement, ShowIndexesStatement, Statement,
         },
         token::TokenType,
     },
@@ -21,8 +21,11 @@ impl Parser {
     pub(super) fn parse_drop(&mut self) -> Result<DropStatement, ParserError> {
         self.expect_seq(&[TokenType::Table])?;
         let if_exists = self.parse_if_exists(false)?;
-        let tok = self.expect(TokenType::Identifier)?;
-        Ok(Statement::drop(&tok, if_exists))
+        let table_name = self.expect_ident()?;
+        Ok(DropStatement {
+            table_name,
+            if_exists,
+        })
     }
 
     /// Parses `CREATE TABLE [IF NOT EXISTS] <name> (<columns>)`.
@@ -35,23 +38,21 @@ impl Parser {
     ///
     /// Returns [`ParserError`] if the syntax is malformed, a type token is
     /// unrecognized, or a default value can't be parsed.
-    pub(super) fn parse_create(&mut self) -> Result<Statement, ParserError> {
+    pub(super) fn parse_create(&mut self) -> Result<CreateTableStatement, ParserError> {
         self.expect_seq(&[TokenType::Table])?;
         let if_not_exists = self.parse_if_exists(true)?;
-        let table_name = self.expect(TokenType::Identifier)?.value;
+        let table_name = self.expect_ident()?;
         self.expect(TokenType::Lparen)?;
 
-        let mut columns: Vec<ColumnDef> = Vec::new();
-        let mut primary_key: Option<String> = None;
+        let mut columns = Vec::new();
+        let mut primary_key = Vec::new();
 
         loop {
             let curr_tok = self.bump()?;
             match curr_tok.kind {
                 TokenType::Primary => {
-                    self.expect_seq(&[TokenType::Key, TokenType::Lparen])?;
-                    let pkey = self.expect(TokenType::Identifier)?;
-                    self.expect(TokenType::Rparen)?;
-                    primary_key = Some(pkey.value);
+                    self.expect_seq(&[TokenType::Key])?;
+                    primary_key.extend(self.paren_list(Parser::expect_ident)?);
                 }
                 TokenType::Identifier => {
                     columns.push(self.parse_column_definition(curr_tok.value)?);
@@ -71,12 +72,12 @@ impl Parser {
             }
         }
 
-        Ok(Statement::CreateTable(Statement::create_table(
+        Ok(CreateTableStatement {
             table_name,
             if_not_exists,
             columns,
             primary_key,
-        )))
+        })
     }
 
     /// Parses the tail of a `CREATE TABLE` column: a [`Type`] token followed by
@@ -172,24 +173,25 @@ impl Parser {
         Ok(true)
     }
 
-    /// Parses `CREATE INDEX [IF NOT EXISTS] <name> (<col>) [USING HASH|BTREE]`.
+    /// Parses `CREATE INDEX [IF NOT EXISTS] <name> ON <table> (<col>, ...) [USING HASH|BTREE]`.
     ///
-    /// Defaults to [`Index::Hash`] when no `USING` clause is present.
+    /// Defaults to [`Index::Hash`] when no `USING` clause is present. At least
+    /// one column is required; column order is preserved (semantically
+    /// significant for composite B-tree indexes via the leftmost-prefix rule).
     ///
     /// # Errors
     ///
-    /// Returns [`ParserError`] if required tokens are missing or the index type
-    /// after `USING` is not `HASH` or `BTREE`.
+    /// Returns [`ParserError`] if required tokens are missing, the column list
+    /// is empty, or the index type after `USING` is not `HASH` or `BTREE`.
     pub(super) fn parse_create_index(&mut self) -> Result<CreateIndexStatement, ParserError> {
         self.expect(TokenType::Index)?;
         let if_not_exists = self.parse_if_exists(true)?;
+        let index_name = self.expect_ident()?;
 
-        let index_name = self.expect(TokenType::Identifier)?;
+        self.expect(TokenType::On)?;
+        let table_name = self.expect_ident()?;
 
-        self.expect(TokenType::Lparen)?;
-        let col_name = self.expect(TokenType::Identifier)?;
-        self.expect(TokenType::Rparen)?;
-
+        let columns = self.paren_list(Parser::expect_ident)?;
         let index_type = self
             .on_peek_token(TokenType::Using, |p| {
                 let type_tok = p.bump()?;
@@ -203,12 +205,13 @@ impl Parser {
             })?
             .unwrap_or(Index::Hash);
 
-        Ok(Statement::create_index(
-            &index_name,
-            &col_name,
+        Ok(CreateIndexStatement {
+            index_name,
+            table_name,
+            columns,
             index_type,
             if_not_exists,
-        ))
+        })
     }
 
     /// Parses `DROP INDEX [IF EXISTS] <name> [ON <table>]`.
@@ -223,15 +226,19 @@ impl Parser {
         self.expect(TokenType::Index)?;
         let if_exists = self.parse_if_exists(false)?;
 
-        let index_name = self.expect(TokenType::Identifier)?;
+        let index_name = self.expect_ident()?;
         let table_name = if self.peek_is(TokenType::On)? {
             self.bump()?;
-            String::from(&self.expect(TokenType::Identifier)?)
+            self.expect_ident()?
         } else {
             String::new()
         };
 
-        Ok(Statement::drop_index(table_name, &index_name, if_exists))
+        Ok(DropIndexStatement {
+            table_name,
+            index_name,
+            if_exists,
+        })
     }
 
     /// Parses `SHOW INDEXES [FROM <table>]`.
@@ -248,8 +255,7 @@ impl Parser {
         let table_name = self.peek_is(TokenType::From).and_then(|ok| {
             if ok {
                 self.bump()?;
-                let t = self.expect(TokenType::Identifier)?;
-                Ok(Some(t.value))
+                Ok(Some(self.expect_ident()?))
             } else {
                 Ok(None)
             }
@@ -341,7 +347,7 @@ mod tests {
         assert!(!t.columns[0].primary_key);
         assert!(!t.columns[0].auto_increment);
         assert!(t.columns[0].default.is_none());
-        assert!(t.primary_key.is_none());
+        assert!(t.primary_key.is_empty());
     }
 
     #[test]
@@ -361,7 +367,7 @@ mod tests {
             panic!("expected CreateTable");
         };
         assert_eq!(t.columns.len(), 2);
-        assert_eq!(t.primary_key.as_deref(), Some("id"));
+        assert_eq!(t.primary_key, vec!["id"]);
     }
 
     #[test]
@@ -370,7 +376,7 @@ mod tests {
         let Statement::CreateTable(t) = stmt else {
             panic!("expected CreateTable");
         };
-        assert_eq!(t.primary_key.as_deref(), Some("id"));
+        assert_eq!(t.primary_key, vec!["id"]);
         assert_eq!(t.columns.len(), 1);
         assert_eq!(t.columns[0].name, "id");
     }
@@ -490,32 +496,47 @@ mod tests {
         }));
     }
 
-    // --- happy path: parse_create_index ---
-
     #[test]
     fn test_parse_create_index_defaults_to_hash() {
-        let stmt = parse("CREATE INDEX idx_email (email)").unwrap();
+        let stmt = parse("CREATE INDEX idx_email ON users (email)").unwrap();
         let Statement::CreateIndex(c) = stmt else {
             panic!("expected CreateIndex");
         };
+        assert_eq!(c.index_name, "idx_email");
+        assert_eq!(c.table_name, "users");
+        assert_eq!(c.columns, vec!["email"]);
         let rendered = c.to_string();
         assert!(rendered.contains("idx_email"));
+        assert!(rendered.contains("users"));
         assert!(rendered.contains("email"));
         assert!(rendered.contains("USING HASH"));
     }
 
     #[test]
-    fn test_parse_create_index_if_not_exists() {
-        let stmt = parse("CREATE INDEX IF NOT EXISTS ix (c)").unwrap();
+    fn test_parse_create_index_multiple_columns_preserve_order() {
+        let stmt = parse("CREATE INDEX idx_name ON users (last_name, first_name, email)").unwrap();
         let Statement::CreateIndex(c) = stmt else {
             panic!("expected CreateIndex");
         };
+        assert_eq!(c.columns, vec!["last_name", "first_name", "email"]);
+        let rendered = c.to_string();
+        assert!(rendered.contains("(last_name, first_name, email)"));
+    }
+
+    #[test]
+    fn test_parse_create_index_if_not_exists() {
+        let stmt = parse("CREATE INDEX IF NOT EXISTS ix ON t (a, b)").unwrap();
+        let Statement::CreateIndex(c) = stmt else {
+            panic!("expected CreateIndex");
+        };
+        assert!(c.if_not_exists);
+        assert_eq!(c.columns, vec!["a", "b"]);
         assert!(c.to_string().contains("IF NOT EXISTS"));
     }
 
     #[test]
     fn test_parse_create_index_using_hash() {
-        let stmt = parse("CREATE INDEX h (c) USING HASH").unwrap();
+        let stmt = parse("CREATE INDEX h ON t (c) USING HASH").unwrap();
         let Statement::CreateIndex(c) = stmt else {
             panic!("expected CreateIndex");
         };
@@ -523,22 +544,59 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_create_index_using_btree() {
-        let stmt = parse("CREATE INDEX b (c) USING BTREE").unwrap();
+    fn test_parse_create_index_using_btree_multi_column() {
+        let stmt = parse("CREATE INDEX b ON t (a, b) USING BTREE").unwrap();
         let Statement::CreateIndex(c) = stmt else {
             panic!("expected CreateIndex");
         };
+        assert_eq!(c.columns, vec!["a", "b"]);
         assert!(c.to_string().contains("USING BTREE"));
     }
 
-    // --- error paths: parse_create_index ---
+    #[test]
+    fn test_parse_create_index_empty_column_list_rejected() {
+        // paren_list requires at least one identifier, so `()` fails on the closing `)`.
+        let Err(err) = parse("CREATE INDEX ix ON t ()") else {
+            panic!("expected error");
+        };
+        assert!(matches!(err, ParserError::UnexpectedToken {
+            expected: TokenType::Identifier,
+            found: TokenType::Rparen,
+        }));
+    }
+
+    #[test]
+    fn test_parse_create_index_trailing_comma_rejected() {
+        assert!(parse("CREATE INDEX ix ON t (a, )").is_err());
+    }
 
     #[test]
     fn test_parse_create_index_using_invalid_kind() {
-        let Err(ParserError::ParsingError(msg)) = parse("CREATE INDEX bad (c) USING HEAP") else {
+        let Err(ParserError::ParsingError(msg)) = parse("CREATE INDEX bad ON t (c) USING HEAP")
+        else {
             panic!("expected ParsingError");
         };
         assert!(msg.contains("expected HASH or BTREE"));
+    }
+
+    #[test]
+    fn test_parse_create_index_missing_on() {
+        // Without ON, parser should fail looking for `ON` after the index name.
+        let Err(err) = parse("CREATE INDEX ix (c)") else {
+            panic!("expected error");
+        };
+        assert!(matches!(err, ParserError::UnexpectedToken {
+            expected: TokenType::On,
+            ..
+        }));
+    }
+
+    #[test]
+    fn test_parse_create_index_missing_table() {
+        assert!(matches!(
+            parse("CREATE INDEX ix ON"),
+            Err(ParserError::WantedToken)
+        ));
     }
 
     #[test]
@@ -623,8 +681,6 @@ mod tests {
             Err(ParserError::WantedToken)
         ));
     }
-
-    // --- property / invariant: Display round-trip shape ---
 
     #[test]
     fn test_parse_create_round_trip_display_contains_core_tokens() {
