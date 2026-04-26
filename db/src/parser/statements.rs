@@ -116,6 +116,7 @@ pub enum Statement {
     CreateTable(CreateTableStatement),
     CreateIndex(CreateIndexStatement),
     DropIndex(DropIndexStatement),
+    AlterTable(AlterTableStatement),
     Delete(DeleteStatement),
     Insert(InsertStatement),
     Update(UpdateStatement),
@@ -145,7 +146,7 @@ pub enum Statement {
 ///     table_name: "users".into(),
 ///     if_not_exists: false,
 ///     columns: vec![col],
-///     primary_key: None,
+///     primary_key: vec![],
 /// };
 /// let statement = Statement::CreateTable(inner);
 /// assert_eq!(
@@ -160,6 +161,7 @@ impl Display for Statement {
             Statement::CreateTable(statement) => write!(f, "{statement}"),
             Statement::CreateIndex(statement) => write!(f, "{statement}"),
             Statement::DropIndex(statement) => write!(f, "{statement}"),
+            Statement::AlterTable(statement) => write!(f, "{statement}"),
             Statement::Delete(statement) => write!(f, "{statement}"),
             Statement::Insert(statement) => write!(f, "{statement}"),
             Statement::Update(statement) => write!(f, "{statement}"),
@@ -178,44 +180,12 @@ impl Statement {
             Statement::CreateTable(_) => "CreateTable",
             Statement::CreateIndex(_) => "CreateIndex",
             Statement::DropIndex(_) => "DropIndex",
+            Statement::AlterTable(_) => "AlterTable",
             Statement::Delete(_) => "Delete",
             Statement::Insert(_) => "Insert",
             Statement::Update(_) => "Update",
             Statement::Select(_) => "Select",
             Statement::ShowIndexes(_) => "ShowIndexes",
-        }
-    }
-
-    pub(super) fn drop(table_name: impl Into<String>, if_exists: bool) -> DropStatement {
-        DropStatement {
-            table_name: table_name.into(),
-            if_exists,
-        }
-    }
-
-    pub(super) fn create_index(
-        index_name: impl Into<String>,
-        col_name: impl Into<String>,
-        index_type: Index,
-        if_not_exists: bool,
-    ) -> CreateIndexStatement {
-        CreateIndexStatement {
-            index_name: index_name.into(),
-            col_name: col_name.into(),
-            index_type,
-            if_not_exists,
-        }
-    }
-
-    pub(super) fn drop_index(
-        table_name: impl Into<String>,
-        index_name: impl Into<String>,
-        if_exists: bool,
-    ) -> DropIndexStatement {
-        DropIndexStatement {
-            table_name: table_name.into(),
-            index_name: index_name.into(),
-            if_exists,
         }
     }
 
@@ -254,20 +224,6 @@ impl Statement {
             alias,
             assignments,
             where_clause,
-        }
-    }
-
-    pub(super) fn create_table(
-        table_name: impl Into<String>,
-        if_not_exists: bool,
-        columns: Vec<ColumnDef>,
-        primary_key: Option<String>,
-    ) -> CreateTableStatement {
-        CreateTableStatement {
-            table_name: table_name.into(),
-            if_not_exists,
-            columns,
-            primary_key,
         }
     }
 
@@ -616,7 +572,7 @@ pub struct CreateTableStatement {
     pub table_name: String,
     pub if_not_exists: bool,
     pub columns: Vec<ColumnDef>,
-    pub primary_key: Option<String>,
+    pub primary_key: Vec<String>,
 }
 
 /// Pretty-prints the statement as a SQL-like string.
@@ -629,38 +585,43 @@ impl Display for CreateTableStatement {
         write!(f, " {} (", self.table_name)?;
         let cols: Vec<String> = self.columns.iter().map(ToString::to_string).collect();
         write!(f, "{}", cols.join(", "))?;
-        if let Some(pk) = &self.primary_key {
-            write!(f, ", PRIMARY KEY ({pk})")?;
+        if !self.primary_key.is_empty() {
+            write!(f, ", PRIMARY KEY ({})", self.primary_key.join(", "))?;
         }
         write!(f, ")")
     }
 }
 
-/// Parsed `CREATE INDEX [IF NOT EXISTS] <name> ON (<col>) USING <type>`.
+/// Parsed `CREATE INDEX [IF NOT EXISTS] <name> ON <table> (<col>, ...) USING <type>`.
 ///
-/// Single-column indexes only at this stage; composite indexes are not modeled.
+/// Supports composite (multi-column) indexes. Column order in `columns` is
+/// semantically significant — for B-tree indexes it determines the key order
+/// used for the leftmost-prefix lookup rule.
 ///
 /// # SQL examples
 ///
 /// ```sql
-/// -- CREATE INDEX idx_age ON users(age) USING BTREE;
+/// -- CREATE INDEX idx_age ON users (age) USING BTREE;
 /// --   CreateIndexStatement {
-/// --       index_name: "idx_age", col_name: "age",
+/// --       index_name: "idx_age", table_name: "users",
+/// --       columns: ["age"],
 /// --       index_type: Index::Btree, if_not_exists: false,
 /// --   }
 ///
-/// -- CREATE INDEX IF NOT EXISTS idx_user ON orders(user_id) USING HASH;
+/// -- CREATE INDEX idx_user ON orders (user_id, created_at) USING BTREE;
 /// --   CreateIndexStatement {
-/// --       index_name: "idx_user", col_name: "user_id",
-/// --       index_type: Index::Hash, if_not_exists: true,
+/// --       index_name: "idx_user", table_name: "orders",
+/// --       columns: ["user_id", "created_at"],
+/// --       index_type: Index::Btree, if_not_exists: false,
 /// --   }
 /// ```
 #[derive(Debug, Clone)]
 pub struct CreateIndexStatement {
-    index_name: String,
-    col_name: String,
-    index_type: Index,
-    if_not_exists: bool,
+    pub index_name: String,
+    pub table_name: String,
+    pub columns: Vec<String>,
+    pub index_type: Index,
+    pub if_not_exists: bool,
 }
 
 impl Display for CreateIndexStatement {
@@ -669,14 +630,17 @@ impl Display for CreateIndexStatement {
             Index::Hash => "HASH",
             Index::Btree => "BTREE",
         };
-        write!(f, "CREATE")?;
+        write!(f, "CREATE INDEX")?;
         if self.if_not_exists {
             write!(f, " IF NOT EXISTS")?;
         }
         write!(
             f,
-            " INDEX {} ON ({}) USING {}",
-            self.index_name, self.col_name, index_type
+            " {} ON {} ({}) USING {}",
+            self.index_name,
+            self.table_name,
+            self.columns.join(", "),
+            index_type
         )
     }
 }
@@ -698,9 +662,9 @@ impl Display for CreateIndexStatement {
 /// ```
 #[derive(Debug, Clone)]
 pub struct DropIndexStatement {
-    table_name: String,
-    index_name: String,
-    if_exists: bool,
+    pub table_name: String,
+    pub index_name: String,
+    pub if_exists: bool,
 }
 
 impl Display for DropIndexStatement {
@@ -737,6 +701,104 @@ impl Display for ShowIndexesStatement {
             write!(f, " FROM {table}")?;
         }
         Ok(())
+    }
+}
+
+/// Parsed `ALTER TABLE [IF EXISTS] <name> <action>`.
+///
+/// `if_exists` is the *outer* clause — it means "don't error if the *table*
+/// is missing." Per-action `if_exists` flags (e.g. `DROP COLUMN IF EXISTS bio`)
+/// live inside the corresponding [`AlterAction`] variant.
+///
+/// Only a single action per statement is modeled at this stage. Multi-action
+/// SQL (`ALTER TABLE u ADD COLUMN x INT, DROP COLUMN y`) would change `action`
+/// to `Vec<AlterAction>` without touching the variants themselves.
+///
+/// # SQL examples
+///
+/// ```sql
+/// -- ALTER TABLE users ADD COLUMN age INT NOT NULL DEFAULT 0;
+/// --   AlterTableStatement {
+/// --       table_name: "users", if_exists: false,
+/// --       action: AlterAction::AddColumn(ColumnDef { name: "age", … }),
+/// --   }
+///
+/// -- ALTER TABLE IF EXISTS users RENAME TO accounts;
+/// --   AlterTableStatement {
+/// --       table_name: "users", if_exists: true,
+/// --       action: AlterAction::RenameTable { to: "accounts" },
+/// --   }
+///
+/// -- ALTER TABLE users DROP COLUMN IF EXISTS bio;
+/// --   AlterTableStatement {
+/// --       table_name: "users", if_exists: false,
+/// --       action: AlterAction::DropColumn { name: "bio", if_exists: true },
+/// --   }
+///
+/// -- ALTER TABLE users RENAME COLUMN name TO full_name;
+/// --   AlterTableStatement {
+/// --       table_name: "users", if_exists: false,
+/// --       action: AlterAction::RenameColumn { from: "name", to: "full_name" },
+/// --   }
+/// ```
+#[derive(Debug, Clone)]
+pub struct AlterTableStatement {
+    pub table_name: String,
+    pub if_exists: bool,
+    pub action: AlterAction,
+}
+
+/// One mutation applied by an `ALTER TABLE` statement.
+///
+/// Each variant captures the syntactic shape of one supported action. The
+/// parser produces these directly; the binder/executor decides what work each
+/// one implies on storage (some are metadata-only, others may require
+/// rewriting every page in the table).
+///
+/// Variants:
+///
+/// - [`AlterAction::AddColumn`] — append a column. Reuses [`ColumnDef`] so the column tail (`<type>
+///   [NOT NULL] [PRIMARY KEY] [AUTO_INCREMENT] [DEFAULT <lit>]`) parses identically to a column
+///   inside `CREATE TABLE`.
+/// - [`AlterAction::DropColumn`] — remove a column by name. The inner `if_exists` controls whether
+///   dropping a missing column is a no-op or an error — independent of the outer table-level
+///   `if_exists`.
+/// - [`AlterAction::RenameColumn`] — change a column's name. Catalog-only.
+/// - [`AlterAction::RenameTable`] — change the table's name. Catalog-only.
+#[derive(Debug, Clone)]
+pub enum AlterAction {
+    AddColumn(ColumnDef),
+    DropColumn { name: String, if_exists: bool },
+    RenameColumn { from: String, to: String },
+    RenameTable { to: String },
+}
+
+impl Display for AlterTableStatement {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "ALTER TABLE")?;
+        if self.if_exists {
+            write!(f, " IF EXISTS")?;
+        }
+        write!(f, " {} {}", self.table_name, self.action)
+    }
+}
+
+impl Display for AlterAction {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            AlterAction::AddColumn(col) => write!(f, "ADD COLUMN {col}"),
+            AlterAction::DropColumn { name, if_exists } => {
+                write!(f, "DROP COLUMN")?;
+                if *if_exists {
+                    write!(f, " IF EXISTS")?;
+                }
+                write!(f, " {name}")
+            }
+            AlterAction::RenameColumn { from, to } => {
+                write!(f, "RENAME COLUMN {from} TO {to}")
+            }
+            AlterAction::RenameTable { to } => write!(f, "RENAME TO {to}"),
+        }
     }
 }
 
@@ -923,32 +985,57 @@ impl Display for DeleteStatement {
 /// `CountStar` is the special `COUNT(*)` form (which counts rows rather than
 /// non-null values of a specific column).
 ///
+/// A scalar expression — anything that, given a row, evaluates to a single
+/// value. `Expr` is the unified shape that every clause that holds an
+/// "expression" eventually wants to use (projections, `WHERE`, `HAVING`,
+/// `ORDER BY`, `GROUP BY`, join conditions). Today only `SelectItem` consumes
+/// it; the other clauses still use their own narrower types and will migrate
+/// later.
+///
+/// The recursive shape is deliberate: a future `Binary { op, left, right }`
+/// variant will let any operand be itself an `Expr` (`age + 1 > 18`,
+/// `UPPER(name) = 'BOB'`, `SUM(a + 1)`), so `Agg`'s argument is already typed
+/// as `Box<Expr>` to avoid a second migration.
+///
 /// # SQL examples
 ///
 /// ```sql
-/// -- SELECT name           -->  SelectExpr::Column(ColumnRef { None, "name" })
-/// -- SELECT u.age          -->  SelectExpr::Column(ColumnRef { Some("u"), "age" })
-/// -- SELECT COUNT(*)       -->  SelectExpr::CountStar
-/// -- SELECT COUNT(name)    -->  SelectExpr::Agg(AggFunc::Count, "name")
-/// -- SELECT AVG(age)       -->  SelectExpr::Agg(AggFunc::Avg,   "age")
+/// -- SELECT name        -->  Expr::Column(ColumnRef { None, "name" })
+/// -- SELECT u.age       -->  Expr::Column(ColumnRef { Some("u"), "age" })
+/// -- SELECT 1           -->  Expr::Literal(Value::Int64(1))
+/// -- SELECT 'hello'     -->  Expr::Literal(Value::String("hello"))
+/// -- SELECT NULL        -->  Expr::Literal(Value::Null)
+/// -- SELECT COUNT(*)    -->  Expr::CountStar
+/// -- SELECT COUNT(name) -->  Expr::Agg(AggFunc::Count, Box::new(Expr::Column("name".into())))
+/// -- SELECT AVG(age)    -->  Expr::Agg(AggFunc::Avg,   Box::new(Expr::Column("age".into())))
 /// ```
-///
-/// The aggregate column is stored as a bare `String` (not a [`ColumnRef`])
-/// because `f(qualifier.col)` is not supported by the parser today; the
-/// argument to an aggregate is always a single unqualified identifier.
 #[derive(Debug, Clone, PartialEq)]
-pub enum SelectExpr {
+pub enum Expr {
+    /// A column reference, possibly qualified (`t.c`).
     Column(ColumnRef),
-    Agg(AggFunc, String),
+    /// A constant value: number, string, boolean, or `NULL`.
+    Literal(Value),
+    /// An aggregate call, e.g. `SUM(amount)`. The argument is recursively an
+    /// `Expr` so that future syntax like `SUM(a + 1)` requires no AST change.
+    Agg(AggFunc, Box<Expr>),
+    /// The special `COUNT(*)` form that counts all rows.
     CountStar,
 }
 
-impl Display for SelectExpr {
+impl Expr {
+    /// Convenience constructor for `Expr::Agg(func, Box::new(arg))`.
+    pub fn agg(func: AggFunc, arg: Expr) -> Self {
+        Expr::Agg(func, Box::new(arg))
+    }
+}
+
+impl Display for Expr {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            SelectExpr::Column(col) => write!(f, "{col}"),
-            SelectExpr::Agg(func, col) => write!(f, "{func}({col})"),
-            SelectExpr::CountStar => write!(f, "COUNT(*)"),
+            Expr::Column(col) => write!(f, "{col}"),
+            Expr::Literal(v) => write!(f, "{v}"),
+            Expr::Agg(func, arg) => write!(f, "{func}({arg})"),
+            Expr::CountStar => write!(f, "COUNT(*)"),
         }
     }
 }
@@ -963,33 +1050,36 @@ impl Display for SelectExpr {
 ///
 /// ```sql
 /// -- SELECT name
-/// --   SelectItem { expr: SelectExpr::Column("name".into()), alias: None }
+/// --   SelectItem { expr: Expr::Column("name".into()), alias: None }
 ///
-/// -- SELECT age AS years
-/// --   SelectItem { expr: SelectExpr::Column("age".into()),  alias: Some("years") }
+/// -- SELECT 1 AS one
+/// --   SelectItem { expr: Expr::Literal(Value::Int64(1)), alias: Some("one") }
 ///
 /// -- SELECT COUNT(*) AS n
-/// --   SelectItem { expr: SelectExpr::CountStar,             alias: Some("n") }
+/// --   SelectItem { expr: Expr::CountStar, alias: Some("n") }
 ///
 /// -- SELECT AVG(age) avg_age
-/// --   SelectItem { expr: SelectExpr::Agg(AggFunc::Avg, "age"), alias: Some("avg_age") }
+/// --   SelectItem {
+/// --       expr: Expr::Agg(AggFunc::Avg, Box::new(Expr::Column("age".into()))),
+/// --       alias: Some("avg_age"),
+/// --   }
 /// ```
 #[derive(Debug, Clone, PartialEq)]
 pub struct SelectItem {
-    pub expr: SelectExpr,
+    pub expr: Expr,
     pub alias: Option<String>,
 }
 
 impl SelectItem {
     /// Wraps an expression with no alias. Convenient for tests and for callers
     /// that synthesise projections (e.g. `SELECT *` expansion).
-    pub fn bare(expr: SelectExpr) -> Self {
+    pub fn bare(expr: Expr) -> Self {
         Self { expr, alias: None }
     }
 }
 
-impl From<SelectExpr> for SelectItem {
-    fn from(expr: SelectExpr) -> Self {
+impl From<Expr> for SelectItem {
+    fn from(expr: Expr) -> Self {
         Self::bare(expr)
     }
 }
@@ -1063,18 +1153,20 @@ impl Display for OrderDirection {
     }
 }
 
-/// Parsed `ORDER BY <col> [ASC|DESC]` — single key only.
+/// One sort key in an `ORDER BY` clause: a column plus an optional direction.
 ///
-/// Multi-column sorts (`ORDER BY a, b DESC`) are not modeled at this layer.
+/// `SelectStatement::order_by` holds a `Vec<OrderBy>`, one entry per
+/// comma-separated key in left-to-right priority. An empty vec means the
+/// clause was absent.
 ///
 /// # SQL examples
 ///
 /// ```sql
 /// -- ORDER BY age
-/// --   OrderBy(ColumnRef { qualifier: None, name: "age" }, OrderDirection::Asc)
+/// --   [OrderBy(ColumnRef { qualifier: None, name: "age" }, OrderDirection::Asc)]
 ///
-/// -- ORDER BY users.id DESC
-/// --   OrderBy(ColumnRef { qualifier: Some("users"), name: "id" }, OrderDirection::Desc)
+/// -- ORDER BY users.id DESC, name
+/// --   [OrderBy(users.id, Desc), OrderBy(name, Asc)]
 /// ```
 #[derive(Debug, Clone)]
 pub struct OrderBy(pub ColumnRef, pub OrderDirection);
@@ -1286,7 +1378,7 @@ impl Display for LimitClause {
 /// --         columns:  SelectColumns::All,
 /// --         from:     vec![ TableWithJoins { table: "users", joins: [] } ],
 /// --         where_clause: None, group_by: vec![],
-/// --         having: None, order_by: None, limit: None,
+/// --         having: None, order_by: vec![], limit: None,
 /// --     }
 ///
 /// -- 2. WHERE + ORDER BY + LIMIT
@@ -1300,7 +1392,7 @@ impl Display for LimitClause {
 /// --         where_clause: Some(Predicate { age, GreaterThanOrEqual, Int32(18) }),
 /// --         group_by: vec![],
 /// --         having: None,
-/// --         order_by: Some(OrderBy(age, OrderDirection::Desc)),
+/// --         order_by: vec![ OrderBy(age, OrderDirection::Desc) ],
 /// --         limit: Some(LimitClause { limit: Some(10), offset: 0 }),
 /// --     }
 ///
@@ -1319,7 +1411,7 @@ impl Display for LimitClause {
 /// --         where_clause: None,
 /// --         group_by: vec![ ColumnRef { None, "user_id" } ],
 /// --         having: Some(Predicate { /* SUM(total) > 100 — modeled as a Predicate node */ }),
-/// --         order_by: None, limit: None,
+/// --         order_by: vec![], limit: None,
 /// --     }
 ///
 /// -- 4. JOIN
@@ -1362,7 +1454,7 @@ pub struct SelectStatement {
     pub where_clause: Option<WhereCondition>,
     pub group_by: Vec<ColumnRef>,
     pub having: Option<WhereCondition>,
-    pub order_by: Option<OrderBy>,
+    pub order_by: Vec<OrderBy>,
     pub limit: Option<LimitClause>,
 }
 
@@ -1380,6 +1472,15 @@ impl SelectStatement {
     /// Renders the comma-separated `GROUP BY` column list.
     fn fmt_group_by(&self) -> String {
         self.group_by
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+            .join(", ")
+    }
+
+    /// Renders the comma-separated `ORDER BY` key list.
+    fn fmt_order_by(&self) -> String {
+        self.order_by
             .iter()
             .map(ToString::to_string)
             .collect::<Vec<_>>()
@@ -1405,8 +1506,8 @@ impl Display for SelectStatement {
         if let Some(h) = &self.having {
             write!(f, " HAVING {h}")?;
         }
-        if let Some(o) = &self.order_by {
-            write!(f, " ORDER BY {o}")?;
+        if !self.order_by.is_empty() {
+            write!(f, " ORDER BY {}", self.fmt_order_by())?;
         }
         if let Some(l) = self.limit {
             write!(f, " {l}")?;
