@@ -19,12 +19,16 @@
 //!
 //!  Fixed header (first PAGE_HDR_SIZE bytes):
 //!
-//!  +------- byte 0 -------+------ byte 2 --------+
-//!  |   num_slots (u16 LE) |  tuple_start (u16 LE)|
-//!  +----------------------+----------------------+
-//!        |                        |
-//!        |                        +-- left edge of the tuple region; tuples
-//!        |                            occupy [tuple_start .. PAGE_SIZE)
+//!  +---- byte 0 ----+---- byte 2 ----+--------- byte 4 ---------+
+//!  | num_slots (u16)| tuple_start(u16)|     checksum (u32 LE)   |
+//!  +----------------+-----------------+-------------------------+
+//!        |                  |                    |
+//!        |                  |                    +-- CRC32 over the entire
+//!        |                  |                        page with these 4 bytes
+//!        |                  |                        treated as zero. Verified
+//!        |                  |                        on every read from disk.
+//!        |                  +-- left edge of the tuple region; tuples
+//!        |                      occupy [tuple_start .. PAGE_SIZE)
 //!        +-- number of slot pointers that follow the header
 //!
 //!
@@ -60,8 +64,15 @@ use crate::{
     tuple::{Tuple, TupleSchema},
 };
 
-/// Size of the fixed page header: `num_slots` (u16) + `tuple_start` (u16).
-const PAGE_HDR_SIZE: usize = 4;
+/// Size of the fixed page header:
+/// `num_slots` (u16) + `tuple_start` (u16) + `checksum` (u32).
+const PAGE_HDR_SIZE: usize = 8;
+
+/// Byte offset within the page where the 4-byte CRC32 checksum lives.
+const CHECKSUM_OFFSET: usize = 4;
+
+/// Size of the stored checksum field, in bytes.
+const CHECKSUM_SIZE: usize = 4;
 
 /// Number of bytes occupied by one slot pointer.
 ///
@@ -145,6 +156,19 @@ impl<'a> HeapPage<'a> {
             return Err(StorageError::InvalidPageSize { got: data.len() });
         }
 
+        let bytes: &[u8; PAGE_SIZE] = data.try_into().unwrap();
+        // A freshly zeroed buffer is a brand-new empty page that was never
+        // stamped with a checksum — preserve the existing contract that
+        // `[0u8; PAGE_SIZE]` constructs an empty page without verification.
+        let is_blank = bytes.iter().all(|&b| b == 0);
+        if !is_blank {
+            let stored = LittleEndian::read_u32(&bytes[CHECKSUM_OFFSET..]);
+            let computed = Self::compute_checksum(bytes);
+            if stored != computed {
+                return Err(StorageError::ChecksumMismatch { stored, computed });
+            }
+        }
+
         let num_slots = LittleEndian::read_u16(&data[0..]) as usize;
         let stored_tuple_start = LittleEndian::read_u16(&data[2..]) as usize;
 
@@ -177,6 +201,18 @@ impl<'a> HeapPage<'a> {
     #[inline]
     fn slot_array_end(n_slots: usize) -> usize {
         PAGE_HDR_SIZE + n_slots * SLOT_POINTER_SIZE
+    }
+
+    /// Computes CRC32 over the entire page with the 4 checksum bytes treated as zero.
+    ///
+    /// The checksum field must be excluded from its own input, otherwise the
+    /// stored value would depend on itself and verification would be impossible.
+    fn compute_checksum(bytes: &[u8; PAGE_SIZE]) -> u32 {
+        let mut hasher = crc32fast::Hasher::new();
+        hasher.update(&bytes[..CHECKSUM_OFFSET]);
+        hasher.update(&[0u8; CHECKSUM_SIZE]);
+        hasher.update(&bytes[CHECKSUM_OFFSET + CHECKSUM_SIZE..]);
+        hasher.finalize()
     }
 
     /// Bytes currently free between the end of the slot array and the start
@@ -539,6 +575,8 @@ impl Page for HeapPage<'_> {
             }
         }
 
+        let checksum = Self::compute_checksum(&bytes);
+        LittleEndian::write_u32(&mut bytes[CHECKSUM_OFFSET..], checksum);
         bytes
     }
 
@@ -1309,6 +1347,67 @@ mod tests {
         assert_eq!(page.live_tuples().count(), 0);
         // tombstones still present — slot identity preserved
         assert_eq!(page.num_slots(), 2);
+    }
+
+    // --- checksum ---
+
+    #[test]
+    fn page_data_includes_valid_checksum() {
+        let s = schema();
+        let mut page = empty_page(&s);
+        page.insert_tuple(make_tuple(1, true)).unwrap();
+        let bytes = page.page_data();
+        // Round-trip succeeds, which means the checksum verified.
+        assert!(HeapPage::new(&bytes, &s).is_ok());
+    }
+
+    #[test]
+    fn corrupted_tuple_byte_is_rejected() {
+        let s = schema();
+        let mut page = empty_page(&s);
+        page.insert_tuple(make_tuple(42, true)).unwrap();
+        let mut bytes = page.page_data();
+        // Flip a bit in the tuple region (high end of the page).
+        bytes[PAGE_SIZE - 1] ^= 0x01;
+        assert!(matches!(
+            HeapPage::new(&bytes, &s),
+            Err(StorageError::ChecksumMismatch { .. })
+        ));
+    }
+
+    #[test]
+    fn corrupted_header_byte_is_rejected() {
+        let s = schema();
+        let mut page = empty_page(&s);
+        page.insert_tuple(make_tuple(1, true)).unwrap();
+        let mut bytes = page.page_data();
+        bytes[0] ^= 0xFF; // mangle num_slots
+        assert!(matches!(
+            HeapPage::new(&bytes, &s),
+            Err(StorageError::ChecksumMismatch { .. })
+        ));
+    }
+
+    #[test]
+    fn corrupted_checksum_byte_is_rejected() {
+        let s = schema();
+        let mut page = empty_page(&s);
+        page.insert_tuple(make_tuple(1, true)).unwrap();
+        let mut bytes = page.page_data();
+        bytes[CHECKSUM_OFFSET] ^= 0xFF;
+        assert!(matches!(
+            HeapPage::new(&bytes, &s),
+            Err(StorageError::ChecksumMismatch { .. })
+        ));
+    }
+
+    #[test]
+    fn empty_zeroed_buffer_still_loads() {
+        let s = schema();
+        // A fully zeroed buffer is treated as a brand-new empty page and
+        // skips checksum verification.
+        let page = HeapPage::new(&[0u8; PAGE_SIZE], &s).unwrap();
+        assert_eq!(page.live_tuples().count(), 0);
     }
 
     #[test]
