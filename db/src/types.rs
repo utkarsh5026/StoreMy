@@ -272,6 +272,21 @@ impl Value {
             _ => None,
         }
     }
+
+    /// Number of bytes [`Encode`] will write for this value.
+    ///
+    /// Must stay in sync with [`Encode for Value`]: every variant here
+    /// mirrors a branch there. The `String` arm applies the same
+    /// [`STRING_MAX_SIZE`](crate::STRING_MAX_SIZE) truncation the encoder does.
+    pub fn encoded_size(&self) -> usize {
+        1 + match self {
+            Value::Null => 0,
+            Value::Bool(_) => 1,
+            Value::Int32(_) | Value::Uint32(_) => 4,
+            Value::Int64(_) | Value::Uint64(_) | Value::Float64(_) => 8,
+            Value::String(s) => 4 + s.len().min(STRING_MAX_SIZE),
+        }
+    }
 }
 
 /// Coerces a literal (for example from a parsed `WHERE` constant) into a value of

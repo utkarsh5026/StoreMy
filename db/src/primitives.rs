@@ -523,6 +523,9 @@ impl RecordId {
             slot_id,
         }
     }
+
+    /// Encoded size of a `RecordId` on disk: `FileId(8) + PageNumber(4) + SlotId(2)`.
+    pub const ENCODED_SIZE: usize = 8 + 4 + 2;
 }
 
 impl fmt::Display for RecordId {
