@@ -358,13 +358,10 @@ mod tests {
         let mut p = Parser::new("INSERT INTO t () VALUES (1)");
         let err = p.parse_insert().unwrap_err();
         assert!(
-            matches!(
-                err,
-                ParserError::UnexpectedToken {
-                    expected: TokenType::Identifier,
-                    ..
-                }
-            ),
+            matches!(err, ParserError::UnexpectedToken {
+                expected: TokenType::Identifier,
+                ..
+            }),
             "got {err:?}"
         );
     }
@@ -373,10 +370,9 @@ mod tests {
     fn test_parse_insert_row_with_only_string_literal() {
         let mut p = Parser::new("INSERT INTO t VALUES ('only')");
         let i = p.parse_insert().unwrap();
-        assert_eq!(
-            insert_rows(&i.source)[0],
-            vec![Value::String("only".into())]
-        );
+        assert_eq!(insert_rows(&i.source)[0], vec![Value::String(
+            "only".into()
+        )]);
     }
 
     #[test]
@@ -396,13 +392,10 @@ mod tests {
         let mut p = Parser::new("DELETE users");
         let err = p.parse_delete().unwrap_err();
         assert!(
-            matches!(
-                err,
-                ParserError::UnexpectedToken {
-                    expected: TokenType::From,
-                    ..
-                }
-            ),
+            matches!(err, ParserError::UnexpectedToken {
+                expected: TokenType::From,
+                ..
+            }),
             "got {err:?}"
         );
     }
@@ -418,13 +411,10 @@ mod tests {
         let mut p = Parser::new("SELECT * FROM t");
         let err = p.parse_delete().unwrap_err();
         assert!(
-            matches!(
-                err,
-                ParserError::UnexpectedToken {
-                    expected: TokenType::Delete,
-                    ..
-                }
-            ),
+            matches!(err, ParserError::UnexpectedToken {
+                expected: TokenType::Delete,
+                ..
+            }),
             "got {err:?}"
         );
     }
@@ -444,13 +434,10 @@ mod tests {
         let mut p = Parser::new("INSERT users VALUES (1)");
         let err = p.parse_insert().unwrap_err();
         assert!(
-            matches!(
-                err,
-                ParserError::UnexpectedToken {
-                    expected: TokenType::Into,
-                    ..
-                }
-            ),
+            matches!(err, ParserError::UnexpectedToken {
+                expected: TokenType::Into,
+                ..
+            }),
             "got {err:?}"
         );
     }
@@ -460,13 +447,10 @@ mod tests {
         let mut p = Parser::new("INSERT INTO t (a) (1)");
         let err = p.parse_insert().unwrap_err();
         assert!(
-            matches!(
-                err,
-                ParserError::UnexpectedToken {
-                    expected: TokenType::Values,
-                    ..
-                }
-            ),
+            matches!(err, ParserError::UnexpectedToken {
+                expected: TokenType::Values,
+                ..
+            }),
             "got {err:?}"
         );
     }
@@ -483,13 +467,10 @@ mod tests {
         let mut p = Parser::new("INSERT INTO VALUES (1)");
         let err = p.parse_insert().unwrap_err();
         assert!(
-            matches!(
-                err,
-                ParserError::UnexpectedToken {
-                    expected: TokenType::Identifier,
-                    ..
-                }
-            ),
+            matches!(err, ParserError::UnexpectedToken {
+                expected: TokenType::Identifier,
+                ..
+            }),
             "got {err:?}"
         );
     }
@@ -499,13 +480,10 @@ mod tests {
         let mut p = Parser::new("INSERT INTO t VALUES 1");
         let err = p.parse_insert().unwrap_err();
         assert!(
-            matches!(
-                err,
-                ParserError::UnexpectedToken {
-                    expected: TokenType::Lparen,
-                    ..
-                }
-            ),
+            matches!(err, ParserError::UnexpectedToken {
+                expected: TokenType::Lparen,
+                ..
+            }),
             "got {err:?}"
         );
     }
@@ -525,13 +503,10 @@ mod tests {
         let mut p = Parser::new("SET x = 1");
         let err = p.parse_update().unwrap_err();
         assert!(
-            matches!(
-                err,
-                ParserError::UnexpectedToken {
-                    expected: TokenType::Update,
-                    ..
-                }
-            ),
+            matches!(err, ParserError::UnexpectedToken {
+                expected: TokenType::Update,
+                ..
+            }),
             "got {err:?}"
         );
     }
@@ -541,13 +516,10 @@ mod tests {
         let mut p = Parser::new("UPDATE SET x = 1");
         let err = p.parse_update().unwrap_err();
         assert!(
-            matches!(
-                err,
-                ParserError::UnexpectedToken {
-                    expected: TokenType::Identifier,
-                    ..
-                }
-            ),
+            matches!(err, ParserError::UnexpectedToken {
+                expected: TokenType::Identifier,
+                ..
+            }),
             "got {err:?}"
         );
     }
@@ -573,13 +545,10 @@ mod tests {
         let mut p = Parser::new("UPDATE t SET x < 1");
         let err = p.parse_update().unwrap_err();
         assert!(
-            matches!(
-                err,
-                ParserError::UnexpectedToken {
-                    expected: TokenType::Operator,
-                    found: TokenType::Operator,
-                }
-            ),
+            matches!(err, ParserError::UnexpectedToken {
+                expected: TokenType::Operator,
+                found: TokenType::Operator,
+            }),
             "got {err:?}"
         );
     }
@@ -599,13 +568,10 @@ mod tests {
         let mut p = Parser::new("UPDATE t x = 1");
         let err = p.parse_update().unwrap_err();
         assert!(
-            matches!(
-                err,
-                ParserError::UnexpectedToken {
-                    expected: TokenType::Set,
-                    found: TokenType::Operator,
-                }
-            ),
+            matches!(err, ParserError::UnexpectedToken {
+                expected: TokenType::Set,
+                found: TokenType::Operator,
+            }),
             "got {err:?}"
         );
     }
@@ -650,13 +616,10 @@ mod tests {
         let mut p = Parser::new("INSERT INTO t (a) DEFAULT VALUES");
         let err = p.parse_insert().unwrap_err();
         assert!(
-            matches!(
-                err,
-                ParserError::UnexpectedToken {
-                    expected: TokenType::Values,
-                    ..
-                }
-            ),
+            matches!(err, ParserError::UnexpectedToken {
+                expected: TokenType::Values,
+                ..
+            }),
             "got {err:?}"
         );
     }
@@ -698,13 +661,10 @@ mod tests {
         let mut p = Parser::new("INSERT INTO t (a) 1");
         let err = p.parse_insert().unwrap_err();
         assert!(
-            matches!(
-                err,
-                ParserError::UnexpectedToken {
-                    expected: TokenType::Values,
-                    ..
-                }
-            ),
+            matches!(err, ParserError::UnexpectedToken {
+                expected: TokenType::Values,
+                ..
+            }),
             "got {err:?}"
         );
     }

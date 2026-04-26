@@ -28,7 +28,7 @@ mod tests {
     //! `lexer`, `token`) cover clause-level variations in depth.
     use super::*;
     use crate::parser::statements::{
-        AggFunc, JoinKind, OrderDirection, SelectColumns, SelectExpr, Statement,
+        AggFunc, Expr, JoinKind, OrderDirection, SelectColumns, Statement,
     };
 
     fn parse(sql: &str) -> Statement {
@@ -64,7 +64,7 @@ mod tests {
 
     #[test]
     fn parse_dispatches_create_index() {
-        let stmt = parse("CREATE INDEX idx_name (name) USING HASH");
+        let stmt = parse("CREATE INDEX idx_name ON users (name) USING HASH");
         assert!(matches!(stmt, Statement::CreateIndex(_)));
     }
 
@@ -94,8 +94,11 @@ mod tests {
             ins.columns.as_deref(),
             Some(&["id".to_string(), "name".to_string()][..])
         );
-        assert_eq!(ins.values.len(), 2);
-        assert_eq!(ins.values[0].len(), 2);
+        let crate::parser::statements::InsertSource::Values(rows) = &ins.source else {
+            panic!("expected Values source, got {:?}", ins.source);
+        };
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0].len(), 2);
     }
 
     #[test]
@@ -148,7 +151,7 @@ mod tests {
             panic!("expected explicit select list");
         };
         assert_eq!(exprs.len(), 2);
-        assert!(matches!(exprs[1].expr, SelectExpr::CountStar));
+        assert!(matches!(exprs[1].expr, Expr::CountStar));
 
         assert_eq!(s.from.len(), 1);
         assert_eq!(s.from[0].joins.len(), 1);
@@ -158,8 +161,8 @@ mod tests {
         assert!(s.where_clause.is_some());
         assert_eq!(s.group_by.len(), 1);
 
-        let order = s.order_by.expect("order_by set");
-        assert_eq!(order.1, OrderDirection::Desc);
+        assert_eq!(s.order_by.len(), 1);
+        assert_eq!(s.order_by[0].1, OrderDirection::Desc);
 
         let limit = s.limit.expect("limit set");
         assert_eq!(limit.limit, Some(10));
@@ -177,8 +180,8 @@ mod tests {
             panic!("expected explicit select list");
         };
         assert_eq!(exprs.len(), 2);
-        assert!(matches!(exprs[0].expr, SelectExpr::Agg(AggFunc::Sum, _)));
-        assert!(matches!(exprs[1].expr, SelectExpr::Agg(AggFunc::Avg, _)));
+        assert!(matches!(exprs[0].expr, Expr::Agg(AggFunc::Sum, _)));
+        assert!(matches!(exprs[1].expr, Expr::Agg(AggFunc::Avg, _)));
     }
 
     #[test]
@@ -188,5 +191,60 @@ mod tests {
             Err(e) => panic!("expected ParsingError, got {e:?}"),
             Ok(_) => panic!("expected parse error, got Ok"),
         }
+    }
+
+    // --- end-of-input enforcement ---
+
+    #[test]
+    fn parse_accepts_trailing_semicolon() {
+        assert!(Parser::new("SELECT * FROM users;").parse().is_ok());
+        assert!(Parser::new("DROP TABLE users;").parse().is_ok());
+        assert!(Parser::new("CREATE TABLE t (id INT);").parse().is_ok());
+    }
+
+    #[test]
+    fn parse_accepts_no_trailing_semicolon() {
+        // A trailing `;` is optional, not required.
+        assert!(Parser::new("SELECT * FROM users").parse().is_ok());
+    }
+
+    #[test]
+    fn parse_rejects_trailing_garbage_after_select() {
+        // Use trailing tokens that can't be absorbed by any optional SELECT
+        // clause (a bare identifier after `FROM users` would be parsed as a
+        // table alias). A semicolon followed by another token is the cleanest
+        // way to demonstrate "extra input after a complete statement."
+        let Err(parsers::ParserError::ParsingError(msg)) =
+            Parser::new("SELECT * FROM users; garbage").parse()
+        else {
+            panic!("expected ParsingError for trailing garbage");
+        };
+        assert!(
+            msg.contains("after end of statement"),
+            "error should mention end of statement: {msg}"
+        );
+    }
+
+    #[test]
+    fn parse_rejects_trailing_garbage_after_drop() {
+        assert!(Parser::new("DROP TABLE users blah").parse().is_err());
+    }
+
+    #[test]
+    fn parse_rejects_double_statement() {
+        // Two statements in one input must fail. Multi-statement parsing would
+        // be a separate API; `parse` is strictly single-statement.
+        assert!(Parser::new("SELECT 1; SELECT 2").parse().is_err());
+    }
+
+    #[test]
+    fn parse_rejects_alter_drop_column_if_exists_wrong_order() {
+        // Standard SQL is `DROP COLUMN IF EXISTS bio` — IF EXISTS *before* the
+        // name. The reverse order leaves trailing tokens and is now caught.
+        assert!(
+            Parser::new("ALTER TABLE users DROP COLUMN bio IF EXISTS")
+                .parse()
+                .is_err()
+        );
     }
 }
