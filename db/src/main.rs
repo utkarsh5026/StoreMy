@@ -1,166 +1,104 @@
 //! `StoreMy` database CLI entrypoint.
 //!
-//! Runs the `StoreMy` database in either:
-//! - **REPL mode** (`cargo run -- repl`) for interactive SQL input
-//! - **One-shot mode** (`cargo run -- "<sql>"`) to execute a single statement and exit
+//! This module is intentionally small and does only process bootstrapping:
+//! - initialize logging/tracing via [`observability::init`]
+//! - parse CLI arguments to choose REPL vs one-shot execution
+//! - create storage/runtime dependencies (WAL, buffer pool, catalog, tx manager)
+//! - construct [`Database`] and hand off control to [`repl`]
 //!
-//! The REPL uses line editing and persists history under `./data/.repl_history`.
+//! # CLI modes
+//! - **REPL mode** (`cargo run` or `cargo run -- repl`) starts an interactive SQL shell.
+//! - **One-shot mode** (`cargo run -- "<sql>"`) executes a single SQL statement and exits.
+//!
+//! Keeping this logic in `main.rs` helps keep the executable wiring explicit, while
+//! parser/executor/storage behavior lives in their respective modules.
 
 use std::{path::PathBuf, sync::Arc};
 
-use comfy_table::{Cell, ContentArrangement, Table};
-use owo_colors::OwoColorize;
-use rustyline::{DefaultEditor, error::ReadlineError};
 use storemy::{
     buffer_pool::page_store::PageStore, catalog::manager::Catalog, database::Database,
-    transaction::TransactionManager, wal::writer::Wal,
+    observability, repl, transaction::TransactionManager, wal::writer::Wal,
 };
+use tracing::{error, info};
 
-/// Default file name for the write-ahead log stored under the data directory.
 const WAL_FILE_NAME: &str = "wal.log";
-
-/// REPL history file name stored under the data directory.
 const REPL_HISTORY_FILE_NAME: &str = ".repl_history";
+const BUFFER_POOL_PAGES: usize = 1028;
+const WORKER_THREADS: usize = 4;
 
-/// CLI entrypoint that initializes storage/catalog and runs either REPL or one-shot execution.
+/// Entrypoint for the `StoreMy` process.
 ///
-/// The database stores its files under `./data` relative to the current working directory.
+/// This function performs the following bootstrapping steps:
+/// - Initializes process-wide tracing and logging by calling [`observability::init`].
+/// - Parses CLI arguments to determine execution mode: either REPL mode (interactive shell) or
+///   one-shot mode (execute a SQL query and exit).
+/// - Ensures the on-disk data directory exists, exiting with an error if not.
+/// - Constructs all core database subsystems:
+///     - Write-ahead log (`WAL`)
+///     - Buffer pool and page store
+///     - Catalog store/manager
+///     - Transaction manager
+///     - Main [`Database`] struct
+/// - Dispatches control to the selected CLI mode:
+///     - REPL: launches an interactive prompt (history file persisted in data dir).
+///     - One-shot: executes provided SQL string(s) and prints the result.
 ///
 /// # Panics
-///
-/// Does not intentionally panic, but may panic if stdout/stderr writes panic (rare) or if Rust
-/// encounters unrecoverable runtime failures.
+/// This function will terminate the process on fatal boot errors, such as filesystem or subsystem
+/// initialization failures. All such errors are logged via the tracing system.
 fn main() {
+    let trace_guards = observability::init();
+
     let mut args = std::env::args().skip(1);
     let mode_or_sql = args.next();
 
     println!("StoreMy Database v{}", env!("CARGO_PKG_VERSION"));
+    if let Some(path) = trace_guards.chrome_path() {
+        println!(
+            "  perfetto trace : {} (open at https://ui.perfetto.dev)",
+            path.display()
+        );
+    }
+    if let Some(endpoint) = trace_guards.otel_endpoint() {
+        println!("  otel exporter  : {endpoint} (Jaeger UI: http://localhost:16686)");
+    }
+    info!(version = env!("CARGO_PKG_VERSION"), "StoreMy starting");
 
     let data_dir = PathBuf::from("./data");
     if let Err(e) = std::fs::create_dir_all(&data_dir) {
-        eprintln!("failed to create data dir {}: {e}", data_dir.display());
+        error!(error = %e, dir = %data_dir.display(), "failed to create data dir");
         std::process::exit(1);
     }
 
     let wal = Arc::new(
         Wal::new(&data_dir.join(WAL_FILE_NAME), 0).unwrap_or_else(|e| {
-            eprintln!("failed to create WAL: {e}");
+            error!(error = %e, "failed to create WAL");
             std::process::exit(1);
         }),
     );
-    let bp = Arc::new(PageStore::new(64, wal.clone()));
 
-    let catalog = Catalog::initialize(&bp, &wal, &data_dir).unwrap_or_else(|e| {
-        eprintln!("failed to initialize catalog: {e}");
+    let buffer_pool = Arc::new(PageStore::new(BUFFER_POOL_PAGES, wal.clone()));
+    let catalog = Catalog::initialize(&buffer_pool, &wal, &data_dir).unwrap_or_else(|e| {
+        error!(error = %e, "failed to initialize catalog");
         std::process::exit(1);
     });
-    let txn_mgr = TransactionManager::new(wal, bp);
-
-    let db = Database::new(Arc::new(catalog), Arc::new(txn_mgr), 4);
+    let txn_mgr = TransactionManager::new(wal, buffer_pool);
+    let db = Database::new(Arc::new(catalog), Arc::new(txn_mgr), WORKER_THREADS);
 
     match mode_or_sql.as_deref() {
-        None | Some("repl") => run_repl(&db, &data_dir.join(REPL_HISTORY_FILE_NAME)),
+        None | Some("repl") => repl::run(
+            &db,
+            &data_dir.join(REPL_HISTORY_FILE_NAME),
+            &data_dir,
+            BUFFER_POOL_PAGES,
+        ),
         Some(first) => {
             let mut sql = String::from(first);
             for part in args {
                 sql.push(' ');
                 sql.push_str(&part);
             }
-            execute_once(&db, &sql);
+            repl::execute_one_shot(&db, &sql);
         }
     }
-}
-
-/// Executes one SQL statement and prints either a formatted success result or a formatted error.
-///
-/// This is used by both one-shot CLI mode and the REPL.
-///
-/// # Panics
-///
-/// Does not intentionally panic. A panic could still happen if the underlying channel receiver
-/// panics due to runtime failures outside this function’s control.
-fn execute_once(db: &Database, sql: &str) {
-    let rx = db.execute(sql.to_string());
-    match rx.recv() {
-        Ok(Ok(result)) => {
-            let mut t = Table::new();
-            t.set_content_arrangement(ContentArrangement::Dynamic);
-            t.set_header(vec![
-                Cell::new("Result").add_attribute(comfy_table::Attribute::Bold),
-            ]);
-
-            t.add_row(vec![Cell::new(result.to_string())]);
-            println!("{t}");
-        }
-        Ok(Err(e)) => {
-            eprintln!("{}", format!("error: {e}").red().bold());
-        }
-        Err(e) => {
-            eprintln!("{}", format!("worker disconnected: {e}").red().bold());
-        }
-    }
-}
-
-/// Runs the interactive SQL REPL with line editing and persisted history.
-///
-/// The REPL reads one line per statement (no multiline input yet), executes it, and prints the
-/// result. History is loaded from and saved to `history_path`.
-///
-/// # Panics
-///
-/// Exits the process if the line editor cannot be initialized.
-fn run_repl(db: &Database, history_path: &std::path::Path) {
-    println!(
-        "{}",
-        r"
-╔══════════════════════════════════════════════════════════════╗
-║                          StoreMy DB                          ║
-║                  a database built in Rust                    ║
-╚══════════════════════════════════════════════════════════════╝
-"
-        .bright_blue()
-    );
-    println!("{}", "REPL mode. Type `exit` or `quit` to leave.".dimmed());
-    println!(
-        "{}",
-        "Try: `CREATE TABLE users (id UINT64, name STRING)`".dimmed()
-    );
-
-    let mut rl = DefaultEditor::new().unwrap_or_else(|e| {
-        eprintln!(
-            "{}",
-            format!("failed to initialize line editor: {e}")
-                .red()
-                .bold()
-        );
-        std::process::exit(1);
-    });
-
-    let _ = rl.load_history(history_path);
-
-    loop {
-        let prompt = format!("{} ", "storemy>".bright_green().bold());
-        let line = match rl.readline(&prompt) {
-            Ok(line) => line,
-            Err(ReadlineError::Interrupted) => continue, // Ctrl-C
-            Err(ReadlineError::Eof) => break,            // Ctrl-D
-            Err(e) => {
-                eprintln!("{}", format!("failed to read input: {e}").red().bold());
-                break;
-            }
-        };
-
-        let sql = line.trim();
-        if sql.is_empty() {
-            continue;
-        }
-        if matches!(sql, "exit" | "quit") {
-            break;
-        }
-
-        rl.add_history_entry(sql).ok();
-        execute_once(db, sql);
-    }
-
-    let _ = rl.save_history(history_path);
 }

@@ -39,6 +39,9 @@ bytes = "1.5"
 byteorder = "1.5"
 crc32fast = "1.4"
 
+# Stable hashing for on-disk indexes (DefaultHasher is not version-stable)
+siphasher = "1"
+
 # Concurrency
 parking_lot = "0.12"
 crossbeam = "0.8"
@@ -53,7 +56,16 @@ crossterm = "0.27"
 
 # Logging
 tracing = "0.1"
-tracing-subscriber = "0.3"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt", "json", "registry"] }
+tracing-tree = "0.3"
+tracing-chrome = "0.7"
+
+# Distributed tracing (OTLP → Jaeger / Tempo / etc.)
+tracing-opentelemetry = "0.28"
+opentelemetry = "0.27"
+opentelemetry_sdk = { version = "0.27", features = ["rt-tokio"] }
+opentelemetry-otlp = { version = "0.27", features = ["grpc-tonic"] }
+tokio = { version = "1", features = ["rt-multi-thread"] }
 
 [dev-dependencies]
 # Testing
