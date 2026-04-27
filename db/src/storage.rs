@@ -9,9 +9,6 @@
 //! - The [`Page`] trait, the minimum interface a page type must expose so the buffer pool and
 //!   recovery code can work with it generically.
 //! - [`StorageError`], the unified error type returned by storage operations.
-//!
-//! The nested [`index`] module holds the small enum naming the supported
-//! secondary index kinds.
 
 use thiserror::Error;
 
@@ -96,6 +93,12 @@ pub enum StorageError {
 
     #[error("failed to parse page data: {0}")]
     ParseError(String),
+
+    #[error("page checksum mismatch: stored={stored:#010x}, computed={computed:#010x}")]
+    ChecksumMismatch { stored: u32, computed: u32 },
+
+    #[error("unknown page kind byte: {0:#04x}")]
+    UnknownPageKind(u8),
 }
 
 impl StorageError {
@@ -129,84 +132,6 @@ impl StorageError {
         Self::TupleTooLarge {
             size,
             max: MAX_TUPLE_SIZE,
-        }
-    }
-}
-
-/// Names of the secondary index kinds the database knows about.
-///
-/// The catalog stores an [`Index`] alongside each declared index so the
-/// executor can pick the right access method. Conversions to and from `&str`
-/// (for SQL) and `u32` (for the on-disk catalog encoding) are provided.
-pub mod index {
-    /// Which kind of secondary index to build.
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-    pub enum Index {
-        /// A hash index — fast equality lookup, no range support.
-        Hash,
-        /// A B-tree index — supports both equality and range scans.
-        Btree,
-    }
-
-    impl TryFrom<&str> for Index {
-        type Error = &'static str;
-
-        /// Parses an index kind from its SQL spelling.
-        ///
-        /// Accepts `"hash"` and `"btree"`; anything else returns an error.
-        ///
-        /// # Errors
-        ///
-        /// Returns `Err("invalid index type")` for any unrecognised string.
-        fn try_from(value: &str) -> Result<Self, Self::Error> {
-            match value {
-                "hash" => Ok(Index::Hash),
-                "btree" => Ok(Index::Btree),
-                _ => Err("invalid index type"),
-            }
-        }
-    }
-
-    impl From<Index> for &'static str {
-        /// Returns the SQL spelling of the index kind.
-        fn from(value: Index) -> Self {
-            match value {
-                Index::Hash => "hash",
-                Index::Btree => "btree",
-            }
-        }
-    }
-
-    impl TryFrom<u32> for Index {
-        type Error = &'static str;
-
-        /// Decodes an index kind from its on-disk catalog tag.
-        ///
-        /// `0` is `Hash`, `1` is `Btree`. Other values are rejected.
-        ///
-        /// # Errors
-        ///
-        /// Returns `Err("invalid index type")` if the tag isn't a known
-        /// variant — typically a sign of catalog corruption or a version
-        /// mismatch.
-        fn try_from(value: u32) -> Result<Self, Self::Error> {
-            match value {
-                0 => Ok(Index::Hash),
-                1 => Ok(Index::Btree),
-                _ => Err("invalid index type"),
-            }
-        }
-    }
-
-    impl From<Index> for u32 {
-        /// Encodes an index kind as its on-disk catalog tag.
-        ///
-        /// Must stay in sync with the [`TryFrom<u32>`] decoder.
-        fn from(value: Index) -> Self {
-            match value {
-                Index::Hash => 0,
-                Index::Btree => 1,
-            }
         }
     }
 }
