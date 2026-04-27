@@ -11,7 +11,7 @@ use std::{
     path::{Path, PathBuf},
     sync::{
         Arc,
-        atomic::{AtomicU64, Ordering},
+        atomic::{AtomicI64, AtomicU64, Ordering},
     },
 };
 
@@ -26,7 +26,7 @@ use crate::{
     },
     heap::file::HeapFile,
     index::AnyIndex,
-    primitives::ColumnId,
+    primitives::{ColumnId, IndexId},
     transaction::Transaction,
     tuple::{Tuple, TupleSchema},
     wal::writer::Wal,
@@ -115,6 +115,7 @@ pub struct Catalog {
     buffer_pool: Arc<PageStore>,
     data_dir: PathBuf,
     next_file_id: AtomicU64,
+    next_index_id: AtomicI64,
     /// Cache of user-table metadata, keyed by table name.
     pub(super) user_tables: RwLock<HashMap<String, TableInfo>>,
     pub(super) open_heaps: RwLock<HashMap<FileId, Arc<HeapFile>>>,
@@ -185,6 +186,7 @@ impl Catalog {
             buffer_pool: buffer_pool.clone(),
             data_dir: data_dir.to_path_buf(),
             next_file_id: AtomicU64::new(100),
+            next_index_id: AtomicI64::new(1),
             user_tables: RwLock::new(tables),
             open_heaps: RwLock::new(HashMap::new()),
             open_indexes: RwLock::new(HashMap::new()),
@@ -453,6 +455,17 @@ impl Catalog {
     /// relationship with other threads beyond the uniqueness guarantee.
     pub(super) fn next_file_id(&self) -> FileId {
         FileId(self.next_file_id.fetch_add(1, Ordering::Relaxed))
+    }
+
+    /// Atomically allocates the next unique [`IndexId`].
+    pub(super) fn next_index_id(&self) -> IndexId {
+        IndexId(self.next_index_id.fetch_add(1, Ordering::Relaxed))
+    }
+
+    /// Canonical path for an index file: `<data_dir>/idx_<name>.dat`.
+    #[inline]
+    pub(super) fn index_file_path(&self, name: &str) -> PathBuf {
+        self.data_dir.join(format!("idx_{name}.dat"))
     }
 
     /// Returns the open [`HeapFile`] for `file_id`, or `None` if not registered.

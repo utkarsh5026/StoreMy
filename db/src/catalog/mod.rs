@@ -14,6 +14,9 @@ pub enum CatalogError {
     #[error(transparent)]
     Heap(#[from] crate::heap::file::HeapError),
 
+    #[error(transparent)]
+    Index(#[from] crate::index::IndexError),
+
     #[error("table not found")]
     TableNotFound { table_name: String },
 
@@ -28,6 +31,9 @@ pub enum CatalogError {
         table_name: String,
         index_name: String,
     },
+
+    #[error("index '{0}' not found")]
+    IndexNameNotFound(String),
 
     #[error("table already exists")]
     TableAlreadyExists { table_name: String },
