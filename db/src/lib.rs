@@ -38,16 +38,18 @@
 //! - [`tuple`] - Tuple schema and record representation
 //! - [`iterator`] - Database iterator traits
 
-pub mod btree;
+pub mod binder;
 pub mod buffer_pool;
 pub mod catalog;
 pub mod codec;
 pub mod database;
 pub mod execution;
-pub mod hash;
 pub mod heap;
+pub mod index;
+pub mod observability;
 pub mod parser;
 pub mod primitives;
+pub mod repl;
 pub mod storage;
 pub mod transaction;
 pub mod tuple;

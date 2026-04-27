@@ -91,6 +91,7 @@ impl TransactionManager {
         let id = self.next_txn_id.fetch_add(1, Ordering::AcqRel);
         let txn_id = TransactionId::new(id);
         self.wal.log_begin(txn_id)?;
+        tracing::debug!(txn_id = %txn_id, "txn begin");
         Ok(Transaction::new(self, txn_id))
     }
 
@@ -102,6 +103,7 @@ impl TransactionManager {
     fn commit(&self, id: TransactionId) -> Result<(), TransactionError> {
         self.wal.log_commit(id)?;
         self.store.release_all(id);
+        tracing::debug!(txn_id = %id, "txn commit");
         Ok(())
     }
 
@@ -113,6 +115,7 @@ impl TransactionManager {
     fn abort(&self, id: TransactionId) -> Result<(), TransactionError> {
         self.wal.log_abort(id)?;
         self.store.release_all(id);
+        tracing::warn!(txn_id = %id, "txn abort");
         Ok(())
     }
 }
