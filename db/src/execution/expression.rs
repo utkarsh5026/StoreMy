@@ -31,6 +31,25 @@ use crate::{primitives::Predicate, tuple::Tuple, types::Value};
 /// being evaluated) or a literal constant hard-coded into the plan. This is
 /// what lets a single `Leaf` shape express both filter predicates
 /// (`col <op> literal`) and join residuals (`col <op> col`).
+///
+/// # SQL examples
+///
+/// Given a `users(id, name, age)` table where the binder has resolved
+/// `id → 0`, `name → 1`, `age → 2`:
+///
+/// ```sql
+/// -- WHERE age = 30
+/// --   left  = Operand::Column(2)        // resolved index of `age`
+/// --   right = Operand::Literal(Int64(30))
+///
+/// -- WHERE name = 'alice'
+/// --   left  = Operand::Column(1)
+/// --   right = Operand::Literal(String("alice"))
+///
+/// -- ON users.id = orders.user_id     (join residual over a concatenated tuple)
+/// --   left  = Operand::Column(0)        // users.id in left half
+/// --   right = Operand::Column(5)        // orders.user_id in right half
+/// ```
 #[derive(Debug, Clone)]
 pub enum Operand {
     Column(usize),
@@ -65,6 +84,81 @@ impl Operand {
 /// Compound nodes (`And` / `Or` / `Not`) recurse; `Leaf` compares two
 /// [`Operand`]s with a [`Predicate`] operator. `NULL` on either side of a
 /// comparison yields `false` — SQL three-valued logic is not modeled here.
+///
+/// # SQL examples
+///
+/// Each example below shows a SQL fragment and the bound expression tree the
+/// binder produces for it, assuming the schema `users(id, name, age)` with
+/// resolved column indices `id → 0`, `name → 1`, `age → 2`.
+///
+/// ```sql
+/// -- 1. Simple equality filter
+/// --
+/// --     SELECT * FROM users WHERE age = 30;
+/// --
+/// --     Leaf {
+/// --         left:  Operand::Column(2),
+/// --         op:    Predicate::Equals,
+/// --         right: Operand::Literal(Int64(30)),
+/// --     }
+///
+/// -- 2. Range filter
+/// --
+/// --     SELECT * FROM users WHERE age >= 18;
+/// --
+/// --     Leaf {
+/// --         left:  Operand::Column(2),
+/// --         op:    Predicate::GreaterThanOrEqual,
+/// --         right: Operand::Literal(Int64(18)),
+/// --     }
+///
+/// -- 3. Conjunction: AND combines two leaves
+/// --
+/// --     SELECT * FROM users WHERE age >= 18 AND name = 'alice';
+/// --
+/// --     And(
+/// --         Leaf { Column(2), GreaterThanOrEqual, Literal(Int64(18)) },
+/// --         Leaf { Column(1), Equals,             Literal(String("alice")) },
+/// --     )
+///
+/// -- 4. Disjunction with negation
+/// --
+/// --     SELECT * FROM users WHERE NOT (age < 18) OR name = 'admin';
+/// --
+/// --     Or(
+/// --         Not(Leaf { Column(2), LessThan, Literal(Int64(18)) }),
+/// --         Leaf  { Column(1), Equals,   Literal(String("admin")) },
+/// --     )
+///
+/// -- 5. LIKE pattern
+/// --
+/// --     SELECT * FROM users WHERE name LIKE 'a%';
+/// --
+/// --     Leaf {
+/// --         left:  Operand::Column(1),
+/// --         op:    Predicate::Like,
+/// --         right: Operand::Literal(String("a%")),
+/// --     }
+///
+/// -- 6. Join residual (column-vs-column over a concatenated tuple)
+/// --
+/// --     SELECT *
+/// --     FROM   users u JOIN orders o ON u.id = o.user_id;
+/// --
+/// --     With u columns at 0..3 and o columns at 3.., the bound predicate is:
+/// --
+/// --     Leaf {
+/// --         left:  Operand::Column(0),    // u.id
+/// --         op:    Predicate::Equals,
+/// --         right: Operand::Column(5),    // o.user_id
+/// --     }
+/// ```
+///
+/// # NULL handling
+///
+/// `WHERE name = NULL` evaluates to `false` for every row — `NULL` short-circuits
+/// any `Leaf` to `false`. Use `IS NULL` / `IS NOT NULL` (once those are added)
+/// instead of `=` / `<>` against `NULL`.
 #[derive(Debug, Clone)]
 pub enum BooleanExpression {
     And(Box<BooleanExpression>, Box<BooleanExpression>),
@@ -79,6 +173,19 @@ pub enum BooleanExpression {
 
 impl BooleanExpression {
     /// Builds a `col <op> literal` leaf — the common filter shape.
+    ///
+    /// # SQL examples
+    ///
+    /// ```sql
+    /// -- WHERE age = 30
+    /// --   col_op_lit(2, Predicate::Equals, Value::Int64(30))
+    ///
+    /// -- WHERE name <> 'guest'
+    /// --   col_op_lit(1, Predicate::NotEqual, Value::String("guest".into()))
+    ///
+    /// -- WHERE name LIKE 'a%'
+    /// --   col_op_lit(1, Predicate::Like, Value::String("a%".into()))
+    /// ```
     pub fn col_op_lit(col: usize, op: Predicate, lit: Value) -> Self {
         Self::Leaf {
             left: Operand::Column(col),
@@ -89,6 +196,19 @@ impl BooleanExpression {
 
     /// Builds a `col_l <op> col_r` leaf — used by join residual predicates
     /// evaluated over the concatenated `left ⋈ right` tuple.
+    ///
+    /// # SQL examples
+    ///
+    /// Assume `users(id, name, age)` is the left input (indices `0..3`) and
+    /// `orders(order_id, user_id, total)` is the right input (indices `3..6`):
+    ///
+    /// ```sql
+    /// -- ON users.id = orders.user_id
+    /// --   col_op_col(0, Predicate::Equals, 4)
+    ///
+    /// -- ON users.age >= orders.total          (silly but valid as a residual)
+    /// --   col_op_col(2, Predicate::GreaterThanOrEqual, 5)
+    /// ```
     pub fn col_op_col(left_col: usize, op: Predicate, right_col: usize) -> Self {
         Self::Leaf {
             left: Operand::Column(left_col),
