@@ -1,9 +1,10 @@
 use std::{fmt, path::PathBuf};
 
 use crate::{
-    FileId, Type, Value,
+    FileId, IndexId, Type,
     catalog::{CatalogError, tuple::TupleReader},
-    storage::index::Index,
+    index::IndexKind,
+    primitives::ColumnId,
     tuple::{Field, Tuple, TupleSchema},
 };
 
@@ -12,6 +13,7 @@ pub enum SystemTable {
     Tables,
     Columns,
     Indexes,
+    PrimaryKeyColumns,
 }
 
 impl SystemTable {
@@ -20,6 +22,7 @@ impl SystemTable {
         SystemTable::Tables,
         SystemTable::Columns,
         SystemTable::Indexes,
+        SystemTable::PrimaryKeyColumns,
     ];
 
     pub const fn file_id(self) -> FileId {
@@ -27,6 +30,7 @@ impl SystemTable {
             SystemTable::Tables => FileId(1),
             SystemTable::Columns => FileId(2),
             SystemTable::Indexes => FileId(3),
+            SystemTable::PrimaryKeyColumns => FileId(4),
         }
     }
 
@@ -35,6 +39,7 @@ impl SystemTable {
             SystemTable::Tables => "catalog_tables.dat",
             SystemTable::Columns => "catalog_columns.dat",
             SystemTable::Indexes => "catalog_indexes.dat",
+            SystemTable::PrimaryKeyColumns => "catalog_primary_key_columns.dat",
         }
     }
 
@@ -43,6 +48,7 @@ impl SystemTable {
             SystemTable::Tables => "CATALOG_TABLES",
             SystemTable::Columns => "CATALOG_COLUMNS",
             SystemTable::Indexes => "CATALOG_INDEXES",
+            SystemTable::PrimaryKeyColumns => "CATALOG_PRIMARY_KEY_COLUMNS",
         }
     }
 
@@ -56,13 +62,12 @@ impl SystemTable {
                 field("table_id", Uint64).not_null(),
                 field("table_name", String).not_null(),
                 field("file_path", String).not_null(),
-                field("primary_key", String),
             ],
             SystemTable::Columns => vec![
-                field("table_id", Int64).not_null(),
+                field("table_id", Uint64).not_null(),
                 field("column_name", String).not_null(),
                 field("column_type", Uint32).not_null(),
-                field("position", Int32).not_null(),
+                field("position", Uint32).not_null(),
                 field("nullable", Bool),
             ],
             SystemTable::Indexes => vec![
@@ -70,7 +75,15 @@ impl SystemTable {
                 field("index_name", String).not_null(),
                 field("table_id", Uint64).not_null(),
                 field("column_name", String).not_null(),
-                field("index_type", Int32).not_null(),
+                field("column_position", Uint32).not_null(),
+                field("index_type", Uint32).not_null(),
+                field("index_file_id", Uint64).not_null(),
+                field("num_buckets", Uint32).not_null(),
+            ],
+            SystemTable::PrimaryKeyColumns => vec![
+                field("table_id", Uint64).not_null(),
+                field("column_id", Uint32).not_null(),
+                field("ordinal", Int32).not_null(),
             ],
         };
 
@@ -106,8 +119,10 @@ impl SystemTable {
             SystemTable::Indexes => {
                 IndexRow::try_from(tuple)?;
             }
+            SystemTable::PrimaryKeyColumns => {
+                PrimaryKeyColumnRow::try_from(tuple)?;
+            }
         }
-
         Ok(())
     }
 }
@@ -116,6 +131,58 @@ impl fmt::Display for SystemTable {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}", self.table_name())
     }
+}
+
+/// Static binding from a row type to the [`SystemTable`] it lives in.
+///
+/// Every catalog row struct (`TableRow`, `ColumnRow`, …) belongs to exactly
+/// one system table. Encoding that relationship as an associated constant lets
+/// the catalog helpers (`scan_system_table`, `insert_systable_tuple`, …)
+/// recover the table from `T::TABLE` instead of forcing every caller to pass
+/// it alongside the type.
+///
+/// The `for<'a> TryFrom<&'a Tuple>` super-trait is the bound the scan helpers
+/// already required — it just lives on the trait now so callers don't have to
+/// repeat it in every `where` clause.
+pub(super) trait CatalogRow: for<'a> TryFrom<&'a Tuple, Error = CatalogError> {
+    const TABLE: SystemTable;
+}
+
+/// Generates the on-disk codec and [`CatalogRow`] impl for a catalog row type.
+///
+/// One invocation produces three impls:
+///
+/// - `From<&T> for Tuple` — encodes the row to a tuple. The `encode` arm takes a comma-separated
+///   list of expressions; the macro wraps each with `.into()` and lifts the result into
+///   `Tuple::new(vec![…])`.
+/// - `TryFrom<&Tuple> for T` — decodes a tuple back to the row. The `decode` arm takes the argument
+///   list to pass to `T::new`; validation lives in `new`, so the codec stays purely mechanical.
+/// - `impl CatalogRow for T` — pins the row to its [`SystemTable`].
+///
+/// **Requires** `T::new` to exist and return `Result<Self, CatalogError>`.
+macro_rules! catalog_row_codec {
+    (
+        $row:ty => $variant:ident,
+        encode |$r:ident| [ $($field:expr),* $(,)? ],
+        decode |$t:ident| ( $($arg:expr),* $(,)? ) $(,)?
+    ) => {
+        impl From<&$row> for Tuple {
+            fn from($r: &$row) -> Tuple {
+                Tuple::new(vec![ $( $field.into() ),* ])
+            }
+        }
+
+        impl TryFrom<&Tuple> for $row {
+            type Error = CatalogError;
+            fn try_from($t: &Tuple) -> Result<Self, Self::Error> {
+                Self::new( $($arg),* )
+            }
+        }
+
+        impl CatalogRow for $row {
+            const TABLE: SystemTable = SystemTable::$variant;
+        }
+    };
 }
 
 /// Reads field `$i` from the `t: &Tuple` parameter.
@@ -133,7 +200,24 @@ macro_rules! read_as {
     };
 }
 
-fn non_empty(value: &str, field: &str) -> Result<(), CatalogError> {
+/// Checks that a given string `value` is not empty, returning an error if it is.
+///
+/// # Arguments
+///
+/// * `value` - The string to check for emptiness.
+/// * `field` - The name of the field (for error messages).
+///
+/// # Errors
+///
+/// Returns a [`CatalogError`] if the string is empty, identifying the specific field.
+///
+/// # Examples
+///
+/// ```rust,ignore
+/// non_empty("foo", "column_name")?; // Ok
+/// non_empty("", "column_name")?;    // Err: "column_name must not be empty"
+/// ```
+fn non_empty(value: &str, field: &'static str) -> Result<(), CatalogError> {
     if value.is_empty() {
         return Err(CatalogError::invalid_catalog_row(format!(
             "{field} must not be empty"
@@ -146,7 +230,6 @@ pub(super) struct TableRow {
     pub(super) table_id: FileId,
     pub(super) table_name: String,
     pub(super) file_path: PathBuf,
-    pub(super) primary_key: Option<String>,
 }
 
 impl TableRow {
@@ -154,71 +237,49 @@ impl TableRow {
         table_id: FileId,
         table_name: String,
         file_path: PathBuf,
-        primary_key: Option<String>,
     ) -> Result<Self, CatalogError> {
         non_empty(&table_name, "table_name")?;
         non_empty(&file_path.as_os_str().to_string_lossy(), "file_path")?;
-        if let Some(ref pk) = primary_key {
-            non_empty(pk, "primary_key")?;
-        }
 
         Ok(Self {
             table_id,
             table_name,
             file_path,
-            primary_key,
         })
     }
 }
 
-impl TryFrom<&Tuple> for TableRow {
-    type Error = CatalogError;
-
-    fn try_from(t: &Tuple) -> Result<Self, Self::Error> {
-        Self::new(
-            FileId::from(read_as!(t, 0 => u64 => u64)),
-            read_as!(t, 1),
-            PathBuf::from(read_as!(t, 2 => String => String)),
-            TupleReader::read::<Option<String>>(t, 3)?,
-        )
-    }
-}
-
-impl From<&TableRow> for Tuple {
-    fn from(r: &TableRow) -> Tuple {
-        Tuple::new(vec![
-            r.table_id.0.into(),
-            r.table_name.clone().into(),
-            r.file_path.to_string_lossy().to_string().into(),
-            r.primary_key
-                .as_ref()
-                .map_or(Value::Null, |s| s.clone().into()),
-        ])
-    }
+catalog_row_codec! {
+    TableRow => Tables,
+    encode |r| [
+        u64::from(r.table_id),
+        r.table_name.clone(),
+        r.file_path.to_string_lossy().to_string(),
+    ],
+    decode |t| (
+        FileId::from(read_as!(t, 0 => u64 => u64)),
+        read_as!(t, 1),
+        PathBuf::from(read_as!(t, 2 => String => String)),
+    ),
 }
 
 pub(super) struct ColumnRow {
-    pub(super) table_id: i64,
-    pub(super) column_name: String,
-    pub(super) column_type: Type,
-    pub(super) position: i32,
-    pub(super) nullable: bool,
+    pub table_id: FileId,
+    pub column_name: String,
+    pub column_type: Type,
+    pub position: ColumnId,
+    pub nullable: bool,
 }
 
 impl ColumnRow {
     pub(super) fn new(
-        table_id: i64,
+        table_id: FileId,
         column_name: String,
         column_type: Type,
-        position: i32,
+        position: ColumnId,
         nullable: bool,
     ) -> Result<Self, CatalogError> {
         non_empty(&column_name, "column_name")?;
-        if position < 0 {
-            return Err(CatalogError::invalid_catalog_row(format!(
-                "position must be non-negative, got {position}"
-            )));
-        }
         Ok(Self {
             table_id,
             column_name,
@@ -233,121 +294,207 @@ impl ColumnRow {
         table_id: FileId,
         schema: &TupleSchema,
     ) -> Result<Vec<ColumnRow>, CatalogError> {
-        schema
-            .fields()
-            .enumerate()
-            .map(|(i, field)| {
-                let position = i32::try_from(i).map_err(|_| {
-                    CatalogError::invalid_catalog_row(format!(
-                        "column position {i} does not fit in i32"
-                    ))
-                })?;
-                Self::new(
-                    table_id.0.cast_signed(),
-                    field.name.clone(),
-                    field.field_type,
-                    position,
-                    field.nullable,
-                )
-            })
-            .collect()
+        let mut rows = Vec::new();
+
+        for (
+            i,
+            Field {
+                name,
+                field_type,
+                nullable,
+            },
+        ) in schema.fields().enumerate()
+        {
+            let position = ColumnId::try_from(i).map_err(|e| {
+                CatalogError::invalid_catalog_row(format!(
+                    "column position {i} is not a valid ColumnId: {e}"
+                ))
+            })?;
+
+            let row = Self::new(table_id, name.clone(), *field_type, position, *nullable)?;
+            rows.push(row);
+        }
+        Ok(rows)
     }
 }
 
-impl TryFrom<&Tuple> for ColumnRow {
-    type Error = CatalogError;
-
-    fn try_from(t: &Tuple) -> Result<Self, Self::Error> {
-        Self::new(
-            read_as!(t, 0),
-            read_as!(t, 1),
-            Type::try_from(read_as!(t, 2 => u32 => u32))
-                .map_err(|e| CatalogError::invalid_catalog_row(e.to_string()))?,
-            read_as!(t, 3),
-            read_as!(t, 4),
-        )
-    }
-}
-
-impl From<&ColumnRow> for Tuple {
-    fn from(r: &ColumnRow) -> Tuple {
-        Tuple::new(vec![
-            r.table_id.into(),
-            r.column_name.clone().into(),
-            u32::from(r.column_type).into(),
-            r.position.into(),
-            r.nullable.into(),
-        ])
-    }
+catalog_row_codec! {
+    ColumnRow => Columns,
+    encode |r| [
+        u64::from(r.table_id),
+        r.column_name.clone(),
+        u32::from(r.column_type),
+        u32::from(r.position),
+        r.nullable,
+    ],
+    decode |t| (
+        FileId::from(read_as!(t, 0 => u64 => u64)),
+        read_as!(t, 1),
+        Type::try_from(read_as!(t, 2 => u32 => u32))
+            .map_err(|e| CatalogError::invalid_catalog_row(e.to_string()))?,
+        read_as!(t, 3 => u32 => ColumnId),
+        read_as!(t, 4),
+    ),
 }
 
 impl From<Vec<ColumnRow>> for TupleSchema {
     fn from(mut rows: Vec<ColumnRow>) -> Self {
         rows.sort_by_key(|r| r.position);
-        let fields = rows
-            .into_iter()
-            .map(|r| {
-                let f = Field::new(r.column_name, r.column_type);
-                if r.nullable { f } else { f.not_null() }
-            })
-            .collect();
+        let mut fields = Vec::new();
+        for ColumnRow {
+            column_name,
+            column_type,
+            nullable,
+            ..
+        } in rows
+        {
+            let f = Field::new(column_name, column_type);
+            fields.push(if nullable { f } else { f.not_null() });
+        }
         TupleSchema::new(fields)
     }
 }
 
+/// One row in `SystemTable::Indexes`.
+///
+/// Composite indexes use the multi-row pattern: a 2-column index
+/// (`CREATE INDEX … ON t (a, b)`) writes two rows that share every field
+/// except `column_name` and `column_position`. The merge from rows to a
+/// single in-memory [`crate::catalog::IndexInfo`] happens up the stack.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct IndexRow {
-    pub(super) index_id: i64,
+    pub(super) index_id: IndexId,
     pub(super) index_name: String,
     pub(super) table_id: FileId,
     pub(super) column_name: String,
-    pub(super) index_type: Index,
+    /// 0-based ordinal of this column within the index's column list.
+    pub(super) column_position: ColumnId,
+    pub(super) index_type: IndexKind,
+    /// `FileId` of the index's own pages — distinct from `table_id`, which
+    /// points at the *table's* heap. Reconstructing the index on database
+    /// open requires this file.
+    pub(super) index_file_id: FileId,
+    /// Static-hash bucket count. Frozen at creation; only meaningful for
+    /// `IndexKind::Hash`. Set to 0 for B-tree rows.
+    pub(super) num_buckets: u32,
 }
 
 impl IndexRow {
+    #[allow(clippy::too_many_arguments)]
     pub(super) fn new(
-        index_id: i64,
+        index_id: IndexId,
         index_name: String,
         table_id: FileId,
         column_name: String,
-        index_type: Index,
+        column_position: ColumnId,
+        index_type: IndexKind,
+        index_file_id: FileId,
+        num_buckets: u32,
     ) -> Result<Self, CatalogError> {
         non_empty(&index_name, "index_name")?;
         non_empty(&column_name, "column_name")?;
+        if matches!(index_type, IndexKind::Hash) && num_buckets == 0 {
+            return Err(CatalogError::invalid_catalog_row(
+                "hash index must declare num_buckets > 0",
+            ));
+        }
         Ok(Self {
             index_id,
             index_name,
             table_id,
             column_name,
+            column_position,
             index_type,
+            index_file_id,
+            num_buckets,
+        })
+    }
+
+    /// Returns `true` when both rows describe the same logical index-level
+    /// metadata, ignoring per-column fields (`column_name`, `column_position`).
+    pub(super) fn same_index_metadata_as(&self, other: &Self) -> bool {
+        self.index_id == other.index_id
+            && self.index_name == other.index_name
+            && self.table_id == other.table_id
+            && self.index_type == other.index_type
+            && self.index_file_id == other.index_file_id
+            && self.num_buckets == other.num_buckets
+    }
+}
+
+catalog_row_codec! {
+    IndexRow => Indexes,
+    encode |r| [
+        r.index_id.0,
+        r.index_name.clone(),
+        r.table_id.0,
+        r.column_name.clone(),
+        u32::from(r.column_position),
+        u32::from(r.index_type),
+        r.index_file_id.0,
+        r.num_buckets,
+    ],
+    decode |t| (
+        IndexId::from(read_as!(t, 0 => i64 => i64)),
+        read_as!(t, 1),
+        FileId::from(read_as!(t, 2 => u64 => u64)),
+        read_as!(t, 3),
+        read_as!(t, 4 => u32 => ColumnId),
+        IndexKind::try_from(read_as!(t, 5 => u32 => u32))
+            .map_err(|e| CatalogError::invalid_catalog_row(e.to_string()))?,
+        FileId::from(read_as!(t, 6 => u64 => u64)),
+        read_as!(t, 7),
+    ),
+}
+
+/// One row in `SystemTable::PrimaryKeyColumns`.
+///
+/// Represents a single column of a table's primary key. A composite PK
+/// (`PRIMARY KEY (a, b)`) writes two rows that share `table_id` and differ in
+/// `ordinal`, where `ordinal` is the column's position inside the PK list
+/// (0-based, in declaration order). Reconstructing the PK on load means
+/// scanning all rows for a `table_id` and sorting by `ordinal`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct PrimaryKeyColumnRow {
+    pub(super) table_id: FileId,
+    pub(super) column_id: ColumnId,
+    /// 0-based position of this column inside the PK list. Distinct from
+    /// `column_id`: `column_id` says *which* schema column, `ordinal` says
+    /// *which slot* of the PK that column occupies.
+    pub(super) ordinal: i32,
+}
+
+impl PrimaryKeyColumnRow {
+    pub(super) fn new(
+        table_id: FileId,
+        column_id: ColumnId,
+        ordinal: i32,
+    ) -> Result<Self, CatalogError> {
+        if ordinal < 0 {
+            return Err(CatalogError::invalid_catalog_row(format!(
+                "ordinal must be non-negative, got {ordinal}"
+            )));
+        }
+        Ok(Self {
+            table_id,
+            column_id,
+            ordinal,
         })
     }
 }
 
-impl TryFrom<&Tuple> for IndexRow {
-    type Error = CatalogError;
-
-    fn try_from(t: &Tuple) -> Result<Self, Self::Error> {
-        Self::new(
-            read_as!(t, 0),
-            read_as!(t, 1),
-            FileId::from(read_as!(t, 2 => u64 => u64)),
-            read_as!(t, 3),
-            Index::try_from(read_as!(t, 4 => u32 => u32))
-                .map_err(|e| CatalogError::invalid_catalog_row(e.to_string()))?,
-        )
-    }
-}
-
-impl From<&IndexRow> for Tuple {
-    fn from(r: &IndexRow) -> Tuple {
-        Tuple::new(vec![
-            r.index_id.into(),
-            r.index_name.clone().into(),
-            r.table_id.0.into(),
-            r.column_name.clone().into(),
-            u32::from(r.index_type).into(),
-        ])
-    }
+catalog_row_codec! {
+    PrimaryKeyColumnRow => PrimaryKeyColumns,
+    encode |r| [
+        r.table_id.0,
+        u32::from(r.column_id),
+        r.ordinal,
+    ],
+    decode |t| (
+        FileId::from(read_as!(t, 0 => u64 => u64)),
+        read_as!(t, 1 => u32 => ColumnId),
+        read_as!(t, 2),
+    ),
 }
 
 #[cfg(test)]
@@ -357,31 +504,30 @@ mod tests {
 
     fn valid_tables_tuple() -> Tuple {
         // table_id (Uint64 NOT NULL), table_name (String NOT NULL),
-        // file_path (String NOT NULL), primary_key (String, nullable)
+        // file_path (String NOT NULL).
         Tuple::new(vec![
             Value::Uint64(1),
             Value::String("users".into()),
             Value::String("/data/users.dat".into()),
-            Value::Null,
         ])
     }
 
     fn valid_columns_tuple() -> Tuple {
-        // table_id (Int64 NOT NULL), column_name (String NOT NULL),
+        // table_id (Uint64 NOT NULL), column_name (String NOT NULL),
         // column_type (Uint32 NOT NULL, 5 = Type::String),
-        // position (Int32 NOT NULL), nullable (Bool, nullable)
+        // position (Uint32 NOT NULL), nullable (Bool, nullable)
         Tuple::new(vec![
-            Value::Int64(1),
+            Value::Uint64(1),
             Value::String("email".into()),
             Value::Uint32(5),
-            Value::Int32(0),
+            Value::Uint32(0),
             Value::Bool(true),
         ])
     }
 
-    // Fully valid Tables row with a null primary_key must pass.
+    // Fully valid Tables row must pass.
     #[test]
-    fn test_validate_tables_row_null_primary_key_ok() {
+    fn test_validate_tables_row_ok() {
         assert!(
             SystemTable::Tables
                 .validate_row(&valid_tables_tuple())
@@ -389,16 +535,19 @@ mod tests {
         );
     }
 
-    // Tables row with a non-null primary_key must also pass.
+    // Wrong number of fields must yield Corruption. The PK info now lives
+    // in PrimaryKeyColumns, so a Tables row with a trailing primary_key
+    // column would now fail — the catch-all field-count check still applies.
     #[test]
-    fn test_validate_tables_row_with_primary_key_ok() {
+    fn test_validate_tables_row_with_extra_pk_field_yields_corruption() {
         let tuple = Tuple::new(vec![
             Value::Uint64(2),
             Value::String("orders".into()),
             Value::String("/data/orders.dat".into()),
-            Value::String("order_id".into()),
+            Value::String("order_id".into()), // legacy field — no longer in schema
         ]);
-        assert!(SystemTable::Tables.validate_row(&tuple).is_ok());
+        let err = SystemTable::Tables.validate_row(&tuple).unwrap_err();
+        assert!(matches!(err, CatalogError::Corruption { .. }));
     }
 
     // Wrong number of fields must yield Corruption.
@@ -419,7 +568,6 @@ mod tests {
             Value::Null, // table_id is NOT NULL
             Value::String("users".into()),
             Value::String("/data/users.dat".into()),
-            Value::Null,
         ]);
         let err = SystemTable::Tables.validate_row(&tuple).unwrap_err();
         assert!(matches!(err, CatalogError::Corruption { .. }));
@@ -432,7 +580,6 @@ mod tests {
             Value::Int32(1), // declared Uint64
             Value::String("users".into()),
             Value::String("/data/users.dat".into()),
-            Value::Null,
         ]);
         let err = SystemTable::Tables.validate_row(&tuple).unwrap_err();
         assert!(matches!(err, CatalogError::Corruption { .. }));
@@ -455,10 +602,10 @@ mod tests {
     fn test_validate_columns_row_all_valid_type_discriminants() {
         for disc in 0u32..=6 {
             let tuple = Tuple::new(vec![
-                Value::Int64(1),
+                Value::Uint64(1),
                 Value::String(format!("col_{disc}")),
                 Value::Uint32(disc),
-                Value::Int32(0),
+                Value::Uint32(0),
                 Value::Bool(false),
             ]);
             assert!(
@@ -471,7 +618,7 @@ mod tests {
     // Wrong field count must yield Corruption.
     #[test]
     fn test_validate_columns_row_wrong_field_count_yields_corruption() {
-        let tuple = Tuple::new(vec![Value::Int64(1), Value::String("col".into())]);
+        let tuple = Tuple::new(vec![Value::Uint64(1), Value::String("col".into())]);
         let err = SystemTable::Columns.validate_row(&tuple).unwrap_err();
         assert!(matches!(err, CatalogError::Corruption { .. }));
     }
@@ -480,10 +627,10 @@ mod tests {
     #[test]
     fn test_validate_columns_row_null_in_not_null_col_yields_corruption() {
         let tuple = Tuple::new(vec![
-            Value::Int64(1),
+            Value::Uint64(1),
             Value::Null, // column_name is NOT NULL
             Value::Uint32(0),
-            Value::Int32(0),
+            Value::Uint32(0),
             Value::Bool(false),
         ]);
         let err = SystemTable::Columns.validate_row(&tuple).unwrap_err();
@@ -494,10 +641,10 @@ mod tests {
     #[test]
     fn test_validate_columns_row_invalid_type_discriminant_yields_invalid_row() {
         let tuple = Tuple::new(vec![
-            Value::Int64(1),
+            Value::Uint64(1),
             Value::String("col".into()),
             Value::Uint32(999), // no such Type variant
-            Value::Int32(0),
+            Value::Uint32(0),
             Value::Bool(false),
         ]);
         let err = SystemTable::Columns.validate_row(&tuple).unwrap_err();
@@ -507,49 +654,106 @@ mod tests {
         );
     }
 
-    // ── validate_row: Indexes — schema/reader inconsistency ──────────────────
-    //
-    // BUG: The Indexes schema declares `index_type` as Int32, but IndexRow::try_from
-    // reads it with TupleReader::read::<u32>, which only accepts Value::Uint32.
-    // Neither value type can pass both validation layers simultaneously:
-    //
-    //   Value::Int32  → passes schema.validate, fails IndexRow::try_from → InvalidCatalogRow
-    //   Value::Uint32 → fails schema.validate (type mismatch)            → Corruption
-    //
-    // Fix: change the Indexes schema's index_type field from Int32 to Uint32
-    // (matching the pattern used by ColumnRow's column_type field).
+    // ── validate_row: Indexes ────────────────────────────────────────────────
 
-    // Value::Int32 passes structural validation but fails semantic conversion.
-    #[test]
-    fn test_validate_indexes_row_int32_index_type_yields_invalid_row() {
-        let tuple = Tuple::new(vec![
+    fn valid_indexes_tuple() -> Tuple {
+        // index_id, index_name, table_id (Uint64), column_name,
+        // column_position (Uint32), index_type (Uint32 = IndexKind::Hash),
+        // index_file_id (Uint64), num_buckets (Uint32).
+        Tuple::new(vec![
             Value::Int64(1),
             Value::String("idx_email".into()),
-            Value::Uint64(1),
+            Value::Uint64(7),
             Value::String("email".into()),
-            Value::Int32(0), // schema says Int32, reader expects Uint32
-        ]);
-        let err = SystemTable::Indexes.validate_row(&tuple).unwrap_err();
+            Value::Uint32(0),
+            Value::Uint32(0), // 0 = IndexKind::Hash
+            Value::Uint64(42),
+            Value::Uint32(64),
+        ])
+    }
+
+    #[test]
+    fn test_validate_indexes_row_ok() {
         assert!(
-            matches!(err, CatalogError::InvalidCatalogRow { .. }),
-            "Int32 index_type should fail semantic validation, got: {err}"
+            SystemTable::Indexes
+                .validate_row(&valid_indexes_tuple())
+                .is_ok()
         );
     }
 
-    // Value::Uint32 fails structural validation (type mismatch against schema).
+    // Composite index: same row schema, different column_position.
     #[test]
-    fn test_validate_indexes_row_uint32_index_type_yields_corruption() {
-        let tuple = Tuple::new(vec![
+    fn test_validate_indexes_row_composite_position_ok() {
+        let t = Tuple::new(vec![
             Value::Int64(1),
             Value::String("idx_email".into()),
-            Value::Uint64(1),
-            Value::String("email".into()),
-            Value::Uint32(0), // reader needs this, but schema says Int32
+            Value::Uint64(7),
+            Value::String("created_at".into()),
+            Value::Uint32(1), // second column of a composite index
+            Value::Uint32(0),
+            Value::Uint64(42),
+            Value::Uint32(64),
         ]);
-        let err = SystemTable::Indexes.validate_row(&tuple).unwrap_err();
+        assert!(SystemTable::Indexes.validate_row(&t).is_ok());
+    }
+
+    // Storing column_position as Int32 (the old format) must now fail
+    // structural validation: the schema column type is Uint32. The wrapper
+    // type ColumnId encodes its non-negative invariant in the Rust type
+    // system, so a separate semantic check would be redundant.
+    #[test]
+    fn test_validate_indexes_row_int32_position_yields_corruption() {
+        let t = Tuple::new(vec![
+            Value::Int64(1),
+            Value::String("idx".into()),
+            Value::Uint64(1),
+            Value::String("c".into()),
+            Value::Int32(0), // wrong: schema declares Uint32
+            Value::Uint32(0),
+            Value::Uint64(42),
+            Value::Uint32(64),
+        ]);
+        let err = SystemTable::Indexes.validate_row(&t).unwrap_err();
+        assert!(matches!(err, CatalogError::Corruption { .. }));
+    }
+
+    // Hash index with num_buckets == 0 is invalid (frozen bucket count must
+    // be positive — zero would imply an empty modulus in hash_to_bucket).
+    #[test]
+    fn test_validate_indexes_row_hash_zero_buckets_yields_invalid_row() {
+        let t = Tuple::new(vec![
+            Value::Int64(1),
+            Value::String("idx".into()),
+            Value::Uint64(1),
+            Value::String("c".into()),
+            Value::Uint32(0),
+            Value::Uint32(0), // hash
+            Value::Uint64(42),
+            Value::Uint32(0), // zero — invalid for hash
+        ]);
+        let err = SystemTable::Indexes.validate_row(&t).unwrap_err();
+        assert!(matches!(err, CatalogError::InvalidCatalogRow { .. }));
+    }
+
+    // Schema/reader agreement: index_type as Int32 must now fail structural
+    // validation (the schema is Uint32). The previous bug (Int32 schema vs
+    // Uint32 reader) is fixed.
+    #[test]
+    fn test_validate_indexes_row_int32_index_type_yields_corruption() {
+        let t = Tuple::new(vec![
+            Value::Int64(1),
+            Value::String("idx".into()),
+            Value::Uint64(1),
+            Value::String("c".into()),
+            Value::Uint32(0),
+            Value::Int32(0), // wrong: schema declares Uint32
+            Value::Uint64(42),
+            Value::Uint32(64),
+        ]);
+        let err = SystemTable::Indexes.validate_row(&t).unwrap_err();
         assert!(
             matches!(err, CatalogError::Corruption { .. }),
-            "Uint32 index_type should fail structural validation, got: {err}"
+            "Int32 index_type should fail structural validation, got: {err}"
         );
     }
 
@@ -565,11 +769,12 @@ mod tests {
 
     // ALL must contain exactly three variants.
     #[test]
-    fn test_system_table_all_has_three_variants() {
-        assert_eq!(SystemTable::ALL.len(), 3);
+    fn test_system_table_all_has_four_variants() {
+        assert_eq!(SystemTable::ALL.len(), 4);
         assert!(SystemTable::ALL.contains(&SystemTable::Tables));
         assert!(SystemTable::ALL.contains(&SystemTable::Columns));
         assert!(SystemTable::ALL.contains(&SystemTable::Indexes));
+        assert!(SystemTable::ALL.contains(&SystemTable::PrimaryKeyColumns));
     }
 
     // file_id values must be unique across all system tables.

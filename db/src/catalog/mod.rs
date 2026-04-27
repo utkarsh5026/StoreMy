@@ -1,3 +1,4 @@
+mod index;
 pub mod manager;
 pub mod systable;
 pub mod table;
@@ -56,6 +57,13 @@ impl CatalogError {
             table: table.into(),
             message: message.into(),
         }
+    }
+
+    pub(super) fn systable_corruption(
+        table: crate::catalog::systable::SystemTable,
+        message: impl Into<String>,
+    ) -> Self {
+        Self::corruption(table.table_name(), message)
     }
 
     pub(super) fn table_not_found(table_name: impl Into<String>) -> Self {
