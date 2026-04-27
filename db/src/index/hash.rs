@@ -86,15 +86,18 @@ use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
 use siphasher::sip::SipHasher13;
 
 use crate::{
-    FileId, Lsn, PageNumber, TransactionId, Type, Value,
+    FileId, Lsn, PageNumber, TransactionId, Type,
     buffer_pool::{
         LockRequest,
         page_store::{PageGuard, PageStore},
     },
     codec::{CodecError, Decode, Encode},
-    index::{Index, IndexEntry, IndexError, IndexKind, check_key_type},
+    index::{
+        CompositeKey, ENVELOPE_HEADER_SIZE, Index, IndexEntry, IndexError, IndexKind, PageKind,
+        decode_index_page, encode_index_page,
+    },
     primitives::{PageId, RecordId},
-    storage::{ENVELOPE_HEADER_SIZE, PAGE_SIZE, PageKind, decode_index_page, encode_index_page},
+    storage::PAGE_SIZE,
 };
 
 const NIL: u32 = u32::MAX;
@@ -203,7 +206,7 @@ impl HashBucket {
         self.entries.push(entry);
     }
 
-    fn find(&self, key: &Value, rid: &RecordId) -> Option<usize> {
+    fn find(&self, key: &CompositeKey, rid: &RecordId) -> Option<usize> {
         self.entries
             .iter()
             .position(|e| e.key == *key && e.rid == *rid)
@@ -286,7 +289,10 @@ const MAX_OVERFLOW_HOPS: usize = 1000; // cycle-detection bound, same as Go
 /// ```
 pub struct HashIndex {
     file_id: FileId,
-    key_type: Type,
+    /// Per-column declared types, in column order. Length is the index's
+    /// arity; arity-1 is the single-column case, larger arities are composite
+    /// indexes (`CREATE INDEX … USING HASH (a, b)`).
+    key_types: Vec<Type>,
     num_buckets: u32,
     /// Maps bucket -> page number of the bucket's head page.
     /// In the Go version this is mutable; here we keep the static-hash
@@ -313,25 +319,32 @@ impl HashIndex {
     ///
     /// ```ignore
     /// // CREATE INDEX users_email_idx ON users USING HASH (email);
-    /// let idx = HashIndex::new(file_id, Type::String, 64, store, 64);
+    /// let idx = HashIndex::new(file_id, vec![Type::String], 64, store, 64);
     /// idx.init(txn)?;  // first time only
+    ///
+    /// // Composite index: CREATE INDEX users_name_idx ON users USING HASH (last, first);
+    /// let idx = HashIndex::new(
+    ///     file_id, vec![Type::String, Type::String], 64, store, 64,
+    /// );
     ///
     /// // Re-opening an existing index where the file holds 80 pages
     /// // (64 head + 16 overflow allocated previously):
-    /// let idx = HashIndex::new(file_id, Type::String, 64, store, 80);
+    /// let idx = HashIndex::new(file_id, vec![Type::String], 64, store, 80);
     /// ```
     ///
     /// # Panics
     ///
+    /// - `key_types` is empty — every index must have at least one column.
     /// - `num_buckets == 0` — must declare at least one bucket.
     /// - `existing_pages < num_buckets` — head pages must always be present.
     pub fn new(
         file_id: FileId,
-        key_type: Type,
+        key_types: Vec<Type>,
         num_buckets: u32,
         store: Arc<PageStore>,
         existing_pages: u32,
     ) -> Self {
+        assert!(!key_types.is_empty(), "index must have at least one column");
         assert!(num_buckets > 0);
         assert!(
             existing_pages >= num_buckets,
@@ -339,7 +352,7 @@ impl HashIndex {
         );
         Self {
             file_id,
-            key_type,
+            key_types,
             num_buckets,
             store,
             num_pages: AtomicU32::new(existing_pages),
@@ -389,7 +402,12 @@ impl HashIndex {
         PageNumber::from(self.num_pages.fetch_add(1, Ordering::AcqRel))
     }
 
-    /// Maps `key` to a bucket using SipHash-2-4 with a fixed key.
+    /// Maps a [`CompositeKey`] to a bucket using SipHash-2-4 with a fixed key.
+    ///
+    /// For composite keys the entire tuple is hashed as a unit (the derived
+    /// `Hash` impl on `CompositeKey` feeds length + each component into the
+    /// hasher). That's why a hash index can only accelerate **full-prefix
+    /// equality** — partial keys hash differently from full ones.
     ///
     /// `SipHash` from the `siphasher` crate is stable across Rust versions,
     /// unlike `std::collections::hash_map::DefaultHasher` whose algorithm is
@@ -401,7 +419,7 @@ impl HashIndex {
     /// The keys `(0, 0)` are arbitrary but fixed for the same reason. If
     /// you ever need to rotate the seed (e.g. to defend against adversarial
     /// key inputs), that's a file-format change requiring a rebuild.
-    fn hash_to_bucket(&self, key: &Value) -> BucketNumber {
+    fn hash_to_bucket(&self, key: &CompositeKey) -> BucketNumber {
         let mut h = SipHasher13::new_with_keys(0, 0);
         key.hash(&mut h);
         let bucket_u64 = h.finish() % u64::from(self.num_buckets);
@@ -418,6 +436,22 @@ impl HashIndex {
         }
     }
 
+    /// Fetches and decodes a hash bucket page from the buffer pool.
+    ///
+    /// Returns a tuple of:
+    /// - A [`PageGuard`] over the requested page, held in either shared or exclusive mode.
+    /// - The decoded [`HashBucket`] contents of the page.
+    ///
+    /// # Arguments
+    ///
+    /// - `txn`: The ID of the transaction requesting the page.
+    /// - `pn`: The [`PageNumber`] of the hash bucket to read.
+    /// - `exclusive`: If `true`, request the page exclusively; otherwise, shared.
+    ///
+    /// # Errors
+    ///
+    /// Returns an [`IndexError::CorruptIndex`] if the page is not of kind [`PageKind::HashBucket`].
+    /// Propagates errors from lower layers (page fetch, decode).
     fn read_bucket(
         &self,
         txn: TransactionId,
@@ -430,6 +464,7 @@ impl HashIndex {
         } else {
             LockRequest::shared(txn, pid)
         };
+
         let g = self.store.fetch_page(req)?;
         let page = g.read();
         let (kind, payload) = decode_index_page(&page)?;
@@ -488,6 +523,21 @@ impl HashIndex {
         Self::write_bucket(tail_guard, tail, Lsn::INVALID)
     }
 
+    /// Checks if the current overflow chain hop count exceeds the permitted maximum.
+    ///
+    /// Every hash bucket can implement overflow pages (separate chaining) for collisions.
+    /// To guard against index corruption (e.g., accidental cycle or infinite chain),
+    /// we enforce a maximum hop limit (`MAX_OVERFLOW_HOPS`). Exceeding this returns
+    /// `IndexError::CorruptIndex`.
+    ///
+    /// # Arguments
+    ///
+    /// * `hops` - The number of buckets traversed so far in the chain.
+    ///
+    /// # Returns
+    ///
+    /// * `Ok(())` if below the hop limit.
+    /// * `Err(IndexError::CorruptIndex)` if the hop limit is reached or exceeded.
     fn ensure_hops_limit(hops: usize) -> Result<(), IndexError> {
         if hops == MAX_OVERFLOW_HOPS {
             return Err(IndexError::CorruptIndex("overflow chain too long"));
@@ -495,6 +545,24 @@ impl HashIndex {
         Ok(())
     }
 
+    /// Walks every page in a hash bucket's overflow chain, invoking the supplied closure on each.
+    ///
+    /// This traversal starts at `head` and follows each linked overflow page in turn, up to the
+    /// hop bound or until the closure returns `ControlFlow::Break`.
+    ///
+    /// Each page is read with a shared lock.
+    ///
+    /// # Arguments
+    ///
+    /// * `txn` - The current transaction ID, used for lock requests.
+    /// * `head` - The page number of the first (head) page in the overflow chain.
+    /// * `f`   - Closure called once per loaded `HashBucket`. If it returns `ControlFlow::Break`,
+    ///   traversal stops early and returns `Ok(())`.
+    ///
+    /// # Returns
+    ///
+    /// * `Ok(())` if traversal completes or is stopped by the closure.
+    /// * `Err(IndexError)` for hop overflow, page I/O failure, or corruption.
     fn traverse<F>(&self, txn: TransactionId, head: PageNumber, mut f: F) -> Result<(), IndexError>
     where
         F: FnMut(&HashBucket) -> std::ops::ControlFlow<()>,
@@ -540,8 +608,13 @@ impl Index for HashIndex {
     /// - [`IndexError::PageStore`] — fetching or locking a chain page failed.
     /// - [`IndexError::Codec`] — encoding the updated page failed.
     /// - [`IndexError::CorruptIndex`] — overflow chain exceeded its hop bound.
-    fn insert(&self, txn: TransactionId, key: &Value, rid: RecordId) -> Result<(), IndexError> {
-        check_key_type(self.key_type, key)?;
+    fn insert(
+        &self,
+        txn: TransactionId,
+        key: &CompositeKey,
+        rid: RecordId,
+    ) -> Result<(), IndexError> {
+        self.check_key_type(key)?;
         let bucket = self.hash_to_bucket(key);
         let entry = IndexEntry::new(key.clone(), rid);
         let head = PageNumber::from(bucket);
@@ -588,8 +661,13 @@ impl Index for HashIndex {
     /// - [`IndexError::NotFound`] — no entry matches the `(key, rid)` pair.
     /// - [`IndexError::PageStore`] / [`IndexError::Codec`] — page I/O failure.
     /// - [`IndexError::CorruptIndex`] — overflow chain too long or wrong page kind.
-    fn delete(&self, txn: TransactionId, key: &Value, rid: RecordId) -> Result<(), IndexError> {
-        check_key_type(self.key_type, key)?;
+    fn delete(
+        &self,
+        txn: TransactionId,
+        key: &CompositeKey,
+        rid: RecordId,
+    ) -> Result<(), IndexError> {
+        self.check_key_type(key)?;
         let bucket = self.hash_to_bucket(key);
         let mut pn = Some(PageNumber::from(bucket));
         let mut hops = 0;
@@ -627,8 +705,8 @@ impl Index for HashIndex {
     /// - [`IndexError::PageStore`] / [`IndexError::Codec`] — page I/O failure.
     /// - [`IndexError::CorruptIndex`] — overflow chain exceeded its hop bound or refers to a page
     ///   of the wrong kind.
-    fn search(&self, txn: TransactionId, key: &Value) -> Result<Vec<RecordId>, IndexError> {
-        check_key_type(self.key_type, key)?;
+    fn search(&self, txn: TransactionId, key: &CompositeKey) -> Result<Vec<RecordId>, IndexError> {
+        self.check_key_type(key)?;
         let bucket = self.hash_to_bucket(key);
         let mut results = Vec::new();
         let pn = PageNumber::from(bucket);
@@ -671,11 +749,11 @@ impl Index for HashIndex {
     fn range_search(
         &self,
         txn: TransactionId,
-        start: &Value,
-        end: &Value,
+        start: &CompositeKey,
+        end: &CompositeKey,
     ) -> Result<Vec<RecordId>, IndexError> {
-        check_key_type(self.key_type, start)?;
-        check_key_type(self.key_type, end)?;
+        self.check_key_type(start)?;
+        self.check_key_type(end)?;
         let mut results = Vec::new();
         for b in 0..self.num_buckets {
             let pn = PageNumber::from(b);
@@ -700,12 +778,12 @@ impl Index for HashIndex {
         IndexKind::Hash
     }
 
-    /// The declared SQL type of the indexed column — the `TEXT` in
-    /// `CREATE INDEX … ON users (email)` where `email TEXT`. Used by
-    /// [`check_key_type`] on every public entry point to reject
-    /// type-mismatched keys before they touch a page.
-    fn key_type(&self) -> Type {
-        self.key_type
+    /// The declared SQL types of the indexed columns, in column order — the
+    /// `[TEXT, TEXT]` in `CREATE INDEX … ON users (last, first)`. Used by
+    /// [`Index::check_key_type`] on every public entry point to reject keys whose
+    /// arity or per-position type doesn't match the index.
+    fn key_types(&self) -> &[Type] {
+        &self.key_types
     }
 }
 
@@ -717,7 +795,7 @@ mod tests {
 
     use super::*;
     use crate::{
-        FileId, TransactionId,
+        FileId, TransactionId, Value,
         buffer_pool::page_store::PageStore,
         primitives::{PageNumber, RecordId, SlotId},
         storage::StorageError,
@@ -726,6 +804,11 @@ mod tests {
 
     fn rid(file: u64, page: u32, slot: u16) -> RecordId {
         RecordId::new(FileId::new(file), PageNumber::new(page), SlotId(slot))
+    }
+
+    /// Single-column key shorthand for tests that predate composite indexes.
+    fn k(v: Value) -> CompositeKey {
+        CompositeKey::single(v)
     }
 
     #[test]
@@ -745,7 +828,7 @@ mod tests {
     #[test]
     fn used_bytes_grows_with_each_entry() {
         let mut b = HashBucket::new(BucketNumber(0));
-        let entry = IndexEntry::new(Value::Int32(7), rid(1, 0, 0));
+        let entry = IndexEntry::new(k(Value::Int32(7)), rid(1, 0, 0));
         let before = b.used_bytes();
         b.push(entry.clone());
         assert_eq!(b.used_bytes(), before + entry.encoded_size());
@@ -754,7 +837,7 @@ mod tests {
     #[test]
     fn has_space_for_returns_false_when_full() {
         let mut b = HashBucket::new(BucketNumber(0));
-        let entry = IndexEntry::new(Value::Int32(0), rid(1, 0, 0));
+        let entry = IndexEntry::new(k(Value::Int32(0)), rid(1, 0, 0));
         let per_entry = entry.encoded_size();
 
         // Pack the bucket until adding one more entry would overflow.
@@ -783,8 +866,11 @@ mod tests {
     fn body_codec_roundtrip_with_entries_and_overflow() {
         let mut b = HashBucket::new(BucketNumber(3));
         b.overflow = Some(PageNumber::new(99));
-        b.push(IndexEntry::new(Value::Int32(1), rid(1, 0, 0)));
-        b.push(IndexEntry::new(Value::String("hello".into()), rid(1, 2, 5)));
+        b.push(IndexEntry::new(k(Value::Int32(1)), rid(1, 0, 0)));
+        b.push(IndexEntry::new(
+            k(Value::String("hello".into())),
+            rid(1, 2, 5),
+        ));
 
         let bytes = b.to_bytes().unwrap();
         let decoded = HashBucket::from_bytes(&bytes).unwrap();
@@ -792,8 +878,8 @@ mod tests {
         assert_eq!(decoded.bucket, BucketNumber(3));
         assert_eq!(decoded.overflow, Some(PageNumber::new(99)));
         assert_eq!(decoded.entries.len(), 2);
-        assert_eq!(decoded.entries[0].key, Value::Int32(1));
-        assert_eq!(decoded.entries[1].key, Value::String("hello".into()));
+        assert_eq!(decoded.entries[0].key, k(Value::Int32(1)));
+        assert_eq!(decoded.entries[1].key, k(Value::String("hello".into())));
     }
 
     // The body codec no longer reads a kind byte — that's the envelope's job
@@ -811,7 +897,7 @@ mod tests {
         _dir: TempDir,
     }
 
-    fn make_index(num_buckets: u32, key_type: Type) -> Fixture {
+    fn make_index(num_buckets: u32, key_types: Vec<Type>) -> Fixture {
         let dir = tempfile::tempdir().unwrap();
         let wal = Arc::new(Wal::new(&dir.path().join("test.wal"), 0).unwrap());
         let store = Arc::new(PageStore::new(64, Arc::clone(&wal)));
@@ -836,7 +922,7 @@ mod tests {
 
         let index = HashIndex::new(
             file_id,
-            key_type,
+            key_types,
             num_buckets,
             Arc::clone(&store),
             num_buckets,
@@ -864,117 +950,122 @@ mod tests {
 
     #[test]
     fn insert_then_search_returns_rid() {
-        let fx = make_index(4, Type::Int32);
+        let fx = make_index(4, vec![Type::Int32]);
         let txn = begin(&fx.wal, 1);
         let r = rid(1, 10, 3);
-        fx.index.insert(txn, &Value::Int32(42), r).unwrap();
+        fx.index.insert(txn, &k(Value::Int32(42)), r).unwrap();
 
-        let found = fx.index.search(txn, &Value::Int32(42)).unwrap();
+        let found = fx.index.search(txn, &k(Value::Int32(42))).unwrap();
         assert_eq!(found, vec![r]);
     }
 
     #[test]
     fn search_missing_key_returns_empty() {
-        let fx = make_index(4, Type::Int32);
+        let fx = make_index(4, vec![Type::Int32]);
         let txn = begin(&fx.wal, 1);
-        let found = fx.index.search(txn, &Value::Int32(999)).unwrap();
+        let found = fx.index.search(txn, &k(Value::Int32(999))).unwrap();
         assert!(found.is_empty());
     }
 
     #[test]
     fn insert_duplicate_key_rid_pair_errors() {
-        let fx = make_index(4, Type::Int32);
+        let fx = make_index(4, vec![Type::Int32]);
         let txn = begin(&fx.wal, 1);
         let r = rid(1, 0, 0);
-        fx.index.insert(txn, &Value::Int32(1), r).unwrap();
+        fx.index.insert(txn, &k(Value::Int32(1)), r).unwrap();
 
-        let err = fx.index.insert(txn, &Value::Int32(1), r).unwrap_err();
+        let err = fx.index.insert(txn, &k(Value::Int32(1)), r).unwrap_err();
         assert!(matches!(err, IndexError::DuplicateEntry));
     }
 
     #[test]
     fn same_key_different_rids_all_returned() {
-        let fx = make_index(4, Type::Int32);
+        let fx = make_index(4, vec![Type::Int32]);
         let txn = begin(&fx.wal, 1);
         let rids = [rid(1, 0, 0), rid(1, 0, 1), rid(1, 1, 0)];
         for r in &rids {
-            fx.index.insert(txn, &Value::Int32(7), *r).unwrap();
+            fx.index.insert(txn, &k(Value::Int32(7)), *r).unwrap();
         }
 
-        let mut found = fx.index.search(txn, &Value::Int32(7)).unwrap();
+        let mut found = fx.index.search(txn, &k(Value::Int32(7))).unwrap();
         found.sort_by_key(|r| (r.page_no.0, r.slot_id.0));
         assert_eq!(found, rids);
     }
 
     #[test]
     fn delete_existing_entry_removes_it() {
-        let fx = make_index(4, Type::Int32);
+        let fx = make_index(4, vec![Type::Int32]);
         let txn = begin(&fx.wal, 1);
         let r = rid(1, 0, 0);
-        fx.index.insert(txn, &Value::Int32(5), r).unwrap();
-        fx.index.delete(txn, &Value::Int32(5), r).unwrap();
-        assert!(fx.index.search(txn, &Value::Int32(5)).unwrap().is_empty());
+        fx.index.insert(txn, &k(Value::Int32(5)), r).unwrap();
+        fx.index.delete(txn, &k(Value::Int32(5)), r).unwrap();
+        assert!(
+            fx.index
+                .search(txn, &k(Value::Int32(5)))
+                .unwrap()
+                .is_empty()
+        );
     }
 
     #[test]
     fn delete_missing_returns_not_found() {
-        let fx = make_index(4, Type::Int32);
+        let fx = make_index(4, vec![Type::Int32]);
         let txn = begin(&fx.wal, 1);
         let err = fx
             .index
-            .delete(txn, &Value::Int32(123), rid(1, 0, 0))
+            .delete(txn, &k(Value::Int32(123)), rid(1, 0, 0))
             .unwrap_err();
         assert!(matches!(err, IndexError::NotFound));
     }
 
     #[test]
     fn delete_one_rid_leaves_others_intact() {
-        let fx = make_index(4, Type::Int32);
+        let fx = make_index(4, vec![Type::Int32]);
         let txn = begin(&fx.wal, 1);
         let r1 = rid(1, 0, 0);
         let r2 = rid(1, 0, 1);
-        fx.index.insert(txn, &Value::Int32(9), r1).unwrap();
-        fx.index.insert(txn, &Value::Int32(9), r2).unwrap();
+        fx.index.insert(txn, &k(Value::Int32(9)), r1).unwrap();
+        fx.index.insert(txn, &k(Value::Int32(9)), r2).unwrap();
 
-        fx.index.delete(txn, &Value::Int32(9), r1).unwrap();
-        let remaining = fx.index.search(txn, &Value::Int32(9)).unwrap();
+        fx.index.delete(txn, &k(Value::Int32(9)), r1).unwrap();
+        let remaining = fx.index.search(txn, &k(Value::Int32(9))).unwrap();
         assert_eq!(remaining, vec![r2]);
     }
 
     #[test]
     fn key_type_mismatch_errors_on_insert() {
-        let fx = make_index(4, Type::Int32);
+        let fx = make_index(4, vec![Type::Int32]);
         let txn = begin(&fx.wal, 1);
         let err = fx
             .index
-            .insert(txn, &Value::String("nope".into()), rid(1, 0, 0))
+            .insert(txn, &k(Value::String("nope".into())), rid(1, 0, 0))
             .unwrap_err();
         assert!(matches!(err, IndexError::KeyTypeMismatch { .. }));
     }
 
     #[test]
     fn key_type_mismatch_errors_on_search() {
-        let fx = make_index(4, Type::Int32);
+        let fx = make_index(4, vec![Type::Int32]);
         let txn = begin(&fx.wal, 1);
         let err = fx
             .index
-            .search(txn, &Value::String("nope".into()))
+            .search(txn, &k(Value::String("nope".into())))
             .unwrap_err();
         assert!(matches!(err, IndexError::KeyTypeMismatch { .. }));
     }
 
     #[test]
     fn kind_and_key_type_accessors() {
-        let fx = make_index(4, Type::Int64);
+        let fx = make_index(4, vec![Type::Int64]);
         assert_eq!(fx.index.kind(), IndexKind::Hash);
-        assert_eq!(fx.index.key_type(), Type::Int64);
+        assert_eq!(fx.index.key_types(), &[Type::Int64]);
     }
 
     #[test]
     fn init_writes_decodable_headers_into_every_head_page() {
         // make_index already calls init(); verify each head page now decodes
         // as a HashBucket with the right BucketNumber and an empty entry list.
-        let fx = make_index(4, Type::Int32);
+        let fx = make_index(4, vec![Type::Int32]);
         let txn = begin(&fx.wal, 1);
         for i in 0..4 {
             let (_g, b) = fx
@@ -992,7 +1083,7 @@ mod tests {
         // Stamp a head page with a non-HashBucket envelope (e.g. BTreeLeaf)
         // and verify read_bucket returns CorruptIndex rather than silently
         // decoding the body.
-        let fx = make_index(2, Type::Int32);
+        let fx = make_index(2, vec![Type::Int32]);
         let init_txn = TransactionId::new(99);
         fx.wal.log_begin(init_txn).unwrap();
         let pid = fx.index.pid(PageNumber::new(0));
@@ -1020,7 +1111,7 @@ mod tests {
         // Verify the envelope's CRC error propagates as IndexError::Storage.
         // Without this, swapping read_bucket to silently swallow CRC failures
         // would go undetected — the envelope tests can't catch that.
-        let fx = make_index(2, Type::Int32);
+        let fx = make_index(2, vec![Type::Int32]);
         let init_txn = TransactionId::new(99);
         fx.wal.log_begin(init_txn).unwrap();
 
@@ -1054,13 +1145,13 @@ mod tests {
         // takes 5 + 14 = 19 bytes; with the 13-byte header a page holds about
         // (4096 - 13) / 19 ≈ 214 entries. Inserting 300 forces at least one
         // overflow page to be allocated.
-        let fx = make_index(1, Type::Int32);
+        let fx = make_index(1, vec![Type::Int32]);
         let txn = begin(&fx.wal, 1);
         let n = 300;
         for i in 0..n {
             let slot = u16::try_from(i).expect("test key must fit into RID slot");
             fx.index
-                .insert(txn, &Value::Int32(i), rid(1, 0, slot))
+                .insert(txn, &k(Value::Int32(i)), rid(1, 0, slot))
                 .unwrap();
         }
 
@@ -1072,42 +1163,135 @@ mod tests {
         // Spot-check that entries from both ends of the chain are findable.
         for i in [0, 100, 250, n - 1] {
             let slot = u16::try_from(i).expect("test key must fit into RID slot");
-            let found = fx.index.search(txn, &Value::Int32(i)).unwrap();
+            let found = fx.index.search(txn, &k(Value::Int32(i))).unwrap();
             assert_eq!(found, vec![rid(1, 0, slot)], "missing key {i}");
         }
     }
 
     #[test]
     fn delete_walks_overflow_chain() {
-        let fx = make_index(1, Type::Int32);
+        let fx = make_index(1, vec![Type::Int32]);
         let txn = begin(&fx.wal, 1);
         for i in 0..300 {
             let slot = u16::try_from(i).expect("test key must fit into RID slot");
             fx.index
-                .insert(txn, &Value::Int32(i), rid(1, 0, slot))
+                .insert(txn, &k(Value::Int32(i)), rid(1, 0, slot))
                 .unwrap();
         }
         // A late key will live on an overflow page.
         fx.index
-            .delete(txn, &Value::Int32(290), rid(1, 0, 290))
+            .delete(txn, &k(Value::Int32(290)), rid(1, 0, 290))
             .unwrap();
-        assert!(fx.index.search(txn, &Value::Int32(290)).unwrap().is_empty());
+        assert!(
+            fx.index
+                .search(txn, &k(Value::Int32(290)))
+                .unwrap()
+                .is_empty()
+        );
     }
 
     #[test]
     fn range_search_returns_keys_in_inclusive_range() {
-        let fx = make_index(4, Type::Int32);
+        let fx = make_index(4, vec![Type::Int32]);
         let txn = begin(&fx.wal, 1);
         for i in 0..20 {
             let slot = u16::try_from(i).expect("test key must fit into RID slot");
             fx.index
-                .insert(txn, &Value::Int32(i), rid(1, 0, slot))
+                .insert(txn, &k(Value::Int32(i)), rid(1, 0, slot))
                 .unwrap();
         }
         let found = fx
             .index
-            .range_search(txn, &Value::Int32(5), &Value::Int32(10))
+            .range_search(txn, &k(Value::Int32(5)), &k(Value::Int32(10)))
             .unwrap();
         assert_eq!(found.len(), 6, "expected keys 5..=10 inclusive");
+    }
+
+    fn name_key(last: &str, first: &str) -> CompositeKey {
+        CompositeKey::new(vec![
+            Value::String(last.into()),
+            Value::String(first.into()),
+        ])
+    }
+
+    #[test]
+    fn composite_key_two_columns_roundtrip() {
+        let fx = make_index(4, vec![Type::String, Type::String]);
+        let txn = begin(&fx.wal, 1);
+
+        let smith_ada = name_key("Smith", "Ada");
+        let smith_bob = name_key("Smith", "Bob");
+        let r1 = rid(1, 0, 0);
+        let r2 = rid(1, 0, 1);
+        fx.index.insert(txn, &smith_ada, r1).unwrap();
+        fx.index.insert(txn, &smith_bob, r2).unwrap();
+
+        // Each composite key resolves only to its own rid — same first
+        // component must not be enough to find the other.
+        assert_eq!(fx.index.search(txn, &smith_ada).unwrap(), vec![r1]);
+        assert_eq!(fx.index.search(txn, &smith_bob).unwrap(), vec![r2]);
+    }
+
+    #[test]
+    fn composite_key_arity_mismatch_errors() {
+        let fx = make_index(4, vec![Type::String, Type::String]);
+        let txn = begin(&fx.wal, 1);
+
+        let single = CompositeKey::single(Value::String("Smith".into()));
+        let err = fx.index.search(txn, &single).unwrap_err();
+        assert!(matches!(err, IndexError::KeyArityMismatch {
+            expected: 2,
+            got: 1
+        }));
+    }
+
+    #[test]
+    fn composite_key_per_position_type_mismatch_errors() {
+        let fx = make_index(4, vec![Type::String, Type::Int32]);
+        let txn = begin(&fx.wal, 1);
+
+        // Right arity (2), wrong type at position 1: String where Int32 expected.
+        let bad = CompositeKey::new(vec![
+            Value::String("Smith".into()),
+            Value::String("not-an-int".into()),
+        ]);
+        let err = fx.index.insert(txn, &bad, rid(1, 0, 0)).unwrap_err();
+        match err {
+            IndexError::KeyTypeMismatch {
+                position,
+                expected: Type::Int32,
+                ..
+            } => assert_eq!(position, 1),
+            other => panic!("expected KeyTypeMismatch at position 1, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn composite_key_column_order_matters() {
+        let ab = CompositeKey::new(vec![Value::String("a".into()), Value::String("b".into())]);
+        let ba = CompositeKey::new(vec![Value::String("b".into()), Value::String("a".into())]);
+        assert_ne!(ab, ba);
+
+        // And end-to-end: insert (a,b), search (b,a), get nothing.
+        let fx = make_index(4, vec![Type::String, Type::String]);
+        let txn = begin(&fx.wal, 1);
+        fx.index.insert(txn, &ab, rid(1, 0, 0)).unwrap();
+        assert!(fx.index.search(txn, &ba).unwrap().is_empty());
+    }
+
+    #[test]
+    fn composite_key_codec_roundtrip() {
+        // Composite IndexEntry survives encode/decode unchanged. Catches
+        // accidental drift between CompositeKey::encode and decode.
+        let mut b = HashBucket::new(BucketNumber(0));
+        b.push(IndexEntry::new(name_key("Smith", "Ada"), rid(1, 0, 0)));
+        b.push(IndexEntry::new(
+            CompositeKey::new(vec![Value::Int32(7), Value::String("x".into())]),
+            rid(1, 0, 1),
+        ));
+
+        let bytes = b.to_bytes().unwrap();
+        let decoded = HashBucket::from_bytes(&bytes).unwrap();
+        assert_eq!(decoded.entries, b.entries);
     }
 }

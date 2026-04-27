@@ -109,20 +109,32 @@ impl Decode for CompositeKey {
 /// [`Decode`].
 #[derive(Debug, Clone, PartialEq)]
 pub struct IndexEntry {
+    /// The indexed column values in declaration order.
     pub key: CompositeKey,
+    /// The physical row location this key points to.
     pub rid: RecordId,
 }
 
 impl IndexEntry {
+    /// Builds one index entry from a key and a row pointer.
     pub fn new(key: CompositeKey, rid: RecordId) -> Self {
         Self { key, rid }
     }
 
+    /// Returns the number of bytes this entry occupies when encoded.
+    ///
+    /// The size is the encoded key size plus the fixed-width encoded
+    /// [`RecordId`].
     pub fn encoded_size(&self) -> usize {
         self.key.encoded_size() + RecordId::ENCODED_SIZE
     }
 }
 
+/// Encodes an [`IndexEntry`] as `CompositeKey` bytes followed by `RecordId`
+/// bytes.
+///
+/// # Errors
+/// - Propagates any write or codec error from encoding the key or record id
 impl Encode for IndexEntry {
     fn encode<W: Write>(&self, w: &mut W) -> Result<(), CodecError> {
         self.key.encode(w)?;
@@ -131,6 +143,11 @@ impl Encode for IndexEntry {
     }
 }
 
+/// Decodes an [`IndexEntry`] by reading a [`CompositeKey`] and then a
+/// [`RecordId`] from the input stream.
+///
+/// # Errors
+/// - Propagates any read or codec error while decoding either component
 impl Decode for IndexEntry {
     fn decode<R: Read>(r: &mut R) -> Result<Self, CodecError> {
         let key = CompositeKey::decode(r)?;
@@ -200,11 +217,7 @@ mod tests {
 
     #[test]
     fn entry_roundtrips() {
-        let rid = RecordId::new(
-            FileId::new(1),
-            PageNumber::new(2),
-            SlotId::new(3).unwrap(),
-        );
+        let rid = RecordId::new(FileId::new(1), PageNumber::new(2), SlotId::new(3).unwrap());
         let entry = IndexEntry::new(
             CompositeKey::new(vec![Value::Int32(99), Value::String("x".into())]),
             rid,
