@@ -3,6 +3,7 @@ use tracing::{debug, instrument, trace, warn};
 use super::ParserError;
 use crate::{
     Type, Value,
+    index::IndexKind,
     parser::{
         Parser,
         statements::{
@@ -12,7 +13,6 @@ use crate::{
         },
         token::TokenType,
     },
-    storage::index::Index,
 };
 
 impl Parser {
@@ -350,7 +350,7 @@ impl Parser {
 
     /// Parses `CREATE INDEX [IF NOT EXISTS] <name> ON <table> (<col>, ...) [USING HASH|BTREE]`.
     ///
-    /// Defaults to [`Index::Hash`] when no `USING` clause is present. At least
+    /// Defaults to [`IndexKind::Hash`] when no `USING` clause is present. At least
     /// one column is required; column order is preserved (semantically
     /// significant for composite B-tree indexes via the leftmost-prefix rule).
     ///
@@ -376,8 +376,8 @@ impl Parser {
             .on_peek_token(TokenType::Using, |p| {
                 let type_tok = p.bump()?;
                 match type_tok.kind {
-                    TokenType::Hash => Ok(Index::Hash),
-                    TokenType::Btree => Ok(Index::Btree),
+                    TokenType::Hash => Ok(IndexKind::Hash),
+                    TokenType::Btree => Ok(IndexKind::Btree),
                     _ => {
                         warn!(
                             found = ?type_tok.kind,
@@ -390,7 +390,7 @@ impl Parser {
                     }
                 }
             })?
-            .unwrap_or(Index::Hash);
+            .unwrap_or(IndexKind::Hash);
 
         debug!(
             index = %index_name,

@@ -69,8 +69,8 @@
 use std::fmt::Display;
 
 use crate::{
+    index::IndexKind,
     primitives::Predicate,
-    storage::index::Index,
     tuple::{Field, TupleSchema},
     types::Value,
 };
@@ -605,14 +605,14 @@ impl Display for CreateTableStatement {
 /// --   CreateIndexStatement {
 /// --       index_name: "idx_age", table_name: "users",
 /// --       columns: ["age"],
-/// --       index_type: Index::Btree, if_not_exists: false,
+/// --       index_type: IndexKind::Btree, if_not_exists: false,
 /// --   }
 ///
 /// -- CREATE INDEX idx_user ON orders (user_id, created_at) USING BTREE;
 /// --   CreateIndexStatement {
 /// --       index_name: "idx_user", table_name: "orders",
 /// --       columns: ["user_id", "created_at"],
-/// --       index_type: Index::Btree, if_not_exists: false,
+/// --       index_type: IndexKind::Btree, if_not_exists: false,
 /// --   }
 /// ```
 #[derive(Debug, Clone)]
@@ -620,15 +620,15 @@ pub struct CreateIndexStatement {
     pub index_name: String,
     pub table_name: String,
     pub columns: Vec<String>,
-    pub index_type: Index,
+    pub index_type: IndexKind,
     pub if_not_exists: bool,
 }
 
 impl Display for CreateIndexStatement {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let index_type = match self.index_type {
-            Index::Hash => "HASH",
-            Index::Btree => "BTREE",
+            IndexKind::Hash => "HASH",
+            IndexKind::Btree => "BTREE",
         };
         write!(f, "CREATE INDEX")?;
         if self.if_not_exists {
