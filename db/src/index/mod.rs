@@ -15,20 +15,20 @@
 //! layouts and algorithms. They depend on this module; nothing in this
 //! module depends on them.
 
-use std::io::{Read, Write};
-
 use thiserror::Error;
 
 use crate::{
-    TransactionId, Type, Value,
-    buffer_pool::page_store::PageStoreError,
-    codec::{CodecError, Decode, Encode},
-    primitives::RecordId,
-    storage::StorageError,
+    TransactionId, Type, buffer_pool::page_store::PageStoreError, codec::CodecError,
+    primitives::RecordId, storage::StorageError,
 };
 
+pub mod access;
 pub mod btree;
 pub mod hash;
+pub mod key;
+
+pub use access::{ENVELOPE_HEADER_SIZE, Index, PageKind, decode_index_page, encode_index_page};
+pub use key::{CompositeKey, IndexEntry};
 
 /// Which kind of secondary index to build.
 ///
@@ -51,7 +51,7 @@ impl TryFrom<&str> for IndexKind {
     ///
     /// # Errors
     ///
-    /// Returns `Err("invalid index type")` for any unrecognised string.
+    /// Returns `Err("invalid index type")` for any unrecognized string.
     fn try_from(value: &str) -> Result<Self, Self::Error> {
         match value {
             "hash" => Ok(IndexKind::Hash),
@@ -91,52 +91,24 @@ impl From<IndexKind> for u32 {
     }
 }
 
-/// A single `(key, rid)` pair — the leaf-level unit of storage in any
-/// index.
-///
-/// Both B+Tree leaves and hash buckets store these. The codec is shared
-/// because `Value` already implements [`Encode`] / [`Decode`] and
-/// [`RecordId`] follows the same pattern.
-#[derive(Debug, Clone, PartialEq)]
-pub struct IndexEntry {
-    pub key: Value,
-    pub rid: RecordId,
-}
-
-impl IndexEntry {
-    pub fn new(key: Value, rid: RecordId) -> Self {
-        Self { key, rid }
-    }
-
-    pub fn encoded_size(&self) -> usize {
-        self.key.encoded_size() + RecordId::ENCODED_SIZE
-    }
-}
-
-impl Encode for IndexEntry {
-    fn encode<W: Write>(&self, w: &mut W) -> Result<(), CodecError> {
-        self.key.encode(w)?;
-        self.rid.encode(w)?;
-        Ok(())
-    }
-}
-
-impl Decode for IndexEntry {
-    fn decode<R: Read>(r: &mut R) -> Result<Self, CodecError> {
-        let key = Value::decode(r)?;
-        let rid = RecordId::decode(r)?;
-        Ok(Self { key, rid })
-    }
-}
-
 /// Errors that index operations can return.
 #[derive(Debug, Error)]
 pub enum IndexError {
-    #[error("key type mismatch: expected {expected:?}, got {got:?}")]
-    KeyTypeMismatch { expected: Type, got: Option<Type> },
+    #[error("key arity mismatch: index expects {expected} columns, got {got}")]
+    KeyArityMismatch { expected: usize, got: usize },
+
+    #[error("key type mismatch at position {position}: expected {expected:?}, got {got:?}")]
+    KeyTypeMismatch {
+        position: usize,
+        expected: Type,
+        got: Option<Type>,
+    },
 
     #[error("duplicate entry: (key, rid) already present")]
     DuplicateEntry,
+
+    #[error("an index named {0:?} is already registered")]
+    DuplicateName(String),
 
     #[error("entry not found for delete")]
     NotFound,
@@ -154,93 +126,202 @@ pub enum IndexError {
     Codec(#[from] CodecError),
 }
 
-/// A trait representing a secondary index over a table.
-///
-/// The `Index` trait abstracts any auxiliary structure (hash, B-tree, etc.)
-/// that maps from key values to a set of record identifiers (`RecordId`).
-///
-/// Methods should be concurrency-safe and respect transactional semantics;
-/// implementations are responsible for ensuring thread safety and
-/// consistency, hence the `Send + Sync` bounds.
-pub trait Index: Send + Sync {
-    /// Inserts a `(key, rid)` pair into the index.
-    ///
-    /// # Arguments
-    ///
-    /// * `txn` - The transaction ID under which the insert occurs.
-    /// * `key` - The value to be indexed (must match the index's `key_type`).
-    /// * `rid` - The record identifier to associate with the key.
-    ///
-    /// # Errors
-    ///
-    /// Returns an `IndexError` if:
-    /// - The key type does not match the index's key type.
-    /// - The exact `(key, rid)` pair already exists (for non-unique indexes).
-    /// - Internal page or storage errors occur.
-    fn insert(&self, txn: TransactionId, key: &Value, rid: RecordId) -> Result<(), IndexError>;
-
-    /// Removes the specific `(key, rid)` entry from the index, if present.
-    ///
-    /// # Arguments
-    ///
-    /// * `txn` - The transaction ID under which the delete occurs.
-    /// * `key` - The value whose record is to be removed.
-    /// * `rid` - The record identifier to remove.
-    ///
-    /// # Errors
-    ///
-    /// Returns an `IndexError` if:
-    /// - The `(key, rid)` pair does not exist.
-    /// - Storage or page-level errors occur.
-    fn delete(&self, txn: TransactionId, key: &Value, rid: RecordId) -> Result<(), IndexError>;
-
-    /// Searches for all record IDs associated with a given key.
-    ///
-    /// # Arguments
-    ///
-    /// * `txn` - The transaction ID performing the search.
-    /// * `key` - The value to look up.
-    ///
-    /// # Returns
-    ///
-    /// A vector of `RecordId` matching the key, or an error if the operation fails.
-    fn search(&self, txn: TransactionId, key: &Value) -> Result<Vec<RecordId>, IndexError>;
-
-    /// Performs an inclusive range scan from `start` to `end`.
-    ///
-    /// Only supported on ordered (e.g., B-tree) indexes; unordered
-    /// implementations (e.g., hash indexes) may return an error or a
-    /// best-effort result containing entries between the bounds.
-    ///
-    /// # Arguments
-    ///
-    /// * `txn` - The transaction ID making the request.
-    /// * `start` - The lower bound (inclusive) of the key range.
-    /// * `end` - The upper bound (inclusive) of the key range.
-    ///
-    /// # Returns
-    ///
-    /// All matching `RecordId` values, or an error.
-    fn range_search(
-        &self,
-        txn: TransactionId,
-        start: &Value,
-        end: &Value,
-    ) -> Result<Vec<RecordId>, IndexError>;
-
-    /// Returns the kind of this index (e.g., hash, B-tree).
-    fn kind(&self) -> IndexKind;
-
-    /// Returns the `Type` of key values supported by this index.
-    fn key_type(&self) -> Type;
+pub enum AnyIndex {
+    Hash(hash::HashIndex),
+    // Btree(btree::tree::BTreeIndex),  // wire up when the B-tree access method lands
 }
 
-pub(crate) fn check_key_type(expected: Type, key: &Value) -> Result<(), IndexError> {
-    match key.get_type() {
-        Some(t) if t == expected => Ok(()),
-        other => Err(IndexError::KeyTypeMismatch {
-            expected,
-            got: other,
-        }),
+impl AnyIndex {
+    /// The catalog tag for this index — i.e. what gets persisted on disk so
+    /// the next database open knows which family to reconstruct.
+    pub fn kind(&self) -> IndexKind {
+        match self {
+            AnyIndex::Hash(_) => IndexKind::Hash,
+        }
+    }
+
+    /// Per-column declared types, in declaration order. Length is the
+    /// index's arity.
+    pub fn key_types(&self) -> &[Type] {
+        match self {
+            AnyIndex::Hash(idx) => idx.key_types(),
+        }
+    }
+
+    /// See [`Index::insert`].
+    pub fn insert(
+        &self,
+        txn: TransactionId,
+        key: &CompositeKey,
+        rid: RecordId,
+    ) -> Result<(), IndexError> {
+        match self {
+            AnyIndex::Hash(idx) => idx.insert(txn, key, rid),
+        }
+    }
+
+    /// See [`Index::delete`].
+    pub fn delete(
+        &self,
+        txn: TransactionId,
+        key: &CompositeKey,
+        rid: RecordId,
+    ) -> Result<(), IndexError> {
+        match self {
+            AnyIndex::Hash(idx) => idx.delete(txn, key, rid),
+        }
+    }
+
+    /// See [`Index::search`].
+    pub fn search(
+        &self,
+        txn: TransactionId,
+        key: &CompositeKey,
+    ) -> Result<Vec<RecordId>, IndexError> {
+        match self {
+            AnyIndex::Hash(idx) => idx.search(txn, key),
+        }
+    }
+
+    /// See [`Index::range_search`]. For hash indexes this degrades to a full
+    /// scan; the planner shouldn't pick a hash index for ranges.
+    pub fn range_search(
+        &self,
+        txn: TransactionId,
+        start: &CompositeKey,
+        end: &CompositeKey,
+    ) -> Result<Vec<RecordId>, IndexError> {
+        match self {
+            AnyIndex::Hash(idx) => idx.range_search(txn, start, end),
+        }
+    }
+}
+
+/// Ergonomic conversion so callers can write `hash_idx.into()` instead of
+/// `AnyIndex::Hash(hash_idx)`. Symmetric impls land alongside future variants.
+impl From<hash::HashIndex> for AnyIndex {
+    fn from(idx: hash::HashIndex) -> Self {
+        AnyIndex::Hash(idx)
+    }
+}
+
+/// Manual `Debug` so we don't have to cascade `#[derive(Debug)]` through
+/// `HashIndex` and its `Arc<PageStore>`. The kind tag is the only useful
+/// thing to print at this level — the inner state is buffer-pool resident.
+impl std::fmt::Debug for AnyIndex {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_tuple("AnyIndex").field(&self.kind()).finish()
+    }
+}
+
+#[cfg(test)]
+mod any_index_tests {
+    //! These are deliberately small. The full insert/delete/search behavior
+    //! is covered exhaustively in `index::hash::tests` against `HashIndex`
+    //! directly; here we only check that wrapping a `HashIndex` in `AnyIndex`
+    //! preserves that behavior — i.e. the forwarding match arms don't drop
+    //! anything on the floor.
+    use std::sync::Arc;
+
+    use tempfile::TempDir;
+
+    use super::*;
+    use crate::{
+        FileId, TransactionId, Value,
+        buffer_pool::page_store::PageStore,
+        index::hash::HashIndex,
+        primitives::{PageNumber, RecordId, SlotId},
+        storage::PAGE_SIZE,
+        wal::writer::Wal,
+    };
+
+    struct Fixture {
+        any: AnyIndex,
+        wal: Arc<Wal>,
+        _dir: TempDir,
+    }
+
+    fn make_any_hash(num_buckets: u32, key_types: Vec<Type>) -> Fixture {
+        let dir = tempfile::tempdir().unwrap();
+        let wal = Arc::new(Wal::new(&dir.path().join("test.wal"), 0).unwrap());
+        let store = Arc::new(PageStore::new(64, Arc::clone(&wal)));
+        let file_id = FileId::new(1);
+        let path = dir.path().join("hash.db");
+
+        let f = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .open(&path)
+            .unwrap();
+        f.set_len(u64::from(num_buckets) * PAGE_SIZE as u64)
+            .unwrap();
+        drop(f);
+        store.register_file(file_id, &path).unwrap();
+
+        let hash = HashIndex::new(
+            file_id,
+            key_types,
+            num_buckets,
+            Arc::clone(&store),
+            num_buckets,
+        );
+
+        let init_txn = TransactionId::new(0);
+        wal.log_begin(init_txn).unwrap();
+        hash.init(init_txn).unwrap();
+        store.release_all(init_txn);
+
+        Fixture {
+            any: hash.into(),
+            wal,
+            _dir: dir,
+        }
+    }
+
+    fn rid(file: u64, page: u32, slot: u16) -> RecordId {
+        RecordId::new(FileId::new(file), PageNumber::new(page), SlotId(slot))
+    }
+
+    fn begin(wal: &Wal, id: u64) -> TransactionId {
+        let txn = TransactionId::new(id);
+        wal.log_begin(txn).unwrap();
+        txn
+    }
+
+    #[test]
+    fn from_hash_index_is_hash_kind() {
+        let fx = make_any_hash(4, vec![Type::Int32]);
+        assert_eq!(fx.any.kind(), IndexKind::Hash);
+        assert_eq!(fx.any.key_types(), &[Type::Int32]);
+    }
+
+    #[test]
+    fn forwarded_insert_search_delete_roundtrip() {
+        let fx = make_any_hash(4, vec![Type::Int32]);
+        let txn = begin(&fx.wal, 1);
+        let key = CompositeKey::single(Value::Int32(42));
+        let r = rid(1, 0, 0);
+
+        fx.any.insert(txn, &key, r).unwrap();
+        assert_eq!(fx.any.search(txn, &key).unwrap(), vec![r]);
+
+        fx.any.delete(txn, &key, r).unwrap();
+        assert!(fx.any.search(txn, &key).unwrap().is_empty());
+    }
+
+    #[test]
+    fn forwarded_errors_propagate() {
+        // Arity check still fires through the wrapper — proves we didn't
+        // accidentally short-circuit validation in the forwarding layer.
+        let fx = make_any_hash(4, vec![Type::Int32, Type::Int32]);
+        let txn = begin(&fx.wal, 1);
+        let single = CompositeKey::single(Value::Int32(1));
+        let err = fx.any.search(txn, &single).unwrap_err();
+        assert!(matches!(err, IndexError::KeyArityMismatch {
+            expected: 2,
+            got: 1
+        }));
     }
 }
