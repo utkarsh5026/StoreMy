@@ -20,8 +20,13 @@ use parking_lot::RwLock;
 use crate::{
     FileId, PAGE_SIZE, TransactionId,
     buffer_pool::page_store::PageStore,
-    catalog::{CatalogError, systable::SystemTable},
+    catalog::{
+        CatalogError,
+        systable::{CatalogRow, SystemTable},
+    },
     heap::file::HeapFile,
+    index::AnyIndex,
+    primitives::ColumnId,
     transaction::Transaction,
     tuple::{Tuple, TupleSchema},
     wal::writer::Wal,
@@ -38,11 +43,12 @@ pub struct TableInfo {
     pub file_id: FileId,
     /// Absolute path to the `.dat` file on disk.
     pub file_path: PathBuf,
-    /// Zero-based column indices of the primary key, if one was declared.
+    /// Zero-based column identifiers of the primary key, in declaration
+    /// order, if one was declared.
     ///
-    /// `None` means no primary key. Only single-element vecs are produced
-    /// today; composite keys are not yet supported.
-    pub primary_key: Option<Vec<usize>>,
+    /// `None` means no primary key. The `Vec` holds one entry per PK column,
+    /// so composite keys appear as `Some(vec![…, …])`.
+    pub primary_key: Option<Vec<ColumnId>>,
 }
 
 impl TableInfo {
@@ -52,7 +58,7 @@ impl TableInfo {
         schema: TupleSchema,
         file_id: FileId,
         file_path: PathBuf,
-        primary_key: Option<Vec<usize>>,
+        primary_key: Option<Vec<ColumnId>>,
     ) -> Self {
         Self {
             name: name.into(),
@@ -73,6 +79,7 @@ pub(super) struct SystemHeaps {
     tables: Option<HeapFile>,
     columns: Option<HeapFile>,
     indexes: Option<HeapFile>,
+    primary_key_columns: Option<HeapFile>,
 }
 
 impl SystemHeaps {
@@ -82,6 +89,7 @@ impl SystemHeaps {
             SystemTable::Tables => self.tables = Some(file),
             SystemTable::Columns => self.columns = Some(file),
             SystemTable::Indexes => self.indexes = Some(file),
+            SystemTable::PrimaryKeyColumns => self.primary_key_columns = Some(file),
         }
     }
 
@@ -91,6 +99,7 @@ impl SystemHeaps {
             SystemTable::Tables => self.tables.as_ref(),
             SystemTable::Columns => self.columns.as_ref(),
             SystemTable::Indexes => self.indexes.as_ref(),
+            SystemTable::PrimaryKeyColumns => self.primary_key_columns.as_ref(),
         }
     }
 }
@@ -109,6 +118,18 @@ pub struct Catalog {
     /// Cache of user-table metadata, keyed by table name.
     pub(super) user_tables: RwLock<HashMap<String, TableInfo>>,
     pub(super) open_heaps: RwLock<HashMap<FileId, Arc<HeapFile>>>,
+    /// Live secondary indexes registered against each table, keyed by the
+    /// table's heap [`FileId`]. Mirrors the role of [`open_heaps`] — pure
+    /// in-memory cache, populated by `register_index` (today) and by
+    /// replaying `SystemTable::Indexes` rows at database open (next).
+    ///
+    /// The DML hot path reads this via [`indexes_for`] and clones the
+    /// `Arc`s out, so callers don't hold the lock across index operations.
+    pub(super) open_indexes: RwLock<HashMap<FileId, Vec<Arc<AnyIndex>>>>,
+    /// Index name → live instance. Used by DDL (`DROP INDEX`) and by the
+    /// planner when resolving a referenced index name. Stays in sync with
+    /// `open_indexes` because `register_index` writes both atomically.
+    pub(super) indexes_by_name: RwLock<HashMap<String, Arc<AnyIndex>>>,
     pub(super) system: SystemHeaps,
 }
 
@@ -166,6 +187,8 @@ impl Catalog {
             next_file_id: AtomicU64::new(100),
             user_tables: RwLock::new(tables),
             open_heaps: RwLock::new(HashMap::new()),
+            open_indexes: RwLock::new(HashMap::new()),
+            indexes_by_name: RwLock::new(HashMap::new()),
             system,
         })
     }
@@ -174,7 +197,7 @@ impl Catalog {
     ///
     /// If the file does not yet exist it is created on disk. Page count is
     /// derived from the file size for existing files, and assumed to be `1`
-    /// for brand-new files (the buffer pool materialises page 0 on first
+    /// for brand-new files (the buffer pool materializes page 0 on first
     /// access). Used by both `initialize` (system tables) and `create_table`
     /// (user tables).
     ///
@@ -284,26 +307,23 @@ impl Catalog {
         Ok(())
     }
 
-    /// Scans all tuples in `table` and deserializes them into `Vec<T>`.
+    /// Scans every tuple in `T`'s system table and deserializes them into `Vec<T>`.
     ///
-    /// `T` must implement `TryFrom<&Tuple, Error = CatalogError>`. The scan
-    /// uses `txn`'s visibility so only committed tuples visible to the
-    /// transaction are returned.
+    /// The system table is recovered from `T::TABLE` (see [`CatalogRow`]), so
+    /// callers only have to name the row type. The scan uses `txn`'s
+    /// visibility so only committed tuples visible to the transaction are
+    /// returned.
     ///
     /// # Errors
     ///
     /// Returns [`CatalogError::Corruption`] if the system table heap is not
     /// open. Propagates heap scan errors and any deserialization error from
     /// `T::try_from`.
-    pub(super) fn scan_system_table<T>(
+    pub(super) fn scan_system_table<T: CatalogRow>(
         &self,
         txn: &Transaction<'_>,
-        table: SystemTable,
-    ) -> Result<Vec<T>, CatalogError>
-    where
-        for<'a> T: TryFrom<&'a Tuple, Error = CatalogError>,
-    {
-        let heap = self.get_system_heap(table)?;
+    ) -> Result<Vec<T>, CatalogError> {
+        let heap = self.get_system_heap(T::TABLE)?;
 
         let scan = heap
             .scan(txn.transaction_id())
@@ -312,46 +332,90 @@ impl Catalog {
         scan.map(|(_, tuple)| T::try_from(&tuple)).collect()
     }
 
-    /// Inserts `tuple` into the heap for `table` under `txn`.
+    /// Scans `T`'s system table, deserializes each tuple into `T`, and returns
+    /// only rows for which `keep` returns `true`.
+    ///
+    /// This is a convenience wrapper around [`scan_system_table`] that avoids
+    /// "scan everything then filter" boilerplate at call sites.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CatalogError::Corruption`] if the system table heap is not
+    /// open. Propagates heap scan errors and any deserialization error from
+    /// `T::try_from`.
+    pub(super) fn scan_system_table_where<T, F>(
+        &self,
+        txn: &Transaction<'_>,
+        keep: F,
+    ) -> Result<Vec<T>, CatalogError>
+    where
+        T: CatalogRow,
+        F: Fn(&T) -> bool,
+    {
+        let heap = self.get_system_heap(T::TABLE)?;
+        let mut scan = heap
+            .scan(txn.transaction_id())
+            .map_err(CatalogError::from)?;
+
+        let mut out = Vec::new();
+        while let Some((_, tuple)) = fallible_iterator::FallibleIterator::next(&mut scan)? {
+            let row = T::try_from(&tuple)?;
+            if keep(&row) {
+                out.push(row);
+            }
+        }
+        Ok(out)
+    }
+
+    /// Encodes `row` and inserts it into its system table under `txn`.
+    ///
+    /// The destination table is `T::TABLE`. The `for<'a> &'a T: Into<Tuple>`
+    /// bound is satisfied by every row type that has a `From<&Row> for Tuple`
+    /// impl in [`systable`].
     ///
     /// # Errors
     ///
     /// Returns [`CatalogError::Corruption`] if the system table heap is not
     /// open. Propagates heap insertion errors as [`CatalogError`].
-    pub(super) fn insert_systable_tuple(
+    pub(super) fn insert_systable_tuple<T>(
         &self,
         txn: &Transaction<'_>,
-        table: SystemTable,
-        tuple: impl Into<Tuple>,
-    ) -> Result<(), CatalogError> {
-        let heap = self.get_system_heap(table)?;
-        let tuple = tuple.into();
+        row: &T,
+    ) -> Result<(), CatalogError>
+    where
+        T: CatalogRow,
+        for<'a> &'a T: Into<Tuple>,
+    {
+        let heap = self.get_system_heap(T::TABLE)?;
+        let tuple: Tuple = row.into();
         heap.insert_tuple(txn.transaction_id(), &tuple)?;
         Ok(())
     }
 
-    /// Deletes every tuple in `table` for which `predicate` returns `true`.
+    /// Deletes every tuple in `T`'s system table whose decoded row satisfies
+    /// `predicate`.
+    ///
+    /// Attempts to decode each tuple into `T` via `TryFrom<&Tuple>`. Tuples
+    /// that fail to decode are treated as non-matching (and are not deleted).
     ///
     /// The deletion is recorded in `txn` and will be rolled back if the
     /// transaction aborts.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`CatalogError::Corruption`] if the system table heap is not
-    /// open. Propagates heap deletion errors as [`CatalogError`].
-    pub(super) fn delete_systable_rows<F>(
+    pub(super) fn delete_systable_rows<T, F>(
         &self,
         txn: &Transaction<'_>,
-        table: SystemTable,
         predicate: F,
     ) -> Result<(), CatalogError>
     where
-        F: Fn(&Tuple) -> bool,
+        T: CatalogRow,
+        F: Fn(&T) -> bool,
     {
-        let heap = self.get_system_heap(table)?;
-        heap.delete_if(txn.transaction_id(), predicate)
-            .map(|_| ())
-            .map_err(CatalogError::from)
+        let heap = self.get_system_heap(T::TABLE)?;
+        let tid = txn.transaction_id();
+        heap.delete_if(tid, |t| {
+            T::try_from(t).map(|r| predicate(&r)).unwrap_or(false)
+        })
+        .map(|_| ())
+        .map_err(CatalogError::from)
     }
 
     /// Returns the open [`HeapFile`] for `table`, or `None` if not registered.
@@ -600,9 +664,7 @@ mod tests {
         let (catalog, txn_mgr) = make_catalog_and_txn_mgr(dir.path());
         let txn = txn_mgr.begin().unwrap();
 
-        let rows: Vec<TableRow> = catalog
-            .scan_system_table(&txn, SystemTable::Tables)
-            .unwrap();
+        let rows: Vec<TableRow> = catalog.scan_system_table(&txn).unwrap();
         assert!(rows.is_empty());
 
         txn.commit().unwrap();
@@ -619,7 +681,6 @@ mod tests {
             Value::Uint64(42),
             Value::String("users".into()),
             Value::String("/data/users.dat".into()),
-            Value::Null,
         ]);
 
         let insert_txn = txn_mgr.begin().unwrap();
@@ -628,9 +689,7 @@ mod tests {
         insert_txn.commit().unwrap();
 
         let txn = txn_mgr.begin().unwrap();
-        let rows: Vec<TableRow> = catalog
-            .scan_system_table(&txn, SystemTable::Tables)
-            .unwrap();
+        let rows: Vec<TableRow> = catalog.scan_system_table(&txn).unwrap();
 
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].table_name, "users");
@@ -648,17 +707,17 @@ mod tests {
         let heap = catalog.system.get(SystemTable::Columns).unwrap();
         let tuples = vec![
             Tuple::new(vec![
-                Value::Int64(1),
+                Value::Uint64(1),
                 Value::String("id".into()),
                 Value::Uint32(3), // Type::Int64
-                Value::Int32(0),
+                Value::Uint32(0),
                 Value::Bool(false),
             ]),
             Tuple::new(vec![
-                Value::Int64(1),
+                Value::Uint64(1),
                 Value::String("name".into()),
                 Value::Uint32(5), // Type::String
-                Value::Int32(1),
+                Value::Uint32(1),
                 Value::Bool(true),
             ]),
         ];
@@ -670,9 +729,7 @@ mod tests {
         insert_txn.commit().unwrap();
 
         let txn = txn_mgr.begin().unwrap();
-        let rows: Vec<ColumnRow> = catalog
-            .scan_system_table(&txn, SystemTable::Columns)
-            .unwrap();
+        let rows: Vec<ColumnRow> = catalog.scan_system_table(&txn).unwrap();
 
         assert_eq!(rows.len(), 2);
         assert_eq!(rows[0].column_name, "id");
@@ -691,10 +748,10 @@ mod tests {
         let heap = catalog.system.get(SystemTable::Columns).unwrap();
         // Invalid: column_type 999 has no Type variant
         let bad_tuple = Tuple::new(vec![
-            Value::Int64(1),
+            Value::Uint64(1),
             Value::String("col".into()),
             Value::Uint32(999),
-            Value::Int32(0),
+            Value::Uint32(0),
             Value::Bool(false),
         ]);
 
@@ -704,8 +761,7 @@ mod tests {
         insert_txn.commit().unwrap();
 
         let txn = txn_mgr.begin().unwrap();
-        let result: Result<Vec<ColumnRow>, _> =
-            catalog.scan_system_table(&txn, SystemTable::Columns);
+        let result: Result<Vec<ColumnRow>, _> = catalog.scan_system_table(&txn);
         assert!(result.is_err());
 
         // txn auto-aborts on drop
