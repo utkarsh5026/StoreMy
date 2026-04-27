@@ -4,7 +4,7 @@
     <option name="autoReloadType" value="SELECTIVE" />
   </component>
   <component name="CargoProjects">
-    <cargoProject FILE="$PROJECT_DIR$/db/Cargo.toml">
+    <cargoProject FILE="$PROJECT_DIR$/Cargo.toml">
       <package file="$PROJECT_DIR$/db">
         <feature name="default" enabled="true" />
       </package>
@@ -12,8 +12,42 @@
   </component>
   <component name="ChangeListManager">
     <list default="true" id="e1ae0b87-b3c0-4220-9290-7c9133dd8700" name="Changes" comment="">
+      <change beforePath="$PROJECT_DIR$/.claude/rules/benchmarking.md" beforeDir="false" />
       <change beforePath="$PROJECT_DIR$/.claude/settings.local.json" beforeDir="false" afterPath="$PROJECT_DIR$/.claude/settings.local.json" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/.github/workflows/ci.yml" beforeDir="false" afterPath="$PROJECT_DIR$/.github/workflows/ci.yml" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/.idea/StoreMy.iml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/StoreMy.iml" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/.vscode/extensions.json" beforeDir="false" afterPath="$PROJECT_DIR$/.vscode/extensions.json" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/.vscode/settings.json" beforeDir="false" afterPath="$PROJECT_DIR$/.vscode/settings.json" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/Makefile" beforeDir="false" afterPath="$PROJECT_DIR$/Makefile" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/README.md" beforeDir="false" afterPath="$PROJECT_DIR$/README.md" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/db/src/binder/ddl.rs" beforeDir="false" afterPath="$PROJECT_DIR$/db/src/binder/ddl.rs" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/db/src/binder/dml.rs" beforeDir="false" afterPath="$PROJECT_DIR$/db/src/binder/dml.rs" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/db/src/binder/mod.rs" beforeDir="false" afterPath="$PROJECT_DIR$/db/src/binder/mod.rs" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/db/src/binder/scope.rs" beforeDir="false" afterPath="$PROJECT_DIR$/db/src/binder/scope.rs" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/db/src/buffer_pool/lock.rs" beforeDir="false" afterPath="$PROJECT_DIR$/db/src/buffer_pool/lock.rs" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/db/src/catalog/table.rs" beforeDir="false" afterPath="$PROJECT_DIR$/db/src/catalog/table.rs" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/db/src/database.rs" beforeDir="false" afterPath="$PROJECT_DIR$/db/src/database.rs" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/db/src/engine/dml.rs" beforeDir="false" afterPath="$PROJECT_DIR$/db/src/engine/dml.rs" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/db/src/engine/mod.rs" beforeDir="false" afterPath="$PROJECT_DIR$/db/src/engine/mod.rs" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/db/src/execution/aggregate.rs" beforeDir="false" afterPath="$PROJECT_DIR$/db/src/execution/aggregate.rs" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/db/src/execution/expression.rs" beforeDir="false" afterPath="$PROJECT_DIR$/db/src/execution/expression.rs" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/db/src/execution/join.rs" beforeDir="false" afterPath="$PROJECT_DIR$/db/src/execution/join.rs" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/db/src/execution/setops.rs" beforeDir="false" afterPath="$PROJECT_DIR$/db/src/execution/setops.rs" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/db/src/execution/unary.rs" beforeDir="false" afterPath="$PROJECT_DIR$/db/src/execution/unary.rs" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/db/src/heap/page.rs" beforeDir="false" afterPath="$PROJECT_DIR$/db/src/heap/page.rs" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/db/src/lib.rs" beforeDir="false" afterPath="$PROJECT_DIR$/db/src/lib.rs" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/db/src/main.rs" beforeDir="false" afterPath="$PROJECT_DIR$/db/src/main.rs" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/db/src/parser/lexer.rs" beforeDir="false" afterPath="$PROJECT_DIR$/db/src/parser/lexer.rs" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/db/src/parser/parsers/ddl.rs" beforeDir="false" afterPath="$PROJECT_DIR$/db/src/parser/parsers/ddl.rs" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/db/src/parser/parsers/dml.rs" beforeDir="false" afterPath="$PROJECT_DIR$/db/src/parser/parsers/dml.rs" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/db/src/parser/parsers/query.rs" beforeDir="false" afterPath="$PROJECT_DIR$/db/src/parser/parsers/query.rs" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/db/src/storage/heap.rs" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/db/src/storage/index.rs" beforeDir="false" afterPath="$PROJECT_DIR$/db/src/storage/index.rs" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/db/src/storage/mod.rs" beforeDir="false" afterPath="$PROJECT_DIR$/db/src/storage/mod.rs" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/db/src/tuple.rs" beforeDir="false" afterPath="$PROJECT_DIR$/db/src/tuple.rs" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/db/src/wal/writer.rs" beforeDir="false" afterPath="$PROJECT_DIR$/db/src/wal/writer.rs" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/tools/viz/src/storemy_viz/views/heap.py" beforeDir="false" afterPath="$PROJECT_DIR$/tools/viz/src/storemy_viz/views/heap.py" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
@@ -36,6 +70,18 @@
   <component name="Git.Settings">
     <option name="RECENT_GIT_ROOT_PATH" value="$PROJECT_DIR$" />
   </component>
+  <component name="GitHubPullRequestSearchHistory"><![CDATA[{
+  "lastFilter": {
+    "state": "OPEN",
+    "assignee": "utkarsh5026"
+  }
+}]]></component>
+  <component name="GithubPullRequestsUISettings"><![CDATA[{
+  "selectedUrlAndAccountId": {
+    "url": "https://github.com/utkarsh5026/StoreMy.git",
+    "accountId": "4d4cb081-097c-403f-b612-71d13cd67bea"
+  }
+}]]></component>
   <component name="MacroExpansionManager">
     <option name="directoryName" value="WecdykWM" />
   </component>
@@ -138,13 +184,14 @@
     "Python tests.pytest for test_transaction.TestTransaction.test_transaction_start_success.executor": "Run",
     "Python tests.pytest for test_tuple_iterator.TestTupleIterator.executor": "Run",
     "RunOnceActivity.ShowReadmeOnStart": "true",
+    "RunOnceActivity.TerminalTabsStorage.copyFrom.TerminalArrangementManager.252": "true",
     "RunOnceActivity.git.unshallow": "true",
     "RunOnceActivity.rust.reset.selective.auto.import": "true",
     "RunOnceActivity.typescript.service.memoryLimit.init": "true",
     "SHARE_PROJECT_CONFIGURATION_FILES": "true",
     "git-widget-placeholder": "port-to-rust",
     "ignore.virus.scanning.warn.message": "true",
-    "last_opened_file_path": "C:/Users/Utkarsh Priyadarshi/GolandProjects/StoreMy",
+    "last_opened_file_path": "//wsl.localhost/Ubuntu/home/utkarsh5026/StoreMy",
     "node.js.detected.package.eslint": "true",
     "node.js.detected.package.tslint": "true",
     "node.js.selected.package.eslint": "(autodetect)",
@@ -266,7 +313,7 @@
     </recent_temporary>
   </component>
   <component name="RustProjectSettings">
-    <option name="toolchainHomeDirectory" value="//wsl.localhost/Ubuntu/home/utkarsh5026/.cargo/bin" />
+    <option name="toolchainHomeDirectory" value="$PROJECT_DIR$/../.cargo/bin" />
   </component>
   <component name="SharedIndexes">
     <attachedChunks>
@@ -286,6 +333,7 @@
       <workItem from="1768726245360" duration="4182000" />
       <workItem from="1768745244678" duration="98000" />
       <workItem from="1768746442281" duration="726000" />
+      <workItem from="1777106880360" duration="743000" />
     </task>
     <servers />
   </component>
