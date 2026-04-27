@@ -1,8 +1,56 @@
-//! Join executors for combining tuples from two inputs.
+//! Physical join executors.
 //!
-//! This module contains multiple physical join implementations that all produce the same logical
-//! output: concatenated tuples from a left and a right input when a [`JoinPredicate`] matches.
-//! Different executors trade memory, startup cost, and per-row work.
+//! All executors in this module implement the same logical operator: produce an output tuple
+//! `left.concat(right)` for every pair \((l, r)\) where the [`JoinPredicate`] evaluates to `true`.
+//! The implementations differ in *when* they materialize input, how they search for matches, and
+//! which predicates they support.
+//!
+//! ## Implemented executors
+//!
+//! - [`NestedLoopJoin`]
+//!   - **Algorithm**: buffer the entire right input once, then for each left tuple evaluate the
+//!     predicate against every buffered right tuple.
+//!   - **Predicates**: supports all operators implemented by [`JoinPredicate::evaluate`] (equality
+//!     and ordering predicates; `LIKE` currently always returns `false`).
+//!   - **Memory**: \(O(|R|)\) to materialize the right side.
+//!   - **Output order**: left-input order; within a left tuple, matches follow the right input
+//!     order from materialization time.
+//!
+//! - [`HashJoin`]
+//!   - **Algorithm**: build a hash table on the right join key once, then probe it with each left
+//!     tuple.
+//!   - **Predicates**: **equality only** (`predicate.op == Predicate::Equals`). The constructor
+//!     asserts this precondition.
+//!   - **Memory**: \(O(|R|)\) for the hash table (buckets store cloned right tuples).
+//!   - **Output order**: left-input order; within a left tuple, matches follow the bucket order
+//!     (right scan order).
+//!
+//! - [`SortMergeJoin`]
+//!   - **Algorithm**: drain *both* inputs, sort each side by its join key, then merge the two
+//!     sorted streams and emit the Cartesian product for equal-key runs.
+//!   - **Predicates**: **equality only** (`predicate.op == Predicate::Equals`). The constructor
+//!     asserts this precondition.
+//!   - **Memory**: \(O(|L| + |R|)\) because both sides are materialized for sorting.
+//!   - **Output order**: ascending join key order (as defined by `Value::partial_cmp`).
+//!
+//! ## NULL semantics and key validation
+//!
+//! - **Join keys with `NULL` never match**. [`JoinPredicate::evaluate`] returns `Ok(false)` if
+//!   either key is [`Value::Null`].
+//! - Executors also **skip tuples whose join key is `NULL` or missing** while
+//!   materializing/building their internal state:
+//!   - [`NestedLoopJoin`] filters the *right* side during materialization.
+//!   - [`HashJoin`] filters the right side during hash build, and skips left tuples with
+//!     `NULL`/missing keys.
+//!   - [`SortMergeJoin`] filters both sides while draining inputs prior to sorting.
+//!
+//! ## Rewind behavior
+//!
+//! All executors implement [`Executor::rewind`], but the amount of retained state differs:
+//! - [`NestedLoopJoin`] keeps the materialized right buffer and rewinds only the left input.
+//! - [`HashJoin`] keeps the built hash table and rewinds only the left input.
+//! - [`SortMergeJoin`] drops the sorted buffers and rewinds **both** children so it can drain/sort
+//!   again on the next iteration.
 
 use std::{
     cmp::Ordering,
@@ -15,7 +63,7 @@ use fallible_iterator::FallibleIterator;
 use super::{ExecutionError, Executor};
 use crate::{
     Value,
-    execution::PlanNode,
+    execution::{PlanNode, expression::BooleanExpression},
     primitives::{ColumnId, Predicate},
     tuple::{Tuple, TupleSchema},
 };
@@ -24,11 +72,8 @@ use crate::{
 /// It is used to determine which tuples from the left and right relations should be joined.
 #[derive(Debug, Clone, Copy)]
 pub struct JoinPredicate {
-    /// Column on the left input used as the join key.
     pub left_col: ColumnId,
-    /// Column on the right input used as the join key.
     pub right_col: ColumnId,
-    /// Comparison operator applied to the two key values.
     pub op: Predicate,
 }
 
@@ -80,7 +125,7 @@ impl JoinPredicate {
 /// borrow of `tuple` (via `<'a>`).
 #[inline]
 fn get_value(tuple: &Tuple, col: ColumnId, is_left: bool) -> Result<&Value, ExecutionError> {
-    tuple.get(usize::from(col)).ok_or_else(|| {
+    tuple.value_at(col).map_err(|_| {
         ExecutionError::TypeError(format!(
             "{} col {col} out of bounds",
             if is_left { "left" } else { "right" }
@@ -88,48 +133,34 @@ fn get_value(tuple: &Tuple, col: ColumnId, is_left: bool) -> Result<&Value, Exec
     })
 }
 
-/// Internal container for the left and right input plan nodes, output schema, and join predicate.
+/// Internal container for a pair of child inputs and their merged output schema.
 ///
-/// Used by join executor implementations to encapsulate the two child nodes and predicate,
-/// and to provide the merged output schema for the join result.
+/// Used by every join executor as the common "two children + output schema" bundle.
+/// The join-specific matching logic (`JoinPredicate`, `BooleanExpression`, residual,
+/// etc.) lives on each executor itself.
 ///
 /// Not exposed outside the execution module.
 #[derive(Debug)]
-struct JoinBox<'a> {
+struct JoinInputs<'a> {
     left: PlanNode<'a>,
     right: PlanNode<'a>,
     schema: TupleSchema,
-    predicate: JoinPredicate,
+    /// Number of columns in the left child's schema. This is the offset at which
+    /// the right child's columns start in any concatenated `left.concat(right)`
+    left_width: usize,
 }
 
-impl<'a> JoinBox<'a> {
-    /// Constructs a new `JoinBox` for two input plan nodes and a join predicate.
-    ///
-    /// Combines the left and right schemas into a composite output schema.
-    pub fn new(left: PlanNode<'a>, right: PlanNode<'a>, predicate: JoinPredicate) -> Self {
+impl<'a> JoinInputs<'a> {
+    /// Constructs a new `JoinInputs` by merging the two children's schemas.
+    pub fn new(left: PlanNode<'a>, right: PlanNode<'a>) -> Self {
+        let left_width = left.schema().num_fields();
         let schema = left.schema().merge(right.schema());
         Self {
             left,
             right,
             schema,
-            predicate,
+            left_width,
         }
-    }
-
-    /// Returns the column index (as `usize`) of the join key on the left input.
-    ///
-    /// This index is derived from the `left_col` field in the `JoinPredicate`.
-    #[inline]
-    fn left_idx(&self) -> usize {
-        usize::from(self.predicate.left_col)
-    }
-
-    /// Returns the column index (as `usize`) of the join key on the right input.
-    ///
-    /// This index is derived from the `right_col` field in the `JoinPredicate`.
-    #[inline]
-    fn right_idx(&self) -> usize {
-        usize::from(self.predicate.right_col)
     }
 }
 
@@ -157,13 +188,30 @@ fn drain_tuples(
     Ok(())
 }
 
-#[derive(Debug)]
-/// Joins two inputs by comparing every left tuple with every right tuple.
+/// Joins two inputs by pairing every left tuple with every right tuple.
 ///
-/// The right input is materialized once (skipping rows with `NULL` join keys), then the executor
-/// scans the left input and evaluates the join predicate against each buffered right tuple.
+/// The right input is materialized once. For each left tuple, the executor concatenates
+/// `left.concat(right)` with every buffered right tuple and evaluates `predicate` over
+/// the combined tuple, emitting pairs that satisfy it.
+///
+/// Because the predicate is a general [`BooleanExpression`], NLJ supports arbitrary
+/// boolean combinations over both sides (e.g. `l.a = r.x AND l.b < r.y`).
+///
+/// # SQL shape
+///
+/// Nested-loop join is the most general join executor here (it can handle non-equality
+/// predicates). Example:
+///
+/// ```sql
+/// SELECT *
+/// FROM left_table  AS l
+/// JOIN right_table AS r
+///   ON l.a = r.x AND l.b < r.y;
+/// ```
+#[derive(Debug)]
 pub struct NestedLoopJoin<'a> {
-    join_box: Box<JoinBox<'a>>,
+    inputs: Box<JoinInputs<'a>>,
+    predicate: BooleanExpression,
     right_buf: Vec<Tuple>,
     materialized: bool,
     pending: VecDeque<Tuple>,
@@ -172,22 +220,33 @@ pub struct NestedLoopJoin<'a> {
 impl<'a> NestedLoopJoin<'a> {
     /// Creates a nested-loop join executor for `left ⋈ right` using `predicate`.
     ///
+    /// `predicate` is evaluated over the concatenated `left.concat(right)` tuple. Right-side
+    /// column references must be built with an offset equal to the left input's width — use
+    /// [`left_width`](Self::left_width) on the built executor if you need it, or compute it
+    /// from `left.schema().num_fields()` before calling this constructor.
+    ///
     /// The right input is read and buffered on the first call to [`FallibleIterator::next`].
-    pub fn new(left: PlanNode<'a>, right: PlanNode<'a>, predicate: JoinPredicate) -> Self {
+    pub fn new(left: PlanNode<'a>, right: PlanNode<'a>, predicate: BooleanExpression) -> Self {
         Self {
-            join_box: Box::new(JoinBox::new(left, right, predicate)),
+            inputs: Box::new(JoinInputs::new(left, right)),
+            predicate,
             right_buf: Vec::new(),
             materialized: false,
             pending: VecDeque::new(),
         }
     }
 
-    /// Reads and buffers all right-side tuples with non-NULL join key values into `self.right_buf`.
+    /// Returns the number of columns in the left child — i.e. the offset at which
+    /// right-side columns start in the concatenated output tuple.
+    #[inline]
+    pub fn left_width(&self) -> usize {
+        self.inputs.left_width
+    }
+
+    /// Reads and buffers every right-side tuple into `self.right_buf`.
     ///
-    /// This method materializes the entire right input exactly once, filtering out any rows where
-    /// the join key (at `right_col`) is either missing or explicitly `NULL`. Each valid tuple
-    /// is pushed into the in-memory right buffer for repeated probing during the nested-loop
-    /// join.
+    /// Unlike the previous equi-key version, nothing is filtered here — the predicate is
+    /// now a general expression that decides matches on its own, including NULL semantics.
     ///
     /// # Errors
     ///
@@ -196,13 +255,8 @@ impl<'a> NestedLoopJoin<'a> {
         if self.materialized {
             return Ok(());
         }
-
-        let right_idx = usize::from(self.join_box.predicate.right_col);
-        let right = &mut self.join_box.right;
+        let right = &mut self.inputs.right;
         while let Some(tuple) = right.next()? {
-            if matches!(tuple.get(right_idx), Some(Value::Null) | None) {
-                continue;
-            }
             self.right_buf.push(tuple);
         }
         self.materialized = true;
@@ -210,12 +264,8 @@ impl<'a> NestedLoopJoin<'a> {
     }
 }
 
-/// Produces joined tuples by pairing each left tuple with every matching right tuple.
-///
-/// On the first call to `next`, this implementation materializes (buffers) all right-side tuples
-/// with non-NULL join keys. Then, for each tuple from the left input, it compares the tuple against
-/// every tuple in this right buffer using the join predicate. Any left/right pair that satisfies
-/// the predicate is concatenated and buffered in `pending`, and then returned from the iterator.
+/// Produces joined tuples by pairing each left tuple with every right tuple satisfying the
+/// predicate over the concatenated `left ⋈ right` tuple.
 ///
 /// Note:
 /// - Right input is only scanned and materialized once per executor.
@@ -223,18 +273,10 @@ impl<'a> NestedLoopJoin<'a> {
 ///   The inner (right) order matches the right input order at materialization time.
 /// - If `pending` is non-empty when `next` is called, it emits these join results before advancing
 ///   the left input.
-/// - Skips right-side tuples where the join key is `NULL`. This is ensured during materialization.
-///
-/// See [`Executor`] for rewind semantics and `materialize_right` for buffering behavior.
 impl FallibleIterator for NestedLoopJoin<'_> {
     type Item = Tuple;
     type Error = ExecutionError;
 
-    /// Advances the join and returns the next joined tuple, if available.
-    ///
-    /// - Materializes (buffers) the right input on the first call.
-    /// - Buffers all output tuples for the current left tuple before returning the first one.
-    /// - Returns `Ok(None)` when the left input is exhausted.
     fn next(&mut self) -> Result<Option<Tuple>, ExecutionError> {
         self.materialize_right()?;
 
@@ -243,15 +285,15 @@ impl FallibleIterator for NestedLoopJoin<'_> {
                 return Ok(Some(tuple));
             }
 
-            let Some(l) = self.join_box.left.next()? else {
+            let Some(l) = self.inputs.left.next()? else {
                 return Ok(None);
             };
 
             for right in &self.right_buf {
-                if !self.join_box.predicate.evaluate(&l, right)? {
-                    continue;
+                let joined = l.concat(right);
+                if self.predicate.eval(&joined)? {
+                    self.pending.push_back(joined);
                 }
-                self.pending.push_back(l.concat(right));
             }
         }
     }
@@ -259,23 +301,45 @@ impl FallibleIterator for NestedLoopJoin<'_> {
 
 impl Executor for NestedLoopJoin<'_> {
     fn schema(&self) -> &TupleSchema {
-        &self.join_box.schema
+        &self.inputs.schema
     }
 
     fn rewind(&mut self) -> Result<(), ExecutionError> {
         self.pending.clear();
-        self.join_box.left.rewind()
+        self.inputs.left.rewind()
     }
 }
 
 #[derive(Debug)]
 /// Joins two inputs by building a hash table on the right input.
 ///
-/// This join only supports equality predicates. The right input is read once and grouped by its
-/// join key (skipping rows with `NULL` keys). Each left tuple probes the hash table to find
-/// matching right tuples.
+/// Requires an equality predicate as the hash key. An optional `residual`
+/// [`BooleanExpression`] evaluated over `left.concat(right)` can further restrict
+/// matches after the key probe — useful for compound join conditions like
+/// `l.a = r.x AND l.b < r.y`, where `l.a = r.x` is the hash key and `l.b < r.y`
+/// is the residual.
+///
+/// # SQL shape
+///
+/// Hash join is used for *equi-joins* (an `=` key), optionally with an additional filter:
+///
+/// ```sql
+/// -- Pure equi-join
+/// SELECT *
+/// FROM left_table  AS l
+/// JOIN right_table AS r
+///   ON l.a = r.x;
+///
+/// -- Equi-join key + residual predicate
+/// SELECT *
+/// FROM left_table  AS l
+/// JOIN right_table AS r
+///   ON l.a = r.x AND l.b < r.y;
+/// ```
 pub struct HashJoin<'a> {
-    join_box: Box<JoinBox<'a>>,
+    inputs: Box<JoinInputs<'a>>,
+    predicate: JoinPredicate,
+    residual: Option<BooleanExpression>,
     hash_table: HashMap<Value, Vec<Tuple>>,
     pending: VecDeque<Tuple>,
     materialized: bool,
@@ -283,7 +347,8 @@ pub struct HashJoin<'a> {
 }
 
 impl<'a> HashJoin<'a> {
-    /// Creates a hash join executor for `left ⋈ right` using `predicate`.
+    /// Creates a hash join executor for `left ⋈ right` using `predicate` as the
+    /// equality key.
     ///
     /// # Panics
     ///
@@ -296,7 +361,9 @@ impl<'a> HashJoin<'a> {
             predicate.op
         );
         Self {
-            join_box: Box::new(JoinBox::new(left, right, predicate)),
+            inputs: Box::new(JoinInputs::new(left, right)),
+            predicate,
+            residual: None,
             hash_table: HashMap::new(),
             pending: VecDeque::new(),
             materialized: false,
@@ -304,26 +371,34 @@ impl<'a> HashJoin<'a> {
         }
     }
 
+    /// Attaches an optional residual predicate to this hash join.
+    ///
+    /// The residual is evaluated over the concatenated `left ⋈ right` tuple *after* the
+    /// hash-key match succeeds, so right-side column references must be offset by
+    /// [`left_width`](Self::left_width).
+    #[must_use]
+    pub fn with_residual(mut self, residual: BooleanExpression) -> Self {
+        self.residual = Some(residual);
+        self
+    }
+
+    /// Returns the left child's column width — the offset at which right columns
+    /// start in the concatenated output tuple.
+    #[inline]
+    pub fn left_width(&self) -> usize {
+        self.inputs.left_width
+    }
+
     /// Materializes the hash table for the right input using the join key.
     ///
-    /// This method reads all remaining tuples from the right child (if not already done)
-    /// and groups them into a hash table, keyed by the value of the right join column.
-    ///
     /// Tuples where the join key is `NULL` or missing are skipped (won't match).
-    /// Only non-null, present join key values are included in the hash table.
-    ///
-    /// - The hash table is only built once, subsequent calls are a no-op.
-    /// - If the materialization is already complete, returns immediately.
-    ///
-    /// # Errors
-    /// Returns an error if advancing the right child fails.
     fn build_hash_table(&mut self) -> Result<(), ExecutionError> {
         if self.materialized {
             return Ok(());
         }
 
-        let right_idx = usize::from(self.join_box.predicate.right_col);
-        while let Some(t) = self.join_box.right.next()? {
+        let right_idx = usize::from(self.predicate.right_col);
+        while let Some(t) = self.inputs.right.next()? {
             match t.get(right_idx) {
                 Some(Value::Null) | None => {}
                 Some(v) => {
@@ -337,39 +412,30 @@ impl<'a> HashJoin<'a> {
     }
 }
 
-/// Produces the next joined tuple from the hash join.
-///
-/// On the first call, the right input is fully materialized into an in-memory hash table
-/// keyed by the right join column (rows with `NULL`/missing keys are skipped).
-///
-/// Each subsequent call probes using the next left tuple:
-/// - Left tuples with `NULL`/missing join keys are skipped.
-/// - If the left key exists in the hash table, this buffers the matching right tuples and returns
-///   `left.concat(right)` for each match.
-/// - If there is no bucket for the left key, it advances to the next left tuple.
-///
-/// Output is streamed: at most one joined tuple is returned per call. For each left tuple,
-/// matches are returned in the right-side scan/bucket order.
-///
-/// # Errors
-/// Returns an error if either child executor returns an error while advancing.
 impl FallibleIterator for HashJoin<'_> {
     type Item = Tuple;
     type Error = ExecutionError;
     fn next(&mut self) -> Result<Option<Tuple>, ExecutionError> {
         self.build_hash_table()?;
-        let left_idx = usize::from(self.join_box.predicate.left_col);
+        let left_idx = usize::from(self.predicate.left_col);
 
         loop {
-            if let Some(r) = self.pending.pop_front() {
+            while let Some(r) = self.pending.pop_front() {
                 let l = self
                     .left_tuple
                     .as_ref()
                     .expect("current_left set with pending");
-                return Ok(Some(l.concat(&r)));
+                let joined = l.concat(&r);
+                let keep = match &self.residual {
+                    None => true,
+                    Some(expr) => expr.eval(&joined)?,
+                };
+                if keep {
+                    return Ok(Some(joined));
+                }
             }
 
-            let Some(l) = self.join_box.left.next()? else {
+            let Some(l) = self.inputs.left.next()? else {
                 self.left_tuple = None;
                 return Ok(None);
             };
@@ -392,13 +458,13 @@ impl FallibleIterator for HashJoin<'_> {
 
 impl Executor for HashJoin<'_> {
     fn schema(&self) -> &TupleSchema {
-        &self.join_box.schema
+        &self.inputs.schema
     }
 
     fn rewind(&mut self) -> Result<(), ExecutionError> {
         self.pending.clear();
         self.left_tuple = None;
-        self.join_box.left.rewind()
+        self.inputs.left.rewind()
     }
 }
 
@@ -444,10 +510,25 @@ impl IndexMut<usize> for TupleCursor {
 #[derive(Debug)]
 /// Joins two inputs by sorting them on the join key and then merging.
 ///
-/// This join only supports equality predicates. Both inputs are drained, sorted by their join
-/// keys (skipping rows with `NULL` keys), then scanned in lockstep to find equal key groups.
+/// Requires an equality predicate as the merge key. An optional `residual`
+/// [`BooleanExpression`] evaluated over `left.concat(right)` can further restrict
+/// matches after the key match succeeds.
+///
+/// # SQL shape
+///
+/// Sort-merge join is also for equi-joins (an `=` key). It’s a good fit when inputs are
+/// already ordered on the join key or can be efficiently sorted:
+///
+/// ```sql
+/// SELECT *
+/// FROM left_table  AS l
+/// JOIN right_table AS r
+///   ON l.a = r.x;
+/// ```
 pub struct SortMergeJoin<'a> {
-    join_box: Box<JoinBox<'a>>,
+    inputs: Box<JoinInputs<'a>>,
+    predicate: JoinPredicate,
+    residual: Option<BooleanExpression>,
     l_sorted: TupleCursor,
     r_sorted: TupleCursor,
     pending: VecDeque<Tuple>,
@@ -457,19 +538,9 @@ pub struct SortMergeJoin<'a> {
 impl<'a> SortMergeJoin<'a> {
     /// Creates a new sort-merge join executor for `left ⋈ right` using the provided predicate.
     ///
-    /// Both input plan nodes will be fully drained and sorted on the join key before producing any
-    /// output. Only equality predicates are supported for sort-merge joins in this
-    /// implementation.
-    ///
     /// # Panics
     ///
     /// Panics if the join predicate is not [`Predicate::Equals`].
-    ///
-    /// # Arguments
-    ///
-    /// * `left` - The left child plan node (input relation).
-    /// * `right` - The right child plan node (input relation).
-    /// * `predicate` - The join predicate describing the join columns and operator.
     pub fn new(left: PlanNode<'a>, right: PlanNode<'a>, predicate: JoinPredicate) -> Self {
         assert_eq!(
             predicate.op,
@@ -478,7 +549,9 @@ impl<'a> SortMergeJoin<'a> {
             predicate.op
         );
         Self {
-            join_box: Box::new(JoinBox::new(left, right, predicate)),
+            inputs: Box::new(JoinInputs::new(left, right)),
+            predicate,
+            residual: None,
             l_sorted: TupleCursor::new(),
             r_sorted: TupleCursor::new(),
             pending: VecDeque::new(),
@@ -486,24 +559,36 @@ impl<'a> SortMergeJoin<'a> {
         }
     }
 
+    /// Attaches an optional residual predicate to this sort-merge join.
+    ///
+    /// The residual is evaluated over the concatenated `left ⋈ right` tuple *after* the
+    /// equal-key match, so right-side column references must be offset by
+    /// [`left_width`](Self::left_width).
+    #[must_use]
+    pub fn with_residual(mut self, residual: BooleanExpression) -> Self {
+        self.residual = Some(residual);
+        self
+    }
+
+    /// Returns the left child's column width — the offset at which right columns
+    /// start in the concatenated output tuple.
+    #[inline]
+    pub fn left_width(&self) -> usize {
+        self.inputs.left_width
+    }
+
     /// Drains both left and right child executors into in-memory vectors
     /// and sorts each side by its join key column.
-    ///
-    /// This transformation is performed only once on first access.
-    ///
-    /// # Errors
-    ///
-    /// Returns an [`ExecutionError`] if draining tuples or retrieving join key values fails.
     fn sort_inputs(&mut self) -> Result<(), ExecutionError> {
         if self.sorted {
             return Ok(());
         }
 
-        let left_idx = self.join_box.left_idx();
-        let right_idx = self.join_box.right_idx();
+        let left_idx = usize::from(self.predicate.left_col);
+        let right_idx = usize::from(self.predicate.right_col);
 
-        drain_tuples(&mut self.join_box.left, &mut self.l_sorted.0, left_idx)?;
-        drain_tuples(&mut self.join_box.right, &mut self.r_sorted.0, right_idx)?;
+        drain_tuples(&mut self.inputs.left, &mut self.l_sorted.0, left_idx)?;
+        drain_tuples(&mut self.inputs.right, &mut self.r_sorted.0, right_idx)?;
 
         Self::sort_by_column(&mut self.l_sorted.0, left_idx);
         Self::sort_by_column(&mut self.r_sorted.0, right_idx);
@@ -539,34 +624,53 @@ impl<'a> SortMergeJoin<'a> {
     /// Returns an [`ExecutionError`] if any join key value lookup fails,
     /// or if the join key values are of incomparable types.
     fn collect_equals(&mut self) -> Result<(), ExecutionError> {
-        let l_idx = self.join_box.predicate.left_col;
-        let r_idx = self.join_box.predicate.right_col;
+        let curr = self.get_value(true)?.clone();
 
-        let curr = get_value(self.l_sorted.current(), l_idx, true)?.clone();
-
-        // Advance the right cursor to collect all right-side tuples with this join key.
         let right_start = self.r_sorted.current_idx();
-        while !self.r_sorted.exhausted()
-            && get_value(self.r_sorted.current(), r_idx, false)? == &curr
-        {
+        while !self.r_sorted.exhausted() && self.get_value(false)? == &curr {
             self.r_sorted.forward();
         }
         let right_end = self.r_sorted.current_idx();
 
-        // For each left tuple in this group, concatenate it with every right tuple from the right
-        // group.
-        while !self.l_sorted.exhausted()
-            && get_value(self.l_sorted.current(), l_idx, true)? == &curr
-        {
+        while !self.l_sorted.exhausted() && self.get_value(true)? == &curr {
             let l_curr = self.l_sorted.current().clone();
             for i in right_start..right_end {
                 let r = &self.r_sorted[i];
-                self.pending.push_back(l_curr.concat(r));
+                let joined = l_curr.concat(r);
+
+                let keep = match &self.residual {
+                    None => true,
+                    Some(expr) => expr.eval(&joined)?,
+                };
+                if keep {
+                    self.pending.push_back(joined);
+                }
             }
             self.l_sorted.forward();
         }
 
         Ok(())
+    }
+
+    /// Retrieves the join key value for the current tuple on the specified side (left or right).
+    ///
+    /// # Arguments
+    ///
+    /// * `is_left` - If `true`, fetches the value from the left input using the left join key
+    ///   column. If `false`, fetches the value from the right input using the right join key
+    ///   column.
+    ///
+    /// # Returns
+    ///
+    /// Returns a reference to the join key [`Value`] for the current tuple on the chosen side,
+    /// or an [`ExecutionError`] if the column index is out of bounds.
+    fn get_value(&self, is_left: bool) -> Result<&Value, ExecutionError> {
+        let (t, col) = if is_left {
+            (&self.l_sorted, self.predicate.left_col)
+        } else {
+            (&self.r_sorted, self.predicate.right_col)
+        };
+        get_value(t.current(), col, is_left)
     }
 }
 
@@ -579,8 +683,6 @@ impl FallibleIterator for SortMergeJoin<'_> {
     type Error = ExecutionError;
     fn next(&mut self) -> Result<Option<Tuple>, ExecutionError> {
         self.sort_inputs()?;
-        let l_idx = self.join_box.predicate.left_col;
-        let r_idx = self.join_box.predicate.right_col;
 
         loop {
             if let Some(tuple) = self.pending.pop_front() {
@@ -591,8 +693,8 @@ impl FallibleIterator for SortMergeJoin<'_> {
                 return Ok(None);
             }
 
-            let lk = get_value(self.l_sorted.current(), l_idx, true)?;
-            let rk = get_value(self.r_sorted.current(), r_idx, false)?;
+            let lk = self.get_value(true)?;
+            let rk = self.get_value(false)?;
 
             match lk.partial_cmp(rk) {
                 Some(Ordering::Less) => self.l_sorted.forward(),
@@ -606,7 +708,7 @@ impl FallibleIterator for SortMergeJoin<'_> {
 
 impl Executor for SortMergeJoin<'_> {
     fn schema(&self) -> &TupleSchema {
-        &self.join_box.schema
+        &self.inputs.schema
     }
 
     fn rewind(&mut self) -> Result<(), ExecutionError> {
@@ -614,8 +716,8 @@ impl Executor for SortMergeJoin<'_> {
         self.l_sorted = TupleCursor::new();
         self.r_sorted = TupleCursor::new();
         self.sorted = false;
-        self.join_box.left.rewind()?;
-        self.join_box.right.rewind()?;
+        self.inputs.left.rewind()?;
+        self.inputs.right.rewind()?;
         Ok(())
     }
 }
@@ -709,6 +811,18 @@ mod tests {
 
     fn eq_pred(l: u32, r: u32) -> JoinPredicate {
         JoinPredicate::new(col(l), col(r), Predicate::Equals)
+    }
+
+    // Build a BooleanExpression for NLJ evaluated over the concatenated tuple.
+    // `r` is the right-side column index in the right tuple; the concatenated
+    // offset is `r + left_width`.
+    fn nlj_expr(l: usize, op: Predicate, r: usize, left_width: usize) -> BooleanExpression {
+        BooleanExpression::col_op_col(l, op, r + left_width)
+    }
+
+    // Most NLJ tests use two 2-column tables, so left_width = 2 and col_l = col_r = 0.
+    fn nlj_eq_0_0_w2() -> BooleanExpression {
+        nlj_expr(0, Predicate::Equals, 0, 2)
     }
 
     fn drain<I: FallibleIterator<Item = Tuple, Error = ExecutionError>>(
@@ -806,7 +920,7 @@ mod tests {
         let left = build_heap(101, &[tup(1, 10), tup(2, 20), tup(3, 30)]);
         let right = build_heap(102, &[tup(1, 100), tup(2, 200), tup(4, 400)]);
 
-        let mut j = NestedLoopJoin::new(scan(&left), scan(&right), eq_pred(0, 0));
+        let mut j = NestedLoopJoin::new(scan(&left), scan(&right), nlj_eq_0_0_w2());
         let out = drain(&mut j);
         assert_eq!(out.len(), 2);
         let mut pairs: Vec<(i32, i32)> = out.iter().map(|t| (int(t, 0), int(t, 2))).collect();
@@ -819,7 +933,7 @@ mod tests {
     fn test_nlj_empty_left() {
         let left = build_heap(103, &[]);
         let right = build_heap(104, &[tup(1, 100)]);
-        let mut j = NestedLoopJoin::new(scan(&left), scan(&right), eq_pred(0, 0));
+        let mut j = NestedLoopJoin::new(scan(&left), scan(&right), nlj_eq_0_0_w2());
         assert!(j.next().unwrap().is_none());
     }
 
@@ -828,7 +942,7 @@ mod tests {
     fn test_nlj_empty_right() {
         let left = build_heap(105, &[tup(1, 10)]);
         let right = build_heap(106, &[]);
-        let mut j = NestedLoopJoin::new(scan(&left), scan(&right), eq_pred(0, 0));
+        let mut j = NestedLoopJoin::new(scan(&left), scan(&right), nlj_eq_0_0_w2());
         assert!(j.next().unwrap().is_none());
     }
 
@@ -837,7 +951,7 @@ mod tests {
     fn test_nlj_duplicate_keys_cartesian() {
         let left = build_heap(107, &[tup(1, 10), tup(1, 11)]);
         let right = build_heap(108, &[tup(1, 100), tup(1, 101)]);
-        let mut j = NestedLoopJoin::new(scan(&left), scan(&right), eq_pred(0, 0));
+        let mut j = NestedLoopJoin::new(scan(&left), scan(&right), nlj_eq_0_0_w2());
         assert_eq!(drain(&mut j).len(), 4);
     }
 
@@ -846,7 +960,7 @@ mod tests {
     fn test_nlj_skips_right_null_keys() {
         let left = build_heap(109, &[tup(1, 10)]);
         let right = build_heap(110, &[tup_null_a(100), tup(1, 200)]);
-        let mut j = NestedLoopJoin::new(scan(&left), scan(&right), eq_pred(0, 0));
+        let mut j = NestedLoopJoin::new(scan(&left), scan(&right), nlj_eq_0_0_w2());
         assert_eq!(drain(&mut j).len(), 1);
     }
 
@@ -855,7 +969,8 @@ mod tests {
     fn test_nlj_less_than_predicate() {
         let left = build_heap(111, &[tup(1, 0), tup(5, 0)]);
         let right = build_heap(112, &[tup(3, 0), tup(10, 0)]);
-        let p = JoinPredicate::new(col(0), col(0), Predicate::LessThan);
+        // left.col0 < right.col0, with right's col0 at concat-index 0 + left_width(2) = 2
+        let p = nlj_expr(0, Predicate::LessThan, 0, 2);
         let mut j = NestedLoopJoin::new(scan(&left), scan(&right), p);
         // (1,3), (1,10), (5,10)
         assert_eq!(drain(&mut j).len(), 3);
@@ -866,7 +981,7 @@ mod tests {
     fn test_nlj_rewind_replays_output() {
         let left = build_heap(113, &[tup(1, 10), tup(2, 20)]);
         let right = build_heap(114, &[tup(1, 100), tup(2, 200)]);
-        let mut j = NestedLoopJoin::new(scan(&left), scan(&right), eq_pred(0, 0));
+        let mut j = NestedLoopJoin::new(scan(&left), scan(&right), nlj_eq_0_0_w2());
         let first = drain(&mut j).len();
         j.rewind().unwrap();
         let second = drain(&mut j).len();
@@ -879,7 +994,7 @@ mod tests {
     fn test_nlj_schema_merged() {
         let left = build_heap(115, &[]);
         let right = build_heap(116, &[]);
-        let j = NestedLoopJoin::new(scan(&left), scan(&right), eq_pred(0, 0));
+        let j = NestedLoopJoin::new(scan(&left), scan(&right), nlj_eq_0_0_w2());
         assert_eq!(j.schema().num_fields(), 4);
     }
 
@@ -948,7 +1063,23 @@ mod tests {
         let _ = HashJoin::new(scan(&left), scan(&right), p);
     }
 
-    // ===== SortMergeJoin =====
+    // residual narrows matches after the hash-key probe: `a = x AND l.b < r.b`
+    #[test]
+    fn test_hash_join_residual_filters_after_key_match() {
+        // left col0 is the key, col1 is b. right col0 is x, col1 is b.
+        // Expected keep-conditions: key match AND left.col1 < right.col1.
+        let left = build_heap(147, &[tup(1, 10), tup(1, 50)]);
+        let right = build_heap(148, &[tup(1, 20), tup(1, 60)]);
+
+        // key = eq(0, 0); residual = col1 < col3 (left_width = 2 → right.col1 at index 3).
+        let residual = BooleanExpression::col_op_col(1, Predicate::LessThan, 3);
+        let mut j = HashJoin::new(scan(&left), scan(&right), eq_pred(0, 0)).with_residual(residual);
+
+        let out = drain(&mut j);
+        // Pairs that match key=1: (10,20), (10,60), (50,20), (50,60).
+        // Residual keeps those where left.b < right.b: (10,20), (10,60), (50,60) — 3 rows.
+        assert_eq!(out.len(), 3);
+    }
 
     // happy path: outputs are emitted in ascending key order
     #[test]
@@ -1052,5 +1183,42 @@ mod tests {
         let right = build_heap(146, &[]);
         let p = JoinPredicate::new(col(0), col(0), Predicate::GreaterThan);
         let _ = SortMergeJoin::new(scan(&left), scan(&right), p);
+    }
+
+    // residual narrows matches after equal-key merge: `a = x AND l.b < r.b`
+    #[test]
+    fn test_smj_residual_filters_after_key_match() {
+        let left = build_heap(149, &[tup(1, 10), tup(1, 50)]);
+        let right = build_heap(150, &[tup(1, 20), tup(1, 60)]);
+
+        let residual = BooleanExpression::col_op_col(1, Predicate::LessThan, 3);
+        let mut j =
+            SortMergeJoin::new(scan(&left), scan(&right), eq_pred(0, 0)).with_residual(residual);
+
+        // Same selectivity as the HashJoin case: 3 rows.
+        assert_eq!(drain(&mut j).len(), 3);
+    }
+
+    // NLJ now supports compound boolean conditions — the original question.
+    // Equi-join on col0 AND inequality on col1 of the concatenated tuple.
+    #[test]
+    fn test_nlj_compound_and_predicate() {
+        let left = build_heap(151, &[tup(1, 10), tup(1, 50), tup(2, 10)]);
+        let right = build_heap(152, &[tup(1, 20), tup(2, 5)]);
+
+        // left.col0 = right.col0 AND left.col1 < right.col1
+        // right's col0 is concat-index 2, col1 is concat-index 3, left_width = 2.
+        let key_eq = BooleanExpression::col_op_col(0, Predicate::Equals, 2);
+        let b_lt = BooleanExpression::col_op_col(1, Predicate::LessThan, 3);
+        let pred = BooleanExpression::And(Box::new(key_eq), Box::new(b_lt));
+
+        let mut j = NestedLoopJoin::new(scan(&left), scan(&right), pred);
+        let out = drain(&mut j);
+        // Candidates with matching col0:
+        //   (1,10)·(1,20) → 10<20 ✓
+        //   (1,50)·(1,20) → 50<20 ✗
+        //   (2,10)·(2,5)  → 10<5  ✗
+        // → 1 row.
+        assert_eq!(out.len(), 1);
     }
 }
