@@ -12,9 +12,10 @@ use crate::{
     catalog::{
         CatalogError,
         manager::{Catalog, TableInfo},
-        systable::{ColumnRow, SystemTable, TableRow},
+        systable::{ColumnRow, PrimaryKeyColumnRow, TableRow},
     },
     heap::file::HeapFile,
+    primitives::ColumnId,
     transaction::Transaction,
     tuple::TupleSchema,
 };
@@ -62,7 +63,7 @@ impl Catalog {
     /// The returned vector is sorted by table name for stable, user-friendly
     /// listings — `\dt` and similar tools rely on a deterministic order.
     pub fn list_tables(&self, txn: &Transaction<'_>) -> Result<Vec<TableInfo>, CatalogError> {
-        let rows = self.scan_system_table::<TableRow>(txn, SystemTable::Tables)?;
+        let rows = self.scan_system_table::<TableRow>(txn)?;
         let mut out = Vec::with_capacity(rows.len());
         for row in rows {
             out.push(self.get_table_info(txn, &row.table_name)?);
@@ -86,12 +87,13 @@ impl Catalog {
     /// Creates a new table with the given schema and registers it in the catalog.
     ///
     /// Allocates a fresh [`FileId`], creates the backing heap file on disk,
-    /// writes rows to the `Tables` and `Columns` system tables inside `txn`,
-    /// and inserts the table into the in-memory cache.
+    /// writes rows to the `Tables`, `Columns`, and `PrimaryKeyColumns` system
+    /// tables inside `txn`, and inserts the table into the in-memory cache.
     ///
-    /// `primary_key` is a list of column indices (zero-based) that form the
-    /// primary key. Only single-column primary keys are supported; passing more
-    /// than one index returns an error. Pass `None` or an empty `Vec` for tables
+    /// `primary_key` is a list of column ids (zero-based, in declaration order)
+    /// that form the primary key. Composite primary keys are supported: each
+    /// column becomes one row in `PrimaryKeyColumns`, sharing `table_id` and
+    /// distinguished by `ordinal`. Pass `None` or an empty `Vec` for tables
     /// without a primary key.
     ///
     /// Returns the [`FileId`] assigned to the new table.
@@ -100,15 +102,15 @@ impl Catalog {
     ///
     /// - [`CatalogError::TableAlreadyExists`] if a table named `name` is already in the in-memory
     ///   cache.
-    /// - [`CatalogError::InvalidCatalogRow`] if a primary key index is out of bounds, or if more
-    ///   than one index is provided.
+    /// - [`CatalogError::InvalidCatalogRow`] if a primary key column index is out of bounds for the
+    ///   schema.
     /// - Propagates heap creation and system table insertion errors.
     pub fn create_table(
         &self,
         txn: &Transaction<'_>,
         name: &str,
         schema: TupleSchema,
-        primary_key: Option<Vec<usize>>,
+        primary_key: Option<Vec<ColumnId>>,
     ) -> Result<FileId, CatalogError> {
         if self.user_tables.read().contains_key(name) {
             return Err(CatalogError::table_already_exists(name));
@@ -116,49 +118,31 @@ impl Catalog {
 
         let file_id = self.next_file_id();
         let file_path = self.file_name(name);
-
-        let heap = Self::create_heap_file(
+        self.register_heap(
             file_id,
-            &file_path,
-            schema.clone(),
-            self.buffer_pool(),
-            self.wal(),
-        )?;
-        self.register_heap(file_id, heap);
-
-        let primary_key_name = match &primary_key {
-            None => None,
-            Some(indices) if indices.is_empty() => None,
-            Some(indices) if indices.len() == 1 => {
-                let i = indices[0];
-                let field = schema.field(i).ok_or_else(|| {
-                    CatalogError::invalid_catalog_row(format!(
-                        "primary key column index {i} out of bounds for schema"
-                    ))
-                })?;
-                Some(field.name.clone())
-            }
-            Some(_) => {
-                return Err(CatalogError::invalid_catalog_row(
-                    "composite primary keys are not yet supported in the system catalog",
-                ));
-            }
-        };
+            Self::create_heap_file(
+                file_id,
+                &file_path,
+                schema.clone(),
+                self.buffer_pool(),
+                self.wal(),
+            )?,
+        );
 
         self.insert_systable_tuple(
             txn,
-            SystemTable::Tables,
-            &TableRow::new(
-                file_id,
-                name.to_string(),
-                file_path.clone(),
-                primary_key_name,
-            )?,
+            &TableRow::new(file_id, name.to_string(), file_path.clone())?,
         )?;
 
-        let columns = ColumnRow::from_schema(file_id, &schema)?;
-        for column in columns {
-            self.insert_systable_tuple(txn, SystemTable::Columns, &column)?;
+        ColumnRow::from_schema(file_id, &schema).and_then(|cols| {
+            for col in cols {
+                self.insert_systable_tuple(txn, &col)?;
+            }
+            Ok(())
+        })?;
+
+        if let Some(pk_cols) = primary_key.as_deref() {
+            self.insert_primary_key_columns(txn, file_id, &schema, pk_cols)?;
         }
 
         let table_info = TableInfo::new(name, schema, file_id, file_path, primary_key);
@@ -166,6 +150,42 @@ impl Catalog {
             .write()
             .insert(table_info.name.clone(), table_info);
         Ok(file_id)
+    }
+
+    /// Persists a table's primary-key column list into `CATALOG_PRIMARY_KEY_COLUMNS`.
+    ///
+    /// A composite primary key is represented as one catalog row per column.
+    /// `col_id` points back into the table schema, while `ordinal` preserves the
+    /// user-declared key order (`PRIMARY KEY (a, b)` is different metadata from
+    /// `PRIMARY KEY (b, a)`).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CatalogError::InvalidCatalogRow`] if any primary-key column id
+    /// does not exist in `schema`, or if the key order cannot be represented by
+    /// the on-disk `i32` ordinal field. Also propagates system-table insert
+    /// errors from [`Self::insert_systable_tuple`].
+    fn insert_primary_key_columns(
+        &self,
+        txn: &Transaction<'_>,
+        file_id: FileId,
+        schema: &TupleSchema,
+        pk_cols: &[ColumnId],
+    ) -> Result<(), CatalogError> {
+        for (ordinal, &col_id) in pk_cols.iter().enumerate() {
+            let i = usize::from(col_id);
+            if schema.field(i).is_none() {
+                return Err(CatalogError::invalid_catalog_row(format!(
+                    "primary key column index {i} out of bounds for schema"
+                )));
+            }
+            let ordinal = i32::try_from(ordinal).map_err(|_| {
+                CatalogError::invalid_catalog_row("primary key ordinal does not fit in i32")
+            })?;
+            let row = PrimaryKeyColumnRow::new(file_id, col_id, ordinal)?;
+            self.insert_systable_tuple(txn, &row)?;
+        }
+        Ok(())
     }
 
     /// Reads table and column metadata from the system catalog for a table named `name`.
@@ -186,41 +206,40 @@ impl Catalog {
         txn: &Transaction<'_>,
         name: &str,
     ) -> Result<TableInfo, CatalogError> {
-        let table_rows = self.scan_system_table::<TableRow>(txn, SystemTable::Tables)?;
-        let row = table_rows
-            .into_iter()
-            .find(|r| r.table_name == name)
+        let table = self
+            .scan_system_table_where::<TableRow, _>(txn, |r| r.table_name == name)?
+            .pop()
             .ok_or_else(|| CatalogError::table_not_found(name))?;
 
-        let all_cols = self.scan_system_table::<ColumnRow>(txn, SystemTable::Columns)?;
-        let cols = all_cols
-            .into_iter()
-            .filter(|c| c.table_id == row.table_id.0.cast_signed())
-            .collect::<Vec<_>>();
-
-        let pk = row.primary_key.as_ref().map(|pk_name| {
-            cols.iter()
-                .enumerate()
-                .filter(|(_, c)| c.column_name == *pk_name)
-                .map(|(i, _)| i)
-                .collect::<Vec<_>>()
-        });
+        let cols =
+            self.scan_system_table_where::<ColumnRow, _>(txn, |c| c.table_id == table.table_id)?;
 
         let schema = TupleSchema::from(cols);
+        let pk = {
+            let mut pk_rows = self.scan_system_table_where::<PrimaryKeyColumnRow, _>(txn, |r| {
+                r.table_id == table.table_id
+            })?;
+            if pk_rows.is_empty() {
+                None
+            } else {
+                pk_rows.sort_by_key(|r| r.ordinal);
+                Some(pk_rows.into_iter().map(|r| r.column_id).collect())
+            }
+        };
 
         let heap = self.open_existing_heap(
-            row.table_id,
-            &row.file_path,
-            &row.table_name,
+            table.table_id,
+            &table.file_path,
+            &table.table_name,
             schema.clone(),
         )?;
-        self.register_heap(row.table_id, heap);
+        self.register_heap(table.table_id, heap);
 
         Ok(TableInfo::new(
-            row.table_name,
+            table.table_name,
             schema,
-            row.table_id,
-            row.file_path,
+            table.table_id,
+            table.file_path,
             pk,
         ))
     }
@@ -237,26 +256,16 @@ impl Catalog {
     /// Returns [`CatalogError::Io`] if the backing file cannot be removed.
     /// Propagates system table deletion errors.
     pub fn drop_table(&self, txn: &Transaction<'_>, name: &str) -> Result<(), CatalogError> {
-        let table_info = self.get_table_info(txn, name)?;
-        let table_id = table_info.file_id;
-        let file_path = table_info.file_path;
+        let TableInfo {
+            file_id, file_path, ..
+        } = self.get_table_info(txn, name)?;
 
-        self.delete_systable_rows(txn, SystemTable::Tables, |t| {
-            TableRow::try_from(t)
-                .map(|r| r.table_id == table_id)
-                .unwrap_or(false)
-        })?;
-
-        let table_id_signed = table_id.0.cast_signed();
-        self.delete_systable_rows(txn, SystemTable::Columns, |t| {
-            ColumnRow::try_from(t)
-                .map(|r| r.table_id == table_id_signed)
-                .unwrap_or(false)
-        })?;
+        self.delete_systable_rows::<TableRow, _>(txn, |r| r.table_id == file_id)?;
+        self.delete_systable_rows::<ColumnRow, _>(txn, |r| r.table_id == file_id)?;
+        self.delete_systable_rows::<PrimaryKeyColumnRow, _>(txn, |r| r.table_id == file_id)?;
 
         std::fs::remove_file(file_path)?;
-
-        self.open_heaps.write().remove(&table_id);
+        self.open_heaps.write().remove(&file_id);
         self.user_tables.write().remove(name);
 
         Ok(())
@@ -274,6 +283,7 @@ mod tests {
         FileId, Type,
         buffer_pool::page_store::PageStore,
         catalog::CatalogError,
+        primitives::ColumnId,
         transaction::TransactionManager,
         tuple::{Field, TupleSchema},
         wal::writer::Wal,
@@ -301,6 +311,10 @@ mod tests {
 
     fn one_col_schema() -> TupleSchema {
         TupleSchema::new(vec![Field::new("val", Type::Int64).not_null()])
+    }
+
+    fn col(id: usize) -> ColumnId {
+        ColumnId::try_from(id).unwrap()
     }
 
     #[test]
@@ -385,8 +399,6 @@ mod tests {
         txn.commit().unwrap();
     }
 
-    // ── get_table_heap: happy path ────────────────────────────────────────
-
     // After create_table the heap is registered and retrievable.
     #[test]
     fn test_get_table_heap_after_create_returns_ok() {
@@ -460,7 +472,7 @@ mod tests {
         let (catalog, txn_mgr) = make_catalog_and_txn(dir.path());
         let txn = txn_mgr.begin().unwrap();
 
-        let result = catalog.create_table(&txn, "t3", two_col_schema(), Some(vec![0]));
+        let result = catalog.create_table(&txn, "t3", two_col_schema(), Some(vec![col(0)]));
         txn.commit().unwrap();
 
         assert!(result.is_ok());
@@ -473,7 +485,7 @@ mod tests {
         let (catalog, txn_mgr) = make_catalog_and_txn(dir.path());
         let txn = txn_mgr.begin().unwrap();
 
-        let result = catalog.create_table(&txn, "t4", two_col_schema(), Some(vec![1]));
+        let result = catalog.create_table(&txn, "t4", two_col_schema(), Some(vec![col(1)]));
         txn.commit().unwrap();
 
         assert!(result.is_ok());
@@ -487,7 +499,7 @@ mod tests {
         let txn = txn_mgr.begin().unwrap();
 
         catalog
-            .create_table(&txn, "t5", two_col_schema(), Some(vec![0]))
+            .create_table(&txn, "t5", two_col_schema(), Some(vec![col(0)]))
             .unwrap();
         txn.commit().unwrap();
 
@@ -495,7 +507,7 @@ mod tests {
         let info = catalog.get_table_info(&txn2, "t5").unwrap();
         txn2.commit().unwrap();
 
-        assert_eq!(info.primary_key, Some(vec![0]));
+        assert_eq!(info.primary_key, Some(vec![col(0)]));
     }
 
     // Schema stored in TableInfo must match what was passed to create_table.
@@ -544,13 +556,11 @@ mod tests {
         let (catalog, txn_mgr) = make_catalog_and_txn(dir.path());
         let txn = txn_mgr.begin().unwrap();
 
-        let result = catalog.create_table(&txn, "tiny", one_col_schema(), Some(vec![0]));
+        let result = catalog.create_table(&txn, "tiny", one_col_schema(), Some(vec![col(0)]));
         txn.commit().unwrap();
 
         assert!(result.is_ok());
     }
-
-    // ── create_table: error paths ─────────────────────────────────────────
 
     // Creating the same table twice must return TableAlreadyExists.
     #[test]
@@ -581,7 +591,7 @@ mod tests {
         let (catalog, txn_mgr) = make_catalog_and_txn(dir.path());
         let txn = txn_mgr.begin().unwrap();
 
-        let result = catalog.create_table(&txn, "bad", two_col_schema(), Some(vec![2]));
+        let result = catalog.create_table(&txn, "bad", two_col_schema(), Some(vec![col(2)]));
 
         assert!(
             matches!(result, Err(CatalogError::InvalidCatalogRow { .. })),
@@ -590,20 +600,51 @@ mod tests {
         txn.commit().unwrap();
     }
 
-    // A composite (multi-column) primary key must return InvalidCatalogRow.
+    // A composite (multi-column) primary key must succeed: each PK column
+    // is recorded as one row in PrimaryKeyColumns.
     #[test]
-    fn test_create_table_composite_pk_returns_invalid_row() {
+    fn test_create_table_composite_pk_succeeds() {
         let dir = tempdir().unwrap();
         let (catalog, txn_mgr) = make_catalog_and_txn(dir.path());
         let txn = txn_mgr.begin().unwrap();
 
-        let result = catalog.create_table(&txn, "multi", two_col_schema(), Some(vec![0, 1]));
+        let result =
+            catalog.create_table(&txn, "multi", two_col_schema(), Some(vec![col(0), col(1)]));
+        txn.commit().unwrap();
 
         assert!(
-            matches!(result, Err(CatalogError::InvalidCatalogRow { .. })),
-            "expected InvalidCatalogRow for composite pk, got: {result:?}"
+            result.is_ok(),
+            "composite primary key must be accepted, got: {result:?}"
         );
+
+        let txn2 = txn_mgr.begin().unwrap();
+        let info = catalog.get_table_info(&txn2, "multi").unwrap();
+        txn2.commit().unwrap();
+
+        assert_eq!(info.primary_key, Some(vec![col(0), col(1)]));
+    }
+
+    // Composite PK ordering must round-trip: declaring (col(1), col(0))
+    // reloads as (col(1), col(0)), not sorted by column id.
+    #[test]
+    fn test_create_table_composite_pk_preserves_declaration_order() {
+        let dir = tempdir().unwrap();
+        let (catalog, txn_mgr) = make_catalog_and_txn(dir.path());
+        let txn = txn_mgr.begin().unwrap();
+
+        catalog
+            .create_table(&txn, "rev", two_col_schema(), Some(vec![col(1), col(0)]))
+            .unwrap();
         txn.commit().unwrap();
+
+        // Force a cache miss so the PK is re-read from disk.
+        catalog.user_tables.write().remove("rev");
+
+        let txn2 = txn_mgr.begin().unwrap();
+        let info = catalog.get_table_info(&txn2, "rev").unwrap();
+        txn2.commit().unwrap();
+
+        assert_eq!(info.primary_key, Some(vec![col(1), col(0)]));
     }
 
     // After drop, the backing file must no longer exist on disk.
@@ -724,7 +765,7 @@ mod tests {
         let txn = txn_mgr.begin().unwrap();
 
         catalog
-            .create_table(&txn, "rt", two_col_schema(), Some(vec![0]))
+            .create_table(&txn, "rt", two_col_schema(), Some(vec![col(0)]))
             .unwrap();
         txn.commit().unwrap();
 
@@ -736,7 +777,7 @@ mod tests {
 
         let names: Vec<_> = info.schema.fields().map(|f| f.name.as_str()).collect();
         assert_eq!(names, &["id", "name"]);
-        assert_eq!(info.primary_key, Some(vec![0]));
+        assert_eq!(info.primary_key, Some(vec![col(0)]));
     }
 
     // A table with no primary key reloads with primary_key == None.
@@ -763,8 +804,6 @@ mod tests {
             info.primary_key
         );
     }
-
-    // ── invariants ────────────────────────────────────────────────────────
 
     // FileIds returned by consecutive create_table calls must be distinct.
     #[test]
