@@ -20,8 +20,11 @@ use std::sync::Arc;
 use thiserror::Error;
 
 use crate::{
-    FileId, TransactionId, Type, buffer_pool::page_store::PageStoreError, codec::CodecError,
-    primitives::RecordId, storage::StorageError,
+    FileId, PageNumber, TransactionId, Type,
+    buffer_pool::page_store::PageStoreError,
+    codec::{CodecError, Decode, Encode},
+    primitives::RecordId,
+    storage::StorageError,
 };
 
 pub mod access;
@@ -31,6 +34,31 @@ pub mod key;
 
 pub use access::{ENVELOPE_HEADER_SIZE, Index, PageKind, decode_index_page, encode_index_page};
 pub use key::{CompositeKey, IndexEntry};
+
+/// Sentinel used on disk when a `PageNumber` field is absent (root's parent,
+/// last leaf's next, etc.). We only need the sentinel at the disk boundary —
+/// in memory we use `Option<PageNumber>`.
+pub(super) const NIL: PageNumber = PageNumber(u32::MAX);
+
+impl Encode for Option<PageNumber> {
+    fn encode<W: std::io::Write>(&self, writer: &mut W) -> Result<(), crate::codec::CodecError> {
+        match self {
+            Some(page_number) => page_number.encode(writer),
+            None => NIL.encode(writer),
+        }
+    }
+}
+
+impl Decode for Option<PageNumber> {
+    fn decode<R: std::io::Read>(reader: &mut R) -> Result<Self, crate::codec::CodecError> {
+        let page_number = PageNumber::decode(reader)?;
+        if page_number == NIL {
+            Ok(None)
+        } else {
+            Ok(Some(page_number))
+        }
+    }
+}
 
 /// Which kind of secondary index to build.
 ///

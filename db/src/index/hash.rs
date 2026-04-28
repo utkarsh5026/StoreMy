@@ -100,8 +100,6 @@ use crate::{
     storage::PAGE_SIZE,
 };
 
-const NIL: u32 = u32::MAX;
-
 /// A bucket index in `0..num_buckets`.
 ///
 /// Static hashing means bucket N lives at page N, so this also doubles as a
@@ -230,8 +228,7 @@ impl Encode for HashBucket {
             })?;
         w.write_u32::<LittleEndian>(entry_count)?;
 
-        let overflow = self.overflow.map_or(NIL, |p| p.0);
-        w.write_u32::<LittleEndian>(overflow)?;
+        self.overflow.encode(w)?;
         for e in &self.entries {
             e.encode(w)?;
         }
@@ -245,13 +242,12 @@ impl Decode for HashBucket {
     fn decode<R: Read>(r: &mut R) -> Result<Self, CodecError> {
         let bucket = BucketNumber(r.read_u32::<LittleEndian>()?);
         let n = r.read_u32::<LittleEndian>()?;
-        let raw_overflow = r.read_u32::<LittleEndian>()?;
-        let overflow = (raw_overflow != NIL).then_some(PageNumber(raw_overflow));
+        let overflow = Option::<PageNumber>::decode(r)?;
 
-        let mut entries = Vec::with_capacity(n as usize);
-        for _ in 0..n {
-            entries.push(IndexEntry::decode(r)?);
-        }
+        let entries = (0..n)
+            .map(|_| IndexEntry::decode(r))
+            .collect::<Result<Vec<_>, _>>()?;
+
         Ok(Self {
             bucket,
             overflow,
