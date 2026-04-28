@@ -410,6 +410,48 @@ impl IndexRow {
         })
     }
 
+    pub(super) fn hash(
+        index_id: IndexId,
+        index_name: impl Into<String>,
+        table_id: FileId,
+        column_name: impl Into<String>,
+        column_position: ColumnId,
+        index_file_id: FileId,
+        num_buckets: u32,
+    ) -> Result<Self, CatalogError> {
+        Self::new(
+            index_id,
+            index_name.into(),
+            table_id,
+            column_name.into(),
+            column_position,
+            IndexKind::Hash,
+            index_file_id,
+            num_buckets,
+        )
+    }
+
+    pub(super) fn btree(
+        index_id: IndexId,
+        index_name: impl Into<String>,
+        table_id: FileId,
+        column_name: impl Into<String>,
+        column_position: ColumnId,
+        index_file_id: FileId,
+    ) -> Result<Self, CatalogError> {
+        Self::new(
+            index_id,
+            index_name.into(),
+            table_id,
+            column_name.into(),
+            column_position,
+            IndexKind::Btree,
+            index_file_id,
+            // num_buckets=
+            0,
+        )
+    }
+
     /// Returns `true` when both rows describe the same logical index-level
     /// metadata, ignoring per-column fields (`column_name`, `column_position`).
     pub(super) fn same_index_metadata_as(&self, other: &Self) -> bool {
