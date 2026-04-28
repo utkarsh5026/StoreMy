@@ -80,7 +80,6 @@ impl TryFrom<u32> for Type {
     }
 }
 
-/// Converts a [`Type`] to its corresponding `u32` tag.
 impl From<Type> for u32 {
     fn from(value: Type) -> Self {
         match value {
@@ -92,6 +91,43 @@ impl From<Type> for u32 {
             Type::String => 5,
             Type::Bool => 6,
         }
+    }
+}
+
+/// Encodes a [`Type`] as a little-endian `u32` tag, matching the mapping defined in [`From<Type>
+/// for u32`].
+///
+/// # Errors
+///
+/// Returns any underlying I/O error from the writer.
+impl Encode for Type {
+    fn encode<W: Write>(&self, writer: &mut W) -> Result<(), CodecError> {
+        writer.write_u32::<LittleEndian>(u32::from(*self))?;
+        Ok(())
+    }
+}
+
+/// Decodes a [`Type`] from a little-endian `u32` tag.
+///
+/// Validates that the tag matches a supported variant; otherwise, returns a [`CodecError`]
+/// describing the issue.
+///
+/// # Errors
+///
+/// - [`CodecError::UnknownDiscriminant`] if the tag can fit in a `u8` but does not correspond to a
+///   known [`Type`] variant.
+/// - [`CodecError::NumericDoesNotFit`] if the tag does not fit in a `u8`.
+/// - Any I/O error returned by the reader.
+impl Decode for Type {
+    fn decode<R: Read>(reader: &mut R) -> Result<Self, CodecError> {
+        let tag = reader.read_u32::<LittleEndian>()?;
+        Type::try_from(tag).map_err(|_| match u8::try_from(tag) {
+            Ok(tag_u8) => CodecError::UnknownDiscriminant(tag_u8),
+            Err(_) => CodecError::NumericDoesNotFit {
+                value: u64::from(tag),
+                target: "u8",
+            },
+        })
     }
 }
 
