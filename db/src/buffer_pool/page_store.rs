@@ -179,6 +179,8 @@ impl PageStore {
             return self.fetch_from_cache(pool_ref, frame_idx, req);
         }
 
+        tracing::debug!(page_id = ?page_id, "buffer miss");
+
         let frame_idx = match pool_ref.frames.iter().position(|f| f.page_id.is_none()) {
             Some(idx) => idx,
             None => self
@@ -357,6 +359,7 @@ impl PageStore {
             }
 
             let victim_pid = frame.page_id.unwrap();
+            let was_dirty = frame.dirty;
             {
                 let files = self.files.read();
                 if let Some(file) = files.get(&victim_pid.file_id) {
@@ -366,6 +369,7 @@ impl PageStore {
 
             pool.page_table.remove(&victim_pid);
             pool.frames[idx] = Frame::default();
+            tracing::debug!(page_id = ?victim_pid, dirty = was_dirty, "buffer evict");
             return Ok(Some(idx));
         }
         Ok(None)
@@ -431,9 +435,11 @@ impl PageStore {
     /// - [`PageStoreError::FileNotRegistered`] if a dirty frame belongs to a file that is no longer
     ///   registered.
     /// - [`PageStoreError::Wal`] or [`PageStoreError::Io`] if any flush fails.
+    #[tracing::instrument(name = "buffer_flush_all", skip(self))]
     pub fn flush_all(&self) -> Result<(), PageStoreError> {
         let mut pool = self.pool.lock();
         let files = self.files.read();
+        let mut flushed = 0usize;
 
         for frame in &mut pool.frames {
             let Some(pid) = frame.page_id else { continue };
@@ -448,8 +454,10 @@ impl PageStore {
 
             frame.dirty = false;
             frame.last_lsn = Lsn::INVALID;
+            flushed += 1;
         }
 
+        tracing::debug!(pages = flushed, "buffer flush all");
         Ok(())
     }
 
