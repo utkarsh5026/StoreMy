@@ -26,6 +26,9 @@ harness = false
 thiserror = "1.0"
 anyhow = "1.0"
 
+# In-house derive macros for the Encode/Decode codec traits.
+storemy-codec-derive = { path = "../storemy-codec-derive" }
+
 # REPL / richer output
 rustyline = "14"
 comfy-table = "7"

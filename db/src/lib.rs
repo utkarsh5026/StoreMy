@@ -38,6 +38,12 @@
 //! - [`tuple`] - Tuple schema and record representation
 //! - [`iterator`] - Database iterator traits
 
+// Make `::storemy::...` resolve inside our own crate. The `Encode` / `Decode`
+// derive macros (in the sibling `storemy-codec-derive` crate) emit absolute
+// paths like `::storemy::codec::Encode`. Without this alias those paths only
+// resolve in *other* crates that depend on us — not in our own code.
+extern crate self as storemy;
+
 pub mod binder;
 pub mod buffer_pool;
 pub mod catalog;
@@ -57,11 +63,8 @@ pub mod types;
 pub mod wal;
 
 pub mod engine;
-pub use primitives::{FileId, Lsn, PageNumber, TransactionId};
+pub use primitives::{FileId, IndexId, Lsn, PageNumber, TransactionId};
 pub use types::{Type, Value};
 
-/// Database page size in bytes (4KB)
 pub const PAGE_SIZE: usize = 4096;
-
-/// Maximum string length for STRING type
 pub const STRING_MAX_SIZE: usize = 255;
