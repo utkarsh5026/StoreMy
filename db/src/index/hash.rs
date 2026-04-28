@@ -49,11 +49,13 @@
 //! # On-disk layout (one bucket page, `PAGE_SIZE` bytes)
 //!
 //!   envelope: kind(1) = `PageKind::HashBucket` | crc32(4)
-//!   body:     `bucket_num`(4) | n(4) | overflow(4) | n × `IndexEntry`
+//!   body:     `bucket_num`(4) | overflow(4) | n(4) | n × `IndexEntry`
 //!   trailing zero padding to `PAGE_SIZE`
 //!
-//! `overflow` is `NIL` when this is the chain tail. The envelope is shared
-//! with the rest of the index family; see [`crate::storage`].
+//! `overflow` is `NIL` when this is the chain tail. The body's count prefix sits
+//! adjacent to the entries list because both codecs are derived: the blanket
+//! `Vec<T>` codec emits the count immediately before the items. The envelope is
+//! shared with the rest of the index family; see [`crate::storage`].
 //!
 //! # NULL semantics
 //!
@@ -75,7 +77,6 @@
 
 use std::{
     hash::{Hash, Hasher},
-    io::{Read, Write},
     sync::{
         Arc,
         atomic::{AtomicU32, Ordering},
@@ -129,13 +130,33 @@ impl From<BucketNumber> for PageNumber {
     }
 }
 
+/// Hand-written codec because `BucketNumber` is a tuple struct (the derive only
+/// supports named fields). Wire format is the inner `u32` little-endian — no
+/// length prefix, no discriminant.
+impl Encode for BucketNumber {
+    fn encode<W: std::io::Write>(&self, writer: &mut W) -> Result<(), CodecError> {
+        writer.write_u32::<LittleEndian>(self.0)?;
+        Ok(())
+    }
+}
+
+impl Decode for BucketNumber {
+    fn decode<R: std::io::Read>(reader: &mut R) -> Result<Self, CodecError> {
+        Ok(Self(reader.read_u32::<LittleEndian>()?))
+    }
+}
+
 /// One page's worth of `(key, RecordId)` entries plus a link to the next
 /// page in the bucket's chain.
 ///
 /// Internal layout type — never appears in a plan or in user-facing SQL.
 /// Constructed by [`HashBucket::new`] for fresh overflow pages and by
 /// [`Decode::decode`] when [`HashIndex::read_bucket`] reads a page off disk.
-#[derive(Debug, Clone)]
+///
+/// Codec impls are derived: each field encodes in declaration order, and the
+/// blanket `Vec<T>` impl writes a `u32` length prefix before the entry list.
+/// On-disk layout is therefore `bucket | overflow | entries(count + items)`.
+#[derive(Debug, Clone, Encode, Decode)]
 pub struct HashBucket {
     bucket: BucketNumber,
     overflow: Option<PageNumber>,
@@ -144,7 +165,7 @@ pub struct HashBucket {
 
 impl HashBucket {
     /// Bytes consumed before the first [`IndexEntry`] on a page: envelope
-    /// (`kind` + `crc`) plus the bucket-specific `bucket_num + n + overflow`.
+    /// (`kind` + `crc`) plus the bucket-specific `bucket_num + overflow + n`.
     ///
     /// Used by [`Self::has_space_for`] to compute remaining room on a page —
     /// effectively the answer to "how many entries fit in one bucket page
@@ -212,47 +233,6 @@ impl HashBucket {
 
     fn remove(&mut self, pos: usize) {
         self.entries.remove(pos);
-    }
-}
-
-/// Body-only codec: the envelope (`kind`, `crc`) is handled by
-/// [`encode_index_page`] / [`decode_index_page`] in `storage`. This impl
-/// writes only the bucket-specific fields and the entry list.
-impl Encode for HashBucket {
-    fn encode<W: Write>(&self, w: &mut W) -> Result<(), CodecError> {
-        w.write_u32::<LittleEndian>(u32::from(self.bucket))?;
-        let entry_count =
-            u32::try_from(self.entries.len()).map_err(|_| CodecError::NumericDoesNotFit {
-                value: u64::try_from(self.entries.len()).unwrap_or(u64::MAX),
-                target: "u32",
-            })?;
-        w.write_u32::<LittleEndian>(entry_count)?;
-
-        self.overflow.encode(w)?;
-        for e in &self.entries {
-            e.encode(w)?;
-        }
-        Ok(())
-    }
-}
-
-/// Body-only codec: assumes the envelope header has already been
-/// stripped by [`decode_index_page`] before the reader is handed off here.
-impl Decode for HashBucket {
-    fn decode<R: Read>(r: &mut R) -> Result<Self, CodecError> {
-        let bucket = BucketNumber(r.read_u32::<LittleEndian>()?);
-        let n = r.read_u32::<LittleEndian>()?;
-        let overflow = Option::<PageNumber>::decode(r)?;
-
-        let entries = (0..n)
-            .map(|_| IndexEntry::decode(r))
-            .collect::<Result<Vec<_>, _>>()?;
-
-        Ok(Self {
-            bucket,
-            overflow,
-            entries,
-        })
     }
 }
 
@@ -454,14 +434,7 @@ impl HashIndex {
         pn: PageNumber,
         exclusive: bool,
     ) -> Result<(PageGuard<'_>, HashBucket), IndexError> {
-        let pid = self.pid(pn);
-        let req = if exclusive {
-            LockRequest::exclusive(txn, pid)
-        } else {
-            LockRequest::shared(txn, pid)
-        };
-
-        let g = self.store.fetch_page(req)?;
+        let g = self.read_page(txn, pn, exclusive, &self.store)?;
         let page = g.read();
         let (kind, payload) = decode_index_page(&page)?;
         if kind != PageKind::HashBucket {
@@ -780,6 +753,10 @@ impl Index for HashIndex {
     /// arity or per-position type doesn't match the index.
     fn key_types(&self) -> &[Type] {
         &self.key_types
+    }
+
+    fn file_id(&self) -> FileId {
+        self.file_id
     }
 }
 
