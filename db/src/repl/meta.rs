@@ -9,6 +9,7 @@ use owo_colors::OwoColorize;
 
 use crate::{
     database::Database,
+    primitives::ColumnId,
     repl::{state::ReplState, theme},
     tuple::TupleSchema,
 };
@@ -148,7 +149,7 @@ fn print_table_describe(db: &Database, name: &str) {
         }
     };
 
-    let pk_indices: &[usize] = info.primary_key.as_deref().unwrap_or(&[]);
+    let pk_indices: &[ColumnId] = info.primary_key.as_deref().unwrap_or(&[]);
 
     println!(
         "{} {}  {}",
@@ -167,7 +168,7 @@ fn print_table_describe(db: &Database, name: &str) {
     );
 
     for (i, field) in info.schema.fields().enumerate() {
-        let is_pk = pk_indices.contains(&i);
+        let is_pk = pk_indices.iter().any(|col_id| usize::from(*col_id) == i);
         t.add_row(vec![
             Cell::new(i.to_string()).fg(comfy_table::Color::DarkGrey),
             Cell::new(&field.name).fg(comfy_table::Color::Green),
@@ -190,14 +191,14 @@ fn print_table_describe(db: &Database, name: &str) {
 
 /// Resolves the primary key indices into a comma-joined column-name string.
 /// Returns `None` if the table has no primary key.
-fn primary_key_label(schema: &TupleSchema, pk: Option<&[usize]>) -> Option<String> {
+fn primary_key_label(schema: &TupleSchema, pk: Option<&[ColumnId]>) -> Option<String> {
     let indices = pk?;
     if indices.is_empty() {
         return None;
     }
     let names: Vec<String> = indices
         .iter()
-        .filter_map(|&i| schema.field(i).map(|f| f.name.clone()))
+        .filter_map(|&col_id| schema.field(usize::from(col_id)).map(|f| f.name.clone()))
         .collect();
     if names.is_empty() {
         None

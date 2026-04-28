@@ -77,7 +77,64 @@ fn print_result(r: &StatementResult) {
         StatementResult::TableDropped { name } => {
             theme::ok("DROP TABLE", &name.cyan().to_string());
         }
+        StatementResult::IndexCreated {
+            name,
+            table,
+            already_exists,
+        } => {
+            if *already_exists {
+                theme::notice("NOTICE", &format!("index {} already exists", name.cyan()));
+            } else {
+                theme::ok(
+                    "CREATE INDEX",
+                    &format!("{} on {}", name.cyan(), table.cyan()),
+                );
+            }
+        }
+        StatementResult::IndexDropped { name } => {
+            theme::ok("DROP INDEX", &name.cyan().to_string());
+        }
+        StatementResult::IndexesShown { scope, rows } => {
+            print_indexes(scope.as_deref(), rows);
+        }
     }
+}
+
+fn print_indexes(scope: Option<&str>, rows: &[crate::engine::ShownIndex]) {
+    if rows.is_empty() {
+        let label = scope.map_or_else(
+            || "(no indexes)".to_string(),
+            |t| format!("(no indexes on {t})"),
+        );
+        println!("{}", label.dimmed());
+        return;
+    }
+
+    let mut t = Table::new();
+    t.load_preset(UTF8_FULL)
+        .set_content_arrangement(ContentArrangement::Dynamic);
+    t.set_header(
+        ["name", "table", "columns", "kind"]
+            .iter()
+            .map(|h| Cell::new(h).fg(comfy_table::Color::Cyan)),
+    );
+
+    for r in rows {
+        let kind_label: &'static str = r.kind.into();
+        t.add_row([
+            Cell::new(&r.name).fg(comfy_table::Color::Green),
+            Cell::new(&r.table).fg(comfy_table::Color::Green),
+            Cell::new(r.columns.join(", ")),
+            Cell::new(kind_label).fg(comfy_table::Color::Magenta),
+        ]);
+    }
+
+    println!("{t}");
+    let suffix = scope.map_or_else(
+        || format!("({} indexes)", rows.len()),
+        |s| format!("({} indexes on {s})", rows.len()),
+    );
+    println!("{}", suffix.dimmed());
 }
 
 fn print_engine_error(e: &EngineError) {
