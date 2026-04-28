@@ -1708,6 +1708,7 @@ dependencies = [
  "ratatui",
  "rustyline",
  "siphasher",
+ "storemy-codec-derive",
  "tempfile",
  "thiserror",
  "tokio",
@@ -1716,6 +1717,15 @@ dependencies = [
  "tracing-opentelemetry",
  "tracing-subscriber",
  "tracing-tree",
+]
+
+[[package]]
+name = "storemy-codec-derive"
+version = "0.1.0"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn",
 ]
 
 [[package]]
