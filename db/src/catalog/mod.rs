@@ -1,9 +1,10 @@
-mod index;
+pub mod index;
 pub mod manager;
 pub mod systable;
 pub mod table;
 mod tuple;
 
+pub use index::{IndexInfo, LiveIndex};
 use thiserror::Error;
 
 #[derive(Debug, Error)]

@@ -5,14 +5,14 @@
 //! [`TableInfo`] consistent with the on-disk system tables (`pg_tables` and
 //! `pg_columns` equivalents) so that callers always see a coherent view.
 
-use std::sync::Arc;
+use std::{collections::HashMap, sync::Arc};
 
 use crate::{
     FileId,
     catalog::{
         CatalogError,
         manager::{Catalog, TableInfo},
-        systable::{ColumnRow, PrimaryKeyColumnRow, TableRow},
+        systable::{ColumnRow, IndexRow, PrimaryKeyColumnRow, TableRow},
     },
     heap::file::HeapFile,
     primitives::ColumnId,
@@ -214,17 +214,34 @@ impl Catalog {
         let cols =
             self.scan_system_table_where::<ColumnRow, _>(txn, |c| c.table_id == table.table_id)?;
 
-        let schema = TupleSchema::from(cols);
-        let pk = {
-            let mut pk_rows = self.scan_system_table_where::<PrimaryKeyColumnRow, _>(txn, |r| {
-                r.table_id == table.table_id
-            })?;
-            if pk_rows.is_empty() {
-                None
-            } else {
-                pk_rows.sort_by_key(|r| r.ordinal);
-                Some(pk_rows.into_iter().map(|r| r.column_id).collect())
-            }
+        let pk_rows = self.scan_system_table_where::<PrimaryKeyColumnRow, _>(txn, |r| {
+            r.table_id == table.table_id
+        })?;
+
+        self.install_table(table, cols, pk_rows)
+    }
+
+    /// Materializes a [`TableInfo`] from already-fetched system-table rows
+    /// and registers the backing heap.
+    ///
+    /// Shared by [`Self::load_table_from_disk`] (lazy, single-table) and
+    /// [`Self::replay_tables`] (eager, all-tables-at-startup). Pulling the
+    /// shared work out keeps both paths in sync — schema folding, primary-key
+    /// reconstruction, and heap registration always happen the same way.
+    fn install_table(
+        &self,
+        table: TableRow,
+        columns: Vec<ColumnRow>,
+        pk_rows: Vec<PrimaryKeyColumnRow>,
+    ) -> Result<TableInfo, CatalogError> {
+        let schema = TupleSchema::from(columns);
+
+        let pk = if pk_rows.is_empty() {
+            None
+        } else {
+            let mut sorted = pk_rows;
+            sorted.sort_by_key(|r| r.ordinal);
+            Some(sorted.into_iter().map(|r| r.column_id).collect())
         };
 
         let heap = self.open_existing_heap(
@@ -244,6 +261,46 @@ impl Catalog {
         ))
     }
 
+    /// Eagerly populates `user_tables` from already-scanned system rows.
+    ///
+    /// Called once during [`Catalog::initialize`] so that a freshly opened
+    /// catalog reflects every user table that was committed before shutdown.
+    /// Without this, `table_exists` would return false for tables that exist
+    /// on disk until something triggers a lazy `get_table_info` lookup —
+    /// a `CREATE TABLE foo` after restart would then silently allocate a
+    /// fresh `FileId` and write a duplicate row to `Tables`, corrupting the
+    /// catalog.
+    ///
+    /// Groups `columns` and `pk_columns` by `table_id` once up front so each
+    /// table reconstruction is O(arity) rather than scanning the full
+    /// row list per table.
+    pub(super) fn replay_tables(
+        &self,
+        tables: Vec<TableRow>,
+        columns: Vec<ColumnRow>,
+        pk_columns: Vec<PrimaryKeyColumnRow>,
+    ) -> Result<(), CatalogError> {
+        let mut cols_by_table: HashMap<FileId, Vec<ColumnRow>> = HashMap::new();
+        for c in columns {
+            cols_by_table.entry(c.table_id).or_default().push(c);
+        }
+
+        let mut pks_by_table: HashMap<FileId, Vec<PrimaryKeyColumnRow>> = HashMap::new();
+        for r in pk_columns {
+            pks_by_table.entry(r.table_id).or_default().push(r);
+        }
+
+        for table in tables {
+            let table_id = table.table_id;
+            let cols = cols_by_table.remove(&table_id).unwrap_or_default();
+            let pks = pks_by_table.remove(&table_id).unwrap_or_default();
+            let info = self.install_table(table, cols, pks)?;
+            self.user_tables.write().insert(info.name.clone(), info);
+        }
+
+        Ok(())
+    }
+
     /// Removes a table from the catalog, system tables, in-memory cache, and disk.
     ///
     /// Looks up the table by `name`, deletes its rows from the `Tables` and
@@ -259,6 +316,15 @@ impl Catalog {
         let TableInfo {
             file_id, file_path, ..
         } = self.get_table_info(txn, name)?;
+
+        let dependent_indexes = self
+            .scan_system_table_where::<IndexRow, _>(txn, |r| r.table_id == file_id)?
+            .into_iter()
+            .map(|r| r.index_name)
+            .collect::<std::collections::HashSet<_>>();
+        for idx_name in dependent_indexes {
+            self.drop_index(txn, &idx_name)?;
+        }
 
         self.delete_systable_rows::<TableRow, _>(txn, |r| r.table_id == file_id)?;
         self.delete_systable_rows::<ColumnRow, _>(txn, |r| r.table_id == file_id)?;
