@@ -161,43 +161,21 @@ pub enum IndexError {
 
 pub enum AnyIndex {
     Hash(hash::HashIndex),
-    // Btree(btree::tree::BTreeIndex),  // wire up when the B-tree access method lands
+    Btree(btree::BTreeIndex),
 }
 
 impl AnyIndex {
-    /// Builds a fresh access method of the requested `kind`.
+    /// Starts building a hash index access method.
     ///
-    /// This is the catalog's single entry point for materializing an
-    /// index — it keeps callers from having to `match` on `IndexKind` and
-    /// reach into a specific implementation (`HashIndex::new`, etc.). When a
-    /// new variant lands, only this factory and the [`Index`] forwarders
-    /// need to grow an arm.
-    ///
-    /// `existing_pages` is the page count to assume for the file:
-    /// `num_buckets` for a freshly created file, or the actual file length
-    /// for a re-open.
-    ///
-    /// # Errors
-    ///
-    /// - [`IndexError::UnsupportedKind`] if `kind` has no implementation yet.
-    pub fn create(
-        kind: IndexKind,
-        file_id: FileId,
-        key_types: Vec<Type>,
-        num_buckets: u32,
-        store: Arc<crate::buffer_pool::page_store::PageStore>,
-        existing_pages: u32,
-    ) -> Result<Self, IndexError> {
-        match kind {
-            IndexKind::Hash => Ok(AnyIndex::Hash(hash::HashIndex::new(
-                file_id,
-                key_types,
-                num_buckets,
-                store,
-                existing_pages,
-            ))),
-            IndexKind::Btree => Err(IndexError::UnsupportedKind(kind)),
-        }
+    /// Using a typed builder keeps the construction call sites readable and prevents accidentally
+    /// passing hash-only parameters (like `num_buckets`) for B+Tree indexes.
+    pub fn hash() -> HashIndexBuilder {
+        HashIndexBuilder::default()
+    }
+
+    /// Starts building a B+Tree index access method.
+    pub fn btree() -> BtreeIndexBuilder {
+        BtreeIndexBuilder::default()
     }
 
     /// One-time initialization for a freshly created index file.
@@ -209,6 +187,10 @@ impl AnyIndex {
     pub fn init(&self, txn: TransactionId) -> Result<(), IndexError> {
         match self {
             AnyIndex::Hash(idx) => idx.init(txn),
+            AnyIndex::Btree(_idx) => {
+                let _ = txn;
+                Ok(())
+            }
         }
     }
 
@@ -217,6 +199,7 @@ impl AnyIndex {
     pub fn kind(&self) -> IndexKind {
         match self {
             AnyIndex::Hash(_) => IndexKind::Hash,
+            AnyIndex::Btree(_) => IndexKind::Btree,
         }
     }
 
@@ -225,6 +208,7 @@ impl AnyIndex {
     pub fn key_types(&self) -> &[Type] {
         match self {
             AnyIndex::Hash(idx) => idx.key_types(),
+            AnyIndex::Btree(idx) => idx.key_types(),
         }
     }
 
@@ -237,6 +221,7 @@ impl AnyIndex {
     ) -> Result<(), IndexError> {
         match self {
             AnyIndex::Hash(idx) => idx.insert(txn, key, rid),
+            AnyIndex::Btree(idx) => idx.insert(txn, key, rid),
         }
     }
 
@@ -249,6 +234,7 @@ impl AnyIndex {
     ) -> Result<(), IndexError> {
         match self {
             AnyIndex::Hash(idx) => idx.delete(txn, key, rid),
+            AnyIndex::Btree(idx) => idx.delete(txn, key, rid),
         }
     }
 
@@ -260,6 +246,7 @@ impl AnyIndex {
     ) -> Result<Vec<RecordId>, IndexError> {
         match self {
             AnyIndex::Hash(idx) => idx.search(txn, key),
+            AnyIndex::Btree(idx) => idx.search(txn, key),
         }
     }
 
@@ -273,7 +260,129 @@ impl AnyIndex {
     ) -> Result<Vec<RecordId>, IndexError> {
         match self {
             AnyIndex::Hash(idx) => idx.range_search(txn, start, end),
+            AnyIndex::Btree(idx) => idx.range_search(txn, start, end),
         }
+    }
+}
+
+#[derive(Default)]
+#[must_use]
+pub struct HashIndexBuilder {
+    file_id: Option<FileId>,
+    key_types: Option<Vec<Type>>,
+    num_buckets: Option<u32>,
+    store: Option<Arc<crate::buffer_pool::page_store::PageStore>>,
+    existing_pages: Option<u32>,
+}
+
+/// Builder helper: unwrap a required `Option` field or return a uniform error.
+///
+/// Expands to `self.<field>.ok_or(IndexError::CorruptIndex("missing <field>"))?`, where
+/// `"<field>"` is derived via `stringify!` so the message stays in sync with the actual field
+/// name.
+macro_rules! req_field {
+    ($s:ident, $field:ident) => {
+        $s.$field.ok_or(IndexError::CorruptIndex(concat!(
+            "missing ",
+            stringify!($field)
+        )))?
+    };
+}
+
+impl HashIndexBuilder {
+    pub fn file_id(mut self, file_id: FileId) -> Self {
+        self.file_id = Some(file_id);
+        self
+    }
+
+    pub fn key_types(mut self, key_types: Vec<Type>) -> Self {
+        self.key_types = Some(key_types);
+        self
+    }
+
+    pub fn num_buckets(mut self, num_buckets: u32) -> Self {
+        self.num_buckets = Some(num_buckets);
+        self
+    }
+
+    pub fn store(mut self, store: Arc<crate::buffer_pool::page_store::PageStore>) -> Self {
+        self.store = Some(store);
+        self
+    }
+
+    pub fn existing_pages(mut self, existing_pages: u32) -> Self {
+        self.existing_pages = Some(existing_pages);
+        self
+    }
+
+    pub fn build(self) -> Result<AnyIndex, IndexError> {
+        let file_id = req_field!(self, file_id);
+        let key_types = req_field!(self, key_types);
+        let num_buckets = req_field!(self, num_buckets);
+        let store = req_field!(self, store);
+        let existing_pages = req_field!(self, existing_pages);
+
+        Ok(AnyIndex::Hash(hash::HashIndex::new(
+            file_id,
+            key_types,
+            num_buckets,
+            store,
+            existing_pages,
+        )))
+    }
+}
+
+#[derive(Default)]
+#[must_use]
+pub struct BtreeIndexBuilder {
+    file_id: Option<FileId>,
+    key_types: Option<Vec<Type>>,
+    root: Option<PageNumber>,
+    store: Option<Arc<crate::buffer_pool::page_store::PageStore>>,
+    existing_pages: Option<u32>,
+}
+
+impl BtreeIndexBuilder {
+    pub fn file_id(mut self, file_id: FileId) -> Self {
+        self.file_id = Some(file_id);
+        self
+    }
+
+    pub fn key_types(mut self, key_types: Vec<Type>) -> Self {
+        self.key_types = Some(key_types);
+        self
+    }
+
+    /// Overrides the starting root page. Defaults to `None`.
+    pub fn root(mut self, root: Option<PageNumber>) -> Self {
+        self.root = root;
+        self
+    }
+
+    pub fn store(mut self, store: Arc<crate::buffer_pool::page_store::PageStore>) -> Self {
+        self.store = Some(store);
+        self
+    }
+
+    pub fn existing_pages(mut self, existing_pages: u32) -> Self {
+        self.existing_pages = Some(existing_pages);
+        self
+    }
+
+    pub fn build(self) -> Result<AnyIndex, IndexError> {
+        let file_id = req_field!(self, file_id);
+        let key_types = req_field!(self, key_types);
+        let root = self.root;
+        let store = req_field!(self, store);
+        let existing_pages = req_field!(self, existing_pages);
+
+        Ok(AnyIndex::Btree(btree::BTreeIndex::new(
+            file_id,
+            key_types,
+            root,
+            store,
+            existing_pages,
+        )))
     }
 }
 
@@ -282,6 +391,12 @@ impl AnyIndex {
 impl From<hash::HashIndex> for AnyIndex {
     fn from(idx: hash::HashIndex) -> Self {
         AnyIndex::Hash(idx)
+    }
+}
+
+impl From<btree::BTreeIndex> for AnyIndex {
+    fn from(idx: btree::BTreeIndex) -> Self {
+        AnyIndex::Btree(idx)
     }
 }
 
@@ -309,7 +424,6 @@ mod any_index_tests {
     use crate::{
         FileId, TransactionId, Value,
         buffer_pool::page_store::PageStore,
-        index::hash::HashIndex,
         primitives::{PageNumber, RecordId, SlotId},
         storage::PAGE_SIZE,
         wal::writer::Wal,
@@ -340,21 +454,22 @@ mod any_index_tests {
         drop(f);
         store.register_file(file_id, &path).unwrap();
 
-        let hash = HashIndex::new(
-            file_id,
-            key_types,
-            num_buckets,
-            Arc::clone(&store),
-            num_buckets,
-        );
+        let any = AnyIndex::hash()
+            .file_id(file_id)
+            .key_types(key_types)
+            .num_buckets(num_buckets)
+            .store(Arc::clone(&store))
+            .existing_pages(num_buckets)
+            .build()
+            .unwrap();
 
         let init_txn = TransactionId::new(0);
         wal.log_begin(init_txn).unwrap();
-        hash.init(init_txn).unwrap();
+        any.init(init_txn).unwrap();
         store.release_all(init_txn);
 
         Fixture {
-            any: hash.into(),
+            any,
             wal,
             _dir: dir,
         }
