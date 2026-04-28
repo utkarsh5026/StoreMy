@@ -124,6 +124,12 @@ impl From<u64> for FileId {
     }
 }
 
+impl From<FileId> for u64 {
+    fn from(id: FileId) -> Self {
+        id.0
+    }
+}
+
 impl From<&Path> for FileId {
     /// Derives a stable-ish id from a path using the standard library hasher.
     ///
@@ -146,6 +152,45 @@ impl Encode for FileId {
 impl Decode for FileId {
     fn decode<R: Read>(reader: &mut R) -> Result<Self, CodecError> {
         Ok(Self(reader.read_u64::<LittleEndian>()?))
+    }
+}
+
+/// Catalog-assigned identifier for a secondary index.
+///
+/// Distinct from [`FileId`] (which identifies the index's *backing file*).
+/// `IndexId` is the catalog's primary key for an index — stable across
+/// renames, used to group multi-column index rows in `SystemTable::Indexes`,
+/// and the on-disk encoding is signed `i64` (matching the system-table
+/// column type).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Default)]
+pub struct IndexId(
+    /// Opaque numeric index key.
+    pub i64,
+);
+
+impl IndexId {
+    /// Wraps a raw index id.
+    #[inline]
+    pub const fn new(id: i64) -> Self {
+        Self(id)
+    }
+}
+
+impl fmt::Display for IndexId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "Index({})", self.0)
+    }
+}
+
+impl From<i64> for IndexId {
+    fn from(id: i64) -> Self {
+        Self(id)
+    }
+}
+
+impl From<IndexId> for i64 {
+    fn from(id: IndexId) -> Self {
+        id.0
     }
 }
 
