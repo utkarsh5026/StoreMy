@@ -264,20 +264,23 @@ impl TupleSchema {
     /// calls when turning a SQL identifier like `users.name` into the column
     /// reference an executor can use.
     ///
-    /// Returns `(index, &Field)`, or `None` if no column with that name
+    /// Returns `(column_id, &Field)`, or `None` if no column with that name
     /// exists.
     ///
     /// # SQL examples
     ///
     /// ```sql
     /// -- SELECT name FROM users;
-    /// --   schema.field_by_name("name")  → Some((1, &Field { name: "name", .. }))
+    /// --   schema.field_by_name("name")  → Some((Col(1), &Field { name: "name", .. }))
     ///
     /// -- SELECT missing FROM users;
     /// --   schema.field_by_name("missing") → None        -- binder reports an unresolved column
     /// ```
-    pub fn field_by_name(&self, name: &str) -> Option<(usize, &Field)> {
-        self.field_indices.get(name).map(|&i| (i, &self.fields[i]))
+    pub fn field_by_name(&self, name: &str) -> Option<(ColumnId, &Field)> {
+        self.field_indices.get(name).and_then(|&i| {
+            let col_id = ColumnId::try_from(i).ok()?;
+            Some((col_id, &self.fields[i]))
+        })
     }
 
     /// Iterates columns in declaration order — the order `SELECT *` exposes
@@ -464,7 +467,7 @@ impl TupleSchema {
     }
 
     /// Resolves a [`ColumnId`] (a typed column reference, as carried by
-    /// [`crate::execution::aggregate::AggregateSpec`] and friends) to its
+    /// [`crate::execution::aggregate::AggregateExpr`] and friends) to its
     /// [`Field`].
     ///
     /// Equivalent to [`TupleSchema::field_or_err`] with `usize::from(col)`,
@@ -1020,7 +1023,7 @@ mod tests {
         let schema = schema_id_name_age();
 
         let (idx, field) = schema.field_by_name("name").unwrap();
-        assert_eq!(idx, 1);
+        assert_eq!(usize::from(idx), 1);
         assert_eq!(field.field_type, Type::String);
 
         assert!(schema.field_by_name("missing").is_none());
