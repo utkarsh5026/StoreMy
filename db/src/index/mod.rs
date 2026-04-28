@@ -15,10 +15,12 @@
 //! layouts and algorithms. They depend on this module; nothing in this
 //! module depends on them.
 
+use std::sync::Arc;
+
 use thiserror::Error;
 
 use crate::{
-    TransactionId, Type, buffer_pool::page_store::PageStoreError, codec::CodecError,
+    FileId, TransactionId, Type, buffer_pool::page_store::PageStoreError, codec::CodecError,
     primitives::RecordId, storage::StorageError,
 };
 
@@ -110,6 +112,9 @@ pub enum IndexError {
     #[error("an index named {0:?} is already registered")]
     DuplicateName(String),
 
+    #[error("index kind {0:?} is not yet implemented")]
+    UnsupportedKind(IndexKind),
+
     #[error("entry not found for delete")]
     NotFound,
 
@@ -132,6 +137,53 @@ pub enum AnyIndex {
 }
 
 impl AnyIndex {
+    /// Builds a fresh access method of the requested `kind`.
+    ///
+    /// This is the catalog's single entry point for materializing an
+    /// index — it keeps callers from having to `match` on `IndexKind` and
+    /// reach into a specific implementation (`HashIndex::new`, etc.). When a
+    /// new variant lands, only this factory and the [`Index`] forwarders
+    /// need to grow an arm.
+    ///
+    /// `existing_pages` is the page count to assume for the file:
+    /// `num_buckets` for a freshly created file, or the actual file length
+    /// for a re-open.
+    ///
+    /// # Errors
+    ///
+    /// - [`IndexError::UnsupportedKind`] if `kind` has no implementation yet.
+    pub fn create(
+        kind: IndexKind,
+        file_id: FileId,
+        key_types: Vec<Type>,
+        num_buckets: u32,
+        store: Arc<crate::buffer_pool::page_store::PageStore>,
+        existing_pages: u32,
+    ) -> Result<Self, IndexError> {
+        match kind {
+            IndexKind::Hash => Ok(AnyIndex::Hash(hash::HashIndex::new(
+                file_id,
+                key_types,
+                num_buckets,
+                store,
+                existing_pages,
+            ))),
+            IndexKind::Btree => Err(IndexError::UnsupportedKind(kind)),
+        }
+    }
+
+    /// One-time initialization for a freshly created index file.
+    ///
+    /// Stamps any access-method-specific bootstrap state onto disk
+    /// (e.g. `HashIndex` writes empty bucket headers). Call exactly once,
+    /// inside the same transaction that allocated the file. Calling it on
+    /// a re-opened index would clobber existing data.
+    pub fn init(&self, txn: TransactionId) -> Result<(), IndexError> {
+        match self {
+            AnyIndex::Hash(idx) => idx.init(txn),
+        }
+    }
+
     /// The catalog tag for this index — i.e. what gets persisted on disk so
     /// the next database open knows which family to reconstruct.
     pub fn kind(&self) -> IndexKind {
