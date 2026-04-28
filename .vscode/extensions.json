@@ -1,11 +1,18 @@
 {
-    "recommendations": [
-        "rust-lang.rust-analyzer",
-        "vadimcn.vscode-lldb",
-        "tamasfe.even-better-toml",
-        "serayuzgur.crates",
-        "usernamehw.errorlens",
-        "streetsidesoftware.code-spell-checker",
-        "fill-labs.dependi"
-    ]
+  "recommendations": [
+    "rust-lang.rust-analyzer",
+    "vadimcn.vscode-lldb",
+    "tamasfe.even-better-toml",
+    "serayuzgur.crates",
+    "usernamehw.errorlens",
+    "streetsidesoftware.code-spell-checker",
+    "fill-labs.dependi",
+    "redhat.vscode-yaml",
+    "davidanson.vscode-markdownlint",
+    "eamodio.gitlens"
+  ],
+  "unwantedRecommendations": [
+    "rust-lang.rust",
+    "statiolake.vscode-rustfmt"
+  ]
 }

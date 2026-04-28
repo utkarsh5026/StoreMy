@@ -2,24 +2,110 @@ name: CI
 
 on:
   push:
-    branches: [ main ]
+    branches: [main]
   pull_request:
-    branches: [ main ]
+    branches: [main]
+
+# Cancel in-flight runs on the same PR when a new push arrives.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: -C link-arg=-fuse-ld=mold
+  NIGHTLY_FMT: nightly-2026-04-01
 
 jobs:
-  test:
+  # ───────────────────────────────── Go (legacy) ────────────────────────────
+  go:
     runs-on: ubuntu-latest
-    
     steps:
-    - uses: actions/checkout@v4
-    
-    - name: Set up Go
-      uses: actions/setup-go@v4
-      with:
-        go-version: '1.23'
-    
-    - name: Build
-      run: go build -v ./...
-    
-    - name: Test
-      run: go test -v ./...
+      - uses: actions/checkout@v4
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.23"
+      - name: Build
+        run: go build -v ./...
+      - name: Test
+        run: go test -v ./...
+
+  # ───────────────────────────────── Rust: fmt ──────────────────────────────
+  # Fast, no compilation — runs on its own without cargo cache to stay cheap.
+  rust-fmt:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Rust nightly (rustfmt)
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: nightly-2026-04-01
+          components: rustfmt
+      - name: Format
+        run: cargo +nightly-2026-04-01 fmt --all -- --check
+
+  # ───────────────────── Rust: dep audits (deny, machete) ───────────────────
+  # Runs against Cargo.lock only — doesn't need a full build.
+  rust-deps:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@v1
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: "."
+          shared-key: "storemy-deps"
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - name: Install cargo-deny & cargo-machete
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-deny,cargo-machete
+      - name: cargo-deny
+        run: cargo deny check
+      - name: cargo-machete
+        run: cargo machete
+
+  # ───────────────────────────── Rust: clippy ───────────────────────────────
+  rust-clippy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: rui314/setup-mold@v1
+      - uses: dtolnay/rust-toolchain@v1
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: "."
+          shared-key: "storemy-build"
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+  # ───────────────────────────── Rust: test ─────────────────────────────────
+  rust-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: rui314/setup-mold@v1
+      - uses: dtolnay/rust-toolchain@v1
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: "."
+          shared-key: "storemy-build"    # shares build artifacts with clippy
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - name: Install cargo-nextest
+        uses: taiki-e/install-action@nextest
+      - name: Tests
+        run: cargo nextest run --workspace --profile ci
+      - name: Build benches (compile-only smoke)
+        run: cargo bench --workspace --no-run
+
+  # ───────────────────────────── Rust: typos ────────────────────────────────
+  # Separate lightweight job — pure IO, no compilation.
+  rust-typos:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: crate-ci/typos@master

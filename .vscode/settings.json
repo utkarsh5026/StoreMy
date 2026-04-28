@@ -1,32 +1,49 @@
 {
   // ── Spell checker ────────────────────────────────────────────────────────
   "cSpell.words": [
+    "accum",
+    "accums",
     "addgroup",
     "adduser",
+    "anyhow",
     "Bitmask",
     "bpid",
     "btreeindex",
     "bubbletea",
+    "byteorder",
     "catalogdb",
     "catalogio",
     "catalogmanager",
     "catalogreader",
     "charmbracelet",
     "checkpointing",
+    "checksumming",
     "CKPT",
+    "clippy",
     "closedb",
+    "codegen",
     "concurrentdb",
+    "Condvar",
     "costmodel",
+    "cref",
+    "criterion",
+    "crossbeam",
+    "crossterm",
+    "Deque",
     "Equi",
     "Equijoin",
+    "evictable",
+    "façade",
     "Fanout",
     "Freqs",
     "functools",
     "golangci",
     "GOPATH",
+    "hashbrown",
     "hashindex",
     "heapage",
     "heapreader",
+    "impls",
     "indexmanager",
     "indexonlyscan",
     "indexops",
@@ -37,49 +54,54 @@
     "installsuffix",
     "lerr",
     "lipgloss",
+    "Lparen",
     "lsns",
     "mcvs",
     "mitranim",
     "MVCC",
     "mydb",
+    "nopk",
     "pageid",
+    "parkng",
+    "peekable",
     "permdb",
     "pgdn",
     "pgdown",
     "pgup",
     "pids",
+    "pkey",
     "preds",
+    "proptest",
     "Ptrs",
     "pushdown",
+    "RAII",
+    "ratatui",
     "reaccess",
     "rerr",
+    "roundtrips",
+    "Rparen",
+    "RUSTSEC",
     "selectivities",
     "seqscan",
+    "serde",
     "setops",
+    "siphasher",
     "statsdb",
     "storemy",
+    "systable",
     "systemtable",
     "tablecache",
+    "tempfile",
     "testcache",
     "testdb",
     "testutil",
+    "thiserror",
     "tids",
     "tndata",
+    "tracing",
     "tsch",
     "Txns",
-    "unflushed",
-    "byteorder",
-    "hashbrown",
-    "parkng",
-    "thiserror",
-    "anyhow",
-    "crossbeam",
-    "ratatui",
-    "crossterm",
-    "tempfile",
-    "proptest",
-    "criterion",
-    "tracing"
+    "unflushed"
   ],
 
   // ── Rust Analyzer ────────────────────────────────────────────────────────
@@ -126,9 +148,26 @@
   // Proc macro support (needed for thiserror, etc.)
   "rust-analyzer.procMacro.enable": true,
 
+  // Use nightly rustfmt for format-on-save — rustfmt.toml uses unstable options
+  // (imports_granularity, group_imports, wrap_comments, ...). Stable rustfmt
+  // silently ignores them, so we pin the same nightly as Makefile/CI.
+  "rust-analyzer.rustfmt.overrideCommand": [
+    "rustup",
+    "run",
+    "nightly-2026-04-01",
+    "rustfmt",
+    "--edition=2024"
+  ],
+
   // Cargo features
   "rust-analyzer.cargo.allFeatures": true,
   "rust-analyzer.cargo.buildScripts.enable": true,
+
+  // Separate target dir for rust-analyzer. Without this, RA and `cargo build`
+  // from the terminal fight over target/ — each invalidates the other's cache,
+  // and every save triggers a full recompile. Combined with the opt-level=2
+  // deps profile in .cargo/config.toml, sharing target/ would be painful.
+  "rust-analyzer.cargo.targetDir": true,
 
   // Show errors from all crates in workspace
   "rust-analyzer.diagnostics.enable": true,
@@ -137,6 +176,10 @@
   // Semantic highlighting
   "rust-analyzer.semanticHighlighting.strings.enable": true,
   "rust-analyzer.highlighting.strings": true,
+  "editor.semanticHighlighting.enabled": true,
+  "files.associations": {
+    "*.rs": "rust"
+  },
 
   // ── Editor ───────────────────────────────────────────────────────────────
   "[rust]": {
@@ -152,6 +195,46 @@
   "[toml]": {
     "editor.defaultFormatter": "tamasfe.even-better-toml",
     "editor.formatOnSave": true
+  },
+
+  // ── Python / storemy-viz ────────────────────────────────────────────────
+  "[python]": {
+    "editor.defaultFormatter": "charliermarsh.ruff",
+    "editor.formatOnSave": true,
+    "editor.codeActionsOnSave": {
+      "source.organizeImports": "explicit",
+      "source.fixAll": "explicit",
+      "source.fixAll.ruff": "explicit"
+    },
+    "editor.rulers": [100]
+  },
+
+  // Prefer ruff for linting/formatting in Python
+  "ruff.enable": true,
+  "ruff.organizeImports": true,
+
+  // Python language server / analysis
+  "python.analysis.typeCheckingMode": "basic",
+  "python.analysis.autoImportCompletions": true,
+  "python.analysis.inlayHints.functionReturnTypes": true,
+  "python.analysis.inlayHints.variableTypes": true,
+
+  // Testing (works well for tools/viz)
+  "python.testing.pytestEnabled": true,
+  "python.testing.unittestEnabled": false,
+  "python.testing.pytestArgs": ["-q"],
+
+  // Keep explorer/search clean
+  "files.exclude": {
+    "**/__pycache__": true,
+    "**/*.pyc": true,
+    "**/.pytest_cache": true,
+    "**/.ruff_cache": true,
+    "**/.venv": true,
+    "**/.venv*": true,
+    "**/dist": true,
+    "**/build": true,
+    "**/*.egg-info": true
   },
 
   // Error Lens — show errors/warnings inline at end of line
