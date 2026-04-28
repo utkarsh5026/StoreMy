@@ -18,6 +18,12 @@
 
 use std::io::{Read, Write};
 
+use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
+/// Re-export the derive macros so callers `use storemy::codec::{Encode, Decode};`
+/// and pick up both the trait and its derive in one go. The derives generate
+/// code that names `::storemy::codec::Encode` / `::storemy::codec::Decode`,
+/// so this re-export site is also where the path the macros emit resolves.
+pub use storemy_codec_derive::{Decode, Encode};
 use thiserror::Error;
 
 /// Errors that can occur during encoding or decoding.
@@ -146,5 +152,32 @@ pub trait Decode: Sized {
     fn from_bytes(bytes: &[u8]) -> Result<Self, CodecError> {
         let mut cursor = std::io::Cursor::new(bytes);
         Self::decode(&mut cursor)
+    }
+}
+
+/// Length-prefixed list codec: `u32` count followed by each element in order.
+///
+/// One blanket impl serves every `Vec<T>` whose element type implements [`Encode`]:
+/// `Vec<IndexEntry>`, `Vec<Type>`, `Vec<(CompositeKey, PageNumber)>`, etc. all use this.
+/// Allowed by Rust's orphan rule because `Encode` is local to this crate even though
+/// `Vec<T>` is not.
+impl<T: Encode> Encode for Vec<T> {
+    fn encode<W: Write>(&self, writer: &mut W) -> Result<(), CodecError> {
+        let n = u32::try_from(self.len()).map_err(|_| CodecError::NumericDoesNotFit {
+            value: u64::try_from(self.len()).unwrap_or(u64::MAX),
+            target: "u32",
+        })?;
+        writer.write_u32::<LittleEndian>(n)?;
+        for item in self {
+            item.encode(writer)?;
+        }
+        Ok(())
+    }
+}
+
+impl<T: Decode> Decode for Vec<T> {
+    fn decode<R: Read>(reader: &mut R) -> Result<Self, CodecError> {
+        let n = reader.read_u32::<LittleEndian>()?;
+        (0..n).map(|_| T::decode(reader)).collect()
     }
 }
