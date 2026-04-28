@@ -12,10 +12,14 @@
 //! and are *not* envelope pages — they live in their own format.
 
 use crate::{
-    TransactionId, Type,
+    FileId, PageNumber, TransactionId, Type,
+    buffer_pool::{
+        LockRequest,
+        page_store::{PageGuard, PageStore},
+    },
     codec::CodecError,
     index::{CompositeKey, IndexError, IndexKind},
-    primitives::RecordId,
+    primitives::{PageId, RecordId},
     storage::{PAGE_SIZE, StorageError},
 };
 
@@ -149,6 +153,9 @@ pub trait Index: Send + Sync {
     /// Returns the per-column declared types of the index, in column order.
     fn key_types(&self) -> &[Type];
 
+    /// Returns the file ID of the index.
+    fn file_id(&self) -> FileId;
+
     /// Checks whether a composite key matches this index's declared key layout.
     ///
     /// The check enforces both arity (same number of key components) and
@@ -187,6 +194,39 @@ pub trait Index: Send + Sync {
             }
         }
         Ok(())
+    }
+
+    /// Fetches and pins an index page from the buffer pool.
+    ///
+    /// This is a small convenience shared by index implementations: it builds a [`PageId`] from
+    /// `self.file_id()` and the provided [`PageNumber`], acquires either a shared or exclusive
+    /// lock for `txn`, and returns the resulting pinned [`PageGuard`].
+    ///
+    /// The returned guard borrows `store` for `'a`, so the page remains pinned for at most as long
+    /// as the caller keeps the guard alive.
+    ///
+    /// # Errors
+    ///
+    /// Propagates [`IndexError::PageStore`] if locking or fetching the page fails.
+    fn read_page<'a>(
+        &self,
+        txn: TransactionId,
+        p: PageNumber,
+        exclusive: bool,
+        store: &'a PageStore,
+    ) -> Result<PageGuard<'a>, IndexError> {
+        let page_id = PageId {
+            file_id: self.file_id(),
+            page_no: p,
+        };
+
+        let req = if exclusive {
+            LockRequest::exclusive(txn, page_id)
+        } else {
+            LockRequest::shared(txn, page_id)
+        };
+        let guard = store.fetch_page(req)?;
+        Ok(guard)
     }
 }
 
