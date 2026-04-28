@@ -1,28 +1,37 @@
-//! Binding for schema-changing statements (`CREATE TABLE`, `DROP TABLE`).
+//! Binding for schema-changing SQL (`CREATE` / `DROP` / `SHOW` on tables and indexes).
 //!
-//! This module sits at the "SQL surface → bound plan" seam for DDL. It resolves
-//! object names against the catalog, performs static checks that must succeed
-//! before the executor mutates catalog state, and produces compact bound shapes
-//! that DDL execution can carry forward without repeating lookups.
+//! Sits at the SQL → bound-plan seam for DDL: resolve object names against the catalog inside a
+//! [`Transaction`](crate::transaction::Transaction), enforce static rules (duplicate columns,
+//! unknown PK columns, index ownership), and hand the executor compact
+//! [`Bound*`](crate::binder::Bound) values so it does not repeat lookups.
 //!
 //! ## Shape
 //!
-//! - [`BoundCreateTable`] — bound outcome of `CREATE TABLE` / `CREATE TABLE IF NOT EXISTS`.
-//! - [`BoundDrop`] — bound outcome of `DROP TABLE` / `DROP TABLE IF EXISTS`.
+//! - [`BoundDrop`] — `DROP TABLE` / `DROP TABLE IF EXISTS`
+//! - [`BoundCreateTable`] — `CREATE TABLE` / `CREATE TABLE IF NOT EXISTS`
+//! - [`BoundCreateIndex`] — `CREATE INDEX` / `CREATE INDEX IF NOT EXISTS`
+//! - [`BoundDropIndex`] — `DROP INDEX` / `DROP INDEX IF EXISTS`
+//! - [`BoundShowIndexes`] — `SHOW INDEXES` / `SHOW INDEXES FROM <table>`
 //!
 //! ## How it works
 //!
-//! Binding is a single-phase catalog + AST check:
+//! Single-phase binding (no iterator phases like a physical operator):
 //!
-//! - `DROP TABLE` performs catalog resolution and either returns a concrete `FileId` to drop or a
-//!   no-op under `IF EXISTS`.
-//! - `CREATE TABLE` checks name collisions, validates the column list, builds a [`TupleSchema`] in
-//!   declaration order, and resolves the (single-column) primary key.
+//! - **Tables** — validate the column list, build a [`TupleSchema`] in declaration order, resolve
+//!   primary key column names to [`ColumnId`](crate::primitives::ColumnId)s (or surface
+//!   `AlreadyExists` under `IF NOT EXISTS`).
+//! - **Indexes** — resolve the base table and each indexed column name to schema positions; reject
+//!   duplicate names in the index column list; check index name collisions against the catalog.
+//! - **Drop index** — resolve the index by name, then confirm it belongs to the named table (or
+//!   treat as no-op / error per `IF EXISTS`).
+//! - **Show indexes** — either list all indexes, or resolve `FROM <table>` to a
+//!   [`FileId`](crate::FileId) for filtered listing.
 //!
 //! ## NULL semantics
 //!
-//! DDL binding does not evaluate expressions; `NULL` behavior here is limited to
-//! column nullability as recorded in the produced [`TupleSchema`].
+//! Does not evaluate scalar expressions. `NULL` only appears indirectly: each
+//! [`ColumnDef`](crate::parser::statements::ColumnDef) contributes nullability to the built
+//! [`TupleSchema`]; binding does not insert default values or run `CHECK` constraints.
 use std::collections::HashSet;
 
 use crate::{
@@ -35,116 +44,61 @@ use crate::{
     index::IndexKind,
     parser::statements::{
         ColumnDef, CreateIndexStatement, CreateTableStatement, DropIndexStatement, DropStatement,
+        ShowIndexesStatement,
     },
+    primitives::ColumnId,
     transaction::Transaction,
     tuple::TupleSchema,
 };
 
-/// Outcome of binding a `DROP TABLE` statement.
+/// Bound outcome of `DROP TABLE` / `DROP TABLE IF EXISTS`.
 ///
-/// Think of this as the DDL analogue of a planned operator: it answers “what
-/// does `DROP TABLE …` mean in terms of catalog objects?” and encodes whether
-/// the executor should do work.
+/// Either resolves the table to a concrete [`FileId`] for the executor to remove, or records a
+/// successful no-op when `IF EXISTS` is set and the name is unknown.
 ///
-/// ## SQL examples
+/// # SQL examples
 ///
 /// ```sql
-/// -- 1. Plain DROP TABLE resolves to a concrete heap file
+/// -- DROP TABLE users;
 /// --
-/// --     DROP TABLE users;
+/// --   BoundDrop::Drop { name: "users", file_id: <heap FileId> }
+/// ```
+///
+/// ```sql
+/// -- DROP TABLE IF EXISTS ghost;
 /// --
-/// --     BoundDrop::Drop { name: "users".into(), file_id: <resolved> }
-/// --
-/// -- 2. IF EXISTS turns a missing table into a successful no-op
-/// --
-/// --     DROP TABLE IF EXISTS ghost;
-/// --
-/// --     BoundDrop::NoOp { name: "ghost".into() }
+/// --   When `ghost` is missing:
+/// --   BoundDrop::NoOp { name: "ghost" }
 /// ```
 pub enum BoundDrop {
     Drop { name: String, file_id: FileId },
     NoOp { name: String },
 }
 
-/// Outcome of binding a `CREATE TABLE` statement.
-///
-/// Binding either produces a fully-resolved "create this new table" shape
-/// (including the physical row layout) or a successful no-op under
-/// `IF NOT EXISTS` that still reports which existing object matched.
-///
-/// ## SQL examples
-///
-/// The examples below assume a simple type system where `BIGINT` lowers to
-/// `Type::Int64` and `TEXT` lowers to `Type::String`.
-///
-/// ```sql
-/// -- 1. A new table binds to its physical row schema (declaration order)
-/// --
-/// --     CREATE TABLE users(id BIGINT PRIMARY KEY, name TEXT, age BIGINT);
-/// --
-/// --     BoundCreateTable::New {
-/// --         name: "users".into(),
-/// --         schema: TupleSchema::new(vec![
-/// --             Field::new("id",   Type::Int64).not_null(),
-/// --             Field::new("name", Type::String),
-/// --             Field::new("age",  Type::Int64),
-/// --         ]),
-/// --         primary_key: Some(vec![0]),   // `id` resolved to index 0
-/// --     }
-/// --
-/// -- 2. IF NOT EXISTS binds as a successful no-op when the name is taken
-/// --
-/// --     CREATE TABLE IF NOT EXISTS users(id BIGINT);
-/// --
-/// --     BoundCreateTable::AlreadyExists { name: "users".into(), file_id: <resolved> }
-/// --
-/// -- 3. A table-level PRIMARY KEY clause resolves by name to a column index
-/// --
-/// --     CREATE TABLE t(a BIGINT, b BIGINT, PRIMARY KEY (b));
-/// --
-/// --     BoundCreateTable::New { primary_key: Some(vec![1]), .. }
-/// ```
-///
-/// ## Output layout
-///
-/// `schema` is the on-disk tuple layout for rows of the created table: columns
-/// appear in `CREATE TABLE` declaration order.
-pub enum BoundCreateTable {
-    New {
-        name: String,
-        schema: TupleSchema,
-        primary_key: Option<Vec<usize>>,
-    },
-    AlreadyExists {
-        name: String,
-        file_id: FileId,
-    },
-}
-
-/// Resolves a parsed [`DropStatement`] against the catalog.
-///
-/// Looks up the target table with [`Catalog::get_table_info`], which reads
-/// through `txn` so the result matches whatever catalog pages this transaction
-/// already sees.
-///
-/// # Resolution
-///
-/// - **Table present** — returns [`BoundDrop::Drop`] with the catalog’s canonical table `name`,
-///   [`FileId`], and any other metadata already folded into the lookup. The executor uses `file_id`
-///   so it does not repeat the resolution step.
-///
-/// - **Table absent and `IF EXISTS`** — returns [`BoundDrop::NoOp`] using the statement’s
-///   `table_name` for diagnostics only; no catalog mutation is scheduled.
-///
-/// - **Table absent without `IF EXISTS`** — [`BindError::UnknownTable`].
-///
-/// - **Any other [`CatalogError`]** — forwarded as [`BindError::Catalog`].
-///
-/// # Errors
-///
-/// - [`BindError::UnknownTable`] — missing table when `stmt.if_exists` is false.
-/// - [`BindError::Catalog`] — I/O or consistency errors from the catalog layer.
 impl BoundDrop {
+    /// Binds a parsed [`DropStatement`](crate::parser::statements::DropStatement) against the
+    /// catalog.
+    ///
+    /// # SQL examples
+    ///
+    /// ```sql
+    /// -- DROP TABLE users
+    /// --   BoundDrop::bind(&stmt, catalog, txn)
+    /// --     -> Ok(BoundDrop::Drop { .. })
+    ///
+    /// -- DROP TABLE IF EXISTS users
+    /// --   same `Drop` when the table exists
+    ///
+    /// -- DROP TABLE IF EXISTS missing
+    /// --   -> Ok(BoundDrop::NoOp { name: "missing" }) when catalog has no such table
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// - [`BindError::UnknownTable`](crate::binder::BindError::UnknownTable) — table name not in
+    ///   the catalog and `IF EXISTS` is false.
+    /// - [`BindError::Catalog`](crate::binder::BindError::Catalog) — other catalog read failures
+    ///   while resolving the table.
     pub(in crate::binder) fn bind(
         stmt: &DropStatement,
         catalog: &Catalog,
@@ -160,7 +114,72 @@ impl BoundDrop {
     }
 }
 
+/// Bound outcome of `CREATE TABLE` / `CREATE TABLE IF NOT EXISTS`.
+///
+/// On success either describes a **new** table (`schema` + optional composite primary key as
+/// resolved [`ColumnId`](crate::primitives::ColumnId)s), or reports **already exists** under
+/// `IF NOT EXISTS` so the executor can skip allocation.
+///
+/// # SQL examples
+///
+/// Fixed reference schema for the snippets below: `users(id, name, age)` with binder-style indices
+/// `id → 0`, `name → 1`, `age → 2` after [`TupleSchema`] is built in column list order.
+///
+/// ```sql
+/// -- CREATE TABLE users (
+/// --   id INT64 NOT NULL PRIMARY KEY,
+/// --   name STRING,
+/// --   age INT64
+/// -- );
+/// --
+/// --   BoundCreateTable::New {
+/// --       name: "users",
+/// --       schema: TupleSchema { fields in order id, name, age },
+/// --       primary_key: Some(vec![ColumnId(0)]),
+/// --   }
+/// ```
+///
+/// ```sql
+/// -- CREATE TABLE IF NOT EXISTS users (...);
+/// --
+/// --   When `users` already exists:
+/// --   BoundCreateTable::AlreadyExists { name: "users", file_id: <heap FileId> }
+/// ```
+pub enum BoundCreateTable {
+    New {
+        name: String,
+        schema: TupleSchema,
+        primary_key: Option<Vec<ColumnId>>,
+    },
+    AlreadyExists {
+        name: String,
+        file_id: FileId,
+    },
+}
+
 impl BoundCreateTable {
+    /// Binds a parsed [`CreateTableStatement`](crate::parser::statements::CreateTableStatement).
+    ///
+    /// # SQL examples
+    ///
+    /// ```sql
+    /// -- CREATE TABLE t (a INT64, b STRING, PRIMARY KEY (a))
+    /// --   primary_key resolves to the schema index of `a` (here 0)
+    ///
+    /// -- CREATE TABLE t (id INT64 PRIMARY KEY, email STRING)
+    /// --   inline `PRIMARY KEY` on `id` is equivalent to `PRIMARY KEY (id)` for binding
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// - [`BindError::TableAlreadyExists`](crate::binder::BindError::TableAlreadyExists) — name
+    ///   already taken and `IF NOT EXISTS` is false.
+    /// - [`BindError::DuplicateColumn`](crate::binder::BindError::DuplicateColumn) — duplicate
+    ///   column name in the `CREATE TABLE` column list.
+    /// - [`BindError::PrimaryKeyNotInColumns`](crate::binder::BindError::PrimaryKeyNotInColumns) —
+    ///   `PRIMARY KEY (...)` names a column not present in the table definition.
+    /// - [`BindError::Catalog`](crate::binder::BindError::Catalog) — catalog read failure on the
+    ///   `IF NOT EXISTS` path when the table already exists.
     pub(in crate::binder) fn bind(
         stmt: &CreateTableStatement,
         catalog: &Catalog,
@@ -205,11 +224,8 @@ impl BoundCreateTable {
         if_not_exists: bool,
     ) -> Result<Self, BindError> {
         if if_not_exists {
-            let info = catalog.get_table_info(txn, table_name)?;
-            return Ok(Self::AlreadyExists {
-                name: table_name.to_string(),
-                file_id: info.file_id,
-            });
+            let TableInfo { name, file_id, .. } = catalog.get_table_info(txn, table_name)?;
+            return Ok(Self::AlreadyExists { name, file_id });
         }
         Err(BindError::table_already_exists(table_name))
     }
@@ -218,7 +234,7 @@ impl BoundCreateTable {
         columns: &[ColumnDef],
         table_pk: &[String],
         schema: &TupleSchema,
-    ) -> Result<Option<Vec<usize>>, BindError> {
+    ) -> Result<Option<Vec<ColumnId>>, BindError> {
         let pk_names = {
             let inline_pk_names = columns
                 .iter()
@@ -237,27 +253,58 @@ impl BoundCreateTable {
         let primary_key = if pk_names.is_empty() {
             None
         } else {
-            let mut key_indices = Vec::with_capacity(pk_names.len());
-            for name in pk_names {
-                match schema.field_by_name(name) {
-                    Some((idx, _)) => key_indices.push(idx),
-                    None => return Err(BindError::PrimaryKeyNotInColumns(name.to_string())),
-                }
-            }
-            Some(key_indices)
+            Some(
+                pk_names
+                    .into_iter()
+                    .map(|name| {
+                        let Some((idx, _)) = schema.field_by_name(name) else {
+                            return Err(BindError::PrimaryKeyNotInColumns(name.to_string()));
+                        };
+                        Ok(idx)
+                    })
+                    .collect::<Result<Vec<_>, _>>()?,
+            )
         };
 
         Ok(primary_key)
     }
 }
 
+/// Bound outcome of `CREATE INDEX` / `CREATE INDEX IF NOT EXISTS`.
+///
+/// Resolves the base table and each indexed column **name** to a zero-based
+/// [`ColumnId`](crate::primitives::ColumnId) (schema position) in index declaration order. The
+/// executor persists names and uses these indices when registering the live index.
+///
+/// # SQL examples
+///
+/// Same reference table `users(id, name, age)` with `id → 0`, `name → 1`, `age → 2`.
+///
+/// ```sql
+/// -- CREATE INDEX users_name_idx ON users (name) USING HASH;
+/// --
+/// --   BoundCreateIndex::New {
+/// --       index_name: "users_name_idx",
+/// --       table_name: "users",
+/// --       table_file_id: <users heap FileId>,
+/// --       column_indices: vec![ColumnId(1)],
+/// --       kind: IndexKind::Hash,
+/// --   }
+/// ```
+///
+/// ```sql
+/// -- CREATE INDEX IF NOT EXISTS users_name_idx ON users (name) USING HASH;
+/// --
+/// --   When that index name is already registered:
+/// --   BoundCreateIndex::AlreadyExists { index_name: "users_name_idx" }
+/// ```
 #[derive(Debug)]
 pub enum BoundCreateIndex {
     New {
         index_name: String,
         table_name: String,
         table_file_id: FileId,
-        column_indices: Vec<usize>,
+        column_indices: Vec<ColumnId>,
         kind: IndexKind,
     },
     AlreadyExists {
@@ -266,6 +313,27 @@ pub enum BoundCreateIndex {
 }
 
 impl BoundCreateIndex {
+    /// Binds a parsed [`CreateIndexStatement`](crate::parser::statements::CreateIndexStatement).
+    ///
+    /// # SQL examples
+    ///
+    /// ```sql
+    /// -- CREATE INDEX idx ON users (id, name) USING HASH;
+    /// --   column_indices: vec![ColumnId(0), ColumnId(1)]  -- declaration order
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// - [`BindError::UnknownTable`](crate::binder::BindError::UnknownTable) — `ON` table not
+    ///   found.
+    /// - [`BindError::UnknownColumn`](crate::binder::BindError::UnknownColumn) — a name in the
+    ///   index column list is not a column of that table.
+    /// - [`BindError::DuplicateColumn`](crate::binder::BindError::DuplicateColumn) — the same
+    ///   column name appears twice in the index column list.
+    /// - [`BindError::IndexAlreadyExists`](crate::binder::BindError::IndexAlreadyExists) — index
+    ///   name is taken and `IF NOT EXISTS` is false.
+    /// - [`BindError::Catalog`](crate::binder::BindError::Catalog) — other catalog failures while
+    ///   loading table metadata or checking the index registry.
     pub(in crate::binder) fn bind(
         stmt: CreateIndexStatement,
         catalog: &Catalog,
@@ -306,7 +374,7 @@ impl BoundCreateIndex {
         columns: &[String],
         table_schema: &TupleSchema,
         table_name: &str,
-    ) -> Result<Vec<usize>, BindError> {
+    ) -> Result<Vec<ColumnId>, BindError> {
         let n = columns.len();
 
         let mut seen = HashSet::with_capacity(n);
@@ -329,17 +397,108 @@ impl BoundCreateIndex {
     }
 }
 
-/// Outcome of binding a `DROP INDEX` statement.
+/// Bound outcome of `DROP INDEX <name> ON <table>` / `… IF EXISTS`.
 ///
-/// Mirrors [`BoundDrop`] for indexes: either a concrete drop targeting a
-/// resolved index name, or a successful no-op under `IF EXISTS`.
+/// After resolving the index by name, binding checks that it belongs to the named table. Either
+/// returns a concrete drop for the executor, or a no-op when `IF EXISTS` allows ignoring a missing
+/// or mismatched index.
+///
+/// # SQL examples
+///
+/// ```sql
+/// -- DROP INDEX users_email_idx ON users;
+/// --
+/// --   BoundDropIndex::Drop { index_name: "users_email_idx" }
+/// --   (only when that index exists on `users`)
+/// ```
+///
+/// ```sql
+/// -- DROP INDEX IF EXISTS ghost_idx ON users;
+/// --
+/// --   BoundDropIndex::NoOp { index_name: "ghost_idx" }
+/// --   when the index is missing, or exists but not on `users`
+/// ```
 #[derive(Debug)]
 pub enum BoundDropIndex {
     Drop { index_name: String },
     NoOp { index_name: String },
 }
 
+/// Bound outcome of `SHOW INDEXES` / `SHOW INDEXES FROM <table>`.
+///
+/// Without `FROM`, the executor lists every index in the catalog. With `FROM`, resolves the table
+/// once to `(name, file_id)` so listing can filter index metadata by `table_id` without a second
+/// name lookup.
+///
+/// # SQL examples
+///
+/// ```sql
+/// -- SHOW INDEXES;
+/// --
+/// --   BoundShowIndexes::AllTables
+/// ```
+///
+/// ```sql
+/// -- SHOW INDEXES FROM users;
+/// --
+/// --   BoundShowIndexes::OneTable { name: "users", file_id: <heap FileId> }
+/// ```
+#[derive(Debug)]
+pub enum BoundShowIndexes {
+    AllTables,
+    OneTable { name: String, file_id: FileId },
+}
+
+impl BoundShowIndexes {
+    /// Binds a parsed [`ShowIndexesStatement`](crate::parser::statements::ShowIndexesStatement).
+    ///
+    /// # SQL examples
+    ///
+    /// ```sql
+    /// -- SHOW INDEXES FROM users
+    /// --   BoundShowIndexes::bind(&stmt, catalog, txn)
+    /// --     -> Ok(BoundShowIndexes::OneTable { .. })
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// - [`BindError::UnknownTable`](crate::binder::BindError::UnknownTable) — `FROM` names a table
+    ///   that is not in the catalog.
+    /// - [`BindError::Catalog`](crate::binder::BindError::Catalog) — other catalog read failures.
+    pub(in crate::binder) fn bind(
+        stmt: &ShowIndexesStatement,
+        catalog: &Catalog,
+        txn: &Transaction<'_>,
+    ) -> Result<Self, BindError> {
+        match &stmt.0 {
+            None => Ok(Self::AllTables),
+            Some(name) => {
+                let TableInfo { name, file_id, .. } = check_table(catalog, txn, name)?;
+                Ok(Self::OneTable { name, file_id })
+            }
+        }
+    }
+}
+
 impl BoundDropIndex {
+    /// Binds a parsed [`DropIndexStatement`](crate::parser::statements::DropIndexStatement).
+    ///
+    /// # SQL examples
+    ///
+    /// ```sql
+    /// -- DROP INDEX idx ON t
+    /// --   BoundDropIndex::bind(stmt, catalog, txn)
+    /// --     -> Ok(BoundDropIndex::Drop { index_name: "idx" })
+    /// --   when `idx` exists and is registered on table `t`
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// - [`BindError::UnknownIndex`](crate::binder::BindError::UnknownIndex) — index name not
+    ///   found, or index exists but not on the given table, when `IF EXISTS` is false.
+    /// - [`BindError::UnknownTable`](crate::binder::BindError::UnknownTable) — `ON` table not found
+    ///   when the index exists and must be checked for ownership.
+    /// - [`BindError::Catalog`](crate::binder::BindError::Catalog) — other catalog failures.
     pub(in crate::binder) fn bind(
         stmt: DropIndexStatement,
         catalog: &Catalog,
@@ -370,25 +529,16 @@ impl BoundDropIndex {
     }
 }
 
-/// Looks up a table by name in the catalog using the provided transaction context.
+/// Shared catalog lookup for DDL that names a table (`ON users`, `FROM users`, `DROP TABLE users`).
 ///
-/// # Arguments
-///
-/// - `catalog`: Reference to the [`Catalog`] used for looking up table information.
-/// - `txn`: Active [`Transaction`] context for catalog access (ensures correct snapshot/isolation).
-/// - `table_name`: Name of the table to look up. Accepts anything convertible to a string
-///   reference.
-///
-/// # Returns
-///
-/// - `Ok(TableInfo)`: If the table exists and metadata was fetched successfully.
-/// - `Err(BindError)`: If the table does not exist (error variant will be
-///   `BindError::UnknownTable`) or if any other catalog error occurs.
+/// Maps [`CatalogError::TableNotFound`](crate::catalog::CatalogError::TableNotFound) to
+/// [`BindError::UnknownTable`](crate::binder::BindError::UnknownTable); other catalog errors become
+/// [`BindError::Catalog`](crate::binder::BindError::Catalog).
 ///
 /// # Errors
 ///
-/// - Returns `BindError::UnknownTable` if the table is not found.
-/// - Propagates other catalog errors wrapped in `BindError`.
+/// - [`BindError::UnknownTable`](crate::binder::BindError::UnknownTable) — no such table.
+/// - [`BindError::Catalog`](crate::binder::BindError::Catalog) — other catalog read failures.
 fn check_table(
     catalog: &Catalog,
     txn: &Transaction<'_>,
@@ -480,7 +630,9 @@ mod tests {
         bp.release_all(init_txn);
 
         catalog
-            .register_index(index_name, table_file_id, hash.into())
+            .register_index(index_name, table_file_id, hash.into(), vec![
+                ColumnId::try_from(0usize).unwrap(),
+            ])
             .unwrap();
     }
 
@@ -552,6 +704,10 @@ mod tests {
             Field::new("id", Type::Uint64).not_null(),
             Field::new("name", Type::String).not_null(),
         ])
+    }
+
+    fn col_id(idx: usize) -> ColumnId {
+        ColumnId::try_from(idx).unwrap()
     }
 
     // Existing table is resolved to Drop carrying the canonical name + file_id.
@@ -669,7 +825,7 @@ mod tests {
 
         match bound {
             BoundCreateTable::New { primary_key, .. } => {
-                assert_eq!(primary_key, Some(vec![1]));
+                assert_eq!(primary_key, Some(vec![col_id(1)]));
             }
             BoundCreateTable::AlreadyExists { .. } => panic!("expected New"),
         }
@@ -693,7 +849,7 @@ mod tests {
 
         match bound {
             BoundCreateTable::New { primary_key, .. } => {
-                assert_eq!(primary_key, Some(vec![1]));
+                assert_eq!(primary_key, Some(vec![col_id(1)]));
             }
             BoundCreateTable::AlreadyExists { .. } => panic!("expected New"),
         }
@@ -717,7 +873,7 @@ mod tests {
 
         match bound {
             BoundCreateTable::New { primary_key, .. } => {
-                assert_eq!(primary_key, Some(vec![0]));
+                assert_eq!(primary_key, Some(vec![col_id(0)]));
             }
             BoundCreateTable::AlreadyExists { .. } => panic!("expected New"),
         }
@@ -920,7 +1076,7 @@ mod tests {
                 assert_eq!(index_name, "users_name_idx");
                 assert_eq!(table_name, "users");
                 assert_eq!(tfid, table_file_id);
-                assert_eq!(column_indices, vec![1]);
+                assert_eq!(column_indices, vec![col_id(1)]);
                 assert_eq!(kind, IndexKind::Hash);
             }
             BoundCreateIndex::AlreadyExists { .. } => panic!("expected New"),
@@ -954,7 +1110,7 @@ mod tests {
                 kind,
                 ..
             } => {
-                assert_eq!(column_indices, vec![2, 0]);
+                assert_eq!(column_indices, vec![col_id(2), col_id(0)]);
                 assert_eq!(kind, IndexKind::Btree);
             }
             BoundCreateIndex::AlreadyExists { .. } => panic!("expected New"),

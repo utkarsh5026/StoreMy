@@ -7,9 +7,7 @@
 use thiserror::Error;
 
 use crate::{
-    Value,
     catalog::{CatalogError, manager::Catalog},
-    execution::unary::BooleanExpression,
     parser::statements::Statement,
     transaction::Transaction,
 };
@@ -17,9 +15,13 @@ use crate::{
 mod ddl;
 mod dml;
 pub mod expr;
+mod query;
 mod scope;
 
+pub use ddl::{BoundCreateIndex, BoundCreateTable, BoundDrop, BoundDropIndex, BoundShowIndexes};
+pub use dml::{BoundDelete, BoundInsert, BoundUpdate};
 pub use expr::BoundExpr;
+pub use query::BoundSelect;
 
 #[derive(Debug, Error)]
 #[non_exhaustive]
@@ -61,6 +63,15 @@ pub enum BindError {
         expected: usize,
         got: usize,
     },
+
+    #[error("unsupported statement: {0}")]
+    Unsupported(String),
+
+    #[error("index '{0}' already exists")]
+    IndexAlreadyExists(String),
+
+    #[error("unknown index '{0}'")]
+    UnknownIndex(String),
 }
 
 impl BindError {
@@ -77,80 +88,72 @@ impl BindError {
     }
 }
 
-use crate::{FileId, tuple::TupleSchema};
-
 #[non_exhaustive]
 pub enum Bound {
     Drop(BoundDrop),
     CreateTable(BoundCreateTable),
+    CreateIndex(BoundCreateIndex),
+    DropIndex(BoundDropIndex),
+    ShowIndexes(BoundShowIndexes),
     Delete(BoundDelete),
     Insert(BoundInsert),
+    Update(BoundUpdate),
+    Select(Box<BoundSelect>),
 }
 
-/// Outcome of binding a `DROP TABLE`. Either the table was resolved (drop it)
-/// or it was absent under `IF EXISTS` (no-op).
-pub enum BoundDrop {
-    /// The table exists and should be dropped. `file_id` is carried so the
-    /// executor doesn't have to look it up again.
-    Drop { name: String, file_id: FileId },
-    /// `IF EXISTS` matched a missing table — the executor has nothing to do.
-    NoOp { name: String },
-}
+impl Bound {
+    /// Resolves `stmt` against `catalog` inside `txn`.
+    ///
+    /// The transaction is required because catalog lookups may read system
+    /// tables on cache miss. Binding and execution should share the same
+    /// transaction so that the bound plan reflects the same catalog snapshot
+    /// the executor sees.
+    pub fn bind(
+        stmt: Statement,
+        catalog: &Catalog,
+        txn: &Transaction<'_>,
+    ) -> Result<Self, BindError> {
+        match stmt {
+            Statement::Drop(s) => Ok(Self::Drop(BoundDrop::bind(&s, catalog, txn)?)),
+            Statement::CreateTable(s) => {
+                Ok(Self::CreateTable(BoundCreateTable::bind(&s, catalog, txn)?))
+            }
+            Statement::CreateIndex(s) => {
+                Ok(Self::CreateIndex(BoundCreateIndex::bind(s, catalog, txn)?))
+            }
+            Statement::DropIndex(s) => Ok(Self::DropIndex(BoundDropIndex::bind(s, catalog, txn)?)),
+            Statement::Delete(s) => Ok(Self::Delete(BoundDelete::bind(s, catalog, txn)?)),
+            Statement::Insert(s) => Ok(Self::Insert(BoundInsert::bind(s, catalog, txn)?)),
+            Statement::Update(s) => Ok(Self::Update(BoundUpdate::bind(s, catalog, txn)?)),
+            Statement::Select(s) => {
+                Ok(Self::Select(Box::new(BoundSelect::bind(&s, catalog, txn)?)))
+            }
+            Statement::ShowIndexes(s) => {
+                Ok(Self::ShowIndexes(BoundShowIndexes::bind(&s, catalog, txn)?))
+            }
+            Statement::AlterTable(_) => Err(BindError::Unsupported(
+                "ALTER TABLE binding is not implemented yet".to_string(),
+            )),
+        }
+    }
 
-/// Outcome of binding a `CREATE TABLE`. Either we fully resolved a new table
-/// (build it) or `IF NOT EXISTS` matched an existing one (report it).
-pub enum BoundCreateTable {
-    New {
-        name: String,
-        schema: TupleSchema,
-        primary_key: Option<Vec<usize>>,
-    },
-    AlreadyExists {
-        name: String,
-        file_id: FileId,
-    },
-}
-
-pub struct BoundDelete {
-    pub name: String,
-    pub file_id: FileId,
-    pub filter: Option<BooleanExpression>,
-}
-
-pub struct BoundUpdate {
-    pub name: String,
-    pub file_id: FileId,
-    pub schema: TupleSchema,
-    pub assignments: Vec<(usize, Value)>,
-    pub filter: Option<BooleanExpression>,
-}
-
-pub struct BoundInsert {
-    pub name: String,
-    pub file_id: FileId,
-    pub schema: TupleSchema,
-    /// One row per `VALUES (...)` tuple, already reordered into schema order.
-    /// `rows[r][c]` is the expression for column `c` of row `r`.
-    pub rows: Vec<Vec<BoundExpr>>,
-}
-
-/// Resolves `stmt` against `catalog` inside `txn`.
-///
-/// The transaction is required because catalog lookups may read system tables
-/// on cache miss. Binding and execution should share the same transaction so
-/// that the bound plan reflects the same catalog snapshot the executor sees.
-pub fn bind(stmt: Statement, catalog: &Catalog, txn: &Transaction<'_>) -> Result<Bound, BindError> {
-    match stmt {
-        Statement::Drop(s) => Ok(Bound::Drop(ddl::bind_drop(&s, catalog, txn)?)),
-        Statement::CreateTable(s) => Ok(Bound::CreateTable(ddl::bind_create_table(
-            &s, catalog, txn,
-        )?)),
-        Statement::CreateIndex(_) => todo!("bind_create_index"),
-        Statement::DropIndex(_) => todo!("bind_drop_index"),
-        Statement::Delete(s) => Ok(Bound::Delete(dml::bind_delete(s, catalog, txn)?)),
-        Statement::Insert(s) => Ok(Bound::Insert(dml::bind_insert(s, catalog, txn)?)),
-        Statement::Update(_) => todo!("bind_update"),
-        Statement::Select(_) => todo!("bind_select"),
-        Statement::ShowIndexes(_) => todo!("bind_show_indexes"),
+    /// Short, stable label for the bound shape — handy for logging, error
+    /// messages, and tests that don't want to match every variant inline.
+    ///
+    /// The strings here mirror the SQL surface (`CREATE TABLE`, `DROP INDEX`,
+    /// …) rather than the variant identifier so they read naturally in
+    /// diagnostics aimed at end users.
+    pub fn kind(&self) -> &'static str {
+        match self {
+            Self::Drop(_) => "DROP TABLE",
+            Self::CreateTable(_) => "CREATE TABLE",
+            Self::CreateIndex(_) => "CREATE INDEX",
+            Self::DropIndex(_) => "DROP INDEX",
+            Self::ShowIndexes(_) => "SHOW INDEXES",
+            Self::Delete(_) => "DELETE",
+            Self::Insert(_) => "INSERT",
+            Self::Update(_) => "UPDATE",
+            Self::Select(_) => "SELECT",
+        }
     }
 }
