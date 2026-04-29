@@ -156,7 +156,7 @@ mod tests {
         assert_eq!(s.from.len(), 1);
         assert_eq!(s.from[0].joins.len(), 1);
         assert_eq!(s.from[0].joins[0].kind, JoinKind::Left);
-        assert_eq!(s.from[0].joins[0].table, "orders");
+        assert_eq!(s.from[0].joins[0].table.name, "orders");
 
         assert!(s.where_clause.is_some());
         assert_eq!(s.group_by.len(), 1);

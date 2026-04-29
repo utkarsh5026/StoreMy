@@ -397,8 +397,7 @@ impl Parser {
 
             joins.push(Join {
                 kind,
-                table,
-                alias,
+                table: TableRef { name: table, alias },
                 on,
             });
         }
@@ -547,8 +546,8 @@ mod tests {
         assert_eq!(s.from[0].joins.len(), 1);
         let j = &s.from[0].joins[0];
         assert_eq!(j.kind, JoinKind::Inner);
-        assert_eq!(j.table, "b");
-        assert!(j.alias.is_none());
+        assert_eq!(j.table.name, "b");
+        assert!(j.table.alias.is_none());
         let WhereCondition::Predicate { field, op, value } = &j.on else {
             panic!("expected predicate ON");
         };
@@ -562,7 +561,7 @@ mod tests {
         let s = select("SELECT * FROM a JOIN b ON x = 2").unwrap();
         assert_eq!(s.from[0].joins.len(), 1);
         assert_eq!(s.from[0].joins[0].kind, JoinKind::Inner);
-        assert_eq!(s.from[0].joins[0].table, "b");
+        assert_eq!(s.from[0].joins[0].table.name, "b");
     }
 
     #[test]
@@ -570,15 +569,15 @@ mod tests {
         let s = select("SELECT * FROM a LEFT JOIN b ON i = 0 RIGHT JOIN c ON j = 3").unwrap();
         assert_eq!(s.from[0].joins.len(), 2);
         assert_eq!(s.from[0].joins[0].kind, JoinKind::Left);
-        assert_eq!(s.from[0].joins[0].table, "b");
+        assert_eq!(s.from[0].joins[0].table.name, "b");
         assert_eq!(s.from[0].joins[1].kind, JoinKind::Right);
-        assert_eq!(s.from[0].joins[1].table, "c");
+        assert_eq!(s.from[0].joins[1].table.name, "c");
     }
 
     #[test]
     fn test_parse_select_join_with_table_alias() {
         let s = select("SELECT * FROM orders o JOIN customers c ON cid = 1").unwrap();
-        assert_eq!(s.from[0].joins[0].alias.as_deref(), Some("c"));
+        assert_eq!(s.from[0].joins[0].table.alias.as_deref(), Some("c"));
         assert_eq!(s.from[0].table.name, "orders");
         assert_eq!(s.from[0].table.alias.as_deref(), Some("o"));
     }

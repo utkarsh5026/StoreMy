@@ -1321,17 +1321,13 @@ impl Display for TableWithJoins {
 #[derive(Debug, Clone)]
 pub struct Join {
     pub kind: JoinKind,
-    pub table: String,
-    pub alias: Option<String>,
+    pub table: TableRef,
     pub on: WhereCondition,
 }
 
 impl Display for Join {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{} {}", self.kind, self.table)?;
-        if let Some(alias) = &self.alias {
-            write!(f, " {alias}")?;
-        }
         write!(f, " ON {}", self.on)
     }
 }
