@@ -1,5 +1,5 @@
 # syntax=docker/dockerfile:1
-# Full Rust workspace for `cargo test`, `cargo bench`, and `cargo run --bin metrics_exporter`
+# Full Rust workspace for `cargo test` and `cargo run --bin metrics_exporter`
 # (compose may bind-mount the repo over `/app` at runtime).
 
 FROM rust:1.88-bookworm

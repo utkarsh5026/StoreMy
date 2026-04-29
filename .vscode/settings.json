@@ -26,7 +26,6 @@
     "Condvar",
     "costmodel",
     "cref",
-    "criterion",
     "crossbeam",
     "crossterm",
     "Deque",

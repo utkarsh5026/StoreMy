@@ -17,10 +17,6 @@ path = "src/lib.rs"
 name = "storemy"
 path = "src/main.rs"
 
-[[bench]]
-name = "storemy_bench"
-harness = false
-
 [dependencies]
 # Error handling
 thiserror = "1.0"
@@ -73,6 +69,5 @@ tokio = { version = "1", features = ["rt-multi-thread"] }
 [dev-dependencies]
 # Testing
 proptest = "1.4"
-criterion = "0.5"
 tempfile = "3.10"
 rand = "0.8"

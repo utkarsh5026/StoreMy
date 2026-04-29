@@ -55,89 +55,6 @@ services:
     networks:
       - storemy-network
 
-  storemy-benchmark:
-    build:
-      context: .
-      dockerfile: Dockerfile.dev
-    container_name: storemy-benchmark
-    volumes:
-      - .:/app
-      - ./benchmark-results:/app/benchmark-results
-      - storemy-benchmark-data:/app/benchmark_data
-      - storemy-benchmark-logs:/app/benchmark_logs
-    working_dir: /app
-    environment:
-      - BENCHMARK_OUTPUT=/app/benchmark-results
-      - BENCHMARK_ITERATIONS=1000
-      - BENCHMARK_CONCURRENT_QUERIES=10
-      - DB_NAME=benchmark_db
-      - DATA_DIR=/app/benchmark_data
-      - LOG_DIR=/app/benchmark_logs
-    command:
-      - /bin/sh
-      - -c
-      - |
-        set -e
-        echo "=========================================="
-        echo "  StoreMy Criterion benchmarks (Rust)"
-        echo "=========================================="
-        echo ""
-        mkdir -p /app/benchmark-results
-        cargo bench -p storemy --locked 2>&1 | tee /app/benchmark-results/bench.log
-        if [ -d /app/target/criterion ]; then
-          rm -rf /app/benchmark-results/criterion 2>/dev/null || true
-          cp -r /app/target/criterion /app/benchmark-results/criterion || true
-        fi
-        echo ""
-        echo "=========================================="
-        echo "  Done — see target/criterion (and ./benchmark-results/criterion on host)"
-        echo "=========================================="
-        echo ""
-        echo "  • Log: ./benchmark-results/bench.log"
-        echo "  • Criterion HTML: open ./benchmark-results/criterion/*/report/index.html"
-        echo "  • Monitoring: docker compose --profile monitoring up -d"
-        echo ""
-    networks:
-      - storemy-network
-    profiles:
-      - benchmark # Only starts when explicitly requested
-
-  benchmark-viewer:
-    image: busybox
-    container_name: storemy-benchmark-viewer
-    volumes:
-      - ./benchmark-results:/results:ro
-    command:
-      - /bin/sh
-      - -c
-      - |
-        echo "=========================================="
-        echo "  StoreMy Benchmark Results"
-        echo "=========================================="
-        echo ""
-        if [ ! -d "/results" ] || [ -z "$$(ls -A /results 2>/dev/null)" ]; then
-          echo "❌ No benchmark results found!"
-          echo ""
-          echo "Run benchmarks first:"
-          echo "  docker-compose --profile benchmark up storemy-benchmark"
-          echo ""
-          exit 1
-        fi
-        echo "📊 Available Reports:"
-        echo ""
-        ls -lt /results/*.html 2>/dev/null | head -5 | awk '{print "  • " $$9 " (" $$6 " " $$7 ")"}'
-        echo ""
-        echo "💡 To view:"
-        echo "  • Criterion: benchmark-results/criterion/*/report/index.html"
-        echo "  • Log:       benchmark-results/bench.log"
-        echo ""
-        echo "📈 Monitoring Dashboard:"
-        echo "  • Grafana: http://localhost:3000 (admin/storemy)"
-        echo "  • Start:   docker-compose --profile monitoring up -d"
-        echo ""
-    profiles:
-      - benchmark
-
   prometheus:
     image: prom/prometheus:latest
     container_name: storemy-prometheus
@@ -212,10 +129,6 @@ volumes:
   storemy-data:
     driver: local
   storemy-test-data:
-    driver: local
-  storemy-benchmark-data:
-    driver: local
-  storemy-benchmark-logs:
     driver: local
   storemy-metrics-logs:
     driver: local
