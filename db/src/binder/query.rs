@@ -1,3 +1,43 @@
+//! Bound `SELECT` queries: names resolved, clauses lowered, and columns indexed.
+//!
+//! This module covers the SQL surface from `SELECT ... FROM ...` through joins,
+//! `WHERE`, projection items, aggregates, `GROUP BY`, `HAVING`, `DISTINCT`,
+//! `ORDER BY`, and `LIMIT`. The parser still owns raw syntax; this binder turns
+//! that syntax into a shape the planner can consume without looking names up
+//! again.
+//!
+//! # Shape
+//!
+//! - [`BoundFrom`] — the bound `FROM` tree, including base table scans and joined inputs.
+//! - [`BoundSelectItem`] — one executable item from the `SELECT` list: column, literal, or
+//!   aggregate.
+//! - [`BoundProjection`] — one `SELECT` item plus the output alias SQL gave it.
+//! - [`BoundSelectList`] — either `SELECT *` or an ordered list of [`BoundProjection`] values.
+//! - [`BoundSelect`] — the full query block, with every column reference resolved to a
+//!   [`ColumnId`].
+//!
+//! # How it works
+//!
+//! Binding walks the `FROM` clause first and builds a [`Scope`](crate::binder::scope::Scope) in
+//! lockstep. Each table gets a column offset in the concatenated row. Later clauses (`JOIN ... ON`,
+//! `WHERE`, `SELECT`, `GROUP BY`, `HAVING`, and `ORDER BY`) ask that scope to resolve SQL names
+//! like `age`, `users.id`, or `o.total` into stable column indices.
+//!
+//! Examples use two schemas throughout:
+//!
+//! ```sql
+//! -- users(id, name, age)       resolves to id → 0, name → 1, age → 2
+//! -- orders(id, user_id, total) resolves to id → 3, user_id → 4, total → 5
+//! -- when joined as: users JOIN orders ...
+//! ```
+//!
+//! # NULL semantics
+//!
+//! The binder only coerces literal values against column types inside predicates. `NULL` may bind
+//! only where the referenced column is nullable; the final truth-table behavior belongs to
+//! [`BooleanExpression`], where a `NULL` comparison evaluates to `false` rather than full SQL
+//! three-valued logic.
+
 use crate::{
     FileId, Value,
     binder::{
@@ -18,24 +58,79 @@ use crate::{
     tuple::TupleSchema,
 };
 
+/// Bound `FROM` input for one `SELECT` query block.
+///
+/// A `BoundFrom` is the planner-facing shape of SQL `FROM`: every table name has
+/// been checked against the catalog, every table schema is attached, and join
+/// predicates have already been lowered to [`BooleanExpression`] values over the
+/// joined row layout.
+///
+/// # SQL examples
+///
+/// ```sql
+/// -- SELECT * FROM users;
+/// ```
+///
+/// ```ignore
+/// BoundFrom::Table {
+///     table: TableRef { name: "users".into(), alias: None },
+///     file_id,
+///     schema: users_schema,
+///     column_offset: 0,
+/// }
+/// ```
+///
+/// ```sql
+/// -- SELECT * FROM users u JOIN orders o ON u.id = o.user_id;
+/// ```
+///
+/// ```ignore
+/// BoundFrom::Join {
+///     kind: JoinKind::Inner,
+///     left: Box::new(users_from),
+///     right: Box::new(orders_from),
+///     on: BooleanExpression::col_op_col(0, Predicate::Equals, 4),
+///     schema: users_schema.merge(&orders_schema),
+/// }
+/// ```
+///
+/// The output tuple layout is left input columns first, then right input columns
+/// for joins: `users.id`, `users.name`, `users.age`, `orders.id`,
+/// `orders.user_id`, `orders.total`.
 #[derive(Debug)]
 pub enum BoundFrom {
+    /// A base table reference from `FROM users` or `FROM users u`.
     Table {
+        /// Parsed table name and optional SQL alias.
         table: TableRef,
+        /// Catalog file id used later by the table-scan plan.
         file_id: FileId,
+        /// Catalog schema for this table.
         schema: TupleSchema,
+        /// First column index of this table inside the surrounding `FROM` row.
         column_offset: usize,
     },
+    /// A SQL `JOIN ... ON ...` input with its join predicate already bound.
     Join {
+        /// SQL join flavor (`INNER`, `LEFT`, or `RIGHT`).
         kind: JoinKind,
+        /// Left side of the join tree.
         left: Box<BoundFrom>,
+        /// Right side of the join tree.
         right: Box<BoundFrom>,
+        /// Bound `ON` predicate evaluated over the concatenated join row.
         on: BooleanExpression,
+        /// Merged output schema, left columns followed by right columns.
         schema: TupleSchema,
     },
+    /// A cross product shape for a future comma-join lowering; `bind` does not
+    /// currently produce this variant.
     Cross {
+        /// Left side of the cross product.
         left: Box<BoundFrom>,
+        /// Right side of the cross product.
         right: Box<BoundFrom>,
+        /// Merged output schema, left columns followed by right columns.
         schema: TupleSchema,
     },
 }
@@ -70,11 +165,54 @@ impl BoundFrom {
     }
 }
 
-/// One bound entry in a `SELECT` projection list.
+/// One bound expression from a SQL `SELECT` projection list.
 ///
-/// Mirrors the executable subset of [`Expr`] — only the shapes the engine
-/// can actually evaluate today. Future binary expressions (e.g. `age + 1`)
-/// will grow this enum, not the parser side.
+/// Mirrors the executable subset of [`Expr`]: plain columns, literal constants,
+/// `COUNT(*)`, and single-column aggregates. Future SQL expressions like
+/// `age + 1` will grow this enum after the executor has a matching expression
+/// shape.
+///
+/// # SQL examples
+///
+/// ```sql
+/// -- SELECT age FROM users;
+/// ```
+///
+/// ```ignore
+/// BoundSelectItem::Column(ColumnId::try_from(2).unwrap())
+/// ```
+///
+/// ```sql
+/// -- SELECT 'guest' FROM users;
+/// ```
+///
+/// ```ignore
+/// BoundSelectItem::Literal(Value::String("guest".into()))
+/// ```
+///
+/// ```sql
+/// -- SELECT COUNT(*) FROM users;
+/// ```
+///
+/// ```ignore
+/// BoundSelectItem::Aggregate(AggregateExpr {
+///     func: AggregateFunc::CountStar,
+///     col_id: ColumnId::default(),
+///     output_name: "COUNT(*)".into(),
+/// })
+/// ```
+///
+/// ```sql
+/// -- SELECT SUM(age) AS total_age FROM users;
+/// ```
+///
+/// ```ignore
+/// BoundSelectItem::Aggregate(AggregateExpr {
+///     func: AggregateFunc::Sum,
+///     col_id: ColumnId::try_from(2).unwrap(),
+///     output_name: "total_age".into(),
+/// })
+/// ```
 #[derive(Debug)]
 pub enum BoundSelectItem {
     /// A direct column reference, resolved to a global index in the
@@ -89,34 +227,207 @@ pub enum BoundSelectItem {
     Aggregate(AggregateExpr),
 }
 
-/// One projection item plus its optional output alias.
+/// One SQL projection entry plus its optional output alias.
 ///
 /// `alias` is the user-supplied `AS name` (or the implicit `expr name`
 /// form). When `None`, the executor / planner falls back to a default
 /// name derived from the item.
+///
+/// # SQL examples
+///
+/// ```sql
+/// -- SELECT age FROM users;
+/// ```
+///
+/// ```ignore
+/// BoundProjection {
+///     item: BoundSelectItem::Column(ColumnId::try_from(2).unwrap()),
+///     alias: None,
+/// }
+/// ```
+///
+/// ```sql
+/// -- SELECT age AS years FROM users;
+/// ```
+///
+/// ```ignore
+/// BoundProjection {
+///     item: BoundSelectItem::Column(ColumnId::try_from(2).unwrap()),
+///     alias: Some("years".into()),
+/// }
+/// ```
+///
+/// ```sql
+/// -- SELECT COUNT(*) AS n FROM users;
+/// ```
+///
+/// ```ignore
+/// BoundProjection {
+///     item: BoundSelectItem::Aggregate(AggregateExpr {
+///         func: AggregateFunc::CountStar,
+///         col_id: ColumnId::default(),
+///         output_name: "n".into(),
+///     }),
+///     alias: Some("n".into()),
+/// }
+/// ```
 #[derive(Debug)]
 pub struct BoundProjection {
+    /// Bound SQL expression for this output column.
     pub item: BoundSelectItem,
+    /// SQL output name from `AS alias`, if one was written.
     pub alias: Option<String>,
 }
 
-/// The bound SELECT projection list.
+/// The bound SQL `SELECT` list.
 ///
 /// `Star` corresponds to `SELECT *` and means "produce the FROM-clause
 /// schema unchanged" — no Project node is built. `Items` is an explicit
 /// list in the user's order.
+///
+/// # SQL examples
+///
+/// ```sql
+/// -- SELECT * FROM users;
+/// ```
+///
+/// ```ignore
+/// BoundSelectList::Star
+/// ```
+///
+/// ```sql
+/// -- SELECT id, name FROM users;
+/// ```
+///
+/// ```ignore
+/// BoundSelectList::Items(vec![
+///     BoundProjection {
+///         item: BoundSelectItem::Column(ColumnId::try_from(0).unwrap()),
+///         alias: None,
+///     },
+///     BoundProjection {
+///         item: BoundSelectItem::Column(ColumnId::try_from(1).unwrap()),
+///         alias: None,
+///     },
+/// ])
+/// ```
+///
+/// ```sql
+/// -- SELECT id, COUNT(*), name FROM users;
+/// ```
+///
+/// ```ignore
+/// BoundSelectList::Items(vec![
+///     BoundProjection { item: BoundSelectItem::Column(ColumnId::try_from(0).unwrap()), alias: None },
+///     BoundProjection {
+///         item: BoundSelectItem::Aggregate(AggregateExpr {
+///             func: AggregateFunc::CountStar,
+///             col_id: ColumnId::default(),
+///             output_name: "COUNT(*)".into(),
+///         }),
+///         alias: None,
+///     },
+///     BoundProjection { item: BoundSelectItem::Column(ColumnId::try_from(1).unwrap()), alias: None },
+/// ])
+/// ```
+///
+/// The output tuple layout follows the SQL order for `Items`; for `Star`, it is
+/// exactly the `FROM` schema layout.
 #[derive(Debug)]
 pub enum BoundSelectList {
+    /// SQL `SELECT *`, preserving the entire `FROM` output row.
     Star,
+    /// SQL `SELECT expr [, expr ...]`, preserving user-written order.
     Items(Vec<BoundProjection>),
 }
 
-/// A resolved single-table SELECT.
+/// A resolved SQL `SELECT` query block.
 ///
 /// Every name has been resolved to an index; every literal has been coerced
 /// to the column's type. The executor is free to assume this is internally
 /// consistent — any error it encounters is a bug, not bad input.
+///
+/// # SQL examples
+///
+/// ```sql
+/// -- SELECT * FROM users WHERE age >= 18;
+/// ```
+///
+/// ```ignore
+/// BoundSelect {
+///     from: BoundFrom::Table {
+///         table: TableRef { name: "users".into(), alias: None },
+///         file_id,
+///         schema: users_schema,
+///         column_offset: 0,
+///     },
+///     select_list: BoundSelectList::Star,
+///     filter: Some(BooleanExpression::col_op_lit(
+///         2,
+///         Predicate::GreaterThanOrEqual,
+///         Value::Int64(18),
+///     )),
+///     group_by: vec![],
+///     having: None,
+///     distinct: false,
+///     order_by: vec![],
+///     limit: None,
+/// }
+/// ```
+///
+/// ```sql
+/// -- SELECT age, COUNT(*) AS n FROM users GROUP BY age ORDER BY age DESC LIMIT 10;
+/// ```
+///
+/// ```ignore
+/// BoundSelect {
+///     from: BoundFrom::Table {
+///         table: TableRef { name: "users".into(), alias: None },
+///         file_id,
+///         schema: users_schema,
+///         column_offset: 0,
+///     },
+///     select_list: BoundSelectList::Items(vec![
+///         BoundProjection {
+///             item: BoundSelectItem::Column(ColumnId::try_from(2).unwrap()),
+///             alias: None,
+///         },
+///         BoundProjection {
+///             item: BoundSelectItem::Aggregate(AggregateExpr {
+///                 func: AggregateFunc::CountStar,
+///                 col_id: ColumnId::default(),
+///                 output_name: "n".into(),
+///             }),
+///             alias: Some("n".into()),
+///         },
+///     ]),
+///     filter: None,
+///     group_by: vec![ColumnId::try_from(2).unwrap()],
+///     having: None,
+///     distinct: false,
+///     order_by: vec![(ColumnId::try_from(2).unwrap(), OrderDirection::Desc)],
+///     limit: Some(LimitClause { limit: Some(10), offset: 0 }),
+/// }
+/// ```
+///
+/// # SQL → operator mapping
+///
+/// ```sql
+/// -- SELECT u.name, o.total
+/// -- FROM users u JOIN orders o ON u.id = o.user_id
+/// -- WHERE o.total > 100
+/// -- ORDER BY o.total DESC;
+/// ```
+///
+/// ```ignore
+/// BoundSelect::bind(select_ast, catalog, txn)?
+/// // from        = BoundFrom::Join { on: <u.id = o.user_id>, schema: users ⋈ orders, .. }
+/// // select_list = Items([Column(1), Column(5)])
+/// // filter      = Some(BooleanExpression::col_op_lit(5, Predicate::GreaterThan, Value::Int64(100)))
+/// // order_by    = [(ColumnId::try_from(5).unwrap(), OrderDirection::Desc)]
+/// ```
 pub struct BoundSelect {
+    /// SQL `FROM` and `JOIN` tree.
     pub from: BoundFrom,
 
     /// The SELECT projection — `Star` for `SELECT *`, `Items` otherwise.
@@ -124,20 +435,57 @@ pub struct BoundSelect {
     /// rather than in a side field, so order and aliases are preserved.
     pub select_list: BoundSelectList,
 
+    /// SQL `WHERE` predicate, if present.
     pub filter: Option<BooleanExpression>,
 
     /// Column indices (into the FROM schema) to group by.
     pub group_by: Vec<ColumnId>,
-    /// Predicate evaluated against the aggregate's output schema.
+    /// SQL `HAVING` predicate, currently resolved against the `FROM` scope.
     pub having: Option<BooleanExpression>,
 
+    /// SQL `SELECT DISTINCT`.
     pub distinct: bool,
     /// `(col_index_in_final_schema, direction)`, in priority order.
     pub order_by: Vec<(ColumnId, OrderDirection)>,
+    /// SQL `LIMIT [n] [OFFSET m]`, if present.
     pub limit: Option<LimitClause>,
 }
 
 impl BoundSelect {
+    /// Binds a parsed SQL `SELECT` into column-indexed query metadata.
+    ///
+    /// ```sql
+    /// -- SELECT * FROM users;
+    /// --   BoundSelect::bind(ast, catalog, txn)
+    ///
+    /// -- SELECT name FROM users WHERE age >= 18;
+    /// --   BoundSelect::bind(ast, catalog, txn)
+    ///
+    /// -- SELECT SUM(age) AS total_age FROM users GROUP BY name;
+    /// --   BoundSelect::bind(ast, catalog, txn)
+    ///
+    /// -- SELECT u.name, o.total FROM users u JOIN orders o ON u.id = o.user_id;
+    /// --   BoundSelect::bind(ast, catalog, txn)
+    /// ```
+    ///
+    /// The result preserves SQL clause order as data: `FROM` first for row
+    /// layout, then projection, filters, grouping, ordering, and limit metadata.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BindError::Unsupported`] for `SELECT` without `FROM`, for
+    /// comma-separated multi-table `FROM` entries, or for aggregate arguments
+    /// that are not a single column.
+    ///
+    /// Returns [`BindError::UnknownTable`] or [`BindError::UnknownColumn`] when
+    /// a SQL name cannot be resolved through the catalog/scope.
+    ///
+    /// Returns [`BindError::AmbiguousColumn`] when an unqualified column name
+    /// appears in more than one joined table, such as `id` in
+    /// `users JOIN orders`.
+    ///
+    /// Returns [`BindError::TypeMismatch`] or [`BindError::NullViolation`] when
+    /// a predicate literal cannot be coerced to the referenced column.
     pub(in crate::binder) fn bind(
         stmt: SelectStatement,
         catalog: &Catalog,
@@ -170,14 +518,43 @@ impl BoundSelect {
         })
     }
 
-    /// Walks a `FROM` entry, building the executable [`BoundFrom`] tree
-    /// and the [`Scope`] used to resolve names within it in lockstep.
+    /// Resolves one SQL `FROM` entry into a [`BoundFrom`] tree and name scope.
     ///
-    /// Each table's column offset reflects its position in the merged
-    /// output row, so a `ColumnRef` resolved through the returned scope
-    /// gives the correct global index. The `ON` predicate of every join
-    /// is bound against the scope as it stands *after* the right-hand
-    /// table has been pushed, so both sides are visible.
+    /// Each table's column offset reflects its position in the merged output
+    /// row, so later clauses resolve names directly to executor column indices.
+    /// A join's right table is pushed into the scope before its `ON` clause is
+    /// bound, which makes both sides visible to the predicate binder.
+    ///
+    /// ```sql
+    /// -- FROM users
+    /// --   (BoundFrom::Table { column_offset: 0, .. }, Scope[users.id → 0, users.name → 1, users.age → 2])
+    ///
+    /// -- FROM users u JOIN orders o ON u.id = o.user_id
+    /// --   BoundFrom::Join {
+    /// --       left:  BoundFrom::Table { column_offset: 0, .. },
+    /// --       right: BoundFrom::Table { column_offset: 3, .. },
+    /// --       on:    BooleanExpression::col_op_col(0, Predicate::Equals, 4),
+    /// --       ..
+    /// --   }
+    ///
+    /// -- FROM users u JOIN orders o ON o.total > 100
+    /// --   BoundFrom::Join {
+    /// --       on: BooleanExpression::col_op_lit(5, Predicate::GreaterThan, Value::Int64(100)),
+    /// --       ..
+    /// --   }
+    /// ```
+    ///
+    /// The joined output tuple layout is left columns followed by right columns:
+    /// `users.id → 0`, `users.name → 1`, `users.age → 2`, `orders.id → 3`,
+    /// `orders.user_id → 4`, `orders.total → 5`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BindError::UnknownTable`] when a `FROM` or joined table is not
+    /// present in the catalog. Returns predicate-binding errors from the `ON`
+    /// clause, including [`BindError::UnknownColumn`],
+    /// [`BindError::AmbiguousColumn`], [`BindError::TypeMismatch`], and
+    /// [`BindError::NullViolation`].
     fn resolve_from(
         from: TableWithJoins,
         catalog: &Catalog,
@@ -213,11 +590,33 @@ impl BoundSelect {
         Ok((left, scope))
     }
 
-    /// Binds the parsed projection list into a [`BoundSelectList`].
+    /// Binds the SQL `SELECT` list into a [`BoundSelectList`].
     ///
-    /// `SELECT *` becomes `Star` (no rewrite); explicit items are bound
-    /// one by one via [`Self::bind_select_item`], preserving order and
-    /// aliases.
+    /// `SELECT *` stays as [`BoundSelectList::Star`], meaning the planner can
+    /// pass through the full `FROM` schema. Explicit projection items are bound
+    /// left to right, preserving SQL output order and aliases.
+    ///
+    /// ```sql
+    /// -- SELECT *
+    /// --   BoundSelectList::Star
+    ///
+    /// -- SELECT id, name
+    /// --   BoundSelectList::Items(vec![
+    /// --       BoundProjection { item: BoundSelectItem::Column(ColumnId::try_from(0).unwrap()), alias: None },
+    /// --       BoundProjection { item: BoundSelectItem::Column(ColumnId::try_from(1).unwrap()), alias: None },
+    /// --   ])
+    ///
+    /// -- SELECT name AS label, COUNT(*) AS n
+    /// --   BoundSelectList::Items(vec![
+    /// --       BoundProjection { item: BoundSelectItem::Column(ColumnId::try_from(1).unwrap()), alias: Some("label".into()) },
+    /// --       BoundProjection { item: BoundSelectItem::Aggregate(count_star), alias: Some("n".into()) },
+    /// --   ])
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Propagates the errors from [`Self::bind_select_item`], including unknown
+    /// or ambiguous column references and unsupported expression shapes.
     fn resolve_select_list(
         scope: &Scope,
         columns: SelectColumns,
@@ -232,16 +631,50 @@ impl BoundSelect {
         }
     }
 
-    /// Binds one [`SelectItem`] into a [`BoundProjection`].
+    /// Binds one SQL projection expression into a [`BoundProjection`].
     ///
-    /// Only the shapes the executor can evaluate today are accepted:
+    /// Only the projection shapes the executor can evaluate today are accepted:
     /// plain columns, literals, single-column aggregates, and `COUNT(*)`.
-    /// Nested expressions like `SUM(a + 1)` parse fine but are rejected
-    /// here with [`BindError::Unsupported`] until binary expressions land.
+    /// Nested expressions like `SUM(age + 1)` parse fine but are rejected here
+    /// until binary expressions land.
+    ///
+    /// ```sql
+    /// -- SELECT age
+    /// --   BoundProjection {
+    /// --       item: BoundSelectItem::Column(ColumnId::try_from(2).unwrap()),
+    /// --       alias: None,
+    /// --   }
+    ///
+    /// -- SELECT 'guest' AS role
+    /// --   BoundProjection {
+    /// --       item: BoundSelectItem::Literal(Value::String("guest".into())),
+    /// --       alias: Some("role".into()),
+    /// --   }
+    ///
+    /// -- SELECT COUNT(*) AS n
+    /// --   BoundProjection {
+    /// --       item: BoundSelectItem::Aggregate(AggregateExpr {
+    /// --           func: AggregateFunc::CountStar,
+    /// --           col_id: ColumnId::default(),
+    /// --           output_name: "n".into(),
+    /// --       }),
+    /// --       alias: Some("n".into()),
+    /// --   }
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BindError::UnknownColumn`] or [`BindError::AmbiguousColumn`]
+    /// for column projections that cannot be resolved uniquely. Propagates
+    /// [`BindError::Unsupported`] from [`Self::bind_agg`] for aggregate
+    /// arguments that are not plain columns.
     fn bind_select_item(scope: &Scope, item: SelectItem) -> Result<BoundProjection, BindError> {
         let SelectItem { expr, alias } = item;
         let bound = match expr {
-            Expr::Column(col) => BoundSelectItem::Column(Self::resolve_scope_col(scope, &col)?),
+            Expr::Column(col) => {
+                let col = Self::resolve_scope_col(scope, &col)?;
+                BoundSelectItem::Column(col)
+            }
             Expr::Literal(v) => BoundSelectItem::Literal(v),
             Expr::CountStar => BoundSelectItem::Aggregate(AggregateExpr {
                 func: AggregateFunc::CountStar,
@@ -253,12 +686,45 @@ impl BoundSelect {
         Ok(BoundProjection { item: bound, alias })
     }
 
-    /// Binds a non-`COUNT(*)` aggregate `f(arg)`.
+    /// Binds a non-`COUNT(*)` SQL aggregate into an [`AggregateExpr`].
     ///
-    /// The argument must currently be a single column reference; richer
-    /// expressions are reported as `Unsupported`. The synthesized
-    /// `output_name` follows the user alias when present, otherwise
-    /// `FUNC(col)` to match how most databases label such columns.
+    /// The aggregate argument must currently be a single column reference. The
+    /// output name follows the user alias when present; otherwise it is
+    /// synthesized as `FUNC(col)` to match how most databases label aggregate
+    /// outputs.
+    ///
+    /// ```sql
+    /// -- SELECT COUNT(age) FROM users
+    /// --   BoundSelectItem::Aggregate(AggregateExpr {
+    /// --       func: AggregateFunc::CountCol,
+    /// --       col_id: ColumnId::try_from(2).unwrap(),
+    /// --       output_name: "COUNT(age)".into(),
+    /// --   })
+    ///
+    /// -- SELECT SUM(age) AS total_age FROM users
+    /// --   BoundSelectItem::Aggregate(AggregateExpr {
+    /// --       func: AggregateFunc::Sum,
+    /// --       col_id: ColumnId::try_from(2).unwrap(),
+    /// --       output_name: "total_age".into(),
+    /// --   })
+    ///
+    /// -- SELECT AVG(orders.total) FROM users JOIN orders ON users.id = orders.user_id
+    /// --   BoundSelectItem::Aggregate(AggregateExpr {
+    /// --       func: AggregateFunc::Avg,
+    /// --       col_id: ColumnId::try_from(5).unwrap(),
+    /// --       output_name: "AVG(total)".into(),
+    /// --   })
+    /// ```
+    ///
+    /// For grouped queries, the aggregate operator emits group key columns
+    /// first, followed by one column per aggregate in projection order.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BindError::Unsupported`] when the aggregate argument is not a
+    /// single column reference, such as `SUM(1)` or `SUM(age + 1)`. Returns
+    /// [`BindError::UnknownColumn`] or [`BindError::AmbiguousColumn`] when the
+    /// aggregate column cannot be resolved uniquely.
     fn bind_agg(
         scope: &Scope,
         func: &AggFunc,
@@ -287,6 +753,28 @@ impl BoundSelect {
         }))
     }
 
+    /// Resolves SQL `ORDER BY` columns into sort keys over the bound `FROM` row.
+    ///
+    /// ```sql
+    /// -- ORDER BY age
+    /// --   vec![(ColumnId::try_from(2).unwrap(), OrderDirection::Asc)]
+    ///
+    /// -- ORDER BY users.id DESC, name ASC
+    /// --   vec![
+    /// --       (ColumnId::try_from(0).unwrap(), OrderDirection::Desc),
+    /// --       (ColumnId::try_from(1).unwrap(), OrderDirection::Asc),
+    /// --   ]
+    ///
+    /// -- ORDER BY orders.total DESC  -- after users JOIN orders
+    /// --   vec![(ColumnId::try_from(5).unwrap(), OrderDirection::Desc)]
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BindError::UnknownColumn`] when an `ORDER BY` name is not in
+    /// scope, [`BindError::AmbiguousColumn`] when an unqualified name matches
+    /// multiple joined tables, or [`BindError::Unsupported`] if the resolved
+    /// index cannot fit in a [`ColumnId`].
     fn resolve_order_by(
         scope: &Scope,
         order_by: Vec<OrderBy>,
@@ -300,6 +788,31 @@ impl BoundSelect {
             .collect::<Result<Vec<_>, BindError>>()
     }
 
+    /// Resolves SQL `GROUP BY` columns into grouping keys over the bound `FROM` row.
+    ///
+    /// ```sql
+    /// -- GROUP BY age
+    /// --   vec![ColumnId::try_from(2).unwrap()]
+    ///
+    /// -- GROUP BY users.id, orders.total  -- after users JOIN orders
+    /// --   vec![
+    /// --       ColumnId::try_from(0).unwrap(),
+    /// --       ColumnId::try_from(5).unwrap(),
+    /// --   ]
+    ///
+    /// -- SELECT age, COUNT(*) FROM users GROUP BY age
+    /// --   group_by = vec![ColumnId::try_from(2).unwrap()]
+    /// ```
+    ///
+    /// The aggregate operator later emits group key columns first, in this
+    /// vector order, then aggregate outputs in `SELECT` declaration order.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BindError::UnknownColumn`] when a grouping column is not in
+    /// scope, [`BindError::AmbiguousColumn`] when an unqualified grouping name
+    /// appears in more than one joined table, or [`BindError::Unsupported`] if
+    /// the resolved index cannot fit in a [`ColumnId`].
     fn resolve_group_by(
         scope: &Scope,
         group_by: Vec<ColumnRef>,
@@ -311,6 +824,26 @@ impl BoundSelect {
     }
 
     #[inline]
+    /// Resolves one SQL column reference into a planner-facing [`ColumnId`].
+    ///
+    /// ```sql
+    /// -- SELECT name FROM users
+    /// --   resolve_scope_col(scope, &ColumnRef::from("name"))?
+    /// --   // ColumnId::try_from(1).unwrap()
+    ///
+    /// -- SELECT orders.total FROM users JOIN orders ON users.id = orders.user_id
+    /// --   resolve_scope_col(scope, &ColumnRef::from("orders.total"))?
+    /// --   // ColumnId::try_from(5).unwrap()
+    ///
+    /// -- SELECT id FROM users JOIN orders ON users.id = orders.user_id
+    /// --   // error: `id` is ambiguous because both tables expose it
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Propagates [`BindError::UnknownColumn`] and [`BindError::AmbiguousColumn`]
+    /// from the scope resolver. Returns [`BindError::Unsupported`] if the
+    /// resolved `usize` index is too large for [`ColumnId`].
     fn resolve_scope_col(scope: &Scope, col: &ColumnRef) -> Result<ColumnId, BindError> {
         let (idx, ..) = scope.resolve(col)?;
         ColumnId::try_from(idx)
