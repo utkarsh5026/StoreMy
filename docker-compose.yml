@@ -25,12 +25,9 @@ services:
     tty: true # Allocate a pseudo-TTY for terminal UI
     volumes:
       - storemy-data:/app/data
-      - ./examples:/app/examples:ro
     environment:
-      - DB_NAME=storemy_db
       - DATA_DIR=/app/data
       - TERM=xterm-256color # Enable colors in terminal
-    command: ["--db", "storemy_db", "--data", "/app/data"]
     networks:
       - storemy-network
 
@@ -38,13 +35,23 @@ services:
   storemy-test:
     build:
       context: .
-      dockerfile: Dockerfile
+      dockerfile: Dockerfile.dev
     container_name: storemy-test
     volumes:
-      - ./examples/test_db:/app/test_db:ro
+      - .:/app
       - storemy-test-data:/app/test_data
     working_dir: /app
-    entrypoint: ["go", "run", "test_db/test_db.go"]
+    command:
+      [
+        "cargo",
+        "test",
+        "-p",
+        "storemy",
+        "--test",
+        "integration",
+        "--locked",
+        "--release",
+      ]
     networks:
       - storemy-network
 
@@ -70,27 +77,25 @@ services:
       - /bin/sh
       - -c
       - |
+        set -e
         echo "=========================================="
-        echo "  StoreMy Performance Benchmark Suite"
-        echo "=========================================="
-        echo ""
-        go run benchmarks/benchmark.go
-        echo ""
-        echo "=========================================="
-        echo "  ✓ Benchmark Complete!"
+        echo "  StoreMy Criterion benchmarks (Rust)"
         echo "=========================================="
         echo ""
-        echo "📊 View Results:"
-        echo "  • HTML Report: ./benchmark-results/"
-        ls -1t /app/benchmark-results/*.html 2>/dev/null | head -1 | xargs -I {} echo "    └─ {}"
+        mkdir -p /app/benchmark-results
+        cargo bench -p storemy --locked 2>&1 | tee /app/benchmark-results/bench.log
+        if [ -d /app/target/criterion ]; then
+          rm -rf /app/benchmark-results/criterion 2>/dev/null || true
+          cp -r /app/target/criterion /app/benchmark-results/criterion || true
+        fi
         echo ""
-        echo "  • JSON Data:   ./benchmark-results/"
-        ls -1t /app/benchmark-results/*.json 2>/dev/null | head -1 | xargs -I {} echo "    └─ {}"
+        echo "=========================================="
+        echo "  Done — see target/criterion (and ./benchmark-results/criterion on host)"
+        echo "=========================================="
         echo ""
-        echo "💡 Quick Actions:"
-        echo "  • Open HTML:   open ./benchmark-results/benchmark_report_*.html"
-        echo "  • Start monitoring:  docker-compose --profile monitoring up -d"
-        echo "  • View Grafana:      http://localhost:3000 (admin/storemy)"
+        echo "  • Log: ./benchmark-results/bench.log"
+        echo "  • Criterion HTML: open ./benchmark-results/criterion/*/report/index.html"
+        echo "  • Monitoring: docker compose --profile monitoring up -d"
         echo ""
     networks:
       - storemy-network
@@ -123,9 +128,8 @@ services:
         ls -lt /results/*.html 2>/dev/null | head -5 | awk '{print "  • " $$9 " (" $$6 " " $$7 ")"}'
         echo ""
         echo "💡 To view:"
-        echo "  • Windows: start benchmark-results\\benchmark_report_*.html"
-        echo "  • Linux:   xdg-open benchmark-results/benchmark_report_*.html"
-        echo "  • Mac:     open benchmark-results/benchmark_report_*.html"
+        echo "  • Criterion: benchmark-results/criterion/*/report/index.html"
+        echo "  • Log:       benchmark-results/bench.log"
         echo ""
         echo "📈 Monitoring Dashboard:"
         echo "  • Grafana: http://localhost:3000 (admin/storemy)"
@@ -186,7 +190,17 @@ services:
       - DATA_DIR=/app/data
       - LOG_DIR=/app/metrics_logs
       - METRICS_PORT=8080
-    command: ["go", "run", "monitoring/exporter/metrics_exporter.go"]
+    command:
+      [
+        "cargo",
+        "run",
+        "--release",
+        "--locked",
+        "-p",
+        "storemy",
+        "--bin",
+        "metrics_exporter",
+      ]
     ports:
       - "8080:8080"
     networks:

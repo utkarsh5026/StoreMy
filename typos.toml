@@ -46,7 +46,6 @@ extend-exclude = [
   "Cargo.lock",
   "*.svg",
   "*.pdf",
-  "pkg/**/testdata/**",     # Go legacy fixtures — not worth linting
   ".git/",
 ]
 

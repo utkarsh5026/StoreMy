@@ -17,20 +17,6 @@ env:
   NIGHTLY_FMT: nightly-2026-04-01
 
 jobs:
-  # ───────────────────────────────── Go (legacy) ────────────────────────────
-  go:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - name: Set up Go
-        uses: actions/setup-go@v5
-        with:
-          go-version: "1.23"
-      - name: Build
-        run: go build -v ./...
-      - name: Test
-        run: go test -v ./...
-
   # ───────────────────────────────── Rust: fmt ──────────────────────────────
   # Fast, no compilation — runs on its own without cargo cache to stay cheap.
   rust-fmt:

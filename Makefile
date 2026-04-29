@@ -1,132 +1,165 @@
-# Makefile for StoreMy project
+# Makefile for StoreMy (Rust workspace). See CONTRIBUTING.md.
 
-.PHONY: test test-tables test-all test-watch test-watch-tables clean install-tools examples \
-        docker-demo docker-import docker-fresh docker-test docker-build docker-clean docker-stop quickstart
+.DEFAULT_GOAL := help
 
-# Run all tests
-test:
-	go test ./... -v
+.PHONY: test test-watch test-watch-rust test-coverage \
+	clean rust-clean \
+	build \
+	fmt rust-fmt rust-fmt-check rust-fmt-install install-hooks uninstall-hooks \
+	clippy rust-clippy rust-lint rust-deny rust-machete rust-typos rust-watch rust-audit \
+	lint \
+	check \
+	install-tools help \
+	docker-demo docker-test docker-build docker-clean docker-stop quickstart
 
-# Run tests for tables package only
-test-tables:
-	go test ./pkg/tables/... -v
+# ----- Rust (default; workspace root = repository root) -----
 
-# Run tests with coverage
-test-coverage:
-	go test ./... -cover
+# Nightly pin used ONLY for rustfmt (rustfmt.toml relies on unstable options).
+# Build/test/clippy use the stable toolchain from rust-toolchain.toml.
+RUSTFMT_TOOLCHAIN := nightly-2026-04-01
 
-# Watch and run all tests when files change (requires inotify-tools)
-test-watch:
-	@echo "Watching for changes in Go files..."
-	@echo "Will run: go test ./... -v"
+rust-fmt-install:
+	rustup toolchain install $(RUSTFMT_TOOLCHAIN) --component rustfmt --profile minimal
+
+rust-fmt:
+	cargo +$(RUSTFMT_TOOLCHAIN) fmt --all
+
+rust-fmt-check:
+	cargo +$(RUSTFMT_TOOLCHAIN) fmt --all -- --check
+
+# ----- Git hooks (tracked in tools/git-hooks) -----
+install-hooks:
+	git config core.hooksPath tools/git-hooks
+	@echo "Git hooks enabled (core.hooksPath = tools/git-hooks)."
+	@echo "Use 'SKIP_HOOKS=1 git commit ...' to bypass once."
+
+uninstall-hooks:
+	git config --unset core.hooksPath || true
+	@echo "Git hooks disabled."
+
+rust-clippy:
+	cargo clippy --workspace --all-targets -- -D warnings
+
+rust-deny:
+	cargo deny check
+
+rust-machete:
+	cargo machete
+
+rust-typos:
+	typos
+
+rust-watch:
+	bacon
+
+rust-audit: rust-deny rust-machete rust-typos
+
+rust-lint: rust-clippy
+
+rust-test:
+	cargo test --workspace
+
+rust-nextest:
+	cargo nextest run --workspace
+
+rust-build:
+	cargo build --workspace
+
+rust-build-release:
+	cargo build --workspace --release
+
+rust-clean:
+	cargo clean
+
+# Default developer targets
+fmt: rust-fmt
+clippy: rust-clippy
+test: rust-test
+build: rust-build
+check: rust-fmt rust-clippy rust-test
+
+lint: rust-clippy
+
+test-watch-rust:
+	@echo "Watching db/src for changes (Rust tests)..."
 	@echo "Press Ctrl+C to stop"
-	@echo ""
-	@go test ./... -v
-	@echo ""
-	@while inotifywait -e modify,create,delete -r . --include='.*\.go$$' 2>/dev/null; do \
-		echo "Files changed, running tests..."; \
-		echo "$$(date): Running go test ./... -v"; \
-		go test ./... -v; \
+	@cargo test --workspace
+	@while inotifywait -e modify,create,delete -r db/src 2>/dev/null; do \
+		echo "$$(date): Running cargo test --workspace"; \
+		cargo test --workspace; \
 		echo ""; \
 	done
 
+test-watch: test-watch-rust
 
-# Install required tools
+test-coverage:
+	cargo test --workspace
+	@echo "Tip: install cargo-llvm-cov for LCOV/HTML: cargo llvm-cov test --workspace"
+
+# ----- Housekeeping -----
+
+clean: rust-clean
+
 install-tools:
 	@echo "Installing file watching tools..."
 	sudo apt-get update && sudo apt-get install -y inotify-tools || true
-	go install github.com/mitranim/gow@latest || true
+	@echo "Optional: cargo install cargo-nextest cargo-watch bacon typos-cli --locked"
 	@echo "Tools installation complete!"
 
-# Clean test cache
-clean:
-	go clean -testcache
-
-# Build the project
-build:
-	go build -o bin/storemy ./
-
-# Format code
-fmt:
-	go fmt ./...
-
-# Vet code
-vet:
-	go vet ./...
-
-# Run linter (requires golangci-lint)
-lint:
-	golangci-lint run || true
-
-# Run all checks
-check: fmt vet test
-
-# Run WAL examples
-examples:
-	go run pkg/examples/main.go
-
-# Help
 help:
-	@echo "StoreMy Database - Available Commands"
+	@echo "StoreMy — Rust workspace (see CONTRIBUTING.md)"
 	@echo ""
-	@echo "Docker Commands (Recommended for Testing):"
-	@echo "  make docker-demo      - Start database with demo data (easiest way to test)"
-	@echo "  make docker-import    - Start database and import sample SQL"
-	@echo "  make docker-fresh     - Start empty database"
-	@echo "  make docker-test      - Run automated CRUD tests"
-	@echo "  make docker-build     - Build Docker image"
-	@echo "  make docker-clean     - Stop containers and remove volumes"
-	@echo "  make docker-stop      - Stop Docker containers"
-	@echo "  make quickstart       - Build and run demo (one command)"
+	@echo "Docker:"
+	@echo "  make docker-demo      - Interactive REPL (docker compose up storemy)"
+	@echo "  make docker-test      - Integration tests (docker compose run storemy-test)"
+	@echo "  make docker-build     - Build images"
+	@echo "  make docker-clean     - Remove containers/volumes"
+	@echo "  make docker-stop      - Stop containers"
+	@echo "  make quickstart       - docker-build + docker-demo"
 	@echo ""
-	@echo "Local Development:"
-	@echo "  test              - Run all tests"
-	@echo "  test-tables       - Run table tests only"
-	@echo "  test-coverage     - Run tests with coverage"
-	@echo "  test-watch        - Watch and run all tests on file changes"
-	@echo "  test-watch-tables - Watch and run table tests on file changes"
-	@echo "  install-tools     - Install file watching tools"
-	@echo "  clean             - Clean test cache"
-	@echo "  build             - Build the project"
-	@echo "  fmt               - Format code"
-	@echo "  vet               - Vet code"
-	@echo "  lint              - Run linter"
-	@echo "  check             - Run fmt, vet, and test"
-	@echo "  examples          - Run WAL transaction examples"
-	@echo "  help              - Show this help"
+	@echo "Rust (default):"
+	@echo "  test / rust-test     - cargo test --workspace"
+	@echo "  rust-nextest         - cargo nextest run (install cargo-nextest)"
+	@echo "  fmt / rust-fmt       - cargo +nightly fmt --all (uses pinned nightly)"
+	@echo "  rust-fmt-check       - fmt --check (same nightly)"
+	@echo "  rust-fmt-install     - install pinned nightly + rustfmt component"
+	@echo "  install-hooks        - enable tools/git-hooks (pre-commit fmt+clippy)"
+	@echo "  uninstall-hooks      - disable the repo git hooks"
+	@echo "  clippy               - clippy -D warnings"
+	@echo "  rust-deny            - cargo deny check (licenses/CVEs/dups)"
+	@echo "  rust-machete         - unused deps"
+	@echo "  rust-typos           - source-code spell check (install: cargo install typos-cli)"
+	@echo "  rust-watch           - bacon background checker (install: cargo install bacon)"
+	@echo "  rust-audit           - deny + machete + typos"
+	@echo "  build                - cargo build --workspace"
+	@echo "  check                - fmt + clippy + test"
+	@echo "  test-watch           - inotify + cargo test on db/src changes"
+	@echo "  rust-clean           - cargo clean"
+	@echo ""
+	@echo "  install-tools, help"
 
 # ============================================
-# Docker Commands (For Recruiters/Testers)
+# Docker
 # ============================================
 
 docker-demo:
-	@echo "🚀 Starting StoreMy with demo data..."
-	@echo "Use Ctrl+E to execute queries, Ctrl+H for help, Ctrl+Q to quit"
-	docker-compose up storemy-demo
-
-docker-import:
-	@echo "📥 Starting StoreMy with sample SQL import..."
-	docker-compose up storemy-import
-
-docker-fresh:
-	@echo "🆕 Starting fresh StoreMy database..."
-	docker-compose up storemy-fresh
+	@echo "Starting StoreMy REPL (Rust). Ctrl+C to stop."
+	docker compose up storemy
 
 docker-test:
-	@echo "🧪 Running automated CRUD tests..."
-	docker-compose run --rm storemy-test
+	@echo "Running Rust integration tests in Docker..."
+	docker compose run --rm storemy-test
 
 docker-build:
-	@echo "🔨 Building Docker image..."
-	docker-compose build
+	@echo "Building Docker images..."
+	docker compose build
 
 docker-clean:
-	@echo "🧹 Cleaning up Docker containers and volumes..."
-	docker-compose down -v
+	@echo "Cleaning up Docker containers and volumes..."
+	docker compose down -v
 
 docker-stop:
-	@echo "🛑 Stopping Docker containers..."
-	docker-compose down
+	@echo "Stopping Docker containers..."
+	docker compose down
 
-# Quick start for recruiters
 quickstart: docker-build docker-demo

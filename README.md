@@ -1,12 +1,11 @@
 # StoreMy
 
-> A fully-featured relational database management system built from scratch in Go
+> A relational database engine built from scratch in **Rust**
 
-StoreMy is a production-grade educational database engine implementing core DBMS concepts including ACID transactions, query optimization, crash recovery, and concurrent access control. Built entirely from the ground up without external database libraries, it demonstrates sophisticated systems programming and deep understanding of database internals.
+StoreMy is an educational database engine implementing core DBMS concepts including ACID transactions, query optimization, crash recovery, and concurrent access control—without embedding SQLite/PostgreSQL as the storage engine. The implementation lives in the Cargo workspace under [`db/`](db/). For workflows, CI, and contribution expectations, see [CONTRIBUTING.md](CONTRIBUTING.md).
 
-![Go Version](https://img.shields.io/badge/Go-1.24%2B-00ADD8?style=flat&logo=go)
+![Rust](https://img.shields.io/badge/rust-1.88-orange?logo=rust)
 ![License](https://img.shields.io/badge/license-MIT-blue.svg)
-![Tests](https://img.shields.io/badge/tests-74%20files-success)
 ![Docker](https://img.shields.io/badge/docker-ready-blue?style=flat&logo=docker)
 
 ## 🚀 Quick Start with Docker (Recommended for Testing)
@@ -20,22 +19,19 @@ make quickstart
 Or using Docker Compose directly:
 
 ```bash
-docker-compose up storemy-demo
+docker compose up storemy
 ```
 
-This starts the database with pre-loaded demo data. Press **Ctrl+E** to execute queries, **Ctrl+H** for help.
+This builds the Rust image and starts the interactive REPL (see [db/src/main.rs](db/src/main.rs) for CLI modes). Data persists under the `storemy-data` volume at `/app/data` inside the container (`DATA_DIR`).
 
 ### Other Quick Start Options
 
 ```bash
-# Run automated CRUD tests
+# Run Rust integration tests in a container
 make docker-test
 
-# Import custom SQL file
-docker-compose up storemy-import
-
-# Start fresh database (no demo data)
-docker-compose up storemy-fresh
+# Benchmark profile (Criterion; copies reports under ./benchmark-results)
+docker compose --profile benchmark up storemy-benchmark
 ```
 
 ## Key Features
@@ -76,11 +72,8 @@ docker-compose up storemy-fresh
 
 ### User Interface
 
-- **Beautiful Terminal UI** built with Bubble Tea framework
-- **Syntax Highlighting Hints** for SQL queries
-- **Real-Time Statistics Display** showing database health and performance metrics
-- **Query History** tracking with keyboard shortcuts
-- **Interactive Demo Mode** with pre-populated sample data
+- **Terminal REPL** built with `ratatui` / `rustyline` (interactive SQL shell and one-shot mode)
+- **Query history** persisted under the data directory
 
 ## Architecture
 
@@ -88,31 +81,13 @@ docker-compose up storemy-fresh
 
 ```
 StoreMy/
-├── pkg/
-│   ├── storage/          # Storage layer with heap files and indexes
-│   │   ├── heap/         # Slotted page heap file implementation
-│   │   ├── page/         # Page abstraction and management
-│   │   └── index/        # B+Tree and Hash index structures
-│   ├── memory/           # Buffer pool manager with LRU cache
-│   ├── concurrency/      # Lock manager and transaction context
-│   │   ├── lock/         # Two-phase locking with deadlock detection
-│   │   └── transaction/  # Transaction state and lifecycle management
-│   ├── log/              # Write-ahead logging for durability
-│   ├── execution/        # Query execution operators
-│   │   ├── query/        # SeqScan, Filter, Project, Limit operators
-│   │   ├── join/         # Join algorithms and cost estimation
-│   │   └── aggregation/  # Aggregate functions and grouping
-│   ├── parser/           # SQL lexer, parser, and query planner
-│   │   ├── lexer/        # Tokenization
-│   │   ├── parser/       # Recursive descent parser
-│   │   ├── statements/   # SQL statement AST nodes
-│   │   └── plan/         # Query plan generation
-│   ├── catalog/          # System catalog and metadata management
-│   ├── database/         # High-level database interface
-│   ├── types/            # Type system (INTEGER, VARCHAR, FLOAT, BOOLEAN)
-│   ├── tuple/            # Tuple and record management
-│   └── ui/               # Terminal user interface
-└── main.go               # Entry point with CLI
+├── db/                     # `storemy` crate — storage, buffer pool, WAL, parser, execution, …
+│   ├── src/
+│   ├── benches/            # Criterion benchmarks
+│   └── tests/integration*  # End-to-end tests against the public `Database` API
+├── storemy-codec-derive/   # Proc-macros for on-disk codecs
+├── Dockerfile              # Release multi-stage image (`storemy` + `metrics_exporter` binaries)
+└── docker-compose.yml      # REPL, tests, benchmarks, optional monitoring stack
 ```
 
 ### Query Processing Pipeline
@@ -155,47 +130,38 @@ Results
 
 ### Prerequisites
 
-- Go 1.24 or higher
-- Terminal with UTF-8 support for best UI experience
+- Rust **1.88** (see [rust-toolchain.toml](rust-toolchain.toml); `rustup` will pick it up automatically)
+- A terminal with UTF-8 support
 
 ### Installation
 
 ```bash
-# Clone the repository
-git clone https://github.com/yourusername/storemy.git
+git clone https://github.com/utkarsh-priyadarshi/storemy.git
 cd storemy
 
-# Install dependencies
-go mod download
+# Debug build (workspace root)
+cargo build -p storemy
 
-# Build the application
-go build -o storemy
+# Release binary
+cargo build -p storemy --release
 ```
 
 ### Quick Start
 
 ```bash
-# Run with default settings
-go run main.go
+# Interactive REPL (default data dir ./data unless DATA_DIR is set)
+cargo run -p storemy -- repl
 
-# Run in demo mode with sample data
-go run main.go --demo
-
-# Specify custom database name and data directory
-go run main.go --db myapp --data ./mydata
-
-# Import SQL file on startup
-go run main.go --import init_schema.sql
+# One-shot SQL
+cargo run -p storemy -- "SELECT 1;"
 ```
 
-### Command-Line Options
+### Environment
 
-| Flag         | Description                       | Default    |
-| ------------ | --------------------------------- | ---------- |
-| `--db`     | Database name                     | `mydb`   |
-| `--data`   | Data directory path               | `./data` |
-| `--demo`   | Run in demo mode with sample data | `false`  |
-| `--import` | SQL file to import on startup     | `""`     |
+| Variable    | Description                          | Default   |
+| ----------- | ------------------------------------ | --------- |
+| `DATA_DIR`  | Directory for WAL, catalog, history  | `./data`  |
+| `RUST_LOG`  | `tracing` filter (see observability) | see crate |
 
 ## Usage Examples
 
@@ -244,17 +210,9 @@ WHERE hire_date < '2020-01-01'
 DROP TABLE employees
 ```
 
-### Keyboard Shortcuts (Interactive Mode)
+### REPL
 
-| Shortcut   | Action                   |
-| ---------- | ------------------------ |
-| `Ctrl+E` | Execute current query    |
-| `Ctrl+C` | Clear editor             |
-| `Ctrl+T` | Show all tables          |
-| `Ctrl+S` | Show database statistics |
-| `Ctrl+H` | Toggle help overlay      |
-| `Ctrl+Q` | Quit application         |
-| `↑/↓`  | Navigate query history   |
+Run `cargo run -p storemy -- repl` and type `help` for the current key bindings and commands.
 
 ## Technical Highlights
 
@@ -304,31 +262,21 @@ Selection criteria based on:
 
 ## Testing
 
-The project includes comprehensive test coverage across all components:
-
 ```bash
-# Run all tests
-go test ./...
+# Full workspace (library + integration test crate)
+cargo test --workspace
 
-# Run tests with coverage report
-go test -cover ./...
+# Integration tests only (`db/tests/integration.rs`)
+cargo test -p storemy --test integration
 
-# Run tests for specific package
-go test ./pkg/storage/heap/...
-go test ./pkg/concurrency/lock/...
-go test ./pkg/execution/join/...
-
-# Run with verbose output
-go test -v ./pkg/database/...
+# CI-style (install cargo-nextest first)
+cargo nextest run --workspace
 ```
 
-### Test Coverage
+### Test layout
 
-- **74 test files** covering critical components
-- **Unit Tests**: Individual component functionality
-- **Integration Tests**: Multi-component interactions
-- **Concurrency Tests**: Race condition detection and deadlock scenarios
-- **End-to-End Tests**: Full query execution pipelines
+- **Unit tests** live next to modules under `db/src/`.
+- **Integration tests** under `db/tests/` exercise the public `Database` API end-to-end.
 
 ## Performance Characteristics
 
@@ -350,12 +298,9 @@ go test -v ./pkg/database/...
 - **Join Block Size**: 100 tuples (configurable)
 - **Hash Table**: O(1) build and probe for equi-joins
 
-## Project Statistics
+## Project scope
 
-- **149 source files** implementing complete DBMS functionality
-- **74 test files** with comprehensive coverage
-- **~20,000+ lines** of production-quality Go code
-- **10+ subsystems** working in concert for database operations
+The codebase is organized as a single primary crate (`storemy`) with focused submodules for storage, concurrency, parsing, execution, and recovery—see `db/src/` and [RUST_PORT_ROADMAP.md](RUST_PORT_ROADMAP.md).
 
 ## Design Philosophy
 

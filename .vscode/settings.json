@@ -37,8 +37,6 @@
     "Fanout",
     "Freqs",
     "functools",
-    "golangci",
-    "GOPATH",
     "hashbrown",
     "hashindex",
     "heapage",

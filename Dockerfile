@@ -1,51 +1,40 @@
-FROM golang:1.24-alpine AS builder
+# syntax=docker/dockerfile:1
 
-RUN apk add --no-cache git make
+FROM rust:1.88-bookworm AS builder
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends pkg-config \
+    && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /build
 
+COPY rust-toolchain.toml Cargo.toml Cargo.lock ./
+COPY db ./db
+COPY storemy-codec-derive ./storemy-codec-derive
 
-COPY go.mod go.sum ./
+RUN cargo build -p storemy --release --locked --bins
 
-RUN go mod download
+FROM debian:bookworm-slim AS runtime
 
-COPY . .
-
-# Build the application
-RUN CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -o storemy .
-
-# Stage 2: Runtime
-FROM alpine:latest
-
-
-RUN apk --no-cache add ca-certificates bash
-
-RUN addgroup -g 1000 storemy && \
-    adduser -D -u 1000 -G storemy storemy
-
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ca-certificates \
+    && rm -rf /var/lib/apt/lists/* \
+    && groupadd -g 1000 storemy \
+    && useradd -r -u 1000 -g storemy storemy
 
 WORKDIR /app
 
-# Copy binary from builder
-COPY --from=builder /build/storemy .
+COPY --from=builder /build/target/release/storemy /build/target/release/metrics_exporter ./
 
-# Copy sample SQL files
-COPY --chown=storemy:storemy examples/ ./examples/
-
-# Create data directories
-RUN mkdir -p /app/data /app/data/logs && \
-    chown -R storemy:storemy /app/data
-
+RUN mkdir -p /app/data \
+    && chown -R storemy:storemy /app
 
 USER storemy
 
-ENV DB_NAME=storemy_db
-ENV DATA_DIR=/app/data
-
-# Volume for data persistence
 VOLUME ["/app/data"]
 
-# Default command - can be overridden
+ENV DATA_DIR=/app/data
+
 ENTRYPOINT ["./storemy"]
 
-CMD ["--db", "storemy_db", "--data", "/app/data"]
+CMD ["repl"]

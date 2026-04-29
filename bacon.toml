@@ -5,7 +5,7 @@
 
 default_job = "clippy"
 
-# Where bacon watches. Excludes target/, node_modules, pkg/ (Go legacy).
+# Where bacon watches. Excludes target/, node_modules.
 [additional_job_options]
 # No-op here; jobs below set their own.
 

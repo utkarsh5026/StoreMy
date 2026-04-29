@@ -11,13 +11,13 @@
 *~
 
 # Build artifacts
+target/
 *.exe
 storemy
 test_db
 storemy.exe
 
 # Test files with main() that conflict
-test_db.go
 test_crud.sql
 
 # Test and temporary data
@@ -43,6 +43,7 @@ Thumbs.db
 tmp/
 temp/
 *.tmp
+node_modules/
 
 # Benchmarks
 .benchmarks/
