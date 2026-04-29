@@ -6,6 +6,10 @@ on:
   pull_request:
     branches: [main]
 
+# Least-privilege: we only need to read the repo contents.
+permissions:
+  contents: read
+
 # Cancel in-flight runs on the same PR when a new push arrives.
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
@@ -13,7 +17,6 @@ concurrency:
 
 env:
   CARGO_TERM_COLOR: always
-  RUSTFLAGS: -C link-arg=-fuse-ld=mold
   NIGHTLY_FMT: nightly-2026-04-01
 
 jobs:
@@ -21,6 +24,7 @@ jobs:
   # Fast, no compilation — runs on its own without cargo cache to stay cheap.
   rust-fmt:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
       - name: Rust nightly (rustfmt)
@@ -35,6 +39,7 @@ jobs:
   # Runs against Cargo.lock only — doesn't need a full build.
   rust-deps:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@v1
@@ -52,30 +57,57 @@ jobs:
       - name: cargo-machete
         run: cargo machete
 
-  # ───────────────────────────── Rust: clippy ───────────────────────────────
+
   rust-clippy:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
       - uses: rui314/setup-mold@v1
       - uses: dtolnay/rust-toolchain@v1
         with:
           components: clippy
+      - name: Install sccache
+        uses: taiki-e/install-action@v2
+        with:
+          tool: sccache
+      - name: Cache sccache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/sccache
+          key: sccache-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            sccache-${{ runner.os }}-
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: "."
           shared-key: "storemy-build"
           save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: Clippy
+        env:
+          RUSTC_WRAPPER: sccache
+          SCCACHE_DIR: ~/.cache/sccache
+          RUSTFLAGS: -C link-arg=-fuse-ld=mold
         run: cargo clippy --workspace --all-targets -- -D warnings
 
-  # ───────────────────────────── Rust: test ─────────────────────────────────
   rust-test:
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
       - uses: rui314/setup-mold@v1
       - uses: dtolnay/rust-toolchain@v1
+      - name: Install sccache
+        uses: taiki-e/install-action@v2
+        with:
+          tool: sccache
+      - name: Cache sccache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/sccache
+          key: sccache-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            sccache-${{ runner.os }}-
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: "."
@@ -84,14 +116,31 @@ jobs:
       - name: Install cargo-nextest
         uses: taiki-e/install-action@nextest
       - name: Tests
+        env:
+          RUSTC_WRAPPER: sccache
+          SCCACHE_DIR: ~/.cache/sccache
+          RUSTFLAGS: -C link-arg=-fuse-ld=mold
         run: cargo nextest run --workspace --profile ci
-      - name: Build benches (compile-only smoke)
-        run: cargo bench --workspace --no-run
+      - name: Upload nextest JUnit
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: nextest-junit
+          path: junit.xml
+          if-no-files-found: ignore
+      - name: Test summary
+        if: always()
+        uses: mikepenz/action-junit-report@v4
+        with:
+          report_paths: junit.xml
+          detailed_summary: true
 
-  # ───────────────────────────── Rust: typos ────────────────────────────────
   # Separate lightweight job — pure IO, no compilation.
   rust-typos:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
-      - uses: crate-ci/typos@master
+      - name: Typos
+        uses: crate-ci/typos@master
+

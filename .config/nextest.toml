@@ -26,9 +26,8 @@ failure-output = "final"       # less noisy in CI logs; summary at the end
 fail-fast = false
 retries = 0                    # fail honestly; don't paper over flakes
 
-# In CI, archive JUnit XML for GitHub's test-summary action if you add one later.
-# [profile.ci.junit]
-# path = "junit.xml"
+[profile.ci.junit]
+path = "junit.xml"
 
 # Group heavy / slow tests separately so you can run just them with
 # `cargo nextest run --profile default -E 'test(slow::)'`.
