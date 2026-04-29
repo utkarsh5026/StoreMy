@@ -39,7 +39,7 @@ use thiserror::Error;
 
 use crate::{
     TransactionId,
-    execution::expression::BooleanExpression,
+    execution::{expression::BooleanExpression, setops::Distinct},
     heap::file::HeapFile,
     tuple::{Tuple, TupleSchema},
 };
@@ -117,6 +117,25 @@ impl<'a> PlanNode<'a> {
 
     pub fn filter(child: Self, predicate: BooleanExpression) -> Self {
         Self::Filter(unary::Filter::new(Box::new(child), predicate))
+    }
+
+    pub fn distinct(child: Self) -> Self {
+        Self::Distinct(Distinct::new(Box::new(child)))
+    }
+
+    pub fn sort(child: Self, keys: Vec<unary::SortKey>) -> Self {
+        Self::Sort(unary::Sort::new(keys, Box::new(child)))
+    }
+
+    pub fn limit(child: Self, limit: u64, offset: u64) -> Self {
+        Self::Limit(unary::Limit::new(Box::new(child), limit, offset))
+    }
+
+    pub fn project(child: Self, items: Vec<unary::ProjectItem>) -> Result<Self, ExecutionError> {
+        Ok(Self::Project(unary::Project::with_items(
+            Box::new(child),
+            items,
+        )?))
     }
 }
 

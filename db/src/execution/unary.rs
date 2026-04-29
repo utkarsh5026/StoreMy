@@ -13,13 +13,16 @@
 //! All operators implement [`Executor`] (and therefore [`FallibleIterator`]),
 //! so they can be composed freely into a plan tree via `Box<PlanNode>`.
 
+use std::cmp::Ordering;
+
 use fallible_iterator::FallibleIterator;
 
 use super::{ExecutionError, Executor, expression::BooleanExpression};
 use crate::{
     execution::PlanNode,
     primitives,
-    tuple::{Tuple, TupleSchema},
+    tuple::{Field, Tuple, TupleSchema},
+    types::{Type, Value},
 };
 
 /// Keeps only the tuples from its child that satisfy a single column predicate.
@@ -70,49 +73,108 @@ impl Executor for Filter<'_> {
     }
 }
 
-/// Picks a subset of columns from each tuple produced by its child.
+/// One output column produced by [`Project`].
 ///
-/// Corresponds to the column list in a SQL `SELECT`, e.g.
-/// `SELECT id, name FROM …` projects two columns out of however many the
-/// child exposes.
+/// Either picks a column out of the child tuple by index, or emits a
+/// constant value that is repeated on every output row.
+#[derive(Debug, Clone)]
+pub enum ProjectItem {
+    /// Pick column `idx` from the child tuple.
+    Column(usize),
+    /// Emit `value` on every row, labeled `name` in the output schema.
+    Literal { value: Value, name: String },
+}
+
+impl ProjectItem {
+    /// Convenience constructor matching [`Project::new`]'s old signature.
+    pub fn column(col_id: primitives::ColumnId) -> Self {
+        Self::Column(usize::from(col_id))
+    }
+
+    /// Builds a literal output column. `NULL` literals default to
+    /// [`Type::String`] since SQL `NULL` carries no inherent type.
+    pub fn literal(value: Value, name: impl Into<String>) -> Self {
+        Self::Literal {
+            value,
+            name: name.into(),
+        }
+    }
+}
+
+/// Picks a subset of columns from each tuple produced by its child, optionally
+/// interleaving constant SQL literals.
 ///
-/// The output schema contains only the projected fields, in the order given
-/// by `col_ids` at construction time.
+/// Corresponds to the column list in a SQL `SELECT`. For every input row the
+/// operator builds an output row by walking its [`ProjectItem`]s in order:
+/// `Column(i)` copies the i-th value out of the child tuple; `Literal { .. }`
+/// clones the constant.
+///
+/// The output schema is computed once at construction time — column items copy
+/// the field from the child schema, literal items synthesize a [`Field`] from
+/// the literal's runtime type.
 #[derive(Debug)]
 pub struct Project<'a> {
     child: Box<PlanNode<'a>>,
-    col_indices: Vec<usize>,
+    items: Vec<ProjectItem>,
     output_schema: TupleSchema,
 }
 
 impl<'a> Project<'a> {
-    /// Creates a new `Project` operator that selects `col_ids` from each tuple.
-    ///
-    /// Column indices are validated against the child's schema immediately —
-    /// any out-of-bounds `ColumnId` causes an error here rather than silently
-    /// dropping values during iteration.
+    /// Creates a `Project` from a list of column indices — every output
+    /// column is taken straight from the child tuple.
     ///
     /// # Errors
     ///
-    /// Returns [`ExecutionError::TypeError`] if any `ColumnId` in `col_ids`
-    /// refers to a column index that does not exist in the child's schema.
+    /// Returns [`ExecutionError::TypeError`] if any `ColumnId` refers to an
+    /// index that does not exist in the child's schema.
     pub fn new(
         child: Box<PlanNode<'a>>,
         col_ids: &[primitives::ColumnId],
     ) -> Result<Self, ExecutionError> {
-        let col_indices = col_ids
-            .iter()
-            .map(|&c| usize::from(c))
-            .collect::<Vec<usize>>();
+        let items: Vec<ProjectItem> = col_ids.iter().copied().map(ProjectItem::column).collect();
+        Self::with_items(child, items)
+    }
 
-        let output_schema = child
-            .schema()
-            .project(&col_indices)
-            .map_err(|e| ExecutionError::TypeError(e.to_string()))?;
+    /// Creates a `Project` from a mixed list of column picks and literals.
+    ///
+    /// Use this when the SQL projection contains constant expressions like
+    /// `SELECT 1, 'guest' AS role, name FROM users`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ExecutionError::TypeError`] if any [`ProjectItem::Column`]
+    /// refers to an out-of-range index in the child's schema.
+    pub fn with_items(
+        child: Box<PlanNode<'a>>,
+        items: Vec<ProjectItem>,
+    ) -> Result<Self, ExecutionError> {
+        let child_schema = child.schema();
+        let fields = items
+            .iter()
+            .map(|item| match item {
+                ProjectItem::Column(idx) => {
+                    let field = child_schema.field(*idx).ok_or_else(|| {
+                        ExecutionError::TypeError(format!(
+                            "Project column index {idx} out of range"
+                        ))
+                    })?;
+                    Ok(field.clone())
+                }
+                ProjectItem::Literal { value, name } => {
+                    let ty = value.get_type().unwrap_or(Type::String);
+                    let mut field = Field::new(name.clone(), ty);
+                    if !value.is_null() {
+                        field = field.not_null();
+                    }
+                    Ok(field)
+                }
+            })
+            .collect::<Result<Vec<_>, ExecutionError>>()?;
+
         Ok(Self {
             child,
-            col_indices,
-            output_schema,
+            items,
+            output_schema: TupleSchema::new(fields),
         })
     }
 }
@@ -122,10 +184,24 @@ impl FallibleIterator for Project<'_> {
     type Error = ExecutionError;
 
     fn next(&mut self) -> Result<Option<Tuple>, ExecutionError> {
-        match self.child.next()? {
-            Some(tuple) => Ok(Some(tuple.project(&self.col_indices))),
-            None => Ok(None),
+        let Some(input) = self.child.next()? else {
+            return Ok(None);
+        };
+        let mut out = Vec::with_capacity(self.items.len());
+        for item in &self.items {
+            match item {
+                ProjectItem::Column(idx) => match input.get(*idx) {
+                    Some(v) => out.push(v.clone()),
+                    None => {
+                        return Err(ExecutionError::TypeError(format!(
+                            "Project: column index {idx} missing from input tuple"
+                        )));
+                    }
+                },
+                ProjectItem::Literal { value, .. } => out.push(value.clone()),
+            }
         }
+        Ok(Some(Tuple::new(out)))
     }
 }
 
@@ -139,18 +215,44 @@ impl Executor for Project<'_> {
     }
 }
 
-/// Sorts all tuples from its child by a single column, either ascending or descending.
+/// One column of an `ORDER BY` clause: which column, and which direction.
 ///
-/// Corresponds to `ORDER BY col [ASC | DESC]` in SQL. Because sorting requires
-/// seeing the full input before producing any output, `Sort` is a **blocking**
-/// operator: on the first call to `next` it drains the child completely into
-/// memory, sorts the collected tuples, and then yields them one by one.
+/// Multiple `SortKey`s are evaluated lexicographically — the first key
+/// decides the ordering, and later keys are only consulted to break ties.
+#[derive(Debug, Clone, Copy)]
+pub struct SortKey {
+    pub col_id: primitives::ColumnId,
+    pub ascending: bool,
+}
+
+impl SortKey {
+    pub fn asc(col_id: primitives::ColumnId) -> Self {
+        Self {
+            col_id,
+            ascending: true,
+        }
+    }
+
+    pub fn desc(col_id: primitives::ColumnId) -> Self {
+        Self {
+            col_id,
+            ascending: false,
+        }
+    }
+}
+
+/// Sorts all tuples from its child by an ordered list of keys.
+///
+/// Corresponds to `ORDER BY c1 [ASC|DESC], c2 [ASC|DESC], …` in SQL.
+/// Because sorting requires seeing the full input before producing any
+/// output, `Sort` is a **blocking** operator: on the first call to `next`
+/// it drains the child completely into memory, sorts the collected
+/// tuples, and then yields them one by one.
 ///
 /// The output schema is identical to the child's.
 #[derive(Debug)]
 pub struct Sort<'a> {
-    ascending: bool,
-    col_id: primitives::ColumnId,
+    keys: Vec<SortKey>,
     child: Box<PlanNode<'a>>,
     sorted: Vec<Tuple>,
     cursor: usize,
@@ -160,13 +262,12 @@ pub struct Sort<'a> {
 impl<'a> Sort<'a> {
     /// Creates a new `Sort` operator.
     ///
-    /// - `ascending` — pass `true` for `ASC`, `false` for `DESC`.
-    /// - `col_id` — the column to sort by.
+    /// - `keys` — the ordered list of `(column, direction)` pairs. The first key is the primary
+    ///   sort key; subsequent keys break ties.
     /// - `child` — the upstream operator to drain.
-    pub fn new(ascending: bool, col_id: primitives::ColumnId, child: Box<PlanNode<'a>>) -> Self {
+    pub fn new(keys: Vec<SortKey>, child: Box<PlanNode<'a>>) -> Self {
         Self {
-            ascending,
-            col_id,
+            keys,
             child,
             sorted: Vec::new(),
             cursor: 0,
@@ -178,8 +279,10 @@ impl<'a> Sort<'a> {
     ///
     /// Subsequent calls return immediately because `self.materialized` is `true`.
     ///
-    /// `NULL` values sort before all non-null values. Incomparable non-null values
-    /// (which should not arise for well-typed data) are treated as equal.
+    /// `NULL` values sort before all non-null values for each key. Each key's
+    /// `ascending` flag only flips the contribution of that key — it does not
+    /// reverse the whole comparator. Incomparable non-null values (which should
+    /// not arise for well-typed data) are treated as equal for that key.
     ///
     /// # Errors
     ///
@@ -193,19 +296,54 @@ impl<'a> Sort<'a> {
             self.sorted.push(tuple);
         }
 
-        let col_index = usize::from(self.col_id);
+        let keys = self.keys.clone();
         self.sorted.sort_by(|a, b| {
-            let ord = match (a.get(col_index), b.get(col_index)) {
-                (Some(va), Some(vb)) => va.partial_cmp(vb).unwrap_or(std::cmp::Ordering::Equal),
-                (None, Some(_)) => std::cmp::Ordering::Less,
-                (Some(_), None) => std::cmp::Ordering::Greater,
-                (None, None) => std::cmp::Ordering::Equal,
-            };
-            if self.ascending { ord } else { ord.reverse() }
+            for key in &keys {
+                let ord = Self::compare_by_sort_key(*key, a, b);
+                if ord != Ordering::Equal {
+                    return ord;
+                }
+            }
+            Ordering::Equal
         });
 
         self.materialized = true;
         Ok(())
+    }
+
+    /// Compares two tuples `a` and `b` using the specified `SortKey`.
+    ///
+    /// This function is used to determine the row order in the `Sort` operator.
+    ///
+    /// # Arguments
+    ///
+    /// * `key` - The sort key specifying the column and direction by which to compare the tuples.
+    /// * `a` - The first tuple to compare.
+    /// * `b` - The second tuple to compare.
+    ///
+    /// # Returns
+    ///
+    /// - [`Ordering::Less`] if `a` should come before `b` according to the sort key.
+    /// - [`Ordering::Greater`] if `a` should come after `b`.
+    /// - [`Ordering::Equal`] if the tuples are equal on this sort key.
+    ///
+    /// # Details
+    ///
+    /// - The value at the column specified by `key.col_id` is compared between `a` and `b`.
+    /// - `NULL` values (represented as `None`) sort before all non-null values for each key.
+    /// - If both values are non-null but not comparable (e.g., type mismatch), they are considered
+    ///   equal.
+    /// - The `ascending` flag on the key determines whether the natural ordering is used (`true`)
+    ///   or reversed (`false`—i.e., descending).
+    fn compare_by_sort_key(key: SortKey, a: &Tuple, b: &Tuple) -> Ordering {
+        let idx = usize::from(key.col_id);
+        let ord = match (a.get(idx), b.get(idx)) {
+            (Some(va), Some(vb)) => va.partial_cmp(vb).unwrap_or(Ordering::Equal),
+            (None, Some(_)) => Ordering::Less,
+            (Some(_), None) => Ordering::Greater,
+            (None, None) => Ordering::Equal,
+        };
+        if key.ascending { ord } else { ord.reverse() }
     }
 }
 
@@ -440,8 +578,7 @@ mod tests {
 
         {
             let mut asc = Sort::new(
-                true,
-                col,
+                vec![SortKey::asc(col)],
                 Box::new(PlanNode::SeqScan(SeqScan::new(&heap, txn))),
             );
             let mut asc_out = Vec::new();
@@ -460,8 +597,7 @@ mod tests {
         // Same txn: a second read txn can block on page locks held until the first
         // scan's resources are fully released; one txn avoids lock handoff races.
         let mut desc = Sort::new(
-            false,
-            col,
+            vec![SortKey::desc(col)],
             Box::new(PlanNode::SeqScan(SeqScan::new(&heap, txn))),
         );
         let mut desc_out = Vec::new();
@@ -478,6 +614,34 @@ mod tests {
     }
 
     #[test]
+    fn test_sort_multi_key_breaks_ties_with_secondary() {
+        let (heap, wal, _dir) = make_registered_heap_file(0);
+        let txn = begin_txn(&wal, 1);
+        // Same id (1), different flag — secondary key decides the order.
+        heap.insert_tuple(txn, &make_scan_tuple(1, true)).unwrap();
+        heap.insert_tuple(txn, &make_scan_tuple(1, false)).unwrap();
+        heap.insert_tuple(txn, &make_scan_tuple(2, true)).unwrap();
+
+        // ORDER BY id ASC, flag DESC  =>  (1,true), (1,false), (2,true)
+        let mut sort = Sort::new(
+            vec![
+                SortKey::asc(ColumnId::try_from(0u32).unwrap()),
+                SortKey::desc(ColumnId::try_from(1u32).unwrap()),
+            ],
+            Box::new(PlanNode::SeqScan(SeqScan::new(&heap, txn))),
+        );
+        let mut out = Vec::new();
+        while let Some(t) = sort.next().unwrap() {
+            out.push(t);
+        }
+        assert_eq!(out, vec![
+            make_scan_tuple(1, true),
+            make_scan_tuple(1, false),
+            make_scan_tuple(2, true),
+        ]);
+    }
+
+    #[test]
     fn test_sort_null_sorts_before_non_null() {
         let (heap, wal, _dir) = make_registered_heap_file(0);
         let txn = begin_txn(&wal, 1);
@@ -487,8 +651,7 @@ mod tests {
             .unwrap();
 
         let mut sort = Sort::new(
-            true,
-            ColumnId::try_from(0u32).unwrap(),
+            vec![SortKey::asc(ColumnId::try_from(0u32).unwrap())],
             Box::new(PlanNode::SeqScan(SeqScan::new(&heap, txn))),
         );
         let first = sort.next().unwrap().unwrap();
@@ -539,8 +702,7 @@ mod tests {
         let (heap, wal, _dir) = make_registered_heap_file(0);
         let txn = begin_txn(&wal, 1);
         let mut sort = Sort::new(
-            true,
-            ColumnId::try_from(0u32).unwrap(),
+            vec![SortKey::asc(ColumnId::try_from(0u32).unwrap())],
             Box::new(PlanNode::SeqScan(SeqScan::new(&heap, txn))),
         );
         assert_eq!(sort.next().unwrap(), None);
@@ -613,8 +775,7 @@ mod tests {
         }
 
         let mut sort = Sort::new(
-            true,
-            ColumnId::try_from(0u32).unwrap(),
+            vec![SortKey::asc(ColumnId::try_from(0u32).unwrap())],
             Box::new(PlanNode::SeqScan(SeqScan::new(&heap, txn))),
         );
         let mut first_pass = Vec::new();
