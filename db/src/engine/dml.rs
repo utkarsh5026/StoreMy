@@ -26,13 +26,17 @@
 //! [`BooleanExpression`](crate::execution::expression::BooleanExpression): any `NULL` in a
 //! comparison short-circuits to `false`, so rows with `NULL` keys do not qualify.
 
-use std::collections::HashSet;
+use std::{collections::HashSet, sync::Arc};
 
 use crate::{
+    FileId, TransactionId, Value,
     binder::{Bound, BoundDelete, BoundExpr, BoundInsert, BoundUpdate},
-    engine::{Engine, EngineError, StatementResult, collect_matching},
+    catalog::{LiveIndex, manager::Catalog},
+    engine::{Engine, EngineError, StatementResult},
+    execution::expression::BooleanExpression,
     parser::statements::{Statement, UpdateStatement},
-    tuple::Tuple,
+    primitives::{ColumnId, RecordId},
+    tuple::{Tuple, TupleSchema},
 };
 
 impl Engine<'_> {
@@ -90,30 +94,50 @@ impl Engine<'_> {
                 unreachable!("binder returned non-Insert variant for Insert input");
             };
 
-            let heap = catalog.get_table_heap(file_id)?;
+            let tid = txn.transaction_id();
             let tuples = rows
                 .iter()
-                .map(|row| row.iter().map(BoundExpr::eval).collect())
-                .map(Tuple::new)
+                .map(|row| Tuple::new(row.iter().map(BoundExpr::eval).collect()))
                 .collect::<Vec<_>>();
-
-            let indexes = catalog.indexes_for(file_id);
-            let tid = txn.transaction_id();
-            if indexes.is_empty() {
-                let rids = heap.bulk_insert(tid, tuples)?;
-                return Ok(StatementResult::inserted(name, rids.len()));
-            }
-
-            let rids = heap.bulk_insert(tid, tuples.iter().cloned())?;
-            rids.iter()
-                .zip(tuples.iter())
-                .try_for_each(|(rid, tuple)| {
-                    indexes
-                        .iter()
-                        .try_for_each(|index| index.insert(tid, tuple, *rid))
-                })?;
-            Ok(StatementResult::inserted(name, rids.len()))
+            let rids = Self::insert_rows_and_indexes(catalog, file_id, tuples, tid)?;
+            Ok(StatementResult::inserted(name, rids))
         })
+    }
+
+    /// Inserts `tuples` into the heap and updates every index registered for `file_id`.
+    ///
+    /// Fast path: when no indexes exist, uses [`HeapFile::bulk_insert`] to batch writes.
+    ///
+    /// Indexed path: inserts one tuple at a time with [`HeapFile::insert_tuple`], then immediately
+    /// inserts matching index keys using the returned [`RecordId`]. This avoids cloning tuples just
+    /// to keep one copy for index maintenance.
+    fn insert_rows_and_indexes(
+        catalog: &Catalog,
+        file_id: FileId,
+        tuples: Vec<Tuple>,
+        tid: TransactionId,
+    ) -> Result<usize, EngineError> {
+        let heap = catalog.get_table_heap(file_id)?;
+        let indexes = catalog.indexes_for(file_id);
+        if indexes.is_empty() {
+            return heap
+                .bulk_insert(tid, tuples)
+                .map(|rids| rids.len())
+                .map_err(EngineError::from);
+        }
+
+        let mut count = 0;
+        tuples
+            .into_iter()
+            .try_for_each(|tuple| -> Result<(), EngineError> {
+                let rid = heap.insert_tuple(tid, &tuple)?;
+                for index in &indexes {
+                    index.insert(tid, &tuple, rid)?;
+                }
+                count += 1;
+                Ok(())
+            })?;
+        Ok(count)
     }
 
     /// Executes `DELETE FROM <table> [WHERE <predicate>]` and updates indexes.
@@ -161,21 +185,46 @@ impl Engine<'_> {
             };
 
             let tid = txn.transaction_id();
-            let heap = catalog.get_table_heap(file_id)?;
             let predicate = filter.as_ref();
-            let rows = collect_matching(&heap, tid, predicate)?;
-            let deleted = rows.len();
-
-            let indexes = catalog.indexes_for(file_id);
-            for (rid, tuple) in &rows {
-                heap.delete_tuple(tid, *rid)?;
-                for index in &indexes {
-                    index.delete(tid, tuple, *rid)?;
-                }
-            }
-
+            let deleted = Self::delete_rows_and_indexes(catalog, file_id, predicate, tid)?;
             Ok(StatementResult::deleted(name, deleted))
         })
+    }
+
+    /// Deletes every heap row matching `predicate` and removes corresponding index entries.
+    ///
+    /// This is the write-side of `DELETE`: it first materializes the set of matching rows (via
+    /// [`Self::collect_matching`]) and then, for each `(rid, tuple)` pair:
+    ///
+    /// - Deletes the tuple from the heap.
+    /// - Deletes the tuple's entry from every index registered for `file_id`.
+    ///
+    /// Materializing the matches up front avoids mutating the heap while iterating it.
+    ///
+    /// # Errors
+    ///
+    /// Propagates errors from the heap scan, heap delete, or index delete operations.
+    fn delete_rows_and_indexes(
+        catalog: &Catalog,
+        file_id: FileId,
+        predicate: Option<&BooleanExpression>,
+        tid: TransactionId,
+    ) -> Result<usize, EngineError> {
+        let heap = catalog.get_table_heap(file_id)?;
+        let rows = Self::collect_matching(&heap, tid, predicate)?;
+
+        let indexes = catalog.indexes_for(file_id);
+        let mut deleted = 0;
+        rows.into_iter()
+            .try_for_each(|(rid, tuple)| -> Result<(), EngineError> {
+                heap.delete_tuple(tid, rid)?;
+                for index in &indexes {
+                    index.delete(tid, &tuple, rid)?;
+                }
+                deleted += 1;
+                Ok(())
+            })?;
+        Ok(deleted)
     }
 
     /// Executes `UPDATE <table> SET … [WHERE <predicate>]` and maintains affected indexes.
@@ -241,55 +290,121 @@ impl Engine<'_> {
 
             let heap_file = catalog.get_table_heap(file_id)?;
             let txn_id = txn.transaction_id();
-            let rows = collect_matching(&heap_file, txn_id, filter.as_ref())?;
+            let rows = Self::collect_matching(&heap_file, txn_id, filter.as_ref())?;
             let updated = rows.len();
 
-            // Statement-level pruning: an index only needs maintenance if at
-            // least one of its covered columns appears in the assignments. We
-            // compute this once here so the per-row loop skips uninvolved
-            // indexes entirely (no clone, no key projection, no I/O).
-            let touched: HashSet<usize> = assignments.iter().map(|(c, _)| *c).collect();
-            let affected_indexes = catalog
-                .indexes_for(file_id)
-                .into_iter()
-                .filter(|live| {
-                    live.table_columns
-                        .iter()
-                        .any(|c| touched.contains(&usize::from(*c)))
-                })
-                .collect::<Vec<_>>();
-            // The old tuple is only needed for affected indexes' old-key
-            // computation; if none are affected we skip the clone entirely.
+            let affected_indexes =
+                Self::get_affected_indices(assignments.as_slice(), catalog, file_id);
+
             let needs_old = !affected_indexes.is_empty();
 
             for (rid, mut tuple) in rows {
                 let old_tuple = needs_old.then(|| tuple.clone());
-                for (idx, value) in &assignments {
-                    tuple
-                        .set_field(*idx, value.clone(), &schema)
-                        .map_err(|e| EngineError::type_error(e.to_string()))?;
-                }
+                Self::apply_update_assignments(&mut tuple, &assignments, &schema)?;
                 heap_file.update_tuple(txn_id, rid, &tuple)?;
 
                 if let Some(old) = &old_tuple {
-                    // Per-row pruning: even when an index is affected at the
-                    // statement level, this particular row's projected key
-                    // might be unchanged (e.g. SET email = LOWER(email) when
-                    // already lowercase). Skip the delete+insert pair in that
-                    // case so the index stays at rest.
-                    for live in &affected_indexes {
-                        let old_key = live.create_index_key(old)?;
-                        let new_key = live.create_index_key(&tuple)?;
-                        if old_key != new_key {
-                            live.access.delete(txn_id, &old_key, rid)?;
-                            live.access.insert(txn_id, &new_key, rid)?;
-                        }
-                    }
+                    Self::sync_indexes_for_updated_row(
+                        &affected_indexes,
+                        txn_id,
+                        rid,
+                        old,
+                        &tuple,
+                    )?;
                 }
             }
 
             Ok(StatementResult::updated(name, updated))
         })
+    }
+
+    /// Returns only the indexes that must be maintained for this `UPDATE`.
+    ///
+    /// An index is considered "affected" when at least one of its covered
+    /// table columns appears in `assignments`. This is a statement-level
+    /// pruning step used before row-by-row update processing, so unaffected
+    /// indexes are skipped entirely (no key projection and no index I/O).
+    ///
+    /// # Parameters
+    ///
+    /// - `assignments`: bound `SET` pairs as `(column_id, value)`.
+    /// - `catalog`: source of live index metadata for the target table.
+    /// - `file_id`: target table identifier.
+    ///
+    /// # Returns
+    ///
+    /// A vector of live indexes whose `table_columns` intersect the assignment
+    /// column set.
+    fn get_affected_indices(
+        assignments: &[(ColumnId, Value)],
+        catalog: &Catalog,
+        file_id: FileId,
+    ) -> Vec<Arc<LiveIndex>> {
+        let touched_cols: HashSet<ColumnId> = assignments.iter().map(|(c, _)| *c).collect();
+
+        let indexes = catalog.indexes_for(file_id);
+        indexes
+            .into_iter()
+            .filter_map(|live| {
+                for col in &live.table_columns {
+                    if touched_cols.contains(col) {
+                        return Some(live);
+                    }
+                }
+                None
+            })
+            .collect::<Vec<_>>()
+    }
+
+    /// Applies all bound `SET` assignments to a tuple in-place.
+    ///
+    /// Each `(column_id, value)` pair is written into `tuple` using the table
+    /// `schema` for type/nullability checks.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`EngineError::TypeError`] if any assignment violates schema
+    /// constraints (e.g. incompatible type or nullability).
+    fn apply_update_assignments(
+        tuple: &mut Tuple,
+        assignments: &[(ColumnId, Value)],
+        schema: &TupleSchema,
+    ) -> Result<(), EngineError> {
+        for (col_id, value) in assignments {
+            tuple
+                .set_field(usize::from(*col_id), value.clone(), schema)
+                .map_err(|e| EngineError::type_error(e.to_string()))?;
+        }
+        Ok(())
+    }
+
+    /// Synchronizes all affected indexes for one updated row.
+    ///
+    /// For each index, this computes the key from `old_tuple` and `new_tuple`.
+    /// If the key is unchanged, no index write is performed. If the key changed,
+    /// the old `(key, rid)` mapping is deleted and the new mapping is inserted.
+    ///
+    /// # Errors
+    ///
+    /// Propagates key-projection and index access-method errors.
+    fn sync_indexes_for_updated_row(
+        affected_indexes: &[Arc<LiveIndex>],
+        txn_id: TransactionId,
+        rid: RecordId,
+        old_tuple: &Tuple,
+        new_tuple: &Tuple,
+    ) -> Result<(), EngineError> {
+        // Per-row pruning: even when an index is affected at the statement
+        // level, this specific row's projected key might be unchanged.
+        for live in affected_indexes {
+            let old_key = live.create_index_key(old_tuple)?;
+            let new_key = live.create_index_key(new_tuple)?;
+            if old_key != new_key {
+                live.access.delete(txn_id, &old_key, rid)?;
+                live.access.insert(txn_id, &new_key, rid)?;
+            }
+        }
+        Ok(())
     }
 }
 

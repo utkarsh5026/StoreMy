@@ -126,7 +126,8 @@ impl<'a> Engine<'a> {
             Statement::Insert(_) => self.exec_insert(stmt),
             Statement::Delete(_) => self.exec_delete(stmt),
             Statement::Update(s) => self.exec_update(s),
-            _ => Err(EngineError::Unsupported(stmt.to_string())),
+            Statement::Select(_) => self.exec_select(stmt),
+            Statement::AlterTable(_) => Err(EngineError::Unsupported(stmt.to_string())),
         };
         if let Err(e) = &result {
             tracing::warn!(error = %e, "statement failed");
@@ -156,52 +157,52 @@ impl<'a> Engine<'a> {
         txn.commit()?;
         Ok(out)
     }
-}
 
-/// Collects every heap row visible to `transaction_id`, optionally filtered by `predicate`.
-///
-/// Rows with no predicate are included. When `predicate` is `Some`, a row is kept only if the
-/// expression evaluates to true for that row's tuple.
-///
-/// # Errors
-///
-/// Returns [`EngineError`] if the heap scan cannot advance.
-///
-/// # Examples
-///
-/// Collect all rows without filtering:
-///
-/// ```ignore
-/// let rows = collect_matching(&heap, txn_id, None)?;
-/// // rows contains every (RecordId, Tuple) pair visible to the transaction
-/// ```
-///
-/// Collect only rows where the first column equals `42`:
-///
-/// ```ignore
-/// use storemy::{execution::expression::BooleanExpression, primitives::Predicate, types::Value};
-///
-/// let predicate = BooleanExpression::col_op_lit(0, Predicate::Equals, Value::Int32(42));
-/// let rows = collect_matching(&heap, txn_id, Some(&predicate))?;
-/// // rows contains only tuples whose first column is 42
-/// ```
-pub(super) fn collect_matching(
-    heap: &HeapFile,
-    transaction_id: TransactionId,
-    predicate: Option<&BooleanExpression>,
-) -> Result<Vec<(RecordId, Tuple)>, EngineError> {
-    let mut scan = heap.scan(transaction_id)?;
-    let mut out = Vec::new();
-    while let Some((rid, tuple)) = FallibleIterator::next(&mut scan)? {
-        let keep = match predicate {
-            None => true,
-            Some(p) => p
-                .eval(&tuple)
-                .map_err(|e| EngineError::type_error(e.to_string()))?,
-        };
-        if keep {
-            out.push((rid, tuple));
+    /// Collects every heap row visible to `transaction_id`, optionally filtered by `predicate`.
+    ///
+    /// Rows with no predicate are included. When `predicate` is `Some`, a row is kept only if the
+    /// expression evaluates to true for that row's tuple.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`EngineError`] if the heap scan cannot advance.
+    ///
+    /// # Examples
+    ///
+    /// Collect all rows without filtering:
+    ///
+    /// ```ignore
+    /// let rows = collect_matching(&heap, txn_id, None)?;
+    /// // rows contains every (RecordId, Tuple) pair visible to the transaction
+    /// ```
+    ///
+    /// Collect only rows where the first column equals `42`:
+    ///
+    /// ```ignore
+    /// use storemy::{execution::expression::BooleanExpression, primitives::Predicate, types::Value};
+    ///
+    /// let predicate = BooleanExpression::col_op_lit(0, Predicate::Equals, Value::Int32(42));
+    /// let rows = collect_matching(&heap, txn_id, Some(&predicate))?;
+    /// // rows contains only tuples whose first column is 42
+    /// ```
+    pub(super) fn collect_matching(
+        heap: &HeapFile,
+        transaction_id: TransactionId,
+        predicate: Option<&BooleanExpression>,
+    ) -> Result<Vec<(RecordId, Tuple)>, EngineError> {
+        let mut scan = heap.scan(transaction_id)?;
+        let mut out = Vec::new();
+        while let Some((rid, tuple)) = FallibleIterator::next(&mut scan)? {
+            let keep = match predicate {
+                None => true,
+                Some(p) => p
+                    .eval(&tuple)
+                    .map_err(|e| EngineError::type_error(e.to_string()))?,
+            };
+            if keep {
+                out.push((rid, tuple));
+            }
         }
+        Ok(out)
     }
-    Ok(out)
 }

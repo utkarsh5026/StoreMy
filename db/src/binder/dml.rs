@@ -42,8 +42,8 @@ pub struct BoundUpdate {
     pub file_id: FileId,
     /// Table schema used to interpret assignments and predicates.
     pub schema: TupleSchema,
-    /// Column assignments expressed as `(schema_index, value)` pairs.
-    pub assignments: Vec<(usize, Value)>,
+    /// Column assignments expressed as `(column_id, value)` pairs.
+    pub assignments: Vec<(ColumnId, Value)>,
     /// Optional predicate used to filter which rows are updated.
     pub filter: Option<BooleanExpression>,
 }
@@ -139,7 +139,7 @@ impl BoundUpdate {
                 return Err(BindError::DuplicateColumn(column));
             }
             let coerced = bind_value_for(&value, field, &scope.name)?;
-            bound_assignments.push((usize::from(col_id), coerced));
+            bound_assignments.push((col_id, coerced));
         }
 
         let filter = where_clause.map(|w| scope.bind_where(&w)).transpose()?;
@@ -761,7 +761,7 @@ mod tests {
 
         assert_eq!(bound.name, "users");
         assert_eq!(bound.assignments.len(), 1);
-        assert_eq!(bound.assignments[0].0, 2); // age is index 2
+        assert_eq!(bound.assignments[0].0, ColumnId::try_from(2usize).unwrap()); // age is index 2
         assert!(matches!(bound.assignments[0].1, Value::Int64(42)));
         assert!(bound.filter.is_none());
     }
@@ -786,8 +786,8 @@ mod tests {
         let bound = BoundUpdate::bind(stmt, &catalog, &txn).unwrap();
         txn.commit().unwrap();
 
-        assert_eq!(bound.assignments[0].0, 1); // name
-        assert_eq!(bound.assignments[1].0, 2); // age
+        assert_eq!(bound.assignments[0].0, ColumnId::try_from(1usize).unwrap()); // name
+        assert_eq!(bound.assignments[1].0, ColumnId::try_from(2usize).unwrap()); // age
     }
 
     // WHERE qualified by alias resolves through the bound TableScope.
