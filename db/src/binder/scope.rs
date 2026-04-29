@@ -80,6 +80,21 @@ pub(super) trait ColumnResolver {
             )),
         }
     }
+
+    /// Resolves an optional [`WhereCondition`] into an optional [`BooleanExpression`].
+    ///
+    /// If the input is `None`, returns `Ok(None)`. If the input is `Some(condition)`,
+    /// attempts to bind it using [`Self::bind_where`] and returns `Ok(Some(expr))`
+    /// on success, or an error if binding fails.
+    ///
+    /// This is intended for binding the `WHERE` or `HAVING` clauses, which may or may not be
+    /// present.
+    fn resolve_where(
+        &self,
+        w: Option<&WhereCondition>,
+    ) -> Result<Option<BooleanExpression>, BindError> {
+        w.map(|w| self.bind_where(w)).transpose()
+    }
 }
 
 /// Multi-table name-resolution environment used while binding `SELECT`.
