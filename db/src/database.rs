@@ -14,7 +14,7 @@ use parking_lot::Mutex;
 
 use crate::{
     catalog::manager::{Catalog, TableInfo},
-    engine::{self, EngineError, StatementResult},
+    engine::{Engine, EngineError, StatementResult},
     parser::Parser,
 };
 
@@ -53,7 +53,7 @@ impl Database {
     /// ```rust
     /// use std::sync::Arc;
     ///
-    /// use db::{catalog::manager::Catalog, database::Database, transaction::TransactionManager};
+    /// use storemy::{catalog::manager::Catalog, database::Database, transaction::TransactionManager};
     ///
     /// # fn example(catalog: Arc<Catalog>, txn_manager: Arc<TransactionManager>) {
     /// let db = Database::new(catalog, txn_manager, 4);
@@ -104,9 +104,9 @@ impl Database {
     ///
     /// ```rust
     /// # use std::sync::Arc;
-    /// # use db::catalog::manager::Catalog;
-    /// # use db::database::Database;
-    /// # use db::transaction::TransactionManager;
+    /// # use storemy::catalog::manager::Catalog;
+    /// # use storemy::database::Database;
+    /// # use storemy::transaction::TransactionManager;
     /// # fn example(catalog: Arc<Catalog>, txn_manager: Arc<TransactionManager>) {
     /// let db = Database::new(catalog, txn_manager, 2);
     /// let rx = db.execute("SELECT * FROM users");
@@ -166,5 +166,5 @@ fn execute_sql(
         .parse()
         .map_err(|e| EngineError::Parse(e.to_string()))?;
 
-    engine::execute_statement(catalog, statement, txn_manager)
+    Engine::new(catalog, txn_manager).execute_statement(statement)
 }

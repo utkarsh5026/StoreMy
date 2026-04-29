@@ -10,6 +10,9 @@
 //! - **REPL mode** (`cargo run` or `cargo run -- repl`) starts an interactive SQL shell.
 //! - **One-shot mode** (`cargo run -- "<sql>"`) executes a single SQL statement and exits.
 //!
+//! # Data directory
+//! On-disk state (WAL, catalog, REPL history) lives under `DATA_DIR` if set, otherwise `./data`.
+//!
 //! Keeping this logic in `main.rs` helps keep the executable wiring explicit, while
 //! parser/executor/storage behavior lives in their respective modules.
 
@@ -64,7 +67,8 @@ fn main() {
     }
     info!(version = env!("CARGO_PKG_VERSION"), "StoreMy starting");
 
-    let data_dir = PathBuf::from("./data");
+    let data_dir =
+        std::env::var("DATA_DIR").map_or_else(|_| PathBuf::from("./data"), PathBuf::from);
     if let Err(e) = std::fs::create_dir_all(&data_dir) {
         error!(error = %e, dir = %data_dir.display(), "failed to create data dir");
         std::process::exit(1);
