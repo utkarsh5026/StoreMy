@@ -119,7 +119,6 @@ def print_page(dump: Dump, page_no: int, console: Console | None = None) -> None
             )
 
 
-
 def _find_page(dump: Dump, page_no: int) -> PageDump | None:
     """Return the page dump for ``page_no`` if present, else ``None``."""
     for p in dump.pages:
