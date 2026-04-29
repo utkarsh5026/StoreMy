@@ -9,7 +9,7 @@ From the repository root:
 ```bash
 cargo +nightly-2026-04-01 fmt --all -- --check   # or: make rust-fmt-check
 cargo clippy --workspace --all-targets -- -D warnings
-cargo test --workspace
+cargo nextest run --workspace --profile ci
 ```
 
 CI runs **cargo-nextest** for tests (`cargo nextest run`). Install locally:
@@ -18,13 +18,35 @@ CI runs **cargo-nextest** for tests (`cargo nextest run`). Install locally:
 cargo install cargo-nextest --locked
 ```
 
+### Fast local loop
+
+Use the smallest useful command while you are editing, then widen the check before committing:
+
+```bash
+cargo check -p storemy                    # fastest compiler feedback
+cargo nextest run -p storemy --lib parser # focused unit tests; replace parser with a filter
+cargo t                                   # workspace nextest alias
+cargo c                                   # workspace clippy alias
+```
+
+The Makefile mirrors that split:
+
+```bash
+make quick-test # cargo nextest run -p storemy --lib
+make test       # cargo nextest run --workspace
+make ci-test    # cargo nextest run --workspace --profile ci
+make check      # fmt + clippy + ci-test
+```
+
+For background feedback, run `bacon`. The default job is a package-level `cargo check`; press `l` for library tests, `t` for workspace tests, `c` for CI-style clippy, and `f` for pedantic clippy.
+
 ### Clippy
 
 The project treats warnings as errors in CI: `clippy ... -D warnings`. Fix or allow with a short comment and `#[allow(...)]` only when justified.
 
 ### Faster links (optional, Linux / WSL)
 
-If [mold](https://github.com/rui314/mold) is installed, you can speed up linking by adding a repo-local Cargo config (not committed), for example `~/.cargo/config.toml` or `.cargo/config.toml` with your platform’s target and:
+If [mold](https://github.com/rui314/mold) and `clang` are installed, you can speed up linking by enabling the guarded block in [`.cargo/config.toml`](.cargo/config.toml), or by adding the same setting to `~/.cargo/config.toml`:
 
 ```toml
 [target.x86_64-unknown-linux-gnu]

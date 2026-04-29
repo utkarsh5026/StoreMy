@@ -2,7 +2,7 @@
 
 .DEFAULT_GOAL := help
 
-.PHONY: test test-watch test-watch-rust test-coverage \
+.PHONY: test quick-test ci-test cargo-test test-watch test-watch-rust test-coverage \
 	clean rust-clean \
 	build \
 	fmt rust-fmt rust-fmt-check rust-fmt-install install-hooks uninstall-hooks \
@@ -57,10 +57,19 @@ rust-audit: rust-deny rust-machete rust-typos
 rust-lint: rust-clippy
 
 rust-test:
-	cargo test --workspace
+	cargo nextest run --workspace
 
 rust-nextest:
 	cargo nextest run --workspace
+
+quick-test:
+	cargo nextest run -p storemy --lib
+
+ci-test:
+	cargo nextest run --workspace --profile ci
+
+cargo-test:
+	cargo test --workspace
 
 rust-build:
 	cargo build --workspace
@@ -76,24 +85,24 @@ fmt: rust-fmt
 clippy: rust-clippy
 test: rust-test
 build: rust-build
-check: rust-fmt rust-clippy rust-test
+check: rust-fmt rust-clippy ci-test
 
 lint: rust-clippy
 
 test-watch-rust:
 	@echo "Watching db/src for changes (Rust tests)..."
 	@echo "Press Ctrl+C to stop"
-	@cargo test --workspace
+	@cargo nextest run --workspace
 	@while inotifywait -e modify,create,delete -r db/src 2>/dev/null; do \
-		echo "$$(date): Running cargo test --workspace"; \
-		cargo test --workspace; \
+		echo "$$(date): Running cargo nextest run --workspace"; \
+		cargo nextest run --workspace; \
 		echo ""; \
 	done
 
 test-watch: test-watch-rust
 
 test-coverage:
-	cargo test --workspace
+	cargo nextest run --workspace
 	@echo "Tip: install cargo-llvm-cov for LCOV/HTML: cargo llvm-cov test --workspace"
 
 # ----- Housekeeping -----
@@ -102,7 +111,7 @@ clean: rust-clean
 
 install-tools:
 	@echo "Installing file watching tools..."
-	sudo apt-get update && sudo apt-get install -y inotify-tools || true
+	sudo apt-get update && sudo apt-get install -y inotify-tools mold clang || true
 	@echo "Optional: cargo install cargo-nextest cargo-watch bacon typos-cli --locked"
 	@echo "Tools installation complete!"
 
@@ -118,8 +127,11 @@ help:
 	@echo "  make quickstart       - docker-build + docker-demo"
 	@echo ""
 	@echo "Rust (default):"
-	@echo "  test / rust-test     - cargo test --workspace"
+	@echo "  test / rust-test     - cargo nextest run --workspace"
 	@echo "  rust-nextest         - cargo nextest run (install cargo-nextest)"
+	@echo "  quick-test           - cargo nextest run -p storemy --lib"
+	@echo "  ci-test              - cargo nextest run --workspace --profile ci"
+	@echo "  cargo-test           - cargo test --workspace"
 	@echo "  fmt / rust-fmt       - cargo +nightly fmt --all (uses pinned nightly)"
 	@echo "  rust-fmt-check       - fmt --check (same nightly)"
 	@echo "  rust-fmt-install     - install pinned nightly + rustfmt component"
@@ -132,8 +144,8 @@ help:
 	@echo "  rust-watch           - bacon background checker (install: cargo install bacon)"
 	@echo "  rust-audit           - deny + machete + typos"
 	@echo "  build                - cargo build --workspace"
-	@echo "  check                - fmt + clippy + test"
-	@echo "  test-watch           - inotify + cargo test on db/src changes"
+	@echo "  check                - fmt + clippy + ci-test"
+	@echo "  test-watch           - inotify + cargo nextest on db/src changes"
 	@echo "  rust-clean           - cargo clean"
 	@echo ""
 	@echo "  install-tools, help"

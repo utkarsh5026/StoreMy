@@ -1,9 +1,9 @@
 # bacon — background rust code checker (better than `cargo watch`).
 # Install: `cargo install --locked bacon`
-# Run: `bacon` (picks default job) or `bacon <job>` (e.g., `bacon test`).
+# Run: `bacon` (picks default job) or `bacon <job>` (e.g., `bacon test-lib-db`).
 # Docs: https://dystroy.org/bacon/
 
-default_job = "clippy"
+default_job = "check-db"
 
 # Where bacon watches. Excludes target/, node_modules.
 [additional_job_options]
@@ -13,7 +13,18 @@ default_job = "clippy"
 command = ["cargo", "check", "--workspace", "--all-targets", "--color", "always"]
 need_stdout = false
 
+[jobs.check-db]
+command = ["cargo", "check", "-p", "storemy", "--all-targets", "--color", "always"]
+need_stdout = false
+
 [jobs.clippy]
+command = [
+  "cargo", "clippy", "--workspace", "--all-targets", "--color", "always",
+  "--", "-D", "warnings",
+]
+need_stdout = false
+
+[jobs.clippy-pedantic]
 command = [
   "cargo", "clippy", "--workspace", "--all-targets", "--color", "always",
   "--", "-W", "clippy::pedantic",
@@ -30,10 +41,18 @@ command = [
 ]
 need_stdout = true
 
-# Test just one crate / module — run with `bacon test-db`.
+# Test just one crate — run with `bacon test-db`.
 [jobs.test-db]
 command = [
   "cargo", "nextest", "run", "-p", "storemy", "--color", "always",
+  "--hide-progress-bar", "--status-level=fail",
+]
+need_stdout = true
+
+# Test only the storemy library unit tests — run with `bacon test-lib-db`.
+[jobs.test-lib-db]
+command = [
+  "cargo", "nextest", "run", "-p", "storemy", "--lib", "--color", "always",
   "--hide-progress-bar", "--status-level=fail",
 ]
 need_stdout = true
@@ -51,5 +70,7 @@ on_success = "back" # return to previous job after opening
 [keybindings]
 t = "job:test"
 c = "job:clippy"
-k = "job:check"
+k = "job:check-db"
+l = "job:test-lib-db"
 d = "job:doc"
+f = "job:clippy-pedantic"
