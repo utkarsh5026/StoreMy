@@ -9,7 +9,11 @@ use std::collections::HashSet;
 
 use crate::{
     FileId, Value,
-    binder::{BindError, expr::BoundExpr, scope::TableScope},
+    binder::{
+        BindError,
+        expr::BoundExpr,
+        scope::{ColumnResolver, SingleTableScope, bind_value_for},
+    },
     catalog::manager::Catalog,
     execution::expression::BooleanExpression,
     parser::statements::{
@@ -76,14 +80,15 @@ impl BoundDelete {
         } = stmt;
 
         let table_info = catalog.get_table_info(txn, table_name.as_str())?;
-        let table_scope = TableScope::from_info(table_info, alias);
+        let file_id = table_info.file_id;
+        let table_scope = SingleTableScope::from_info(table_info, alias);
         let predicate = where_clause
-            .map(|w| TableScope::bind_predicate(&w, &table_scope))
+            .map(|w| table_scope.bind_where(&w))
             .transpose()?;
 
         Ok(Self {
             name: table_name,
-            file_id: table_scope.file_id,
+            file_id,
             filter: predicate,
         })
     }
@@ -116,7 +121,7 @@ impl BoundUpdate {
         } = stmt;
 
         let info = catalog.get_table_info(txn, &table_name)?;
-        let scope = TableScope::from_info(info, alias);
+        let scope = SingleTableScope::from_info(info, alias);
 
         let mut seen: HashSet<ColumnId> = HashSet::with_capacity(assignments.len());
         let mut bound_assignments = Vec::with_capacity(assignments.len());
@@ -133,13 +138,11 @@ impl BoundUpdate {
             if !seen.insert(col_id) {
                 return Err(BindError::DuplicateColumn(column));
             }
-            let coerced = TableScope::bind_value_for(&value, field, &scope.name)?;
+            let coerced = bind_value_for(&value, field, &scope.name)?;
             bound_assignments.push((usize::from(col_id), coerced));
         }
 
-        let filter = where_clause
-            .map(|w| TableScope::bind_predicate(&w, &scope))
-            .transpose()?;
+        let filter = where_clause.map(|w| scope.bind_where(&w)).transpose()?;
 
         Ok(Self {
             name: scope.name,

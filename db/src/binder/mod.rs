@@ -38,6 +38,9 @@ pub enum BindError {
     #[error("column '{0}' appears more than once")]
     DuplicateColumn(String),
 
+    #[error("column '{column}' appears more than once in the FROM/JOIN scope")]
+    AmbiguousColumn { column: String },
+
     #[error("primary key references unknown column '{0}'")]
     PrimaryKeyNotInColumns(String),
 
@@ -86,6 +89,19 @@ impl BindError {
     pub(super) fn duplicate_column(column: impl Into<String>) -> Self {
         Self::DuplicateColumn(column.into())
     }
+
+    pub(super) fn ambiguous_column(column: impl Into<String>) -> Self {
+        Self::AmbiguousColumn {
+            column: column.into(),
+        }
+    }
+
+    pub(super) fn unknown_column(table: impl Into<String>, column: impl Into<String>) -> Self {
+        Self::UnknownColumn {
+            table: table.into(),
+            column: column.into(),
+        }
+    }
 }
 
 #[non_exhaustive]
@@ -125,9 +141,7 @@ impl Bound {
             Statement::Delete(s) => Ok(Self::Delete(BoundDelete::bind(s, catalog, txn)?)),
             Statement::Insert(s) => Ok(Self::Insert(BoundInsert::bind(s, catalog, txn)?)),
             Statement::Update(s) => Ok(Self::Update(BoundUpdate::bind(s, catalog, txn)?)),
-            Statement::Select(s) => {
-                Ok(Self::Select(Box::new(BoundSelect::bind(&s, catalog, txn)?)))
-            }
+            Statement::Select(s) => Ok(Self::Select(Box::new(BoundSelect::bind(s, catalog, txn)?))),
             Statement::ShowIndexes(s) => {
                 Ok(Self::ShowIndexes(BoundShowIndexes::bind(&s, catalog, txn)?))
             }
