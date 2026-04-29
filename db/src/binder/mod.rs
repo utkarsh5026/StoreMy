@@ -15,7 +15,7 @@ use crate::{
 mod ddl;
 mod dml;
 pub mod expr;
-mod query;
+pub mod query;
 mod scope;
 
 pub use ddl::{BoundCreateIndex, BoundCreateTable, BoundDrop, BoundDropIndex, BoundShowIndexes};
@@ -114,7 +114,7 @@ pub enum Bound {
     Delete(BoundDelete),
     Insert(BoundInsert),
     Update(BoundUpdate),
-    Select(Box<BoundSelect>),
+    Select(BoundSelect),
 }
 
 impl Bound {
@@ -141,7 +141,7 @@ impl Bound {
             Statement::Delete(s) => Ok(Self::Delete(BoundDelete::bind(s, catalog, txn)?)),
             Statement::Insert(s) => Ok(Self::Insert(BoundInsert::bind(s, catalog, txn)?)),
             Statement::Update(s) => Ok(Self::Update(BoundUpdate::bind(s, catalog, txn)?)),
-            Statement::Select(s) => Ok(Self::Select(Box::new(BoundSelect::bind(s, catalog, txn)?))),
+            Statement::Select(s) => Ok(Self::Select(BoundSelect::bind(s, catalog, txn)?)),
             Statement::ShowIndexes(s) => {
                 Ok(Self::ShowIndexes(BoundShowIndexes::bind(&s, catalog, txn)?))
             }

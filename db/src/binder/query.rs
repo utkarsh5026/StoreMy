@@ -101,36 +101,22 @@ use crate::{
 pub enum BoundFrom {
     /// A base table reference from `FROM users` or `FROM users u`.
     Table {
-        /// Parsed table name and optional SQL alias.
         table: TableRef,
-        /// Catalog file id used later by the table-scan plan.
         file_id: FileId,
-        /// Catalog schema for this table.
         schema: TupleSchema,
-        /// First column index of this table inside the surrounding `FROM` row.
         column_offset: usize,
     },
     /// A SQL `JOIN ... ON ...` input with its join predicate already bound.
     Join {
-        /// SQL join flavor (`INNER`, `LEFT`, or `RIGHT`).
         kind: JoinKind,
-        /// Left side of the join tree.
         left: Box<BoundFrom>,
-        /// Right side of the join tree.
         right: Box<BoundFrom>,
-        /// Bound `ON` predicate evaluated over the concatenated join row.
         on: BooleanExpression,
-        /// Merged output schema, left columns followed by right columns.
         schema: TupleSchema,
     },
-    /// A cross product shape for a future comma-join lowering; `bind` does not
-    /// currently produce this variant.
     Cross {
-        /// Left side of the cross product.
         left: Box<BoundFrom>,
-        /// Right side of the cross product.
         right: Box<BoundFrom>,
-        /// Merged output schema, left columns followed by right columns.
         schema: TupleSchema,
     },
 }
@@ -161,6 +147,39 @@ impl BoundFrom {
             right: Box::new(right),
             on,
             schema,
+        }
+    }
+
+    /// Returns the name of the root table in this `FROM` clause input.
+    ///
+    /// - If this is a simple table reference (`FROM users`), returns the table name.
+    /// - If this is a join or cross product (`FROM users JOIN posts`), recursively finds the
+    ///   leftmost table's name. This matches the binding model, which keeps left-deep join trees.
+    ///
+    /// # Panics
+    ///
+    /// This method assumes the join tree is left-deep (every join has a "left"), in accordance
+    /// with how the binder produces `BoundFrom` shapes.
+    pub fn root_table_name(&self) -> &str {
+        match self {
+            Self::Table { table, .. } => &table.name,
+            Self::Join { left, .. } | Self::Cross { left, .. } => left.root_table_name(),
+        }
+    }
+
+    /// Returns the number of base tables present in this `FROM` clause tree.
+    ///
+    /// - For a simple table reference (`FROM users`), returns 1.
+    /// - For joins or cross products, recursively sums the number of base tables in each input.
+    ///
+    /// This is useful for planner logic that may need to enumerate all tables referenced in a
+    /// query, such as in join planning or determining table sources.
+    pub fn table_count(&self) -> usize {
+        match self {
+            Self::Table { .. } => 1,
+            Self::Join { left, right, .. } | Self::Cross { left, right, .. } => {
+                left.table_count() + right.table_count()
+            }
         }
     }
 }
