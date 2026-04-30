@@ -11,7 +11,7 @@ use crate::{
     catalog::manager::Catalog,
     engine::{Engine, EngineError, StatementResult},
     execution::{
-        PlanNode,
+        Executor, PlanNode,
         aggregate::{Aggregate, AggregateExpr},
         unary::{ProjectItem, SortKey},
     },
@@ -31,6 +31,7 @@ impl Engine<'_> {
             let mut heap_files = Vec::with_capacity(bound.from.table_count());
             Self::collect_heap_files(&bound.from, catalog, &mut heap_files)?;
             let mut plan = Self::build_plan(&bound, &heap_files, txn.transaction_id())?;
+            let schema = plan.schema().to_owned();
 
             let mut rows = Vec::new();
             while let Some(t) = plan
@@ -43,11 +44,18 @@ impl Engine<'_> {
 
             Ok(StatementResult::Selected {
                 table: root_table_name.to_string(),
+                schema,
                 rows,
             })
         })
     }
 
+    /// Walks the bound `FROM` tree and appends every base table's heap as `(file_id, heap)`.
+    ///
+    /// Join and cross-product nodes are traversed recursively; only [`BoundFrom::Table`]
+    /// nodes contribute entries. Used so [`Self::build_plan`] can look up heaps by
+    /// [`FileId`] without touching the catalog again. Missing heaps become
+    /// [`EngineError::TableNotFound`].
     fn collect_heap_files(
         from: &BoundFrom,
         catalog: &Catalog,
@@ -279,6 +287,18 @@ impl Engine<'_> {
             .map_err(|e| EngineError::type_error(e.to_string()))
     }
 
+    /// Converts a `usize` index to a `ColumnId`, ensuring it fits within the valid range.
+    ///
+    /// Returns an error if the index is out of bounds for a column reference.
+    ///
+    /// # Arguments
+    ///
+    /// * `idx` - The positional index of the column to convert.
+    ///
+    /// # Errors
+    ///
+    /// Returns `EngineError::Unsupported` if the index cannot be converted
+    /// to a valid `ColumnId` (e.g., index is out of bounds for u32).
     #[inline]
     fn col_id(idx: usize) -> Result<ColumnId, EngineError> {
         ColumnId::try_from(idx)
