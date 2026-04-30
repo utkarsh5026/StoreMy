@@ -154,6 +154,31 @@ impl Field {
         self.nullable = false;
         self
     }
+
+    /// Sets the name of this field (column) to a new value.
+    ///
+    /// This mutates the field in place and returns a mutable reference to self, allowing for
+    /// chained calls.
+    ///
+    /// # SQL examples
+    ///
+    /// Used by SQL projections that emit an alias with `AS`:
+    ///
+    /// ```sql
+    /// -- SELECT column_name AS alias
+    /// --   field.set_name("alias")
+    /// ```
+    ///
+    /// # Examples
+    /// ```
+    /// let mut field = Field::new("old_name", Type::Int32);
+    /// field.set_name("new_name");
+    /// assert_eq!(field.name, "new_name");
+    /// ```
+    pub fn set_name(&mut self, name: impl Into<String>) -> &mut Self {
+        self.name = name.into();
+        self
+    }
 }
 
 impl fmt::Display for Field {
@@ -244,6 +269,10 @@ impl TupleSchema {
     #[inline]
     pub fn is_empty(&self) -> bool {
         self.fields.is_empty()
+    }
+
+    pub fn col_name(&self, col_id: ColumnId) -> Option<&str> {
+        self.field(usize::from(col_id)).map(|f| f.name.as_str())
     }
 
     /// Returns the column at `index` in declaration order, or `None` if out
