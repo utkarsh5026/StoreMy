@@ -1,4 +1,4 @@
-use std::{collections::VecDeque, time};
+use std::collections::VecDeque;
 
 use hashbrown::{HashMap, HashSet};
 use parking_lot::Mutex;
@@ -7,6 +7,7 @@ use thiserror::Error;
 use crate::{TransactionId, primitives::PageId};
 
 const MAX_LOCK_RETRIES: usize = 100;
+const LOCK_PAGE_BACKOFF_MULTIPLIER: [u32; 6] = [1, 2, 4, 8, 16, 32];
 
 #[derive(Debug, Error)]
 pub enum LockError {
@@ -154,10 +155,15 @@ impl LockRequest {
         }
     }
 
+    pub fn page_id(&self) -> PageId {
+        self.page_id
+    }
+
     pub fn is_exclusive(&self) -> bool {
         self.lock_type.is_exclusive()
     }
 
+    #[must_use]
     pub fn as_shared(&self) -> Self {
         Self {
             transaction_id: self.transaction_id,
@@ -166,6 +172,7 @@ impl LockRequest {
         }
     }
 
+    #[must_use]
     pub fn as_exclusive(&self) -> Self {
         Self {
             transaction_id: self.transaction_id,
@@ -182,6 +189,7 @@ struct LockTable {
     transaction_locks: HashMap<TransactionId, HashMap<PageId, LockType>>,
 }
 
+#[allow(dead_code)] // unlock / inspect paths reserved for transaction integration
 impl LockTable {
     fn new() -> Self {
         Self {
@@ -372,6 +380,7 @@ struct LockManagerState {
     wait_queue: WaitQueue,
 }
 
+#[allow(dead_code)] // release_lock / release_all_locks for explicit lock lifecycle APIs
 impl LockManagerState {
     fn new() -> Self {
         Self {
@@ -459,6 +468,7 @@ pub(super) struct LockManager {
     state: Mutex<LockManagerState>,
 }
 
+#[allow(dead_code)] // page lock queries / single-page unlock for upper layers
 impl LockManager {
     pub(super) fn new() -> Self {
         Self {
@@ -478,17 +488,48 @@ impl LockManager {
             let result = self.state.lock().attempt_to_acquire_lock(&req);
 
             match result {
-                Ok(()) => return Ok(()),
-                Err(LockError::Deadlock(tid)) => return Err(LockError::Deadlock(tid)),
+                Ok(()) => {
+                    if attempt > 0 {
+                        tracing::debug!(
+                            txn_id = %req.transaction_id,
+                            page_id = ?req.page_id,
+                            exclusive = req.is_exclusive(),
+                            attempts = attempt + 1,
+                            "lock granted after wait",
+                        );
+                    }
+                    return Ok(());
+                }
+                Err(LockError::Deadlock(tid)) => {
+                    tracing::warn!(
+                        victim = %tid,
+                        page_id = ?req.page_id,
+                        "deadlock detected, aborting victim",
+                    );
+                    return Err(LockError::Deadlock(tid));
+                }
                 Err(LockError::NotYetGranted) => {
+                    if attempt == 0 {
+                        tracing::debug!(
+                            txn_id = %req.transaction_id,
+                            page_id = ?req.page_id,
+                            exclusive = req.is_exclusive(),
+                            "lock contended, waiting",
+                        );
+                    }
                     let exp_factor = (attempt / 5).min(5);
-                    delay = (delay * (1 << exp_factor as u32)).min(max_delay);
+                    delay = (delay * LOCK_PAGE_BACKOFF_MULTIPLIER[exp_factor]).min(max_delay);
                     std::thread::sleep(delay);
                 }
                 Err(e) => return Err(e),
             }
         }
 
+        tracing::warn!(
+            txn_id = %req.transaction_id,
+            page_id = ?req.page_id,
+            "lock timeout",
+        );
         Err(LockError::Timeout {
             file_id: req.page_id.file_id.0,
             page_no: req.page_id.page_no.0,
@@ -742,8 +783,7 @@ mod tests {
 
     #[test]
     fn waiting_shared_lock_granted_after_exclusive_released() {
-        use std::sync::Arc;
-        use std::thread;
+        use std::{sync::Arc, thread};
 
         let lm = Arc::new(LockManager::new());
         lm.lock_page(LockRequest::exclusive(tid(1), page(1, 1)))
@@ -761,8 +801,7 @@ mod tests {
 
     #[test]
     fn deadlock_detected_between_two_transactions() {
-        use std::sync::Arc;
-        use std::thread;
+        use std::{sync::Arc, thread};
 
         let lm = Arc::new(LockManager::new());
 
