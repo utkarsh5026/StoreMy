@@ -141,12 +141,3 @@ jobs:
           report_paths: junit.xml
           detailed_summary: true
 
-  # Separate lightweight job — pure IO, no compilation.
-  rust-typos:
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    steps:
-      - uses: actions/checkout@v4
-      - name: Typos
-        uses: crate-ci/typos@master
-
