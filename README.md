@@ -4,7 +4,7 @@
 
 StoreMy is an educational database engine implementing core DBMS concepts including ACID transactions, query optimization, crash recovery, and concurrent access control—without embedding SQLite/PostgreSQL as the storage engine. The implementation lives in the Cargo workspace under [`db/`](db/). For workflows, CI, and contribution expectations, see [CONTRIBUTING.md](CONTRIBUTING.md).
 
-![Rust](https://img.shields.io/badge/rust-1.88-orange?logo=rust)
+![Rust](https://img.shields.io/badge/rust-1.89-orange?logo=rust)
 ![License](https://img.shields.io/badge/license-MIT-blue.svg)
 ![Docker](https://img.shields.io/badge/docker-ready-blue?style=flat&logo=docker)
 
@@ -130,7 +130,7 @@ Results
 
 ### Prerequisites
 
-- Rust **1.88** (see [rust-toolchain.toml](rust-toolchain.toml); `rustup` will pick it up automatically)
+- Rust **1.89** (see [rust-toolchain.toml](rust-toolchain.toml); `rustup` will pick it up automatically)
 - A terminal with UTF-8 support
 
 ### Installation
