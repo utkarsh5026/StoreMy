@@ -1,0 +1,1 @@
+# Intentionally minimal. CI runs `clippy ... -D warnings` (see CONTRIBUTING.md).

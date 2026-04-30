@@ -1,0 +1,73 @@
+[package]
+name = "storemy"
+version = "0.1.0"
+edition = "2024"
+authors = ["Utkarsh Priyadarshi"]
+description = "A relational database management system built from scratch"
+license = "MIT"
+repository = "https://github.com/utkarsh-priyadarshi/storemy"
+keywords = ["database", "sql", "storage-engine", "btree"]
+categories = ["database-implementations"]
+
+[lib]
+name = "storemy"
+path = "src/lib.rs"
+
+[[bin]]
+name = "storemy"
+path = "src/main.rs"
+
+[dependencies]
+# Error handling
+thiserror = "1.0"
+anyhow = "1.0"
+
+# In-house derive macros for the Encode/Decode codec traits.
+storemy-codec-derive = { path = "../storemy-codec-derive" }
+
+# REPL / richer output
+rustyline = "14"
+comfy-table = "7"
+owo-colors = "4"
+
+# Fallible iteration
+fallible-iterator = "0.3"
+
+# Serialization
+bytes = "1.5"
+byteorder = "1.5"
+crc32fast = "1.4"
+
+# Stable hashing for on-disk indexes (DefaultHasher is not version-stable)
+siphasher = "1"
+
+# Concurrency
+parking_lot = "0.12"
+crossbeam = "0.8"
+
+# Collections
+hashbrown = "0.14"
+lru = "0.12"
+
+# TUI (Phase 7)
+ratatui = "0.26"
+crossterm = "0.27"
+
+# Logging
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt", "json", "registry"] }
+tracing-tree = "0.3"
+tracing-chrome = "0.7"
+
+# Distributed tracing (OTLP → Jaeger / Tempo / etc.)
+tracing-opentelemetry = "0.28"
+opentelemetry = "0.27"
+opentelemetry_sdk = { version = "0.27", features = ["rt-tokio"] }
+opentelemetry-otlp = { version = "0.27", features = ["grpc-tonic"] }
+tokio = { version = "1", features = ["rt-multi-thread"] }
+
+[dev-dependencies]
+# Testing
+proptest = "1.4"
+tempfile = "3.10"
+rand = "0.8"

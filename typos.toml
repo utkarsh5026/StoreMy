@@ -1,0 +1,58 @@
+# typos — source-code-aware spell checker.
+# Run: `cargo install typos-cli` (or use `taiki-e/install-action`)  then `typos`.
+# Far faster than VSCode's cSpell for full-repo scans; runs in CI.
+
+[default]
+# Don't flag identifiers inside strings/comments that match project shorthand.
+extend-ignore-identifiers-re = [
+  # Hex/base32/ulid-like tokens that often look like typos.
+  "^[0-9a-fA-F]{8,}$",
+]
+
+[default.extend-words]
+# Domain / project vocabulary — spelled correctly by typos' standards.
+# Keep in sync with the shorter cSpell.words list in .vscode/settings.json.
+bpid = "bpid"
+pageid = "pageid"
+tids = "tids"
+pids = "pids"
+txns = "txns"
+lsns = "lsns"
+ptrs = "ptrs"
+preds = "preds"
+mvcc = "mvcc"
+wal = "wal"
+btree = "btree"
+seqscan = "seqscan"
+indexscan = "indexscan"
+codegen = "codegen"
+# Intentional abbreviations — don't "correct" to full words.
+impls = "impls"
+hasher = "hasher"
+dedup = "dedup"
+# Project names & tech used in code/comments.
+storemy = "storemy"
+hashbrown = "hashbrown"
+crossbeam = "crossbeam"
+ratatui = "ratatui"
+crossterm = "crossterm"
+thiserror = "thiserror"
+proptest = "proptest"
+
+[files]
+extend-exclude = [
+  "target/",
+  "*.lock",
+  "Cargo.lock",
+  "*.svg",
+  "*.pdf",
+  ".git/",
+]
+
+# Lower false-positive rate in strings — a lot of SQL test data looks garbled.
+[type.rust]
+extend-glob = ["*.rs"]
+check-filename = false
+
+[type.markdown]
+extend-glob = ["*.md"]

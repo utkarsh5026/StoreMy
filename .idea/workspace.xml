@@ -1,0 +1,351 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project version="4">
+  <component name="AutoImportSettings">
+    <option name="autoReloadType" value="SELECTIVE" />
+  </component>
+  <component name="CargoProjects">
+    <cargoProject FILE="$PROJECT_DIR$/Cargo.toml">
+      <package file="$PROJECT_DIR$/db">
+        <feature name="default" enabled="true" />
+      </package>
+    </cargoProject>
+  </component>
+  <component name="ChangeListManager">
+    <list default="true" id="e1ae0b87-b3c0-4220-9290-7c9133dd8700" name="Changes" comment="">
+      <change beforePath="$PROJECT_DIR$/.claude/rules/benchmarking.md" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/.claude/settings.local.json" beforeDir="false" afterPath="$PROJECT_DIR$/.claude/settings.local.json" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/.github/workflows/ci.yml" beforeDir="false" afterPath="$PROJECT_DIR$/.github/workflows/ci.yml" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/.idea/StoreMy.iml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/StoreMy.iml" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/.vscode/extensions.json" beforeDir="false" afterPath="$PROJECT_DIR$/.vscode/extensions.json" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/.vscode/settings.json" beforeDir="false" afterPath="$PROJECT_DIR$/.vscode/settings.json" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/Makefile" beforeDir="false" afterPath="$PROJECT_DIR$/Makefile" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/README.md" beforeDir="false" afterPath="$PROJECT_DIR$/README.md" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/db/src/binder/ddl.rs" beforeDir="false" afterPath="$PROJECT_DIR$/db/src/binder/ddl.rs" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/db/src/binder/dml.rs" beforeDir="false" afterPath="$PROJECT_DIR$/db/src/binder/dml.rs" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/db/src/binder/mod.rs" beforeDir="false" afterPath="$PROJECT_DIR$/db/src/binder/mod.rs" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/db/src/binder/scope.rs" beforeDir="false" afterPath="$PROJECT_DIR$/db/src/binder/scope.rs" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/db/src/buffer_pool/lock.rs" beforeDir="false" afterPath="$PROJECT_DIR$/db/src/buffer_pool/lock.rs" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/db/src/catalog/table.rs" beforeDir="false" afterPath="$PROJECT_DIR$/db/src/catalog/table.rs" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/db/src/database.rs" beforeDir="false" afterPath="$PROJECT_DIR$/db/src/database.rs" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/db/src/engine/dml.rs" beforeDir="false" afterPath="$PROJECT_DIR$/db/src/engine/dml.rs" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/db/src/engine/mod.rs" beforeDir="false" afterPath="$PROJECT_DIR$/db/src/engine/mod.rs" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/db/src/execution/aggregate.rs" beforeDir="false" afterPath="$PROJECT_DIR$/db/src/execution/aggregate.rs" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/db/src/execution/expression.rs" beforeDir="false" afterPath="$PROJECT_DIR$/db/src/execution/expression.rs" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/db/src/execution/join.rs" beforeDir="false" afterPath="$PROJECT_DIR$/db/src/execution/join.rs" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/db/src/execution/setops.rs" beforeDir="false" afterPath="$PROJECT_DIR$/db/src/execution/setops.rs" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/db/src/execution/unary.rs" beforeDir="false" afterPath="$PROJECT_DIR$/db/src/execution/unary.rs" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/db/src/heap/page.rs" beforeDir="false" afterPath="$PROJECT_DIR$/db/src/heap/page.rs" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/db/src/lib.rs" beforeDir="false" afterPath="$PROJECT_DIR$/db/src/lib.rs" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/db/src/main.rs" beforeDir="false" afterPath="$PROJECT_DIR$/db/src/main.rs" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/db/src/parser/lexer.rs" beforeDir="false" afterPath="$PROJECT_DIR$/db/src/parser/lexer.rs" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/db/src/parser/parsers/ddl.rs" beforeDir="false" afterPath="$PROJECT_DIR$/db/src/parser/parsers/ddl.rs" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/db/src/parser/parsers/dml.rs" beforeDir="false" afterPath="$PROJECT_DIR$/db/src/parser/parsers/dml.rs" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/db/src/parser/parsers/query.rs" beforeDir="false" afterPath="$PROJECT_DIR$/db/src/parser/parsers/query.rs" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/db/src/storage/heap.rs" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/db/src/storage/index.rs" beforeDir="false" afterPath="$PROJECT_DIR$/db/src/storage/index.rs" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/db/src/storage/mod.rs" beforeDir="false" afterPath="$PROJECT_DIR$/db/src/storage/mod.rs" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/db/src/tuple.rs" beforeDir="false" afterPath="$PROJECT_DIR$/db/src/tuple.rs" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/db/src/wal/writer.rs" beforeDir="false" afterPath="$PROJECT_DIR$/db/src/wal/writer.rs" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/tools/viz/src/storemy_viz/views/heap.py" beforeDir="false" afterPath="$PROJECT_DIR$/tools/viz/src/storemy_viz/views/heap.py" afterDir="false" />
+    </list>
+    <option name="SHOW_DIALOG" value="false" />
+    <option name="HIGHLIGHT_CONFLICTS" value="true" />
+    <option name="HIGHLIGHT_NON_ACTIVE_CHANGELIST" value="false" />
+    <option name="LAST_RESOLUTION" value="IGNORE" />
+  </component>
+  <component name="CopilotPersistence">
+    <persistenceIdMap>
+      <entry key="_C:/Users/Utkarsh Priyadarshi/GolandProjects/StoreMy" value="2yHjWhzUM15HlzzYAIbGsAubRat" />
+    </persistenceIdMap>
+  </component>
+  <component name="ExecutionTargetManager" SELECTED_TARGET="RsBuildProfile:dev" />
+  <component name="FileTemplateManagerImpl">
+    <option name="RECENT_TEMPLATES">
+      <list>
+        <option value="Python Script" />
+      </list>
+    </option>
+  </component>
+  <component name="Git.Settings">
+    <option name="RECENT_GIT_ROOT_PATH" value="$PROJECT_DIR$" />
+  </component>
+  <component name="GitHubPullRequestSearchHistory"><![CDATA[{
+  "lastFilter": {
+    "state": "OPEN",
+    "assignee": "utkarsh5026"
+  }
+}]]></component>
+  <component name="GithubPullRequestsUISettings"><![CDATA[{
+  "selectedUrlAndAccountId": {
+    "url": "https://github.com/utkarsh5026/StoreMy.git",
+    "accountId": "4d4cb081-097c-403f-b612-71d13cd67bea"
+  }
+}]]></component>
+  <component name="MacroExpansionManager">
+    <option name="directoryName" value="WecdykWM" />
+  </component>
+  <component name="ProjectColorInfo">{
+  &quot;associatedIndex&quot;: 2
+}</component>
+  <component name="ProjectId" id="2yHjWhzUM15HlzzYAIbGsAubRat" />
+  <component name="ProjectViewState">
+    <option name="hideEmptyMiddlePackages" value="true" />
+    <option name="showLibraryContents" value="true" />
+    <option name="showMembers" value="true" />
+  </component>
+  <component name="PropertiesComponent"><![CDATA[{
+  "keyToString": {
+    "Cargo.Run storemy.executor": "Run",
+    "ModuleVcsDetector.initialDetectionPerformed": "true",
+    "Python tests.pytest for test_bitmap_slot.TestBitmapSlotManager.executor": "Run",
+    "Python tests.pytest for test_bitmap_slot.TestBitmapSlotManager.test_find_free_slot_empty_manager.executor": "Run",
+    "Python tests.pytest for test_bitmap_slot.TestBitmapSlotManager.test_set_slot_used_out_of_range_raises_error.executor": "Run",
+    "Python tests.pytest for test_boolean_field.TestBoolField.executor": "Run",
+    "Python tests.pytest for test_catalog.TestCatalog.executor": "Run",
+    "Python tests.pytest for test_dependency_manager.TestDependencyGraph.executor": "Run",
+    "Python tests.pytest for test_dependency_manager.TestLock.executor": "Run",
+    "Python tests.pytest for test_dependency_manager.TestLockType.executor": "Run",
+    "Python tests.pytest for test_disk_manager.TestDiskManager.executor": "Run",
+    "Python tests.pytest for test_disk_manager.TestDiskManager.test_init_default_directory.executor": "Run",
+    "Python tests.pytest for test_disk_manager.TestDiskManagerExceptions.executor": "Run",
+    "Python tests.pytest for test_disk_manager.TestDiskManagerStats.executor": "Run",
+    "Python tests.pytest for test_disk_manager.TestDiskManagerStats.test_init_default_values.executor": "Run",
+    "Python tests.pytest for test_double_field.TestDoubleField.executor": "Run",
+    "Python tests.pytest for test_edge_cases.TestPageEdgeCases.executor": "Run",
+    "Python tests.pytest for test_edge_cases.TestPageEdgeCases.test_transaction_id_edge_cases.executor": "Run",
+    "Python tests.pytest for test_heap_page.TestHeapPage.executor": "Run",
+    "Python tests.pytest for test_heap_page.TestHeapPage.test_add_delete_add_reuses_slots.executor": "Run",
+    "Python tests.pytest for test_heap_page.TestHeapPage.test_add_tuple_page_full_raises_error.executor": "Run",
+    "Python tests.pytest for test_heap_page.TestHeapPage.test_before_image_operations.executor": "Run",
+    "Python tests.pytest for test_heap_page.TestHeapPage.test_calculate_header_size.executor": "Run",
+    "Python tests.pytest for test_heap_page.TestHeapPage.test_calculate_num_slots.executor": "Run",
+    "Python tests.pytest for test_heap_page.TestHeapPage.test_init_new_page_valid.executor": "Run",
+    "Python tests.pytest for test_heap_page.TestHeapPage.test_init_with_data_not_implemented.executor": "Run",
+    "Python tests.pytest for test_heap_page.TestHeapPage.test_insert_tuple_page_full_returns_none.executor": "Run",
+    "Python tests.pytest for test_heap_page_id.TestHeapPageId.executor": "Run",
+    "Python tests.pytest for test_heap_page_id.TestHeapPageId.test_init_valid_values.executor": "Run",
+    "Python tests.pytest for test_int_field.TestIntField.executor": "Run",
+    "Python tests.pytest for test_json.TestJsonExtraction.executor": "Run",
+    "Python tests.pytest for test_json.TestJsonExtraction.test_completely_invalid_json_fallback.executor": "Run",
+    "Python tests.pytest for test_json.TestJsonExtraction.test_deeply_nested_structures.executor": "Run",
+    "Python tests.pytest for test_json.TestJsonExtraction.test_empty_string_input.executor": "Run",
+    "Python tests.pytest for test_json.TestJsonExtraction.test_extract_and_clean_json_direct.executor": "Run",
+    "Python tests.pytest for test_json.TestJsonExtraction.test_json_array_extraction.executor": "Run",
+    "Python tests.pytest for test_json.TestJsonExtraction.test_json_surrounded_by_noise.executor": "Run",
+    "Python tests.pytest for test_json.TestJsonExtraction.test_json_with_comments_inside_strings.executor": "Run",
+    "Python tests.pytest for test_json.TestJsonExtraction.test_json_with_multiline_comments.executor": "Run",
+    "Python tests.pytest for test_json.TestJsonExtraction.test_json_with_newlines_in_strings.executor": "Run",
+    "Python tests.pytest for test_json.TestJsonExtraction.test_json_with_null_and_boolean_values.executor": "Run",
+    "Python tests.pytest for test_json.TestJsonExtraction.test_json_with_scientific_notation.executor": "Run",
+    "Python tests.pytest for test_json.TestJsonExtraction.test_json_with_single_line_comments.executor": "Run",
+    "Python tests.pytest for test_json.TestJsonExtraction.test_json_with_very_long_strings.executor": "Run",
+    "Python tests.pytest for test_json.TestJsonExtraction.test_markdown_without_language_specifier.executor": "Run",
+    "Python tests.pytest for test_json.TestJsonExtraction.test_missing_closing_braces.executor": "Run",
+    "Python tests.pytest for test_json.TestJsonExtraction.test_multiple_json_blocks_takes_first.executor": "Run",
+    "Python tests.pytest for test_json.TestJsonExtraction.test_multiple_json_like_structures.executor": "Run",
+    "Python tests.pytest for test_json.TestJsonExtraction.test_nested_complex_json.executor": "Run",
+    "Python tests.pytest for test_json.TestJsonExtraction.test_none_input_conversion.executor": "Run",
+    "Python tests.pytest for test_json.TestJsonExtraction.test_simple_valid_json.executor": "Run",
+    "Python tests.pytest for test_lock_manager.TestLockManager.executor": "Run",
+    "Python tests.pytest for test_lock_manager.TestLockManagerComprehensive.executor": "Run",
+    "Python tests.pytest for test_lock_manager.TestLockManagerComprehensive.test_acquire_lock_exclusive_on_empty_page.executor": "Run",
+    "Python tests.pytest for test_lock_manager.TestLockManagerComprehensive.test_acquire_lock_shared_on_empty_page.executor": "Run",
+    "Python tests.pytest for test_lock_manager.TestLockManagerComprehensive.test_complex_deadlock_cycle.executor": "Run",
+    "Python tests.pytest for test_lock_manager.TestLockManagerComprehensive.test_concurrent_exclusive_lock_acquisition.executor": "Run",
+    "Python tests.pytest for test_lock_manager.TestLockManagerComprehensive.test_concurrent_lock_upgrade.executor": "Run",
+    "Python tests.pytest for test_lock_manager.TestLockManagerComprehensive.test_concurrent_release_operations.executor": "Run",
+    "Python tests.pytest for test_lock_manager.TestLockManagerComprehensive.test_concurrent_shared_lock_acquisition.executor": "Run",
+    "Python tests.pytest for test_lock_manager.TestLockManagerComprehensive.test_exclusive_lock_blocks_all_others.executor": "Run",
+    "Python tests.pytest for test_lock_manager.TestLockManagerComprehensive.test_lock_granted_after_release.executor": "Run",
+    "Python tests.pytest for test_lock_manager.TestLockManagerComprehensive.test_lock_timeout_behavior.executor": "Run",
+    "Python tests.pytest for test_lock_manager.TestLockManagerComprehensive.test_multiple_shared_locks_same_page.executor": "Run",
+    "Python tests.pytest for test_lock_manager.TestLockManagerComprehensive.test_release_all_locks_for_transaction.executor": "Run",
+    "Python tests.pytest for test_lock_manager.TestLockManagerComprehensive.test_release_nonexistent_lock.executor": "Run",
+    "Python tests.pytest for test_lock_manager.TestLockManagerComprehensive.test_release_one_of_multiple_shared_locks.executor": "Run",
+    "Python tests.pytest for test_lock_manager.TestLockManagerComprehensive.test_release_single_lock.executor": "Run",
+    "Python tests.pytest for test_lock_manager.TestLockManagerComprehensive.test_same_transaction_duplicate_requests.executor": "Run",
+    "Python tests.pytest for test_lock_manager.TestLockManagerComprehensive.test_shared_lock_blocks_exclusive.executor": "Run",
+    "Python tests.pytest for test_lock_manager.TestLockManagerComprehensive.test_simple_deadlock_detection.executor": "Run",
+    "Python tests.pytest for test_lock_manager.TestLockManagerComprehensive.test_statistics_tracking.executor": "Run",
+    "Python tests.pytest for test_page_integration.TestPageIntegration.test_page_capacity_limits.executor": "Run",
+    "Python tests.pytest for test_record_id.TestRecordId.executor": "Run",
+    "Python tests.pytest for test_record_id.TestRecordId.test_init_valid_values.executor": "Run",
+    "Python tests.pytest for test_schema_validator.TestSchemaValidator.executor": "Run",
+    "Python tests.pytest for test_table_info.TestConstraintInfo.executor": "Run",
+    "Python tests.pytest for test_table_info.TestIndexInfo.executor": "Run",
+    "Python tests.pytest for test_table_info.TestTableMetadata.executor": "Run",
+    "Python tests.pytest for test_transaction.TestTransaction.executor": "Run",
+    "Python tests.pytest for test_transaction.TestTransaction.test_get_age.executor": "Run",
+    "Python tests.pytest for test_transaction.TestTransaction.test_get_id.executor": "Run",
+    "Python tests.pytest for test_transaction.TestTransaction.test_is_active.executor": "Run",
+    "Python tests.pytest for test_transaction.TestTransaction.test_transaction_initialization.executor": "Run",
+    "Python tests.pytest for test_transaction.TestTransaction.test_transaction_start_invalid_state.executor": "Run",
+    "Python tests.pytest for test_transaction.TestTransaction.test_transaction_start_success.executor": "Run",
+    "Python tests.pytest for test_tuple_iterator.TestTupleIterator.executor": "Run",
+    "RunOnceActivity.ShowReadmeOnStart": "true",
+    "RunOnceActivity.TerminalTabsStorage.copyFrom.TerminalArrangementManager.252": "true",
+    "RunOnceActivity.git.unshallow": "true",
+    "RunOnceActivity.rust.reset.selective.auto.import": "true",
+    "RunOnceActivity.typescript.service.memoryLimit.init": "true",
+    "SHARE_PROJECT_CONFIGURATION_FILES": "true",
+    "git-widget-placeholder": "port-to-rust",
+    "ignore.virus.scanning.warn.message": "true",
+    "last_opened_file_path": "//wsl.localhost/Ubuntu/home/utkarsh5026/StoreMy",
+    "node.js.detected.package.eslint": "true",
+    "node.js.detected.package.tslint": "true",
+    "node.js.selected.package.eslint": "(autodetect)",
+    "node.js.selected.package.tslint": "(autodetect)",
+    "nodejs_package_manager_path": "npm",
+    "org.rust.cargo.project.model.PROJECT_DISCOVERY": "true",
+    "settings.editor.selected.configurable": "language.rust",
+    "vue.rearranger.settings.migration": "true"
+  }
+}]]></component>
+  <component name="RecentsManager">
+    <key name="MoveFile.RECENT_KEYS">
+      <recent name="C:\Users\Utkarsh Priyadarshi\WebstormProjects\StoreMy\app\storage\buffer" />
+      <recent name="C:\Users\Utkarsh Priyadarshi\WebstormProjects\StoreMy\app\storage\interfaces" />
+      <recent name="C:\Users\Utkarsh Priyadarshi\WebstormProjects\StoreMy\app\storage\heap" />
+      <recent name="C:\Users\Utkarsh Priyadarshi\WebstormProjects\StoreMy\tests\test_catalog" />
+      <recent name="C:\Users\Utkarsh Priyadarshi\WebstormProjects\StoreMy\app\primitives" />
+    </key>
+  </component>
+  <component name="RunManager" selected="Cargo.Run storemy">
+    <configuration name="Run storemy" type="CargoCommandRunConfiguration" factoryName="Cargo Command" temporary="true">
+      <option name="buildProfileId" value="dev" />
+      <option name="command" value="run --package storemy --bin storemy" />
+      <option name="workingDirectory" value="file://$PROJECT_DIR$/db" />
+      <envs />
+      <option name="emulateTerminal" value="true" />
+      <option name="channel" value="DEFAULT" />
+      <option name="requiredFeatures" value="true" />
+      <option name="allFeatures" value="false" />
+      <option name="withSudo" value="false" />
+      <option name="buildTarget" value="REMOTE" />
+      <option name="backtrace" value="SHORT" />
+      <option name="isRedirectInput" value="false" />
+      <option name="redirectInputPath" value="" />
+      <method v="2">
+        <option name="CARGO.BUILD_TASK_PROVIDER" enabled="true" />
+      </method>
+    </configuration>
+    <configuration name="pytest for test_json.TestJsonExtraction.test_extract_and_clean_json_direct" type="tests" factoryName="py.test" temporary="true" nameIsGenerated="true">
+      <module name="StoreMy" />
+      <option name="ENV_FILES" value="" />
+      <option name="INTERPRETER_OPTIONS" value="" />
+      <option name="PARENT_ENVS" value="true" />
+      <option name="SDK_HOME" value="" />
+      <option name="WORKING_DIRECTORY" value="$PROJECT_DIR$/tests/test_json" />
+      <option name="IS_MODULE_SDK" value="true" />
+      <option name="ADD_CONTENT_ROOTS" value="true" />
+      <option name="ADD_SOURCE_ROOTS" value="true" />
+      <option name="RUN_TOOL" value="" />
+      <option name="_new_keywords" value="&quot;&quot;" />
+      <option name="_new_parameters" value="&quot;&quot;" />
+      <option name="_new_additionalArguments" value="&quot;&quot;" />
+      <option name="_new_target" value="&quot;test_json.TestJsonExtraction.test_extract_and_clean_json_direct&quot;" />
+      <option name="_new_targetType" value="&quot;PYTHON&quot;" />
+      <method v="2" />
+    </configuration>
+    <configuration name="pytest for test_json.TestJsonExtraction.test_json_surrounded_by_noise" type="tests" factoryName="py.test" temporary="true" nameIsGenerated="true">
+      <module name="StoreMy" />
+      <option name="ENV_FILES" value="" />
+      <option name="INTERPRETER_OPTIONS" value="" />
+      <option name="PARENT_ENVS" value="true" />
+      <option name="SDK_HOME" value="" />
+      <option name="WORKING_DIRECTORY" value="$PROJECT_DIR$/tests/test_json" />
+      <option name="IS_MODULE_SDK" value="true" />
+      <option name="ADD_CONTENT_ROOTS" value="true" />
+      <option name="ADD_SOURCE_ROOTS" value="true" />
+      <option name="RUN_TOOL" value="" />
+      <option name="_new_keywords" value="&quot;&quot;" />
+      <option name="_new_parameters" value="&quot;&quot;" />
+      <option name="_new_additionalArguments" value="&quot;&quot;" />
+      <option name="_new_target" value="&quot;test_json.TestJsonExtraction.test_json_surrounded_by_noise&quot;" />
+      <option name="_new_targetType" value="&quot;PYTHON&quot;" />
+      <method v="2" />
+    </configuration>
+    <configuration name="pytest for test_json.TestJsonExtraction.test_json_with_newlines_in_strings" type="tests" factoryName="py.test" temporary="true" nameIsGenerated="true">
+      <module name="StoreMy" />
+      <option name="ENV_FILES" value="" />
+      <option name="INTERPRETER_OPTIONS" value="" />
+      <option name="PARENT_ENVS" value="true" />
+      <option name="SDK_HOME" value="" />
+      <option name="WORKING_DIRECTORY" value="$PROJECT_DIR$/tests/test_json" />
+      <option name="IS_MODULE_SDK" value="true" />
+      <option name="ADD_CONTENT_ROOTS" value="true" />
+      <option name="ADD_SOURCE_ROOTS" value="true" />
+      <option name="RUN_TOOL" value="" />
+      <option name="_new_keywords" value="&quot;&quot;" />
+      <option name="_new_parameters" value="&quot;&quot;" />
+      <option name="_new_additionalArguments" value="&quot;&quot;" />
+      <option name="_new_target" value="&quot;test_json.TestJsonExtraction.test_json_with_newlines_in_strings&quot;" />
+      <option name="_new_targetType" value="&quot;PYTHON&quot;" />
+      <method v="2" />
+    </configuration>
+    <configuration name="pytest for test_json.TestJsonExtraction.test_json_with_very_long_strings" type="tests" factoryName="py.test" temporary="true" nameIsGenerated="true">
+      <module name="StoreMy" />
+      <option name="ENV_FILES" value="" />
+      <option name="INTERPRETER_OPTIONS" value="" />
+      <option name="PARENT_ENVS" value="true" />
+      <option name="SDK_HOME" value="" />
+      <option name="WORKING_DIRECTORY" value="$PROJECT_DIR$/tests/test_json" />
+      <option name="IS_MODULE_SDK" value="true" />
+      <option name="ADD_CONTENT_ROOTS" value="true" />
+      <option name="ADD_SOURCE_ROOTS" value="true" />
+      <option name="RUN_TOOL" value="" />
+      <option name="_new_keywords" value="&quot;&quot;" />
+      <option name="_new_parameters" value="&quot;&quot;" />
+      <option name="_new_additionalArguments" value="&quot;&quot;" />
+      <option name="_new_target" value="&quot;test_json.TestJsonExtraction.test_json_with_very_long_strings&quot;" />
+      <option name="_new_targetType" value="&quot;PYTHON&quot;" />
+      <method v="2" />
+    </configuration>
+    <recent_temporary>
+      <list>
+        <item itemvalue="Cargo.Run storemy" />
+        <item itemvalue="Python tests.pytest for test_json.TestJsonExtraction.test_extract_and_clean_json_direct" />
+        <item itemvalue="Python tests.pytest for test_json.TestJsonExtraction.test_json_with_very_long_strings" />
+        <item itemvalue="Python tests.pytest for test_json.TestJsonExtraction.test_json_surrounded_by_noise" />
+        <item itemvalue="Python tests.pytest for test_json.TestJsonExtraction.test_json_with_newlines_in_strings" />
+      </list>
+    </recent_temporary>
+  </component>
+  <component name="RustProjectSettings">
+    <option name="toolchainHomeDirectory" value="$PROJECT_DIR$/../.cargo/bin" />
+  </component>
+  <component name="SharedIndexes">
+    <attachedChunks>
+      <set>
+        <option value="bundled-python-sdk-890ed5b35930-d9c5bdb153f4-com.jetbrains.pycharm.pro.sharedIndexes.bundled-PY-251.23774.444" />
+      </set>
+    </attachedChunks>
+  </component>
+  <component name="TaskManager">
+    <task active="true" id="Default" summary="Default task">
+      <changelist id="e1ae0b87-b3c0-4220-9290-7c9133dd8700" name="Changes" comment="" />
+      <created>1749498425788</created>
+      <option name="number" value="Default" />
+      <option name="presentableId" value="Default" />
+      <updated>1749498425788</updated>
+      <workItem from="1768724975128" duration="101000" />
+      <workItem from="1768726245360" duration="4182000" />
+      <workItem from="1768745244678" duration="98000" />
+      <workItem from="1768746442281" duration="726000" />
+      <workItem from="1777106880360" duration="743000" />
+    </task>
+    <servers />
+  </component>
+  <component name="TypeScriptGeneratedFilesManager">
+    <option name="version" value="3" />
+  </component>
+  <component name="github-copilot-workspace">
+    <instructionFileLocations>
+      <option value=".github/instructions" />
+    </instructionFileLocations>
+    <promptFileLocations>
+      <option value=".github/prompts" />
+    </promptFileLocations>
+  </component>
+</project>

@@ -2,49 +2,40 @@
     "version": "0.2.0",
     "configurations": [
         {
-            "name": "Run StoreMy",
-            "type": "go",
+            "type": "lldb",
             "request": "launch",
-            "mode": "debug",
-            "program": "${workspaceFolder}",
-            "args": ["-db", "mydb", "-data", "./data"],
-            "env": {},
-            "console": "integratedTerminal",
-            "stopAtEntry": false
+            "name": "Rust: Debug storemy binary",
+            "cargo": {
+                "args": ["build", "--bin=storemy"],
+                "filter": { "name": "storemy", "kind": "bin" }
+            },
+            "args": [],
+            "cwd": "${workspaceFolder}/db",
+            "sourceLanguages": ["rust"]
         },
         {
-            "name": "Run StoreMy (fresh data)",
-            "type": "go",
+            "type": "lldb",
             "request": "launch",
-            "mode": "debug",
-            "program": "${workspaceFolder}",
-            "args": ["-db", "testdb", "-data", "./tmp/data"],
-            "env": {},
-            "console": "integratedTerminal",
-            "stopAtEntry": false,
-            "preLaunchTask": "Shell: Clear fresh data"
+            "name": "Rust: Debug unit tests",
+            "cargo": {
+                "args": ["test", "--no-run", "--lib"],
+                "filter": { "name": "storemy", "kind": "lib" }
+            },
+            "args": ["--nocapture"],
+            "cwd": "${workspaceFolder}/db",
+            "sourceLanguages": ["rust"]
         },
         {
-            "name": "Debug current test file",
-            "type": "go",
+            "type": "lldb",
             "request": "launch",
-            "mode": "test",
-            "program": "${fileDirname}",
-            "args": ["-v", "-count=1"],
-            "env": {},
-            "console": "integratedTerminal",
-            "stopAtEntry": false
-        },
-        {
-            "name": "Debug tests in package",
-            "type": "go",
-            "request": "launch",
-            "mode": "test",
-            "program": "${fileDirname}",
-            "args": ["-v", "-count=1", "-timeout", "120s"],
-            "env": {},
-            "console": "integratedTerminal",
-            "stopAtEntry": false
+            "name": "Rust: Debug current test file",
+            "cargo": {
+                "args": ["test", "--no-run", "--lib", "${fileBasenameNoExtension}"],
+                "filter": { "name": "storemy", "kind": "lib" }
+            },
+            "args": ["--nocapture"],
+            "cwd": "${workspaceFolder}/db",
+            "sourceLanguages": ["rust"]
         }
     ]
 }

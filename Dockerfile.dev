@@ -1,27 +1,19 @@
-# Development Dockerfile with Go toolchain for benchmarking and testing
-FROM golang:1.24-alpine
+# syntax=docker/dockerfile:1
+# Full Rust workspace for `cargo test` and `cargo run --bin metrics_exporter`
+# (compose may bind-mount the repo over `/app` at runtime).
 
-# Install additional tools
-RUN apk add --no-cache git make bash ca-certificates
+FROM rust:1.88-bookworm
 
-# Set working directory
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends pkg-config \
+    && rm -rf /var/lib/apt/lists/*
+
 WORKDIR /app
 
-# Copy go mod files
-COPY go.mod go.sum ./
+COPY rust-toolchain.toml Cargo.toml Cargo.lock ./
+COPY db ./db
+COPY storemy-codec-derive ./storemy-codec-derive
 
-# Download dependencies
-RUN go mod download
+RUN cargo fetch --locked
 
-# Copy source code
-COPY . .
-
-# Create necessary directories
-RUN mkdir -p /app/data /app/data/logs /app/benchmark_data /app/benchmark_logs /app/benchmark-results /app/metrics_logs
-
-# Set environment variables
-ENV DB_NAME=storemy_db
-ENV DATA_DIR=/app/data
-
-# Default command
-CMD ["go", "version"]
+CMD ["rustc", "-V"]

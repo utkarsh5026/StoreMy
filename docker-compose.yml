@@ -1,4 +1,21 @@
 services:
+  # Jaeger all-in-one for distributed tracing.
+  #
+  # Bring it up:   docker compose up -d jaeger
+  # Run the DB:    STOREMY_OTEL=1 cargo run -- repl
+  # Open the UI:   http://localhost:16686
+  # Tear it down:  docker compose down jaeger
+  jaeger:
+    image: jaegertracing/all-in-one:1.62
+    container_name: storemy-jaeger
+    restart: unless-stopped
+    ports:
+      - "16686:16686" # web UI
+      - "4317:4317"   # OTLP gRPC (default for STOREMY_OTEL_ENDPOINT)
+      - "4318:4318"   # OTLP HTTP (alternative)
+    environment:
+      COLLECTOR_OTLP_ENABLED: "true"
+
   storemy:
     build:
       context: .
@@ -8,12 +25,9 @@ services:
     tty: true # Allocate a pseudo-TTY for terminal UI
     volumes:
       - storemy-data:/app/data
-      - ./examples:/app/examples:ro
     environment:
-      - DB_NAME=storemy_db
       - DATA_DIR=/app/data
       - TERM=xterm-256color # Enable colors in terminal
-    command: ["--db", "storemy_db", "--data", "/app/data"]
     networks:
       - storemy-network
 
@@ -21,101 +35,25 @@ services:
   storemy-test:
     build:
       context: .
-      dockerfile: Dockerfile
+      dockerfile: Dockerfile.dev
     container_name: storemy-test
     volumes:
-      - ./examples/test_db:/app/test_db:ro
+      - .:/app
       - storemy-test-data:/app/test_data
     working_dir: /app
-    entrypoint: ["go", "run", "test_db/test_db.go"]
+    command:
+      [
+        "cargo",
+        "test",
+        "-p",
+        "storemy",
+        "--test",
+        "integration",
+        "--locked",
+        "--release",
+      ]
     networks:
       - storemy-network
-
-  storemy-benchmark:
-    build:
-      context: .
-      dockerfile: Dockerfile.dev
-    container_name: storemy-benchmark
-    volumes:
-      - .:/app
-      - ./benchmark-results:/app/benchmark-results
-      - storemy-benchmark-data:/app/benchmark_data
-      - storemy-benchmark-logs:/app/benchmark_logs
-    working_dir: /app
-    environment:
-      - BENCHMARK_OUTPUT=/app/benchmark-results
-      - BENCHMARK_ITERATIONS=1000
-      - BENCHMARK_CONCURRENT_QUERIES=10
-      - DB_NAME=benchmark_db
-      - DATA_DIR=/app/benchmark_data
-      - LOG_DIR=/app/benchmark_logs
-    command:
-      - /bin/sh
-      - -c
-      - |
-        echo "=========================================="
-        echo "  StoreMy Performance Benchmark Suite"
-        echo "=========================================="
-        echo ""
-        go run benchmarks/benchmark.go
-        echo ""
-        echo "=========================================="
-        echo "  ✓ Benchmark Complete!"
-        echo "=========================================="
-        echo ""
-        echo "📊 View Results:"
-        echo "  • HTML Report: ./benchmark-results/"
-        ls -1t /app/benchmark-results/*.html 2>/dev/null | head -1 | xargs -I {} echo "    └─ {}"
-        echo ""
-        echo "  • JSON Data:   ./benchmark-results/"
-        ls -1t /app/benchmark-results/*.json 2>/dev/null | head -1 | xargs -I {} echo "    └─ {}"
-        echo ""
-        echo "💡 Quick Actions:"
-        echo "  • Open HTML:   open ./benchmark-results/benchmark_report_*.html"
-        echo "  • Start monitoring:  docker-compose --profile monitoring up -d"
-        echo "  • View Grafana:      http://localhost:3000 (admin/storemy)"
-        echo ""
-    networks:
-      - storemy-network
-    profiles:
-      - benchmark # Only starts when explicitly requested
-
-  benchmark-viewer:
-    image: busybox
-    container_name: storemy-benchmark-viewer
-    volumes:
-      - ./benchmark-results:/results:ro
-    command:
-      - /bin/sh
-      - -c
-      - |
-        echo "=========================================="
-        echo "  StoreMy Benchmark Results"
-        echo "=========================================="
-        echo ""
-        if [ ! -d "/results" ] || [ -z "$$(ls -A /results 2>/dev/null)" ]; then
-          echo "❌ No benchmark results found!"
-          echo ""
-          echo "Run benchmarks first:"
-          echo "  docker-compose --profile benchmark up storemy-benchmark"
-          echo ""
-          exit 1
-        fi
-        echo "📊 Available Reports:"
-        echo ""
-        ls -lt /results/*.html 2>/dev/null | head -5 | awk '{print "  • " $$9 " (" $$6 " " $$7 ")"}'
-        echo ""
-        echo "💡 To view:"
-        echo "  • Windows: start benchmark-results\\benchmark_report_*.html"
-        echo "  • Linux:   xdg-open benchmark-results/benchmark_report_*.html"
-        echo "  • Mac:     open benchmark-results/benchmark_report_*.html"
-        echo ""
-        echo "📈 Monitoring Dashboard:"
-        echo "  • Grafana: http://localhost:3000 (admin/storemy)"
-        echo "  • Start:   docker-compose --profile monitoring up -d"
-        echo ""
-    profiles:
-      - benchmark
 
   prometheus:
     image: prom/prometheus:latest
@@ -169,7 +107,17 @@ services:
       - DATA_DIR=/app/data
       - LOG_DIR=/app/metrics_logs
       - METRICS_PORT=8080
-    command: ["go", "run", "monitoring/exporter/metrics_exporter.go"]
+    command:
+      [
+        "cargo",
+        "run",
+        "--release",
+        "--locked",
+        "-p",
+        "storemy",
+        "--bin",
+        "metrics_exporter",
+      ]
     ports:
       - "8080:8080"
     networks:
@@ -181,10 +129,6 @@ volumes:
   storemy-data:
     driver: local
   storemy-test-data:
-    driver: local
-  storemy-benchmark-data:
-    driver: local
-  storemy-benchmark-logs:
     driver: local
   storemy-metrics-logs:
     driver: local

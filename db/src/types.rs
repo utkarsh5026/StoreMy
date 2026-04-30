@@ -1,0 +1,722 @@
+//! Type system for `StoreMy` database.
+//!
+//! This module defines the supported data types and the [`Value`] enum
+//! that represents runtime values in the database.
+//!
+//! There are two layers:
+//!
+//! - [`Type`] — a compile-time descriptor of what *kind* of value a column holds.
+//! - [`Value`] — an owned runtime value that carries actual data, including [`Value::Null`].
+//!
+//! Both types support serialization to and from raw byte slices using little-endian
+//! encoding (via the `byteorder` crate). Strings are stored as a 4-byte length prefix
+//! followed by the UTF-8 bytes, capped at [`crate::STRING_MAX_SIZE`].
+
+use std::{
+    cmp::Ordering,
+    fmt,
+    hash::{Hash, Hasher},
+    io::{Read, Write},
+};
+
+use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
+use thiserror::Error;
+
+use crate::{
+    STRING_MAX_SIZE,
+    codec::{CodecError, Decode, Encode},
+};
+
+/// Errors related to the type system and value conversions.
+#[derive(Error, Debug)]
+pub enum TypeError {
+    #[error("Type mismatch: expected {expected}, got {actual}")]
+    Mismatch { expected: String, actual: String },
+
+    #[error("Cannot convert {from} to {to}")]
+    InvalidConversion { from: String, to: String },
+
+    #[error("Null value not allowed for column {column}")]
+    NullNotAllowed { column: String },
+
+    #[error("Unsupported type: {message}")]
+    UnsupportedType { message: String },
+}
+
+/// The data type of a column or expression.
+///
+/// `Type` is a lightweight, `Copy` descriptor used in schema definitions and
+/// during serialization/deserialization to interpret raw bytes correctly.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Type {
+    Int32,
+    Int64,
+    Uint32,
+    Uint64,
+    Float64,
+    String,
+    Bool,
+}
+
+/// Converts a `u32` to a [`Type`] by matching a numeric tag to the corresponding variant.
+///
+/// Returns a [`TypeError::UnsupportedType`] if the value does not correspond to any known tag.
+impl TryFrom<u32> for Type {
+    type Error = TypeError;
+
+    fn try_from(value: u32) -> Result<Self, Self::Error> {
+        match value {
+            0 => Ok(Type::Int32),
+            1 => Ok(Type::Int64),
+            2 => Ok(Type::Uint32),
+            3 => Ok(Type::Uint64),
+            4 => Ok(Type::Float64),
+            5 => Ok(Type::String),
+            6 => Ok(Type::Bool),
+            _ => Err(TypeError::UnsupportedType {
+                message: format!("Unsupported type: {value}"),
+            }),
+        }
+    }
+}
+
+impl From<Type> for u32 {
+    fn from(value: Type) -> Self {
+        match value {
+            Type::Int32 => 0,
+            Type::Int64 => 1,
+            Type::Uint32 => 2,
+            Type::Uint64 => 3,
+            Type::Float64 => 4,
+            Type::String => 5,
+            Type::Bool => 6,
+        }
+    }
+}
+
+/// Encodes a [`Type`] as a little-endian `u32` tag, matching the mapping defined in [`From<Type>
+/// for u32`].
+///
+/// # Errors
+///
+/// Returns any underlying I/O error from the writer.
+impl Encode for Type {
+    fn encode<W: Write>(&self, writer: &mut W) -> Result<(), CodecError> {
+        writer.write_u32::<LittleEndian>(u32::from(*self))?;
+        Ok(())
+    }
+}
+
+/// Decodes a [`Type`] from a little-endian `u32` tag.
+///
+/// Validates that the tag matches a supported variant; otherwise, returns a [`CodecError`]
+/// describing the issue.
+///
+/// # Errors
+///
+/// - [`CodecError::UnknownDiscriminant`] if the tag can fit in a `u8` but does not correspond to a
+///   known [`Type`] variant.
+/// - [`CodecError::NumericDoesNotFit`] if the tag does not fit in a `u8`.
+/// - Any I/O error returned by the reader.
+impl Decode for Type {
+    fn decode<R: Read>(reader: &mut R) -> Result<Self, CodecError> {
+        let tag = reader.read_u32::<LittleEndian>()?;
+        Type::try_from(tag).map_err(|_| match u8::try_from(tag) {
+            Ok(tag_u8) => CodecError::UnknownDiscriminant(tag_u8),
+            Err(_) => CodecError::NumericDoesNotFit {
+                value: u64::from(tag),
+                target: "u8",
+            },
+        })
+    }
+}
+
+impl Type {
+    /// Returns the on-disk size of this type in bytes.
+    ///
+    /// For all fixed-width types this is the exact byte count. For [`Type::String`]
+    /// it is the *maximum* possible size: a 4-byte length prefix plus
+    /// [`crate::STRING_MAX_SIZE`] payload bytes. Use [`Value::serialized_size`] when
+    /// you need the actual size of a specific string value.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use storemy::types::Type;
+    ///
+    /// assert_eq!(Type::Int32.size(), 4);
+    /// assert_eq!(Type::Float64.size(), 8);
+    /// assert_eq!(Type::Bool.size(), 1);
+    /// ```
+    pub const fn size(&self) -> usize {
+        match self {
+            Type::Int32 | Type::Uint32 => 4,
+            Type::Int64 | Type::Uint64 | Type::Float64 => 8,
+            Type::Bool => 1,
+            Type::String => 4 + STRING_MAX_SIZE, // 4-byte length prefix
+        }
+    }
+
+    /// Returns `true` if values of this type always occupy the same number of bytes.
+    ///
+    /// Every type except [`Type::String`] is fixed-size. Fixed-size columns can be
+    /// accessed by direct offset arithmetic without scanning a length prefix.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use storemy::types::Type;
+    ///
+    /// assert!(Type::Int64.is_fixed_size());
+    /// assert!(!Type::String.is_fixed_size());
+    /// ```
+    pub const fn is_fixed_size(&self) -> bool {
+        !matches!(self, Type::String)
+    }
+}
+
+/// Parses a SQL-style type name (case-insensitive) into a [`Type`].
+///
+/// Accepted names per variant:
+///
+/// | Variant | Accepted strings |
+/// |---------|-----------------|
+/// | `Int32`   | `INT`, `INTEGER`, `INT32` |
+/// | `Int64`   | `BIGINT`, `INT64` |
+/// | `Uint32`  | `UINT`, `UINT32` |
+/// | `Uint64`  | `UBIGINT`, `UINT64` |
+/// | `Float64` | `FLOAT`, `DOUBLE`, `REAL`, `FLOAT64` |
+/// | `String`  | `VARCHAR`, `TEXT`, `STRING` |
+/// | `Bool`    | `BOOL`, `BOOLEAN` |
+///
+/// # Errors
+///
+/// Returns [`TypeError::UnsupportedType`] when `value` does not match any
+/// of the accepted strings (unrecognized name).
+///
+/// # Examples
+///
+/// ```
+/// use storemy::types::Type;
+///
+/// assert_eq!(Type::try_from("bigint").unwrap(), Type::Int64);
+/// assert!(Type::try_from("uuid").is_err());
+/// ```
+impl TryFrom<&str> for Type {
+    type Error = TypeError;
+
+    fn try_from(value: &str) -> Result<Self, Self::Error> {
+        match value.to_uppercase().as_str() {
+            "INT" | "INTEGER" | "INT32" => Ok(Type::Int32),
+            "BIGINT" | "INT64" => Ok(Type::Int64),
+            "UINT" | "UINT32" => Ok(Type::Uint32),
+            "UBIGINT" | "UINT64" => Ok(Type::Uint64),
+            "FLOAT" | "DOUBLE" | "REAL" | "FLOAT64" => Ok(Type::Float64),
+            "VARCHAR" | "TEXT" | "STRING" => Ok(Type::String),
+            "BOOL" | "BOOLEAN" => Ok(Type::Bool),
+            _ => Err(TypeError::UnsupportedType {
+                message: format!("Unsupported type name: {value}"),
+            }),
+        }
+    }
+}
+
+/// Formats the type as a standard SQL type name.
+///
+/// The output matches the primary SQL keyword for each variant:
+/// `INT`, `BIGINT`, `INT UNSIGNED`, `BIGINT UNSIGNED`, `DOUBLE`, `VARCHAR`, `BOOLEAN`.
+impl fmt::Display for Type {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let name = match self {
+            Type::Int32 => "INT",
+            Type::Int64 => "BIGINT",
+            Type::Uint32 => "INT UNSIGNED",
+            Type::Uint64 => "BIGINT UNSIGNED",
+            Type::Float64 => "DOUBLE",
+            Type::String => "VARCHAR",
+            Type::Bool => "BOOLEAN",
+        };
+        write!(f, "{name}")
+    }
+}
+
+/// An owned runtime value stored in or retrieved from the database.
+///
+/// Each variant corresponds directly to a [`Type`] variant, plus [`Value::Null`]
+/// which represents the absence of a value (SQL `NULL`).
+///
+/// `Value` implements [`PartialOrd`] with the convention that `NULL` sorts before
+/// all other values, and that comparisons between different non-null types return
+/// `None` (incomparable).
+#[derive(Debug, Clone)]
+pub enum Value {
+    Int32(i32),
+    Int64(i64),
+    Uint32(u32),
+    Uint64(u64),
+    Float64(f64),
+    String(String),
+    Bool(bool),
+    Null,
+}
+
+impl Value {
+    /// Returns the [`Type`] of this value, or `None` if the value is `NULL`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use storemy::types::{Type, Value};
+    ///
+    /// assert_eq!(Value::Int32(42).get_type(), Some(Type::Int32));
+    /// assert_eq!(Value::Null.get_type(), None);
+    /// ```
+    pub fn get_type(&self) -> Option<Type> {
+        match self {
+            Value::Int32(_) => Some(Type::Int32),
+            Value::Int64(_) => Some(Type::Int64),
+            Value::Uint32(_) => Some(Type::Uint32),
+            Value::Uint64(_) => Some(Type::Uint64),
+            Value::Float64(_) => Some(Type::Float64),
+            Value::String(_) => Some(Type::String),
+            Value::Bool(_) => Some(Type::Bool),
+            Value::Null => None,
+        }
+    }
+
+    /// Returns `true` if this value is `NULL`.
+    pub fn is_null(&self) -> bool {
+        matches!(self, Value::Null)
+    }
+
+    /// Borrows the inner string slice if this value is a [`Value::String`].
+    ///
+    /// Returns `None` for all other variants.
+    pub fn as_str(&self) -> Option<&str> {
+        match self {
+            Value::String(s) => Some(s),
+            _ => None,
+        }
+    }
+
+    /// Returns the inner `bool` if this value is a [`Value::Bool`].
+    ///
+    /// Returns `None` for all other variants.
+    pub fn as_bool(&self) -> Option<bool> {
+        match self {
+            Value::Bool(b) => Some(*b),
+            _ => None,
+        }
+    }
+
+    /// Number of bytes [`Encode`] will write for this value.
+    ///
+    /// Must stay in sync with [`Encode for Value`]: every variant here
+    /// mirrors a branch there. The `String` arm applies the same
+    /// [`STRING_MAX_SIZE`](crate::STRING_MAX_SIZE) truncation the encoder does.
+    pub fn encoded_size(&self) -> usize {
+        1 + match self {
+            Value::Null => 0,
+            Value::Bool(_) => 1,
+            Value::Int32(_) | Value::Uint32(_) => 4,
+            Value::Int64(_) | Value::Uint64(_) | Value::Float64(_) => 8,
+            Value::String(s) => 4 + s.len().min(STRING_MAX_SIZE),
+        }
+    }
+}
+
+/// Coerces a literal (for example from a parsed `WHERE` constant) into a value of
+/// `target`, which is typically a column’s declared type.
+///
+/// Integer literals are parsed as [`Value::Int64`]; this conversion narrows or
+/// reinterprets them when the column is a smaller integer or unsigned type.
+/// When the value’s [`Value::get_type`] already equals `target`, the value is
+/// cloned unchanged.
+///
+/// # Errors
+///
+/// Returns [`TypeError::InvalidConversion`] when the value cannot be represented
+/// in `target` (including out-of-range integers and unsupported combinations such
+/// as comparing a string literal to a numeric column without a conversion rule).
+impl TryFrom<(&Value, Type)> for Value {
+    type Error = TypeError;
+
+    fn try_from((v, target): (&Value, Type)) -> Result<Self, Self::Error> {
+        match (v, target) {
+            (Value::Int64(n), Type::Int32) => {
+                i32::try_from(*n)
+                    .map(Value::Int32)
+                    .map_err(|_| TypeError::InvalidConversion {
+                        from: n.to_string(),
+                        to: Type::Int32.to_string(),
+                    })
+            }
+            (Value::Int64(n), Type::Int64) => Ok(Value::Int64(*n)),
+            (Value::Int64(n), Type::Uint32) => {
+                u32::try_from(*n)
+                    .map(Value::Uint32)
+                    .map_err(|_| TypeError::InvalidConversion {
+                        from: n.to_string(),
+                        to: Type::Uint32.to_string(),
+                    })
+            }
+            (Value::Int64(n), Type::Uint64) => {
+                u64::try_from(*n)
+                    .map(Value::Uint64)
+                    .map_err(|_| TypeError::InvalidConversion {
+                        from: n.to_string(),
+                        to: Type::Uint64.to_string(),
+                    })
+            }
+            (Value::String(s), Type::String) => Ok(Value::String(s.clone())),
+            (v, ty) if v.get_type() == Some(ty) => Ok(v.clone()),
+            (v, ty) => Err(TypeError::InvalidConversion {
+                from: v.to_string(),
+                to: ty.to_string(),
+            }),
+        }
+    }
+}
+
+macro_rules! impl_value_cmp {
+    ($($variant:ident),* $(,)?) => {
+        /// Compares two values for equality.
+        ///
+        /// Two values are equal only when they are the same variant holding the same
+        /// data. Comparisons across different non-null variants always return `false`.
+        /// `NULL == NULL` returns `true` (unlike SQL semantics, which return `UNKNOWN`).
+        impl PartialEq for Value {
+            fn eq(&self, other: &Self) -> bool {
+                match (self, other) {
+                    $(
+                        (Value::$variant(a), Value::$variant(b)) => a == b,
+                    )*
+                    (Value::Null, Value::Null) => true,
+                    _ => false,
+                }
+            }
+        }
+
+        /// Orders values within the same type, with `NULL` sorting before everything else.
+        ///
+        /// Comparisons between different non-null types return `None` (incomparable).
+        /// `Float64` ordering follows [`f64::partial_cmp`], so `NaN` produces `None`.
+        impl PartialOrd for Value {
+            fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+                match (self, other) {
+                    $((Value::$variant(a), Value::$variant(b)) => a.partial_cmp(b),)*
+                    (Value::Null, Value::Null) => Some(Ordering::Equal),
+                    (Value::Null, _)           => Some(Ordering::Less),
+                    (_, Value::Null)           => Some(Ordering::Greater),
+                    _ => None,
+                }
+            }
+        }
+    };
+}
+
+impl_value_cmp! { Int32, Int64, Uint32, Uint64, Float64, String, Bool }
+
+impl Eq for Value {}
+
+macro_rules! impl_value_hash_display {
+    (
+        hash_default { $( $hd_variant:ident ),* $(,)? }
+        hash_custom { $( $hc_variant:ident => |$hc_v:ident, $hc_state:ident| $hc_body:expr ),* $(,)? }
+        display_default { $( $dd_variant:ident ),* $(,)? }
+        display_custom { $( $dc_variant:ident => |$dc_v:ident, $dc_f:ident| $dc_body:expr ),* $(,)? }
+    ) => {
+        /// Hashes a value consistently with its [`PartialEq`] implementation.
+        ///
+        /// `Float64` is hashed by its bit pattern (`f64::to_bits`), so two `NaN`
+        /// values with the same bit pattern hash equal, even though `NaN != NaN`
+        /// under IEEE 754. The discriminant is always mixed in first so that, e.g.,
+        /// `Int32(1)` and `Int64(1)` produce different hashes.
+        impl Hash for Value {
+            fn hash<H: Hasher>(&self, state: &mut H) {
+                std::mem::discriminant(self).hash(state);
+                match self {
+                    $(
+                        Value::$hd_variant(v) => v.hash(state),
+                    )*
+                    $(
+                        Value::$hc_variant($hc_v) => { let $hc_state = state; $hc_body }
+                    ),*
+                    Value::Null => {}
+                }
+            }
+        }
+
+        /// Formats the value in a SQL-like representation.
+        ///
+        /// Strings are wrapped in single quotes (`'hello'`). `NULL` is printed as
+        /// the literal `NULL`. All numeric and boolean variants use their standard
+        /// Rust `Display` format.
+        impl fmt::Display for Value {
+            fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                match self {
+                    $(
+                        Value::$dd_variant(v) => write!(f, "{v}"),
+                    )*
+                    $(
+                        Value::$dc_variant($dc_v) => { let $dc_f = f; $dc_body }
+                    ),*
+                    Value::Null => write!(f, "NULL"),
+                }
+            }
+        }
+    };
+}
+
+impl_value_hash_display! {
+    hash_default { Int32, Int64, Uint32, Uint64, String, Bool }
+    hash_custom {
+        Float64 => |v, state| v.to_bits().hash(state),
+    }
+    display_default { Int32, Int64, Uint32, Uint64, Float64, Bool }
+    display_custom {
+        String => |v, f| write!(f, "'{v}'"),
+    }
+}
+
+/// Implements `From<T>` for [`Value`] for a list of Rust types.
+///
+/// The macro expects each mapping as `<rust_type> => <ValueVariant>`.
+macro_rules! impl_from_value {
+    ($($rust_type:ty => $variant:ident),* $(,)?) => {
+        $(
+            impl From<$rust_type> for Value {
+                #[inline]
+                fn from(v: $rust_type) -> Self {
+                    Value::$variant(v)
+                }
+            }
+        )*
+    };
+}
+
+impl_from_value! {
+    i32   => Int32,
+    i64   => Int64,
+    u32   => Uint32,
+    u64   => Uint64,
+    f64   => Float64,
+    String => String,
+    bool  => Bool,
+}
+
+/// Adds two values, widening integers to `Int64` and floats to `Float64`.
+///
+/// Mixed integer/float combinations widen to `Float64`. Any unsupported
+/// combination (e.g. adding a string to a number) returns [`Value::Null`].
+///
+/// Note: `NULL + anything` returns `NULL`. Callers that want SQL NULL-skip
+/// behavior (like `SUM`) should check [`Value::is_null`] before calling `+`.
+impl std::ops::Add<&Value> for Value {
+    type Output = Value;
+
+    fn add(self, rhs: &Value) -> Value {
+        match (self, rhs) {
+            (Value::Int32(x), Value::Int32(y)) => Value::Int64(i64::from(x) + i64::from(*y)),
+            (Value::Int64(x), Value::Int32(y)) => Value::Int64(x + i64::from(*y)),
+            (Value::Int32(x), Value::Int64(y)) => Value::Int64(i64::from(x) + y),
+            (Value::Int64(x), Value::Int64(y)) => Value::Int64(x + y),
+            (Value::Uint32(x), Value::Uint32(y)) => Value::Int64(i64::from(x) + i64::from(*y)),
+            #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+            (Value::Uint64(x), Value::Uint64(y)) => {
+                Value::Int64(x.cast_signed() + (*y).cast_signed())
+            }
+            (Value::Float64(x), Value::Float64(y)) => Value::Float64(x + y),
+            (Value::Float64(x), Value::Int32(y)) => Value::Float64(x + f64::from(*y)),
+            #[allow(clippy::cast_precision_loss)]
+            (Value::Float64(x), Value::Int64(y)) => Value::Float64(x + *y as f64),
+            _ => Value::Null,
+        }
+    }
+}
+
+/// Converts a numeric [`Value`] to `f64`, returning `Err(())` for non-numeric or `NULL` values.
+///
+/// All integer variants are cast to `f64` (which may lose precision for very
+/// large 64-bit integers). Strings, booleans, and `NULL` always return `Err(())`.
+impl TryFrom<&Value> for f64 {
+    type Error = ();
+
+    fn try_from(val: &Value) -> Result<f64, ()> {
+        match val {
+            Value::Int32(v) => Ok(f64::from(*v)),
+            Value::Uint32(v) => Ok(f64::from(*v)),
+            Value::Float64(v) => Ok(*v),
+            #[allow(clippy::cast_precision_loss)]
+            Value::Int64(v) => Ok(*v as f64),
+            #[allow(clippy::cast_precision_loss)]
+            Value::Uint64(v) => Ok(*v as f64),
+            _ => Err(()),
+        }
+    }
+}
+
+/// Converts an `Option<T>` into a `Value`, mapping `None` to [`Value::Null`].
+///
+/// This lets you write `Value::from(some_option)` for any `T: Into<Value>`.
+impl<T: Into<Value>> From<Option<T>> for Value {
+    fn from(v: Option<T>) -> Self {
+        match v {
+            Some(val) => val.into(),
+            None => Value::Null,
+        }
+    }
+}
+
+/// Encodes a [`Value`] in a self-describing binary format.
+///
+/// The encoding is a 1-byte discriminant followed by the payload:
+///
+/// | Discriminant | Variant   | Payload                              |
+/// |:---:|-----------|--------------------------------------|
+/// | 0   | `Null`    | *(none)*                             |
+/// | 1   | `Int32`   | 4 bytes, little-endian `i32`         |
+/// | 2   | `Int64`   | 8 bytes, little-endian `i64`         |
+/// | 3   | `Uint32`  | 4 bytes, little-endian `u32`         |
+/// | 4   | `Uint64`  | 8 bytes, little-endian `u64`         |
+/// | 5   | `Float64` | 8 bytes, little-endian `f64`         |
+/// | 6   | `Bool`    | 1 byte (`0` = false, `1` = true)     |
+/// | 7   | `String`  | 4-byte LE length + UTF-8 bytes       |
+///
+/// Strings are silently truncated to [`crate::STRING_MAX_SIZE`] bytes.
+impl Encode for Value {
+    fn encode<W: Write>(&self, writer: &mut W) -> Result<(), CodecError> {
+        match self {
+            Value::Null => writer.write_u8(0)?,
+            Value::Int32(v) => {
+                writer.write_u8(1)?;
+                writer.write_i32::<LittleEndian>(*v)?;
+            }
+            Value::Int64(v) => {
+                writer.write_u8(2)?;
+                writer.write_i64::<LittleEndian>(*v)?;
+            }
+            Value::Uint32(v) => {
+                writer.write_u8(3)?;
+                writer.write_u32::<LittleEndian>(*v)?;
+            }
+            Value::Uint64(v) => {
+                writer.write_u8(4)?;
+                writer.write_u64::<LittleEndian>(*v)?;
+            }
+            Value::Float64(v) => {
+                writer.write_u8(5)?;
+                writer.write_f64::<LittleEndian>(*v)?;
+            }
+            Value::Bool(v) => {
+                writer.write_u8(6)?;
+                writer.write_u8(u8::from(*v))?;
+            }
+            Value::String(s) => {
+                let bytes = s.as_bytes();
+                let len = bytes.len().min(STRING_MAX_SIZE);
+                writer.write_u8(7)?;
+                let len_u32 = u32::try_from(len).map_err(|_| CodecError::NumericDoesNotFit {
+                    value: len as u64,
+                    target: "u32",
+                })?;
+                writer.write_u32::<LittleEndian>(len_u32)?;
+                writer.write_all(&bytes[..len])?;
+            }
+        }
+        Ok(())
+    }
+}
+
+/// Decodes a [`Value`] written by [`Encode for Value`].
+///
+/// Reads the 1-byte discriminant and then the corresponding payload.
+/// Returns [`CodecError::UnknownDiscriminant`] for any unrecognized byte.
+impl Decode for Value {
+    fn decode<R: Read>(reader: &mut R) -> Result<Self, CodecError> {
+        match reader.read_u8()? {
+            0 => Ok(Value::Null),
+            1 => Ok(Value::Int32(reader.read_i32::<LittleEndian>()?)),
+            2 => Ok(Value::Int64(reader.read_i64::<LittleEndian>()?)),
+            3 => Ok(Value::Uint32(reader.read_u32::<LittleEndian>()?)),
+            4 => Ok(Value::Uint64(reader.read_u64::<LittleEndian>()?)),
+            5 => Ok(Value::Float64(reader.read_f64::<LittleEndian>()?)),
+            6 => Ok(Value::Bool(reader.read_u8()? != 0)),
+            7 => {
+                let len = reader.read_u32::<LittleEndian>()? as usize;
+                let mut buf = vec![0u8; len];
+                reader.read_exact(&mut buf)?;
+                Ok(Value::String(std::str::from_utf8(&buf)?.to_string()))
+            }
+            other => Err(CodecError::UnknownDiscriminant(other)),
+        }
+    }
+}
+
+#[cfg(test)]
+mod coerce_to_type_tests {
+    use super::{Type, TypeError, Value};
+
+    #[test]
+    fn int64_literal_to_int32() {
+        let v = Value::Int64(42);
+        assert_eq!(
+            Value::try_from((&v, Type::Int32)).unwrap(),
+            Value::Int32(42)
+        );
+    }
+
+    #[test]
+    fn int64_out_of_range_for_int32() {
+        let v = Value::Int64(i64::from(i32::MAX) + 1);
+        let err = Value::try_from((&v, Type::Int32)).unwrap_err();
+        assert!(matches!(err, TypeError::InvalidConversion { .. }));
+    }
+
+    #[test]
+    fn negative_int64_to_uint64_fails() {
+        let v = Value::Int64(-1);
+        assert!(Value::try_from((&v, Type::Uint64)).is_err());
+    }
+
+    #[test]
+    fn string_to_varchar_column() {
+        let v = Value::String("x".to_string());
+        assert_eq!(
+            Value::try_from((&v, Type::String)).unwrap(),
+            Value::String("x".to_string())
+        );
+    }
+
+    #[test]
+    fn bool_same_type_unchanged() {
+        let v = Value::Bool(true);
+        assert_eq!(
+            Value::try_from((&v, Type::Bool)).unwrap(),
+            Value::Bool(true)
+        );
+    }
+
+    #[test]
+    fn string_literal_to_int_column_fails() {
+        let v = Value::String("1".to_string());
+        assert!(Value::try_from((&v, Type::Int32)).is_err());
+    }
+}
+
+#[cfg(test)]
+mod value_codec_proptest {
+    use proptest::prelude::*;
+
+    use super::Value;
+    use crate::codec::{Decode, Encode};
+
+    proptest! {
+        #[test]
+        fn value_int32_roundtrip(v in any::<i32>()) {
+            let val = Value::Int32(v);
+            let bytes = val.to_bytes().unwrap();
+            prop_assert_eq!(Value::from_bytes(&bytes).unwrap(), val);
+        }
+    }
+}

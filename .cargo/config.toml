@@ -1,0 +1,47 @@
+# Workspace root: aliases, profile tweaks, and shared settings for `db/`.
+#
+# Optional mold linker — uncomment if `mold` and `clang` are installed.
+# Gives ~2x faster link times on Linux (big win for incremental test runs).
+# WSL/Ubuntu install: `sudo apt-get install mold clang`.
+#
+# [target.x86_64-unknown-linux-gnu]
+# linker = "clang"
+# rustflags = ["-C", "link-arg=-fuse-ld=mold"]
+
+[alias]
+# Test / build shortcuts
+t   = "nextest run --workspace"
+tt  = "nextest run --workspace --no-fail-fast"
+nt  = "nextest run"
+c   = "clippy --workspace --all-targets -- -D warnings"
+cp  = "clippy --workspace --all-targets -- -W clippy::pedantic -D warnings"
+b   = "build --workspace"
+br  = "build --workspace --release"
+# Format using the pinned nightly (mirrors Makefile's RUSTFMT_TOOLCHAIN).
+# Invoke as: `cargo fmtn` / `cargo fmtn -- --check`.
+fmtn = "+nightly-2026-04-01 fmt --all"
+
+# ----- Profile tweaks -----
+#
+# Dev profile: your crate compiles un-optimized (fast edit-compile loop) but
+# dependencies compile at opt-level=2. For a DB workload this matters a lot —
+# bincode, serde, hashbrown, crossbeam etc. are hot paths in tests/benches,
+# and unoptimized builds of those make every test run 2-5x slower.
+#
+# First `cargo build` after this change rebuilds all deps once (slow); every
+# build after that is faster than before.
+[profile.dev]
+split-debuginfo = "unpacked"   # faster incremental linking on Linux/macOS
+
+[profile.dev.package."*"]
+opt-level = 2
+debug = false                  # dep debuginfo is rarely useful; saves link time
+
+# Keep proc-macro / build-script crates cheap — they run at compile time,
+# optimizing them doesn't speed the final binary but slows the first build.
+[profile.dev.build-override]
+opt-level = 0
+debug = false
+
+# Test profile inherits from dev automatically — no need to duplicate.
+# Release / bench profiles live in Cargo.toml (workspace-level), not here.

@@ -1,0 +1,13 @@
+[workspace]
+members = ["db", "storemy-codec-derive"]
+resolver = "3"
+default-members = ["db"]
+
+[profile.release]
+lto = true
+codegen-units = 1
+panic = "abort"
+
+[profile.bench]
+lto = true
+codegen-units = 1

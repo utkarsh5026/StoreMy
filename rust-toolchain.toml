@@ -1,0 +1,6 @@
+[toolchain]
+# Edition 2024 requires 1.85+. Pin for reproducible CI and local builds.
+# 1.88+: let chains (2024 edition); required by comfy-table and other deps.
+channel = "1.88.0"
+profile = "default"
+components = ["rustfmt", "clippy"]

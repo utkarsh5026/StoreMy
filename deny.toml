@@ -1,0 +1,60 @@
+# cargo-deny config — run with `cargo deny check` (CI does this per PR).
+# Docs: https://embarkstudios.github.io/cargo-deny/
+
+[graph]
+# Check all targets so a Windows-only dep CVE still trips the build.
+all-features = true
+
+# ----- Security advisories (RUSTSEC) -------------------------------------
+[advisories]
+version = 2
+# Fail on any active vulnerability or unmaintained crate.
+# To temporarily allow one, add its ID to `ignore = ["RUSTSEC-YYYY-NNNN"]`.
+yanked = "deny"
+ignore = []
+
+# ----- Licenses ----------------------------------------------------------
+# StoreMy is MIT-licensed. This allowlist covers anything compatible with a
+# permissive downstream redistribution. Add entries as legitimate deps need them;
+# reject anything copyleft (GPL/AGPL/LGPL) unless you intend that licensing.
+[licenses]
+version = 2
+confidence-threshold = 0.93
+allow = [
+  "MIT",
+  "Apache-2.0",
+  "Apache-2.0 WITH LLVM-exception",
+  "BSD-2-Clause",
+  "BSD-3-Clause",
+  "ISC",
+  "Unicode-DFS-2016",
+  "Unicode-3.0",
+  "Zlib",
+  "CC0-1.0",
+  "MPL-2.0",                        # file-level copyleft, redistributable
+  "BSL-1.0",
+]
+# Per-crate overrides for weird/dual licensing. Extend as needed.
+exceptions = []
+
+# ----- Sources -----------------------------------------------------------
+# Only allow crates from crates.io + approved git hosts. Prevents accidentally
+# pulling a random fork someone pushed to their personal GitHub.
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+allow-git = []
+
+# ----- Bans: duplicate / unwanted crates --------------------------------
+[bans]
+# Warn on multiple versions of the same crate — they inflate binary size and
+# compile time. Set to "deny" once you've cleaned the current tree.
+multiple-versions = "warn"
+wildcards = "deny"         # no `foo = "*"` in Cargo.toml
+highlight = "all"
+
+# Prefer these over alternatives.
+deny = []
+skip = []
+skip-tree = []

@@ -1,0 +1,28 @@
+# Requires nightly rustfmt (pinned via Makefile / CI / .vscode).
+# Stable rustfmt silently ignores unstable options — do not run `cargo fmt`
+# without `+nightly-<pinned>`.
+edition = "2024"
+
+max_width = 100
+newline_style = "Unix"
+use_small_heuristics = "Default"
+use_field_init_shorthand = true
+use_try_shorthand = true
+reorder_imports = true
+reorder_modules = true
+
+unstable_features = true
+
+imports_granularity = "Crate"
+group_imports = "StdExternalCrate"
+
+wrap_comments = true
+comment_width = 100
+format_code_in_doc_comments = true
+format_macro_matchers = true
+format_strings = false
+
+condense_wildcard_suffixes = true
+normalize_comments = true
+normalize_doc_attributes = true
+overflow_delimited_expr = true

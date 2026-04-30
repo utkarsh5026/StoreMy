@@ -2,91 +2,100 @@
     "version": "2.0.0",
     "tasks": [
         {
-            "label": "Go: Test All",
+            "label": "Rust: Build (debug)",
             "type": "shell",
-            "command": "go",
-            "args": ["test", "./...", "-v"],
-            "group": "test",
-            "presentation": {
-                "reveal": "always",
-                "panel": "new"
-            },
-            "problemMatcher": ["$go"]
+            "command": "cargo",
+            "args": ["build"],
+            "options": { "cwd": "${workspaceFolder}/db" },
+            "group": { "kind": "build", "isDefault": true },
+            "presentation": { "reveal": "always", "panel": "shared", "clear": true },
+            "problemMatcher": ["$rustc"]
         },
         {
-            "label": "Go: Watch Tests",
+            "label": "Rust: Build (release)",
             "type": "shell",
-            "command": "make",
-            "args": ["test-watch"],
+            "command": "cargo",
+            "args": ["build", "--release"],
+            "options": { "cwd": "${workspaceFolder}/db" },
+            "group": "build",
+            "presentation": { "reveal": "always", "panel": "shared", "clear": true },
+            "problemMatcher": ["$rustc"]
+        },
+        {
+            "label": "Rust: Test All",
+            "type": "shell",
+            "command": "cargo",
+            "args": ["test", "--", "--nocapture"],
+            "options": { "cwd": "${workspaceFolder}/db" },
+            "group": { "kind": "test", "isDefault": true },
+            "presentation": { "reveal": "always", "panel": "shared", "clear": true },
+            "problemMatcher": ["$rustc"]
+        },
+        {
+            "label": "Rust: Clippy",
+            "type": "shell",
+            "command": "cargo",
+            "args": [
+                "clippy", "--all-targets", "--",
+                "-W", "clippy::pedantic",
+                "-A", "clippy::must_use_candidate",
+                "-A", "clippy::missing_errors_doc",
+                "-A", "clippy::missing_panics_doc"
+            ],
+            "options": { "cwd": "${workspaceFolder}/db" },
+            "group": "build",
+            "presentation": { "reveal": "always", "panel": "shared", "clear": true },
+            "problemMatcher": ["$rustc"]
+        },
+        {
+            "label": "Rust: Check",
+            "type": "shell",
+            "command": "cargo",
+            "args": ["check", "--all-targets"],
+            "options": { "cwd": "${workspaceFolder}/db" },
+            "group": "build",
+            "presentation": { "reveal": "always", "panel": "shared", "clear": true },
+            "problemMatcher": ["$rustc"]
+        },
+        {
+            "label": "Rust: Doc",
+            "type": "shell",
+            "command": "cargo",
+            "args": ["doc", "--no-deps", "--open"],
+            "options": { "cwd": "${workspaceFolder}/db" },
+            "group": "none",
+            "presentation": { "reveal": "always", "panel": "shared" },
+            "problemMatcher": []
+        },
+        {
+            "label": "Rust: Bench",
+            "type": "shell",
+            "command": "cargo",
+            "args": ["bench"],
+            "options": { "cwd": "${workspaceFolder}/db" },
             "group": "test",
+            "presentation": { "reveal": "always", "panel": "shared", "clear": true },
+            "problemMatcher": ["$rustc"]
+        },
+        {
+            "label": "Rust: Watch (cargo-watch)",
+            "type": "shell",
+            "command": "cargo",
+            "args": ["watch", "-x", "check", "-x", "test"],
+            "options": { "cwd": "${workspaceFolder}/db" },
+            "group": "none",
             "isBackground": true,
-            "presentation": {
-                "reveal": "always",
-                "panel": "new"
-            },
-            "problemMatcher": ["$go"]
+            "presentation": { "reveal": "always", "panel": "dedicated" },
+            "problemMatcher": ["$rustc"]
         },
         {
-            "label": "Go: Build",
+            "label": "Rust: Expand Macros",
             "type": "shell",
-            "command": "go",
-            "args": ["build", "-o", "bin/storemy", "./"],
-            "group": {
-                "kind": "build",
-                "isDefault": true
-            },
-            "presentation": {
-                "reveal": "always",
-                "panel": "shared"
-            },
-            "problemMatcher": ["$go"]
-        },
-        {
-            "label": "Go: Lint",
-            "type": "shell",
-            "command": "golangci-lint",
-            "args": ["run"],
+            "command": "cargo",
+            "args": ["expand"],
+            "options": { "cwd": "${workspaceFolder}/db" },
             "group": "none",
-            "presentation": {
-                "reveal": "always",
-                "panel": "shared"
-            },
-            "problemMatcher": []
-        },
-        {
-            "label": "Go: Coverage HTML",
-            "type": "shell",
-            "command": "make",
-            "args": ["coverage-html"],
-            "group": "none",
-            "presentation": {
-                "reveal": "always",
-                "panel": "shared"
-            },
-            "problemMatcher": ["$go"]
-        },
-        {
-            "label": "Make: Run",
-            "type": "shell",
-            "command": "make",
-            "args": ["run"],
-            "group": "none",
-            "presentation": {
-                "reveal": "always",
-                "panel": "new"
-            },
-            "problemMatcher": []
-        },
-        {
-            "label": "Shell: Clear fresh data",
-            "type": "shell",
-            "command": "rm",
-            "args": ["-rf", "./tmp/data/testdb"],
-            "group": "none",
-            "presentation": {
-                "reveal": "silent",
-                "panel": "shared"
-            },
+            "presentation": { "reveal": "always", "panel": "shared", "clear": true },
             "problemMatcher": []
         }
     ]

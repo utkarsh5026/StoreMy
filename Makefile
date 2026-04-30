@@ -1,112 +1,177 @@
-# Makefile for StoreMy project
-# Thin interface — all logic lives in makefile.py
-# Usage: make <target>  or  python makefile.py <target>
+# Makefile for StoreMy (Rust workspace). See CONTRIBUTING.md.
 
 .DEFAULT_GOAL := help
 
-.PHONY: test test-tables test-coverage test-watch test-watch-tables \
-        install-tools clean build fmt vet lint lint-fix \
-        run run-fresh tidy coverage-html bench check examples help \
-        docker-demo docker-import docker-fresh docker-test \
-        docker-build docker-clean docker-stop quickstart \
-        security security-vuln security-scan
+.PHONY: test quick-test ci-test cargo-test test-watch test-watch-rust test-coverage \
+	clean rust-clean \
+	build \
+	fmt rust-fmt rust-fmt-check rust-fmt-install install-hooks uninstall-hooks \
+	clippy rust-clippy rust-lint rust-deny rust-machete rust-typos rust-watch rust-audit \
+	lint \
+	check \
+	install-tools help \
+	docker-demo docker-test docker-build docker-clean docker-stop quickstart
 
-# ── Testing ────────────────────────────────────────────────────────────────────
-test:
-	python makefile.py test
+# ----- Rust (default; workspace root = repository root) -----
 
-test-tables:
-	python makefile.py test-tables
+# Nightly pin used ONLY for rustfmt (rustfmt.toml relies on unstable options).
+# Build/test/clippy use the stable toolchain from rust-toolchain.toml.
+RUSTFMT_TOOLCHAIN := nightly-2026-04-01
+
+rust-fmt-install:
+	rustup toolchain install $(RUSTFMT_TOOLCHAIN) --component rustfmt --profile minimal
+
+rust-fmt:
+	cargo +$(RUSTFMT_TOOLCHAIN) fmt --all
+
+rust-fmt-check:
+	cargo +$(RUSTFMT_TOOLCHAIN) fmt --all -- --check
+
+# ----- Git hooks (tracked in tools/git-hooks) -----
+install-hooks:
+	git config core.hooksPath tools/git-hooks
+	@echo "Git hooks enabled (core.hooksPath = tools/git-hooks)."
+	@echo "Use 'SKIP_HOOKS=1 git commit ...' to bypass once."
+
+uninstall-hooks:
+	git config --unset core.hooksPath || true
+	@echo "Git hooks disabled."
+
+rust-clippy:
+	cargo clippy --workspace --all-targets -- -D warnings
+
+rust-deny:
+	cargo deny check
+
+rust-machete:
+	cargo machete
+
+rust-typos:
+	typos
+
+rust-watch:
+	bacon
+
+rust-audit: rust-deny rust-machete rust-typos
+
+rust-lint: rust-clippy
+
+rust-test:
+	cargo nextest run --workspace
+
+rust-nextest:
+	cargo nextest run --workspace
+
+quick-test:
+	cargo nextest run -p storemy --lib
+
+ci-test:
+	cargo nextest run --workspace --profile ci
+
+cargo-test:
+	cargo test --workspace
+
+rust-build:
+	cargo build --workspace
+
+rust-build-release:
+	cargo build --workspace --release
+
+rust-clean:
+	cargo clean
+
+# Default developer targets
+fmt: rust-fmt
+clippy: rust-clippy
+test: rust-test
+build: rust-build
+check: rust-fmt rust-clippy ci-test
+
+lint: rust-clippy
+
+test-watch-rust:
+	@echo "Watching db/src for changes (Rust tests)..."
+	@echo "Press Ctrl+C to stop"
+	@cargo nextest run --workspace
+	@while inotifywait -e modify,create,delete -r db/src 2>/dev/null; do \
+		echo "$$(date): Running cargo nextest run --workspace"; \
+		cargo nextest run --workspace; \
+		echo ""; \
+	done
+
+test-watch: test-watch-rust
 
 test-coverage:
-	python makefile.py test-coverage
+	cargo nextest run --workspace
+	@echo "Tip: install cargo-llvm-cov for LCOV/HTML: cargo llvm-cov test --workspace"
 
-test-watch:
-	python makefile.py test-watch
+# ----- Housekeeping -----
 
-test-watch-tables:
-	python makefile.py test-watch-tables
+clean: rust-clean
 
-# ── Tools ──────────────────────────────────────────────────────────────────────
 install-tools:
-	python makefile.py install-tools
+	@echo "Installing file watching tools..."
+	sudo apt-get update && sudo apt-get install -y inotify-tools mold clang || true
+	@echo "Optional: cargo install cargo-nextest cargo-watch bacon typos-cli --locked"
+	@echo "Tools installation complete!"
 
-clean:
-	python makefile.py clean
+help:
+	@echo "StoreMy — Rust workspace (see CONTRIBUTING.md)"
+	@echo ""
+	@echo "Docker:"
+	@echo "  make docker-demo      - Interactive REPL (docker compose up storemy)"
+	@echo "  make docker-test      - Integration tests (docker compose run storemy-test)"
+	@echo "  make docker-build     - Build images"
+	@echo "  make docker-clean     - Remove containers/volumes"
+	@echo "  make docker-stop      - Stop containers"
+	@echo "  make quickstart       - docker-build + docker-demo"
+	@echo ""
+	@echo "Rust (default):"
+	@echo "  test / rust-test     - cargo nextest run --workspace"
+	@echo "  rust-nextest         - cargo nextest run (install cargo-nextest)"
+	@echo "  quick-test           - cargo nextest run -p storemy --lib"
+	@echo "  ci-test              - cargo nextest run --workspace --profile ci"
+	@echo "  cargo-test           - cargo test --workspace"
+	@echo "  fmt / rust-fmt       - cargo +nightly fmt --all (uses pinned nightly)"
+	@echo "  rust-fmt-check       - fmt --check (same nightly)"
+	@echo "  rust-fmt-install     - install pinned nightly + rustfmt component"
+	@echo "  install-hooks        - enable tools/git-hooks (pre-commit fmt+clippy)"
+	@echo "  uninstall-hooks      - disable the repo git hooks"
+	@echo "  clippy               - clippy -D warnings"
+	@echo "  rust-deny            - cargo deny check (licenses/CVEs/dups)"
+	@echo "  rust-machete         - unused deps"
+	@echo "  rust-typos           - source-code spell check (install: cargo install typos-cli)"
+	@echo "  rust-watch           - bacon background checker (install: cargo install bacon)"
+	@echo "  rust-audit           - deny + machete + typos"
+	@echo "  build                - cargo build --workspace"
+	@echo "  check                - fmt + clippy + ci-test"
+	@echo "  test-watch           - inotify + cargo nextest on db/src changes"
+	@echo "  rust-clean           - cargo clean"
+	@echo ""
+	@echo "  install-tools, help"
 
-# ── Build ──────────────────────────────────────────────────────────────────────
-build:
-	python makefile.py build
+# ============================================
+# Docker
+# ============================================
 
-fmt:
-	python makefile.py fmt
-
-vet:
-	python makefile.py vet
-
-lint:
-	python makefile.py lint
-
-lint-fix:
-	python makefile.py lint-fix
-
-tidy:
-	python makefile.py tidy
-
-coverage-html:
-	python makefile.py coverage-html
-
-bench:
-	python makefile.py bench
-
-check:
-	python makefile.py check
-
-# ── Run ────────────────────────────────────────────────────────────────────────
-run:
-	python makefile.py run
-
-run-fresh:
-	python makefile.py run-fresh
-
-examples:
-	python makefile.py examples
-
-# ── Docker ─────────────────────────────────────────────────────────────────────
 docker-demo:
-	python makefile.py docker-demo
-
-docker-import:
-	python makefile.py docker-import
-
-docker-fresh:
-	python makefile.py docker-fresh
+	@echo "Starting StoreMy REPL (Rust). Ctrl+C to stop."
+	docker compose up storemy
 
 docker-test:
-	python makefile.py docker-test
+	@echo "Running Rust integration tests in Docker..."
+	docker compose run --rm storemy-test
 
 docker-build:
-	python makefile.py docker-build
+	@echo "Building Docker images..."
+	docker compose build
 
 docker-clean:
-	python makefile.py docker-clean
+	@echo "Cleaning up Docker containers and volumes..."
+	docker compose down -v
 
 docker-stop:
-	python makefile.py docker-stop
+	@echo "Stopping Docker containers..."
+	docker compose down
 
-quickstart:
-	python makefile.py quickstart
-
-# ── Security ───────────────────────────────────────────────────────────────────
-security:
-	python makefile.py security
-
-security-vuln:
-	python makefile.py security-vuln
-
-security-scan:
-	python makefile.py security-scan
-
-# ── Help ───────────────────────────────────────────────────────────────────────
-help:
-	@python makefile.py help
+quickstart: docker-build docker-demo

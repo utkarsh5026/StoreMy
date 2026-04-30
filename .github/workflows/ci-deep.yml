@@ -1,0 +1,138 @@
+name: CI (deep)
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 3 * * *" # daily at 03:00 UTC
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-deep-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  # ───────────────────────────── Coverage ───────────────────────────────────
+  rust-coverage:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@v1
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: "."
+          shared-key: "storemy-deep"
+      - name: Install cargo-nextest and cargo-llvm-cov
+        uses: taiki-e/install-action@v2
+        with:
+          tool: nextest,cargo-llvm-cov
+      - name: Coverage (nextest)
+        run: |
+          cargo llvm-cov nextest --workspace --profile ci --lcov --output-path lcov.info
+      - name: Upload coverage (lcov)
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-lcov
+          path: lcov.info
+
+  # ───────────────────────────── Miri ───────────────────────────────────────
+  rust-miri:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - name: Rust nightly (miri)
+        uses: dtolnay/rust-toolchain@v1
+        with:
+          toolchain: nightly
+          components: miri,rust-src
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: "."
+          shared-key: "storemy-deep"
+      - name: Miri (unit tests only)
+        run: |
+          cargo +nightly miri setup
+          cargo +nightly miri test -p storemy --lib
+
+  # ───────────────────────────── Sanitizers ─────────────────────────────────
+  # These are best-effort: they can be noisy on some deps/platform combos.
+  rust-sanitize-asan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - name: Rust nightly (asan)
+        uses: dtolnay/rust-toolchain@v1
+        with:
+          toolchain: nightly
+          components: rust-src
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: "."
+          shared-key: "storemy-deep"
+      - name: ASan tests (storemy)
+        env:
+          RUSTFLAGS: -Z sanitizer=address
+          ASAN_OPTIONS: detect_leaks=0
+        run: |
+          cargo +nightly test -Zbuild-std --target x86_64-unknown-linux-gnu -p storemy --tests
+
+  rust-sanitize-ubsan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - name: Rust nightly (ubsan)
+        uses: dtolnay/rust-toolchain@v1
+        with:
+          toolchain: nightly
+          components: rust-src
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: "."
+          shared-key: "storemy-deep"
+      - name: UBSan tests (storemy)
+        env:
+          RUSTFLAGS: -Z sanitizer=undefined
+          UBSAN_OPTIONS: print_stacktrace=1
+        run: |
+          cargo +nightly test -Zbuild-std --target x86_64-unknown-linux-gnu -p storemy --tests
+
+  # ───────────────────────────── Fuzz smoke ─────────────────────────────────
+  # Only runs once you add fuzz targets (cargo-fuzz creates fuzz/Cargo.toml).
+  rust-fuzz-smoke:
+    if: ${{ hashFiles('fuzz/Cargo.toml') != '' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - name: Rust nightly (fuzz)
+        uses: dtolnay/rust-toolchain@v1
+        with:
+          toolchain: nightly
+      - name: Install cargo-fuzz
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-fuzz
+      - name: Fuzz smoke (timeboxed)
+        working-directory: fuzz
+        run: |
+          set -euo pipefail
+          targets="$(cargo fuzz list)"
+          if [ -z "$targets" ]; then
+            echo "no fuzz targets"
+            exit 0
+          fi
+          first="$(echo "$targets" | head -n 1)"
+          echo "running fuzz target: $first"
+          cargo fuzz run "$first" -- -max_total_time=60
