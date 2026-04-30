@@ -20,7 +20,6 @@ path = "src/main.rs"
 [dependencies]
 # Error handling
 thiserror = "1.0"
-anyhow = "1.0"
 
 # In-house derive macros for the Encode/Decode codec traits.
 storemy-codec-derive = { path = "../storemy-codec-derive", version = "0.1.0" }
@@ -34,7 +33,6 @@ owo-colors = "4"
 fallible-iterator = "0.3"
 
 # Serialization
-bytes = "1.5"
 byteorder = "1.5"
 crc32fast = "1.4"
 
@@ -43,11 +41,9 @@ siphasher = "1"
 
 # Concurrency
 parking_lot = "0.12"
-crossbeam = "0.8"
 
 # Collections
 hashbrown = "0.14"
-lru = "0.16"
 
 # Logging
 tracing = "0.1"

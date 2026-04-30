@@ -14,7 +14,7 @@ concurrency:
 
 env:
   CARGO_TERM_COLOR: always
-  RUST_TOOLCHAIN: 1.88.0
+  RUST_TOOLCHAIN: 1.89.0
 
 jobs:
   # ───────────────────────────── Coverage ───────────────────────────────────

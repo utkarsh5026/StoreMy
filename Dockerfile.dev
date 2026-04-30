@@ -2,7 +2,7 @@
 # Full Rust workspace for `cargo test` and `cargo run --bin metrics_exporter`
 # (compose may bind-mount the repo over `/app` at runtime).
 
-FROM rust:1.88-bookworm
+FROM rust:1.89-bookworm
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends pkg-config \

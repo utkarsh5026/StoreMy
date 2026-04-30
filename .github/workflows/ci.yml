@@ -18,7 +18,7 @@ concurrency:
 env:
   CARGO_TERM_COLOR: always
   NIGHTLY_FMT: nightly-2026-04-01
-  RUST_TOOLCHAIN: 1.88.0
+  RUST_TOOLCHAIN: 1.89.0
 
 jobs:
   # ───────────────────────────────── Rust: fmt ──────────────────────────────
