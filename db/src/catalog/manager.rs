@@ -22,10 +22,10 @@ use crate::{
     buffer_pool::page_store::PageStore,
     catalog::{
         CatalogError,
+        index::LiveIndex,
         systable::{CatalogRow, SystemTable},
     },
     heap::file::HeapFile,
-    index::AnyIndex,
     primitives::{ColumnId, IndexId},
     transaction::Transaction,
     tuple::{Tuple, TupleSchema},
@@ -126,11 +126,11 @@ pub struct Catalog {
     ///
     /// The DML hot path reads this via [`indexes_for`] and clones the
     /// `Arc`s out, so callers don't hold the lock across index operations.
-    pub(super) open_indexes: RwLock<HashMap<FileId, Vec<Arc<AnyIndex>>>>,
+    pub(super) open_indexes: RwLock<HashMap<FileId, Vec<Arc<LiveIndex>>>>,
     /// Index name → live instance. Used by DDL (`DROP INDEX`) and by the
     /// planner when resolving a referenced index name. Stays in sync with
     /// `open_indexes` because `register_index` writes both atomically.
-    pub(super) indexes_by_name: RwLock<HashMap<String, Arc<AnyIndex>>>,
+    pub(super) indexes_by_name: RwLock<HashMap<String, Arc<LiveIndex>>>,
     pub(super) system: SystemHeaps,
 }
 
@@ -181,7 +181,7 @@ impl Catalog {
             system.insert(*table, file);
         }
 
-        Ok(Self {
+        let catalog = Self {
             wal: wal.clone(),
             buffer_pool: buffer_pool.clone(),
             data_dir: data_dir.to_path_buf(),
@@ -192,7 +192,9 @@ impl Catalog {
             open_indexes: RwLock::new(HashMap::new()),
             indexes_by_name: RwLock::new(HashMap::new()),
             system,
-        })
+        };
+        catalog.replay_user_objects()?;
+        Ok(catalog)
     }
 
     /// Creates a heap file at `file_path` and registers it with the buffer pool.
@@ -325,12 +327,21 @@ impl Catalog {
         &self,
         txn: &Transaction<'_>,
     ) -> Result<Vec<T>, CatalogError> {
+        self.scan_system_table_with_tid(txn.transaction_id())
+    }
+
+    /// Same as [`Self::scan_system_table`], but takes a raw [`TransactionId`].
+    ///
+    /// Used during catalog bootstrap (`initialize`) where no
+    /// `TransactionManager` exists yet — system-table contents are committed
+    /// data, so any `TransactionId` later than every prior commit sees
+    /// everything.
+    pub(super) fn scan_system_table_with_tid<T: CatalogRow>(
+        &self,
+        tid: TransactionId,
+    ) -> Result<Vec<T>, CatalogError> {
         let heap = self.get_system_heap(T::TABLE)?;
-
-        let scan = heap
-            .scan(txn.transaction_id())
-            .map_err(CatalogError::from)?;
-
+        let scan = heap.scan(tid).map_err(CatalogError::from)?;
         scan.map(|(_, tuple)| T::try_from(&tuple)).collect()
     }
 
@@ -460,6 +471,21 @@ impl Catalog {
     /// Atomically allocates the next unique [`IndexId`].
     pub(super) fn next_index_id(&self) -> IndexId {
         IndexId(self.next_index_id.fetch_add(1, Ordering::Relaxed))
+    }
+
+    /// Bumps `next_file_id` to at least `floor + 1`.
+    ///
+    /// Used during catalog replay so the counter resumes past every
+    /// [`FileId`] already on disk. Idempotent: if the counter is already
+    /// past `floor + 1`, this is a no-op.
+    pub(super) fn bump_next_file_id_past(&self, floor: u64) {
+        self.next_file_id.fetch_max(floor + 1, Ordering::Relaxed);
+    }
+
+    /// Bumps `next_index_id` to at least `floor + 1`. Counterpart of
+    /// [`Self::bump_next_file_id_past`] for indexes.
+    pub(super) fn bump_next_index_id_past(&self, floor: i64) {
+        self.next_index_id.fetch_max(floor + 1, Ordering::Relaxed);
     }
 
     /// Canonical path for an index file: `<data_dir>/idx_<name>.dat`.
