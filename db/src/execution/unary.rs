@@ -1,17 +1,35 @@
-//! Single-child (unary) execution operators.
+//! Single-input SQL operators: `WHERE`, `SELECT`, `ORDER BY`, and `LIMIT`.
 //!
-//! Each operator in this module wraps one child [`PlanNode`] and transforms
-//! the stream of tuples it produces without combining multiple inputs.
+//! Each operator in this module wraps one child [`PlanNode`] and transforms the
+//! stream of tuples it produces without combining it with another input. These
+//! are the physical operators the binder/planner reaches for after it has
+//! resolved SQL names like `users.age` into tuple positions like `2`.
 //!
-//! | Operator | SQL equivalent              |
-//! |----------|-----------------------------|
-//! | [`Filter`]  | `WHERE <predicate>`      |
-//! | [`Project`] | `SELECT col1, col2, …`   |
-//! | [`Sort`]    | `ORDER BY col [ASC|DESC]` |
-//! | [`Limit`]   | `LIMIT n OFFSET m`        |
+//! # Shape
 //!
-//! All operators implement [`Executor`] (and therefore [`FallibleIterator`]),
-//! so they can be composed freely into a plan tree via `Box<PlanNode>`.
+//! - [`Filter`] — applies a boolean expression for `WHERE <predicate>`.
+//! - [`ProjectItem`] — describes one item in the `SELECT` list: either a resolved column or a
+//!   literal constant.
+//! - [`Project`] — builds the output row for `SELECT col, literal, ...`.
+//! - [`SortKey`] — one resolved `ORDER BY` item and direction.
+//! - [`Sort`] — performs a blocking in-memory `ORDER BY`.
+//! - [`Limit`] — applies `LIMIT n OFFSET m` as a streaming row window.
+//!
+//! # How it works
+//!
+//! `Filter`, `Project`, and `Limit` are streaming operators: each call to
+//! [`FallibleIterator::next`] pulls only as much as it needs from the child.
+//! [`Sort`] is blocking: the first `next` call drains the whole child, sorts the
+//! materialized rows, then emits the sorted buffer one row at a time.
+//!
+//! # NULL semantics
+//!
+//! `Filter` delegates to [`BooleanExpression`]: a `NULL` on either side of a
+//! comparison makes that predicate `false`, rather than modeling full SQL
+//! three-valued logic. `Project` copies `NULL` values unchanged and can emit
+//! literal `NULL`s. `Sort` orders `NULL` before non-`NULL` in ascending order
+//! and after non-`NULL` in descending order because the per-key comparison is
+//! reversed. `Limit` is row-count based and does not inspect values.
 
 use std::cmp::Ordering;
 
@@ -25,14 +43,78 @@ use crate::{
     types::{Type, Value},
 };
 
-/// Keeps only the tuples from its child that satisfy a single column predicate.
+/// Applies a SQL `WHERE` predicate to rows from one child plan.
 ///
-/// Corresponds to a SQL `WHERE` clause of the form `col <op> value`, where
-/// `op` is one of the comparisons in [`Predicate`]. Multi-column or compound
-/// predicates are expressed by chaining multiple `Filter` nodes.
+/// Each input tuple is tested with a [`BooleanExpression`]. Rows that evaluate
+/// to `true` pass through unchanged; rows that evaluate to `false` are skipped.
+/// The output tuple layout is exactly the child layout because filtering never
+/// adds, removes, or reorders columns.
 ///
-/// The output schema is identical to the child's — no columns are added or
-/// removed by filtering.
+/// # SQL examples
+///
+/// Assume `users(id, name, age)` with binder-resolved indices
+/// `id → 0`, `name → 1`, `age → 2`:
+///
+/// ```sql
+/// -- SELECT * FROM users WHERE age >= 18;
+/// ```
+///
+/// ```ignore
+/// Filter::new(
+///     users_scan,
+///     BooleanExpression::col_op_lit(2, Predicate::GreaterThanOrEqual, Value::Int64(18)),
+/// )
+/// ```
+///
+/// ```sql
+/// -- SELECT * FROM users WHERE name LIKE 'a%';
+/// ```
+///
+/// ```ignore
+/// Filter::new(
+///     users_scan,
+///     BooleanExpression::col_op_lit(1, Predicate::Like, Value::String("a%".into())),
+/// )
+/// ```
+///
+/// ```sql
+/// -- SELECT * FROM users WHERE age >= 18 AND name <> 'guest';
+/// ```
+///
+/// ```ignore
+/// Filter::new(
+///     users_scan,
+///     BooleanExpression::And(
+///         Box::new(BooleanExpression::col_op_lit(
+///             2,
+///             Predicate::GreaterThanOrEqual,
+///             Value::Int64(18),
+///         )),
+///         Box::new(BooleanExpression::col_op_lit(
+///             1,
+///             Predicate::NotEqual,
+///             Value::String("guest".into()),
+///         )),
+///     ),
+/// )
+/// ```
+///
+/// # SQL → operator mapping
+///
+/// ```sql
+/// -- SELECT id, name FROM users WHERE age < 30;
+/// ```
+///
+/// ```ignore
+/// let filtered = Filter::new(
+///     users_scan,
+///     BooleanExpression::col_op_lit(2, Predicate::LessThan, Value::Int64(30)),
+/// );
+/// let projected = Project::new(Box::new(PlanNode::Filter(filtered)), &[col(0), col(1)])?;
+/// ```
+///
+/// `NULL` in a comparison filters the row out: `WHERE age = NULL` evaluates to
+/// `false` for every row in this executor.
 #[derive(Debug)]
 pub struct Filter<'a> {
     child: Box<PlanNode<'a>>,
@@ -40,10 +122,26 @@ pub struct Filter<'a> {
 }
 
 impl<'a> Filter<'a> {
-    /// Creates a new `Filter` operator.
+    /// Builds a `WHERE` operator over an already-planned child.
     ///
-    /// - `child` — the upstream operator to filter.
-    /// - `predicate` — the boolean expression to evaluate.
+    /// # SQL examples
+    ///
+    /// ```sql
+    /// -- WHERE age = 30
+    /// --   Filter::new(child, BooleanExpression::col_op_lit(2, Predicate::Equals, Value::Int64(30)))
+    ///
+    /// -- WHERE name LIKE 'a%'
+    /// --   Filter::new(child, BooleanExpression::col_op_lit(1, Predicate::Like, Value::String("a%".into())))
+    ///
+    /// -- WHERE age > id
+    /// --   Filter::new(child, BooleanExpression::col_op_col(2, Predicate::GreaterThan, 0))
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Does not validate eagerly. Column resolution errors surface later as
+    /// [`ExecutionError::TypeError`] from [`FallibleIterator::next`] when the
+    /// predicate references a tuple position outside the child's output.
     pub fn new(child: Box<PlanNode<'a>>, predicate: BooleanExpression) -> Self {
         Self { child, predicate }
     }
@@ -53,6 +151,17 @@ impl FallibleIterator for Filter<'_> {
     type Item = Tuple;
     type Error = ExecutionError;
 
+    /// Returns the next row that qualifies for the SQL `WHERE` predicate.
+    ///
+    /// Pulls child rows until the predicate evaluates to `true` or the child is
+    /// exhausted. `And` / `Or` expressions use Rust's short-circuiting `&&` and
+    /// `||`; `NULL` comparisons and non-string `LIKE` checks evaluate to
+    /// `false`.
+    ///
+    /// # Errors
+    ///
+    /// Propagates child errors and returns [`ExecutionError::TypeError`] when
+    /// the predicate references an out-of-bounds column.
     fn next(&mut self) -> Result<Option<Tuple>, ExecutionError> {
         while let Some(tuple) = self.child.next()? {
             if self.predicate.eval(&tuple)? {
@@ -64,35 +173,116 @@ impl FallibleIterator for Filter<'_> {
 }
 
 impl Executor for Filter<'_> {
+    /// Exposes the unchanged child schema for `SELECT ... WHERE ...`.
     fn schema(&self) -> &TupleSchema {
         self.child.schema()
     }
 
+    /// Rewinds the child so the same `WHERE` predicate can be evaluated again.
+    ///
+    /// # Errors
+    ///
+    /// Propagates any error returned by the child's rewind implementation.
     fn rewind(&mut self) -> Result<(), ExecutionError> {
         self.child.rewind()
     }
 }
 
-/// One output column produced by [`Project`].
+/// One resolved SQL `SELECT` item produced by [`Project`].
 ///
-/// Either picks a column out of the child tuple by index, or emits a
-/// constant value that is repeated on every output row.
+/// A projection item either copies a column from the child tuple by resolved
+/// index, or emits a constant value for every row. It is the bound form of
+/// SQL list items like `name`, `age AS years`, or `'guest' AS role`.
+///
+/// # SQL examples
+///
+/// Assume `users(id, name, age)` with binder-resolved indices
+/// `id → 0`, `name → 1`, `age → 2`:
+///
+/// ```sql
+/// -- SELECT id FROM users;
+/// ```
+///
+/// ```ignore
+/// ProjectItem::Column { idx: 0, alias: None }
+/// ```
+///
+/// ```sql
+/// -- SELECT name AS username FROM users;
+/// ```
+///
+/// ```ignore
+/// ProjectItem::Column {
+///     idx: 1,
+///     alias: Some("username".into()),
+/// }
+/// ```
+///
+/// ```sql
+/// -- SELECT 'active' AS status FROM users;
+/// ```
+///
+/// ```ignore
+/// ProjectItem::Literal {
+///     value: Value::String("active".into()),
+///     name: "status".into(),
+/// }
+/// ```
 #[derive(Debug, Clone)]
 pub enum ProjectItem {
-    /// Pick column `idx` from the child tuple.
-    Column(usize),
-    /// Emit `value` on every row, labeled `name` in the output schema.
+    /// A resolved `SELECT col` or `SELECT col AS alias` item.
+    Column { idx: usize, alias: Option<String> },
+    /// A resolved `SELECT <literal> AS name` item repeated for every input row.
     Literal { value: Value, name: String },
 }
 
 impl ProjectItem {
-    /// Convenience constructor matching [`Project::new`]'s old signature.
-    pub fn column(col_id: primitives::ColumnId) -> Self {
-        Self::Column(usize::from(col_id))
+    /// Builds a `SELECT col` item that keeps the child's field name.
+    ///
+    /// # SQL examples
+    ///
+    /// ```sql
+    /// -- SELECT id FROM users
+    /// --   ProjectItem::column(col(0))
+    ///
+    /// -- SELECT name FROM users
+    /// --   ProjectItem::column(col(1))
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Does not validate eagerly. An out-of-bounds column becomes
+    /// [`ExecutionError::TypeError`] when [`Project::with_items`] builds the
+    /// output schema.
+    pub fn column(col_id: primitives::ColumnId, alias: Option<String>) -> Self {
+        Self::Column {
+            idx: usize::from(col_id),
+            alias,
+        }
     }
 
-    /// Builds a literal output column. `NULL` literals default to
-    /// [`Type::String`] since SQL `NULL` carries no inherent type.
+    /// Builds a `SELECT <literal> AS name` item repeated on each output row.
+    ///
+    /// `NULL` literals default to [`Type::String`] in the output schema because
+    /// SQL `NULL` carries no inherent type in this bound form.
+    ///
+    /// # SQL examples
+    ///
+    /// ```sql
+    /// -- SELECT 1 AS one FROM users
+    /// --   ProjectItem::literal(Value::Int64(1), "one")
+    ///
+    /// -- SELECT 'guest' AS role FROM users
+    /// --   ProjectItem::literal(Value::String("guest".into()), "role")
+    ///
+    /// -- SELECT NULL AS missing FROM users
+    /// --   ProjectItem::literal(Value::Null, "missing")
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Does not return an error; schema type inference happens later in
+    /// [`Project::with_items`] and accepts all literal values.
     pub fn literal(value: Value, name: impl Into<String>) -> Self {
         Self::Literal {
             value,
@@ -101,17 +291,77 @@ impl ProjectItem {
     }
 }
 
-/// Picks a subset of columns from each tuple produced by its child, optionally
-/// interleaving constant SQL literals.
+/// Builds the SQL `SELECT` list for each row from one child plan.
 ///
-/// Corresponds to the column list in a SQL `SELECT`. For every input row the
-/// operator builds an output row by walking its [`ProjectItem`]s in order:
-/// `Column(i)` copies the i-th value out of the child tuple; `Literal { .. }`
-/// clones the constant.
+/// A `Project` maps each input tuple to a new tuple by copying selected child
+/// columns and/or appending literal values. The output tuple layout is exactly
+/// the `items` order: each [`ProjectItem`] contributes one output column.
 ///
-/// The output schema is computed once at construction time — column items copy
-/// the field from the child schema, literal items synthesize a [`Field`] from
-/// the literal's runtime type.
+/// # SQL examples
+///
+/// Assume `users(id, name, age)` with binder-resolved indices
+/// `id → 0`, `name → 1`, `age → 2`:
+///
+/// ```sql
+/// -- SELECT id, name FROM users;
+/// ```
+///
+/// ```ignore
+/// Project::new(users_scan, &[col(0), col(1)])?
+/// ```
+///
+/// ```sql
+/// -- SELECT name AS username, age FROM users;
+/// ```
+///
+/// ```ignore
+/// Project::with_items(
+///     users_scan,
+///     vec![
+///         ProjectItem::aliased_column(col(1), "username"),
+///         ProjectItem::column(col(2)),
+///     ],
+/// )?
+/// ```
+///
+/// ```sql
+/// -- SELECT id, 'active' AS status FROM users;
+/// ```
+///
+/// ```ignore
+/// Project::with_items(
+///     users_scan,
+///     vec![
+///         ProjectItem::column(col(0)),
+///         ProjectItem::literal(Value::String("active".into()), "status"),
+///     ],
+/// )?
+/// ```
+///
+/// # SQL → operator mapping
+///
+/// ```sql
+/// -- SELECT name AS username, 1 AS one
+/// -- FROM users
+/// -- WHERE age >= 18;
+/// ```
+///
+/// ```ignore
+/// let filtered = Filter::new(
+///     users_scan,
+///     BooleanExpression::col_op_lit(2, Predicate::GreaterThanOrEqual, Value::Int64(18)),
+/// );
+/// let projected = Project::with_items(
+///     Box::new(PlanNode::Filter(filtered)),
+///     vec![
+///         ProjectItem::aliased_column(col(1), "username"),
+///         ProjectItem::literal(Value::Int64(1), "one"),
+///     ],
+/// )?;
+/// ```
+///
+/// `NULL` values copied from input columns remain `NULL`; literal `NULL`s are
+/// emitted unchanged.
 #[derive(Debug)]
 pub struct Project<'a> {
     child: Box<PlanNode<'a>>,
@@ -120,8 +370,23 @@ pub struct Project<'a> {
 }
 
 impl<'a> Project<'a> {
-    /// Creates a `Project` from a list of column indices — every output
-    /// column is taken straight from the child tuple.
+    /// Builds a `SELECT col, ...` projection from resolved column indices.
+    ///
+    /// Every output column is copied straight from the child tuple and keeps the
+    /// child's field name.
+    ///
+    /// # SQL examples
+    ///
+    /// ```sql
+    /// -- SELECT id FROM users
+    /// --   Project::new(child, &[col(0)])?
+    ///
+    /// -- SELECT name, age FROM users
+    /// --   Project::new(child, &[col(1), col(2)])?
+    ///
+    /// -- SELECT age, id FROM users
+    /// --   Project::new(child, &[col(2), col(0)])?
+    /// ```
     ///
     /// # Errors
     ///
@@ -131,14 +396,34 @@ impl<'a> Project<'a> {
         child: Box<PlanNode<'a>>,
         col_ids: &[primitives::ColumnId],
     ) -> Result<Self, ExecutionError> {
-        let items: Vec<ProjectItem> = col_ids.iter().copied().map(ProjectItem::column).collect();
+        let items: Vec<ProjectItem> = col_ids
+            .iter()
+            .copied()
+            .map(|c| ProjectItem::column(c, None))
+            .collect();
         Self::with_items(child, items)
     }
 
-    /// Creates a `Project` from a mixed list of column picks and literals.
+    /// Builds a `SELECT` projection with columns, aliases, and literals.
     ///
-    /// Use this when the SQL projection contains constant expressions like
-    /// `SELECT 1, 'guest' AS role, name FROM users`.
+    /// Use this when the SQL projection contains more than bare column picks,
+    /// such as `AS` aliases or constant expressions.
+    ///
+    /// # SQL examples
+    ///
+    /// ```sql
+    /// -- SELECT id AS user_id FROM users
+    /// --   Project::with_items(child, vec![ProjectItem::aliased_column(col(0), "user_id")])?
+    ///
+    /// -- SELECT 1 AS one, name FROM users
+    /// --   Project::with_items(child, vec![
+    /// --       ProjectItem::literal(Value::Int64(1), "one"),
+    /// --       ProjectItem::column(col(1)),
+    /// --   ])?
+    ///
+    /// -- SELECT NULL AS missing FROM users
+    /// --   Project::with_items(child, vec![ProjectItem::literal(Value::Null, "missing")])?
+    /// ```
     ///
     /// # Errors
     ///
@@ -151,24 +436,7 @@ impl<'a> Project<'a> {
         let child_schema = child.schema();
         let fields = items
             .iter()
-            .map(|item| match item {
-                ProjectItem::Column(idx) => {
-                    let field = child_schema.field(*idx).ok_or_else(|| {
-                        ExecutionError::TypeError(format!(
-                            "Project column index {idx} out of range"
-                        ))
-                    })?;
-                    Ok(field.clone())
-                }
-                ProjectItem::Literal { value, name } => {
-                    let ty = value.get_type().unwrap_or(Type::String);
-                    let mut field = Field::new(name.clone(), ty);
-                    if !value.is_null() {
-                        field = field.not_null();
-                    }
-                    Ok(field)
-                }
-            })
+            .map(|item| Self::create_field_from_projection(item, child_schema))
             .collect::<Result<Vec<_>, ExecutionError>>()?;
 
         Ok(Self {
@@ -177,51 +445,137 @@ impl<'a> Project<'a> {
             output_schema: TupleSchema::new(fields),
         })
     }
+
+    /// Builds one output [`Field`] for a resolved SQL `SELECT` item.
+    ///
+    /// [`Project::with_items`] uses this helper to turn each [`ProjectItem`]
+    /// into the corresponding output schema field before any rows are pulled.
+    ///
+    /// - [`ProjectItem::Column`] — clones the child's field at `idx`, then applies an optional `AS`
+    ///   rename via [`Field::set_name`].
+    /// - [`ProjectItem::Literal`] — uses the literal's runtime type (defaulting to [`Type::String`]
+    ///   for untyped `NULL`); non-null literals use [`Field::not_null`].
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ExecutionError::TypeError`] when a [`ProjectItem::Column`] index is
+    /// out of range for `schema`.
+    fn create_field_from_projection(
+        item: &ProjectItem,
+        schema: &TupleSchema,
+    ) -> Result<Field, ExecutionError> {
+        match item {
+            ProjectItem::Column { idx, alias } => {
+                let mut field = schema
+                    .field_or_err(*idx)
+                    .map_err(|e| ExecutionError::TypeError(e.to_string()))?
+                    .clone();
+                if let Some(name) = alias {
+                    field.set_name(name);
+                }
+                Ok(field)
+            }
+            ProjectItem::Literal { value, name } => {
+                let ty = value.get_type().unwrap_or(Type::String);
+                let mut field = Field::new(name.clone(), ty);
+                if !value.is_null() {
+                    field = field.not_null();
+                }
+                Ok(field)
+            }
+        }
+    }
 }
 
 impl FallibleIterator for Project<'_> {
     type Item = Tuple;
     type Error = ExecutionError;
 
+    /// Returns the next row shaped like the SQL `SELECT` list.
+    ///
+    /// Copies projected column values by index and clones literal values into
+    /// the output tuple. `NULL` values are copied or emitted unchanged; there is
+    /// no expression evaluation or type coercion at this layer.
+    ///
+    /// # Errors
+    ///
+    /// Propagates child errors and returns [`ExecutionError::TypeError`] if a
+    /// projected column is missing from an input tuple.
     fn next(&mut self) -> Result<Option<Tuple>, ExecutionError> {
         let Some(input) = self.child.next()? else {
             return Ok(None);
         };
-        let mut out = Vec::with_capacity(self.items.len());
-        for item in &self.items {
-            match item {
-                ProjectItem::Column(idx) => match input.get(*idx) {
-                    Some(v) => out.push(v.clone()),
-                    None => {
-                        return Err(ExecutionError::TypeError(format!(
-                            "Project: column index {idx} missing from input tuple"
-                        )));
-                    }
+        let out = self
+            .items
+            .iter()
+            .map(|item| match item {
+                ProjectItem::Column { idx, .. } => match input.get(*idx) {
+                    Some(v) => Ok(v.clone()),
+                    None => Err(ExecutionError::TypeError(format!(
+                        "Project: column index {idx} missing from input tuple"
+                    ))),
                 },
-                ProjectItem::Literal { value, .. } => out.push(value.clone()),
-            }
-        }
+                ProjectItem::Literal { value, .. } => Ok(value.clone()),
+            })
+            .collect::<Result<Vec<_>, ExecutionError>>()?;
         Ok(Some(Tuple::new(out)))
     }
 }
 
 impl Executor for Project<'_> {
+    /// Exposes the schema produced by the SQL `SELECT` list.
     fn schema(&self) -> &TupleSchema {
         &self.output_schema
     }
 
+    /// Rewinds the child so the same projection can be emitted again.
+    ///
+    /// # Errors
+    ///
+    /// Propagates any error returned by the child's rewind implementation.
     fn rewind(&mut self) -> Result<(), ExecutionError> {
         self.child.rewind()
     }
 }
 
-/// One column of an `ORDER BY` clause: which column, and which direction.
+/// One resolved SQL `ORDER BY` item: column position plus direction.
 ///
 /// Multiple `SortKey`s are evaluated lexicographically — the first key
 /// decides the ordering, and later keys are only consulted to break ties.
+///
+/// # SQL examples
+///
+/// Assume `users(id, name, age)` with binder-resolved indices
+/// `id → 0`, `name → 1`, `age → 2`:
+///
+/// ```sql
+/// -- ORDER BY age
+/// ```
+///
+/// ```ignore
+/// SortKey::asc(col(2))
+/// ```
+///
+/// ```sql
+/// -- ORDER BY name DESC
+/// ```
+///
+/// ```ignore
+/// SortKey::desc(col(1))
+/// ```
+///
+/// ```sql
+/// -- ORDER BY age ASC, name DESC
+/// ```
+///
+/// ```ignore
+/// vec![SortKey::asc(col(2)), SortKey::desc(col(1))]
+/// ```
 #[derive(Debug, Clone, Copy)]
 pub struct SortKey {
+    /// Resolved `ORDER BY` column position in the child tuple.
     pub col_id: primitives::ColumnId,
+    /// `true` for `ASC`, `false` for `DESC`.
     pub ascending: bool,
 }
 
@@ -241,15 +595,68 @@ impl SortKey {
     }
 }
 
-/// Sorts all tuples from its child by an ordered list of keys.
+/// Applies a SQL `ORDER BY` clause to all rows from one child plan.
 ///
-/// Corresponds to `ORDER BY c1 [ASC|DESC], c2 [ASC|DESC], …` in SQL.
-/// Because sorting requires seeing the full input before producing any
-/// output, `Sort` is a **blocking** operator: on the first call to `next`
-/// it drains the child completely into memory, sorts the collected
-/// tuples, and then yields them one by one.
+/// `Sort` is a blocking operator: on the first call to `next`, it drains the
+/// child completely into memory, sorts the collected tuples by the declared
+/// keys, then yields those tuples one by one. The output tuple layout is exactly
+/// the child layout because sorting only changes row order.
 ///
-/// The output schema is identical to the child's.
+/// # SQL examples
+///
+/// Assume `users(id, name, age)` with binder-resolved indices
+/// `id → 0`, `name → 1`, `age → 2`:
+///
+/// ```sql
+/// -- SELECT * FROM users ORDER BY age;
+/// ```
+///
+/// ```ignore
+/// Sort::new(vec![SortKey::asc(col(2))], users_scan)
+/// ```
+///
+/// ```sql
+/// -- SELECT * FROM users ORDER BY name DESC;
+/// ```
+///
+/// ```ignore
+/// Sort::new(vec![SortKey::desc(col(1))], users_scan)
+/// ```
+///
+/// ```sql
+/// -- SELECT * FROM users ORDER BY age ASC, name DESC;
+/// ```
+///
+/// ```ignore
+/// Sort::new(
+///     vec![SortKey::asc(col(2)), SortKey::desc(col(1))],
+///     users_scan,
+/// )
+/// ```
+///
+/// # SQL → operator mapping
+///
+/// ```sql
+/// -- SELECT id, name
+/// -- FROM users
+/// -- WHERE age >= 18
+/// -- ORDER BY name DESC;
+/// ```
+///
+/// ```ignore
+/// let filtered = Filter::new(
+///     users_scan,
+///     BooleanExpression::col_op_lit(2, Predicate::GreaterThanOrEqual, Value::Int64(18)),
+/// );
+/// let sorted = Sort::new(
+///     vec![SortKey::desc(col(1))],
+///     Box::new(PlanNode::Filter(filtered)),
+/// );
+/// let projected = Project::new(Box::new(PlanNode::Sort(sorted)), &[col(0), col(1)])?;
+/// ```
+///
+/// `NULL` sorts before non-`NULL` for ascending keys. Descending keys reverse
+/// that per-key ordering.
 #[derive(Debug)]
 pub struct Sort<'a> {
     keys: Vec<SortKey>,
@@ -260,11 +667,27 @@ pub struct Sort<'a> {
 }
 
 impl<'a> Sort<'a> {
-    /// Creates a new `Sort` operator.
+    /// Builds an `ORDER BY` operator over an already-planned child.
     ///
-    /// - `keys` — the ordered list of `(column, direction)` pairs. The first key is the primary
-    ///   sort key; subsequent keys break ties.
-    /// - `child` — the upstream operator to drain.
+    /// `keys[0]` is the primary `ORDER BY` expression; later keys break ties.
+    ///
+    /// # SQL examples
+    ///
+    /// ```sql
+    /// -- ORDER BY id
+    /// --   Sort::new(vec![SortKey::asc(col(0))], child)
+    ///
+    /// -- ORDER BY age DESC
+    /// --   Sort::new(vec![SortKey::desc(col(2))], child)
+    ///
+    /// -- ORDER BY age ASC, name DESC
+    /// --   Sort::new(vec![SortKey::asc(col(2)), SortKey::desc(col(1))], child)
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Does not validate eagerly. Errors from the child surface from
+    /// [`FallibleIterator::next`] during materialization.
     pub fn new(keys: Vec<SortKey>, child: Box<PlanNode<'a>>) -> Self {
         Self {
             keys,
@@ -275,7 +698,7 @@ impl<'a> Sort<'a> {
         }
     }
 
-    /// Drains the child into `self.sorted` and sorts it, but only on the first call.
+    /// Drains the child rows for a SQL `ORDER BY`, then sorts them once.
     ///
     /// Subsequent calls return immediately because `self.materialized` is `true`.
     ///
@@ -311,30 +734,12 @@ impl<'a> Sort<'a> {
         Ok(())
     }
 
-    /// Compares two tuples `a` and `b` using the specified `SortKey`.
+    /// Compares two rows for one resolved SQL `ORDER BY` item.
     ///
-    /// This function is used to determine the row order in the `Sort` operator.
-    ///
-    /// # Arguments
-    ///
-    /// * `key` - The sort key specifying the column and direction by which to compare the tuples.
-    /// * `a` - The first tuple to compare.
-    /// * `b` - The second tuple to compare.
-    ///
-    /// # Returns
-    ///
-    /// - [`Ordering::Less`] if `a` should come before `b` according to the sort key.
-    /// - [`Ordering::Greater`] if `a` should come after `b`.
-    /// - [`Ordering::Equal`] if the tuples are equal on this sort key.
-    ///
-    /// # Details
-    ///
-    /// - The value at the column specified by `key.col_id` is compared between `a` and `b`.
-    /// - `NULL` values (represented as `None`) sort before all non-null values for each key.
-    /// - If both values are non-null but not comparable (e.g., type mismatch), they are considered
-    ///   equal.
-    /// - The `ascending` flag on the key determines whether the natural ordering is used (`true`)
-    ///   or reversed (`false`—i.e., descending).
+    /// Returns the ordering contribution for this key only; multi-key sorting
+    /// calls this repeatedly until one key breaks the tie. Missing values are
+    /// treated like `NULL`, `NULL` sorts before non-`NULL` in ascending order,
+    /// and incomparable non-`NULL` values compare equal.
     fn compare_by_sort_key(key: SortKey, a: &Tuple, b: &Tuple) -> Ordering {
         let idx = usize::from(key.col_id);
         let ord = match (a.get(idx), b.get(idx)) {
@@ -351,6 +756,16 @@ impl FallibleIterator for Sort<'_> {
     type Item = Tuple;
     type Error = ExecutionError;
 
+    /// Returns the next row in SQL `ORDER BY` order.
+    ///
+    /// The first call drains and sorts the complete child input. Later calls
+    /// walk the materialized sorted buffer. `NULL` ordering follows
+    /// [`Sort::compare_by_sort_key`]; type mismatches that cannot be compared
+    /// are treated as ties for that key.
+    ///
+    /// # Errors
+    ///
+    /// Propagates errors returned while draining the child.
     fn next(&mut self) -> Result<Option<Tuple>, ExecutionError> {
         self.materialize_tuples()?;
         if self.cursor >= self.sorted.len() {
@@ -363,23 +778,83 @@ impl FallibleIterator for Sort<'_> {
 }
 
 impl Executor for Sort<'_> {
+    /// Exposes the unchanged child schema for `SELECT ... ORDER BY ...`.
     fn schema(&self) -> &TupleSchema {
         self.child.schema()
     }
 
+    /// Rewinds the sorted output buffer to the first row.
+    ///
+    /// After materialization, rewind replays the same sorted rows without
+    /// rewinding the child. Before materialization, it simply leaves the cursor
+    /// at the beginning.
+    ///
+    /// # Errors
+    ///
+    /// Does not return an error.
     fn rewind(&mut self) -> Result<(), ExecutionError> {
         self.cursor = 0;
         Ok(())
     }
 }
 
-/// Restricts the number of tuples produced by its child, with an optional starting offset.
+/// Applies a SQL `LIMIT n OFFSET m` row window to one child plan.
 ///
-/// Corresponds to `LIMIT n OFFSET m` in SQL. The first `offset` tuples from the
-/// child are consumed and discarded on the initial `next` call; after that, at
-/// most `limit` tuples are returned before the operator signals end-of-stream.
+/// The first `offset` rows from the child are consumed and discarded on the
+/// initial `next` call. After that, at most `limit` rows are returned before the
+/// operator signals end-of-stream. The output tuple layout is exactly the child
+/// layout because limiting only removes rows.
 ///
-/// The output schema is identical to the child's.
+/// # SQL examples
+///
+/// Assume `users(id, name, age)` with binder-resolved indices
+/// `id → 0`, `name → 1`, `age → 2`:
+///
+/// ```sql
+/// -- SELECT * FROM users LIMIT 10;
+/// ```
+///
+/// ```ignore
+/// Limit::new(users_scan, 10, 0)
+/// ```
+///
+/// ```sql
+/// -- SELECT * FROM users LIMIT 10 OFFSET 20;
+/// ```
+///
+/// ```ignore
+/// Limit::new(users_scan, 10, 20)
+/// ```
+///
+/// ```sql
+/// -- SELECT id, name FROM users ORDER BY age DESC LIMIT 5;
+/// ```
+///
+/// ```ignore
+/// let sorted = Sort::new(vec![SortKey::desc(col(2))], users_scan);
+/// let limited = Limit::new(Box::new(PlanNode::Sort(sorted)), 5, 0);
+/// let projected = Project::new(Box::new(PlanNode::Limit(limited)), &[col(0), col(1)])?;
+/// ```
+///
+/// # SQL → operator mapping
+///
+/// ```sql
+/// -- SELECT *
+/// -- FROM users
+/// -- WHERE age >= 18
+/// -- LIMIT 2 OFFSET 1;
+/// ```
+///
+/// ```ignore
+/// let filtered = Filter::new(
+///     users_scan,
+///     BooleanExpression::col_op_lit(2, Predicate::GreaterThanOrEqual, Value::Int64(18)),
+/// );
+/// let limited = Limit::new(Box::new(PlanNode::Filter(filtered)), 2, 1);
+/// ```
+///
+/// `LIMIT` and `OFFSET` count rows, so `NULL` values do not receive special
+/// handling.
 #[derive(Debug)]
 #[allow(clippy::struct_field_names)]
 pub struct Limit<'a> {
@@ -391,11 +866,25 @@ pub struct Limit<'a> {
 }
 
 impl<'a> Limit<'a> {
-    /// Creates a new `Limit` operator.
+    /// Builds a `LIMIT limit OFFSET offset` operator over an already-planned child.
     ///
-    /// - `child` — the upstream operator to restrict.
-    /// - `limit` — maximum number of tuples to return.
-    /// - `offset` — number of leading tuples to skip before counting starts.
+    /// # SQL examples
+    ///
+    /// ```sql
+    /// -- LIMIT 10
+    /// --   Limit::new(child, 10, 0)
+    ///
+    /// -- LIMIT 10 OFFSET 20
+    /// --   Limit::new(child, 10, 20)
+    ///
+    /// -- LIMIT 0
+    /// --   Limit::new(child, 0, 0)
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Does not validate eagerly. Errors from the child surface from
+    /// [`FallibleIterator::next`] while skipping the offset or returning rows.
     pub fn new(child: Box<PlanNode<'a>>, limit: u64, offset: u64) -> Self {
         Self {
             child,
@@ -406,7 +895,7 @@ impl<'a> Limit<'a> {
         }
     }
 
-    /// Skips the first `self.offset` tuples from the child, but only once.
+    /// Consumes the SQL `OFFSET` rows from the child, but only once.
     ///
     /// If the child is exhausted before the full offset is consumed, the skip
     /// stops early and the operator will immediately return `None` on the next
@@ -432,6 +921,16 @@ impl<'a> Limit<'a> {
 impl FallibleIterator for Limit<'_> {
     type Item = Tuple;
     type Error = ExecutionError;
+
+    /// Returns the next row inside the SQL `LIMIT` / `OFFSET` window.
+    ///
+    /// The first call skips `offset` rows, then each successful output
+    /// increments the `limit` counter. `NULL` values are irrelevant because this
+    /// operator counts rows only.
+    ///
+    /// # Errors
+    ///
+    /// Propagates errors returned by the child while skipping or reading rows.
     fn next(&mut self) -> Result<Option<Tuple>, ExecutionError> {
         self.skip_offset()?;
         if self.count >= self.limit {
@@ -450,9 +949,16 @@ impl FallibleIterator for Limit<'_> {
 }
 
 impl Executor for Limit<'_> {
+    /// Exposes the unchanged child schema for `SELECT ... LIMIT ...`.
     fn schema(&self) -> &TupleSchema {
         self.child.schema()
     }
+
+    /// Resets the SQL row window and rewinds the child.
+    ///
+    /// # Errors
+    ///
+    /// Propagates any error returned by the child's rewind implementation.
     fn rewind(&mut self) -> Result<(), ExecutionError> {
         self.count = 0;
         self.initialized = false;

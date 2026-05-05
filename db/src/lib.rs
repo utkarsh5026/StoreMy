@@ -61,6 +61,7 @@ pub mod transaction;
 pub mod tuple;
 pub mod types;
 pub mod wal;
+pub mod web;
 
 pub mod engine;
 pub use primitives::{FileId, IndexId, Lsn, PageNumber, TransactionId};

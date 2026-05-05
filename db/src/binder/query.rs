@@ -701,6 +701,11 @@ impl BoundSelect {
                 output_name: alias.clone().unwrap_or_else(|| "COUNT(*)".to_string()),
             }),
             Expr::Agg(func, arg) => Self::bind_agg(scope, &func, *arg, alias.as_deref())?,
+            Expr::BinaryOp { .. } | Expr::UnaryOp { .. } => {
+                return Err(BindError::Unsupported(
+                    "binary/unary expressions in SELECT projections are not yet supported".into(),
+                ));
+            }
         };
         Ok(BoundProjection { item: bound, alias })
     }

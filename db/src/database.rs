@@ -13,6 +13,7 @@ use std::{
 use parking_lot::Mutex;
 
 use crate::{
+    PAGE_SIZE,
     catalog::manager::{Catalog, TableInfo},
     engine::{Engine, EngineError, StatementResult},
     parser::Parser,
@@ -153,6 +154,40 @@ impl Database {
         let result = self.inner.catalog.get_table_info(&txn, name)?;
         txn.commit()?;
         Ok(result)
+    }
+
+    /// Reads every heap page of `name` and returns the table's metadata
+    /// together with each page's raw bytes.
+    ///
+    /// Used by the visualization endpoint. Each page is read under a shared
+    /// lock that is dropped as soon as the bytes are copied; the surrounding
+    /// transaction is read-only.
+    ///
+    /// # Errors
+    ///
+    /// - [`EngineError::TableNotFound`] if `name` is not a registered table or its heap file is not
+    ///   open in the catalog.
+    /// - [`EngineError::Transaction`] / [`EngineError::Storage`] on lock or I/O failure.
+    pub fn read_heap_pages(
+        &self,
+        name: &str,
+    ) -> Result<(TableInfo, Vec<[u8; PAGE_SIZE]>), EngineError> {
+        let txn = self.inner.txn_manager.begin()?;
+        let info = self.inner.catalog.get_table_info(&txn, name)?;
+        let heap = self
+            .inner
+            .catalog
+            .get_heap(info.file_id)
+            .ok_or_else(|| EngineError::TableNotFound(name.to_string()))?;
+
+        let n = heap.page_count();
+        let mut pages: Vec<[u8; PAGE_SIZE]> = Vec::with_capacity(n as usize);
+        for page_no in 0..n {
+            let bytes = heap.read_raw_page(page_no, txn.transaction_id())?;
+            pages.push(bytes);
+        }
+        txn.commit()?;
+        Ok((info, pages))
     }
 }
 

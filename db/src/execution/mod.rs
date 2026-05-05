@@ -41,6 +41,7 @@ use crate::{
     TransactionId,
     execution::{expression::BooleanExpression, setops::Distinct},
     heap::file::HeapFile,
+    primitives::ColumnId,
     tuple::{Tuple, TupleSchema},
 };
 
@@ -135,6 +136,16 @@ impl<'a> PlanNode<'a> {
         Ok(Self::Project(unary::Project::with_items(
             Box::new(child),
             items,
+        )?))
+    }
+
+    pub fn aggregate(
+        child: Self,
+        group_by: &[ColumnId],
+        agg_exprs: Vec<aggregate::AggregateExpr>,
+    ) -> Result<Self, ExecutionError> {
+        Ok(Self::Aggregate(aggregate::Aggregate::new(
+            child, group_by, agg_exprs,
         )?))
     }
 }

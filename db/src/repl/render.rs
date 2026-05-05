@@ -10,7 +10,7 @@ use crate::{
     database::Database,
     engine::{EngineError, StatementResult},
     repl::{state::ReplState, theme},
-    tuple::Tuple,
+    tuple::{Tuple, TupleSchema},
 };
 
 /// Submits `sql` to the engine, waits for the result, and pretty-prints it.
@@ -41,7 +41,13 @@ pub fn execute_and_print(db: &Database, sql: &str, state: &ReplState) {
 
 fn print_result(r: &StatementResult) {
     match r {
-        StatementResult::Selected { table, rows } => print_select(table, rows),
+        StatementResult::Selected {
+            table,
+            schema,
+            rows,
+        } => {
+            print_select(table, schema, rows);
+        }
         StatementResult::Inserted { table, rows } => {
             theme::ok(
                 "INSERT",
@@ -141,18 +147,23 @@ fn print_engine_error(e: &EngineError) {
     eprintln!("{} {e}", "ERROR:".red().bold());
 }
 
-fn print_select(table_name: &str, rows: &[Tuple]) {
-    if rows.is_empty() {
+fn print_select(table_name: &str, schema: &TupleSchema, rows: &[Tuple]) {
+    let width = schema
+        .num_fields()
+        .max(rows.iter().map(Tuple::len).max().unwrap_or(0));
+
+    if width == 0 {
         println!("{}", format!("(0 rows from {table_name})").dimmed());
         return;
     }
 
-    let width = rows.iter().map(Tuple::len).max().unwrap_or(0);
-
     let mut t = Table::new();
     t.load_preset(UTF8_FULL)
         .set_content_arrangement(ContentArrangement::Dynamic);
-    t.set_header((0..width).map(|i| Cell::new(format!("col{i}")).fg(comfy_table::Color::Cyan)));
+    t.set_header((0..width).map(|i| {
+        let label = schema.field(i).map_or("?", |f| f.name.as_str());
+        Cell::new(label).fg(comfy_table::Color::Cyan)
+    }));
 
     for tup in rows {
         let cells = (0..width).map(|i| match tup.get(i) {

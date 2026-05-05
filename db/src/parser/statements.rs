@@ -1038,12 +1038,53 @@ pub enum Expr {
     Agg(AggFunc, Box<Expr>),
     /// The special `COUNT(*)` form that counts all rows.
     CountStar,
+    /// A binary operator applied to two sub-expressions, e.g. `age > 25`,
+    /// `a AND b`, `x = y`. Boolean connectives (`AND`, `OR`) and comparisons
+    /// share this shape — they differ only by the [`BinOp`] tag and the
+    /// types the binder will require of their operands.
+    BinaryOp {
+        lhs: Box<Expr>,
+        op: BinOp,
+        rhs: Box<Expr>,
+    },
+    /// A unary operator applied to a sub-expression, e.g. `NOT (age > 25)`.
+    /// The binder enforces the operand's type (e.g. `NOT` requires boolean).
+    UnaryOp { op: UnOp, operand: Box<Expr> },
 }
 
 impl Expr {
     /// Convenience constructor for `Expr::Agg(func, Box::new(arg))`.
     pub fn agg(func: AggFunc, arg: Expr) -> Self {
         Expr::Agg(func, Box::new(arg))
+    }
+
+    /// Convenience constructor for `Expr::BinaryOp { lhs, op, rhs }` that
+    /// hides the `Box::new` boilerplate.
+    pub fn binary(lhs: Expr, op: BinOp, rhs: Expr) -> Self {
+        Expr::BinaryOp {
+            lhs: Box::new(lhs),
+            op,
+            rhs: Box::new(rhs),
+        }
+    }
+
+    /// Convenience constructor for `Expr::UnaryOp { op, operand }` that hides
+    /// the `Box::new` boilerplate.
+    pub fn unary(op: UnOp, operand: Expr) -> Self {
+        Expr::UnaryOp {
+            op,
+            operand: Box::new(operand),
+        }
+    }
+
+    pub(super) fn col<T>(col_name: T, qualifier: Option<T>) -> Self
+    where
+        T: Into<String>,
+    {
+        Expr::Column(ColumnRef {
+            qualifier: qualifier.map(Into::into),
+            name: col_name.into(),
+        })
     }
 }
 
@@ -1054,7 +1095,68 @@ impl Display for Expr {
             Expr::Literal(v) => write!(f, "{v}"),
             Expr::Agg(func, arg) => write!(f, "{func}({arg})"),
             Expr::CountStar => write!(f, "COUNT(*)"),
+            Expr::BinaryOp { lhs, op, rhs } => write!(f, "({lhs} {op} {rhs})"),
+            Expr::UnaryOp { op, operand } => write!(f, "({op} {operand})"),
         }
+    }
+}
+
+/// A binary operator usable inside an [`Expr::BinaryOp`].
+///
+/// Grouped roughly by the type the binder will require of the operands and
+/// produce as a result:
+///
+/// - **Logical**: `And`, `Or` — both operands and the result are boolean.
+/// - **Comparison**: `Eq`, `NotEq`, `Lt`, `LtEq`, `Gt`, `GtEq` — operands of compatible scalar
+///   types, result is boolean.
+///
+/// The parser produces these from the SQL surface tokens (`AND`, `OR`, `=`,
+/// `!=`/`<>`, `<`, `<=`, `>`, `>=`). Arithmetic operators (`+`, `-`, `*`, `/`,
+/// `%`) will land here when expression-level arithmetic is wired through the
+/// parser and the runtime evaluator.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BinOp {
+    And,
+    Or,
+    Eq,
+    NotEq,
+    Lt,
+    LtEq,
+    Gt,
+    GtEq,
+}
+
+impl Display for BinOp {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let s = match self {
+            BinOp::And => "AND",
+            BinOp::Or => "OR",
+            BinOp::Eq => "=",
+            BinOp::NotEq => "<>",
+            BinOp::Lt => "<",
+            BinOp::LtEq => "<=",
+            BinOp::Gt => ">",
+            BinOp::GtEq => ">=",
+        };
+        f.write_str(s)
+    }
+}
+
+/// A unary operator usable inside an [`Expr::UnaryOp`].
+///
+/// Currently only `NOT` (logical negation, boolean → boolean). Unary minus
+/// for arithmetic will join this enum when arithmetic lands.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UnOp {
+    Not,
+}
+
+impl Display for UnOp {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let s = match self {
+            UnOp::Not => "NOT",
+        };
+        f.write_str(s)
     }
 }
 

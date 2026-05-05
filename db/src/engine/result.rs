@@ -1,6 +1,10 @@
 use std::fmt;
 
-use crate::{FileId, index::IndexKind, tuple::Tuple};
+use crate::{
+    FileId,
+    index::IndexKind,
+    tuple::{Tuple, TupleSchema},
+};
 
 /// One row in the result of `SHOW INDEXES`.
 #[derive(Debug, Clone)]
@@ -50,6 +54,7 @@ pub enum StatementResult {
     },
     Selected {
         table: String,
+        schema: TupleSchema,
         rows: Vec<Tuple>,
     },
 }
@@ -194,11 +199,15 @@ impl fmt::Display for StatementResult {
                     "UPDATE completed: modified {rows} {row_word} in heap table '{table}'",
                 )
             }
-            StatementResult::Selected { table, rows } => {
+            StatementResult::Selected {
+                table,
+                schema,
+                rows,
+            } => {
                 let row_word = if rows.len() == 1 { "row" } else { "rows" };
                 write!(
                     f,
-                    "SELECT completed: returned {} {row_word} from '{table}'",
+                    "SELECT completed: returned {} {row_word} from '{table}' with columns {schema:?}",
                     rows.len()
                 )
             }

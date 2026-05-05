@@ -44,7 +44,7 @@ use crate::{
     },
     heap::page::HeapPage,
     primitives::{PageId, RecordId, SlotId},
-    storage::{Page, StorageError},
+    storage::{PAGE_SIZE, Page, StorageError},
     tuple::{Tuple, TupleSchema},
     wal::writer::{Wal, WalError},
 };
@@ -122,6 +122,33 @@ impl HeapFile {
     /// sees all pages initialized by prior atomic stores.
     fn num_pages(&self) -> u32 {
         self.num_pages.load(Ordering::Acquire)
+    }
+
+    /// Public view of the current page count, for tooling/visualization.
+    ///
+    /// Equivalent to the internal [`Self::num_pages`] but exposed so the HTTP
+    /// layer can iterate every page of a file without going through a scan.
+    pub fn page_count(&self) -> u32 {
+        self.num_pages()
+    }
+
+    /// Reads page `page_no` and returns its raw bytes.
+    ///
+    /// Acquires a shared page lock just long enough to copy the bytes out,
+    /// then drops it. Intended for read-only inspection (e.g. heap-page
+    /// visualization) — no decoding of slots or tuples is performed here.
+    ///
+    /// # Errors
+    ///
+    /// - [`HeapError::Store`] — the page store could not fetch or lock the page.
+    pub fn read_raw_page(
+        &self,
+        page_no: u32,
+        transaction_id: TransactionId,
+    ) -> Result<[u8; PAGE_SIZE], HeapError> {
+        let page_id = self.page_id(PageNumber(page_no));
+        let guard = self.guard(page_id, transaction_id, false)?;
+        Ok(guard.read())
     }
 
     /// Returns the schema of the file.
