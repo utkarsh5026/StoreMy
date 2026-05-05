@@ -6,7 +6,7 @@ use crate::{
     binder::{BindError, Bound},
     buffer_pool::page_store::PageStoreError,
     catalog::{CatalogError, manager::Catalog},
-    execution::expression::BooleanExpression,
+    execution::{ExecutionError, expression::BooleanExpression},
     heap::file::{HeapError, HeapFile},
     parser::statements::Statement,
     primitives::RecordId,
@@ -46,6 +46,9 @@ pub enum EngineError {
 
     #[error(transparent)]
     Index(#[from] crate::index::IndexError),
+
+    #[error(transparent)]
+    Execution(#[from] ExecutionError),
 
     #[error("table '{0}' not found")]
     TableNotFound(String),
