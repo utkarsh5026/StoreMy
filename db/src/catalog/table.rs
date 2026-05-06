@@ -46,6 +46,50 @@ impl Catalog {
         Ok(info)
     }
 
+    /// Returns metadata for a table by `file_id`, loading it from disk if needed.
+    ///
+    /// Checks the in-memory table cache first (by scanning cached values for a
+    /// matching `file_id`). On a miss, reads the `Tables`, `Columns`, and
+    /// `PrimaryKeyColumns` system tables inside `txn`, reconstructs the
+    /// [`TableInfo`], warms the cache, and returns it.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CatalogError::TableNotFound`] if no table with `file_id`
+    /// exists in the system catalog. Propagates scan, deserialization, and
+    /// heap-open errors from the slow path.
+    pub fn get_table_info_by_id(
+        &self,
+        txn: &Transaction<'_>,
+        file_id: FileId,
+    ) -> Result<TableInfo, CatalogError> {
+        if let Some(info) = self
+            .user_tables
+            .read()
+            .values()
+            .find(|info| info.file_id == file_id)
+            .cloned()
+        {
+            return Ok(info);
+        }
+
+        let table = self
+            .scan_system_table_where::<TableRow, _>(txn, |r| r.table_id == file_id)?
+            .pop()
+            .ok_or_else(|| CatalogError::table_not_found(file_id.to_string()))?;
+
+        let cols = self.scan_system_table_where::<ColumnRow, _>(txn, |c| c.table_id == file_id)?;
+
+        let pk_rows =
+            self.scan_system_table_where::<PrimaryKeyColumnRow, _>(txn, |r| r.table_id == file_id)?;
+
+        let info = self.install_table(table, cols, pk_rows)?;
+        self.user_tables
+            .write()
+            .insert(info.name.clone(), info.clone());
+        Ok(info)
+    }
+
     /// Returns true if a table with the given name exists in the catalog.
     ///
     /// This function does not perform any I/O or disk operations.
@@ -374,7 +418,6 @@ impl Catalog {
         cache.insert(new_name.to_string(), table);
         Ok(())
     }
-
 }
 
 #[cfg(test)]
@@ -486,8 +529,6 @@ mod tests {
         );
     }
 
-    // ── get_table_info: error paths ───────────────────────────────────────
-
     // Asking for a table that was never created must return TableNotFound.
     #[test]
     fn test_get_table_info_nonexistent_table_returns_not_found() {
@@ -496,6 +537,66 @@ mod tests {
         let txn = txn_mgr.begin().unwrap();
 
         let result = catalog.get_table_info(&txn, "ghost");
+        assert!(
+            matches!(result, Err(CatalogError::TableNotFound { .. })),
+            "expected TableNotFound, got: {:?}",
+            result.err()
+        );
+        txn.commit().unwrap();
+    }
+
+    #[test]
+    fn test_get_table_info_by_id_cache_hit_returns_same_info() {
+        let dir = tempdir().unwrap();
+        let (catalog, txn_mgr) = make_catalog_and_txn(dir.path());
+        let txn = txn_mgr.begin().unwrap();
+
+        let file_id = catalog
+            .create_table(&txn, "users_by_id", two_col_schema(), None)
+            .unwrap();
+        txn.commit().unwrap();
+
+        let txn2 = txn_mgr.begin().unwrap();
+        let info = catalog.get_table_info_by_id(&txn2, file_id).unwrap();
+        txn2.commit().unwrap();
+
+        assert_eq!(info.name, "users_by_id");
+        assert_eq!(info.file_id, file_id);
+    }
+
+    // Cache miss: evict from in-memory cache and reload by file_id from disk.
+    #[test]
+    fn test_get_table_info_by_id_cache_miss_loads_from_disk() {
+        let dir = tempdir().unwrap();
+        let (catalog, txn_mgr) = make_catalog_and_txn(dir.path());
+        let txn = txn_mgr.begin().unwrap();
+
+        let file_id = catalog
+            .create_table(&txn, "orders_by_id", two_col_schema(), None)
+            .unwrap();
+        txn.commit().unwrap();
+
+        catalog.user_tables.write().remove("orders_by_id");
+
+        let txn2 = txn_mgr.begin().unwrap();
+        let info = catalog.get_table_info_by_id(&txn2, file_id).unwrap();
+        txn2.commit().unwrap();
+
+        assert_eq!(info.name, "orders_by_id");
+        assert_eq!(info.file_id, file_id);
+        assert!(
+            catalog.user_tables.read().contains_key("orders_by_id"),
+            "cache should be repopulated after a miss"
+        );
+    }
+
+    #[test]
+    fn test_get_table_info_by_id_nonexistent_returns_not_found() {
+        let dir = tempdir().unwrap();
+        let (catalog, txn_mgr) = make_catalog_and_txn(dir.path());
+        let txn = txn_mgr.begin().unwrap();
+
+        let result = catalog.get_table_info_by_id(&txn, FileId(999_999));
         assert!(
             matches!(result, Err(CatalogError::TableNotFound { .. })),
             "expected TableNotFound, got: {:?}",
@@ -1101,5 +1202,4 @@ mod tests {
 
         assert_eq!(info.name, "b", "reloaded name must be the new name");
     }
-
 }
