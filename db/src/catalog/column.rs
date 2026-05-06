@@ -6,8 +6,13 @@
 
 use crate::{
     FileId,
-    catalog::{CatalogError, manager::Catalog, systable::ColumnRow},
+    catalog::{
+        CatalogError,
+        manager::Catalog,
+        systable::{ColumnRow, PrimaryKeyColumnRow},
+    },
     transaction::Transaction,
+    tuple::TupleSchema,
 };
 
 impl Catalog {
@@ -36,21 +41,10 @@ impl Catalog {
         old_name: &str,
         new_name: &str,
     ) -> Result<(), CatalogError> {
-        let column = self
-            .scan_system_table_where::<ColumnRow, _>(txn, |r| {
-                r.table_id == table_id && r.column_name == old_name
-            })?
-            .pop()
-            .ok_or_else(|| {
-                let table_name = self
-                    .table_name_by_id(table_id)
-                    .unwrap_or_else(|| table_id.to_string());
-                CatalogError::column_not_found(table_name, old_name)
-            })?;
+        let table = self.get_table_info_by_id(txn, table_id)?;
+        let column = self.get_table_col(txn, &table.name, table_id, old_name)?;
 
-        self.delete_systable_rows::<ColumnRow, _>(txn, |r| {
-            r.table_id == table_id && r.column_name == old_name
-        })?;
+        self.delete_column(txn, table_id, old_name)?;
 
         let new_column = ColumnRow::new(
             table_id,
@@ -61,6 +55,118 @@ impl Catalog {
         )?;
         self.insert_systable_tuple(txn, &new_column)?;
         Ok(())
+    }
+
+    /// Drops a non-primary-key column from a table in the catalog.
+    ///
+    /// The operation:
+    /// 1. Resolves the target table and column metadata.
+    /// 2. Verifies the column is not part of the primary key.
+    /// 3. Deletes the column row from the `Columns` system table.
+    /// 4. Rebuilds the table schema from remaining catalog rows and updates the in-memory
+    ///    `user_tables` cache entry for that table.
+    ///
+    /// This updates catalog metadata only. Existing heap tuples are not
+    /// rewritten here; higher layers are responsible for coordinating any data
+    /// migration semantics around column drops.
+    ///
+    /// # Errors
+    ///
+    /// - Returns [`CatalogError::TableNotFound`] if `table_id` does not resolve to a table.
+    /// - Returns [`CatalogError::ColumnNotFound`] if `column_name` is not found in `table_id`.
+    /// - Returns [`CatalogError::CannotAlterPrimaryKeyColumn`] if `column_name` is part of the
+    ///   table's primary key.
+    /// - Propagates system-table scan and write errors.
+    pub fn drop_column(
+        &self,
+        txn: &Transaction<'_>,
+        table_id: FileId,
+        column_name: &str,
+    ) -> Result<(), CatalogError> {
+        let mut table = self.get_table_info_by_id(txn, table_id)?;
+        let col = self.get_table_col(txn, &table.name, table_id, column_name)?;
+
+        let pk_cols = self.scan_system_table_where::<PrimaryKeyColumnRow, _>(txn, |r| {
+            r.table_id == table_id && r.column_id == col.position
+        })?;
+
+        if !pk_cols.is_empty() {
+            return Err(CatalogError::cannot_alter_primary_key_column(
+                &table.name,
+                column_name,
+            ));
+        }
+
+        self.delete_column(txn, table_id, column_name)?;
+
+        let cols = self.scan_system_table_where::<ColumnRow, _>(txn, |r| r.table_id == table_id)?;
+        let new_schema = TupleSchema::from(cols);
+        table.schema = new_schema;
+
+        let mut cache = self.user_tables.write();
+        cache.remove(&table.name);
+        cache.insert(table.name.clone(), table);
+        Ok(())
+    }
+
+    /// Deletes a column definition from the system catalog's columns table.
+    ///
+    /// Removes all entries in the system `ColumnRow` table for the column named `column_name`
+    /// in the table identified by `table_id`. This does not update any in-memory cache or
+    /// table schema; the caller is responsible for evicting/reloading the in-memory metadata.
+    ///
+    /// # Arguments
+    ///
+    /// * `txn` - The active catalog transaction.
+    /// * `table_id` - The ID of the table whose column should be deleted.
+    /// * `column_name` - The name of the column to delete.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the underlying system table row deletion fails.
+    fn delete_column(
+        &self,
+        txn: &Transaction<'_>,
+        table_id: FileId,
+        column_name: &str,
+    ) -> Result<(), CatalogError> {
+        self.delete_systable_rows::<ColumnRow, _>(txn, |r| {
+            r.table_id == table_id && r.column_name == column_name
+        })?;
+        Ok(())
+    }
+
+    /// Looks up a column definition by name and table in the catalog.
+    ///
+    /// Searches the system catalog for a column with the given `column_name` in the
+    /// table identified by `table_id`. Returns the corresponding [`ColumnRow`] if found;
+    /// otherwise, returns [`CatalogError::column_not_found`].
+    ///
+    /// # Arguments
+    ///
+    /// * `txn` - Active catalog transaction.
+    /// * `table_name` - The table's name (only used for error messages).
+    /// * `table_id` - The table's unique file identifier.
+    /// * `column_name` - The name of the column to look up.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CatalogError::column_not_found`] if the column does not exist in the catalog.
+    fn get_table_col(
+        &self,
+        txn: &Transaction<'_>,
+        table_name: &str,
+        table_id: FileId,
+        column_name: &str,
+    ) -> Result<ColumnRow, CatalogError> {
+        let col = self
+            .scan_system_table_where::<ColumnRow, _>(txn, |r| {
+                r.table_id == table_id && r.column_name == column_name
+            })?
+            .pop()
+            .ok_or_else(|| CatalogError::column_not_found(table_name, column_name))?;
+
+        Ok(col)
     }
 }
 
@@ -75,6 +181,7 @@ mod tests {
         Type,
         buffer_pool::page_store::PageStore,
         catalog::CatalogError,
+        primitives::ColumnId,
         transaction::TransactionManager,
         tuple::{Field, TupleSchema},
         wal::writer::Wal,
@@ -98,6 +205,10 @@ mod tests {
             Field::new("id", Type::Uint64).not_null(),
             Field::new("name", Type::String).not_null(),
         ])
+    }
+
+    fn col(id: usize) -> ColumnId {
+        ColumnId::try_from(id).unwrap()
     }
 
     // Happy path: the new column name is visible after evicting the cache and
@@ -217,5 +328,181 @@ mod tests {
 
         assert_eq!(pk_field.field_type, Type::Uint64, "type must be preserved");
         assert!(!pk_field.nullable, "nullability must be preserved");
+    }
+
+    // ── drop_column ───────────────────────────────────────────────────────
+
+    // Dropping a PK column must be rejected.
+    #[test]
+    fn test_drop_column_primary_key_returns_cannot_alter_primary_key() {
+        let dir = tempdir().unwrap();
+        let (catalog, txn_mgr) = make_catalog_and_txn(dir.path());
+
+        let txn = txn_mgr.begin().unwrap();
+        let file_id = catalog
+            .create_table(&txn, "t", two_col_schema(), Some(vec![col(0)]))
+            .unwrap();
+        txn.commit().unwrap();
+
+        let txn2 = txn_mgr.begin().unwrap();
+        let result = catalog.drop_column(&txn2, file_id, "id");
+        txn2.commit().unwrap();
+
+        assert!(
+            matches!(
+                result,
+                Err(CatalogError::CannotAlterPrimaryKeyColumn { .. })
+            ),
+            "expected CannotAlterPrimaryKeyColumn, got: {result:?}"
+        );
+    }
+
+    // Happy path: dropped column is absent from the in-memory schema immediately.
+    #[test]
+    fn test_drop_column_absent_from_cache_immediately() {
+        let dir = tempdir().unwrap();
+        let (catalog, txn_mgr) = make_catalog_and_txn(dir.path());
+
+        let txn = txn_mgr.begin().unwrap();
+        let file_id = catalog
+            .create_table(&txn, "t", two_col_schema(), None)
+            .unwrap();
+        txn.commit().unwrap();
+
+        let txn2 = txn_mgr.begin().unwrap();
+        catalog.drop_column(&txn2, file_id, "name").unwrap();
+        let info = catalog.get_table_info(&txn2, "t").unwrap();
+        txn2.commit().unwrap();
+
+        let col_names: Vec<_> = info.schema.fields().map(|f| f.name.as_str()).collect();
+        assert!(
+            !col_names.contains(&"name"),
+            "dropped column must not appear in schema, got: {col_names:?}"
+        );
+    }
+
+    // The surviving column must still be present after the drop.
+    #[test]
+    fn test_drop_column_sibling_column_survives() {
+        let dir = tempdir().unwrap();
+        let (catalog, txn_mgr) = make_catalog_and_txn(dir.path());
+
+        let txn = txn_mgr.begin().unwrap();
+        let file_id = catalog
+            .create_table(&txn, "t", two_col_schema(), None)
+            .unwrap();
+        txn.commit().unwrap();
+
+        let txn2 = txn_mgr.begin().unwrap();
+        catalog.drop_column(&txn2, file_id, "name").unwrap();
+        let info = catalog.get_table_info(&txn2, "t").unwrap();
+        txn2.commit().unwrap();
+
+        let col_names: Vec<_> = info.schema.fields().map(|f| f.name.as_str()).collect();
+        assert!(
+            col_names.contains(&"id"),
+            "surviving column must remain in schema, got: {col_names:?}"
+        );
+    }
+
+    // Schema change must persist across a cache evict + reload cycle.
+    #[test]
+    fn test_drop_column_survives_cache_evict_and_reload() {
+        let dir = tempdir().unwrap();
+        let (catalog, txn_mgr) = make_catalog_and_txn(dir.path());
+
+        let txn = txn_mgr.begin().unwrap();
+        let file_id = catalog
+            .create_table(&txn, "t", two_col_schema(), None)
+            .unwrap();
+        txn.commit().unwrap();
+
+        let txn2 = txn_mgr.begin().unwrap();
+        catalog.drop_column(&txn2, file_id, "name").unwrap();
+        txn2.commit().unwrap();
+
+        catalog.user_tables.write().remove("t");
+
+        let txn3 = txn_mgr.begin().unwrap();
+        let info = catalog.get_table_info(&txn3, "t").unwrap();
+        txn3.commit().unwrap();
+
+        let col_names: Vec<_> = info.schema.fields().map(|f| f.name.as_str()).collect();
+        assert_eq!(
+            col_names, &["id"],
+            "only surviving column must remain after reload, got: {col_names:?}"
+        );
+    }
+
+    // Dropping a column that does not exist must return ColumnNotFound.
+    #[test]
+    fn test_drop_column_nonexistent_returns_column_not_found() {
+        let dir = tempdir().unwrap();
+        let (catalog, txn_mgr) = make_catalog_and_txn(dir.path());
+
+        let txn = txn_mgr.begin().unwrap();
+        let file_id = catalog
+            .create_table(&txn, "t", two_col_schema(), None)
+            .unwrap();
+        txn.commit().unwrap();
+
+        let txn2 = txn_mgr.begin().unwrap();
+        let result = catalog.drop_column(&txn2, file_id, "ghost");
+        txn2.commit().unwrap();
+
+        assert!(
+            matches!(result, Err(CatalogError::ColumnNotFound { .. })),
+            "expected ColumnNotFound for a nonexistent column, got: {result:?}"
+        );
+    }
+
+    // Dropping a non-PK column on a table that has a PK must succeed.
+    #[test]
+    fn test_drop_column_non_pk_on_table_with_pk_succeeds() {
+        let dir = tempdir().unwrap();
+        let (catalog, txn_mgr) = make_catalog_and_txn(dir.path());
+
+        let txn = txn_mgr.begin().unwrap();
+        // "id" is the PK; "name" is a plain column — dropping "name" must be allowed.
+        let file_id = catalog
+            .create_table(&txn, "t", two_col_schema(), Some(vec![col(0)]))
+            .unwrap();
+        txn.commit().unwrap();
+
+        let txn2 = txn_mgr.begin().unwrap();
+        let result = catalog.drop_column(&txn2, file_id, "name");
+        txn2.commit().unwrap();
+
+        assert!(
+            result.is_ok(),
+            "dropping a non-PK column on a table with a PK must succeed, got: {result:?}"
+        );
+    }
+
+    // Dropping a column from a composite PK must be rejected for every PK member.
+    #[test]
+    fn test_drop_column_composite_pk_member_rejected() {
+        let dir = tempdir().unwrap();
+        let (catalog, txn_mgr) = make_catalog_and_txn(dir.path());
+
+        let txn = txn_mgr.begin().unwrap();
+        let file_id = catalog
+            .create_table(&txn, "t", two_col_schema(), Some(vec![col(0), col(1)]))
+            .unwrap();
+        txn.commit().unwrap();
+
+        let txn2 = txn_mgr.begin().unwrap();
+        let r1 = catalog.drop_column(&txn2, file_id, "id");
+        let r2 = catalog.drop_column(&txn2, file_id, "name");
+        txn2.commit().unwrap();
+
+        assert!(
+            matches!(r1, Err(CatalogError::CannotAlterPrimaryKeyColumn { .. })),
+            "first PK column must be rejected, got: {r1:?}"
+        );
+        assert!(
+            matches!(r2, Err(CatalogError::CannotAlterPrimaryKeyColumn { .. })),
+            "second PK column must be rejected, got: {r2:?}"
+        );
     }
 }
