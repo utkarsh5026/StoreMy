@@ -1,3 +1,4 @@
+pub mod column;
 pub mod index;
 pub mod manager;
 pub mod systable;
@@ -87,5 +88,15 @@ impl CatalogError {
 
     pub(super) fn heap_not_found(file_id: crate::FileId) -> Self {
         Self::HeapNotFound { file_id }
+    }
+
+    pub(super) fn column_not_found(
+        table_name: impl Into<String>,
+        column_name: impl Into<String>,
+    ) -> Self {
+        Self::ColumnNotFound {
+            table_name: table_name.into(),
+            column_name: column_name.into(),
+        }
     }
 }

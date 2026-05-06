@@ -336,6 +336,45 @@ impl Catalog {
 
         Ok(())
     }
+
+    /// Renames a user table in the catalog.
+    ///
+    /// This updates the `Tables` system table row (logical name) and keeps the
+    /// in-memory `user_tables` cache consistent by removing `old_name` and
+    /// inserting the same table metadata under `new_name`.
+    ///
+    /// Note that this does **not** rename or move the underlying heap file on
+    /// disk: the table's `file_id` and `file_path` remain unchanged.
+    ///
+    /// # Errors
+    ///
+    /// - Returns [`CatalogError::TableAlreadyExists`] if `new_name` is already present in the
+    ///   in-memory cache.
+    /// - Returns [`CatalogError::TableNotFound`] if `old_name` does not exist.
+    pub fn rename_table(
+        &self,
+        txn: &Transaction<'_>,
+        old_name: &str,
+        new_name: &str,
+    ) -> Result<(), CatalogError> {
+        if self.table_exists(new_name) {
+            return Err(CatalogError::table_already_exists(new_name));
+        }
+        let mut table = self.get_table_info(txn, old_name)?;
+
+        self.delete_systable_rows::<TableRow, _>(txn, |r| r.table_name == old_name)?;
+        self.insert_systable_tuple(
+            txn,
+            &TableRow::new(table.file_id, new_name.to_string(), table.file_path.clone())?,
+        )?;
+
+        table.name = new_name.to_string();
+        let mut cache = self.user_tables.write();
+        cache.remove(old_name);
+        cache.insert(new_name.to_string(), table);
+        Ok(())
+    }
+
 }
 
 #[cfg(test)]
@@ -914,4 +953,153 @@ mod tests {
             "should be able to recreate a table after dropping it"
         );
     }
+
+    #[test]
+    fn test_rename_table_updates_cache_and_table_info_name() {
+        let dir = tempdir().unwrap();
+        let (catalog, txn_mgr) = make_catalog_and_txn(dir.path());
+
+        let txn = txn_mgr.begin().unwrap();
+        catalog
+            .create_table(&txn, "old", one_col_schema(), None)
+            .unwrap();
+        txn.commit().unwrap();
+
+        let txn2 = txn_mgr.begin().unwrap();
+        catalog.rename_table(&txn2, "old", "new").unwrap();
+        txn2.commit().unwrap();
+
+        assert!(
+            !catalog.table_exists("old"),
+            "old name must be removed from cache"
+        );
+        assert!(
+            catalog.table_exists("new"),
+            "new name must be present in cache"
+        );
+
+        let txn3 = txn_mgr.begin().unwrap();
+        let info = catalog.get_table_info(&txn3, "new").unwrap();
+        txn3.commit().unwrap();
+
+        assert_eq!(info.name, "new", "TableInfo.name must match the cache key");
+    }
+
+    // Renaming to a name that is already taken must return TableAlreadyExists.
+    #[test]
+    fn test_rename_table_to_existing_name_returns_already_exists() {
+        let dir = tempdir().unwrap();
+        let (catalog, txn_mgr) = make_catalog_and_txn(dir.path());
+
+        let txn = txn_mgr.begin().unwrap();
+        catalog
+            .create_table(&txn, "alpha", one_col_schema(), None)
+            .unwrap();
+        catalog
+            .create_table(&txn, "beta", one_col_schema(), None)
+            .unwrap();
+        txn.commit().unwrap();
+
+        let txn2 = txn_mgr.begin().unwrap();
+        let result = catalog.rename_table(&txn2, "alpha", "beta");
+        txn2.commit().unwrap();
+
+        assert!(
+            matches!(result, Err(CatalogError::TableAlreadyExists { .. })),
+            "expected TableAlreadyExists when target name is taken, got: {result:?}"
+        );
+    }
+
+    // Renaming a table that does not exist must return TableNotFound.
+    #[test]
+    fn test_rename_table_nonexistent_returns_not_found() {
+        let dir = tempdir().unwrap();
+        let (catalog, txn_mgr) = make_catalog_and_txn(dir.path());
+
+        let txn = txn_mgr.begin().unwrap();
+        let result = catalog.rename_table(&txn, "ghost", "specter");
+        txn.commit().unwrap();
+
+        assert!(
+            matches!(result, Err(CatalogError::TableNotFound { .. })),
+            "expected TableNotFound when renaming a nonexistent table, got: {result:?}"
+        );
+    }
+
+    // The heap file_path must not change after a rename (only the logical name moves).
+    #[test]
+    fn test_rename_table_file_path_unchanged() {
+        let dir = tempdir().unwrap();
+        let (catalog, txn_mgr) = make_catalog_and_txn(dir.path());
+
+        let txn = txn_mgr.begin().unwrap();
+        catalog
+            .create_table(&txn, "before", one_col_schema(), None)
+            .unwrap();
+        txn.commit().unwrap();
+
+        let txn2 = txn_mgr.begin().unwrap();
+        let before_path = catalog.get_table_info(&txn2, "before").unwrap().file_path;
+        catalog.rename_table(&txn2, "before", "after").unwrap();
+        let after_path = catalog.get_table_info(&txn2, "after").unwrap().file_path;
+        txn2.commit().unwrap();
+
+        assert_eq!(
+            before_path, after_path,
+            "file_path must not change after a table rename"
+        );
+    }
+
+    // Schema and primary key must survive a rename.
+    #[test]
+    fn test_rename_table_schema_and_pk_preserved() {
+        let dir = tempdir().unwrap();
+        let (catalog, txn_mgr) = make_catalog_and_txn(dir.path());
+
+        let txn = txn_mgr.begin().unwrap();
+        catalog
+            .create_table(&txn, "src", two_col_schema(), Some(vec![col(0)]))
+            .unwrap();
+        txn.commit().unwrap();
+
+        let txn2 = txn_mgr.begin().unwrap();
+        catalog.rename_table(&txn2, "src", "dst").unwrap();
+        let info = catalog.get_table_info(&txn2, "dst").unwrap();
+        txn2.commit().unwrap();
+
+        let col_names: Vec<_> = info.schema.fields().map(|f| f.name.as_str()).collect();
+        assert_eq!(col_names, &["id", "name"], "schema must survive rename");
+        assert_eq!(
+            info.primary_key,
+            Some(vec![col(0)]),
+            "primary key must survive rename"
+        );
+    }
+
+    // After evicting the cache, a reload under the new name must succeed.
+    #[test]
+    fn test_rename_table_survives_cache_evict_and_reload() {
+        let dir = tempdir().unwrap();
+        let (catalog, txn_mgr) = make_catalog_and_txn(dir.path());
+
+        let txn = txn_mgr.begin().unwrap();
+        catalog
+            .create_table(&txn, "a", one_col_schema(), None)
+            .unwrap();
+        txn.commit().unwrap();
+
+        let txn2 = txn_mgr.begin().unwrap();
+        catalog.rename_table(&txn2, "a", "b").unwrap();
+        txn2.commit().unwrap();
+
+        // Force a cache miss so the next lookup goes to disk.
+        catalog.user_tables.write().remove("b");
+
+        let txn3 = txn_mgr.begin().unwrap();
+        let info = catalog.get_table_info(&txn3, "b").unwrap();
+        txn3.commit().unwrap();
+
+        assert_eq!(info.name, "b", "reloaded name must be the new name");
+    }
+
 }
