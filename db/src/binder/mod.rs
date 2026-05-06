@@ -4,6 +4,7 @@
 //! is syntactically valid SQL but refers to something that doesn't exist,
 //! has a type mismatch, or violates a static rule. The executor can assume
 //! every `Bound` value it receives is internally consistent.
+
 use thiserror::Error;
 
 use crate::{
@@ -15,12 +16,18 @@ use crate::{
 mod ddl;
 mod dml;
 pub mod expr;
+mod helpers;
 pub mod query;
 mod scope;
 
-pub use ddl::{BoundCreateIndex, BoundCreateTable, BoundDrop, BoundDropIndex, BoundShowIndexes};
+pub use ddl::{
+    BoundAlterTable, BoundCreateIndex, BoundCreateTable, BoundDrop, BoundDropIndex,
+    BoundShowIndexes,
+};
 pub use dml::{BoundDelete, BoundInsert, BoundUpdate};
 pub use expr::BoundExpr;
+pub(in crate::binder) use helpers::check_table;
+pub(in crate::binder) use helpers::ensure_unique_strs;
 pub use query::BoundSelect;
 
 #[derive(Debug, Error)]
@@ -115,6 +122,7 @@ pub enum Bound {
     Insert(BoundInsert),
     Update(BoundUpdate),
     Select(BoundSelect),
+    AlterTable(BoundAlterTable),
 }
 
 impl Bound {
@@ -145,9 +153,9 @@ impl Bound {
             Statement::ShowIndexes(s) => {
                 Ok(Self::ShowIndexes(BoundShowIndexes::bind(&s, catalog, txn)?))
             }
-            Statement::AlterTable(_) => Err(BindError::Unsupported(
-                "ALTER TABLE binding is not implemented yet".to_string(),
-            )),
+            Statement::AlterTable(s) => {
+                Ok(Self::AlterTable(BoundAlterTable::bind(s, catalog, txn)?))
+            }
         }
     }
 
@@ -168,6 +176,7 @@ impl Bound {
             Self::Insert(_) => "INSERT",
             Self::Update(_) => "UPDATE",
             Self::Select(_) => "SELECT",
+            Self::AlterTable(_) => "ALTER TABLE",
         }
     }
 }
