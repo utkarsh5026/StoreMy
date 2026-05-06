@@ -8,9 +8,11 @@ use crate::{
     FileId,
     catalog::{
         CatalogError,
-        manager::Catalog,
+        manager::{Catalog, TableInfo},
         systable::{ColumnRow, PrimaryKeyColumnRow},
     },
+    parser::statements::ColumnDef,
+    primitives::ColumnId,
     transaction::Transaction,
     tuple::TupleSchema,
 };
@@ -54,7 +56,7 @@ impl Catalog {
             column.nullable,
         )?;
         self.insert_systable_tuple(txn, &new_column)?;
-        Ok(())
+        self.refresh_table_schema(txn, table)
     }
 
     /// Drops a non-primary-key column from a table in the catalog.
@@ -83,7 +85,7 @@ impl Catalog {
         table_id: FileId,
         column_name: &str,
     ) -> Result<(), CatalogError> {
-        let mut table = self.get_table_info_by_id(txn, table_id)?;
+        let table = self.get_table_info_by_id(txn, table_id)?;
         let col = self.get_table_col(txn, &table.name, table_id, column_name)?;
 
         let pk_cols = self.scan_system_table_where::<PrimaryKeyColumnRow, _>(txn, |r| {
@@ -98,15 +100,54 @@ impl Catalog {
         }
 
         self.delete_column(txn, table_id, column_name)?;
+        self.refresh_table_schema(txn, table)
+    }
 
-        let cols = self.scan_system_table_where::<ColumnRow, _>(txn, |r| r.table_id == table_id)?;
-        let new_schema = TupleSchema::from(cols);
-        table.schema = new_schema;
+    /// Adds a column to an existing table in the catalog.
+    ///
+    /// This updates the `Columns` system table by inserting a new [`ColumnRow`]
+    /// with a position equal to the current schema's field count, then rebuilds
+    /// the table's [`TupleSchema`] from the system catalog and refreshes the
+    /// in-memory `user_tables` cache entry.
+    ///
+    /// This updates catalog metadata only. Existing heap tuples are not
+    /// rewritten here; higher layers are responsible for coordinating any data
+    /// backfill / default-value semantics for previously-stored rows.
+    ///
+    /// # Errors
+    ///
+    /// - Returns [`CatalogError::TableNotFound`] if `table_id` does not resolve to a table.
+    /// - Returns [`CatalogError::ColumnAlreadyExists`] if a column with the same name is already
+    ///   present in the catalog for this table.
+    /// - Returns [`CatalogError::InvalidCatalogRow`] if the computed column position does not fit
+    ///   in the on-disk [`ColumnId`] representation.
+    /// - Propagates validation errors from [`ColumnRow::new`] and system-table read/write errors.
+    pub fn add_column(
+        &self,
+        txn: &Transaction<'_>,
+        table_id: FileId,
+        column: ColumnDef,
+    ) -> Result<(), CatalogError> {
+        let table = self.get_table_info_by_id(txn, table_id)?;
+        if self
+            .get_table_col(txn, &table.name, table_id, &column.name)
+            .is_ok()
+        {
+            return Err(CatalogError::column_already_exists(table.name, column.name));
+        }
 
-        let mut cache = self.user_tables.write();
-        cache.remove(&table.name);
-        cache.insert(table.name.clone(), table);
-        Ok(())
+        let position = ColumnId::try_from(table.schema.num_fields())
+            .map_err(|_| CatalogError::invalid_catalog_row("column position out of range"))?;
+
+        let new_col = ColumnRow::new(
+            table_id,
+            column.name,
+            column.col_type,
+            position,
+            column.nullable,
+        )?;
+        self.insert_systable_tuple(txn, &new_col)?;
+        self.refresh_table_schema(txn, table)
     }
 
     /// Deletes a column definition from the system catalog's columns table.
@@ -167,6 +208,26 @@ impl Catalog {
             .ok_or_else(|| CatalogError::column_not_found(table_name, column_name))?;
 
         Ok(col)
+    }
+
+    /// Rebuilds a table's [`TupleSchema`] from the system catalog and writes
+    /// the updated [`TableInfo`] back into the in-memory cache.
+    ///
+    /// Call this after any operation that mutates `CATALOG_COLUMNS` for
+    /// `table.file_id` so that the cache stays consistent without requiring a
+    /// full evict-and-reload cycle.
+    fn refresh_table_schema(
+        &self,
+        txn: &Transaction<'_>,
+        mut table: TableInfo,
+    ) -> Result<(), CatalogError> {
+        let cols =
+            self.scan_system_table_where::<ColumnRow, _>(txn, |r| r.table_id == table.file_id)?;
+        table.schema = TupleSchema::from(cols);
+        let mut cache = self.user_tables.write();
+        cache.remove(&table.name);
+        cache.insert(table.name.clone(), table);
+        Ok(())
     }
 }
 
@@ -429,7 +490,8 @@ mod tests {
 
         let col_names: Vec<_> = info.schema.fields().map(|f| f.name.as_str()).collect();
         assert_eq!(
-            col_names, &["id"],
+            col_names,
+            &["id"],
             "only surviving column must remain after reload, got: {col_names:?}"
         );
     }
@@ -476,6 +538,184 @@ mod tests {
         assert!(
             result.is_ok(),
             "dropping a non-PK column on a table with a PK must succeed, got: {result:?}"
+        );
+    }
+
+    fn col_def(name: &str, ty: Type) -> crate::parser::statements::ColumnDef {
+        crate::parser::statements::ColumnDef {
+            name: name.to_string(),
+            col_type: ty,
+            nullable: true,
+            primary_key: false,
+            auto_increment: false,
+            default: None,
+        }
+    }
+
+    // ── add_column ────────────────────────────────────────────────────────
+
+    // Adding a new column appends it to the in-memory schema immediately.
+    #[test]
+    fn test_add_column_appears_in_schema_immediately() {
+        let dir = tempdir().unwrap();
+        let (catalog, txn_mgr) = make_catalog_and_txn(dir.path());
+
+        let txn = txn_mgr.begin().unwrap();
+        let file_id = catalog
+            .create_table(&txn, "t", two_col_schema(), None)
+            .unwrap();
+        txn.commit().unwrap();
+
+        let txn2 = txn_mgr.begin().unwrap();
+        catalog
+            .add_column(&txn2, file_id, col_def("age", Type::Int64))
+            .unwrap();
+        let info = catalog.get_table_info(&txn2, "t").unwrap();
+        txn2.commit().unwrap();
+
+        let names: Vec<_> = info.schema.fields().map(|f| f.name.as_str()).collect();
+        assert!(
+            names.contains(&"age"),
+            "new column must appear in schema immediately, got: {names:?}"
+        );
+    }
+
+    // The new column must be appended after the existing columns.
+    #[test]
+    fn test_add_column_appended_at_end() {
+        let dir = tempdir().unwrap();
+        let (catalog, txn_mgr) = make_catalog_and_txn(dir.path());
+
+        let txn = txn_mgr.begin().unwrap();
+        let file_id = catalog
+            .create_table(&txn, "t", two_col_schema(), None)
+            .unwrap();
+        txn.commit().unwrap();
+
+        let txn2 = txn_mgr.begin().unwrap();
+        catalog
+            .add_column(&txn2, file_id, col_def("age", Type::Int64))
+            .unwrap();
+        let info = catalog.get_table_info(&txn2, "t").unwrap();
+        txn2.commit().unwrap();
+
+        // two_col_schema gives (id, name); new column must come after both.
+        let names: Vec<_> = info.schema.fields().map(|f| f.name.as_str()).collect();
+        assert_eq!(
+            names.last().copied(),
+            Some("age"),
+            "new column must be last, got: {names:?}"
+        );
+    }
+
+    // Existing columns must still be present and in the same positions.
+    #[test]
+    fn test_add_column_existing_columns_unaffected() {
+        let dir = tempdir().unwrap();
+        let (catalog, txn_mgr) = make_catalog_and_txn(dir.path());
+
+        let txn = txn_mgr.begin().unwrap();
+        let file_id = catalog
+            .create_table(&txn, "t", two_col_schema(), None)
+            .unwrap();
+        txn.commit().unwrap();
+
+        let txn2 = txn_mgr.begin().unwrap();
+        catalog
+            .add_column(&txn2, file_id, col_def("extra", Type::Int64))
+            .unwrap();
+        let info = catalog.get_table_info(&txn2, "t").unwrap();
+        txn2.commit().unwrap();
+
+        let names: Vec<_> = info.schema.fields().map(|f| f.name.as_str()).collect();
+        assert_eq!(
+            &names[..2],
+            &["id", "name"],
+            "existing columns must remain at their positions, got: {names:?}"
+        );
+    }
+
+    // The schema change must survive a cache evict + reload from disk.
+    #[test]
+    fn test_add_column_survives_cache_evict_and_reload() {
+        let dir = tempdir().unwrap();
+        let (catalog, txn_mgr) = make_catalog_and_txn(dir.path());
+
+        let txn = txn_mgr.begin().unwrap();
+        let file_id = catalog
+            .create_table(&txn, "t", two_col_schema(), None)
+            .unwrap();
+        txn.commit().unwrap();
+
+        let txn2 = txn_mgr.begin().unwrap();
+        catalog
+            .add_column(&txn2, file_id, col_def("score", Type::Int64))
+            .unwrap();
+        txn2.commit().unwrap();
+
+        catalog.user_tables.write().remove("t");
+
+        let txn3 = txn_mgr.begin().unwrap();
+        let info = catalog.get_table_info(&txn3, "t").unwrap();
+        txn3.commit().unwrap();
+
+        let names: Vec<_> = info.schema.fields().map(|f| f.name.as_str()).collect();
+        assert_eq!(
+            names,
+            &["id", "name", "score"],
+            "schema must persist across reload, got: {names:?}"
+        );
+    }
+
+    // Adding two columns in sequence must produce schema length 4.
+    #[test]
+    fn test_add_column_twice_grows_schema() {
+        let dir = tempdir().unwrap();
+        let (catalog, txn_mgr) = make_catalog_and_txn(dir.path());
+
+        let txn = txn_mgr.begin().unwrap();
+        let file_id = catalog
+            .create_table(&txn, "t", two_col_schema(), None)
+            .unwrap();
+        txn.commit().unwrap();
+
+        let txn2 = txn_mgr.begin().unwrap();
+        catalog
+            .add_column(&txn2, file_id, col_def("a", Type::Int64))
+            .unwrap();
+        catalog
+            .add_column(&txn2, file_id, col_def("b", Type::Int64))
+            .unwrap();
+        let info = catalog.get_table_info(&txn2, "t").unwrap();
+        txn2.commit().unwrap();
+
+        assert_eq!(
+            info.schema.num_fields(),
+            4,
+            "schema must have 4 fields after two adds, got: {}",
+            info.schema.num_fields()
+        );
+    }
+
+    // Adding a column with a name that already exists must fail.
+    #[test]
+    fn test_add_column_duplicate_name_errors() {
+        let dir = tempdir().unwrap();
+        let (catalog, txn_mgr) = make_catalog_and_txn(dir.path());
+
+        let txn = txn_mgr.begin().unwrap();
+        let file_id = catalog
+            .create_table(&txn, "t", two_col_schema(), None)
+            .unwrap();
+        txn.commit().unwrap();
+
+        let txn2 = txn_mgr.begin().unwrap();
+        let result = catalog.add_column(&txn2, file_id, col_def("name", Type::Int64));
+        txn2.commit().unwrap();
+
+        assert!(
+            result.is_err(),
+            "adding a column whose name already exists must error, got: {result:?}"
         );
     }
 

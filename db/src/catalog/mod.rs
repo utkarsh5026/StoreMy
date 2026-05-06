@@ -28,6 +28,12 @@ pub enum CatalogError {
         column_name: String,
     },
 
+    #[error("column already exists")]
+    ColumnAlreadyExists {
+        table_name: String,
+        column_name: String,
+    },
+
     #[error("cannot alter primary key column")]
     CannotAlterPrimaryKeyColumn {
         table_name: String,
@@ -101,6 +107,16 @@ impl CatalogError {
         column_name: impl Into<String>,
     ) -> Self {
         Self::ColumnNotFound {
+            table_name: table_name.into(),
+            column_name: column_name.into(),
+        }
+    }
+
+    pub(super) fn column_already_exists(
+        table_name: impl Into<String>,
+        column_name: impl Into<String>,
+    ) -> Self {
+        Self::ColumnAlreadyExists {
             table_name: table_name.into(),
             column_name: column_name.into(),
         }
