@@ -39,8 +39,12 @@ pub fn execute_and_print(db: &Database, sql: &str, state: &ReplState) {
     println!();
 }
 
+#[allow(clippy::too_many_lines)]
 fn print_result(r: &StatementResult) {
     match r {
+        StatementResult::NoOp { statement } => {
+            theme::notice("NOTICE", &format!("{statement} (no-op)"));
+        }
         StatementResult::Selected {
             table,
             schema,
@@ -102,6 +106,43 @@ fn print_result(r: &StatementResult) {
         }
         StatementResult::IndexesShown { scope, rows } => {
             print_indexes(scope.as_deref(), rows);
+        }
+        StatementResult::ColumnRenamed {
+            table,
+            old_name,
+            new_name,
+        } => {
+            theme::ok(
+                "ALTER TABLE",
+                &format!(
+                    "renamed column {} to {} in {}",
+                    old_name.cyan(),
+                    new_name.cyan(),
+                    table.cyan()
+                ),
+            );
+        }
+        StatementResult::ColumnAdded { table, column_name } => {
+            theme::ok(
+                "ALTER TABLE",
+                &format!("added column {} to {}", column_name.cyan(), table.cyan()),
+            );
+        }
+        StatementResult::ColumnDropped { table, column_name } => {
+            theme::ok(
+                "ALTER TABLE",
+                &format!(
+                    "dropped column {} from {}",
+                    column_name.cyan(),
+                    table.cyan()
+                ),
+            );
+        }
+        StatementResult::TableRenamed { old_name, new_name } => {
+            theme::ok(
+                "ALTER TABLE",
+                &format!("renamed table {} to {}", old_name.cyan(), new_name.cyan()),
+            );
         }
     }
 }

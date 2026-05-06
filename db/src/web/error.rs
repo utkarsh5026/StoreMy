@@ -25,7 +25,7 @@ pub enum ApiError {
     /// Worker pool dropped the reply channel before sending — should not
     /// happen in practice. Surfaced as 500.
     WorkerGone,
-    /// Tokio failed to join the spawn_blocking task that called the engine.
+    /// Tokio failed to join the `spawn_blocking` task that called the engine.
     JoinError(String),
 }
 

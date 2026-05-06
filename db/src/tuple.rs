@@ -171,6 +171,8 @@ impl Field {
     ///
     /// # Examples
     /// ```
+    /// use storemy::{Type, tuple::Field};
+    ///
     /// let mut field = Field::new("old_name", Type::Int32);
     /// field.set_name("new_name");
     /// assert_eq!(field.name, "new_name");

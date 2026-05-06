@@ -64,7 +64,6 @@ tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "signal
 
 # HTTP server (storemy-server bin only)
 axum = "0.7"
-tower = "0.5"
 tower-http = { version = "0.6", features = ["cors", "trace", "fs"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

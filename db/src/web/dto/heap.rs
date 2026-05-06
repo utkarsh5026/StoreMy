@@ -311,8 +311,7 @@ fn decode_tuple_bytes(body: &[u8], schema: &TupleSchema) -> SlotDecodeDto {
             Ok(v) => {
                 let type_name = v
                     .get_type()
-                    .map(|t| t.to_string())
-                    .unwrap_or_else(|| "NULL".to_string());
+                    .map_or_else(|| "NULL".to_string(), |t| t.to_string());
                 fields.push(DecodedFieldDto {
                     index: i,
                     name: field.name.clone(),
@@ -337,9 +336,13 @@ fn decode_tuple_bytes(body: &[u8], schema: &TupleSchema) -> SlotDecodeDto {
 }
 
 fn hex(bytes: &[u8]) -> String {
+    use std::fmt::Write;
+
     let mut s = String::with_capacity(bytes.len() * 2);
     for b in bytes {
-        s.push_str(&format!("{b:02x}"));
+        // Writing directly into the existing String avoids allocating a
+        // temporary formatted String for each byte.
+        write!(&mut s, "{b:02x}").expect("writing into a String cannot fail");
     }
     s
 }

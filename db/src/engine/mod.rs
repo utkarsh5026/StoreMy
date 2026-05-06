@@ -130,7 +130,7 @@ impl<'a> Engine<'a> {
             Statement::Delete(_) => self.exec_delete(stmt),
             Statement::Update(s) => self.exec_update(s),
             Statement::Select(_) => self.exec_select(stmt),
-            Statement::AlterTable(_) => Err(EngineError::Unsupported(stmt.to_string())),
+            Statement::AlterTable(s) => self.exec_alter_table(s),
         };
         if let Err(e) = &result {
             tracing::warn!(error = %e, "statement failed");

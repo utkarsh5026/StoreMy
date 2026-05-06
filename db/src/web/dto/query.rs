@@ -73,9 +73,7 @@ pub fn value_to_json(v: &Value) -> JsonValue {
         }
         Value::Float64(f) => {
             if f.is_finite() {
-                serde_json::Number::from_f64(*f)
-                    .map(JsonValue::Number)
-                    .unwrap_or(JsonValue::Null)
+                serde_json::Number::from_f64(*f).map_or(JsonValue::Null, JsonValue::Number)
             } else {
                 JsonValue::Null
             }
@@ -100,7 +98,7 @@ impl QueryRowsDto {
             .iter()
             .map(|t| {
                 (0..t.len())
-                    .map(|i| t.get(i).map(value_to_json).unwrap_or(JsonValue::Null))
+                    .map(|i| t.get(i).map_or(JsonValue::Null, value_to_json))
                     .collect::<Vec<_>>()
             })
             .collect();
@@ -140,6 +138,9 @@ impl From<&ShownIndex> for ShownIndexDto {
 #[derive(Debug, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum QueryResultDto {
+    NoOp {
+        statement: String,
+    },
     TableCreated {
         name: String,
         file_id: u64,
@@ -173,11 +174,31 @@ pub enum QueryResultDto {
         rows: usize,
     },
     Selected(QueryRowsDto),
+    ColumnRenamed {
+        table: String,
+        old_name: String,
+        new_name: String,
+    },
+    ColumnAdded {
+        table: String,
+        column_name: String,
+    },
+    ColumnDropped {
+        table: String,
+        column_name: String,
+    },
+    TableRenamed {
+        old_name: String,
+        new_name: String,
+    },
 }
 
 impl From<&StatementResult> for QueryResultDto {
     fn from(r: &StatementResult) -> Self {
         match r {
+            StatementResult::NoOp { statement } => QueryResultDto::NoOp {
+                statement: statement.clone(),
+            },
             StatementResult::TableCreated {
                 name,
                 file_id,
@@ -223,6 +244,29 @@ impl From<&StatementResult> for QueryResultDto {
                 schema,
                 rows,
             } => QueryResultDto::Selected(QueryRowsDto::from_selected(table, schema, rows)),
+            StatementResult::ColumnRenamed {
+                table,
+                old_name,
+                new_name,
+            } => QueryResultDto::ColumnRenamed {
+                table: table.clone(),
+                old_name: old_name.clone(),
+                new_name: new_name.clone(),
+            },
+            StatementResult::ColumnAdded { table, column_name } => QueryResultDto::ColumnAdded {
+                table: table.clone(),
+                column_name: column_name.clone(),
+            },
+            StatementResult::ColumnDropped { table, column_name } => {
+                QueryResultDto::ColumnDropped {
+                    table: table.clone(),
+                    column_name: column_name.clone(),
+                }
+            }
+            StatementResult::TableRenamed { old_name, new_name } => QueryResultDto::TableRenamed {
+                old_name: old_name.clone(),
+                new_name: new_name.clone(),
+            },
         }
     }
 }
