@@ -1076,16 +1076,6 @@ impl Expr {
             operand: Box::new(operand),
         }
     }
-
-    pub(super) fn col<T>(col_name: T, qualifier: Option<T>) -> Self
-    where
-        T: Into<String>,
-    {
-        Expr::Column(ColumnRef {
-            qualifier: qualifier.map(Into::into),
-            name: col_name.into(),
-        })
-    }
 }
 
 impl Display for Expr {

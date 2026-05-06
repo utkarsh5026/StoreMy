@@ -1,4 +1,4 @@
-//! HTTP layer over the StoreMy engine.
+//! HTTP layer over the `StoreMy` engine.
 //!
 //! Owns the JSON shapes (DTOs) the React frontend talks to, and the Axum
 //! router/handlers that translate HTTP requests into [`Database`](crate::database::Database)
@@ -25,7 +25,7 @@ pub struct AppState {
     pub db: Arc<Database>,
 }
 
-/// Builds the Axum router for the StoreMy web API.
+/// Builds the Axum router for the `StoreMy` web API.
 ///
 /// Routes:
 /// - `POST /api/query` — execute a SQL string.

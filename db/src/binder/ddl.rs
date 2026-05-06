@@ -189,7 +189,7 @@ impl BoundCreateTable {
         columns: &[ColumnDef],
         table_pk: &[String],
         schema: &TupleSchema,
-        table_name: &str,
+        _table_name: &str,
     ) -> Result<Option<Vec<ColumnId>>, BindError> {
         let pk_names = {
             let inline_pk_names = columns
@@ -211,7 +211,12 @@ impl BoundCreateTable {
         } else {
             let pk = pk_names
                 .into_iter()
-                .map(|name| require_column(schema, table_name, name).map(|(id, _)| id))
+                .map(|name| {
+                    schema.field_by_name(name).map_or_else(
+                        || Err(BindError::PrimaryKeyNotInColumns(name.to_string())),
+                        |(id, _)| Ok(id),
+                    )
+                })
                 .collect::<Result<Vec<_>, _>>()?;
             Some(pk)
         };
