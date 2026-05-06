@@ -1446,4 +1446,414 @@ mod tests {
             "unexpected error: {err:?}"
         );
     }
+
+    // ── helpers: bind_alter_table ─────────────────────────────────────────
+
+    fn alter_stmt(table_name: &str, if_exists: bool, action: AlterAction) -> AlterTableStatement {
+        AlterTableStatement {
+            table_name: table_name.to_string(),
+            if_exists,
+            action,
+        }
+    }
+
+    fn col_def(name: &str, ty: Type) -> ColumnDef {
+        ColumnDef {
+            name: name.to_string(),
+            col_type: ty,
+            nullable: true,
+            primary_key: false,
+            auto_increment: false,
+            default: None,
+        }
+    }
+
+    // ── happy path: ADD COLUMN ────────────────────────────────────────────
+
+    // Adding a brand-new column resolves to AddColumn carrying the correct
+    // table name, file_id, and column definition.
+    #[test]
+    fn test_bind_alter_add_column_new() {
+        let dir = tempdir().unwrap();
+        let (catalog, txn_mgr) = make_catalog_and_txn_mgr(dir.path());
+        let txn = txn_mgr.begin().unwrap();
+        let file_id = catalog
+            .create_table(&txn, "users", two_col_schema(), None)
+            .unwrap();
+        txn.commit().unwrap();
+
+        let txn2 = txn_mgr.begin().unwrap();
+        let stmt = alter_stmt(
+            "users",
+            false,
+            AlterAction::AddColumn(col_def("age", Type::Int64)),
+        );
+        let bound = BoundAlterTable::bind(stmt, &catalog, &txn2).unwrap();
+        txn2.commit().unwrap();
+
+        match bound {
+            BoundAlterTable::AddColumn {
+                table_name,
+                file_id: fid,
+                column,
+            } => {
+                assert_eq!(table_name, "users");
+                assert_eq!(fid, file_id);
+                assert_eq!(column.name, "age");
+            }
+            other => panic!("expected AddColumn, got {other:?}"),
+        }
+    }
+
+    // Adding a column whose name already exists in the schema is a static
+    // duplicate-column error; the binder catches it before the executor runs.
+    #[test]
+    fn test_bind_alter_add_column_duplicate_errors() {
+        let dir = tempdir().unwrap();
+        let (catalog, txn_mgr) = make_catalog_and_txn_mgr(dir.path());
+        let txn = txn_mgr.begin().unwrap();
+        catalog
+            .create_table(&txn, "users", two_col_schema(), None)
+            .unwrap();
+        txn.commit().unwrap();
+
+        let txn2 = txn_mgr.begin().unwrap();
+        let stmt = alter_stmt(
+            "users",
+            false,
+            AlterAction::AddColumn(col_def("name", Type::String)),
+        );
+        let err = BoundAlterTable::bind(stmt, &catalog, &txn2).unwrap_err();
+        txn2.commit().unwrap();
+
+        assert!(
+            matches!(err, BindError::DuplicateColumn(ref n) if n == "name"),
+            "unexpected error: {err:?}"
+        );
+    }
+
+    // ALTER TABLE on a table that doesn't exist (no IF EXISTS) surfaces as
+    // UnknownTable, regardless of which action was requested.
+    #[test]
+    fn test_bind_alter_add_column_unknown_table_errors() {
+        let dir = tempdir().unwrap();
+        let (catalog, txn_mgr) = make_catalog_and_txn_mgr(dir.path());
+        let txn = txn_mgr.begin().unwrap();
+
+        let stmt = alter_stmt(
+            "ghost",
+            false,
+            AlterAction::AddColumn(col_def("x", Type::Int64)),
+        );
+        let err = BoundAlterTable::bind(stmt, &catalog, &txn).unwrap_err();
+        txn.commit().unwrap();
+
+        assert!(
+            matches!(err, BindError::UnknownTable(ref n) if n == "ghost"),
+            "unexpected error: {err:?}"
+        );
+    }
+
+    // With IF EXISTS on the outer table clause, a missing table collapses to
+    // NoOp instead of an error — regardless of which action was inside.
+    #[test]
+    fn test_bind_alter_if_exists_on_missing_table_is_noop() {
+        let dir = tempdir().unwrap();
+        let (catalog, txn_mgr) = make_catalog_and_txn_mgr(dir.path());
+        let txn = txn_mgr.begin().unwrap();
+
+        let stmt = alter_stmt(
+            "ghost",
+            true,
+            AlterAction::AddColumn(col_def("x", Type::Int64)),
+        );
+        let bound = BoundAlterTable::bind(stmt, &catalog, &txn).unwrap();
+        txn.commit().unwrap();
+
+        match bound {
+            BoundAlterTable::NoOp { table_name } => assert_eq!(table_name, "ghost"),
+            other => panic!("expected NoOp, got {other:?}"),
+        }
+    }
+
+    // Dropping an existing column resolves its zero-based position in the
+    // schema (name → ColumnId) correctly.
+    #[test]
+    fn test_bind_alter_drop_column_existing() {
+        let dir = tempdir().unwrap();
+        let (catalog, txn_mgr) = make_catalog_and_txn_mgr(dir.path());
+        let txn = txn_mgr.begin().unwrap();
+        let file_id = catalog
+            .create_table(&txn, "users", two_col_schema(), None)
+            .unwrap();
+        txn.commit().unwrap();
+
+        let txn2 = txn_mgr.begin().unwrap();
+        let stmt = alter_stmt("users", false, AlterAction::DropColumn {
+            name: "name".to_string(),
+            if_exists: false,
+        });
+        let bound = BoundAlterTable::bind(stmt, &catalog, &txn2).unwrap();
+        txn2.commit().unwrap();
+
+        // two_col_schema() is (id → 0, name → 1); dropping "name" must yield ColumnId(1).
+        match bound {
+            BoundAlterTable::DropColumn {
+                table_name,
+                file_id: fid,
+                column_name,
+                column_id,
+            } => {
+                assert_eq!(table_name, "users");
+                assert_eq!(fid, file_id);
+                assert_eq!(column_name, "name");
+                assert_eq!(column_id, col_id(1));
+            }
+            other => panic!("expected DropColumn, got {other:?}"),
+        }
+    }
+
+    // Dropping a column that doesn't exist (no inner IF EXISTS) is
+    // UnknownColumn — the column name and table name both appear in the error.
+    #[test]
+    fn test_bind_alter_drop_column_unknown_errors() {
+        let dir = tempdir().unwrap();
+        let (catalog, txn_mgr) = make_catalog_and_txn_mgr(dir.path());
+        let txn = txn_mgr.begin().unwrap();
+        catalog
+            .create_table(&txn, "users", two_col_schema(), None)
+            .unwrap();
+        txn.commit().unwrap();
+
+        let txn2 = txn_mgr.begin().unwrap();
+        let stmt = alter_stmt("users", false, AlterAction::DropColumn {
+            name: "ghost".to_string(),
+            if_exists: false,
+        });
+        let err = BoundAlterTable::bind(stmt, &catalog, &txn2).unwrap_err();
+        txn2.commit().unwrap();
+
+        assert!(
+            matches!(
+                err,
+                BindError::UnknownColumn { ref table, ref column }
+                    if table == "users" && column == "ghost"
+            ),
+            "unexpected error: {err:?}"
+        );
+    }
+
+    // DROP COLUMN IF EXISTS on a missing column is a per-column no-op; the
+    // inner `if_exists` is independent of the outer table-level `if_exists`.
+    #[test]
+    fn test_bind_alter_drop_column_if_exists_on_missing_col_is_noop() {
+        let dir = tempdir().unwrap();
+        let (catalog, txn_mgr) = make_catalog_and_txn_mgr(dir.path());
+        let txn = txn_mgr.begin().unwrap();
+        catalog
+            .create_table(&txn, "users", two_col_schema(), None)
+            .unwrap();
+        txn.commit().unwrap();
+
+        let txn2 = txn_mgr.begin().unwrap();
+        let stmt = alter_stmt("users", false, AlterAction::DropColumn {
+            name: "ghost".to_string(),
+            if_exists: true,
+        });
+        let bound = BoundAlterTable::bind(stmt, &catalog, &txn2).unwrap();
+        txn2.commit().unwrap();
+
+        match bound {
+            BoundAlterTable::NoOp { table_name } => assert_eq!(table_name, "users"),
+            other => panic!("expected NoOp, got {other:?}"),
+        }
+    }
+
+    // Renaming an existing column to a free name resolves correctly.
+    #[test]
+    fn test_bind_alter_rename_column_happy() {
+        let dir = tempdir().unwrap();
+        let (catalog, txn_mgr) = make_catalog_and_txn_mgr(dir.path());
+        let txn = txn_mgr.begin().unwrap();
+        let file_id = catalog
+            .create_table(&txn, "users", two_col_schema(), None)
+            .unwrap();
+        txn.commit().unwrap();
+
+        let txn2 = txn_mgr.begin().unwrap();
+        let stmt = alter_stmt("users", false, AlterAction::RenameColumn {
+            from: "name".to_string(),
+            to: "full_name".to_string(),
+        });
+        let bound = BoundAlterTable::bind(stmt, &catalog, &txn2).unwrap();
+        txn2.commit().unwrap();
+
+        match bound {
+            BoundAlterTable::RenameColumn {
+                table_name,
+                file_id: fid,
+                old_name,
+                new_name,
+            } => {
+                assert_eq!(table_name, "users");
+                assert_eq!(fid, file_id);
+                assert_eq!(old_name, "name");
+                assert_eq!(new_name, "full_name");
+            }
+            other => panic!("expected RenameColumn, got {other:?}"),
+        }
+    }
+
+    // The `from` column must exist; otherwise UnknownColumn.
+    #[test]
+    fn test_bind_alter_rename_column_from_missing_errors() {
+        let dir = tempdir().unwrap();
+        let (catalog, txn_mgr) = make_catalog_and_txn_mgr(dir.path());
+        let txn = txn_mgr.begin().unwrap();
+        catalog
+            .create_table(&txn, "users", two_col_schema(), None)
+            .unwrap();
+        txn.commit().unwrap();
+
+        let txn2 = txn_mgr.begin().unwrap();
+        let stmt = alter_stmt("users", false, AlterAction::RenameColumn {
+            from: "ghost".to_string(),
+            to: "x".to_string(),
+        });
+        let err = BoundAlterTable::bind(stmt, &catalog, &txn2).unwrap_err();
+        txn2.commit().unwrap();
+
+        assert!(
+            matches!(
+                err,
+                BindError::UnknownColumn { ref table, ref column }
+                    if table == "users" && column == "ghost"
+            ),
+            "unexpected error: {err:?}"
+        );
+    }
+
+    // The `to` name must not already be a column; otherwise DuplicateColumn.
+    #[test]
+    fn test_bind_alter_rename_column_to_exists_errors() {
+        let dir = tempdir().unwrap();
+        let (catalog, txn_mgr) = make_catalog_and_txn_mgr(dir.path());
+        let txn = txn_mgr.begin().unwrap();
+        catalog
+            .create_table(&txn, "users", two_col_schema(), None)
+            .unwrap();
+        txn.commit().unwrap();
+
+        let txn2 = txn_mgr.begin().unwrap();
+        // Renaming "id" to "name" would create a second "name" column.
+        let stmt = alter_stmt("users", false, AlterAction::RenameColumn {
+            from: "id".to_string(),
+            to: "name".to_string(),
+        });
+        let err = BoundAlterTable::bind(stmt, &catalog, &txn2).unwrap_err();
+        txn2.commit().unwrap();
+
+        assert!(
+            matches!(err, BindError::DuplicateColumn(ref n) if n == "name"),
+            "unexpected error: {err:?}"
+        );
+    }
+
+    // Renaming a table to a free name resolves to RenameTable carrying both
+    // old and new names plus the heap file_id.
+    #[test]
+    fn test_bind_alter_rename_table_happy() {
+        let dir = tempdir().unwrap();
+        let (catalog, txn_mgr) = make_catalog_and_txn_mgr(dir.path());
+        let txn = txn_mgr.begin().unwrap();
+        let file_id = catalog
+            .create_table(&txn, "users", two_col_schema(), None)
+            .unwrap();
+        txn.commit().unwrap();
+
+        let txn2 = txn_mgr.begin().unwrap();
+        let stmt = alter_stmt("users", false, AlterAction::RenameTable {
+            to: "accounts".to_string(),
+        });
+        let bound = BoundAlterTable::bind(stmt, &catalog, &txn2).unwrap();
+        txn2.commit().unwrap();
+
+        match bound {
+            BoundAlterTable::RenameTable {
+                old_name,
+                new_name,
+                file_id: fid,
+            } => {
+                assert_eq!(old_name, "users");
+                assert_eq!(new_name, "accounts");
+                assert_eq!(fid, file_id);
+            }
+            other => panic!("expected RenameTable, got {other:?}"),
+        }
+    }
+
+    // Renaming to a name already taken by another table is TableAlreadyExists.
+    #[test]
+    fn test_bind_alter_rename_table_target_exists_errors() {
+        let dir = tempdir().unwrap();
+        let (catalog, txn_mgr) = make_catalog_and_txn_mgr(dir.path());
+        let txn = txn_mgr.begin().unwrap();
+        catalog
+            .create_table(&txn, "users", two_col_schema(), None)
+            .unwrap();
+        catalog
+            .create_table(&txn, "accounts", two_col_schema(), None)
+            .unwrap();
+        txn.commit().unwrap();
+
+        let txn2 = txn_mgr.begin().unwrap();
+        let stmt = alter_stmt("users", false, AlterAction::RenameTable {
+            to: "accounts".to_string(),
+        });
+        let err = BoundAlterTable::bind(stmt, &catalog, &txn2).unwrap_err();
+        txn2.commit().unwrap();
+
+        assert!(
+            matches!(err, BindError::TableAlreadyExists(ref n) if n == "accounts"),
+            "unexpected error: {err:?}"
+        );
+    }
+
+    // Missing table without IF EXISTS is UnknownTable.
+    #[test]
+    fn test_bind_alter_rename_table_missing_without_if_exists_errors() {
+        let dir = tempdir().unwrap();
+        let (catalog, txn_mgr) = make_catalog_and_txn_mgr(dir.path());
+        let txn = txn_mgr.begin().unwrap();
+
+        let stmt = alter_stmt("ghost", false, AlterAction::RenameTable {
+            to: "x".to_string(),
+        });
+        let err = BoundAlterTable::bind(stmt, &catalog, &txn).unwrap_err();
+        txn.commit().unwrap();
+
+        assert!(
+            matches!(err, BindError::UnknownTable(ref n) if n == "ghost"),
+            "unexpected error: {err:?}"
+        );
+    }
+
+    // Missing table with IF EXISTS is a no-op.
+    #[test]
+    fn test_bind_alter_rename_table_missing_with_if_exists_is_noop() {
+        let dir = tempdir().unwrap();
+        let (catalog, txn_mgr) = make_catalog_and_txn_mgr(dir.path());
+        let txn = txn_mgr.begin().unwrap();
+
+        let stmt = alter_stmt("ghost", true, AlterAction::RenameTable {
+            to: "x".to_string(),
+        });
+        let bound = BoundAlterTable::bind(stmt, &catalog, &txn).unwrap();
+        txn.commit().unwrap();
+
+        match bound {
+            BoundAlterTable::NoOp { table_name } => assert_eq!(table_name, "ghost"),
+            other => panic!("expected NoOp, got {other:?}"),
+        }
+    }
 }
