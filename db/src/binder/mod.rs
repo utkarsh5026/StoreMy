@@ -26,7 +26,7 @@ pub use ddl::{
 };
 pub use dml::{BoundDelete, BoundInsert, BoundUpdate};
 pub use expr::BoundExpr;
-pub(in crate::binder) use helpers::{check_table, ensure_unique_strs};
+pub(in crate::binder) use helpers::{check_table, ensure_unique_strs, require_column};
 pub use query::BoundSelect;
 
 #[derive(Debug, Error)]

@@ -35,7 +35,7 @@
 
 use crate::{
     FileId,
-    binder::{BindError, check_table, ensure_unique_strs},
+    binder::{BindError, check_table, ensure_unique_strs, require_column},
     catalog::manager::{Catalog, TableInfo},
     index::IndexKind,
     parser::statements::{
@@ -175,6 +175,7 @@ impl BoundCreateTable {
             stmt.columns.as_slice(),
             stmt.primary_key.as_slice(),
             &schema,
+            table_name,
         )?;
 
         Ok(Self::New {
@@ -188,6 +189,7 @@ impl BoundCreateTable {
         columns: &[ColumnDef],
         table_pk: &[String],
         schema: &TupleSchema,
+        table_name: &str,
     ) -> Result<Option<Vec<ColumnId>>, BindError> {
         let pk_names = {
             let inline_pk_names = columns
@@ -209,12 +211,7 @@ impl BoundCreateTable {
         } else {
             let pk = pk_names
                 .into_iter()
-                .map(|name| {
-                    let Some((idx, _)) = schema.field_by_name(name) else {
-                        return Err(BindError::PrimaryKeyNotInColumns(name.to_string()));
-                    };
-                    Ok(idx)
-                })
+                .map(|name| require_column(schema, table_name, name).map(|(id, _)| id))
                 .collect::<Result<Vec<_>, _>>()?;
             Some(pk)
         };
@@ -317,13 +314,7 @@ impl BoundCreateIndex {
 
         columns
             .into_iter()
-            .map(|col| {
-                let c = col.as_str();
-                let Some((idx, _)) = schema.field_by_name(c) else {
-                    return Err(BindError::unknown_column(table_name, c));
-                };
-                Ok(idx)
-            })
+            .map(|col| require_column(schema, table_name, &col).map(|(id, _)| id))
             .collect::<Result<Vec<_>, _>>()
     }
 }
@@ -354,7 +345,7 @@ pub enum BoundShowIndexes {
 }
 
 impl BoundShowIndexes {
-    /// Binds a parsed [`ShowIndexesStatement`](crate::parser::statements::ShowIndexesStatement).
+    /// Binds a parsed [`ShowIndexesStatement`].
     ///
     /// # SQL examples
     ///
@@ -366,9 +357,8 @@ impl BoundShowIndexes {
     ///
     /// # Errors
     ///
-    /// - [`BindError::UnknownTable`](crate::binder::BindError::UnknownTable) — `FROM` names a table
-    ///   that is not in the catalog.
-    /// - [`BindError::Catalog`](crate::binder::BindError::Catalog) — other catalog read failures.
+    /// - [`BindError::UnknownTable`] — `FROM` names a table that is not in the catalog.
+    /// - [`BindError::Catalog`] — other catalog read failures.
     pub(in crate::binder) fn bind(
         stmt: &ShowIndexesStatement,
         catalog: &Catalog,
@@ -624,9 +614,7 @@ impl BoundAlterTable {
     }
 
     fn bind_rename_column(table: TableInfo, from: &str, to: &str) -> Result<Self, BindError> {
-        if table.schema.field_by_name(from).is_none() {
-            return Err(BindError::unknown_column(&table.name, from));
-        }
+        require_column(&table.schema, &table.name, from)?;
 
         if table.schema.field_by_name(to).is_some() {
             return Err(BindError::duplicate_column(to));

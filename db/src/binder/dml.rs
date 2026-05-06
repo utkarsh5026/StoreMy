@@ -12,6 +12,7 @@ use crate::{
     binder::{
         BindError,
         expr::BoundExpr,
+        require_column,
         scope::{ColumnResolver, SingleTableScope, bind_value_for},
     },
     catalog::manager::Catalog,
@@ -127,14 +128,7 @@ impl BoundUpdate {
         let mut bound_assignments = Vec::with_capacity(assignments.len());
 
         for Assignment { column, value } in assignments {
-            let (col_id, field) =
-                scope
-                    .schema
-                    .field_by_name(&column)
-                    .ok_or_else(|| BindError::UnknownColumn {
-                        table: scope.name.clone(),
-                        column: column.clone(),
-                    })?;
+            let (col_id, field) = require_column(&scope.schema, &scope.name, &column)?;
             if !seen.insert(col_id) {
                 return Err(BindError::DuplicateColumn(column));
             }

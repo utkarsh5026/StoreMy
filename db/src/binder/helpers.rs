@@ -6,7 +6,9 @@ use crate::{
         CatalogError,
         manager::{Catalog, TableInfo},
     },
+    primitives::ColumnId,
     transaction::Transaction,
+    tuple::{Field, TupleSchema},
 };
 
 /// Ensures that all string elements in an iterator are unique.
@@ -71,4 +73,27 @@ pub(in crate::binder) fn check_table(
         Err(other) => return Err(other.into()),
     };
     Ok(Some(info))
+}
+
+/// Looks up a column in a schema by name, returning the column's ID and field definition.
+///
+/// Used during binding to ensure a column reference is valid and to retrieve its schema info.
+///
+/// # Arguments
+///
+/// * `schema` - The tuple schema to search.
+/// * `table` - The name of the table (for error reporting).
+/// * `column` - The name of the column to look up.
+///
+/// # Errors
+///
+/// Returns [`BindError::UnknownColumn`] if the column is not found in the schema.
+pub(in crate::binder) fn require_column<'s>(
+    schema: &'s TupleSchema,
+    table: &str,
+    column: &str,
+) -> Result<(ColumnId, &'s Field), BindError> {
+    schema
+        .field_by_name(column)
+        .ok_or_else(|| BindError::unknown_column(table, column))
 }
