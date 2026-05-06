@@ -136,7 +136,7 @@ jobs:
           if-no-files-found: ignore
       - name: Test summary
         if: always()
-        uses: mikepenz/action-junit-report@v4
+        uses: mikepenz/action-junit-report@v6
         with:
           report_paths: junit.xml
           detailed_summary: true
