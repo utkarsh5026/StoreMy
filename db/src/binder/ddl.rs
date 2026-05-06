@@ -32,19 +32,15 @@
 //! Does not evaluate scalar expressions. `NULL` only appears indirectly: each
 //! [`ColumnDef`](crate::parser::statements::ColumnDef) contributes nullability to the built
 //! [`TupleSchema`]; binding does not insert default values or run `CHECK` constraints.
-use std::collections::HashSet;
 
 use crate::{
     FileId,
-    binder::BindError,
-    catalog::{
-        CatalogError,
-        manager::{Catalog, TableInfo},
-    },
+    binder::{BindError, check_table, ensure_unique_strs},
+    catalog::manager::{Catalog, TableInfo},
     index::IndexKind,
     parser::statements::{
-        ColumnDef, CreateIndexStatement, CreateTableStatement, DropIndexStatement, DropStatement,
-        ShowIndexesStatement,
+        AlterAction, AlterTableStatement, ColumnDef, CreateIndexStatement, CreateTableStatement,
+        DropIndexStatement, DropStatement, ShowIndexesStatement,
     },
     primitives::ColumnId,
     transaction::Transaction,
@@ -76,40 +72,23 @@ pub enum BoundDrop {
 }
 
 impl BoundDrop {
-    /// Binds a parsed [`DropStatement`](crate::parser::statements::DropStatement) against the
+    /// Binds a parsed [`DropStatement`] against the
     /// catalog.
-    ///
-    /// # SQL examples
-    ///
-    /// ```sql
-    /// -- DROP TABLE users
-    /// --   BoundDrop::bind(&stmt, catalog, txn)
-    /// --     -> Ok(BoundDrop::Drop { .. })
-    ///
-    /// -- DROP TABLE IF EXISTS users
-    /// --   same `Drop` when the table exists
-    ///
-    /// -- DROP TABLE IF EXISTS missing
-    /// --   -> Ok(BoundDrop::NoOp { name: "missing" }) when catalog has no such table
-    /// ```
     ///
     /// # Errors
     ///
-    /// - [`BindError::UnknownTable`](crate::binder::BindError::UnknownTable) — table name not in
-    ///   the catalog and `IF EXISTS` is false.
-    /// - [`BindError::Catalog`](crate::binder::BindError::Catalog) — other catalog read failures
-    ///   while resolving the table.
+    /// - [`BindError::UnknownTable`] — table name not in the catalog and `IF EXISTS` is false.
+    /// - [`BindError::Catalog`] — other catalog read failures while resolving the table.
     pub(in crate::binder) fn bind(
         stmt: &DropStatement,
         catalog: &Catalog,
         txn: &Transaction<'_>,
     ) -> Result<Self, BindError> {
-        match check_table(catalog, txn, &stmt.table_name) {
-            Ok(TableInfo { name, file_id, .. }) => Ok(Self::Drop { name, file_id }),
-            Err(BindError::UnknownTable(_)) if stmt.if_exists => Ok(Self::NoOp {
+        match check_table(catalog, txn, &stmt.table_name, stmt.if_exists)? {
+            Some(TableInfo { name, file_id, .. }) => Ok(Self::Drop { name, file_id }),
+            None => Ok(Self::NoOp {
                 name: stmt.table_name.clone(),
             }),
-            Err(e) => Err(e),
         }
     }
 }
@@ -117,7 +96,7 @@ impl BoundDrop {
 /// Bound outcome of `CREATE TABLE` / `CREATE TABLE IF NOT EXISTS`.
 ///
 /// On success either describes a **new** table (`schema` + optional composite primary key as
-/// resolved [`ColumnId`](crate::primitives::ColumnId)s), or reports **already exists** under
+/// resolved [`ColumnId`]s), or reports **already exists** under
 /// `IF NOT EXISTS` so the executor can skip allocation.
 ///
 /// # SQL examples
@@ -158,76 +137,51 @@ pub enum BoundCreateTable {
 }
 
 impl BoundCreateTable {
-    /// Binds a parsed [`CreateTableStatement`](crate::parser::statements::CreateTableStatement).
-    ///
-    /// # SQL examples
-    ///
-    /// ```sql
-    /// -- CREATE TABLE t (a INT64, b STRING, PRIMARY KEY (a))
-    /// --   primary_key resolves to the schema index of `a` (here 0)
-    ///
-    /// -- CREATE TABLE t (id INT64 PRIMARY KEY, email STRING)
-    /// --   inline `PRIMARY KEY` on `id` is equivalent to `PRIMARY KEY (id)` for binding
-    /// ```
+    /// Binds a parsed [`CreateTableStatement`].
     ///
     /// # Errors
     ///
-    /// - [`BindError::TableAlreadyExists`](crate::binder::BindError::TableAlreadyExists) — name
-    ///   already taken and `IF NOT EXISTS` is false.
-    /// - [`BindError::DuplicateColumn`](crate::binder::BindError::DuplicateColumn) — duplicate
-    ///   column name in the `CREATE TABLE` column list.
-    /// - [`BindError::PrimaryKeyNotInColumns`](crate::binder::BindError::PrimaryKeyNotInColumns) —
-    ///   `PRIMARY KEY (...)` names a column not present in the table definition.
-    /// - [`BindError::Catalog`](crate::binder::BindError::Catalog) — catalog read failure on the
-    ///   `IF NOT EXISTS` path when the table already exists.
+    /// - [`BindError::TableAlreadyExists`] — name already taken and `IF NOT EXISTS` is false.
+    /// - [`BindError::DuplicateColumn`] — duplicate column name in the `CREATE TABLE` column list.
+    /// - [`BindError::PrimaryKeyNotInColumns`] — `PRIMARY KEY (...)` names a column not present in
+    ///   the table definition.
+    /// - [`BindError::Catalog`] — catalog read failure on the `IF NOT EXISTS` path when the table
+    ///   already exists.
     pub(in crate::binder) fn bind(
         stmt: &CreateTableStatement,
         catalog: &Catalog,
         txn: &Transaction<'_>,
     ) -> Result<Self, BindError> {
-        let CreateTableStatement {
-            table_name,
-            columns,
-            primary_key,
-            if_not_exists,
-        } = stmt;
-
+        let table_name = stmt.table_name.as_str();
         if catalog.table_exists(table_name) {
-            return Self::handle_table_exists(catalog, txn, table_name, *if_not_exists);
+            if !stmt.if_not_exists {
+                return Err(BindError::table_already_exists(table_name));
+            }
+
+            let table = check_table(catalog, txn, table_name, true)?
+                .expect("if_exists=false should never yield None");
+            return Ok(Self::AlreadyExists {
+                name: table.name,
+                file_id: table.file_id,
+            });
         }
 
-        let mut seen = HashSet::with_capacity(columns.len());
-        columns
-            .iter()
-            .try_for_each(|col| -> Result<(), BindError> {
-                if seen.insert(col.name.as_str()) {
-                    Ok(())
-                } else {
-                    Err(BindError::duplicate_column(col.name.as_str()))
-                }
-            })?;
+        ensure_unique_strs(stmt.columns.iter().map(|c| c.name.as_str()), |c| {
+            BindError::duplicate_column(c)
+        })?;
 
-        let schema = TupleSchema::from(columns.iter().collect::<Vec<&ColumnDef>>());
-        let primary_key = Self::resolve_primary_key(columns.as_slice(), primary_key, &schema)?;
+        let schema = TupleSchema::from(stmt.columns.iter().collect::<Vec<&ColumnDef>>());
+        let primary_key = Self::resolve_primary_key(
+            stmt.columns.as_slice(),
+            stmt.primary_key.as_slice(),
+            &schema,
+        )?;
 
         Ok(Self::New {
-            name: table_name.clone(),
+            name: stmt.table_name.clone(),
             schema,
             primary_key,
         })
-    }
-
-    fn handle_table_exists(
-        catalog: &Catalog,
-        txn: &Transaction<'_>,
-        table_name: &str,
-        if_not_exists: bool,
-    ) -> Result<Self, BindError> {
-        if if_not_exists {
-            let TableInfo { name, file_id, .. } = catalog.get_table_info(txn, table_name)?;
-            return Ok(Self::AlreadyExists { name, file_id });
-        }
-        Err(BindError::table_already_exists(table_name))
     }
 
     fn resolve_primary_key(
@@ -253,17 +207,16 @@ impl BoundCreateTable {
         let primary_key = if pk_names.is_empty() {
             None
         } else {
-            Some(
-                pk_names
-                    .into_iter()
-                    .map(|name| {
-                        let Some((idx, _)) = schema.field_by_name(name) else {
-                            return Err(BindError::PrimaryKeyNotInColumns(name.to_string()));
-                        };
-                        Ok(idx)
-                    })
-                    .collect::<Result<Vec<_>, _>>()?,
-            )
+            let pk = pk_names
+                .into_iter()
+                .map(|name| {
+                    let Some((idx, _)) = schema.field_by_name(name) else {
+                        return Err(BindError::PrimaryKeyNotInColumns(name.to_string()));
+                    };
+                    Ok(idx)
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+            Some(pk)
         };
 
         Ok(primary_key)
@@ -313,115 +266,66 @@ pub enum BoundCreateIndex {
 }
 
 impl BoundCreateIndex {
-    /// Binds a parsed [`CreateIndexStatement`](crate::parser::statements::CreateIndexStatement).
-    ///
-    /// # SQL examples
-    ///
-    /// ```sql
-    /// -- CREATE INDEX idx ON users (id, name) USING HASH;
-    /// --   column_indices: vec![ColumnId(0), ColumnId(1)]  -- declaration order
-    /// ```
+    /// Binds a parsed [`CreateIndexStatement`].
     ///
     /// # Errors
     ///
-    /// - [`BindError::UnknownTable`](crate::binder::BindError::UnknownTable) — `ON` table not
-    ///   found.
-    /// - [`BindError::UnknownColumn`](crate::binder::BindError::UnknownColumn) — a name in the
-    ///   index column list is not a column of that table.
-    /// - [`BindError::DuplicateColumn`](crate::binder::BindError::DuplicateColumn) — the same
-    ///   column name appears twice in the index column list.
-    /// - [`BindError::IndexAlreadyExists`](crate::binder::BindError::IndexAlreadyExists) — index
-    ///   name is taken and `IF NOT EXISTS` is false.
-    /// - [`BindError::Catalog`](crate::binder::BindError::Catalog) — other catalog failures while
-    ///   loading table metadata or checking the index registry.
+    /// - [`BindError::UnknownTable`] — `ON` table not found.
+    /// - [`BindError::UnknownColumn`] — a name in the index column list is not a column of that
+    ///   table.
+    /// - [`BindError::DuplicateColumn`] — the same column name appears twice in the index column
+    ///   list.
+    /// - [`BindError::IndexAlreadyExists`] — index name is taken and `IF NOT EXISTS` is false.
+    /// - [`BindError::Catalog`] — other catalog failures while loading table metadata or checking
+    ///   the index registry.
     pub(in crate::binder) fn bind(
         stmt: CreateIndexStatement,
         catalog: &Catalog,
         txn: &Transaction<'_>,
     ) -> Result<Self, BindError> {
-        let CreateIndexStatement {
-            index_name,
-            table_name,
-            columns,
-            index_type,
-            if_not_exists,
-        } = stmt;
+        let table = check_table(catalog, txn, &stmt.table_name, false)?
+            .expect("if_exists=false should never yield None");
 
-        let TableInfo {
-            name,
-            file_id,
-            schema,
-            ..
-        } = check_table(catalog, txn, table_name)?;
-        if catalog.get_index_by_name(&index_name).is_some() {
-            if if_not_exists {
-                return Ok(Self::AlreadyExists { index_name });
+        if catalog.get_index_by_name(&stmt.index_name).is_some() {
+            if stmt.if_not_exists {
+                return Ok(Self::AlreadyExists {
+                    index_name: stmt.index_name,
+                });
             }
-            return Err(BindError::IndexAlreadyExists(index_name));
+            return Err(BindError::IndexAlreadyExists(stmt.index_name));
         }
 
-        let column_indices = Self::resolve_column_indices(columns.as_slice(), &schema, &name)?;
+        let column_indices =
+            Self::resolve_column_indices(stmt.columns, &table.schema, &table.name)?;
         Ok(Self::New {
-            index_name,
-            table_name: name,
-            table_file_id: file_id,
+            index_name: stmt.index_name,
+            table_name: table.name,
+            table_file_id: table.file_id,
             column_indices,
-            kind: index_type,
+            kind: stmt.index_type,
         })
     }
 
     fn resolve_column_indices(
-        columns: &[String],
-        table_schema: &TupleSchema,
+        columns: Vec<String>,
+        schema: &TupleSchema,
         table_name: &str,
     ) -> Result<Vec<ColumnId>, BindError> {
-        let n = columns.len();
+        ensure_unique_strs(columns.iter().map(String::as_str), |col| {
+            BindError::duplicate_column(col)
+        })?;
 
-        let mut seen = HashSet::with_capacity(n);
-        let mut column_indices = Vec::with_capacity(n);
-
-        for col in columns {
-            if !seen.insert(col) {
-                return Err(BindError::duplicate_column(col.as_str()));
-            }
-            let Some((idx, _)) = table_schema.field_by_name(col.as_str()) else {
-                return Err(BindError::UnknownColumn {
-                    table: table_name.to_string(),
-                    column: (*col).to_string(),
-                });
-            };
-            column_indices.push(idx);
-        }
-
-        Ok(column_indices)
+        columns
+            .into_iter()
+            .map(|col| {
+                let c = col.as_str();
+                let Some((idx, _)) = schema.field_by_name(c) else {
+                    return Err(BindError::unknown_column(table_name, c));
+                };
+                Ok(idx)
+            })
+            .collect::<Result<Vec<_>, _>>()
     }
-}
-
-/// Bound outcome of `DROP INDEX <name> ON <table>` / `… IF EXISTS`.
-///
-/// After resolving the index by name, binding checks that it belongs to the named table. Either
-/// returns a concrete drop for the executor, or a no-op when `IF EXISTS` allows ignoring a missing
-/// or mismatched index.
-///
-/// # SQL examples
-///
-/// ```sql
-/// -- DROP INDEX users_email_idx ON users;
-/// --
-/// --   BoundDropIndex::Drop { index_name: "users_email_idx" }
-/// --   (only when that index exists on `users`)
-/// ```
-///
-/// ```sql
-/// -- DROP INDEX IF EXISTS ghost_idx ON users;
-/// --
-/// --   BoundDropIndex::NoOp { index_name: "ghost_idx" }
-/// --   when the index is missing, or exists but not on `users`
-/// ```
-#[derive(Debug)]
-pub enum BoundDropIndex {
-    Drop { index_name: String },
-    NoOp { index_name: String },
 }
 
 /// Bound outcome of `SHOW INDEXES` / `SHOW INDEXES FROM <table>`.
@@ -473,84 +377,284 @@ impl BoundShowIndexes {
         match &stmt.0 {
             None => Ok(Self::AllTables),
             Some(name) => {
-                let TableInfo { name, file_id, .. } = check_table(catalog, txn, name)?;
+                let TableInfo { name, file_id, .. } = check_table(catalog, txn, name, false)?
+                    .expect("if_exists=false should never yield None");
                 Ok(Self::OneTable { name, file_id })
             }
         }
     }
 }
 
+/// Bound outcome of `DROP INDEX <name> ON <table>` / `… IF EXISTS`.
+///
+/// After resolving the index by name, binding checks that it belongs to the named table. Either
+/// returns a concrete drop for the executor, or a no-op when `IF EXISTS` allows ignoring a missing
+/// or mismatched index.
+///
+/// # SQL examples
+///
+/// ```sql
+/// -- DROP INDEX users_email_idx ON users;
+/// --
+/// --   BoundDropIndex::Drop { index_name: "users_email_idx" }
+/// --   (only when that index exists on `users`)
+/// ```
+///
+/// ```sql
+/// -- DROP INDEX IF EXISTS ghost_idx ON users;
+/// --
+/// --   BoundDropIndex::NoOp { index_name: "ghost_idx" }
+/// --   when the index is missing, or exists but not on `users`
+/// ```
+#[derive(Debug)]
+pub enum BoundDropIndex {
+    Drop { index_name: String },
+    NoOp { index_name: String },
+}
+
 impl BoundDropIndex {
-    /// Binds a parsed [`DropIndexStatement`](crate::parser::statements::DropIndexStatement).
-    ///
-    /// # SQL examples
-    ///
-    /// ```sql
-    /// -- DROP INDEX idx ON t
-    /// --   BoundDropIndex::bind(stmt, catalog, txn)
-    /// --     -> Ok(BoundDropIndex::Drop { index_name: "idx" })
-    /// --   when `idx` exists and is registered on table `t`
-    /// ```
+    /// Binds a parsed [`DropIndexStatement`].
     ///
     /// # Errors
     ///
-    /// - [`BindError::UnknownIndex`](crate::binder::BindError::UnknownIndex) — index name not
-    ///   found, or index exists but not on the given table, when `IF EXISTS` is false.
-    /// - [`BindError::UnknownTable`](crate::binder::BindError::UnknownTable) — `ON` table not found
-    ///   when the index exists and must be checked for ownership.
-    /// - [`BindError::Catalog`](crate::binder::BindError::Catalog) — other catalog failures.
+    /// - [`BindError::UnknownIndex`] — index name not found, or index exists but not on the given
+    ///   table, when `IF EXISTS` is false.
+    /// - [`BindError::UnknownTable`] — `ON` table not found when the index exists and must be
+    ///   checked for ownership.
+    /// - [`BindError::Catalog`] — other catalog failures.
     pub(in crate::binder) fn bind(
         stmt: DropIndexStatement,
         catalog: &Catalog,
         txn: &Transaction<'_>,
     ) -> Result<Self, BindError> {
-        let DropIndexStatement {
-            index_name,
-            table_name,
-            if_exists,
-        } = stmt;
+        if let Some(index) = catalog.get_index_by_name(&stmt.index_name) {
+            let table = check_table(catalog, txn, &stmt.table_name, false)?
+                .expect("if_exists=false should never yield None");
 
-        if let Some(index) = catalog.get_index_by_name(&index_name) {
-            let TableInfo { file_id, .. } = check_table(catalog, txn, &table_name)?;
-            if catalog.index_belongs_to_table(file_id, &index) {
-                return Ok(Self::Drop { index_name });
+            if catalog.index_belongs_to_table(table.file_id, &index) {
+                return Ok(Self::Drop {
+                    index_name: stmt.index_name,
+                });
             }
 
-            if if_exists {
-                return Ok(Self::NoOp { index_name });
+            if stmt.if_exists {
+                return Ok(Self::NoOp {
+                    index_name: stmt.index_name,
+                });
             }
-            return Err(BindError::UnknownIndex(index_name));
+            return Err(BindError::UnknownIndex(stmt.index_name));
         }
 
-        if if_exists {
-            return Ok(Self::NoOp { index_name });
+        if stmt.if_exists {
+            return Ok(Self::NoOp {
+                index_name: stmt.index_name,
+            });
         }
-        Err(BindError::UnknownIndex(index_name))
+        Err(BindError::UnknownIndex(stmt.index_name))
     }
 }
 
-/// Shared catalog lookup for DDL that names a table (`ON users`, `FROM users`, `DROP TABLE users`).
+/// Bound outcome of `ALTER TABLE [IF EXISTS] <name> <action>`.
 ///
-/// Maps [`CatalogError::TableNotFound`](crate::catalog::CatalogError::TableNotFound) to
-/// [`BindError::UnknownTable`](crate::binder::BindError::UnknownTable); other catalog errors become
-/// [`BindError::Catalog`](crate::binder::BindError::Catalog).
+/// Each variant carries exactly the information the executor needs — no raw
+/// string lookups remain.  The outer `IF EXISTS` (missing *table*) collapses
+/// the whole statement into [`NoOp`](BoundAlterTable::NoOp).
 ///
-/// # Errors
+/// # SQL examples
 ///
-/// - [`BindError::UnknownTable`](crate::binder::BindError::UnknownTable) — no such table.
-/// - [`BindError::Catalog`](crate::binder::BindError::Catalog) — other catalog read failures.
-fn check_table(
-    catalog: &Catalog,
-    txn: &Transaction<'_>,
-    table_name: impl AsRef<str>,
-) -> Result<TableInfo, BindError> {
-    Ok(match catalog.get_table_info(txn, table_name.as_ref()) {
-        Ok(i) => i,
-        Err(CatalogError::TableNotFound { table_name }) => {
-            return Err(BindError::unknown_table(table_name));
+/// Reference table: `users(id INT64 NOT NULL, name STRING)` with `id → ColumnId(0)`,
+/// `name → ColumnId(1)`.
+///
+/// ```sql
+/// -- ALTER TABLE users ADD COLUMN age INT64;
+/// --
+/// --   BoundAlterTable::AddColumn {
+/// --       table_name: "users", file_id: <FileId>,
+/// --       column: ColumnDef { name: "age", col_type: Int64, … },
+/// --   }
+/// ```
+///
+/// ```sql
+/// -- ALTER TABLE users DROP COLUMN name;
+/// --
+/// --   BoundAlterTable::DropColumn {
+/// --       table_name: "users", file_id: <FileId>,
+/// --       column_name: "name", column_id: ColumnId(1),
+/// --   }
+/// ```
+///
+/// ```sql
+/// -- ALTER TABLE users RENAME COLUMN name TO full_name;
+/// --
+/// --   BoundAlterTable::RenameColumn {
+/// --       table_name: "users", file_id: <FileId>,
+/// --       old_name: "name", new_name: "full_name",
+/// --   }
+/// ```
+///
+/// ```sql
+/// -- ALTER TABLE users RENAME TO accounts;
+/// --
+/// --   BoundAlterTable::RenameTable {
+/// --       old_name: "users", new_name: "accounts", file_id: <FileId>,
+/// --   }
+/// ```
+///
+/// ```sql
+/// -- ALTER TABLE IF EXISTS ghost ADD COLUMN x INT64;
+/// --
+/// --   BoundAlterTable::NoOp { table_name: "ghost" }
+/// --   when `ghost` is not in the catalog.
+/// ```
+#[derive(Debug)]
+pub enum BoundAlterTable {
+    /// `ADD COLUMN <col_def>` — append a new column to the table schema.
+    ///
+    /// The executor should insert a new row into `CATALOG_COLUMNS` and
+    /// invalidate the cached [`TableInfo`] so the rebuilt schema includes the
+    /// new field.
+    AddColumn {
+        table_name: String,
+        file_id: FileId,
+        /// The full column definition from the AST, including type, nullability,
+        /// and any default. The executor owns this and writes it to the catalog.
+        column: ColumnDef,
+    },
+
+    /// `DROP COLUMN [IF EXISTS] <name>` — remove an existing column.
+    ///
+    /// `column_id` is the zero-based position in the *current* schema. The
+    /// executor uses it to delete the matching row from `CATALOG_COLUMNS` and
+    /// to rebuild the schema after removal.
+    DropColumn {
+        table_name: String,
+        file_id: FileId,
+        column_name: String,
+        column_id: ColumnId,
+    },
+
+    /// `RENAME COLUMN <old> TO <new>` — rename a column in the catalog.
+    ///
+    /// Catalog-metadata change only; the heap file is unaffected.
+    RenameColumn {
+        table_name: String,
+        file_id: FileId,
+        old_name: String,
+        new_name: String,
+    },
+
+    /// `RENAME TO <new_name>` — give the table a different name.
+    ///
+    /// Catalog-metadata change only; the heap file path is unaffected.
+    RenameTable {
+        old_name: String,
+        new_name: String,
+        file_id: FileId,
+    },
+
+    /// The table named in the statement was not found, but `IF EXISTS` was set,
+    /// so this is a successful no-op rather than an error.
+    NoOp { table_name: String },
+}
+
+impl BoundAlterTable {
+    /// Binds a parsed [`AlterTableStatement`] against the catalog.
+    ///
+    /// # Errors
+    ///
+    /// - [`BindError::UnknownTable`] — table not found and `IF EXISTS` is false.
+    /// - [`BindError::UnknownColumn`] — `DROP COLUMN` or `RENAME COLUMN` names a column that does
+    ///   not exist in the current schema (and `IF EXISTS` is false for `DROP COLUMN`).
+    /// - [`BindError::DuplicateColumn`] — `ADD COLUMN` names a column that already exists, or
+    ///   `RENAME COLUMN` targets a name already taken.
+    /// - [`BindError::TableAlreadyExists`] — `RENAME TO` targets a name already in the catalog.
+    /// - [`BindError::Catalog`] — other catalog read failures.
+    pub(in crate::binder) fn bind(
+        stmt: AlterTableStatement,
+        catalog: &Catalog,
+        txn: &Transaction<'_>,
+    ) -> Result<Self, BindError> {
+        let Some(table_info) = check_table(catalog, txn, &stmt.table_name, stmt.if_exists)? else {
+            return Ok(Self::NoOp {
+                table_name: stmt.table_name,
+            });
+        };
+
+        match &stmt.action {
+            AlterAction::AddColumn(col_def) => Self::bind_add_column(table_info, col_def),
+            AlterAction::DropColumn { name, if_exists } => {
+                Self::bind_drop_column(table_info, name, *if_exists)
+            }
+            AlterAction::RenameColumn { from, to } => {
+                Self::bind_rename_column(table_info, from, to)
+            }
+            AlterAction::RenameTable { to } => Self::bind_rename_table(catalog, table_info, to),
         }
-        Err(other) => return Err(other.into()),
-    })
+    }
+
+    fn bind_add_column(table: TableInfo, col_def: &ColumnDef) -> Result<Self, BindError> {
+        if table.schema.field_by_name(&col_def.name).is_some() {
+            return Err(BindError::duplicate_column(&col_def.name));
+        }
+
+        Ok(Self::AddColumn {
+            table_name: table.name,
+            file_id: table.file_id,
+            column: col_def.clone(),
+        })
+    }
+
+    fn bind_drop_column(
+        table: TableInfo,
+        column_name: &str,
+        if_exists: bool,
+    ) -> Result<Self, BindError> {
+        match table.schema.field_by_name(column_name) {
+            Some((column_id, _)) => Ok(Self::DropColumn {
+                table_name: table.name,
+                file_id: table.file_id,
+                column_name: column_name.to_string(),
+                column_id,
+            }),
+            None if if_exists => Ok(Self::NoOp {
+                table_name: table.name,
+            }),
+            None => Err(BindError::unknown_column(&table.name, column_name)),
+        }
+    }
+
+    fn bind_rename_column(table: TableInfo, from: &str, to: &str) -> Result<Self, BindError> {
+        if table.schema.field_by_name(from).is_none() {
+            return Err(BindError::unknown_column(&table.name, from));
+        }
+
+        if table.schema.field_by_name(to).is_some() {
+            return Err(BindError::duplicate_column(to));
+        }
+
+        Ok(Self::RenameColumn {
+            table_name: table.name,
+            file_id: table.file_id,
+            old_name: from.to_string(),
+            new_name: to.to_string(),
+        })
+    }
+
+    fn bind_rename_table(
+        catalog: &Catalog,
+        table: TableInfo,
+        new_name: &str,
+    ) -> Result<Self, BindError> {
+        if catalog.table_exists(new_name) {
+            return Err(BindError::table_already_exists(new_name));
+        }
+
+        Ok(Self::RenameTable {
+            old_name: table.name,
+            new_name: new_name.to_string(),
+            file_id: table.file_id,
+        })
+    }
 }
 
 #[cfg(test)]
@@ -734,8 +838,6 @@ mod tests {
         }
     }
 
-    // ── error / edge: bind_drop ───────────────────────────────────────────
-
     // IF EXISTS on a missing table is a NoOp, not an error.
     #[test]
     fn test_bind_drop_missing_with_if_exists_is_noop() {
@@ -759,9 +861,8 @@ mod tests {
         let (catalog, txn_mgr) = make_catalog_and_txn_mgr(dir.path());
         let txn = txn_mgr.begin().unwrap();
 
-        let err = match BoundDrop::bind(&drop_stmt("ghost", false), &catalog, &txn) {
-            Ok(_) => panic!("expected error"),
-            Err(e) => e,
+        let Err(err) = BoundDrop::bind(&drop_stmt("ghost", false), &catalog, &txn) else {
+            panic!("expected error");
         };
         txn.commit().unwrap();
 
@@ -770,8 +871,6 @@ mod tests {
             "unexpected error: {err:?}"
         );
     }
-
-    // ── happy path: bind_create_table ─────────────────────────────────────
 
     // New table with no PK produces BoundCreateTable::New with primary_key = None.
     #[test]
@@ -945,9 +1044,8 @@ mod tests {
 
         let txn2 = txn_mgr.begin().unwrap();
         let stmt = create_stmt("t", vec![col("a", Type::Int64, false)], false, None);
-        let err = match BoundCreateTable::bind(&stmt, &catalog, &txn2) {
-            Ok(_) => panic!("expected error"),
-            Err(e) => e,
+        let Err(err) = BoundCreateTable::bind(&stmt, &catalog, &txn2) else {
+            panic!("expected error");
         };
         txn2.commit().unwrap();
 
@@ -970,9 +1068,8 @@ mod tests {
             false,
             None,
         );
-        let err = match BoundCreateTable::bind(&stmt, &catalog, &txn) {
-            Ok(_) => panic!("expected error"),
-            Err(e) => e,
+        let Err(err) = BoundCreateTable::bind(&stmt, &catalog, &txn) else {
+            panic!("expected error");
         };
         txn.commit().unwrap();
 
@@ -995,9 +1092,8 @@ mod tests {
             false,
             Some("missing"),
         );
-        let err = match BoundCreateTable::bind(&stmt, &catalog, &txn) {
-            Ok(_) => panic!("expected error"),
-            Err(e) => e,
+        let Err(err) = BoundCreateTable::bind(&stmt, &catalog, &txn) else {
+            panic!("expected error");
         };
         txn.commit().unwrap();
 
@@ -1017,9 +1113,8 @@ mod tests {
             false,
             Some("c"),
         );
-        let err = match BoundCreateTable::bind(&stmt, &catalog, &txn) {
-            Ok(_) => panic!("expected error"),
-            Err(e) => e,
+        let Err(err) = BoundCreateTable::bind(&stmt, &catalog, &txn) else {
+            panic!("expected error");
         };
         txn.commit().unwrap();
 
@@ -1037,9 +1132,8 @@ mod tests {
         let txn = txn_mgr.begin().unwrap();
 
         let stmt = create_stmt("t", vec![col("a", Type::Int64, false)], false, Some("A"));
-        let err = match BoundCreateTable::bind(&stmt, &catalog, &txn) {
-            Ok(_) => panic!("expected error"),
-            Err(e) => e,
+        let Err(err) = BoundCreateTable::bind(&stmt, &catalog, &txn) else {
+            panic!("expected error");
         };
         txn.commit().unwrap();
 
