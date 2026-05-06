@@ -42,6 +42,9 @@ pub fn execute_and_print(db: &Database, sql: &str, state: &ReplState) {
 #[allow(clippy::too_many_lines)]
 fn print_result(r: &StatementResult) {
     match r {
+        StatementResult::NoOp { statement } => {
+            theme::notice("NOTICE", &format!("{statement} (no-op)"));
+        }
         StatementResult::Selected {
             table,
             schema,

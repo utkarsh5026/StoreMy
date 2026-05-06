@@ -34,12 +34,13 @@
 
 use crate::{
     binder::{
-        Bound, BoundCreateIndex, BoundCreateTable, BoundDrop, BoundDropIndex, BoundShowIndexes,
+        Bound, BoundAlterTable, BoundCreateIndex, BoundCreateTable, BoundDrop, BoundDropIndex,
+        BoundShowIndexes,
     },
-    catalog::IndexInfo,
     engine::{Engine, EngineError, ShownIndex, StatementResult},
     parser::statements::{
-        CreateIndexStatement, DropIndexStatement, DropStatement, ShowIndexesStatement, Statement,
+        AlterTableStatement, CreateIndexStatement, DropIndexStatement, DropStatement,
+        ShowIndexesStatement, Statement,
     },
 };
 
@@ -446,25 +447,79 @@ impl Engine<'_> {
 
             let rows = infos
                 .into_iter()
-                .map(
-                    |IndexInfo {
-                         name,
-                         table_id,
-                         columns,
-                         kind,
-                         ..
-                     }| ShownIndex {
-                        name,
-                        table: catalog
-                            .table_name_by_id(table_id)
-                            .unwrap_or_else(|| format!("<file {}>", table_id.0)),
-                        columns,
-                        kind,
-                    },
-                )
+                .map(|i| ShownIndex {
+                    name: i.name,
+                    table: catalog
+                        .table_name_by_id(i.table_id)
+                        .unwrap_or_else(|| format!("<file {}>", i.table_id.0)),
+                    columns: i.columns,
+                    kind: i.kind,
+                })
                 .collect();
 
             Ok(StatementResult::indexes_shown(scope, rows))
+        })
+    }
+
+    pub(super) fn exec_alter_table(
+        &self,
+        statement: AlterTableStatement,
+    ) -> Result<StatementResult, EngineError> {
+        self.bind_and_execute(Statement::AlterTable(statement), |catalog, bound, txn| {
+            let Bound::AlterTable(b) = bound else {
+                unreachable!("binder returned non-AlterTable variant for AlterTable input");
+            };
+
+            match b {
+                BoundAlterTable::RenameTable {
+                    old_name, new_name, ..
+                } => {
+                    catalog.rename_table(txn, &old_name, &new_name)?;
+                    Ok(StatementResult::TableRenamed { old_name, new_name })
+                }
+                BoundAlterTable::RenameColumn {
+                    table_name,
+                    file_id,
+                    old_name,
+                    new_name,
+                    ..
+                } => {
+                    catalog.rename_column(txn, file_id, &old_name, &new_name)?;
+                    Ok(StatementResult::ColumnRenamed {
+                        table: table_name,
+                        old_name,
+                        new_name,
+                    })
+                }
+                BoundAlterTable::AddColumn {
+                    table_name,
+                    file_id,
+                    column,
+                    ..
+                } => {
+                    let column_name = column.name.clone();
+                    catalog.add_column(txn, file_id, column)?;
+                    Ok(StatementResult::ColumnAdded {
+                        table: table_name,
+                        column_name,
+                    })
+                }
+                BoundAlterTable::DropColumn {
+                    table_name,
+                    file_id,
+                    column_name,
+                    ..
+                } => {
+                    catalog.drop_column(txn, file_id, &column_name)?;
+                    Ok(StatementResult::ColumnDropped {
+                        table: table_name,
+                        column_name,
+                    })
+                }
+                BoundAlterTable::NoOp { table_name } => Ok(StatementResult::NoOp {
+                    statement: format!("ALTER TABLE IF EXISTS {table_name}"),
+                }),
+            }
         })
     }
 }

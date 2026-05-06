@@ -17,6 +17,10 @@ pub struct ShownIndex {
 
 #[derive(Debug)]
 pub enum StatementResult {
+    /// Successful statement that intentionally performed no changes (typically due to `IF EXISTS`).
+    NoOp {
+        statement: String,
+    },
     TableCreated {
         name: String,
         file_id: FileId,
@@ -56,6 +60,23 @@ pub enum StatementResult {
         table: String,
         schema: TupleSchema,
         rows: Vec<Tuple>,
+    },
+    ColumnRenamed {
+        table: String,
+        old_name: String,
+        new_name: String,
+    },
+    ColumnAdded {
+        table: String,
+        column_name: String,
+    },
+    ColumnDropped {
+        table: String,
+        column_name: String,
+    },
+    TableRenamed {
+        old_name: String,
+        new_name: String,
     },
 }
 
@@ -119,8 +140,10 @@ impl StatementResult {
 }
 
 impl fmt::Display for StatementResult {
+    #[allow(clippy::too_many_lines)]
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            StatementResult::NoOp { statement } => write!(f, "{statement} completed: no-op"),
             StatementResult::TableCreated {
                 name,
                 file_id,
@@ -209,6 +232,34 @@ impl fmt::Display for StatementResult {
                     f,
                     "SELECT completed: returned {} {row_word} from '{table}' with columns {schema:?}",
                     rows.len()
+                )
+            }
+            StatementResult::ColumnRenamed {
+                table,
+                old_name,
+                new_name,
+            } => {
+                write!(
+                    f,
+                    "ALTER COLUMN completed: renamed column '{old_name}' to '{new_name}' in table '{table}'"
+                )
+            }
+            StatementResult::ColumnAdded { table, column_name } => {
+                write!(
+                    f,
+                    "ALTER TABLE completed: added column '{column_name}' to table '{table}'"
+                )
+            }
+            StatementResult::ColumnDropped { table, column_name } => {
+                write!(
+                    f,
+                    "ALTER TABLE completed: dropped column '{column_name}' from table '{table}'"
+                )
+            }
+            StatementResult::TableRenamed { old_name, new_name } => {
+                write!(
+                    f,
+                    "RENAME TABLE completed: renamed table '{old_name}' to '{new_name}'"
                 )
             }
         }

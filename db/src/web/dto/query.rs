@@ -138,6 +138,9 @@ impl From<&ShownIndex> for ShownIndexDto {
 #[derive(Debug, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum QueryResultDto {
+    NoOp {
+        statement: String,
+    },
     TableCreated {
         name: String,
         file_id: u64,
@@ -193,6 +196,9 @@ pub enum QueryResultDto {
 impl From<&StatementResult> for QueryResultDto {
     fn from(r: &StatementResult) -> Self {
         match r {
+            StatementResult::NoOp { statement } => QueryResultDto::NoOp {
+                statement: statement.clone(),
+            },
             StatementResult::TableCreated {
                 name,
                 file_id,
