@@ -191,6 +191,24 @@ pub enum QueryResultDto {
         old_name: String,
         new_name: String,
     },
+    ColumnDefaultSet {
+        table: String,
+        column: String,
+    },
+    ColumnDefaultDropped {
+        table: String,
+        column: String,
+    },
+    ColumnNotNullDropped {
+        table: String,
+        column: String,
+    },
+    PrimaryKeySet {
+        table: String,
+    },
+    PrimaryKeyDropped {
+        table: String,
+    },
 }
 
 impl From<&StatementResult> for QueryResultDto {
@@ -266,6 +284,30 @@ impl From<&StatementResult> for QueryResultDto {
             StatementResult::TableRenamed { old_name, new_name } => QueryResultDto::TableRenamed {
                 old_name: old_name.clone(),
                 new_name: new_name.clone(),
+            },
+            StatementResult::ColumnDefaultSet { table, column } => {
+                QueryResultDto::ColumnDefaultSet {
+                    table: table.clone(),
+                    column: column.clone(),
+                }
+            }
+            StatementResult::ColumnDefaultDropped { table, column } => {
+                QueryResultDto::ColumnDefaultDropped {
+                    table: table.clone(),
+                    column: column.clone(),
+                }
+            }
+            StatementResult::ColumnNotNullDropped { table, column } => {
+                QueryResultDto::ColumnNotNullDropped {
+                    table: table.clone(),
+                    column: column.clone(),
+                }
+            }
+            StatementResult::PrimaryKeySet { table } => QueryResultDto::PrimaryKeySet {
+                table: table.clone(),
+            },
+            StatementResult::PrimaryKeyDropped { table } => QueryResultDto::PrimaryKeyDropped {
+                table: table.clone(),
             },
         }
     }

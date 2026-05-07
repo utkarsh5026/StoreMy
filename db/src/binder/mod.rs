@@ -81,6 +81,9 @@ pub enum BindError {
 
     #[error("unknown index '{0}'")]
     UnknownIndex(String),
+
+    #[error("table '{0}' already has a primary key")]
+    PrimaryKeyAlreadyExists(String),
 }
 
 impl BindError {
@@ -107,6 +110,10 @@ impl BindError {
             table: table.into(),
             column: column.into(),
         }
+    }
+
+    pub(super) fn primary_key_already_exists(table: impl Into<String>) -> Self {
+        Self::PrimaryKeyAlreadyExists(table.into())
     }
 
     pub(super) fn wrong_column_count(

@@ -232,6 +232,59 @@ impl Catalog {
         Ok(())
     }
 
+    /// Assigns a primary key to a table that currently has none, or replaces an existing one.
+    ///
+    /// Deletes all existing `PrimaryKeyColumnRow` entries for `table_id`, inserts
+    /// fresh rows for each element of `column_ids` (preserving their order as the
+    /// PK ordinal), then updates the in-memory `user_tables` cache so the change
+    /// is visible immediately without a reload.
+    ///
+    /// # Errors
+    ///
+    /// - [`CatalogError::TableNotFound`] if `table_id` does not resolve.
+    /// - [`CatalogError::InvalidCatalogRow`] if any `column_ids` entry is out of bounds or the
+    ///   ordinal overflows `i32`.
+    /// - Propagates system-table write errors.
+    pub fn set_primary_key(
+        &self,
+        txn: &Transaction<'_>,
+        table_id: FileId,
+        column_ids: Vec<ColumnId>,
+    ) -> Result<(), CatalogError> {
+        let mut table = self.get_table_info_by_id(txn, table_id)?;
+        self.delete_systable_rows::<PrimaryKeyColumnRow, _>(txn, |r| r.table_id == table_id)?;
+        self.insert_primary_key_columns(txn, table_id, &table.schema, &column_ids)?;
+        table.primary_key = Some(column_ids);
+        let mut cache = self.user_tables.write();
+        cache.remove(&table.name);
+        cache.insert(table.name.clone(), table);
+        Ok(())
+    }
+
+    /// Removes the primary key from a table.
+    ///
+    /// Deletes all `PrimaryKeyColumnRow` entries for `table_id` and sets
+    /// `TableInfo.primary_key` to `None` in the in-memory cache. No column
+    /// data or nullability constraints are altered.
+    ///
+    /// # Errors
+    ///
+    /// - [`CatalogError::TableNotFound`] if `table_id` does not resolve.
+    /// - Propagates system-table write errors.
+    pub fn drop_primary_key(
+        &self,
+        txn: &Transaction<'_>,
+        table_id: FileId,
+    ) -> Result<(), CatalogError> {
+        let mut table = self.get_table_info_by_id(txn, table_id)?;
+        self.delete_systable_rows::<PrimaryKeyColumnRow, _>(txn, |r| r.table_id == table_id)?;
+        table.primary_key = None;
+        let mut cache = self.user_tables.write();
+        cache.remove(&table.name);
+        cache.insert(table.name.clone(), table);
+        Ok(())
+    }
+
     /// Reads table and column metadata from the system catalog for a table named `name`.
     ///
     /// Scans the `Tables` system table to find the matching [`TableRow`], then
@@ -1205,5 +1258,144 @@ mod tests {
         txn3.commit().unwrap();
 
         assert_eq!(info.name, "b", "reloaded name must be the new name");
+    }
+
+    // ── set_primary_key ───────────────────────────────────────────────────
+
+    #[test]
+    fn test_set_primary_key_visible_in_cache_immediately() {
+        let dir = tempdir().unwrap();
+        let (catalog, txn_mgr) = make_catalog_and_txn(dir.path());
+
+        let txn = txn_mgr.begin().unwrap();
+        let file_id = catalog
+            .create_table(&txn, "t", two_col_schema(), None)
+            .unwrap();
+        txn.commit().unwrap();
+
+        let txn2 = txn_mgr.begin().unwrap();
+        catalog
+            .set_primary_key(&txn2, file_id, vec![col(0)])
+            .unwrap();
+        let info = catalog.get_table_info(&txn2, "t").unwrap();
+        txn2.commit().unwrap();
+
+        assert_eq!(
+            info.primary_key,
+            Some(vec![col(0)]),
+            "PK must be visible immediately after set_primary_key, got: {:?}",
+            info.primary_key
+        );
+    }
+
+    #[test]
+    fn test_set_primary_key_replaces_existing_pk() {
+        let dir = tempdir().unwrap();
+        let (catalog, txn_mgr) = make_catalog_and_txn(dir.path());
+
+        let txn = txn_mgr.begin().unwrap();
+        // Start with col 0 as PK.
+        let file_id = catalog
+            .create_table(&txn, "t", two_col_schema(), Some(vec![col(0)]))
+            .unwrap();
+        txn.commit().unwrap();
+
+        let txn2 = txn_mgr.begin().unwrap();
+        catalog
+            .set_primary_key(&txn2, file_id, vec![col(1)])
+            .unwrap();
+        let info = catalog.get_table_info(&txn2, "t").unwrap();
+        txn2.commit().unwrap();
+
+        assert_eq!(
+            info.primary_key,
+            Some(vec![col(1)]),
+            "PK must be replaced by set_primary_key, got: {:?}",
+            info.primary_key
+        );
+    }
+
+    #[test]
+    fn test_set_primary_key_survives_cache_evict_and_reload() {
+        let dir = tempdir().unwrap();
+        let (catalog, txn_mgr) = make_catalog_and_txn(dir.path());
+
+        let txn = txn_mgr.begin().unwrap();
+        let file_id = catalog
+            .create_table(&txn, "t", two_col_schema(), None)
+            .unwrap();
+        txn.commit().unwrap();
+
+        let txn2 = txn_mgr.begin().unwrap();
+        catalog
+            .set_primary_key(&txn2, file_id, vec![col(0), col(1)])
+            .unwrap();
+        txn2.commit().unwrap();
+
+        catalog.user_tables.write().remove("t");
+
+        let txn3 = txn_mgr.begin().unwrap();
+        let info = catalog.get_table_info(&txn3, "t").unwrap();
+        txn3.commit().unwrap();
+
+        assert_eq!(
+            info.primary_key,
+            Some(vec![col(0), col(1)]),
+            "PK must survive cache evict and reload, got: {:?}",
+            info.primary_key
+        );
+    }
+
+    // ── drop_primary_key ──────────────────────────────────────────────────
+
+    #[test]
+    fn test_drop_primary_key_clears_pk_immediately() {
+        let dir = tempdir().unwrap();
+        let (catalog, txn_mgr) = make_catalog_and_txn(dir.path());
+
+        let txn = txn_mgr.begin().unwrap();
+        let file_id = catalog
+            .create_table(&txn, "t", two_col_schema(), Some(vec![col(0)]))
+            .unwrap();
+        txn.commit().unwrap();
+
+        let txn2 = txn_mgr.begin().unwrap();
+        catalog.drop_primary_key(&txn2, file_id).unwrap();
+        let info = catalog.get_table_info(&txn2, "t").unwrap();
+        txn2.commit().unwrap();
+
+        assert!(
+            info.primary_key.is_none(),
+            "PK must be None after drop_primary_key, got: {:?}",
+            info.primary_key
+        );
+    }
+
+    #[test]
+    fn test_drop_primary_key_survives_cache_evict_and_reload() {
+        let dir = tempdir().unwrap();
+        let (catalog, txn_mgr) = make_catalog_and_txn(dir.path());
+
+        let txn = txn_mgr.begin().unwrap();
+        let file_id = catalog
+            .create_table(&txn, "t", two_col_schema(), Some(vec![col(0)]))
+            .unwrap();
+        txn.commit().unwrap();
+
+        let txn2 = txn_mgr.begin().unwrap();
+        catalog.drop_primary_key(&txn2, file_id).unwrap();
+        txn2.commit().unwrap();
+
+        catalog.user_tables.write().remove("t");
+
+        let txn3 = txn_mgr.begin().unwrap();
+        let info = catalog.get_table_info(&txn3, "t").unwrap();
+        txn3.commit().unwrap();
+
+        assert!(
+            info.primary_key.is_none(),
+            "PK must still be None after cache reload, got: {:?}",
+            info.primary_key
+        );
     }
 }
