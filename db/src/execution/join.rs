@@ -739,11 +739,12 @@ mod tests {
         wal::writer::Wal,
     };
 
+    fn field(name: &str, field_type: Type) -> Field {
+        Field::new(name, field_type).unwrap()
+    }
+
     fn schema_ab() -> TupleSchema {
-        TupleSchema::new(vec![
-            Field::new("a", Type::Int32),
-            Field::new("b", Type::Int32),
-        ])
+        TupleSchema::new(vec![field("a", Type::Int32), field("b", Type::Int32)])
     }
 
     fn tup(a: i32, b: i32) -> Tuple {

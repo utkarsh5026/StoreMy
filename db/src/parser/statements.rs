@@ -69,8 +69,9 @@
 use std::fmt::Display;
 
 use crate::{
+    Type,
     index::IndexKind,
-    primitives::Predicate,
+    primitives::{NonEmptyString, Predicate},
     tuple::{Field, TupleSchema},
     types::Value,
 };
@@ -486,8 +487,8 @@ impl Display for DropStatement {
 /// ```
 #[derive(Debug, Clone)]
 pub struct ColumnDef {
-    pub name: String,
-    pub col_type: crate::types::Type,
+    pub name: NonEmptyString,
+    pub col_type: Type,
     pub nullable: bool,
     pub primary_key: bool,
     pub auto_increment: bool,
@@ -527,7 +528,7 @@ impl From<Vec<&ColumnDef>> for TupleSchema {
                 .into_iter()
                 .map(|col| {
                     let field_nullable = col.nullable && !col.primary_key;
-                    let mut field = Field::new(col.name.clone(), col.col_type);
+                    let mut field = Field::new_non_empty(col.name.clone(), col.col_type);
                     if !field_nullable {
                         field = field.not_null();
                     }
@@ -1177,7 +1178,7 @@ impl Display for UnOp {
 #[derive(Debug, Clone, PartialEq)]
 pub struct SelectItem {
     pub expr: Expr,
-    pub alias: Option<String>,
+    pub alias: Option<NonEmptyString>,
 }
 
 impl SelectItem {

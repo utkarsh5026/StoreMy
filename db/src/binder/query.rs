@@ -53,7 +53,7 @@ use crate::{
         AggFunc, ColumnRef, Expr, JoinKind, LimitClause, OrderBy, OrderDirection, SelectColumns,
         SelectItem, SelectStatement, TableRef, TableWithJoins,
     },
-    primitives::ColumnId,
+    primitives::{ColumnId, NonEmptyString},
     transaction::Transaction,
     tuple::TupleSchema,
 };
@@ -295,7 +295,7 @@ pub struct BoundProjection {
     /// Bound SQL expression for this output column.
     pub item: BoundSelectItem,
     /// SQL output name from `AS alias`, if one was written.
-    pub alias: Option<String>,
+    pub alias: Option<NonEmptyString>,
 }
 
 /// The bound SQL `SELECT` list.
@@ -698,9 +698,11 @@ impl BoundSelect {
             Expr::CountStar => BoundSelectItem::Aggregate(AggregateExpr {
                 func: AggregateFunc::CountStar,
                 col_id: ColumnId::default(),
-                output_name: alias.clone().unwrap_or_else(|| "COUNT(*)".to_string()),
+                output_name: alias
+                    .clone()
+                    .unwrap_or_else(|| "COUNT(*)".try_into().unwrap()),
             }),
-            Expr::Agg(func, arg) => Self::bind_agg(scope, &func, *arg, alias.as_deref())?,
+            Expr::Agg(func, arg) => Self::bind_agg(scope, &func, *arg, alias.as_ref())?,
             Expr::BinaryOp { .. } | Expr::UnaryOp { .. } => {
                 return Err(BindError::Unsupported(
                     "binary/unary expressions in SELECT projections are not yet supported".into(),
@@ -753,7 +755,7 @@ impl BoundSelect {
         scope: &Scope,
         func: &AggFunc,
         arg: Expr,
-        alias: Option<&str>,
+        alias: Option<&NonEmptyString>,
     ) -> Result<BoundSelectItem, BindError> {
         let Expr::Column(col) = arg else {
             return Err(BindError::Unsupported(
@@ -761,7 +763,9 @@ impl BoundSelect {
             ));
         };
 
-        let default_name = format!("{func}({})", col.name);
+        let default_name: NonEmptyString = format!("{func}({})", col.name)
+            .try_into()
+            .map_err(|e| BindError::Unsupported(format!("invalid aggregate output name: {e}")))?;
         let col_id = Self::resolve_scope_col(scope, &col)?;
         let agg_func = match func {
             AggFunc::Count => AggregateFunc::CountCol,
@@ -773,7 +777,7 @@ impl BoundSelect {
         Ok(BoundSelectItem::Aggregate(AggregateExpr {
             func: agg_func,
             col_id,
-            output_name: alias.map_or(default_name, str::to_string),
+            output_name: alias.cloned().unwrap_or(default_name),
         }))
     }
 
@@ -901,13 +905,17 @@ mod tests {
         (catalog, txn_mgr)
     }
 
+    fn field(name: &str, field_type: Type) -> Field {
+        Field::new(name, field_type).unwrap()
+    }
+
     /// `users(id Uint64 NN, name String, age Int64 NN)` — three columns at
     /// indices 0, 1, 2. Used as the canonical "left side" in join tests.
     fn users_schema() -> TupleSchema {
         TupleSchema::new(vec![
-            Field::new("id", Type::Uint64).not_null(),
-            Field::new("name", Type::String),
-            Field::new("age", Type::Int64).not_null(),
+            field("id", Type::Uint64).not_null(),
+            field("name", Type::String),
+            field("age", Type::Int64).not_null(),
         ])
     }
 
@@ -917,9 +925,9 @@ mod tests {
     /// when both tables are in scope.
     fn orders_schema() -> TupleSchema {
         TupleSchema::new(vec![
-            Field::new("id", Type::Uint64).not_null(),
-            Field::new("user_id", Type::Uint64).not_null(),
-            Field::new("total", Type::Int64).not_null(),
+            field("id", Type::Uint64).not_null(),
+            field("user_id", Type::Uint64).not_null(),
+            field("total", Type::Int64).not_null(),
         ])
     }
 
@@ -992,7 +1000,9 @@ mod tests {
     fn item(expr: Expr, alias: Option<&str>) -> SelectItem {
         SelectItem {
             expr,
-            alias: alias.map(str::to_string),
+            alias: alias.map(|a| {
+                NonEmptyString::new(a).expect("test helper `item` requires a valid non-empty alias")
+            }),
         }
     }
 

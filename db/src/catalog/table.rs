@@ -437,6 +437,10 @@ mod tests {
         wal::writer::Wal,
     };
 
+    fn field(name: &str, field_type: Type) -> Field {
+        Field::new(name, field_type).unwrap()
+    }
+
     fn make_infra(dir: &Path) -> (Arc<Wal>, Arc<PageStore>) {
         let wal = Arc::new(Wal::new(&dir.join("wal.log"), 0).expect("WAL creation failed"));
         let bp = Arc::new(PageStore::new(64, wal.clone()));
@@ -452,13 +456,13 @@ mod tests {
 
     fn two_col_schema() -> TupleSchema {
         TupleSchema::new(vec![
-            Field::new("id", Type::Uint64).not_null(),
-            Field::new("name", Type::String).not_null(),
+            field("id", Type::Uint64).not_null(),
+            field("name", Type::String).not_null(),
         ])
     }
 
     fn one_col_schema() -> TupleSchema {
-        TupleSchema::new(vec![Field::new("val", Type::Int64).not_null()])
+        TupleSchema::new(vec![field("val", Type::Int64).not_null()])
     }
 
     fn col(id: usize) -> ColumnId {

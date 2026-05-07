@@ -125,7 +125,10 @@ impl HeapDumpDto {
     /// `pages[i]` must be the raw bytes of page `i`; the caller is responsible
     /// for fetching them under a shared lock.
     pub fn build(table: &str, schema: &TupleSchema, pages: Vec<[u8; PAGE_SIZE]>) -> Self {
-        let field_names: Vec<String> = schema.fields().map(|f| f.name.clone()).collect();
+        let field_names: Vec<String> = schema
+            .fields()
+            .map(|f| f.name.as_str().to_owned())
+            .collect();
         let field_count = field_names.len();
         let pages = pages
             .into_iter()
@@ -301,7 +304,7 @@ fn decode_tuple_bytes(body: &[u8], schema: &TupleSchema) -> SlotDecodeDto {
         if is_null {
             fields.push(DecodedFieldDto {
                 index: i,
-                name: field.name.clone(),
+                name: field.name.as_str().to_owned(),
                 r#type: "NULL".to_string(),
                 value: JsonValue::Null,
             });
@@ -314,7 +317,7 @@ fn decode_tuple_bytes(body: &[u8], schema: &TupleSchema) -> SlotDecodeDto {
                     .map_or_else(|| "NULL".to_string(), |t| t.to_string());
                 fields.push(DecodedFieldDto {
                     index: i,
-                    name: field.name.clone(),
+                    name: field.name.as_str().to_owned(),
                     r#type: type_name,
                     value: value_to_json(&v),
                 });

@@ -501,7 +501,7 @@ impl Engine<'_> {
                     catalog.add_column(txn, file_id, column)?;
                     Ok(StatementResult::ColumnAdded {
                         table: table_name,
-                        column_name,
+                        column_name: column_name.as_str().to_owned(),
                     })
                 }
                 BoundAlterTable::DropColumn {
@@ -537,11 +537,15 @@ mod tests {
         catalog::manager::Catalog,
         engine::{Engine, EngineError, StatementResult},
         parser::statements::{ColumnDef, CreateTableStatement, DropStatement},
-        primitives::ColumnId,
+        primitives::{ColumnId, NonEmptyString},
         transaction::TransactionManager,
         tuple::TupleSchema,
         wal::writer::Wal,
     };
+
+    fn field(name: &str, col_type: Type) -> Field {
+        Field::new_non_empty(NonEmptyString::new(name).unwrap(), col_type)
+    }
 
     fn make_infra(dir: &Path) -> (Arc<Wal>, Arc<PageStore>) {
         let wal = Arc::new(Wal::new(&dir.join("wal.log"), 0).expect("WAL creation failed"));
@@ -558,7 +562,7 @@ mod tests {
 
     fn col(name: &str, col_type: Type, nullable: bool, primary_key: bool) -> ColumnDef {
         ColumnDef {
-            name: name.to_string(),
+            name: NonEmptyString::new(name).unwrap(),
             col_type,
             nullable,
             primary_key,
@@ -926,8 +930,8 @@ mod tests {
                 &txn,
                 "users",
                 crate::tuple::TupleSchema::new(vec![
-                    Field::new("id", Type::Int64).not_null(),
-                    Field::new("email", Type::String).not_null(),
+                    field("id", Type::Int64).not_null(),
+                    field("email", Type::String).not_null(),
                 ]),
                 None,
             )
@@ -962,8 +966,8 @@ mod tests {
                 &txn,
                 "t",
                 crate::tuple::TupleSchema::new(vec![
-                    Field::new("a", Type::Int64).not_null(),
-                    Field::new("b", Type::Int64).not_null(),
+                    field("a", Type::Int64).not_null(),
+                    field("b", Type::Int64).not_null(),
                 ]),
                 None,
             )
@@ -1019,7 +1023,7 @@ mod tests {
             .create_table(
                 &txn,
                 "other",
-                crate::tuple::TupleSchema::new(vec![Field::new("k", Type::Int64).not_null()]),
+                TupleSchema::new(vec![field("k", Type::Int64).not_null()]),
                 None,
             )
             .unwrap();
@@ -1079,7 +1083,7 @@ mod tests {
             .create_table(
                 &txn,
                 "lonely",
-                crate::tuple::TupleSchema::new(vec![Field::new("x", Type::Int64).not_null()]),
+                TupleSchema::new(vec![field("x", Type::Int64).not_null()]),
                 None,
             )
             .unwrap();

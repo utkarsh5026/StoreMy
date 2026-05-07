@@ -24,6 +24,7 @@ impl Encode for (&TupleSchema, &Tuple) {
     fn encode<W: Write>(&self, writer: &mut W) -> Result<(), CodecError> {
         let (schema, tuple) = *self;
         let bitmap_size = schema.num_fields().div_ceil(8);
+        writer.write_all(&tuple.n_fields.to_le_bytes())?;
         let mut bitmap = vec![0u8; bitmap_size];
         for (i, value) in tuple.values.iter().enumerate() {
             if value.is_null() {
@@ -71,6 +72,7 @@ impl Encode for (&TupleSchema, &Tuple) {
 /// itself does no checking.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Default)]
 pub struct Tuple {
+    pub(crate) n_fields: u16,
     pub(crate) values: Vec<Value>,
 }
 
@@ -92,7 +94,10 @@ impl Tuple {
     /// Stores the values as-is - no validation. Pair with
     /// [`TupleSchema::validate`] when the row is about to be persisted.
     pub fn new(values: Vec<Value>) -> Self {
-        Self { values }
+        Self {
+            n_fields: values.len() as u16,
+            values,
+        }
     }
 
     /// Reads the value at column `index`, or `None` if out of bounds - the
@@ -153,11 +158,18 @@ impl Tuple {
     /// Builds a new row containing only the values at `indices`.
     #[must_use]
     pub fn project(&self, indices: &[usize]) -> Self {
-        let values = indices
-            .iter()
-            .filter_map(|&i| self.values.get(i).cloned())
+        let mut n_fields = 0u16;
+        let values: Vec<Value> = indices
+            .into_iter()
+            .filter_map(|&i| {
+                let value = self.values.get(i).cloned();
+                if value.is_some() {
+                    n_fields += 1;
+                }
+                value
+            })
             .collect();
-        Self { values }
+        Self { n_fields, values }
     }
 
     /// Iterates references to the row's values in column-declaration order.
@@ -170,7 +182,10 @@ impl Tuple {
     pub fn concat(&self, other: &Tuple) -> Self {
         let mut values = self.values.clone();
         values.extend(other.values.iter().cloned());
-        Self { values }
+        Self {
+            n_fields: self.n_fields + other.n_fields,
+            values,
+        }
     }
 
     /// Writes the row's bytes into `buf`.
@@ -211,7 +226,10 @@ impl Tuple {
             }
         }
 
-        Ok(Self { values })
+        Ok(Self {
+            n_fields: values.len() as u16,
+            values,
+        })
     }
 
     /// Overwrites the column at `index` with `value`, enforcing the same
@@ -237,7 +255,7 @@ impl Tuple {
 
         if value.is_null() && !field.nullable {
             return Err(TupleError::NullNotAllowed {
-                column: field.name.clone(),
+                column: field.name.to_string(),
             });
         }
 
@@ -245,7 +263,7 @@ impl Tuple {
             && value_type != field.field_type
         {
             return Err(TupleError::TypeMismatch {
-                column: field.name.clone(),
+                column: field.name.to_string(),
                 expected: field.field_type,
                 actual: value_type,
             });
@@ -303,11 +321,15 @@ mod tests {
         types::{Type, Value},
     };
 
+    fn field(name: &str, field_type: Type) -> Field {
+        Field::new(name, field_type).unwrap()
+    }
+
     fn schema_id_name_age() -> TupleSchema {
         TupleSchema::new(vec![
-            Field::new("id", Type::Int32).not_null(),
-            Field::new("name", Type::String),
-            Field::new("age", Type::Int32),
+            field("id", Type::Int32).not_null(),
+            field("name", Type::String),
+            field("age", Type::Int32),
         ])
     }
 
@@ -481,12 +503,12 @@ mod tests {
     #[test]
     fn serialize_deserialize_all_fixed_types() {
         let schema = TupleSchema::new(vec![
-            Field::new("i32", Type::Int32),
-            Field::new("i64", Type::Int64),
-            Field::new("u32", Type::Uint32),
-            Field::new("u64", Type::Uint64),
-            Field::new("f64", Type::Float64),
-            Field::new("b", Type::Bool),
+            field("i32", Type::Int32),
+            field("i64", Type::Int64),
+            field("u32", Type::Uint32),
+            field("u64", Type::Uint64),
+            field("f64", Type::Float64),
+            field("b", Type::Bool),
         ]);
         let tuple = Tuple::new(vec![
             Value::Int32(-1),
@@ -501,7 +523,7 @@ mod tests {
 
     #[test]
     fn serialize_deserialize_string() {
-        let schema = TupleSchema::new(vec![Field::new("s", Type::String)]);
+        let schema = TupleSchema::new(vec![field("s", Type::String)]);
         let tuple = Tuple::new(vec![Value::String("hello, world".into())]);
         assert_eq!(roundtrip(&schema, &tuple), tuple);
     }
@@ -509,9 +531,9 @@ mod tests {
     #[test]
     fn serialize_deserialize_with_nulls() {
         let schema = TupleSchema::new(vec![
-            Field::new("a", Type::Int32),
-            Field::new("b", Type::Int32),
-            Field::new("c", Type::Int32),
+            field("a", Type::Int32),
+            field("b", Type::Int32),
+            field("c", Type::Int32),
         ]);
         let tuple = Tuple::new(vec![Value::Int32(1), Value::Null, Value::Int32(3)]);
         assert_eq!(roundtrip(&schema, &tuple), tuple);
@@ -519,20 +541,14 @@ mod tests {
 
     #[test]
     fn serialize_deserialize_all_nulls() {
-        let schema = TupleSchema::new(vec![
-            Field::new("x", Type::Bool),
-            Field::new("y", Type::Int64),
-        ]);
+        let schema = TupleSchema::new(vec![field("x", Type::Bool), field("y", Type::Int64)]);
         let tuple = Tuple::new(vec![Value::Null, Value::Null]);
         assert_eq!(roundtrip(&schema, &tuple), tuple);
     }
 
     #[test]
     fn serialize_returns_bytes_written() {
-        let schema = TupleSchema::new(vec![
-            Field::new("n", Type::Int32),
-            Field::new("b", Type::Bool),
-        ]);
+        let schema = TupleSchema::new(vec![field("n", Type::Int32), field("b", Type::Bool)]);
         let tuple = Tuple::new(vec![Value::Int32(7), Value::Bool(true)]);
         let mut buf = vec![0u8; schema.serialized_size()];
         let written = tuple.serialize(&schema, &mut buf).unwrap();
@@ -541,7 +557,7 @@ mod tests {
 
     #[test]
     fn serialize_buffer_too_small_returns_error() {
-        let schema = TupleSchema::new(vec![Field::new("a", Type::Int32)]);
+        let schema = TupleSchema::new(vec![field("a", Type::Int32)]);
         let tuple = Tuple::new(vec![Value::Int32(1)]);
         let mut buf: Vec<u8> = vec![];
         let err = tuple.serialize(&schema, &mut buf).unwrap_err();
@@ -550,7 +566,7 @@ mod tests {
 
     #[test]
     fn deserialize_buffer_too_small_returns_error() {
-        let schema = TupleSchema::new(vec![Field::new("a", Type::Int32)]);
+        let schema = TupleSchema::new(vec![field("a", Type::Int32)]);
         let err = Tuple::deserialize(&schema, &[]).unwrap_err();
         assert!(matches!(err, CodecError::Io(_)));
     }
@@ -614,7 +630,7 @@ mod tests {
     #[test]
     fn null_bitmap_encoding_correctness() {
         let fields: Vec<Field> = (0..8)
-            .map(|i| Field::new(format!("c{i}"), Type::Bool))
+            .map(|i| field(format!("c{i}").as_str(), Type::Bool))
             .collect();
         let schema = TupleSchema::new(fields);
 

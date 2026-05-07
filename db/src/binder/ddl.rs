@@ -589,7 +589,7 @@ impl BoundAlterTable {
 
     fn bind_add_column(table: TableInfo, col_def: &ColumnDef) -> Result<Self, BindError> {
         if table.schema.field_by_name(&col_def.name).is_some() {
-            return Err(BindError::duplicate_column(&col_def.name));
+            return Err(BindError::duplicate_column(col_def.name.as_str()));
         }
 
         Ok(Self::AddColumn {
@@ -663,10 +663,15 @@ mod tests {
         catalog::manager::Catalog,
         index::hash::HashIndex,
         parser::statements::{ColumnDef, CreateTableStatement, DropStatement},
+        primitives::NonEmptyString,
         transaction::TransactionManager,
         tuple::{Field, TupleSchema},
         wal::writer::Wal,
     };
+
+    fn field(name: &str, field_type: Type) -> Field {
+        Field::new(name, field_type).unwrap()
+    }
 
     fn make_catalog_and_txn_mgr(dir: &Path) -> (Catalog, TransactionManager) {
         let wal = Arc::new(Wal::new(&dir.join("wal.log"), 0).expect("WAL creation failed"));
@@ -766,7 +771,7 @@ mod tests {
 
     fn col(name: &str, ty: Type, pk: bool) -> ColumnDef {
         ColumnDef {
-            name: name.to_string(),
+            name: NonEmptyString::new(name).unwrap(),
             col_type: ty,
             nullable: true,
             primary_key: pk,
@@ -798,8 +803,8 @@ mod tests {
 
     fn two_col_schema() -> TupleSchema {
         TupleSchema::new(vec![
-            Field::new("id", Type::Uint64).not_null(),
-            Field::new("name", Type::String).not_null(),
+            field("id", Type::Uint64).not_null(),
+            field("name", Type::String).not_null(),
         ])
     }
 
@@ -1133,8 +1138,6 @@ mod tests {
         assert!(matches!(err, BindError::PrimaryKeyNotInColumns(_)));
     }
 
-    // ── happy path: bind_create_index ─────────────────────────────────────
-
     // Resolves a single column name to its index in the table's schema and
     // preserves the access-method kind from the AST.
     #[test]
@@ -1177,9 +1180,9 @@ mod tests {
         let (catalog, txn_mgr) = make_catalog_and_txn_mgr(dir.path());
         let txn = txn_mgr.begin().unwrap();
         let schema = TupleSchema::new(vec![
-            Field::new("a", Type::Int64).not_null(),
-            Field::new("b", Type::Int64).not_null(),
-            Field::new("c", Type::Int64).not_null(),
+            field("a", Type::Int64).not_null(),
+            field("b", Type::Int64).not_null(),
+            field("c", Type::Int64).not_null(),
         ]);
         catalog.create_table(&txn, "t", schema, None).unwrap();
         txn.commit().unwrap();
@@ -1203,8 +1206,6 @@ mod tests {
             BoundCreateIndex::AlreadyExists { .. } => panic!("expected New"),
         }
     }
-
-    // ── error / edge: bind_create_index ───────────────────────────────────
 
     // Unknown column inside the column list surfaces as BindError::UnknownColumn,
     // tagged with the table name the binder resolved.
@@ -1464,7 +1465,7 @@ mod tests {
 
     fn col_def(name: &str, ty: Type) -> ColumnDef {
         ColumnDef {
-            name: name.to_string(),
+            name: NonEmptyString::new(name).unwrap(),
             col_type: ty,
             nullable: true,
             primary_key: false,
@@ -1472,8 +1473,6 @@ mod tests {
             default: None,
         }
     }
-
-    // ── happy path: ADD COLUMN ────────────────────────────────────────────
 
     // Adding a brand-new column resolves to AddColumn carrying the correct
     // table name, file_id, and column definition.

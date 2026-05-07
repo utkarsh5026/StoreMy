@@ -1,7 +1,11 @@
 use std::{collections::HashMap, fmt};
 
 use super::{Tuple, TupleError};
-use crate::{primitives::ColumnId, types::Type};
+use crate::{
+    Value,
+    primitives::{ColumnId, NameError, NonEmptyString},
+    types::Type,
+};
 
 /// One column declared in `CREATE TABLE` - name, type, and the `NOT NULL` flag.
 ///
@@ -20,31 +24,44 @@ use crate::{primitives::ColumnId, types::Type};
 /// `NOT NULL`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Field {
-    pub name: String,
+    pub name: NonEmptyString,
     pub field_type: Type,
     pub nullable: bool,
+    pub is_dropped: bool,
+    pub missing_default_value: Option<Value>,
 }
 
 impl Field {
     /// Builds a nullable column - the `CREATE TABLE` default.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`NameError`] if `name` violates the [`NonEmptyString`]
+    /// invariant (empty, NUL byte, or longer than `MAX_NAME_LEN`).
     ///
     /// # SQL examples
     ///
     /// ```sql
     /// -- name VARCHAR
     /// --   Field::new("name", Type::String)
-    ///
-    /// -- age INT
-    /// --   Field::new("age", Type::Int32)
-    ///
-    /// -- score DOUBLE
-    /// --   Field::new("score", Type::Float64)
     /// ```
-    pub fn new(name: impl Into<String>, field_type: Type) -> Self {
-        Self {
-            name: name.into(),
+    pub fn new(name: impl Into<String>, field_type: Type) -> Result<Self, NameError> {
+        Ok(Self {
+            name: NonEmptyString::new(name)?,
             field_type,
             nullable: true,
+            is_dropped: false,
+            missing_default_value: None,
+        })
+    }
+
+    pub fn new_non_empty(name: NonEmptyString, field_type: Type) -> Self {
+        Self {
+            name,
+            field_type,
+            nullable: true,
+            is_dropped: false,
+            missing_default_value: None,
         }
     }
 
@@ -78,17 +95,47 @@ impl Field {
     /// -- SELECT column_name AS alias
     /// --   field.set_name("alias")
     /// ```
+    /// # Errors
     ///
-    /// # Examples
-    /// ```
-    /// use storemy::{Type, tuple::Field};
+    /// Returns [`NameError`] if `name` violates the [`NonEmptyString`] invariant.
+    pub fn set_name(&mut self, name: impl Into<String>) -> Result<&mut Self, NameError> {
+        self.name = NonEmptyString::new(name)?;
+        Ok(self)
+    }
+
+    /// Sets the default value used when this column is added after existing
+    /// rows already exist.
     ///
-    /// let mut field = Field::new("old_name", Type::Int32);
-    /// field.set_name("new_name");
-    /// assert_eq!(field.name, "new_name");
+    /// This is mainly used by schema evolution paths (`ALTER TABLE ... ADD COLUMN`)
+    /// so old tuples can read a sensible value for the newly introduced field.
+    ///
+    /// # SQL examples
+    ///
+    /// ```sql
+    /// -- ALTER TABLE users ADD COLUMN is_active BOOLEAN DEFAULT TRUE;
+    /// --   field.set_missing_default_value(Value::Bool(true))
     /// ```
-    pub fn set_name(&mut self, name: impl Into<String>) -> &mut Self {
-        self.name = name.into();
+    #[must_use]
+    pub fn set_missing_default_value(&mut self, value: Value) -> &mut Self {
+        self.missing_default_value = Some(value);
+        self
+    }
+
+    /// Marks whether this field is logically dropped while metadata is kept.
+    ///
+    /// A dropped field can remain in catalog/schema metadata for compatibility
+    /// during migration or rewrite steps, even though it should no longer appear
+    /// in normal query projections.
+    ///
+    /// # SQL examples
+    ///
+    /// ```sql
+    /// -- ALTER TABLE users DROP COLUMN middle_name;
+    /// --   field.set_is_dropped(true)
+    /// ```
+    #[must_use]
+    pub fn set_is_dropped(&mut self, is_dropped: bool) -> &mut Self {
+        self.is_dropped = is_dropped;
         self
     }
 }
@@ -133,7 +180,7 @@ impl fmt::Display for Field {
 #[derive(Debug, Clone, Default)]
 pub struct TupleSchema {
     fields: Vec<Field>,
-    field_indices: HashMap<String, usize>,
+    field_indices: HashMap<NonEmptyString, usize>,
 }
 
 impl TupleSchema {
@@ -351,7 +398,7 @@ impl TupleSchema {
         for (field, value) in self.fields.iter().zip(tuple.iter()) {
             if value.is_null() && !field.nullable {
                 return Err(TupleError::NullNotAllowed {
-                    column: field.name.clone(),
+                    column: field.name.to_string(),
                 });
             }
 
@@ -359,7 +406,7 @@ impl TupleSchema {
                 && value_type != field.field_type
             {
                 return Err(TupleError::TypeMismatch {
-                    column: field.name.clone(),
+                    column: field.name.to_string(),
                     expected: field.field_type,
                     actual: value_type,
                 });
@@ -371,7 +418,7 @@ impl TupleSchema {
 
     /// Borrows the name -> index map the binder uses to resolve qualified
     /// column references (e.g. `users.id`) to positional column indices.
-    pub fn field_indices(&self) -> &HashMap<String, usize> {
+    pub fn field_indices(&self) -> &HashMap<NonEmptyString, usize> {
         &self.field_indices
     }
 
@@ -439,6 +486,14 @@ impl TupleSchema {
             })
             .collect()
     }
+
+    pub fn logical_iter(&self) -> impl Iterator<Item = &Field> {
+        self.fields.iter().filter(|f| !f.is_dropped)
+    }
+
+    pub fn physical_iter(&self) -> impl Iterator<Item = &Field> {
+        self.fields.iter()
+    }
 }
 
 impl fmt::Display for TupleSchema {
@@ -461,9 +516,9 @@ mod tests {
 
     fn schema_id_name_age() -> TupleSchema {
         TupleSchema::new(vec![
-            Field::new("id", Type::Int32).not_null(),
-            Field::new("name", Type::String),
-            Field::new("age", Type::Int32),
+            Field::new("id", Type::Int32).unwrap().not_null(),
+            Field::new("name", Type::String).unwrap(),
+            Field::new("age", Type::Int32).unwrap(),
         ])
     }
 
@@ -475,9 +530,13 @@ mod tests {
         ])
     }
 
+    fn field(name: &str, field_type: Type) -> Field {
+        Field::new(name, field_type).unwrap()
+    }
+
     #[test]
     fn field_new_is_nullable() {
-        let f = Field::new("score", Type::Float64);
+        let f = field("score", Type::Float64);
         assert_eq!(f.name, "score");
         assert_eq!(f.field_type, Type::Float64);
         assert!(f.nullable);
@@ -485,19 +544,19 @@ mod tests {
 
     #[test]
     fn field_not_null_clears_flag() {
-        let f = Field::new("id", Type::Int64).not_null();
+        let f = field("id", Type::Int64).not_null();
         assert!(!f.nullable);
     }
 
     #[test]
     fn field_display_nullable() {
-        let f = Field::new("score", Type::Int32);
+        let f = field("score", Type::Int32);
         assert_eq!(f.to_string(), "score INT");
     }
 
     #[test]
     fn field_display_not_null() {
-        let f = Field::new("id", Type::Int64).not_null();
+        let f = field("id", Type::Int64).not_null();
         assert_eq!(f.to_string(), "id BIGINT NOT NULL");
     }
 
@@ -552,7 +611,7 @@ mod tests {
     #[test]
     fn schema_serialized_size_bitmap_grows_at_9_fields() {
         let fields: Vec<Field> = (0..9)
-            .map(|i| Field::new(format!("c{i}"), Type::Bool))
+            .map(|i| field(format!("c{i}").as_str(), Type::Bool))
             .collect();
         let schema = TupleSchema::new(fields);
         assert_eq!(schema.serialized_size(), 2 + 9 + 9);
@@ -560,8 +619,8 @@ mod tests {
 
     #[test]
     fn schema_merge() {
-        let left = TupleSchema::new(vec![Field::new("a", Type::Int32)]);
-        let right = TupleSchema::new(vec![Field::new("b", Type::Int64)]);
+        let left = TupleSchema::new(vec![field("a", Type::Int32)]);
+        let right = TupleSchema::new(vec![Field::new("b", Type::Int64).unwrap()]);
         let merged = left.merge(&right);
         assert_eq!(merged.num_fields(), 2);
         assert_eq!(merged.field(0).unwrap().name, "a");
@@ -589,8 +648,8 @@ mod tests {
     #[test]
     fn schema_display() {
         let schema = TupleSchema::new(vec![
-            Field::new("id", Type::Int32).not_null(),
-            Field::new("flag", Type::Bool),
+            field("id", Type::Int32).not_null(),
+            field("flag", Type::Bool),
         ]);
         assert_eq!(schema.to_string(), "(id INT NOT NULL, flag BOOLEAN)");
     }

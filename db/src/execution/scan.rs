@@ -29,14 +29,9 @@ use crate::{
 /// `SeqScan` borrows the heap file for its lifetime `'a`, so the file must
 /// outlive the scan.
 pub struct SeqScan<'a> {
-    /// The heap file being scanned.
     file: &'a HeapFile,
-    /// Transaction under whose visibility rules tuples are read.
     txn: TransactionId,
-    /// Schema cloned from the heap file at construction time.
     schema: TupleSchema,
-    /// The live page-level iterator; `None` before the first `next()` call or
-    /// after a `rewind()`.
     inner: Option<HeapScan<'a>>,
 }
 
@@ -155,11 +150,12 @@ mod tests {
         wal::writer::Wal,
     };
 
+    fn field(name: &str, field_type: Type) -> Field {
+        Field::new(name, field_type).unwrap()
+    }
+
     fn schema() -> TupleSchema {
-        TupleSchema::new(vec![
-            Field::new("id", Type::Int32),
-            Field::new("flag", Type::Bool),
-        ])
+        TupleSchema::new(vec![field("id", Type::Int32), field("flag", Type::Bool)])
     }
 
     fn make_tuple(id: i32, flag: bool) -> Tuple {

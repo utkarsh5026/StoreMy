@@ -12,7 +12,7 @@ use crate::{
         systable::{ColumnRow, PrimaryKeyColumnRow},
     },
     parser::statements::ColumnDef,
-    primitives::ColumnId,
+    primitives::{ColumnId, NonEmptyString},
     transaction::Transaction,
     tuple::TupleSchema,
 };
@@ -48,13 +48,16 @@ impl Catalog {
 
         self.delete_column(txn, table_id, old_name)?;
 
-        let new_column = ColumnRow::new(
+        let new_column = ColumnRow {
             table_id,
-            new_name.to_string(),
-            column.column_type,
-            column.position,
-            column.nullable,
-        )?;
+            column_name: NonEmptyString::new(new_name)
+                .map_err(|e| CatalogError::invalid_catalog_row(e.to_string()))?,
+            column_type: column.column_type,
+            position: column.position,
+            nullable: column.nullable,
+            is_dropped: false,
+            missing_default_value: None,
+        };
         self.insert_systable_tuple(txn, &new_column)?;
         self.refresh_table_schema(txn, table)
     }
@@ -139,13 +142,15 @@ impl Catalog {
         let position = ColumnId::try_from(table.schema.num_fields())
             .map_err(|_| CatalogError::invalid_catalog_row("column position out of range"))?;
 
-        let new_col = ColumnRow::new(
+        let new_col = ColumnRow {
             table_id,
-            column.name,
-            column.col_type,
+            column_name: column.name,
+            column_type: column.col_type,
             position,
-            column.nullable,
-        )?;
+            nullable: column.nullable,
+            is_dropped: false,
+            missing_default_value: None,
+        };
         self.insert_systable_tuple(txn, &new_col)?;
         self.refresh_table_schema(txn, table)
     }
@@ -172,7 +177,7 @@ impl Catalog {
         column_name: &str,
     ) -> Result<(), CatalogError> {
         self.delete_systable_rows::<ColumnRow, _>(txn, |r| {
-            r.table_id == table_id && r.column_name == column_name
+            r.table_id == table_id && r.column_name.as_str() == column_name
         })?;
         Ok(())
     }
@@ -263,8 +268,8 @@ mod tests {
 
     fn two_col_schema() -> TupleSchema {
         TupleSchema::new(vec![
-            Field::new("id", Type::Uint64).not_null(),
-            Field::new("name", Type::String).not_null(),
+            Field::new("id", Type::Uint64).unwrap().not_null(),
+            Field::new("name", Type::String).unwrap().not_null(),
         ])
     }
 
@@ -543,7 +548,8 @@ mod tests {
 
     fn col_def(name: &str, ty: Type) -> crate::parser::statements::ColumnDef {
         crate::parser::statements::ColumnDef {
-            name: name.to_string(),
+            name: NonEmptyString::new(name)
+                .expect("test helper `col_def` requires a valid non-empty column name"),
             col_type: ty,
             nullable: true,
             primary_key: false,

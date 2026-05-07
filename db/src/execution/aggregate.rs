@@ -33,7 +33,7 @@ use fallible_iterator::FallibleIterator;
 use super::{ExecutionError, Executor};
 use crate::{
     execution::PlanNode,
-    primitives::ColumnId,
+    primitives::{ColumnId, NonEmptyString},
     tuple::{Field, Tuple, TupleSchema},
     types::{Type, Value},
 };
@@ -109,7 +109,7 @@ impl From<(&AggregateFunc, Type)> for Type {
 pub struct AggregateExpr {
     pub func: AggregateFunc,
     pub col_id: ColumnId,
-    pub output_name: String,
+    pub output_name: NonEmptyString,
 }
 
 /// Running state for one aggregate function over one group.
@@ -423,7 +423,7 @@ impl<'a> Aggregate<'a> {
                 })?;
 
             let output_type = Type::from((func, input_type));
-            output_fields.push(Field::new(output_name, output_type));
+            output_fields.push(Field::new_non_empty(output_name.clone(), output_type));
         }
 
         Ok(output_fields)
@@ -582,12 +582,13 @@ mod tests {
         wal::writer::Wal,
     };
 
+    fn field(name: &str, field_type: Type) -> Field {
+        Field::new(name, field_type).unwrap()
+    }
+
     // Schema: (group: Int32, val: Int32 NULLABLE)
     fn schema_gv() -> TupleSchema {
-        TupleSchema::new(vec![
-            Field::new("group", Type::Int32),
-            Field::new("val", Type::Int32),
-        ])
+        TupleSchema::new(vec![field("group", Type::Int32), field("val", Type::Int32)])
     }
 
     fn row(g: i32, v: Option<i32>) -> Tuple {
@@ -647,7 +648,7 @@ mod tests {
         AggregateExpr {
             func,
             col_id: col(col_id),
-            output_name: name.to_string(),
+            output_name: NonEmptyString::new(name).unwrap(),
         }
     }
 

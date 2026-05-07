@@ -10,6 +10,7 @@ use crate::{
         },
         token::TokenType,
     },
+    primitives::NonEmptyString,
     types::Value,
 };
 
@@ -147,7 +148,10 @@ impl Parser {
                 } else {
                     None
                 };
-            Ok(SelectItem { expr, alias })
+            Ok(SelectItem {
+                expr,
+                alias: alias.map(NonEmptyString::try_from).transpose()?,
+            })
         };
         self.parse_delimited_list(TokenType::Comma, TokenType::From, parse_select_item)
     }

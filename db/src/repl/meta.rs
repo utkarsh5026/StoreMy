@@ -198,7 +198,11 @@ fn primary_key_label(schema: &TupleSchema, pk: Option<&[ColumnId]>) -> Option<St
     }
     let names: Vec<String> = indices
         .iter()
-        .filter_map(|&col_id| schema.field(usize::from(col_id)).map(|f| f.name.clone()))
+        .filter_map(|&col_id| {
+            schema
+                .field(usize::from(col_id))
+                .map(|f| f.name.as_str().to_owned())
+        })
         .collect();
     if names.is_empty() {
         None

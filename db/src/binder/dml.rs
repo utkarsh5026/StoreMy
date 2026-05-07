@@ -298,7 +298,7 @@ fn bind_literal_for_column(
         if !field.nullable {
             return Err(BindError::NullViolation {
                 table: table.into(),
-                column: field.name.clone(),
+                column: field.name.to_string(),
             });
         }
         return Ok(BoundExpr::Literal(Value::Null));
@@ -306,7 +306,7 @@ fn bind_literal_for_column(
 
     let coerced =
         Value::try_from((value, field.field_type)).map_err(|e| BindError::TypeMismatch {
-            column: field.name.clone(),
+            column: field.name.to_string(),
             expected: field.field_type.to_string(),
             got: e.to_string(),
         })?;
@@ -335,8 +335,6 @@ mod tests {
         wal::writer::Wal,
     };
 
-    // ── fixture helpers ───────────────────────────────────────────────────
-
     fn make_catalog_and_txn_mgr(dir: &Path) -> (Catalog, TransactionManager) {
         let wal = Arc::new(Wal::new(&dir.join("wal.log"), 0).expect("WAL creation failed"));
         let bp = Arc::new(PageStore::new(64, wal.clone()));
@@ -345,12 +343,12 @@ mod tests {
         (catalog, txn_mgr)
     }
 
-    /// (id: Uint64 NOT NULL, name: String nullable, age: Int64 NOT NULL)
     fn three_col_schema() -> TupleSchema {
+        let f = |name: &str, field_type: Type| Field::new(name, field_type).unwrap();
         TupleSchema::new(vec![
-            Field::new("id", Type::Uint64).not_null(),
-            Field::new("name", Type::String),
-            Field::new("age", Type::Int64).not_null(),
+            f("id", Type::Uint64).not_null(),
+            f("name", Type::String),
+            f("age", Type::Int64).not_null(),
         ])
     }
 
@@ -381,12 +379,6 @@ mod tests {
             Err(e) => e,
         }
     }
-
-    // ──────────────────────────────────────────────────────────────────────
-    // bind_delete
-    // ──────────────────────────────────────────────────────────────────────
-
-    // --- happy path ---
 
     // DELETE without WHERE binds to None filter and the catalog file_id.
     #[test]
@@ -429,8 +421,6 @@ mod tests {
         assert!(matches!(bound.filter, Some(BooleanExpression::Leaf { .. })));
     }
 
-    // --- error paths ---
-
     // Missing target table surfaces as a Catalog error wrapped in BindError.
     #[test]
     fn test_bind_delete_unknown_table_errors() {
@@ -467,12 +457,6 @@ mod tests {
 
         assert!(matches!(err, BindError::UnknownColumn { ref column, .. } if column == "nope"));
     }
-
-    // ──────────────────────────────────────────────────────────────────────
-    // bind_insert
-    // ──────────────────────────────────────────────────────────────────────
-
-    // --- happy path ---
 
     // No column list → identity projection; rows already in schema order.
     #[test]

@@ -501,7 +501,11 @@ impl Engine<'_> {
                     let name = if let Some(name) = &proj.alias {
                         name.clone()
                     } else {
-                        format!("?column?{}", i + 1)
+                        format!("?column?{}", i + 1).try_into().map_err(|e| {
+                            EngineError::type_error(format!(
+                                "invalid synthesized literal column name: {e}"
+                            ))
+                        })?
                     };
                     Ok(ProjectItem::literal(v.clone(), name))
                 }
@@ -648,10 +652,14 @@ impl Engine<'_> {
                         ProjectItem::column(Self::col_id(pos)?, projection.alias.clone())
                     }
                     BoundSelectItem::Literal(v) => {
-                        let name = projection
-                            .alias
-                            .clone()
-                            .unwrap_or_else(|| format!("?column?{}", i + 1));
+                        let name = match projection.alias.clone() {
+                            Some(alias) => alias,
+                            None => format!("?column?{}", i + 1).try_into().map_err(|e| {
+                                EngineError::type_error(format!(
+                                    "invalid synthesized literal column name: {e}"
+                                ))
+                            })?,
+                        };
                         ProjectItem::literal(v.clone(), name)
                     }
                 })
@@ -755,6 +763,7 @@ mod tests {
         catalog::manager::Catalog,
         engine::{Engine, EngineError, StatementResult},
         parser::Parser,
+        primitives::NonEmptyString,
         transaction::TransactionManager,
         tuple::{Field, Tuple, TupleSchema},
         wal::writer::Wal,
@@ -766,6 +775,10 @@ mod tests {
         let catalog = Catalog::initialize(&bp, &wal, dir).unwrap();
         let txn_mgr = TransactionManager::new(wal, bp);
         (catalog, txn_mgr)
+    }
+
+    fn field(name: &str, col_type: Type) -> Field {
+        Field::new_non_empty(NonEmptyString::new(name).unwrap(), col_type)
     }
 
     fn parse(sql: &str) -> crate::parser::statements::Statement {
@@ -791,7 +804,7 @@ mod tests {
 
     fn field_names(schema: &TupleSchema) -> Vec<String> {
         (0..schema.num_fields())
-            .map(|i| schema.field(i).unwrap().name.clone())
+            .map(|i| schema.field(i).unwrap().name.as_str().to_owned())
             .collect()
     }
 
@@ -807,9 +820,9 @@ mod tests {
                     &txn,
                     "users",
                     TupleSchema::new(vec![
-                        Field::new("id", Type::Int64).not_null(),
-                        Field::new("name", Type::String),
-                        Field::new("age", Type::Int64).not_null(),
+                        field("id", Type::Int64).not_null(),
+                        field("name", Type::String),
+                        field("age", Type::Int64).not_null(),
                     ]),
                     None,
                 )
@@ -835,9 +848,9 @@ mod tests {
                 &txn,
                 "users",
                 TupleSchema::new(vec![
-                    Field::new("id", Type::Int64).not_null(),
-                    Field::new("name", Type::String),
-                    Field::new("age", Type::Int64).not_null(),
+                    field("id", Type::Int64).not_null(),
+                    field("name", Type::String),
+                    field("age", Type::Int64).not_null(),
                 ]),
                 None,
             )

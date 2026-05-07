@@ -601,11 +601,12 @@ mod tests {
         types::{Type, Value},
     };
 
+    fn field(name: &str, field_type: Type) -> Field {
+        Field::new(name, field_type).unwrap()
+    }
+
     fn schema() -> TupleSchema {
-        TupleSchema::new(vec![
-            Field::new("id", Type::Int32),
-            Field::new("flag", Type::Bool),
-        ])
+        TupleSchema::new(vec![field("id", Type::Int32), field("flag", Type::Bool)])
     }
 
     fn make_tuple(id: i32, flag: bool) -> Tuple {

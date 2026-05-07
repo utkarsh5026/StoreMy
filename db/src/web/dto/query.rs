@@ -24,7 +24,7 @@ pub struct ColumnDto {
 impl From<&Field> for ColumnDto {
     fn from(f: &Field) -> Self {
         ColumnDto {
-            name: f.name.clone(),
+            name: f.name.as_str().to_owned(),
             r#type: f.field_type.to_string(),
             nullable: f.nullable,
         }

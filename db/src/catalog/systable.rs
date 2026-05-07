@@ -1,10 +1,10 @@
 use std::{fmt, path::PathBuf};
 
 use crate::{
-    FileId, IndexId, Type,
+    FileId, IndexId, Type, Value,
     catalog::{CatalogError, tuple::TupleReader},
     index::IndexKind,
-    primitives::ColumnId,
+    primitives::{ColumnId, NonEmptyString},
     tuple::{Field, Tuple, TupleSchema},
 };
 
@@ -55,7 +55,8 @@ impl SystemTable {
     pub fn schema(self) -> TupleSchema {
         use Type::{Bool, Int32, Int64, String, Uint32, Uint64};
 
-        let field = |name: &'static str, ty| Field::new(name, ty);
+        // Names are compile-time string literals — Field::new can never fail here.
+        let field = |name: &'static str, ty| Field::new(name, ty).expect("static field name");
 
         let fields = match self {
             SystemTable::Tables => vec![
@@ -148,25 +149,17 @@ pub(super) trait CatalogRow: for<'a> TryFrom<&'a Tuple, Error = CatalogError> {
     const TABLE: SystemTable;
 }
 
-/// Checks that a given string `value` is not empty, returning an error if it is.
-///
-/// # Arguments
-///
-/// * `value` - The string to check for emptiness.
-/// * `field` - The name of the field (for error messages).
-///
-/// # Errors
-///
-/// Returns a [`CatalogError`] if the string is empty, identifying the specific field.
-///
-/// # Examples
-///
-/// ```rust,ignore
-/// non_empty("foo", "column_name")?; // Ok
-/// non_empty("", "column_name")?;    // Err: "column_name must not be empty"
-/// ```
-fn non_empty(value: &str, field: &'static str) -> Result<(), CatalogError> {
-    if value.is_empty() {
+/// Validates a raw string and wraps it in a [`NonEmptyString`], attaching the
+/// catalog-field label to any error so the message points at the offending column.
+fn validate_name(value: String, field: &'static str) -> Result<NonEmptyString, CatalogError> {
+    NonEmptyString::new(value)
+        .map_err(|e| CatalogError::invalid_catalog_row(format!("{field}: {e}")))
+}
+
+/// Empty-check for a [`PathBuf`]. Paths don't go through [`NonEmptyString`]
+/// because the type's NUL/length rules are name-shaped, not path-shaped.
+fn non_empty_path(value: &PathBuf, field: &'static str) -> Result<(), CatalogError> {
+    if value.as_os_str().is_empty() {
         return Err(CatalogError::invalid_catalog_row(format!(
             "{field} must not be empty"
         )));
@@ -176,7 +169,7 @@ fn non_empty(value: &str, field: &'static str) -> Result<(), CatalogError> {
 
 pub(super) struct TableRow {
     pub(super) table_id: FileId,
-    pub(super) table_name: String,
+    pub(super) table_name: NonEmptyString,
     pub(super) file_path: PathBuf,
 }
 
@@ -186,8 +179,8 @@ impl TableRow {
         table_name: String,
         file_path: PathBuf,
     ) -> Result<Self, CatalogError> {
-        non_empty(&table_name, "table_name")?;
-        non_empty(&file_path.as_os_str().to_string_lossy(), "file_path")?;
+        let table_name = validate_name(table_name, "table_name")?;
+        non_empty_path(&file_path, "file_path")?;
 
         Ok(Self {
             table_id,
@@ -201,7 +194,7 @@ impl From<&TableRow> for Tuple {
     fn from(row: &TableRow) -> Tuple {
         Tuple::new(vec![
             u64::from(row.table_id).into(),
-            row.table_name.clone().into(),
+            row.table_name.as_str().to_owned().into(),
             row.file_path.to_string_lossy().to_string().into(),
         ])
     }
@@ -224,30 +217,15 @@ impl CatalogRow for TableRow {
 
 pub(super) struct ColumnRow {
     pub table_id: FileId,
-    pub column_name: String,
+    pub column_name: NonEmptyString,
     pub column_type: Type,
     pub position: ColumnId,
     pub nullable: bool,
+    pub is_dropped: bool,
+    pub missing_default_value: Option<Value>,
 }
 
 impl ColumnRow {
-    pub(super) fn new(
-        table_id: FileId,
-        column_name: String,
-        column_type: Type,
-        position: ColumnId,
-        nullable: bool,
-    ) -> Result<Self, CatalogError> {
-        non_empty(&column_name, "column_name")?;
-        Ok(Self {
-            table_id,
-            column_name,
-            column_type,
-            position,
-            nullable,
-        })
-    }
-
     /// Builds one [`ColumnRow`] per field in `schema` for catalog `CATALOG_COLUMNS`.
     pub(super) fn from_schema(
         table_id: FileId,
@@ -255,22 +233,22 @@ impl ColumnRow {
     ) -> Result<Vec<ColumnRow>, CatalogError> {
         let mut rows = Vec::new();
 
-        for (
-            i,
-            Field {
-                name,
-                field_type,
-                nullable,
-            },
-        ) in schema.fields().enumerate()
-        {
+        for (i, f) in schema.fields().enumerate() {
             let position = ColumnId::try_from(i).map_err(|e| {
                 CatalogError::invalid_catalog_row(format!(
                     "column position {i} is not a valid ColumnId: {e}"
                 ))
             })?;
 
-            let row = Self::new(table_id, name.clone(), *field_type, position, *nullable)?;
+            let row = ColumnRow {
+                table_id,
+                column_name: f.name.clone(),
+                column_type: f.field_type,
+                position,
+                nullable: f.nullable,
+                is_dropped: f.is_dropped,
+                missing_default_value: f.missing_default_value.clone(),
+            };
             rows.push(row);
         }
         Ok(rows)
@@ -281,10 +259,12 @@ impl From<&ColumnRow> for Tuple {
     fn from(row: &ColumnRow) -> Tuple {
         Tuple::new(vec![
             u64::from(row.table_id).into(),
-            row.column_name.clone().into(),
+            row.column_name.as_str().to_owned().into(),
             u32::from(row.column_type).into(),
             u32::from(row.position).into(),
             row.nullable.into(),
+            row.is_dropped.into(),
+            row.missing_default_value.clone().into(),
         ])
     }
 }
@@ -293,15 +273,25 @@ impl TryFrom<&Tuple> for ColumnRow {
     type Error = CatalogError;
 
     fn try_from(tuple: &Tuple) -> Result<Self, Self::Error> {
-        let table_id = FileId::from(TupleReader::read::<u64>(tuple, 0)?);
-        let column_name = TupleReader::read(tuple, 1)?;
+        let table_id = TupleReader::read::<u64>(tuple, 0)?;
+        let column_name = TupleReader::read::<String>(tuple, 1)?;
         let column_type = Type::try_from(TupleReader::read::<u32>(tuple, 2)?)
             .map_err(|e| CatalogError::invalid_catalog_row(e.to_string()))?;
         let position = ColumnId::try_from(TupleReader::read::<u32>(tuple, 3)?)
             .map_err(|e| CatalogError::invalid_catalog_row(e.to_string()))?;
         let nullable = TupleReader::read(tuple, 4)?;
+        let is_dropped = TupleReader::read(tuple, 5)?;
+        let missing_default_value = TupleReader::read(tuple, 6)?;
 
-        Self::new(table_id, column_name, column_type, position, nullable)
+        Ok(Self {
+            table_id: FileId::from(table_id),
+            column_name: validate_name(column_name, "column_name")?,
+            column_type,
+            position,
+            nullable,
+            is_dropped,
+            missing_default_value,
+        })
     }
 }
 
@@ -320,7 +310,7 @@ impl From<Vec<ColumnRow>> for TupleSchema {
             ..
         } in rows
         {
-            let f = Field::new(column_name, column_type);
+            let f = Field::new_non_empty(column_name, column_type);
             fields.push(if nullable { f } else { f.not_null() });
         }
         TupleSchema::new(fields)
@@ -336,9 +326,9 @@ impl From<Vec<ColumnRow>> for TupleSchema {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct IndexRow {
     pub(super) index_id: IndexId,
-    pub(super) index_name: String,
+    pub(super) index_name: NonEmptyString,
     pub(super) table_id: FileId,
-    pub(super) column_name: String,
+    pub(super) column_name: NonEmptyString,
     /// 0-based ordinal of this column within the index's column list.
     pub(super) column_position: ColumnId,
     pub(super) index_type: IndexKind,
@@ -363,8 +353,8 @@ impl IndexRow {
         index_file_id: FileId,
         num_buckets: u32,
     ) -> Result<Self, CatalogError> {
-        non_empty(&index_name, "index_name")?;
-        non_empty(&column_name, "column_name")?;
+        let index_name = validate_name(index_name, "index_name")?;
+        let column_name = validate_name(column_name, "column_name")?;
         if matches!(index_type, IndexKind::Hash) && num_buckets == 0 {
             return Err(CatalogError::invalid_catalog_row(
                 "hash index must declare num_buckets > 0",
@@ -440,9 +430,9 @@ impl From<&IndexRow> for Tuple {
     fn from(row: &IndexRow) -> Tuple {
         Tuple::new(vec![
             row.index_id.0.into(),
-            row.index_name.clone().into(),
+            row.index_name.as_str().to_owned().into(),
             row.table_id.0.into(),
-            row.column_name.clone().into(),
+            row.column_name.as_str().to_owned().into(),
             u32::from(row.column_position).into(),
             u32::from(row.index_type).into(),
             row.index_file_id.0.into(),
