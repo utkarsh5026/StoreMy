@@ -151,7 +151,7 @@ impl Decode for BucketNumber {
 ///
 /// Internal layout type — never appears in a plan or in user-facing SQL.
 /// Constructed by [`HashBucket::new`] for fresh overflow pages and by
-/// [`Decode::decode`] when [`HashIndex::read_bucket`] reads a page off disk.
+/// [`Decode::decode`] when `HashIndex::read_bucket` reads a page off disk.
 ///
 /// Codec impls are derived: each field encodes in declaration order, and the
 /// blanket `Vec<T>` impl writes a `u32` length prefix before the entry list.
@@ -176,7 +176,7 @@ impl HashBucket {
     ///
     /// Two callers in this file:
     /// - [`HashIndex::init`] when stamping head pages on `CREATE INDEX`.
-    /// - [`HashIndex::spill_to_overflow`] when the chain tail fills and a fresh overflow page is
+    /// - `HashIndex::spill_to_overflow` when the chain tail fills and a fresh overflow page is
     ///   allocated.
     pub fn new(bucket: BucketNumber) -> Self {
         Self {
@@ -208,7 +208,7 @@ impl HashBucket {
     /// Whether `entry` will fit in this bucket page without spilling.
     ///
     /// Returns `true` when the bucket can absorb the next insert in-place,
-    /// `false` when [`HashIndex::spill_to_overflow`] must allocate a fresh
+    /// `false` when `HashIndex::spill_to_overflow` must allocate a fresh
     /// page and link it from the current tail.
     ///
     /// The size estimate is exact because [`IndexEntry::encoded_size`]
@@ -339,7 +339,7 @@ impl HashIndex {
     ///
     /// Call this once when the index file is first created, before any
     /// insert or lookup. Without it, the buffer pool returns a zero-filled
-    /// page whose envelope CRC is invalid, and [`Self::read_bucket`] would
+    /// page whose envelope CRC is invalid, and `Self::read_bucket` would
     /// fail on first read.
     ///
     /// # SQL mapping

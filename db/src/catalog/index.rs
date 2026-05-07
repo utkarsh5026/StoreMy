@@ -101,10 +101,10 @@ const DEFAULT_HASH_BUCKETS: u32 = 64;
 
 /// In-memory description of one secondary index.
 ///
-/// This is the merged, validated view of N [`IndexRow`]s that share the same
-/// `index_id` — one per indexed column. The catalog reads rows off disk, calls
-/// [`IndexInfo::from_rows`] to fold them, and hands the result to the
-/// [`crate::index::IndexManager`] which then constructs and registers the live
+/// This is the merged, validated view of N `IndexRow`s that share the same
+/// `index_id` — one per indexed column. The catalog reads rows off disk, folds
+/// them into `IndexInfo`, and hands the result to the index subsystem which
+/// then constructs and registers the live
 /// access method.
 ///
 /// Mirrors the role [`TableInfo`] plays for tables: pure metadata, no
@@ -116,7 +116,7 @@ pub struct IndexInfo {
     /// SQL-visible name (`CREATE INDEX <name> …`).
     pub name: String,
     /// `FileId` of the indexed table's heap. Use this to look up the table
-    /// in [`Catalog::open_heaps`] when the executor needs to materialize a
+    /// in `Catalog::open_heaps` when the executor needs to materialize a
     /// row from a `RecordId` returned by the index.
     pub table_id: FileId,
     /// Names of the indexed columns, in declaration order. Length is the
@@ -222,12 +222,12 @@ impl TryFrom<Vec<IndexRow>> for IndexInfo {
 
         let columns = rows_with_positions
             .into_iter()
-            .map(|(_, row)| row.column_name)
+            .map(|(_, row)| row.column_name.into_inner())
             .collect();
 
         Ok(Self {
             index_id,
-            name,
+            name: name.into_inner(),
             table_id,
             columns,
             kind,
@@ -494,7 +494,7 @@ impl Catalog {
                         "index column index {i} out of bounds for table '{table_name}'"
                     ))
                 })?;
-                Ok((name.clone(), field_type))
+                Ok((name.to_string(), field_type))
             })
             .collect()
     }
@@ -605,10 +605,10 @@ impl Catalog {
         // table replay.
         let mut col_lookup: HashMap<FileId, HashMap<String, (ColumnId, Type)>> = HashMap::new();
         for c in &columns {
-            col_lookup
-                .entry(c.table_id)
-                .or_default()
-                .insert(c.column_name.clone(), (c.position, c.column_type));
+            col_lookup.entry(c.table_id).or_default().insert(
+                c.column_name.as_str().to_owned(),
+                (c.position, c.column_type),
+            );
         }
 
         // Eagerly populate user_tables / open_heaps. Without this,
@@ -737,9 +737,13 @@ mod tests {
         PAGE_SIZE, TransactionId, Type, Value,
         buffer_pool::page_store::PageStore,
         index::{CompositeKey, hash::HashIndex},
-        primitives::{PageNumber, RecordId, SlotId},
+        primitives::{NonEmptyString, PageNumber, RecordId, SlotId},
         wal::writer::Wal,
     };
+
+    fn field(name: &str, ty: Type) -> Field {
+        Field::new_non_empty(NonEmptyString::new(name).unwrap(), ty)
+    }
 
     fn make_infra(dir: &Path) -> (Arc<Wal>, Arc<PageStore>) {
         let wal = Arc::new(Wal::new(&dir.join("wal.log"), 0).expect("failed to create WAL"));
@@ -1009,8 +1013,6 @@ mod tests {
         assert_eq!(live.access.search(txn, &key).unwrap(), vec![r]);
     }
 
-    // ── Catalog::create_index / drop_index orchestrators ──────────────────
-
     use crate::{
         transaction::TransactionManager,
         tuple::{Field, TupleSchema},
@@ -1031,8 +1033,8 @@ mod tests {
     /// caller can start a fresh txn for the index work that follows.
     fn make_users_table(catalog: &Catalog, txn_mgr: &TransactionManager) -> FileId {
         let schema = TupleSchema::new(vec![
-            Field::new("id", Type::Int64).not_null(),
-            Field::new("email", Type::String).not_null(),
+            field("id", Type::Int64).not_null(),
+            field("email", Type::String).not_null(),
         ]);
         let txn = txn_mgr.begin().unwrap();
         let file_id = catalog.create_table(&txn, "users", schema, None).unwrap();
@@ -1043,9 +1045,9 @@ mod tests {
     /// Three-column variant for composite-index tests.
     fn make_three_col_table(catalog: &Catalog, txn_mgr: &TransactionManager) -> FileId {
         let schema = TupleSchema::new(vec![
-            Field::new("a", Type::Int64).not_null(),
-            Field::new("b", Type::Int64).not_null(),
-            Field::new("c", Type::Int64).not_null(),
+            field("a", Type::Int64).not_null(),
+            field("b", Type::Int64).not_null(),
+            field("c", Type::Int64).not_null(),
         ]);
         let txn = txn_mgr.begin().unwrap();
         let file_id = catalog.create_table(&txn, "t", schema, None).unwrap();
@@ -1378,7 +1380,7 @@ mod tests {
 
         // Second table with its own index.
         let other_id = {
-            let schema = TupleSchema::new(vec![Field::new("k", Type::Int64).not_null()]);
+            let schema = TupleSchema::new(vec![field("k", Type::Int64).not_null()]);
             let txn = txn_mgr.begin().unwrap();
             let id = catalog.create_table(&txn, "other", schema, None).unwrap();
             txn.commit().unwrap();
@@ -1549,7 +1551,7 @@ mod tests {
                 .create_table(
                     &txn,
                     "orders",
-                    TupleSchema::new(vec![Field::new("oid", Type::Int64).not_null()]),
+                    TupleSchema::new(vec![field("oid", Type::Int64).not_null()]),
                     None,
                 )
                 .unwrap();
@@ -1590,8 +1592,8 @@ mod tests {
 
         let txn = txn_mgr2.begin().unwrap();
         let schema = TupleSchema::new(vec![
-            Field::new("id", Type::Int64).not_null(),
-            Field::new("email", Type::String).not_null(),
+            field("id", Type::Int64).not_null(),
+            field("email", Type::String).not_null(),
         ]);
         let err = catalog2
             .create_table(&txn, "users", schema, None)
@@ -1619,8 +1621,8 @@ mod tests {
                     &txn,
                     "kv",
                     TupleSchema::new(vec![
-                        Field::new("a", Type::Int64).not_null(),
-                        Field::new("b", Type::Int64).not_null(),
+                        field("a", Type::Int64).not_null(),
+                        field("b", Type::Int64).not_null(),
                     ]),
                     // Declare PK as (b, a) — order matters and must
                     // round-trip across restart.

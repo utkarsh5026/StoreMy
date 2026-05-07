@@ -421,7 +421,7 @@ mod tests {
         engine::Engine,
         index::{CompositeKey, IndexKind},
         parser::Parser,
-        primitives::ColumnId,
+        primitives::{ColumnId, NonEmptyString},
         transaction::TransactionManager,
         tuple::{Field, TupleSchema},
         wal::writer::Wal,
@@ -444,6 +444,10 @@ mod tests {
         engine.execute_statement(stmt).expect("execute");
     }
 
+    fn field(name: &str, col_type: Type) -> Field {
+        Field::new_non_empty(NonEmptyString::new(name).unwrap(), col_type)
+    }
+
     // After INSERT, every registered index on the table contains the new
     // (key, rid) pair: index search by key returns exactly the record id
     // the heap insert produced.
@@ -459,8 +463,8 @@ mod tests {
                 &txn,
                 "users",
                 TupleSchema::new(vec![
-                    Field::new("id", Type::Int64).not_null(),
-                    Field::new("email", Type::String).not_null(),
+                    field("id", Type::Int64).not_null(),
+                    field("email", Type::String).not_null(),
                 ]),
                 None,
             )
@@ -512,8 +516,8 @@ mod tests {
                 &txn,
                 "t",
                 TupleSchema::new(vec![
-                    Field::new("a", Type::Int64).not_null(),
-                    Field::new("b", Type::Int64).not_null(),
+                    field("a", Type::Int64).not_null(),
+                    field("b", Type::Int64).not_null(),
                 ]),
                 None,
             )
@@ -567,7 +571,7 @@ mod tests {
             .create_table(
                 &txn,
                 "noidx",
-                TupleSchema::new(vec![Field::new("x", Type::Int64).not_null()]),
+                TupleSchema::new(vec![field("x", Type::Int64).not_null()]),
                 None,
             )
             .unwrap();
@@ -592,8 +596,8 @@ mod tests {
                 &txn,
                 "users",
                 TupleSchema::new(vec![
-                    Field::new("id", Type::Int64).not_null(),
-                    Field::new("email", Type::String).not_null(),
+                    field("id", Type::Int64).not_null(),
+                    field("email", Type::String).not_null(),
                 ]),
                 None,
             )
@@ -652,7 +656,7 @@ mod tests {
             .create_table(
                 &txn,
                 "t",
-                TupleSchema::new(vec![Field::new("k", Type::Int64).not_null()]),
+                TupleSchema::new(vec![field("k", Type::Int64).not_null()]),
                 None,
             )
             .unwrap();
@@ -698,8 +702,8 @@ mod tests {
                 &txn,
                 "users",
                 TupleSchema::new(vec![
-                    Field::new("id", Type::Int64).not_null(),
-                    Field::new("email", Type::String).not_null(),
+                    field("id", Type::Int64).not_null(),
+                    field("email", Type::String).not_null(),
                 ]),
                 None,
             )
@@ -759,8 +763,8 @@ mod tests {
                 &txn,
                 "users",
                 TupleSchema::new(vec![
-                    Field::new("id", Type::Int64).not_null(),
-                    Field::new("email", Type::String).not_null(),
+                    field("id", Type::Int64).not_null(),
+                    field("email", Type::String).not_null(),
                 ]),
                 None,
             )
@@ -813,8 +817,8 @@ mod tests {
                 &txn,
                 "noidx",
                 TupleSchema::new(vec![
-                    Field::new("x", Type::Int64).not_null(),
-                    Field::new("y", Type::Int64).not_null(),
+                    field("x", Type::Int64).not_null(),
+                    field("y", Type::Int64).not_null(),
                 ]),
                 None,
             )
@@ -840,8 +844,8 @@ mod tests {
                 &txn,
                 "t",
                 TupleSchema::new(vec![
-                    Field::new("a", Type::Int64).not_null(),
-                    Field::new("b", Type::Int64).not_null(),
+                    field("a", Type::Int64).not_null(),
+                    field("b", Type::Int64).not_null(),
                 ]),
                 None,
             )
@@ -895,8 +899,8 @@ mod tests {
                 &txn,
                 "users",
                 TupleSchema::new(vec![
-                    Field::new("id", Type::Int64).not_null(),
-                    Field::new("email", Type::String).not_null(),
+                    field("id", Type::Int64).not_null(),
+                    field("email", Type::String).not_null(),
                 ]),
                 None,
             )
@@ -952,9 +956,9 @@ mod tests {
                 &txn,
                 "users",
                 TupleSchema::new(vec![
-                    Field::new("id", Type::Int64).not_null(),
-                    Field::new("email", Type::String).not_null(),
-                    Field::new("name", Type::String).not_null(),
+                    field("id", Type::Int64).not_null(),
+                    field("email", Type::String).not_null(),
+                    field("name", Type::String).not_null(),
                 ]),
                 None,
             )
@@ -1036,7 +1040,7 @@ mod tests {
             .create_table(
                 &txn,
                 "noidx",
-                TupleSchema::new(vec![Field::new("x", Type::Int64).not_null()]),
+                TupleSchema::new(vec![field("x", Type::Int64).not_null()]),
                 None,
             )
             .unwrap();

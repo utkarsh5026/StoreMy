@@ -31,13 +31,12 @@
 //! - [`ColumnRef`] — possibly-qualified column reference (`t.c` or `c`), shared by every clause
 //!   that names a column.
 //! - [`WhereCondition`] — predicate tree used by `WHERE`, `HAVING`, and `JOIN … ON`.
-//! - [`AggFunc`] — aggregate function tag used by [`SelectExpr::Agg`].
+//! - [`AggFunc`] — aggregate function tag used by [`Expr::Agg`].
 //! - DDL: [`CreateTableStatement`], [`DropStatement`], [`CreateIndexStatement`],
 //!   [`DropIndexStatement`], [`ShowIndexesStatement`], [`ColumnDef`].
 //! - DML: [`InsertStatement`], [`UpdateStatement`] (with [`Assignment`]), [`DeleteStatement`].
-//! - Query: [`SelectStatement`], [`SelectColumns`], [`SelectItem`], [`SelectExpr`],
-//!   [`TableWithJoins`], [`TableRef`], [`Join`], [`JoinKind`], [`OrderBy`], [`OrderDirection`],
-//!   [`LimitClause`].
+//! - Query: [`SelectStatement`], [`SelectColumns`], [`SelectItem`], [`Expr`], [`TableWithJoins`],
+//!   [`TableRef`], [`Join`], [`JoinKind`], [`OrderBy`], [`OrderDirection`], [`LimitClause`].
 //!
 //! # Fixed schema for examples
 //!
@@ -54,7 +53,7 @@
 //! # NULL semantics
 //!
 //! The AST itself is value-neutral — `NULL` literals are stored as
-//! [`Value::Null`](crate::types::Value::Null). Three-valued logic in `WHERE` is
+//! [`Value::Null`]. Three-valued logic in `WHERE` is
 //! the executor's concern; see [`crate::execution::expression`] for how
 //! predicates collapse `NULL` to `false`.
 //!
@@ -69,8 +68,9 @@
 use std::fmt::Display;
 
 use crate::{
+    Type,
     index::IndexKind,
-    primitives::Predicate,
+    primitives::{NonEmptyString, Predicate},
     tuple::{Field, TupleSchema},
     types::Value,
 };
@@ -131,11 +131,12 @@ pub enum Statement {
 /// ```
 /// use storemy::{
 ///     parser::statements::{ColumnDef, CreateTableStatement, Statement},
+///     primitives::NonEmptyString,
 ///     types::Type,
 /// };
 ///
 /// let col = ColumnDef {
-///     name: "id".into(),
+///     name: NonEmptyString::new("id").unwrap(),
 ///     col_type: Type::Int32,
 ///     nullable: false,
 ///     primary_key: true,
@@ -366,18 +367,18 @@ impl Display for WhereCondition {
 
 /// An SQL aggregate function tag — the function name in `SELECT f(col)`.
 ///
-/// Pairs with a column name (or `*` for `COUNT`) inside [`SelectExpr::Agg`] /
-/// [`SelectExpr::CountStar`] to form a complete projection like `SUM(total)`.
+/// Pairs with a column name (or `*` for `COUNT`) inside [`Expr::Agg`] /
+/// [`Expr::CountStar`] to form a complete projection like `SUM(total)`.
 ///
 /// # SQL examples
 ///
 /// ```sql
-/// -- SELECT COUNT(*)              FROM users;   --> SelectExpr::CountStar
-/// -- SELECT COUNT(name)           FROM users;   --> SelectExpr::Agg(AggFunc::Count, "name")
-/// -- SELECT AVG(age)              FROM users;   --> SelectExpr::Agg(AggFunc::Avg,   "age")
-/// -- SELECT MIN(age), MAX(age)    FROM users;   --> two SelectExprs with AggFunc::Min / AggFunc::Max
+/// -- SELECT COUNT(*)              FROM users;   --> Expr::CountStar
+/// -- SELECT COUNT(name)           FROM users;   --> Expr::Agg(AggFunc::Count, "name")
+/// -- SELECT AVG(age)              FROM users;   --> Expr::Agg(AggFunc::Avg,   "age")
+/// -- SELECT MIN(age), MAX(age)    FROM users;   --> two Exprs with AggFunc::Min / AggFunc::Max
 /// -- SELECT SUM(total) FROM orders GROUP BY user_id;
-/// --                                            --> SelectExpr::Agg(AggFunc::Sum,   "total")
+/// --                                            --> Expr::Agg(AggFunc::Sum,   "total")
 /// ```
 #[derive(Debug, Clone, PartialEq)]
 pub enum AggFunc {
@@ -486,8 +487,8 @@ impl Display for DropStatement {
 /// ```
 #[derive(Debug, Clone)]
 pub struct ColumnDef {
-    pub name: String,
-    pub col_type: crate::types::Type,
+    pub name: NonEmptyString,
+    pub col_type: Type,
     pub nullable: bool,
     pub primary_key: bool,
     pub auto_increment: bool,
@@ -527,7 +528,7 @@ impl From<Vec<&ColumnDef>> for TupleSchema {
                 .into_iter()
                 .map(|col| {
                     let field_nullable = col.nullable && !col.primary_key;
-                    let mut field = Field::new(col.name.clone(), col.col_type);
+                    let mut field = Field::new_non_empty(col.name.clone(), col.col_type);
                     if !field_nullable {
                         field = field.not_null();
                     }
@@ -1177,7 +1178,7 @@ impl Display for UnOp {
 #[derive(Debug, Clone, PartialEq)]
 pub struct SelectItem {
     pub expr: Expr,
-    pub alias: Option<String>,
+    pub alias: Option<NonEmptyString>,
 }
 
 impl SelectItem {
@@ -1551,7 +1552,7 @@ impl Display for LimitClause {
 ///
 /// `NULL` literals in `WHERE`/`HAVING` predicates collapse to `false` per the
 /// executor's two-valued model — see [`crate::execution::expression`]. The
-/// AST itself just carries [`Value::Null`](crate::types::Value::Null).
+/// AST itself just carries [`Value::Null`].
 #[derive(Debug, Clone)]
 pub struct SelectStatement {
     pub distinct: bool,

@@ -18,7 +18,7 @@
 //!
 //! ## Structure
 //!
-//! - [`node`] — `BTreeNode` (Leaf | Internal): page layout + encode/decode. Pure data; testable
+//! - `node` — `BTreeNode` (Leaf | Internal): page layout + encode/decode. Pure data; testable
 //!   without a buffer pool.
 //! - `BTreeIndex` — tree traversal, splits, point lookups, range scans. Uses [`PageStore`] for
 //!   fetching/pinning pages and relies on the buffer pool's per-page locks.

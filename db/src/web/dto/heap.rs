@@ -60,7 +60,7 @@ pub struct PageHeaderDto {
     pub num_slots: u16,
     pub tuple_start: u16,
     pub checksum: u32,
-    /// First [`PAGE_HDR_SIZE`] bytes of the page in lower-case hex.
+    /// First `PAGE_HDR_SIZE` bytes of the page in lower-case hex.
     pub raw_hex: String,
 }
 
@@ -125,7 +125,10 @@ impl HeapDumpDto {
     /// `pages[i]` must be the raw bytes of page `i`; the caller is responsible
     /// for fetching them under a shared lock.
     pub fn build(table: &str, schema: &TupleSchema, pages: Vec<[u8; PAGE_SIZE]>) -> Self {
-        let field_names: Vec<String> = schema.fields().map(|f| f.name.clone()).collect();
+        let field_names: Vec<String> = schema
+            .fields()
+            .map(|f| f.name.as_str().to_owned())
+            .collect();
         let field_count = field_names.len();
         let pages = pages
             .into_iter()
@@ -279,7 +282,7 @@ fn decode_slot(
 }
 
 fn decode_tuple_bytes(body: &[u8], schema: &TupleSchema) -> SlotDecodeDto {
-    let bitmap_size = schema.num_fields().div_ceil(8);
+    let bitmap_size = schema.physical_num_fields().div_ceil(8);
     if body.len() < bitmap_size {
         return SlotDecodeDto::Err {
             error: format!(
@@ -294,14 +297,14 @@ fn decode_tuple_bytes(body: &[u8], schema: &TupleSchema) -> SlotDecodeDto {
     let bitmap = &body[..bitmap_size];
     let bitmap_hex = hex(bitmap);
     let mut cursor = std::io::Cursor::new(&body[bitmap_size..]);
-    let mut fields = Vec::with_capacity(schema.num_fields());
+    let mut fields = Vec::with_capacity(schema.physical_num_fields());
 
     for (i, field) in schema.fields().enumerate() {
         let is_null = (bitmap[i / 8] & (1 << (i % 8))) != 0;
         if is_null {
             fields.push(DecodedFieldDto {
                 index: i,
-                name: field.name.clone(),
+                name: field.name.as_str().to_owned(),
                 r#type: "NULL".to_string(),
                 value: JsonValue::Null,
             });
@@ -314,7 +317,7 @@ fn decode_tuple_bytes(body: &[u8], schema: &TupleSchema) -> SlotDecodeDto {
                     .map_or_else(|| "NULL".to_string(), |t| t.to_string());
                 fields.push(DecodedFieldDto {
                     index: i,
-                    name: field.name.clone(),
+                    name: field.name.as_str().to_owned(),
                     r#type: type_name,
                     value: value_to_json(&v),
                 });

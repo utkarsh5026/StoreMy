@@ -4,6 +4,8 @@
 //! Currently covers renaming; future operations (ADD COLUMN, DROP COLUMN) will
 //! live here as well.
 
+use std::sync::Arc;
+
 use crate::{
     FileId,
     catalog::{
@@ -12,7 +14,7 @@ use crate::{
         systable::{ColumnRow, PrimaryKeyColumnRow},
     },
     parser::statements::ColumnDef,
-    primitives::ColumnId,
+    primitives::{ColumnId, NonEmptyString},
     transaction::Transaction,
     tuple::TupleSchema,
 };
@@ -48,13 +50,16 @@ impl Catalog {
 
         self.delete_column(txn, table_id, old_name)?;
 
-        let new_column = ColumnRow::new(
+        let new_column = ColumnRow {
             table_id,
-            new_name.to_string(),
-            column.column_type,
-            column.position,
-            column.nullable,
-        )?;
+            column_name: NonEmptyString::new(new_name)
+                .map_err(|e| CatalogError::invalid_catalog_row(e.to_string()))?,
+            column_type: column.column_type,
+            position: column.position,
+            nullable: column.nullable,
+            is_dropped: false,
+            missing_default_value: column.missing_default_value,
+        };
         self.insert_systable_tuple(txn, &new_column)?;
         self.refresh_table_schema(txn, table)
     }
@@ -100,12 +105,17 @@ impl Catalog {
         }
 
         self.delete_column(txn, table_id, column_name)?;
+        let tombstone = ColumnRow {
+            is_dropped: true,
+            ..col
+        };
+        self.insert_systable_tuple(txn, &tombstone)?;
         self.refresh_table_schema(txn, table)
     }
 
     /// Adds a column to an existing table in the catalog.
     ///
-    /// This updates the `Columns` system table by inserting a new [`ColumnRow`]
+    /// This updates the `Columns` system table by inserting a new `ColumnRow`
     /// with a position equal to the current schema's field count, then rebuilds
     /// the table's [`TupleSchema`] from the system catalog and refreshes the
     /// in-memory `user_tables` cache entry.
@@ -121,7 +131,7 @@ impl Catalog {
     ///   present in the catalog for this table.
     /// - Returns [`CatalogError::InvalidCatalogRow`] if the computed column position does not fit
     ///   in the on-disk [`ColumnId`] representation.
-    /// - Propagates validation errors from [`ColumnRow::new`] and system-table read/write errors.
+    /// - Propagates system-table read/write and validation errors.
     pub fn add_column(
         &self,
         txn: &Transaction<'_>,
@@ -136,16 +146,25 @@ impl Catalog {
             return Err(CatalogError::column_already_exists(table.name, column.name));
         }
 
-        let position = ColumnId::try_from(table.schema.num_fields())
+        let all_cols =
+            self.scan_system_table_where::<ColumnRow, _>(txn, |r| r.table_id == table_id)?;
+        let next_pos = all_cols
+            .iter()
+            .map(|r| u32::from(r.position))
+            .max()
+            .map_or(0, |m| m + 1);
+        let position = ColumnId::try_from(next_pos)
             .map_err(|_| CatalogError::invalid_catalog_row("column position out of range"))?;
 
-        let new_col = ColumnRow::new(
+        let new_col = ColumnRow {
             table_id,
-            column.name,
-            column.col_type,
+            column_name: column.name,
+            column_type: column.col_type,
             position,
-            column.nullable,
-        )?;
+            nullable: column.nullable,
+            is_dropped: false,
+            missing_default_value: column.default,
+        };
         self.insert_systable_tuple(txn, &new_col)?;
         self.refresh_table_schema(txn, table)
     }
@@ -172,7 +191,7 @@ impl Catalog {
         column_name: &str,
     ) -> Result<(), CatalogError> {
         self.delete_systable_rows::<ColumnRow, _>(txn, |r| {
-            r.table_id == table_id && r.column_name == column_name
+            r.table_id == table_id && r.column_name.as_str() == column_name
         })?;
         Ok(())
     }
@@ -202,7 +221,7 @@ impl Catalog {
     ) -> Result<ColumnRow, CatalogError> {
         let col = self
             .scan_system_table_where::<ColumnRow, _>(txn, |r| {
-                r.table_id == table_id && r.column_name == column_name
+                r.table_id == table_id && r.column_name == column_name && !r.is_dropped
             })?
             .pop()
             .ok_or_else(|| CatalogError::column_not_found(table_name, column_name))?;
@@ -224,6 +243,22 @@ impl Catalog {
         let cols =
             self.scan_system_table_where::<ColumnRow, _>(txn, |r| r.table_id == table.file_id)?;
         table.schema = TupleSchema::from(cols);
+
+        // Re-register the heap with the new schema so that INSERT/scan sees
+        // the updated physical layout.  We rebuild rather than mutating
+        // in-place because HeapFile.schema is not behind a lock.
+        let file_id = table.file_id;
+        if let Some(old_heap) = self.get_heap(file_id) {
+            let new_heap = crate::heap::file::HeapFile::new(
+                file_id,
+                table.schema.clone(),
+                Arc::clone(&self.buffer_pool),
+                old_heap.page_count(),
+                Arc::clone(&self.wal),
+            );
+            self.register_heap(file_id, new_heap);
+        }
+
         let mut cache = self.user_tables.write();
         cache.remove(&table.name);
         cache.insert(table.name.clone(), table);
@@ -263,8 +298,8 @@ mod tests {
 
     fn two_col_schema() -> TupleSchema {
         TupleSchema::new(vec![
-            Field::new("id", Type::Uint64).not_null(),
-            Field::new("name", Type::String).not_null(),
+            Field::new("id", Type::Uint64).unwrap().not_null(),
+            Field::new("name", Type::String).unwrap().not_null(),
         ])
     }
 
@@ -435,10 +470,19 @@ mod tests {
         let info = catalog.get_table_info(&txn2, "t").unwrap();
         txn2.commit().unwrap();
 
-        let col_names: Vec<_> = info.schema.fields().map(|f| f.name.as_str()).collect();
+        let logical_names: Vec<_> = info
+            .schema
+            .logical_iter()
+            .map(|f| f.name.as_str())
+            .collect();
         assert!(
-            !col_names.contains(&"name"),
-            "dropped column must not appear in schema, got: {col_names:?}"
+            !logical_names.contains(&"name"),
+            "dropped column must not appear in logical schema, got: {logical_names:?}"
+        );
+        assert_eq!(
+            info.schema.physical_num_fields(),
+            2,
+            "physical slot count must be preserved after drop"
         );
     }
 
@@ -488,11 +532,20 @@ mod tests {
         let info = catalog.get_table_info(&txn3, "t").unwrap();
         txn3.commit().unwrap();
 
-        let col_names: Vec<_> = info.schema.fields().map(|f| f.name.as_str()).collect();
+        let logical_names: Vec<_> = info
+            .schema
+            .logical_iter()
+            .map(|f| f.name.as_str())
+            .collect();
         assert_eq!(
-            col_names,
+            logical_names,
             &["id"],
-            "only surviving column must remain after reload, got: {col_names:?}"
+            "only surviving column must be logical after reload, got: {logical_names:?}"
+        );
+        assert_eq!(
+            info.schema.physical_num_fields(),
+            2,
+            "physical slot must be preserved across cache evict/reload"
         );
     }
 
@@ -543,7 +596,8 @@ mod tests {
 
     fn col_def(name: &str, ty: Type) -> crate::parser::statements::ColumnDef {
         crate::parser::statements::ColumnDef {
-            name: name.to_string(),
+            name: NonEmptyString::new(name)
+                .expect("test helper `col_def` requires a valid non-empty column name"),
             col_type: ty,
             nullable: true,
             primary_key: false,
@@ -690,10 +744,10 @@ mod tests {
         txn2.commit().unwrap();
 
         assert_eq!(
-            info.schema.num_fields(),
+            info.schema.physical_num_fields(),
             4,
             "schema must have 4 fields after two adds, got: {}",
-            info.schema.num_fields()
+            info.schema.physical_num_fields()
         );
     }
 

@@ -97,7 +97,7 @@ impl JoinPredicate {
     ///
     /// # Errors
     ///
-    /// Returns an [`ExecutionError::TypeError`](crate::execution::ExecutionError::TypeError) if the
+    /// Returns an [`ExecutionError::TypeError`] if the
     /// column index is out of bounds for the tuple.
     pub fn evaluate(&self, left: &Tuple, right: &Tuple) -> Result<bool, ExecutionError> {
         let l = get_value(left, self.left_col, true)?;
@@ -153,7 +153,7 @@ struct JoinInputs<'a> {
 impl<'a> JoinInputs<'a> {
     /// Constructs a new `JoinInputs` by merging the two children's schemas.
     pub fn new(left: PlanNode<'a>, right: PlanNode<'a>) -> Self {
-        let left_width = left.schema().num_fields();
+        let left_width = left.schema().physical_num_fields();
         let schema = left.schema().merge(right.schema());
         Self {
             left,
@@ -739,11 +739,12 @@ mod tests {
         wal::writer::Wal,
     };
 
+    fn field(name: &str, field_type: Type) -> Field {
+        Field::new(name, field_type).unwrap()
+    }
+
     fn schema_ab() -> TupleSchema {
-        TupleSchema::new(vec![
-            Field::new("a", Type::Int32),
-            Field::new("b", Type::Int32),
-        ])
+        TupleSchema::new(vec![field("a", Type::Int32), field("b", Type::Int32)])
     }
 
     fn tup(a: i32, b: i32) -> Tuple {
@@ -995,7 +996,7 @@ mod tests {
         let left = build_heap(115, &[]);
         let right = build_heap(116, &[]);
         let j = NestedLoopJoin::new(scan(&left), scan(&right), nlj_eq_0_0_w2());
-        assert_eq!(j.schema().num_fields(), 4);
+        assert_eq!(j.schema().physical_num_fields(), 4);
     }
 
     // ===== HashJoin =====

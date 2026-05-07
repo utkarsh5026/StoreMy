@@ -34,9 +34,9 @@
 //!
 //! - [`primitives`] - Core types (`PageId`, `TransactionId`Id, LSN, etc.)
 //! - [`types`] - Value types and type system
-//! - [`error`] - Error types and Result alias
-//! - [`tuple`] - Tuple schema and record representation
-//! - [`iterator`] - Database iterator traits
+//! - Module-specific error enums and `Result` aliases
+//! - [`mod@tuple`] - Tuple schema and record representation
+//! - [`execution`] - Database operator and iterator traits
 
 // Make `::storemy::...` resolve inside our own crate. The `Encode` / `Decode`
 // derive macros (in the sibling `storemy-codec-derive` crate) emit absolute

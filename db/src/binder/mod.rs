@@ -108,6 +108,18 @@ impl BindError {
             column: column.into(),
         }
     }
+
+    pub(super) fn wrong_column_count(
+        table: impl Into<String>,
+        expected: usize,
+        got: usize,
+    ) -> Self {
+        Self::WrongColumnCount {
+            table: table.into(),
+            expected,
+            got,
+        }
+    }
 }
 
 #[non_exhaustive]

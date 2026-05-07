@@ -2,7 +2,7 @@
 //!
 //! These types name storage locations, transactions, log positions, and
 //! simple SQL comparison operators. Most of them implement
-//! [`Encode`](crate::codec::Encode) and [`Decode`](crate::codec::Decode) so
+//! [`Encode`] and [`Decode`] so
 //! they can be stored in pages or log records with a fixed, little-endian
 //! layout.
 //!
@@ -18,12 +18,14 @@
 //! - [`RecordId`] — full tuple address (`file`, `page`, `slot`)
 //! - [`PageId`] — page address without a slot (`file`, `page`)
 //! - [`Predicate`] — comparison operators used in `WHERE` / join conditions
-//! - [`Filepath`] — type alias for [`PathBuf`](std::path::PathBuf) in APIs
+//! - [`Filepath`] — type alias for [`PathBuf`] in APIs
 
 use std::{
+    borrow::Borrow,
     fmt,
     hash::{Hash, Hasher},
     io::{Read, Write},
+    ops::Deref,
     path::{Path, PathBuf},
 };
 
@@ -730,7 +732,7 @@ impl Encode for Predicate {
 impl Decode for Predicate {
     /// # Errors
     ///
-    /// Returns [`CodecError::UnknownDiscriminant`](crate::codec::CodecError::UnknownDiscriminant)
+    /// Returns [`CodecError::UnknownDiscriminant`]
     /// when the stored discriminant is not in `0..=7`.
     fn decode<R: Read>(reader: &mut R) -> Result<Self, CodecError> {
         match reader.read_u8()? {
@@ -749,6 +751,170 @@ impl Decode for Predicate {
 
 /// Convenience alias for owning file paths in engine APIs.
 pub type Filepath = PathBuf;
+
+/// Maximum length, in bytes, of a [`NonEmptyString`].
+///
+/// Matches the order of magnitude used by mainstream databases (Postgres 63,
+/// `MySQL` 64, SQL Server 128). The bound exists so a malformed or hostile
+/// `CREATE TABLE` cannot write an unbounded name into the catalog.
+pub const MAX_NAME_LEN: usize = 128;
+
+/// A `String` proven at construction to be non-empty, NUL-free, and at most
+/// [`MAX_NAME_LEN`] bytes long.
+///
+/// This is a *storage-layer* invariant: it covers the rules that must hold
+/// for any name written to the catalog, regardless of where it came from.
+/// Stricter rules (must start with a letter, no reserved words, etc.) belong
+/// in the SQL parser, not here — the catalog reload path needs to accept
+/// anything it would previously have written.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct NonEmptyString(String);
+
+/// Construction-time errors for [`NonEmptyString`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum NameError {
+    /// The string was empty.
+    Empty,
+    /// The string contained an interior NUL byte.
+    ContainsNul,
+    /// The string exceeded [`MAX_NAME_LEN`] bytes. `len` is the offending length.
+    TooLong { len: usize, max: usize },
+}
+
+impl fmt::Display for NameError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            NameError::Empty => write!(f, "name must not be empty"),
+            NameError::ContainsNul => write!(f, "name must not contain NUL bytes"),
+            NameError::TooLong { len, max } => {
+                write!(f, "name length {len} exceeds maximum {max}")
+            }
+        }
+    }
+}
+
+impl std::error::Error for NameError {}
+
+impl NonEmptyString {
+    /// Builds a [`NonEmptyString`], validating non-empty / no-NUL / length.
+    ///
+    /// # Errors
+    ///
+    /// - [`NameError::Empty`] when `s` has length zero.
+    /// - [`NameError::ContainsNul`] when `s` contains a `\0` byte.
+    /// - [`NameError::TooLong`] when `s.len()` exceeds [`MAX_NAME_LEN`].
+    pub fn new(s: impl Into<String>) -> Result<Self, NameError> {
+        let s = s.into();
+        if s.is_empty() {
+            return Err(NameError::Empty);
+        }
+        if s.as_bytes().contains(&0) {
+            return Err(NameError::ContainsNul);
+        }
+        if s.len() > MAX_NAME_LEN {
+            return Err(NameError::TooLong {
+                len: s.len(),
+                max: MAX_NAME_LEN,
+            });
+        }
+        Ok(Self(s))
+    }
+
+    /// Borrows the inner string.
+    #[inline]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+
+    /// Consumes the wrapper and returns the underlying [`String`].
+    #[inline]
+    pub fn into_inner(self) -> String {
+        self.0
+    }
+}
+
+impl AsRef<str> for NonEmptyString {
+    fn as_ref(&self) -> &str {
+        &self.0
+    }
+}
+
+impl Borrow<str> for NonEmptyString {
+    fn borrow(&self) -> &str {
+        &self.0
+    }
+}
+
+/// `Deref<Target = str>` lets `&NonEmptyString` auto-coerce to `&str` when
+/// passed to functions expecting `&str` — same trick `String` uses.
+impl Deref for NonEmptyString {
+    type Target = str;
+    fn deref(&self) -> &str {
+        &self.0
+    }
+}
+
+impl PartialEq<str> for NonEmptyString {
+    fn eq(&self, other: &str) -> bool {
+        self.0 == other
+    }
+}
+
+impl PartialEq<&str> for NonEmptyString {
+    fn eq(&self, other: &&str) -> bool {
+        self.0 == *other
+    }
+}
+
+impl PartialEq<String> for NonEmptyString {
+    fn eq(&self, other: &String) -> bool {
+        &self.0 == other
+    }
+}
+
+impl PartialEq<NonEmptyString> for str {
+    fn eq(&self, other: &NonEmptyString) -> bool {
+        self == other.0
+    }
+}
+
+impl PartialEq<NonEmptyString> for &str {
+    fn eq(&self, other: &NonEmptyString) -> bool {
+        *self == other.0
+    }
+}
+
+impl PartialEq<NonEmptyString> for String {
+    fn eq(&self, other: &NonEmptyString) -> bool {
+        self == &other.0
+    }
+}
+
+impl fmt::Display for NonEmptyString {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl From<NonEmptyString> for String {
+    fn from(n: NonEmptyString) -> Self {
+        n.0
+    }
+}
+
+impl TryFrom<String> for NonEmptyString {
+    type Error = NameError;
+    fn try_from(s: String) -> Result<Self, Self::Error> {
+        Self::new(s)
+    }
+}
+
+impl TryFrom<&str> for NonEmptyString {
+    type Error = NameError;
+    fn try_from(s: &str) -> Result<Self, Self::Error> {
+        Self::new(s.to_owned())
+    }
+}
 
 #[cfg(test)]
 mod tests {

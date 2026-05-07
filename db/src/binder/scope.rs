@@ -253,13 +253,13 @@ pub(super) fn bind_value_for(
         if !field.nullable {
             return Err(BindError::NullViolation {
                 table: table.into(),
-                column: field.name.clone(),
+                column: field.name.to_string(),
             });
         }
         return Ok(Value::Null);
     }
     Value::try_from((value, field.field_type)).map_err(|e| BindError::TypeMismatch {
-        column: field.name.clone(),
+        column: field.name.to_string(),
         expected: field.field_type.to_string(),
         got: e.to_string(),
     })

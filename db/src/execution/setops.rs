@@ -200,7 +200,7 @@ impl Executor for MembershipFilter<'_> {
 
 /// Streams tuples that appear in both the left and right child (`INTERSECT`).
 ///
-/// Wraps [`MembershipFilter`] with `exclude = false`. The right child is materialized in
+/// Wraps `MembershipFilter` with `exclude = false`. The right child is materialized in
 /// full before streaming begins; the left child is then streamed and only tuples present
 /// in the right set are returned.
 #[derive(Debug)]
@@ -244,7 +244,7 @@ impl Executor for Intersect<'_> {
 
 /// Streams tuples from the left child that do not appear in the right child (`EXCEPT`).
 ///
-/// Wraps [`MembershipFilter`] with `exclude = true`. The right child is materialized in
+/// Wraps `MembershipFilter` with `exclude = true`. The right child is materialized in
 /// full before streaming begins; the left child is then streamed and only tuples absent
 /// from the right set are returned.
 #[derive(Debug)]
@@ -364,11 +364,12 @@ mod tests {
         wal::writer::Wal,
     };
 
+    fn field(name: &str, field_type: Type) -> Field {
+        Field::new(name, field_type).unwrap()
+    }
+
     fn schema_ab() -> TupleSchema {
-        TupleSchema::new(vec![
-            Field::new("a", Type::Int32),
-            Field::new("b", Type::Int32),
-        ])
+        TupleSchema::new(vec![field("a", Type::Int32), field("b", Type::Int32)])
     }
 
     fn tup(a: i32, b: i32) -> Tuple {
@@ -514,7 +515,7 @@ mod tests {
         let left = build_heap(213, &[]);
         let right = build_heap(214, &[]);
         let u = Union::new(scan(&left), scan(&right), false);
-        assert_eq!(u.schema().num_fields(), 2);
+        assert_eq!(u.schema().physical_num_fields(), 2);
     }
 
     // ===== Intersect =====

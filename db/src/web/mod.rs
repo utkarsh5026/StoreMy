@@ -1,7 +1,7 @@
 //! HTTP layer over the `StoreMy` engine.
 //!
 //! Owns the JSON shapes (DTOs) the React frontend talks to, and the Axum
-//! router/handlers that translate HTTP requests into [`Database`](crate::database::Database)
+//! router/handlers that translate HTTP requests into [`Database`]
 //! calls. The engine itself does not depend on serde — DTOs are explicit
 //! mirror types so we can change wire formats without touching core code.
 

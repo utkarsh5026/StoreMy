@@ -22,7 +22,7 @@ use crate::{
         statements::{ColumnRef, Statement, WhereCondition},
         token::{Token, TokenType},
     },
-    primitives::Predicate,
+    primitives::{NameError, Predicate},
 };
 
 /// Errors that can occur while parsing a SQL statement.
@@ -42,6 +42,9 @@ pub enum ParserError {
 
     #[error(transparent)]
     LexError(#[from] LexError),
+
+    #[error(transparent)]
+    NameError(#[from] NameError),
 }
 
 impl ParserError {
@@ -59,7 +62,7 @@ impl Parser {
     ///
     /// # Errors
     ///
-    /// Returns [`ParserError`] if the token stream is empty, starts with an
+    /// Returns `ParserError` if the token stream is empty, starts with an
     /// unrecognized keyword, or any sub-parser fails.
     #[instrument(
         skip(self),

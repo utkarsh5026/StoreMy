@@ -29,14 +29,9 @@ use crate::{
 /// `SeqScan` borrows the heap file for its lifetime `'a`, so the file must
 /// outlive the scan.
 pub struct SeqScan<'a> {
-    /// The heap file being scanned.
     file: &'a HeapFile,
-    /// Transaction under whose visibility rules tuples are read.
     txn: TransactionId,
-    /// Schema cloned from the heap file at construction time.
     schema: TupleSchema,
-    /// The live page-level iterator; `None` before the first `next()` call or
-    /// after a `rewind()`.
     inner: Option<HeapScan<'a>>,
 }
 
@@ -155,11 +150,12 @@ mod tests {
         wal::writer::Wal,
     };
 
+    fn field(name: &str, field_type: Type) -> Field {
+        Field::new(name, field_type).unwrap()
+    }
+
     fn schema() -> TupleSchema {
-        TupleSchema::new(vec![
-            Field::new("id", Type::Int32),
-            Field::new("flag", Type::Bool),
-        ])
+        TupleSchema::new(vec![field("id", Type::Int32), field("flag", Type::Bool)])
     }
 
     fn make_tuple(id: i32, flag: bool) -> Tuple {
@@ -315,7 +311,10 @@ mod tests {
 
         assert_eq!(p1, p2);
         assert_eq!(p2, p3);
-        assert_eq!(scan.schema().num_fields(), heap.schema().num_fields());
+        assert_eq!(
+            scan.schema().physical_num_fields(),
+            heap.schema().physical_num_fields()
+        );
         assert_eq!(
             scan.schema().field(0).unwrap().name,
             heap.schema().field(0).unwrap().name
@@ -336,8 +335,8 @@ mod tests {
     }
 
     fn assert_schema_equivalent(a: &TupleSchema, b: &TupleSchema) {
-        assert_eq!(a.num_fields(), b.num_fields());
-        for i in 0..a.num_fields() {
+        assert_eq!(a.physical_num_fields(), b.physical_num_fields());
+        for i in 0..a.physical_num_fields() {
             let af = a.field(i).unwrap();
             let bf = b.field(i).unwrap();
             assert_eq!(af.name, bf.name);

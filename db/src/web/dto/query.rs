@@ -24,7 +24,7 @@ pub struct ColumnDto {
 impl From<&Field> for ColumnDto {
     fn from(f: &Field) -> Self {
         ColumnDto {
-            name: f.name.clone(),
+            name: f.name.as_str().to_owned(),
             r#type: f.field_type.to_string(),
             nullable: f.nullable,
         }
@@ -283,7 +283,7 @@ impl From<&TableInfo> for TableSummaryDto {
     fn from(t: &TableInfo) -> Self {
         TableSummaryDto {
             name: t.name.clone(),
-            column_count: t.schema.num_fields(),
+            column_count: t.schema.logical_num_fields(),
             file_id: u64::from(t.file_id),
         }
     }

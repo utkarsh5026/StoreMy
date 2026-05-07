@@ -13,6 +13,7 @@ use crate::{
         },
         token::TokenType,
     },
+    primitives::NonEmptyString,
 };
 
 impl Parser {
@@ -314,7 +315,8 @@ impl Parser {
             "parsed column definition"
         );
         Ok(ColumnDef {
-            name: col_name,
+            name: NonEmptyString::new(col_name)
+                .map_err(|e| ParserError::ParsingError(e.to_string()))?,
             col_type,
             nullable,
             primary_key: is_primary_key,

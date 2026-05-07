@@ -38,7 +38,7 @@ use fallible_iterator::FallibleIterator;
 use super::{ExecutionError, Executor, expression::BooleanExpression};
 use crate::{
     execution::PlanNode,
-    primitives,
+    primitives::{self, NonEmptyString},
     tuple::{Field, Tuple, TupleSchema},
     types::{Type, Value},
 };
@@ -231,9 +231,12 @@ impl Executor for Filter<'_> {
 #[derive(Debug, Clone)]
 pub enum ProjectItem {
     /// A resolved `SELECT col` or `SELECT col AS alias` item.
-    Column { idx: usize, alias: Option<String> },
+    Column {
+        idx: usize,
+        alias: Option<NonEmptyString>,
+    },
     /// A resolved `SELECT <literal> AS name` item repeated for every input row.
-    Literal { value: Value, name: String },
+    Literal { value: Value, name: NonEmptyString },
 }
 
 impl ProjectItem {
@@ -254,7 +257,7 @@ impl ProjectItem {
     /// Does not validate eagerly. An out-of-bounds column becomes
     /// [`ExecutionError::TypeError`] when [`Project::with_items`] builds the
     /// output schema.
-    pub fn column(col_id: primitives::ColumnId, alias: Option<String>) -> Self {
+    pub fn column(col_id: primitives::ColumnId, alias: Option<NonEmptyString>) -> Self {
         Self::Column {
             idx: usize::from(col_id),
             alias,
@@ -283,11 +286,8 @@ impl ProjectItem {
     ///
     /// Does not return an error; schema type inference happens later in
     /// [`Project::with_items`] and accepts all literal values.
-    pub fn literal(value: Value, name: impl Into<String>) -> Self {
-        Self::Literal {
-            value,
-            name: name.into(),
-        }
+    pub fn literal(value: Value, name: NonEmptyString) -> Self {
+        Self::Literal { value, name }
     }
 }
 
@@ -471,13 +471,15 @@ impl<'a> Project<'a> {
                     .map_err(|e| ExecutionError::TypeError(e.to_string()))?
                     .clone();
                 if let Some(name) = alias {
-                    field.set_name(name);
+                    field
+                        .set_name(name.as_str())
+                        .map_err(|e| ExecutionError::TypeError(e.to_string()))?;
                 }
                 Ok(field)
             }
             ProjectItem::Literal { value, name } => {
                 let ty = value.get_type().unwrap_or(Type::String);
-                let mut field = Field::new(name.clone(), ty);
+                let mut field = Field::new_non_empty(name.clone(), ty);
                 if !value.is_null() {
                     field = field.not_null();
                 }
@@ -760,7 +762,7 @@ impl FallibleIterator for Sort<'_> {
     ///
     /// The first call drains and sorts the complete child input. Later calls
     /// walk the materialized sorted buffer. `NULL` ordering follows
-    /// [`Sort::compare_by_sort_key`]; type mismatches that cannot be compared
+    /// `Sort::compare_by_sort_key`; type mismatches that cannot be compared
     /// are treated as ties for that key.
     ///
     /// # Errors
@@ -985,11 +987,12 @@ mod tests {
         wal::writer::Wal,
     };
 
+    fn field(name: &str, field_type: Type) -> Field {
+        Field::new(name, field_type).unwrap()
+    }
+
     fn scan_schema() -> TupleSchema {
-        TupleSchema::new(vec![
-            Field::new("id", Type::Int32),
-            Field::new("flag", Type::Bool),
-        ])
+        TupleSchema::new(vec![field("id", Type::Int32), field("flag", Type::Bool)])
     }
 
     fn make_scan_tuple(id: i32, flag: bool) -> Tuple {

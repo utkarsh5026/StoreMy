@@ -190,7 +190,7 @@ fn print_engine_error(e: &EngineError) {
 
 fn print_select(table_name: &str, schema: &TupleSchema, rows: &[Tuple]) {
     let width = schema
-        .num_fields()
+        .physical_num_fields()
         .max(rows.iter().map(Tuple::len).max().unwrap_or(0));
 
     if width == 0 {

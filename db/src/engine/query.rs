@@ -53,6 +53,38 @@ use crate::{
 };
 
 impl Engine<'_> {
+    /// Projects away dropped (logical) columns from a plan node's output.
+    ///
+    /// Dropped columns remain in the *physical* schema so that existing on-disk
+    /// tuples (written before a DROP COLUMN) still decode into the same slot
+    /// layout. For SQL output, though, we must hide those slots — `SELECT *`
+    /// should only return live columns.
+    ///
+    /// When the schema's physical and logical widths match, this is a no-op.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`EngineError::TypeError`] if the underlying `Project` operator
+    /// rejects the requested projection.
+    fn project_out_dropped_columns(node: PlanNode<'_>) -> Result<PlanNode<'_>, EngineError> {
+        let schema = node.schema();
+        if schema.physical_num_fields() == schema.logical_num_fields() {
+            return Ok(node);
+        }
+
+        let items: Vec<ProjectItem> = schema
+            .physical_iter()
+            .enumerate()
+            .filter(|(_, f)| !f.is_dropped)
+            .map(|(phys_i, _)| ProjectItem::Column {
+                idx: phys_i,
+                alias: None,
+            })
+            .collect();
+
+        PlanNode::project(node, items).map_err(|e| EngineError::type_error(e.to_string()))
+    }
+
     /// Executes a bound SQL `SELECT` and returns the selected rows.
     ///
     /// The parser has already produced a [`Statement::Select`] and the binder
@@ -358,6 +390,8 @@ impl Engine<'_> {
             node = Self::build_aggregate(node, &bound.select_list, &bound.group_by)?;
         } else if let BoundSelectList::Items(items) = &bound.select_list {
             node = Self::build_project(node, items)?;
+        } else {
+            node = Self::project_out_dropped_columns(node)?;
         }
 
         if bound.distinct {
@@ -501,7 +535,11 @@ impl Engine<'_> {
                     let name = if let Some(name) = &proj.alias {
                         name.clone()
                     } else {
-                        format!("?column?{}", i + 1)
+                        format!("?column?{}", i + 1).try_into().map_err(|e| {
+                            EngineError::type_error(format!(
+                                "invalid synthesized literal column name: {e}"
+                            ))
+                        })?
                     };
                     Ok(ProjectItem::literal(v.clone(), name))
                 }
@@ -648,10 +686,14 @@ impl Engine<'_> {
                         ProjectItem::column(Self::col_id(pos)?, projection.alias.clone())
                     }
                     BoundSelectItem::Literal(v) => {
-                        let name = projection
-                            .alias
-                            .clone()
-                            .unwrap_or_else(|| format!("?column?{}", i + 1));
+                        let name = match projection.alias.clone() {
+                            Some(alias) => alias,
+                            None => format!("?column?{}", i + 1).try_into().map_err(|e| {
+                                EngineError::type_error(format!(
+                                    "invalid synthesized literal column name: {e}"
+                                ))
+                            })?,
+                        };
                         ProjectItem::literal(v.clone(), name)
                     }
                 })
@@ -755,6 +797,7 @@ mod tests {
         catalog::manager::Catalog,
         engine::{Engine, EngineError, StatementResult},
         parser::Parser,
+        primitives::NonEmptyString,
         transaction::TransactionManager,
         tuple::{Field, Tuple, TupleSchema},
         wal::writer::Wal,
@@ -766,6 +809,10 @@ mod tests {
         let catalog = Catalog::initialize(&bp, &wal, dir).unwrap();
         let txn_mgr = TransactionManager::new(wal, bp);
         (catalog, txn_mgr)
+    }
+
+    fn field(name: &str, col_type: Type) -> Field {
+        Field::new_non_empty(NonEmptyString::new(name).unwrap(), col_type)
     }
 
     fn parse(sql: &str) -> crate::parser::statements::Statement {
@@ -790,8 +837,9 @@ mod tests {
     }
 
     fn field_names(schema: &TupleSchema) -> Vec<String> {
-        (0..schema.num_fields())
-            .map(|i| schema.field(i).unwrap().name.clone())
+        schema
+            .logical_iter()
+            .map(|f| f.name.as_str().to_owned())
             .collect()
     }
 
@@ -807,9 +855,9 @@ mod tests {
                     &txn,
                     "users",
                     TupleSchema::new(vec![
-                        Field::new("id", Type::Int64).not_null(),
-                        Field::new("name", Type::String),
-                        Field::new("age", Type::Int64).not_null(),
+                        field("id", Type::Int64).not_null(),
+                        field("name", Type::String),
+                        field("age", Type::Int64).not_null(),
                     ]),
                     None,
                 )
@@ -835,9 +883,9 @@ mod tests {
                 &txn,
                 "users",
                 TupleSchema::new(vec![
-                    Field::new("id", Type::Int64).not_null(),
-                    Field::new("name", Type::String),
-                    Field::new("age", Type::Int64).not_null(),
+                    field("id", Type::Int64).not_null(),
+                    field("name", Type::String),
+                    field("age", Type::Int64).not_null(),
                 ]),
                 None,
             )
@@ -862,8 +910,6 @@ mod tests {
             .map(|i| row.get(i).unwrap().clone())
             .collect()
     }
-
-    // ──────────────────────── projection / schema ────────────────────────
 
     /// `SELECT *` preserves the table's full schema (names + types) and
     /// returns every row.
@@ -934,8 +980,6 @@ mod tests {
         assert_eq!(names[1], "name");
     }
 
-    // ──────────────────────────── WHERE ─────────────────────────────────
-
     /// `WHERE` keeps only matching rows; schema is unchanged from the
     /// child scan.
     #[test]
@@ -961,8 +1005,6 @@ mod tests {
         assert_eq!(field_names(&schema), vec!["id"]);
         assert!(rows.is_empty());
     }
-
-    // ─────────────────────────── ORDER BY ───────────────────────────────
 
     /// Single-key ascending sort. Stable: ties between alice (1, 30) and
     /// cara (3, 30) preserve insertion order.
@@ -1021,8 +1063,6 @@ mod tests {
         assert_eq!(ids, vec![2, 3, 1]);
     }
 
-    // ─────────────────────────── LIMIT / OFFSET ─────────────────────────
-
     /// `LIMIT n` caps the number of rows returned.
     #[test]
     fn limit_caps_row_count() {
@@ -1046,8 +1086,6 @@ mod tests {
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].get(0).unwrap(), &Value::Int64(2));
     }
-
-    // ─────────────────────────── DISTINCT ───────────────────────────────
 
     /// `DISTINCT` removes exact-duplicate rows after projection.
     /// `users.age` has values {30, 25, 30}, so DISTINCT yields {25, 30}.
@@ -1273,8 +1311,6 @@ mod tests {
     // the planner. The planner's `BoundFrom::Join` → Unsupported branch is
     // covered by the binder's join tests at the bound-AST level, and will
     // be tested end-to-end once the parser supports qualified refs.
-
-    // ─────────────────────── interaction tests ──────────────────────────
 
     /// `WHERE` + projection + `LIMIT` compose: filter narrows rows,
     /// project narrows columns, limit caps count.

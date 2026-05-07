@@ -129,6 +129,18 @@ impl_from_reader!(i64, "i64",
 impl_from_reader!(i32, "i32",   Value::Int32(n) => Some(*n));
 impl_from_reader!(bool, "bool", Value::Bool(b)  => Some(*b));
 
+impl<'a> TryFrom<TupleReader<'a>> for Value {
+    type Error = CatalogError;
+
+    fn try_from(t: TupleReader<'a>) -> Result<Self, Self::Error> {
+        let TupleReader(tuple, index) = t;
+        tuple
+            .get(index)
+            .cloned()
+            .ok_or_else(|| CatalogError::invalid_catalog_row("field index out of bounds"))
+    }
+}
+
 /// Reads a nullable field as `Option<T>`.
 ///
 /// `Value::Null` maps to `Ok(None)`. Any other value is forwarded to

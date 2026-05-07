@@ -170,7 +170,7 @@ impl BoundInsert {
         let schema = info.schema.clone();
         let table_name = info.name.clone();
 
-        let projection = build_projection(stmt.columns.as_deref(), &schema, &table_name)?;
+        let projection = Self::build_projection(stmt.columns.as_deref(), &schema, &table_name)?;
 
         let values = match stmt.source {
             InsertSource::Values(rows) => rows,
@@ -188,7 +188,7 @@ impl BoundInsert {
 
         let rows = values
             .into_iter()
-            .map(|row| bind_row(&row, &schema, &projection, &table_name))
+            .map(|row| Self::bind_row(&row, &schema, &projection, &table_name))
             .collect::<Result<Vec<_>, _>>()?;
 
         Ok(Self {
@@ -198,119 +198,161 @@ impl BoundInsert {
             rows,
         })
     }
-}
 
-/// Permutation `p` such that `p[i]` is the index in the SQL VALUES row
-/// that supplies the value for schema field `i`.
-///
-/// When `cols` is `None`, VALUES is already in schema order and `p` is
-/// the identity. When `cols` is `Some`, every schema field must be named
-/// exactly once; any unknown, duplicate, extra, or missing column is an
-/// error.
-fn build_projection(
-    cols: Option<&[String]>,
-    schema: &TupleSchema,
-    table: &str,
-) -> Result<Vec<usize>, BindError> {
-    let n = schema.num_fields();
+    /// Permutation `p` of length `physical_num_fields` where `p[phys_i]` is:
+    /// - `Some(user_col_idx)` — take the value at `user_col_idx` in the VALUES row
+    /// - `None`              — dropped column; use `missing_default_value` or NULL
+    ///
+    /// When `cols` is `None`, VALUES must supply one value per *logical* (non-dropped)
+    /// column in declaration order. When `cols` is `Some`, every non-dropped column
+    /// must be named exactly once; naming a dropped column, an unknown column,
+    /// a duplicate, or too few/many columns is an error.
+    fn build_projection(
+        cols: Option<&[String]>,
+        schema: &TupleSchema,
+        table: &str,
+    ) -> Result<Vec<Option<usize>>, BindError> {
+        let logical_n = schema.logical_num_fields();
+        let physical_n = schema.physical_num_fields();
 
-    let Some(cols) = cols else {
-        return Ok((0..n).collect());
-    };
+        let Some(cols) = cols else {
+            // No column list: use identity projection (i.e. `None` for dropped, `Some(user_idx)`
+            // for live).
+            let mut perm = vec![None; physical_n];
+            let mut logical_idx = 0usize;
+            for (phys_i, field) in schema.physical_iter().enumerate() {
+                if !field.is_dropped {
+                    perm[phys_i] = Some(logical_idx);
+                    logical_idx += 1;
+                }
+            }
+            return Ok(perm);
+        };
 
-    let mut seen: HashSet<&str> = HashSet::with_capacity(cols.len());
-    for c in cols {
-        if !schema.contains(c) {
-            return Err(BindError::UnknownColumn {
-                table: table.into(),
-                column: c.clone(),
-            });
+        Self::validate_named_insert_columns(cols, schema, table, logical_n)?;
+
+        let mut perm = vec![None; physical_n];
+        for (phys_i, field) in schema.physical_iter().enumerate() {
+            if !field.is_dropped {
+                let pos = cols
+                    .iter()
+                    .position(|c| c.as_str() == field.name.as_str())
+                    .expect("all logical columns are covered by the column list");
+                perm[phys_i] = Some(pos);
+            }
         }
-        if !seen.insert(c.as_str()) {
-            return Err(BindError::DuplicateInsertColumn {
-                table: table.into(),
-                column: c.clone(),
-            });
+        Ok(perm)
+    }
+
+    /// Validates an explicit `INSERT INTO t (col1, col2, ...)` column list.
+    ///
+    /// Ensures every name resolves to a non-dropped column in `schema`, no name
+    /// appears more than once, and the list covers exactly `logical_n`
+    /// (non-dropped) columns.
+    ///
+    /// # Errors
+    ///
+    /// - [`BindError::UnknownColumn`] if a name is not found (or refers to a dropped column).
+    /// - [`BindError::DuplicateInsertColumn`] if a name is repeated.
+    /// - [`BindError::WrongColumnCount`] if the list names too few/many logical columns.
+    fn validate_named_insert_columns(
+        cols: &[String],
+        schema: &TupleSchema,
+        table: &str,
+        logical_n: usize,
+    ) -> Result<(), BindError> {
+        let mut seen: HashSet<&str> = HashSet::with_capacity(cols.len());
+        for c in cols {
+            match schema.field_by_name(c) {
+                None => return Err(BindError::unknown_column(table, c)),
+                Some((_, field)) if field.is_dropped => {
+                    return Err(BindError::unknown_column(table, c));
+                }
+                Some(_) => {}
+            }
+            if !seen.insert(c.as_str()) {
+                return Err(BindError::DuplicateInsertColumn {
+                    table: table.into(),
+                    column: c.clone(),
+                });
+            }
         }
-    }
 
-    if seen.len() != n {
-        return Err(BindError::WrongColumnCount {
-            table: table.into(),
-            expected: n,
-            got: seen.len(),
-        });
-    }
-
-    let mut perm = vec![0usize; n];
-    for (i, slot) in perm.iter_mut().enumerate() {
-        let fname = &schema.field(i).expect("schema index in range").name;
-        *slot = cols
-            .iter()
-            .position(|c| c == fname)
-            .expect("insert column list covers every schema field");
-    }
-    Ok(perm)
-}
-
-/// Binds a single `VALUES (...)` row into schema order.
-///
-/// # Errors
-///
-/// Returns an error if the row arity does not match the schema, if a non-nullable
-/// column is set to `NULL`, or if a literal cannot be coerced to the column type.
-fn bind_row(
-    row: &[Value],
-    schema: &TupleSchema,
-    projection: &[usize],
-    table: &str,
-) -> Result<Vec<BoundExpr>, BindError> {
-    let n = schema.num_fields();
-    if row.len() != n {
-        return Err(BindError::WrongColumnCount {
-            table: table.into(),
-            expected: n,
-            got: row.len(),
-        });
-    }
-
-    (0..n)
-        .map(|i| {
-            let field = schema.field(i).expect("schema index in range");
-            let value = &row[projection[i]];
-            bind_literal_for_column(value, field, table)
-        })
-        .collect()
-}
-
-/// Binds a literal for a specific table column, applying nullability and coercions.
-///
-/// # Errors
-///
-/// Returns an error if `value` is `NULL` for a non-nullable column, or if the
-/// value cannot be coerced to the column's type.
-fn bind_literal_for_column(
-    value: &Value,
-    field: &Field,
-    table: &str,
-) -> Result<BoundExpr, BindError> {
-    if matches!(value, &Value::Null) {
-        if !field.nullable {
-            return Err(BindError::NullViolation {
-                table: table.into(),
-                column: field.name.clone(),
-            });
+        if seen.len() != logical_n {
+            return Err(BindError::wrong_column_count(table, logical_n, seen.len()));
         }
-        return Ok(BoundExpr::Literal(Value::Null));
+
+        Ok(())
     }
 
-    let coerced =
-        Value::try_from((value, field.field_type)).map_err(|e| BindError::TypeMismatch {
-            column: field.name.clone(),
-            expected: field.field_type.to_string(),
-            got: e.to_string(),
-        })?;
-    Ok(BoundExpr::Literal(coerced))
+    /// Binds a single `VALUES (...)` row into physical schema order.
+    ///
+    /// `projection[phys_i]` is `Some(user_idx)` for a live column or `None` for a
+    /// dropped one. Dropped columns are filled with the field's
+    /// `missing_default_value`, falling back to `NULL`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the row arity does not match the logical (non-dropped)
+    /// column count, if a non-nullable column is set to `NULL`, or if a literal
+    /// cannot be coerced to the column type.
+    fn bind_row(
+        row: &[Value],
+        schema: &TupleSchema,
+        projection: &[Option<usize>],
+        table: &str,
+    ) -> Result<Vec<BoundExpr>, BindError> {
+        let logical_n = schema.logical_num_fields();
+        if row.len() != logical_n {
+            return Err(BindError::wrong_column_count(table, logical_n, row.len()));
+        }
+
+        schema
+            .physical_iter()
+            .zip(projection.iter())
+            .map(|(field, proj)| {
+                if let Some(user_idx) = proj {
+                    Self::bind_literal_for_column(&row[*user_idx], field, table)
+                } else {
+                    let default = field.missing_default_value.clone().unwrap_or(Value::Null);
+                    Ok(BoundExpr::Literal(default))
+                }
+            })
+            .collect()
+    }
+
+    /// Binds one user-supplied literal to a concrete table column.
+    ///
+    /// Applies the column's nullability constraint and coerces the literal to the
+    /// declared column type.
+    ///
+    /// # Errors
+    ///
+    /// - [`BindError::NullViolation`] if `value` is `NULL` but `field` is `NOT NULL`.
+    /// - [`BindError::TypeMismatch`] if the literal cannot be coerced to `field.field_type`.
+    fn bind_literal_for_column(
+        value: &Value,
+        field: &Field,
+        table: &str,
+    ) -> Result<BoundExpr, BindError> {
+        if matches!(value, &Value::Null) {
+            if !field.nullable {
+                return Err(BindError::NullViolation {
+                    table: table.into(),
+                    column: field.name.to_string(),
+                });
+            }
+            return Ok(BoundExpr::Literal(Value::Null));
+        }
+
+        let coerced =
+            Value::try_from((value, field.field_type)).map_err(|e| BindError::TypeMismatch {
+                column: field.name.to_string(),
+                expected: field.field_type.to_string(),
+                got: e.to_string(),
+            })?;
+        Ok(BoundExpr::Literal(coerced))
+    }
 }
 
 #[cfg(test)]
@@ -335,8 +377,6 @@ mod tests {
         wal::writer::Wal,
     };
 
-    // ── fixture helpers ───────────────────────────────────────────────────
-
     fn make_catalog_and_txn_mgr(dir: &Path) -> (Catalog, TransactionManager) {
         let wal = Arc::new(Wal::new(&dir.join("wal.log"), 0).expect("WAL creation failed"));
         let bp = Arc::new(PageStore::new(64, wal.clone()));
@@ -345,12 +385,12 @@ mod tests {
         (catalog, txn_mgr)
     }
 
-    /// (id: Uint64 NOT NULL, name: String nullable, age: Int64 NOT NULL)
     fn three_col_schema() -> TupleSchema {
+        let f = |name: &str, field_type: Type| Field::new(name, field_type).unwrap();
         TupleSchema::new(vec![
-            Field::new("id", Type::Uint64).not_null(),
-            Field::new("name", Type::String),
-            Field::new("age", Type::Int64).not_null(),
+            f("id", Type::Uint64).not_null(),
+            f("name", Type::String),
+            f("age", Type::Int64).not_null(),
         ])
     }
 
@@ -381,12 +421,6 @@ mod tests {
             Err(e) => e,
         }
     }
-
-    // ──────────────────────────────────────────────────────────────────────
-    // bind_delete
-    // ──────────────────────────────────────────────────────────────────────
-
-    // --- happy path ---
 
     // DELETE without WHERE binds to None filter and the catalog file_id.
     #[test]
@@ -429,8 +463,6 @@ mod tests {
         assert!(matches!(bound.filter, Some(BooleanExpression::Leaf { .. })));
     }
 
-    // --- error paths ---
-
     // Missing target table surfaces as a Catalog error wrapped in BindError.
     #[test]
     fn test_bind_delete_unknown_table_errors() {
@@ -467,12 +499,6 @@ mod tests {
 
         assert!(matches!(err, BindError::UnknownColumn { ref column, .. } if column == "nope"));
     }
-
-    // ──────────────────────────────────────────────────────────────────────
-    // bind_insert
-    // ──────────────────────────────────────────────────────────────────────
-
-    // --- happy path ---
 
     // No column list → identity projection; rows already in schema order.
     #[test]
@@ -729,12 +755,6 @@ mod tests {
 
         assert!(matches!(err, BindError::TypeMismatch { ref column, .. } if column == "age"));
     }
-
-    // ──────────────────────────────────────────────────────────────────────
-    // bind_update
-    // ──────────────────────────────────────────────────────────────────────
-
-    // --- happy path ---
 
     // Single assignment with no WHERE binds to (idx, coerced_value) and no filter.
     #[test]

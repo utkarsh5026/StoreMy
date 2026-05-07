@@ -9,7 +9,7 @@
 //! before it can produce any output. Execution is split into two phases:
 //!
 //! 1. **Accumulate** — drain the child, grouping rows by their `GROUP BY` column values. For each
-//!    group, maintain one [`Accumulator`] per aggregate spec. This happens lazily on the first call
+//!    group, maintain one `Accumulator` per aggregate spec. This happens lazily on the first call
 //!    to [`FallibleIterator::next`].
 //!
 //! 2. **Emit** — iterate over the finalized groups, yielding one [`Tuple`] per group. The tuple
@@ -33,7 +33,7 @@ use fallible_iterator::FallibleIterator;
 use super::{ExecutionError, Executor};
 use crate::{
     execution::PlanNode,
-    primitives::ColumnId,
+    primitives::{ColumnId, NonEmptyString},
     tuple::{Field, Tuple, TupleSchema},
     types::{Type, Value},
 };
@@ -65,7 +65,7 @@ pub enum AggregateFunc {
 /// This is used to infer the output [`Type`] of each aggregate in the `SELECT` list,
 /// which determines the schema of each output row from the `Aggregate` operator.
 ///
-/// - `COUNT(*)` and `COUNT(col)` always produce an [`Int64`] result, regardless of input.
+/// - `COUNT(*)` and `COUNT(col)` always produce a [`Type::Int64`] result, regardless of input.
 /// - `SUM` returns `Float64` when summing over a `Float64` input, or `Int64` otherwise (even for
 ///   integer types smaller than 64 bits).
 /// - `AVG` always returns a `Float64`, matching typical SQL semantics.
@@ -109,7 +109,7 @@ impl From<(&AggregateFunc, Type)> for Type {
 pub struct AggregateExpr {
     pub func: AggregateFunc,
     pub col_id: ColumnId,
-    pub output_name: String,
+    pub output_name: NonEmptyString,
 }
 
 /// Running state for one aggregate function over one group.
@@ -423,7 +423,7 @@ impl<'a> Aggregate<'a> {
                 })?;
 
             let output_type = Type::from((func, input_type));
-            output_fields.push(Field::new(output_name, output_type));
+            output_fields.push(Field::new_non_empty(output_name.clone(), output_type));
         }
 
         Ok(output_fields)
@@ -582,12 +582,13 @@ mod tests {
         wal::writer::Wal,
     };
 
+    fn field(name: &str, field_type: Type) -> Field {
+        Field::new(name, field_type).unwrap()
+    }
+
     // Schema: (group: Int32, val: Int32 NULLABLE)
     fn schema_gv() -> TupleSchema {
-        TupleSchema::new(vec![
-            Field::new("group", Type::Int32),
-            Field::new("val", Type::Int32),
-        ])
+        TupleSchema::new(vec![field("group", Type::Int32), field("val", Type::Int32)])
     }
 
     fn row(g: i32, v: Option<i32>) -> Tuple {
@@ -647,7 +648,7 @@ mod tests {
         AggregateExpr {
             func,
             col_id: col(col_id),
-            output_name: name.to_string(),
+            output_name: NonEmptyString::new(name).unwrap(),
         }
     }
 
@@ -938,7 +939,7 @@ mod tests {
         ])
         .unwrap();
         let s = agg.schema();
-        assert_eq!(s.num_fields(), 3);
+        assert_eq!(s.physical_num_fields(), 3);
         assert_eq!(s.field(0).unwrap().field_type, Type::Int32); // group col unchanged
         assert_eq!(s.field(1).unwrap().field_type, Type::Int64); // COUNT -> Int64
         assert_eq!(s.field(2).unwrap().field_type, Type::Float64); // AVG -> Float64
