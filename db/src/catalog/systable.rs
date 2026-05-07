@@ -148,58 +148,6 @@ pub(super) trait CatalogRow: for<'a> TryFrom<&'a Tuple, Error = CatalogError> {
     const TABLE: SystemTable;
 }
 
-/// Generates the on-disk codec and [`CatalogRow`] impl for a catalog row type.
-///
-/// One invocation produces three impls:
-///
-/// - `From<&T> for Tuple` — encodes the row to a tuple. The `encode` arm takes a comma-separated
-///   list of expressions; the macro wraps each with `.into()` and lifts the result into
-///   `Tuple::new(vec![…])`.
-/// - `TryFrom<&Tuple> for T` — decodes a tuple back to the row. The `decode` arm takes the argument
-///   list to pass to `T::new`; validation lives in `new`, so the codec stays purely mechanical.
-/// - `impl CatalogRow for T` — pins the row to its [`SystemTable`].
-///
-/// **Requires** `T::new` to exist and return `Result<Self, CatalogError>`.
-macro_rules! catalog_row_codec {
-    (
-        $row:ty => $variant:ident,
-        encode |$r:ident| [ $($field:expr),* $(,)? ],
-        decode |$t:ident| ( $($arg:expr),* $(,)? ) $(,)?
-    ) => {
-        impl From<&$row> for Tuple {
-            fn from($r: &$row) -> Tuple {
-                Tuple::new(vec![ $( $field.into() ),* ])
-            }
-        }
-
-        impl TryFrom<&Tuple> for $row {
-            type Error = CatalogError;
-            fn try_from($t: &Tuple) -> Result<Self, Self::Error> {
-                Self::new( $($arg),* )
-            }
-        }
-
-        impl CatalogRow for $row {
-            const TABLE: SystemTable = SystemTable::$variant;
-        }
-    };
-}
-
-/// Reads field `$i` from the `t: &Tuple` parameter.
-///
-/// `read_as!(t, N)` — direct typed read.
-/// `read_as!(t, N => Via => Target)` — read as `Via`, then convert to `Target`,
-/// mapping the error to `CatalogError`.
-macro_rules! read_as {
-    ($t:expr, $i:literal) => {
-        TupleReader::read($t, $i)?
-    };
-    ($t:expr, $i:literal => $via:ty => $target:ty) => {
-        <$target>::try_from(TupleReader::read::<$via>($t, $i)?)
-            .map_err(|e| CatalogError::invalid_catalog_row(e.to_string()))?
-    };
-}
-
 /// Checks that a given string `value` is not empty, returning an error if it is.
 ///
 /// # Arguments
@@ -249,18 +197,29 @@ impl TableRow {
     }
 }
 
-catalog_row_codec! {
-    TableRow => Tables,
-    encode |r| [
-        u64::from(r.table_id),
-        r.table_name.clone(),
-        r.file_path.to_string_lossy().to_string(),
-    ],
-    decode |t| (
-        FileId::from(read_as!(t, 0 => u64 => u64)),
-        read_as!(t, 1),
-        PathBuf::from(read_as!(t, 2 => String => String)),
-    ),
+impl From<&TableRow> for Tuple {
+    fn from(row: &TableRow) -> Tuple {
+        Tuple::new(vec![
+            u64::from(row.table_id).into(),
+            row.table_name.clone().into(),
+            row.file_path.to_string_lossy().to_string().into(),
+        ])
+    }
+}
+
+impl TryFrom<&Tuple> for TableRow {
+    type Error = CatalogError;
+
+    fn try_from(tuple: &Tuple) -> Result<Self, Self::Error> {
+        let table_id = FileId::from(TupleReader::read::<u64>(tuple, 0)?);
+        let table_name = TupleReader::read(tuple, 1)?;
+        let file_path = PathBuf::from(TupleReader::read::<String>(tuple, 2)?);
+        Self::new(table_id, table_name, file_path)
+    }
+}
+
+impl CatalogRow for TableRow {
+    const TABLE: SystemTable = SystemTable::Tables;
 }
 
 pub(super) struct ColumnRow {
@@ -318,23 +277,36 @@ impl ColumnRow {
     }
 }
 
-catalog_row_codec! {
-    ColumnRow => Columns,
-    encode |r| [
-        u64::from(r.table_id),
-        r.column_name.clone(),
-        u32::from(r.column_type),
-        u32::from(r.position),
-        r.nullable,
-    ],
-    decode |t| (
-        FileId::from(read_as!(t, 0 => u64 => u64)),
-        read_as!(t, 1),
-        Type::try_from(read_as!(t, 2 => u32 => u32))
-            .map_err(|e| CatalogError::invalid_catalog_row(e.to_string()))?,
-        read_as!(t, 3 => u32 => ColumnId),
-        read_as!(t, 4),
-    ),
+impl From<&ColumnRow> for Tuple {
+    fn from(row: &ColumnRow) -> Tuple {
+        Tuple::new(vec![
+            u64::from(row.table_id).into(),
+            row.column_name.clone().into(),
+            u32::from(row.column_type).into(),
+            u32::from(row.position).into(),
+            row.nullable.into(),
+        ])
+    }
+}
+
+impl TryFrom<&Tuple> for ColumnRow {
+    type Error = CatalogError;
+
+    fn try_from(tuple: &Tuple) -> Result<Self, Self::Error> {
+        let table_id = FileId::from(TupleReader::read::<u64>(tuple, 0)?);
+        let column_name = TupleReader::read(tuple, 1)?;
+        let column_type = Type::try_from(TupleReader::read::<u32>(tuple, 2)?)
+            .map_err(|e| CatalogError::invalid_catalog_row(e.to_string()))?;
+        let position = ColumnId::try_from(TupleReader::read::<u32>(tuple, 3)?)
+            .map_err(|e| CatalogError::invalid_catalog_row(e.to_string()))?;
+        let nullable = TupleReader::read(tuple, 4)?;
+
+        Self::new(table_id, column_name, column_type, position, nullable)
+    }
+}
+
+impl CatalogRow for ColumnRow {
+    const TABLE: SystemTable = SystemTable::Columns;
 }
 
 impl From<Vec<ColumnRow>> for TupleSchema {
@@ -464,29 +436,51 @@ impl IndexRow {
     }
 }
 
-catalog_row_codec! {
-    IndexRow => Indexes,
-    encode |r| [
-        r.index_id.0,
-        r.index_name.clone(),
-        r.table_id.0,
-        r.column_name.clone(),
-        u32::from(r.column_position),
-        u32::from(r.index_type),
-        r.index_file_id.0,
-        r.num_buckets,
-    ],
-    decode |t| (
-        IndexId::from(read_as!(t, 0 => i64 => i64)),
-        read_as!(t, 1),
-        FileId::from(read_as!(t, 2 => u64 => u64)),
-        read_as!(t, 3),
-        read_as!(t, 4 => u32 => ColumnId),
-        IndexKind::try_from(read_as!(t, 5 => u32 => u32))
-            .map_err(|e| CatalogError::invalid_catalog_row(e.to_string()))?,
-        FileId::from(read_as!(t, 6 => u64 => u64)),
-        read_as!(t, 7),
-    ),
+impl From<&IndexRow> for Tuple {
+    fn from(row: &IndexRow) -> Tuple {
+        Tuple::new(vec![
+            row.index_id.0.into(),
+            row.index_name.clone().into(),
+            row.table_id.0.into(),
+            row.column_name.clone().into(),
+            u32::from(row.column_position).into(),
+            u32::from(row.index_type).into(),
+            row.index_file_id.0.into(),
+            row.num_buckets.into(),
+        ])
+    }
+}
+
+impl TryFrom<&Tuple> for IndexRow {
+    type Error = CatalogError;
+
+    fn try_from(tuple: &Tuple) -> Result<Self, Self::Error> {
+        let index_id = IndexId::from(TupleReader::read::<i64>(tuple, 0)?);
+        let index_name = TupleReader::read(tuple, 1)?;
+        let table_id = FileId::from(TupleReader::read::<u64>(tuple, 2)?);
+        let column_name = TupleReader::read(tuple, 3)?;
+        let column_position = ColumnId::try_from(TupleReader::read::<u32>(tuple, 4)?)
+            .map_err(|e| CatalogError::invalid_catalog_row(e.to_string()))?;
+        let index_type = IndexKind::try_from(TupleReader::read::<u32>(tuple, 5)?)
+            .map_err(|e| CatalogError::invalid_catalog_row(e.to_string()))?;
+        let index_file_id = FileId::from(TupleReader::read::<u64>(tuple, 6)?);
+        let num_buckets = TupleReader::read(tuple, 7)?;
+
+        Self::new(
+            index_id,
+            index_name,
+            table_id,
+            column_name,
+            column_position,
+            index_type,
+            index_file_id,
+            num_buckets,
+        )
+    }
+}
+
+impl CatalogRow for IndexRow {
+    const TABLE: SystemTable = SystemTable::Indexes;
 }
 
 /// One row in `SystemTable::PrimaryKeyColumns`.
@@ -525,18 +519,30 @@ impl PrimaryKeyColumnRow {
     }
 }
 
-catalog_row_codec! {
-    PrimaryKeyColumnRow => PrimaryKeyColumns,
-    encode |r| [
-        r.table_id.0,
-        u32::from(r.column_id),
-        r.ordinal,
-    ],
-    decode |t| (
-        FileId::from(read_as!(t, 0 => u64 => u64)),
-        read_as!(t, 1 => u32 => ColumnId),
-        read_as!(t, 2),
-    ),
+impl From<&PrimaryKeyColumnRow> for Tuple {
+    fn from(row: &PrimaryKeyColumnRow) -> Tuple {
+        Tuple::new(vec![
+            row.table_id.0.into(),
+            u32::from(row.column_id).into(),
+            row.ordinal.into(),
+        ])
+    }
+}
+
+impl TryFrom<&Tuple> for PrimaryKeyColumnRow {
+    type Error = CatalogError;
+
+    fn try_from(tuple: &Tuple) -> Result<Self, Self::Error> {
+        let table_id = FileId::from(TupleReader::read::<u64>(tuple, 0)?);
+        let column_id = ColumnId::try_from(TupleReader::read::<u32>(tuple, 1)?)
+            .map_err(|e| CatalogError::invalid_catalog_row(e.to_string()))?;
+        let ordinal = TupleReader::read(tuple, 2)?;
+        Self::new(table_id, column_id, ordinal)
+    }
+}
+
+impl CatalogRow for PrimaryKeyColumnRow {
+    const TABLE: SystemTable = SystemTable::PrimaryKeyColumns;
 }
 
 #[cfg(test)]
