@@ -7,7 +7,7 @@
 use std::sync::Arc;
 
 use crate::{
-    FileId,
+    FileId, Value,
     catalog::{
         CatalogError,
         manager::{Catalog, TableInfo},
@@ -166,6 +166,91 @@ impl Catalog {
             missing_default_value: column.default,
         };
         self.insert_systable_tuple(txn, &new_col)?;
+        self.refresh_table_schema(txn, table)
+    }
+
+    /// Sets or replaces the default value for a column.
+    ///
+    /// Rewrites the `CATALOG_COLUMNS` row for `(table_id, column_name)` with the
+    /// new `value` in the `missing_default_value` slot, then refreshes the
+    /// in-memory schema so the new default is visible immediately.
+    ///
+    /// # Errors
+    ///
+    /// - [`CatalogError::TableNotFound`] if `table_id` does not resolve.
+    /// - [`CatalogError::ColumnNotFound`] if `column_name` is not in the table.
+    /// - Propagates system-table write errors.
+    pub fn set_column_default(
+        &self,
+        txn: &Transaction<'_>,
+        table_id: FileId,
+        column_name: &str,
+        value: Value,
+    ) -> Result<(), CatalogError> {
+        let table = self.get_table_info_by_id(txn, table_id)?;
+        let column = self.get_table_col(txn, &table.name, table_id, column_name)?;
+        self.delete_column(txn, table_id, column_name)?;
+        let updated = ColumnRow {
+            missing_default_value: Some(value),
+            ..column
+        };
+        self.insert_systable_tuple(txn, &updated)?;
+        self.refresh_table_schema(txn, table)
+    }
+
+    /// Clears the default value for a column.
+    ///
+    /// After this call the column has no `missing_default_value`, meaning rows
+    /// inserted without an explicit value for this column will require the caller
+    /// to supply one (or the engine will use `NULL` for nullable columns).
+    ///
+    /// # Errors
+    ///
+    /// - [`CatalogError::TableNotFound`] if `table_id` does not resolve.
+    /// - [`CatalogError::ColumnNotFound`] if `column_name` is not in the table.
+    /// - Propagates system-table write errors.
+    pub fn drop_column_default(
+        &self,
+        txn: &Transaction<'_>,
+        table_id: FileId,
+        column_name: &str,
+    ) -> Result<(), CatalogError> {
+        let table = self.get_table_info_by_id(txn, table_id)?;
+        let column = self.get_table_col(txn, &table.name, table_id, column_name)?;
+        self.delete_column(txn, table_id, column_name)?;
+        let updated = ColumnRow {
+            missing_default_value: None,
+            ..column
+        };
+        self.insert_systable_tuple(txn, &updated)?;
+        self.refresh_table_schema(txn, table)
+    }
+
+    /// Relaxes a `NOT NULL` constraint on a column, making it nullable.
+    ///
+    /// Rewrites the `CATALOG_COLUMNS` row for `(table_id, column_name)` with
+    /// `nullable = true`. Existing `NOT NULL` rows are unaffected on disk;
+    /// only catalog metadata changes.
+    ///
+    /// # Errors
+    ///
+    /// - [`CatalogError::TableNotFound`] if `table_id` does not resolve.
+    /// - [`CatalogError::ColumnNotFound`] if `column_name` is not in the table.
+    /// - Propagates system-table write errors.
+    pub fn drop_column_not_null(
+        &self,
+        txn: &Transaction<'_>,
+        table_id: FileId,
+        column_name: &str,
+    ) -> Result<(), CatalogError> {
+        let table = self.get_table_info_by_id(txn, table_id)?;
+        let column = self.get_table_col(txn, &table.name, table_id, column_name)?;
+        self.delete_column(txn, table_id, column_name)?;
+        let updated = ColumnRow {
+            nullable: true,
+            ..column
+        };
+        self.insert_systable_tuple(txn, &updated)?;
         self.refresh_table_schema(txn, table)
     }
 
@@ -797,6 +882,158 @@ mod tests {
         assert!(
             matches!(r2, Err(CatalogError::CannotAlterPrimaryKeyColumn { .. })),
             "second PK column must be rejected, got: {r2:?}"
+        );
+    }
+
+    // ── set_column_default ────────────────────────────────────────────────
+
+    #[test]
+    fn test_set_column_default_visible_in_schema_immediately() {
+        let dir = tempdir().unwrap();
+        let (catalog, txn_mgr) = make_catalog_and_txn(dir.path());
+
+        let txn = txn_mgr.begin().unwrap();
+        let file_id = catalog
+            .create_table(&txn, "t", two_col_schema(), None)
+            .unwrap();
+        txn.commit().unwrap();
+
+        let txn2 = txn_mgr.begin().unwrap();
+        catalog
+            .set_column_default(&txn2, file_id, "name", Value::String("anon".into()))
+            .unwrap();
+        let info = catalog.get_table_info(&txn2, "t").unwrap();
+        txn2.commit().unwrap();
+
+        let field = info
+            .schema
+            .fields()
+            .find(|f| f.name == "name")
+            .expect("column 'name' must still exist");
+        assert_eq!(
+            field.missing_default_value,
+            Some(Value::String("anon".into())),
+            "default must be visible immediately, got: {:?}",
+            field.missing_default_value
+        );
+    }
+
+    #[test]
+    fn test_set_column_default_unknown_column_errors() {
+        let dir = tempdir().unwrap();
+        let (catalog, txn_mgr) = make_catalog_and_txn(dir.path());
+
+        let txn = txn_mgr.begin().unwrap();
+        let file_id = catalog
+            .create_table(&txn, "t", two_col_schema(), None)
+            .unwrap();
+        txn.commit().unwrap();
+
+        let txn2 = txn_mgr.begin().unwrap();
+        let result = catalog.set_column_default(&txn2, file_id, "ghost", Value::Null);
+        txn2.commit().unwrap();
+
+        assert!(
+            matches!(result, Err(CatalogError::ColumnNotFound { .. })),
+            "expected ColumnNotFound for unknown column, got: {result:?}"
+        );
+    }
+
+    // ── drop_column_default ───────────────────────────────────────────────
+
+    #[test]
+    fn test_drop_column_default_clears_default_immediately() {
+        let dir = tempdir().unwrap();
+        let (catalog, txn_mgr) = make_catalog_and_txn(dir.path());
+
+        let txn = txn_mgr.begin().unwrap();
+        // Build a schema where "name" already has a default.
+        let mut name_field = Field::new("name", Type::String).unwrap();
+        let _ = name_field.set_missing_default_value(Value::String("anon".into()));
+        let schema = TupleSchema::new(vec![
+            Field::new("id", Type::Uint64).unwrap().not_null(),
+            name_field,
+        ]);
+        let file_id = catalog.create_table(&txn, "t", schema, None).unwrap();
+        txn.commit().unwrap();
+
+        let txn2 = txn_mgr.begin().unwrap();
+        catalog.drop_column_default(&txn2, file_id, "name").unwrap();
+        let info = catalog.get_table_info(&txn2, "t").unwrap();
+        txn2.commit().unwrap();
+
+        let field = info
+            .schema
+            .fields()
+            .find(|f| f.name == "name")
+            .expect("column must still exist");
+        assert_eq!(
+            field.missing_default_value, None,
+            "default must be gone after drop, got: {:?}",
+            field.missing_default_value
+        );
+    }
+
+    // ── drop_column_not_null ──────────────────────────────────────────────
+
+    #[test]
+    fn test_drop_column_not_null_makes_column_nullable_immediately() {
+        let dir = tempdir().unwrap();
+        let (catalog, txn_mgr) = make_catalog_and_txn(dir.path());
+
+        let txn = txn_mgr.begin().unwrap();
+        // two_col_schema has "id" NOT NULL and "name" NOT NULL.
+        let file_id = catalog
+            .create_table(&txn, "t", two_col_schema(), None)
+            .unwrap();
+        txn.commit().unwrap();
+
+        let txn2 = txn_mgr.begin().unwrap();
+        catalog
+            .drop_column_not_null(&txn2, file_id, "name")
+            .unwrap();
+        let info = catalog.get_table_info(&txn2, "t").unwrap();
+        txn2.commit().unwrap();
+
+        let field = info
+            .schema
+            .fields()
+            .find(|f| f.name == "name")
+            .expect("column must still exist");
+        assert!(
+            field.nullable,
+            "column must be nullable after DROP NOT NULL, got nullable={}",
+            field.nullable
+        );
+    }
+
+    #[test]
+    fn test_drop_column_not_null_sibling_nullability_unchanged() {
+        let dir = tempdir().unwrap();
+        let (catalog, txn_mgr) = make_catalog_and_txn(dir.path());
+
+        let txn = txn_mgr.begin().unwrap();
+        let file_id = catalog
+            .create_table(&txn, "t", two_col_schema(), None)
+            .unwrap();
+        txn.commit().unwrap();
+
+        let txn2 = txn_mgr.begin().unwrap();
+        catalog
+            .drop_column_not_null(&txn2, file_id, "name")
+            .unwrap();
+        let info = catalog.get_table_info(&txn2, "t").unwrap();
+        txn2.commit().unwrap();
+
+        let id_field = info
+            .schema
+            .fields()
+            .find(|f| f.name == "id")
+            .expect("id column must still exist");
+        assert!(
+            !id_field.nullable,
+            "sibling 'id' column must still be NOT NULL, got nullable={}",
+            id_field.nullable
         );
     }
 }
