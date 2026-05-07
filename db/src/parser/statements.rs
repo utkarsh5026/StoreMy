@@ -132,11 +132,12 @@ pub enum Statement {
 /// ```
 /// use storemy::{
 ///     parser::statements::{ColumnDef, CreateTableStatement, Statement},
+///     primitives::NonEmptyString,
 ///     types::Type,
 /// };
 ///
 /// let col = ColumnDef {
-///     name: "id".into(),
+///     name: NonEmptyString::new("id").unwrap(),
 ///     col_type: Type::Int32,
 ///     nullable: false,
 ///     primary_key: true,
