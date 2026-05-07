@@ -478,12 +478,11 @@ impl Engine<'_> {
                     Ok(StatementResult::TableRenamed { old_name, new_name })
                 }
                 BoundAlterTable::RenameColumn {
-                    table_name,
                     file_id,
                     old_name,
                     new_name,
-                    ..
                 } => {
+                    let table_name = catalog.get_table_info_by_id(txn, file_id)?.name;
                     catalog.rename_column(txn, file_id, &old_name, &new_name)?;
                     Ok(StatementResult::ColumnRenamed {
                         table: table_name,
@@ -491,12 +490,8 @@ impl Engine<'_> {
                         new_name,
                     })
                 }
-                BoundAlterTable::AddColumn {
-                    table_name,
-                    file_id,
-                    column,
-                    ..
-                } => {
+                BoundAlterTable::AddColumn { file_id, column } => {
+                    let table_name = catalog.get_table_info_by_id(txn, file_id)?.name;
                     let column_name = column.name.clone();
                     catalog.add_column(txn, file_id, column)?;
                     Ok(StatementResult::ColumnAdded {
@@ -505,11 +500,11 @@ impl Engine<'_> {
                     })
                 }
                 BoundAlterTable::DropColumn {
-                    table_name,
                     file_id,
                     column_name,
                     ..
                 } => {
+                    let table_name = catalog.get_table_info_by_id(txn, file_id)?.name;
                     catalog.drop_column(txn, file_id, &column_name)?;
                     Ok(StatementResult::ColumnDropped {
                         table: table_name,
@@ -519,6 +514,7 @@ impl Engine<'_> {
                 BoundAlterTable::NoOp { table_name } => Ok(StatementResult::NoOp {
                     statement: format!("ALTER TABLE IF EXISTS {table_name}"),
                 }),
+                _ => todo!("executor for new ALTER TABLE actions"),
             }
         })
     }
