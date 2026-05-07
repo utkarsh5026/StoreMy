@@ -270,14 +270,14 @@ impl ColumnRow {
 /// `None` is stored as `Value::Null`.
 fn encode_default(v: &Value) -> String {
     match v {
-        Value::Int32(n)   => format!("i32:{n}"),
-        Value::Int64(n)   => format!("i64:{n}"),
-        Value::Uint32(n)  => format!("u32:{n}"),
-        Value::Uint64(n)  => format!("u64:{n}"),
+        Value::Int32(n) => format!("i32:{n}"),
+        Value::Int64(n) => format!("i64:{n}"),
+        Value::Uint32(n) => format!("u32:{n}"),
+        Value::Uint64(n) => format!("u64:{n}"),
         Value::Float64(f) => format!("f64:{f}"),
-        Value::Bool(b)    => format!("bool:{b}"),
-        Value::String(s)  => format!("str:{s}"),
-        Value::Null       => "null".to_owned(),
+        Value::Bool(b) => format!("bool:{b}"),
+        Value::String(s) => format!("str:{s}"),
+        Value::Null => "null".to_owned(),
     }
 }
 
@@ -294,25 +294,25 @@ fn decode_default(s: &str) -> Option<Value> {
     }
     let (tag, rest) = s.split_once(':')?;
     match tag {
-        "i32"  => rest.parse::<i32>().ok().map(Value::Int32),
-        "i64"  => rest.parse::<i64>().ok().map(Value::Int64),
-        "u32"  => rest.parse::<u32>().ok().map(Value::Uint32),
-        "u64"  => rest.parse::<u64>().ok().map(Value::Uint64),
-        "f64"  => rest.parse::<f64>().ok().map(Value::Float64),
+        "i32" => rest.parse::<i32>().ok().map(Value::Int32),
+        "i64" => rest.parse::<i64>().ok().map(Value::Int64),
+        "u32" => rest.parse::<u32>().ok().map(Value::Uint32),
+        "u64" => rest.parse::<u64>().ok().map(Value::Uint64),
+        "f64" => rest.parse::<f64>().ok().map(Value::Float64),
         "bool" => match rest {
-            "true"  => Some(Value::Bool(true)),
+            "true" => Some(Value::Bool(true)),
             "false" => Some(Value::Bool(false)),
-            _       => None,
+            _ => None,
         },
-        "str"  => Some(Value::String(rest.to_owned())),
-        _      => None,
+        "str" => Some(Value::String(rest.to_owned())),
+        _ => None,
     }
 }
 
 impl From<&ColumnRow> for Tuple {
     fn from(row: &ColumnRow) -> Tuple {
         let default_val = match &row.missing_default_value {
-            None    => Value::Null,
+            None => Value::Null,
             Some(v) => Value::String(encode_default(v)),
         };
         Tuple::new(vec![
@@ -340,8 +340,7 @@ impl TryFrom<&Tuple> for ColumnRow {
         let nullable = TupleReader::read(tuple, 4)?;
         let is_dropped = TupleReader::read(tuple, 5)?;
         let raw_default: Option<String> = TupleReader::read(tuple, 6)?;
-        let missing_default_value: Option<Value> =
-            raw_default.as_deref().and_then(decode_default);
+        let missing_default_value: Option<Value> = raw_default.as_deref().and_then(decode_default);
 
         Ok(Self {
             table_id: FileId::from(table_id),
