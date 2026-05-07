@@ -73,6 +73,11 @@ impl Parser {
             AlterAction::DropColumn { .. } => "drop_column",
             AlterAction::RenameColumn { .. } => "rename_column",
             AlterAction::RenameTable { .. } => "rename_table",
+            AlterAction::SetDefault { .. } => "set_default",
+            AlterAction::DropDefault { .. } => "drop_default",
+            AlterAction::DropNotNull { .. } => "drop_not_null",
+            AlterAction::AddPrimaryKey { .. } => "add_primary_key",
+            AlterAction::DropPrimaryKey => "drop_primary_key",
         };
         debug!(
             table = %table_name,
@@ -89,20 +94,21 @@ impl Parser {
 
     /// Parses the action clause for an `ALTER TABLE` statement.
     ///
-    /// Supported actions are:
-    /// - `ADD COLUMN <column_definition>` — Add a new column to the table.
-    /// - `DROP COLUMN [IF EXISTS] <name>` — Remove a column by name, optionally only if it exists.
-    /// - `RENAME COLUMN <from> TO <to>` — Rename a column.
-    /// - `RENAME TABLE TO <to>` — Rename the whole table.
-    ///
-    /// # Returns
-    ///
-    /// An [`AlterAction`] describing the type of alteration.
+    /// Supported actions:
+    /// - `ADD COLUMN <col_def>` — append a new column.
+    /// - `ADD PRIMARY KEY (<col>, …)` — set the table's primary key.
+    /// - `DROP COLUMN [IF EXISTS] <name>` — remove a column.
+    /// - `DROP PRIMARY KEY` — remove the table's primary key.
+    /// - `RENAME COLUMN <from> TO <to>` — rename a column.
+    /// - `RENAME TO <new_name>` — rename the table.
+    /// - `ALTER COLUMN <name> SET DEFAULT <val>` — set a column default.
+    /// - `ALTER COLUMN <name> DROP DEFAULT` — remove a column default.
+    /// - `ALTER COLUMN <name> DROP NOT NULL` — relax a NOT NULL constraint.
     ///
     /// # Errors
     ///
-    /// Returns a [`ParserError`] if the clause is syntactically incorrect or an expected token is
-    /// missing.
+    /// Returns a [`ParserError`] if the clause is syntactically incorrect or an
+    /// expected token is missing.
     #[instrument(
         skip(self),
         fields(component = "parser", clause = "alter_action"),
@@ -111,24 +117,41 @@ impl Parser {
     fn parse_alter_action(&mut self) -> Result<AlterAction, ParserError> {
         let action_token = self.bump()?;
         match action_token.kind {
+            // ADD COLUMN <col_def>  |  ADD PRIMARY KEY (<cols>)
             TokenType::Add => {
-                // ADD COLUMN <name> <type and constraints>
-                self.expect_seq(&[TokenType::Column])?;
-                let name = self.expect_ident()?;
-                let column_def = self.parse_column_definition(name)?;
-                Ok(AlterAction::AddColumn(column_def))
+                if self.if_peek_then_consume(TokenType::Column)? {
+                    let name = self.expect_ident()?;
+                    Ok(AlterAction::AddColumn(self.parse_column_definition(name)?))
+                } else if self.if_peek_then_consume(TokenType::Primary)? {
+                    self.expect(TokenType::Key)?;
+                    Ok(AlterAction::AddPrimaryKey {
+                        columns: self.paren_list(Parser::expect_ident)?,
+                    })
+                } else {
+                    // Neither COLUMN nor PRIMARY — emit UnexpectedToken so the
+                    // error message says what was actually wanted.
+                    self.expect(TokenType::Column)?;
+                    unreachable!()
+                }
             }
 
+            // DROP COLUMN [IF EXISTS] <name>  |  DROP PRIMARY KEY
             TokenType::Drop => {
-                // DROP COLUMN [IF EXISTS] <name>
-                self.expect_seq(&[TokenType::Column])?;
-                let if_exists = self.parse_if_exists(false)?;
-                let name = self.expect_ident()?;
-                Ok(AlterAction::DropColumn { name, if_exists })
+                if self.if_peek_then_consume(TokenType::Column)? {
+                    let if_exists = self.parse_if_exists(false)?;
+                    let name = self.expect_ident()?;
+                    Ok(AlterAction::DropColumn { name, if_exists })
+                } else if self.if_peek_then_consume(TokenType::Primary)? {
+                    self.expect(TokenType::Key)?;
+                    Ok(AlterAction::DropPrimaryKey)
+                } else {
+                    self.expect(TokenType::Column)?;
+                    unreachable!()
+                }
             }
 
+            // RENAME COLUMN <from> TO <to>  |  RENAME TO <new_name>
             TokenType::Rename => {
-                // RENAME COLUMN <from> TO <to> | RENAME TO <to>
                 if self.if_peek_then_consume(TokenType::Column)? {
                     let from = self.expect_ident()?;
                     self.expect(TokenType::To)?;
@@ -141,6 +164,46 @@ impl Parser {
                 }
             }
 
+            // ALTER COLUMN <name> SET DEFAULT <val>
+            //              <name> DROP DEFAULT
+            //              <name> DROP NOT NULL
+            TokenType::Alter => {
+                self.expect(TokenType::Column)?;
+                let column = self.expect_ident()?;
+                let sub = self.bump()?;
+                match sub.kind {
+                    TokenType::Set => {
+                        self.expect(TokenType::Default)?;
+                        let val_tok = self.bump()?;
+                        let value = Value::try_from(val_tok).map_err(|msg| {
+                            warn!(column = %column, reason = %msg, "invalid SET DEFAULT literal");
+                            ParserError::ParsingError(msg)
+                        })?;
+                        Ok(AlterAction::SetDefault { column, value })
+                    }
+                    TokenType::Drop => {
+                        if self.if_peek_then_consume(TokenType::Default)? {
+                            Ok(AlterAction::DropDefault { column })
+                        } else {
+                            self.expect_seq(&[TokenType::Not, TokenType::Null])?;
+                            Ok(AlterAction::DropNotNull { column })
+                        }
+                    }
+                    _ => {
+                        warn!(
+                            found = ?sub.kind,
+                            value = %sub.value,
+                            column = %column,
+                            "invalid ALTER COLUMN sub-action"
+                        );
+                        Err(ParserError::ParsingError(format!(
+                            "expected SET DEFAULT, DROP DEFAULT, or DROP NOT NULL after column name, got {}",
+                            sub.value
+                        )))
+                    }
+                }
+            }
+
             _ => {
                 warn!(
                     found = ?action_token.kind,
@@ -148,7 +211,7 @@ impl Parser {
                     "invalid ALTER TABLE action"
                 );
                 Err(ParserError::ParsingError(format!(
-                    "expected ADD COLUMN, DROP COLUMN, RENAME COLUMN, or RENAME TABLE, got {}",
+                    "expected ADD, DROP, RENAME, or ALTER COLUMN, got {}",
                     action_token.value
                 )))
             }
@@ -1024,6 +1087,7 @@ mod tests {
 
     // --- error paths: parse_alter_table ---
 
+    // ADD without COLUMN or PRIMARY → UnexpectedToken expected COLUMN
     #[test]
     fn test_parse_alter_add_missing_column_keyword() {
         let Err(err) = parse("ALTER TABLE users ADD age INT") else {
@@ -1035,6 +1099,7 @@ mod tests {
         }));
     }
 
+    // DROP without COLUMN or PRIMARY → UnexpectedToken expected COLUMN
     #[test]
     fn test_parse_alter_drop_missing_column_keyword() {
         let Err(err) = parse("ALTER TABLE users DROP bio") else {
@@ -1090,5 +1155,136 @@ mod tests {
             parse("ALTER TABLE"),
             Err(ParserError::WantedToken)
         ));
+    }
+
+    // ── new catalog-only ALTER TABLE actions ─────────────────────────────
+
+    #[test]
+    fn test_parse_alter_add_primary_key() {
+        let stmt = parse("ALTER TABLE orders ADD PRIMARY KEY (id)").unwrap();
+        let Statement::AlterTable(a) = stmt else {
+            panic!("expected AlterTable");
+        };
+        let AlterAction::AddPrimaryKey { columns } = a.action else {
+            panic!("expected AddPrimaryKey");
+        };
+        assert_eq!(columns, vec!["id"]);
+    }
+
+    #[test]
+    fn test_parse_alter_add_primary_key_composite() {
+        let stmt = parse("ALTER TABLE t ADD PRIMARY KEY (a, b)").unwrap();
+        let Statement::AlterTable(a) = stmt else {
+            panic!("expected AlterTable");
+        };
+        let AlterAction::AddPrimaryKey { columns } = a.action else {
+            panic!("expected AddPrimaryKey");
+        };
+        assert_eq!(columns, vec!["a", "b"]);
+    }
+
+    #[test]
+    fn test_parse_alter_drop_primary_key() {
+        let stmt = parse("ALTER TABLE orders DROP PRIMARY KEY").unwrap();
+        let Statement::AlterTable(a) = stmt else {
+            panic!("expected AlterTable");
+        };
+        assert!(matches!(a.action, AlterAction::DropPrimaryKey));
+    }
+
+    #[test]
+    fn test_parse_alter_set_default_integer() {
+        let stmt = parse("ALTER TABLE users ALTER COLUMN age SET DEFAULT 0").unwrap();
+        let Statement::AlterTable(a) = stmt else {
+            panic!("expected AlterTable");
+        };
+        let AlterAction::SetDefault { column, value } = a.action else {
+            panic!("expected SetDefault");
+        };
+        assert_eq!(column, "age");
+        assert_eq!(value, Value::Int64(0));
+    }
+
+    #[test]
+    fn test_parse_alter_set_default_string() {
+        let stmt = parse("ALTER TABLE users ALTER COLUMN status SET DEFAULT 'active'").unwrap();
+        let Statement::AlterTable(a) = stmt else {
+            panic!("expected AlterTable");
+        };
+        let AlterAction::SetDefault { column, value } = a.action else {
+            panic!("expected SetDefault");
+        };
+        assert_eq!(column, "status");
+        assert_eq!(value, Value::String("active".to_string()));
+    }
+
+    #[test]
+    fn test_parse_alter_drop_default() {
+        let stmt = parse("ALTER TABLE users ALTER COLUMN age DROP DEFAULT").unwrap();
+        let Statement::AlterTable(a) = stmt else {
+            panic!("expected AlterTable");
+        };
+        let AlterAction::DropDefault { column } = a.action else {
+            panic!("expected DropDefault");
+        };
+        assert_eq!(column, "age");
+    }
+
+    #[test]
+    fn test_parse_alter_drop_not_null() {
+        let stmt = parse("ALTER TABLE users ALTER COLUMN email DROP NOT NULL").unwrap();
+        let Statement::AlterTable(a) = stmt else {
+            panic!("expected AlterTable");
+        };
+        let AlterAction::DropNotNull { column } = a.action else {
+            panic!("expected DropNotNull");
+        };
+        assert_eq!(column, "email");
+    }
+
+    // Display round-trips: what Display renders must parse back identically.
+    #[test]
+    fn test_parse_alter_set_default_display_round_trip() {
+        let original = parse("ALTER TABLE t ALTER COLUMN x SET DEFAULT 42").unwrap();
+        let rendered = original.to_string();
+        let reparsed = parse(&rendered).unwrap();
+        assert_eq!(original.to_string(), reparsed.to_string());
+    }
+
+    #[test]
+    fn test_parse_alter_drop_default_display_round_trip() {
+        let original = parse("ALTER TABLE t ALTER COLUMN x DROP DEFAULT").unwrap();
+        let rendered = original.to_string();
+        let reparsed = parse(&rendered).unwrap();
+        assert_eq!(original.to_string(), reparsed.to_string());
+    }
+
+    #[test]
+    fn test_parse_alter_drop_not_null_display_round_trip() {
+        let original = parse("ALTER TABLE t ALTER COLUMN x DROP NOT NULL").unwrap();
+        let rendered = original.to_string();
+        let reparsed = parse(&rendered).unwrap();
+        assert_eq!(original.to_string(), reparsed.to_string());
+    }
+
+    // Error paths for the new actions.
+    #[test]
+    fn test_parse_alter_set_default_bad_value() {
+        let Err(ParserError::ParsingError(msg)) =
+            parse("ALTER TABLE t ALTER COLUMN x SET DEFAULT bogus")
+        else {
+            panic!("expected ParsingError");
+        };
+        assert!(msg.contains("literal value") || msg.contains("unknown"));
+    }
+
+    #[test]
+    fn test_parse_alter_column_unknown_sub_action() {
+        let Err(ParserError::ParsingError(msg)) =
+            parse("ALTER TABLE t ALTER COLUMN x FLIP DEFAULT")
+        else {
+            panic!("expected ParsingError");
+        };
+        assert!(msg.contains("SET DEFAULT") || msg.contains("DROP"));
     }
 }

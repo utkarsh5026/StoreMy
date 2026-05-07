@@ -766,12 +766,22 @@ pub struct AlterTableStatement {
 ///   `if_exists`.
 /// - [`AlterAction::RenameColumn`] — change a column's name. Catalog-only.
 /// - [`AlterAction::RenameTable`] — change the table's name. Catalog-only.
+/// - [`AlterAction::SetDefault`] — set a column's default value.
+/// - [`AlterAction::DropDefault`] — drop a column's default value.
+/// - [`AlterAction::DropNotNull`] — drop a column's NOT NULL constraint.
+/// - [`AlterAction::AddPrimaryKey`] — add a primary key to one or more columns.
+/// - [`AlterAction::DropPrimaryKey`] — drop the table's primary key.
 #[derive(Debug, Clone)]
 pub enum AlterAction {
     AddColumn(ColumnDef),
     DropColumn { name: String, if_exists: bool },
     RenameColumn { from: String, to: String },
     RenameTable { to: String },
+    SetDefault { column: String, value: Value },
+    DropDefault { column: String },
+    DropNotNull { column: String },
+    AddPrimaryKey { columns: Vec<String> },
+    DropPrimaryKey,
 }
 
 impl Display for AlterTableStatement {
@@ -799,6 +809,15 @@ impl Display for AlterAction {
                 write!(f, "RENAME COLUMN {from} TO {to}")
             }
             AlterAction::RenameTable { to } => write!(f, "RENAME TO {to}"),
+            AlterAction::SetDefault { column, value } => {
+                write!(f, "ALTER COLUMN {column} SET DEFAULT {value}")
+            }
+            AlterAction::DropDefault { column } => write!(f, "ALTER COLUMN {column} DROP DEFAULT"),
+            AlterAction::DropNotNull { column } => write!(f, "ALTER COLUMN {column} DROP NOT NULL"),
+            AlterAction::AddPrimaryKey { columns } => {
+                write!(f, "ADD PRIMARY KEY ({})", columns.join(", "))
+            }
+            AlterAction::DropPrimaryKey => write!(f, "DROP PRIMARY KEY"),
         }
     }
 }
