@@ -1,0 +1,5 @@
+# CODEOWNERS — reviewers are suggested automatically on PRs.
+# Format: <pattern> <owner>
+# https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/customizing-your-repository/about-code-owners
+
+* @utkarsh5026

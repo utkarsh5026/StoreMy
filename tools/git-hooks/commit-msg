@@ -1,0 +1,54 @@
+#!/usr/bin/env bash
+# StoreMy commit-msg hook — enforces Conventional Commits format.
+#
+# Activated automatically when you run `make install-hooks` (git core.hooksPath).
+# Skip for a single commit:
+#     SKIP_HOOKS=1 git commit ...
+#
+# Valid format:  <type>(<scope>): <description>
+#   type    — feat | fix | docs | chore | refactor | test | perf | ci | build
+#   scope   — optional, e.g.  parser, executor, btree, buffer
+#   subject — lowercase, no trailing period, ≥ 10 chars
+#
+# Examples:
+#   feat(parser): add support for ORDER BY expressions
+#   fix(btree): correct split key propagation on overflow
+#   chore: update rust-toolchain to 1.89.0
+#   docs(executor): explain filter pushdown trade-offs
+
+set -euo pipefail
+
+if [[ "${SKIP_HOOKS:-0}" == "1" ]]; then
+  exit 0
+fi
+
+msg_file="$1"
+msg=$(cat "$msg_file")
+
+# Ignore merge commits, fixups, and squash markers — git generates these.
+if echo "$msg" | grep -qE '^(Merge |fixup! |squash! )'; then
+  exit 0
+fi
+
+# The pattern: type(optional scope): description (≥ 10 chars)
+pattern='^(feat|fix|docs|chore|refactor|test|perf|ci|build)(\([a-z0-9_/-]+\))?: .{10,}$'
+
+first_line=$(echo "$msg" | head -n 1)
+
+if ! echo "$first_line" | grep -qE "$pattern"; then
+  echo >&2
+  echo "commit-msg: commit message does not follow Conventional Commits." >&2
+  echo >&2
+  echo "  Got:      $first_line" >&2
+  echo >&2
+  echo "  Expected: <type>(<scope>): <description>  (description ≥ 10 chars)" >&2
+  echo "  Types:    feat | fix | docs | chore | refactor | test | perf | ci | build" >&2
+  echo >&2
+  echo "  Examples:" >&2
+  echo "    feat(parser): add support for ORDER BY expressions" >&2
+  echo "    fix(btree): correct split key propagation on page overflow" >&2
+  echo "    chore: update rust-toolchain to 1.89.0" >&2
+  echo >&2
+  echo "  To bypass once: SKIP_HOOKS=1 git commit ..." >&2
+  exit 1
+fi

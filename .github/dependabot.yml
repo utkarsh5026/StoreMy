@@ -1,7 +1,7 @@
 version: 2
 
 updates:
-  - package-ecosystem: gomod
+  - package-ecosystem: cargo
     directory: /
     schedule:
       interval: weekly
@@ -11,9 +11,9 @@ updates:
     open-pull-requests-limit: 5
     labels:
       - dependencies
-      - go
+      - rust
     groups:
-      go-minor-patch:
+      cargo-minor-patch:
         update-types:
           - minor
           - patch

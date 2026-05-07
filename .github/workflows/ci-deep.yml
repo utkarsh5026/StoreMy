@@ -4,25 +4,33 @@ on:
   workflow_dispatch:
   schedule:
     - cron: "0 3 * * *" # daily at 03:00 UTC
+  # Add the label "ci:deep" to a PR to trigger miri/sanitizers/coverage on demand.
+  pull_request:
+    types: [labeled]
 
 permissions:
   contents: read
 
 concurrency:
-  group: ci-deep-${{ github.workflow }}-${{ github.ref }}
+  group: ci-deep-${{ github.workflow }}-${{ github.head_ref || github.ref }}
   cancel-in-progress: true
 
 env:
   CARGO_TERM_COLOR: always
   RUST_TOOLCHAIN: 1.89.0
 
+# Jobs only run on PRs when the "ci:deep" label is present.
+# On schedule and workflow_dispatch they always run.
 jobs:
   # ───────────────────────────── Coverage ───────────────────────────────────
   rust-coverage:
     runs-on: ubuntu-latest
     timeout-minutes: 45
+    if: >-
+      github.event_name != 'pull_request' ||
+      contains(github.event.pull_request.labels.*.name, 'ci:deep')
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@v1
         with:
           toolchain: ${{ env.RUST_TOOLCHAIN }}
@@ -38,7 +46,7 @@ jobs:
         run: |
           cargo llvm-cov nextest --workspace --profile ci --lcov --output-path lcov.info
       - name: Upload coverage (lcov)
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@v4
         with:
           name: coverage-lcov
           path: lcov.info
@@ -48,8 +56,11 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 45
     continue-on-error: true
+    if: >-
+      github.event_name != 'pull_request' ||
+      contains(github.event.pull_request.labels.*.name, 'ci:deep')
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v4
       - name: Rust nightly (miri)
         uses: dtolnay/rust-toolchain@v1
         with:
@@ -70,8 +81,11 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 60
     continue-on-error: true
+    if: >-
+      github.event_name != 'pull_request' ||
+      contains(github.event.pull_request.labels.*.name, 'ci:deep')
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v4
       - name: Rust nightly (asan)
         uses: dtolnay/rust-toolchain@v1
         with:
@@ -92,8 +106,11 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 60
     continue-on-error: true
+    if: >-
+      github.event_name != 'pull_request' ||
+      contains(github.event.pull_request.labels.*.name, 'ci:deep')
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v4
       - name: Rust nightly (ubsan)
         uses: dtolnay/rust-toolchain@v1
         with:
@@ -111,14 +128,17 @@ jobs:
           cargo +nightly test -Zbuild-std --target x86_64-unknown-linux-gnu -p storemy --tests
 
   # ───────────────────────────── Fuzz smoke ─────────────────────────────────
-  # Only runs once you add fuzz targets (cargo-fuzz creates fuzz/Cargo.toml).
+  # hashFiles() is not valid in a job-level if:, so we skip the Cargo.toml
+  # existence check here. The step itself exits gracefully when no targets exist.
   rust-fuzz-smoke:
-    if: ${{ hashFiles('fuzz/Cargo.toml') != '' }}
+    if: >-
+      github.event_name != 'pull_request' ||
+      contains(github.event.pull_request.labels.*.name, 'ci:deep')
     runs-on: ubuntu-latest
     timeout-minutes: 30
     continue-on-error: true
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v4
       - name: Rust nightly (fuzz)
         uses: dtolnay/rust-toolchain@v1
         with:
@@ -128,9 +148,13 @@ jobs:
         with:
           tool: cargo-fuzz
       - name: Fuzz smoke (timeboxed)
-        working-directory: fuzz
         run: |
           set -euo pipefail
+          if [ ! -f fuzz/Cargo.toml ]; then
+            echo "no fuzz directory — skipping"
+            exit 0
+          fi
+          cd fuzz
           targets="$(cargo fuzz list)"
           if [ -z "$targets" ]; then
             echo "no fuzz targets"
