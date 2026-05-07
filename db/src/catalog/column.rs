@@ -58,7 +58,7 @@ impl Catalog {
             position: column.position,
             nullable: column.nullable,
             is_dropped: false,
-            missing_default_value: None,
+            missing_default_value: column.missing_default_value,
         };
         self.insert_systable_tuple(txn, &new_column)?;
         self.refresh_table_schema(txn, table)
@@ -163,7 +163,7 @@ impl Catalog {
             position,
             nullable: column.nullable,
             is_dropped: false,
-            missing_default_value: None,
+            missing_default_value: column.default,
         };
         self.insert_systable_tuple(txn, &new_col)?;
         self.refresh_table_schema(txn, table)

@@ -263,8 +263,58 @@ impl ColumnRow {
     }
 }
 
+/// Encodes an optional default `Value` as a tagged string for catalog storage.
+///
+/// The catalog's `missing_default_value` column has type `String`, so all
+/// non-null defaults are round-tripped through a `"tag:payload"` format.
+/// `None` is stored as `Value::Null`.
+fn encode_default(v: &Value) -> String {
+    match v {
+        Value::Int32(n)   => format!("i32:{n}"),
+        Value::Int64(n)   => format!("i64:{n}"),
+        Value::Uint32(n)  => format!("u32:{n}"),
+        Value::Uint64(n)  => format!("u64:{n}"),
+        Value::Float64(f) => format!("f64:{f}"),
+        Value::Bool(b)    => format!("bool:{b}"),
+        Value::String(s)  => format!("str:{s}"),
+        Value::Null       => "null".to_owned(),
+    }
+}
+
+/// Decodes a tagged default string back into a `Value`.
+///
+/// Returns `None` for an empty string (which represents no default), and
+/// `Some(Value::Null)` for the literal `"null"` tag.
+fn decode_default(s: &str) -> Option<Value> {
+    if s.is_empty() {
+        return None;
+    }
+    if s == "null" {
+        return Some(Value::Null);
+    }
+    let (tag, rest) = s.split_once(':')?;
+    match tag {
+        "i32"  => rest.parse::<i32>().ok().map(Value::Int32),
+        "i64"  => rest.parse::<i64>().ok().map(Value::Int64),
+        "u32"  => rest.parse::<u32>().ok().map(Value::Uint32),
+        "u64"  => rest.parse::<u64>().ok().map(Value::Uint64),
+        "f64"  => rest.parse::<f64>().ok().map(Value::Float64),
+        "bool" => match rest {
+            "true"  => Some(Value::Bool(true)),
+            "false" => Some(Value::Bool(false)),
+            _       => None,
+        },
+        "str"  => Some(Value::String(rest.to_owned())),
+        _      => None,
+    }
+}
+
 impl From<&ColumnRow> for Tuple {
     fn from(row: &ColumnRow) -> Tuple {
+        let default_val = match &row.missing_default_value {
+            None    => Value::Null,
+            Some(v) => Value::String(encode_default(v)),
+        };
         Tuple::new(vec![
             u64::from(row.table_id).into(),
             row.column_name.as_str().to_owned().into(),
@@ -272,7 +322,7 @@ impl From<&ColumnRow> for Tuple {
             u32::from(row.position).into(),
             row.nullable.into(),
             row.is_dropped.into(),
-            row.missing_default_value.clone().into(),
+            default_val,
         ])
     }
 }
@@ -289,7 +339,9 @@ impl TryFrom<&Tuple> for ColumnRow {
             .map_err(|e| CatalogError::invalid_catalog_row(e.to_string()))?;
         let nullable = TupleReader::read(tuple, 4)?;
         let is_dropped = TupleReader::read(tuple, 5)?;
-        let missing_default_value = TupleReader::read(tuple, 6)?;
+        let raw_default: Option<String> = TupleReader::read(tuple, 6)?;
+        let missing_default_value: Option<Value> =
+            raw_default.as_deref().and_then(decode_default);
 
         Ok(Self {
             table_id: FileId::from(table_id),
@@ -316,12 +368,16 @@ impl From<Vec<ColumnRow>> for TupleSchema {
             column_type,
             nullable,
             is_dropped,
+            missing_default_value,
             ..
         } in rows
         {
             let f = Field::new_non_empty(column_name, column_type);
             let mut f = if nullable { f } else { f.not_null() };
             let _ = f.set_is_dropped(is_dropped);
+            if let Some(v) = missing_default_value {
+                let _ = f.set_missing_default_value(v);
+            }
             fields.push(f);
         }
         TupleSchema::new(fields)
