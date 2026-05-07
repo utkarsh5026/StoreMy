@@ -21,11 +21,47 @@ env:
   RUST_TOOLCHAIN: 1.89.0
 
 jobs:
+  # ───────────────────────────── Changed-files gate ─────────────────────────
+  # Every downstream job reads these outputs so it can skip when irrelevant
+  # files changed (e.g. doc-only PRs skip clippy/test, Dockerfile-only PRs
+  # skip the Rust jobs). ci-required always runs and treats skipped = ok.
+  changes:
+    runs-on: ubuntu-latest
+    outputs:
+      rust:       ${{ steps.filter.outputs.rust }}
+      cargo_deps: ${{ steps.filter.outputs.cargo_deps }}
+      docker:     ${{ steps.filter.outputs.docker }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            rust:
+              - 'db/**'
+              - 'storemy-codec-derive/**'
+              - 'Cargo.toml'
+              - 'Cargo.lock'
+              - 'rust-toolchain.toml'
+              - 'clippy.toml'
+              - 'rustfmt.toml'
+            cargo_deps:
+              - 'Cargo.toml'
+              - 'Cargo.lock'
+              - 'deny.toml'
+            docker:
+              - 'Dockerfile'
+              - 'Dockerfile.dev'
+              - 'docker-compose.yml'
+              - '.dockerignore'
+
   # ───────────────────────────────── Rust: fmt ──────────────────────────────
-  # Fast, no compilation — runs on its own without cargo cache to stay cheap.
+  # Fast — no compilation. Always runs; formatting is cheap enough to not skip.
   rust-fmt:
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    needs: [changes]
+    if: needs.changes.outputs.rust == 'true'
     steps:
       - uses: actions/checkout@v4
       - name: Rust nightly (rustfmt)
@@ -37,10 +73,11 @@ jobs:
         run: cargo +nightly-2026-04-01 fmt --all -- --check
 
   # ───────────────────── Rust: dep audits (deny, machete) ───────────────────
-  # Runs against Cargo.lock only — doesn't need a full build.
   rust-deps:
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    needs: [changes]
+    if: needs.changes.outputs.cargo_deps == 'true'
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@v1
@@ -64,6 +101,8 @@ jobs:
   rust-clippy:
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    needs: [changes]
+    if: needs.changes.outputs.rust == 'true'
     steps:
       - uses: actions/checkout@v4
       - uses: rui314/setup-mold@v1
@@ -95,10 +134,11 @@ jobs:
         run: cargo clippy --workspace --all-targets -- -D warnings
 
   # ───────────────────────────────── Rust: docs ─────────────────────────────
-  # Catches broken intra-doc links and doc comment errors before they land.
   rust-doc:
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    needs: [changes]
+    if: needs.changes.outputs.rust == 'true'
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@v1
@@ -118,6 +158,8 @@ jobs:
   rust-test:
     runs-on: ubuntu-latest
     timeout-minutes: 45
+    needs: [changes]
+    if: needs.changes.outputs.rust == 'true'
     steps:
       - uses: actions/checkout@v4
       - uses: rui314/setup-mold@v1
@@ -168,12 +210,36 @@ jobs:
           report_paths: junit.xml
           detailed_summary: true
 
+  # ──────────────────────────── Rust: release build ─────────────────────────
+  # LTO + panic=abort (the release profile) can surface bugs that debug builds
+  # hide. Only runs on pushes to main — PRs catch this transitively once merged.
+  rust-build-release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    needs: [changes]
+    if: github.ref == 'refs/heads/main' && needs.changes.outputs.rust == 'true'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: rui314/setup-mold@v1
+      - uses: dtolnay/rust-toolchain@v1
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: "."
+          shared-key: "storemy-release"
+          save-if: true
+      - name: Build (release)
+        env:
+          RUSTFLAGS: -C link-arg=-fuse-ld=mold
+        run: cargo build --workspace --release
+
   # ─────────────────────────── Docker build (smoke) ─────────────────────────
-  # Catches Dockerfile breakage early. Uses GHA layer cache so it's fast
-  # on repeat runs.
   docker-build:
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    needs: [changes]
+    if: needs.changes.outputs.docker == 'true'
     steps:
       - uses: actions/checkout@v4
       - name: Set up Docker Buildx
@@ -189,11 +255,11 @@ jobs:
           cache-to: type=gha,mode=max
 
   # ───────────────────────── Required-checks gate ───────────────────────────
-  # Set branch protection to require THIS job only. Adding or removing jobs
-  # above won't require touching repo settings.
+  # Set branch protection to require THIS job only.
+  # Skipped jobs (due to path filters) count as ok — only failures/cancellations block.
   ci-required:
     runs-on: ubuntu-latest
-    needs: [rust-fmt, rust-deps, rust-clippy, rust-doc, rust-test, docker-build]
+    needs: [changes, rust-fmt, rust-deps, rust-clippy, rust-doc, rust-test, rust-build-release, docker-build]
     if: always()
     steps:
       - name: Check all required jobs passed
