@@ -53,6 +53,38 @@ use crate::{
 };
 
 impl Engine<'_> {
+    /// Projects away dropped (logical) columns from a plan node's output.
+    ///
+    /// Dropped columns remain in the *physical* schema so that existing on-disk
+    /// tuples (written before a DROP COLUMN) still decode into the same slot
+    /// layout. For SQL output, though, we must hide those slots — `SELECT *`
+    /// should only return live columns.
+    ///
+    /// When the schema's physical and logical widths match, this is a no-op.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`EngineError::TypeError`] if the underlying `Project` operator
+    /// rejects the requested projection.
+    fn project_out_dropped_columns(node: PlanNode<'_>) -> Result<PlanNode<'_>, EngineError> {
+        let schema = node.schema();
+        if schema.physical_num_fields() == schema.logical_num_fields() {
+            return Ok(node);
+        }
+
+        let items: Vec<ProjectItem> = schema
+            .physical_iter()
+            .enumerate()
+            .filter(|(_, f)| !f.is_dropped)
+            .map(|(phys_i, _)| ProjectItem::Column {
+                idx: phys_i,
+                alias: None,
+            })
+            .collect();
+
+        PlanNode::project(node, items).map_err(|e| EngineError::type_error(e.to_string()))
+    }
+
     /// Executes a bound SQL `SELECT` and returns the selected rows.
     ///
     /// The parser has already produced a [`Statement::Select`] and the binder
@@ -358,6 +390,8 @@ impl Engine<'_> {
             node = Self::build_aggregate(node, &bound.select_list, &bound.group_by)?;
         } else if let BoundSelectList::Items(items) = &bound.select_list {
             node = Self::build_project(node, items)?;
+        } else {
+            node = Self::project_out_dropped_columns(node)?;
         }
 
         if bound.distinct {
@@ -877,8 +911,6 @@ mod tests {
             .collect()
     }
 
-    // ──────────────────────── projection / schema ────────────────────────
-
     /// `SELECT *` preserves the table's full schema (names + types) and
     /// returns every row.
     #[test]
@@ -948,8 +980,6 @@ mod tests {
         assert_eq!(names[1], "name");
     }
 
-    // ──────────────────────────── WHERE ─────────────────────────────────
-
     /// `WHERE` keeps only matching rows; schema is unchanged from the
     /// child scan.
     #[test]
@@ -975,8 +1005,6 @@ mod tests {
         assert_eq!(field_names(&schema), vec!["id"]);
         assert!(rows.is_empty());
     }
-
-    // ─────────────────────────── ORDER BY ───────────────────────────────
 
     /// Single-key ascending sort. Stable: ties between alice (1, 30) and
     /// cara (3, 30) preserve insertion order.
@@ -1035,8 +1063,6 @@ mod tests {
         assert_eq!(ids, vec![2, 3, 1]);
     }
 
-    // ─────────────────────────── LIMIT / OFFSET ─────────────────────────
-
     /// `LIMIT n` caps the number of rows returned.
     #[test]
     fn limit_caps_row_count() {
@@ -1060,8 +1086,6 @@ mod tests {
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].get(0).unwrap(), &Value::Int64(2));
     }
-
-    // ─────────────────────────── DISTINCT ───────────────────────────────
 
     /// `DISTINCT` removes exact-duplicate rows after projection.
     /// `users.age` has values {30, 25, 30}, so DISTINCT yields {25, 30}.
@@ -1287,8 +1311,6 @@ mod tests {
     // the planner. The planner's `BoundFrom::Join` → Unsupported branch is
     // covered by the binder's join tests at the bound-AST level, and will
     // be tested end-to-end once the parser supports qualified refs.
-
-    // ─────────────────────── interaction tests ──────────────────────────
 
     /// `WHERE` + projection + `LIMIT` compose: filter narrows rows,
     /// project narrows columns, limit caps count.

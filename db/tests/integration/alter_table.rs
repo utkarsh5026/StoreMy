@@ -7,6 +7,7 @@
 use storemy::{
     catalog::CatalogError,
     engine::{EngineError, StatementResult},
+    types::Value,
 };
 
 use crate::common::TestDb;
@@ -284,6 +285,66 @@ fn insert_before_and_after_drop_column_rows_coexist() {
 }
 
 #[test]
+fn select_star_after_drop_column_excludes_dropped_slot() {
+    let db = TestDb::new();
+    db.run_ok("CREATE TABLE t (id INT, name STRING, age INT)");
+    db.run_ok("INSERT INTO t VALUES (1, 'alice', 30)");
+    db.run_ok("ALTER TABLE t DROP COLUMN name");
+
+    let result = db.run_ok("SELECT * FROM t");
+    let StatementResult::Selected { schema, rows, .. } = result else {
+        panic!("expected Selected, got {result:?}");
+    };
+
+    // Output schema must only contain the two surviving columns.
+    assert_eq!(
+        schema.physical_num_fields(),
+        2,
+        "output schema must not carry the dropped slot"
+    );
+    let col_names: Vec<&str> = schema.fields().map(|f| f.name.as_str()).collect();
+    assert_eq!(col_names, ["id", "age"]);
+
+    // Each row must have exactly two values.
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].len(), 2);
+}
+
+#[test]
+fn select_star_after_add_then_drop_shows_only_live_columns() {
+    let db = TestDb::new();
+    db.run_ok("CREATE TABLE t (id INT, name STRING)");
+    db.run_ok("ALTER TABLE t ADD COLUMN age INT");
+    db.run_ok("ALTER TABLE t DROP COLUMN name");
+    db.run_ok("INSERT INTO t VALUES (1, 42)");
+
+    let result = db.run_ok("SELECT * FROM t");
+    let StatementResult::Selected { schema, rows, .. } = result else {
+        panic!("expected Selected, got {result:?}");
+    };
+
+    let col_names: Vec<&str> = schema.fields().map(|f| f.name.as_str()).collect();
+    assert_eq!(col_names, ["id", "age"]);
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].len(), 2);
+}
+
+#[test]
+fn select_star_with_no_dropped_columns_is_unchanged() {
+    let db = TestDb::new();
+    db.run_ok("CREATE TABLE t (id INT, name STRING)");
+    db.run_ok("INSERT INTO t VALUES (1, 'alice')");
+
+    let result = db.run_ok("SELECT * FROM t");
+    let StatementResult::Selected { schema, rows, .. } = result else {
+        panic!("expected Selected, got {result:?}");
+    };
+
+    assert_eq!(schema.physical_num_fields(), 2);
+    assert_eq!(rows[0].len(), 2);
+}
+
+#[test]
 fn multiple_add_columns_accumulate_in_order() {
     let db = TestDb::new();
     db.run_ok("CREATE TABLE t (id INT)");
@@ -296,4 +357,97 @@ fn multiple_add_columns_accumulate_in_order() {
     let info = db.db.describe_table("t").unwrap();
     assert_eq!(info.schema.logical_num_fields(), 4);
     assert_eq!(info.schema.physical_num_fields(), 4);
+}
+
+#[test]
+fn add_column_with_default_old_rows_see_default_value() {
+    let db = TestDb::new();
+    db.run_ok("CREATE TABLE t (id INT, name STRING)");
+    db.run_ok("INSERT INTO t VALUES (1, 'alice')");
+
+    // Add a column with a literal default.
+    db.run_ok("ALTER TABLE t ADD COLUMN score INT DEFAULT 42");
+
+    // SELECT * must return the default for the pre-existing row.
+    let result = db.run_ok("SELECT * FROM t");
+    let StatementResult::Selected { rows, .. } = result else {
+        panic!("expected Selected");
+    };
+
+    assert_eq!(rows.len(), 1);
+    assert_eq!(
+        rows[0].len(),
+        3,
+        "row should have three values after ADD COLUMN"
+    );
+    let score = rows[0].get(2).expect("index 2 must exist");
+    assert_eq!(
+        *score,
+        Value::Int64(42),
+        "old row must show the declared DEFAULT, got {score:?}"
+    );
+}
+
+#[test]
+fn add_column_without_default_old_rows_see_null() {
+    let db = TestDb::new();
+    db.run_ok("CREATE TABLE t (id INT)");
+    db.run_ok("INSERT INTO t VALUES (1)");
+
+    db.run_ok("ALTER TABLE t ADD COLUMN tag STRING");
+
+    let result = db.run_ok("SELECT * FROM t");
+    let StatementResult::Selected { rows, .. } = result else {
+        panic!("expected Selected");
+    };
+
+    assert_eq!(
+        *rows[0].get(1).unwrap(),
+        Value::Null,
+        "no DEFAULT means NULL for old rows"
+    );
+}
+
+#[test]
+fn add_column_with_default_new_rows_use_supplied_value() {
+    let db = TestDb::new();
+    db.run_ok("CREATE TABLE t (id INT, name STRING)");
+    db.run_ok("ALTER TABLE t ADD COLUMN score INT DEFAULT 99");
+
+    // New row explicitly supplies 7; the default should not override it.
+    db.run_ok("INSERT INTO t VALUES (1, 'bob', 7)");
+
+    let result = db.run_ok("SELECT * FROM t");
+    let StatementResult::Selected { rows, .. } = result else {
+        panic!("expected Selected");
+    };
+
+    assert_eq!(
+        *rows[0].get(2).unwrap(),
+        Value::Int64(7),
+        "supplied value must win over default"
+    );
+}
+
+#[test]
+fn add_column_default_survives_catalog_reconstruction() {
+    // This checks that the default is persisted in the system catalog and
+    // re-read correctly when the schema is reconstructed from ColumnRow records.
+    let db = TestDb::new();
+    db.run_ok("CREATE TABLE t (id INT)");
+    db.run_ok("ALTER TABLE t ADD COLUMN bonus INT DEFAULT 100");
+
+    // Force schema reconstruction by reading the field directly.
+    let info = db.db.describe_table("t").unwrap();
+    let bonus_field = info
+        .schema
+        .field_by_name("bonus")
+        .expect("bonus field must exist")
+        .1;
+
+    assert_eq!(
+        bonus_field.missing_default_value,
+        Some(Value::Int64(100)),
+        "default must be stored in Field after catalog roundtrip"
+    );
 }
