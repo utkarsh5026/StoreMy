@@ -388,16 +388,22 @@ impl TupleSchema {
     /// runs before a tuple is written to a heap page.
     ///
     /// Verifies that:
-    /// - the number of values equals the number of columns,
-    /// - no `NOT NULL` column holds a `NULL` value, and
-    /// - each non-null value's runtime type matches the column's declared type.
+    /// - the number of values equals the **physical** column count (including dropped slots, which
+    ///   carry a placeholder `NULL`),
+    /// - no live `NOT NULL` column holds a `NULL` value, and
+    /// - each non-null live value's runtime type matches the column's declared type.
+    ///
+    /// Dropped columns (`field.is_dropped == true`) are skipped for the null
+    /// and type checks: their slot is always filled with `NULL` or a stored
+    /// default regardless of the original constraint.
     ///
     /// # Errors
     ///
     /// Returns the first [`TupleError`] encountered, in the order checks run:
-    /// - [`TupleError::FieldCountMismatch`] - `VALUES` arity does not match the column list
-    /// - [`TupleError::NullNotAllowed`] - `NULL` written to a `NOT NULL` column
-    /// - [`TupleError::TypeMismatch`] - value type differs from the declared column type
+    /// - [`TupleError::FieldCountMismatch`] - `VALUES` arity does not match the physical column
+    ///   count
+    /// - [`TupleError::NullNotAllowed`] - `NULL` written to a live `NOT NULL` column
+    /// - [`TupleError::TypeMismatch`] - value type differs from a live column's declared type
     pub fn validate(&self, tuple: &Tuple) -> Result<(), TupleError> {
         if tuple.len() != self.fields.len() {
             return Err(TupleError::FieldCountMismatch {
@@ -407,6 +413,10 @@ impl TupleSchema {
         }
 
         for (field, value) in self.fields.iter().zip(tuple.iter()) {
+            if field.is_dropped {
+                continue;
+            }
+
             if value.is_null() && !field.nullable {
                 return Err(TupleError::NullNotAllowed {
                     column: field.name.to_string(),
@@ -758,5 +768,58 @@ mod tests {
         assert!(matches!(err, TupleError::FieldIndexOutOfBounds {
             index: 99
         }));
+    }
+
+    // Dropped columns are skipped entirely by validate — NULL is always
+    // acceptable in their slot, even if the original constraint was NOT NULL.
+    #[test]
+    fn validate_skips_dropped_not_null_column() {
+        // Schema: id NOT NULL, name NOT NULL (dropped), age nullable.
+        let mut name_field = Field::new("name", Type::String).unwrap().not_null();
+        let _ = name_field.set_is_dropped(true);
+
+        let schema = TupleSchema::new(vec![
+            Field::new("id", Type::Int32).unwrap().not_null(),
+            name_field,
+            Field::new("age", Type::Int32).unwrap(),
+        ]);
+
+        // Slot 1 is NULL (the dropped column's placeholder) — must not error.
+        let tuple = Tuple::new(vec![Value::Int32(1), Value::Null, Value::Int32(30)]);
+        assert!(schema.validate(&tuple).is_ok());
+    }
+
+    // Dropped columns are also skipped for the type check.
+    #[test]
+    fn validate_skips_type_check_for_dropped_column() {
+        let mut dropped = Field::new("tag", Type::String).unwrap();
+        let _ = dropped.set_is_dropped(true);
+
+        let schema = TupleSchema::new(vec![
+            Field::new("id", Type::Int32).unwrap().not_null(),
+            dropped,
+        ]);
+
+        // Value::Bool in a STRING slot would normally be a TypeMismatch,
+        // but the column is dropped so it must be ignored.
+        let tuple = Tuple::new(vec![Value::Int32(1), Value::Bool(true)]);
+        assert!(schema.validate(&tuple).is_ok());
+    }
+
+    // Live columns still have their constraints enforced after a drop.
+    #[test]
+    fn validate_still_enforces_live_not_null_after_drop() {
+        let mut dropped = Field::new("tag", Type::String).unwrap();
+        let _ = dropped.set_is_dropped(true);
+
+        let schema = TupleSchema::new(vec![
+            Field::new("id", Type::Int32).unwrap().not_null(),
+            dropped,
+        ]);
+
+        // id is NOT NULL and live — writing NULL there must still fail.
+        let tuple = Tuple::new(vec![Value::Null, Value::Null]);
+        let err = schema.validate(&tuple).unwrap_err();
+        assert!(matches!(err, TupleError::NullNotAllowed { column } if column == "id"));
     }
 }
