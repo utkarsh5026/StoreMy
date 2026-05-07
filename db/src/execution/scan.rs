@@ -311,7 +311,10 @@ mod tests {
 
         assert_eq!(p1, p2);
         assert_eq!(p2, p3);
-        assert_eq!(scan.schema().num_fields(), heap.schema().num_fields());
+        assert_eq!(
+            scan.schema().physical_num_fields(),
+            heap.schema().physical_num_fields()
+        );
         assert_eq!(
             scan.schema().field(0).unwrap().name,
             heap.schema().field(0).unwrap().name
@@ -332,8 +335,8 @@ mod tests {
     }
 
     fn assert_schema_equivalent(a: &TupleSchema, b: &TupleSchema) {
-        assert_eq!(a.num_fields(), b.num_fields());
-        for i in 0..a.num_fields() {
+        assert_eq!(a.physical_num_fields(), b.physical_num_fields());
+        for i in 0..a.physical_num_fields() {
             let af = a.field(i).unwrap();
             let bf = b.field(i).unwrap();
             assert_eq!(af.name, bf.name);

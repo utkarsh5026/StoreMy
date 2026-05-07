@@ -894,7 +894,7 @@ mod tests {
             } => {
                 assert_eq!(name, "t");
                 assert!(primary_key.is_none());
-                assert_eq!(schema.num_fields(), 2);
+                assert_eq!(schema.physical_num_fields(), 2);
             }
             BoundCreateTable::AlreadyExists { .. } => panic!("expected New"),
         }
@@ -1021,7 +1021,7 @@ mod tests {
                 ..
             } => {
                 assert!(primary_key.is_none());
-                assert_eq!(schema.num_fields(), 0);
+                assert_eq!(schema.physical_num_fields(), 0);
             }
             BoundCreateTable::AlreadyExists { .. } => panic!("expected New"),
         }

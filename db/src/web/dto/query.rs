@@ -283,7 +283,7 @@ impl From<&TableInfo> for TableSummaryDto {
     fn from(t: &TableInfo) -> Self {
         TableSummaryDto {
             name: t.name.clone(),
-            column_count: t.schema.num_fields(),
+            column_count: t.schema.logical_num_fields(),
             file_id: u64::from(t.file_id),
         }
     }

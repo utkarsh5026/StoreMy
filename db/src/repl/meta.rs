@@ -119,7 +119,7 @@ fn print_table_list(db: &Database) {
         t.add_row(vec![
             Cell::new(&info.name).fg(comfy_table::Color::Green),
             Cell::new(info.file_id.0.to_string()).fg(comfy_table::Color::Yellow),
-            Cell::new(info.schema.num_fields().to_string()),
+            Cell::new(info.schema.logical_num_fields().to_string()),
             match pk_text.as_deref() {
                 Some(s) => Cell::new(s).fg(comfy_table::Color::Magenta),
                 None => Cell::new("—").fg(comfy_table::Color::DarkGrey),

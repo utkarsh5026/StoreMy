@@ -282,7 +282,7 @@ fn decode_slot(
 }
 
 fn decode_tuple_bytes(body: &[u8], schema: &TupleSchema) -> SlotDecodeDto {
-    let bitmap_size = schema.num_fields().div_ceil(8);
+    let bitmap_size = schema.physical_num_fields().div_ceil(8);
     if body.len() < bitmap_size {
         return SlotDecodeDto::Err {
             error: format!(
@@ -297,7 +297,7 @@ fn decode_tuple_bytes(body: &[u8], schema: &TupleSchema) -> SlotDecodeDto {
     let bitmap = &body[..bitmap_size];
     let bitmap_hex = hex(bitmap);
     let mut cursor = std::io::Cursor::new(&body[bitmap_size..]);
-    let mut fields = Vec::with_capacity(schema.num_fields());
+    let mut fields = Vec::with_capacity(schema.physical_num_fields());
 
     for (i, field) in schema.fields().enumerate() {
         let is_null = (bitmap[i / 8] & (1 << (i % 8))) != 0;

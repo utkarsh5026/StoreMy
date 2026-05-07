@@ -216,11 +216,21 @@ impl TupleSchema {
         }
     }
 
-    /// Returns the number of columns in the schema - the arity of a row that
-    /// matches it. Equivalent to the count of items in `INSERT ... VALUES (...)`.
+    /// Total number of columns in the physical layout, including logically
+    /// dropped ones. This is the count the storage layer uses: null-bitmap
+    /// width, tuple slot sizing, join offsets, and serialization all depend
+    /// on this value because on-disk rows were written with this many slots.
     #[inline]
-    pub fn num_fields(&self) -> usize {
+    pub fn physical_num_fields(&self) -> usize {
         self.fields.len()
+    }
+
+    /// Number of columns visible to SQL — dropped columns excluded. This is
+    /// the arity a user must satisfy in `INSERT … VALUES (…)` and the count
+    /// returned to API callers or the REPL.
+    #[inline]
+    pub fn logical_num_fields(&self) -> usize {
+        self.fields.iter().filter(|f| !f.is_dropped).count()
     }
 
     /// Returns `true` if the schema has no columns - `CREATE TABLE t ()` in
@@ -305,14 +315,15 @@ impl TupleSchema {
     ///
     /// // CREATE TABLE t (id INT, ok BOOLEAN);
     /// let schema = TupleSchema::new(vec![
-    ///     Field::new("id", Type::Int32), // 1 disc + 4 bytes
-    ///     Field::new("ok", Type::Bool),  // 1 disc + 1 byte
+    ///     Field::new("id", Type::Int32).unwrap(), // 1 disc + 4 bytes
+    ///     Field::new("ok", Type::Bool).unwrap(),  // 1 disc + 1 byte
     /// ]);
-    /// // 2 columns -> 1-byte bitmap + 2 discriminants + 5 payload = 8 total
-    /// assert_eq!(schema.serialized_size(), 8);
+    /// // 2 columns -> 2-byte n_fields + 1-byte bitmap + 2 discriminants + 5 payload = 10 total
+    /// assert_eq!(schema.serialized_size(), 10);
     /// ```
     pub fn serialized_size(&self) -> usize {
-        self.num_fields().div_ceil(8) + self.num_fields() + self.tuple_size()
+        let n = self.physical_num_fields();
+        2 + n.div_ceil(8) + n + self.tuple_size()
     }
 
     /// Concatenates two schemas - the schema-level counterpart to
@@ -431,7 +442,7 @@ impl TupleSchema {
     ///
     /// # Errors
     ///
-    /// [`TupleError::FieldIndexOutOfBounds`] when `index >= self.num_fields()` -
+    /// [`TupleError::FieldIndexOutOfBounds`] when `index >= self.physical_num_fields()` -
     /// usually means a `SELECT col` referenced something past the end of the
     /// child operator's output schema.
     pub fn field_or_err(&self, index: usize) -> Result<&Field, TupleError> {
@@ -564,11 +575,11 @@ mod tests {
     fn schema_num_fields_and_is_empty() {
         let empty = TupleSchema::new(vec![]);
         assert!(empty.is_empty());
-        assert_eq!(empty.num_fields(), 0);
+        assert_eq!(empty.physical_num_fields(), 0);
 
         let schema = schema_id_name_age();
         assert!(!schema.is_empty());
-        assert_eq!(schema.num_fields(), 3);
+        assert_eq!(schema.physical_num_fields(), 3);
     }
 
     #[test]
@@ -605,7 +616,7 @@ mod tests {
     #[test]
     fn schema_serialized_size() {
         let schema = schema_id_name_age();
-        assert_eq!(schema.serialized_size(), 1 + 3 + schema.tuple_size());
+        assert_eq!(schema.serialized_size(), 2 + 1 + 3 + schema.tuple_size());
     }
 
     #[test]
@@ -614,7 +625,7 @@ mod tests {
             .map(|i| field(format!("c{i}").as_str(), Type::Bool))
             .collect();
         let schema = TupleSchema::new(fields);
-        assert_eq!(schema.serialized_size(), 2 + 9 + 9);
+        assert_eq!(schema.serialized_size(), 2 + 2 + 9 + 9);
     }
 
     #[test]
@@ -622,7 +633,7 @@ mod tests {
         let left = TupleSchema::new(vec![field("a", Type::Int32)]);
         let right = TupleSchema::new(vec![Field::new("b", Type::Int64).unwrap()]);
         let merged = left.merge(&right);
-        assert_eq!(merged.num_fields(), 2);
+        assert_eq!(merged.physical_num_fields(), 2);
         assert_eq!(merged.field(0).unwrap().name, "a");
         assert_eq!(merged.field(1).unwrap().name, "b");
     }
@@ -631,7 +642,7 @@ mod tests {
     fn schema_project_valid_indices() {
         let schema = schema_id_name_age();
         let projected = schema.project(&[2, 0]).unwrap();
-        assert_eq!(projected.num_fields(), 2);
+        assert_eq!(projected.physical_num_fields(), 2);
         assert_eq!(projected.field(0).unwrap().name, "age");
         assert_eq!(projected.field(1).unwrap().name, "id");
     }

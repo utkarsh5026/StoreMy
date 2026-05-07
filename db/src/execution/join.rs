@@ -153,7 +153,7 @@ struct JoinInputs<'a> {
 impl<'a> JoinInputs<'a> {
     /// Constructs a new `JoinInputs` by merging the two children's schemas.
     pub fn new(left: PlanNode<'a>, right: PlanNode<'a>) -> Self {
-        let left_width = left.schema().num_fields();
+        let left_width = left.schema().physical_num_fields();
         let schema = left.schema().merge(right.schema());
         Self {
             left,
@@ -996,7 +996,7 @@ mod tests {
         let left = build_heap(115, &[]);
         let right = build_heap(116, &[]);
         let j = NestedLoopJoin::new(scan(&left), scan(&right), nlj_eq_0_0_w2());
-        assert_eq!(j.schema().num_fields(), 4);
+        assert_eq!(j.schema().physical_num_fields(), 4);
     }
 
     // ===== HashJoin =====

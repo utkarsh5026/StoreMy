@@ -939,7 +939,7 @@ mod tests {
         ])
         .unwrap();
         let s = agg.schema();
-        assert_eq!(s.num_fields(), 3);
+        assert_eq!(s.physical_num_fields(), 3);
         assert_eq!(s.field(0).unwrap().field_type, Type::Int32); // group col unchanged
         assert_eq!(s.field(1).unwrap().field_type, Type::Int64); // COUNT -> Int64
         assert_eq!(s.field(2).unwrap().field_type, Type::Float64); // AVG -> Float64

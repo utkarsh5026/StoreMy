@@ -803,8 +803,9 @@ mod tests {
     }
 
     fn field_names(schema: &TupleSchema) -> Vec<String> {
-        (0..schema.num_fields())
-            .map(|i| schema.field(i).unwrap().name.as_str().to_owned())
+        schema
+            .logical_iter()
+            .map(|f| f.name.as_str().to_owned())
             .collect()
     }
 

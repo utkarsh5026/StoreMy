@@ -592,7 +592,7 @@ impl BoundSelect {
         let mut left = BoundFrom::table(info, table, 0);
 
         for j in joins {
-            let right_offset = left.schema().num_fields();
+            let right_offset = left.schema().physical_num_fields();
             let right_info = catalog.get_table_info(txn, &j.table.name)?;
             let right_table = BoundTable {
                 name: right_info.name.clone(),

@@ -23,7 +23,7 @@ use crate::{
 impl Encode for (&TupleSchema, &Tuple) {
     fn encode<W: Write>(&self, writer: &mut W) -> Result<(), CodecError> {
         let (schema, tuple) = *self;
-        let bitmap_size = schema.num_fields().div_ceil(8);
+        let bitmap_size = schema.physical_num_fields().div_ceil(8);
         writer.write_all(&tuple.n_fields.to_le_bytes())?;
         let mut bitmap = vec![0u8; bitmap_size];
         for (i, value) in tuple.values.iter().enumerate() {
@@ -77,6 +77,11 @@ pub struct Tuple {
 }
 
 impl Tuple {
+    #[inline]
+    fn field_count_u16(len: usize) -> u16 {
+        u16::try_from(len).expect("tuple field count exceeds u16::MAX")
+    }
+
     /// Builds a tuple from the values produced by `INSERT ... VALUES (...)` or
     /// emitted by a child operator.
     ///
@@ -95,7 +100,7 @@ impl Tuple {
     /// [`TupleSchema::validate`] when the row is about to be persisted.
     pub fn new(values: Vec<Value>) -> Self {
         Self {
-            n_fields: values.len() as u16,
+            n_fields: Self::field_count_u16(values.len()),
             values,
         }
     }
@@ -160,7 +165,7 @@ impl Tuple {
     pub fn project(&self, indices: &[usize]) -> Self {
         let mut n_fields = 0u16;
         let values: Vec<Value> = indices
-            .into_iter()
+            .iter()
             .filter_map(|&i| {
                 let value = self.values.get(i).cloned();
                 if value.is_some() {
@@ -211,13 +216,19 @@ impl Tuple {
     ///
     /// Returns codec errors if the input is too short or corrupt.
     pub fn deserialize(schema: &TupleSchema, buf: &[u8]) -> Result<Self, CodecError> {
+        use byteorder::ReadBytesExt;
         let mut reader = Cursor::new(buf);
-        let bitmap_size = schema.num_fields().div_ceil(8);
+
+        // Read the field count written by Encode, then size the bitmap from it.
+        // This is the physical count — may be less than schema.num_fields() for
+        // tuples written before a later ADD COLUMN.
+        let n_fields = reader.read_u16::<byteorder::LittleEndian>()? as usize;
+        let bitmap_size = n_fields.div_ceil(8);
         let mut bitmap = vec![0u8; bitmap_size];
         reader.read_exact(&mut bitmap)?;
 
-        let mut values = Vec::with_capacity(schema.num_fields());
-        for i in 0..schema.num_fields() {
+        let mut values = Vec::with_capacity(n_fields);
+        for i in 0..n_fields {
             let is_null = (bitmap[i / 8] & (1 << (i % 8))) != 0;
             if is_null {
                 values.push(Value::Null);
@@ -226,8 +237,13 @@ impl Tuple {
             }
         }
 
+        // Pad columns added after this tuple was written with their missing value.
+        for field in schema.fields().skip(n_fields) {
+            values.push(field.missing_default_value.clone().unwrap_or(Value::Null));
+        }
+
         Ok(Self {
-            n_fields: values.len() as u16,
+            n_fields: Self::field_count_u16(values.len()),
             values,
         })
     }
@@ -552,7 +568,7 @@ mod tests {
         let tuple = Tuple::new(vec![Value::Int32(7), Value::Bool(true)]);
         let mut buf = vec![0u8; schema.serialized_size()];
         let written = tuple.serialize(&schema, &mut buf).unwrap();
-        assert_eq!(written, 8);
+        assert_eq!(written, 10);
     }
 
     #[test]
@@ -643,7 +659,7 @@ mod tests {
         let mut buf = vec![0u8; schema.serialized_size()];
         tuple.serialize(&schema, &mut buf).unwrap();
 
-        assert_eq!(buf[0], 0b1000_1001, "null bitmap byte mismatch");
+        assert_eq!(buf[2], 0b1000_1001, "null bitmap byte mismatch");
 
         let restored = Tuple::deserialize(&schema, &buf).unwrap();
         assert_eq!(restored.get(0), Some(&Value::Null));

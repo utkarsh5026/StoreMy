@@ -515,7 +515,7 @@ mod tests {
         let left = build_heap(213, &[]);
         let right = build_heap(214, &[]);
         let u = Union::new(scan(&left), scan(&right), false);
-        assert_eq!(u.schema().num_fields(), 2);
+        assert_eq!(u.schema().physical_num_fields(), 2);
     }
 
     // ===== Intersect =====
