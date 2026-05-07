@@ -19,7 +19,7 @@ use syn::{
     Data, DataStruct, DeriveInput, Fields, FieldsNamed, parse_macro_input, spanned::Spanned,
 };
 
-/// Derives [`storemy::codec::Encode`] for a struct with named fields.
+/// Derives `::storemy::codec::Encode` for a struct with named fields.
 ///
 /// Each field is encoded in declaration order via `field.encode(writer)?`.
 #[proc_macro_derive(Encode)]
@@ -54,7 +54,7 @@ pub fn derive_encode(input: TokenStream) -> TokenStream {
     expanded.into()
 }
 
-/// Derives [`storemy::codec::Decode`] for a struct with named fields.
+/// Derives `::storemy::codec::Decode` for a struct with named fields.
 ///
 /// Each field is decoded in declaration order via `<FieldType>::decode(reader)?`.
 #[proc_macro_derive(Decode)]
