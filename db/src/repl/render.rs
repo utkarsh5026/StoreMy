@@ -144,6 +144,36 @@ fn print_result(r: &StatementResult) {
                 &format!("renamed table {} to {}", old_name.cyan(), new_name.cyan()),
             );
         }
+        StatementResult::ColumnDefaultSet { table, column } => {
+            theme::ok(
+                "ALTER TABLE",
+                &format!("set default for {} on {}", column.cyan(), table.cyan()),
+            );
+        }
+        StatementResult::ColumnDefaultDropped { table, column } => {
+            theme::ok(
+                "ALTER TABLE",
+                &format!("dropped default for {} on {}", column.cyan(), table.cyan()),
+            );
+        }
+        StatementResult::ColumnNotNullDropped { table, column } => {
+            theme::ok(
+                "ALTER TABLE",
+                &format!("dropped NOT NULL on {} in {}", column.cyan(), table.cyan()),
+            );
+        }
+        StatementResult::PrimaryKeySet { table } => {
+            theme::ok(
+                "ALTER TABLE",
+                &format!("set primary key on {}", table.cyan()),
+            );
+        }
+        StatementResult::PrimaryKeyDropped { table } => {
+            theme::ok(
+                "ALTER TABLE",
+                &format!("dropped primary key from {}", table.cyan()),
+            );
+        }
     }
 }
 

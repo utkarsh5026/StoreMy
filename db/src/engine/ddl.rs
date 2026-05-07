@@ -514,7 +514,38 @@ impl Engine<'_> {
                 BoundAlterTable::NoOp { table_name } => Ok(StatementResult::NoOp {
                     statement: format!("ALTER TABLE IF EXISTS {table_name}"),
                 }),
-                _ => todo!("executor for new ALTER TABLE actions"),
+                BoundAlterTable::SetDefault {
+                    file_id,
+                    column,
+                    value,
+                } => {
+                    let table = catalog.get_table_info_by_id(txn, file_id)?.name;
+                    catalog.set_column_default(txn, file_id, &column, value)?;
+                    Ok(StatementResult::ColumnDefaultSet { table, column })
+                }
+                BoundAlterTable::DropDefault { file_id, column } => {
+                    let table = catalog.get_table_info_by_id(txn, file_id)?.name;
+                    catalog.drop_column_default(txn, file_id, &column)?;
+                    Ok(StatementResult::ColumnDefaultDropped { table, column })
+                }
+                BoundAlterTable::DropNotNull { file_id, column } => {
+                    let table = catalog.get_table_info_by_id(txn, file_id)?.name;
+                    catalog.drop_column_not_null(txn, file_id, &column)?;
+                    Ok(StatementResult::ColumnNotNullDropped { table, column })
+                }
+                BoundAlterTable::AddPrimaryKey {
+                    file_id,
+                    column_ids,
+                } => {
+                    let table = catalog.get_table_info_by_id(txn, file_id)?.name;
+                    catalog.set_primary_key(txn, file_id, column_ids)?;
+                    Ok(StatementResult::PrimaryKeySet { table })
+                }
+                BoundAlterTable::DropPrimaryKey { file_id } => {
+                    let table = catalog.get_table_info_by_id(txn, file_id)?.name;
+                    catalog.drop_primary_key(txn, file_id)?;
+                    Ok(StatementResult::PrimaryKeyDropped { table })
+                }
             }
         })
     }

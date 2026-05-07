@@ -78,6 +78,24 @@ pub enum StatementResult {
         old_name: String,
         new_name: String,
     },
+    ColumnDefaultSet {
+        table: String,
+        column: String,
+    },
+    ColumnDefaultDropped {
+        table: String,
+        column: String,
+    },
+    ColumnNotNullDropped {
+        table: String,
+        column: String,
+    },
+    PrimaryKeySet {
+        table: String,
+    },
+    PrimaryKeyDropped {
+        table: String,
+    },
 }
 
 impl StatementResult {
@@ -260,6 +278,36 @@ impl fmt::Display for StatementResult {
                 write!(
                     f,
                     "RENAME TABLE completed: renamed table '{old_name}' to '{new_name}'"
+                )
+            }
+            StatementResult::ColumnDefaultSet { table, column } => {
+                write!(
+                    f,
+                    "ALTER TABLE completed: set default for column '{column}' in table '{table}'"
+                )
+            }
+            StatementResult::ColumnDefaultDropped { table, column } => {
+                write!(
+                    f,
+                    "ALTER TABLE completed: dropped default for column '{column}' in table '{table}'"
+                )
+            }
+            StatementResult::ColumnNotNullDropped { table, column } => {
+                write!(
+                    f,
+                    "ALTER TABLE completed: dropped NOT NULL constraint on column '{column}' in table '{table}'"
+                )
+            }
+            StatementResult::PrimaryKeySet { table } => {
+                write!(
+                    f,
+                    "ALTER TABLE completed: set primary key on table '{table}'"
+                )
+            }
+            StatementResult::PrimaryKeyDropped { table } => {
+                write!(
+                    f,
+                    "ALTER TABLE completed: dropped primary key from table '{table}'"
                 )
             }
         }
