@@ -111,8 +111,8 @@ impl SystemHeaps {
 /// [`Transaction`] into each write operation so that changes are durable and
 /// recoverable via the WAL.
 pub struct Catalog {
-    wal: Arc<Wal>,
-    buffer_pool: Arc<PageStore>,
+    pub(super) wal: Arc<Wal>,
+    pub(super) buffer_pool: Arc<PageStore>,
     data_dir: PathBuf,
     next_file_id: AtomicU64,
     next_index_id: AtomicI64,
@@ -751,6 +751,8 @@ mod tests {
                 Value::Uint32(3), // Type::Int64
                 Value::Uint32(0),
                 Value::Bool(false),
+                Value::Bool(false), // is_dropped
+                Value::Null,        // missing_default_value
             ]),
             Tuple::new(vec![
                 Value::Uint64(1),
@@ -758,6 +760,8 @@ mod tests {
                 Value::Uint32(5), // Type::String
                 Value::Uint32(1),
                 Value::Bool(true),
+                Value::Bool(false), // is_dropped
+                Value::Null,        // missing_default_value
             ]),
         ];
 
@@ -789,9 +793,11 @@ mod tests {
         let bad_tuple = Tuple::new(vec![
             Value::Uint64(1),
             Value::String("col".into()),
-            Value::Uint32(999),
+            Value::Uint32(999), // no such Type variant
             Value::Uint32(0),
             Value::Bool(false),
+            Value::Bool(false),
+            Value::Null,
         ]);
 
         let insert_txn = txn_mgr.begin().unwrap();

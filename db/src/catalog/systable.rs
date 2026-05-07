@@ -1,4 +1,7 @@
-use std::{fmt, path::PathBuf};
+use std::{
+    fmt,
+    path::{Path, PathBuf},
+};
 
 use crate::{
     FileId, IndexId, Type, Value,
@@ -70,6 +73,11 @@ impl SystemTable {
                 field("column_type", Uint32).not_null(),
                 field("position", Uint32).not_null(),
                 field("nullable", Bool),
+                field("is_dropped", Bool).not_null(),
+                // Stored as the raw Value; nullable means "no default". Type
+                // validation is skipped for Value::Null so any nullable column
+                // works here — revisit when non-null defaults are supported.
+                field("missing_default_value", String),
             ],
             SystemTable::Indexes => vec![
                 field("index_id", Int64).not_null(),
@@ -158,7 +166,7 @@ fn validate_name(value: String, field: &'static str) -> Result<NonEmptyString, C
 
 /// Empty-check for a [`PathBuf`]. Paths don't go through [`NonEmptyString`]
 /// because the type's NUL/length rules are name-shaped, not path-shaped.
-fn non_empty_path(value: &PathBuf, field: &'static str) -> Result<(), CatalogError> {
+fn non_empty_path(value: &Path, field: &'static str) -> Result<(), CatalogError> {
     if value.as_os_str().is_empty() {
         return Err(CatalogError::invalid_catalog_row(format!(
             "{field} must not be empty"
@@ -307,11 +315,14 @@ impl From<Vec<ColumnRow>> for TupleSchema {
             column_name,
             column_type,
             nullable,
+            is_dropped,
             ..
         } in rows
         {
             let f = Field::new_non_empty(column_name, column_type);
-            fields.push(if nullable { f } else { f.not_null() });
+            let mut f = if nullable { f } else { f.not_null() };
+            let _ = f.set_is_dropped(is_dropped);
+            fields.push(f);
         }
         TupleSchema::new(fields)
     }
@@ -551,15 +562,14 @@ mod tests {
     }
 
     fn valid_columns_tuple() -> Tuple {
-        // table_id (Uint64 NOT NULL), column_name (String NOT NULL),
-        // column_type (Uint32 NOT NULL, 5 = Type::String),
-        // position (Uint32 NOT NULL), nullable (Bool, nullable)
         Tuple::new(vec![
             Value::Uint64(1),
             Value::String("email".into()),
-            Value::Uint32(5),
-            Value::Uint32(0),
-            Value::Bool(true),
+            Value::Uint32(5),   // column_type = Type::String
+            Value::Uint32(0),   // position
+            Value::Bool(true),  // nullable
+            Value::Bool(false), // is_dropped
+            Value::Null,        // missing_default_value
         ])
     }
 
@@ -645,6 +655,8 @@ mod tests {
                 Value::Uint32(disc),
                 Value::Uint32(0),
                 Value::Bool(false),
+                Value::Bool(false), // is_dropped
+                Value::Null,        // missing_default_value
             ]);
             assert!(
                 SystemTable::Columns.validate_row(&tuple).is_ok(),
@@ -670,6 +682,8 @@ mod tests {
             Value::Uint32(0),
             Value::Uint32(0),
             Value::Bool(false),
+            Value::Bool(false),
+            Value::Null,
         ]);
         let err = SystemTable::Columns.validate_row(&tuple).unwrap_err();
         assert!(matches!(err, CatalogError::Corruption { .. }));
@@ -684,6 +698,8 @@ mod tests {
             Value::Uint32(999), // no such Type variant
             Value::Uint32(0),
             Value::Bool(false),
+            Value::Bool(false),
+            Value::Null,
         ]);
         let err = SystemTable::Columns.validate_row(&tuple).unwrap_err();
         assert!(
