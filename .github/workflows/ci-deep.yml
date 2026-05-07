@@ -128,13 +128,12 @@ jobs:
           cargo +nightly test -Zbuild-std --target x86_64-unknown-linux-gnu -p storemy --tests
 
   # ───────────────────────────── Fuzz smoke ─────────────────────────────────
-  # Only runs once you add fuzz targets (cargo-fuzz creates fuzz/Cargo.toml).
+  # hashFiles() is not valid in a job-level if:, so we skip the Cargo.toml
+  # existence check here. The step itself exits gracefully when no targets exist.
   rust-fuzz-smoke:
     if: >-
-      hashFiles('fuzz/Cargo.toml') != '' && (
-        github.event_name != 'pull_request' ||
-        contains(github.event.pull_request.labels.*.name, 'ci:deep')
-      )
+      github.event_name != 'pull_request' ||
+      contains(github.event.pull_request.labels.*.name, 'ci:deep')
     runs-on: ubuntu-latest
     timeout-minutes: 30
     continue-on-error: true
@@ -149,9 +148,13 @@ jobs:
         with:
           tool: cargo-fuzz
       - name: Fuzz smoke (timeboxed)
-        working-directory: fuzz
         run: |
           set -euo pipefail
+          if [ ! -f fuzz/Cargo.toml ]; then
+            echo "no fuzz directory — skipping"
+            exit 0
+          fi
+          cd fuzz
           targets="$(cargo fuzz list)"
           if [ -z "$targets" ]; then
             echo "no fuzz targets"
