@@ -5,9 +5,10 @@
 #   Activate: pre-commit install   (run once after cloning)
 #   Run manually: pre-commit run --all-files
 #
-# Python-less alternative: run `make check` before committing.
+# Rust-native alternative: run `make check` before committing, or install
+# the git hook once with `make install-hooks`.
 
-default_install_hook_types: [pre-commit]
+default_install_hook_types: [pre-commit, commit-msg]
 
 repos:
   - repo: https://github.com/pre-commit/pre-commit-hooks
@@ -17,20 +18,40 @@ repos:
       - id: end-of-file-fixer
       - id: check-yaml
       - id: check-json
+      - id: check-toml
 
   - repo: local
     hooks:
-      - id: go-fmt
-        name: go fmt
-        language: system
-        entry: >-
-          bash -c 'unformatted=$(gofmt -l .); if [ -n "$unformatted" ]; then echo "Unformatted files:"; echo "$unformatted"; echo "Run: go fmt ./..."; exit 1; fi'
-        pass_filenames: false
-        types: [go]
+      - id: no-banned-macros
+        name: no dbg!/println!/eprintln! in lib code
+        language: pygrep
+        entry: '(dbg!|eprintln!|println!)'
+        types: [rust]
+        # Exclude test files — debug prints in tests are fine.
+        exclude: '(^|/)tests/|_test\.rs$'
 
-      - id: go-vet
-        name: go vet
+      - id: conventional-commit-msg
+        name: conventional commit message
+        language: script
+        entry: tools/git-hooks/commit-msg
+        stages: [commit-msg]
+
+      - id: rust-fmt
+        name: cargo fmt
         language: system
-        entry: go vet ./...
+        entry: bash -c 'cargo +nightly-2026-04-01 fmt --all -- --check'
         pass_filenames: false
-        types: [go]
+        types: [rust]
+
+      - id: rust-clippy
+        name: cargo clippy
+        language: system
+        entry: bash -c 'cargo clippy --workspace --all-targets -- -D warnings'
+        pass_filenames: false
+        types: [rust]
+
+      - id: typos
+        name: typos
+        language: system
+        entry: typos
+        pass_filenames: false

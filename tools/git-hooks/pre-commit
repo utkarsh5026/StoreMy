@@ -1,12 +1,18 @@
 #!/usr/bin/env bash
-# StoreMy pre-commit hook — runs fmt-check + clippy on staged Rust changes.
+# StoreMy pre-commit hook.
 #
 # Install once per clone:
 #     make install-hooks
-# (equivalent to: `git config core.hooksPath tools/git-hooks`)
+# (equivalent to: git config core.hooksPath tools/git-hooks)
 #
-# Skip for a single commit if you know what you're doing:
+# Skip for a single commit when you know what you're doing:
 #     SKIP_HOOKS=1 git commit ...
+#
+# Checks (in order, fast to slow):
+#   1. Banned macros  — dbg!, eprintln!, println! in non-test lib code
+#   2. cargo check    — fast type + syntax gate (~3 s warm vs clippy's ~30 s)
+#   3. cargo fmt      — formatting
+#   4. cargo clippy   — lints (-D warnings)
 
 set -euo pipefail
 
@@ -14,7 +20,6 @@ if [[ "${SKIP_HOOKS:-0}" == "1" ]]; then
   echo "pre-commit: SKIP_HOOKS=1, bypassing checks." >&2
   exit 0
 fi
-
 
 staged_rs=$(git diff --cached --name-only --diff-filter=ACMR -- '*.rs' || true)
 
@@ -24,6 +29,37 @@ fi
 
 echo "pre-commit: staged Rust files detected, running checks…" >&2
 
+# ── 1. Banned macros ────────────────────────────────────────────────────────
+# Catches debug leftovers before they reach the repo.
+# Skips paths under tests/ or ending in _test.rs — debug prints in test code are fine.
+
+banned_pattern='dbg!\|eprintln!\|println!'
+lib_staged=$(echo "$staged_rs" | grep -v '/tests/' | grep -v '_test\.rs' || true)
+
+if [[ -n "$lib_staged" ]]; then
+  hits=$(echo "$lib_staged" | xargs grep -n "$banned_pattern" 2>/dev/null || true)
+  if [[ -n "$hits" ]]; then
+    echo >&2
+    echo "pre-commit: banned macros found in non-test code:" >&2
+    echo "$hits" | sed 's/^/  /' >&2
+    echo >&2
+    echo "  Remove dbg!, println!, eprintln! before committing." >&2
+    echo "  If intentional, use: SKIP_HOOKS=1 git commit ..." >&2
+    exit 1
+  fi
+fi
+
+# ── 2. cargo check (fast type + syntax gate) ────────────────────────────────
+# Fails fast on type errors before spending time on clippy.
+
+echo "pre-commit: cargo check…" >&2
+if ! cargo check --workspace --all-targets --quiet 2>&1; then
+  echo >&2
+  echo "pre-commit: cargo check failed — fix type errors before committing." >&2
+  exit 1
+fi
+
+# ── 3. rustfmt ──────────────────────────────────────────────────────────────
 
 RUSTFMT_TOOLCHAIN="${RUSTFMT_TOOLCHAIN:-nightly-2026-04-01}"
 
@@ -33,6 +69,7 @@ if ! rustup run "$RUSTFMT_TOOLCHAIN" rustfmt --version >/dev/null 2>&1; then
   exit 1
 fi
 
+echo "pre-commit: cargo fmt --check…" >&2
 if ! cargo "+$RUSTFMT_TOOLCHAIN" fmt --all -- --check; then
   echo >&2
   echo "pre-commit: formatting issues detected." >&2
@@ -40,6 +77,9 @@ if ! cargo "+$RUSTFMT_TOOLCHAIN" fmt --all -- --check; then
   exit 1
 fi
 
+# ── 4. clippy ───────────────────────────────────────────────────────────────
+
+echo "pre-commit: cargo clippy…" >&2
 if ! cargo clippy --workspace --all-targets --quiet -- -D warnings; then
   echo >&2
   echo "pre-commit: clippy reported warnings (treated as errors)." >&2
