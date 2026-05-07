@@ -200,7 +200,7 @@ impl Executor for MembershipFilter<'_> {
 
 /// Streams tuples that appear in both the left and right child (`INTERSECT`).
 ///
-/// Wraps [`MembershipFilter`] with `exclude = false`. The right child is materialized in
+/// Wraps `MembershipFilter` with `exclude = false`. The right child is materialized in
 /// full before streaming begins; the left child is then streamed and only tuples present
 /// in the right set are returned.
 #[derive(Debug)]
@@ -244,7 +244,7 @@ impl Executor for Intersect<'_> {
 
 /// Streams tuples from the left child that do not appear in the right child (`EXCEPT`).
 ///
-/// Wraps [`MembershipFilter`] with `exclude = true`. The right child is materialized in
+/// Wraps `MembershipFilter` with `exclude = true`. The right child is materialized in
 /// full before streaming begins; the left child is then streamed and only tuples absent
 /// from the right set are returned.
 #[derive(Debug)]

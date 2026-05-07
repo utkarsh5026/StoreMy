@@ -126,7 +126,7 @@ impl HeapFile {
 
     /// Public view of the current page count, for tooling/visualization.
     ///
-    /// Equivalent to the internal [`Self::num_pages`] but exposed so the HTTP
+    /// Equivalent to the internal `Self::num_pages` but exposed so the HTTP
     /// layer can iterate every page of a file without going through a scan.
     pub fn page_count(&self) -> u32 {
         self.num_pages()
@@ -360,7 +360,7 @@ impl HeapFile {
     /// Inserts a batch of tuples as efficiently as possible, filling existing
     /// pages before allocating new ones.
     ///
-    /// Iterates through pages `0..=num_pages` and calls [`Self::fill_page`] on
+    /// Iterates through pages `0..=num_pages` and calls `Self::fill_page` on
     /// each. If the iterator is not yet exhausted after all existing pages have
     /// been tried, new pages are claimed atomically until every tuple has been
     /// stored. Returns the total number of tuples inserted.
@@ -371,7 +371,7 @@ impl HeapFile {
     ///
     /// # Errors
     ///
-    /// Propagates any [`HeapError`] returned by [`Self::fill_page`].
+    /// Propagates any [`HeapError`] returned by `Self::fill_page`.
     pub fn bulk_insert<I>(&self, txn: TransactionId, tuples: I) -> Result<Vec<RecordId>, HeapError>
     where
         I: IntoIterator<Item = Tuple>,

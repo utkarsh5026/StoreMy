@@ -18,7 +18,7 @@
 //!
 //! # How it works
 //!
-//! Binding walks the `FROM` clause first and builds a [`Scope`](crate::binder::scope::Scope) in
+//! Binding walks the `FROM` clause first and builds a `Scope` in
 //! lockstep. Each table gets a column offset in the concatenated row. Later clauses (`JOIN ... ON`,
 //! `WHERE`, `SELECT`, `GROUP BY`, `HAVING`, and `ORDER BY`) ask that scope to resolve SQL names
 //! like `age`, `users.id`, or `o.total` into stable column indices.

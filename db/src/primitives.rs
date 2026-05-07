@@ -2,7 +2,7 @@
 //!
 //! These types name storage locations, transactions, log positions, and
 //! simple SQL comparison operators. Most of them implement
-//! [`Encode`](crate::codec::Encode) and [`Decode`](crate::codec::Decode) so
+//! [`Encode`] and [`Decode`] so
 //! they can be stored in pages or log records with a fixed, little-endian
 //! layout.
 //!
@@ -18,7 +18,7 @@
 //! - [`RecordId`] — full tuple address (`file`, `page`, `slot`)
 //! - [`PageId`] — page address without a slot (`file`, `page`)
 //! - [`Predicate`] — comparison operators used in `WHERE` / join conditions
-//! - [`Filepath`] — type alias for [`PathBuf`](std::path::PathBuf) in APIs
+//! - [`Filepath`] — type alias for [`PathBuf`] in APIs
 
 use std::{
     borrow::Borrow,
@@ -732,7 +732,7 @@ impl Encode for Predicate {
 impl Decode for Predicate {
     /// # Errors
     ///
-    /// Returns [`CodecError::UnknownDiscriminant`](crate::codec::CodecError::UnknownDiscriminant)
+    /// Returns [`CodecError::UnknownDiscriminant`]
     /// when the stored discriminant is not in `0..=7`.
     fn decode<R: Read>(reader: &mut R) -> Result<Self, CodecError> {
         match reader.read_u8()? {

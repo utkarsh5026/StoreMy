@@ -101,10 +101,10 @@ const DEFAULT_HASH_BUCKETS: u32 = 64;
 
 /// In-memory description of one secondary index.
 ///
-/// This is the merged, validated view of N [`IndexRow`]s that share the same
-/// `index_id` — one per indexed column. The catalog reads rows off disk, calls
-/// [`IndexInfo::from_rows`] to fold them, and hands the result to the
-/// [`crate::index::IndexManager`] which then constructs and registers the live
+/// This is the merged, validated view of N `IndexRow`s that share the same
+/// `index_id` — one per indexed column. The catalog reads rows off disk, folds
+/// them into `IndexInfo`, and hands the result to the index subsystem which
+/// then constructs and registers the live
 /// access method.
 ///
 /// Mirrors the role [`TableInfo`] plays for tables: pure metadata, no
@@ -116,7 +116,7 @@ pub struct IndexInfo {
     /// SQL-visible name (`CREATE INDEX <name> …`).
     pub name: String,
     /// `FileId` of the indexed table's heap. Use this to look up the table
-    /// in [`Catalog::open_heaps`] when the executor needs to materialize a
+    /// in `Catalog::open_heaps` when the executor needs to materialize a
     /// row from a `RecordId` returned by the index.
     pub table_id: FileId,
     /// Names of the indexed columns, in declaration order. Length is the

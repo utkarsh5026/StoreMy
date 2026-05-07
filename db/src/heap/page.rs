@@ -137,7 +137,7 @@ impl<'a> HeapPage<'a> {
     /// Loads a heap page from a raw byte slice, decoding the page header, slot
     /// pointers, and stored tuples.
     ///
-    /// `data` must be exactly `PAGE_SIZE` bytes. The first [`PAGE_HDR_SIZE`]
+    /// `data` must be exactly `PAGE_SIZE` bytes. The first `PAGE_HDR_SIZE`
     /// bytes hold `num_slots` and `tuple_start`; the next
     /// `num_slots × SLOT_POINTER_SIZE` bytes are interpreted as slot pointers;
     /// the tuple bytes they reference are deserialized according to `schema`.

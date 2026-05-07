@@ -136,7 +136,7 @@ impl Type {
     ///
     /// For all fixed-width types this is the exact byte count. For [`Type::String`]
     /// it is the *maximum* possible size: a 4-byte length prefix plus
-    /// [`crate::STRING_MAX_SIZE`] payload bytes. Use [`Value::serialized_size`] when
+    /// [`crate::STRING_MAX_SIZE`] payload bytes. Use [`Value::encoded_size`] when
     /// you need the actual size of a specific string value.
     ///
     /// # Examples
@@ -313,7 +313,7 @@ impl Value {
     ///
     /// Must stay in sync with [`Encode for Value`]: every variant here
     /// mirrors a branch there. The `String` arm applies the same
-    /// [`STRING_MAX_SIZE`](crate::STRING_MAX_SIZE) truncation the encoder does.
+    /// [`STRING_MAX_SIZE`] truncation the encoder does.
     pub fn encoded_size(&self) -> usize {
         1 + match self {
             Value::Null => 0,

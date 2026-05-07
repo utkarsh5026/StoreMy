@@ -60,7 +60,7 @@ pub struct PageHeaderDto {
     pub num_slots: u16,
     pub tuple_start: u16,
     pub checksum: u32,
-    /// First [`PAGE_HDR_SIZE`] bytes of the page in lower-case hex.
+    /// First `PAGE_HDR_SIZE` bytes of the page in lower-case hex.
     pub raw_hex: String,
 }
 

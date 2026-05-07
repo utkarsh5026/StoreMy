@@ -115,7 +115,7 @@ impl Catalog {
 
     /// Adds a column to an existing table in the catalog.
     ///
-    /// This updates the `Columns` system table by inserting a new [`ColumnRow`]
+    /// This updates the `Columns` system table by inserting a new `ColumnRow`
     /// with a position equal to the current schema's field count, then rebuilds
     /// the table's [`TupleSchema`] from the system catalog and refreshes the
     /// in-memory `user_tables` cache entry.
@@ -131,7 +131,7 @@ impl Catalog {
     ///   present in the catalog for this table.
     /// - Returns [`CatalogError::InvalidCatalogRow`] if the computed column position does not fit
     ///   in the on-disk [`ColumnId`] representation.
-    /// - Propagates validation errors from [`ColumnRow::new`] and system-table read/write errors.
+    /// - Propagates system-table read/write and validation errors.
     pub fn add_column(
         &self,
         txn: &Transaction<'_>,

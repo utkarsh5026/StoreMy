@@ -4,8 +4,8 @@
 //! [`Tuple`]s out, all interpreted relative to a [`TupleSchema`].
 //!
 //! This module is intentionally split across:
-//! - [`schema`] for [`Field`] and [`TupleSchema`]
-//! - [`tuple`] for [`Tuple`] and row-oriented operations
+//! - `schema` for [`Field`] and [`TupleSchema`]
+//! - `tuple` for [`Tuple`] and row-oriented operations
 
 use thiserror::Error;
 

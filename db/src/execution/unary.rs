@@ -762,7 +762,7 @@ impl FallibleIterator for Sort<'_> {
     ///
     /// The first call drains and sorts the complete child input. Later calls
     /// walk the materialized sorted buffer. `NULL` ordering follows
-    /// [`Sort::compare_by_sort_key`]; type mismatches that cannot be compared
+    /// `Sort::compare_by_sort_key`; type mismatches that cannot be compared
     /// are treated as ties for that key.
     ///
     /// # Errors

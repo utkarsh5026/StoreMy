@@ -97,7 +97,7 @@ impl JoinPredicate {
     ///
     /// # Errors
     ///
-    /// Returns an [`ExecutionError::TypeError`](crate::execution::ExecutionError::TypeError) if the
+    /// Returns an [`ExecutionError::TypeError`] if the
     /// column index is out of bounds for the tuple.
     pub fn evaluate(&self, left: &Tuple, right: &Tuple) -> Result<bool, ExecutionError> {
         let l = get_value(left, self.left_col, true)?;

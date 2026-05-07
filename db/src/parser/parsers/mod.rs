@@ -62,7 +62,7 @@ impl Parser {
     ///
     /// # Errors
     ///
-    /// Returns [`ParserError`] if the token stream is empty, starts with an
+    /// Returns `ParserError` if the token stream is empty, starts with an
     /// unrecognized keyword, or any sub-parser fails.
     #[instrument(
         skip(self),

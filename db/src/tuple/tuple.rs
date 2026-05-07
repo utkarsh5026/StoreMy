@@ -113,7 +113,7 @@ impl Tuple {
     }
 
     /// Returns the number of values in this row - the arity. Should equal
-    /// the matching schema's [`TupleSchema::num_fields`] once validation
+    /// the matching schema's [`TupleSchema::physical_num_fields`] once validation
     /// passes.
     #[inline]
     pub fn len(&self) -> usize {

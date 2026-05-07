@@ -2,11 +2,11 @@
 //!
 //! ## Module layout
 //!
-//! - [`helper`] — rustyline glue: validator, highlighter, hinter, completer.
-//! - [`meta`]   — backslash meta-commands (`\help`, `\timing`, …).
-//! - [`render`] — pretty-printing of statement results and errors.
-//! - [`state`]  — mutable per-session flags shared across the modules above.
-//! - [`theme`]  — single source of truth for colors, glyphs, and banner text.
+//! - `helper` — rustyline glue: validator, highlighter, hinter, completer.
+//! - `meta`   — backslash meta-commands (`\help`, `\timing`, …).
+//! - `render` — pretty-printing of statement results and errors.
+//! - `state`  — mutable per-session flags shared across the modules above.
+//! - `theme`  — single source of truth for colors, glyphs, and banner text.
 //!
 //! Public surface is just [`run`] — call it from `main`.
 

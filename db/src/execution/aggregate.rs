@@ -9,7 +9,7 @@
 //! before it can produce any output. Execution is split into two phases:
 //!
 //! 1. **Accumulate** — drain the child, grouping rows by their `GROUP BY` column values. For each
-//!    group, maintain one [`Accumulator`] per aggregate spec. This happens lazily on the first call
+//!    group, maintain one `Accumulator` per aggregate spec. This happens lazily on the first call
 //!    to [`FallibleIterator::next`].
 //!
 //! 2. **Emit** — iterate over the finalized groups, yielding one [`Tuple`] per group. The tuple
@@ -65,7 +65,7 @@ pub enum AggregateFunc {
 /// This is used to infer the output [`Type`] of each aggregate in the `SELECT` list,
 /// which determines the schema of each output row from the `Aggregate` operator.
 ///
-/// - `COUNT(*)` and `COUNT(col)` always produce an [`Int64`] result, regardless of input.
+/// - `COUNT(*)` and `COUNT(col)` always produce a [`Type::Int64`] result, regardless of input.
 /// - `SUM` returns `Float64` when summing over a `Float64` input, or `Int64` otherwise (even for
 ///   integer types smaller than 64 bits).
 /// - `AVG` always returns a `Float64`, matching typical SQL semantics.

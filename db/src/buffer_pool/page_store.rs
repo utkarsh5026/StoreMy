@@ -22,7 +22,7 @@
 //!
 //! ## Concurrency
 //!
-//! Page-level locking is delegated to a [`LockManager`]. Callers supply a
+//! Page-level locking is delegated to a `LockManager`. Callers supply a
 //! [`LockRequest`] (shared or exclusive) when fetching a page; locks are held for
 //! the lifetime of the transaction and released in bulk via [`PageStore::release_all`].
 
@@ -81,7 +81,7 @@ struct FramePool {
 /// `PageStore` combines four concerns:
 /// 1. **Frame management** — allocating and evicting frames via clock-sweep.
 /// 2. **File registry** — tracking which [`FileId`]s are open and where on disk they live.
-/// 3. **Page-level locking** — forwarding lock requests to a [`LockManager`].
+/// 3. **Page-level locking** — forwarding lock requests to a `LockManager`.
 /// 4. **WAL integration** — forcing log records before flushing dirty pages.
 ///
 /// The pool lock (`pool`) and the file lock (`files`) are intentionally separate
@@ -496,7 +496,7 @@ impl PageGuard<'_> {
     /// Overwrites the page's raw bytes and marks the frame dirty.
     ///
     /// `lsn` must be the LSN of the WAL record that describes this write. It is
-    /// stored in the frame so that [`PageStore::flush_frame_to_file`] can call
+    /// stored in the frame so that `PageStore::flush_frame_to_file` can call
     /// [`Wal::force`] with the correct LSN before writing to disk.
     pub fn write(&self, data: &[u8; PAGE_SIZE], lsn: Lsn) {
         let mut pool = self.store.pool.lock();

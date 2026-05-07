@@ -101,7 +101,7 @@ impl Catalog {
     ///
     /// Scans the `Tables` system table inside `txn` (system tables themselves
     /// are not recorded there, so the result excludes them by construction)
-    /// and resolves each row through [`get_table_info`], which warms the
+    /// and resolves each row through [`Catalog::get_table_info`], which warms the
     /// in-memory cache as a side effect.
     ///
     /// The returned vector is sorted by table name for stable, user-friendly
