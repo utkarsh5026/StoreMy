@@ -34,7 +34,7 @@
 //! [`TupleSchema`]; binding does not insert default values or run `CHECK` constraints.
 
 use crate::{
-    FileId,
+    FileId, Value,
     binder::{BindError, check_table, ensure_unique_strs, require_column},
     catalog::manager::{Catalog, TableInfo},
     index::IndexKind,
@@ -509,7 +509,6 @@ pub enum BoundAlterTable {
     /// invalidate the cached [`TableInfo`] so the rebuilt schema includes the
     /// new field.
     AddColumn {
-        table_name: String,
         file_id: FileId,
         /// The full column definition from the AST, including type, nullability,
         /// and any default. The executor owns this and writes it to the catalog.
@@ -522,7 +521,6 @@ pub enum BoundAlterTable {
     /// executor uses it to delete the matching row from `CATALOG_COLUMNS` and
     /// to rebuild the schema after removal.
     DropColumn {
-        table_name: String,
         file_id: FileId,
         column_name: String,
         column_id: ColumnId,
@@ -532,7 +530,6 @@ pub enum BoundAlterTable {
     ///
     /// Catalog-metadata change only; the heap file is unaffected.
     RenameColumn {
-        table_name: String,
         file_id: FileId,
         old_name: String,
         new_name: String,
@@ -546,6 +543,31 @@ pub enum BoundAlterTable {
         new_name: String,
         file_id: FileId,
     },
+
+    /// `ALTER COLUMN <col> SET DEFAULT <value>` — set a column's default value.
+    SetDefault {
+        file_id: FileId,
+        column: String,
+        value: Value,
+    },
+
+    /// `ALTER COLUMN <col> DROP DEFAULT` — remove a column's default value.
+    DropDefault { file_id: FileId, column: String },
+
+    /// `ALTER COLUMN <col> DROP NOT NULL` — relax a NOT NULL constraint to nullable.
+    DropNotNull { file_id: FileId, column: String },
+
+    /// `ADD PRIMARY KEY (<cols>)` — set the table's primary key.
+    ///
+    /// `column_ids` are the resolved zero-based positions in the *current* schema,
+    /// in the order the user listed them in the `ADD PRIMARY KEY` clause.
+    AddPrimaryKey {
+        file_id: FileId,
+        column_ids: Vec<ColumnId>,
+    },
+
+    /// `DROP PRIMARY KEY` — remove the table's primary key.
+    DropPrimaryKey { file_id: FileId },
 
     /// The table named in the statement was not found, but `IF EXISTS` was set,
     /// so this is a successful no-op rather than an error.
@@ -575,6 +597,8 @@ impl BoundAlterTable {
             });
         };
 
+        let file_id = table_info.file_id;
+
         match &stmt.action {
             AlterAction::AddColumn(col_def) => Self::bind_add_column(table_info, col_def),
             AlterAction::DropColumn { name, if_exists } => {
@@ -584,6 +608,32 @@ impl BoundAlterTable {
                 Self::bind_rename_column(table_info, from, to)
             }
             AlterAction::RenameTable { to } => Self::bind_rename_table(catalog, table_info, to),
+            AlterAction::SetDefault { column, value } => {
+                require_column(&table_info.schema, &table_info.name, column)?;
+                Ok(Self::SetDefault {
+                    file_id,
+                    column: column.to_string(),
+                    value: value.clone(),
+                })
+            }
+            AlterAction::DropDefault { column } => {
+                require_column(&table_info.schema, &table_info.name, column)?;
+                Ok(Self::DropDefault {
+                    file_id,
+                    column: column.to_string(),
+                })
+            }
+            AlterAction::DropNotNull { column } => {
+                require_column(&table_info.schema, &table_info.name, column)?;
+                Ok(Self::DropNotNull {
+                    file_id,
+                    column: column.to_string(),
+                })
+            }
+            AlterAction::AddPrimaryKey { columns } => {
+                Self::bind_add_primary_key(&table_info, columns)
+            }
+            AlterAction::DropPrimaryKey => Ok(Self::DropPrimaryKey { file_id }),
         }
     }
 
@@ -593,7 +643,6 @@ impl BoundAlterTable {
         }
 
         Ok(Self::AddColumn {
-            table_name: table.name,
             file_id: table.file_id,
             column: col_def.clone(),
         })
@@ -606,7 +655,6 @@ impl BoundAlterTable {
     ) -> Result<Self, BindError> {
         match table.schema.field_by_name(column_name) {
             Some((column_id, _)) => Ok(Self::DropColumn {
-                table_name: table.name,
                 file_id: table.file_id,
                 column_name: column_name.to_string(),
                 column_id,
@@ -626,7 +674,6 @@ impl BoundAlterTable {
         }
 
         Ok(Self::RenameColumn {
-            table_name: table.name,
             file_id: table.file_id,
             old_name: from.to_string(),
             new_name: to.to_string(),
@@ -648,6 +695,26 @@ impl BoundAlterTable {
             file_id: table.file_id,
         })
     }
+
+    fn bind_add_primary_key(table: &TableInfo, columns: &[String]) -> Result<Self, BindError> {
+        if table.primary_key.is_some() {
+            return Err(BindError::primary_key_already_exists(&table.name));
+        }
+
+        ensure_unique_strs(columns.iter().map(String::as_str), |c| {
+            BindError::duplicate_column(c)
+        })?;
+
+        let column_ids = columns
+            .iter()
+            .map(|c| require_column(&table.schema, &table.name, c).map(|(id, _)| id))
+            .collect::<Result<Vec<_>, _>>()?;
+
+        Ok(Self::AddPrimaryKey {
+            file_id: table.file_id,
+            column_ids,
+        })
+    }
 }
 
 #[cfg(test)]
@@ -658,7 +725,7 @@ mod tests {
 
     use super::*;
     use crate::{
-        PAGE_SIZE, TransactionId, Type,
+        PAGE_SIZE, TransactionId, Type, Value,
         buffer_pool::page_store::PageStore,
         catalog::manager::Catalog,
         index::hash::HashIndex,
@@ -1497,11 +1564,9 @@ mod tests {
 
         match bound {
             BoundAlterTable::AddColumn {
-                table_name,
                 file_id: fid,
                 column,
             } => {
-                assert_eq!(table_name, "users");
                 assert_eq!(fid, file_id);
                 assert_eq!(column.name, "age");
             }
@@ -1603,12 +1668,10 @@ mod tests {
         // two_col_schema() is (id → 0, name → 1); dropping "name" must yield ColumnId(1).
         match bound {
             BoundAlterTable::DropColumn {
-                table_name,
                 file_id: fid,
                 column_name,
                 column_id,
             } => {
-                assert_eq!(table_name, "users");
                 assert_eq!(fid, file_id);
                 assert_eq!(column_name, "name");
                 assert_eq!(column_id, col_id(1));
@@ -1694,12 +1757,10 @@ mod tests {
 
         match bound {
             BoundAlterTable::RenameColumn {
-                table_name,
                 file_id: fid,
                 old_name,
                 new_name,
             } => {
-                assert_eq!(table_name, "users");
                 assert_eq!(fid, file_id);
                 assert_eq!(old_name, "name");
                 assert_eq!(new_name, "full_name");
@@ -1858,6 +1919,327 @@ mod tests {
         match bound {
             BoundAlterTable::NoOp { table_name } => assert_eq!(table_name, "ghost"),
             other => panic!("expected NoOp, got {other:?}"),
+        }
+    }
+
+    // ── SET DEFAULT ───────────────────────────────────────────────────────
+
+    #[test]
+    fn test_bind_alter_set_default_known_column_returns_set_default() {
+        let dir = tempdir().unwrap();
+        let (catalog, txn_mgr) = make_catalog_and_txn_mgr(dir.path());
+        let txn = txn_mgr.begin().unwrap();
+        let file_id = catalog
+            .create_table(&txn, "users", two_col_schema(), None)
+            .unwrap();
+        txn.commit().unwrap();
+
+        let txn2 = txn_mgr.begin().unwrap();
+        let stmt = alter_stmt("users", false, AlterAction::SetDefault {
+            column: "name".to_string(),
+            value: Value::String("anon".to_string()),
+        });
+        let bound = BoundAlterTable::bind(stmt, &catalog, &txn2).unwrap();
+        txn2.commit().unwrap();
+
+        match bound {
+            BoundAlterTable::SetDefault {
+                file_id: fid,
+                column,
+                value,
+            } => {
+                assert_eq!(fid, file_id);
+                assert_eq!(column, "name");
+                assert_eq!(value, Value::String("anon".to_string()));
+            }
+            other => panic!("expected SetDefault, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_bind_alter_set_default_unknown_column_errors() {
+        let dir = tempdir().unwrap();
+        let (catalog, txn_mgr) = make_catalog_and_txn_mgr(dir.path());
+        let txn = txn_mgr.begin().unwrap();
+        catalog
+            .create_table(&txn, "users", two_col_schema(), None)
+            .unwrap();
+        txn.commit().unwrap();
+
+        let txn2 = txn_mgr.begin().unwrap();
+        let stmt = alter_stmt("users", false, AlterAction::SetDefault {
+            column: "ghost".to_string(),
+            value: Value::Int64(0),
+        });
+        let err = BoundAlterTable::bind(stmt, &catalog, &txn2).unwrap_err();
+        txn2.commit().unwrap();
+
+        assert!(
+            matches!(err, BindError::UnknownColumn { ref column, .. } if column == "ghost"),
+            "unexpected error: {err:?}"
+        );
+    }
+
+    // ── DROP DEFAULT ──────────────────────────────────────────────────────
+
+    #[test]
+    fn test_bind_alter_drop_default_known_column_returns_drop_default() {
+        let dir = tempdir().unwrap();
+        let (catalog, txn_mgr) = make_catalog_and_txn_mgr(dir.path());
+        let txn = txn_mgr.begin().unwrap();
+        let file_id = catalog
+            .create_table(&txn, "users", two_col_schema(), None)
+            .unwrap();
+        txn.commit().unwrap();
+
+        let txn2 = txn_mgr.begin().unwrap();
+        let stmt = alter_stmt("users", false, AlterAction::DropDefault {
+            column: "name".to_string(),
+        });
+        let bound = BoundAlterTable::bind(stmt, &catalog, &txn2).unwrap();
+        txn2.commit().unwrap();
+
+        match bound {
+            BoundAlterTable::DropDefault {
+                file_id: fid,
+                column,
+            } => {
+                assert_eq!(fid, file_id);
+                assert_eq!(column, "name");
+            }
+            other => panic!("expected DropDefault, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_bind_alter_drop_default_unknown_column_errors() {
+        let dir = tempdir().unwrap();
+        let (catalog, txn_mgr) = make_catalog_and_txn_mgr(dir.path());
+        let txn = txn_mgr.begin().unwrap();
+        catalog
+            .create_table(&txn, "users", two_col_schema(), None)
+            .unwrap();
+        txn.commit().unwrap();
+
+        let txn2 = txn_mgr.begin().unwrap();
+        let stmt = alter_stmt("users", false, AlterAction::DropDefault {
+            column: "ghost".to_string(),
+        });
+        let err = BoundAlterTable::bind(stmt, &catalog, &txn2).unwrap_err();
+        txn2.commit().unwrap();
+
+        assert!(
+            matches!(err, BindError::UnknownColumn { ref column, .. } if column == "ghost"),
+            "unexpected error: {err:?}"
+        );
+    }
+
+    // ── DROP NOT NULL ─────────────────────────────────────────────────────
+
+    #[test]
+    fn test_bind_alter_drop_not_null_known_column_returns_drop_not_null() {
+        let dir = tempdir().unwrap();
+        let (catalog, txn_mgr) = make_catalog_and_txn_mgr(dir.path());
+        let txn = txn_mgr.begin().unwrap();
+        let file_id = catalog
+            .create_table(&txn, "users", two_col_schema(), None)
+            .unwrap();
+        txn.commit().unwrap();
+
+        let txn2 = txn_mgr.begin().unwrap();
+        let stmt = alter_stmt("users", false, AlterAction::DropNotNull {
+            column: "id".to_string(),
+        });
+        let bound = BoundAlterTable::bind(stmt, &catalog, &txn2).unwrap();
+        txn2.commit().unwrap();
+
+        match bound {
+            BoundAlterTable::DropNotNull {
+                file_id: fid,
+                column,
+            } => {
+                assert_eq!(fid, file_id);
+                assert_eq!(column, "id");
+            }
+            other => panic!("expected DropNotNull, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_bind_alter_drop_not_null_unknown_column_errors() {
+        let dir = tempdir().unwrap();
+        let (catalog, txn_mgr) = make_catalog_and_txn_mgr(dir.path());
+        let txn = txn_mgr.begin().unwrap();
+        catalog
+            .create_table(&txn, "users", two_col_schema(), None)
+            .unwrap();
+        txn.commit().unwrap();
+
+        let txn2 = txn_mgr.begin().unwrap();
+        let stmt = alter_stmt("users", false, AlterAction::DropNotNull {
+            column: "ghost".to_string(),
+        });
+        let err = BoundAlterTable::bind(stmt, &catalog, &txn2).unwrap_err();
+        txn2.commit().unwrap();
+
+        assert!(
+            matches!(err, BindError::UnknownColumn { ref column, .. } if column == "ghost"),
+            "unexpected error: {err:?}"
+        );
+    }
+
+    // ── ADD PRIMARY KEY ───────────────────────────────────────────────────
+
+    #[test]
+    fn test_bind_alter_add_primary_key_single_column_resolves_column_id() {
+        let dir = tempdir().unwrap();
+        let (catalog, txn_mgr) = make_catalog_and_txn_mgr(dir.path());
+        let txn = txn_mgr.begin().unwrap();
+        // two_col_schema() is (id → 0, name → 1); no PK.
+        let file_id = catalog
+            .create_table(&txn, "users", two_col_schema(), None)
+            .unwrap();
+        txn.commit().unwrap();
+
+        let txn2 = txn_mgr.begin().unwrap();
+        let stmt = alter_stmt("users", false, AlterAction::AddPrimaryKey {
+            columns: vec!["name".to_string()],
+        });
+        let bound = BoundAlterTable::bind(stmt, &catalog, &txn2).unwrap();
+        txn2.commit().unwrap();
+
+        match bound {
+            BoundAlterTable::AddPrimaryKey {
+                file_id: fid,
+                column_ids,
+            } => {
+                assert_eq!(fid, file_id);
+                assert_eq!(column_ids, vec![col_id(1)]);
+            }
+            other => panic!("expected AddPrimaryKey, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_bind_alter_add_primary_key_composite_preserves_order() {
+        let dir = tempdir().unwrap();
+        let (catalog, txn_mgr) = make_catalog_and_txn_mgr(dir.path());
+        let txn = txn_mgr.begin().unwrap();
+        let schema = TupleSchema::new(vec![
+            field("a", Type::Int64).not_null(),
+            field("b", Type::Int64).not_null(),
+            field("c", Type::Int64).not_null(),
+        ]);
+        catalog.create_table(&txn, "t", schema, None).unwrap();
+        txn.commit().unwrap();
+
+        let txn2 = txn_mgr.begin().unwrap();
+        let stmt = alter_stmt("t", false, AlterAction::AddPrimaryKey {
+            columns: vec!["c".to_string(), "a".to_string()],
+        });
+        let bound = BoundAlterTable::bind(stmt, &catalog, &txn2).unwrap();
+        txn2.commit().unwrap();
+
+        match bound {
+            BoundAlterTable::AddPrimaryKey { column_ids, .. } => {
+                // c → 2, a → 0, order preserved from the SQL clause.
+                assert_eq!(column_ids, vec![col_id(2), col_id(0)]);
+            }
+            other => panic!("expected AddPrimaryKey, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_bind_alter_add_primary_key_existing_pk_errors() {
+        let dir = tempdir().unwrap();
+        let (catalog, txn_mgr) = make_catalog_and_txn_mgr(dir.path());
+        let txn = txn_mgr.begin().unwrap();
+        catalog
+            .create_table(&txn, "users", two_col_schema(), Some(vec![col_id(0)]))
+            .unwrap();
+        txn.commit().unwrap();
+
+        let txn2 = txn_mgr.begin().unwrap();
+        let stmt = alter_stmt("users", false, AlterAction::AddPrimaryKey {
+            columns: vec!["name".to_string()],
+        });
+        let err = BoundAlterTable::bind(stmt, &catalog, &txn2).unwrap_err();
+        txn2.commit().unwrap();
+
+        assert!(
+            matches!(err, BindError::PrimaryKeyAlreadyExists(ref t) if t == "users"),
+            "unexpected error: {err:?}"
+        );
+    }
+
+    #[test]
+    fn test_bind_alter_add_primary_key_unknown_column_errors() {
+        let dir = tempdir().unwrap();
+        let (catalog, txn_mgr) = make_catalog_and_txn_mgr(dir.path());
+        let txn = txn_mgr.begin().unwrap();
+        catalog
+            .create_table(&txn, "users", two_col_schema(), None)
+            .unwrap();
+        txn.commit().unwrap();
+
+        let txn2 = txn_mgr.begin().unwrap();
+        let stmt = alter_stmt("users", false, AlterAction::AddPrimaryKey {
+            columns: vec!["ghost".to_string()],
+        });
+        let err = BoundAlterTable::bind(stmt, &catalog, &txn2).unwrap_err();
+        txn2.commit().unwrap();
+
+        assert!(
+            matches!(err, BindError::UnknownColumn { ref column, .. } if column == "ghost"),
+            "unexpected error: {err:?}"
+        );
+    }
+
+    #[test]
+    fn test_bind_alter_add_primary_key_duplicate_columns_errors() {
+        let dir = tempdir().unwrap();
+        let (catalog, txn_mgr) = make_catalog_and_txn_mgr(dir.path());
+        let txn = txn_mgr.begin().unwrap();
+        catalog
+            .create_table(&txn, "users", two_col_schema(), None)
+            .unwrap();
+        txn.commit().unwrap();
+
+        let txn2 = txn_mgr.begin().unwrap();
+        let stmt = alter_stmt("users", false, AlterAction::AddPrimaryKey {
+            columns: vec!["id".to_string(), "id".to_string()],
+        });
+        let err = BoundAlterTable::bind(stmt, &catalog, &txn2).unwrap_err();
+        txn2.commit().unwrap();
+
+        assert!(
+            matches!(err, BindError::DuplicateColumn(ref c) if c == "id"),
+            "unexpected error: {err:?}"
+        );
+    }
+
+    // ── DROP PRIMARY KEY ──────────────────────────────────────────────────
+
+    #[test]
+    fn test_bind_alter_drop_primary_key_returns_drop_primary_key() {
+        let dir = tempdir().unwrap();
+        let (catalog, txn_mgr) = make_catalog_and_txn_mgr(dir.path());
+        let txn = txn_mgr.begin().unwrap();
+        let file_id = catalog
+            .create_table(&txn, "users", two_col_schema(), None)
+            .unwrap();
+        txn.commit().unwrap();
+
+        let txn2 = txn_mgr.begin().unwrap();
+        let stmt = alter_stmt("users", false, AlterAction::DropPrimaryKey);
+        let bound = BoundAlterTable::bind(stmt, &catalog, &txn2).unwrap();
+        txn2.commit().unwrap();
+
+        match bound {
+            BoundAlterTable::DropPrimaryKey { file_id: fid } => {
+                assert_eq!(fid, file_id);
+            }
+            other => panic!("expected DropPrimaryKey, got {other:?}"),
         }
     }
 }
