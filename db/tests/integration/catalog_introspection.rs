@@ -40,7 +40,7 @@ fn describe_table_returns_schema_and_primary_key() {
     let info = t.db.describe_table("users").expect("describe");
 
     assert_eq!(info.name, "users");
-    assert_eq!(info.schema.num_fields(), 3);
+    assert_eq!(info.schema.physical_num_fields(), 3);
 
     let fields: Vec<&str> = info.schema.fields().map(|f| f.name.as_str()).collect();
     assert_eq!(fields, vec!["id", "name", "age"]);

@@ -8,6 +8,8 @@
 #[path = "integration/common.rs"]
 mod common;
 
+#[path = "integration/alter_table.rs"]
+mod alter_table;
 #[path = "integration/catalog_introspection.rs"]
 mod catalog_introspection;
 #[path = "integration/concurrency.rs"]
