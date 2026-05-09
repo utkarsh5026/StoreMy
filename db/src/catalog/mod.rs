@@ -14,6 +14,9 @@ pub enum CatalogError {
     Io(#[from] std::io::Error),
 
     #[error(transparent)]
+    Name(#[from] crate::primitives::NameError),
+
+    #[error(transparent)]
     Heap(#[from] crate::heap::file::HeapError),
 
     #[error(transparent)]

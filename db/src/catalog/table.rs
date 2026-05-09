@@ -42,7 +42,7 @@ impl Catalog {
         let info = self.load_table_from_disk(txn, name)?;
         self.user_tables
             .write()
-            .insert(name.to_string(), info.clone());
+            .insert(name.try_into()?, info.clone());
         Ok(info)
     }
 
@@ -189,7 +189,7 @@ impl Catalog {
             self.insert_primary_key_columns(txn, file_id, &schema, pk_cols)?;
         }
 
-        let table_info = TableInfo::new(name, schema, file_id, file_path, primary_key);
+        let table_info = TableInfo::new(name.try_into()?, schema, file_id, file_path, primary_key);
         self.user_tables
             .write()
             .insert(table_info.name.clone(), table_info);
@@ -465,10 +465,10 @@ impl Catalog {
             &TableRow::new(table.file_id, new_name.to_string(), table.file_path.clone())?,
         )?;
 
-        table.name = new_name.to_string();
+        table.name = new_name.try_into()?;
         let mut cache = self.user_tables.write();
         cache.remove(old_name);
-        cache.insert(new_name.to_string(), table);
+        cache.insert(new_name.try_into()?, table);
         Ok(())
     }
 }

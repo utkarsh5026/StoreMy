@@ -8,7 +8,7 @@ use crate::{
         systable::{ColumnRow, IndexRow, PrimaryKeyColumnRow, SystemTable, TableRow},
     },
     index::{AnyIndex, CompositeKey, IndexError, IndexKind},
-    primitives::{ColumnId, RecordId},
+    primitives::{ColumnId, NonEmptyString, RecordId},
     transaction::Transaction,
     tuple::{Field, Tuple, TupleSchema},
 };
@@ -255,20 +255,22 @@ impl Catalog {
     ///   caller should roll back the surrounding DDL transaction.
     pub fn register_index(
         &self,
-        name: impl Into<String>,
+        name: impl AsRef<str>,
         table_file_id: FileId,
         index: AnyIndex,
         table_columns: Vec<ColumnId>,
     ) -> Result<Arc<LiveIndex>, IndexError> {
-        let name = name.into();
+        let name_str = name.as_ref();
+        let name =
+            NonEmptyString::new(name_str).expect("index name must be a valid NonEmptyString");
         let live = Arc::new(LiveIndex {
             access: index,
             table_columns,
         });
 
         let mut by_name = self.indexes_by_name.write();
-        if by_name.contains_key(&name) {
-            return Err(IndexError::DuplicateName(name));
+        if by_name.contains_key(name_str) {
+            return Err(IndexError::DuplicateName(name_str.to_string()));
         }
 
         let mut by_table = self.open_indexes.write();
@@ -348,7 +350,7 @@ impl Catalog {
         self.user_tables
             .read()
             .iter()
-            .find_map(|(name, info)| (info.file_id == file_id).then(|| name.clone()))
+            .find_map(|(name, info)| (info.file_id == file_id).then(|| name.to_string()))
     }
 
     /// Returns one [`IndexInfo`] per registered index, sorted by name.

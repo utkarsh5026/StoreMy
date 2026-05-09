@@ -99,7 +99,7 @@ impl Catalog {
 
         if !pk_cols.is_empty() {
             return Err(CatalogError::cannot_alter_primary_key_column(
-                &table.name,
+                table.name.as_str(),
                 column_name,
             ));
         }
@@ -688,10 +688,11 @@ mod tests {
             primary_key: false,
             auto_increment: false,
             default: None,
+            unique: crate::parser::statements::Uniqueness::NotUnique,
+            check: None,
+            references: None,
         }
     }
-
-    // ── add_column ────────────────────────────────────────────────────────
 
     // Adding a new column appends it to the in-memory schema immediately.
     #[test]
@@ -973,8 +974,6 @@ mod tests {
             field.missing_default_value
         );
     }
-
-    // ── drop_column_not_null ──────────────────────────────────────────────
 
     #[test]
     fn test_drop_column_not_null_makes_column_nullable_immediately() {
