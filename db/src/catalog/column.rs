@@ -9,8 +9,8 @@ use std::sync::Arc;
 use crate::{
     FileId, Value,
     catalog::{
-        CatalogError,
-        manager::{Catalog, TableInfo},
+        CatalogError, TableInfo,
+        manager::Catalog,
         systable::{ColumnRow, PrimaryKeyColumnRow},
     },
     parser::statements::ColumnDef,

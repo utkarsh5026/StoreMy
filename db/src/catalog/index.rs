@@ -3,8 +3,8 @@ use std::{collections::HashMap, sync::Arc};
 use crate::{
     FileId, IndexId, PAGE_SIZE, TransactionId, Type,
     catalog::{
-        CatalogError,
-        manager::{Catalog, TableInfo},
+        CatalogError, TableInfo,
+        manager::Catalog,
         systable::{ColumnRow, IndexRow, PrimaryKeyColumnRow, SystemTable, TableRow},
     },
     index::{AnyIndex, CompositeKey, IndexError, IndexKind},

@@ -1344,8 +1344,6 @@ mod tests {
         );
     }
 
-    // ── validate_row: FK constraints ─────────────────────────────────────────
-
     #[test]
     fn test_validate_fk_constraints_row_ok() {
         assert!(

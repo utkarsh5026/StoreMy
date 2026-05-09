@@ -21,54 +21,16 @@ use crate::{
     FileId, PAGE_SIZE, TransactionId,
     buffer_pool::page_store::PageStore,
     catalog::{
-        CatalogError,
+        CatalogError, TableInfo,
         index::LiveIndex,
         systable::{CatalogRow, SystemTable},
     },
     heap::file::HeapFile,
-    primitives::{ColumnId, IndexId, NonEmptyString},
+    primitives::{IndexId, NonEmptyString},
     transaction::Transaction,
     tuple::{Tuple, TupleSchema},
     wal::writer::Wal,
 };
-
-/// Metadata for a single user table held in the catalog's in-memory cache.
-#[derive(Clone, Debug)]
-pub struct TableInfo {
-    /// Logical name of the table (matches the key in the `tables` map).
-    pub name: NonEmptyString,
-    /// Column layout used to encode and decode tuples in this table's heap.
-    pub schema: TupleSchema,
-    /// Stable numeric identifier for the backing heap file.
-    pub file_id: FileId,
-    /// Absolute path to the `.dat` file on disk.
-    pub file_path: PathBuf,
-    /// Zero-based column identifiers of the primary key, in declaration
-    /// order, if one was declared.
-    ///
-    /// `None` means no primary key. The `Vec` holds one entry per PK column,
-    /// so composite keys appear as `Some(vec![…, …])`.
-    pub primary_key: Option<Vec<ColumnId>>,
-}
-
-impl TableInfo {
-    /// Constructs a [`TableInfo`] from its component parts.
-    pub(super) fn new(
-        name: NonEmptyString,
-        schema: TupleSchema,
-        file_id: FileId,
-        file_path: PathBuf,
-        primary_key: Option<Vec<ColumnId>>,
-    ) -> Self {
-        Self {
-            name,
-            schema,
-            file_id,
-            file_path,
-            primary_key,
-        }
-    }
-}
 
 /// Holds the three open system-table heap files used by the catalog.
 ///
