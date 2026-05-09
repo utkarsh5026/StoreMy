@@ -27,8 +27,8 @@ use crate::{
 impl Catalog {
     /// Adds a UNIQUE constraint to a table.
     ///
-    /// Writes one [`ConstraintRow`] header (kind = `Unique`) and one
-    /// [`ConstraintColumnRow`] per participating column, then refreshes
+    /// Writes one `ConstraintRow` header (kind = `Unique`) and one
+    /// `ConstraintColumnRow` per participating column, then refreshes
     /// the cached [`TableInfo::unique_constraints`].
     ///
     /// `columns` order is preserved as `ordinal` in the catalog — `(a, b)` and

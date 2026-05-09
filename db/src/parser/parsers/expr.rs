@@ -11,15 +11,15 @@
 //! - [`Precedence`] — Pratt binding powers: `OR` < `AND` < prefix `NOT` < comparisons.
 //! - [`Expr`] — columns, literals, aggregates, `BinaryOp`, `UnaryOp`, `CountStar`.
 //! - [`BinOp`] / [`UnOp`] — operator tags attached to [`Expr`] trees.
-//! - [`Parser::parse_expression`] — entry point; callers pass `min_precedence` to stop early when
+//! - `Parser::parse_expression` — entry point; callers pass `min_precedence` to stop early when
 //!   parsing a sub-clause inside a larger production.
 //!
 //! # How it works
 //!
-//! [`Parser::parse_expression`] runs precedence climbing: parse one primary, then
+//! `Parser::parse_expression` runs precedence climbing: parse one primary, then
 //! while the peeked binary operator’s left binding power is high enough, consume
 //! it and parse the right side with that operator’s right binding power. Primary
-//! forms (`NOT`, `( … )`, literals, identifiers) live in [`Parser::parse_primary`].
+//! forms (`NOT`, `( … )`, literals, identifiers) live in `Parser::parse_primary`.
 //!
 //! # NULL semantics
 //!
@@ -216,7 +216,7 @@ impl Expr {
     /// # Errors
     ///
     /// This helper does not fail; unknown aggregate *names* are rejected in
-    /// [`Parser::parse_fn_call`] when building `AggFunc` from the function name.
+    /// `Parser::parse_fn_call` when building `AggFunc` from the function name.
     pub fn agg(func: AggFunc, arg: Expr) -> Self {
         Expr::Agg(func, Box::new(arg))
     }
@@ -263,7 +263,7 @@ impl Expr {
     ///
     /// # Errors
     ///
-    /// Does not error; operand parsing happens in [`Parser::parse_primary`].
+    /// Does not error; operand parsing happens in `Parser::parse_primary`.
     pub fn unary(op: UnOp, operand: Expr) -> Self {
         Expr::UnaryOp {
             op,
