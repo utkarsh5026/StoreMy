@@ -663,8 +663,7 @@ pub struct CreateTableStatement {
     pub if_not_exists: bool,
     pub columns: Vec<ColumnDef>,
     pub primary_key: Vec<NonEmptyString>,
-    pub unique: Vec<Vec<NonEmptyString>>,
-    pub references: Vec<Reference>,
+    pub constraints: Vec<(Option<NonEmptyString>, TableConstraint)>,
 }
 
 /// Pretty-prints the statement as a SQL-like string.
@@ -680,17 +679,19 @@ impl Display for CreateTableStatement {
         if !self.primary_key.is_empty() {
             write!(f, ", PRIMARY KEY ({})", self.primary_key.join(", "))?;
         }
-        if !self.unique.is_empty() {
-            let unique_constraints: Vec<String> = self
-                .unique
+        if !self.constraints.is_empty() {
+            let constraints: Vec<String> = self
+                .constraints
                 .iter()
-                .map(|cols| format!("UNIQUE ({})", cols.join(", ")))
+                .map(|(name, constraint)| {
+                    if let Some(name) = name {
+                        format!("CONSTRAINT {name} {constraint}")
+                    } else {
+                        format!("{constraint}")
+                    }
+                })
                 .collect();
-            write!(f, ", {}", unique_constraints.join(", "))?;
-        }
-        if !self.references.is_empty() {
-            let references: Vec<String> = self.references.iter().map(ToString::to_string).collect();
-            write!(f, ", {}", references.join(", "))?;
+            write!(f, ", {}", constraints.join(", "))?;
         }
         write!(f, ")")
     }
@@ -907,6 +908,14 @@ pub enum AlterAction {
         columns: Vec<NonEmptyString>,
     },
     DropPrimaryKey,
+    AddConstraint {
+        name: Option<NonEmptyString>,
+        constraint: TableConstraint,
+    },
+    DropConstraint {
+        name: NonEmptyString,
+        if_exists: bool,
+    },
 }
 
 impl Display for AlterTableStatement {
@@ -916,6 +925,75 @@ impl Display for AlterTableStatement {
             write!(f, " IF EXISTS")?;
         }
         write!(f, " {} {}", self.table_name, self.action)
+    }
+}
+
+/// A table-level constraint declared in `CREATE TABLE` or added via `ALTER TABLE ... ADD`.
+///
+/// These constraints apply to the table as a whole (as opposed to column-level
+/// qualifiers like `NOT NULL` or `DEFAULT`).
+///
+/// Supported SQL shapes:
+///
+/// - `UNIQUE (<col>, ...)`
+/// - `CHECK (<expr>)`
+/// - `FOREIGN KEY (<local_col>, ...) REFERENCES <ref_table> (<ref_col>, ...) [ON DELETE <action>]
+///   [ON UPDATE <action>]`
+///
+/// Note that `CONSTRAINT <name> ...` is handled by the surrounding statement
+/// (`CreateTableStatement` / [`AlterAction::AddConstraint`]) — `TableConstraint`
+/// captures only the constraint *body*.
+#[derive(Debug, Clone)]
+pub enum TableConstraint {
+    Unique {
+        /// The columns that must be unique across all rows.
+        columns: Vec<NonEmptyString>,
+    },
+    Check {
+        /// A boolean expression that must evaluate to true for every row.
+        expr: Expr,
+    },
+    ForeignKey {
+        /// The local columns that participate in the foreign key.
+        local_cols: Vec<NonEmptyString>,
+        /// The referenced table name.
+        ref_table: NonEmptyString,
+        /// The referenced columns in `ref_table` (same length as `local_cols`).
+        ref_cols: Vec<NonEmptyString>,
+        /// Optional referential action for `ON DELETE`.
+        on_delete: Option<ReferentialAction>,
+        /// Optional referential action for `ON UPDATE`.
+        on_update: Option<ReferentialAction>,
+    },
+}
+
+impl Display for TableConstraint {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            TableConstraint::Unique { columns } => write!(f, "UNIQUE ({})", columns.join(", ")),
+            TableConstraint::Check { expr } => write!(f, "CHECK ({expr})"),
+            TableConstraint::ForeignKey {
+                local_cols,
+                ref_table,
+                ref_cols,
+                on_delete,
+                on_update,
+            } => {
+                write!(
+                    f,
+                    "FOREIGN KEY ({}) REFERENCES {ref_table} ({})",
+                    local_cols.join(", "),
+                    ref_cols.join(", ")
+                )?;
+                if let Some(action) = on_delete {
+                    write!(f, " ON DELETE {action}")?;
+                }
+                if let Some(action) = on_update {
+                    write!(f, " ON UPDATE {action}")?;
+                }
+                Ok(())
+            }
+        }
     }
 }
 
@@ -943,6 +1021,20 @@ impl Display for AlterAction {
                 write!(f, "ADD PRIMARY KEY ({})", columns.join(", "))
             }
             AlterAction::DropPrimaryKey => write!(f, "DROP PRIMARY KEY"),
+            AlterAction::AddConstraint { name, constraint } => {
+                write!(f, "ADD")?;
+                if let Some(name) = name {
+                    write!(f, " CONSTRAINT {name}")?;
+                }
+                write!(f, " {constraint}")
+            }
+            AlterAction::DropConstraint { name, if_exists } => {
+                write!(f, "DROP CONSTRAINT")?;
+                if *if_exists {
+                    write!(f, " IF EXISTS")?;
+                }
+                write!(f, " {name}")
+            }
         }
     }
 }

@@ -30,7 +30,7 @@ mod tests {
     use crate::{
         parser::statements::{
             AggFunc, BinOp, Expr, JoinKind, OrderDirection, ReferentialAction, SelectColumns,
-            Statement, Uniqueness,
+            Statement, TableConstraint, Uniqueness,
         },
         primitives::NonEmptyString,
     };
@@ -98,7 +98,7 @@ mod tests {
             "id INT, ",
             "x INT, ",
             "UNIQUE (x), ",
-            "FOREIGN KEY REFERENCES parent(id)",
+            "FOREIGN KEY (x) REFERENCES parent(id)",
             ")",
         ));
         let Statement::CreateTable(ct) = stmt else {
@@ -106,15 +106,23 @@ mod tests {
         };
 
         assert_eq!(ct.table_name, "t");
-        assert_eq!(ct.unique.len(), 1);
-        assert_eq!(
-            ct.unique[0].as_slice(),
-            &[NonEmptyString::new("x").unwrap()]
-        );
+        assert!(ct
+            .constraints
+            .iter()
+            .any(|(_, c)| matches!(c, TableConstraint::Unique { columns } if columns.as_slice() == [NonEmptyString::new("x").unwrap()].as_slice())));
 
-        assert_eq!(ct.references.len(), 1);
-        assert_eq!(ct.references[0].table, "parent");
-        assert_eq!(ct.references[0].column, "id");
+        assert!(ct.constraints.iter().any(|(_, c)| matches!(
+            c,
+            TableConstraint::ForeignKey {
+                local_cols,
+                ref_table,
+                ref_cols,
+                on_delete: _,
+                on_update: _,
+            } if local_cols.as_slice() == [NonEmptyString::new("x").unwrap()].as_slice()
+                && ref_table.as_str() == "parent"
+                && ref_cols.as_slice() == [NonEmptyString::new("id").unwrap()].as_slice()
+        )));
     }
 
     #[test]
