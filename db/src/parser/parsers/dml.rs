@@ -5,6 +5,7 @@ use crate::{
     Value,
     parser::{
         Parser,
+        parsers::expr::Precedence,
         statements::{
             Assignment, DeleteStatement, InsertSource, InsertStatement, Statement, UpdateStatement,
         },
@@ -188,7 +189,7 @@ impl Parser {
 
         let mut assignments = Vec::new();
         loop {
-            let field = self.expect(TokenType::Identifier)?;
+            let field = self.expect_ident()?;
             let op = self.expect(TokenType::Operator)?;
 
             if op.value.ne("=") {
@@ -196,22 +197,11 @@ impl Parser {
                 return Err(ParserError::unexpected(TokenType::Operator, op.kind));
             }
 
-            let t = self.bump()?;
-            let value_kind = t.kind;
-            let value_position = t.span.start;
-            let val = Value::try_from(t).map_err(|msg| {
-                warn!(
-                    value_token_kind = ?value_kind,
-                    value_position,
-                    reason = %msg,
-                    "invalid UPDATE assignment literal"
-                );
-                ParserError::ParsingError(msg)
-            })?;
+            let value = self.parse_expression(Precedence::LOOSEST)?;
 
             assignments.push(Assignment {
-                column: field.value,
-                value: val,
+                column: field,
+                value,
             });
 
             if self.on_peek_token(TokenType::Comma, |_| Ok(()))?.is_none() {
@@ -321,7 +311,7 @@ mod tests {
         assert!(u.alias.is_none());
         assert_eq!(u.assignments.len(), 1);
         assert_eq!(u.assignments[0].column, "active");
-        assert_eq!(u.assignments[0].value, Value::Bool(false));
+        assert_eq!(u.assignments[0].value, Expr::Literal(Value::Bool(false)));
         assert!(u.where_clause.is_none());
     }
 
@@ -352,7 +342,28 @@ mod tests {
     fn test_parse_update_int_assignment_parses_as_int64() {
         let mut p = Parser::new("UPDATE counters SET n = 99");
         let u = p.parse_update().unwrap();
-        assert_eq!(u.assignments[0].value, Value::Int64(99));
+        assert_eq!(u.assignments[0].value, Expr::Literal(Value::Int64(99)));
+    }
+
+    #[test]
+    fn test_parse_update_assignment_allows_column_expr() {
+        let mut p = Parser::new("UPDATE t SET a = b");
+        let u = p.parse_update().unwrap();
+        assert_eq!(u.assignments.len(), 1);
+        assert_eq!(u.assignments[0].column, "a");
+        assert_eq!(u.assignments[0].value, Expr::Column(ColumnRef::from("b")));
+    }
+
+    #[test]
+    fn test_parse_update_assignment_allows_unary_not_expr() {
+        let mut p = Parser::new("UPDATE t SET active = NOT active");
+        let u = p.parse_update().unwrap();
+        assert_eq!(u.assignments.len(), 1);
+        assert_eq!(u.assignments[0].column, "active");
+        assert!(matches!(u.assignments[0].value, Expr::UnaryOp {
+            op: _,
+            operand: _
+        }));
     }
 
     #[test]
@@ -562,11 +573,13 @@ mod tests {
     #[test]
     fn test_parse_update_rhs_value_conversion_error() {
         let mut p = Parser::new("UPDATE t SET x = bogus_id");
-        let err = p.parse_update().unwrap_err();
-        match &err {
-            ParserError::ParsingError(msg) => assert!(msg.contains("bogus_id"), "got {msg}"),
-            _ => panic!("expected ParsingError, got {err:?}"),
-        }
+        let u = p.parse_update().unwrap();
+        assert_eq!(u.assignments.len(), 1);
+        assert_eq!(u.assignments[0].column, "x");
+        assert_eq!(
+            u.assignments[0].value,
+            Expr::Column(ColumnRef::from("bogus_id"))
+        );
     }
 
     #[test]

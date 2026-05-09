@@ -1041,8 +1041,8 @@ impl Display for InsertStatement {
 /// ```
 #[derive(Debug, Clone)]
 pub struct Assignment {
-    pub column: String,
-    pub value: Value,
+    pub column: NonEmptyString,
+    pub value: Expr,
 }
 
 /// Parsed `UPDATE table [alias] SET col = val, … [WHERE …]`.
