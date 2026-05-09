@@ -44,7 +44,7 @@ use crate::{
         BindError,
         scope::{BoundTable, ColumnResolver, Scope},
     },
-    catalog::manager::{Catalog, TableInfo},
+    catalog::{TableInfo, manager::Catalog},
     execution::{
         aggregate::{AggregateExpr, AggregateFunc},
         expression::BooleanExpression,
@@ -584,8 +584,8 @@ impl BoundSelect {
         let info = catalog.get_table_info(txn, &table.name)?;
         let mut scope = Scope::empty();
         scope.push(BoundTable::new(
-            info.name.clone(),
-            table.alias.clone(),
+            info.name.to_string(),
+            table.alias.as_ref().map(ToString::to_string),
             info.schema.clone(),
             0,
         ));
@@ -595,8 +595,8 @@ impl BoundSelect {
             let right_offset = left.schema().physical_num_fields();
             let right_info = catalog.get_table_info(txn, &j.table.name)?;
             let right_table = BoundTable {
-                name: right_info.name.clone(),
-                alias: j.table.alias.clone(),
+                name: right_info.name.to_string(),
+                alias: j.table.alias.as_ref().map(ToString::to_string),
                 schema: right_info.schema.clone(),
                 column_offset: right_offset,
             };
@@ -890,8 +890,8 @@ mod tests {
         Type,
         buffer_pool::page_store::PageStore,
         catalog::manager::Catalog,
-        parser::statements::{Join, JoinKind, WhereCondition},
-        primitives::Predicate,
+        parser::statements::{BinOp, ColumnRef, Expr, Join, JoinKind},
+        primitives::{NonEmptyString, Predicate},
         transaction::TransactionManager,
         tuple::{Field, TupleSchema},
         wal::writer::Wal,
@@ -944,8 +944,8 @@ mod tests {
 
     fn table_ref(name: &str, alias: Option<&str>) -> TableRef {
         TableRef {
-            name: name.into(),
-            alias: alias.map(str::to_string),
+            name: NonEmptyString::new(name).unwrap(),
+            alias: alias.map(|a| NonEmptyString::new(a).unwrap()),
         }
     }
 
@@ -968,7 +968,7 @@ mod tests {
         base
     }
 
-    fn inner_join(name: &str, alias: Option<&str>, on: WhereCondition) -> Join {
+    fn inner_join(name: &str, alias: Option<&str>, on: Expr) -> Join {
         Join {
             kind: JoinKind::Inner,
             table: table_ref(name, alias),
@@ -1010,8 +1010,17 @@ mod tests {
         Expr::Column(ColumnRef::from(name))
     }
 
-    fn pred(c: &str, op: Predicate, v: Value) -> WhereCondition {
-        WhereCondition::predicate(ColumnRef::from(c), op, v)
+    fn pred(c: &str, op: Predicate, v: Value) -> Expr {
+        let bin_op = match op {
+            Predicate::Equals => BinOp::Eq,
+            Predicate::NotEqual | Predicate::NotEqualBracket => BinOp::NotEq,
+            Predicate::LessThan => BinOp::Lt,
+            Predicate::LessThanOrEqual => BinOp::LtEq,
+            Predicate::GreaterThan => BinOp::Gt,
+            Predicate::GreaterThanOrEqual => BinOp::GtEq,
+            Predicate::Like => panic!("test helper `pred`: LIKE is not an Expr::BinaryOp"),
+        };
+        Expr::binary(Expr::Column(ColumnRef::from(c)), bin_op, Expr::Literal(v))
     }
 
     fn expect_err<T, E>(r: Result<T, E>) -> E {
