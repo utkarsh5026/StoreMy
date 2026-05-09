@@ -42,7 +42,7 @@ use crate::{
         AlterAction, AlterTableStatement, ColumnDef, CreateIndexStatement, CreateTableStatement,
         DropIndexStatement, DropStatement, ShowIndexesStatement,
     },
-    primitives::ColumnId,
+    primitives::{ColumnId, NonEmptyString},
     transaction::Transaction,
     tuple::TupleSchema,
 };
@@ -85,9 +85,12 @@ impl BoundDrop {
         txn: &Transaction<'_>,
     ) -> Result<Self, BindError> {
         match check_table(catalog, txn, &stmt.table_name, stmt.if_exists)? {
-            Some(TableInfo { name, file_id, .. }) => Ok(Self::Drop { name, file_id }),
+            Some(TableInfo { name, file_id, .. }) => Ok(Self::Drop {
+                name: name.as_str().to_string(),
+                file_id,
+            }),
             None => Ok(Self::NoOp {
-                name: stmt.table_name.clone(),
+                name: stmt.table_name.as_str().to_string(),
             }),
         }
     }
@@ -161,7 +164,7 @@ impl BoundCreateTable {
             let table = check_table(catalog, txn, table_name, true)?
                 .expect("if_exists=false should never yield None");
             return Ok(Self::AlreadyExists {
-                name: table.name,
+                name: table.name.as_str().to_string(),
                 file_id: table.file_id,
             });
         }
@@ -179,7 +182,7 @@ impl BoundCreateTable {
         )?;
 
         Ok(Self::New {
-            name: stmt.table_name.clone(),
+            name: stmt.table_name.as_str().to_string(),
             schema,
             primary_key,
         })
@@ -187,7 +190,7 @@ impl BoundCreateTable {
 
     fn resolve_primary_key(
         columns: &[ColumnDef],
-        table_pk: &[String],
+        table_pk: &[NonEmptyString],
         schema: &TupleSchema,
         _table_name: &str,
     ) -> Result<Option<Vec<ColumnId>>, BindError> {
@@ -197,7 +200,10 @@ impl BoundCreateTable {
                 .filter_map(|c| c.primary_key.then_some(c.name.as_str()))
                 .collect::<Vec<_>>();
 
-            let table_pk_names = table_pk.iter().map(String::as_str).collect::<Vec<_>>();
+            let table_pk_names = table_pk
+                .iter()
+                .map(NonEmptyString::as_str)
+                .collect::<Vec<_>>();
 
             if inline_pk_names.is_empty() {
                 table_pk_names
@@ -291,17 +297,19 @@ impl BoundCreateIndex {
         if catalog.get_index_by_name(&stmt.index_name).is_some() {
             if stmt.if_not_exists {
                 return Ok(Self::AlreadyExists {
-                    index_name: stmt.index_name,
+                    index_name: stmt.index_name.as_str().to_string(),
                 });
             }
-            return Err(BindError::IndexAlreadyExists(stmt.index_name));
+            return Err(BindError::IndexAlreadyExists(
+                stmt.index_name.as_str().to_string(),
+            ));
         }
 
         let column_indices =
             Self::resolve_column_indices(stmt.columns, &table.schema, &table.name)?;
         Ok(Self::New {
-            index_name: stmt.index_name,
-            table_name: table.name,
+            index_name: stmt.index_name.as_str().to_string(),
+            table_name: table.name.as_str().to_string(),
             table_file_id: table.file_id,
             column_indices,
             kind: stmt.index_type,
@@ -309,11 +317,11 @@ impl BoundCreateIndex {
     }
 
     fn resolve_column_indices(
-        columns: Vec<String>,
+        columns: Vec<NonEmptyString>,
         schema: &TupleSchema,
         table_name: &str,
     ) -> Result<Vec<ColumnId>, BindError> {
-        ensure_unique_strs(columns.iter().map(String::as_str), |col| {
+        ensure_unique_strs(columns.iter().map(NonEmptyString::as_str), |col| {
             BindError::duplicate_column(col)
         })?;
 
@@ -374,7 +382,10 @@ impl BoundShowIndexes {
             Some(name) => {
                 let TableInfo { name, file_id, .. } = check_table(catalog, txn, name, false)?
                     .expect("if_exists=false should never yield None");
-                Ok(Self::OneTable { name, file_id })
+                Ok(Self::OneTable {
+                    name: name.as_str().to_string(),
+                    file_id,
+                })
             }
         }
     }
@@ -422,30 +433,30 @@ impl BoundDropIndex {
         catalog: &Catalog,
         txn: &Transaction<'_>,
     ) -> Result<Self, BindError> {
-        if let Some(index) = catalog.get_index_by_name(&stmt.index_name) {
-            let table = check_table(catalog, txn, &stmt.table_name, false)?
+        let index_name = stmt.index_name.into_inner();
+        if let Some(index) = catalog.get_index_by_name(&index_name) {
+            let Some(table_name) = stmt.table_name.as_ref() else {
+                return Err(BindError::UnknownIndex(index_name));
+            };
+            let table = check_table(catalog, txn, table_name.as_str(), false)?
                 .expect("if_exists=false should never yield None");
 
             if catalog.index_belongs_to_table(table.file_id, &index) {
-                return Ok(Self::Drop {
-                    index_name: stmt.index_name,
-                });
+                return Ok(Self::Drop { index_name });
             }
 
             if stmt.if_exists {
                 return Ok(Self::NoOp {
-                    index_name: stmt.index_name,
+                    index_name: index_name.to_string(),
                 });
             }
-            return Err(BindError::UnknownIndex(stmt.index_name));
+            return Err(BindError::UnknownIndex(index_name));
         }
 
         if stmt.if_exists {
-            return Ok(Self::NoOp {
-                index_name: stmt.index_name,
-            });
+            return Ok(Self::NoOp { index_name });
         }
-        Err(BindError::UnknownIndex(stmt.index_name))
+        Err(BindError::UnknownIndex(index_name))
     }
 }
 
@@ -591,23 +602,22 @@ impl BoundAlterTable {
         catalog: &Catalog,
         txn: &Transaction<'_>,
     ) -> Result<Self, BindError> {
-        let Some(table_info) = check_table(catalog, txn, &stmt.table_name, stmt.if_exists)? else {
-            return Ok(Self::NoOp {
-                table_name: stmt.table_name,
-            });
+        let table_name = stmt.table_name.into_inner();
+        let Some(table_info) = check_table(catalog, txn, &table_name, stmt.if_exists)? else {
+            return Ok(Self::NoOp { table_name });
         };
 
         let file_id = table_info.file_id;
 
         match &stmt.action {
-            AlterAction::AddColumn(col_def) => Self::bind_add_column(table_info, col_def),
+            AlterAction::AddColumn(col_def) => Self::bind_add_column(&table_info, col_def),
             AlterAction::DropColumn { name, if_exists } => {
-                Self::bind_drop_column(table_info, name, *if_exists)
+                Self::bind_drop_column(&table_info, name, *if_exists)
             }
             AlterAction::RenameColumn { from, to } => {
-                Self::bind_rename_column(table_info, from, to)
+                Self::bind_rename_column(&table_info, from, to)
             }
-            AlterAction::RenameTable { to } => Self::bind_rename_table(catalog, table_info, to),
+            AlterAction::RenameTable { to } => Self::bind_rename_table(catalog, &table_info, to),
             AlterAction::SetDefault { column, value } => {
                 require_column(&table_info.schema, &table_info.name, column)?;
                 Ok(Self::SetDefault {
@@ -637,7 +647,7 @@ impl BoundAlterTable {
         }
     }
 
-    fn bind_add_column(table: TableInfo, col_def: &ColumnDef) -> Result<Self, BindError> {
+    fn bind_add_column(table: &TableInfo, col_def: &ColumnDef) -> Result<Self, BindError> {
         if table.schema.field_by_name(&col_def.name).is_some() {
             return Err(BindError::duplicate_column(col_def.name.as_str()));
         }
@@ -649,7 +659,7 @@ impl BoundAlterTable {
     }
 
     fn bind_drop_column(
-        table: TableInfo,
+        table: &TableInfo,
         column_name: &str,
         if_exists: bool,
     ) -> Result<Self, BindError> {
@@ -660,13 +670,13 @@ impl BoundAlterTable {
                 column_id,
             }),
             None if if_exists => Ok(Self::NoOp {
-                table_name: table.name,
+                table_name: table.name.as_str().to_string(),
             }),
-            None => Err(BindError::unknown_column(&table.name, column_name)),
+            None => Err(BindError::unknown_column(table.name.as_str(), column_name)),
         }
     }
 
-    fn bind_rename_column(table: TableInfo, from: &str, to: &str) -> Result<Self, BindError> {
+    fn bind_rename_column(table: &TableInfo, from: &str, to: &str) -> Result<Self, BindError> {
         require_column(&table.schema, &table.name, from)?;
 
         if table.schema.field_by_name(to).is_some() {
@@ -682,7 +692,7 @@ impl BoundAlterTable {
 
     fn bind_rename_table(
         catalog: &Catalog,
-        table: TableInfo,
+        table: &TableInfo,
         new_name: &str,
     ) -> Result<Self, BindError> {
         if catalog.table_exists(new_name) {
@@ -690,18 +700,21 @@ impl BoundAlterTable {
         }
 
         Ok(Self::RenameTable {
-            old_name: table.name,
+            old_name: table.name.as_str().to_string(),
             new_name: new_name.to_string(),
             file_id: table.file_id,
         })
     }
 
-    fn bind_add_primary_key(table: &TableInfo, columns: &[String]) -> Result<Self, BindError> {
+    fn bind_add_primary_key(
+        table: &TableInfo,
+        columns: &[NonEmptyString],
+    ) -> Result<Self, BindError> {
         if table.primary_key.is_some() {
-            return Err(BindError::primary_key_already_exists(&table.name));
+            return Err(BindError::primary_key_already_exists(table.name.as_str()));
         }
 
-        ensure_unique_strs(columns.iter().map(String::as_str), |c| {
+        ensure_unique_strs(columns.iter().map(NonEmptyString::as_str), |c| {
             BindError::duplicate_column(c)
         })?;
 
@@ -729,7 +742,7 @@ mod tests {
         buffer_pool::page_store::PageStore,
         catalog::manager::Catalog,
         index::hash::HashIndex,
-        parser::statements::{ColumnDef, CreateTableStatement, DropStatement},
+        parser::statements::{ColumnDef, CreateTableStatement, DropStatement, Uniqueness},
         primitives::NonEmptyString,
         transaction::TransactionManager,
         tuple::{Field, TupleSchema},
@@ -813,11 +826,11 @@ mod tests {
         if_not_exists: bool,
     ) -> CreateIndexStatement {
         CreateIndexStatement {
-            index_name: index_name.to_string(),
-            table_name: table_name.to_string(),
+            index_name: NonEmptyString::new(index_name).unwrap(),
+            table_name: NonEmptyString::new(table_name).unwrap(),
             columns: columns
                 .iter()
-                .map(std::string::ToString::to_string)
+                .map(|c| NonEmptyString::new(*c).unwrap())
                 .collect(),
             index_type: kind,
             if_not_exists,
@@ -830,8 +843,8 @@ mod tests {
         if_exists: bool,
     ) -> crate::parser::statements::DropIndexStatement {
         crate::parser::statements::DropIndexStatement {
-            table_name: table_name.to_string(),
-            index_name: index_name.to_string(),
+            table_name: Some(NonEmptyString::new(table_name).unwrap()),
+            index_name: NonEmptyString::new(index_name).unwrap(),
             if_exists,
         }
     }
@@ -844,6 +857,9 @@ mod tests {
             primary_key: pk,
             auto_increment: false,
             default: None,
+            unique: Uniqueness::NotUnique,
+            check: None,
+            references: None,
         }
     }
 
@@ -854,16 +870,21 @@ mod tests {
         table_pk: Option<&str>,
     ) -> CreateTableStatement {
         CreateTableStatement {
-            table_name: name.to_string(),
+            table_name: NonEmptyString::new(name).unwrap(),
             if_not_exists,
             columns: cols,
-            primary_key: table_pk.into_iter().map(str::to_string).collect(),
+            primary_key: table_pk
+                .into_iter()
+                .map(|s| NonEmptyString::new(s).unwrap())
+                .collect(),
+            unique: vec![],
+            references: vec![],
         }
     }
 
     fn drop_stmt(name: &str, if_exists: bool) -> DropStatement {
         DropStatement {
-            table_name: name.to_string(),
+            table_name: NonEmptyString::new(name).unwrap(),
             if_exists,
         }
     }
@@ -1524,7 +1545,7 @@ mod tests {
 
     fn alter_stmt(table_name: &str, if_exists: bool, action: AlterAction) -> AlterTableStatement {
         AlterTableStatement {
-            table_name: table_name.to_string(),
+            table_name: NonEmptyString::new(table_name).unwrap(),
             if_exists,
             action,
         }
@@ -1538,6 +1559,9 @@ mod tests {
             primary_key: false,
             auto_increment: false,
             default: None,
+            unique: Uniqueness::NotUnique,
+            check: None,
+            references: None,
         }
     }
 
@@ -1659,7 +1683,7 @@ mod tests {
 
         let txn2 = txn_mgr.begin().unwrap();
         let stmt = alter_stmt("users", false, AlterAction::DropColumn {
-            name: "name".to_string(),
+            name: NonEmptyString::new("name").unwrap(),
             if_exists: false,
         });
         let bound = BoundAlterTable::bind(stmt, &catalog, &txn2).unwrap();
@@ -1694,7 +1718,7 @@ mod tests {
 
         let txn2 = txn_mgr.begin().unwrap();
         let stmt = alter_stmt("users", false, AlterAction::DropColumn {
-            name: "ghost".to_string(),
+            name: NonEmptyString::new("ghost").unwrap(),
             if_exists: false,
         });
         let err = BoundAlterTable::bind(stmt, &catalog, &txn2).unwrap_err();
@@ -1724,7 +1748,7 @@ mod tests {
 
         let txn2 = txn_mgr.begin().unwrap();
         let stmt = alter_stmt("users", false, AlterAction::DropColumn {
-            name: "ghost".to_string(),
+            name: NonEmptyString::new("ghost").unwrap(),
             if_exists: true,
         });
         let bound = BoundAlterTable::bind(stmt, &catalog, &txn2).unwrap();
@@ -1749,8 +1773,8 @@ mod tests {
 
         let txn2 = txn_mgr.begin().unwrap();
         let stmt = alter_stmt("users", false, AlterAction::RenameColumn {
-            from: "name".to_string(),
-            to: "full_name".to_string(),
+            from: NonEmptyString::new("name").unwrap(),
+            to: NonEmptyString::new("full_name").unwrap(),
         });
         let bound = BoundAlterTable::bind(stmt, &catalog, &txn2).unwrap();
         txn2.commit().unwrap();
@@ -1782,8 +1806,8 @@ mod tests {
 
         let txn2 = txn_mgr.begin().unwrap();
         let stmt = alter_stmt("users", false, AlterAction::RenameColumn {
-            from: "ghost".to_string(),
-            to: "x".to_string(),
+            from: NonEmptyString::new("ghost").unwrap(),
+            to: NonEmptyString::new("x").unwrap(),
         });
         let err = BoundAlterTable::bind(stmt, &catalog, &txn2).unwrap_err();
         txn2.commit().unwrap();
@@ -1812,8 +1836,8 @@ mod tests {
         let txn2 = txn_mgr.begin().unwrap();
         // Renaming "id" to "name" would create a second "name" column.
         let stmt = alter_stmt("users", false, AlterAction::RenameColumn {
-            from: "id".to_string(),
-            to: "name".to_string(),
+            from: NonEmptyString::new("id").unwrap(),
+            to: NonEmptyString::new("name").unwrap(),
         });
         let err = BoundAlterTable::bind(stmt, &catalog, &txn2).unwrap_err();
         txn2.commit().unwrap();
@@ -1838,7 +1862,7 @@ mod tests {
 
         let txn2 = txn_mgr.begin().unwrap();
         let stmt = alter_stmt("users", false, AlterAction::RenameTable {
-            to: "accounts".to_string(),
+            to: NonEmptyString::new("accounts").unwrap(),
         });
         let bound = BoundAlterTable::bind(stmt, &catalog, &txn2).unwrap();
         txn2.commit().unwrap();
@@ -1873,7 +1897,7 @@ mod tests {
 
         let txn2 = txn_mgr.begin().unwrap();
         let stmt = alter_stmt("users", false, AlterAction::RenameTable {
-            to: "accounts".to_string(),
+            to: NonEmptyString::new("accounts").unwrap(),
         });
         let err = BoundAlterTable::bind(stmt, &catalog, &txn2).unwrap_err();
         txn2.commit().unwrap();
@@ -1892,7 +1916,7 @@ mod tests {
         let txn = txn_mgr.begin().unwrap();
 
         let stmt = alter_stmt("ghost", false, AlterAction::RenameTable {
-            to: "x".to_string(),
+            to: NonEmptyString::new("x").unwrap(),
         });
         let err = BoundAlterTable::bind(stmt, &catalog, &txn).unwrap_err();
         txn.commit().unwrap();
@@ -1911,7 +1935,7 @@ mod tests {
         let txn = txn_mgr.begin().unwrap();
 
         let stmt = alter_stmt("ghost", true, AlterAction::RenameTable {
-            to: "x".to_string(),
+            to: NonEmptyString::new("x").unwrap(),
         });
         let bound = BoundAlterTable::bind(stmt, &catalog, &txn).unwrap();
         txn.commit().unwrap();
@@ -1936,7 +1960,7 @@ mod tests {
 
         let txn2 = txn_mgr.begin().unwrap();
         let stmt = alter_stmt("users", false, AlterAction::SetDefault {
-            column: "name".to_string(),
+            column: NonEmptyString::new("name").unwrap(),
             value: Value::String("anon".to_string()),
         });
         let bound = BoundAlterTable::bind(stmt, &catalog, &txn2).unwrap();
@@ -1968,7 +1992,7 @@ mod tests {
 
         let txn2 = txn_mgr.begin().unwrap();
         let stmt = alter_stmt("users", false, AlterAction::SetDefault {
-            column: "ghost".to_string(),
+            column: NonEmptyString::new("ghost").unwrap(),
             value: Value::Int64(0),
         });
         let err = BoundAlterTable::bind(stmt, &catalog, &txn2).unwrap_err();
@@ -1994,7 +2018,7 @@ mod tests {
 
         let txn2 = txn_mgr.begin().unwrap();
         let stmt = alter_stmt("users", false, AlterAction::DropDefault {
-            column: "name".to_string(),
+            column: NonEmptyString::new("name").unwrap(),
         });
         let bound = BoundAlterTable::bind(stmt, &catalog, &txn2).unwrap();
         txn2.commit().unwrap();
@@ -2023,7 +2047,7 @@ mod tests {
 
         let txn2 = txn_mgr.begin().unwrap();
         let stmt = alter_stmt("users", false, AlterAction::DropDefault {
-            column: "ghost".to_string(),
+            column: NonEmptyString::new("ghost").unwrap(),
         });
         let err = BoundAlterTable::bind(stmt, &catalog, &txn2).unwrap_err();
         txn2.commit().unwrap();
@@ -2048,7 +2072,7 @@ mod tests {
 
         let txn2 = txn_mgr.begin().unwrap();
         let stmt = alter_stmt("users", false, AlterAction::DropNotNull {
-            column: "id".to_string(),
+            column: NonEmptyString::new("id").unwrap(),
         });
         let bound = BoundAlterTable::bind(stmt, &catalog, &txn2).unwrap();
         txn2.commit().unwrap();
@@ -2077,7 +2101,7 @@ mod tests {
 
         let txn2 = txn_mgr.begin().unwrap();
         let stmt = alter_stmt("users", false, AlterAction::DropNotNull {
-            column: "ghost".to_string(),
+            column: NonEmptyString::new("ghost").unwrap(),
         });
         let err = BoundAlterTable::bind(stmt, &catalog, &txn2).unwrap_err();
         txn2.commit().unwrap();
@@ -2103,7 +2127,7 @@ mod tests {
 
         let txn2 = txn_mgr.begin().unwrap();
         let stmt = alter_stmt("users", false, AlterAction::AddPrimaryKey {
-            columns: vec!["name".to_string()],
+            columns: vec![NonEmptyString::new("name").unwrap()],
         });
         let bound = BoundAlterTable::bind(stmt, &catalog, &txn2).unwrap();
         txn2.commit().unwrap();
@@ -2135,7 +2159,10 @@ mod tests {
 
         let txn2 = txn_mgr.begin().unwrap();
         let stmt = alter_stmt("t", false, AlterAction::AddPrimaryKey {
-            columns: vec!["c".to_string(), "a".to_string()],
+            columns: vec![
+                NonEmptyString::new("c").unwrap(),
+                NonEmptyString::new("a").unwrap(),
+            ],
         });
         let bound = BoundAlterTable::bind(stmt, &catalog, &txn2).unwrap();
         txn2.commit().unwrap();
@@ -2161,7 +2188,7 @@ mod tests {
 
         let txn2 = txn_mgr.begin().unwrap();
         let stmt = alter_stmt("users", false, AlterAction::AddPrimaryKey {
-            columns: vec!["name".to_string()],
+            columns: vec![NonEmptyString::new("name").unwrap()],
         });
         let err = BoundAlterTable::bind(stmt, &catalog, &txn2).unwrap_err();
         txn2.commit().unwrap();
@@ -2184,7 +2211,7 @@ mod tests {
 
         let txn2 = txn_mgr.begin().unwrap();
         let stmt = alter_stmt("users", false, AlterAction::AddPrimaryKey {
-            columns: vec!["ghost".to_string()],
+            columns: vec![NonEmptyString::new("ghost").unwrap()],
         });
         let err = BoundAlterTable::bind(stmt, &catalog, &txn2).unwrap_err();
         txn2.commit().unwrap();
@@ -2207,7 +2234,10 @@ mod tests {
 
         let txn2 = txn_mgr.begin().unwrap();
         let stmt = alter_stmt("users", false, AlterAction::AddPrimaryKey {
-            columns: vec!["id".to_string(), "id".to_string()],
+            columns: vec![
+                NonEmptyString::new("id").unwrap(),
+                NonEmptyString::new("id").unwrap(),
+            ],
         });
         let err = BoundAlterTable::bind(stmt, &catalog, &txn2).unwrap_err();
         txn2.commit().unwrap();
