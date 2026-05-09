@@ -34,8 +34,8 @@
 
 use crate::{
     binder::{
-        Bound, BoundAlterTable, BoundCreateIndex, BoundCreateTable, BoundDrop, BoundDropIndex,
-        BoundShowIndexes,
+        Bound, BoundAlterAction, BoundAlterTable, BoundCreateIndex, BoundCreateTable, BoundDrop,
+        BoundDropIndex, BoundShowIndexes,
     },
     engine::{Engine, EngineError, ShownIndex, StatementResult},
     parser::statements::{
@@ -121,6 +121,7 @@ impl Engine<'_> {
                     name,
                     schema,
                     primary_key,
+                    constraints: _,
                 } => {
                     let file_id = catalog.create_table(txn, &name, schema, primary_key)?;
                     Ok(StatementResult::table_created(name, file_id, false))
@@ -471,81 +472,73 @@ impl Engine<'_> {
             };
 
             match b {
-                BoundAlterTable::RenameTable {
-                    old_name, new_name, ..
-                } => {
-                    catalog.rename_table(txn, &old_name, &new_name)?;
-                    Ok(StatementResult::TableRenamed { old_name, new_name })
-                }
-                BoundAlterTable::RenameColumn {
-                    file_id,
-                    old_name,
-                    new_name,
-                } => {
-                    let table_name = catalog.get_table_info_by_id(txn, file_id)?.name;
-                    catalog.rename_column(txn, file_id, &old_name, &new_name)?;
-                    Ok(StatementResult::ColumnRenamed {
-                        table: table_name,
-                        old_name,
-                        new_name,
-                    })
-                }
-                BoundAlterTable::AddColumn { file_id, column } => {
-                    let table_name = catalog.get_table_info_by_id(txn, file_id)?.name;
-                    let column_name = column.name.clone();
-                    catalog.add_column(txn, file_id, column)?;
-                    Ok(StatementResult::ColumnAdded {
-                        table: table_name,
-                        column_name: column_name.as_str().to_owned(),
-                    })
-                }
-                BoundAlterTable::DropColumn {
-                    file_id,
-                    column_name,
-                    ..
-                } => {
-                    let table_name = catalog.get_table_info_by_id(txn, file_id)?.name;
-                    catalog.drop_column(txn, file_id, &column_name)?;
-                    Ok(StatementResult::ColumnDropped {
-                        table: table_name,
-                        column_name,
-                    })
-                }
                 BoundAlterTable::NoOp { table_name } => Ok(StatementResult::NoOp {
                     statement: format!("ALTER TABLE IF EXISTS {table_name}"),
                 }),
-                BoundAlterTable::SetDefault {
+                BoundAlterTable::Action {
+                    table_name,
                     file_id,
-                    column,
-                    value,
-                } => {
-                    let table = catalog.get_table_info_by_id(txn, file_id)?.name;
-                    catalog.set_column_default(txn, file_id, &column, value)?;
-                    Ok(StatementResult::ColumnDefaultSet { table, column })
-                }
-                BoundAlterTable::DropDefault { file_id, column } => {
-                    let table = catalog.get_table_info_by_id(txn, file_id)?.name;
-                    catalog.drop_column_default(txn, file_id, &column)?;
-                    Ok(StatementResult::ColumnDefaultDropped { table, column })
-                }
-                BoundAlterTable::DropNotNull { file_id, column } => {
-                    let table = catalog.get_table_info_by_id(txn, file_id)?.name;
-                    catalog.drop_column_not_null(txn, file_id, &column)?;
-                    Ok(StatementResult::ColumnNotNullDropped { table, column })
-                }
-                BoundAlterTable::AddPrimaryKey {
-                    file_id,
-                    column_ids,
-                } => {
-                    let table = catalog.get_table_info_by_id(txn, file_id)?.name;
-                    catalog.set_primary_key(txn, file_id, column_ids)?;
-                    Ok(StatementResult::PrimaryKeySet { table })
-                }
-                BoundAlterTable::DropPrimaryKey { file_id } => {
-                    let table = catalog.get_table_info_by_id(txn, file_id)?.name;
-                    catalog.drop_primary_key(txn, file_id)?;
-                    Ok(StatementResult::PrimaryKeyDropped { table })
-                }
+                    action,
+                } => match action {
+                    BoundAlterAction::RenameTable { old_name, new_name } => {
+                        catalog.rename_table(txn, &old_name, &new_name)?;
+                        Ok(StatementResult::TableRenamed { old_name, new_name })
+                    }
+                    BoundAlterAction::RenameColumn { old_name, new_name } => {
+                        catalog.rename_column(txn, file_id, &old_name, &new_name)?;
+                        Ok(StatementResult::ColumnRenamed {
+                            table: table_name,
+                            old_name,
+                            new_name,
+                        })
+                    }
+                    BoundAlterAction::AddColumn { column } => {
+                        let column_name = column.name.clone();
+                        catalog.add_column(txn, file_id, column)?;
+                        Ok(StatementResult::ColumnAdded {
+                            table: table_name,
+                            column_name: column_name.as_str().to_owned(),
+                        })
+                    }
+                    BoundAlterAction::DropColumn { column_name, .. } => {
+                        catalog.drop_column(txn, file_id, &column_name)?;
+                        Ok(StatementResult::ColumnDropped {
+                            table: table_name,
+                            column_name,
+                        })
+                    }
+                    BoundAlterAction::SetDefault { column, value } => {
+                        catalog.set_column_default(txn, file_id, &column, value)?;
+                        Ok(StatementResult::ColumnDefaultSet {
+                            table: table_name,
+                            column,
+                        })
+                    }
+                    BoundAlterAction::DropDefault { column } => {
+                        catalog.drop_column_default(txn, file_id, &column)?;
+                        Ok(StatementResult::ColumnDefaultDropped {
+                            table: table_name,
+                            column,
+                        })
+                    }
+                    BoundAlterAction::DropNotNull { column } => {
+                        catalog.drop_column_not_null(txn, file_id, &column)?;
+                        Ok(StatementResult::ColumnNotNullDropped {
+                            table: table_name,
+                            column,
+                        })
+                    }
+                    BoundAlterAction::AddPrimaryKey { column_ids } => {
+                        catalog.set_primary_key(txn, file_id, column_ids)?;
+                        Ok(StatementResult::PrimaryKeySet { table: table_name })
+                    }
+                    BoundAlterAction::DropPrimaryKey => {
+                        catalog.drop_primary_key(txn, file_id)?;
+                        Ok(StatementResult::PrimaryKeyDropped { table: table_name })
+                    }
+                    BoundAlterAction::AddConstraint { .. }
+                    | BoundAlterAction::DropConstraint { .. } => todo!(),
+                },
             }
         })
     }
@@ -563,7 +556,7 @@ mod tests {
         buffer_pool::page_store::PageStore,
         catalog::manager::Catalog,
         engine::{Engine, EngineError, StatementResult},
-        parser::statements::{ColumnDef, CreateTableStatement, DropStatement},
+        parser::statements::{ColumnDef, CreateTableStatement, DropStatement, Uniqueness},
         primitives::{ColumnId, NonEmptyString},
         transaction::TransactionManager,
         tuple::TupleSchema,
@@ -595,6 +588,9 @@ mod tests {
             primary_key,
             auto_increment: false,
             default: None,
+            unique: Uniqueness::NotUnique,
+            check: None,
+            references: None,
         }
     }
 
@@ -605,13 +601,14 @@ mod tests {
         primary_key: Option<&str>,
     ) -> CreateTableStatement {
         CreateTableStatement {
-            table_name: table.to_string(),
+            table_name: table.try_into().unwrap(),
             if_not_exists,
             columns,
             primary_key: primary_key
                 .into_iter()
-                .map(std::string::ToString::to_string)
-                .collect(),
+                .map(|s| s.try_into().unwrap())
+                .collect::<Vec<NonEmptyString>>(),
+            constraints: vec![],
         }
     }
 
@@ -676,7 +673,7 @@ mod tests {
             .unwrap();
 
         let stmt_drop = DropStatement {
-            table_name: "t1".to_string(),
+            table_name: "t1".try_into().unwrap(),
             if_exists: false,
         };
         let result = engine.exec_drop_table(stmt_drop).unwrap();
@@ -882,7 +879,7 @@ mod tests {
         let (catalog, txn_mgr) = make_catalog_and_txn(dir.path());
 
         let stmt_drop = DropStatement {
-            table_name: "ghost".to_string(),
+            table_name: "ghost".try_into().unwrap(),
             if_exists: false,
         };
         let engine = Engine::new(&catalog, &txn_mgr);
@@ -901,7 +898,7 @@ mod tests {
         let (catalog, txn_mgr) = make_catalog_and_txn(dir.path());
 
         let stmt_drop = DropStatement {
-            table_name: "ghost".to_string(),
+            table_name: "ghost".try_into().unwrap(),
             if_exists: true,
         };
         let engine = Engine::new(&catalog, &txn_mgr);
@@ -927,10 +924,11 @@ mod tests {
         let expected_schema = TupleSchema::from(cols.iter().collect::<Vec<&ColumnDef>>());
 
         let stmt = CreateTableStatement {
-            table_name: "schema_check".to_string(),
+            table_name: "schema_check".try_into().unwrap(),
             if_not_exists: false,
             columns: cols,
             primary_key: vec![],
+            constraints: vec![],
         };
         let engine = Engine::new(&catalog, &txn_mgr);
         engine
@@ -945,8 +943,6 @@ mod tests {
         let actual_names: Vec<_> = info.schema.fields().map(|f| f.name.as_str()).collect();
         assert_eq!(actual_names, expected_names);
     }
-
-    // ── SHOW INDEXES ──────────────────────────────────────────────────────
 
     use crate::{index::IndexKind, parser::statements::ShowIndexesStatement, tuple::Field};
 
@@ -1068,7 +1064,7 @@ mod tests {
 
         let engine = Engine::new(&catalog, &txn_mgr);
         let result = engine
-            .exec_show_indexes(ShowIndexesStatement(Some("users".to_string())))
+            .exec_show_indexes(ShowIndexesStatement(Some("users".try_into().unwrap())))
             .unwrap();
 
         let StatementResult::IndexesShown { scope, rows } = result else {
@@ -1118,7 +1114,7 @@ mod tests {
 
         let engine = Engine::new(&catalog, &txn_mgr);
         let result = engine
-            .exec_show_indexes(ShowIndexesStatement(Some("lonely".to_string())))
+            .exec_show_indexes(ShowIndexesStatement(Some("lonely".try_into().unwrap())))
             .unwrap();
 
         let StatementResult::IndexesShown { scope, rows } = result else {
@@ -1136,7 +1132,7 @@ mod tests {
 
         let engine = Engine::new(&catalog, &txn_mgr);
         let err = engine
-            .exec_show_indexes(ShowIndexesStatement(Some("ghost".to_string())))
+            .exec_show_indexes(ShowIndexesStatement(Some("ghost".try_into().unwrap())))
             .unwrap_err();
 
         assert!(

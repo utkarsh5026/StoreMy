@@ -1,9 +1,10 @@
 use crate::{
     FileId, Value,
     binder::BindError,
-    catalog::manager::TableInfo,
+    catalog::TableInfo,
     execution::expression::BooleanExpression,
-    parser::statements::{ColumnRef, WhereCondition},
+    parser::statements::{BinOp, ColumnRef, Expr, UnOp},
+    primitives::{NonEmptyString, Predicate},
     tuple::{Field, TupleSchema},
 };
 
@@ -58,30 +59,37 @@ pub(super) trait ColumnResolver {
     /// against the correct table.
     fn resolve<'a>(&'a self, col: &ColumnRef) -> Result<(usize, &'a Field, &'a str), BindError>;
 
-    /// Binds a parsed [`WhereCondition`] tree into a [`BooleanExpression`].
+    /// Binds a parsed boolean [`Expr`] tree into a [`BooleanExpression`].
     ///
     /// Default implementation recursively binds `And`/`Or` and uses
     /// [`Self::resolve`] + [`bind_value_for`] at each leaf — so a
     /// single-table and multi-table scope share this code unchanged.
-    fn bind_where(&self, w: &WhereCondition) -> Result<BooleanExpression, BindError> {
+    fn bind_where(&self, w: &Expr) -> Result<BooleanExpression, BindError> {
         match w {
-            WhereCondition::Predicate { field, op, value } => {
-                let (idx, fld, table) = self.resolve(field)?;
-                let operand = bind_value_for(value, fld, table)?;
-                Ok(BooleanExpression::col_op_lit(idx, *op, operand))
-            }
-            WhereCondition::And(l, r) => Ok(BooleanExpression::And(
-                Box::new(self.bind_where(l)?),
-                Box::new(self.bind_where(r)?),
-            )),
-            WhereCondition::Or(l, r) => Ok(BooleanExpression::Or(
-                Box::new(self.bind_where(l)?),
-                Box::new(self.bind_where(r)?),
-            )),
+            Expr::BinaryOp { lhs, op, rhs } => match op {
+                BinOp::And => Ok(BooleanExpression::And(
+                    Box::new(self.bind_where(lhs)?),
+                    Box::new(self.bind_where(rhs)?),
+                )),
+                BinOp::Or => Ok(BooleanExpression::Or(
+                    Box::new(self.bind_where(lhs)?),
+                    Box::new(self.bind_where(rhs)?),
+                )),
+                BinOp::Eq | BinOp::NotEq | BinOp::Lt | BinOp::LtEq | BinOp::Gt | BinOp::GtEq => {
+                    self.bind_comparison(lhs, *op, rhs)
+                }
+            },
+            Expr::UnaryOp {
+                op: UnOp::Not,
+                operand,
+            } => Ok(BooleanExpression::Not(Box::new(self.bind_where(operand)?))),
+            other => Err(BindError::Unsupported(format!(
+                "unsupported boolean expression in WHERE/HAVING/ON: {other}"
+            ))),
         }
     }
 
-    /// Resolves an optional [`WhereCondition`] into an optional [`BooleanExpression`].
+    /// Resolves an optional boolean [`Expr`] into an optional [`BooleanExpression`].
     ///
     /// If the input is `None`, returns `Ok(None)`. If the input is `Some(condition)`,
     /// attempts to bind it using [`Self::bind_where`] and returns `Ok(Some(expr))`
@@ -89,11 +97,66 @@ pub(super) trait ColumnResolver {
     ///
     /// This is intended for binding the `WHERE` or `HAVING` clauses, which may or may not be
     /// present.
-    fn resolve_where(
-        &self,
-        w: Option<&WhereCondition>,
-    ) -> Result<Option<BooleanExpression>, BindError> {
+    fn resolve_where(&self, w: Option<&Expr>) -> Result<Option<BooleanExpression>, BindError> {
         w.map(|w| self.bind_where(w)).transpose()
+    }
+
+    fn bind_comparison(
+        &self,
+        lhs: &Expr,
+        op: BinOp,
+        rhs: &Expr,
+    ) -> Result<BooleanExpression, BindError> {
+        let pred = binop_to_predicate(op).ok_or_else(|| {
+            BindError::Unsupported(format!("unsupported comparison operator in WHERE: {op:?}"))
+        })?;
+
+        match (lhs, rhs) {
+            (Expr::Column(lc), Expr::Literal(rv)) => {
+                let (l_idx, l_fld, l_table) = self.resolve(lc)?;
+                let lit = bind_value_for(rv, l_fld, l_table)?;
+                Ok(BooleanExpression::col_op_lit(l_idx, pred, lit))
+            }
+            (Expr::Literal(lv), Expr::Column(rc)) => {
+                let (r_idx, r_fld, r_table) = self.resolve(rc)?;
+                let lit = bind_value_for(lv, r_fld, r_table)?;
+                Ok(BooleanExpression::col_op_lit(
+                    r_idx,
+                    flip_predicate(pred),
+                    lit,
+                ))
+            }
+            (Expr::Column(lc), Expr::Column(rc)) => {
+                let (l_idx, _l_fld, _l_table) = self.resolve(lc)?;
+                let (r_idx, _r_fld, _r_table) = self.resolve(rc)?;
+                Ok(BooleanExpression::col_op_col(l_idx, pred, r_idx))
+            }
+            _ => Err(BindError::Unsupported(format!(
+                "unsupported comparison operands in WHERE/HAVING/ON: {lhs} {op} {rhs}"
+            ))),
+        }
+    }
+}
+
+fn binop_to_predicate(op: BinOp) -> Option<Predicate> {
+    Some(match op {
+        BinOp::Eq => Predicate::Equals,
+        BinOp::NotEq => Predicate::NotEqualBracket,
+        BinOp::Lt => Predicate::LessThan,
+        BinOp::LtEq => Predicate::LessThanOrEqual,
+        BinOp::Gt => Predicate::GreaterThan,
+        BinOp::GtEq => Predicate::GreaterThanOrEqual,
+        BinOp::And | BinOp::Or => return None,
+    })
+}
+
+fn flip_predicate(p: Predicate) -> Predicate {
+    match p {
+        Predicate::LessThan => Predicate::GreaterThan,
+        Predicate::GreaterThan => Predicate::LessThan,
+        Predicate::LessThanOrEqual => Predicate::GreaterThanOrEqual,
+        Predicate::GreaterThanOrEqual => Predicate::LessThanOrEqual,
+        other => other,
     }
 }
 
@@ -143,10 +206,10 @@ impl ColumnResolver for Scope {
 
         if let Some(q) = &col.qualifier {
             if candidates.is_empty() {
-                return Err(BindError::unknown_column(q.clone(), col.name.clone()));
+                return Err(BindError::unknown_column(q.as_str(), col.name.as_str()));
             }
             if candidates.len() > 1 {
-                return Err(BindError::ambiguous_column(q.clone()));
+                return Err(BindError::ambiguous_column(q.as_str()));
             }
         }
 
@@ -163,15 +226,16 @@ impl ColumnResolver for Scope {
             0 => {
                 let table = col
                     .qualifier
-                    .clone()
+                    .as_ref()
+                    .map(ToString::to_string)
                     .or_else(|| self.tables.first().map(|t| t.name.clone()))
                     .unwrap_or_default();
 
-                Err(BindError::unknown_column(table, col.name.clone()))
+                Err(BindError::unknown_column(table, col.name.as_str()))
             }
             1 => Ok(matches[0]),
             _ => Err(BindError::AmbiguousColumn {
-                column: col.name.clone(),
+                column: col.name.to_string(),
             }),
         }
     }
@@ -186,14 +250,14 @@ impl ColumnResolver for Scope {
 /// `UPDATE … FROM` / subquery support, it will keep this as the
 /// *target* and gain a separate [`Scope`] field for resolution.
 pub(super) struct SingleTableScope {
-    pub name: String,
-    pub alias: Option<String>,
+    pub name: NonEmptyString,
+    pub alias: Option<NonEmptyString>,
     pub file_id: FileId,
     pub schema: TupleSchema,
 }
 
 impl SingleTableScope {
-    pub fn from_info(info: TableInfo, alias: Option<String>) -> Self {
+    pub fn from_info(info: TableInfo, alias: Option<NonEmptyString>) -> Self {
         Self {
             name: info.name,
             alias,

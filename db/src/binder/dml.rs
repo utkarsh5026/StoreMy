@@ -18,9 +18,9 @@ use crate::{
     catalog::manager::Catalog,
     execution::expression::BooleanExpression,
     parser::statements::{
-        Assignment, DeleteStatement, InsertSource, InsertStatement, UpdateStatement,
+        Assignment, DeleteStatement, Expr, InsertSource, InsertStatement, UpdateStatement,
     },
-    primitives::ColumnId,
+    primitives::{ColumnId, NonEmptyString},
     transaction::Transaction,
     tuple::{Field, TupleSchema},
 };
@@ -33,33 +33,6 @@ pub struct BoundDelete {
     pub file_id: FileId,
     /// Optional predicate used to filter which rows are deleted.
     pub filter: Option<BooleanExpression>,
-}
-
-/// A bound `UPDATE` statement ready for planning and execution.
-pub struct BoundUpdate {
-    /// Target table name as it appears in the catalog.
-    pub name: String,
-    /// Storage identifier for the target table.
-    pub file_id: FileId,
-    /// Table schema used to interpret assignments and predicates.
-    pub schema: TupleSchema,
-    /// Column assignments expressed as `(column_id, value)` pairs.
-    pub assignments: Vec<(ColumnId, Value)>,
-    /// Optional predicate used to filter which rows are updated.
-    pub filter: Option<BooleanExpression>,
-}
-
-/// A bound `INSERT` statement ready for planning and execution.
-pub struct BoundInsert {
-    /// Target table name as it appears in the catalog.
-    pub name: String,
-    /// Storage identifier for the target table.
-    pub file_id: FileId,
-    /// Table schema that the inserted rows must match.
-    pub schema: TupleSchema,
-    /// One row per `VALUES (...)` tuple, already reordered into schema order.
-    /// `rows[r][c]` is the expression for column `c` of row `r`.
-    pub rows: Vec<Vec<BoundExpr>>,
 }
 
 /// Binds a parsed `DELETE` statement against the catalog and current transaction.
@@ -88,11 +61,25 @@ impl BoundDelete {
             .transpose()?;
 
         Ok(Self {
-            name: table_name,
+            name: table_name.as_str().to_string(),
             file_id,
             filter: predicate,
         })
     }
+}
+
+/// A bound `UPDATE` statement ready for planning and execution.
+pub struct BoundUpdate {
+    /// Target table name as it appears in the catalog.
+    pub name: String,
+    /// Storage identifier for the target table.
+    pub file_id: FileId,
+    /// Table schema used to interpret assignments and predicates.
+    pub schema: TupleSchema,
+    /// Column assignments expressed as `(column_id, value)` pairs.
+    pub assignments: Vec<(ColumnId, Value)>,
+    /// Optional predicate used to filter which rows are updated.
+    pub filter: Option<BooleanExpression>,
 }
 
 /// Binds a parsed `UPDATE` statement against the catalog and current transaction.
@@ -130,22 +117,40 @@ impl BoundUpdate {
         for Assignment { column, value } in assignments {
             let (col_id, field) = require_column(&scope.schema, &scope.name, &column)?;
             if !seen.insert(col_id) {
-                return Err(BindError::DuplicateColumn(column));
+                return Err(BindError::DuplicateColumn(column.as_str().to_string()));
             }
-            let coerced = bind_value_for(&value, field, &scope.name)?;
+            let Expr::Literal(lit) = value else {
+                return Err(BindError::Unsupported(
+                    "UPDATE assignment expressions are not yet supported (literals only)".into(),
+                ));
+            };
+            let coerced = bind_value_for(&lit, field, &scope.name)?;
             bound_assignments.push((col_id, coerced));
         }
 
         let filter = where_clause.map(|w| scope.bind_where(&w)).transpose()?;
 
         Ok(Self {
-            name: scope.name,
+            name: scope.name.as_str().to_string(),
             file_id: scope.file_id,
             schema: scope.schema,
             assignments: bound_assignments,
             filter,
         })
     }
+}
+
+/// A bound `INSERT` statement ready for planning and execution.
+pub struct BoundInsert {
+    /// Target table name as it appears in the catalog.
+    pub name: String,
+    /// Storage identifier for the target table.
+    pub file_id: FileId,
+    /// Table schema that the inserted rows must match.
+    pub schema: TupleSchema,
+    /// One row per `VALUES (...)` tuple, already reordered into schema order.
+    /// `rows[r][c]` is the expression for column `c` of row `r`.
+    pub rows: Vec<Vec<BoundExpr>>,
 }
 
 /// Binds a parsed `INSERT ... VALUES ...` statement against the catalog and schema.
@@ -192,7 +197,7 @@ impl BoundInsert {
             .collect::<Result<Vec<_>, _>>()?;
 
         Ok(Self {
-            name: table_name,
+            name: table_name.as_str().to_string(),
             file_id: info.file_id,
             schema,
             rows,
@@ -208,7 +213,7 @@ impl BoundInsert {
     /// must be named exactly once; naming a dropped column, an unknown column,
     /// a duplicate, or too few/many columns is an error.
     fn build_projection(
-        cols: Option<&[String]>,
+        cols: Option<&[NonEmptyString]>,
         schema: &TupleSchema,
         table: &str,
     ) -> Result<Vec<Option<usize>>, BindError> {
@@ -256,7 +261,7 @@ impl BoundInsert {
     /// - [`BindError::DuplicateInsertColumn`] if a name is repeated.
     /// - [`BindError::WrongColumnCount`] if the list names too few/many logical columns.
     fn validate_named_insert_columns(
-        cols: &[String],
+        cols: &[NonEmptyString],
         schema: &TupleSchema,
         table: &str,
         logical_n: usize,
@@ -264,16 +269,16 @@ impl BoundInsert {
         let mut seen: HashSet<&str> = HashSet::with_capacity(cols.len());
         for c in cols {
             match schema.field_by_name(c) {
-                None => return Err(BindError::unknown_column(table, c)),
+                None => return Err(BindError::unknown_column(table, c.as_str())),
                 Some((_, field)) if field.is_dropped => {
-                    return Err(BindError::unknown_column(table, c));
+                    return Err(BindError::unknown_column(table, c.as_str()));
                 }
                 Some(_) => {}
             }
             if !seen.insert(c.as_str()) {
                 return Err(BindError::DuplicateInsertColumn {
                     table: table.into(),
-                    column: c.clone(),
+                    column: c.as_str().to_string(),
                 });
             }
         }
@@ -368,8 +373,8 @@ mod tests {
         catalog::manager::Catalog,
         execution::expression::BooleanExpression,
         parser::statements::{
-            Assignment, ColumnRef, DeleteStatement, InsertSource, InsertStatement, UpdateStatement,
-            WhereCondition,
+            Assignment, BinOp, ColumnRef, DeleteStatement, Expr, InsertSource, InsertStatement,
+            UpdateStatement,
         },
         primitives::Predicate,
         transaction::TransactionManager,
@@ -405,13 +410,26 @@ mod tests {
 
     fn assignment(col: &str, value: Value) -> Assignment {
         Assignment {
-            column: col.to_string(),
-            value,
+            column: NonEmptyString::new(col).unwrap(),
+            value: Expr::Literal(value),
         }
     }
 
-    fn predicate(col: &str, op: Predicate, value: Value) -> WhereCondition {
-        WhereCondition::predicate(ColumnRef::from(col), op, value)
+    fn predicate(col: &str, op: Predicate, value: Value) -> Expr {
+        let bin_op = match op {
+            Predicate::Equals => BinOp::Eq,
+            Predicate::NotEqual | Predicate::NotEqualBracket => BinOp::NotEq,
+            Predicate::LessThan => BinOp::Lt,
+            Predicate::LessThanOrEqual => BinOp::LtEq,
+            Predicate::GreaterThan => BinOp::Gt,
+            Predicate::GreaterThanOrEqual => BinOp::GtEq,
+            Predicate::Like => panic!("test helper `predicate`: LIKE is not an Expr::BinaryOp"),
+        };
+        Expr::binary(
+            Expr::Column(ColumnRef::from(col)),
+            bin_op,
+            Expr::Literal(value),
+        )
     }
 
     /// Convenience: extract the error from a `Result<T, E>` without requiring `T: Debug`.
@@ -432,7 +450,7 @@ mod tests {
         let txn = txn_mgr.begin().unwrap();
         let info = catalog.get_table_info(&txn, "users").unwrap();
         let stmt = DeleteStatement {
-            table_name: "users".into(),
+            table_name: NonEmptyString::new("users").unwrap(),
             alias: None,
             where_clause: None,
         };
@@ -453,7 +471,7 @@ mod tests {
 
         let txn = txn_mgr.begin().unwrap();
         let stmt = DeleteStatement {
-            table_name: "users".into(),
+            table_name: NonEmptyString::new("users").unwrap(),
             alias: None,
             where_clause: Some(predicate("age", Predicate::Equals, Value::Int64(30))),
         };
@@ -471,7 +489,7 @@ mod tests {
 
         let txn = txn_mgr.begin().unwrap();
         let stmt = DeleteStatement {
-            table_name: "ghost".into(),
+            table_name: NonEmptyString::new("ghost").unwrap(),
             alias: None,
             where_clause: None,
         };
@@ -490,7 +508,7 @@ mod tests {
 
         let txn = txn_mgr.begin().unwrap();
         let stmt = DeleteStatement {
-            table_name: "users".into(),
+            table_name: NonEmptyString::new("users").unwrap(),
             alias: None,
             where_clause: Some(predicate("nope", Predicate::Equals, Value::Int64(1))),
         };
@@ -509,7 +527,7 @@ mod tests {
 
         let txn = txn_mgr.begin().unwrap();
         let stmt = InsertStatement {
-            table_name: "users".into(),
+            table_name: NonEmptyString::new("users").unwrap(),
             columns: None,
             source: InsertSource::Values(vec![vec![
                 Value::Int64(1),
@@ -548,8 +566,12 @@ mod tests {
 
         let txn = txn_mgr.begin().unwrap();
         let stmt = InsertStatement {
-            table_name: "users".into(),
-            columns: Some(vec!["age".into(), "id".into(), "name".into()]),
+            table_name: NonEmptyString::new("users").unwrap(),
+            columns: Some(vec![
+                NonEmptyString::new("age").unwrap(),
+                NonEmptyString::new("id").unwrap(),
+                NonEmptyString::new("name").unwrap(),
+            ]),
             source: InsertSource::Values(vec![vec![
                 Value::Int64(99),
                 Value::Int64(7),
@@ -582,7 +604,7 @@ mod tests {
 
         let txn = txn_mgr.begin().unwrap();
         let stmt = InsertStatement {
-            table_name: "users".into(),
+            table_name: NonEmptyString::new("users").unwrap(),
             columns: None,
             source: InsertSource::Values(vec![vec![
                 Value::Int64(1),
@@ -606,7 +628,7 @@ mod tests {
 
         let txn = txn_mgr.begin().unwrap();
         let stmt = InsertStatement {
-            table_name: "ghost".into(),
+            table_name: NonEmptyString::new("ghost").unwrap(),
             columns: None,
             source: InsertSource::Values(vec![vec![Value::Int64(1)]]),
         };
@@ -625,8 +647,12 @@ mod tests {
 
         let txn = txn_mgr.begin().unwrap();
         let stmt = InsertStatement {
-            table_name: "users".into(),
-            columns: Some(vec!["id".into(), "nope".into(), "age".into()]),
+            table_name: NonEmptyString::new("users").unwrap(),
+            columns: Some(vec![
+                NonEmptyString::new("id").unwrap(),
+                NonEmptyString::new("nope").unwrap(),
+                NonEmptyString::new("age").unwrap(),
+            ]),
             source: InsertSource::Values(vec![vec![
                 Value::Int64(1),
                 Value::Int64(2),
@@ -648,8 +674,12 @@ mod tests {
 
         let txn = txn_mgr.begin().unwrap();
         let stmt = InsertStatement {
-            table_name: "users".into(),
-            columns: Some(vec!["id".into(), "id".into(), "age".into()]),
+            table_name: NonEmptyString::new("users").unwrap(),
+            columns: Some(vec![
+                NonEmptyString::new("id").unwrap(),
+                NonEmptyString::new("id").unwrap(),
+                NonEmptyString::new("age").unwrap(),
+            ]),
             source: InsertSource::Values(vec![vec![
                 Value::Int64(1),
                 Value::Int64(2),
@@ -673,8 +703,11 @@ mod tests {
 
         let txn = txn_mgr.begin().unwrap();
         let stmt = InsertStatement {
-            table_name: "users".into(),
-            columns: Some(vec!["id".into(), "name".into()]),
+            table_name: NonEmptyString::new("users").unwrap(),
+            columns: Some(vec![
+                NonEmptyString::new("id").unwrap(),
+                NonEmptyString::new("name").unwrap(),
+            ]),
             source: InsertSource::Values(vec![vec![Value::Int64(1), Value::String("a".into())]]),
         };
         let err = expect_err(BoundInsert::bind(stmt, &catalog, &txn));
@@ -696,7 +729,7 @@ mod tests {
 
         let txn = txn_mgr.begin().unwrap();
         let stmt = InsertStatement {
-            table_name: "users".into(),
+            table_name: NonEmptyString::new("users").unwrap(),
             columns: None,
             source: InsertSource::Values(vec![vec![Value::Int64(1), Value::String("a".into())]]),
         };
@@ -719,7 +752,7 @@ mod tests {
 
         let txn = txn_mgr.begin().unwrap();
         let stmt = InsertStatement {
-            table_name: "users".into(),
+            table_name: NonEmptyString::new("users").unwrap(),
             columns: None,
             source: InsertSource::Values(vec![vec![
                 Value::Null, // id is NOT NULL
@@ -742,7 +775,7 @@ mod tests {
 
         let txn = txn_mgr.begin().unwrap();
         let stmt = InsertStatement {
-            table_name: "users".into(),
+            table_name: NonEmptyString::new("users").unwrap(),
             columns: None,
             source: InsertSource::Values(vec![vec![
                 Value::Int64(1),
@@ -765,7 +798,7 @@ mod tests {
 
         let txn = txn_mgr.begin().unwrap();
         let stmt = UpdateStatement {
-            table_name: "users".into(),
+            table_name: NonEmptyString::new("users").unwrap(),
             alias: None,
             assignments: vec![assignment("age", Value::Int64(42))],
             where_clause: None,
@@ -789,7 +822,7 @@ mod tests {
 
         let txn = txn_mgr.begin().unwrap();
         let stmt = UpdateStatement {
-            table_name: "users".into(),
+            table_name: NonEmptyString::new("users").unwrap(),
             alias: None,
             assignments: vec![
                 assignment("name", Value::String("zed".into())),
@@ -813,8 +846,8 @@ mod tests {
 
         let txn = txn_mgr.begin().unwrap();
         let stmt = UpdateStatement {
-            table_name: "users".into(),
-            alias: Some("u".into()),
+            table_name: NonEmptyString::new("users").unwrap(),
+            alias: Some(NonEmptyString::new("u").unwrap()),
             assignments: vec![assignment("age", Value::Int64(1))],
             where_clause: Some(predicate("u.id", Predicate::Equals, Value::Int64(7))),
         };
@@ -833,7 +866,7 @@ mod tests {
 
         let txn = txn_mgr.begin().unwrap();
         let stmt = UpdateStatement {
-            table_name: "users".into(),
+            table_name: NonEmptyString::new("users").unwrap(),
             alias: None,
             assignments: vec![assignment("name", Value::Null)],
             where_clause: None,
@@ -854,7 +887,7 @@ mod tests {
 
         let txn = txn_mgr.begin().unwrap();
         let stmt = UpdateStatement {
-            table_name: "ghost".into(),
+            table_name: NonEmptyString::new("ghost").unwrap(),
             alias: None,
             assignments: vec![assignment("age", Value::Int64(1))],
             where_clause: None,
@@ -874,7 +907,7 @@ mod tests {
 
         let txn = txn_mgr.begin().unwrap();
         let stmt = UpdateStatement {
-            table_name: "users".into(),
+            table_name: NonEmptyString::new("users").unwrap(),
             alias: None,
             assignments: vec![assignment("nope", Value::Int64(1))],
             where_clause: None,
@@ -894,7 +927,7 @@ mod tests {
 
         let txn = txn_mgr.begin().unwrap();
         let stmt = UpdateStatement {
-            table_name: "users".into(),
+            table_name: NonEmptyString::new("users").unwrap(),
             alias: None,
             assignments: vec![
                 assignment("age", Value::Int64(1)),
@@ -917,7 +950,7 @@ mod tests {
 
         let txn = txn_mgr.begin().unwrap();
         let stmt = UpdateStatement {
-            table_name: "users".into(),
+            table_name: NonEmptyString::new("users").unwrap(),
             alias: None,
             assignments: vec![assignment("age", Value::Null)],
             where_clause: None,
@@ -937,7 +970,7 @@ mod tests {
 
         let txn = txn_mgr.begin().unwrap();
         let stmt = UpdateStatement {
-            table_name: "users".into(),
+            table_name: NonEmptyString::new("users").unwrap(),
             alias: None,
             assignments: vec![assignment("age", Value::String("not a number".into()))],
             where_clause: None,
@@ -957,7 +990,7 @@ mod tests {
 
         let txn = txn_mgr.begin().unwrap();
         let stmt = UpdateStatement {
-            table_name: "users".into(),
+            table_name: NonEmptyString::new("users").unwrap(),
             alias: None,
             assignments: vec![assignment("age", Value::Int64(1))],
             where_clause: Some(predicate("nope", Predicate::Equals, Value::Int64(0))),

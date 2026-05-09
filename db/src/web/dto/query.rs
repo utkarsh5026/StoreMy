@@ -6,7 +6,7 @@ use serde::Serialize;
 use serde_json::Value as JsonValue;
 
 use crate::{
-    catalog::manager::TableInfo,
+    catalog::TableInfo,
     engine::{ShownIndex, StatementResult},
     tuple::{Field, Tuple, TupleSchema},
     types::Value,
@@ -324,7 +324,7 @@ pub struct TableSummaryDto {
 impl From<&TableInfo> for TableSummaryDto {
     fn from(t: &TableInfo) -> Self {
         TableSummaryDto {
-            name: t.name.clone(),
+            name: t.name.to_string(),
             column_count: t.schema.logical_num_fields(),
             file_id: u64::from(t.file_id),
         }
@@ -350,7 +350,7 @@ impl From<&TableInfo> for TableInfoDto {
                 .collect::<Vec<_>>()
         });
         TableInfoDto {
-            name: t.name.clone(),
+            name: t.name.to_string(),
             file_id: u64::from(t.file_id),
             file_path: t.file_path.display().to_string(),
             primary_key,

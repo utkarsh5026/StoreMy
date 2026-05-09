@@ -67,6 +67,7 @@
 
 use std::fmt::Display;
 
+pub use crate::parser::parsers::expr::{BinOp, Expr, UnOp};
 use crate::{
     Type,
     index::IndexKind,
@@ -130,7 +131,7 @@ pub enum Statement {
 ///
 /// ```
 /// use storemy::{
-///     parser::statements::{ColumnDef, CreateTableStatement, Statement},
+///     parser::statements::{ColumnDef, CreateTableStatement, Statement, Uniqueness},
 ///     primitives::NonEmptyString,
 ///     types::Type,
 /// };
@@ -142,12 +143,16 @@ pub enum Statement {
 ///     primary_key: true,
 ///     auto_increment: false,
 ///     default: None,
+///     unique: Uniqueness::NotUnique,
+///     check: None,
+///     references: None,
 /// };
 /// let inner = CreateTableStatement {
-///     table_name: "users".into(),
+///     table_name: NonEmptyString::new("users").unwrap(),
 ///     if_not_exists: false,
 ///     columns: vec![col],
 ///     primary_key: vec![],
+///     constraints: vec![],
 /// };
 /// let statement = Statement::CreateTable(inner);
 /// assert_eq!(
@@ -191,44 +196,44 @@ impl Statement {
     }
 
     pub(super) fn delete(
-        table_name: impl Into<String>,
-        alias: Option<String>,
-        where_clause: Option<WhereCondition>,
+        table_name: NonEmptyString,
+        alias: Option<NonEmptyString>,
+        where_clause: Option<Expr>,
     ) -> DeleteStatement {
         DeleteStatement {
-            table_name: table_name.into(),
+            table_name,
             alias,
             where_clause,
         }
     }
 
     pub(super) fn insert(
-        table_name: impl Into<String>,
-        columns: Option<Vec<String>>,
+        table_name: NonEmptyString,
+        columns: Option<Vec<NonEmptyString>>,
         source: InsertSource,
     ) -> InsertStatement {
         InsertStatement {
-            table_name: table_name.into(),
+            table_name,
             columns,
             source,
         }
     }
 
     pub(super) fn update(
-        table_name: impl Into<String>,
-        alias: Option<String>,
+        table_name: NonEmptyString,
+        alias: Option<NonEmptyString>,
         assignments: Vec<Assignment>,
-        where_clause: Option<WhereCondition>,
+        where_clause: Option<Expr>,
     ) -> UpdateStatement {
         UpdateStatement {
-            table_name: table_name.into(),
+            table_name,
             alias,
             assignments,
             where_clause,
         }
     }
 
-    pub(super) fn show_indexes(table_name: Option<String>) -> ShowIndexesStatement {
+    pub(super) fn show_indexes(table_name: Option<NonEmptyString>) -> ShowIndexesStatement {
         ShowIndexesStatement(table_name)
     }
 }
@@ -260,8 +265,8 @@ impl Statement {
 /// ```
 #[derive(Debug, Clone, PartialEq)]
 pub struct ColumnRef {
-    pub qualifier: Option<String>, // table name or alias
-    pub name: String,
+    pub qualifier: Option<NonEmptyString>, // table name or alias
+    pub name: NonEmptyString,
 }
 
 impl From<&str> for ColumnRef {
@@ -270,12 +275,12 @@ impl From<&str> for ColumnRef {
         if parts.len() == 1 {
             return Self {
                 qualifier: None,
-                name: parts[0].to_string(),
+                name: NonEmptyString::new(parts[0]).unwrap(),
             };
         }
         Self {
-            qualifier: Some(parts[0].to_string()),
-            name: parts[1].to_string(),
+            qualifier: Some(NonEmptyString::new(parts[0]).unwrap()),
+            name: NonEmptyString::new(parts[1]).unwrap(),
         }
     }
 }
@@ -443,7 +448,7 @@ impl TryFrom<&str> for AggFunc {
 /// table is an error; with `if_exists = true`, it's a no-op.
 #[derive(Debug, Clone)]
 pub struct DropStatement {
-    pub table_name: String,
+    pub table_name: NonEmptyString,
     pub if_exists: bool,
 }
 
@@ -454,6 +459,51 @@ impl Display for DropStatement {
             write!(f, " IF EXISTS")?;
         }
         write!(f, "{}", self.table_name)
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum ReferentialAction {
+    Cascade,
+    SetNull,
+    SetDefault,
+    Restrict,
+}
+
+impl Display for ReferentialAction {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ReferentialAction::Cascade => write!(f, "CASCADE"),
+            ReferentialAction::SetNull => write!(f, "SET NULL"),
+            ReferentialAction::SetDefault => write!(f, "SET DEFAULT"),
+            ReferentialAction::Restrict => write!(f, "RESTRICT"),
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct Reference {
+    pub table: NonEmptyString,
+    pub column: NonEmptyString,
+    pub on_delete: Option<ReferentialAction>,
+    pub on_update: Option<ReferentialAction>,
+}
+
+impl Display for Reference {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "REFERENCES {table}({column})",
+            table = self.table,
+            column = self.column
+        )?;
+        if let Some(on_delete) = &self.on_delete {
+            write!(f, " ON DELETE {on_delete}")?;
+        }
+        if let Some(on_update) = &self.on_update {
+            write!(f, " ON UPDATE {on_update}")?;
+        }
+        Ok(())
     }
 }
 
@@ -493,6 +543,38 @@ pub struct ColumnDef {
     pub primary_key: bool,
     pub auto_increment: bool,
     pub default: Option<Value>,
+    pub unique: Uniqueness,
+    pub check: Option<NonEmptyString>,
+    pub references: Option<Reference>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Uniqueness {
+    Unique,
+    #[default]
+    NotUnique,
+}
+
+impl From<bool> for Uniqueness {
+    fn from(value: bool) -> Self {
+        if value { Self::Unique } else { Self::NotUnique }
+    }
+}
+
+impl ColumnDef {
+    pub fn with_type(name: NonEmptyString, col_type: Type) -> Self {
+        Self {
+            name,
+            col_type,
+            nullable: true,
+            primary_key: false,
+            auto_increment: false,
+            default: None,
+            unique: Uniqueness::NotUnique,
+            check: None,
+            references: None,
+        }
+    }
 }
 
 impl Display for ColumnDef {
@@ -509,6 +591,12 @@ impl Display for ColumnDef {
         }
         if let Some(default) = &self.default {
             write!(f, " DEFAULT {default}")?;
+        }
+        if self.unique == Uniqueness::Unique {
+            write!(f, " UNIQUE")?;
+        }
+        if let Some(check) = &self.check {
+            write!(f, " CHECK ({check})")?;
         }
         Ok(())
     }
@@ -570,10 +658,11 @@ impl From<Vec<&ColumnDef>> for TupleSchema {
 /// ```
 #[derive(Debug, Clone)]
 pub struct CreateTableStatement {
-    pub table_name: String,
+    pub table_name: NonEmptyString,
     pub if_not_exists: bool,
     pub columns: Vec<ColumnDef>,
-    pub primary_key: Vec<String>,
+    pub primary_key: Vec<NonEmptyString>,
+    pub constraints: Vec<(Option<NonEmptyString>, TableConstraint)>,
 }
 
 /// Pretty-prints the statement as a SQL-like string.
@@ -588,6 +677,20 @@ impl Display for CreateTableStatement {
         write!(f, "{}", cols.join(", "))?;
         if !self.primary_key.is_empty() {
             write!(f, ", PRIMARY KEY ({})", self.primary_key.join(", "))?;
+        }
+        if !self.constraints.is_empty() {
+            let constraints: Vec<String> = self
+                .constraints
+                .iter()
+                .map(|(name, constraint)| {
+                    if let Some(name) = name {
+                        format!("CONSTRAINT {name} {constraint}")
+                    } else {
+                        format!("{constraint}")
+                    }
+                })
+                .collect();
+            write!(f, ", {}", constraints.join(", "))?;
         }
         write!(f, ")")
     }
@@ -618,9 +721,9 @@ impl Display for CreateTableStatement {
 /// ```
 #[derive(Debug, Clone)]
 pub struct CreateIndexStatement {
-    pub index_name: String,
-    pub table_name: String,
-    pub columns: Vec<String>,
+    pub index_name: NonEmptyString,
+    pub table_name: NonEmptyString,
+    pub columns: Vec<NonEmptyString>,
     pub index_type: IndexKind,
     pub if_not_exists: bool,
 }
@@ -646,25 +749,26 @@ impl Display for CreateIndexStatement {
     }
 }
 
-/// Parsed `DROP INDEX [IF EXISTS] <index> ON <table>`.
+/// Parsed `DROP INDEX [IF EXISTS] <index> [ON <table>]`.
 ///
 /// # SQL examples
 ///
 /// ```sql
 /// -- DROP INDEX idx_age ON users;
 /// --   DropIndexStatement {
-/// --       table_name: "users", index_name: "idx_age", if_exists: false,
+/// --       table_name: Some("users"), index_name: "idx_age", if_exists: false,
 /// --   }
 ///
 /// -- DROP INDEX IF EXISTS idx_age ON users;
+/// -- DROP INDEX idx_age;
 /// --   DropIndexStatement {
-/// --       table_name: "users", index_name: "idx_age", if_exists: true,
+/// --       table_name: None, index_name: "idx_age", if_exists: false,
 /// --   }
 /// ```
 #[derive(Debug, Clone)]
 pub struct DropIndexStatement {
-    pub table_name: String,
-    pub index_name: String,
+    pub table_name: Option<NonEmptyString>,
+    pub index_name: NonEmptyString,
     pub if_exists: bool,
 }
 
@@ -674,7 +778,11 @@ impl Display for DropIndexStatement {
         if self.if_exists {
             write!(f, " IF EXISTS")?;
         }
-        write!(f, " {} ON {}", self.index_name, self.table_name)
+        write!(f, " {}", self.index_name)?;
+        if let Some(table_name) = &self.table_name {
+            write!(f, " ON {table_name}")?;
+        }
+        Ok(())
     }
 }
 
@@ -693,7 +801,7 @@ impl Display for DropIndexStatement {
 /// --   ShowIndexesStatement(Some("users"))
 /// ```
 #[derive(Debug, Clone)]
-pub struct ShowIndexesStatement(pub Option<String>);
+pub struct ShowIndexesStatement(pub Option<NonEmptyString>);
 
 impl Display for ShowIndexesStatement {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -744,7 +852,7 @@ impl Display for ShowIndexesStatement {
 /// ```
 #[derive(Debug, Clone)]
 pub struct AlterTableStatement {
-    pub table_name: String,
+    pub table_name: NonEmptyString,
     pub if_exists: bool,
     pub action: AlterAction,
 }
@@ -774,14 +882,39 @@ pub struct AlterTableStatement {
 #[derive(Debug, Clone)]
 pub enum AlterAction {
     AddColumn(ColumnDef),
-    DropColumn { name: String, if_exists: bool },
-    RenameColumn { from: String, to: String },
-    RenameTable { to: String },
-    SetDefault { column: String, value: Value },
-    DropDefault { column: String },
-    DropNotNull { column: String },
-    AddPrimaryKey { columns: Vec<String> },
+    DropColumn {
+        name: NonEmptyString,
+        if_exists: bool,
+    },
+    RenameColumn {
+        from: NonEmptyString,
+        to: NonEmptyString,
+    },
+    RenameTable {
+        to: NonEmptyString,
+    },
+    SetDefault {
+        column: NonEmptyString,
+        value: Value,
+    },
+    DropDefault {
+        column: NonEmptyString,
+    },
+    DropNotNull {
+        column: NonEmptyString,
+    },
+    AddPrimaryKey {
+        columns: Vec<NonEmptyString>,
+    },
     DropPrimaryKey,
+    AddConstraint {
+        name: Option<NonEmptyString>,
+        constraint: TableConstraint,
+    },
+    DropConstraint {
+        name: NonEmptyString,
+        if_exists: bool,
+    },
 }
 
 impl Display for AlterTableStatement {
@@ -791,6 +924,75 @@ impl Display for AlterTableStatement {
             write!(f, " IF EXISTS")?;
         }
         write!(f, " {} {}", self.table_name, self.action)
+    }
+}
+
+/// A table-level constraint declared in `CREATE TABLE` or added via `ALTER TABLE ... ADD`.
+///
+/// These constraints apply to the table as a whole (as opposed to column-level
+/// qualifiers like `NOT NULL` or `DEFAULT`).
+///
+/// Supported SQL shapes:
+///
+/// - `UNIQUE (<col>, ...)`
+/// - `CHECK (<expr>)`
+/// - `FOREIGN KEY (<local_col>, ...) REFERENCES <ref_table> (<ref_col>, ...) [ON DELETE <action>]
+///   [ON UPDATE <action>]`
+///
+/// Note that `CONSTRAINT <name> ...` is handled by the surrounding statement
+/// (`CreateTableStatement` / [`AlterAction::AddConstraint`]) — `TableConstraint`
+/// captures only the constraint *body*.
+#[derive(Debug, Clone)]
+pub enum TableConstraint {
+    Unique {
+        /// The columns that must be unique across all rows.
+        columns: Vec<NonEmptyString>,
+    },
+    Check {
+        /// A boolean expression that must evaluate to true for every row.
+        expr: Expr,
+    },
+    ForeignKey {
+        /// The local columns that participate in the foreign key.
+        local_cols: Vec<NonEmptyString>,
+        /// The referenced table name.
+        ref_table: NonEmptyString,
+        /// The referenced columns in `ref_table` (same length as `local_cols`).
+        ref_cols: Vec<NonEmptyString>,
+        /// Optional referential action for `ON DELETE`.
+        on_delete: Option<ReferentialAction>,
+        /// Optional referential action for `ON UPDATE`.
+        on_update: Option<ReferentialAction>,
+    },
+}
+
+impl Display for TableConstraint {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            TableConstraint::Unique { columns } => write!(f, "UNIQUE ({})", columns.join(", ")),
+            TableConstraint::Check { expr } => write!(f, "CHECK ({expr})"),
+            TableConstraint::ForeignKey {
+                local_cols,
+                ref_table,
+                ref_cols,
+                on_delete,
+                on_update,
+            } => {
+                write!(
+                    f,
+                    "FOREIGN KEY ({}) REFERENCES {ref_table} ({})",
+                    local_cols.join(", "),
+                    ref_cols.join(", ")
+                )?;
+                if let Some(action) = on_delete {
+                    write!(f, " ON DELETE {action}")?;
+                }
+                if let Some(action) = on_update {
+                    write!(f, " ON UPDATE {action}")?;
+                }
+                Ok(())
+            }
+        }
     }
 }
 
@@ -818,6 +1020,20 @@ impl Display for AlterAction {
                 write!(f, "ADD PRIMARY KEY ({})", columns.join(", "))
             }
             AlterAction::DropPrimaryKey => write!(f, "DROP PRIMARY KEY"),
+            AlterAction::AddConstraint { name, constraint } => {
+                write!(f, "ADD")?;
+                if let Some(name) = name {
+                    write!(f, " CONSTRAINT {name}")?;
+                }
+                write!(f, " {constraint}")
+            }
+            AlterAction::DropConstraint { name, if_exists } => {
+                write!(f, "DROP CONSTRAINT")?;
+                if *if_exists {
+                    write!(f, " IF EXISTS")?;
+                }
+                write!(f, " {name}")
+            }
         }
     }
 }
@@ -871,8 +1087,8 @@ pub enum InsertSource {
 
 #[derive(Debug, Clone)]
 pub struct InsertStatement {
-    pub table_name: String,
-    pub columns: Option<Vec<String>>,
+    pub table_name: NonEmptyString,
+    pub columns: Option<Vec<NonEmptyString>>,
     pub source: InsertSource,
 }
 
@@ -916,8 +1132,8 @@ impl Display for InsertStatement {
 /// ```
 #[derive(Debug, Clone)]
 pub struct Assignment {
-    pub column: String,
-    pub value: Value,
+    pub column: NonEmptyString,
+    pub value: Expr,
 }
 
 /// Parsed `UPDATE table [alias] SET col = val, … [WHERE …]`.
@@ -946,10 +1162,10 @@ pub struct Assignment {
 /// ```
 #[derive(Debug, Clone)]
 pub struct UpdateStatement {
-    pub table_name: String,
-    pub alias: Option<String>,
+    pub table_name: NonEmptyString,
+    pub alias: Option<NonEmptyString>,
     pub assignments: Vec<Assignment>,
-    pub where_clause: Option<WhereCondition>,
+    pub where_clause: Option<Expr>,
 }
 
 impl Display for UpdateStatement {
@@ -999,9 +1215,9 @@ impl Display for UpdateStatement {
 /// ```
 #[derive(Debug, Clone)]
 pub struct DeleteStatement {
-    pub table_name: String,
-    pub alias: Option<String>,
-    pub where_clause: Option<WhereCondition>,
+    pub table_name: NonEmptyString,
+    pub alias: Option<NonEmptyString>,
+    pub where_clause: Option<Expr>,
 }
 
 impl Display for DeleteStatement {
@@ -1014,159 +1230,6 @@ impl Display for DeleteStatement {
             write!(f, " WHERE {where_clause}")?;
         }
         Ok(())
-    }
-}
-
-/// A single expression inside a `SELECT` list.
-///
-/// `Column` is a plain projection; `Agg` is `f(col)` for any non-`*` aggregate;
-/// `CountStar` is the special `COUNT(*)` form (which counts rows rather than
-/// non-null values of a specific column).
-///
-/// A scalar expression — anything that, given a row, evaluates to a single
-/// value. `Expr` is the unified shape that every clause that holds an
-/// "expression" eventually wants to use (projections, `WHERE`, `HAVING`,
-/// `ORDER BY`, `GROUP BY`, join conditions). Today only `SelectItem` consumes
-/// it; the other clauses still use their own narrower types and will migrate
-/// later.
-///
-/// The recursive shape is deliberate: a future `Binary { op, left, right }`
-/// variant will let any operand be itself an `Expr` (`age + 1 > 18`,
-/// `UPPER(name) = 'BOB'`, `SUM(a + 1)`), so `Agg`'s argument is already typed
-/// as `Box<Expr>` to avoid a second migration.
-///
-/// # SQL examples
-///
-/// ```sql
-/// -- SELECT name        -->  Expr::Column(ColumnRef { None, "name" })
-/// -- SELECT u.age       -->  Expr::Column(ColumnRef { Some("u"), "age" })
-/// -- SELECT 1           -->  Expr::Literal(Value::Int64(1))
-/// -- SELECT 'hello'     -->  Expr::Literal(Value::String("hello"))
-/// -- SELECT NULL        -->  Expr::Literal(Value::Null)
-/// -- SELECT COUNT(*)    -->  Expr::CountStar
-/// -- SELECT COUNT(name) -->  Expr::Agg(AggFunc::Count, Box::new(Expr::Column("name".into())))
-/// -- SELECT AVG(age)    -->  Expr::Agg(AggFunc::Avg,   Box::new(Expr::Column("age".into())))
-/// ```
-#[derive(Debug, Clone, PartialEq)]
-pub enum Expr {
-    /// A column reference, possibly qualified (`t.c`).
-    Column(ColumnRef),
-    /// A constant value: number, string, boolean, or `NULL`.
-    Literal(Value),
-    /// An aggregate call, e.g. `SUM(amount)`. The argument is recursively an
-    /// `Expr` so that future syntax like `SUM(a + 1)` requires no AST change.
-    Agg(AggFunc, Box<Expr>),
-    /// The special `COUNT(*)` form that counts all rows.
-    CountStar,
-    /// A binary operator applied to two sub-expressions, e.g. `age > 25`,
-    /// `a AND b`, `x = y`. Boolean connectives (`AND`, `OR`) and comparisons
-    /// share this shape — they differ only by the [`BinOp`] tag and the
-    /// types the binder will require of their operands.
-    BinaryOp {
-        lhs: Box<Expr>,
-        op: BinOp,
-        rhs: Box<Expr>,
-    },
-    /// A unary operator applied to a sub-expression, e.g. `NOT (age > 25)`.
-    /// The binder enforces the operand's type (e.g. `NOT` requires boolean).
-    UnaryOp { op: UnOp, operand: Box<Expr> },
-}
-
-impl Expr {
-    /// Convenience constructor for `Expr::Agg(func, Box::new(arg))`.
-    pub fn agg(func: AggFunc, arg: Expr) -> Self {
-        Expr::Agg(func, Box::new(arg))
-    }
-
-    /// Convenience constructor for `Expr::BinaryOp { lhs, op, rhs }` that
-    /// hides the `Box::new` boilerplate.
-    pub fn binary(lhs: Expr, op: BinOp, rhs: Expr) -> Self {
-        Expr::BinaryOp {
-            lhs: Box::new(lhs),
-            op,
-            rhs: Box::new(rhs),
-        }
-    }
-
-    /// Convenience constructor for `Expr::UnaryOp { op, operand }` that hides
-    /// the `Box::new` boilerplate.
-    pub fn unary(op: UnOp, operand: Expr) -> Self {
-        Expr::UnaryOp {
-            op,
-            operand: Box::new(operand),
-        }
-    }
-}
-
-impl Display for Expr {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Expr::Column(col) => write!(f, "{col}"),
-            Expr::Literal(v) => write!(f, "{v}"),
-            Expr::Agg(func, arg) => write!(f, "{func}({arg})"),
-            Expr::CountStar => write!(f, "COUNT(*)"),
-            Expr::BinaryOp { lhs, op, rhs } => write!(f, "({lhs} {op} {rhs})"),
-            Expr::UnaryOp { op, operand } => write!(f, "({op} {operand})"),
-        }
-    }
-}
-
-/// A binary operator usable inside an [`Expr::BinaryOp`].
-///
-/// Grouped roughly by the type the binder will require of the operands and
-/// produce as a result:
-///
-/// - **Logical**: `And`, `Or` — both operands and the result are boolean.
-/// - **Comparison**: `Eq`, `NotEq`, `Lt`, `LtEq`, `Gt`, `GtEq` — operands of compatible scalar
-///   types, result is boolean.
-///
-/// The parser produces these from the SQL surface tokens (`AND`, `OR`, `=`,
-/// `!=`/`<>`, `<`, `<=`, `>`, `>=`). Arithmetic operators (`+`, `-`, `*`, `/`,
-/// `%`) will land here when expression-level arithmetic is wired through the
-/// parser and the runtime evaluator.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum BinOp {
-    And,
-    Or,
-    Eq,
-    NotEq,
-    Lt,
-    LtEq,
-    Gt,
-    GtEq,
-}
-
-impl Display for BinOp {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let s = match self {
-            BinOp::And => "AND",
-            BinOp::Or => "OR",
-            BinOp::Eq => "=",
-            BinOp::NotEq => "<>",
-            BinOp::Lt => "<",
-            BinOp::LtEq => "<=",
-            BinOp::Gt => ">",
-            BinOp::GtEq => ">=",
-        };
-        f.write_str(s)
-    }
-}
-
-/// A unary operator usable inside an [`Expr::UnaryOp`].
-///
-/// Currently only `NOT` (logical negation, boolean → boolean). Unary minus
-/// for arithmetic will join this enum when arithmetic lands.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum UnOp {
-    Not,
-}
-
-impl Display for UnOp {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let s = match self {
-            UnOp::Not => "NOT",
-        };
-        f.write_str(s)
     }
 }
 
@@ -1348,8 +1411,8 @@ impl Display for JoinKind {
 /// ```
 #[derive(Debug, Clone)]
 pub struct TableRef {
-    pub name: String,
-    pub alias: Option<String>,
+    pub name: NonEmptyString,
+    pub alias: Option<NonEmptyString>,
 }
 
 impl Display for TableRef {
@@ -1434,7 +1497,7 @@ impl Display for TableWithJoins {
 pub struct Join {
     pub kind: JoinKind,
     pub table: TableRef,
-    pub on: WhereCondition,
+    pub on: Expr,
 }
 
 impl Display for Join {
@@ -1577,9 +1640,9 @@ pub struct SelectStatement {
     pub distinct: bool,
     pub columns: SelectColumns,
     pub from: Vec<TableWithJoins>,
-    pub where_clause: Option<WhereCondition>,
+    pub where_clause: Option<Expr>,
     pub group_by: Vec<ColumnRef>,
-    pub having: Option<WhereCondition>,
+    pub having: Option<Expr>,
     pub order_by: Vec<OrderBy>,
     pub limit: Option<LimitClause>,
 }

@@ -21,54 +21,16 @@ use crate::{
     FileId, PAGE_SIZE, TransactionId,
     buffer_pool::page_store::PageStore,
     catalog::{
-        CatalogError,
+        CatalogError, TableInfo,
         index::LiveIndex,
         systable::{CatalogRow, SystemTable},
     },
     heap::file::HeapFile,
-    primitives::{ColumnId, IndexId},
+    primitives::{IndexId, NonEmptyString},
     transaction::Transaction,
     tuple::{Tuple, TupleSchema},
     wal::writer::Wal,
 };
-
-/// Metadata for a single user table held in the catalog's in-memory cache.
-#[derive(Clone, Debug)]
-pub struct TableInfo {
-    /// Logical name of the table (matches the key in the `tables` map).
-    pub name: String,
-    /// Column layout used to encode and decode tuples in this table's heap.
-    pub schema: TupleSchema,
-    /// Stable numeric identifier for the backing heap file.
-    pub file_id: FileId,
-    /// Absolute path to the `.dat` file on disk.
-    pub file_path: PathBuf,
-    /// Zero-based column identifiers of the primary key, in declaration
-    /// order, if one was declared.
-    ///
-    /// `None` means no primary key. The `Vec` holds one entry per PK column,
-    /// so composite keys appear as `Some(vec![…, …])`.
-    pub primary_key: Option<Vec<ColumnId>>,
-}
-
-impl TableInfo {
-    /// Constructs a [`TableInfo`] from its component parts.
-    pub(super) fn new(
-        name: impl Into<String>,
-        schema: TupleSchema,
-        file_id: FileId,
-        file_path: PathBuf,
-        primary_key: Option<Vec<ColumnId>>,
-    ) -> Self {
-        Self {
-            name: name.into(),
-            schema,
-            file_id,
-            file_path,
-            primary_key,
-        }
-    }
-}
 
 /// Holds the three open system-table heap files used by the catalog.
 ///
@@ -80,6 +42,9 @@ pub(super) struct SystemHeaps {
     columns: Option<HeapFile>,
     indexes: Option<HeapFile>,
     primary_key_columns: Option<HeapFile>,
+    constraints: Option<HeapFile>,
+    constraint_columns: Option<HeapFile>,
+    fk_constraints: Option<HeapFile>,
 }
 
 impl SystemHeaps {
@@ -90,6 +55,9 @@ impl SystemHeaps {
             SystemTable::Columns => self.columns = Some(file),
             SystemTable::Indexes => self.indexes = Some(file),
             SystemTable::PrimaryKeyColumns => self.primary_key_columns = Some(file),
+            SystemTable::Constraints => self.constraints = Some(file),
+            SystemTable::ConstraintColumns => self.constraint_columns = Some(file),
+            SystemTable::FkConstraints => self.fk_constraints = Some(file),
         }
     }
 
@@ -100,6 +68,9 @@ impl SystemHeaps {
             SystemTable::Columns => self.columns.as_ref(),
             SystemTable::Indexes => self.indexes.as_ref(),
             SystemTable::PrimaryKeyColumns => self.primary_key_columns.as_ref(),
+            SystemTable::Constraints => self.constraints.as_ref(),
+            SystemTable::ConstraintColumns => self.constraint_columns.as_ref(),
+            SystemTable::FkConstraints => self.fk_constraints.as_ref(),
         }
     }
 }
@@ -117,7 +88,7 @@ pub struct Catalog {
     next_file_id: AtomicU64,
     next_index_id: AtomicI64,
     /// Cache of user-table metadata, keyed by table name.
-    pub(super) user_tables: RwLock<HashMap<String, TableInfo>>,
+    pub(super) user_tables: RwLock<HashMap<NonEmptyString, TableInfo>>,
     pub(super) open_heaps: RwLock<HashMap<FileId, Arc<HeapFile>>>,
     /// Live secondary indexes registered against each table, keyed by the
     /// table's heap [`FileId`]. Mirrors the role of [`open_heaps`] — pure
@@ -130,7 +101,7 @@ pub struct Catalog {
     /// Index name → live instance. Used by DDL (`DROP INDEX`) and by the
     /// planner when resolving a referenced index name. Stays in sync with
     /// `open_indexes` because `register_index` writes both atomically.
-    pub(super) indexes_by_name: RwLock<HashMap<String, Arc<LiveIndex>>>,
+    pub(super) indexes_by_name: RwLock<HashMap<NonEmptyString, Arc<LiveIndex>>>,
     pub(super) system: SystemHeaps,
 }
 
@@ -170,7 +141,7 @@ impl Catalog {
             Self::verify_system_heap(*table, &file)?;
 
             let table_info = TableInfo::new(
-                table.table_name().to_string(),
+                table.table_name().try_into()?,
                 schema,
                 file_id,
                 file_path.clone(),

@@ -10,9 +10,12 @@ use std::{collections::HashMap, sync::Arc};
 use crate::{
     FileId,
     catalog::{
-        CatalogError,
-        manager::{Catalog, TableInfo},
-        systable::{ColumnRow, IndexRow, PrimaryKeyColumnRow, TableRow},
+        CatalogError, TableInfo,
+        manager::Catalog,
+        systable::{
+            ColumnRow, ConstraintColumnRow, ConstraintRow, FkConstraintRow, IndexRow,
+            PrimaryKeyColumnRow, TableRow,
+        },
     },
     heap::file::HeapFile,
     primitives::ColumnId,
@@ -42,7 +45,7 @@ impl Catalog {
         let info = self.load_table_from_disk(txn, name)?;
         self.user_tables
             .write()
-            .insert(name.to_string(), info.clone());
+            .insert(name.try_into()?, info.clone());
         Ok(info)
     }
 
@@ -78,12 +81,25 @@ impl Catalog {
             .pop()
             .ok_or_else(|| CatalogError::table_not_found(file_id.to_string()))?;
 
-        let cols = self.scan_system_table_where::<ColumnRow, _>(txn, |c| c.table_id == file_id)?;
+        let cols = self.scan_system_table_where::<ColumnRow, _>(txn, |r| r.table_id == file_id)?;
 
         let pk_rows =
             self.scan_system_table_where::<PrimaryKeyColumnRow, _>(txn, |r| r.table_id == file_id)?;
+        let constraint_rows =
+            self.scan_system_table_where::<ConstraintRow, _>(txn, |r| r.table_id == file_id)?;
+        let constraint_col_rows =
+            self.scan_system_table_where::<ConstraintColumnRow, _>(txn, |r| r.table_id == file_id)?;
+        let fk_rows =
+            self.scan_system_table_where::<FkConstraintRow, _>(txn, |r| r.table_id == file_id)?;
 
-        let info = self.install_table(table, cols, pk_rows)?;
+        let info = self.install_table(
+            table,
+            cols,
+            pk_rows,
+            constraint_rows,
+            constraint_col_rows,
+            fk_rows,
+        )?;
         self.user_tables
             .write()
             .insert(info.name.clone(), info.clone());
@@ -189,7 +205,7 @@ impl Catalog {
             self.insert_primary_key_columns(txn, file_id, &schema, pk_cols)?;
         }
 
-        let table_info = TableInfo::new(name, schema, file_id, file_path, primary_key);
+        let table_info = TableInfo::new(name.try_into()?, schema, file_id, file_path, primary_key);
         self.user_tables
             .write()
             .insert(table_info.name.clone(), table_info);
@@ -309,13 +325,28 @@ impl Catalog {
             .ok_or_else(|| CatalogError::table_not_found(name))?;
 
         let cols =
-            self.scan_system_table_where::<ColumnRow, _>(txn, |c| c.table_id == table.table_id)?;
+            self.scan_system_table_where::<ColumnRow, _>(txn, |r| r.table_id == table.table_id)?;
 
         let pk_rows = self.scan_system_table_where::<PrimaryKeyColumnRow, _>(txn, |r| {
             r.table_id == table.table_id
         })?;
+        let constraint_rows = self
+            .scan_system_table_where::<ConstraintRow, _>(txn, |r| r.table_id == table.table_id)?;
+        let constraint_col_rows = self
+            .scan_system_table_where::<ConstraintColumnRow, _>(txn, |r| {
+                r.table_id == table.table_id
+            })?;
+        let fk_rows = self
+            .scan_system_table_where::<FkConstraintRow, _>(txn, |r| r.table_id == table.table_id)?;
 
-        self.install_table(table, cols, pk_rows)
+        self.install_table(
+            table,
+            cols,
+            pk_rows,
+            constraint_rows,
+            constraint_col_rows,
+            fk_rows,
+        )
     }
 
     /// Materializes a [`TableInfo`] from already-fetched system-table rows
@@ -324,12 +355,16 @@ impl Catalog {
     /// Shared by [`Self::load_table_from_disk`] (lazy, single-table) and
     /// [`Self::replay_tables`] (eager, all-tables-at-startup). Pulling the
     /// shared work out keeps both paths in sync — schema folding, primary-key
-    /// reconstruction, and heap registration always happen the same way.
+    /// and table-constraint reconstruction, and heap registration always happen
+    /// the same way.
     fn install_table(
         &self,
         table: TableRow,
         columns: Vec<ColumnRow>,
         pk_rows: Vec<PrimaryKeyColumnRow>,
+        constraint_rows: Vec<ConstraintRow>,
+        constraint_col_rows: Vec<ConstraintColumnRow>,
+        fk_rows: Vec<FkConstraintRow>,
     ) -> Result<TableInfo, CatalogError> {
         let schema = TupleSchema::from(columns);
 
@@ -349,13 +384,20 @@ impl Catalog {
         )?;
         self.register_heap(table.table_id, heap);
 
-        Ok(TableInfo::new(
+        let mut info = TableInfo::new(
             table.table_name,
             schema,
             table.table_id,
             table.file_path,
             pk,
-        ))
+        );
+        Catalog::build_constraints_for_table(
+            &mut info,
+            constraint_rows,
+            constraint_col_rows,
+            fk_rows,
+        )?;
+        Ok(info)
     }
 
     /// Eagerly populates `user_tables` from already-scanned system rows.
@@ -368,14 +410,17 @@ impl Catalog {
     /// fresh `FileId` and write a duplicate row to `Tables`, corrupting the
     /// catalog.
     ///
-    /// Groups `columns` and `pk_columns` by `table_id` once up front so each
-    /// table reconstruction is O(arity) rather than scanning the full
-    /// row list per table.
+    /// Groups metadata rows by `table_id` once up front so each table
+    /// reconstruction is O(arity) rather than scanning the full row list per
+    /// table.
     pub(super) fn replay_tables(
         &self,
         tables: Vec<TableRow>,
         columns: Vec<ColumnRow>,
         pk_columns: Vec<PrimaryKeyColumnRow>,
+        constraints: Vec<ConstraintRow>,
+        constraint_columns: Vec<ConstraintColumnRow>,
+        fk_constraints: Vec<FkConstraintRow>,
     ) -> Result<(), CatalogError> {
         let mut cols_by_table: HashMap<FileId, Vec<ColumnRow>> = HashMap::new();
         for c in columns {
@@ -387,11 +432,35 @@ impl Catalog {
             pks_by_table.entry(r.table_id).or_default().push(r);
         }
 
+        let mut constraints_by_table: HashMap<FileId, Vec<ConstraintRow>> = HashMap::new();
+        for r in constraints {
+            constraints_by_table.entry(r.table_id).or_default().push(r);
+        }
+
+        let mut constraint_cols_by_table: HashMap<FileId, Vec<ConstraintColumnRow>> =
+            HashMap::new();
+        for r in constraint_columns {
+            constraint_cols_by_table
+                .entry(r.table_id)
+                .or_default()
+                .push(r);
+        }
+
+        let mut fks_by_table: HashMap<FileId, Vec<FkConstraintRow>> = HashMap::new();
+        for r in fk_constraints {
+            fks_by_table.entry(r.table_id).or_default().push(r);
+        }
+
         for table in tables {
             let table_id = table.table_id;
             let cols = cols_by_table.remove(&table_id).unwrap_or_default();
             let pks = pks_by_table.remove(&table_id).unwrap_or_default();
-            let info = self.install_table(table, cols, pks)?;
+            let constraints = constraints_by_table.remove(&table_id).unwrap_or_default();
+            let constraint_cols = constraint_cols_by_table
+                .remove(&table_id)
+                .unwrap_or_default();
+            let fks = fks_by_table.remove(&table_id).unwrap_or_default();
+            let info = self.install_table(table, cols, pks, constraints, constraint_cols, fks)?;
             self.user_tables.write().insert(info.name.clone(), info);
         }
 
@@ -419,13 +488,27 @@ impl Catalog {
             .into_iter()
             .map(|r| r.index_name)
             .collect::<std::collections::HashSet<_>>();
+
         for idx_name in dependent_indexes {
             self.drop_index(txn, &idx_name)?;
+        }
+
+        let inbound_fks =
+            self.scan_system_table_where::<FkConstraintRow, _>(txn, |r| r.ref_table_id == file_id)?;
+        if let Some(fk) = inbound_fks.first() {
+            return Err(CatalogError::invalid_catalog_row(format!(
+                "cannot drop table {name}: foreign key {} from table {} references it",
+                fk.constraint_name.as_str(),
+                fk.table_id
+            )));
         }
 
         self.delete_systable_rows::<TableRow, _>(txn, |r| r.table_id == file_id)?;
         self.delete_systable_rows::<ColumnRow, _>(txn, |r| r.table_id == file_id)?;
         self.delete_systable_rows::<PrimaryKeyColumnRow, _>(txn, |r| r.table_id == file_id)?;
+        self.delete_systable_rows::<ConstraintRow, _>(txn, |r| r.table_id == file_id)?;
+        self.delete_systable_rows::<ConstraintColumnRow, _>(txn, |r| r.table_id == file_id)?;
+        self.delete_systable_rows::<FkConstraintRow, _>(txn, |r| r.table_id == file_id)?;
 
         std::fs::remove_file(file_path)?;
         self.open_heaps.write().remove(&file_id);
@@ -465,10 +548,10 @@ impl Catalog {
             &TableRow::new(table.file_id, new_name.to_string(), table.file_path.clone())?,
         )?;
 
-        table.name = new_name.to_string();
+        table.name = new_name.try_into()?;
         let mut cache = self.user_tables.write();
         cache.remove(old_name);
-        cache.insert(new_name.to_string(), table);
+        cache.insert(new_name.try_into()?, table);
         Ok(())
     }
 }

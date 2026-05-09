@@ -9,11 +9,18 @@
 //!
 //! # Usage pattern
 //!
+//! Prefer the [`CatalogTupleRead::read_field`] extension on [`Tuple`] so call
+//! sites stay tuple-centric:
+//!
 //! ```ignore
-//! // Read field 0 as a String and field 1 as a u32:
-//! let name  = TupleReader::read::<String>(&tuple, 0)?;
-//! let arity = TupleReader::read::<u32>(&tuple, 1)?;
+//! use crate::catalog::tuple::CatalogTupleRead;
+//!
+//! let name  = tuple.read_field::<String>(0)?;
+//! let arity = tuple.read_field::<u32>(1)?;
 //! ```
+//!
+//! The underlying helper is still [`TupleReader::read`] if you need it
+//! without bringing the trait into scope.
 //!
 //! All conversions fail with [`CatalogError`] when the index is out of bounds
 //! or the stored [`Value`] variant does not match the requested type.
@@ -79,6 +86,23 @@ impl<'a> TupleReader<'a> {
         T: TryFrom<TupleReader<'a>, Error = CatalogError>,
     {
         T::try_from(TupleReader::new(tuple, i))
+    }
+}
+
+/// Extension methods for typed reads from catalog [`Tuple`] rows.
+pub(super) trait CatalogTupleRead {
+    /// Reads field `index` as `T`, using the same rules as [`TupleReader::read`].
+    fn read_field<T>(&self, index: usize) -> Result<T, CatalogError>
+    where
+        T: for<'a> TryFrom<TupleReader<'a>, Error = CatalogError>;
+}
+
+impl CatalogTupleRead for Tuple {
+    fn read_field<T>(&self, index: usize) -> Result<T, CatalogError>
+    where
+        T: for<'a> TryFrom<TupleReader<'a>, Error = CatalogError>,
+    {
+        TupleReader::read(self, index)
     }
 }
 
@@ -166,11 +190,18 @@ mod tests {
     use super::*;
     use crate::{tuple::Tuple, types::Value};
 
+    #[test]
+    fn read_field_matches_tuple_reader_read() {
+        let t = tuple(vec![Value::Int32(42)]);
+        assert_eq!(
+            t.read_field::<i32>(0).unwrap(),
+            TupleReader::read::<i32>(&t, 0).unwrap()
+        );
+    }
+
     fn tuple(values: Vec<Value>) -> Tuple {
         Tuple::new(values)
     }
-
-    // --- extract: index out of bounds ---
 
     #[test]
     fn test_extract_index_oob_empty_tuple() {

@@ -27,8 +27,12 @@ mod tests {
     //! per statement type — the submodule tests (`ddl`, `dml`, `query`,
     //! `lexer`, `token`) cover clause-level variations in depth.
     use super::*;
-    use crate::parser::statements::{
-        AggFunc, Expr, JoinKind, OrderDirection, SelectColumns, Statement,
+    use crate::{
+        parser::statements::{
+            AggFunc, BinOp, Expr, JoinKind, OrderDirection, ReferentialAction, SelectColumns,
+            Statement, TableConstraint, Uniqueness,
+        },
+        primitives::NonEmptyString,
     };
 
     fn parse(sql: &str) -> Statement {
@@ -53,6 +57,75 @@ mod tests {
     }
 
     #[test]
+    fn parse_dispatches_create_table_if_not_exists() {
+        let stmt = parse("CREATE TABLE IF NOT EXISTS t (id INT)");
+        let Statement::CreateTable(ct) = stmt else {
+            panic!("expected CreateTable, got {stmt}");
+        };
+        assert_eq!(ct.table_name, "t");
+        assert!(ct.if_not_exists);
+    }
+
+    #[test]
+    fn parse_dispatches_create_table_column_unique_and_references() {
+        let stmt = parse(concat!(
+            "CREATE TABLE p (",
+            "id INT, ",
+            "user_id INT UNIQUE REFERENCES users(id) ON DELETE CASCADE",
+            ")",
+        ));
+        let Statement::CreateTable(ct) = stmt else {
+            panic!("expected CreateTable, got {stmt}");
+        };
+
+        assert_eq!(ct.table_name, "p");
+        assert_eq!(ct.columns.len(), 2);
+
+        let col = &ct.columns[1];
+        assert_eq!(col.name, "user_id");
+        assert_eq!(col.unique, Uniqueness::Unique);
+
+        let r = col.references.as_ref().expect("references");
+        assert_eq!(r.table, "users");
+        assert_eq!(r.column, "id");
+        assert!(matches!(r.on_delete, Some(ReferentialAction::Cascade)));
+    }
+
+    #[test]
+    fn parse_dispatches_create_table_table_level_unique_and_foreign_key() {
+        let stmt = parse(concat!(
+            "CREATE TABLE t (",
+            "id INT, ",
+            "x INT, ",
+            "UNIQUE (x), ",
+            "FOREIGN KEY (x) REFERENCES parent(id)",
+            ")",
+        ));
+        let Statement::CreateTable(ct) = stmt else {
+            panic!("expected CreateTable, got {stmt}");
+        };
+
+        assert_eq!(ct.table_name, "t");
+        assert!(ct
+            .constraints
+            .iter()
+            .any(|(_, c)| matches!(c, TableConstraint::Unique { columns } if columns.as_slice() == [NonEmptyString::new("x").unwrap()].as_slice())));
+
+        assert!(ct.constraints.iter().any(|(_, c)| matches!(
+            c,
+            TableConstraint::ForeignKey {
+                local_cols,
+                ref_table,
+                ref_cols,
+                on_delete: _,
+                on_update: _,
+            } if local_cols.as_slice() == [NonEmptyString::new("x").unwrap()].as_slice()
+                && ref_table.as_str() == "parent"
+                && ref_cols.as_slice() == [NonEmptyString::new("id").unwrap()].as_slice()
+        )));
+    }
+
+    #[test]
     fn parse_dispatches_drop_table() {
         let stmt = parse("DROP TABLE IF EXISTS users");
         let Statement::Drop(d) = stmt else {
@@ -66,6 +139,15 @@ mod tests {
     fn parse_dispatches_create_index() {
         let stmt = parse("CREATE INDEX idx_name ON users (name) USING HASH");
         assert!(matches!(stmt, Statement::CreateIndex(_)));
+    }
+
+    #[test]
+    fn parse_dispatches_create_index_if_not_exists() {
+        let stmt = parse("CREATE INDEX IF NOT EXISTS idx ON t (c) USING BTREE");
+        let Statement::CreateIndex(c) = stmt else {
+            panic!("expected CreateIndex");
+        };
+        assert!(c.if_not_exists);
     }
 
     #[test]
@@ -92,7 +174,12 @@ mod tests {
         assert_eq!(ins.table_name, "users");
         assert_eq!(
             ins.columns.as_deref(),
-            Some(&["id".to_string(), "name".to_string()][..])
+            Some(
+                &[
+                    NonEmptyString::new("id").unwrap(),
+                    NonEmptyString::new("name").unwrap()
+                ][..]
+            )
         );
         let crate::parser::statements::InsertSource::Values(rows) = &ins.source else {
             panic!("expected Values source, got {:?}", ins.source);
@@ -110,7 +197,10 @@ mod tests {
         assert_eq!(u.table_name, "users");
         assert_eq!(u.assignments.len(), 1);
         assert_eq!(u.assignments[0].column, "name");
-        assert!(u.where_clause.is_some());
+        assert!(matches!(
+            u.where_clause,
+            Some(crate::parser::statements::Expr::BinaryOp { op: BinOp::Eq, .. })
+        ));
     }
 
     #[test]
@@ -120,7 +210,10 @@ mod tests {
             panic!("expected Delete, got {stmt}");
         };
         assert_eq!(d.table_name, "users");
-        assert!(d.where_clause.is_some());
+        assert!(matches!(
+            d.where_clause,
+            Some(crate::parser::statements::Expr::BinaryOp { op: BinOp::Eq, .. })
+        ));
     }
 
     #[test]
@@ -167,6 +260,19 @@ mod tests {
         let limit = s.limit.expect("limit set");
         assert_eq!(limit.limit, Some(10));
         assert_eq!(limit.offset, 5);
+    }
+
+    #[test]
+    fn parse_dispatches_select_with_having() {
+        let stmt = parse("SELECT a FROM t GROUP BY a HAVING a = 1");
+        let Statement::Select(s) = stmt else {
+            panic!("expected Select");
+        };
+        let having = s.having.expect("having");
+        assert!(matches!(
+            having,
+            crate::parser::statements::Expr::BinaryOp { op: BinOp::Eq, .. }
+        ));
     }
 
     #[test]

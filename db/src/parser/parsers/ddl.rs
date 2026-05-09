@@ -1,4 +1,4 @@
-use tracing::{debug, instrument, trace, warn};
+use tracing::{debug, instrument, warn};
 
 use super::ParserError;
 use crate::{
@@ -8,10 +8,10 @@ use crate::{
         Parser,
         statements::{
             AlterAction, AlterTableStatement, ColumnDef, CreateIndexStatement,
-            CreateTableStatement, DropIndexStatement, DropStatement, ShowIndexesStatement,
-            Statement,
+            CreateTableStatement, DropIndexStatement, DropStatement, Reference, ReferentialAction,
+            ShowIndexesStatement, Statement, TableConstraint, Uniqueness,
         },
-        token::TokenType,
+        token::{Token, TokenType},
     },
     primitives::NonEmptyString,
 };
@@ -67,22 +67,10 @@ impl Parser {
 
         let table_name = self.expect_ident()?;
         let action = self.parse_alter_action()?;
-
-        let action_kind = match &action {
-            AlterAction::AddColumn(_) => "add_column",
-            AlterAction::DropColumn { .. } => "drop_column",
-            AlterAction::RenameColumn { .. } => "rename_column",
-            AlterAction::RenameTable { .. } => "rename_table",
-            AlterAction::SetDefault { .. } => "set_default",
-            AlterAction::DropDefault { .. } => "drop_default",
-            AlterAction::DropNotNull { .. } => "drop_not_null",
-            AlterAction::AddPrimaryKey { .. } => "add_primary_key",
-            AlterAction::DropPrimaryKey => "drop_primary_key",
-        };
         debug!(
             table = %table_name,
             if_exists,
-            action = action_kind,
+            action = %action,
             "parsed ALTER TABLE statement"
         );
         Ok(AlterTableStatement {
@@ -104,6 +92,8 @@ impl Parser {
     /// - `ALTER COLUMN <name> SET DEFAULT <val>` — set a column default.
     /// - `ALTER COLUMN <name> DROP DEFAULT` — remove a column default.
     /// - `ALTER COLUMN <name> DROP NOT NULL` — relax a NOT NULL constraint.
+    /// - `ADD CONSTRAINT <name> <constraint>` — add a table constraint.
+    /// - `DROP CONSTRAINT [IF EXISTS] <name>` — remove a table constraint.
     ///
     /// # Errors
     ///
@@ -114,24 +104,38 @@ impl Parser {
         fields(component = "parser", clause = "alter_action"),
         err(Debug)
     )]
+    #[allow(clippy::too_many_lines)]
     fn parse_alter_action(&mut self) -> Result<AlterAction, ParserError> {
         let action_token = self.bump()?;
-        match action_token.kind {
+        let action = match action_token.kind {
             // ADD COLUMN <col_def>  |  ADD PRIMARY KEY (<cols>)
             TokenType::Add => {
                 if self.if_peek_then_consume(TokenType::Column)? {
                     let name = self.expect_ident()?;
-                    Ok(AlterAction::AddColumn(self.parse_column_definition(name)?))
+                    AlterAction::AddColumn(self.parse_column_definition(name)?)
                 } else if self.if_peek_then_consume(TokenType::Primary)? {
                     self.expect(TokenType::Key)?;
-                    Ok(AlterAction::AddPrimaryKey {
-                        columns: self.paren_list(Parser::expect_ident)?,
-                    })
+                    let columns = self.paren_list(Parser::expect_ident)?;
+                    AlterAction::AddPrimaryKey { columns }
+                } else if self.if_peek_then_consume(TokenType::Constraint)? {
+                    let name = self.expect_ident()?;
+                    let current_tok = self.bump()?;
+                    let constraint = self.parse_table_contraint(&current_tok)?;
+                    AlterAction::AddConstraint {
+                        name: Some(name),
+                        constraint,
+                    }
                 } else {
-                    // Neither COLUMN nor PRIMARY — emit UnexpectedToken so the
-                    // error message says what was actually wanted.
-                    self.expect(TokenType::Column)?;
-                    unreachable!()
+                    let current_tok = self.bump()?;
+                    match current_tok.kind {
+                        TokenType::Unique | TokenType::Check | TokenType::Foreign => {}
+                        other => return Err(ParserError::unexpected(TokenType::Column, other)),
+                    }
+                    let tc = self.parse_table_contraint(&current_tok)?;
+                    AlterAction::AddConstraint {
+                        name: None,
+                        constraint: tc,
+                    }
                 }
             }
 
@@ -140,10 +144,14 @@ impl Parser {
                 if self.if_peek_then_consume(TokenType::Column)? {
                     let if_exists = self.parse_if_exists(false)?;
                     let name = self.expect_ident()?;
-                    Ok(AlterAction::DropColumn { name, if_exists })
+                    AlterAction::DropColumn { name, if_exists }
                 } else if self.if_peek_then_consume(TokenType::Primary)? {
                     self.expect(TokenType::Key)?;
-                    Ok(AlterAction::DropPrimaryKey)
+                    AlterAction::DropPrimaryKey
+                } else if self.if_peek_then_consume(TokenType::Constraint)? {
+                    let if_exists = self.parse_if_exists(false)?;
+                    let name = self.expect_ident()?;
+                    AlterAction::DropConstraint { name, if_exists }
                 } else {
                     self.expect(TokenType::Column)?;
                     unreachable!()
@@ -156,11 +164,11 @@ impl Parser {
                     let from = self.expect_ident()?;
                     self.expect(TokenType::To)?;
                     let to = self.expect_ident()?;
-                    Ok(AlterAction::RenameColumn { from, to })
+                    AlterAction::RenameColumn { from, to }
                 } else {
                     self.expect(TokenType::To)?;
                     let to = self.expect_ident()?;
-                    Ok(AlterAction::RenameTable { to })
+                    AlterAction::RenameTable { to }
                 }
             }
 
@@ -179,14 +187,14 @@ impl Parser {
                             warn!(column = %column, reason = %msg, "invalid SET DEFAULT literal");
                             ParserError::ParsingError(msg)
                         })?;
-                        Ok(AlterAction::SetDefault { column, value })
+                        AlterAction::SetDefault { column, value }
                     }
                     TokenType::Drop => {
                         if self.if_peek_then_consume(TokenType::Default)? {
-                            Ok(AlterAction::DropDefault { column })
+                            AlterAction::DropDefault { column }
                         } else {
                             self.expect_seq(&[TokenType::Not, TokenType::Null])?;
-                            Ok(AlterAction::DropNotNull { column })
+                            AlterAction::DropNotNull { column }
                         }
                     }
                     _ => {
@@ -196,10 +204,10 @@ impl Parser {
                             column = %column,
                             "invalid ALTER COLUMN sub-action"
                         );
-                        Err(ParserError::ParsingError(format!(
+                        return Err(ParserError::ParsingError(format!(
                             "expected SET DEFAULT, DROP DEFAULT, or DROP NOT NULL after column name, got {}",
                             sub.value
-                        )))
+                        )));
                     }
                 }
             }
@@ -210,12 +218,13 @@ impl Parser {
                     value = %action_token.value,
                     "invalid ALTER TABLE action"
                 );
-                Err(ParserError::ParsingError(format!(
+                return Err(ParserError::ParsingError(format!(
                     "expected ADD, DROP, RENAME, or ALTER COLUMN, got {}",
                     action_token.value
-                )))
+                )));
             }
-        }
+        };
+        Ok(action)
     }
 
     /// Parses `CREATE TABLE [IF NOT EXISTS] <name> (<columns>)`.
@@ -241,6 +250,7 @@ impl Parser {
 
         let mut columns = Vec::new();
         let mut primary_key = Vec::new();
+        let mut constraints = Vec::new();
 
         loop {
             let curr_tok = self.bump()?;
@@ -250,7 +260,16 @@ impl Parser {
                     primary_key.extend(self.paren_list(Parser::expect_ident)?);
                 }
                 TokenType::Identifier => {
-                    columns.push(self.parse_column_definition(curr_tok.value)?);
+                    let name = NonEmptyString::try_from(curr_tok.value)?;
+                    columns.push(self.parse_column_definition(name)?);
+                }
+                TokenType::Constraint => {
+                    let name = self.expect_ident()?;
+                    let current_tok = self.bump()?;
+                    constraints.push((Some(name), self.parse_table_contraint(&current_tok)?));
+                }
+                TokenType::Unique | TokenType::Foreign | TokenType::Check => {
+                    constraints.push((None, self.parse_table_contraint(&curr_tok)?));
                 }
                 _ => {
                     warn!(
@@ -288,7 +307,59 @@ impl Parser {
             if_not_exists,
             columns,
             primary_key,
+            constraints,
         })
+    }
+
+    fn parse_table_contraint(
+        &mut self,
+        current_tok: &Token,
+    ) -> Result<TableConstraint, ParserError> {
+        match current_tok.kind {
+            TokenType::Unique => {
+                let columns = self.paren_list(Parser::expect_ident)?;
+                return Ok(TableConstraint::Unique { columns });
+            }
+
+            TokenType::Check => {
+                let expr = self.parens(Parser::parse_expression)?;
+                return Ok(TableConstraint::Check { expr });
+            }
+
+            TokenType::Foreign => {
+                self.expect(TokenType::Key)?;
+                let local_cols = self.paren_list(Parser::expect_ident)?;
+                self.expect(TokenType::References)?;
+
+                let ref_table = self.expect_ident()?;
+                let ref_cols = self.paren_list(Parser::expect_ident)?;
+
+                if ref_cols.len() != local_cols.len() {
+                    return Err(ParserError::ParsingError(format!(
+                        "number of referenced columns ({}) does not match number of local columns ({})",
+                        ref_cols.len(),
+                        local_cols.len()
+                    )));
+                }
+
+                let (on_delete, on_update) = self.parse_on_delete_and_update()?;
+
+                return Ok(TableConstraint::ForeignKey {
+                    local_cols,
+                    ref_table,
+                    ref_cols,
+                    on_delete,
+                    on_update,
+                });
+            }
+
+            _ => {}
+        }
+
+        Err(ParserError::ParsingError(format!(
+            "unexpected table constraint token: {:?}",
+            current_tok.kind
+        )))
     }
 
     /// Parses the tail of a `CREATE TABLE` column: a [`Type`] token followed by
@@ -312,17 +383,17 @@ impl Parser {
         fields(component = "parser", clause = "column_definition"),
         err(Debug)
     )]
-    fn parse_column_definition(&mut self, col_name: String) -> Result<ColumnDef, ParserError> {
+    fn parse_column_definition(
+        &mut self,
+        col_name: NonEmptyString,
+    ) -> Result<ColumnDef, ParserError> {
         let type_tok = self.bump()?;
         let col_type = Type::try_from(type_tok).map_err(|msg| {
             warn!(column = %col_name, reason = %msg, "invalid column type");
             ParserError::ParsingError(msg)
         })?;
 
-        let mut nullable = true;
-        let mut is_primary_key = false;
-        let mut auto_increment = false;
-        let mut default: Option<Value> = None;
+        let mut column = ColumnDef::with_type(NonEmptyString::new(col_name)?, col_type);
 
         loop {
             let next_kind = match self.lexer.next() {
@@ -338,25 +409,28 @@ impl Parser {
             match next_kind {
                 TokenType::Not => {
                     self.expect_seq(&[TokenType::Not, TokenType::Null])?;
-                    nullable = false;
+                    column.nullable = false;
                 }
                 TokenType::Primary => {
                     self.expect_seq(&[TokenType::Primary, TokenType::Key])?;
-                    is_primary_key = true;
+                    column.primary_key = true;
+                }
+                TokenType::Unique => {
+                    self.expect(TokenType::Unique)?;
+                    column.unique = Uniqueness::Unique;
                 }
                 TokenType::AutoIncrement => {
-                    self.bump()?;
-                    auto_increment = true;
-                    trace!(column = %col_name, "saw AUTO_INCREMENT");
+                    self.expect(TokenType::AutoIncrement)?;
+                    column.auto_increment = true;
                 }
                 TokenType::Default => {
-                    self.bump()?;
+                    self.expect(TokenType::Default)?;
                     let val_tok = self.bump()?;
                     let value_kind = val_tok.kind;
                     let value_position = val_tok.span.start;
-                    default = Some(Value::try_from(val_tok).map_err(|msg| {
+                    column.default = Some(Value::try_from(val_tok).map_err(|msg| {
                         warn!(
-                            column = %col_name,
+                            column = %column.name,
                             value_token_kind = ?value_kind,
                             value_position,
                             reason = %msg,
@@ -365,27 +439,110 @@ impl Parser {
                         ParserError::ParsingError(msg)
                     })?);
                 }
+                TokenType::References => {
+                    self.expect(TokenType::References)?;
+                    let table = self.expect_ident()?;
+                    let foreign_column = self.parens(Parser::expect_ident)?;
+                    let (on_delete, on_update) = self.parse_on_delete_and_update()?;
+                    column.references = Some(Reference {
+                        table,
+                        column: foreign_column,
+                        on_delete,
+                        on_update,
+                    });
+                }
                 _ => break,
             }
         }
 
         debug!(
-            column = %col_name,
-            nullable,
-            primary_key = is_primary_key,
-            auto_increment,
-            has_default = default.is_some(),
+            column = %column,
             "parsed column definition"
         );
-        Ok(ColumnDef {
-            name: NonEmptyString::new(col_name)
-                .map_err(|e| ParserError::ParsingError(e.to_string()))?,
-            col_type,
-            nullable,
-            primary_key: is_primary_key,
-            auto_increment,
-            default,
-        })
+        Ok(column)
+    }
+
+    /// Parses optional `ON DELETE ...` and `ON UPDATE ...` referential actions.
+    ///
+    /// This is used immediately after a `REFERENCES <table>(<column>)` clause.
+    ///
+    /// ## Accepted syntax
+    ///
+    /// This helper recognizes a single `ON` followed by an optional `DELETE` action and an
+    /// optional `UPDATE` action, in that order:
+    ///
+    /// - `ON DELETE <action> [UPDATE <action>]`
+    /// - `ON UPDATE <action>` (no delete action)
+    ///
+    /// where `<action>` is parsed by [`Self::parse_referential_action`].
+    ///
+    /// If the next token is not `ON`, this method consumes nothing and returns `(None, None)`.
+    ///
+    /// ## Returns
+    ///
+    /// A pair `(on_delete, on_update)`.
+    ///
+    /// ## Errors
+    ///
+    /// Returns [`ParserError`] if an `ON DELETE` / `ON UPDATE` clause is present but does not
+    /// contain a valid referential action.
+    fn parse_on_delete_and_update(
+        &mut self,
+    ) -> Result<(Option<ReferentialAction>, Option<ReferentialAction>), ParserError> {
+        let mut on_delete = None;
+        let mut on_update = None;
+
+        if self.if_peek_then_consume(TokenType::On)? {
+            if self.if_peek_then_consume(TokenType::Delete)? {
+                on_delete = Some(self.parse_referential_action()?);
+            }
+            if self.if_peek_then_consume(TokenType::Update)? {
+                on_update = Some(self.parse_referential_action()?);
+            }
+        }
+
+        Ok((on_delete, on_update))
+    }
+
+    /// Parses one referential action for `ON DELETE` or `ON UPDATE`.
+    ///
+    /// Recognized actions:
+    /// - `CASCADE`
+    /// - `RESTRICT`
+    /// - `SET NULL`
+    /// - `SET DEFAULT`
+    ///
+    /// The `ON DELETE` / `ON UPDATE` keywords must already have been consumed by the caller
+    /// (see [`Self::parse_foreign_key`]).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ParserError`] if the next token does not start a valid action.
+    fn parse_referential_action(&mut self) -> Result<ReferentialAction, ParserError> {
+        let action_tok = self.bump()?;
+        match action_tok.kind {
+            TokenType::Cascade => Ok(ReferentialAction::Cascade),
+            TokenType::Restrict => Ok(ReferentialAction::Restrict),
+            TokenType::Set => {
+                if self.if_peek_then_consume(TokenType::Null)? {
+                    Ok(ReferentialAction::SetNull)
+                } else {
+                    self.expect_seq(&[TokenType::Default])?;
+                    Ok(ReferentialAction::SetDefault)
+                }
+            }
+            _ => {
+                warn!(
+                    found = ?action_tok.kind,
+                    value = %action_tok.value,
+                    "invalid REFERENTIAL ACTION"
+                );
+                Err(ParserError::ParsingError(format!(
+                    "expected CASCADE, RESTRICT, SET NULL, or SET DEFAULT after REFERENCES, got {}",
+                    action_tok.value
+                )))
+            }
+        }
     }
 
     /// Tries to consume an optional `IF [NOT] EXISTS` clause.
@@ -476,8 +633,7 @@ impl Parser {
 
     /// Parses `DROP INDEX [IF EXISTS] <name> [ON <table>]`.
     ///
-    /// The `ON <table>` clause is optional; an empty string is stored when it
-    /// is absent.
+    /// The `ON <table>` clause is optional and is stored as [`None`] when absent.
     ///
     /// # Errors
     ///
@@ -494,15 +650,15 @@ impl Parser {
         let index_name = self.expect_ident()?;
         let table_name = if self.peek_is(TokenType::On)? {
             self.bump()?;
-            self.expect_ident()?
+            Some(self.expect_ident()?)
         } else {
-            String::new()
+            None
         };
 
         debug!(
             index = %index_name,
             if_exists,
-            has_table = !table_name.is_empty(),
+            has_table = table_name.is_some(),
             "parsed DROP INDEX statement"
         );
         Ok(DropIndexStatement {
@@ -548,7 +704,12 @@ impl Parser {
 #[cfg(test)]
 mod tests {
     use crate::{
-        parser::{Parser, parsers::ParserError, statements::Statement, token::TokenType},
+        parser::{
+            Parser,
+            parsers::ParserError,
+            statements::{ReferentialAction, Statement, TableConstraint, Uniqueness},
+            token::TokenType,
+        },
         types::{Type, Value},
     };
 
@@ -696,6 +857,189 @@ mod tests {
         };
         assert_eq!(t.columns[0].col_type, Type::Int64);
         assert_eq!(t.columns[1].col_type, Type::String);
+    }
+
+    #[test]
+    fn test_parse_create_unique_clause() {
+        let stmt = parse("CREATE TABLE users (id INT, email STRING, UNIQUE (email))").unwrap();
+        let Statement::CreateTable(t) = stmt else {
+            panic!("expected CreateTable");
+        };
+        assert_eq!(t.table_name, "users");
+        assert_eq!(t.columns.len(), 2);
+        assert_eq!(t.constraints.len(), 1);
+        assert!(
+            matches!(
+                &t.constraints[0],
+                (None, TableConstraint::Unique { columns })
+                    if columns.as_slice()
+                        == [crate::primitives::NonEmptyString::new("email").unwrap()].as_slice()
+            ),
+            "expected single table constraint: UNIQUE(email); got: {:?}",
+            t.constraints
+        );
+    }
+
+    #[test]
+    fn test_parse_create_named_unique_clause() {
+        let stmt = parse(concat!(
+            "CREATE TABLE users (",
+            "id INT, ",
+            "email STRING, ",
+            "CONSTRAINT uq_email UNIQUE (email)",
+            ")",
+        ))
+        .unwrap();
+        let Statement::CreateTable(t) = stmt else {
+            panic!("expected CreateTable");
+        };
+        assert_eq!(t.table_name, "users");
+        assert_eq!(t.columns.len(), 2);
+        assert_eq!(t.constraints.len(), 1);
+        assert!(
+            matches!(
+                &t.constraints[0],
+                (Some(name), TableConstraint::Unique { columns })
+                    if name.as_str() == "uq_email"
+                        && columns.as_slice()
+                            == [crate::primitives::NonEmptyString::new("email").unwrap()].as_slice()
+            ),
+            "expected named table constraint: CONSTRAINT uq_email UNIQUE(email); got: {:?}",
+            t.constraints
+        );
+    }
+
+    #[test]
+    fn test_parse_create_foreign_key_clause_with_actions() {
+        let stmt = parse(concat!(
+            "CREATE TABLE child (",
+            "id INT, ",
+            "parent_id INT, ",
+            "FOREIGN KEY (parent_id) REFERENCES parent (id) ",
+            "ON DELETE CASCADE UPDATE SET NULL",
+            ")",
+        ))
+        .unwrap();
+        let Statement::CreateTable(t) = stmt else {
+            panic!("expected CreateTable");
+        };
+        assert_eq!(t.constraints.len(), 1);
+        let (_, c) = &t.constraints[0];
+        let TableConstraint::ForeignKey {
+            local_cols,
+            ref_table,
+            ref_cols,
+            on_delete,
+            on_update,
+        } = c
+        else {
+            panic!("expected FOREIGN KEY constraint, got: {c:?}");
+        };
+
+        assert_eq!(
+            local_cols.as_slice(),
+            [crate::primitives::NonEmptyString::new("parent_id").unwrap()].as_slice()
+        );
+        assert_eq!(ref_table, "parent");
+        assert_eq!(
+            ref_cols.as_slice(),
+            [crate::primitives::NonEmptyString::new("id").unwrap()].as_slice()
+        );
+        assert!(matches!(on_delete, Some(ReferentialAction::Cascade)));
+        assert!(matches!(on_update, Some(ReferentialAction::SetNull)));
+    }
+
+    #[test]
+    fn test_parse_create_named_foreign_key_clause_with_actions() {
+        let stmt = parse(concat!(
+            "CREATE TABLE child (",
+            "id INT, ",
+            "parent_id INT, ",
+            "CONSTRAINT fk_parent FOREIGN KEY (parent_id) REFERENCES parent (id) ",
+            "ON DELETE CASCADE UPDATE SET NULL",
+            ")",
+        ))
+        .unwrap();
+        let Statement::CreateTable(t) = stmt else {
+            panic!("expected CreateTable");
+        };
+        assert_eq!(t.constraints.len(), 1);
+        let (name, c) = &t.constraints[0];
+        assert_eq!(name.as_deref(), Some("fk_parent"));
+
+        let TableConstraint::ForeignKey {
+            local_cols,
+            ref_table,
+            ref_cols,
+            on_delete,
+            on_update,
+        } = c
+        else {
+            panic!("expected FOREIGN KEY constraint, got: {c:?}");
+        };
+
+        assert_eq!(
+            local_cols.as_slice(),
+            [crate::primitives::NonEmptyString::new("parent_id").unwrap()].as_slice()
+        );
+        assert_eq!(ref_table, "parent");
+        assert_eq!(
+            ref_cols.as_slice(),
+            [crate::primitives::NonEmptyString::new("id").unwrap()].as_slice()
+        );
+        assert!(matches!(on_delete, Some(ReferentialAction::Cascade)));
+        assert!(matches!(on_update, Some(ReferentialAction::SetNull)));
+    }
+
+    #[test]
+    fn test_parse_create_named_check_clause() {
+        let stmt = parse("CREATE TABLE t (x INT, CONSTRAINT ck_x CHECK (x > 0))").unwrap();
+        let Statement::CreateTable(t) = stmt else {
+            panic!("expected CreateTable");
+        };
+        assert_eq!(t.constraints.len(), 1);
+        let (name, c) = &t.constraints[0];
+        assert_eq!(name.as_deref(), Some("ck_x"));
+        assert!(
+            matches!(c, TableConstraint::Check { .. }),
+            "expected CHECK constraint, got: {c:?}"
+        );
+    }
+
+    #[test]
+    fn test_parse_create_check_clause() {
+        let stmt = parse("CREATE TABLE t (x INT, CHECK (x > 0))").unwrap();
+        let Statement::CreateTable(t) = stmt else {
+            panic!("expected CreateTable");
+        };
+        assert_eq!(t.constraints.len(), 1);
+        assert!(
+            matches!(&t.constraints[0], (None, TableConstraint::Check { .. })),
+            "expected unnamed CHECK constraint, got: {:?}",
+            t.constraints
+        );
+    }
+
+    #[test]
+    fn test_parse_create_column_unique_and_references() {
+        let stmt = parse(concat!(
+            "CREATE TABLE posts (",
+            "user_id INT UNIQUE REFERENCES users (id) ON DELETE RESTRICT",
+            ")",
+        ))
+        .unwrap();
+        let Statement::CreateTable(t) = stmt else {
+            panic!("expected CreateTable");
+        };
+        assert_eq!(t.columns.len(), 1);
+        let c = &t.columns[0];
+        assert_eq!(c.name, "user_id");
+        assert_eq!(c.unique, Uniqueness::Unique);
+        let r = c.references.as_ref().expect("expected REFERENCES");
+        assert_eq!(r.table, "users");
+        assert_eq!(r.column, "id");
+        assert!(matches!(r.on_delete, Some(ReferentialAction::Restrict)));
+        assert!(r.on_update.is_none());
     }
 
     // --- edge cases: parse_create ---
@@ -861,7 +1205,6 @@ mod tests {
 
     #[test]
     fn test_parse_create_index_missing_on() {
-        // Without ON, parser should fail looking for `ON` after the index name.
         let Err(err) = parse("CREATE INDEX ix (c)") else {
             panic!("expected error");
         };
@@ -885,13 +1228,9 @@ mod tests {
         let Statement::DropIndex(d) = stmt else {
             panic!("expected DropIndex");
         };
-        let dbg = format!("{d:?}");
-        assert!(dbg.contains(r#""idx1""#), "index name: {dbg}");
-        assert!(
-            dbg.contains(r#"table_name: """#) || dbg.contains("table_name: \"\""),
-            "{dbg}"
-        );
-        assert!(!dbg.contains("if_exists: true"));
+        assert_eq!(d.index_name, "idx1");
+        assert!(d.table_name.is_none());
+        assert!(!d.if_exists);
     }
 
     #[test]
@@ -900,10 +1239,9 @@ mod tests {
         let Statement::DropIndex(d) = stmt else {
             panic!("expected DropIndex");
         };
-        let dbg = format!("{d:?}");
-        assert!(dbg.contains("if_exists: true"), "{dbg}");
-        assert!(dbg.contains(r#""ix""#), "{dbg}");
-        assert!(dbg.contains(r#""tbl""#), "{dbg}");
+        assert!(d.if_exists);
+        assert_eq!(d.index_name, "ix");
+        assert_eq!(d.table_name.as_deref(), Some("tbl"));
     }
 
     // --- error paths: parse_drop_index ---
@@ -1240,6 +1578,157 @@ mod tests {
             panic!("expected DropNotNull");
         };
         assert_eq!(column, "email");
+    }
+
+    #[test]
+    fn test_parse_alter_add_constraint_named_unique() {
+        let stmt = parse("ALTER TABLE t ADD CONSTRAINT uq_email UNIQUE (email)").unwrap();
+        let Statement::AlterTable(a) = stmt else {
+            panic!("expected AlterTable");
+        };
+        let AlterAction::AddConstraint { name, constraint } = a.action else {
+            panic!("expected AddConstraint");
+        };
+        assert_eq!(name.as_deref(), Some("uq_email"));
+        let TableConstraint::Unique { columns } = constraint else {
+            panic!("expected UNIQUE constraint, got: {constraint:?}");
+        };
+        assert_eq!(
+            columns.as_slice(),
+            [crate::primitives::NonEmptyString::new("email").unwrap()].as_slice()
+        );
+    }
+
+    #[test]
+    fn test_parse_alter_add_constraint_named_foreign_key_with_action() {
+        let stmt = parse(concat!(
+            "ALTER TABLE t ADD CONSTRAINT fk_parent ",
+            "FOREIGN KEY (parent_id) REFERENCES parent (id) ON DELETE RESTRICT",
+        ))
+        .unwrap();
+        let Statement::AlterTable(a) = stmt else {
+            panic!("expected AlterTable");
+        };
+        let AlterAction::AddConstraint { name, constraint } = a.action else {
+            panic!("expected AddConstraint");
+        };
+        assert_eq!(name.as_deref(), Some("fk_parent"));
+
+        let TableConstraint::ForeignKey {
+            local_cols,
+            ref_table,
+            ref_cols,
+            on_delete,
+            on_update,
+        } = constraint
+        else {
+            panic!("expected FOREIGN KEY constraint, got: {constraint:?}");
+        };
+
+        assert_eq!(
+            local_cols.as_slice(),
+            [crate::primitives::NonEmptyString::new("parent_id").unwrap()].as_slice()
+        );
+        assert_eq!(ref_table, "parent");
+        assert_eq!(
+            ref_cols.as_slice(),
+            [crate::primitives::NonEmptyString::new("id").unwrap()].as_slice()
+        );
+        assert!(matches!(on_delete, Some(ReferentialAction::Restrict)));
+        assert!(on_update.is_none());
+    }
+
+    #[test]
+    fn test_parse_alter_add_constraint_unnamed_unique() {
+        let stmt = parse("ALTER TABLE t ADD UNIQUE (email)").unwrap();
+        let Statement::AlterTable(a) = stmt else {
+            panic!("expected AlterTable");
+        };
+        let AlterAction::AddConstraint { name, constraint } = a.action else {
+            panic!("expected AddConstraint");
+        };
+        assert!(name.is_none());
+        assert!(
+            matches!(constraint, TableConstraint::Unique { .. }),
+            "expected UNIQUE constraint, got: {constraint:?}"
+        );
+    }
+
+    #[test]
+    fn test_parse_alter_add_constraint_unnamed_check() {
+        let stmt = parse("ALTER TABLE t ADD CHECK (x > 0)").unwrap();
+        let Statement::AlterTable(a) = stmt else {
+            panic!("expected AlterTable");
+        };
+        let AlterAction::AddConstraint { name, constraint } = a.action else {
+            panic!("expected AddConstraint");
+        };
+        assert!(name.is_none());
+        assert!(
+            matches!(constraint, TableConstraint::Check { .. }),
+            "expected CHECK constraint, got: {constraint:?}"
+        );
+    }
+
+    #[test]
+    fn test_parse_alter_add_constraint_unnamed_foreign_key() {
+        let stmt = parse("ALTER TABLE t ADD FOREIGN KEY (x) REFERENCES parent (id)").unwrap();
+        let Statement::AlterTable(a) = stmt else {
+            panic!("expected AlterTable");
+        };
+        let AlterAction::AddConstraint { name, constraint } = a.action else {
+            panic!("expected AddConstraint");
+        };
+        assert!(name.is_none());
+        assert!(
+            matches!(constraint, TableConstraint::ForeignKey { .. }),
+            "expected FOREIGN KEY constraint, got: {constraint:?}"
+        );
+    }
+
+    #[test]
+    fn test_parse_alter_drop_constraint() {
+        let stmt = parse("ALTER TABLE t DROP CONSTRAINT uq_email").unwrap();
+        let Statement::AlterTable(a) = stmt else {
+            panic!("expected AlterTable");
+        };
+        let AlterAction::DropConstraint { name, if_exists } = a.action else {
+            panic!("expected DropConstraint");
+        };
+        assert_eq!(name, "uq_email");
+        assert!(!if_exists);
+    }
+
+    #[test]
+    fn test_parse_alter_drop_constraint_if_exists() {
+        let stmt = parse("ALTER TABLE t DROP CONSTRAINT IF EXISTS uq_email").unwrap();
+        let Statement::AlterTable(a) = stmt else {
+            panic!("expected AlterTable");
+        };
+        let AlterAction::DropConstraint { name, if_exists } = a.action else {
+            panic!("expected DropConstraint");
+        };
+        assert_eq!(name, "uq_email");
+        assert!(if_exists);
+    }
+
+    #[test]
+    fn test_parse_alter_drop_constraint_missing_name_errors() {
+        assert!(matches!(
+            parse("ALTER TABLE t DROP CONSTRAINT"),
+            Err(ParserError::WantedToken)
+        ));
+    }
+
+    #[test]
+    fn test_parse_alter_add_constraint_named_missing_name_errors() {
+        let Err(err) = parse("ALTER TABLE t ADD CONSTRAINT UNIQUE (email)") else {
+            panic!("expected error");
+        };
+        assert!(matches!(err, ParserError::UnexpectedToken {
+            expected: TokenType::Identifier,
+            ..
+        }));
     }
 
     // Display round-trips: what Display renders must parse back identically.

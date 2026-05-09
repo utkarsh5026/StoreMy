@@ -4,8 +4,9 @@ use super::ParserError;
 use crate::{
     parser::{
         Parser,
+        parsers::expr::Expr,
         statements::{
-            AggFunc, ColumnRef, Expr, Join, JoinKind, LimitClause, OrderBy, OrderDirection,
+            AggFunc, ColumnRef, Join, JoinKind, LimitClause, OrderBy, OrderDirection,
             SelectColumns, SelectItem, SelectStatement, TableRef, TableWithJoins,
         },
         token::TokenType,
@@ -210,15 +211,17 @@ impl Parser {
                 Expr::Column(ColumnRef::from(col_tok.value.as_str())),
             ))
         } else {
+            // Identifiers in ColumnRef are stored as NonEmptyString.
+            let first = NonEmptyString::try_from(name_tok.value)?;
             let cref = if p.if_peek_then_consume(TokenType::Dot)? {
                 ColumnRef {
-                    qualifier: Some(name_tok.value),
-                    name: p.expect(TokenType::Identifier)?.value,
+                    qualifier: Some(first),
+                    name: p.expect_ident()?,
                 }
             } else {
                 ColumnRef {
                     qualifier: None,
-                    name: name_tok.value,
+                    name: first,
                 }
             };
             Ok(Expr::Column(cref))
@@ -416,13 +419,16 @@ mod tests {
     use crate::{
         parser::{
             Parser,
-            parsers::ParserError,
+            parsers::{
+                ParserError,
+                expr::{BinOp, Expr},
+            },
             statements::{
-                AggFunc, ColumnRef, Expr, JoinKind, LimitClause, OrderBy, OrderDirection,
-                SelectColumns, SelectItem, SelectStatement, Statement, WhereCondition,
+                AggFunc, ColumnRef, JoinKind, LimitClause, OrderBy, OrderDirection, SelectColumns,
+                SelectItem, SelectStatement, Statement,
             },
         },
-        primitives::Predicate,
+        primitives::NonEmptyString,
         types::Value,
     };
 
@@ -552,12 +558,12 @@ mod tests {
         assert_eq!(j.kind, JoinKind::Inner);
         assert_eq!(j.table.name, "b");
         assert!(j.table.alias.is_none());
-        let WhereCondition::Predicate { field, op, value } = &j.on else {
-            panic!("expected predicate ON");
+        let Expr::BinaryOp { lhs, op, rhs } = &j.on else {
+            panic!("expected binary ON expression");
         };
-        assert_eq!(field, &ColumnRef::from("id"));
-        assert_eq!(op, &Predicate::Equals);
-        assert_eq!(value, &Value::Int64(1));
+        assert_eq!(**lhs, Expr::Column(ColumnRef::from("id")));
+        assert_eq!(*op, BinOp::Eq);
+        assert_eq!(**rhs, Expr::Literal(Value::Int64(1)));
     }
 
     #[test]
@@ -590,53 +596,57 @@ mod tests {
     fn test_parse_select_where_optional() {
         let s = select("SELECT * FROM t WHERE status = 1").unwrap();
         let wc = s.where_clause.as_ref().unwrap();
-        let WhereCondition::Predicate { field, op, value } = wc else {
-            panic!("expected predicate");
+        let Expr::BinaryOp { lhs, op, rhs } = wc else {
+            panic!("expected binary WHERE expression");
         };
-        assert_eq!(field, &ColumnRef::from("status"));
-        assert_eq!(*op, Predicate::Equals);
-        assert_eq!(*value, Value::Int64(1));
+        assert_eq!(**lhs, Expr::Column(ColumnRef::from("status")));
+        assert_eq!(*op, BinOp::Eq);
+        assert_eq!(**rhs, Expr::Literal(Value::Int64(1)));
     }
 
     #[test]
     fn test_parse_select_where_float_literal() {
         let s = select("SELECT * FROM t WHERE price = 2.5").unwrap();
         let wc = s.where_clause.as_ref().unwrap();
-        let WhereCondition::Predicate { field, value, .. } = wc else {
-            panic!("expected predicate");
+        let Expr::BinaryOp { lhs, op, rhs } = wc else {
+            panic!("expected binary WHERE expression");
         };
-        assert_eq!(field, &ColumnRef::from("price"));
-        assert_eq!(*value, Value::Float64(2.5));
+        assert_eq!(**lhs, Expr::Column(ColumnRef::from("price")));
+        assert_eq!(*op, BinOp::Eq);
+        assert_eq!(**rhs, Expr::Literal(Value::Float64(2.5)));
     }
 
     #[test]
     fn test_parse_select_where_string_literal() {
         let s = select("SELECT * FROM t WHERE name = 'alice'").unwrap();
         let wc = s.where_clause.as_ref().unwrap();
-        let WhereCondition::Predicate { value, .. } = wc else {
-            panic!("expected predicate");
+        let Expr::BinaryOp { op, rhs, .. } = wc else {
+            panic!("expected binary WHERE expression");
         };
-        assert_eq!(*value, Value::String("alice".to_string()));
+        assert_eq!(*op, BinOp::Eq);
+        assert_eq!(**rhs, Expr::Literal(Value::String("alice".to_string())));
     }
 
     #[test]
     fn test_parse_select_where_null_literal() {
         let s = select("SELECT * FROM t WHERE deleted_at = NULL").unwrap();
         let wc = s.where_clause.as_ref().unwrap();
-        let WhereCondition::Predicate { value, .. } = wc else {
-            panic!("expected predicate");
+        let Expr::BinaryOp { op, rhs, .. } = wc else {
+            panic!("expected binary WHERE expression");
         };
-        assert_eq!(*value, Value::Null);
+        assert_eq!(*op, BinOp::Eq);
+        assert_eq!(**rhs, Expr::Literal(Value::Null));
     }
 
     #[test]
     fn test_parse_select_where_bool_literal() {
         let s = select("SELECT * FROM t WHERE active = true").unwrap();
         let wc = s.where_clause.as_ref().unwrap();
-        let WhereCondition::Predicate { value, .. } = wc else {
-            panic!("expected predicate");
+        let Expr::BinaryOp { op, rhs, .. } = wc else {
+            panic!("expected binary WHERE expression");
         };
-        assert_eq!(*value, Value::Bool(true));
+        assert_eq!(*op, BinOp::Eq);
+        assert_eq!(**rhs, Expr::Literal(Value::Bool(true)));
     }
 
     #[test]
@@ -644,13 +654,15 @@ mod tests {
         let s = select("SELECT * FROM t WHERE a = 1 OR b = 2 AND c = 3").unwrap();
         let wc = s.where_clause.as_ref().unwrap();
         // Grammar: AND binds tighter than OR → (a=1) OR ((b=2) AND (c=3))
-        let WhereCondition::Or(l, r) = wc else {
-            panic!("expected Or at top");
+        let Expr::BinaryOp { op, lhs, rhs } = wc else {
+            panic!("expected binary WHERE expression");
         };
-        assert!(matches!(**l, WhereCondition::Predicate { .. }));
-        let WhereCondition::And(..) = **r else {
-            panic!("expected And on rhs");
+        assert_eq!(*op, BinOp::Or);
+        assert!(matches!(**lhs, Expr::BinaryOp { .. }));
+        let Expr::BinaryOp { op: rhs_op, .. } = &**rhs else {
+            panic!("expected AND on rhs");
         };
+        assert_eq!(*rhs_op, BinOp::And);
     }
 
     #[test]
@@ -942,8 +954,8 @@ mod tests {
         assert_eq!(
             v[0].expr,
             Expr::Column(ColumnRef {
-                qualifier: Some("u".into()),
-                name: "name".into()
+                qualifier: Some(NonEmptyString::new("u").unwrap()),
+                name: NonEmptyString::new("name").unwrap()
             })
         );
         assert_eq!(v[0].alias.as_deref(), Some("who"));
@@ -1027,16 +1039,16 @@ mod tests {
     #[test]
     fn test_parse_select_having_simple_predicate() {
         // HAVING with a column predicate. Aggregate predicates like
-        // `HAVING SUM(x) > 10` will land once `WhereCondition::Predicate`
-        // is generalized to `Expr` on both sides.
+        // `HAVING SUM(x) > 10` will land once aggregate calls are accepted in
+        // predicate expressions.
         let s = select("SELECT a FROM t GROUP BY a HAVING a = 1").unwrap();
         let h = s.having.as_ref().expect("expected having");
-        let WhereCondition::Predicate { field, op, value } = h else {
+        let Expr::BinaryOp { lhs, op, rhs } = h else {
             panic!("expected predicate");
         };
-        assert_eq!(field, &ColumnRef::from("a"));
-        assert_eq!(*op, Predicate::Equals);
-        assert_eq!(*value, Value::Int64(1));
+        assert_eq!(lhs.as_ref(), &Expr::Column(ColumnRef::from("a")));
+        assert_eq!(*op, BinOp::Eq);
+        assert_eq!(rhs.as_ref(), &Expr::Literal(Value::Int64(1)));
     }
 
     #[test]
@@ -1044,10 +1056,16 @@ mod tests {
         // AND binds tighter than OR — same as WHERE.
         let s = select("SELECT a FROM t GROUP BY a HAVING a = 1 OR b = 2 AND c = 3").unwrap();
         let h = s.having.as_ref().unwrap();
-        let WhereCondition::Or(_, r) = h else {
+        let Expr::BinaryOp {
+            op: BinOp::Or, rhs, ..
+        } = h
+        else {
             panic!("expected Or at top");
         };
-        assert!(matches!(**r, WhereCondition::And(..)));
+        assert!(matches!(rhs.as_ref(), Expr::BinaryOp {
+            op: BinOp::And,
+            ..
+        }));
     }
 
     #[test]
