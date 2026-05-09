@@ -244,11 +244,10 @@ impl Parser {
                     columns.push(self.parse_column_definition(name)?);
                 }
                 TokenType::Unique => {
-                    self.expect(TokenType::Unique)?;
                     unique.push(self.paren_list(Parser::expect_ident)?);
                 }
                 TokenType::Foreign => {
-                    self.expect_seq(&[TokenType::Foreign, TokenType::Key, TokenType::References])?;
+                    self.expect_seq(&[TokenType::Key, TokenType::References])?;
                     references.push(self.parse_foreign_key()?);
                 }
                 _ => {
@@ -625,7 +624,12 @@ impl Parser {
 #[cfg(test)]
 mod tests {
     use crate::{
-        parser::{Parser, parsers::ParserError, statements::Statement, token::TokenType},
+        parser::{
+            Parser,
+            parsers::ParserError,
+            statements::{ReferentialAction, Statement, Uniqueness},
+            token::TokenType,
+        },
         types::{Type, Value},
     };
 
@@ -773,6 +777,62 @@ mod tests {
         };
         assert_eq!(t.columns[0].col_type, Type::Int64);
         assert_eq!(t.columns[1].col_type, Type::String);
+    }
+
+    #[test]
+    fn test_parse_create_unique_clause() {
+        let stmt = parse("CREATE TABLE users (id INT, email STRING, UNIQUE (email))").unwrap();
+        let Statement::CreateTable(t) = stmt else {
+            panic!("expected CreateTable");
+        };
+        assert_eq!(t.table_name, "users");
+        assert_eq!(t.columns.len(), 2);
+        assert_eq!(t.unique, vec![vec!["email".to_string()]]);
+        assert!(t.references.is_empty());
+    }
+
+    #[test]
+    fn test_parse_create_foreign_key_clause_with_actions() {
+        let stmt = parse(concat!(
+            "CREATE TABLE child (",
+            "id INT, ",
+            "parent_id INT, ",
+            "FOREIGN KEY REFERENCES parent (id) ",
+            "ON DELETE CASCADE UPDATE SET NULL",
+            ")",
+        ))
+        .unwrap();
+        let Statement::CreateTable(t) = stmt else {
+            panic!("expected CreateTable");
+        };
+        assert_eq!(t.references.len(), 1);
+        let r = &t.references[0];
+        assert_eq!(r.table, "parent");
+        assert_eq!(r.column, "id");
+        assert!(matches!(r.on_delete, Some(ReferentialAction::Cascade)));
+        assert!(matches!(r.on_update, Some(ReferentialAction::SetNull)));
+    }
+
+    #[test]
+    fn test_parse_create_column_unique_and_references() {
+        let stmt = parse(concat!(
+            "CREATE TABLE posts (",
+            "user_id INT UNIQUE REFERENCES users (id) ON DELETE RESTRICT",
+            ")",
+        ))
+        .unwrap();
+        let Statement::CreateTable(t) = stmt else {
+            panic!("expected CreateTable");
+        };
+        assert_eq!(t.columns.len(), 1);
+        let c = &t.columns[0];
+        assert_eq!(c.name, "user_id");
+        assert_eq!(c.unique, Uniqueness::Unique);
+        let r = c.references.as_ref().expect("expected REFERENCES");
+        assert_eq!(r.table, "users");
+        assert_eq!(r.column, "id");
+        assert!(matches!(r.on_delete, Some(ReferentialAction::Restrict)));
+        assert!(r.on_update.is_none());
     }
 
     // --- edge cases: parse_create ---
