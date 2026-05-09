@@ -2,10 +2,7 @@ use std::collections::HashSet;
 
 use super::BindError;
 use crate::{
-    catalog::{
-        CatalogError,
-        manager::{Catalog, TableInfo},
-    },
+    catalog::{CatalogError, TableInfo, manager::Catalog},
     primitives::ColumnId,
     transaction::Transaction,
     tuple::{Field, TupleSchema},
@@ -96,4 +93,32 @@ pub(in crate::binder) fn require_column<'s>(
     schema
         .field_by_name(column)
         .ok_or_else(|| BindError::unknown_column(table, column))
+}
+
+/// Resolves a list of column names to their corresponding column IDs in a given table schema.
+///
+/// This function checks that all column names in `columns` are unique, then looks up each column
+/// name in the provided `schema`. If all columns exist and are unique, their `ColumnId`s are
+/// returned in the same order. This is commonly used during query binding and validation to convert
+/// user-supplied column names into internal identifiers.
+///
+/// # Errors
+///
+/// - Returns [`BindError::DuplicateColumn`] if there are any duplicate column names in the input.
+/// - Returns [`BindError::UnknownColumn`] if any column does not exist in the schema.
+pub(in crate::binder) fn resolve_column_ids<'a, I>(
+    schema: &TupleSchema,
+    table_name: &str,
+    columns: I,
+) -> Result<Vec<ColumnId>, BindError>
+where
+    I: IntoIterator<Item = &'a str>,
+{
+    let columns = columns.into_iter().collect::<Vec<_>>();
+    ensure_unique_strs(columns.iter().copied(), BindError::duplicate_column)?;
+
+    columns
+        .into_iter()
+        .map(|c| require_column(schema, table_name, c).map(|(id, _)| id))
+        .collect()
 }

@@ -21,12 +21,12 @@ pub mod query;
 mod scope;
 
 pub use ddl::{
-    BoundAlterTable, BoundCreateIndex, BoundCreateTable, BoundDrop, BoundDropIndex,
-    BoundShowIndexes,
+    BoundAlterAction, BoundAlterTable, BoundConstraintBody, BoundCreateIndex, BoundCreateTable,
+    BoundDrop, BoundDropIndex, BoundShowIndexes, BoundTableConstraint,
 };
 pub use dml::{BoundDelete, BoundInsert, BoundUpdate};
 pub use expr::BoundExpr;
-pub(in crate::binder) use helpers::{check_table, ensure_unique_strs, require_column};
+pub(in crate::binder) use helpers::{check_table, require_column, resolve_column_ids};
 pub use query::BoundSelect;
 
 #[derive(Debug, Error)]
