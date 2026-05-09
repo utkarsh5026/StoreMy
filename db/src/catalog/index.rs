@@ -5,7 +5,10 @@ use crate::{
     catalog::{
         CatalogError, TableInfo,
         manager::Catalog,
-        systable::{ColumnRow, IndexRow, PrimaryKeyColumnRow, SystemTable, TableRow},
+        systable::{
+            ColumnRow, ConstraintColumnRow, ConstraintRow, FkConstraintRow, IndexRow,
+            PrimaryKeyColumnRow, SystemTable, TableRow,
+        },
     },
     index::{AnyIndex, CompositeKey, IndexError, IndexKind},
     primitives::{ColumnId, NonEmptyString, RecordId},
@@ -582,6 +585,9 @@ impl Catalog {
         let tables = self.scan_system_table_with_tid::<TableRow>(tid)?;
         let columns = self.scan_system_table_with_tid::<ColumnRow>(tid)?;
         let pk_columns = self.scan_system_table_with_tid::<PrimaryKeyColumnRow>(tid)?;
+        let constraints = self.scan_system_table_with_tid::<ConstraintRow>(tid)?;
+        let constraint_columns = self.scan_system_table_with_tid::<ConstraintColumnRow>(tid)?;
+        let fk_constraints = self.scan_system_table_with_tid::<FkConstraintRow>(tid)?;
         let index_rows = self.scan_system_table_with_tid::<IndexRow>(tid)?;
 
         let max_file_id: u64 = {
@@ -616,7 +622,14 @@ impl Catalog {
         // Eagerly populate user_tables / open_heaps. Without this,
         // table_exists returns false after restart for committed tables,
         // which lets `CREATE TABLE foo` silently duplicate an existing one.
-        self.replay_tables(tables, columns, pk_columns)?;
+        self.replay_tables(
+            tables,
+            columns,
+            pk_columns,
+            constraints,
+            constraint_columns,
+            fk_constraints,
+        )?;
         if index_rows.is_empty() {
             return Ok(());
         }
@@ -1473,6 +1486,63 @@ mod tests {
         );
         assert_eq!(live.access.kind(), IndexKind::Hash);
         assert_eq!(catalog2.indexes_for(table_file_id).len(), 1);
+    }
+
+    #[test]
+    fn replay_restores_table_constraints_after_reopen() {
+        let dir = tempdir().unwrap();
+
+        {
+            let (catalog, txn_mgr, bp, _) = make_full_infra(dir.path());
+            let parent_schema = TupleSchema::new(vec![
+                field("id", Type::Int64).not_null(),
+                field("email", Type::String).not_null(),
+            ]);
+            let child_schema = TupleSchema::new(vec![
+                field("id", Type::Int64).not_null(),
+                field("parent_id", Type::Int64).not_null(),
+            ]);
+
+            let txn = txn_mgr.begin().unwrap();
+            let parent_id = catalog
+                .create_table(&txn, "parents", parent_schema, Some(vec![col_id(0)]))
+                .unwrap();
+            let child_id = catalog
+                .create_table(&txn, "children", child_schema, None)
+                .unwrap();
+            catalog
+                .add_unique_constraint(&txn, parent_id, "parents_email_key", &[col_id(1)])
+                .unwrap();
+            catalog
+                .add_foreign_key(
+                    &txn,
+                    child_id,
+                    "children_parent_fk",
+                    &[col_id(1)],
+                    parent_id,
+                    &[col_id(0)],
+                    Some(crate::catalog::systable::FkAction::Cascade),
+                    Some(crate::catalog::systable::FkAction::Restrict),
+                )
+                .unwrap();
+            txn.commit().unwrap();
+            bp.flush_all().unwrap();
+        }
+
+        let (catalog2, txn_mgr2, ..) = make_full_infra(dir.path());
+        let txn = txn_mgr2.begin().unwrap();
+        let parent = catalog2.get_table_info(&txn, "parents").unwrap();
+        let child = catalog2.get_table_info(&txn, "children").unwrap();
+        txn.commit().unwrap();
+
+        assert_eq!(parent.unique_constraints.len(), 1);
+        assert_eq!(parent.unique_constraints[0].name, "parents_email_key");
+        assert_eq!(parent.unique_constraints[0].columns, vec![col_id(1)]);
+
+        assert_eq!(child.foreign_keys.len(), 1);
+        assert_eq!(child.foreign_keys[0].name, "children_parent_fk");
+        assert_eq!(child.foreign_keys[0].local_columns, vec![col_id(1)]);
+        assert_eq!(child.foreign_keys[0].ref_columns, vec![col_id(0)]);
     }
 
     // After reopen, next_file_id must resume past every existing FileId

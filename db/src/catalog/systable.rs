@@ -29,6 +29,9 @@ impl SystemTable {
         SystemTable::Columns,
         SystemTable::Indexes,
         SystemTable::PrimaryKeyColumns,
+        SystemTable::Constraints,
+        SystemTable::ConstraintColumns,
+        SystemTable::FkConstraints,
     ];
 
     pub const fn file_id(self) -> FileId {
@@ -1527,14 +1530,17 @@ mod tests {
         assert_eq!(got.on_update, row.on_update);
     }
 
-    // ALL must contain exactly three variants.
+    // ALL must contain exactly seven variants.
     #[test]
-    fn test_system_table_all_has_four_variants() {
-        assert_eq!(SystemTable::ALL.len(), 4);
+    fn test_system_table_all_has_seven_variants() {
+        assert_eq!(SystemTable::ALL.len(), 7);
         assert!(SystemTable::ALL.contains(&SystemTable::Tables));
         assert!(SystemTable::ALL.contains(&SystemTable::Columns));
         assert!(SystemTable::ALL.contains(&SystemTable::Indexes));
         assert!(SystemTable::ALL.contains(&SystemTable::PrimaryKeyColumns));
+        assert!(SystemTable::ALL.contains(&SystemTable::Constraints));
+        assert!(SystemTable::ALL.contains(&SystemTable::ConstraintColumns));
+        assert!(SystemTable::ALL.contains(&SystemTable::FkConstraints));
     }
 
     // file_id values must be unique across all system tables.
