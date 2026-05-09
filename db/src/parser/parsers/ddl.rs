@@ -1,4 +1,4 @@
-use tracing::{debug, instrument, trace, warn};
+use tracing::{debug, instrument, warn};
 
 use super::ParserError;
 use crate::{
@@ -8,8 +8,8 @@ use crate::{
         Parser,
         statements::{
             AlterAction, AlterTableStatement, ColumnDef, CreateIndexStatement,
-            CreateTableStatement, DropIndexStatement, DropStatement, ShowIndexesStatement,
-            Statement,
+            CreateTableStatement, DropIndexStatement, DropStatement, Reference, ReferentialAction,
+            ShowIndexesStatement, Statement, Uniqueness,
         },
         token::TokenType,
     },
@@ -67,22 +67,10 @@ impl Parser {
 
         let table_name = self.expect_ident()?;
         let action = self.parse_alter_action()?;
-
-        let action_kind = match &action {
-            AlterAction::AddColumn(_) => "add_column",
-            AlterAction::DropColumn { .. } => "drop_column",
-            AlterAction::RenameColumn { .. } => "rename_column",
-            AlterAction::RenameTable { .. } => "rename_table",
-            AlterAction::SetDefault { .. } => "set_default",
-            AlterAction::DropDefault { .. } => "drop_default",
-            AlterAction::DropNotNull { .. } => "drop_not_null",
-            AlterAction::AddPrimaryKey { .. } => "add_primary_key",
-            AlterAction::DropPrimaryKey => "drop_primary_key",
-        };
         debug!(
             table = %table_name,
             if_exists,
-            action = action_kind,
+            action = %action,
             "parsed ALTER TABLE statement"
         );
         Ok(AlterTableStatement {
@@ -241,6 +229,8 @@ impl Parser {
 
         let mut columns = Vec::new();
         let mut primary_key = Vec::new();
+        let mut unique = Vec::new();
+        let mut references = Vec::new();
 
         loop {
             let curr_tok = self.bump()?;
@@ -250,7 +240,16 @@ impl Parser {
                     primary_key.extend(self.paren_list(Parser::expect_ident)?);
                 }
                 TokenType::Identifier => {
-                    columns.push(self.parse_column_definition(curr_tok.value)?);
+                    let name = NonEmptyString::try_from(curr_tok.value)?;
+                    columns.push(self.parse_column_definition(name)?);
+                }
+                TokenType::Unique => {
+                    self.expect(TokenType::Unique)?;
+                    unique.push(self.paren_list(Parser::expect_ident)?);
+                }
+                TokenType::Foreign => {
+                    self.expect_seq(&[TokenType::Foreign, TokenType::Key, TokenType::References])?;
+                    references.push(self.parse_foreign_key()?);
                 }
                 _ => {
                     warn!(
@@ -288,6 +287,8 @@ impl Parser {
             if_not_exists,
             columns,
             primary_key,
+            unique,
+            references,
         })
     }
 
@@ -312,17 +313,17 @@ impl Parser {
         fields(component = "parser", clause = "column_definition"),
         err(Debug)
     )]
-    fn parse_column_definition(&mut self, col_name: String) -> Result<ColumnDef, ParserError> {
+    fn parse_column_definition(
+        &mut self,
+        col_name: NonEmptyString,
+    ) -> Result<ColumnDef, ParserError> {
         let type_tok = self.bump()?;
         let col_type = Type::try_from(type_tok).map_err(|msg| {
             warn!(column = %col_name, reason = %msg, "invalid column type");
             ParserError::ParsingError(msg)
         })?;
 
-        let mut nullable = true;
-        let mut is_primary_key = false;
-        let mut auto_increment = false;
-        let mut default: Option<Value> = None;
+        let mut column = ColumnDef::with_type(NonEmptyString::new(col_name)?, col_type);
 
         loop {
             let next_kind = match self.lexer.next() {
@@ -338,25 +339,28 @@ impl Parser {
             match next_kind {
                 TokenType::Not => {
                     self.expect_seq(&[TokenType::Not, TokenType::Null])?;
-                    nullable = false;
+                    column.nullable = false;
                 }
                 TokenType::Primary => {
                     self.expect_seq(&[TokenType::Primary, TokenType::Key])?;
-                    is_primary_key = true;
+                    column.primary_key = true;
+                }
+                TokenType::Unique => {
+                    self.expect(TokenType::Unique)?;
+                    column.unique = Uniqueness::Unique;
                 }
                 TokenType::AutoIncrement => {
-                    self.bump()?;
-                    auto_increment = true;
-                    trace!(column = %col_name, "saw AUTO_INCREMENT");
+                    self.expect(TokenType::AutoIncrement)?;
+                    column.auto_increment = true;
                 }
                 TokenType::Default => {
-                    self.bump()?;
+                    self.expect(TokenType::Default)?;
                     let val_tok = self.bump()?;
                     let value_kind = val_tok.kind;
                     let value_position = val_tok.span.start;
-                    default = Some(Value::try_from(val_tok).map_err(|msg| {
+                    column.default = Some(Value::try_from(val_tok).map_err(|msg| {
                         warn!(
-                            column = %col_name,
+                            column = %column.name,
                             value_token_kind = ?value_kind,
                             value_position,
                             reason = %msg,
@@ -365,27 +369,101 @@ impl Parser {
                         ParserError::ParsingError(msg)
                     })?);
                 }
+                TokenType::References => {
+                    self.expect(TokenType::References)?;
+                    column.references = Some(self.parse_foreign_key()?);
+                }
                 _ => break,
             }
         }
 
         debug!(
-            column = %col_name,
-            nullable,
-            primary_key = is_primary_key,
-            auto_increment,
-            has_default = default.is_some(),
+            column = %column,
             "parsed column definition"
         );
-        Ok(ColumnDef {
-            name: NonEmptyString::new(col_name)
-                .map_err(|e| ParserError::ParsingError(e.to_string()))?,
-            col_type,
-            nullable,
-            primary_key: is_primary_key,
-            auto_increment,
-            default,
+        Ok(column)
+    }
+
+    /// Parses the foreign-key target after a column's `REFERENCES` keyword.
+    ///
+    /// Expects `<referenced_table> ( <referenced_column> )`, optionally followed by
+    /// `ON DELETE <action>` and/or `ON UPDATE <action>`. Each `<action>` is read via
+    /// [`Self::parse_referential_action`].
+    ///
+    /// The caller must have consumed `REFERENCES` already (see the `REFERENCES` arm in
+    /// [`Self::parse_column_definition`]).
+    ///
+    /// # Returns
+    ///
+    /// A [`Reference`] holding the referenced table and column, plus optional `on_delete` and
+    /// `on_update` actions.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ParserError`] if the table identifier, parenthesized column name, or optional
+    /// `ON` clauses are missing or malformed.
+    fn parse_foreign_key(&mut self) -> Result<Reference, ParserError> {
+        let table = self.expect_ident()?;
+        let foreign_column = self.parens(Parser::expect_ident)?;
+        let mut on_delete = None;
+        let mut on_update = None;
+
+        if self.if_peek_then_consume(TokenType::On)? {
+            if self.if_peek_then_consume(TokenType::Delete)? {
+                on_delete = Some(self.parse_referential_action()?);
+            }
+            if self.if_peek_then_consume(TokenType::Update)? {
+                on_update = Some(self.parse_referential_action()?);
+            }
+        }
+
+        Ok(Reference {
+            table,
+            column: foreign_column,
+            on_delete,
+            on_update,
         })
+    }
+
+    /// Parses one referential action for `ON DELETE` or `ON UPDATE`.
+    ///
+    /// Recognized actions:
+    /// - `CASCADE`
+    /// - `RESTRICT`
+    /// - `SET NULL`
+    /// - `SET DEFAULT`
+    ///
+    /// The `ON DELETE` / `ON UPDATE` keywords must already have been consumed by the caller
+    /// (see [`Self::parse_foreign_key`]).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ParserError`] if the next token does not start a valid action.
+    fn parse_referential_action(&mut self) -> Result<ReferentialAction, ParserError> {
+        let action_tok = self.bump()?;
+        match action_tok.kind {
+            TokenType::Cascade => Ok(ReferentialAction::Cascade),
+            TokenType::Restrict => Ok(ReferentialAction::Restrict),
+            TokenType::Set => {
+                if self.if_peek_then_consume(TokenType::Null)? {
+                    Ok(ReferentialAction::SetNull)
+                } else {
+                    self.expect_seq(&[TokenType::Default])?;
+                    Ok(ReferentialAction::SetDefault)
+                }
+            }
+            _ => {
+                warn!(
+                    found = ?action_tok.kind,
+                    value = %action_tok.value,
+                    "invalid REFERENTIAL ACTION"
+                );
+                Err(ParserError::ParsingError(format!(
+                    "expected CASCADE, RESTRICT, SET NULL, or SET DEFAULT after REFERENCES, got {}",
+                    action_tok.value
+                )))
+            }
+        }
     }
 
     /// Tries to consume an optional `IF [NOT] EXISTS` clause.
@@ -476,8 +554,7 @@ impl Parser {
 
     /// Parses `DROP INDEX [IF EXISTS] <name> [ON <table>]`.
     ///
-    /// The `ON <table>` clause is optional; an empty string is stored when it
-    /// is absent.
+    /// The `ON <table>` clause is optional and is stored as [`None`] when absent.
     ///
     /// # Errors
     ///
@@ -494,15 +571,15 @@ impl Parser {
         let index_name = self.expect_ident()?;
         let table_name = if self.peek_is(TokenType::On)? {
             self.bump()?;
-            self.expect_ident()?
+            Some(self.expect_ident()?)
         } else {
-            String::new()
+            None
         };
 
         debug!(
             index = %index_name,
             if_exists,
-            has_table = !table_name.is_empty(),
+            has_table = table_name.is_some(),
             "parsed DROP INDEX statement"
         );
         Ok(DropIndexStatement {
@@ -861,7 +938,6 @@ mod tests {
 
     #[test]
     fn test_parse_create_index_missing_on() {
-        // Without ON, parser should fail looking for `ON` after the index name.
         let Err(err) = parse("CREATE INDEX ix (c)") else {
             panic!("expected error");
         };
@@ -885,13 +961,9 @@ mod tests {
         let Statement::DropIndex(d) = stmt else {
             panic!("expected DropIndex");
         };
-        let dbg = format!("{d:?}");
-        assert!(dbg.contains(r#""idx1""#), "index name: {dbg}");
-        assert!(
-            dbg.contains(r#"table_name: """#) || dbg.contains("table_name: \"\""),
-            "{dbg}"
-        );
-        assert!(!dbg.contains("if_exists: true"));
+        assert_eq!(d.index_name, "idx1");
+        assert!(d.table_name.is_none());
+        assert!(!d.if_exists);
     }
 
     #[test]
@@ -900,10 +972,9 @@ mod tests {
         let Statement::DropIndex(d) = stmt else {
             panic!("expected DropIndex");
         };
-        let dbg = format!("{d:?}");
-        assert!(dbg.contains("if_exists: true"), "{dbg}");
-        assert!(dbg.contains(r#""ix""#), "{dbg}");
-        assert!(dbg.contains(r#""tbl""#), "{dbg}");
+        assert!(d.if_exists);
+        assert_eq!(d.index_name, "ix");
+        assert_eq!(d.table_name.as_deref(), Some("tbl"));
     }
 
     // --- error paths: parse_drop_index ---
