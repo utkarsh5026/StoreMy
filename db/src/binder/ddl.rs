@@ -35,12 +35,13 @@
 
 use crate::{
     FileId, Value,
-    binder::{BindError, check_table, ensure_unique_strs, require_column},
-    catalog::manager::{Catalog, TableInfo},
+    binder::{BindError, check_table, require_column, resolve_column_ids},
+    catalog::{TableInfo, manager::Catalog, systable::FkAction},
     index::IndexKind,
     parser::statements::{
         AlterAction, AlterTableStatement, ColumnDef, CreateIndexStatement, CreateTableStatement,
-        DropIndexStatement, DropStatement, ShowIndexesStatement,
+        DropIndexStatement, DropStatement, ReferentialAction, ShowIndexesStatement,
+        TableConstraint,
     },
     primitives::{ColumnId, NonEmptyString},
     transaction::Transaction,
@@ -132,6 +133,7 @@ pub enum BoundCreateTable {
         name: String,
         schema: TupleSchema,
         primary_key: Option<Vec<ColumnId>>,
+        constraints: Vec<BoundTableConstraint>,
     },
     AlreadyExists {
         name: String,
@@ -169,22 +171,25 @@ impl BoundCreateTable {
             });
         }
 
-        ensure_unique_strs(stmt.columns.iter().map(|c| c.name.as_str()), |c| {
-            BindError::duplicate_column(c)
-        })?;
-
         let schema = TupleSchema::from(stmt.columns.iter().collect::<Vec<&ColumnDef>>());
+        resolve_column_ids(
+            &schema,
+            table_name,
+            stmt.columns.iter().map(|c| c.name.as_str()),
+        )?;
         let primary_key = Self::resolve_primary_key(
             stmt.columns.as_slice(),
             stmt.primary_key.as_slice(),
             &schema,
             table_name,
         )?;
+        let constraints = Self::resolve_constraints(stmt, &schema, catalog, txn)?;
 
         Ok(Self::New {
             name: stmt.table_name.as_str().to_string(),
             schema,
             primary_key,
+            constraints,
         })
     }
 
@@ -228,6 +233,27 @@ impl BoundCreateTable {
         };
 
         Ok(primary_key)
+    }
+
+    fn resolve_constraints(
+        stmt: &CreateTableStatement,
+        schema: &TupleSchema,
+        catalog: &Catalog,
+        txn: &Transaction<'_>,
+    ) -> Result<Vec<BoundTableConstraint>, BindError> {
+        stmt.constraints
+            .iter()
+            .map(|(name, constraint)| {
+                bind_constraint_against_schema(
+                    schema,
+                    stmt.table_name.as_str(),
+                    name.clone(),
+                    constraint,
+                    catalog,
+                    txn,
+                )
+            })
+            .collect()
     }
 }
 
@@ -273,6 +299,40 @@ pub enum BoundCreateIndex {
     },
 }
 
+#[derive(Debug, Clone)]
+pub enum BoundConstraintBody {
+    Unique {
+        columns: Vec<ColumnId>,
+    },
+    Check {
+        expr: crate::parser::statements::Expr,
+    },
+    ForeignKey {
+        local_columns: Vec<ColumnId>,
+        ref_table_id: FileId,
+        ref_columns: Vec<ColumnId>,
+        on_delete: Option<FkAction>,
+        on_update: Option<FkAction>,
+    },
+}
+
+#[derive(Debug, Clone)]
+pub struct BoundTableConstraint {
+    pub name: Option<NonEmptyString>,
+    pub body: BoundConstraintBody,
+}
+
+impl From<ReferentialAction> for FkAction {
+    fn from(action: ReferentialAction) -> Self {
+        match action {
+            ReferentialAction::Cascade => FkAction::Cascade,
+            ReferentialAction::SetNull => FkAction::SetNull,
+            ReferentialAction::SetDefault => FkAction::SetDefault,
+            ReferentialAction::Restrict => FkAction::Restrict,
+        }
+    }
+}
+
 impl BoundCreateIndex {
     /// Binds a parsed [`CreateIndexStatement`].
     ///
@@ -297,38 +357,24 @@ impl BoundCreateIndex {
         if catalog.get_index_by_name(&stmt.index_name).is_some() {
             if stmt.if_not_exists {
                 return Ok(Self::AlreadyExists {
-                    index_name: stmt.index_name.as_str().to_string(),
+                    index_name: stmt.index_name.into_inner(),
                 });
             }
-            return Err(BindError::IndexAlreadyExists(
-                stmt.index_name.as_str().to_string(),
-            ));
+            return Err(BindError::IndexAlreadyExists(stmt.index_name.into_inner()));
         }
 
-        let column_indices =
-            Self::resolve_column_indices(stmt.columns, &table.schema, &table.name)?;
+        let column_indices = resolve_column_ids(
+            &table.schema,
+            table.name.as_str(),
+            stmt.columns.iter().map(NonEmptyString::as_str),
+        )?;
         Ok(Self::New {
-            index_name: stmt.index_name.as_str().to_string(),
-            table_name: table.name.as_str().to_string(),
+            index_name: stmt.index_name.into_inner(),
+            table_name: table.name.into_inner(),
             table_file_id: table.file_id,
             column_indices,
             kind: stmt.index_type,
         })
-    }
-
-    fn resolve_column_indices(
-        columns: Vec<NonEmptyString>,
-        schema: &TupleSchema,
-        table_name: &str,
-    ) -> Result<Vec<ColumnId>, BindError> {
-        ensure_unique_strs(columns.iter().map(NonEmptyString::as_str), |col| {
-            BindError::duplicate_column(col)
-        })?;
-
-        columns
-            .into_iter()
-            .map(|col| require_column(schema, table_name, &col).map(|(id, _)| id))
-            .collect::<Result<Vec<_>, _>>()
     }
 }
 
@@ -514,13 +560,26 @@ impl BoundDropIndex {
 /// ```
 #[derive(Debug)]
 pub enum BoundAlterTable {
+    /// The table named in the statement was not found, but `IF EXISTS` was set,
+    /// so this is a successful no-op rather than an error.
+    NoOp { table_name: String },
+
+    /// A real table mutation. Every executable ALTER action has a resolved table file id.
+    Action {
+        table_name: String,
+        file_id: FileId,
+        action: BoundAlterAction,
+    },
+}
+
+#[derive(Debug)]
+pub enum BoundAlterAction {
     /// `ADD COLUMN <col_def>` — append a new column to the table schema.
     ///
     /// The executor should insert a new row into `CATALOG_COLUMNS` and
     /// invalidate the cached [`TableInfo`] so the rebuilt schema includes the
     /// new field.
     AddColumn {
-        file_id: FileId,
         /// The full column definition from the AST, including type, nullability,
         /// and any default. The executor owns this and writes it to the catalog.
         column: ColumnDef,
@@ -532,7 +591,6 @@ pub enum BoundAlterTable {
     /// executor uses it to delete the matching row from `CATALOG_COLUMNS` and
     /// to rebuild the schema after removal.
     DropColumn {
-        file_id: FileId,
         column_name: String,
         column_id: ColumnId,
     },
@@ -541,7 +599,6 @@ pub enum BoundAlterTable {
     ///
     /// Catalog-metadata change only; the heap file is unaffected.
     RenameColumn {
-        file_id: FileId,
         old_name: String,
         new_name: String,
     },
@@ -552,40 +609,54 @@ pub enum BoundAlterTable {
     RenameTable {
         old_name: String,
         new_name: String,
-        file_id: FileId,
     },
 
     /// `ALTER COLUMN <col> SET DEFAULT <value>` — set a column's default value.
     SetDefault {
-        file_id: FileId,
         column: String,
         value: Value,
     },
 
     /// `ALTER COLUMN <col> DROP DEFAULT` — remove a column's default value.
-    DropDefault { file_id: FileId, column: String },
+    DropDefault {
+        column: String,
+    },
 
     /// `ALTER COLUMN <col> DROP NOT NULL` — relax a NOT NULL constraint to nullable.
-    DropNotNull { file_id: FileId, column: String },
+    DropNotNull {
+        column: String,
+    },
 
     /// `ADD PRIMARY KEY (<cols>)` — set the table's primary key.
     ///
     /// `column_ids` are the resolved zero-based positions in the *current* schema,
     /// in the order the user listed them in the `ADD PRIMARY KEY` clause.
     AddPrimaryKey {
-        file_id: FileId,
         column_ids: Vec<ColumnId>,
     },
 
     /// `DROP PRIMARY KEY` — remove the table's primary key.
-    DropPrimaryKey { file_id: FileId },
+    DropPrimaryKey,
 
-    /// The table named in the statement was not found, but `IF EXISTS` was set,
-    /// so this is a successful no-op rather than an error.
-    NoOp { table_name: String },
+    AddConstraint {
+        constraint: BoundTableConstraint,
+    },
+
+    DropConstraint {
+        name: NonEmptyString,
+        if_exists: bool,
+    },
 }
 
 impl BoundAlterTable {
+    fn action(table_name: &str, file_id: FileId, action: BoundAlterAction) -> Self {
+        Self::Action {
+            table_name: table_name.to_string(),
+            file_id,
+            action,
+        }
+    }
+
     /// Binds a parsed [`AlterTableStatement`] against the catalog.
     ///
     /// # Errors
@@ -607,127 +678,192 @@ impl BoundAlterTable {
             return Ok(Self::NoOp { table_name });
         };
 
-        let file_id = table_info.file_id;
+        let TableInfo {
+            file_id,
+            schema,
+            primary_key,
+            ..
+        } = &table_info;
 
-        match &stmt.action {
-            AlterAction::AddColumn(col_def) => Self::bind_add_column(&table_info, col_def),
+        let action = match stmt.action {
             AlterAction::DropColumn { name, if_exists } => {
-                Self::bind_drop_column(&table_info, name, *if_exists)
+                let Some((column_id, _)) = schema.field_by_name(name.as_str()) else {
+                    return if if_exists {
+                        Ok(Self::NoOp {
+                            table_name: table_name.clone(),
+                        })
+                    } else {
+                        Err(BindError::unknown_column(&table_name, name.into_inner()))
+                    };
+                };
+
+                BoundAlterAction::DropColumn {
+                    column_name: name.into_inner(),
+                    column_id,
+                }
             }
+
+            AlterAction::AddColumn(col_def) => {
+                if schema.field_by_name(&col_def.name).is_some() {
+                    return Err(BindError::duplicate_column(col_def.name.as_str()));
+                }
+                BoundAlterAction::AddColumn { column: col_def }
+            }
+
             AlterAction::RenameColumn { from, to } => {
-                Self::bind_rename_column(&table_info, from, to)
+                require_column(schema, &table_name, from.as_str())?;
+                if schema.field_by_name(to.as_str()).is_some() {
+                    return Err(BindError::duplicate_column(to));
+                }
+
+                BoundAlterAction::RenameColumn {
+                    old_name: from.into_inner(),
+                    new_name: to.into_inner(),
+                }
             }
-            AlterAction::RenameTable { to } => Self::bind_rename_table(catalog, &table_info, to),
+
+            AlterAction::RenameTable { to } => {
+                if catalog.table_exists(to.as_str()) {
+                    return Err(BindError::table_already_exists(to.into_inner()));
+                }
+
+                BoundAlterAction::RenameTable {
+                    old_name: table_name.to_string(),
+                    new_name: to.into_inner(),
+                }
+            }
+
             AlterAction::SetDefault { column, value } => {
-                require_column(&table_info.schema, &table_info.name, column)?;
-                Ok(Self::SetDefault {
-                    file_id,
-                    column: column.to_string(),
-                    value: value.clone(),
-                })
+                require_column(schema, &table_name, column.as_str())?;
+                BoundAlterAction::SetDefault {
+                    column: column.into_inner(),
+                    value,
+                }
             }
+
             AlterAction::DropDefault { column } => {
-                require_column(&table_info.schema, &table_info.name, column)?;
-                Ok(Self::DropDefault {
-                    file_id,
+                require_column(&table_info.schema, &table_info.name, column.as_str())?;
+                BoundAlterAction::DropDefault {
                     column: column.to_string(),
-                })
+                }
             }
+
             AlterAction::DropNotNull { column } => {
-                require_column(&table_info.schema, &table_info.name, column)?;
-                Ok(Self::DropNotNull {
-                    file_id,
+                require_column(&table_info.schema, &table_info.name, column.as_str())?;
+                BoundAlterAction::DropNotNull {
                     column: column.to_string(),
-                })
+                }
             }
+
             AlterAction::AddPrimaryKey { columns } => {
-                Self::bind_add_primary_key(&table_info, columns)
+                if primary_key.is_some() {
+                    return Err(BindError::primary_key_already_exists(&table_name));
+                }
+
+                let cols_iter = columns.iter().map(NonEmptyString::as_str);
+                BoundAlterAction::AddPrimaryKey {
+                    column_ids: resolve_column_ids(schema, &table_name, cols_iter)?,
+                }
             }
-            AlterAction::DropPrimaryKey => Ok(Self::DropPrimaryKey { file_id }),
-        }
+
+            AlterAction::DropPrimaryKey => BoundAlterAction::DropPrimaryKey,
+
+            AlterAction::DropConstraint { name, if_exists } => {
+                BoundAlterAction::DropConstraint { name, if_exists }
+            }
+
+            AlterAction::AddConstraint { name, constraint } => BoundAlterAction::AddConstraint {
+                constraint: bind_constraint_against_schema(
+                    schema,
+                    &table_name,
+                    name,
+                    &constraint,
+                    catalog,
+                    txn,
+                )?,
+            },
+        };
+
+        Ok(Self::action(&table_name, *file_id, action))
     }
+}
 
-    fn bind_add_column(table: &TableInfo, col_def: &ColumnDef) -> Result<Self, BindError> {
-        if table.schema.field_by_name(&col_def.name).is_some() {
-            return Err(BindError::duplicate_column(col_def.name.as_str()));
+/// Resolves a parsed table constraint against the current catalog snapshot.
+///
+/// `TableConstraint` is still parser-shaped: it contains column and table names
+/// exactly as the user wrote them. This helper lowers that syntax into a
+/// [`BoundTableConstraint`] by resolving local columns against `schema`, looking
+/// up referenced tables for foreign keys, and converting referential actions
+/// into catalog-facing [`FkAction`] values.
+///
+/// This is shared by `CREATE TABLE (..., <constraint>)` and
+/// `ALTER TABLE ... ADD CONSTRAINT`, so both statements apply the same static
+/// validation before the executor writes anything to the catalog.
+///
+/// # Errors
+///
+/// - [`BindError::DuplicateColumn`] when a UNIQUE/FK column list repeats a column.
+/// - [`BindError::UnknownColumn`] when a local or referenced column name cannot be resolved.
+/// - [`BindError::UnknownTable`] when a foreign key references a missing table.
+/// - [`BindError::Unsupported`] when a foreign key has mismatched local and referenced column
+///   counts.
+/// - [`BindError::Catalog`] for other catalog lookup failures.
+fn bind_constraint_against_schema(
+    schema: &TupleSchema,
+    table_name: &str,
+    name: Option<NonEmptyString>,
+    constraint: &TableConstraint,
+    catalog: &Catalog,
+    txn: &Transaction<'_>,
+) -> Result<BoundTableConstraint, BindError> {
+    let body = match constraint {
+        TableConstraint::Unique { columns } => BoundConstraintBody::Unique {
+            columns: resolve_column_ids(
+                schema,
+                table_name,
+                columns.iter().map(NonEmptyString::as_str),
+            )?,
+        },
+        TableConstraint::Check { expr } => BoundConstraintBody::Check { expr: expr.clone() },
+        TableConstraint::ForeignKey {
+            local_cols,
+            ref_table,
+            ref_cols,
+            on_delete,
+            on_update,
+        } => {
+            let local_columns = resolve_column_ids(
+                schema,
+                table_name,
+                local_cols.iter().map(NonEmptyString::as_str),
+            )?;
+            let ref_table_info = check_table(catalog, txn, ref_table.as_str(), false)?
+                .expect("if_exists=false should never yield None");
+            let ref_columns = resolve_column_ids(
+                &ref_table_info.schema,
+                ref_table_info.name.as_str(),
+                ref_cols.iter().map(NonEmptyString::as_str),
+            )?;
+
+            if local_columns.len() != ref_columns.len() {
+                return Err(BindError::Unsupported(format!(
+                    "foreign key column count mismatch: {} local columns, {} referenced columns",
+                    local_columns.len(),
+                    ref_columns.len()
+                )));
+            }
+
+            BoundConstraintBody::ForeignKey {
+                local_columns,
+                ref_table_id: ref_table_info.file_id,
+                ref_columns,
+                on_delete: (*on_delete).map(FkAction::from),
+                on_update: (*on_update).map(FkAction::from),
+            }
         }
+    };
 
-        Ok(Self::AddColumn {
-            file_id: table.file_id,
-            column: col_def.clone(),
-        })
-    }
-
-    fn bind_drop_column(
-        table: &TableInfo,
-        column_name: &str,
-        if_exists: bool,
-    ) -> Result<Self, BindError> {
-        match table.schema.field_by_name(column_name) {
-            Some((column_id, _)) => Ok(Self::DropColumn {
-                file_id: table.file_id,
-                column_name: column_name.to_string(),
-                column_id,
-            }),
-            None if if_exists => Ok(Self::NoOp {
-                table_name: table.name.as_str().to_string(),
-            }),
-            None => Err(BindError::unknown_column(table.name.as_str(), column_name)),
-        }
-    }
-
-    fn bind_rename_column(table: &TableInfo, from: &str, to: &str) -> Result<Self, BindError> {
-        require_column(&table.schema, &table.name, from)?;
-
-        if table.schema.field_by_name(to).is_some() {
-            return Err(BindError::duplicate_column(to));
-        }
-
-        Ok(Self::RenameColumn {
-            file_id: table.file_id,
-            old_name: from.to_string(),
-            new_name: to.to_string(),
-        })
-    }
-
-    fn bind_rename_table(
-        catalog: &Catalog,
-        table: &TableInfo,
-        new_name: &str,
-    ) -> Result<Self, BindError> {
-        if catalog.table_exists(new_name) {
-            return Err(BindError::table_already_exists(new_name));
-        }
-
-        Ok(Self::RenameTable {
-            old_name: table.name.as_str().to_string(),
-            new_name: new_name.to_string(),
-            file_id: table.file_id,
-        })
-    }
-
-    fn bind_add_primary_key(
-        table: &TableInfo,
-        columns: &[NonEmptyString],
-    ) -> Result<Self, BindError> {
-        if table.primary_key.is_some() {
-            return Err(BindError::primary_key_already_exists(table.name.as_str()));
-        }
-
-        ensure_unique_strs(columns.iter().map(NonEmptyString::as_str), |c| {
-            BindError::duplicate_column(c)
-        })?;
-
-        let column_ids = columns
-            .iter()
-            .map(|c| require_column(&table.schema, &table.name, c).map(|(id, _)| id))
-            .collect::<Result<Vec<_>, _>>()?;
-
-        Ok(Self::AddPrimaryKey {
-            file_id: table.file_id,
-            column_ids,
-        })
-    }
+    Ok(BoundTableConstraint { name, body })
 }
 
 #[cfg(test)]
@@ -877,8 +1013,7 @@ mod tests {
                 .into_iter()
                 .map(|s| NonEmptyString::new(s).unwrap())
                 .collect(),
-            unique: vec![],
-            references: vec![],
+            constraints: vec![],
         }
     }
 
@@ -898,6 +1033,19 @@ mod tests {
 
     fn col_id(idx: usize) -> ColumnId {
         ColumnId::try_from(idx).unwrap()
+    }
+
+    fn unwrap_alter_action(bound: BoundAlterTable) -> (String, FileId, BoundAlterAction) {
+        match bound {
+            BoundAlterTable::Action {
+                table_name,
+                file_id,
+                action,
+            } => (table_name, file_id, action),
+            other @ BoundAlterTable::NoOp { .. } => {
+                panic!("expected AlterTable action, got {other:?}")
+            }
+        }
     }
 
     // Existing table is resolved to Drop carrying the canonical name + file_id.
@@ -979,10 +1127,55 @@ mod tests {
                 name,
                 primary_key,
                 schema,
+                constraints,
             } => {
                 assert_eq!(name, "t");
                 assert!(primary_key.is_none());
                 assert_eq!(schema.physical_num_fields(), 2);
+                assert!(constraints.is_empty());
+            }
+            BoundCreateTable::AlreadyExists { .. } => panic!("expected New"),
+        }
+    }
+
+    #[test]
+    fn test_bind_create_table_unique_constraint_resolves_column_ids() {
+        let dir = tempdir().unwrap();
+        let (catalog, txn_mgr) = make_catalog_and_txn_mgr(dir.path());
+        let txn = txn_mgr.begin().unwrap();
+
+        let stmt = CreateTableStatement {
+            table_name: NonEmptyString::new("users").unwrap(),
+            if_not_exists: false,
+            columns: vec![
+                col("id", Type::Int64, false),
+                col("name", Type::String, false),
+            ],
+            primary_key: vec![],
+            constraints: vec![(
+                Some(NonEmptyString::new("users_name_key").unwrap()),
+                TableConstraint::Unique {
+                    columns: vec![NonEmptyString::new("name").unwrap()],
+                },
+            )],
+        };
+        let bound = BoundCreateTable::bind(&stmt, &catalog, &txn).unwrap();
+        txn.commit().unwrap();
+
+        match bound {
+            BoundCreateTable::New { constraints, .. } => {
+                assert_eq!(constraints.len(), 1);
+                let c = &constraints[0];
+                assert_eq!(
+                    c.name.as_ref().map(NonEmptyString::as_str),
+                    Some("users_name_key")
+                );
+                match &c.body {
+                    BoundConstraintBody::Unique { columns } => {
+                        assert_eq!(columns, &vec![col_id(1)]);
+                    }
+                    other => panic!("expected Unique, got {other:?}"),
+                }
             }
             BoundCreateTable::AlreadyExists { .. } => panic!("expected New"),
         }
@@ -1586,12 +1779,10 @@ mod tests {
         let bound = BoundAlterTable::bind(stmt, &catalog, &txn2).unwrap();
         txn2.commit().unwrap();
 
-        match bound {
-            BoundAlterTable::AddColumn {
-                file_id: fid,
-                column,
-            } => {
-                assert_eq!(fid, file_id);
+        let (_, fid, action) = unwrap_alter_action(bound);
+        assert_eq!(fid, file_id);
+        match action {
+            BoundAlterAction::AddColumn { column } => {
                 assert_eq!(column.name, "age");
             }
             other => panic!("expected AddColumn, got {other:?}"),
@@ -1665,7 +1856,7 @@ mod tests {
 
         match bound {
             BoundAlterTable::NoOp { table_name } => assert_eq!(table_name, "ghost"),
-            other => panic!("expected NoOp, got {other:?}"),
+            other @ BoundAlterTable::Action { .. } => panic!("expected NoOp, got {other:?}"),
         }
     }
 
@@ -1690,13 +1881,13 @@ mod tests {
         txn2.commit().unwrap();
 
         // two_col_schema() is (id → 0, name → 1); dropping "name" must yield ColumnId(1).
-        match bound {
-            BoundAlterTable::DropColumn {
-                file_id: fid,
+        let (_, fid, action) = unwrap_alter_action(bound);
+        assert_eq!(fid, file_id);
+        match action {
+            BoundAlterAction::DropColumn {
                 column_name,
                 column_id,
             } => {
-                assert_eq!(fid, file_id);
                 assert_eq!(column_name, "name");
                 assert_eq!(column_id, col_id(1));
             }
@@ -1756,7 +1947,7 @@ mod tests {
 
         match bound {
             BoundAlterTable::NoOp { table_name } => assert_eq!(table_name, "users"),
-            other => panic!("expected NoOp, got {other:?}"),
+            other @ BoundAlterTable::Action { .. } => panic!("expected NoOp, got {other:?}"),
         }
     }
 
@@ -1779,13 +1970,10 @@ mod tests {
         let bound = BoundAlterTable::bind(stmt, &catalog, &txn2).unwrap();
         txn2.commit().unwrap();
 
-        match bound {
-            BoundAlterTable::RenameColumn {
-                file_id: fid,
-                old_name,
-                new_name,
-            } => {
-                assert_eq!(fid, file_id);
+        let (_, fid, action) = unwrap_alter_action(bound);
+        assert_eq!(fid, file_id);
+        match action {
+            BoundAlterAction::RenameColumn { old_name, new_name } => {
                 assert_eq!(old_name, "name");
                 assert_eq!(new_name, "full_name");
             }
@@ -1867,15 +2055,12 @@ mod tests {
         let bound = BoundAlterTable::bind(stmt, &catalog, &txn2).unwrap();
         txn2.commit().unwrap();
 
-        match bound {
-            BoundAlterTable::RenameTable {
-                old_name,
-                new_name,
-                file_id: fid,
-            } => {
+        let (_, fid, action) = unwrap_alter_action(bound);
+        assert_eq!(fid, file_id);
+        match action {
+            BoundAlterAction::RenameTable { old_name, new_name } => {
                 assert_eq!(old_name, "users");
                 assert_eq!(new_name, "accounts");
-                assert_eq!(fid, file_id);
             }
             other => panic!("expected RenameTable, got {other:?}"),
         }
@@ -1942,11 +2127,9 @@ mod tests {
 
         match bound {
             BoundAlterTable::NoOp { table_name } => assert_eq!(table_name, "ghost"),
-            other => panic!("expected NoOp, got {other:?}"),
+            other @ BoundAlterTable::Action { .. } => panic!("expected NoOp, got {other:?}"),
         }
     }
-
-    // ── SET DEFAULT ───────────────────────────────────────────────────────
 
     #[test]
     fn test_bind_alter_set_default_known_column_returns_set_default() {
@@ -1966,13 +2149,10 @@ mod tests {
         let bound = BoundAlterTable::bind(stmt, &catalog, &txn2).unwrap();
         txn2.commit().unwrap();
 
-        match bound {
-            BoundAlterTable::SetDefault {
-                file_id: fid,
-                column,
-                value,
-            } => {
-                assert_eq!(fid, file_id);
+        let (_, fid, action) = unwrap_alter_action(bound);
+        assert_eq!(fid, file_id);
+        match action {
+            BoundAlterAction::SetDefault { column, value } => {
                 assert_eq!(column, "name");
                 assert_eq!(value, Value::String("anon".to_string()));
             }
@@ -2023,12 +2203,10 @@ mod tests {
         let bound = BoundAlterTable::bind(stmt, &catalog, &txn2).unwrap();
         txn2.commit().unwrap();
 
-        match bound {
-            BoundAlterTable::DropDefault {
-                file_id: fid,
-                column,
-            } => {
-                assert_eq!(fid, file_id);
+        let (_, fid, action) = unwrap_alter_action(bound);
+        assert_eq!(fid, file_id);
+        match action {
+            BoundAlterAction::DropDefault { column } => {
                 assert_eq!(column, "name");
             }
             other => panic!("expected DropDefault, got {other:?}"),
@@ -2077,12 +2255,10 @@ mod tests {
         let bound = BoundAlterTable::bind(stmt, &catalog, &txn2).unwrap();
         txn2.commit().unwrap();
 
-        match bound {
-            BoundAlterTable::DropNotNull {
-                file_id: fid,
-                column,
-            } => {
-                assert_eq!(fid, file_id);
+        let (_, fid, action) = unwrap_alter_action(bound);
+        assert_eq!(fid, file_id);
+        match action {
+            BoundAlterAction::DropNotNull { column } => {
                 assert_eq!(column, "id");
             }
             other => panic!("expected DropNotNull, got {other:?}"),
@@ -2132,12 +2308,10 @@ mod tests {
         let bound = BoundAlterTable::bind(stmt, &catalog, &txn2).unwrap();
         txn2.commit().unwrap();
 
-        match bound {
-            BoundAlterTable::AddPrimaryKey {
-                file_id: fid,
-                column_ids,
-            } => {
-                assert_eq!(fid, file_id);
+        let (_, fid, action) = unwrap_alter_action(bound);
+        assert_eq!(fid, file_id);
+        match action {
+            BoundAlterAction::AddPrimaryKey { column_ids } => {
                 assert_eq!(column_ids, vec![col_id(1)]);
             }
             other => panic!("expected AddPrimaryKey, got {other:?}"),
@@ -2167,8 +2341,9 @@ mod tests {
         let bound = BoundAlterTable::bind(stmt, &catalog, &txn2).unwrap();
         txn2.commit().unwrap();
 
-        match bound {
-            BoundAlterTable::AddPrimaryKey { column_ids, .. } => {
+        let (_, _, action) = unwrap_alter_action(bound);
+        match action {
+            BoundAlterAction::AddPrimaryKey { column_ids } => {
                 // c → 2, a → 0, order preserved from the SQL clause.
                 assert_eq!(column_ids, vec![col_id(2), col_id(0)]);
             }
@@ -2248,7 +2423,60 @@ mod tests {
         );
     }
 
-    // ── DROP PRIMARY KEY ──────────────────────────────────────────────────
+    #[test]
+    fn test_bind_alter_add_fk_constraint_resolves_ids_and_actions() {
+        let dir = tempdir().unwrap();
+        let (catalog, txn_mgr) = make_catalog_and_txn_mgr(dir.path());
+        let txn = txn_mgr.begin().unwrap();
+        let parent_id = catalog
+            .create_table(&txn, "parents", two_col_schema(), None)
+            .unwrap();
+        catalog
+            .create_table(&txn, "children", two_col_schema(), None)
+            .unwrap();
+        txn.commit().unwrap();
+
+        let txn2 = txn_mgr.begin().unwrap();
+        let stmt = alter_stmt("children", false, AlterAction::AddConstraint {
+            name: Some(NonEmptyString::new("children_parent_fk").unwrap()),
+            constraint: TableConstraint::ForeignKey {
+                local_cols: vec![NonEmptyString::new("id").unwrap()],
+                ref_table: NonEmptyString::new("parents").unwrap(),
+                ref_cols: vec![NonEmptyString::new("id").unwrap()],
+                on_delete: Some(ReferentialAction::Cascade),
+                on_update: Some(ReferentialAction::Restrict),
+            },
+        });
+        let bound = BoundAlterTable::bind(stmt, &catalog, &txn2).unwrap();
+        txn2.commit().unwrap();
+
+        let (_, _, action) = unwrap_alter_action(bound);
+        match action {
+            BoundAlterAction::AddConstraint { constraint } => {
+                assert_eq!(
+                    constraint.name.as_ref().map(NonEmptyString::as_str),
+                    Some("children_parent_fk")
+                );
+                match constraint.body {
+                    BoundConstraintBody::ForeignKey {
+                        local_columns,
+                        ref_table_id,
+                        ref_columns,
+                        on_delete,
+                        on_update,
+                    } => {
+                        assert_eq!(local_columns, vec![col_id(0)]);
+                        assert_eq!(ref_columns, vec![col_id(0)]);
+                        assert_eq!(ref_table_id, parent_id);
+                        assert_eq!(on_delete, Some(FkAction::Cascade));
+                        assert_eq!(on_update, Some(FkAction::Restrict));
+                    }
+                    other => panic!("expected ForeignKey, got {other:?}"),
+                }
+            }
+            other => panic!("expected AddConstraint, got {other:?}"),
+        }
+    }
 
     #[test]
     fn test_bind_alter_drop_primary_key_returns_drop_primary_key() {
@@ -2265,10 +2493,10 @@ mod tests {
         let bound = BoundAlterTable::bind(stmt, &catalog, &txn2).unwrap();
         txn2.commit().unwrap();
 
-        match bound {
-            BoundAlterTable::DropPrimaryKey { file_id: fid } => {
-                assert_eq!(fid, file_id);
-            }
+        let (_, fid, action) = unwrap_alter_action(bound);
+        assert_eq!(fid, file_id);
+        match action {
+            BoundAlterAction::DropPrimaryKey => {}
             other => panic!("expected DropPrimaryKey, got {other:?}"),
         }
     }
