@@ -5,7 +5,7 @@ use std::{
 
 use crate::{
     FileId, IndexId, Type, Value,
-    catalog::{CatalogError, tuple::TupleReader},
+    catalog::{CatalogError, tuple::CatalogTupleRead},
     index::IndexKind,
     primitives::{ColumnId, NonEmptyString},
     tuple::{Field, Tuple, TupleSchema},
@@ -17,6 +17,9 @@ pub enum SystemTable {
     Columns,
     Indexes,
     PrimaryKeyColumns,
+    Constraints,
+    ConstraintColumns,
+    FkConstraints,
 }
 
 impl SystemTable {
@@ -34,6 +37,9 @@ impl SystemTable {
             SystemTable::Columns => FileId(2),
             SystemTable::Indexes => FileId(3),
             SystemTable::PrimaryKeyColumns => FileId(4),
+            SystemTable::Constraints => FileId(5),
+            SystemTable::ConstraintColumns => FileId(6),
+            SystemTable::FkConstraints => FileId(7),
         }
     }
 
@@ -43,6 +49,9 @@ impl SystemTable {
             SystemTable::Columns => "catalog_columns.dat",
             SystemTable::Indexes => "catalog_indexes.dat",
             SystemTable::PrimaryKeyColumns => "catalog_primary_key_columns.dat",
+            SystemTable::Constraints => "catalog_constraints.dat",
+            SystemTable::ConstraintColumns => "catalog_constraint_columns.dat",
+            SystemTable::FkConstraints => "catalog_fk_constraints.dat",
         }
     }
 
@@ -52,6 +61,9 @@ impl SystemTable {
             SystemTable::Columns => "CATALOG_COLUMNS",
             SystemTable::Indexes => "CATALOG_INDEXES",
             SystemTable::PrimaryKeyColumns => "CATALOG_PRIMARY_KEY_COLUMNS",
+            SystemTable::Constraints => "CATALOG_CONSTRAINTS",
+            SystemTable::ConstraintColumns => "CATALOG_CONSTRAINT_COLUMNS",
+            SystemTable::FkConstraints => "CATALOG_FK_CONSTRAINTS",
         }
     }
 
@@ -94,6 +106,28 @@ impl SystemTable {
                 field("column_id", Uint32).not_null(),
                 field("ordinal", Int32).not_null(),
             ],
+            SystemTable::Constraints => vec![
+                field("constraint_name", String).not_null(),
+                field("table_id", Uint64).not_null(),
+                field("constraint_kind", Uint32).not_null(),
+                field("expr", String),
+            ],
+            SystemTable::ConstraintColumns => vec![
+                field("constraint_name", String).not_null(),
+                field("table_id", Uint64).not_null(),
+                field("column_id", Uint32).not_null(),
+                field("ordinal", Int32).not_null(),
+            ],
+            SystemTable::FkConstraints => vec![
+                field("constraint_name", String).not_null(),
+                field("table_id", Uint64).not_null(),
+                field("local_column_id", Uint32).not_null(),
+                field("ordinal", Int32).not_null(),
+                field("ref_table_id", Uint64).not_null(),
+                field("ref_column_id", Uint32).not_null(),
+                field("on_delete", Uint32).not_null(),
+                field("on_update", Uint32).not_null(),
+            ],
         };
 
         TupleSchema::new(fields)
@@ -131,6 +165,15 @@ impl SystemTable {
             SystemTable::PrimaryKeyColumns => {
                 PrimaryKeyColumnRow::try_from(tuple)?;
             }
+            SystemTable::Constraints => {
+                ConstraintRow::try_from(tuple)?;
+            }
+            SystemTable::ConstraintColumns => {
+                ConstraintColumnRow::try_from(tuple)?;
+            }
+            SystemTable::FkConstraints => {
+                FkConstraintRow::try_from(tuple)?;
+            }
         }
         Ok(())
     }
@@ -162,6 +205,14 @@ pub(super) trait CatalogRow: for<'a> TryFrom<&'a Tuple, Error = CatalogError> {
 fn validate_name(value: String, field: &'static str) -> Result<NonEmptyString, CatalogError> {
     NonEmptyString::new(value)
         .map_err(|e| CatalogError::invalid_catalog_row(format!("{field}: {e}")))
+}
+
+/// Maps a fallible conversion (e.g. [`TryFrom`]) into [`CatalogError::invalid_catalog_row`].
+fn catalog_row_try<T, E>(result: Result<T, E>) -> Result<T, CatalogError>
+where
+    E: fmt::Display,
+{
+    result.map_err(|e| CatalogError::invalid_catalog_row(e.to_string()))
 }
 
 /// Empty-check for a [`PathBuf`]. Paths don't go through [`NonEmptyString`]
@@ -212,9 +263,9 @@ impl TryFrom<&Tuple> for TableRow {
     type Error = CatalogError;
 
     fn try_from(tuple: &Tuple) -> Result<Self, Self::Error> {
-        let table_id = FileId::from(TupleReader::read::<u64>(tuple, 0)?);
-        let table_name = TupleReader::read(tuple, 1)?;
-        let file_path = PathBuf::from(TupleReader::read::<String>(tuple, 2)?);
+        let table_id = FileId::from(tuple.read_field::<u64>(0)?);
+        let table_name = tuple.read_field(1)?;
+        let file_path = PathBuf::from(tuple.read_field::<String>(2)?);
         Self::new(table_id, table_name, file_path)
     }
 }
@@ -331,15 +382,13 @@ impl TryFrom<&Tuple> for ColumnRow {
     type Error = CatalogError;
 
     fn try_from(tuple: &Tuple) -> Result<Self, Self::Error> {
-        let table_id = TupleReader::read::<u64>(tuple, 0)?;
-        let column_name = TupleReader::read::<String>(tuple, 1)?;
-        let column_type = Type::try_from(TupleReader::read::<u32>(tuple, 2)?)
-            .map_err(|e| CatalogError::invalid_catalog_row(e.to_string()))?;
-        let position = ColumnId::try_from(TupleReader::read::<u32>(tuple, 3)?)
-            .map_err(|e| CatalogError::invalid_catalog_row(e.to_string()))?;
-        let nullable = TupleReader::read(tuple, 4)?;
-        let is_dropped = TupleReader::read(tuple, 5)?;
-        let raw_default: Option<String> = TupleReader::read(tuple, 6)?;
+        let table_id = tuple.read_field::<u64>(0)?;
+        let column_name = tuple.read_field::<String>(1)?;
+        let column_type = catalog_row_try(Type::try_from(tuple.read_field::<u32>(2)?))?;
+        let position = catalog_row_try(ColumnId::try_from(tuple.read_field::<u32>(3)?))?;
+        let nullable = tuple.read_field(4)?;
+        let is_dropped = tuple.read_field(5)?;
+        let raw_default: Option<String> = tuple.read_field(6)?;
         let missing_default_value: Option<Value> = raw_default.as_deref().and_then(decode_default);
 
         Ok(Self {
@@ -511,16 +560,14 @@ impl TryFrom<&Tuple> for IndexRow {
     type Error = CatalogError;
 
     fn try_from(tuple: &Tuple) -> Result<Self, Self::Error> {
-        let index_id = IndexId::from(TupleReader::read::<i64>(tuple, 0)?);
-        let index_name = TupleReader::read(tuple, 1)?;
-        let table_id = FileId::from(TupleReader::read::<u64>(tuple, 2)?);
-        let column_name = TupleReader::read(tuple, 3)?;
-        let column_position = ColumnId::try_from(TupleReader::read::<u32>(tuple, 4)?)
-            .map_err(|e| CatalogError::invalid_catalog_row(e.to_string()))?;
-        let index_type = IndexKind::try_from(TupleReader::read::<u32>(tuple, 5)?)
-            .map_err(|e| CatalogError::invalid_catalog_row(e.to_string()))?;
-        let index_file_id = FileId::from(TupleReader::read::<u64>(tuple, 6)?);
-        let num_buckets = TupleReader::read(tuple, 7)?;
+        let index_id = IndexId::from(tuple.read_field::<i64>(0)?);
+        let index_name = tuple.read_field(1)?;
+        let table_id = FileId::from(tuple.read_field::<u64>(2)?);
+        let column_name = tuple.read_field(3)?;
+        let column_position = catalog_row_try(ColumnId::try_from(tuple.read_field::<u32>(4)?))?;
+        let index_type = catalog_row_try(IndexKind::try_from(tuple.read_field::<u32>(5)?))?;
+        let index_file_id = FileId::from(tuple.read_field::<u64>(6)?);
+        let num_buckets = tuple.read_field(7)?;
 
         Self::new(
             index_id,
@@ -589,10 +636,9 @@ impl TryFrom<&Tuple> for PrimaryKeyColumnRow {
     type Error = CatalogError;
 
     fn try_from(tuple: &Tuple) -> Result<Self, Self::Error> {
-        let table_id = FileId::from(TupleReader::read::<u64>(tuple, 0)?);
-        let column_id = ColumnId::try_from(TupleReader::read::<u32>(tuple, 1)?)
-            .map_err(|e| CatalogError::invalid_catalog_row(e.to_string()))?;
-        let ordinal = TupleReader::read(tuple, 2)?;
+        let table_id = FileId::from(tuple.read_field::<u64>(0)?);
+        let column_id = catalog_row_try(ColumnId::try_from(tuple.read_field::<u32>(1)?))?;
+        let ordinal = tuple.read_field(2)?;
         Self::new(table_id, column_id, ordinal)
     }
 }
@@ -601,10 +647,264 @@ impl CatalogRow for PrimaryKeyColumnRow {
     const TABLE: SystemTable = SystemTable::PrimaryKeyColumns;
 }
 
+/// On-disk discriminant for the `constraint_kind` column of [`SystemTable::Constraints`].
+///
+/// Values `0..=4` are stable catalog codes; any other `u32` fails [`TryFrom`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u32)]
+pub enum ConstraintKind {
+    NotNull = 0,
+    Unique = 1,
+    Check = 2,
+    PrimaryKey = 3,
+    ForeignKey = 4,
+}
+
+impl TryFrom<u32> for ConstraintKind {
+    type Error = String;
+    fn try_from(v: u32) -> Result<Self, Self::Error> {
+        match v {
+            0 => Ok(Self::NotNull),
+            1 => Ok(Self::Unique),
+            2 => Ok(Self::Check),
+            3 => Ok(Self::PrimaryKey),
+            4 => Ok(Self::ForeignKey),
+            other => Err(format!("unknown constraint kind: {other}")),
+        }
+    }
+}
+
+impl From<ConstraintKind> for u32 {
+    fn from(k: ConstraintKind) -> u32 {
+        k as u32
+    }
+}
+
+/// Referential action codes (`ON DELETE` / `ON UPDATE`), stored as `Uint32` in
+/// [`SystemTable::FkConstraints`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u32)]
+pub enum FkAction {
+    NoAction = 0,
+    Restrict = 1,
+    Cascade = 2,
+    SetNull = 3,
+    SetDefault = 4,
+}
+
+impl TryFrom<u32> for FkAction {
+    type Error = String;
+    fn try_from(v: u32) -> Result<Self, Self::Error> {
+        match v {
+            0 => Ok(Self::NoAction),
+            1 => Ok(Self::Restrict),
+            2 => Ok(Self::Cascade),
+            3 => Ok(Self::SetNull),
+            4 => Ok(Self::SetDefault),
+            other => Err(format!("unknown fk action: {other}")),
+        }
+    }
+}
+
+impl From<FkAction> for u32 {
+    fn from(a: FkAction) -> u32 {
+        a as u32
+    }
+}
+
+/// One row in `SystemTable::Constraints`.
+///
+/// Identifies a table-level constraint by name, [`FileId`], and [`ConstraintKind`].
+/// `expr` holds a non-empty predicate string when the kind needs one (for example
+/// CHECK); otherwise it is `None` and serializes as [`Value::Null`].
+pub(super) struct ConstraintRow {
+    pub(super) table_id: FileId,
+    pub(super) constraint_name: NonEmptyString,
+    pub(super) expr: Option<NonEmptyString>,
+    pub(super) constraint_kind: ConstraintKind,
+}
+
+impl From<&ConstraintRow> for Tuple {
+    fn from(c: &ConstraintRow) -> Tuple {
+        Tuple::new(vec![
+            c.constraint_name.as_str().to_owned().into(),
+            c.table_id.0.into(),
+            u32::from(c.constraint_kind).into(),
+            c.expr
+                .clone()
+                .map_or(Value::Null, |e| e.as_str().to_owned().into()),
+        ])
+    }
+}
+
+impl TryFrom<&Tuple> for ConstraintRow {
+    type Error = CatalogError;
+    fn try_from(tuple: &Tuple) -> Result<Self, Self::Error> {
+        let constraint_name = validate_name(tuple.read_field(0)?, "constraint_name")?;
+        let table_id = FileId::from(tuple.read_field::<u64>(1)?);
+
+        let constraint_kind =
+            catalog_row_try(ConstraintKind::try_from(tuple.read_field::<u32>(2)?))?;
+        let expr: Option<String> = tuple.read_field(3)?;
+        Ok(Self {
+            constraint_name,
+            table_id,
+            constraint_kind,
+            expr: expr.map(NonEmptyString::new).transpose()?,
+        })
+    }
+}
+
+impl CatalogRow for ConstraintRow {
+    const TABLE: SystemTable = SystemTable::Constraints;
+}
+
+/// One row in `SystemTable::ConstraintColumns`.
+///
+/// Multi-row pattern: a constraint that spans several columns (composite PK,
+/// multi-column UNIQUE, …) writes one tuple per participating column. Rows for
+/// the same logical constraint share `constraint_name` and `table_id` and differ
+/// by `column_id` and `ordinal` (0-based declaration order within that constraint).
+pub(super) struct ConstraintColumnRow {
+    pub(super) constraint_name: NonEmptyString,
+    pub(super) table_id: FileId,
+    pub(super) column_id: ColumnId,
+    /// Position of this column inside the constraint's column list (not the table ordinal).
+    pub(super) ordinal: i32,
+}
+
+impl From<&ConstraintColumnRow> for Tuple {
+    fn from(row: &ConstraintColumnRow) -> Tuple {
+        Tuple::new(vec![
+            row.constraint_name.as_str().to_owned().into(),
+            row.table_id.0.into(),
+            u32::from(row.column_id).into(),
+            row.ordinal.into(),
+        ])
+    }
+}
+
+impl TryFrom<&Tuple> for ConstraintColumnRow {
+    type Error = CatalogError;
+    fn try_from(t: &Tuple) -> Result<Self, Self::Error> {
+        let constraint_name = validate_name(t.read_field(0)?, "constraint_name")?;
+        let table_id = FileId::from(t.read_field::<u64>(1)?);
+        let column_id = catalog_row_try(ColumnId::try_from(t.read_field::<u32>(2)?))?;
+
+        let ordinal = t.read_field(3)?;
+        if ordinal < 0 {
+            return Err(CatalogError::invalid_catalog_row(format!(
+                "ordinal must be non-negative, got {ordinal}"
+            )));
+        }
+        Ok(Self {
+            constraint_name,
+            table_id,
+            column_id,
+            ordinal,
+        })
+    }
+}
+
+impl CatalogRow for ConstraintColumnRow {
+    const TABLE: SystemTable = SystemTable::ConstraintColumns;
+}
+
+/// One row in `SystemTable::FkConstraints`.
+///
+/// Describes one column of a foreign key: the child table/column, the referenced
+/// table/column, and optional [`FkAction`] for `ON DELETE` / `ON UPDATE`.
+/// Composite FKs follow the same multi-row pattern as [`ConstraintColumnRow`]:
+/// shared `constraint_name` and `table_id`, distinct `local_column_id` and
+/// `ordinal`.
+///
+/// [`From`] maps `None` actions to [`Value::Null`]; [`SystemTable::validate_row`]
+/// still applies the heap schema (both action columns are declared NOT NULL
+/// `Uint32`), so only tuples that pass structural validation reach [`TryFrom`].
+pub(super) struct FkConstraintRow {
+    pub(super) constraint_name: NonEmptyString,
+    pub(super) table_id: FileId,
+    pub(super) local_column_id: ColumnId,
+    /// 0-based slot of this local column within the FK column list.
+    pub(super) ordinal: i32,
+    pub(super) ref_table_id: FileId,
+    pub(super) ref_column_id: ColumnId,
+    pub(super) on_delete: Option<FkAction>,
+    pub(super) on_update: Option<FkAction>,
+}
+
+impl From<&FkConstraintRow> for Tuple {
+    fn from(f: &FkConstraintRow) -> Tuple {
+        Tuple::new(vec![
+            f.constraint_name.as_str().to_owned().into(),
+            f.table_id.0.into(),
+            u32::from(f.local_column_id).into(),
+            f.ordinal.into(),
+            f.ref_table_id.0.into(),
+            u32::from(f.ref_column_id).into(),
+            f.on_delete
+                .map_or(Value::Null, |a| Value::Uint32(u32::from(a))),
+            f.on_update
+                .map_or(Value::Null, |a| Value::Uint32(u32::from(a))),
+        ])
+    }
+}
+
+impl TryFrom<&Tuple> for FkConstraintRow {
+    type Error = CatalogError;
+    fn try_from(t: &Tuple) -> Result<Self, Self::Error> {
+        let constraint_name = validate_name(t.read_field(0)?, "constraint_name")?;
+
+        let table_id = FileId::from(t.read_field::<u64>(1)?);
+        let local_column_id = catalog_row_try(ColumnId::try_from(t.read_field::<u32>(2)?))?;
+        let ordinal = t.read_field(3)?;
+
+        let ref_table_id = FileId::from(t.read_field::<u64>(4)?);
+        let ref_column_id = catalog_row_try(ColumnId::try_from(t.read_field::<u32>(5)?))?;
+
+        let read_fk_action = |i: usize| -> Result<Option<FkAction>, CatalogError> {
+            let raw: Option<u32> = t.read_field(i)?;
+            catalog_row_try(raw.map(FkAction::try_from).transpose())
+        };
+
+        let on_delete = read_fk_action(6)?;
+        let on_update = read_fk_action(7)?;
+
+        if ordinal < 0 {
+            return Err(CatalogError::invalid_catalog_row(format!(
+                "ordinal must be non-negative, got {ordinal}"
+            )));
+        }
+
+        Ok(Self {
+            constraint_name,
+            table_id,
+            local_column_id,
+            ordinal,
+            ref_table_id,
+            ref_column_id,
+            on_delete,
+            on_update,
+        })
+    }
+}
+
+impl CatalogRow for FkConstraintRow {
+    const TABLE: SystemTable = SystemTable::FkConstraints;
+}
+
 #[cfg(test)]
 mod tests {
-    use super::SystemTable;
-    use crate::{Value, catalog::CatalogError, tuple::Tuple};
+    use super::{
+        ConstraintColumnRow, ConstraintKind, ConstraintRow, FkAction, FkConstraintRow, SystemTable,
+    };
+    use crate::{
+        FileId,
+        catalog::CatalogError,
+        primitives::{ColumnId, NonEmptyString},
+        tuple::Tuple,
+        types::Value,
+    };
 
     fn valid_tables_tuple() -> Tuple {
         // table_id (Uint64 NOT NULL), table_name (String NOT NULL),
@@ -625,6 +925,37 @@ mod tests {
             Value::Bool(true),  // nullable
             Value::Bool(false), // is_dropped
             Value::Null,        // missing_default_value
+        ])
+    }
+
+    fn valid_constraints_tuple() -> Tuple {
+        Tuple::new(vec![
+            Value::String("pk_orders".into()),
+            Value::Uint64(10),
+            Value::Uint32(u32::from(ConstraintKind::PrimaryKey)),
+            Value::Null, // expr
+        ])
+    }
+
+    fn valid_constraint_columns_tuple() -> Tuple {
+        Tuple::new(vec![
+            Value::String("pk_orders".into()),
+            Value::Uint64(10),
+            Value::Uint32(0),
+            Value::Int32(0),
+        ])
+    }
+
+    fn valid_fk_constraints_tuple() -> Tuple {
+        Tuple::new(vec![
+            Value::String("fk_orders_users".into()),
+            Value::Uint64(10),
+            Value::Uint32(0),
+            Value::Int32(0),
+            Value::Uint64(20),
+            Value::Uint32(1),
+            Value::Uint32(FkAction::NoAction as u32),
+            Value::Uint32(FkAction::Restrict as u32),
         ])
     }
 
@@ -687,8 +1018,6 @@ mod tests {
         let err = SystemTable::Tables.validate_row(&tuple).unwrap_err();
         assert!(matches!(err, CatalogError::Corruption { .. }));
     }
-
-    // ── validate_row: Columns — happy path ───────────────────────────────────
 
     // Fully valid Columns row must pass.
     #[test]
@@ -762,8 +1091,6 @@ mod tests {
             "expected InvalidCatalogRow, got: {err}"
         );
     }
-
-    // ── validate_row: Indexes ────────────────────────────────────────────────
 
     fn valid_indexes_tuple() -> Tuple {
         // index_id, index_name, table_id (Uint64), column_name,
@@ -874,7 +1201,333 @@ mod tests {
         assert!(matches!(err, CatalogError::Corruption { .. }));
     }
 
-    // ── SystemTable constants ────────────────────────────────────────────────
+    // ── validate_row: Constraints ───────────────────────────────────────────
+
+    #[test]
+    fn test_validate_constraints_row_ok() {
+        assert!(
+            SystemTable::Constraints
+                .validate_row(&valid_constraints_tuple())
+                .is_ok()
+        );
+    }
+
+    #[test]
+    fn test_validate_constraints_row_all_constraint_kinds_ok() {
+        for kind in [
+            ConstraintKind::NotNull,
+            ConstraintKind::Unique,
+            ConstraintKind::Check,
+            ConstraintKind::PrimaryKey,
+            ConstraintKind::ForeignKey,
+        ] {
+            let tuple = Tuple::new(vec![
+                Value::String("c_name".into()),
+                Value::Uint64(1),
+                Value::Uint32(u32::from(kind)),
+                Value::Null,
+            ]);
+            assert!(
+                SystemTable::Constraints.validate_row(&tuple).is_ok(),
+                "kind {kind:?} should validate"
+            );
+        }
+    }
+
+    #[test]
+    fn test_validate_constraints_row_unknown_kind_yields_invalid_row() {
+        let tuple = Tuple::new(vec![
+            Value::String("bad".into()),
+            Value::Uint64(1),
+            Value::Uint32(99),
+            Value::Null,
+        ]);
+        let err = SystemTable::Constraints.validate_row(&tuple).unwrap_err();
+        assert!(
+            matches!(err, CatalogError::InvalidCatalogRow { .. }),
+            "got {err}"
+        );
+    }
+
+    #[test]
+    fn test_validate_constraints_row_wrong_field_count_yields_corruption() {
+        let tuple = Tuple::new(vec![
+            Value::String("c".into()),
+            Value::Uint64(1),
+            Value::Uint32(0),
+        ]);
+        let err = SystemTable::Constraints.validate_row(&tuple).unwrap_err();
+        assert!(matches!(err, CatalogError::Corruption { .. }));
+    }
+
+    #[test]
+    fn test_validate_constraints_row_null_constraint_name_yields_corruption() {
+        let tuple = Tuple::new(vec![
+            Value::Null,
+            Value::Uint64(1),
+            Value::Uint32(0),
+            Value::Null,
+        ]);
+        let err = SystemTable::Constraints.validate_row(&tuple).unwrap_err();
+        assert!(matches!(err, CatalogError::Corruption { .. }));
+    }
+
+    // ── validate_row: Constraint columns ─────────────────────────────────────
+
+    #[test]
+    fn test_validate_constraint_columns_row_ok() {
+        assert!(
+            SystemTable::ConstraintColumns
+                .validate_row(&valid_constraint_columns_tuple())
+                .is_ok()
+        );
+    }
+
+    #[test]
+    fn test_validate_constraint_columns_row_wrong_field_count_yields_corruption() {
+        let tuple = Tuple::new(vec![
+            Value::String("pk".into()),
+            Value::Uint64(1),
+            Value::Uint32(0),
+        ]);
+        let err = SystemTable::ConstraintColumns
+            .validate_row(&tuple)
+            .unwrap_err();
+        assert!(matches!(err, CatalogError::Corruption { .. }));
+    }
+
+    #[test]
+    fn test_validate_constraint_columns_row_null_constraint_name_yields_corruption() {
+        let tuple = Tuple::new(vec![
+            Value::Null,
+            Value::Uint64(1),
+            Value::Uint32(0),
+            Value::Int32(0),
+        ]);
+        let err = SystemTable::ConstraintColumns
+            .validate_row(&tuple)
+            .unwrap_err();
+        assert!(matches!(err, CatalogError::Corruption { .. }));
+    }
+
+    #[test]
+    fn test_validate_constraint_columns_row_negative_ordinal_yields_invalid_row() {
+        let tuple = Tuple::new(vec![
+            Value::String("pk".into()),
+            Value::Uint64(1),
+            Value::Uint32(0),
+            Value::Int32(-1),
+        ]);
+        let err = SystemTable::ConstraintColumns
+            .validate_row(&tuple)
+            .unwrap_err();
+        assert!(
+            matches!(err, CatalogError::InvalidCatalogRow { .. }),
+            "got {err}"
+        );
+    }
+
+    #[test]
+    fn test_validate_constraint_columns_row_column_id_max_yields_invalid_row() {
+        let tuple = Tuple::new(vec![
+            Value::String("pk".into()),
+            Value::Uint64(1),
+            Value::Uint32(u32::MAX),
+            Value::Int32(0),
+        ]);
+        let err = SystemTable::ConstraintColumns
+            .validate_row(&tuple)
+            .unwrap_err();
+        assert!(
+            matches!(err, CatalogError::InvalidCatalogRow { .. }),
+            "got {err}"
+        );
+    }
+
+    // ── validate_row: FK constraints ─────────────────────────────────────────
+
+    #[test]
+    fn test_validate_fk_constraints_row_ok() {
+        assert!(
+            SystemTable::FkConstraints
+                .validate_row(&valid_fk_constraints_tuple())
+                .is_ok()
+        );
+    }
+
+    #[test]
+    fn test_validate_fk_constraints_row_wrong_field_count_yields_corruption() {
+        let tuple = Tuple::new(vec![
+            Value::String("fk".into()),
+            Value::Uint64(1),
+            Value::Uint32(0),
+            Value::Int32(0),
+            Value::Uint64(2),
+            Value::Uint32(0),
+        ]);
+        let err = SystemTable::FkConstraints.validate_row(&tuple).unwrap_err();
+        assert!(matches!(err, CatalogError::Corruption { .. }));
+    }
+
+    #[test]
+    fn test_validate_fk_constraints_row_null_constraint_name_yields_corruption() {
+        let tuple = Tuple::new(vec![
+            Value::Null,
+            Value::Uint64(1),
+            Value::Uint32(0),
+            Value::Int32(0),
+            Value::Uint64(2),
+            Value::Uint32(0),
+            Value::Uint32(0),
+            Value::Uint32(0),
+        ]);
+        let err = SystemTable::FkConstraints.validate_row(&tuple).unwrap_err();
+        assert!(matches!(err, CatalogError::Corruption { .. }));
+    }
+
+    #[test]
+    fn test_validate_fk_constraints_row_unknown_on_delete_yields_invalid_row() {
+        let tuple = Tuple::new(vec![
+            Value::String("fk".into()),
+            Value::Uint64(1),
+            Value::Uint32(0),
+            Value::Int32(0),
+            Value::Uint64(2),
+            Value::Uint32(0),
+            Value::Uint32(99),
+            Value::Uint32(0),
+        ]);
+        let err = SystemTable::FkConstraints.validate_row(&tuple).unwrap_err();
+        assert!(
+            matches!(err, CatalogError::InvalidCatalogRow { .. }),
+            "got {err}"
+        );
+    }
+
+    #[test]
+    fn test_validate_fk_constraints_row_negative_ordinal_yields_invalid_row() {
+        let tuple = Tuple::new(vec![
+            Value::String("fk".into()),
+            Value::Uint64(1),
+            Value::Uint32(0),
+            Value::Int32(-1),
+            Value::Uint64(2),
+            Value::Uint32(0),
+            Value::Uint32(0),
+            Value::Uint32(0),
+        ]);
+        let err = SystemTable::FkConstraints.validate_row(&tuple).unwrap_err();
+        assert!(
+            matches!(err, CatalogError::InvalidCatalogRow { .. }),
+            "got {err}"
+        );
+    }
+
+    #[test]
+    fn test_validate_fk_constraints_row_null_on_delete_yields_corruption() {
+        let tuple = Tuple::new(vec![
+            Value::String("fk".into()),
+            Value::Uint64(1),
+            Value::Uint32(0),
+            Value::Int32(0),
+            Value::Uint64(2),
+            Value::Uint32(0),
+            Value::Null, // on_delete is NOT NULL in schema
+            Value::Uint32(0),
+        ]);
+        let err = SystemTable::FkConstraints.validate_row(&tuple).unwrap_err();
+        assert!(matches!(err, CatalogError::Corruption { .. }), "got {err}");
+    }
+
+    #[test]
+    fn test_constraint_kind_try_from_unknown() {
+        let err = ConstraintKind::try_from(5u32).unwrap_err();
+        assert!(err.contains("unknown constraint kind"));
+    }
+
+    #[test]
+    fn test_fk_action_try_from_unknown() {
+        let err = FkAction::try_from(5u32).unwrap_err();
+        assert!(err.contains("unknown fk action"));
+    }
+
+    // ── Row round-trip: Tuple encode / decode ─────────────────────────────────
+
+    #[test]
+    fn test_constraint_row_round_trip() {
+        let row = ConstraintRow {
+            table_id: FileId(42),
+            constraint_name: NonEmptyString::new("pk_t").unwrap(),
+            expr: None,
+            constraint_kind: ConstraintKind::PrimaryKey,
+        };
+        let tuple = Tuple::from(&row);
+        let got = ConstraintRow::try_from(&tuple).unwrap();
+        assert_eq!(got.table_id, row.table_id);
+        assert_eq!(got.constraint_name.as_str(), row.constraint_name.as_str());
+        assert_eq!(got.expr, row.expr);
+        assert_eq!(got.constraint_kind, row.constraint_kind);
+    }
+
+    #[test]
+    fn test_constraint_row_round_trip_with_expr() {
+        let expr = NonEmptyString::new("col > 0").unwrap();
+        let row = ConstraintRow {
+            table_id: FileId(1),
+            constraint_name: NonEmptyString::new("chk_t").unwrap(),
+            expr: Some(expr.clone()),
+            constraint_kind: ConstraintKind::Check,
+        };
+        let tuple = Tuple::from(&row);
+        let got = ConstraintRow::try_from(&tuple).unwrap();
+        assert_eq!(
+            got.expr
+                .as_ref()
+                .map(crate::primitives::NonEmptyString::as_str),
+            Some(expr.as_str())
+        );
+        assert_eq!(got.constraint_kind, ConstraintKind::Check);
+    }
+
+    #[test]
+    fn test_constraint_column_row_round_trip() {
+        let row = ConstraintColumnRow {
+            constraint_name: NonEmptyString::new("pk_orders").unwrap(),
+            table_id: FileId(10),
+            column_id: ColumnId::try_from(3u32).unwrap(),
+            ordinal: 0,
+        };
+        let tuple = Tuple::from(&row);
+        let got = ConstraintColumnRow::try_from(&tuple).unwrap();
+        assert_eq!(got.constraint_name.as_str(), row.constraint_name.as_str());
+        assert_eq!(got.table_id, row.table_id);
+        assert_eq!(got.column_id, row.column_id);
+        assert_eq!(got.ordinal, row.ordinal);
+    }
+
+    #[test]
+    fn test_fk_constraint_row_round_trip() {
+        let row = FkConstraintRow {
+            constraint_name: NonEmptyString::new("fk_a").unwrap(),
+            table_id: FileId(10),
+            local_column_id: ColumnId::try_from(0u32).unwrap(),
+            ordinal: 0,
+            ref_table_id: FileId(20),
+            ref_column_id: ColumnId::try_from(1u32).unwrap(),
+            on_delete: Some(FkAction::Cascade),
+            on_update: Some(FkAction::NoAction),
+        };
+        let tuple = Tuple::from(&row);
+        let got = FkConstraintRow::try_from(&tuple).unwrap();
+        assert_eq!(got.constraint_name.as_str(), row.constraint_name.as_str());
+        assert_eq!(got.table_id, row.table_id);
+        assert_eq!(got.local_column_id, row.local_column_id);
+        assert_eq!(got.ordinal, row.ordinal);
+        assert_eq!(got.ref_table_id, row.ref_table_id);
+        assert_eq!(got.ref_column_id, row.ref_column_id);
+        assert_eq!(got.on_delete, row.on_delete);
+        assert_eq!(got.on_update, row.on_update);
+    }
 
     // ALL must contain exactly three variants.
     #[test]

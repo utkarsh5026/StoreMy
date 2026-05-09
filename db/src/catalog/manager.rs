@@ -80,6 +80,9 @@ pub(super) struct SystemHeaps {
     columns: Option<HeapFile>,
     indexes: Option<HeapFile>,
     primary_key_columns: Option<HeapFile>,
+    constraints: Option<HeapFile>,
+    constraint_columns: Option<HeapFile>,
+    fk_constraints: Option<HeapFile>,
 }
 
 impl SystemHeaps {
@@ -90,6 +93,9 @@ impl SystemHeaps {
             SystemTable::Columns => self.columns = Some(file),
             SystemTable::Indexes => self.indexes = Some(file),
             SystemTable::PrimaryKeyColumns => self.primary_key_columns = Some(file),
+            SystemTable::Constraints => self.constraints = Some(file),
+            SystemTable::ConstraintColumns => self.constraint_columns = Some(file),
+            SystemTable::FkConstraints => self.fk_constraints = Some(file),
         }
     }
 
@@ -100,6 +106,9 @@ impl SystemHeaps {
             SystemTable::Columns => self.columns.as_ref(),
             SystemTable::Indexes => self.indexes.as_ref(),
             SystemTable::PrimaryKeyColumns => self.primary_key_columns.as_ref(),
+            SystemTable::Constraints => self.constraints.as_ref(),
+            SystemTable::ConstraintColumns => self.constraint_columns.as_ref(),
+            SystemTable::FkConstraints => self.fk_constraints.as_ref(),
         }
     }
 }
