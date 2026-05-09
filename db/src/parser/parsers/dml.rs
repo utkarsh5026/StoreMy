@@ -5,7 +5,6 @@ use crate::{
     Value,
     parser::{
         Parser,
-        parsers::expr::Precedence,
         statements::{
             Assignment, DeleteStatement, InsertSource, InsertStatement, Statement, UpdateStatement,
         },
@@ -197,7 +196,7 @@ impl Parser {
                 return Err(ParserError::unexpected(TokenType::Operator, op.kind));
             }
 
-            let value = self.parse_expression(Precedence::LOOSEST)?;
+            let value = self.parse_expression()?;
 
             assignments.push(Assignment {
                 column: field,

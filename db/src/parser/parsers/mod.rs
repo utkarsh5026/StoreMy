@@ -328,7 +328,7 @@ impl Parser {
     /// `AND`, `OR`, `NOT`, comparisons, and parentheses with correct precedence.
     #[instrument(skip(self), fields(component = "parser", clause = "where"), err(Debug))]
     pub(super) fn parse_where(&mut self) -> Result<Expr, ParserError> {
-        self.parse_expression(expr::Precedence::LOOSEST)
+        self.parse_expression()
     }
 
     /// Parses a possibly qualified column reference, e.g., `col` or `tbl.col`.

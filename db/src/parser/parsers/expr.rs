@@ -273,6 +273,21 @@ impl Expr {
 }
 
 impl Parser {
+    /// Parses a full SQL expression using the loosest (lowest) precedence level.
+    ///
+    /// This serves as the main entry point for parsing SQL expressions, such as those
+    /// found in WHERE clauses. Internally, this method delegates to
+    /// [`parse_expression_with_precedence`] using [`Precedence::LOOSEST`] to allow all
+    /// valid SQL binary/unary operators to bind according to standard SQL operator precedence.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`ParserError`] if the stream ends prematurely, contains invalid syntax,
+    /// or if nested subexpressions are malformed or unbalanced.
+    pub(super) fn parse_expression(&mut self) -> Result<Expr, ParserError> {
+        self.parse_expression_with_precedence(Precedence::LOOSEST)
+    }
+
     /// Parses a SQL expression until precedence falls below `min_precedence`.
     ///
     /// Used for full clause expressions with `min_precedence = 0` ([`Precedence::LOOSEST`])
@@ -298,7 +313,10 @@ impl Parser {
     ///
     /// Returns [`ParserError`] if the stream ends early, a closing `)` is missing,
     /// tokens mismatch expectations, or a nested parse fails (including lexer errors).
-    pub(super) fn parse_expression(&mut self, min_precedence: u8) -> Result<Expr, ParserError> {
+    fn parse_expression_with_precedence(
+        &mut self,
+        min_precedence: u8,
+    ) -> Result<Expr, ParserError> {
         let mut left = self.parse_primary()?;
 
         loop {
@@ -311,7 +329,7 @@ impl Parser {
             }
 
             self.bump()?;
-            let rhs = self.parse_expression(r_bp)?;
+            let rhs = self.parse_expression_with_precedence(r_bp)?;
             left = Expr::binary(left, op, rhs);
         }
 
@@ -327,7 +345,8 @@ impl Parser {
     /// a token cannot convert to [`Value`] for literals.
     fn parse_primary(&mut self) -> Result<Expr, ParserError> {
         if self.if_peek_then_consume(TokenType::Not)? {
-            let operand = self.parse_expression(Precedence::PrefixNot.prefix_bp())?;
+            let operand =
+                self.parse_expression_with_precedence(Precedence::PrefixNot.prefix_bp())?;
             return Ok(Expr::UnaryOp {
                 op: UnOp::Not,
                 operand: Box::new(operand),
@@ -335,7 +354,7 @@ impl Parser {
         }
 
         if self.if_peek_then_consume(TokenType::Lparen)? {
-            let expr = self.parse_expression(Precedence::LOOSEST)?;
+            let expr = self.parse_expression()?;
             self.expect(TokenType::Rparen)?;
             return Ok(expr);
         }
@@ -414,7 +433,7 @@ impl Parser {
             return Ok(Expr::CountStar);
         }
 
-        let arg = self.parse_expression(Precedence::LOOSEST)?;
+        let arg = self.parse_expression_with_precedence(Precedence::LOOSEST)?;
         self.expect(TokenType::Rparen)?;
         Ok(Expr::Agg(
             AggFunc::try_from(name.as_str()).map_err(ParserError::ParsingError)?,
@@ -498,7 +517,7 @@ mod tests {
     /// Parse `sql` as a standalone expression (no surrounding SELECT/WHERE).
     /// Passes `min_bp = 0` so every operator binds.
     fn expr(sql: &str) -> Result<Expr, ParserError> {
-        Parser::new(sql).parse_expression(Precedence::LOOSEST)
+        Parser::new(sql).parse_expression()
     }
 
     fn ok(sql: &str) -> Expr {
