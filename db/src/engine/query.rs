@@ -279,7 +279,7 @@ impl Engine<'_> {
             BoundFrom::Table { file_id, table, .. } => {
                 let heap_file = catalog
                     .get_heap(*file_id)
-                    .ok_or_else(|| EngineError::TableNotFound(table.name.clone()))?;
+                    .ok_or_else(|| EngineError::TableNotFound(table.name.as_str().to_owned()))?;
                 heap_files.push((*file_id, heap_file));
             }
             BoundFrom::Join { left, right, .. } => {
