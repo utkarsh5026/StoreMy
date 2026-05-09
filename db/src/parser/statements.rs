@@ -152,8 +152,7 @@ pub enum Statement {
 ///     if_not_exists: false,
 ///     columns: vec![col],
 ///     primary_key: vec![],
-///     unique: vec![],
-///     references: vec![],
+///     constraints: vec![],
 /// };
 /// let statement = Statement::CreateTable(inner);
 /// assert_eq!(

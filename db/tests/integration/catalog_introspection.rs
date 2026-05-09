@@ -26,7 +26,7 @@ fn list_user_tables_returns_sorted_names() {
         t.db.list_user_tables()
             .expect("list")
             .into_iter()
-            .map(|info| info.name)
+            .map(|info| info.name.to_string())
             .collect();
 
     assert_eq!(names, vec!["apple", "mango", "zebra"]);

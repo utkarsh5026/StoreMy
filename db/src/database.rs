@@ -14,7 +14,7 @@ use parking_lot::Mutex;
 
 use crate::{
     PAGE_SIZE,
-    catalog::manager::{Catalog, TableInfo},
+    catalog::{TableInfo, manager::Catalog},
     engine::{Engine, EngineError, StatementResult},
     parser::Parser,
 };
