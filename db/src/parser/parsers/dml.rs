@@ -242,10 +242,11 @@ mod tests {
     use crate::{
         Value,
         parser::{
-            statements::{InsertSource, WhereCondition},
+            parsers::expr::{BinOp, Expr},
+            statements::{ColumnRef, InsertSource},
             token::TokenType,
         },
-        primitives::Predicate,
+        primitives::NonEmptyString,
     };
 
     fn insert_rows(src: &InsertSource) -> &Vec<Vec<Value>> {
@@ -253,6 +254,10 @@ mod tests {
             InsertSource::Values(rows) => rows,
             other => panic!("expected InsertSource::Values, got {other:?}"),
         }
+    }
+
+    fn column_names(columns: Option<&[NonEmptyString]>) -> Option<Vec<&str>> {
+        columns.map(|cols| cols.iter().map(NonEmptyString::as_str).collect())
     }
 
     #[test]
@@ -276,13 +281,13 @@ mod tests {
     fn test_parse_delete_where_predicate() {
         let mut p = Parser::new("DELETE FROM t WHERE id = 7");
         let d = p.parse_delete().unwrap();
-        let wc = d.where_clause.as_ref().unwrap();
-        let WhereCondition::Predicate { field, op, value } = wc else {
-            panic!("expected Predicate");
+        let wc = d.where_clause.expect("where clause");
+        let Expr::BinaryOp { lhs, op, rhs } = wc else {
+            panic!("expected BinaryOp");
         };
-        assert_eq!(field, &"id".into());
-        assert_eq!(*op, Predicate::Equals);
-        assert_eq!(*value, Value::Int64(7));
+        assert_eq!(op, BinOp::Eq);
+        assert_eq!(*lhs, Expr::Column(ColumnRef::from("id")));
+        assert_eq!(*rhs, Expr::Literal(Value::Int64(7)));
     }
 
     #[test]
@@ -301,10 +306,7 @@ mod tests {
         let mut p = Parser::new("INSERT INTO items (a, b) VALUES (1, 'x'), (2, 'y')");
         let i = p.parse_insert().unwrap();
         assert_eq!(i.table_name, "items");
-        assert_eq!(
-            i.columns.as_deref(),
-            Some(&["a".to_string(), "b".to_string()][..])
-        );
+        assert_eq!(column_names(i.columns.as_deref()), Some(vec!["a", "b"]));
         let rows = insert_rows(&i.source);
         assert_eq!(rows.len(), 2);
         assert_eq!(rows[0][0], Value::Int64(1));
@@ -329,13 +331,13 @@ mod tests {
         let u = p.parse_update().unwrap();
         assert_eq!(u.alias.as_deref(), Some("u"));
         assert_eq!(u.assignments.len(), 2);
-        let wc = u.where_clause.as_ref().unwrap();
-        let WhereCondition::Predicate { field, op, value } = wc else {
-            panic!("expected Predicate");
+        let wc = u.where_clause.expect("where clause");
+        let Expr::BinaryOp { lhs, op, rhs } = wc else {
+            panic!("expected BinaryOp");
         };
-        assert_eq!(field, &"id".into());
-        assert_eq!(*op, Predicate::Equals);
-        assert_eq!(*value, Value::Int64(2));
+        assert_eq!(op, BinOp::Eq);
+        assert_eq!(*lhs, Expr::Column(ColumnRef::from("id")));
+        assert_eq!(*rhs, Expr::Literal(Value::Int64(2)));
     }
 
     #[test]
@@ -380,11 +382,15 @@ mod tests {
         let mut p = Parser::new("UPDATE t SET x = 1 WHERE p = 0 OR q = 1 AND r = 2");
         let u = p.parse_update().unwrap();
         let wc = u.where_clause.expect("where");
-        let WhereCondition::Or(left, right) = wc else {
-            panic!("expected OR at top");
+        let Expr::BinaryOp { lhs, op, rhs } = wc else {
+            panic!("expected BinaryOp at root");
         };
-        assert!(matches!(left.as_ref(), WhereCondition::Predicate { .. }));
-        assert!(matches!(right.as_ref(), WhereCondition::And(_, _)));
+        assert_eq!(op, BinOp::Or);
+        assert!(matches!(lhs.as_ref(), Expr::BinaryOp { op: BinOp::Eq, .. }));
+        assert!(matches!(rhs.as_ref(), Expr::BinaryOp {
+            op: BinOp::And,
+            ..
+        }));
     }
 
     #[test]
@@ -644,10 +650,7 @@ mod tests {
             "INSERT INTO archive (id, name) SELECT id, name FROM users WHERE deleted = true",
         );
         let i = p.parse_insert().unwrap();
-        assert_eq!(
-            i.columns.as_deref(),
-            Some(&["id".to_string(), "name".to_string()][..])
-        );
+        assert_eq!(column_names(i.columns.as_deref()), Some(vec!["id", "name"]));
         let InsertSource::Select(sel) = &i.source else {
             panic!("expected Select source, got {:?}", i.source);
         };
@@ -674,15 +677,26 @@ mod tests {
         let mut p = Parser::new("DELETE FROM t WHERE a = 1 OR b = 2 AND c = 3");
         let d = p.parse_delete().unwrap();
         let wc = d.where_clause.expect("where");
-        let WhereCondition::Or(left, right) = wc else {
+        let Expr::BinaryOp { lhs, op, rhs } = wc else {
             panic!("expected OR at top");
         };
-        let WhereCondition::Predicate { field, .. } = left.as_ref() else {
-            panic!("expected left predicate");
+        assert_eq!(op, BinOp::Or);
+        let Expr::BinaryOp {
+            lhs: l_lhs,
+            op: l_op,
+            ..
+        } = lhs.as_ref()
+        else {
+            panic!("expected left comparison");
         };
-        assert_eq!(field, &"a".into());
-        let WhereCondition::And(..) = right.as_ref() else {
+        assert_eq!(l_op, &BinOp::Eq);
+        let Expr::Column(col) = l_lhs.as_ref() else {
+            panic!("expected column on left of a = 1");
+        };
+        assert_eq!(col.name.as_str(), "a");
+        let Expr::BinaryOp { op: r_op, .. } = rhs.as_ref() else {
             panic!("expected AND group on right");
         };
+        assert_eq!(r_op, &BinOp::And);
     }
 }

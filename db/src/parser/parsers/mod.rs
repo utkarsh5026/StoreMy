@@ -11,18 +11,18 @@ mod ddl;
 mod dml;
 mod query;
 
+pub mod expr;
 use thiserror::Error;
 use tracing::{debug, instrument, trace, warn};
 
 use super::Parser;
 use crate::{
-    Value,
     parser::{
         lexer::LexError,
-        statements::{ColumnRef, Statement, WhereCondition},
+        statements::{ColumnRef, Expr, Statement},
         token::{Token, TokenType},
     },
-    primitives::{NameError, Predicate},
+    primitives::{NameError, NonEmptyString},
 };
 
 /// Errors that can occur while parsing a SQL statement.
@@ -275,8 +275,10 @@ impl Parser {
     ///
     /// Returns [`ParserError`] if no table name identifier is present, or if
     /// `AS` is not followed by an identifier.
-    fn parse_table_with_alias(&mut self) -> Result<(String, Option<String>), ParserError> {
-        let table = self.expect(TokenType::Identifier)?;
+    fn parse_table_with_alias(
+        &mut self,
+    ) -> Result<(NonEmptyString, Option<NonEmptyString>), ParserError> {
+        let table = self.expect_ident()?;
 
         let saw_as = self.on_peek_token(TokenType::As, |_| Ok(()))?.is_some();
 
@@ -288,7 +290,7 @@ impl Parser {
             None
         };
 
-        Ok((String::from(&table), alias))
+        Ok((table, alias.map(NonEmptyString::try_from).transpose()?))
     }
 
     /// Runs `exec` only if the next token matches `expected`, consuming nothing
@@ -320,85 +322,13 @@ impl Parser {
         })
     }
 
-    /// Parses `WHERE condition`, supporting `AND` (higher precedence) and `OR` (lower precedence).
+    /// Parses a `WHERE` / `HAVING` / `ON` condition as a full expression tree.
     ///
-    /// Strategy: collect predicates into AND-groups separated by OR, then fold both levels.
-    /// e.g. `a=1 OR b=2 AND c=3` → `a=1 OR (b=2 AND c=3)`
+    /// Delegates entirely to [`Parser::parse_expression`], which handles
+    /// `AND`, `OR`, `NOT`, comparisons, and parentheses with correct precedence.
     #[instrument(skip(self), fields(component = "parser", clause = "where"), err(Debug))]
-    fn parse_where(&mut self) -> Result<WhereCondition, ParserError> {
-        let mut or_groups = vec![vec![self.parse_predicate()?]];
-        let mut predicate_count: usize = 1;
-
-        loop {
-            if let Some(pred) = self.on_peek_token(TokenType::And, Self::parse_predicate)? {
-                or_groups.last_mut().unwrap().push(pred);
-                predicate_count += 1;
-                trace!("parsed AND predicate");
-            } else if let Some(pred) = self.on_peek_token(TokenType::Or, Self::parse_predicate)? {
-                or_groups.push(vec![pred]);
-                predicate_count += 1;
-                trace!("parsed OR predicate");
-            } else {
-                break;
-            }
-        }
-
-        let or_group_count = or_groups.len();
-        let or_terms = or_groups.into_iter().map(|group| {
-            group
-                .into_iter()
-                .reduce(|l, r| WhereCondition::And(Box::new(l), Box::new(r)))
-                .unwrap()
-        });
-
-        let condition = or_terms
-            .reduce(|l, r| WhereCondition::Or(Box::new(l), Box::new(r)))
-            .unwrap();
-        debug!(
-            predicate_count,
-            or_group_count, "parsed WHERE/HAVING condition"
-        );
-        Ok(condition)
-    }
-
-    /// Parses a single `<field> <op> <value>` predicate.
-    ///
-    /// The value token is converted to a [`Value`] via [`Value::try_from`],
-    /// which handles integer, float, string, `NULL`, and boolean literals.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`ParserError`] if the field or operator tokens are missing,
-    /// the operator string is not a recognized [`Predicate`] variant, or the
-    /// value token cannot be interpreted as a literal.
-    #[instrument(
-        skip(self),
-        fields(component = "parser", rule = "predicate"),
-        err(Debug)
-    )]
-    fn parse_predicate(&mut self) -> Result<WhereCondition, ParserError> {
-        let field = self.parse_column_ref()?;
-        let op = self.expect(TokenType::Operator)?;
-        let op = Predicate::try_from(op.value.as_str()).map_err(|msg| {
-            warn!(operator = %op.value, reason = %msg, "invalid predicate operator");
-            ParserError::ParsingError(msg)
-        })?;
-
-        let val_tok = self.bump()?;
-        let value_kind = val_tok.kind;
-        let value_position = val_tok.span.start;
-        let value = Value::try_from(val_tok).map_err(|msg| {
-            warn!(
-                value_token_kind = ?value_kind,
-                value_position,
-                reason = %msg,
-                "invalid predicate literal"
-            );
-            ParserError::ParsingError(msg)
-        })?;
-
-        trace!(field = %field, predicate = ?op, "parsed predicate");
-        Ok(WhereCondition::predicate(field, op, value))
+    pub(super) fn parse_where(&mut self) -> Result<Expr, ParserError> {
+        self.parse_expression(expr::Precedence::LOOSEST)
     }
 
     /// Parses a possibly qualified column reference, e.g., `col` or `tbl.col`.
@@ -413,9 +343,9 @@ impl Parser {
     /// - [`Ok(ColumnRef)`]: with the parsed qualifier (if present) and column name.
     /// - [`Err(ParserError)`]: if any identifier token is missing or malformed.
     pub(super) fn parse_column_ref(&mut self) -> Result<ColumnRef, ParserError> {
-        let first = self.expect(TokenType::Identifier)?.value;
+        let first = self.expect_ident()?;
         if self.if_peek_then_consume(TokenType::Dot)? {
-            let name = self.expect(TokenType::Identifier)?.value;
+            let name = self.expect_ident()?;
             Ok(ColumnRef {
                 qualifier: Some(first),
                 name,
@@ -530,8 +460,10 @@ impl Parser {
     ///
     /// Returns [`ParserError`] if the next token is not an identifier.
     #[inline]
-    fn expect_ident(&mut self) -> Result<String, ParserError> {
-        Ok(self.expect(TokenType::Identifier)?.value)
+    fn expect_ident(&mut self) -> Result<NonEmptyString, ParserError> {
+        Ok(NonEmptyString::try_from(
+            self.expect(TokenType::Identifier)?.value,
+        )?)
     }
 
     /// Parses a parenthesized, comma-separated list of items.
