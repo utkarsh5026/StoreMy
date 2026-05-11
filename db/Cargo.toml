@@ -29,7 +29,7 @@ thiserror = "1.0"
 storemy-codec-derive = { path = "../storemy-codec-derive", version = "0.1.0" }
 
 # REPL / richer output
-rustyline = "14"
+rustyline = "18"
 comfy-table = "7"
 owo-colors = "4"
 
