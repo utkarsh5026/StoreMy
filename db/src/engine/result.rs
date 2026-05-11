@@ -96,6 +96,17 @@ pub enum StatementResult {
     PrimaryKeyDropped {
         table: String,
     },
+    /// `ALTER TABLE ... ADD CONSTRAINT` created a UNIQUE constraint backed by a new B-tree index.
+    UniqueConstraintAdded {
+        table: String,
+        constraint: String,
+        index: String,
+    },
+    /// `ALTER TABLE ... DROP CONSTRAINT` removed a catalog constraint (and any backing index).
+    ConstraintDropped {
+        table: String,
+        constraint: String,
+    },
 }
 
 impl StatementResult {
@@ -153,6 +164,28 @@ impl StatementResult {
         Self::Updated {
             table: table.into(),
             rows,
+        }
+    }
+
+    pub(super) fn unique_constraint_added(
+        table: impl Into<String>,
+        constraint: impl Into<String>,
+        index: impl Into<String>,
+    ) -> Self {
+        Self::UniqueConstraintAdded {
+            table: table.into(),
+            constraint: constraint.into(),
+            index: index.into(),
+        }
+    }
+
+    pub(super) fn constraint_dropped(
+        table: impl Into<String>,
+        constraint: impl Into<String>,
+    ) -> Self {
+        Self::ConstraintDropped {
+            table: table.into(),
+            constraint: constraint.into(),
         }
     }
 }
@@ -308,6 +341,22 @@ impl fmt::Display for StatementResult {
                 write!(
                     f,
                     "ALTER TABLE completed: dropped primary key from table '{table}'"
+                )
+            }
+            StatementResult::UniqueConstraintAdded {
+                table,
+                constraint,
+                index,
+            } => {
+                write!(
+                    f,
+                    "ALTER TABLE completed: added UNIQUE constraint '{constraint}' on '{table}' with backing index '{index}'"
+                )
+            }
+            StatementResult::ConstraintDropped { table, constraint } => {
+                write!(
+                    f,
+                    "ALTER TABLE completed: dropped constraint '{constraint}' from table '{table}'"
                 )
             }
         }
