@@ -59,7 +59,7 @@ tracing-chrome = "0.7"
 tracing-opentelemetry = "0.28"
 opentelemetry = "0.27"
 opentelemetry_sdk = { version = "0.27", features = ["rt-tokio"] }
-opentelemetry-otlp = { version = "0.27", features = ["grpc-tonic"] }
+opentelemetry-otlp = { version = "0.32", features = ["grpc-tonic"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "signal"] }
 
 # HTTP server (storemy-server bin only)
