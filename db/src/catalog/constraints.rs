@@ -27,6 +27,22 @@ use crate::{
 };
 
 impl Catalog {
+    /// Generates a UNIQUE constraint name `{table}_unique_{col1}_{col2}…` by
+    /// resolving `columns` (bound [`ColumnId`]s) to names via the catalog.
+    pub fn autoname_unique_constraint_for(
+        &self,
+        txn: &Transaction<'_>,
+        table_id: FileId,
+        columns: &[ColumnId],
+    ) -> Result<String, CatalogError> {
+        let tbl = self.get_table_info_by_id(txn, table_id)?;
+        let col_names: Vec<&str> = columns
+            .iter()
+            .map(|&id| tbl.schema.field(usize::from(id)).unwrap().name.as_str())
+            .collect();
+        Ok(format!("{}_unique_{}", tbl.name.as_str(), col_names.join("_")))
+    }
+
     /// Adds a UNIQUE constraint to a table.
     ///
     /// Writes one `ConstraintRow` header (kind = `Unique`) and one
@@ -396,3 +412,4 @@ fn i32_ordinal(ordinal: usize) -> Result<i32, CatalogError> {
     i32::try_from(ordinal)
         .map_err(|_| CatalogError::invalid_catalog_row("constraint ordinal does not fit in i32"))
 }
+
