@@ -31,18 +31,80 @@
 //! DDL execution does not evaluate row expressions. `NULL` appears only as
 //! column nullability recorded in the `CREATE TABLE` schema; `SHOW INDEXES`
 //! returns catalog strings and index kinds, not row values.
+//!
+//! UNIQUE-with-index orchestration (empty B-tree, catalog rows, then heap
+//! backfill) lives in this module so the catalog stays metadata-oriented.
 
 use crate::{
+    FileId,
     binder::{
-        Bound, BoundAlterAction, BoundAlterTable, BoundCreateIndex, BoundCreateTable, BoundDrop,
-        BoundDropIndex, BoundShowIndexes,
+        Bound, BoundAlterAction, BoundAlterTable, BoundConstraintBody, BoundCreateIndex,
+        BoundCreateTable, BoundDrop, BoundDropIndex, BoundShowIndexes,
     },
+    catalog::{CatalogError, manager::Catalog},
     engine::{Engine, EngineError, ShownIndex, StatementResult},
+    index::IndexKind,
     parser::statements::{
         AlterTableStatement, CreateIndexStatement, DropIndexStatement, DropStatement,
         ShowIndexesStatement, Statement,
     },
+    primitives::ColumnId,
+    transaction::Transaction,
 };
+
+/// Inserts one secondary-index entry per live heap row for `index_name`.
+///
+/// Used after [`Catalog::create_index`] when enforcing UNIQUE on existing data.
+/// Duplicate keys are rejected before insert (B-trees may otherwise hold the
+/// same key under different [`RecordId`](crate::primitives::RecordId)s).
+fn populate_index_from_heap(
+    catalog: &Catalog,
+    txn: &Transaction<'_>,
+    table_file_id: FileId,
+    index_name: &str,
+) -> Result<(), CatalogError> {
+    use fallible_iterator::FallibleIterator;
+
+    let heap = catalog.get_table_heap(table_file_id)?;
+    let live = catalog
+        .get_index_by_name(index_name)
+        .ok_or_else(|| CatalogError::IndexNameNotFound(index_name.to_string()))?;
+    let tid = txn.transaction_id();
+    let mut scan = heap.scan(tid)?;
+    while let Some((rid, tuple)) = FallibleIterator::next(&mut scan)? {
+        let key = live.create_index_key(&tuple)?;
+        let hits = live.access.search(tid, &key)?;
+        if !hits.is_empty() {
+            return Err(CatalogError::invalid_catalog_row(format!(
+                "UNIQUE constraint violated while building index '{index_name}': duplicate key in existing table data"
+            )));
+        }
+        live.insert(tid, &tuple, rid)?;
+    }
+    Ok(())
+}
+
+fn add_unique_constraint_with_btree_backfill(
+    catalog: &Catalog,
+    txn: &Transaction<'_>,
+    table_file_id: FileId,
+    table_name: &str,
+    constraint_name: &str,
+    index_name: &str,
+    columns: &[ColumnId],
+) -> Result<(), CatalogError> {
+    let index_id = catalog.create_index(
+        txn,
+        index_name,
+        table_name,
+        table_file_id,
+        columns,
+        IndexKind::Btree,
+    )?;
+    catalog.add_unique_constraint(txn, table_file_id, constraint_name, columns, Some(index_id))?;
+    populate_index_from_heap(catalog, txn, table_file_id, index_name)?;
+    Ok(())
+}
 
 impl Engine<'_> {
     /// Executes a `CREATE TABLE` statement after binding table names and schema.
@@ -121,9 +183,30 @@ impl Engine<'_> {
                     name,
                     schema,
                     primary_key,
-                    constraints: _,
+                    constraints,
                 } => {
                     let file_id = catalog.create_table(txn, &name, schema, primary_key)?;
+                    for c in &constraints {
+                        let BoundConstraintBody::Unique { columns } = &c.body else {
+                            continue;
+                        };
+                        let constraint_name: String = match c.name.as_ref() {
+                            Some(n) => n.as_str().to_owned(),
+                            None => {
+                                catalog.autoname_unique_constraint_for(txn, file_id, columns)?
+                            }
+                        };
+                        let index_name = format!("{name}_{constraint_name}_idx");
+                        add_unique_constraint_with_btree_backfill(
+                            catalog,
+                            txn,
+                            file_id,
+                            &name,
+                            constraint_name.as_str(),
+                            index_name.as_str(),
+                            columns.as_slice(),
+                        )?;
+                    }
                     Ok(StatementResult::table_created(name, file_id, false))
                 }
             }
@@ -462,6 +545,7 @@ impl Engine<'_> {
         })
     }
 
+    #[allow(clippy::too_many_lines)]
     pub(super) fn exec_alter_table(
         &self,
         statement: AlterTableStatement,
@@ -536,8 +620,49 @@ impl Engine<'_> {
                         catalog.drop_primary_key(txn, file_id)?;
                         Ok(StatementResult::PrimaryKeyDropped { table: table_name })
                     }
-                    BoundAlterAction::AddConstraint { .. }
-                    | BoundAlterAction::DropConstraint { .. } => todo!(),
+                    BoundAlterAction::AddConstraint { constraint } => match &constraint.body {
+                        BoundConstraintBody::Unique { columns } => {
+                            let constraint_name: String = match constraint.name.as_ref() {
+                                Some(n) => n.as_str().to_owned(),
+                                None => {
+                                    catalog.autoname_unique_constraint_for(txn, file_id, columns)?
+                                }
+                            };
+                            let index_name = format!("{table_name}_{constraint_name}_idx");
+                            add_unique_constraint_with_btree_backfill(
+                                catalog,
+                                txn,
+                                file_id,
+                                &table_name,
+                                constraint_name.as_str(),
+                                index_name.as_str(),
+                                columns.as_slice(),
+                            )?;
+                            Ok(StatementResult::unique_constraint_added(
+                                table_name,
+                                constraint_name,
+                                index_name,
+                            ))
+                        }
+                        _ => Err(EngineError::Unsupported(
+                            "ALTER TABLE ADD CONSTRAINT: only UNIQUE is supported for execution"
+                                .to_string(),
+                        )),
+                    },
+                    BoundAlterAction::DropConstraint { name, if_exists } => {
+                        let n = name.as_str();
+                        match catalog.drop_constraint(txn, file_id, n) {
+                            Ok(()) => Ok(StatementResult::constraint_dropped(table_name, n)),
+                            Err(CatalogError::ConstraintNotFound { .. }) if if_exists => {
+                                Ok(StatementResult::NoOp {
+                                    statement: format!(
+                                        "ALTER TABLE {table_name} DROP CONSTRAINT IF EXISTS {n}"
+                                    ),
+                                })
+                            }
+                            Err(e) => Err(e.into()),
+                        }
+                    }
                 },
             }
         })

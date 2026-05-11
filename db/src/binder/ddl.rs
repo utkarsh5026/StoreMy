@@ -36,7 +36,7 @@
 use crate::{
     FileId, Value,
     binder::{BindError, check_table, require_column, resolve_column_ids},
-    catalog::{CatalogError, TableInfo, manager::Catalog, systable::FkAction},
+    catalog::{TableInfo, manager::Catalog, systable::FkAction},
     index::IndexKind,
     parser::statements::{
         AlterAction, AlterTableStatement, ColumnDef, CreateIndexStatement, CreateTableStatement,
