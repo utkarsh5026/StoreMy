@@ -1024,9 +1024,13 @@ mod tests {
         bp.release_all(init_txn);
 
         catalog
-            .register_index(index_name, table_file_id, hash.into(), vec![
-                ColumnId::try_from(0usize).unwrap(),
-            ])
+            .register_index(
+                index_name,
+                table_file_id,
+                crate::primitives::IndexId::new(1),
+                hash.into(),
+                vec![ColumnId::try_from(0usize).unwrap()],
+            )
             .unwrap();
     }
 

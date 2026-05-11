@@ -66,6 +66,7 @@ fn engine_error_to_http(e: &EngineError) -> (StatusCode, &'static str, String) {
         E::DuplicateInsertColumn { .. } => (StatusCode::BAD_REQUEST, "duplicate_column"),
         E::WrongColumnCount { .. } => (StatusCode::BAD_REQUEST, "wrong_column_count"),
         E::NullViolation { .. } => (StatusCode::BAD_REQUEST, "null_violation"),
+        E::UniqueViolation { .. } => (StatusCode::CONFLICT, "unique_violation"),
         E::TypeMismatch { .. } | E::TypeError(_) => (StatusCode::BAD_REQUEST, "type_error"),
         E::Bind(_) => (StatusCode::BAD_REQUEST, "bind"),
         E::Catalog(_)

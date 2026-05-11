@@ -40,7 +40,11 @@ impl Catalog {
             .iter()
             .map(|&id| tbl.schema.field(usize::from(id)).unwrap().name.as_str())
             .collect();
-        Ok(format!("{}_unique_{}", tbl.name.as_str(), col_names.join("_")))
+        Ok(format!(
+            "{}_unique_{}",
+            tbl.name.as_str(),
+            col_names.join("_")
+        ))
     }
 
     /// Adds a UNIQUE constraint to a table.
@@ -540,7 +544,10 @@ mod tests {
         txn2.commit().unwrap();
 
         assert_eq!(info.unique_constraints.len(), 1);
-        assert_eq!(info.unique_constraints[0].name.as_str(), "users_unique_email");
+        assert_eq!(
+            info.unique_constraints[0].name.as_str(),
+            "users_unique_email"
+        );
         assert_eq!(info.unique_constraints[0].columns, vec![col(1)]);
     }
 
@@ -590,7 +597,10 @@ mod tests {
         txn2.commit().unwrap();
 
         assert_eq!(info.unique_constraints.len(), 1);
-        assert_eq!(info.unique_constraints[0].name.as_str(), "users_unique_email");
+        assert_eq!(
+            info.unique_constraints[0].name.as_str(),
+            "users_unique_email"
+        );
     }
 
     #[test]
@@ -654,8 +664,7 @@ mod tests {
             .create_table(&txn, "users", three_col_schema(), None)
             .unwrap();
 
-        let result =
-            catalog.add_unique_constraint(&txn, file_id, "bad", &[col(99)], None);
+        let result = catalog.add_unique_constraint(&txn, file_id, "bad", &[col(99)], None);
 
         assert!(
             matches!(result, Err(CatalogError::InvalidCatalogRow { .. })),
@@ -783,7 +792,9 @@ mod tests {
         txn2.commit().unwrap();
 
         assert_eq!(info.unique_constraints.len(), 1);
-        assert_eq!(info.unique_constraints[0].name.as_str(), "users_unique_name");
+        assert_eq!(
+            info.unique_constraints[0].name.as_str(),
+            "users_unique_name"
+        );
     }
 }
-
