@@ -36,12 +36,12 @@
 use crate::{
     FileId, Value,
     binder::{BindError, check_table, require_column, resolve_column_ids},
-    catalog::{TableInfo, manager::Catalog, systable::FkAction},
+    catalog::{CatalogError, TableInfo, manager::Catalog, systable::FkAction},
     index::IndexKind,
     parser::statements::{
         AlterAction, AlterTableStatement, ColumnDef, CreateIndexStatement, CreateTableStatement,
         DropIndexStatement, DropStatement, ReferentialAction, ShowIndexesStatement,
-        TableConstraint,
+        TableConstraint, Uniqueness,
     },
     primitives::{ColumnId, NonEmptyString},
     transaction::Transaction,
@@ -183,7 +183,13 @@ impl BoundCreateTable {
             &schema,
             table_name,
         )?;
-        let constraints = Self::resolve_constraints(stmt, &schema, catalog, txn)?;
+        let mut constraints = Self::resolve_constraints(stmt, &schema, catalog, txn)?;
+        Self::append_column_level_unique_constraints(
+            table_name,
+            &stmt.columns,
+            &schema,
+            &mut constraints,
+        )?;
 
         Ok(Self::New {
             name: stmt.table_name.as_str().to_string(),
@@ -193,6 +199,69 @@ impl BoundCreateTable {
         })
     }
 
+    /// Appends column-level unique constraints to the list of table constraints.
+    ///
+    /// For each column in `columns` marked as `UNIQUE`, this function checks if a unique constraint
+    /// on that column already exists in `constraints`. If not, it creates a `BoundTableConstraint`
+    /// with an auto-generated name (`{table}_unique_{col}`) and adds it to
+    /// `constraints`.
+    ///
+    /// If a column marked as `UNIQUE` does not exist in the schema, returns
+    /// `BindError::unknown_column`.
+    ///
+    /// # Arguments
+    ///
+    /// - `table_name`: The name of the table, used for error reporting and auto-naming constraints.
+    /// - `columns`: Slice of all column definitions for the table.
+    /// - `schema`: The schema for the table, used for resolving column IDs.
+    /// - `constraints`: The mutable vector of constraints to which new unique constraints will be
+    ///   appended.
+    ///
+    /// # Errors
+    ///
+    /// Returns `BindError::unknown_column` if a column marked as unique is not found in the schema.
+    /// Returns `BindError::Catalog` on constraint name validation errors.
+    fn append_column_level_unique_constraints(
+        table_name: &str,
+        columns: &[ColumnDef],
+        schema: &TupleSchema,
+        constraints: &mut Vec<BoundTableConstraint>,
+    ) -> Result<(), BindError> {
+        for col in columns {
+            if col.unique != Uniqueness::Unique {
+                continue;
+            }
+            let (col_id, _) = require_column(schema, table_name, col.name.as_str())?;
+            let sorted = vec![col_id];
+
+            if constraints.iter().any(|c| {
+                matches!(
+                    &c.body,
+                    BoundConstraintBody::Unique { columns } if columns == &sorted
+                )
+            }) {
+                continue;
+            }
+
+            constraints.push(BoundTableConstraint {
+                name: None,
+                body: BoundConstraintBody::Unique { columns: sorted },
+            });
+        }
+        Ok(())
+    }
+
+    /// Resolves the primary key for a table during table creation.
+    ///
+    /// Primary keys can be specified in two ways:
+    /// 1. Inline, by marking one or more column definitions as `primary_key`.
+    /// 2. At the table-level (often via a `PRIMARY KEY (...)` constraint), passed as `table_pk`.
+    ///
+    /// If both exist, preference is given to the inline specification.
+    ///
+    /// Returns a vector of `ColumnId`s for the columns holding the primary key, or `None` if there
+    /// is no primary key. Returns `BindError::PrimaryKeyNotInColumns` if a named primary key
+    /// column does not exist in the schema.
     fn resolve_primary_key(
         columns: &[ColumnDef],
         table_pk: &[NonEmptyString],
@@ -235,6 +304,13 @@ impl BoundCreateTable {
         Ok(primary_key)
     }
 
+    /// Resolves and binds table constraints declared in a `CREATE TABLE` statement.
+    ///
+    /// Iterates over all named constraints and binds them against the current table schema,
+    /// validating correctness and referencing other catalog entries when needed (e.g. for
+    /// foreign keys).
+    ///
+    /// Returns a vector of bound constraints or a `BindError` if any constraint is invalid.
     fn resolve_constraints(
         stmt: &CreateTableStatement,
         schema: &TupleSchema,
