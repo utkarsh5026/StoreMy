@@ -114,6 +114,7 @@ impl SystemTable {
                 field("table_id", Uint64).not_null(),
                 field("constraint_kind", Uint32).not_null(),
                 field("expr", String),
+                field("backing_index_id", Int64),
             ],
             SystemTable::ConstraintColumns => vec![
                 field("constraint_name", String).not_null(),
@@ -720,11 +721,16 @@ impl From<FkAction> for u32 {
 /// Identifies a table-level constraint by name, [`FileId`], and [`ConstraintKind`].
 /// `expr` holds a non-empty predicate string when the kind needs one (for example
 /// CHECK); otherwise it is `None` and serializes as [`Value::Null`].
+///
+/// `backing_index_id` links a UNIQUE constraint to the catalog [`IndexId`] of the
+/// secondary index that maintains uniqueness for the same column list (when the engine
+/// creates or attaches that index). Other constraint kinds keep this unset.
 pub(super) struct ConstraintRow {
     pub(super) table_id: FileId,
     pub(super) constraint_name: NonEmptyString,
     pub(super) expr: Option<NonEmptyString>,
     pub(super) constraint_kind: ConstraintKind,
+    pub(super) backing_index_id: Option<IndexId>,
 }
 
 impl From<&ConstraintRow> for Tuple {
@@ -736,6 +742,8 @@ impl From<&ConstraintRow> for Tuple {
             c.expr
                 .clone()
                 .map_or(Value::Null, |e| e.as_str().to_owned().into()),
+            c.backing_index_id
+                .map_or(Value::Null, |id| Value::Int64(id.0)),
         ])
     }
 }
@@ -749,11 +757,13 @@ impl TryFrom<&Tuple> for ConstraintRow {
         let constraint_kind =
             catalog_row_try(ConstraintKind::try_from(tuple.read_field::<u32>(2)?))?;
         let expr: Option<String> = tuple.read_field(3)?;
+        let backing_index_id: Option<i64> = tuple.read_field(4)?;
         Ok(Self {
             constraint_name,
             table_id,
             constraint_kind,
             expr: expr.map(NonEmptyString::new).transpose()?,
+            backing_index_id: backing_index_id.map(IndexId::from),
         })
     }
 }
@@ -904,7 +914,7 @@ mod tests {
     use crate::{
         FileId,
         catalog::CatalogError,
-        primitives::{ColumnId, NonEmptyString},
+        primitives::{ColumnId, IndexId, NonEmptyString},
         tuple::Tuple,
         types::Value,
     };
@@ -937,6 +947,7 @@ mod tests {
             Value::Uint64(10),
             Value::Uint32(u32::from(ConstraintKind::PrimaryKey)),
             Value::Null, // expr
+            Value::Null, // backing_index_id
         ])
     }
 
@@ -1204,8 +1215,6 @@ mod tests {
         assert!(matches!(err, CatalogError::Corruption { .. }));
     }
 
-    // ── validate_row: Constraints ───────────────────────────────────────────
-
     #[test]
     fn test_validate_constraints_row_ok() {
         assert!(
@@ -1229,6 +1238,7 @@ mod tests {
                 Value::Uint64(1),
                 Value::Uint32(u32::from(kind)),
                 Value::Null,
+                Value::Null,
             ]);
             assert!(
                 SystemTable::Constraints.validate_row(&tuple).is_ok(),
@@ -1243,6 +1253,7 @@ mod tests {
             Value::String("bad".into()),
             Value::Uint64(1),
             Value::Uint32(99),
+            Value::Null,
             Value::Null,
         ]);
         let err = SystemTable::Constraints.validate_row(&tuple).unwrap_err();
@@ -1270,12 +1281,11 @@ mod tests {
             Value::Uint64(1),
             Value::Uint32(0),
             Value::Null,
+            Value::Null,
         ]);
         let err = SystemTable::Constraints.validate_row(&tuple).unwrap_err();
         assert!(matches!(err, CatalogError::Corruption { .. }));
     }
-
-    // ── validate_row: Constraint columns ─────────────────────────────────────
 
     #[test]
     fn test_validate_constraint_columns_row_ok() {
@@ -1452,8 +1462,6 @@ mod tests {
         assert!(err.contains("unknown fk action"));
     }
 
-    // ── Row round-trip: Tuple encode / decode ─────────────────────────────────
-
     #[test]
     fn test_constraint_row_round_trip() {
         let row = ConstraintRow {
@@ -1461,6 +1469,7 @@ mod tests {
             constraint_name: NonEmptyString::new("pk_t").unwrap(),
             expr: None,
             constraint_kind: ConstraintKind::PrimaryKey,
+            backing_index_id: None,
         };
         let tuple = Tuple::from(&row);
         let got = ConstraintRow::try_from(&tuple).unwrap();
@@ -1468,6 +1477,7 @@ mod tests {
         assert_eq!(got.constraint_name.as_str(), row.constraint_name.as_str());
         assert_eq!(got.expr, row.expr);
         assert_eq!(got.constraint_kind, row.constraint_kind);
+        assert_eq!(got.backing_index_id, row.backing_index_id);
     }
 
     #[test]
@@ -1478,6 +1488,7 @@ mod tests {
             constraint_name: NonEmptyString::new("chk_t").unwrap(),
             expr: Some(expr.clone()),
             constraint_kind: ConstraintKind::Check,
+            backing_index_id: None,
         };
         let tuple = Tuple::from(&row);
         let got = ConstraintRow::try_from(&tuple).unwrap();
@@ -1488,6 +1499,21 @@ mod tests {
             Some(expr.as_str())
         );
         assert_eq!(got.constraint_kind, ConstraintKind::Check);
+    }
+
+    #[test]
+    fn test_constraint_row_round_trip_with_backing_index_id() {
+        let row = ConstraintRow {
+            table_id: FileId(1),
+            constraint_name: NonEmptyString::new("u_email").unwrap(),
+            expr: None,
+            constraint_kind: ConstraintKind::Unique,
+            backing_index_id: Some(IndexId::new(7)),
+        };
+        let tuple = Tuple::from(&row);
+        let got = ConstraintRow::try_from(&tuple).unwrap();
+        assert_eq!(got.backing_index_id, Some(IndexId::new(7)));
+        assert_eq!(got.constraint_kind, ConstraintKind::Unique);
     }
 
     #[test]

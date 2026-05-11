@@ -1491,6 +1491,7 @@ mod tests {
     #[test]
     fn replay_restores_table_constraints_after_reopen() {
         let dir = tempdir().unwrap();
+        let unique_backing_index_id: IndexId;
 
         {
             let (catalog, txn_mgr, bp, _) = make_full_infra(dir.path());
@@ -1510,8 +1511,24 @@ mod tests {
             let child_id = catalog
                 .create_table(&txn, "children", child_schema, None)
                 .unwrap();
+            unique_backing_index_id = catalog
+                .create_index(
+                    &txn,
+                    "parents_email_uidx",
+                    "parents",
+                    parent_id,
+                    &[col_id(1)],
+                    IndexKind::Btree,
+                )
+                .unwrap();
             catalog
-                .add_unique_constraint(&txn, parent_id, "parents_email_key", &[col_id(1)])
+                .add_unique_constraint(
+                    &txn,
+                    parent_id,
+                    "parents_email_key",
+                    &[col_id(1)],
+                    Some(unique_backing_index_id),
+                )
                 .unwrap();
             catalog
                 .add_foreign_key(
@@ -1538,6 +1555,10 @@ mod tests {
         assert_eq!(parent.unique_constraints.len(), 1);
         assert_eq!(parent.unique_constraints[0].name, "parents_email_key");
         assert_eq!(parent.unique_constraints[0].columns, vec![col_id(1)]);
+        assert_eq!(
+            parent.unique_constraints[0].backing_index_id,
+            Some(unique_backing_index_id)
+        );
 
         assert_eq!(child.foreign_keys.len(), 1);
         assert_eq!(child.foreign_keys[0].name, "children_parent_fk");

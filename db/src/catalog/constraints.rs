@@ -18,9 +18,11 @@ use crate::{
     catalog::{
         CatalogError, ForeignKey, TableInfo, UniqueConstraint,
         manager::Catalog,
-        systable::{ConstraintColumnRow, ConstraintKind, ConstraintRow, FkAction, FkConstraintRow},
+        systable::{
+            ConstraintColumnRow, ConstraintKind, ConstraintRow, FkAction, FkConstraintRow, IndexRow,
+        },
     },
-    primitives::{ColumnId, NonEmptyString},
+    primitives::{ColumnId, IndexId, NonEmptyString},
     transaction::Transaction,
 };
 
@@ -40,6 +42,7 @@ impl Catalog {
         table_id: FileId,
         name: &str,
         columns: &[ColumnId],
+        backing_index_id: Option<IndexId>,
     ) -> Result<(), CatalogError> {
         if columns.is_empty() {
             return Err(CatalogError::invalid_catalog_row(
@@ -58,6 +61,7 @@ impl Catalog {
             table_id,
             constraint_kind: ConstraintKind::Unique,
             expr: None,
+            backing_index_id,
         })?;
 
         for (ordinal, &col_id) in columns.iter().enumerate() {
@@ -73,6 +77,7 @@ impl Catalog {
         table.unique_constraints.push(UniqueConstraint {
             name: constraint_name,
             columns: columns.to_vec(),
+            backing_index_id,
         });
         self.refresh_cached_table(table);
         Ok(())
@@ -128,6 +133,7 @@ impl Catalog {
             table_id,
             constraint_kind: ConstraintKind::ForeignKey,
             expr: None,
+            backing_index_id: None,
         })?;
 
         for (ordinal, (&local, &referenced)) in
@@ -176,12 +182,24 @@ impl Catalog {
                 r.table_id == table_id && r.constraint_name.as_str() == name
             })?
             .pop()
-            .ok_or_else(|| {
-                CatalogError::invalid_catalog_row(format!(
-                    "constraint {name} not found on table {}",
-                    table.name.as_str()
-                ))
+            .ok_or_else(|| CatalogError::ConstraintNotFound {
+                table: table.name.as_str().to_owned(),
+                constraint: name.to_owned(),
             })?;
+
+        let backing_index_name = if header.constraint_kind == ConstraintKind::Unique {
+            if let Some(idx_id) = header.backing_index_id {
+                let rows =
+                    self.scan_system_table_where::<IndexRow, _>(txn, |r| r.index_id == idx_id)?;
+                rows.into_iter()
+                    .next()
+                    .map(|r| r.index_name.as_str().to_owned())
+            } else {
+                None
+            }
+        } else {
+            None
+        };
 
         match header.constraint_kind {
             ConstraintKind::Unique => {
@@ -215,6 +233,10 @@ impl Catalog {
             r.table_id == table_id && r.constraint_name.as_str() == name
         })?;
 
+        if let Some(index_name) = backing_index_name {
+            self.drop_index(txn, &index_name)?;
+        }
+
         self.refresh_cached_table(table);
         Ok(())
     }
@@ -232,7 +254,6 @@ impl Catalog {
         column_rows: Vec<ConstraintColumnRow>,
         fk_rows: Vec<FkConstraintRow>,
     ) -> Result<(), CatalogError> {
-        // Group detail rows by constraint name once, so each header lookup is O(1).
         let mut cols_by_name: HashMap<String, Vec<ConstraintColumnRow>> = HashMap::new();
         for r in column_rows {
             cols_by_name
@@ -259,6 +280,7 @@ impl Catalog {
                     table.unique_constraints.push(UniqueConstraint {
                         name: header.constraint_name,
                         columns: rows.into_iter().map(|r| r.column_id).collect(),
+                        backing_index_id: header.backing_index_id,
                     });
                 }
                 ConstraintKind::ForeignKey => {
