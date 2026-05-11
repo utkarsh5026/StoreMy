@@ -244,6 +244,16 @@ impl<'a> HeapPage<'a> {
         Ok(())
     }
 
+    /// Returns the live tuple at `slot_id`, or [`None`] when the slot is empty.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`StorageError::SlotOutOfBounds`] when `slot_id` is not a valid slot index.
+    pub(crate) fn tuple_at(&self, slot_id: SlotId) -> Result<Option<&Tuple>, StorageError> {
+        self.check_slot_bounds(slot_id)?;
+        Ok(self.tuples[usize::from(slot_id)].as_ref())
+    }
+
     /// Returns an iterator over every occupied slot, yielding `(SlotId, &Tuple)` pairs.
     ///
     /// Empty (deleted) slots are skipped. The order of iteration follows slot

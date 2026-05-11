@@ -14,7 +14,7 @@ use thiserror::Error;
 use crate::{
     FileId,
     catalog::systable::FkAction,
-    primitives::{ColumnId, NonEmptyString},
+    primitives::{ColumnId, IndexId, NonEmptyString},
     tuple::TupleSchema,
 };
 
@@ -64,6 +64,9 @@ pub enum CatalogError {
 
     #[error("table already exists")]
     TableAlreadyExists { table_name: String },
+
+    #[error("constraint '{constraint}' not found on table '{table}'")]
+    ConstraintNotFound { table: String, constraint: String },
 
     #[error("invalid catalog row: {message}")]
     InvalidCatalogRow { message: String },
@@ -182,6 +185,8 @@ pub struct UniqueConstraint {
     pub name: NonEmptyString,
     /// Columns in the UNIQUE list, in declaration order. `(a, b)` ≠ `(b, a)`.
     pub columns: Vec<ColumnId>,
+    /// Catalog [`IndexId`] of the secondary index enforcing this UNIQUE, when present.
+    pub backing_index_id: Option<IndexId>,
 }
 
 /// In-memory shape of one outgoing foreign key.

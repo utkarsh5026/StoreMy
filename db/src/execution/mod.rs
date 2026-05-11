@@ -41,6 +41,7 @@ use crate::{
     TransactionId,
     execution::{expression::BooleanExpression, setops::Distinct},
     heap::file::HeapFile,
+    index::AnyIndex,
     primitives::ColumnId,
     tuple::{Tuple, TupleSchema},
 };
@@ -56,6 +57,9 @@ pub enum ExecutionError {
 
     #[error("storage error: {0}")]
     Storage(String),
+
+    #[error("index error: {0}")]
+    Index(String),
 }
 
 /// The core trait every execution operator must implement.
@@ -92,7 +96,7 @@ pub trait Executor: FallibleIterator<Item = Tuple, Error = ExecutionError> {
 #[derive(Debug)]
 pub enum PlanNode<'a> {
     SeqScan(scan::SeqScan<'a>),
-    IndexScan(scan::IndexScan),
+    IndexScan(scan::IndexScan<'a>),
 
     Filter(unary::Filter<'a>),
     Project(unary::Project<'a>),
@@ -114,6 +118,15 @@ pub enum PlanNode<'a> {
 impl<'a> PlanNode<'a> {
     pub fn seq_scan(file: &'a HeapFile, txn: TransactionId) -> Self {
         Self::SeqScan(scan::SeqScan::new(file, txn))
+    }
+
+    pub fn index_scan(
+        heap: &'a HeapFile,
+        index: &'a AnyIndex,
+        txn: TransactionId,
+        spec: scan::IndexScanSpec,
+    ) -> Self {
+        Self::IndexScan(scan::IndexScan::new(heap, index, txn, spec))
     }
 
     pub fn filter(child: Self, predicate: BooleanExpression) -> Self {

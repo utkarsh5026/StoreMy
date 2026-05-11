@@ -29,6 +29,11 @@ use crate::{
 /// cheap and the lock can be released before any index work runs.
 #[derive(Debug)]
 pub struct LiveIndex {
+    /// Catalog-assigned identifier, stable across process restarts.
+    ///
+    /// Matches [`IndexInfo::index_id`] and [`UniqueConstraint::backing_index_id`],
+    /// so DML can identify which live indexes enforce uniqueness.
+    pub index_id: IndexId,
     /// The live access method. Call `access.insert` / `access.delete` /
     /// `access.search` from DML.
     pub access: AnyIndex,
@@ -260,6 +265,7 @@ impl Catalog {
         &self,
         name: impl AsRef<str>,
         table_file_id: FileId,
+        index_id: IndexId,
         index: AnyIndex,
         table_columns: Vec<ColumnId>,
     ) -> Result<Arc<LiveIndex>, IndexError> {
@@ -267,6 +273,7 @@ impl Catalog {
         let name =
             NonEmptyString::new(name_str).expect("index name must be a valid NonEmptyString");
         let live = Arc::new(LiveIndex {
+            index_id,
             access: index,
             table_columns,
         });
@@ -465,7 +472,13 @@ impl Catalog {
             self.insert_systable_tuple(txn, &row)?;
         }
 
-        self.register_index(index_name, table_file_id, index, column_indices.to_vec())?;
+        self.register_index(
+            index_name,
+            table_file_id,
+            index_id,
+            index,
+            column_indices.to_vec(),
+        )?;
         Ok(index_id)
     }
 
@@ -698,6 +711,7 @@ impl Catalog {
         self.register_index(
             info.name.clone(),
             info.table_id,
+            info.index_id,
             index,
             table_columns.to_vec(),
         )?;
@@ -893,9 +907,13 @@ mod tests {
         let table_file_id = FileId::new(7);
         let hash = fresh_hash(&catalog, &bp, &wal, dir.path(), 4, vec![Type::Int32]);
         let arc = catalog
-            .register_index("users_id_idx", table_file_id, hash.into(), vec![
-                ColumnId::try_from(0usize).unwrap(),
-            ])
+            .register_index(
+                "users_id_idx",
+                table_file_id,
+                IndexId::new(1),
+                hash.into(),
+                vec![ColumnId::try_from(0usize).unwrap()],
+            )
             .unwrap();
 
         let by_name = catalog.get_index_by_name("users_id_idx").unwrap();
@@ -917,10 +935,16 @@ mod tests {
         let h2 = fresh_hash(&catalog, &bp, &wal, dir.path(), 4, vec![Type::Int32]);
         let cols = vec![ColumnId::try_from(0usize).unwrap()];
         catalog
-            .register_index("dup", table_file_id, h1.into(), cols.clone())
+            .register_index(
+                "dup",
+                table_file_id,
+                IndexId::new(1),
+                h1.into(),
+                cols.clone(),
+            )
             .unwrap();
         let err = catalog
-            .register_index("dup", table_file_id, h2.into(), cols)
+            .register_index("dup", table_file_id, IndexId::new(2), h2.into(), cols)
             .unwrap_err();
         match err {
             crate::index::IndexError::DuplicateName(name) => assert_eq!(name, "dup"),
@@ -939,7 +963,7 @@ mod tests {
 
         let hash = fresh_hash(&catalog, &bp, &wal, dir.path(), 4, vec![Type::Int32]);
         catalog
-            .register_index("idx", table_file_id, hash.into(), vec![
+            .register_index("idx", table_file_id, IndexId::new(1), hash.into(), vec![
                 ColumnId::try_from(0usize).unwrap(),
             ])
             .unwrap();
@@ -969,10 +993,16 @@ mod tests {
         let h2 = fresh_hash(&catalog, &bp, &wal, dir.path(), 4, vec![Type::String]);
         let cols = vec![ColumnId::try_from(0usize).unwrap()];
         catalog
-            .register_index("by_id", table_file_id, h1.into(), cols.clone())
+            .register_index(
+                "by_id",
+                table_file_id,
+                IndexId::new(1),
+                h1.into(),
+                cols.clone(),
+            )
             .unwrap();
         catalog
-            .register_index("by_email", table_file_id, h2.into(), cols)
+            .register_index("by_email", table_file_id, IndexId::new(2), h2.into(), cols)
             .unwrap();
 
         assert_eq!(catalog.indexes_for(table_file_id).len(), 2);
@@ -990,10 +1020,10 @@ mod tests {
         let hb = fresh_hash(&catalog, &bp, &wal, dir.path(), 4, vec![Type::Int32]);
         let cols = vec![ColumnId::try_from(0usize).unwrap()];
         catalog
-            .register_index("a_idx", table_a, ha.into(), cols.clone())
+            .register_index("a_idx", table_a, IndexId::new(1), ha.into(), cols.clone())
             .unwrap();
         catalog
-            .register_index("b_idx", table_b, hb.into(), cols)
+            .register_index("b_idx", table_b, IndexId::new(2), hb.into(), cols)
             .unwrap();
 
         assert_eq!(catalog.indexes_for(table_a).len(), 1);
@@ -1013,7 +1043,7 @@ mod tests {
 
         let hash = fresh_hash(&catalog, &bp, &wal, dir.path(), 4, vec![Type::Int32]);
         catalog
-            .register_index("idx", table_file_id, hash.into(), vec![
+            .register_index("idx", table_file_id, IndexId::new(1), hash.into(), vec![
                 ColumnId::try_from(0usize).unwrap(),
             ])
             .unwrap();
@@ -1491,6 +1521,7 @@ mod tests {
     #[test]
     fn replay_restores_table_constraints_after_reopen() {
         let dir = tempdir().unwrap();
+        let unique_backing_index_id: IndexId;
 
         {
             let (catalog, txn_mgr, bp, _) = make_full_infra(dir.path());
@@ -1510,8 +1541,24 @@ mod tests {
             let child_id = catalog
                 .create_table(&txn, "children", child_schema, None)
                 .unwrap();
+            unique_backing_index_id = catalog
+                .create_index(
+                    &txn,
+                    "parents_email_uidx",
+                    "parents",
+                    parent_id,
+                    &[col_id(1)],
+                    IndexKind::Btree,
+                )
+                .unwrap();
             catalog
-                .add_unique_constraint(&txn, parent_id, "parents_email_key", &[col_id(1)])
+                .add_unique_constraint(
+                    &txn,
+                    parent_id,
+                    "parents_email_key",
+                    &[col_id(1)],
+                    Some(unique_backing_index_id),
+                )
                 .unwrap();
             catalog
                 .add_foreign_key(
@@ -1538,6 +1585,10 @@ mod tests {
         assert_eq!(parent.unique_constraints.len(), 1);
         assert_eq!(parent.unique_constraints[0].name, "parents_email_key");
         assert_eq!(parent.unique_constraints[0].columns, vec![col_id(1)]);
+        assert_eq!(
+            parent.unique_constraints[0].backing_index_id,
+            Some(unique_backing_index_id)
+        );
 
         assert_eq!(child.foreign_keys.len(), 1);
         assert_eq!(child.foreign_keys[0].name, "children_parent_fk");

@@ -209,9 +209,19 @@ pub enum QueryResultDto {
     PrimaryKeyDropped {
         table: String,
     },
+    UniqueConstraintAdded {
+        table: String,
+        constraint: String,
+        index: String,
+    },
+    ConstraintDropped {
+        table: String,
+        constraint: String,
+    },
 }
 
 impl From<&StatementResult> for QueryResultDto {
+    #[allow(clippy::too_many_lines)]
     fn from(r: &StatementResult) -> Self {
         match r {
             StatementResult::NoOp { statement } => QueryResultDto::NoOp {
@@ -309,6 +319,21 @@ impl From<&StatementResult> for QueryResultDto {
             StatementResult::PrimaryKeyDropped { table } => QueryResultDto::PrimaryKeyDropped {
                 table: table.clone(),
             },
+            StatementResult::UniqueConstraintAdded {
+                table,
+                constraint,
+                index,
+            } => QueryResultDto::UniqueConstraintAdded {
+                table: table.clone(),
+                constraint: constraint.clone(),
+                index: index.clone(),
+            },
+            StatementResult::ConstraintDropped { table, constraint } => {
+                QueryResultDto::ConstraintDropped {
+                    table: table.clone(),
+                    constraint: constraint.clone(),
+                }
+            }
         }
     }
 }

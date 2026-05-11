@@ -174,6 +174,31 @@ fn print_result(r: &StatementResult) {
                 &format!("dropped primary key from {}", table.cyan()),
             );
         }
+        StatementResult::UniqueConstraintAdded {
+            table,
+            constraint,
+            index,
+        } => {
+            theme::ok(
+                "ALTER TABLE",
+                &format!(
+                    "added UNIQUE {} on {} (index {})",
+                    constraint.cyan(),
+                    table.cyan(),
+                    index.cyan()
+                ),
+            );
+        }
+        StatementResult::ConstraintDropped { table, constraint } => {
+            theme::ok(
+                "ALTER TABLE",
+                &format!(
+                    "dropped constraint {} from {}",
+                    constraint.cyan(),
+                    table.cyan()
+                ),
+            );
+        }
     }
 }
 

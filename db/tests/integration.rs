@@ -14,6 +14,8 @@ mod alter_table;
 mod catalog_introspection;
 #[path = "integration/concurrency.rs"]
 mod concurrency;
+#[path = "integration/constraints.rs"]
+mod constraints;
 #[path = "integration/ddl.rs"]
 mod ddl;
 #[path = "integration/dml.rs"]

@@ -18,13 +18,35 @@ use crate::{
     catalog::{
         CatalogError, ForeignKey, TableInfo, UniqueConstraint,
         manager::Catalog,
-        systable::{ConstraintColumnRow, ConstraintKind, ConstraintRow, FkAction, FkConstraintRow},
+        systable::{
+            ConstraintColumnRow, ConstraintKind, ConstraintRow, FkAction, FkConstraintRow, IndexRow,
+        },
     },
-    primitives::{ColumnId, NonEmptyString},
+    primitives::{ColumnId, IndexId, NonEmptyString},
     transaction::Transaction,
 };
 
 impl Catalog {
+    /// Generates a UNIQUE constraint name `{table}_unique_{col1}_{col2}…` by
+    /// resolving `columns` (bound [`ColumnId`]s) to names via the catalog.
+    pub fn autoname_unique_constraint_for(
+        &self,
+        txn: &Transaction<'_>,
+        table_id: FileId,
+        columns: &[ColumnId],
+    ) -> Result<String, CatalogError> {
+        let tbl = self.get_table_info_by_id(txn, table_id)?;
+        let col_names: Vec<&str> = columns
+            .iter()
+            .map(|&id| tbl.schema.field(usize::from(id)).unwrap().name.as_str())
+            .collect();
+        Ok(format!(
+            "{}_unique_{}",
+            tbl.name.as_str(),
+            col_names.join("_")
+        ))
+    }
+
     /// Adds a UNIQUE constraint to a table.
     ///
     /// Writes one `ConstraintRow` header (kind = `Unique`) and one
@@ -40,6 +62,7 @@ impl Catalog {
         table_id: FileId,
         name: &str,
         columns: &[ColumnId],
+        backing_index_id: Option<IndexId>,
     ) -> Result<(), CatalogError> {
         if columns.is_empty() {
             return Err(CatalogError::invalid_catalog_row(
@@ -58,6 +81,7 @@ impl Catalog {
             table_id,
             constraint_kind: ConstraintKind::Unique,
             expr: None,
+            backing_index_id,
         })?;
 
         for (ordinal, &col_id) in columns.iter().enumerate() {
@@ -73,6 +97,7 @@ impl Catalog {
         table.unique_constraints.push(UniqueConstraint {
             name: constraint_name,
             columns: columns.to_vec(),
+            backing_index_id,
         });
         self.refresh_cached_table(table);
         Ok(())
@@ -128,6 +153,7 @@ impl Catalog {
             table_id,
             constraint_kind: ConstraintKind::ForeignKey,
             expr: None,
+            backing_index_id: None,
         })?;
 
         for (ordinal, (&local, &referenced)) in
@@ -176,12 +202,24 @@ impl Catalog {
                 r.table_id == table_id && r.constraint_name.as_str() == name
             })?
             .pop()
-            .ok_or_else(|| {
-                CatalogError::invalid_catalog_row(format!(
-                    "constraint {name} not found on table {}",
-                    table.name.as_str()
-                ))
+            .ok_or_else(|| CatalogError::ConstraintNotFound {
+                table: table.name.as_str().to_owned(),
+                constraint: name.to_owned(),
             })?;
+
+        let backing_index_name = if header.constraint_kind == ConstraintKind::Unique {
+            if let Some(idx_id) = header.backing_index_id {
+                let rows =
+                    self.scan_system_table_where::<IndexRow, _>(txn, |r| r.index_id == idx_id)?;
+                rows.into_iter()
+                    .next()
+                    .map(|r| r.index_name.as_str().to_owned())
+            } else {
+                None
+            }
+        } else {
+            None
+        };
 
         match header.constraint_kind {
             ConstraintKind::Unique => {
@@ -215,6 +253,10 @@ impl Catalog {
             r.table_id == table_id && r.constraint_name.as_str() == name
         })?;
 
+        if let Some(index_name) = backing_index_name {
+            self.drop_index(txn, &index_name)?;
+        }
+
         self.refresh_cached_table(table);
         Ok(())
     }
@@ -232,7 +274,6 @@ impl Catalog {
         column_rows: Vec<ConstraintColumnRow>,
         fk_rows: Vec<FkConstraintRow>,
     ) -> Result<(), CatalogError> {
-        // Group detail rows by constraint name once, so each header lookup is O(1).
         let mut cols_by_name: HashMap<String, Vec<ConstraintColumnRow>> = HashMap::new();
         for r in column_rows {
             cols_by_name
@@ -259,6 +300,7 @@ impl Catalog {
                     table.unique_constraints.push(UniqueConstraint {
                         name: header.constraint_name,
                         columns: rows.into_iter().map(|r| r.column_id).collect(),
+                        backing_index_id: header.backing_index_id,
                     });
                 }
                 ConstraintKind::ForeignKey => {
@@ -373,4 +415,386 @@ fn validate_columns_in_schema(
 fn i32_ordinal(ordinal: usize) -> Result<i32, CatalogError> {
     i32::try_from(ordinal)
         .map_err(|_| CatalogError::invalid_catalog_row("constraint ordinal does not fit in i32"))
+}
+
+#[cfg(test)]
+mod tests {
+    use std::{path::Path, sync::Arc};
+
+    use tempfile::tempdir;
+
+    use super::*;
+    use crate::{
+        Type,
+        buffer_pool::page_store::PageStore,
+        transaction::TransactionManager,
+        tuple::{Field, TupleSchema},
+        wal::writer::Wal,
+    };
+
+    fn make_infra(dir: &Path) -> (Arc<Wal>, Arc<PageStore>) {
+        let wal = Arc::new(Wal::new(&dir.join("wal.log"), 0).expect("WAL creation failed"));
+        let bp = Arc::new(PageStore::new(64, wal.clone()));
+        (wal, bp)
+    }
+
+    fn make_catalog_and_txn(dir: &Path) -> (Catalog, TransactionManager) {
+        let (wal, bp) = make_infra(dir);
+        let catalog = Catalog::initialize(&bp, &wal, dir).expect("catalog init failed");
+        let txn_mgr = TransactionManager::new(wal, bp);
+        (catalog, txn_mgr)
+    }
+
+    fn field(name: &str, ty: Type) -> Field {
+        Field::new(name, ty).unwrap()
+    }
+
+    /// Three-column schema: id (Uint64), email (String), name (String).
+    fn three_col_schema() -> TupleSchema {
+        TupleSchema::new(vec![
+            field("id", Type::Uint64).not_null(),
+            field("email", Type::String).not_null(),
+            field("name", Type::String).not_null(),
+        ])
+    }
+
+    fn col(id: usize) -> ColumnId {
+        ColumnId::try_from(id).unwrap()
+    }
+
+    // ── autoname_unique_constraint_for ────────────────────────────────────
+
+    #[test]
+    fn autoname_single_column_produces_correct_name() {
+        let dir = tempdir().unwrap();
+        let (catalog, txn_mgr) = make_catalog_and_txn(dir.path());
+        let txn = txn_mgr.begin().unwrap();
+        let file_id = catalog
+            .create_table(&txn, "users", three_col_schema(), None)
+            .unwrap();
+        txn.commit().unwrap();
+
+        let txn2 = txn_mgr.begin().unwrap();
+        let name = catalog
+            .autoname_unique_constraint_for(&txn2, file_id, &[col(1)])
+            .unwrap();
+        txn2.commit().unwrap();
+
+        assert_eq!(name, "users_unique_email");
+    }
+
+    #[test]
+    fn autoname_composite_columns_joins_names_in_order() {
+        let dir = tempdir().unwrap();
+        let (catalog, txn_mgr) = make_catalog_and_txn(dir.path());
+        let txn = txn_mgr.begin().unwrap();
+        let file_id = catalog
+            .create_table(&txn, "users", three_col_schema(), None)
+            .unwrap();
+        txn.commit().unwrap();
+
+        let txn2 = txn_mgr.begin().unwrap();
+        let name = catalog
+            .autoname_unique_constraint_for(&txn2, file_id, &[col(1), col(2)])
+            .unwrap();
+        txn2.commit().unwrap();
+
+        assert_eq!(name, "users_unique_email_name");
+    }
+
+    #[test]
+    fn autoname_column_order_affects_name() {
+        let dir = tempdir().unwrap();
+        let (catalog, txn_mgr) = make_catalog_and_txn(dir.path());
+        let txn = txn_mgr.begin().unwrap();
+        let file_id = catalog
+            .create_table(&txn, "users", three_col_schema(), None)
+            .unwrap();
+        txn.commit().unwrap();
+
+        let txn2 = txn_mgr.begin().unwrap();
+        let ab = catalog
+            .autoname_unique_constraint_for(&txn2, file_id, &[col(1), col(2)])
+            .unwrap();
+        let ba = catalog
+            .autoname_unique_constraint_for(&txn2, file_id, &[col(2), col(1)])
+            .unwrap();
+        txn2.commit().unwrap();
+
+        assert_ne!(ab, ba);
+    }
+
+    // ── add_unique_constraint: happy paths ────────────────────────────────
+
+    #[test]
+    fn add_unique_single_column_visible_immediately() {
+        let dir = tempdir().unwrap();
+        let (catalog, txn_mgr) = make_catalog_and_txn(dir.path());
+        let txn = txn_mgr.begin().unwrap();
+        let file_id = catalog
+            .create_table(&txn, "users", three_col_schema(), None)
+            .unwrap();
+        catalog
+            .add_unique_constraint(&txn, file_id, "users_unique_email", &[col(1)], None)
+            .unwrap();
+        txn.commit().unwrap();
+
+        let txn2 = txn_mgr.begin().unwrap();
+        let info = catalog.get_table_info(&txn2, "users").unwrap();
+        txn2.commit().unwrap();
+
+        assert_eq!(info.unique_constraints.len(), 1);
+        assert_eq!(
+            info.unique_constraints[0].name.as_str(),
+            "users_unique_email"
+        );
+        assert_eq!(info.unique_constraints[0].columns, vec![col(1)]);
+    }
+
+    #[test]
+    fn add_unique_composite_columns_preserved_in_order() {
+        let dir = tempdir().unwrap();
+        let (catalog, txn_mgr) = make_catalog_and_txn(dir.path());
+        let txn = txn_mgr.begin().unwrap();
+        let file_id = catalog
+            .create_table(&txn, "users", three_col_schema(), None)
+            .unwrap();
+        catalog
+            .add_unique_constraint(
+                &txn,
+                file_id,
+                "users_unique_email_name",
+                &[col(1), col(2)],
+                None,
+            )
+            .unwrap();
+        txn.commit().unwrap();
+
+        let txn2 = txn_mgr.begin().unwrap();
+        let info = catalog.get_table_info(&txn2, "users").unwrap();
+        txn2.commit().unwrap();
+
+        assert_eq!(info.unique_constraints[0].columns, vec![col(1), col(2)]);
+    }
+
+    #[test]
+    fn add_unique_constraint_survives_cache_evict_and_reload() {
+        let dir = tempdir().unwrap();
+        let (catalog, txn_mgr) = make_catalog_and_txn(dir.path());
+        let txn = txn_mgr.begin().unwrap();
+        let file_id = catalog
+            .create_table(&txn, "users", three_col_schema(), None)
+            .unwrap();
+        catalog
+            .add_unique_constraint(&txn, file_id, "users_unique_email", &[col(1)], None)
+            .unwrap();
+        txn.commit().unwrap();
+
+        catalog.user_tables.write().remove("users");
+
+        let txn2 = txn_mgr.begin().unwrap();
+        let info = catalog.get_table_info(&txn2, "users").unwrap();
+        txn2.commit().unwrap();
+
+        assert_eq!(info.unique_constraints.len(), 1);
+        assert_eq!(
+            info.unique_constraints[0].name.as_str(),
+            "users_unique_email"
+        );
+    }
+
+    #[test]
+    fn add_multiple_unique_constraints_all_round_trip() {
+        let dir = tempdir().unwrap();
+        let (catalog, txn_mgr) = make_catalog_and_txn(dir.path());
+        let txn = txn_mgr.begin().unwrap();
+        let file_id = catalog
+            .create_table(&txn, "users", three_col_schema(), None)
+            .unwrap();
+        catalog
+            .add_unique_constraint(&txn, file_id, "users_unique_email", &[col(1)], None)
+            .unwrap();
+        catalog
+            .add_unique_constraint(&txn, file_id, "users_unique_name", &[col(2)], None)
+            .unwrap();
+        txn.commit().unwrap();
+
+        catalog.user_tables.write().remove("users");
+
+        let txn2 = txn_mgr.begin().unwrap();
+        let info = catalog.get_table_info(&txn2, "users").unwrap();
+        txn2.commit().unwrap();
+
+        assert_eq!(info.unique_constraints.len(), 2);
+        let names: Vec<_> = info
+            .unique_constraints
+            .iter()
+            .map(|u| u.name.as_str())
+            .collect();
+        assert!(names.contains(&"users_unique_email"));
+        assert!(names.contains(&"users_unique_name"));
+    }
+
+    // ── add_unique_constraint: error paths ────────────────────────────────
+
+    #[test]
+    fn add_unique_empty_column_list_returns_error() {
+        let dir = tempdir().unwrap();
+        let (catalog, txn_mgr) = make_catalog_and_txn(dir.path());
+        let txn = txn_mgr.begin().unwrap();
+        let file_id = catalog
+            .create_table(&txn, "users", three_col_schema(), None)
+            .unwrap();
+
+        let result = catalog.add_unique_constraint(&txn, file_id, "bad", &[], None);
+
+        assert!(
+            matches!(result, Err(CatalogError::InvalidCatalogRow { .. })),
+            "expected InvalidCatalogRow for empty column list, got: {result:?}"
+        );
+        txn.commit().unwrap();
+    }
+
+    #[test]
+    fn add_unique_out_of_bounds_column_returns_error() {
+        let dir = tempdir().unwrap();
+        let (catalog, txn_mgr) = make_catalog_and_txn(dir.path());
+        let txn = txn_mgr.begin().unwrap();
+        let file_id = catalog
+            .create_table(&txn, "users", three_col_schema(), None)
+            .unwrap();
+
+        let result = catalog.add_unique_constraint(&txn, file_id, "bad", &[col(99)], None);
+
+        assert!(
+            matches!(result, Err(CatalogError::InvalidCatalogRow { .. })),
+            "expected InvalidCatalogRow for OOB column, got: {result:?}"
+        );
+        txn.commit().unwrap();
+    }
+
+    #[test]
+    fn add_unique_duplicate_name_returns_error() {
+        let dir = tempdir().unwrap();
+        let (catalog, txn_mgr) = make_catalog_and_txn(dir.path());
+        let txn = txn_mgr.begin().unwrap();
+        let file_id = catalog
+            .create_table(&txn, "users", three_col_schema(), None)
+            .unwrap();
+        catalog
+            .add_unique_constraint(&txn, file_id, "my_unique", &[col(1)], None)
+            .unwrap();
+
+        let result = catalog.add_unique_constraint(&txn, file_id, "my_unique", &[col(2)], None);
+
+        assert!(
+            matches!(result, Err(CatalogError::InvalidCatalogRow { .. })),
+            "expected error for duplicate constraint name, got: {result:?}"
+        );
+        txn.commit().unwrap();
+    }
+
+    // ── drop_constraint ───────────────────────────────────────────────────
+
+    #[test]
+    fn drop_constraint_removes_from_unique_constraints() {
+        let dir = tempdir().unwrap();
+        let (catalog, txn_mgr) = make_catalog_and_txn(dir.path());
+        let txn = txn_mgr.begin().unwrap();
+        let file_id = catalog
+            .create_table(&txn, "users", three_col_schema(), None)
+            .unwrap();
+        catalog
+            .add_unique_constraint(&txn, file_id, "users_unique_email", &[col(1)], None)
+            .unwrap();
+        txn.commit().unwrap();
+
+        let txn2 = txn_mgr.begin().unwrap();
+        catalog
+            .drop_constraint(&txn2, file_id, "users_unique_email")
+            .unwrap();
+        let info = catalog.get_table_info(&txn2, "users").unwrap();
+        txn2.commit().unwrap();
+
+        assert!(info.unique_constraints.is_empty());
+    }
+
+    #[test]
+    fn drop_constraint_survives_cache_evict_and_reload() {
+        let dir = tempdir().unwrap();
+        let (catalog, txn_mgr) = make_catalog_and_txn(dir.path());
+        let txn = txn_mgr.begin().unwrap();
+        let file_id = catalog
+            .create_table(&txn, "users", three_col_schema(), None)
+            .unwrap();
+        catalog
+            .add_unique_constraint(&txn, file_id, "users_unique_email", &[col(1)], None)
+            .unwrap();
+        txn.commit().unwrap();
+
+        let txn2 = txn_mgr.begin().unwrap();
+        catalog
+            .drop_constraint(&txn2, file_id, "users_unique_email")
+            .unwrap();
+        txn2.commit().unwrap();
+
+        catalog.user_tables.write().remove("users");
+
+        let txn3 = txn_mgr.begin().unwrap();
+        let info = catalog.get_table_info(&txn3, "users").unwrap();
+        txn3.commit().unwrap();
+
+        assert!(
+            info.unique_constraints.is_empty(),
+            "dropped constraint must not reappear after reload"
+        );
+    }
+
+    #[test]
+    fn drop_constraint_nonexistent_returns_not_found() {
+        let dir = tempdir().unwrap();
+        let (catalog, txn_mgr) = make_catalog_and_txn(dir.path());
+        let txn = txn_mgr.begin().unwrap();
+        let file_id = catalog
+            .create_table(&txn, "users", three_col_schema(), None)
+            .unwrap();
+
+        let result = catalog.drop_constraint(&txn, file_id, "ghost");
+
+        assert!(
+            matches!(result, Err(CatalogError::ConstraintNotFound { .. })),
+            "expected ConstraintNotFound, got: {result:?}"
+        );
+        txn.commit().unwrap();
+    }
+
+    #[test]
+    fn drop_one_constraint_leaves_others_intact() {
+        let dir = tempdir().unwrap();
+        let (catalog, txn_mgr) = make_catalog_and_txn(dir.path());
+        let txn = txn_mgr.begin().unwrap();
+        let file_id = catalog
+            .create_table(&txn, "users", three_col_schema(), None)
+            .unwrap();
+        catalog
+            .add_unique_constraint(&txn, file_id, "users_unique_email", &[col(1)], None)
+            .unwrap();
+        catalog
+            .add_unique_constraint(&txn, file_id, "users_unique_name", &[col(2)], None)
+            .unwrap();
+        txn.commit().unwrap();
+
+        let txn2 = txn_mgr.begin().unwrap();
+        catalog
+            .drop_constraint(&txn2, file_id, "users_unique_email")
+            .unwrap();
+        let info = catalog.get_table_info(&txn2, "users").unwrap();
+        txn2.commit().unwrap();
+
+        assert_eq!(info.unique_constraints.len(), 1);
+        assert_eq!(
+            info.unique_constraints[0].name.as_str(),
+            "users_unique_name"
+        );
+    }
 }

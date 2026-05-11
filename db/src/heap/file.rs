@@ -71,6 +71,10 @@ pub enum HeapError {
     #[error("record {0} not found")]
     NotFound(RecordId),
 
+    /// [`RecordId::file_id`] does not match this heap file.
+    #[error("record id file mismatch")]
+    BadRecordId,
+
     /// A freshly allocated page has no room for the tuple being inserted.
     /// Under normal conditions this should never happen; it indicates the
     /// tuple is larger than an entire page.
@@ -287,6 +291,31 @@ impl HeapFile {
     /// iterator returns `None`).
     pub fn scan(&self, transaction_id: TransactionId) -> Result<HeapScan<'_>, HeapError> {
         Ok(HeapScan::new(self, transaction_id))
+    }
+
+    /// Reads the live tuple at `rid`, or [`None`] if that slot is empty.
+    ///
+    /// Uses a shared page lock only for the duration of the read.
+    ///
+    /// # Errors
+    ///
+    /// - [`HeapError::BadRecordId`] — `rid.file_id` is not this file's id.
+    /// - [`HeapError::Store`] / [`HeapError::Storage`] — page I/O or decode failure.
+    pub fn fetch_tuple(
+        &self,
+        transaction_id: TransactionId,
+        rid: RecordId,
+    ) -> Result<Option<Tuple>, HeapError> {
+        if rid.file_id != self.file_id {
+            return Err(HeapError::BadRecordId);
+        }
+        let page_id = self.page_id(rid.page_no);
+        let guard = self.guard(page_id, transaction_id, false)?;
+        let page = self.h_page(&guard.read())?;
+        match page.tuple_at(rid.slot_id)? {
+            None => Ok(None),
+            Some(t) => Ok(Some(t.clone())),
+        }
     }
 
     /// Deletes all tuples matching `predicate` and returns the number deleted.
@@ -598,7 +627,7 @@ mod tests {
     use crate::{
         FileId, TransactionId,
         buffer_pool::page_store::PageStore,
-        primitives::{PageNumber, RecordId},
+        primitives::{PageNumber, RecordId, SlotId},
         tuple::{Field, Tuple, TupleSchema},
         types::{Type, Value},
         wal::writer::Wal,
@@ -759,6 +788,61 @@ mod tests {
         assert_eq!(tuples.len(), 0, "deleted tuple must not be visible");
     }
 
+    // ── fetch_tuple ──────────────────────────────────────────────────────────
+
+    #[test]
+    fn test_fetch_tuple_returns_inserted_row() {
+        let (heap, wal, _dir) = make_heap_file(1);
+        let txn = begin_txn(&wal, 1);
+        let t = make_tuple(42, true);
+        let rid = heap.insert_tuple(txn, &t).unwrap();
+        assert_eq!(heap.fetch_tuple(txn, rid).unwrap(), Some(t));
+    }
+
+    #[test]
+    fn test_fetch_tuple_after_delete_returns_none() {
+        let (heap, wal, _dir) = make_heap_file(1);
+        let txn = begin_txn(&wal, 1);
+        let rid = heap.insert_tuple(txn, &make_tuple(1, true)).unwrap();
+        heap.delete_tuple(txn, rid).unwrap();
+        assert_eq!(heap.fetch_tuple(txn, rid).unwrap(), None);
+    }
+
+    #[test]
+    fn test_fetch_tuple_after_update_returns_new_values() {
+        let (heap, wal, _dir) = make_heap_file(1);
+        let txn = begin_txn(&wal, 1);
+        let rid = heap.insert_tuple(txn, &make_tuple(1, false)).unwrap();
+        let updated = make_tuple(1, true);
+        heap.update_tuple(txn, rid, &updated).unwrap();
+        assert_eq!(heap.fetch_tuple(txn, rid).unwrap(), Some(updated));
+    }
+
+    #[test]
+    fn test_fetch_tuple_wrong_file_id_returns_bad_record_id() {
+        let (heap, wal, _dir) = make_heap_file(1);
+        let txn = begin_txn(&wal, 1);
+        let rid = heap.insert_tuple(txn, &make_tuple(1, true)).unwrap();
+        let wrong = RecordId::new(FileId::new(999), rid.page_no, rid.slot_id);
+        assert!(matches!(
+            heap.fetch_tuple(txn, wrong),
+            Err(HeapError::BadRecordId)
+        ));
+    }
+
+    #[test]
+    fn test_fetch_tuple_out_of_bounds_slot_returns_storage_error() {
+        let (heap, wal, _dir) = make_heap_file(1);
+        let txn = begin_txn(&wal, 1);
+        heap.insert_tuple(txn, &make_tuple(1, true)).unwrap();
+        let bad_rid = RecordId::new(FileId::new(1), PageNumber::new(0), SlotId(9999));
+        let result = heap.fetch_tuple(txn, bad_rid);
+        assert!(
+            matches!(result, Err(HeapError::Storage(_))),
+            "expected HeapError::Storage, got {result:?}"
+        );
+    }
+
     // After update, the new value should appear in scan and the old value should not
     #[test]
     fn test_scan_updated_tuple_shows_new_value() {
@@ -789,8 +873,6 @@ mod tests {
         assert_eq!(tuples.len(), 2);
     }
 
-    // ── edge cases ───────────────────────────────────────────────────────────
-
     // num_pages counter must reflect the highest page that's been written to,
     // regardless of which insert path (for-loop or fetch_add fallback) placed
     // the tuple. This guarantees scan sees pages that hold live tuples.
@@ -811,8 +893,6 @@ mod tests {
         let (heap, _wal, _dir) = make_heap_file(2);
         assert_eq!(heap.num_pages(), 2);
     }
-
-    // ── error paths ──────────────────────────────────────────────────────────
 
     // delete_tuple with an out-of-bounds slot_id returns HeapError::Storage.
     // Note: delete_tuple builds the PageId from self.file_id (not record_id.file_id),

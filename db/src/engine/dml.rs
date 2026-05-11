@@ -26,16 +26,20 @@
 //! [`BooleanExpression`](crate::execution::expression::BooleanExpression): any `NULL` in a
 //! comparison short-circuits to `false`, so rows with `NULL` keys do not qualify.
 
-use std::{collections::HashSet, sync::Arc};
+use std::{
+    collections::{HashMap, HashSet},
+    sync::Arc,
+};
 
 use crate::{
-    FileId, TransactionId, Value,
+    FileId, IndexId, TransactionId, Value,
     binder::{Bound, BoundDelete, BoundExpr, BoundInsert, BoundUpdate},
     catalog::{LiveIndex, manager::Catalog},
     engine::{Engine, EngineError, StatementResult},
     execution::expression::BooleanExpression,
     parser::statements::{Statement, UpdateStatement},
     primitives::{ColumnId, RecordId},
+    transaction::Transaction,
     tuple::{Tuple, TupleSchema},
 };
 
@@ -99,7 +103,7 @@ impl Engine<'_> {
                 .iter()
                 .map(|row| Tuple::new(row.iter().map(BoundExpr::eval).collect()))
                 .collect::<Vec<_>>();
-            let rids = Self::insert_rows_and_indexes(catalog, file_id, tuples, tid)?;
+            let rids = Self::insert_rows_and_indexes(catalog, txn, file_id, tuples, tid)?;
             Ok(StatementResult::inserted(name, rids))
         })
     }
@@ -113,6 +117,7 @@ impl Engine<'_> {
     /// to keep one copy for index maintenance.
     fn insert_rows_and_indexes(
         catalog: &Catalog,
+        txn: &Transaction<'_>,
         file_id: FileId,
         tuples: Vec<Tuple>,
         tid: TransactionId,
@@ -126,10 +131,40 @@ impl Engine<'_> {
                 .map_err(EngineError::from);
         }
 
+        // Build a list of (constraint_name, live_index) for every UNIQUE constraint
+        // that has a backing index, so we can check for violations before each insert.
+        let unique_checks: Vec<(String, Arc<LiveIndex>)> = {
+            let info = catalog.get_table_info_by_id(txn, file_id)?;
+            let backing_ids: HashMap<IndexId, String> = info
+                .unique_constraints
+                .into_iter()
+                .filter_map(|uc| {
+                    uc.backing_index_id
+                        .map(|id| (id, uc.name.as_str().to_owned()))
+                })
+                .collect();
+            indexes
+                .iter()
+                .filter_map(|live| {
+                    backing_ids
+                        .get(&live.index_id)
+                        .map(|name| (name.clone(), Arc::clone(live)))
+                })
+                .collect()
+        };
+
         let mut count = 0;
         tuples
             .into_iter()
             .try_for_each(|tuple| -> Result<(), EngineError> {
+                for (constraint, live) in &unique_checks {
+                    let key = live.create_index_key(&tuple)?;
+                    if !live.access.search(tid, &key)?.is_empty() {
+                        return Err(EngineError::UniqueViolation {
+                            constraint: constraint.clone(),
+                        });
+                    }
+                }
                 let rid = heap.insert_tuple(tid, &tuple)?;
                 for index in &indexes {
                     index.insert(tid, &tuple, rid)?;
@@ -298,9 +333,33 @@ impl Engine<'_> {
 
             let needs_old = !affected_indexes.is_empty();
 
+            let unique_checks: HashMap<IndexId, String> = if needs_old {
+                let info = catalog.get_table_info_by_id(txn, file_id)?;
+                info.unique_constraints
+                    .into_iter()
+                    .filter_map(|uc| {
+                        uc.backing_index_id
+                            .map(|id| (id, uc.name.as_str().to_owned()))
+                    })
+                    .collect()
+            } else {
+                HashMap::new()
+            };
+
             for (rid, mut tuple) in rows {
                 let old_tuple = needs_old.then(|| tuple.clone());
                 Self::apply_update_assignments(&mut tuple, &assignments, &schema)?;
+
+                if let Some(old) = &old_tuple {
+                    Self::check_unique_for_update(
+                        &affected_indexes,
+                        &unique_checks,
+                        txn_id,
+                        old,
+                        &tuple,
+                    )?;
+                }
+
                 heap_file.update_tuple(txn_id, rid, &tuple)?;
 
                 if let Some(old) = &old_tuple {
@@ -374,6 +433,39 @@ impl Engine<'_> {
             tuple
                 .set_field(usize::from(*col_id), value.clone(), schema)
                 .map_err(|e| EngineError::type_error(e.to_string()))?;
+        }
+        Ok(())
+    }
+
+    /// Checks that applying `new_tuple` would not violate any UNIQUE constraint.
+    ///
+    /// Called once per row before `heap_file.update_tuple`, so a violation is caught
+    /// before any heap or index writes happen for that row.
+    ///
+    /// Only indexes in `affected_indexes` (those whose columns appear in the assignment
+    /// list) can possibly be violated — unaffected indexes are skipped. Within those,
+    /// only indexes whose `index_id` appears in `unique_checks` enforce uniqueness.
+    ///
+    /// The `old_key == new_key` case is explicitly allowed: the current row already
+    /// holds that key, so no duplicate is introduced.
+    fn check_unique_for_update(
+        affected_indexes: &[Arc<LiveIndex>],
+        unique_checks: &HashMap<IndexId, String>,
+        txn_id: TransactionId,
+        old_tuple: &Tuple,
+        new_tuple: &Tuple,
+    ) -> Result<(), EngineError> {
+        for live in affected_indexes {
+            let Some(constraint) = unique_checks.get(&live.index_id) else {
+                continue;
+            };
+            let old_key = live.create_index_key(old_tuple)?;
+            let new_key = live.create_index_key(new_tuple)?;
+            if old_key != new_key && !live.access.search(txn_id, &new_key)?.is_empty() {
+                return Err(EngineError::UniqueViolation {
+                    constraint: constraint.clone(),
+                });
+            }
         }
         Ok(())
     }

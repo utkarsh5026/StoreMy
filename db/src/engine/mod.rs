@@ -72,6 +72,9 @@ pub enum EngineError {
     #[error("null value in NOT NULL column '{column}' in table '{table}'")]
     NullViolation { table: String, column: String },
 
+    #[error("duplicate value violates unique constraint '{constraint}'")]
+    UniqueViolation { constraint: String },
+
     #[error("type mismatch for column '{column}': expected {expected}, got {got}")]
     TypeMismatch {
         column: String,

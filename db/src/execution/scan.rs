@@ -8,7 +8,8 @@
 //! # Current state
 //! * [`SeqScan`] is fully implemented and scans every visible tuple in a [`HeapFile`] under a given
 //!   transaction.
-//! * [`IndexScan`] is a placeholder; all methods call `todo!()`.
+//! * [`IndexScan`] resolves [`RecordId`]s from an [`AnyIndex`] (`search` / `range_search`) and
+//!   materializes table tuples via [`HeapFile::fetch_tuple`].
 
 use fallible_iterator::FallibleIterator;
 
@@ -16,6 +17,8 @@ use super::{ExecutionError, Executor};
 use crate::{
     TransactionId,
     heap::file::{HeapFile, HeapScan},
+    index::{AnyIndex, CompositeKey},
+    primitives::RecordId,
     tuple::{Tuple, TupleSchema},
 };
 
@@ -69,7 +72,7 @@ impl FallibleIterator for SeqScan<'_> {
     /// Advances the scan and returns the next tuple, or `Ok(None)` when all
     /// tuples have been consumed.
     ///
-    /// On the first call the underlying [`HeapScan`] is initialised
+    /// On the first call the underlying [`HeapScan`] is initialized
     /// automatically, so callers do not need to call any `open()` method.
     ///
     /// # Errors
@@ -88,12 +91,88 @@ impl FallibleIterator for SeqScan<'_> {
     }
 }
 
-/// Index scan executor — not yet implemented.
+/// How [`IndexScan`] collects [`RecordId`]s from an [`AnyIndex`] before heap lookups.
+#[derive(Debug, Clone)]
+pub enum IndexScanSpec {
+    /// Point probe: [`AnyIndex::search`].
+    Search(CompositeKey),
+    /// Inclusive key range: [`AnyIndex::range_search`].
+    Range {
+        start: CompositeKey,
+        end: CompositeKey,
+    },
+}
+
+/// Index scan: look up qualifying RIDs in a secondary index, then fetch full rows from the heap.
 ///
-/// This is a stub that will eventually drive tuple retrieval through a B-tree
-/// or other index structure.  All methods currently call `todo!()`.
-#[derive(Debug)]
-pub struct IndexScan;
+/// B-tree vs hash is determined by the concrete [`AnyIndex`] instance; this operator only calls
+/// [`AnyIndex::search`] or [`AnyIndex::range_search`]. Empty index slots (stale RIDs) are skipped.
+pub struct IndexScan<'a> {
+    heap: &'a HeapFile,
+    index: &'a AnyIndex,
+    txn: TransactionId,
+    schema: TupleSchema,
+    spec: IndexScanSpec,
+    /// Filled on first [`FallibleIterator::next`]; cleared by [`Executor::rewind`].
+    rids: Option<Vec<RecordId>>,
+    next_rid: usize,
+}
+
+impl std::fmt::Debug for IndexScan<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("IndexScan")
+            .field("txn", &self.txn)
+            .field("schema", &self.schema)
+            .field("spec", &self.spec)
+            .field("index", &self.index)
+            .field("initialized", &self.rids.is_some())
+            .finish_non_exhaustive()
+    }
+}
+
+impl<'a> IndexScan<'a> {
+    /// Builds an index scan over `heap` using `index`, under transaction `txn`, according to
+    /// `spec`.
+    pub fn new(
+        heap: &'a HeapFile,
+        index: &'a AnyIndex,
+        txn: TransactionId,
+        spec: IndexScanSpec,
+    ) -> Self {
+        Self {
+            heap,
+            index,
+            txn,
+            schema: heap.schema().clone(),
+            spec,
+            rids: None,
+            next_rid: 0,
+        }
+    }
+
+    /// Loads the `RecordId`s (RIDs) qualifying for this index scan into the internal buffer.
+    ///
+    /// - For [`IndexScanSpec::Search`], looks up all RIDs associated with the given key using the
+    ///   index.
+    /// - For [`IndexScanSpec::Range`], retrieves all RIDs within the specified key range.
+    ///
+    /// The RIDs are obtained from the index and stored in `self.rids`. The index may include some
+    /// stale RIDs (i.e., deleted records) which are skipped later during scanning. After loading,
+    /// `self.next_rid` is reset to 0 to begin iteration from the start.
+    ///
+    /// Returns an error if the underlying index access fails, wrapping the error as an
+    /// [`ExecutionError::Index`].
+    fn load_rids(&mut self) -> Result<(), ExecutionError> {
+        let vec = match &self.spec {
+            IndexScanSpec::Search(key) => self.index.search(self.txn, key),
+            IndexScanSpec::Range { start, end } => self.index.range_search(self.txn, start, end),
+        }
+        .map_err(|e| ExecutionError::Index(e.to_string()))?;
+        self.rids = Some(vec);
+        self.next_rid = 0;
+        Ok(())
+    }
+}
 
 impl Executor for SeqScan<'_> {
     /// Returns the schema of the tuples produced by this scan.
@@ -115,22 +194,42 @@ impl Executor for SeqScan<'_> {
     }
 }
 
-impl FallibleIterator for IndexScan {
+impl FallibleIterator for IndexScan<'_> {
     type Item = Tuple;
     type Error = ExecutionError;
 
     fn next(&mut self) -> Result<Option<Tuple>, ExecutionError> {
-        todo!()
+        if self.rids.is_none() {
+            self.load_rids()?;
+        }
+        let rids = self
+            .rids
+            .as_ref()
+            .ok_or_else(|| ExecutionError::TypeError("index scan rid buffer missing".into()))?;
+        while self.next_rid < rids.len() {
+            let rid = rids[self.next_rid];
+            self.next_rid += 1;
+            if let Some(t) = self
+                .heap
+                .fetch_tuple(self.txn, rid)
+                .map_err(|e| ExecutionError::Storage(e.to_string()))?
+            {
+                return Ok(Some(t));
+            }
+        }
+        Ok(None)
     }
 }
 
-impl Executor for IndexScan {
+impl Executor for IndexScan<'_> {
     fn schema(&self) -> &TupleSchema {
-        todo!()
+        &self.schema
     }
 
     fn rewind(&mut self) -> Result<(), ExecutionError> {
-        todo!()
+        self.rids = None;
+        self.next_rid = 0;
+        Ok(())
     }
 }
 
@@ -145,6 +244,8 @@ mod tests {
     use crate::{
         FileId, TransactionId,
         buffer_pool::page_store::PageStore,
+        index::{AnyIndex, CompositeKey},
+        primitives::{PageNumber, RecordId, SlotId},
         tuple::{Field, Tuple, TupleSchema},
         types::{Type, Value},
         wal::writer::Wal,
@@ -197,6 +298,45 @@ mod tests {
             Arc::clone(&wal),
         );
         (heap, wal, dir)
+    }
+
+    fn make_heap_and_btree_index() -> (HeapFile, AnyIndex, Arc<Wal>, tempfile::TempDir) {
+        let dir = tempdir().unwrap();
+        let wal = Arc::new(Wal::new(&dir.path().join("test.wal"), 0).unwrap());
+        let store = Arc::new(PageStore::new(16, Arc::clone(&wal)));
+
+        let heap_fid = FileId::new(1);
+        let heap_path = dir.path().join("heap.db");
+        let hf = std::fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .open(&heap_path)
+            .unwrap();
+        hf.set_len(4 * crate::storage::PAGE_SIZE as u64).unwrap();
+        drop(hf);
+        store.register_file(heap_fid, &heap_path).unwrap();
+        let heap = HeapFile::new(heap_fid, schema(), Arc::clone(&store), 0, Arc::clone(&wal));
+
+        let idx_fid = FileId::new(2);
+        let idx_path = dir.path().join("btree_idx.db");
+        std::fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .open(&idx_path)
+            .unwrap();
+        store.register_file(idx_fid, &idx_path).unwrap();
+
+        let any = AnyIndex::btree()
+            .file_id(idx_fid)
+            .key_types(vec![Type::Int32])
+            .store(store)
+            .existing_pages(0)
+            .build()
+            .unwrap();
+
+        (heap, any, wal, dir)
     }
 
     // SeqScan yields all tuples for a heap file in insertion order until exhaustion.
@@ -343,5 +483,103 @@ mod tests {
             assert_eq!(af.field_type, bf.field_type);
             assert_eq!(af.nullable, bf.nullable);
         }
+    }
+
+    #[test]
+    fn test_index_scan_search_returns_matching_heap_tuple() {
+        let (heap, index, wal, _dir) = make_heap_and_btree_index();
+        let txn = begin_txn(&wal, 1);
+
+        let row = make_tuple(42, true);
+        let rid = heap.insert_tuple(txn, &row).unwrap();
+        let key = CompositeKey::single(Value::Int32(42));
+        index.insert(txn, &key, rid).unwrap();
+
+        let mut scan = IndexScan::new(&heap, &index, txn, IndexScanSpec::Search(key.clone()));
+        assert_schema_equivalent(scan.schema(), heap.schema());
+
+        assert_eq!(scan.next().unwrap(), Some(row));
+        assert_eq!(scan.next().unwrap(), None);
+    }
+
+    #[test]
+    fn test_index_scan_range_returns_tuples_in_bounds() {
+        let (heap, index, wal, _dir) = make_heap_and_btree_index();
+        let txn = begin_txn(&wal, 1);
+
+        let r10 = heap.insert_tuple(txn, &make_tuple(10, true)).unwrap();
+        let r20 = heap.insert_tuple(txn, &make_tuple(20, false)).unwrap();
+        let r30 = heap.insert_tuple(txn, &make_tuple(30, true)).unwrap();
+        index
+            .insert(txn, &CompositeKey::single(Value::Int32(10)), r10)
+            .unwrap();
+        index
+            .insert(txn, &CompositeKey::single(Value::Int32(20)), r20)
+            .unwrap();
+        index
+            .insert(txn, &CompositeKey::single(Value::Int32(30)), r30)
+            .unwrap();
+
+        let mut scan = IndexScan::new(&heap, &index, txn, IndexScanSpec::Range {
+            start: CompositeKey::single(Value::Int32(15)),
+            end: CompositeKey::single(Value::Int32(25)),
+        });
+
+        let mut out = Vec::new();
+        while let Some(t) = scan.next().unwrap() {
+            out.push(t);
+        }
+        out.sort_by_key(|t| match t.get(0).unwrap() {
+            Value::Int32(v) => *v,
+            _ => 0,
+        });
+        assert_eq!(out, vec![make_tuple(20, false)]);
+    }
+
+    #[test]
+    fn test_index_scan_rewind_replays_from_index() {
+        let (heap, index, wal, _dir) = make_heap_and_btree_index();
+        let txn = begin_txn(&wal, 1);
+
+        let row = make_tuple(7, false);
+        let rid = heap.insert_tuple(txn, &row).unwrap();
+        let key = CompositeKey::single(Value::Int32(7));
+        index.insert(txn, &key, rid).unwrap();
+
+        let mut scan = IndexScan::new(&heap, &index, txn, IndexScanSpec::Search(key));
+        assert_eq!(scan.next().unwrap(), Some(row.clone()));
+        assert_eq!(scan.next().unwrap(), None);
+
+        scan.rewind().unwrap();
+        assert_eq!(scan.next().unwrap(), Some(row));
+        assert_eq!(scan.next().unwrap(), None);
+    }
+
+    #[test]
+    fn test_index_scan_skips_stale_rid_after_heap_delete() {
+        let (heap, index, wal, _dir) = make_heap_and_btree_index();
+        let txn = begin_txn(&wal, 1);
+
+        let row = make_tuple(99, true);
+        let rid = heap.insert_tuple(txn, &row).unwrap();
+        let key = CompositeKey::single(Value::Int32(99));
+        index.insert(txn, &key, rid).unwrap();
+        heap.delete_tuple(txn, rid).unwrap();
+
+        let mut scan = IndexScan::new(&heap, &index, txn, IndexScanSpec::Search(key));
+        assert_eq!(scan.next().unwrap(), None);
+    }
+
+    #[test]
+    fn test_fetch_tuple_wrong_file_id_errors() {
+        let (heap, wal, _dir) = make_registered_heap_file(0);
+        let txn = begin_txn(&wal, 1);
+        let bad = RecordId::new(
+            FileId::new(999),
+            PageNumber::new(0),
+            SlotId::new(0).unwrap(),
+        );
+        let err = heap.fetch_tuple(txn, bad).unwrap_err();
+        assert!(matches!(err, crate::heap::file::HeapError::BadRecordId));
     }
 }
