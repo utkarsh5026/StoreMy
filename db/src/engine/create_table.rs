@@ -75,7 +75,8 @@ impl Engine<'_> {
             columns.iter().map(|c| &c.name),
         )?;
 
-        let mut defs: Vec<ConstraintDef> = Vec::new();
+        let mut defs: Vec<ConstraintDef> =
+            Vec::with_capacity(1 + columns.len() + table_constraints.len());
 
         if let Some(pk) = Self::resolve_primary_key(
             columns.as_slice(),
@@ -86,13 +87,14 @@ impl Engine<'_> {
             defs.push(pk);
         }
 
-        defs.extend(Self::resolve_column_constraints(
+        Self::resolve_column_constraints(
             columns.as_slice(),
             &schema,
             table_name.as_str(),
             catalog,
             txn,
-        )?);
+            &mut defs,
+        )?;
 
         for tc in table_constraints {
             defs.push(Self::resolve_table_constraint(
@@ -210,9 +212,8 @@ impl Engine<'_> {
         table_name: &str,
         catalog: &Catalog,
         txn: &Transaction<'_>,
-    ) -> Result<Vec<ConstraintDef>, EngineError> {
-        let mut defs: Vec<ConstraintDef> = Vec::new();
-
+        defs: &mut Vec<ConstraintDef>,
+    ) -> Result<(), EngineError> {
         for col in columns {
             if col.unique == Uniqueness::Unique {
                 let (col_id, _) = Self::require_column(schema, table_name, col.name.as_str())?;
@@ -245,7 +246,7 @@ impl Engine<'_> {
             }
         }
 
-        Ok(defs)
+        Ok(())
     }
 }
 
