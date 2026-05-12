@@ -1,9 +1,10 @@
 use std::collections::HashSet;
 
 use crate::{
-    catalog::{CatalogError, TableInfo, manager::Catalog},
+    catalog::{CatalogError, ConstraintDef, TableInfo, manager::Catalog, systable::FkAction},
     engine::{Engine, EngineError},
-    primitives::ColumnId,
+    parser::statements::TableConstraint,
+    primitives::{ColumnId, NonEmptyString},
     transaction::Transaction,
     tuple::{Field, TupleSchema},
 };
@@ -93,10 +94,10 @@ impl Engine<'_> {
         columns: I,
     ) -> Result<Vec<ColumnId>, EngineError>
     where
-        I: IntoIterator<Item = &'a str>,
+        I: IntoIterator<Item = &'a NonEmptyString>,
     {
         let columns = columns.into_iter().collect::<Vec<_>>();
-        Self::ensure_unique_strs(columns.iter().copied(), |column| {
+        Self::ensure_unique_strs(columns.iter().map(|c| c.as_str()), |column| {
             EngineError::DuplicateColumn {
                 table: table_name.to_string(),
                 column: column.to_string(),
@@ -133,5 +134,118 @@ impl Engine<'_> {
                 table: table.to_string(),
                 column: column.to_string(),
             })
+    }
+
+    /// Converts a parsed table-level constraint into a catalog [`ConstraintDef`].
+    ///
+    /// This is used when materializing `CREATE TABLE ...` constraints into the catalog layer.
+    /// It validates that all referenced columns exist in the provided `schema` (for local
+    /// columns) and, for foreign keys, in the referenced table's schema fetched from `catalog`.
+    ///
+    /// If the SQL did not provide an explicit constraint name, a stable default is generated:
+    ///
+    /// - `UNIQUE (a, b)` → `{table}_unique_a_b`
+    /// - `CHECK (...)` → `{table}_check`
+    /// - `FOREIGN KEY (a, b) ...` → `{table}_fk_a_b`
+    ///
+    /// # Errors
+    ///
+    /// - [`EngineError::UnknownTable`] — referenced table for a foreign key does not exist.
+    /// - [`EngineError::UnknownColumn`] — a referenced column does not exist (local or referenced).
+    /// - [`EngineError::DuplicateColumn`] — the same column name appears more than once in a column
+    ///   list.
+    /// - [`EngineError::Unsupported`] — foreign key local/ref column counts differ.
+    pub(super) fn resolve_table_constraint(
+        catalog: &Catalog,
+        txn: &Transaction<'_>,
+        constraint: &(Option<NonEmptyString>, TableConstraint),
+        schema: &TupleSchema,
+        table_name: &str,
+    ) -> Result<ConstraintDef, EngineError> {
+        let (opt_name, constraint) = constraint;
+        let def = match constraint {
+            TableConstraint::Unique { columns: col_names } => {
+                let columns = Self::resolve_column_ids(schema, table_name, col_names.as_slice())?;
+                ConstraintDef::Unique {
+                    name: Self::resolve_constraint_name(opt_name, table_name, constraint),
+                    columns,
+                    backing_index_id: None,
+                }
+            }
+            TableConstraint::Check { expr } => ConstraintDef::Check {
+                name: Self::resolve_constraint_name(opt_name, table_name, constraint),
+                expr: expr.to_string(),
+            },
+            TableConstraint::ForeignKey {
+                local_cols,
+                ref_table,
+                ref_cols,
+                on_delete,
+                on_update,
+            } => {
+                let local_columns =
+                    Self::resolve_column_ids(schema, table_name, local_cols.as_slice())?;
+
+                let ref_info = Self::check_table(catalog, txn, ref_table.as_str(), false)?
+                    .expect("if_exists=false never yields None");
+
+                let ref_ids = Self::resolve_column_ids(
+                    &ref_info.schema,
+                    ref_info.name.as_str(),
+                    ref_cols.as_slice(),
+                )?;
+
+                if ref_ids.len() != local_columns.len() {
+                    return Err(EngineError::Unsupported(format!(
+                        "foreign key column count mismatch: {} local columns, {} referenced columns",
+                        local_columns.len(),
+                        ref_ids.len()
+                    )));
+                }
+
+                ConstraintDef::ForeignKey {
+                    name: Self::resolve_constraint_name(opt_name, table_name, constraint),
+                    local_columns,
+                    ref_table_id: ref_info.file_id,
+                    ref_columns: ref_ids,
+                    on_delete: on_delete.map(FkAction::from),
+                    on_update: on_update.map(FkAction::from),
+                }
+            }
+        };
+        Ok(def)
+    }
+
+    /// Picks a catalog constraint name for a table-level constraint.
+    ///
+    /// If the user provided a name (via `CONSTRAINT name ...`), that name is returned.
+    /// Otherwise, a deterministic default is derived from the table name and constraint kind:
+    ///
+    /// - `UNIQUE (a, b)` → `{table}_unique_a_b`
+    /// - `CHECK (...)` → `{table}_check`
+    /// - `FOREIGN KEY (a, b) ...` → `{table}_fk_a_b`
+    ///
+    /// Note: these generated names are stable but not guaranteed globally unique (e.g. two
+    /// separate `CHECK` constraints on the same table both default to `{table}_check`).
+    fn resolve_constraint_name(
+        opt_name: &Option<NonEmptyString>,
+        table_name: &str,
+        constraint: &TableConstraint,
+    ) -> String {
+        if let Some(name) = opt_name {
+            return name.as_str().to_owned();
+        }
+
+        match constraint {
+            TableConstraint::Unique { columns } => {
+                let cols = columns.join("_");
+                format!("{table_name}_unique_{cols}")
+            }
+            TableConstraint::Check { .. } => format!("{table_name}_check"),
+            TableConstraint::ForeignKey { local_cols, .. } => {
+                let cols = local_cols.join("_");
+                format!("{table_name}_fk_{cols}")
+            }
+        }
     }
 }
