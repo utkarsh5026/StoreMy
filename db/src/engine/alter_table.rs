@@ -200,7 +200,8 @@ impl Engine<'_> {
             }
 
             // ALTER TABLE users ADD CONSTRAINT uq_email UNIQUE (email);
-            // ALTER TABLE orders ADD CONSTRAINT fk_user FOREIGN KEY (user_id) REFERENCES users (id);
+            // ALTER TABLE orders ADD CONSTRAINT fk_user FOREIGN KEY (user_id) REFERENCES users
+            // (id);
             AlterAction::AddConstraint { name, constraint } => match &constraint {
                 TableConstraint::Unique { columns } => {
                     let column_ids =
@@ -395,8 +396,8 @@ mod tests {
             .unwrap_err();
 
         assert!(
-            matches!(err, EngineError::UnknownTable(_)),
-            "expected UnknownTable, got: {err:?}"
+            matches!(err, EngineError::TableNotFound(_)),
+            "expected TableNotFound, got: {err:?}"
         );
     }
 

@@ -301,8 +301,8 @@ mod tests {
             .unwrap_err();
 
         assert!(
-            matches!(err, EngineError::UnknownTable(ref n) if n == "ghost"),
-            "expected UnknownTable, got: {err:?}"
+            matches!(err, EngineError::TableNotFound(ref n) if n == "ghost"),
+            "expected TableNotFound, got: {err:?}"
         );
     }
 }

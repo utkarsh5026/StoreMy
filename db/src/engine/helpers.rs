@@ -49,12 +49,12 @@ impl Engine<'_> {
     /// users`).
     ///
     /// Maps [`CatalogError::TableNotFound`] to
-    /// [`EngineError::UnknownTable`]; other catalog errors become
+    /// [`EngineError::TableNotFound`]; other catalog errors become
     /// [`EngineError::Catalog`].
     ///
     /// # Errors
     ///
-    /// - [`EngineError::UnknownTable`] — no such table.
+    /// - [`EngineError::TableNotFound`] — no such table.
     /// - [`EngineError::Catalog`] — other catalog read failures.
     pub(super) fn check_table(
         catalog: &Catalog,
@@ -68,7 +68,7 @@ impl Engine<'_> {
                 return if if_exists {
                     Ok(None)
                 } else {
-                    Err(EngineError::UnknownTable(table_name.to_string()))
+                    Err(EngineError::TableNotFound(table_name.to_string()))
                 };
             }
             Err(other) => return Err(other.into()),
@@ -150,7 +150,7 @@ impl Engine<'_> {
     ///
     /// # Errors
     ///
-    /// - [`EngineError::UnknownTable`] — referenced table for a foreign key does not exist.
+    /// - [`EngineError::TableNotFound`] — referenced table for a foreign key does not exist.
     /// - [`EngineError::UnknownColumn`] — a referenced column does not exist (local or referenced).
     /// - [`EngineError::DuplicateColumn`] — the same column name appears more than once in a column
     ///   list.

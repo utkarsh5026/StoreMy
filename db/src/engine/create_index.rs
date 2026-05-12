@@ -293,8 +293,8 @@ mod tests {
             .unwrap_err();
 
         assert!(
-            matches!(err, EngineError::UnknownTable(_)),
-            "expected UnknownTable, got: {err:?}"
+            matches!(err, EngineError::TableNotFound(_)),
+            "expected TableNotFound, got: {err:?}"
         );
     }
 

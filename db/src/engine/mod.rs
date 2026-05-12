@@ -1,138 +1,34 @@
 use fallible_iterator::FallibleIterator;
-use thiserror::Error;
 
 use crate::{
     TransactionId,
-    binder::{BindError, Bound},
-    buffer_pool::page_store::PageStoreError,
-    catalog::{CatalogError, manager::Catalog},
-    execution::{ExecutionError, expression::BooleanExpression},
-    heap::file::{HeapError, HeapFile},
+    binder::Bound,
+    catalog::manager::Catalog,
+    execution::expression::BooleanExpression,
+    heap::file::HeapFile,
     parser::statements::Statement,
     primitives::RecordId,
-    transaction::{Transaction, TransactionError, TransactionManager},
+    transaction::{Transaction, TransactionManager},
     tuple::Tuple,
 };
 
 mod dml;
+mod error;
 mod query;
 mod result;
 
+pub use error::{ConstraintViolation, EngineError};
 pub use result::{ShownIndex, StatementResult};
 
 mod alter_table;
 mod create_index;
 mod create_table;
+mod delete;
 mod drop_index;
 mod drop_table;
 mod helpers;
+mod scope;
 mod show_indexes;
-
-#[derive(Debug, Error)]
-pub enum EngineError {
-    #[error("parse error: {0}")]
-    Parse(String),
-
-    #[error("unsupported statement: {0}")]
-    Unsupported(String),
-
-    #[error(transparent)]
-    Catalog(#[from] CatalogError),
-
-    #[error(transparent)]
-    Transaction(#[from] TransactionError),
-
-    #[error(transparent)]
-    Storage(#[from] HeapError),
-
-    #[error(transparent)]
-    BufferPool(#[from] PageStoreError),
-
-    #[error(transparent)]
-    Bind(#[from] crate::binder::BindError),
-
-    #[error(transparent)]
-    Index(#[from] crate::index::IndexError),
-
-    #[error(transparent)]
-    Execution(#[from] ExecutionError),
-
-    #[error("table '{0}' not found")]
-    TableNotFound(String),
-
-    #[error("table '{0}' already exists")]
-    TableAlreadyExists(String),
-
-    #[error("index '{0}' already exists")]
-    IndexAlreadyExists(String),
-
-    #[error("index '{0}' not found")]
-    UnknownIndex(String),
-
-    #[error("table '{0}' already has a primary key")]
-    PrimaryKeyAlreadyExists(String),
-
-    #[error("column '{column}' not found in table '{table}'")]
-    ColumnNotFound { table: String, column: String },
-
-    #[error("column '{column}' appears more than once in INSERT into '{table}'")]
-    DuplicateInsertColumn { table: String, column: String },
-
-    #[error("wrong number of values for table '{table}': expected {expected}, got {got}")]
-    WrongColumnCount {
-        table: String,
-        expected: usize,
-        got: usize,
-    },
-
-    #[error("null value in NOT NULL column '{column}' in table '{table}'")]
-    NullViolation { table: String, column: String },
-
-    #[error("duplicate value violates unique constraint '{constraint}'")]
-    UniqueViolation { constraint: String },
-
-    #[error(
-        "insert violates foreign key constraint '{constraint}': key not found in referenced table"
-    )]
-    ForeignKeyViolation { constraint: String },
-
-    #[error(
-        "delete or update on parent table violates foreign key constraint '{constraint}': child rows still reference the old key"
-    )]
-    FkParentViolation { constraint: String },
-
-    #[error("type mismatch for column '{column}': expected {expected}, got {got}")]
-    TypeMismatch {
-        column: String,
-        expected: String,
-        got: String,
-    },
-
-    #[error("type error: {0}")]
-    TypeError(String),
-
-    #[error("table '{0}' not found")]
-    UnknownTable(String),
-
-    #[error("column '{column}' not found in table '{table}'")]
-    UnknownColumn { table: String, column: String },
-
-    #[error("column '{column}' appears more than once in the FROM/JOIN scope")]
-    DuplicateColumn { table: String, column: String },
-}
-
-impl EngineError {
-    pub(super) fn type_error(message: impl Into<String>) -> Self {
-        Self::TypeError(message.into())
-    }
-
-    fn from_update_bind_error(error: BindError) -> Self {
-        match error {
-            BindError::UnknownColumn { table, column } => Self::ColumnNotFound { table, column },
-            other => Self::Bind(other),
-        }
-    }
-}
 
 /// SQL execution entrypoint.
 ///
