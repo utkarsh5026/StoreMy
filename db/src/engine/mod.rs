@@ -14,13 +14,13 @@ use crate::{
     tuple::Tuple,
 };
 
-mod ddl;
 mod dml;
 mod query;
 mod result;
 
 pub use result::{ShownIndex, StatementResult};
 
+mod alter_table;
 mod create_index;
 mod create_table;
 mod drop_index;
@@ -68,6 +68,9 @@ pub enum EngineError {
 
     #[error("index '{0}' not found")]
     UnknownIndex(String),
+
+    #[error("table '{0}' already has a primary key")]
+    PrimaryKeyAlreadyExists(String),
 
     #[error("column '{column}' not found in table '{table}'")]
     ColumnNotFound { table: String, column: String },
@@ -175,7 +178,9 @@ impl<'a> Engine<'a> {
             Statement::Delete(_) => self.exec_delete(stmt),
             Statement::Update(s) => self.exec_update(s),
             Statement::Select(_) => self.exec_select(stmt),
-            Statement::AlterTable(s) => self.exec_alter_table(s),
+            Statement::AlterTable(s) => {
+                self.with_txn(|txn| Engine::exec_alter_table(txn, self.catalog, s))
+            }
         };
         if let Err(e) = &result {
             tracing::warn!(error = %e, "statement failed");
