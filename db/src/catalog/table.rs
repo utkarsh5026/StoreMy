@@ -10,7 +10,7 @@ use std::{collections::HashMap, sync::Arc};
 use crate::{
     FileId,
     catalog::{
-        CatalogError, TableInfo,
+        CatalogError, ConstraintDef, TableInfo,
         manager::Catalog,
         systable::{
             ColumnRow, ConstraintColumnRow, ConstraintRow, FkConstraintRow, IndexRow,
@@ -144,17 +144,16 @@ impl Catalog {
             .ok_or_else(|| CatalogError::heap_not_found(file_id))
     }
 
-    /// Creates a new table with the given schema and registers it in the catalog.
+    /// Creates a new table with the given schema and constraints, and registers it in the catalog.
     ///
-    /// Allocates a fresh [`FileId`], creates the backing heap file on disk,
-    /// writes rows to the `Tables`, `Columns`, and `PrimaryKeyColumns` system
-    /// tables inside `txn`, and inserts the table into the in-memory cache.
+    /// Allocates a fresh [`FileId`], creates the backing heap file on disk, writes rows to the
+    /// `Tables` and `Columns` system tables, applies every [`ConstraintDef`] in `constraints`
+    /// (PK goes to `PrimaryKeyColumns`; UNIQUE / FK / CHECK go through
+    /// [`Catalog::add_constraint`]), and inserts the table into the in-memory cache.
     ///
-    /// `primary_key` is a list of column ids (zero-based, in declaration order)
-    /// that form the primary key. Composite primary keys are supported: each
-    /// column becomes one row in `PrimaryKeyColumns`, sharing `table_id` and
-    /// distinguished by `ordinal`. Pass `None` or an empty `Vec` for tables
-    /// without a primary key.
+    /// `constraints` replaces the old `primary_key` parameter — wrap a primary key as
+    /// `ConstraintDef::PrimaryKey { columns }`. Pass an empty `Vec` for tables with no
+    /// constraints.
     ///
     /// Returns the [`FileId`] assigned to the new table.
     ///
@@ -162,15 +161,14 @@ impl Catalog {
     ///
     /// - [`CatalogError::TableAlreadyExists`] if a table named `name` is already in the in-memory
     ///   cache.
-    /// - [`CatalogError::InvalidCatalogRow`] if a primary key column index is out of bounds for the
-    ///   schema.
+    /// - [`CatalogError::InvalidCatalogRow`] if any constraint is structurally invalid.
     /// - Propagates heap creation and system table insertion errors.
     pub fn create_table(
         &self,
         txn: &Transaction<'_>,
         name: &str,
         schema: TupleSchema,
-        primary_key: Option<Vec<ColumnId>>,
+        constraints: Vec<ConstraintDef>,
     ) -> Result<FileId, CatalogError> {
         if self.user_tables.read().contains_key(name) {
             return Err(CatalogError::table_already_exists(name));
@@ -201,14 +199,31 @@ impl Catalog {
             Ok(())
         })?;
 
-        if let Some(pk_cols) = primary_key.as_deref() {
-            self.insert_primary_key_columns(txn, file_id, &schema, pk_cols)?;
+        // Extract the PK before building the initial TableInfo — it lives in its own system
+        // table and must be written before the table enters the cache so that add_constraint
+        // (for UNIQUE / FK) can read back a fully-formed TableInfo.
+        let pk_cols: Option<Vec<ColumnId>> = constraints.iter().find_map(|def| {
+            if let ConstraintDef::PrimaryKey { columns } = def {
+                Some(columns.clone())
+            } else {
+                None
+            }
+        });
+        if let Some(ref pk) = pk_cols {
+            self.insert_primary_key_columns(txn, file_id, &schema, pk)?;
         }
 
-        let table_info = TableInfo::new(name.try_into()?, schema, file_id, file_path, primary_key);
+        let table_info = TableInfo::new(name.try_into()?, schema, file_id, file_path, pk_cols);
         self.user_tables
             .write()
             .insert(table_info.name.clone(), table_info);
+
+        for def in constraints {
+            if !matches!(def, ConstraintDef::PrimaryKey { .. }) {
+                self.add_constraint(txn, file_id, def)?;
+            }
+        }
+
         Ok(file_id)
     }
 
@@ -614,7 +629,7 @@ mod tests {
         let txn = txn_mgr.begin().unwrap();
 
         let file_id = catalog
-            .create_table(&txn, "users", two_col_schema(), None)
+            .create_table(&txn, "users", two_col_schema(), vec![])
             .unwrap();
         txn.commit().unwrap();
 
@@ -634,7 +649,7 @@ mod tests {
         let txn = txn_mgr.begin().unwrap();
 
         let file_id = catalog
-            .create_table(&txn, "orders", two_col_schema(), None)
+            .create_table(&txn, "orders", two_col_schema(), vec![])
             .unwrap();
         txn.commit().unwrap();
 
@@ -655,7 +670,7 @@ mod tests {
         let (catalog, txn_mgr) = make_catalog_and_txn(dir.path());
         let txn = txn_mgr.begin().unwrap();
         catalog
-            .create_table(&txn, "items", two_col_schema(), None)
+            .create_table(&txn, "items", two_col_schema(), vec![])
             .unwrap();
         txn.commit().unwrap();
 
@@ -694,7 +709,7 @@ mod tests {
         let txn = txn_mgr.begin().unwrap();
 
         let file_id = catalog
-            .create_table(&txn, "users_by_id", two_col_schema(), None)
+            .create_table(&txn, "users_by_id", two_col_schema(), vec![])
             .unwrap();
         txn.commit().unwrap();
 
@@ -714,7 +729,7 @@ mod tests {
         let txn = txn_mgr.begin().unwrap();
 
         let file_id = catalog
-            .create_table(&txn, "orders_by_id", two_col_schema(), None)
+            .create_table(&txn, "orders_by_id", two_col_schema(), vec![])
             .unwrap();
         txn.commit().unwrap();
 
@@ -755,7 +770,7 @@ mod tests {
         let txn = txn_mgr.begin().unwrap();
 
         let file_id = catalog
-            .create_table(&txn, "users", two_col_schema(), None)
+            .create_table(&txn, "users", two_col_schema(), vec![])
             .unwrap();
         txn.commit().unwrap();
 
@@ -765,8 +780,6 @@ mod tests {
             "expected heap to be registered after create_table"
         );
     }
-
-    // ── get_table_heap: error paths ───────────────────────────────────────
 
     // Requesting a heap for an unregistered FileId must return HeapNotFound.
     #[test]
@@ -782,8 +795,6 @@ mod tests {
         );
     }
 
-    // ── create_table: happy path ──────────────────────────────────────────
-
     // No primary key (None) must succeed and return a valid FileId.
     #[test]
     fn test_create_table_no_pk_none_succeeds() {
@@ -791,7 +802,7 @@ mod tests {
         let (catalog, txn_mgr) = make_catalog_and_txn(dir.path());
         let txn = txn_mgr.begin().unwrap();
 
-        let result = catalog.create_table(&txn, "t1", two_col_schema(), None);
+        let result = catalog.create_table(&txn, "t1", two_col_schema(), vec![]);
         txn.commit().unwrap();
 
         assert!(result.is_ok(), "create_table with None pk must succeed");
@@ -804,7 +815,7 @@ mod tests {
         let (catalog, txn_mgr) = make_catalog_and_txn(dir.path());
         let txn = txn_mgr.begin().unwrap();
 
-        let result = catalog.create_table(&txn, "t2", two_col_schema(), Some(vec![]));
+        let result = catalog.create_table(&txn, "t2", two_col_schema(), vec![]);
         txn.commit().unwrap();
 
         assert!(
@@ -820,7 +831,11 @@ mod tests {
         let (catalog, txn_mgr) = make_catalog_and_txn(dir.path());
         let txn = txn_mgr.begin().unwrap();
 
-        let result = catalog.create_table(&txn, "t3", two_col_schema(), Some(vec![col(0)]));
+        let result = catalog.create_table(&txn, "t3", two_col_schema(), vec![
+            ConstraintDef::PrimaryKey {
+                columns: vec![col(0)],
+            },
+        ]);
         txn.commit().unwrap();
 
         assert!(result.is_ok());
@@ -833,7 +848,11 @@ mod tests {
         let (catalog, txn_mgr) = make_catalog_and_txn(dir.path());
         let txn = txn_mgr.begin().unwrap();
 
-        let result = catalog.create_table(&txn, "t4", two_col_schema(), Some(vec![col(1)]));
+        let result = catalog.create_table(&txn, "t4", two_col_schema(), vec![
+            ConstraintDef::PrimaryKey {
+                columns: vec![col(1)],
+            },
+        ]);
         txn.commit().unwrap();
 
         assert!(result.is_ok());
@@ -847,7 +866,11 @@ mod tests {
         let txn = txn_mgr.begin().unwrap();
 
         catalog
-            .create_table(&txn, "t5", two_col_schema(), Some(vec![col(0)]))
+            .create_table(&txn, "t5", two_col_schema(), vec![
+                ConstraintDef::PrimaryKey {
+                    columns: vec![col(0)],
+                },
+            ])
             .unwrap();
         txn.commit().unwrap();
 
@@ -866,7 +889,7 @@ mod tests {
         let txn = txn_mgr.begin().unwrap();
 
         catalog
-            .create_table(&txn, "t6", two_col_schema(), None)
+            .create_table(&txn, "t6", two_col_schema(), vec![])
             .unwrap();
         txn.commit().unwrap();
 
@@ -886,7 +909,7 @@ mod tests {
         let txn = txn_mgr.begin().unwrap();
 
         catalog
-            .create_table(&txn, "things", two_col_schema(), None)
+            .create_table(&txn, "things", two_col_schema(), vec![])
             .unwrap();
         txn.commit().unwrap();
 
@@ -904,7 +927,11 @@ mod tests {
         let (catalog, txn_mgr) = make_catalog_and_txn(dir.path());
         let txn = txn_mgr.begin().unwrap();
 
-        let result = catalog.create_table(&txn, "tiny", one_col_schema(), Some(vec![col(0)]));
+        let result = catalog.create_table(&txn, "tiny", one_col_schema(), vec![
+            ConstraintDef::PrimaryKey {
+                columns: vec![col(0)],
+            },
+        ]);
         txn.commit().unwrap();
 
         assert!(result.is_ok());
@@ -918,12 +945,12 @@ mod tests {
         let txn = txn_mgr.begin().unwrap();
 
         catalog
-            .create_table(&txn, "dup", two_col_schema(), None)
+            .create_table(&txn, "dup", two_col_schema(), vec![])
             .unwrap();
         txn.commit().unwrap();
 
         let txn2 = txn_mgr.begin().unwrap();
-        let result = catalog.create_table(&txn2, "dup", two_col_schema(), None);
+        let result = catalog.create_table(&txn2, "dup", two_col_schema(), vec![]);
 
         assert!(
             matches!(result, Err(CatalogError::TableAlreadyExists { .. })),
@@ -939,7 +966,11 @@ mod tests {
         let (catalog, txn_mgr) = make_catalog_and_txn(dir.path());
         let txn = txn_mgr.begin().unwrap();
 
-        let result = catalog.create_table(&txn, "bad", two_col_schema(), Some(vec![col(2)]));
+        let result = catalog.create_table(&txn, "bad", two_col_schema(), vec![
+            ConstraintDef::PrimaryKey {
+                columns: vec![col(2)],
+            },
+        ]);
 
         assert!(
             matches!(result, Err(CatalogError::InvalidCatalogRow { .. })),
@@ -956,8 +987,11 @@ mod tests {
         let (catalog, txn_mgr) = make_catalog_and_txn(dir.path());
         let txn = txn_mgr.begin().unwrap();
 
-        let result =
-            catalog.create_table(&txn, "multi", two_col_schema(), Some(vec![col(0), col(1)]));
+        let result = catalog.create_table(&txn, "multi", two_col_schema(), vec![
+            ConstraintDef::PrimaryKey {
+                columns: vec![col(0), col(1)],
+            },
+        ]);
         txn.commit().unwrap();
 
         assert!(
@@ -981,7 +1015,11 @@ mod tests {
         let txn = txn_mgr.begin().unwrap();
 
         catalog
-            .create_table(&txn, "rev", two_col_schema(), Some(vec![col(1), col(0)]))
+            .create_table(&txn, "rev", two_col_schema(), vec![
+                ConstraintDef::PrimaryKey {
+                    columns: vec![col(1), col(0)],
+                },
+            ])
             .unwrap();
         txn.commit().unwrap();
 
@@ -1003,7 +1041,7 @@ mod tests {
         let txn = txn_mgr.begin().unwrap();
 
         catalog
-            .create_table(&txn, "gone", two_col_schema(), None)
+            .create_table(&txn, "gone", two_col_schema(), vec![])
             .unwrap();
         txn.commit().unwrap();
 
@@ -1025,7 +1063,7 @@ mod tests {
         let txn = txn_mgr.begin().unwrap();
 
         catalog
-            .create_table(&txn, "ephemeral", two_col_schema(), None)
+            .create_table(&txn, "ephemeral", two_col_schema(), vec![])
             .unwrap();
         txn.commit().unwrap();
 
@@ -1047,7 +1085,7 @@ mod tests {
         let txn = txn_mgr.begin().unwrap();
 
         let file_id = catalog
-            .create_table(&txn, "temp", two_col_schema(), None)
+            .create_table(&txn, "temp", two_col_schema(), vec![])
             .unwrap();
         txn.commit().unwrap();
 
@@ -1070,7 +1108,7 @@ mod tests {
         let txn = txn_mgr.begin().unwrap();
 
         catalog
-            .create_table(&txn, "vanish", two_col_schema(), None)
+            .create_table(&txn, "vanish", two_col_schema(), vec![])
             .unwrap();
         txn.commit().unwrap();
 
@@ -1113,7 +1151,11 @@ mod tests {
         let txn = txn_mgr.begin().unwrap();
 
         catalog
-            .create_table(&txn, "rt", two_col_schema(), Some(vec![col(0)]))
+            .create_table(&txn, "rt", two_col_schema(), vec![
+                ConstraintDef::PrimaryKey {
+                    columns: vec![col(0)],
+                },
+            ])
             .unwrap();
         txn.commit().unwrap();
 
@@ -1136,7 +1178,7 @@ mod tests {
         let txn = txn_mgr.begin().unwrap();
 
         catalog
-            .create_table(&txn, "nopk", two_col_schema(), None)
+            .create_table(&txn, "nopk", two_col_schema(), vec![])
             .unwrap();
         txn.commit().unwrap();
 
@@ -1161,10 +1203,10 @@ mod tests {
         let txn = txn_mgr.begin().unwrap();
 
         let id1 = catalog
-            .create_table(&txn, "a", two_col_schema(), None)
+            .create_table(&txn, "a", two_col_schema(), vec![])
             .unwrap();
         let id2 = catalog
-            .create_table(&txn, "b", two_col_schema(), None)
+            .create_table(&txn, "b", two_col_schema(), vec![])
             .unwrap();
         txn.commit().unwrap();
 
@@ -1179,7 +1221,7 @@ mod tests {
         let txn = txn_mgr.begin().unwrap();
 
         catalog
-            .create_table(&txn, "phoenix", two_col_schema(), None)
+            .create_table(&txn, "phoenix", two_col_schema(), vec![])
             .unwrap();
         txn.commit().unwrap();
 
@@ -1188,7 +1230,7 @@ mod tests {
         txn2.commit().unwrap();
 
         let txn3 = txn_mgr.begin().unwrap();
-        let result = catalog.create_table(&txn3, "phoenix", two_col_schema(), None);
+        let result = catalog.create_table(&txn3, "phoenix", two_col_schema(), vec![]);
         txn3.commit().unwrap();
 
         assert!(
@@ -1204,7 +1246,7 @@ mod tests {
 
         let txn = txn_mgr.begin().unwrap();
         catalog
-            .create_table(&txn, "old", one_col_schema(), None)
+            .create_table(&txn, "old", one_col_schema(), vec![])
             .unwrap();
         txn.commit().unwrap();
 
@@ -1236,10 +1278,10 @@ mod tests {
 
         let txn = txn_mgr.begin().unwrap();
         catalog
-            .create_table(&txn, "alpha", one_col_schema(), None)
+            .create_table(&txn, "alpha", one_col_schema(), vec![])
             .unwrap();
         catalog
-            .create_table(&txn, "beta", one_col_schema(), None)
+            .create_table(&txn, "beta", one_col_schema(), vec![])
             .unwrap();
         txn.commit().unwrap();
 
@@ -1277,7 +1319,7 @@ mod tests {
 
         let txn = txn_mgr.begin().unwrap();
         catalog
-            .create_table(&txn, "before", one_col_schema(), None)
+            .create_table(&txn, "before", one_col_schema(), vec![])
             .unwrap();
         txn.commit().unwrap();
 
@@ -1301,7 +1343,11 @@ mod tests {
 
         let txn = txn_mgr.begin().unwrap();
         catalog
-            .create_table(&txn, "src", two_col_schema(), Some(vec![col(0)]))
+            .create_table(&txn, "src", two_col_schema(), vec![
+                ConstraintDef::PrimaryKey {
+                    columns: vec![col(0)],
+                },
+            ])
             .unwrap();
         txn.commit().unwrap();
 
@@ -1327,7 +1373,7 @@ mod tests {
 
         let txn = txn_mgr.begin().unwrap();
         catalog
-            .create_table(&txn, "a", one_col_schema(), None)
+            .create_table(&txn, "a", one_col_schema(), vec![])
             .unwrap();
         txn.commit().unwrap();
 
@@ -1345,8 +1391,6 @@ mod tests {
         assert_eq!(info.name, "b", "reloaded name must be the new name");
     }
 
-    // ── set_primary_key ───────────────────────────────────────────────────
-
     #[test]
     fn test_set_primary_key_visible_in_cache_immediately() {
         let dir = tempdir().unwrap();
@@ -1354,7 +1398,7 @@ mod tests {
 
         let txn = txn_mgr.begin().unwrap();
         let file_id = catalog
-            .create_table(&txn, "t", two_col_schema(), None)
+            .create_table(&txn, "t", two_col_schema(), vec![])
             .unwrap();
         txn.commit().unwrap();
 
@@ -1381,7 +1425,11 @@ mod tests {
         let txn = txn_mgr.begin().unwrap();
         // Start with col 0 as PK.
         let file_id = catalog
-            .create_table(&txn, "t", two_col_schema(), Some(vec![col(0)]))
+            .create_table(&txn, "t", two_col_schema(), vec![
+                ConstraintDef::PrimaryKey {
+                    columns: vec![col(0)],
+                },
+            ])
             .unwrap();
         txn.commit().unwrap();
 
@@ -1407,7 +1455,7 @@ mod tests {
 
         let txn = txn_mgr.begin().unwrap();
         let file_id = catalog
-            .create_table(&txn, "t", two_col_schema(), None)
+            .create_table(&txn, "t", two_col_schema(), vec![])
             .unwrap();
         txn.commit().unwrap();
 
@@ -1431,8 +1479,6 @@ mod tests {
         );
     }
 
-    // ── drop_primary_key ──────────────────────────────────────────────────
-
     #[test]
     fn test_drop_primary_key_clears_pk_immediately() {
         let dir = tempdir().unwrap();
@@ -1440,7 +1486,11 @@ mod tests {
 
         let txn = txn_mgr.begin().unwrap();
         let file_id = catalog
-            .create_table(&txn, "t", two_col_schema(), Some(vec![col(0)]))
+            .create_table(&txn, "t", two_col_schema(), vec![
+                ConstraintDef::PrimaryKey {
+                    columns: vec![col(0)],
+                },
+            ])
             .unwrap();
         txn.commit().unwrap();
 
@@ -1463,7 +1513,11 @@ mod tests {
 
         let txn = txn_mgr.begin().unwrap();
         let file_id = catalog
-            .create_table(&txn, "t", two_col_schema(), Some(vec![col(0)]))
+            .create_table(&txn, "t", two_col_schema(), vec![
+                ConstraintDef::PrimaryKey {
+                    columns: vec![col(0)],
+                },
+            ])
             .unwrap();
         txn.commit().unwrap();
 

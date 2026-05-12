@@ -47,15 +47,10 @@ pub enum ConstraintDef {
     },
     /// Registers a CHECK expression in the catalog. Enforcement is not yet
     /// implemented — the expression is stored but never evaluated at DML time.
-    Check {
-        name: String,
-        expr: String,
-    },
+    Check { name: String, expr: String },
     /// Sets the primary key via the dedicated PK system table. Unlike the other
     /// variants there is no constraint name — PKs are identified by table only.
-    PrimaryKey {
-        columns: Vec<ColumnId>,
-    },
+    PrimaryKey { columns: Vec<ColumnId> },
 }
 
 impl Catalog {
@@ -101,9 +96,7 @@ impl Catalog {
                 })?;
                 Ok(())
             }
-            ConstraintDef::PrimaryKey { columns } => {
-                self.set_primary_key(txn, table_id, columns)
-            }
+            ConstraintDef::PrimaryKey { columns } => self.set_primary_key(txn, table_id, columns),
         }
     }
 
@@ -599,7 +592,7 @@ mod tests {
         let (catalog, txn_mgr) = make_catalog_and_txn(dir.path());
         let txn = txn_mgr.begin().unwrap();
         let file_id = catalog
-            .create_table(&txn, "users", three_col_schema(), None)
+            .create_table(&txn, "users", three_col_schema(), vec![])
             .unwrap();
         txn.commit().unwrap();
 
@@ -618,7 +611,7 @@ mod tests {
         let (catalog, txn_mgr) = make_catalog_and_txn(dir.path());
         let txn = txn_mgr.begin().unwrap();
         let file_id = catalog
-            .create_table(&txn, "users", three_col_schema(), None)
+            .create_table(&txn, "users", three_col_schema(), vec![])
             .unwrap();
         txn.commit().unwrap();
 
@@ -637,7 +630,7 @@ mod tests {
         let (catalog, txn_mgr) = make_catalog_and_txn(dir.path());
         let txn = txn_mgr.begin().unwrap();
         let file_id = catalog
-            .create_table(&txn, "users", three_col_schema(), None)
+            .create_table(&txn, "users", three_col_schema(), vec![])
             .unwrap();
         txn.commit().unwrap();
 
@@ -661,7 +654,7 @@ mod tests {
         let (catalog, txn_mgr) = make_catalog_and_txn(dir.path());
         let txn = txn_mgr.begin().unwrap();
         let file_id = catalog
-            .create_table(&txn, "users", three_col_schema(), None)
+            .create_table(&txn, "users", three_col_schema(), vec![])
             .unwrap();
         catalog
             .add_unique_constraint(&txn, file_id, "users_unique_email", &[col(1)], None)
@@ -686,7 +679,7 @@ mod tests {
         let (catalog, txn_mgr) = make_catalog_and_txn(dir.path());
         let txn = txn_mgr.begin().unwrap();
         let file_id = catalog
-            .create_table(&txn, "users", three_col_schema(), None)
+            .create_table(&txn, "users", three_col_schema(), vec![])
             .unwrap();
         catalog
             .add_unique_constraint(
@@ -712,7 +705,7 @@ mod tests {
         let (catalog, txn_mgr) = make_catalog_and_txn(dir.path());
         let txn = txn_mgr.begin().unwrap();
         let file_id = catalog
-            .create_table(&txn, "users", three_col_schema(), None)
+            .create_table(&txn, "users", three_col_schema(), vec![])
             .unwrap();
         catalog
             .add_unique_constraint(&txn, file_id, "users_unique_email", &[col(1)], None)
@@ -738,7 +731,7 @@ mod tests {
         let (catalog, txn_mgr) = make_catalog_and_txn(dir.path());
         let txn = txn_mgr.begin().unwrap();
         let file_id = catalog
-            .create_table(&txn, "users", three_col_schema(), None)
+            .create_table(&txn, "users", three_col_schema(), vec![])
             .unwrap();
         catalog
             .add_unique_constraint(&txn, file_id, "users_unique_email", &[col(1)], None)
@@ -772,7 +765,7 @@ mod tests {
         let (catalog, txn_mgr) = make_catalog_and_txn(dir.path());
         let txn = txn_mgr.begin().unwrap();
         let file_id = catalog
-            .create_table(&txn, "users", three_col_schema(), None)
+            .create_table(&txn, "users", three_col_schema(), vec![])
             .unwrap();
 
         let result = catalog.add_unique_constraint(&txn, file_id, "bad", &[], None);
@@ -790,7 +783,7 @@ mod tests {
         let (catalog, txn_mgr) = make_catalog_and_txn(dir.path());
         let txn = txn_mgr.begin().unwrap();
         let file_id = catalog
-            .create_table(&txn, "users", three_col_schema(), None)
+            .create_table(&txn, "users", three_col_schema(), vec![])
             .unwrap();
 
         let result = catalog.add_unique_constraint(&txn, file_id, "bad", &[col(99)], None);
@@ -808,7 +801,7 @@ mod tests {
         let (catalog, txn_mgr) = make_catalog_and_txn(dir.path());
         let txn = txn_mgr.begin().unwrap();
         let file_id = catalog
-            .create_table(&txn, "users", three_col_schema(), None)
+            .create_table(&txn, "users", three_col_schema(), vec![])
             .unwrap();
         catalog
             .add_unique_constraint(&txn, file_id, "my_unique", &[col(1)], None)
@@ -831,7 +824,7 @@ mod tests {
         let (catalog, txn_mgr) = make_catalog_and_txn(dir.path());
         let txn = txn_mgr.begin().unwrap();
         let file_id = catalog
-            .create_table(&txn, "users", three_col_schema(), None)
+            .create_table(&txn, "users", three_col_schema(), vec![])
             .unwrap();
         catalog
             .add_unique_constraint(&txn, file_id, "users_unique_email", &[col(1)], None)
@@ -854,7 +847,7 @@ mod tests {
         let (catalog, txn_mgr) = make_catalog_and_txn(dir.path());
         let txn = txn_mgr.begin().unwrap();
         let file_id = catalog
-            .create_table(&txn, "users", three_col_schema(), None)
+            .create_table(&txn, "users", three_col_schema(), vec![])
             .unwrap();
         catalog
             .add_unique_constraint(&txn, file_id, "users_unique_email", &[col(1)], None)
@@ -885,7 +878,7 @@ mod tests {
         let (catalog, txn_mgr) = make_catalog_and_txn(dir.path());
         let txn = txn_mgr.begin().unwrap();
         let file_id = catalog
-            .create_table(&txn, "users", three_col_schema(), None)
+            .create_table(&txn, "users", three_col_schema(), vec![])
             .unwrap();
 
         let result = catalog.drop_constraint(&txn, file_id, "ghost");
@@ -903,7 +896,7 @@ mod tests {
         let (catalog, txn_mgr) = make_catalog_and_txn(dir.path());
         let txn = txn_mgr.begin().unwrap();
         let file_id = catalog
-            .create_table(&txn, "users", three_col_schema(), None)
+            .create_table(&txn, "users", three_col_schema(), vec![])
             .unwrap();
         catalog
             .add_unique_constraint(&txn, file_id, "users_unique_email", &[col(1)], None)

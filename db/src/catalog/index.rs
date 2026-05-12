@@ -1083,7 +1083,7 @@ mod tests {
             field("email", Type::String).not_null(),
         ]);
         let txn = txn_mgr.begin().unwrap();
-        let file_id = catalog.create_table(&txn, "users", schema, None).unwrap();
+        let file_id = catalog.create_table(&txn, "users", schema, vec![]).unwrap();
         txn.commit().unwrap();
         file_id
     }
@@ -1096,7 +1096,7 @@ mod tests {
             field("c", Type::Int64).not_null(),
         ]);
         let txn = txn_mgr.begin().unwrap();
-        let file_id = catalog.create_table(&txn, "t", schema, None).unwrap();
+        let file_id = catalog.create_table(&txn, "t", schema, vec![]).unwrap();
         txn.commit().unwrap();
         file_id
     }
@@ -1428,7 +1428,7 @@ mod tests {
         let other_id = {
             let schema = TupleSchema::new(vec![field("k", Type::Int64).not_null()]);
             let txn = txn_mgr.begin().unwrap();
-            let id = catalog.create_table(&txn, "other", schema, None).unwrap();
+            let id = catalog.create_table(&txn, "other", schema, vec![]).unwrap();
             txn.commit().unwrap();
             id
         };
@@ -1537,10 +1537,14 @@ mod tests {
 
             let txn = txn_mgr.begin().unwrap();
             let parent_id = catalog
-                .create_table(&txn, "parents", parent_schema, Some(vec![col_id(0)]))
+                .create_table(&txn, "parents", parent_schema, vec![
+                    ConstraintDef::PrimaryKey {
+                        columns: vec![col_id(0)],
+                    },
+                ])
                 .unwrap();
             let child_id = catalog
-                .create_table(&txn, "children", child_schema, None)
+                .create_table(&txn, "children", child_schema, vec![])
                 .unwrap();
             unique_backing_index_id = catalog
                 .create_index(
@@ -1672,7 +1676,7 @@ mod tests {
                     &txn,
                     "orders",
                     TupleSchema::new(vec![field("oid", Type::Int64).not_null()]),
-                    None,
+                    vec![],
                 )
                 .unwrap();
             txn.commit().unwrap();
@@ -1716,7 +1720,7 @@ mod tests {
             field("email", Type::String).not_null(),
         ]);
         let err = catalog2
-            .create_table(&txn, "users", schema, None)
+            .create_table(&txn, "users", schema, vec![])
             .unwrap_err();
         txn.commit().unwrap();
 
@@ -1746,7 +1750,9 @@ mod tests {
                     ]),
                     // Declare PK as (b, a) — order matters and must
                     // round-trip across restart.
-                    Some(vec![col_id(1), col_id(0)]),
+                    vec![ConstraintDef::PrimaryKey {
+                        columns: vec![col_id(1), col_id(0)],
+                    }],
                 )
                 .unwrap();
             txn.commit().unwrap();

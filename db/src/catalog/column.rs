@@ -361,7 +361,7 @@ mod tests {
     use crate::{
         Type,
         buffer_pool::page_store::PageStore,
-        catalog::CatalogError,
+        catalog::{CatalogError, ConstraintDef},
         primitives::ColumnId,
         transaction::TransactionManager,
         tuple::{Field, TupleSchema},
@@ -401,7 +401,7 @@ mod tests {
 
         let txn = txn_mgr.begin().unwrap();
         let file_id = catalog
-            .create_table(&txn, "t", two_col_schema(), None)
+            .create_table(&txn, "t", two_col_schema(), vec![])
             .unwrap();
         txn.commit().unwrap();
 
@@ -433,7 +433,7 @@ mod tests {
 
         let txn = txn_mgr.begin().unwrap();
         let file_id = catalog
-            .create_table(&txn, "t", two_col_schema(), None)
+            .create_table(&txn, "t", two_col_schema(), vec![])
             .unwrap();
         txn.commit().unwrap();
 
@@ -464,7 +464,7 @@ mod tests {
 
         let txn = txn_mgr.begin().unwrap();
         let file_id = catalog
-            .create_table(&txn, "t", two_col_schema(), None)
+            .create_table(&txn, "t", two_col_schema(), vec![])
             .unwrap();
         txn.commit().unwrap();
 
@@ -487,7 +487,7 @@ mod tests {
         let txn = txn_mgr.begin().unwrap();
         // two_col_schema: col 0 = "id" Uint64 not-null, col 1 = "name" String not-null
         let file_id = catalog
-            .create_table(&txn, "t", two_col_schema(), None)
+            .create_table(&txn, "t", two_col_schema(), vec![])
             .unwrap();
         txn.commit().unwrap();
 
@@ -511,8 +511,6 @@ mod tests {
         assert!(!pk_field.nullable, "nullability must be preserved");
     }
 
-    // ── drop_column ───────────────────────────────────────────────────────
-
     // Dropping a PK column must be rejected.
     #[test]
     fn test_drop_column_primary_key_returns_cannot_alter_primary_key() {
@@ -521,7 +519,11 @@ mod tests {
 
         let txn = txn_mgr.begin().unwrap();
         let file_id = catalog
-            .create_table(&txn, "t", two_col_schema(), Some(vec![col(0)]))
+            .create_table(&txn, "t", two_col_schema(), vec![
+                ConstraintDef::PrimaryKey {
+                    columns: vec![col(0)],
+                },
+            ])
             .unwrap();
         txn.commit().unwrap();
 
@@ -546,7 +548,7 @@ mod tests {
 
         let txn = txn_mgr.begin().unwrap();
         let file_id = catalog
-            .create_table(&txn, "t", two_col_schema(), None)
+            .create_table(&txn, "t", two_col_schema(), vec![])
             .unwrap();
         txn.commit().unwrap();
 
@@ -579,7 +581,7 @@ mod tests {
 
         let txn = txn_mgr.begin().unwrap();
         let file_id = catalog
-            .create_table(&txn, "t", two_col_schema(), None)
+            .create_table(&txn, "t", two_col_schema(), vec![])
             .unwrap();
         txn.commit().unwrap();
 
@@ -603,7 +605,7 @@ mod tests {
 
         let txn = txn_mgr.begin().unwrap();
         let file_id = catalog
-            .create_table(&txn, "t", two_col_schema(), None)
+            .create_table(&txn, "t", two_col_schema(), vec![])
             .unwrap();
         txn.commit().unwrap();
 
@@ -642,7 +644,7 @@ mod tests {
 
         let txn = txn_mgr.begin().unwrap();
         let file_id = catalog
-            .create_table(&txn, "t", two_col_schema(), None)
+            .create_table(&txn, "t", two_col_schema(), vec![])
             .unwrap();
         txn.commit().unwrap();
 
@@ -665,7 +667,11 @@ mod tests {
         let txn = txn_mgr.begin().unwrap();
         // "id" is the PK; "name" is a plain column — dropping "name" must be allowed.
         let file_id = catalog
-            .create_table(&txn, "t", two_col_schema(), Some(vec![col(0)]))
+            .create_table(&txn, "t", two_col_schema(), vec![
+                ConstraintDef::PrimaryKey {
+                    columns: vec![col(0)],
+                },
+            ])
             .unwrap();
         txn.commit().unwrap();
 
@@ -702,7 +708,7 @@ mod tests {
 
         let txn = txn_mgr.begin().unwrap();
         let file_id = catalog
-            .create_table(&txn, "t", two_col_schema(), None)
+            .create_table(&txn, "t", two_col_schema(), vec![])
             .unwrap();
         txn.commit().unwrap();
 
@@ -728,7 +734,7 @@ mod tests {
 
         let txn = txn_mgr.begin().unwrap();
         let file_id = catalog
-            .create_table(&txn, "t", two_col_schema(), None)
+            .create_table(&txn, "t", two_col_schema(), vec![])
             .unwrap();
         txn.commit().unwrap();
 
@@ -756,7 +762,7 @@ mod tests {
 
         let txn = txn_mgr.begin().unwrap();
         let file_id = catalog
-            .create_table(&txn, "t", two_col_schema(), None)
+            .create_table(&txn, "t", two_col_schema(), vec![])
             .unwrap();
         txn.commit().unwrap();
 
@@ -783,7 +789,7 @@ mod tests {
 
         let txn = txn_mgr.begin().unwrap();
         let file_id = catalog
-            .create_table(&txn, "t", two_col_schema(), None)
+            .create_table(&txn, "t", two_col_schema(), vec![])
             .unwrap();
         txn.commit().unwrap();
 
@@ -815,7 +821,7 @@ mod tests {
 
         let txn = txn_mgr.begin().unwrap();
         let file_id = catalog
-            .create_table(&txn, "t", two_col_schema(), None)
+            .create_table(&txn, "t", two_col_schema(), vec![])
             .unwrap();
         txn.commit().unwrap();
 
@@ -845,7 +851,7 @@ mod tests {
 
         let txn = txn_mgr.begin().unwrap();
         let file_id = catalog
-            .create_table(&txn, "t", two_col_schema(), None)
+            .create_table(&txn, "t", two_col_schema(), vec![])
             .unwrap();
         txn.commit().unwrap();
 
@@ -867,7 +873,11 @@ mod tests {
 
         let txn = txn_mgr.begin().unwrap();
         let file_id = catalog
-            .create_table(&txn, "t", two_col_schema(), Some(vec![col(0), col(1)]))
+            .create_table(&txn, "t", two_col_schema(), vec![
+                ConstraintDef::PrimaryKey {
+                    columns: vec![col(0), col(1)],
+                },
+            ])
             .unwrap();
         txn.commit().unwrap();
 
@@ -886,8 +896,6 @@ mod tests {
         );
     }
 
-    // ── set_column_default ────────────────────────────────────────────────
-
     #[test]
     fn test_set_column_default_visible_in_schema_immediately() {
         let dir = tempdir().unwrap();
@@ -895,7 +903,7 @@ mod tests {
 
         let txn = txn_mgr.begin().unwrap();
         let file_id = catalog
-            .create_table(&txn, "t", two_col_schema(), None)
+            .create_table(&txn, "t", two_col_schema(), vec![])
             .unwrap();
         txn.commit().unwrap();
 
@@ -926,7 +934,7 @@ mod tests {
 
         let txn = txn_mgr.begin().unwrap();
         let file_id = catalog
-            .create_table(&txn, "t", two_col_schema(), None)
+            .create_table(&txn, "t", two_col_schema(), vec![])
             .unwrap();
         txn.commit().unwrap();
 
@@ -940,22 +948,19 @@ mod tests {
         );
     }
 
-    // ── drop_column_default ───────────────────────────────────────────────
-
     #[test]
     fn test_drop_column_default_clears_default_immediately() {
         let dir = tempdir().unwrap();
         let (catalog, txn_mgr) = make_catalog_and_txn(dir.path());
 
         let txn = txn_mgr.begin().unwrap();
-        // Build a schema where "name" already has a default.
         let mut name_field = Field::new("name", Type::String).unwrap();
         let _ = name_field.set_missing_default_value(Value::String("anon".into()));
         let schema = TupleSchema::new(vec![
             Field::new("id", Type::Uint64).unwrap().not_null(),
             name_field,
         ]);
-        let file_id = catalog.create_table(&txn, "t", schema, None).unwrap();
+        let file_id = catalog.create_table(&txn, "t", schema, vec![]).unwrap();
         txn.commit().unwrap();
 
         let txn2 = txn_mgr.begin().unwrap();
@@ -981,9 +986,8 @@ mod tests {
         let (catalog, txn_mgr) = make_catalog_and_txn(dir.path());
 
         let txn = txn_mgr.begin().unwrap();
-        // two_col_schema has "id" NOT NULL and "name" NOT NULL.
         let file_id = catalog
-            .create_table(&txn, "t", two_col_schema(), None)
+            .create_table(&txn, "t", two_col_schema(), vec![])
             .unwrap();
         txn.commit().unwrap();
 
@@ -1013,7 +1017,7 @@ mod tests {
 
         let txn = txn_mgr.begin().unwrap();
         let file_id = catalog
-            .create_table(&txn, "t", two_col_schema(), None)
+            .create_table(&txn, "t", two_col_schema(), vec![])
             .unwrap();
         txn.commit().unwrap();
 
