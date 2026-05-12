@@ -39,14 +39,14 @@ use crate::{
     FileId,
     binder::{
         Bound, BoundAlterAction, BoundAlterTable, BoundConstraintBody, BoundCreateIndex,
-        BoundCreateTable, BoundDrop, BoundDropIndex, BoundShowIndexes,
+        BoundCreateTable, BoundDropIndex, BoundShowIndexes,
     },
     catalog::{CatalogError, ConstraintDef, manager::Catalog},
     engine::{Engine, EngineError, ShownIndex, StatementResult},
     index::IndexKind,
     parser::statements::{
-        AlterTableStatement, CreateIndexStatement, DropIndexStatement, DropStatement,
-        ShowIndexesStatement, Statement,
+        AlterTableStatement, CreateIndexStatement, DropIndexStatement, ShowIndexesStatement,
+        Statement,
     },
     primitives::ColumnId,
     transaction::Transaction,
@@ -245,71 +245,6 @@ impl Engine<'_> {
                         }
                     }
                     Ok(StatementResult::table_created(name, file_id, false))
-                }
-            }
-        })
-    }
-
-    /// Executes a `DROP TABLE` statement after binding the target table.
-    ///
-    /// Binding resolves `DROP TABLE users` to the catalog's canonical table name
-    /// and heap [`crate::FileId`]. Execution performs the catalog drop, or returns
-    /// the SQL no-op result for `DROP TABLE IF EXISTS` when the table is missing.
-    ///
-    /// # SQL examples
-    ///
-    /// ```sql
-    /// -- DROP TABLE users;
-    /// ```
-    ///
-    /// ```ignore
-    /// BoundDrop::Drop {
-    ///     name: "users".into(),
-    ///     file_id: <resolved users heap file>,
-    /// }
-    /// ```
-    ///
-    /// ```sql
-    /// -- DROP TABLE IF EXISTS ghost;
-    /// ```
-    ///
-    /// ```ignore
-    /// BoundDrop::NoOp {
-    ///     name: "ghost".into(),
-    /// }
-    /// ```
-    ///
-    /// # SQL -> result mapping
-    ///
-    /// ```sql
-    /// -- DROP TABLE users;
-    /// --   StatementResult::TableDropped { name: "users" }
-    ///
-    /// -- DROP TABLE IF EXISTS ghost;
-    /// --   StatementResult::TableDropped { name: "ghost" }
-    /// ```
-    ///
-    /// # Errors
-    ///
-    /// Returns [`EngineError::Bind`] when the table does not exist and the SQL
-    /// did not include `IF EXISTS`.
-    ///
-    /// Returns [`EngineError::Catalog`] when the catalog cannot remove the table
-    /// metadata or associated storage.
-    pub(super) fn exec_drop_table(
-        &self,
-        statement: DropStatement,
-    ) -> Result<StatementResult, EngineError> {
-        self.bind_and_execute(Statement::Drop(statement), |catalog, bound, txn| {
-            let Bound::Drop(b) = bound else {
-                unreachable!("binder returned non-Drop variant for Drop input");
-            };
-
-            match b {
-                BoundDrop::NoOp { name } => Ok(StatementResult::table_dropped(name)),
-                BoundDrop::Drop { name, .. } => {
-                    catalog.drop_table(txn, &name)?;
-                    Ok(StatementResult::table_dropped(name))
                 }
             }
         })
@@ -718,7 +653,7 @@ mod tests {
         buffer_pool::page_store::PageStore,
         catalog::manager::Catalog,
         engine::{Engine, EngineError, StatementResult},
-        parser::statements::{ColumnDef, CreateTableStatement, DropStatement, Uniqueness},
+        parser::statements::{ColumnDef, CreateTableStatement, Uniqueness},
         primitives::{ColumnId, NonEmptyString},
         transaction::TransactionManager,
         tuple::TupleSchema,
@@ -813,37 +748,6 @@ mod tests {
         }
 
         assert!(dir.path().join("users.dat").exists());
-    }
-
-    // drop_table returns TableDropped after dropping an existing table.
-    #[test]
-    fn test_drop_table_existing_returns_table_dropped() {
-        let dir = tempdir().unwrap();
-        let (catalog, txn_mgr) = make_catalog_and_txn(dir.path());
-
-        let stmt_create = statement_create(
-            "t1",
-            false,
-            vec![col("id", Type::Uint64, false, false)],
-            None,
-        );
-        let engine = Engine::new(&catalog, &txn_mgr);
-        engine
-            .exec_create_table(crate::parser::statements::Statement::CreateTable(
-                stmt_create,
-            ))
-            .unwrap();
-
-        let stmt_drop = DropStatement {
-            table_name: "t1".try_into().unwrap(),
-            if_exists: false,
-        };
-        let result = engine.exec_drop_table(stmt_drop).unwrap();
-
-        match result {
-            StatementResult::TableDropped { name } => assert_eq!(name, "t1"),
-            other => panic!("expected TableDropped, got: {other:?}"),
-        }
     }
 
     // --- edge cases ---
@@ -1032,44 +936,6 @@ mod tests {
             matches!(err, EngineError::Bind(BindError::TableAlreadyExists(_))),
             "expected Bind(TableAlreadyExists), got: {err:?}"
         );
-    }
-
-    // Dropping a missing table without IF EXISTS should error.
-    #[test]
-    fn test_drop_table_missing_without_if_exists_returns_err() {
-        let dir = tempdir().unwrap();
-        let (catalog, txn_mgr) = make_catalog_and_txn(dir.path());
-
-        let stmt_drop = DropStatement {
-            table_name: "ghost".try_into().unwrap(),
-            if_exists: false,
-        };
-        let engine = Engine::new(&catalog, &txn_mgr);
-        let err = engine.exec_drop_table(stmt_drop).unwrap_err();
-
-        assert!(
-            matches!(err, EngineError::Bind(BindError::UnknownTable(_))),
-            "expected Bind(UnknownTable), got: {err:?}"
-        );
-    }
-
-    // IF EXISTS should suppress the missing-table error and return Ok(TableDropped).
-    #[test]
-    fn test_drop_table_missing_with_if_exists_returns_ok() {
-        let dir = tempdir().unwrap();
-        let (catalog, txn_mgr) = make_catalog_and_txn(dir.path());
-
-        let stmt_drop = DropStatement {
-            table_name: "ghost".try_into().unwrap(),
-            if_exists: true,
-        };
-        let engine = Engine::new(&catalog, &txn_mgr);
-        let result = engine.exec_drop_table(stmt_drop).unwrap();
-
-        match result {
-            StatementResult::TableDropped { name } => assert_eq!(name, "ghost"),
-            other => panic!("expected TableDropped, got: {other:?}"),
-        }
     }
 
     // --- property / invariant tests ---

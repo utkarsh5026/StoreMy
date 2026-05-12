@@ -21,6 +21,9 @@ mod result;
 
 pub use result::{ShownIndex, StatementResult};
 
+mod drop_table;
+mod helpers;
+
 #[derive(Debug, Error)]
 pub enum EngineError {
     #[error("parse error: {0}")]
@@ -75,10 +78,14 @@ pub enum EngineError {
     #[error("duplicate value violates unique constraint '{constraint}'")]
     UniqueViolation { constraint: String },
 
-    #[error("insert violates foreign key constraint '{constraint}': key not found in referenced table")]
+    #[error(
+        "insert violates foreign key constraint '{constraint}': key not found in referenced table"
+    )]
     ForeignKeyViolation { constraint: String },
 
-    #[error("delete or update on parent table violates foreign key constraint '{constraint}': child rows still reference the old key")]
+    #[error(
+        "delete or update on parent table violates foreign key constraint '{constraint}': child rows still reference the old key"
+    )]
     FkParentViolation { constraint: String },
 
     #[error("type mismatch for column '{column}': expected {expected}, got {got}")]
@@ -90,6 +97,15 @@ pub enum EngineError {
 
     #[error("type error: {0}")]
     TypeError(String),
+
+    #[error("table '{0}' not found")]
+    UnknownTable(String),
+
+    #[error("column '{column}' not found in table '{table}'")]
+    UnknownColumn { table: String, column: String },
+
+    #[error("column '{column}' appears more than once in the FROM/JOIN scope")]
+    DuplicateColumn { table: String, column: String },
 }
 
 impl EngineError {
@@ -131,7 +147,7 @@ impl<'a> Engine<'a> {
     pub fn execute_statement(&self, stmt: Statement) -> Result<StatementResult, EngineError> {
         let result = match stmt {
             Statement::CreateTable(_) => self.exec_create_table(stmt),
-            Statement::Drop(s) => self.exec_drop_table(s),
+            Statement::Drop(s) => self.with_txn(|txn| Engine::exec_drop_table(txn, self.catalog, s)),
             Statement::CreateIndex(s) => self.exec_create_index(s),
             Statement::DropIndex(s) => self.exec_drop_index(s),
             Statement::ShowIndexes(s) => self.exec_show_indexes(s),
@@ -145,6 +161,16 @@ impl<'a> Engine<'a> {
             tracing::warn!(error = %e, "statement failed");
         }
         result
+    }
+
+    pub(super) fn with_txn<F>(&self, run: F) -> Result<StatementResult, EngineError>
+    where
+        F: FnOnce(&Transaction<'_>) -> Result<StatementResult, EngineError>,
+    {
+        let txn = self.txn_manager.begin()?;
+        let result = run(&txn)?;
+        txn.commit()?;
+        Ok(result)
     }
 
     /// Binds `stmt` inside a fresh transaction, then runs the bound statement.
