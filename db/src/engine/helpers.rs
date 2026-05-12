@@ -167,13 +167,13 @@ impl Engine<'_> {
             TableConstraint::Unique { columns: col_names } => {
                 let columns = Self::resolve_column_ids(schema, table_name, col_names.as_slice())?;
                 ConstraintDef::Unique {
-                    name: Self::resolve_constraint_name(opt_name, table_name, constraint),
+                    name: Self::resolve_constraint_name(opt_name.as_ref(), table_name, constraint),
                     columns,
                     backing_index_id: None,
                 }
             }
             TableConstraint::Check { expr } => ConstraintDef::Check {
-                name: Self::resolve_constraint_name(opt_name, table_name, constraint),
+                name: Self::resolve_constraint_name(opt_name.as_ref(), table_name, constraint),
                 expr: expr.to_string(),
             },
             TableConstraint::ForeignKey {
@@ -204,7 +204,7 @@ impl Engine<'_> {
                 }
 
                 ConstraintDef::ForeignKey {
-                    name: Self::resolve_constraint_name(opt_name, table_name, constraint),
+                    name: Self::resolve_constraint_name(opt_name.as_ref(), table_name, constraint),
                     local_columns,
                     ref_table_id: ref_info.file_id,
                     ref_columns: ref_ids,
@@ -228,7 +228,7 @@ impl Engine<'_> {
     /// Note: these generated names are stable but not guaranteed globally unique (e.g. two
     /// separate `CHECK` constraints on the same table both default to `{table}_check`).
     fn resolve_constraint_name(
-        opt_name: &Option<NonEmptyString>,
+        opt_name: Option<&NonEmptyString>,
         table_name: &str,
         constraint: &TableConstraint,
     ) -> String {
