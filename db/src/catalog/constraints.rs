@@ -16,7 +16,7 @@ use std::collections::HashMap;
 use crate::{
     FileId,
     catalog::{
-        CatalogError, ForeignKey, InboundFk, TableInfo, UniqueConstraint,
+        CatalogError, ForeignKey, ReferencingFk, TableInfo, UniqueConstraint,
         manager::Catalog,
         systable::{
             ConstraintColumnRow, ConstraintKind, ConstraintRow, FkAction, FkConstraintRow, IndexRow,
@@ -237,60 +237,78 @@ impl Catalog {
         Ok(())
     }
 
-    /// Returns every FK that targets `ref_table_id` as its parent.
+    /// Lists every foreign key in the catalog whose referenced table is `ref_table_id`.
     ///
-    /// The engine calls this on DELETE and UPDATE to discover which child tables
-    /// need to be checked (or cascaded into) before the parent row is mutated.
+    /// Scans the foreign-key constraint system table for rows where `ref_table_id` matches. A
+    /// single logical FK is stored as one row per column pair; this method groups rows by
+    /// `constraint_name`, sorts each group by `ordinal`, and folds them into one
+    /// [`ReferencingFk`] with `column_pairs` in declaration order. `on_delete` / `on_update`
+    /// are read from the first row of each group (they are identical across ordinals when the
+    /// constraint was written).
     ///
-    /// Scans `CATALOG_FK_CONSTRAINTS` for rows where `ref_table_id` matches,
-    /// groups them by constraint name (respecting `ordinal` for column order),
-    /// and returns one [`InboundFk`] per constraint.
-    pub fn find_inbound_fks(
+    /// Callers use this to implement parent-side rules (for example blocking a delete or
+    /// update on the referenced table while child rows still point at the key).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CatalogError`] if the system table scan fails.
+    pub fn find_referencing_fks(
         &self,
         txn: &Transaction<'_>,
         ref_table_id: FileId,
-    ) -> Result<Vec<InboundFk>, CatalogError> {
+    ) -> Result<Vec<ReferencingFk>, CatalogError> {
         let fk_rows = self.scan_system_table_where::<FkConstraintRow, _>(txn, |r| {
             r.ref_table_id == ref_table_id
         })?;
 
-        if fk_rows.is_empty() {
-            return Ok(Vec::new());
-        }
-
-        let mut by_name: HashMap<String, Vec<FkConstraintRow>> = HashMap::new();
+        let mut by_name: HashMap<NonEmptyString, Vec<FkConstraintRow>> = HashMap::new();
         for row in fk_rows {
-            by_name
-                .entry(row.constraint_name.as_str().to_owned())
-                .or_default()
-                .push(row);
+            if let Some(vec) = by_name.get_mut(row.constraint_name.as_str()) {
+                vec.push(row);
+            } else {
+                let key = row.constraint_name.clone();
+                by_name.insert(key, vec![row]);
+            }
         }
 
-        let mut result = Vec::new();
-        for (name, mut rows) in by_name {
-            rows.sort_by_key(|r| r.ordinal);
-            let child_table_id = rows[0].table_id;
-            let on_delete = rows[0].on_delete;
-            let on_update = rows[0].on_update;
-            let child_columns = rows.iter().map(|r| r.local_column_id).collect();
-            let ref_columns = rows.iter().map(|r| r.ref_column_id).collect();
-            result.push(InboundFk {
-                constraint_name: name,
-                child_table_id,
-                child_columns,
-                ref_columns,
-                on_delete,
-                on_update,
-            });
-        }
-        Ok(result)
+        Ok(by_name
+            .into_iter()
+            .map(|(name, mut rows)| {
+                rows.sort_by_key(|r| r.ordinal);
+                let first = &rows[0];
+
+                ReferencingFk {
+                    constraint_name: name.into_inner(),
+                    child_table_id: first.table_id,
+                    on_delete: first.on_delete,
+                    on_update: first.on_update,
+                    column_pairs: rows
+                        .into_iter()
+                        .map(|r| (r.local_column_id, r.ref_column_id))
+                        .collect(),
+                }
+            })
+            .collect())
     }
 
-    /// Drops a constraint (UNIQUE or FK) by name.
+    /// Drops a named constraint on `table_id` inside `txn`.
     ///
-    /// PRIMARY KEY is dropped via [`Catalog::drop_primary_key`] (it lives in
-    /// its own system table for now). NOT NULL is a column attribute on
-    /// `CATALOG_COLUMNS`, not a row in `CATALOG_CONSTRAINTS`.
+    /// Loads the constraint header row from `CATALOG_CONSTRAINTS` to learn the kind, then deletes the
+    /// appropriate companion rows (`ConstraintColumnRow` for UNIQUE,
+    /// `FkConstraintRow` for FOREIGN KEY), removes the header from
+    /// `CATALOG_CONSTRAINTS`, drops any UNIQUE backing index, and refreshes the
+    /// in-memory [`TableInfo`] for that table.
+    ///
+    /// PRIMARY KEY and NOT NULL are rejected here so callers use the dedicated
+    /// catalog paths (`drop_primary_key`, column alter) instead of treating them
+    /// as generic constraint rows.
+    ///
+    /// # Errors
+    ///
+    /// - [`CatalogError::ConstraintNotFound`] — no constraint named `name` on that table.
+    /// - `CatalogError` from `invalid_catalog_row` when the constraint is PRIMARY KEY or NOT NULL
+    ///   (those use other catalog APIs, not generic constraint drop).
+    /// - Other [`CatalogError`] variants from system-table deletes, index drop, or cache refresh.
     pub fn drop_constraint(
         &self,
         txn: &Transaction<'_>,
@@ -298,30 +316,7 @@ impl Catalog {
         name: &str,
     ) -> Result<(), CatalogError> {
         let mut table = self.get_table_info_by_id(txn, table_id)?;
-
-        let header = self
-            .scan_system_table_where::<ConstraintRow, _>(txn, |r| {
-                r.table_id == table_id && r.constraint_name.as_str() == name
-            })?
-            .pop()
-            .ok_or_else(|| CatalogError::ConstraintNotFound {
-                table: table.name.as_str().to_owned(),
-                constraint: name.to_owned(),
-            })?;
-
-        let backing_index_name = if header.constraint_kind == ConstraintKind::Unique {
-            if let Some(idx_id) = header.backing_index_id {
-                let rows =
-                    self.scan_system_table_where::<IndexRow, _>(txn, |r| r.index_id == idx_id)?;
-                rows.into_iter()
-                    .next()
-                    .map(|r| r.index_name.as_str().to_owned())
-            } else {
-                None
-            }
-        } else {
-            None
-        };
+        let header = self.fetch_constraint_header(txn, table_id, name, table.name.as_str())?;
 
         match header.constraint_kind {
             ConstraintKind::Unique => {
@@ -355,11 +350,69 @@ impl Catalog {
             r.table_id == table_id && r.constraint_name.as_str() == name
         })?;
 
+        self.delete_constraint_indexes(txn, &header)?;
+        self.refresh_cached_table(table);
+        Ok(())
+    }
+
+    /// Looks up the `CATALOG_CONSTRAINTS` header row for `constraint_name` on `table_id`.
+    ///
+    /// `table_name` is only used to populate [`CatalogError::ConstraintNotFound`]; it must
+    /// match the human-readable table name for that `table_id` (callers typically pass
+    /// [`TableInfo::name`]).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CatalogError::ConstraintNotFound`] when no matching header exists, or other
+    /// [`CatalogError`] values if the system table scan fails.
+    fn fetch_constraint_header(
+        &self,
+        txn: &Transaction<'_>,
+        table_id: FileId,
+        constraint_name: &str,
+        table_name: &str,
+    ) -> Result<ConstraintRow, CatalogError> {
+        self.scan_system_table_where::<ConstraintRow, _>(txn, |r| {
+            r.table_id == table_id && r.constraint_name.as_str() == constraint_name
+        })?
+        .pop()
+        .ok_or_else(|| CatalogError::ConstraintNotFound {
+            table: table_name.to_owned(),
+            constraint: constraint_name.to_owned(),
+        })
+    }
+
+    /// Drops the secondary index backing a UNIQUE constraint, if any.
+    ///
+    /// UNIQUE constraints may record a backing index id on the header row. When present, this
+    /// resolves the index name from `CATALOG_INDEXES` and calls [`Catalog::drop_index`]. Other
+    /// constraint kinds are no-ops.
+    ///
+    /// # Errors
+    ///
+    /// Propagates errors from index metadata lookup or [`Catalog::drop_index`].
+    fn delete_constraint_indexes(
+        &self,
+        txn: &Transaction<'_>,
+        header: &ConstraintRow,
+    ) -> Result<(), CatalogError> {
+        let backing_index_name = if header.constraint_kind == ConstraintKind::Unique {
+            if let Some(idx_id) = header.backing_index_id {
+                let rows =
+                    self.scan_system_table_where::<IndexRow, _>(txn, |r| r.index_id == idx_id)?;
+                rows.into_iter()
+                    .next()
+                    .map(|r| r.index_name.as_str().to_owned())
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
         if let Some(index_name) = backing_index_name {
             self.drop_index(txn, &index_name)?;
         }
-
-        self.refresh_cached_table(table);
         Ok(())
     }
 

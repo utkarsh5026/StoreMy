@@ -204,17 +204,15 @@ pub struct ForeignKey {
 
 /// Descriptor of a foreign key that points INTO a table (the table is the parent).
 ///
-/// Returned by [`Catalog::find_inbound_fks`] to let the engine locate and act
+/// Returned by [`Catalog::find_referencing_fks`] to let the engine locate and act
 /// on child rows when a parent row is deleted or its referenced columns change.
 #[derive(Clone, Debug)]
-pub struct InboundFk {
+pub struct ReferencingFk {
     pub constraint_name: String,
     /// The child table that owns this FK.
     pub child_table_id: FileId,
-    /// FK columns in the child, in ordinal order. `child_columns[i]` → `ref_columns[i]`.
-    pub child_columns: Vec<ColumnId>,
-    /// Referenced columns in the parent, same ordinal alignment.
-    pub ref_columns: Vec<ColumnId>,
+    /// Paired FK columns `(child_col, ref_col)` in ordinal order.
+    pub column_pairs: Vec<(ColumnId, ColumnId)>,
     pub on_delete: Option<FkAction>,
     pub on_update: Option<FkAction>,
 }

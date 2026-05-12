@@ -508,9 +508,9 @@ impl Catalog {
             self.drop_index(txn, &idx_name)?;
         }
 
-        let inbound_fks =
+        let referencing_fks =
             self.scan_system_table_where::<FkConstraintRow, _>(txn, |r| r.ref_table_id == file_id)?;
-        if let Some(fk) = inbound_fks.first() {
+        if let Some(fk) = referencing_fks.first() {
             let child_name = self
                 .table_name_by_id(fk.table_id)
                 .unwrap_or_else(|| fk.table_id.0.to_string());
