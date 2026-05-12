@@ -75,6 +75,12 @@ pub enum EngineError {
     #[error("duplicate value violates unique constraint '{constraint}'")]
     UniqueViolation { constraint: String },
 
+    #[error("insert violates foreign key constraint '{constraint}': key not found in referenced table")]
+    ForeignKeyViolation { constraint: String },
+
+    #[error("delete or update on parent table violates foreign key constraint '{constraint}': child rows still reference the old key")]
+    FkParentViolation { constraint: String },
+
     #[error("type mismatch for column '{column}': expected {expected}, got {got}")]
     TypeMismatch {
         column: String,
