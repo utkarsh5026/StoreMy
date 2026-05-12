@@ -855,10 +855,8 @@ impl From<&FkConstraintRow> for Tuple {
             f.ordinal.into(),
             f.ref_table_id.0.into(),
             u32::from(f.ref_column_id).into(),
-            f.on_delete
-                .map_or(Value::Null, |a| Value::Uint32(u32::from(a))),
-            f.on_update
-                .map_or(Value::Null, |a| Value::Uint32(u32::from(a))),
+            Value::Uint32(u32::from(f.on_delete.unwrap_or(FkAction::NoAction))),
+            Value::Uint32(u32::from(f.on_update.unwrap_or(FkAction::NoAction))),
         ])
     }
 }

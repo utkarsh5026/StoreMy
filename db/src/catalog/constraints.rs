@@ -16,7 +16,7 @@ use std::collections::HashMap;
 use crate::{
     FileId,
     catalog::{
-        CatalogError, ForeignKey, TableInfo, UniqueConstraint,
+        CatalogError, ForeignKey, InboundFk, TableInfo, UniqueConstraint,
         manager::Catalog,
         systable::{
             ConstraintColumnRow, ConstraintKind, ConstraintRow, FkAction, FkConstraintRow, IndexRow,
@@ -26,7 +26,87 @@ use crate::{
     transaction::Transaction,
 };
 
+/// A constraint definition passed to [`Catalog::add_constraint`].
+///
+/// Each variant carries the fields specific to that constraint kind. Use this
+/// instead of calling the per-kind methods directly — `add_constraint` is the
+/// single public entry point for writing any constraint to the catalog.
+pub enum ConstraintDef {
+    Unique {
+        name: String,
+        columns: Vec<ColumnId>,
+        backing_index_id: Option<IndexId>,
+    },
+    ForeignKey {
+        name: String,
+        local_columns: Vec<ColumnId>,
+        ref_table_id: FileId,
+        ref_columns: Vec<ColumnId>,
+        on_delete: Option<FkAction>,
+        on_update: Option<FkAction>,
+    },
+    /// Registers a CHECK expression in the catalog. Enforcement is not yet
+    /// implemented — the expression is stored but never evaluated at DML time.
+    Check {
+        name: String,
+        expr: String,
+    },
+    /// Sets the primary key via the dedicated PK system table. Unlike the other
+    /// variants there is no constraint name — PKs are identified by table only.
+    PrimaryKey {
+        columns: Vec<ColumnId>,
+    },
+}
+
 impl Catalog {
+    /// Single entry point for adding any constraint to a table.
+    pub fn add_constraint(
+        &self,
+        txn: &Transaction<'_>,
+        table_id: FileId,
+        def: ConstraintDef,
+    ) -> Result<(), CatalogError> {
+        match def {
+            ConstraintDef::Unique {
+                name,
+                columns,
+                backing_index_id,
+            } => self.add_unique_constraint(txn, table_id, &name, &columns, backing_index_id),
+            ConstraintDef::ForeignKey {
+                name,
+                local_columns,
+                ref_table_id,
+                ref_columns,
+                on_delete,
+                on_update,
+            } => self.add_foreign_key(
+                txn,
+                table_id,
+                &name,
+                &local_columns,
+                ref_table_id,
+                &ref_columns,
+                on_delete,
+                on_update,
+            ),
+            ConstraintDef::Check { name, expr } => {
+                let constraint_name = NonEmptyString::try_from(name.as_str())?;
+                self.reject_duplicate_constraint_name(txn, table_id, &name)?;
+                self.insert_systable_tuple(txn, &ConstraintRow {
+                    constraint_name,
+                    table_id,
+                    constraint_kind: ConstraintKind::Check,
+                    expr: Some(NonEmptyString::try_from(expr.as_str())?),
+                    backing_index_id: None,
+                })?;
+                Ok(())
+            }
+            ConstraintDef::PrimaryKey { columns } => {
+                self.set_primary_key(txn, table_id, columns)
+            }
+        }
+    }
+
     /// Generates a UNIQUE constraint name `{table}_unique_{col1}_{col2}…` by
     /// resolving `columns` (bound [`ColumnId`]s) to names via the catalog.
     pub fn autoname_unique_constraint_for(
@@ -56,7 +136,7 @@ impl Catalog {
     /// `columns` order is preserved as `ordinal` in the catalog — `(a, b)` and
     /// `(b, a)` are different UNIQUE constraints because index-prefix lookups
     /// depend on order.
-    pub fn add_unique_constraint(
+    fn add_unique_constraint(
         &self,
         txn: &Transaction<'_>,
         table_id: FileId,
@@ -110,7 +190,7 @@ impl Catalog {
     /// columns must form a UNIQUE or PRIMARY KEY in the parent — without that,
     /// the FK has no guarantee that its lookup target is unique.
     #[allow(clippy::too_many_arguments)]
-    pub fn add_foreign_key(
+    fn add_foreign_key(
         &self,
         txn: &Transaction<'_>,
         table_id: FileId,
@@ -182,6 +262,55 @@ impl Catalog {
         });
         self.refresh_cached_table(table);
         Ok(())
+    }
+
+    /// Returns every FK that targets `ref_table_id` as its parent.
+    ///
+    /// The engine calls this on DELETE and UPDATE to discover which child tables
+    /// need to be checked (or cascaded into) before the parent row is mutated.
+    ///
+    /// Scans `CATALOG_FK_CONSTRAINTS` for rows where `ref_table_id` matches,
+    /// groups them by constraint name (respecting `ordinal` for column order),
+    /// and returns one [`InboundFk`] per constraint.
+    pub fn find_inbound_fks(
+        &self,
+        txn: &Transaction<'_>,
+        ref_table_id: FileId,
+    ) -> Result<Vec<InboundFk>, CatalogError> {
+        let fk_rows = self.scan_system_table_where::<FkConstraintRow, _>(txn, |r| {
+            r.ref_table_id == ref_table_id
+        })?;
+
+        if fk_rows.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let mut by_name: HashMap<String, Vec<FkConstraintRow>> = HashMap::new();
+        for row in fk_rows {
+            by_name
+                .entry(row.constraint_name.as_str().to_owned())
+                .or_default()
+                .push(row);
+        }
+
+        let mut result = Vec::new();
+        for (name, mut rows) in by_name {
+            rows.sort_by_key(|r| r.ordinal);
+            let child_table_id = rows[0].table_id;
+            let on_delete = rows[0].on_delete;
+            let on_update = rows[0].on_update;
+            let child_columns = rows.iter().map(|r| r.local_column_id).collect();
+            let ref_columns = rows.iter().map(|r| r.ref_column_id).collect();
+            result.push(InboundFk {
+                constraint_name: name,
+                child_table_id,
+                child_columns,
+                ref_columns,
+                on_delete,
+                on_update,
+            });
+        }
+        Ok(result)
     }
 
     /// Drops a constraint (UNIQUE or FK) by name.

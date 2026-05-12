@@ -8,6 +8,7 @@ mod tuple;
 
 use std::path::PathBuf;
 
+pub use constraints::ConstraintDef;
 pub use index::{IndexInfo, LiveIndex};
 use thiserror::Error;
 
@@ -196,6 +197,23 @@ pub struct ForeignKey {
     /// Local columns, in declaration order. Index `i` lines up with `ref_columns[i]`.
     pub local_columns: Vec<ColumnId>,
     pub ref_table_id: FileId,
+    pub ref_columns: Vec<ColumnId>,
+    pub on_delete: Option<FkAction>,
+    pub on_update: Option<FkAction>,
+}
+
+/// Descriptor of a foreign key that points INTO a table (the table is the parent).
+///
+/// Returned by [`Catalog::find_inbound_fks`] to let the engine locate and act
+/// on child rows when a parent row is deleted or its referenced columns change.
+#[derive(Clone, Debug)]
+pub struct InboundFk {
+    pub constraint_name: String,
+    /// The child table that owns this FK.
+    pub child_table_id: FileId,
+    /// FK columns in the child, in ordinal order. `child_columns[i]` → `ref_columns[i]`.
+    pub child_columns: Vec<ColumnId>,
+    /// Referenced columns in the parent, same ordinal alignment.
     pub ref_columns: Vec<ColumnId>,
     pub on_delete: Option<FkAction>,
     pub on_update: Option<FkAction>,

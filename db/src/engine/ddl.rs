@@ -41,7 +41,7 @@ use crate::{
         Bound, BoundAlterAction, BoundAlterTable, BoundConstraintBody, BoundCreateIndex,
         BoundCreateTable, BoundDrop, BoundDropIndex, BoundShowIndexes,
     },
-    catalog::{CatalogError, manager::Catalog},
+    catalog::{CatalogError, ConstraintDef, manager::Catalog},
     engine::{Engine, EngineError, ShownIndex, StatementResult},
     index::IndexKind,
     parser::statements::{
@@ -101,7 +101,11 @@ fn add_unique_constraint_with_btree_backfill(
         columns,
         IndexKind::Btree,
     )?;
-    catalog.add_unique_constraint(txn, table_file_id, constraint_name, columns, Some(index_id))?;
+    catalog.add_constraint(txn, table_file_id, ConstraintDef::Unique {
+        name: constraint_name.to_owned(),
+        columns: columns.to_vec(),
+        backing_index_id: Some(index_id),
+    })?;
     populate_index_from_heap(catalog, txn, table_file_id, index_name)?;
     Ok(())
 }
@@ -187,25 +191,58 @@ impl Engine<'_> {
                 } => {
                     let file_id = catalog.create_table(txn, &name, schema, primary_key)?;
                     for c in &constraints {
-                        let BoundConstraintBody::Unique { columns } = &c.body else {
-                            continue;
-                        };
-                        let constraint_name: String = match c.name.as_ref() {
-                            Some(n) => n.as_str().to_owned(),
-                            None => {
-                                catalog.autoname_unique_constraint_for(txn, file_id, columns)?
+                        match &c.body {
+                            BoundConstraintBody::Unique { columns } => {
+                                let constraint_name: String = match c.name.as_ref() {
+                                    Some(n) => n.as_str().to_owned(),
+                                    None => catalog
+                                        .autoname_unique_constraint_for(txn, file_id, columns)?,
+                                };
+                                let index_name = format!("{name}_{constraint_name}_idx");
+                                add_unique_constraint_with_btree_backfill(
+                                    catalog,
+                                    txn,
+                                    file_id,
+                                    &name,
+                                    constraint_name.as_str(),
+                                    index_name.as_str(),
+                                    columns.as_slice(),
+                                )?;
                             }
-                        };
-                        let index_name = format!("{name}_{constraint_name}_idx");
-                        add_unique_constraint_with_btree_backfill(
-                            catalog,
-                            txn,
-                            file_id,
-                            &name,
-                            constraint_name.as_str(),
-                            index_name.as_str(),
-                            columns.as_slice(),
-                        )?;
+                            BoundConstraintBody::ForeignKey {
+                                local_columns,
+                                ref_table_id,
+                                ref_columns,
+                                on_delete,
+                                on_update,
+                            } => {
+                                let constraint_name: String = if let Some(n) = c.name.as_ref() {
+                                    n.as_str().to_owned()
+                                } else {
+                                    let tbl = catalog.get_table_info_by_id(txn, file_id)?;
+                                    let col_names: Vec<&str> = local_columns
+                                        .iter()
+                                        .map(|&id| {
+                                            tbl.schema.field(usize::from(id)).unwrap().name.as_str()
+                                        })
+                                        .collect();
+                                    format!("{}_{}_fkey", tbl.name.as_str(), col_names.join("_"))
+                                };
+                                catalog.add_constraint(
+                                    txn,
+                                    file_id,
+                                    ConstraintDef::ForeignKey {
+                                        name: constraint_name,
+                                        local_columns: local_columns.clone(),
+                                        ref_table_id: *ref_table_id,
+                                        ref_columns: ref_columns.clone(),
+                                        on_delete: *on_delete,
+                                        on_update: *on_update,
+                                    },
+                                )?;
+                            }
+                            BoundConstraintBody::Check { .. } => {}
+                        }
                     }
                     Ok(StatementResult::table_created(name, file_id, false))
                 }

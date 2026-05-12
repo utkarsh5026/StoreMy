@@ -765,6 +765,7 @@ mod tests {
     use crate::{
         PAGE_SIZE, TransactionId, Type, Value,
         buffer_pool::page_store::PageStore,
+        catalog::ConstraintDef,
         index::{CompositeKey, hash::HashIndex},
         primitives::{NonEmptyString, PageNumber, RecordId, SlotId},
         wal::writer::Wal,
@@ -1552,25 +1553,21 @@ mod tests {
                 )
                 .unwrap();
             catalog
-                .add_unique_constraint(
-                    &txn,
-                    parent_id,
-                    "parents_email_key",
-                    &[col_id(1)],
-                    Some(unique_backing_index_id),
-                )
+                .add_constraint(&txn, parent_id, ConstraintDef::Unique {
+                    name: "parents_email_key".to_owned(),
+                    columns: vec![col_id(1)],
+                    backing_index_id: Some(unique_backing_index_id),
+                })
                 .unwrap();
             catalog
-                .add_foreign_key(
-                    &txn,
-                    child_id,
-                    "children_parent_fk",
-                    &[col_id(1)],
-                    parent_id,
-                    &[col_id(0)],
-                    Some(crate::catalog::systable::FkAction::Cascade),
-                    Some(crate::catalog::systable::FkAction::Restrict),
-                )
+                .add_constraint(&txn, child_id, ConstraintDef::ForeignKey {
+                    name: "children_parent_fk".to_owned(),
+                    local_columns: vec![col_id(1)],
+                    ref_table_id: parent_id,
+                    ref_columns: vec![col_id(0)],
+                    on_delete: Some(crate::catalog::systable::FkAction::Cascade),
+                    on_update: Some(crate::catalog::systable::FkAction::Restrict),
+                })
                 .unwrap();
             txn.commit().unwrap();
             bp.flush_all().unwrap();

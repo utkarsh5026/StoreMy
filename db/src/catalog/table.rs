@@ -496,10 +496,12 @@ impl Catalog {
         let inbound_fks =
             self.scan_system_table_where::<FkConstraintRow, _>(txn, |r| r.ref_table_id == file_id)?;
         if let Some(fk) = inbound_fks.first() {
+            let child_name = self
+                .table_name_by_id(fk.table_id)
+                .unwrap_or_else(|| fk.table_id.0.to_string());
             return Err(CatalogError::invalid_catalog_row(format!(
-                "cannot drop table {name}: foreign key {} from table {} references it",
+                "cannot drop table \"{name}\": foreign key constraint \"{}\" on table \"{child_name}\" references it",
                 fk.constraint_name.as_str(),
-                fk.table_id
             )));
         }
 
