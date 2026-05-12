@@ -11,7 +11,7 @@
 //! See `db/src/catalog/systable.rs` for the row layouts and the multi-row
 //! pattern used to encode composite constraints.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use crate::{
     FileId,
@@ -102,13 +102,22 @@ impl Catalog {
 
     /// Adds a UNIQUE constraint to a table.
     ///
-    /// Writes one `ConstraintRow` header (kind = `Unique`) and one
-    /// `ConstraintColumnRow` per participating column, then refreshes
-    /// the cached [`TableInfo::unique_constraints`].
+    /// Writes one header row to `CATALOG_CONSTRAINTS` (kind UNIQUE, optional
+    /// `backing_index_id` when the engine already created an enforcing index) and one
+    /// `CATALOG_CONSTRAINT_COLUMNS` row per listed column. `columns` order is stored as
+    /// `ordinal` and is semantically significant: `(a, b)` and `(b, a)` are different
+    /// constraints for prefix-based uniqueness checks.
     ///
-    /// `columns` order is preserved as `ordinal` in the catalog — `(a, b)` and
-    /// `(b, a)` are different UNIQUE constraints because index-prefix lookups
-    /// depend on order.
+    /// Updates the in-memory [`TableInfo::unique_constraints`] cache for `table_id`.
+    /// Prefer [`Catalog::add_constraint`] with [`ConstraintDef::Unique`] at call sites;
+    /// this method is the internal implementation shared from that entry point.
+    ///
+    /// # Errors
+    ///
+    /// - Empty `columns`, unknown columns for the table, or a duplicate constraint name.
+    /// - Name validation failures when `name` is not a valid [`NonEmptyString`].
+    /// - `CatalogError` if an ordinal does not fit in `i32` or system-table inserts / cache refresh
+    ///   fail.
     fn add_unique_constraint(
         &self,
         txn: &Transaction<'_>,
@@ -124,27 +133,30 @@ impl Catalog {
         }
 
         let mut table = self.get_table_info_by_id(txn, table_id)?;
-        validate_columns_in_schema(&table, columns, "UNIQUE")?;
+
+        Self::validate_columns_in_schema(&table, columns, "UNIQUE")?;
         self.reject_duplicate_constraint_name(txn, table_id, name)?;
 
         let constraint_name = NonEmptyString::try_from(name)?;
-
-        self.insert_systable_tuple(txn, &ConstraintRow {
+        let constraint_row = ConstraintRow {
             constraint_name: constraint_name.clone(),
             table_id,
             constraint_kind: ConstraintKind::Unique,
             expr: None,
             backing_index_id,
-        })?;
+        };
+        self.insert_systable_tuple(txn, &constraint_row)?;
 
-        for (ordinal, &col_id) in columns.iter().enumerate() {
-            let ordinal = i32_ordinal(ordinal)?;
-            self.insert_systable_tuple(txn, &ConstraintColumnRow {
+        for (ordinal, &column_id) in columns.iter().enumerate() {
+            let constraint_column_row = ConstraintColumnRow {
                 constraint_name: constraint_name.clone(),
                 table_id,
-                column_id: col_id,
-                ordinal,
-            })?;
+                column_id,
+                ordinal: i32::try_from(ordinal).map_err(|_| {
+                    CatalogError::invalid_catalog_row("constraint ordinal does not fit in i32")
+                })?,
+            };
+            self.insert_systable_tuple(txn, &constraint_column_row)?;
         }
 
         table.unique_constraints.push(UniqueConstraint {
@@ -179,6 +191,7 @@ impl Catalog {
                 "FOREIGN KEY must list at least one column",
             ));
         }
+
         if local_columns.len() != ref_columns.len() {
             return Err(CatalogError::invalid_catalog_row(format!(
                 "FOREIGN KEY column count mismatch: {} local vs {} referenced",
@@ -188,12 +201,13 @@ impl Catalog {
         }
 
         let mut table = self.get_table_info_by_id(txn, table_id)?;
-        validate_columns_in_schema(&table, local_columns, "FOREIGN KEY")?;
-        self.reject_duplicate_constraint_name(txn, table_id, name)?;
+        Self::validate_columns_in_schema(&table, local_columns, "FOREIGN KEY")?;
 
         let ref_table = self.get_table_info_by_id(txn, ref_table_id)?;
-        validate_columns_in_schema(&ref_table, ref_columns, "FOREIGN KEY referenced")?;
-        if !references_unique_or_pk(&ref_table, ref_columns) {
+        Self::validate_columns_in_schema(&ref_table, ref_columns, "FOREIGN KEY referenced")?;
+
+        self.reject_duplicate_constraint_name(txn, table_id, name)?;
+        if !Self::references_unique_or_pk(&ref_table, ref_columns) {
             return Err(CatalogError::invalid_catalog_row(format!(
                 "FOREIGN KEY referenced columns in table {} are not a PRIMARY KEY or UNIQUE",
                 ref_table.name.as_str()
@@ -212,7 +226,9 @@ impl Catalog {
         for (ordinal, (&local, &referenced)) in
             local_columns.iter().zip(ref_columns.iter()).enumerate()
         {
-            let ordinal = i32_ordinal(ordinal)?;
+            let ordinal = i32::try_from(ordinal).map_err(|_| {
+                CatalogError::invalid_catalog_row("constraint ordinal does not fit in i32")
+            })?;
             self.insert_systable_tuple(txn, &FkConstraintRow {
                 constraint_name: constraint_name.clone(),
                 table_id,
@@ -235,6 +251,29 @@ impl Catalog {
         });
         self.refresh_cached_table(table);
         Ok(())
+    }
+
+    /// Returns whether `columns` names the same set of columns as an enforced unique key on
+    /// `table`.
+    ///
+    /// Used when validating a FOREIGN KEY: the referenced column list must target a PRIMARY KEY
+    /// or a UNIQUE constraint on the parent [`TableInfo`]. Matching is by **set** equality of
+    /// [`ColumnId`] values (order in `columns` vs order in the PK / UNIQUE definition does not
+    /// matter for this predicate).
+    fn references_unique_or_pk(table: &TableInfo, columns: &[ColumnId]) -> bool {
+        let target: HashSet<ColumnId> = columns.iter().copied().collect();
+
+        if let Some(pk) = &table.primary_key
+            && pk.len() == target.len()
+            && pk.iter().copied().collect::<HashSet<_>>() == target
+        {
+            return true;
+        }
+
+        table.unique_constraints.iter().any(|u| {
+            u.columns.len() == target.len()
+                && u.columns.iter().copied().collect::<HashSet<_>>() == target
+        })
     }
 
     /// Lists every foreign key in the catalog whose referenced table is `ref_table_id`.
@@ -293,8 +332,8 @@ impl Catalog {
 
     /// Drops a named constraint on `table_id` inside `txn`.
     ///
-    /// Loads the constraint header row from `CATALOG_CONSTRAINTS` to learn the kind, then deletes the
-    /// appropriate companion rows (`ConstraintColumnRow` for UNIQUE,
+    /// Loads the constraint header row from `CATALOG_CONSTRAINTS` to learn the kind, then deletes
+    /// the appropriate companion rows (`ConstraintColumnRow` for UNIQUE,
     /// `FkConstraintRow` for FOREIGN KEY), removes the header from
     /// `CATALOG_CONSTRAINTS`, drops any UNIQUE backing index, and refreshes the
     /// in-memory [`TableInfo`] for that table.
@@ -334,15 +373,12 @@ impl Catalog {
             ConstraintKind::Check => {
                 // Predicate lives on the header row; nothing else to delete.
             }
-            ConstraintKind::PrimaryKey => {
-                return Err(CatalogError::invalid_catalog_row(
-                    "use drop_primary_key to remove a PRIMARY KEY",
-                ));
-            }
+            ConstraintKind::PrimaryKey => unreachable!(
+                "set_primary_key never writes a ConstraintRow; \
+                 use drop_primary_key instead"
+            ),
             ConstraintKind::NotNull => {
-                return Err(CatalogError::invalid_catalog_row(
-                    "NOT NULL is a column attribute; alter the column instead",
-                ));
+                unreachable!("NOT NULL is a column attribute, never written as a ConstraintRow")
             }
         }
 
@@ -522,54 +558,24 @@ impl Catalog {
         }
         Ok(())
     }
-}
 
-/// Returns true if `columns` (as a set) equals the table's PK or any UNIQUE
-/// constraint. FKs require the referenced column list to be the *full* key of
-/// some uniqueness constraint — a prefix is not enough.
-fn references_unique_or_pk(table: &TableInfo, columns: &[ColumnId]) -> bool {
-    let target: std::collections::HashSet<ColumnId> = columns.iter().copied().collect();
-
-    if let Some(pk) = &table.primary_key
-        && pk.len() == target.len()
-        && pk.iter().copied().collect::<std::collections::HashSet<_>>() == target
-    {
-        return true;
-    }
-
-    table.unique_constraints.iter().any(|u| {
-        u.columns.len() == target.len()
-            && u.columns
-                .iter()
-                .copied()
-                .collect::<std::collections::HashSet<_>>()
-                == target
-    })
-}
-
-/// Bounds-check every column id against the table schema.
-fn validate_columns_in_schema(
-    table: &TableInfo,
-    columns: &[ColumnId],
-    label: &str,
-) -> Result<(), CatalogError> {
-    for &col in columns {
-        if table.schema.field(usize::from(col)).is_none() {
-            return Err(CatalogError::invalid_catalog_row(format!(
-                "{label} column index {} out of bounds for table {}",
-                usize::from(col),
-                table.name.as_str()
-            )));
+    /// Bounds-check every column id against the table schema.
+    fn validate_columns_in_schema(
+        table: &TableInfo,
+        columns: &[ColumnId],
+        label: &str,
+    ) -> Result<(), CatalogError> {
+        for &col in columns {
+            if table.schema.field(usize::from(col)).is_none() {
+                return Err(CatalogError::invalid_catalog_row(format!(
+                    "{label} column index {} out of bounds for table {}",
+                    usize::from(col),
+                    table.name.as_str()
+                )));
+            }
         }
+        Ok(())
     }
-    Ok(())
-}
-
-/// Converts a `usize` ordinal to the on-disk `i32`, matching the pattern in
-/// `insert_primary_key_columns`.
-fn i32_ordinal(ordinal: usize) -> Result<i32, CatalogError> {
-    i32::try_from(ordinal)
-        .map_err(|_| CatalogError::invalid_catalog_row("constraint ordinal does not fit in i32"))
 }
 
 #[cfg(test)]
@@ -616,8 +622,6 @@ mod tests {
     fn col(id: usize) -> ColumnId {
         ColumnId::try_from(id).unwrap()
     }
-
-    // ── add_unique_constraint: happy paths ────────────────────────────────
 
     #[test]
     fn add_unique_single_column_visible_immediately() {
