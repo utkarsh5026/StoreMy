@@ -26,6 +26,7 @@ mod create_table;
 mod drop_index;
 mod drop_table;
 mod helpers;
+mod show_indexes;
 
 #[derive(Debug, Error)]
 pub enum EngineError {
@@ -167,7 +168,9 @@ impl<'a> Engine<'a> {
             Statement::DropIndex(s) => {
                 self.with_txn(|txn| Engine::exec_drop_index(txn, self.catalog, s))
             }
-            Statement::ShowIndexes(s) => self.exec_show_indexes(s),
+            Statement::ShowIndexes(s) => {
+                self.with_txn(|txn| Engine::exec_show_indexes(txn, self.catalog, s))
+            }
             Statement::Insert(_) => self.exec_insert(stmt),
             Statement::Delete(_) => self.exec_delete(stmt),
             Statement::Update(s) => self.exec_update(s),
