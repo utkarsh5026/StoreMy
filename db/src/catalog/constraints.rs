@@ -100,26 +100,6 @@ impl Catalog {
         }
     }
 
-    /// Generates a UNIQUE constraint name `{table}_unique_{col1}_{col2}…` by
-    /// resolving `columns` (bound [`ColumnId`]s) to names via the catalog.
-    pub fn autoname_unique_constraint_for(
-        &self,
-        txn: &Transaction<'_>,
-        table_id: FileId,
-        columns: &[ColumnId],
-    ) -> Result<String, CatalogError> {
-        let tbl = self.get_table_info_by_id(txn, table_id)?;
-        let col_names: Vec<&str> = columns
-            .iter()
-            .map(|&id| tbl.schema.field(usize::from(id)).unwrap().name.as_str())
-            .collect();
-        Ok(format!(
-            "{}_unique_{}",
-            tbl.name.as_str(),
-            col_names.join("_")
-        ))
-    }
-
     /// Adds a UNIQUE constraint to a table.
     ///
     /// Writes one `ConstraintRow` header (kind = `Unique`) and one
@@ -582,68 +562,6 @@ mod tests {
 
     fn col(id: usize) -> ColumnId {
         ColumnId::try_from(id).unwrap()
-    }
-
-    // ── autoname_unique_constraint_for ────────────────────────────────────
-
-    #[test]
-    fn autoname_single_column_produces_correct_name() {
-        let dir = tempdir().unwrap();
-        let (catalog, txn_mgr) = make_catalog_and_txn(dir.path());
-        let txn = txn_mgr.begin().unwrap();
-        let file_id = catalog
-            .create_table(&txn, "users", three_col_schema(), vec![])
-            .unwrap();
-        txn.commit().unwrap();
-
-        let txn2 = txn_mgr.begin().unwrap();
-        let name = catalog
-            .autoname_unique_constraint_for(&txn2, file_id, &[col(1)])
-            .unwrap();
-        txn2.commit().unwrap();
-
-        assert_eq!(name, "users_unique_email");
-    }
-
-    #[test]
-    fn autoname_composite_columns_joins_names_in_order() {
-        let dir = tempdir().unwrap();
-        let (catalog, txn_mgr) = make_catalog_and_txn(dir.path());
-        let txn = txn_mgr.begin().unwrap();
-        let file_id = catalog
-            .create_table(&txn, "users", three_col_schema(), vec![])
-            .unwrap();
-        txn.commit().unwrap();
-
-        let txn2 = txn_mgr.begin().unwrap();
-        let name = catalog
-            .autoname_unique_constraint_for(&txn2, file_id, &[col(1), col(2)])
-            .unwrap();
-        txn2.commit().unwrap();
-
-        assert_eq!(name, "users_unique_email_name");
-    }
-
-    #[test]
-    fn autoname_column_order_affects_name() {
-        let dir = tempdir().unwrap();
-        let (catalog, txn_mgr) = make_catalog_and_txn(dir.path());
-        let txn = txn_mgr.begin().unwrap();
-        let file_id = catalog
-            .create_table(&txn, "users", three_col_schema(), vec![])
-            .unwrap();
-        txn.commit().unwrap();
-
-        let txn2 = txn_mgr.begin().unwrap();
-        let ab = catalog
-            .autoname_unique_constraint_for(&txn2, file_id, &[col(1), col(2)])
-            .unwrap();
-        let ba = catalog
-            .autoname_unique_constraint_for(&txn2, file_id, &[col(2), col(1)])
-            .unwrap();
-        txn2.commit().unwrap();
-
-        assert_ne!(ab, ba);
     }
 
     // ── add_unique_constraint: happy paths ────────────────────────────────

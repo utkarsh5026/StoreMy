@@ -227,7 +227,7 @@ impl Engine<'_> {
     ///
     /// Note: these generated names are stable but not guaranteed globally unique (e.g. two
     /// separate `CHECK` constraints on the same table both default to `{table}_check`).
-    fn resolve_constraint_name(
+    pub(super) fn resolve_constraint_name(
         opt_name: Option<&NonEmptyString>,
         table_name: &str,
         constraint: &TableConstraint,
