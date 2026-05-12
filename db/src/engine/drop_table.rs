@@ -124,9 +124,7 @@ mod tests {
         );
         let engine = Engine::new(&catalog, &txn_mgr);
         engine
-            .exec_create_table(crate::parser::statements::Statement::CreateTable(
-                stmt_create,
-            ))
+            .execute_statement(Statement::CreateTable(stmt_create))
             .unwrap();
 
         let stmt_drop = DropStatement {

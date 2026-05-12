@@ -23,6 +23,7 @@ pub use result::{ShownIndex, StatementResult};
 
 mod create_index;
 mod create_table;
+mod drop_index;
 mod drop_table;
 mod helpers;
 
@@ -63,6 +64,9 @@ pub enum EngineError {
 
     #[error("index '{0}' already exists")]
     IndexAlreadyExists(String),
+
+    #[error("index '{0}' not found")]
+    UnknownIndex(String),
 
     #[error("column '{column}' not found in table '{table}'")]
     ColumnNotFound { table: String, column: String },
@@ -160,7 +164,9 @@ impl<'a> Engine<'a> {
             Statement::CreateIndex(s) => {
                 self.with_txn(|txn| Engine::exec_create_index(txn, self.catalog, s))
             }
-            Statement::DropIndex(s) => self.exec_drop_index(s),
+            Statement::DropIndex(s) => {
+                self.with_txn(|txn| Engine::exec_drop_index(txn, self.catalog, s))
+            }
             Statement::ShowIndexes(s) => self.exec_show_indexes(s),
             Statement::Insert(_) => self.exec_insert(stmt),
             Statement::Delete(_) => self.exec_delete(stmt),
