@@ -21,6 +21,8 @@ mod result;
 
 pub use result::{ShownIndex, StatementResult};
 
+mod create_index;
+mod create_table;
 mod drop_table;
 mod helpers;
 
@@ -58,6 +60,9 @@ pub enum EngineError {
 
     #[error("table '{0}' already exists")]
     TableAlreadyExists(String),
+
+    #[error("index '{0}' already exists")]
+    IndexAlreadyExists(String),
 
     #[error("column '{column}' not found in table '{table}'")]
     ColumnNotFound { table: String, column: String },
@@ -146,9 +151,15 @@ impl<'a> Engine<'a> {
     )]
     pub fn execute_statement(&self, stmt: Statement) -> Result<StatementResult, EngineError> {
         let result = match stmt {
-            Statement::CreateTable(_) => self.exec_create_table(stmt),
-            Statement::Drop(s) => self.with_txn(|txn| Engine::exec_drop_table(txn, self.catalog, s)),
-            Statement::CreateIndex(s) => self.exec_create_index(s),
+            Statement::CreateTable(s) => {
+                self.with_txn(|txn| Engine::exec_create_table(s, txn, self.catalog))
+            }
+            Statement::Drop(s) => {
+                self.with_txn(|txn| Engine::exec_drop_table(txn, self.catalog, s))
+            }
+            Statement::CreateIndex(s) => {
+                self.with_txn(|txn| Engine::exec_create_index(txn, self.catalog, s))
+            }
             Statement::DropIndex(s) => self.exec_drop_index(s),
             Statement::ShowIndexes(s) => self.exec_show_indexes(s),
             Statement::Insert(_) => self.exec_insert(stmt),
