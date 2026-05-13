@@ -31,7 +31,7 @@ use crate::{
 pub struct LiveIndex {
     /// Catalog-assigned identifier, stable across process restarts.
     ///
-    /// Matches [`IndexInfo::index_id`] and [`UniqueConstraint::backing_index_id`],
+    /// Matches [`IndexInfo::index_id`] and [`crate::catalog::UniqueConstraint::backing_index_id`],
     /// so DML can identify which live indexes enforce uniqueness.
     pub index_id: IndexId,
     /// The live access method. Call `access.insert` / `access.delete` /
