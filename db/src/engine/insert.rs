@@ -26,7 +26,7 @@ use std::{
 };
 
 use crate::{
-    FileId, IndexId, TransactionId, Value,
+    FileId, IndexId, TransactionId, Type, Value,
     catalog::{LiveIndex, manager::Catalog},
     engine::{ConstraintViolation, Engine, EngineError, StatementResult},
     parser::statements::{InsertSource, InsertStatement},
@@ -64,8 +64,9 @@ impl Engine<'_> {
         let name = info.name.as_str().to_owned();
         let file_id = info.file_id;
         let schema = info.schema.clone();
+        let ai_col = info.auto_increment_column;
 
-        if let Some(ai_col_id) = info.auto_increment_column {
+        if let Some(ai_col_id) = ai_col {
             Self::reject_auto_increment_in_insert(
                 stmt.columns.as_deref(),
                 &schema,
@@ -74,7 +75,7 @@ impl Engine<'_> {
             )?;
         }
 
-        let projection = Self::build_projection(stmt.columns.as_deref(), &schema, &name)?;
+        let projection = Self::build_projection(stmt.columns.as_deref(), &schema, &name, ai_col)?;
 
         let values = match stmt.source {
             InsertSource::Values(rows) => rows,
@@ -90,13 +91,20 @@ impl Engine<'_> {
             }
         };
 
-        let tuples = values
+        let mut tuples = values
             .into_iter()
             .map(|row| {
-                let fields = Self::bind_row(&row, &schema, &projection, &name)?;
+                let fields = Self::bind_row(&row, &schema, &projection, &name, ai_col)?;
                 Ok(Tuple::new(fields))
             })
             .collect::<Result<Vec<_>, EngineError>>()?;
+
+        // Allocate the whole counter range in one catalog write so multiple rows
+        // in a single statement get contiguous IDs.
+        if let Some(ai_col_id) = ai_col {
+            let start = catalog.allocate_auto_increment(txn, file_id, tuples.len())?;
+            Self::fill_auto_increment_values(&mut tuples, &schema, ai_col_id, start);
+        }
 
         let count = Self::insert_rows_and_indexes(catalog, txn, file_id, tuples)?;
         Ok(StatementResult::inserted(name, count))
@@ -207,16 +215,13 @@ impl Engine<'_> {
         cols: Option<&[NonEmptyString]>,
         schema: &TupleSchema,
         table: &str,
+        ai_col: Option<ColumnId>,
     ) -> Result<Vec<Option<usize>>, EngineError> {
         let logical_n = schema.logical_num_fields();
         let physical_n = schema.physical_num_fields();
 
-        // If no column list is provided (i.e., positional/unnamed INSERT), build a mapping of
-        // physical column indices to value positions by assigning user values to the first N
-        // non-dropped logical columns in schema order.
-        //
-        // For every physical column slot, if it is not dropped, we assign the next available
-        // user-supplied value index to that slot. Dropped columns are mapped to None.
+        // Positional INSERT — AI tables are rejected before this point, so the
+        // positional path never needs to handle the AI slot specially.
         let Some(cols) = cols else {
             let mut perm = vec![None; physical_n];
             let mut logical_idx = 0usize;
@@ -229,20 +234,24 @@ impl Engine<'_> {
             return Ok(perm);
         };
 
-        Self::validate_named_insert_columns(cols, schema, table, logical_n)?;
+        Self::validate_named_insert_columns(cols, schema, table, logical_n, ai_col)?;
 
-        // If a column list is provided (i.e., named INSERT), build a mapping of physical column
-        // indices to value positions by mapping each physical column to the user-supplied column
-        // name in the provided column list.
         let mut perm = vec![None; physical_n];
         for (phys_i, field) in schema.physical_iter().enumerate() {
-            if !field.is_dropped {
-                let pos = cols
-                    .iter()
-                    .position(|c| c.as_str() == field.name.as_str())
-                    .expect("all logical columns are covered by the column list");
-                perm[phys_i] = Some(pos);
+            if field.is_dropped {
+                continue;
             }
+            // AI column: user is not allowed to name it (already rejected by
+            // reject_auto_increment_in_insert). Leave perm[phys_i] = None so
+            // bind_row produces a placeholder Null that exec_insert overwrites.
+            if ai_col.map(usize::from) == Some(phys_i) {
+                continue;
+            }
+            let pos = cols
+                .iter()
+                .position(|c| c.as_str() == field.name.as_str())
+                .expect("all required columns are covered by the column list");
+            perm[phys_i] = Some(pos);
         }
         Ok(perm)
     }
@@ -268,6 +277,7 @@ impl Engine<'_> {
         schema: &TupleSchema,
         table: &str,
         logical_n: usize,
+        ai_col: Option<ColumnId>,
     ) -> Result<(), EngineError> {
         let table = table.to_string();
         let mut seen: HashSet<&str> = HashSet::with_capacity(cols.len());
@@ -281,7 +291,6 @@ impl Engine<'_> {
                 });
             }
 
-            // Check that the column exists in the schema and is not dropped.
             let field = schema.field_by_name(c);
             if field.is_none() || field.unwrap().1.is_dropped {
                 return Err(EngineError::UnknownColumn {
@@ -291,10 +300,16 @@ impl Engine<'_> {
             }
         }
 
-        if seen.len() != logical_n {
+        // The AUTO_INCREMENT column may be omitted — the engine fills it in.
+        let required_n = if ai_col.is_some() {
+            logical_n - 1
+        } else {
+            logical_n
+        };
+        if seen.len() != required_n {
             return Err(EngineError::WrongColumnCount {
                 table,
-                expected: logical_n,
+                expected: required_n,
                 got: seen.len(),
             });
         }
@@ -326,12 +341,18 @@ impl Engine<'_> {
         schema: &TupleSchema,
         projection: &[Option<usize>],
         table: &str,
+        ai_col: Option<ColumnId>,
     ) -> Result<Vec<Value>, EngineError> {
         let logical_n = schema.logical_num_fields();
-        if row.len() != logical_n {
+        let expected_n = if ai_col.is_some() {
+            logical_n - 1
+        } else {
+            logical_n
+        };
+        if row.len() != expected_n {
             return Err(EngineError::WrongColumnCount {
                 table: table.into(),
-                expected: logical_n,
+                expected: expected_n,
                 got: row.len(),
             });
         }
@@ -500,6 +521,33 @@ impl Engine<'_> {
             }
         }
         Ok(())
+    }
+
+    /// Stamp each tuple's auto-increment slot with its assigned counter value.
+    ///
+    /// `start` is the first counter in the allocated range (inclusive). Each
+    /// tuple at index `i` receives `start + i`. The value is cast to the
+    /// column's declared type: signed (`Int64`/`Int32`) or unsigned (`Uint64`).
+    fn fill_auto_increment_values(
+        tuples: &mut [Tuple],
+        schema: &TupleSchema,
+        ai_col_id: ColumnId,
+        start: u64,
+    ) {
+        let phys_idx = usize::from(ai_col_id);
+        let ai_type = schema.field(phys_idx).map(|f| f.field_type);
+
+        for (i, tuple) in tuples.iter_mut().enumerate() {
+            let counter = start + i as u64;
+            #[allow(clippy::cast_possible_wrap)]
+            let value = match ai_type {
+                Some(Type::Int64 | Type::Int32) => Value::Int64(counter as i64),
+                _ => Value::Uint64(counter),
+            };
+            *tuple
+                .get_mut(phys_idx)
+                .expect("ai column index is within physical schema bounds") = value;
+        }
     }
 }
 
@@ -933,5 +981,84 @@ mod tests {
         run(&engine, "INSERT INTO child VALUES (1, 1)");
 
         assert_eq!(scan_rows(&catalog, &txn_mgr, "child").len(), 1);
+    }
+
+    // ── AUTO_INCREMENT ────────────────────────────────────────────────────────
+
+    #[test]
+    fn auto_increment_fills_column_starting_at_one() {
+        let dir = tempdir().unwrap();
+        let (catalog, txn_mgr) = make_infra(dir.path());
+
+        let engine = Engine::new(&catalog, &txn_mgr);
+        run(
+            &engine,
+            "CREATE TABLE t (id INT NOT NULL AUTO_INCREMENT, name STRING NOT NULL)",
+        );
+        run(
+            &engine,
+            "INSERT INTO t (name) VALUES ('alice'), ('bob'), ('carol')",
+        );
+
+        let rows = scan_rows(&catalog, &txn_mgr, "t");
+        assert_eq!(rows.len(), 3);
+
+        let ids: Vec<_> = rows.iter().map(|r| r.get(0).cloned().unwrap()).collect();
+        assert_eq!(ids, vec![Value::Int64(1), Value::Int64(2), Value::Int64(3)]);
+    }
+
+    #[test]
+    fn auto_increment_counter_persists_across_inserts() {
+        let dir = tempdir().unwrap();
+        let (catalog, txn_mgr) = make_infra(dir.path());
+
+        let engine = Engine::new(&catalog, &txn_mgr);
+        run(
+            &engine,
+            "CREATE TABLE t (id INT NOT NULL AUTO_INCREMENT, name STRING NOT NULL)",
+        );
+        run(&engine, "INSERT INTO t (name) VALUES ('first')");
+        run(&engine, "INSERT INTO t (name) VALUES ('second')");
+        run(&engine, "INSERT INTO t (name) VALUES ('third')");
+
+        let rows = scan_rows(&catalog, &txn_mgr, "t");
+        let ids: Vec<_> = rows.iter().map(|r| r.get(0).cloned().unwrap()).collect();
+        assert_eq!(ids, vec![Value::Int64(1), Value::Int64(2), Value::Int64(3)]);
+    }
+
+    #[test]
+    fn auto_increment_named_insert_with_ai_column_is_rejected() {
+        let dir = tempdir().unwrap();
+        let (catalog, txn_mgr) = make_infra(dir.path());
+
+        let engine = Engine::new(&catalog, &txn_mgr);
+        run(
+            &engine,
+            "CREATE TABLE t (id INT NOT NULL AUTO_INCREMENT, name STRING NOT NULL)",
+        );
+        let err = try_run(&engine, "INSERT INTO t (id, name) VALUES (99, 'x')").unwrap_err();
+
+        assert!(
+            matches!(err, EngineError::InsertIntoAutoIncrementColumn { .. }),
+            "expected InsertIntoAutoIncrementColumn, got {err:?}"
+        );
+    }
+
+    #[test]
+    fn auto_increment_positional_insert_is_rejected() {
+        let dir = tempdir().unwrap();
+        let (catalog, txn_mgr) = make_infra(dir.path());
+
+        let engine = Engine::new(&catalog, &txn_mgr);
+        run(
+            &engine,
+            "CREATE TABLE t (id INT NOT NULL AUTO_INCREMENT, name STRING NOT NULL)",
+        );
+        let err = try_run(&engine, "INSERT INTO t VALUES (1, 'x')").unwrap_err();
+
+        assert!(
+            matches!(err, EngineError::InsertIntoAutoIncrementColumn { .. }),
+            "expected InsertIntoAutoIncrementColumn, got {err:?}"
+        );
     }
 }
