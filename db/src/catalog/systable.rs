@@ -948,7 +948,11 @@ pub(super) struct AutoIncrementRow {
 
 impl AutoIncrementRow {
     pub(super) fn new(table_id: FileId, column_id: ColumnId, next_value: u64) -> Self {
-        Self { table_id, column_id, next_value }
+        Self {
+            table_id,
+            column_id,
+            next_value,
+        }
     }
 }
 

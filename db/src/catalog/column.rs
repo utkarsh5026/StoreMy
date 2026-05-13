@@ -11,7 +11,7 @@ use crate::{
     catalog::{
         CatalogError, TableInfo,
         manager::Catalog,
-        systable::{ColumnRow, PrimaryKeyColumnRow},
+        systable::{AutoIncrementRow, ColumnRow, PrimaryKeyColumnRow},
     },
     parser::statements::ColumnDef,
     primitives::{ColumnId, NonEmptyString},
@@ -90,7 +90,7 @@ impl Catalog {
         table_id: FileId,
         column_name: &str,
     ) -> Result<(), CatalogError> {
-        let table = self.get_table_info_by_id(txn, table_id)?;
+        let mut table = self.get_table_info_by_id(txn, table_id)?;
         let col = self.get_table_col(txn, &table.name, table_id, column_name)?;
 
         let pk_cols = self.scan_system_table_where::<PrimaryKeyColumnRow, _>(txn, |r| {
@@ -102,6 +102,11 @@ impl Catalog {
                 table.name.as_str(),
                 column_name,
             ));
+        }
+
+        if table.auto_increment_column == Some(col.position) {
+            self.delete_systable_rows::<AutoIncrementRow, _>(txn, |r| r.table_id == table_id)?;
+            table.auto_increment_column = None;
         }
 
         self.delete_column(txn, table_id, column_name)?;

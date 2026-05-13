@@ -577,6 +577,7 @@ impl Catalog {
         self.delete_systable_rows::<ConstraintRow, _>(txn, |r| r.table_id == file_id)?;
         self.delete_systable_rows::<ConstraintColumnRow, _>(txn, |r| r.table_id == file_id)?;
         self.delete_systable_rows::<FkConstraintRow, _>(txn, |r| r.table_id == file_id)?;
+        self.delete_systable_rows::<AutoIncrementRow, _>(txn, |r| r.table_id == file_id)?;
 
         std::fs::remove_file(file_path)?;
         self.open_heaps.write().remove(&file_id);
