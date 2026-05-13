@@ -8,13 +8,11 @@
 //!
 //! A table's schema tracks two column counts:
 //!
-//! - **Logical** — columns visible to SQL (dropped columns excluded). This is
-//!   what the user names in `INSERT INTO t (a, b)` and what a bare `VALUES`
-//!   row must satisfy.
-//! - **Physical** — every slot ever allocated on disk, including columns
-//!   removed with `ALTER TABLE … DROP COLUMN`. Storage always writes a value
-//!   into every physical slot, so dropped slots are backfilled with `NULL` or
-//!   the column's stored default.
+//! - **Logical** — columns visible to SQL (dropped columns excluded). This is what the user names
+//!   in `INSERT INTO t (a, b)` and what a bare `VALUES` row must satisfy.
+//! - **Physical** — every slot ever allocated on disk, including columns removed with `ALTER TABLE
+//!   … DROP COLUMN`. Storage always writes a value into every physical slot, so dropped slots are
+//!   backfilled with `NULL` or the column's stored default.
 //!
 //! [`build_projection`](Engine::build_projection) bridges the two worlds by
 //! building a permutation array of length `physical_num_fields` where each
@@ -28,7 +26,7 @@ use std::{
 };
 
 use crate::{
-    FileId, IndexId, Value,
+    FileId, IndexId, TransactionId, Value,
     catalog::{LiveIndex, manager::Catalog},
     engine::{ConstraintViolation, Engine, EngineError, StatementResult, scope::bind_value_for},
     parser::statements::{InsertSource, InsertStatement},
@@ -50,16 +48,13 @@ impl Engine<'_> {
     /// # Errors
     ///
     /// - [`EngineError::TableNotFound`] if `stmt.table_name` does not exist.
-    /// - [`EngineError::UnknownColumn`] if any named column is not in the table
-    ///   or was dropped.
-    /// - [`EngineError::DuplicateInsertColumn`] if a column appears more than
-    ///   once in the column list.
-    /// - [`EngineError::WrongColumnCount`] if the number of `VALUES` in a row
-    ///   does not match the number of logical columns.
-    /// - [`EngineError::TypeMismatch`] if a value cannot be coerced to the
-    ///   declared column type.
-    /// - Constraint errors (FK, UNIQUE) propagated from
-    ///   [`Self::insert_rows_and_indexes`].
+    /// - [`EngineError::UnknownColumn`] if any named column is not in the table or was dropped.
+    /// - [`EngineError::DuplicateInsertColumn`] if a column appears more than once in the column
+    ///   list.
+    /// - [`EngineError::WrongColumnCount`] if the number of `VALUES` in a row does not match the
+    ///   number of logical columns.
+    /// - [`EngineError::TypeMismatch`] if a value cannot be coerced to the declared column type.
+    /// - Constraint errors (FK, UNIQUE) propagated from [`Self::insert_rows_and_indexes`].
     pub(super) fn exec_insert(
         catalog: &Catalog,
         txn: &Transaction<'_>,
@@ -111,10 +106,10 @@ impl Engine<'_> {
     /// When indexes or FK constraints are present, each tuple is processed
     /// individually:
     ///
-    /// 1. Every parent-side FK reference is checked — the referenced value must
-    ///    already exist in the parent table.
-    /// 2. Every UNIQUE constraint backed by an index is probed; a non-empty
-    ///    result means the new value is already present.
+    /// 1. Every parent-side FK reference is checked — the referenced value must already exist in
+    ///    the parent table.
+    /// 2. Every UNIQUE constraint backed by an index is probed; a non-empty result means the new
+    ///    value is already present.
     /// 3. The tuple is appended to the heap, obtaining a [`RowId`].
     /// 4. Every index entry for that tuple is inserted using the new [`RowId`].
     ///
@@ -124,11 +119,10 @@ impl Engine<'_> {
     ///
     /// # Errors
     ///
-    /// - [`EngineError::TableNotFound`] / storage errors if the heap or an index
-    ///   cannot be accessed.
-    /// - [`EngineError::ConstraintViolation`] wrapping
-    ///   [`ConstraintViolation::ForeignKeyViolation`] or
-    ///   [`ConstraintViolation::UniqueViolation`] when a constraint is breached.
+    /// - [`EngineError::TableNotFound`] / storage errors if the heap or an index cannot be
+    ///   accessed.
+    /// - [`EngineError::ConstraintViolation`] wrapping [`ConstraintViolation::ForeignKeyViolation`]
+    ///   or [`ConstraintViolation::UniqueViolation`] when a constraint is breached.
     pub(super) fn insert_rows_and_indexes(
         catalog: &Catalog,
         txn: &Transaction<'_>,
@@ -138,7 +132,7 @@ impl Engine<'_> {
         let tid = txn.transaction_id();
         let heap = catalog.get_table_heap(file_id)?;
         let indexes = catalog.indexes_for(file_id);
-        let fk_checks = Self::build_parent_fk_checks(catalog, txn, file_id)?;
+        let fk_checks = Self::prepare_outbound_ref_checks(catalog, txn, file_id)?;
 
         if indexes.is_empty() && fk_checks.is_empty() {
             return heap
@@ -147,56 +141,18 @@ impl Engine<'_> {
                 .map_err(EngineError::from);
         }
 
-        let unique_checks: Vec<(String, Arc<LiveIndex>)> = if indexes.is_empty() {
-            Vec::new()
-        } else {
-            let info = catalog.get_table_info_by_id(txn, file_id)?;
-            let backing_ids: HashMap<IndexId, String> = info
-                .unique_constraints
-                .into_iter()
-                .filter_map(|uc| {
-                    uc.backing_index_id
-                        .map(|id| (id, uc.name.as_str().to_owned()))
-                })
-                .collect();
-            indexes
-                .iter()
-                .filter_map(|live| {
-                    backing_ids
-                        .get(&live.index_id)
-                        .map(|name| (name.clone(), Arc::clone(live)))
-                })
-                .collect()
-        };
+        let unique_checks = Self::collect_unique_index_checks(&indexes, catalog, txn, file_id)?;
 
         let mut count = 0;
-        tuples
-            .into_iter()
-            .try_for_each(|tuple| -> Result<(), EngineError> {
-                for fk in &fk_checks {
-                    if !Self::fk_ref_exists(fk, &tuple, tid)? {
-                        return Err(ConstraintViolation::ForeignKeyViolation {
-                            constraint: fk.name.clone(),
-                        }
-                        .into());
-                    }
-                }
-                for (constraint, live) in &unique_checks {
-                    let key = live.create_index_key(&tuple)?;
-                    if !live.access.search(tid, &key)?.is_empty() {
-                        return Err(ConstraintViolation::UniqueViolation {
-                            constraint: constraint.clone(),
-                        }
-                        .into());
-                    }
-                }
-                let rid = heap.insert_tuple(tid, &tuple)?;
-                for index in &indexes {
-                    index.insert(tid, &tuple, rid)?;
-                }
-                count += 1;
-                Ok(())
-            })?;
+        for tuple in tuples {
+            Self::check_fk_constraints(&fk_checks, &tuple, tid)?;
+            Self::check_unique_constraints(&unique_checks, &tuple, tid)?;
+            let rid = heap.insert_tuple(tid, &tuple)?;
+            for index in &indexes {
+                index.insert(tid, &tuple, rid)?;
+            }
+            count += 1;
+        }
         Ok(count)
     }
 
@@ -207,8 +163,8 @@ impl Engine<'_> {
     ///
     /// - `Some(user_col_idx)` — the value for this physical slot comes from
     ///   `VALUES_row[user_col_idx]`.
-    /// - `None` — this physical slot is a dropped column; [`bind_row`] will fill
-    ///   it with the column's stored default or `NULL`.
+    /// - `None` — this physical slot is a dropped column; [`bind_row`] will fill it with the
+    ///   column's stored default or `NULL`.
     ///
     /// ## Unnamed INSERT (`INSERT INTO t VALUES (…)`)
     ///
@@ -224,11 +180,10 @@ impl Engine<'_> {
     ///
     /// # Errors
     ///
-    /// - [`EngineError::UnknownColumn`] if any name in `cols` does not exist or
-    ///   refers to a dropped column.
-    /// - [`EngineError::DuplicateInsertColumn`] if a name appears more than once.
-    /// - [`EngineError::WrongColumnCount`] if `cols` does not cover every logical
+    /// - [`EngineError::UnknownColumn`] if any name in `cols` does not exist or refers to a dropped
     ///   column.
+    /// - [`EngineError::DuplicateInsertColumn`] if a name appears more than once.
+    /// - [`EngineError::WrongColumnCount`] if `cols` does not cover every logical column.
     ///
     /// # Panics
     ///
@@ -276,17 +231,16 @@ impl Engine<'_> {
     ///
     /// 1. Every name must exist in `schema` and must not refer to a dropped column.
     /// 2. No name may appear more than once.
-    /// 3. The list must cover all `logical_n` columns — partial column lists are
-    ///    not supported (callers that need defaults should supply them explicitly).
+    /// 3. The list must cover all `logical_n` columns — partial column lists are not supported
+    ///    (callers that need defaults should supply them explicitly).
     ///
     /// # Errors
     ///
-    /// - [`EngineError::UnknownColumn`] if a name is absent from the schema or
-    ///   names a dropped column.
-    /// - [`EngineError::DuplicateInsertColumn`] if a name appears more than once
-    ///   in `cols`.
-    /// - [`EngineError::WrongColumnCount`] if `cols.len()` differs from
-    ///   `logical_n` after deduplication.
+    /// - [`EngineError::UnknownColumn`] if a name is absent from the schema or names a dropped
+    ///   column.
+    /// - [`EngineError::DuplicateInsertColumn`] if a name appears more than once in `cols`.
+    /// - [`EngineError::WrongColumnCount`] if `cols.len()` differs from `logical_n` after
+    ///   deduplication.
     fn validate_named_insert_columns(
         cols: &[NonEmptyString],
         schema: &TupleSchema,
@@ -335,10 +289,10 @@ impl Engine<'_> {
     /// wrote in `VALUES (…)`. This function stretches it to cover every
     /// *physical* slot using `projection`:
     ///
-    /// - `Some(user_idx)` → coerce `row[user_idx]` to the field's declared type
-    ///   via [`bind_value_for`].
-    /// - `None` → the physical slot is a dropped column; fill it with the
-    ///   field's `missing_default_value` or [`Value::Null`].
+    /// - `Some(user_idx)` → coerce `row[user_idx]` to the field's declared type via
+    ///   [`bind_value_for`].
+    /// - `None` → the physical slot is a dropped column; fill it with the field's
+    ///   `missing_default_value` or [`Value::Null`].
     ///
     /// The returned `Vec` is ready to be wrapped in a [`Tuple`] and written to
     /// the heap.
@@ -347,8 +301,8 @@ impl Engine<'_> {
     ///
     /// - [`EngineError::WrongColumnCount`] if `row.len()` does not equal
     ///   `schema.logical_num_fields()`.
-    /// - [`EngineError::TypeMismatch`] (or similar) from [`bind_value_for`] if a
-    ///   value cannot be coerced to the column's declared type.
+    /// - [`EngineError::TypeMismatch`] (or similar) from [`bind_value_for`] if a value cannot be
+    ///   coerced to the column's declared type.
     fn bind_row(
         row: &[Value],
         schema: &TupleSchema,
@@ -375,6 +329,103 @@ impl Engine<'_> {
                 }
             })
             .collect()
+    }
+
+    /// Returns `(constraint_name, index)` pairs for every UNIQUE constraint
+    /// that is backed by one of `indexes`.
+    ///
+    /// Returns an empty vec immediately when `indexes` is empty, avoiding an
+    /// unnecessary catalog round-trip.
+    fn collect_unique_index_checks(
+        indexes: &[Arc<LiveIndex>],
+        catalog: &Catalog,
+        txn: &Transaction<'_>,
+        file_id: FileId,
+    ) -> Result<Vec<(String, Arc<LiveIndex>)>, EngineError> {
+        if indexes.is_empty() {
+            return Ok(Vec::new());
+        }
+        let info = catalog.get_table_info_by_id(txn, file_id)?;
+        let backing_ids: HashMap<IndexId, String> = info
+            .unique_constraints
+            .into_iter()
+            .filter_map(|uc| {
+                uc.backing_index_id
+                    .map(|id| (id, uc.name.as_str().to_owned()))
+            })
+            .collect();
+        Ok(indexes
+            .iter()
+            .filter_map(|live| {
+                backing_ids
+                    .get(&live.index_id)
+                    .map(|name| (name.clone(), Arc::clone(live)))
+            })
+            .collect())
+    }
+
+    /// Verifies that every outbound FK constraint is satisfied by `tuple`.
+    ///
+    /// Walks each [`ParentFkCheck`](super::fk::ParentFkCheck) prepared for this
+    /// table and calls [`Self::referenced_row_exists`] to confirm the parent row
+    /// is present.  The check uses an index point-lookup when a covering index
+    /// exists on the parent, falling back to a heap scan otherwise.
+    ///
+    /// A NULL in any FK column short-circuits that constraint to `true` — SQL
+    /// semantics treat a NULL foreign key as "no reference asserted", so it is
+    /// always allowed regardless of what the parent table contains.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`EngineError::Constraint`] →
+    /// [`ConstraintViolation::ForeignKeyViolation`] (with the constraint name)
+    /// for the first FK whose referenced parent row cannot be found.
+    fn check_fk_constraints(
+        fk_checks: &[super::fk::ParentFkCheck],
+        tuple: &Tuple,
+        tid: TransactionId,
+    ) -> Result<(), EngineError> {
+        for fk in fk_checks {
+            if !Self::referenced_row_exists(fk, tuple, tid)? {
+                return Err(ConstraintViolation::ForeignKeyViolation {
+                    constraint: fk.name.clone(),
+                }
+                .into());
+            }
+        }
+        Ok(())
+    }
+
+    /// Verifies that `tuple` does not violate any UNIQUE constraint.
+    ///
+    /// For each `(constraint_name, index)` pair in `unique_checks`, projects
+    /// `tuple` into the index's key format and probes the index.  A non-empty
+    /// result means a row with that key already exists — inserting `tuple`
+    /// would create a duplicate, so the insert is rejected immediately.
+    ///
+    /// `unique_checks` is pre-filtered to only the indexes that actually back a
+    /// UNIQUE constraint, so non-unique indexes are never probed here.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`EngineError::Constraint`] →
+    /// [`ConstraintViolation::UniqueViolation`] (with the constraint name) for
+    /// the first constraint whose key is already present in the index.
+    fn check_unique_constraints(
+        unique_checks: &[(String, Arc<LiveIndex>)],
+        tuple: &Tuple,
+        tid: TransactionId,
+    ) -> Result<(), EngineError> {
+        for (constraint, live) in unique_checks {
+            let key = live.create_index_key(tuple)?;
+            if !live.access.search(tid, &key)?.is_empty() {
+                return Err(ConstraintViolation::UniqueViolation {
+                    constraint: constraint.clone(),
+                }
+                .into());
+            }
+        }
+        Ok(())
     }
 }
 
