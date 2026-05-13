@@ -439,12 +439,12 @@ mod tests {
         Type, Value,
         buffer_pool::page_store::PageStore,
         catalog::manager::Catalog,
-        engine::Engine,
+        engine::{ConstraintViolation, Engine, EngineError, StatementResult},
         index::{CompositeKey, IndexKind},
         parser::Parser,
         primitives::{ColumnId, NonEmptyString},
         transaction::TransactionManager,
-        tuple::{Field, TupleSchema},
+        tuple::{Field, Tuple, TupleSchema},
         wal::writer::Wal,
     };
 
@@ -463,6 +463,23 @@ mod tests {
     fn run(engine: &Engine<'_>, sql: &str) {
         let stmt = Parser::new(sql).parse().expect("parse");
         engine.execute_statement(stmt).expect("execute");
+    }
+
+    fn try_run(engine: &Engine<'_>, sql: &str) -> Result<StatementResult, EngineError> {
+        let stmt = Parser::new(sql).parse().expect("parse");
+        engine.execute_statement(stmt)
+    }
+
+    fn scan_rows(catalog: &Catalog, txn_mgr: &TransactionManager, table: &str) -> Vec<Tuple> {
+        let txn = txn_mgr.begin().unwrap();
+        let info = catalog.get_table_info(&txn, table).unwrap();
+        let heap = catalog.get_table_heap(info.file_id).unwrap();
+        let mut rows = Vec::new();
+        for (_, tuple) in heap.scan(txn.transaction_id()).unwrap() {
+            rows.push(tuple);
+        }
+        txn.commit().unwrap();
+        rows
     }
 
     fn field(name: &str, col_type: Type) -> Field {
@@ -585,5 +602,262 @@ mod tests {
 
         let engine = Engine::new(&catalog, &txn_mgr);
         run(&engine, "INSERT INTO noidx (x) VALUES (1), (2), (3);");
+    }
+
+    #[test]
+    fn positional_insert_maps_values_to_correct_slots() {
+        let dir = tempdir().unwrap();
+        let (catalog, txn_mgr) = make_infra(dir.path());
+
+        let txn = txn_mgr.begin().unwrap();
+        let file_id = catalog
+            .create_table(
+                &txn,
+                "t",
+                TupleSchema::new(vec![
+                    field("x", Type::Int64).not_null(),
+                    field("y", Type::Int64).not_null(),
+                ]),
+                vec![],
+            )
+            .unwrap();
+        // Index on y (slot 1) lets us verify which slot received which value.
+        catalog
+            .create_index(&txn, "t_y_idx", "t", file_id, &[col_id(1)], IndexKind::Hash)
+            .unwrap();
+        txn.commit().unwrap();
+
+        let engine = Engine::new(&catalog, &txn_mgr);
+        run(&engine, "INSERT INTO t VALUES (10, 20);");
+
+        let live = catalog.get_index_by_name("t_y_idx").unwrap();
+        let probe_txn = txn_mgr.begin().unwrap();
+        let tid = probe_txn.transaction_id();
+
+        // 20 is in y — must hit.
+        let hits = live
+            .access
+            .search(tid, &CompositeKey::single(Value::Int64(20)))
+            .unwrap();
+        assert_eq!(hits.len(), 1, "value 20 must land in the y slot");
+
+        // 10 is in x, not indexed — must miss.
+        let miss = live
+            .access
+            .search(tid, &CompositeKey::single(Value::Int64(10)))
+            .unwrap();
+        assert!(miss.is_empty(), "value 10 is in x, not y");
+
+        probe_txn.commit().unwrap();
+    }
+
+    #[test]
+    fn named_insert_unknown_column_returns_error() {
+        let dir = tempdir().unwrap();
+        let (catalog, txn_mgr) = make_infra(dir.path());
+
+        let txn = txn_mgr.begin().unwrap();
+        catalog
+            .create_table(
+                &txn,
+                "t",
+                TupleSchema::new(vec![
+                    field("id", Type::Int64).not_null(),
+                    field("name", Type::String).not_null(),
+                ]),
+                vec![],
+            )
+            .unwrap();
+        txn.commit().unwrap();
+
+        let engine = Engine::new(&catalog, &txn_mgr);
+        let err = try_run(&engine, "INSERT INTO t (id, ghost) VALUES (1, 'x')").unwrap_err();
+
+        assert!(
+            matches!(err, EngineError::UnknownColumn { ref column, .. } if column == "ghost"),
+            "expected UnknownColumn for 'ghost', got {err:?}"
+        );
+    }
+
+    #[test]
+    fn named_insert_duplicate_column_returns_error() {
+        let dir = tempdir().unwrap();
+        let (catalog, txn_mgr) = make_infra(dir.path());
+
+        let txn = txn_mgr.begin().unwrap();
+        catalog
+            .create_table(
+                &txn,
+                "t",
+                TupleSchema::new(vec![
+                    field("id", Type::Int64).not_null(),
+                    field("name", Type::String).not_null(),
+                ]),
+                vec![],
+            )
+            .unwrap();
+        txn.commit().unwrap();
+
+        let engine = Engine::new(&catalog, &txn_mgr);
+        let err = try_run(&engine, "INSERT INTO t (id, id) VALUES (1, 2)").unwrap_err();
+
+        assert!(
+            matches!(err, EngineError::DuplicateInsertColumn { ref column, .. } if column == "id"),
+            "expected DuplicateInsertColumn for 'id', got {err:?}"
+        );
+    }
+
+    #[test]
+    fn named_insert_column_list_too_short_returns_error() {
+        let dir = tempdir().unwrap();
+        let (catalog, txn_mgr) = make_infra(dir.path());
+
+        let txn = txn_mgr.begin().unwrap();
+        catalog
+            .create_table(
+                &txn,
+                "t",
+                TupleSchema::new(vec![
+                    field("id", Type::Int64).not_null(),
+                    field("name", Type::String).not_null(),
+                ]),
+                vec![],
+            )
+            .unwrap();
+        txn.commit().unwrap();
+
+        // Column list names only 1 of the 2 logical columns.
+        let engine = Engine::new(&catalog, &txn_mgr);
+        let err = try_run(&engine, "INSERT INTO t (id) VALUES (1)").unwrap_err();
+
+        assert!(
+            matches!(err, EngineError::WrongColumnCount {
+                expected: 2,
+                got: 1,
+                ..
+            }),
+            "expected WrongColumnCount {{expected:2, got:1}}, got {err:?}"
+        );
+    }
+
+    #[test]
+    fn values_row_shorter_than_column_list_returns_error() {
+        let dir = tempdir().unwrap();
+        let (catalog, txn_mgr) = make_infra(dir.path());
+
+        let txn = txn_mgr.begin().unwrap();
+        catalog
+            .create_table(
+                &txn,
+                "t",
+                TupleSchema::new(vec![
+                    field("id", Type::Int64).not_null(),
+                    field("name", Type::String).not_null(),
+                ]),
+                vec![],
+            )
+            .unwrap();
+        txn.commit().unwrap();
+
+        // Column list covers both columns; VALUES row supplies only one value.
+        let engine = Engine::new(&catalog, &txn_mgr);
+        let err = try_run(&engine, "INSERT INTO t (id, name) VALUES (1)").unwrap_err();
+
+        assert!(
+            matches!(err, EngineError::WrongColumnCount {
+                expected: 2,
+                got: 1,
+                ..
+            }),
+            "expected WrongColumnCount {{expected:2, got:1}}, got {err:?}"
+        );
+    }
+
+    #[test]
+    fn dropped_column_physical_slot_is_backfilled_with_null() {
+        let dir = tempdir().unwrap();
+        let (catalog, txn_mgr) = make_infra(dir.path());
+
+        // Three-column table: id | tag | score (physical slots 0, 1, 2).
+        let engine = Engine::new(&catalog, &txn_mgr);
+        run(
+            &engine,
+            "CREATE TABLE t (id INT NOT NULL, tag STRING NOT NULL, score INT NOT NULL)",
+        );
+        // Drop the middle column — logical columns are now [id, score], physical still [id, tag,
+        // score].
+        run(&engine, "ALTER TABLE t DROP COLUMN tag");
+        // Insert only the two surviving logical columns.
+        run(&engine, "INSERT INTO t (id, score) VALUES (42, 99)");
+
+        let rows = scan_rows(&catalog, &txn_mgr, "t");
+        assert_eq!(rows.len(), 1);
+
+        let tuple = &rows[0];
+        // Physical slot 0: id = 42
+        assert_eq!(
+            tuple.get(0),
+            Some(&Value::Int64(42)),
+            "slot 0 must be id=42"
+        );
+        // Physical slot 1: dropped tag column — must be NULL
+        assert_eq!(
+            tuple.get(1),
+            Some(&Value::Null),
+            "slot 1 (dropped tag) must be NULL"
+        );
+        // Physical slot 2: score = 99
+        assert_eq!(
+            tuple.get(2),
+            Some(&Value::Int64(99)),
+            "slot 2 must be score=99"
+        );
+    }
+
+    // ── FK enforcement ────────────────────────────────────────────────────────
+
+    #[test]
+    fn fk_violation_on_insert_is_rejected() {
+        let dir = tempdir().unwrap();
+        let (catalog, txn_mgr) = make_infra(dir.path());
+
+        let engine = Engine::new(&catalog, &txn_mgr);
+        run(&engine, "CREATE TABLE parent (id INT NOT NULL UNIQUE)");
+        run(
+            &engine,
+            "CREATE TABLE child (id INT NOT NULL, parent_id INT NOT NULL, \
+             FOREIGN KEY (parent_id) REFERENCES parent(id))",
+        );
+        run(&engine, "INSERT INTO parent VALUES (1)");
+
+        // 999 does not exist in parent.id.
+        let err = try_run(&engine, "INSERT INTO child VALUES (1, 999)").unwrap_err();
+
+        assert!(
+            matches!(
+                err,
+                EngineError::Constraint(ConstraintViolation::ForeignKeyViolation { .. })
+            ),
+            "expected ForeignKeyViolation, got {err:?}"
+        );
+    }
+
+    #[test]
+    fn fk_insert_with_valid_parent_succeeds() {
+        let dir = tempdir().unwrap();
+        let (catalog, txn_mgr) = make_infra(dir.path());
+
+        let engine = Engine::new(&catalog, &txn_mgr);
+        run(&engine, "CREATE TABLE parent (id INT NOT NULL UNIQUE)");
+        run(
+            &engine,
+            "CREATE TABLE child (id INT NOT NULL, parent_id INT NOT NULL, \
+             FOREIGN KEY (parent_id) REFERENCES parent(id))",
+        );
+        run(&engine, "INSERT INTO parent VALUES (1)");
+        // parent_id=1 exists in parent.
+        run(&engine, "INSERT INTO child VALUES (1, 1)");
+
+        assert_eq!(scan_rows(&catalog, &txn_mgr, "child").len(), 1);
     }
 }

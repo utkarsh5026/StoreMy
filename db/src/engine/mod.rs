@@ -1,12 +1,11 @@
 use crate::{
-    binder::Bound,
     catalog::manager::Catalog,
     parser::statements::Statement,
     transaction::{Transaction, TransactionManager},
 };
 
-mod dml;
 mod error;
+mod fk;
 mod query;
 mod result;
 
@@ -20,8 +19,10 @@ mod delete;
 mod drop_index;
 mod drop_table;
 mod helpers;
+mod insert;
 mod scope;
 mod show_indexes;
+mod update;
 
 /// SQL execution entrypoint.
 ///
@@ -63,9 +64,9 @@ impl<'a> Engine<'a> {
             Statement::ShowIndexes(s) => {
                 self.with_txn(|txn| Engine::exec_show_indexes(txn, self.catalog, s))
             }
-            Statement::Insert(_) => self.exec_insert(stmt),
-            Statement::Delete(_) => self.exec_delete(stmt),
-            Statement::Update(s) => self.exec_update(s),
+            Statement::Insert(s) => self.with_txn(|txn| Engine::exec_insert(self.catalog, txn, s)),
+            Statement::Delete(s) => self.with_txn(|txn| Engine::exec_delete(self.catalog, txn, s)),
+            Statement::Update(s) => self.with_txn(|txn| Engine::exec_update(self.catalog, txn, s)),
             Statement::Select(_) => self.exec_select(stmt),
             Statement::AlterTable(s) => {
                 self.with_txn(|txn| Engine::exec_alter_table(txn, self.catalog, s))
@@ -85,28 +86,5 @@ impl<'a> Engine<'a> {
         let result = run(&txn)?;
         txn.commit()?;
         Ok(result)
-    }
-
-    /// Binds `stmt` inside a fresh transaction, then runs the bound statement.
-    ///
-    /// This is the shared shell for statement executors with the same shape:
-    /// begin a transaction, bind the AST against the catalog, execute the bound
-    /// variant, then commit on success.
-    fn bind_and_execute<F>(&self, stmt: Statement, run: F) -> Result<StatementResult, EngineError>
-    where
-        F: FnOnce(&Catalog, Bound, &Transaction<'_>) -> Result<StatementResult, EngineError>,
-    {
-        let is_update = matches!(&stmt, Statement::Update(_));
-        let txn = self.txn_manager.begin()?;
-        let bound = Bound::bind(stmt, self.catalog, &txn).map_err(|e| {
-            if is_update {
-                EngineError::from_update_bind_error(e)
-            } else {
-                EngineError::Bind(e)
-            }
-        })?;
-        let out = run(self.catalog, bound, &txn)?;
-        txn.commit()?;
-        Ok(out)
     }
 }

@@ -1,8 +1,8 @@
 use thiserror::Error;
 
 use crate::{
-    binder::BindError, buffer_pool::page_store::PageStoreError, catalog::CatalogError,
-    execution::ExecutionError, heap::file::HeapError, transaction::TransactionError,
+    buffer_pool::page_store::PageStoreError, catalog::CatalogError, execution::ExecutionError,
+    heap::file::HeapError, transaction::TransactionError,
 };
 
 /// Schema rule violations raised during DML execution.
@@ -49,9 +49,6 @@ pub enum EngineError {
 
     #[error(transparent)]
     BufferPool(#[from] PageStoreError),
-
-    #[error(transparent)]
-    Bind(#[from] BindError),
 
     #[error(transparent)]
     Index(#[from] crate::index::IndexError),
@@ -108,17 +105,4 @@ pub enum EngineError {
 
     #[error(transparent)]
     Constraint(#[from] ConstraintViolation),
-}
-
-impl EngineError {
-    pub(super) fn type_error(message: impl Into<String>) -> Self {
-        Self::TypeError(message.into())
-    }
-
-    pub(super) fn from_update_bind_error(error: BindError) -> Self {
-        match error {
-            BindError::UnknownColumn { table, column } => Self::UnknownColumn { table, column },
-            other => Self::Bind(other),
-        }
-    }
 }
