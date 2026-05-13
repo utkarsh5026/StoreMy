@@ -24,8 +24,8 @@ impl Engine<'_> {
     ///
     /// # Errors
     ///
-    /// Returns [`EngineError::Bind`] when the table does not exist and the SQL
-    /// did not include `IF EXISTS`.
+    /// Returns [`EngineError::TableNotFound`] when the table does not exist and
+    /// the SQL did not include `IF EXISTS`.
     ///
     /// Returns [`EngineError::Catalog`] when the catalog cannot remove the table
     /// metadata or associated storage.

@@ -9,13 +9,11 @@
 //! All rows that match the predicate are collected first (full heap scan), then
 //! each matched row is processed in three steps:
 //!
-//! 1. **Inbound FK actions** — child tables that reference this table are
-//!    consulted. Depending on the declared referential action the engine will
-//!    error (`RESTRICT`), nullify the child column (`SET NULL`), or recursively
-//!    delete the child row (`CASCADE`).
+//! 1. **Inbound FK actions** — child tables that reference this table are consulted. Depending on
+//!    the declared referential action the engine will error (`RESTRICT`), nullify the child column
+//!    (`SET NULL`), or recursively delete the child row (`CASCADE`).
 //! 2. **Heap deletion** — the tuple is marked deleted in the heap file.
-//! 3. **Index cleanup** — every index entry that pointed at the deleted row is
-//!    removed.
+//! 3. **Index cleanup** — every index entry that pointed at the deleted row is removed.
 //!
 //! The scan-then-act split means the predicate is evaluated against the
 //! snapshot visible at the start of the statement, which avoids Halloween-
@@ -46,12 +44,9 @@ impl Engine<'_> {
     ///
     /// # Errors
     ///
-    /// - [`EngineError::TableNotFound`] if `stmt.table_name` does not exist in
-    ///   the catalog.
-    /// - Any bind error from the `WHERE` clause (unknown column, type mismatch,
-    ///   etc.).
-    /// - Constraint and storage errors propagated from
-    ///   [`Self::delete_rows_and_indexes`].
+    /// - [`EngineError::TableNotFound`] if `stmt.table_name` does not exist in the catalog.
+    /// - Any bind error from the `WHERE` clause (unknown column, type mismatch, etc.).
+    /// - Constraint and storage errors propagated from [`Self::delete_rows_and_indexes`].
     pub(super) fn exec_delete(
         catalog: &Catalog,
         txn: &Transaction<'_>,
@@ -84,26 +79,25 @@ impl Engine<'_> {
     /// `predicate` (or all rows when `predicate` is `None`). Then, for each
     /// matched row:
     ///
-    /// 1. **Inbound FK actions** — calls [`Self::enforce_referential_actions_on_delete`]
-    ///    for every child table that has a foreign key pointing at this table.
-    ///    The behaviour depends on the child's declared referential action:
+    /// 1. **Inbound FK actions** — calls [`Self::enforce_referential_actions_on_delete`] for every
+    ///    child table that has a foreign key pointing at this table. The behaviour depends on the
+    ///    child's declared referential action:
     ///    - `RESTRICT` / `NO ACTION` — returns a [`ConstraintViolation`] error.
     ///    - `CASCADE` — recursively deletes matching rows in the child table.
     ///    - `SET NULL` — nullifies the child's FK column(s) for matching rows.
     /// 2. **Heap deletion** — marks the tuple deleted via [`HeapFile::delete_tuple`].
-    /// 3. **Index cleanup** — removes the deleted row's key from every index
-    ///    registered for `file_id`.
+    /// 3. **Index cleanup** — removes the deleted row's key from every index registered for
+    ///    `file_id`.
     ///
     /// Returns the count of rows removed from *this* table only; rows removed
     /// by cascading deletes in child tables are not counted.
     ///
     /// # Errors
     ///
-    /// - [`EngineError::TableNotFound`] or storage errors if the heap or an
-    ///   index cannot be accessed.
-    /// - [`EngineError::ConstraintViolation`] wrapping
-    ///   [`ConstraintViolation::ForeignKeyViolation`] when a child table uses
-    ///   `RESTRICT` and a matching child row exists.
+    /// - [`EngineError::TableNotFound`] or storage errors if the heap or an index cannot be
+    ///   accessed.
+    /// - [`EngineError::ConstraintViolation`] wrapping [`ConstraintViolation::ForeignKeyViolation`]
+    ///   when a child table uses `RESTRICT` and a matching child row exists.
     pub(super) fn delete_rows_and_indexes(
         catalog: &Catalog,
         txn: &Transaction<'_>,
@@ -118,7 +112,13 @@ impl Engine<'_> {
 
         let mut deleted = 0;
         for (rid, tuple) in rows {
-            Self::enforce_referential_actions_on_delete(catalog, txn, &inbound_checks, &tuple, tid)?;
+            Self::enforce_referential_actions_on_delete(
+                catalog,
+                txn,
+                &inbound_checks,
+                &tuple,
+                tid,
+            )?;
             heap.delete_tuple(tid, rid)?;
             for index in &indexes {
                 index.delete(tid, &tuple, rid)?;

@@ -6,31 +6,31 @@
 //!
 //! ## Update pipeline
 //!
-//! 1. **Bind** — each `SET col = expr` is resolved against the schema: the
-//!    column must exist, must not appear twice in the same statement, and the
-//!    right-hand side must be a literal value (expression assignment is not yet
-//!    supported).  The literal is coerced to the column's declared type.
+//! 1. **Bind** — each `SET col = expr` is resolved against the schema: the column must exist, must
+//!    not appear twice in the same statement, and the right-hand side must be a literal value
+//!    (expression assignment is not yet supported).  The literal is coerced to the column's
+//!    declared type.
 //!
-//! 2. **Scan** — the optional `WHERE` predicate is bound and evaluated against
-//!    a full heap scan.  All matching rows are collected before any row is
-//!    mutated (see *Halloween problem* note below).
+//! 2. **Scan** — the optional `WHERE` predicate is bound and evaluated against a full heap scan.
+//!    All matching rows are collected before any row is mutated (see *Halloween problem* note
+//!    below).
 //!
-//! 3. **Constraint prep** — the engine determines which indexes and FK
-//!    constraints are actually relevant to the columns being changed, so that
-//!    rows whose index keys or FK columns are untouched pay no extra cost.
+//! 3. **Constraint prep** — the engine determines which indexes and FK constraints are actually
+//!    relevant to the columns being changed, so that rows whose index keys or FK columns are
+//!    untouched pay no extra cost.
 //!
 //! 4. **Per-row update** — for every matched row:
 //!    - The new tuple is built by applying all assignments in-place.
-//!    - UNIQUE constraints are checked: if the new index key already exists
-//!      under a *different* row, the statement is rejected.
-//!    - Outbound FK constraints are checked: the new child value must still
-//!      have a matching parent row.
-//!    - Inbound FK referential actions are enforced: child rows that reference
-//!      the *old* parent key are handled via `CASCADE`, `SET NULL`, or
-//!      `RESTRICT` depending on the constraint definition.
+//!    - UNIQUE constraints are checked: if the new index key already exists under a *different*
+//!      row, the statement is rejected.
+//!    - Outbound FK constraints are checked: the new child value must still have a matching parent
+//!      row.
+//!    - Inbound FK referential actions are enforced: child rows that reference the *old* parent key
+//!      are handled via `CASCADE`, `SET NULL`, or `RESTRICT` depending on the constraint
+//!      definition.
 //!    - The tuple is written back to the heap.
-//!    - Affected index entries are rotated: the old key is deleted and the new
-//!      key is inserted.  Unchanged keys are skipped.
+//!    - Affected index entries are rotated: the old key is deleted and the new key is inserted.
+//!      Unchanged keys are skipped.
 //!
 //! ## Halloween problem
 //!
@@ -64,22 +64,19 @@ impl Engine<'_> {
     ///
     /// # Steps
     ///
-    /// 1. **Bind** — resolve the table, validate each `SET` assignment (column
-    ///    exists, no duplicates, literal values only), and coerce every value to
-    ///    the column's declared type.
-    /// 2. **Scan** — apply the optional `WHERE` filter and collect all matching
-    ///    rows from the heap file.
-    /// 3. **Constraint prep** — determine which indexes and FK constraints are
-    ///    relevant to the columns being changed.  Irrelevant constraints are
-    ///    skipped entirely so no unnecessary catalog reads or index probes occur.
+    /// 1. **Bind** — resolve the table, validate each `SET` assignment (column exists, no
+    ///    duplicates, literal values only), and coerce every value to the column's declared type.
+    /// 2. **Scan** — apply the optional `WHERE` filter and collect all matching rows from the heap
+    ///    file.
+    /// 3. **Constraint prep** — determine which indexes and FK constraints are relevant to the
+    ///    columns being changed.  Irrelevant constraints are skipped entirely so no unnecessary
+    ///    catalog reads or index probes occur.
     /// 4. **Per-row update** — for every matching row:
     ///    - Apply the assignments to an in-memory tuple.
-    ///    - Enforce UNIQUE constraints (index key must not already exist under a
-    ///      different row).
-    ///    - Enforce outbound FK constraints (child values must still reference a
-    ///      valid parent row).
-    ///    - Execute referential actions for inbound FKs (CASCADE / SET NULL on
-    ///      child rows that reference the old parent key).
+    ///    - Enforce UNIQUE constraints (index key must not already exist under a different row).
+    ///    - Enforce outbound FK constraints (child values must still reference a valid parent row).
+    ///    - Execute referential actions for inbound FKs (CASCADE / SET NULL on child rows that
+    ///      reference the old parent key).
     ///    - Write the updated tuple back to the heap.
     ///    - Sync every affected index (`delete old key → insert new key`).
     ///
@@ -193,8 +190,8 @@ impl Engine<'_> {
     /// Walks each `SET col = expr` item and:
     /// - Resolves `col` against the table schema, returning an error if it does not exist.
     /// - Rejects the same column appearing twice (`SET a = 1, a = 2` is illegal).
-    /// - Requires the right-hand side to be a literal value; expression assignment
-    ///   (e.g. `SET x = x + 1`) is not yet supported.
+    /// - Requires the right-hand side to be a literal value; expression assignment (e.g. `SET x = x
+    ///   + 1`) is not yet supported.
     /// - Coerces the literal to the column's declared type via [`bind_value_for`].
     ///
     /// # Errors
@@ -364,10 +361,10 @@ impl Engine<'_> {
     /// "Outbound" means `file_id`'s table holds the foreign key and references a
     /// parent table.  For each such FK:
     ///
-    /// - If none of the FK's local columns changed value (`old == new`), the
-    ///   parent reference is unchanged — skip it.
-    /// - Otherwise, verify that the new FK value still has a matching row in the
-    ///   parent table via [`Self::referenced_row_exists`].
+    /// - If none of the FK's local columns changed value (`old == new`), the parent reference is
+    ///   unchanged — skip it.
+    /// - Otherwise, verify that the new FK value still has a matching row in the parent table via
+    ///   [`Self::referenced_row_exists`].
     ///
     /// # Errors
     ///

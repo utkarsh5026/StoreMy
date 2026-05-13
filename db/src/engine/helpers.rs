@@ -294,7 +294,7 @@ impl Engine<'_> {
                 None => true,
                 Some(p) => p
                     .eval(&tuple)
-                    .map_err(|e| EngineError::type_error(e.to_string()))?,
+                    .map_err(|e| EngineError::TypeError(e.to_string()))?,
             };
             if keep {
                 out.push((rid, tuple));

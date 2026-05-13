@@ -34,9 +34,11 @@ impl Engine<'_> {
     ///
     /// # Errors
     ///
-    /// Returns [`EngineError::Bind`] when the target table is unknown, the index
-    /// name already exists without `IF NOT EXISTS`, an indexed column is unknown,
-    /// or the same column appears more than once in the index column list.
+    /// Returns [`EngineError::TableNotFound`] when the target table is unknown.
+    /// Returns [`EngineError::IndexAlreadyExists`] when the index name already exists
+    /// without `IF NOT EXISTS`. Returns [`EngineError::UnknownColumn`] when an indexed
+    /// column is unknown, or [`EngineError::DuplicateColumn`] when the same column
+    /// appears more than once in the index column list.
     ///
     /// Returns [`EngineError::Catalog`] when the catalog cannot persist the index
     /// metadata.

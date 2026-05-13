@@ -44,9 +44,9 @@ impl Engine<'_> {
     ///
     /// # Errors
     ///
-    /// Returns [`EngineError::Bind`] when SQL-level validation fails, such as a
-    /// duplicate table name without `IF NOT EXISTS`, duplicate column names, or a
-    /// primary key name that is not present in the column list.
+    /// Returns [`EngineError::TableAlreadyExists`] when the table already exists
+    /// without `IF NOT EXISTS`. Returns [`EngineError::UnknownColumn`] when a
+    /// primary key name is not in the column list.
     ///
     /// Returns [`EngineError::Catalog`] when creating the table's catalog entry
     /// or heap file fails.
