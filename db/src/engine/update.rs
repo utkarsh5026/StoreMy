@@ -346,7 +346,7 @@ impl Engine<'_> {
             };
             let old_key = live.create_index_key(change.before)?;
             let new_key = live.create_index_key(change.after)?;
-            if old_key != new_key && live.access.search(txn_id, &new_key)?.len() > 1 {
+            if old_key != new_key && !live.access.search(txn_id, &new_key)?.is_empty() {
                 return Err(ConstraintViolation::UniqueViolation {
                     constraint: constraint.clone(),
                 }
