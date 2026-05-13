@@ -87,4 +87,13 @@ if ! cargo clippy --workspace --all-targets --quiet -- -D warnings; then
   exit 1
 fi
 
+# ── 5. rustdoc ──────────────────────────────────────────────────────────────
+
+echo "pre-commit: cargo doc…" >&2
+if ! RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --quiet 2>&1; then
+  echo >&2
+  echo "pre-commit: rustdoc reported errors — fix broken doc links before committing." >&2
+  exit 1
+fi
+
 echo "pre-commit: OK" >&2
