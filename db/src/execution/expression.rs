@@ -161,6 +161,9 @@ impl Operand {
 /// instead of `=` / `<>` against `NULL`.
 #[derive(Debug, Clone)]
 pub enum BooleanExpression {
+    /// Always evaluates to `true` — used for cross-product joins that have no
+    /// `ON` predicate.
+    Always,
     And(Box<BooleanExpression>, Box<BooleanExpression>),
     Or(Box<BooleanExpression>, Box<BooleanExpression>),
     Not(Box<BooleanExpression>),
@@ -229,6 +232,7 @@ impl BooleanExpression {
     /// is out of bounds for `tuple`.
     pub fn eval(&self, tuple: &Tuple) -> Result<bool, ExecutionError> {
         match self {
+            Self::Always => Ok(true),
             Self::Leaf { left, op, right } => {
                 let l = left.resolve(tuple)?;
                 let r = right.resolve(tuple)?;

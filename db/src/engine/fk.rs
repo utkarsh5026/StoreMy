@@ -502,7 +502,8 @@ impl Engine<'_> {
                         let old = child_tuple.clone();
                         for &(child_col, ref_col) in &fk.col_pairs {
                             if let Some(v) = child_tuple.get_mut(usize::from(child_col)) {
-                                *v = change.after
+                                *v = change
+                                    .after
                                     .get(usize::from(ref_col))
                                     .cloned()
                                     .unwrap_or(Value::Null);
@@ -513,7 +514,10 @@ impl Engine<'_> {
                             &fk.maintenance_indexes,
                             tid,
                             rid,
-                            RowChange { before: &old, after: &child_tuple },
+                            RowChange {
+                                before: &old,
+                                after: &child_tuple,
+                            },
                         )?;
                     }
                 }
@@ -548,12 +552,10 @@ impl Engine<'_> {
                 }
             }
             fk.child_heap.update_tuple(tid, rid, &child_tuple)?;
-            Self::sync_indexes_after_fk_action(
-                &fk.maintenance_indexes,
-                tid,
-                rid,
-                RowChange { before: &old, after: &child_tuple },
-            )?;
+            Self::sync_indexes_after_fk_action(&fk.maintenance_indexes, tid, rid, RowChange {
+                before: &old,
+                after: &child_tuple,
+            })?;
         }
         Ok(())
     }
