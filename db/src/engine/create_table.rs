@@ -1,6 +1,7 @@
 use crate::{
     catalog::{ConstraintDef, manager::Catalog, systable::FkAction},
     engine::{Engine, EngineError, StatementResult},
+    index::IndexKind,
     parser::statements::{ColumnDef, CreateTableStatement, Uniqueness},
     primitives::NonEmptyString,
     transaction::Transaction,
@@ -106,7 +107,34 @@ impl Engine<'_> {
             )?);
         }
 
-        let file_id = catalog.create_table(txn, table_name.as_str(), schema, defs)?;
+        // UNIQUE constraints need a backing B-tree index, but we need the table's
+        // file_id to create indexes — so split them out and add them after the table exists.
+        let (unique_defs, other_defs): (Vec<_>, Vec<_>) = defs
+            .into_iter()
+            .partition(|d| matches!(d, ConstraintDef::Unique { .. }));
+
+        let file_id = catalog.create_table(txn, table_name.as_str(), schema, other_defs)?;
+
+        for def in unique_defs {
+            let ConstraintDef::Unique { name, columns, .. } = def else {
+                unreachable!()
+            };
+            let index_name = format!("{}_{}_idx", table_name.as_str(), name);
+            let index_id = catalog.create_index(
+                txn,
+                &index_name,
+                table_name.as_str(),
+                file_id,
+                &columns,
+                IndexKind::Btree,
+            )?;
+            catalog.add_constraint(txn, file_id, ConstraintDef::Unique {
+                name,
+                columns,
+                backing_index_id: Some(index_id),
+            })?;
+        }
+
         Ok(StatementResult::table_created(
             table_name.as_str().to_owned(),
             file_id,
