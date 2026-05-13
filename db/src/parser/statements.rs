@@ -613,7 +613,7 @@ impl From<&[ColumnDef]> for TupleSchema {
     fn from(columns: &[ColumnDef]) -> Self {
         TupleSchema::new(
             columns
-                .into_iter()
+                .iter()
                 .map(|col| {
                     let field_nullable = col.nullable && !col.primary_key;
                     let mut field = Field::new_non_empty(col.name.clone(), col.col_type);

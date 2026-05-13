@@ -126,8 +126,10 @@ impl Tuple {
     /// # Example
     ///
     /// ```
+    /// use storemy::{Value, primitives::ColumnId, tuple::Tuple};
+    ///
     /// let tuple = Tuple::new(vec![Value::Int32(1), Value::String("test".into())]);
-    /// let col_id = ColumnId::from(1);
+    /// let col_id = ColumnId::try_from(1usize).unwrap();
     /// assert_eq!(tuple.get_col(col_id), Some(&Value::String("test".into())));
     /// ```
     pub fn get_col(&self, col: ColumnId) -> Option<&Value> {
