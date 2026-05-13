@@ -946,6 +946,12 @@ pub(super) struct AutoIncrementRow {
     pub(super) next_value: u64,
 }
 
+impl AutoIncrementRow {
+    pub(super) fn new(table_id: FileId, column_id: ColumnId, next_value: u64) -> Self {
+        Self { table_id, column_id, next_value }
+    }
+}
+
 impl From<&AutoIncrementRow> for Tuple {
     fn from(row: &AutoIncrementRow) -> Tuple {
         Tuple::new(vec![

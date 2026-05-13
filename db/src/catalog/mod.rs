@@ -178,6 +178,11 @@ pub struct TableInfo {
     /// cache load. Inbound FKs (this table as parent) are not cached here —
     /// they're queried on demand during `DROP TABLE`.
     pub foreign_keys: Vec<ForeignKey>,
+    /// The column that carries `AUTO_INCREMENT`, if any.
+    ///
+    /// There can be at most one such column per table (enforced at `CREATE TABLE`
+    /// time). `None` means this table has no auto-increment column.
+    pub auto_increment_column: Option<ColumnId>,
 }
 
 /// In-memory shape of one UNIQUE constraint.
@@ -246,6 +251,7 @@ impl TableInfo {
             primary_key,
             unique_constraints: Vec::new(),
             foreign_keys: Vec::new(),
+            auto_increment_column: None,
         }
     }
 }
