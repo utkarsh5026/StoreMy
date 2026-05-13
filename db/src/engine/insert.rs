@@ -28,7 +28,7 @@ use std::{
 use crate::{
     FileId, IndexId, TransactionId, Value,
     catalog::{LiveIndex, manager::Catalog},
-    engine::{ConstraintViolation, Engine, EngineError, StatementResult, scope::bind_value_for},
+    engine::{ConstraintViolation, Engine, EngineError, StatementResult},
     parser::statements::{InsertSource, InsertStatement},
     primitives::NonEmptyString,
     transaction::Transaction,
@@ -134,6 +134,8 @@ impl Engine<'_> {
         let indexes = catalog.indexes_for(file_id);
         let fk_checks = Self::prepare_outbound_ref_checks(catalog, txn, file_id)?;
 
+        // If there are no indexes or FK constraints, we can bulk insert the tuples.
+        // This is the fast path.
         if indexes.is_empty() && fk_checks.is_empty() {
             return heap
                 .bulk_insert(tid, tuples)
@@ -141,6 +143,8 @@ impl Engine<'_> {
                 .map_err(EngineError::from);
         }
 
+        // If there are indexes or FK constraints, we need to check each tuple individually.
+        // We collect the unique index checks first to avoid making multiple catalog round-trips.
         let unique_checks = Self::collect_unique_index_checks(&indexes, catalog, txn, file_id)?;
 
         let mut count = 0;
@@ -198,6 +202,12 @@ impl Engine<'_> {
         let logical_n = schema.logical_num_fields();
         let physical_n = schema.physical_num_fields();
 
+        // If no column list is provided (i.e., positional/unnamed INSERT), build a mapping of
+        // physical column indices to value positions by assigning user values to the first N
+        // non-dropped logical columns in schema order.
+        //
+        // For every physical column slot, if it is not dropped, we assign the next available
+        // user-supplied value index to that slot. Dropped columns are mapped to None.
         let Some(cols) = cols else {
             let mut perm = vec![None; physical_n];
             let mut logical_idx = 0usize;
@@ -212,6 +222,9 @@ impl Engine<'_> {
 
         Self::validate_named_insert_columns(cols, schema, table, logical_n)?;
 
+        // If a column list is provided (i.e., named INSERT), build a mapping of physical column
+        // indices to value positions by mapping each physical column to the user-supplied column
+        // name in the provided column list.
         let mut perm = vec![None; physical_n];
         for (phys_i, field) in schema.physical_iter().enumerate() {
             if !field.is_dropped {
@@ -247,39 +260,35 @@ impl Engine<'_> {
         table: &str,
         logical_n: usize,
     ) -> Result<(), EngineError> {
+        let table = table.to_string();
         let mut seen: HashSet<&str> = HashSet::with_capacity(cols.len());
+
         for c in cols {
-            match schema.field_by_name(c) {
-                None => {
-                    return Err(EngineError::UnknownColumn {
-                        table: table.into(),
-                        column: c.as_str().to_string(),
-                    });
-                }
-                Some((_, field)) if field.is_dropped => {
-                    return Err(EngineError::UnknownColumn {
-                        table: table.into(),
-                        column: c.as_str().to_string(),
-                    });
-                }
-                Some(_) => {}
-            }
-            if !seen.insert(c.as_str()) {
+            let column = c.as_str();
+            if !seen.insert(column) {
                 return Err(EngineError::DuplicateInsertColumn {
-                    table: table.into(),
-                    column: c.as_str().to_string(),
+                    table,
+                    column: column.to_string(),
+                });
+            }
+
+            // Check that the column exists in the schema and is not dropped.
+            let field = schema.field_by_name(c);
+            if field.is_none() || field.unwrap().1.is_dropped {
+                return Err(EngineError::UnknownColumn {
+                    table,
+                    column: column.to_string(),
                 });
             }
         }
 
         if seen.len() != logical_n {
             return Err(EngineError::WrongColumnCount {
-                table: table.into(),
+                table,
                 expected: logical_n,
                 got: seen.len(),
             });
         }
-
         Ok(())
     }
 
@@ -318,12 +327,16 @@ impl Engine<'_> {
             });
         }
 
+        // For each physical column, if it is not dropped, we bind the value from the user-supplied
+        // value position using `bind_value_for`. If it is dropped, we fill it with the column's
+        // stored default or `NULL`.
         schema
             .physical_iter()
             .zip(projection.iter())
             .map(|(field, proj)| {
                 if let Some(user_idx) = proj {
-                    bind_value_for(&row[*user_idx], field, table)
+                    let value = &row[*user_idx];
+                    Self::bind_value_for(value, field, table)
                 } else {
                     Ok(field.missing_default_value.clone().unwrap_or(Value::Null))
                 }
@@ -345,21 +358,26 @@ impl Engine<'_> {
         if indexes.is_empty() {
             return Ok(Vec::new());
         }
-        let info = catalog.get_table_info_by_id(txn, file_id)?;
-        let backing_ids: HashMap<IndexId, String> = info
+
+        let table = catalog.get_table_info_by_id(txn, file_id)?;
+
+        // Collect the unique constraint names and their backing index IDs.
+        // For each unique constraint, if it has a backing index, we add the constraint name and
+        // the index ID to the map.
+        let backing_ids = table
             .unique_constraints
             .into_iter()
-            .filter_map(|uc| {
-                uc.backing_index_id
-                    .map(|id| (id, uc.name.as_str().to_owned()))
-            })
-            .collect();
+            .filter_map(|uc| uc.backing_index_id.map(|id| (id, uc.name.into_inner())))
+            .collect::<HashMap<IndexId, String>>();
+
+        // For each index, if it has a backing unique constraint, we add the constraint name and
+        // the index ID to the map.
         Ok(indexes
             .iter()
             .filter_map(|live| {
                 backing_ids
                     .get(&live.index_id)
-                    .map(|name| (name.clone(), Arc::clone(live)))
+                    .map(|constraint_name| (constraint_name.clone(), Arc::clone(live)))
             })
             .collect())
     }
@@ -418,12 +436,14 @@ impl Engine<'_> {
     ) -> Result<(), EngineError> {
         for (constraint, live) in unique_checks {
             let key = live.create_index_key(tuple)?;
-            if !live.access.search(tid, &key)?.is_empty() {
-                return Err(ConstraintViolation::UniqueViolation {
-                    constraint: constraint.clone(),
-                }
-                .into());
+            let hits = live.access.search(tid, &key)?;
+            if hits.is_empty() {
+                continue;
             }
+            return Err(ConstraintViolation::UniqueViolation {
+                constraint: constraint.clone(),
+            }
+            .into());
         }
         Ok(())
     }

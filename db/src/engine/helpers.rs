@@ -3,9 +3,9 @@ use std::collections::HashSet;
 use fallible_iterator::FallibleIterator;
 
 use crate::{
-    TransactionId,
+    TransactionId, Value,
     catalog::{CatalogError, ConstraintDef, TableInfo, manager::Catalog, systable::FkAction},
-    engine::{Engine, EngineError},
+    engine::{ConstraintViolation, Engine, EngineError},
     execution::expression::BooleanExpression,
     heap::file::HeapFile,
     parser::statements::TableConstraint,
@@ -301,5 +301,64 @@ impl Engine<'_> {
             }
         }
         Ok(out)
+    }
+
+    /// Enforces all column-level constraints for a single value before it is written.
+    ///
+    /// Currently checks:
+    /// - **NOT NULL** — rejects [`Value::Null`] when the field is not nullable.
+    ///
+    /// Future constraints to add here:
+    /// - CHECK expressions (e.g. `price > 0`) — evaluate the expression against the value and
+    ///   return [`ConstraintViolation::CheckViolation`] on failure.
+    ///
+    /// # Errors
+    ///
+    /// - [`ConstraintViolation::NullViolation`] if a null is supplied for a `NOT NULL` column.
+    pub(super) fn check_column_constraints(
+        value: &Value,
+        field: &Field,
+        table: &str,
+    ) -> Result<(), EngineError> {
+        // NOT NULL
+        if matches!(value, Value::Null) && !field.nullable {
+            return Err(ConstraintViolation::NullViolation {
+                table: table.into(),
+                column: field.name.to_string(),
+            }
+            .into());
+        }
+
+        // TODO: CHECK constraints — evaluate field.check_expr against `value` here.
+
+        Ok(())
+    }
+
+    /// Coerces a literal [`Value`] to the type declared by a table column ([`Field`]).
+    ///
+    /// Enforces column-level constraints via [`Self::check_column_constraints`] first, then
+    /// converts the value to the column's declared type. Returns [`Value::Null`] unchanged for
+    /// nullable columns.
+    ///
+    /// # Errors
+    ///
+    /// - [`ConstraintViolation::NullViolation`] if a null value is bound to a non-nullable column.
+    /// - [`EngineError::TypeMismatch`] if the value cannot be coerced to the column type.
+    pub(super) fn bind_value_for(
+        value: &Value,
+        field: &Field,
+        table: &str,
+    ) -> Result<Value, EngineError> {
+        Self::check_column_constraints(value, field, table)?;
+
+        if matches!(value, Value::Null) {
+            return Ok(Value::Null);
+        }
+
+        Value::try_from((value, field.field_type)).map_err(|e| EngineError::TypeMismatch {
+            column: field.name.to_string(),
+            expected: field.field_type.to_string(),
+            got: e.to_string(),
+        })
     }
 }
