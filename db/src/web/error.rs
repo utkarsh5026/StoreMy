@@ -10,7 +10,7 @@ use axum::{
 };
 use serde::Serialize;
 
-use crate::engine::EngineError;
+use crate::engine::{ConstraintViolation, EngineError};
 
 #[derive(Debug, Serialize)]
 pub struct ErrorBody {
@@ -62,15 +62,30 @@ fn engine_error_to_http(e: &EngineError) -> (StatusCode, &'static str, String) {
         E::Unsupported(_) => (StatusCode::BAD_REQUEST, "unsupported"),
         E::TableNotFound(_) => (StatusCode::NOT_FOUND, "table_not_found"),
         E::TableAlreadyExists(_) => (StatusCode::CONFLICT, "table_exists"),
-        E::ColumnNotFound { .. } => (StatusCode::BAD_REQUEST, "column_not_found"),
-        E::DuplicateInsertColumn { .. } => (StatusCode::BAD_REQUEST, "duplicate_column"),
+        E::IndexAlreadyExists(_) => (StatusCode::CONFLICT, "index_exists"),
+        E::UnknownIndex(_) => (StatusCode::NOT_FOUND, "index_not_found"),
+        E::PrimaryKeyAlreadyExists(_) => (StatusCode::CONFLICT, "primary_key_exists"),
+        E::UnknownColumn { .. } => (StatusCode::BAD_REQUEST, "column_not_found"),
+        E::DuplicateColumn { .. } | E::DuplicateInsertColumn { .. } => {
+            (StatusCode::BAD_REQUEST, "duplicate_column")
+        }
+        E::AmbiguousColumn { .. } => (StatusCode::BAD_REQUEST, "ambiguous_column"),
         E::WrongColumnCount { .. } => (StatusCode::BAD_REQUEST, "wrong_column_count"),
-        E::NullViolation { .. } => (StatusCode::BAD_REQUEST, "null_violation"),
-        E::UniqueViolation { .. } => (StatusCode::CONFLICT, "unique_violation"),
-        E::ForeignKeyViolation { .. } => (StatusCode::CONFLICT, "fk_violation"),
-        E::FkParentViolation { .. } => (StatusCode::CONFLICT, "fk_parent_violation"),
         E::TypeMismatch { .. } | E::TypeError(_) => (StatusCode::BAD_REQUEST, "type_error"),
-        E::Bind(_) => (StatusCode::BAD_REQUEST, "bind"),
+        E::Constraint(c) => match c {
+            ConstraintViolation::NullViolation { .. } => {
+                (StatusCode::BAD_REQUEST, "null_violation")
+            }
+            ConstraintViolation::UniqueViolation { .. } => {
+                (StatusCode::CONFLICT, "unique_violation")
+            }
+            ConstraintViolation::ForeignKeyViolation { .. } => {
+                (StatusCode::CONFLICT, "fk_violation")
+            }
+            ConstraintViolation::FkParentViolation { .. } => {
+                (StatusCode::CONFLICT, "fk_parent_violation")
+            }
+        },
         E::Catalog(_)
         | E::Transaction(_)
         | E::Storage(_)
