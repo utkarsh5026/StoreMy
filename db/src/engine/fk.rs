@@ -116,6 +116,19 @@ pub(super) struct InboundParentFkCheck {
     pub maintenance_indexes: Vec<Arc<LiveIndex>>,
 }
 
+/// A before/after tuple pair for a single-row mutation (UPDATE, CASCADE, SET NULL).
+///
+/// Bundles the pre- and post-mutation state so callers cannot silently swap the two
+/// `&Tuple` arguments that appear in every constraint-check and index-sync function.
+/// `Copy` because both fields are shared references.
+#[derive(Clone, Copy)]
+pub(super) struct RowChange<'a> {
+    /// The tuple as it existed before the mutation.
+    pub before: &'a Tuple,
+    /// The tuple as it will look after the mutation is applied.
+    pub after: &'a Tuple,
+}
+
 impl Engine<'_> {
     /// Builds one [`ParentFkCheck`] per foreign key declared on the table `file_id`.
     ///
@@ -441,8 +454,8 @@ impl Engine<'_> {
     /// columns change.
     ///
     /// For each [`InboundParentFkCheck`], first checks whether any ref-column value actually
-    /// changed between `old_row` and `new_row` — if nothing changed the constraint cannot be
-    /// violated and the loop continues.
+    /// changed between `change.before` and `change.after` — if nothing changed the constraint
+    /// cannot be violated and the loop continues.
     ///
     /// When a ref-column did change, [`Self::find_referencing_rows`] locates child rows that
     /// still point at the *old* key.  If none exist the constraint is satisfied.  Otherwise
@@ -461,22 +474,19 @@ impl Engine<'_> {
     ///   (or equivalent) is declared and matching child rows are found.
     /// - Storage errors propagated from heap writes or index maintenance.
     pub(super) fn enforce_referential_actions_on_update(
-        _catalog: &Catalog,
-        _txn: &Transaction<'_>,
         inbound_checks: &[InboundParentFkCheck],
-        old_row: &Tuple,
-        new_row: &Tuple,
+        change: RowChange<'_>,
         tid: TransactionId,
     ) -> Result<(), EngineError> {
         for fk in inbound_checks {
             let ref_changed = fk.col_pairs.iter().any(|&(_, ref_col)| {
-                old_row.get(usize::from(ref_col)) != new_row.get(usize::from(ref_col))
+                change.before.get(usize::from(ref_col)) != change.after.get(usize::from(ref_col))
             });
             if !ref_changed {
                 continue;
             }
 
-            let child_rows = Self::find_referencing_rows(fk, old_row, tid)?;
+            let child_rows = Self::find_referencing_rows(fk, change.before, tid)?;
             if child_rows.is_empty() {
                 continue;
             }
@@ -492,7 +502,7 @@ impl Engine<'_> {
                         let old = child_tuple.clone();
                         for &(child_col, ref_col) in &fk.col_pairs {
                             if let Some(v) = child_tuple.get_mut(usize::from(child_col)) {
-                                *v = new_row
+                                *v = change.after
                                     .get(usize::from(ref_col))
                                     .cloned()
                                     .unwrap_or(Value::Null);
@@ -503,8 +513,7 @@ impl Engine<'_> {
                             &fk.maintenance_indexes,
                             tid,
                             rid,
-                            &old,
-                            &child_tuple,
+                            RowChange { before: &old, after: &child_tuple },
                         )?;
                     }
                 }
@@ -543,8 +552,7 @@ impl Engine<'_> {
                 &fk.maintenance_indexes,
                 tid,
                 rid,
-                &old,
-                &child_tuple,
+                RowChange { before: &old, after: &child_tuple },
             )?;
         }
         Ok(())
@@ -552,10 +560,10 @@ impl Engine<'_> {
 
     /// Updates indexes after a `CASCADE` or `SET NULL` modification to a child row.
     ///
-    /// For each index in `maintenance_indexes`, computes the key for both `old` and `new`.
-    /// When the keys differ — meaning this index covers a column that was changed — it deletes
-    /// the old entry and inserts the new one.  Indexes whose key did not change are left
-    /// untouched to avoid unnecessary writes.
+    /// For each index in `maintenance_indexes`, computes the key for both `change.before` and
+    /// `change.after`.  When the keys differ — meaning this index covers a column that was
+    /// changed — it deletes the old entry and inserts the new one.  Indexes whose key did not
+    /// change are left untouched to avoid unnecessary writes.
     ///
     /// # Errors
     ///
@@ -564,12 +572,11 @@ impl Engine<'_> {
         maintenance_indexes: &[Arc<LiveIndex>],
         tid: TransactionId,
         rid: RecordId,
-        old: &Tuple,
-        new: &Tuple,
+        change: RowChange<'_>,
     ) -> Result<(), EngineError> {
         for index in maintenance_indexes {
-            let old_key = index.create_index_key(old)?;
-            let new_key = index.create_index_key(new)?;
+            let old_key = index.create_index_key(change.before)?;
+            let new_key = index.create_index_key(change.after)?;
             if old_key != new_key {
                 index.access.delete(tid, &old_key, rid)?;
                 index.access.insert(tid, &new_key, rid)?;

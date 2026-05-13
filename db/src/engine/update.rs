@@ -45,18 +45,18 @@ use std::{
     sync::Arc,
 };
 
-use super::fk::ParentFkCheck;
+use super::fk::{ParentFkCheck, RowChange};
 use crate::{
     FileId, IndexId, TransactionId, Value,
     catalog::{LiveIndex, manager::Catalog},
     engine::{
         ConstraintViolation, Engine, EngineError, StatementResult,
-        scope::{ColumnResolver, SingleTableScope, bind_value_for},
+        fk::InboundParentFkCheck,
+        scope::{ColumnResolver, SingleTableScope},
     },
     parser::statements::{Assignment, Expr, UpdateStatement},
     primitives::ColumnId,
     transaction::Transaction,
-    tuple::{Tuple, TupleSchema},
 };
 
 impl Engine<'_> {
@@ -96,70 +96,77 @@ impl Engine<'_> {
             where_clause,
         } = stmt;
 
-        let info = catalog.get_table_info(txn, &table_name)?;
-        let scope = SingleTableScope::from_info(info, alias);
-
-        let bound_assignments = Self::bind_assignments(&scope, assignments)?;
+        let scope =
+            SingleTableScope::from_info(catalog.get_table_info(txn, table_name.as_str())?, alias);
+        let heap_file = catalog.get_table_heap(scope.file_id)?;
 
         let filter = where_clause.map(|w| scope.bind_where(&w)).transpose()?;
-        let SingleTableScope {
-            name,
-            file_id,
-            schema,
-            ..
-        } = scope;
-
-        let heap_file = catalog.get_table_heap(file_id)?;
         let rows = Self::collect_matching_rows(&heap_file, txn.transaction_id(), filter.as_ref())?;
-        let updated = rows.len();
 
+        let assignments = Self::bind_assignments(&scope, assignments)?;
         let affected_indexes =
-            Self::get_affected_indices(bound_assignments.as_slice(), catalog, file_id);
+            Self::get_affected_indices(assignments.as_slice(), catalog, scope.file_id);
+        let unique_checks = if affected_indexes.is_empty() {
+            HashMap::new()
+        } else {
+            Self::build_unique_check_map(catalog, txn, scope.file_id)?
+        };
 
-        let assignment_cols: HashSet<ColumnId> =
-            bound_assignments.iter().map(|(c, _)| *c).collect();
+        let assignment_cols = assignments
+            .iter()
+            .map(|(c, _)| *c)
+            .collect::<HashSet<ColumnId>>();
 
         let (outbound_fk_checks, inbound_checks) =
-            Self::prepare_fk_checks_for_update(catalog, txn, file_id, &assignment_cols)?;
+            Self::prepare_fk_checks_for_update(catalog, txn, scope.file_id, &assignment_cols)?;
 
         let needs_old = !affected_indexes.is_empty()
             || !outbound_fk_checks.is_empty()
             || !inbound_checks.is_empty();
 
-        let unique_checks = Self::build_unique_check_map(&affected_indexes, catalog, txn, file_id)?;
-
         let txn_id = txn.transaction_id();
+        let mut updated = 0;
         for (rid, mut tuple) in rows {
             let old_tuple = needs_old.then(|| tuple.clone());
-            Self::apply_update_assignments(&mut tuple, &bound_assignments, &schema)?;
 
+            // Apply the assignments to the tuple in-place.
+            // This is more efficient than building a new tuple and applying the assignments one by
+            // one.
+            for (col_id, value) in &assignments {
+                let col_id = usize::from(*col_id);
+                tuple
+                    .set_field(col_id, value.clone(), &scope.schema)
+                    .map_err(|e| EngineError::TypeError(e.to_string()))?;
+            }
+
+            // If an old tuple was captured before assignment, perform all
+            // necessary checks for data integrity constraints on the updated values.
+            //
+            // This includes:
+            // - Checking unique constraints in affected indexes using the old and new tuple
+            // - Validating outgoing foreign key constraints (where this table is the origin)
+            // - Enforcing inbound foreign key referential actions (where this table is referenced)
             if let Some(old) = &old_tuple {
-                Self::check_unique_for_update(
-                    &affected_indexes,
-                    &unique_checks,
-                    txn_id,
-                    old,
-                    &tuple,
-                )?;
-                Self::check_outbound_fks_for_update(&outbound_fk_checks, old, &tuple, txn_id)?;
-                Self::enforce_referential_actions_on_update(
-                    catalog,
-                    txn,
-                    &inbound_checks,
-                    old,
-                    &tuple,
-                    txn_id,
-                )?;
+                let change = RowChange {
+                    before: old,
+                    after: &tuple,
+                };
+                Self::check_unique_for_update(&affected_indexes, &unique_checks, txn_id, change)?;
+                Self::check_outbound_fks_for_update(&outbound_fk_checks, change, txn_id)?;
+                Self::enforce_referential_actions_on_update(&inbound_checks, change, txn_id)?;
             }
 
             heap_file.update_tuple(txn_id, rid, &tuple)?;
-
             if let Some(old) = &old_tuple {
-                Self::sync_indexes_after_fk_action(&affected_indexes, txn_id, rid, old, &tuple)?;
+                Self::sync_indexes_after_fk_action(&affected_indexes, txn_id, rid, RowChange {
+                    before: old,
+                    after: &tuple,
+                })?;
             }
+            updated += 1;
         }
 
-        Ok(StatementResult::updated(name, updated))
+        Ok(StatementResult::updated(scope.name.as_str(), updated))
     }
 
     /// Returns only the indexes that must be maintained for this UPDATE.
@@ -173,7 +180,13 @@ impl Engine<'_> {
         catalog: &Catalog,
         file_id: FileId,
     ) -> Vec<Arc<LiveIndex>> {
-        let touched_cols: HashSet<ColumnId> = assignments.iter().map(|(c, _)| *c).collect();
+        let touched_cols = assignments
+            .iter()
+            .map(|(c, _)| *c)
+            .collect::<HashSet<ColumnId>>();
+
+        // We find the indexes that cover at least one column being updated —
+        // indexes on untouched columns don't need to be maintained.
         catalog
             .indexes_for(file_id)
             .into_iter()
@@ -190,8 +203,6 @@ impl Engine<'_> {
     /// Walks each `SET col = expr` item and:
     /// - Resolves `col` against the table schema, returning an error if it does not exist.
     /// - Rejects the same column appearing twice (`SET a = 1, a = 2` is illegal).
-    /// - Requires the right-hand side to be a literal value; expression assignment (e.g. `SET x = x
-    ///   + 1`) is not yet supported.
     /// - Coerces the literal to the column's declared type via [`bind_value_for`].
     ///
     /// # Errors
@@ -205,23 +216,31 @@ impl Engine<'_> {
         assignments: Vec<Assignment>,
     ) -> Result<Vec<(ColumnId, Value)>, EngineError> {
         let mut seen: HashSet<ColumnId> = HashSet::with_capacity(assignments.len());
-        let mut bound: Vec<(ColumnId, Value)> = Vec::with_capacity(assignments.len());
-        for Assignment { column, value } in assignments {
-            let (col_id, field) =
-                Self::require_column(&scope.schema, scope.name.as_str(), column.as_str())?;
-            if !seen.insert(col_id) {
-                return Err(EngineError::DuplicateColumn {
-                    table: scope.name.as_str().to_string(),
-                    column: column.as_str().to_string(),
-                });
-            }
-            let Expr::Literal(lit) = value else {
-                return Err(EngineError::Unsupported(
-                    "UPDATE assignment expressions are not yet supported (literals only)".into(),
-                ));
-            };
-            bound.push((col_id, bind_value_for(&lit, field, scope.name.as_str())?));
-        }
+        let table_name = scope.name.as_str();
+
+        let bound = assignments
+            .into_iter()
+            .map(|ass| {
+                let column = ass.column.into_inner();
+
+                let (col_id, field) = Self::require_column(&scope.schema, table_name, &column)?;
+                if seen.contains(&col_id) {
+                    return Err(EngineError::DuplicateColumn {
+                        table: table_name.to_string(),
+                        column,
+                    });
+                }
+
+                seen.insert(col_id);
+                let Expr::Literal(lit) = ass.value else {
+                    return Err(EngineError::Unsupported(
+                        "UPDATE assignment expressions are not yet supported (literals only)"
+                            .into(),
+                    ));
+                };
+                Ok((col_id, Self::bind_value_for(&lit, field, table_name)?))
+            })
+            .collect::<Result<Vec<(ColumnId, Value)>, EngineError>>()?;
         Ok(bound)
     }
 
@@ -243,22 +262,31 @@ impl Engine<'_> {
         txn: &Transaction<'_>,
         file_id: FileId,
         assignment_cols: &HashSet<ColumnId>,
-    ) -> Result<(Vec<ParentFkCheck>, Vec<super::fk::InboundParentFkCheck>), EngineError> {
+    ) -> Result<(Vec<ParentFkCheck>, Vec<InboundParentFkCheck>), EngineError> {
+        let contains_assignment_col = |col: ColumnId| assignment_cols.contains(&col);
+
+        // Outbound FK checks: constraints declared on `file_id`'s table.
+        // Only those whose local FK columns overlap `assignment_cols` are kept —
+        // if none of the FK columns changed, the parent reference cannot be broken.
         let outbound = Self::prepare_outbound_ref_checks(catalog, txn, file_id)?
             .into_iter()
             .filter(|fk| {
                 fk.local_ref_pairs
                     .iter()
-                    .any(|&(local_col, _)| assignment_cols.contains(&local_col))
+                    .any(|&(local_col, _)| contains_assignment_col(local_col))
             })
-            .collect();
+            .collect::<Vec<_>>();
 
+        // Inbound FK checks: constraints where `file_id`'s table is the
+        // referenced parent. Only those whose referenced columns overlap
+        // `assignment_cols` are kept — if the referenced key didn't change, no
+        // child row can be affected.
         let inbound = Self::prepare_inbound_ref_checks(catalog, txn, file_id)?
             .into_iter()
             .filter(|fk| {
                 fk.col_pairs
                     .iter()
-                    .any(|&(_, ref_col)| assignment_cols.contains(&ref_col))
+                    .any(|&(_, ref_col)| contains_assignment_col(ref_col))
             })
             .collect();
 
@@ -276,16 +304,12 @@ impl Engine<'_> {
     /// The map is used in [`Self::check_unique_for_update`] to produce a
     /// human-readable constraint name in the error message.
     fn build_unique_check_map(
-        affected_indexes: &[Arc<LiveIndex>],
         catalog: &Catalog,
         txn: &Transaction<'_>,
         file_id: FileId,
     ) -> Result<HashMap<IndexId, String>, EngineError> {
-        if affected_indexes.is_empty() {
-            return Ok(HashMap::new());
-        }
-        let info = catalog.get_table_info_by_id(txn, file_id)?;
-        Ok(info
+        let table = catalog.get_table_info_by_id(txn, file_id)?;
+        Ok(table
             .unique_constraints
             .into_iter()
             .filter_map(|uc| {
@@ -293,29 +317,6 @@ impl Engine<'_> {
                     .map(|id| (id, uc.name.as_str().to_owned()))
             })
             .collect())
-    }
-
-    /// Applies every bound `SET` assignment to `tuple` in-place.
-    ///
-    /// Each `(col_id, value)` pair calls [`Tuple::set_field`] at the column's
-    /// ordinal position.  The schema is required by `set_field` to validate the
-    /// slot type before writing.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`EngineError::TypeError`] if `set_field` rejects the value
-    /// (e.g. type mismatch or out-of-bounds column index).
-    fn apply_update_assignments(
-        tuple: &mut Tuple,
-        assignments: &[(ColumnId, Value)],
-        schema: &TupleSchema,
-    ) -> Result<(), EngineError> {
-        for (col_id, value) in assignments {
-            tuple
-                .set_field(usize::from(*col_id), value.clone(), schema)
-                .map_err(|e| EngineError::TypeError(e.to_string()))?;
-        }
-        Ok(())
     }
 
     /// Checks that the updated tuple does not violate any UNIQUE constraint.
@@ -337,16 +338,15 @@ impl Engine<'_> {
         affected_indexes: &[Arc<LiveIndex>],
         unique_checks: &HashMap<IndexId, String>,
         txn_id: TransactionId,
-        old_tuple: &Tuple,
-        new_tuple: &Tuple,
+        change: RowChange<'_>,
     ) -> Result<(), EngineError> {
         for live in affected_indexes {
             let Some(constraint) = unique_checks.get(&live.index_id) else {
                 continue;
             };
-            let old_key = live.create_index_key(old_tuple)?;
-            let new_key = live.create_index_key(new_tuple)?;
-            if old_key != new_key && !live.access.search(txn_id, &new_key)?.is_empty() {
+            let old_key = live.create_index_key(change.before)?;
+            let new_key = live.create_index_key(change.after)?;
+            if old_key != new_key && live.access.search(txn_id, &new_key)?.len() > 1 {
                 return Err(ConstraintViolation::UniqueViolation {
                     constraint: constraint.clone(),
                 }
@@ -372,15 +372,15 @@ impl Engine<'_> {
     /// if the new child value references a parent row that does not exist.
     fn check_outbound_fks_for_update(
         outbound_checks: &[ParentFkCheck],
-        old_tuple: &Tuple,
-        new_tuple: &Tuple,
+        change: RowChange<'_>,
         tid: TransactionId,
     ) -> Result<(), EngineError> {
         for fk in outbound_checks {
             let cols_changed = fk.local_ref_pairs.iter().any(|&(local_col, _)| {
-                old_tuple.get(usize::from(local_col)) != new_tuple.get(usize::from(local_col))
+                change.before.get(usize::from(local_col))
+                    != change.after.get(usize::from(local_col))
             });
-            if cols_changed && !Self::referenced_row_exists(fk, new_tuple, tid)? {
+            if cols_changed && !Self::referenced_row_exists(fk, change.after, tid)? {
                 return Err(ConstraintViolation::ForeignKeyViolation {
                     constraint: fk.name.clone(),
                 }
