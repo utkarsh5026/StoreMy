@@ -894,4 +894,540 @@ mod tests {
             "users_unique_name"
         );
     }
+
+    #[test]
+    fn add_foreign_key_single_column_visible_immediately() {
+        let dir = tempdir().unwrap();
+        let (catalog, txn_mgr) = make_catalog_and_txn(dir.path());
+        let txn = txn_mgr.begin().unwrap();
+        let parent_id = catalog
+            .create_table(&txn, "orders", three_col_schema(), vec![])
+            .unwrap();
+        catalog
+            .add_constraint(&txn, parent_id, ConstraintDef::PrimaryKey {
+                columns: vec![col(0)],
+            })
+            .unwrap();
+        let child_id = catalog
+            .create_table(&txn, "items", three_col_schema(), vec![])
+            .unwrap();
+        catalog
+            .add_constraint(&txn, child_id, ConstraintDef::ForeignKey {
+                name: "items_fk_order".to_owned(),
+                local_columns: vec![col(0)],
+                ref_table_id: parent_id,
+                ref_columns: vec![col(0)],
+                on_delete: None,
+                on_update: None,
+            })
+            .unwrap();
+
+        let info = catalog.get_table_info(&txn, "items").unwrap();
+        txn.commit().unwrap();
+
+        assert_eq!(info.foreign_keys.len(), 1);
+        assert_eq!(info.foreign_keys[0].name.as_str(), "items_fk_order");
+        assert_eq!(info.foreign_keys[0].local_columns, vec![col(0)]);
+        assert_eq!(info.foreign_keys[0].ref_table_id, parent_id);
+        assert_eq!(info.foreign_keys[0].ref_columns, vec![col(0)]);
+    }
+
+    #[test]
+    fn add_foreign_key_references_unique_constraint() {
+        let dir = tempdir().unwrap();
+        let (catalog, txn_mgr) = make_catalog_and_txn(dir.path());
+        let txn = txn_mgr.begin().unwrap();
+        let parent_id = catalog
+            .create_table(&txn, "users", three_col_schema(), vec![])
+            .unwrap();
+        // No PK — reference a UNIQUE constraint instead.
+        catalog
+            .add_unique_constraint(&txn, parent_id, "users_unique_email", &[col(1)], None)
+            .unwrap();
+        let child_id = catalog
+            .create_table(&txn, "profiles", three_col_schema(), vec![])
+            .unwrap();
+        catalog
+            .add_constraint(&txn, child_id, ConstraintDef::ForeignKey {
+                name: "profiles_fk_email".to_owned(),
+                local_columns: vec![col(1)],
+                ref_table_id: parent_id,
+                ref_columns: vec![col(1)],
+                on_delete: None,
+                on_update: None,
+            })
+            .unwrap();
+
+        let info = catalog.get_table_info(&txn, "profiles").unwrap();
+        txn.commit().unwrap();
+
+        assert_eq!(info.foreign_keys.len(), 1);
+        assert_eq!(info.foreign_keys[0].ref_columns, vec![col(1)]);
+    }
+
+    #[test]
+    fn add_foreign_key_composite_columns_preserved_in_order() {
+        let dir = tempdir().unwrap();
+        let (catalog, txn_mgr) = make_catalog_and_txn(dir.path());
+        let txn = txn_mgr.begin().unwrap();
+        let parent_id = catalog
+            .create_table(&txn, "orders", three_col_schema(), vec![])
+            .unwrap();
+        catalog
+            .add_constraint(&txn, parent_id, ConstraintDef::PrimaryKey {
+                columns: vec![col(1), col(2)],
+            })
+            .unwrap();
+        let child_id = catalog
+            .create_table(&txn, "items", three_col_schema(), vec![])
+            .unwrap();
+        catalog
+            .add_constraint(&txn, child_id, ConstraintDef::ForeignKey {
+                name: "items_fk_composite".to_owned(),
+                local_columns: vec![col(1), col(2)],
+                ref_table_id: parent_id,
+                ref_columns: vec![col(1), col(2)],
+                on_delete: None,
+                on_update: None,
+            })
+            .unwrap();
+
+        let info = catalog.get_table_info(&txn, "items").unwrap();
+        txn.commit().unwrap();
+
+        assert_eq!(info.foreign_keys[0].local_columns, vec![col(1), col(2)]);
+        assert_eq!(info.foreign_keys[0].ref_columns, vec![col(1), col(2)]);
+    }
+
+    #[test]
+    fn add_foreign_key_survives_cache_evict_and_reload() {
+        let dir = tempdir().unwrap();
+        let (catalog, txn_mgr) = make_catalog_and_txn(dir.path());
+        let txn = txn_mgr.begin().unwrap();
+        let parent_id = catalog
+            .create_table(&txn, "orders", three_col_schema(), vec![])
+            .unwrap();
+        catalog
+            .add_constraint(&txn, parent_id, ConstraintDef::PrimaryKey {
+                columns: vec![col(0)],
+            })
+            .unwrap();
+        let child_id = catalog
+            .create_table(&txn, "items", three_col_schema(), vec![])
+            .unwrap();
+        catalog
+            .add_constraint(&txn, child_id, ConstraintDef::ForeignKey {
+                name: "items_fk_order".to_owned(),
+                local_columns: vec![col(0)],
+                ref_table_id: parent_id,
+                ref_columns: vec![col(0)],
+                on_delete: None,
+                on_update: None,
+            })
+            .unwrap();
+        txn.commit().unwrap();
+
+        catalog.user_tables.write().remove("items");
+
+        let txn2 = txn_mgr.begin().unwrap();
+        let info = catalog.get_table_info(&txn2, "items").unwrap();
+        txn2.commit().unwrap();
+
+        assert_eq!(info.foreign_keys.len(), 1);
+        assert_eq!(info.foreign_keys[0].name.as_str(), "items_fk_order");
+    }
+
+    #[test]
+    fn add_foreign_key_empty_columns_returns_error() {
+        let dir = tempdir().unwrap();
+        let (catalog, txn_mgr) = make_catalog_and_txn(dir.path());
+        let txn = txn_mgr.begin().unwrap();
+        let parent_id = catalog
+            .create_table(&txn, "orders", three_col_schema(), vec![])
+            .unwrap();
+        catalog
+            .add_constraint(&txn, parent_id, ConstraintDef::PrimaryKey {
+                columns: vec![col(0)],
+            })
+            .unwrap();
+        let child_id = catalog
+            .create_table(&txn, "items", three_col_schema(), vec![])
+            .unwrap();
+
+        let result = catalog.add_constraint(&txn, child_id, ConstraintDef::ForeignKey {
+            name: "bad".to_owned(),
+            local_columns: vec![],
+            ref_table_id: parent_id,
+            ref_columns: vec![],
+            on_delete: None,
+            on_update: None,
+        });
+
+        assert!(
+            matches!(result, Err(CatalogError::InvalidCatalogRow { .. })),
+            "expected InvalidCatalogRow for empty column list, got: {result:?}"
+        );
+        txn.commit().unwrap();
+    }
+
+    #[test]
+    fn add_foreign_key_column_count_mismatch_returns_error() {
+        let dir = tempdir().unwrap();
+        let (catalog, txn_mgr) = make_catalog_and_txn(dir.path());
+        let txn = txn_mgr.begin().unwrap();
+        let parent_id = catalog
+            .create_table(&txn, "orders", three_col_schema(), vec![])
+            .unwrap();
+        catalog
+            .add_constraint(&txn, parent_id, ConstraintDef::PrimaryKey {
+                columns: vec![col(0)],
+            })
+            .unwrap();
+        let child_id = catalog
+            .create_table(&txn, "items", three_col_schema(), vec![])
+            .unwrap();
+
+        let result = catalog.add_constraint(&txn, child_id, ConstraintDef::ForeignKey {
+            name: "bad".to_owned(),
+            local_columns: vec![col(0), col(1)],
+            ref_table_id: parent_id,
+            ref_columns: vec![col(0)],
+            on_delete: None,
+            on_update: None,
+        });
+
+        assert!(
+            matches!(result, Err(CatalogError::InvalidCatalogRow { .. })),
+            "expected InvalidCatalogRow for column count mismatch, got: {result:?}"
+        );
+        txn.commit().unwrap();
+    }
+
+    #[test]
+    fn add_foreign_key_referenced_columns_not_unique_returns_error() {
+        let dir = tempdir().unwrap();
+        let (catalog, txn_mgr) = make_catalog_and_txn(dir.path());
+        let txn = txn_mgr.begin().unwrap();
+        let parent_id = catalog
+            .create_table(&txn, "orders", three_col_schema(), vec![])
+            .unwrap();
+        // col(1) on orders has no PK or UNIQUE — FK must be rejected.
+        let child_id = catalog
+            .create_table(&txn, "items", three_col_schema(), vec![])
+            .unwrap();
+
+        let result = catalog.add_constraint(&txn, child_id, ConstraintDef::ForeignKey {
+            name: "bad".to_owned(),
+            local_columns: vec![col(1)],
+            ref_table_id: parent_id,
+            ref_columns: vec![col(1)],
+            on_delete: None,
+            on_update: None,
+        });
+
+        assert!(
+            matches!(result, Err(CatalogError::InvalidCatalogRow { .. })),
+            "expected InvalidCatalogRow when referenced columns are not PK/UNIQUE, got: {result:?}"
+        );
+        txn.commit().unwrap();
+    }
+
+    #[test]
+    fn add_foreign_key_duplicate_name_returns_error() {
+        let dir = tempdir().unwrap();
+        let (catalog, txn_mgr) = make_catalog_and_txn(dir.path());
+        let txn = txn_mgr.begin().unwrap();
+        let parent_id = catalog
+            .create_table(&txn, "orders", three_col_schema(), vec![])
+            .unwrap();
+        catalog
+            .add_constraint(&txn, parent_id, ConstraintDef::PrimaryKey {
+                columns: vec![col(0)],
+            })
+            .unwrap();
+        let child_id = catalog
+            .create_table(&txn, "items", three_col_schema(), vec![])
+            .unwrap();
+        catalog
+            .add_constraint(&txn, child_id, ConstraintDef::ForeignKey {
+                name: "my_fk".to_owned(),
+                local_columns: vec![col(0)],
+                ref_table_id: parent_id,
+                ref_columns: vec![col(0)],
+                on_delete: None,
+                on_update: None,
+            })
+            .unwrap();
+
+        let result = catalog.add_constraint(&txn, child_id, ConstraintDef::ForeignKey {
+            name: "my_fk".to_owned(),
+            local_columns: vec![col(1)],
+            ref_table_id: parent_id,
+            ref_columns: vec![col(0)],
+            on_delete: None,
+            on_update: None,
+        });
+
+        assert!(
+            matches!(result, Err(CatalogError::InvalidCatalogRow { .. })),
+            "expected InvalidCatalogRow for duplicate FK name, got: {result:?}"
+        );
+        txn.commit().unwrap();
+    }
+
+    #[test]
+    fn find_referencing_fks_returns_child_fk() {
+        let dir = tempdir().unwrap();
+        let (catalog, txn_mgr) = make_catalog_and_txn(dir.path());
+        let txn = txn_mgr.begin().unwrap();
+        let parent_id = catalog
+            .create_table(&txn, "orders", three_col_schema(), vec![])
+            .unwrap();
+        catalog
+            .add_constraint(&txn, parent_id, ConstraintDef::PrimaryKey {
+                columns: vec![col(0)],
+            })
+            .unwrap();
+        let child_id = catalog
+            .create_table(&txn, "items", three_col_schema(), vec![])
+            .unwrap();
+        catalog
+            .add_constraint(&txn, child_id, ConstraintDef::ForeignKey {
+                name: "items_fk_order".to_owned(),
+                local_columns: vec![col(0)],
+                ref_table_id: parent_id,
+                ref_columns: vec![col(0)],
+                on_delete: None,
+                on_update: None,
+            })
+            .unwrap();
+
+        let refs = catalog.find_referencing_fks(&txn, parent_id).unwrap();
+        txn.commit().unwrap();
+
+        assert_eq!(refs.len(), 1);
+        assert_eq!(refs[0].constraint_name, "items_fk_order");
+        assert_eq!(refs[0].child_table_id, child_id);
+        assert_eq!(refs[0].column_pairs, vec![(col(0), col(0))]);
+    }
+
+    #[test]
+    fn find_referencing_fks_empty_when_no_references() {
+        let dir = tempdir().unwrap();
+        let (catalog, txn_mgr) = make_catalog_and_txn(dir.path());
+        let txn = txn_mgr.begin().unwrap();
+        let table_id = catalog
+            .create_table(&txn, "orders", three_col_schema(), vec![])
+            .unwrap();
+
+        let refs = catalog.find_referencing_fks(&txn, table_id).unwrap();
+        txn.commit().unwrap();
+
+        assert!(refs.is_empty());
+    }
+
+    #[test]
+    fn find_referencing_fks_groups_composite_columns_into_single_entry() {
+        let dir = tempdir().unwrap();
+        let (catalog, txn_mgr) = make_catalog_and_txn(dir.path());
+        let txn = txn_mgr.begin().unwrap();
+        let parent_id = catalog
+            .create_table(&txn, "orders", three_col_schema(), vec![])
+            .unwrap();
+        catalog
+            .add_constraint(&txn, parent_id, ConstraintDef::PrimaryKey {
+                columns: vec![col(1), col(2)],
+            })
+            .unwrap();
+        let child_id = catalog
+            .create_table(&txn, "items", three_col_schema(), vec![])
+            .unwrap();
+        catalog
+            .add_constraint(&txn, child_id, ConstraintDef::ForeignKey {
+                name: "items_fk_composite".to_owned(),
+                local_columns: vec![col(1), col(2)],
+                ref_table_id: parent_id,
+                ref_columns: vec![col(1), col(2)],
+                on_delete: None,
+                on_update: None,
+            })
+            .unwrap();
+
+        let refs = catalog.find_referencing_fks(&txn, parent_id).unwrap();
+        txn.commit().unwrap();
+
+        assert_eq!(
+            refs.len(),
+            1,
+            "two FK rows must fold into one ReferencingFk"
+        );
+        assert_eq!(refs[0].column_pairs, vec![
+            (col(1), col(1)),
+            (col(2), col(2))
+        ]);
+    }
+
+    // ── drop_constraint (FK) ──────────────────────────────────────────────
+
+    #[test]
+    fn drop_fk_constraint_removes_from_foreign_keys() {
+        let dir = tempdir().unwrap();
+        let (catalog, txn_mgr) = make_catalog_and_txn(dir.path());
+        let txn = txn_mgr.begin().unwrap();
+        let parent_id = catalog
+            .create_table(&txn, "orders", three_col_schema(), vec![])
+            .unwrap();
+        catalog
+            .add_constraint(&txn, parent_id, ConstraintDef::PrimaryKey {
+                columns: vec![col(0)],
+            })
+            .unwrap();
+        let child_id = catalog
+            .create_table(&txn, "items", three_col_schema(), vec![])
+            .unwrap();
+        catalog
+            .add_constraint(&txn, child_id, ConstraintDef::ForeignKey {
+                name: "items_fk_order".to_owned(),
+                local_columns: vec![col(0)],
+                ref_table_id: parent_id,
+                ref_columns: vec![col(0)],
+                on_delete: None,
+                on_update: None,
+            })
+            .unwrap();
+        txn.commit().unwrap();
+
+        let txn2 = txn_mgr.begin().unwrap();
+        catalog
+            .drop_constraint(&txn2, child_id, "items_fk_order")
+            .unwrap();
+        let info = catalog.get_table_info(&txn2, "items").unwrap();
+        txn2.commit().unwrap();
+
+        assert!(info.foreign_keys.is_empty());
+    }
+
+    #[test]
+    fn drop_fk_constraint_survives_cache_evict_and_reload() {
+        let dir = tempdir().unwrap();
+        let (catalog, txn_mgr) = make_catalog_and_txn(dir.path());
+        let txn = txn_mgr.begin().unwrap();
+        let parent_id = catalog
+            .create_table(&txn, "orders", three_col_schema(), vec![])
+            .unwrap();
+        catalog
+            .add_constraint(&txn, parent_id, ConstraintDef::PrimaryKey {
+                columns: vec![col(0)],
+            })
+            .unwrap();
+        let child_id = catalog
+            .create_table(&txn, "items", three_col_schema(), vec![])
+            .unwrap();
+        catalog
+            .add_constraint(&txn, child_id, ConstraintDef::ForeignKey {
+                name: "items_fk_order".to_owned(),
+                local_columns: vec![col(0)],
+                ref_table_id: parent_id,
+                ref_columns: vec![col(0)],
+                on_delete: None,
+                on_update: None,
+            })
+            .unwrap();
+        txn.commit().unwrap();
+
+        let txn2 = txn_mgr.begin().unwrap();
+        catalog
+            .drop_constraint(&txn2, child_id, "items_fk_order")
+            .unwrap();
+        txn2.commit().unwrap();
+
+        catalog.user_tables.write().remove("items");
+
+        let txn3 = txn_mgr.begin().unwrap();
+        let info = catalog.get_table_info(&txn3, "items").unwrap();
+        txn3.commit().unwrap();
+
+        assert!(
+            info.foreign_keys.is_empty(),
+            "dropped FK must not reappear after reload"
+        );
+    }
+
+    // ── add_constraint: Check dispatch ────────────────────────────────────
+
+    #[test]
+    fn add_constraint_check_stored_without_error() {
+        let dir = tempdir().unwrap();
+        let (catalog, txn_mgr) = make_catalog_and_txn(dir.path());
+        let txn = txn_mgr.begin().unwrap();
+        let file_id = catalog
+            .create_table(&txn, "users", three_col_schema(), vec![])
+            .unwrap();
+
+        let result = catalog.add_constraint(&txn, file_id, ConstraintDef::Check {
+            name: "age_positive".to_owned(),
+            expr: "age > 0".to_owned(),
+        });
+        txn.commit().unwrap();
+
+        assert!(
+            result.is_ok(),
+            "add_constraint Check should succeed, got: {result:?}"
+        );
+    }
+
+    #[test]
+    fn add_constraint_check_duplicate_name_returns_error() {
+        let dir = tempdir().unwrap();
+        let (catalog, txn_mgr) = make_catalog_and_txn(dir.path());
+        let txn = txn_mgr.begin().unwrap();
+        let file_id = catalog
+            .create_table(&txn, "users", three_col_schema(), vec![])
+            .unwrap();
+        catalog
+            .add_constraint(&txn, file_id, ConstraintDef::Check {
+                name: "chk".to_owned(),
+                expr: "id > 0".to_owned(),
+            })
+            .unwrap();
+
+        let result = catalog.add_constraint(&txn, file_id, ConstraintDef::Check {
+            name: "chk".to_owned(),
+            expr: "id > 1".to_owned(),
+        });
+
+        assert!(
+            matches!(result, Err(CatalogError::InvalidCatalogRow { .. })),
+            "expected error for duplicate Check name, got: {result:?}"
+        );
+        txn.commit().unwrap();
+    }
+
+    #[test]
+    fn build_constraints_fk_header_with_no_detail_rows_returns_error() {
+        let dir = tempdir().unwrap();
+        let (catalog, txn_mgr) = make_catalog_and_txn(dir.path());
+        let txn = txn_mgr.begin().unwrap();
+        let file_id = catalog
+            .create_table(&txn, "t", three_col_schema(), vec![])
+            .unwrap();
+        let mut table = catalog.get_table_info(&txn, "t").unwrap();
+        txn.commit().unwrap();
+
+        let orphan_header = ConstraintRow {
+            constraint_name: NonEmptyString::try_from("orphan_fk").unwrap(),
+            table_id: file_id,
+            constraint_kind: ConstraintKind::ForeignKey,
+            expr: None,
+            backing_index_id: None,
+        };
+
+        let result =
+            Catalog::build_constraints_for_table(&mut table, vec![orphan_header], vec![], vec![]);
+
+        assert!(
+            matches!(result, Err(CatalogError::InvalidCatalogRow { .. })),
+            "expected error for FK header with no detail rows, got: {result:?}"
+        );
+    }
 }

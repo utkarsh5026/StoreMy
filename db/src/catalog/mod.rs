@@ -190,22 +190,34 @@ pub struct UniqueConstraint {
     pub backing_index_id: Option<IndexId>,
 }
 
-/// In-memory shape of one outgoing foreign key.
+/// Outgoing foreign key metadata cached on the **child** [`TableInfo`].
+///
+/// Reconstructed from `CATALOG_CONSTRAINTS` plus `CATALOG_FK_CONSTRAINTS` when the
+/// catalog loads the child table. For the inverse view (this table as parent,
+/// other tables referencing it), see [`ReferencingFk`] and
+/// [`Catalog::find_referencing_fks`](crate::catalog::manager::Catalog::find_referencing_fks).
 #[derive(Clone, Debug)]
 pub struct ForeignKey {
+    /// Constraint name as stored in the catalog (`CONSTRAINT` clause or generated default).
     pub name: NonEmptyString,
-    /// Local columns, in declaration order. Index `i` lines up with `ref_columns[i]`.
+    /// Child-side columns, in declaration order. Index `i` pairs with `ref_columns[i]`.
     pub local_columns: Vec<ColumnId>,
+    /// Heap [`FileId`] of the **referenced** (parent) table.
     pub ref_table_id: FileId,
+    /// Referenced columns on the parent table, in the same order as `local_columns`.
     pub ref_columns: Vec<ColumnId>,
+    /// `ON DELETE` action when present (`None` means no action / database default).
     pub on_delete: Option<FkAction>,
+    /// `ON UPDATE` action when present (`None` means no action / database default).
     pub on_update: Option<FkAction>,
 }
 
 /// Descriptor of a foreign key that points INTO a table (the table is the parent).
 ///
-/// Returned by [`Catalog::find_referencing_fks`] to let the engine locate and act
-/// on child rows when a parent row is deleted or its referenced columns change.
+/// Returned by
+/// [`Catalog::find_referencing_fks`](crate::catalog::manager::Catalog::find_referencing_fks) to let
+/// the engine locate and act on child rows when a parent row is deleted or its referenced
+/// columns change.
 #[derive(Clone, Debug)]
 pub struct ReferencingFk {
     pub constraint_name: String,
