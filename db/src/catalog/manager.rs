@@ -45,6 +45,7 @@ pub(super) struct SystemHeaps {
     constraints: Option<HeapFile>,
     constraint_columns: Option<HeapFile>,
     fk_constraints: Option<HeapFile>,
+    auto_increment: Option<HeapFile>,
 }
 
 impl SystemHeaps {
@@ -58,6 +59,7 @@ impl SystemHeaps {
             SystemTable::Constraints => self.constraints = Some(file),
             SystemTable::ConstraintColumns => self.constraint_columns = Some(file),
             SystemTable::FkConstraints => self.fk_constraints = Some(file),
+            SystemTable::AutoIncrement => self.auto_increment = Some(file),
         }
     }
 
@@ -71,6 +73,7 @@ impl SystemHeaps {
             SystemTable::Constraints => self.constraints.as_ref(),
             SystemTable::ConstraintColumns => self.constraint_columns.as_ref(),
             SystemTable::FkConstraints => self.fk_constraints.as_ref(),
+            SystemTable::AutoIncrement => self.auto_increment.as_ref(),
         }
     }
 }

@@ -21,6 +21,7 @@ pub enum SystemTable {
     Constraints,
     ConstraintColumns,
     FkConstraints,
+    AutoIncrement,
 }
 
 impl SystemTable {
@@ -33,6 +34,7 @@ impl SystemTable {
         SystemTable::Constraints,
         SystemTable::ConstraintColumns,
         SystemTable::FkConstraints,
+        SystemTable::AutoIncrement,
     ];
 
     pub const fn file_id(self) -> FileId {
@@ -44,6 +46,7 @@ impl SystemTable {
             SystemTable::Constraints => FileId(5),
             SystemTable::ConstraintColumns => FileId(6),
             SystemTable::FkConstraints => FileId(7),
+            SystemTable::AutoIncrement => FileId(8),
         }
     }
 
@@ -56,6 +59,7 @@ impl SystemTable {
             SystemTable::Constraints => "catalog_constraints.dat",
             SystemTable::ConstraintColumns => "catalog_constraint_columns.dat",
             SystemTable::FkConstraints => "catalog_fk_constraints.dat",
+            SystemTable::AutoIncrement => "catalog_auto_increment.dat",
         }
     }
 
@@ -68,6 +72,7 @@ impl SystemTable {
             SystemTable::Constraints => "CATALOG_CONSTRAINTS",
             SystemTable::ConstraintColumns => "CATALOG_CONSTRAINT_COLUMNS",
             SystemTable::FkConstraints => "CATALOG_FK_CONSTRAINTS",
+            SystemTable::AutoIncrement => "CATALOG_AUTO_INCREMENT",
         }
     }
 
@@ -133,6 +138,13 @@ impl SystemTable {
                 field("on_delete", Uint32).not_null(),
                 field("on_update", Uint32).not_null(),
             ],
+            // One row per AUTO_INCREMENT column. Stores the column's position
+            // and the next value to issue, so the counter survives restarts.
+            SystemTable::AutoIncrement => vec![
+                field("table_id", Uint64).not_null(),
+                field("column_id", Uint32).not_null(),
+                field("next_value", Uint64).not_null(),
+            ],
         };
 
         TupleSchema::new(fields)
@@ -178,6 +190,9 @@ impl SystemTable {
             }
             SystemTable::FkConstraints => {
                 FkConstraintRow::try_from(tuple)?;
+            }
+            SystemTable::AutoIncrement => {
+                AutoIncrementRow::try_from(tuple)?;
             }
         }
         Ok(())
@@ -916,6 +931,47 @@ impl CatalogRow for FkConstraintRow {
     const TABLE: SystemTable = SystemTable::FkConstraints;
 }
 
+/// One row in `SystemTable::AutoIncrement`.
+///
+/// There is at most one row per table (enforced at `CREATE TABLE` time). It
+/// records which column carries `AUTO_INCREMENT` and the next value the engine
+/// will issue. On every insert the engine reads this row, uses `next_value` as
+/// the generated ID, then writes `next_value + 1` back. On restart the catalog
+/// loads this row so the counter resumes where it left off.
+pub(super) struct AutoIncrementRow {
+    pub(super) table_id: FileId,
+    /// 0-based physical position of the auto-increment column in the table schema.
+    pub(super) column_id: ColumnId,
+    /// The value that will be assigned to the *next* inserted row.
+    pub(super) next_value: u64,
+}
+
+impl From<&AutoIncrementRow> for Tuple {
+    fn from(row: &AutoIncrementRow) -> Tuple {
+        Tuple::new(vec![
+            row.table_id.0.into(),
+            u32::from(row.column_id).into(),
+            row.next_value.into(),
+        ])
+    }
+}
+
+impl TryFrom<&Tuple> for AutoIncrementRow {
+    type Error = CatalogError;
+
+    fn try_from(t: &Tuple) -> Result<Self, Self::Error> {
+        Ok(Self {
+            table_id: FileId::from(t.read_field::<u64>(0)?),
+            column_id: catalog_row_try(ColumnId::try_from(t.read_field::<u32>(1)?))?,
+            next_value: t.read_field(2)?,
+        })
+    }
+}
+
+impl CatalogRow for AutoIncrementRow {
+    const TABLE: SystemTable = SystemTable::AutoIncrement;
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
@@ -1566,10 +1622,10 @@ mod tests {
         assert_eq!(got.on_update, row.on_update);
     }
 
-    // ALL must contain exactly seven variants.
+    // ALL must contain exactly eight variants.
     #[test]
-    fn test_system_table_all_has_seven_variants() {
-        assert_eq!(SystemTable::ALL.len(), 7);
+    fn test_system_table_all_has_eight_variants() {
+        assert_eq!(SystemTable::ALL.len(), 8);
         assert!(SystemTable::ALL.contains(&SystemTable::Tables));
         assert!(SystemTable::ALL.contains(&SystemTable::Columns));
         assert!(SystemTable::ALL.contains(&SystemTable::Indexes));
@@ -1577,6 +1633,7 @@ mod tests {
         assert!(SystemTable::ALL.contains(&SystemTable::Constraints));
         assert!(SystemTable::ALL.contains(&SystemTable::ConstraintColumns));
         assert!(SystemTable::ALL.contains(&SystemTable::FkConstraints));
+        assert!(SystemTable::ALL.contains(&SystemTable::AutoIncrement));
     }
 
     // file_id values must be unique across all system tables.
