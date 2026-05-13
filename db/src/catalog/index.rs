@@ -6,8 +6,8 @@ use crate::{
         CatalogError, TableInfo,
         manager::Catalog,
         systable::{
-            ColumnRow, ConstraintColumnRow, ConstraintRow, FkConstraintRow, IndexRow,
-            PrimaryKeyColumnRow, SystemTable, TableRow,
+            AutoIncrementRow, ColumnRow, ConstraintColumnRow, ConstraintRow, FkConstraintRow,
+            IndexRow, PrimaryKeyColumnRow, SystemTable, TableRow,
         },
     },
     index::{AnyIndex, CompositeKey, IndexError, IndexKind},
@@ -601,6 +601,7 @@ impl Catalog {
         let constraints = self.scan_system_table_with_tid::<ConstraintRow>(tid)?;
         let constraint_columns = self.scan_system_table_with_tid::<ConstraintColumnRow>(tid)?;
         let fk_constraints = self.scan_system_table_with_tid::<FkConstraintRow>(tid)?;
+        let auto_increment_rows = self.scan_system_table_with_tid::<AutoIncrementRow>(tid)?;
         let index_rows = self.scan_system_table_with_tid::<IndexRow>(tid)?;
 
         let max_file_id: u64 = {
@@ -642,6 +643,7 @@ impl Catalog {
             constraints,
             constraint_columns,
             fk_constraints,
+            auto_increment_rows,
         )?;
         if index_rows.is_empty() {
             return Ok(());

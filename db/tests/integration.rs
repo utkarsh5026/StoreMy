@@ -10,6 +10,8 @@ mod common;
 
 #[path = "integration/alter_table.rs"]
 mod alter_table;
+#[path = "integration/auto_increment.rs"]
+mod auto_increment;
 #[path = "integration/catalog_introspection.rs"]
 mod catalog_introspection;
 #[path = "integration/concurrency.rs"]

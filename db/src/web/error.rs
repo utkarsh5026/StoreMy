@@ -65,6 +65,12 @@ fn engine_error_to_http(e: &EngineError) -> (StatusCode, &'static str, String) {
         E::IndexAlreadyExists(_) => (StatusCode::CONFLICT, "index_exists"),
         E::UnknownIndex(_) => (StatusCode::NOT_FOUND, "index_not_found"),
         E::PrimaryKeyAlreadyExists(_) => (StatusCode::CONFLICT, "primary_key_exists"),
+        E::MultipleAutoIncrementColumns { .. } => {
+            (StatusCode::BAD_REQUEST, "multiple_auto_increment")
+        }
+        E::InsertIntoAutoIncrementColumn { .. } | E::UpdateAutoIncrementColumn { .. } => {
+            (StatusCode::BAD_REQUEST, "auto_increment_column_write")
+        }
         E::UnknownColumn { .. } => (StatusCode::BAD_REQUEST, "column_not_found"),
         E::DuplicateColumn { .. } | E::DuplicateInsertColumn { .. } => {
             (StatusCode::BAD_REQUEST, "duplicate_column")

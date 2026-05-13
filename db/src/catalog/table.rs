@@ -13,8 +13,8 @@ use crate::{
         CatalogError, ConstraintDef, TableInfo,
         manager::Catalog,
         systable::{
-            ColumnRow, ConstraintColumnRow, ConstraintRow, FkConstraintRow, IndexRow,
-            PrimaryKeyColumnRow, TableRow,
+            AutoIncrementRow, ColumnRow, ConstraintColumnRow, ConstraintRow, FkConstraintRow,
+            IndexRow, PrimaryKeyColumnRow, SystemTable, TableRow,
         },
     },
     heap::file::HeapFile,
@@ -22,6 +22,18 @@ use crate::{
     transaction::Transaction,
     tuple::TupleSchema,
 };
+
+/// Deletes rows from one or more system tables where `table_id == $id`.
+///
+/// Expands to a sequence of `delete_rows_by_table_id` calls — one per
+/// `SystemTable` variant listed — each propagating errors with `?`.
+macro_rules! delete_by_table_id {
+    ($catalog:expr, $txn:expr, $id:expr, $($table:expr),+ $(,)?) => {
+        $(
+            $catalog.delete_rows_by_table_id($txn, $table, $id)?;
+        )+
+    };
+}
 
 impl Catalog {
     /// Returns metadata for a table by name, loading it from disk if not cached.
@@ -91,6 +103,10 @@ impl Catalog {
             self.scan_system_table_where::<ConstraintColumnRow, _>(txn, |r| r.table_id == file_id)?;
         let fk_rows =
             self.scan_system_table_where::<FkConstraintRow, _>(txn, |r| r.table_id == file_id)?;
+        let ai_row = self
+            .scan_system_table_where::<AutoIncrementRow, _>(txn, |r| r.table_id == file_id)?
+            .into_iter()
+            .next();
 
         let info = self.install_table(
             table,
@@ -99,6 +115,7 @@ impl Catalog {
             constraint_rows,
             constraint_col_rows,
             fk_rows,
+            ai_row,
         )?;
         self.user_tables
             .write()
@@ -283,7 +300,7 @@ impl Catalog {
         column_ids: Vec<ColumnId>,
     ) -> Result<(), CatalogError> {
         let mut table = self.get_table_info_by_id(txn, table_id)?;
-        self.delete_systable_rows::<PrimaryKeyColumnRow, _>(txn, |r| r.table_id == table_id)?;
+        self.delete_rows_by_table_id(txn, SystemTable::PrimaryKeyColumns, table_id)?;
         self.insert_primary_key_columns(txn, table_id, &table.schema, &column_ids)?;
         table.primary_key = Some(column_ids);
         let mut cache = self.user_tables.write();
@@ -308,7 +325,7 @@ impl Catalog {
         table_id: FileId,
     ) -> Result<(), CatalogError> {
         let mut table = self.get_table_info_by_id(txn, table_id)?;
-        self.delete_systable_rows::<PrimaryKeyColumnRow, _>(txn, |r| r.table_id == table_id)?;
+        self.delete_rows_by_table_id(txn, SystemTable::PrimaryKeyColumns, table_id)?;
         table.primary_key = None;
         let mut cache = self.user_tables.write();
         cache.remove(&table.name);
@@ -353,6 +370,10 @@ impl Catalog {
             })?;
         let fk_rows = self
             .scan_system_table_where::<FkConstraintRow, _>(txn, |r| r.table_id == table.table_id)?;
+        let ai_row = self
+            .scan_system_table_where::<AutoIncrementRow, _>(txn, |r| r.table_id == table.table_id)?
+            .into_iter()
+            .next();
 
         self.install_table(
             table,
@@ -361,6 +382,7 @@ impl Catalog {
             constraint_rows,
             constraint_col_rows,
             fk_rows,
+            ai_row,
         )
     }
 
@@ -372,6 +394,7 @@ impl Catalog {
     /// shared work out keeps both paths in sync — schema folding, primary-key
     /// and table-constraint reconstruction, and heap registration always happen
     /// the same way.
+    #[allow(clippy::too_many_arguments)]
     fn install_table(
         &self,
         table: TableRow,
@@ -380,6 +403,7 @@ impl Catalog {
         constraint_rows: Vec<ConstraintRow>,
         constraint_col_rows: Vec<ConstraintColumnRow>,
         fk_rows: Vec<FkConstraintRow>,
+        ai_row: Option<AutoIncrementRow>,
     ) -> Result<TableInfo, CatalogError> {
         let schema = TupleSchema::from(columns);
 
@@ -406,6 +430,7 @@ impl Catalog {
             table.file_path,
             pk,
         );
+        info.auto_increment_column = ai_row.map(|r| r.column_id);
         Catalog::build_constraints_for_table(
             &mut info,
             constraint_rows,
@@ -428,6 +453,7 @@ impl Catalog {
     /// Groups metadata rows by `table_id` once up front so each table
     /// reconstruction is O(arity) rather than scanning the full row list per
     /// table.
+    #[allow(clippy::too_many_arguments)]
     pub(super) fn replay_tables(
         &self,
         tables: Vec<TableRow>,
@@ -436,6 +462,7 @@ impl Catalog {
         constraints: Vec<ConstraintRow>,
         constraint_columns: Vec<ConstraintColumnRow>,
         fk_constraints: Vec<FkConstraintRow>,
+        auto_increment_rows: Vec<AutoIncrementRow>,
     ) -> Result<(), CatalogError> {
         let mut cols_by_table: HashMap<FileId, Vec<ColumnRow>> = HashMap::new();
         for c in columns {
@@ -466,6 +493,11 @@ impl Catalog {
             fks_by_table.entry(r.table_id).or_default().push(r);
         }
 
+        let mut ai_by_table: HashMap<FileId, AutoIncrementRow> = HashMap::new();
+        for r in auto_increment_rows {
+            ai_by_table.insert(r.table_id, r);
+        }
+
         for table in tables {
             let table_id = table.table_id;
             let cols = cols_by_table.remove(&table_id).unwrap_or_default();
@@ -475,11 +507,82 @@ impl Catalog {
                 .remove(&table_id)
                 .unwrap_or_default();
             let fks = fks_by_table.remove(&table_id).unwrap_or_default();
-            let info = self.install_table(table, cols, pks, constraints, constraint_cols, fks)?;
+            let ai = ai_by_table.remove(&table_id);
+            let info =
+                self.install_table(table, cols, pks, constraints, constraint_cols, fks, ai)?;
             self.user_tables.write().insert(info.name.clone(), info);
         }
 
         Ok(())
+    }
+
+    /// Writes an `AUTO_INCREMENT` catalog row for `col_id` on `file_id` and updates the cache.
+    ///
+    /// Call this once after [`Catalog::create_table`] when the table has an
+    /// auto-increment column. `next_value` is the first ID that will be issued
+    /// (conventionally `1`).
+    ///
+    /// # Errors
+    ///
+    /// Propagates system-table write errors and cache-reload errors.
+    pub fn register_auto_increment(
+        &self,
+        txn: &Transaction<'_>,
+        file_id: FileId,
+        col_id: ColumnId,
+    ) -> Result<(), CatalogError> {
+        let row = AutoIncrementRow::new(file_id, col_id, 1);
+        self.insert_systable_tuple(txn, &row)?;
+
+        // Keep the in-memory cache consistent.
+        let mut cache = self.user_tables.write();
+        for info in cache.values_mut() {
+            if info.file_id == file_id {
+                info.auto_increment_column = Some(col_id);
+                break;
+            }
+        }
+        Ok(())
+    }
+
+    /// Atomically reserves `count` consecutive auto-increment values for `file_id`.
+    ///
+    /// Reads the current `next_value` from `CATALOG_AUTO_INCREMENT`, writes
+    /// `next_value + count` back in the same transaction, and returns the old
+    /// `next_value` as the first value to use.  The caller assigns
+    /// `start, start+1, …, start+count-1` to the inserted rows.
+    ///
+    /// # Errors
+    ///
+    /// - [`CatalogError::InvalidCatalogRow`] if no AI row exists for `file_id` (this means the
+    ///   table was not declared with `AUTO_INCREMENT`).
+    /// - Propagates system-table read/write errors.
+    pub fn allocate_auto_increment(
+        &self,
+        txn: &Transaction<'_>,
+        file_id: FileId,
+        count: usize,
+    ) -> Result<u64, CatalogError> {
+        let row = self
+            .scan_system_table_where::<AutoIncrementRow, _>(txn, |r| r.table_id == file_id)?
+            .into_iter()
+            .next()
+            .ok_or_else(|| {
+                CatalogError::invalid_catalog_row(format!(
+                    "no auto-increment entry for table {file_id}"
+                ))
+            })?;
+
+        let start = row.next_value;
+        let new_next = start + count as u64;
+
+        self.delete_rows_by_table_id(txn, SystemTable::AutoIncrement, file_id)?;
+        self.insert_systable_tuple(
+            txn,
+            &AutoIncrementRow::new(file_id, row.column_id, new_next),
+        )?;
+
+        Ok(start)
     }
 
     /// Removes a table from the catalog, system tables, in-memory cache, and disk.
@@ -520,12 +623,18 @@ impl Catalog {
             )));
         }
 
-        self.delete_systable_rows::<TableRow, _>(txn, |r| r.table_id == file_id)?;
-        self.delete_systable_rows::<ColumnRow, _>(txn, |r| r.table_id == file_id)?;
-        self.delete_systable_rows::<PrimaryKeyColumnRow, _>(txn, |r| r.table_id == file_id)?;
-        self.delete_systable_rows::<ConstraintRow, _>(txn, |r| r.table_id == file_id)?;
-        self.delete_systable_rows::<ConstraintColumnRow, _>(txn, |r| r.table_id == file_id)?;
-        self.delete_systable_rows::<FkConstraintRow, _>(txn, |r| r.table_id == file_id)?;
+        delete_by_table_id!(
+            self,
+            txn,
+            file_id,
+            SystemTable::Tables,
+            SystemTable::Columns,
+            SystemTable::PrimaryKeyColumns,
+            SystemTable::Constraints,
+            SystemTable::ConstraintColumns,
+            SystemTable::FkConstraints,
+            SystemTable::AutoIncrement,
+        );
 
         std::fs::remove_file(file_path)?;
         self.open_heaps.write().remove(&file_id);

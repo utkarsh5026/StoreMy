@@ -3,7 +3,7 @@ use crate::{
     engine::{Engine, EngineError, StatementResult},
     index::IndexKind,
     parser::statements::{ColumnDef, CreateTableStatement, Uniqueness},
-    primitives::NonEmptyString,
+    primitives::{ColumnId, NonEmptyString},
     transaction::Transaction,
     tuple::TupleSchema,
 };
@@ -60,6 +60,14 @@ impl Engine<'_> {
             return Self::handle_table_already_exists(stmt, txn, catalog);
         }
 
+        let ai_count = stmt.columns.iter().filter(|c| c.auto_increment).count();
+        if ai_count > 1 {
+            return Err(EngineError::MultipleAutoIncrementColumns {
+                table: stmt.table_name.as_str().to_owned(),
+                count: ai_count,
+            });
+        }
+
         let CreateTableStatement {
             table_name,
             columns,
@@ -114,6 +122,17 @@ impl Engine<'_> {
             .partition(|d| matches!(d, ConstraintDef::Unique { .. }));
 
         let file_id = catalog.create_table(txn, table_name.as_str(), schema, other_defs)?;
+
+        // If one column declared AUTO_INCREMENT, persist its column id so the
+        // counter survives restarts and is visible to the insert path.
+        if let Some(ai_col_id) = columns
+            .iter()
+            .enumerate()
+            .find(|(_, c)| c.auto_increment)
+            .and_then(|(i, _)| ColumnId::try_from(i).ok())
+        {
+            catalog.register_auto_increment(txn, file_id, ai_col_id)?;
+        }
 
         for def in unique_defs {
             let ConstraintDef::Unique { name, columns, .. } = def else {
@@ -551,6 +570,46 @@ mod tests {
         assert!(
             matches!(err, EngineError::TableAlreadyExists(_)),
             "expected TableAlreadyExists, got: {err:?}"
+        );
+    }
+
+    // --- auto_increment validation ---
+    #[test]
+    fn test_create_table_multiple_auto_increment_columns_returns_err() {
+        let dir = tempdir().unwrap();
+        let (catalog, txn_mgr) = make_catalog_and_txn(dir.path());
+
+        let ai_col = |name: &str| ColumnDef {
+            name: NonEmptyString::new(name).unwrap(),
+            col_type: Type::Int64,
+            nullable: false,
+            primary_key: false,
+            auto_increment: true,
+            default: None,
+            unique: Uniqueness::NotUnique,
+            check: None,
+            references: None,
+        };
+
+        let stmt = CreateTableStatement {
+            table_name: "bad_ai".try_into().unwrap(),
+            if_not_exists: false,
+            columns: vec![ai_col("id"), ai_col("seq")],
+            primary_key: vec![],
+            constraints: vec![],
+        };
+
+        let engine = Engine::new(&catalog, &txn_mgr);
+        let err = engine
+            .execute_statement(Statement::CreateTable(stmt))
+            .unwrap_err();
+
+        assert!(
+            matches!(err, EngineError::MultipleAutoIncrementColumns {
+                count: 2,
+                ..
+            }),
+            "expected MultipleAutoIncrementColumns, got: {err:?}"
         );
     }
 
