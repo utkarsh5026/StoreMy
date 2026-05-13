@@ -99,6 +99,12 @@ pub enum EngineError {
         got: usize,
     },
 
+    #[error(
+        "column '{column}' in table '{table}' is NOT NULL and has no default value; \
+         supply a value or declare a DEFAULT"
+    )]
+    MissingColumnDefault { table: String, column: String },
+
     #[error("type mismatch for column '{column}': expected {expected}, got {got}")]
     TypeMismatch {
         column: String,

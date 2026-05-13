@@ -77,6 +77,7 @@ fn engine_error_to_http(e: &EngineError) -> (StatusCode, &'static str, String) {
         }
         E::AmbiguousColumn { .. } => (StatusCode::BAD_REQUEST, "ambiguous_column"),
         E::WrongColumnCount { .. } => (StatusCode::BAD_REQUEST, "wrong_column_count"),
+        E::MissingColumnDefault { .. } => (StatusCode::BAD_REQUEST, "missing_column_default"),
         E::TypeMismatch { .. } | E::TypeError(_) => (StatusCode::BAD_REQUEST, "type_error"),
         E::Constraint(c) => match c {
             ConstraintViolation::NullViolation { .. } => {
