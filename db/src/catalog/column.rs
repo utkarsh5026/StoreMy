@@ -11,7 +11,7 @@ use crate::{
     catalog::{
         CatalogError, TableInfo,
         manager::Catalog,
-        systable::{AutoIncrementRow, ColumnRow, PrimaryKeyColumnRow},
+        systable::{ColumnRow, PrimaryKeyColumnRow, SystemTable},
     },
     parser::statements::ColumnDef,
     primitives::{ColumnId, NonEmptyString},
@@ -105,7 +105,7 @@ impl Catalog {
         }
 
         if table.auto_increment_column == Some(col.position) {
-            self.delete_systable_rows::<AutoIncrementRow, _>(txn, |r| r.table_id == table_id)?;
+            self.delete_rows_by_table_id(txn, SystemTable::AutoIncrement, table_id)?;
             table.auto_increment_column = None;
         }
 

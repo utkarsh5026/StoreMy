@@ -37,6 +37,24 @@ impl SystemTable {
         SystemTable::AutoIncrement,
     ];
 
+    /// Returns the 0-based index of the `table_id` column in this system
+    /// table's schema. Every system table carries a `table_id` field, but its
+    /// position differs between tables (e.g. `Constraints` puts it at index 1
+    /// after `constraint_name`). This lets generic helpers filter by table
+    /// without decoding the full typed row.
+    pub const fn table_id_field(self) -> usize {
+        match self {
+            SystemTable::Indexes => 2,
+            SystemTable::Constraints
+            | SystemTable::ConstraintColumns
+            | SystemTable::FkConstraints => 1,
+            SystemTable::Tables
+            | SystemTable::Columns
+            | SystemTable::PrimaryKeyColumns
+            | SystemTable::AutoIncrement => 0,
+        }
+    }
+
     pub const fn file_id(self) -> FileId {
         match self {
             SystemTable::Tables => FileId(1),

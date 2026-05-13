@@ -18,7 +18,7 @@ use std::{
 use parking_lot::RwLock;
 
 use crate::{
-    FileId, PAGE_SIZE, TransactionId,
+    FileId, PAGE_SIZE, TransactionId, Value,
     buffer_pool::page_store::PageStore,
     catalog::{
         CatalogError, TableInfo,
@@ -403,6 +403,26 @@ impl Catalog {
         })
         .map(|_| ())
         .map_err(CatalogError::from)
+    }
+
+    /// Deletes every row in `table` whose `table_id` field equals `target_id`.
+    ///
+    /// Works at the raw [`Tuple`] level — no typed row deserialization — so it
+    /// is usable as a building block by the [`delete_by_table_id!`] macro when
+    /// cleaning up multiple system tables in one step.
+    pub(super) fn delete_rows_by_table_id(
+        &self,
+        txn: &Transaction<'_>,
+        table: SystemTable,
+        target_id: FileId,
+    ) -> Result<(), CatalogError> {
+        let field = table.table_id_field();
+        let target = Value::Uint64(u64::from(target_id));
+        let heap = self.get_system_heap(table)?;
+        let tid = txn.transaction_id();
+        heap.delete_if(tid, |t| t.get(field).is_some_and(|v| v == &target))
+            .map(|_| ())
+            .map_err(CatalogError::from)
     }
 
     /// Returns the open [`HeapFile`] for `table`, or `None` if not registered.

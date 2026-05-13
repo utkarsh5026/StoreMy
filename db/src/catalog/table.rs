@@ -14,7 +14,7 @@ use crate::{
         manager::Catalog,
         systable::{
             AutoIncrementRow, ColumnRow, ConstraintColumnRow, ConstraintRow, FkConstraintRow,
-            IndexRow, PrimaryKeyColumnRow, TableRow,
+            IndexRow, PrimaryKeyColumnRow, SystemTable, TableRow,
         },
     },
     heap::file::HeapFile,
@@ -22,6 +22,18 @@ use crate::{
     transaction::Transaction,
     tuple::TupleSchema,
 };
+
+/// Deletes rows from one or more system tables where `table_id == $id`.
+///
+/// Expands to a sequence of `delete_rows_by_table_id` calls — one per
+/// `SystemTable` variant listed — each propagating errors with `?`.
+macro_rules! delete_by_table_id {
+    ($catalog:expr, $txn:expr, $id:expr, $($table:expr),+ $(,)?) => {
+        $(
+            $catalog.delete_rows_by_table_id($txn, $table, $id)?;
+        )+
+    };
+}
 
 impl Catalog {
     /// Returns metadata for a table by name, loading it from disk if not cached.
@@ -288,7 +300,7 @@ impl Catalog {
         column_ids: Vec<ColumnId>,
     ) -> Result<(), CatalogError> {
         let mut table = self.get_table_info_by_id(txn, table_id)?;
-        self.delete_systable_rows::<PrimaryKeyColumnRow, _>(txn, |r| r.table_id == table_id)?;
+        self.delete_rows_by_table_id(txn, SystemTable::PrimaryKeyColumns, table_id)?;
         self.insert_primary_key_columns(txn, table_id, &table.schema, &column_ids)?;
         table.primary_key = Some(column_ids);
         let mut cache = self.user_tables.write();
@@ -313,7 +325,7 @@ impl Catalog {
         table_id: FileId,
     ) -> Result<(), CatalogError> {
         let mut table = self.get_table_info_by_id(txn, table_id)?;
-        self.delete_systable_rows::<PrimaryKeyColumnRow, _>(txn, |r| r.table_id == table_id)?;
+        self.delete_rows_by_table_id(txn, SystemTable::PrimaryKeyColumns, table_id)?;
         table.primary_key = None;
         let mut cache = self.user_tables.write();
         cache.remove(&table.name);
@@ -533,6 +545,46 @@ impl Catalog {
         Ok(())
     }
 
+    /// Atomically reserves `count` consecutive auto-increment values for `file_id`.
+    ///
+    /// Reads the current `next_value` from `CATALOG_AUTO_INCREMENT`, writes
+    /// `next_value + count` back in the same transaction, and returns the old
+    /// `next_value` as the first value to use.  The caller assigns
+    /// `start, start+1, …, start+count-1` to the inserted rows.
+    ///
+    /// # Errors
+    ///
+    /// - [`CatalogError::InvalidCatalogRow`] if no AI row exists for `file_id` (this means the
+    ///   table was not declared with `AUTO_INCREMENT`).
+    /// - Propagates system-table read/write errors.
+    pub fn allocate_auto_increment(
+        &self,
+        txn: &Transaction<'_>,
+        file_id: FileId,
+        count: usize,
+    ) -> Result<u64, CatalogError> {
+        let row = self
+            .scan_system_table_where::<AutoIncrementRow, _>(txn, |r| r.table_id == file_id)?
+            .into_iter()
+            .next()
+            .ok_or_else(|| {
+                CatalogError::invalid_catalog_row(format!(
+                    "no auto-increment entry for table {file_id}"
+                ))
+            })?;
+
+        let start = row.next_value;
+        let new_next = start + count as u64;
+
+        self.delete_rows_by_table_id(txn, SystemTable::AutoIncrement, file_id)?;
+        self.insert_systable_tuple(
+            txn,
+            &AutoIncrementRow::new(file_id, row.column_id, new_next),
+        )?;
+
+        Ok(start)
+    }
+
     /// Removes a table from the catalog, system tables, in-memory cache, and disk.
     ///
     /// Looks up the table by `name`, deletes its rows from the `Tables` and
@@ -571,13 +623,18 @@ impl Catalog {
             )));
         }
 
-        self.delete_systable_rows::<TableRow, _>(txn, |r| r.table_id == file_id)?;
-        self.delete_systable_rows::<ColumnRow, _>(txn, |r| r.table_id == file_id)?;
-        self.delete_systable_rows::<PrimaryKeyColumnRow, _>(txn, |r| r.table_id == file_id)?;
-        self.delete_systable_rows::<ConstraintRow, _>(txn, |r| r.table_id == file_id)?;
-        self.delete_systable_rows::<ConstraintColumnRow, _>(txn, |r| r.table_id == file_id)?;
-        self.delete_systable_rows::<FkConstraintRow, _>(txn, |r| r.table_id == file_id)?;
-        self.delete_systable_rows::<AutoIncrementRow, _>(txn, |r| r.table_id == file_id)?;
+        delete_by_table_id!(
+            self,
+            txn,
+            file_id,
+            SystemTable::Tables,
+            SystemTable::Columns,
+            SystemTable::PrimaryKeyColumns,
+            SystemTable::Constraints,
+            SystemTable::ConstraintColumns,
+            SystemTable::FkConstraints,
+            SystemTable::AutoIncrement,
+        );
 
         std::fs::remove_file(file_path)?;
         self.open_heaps.write().remove(&file_id);
