@@ -44,7 +44,6 @@
 // resolve in *other* crates that depend on us — not in our own code.
 extern crate self as storemy;
 
-pub mod binder;
 pub mod buffer_pool;
 pub mod catalog;
 pub mod codec;

@@ -39,8 +39,8 @@ fn insert_into_unknown_table_errors() {
     let db = TestDb::new();
     let err = db.run("INSERT INTO ghost VALUES (1)").unwrap_err();
     assert!(
-        matches!(err, EngineError::Bind(_)),
-        "expected Bind(UnknownTable), got {err:?}"
+        matches!(err, EngineError::Catalog(_) | EngineError::TableNotFound(_)),
+        "expected an error for unknown table, got {err:?}"
     );
 }
 
@@ -50,7 +50,7 @@ fn update_unknown_column_errors() {
     db.run_ok("CREATE TABLE t (id INT)");
     let err = db.run("UPDATE t SET nope = 1").unwrap_err();
     assert!(
-        matches!(err, EngineError::ColumnNotFound { .. }),
-        "expected ColumnNotFound, got {err:?}"
+        matches!(err, EngineError::UnknownColumn { .. }),
+        "expected UnknownColumn, got {err:?}"
     );
 }

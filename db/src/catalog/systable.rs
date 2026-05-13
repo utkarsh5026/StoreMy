@@ -7,6 +7,7 @@ use crate::{
     FileId, IndexId, Type, Value,
     catalog::{CatalogError, tuple::CatalogTupleRead},
     index::IndexKind,
+    parser::statements::ReferentialAction,
     primitives::{ColumnId, NonEmptyString},
     tuple::{Field, Tuple, TupleSchema},
 };
@@ -694,6 +695,17 @@ pub enum FkAction {
     Cascade = 2,
     SetNull = 3,
     SetDefault = 4,
+}
+
+impl From<ReferentialAction> for FkAction {
+    fn from(action: ReferentialAction) -> Self {
+        match action {
+            ReferentialAction::Cascade => FkAction::Cascade,
+            ReferentialAction::SetNull => FkAction::SetNull,
+            ReferentialAction::SetDefault => FkAction::SetDefault,
+            ReferentialAction::Restrict => FkAction::Restrict,
+        }
+    }
 }
 
 impl TryFrom<u32> for FkAction {

@@ -11,12 +11,12 @@
 //! See `db/src/catalog/systable.rs` for the row layouts and the multi-row
 //! pattern used to encode composite constraints.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use crate::{
     FileId,
     catalog::{
-        CatalogError, ForeignKey, InboundFk, TableInfo, UniqueConstraint,
+        CatalogError, ForeignKey, ReferencingFk, TableInfo, UniqueConstraint,
         manager::Catalog,
         systable::{
             ConstraintColumnRow, ConstraintKind, ConstraintRow, FkAction, FkConstraintRow, IndexRow,
@@ -47,15 +47,10 @@ pub enum ConstraintDef {
     },
     /// Registers a CHECK expression in the catalog. Enforcement is not yet
     /// implemented — the expression is stored but never evaluated at DML time.
-    Check {
-        name: String,
-        expr: String,
-    },
+    Check { name: String, expr: String },
     /// Sets the primary key via the dedicated PK system table. Unlike the other
     /// variants there is no constraint name — PKs are identified by table only.
-    PrimaryKey {
-        columns: Vec<ColumnId>,
-    },
+    PrimaryKey { columns: Vec<ColumnId> },
 }
 
 impl Catalog {
@@ -101,41 +96,28 @@ impl Catalog {
                 })?;
                 Ok(())
             }
-            ConstraintDef::PrimaryKey { columns } => {
-                self.set_primary_key(txn, table_id, columns)
-            }
+            ConstraintDef::PrimaryKey { columns } => self.set_primary_key(txn, table_id, columns),
         }
-    }
-
-    /// Generates a UNIQUE constraint name `{table}_unique_{col1}_{col2}…` by
-    /// resolving `columns` (bound [`ColumnId`]s) to names via the catalog.
-    pub fn autoname_unique_constraint_for(
-        &self,
-        txn: &Transaction<'_>,
-        table_id: FileId,
-        columns: &[ColumnId],
-    ) -> Result<String, CatalogError> {
-        let tbl = self.get_table_info_by_id(txn, table_id)?;
-        let col_names: Vec<&str> = columns
-            .iter()
-            .map(|&id| tbl.schema.field(usize::from(id)).unwrap().name.as_str())
-            .collect();
-        Ok(format!(
-            "{}_unique_{}",
-            tbl.name.as_str(),
-            col_names.join("_")
-        ))
     }
 
     /// Adds a UNIQUE constraint to a table.
     ///
-    /// Writes one `ConstraintRow` header (kind = `Unique`) and one
-    /// `ConstraintColumnRow` per participating column, then refreshes
-    /// the cached [`TableInfo::unique_constraints`].
+    /// Writes one header row to `CATALOG_CONSTRAINTS` (kind UNIQUE, optional
+    /// `backing_index_id` when the engine already created an enforcing index) and one
+    /// `CATALOG_CONSTRAINT_COLUMNS` row per listed column. `columns` order is stored as
+    /// `ordinal` and is semantically significant: `(a, b)` and `(b, a)` are different
+    /// constraints for prefix-based uniqueness checks.
     ///
-    /// `columns` order is preserved as `ordinal` in the catalog — `(a, b)` and
-    /// `(b, a)` are different UNIQUE constraints because index-prefix lookups
-    /// depend on order.
+    /// Updates the in-memory [`TableInfo::unique_constraints`] cache for `table_id`.
+    /// Prefer [`Catalog::add_constraint`] with [`ConstraintDef::Unique`] at call sites;
+    /// this method is the internal implementation shared from that entry point.
+    ///
+    /// # Errors
+    ///
+    /// - Empty `columns`, unknown columns for the table, or a duplicate constraint name.
+    /// - Name validation failures when `name` is not a valid [`NonEmptyString`].
+    /// - `CatalogError` if an ordinal does not fit in `i32` or system-table inserts / cache refresh
+    ///   fail.
     fn add_unique_constraint(
         &self,
         txn: &Transaction<'_>,
@@ -151,27 +133,30 @@ impl Catalog {
         }
 
         let mut table = self.get_table_info_by_id(txn, table_id)?;
-        validate_columns_in_schema(&table, columns, "UNIQUE")?;
+
+        Self::validate_columns_in_schema(&table, columns, "UNIQUE")?;
         self.reject_duplicate_constraint_name(txn, table_id, name)?;
 
         let constraint_name = NonEmptyString::try_from(name)?;
-
-        self.insert_systable_tuple(txn, &ConstraintRow {
+        let constraint_row = ConstraintRow {
             constraint_name: constraint_name.clone(),
             table_id,
             constraint_kind: ConstraintKind::Unique,
             expr: None,
             backing_index_id,
-        })?;
+        };
+        self.insert_systable_tuple(txn, &constraint_row)?;
 
-        for (ordinal, &col_id) in columns.iter().enumerate() {
-            let ordinal = i32_ordinal(ordinal)?;
-            self.insert_systable_tuple(txn, &ConstraintColumnRow {
+        for (ordinal, &column_id) in columns.iter().enumerate() {
+            let constraint_column_row = ConstraintColumnRow {
                 constraint_name: constraint_name.clone(),
                 table_id,
-                column_id: col_id,
-                ordinal,
-            })?;
+                column_id,
+                ordinal: i32::try_from(ordinal).map_err(|_| {
+                    CatalogError::invalid_catalog_row("constraint ordinal does not fit in i32")
+                })?,
+            };
+            self.insert_systable_tuple(txn, &constraint_column_row)?;
         }
 
         table.unique_constraints.push(UniqueConstraint {
@@ -206,6 +191,7 @@ impl Catalog {
                 "FOREIGN KEY must list at least one column",
             ));
         }
+
         if local_columns.len() != ref_columns.len() {
             return Err(CatalogError::invalid_catalog_row(format!(
                 "FOREIGN KEY column count mismatch: {} local vs {} referenced",
@@ -215,12 +201,13 @@ impl Catalog {
         }
 
         let mut table = self.get_table_info_by_id(txn, table_id)?;
-        validate_columns_in_schema(&table, local_columns, "FOREIGN KEY")?;
-        self.reject_duplicate_constraint_name(txn, table_id, name)?;
+        Self::validate_columns_in_schema(&table, local_columns, "FOREIGN KEY")?;
 
         let ref_table = self.get_table_info_by_id(txn, ref_table_id)?;
-        validate_columns_in_schema(&ref_table, ref_columns, "FOREIGN KEY referenced")?;
-        if !references_unique_or_pk(&ref_table, ref_columns) {
+        Self::validate_columns_in_schema(&ref_table, ref_columns, "FOREIGN KEY referenced")?;
+
+        self.reject_duplicate_constraint_name(txn, table_id, name)?;
+        if !Self::references_unique_or_pk(&ref_table, ref_columns) {
             return Err(CatalogError::invalid_catalog_row(format!(
                 "FOREIGN KEY referenced columns in table {} are not a PRIMARY KEY or UNIQUE",
                 ref_table.name.as_str()
@@ -239,7 +226,9 @@ impl Catalog {
         for (ordinal, (&local, &referenced)) in
             local_columns.iter().zip(ref_columns.iter()).enumerate()
         {
-            let ordinal = i32_ordinal(ordinal)?;
+            let ordinal = i32::try_from(ordinal).map_err(|_| {
+                CatalogError::invalid_catalog_row("constraint ordinal does not fit in i32")
+            })?;
             self.insert_systable_tuple(txn, &FkConstraintRow {
                 constraint_name: constraint_name.clone(),
                 table_id,
@@ -264,60 +253,101 @@ impl Catalog {
         Ok(())
     }
 
-    /// Returns every FK that targets `ref_table_id` as its parent.
+    /// Returns whether `columns` names the same set of columns as an enforced unique key on
+    /// `table`.
     ///
-    /// The engine calls this on DELETE and UPDATE to discover which child tables
-    /// need to be checked (or cascaded into) before the parent row is mutated.
+    /// Used when validating a FOREIGN KEY: the referenced column list must target a PRIMARY KEY
+    /// or a UNIQUE constraint on the parent [`TableInfo`]. Matching is by **set** equality of
+    /// [`ColumnId`] values (order in `columns` vs order in the PK / UNIQUE definition does not
+    /// matter for this predicate).
+    fn references_unique_or_pk(table: &TableInfo, columns: &[ColumnId]) -> bool {
+        let target: HashSet<ColumnId> = columns.iter().copied().collect();
+
+        if let Some(pk) = &table.primary_key
+            && pk.len() == target.len()
+            && pk.iter().copied().collect::<HashSet<_>>() == target
+        {
+            return true;
+        }
+
+        table.unique_constraints.iter().any(|u| {
+            u.columns.len() == target.len()
+                && u.columns.iter().copied().collect::<HashSet<_>>() == target
+        })
+    }
+
+    /// Lists every foreign key in the catalog whose referenced table is `ref_table_id`.
     ///
-    /// Scans `CATALOG_FK_CONSTRAINTS` for rows where `ref_table_id` matches,
-    /// groups them by constraint name (respecting `ordinal` for column order),
-    /// and returns one [`InboundFk`] per constraint.
-    pub fn find_inbound_fks(
+    /// Scans the foreign-key constraint system table for rows where `ref_table_id` matches. A
+    /// single logical FK is stored as one row per column pair; this method groups rows by
+    /// `constraint_name`, sorts each group by `ordinal`, and folds them into one
+    /// [`ReferencingFk`] with `column_pairs` in declaration order. `on_delete` / `on_update`
+    /// are read from the first row of each group (they are identical across ordinals when the
+    /// constraint was written).
+    ///
+    /// Callers use this to implement parent-side rules (for example blocking a delete or
+    /// update on the referenced table while child rows still point at the key).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CatalogError`] if the system table scan fails.
+    pub fn find_referencing_fks(
         &self,
         txn: &Transaction<'_>,
         ref_table_id: FileId,
-    ) -> Result<Vec<InboundFk>, CatalogError> {
+    ) -> Result<Vec<ReferencingFk>, CatalogError> {
         let fk_rows = self.scan_system_table_where::<FkConstraintRow, _>(txn, |r| {
             r.ref_table_id == ref_table_id
         })?;
 
-        if fk_rows.is_empty() {
-            return Ok(Vec::new());
-        }
-
-        let mut by_name: HashMap<String, Vec<FkConstraintRow>> = HashMap::new();
+        let mut by_name: HashMap<NonEmptyString, Vec<FkConstraintRow>> = HashMap::new();
         for row in fk_rows {
-            by_name
-                .entry(row.constraint_name.as_str().to_owned())
-                .or_default()
-                .push(row);
+            if let Some(vec) = by_name.get_mut(row.constraint_name.as_str()) {
+                vec.push(row);
+            } else {
+                let key = row.constraint_name.clone();
+                by_name.insert(key, vec![row]);
+            }
         }
 
-        let mut result = Vec::new();
-        for (name, mut rows) in by_name {
-            rows.sort_by_key(|r| r.ordinal);
-            let child_table_id = rows[0].table_id;
-            let on_delete = rows[0].on_delete;
-            let on_update = rows[0].on_update;
-            let child_columns = rows.iter().map(|r| r.local_column_id).collect();
-            let ref_columns = rows.iter().map(|r| r.ref_column_id).collect();
-            result.push(InboundFk {
-                constraint_name: name,
-                child_table_id,
-                child_columns,
-                ref_columns,
-                on_delete,
-                on_update,
-            });
-        }
-        Ok(result)
+        Ok(by_name
+            .into_iter()
+            .map(|(name, mut rows)| {
+                rows.sort_by_key(|r| r.ordinal);
+                let first = &rows[0];
+
+                ReferencingFk {
+                    constraint_name: name.into_inner(),
+                    child_table_id: first.table_id,
+                    on_delete: first.on_delete,
+                    on_update: first.on_update,
+                    column_pairs: rows
+                        .into_iter()
+                        .map(|r| (r.local_column_id, r.ref_column_id))
+                        .collect(),
+                }
+            })
+            .collect())
     }
 
-    /// Drops a constraint (UNIQUE or FK) by name.
+    /// Drops a named constraint on `table_id` inside `txn`.
     ///
-    /// PRIMARY KEY is dropped via [`Catalog::drop_primary_key`] (it lives in
-    /// its own system table for now). NOT NULL is a column attribute on
-    /// `CATALOG_COLUMNS`, not a row in `CATALOG_CONSTRAINTS`.
+    /// Loads the constraint header row from `CATALOG_CONSTRAINTS` to learn the kind, then deletes
+    /// the appropriate companion rows (`ConstraintColumnRow` for UNIQUE,
+    /// `FkConstraintRow` for FOREIGN KEY), removes the header from
+    /// `CATALOG_CONSTRAINTS`, drops any UNIQUE backing index, and refreshes the
+    /// in-memory [`TableInfo`] for that table.
+    ///
+    /// PRIMARY KEY and NOT NULL are rejected here so callers use the dedicated
+    /// catalog paths (`drop_primary_key`, column alter) instead of treating them
+    /// as generic constraint rows.
+    ///
+    /// # Errors
+    ///
+    /// - [`CatalogError::ConstraintNotFound`] — no constraint named `name` on that table.
+    /// - `CatalogError` from `invalid_catalog_row` when the constraint is PRIMARY KEY or NOT NULL
+    ///   (those use other catalog APIs, not generic constraint drop).
+    /// - Other [`CatalogError`] variants from system-table deletes, index drop, or cache refresh.
     pub fn drop_constraint(
         &self,
         txn: &Transaction<'_>,
@@ -325,30 +355,7 @@ impl Catalog {
         name: &str,
     ) -> Result<(), CatalogError> {
         let mut table = self.get_table_info_by_id(txn, table_id)?;
-
-        let header = self
-            .scan_system_table_where::<ConstraintRow, _>(txn, |r| {
-                r.table_id == table_id && r.constraint_name.as_str() == name
-            })?
-            .pop()
-            .ok_or_else(|| CatalogError::ConstraintNotFound {
-                table: table.name.as_str().to_owned(),
-                constraint: name.to_owned(),
-            })?;
-
-        let backing_index_name = if header.constraint_kind == ConstraintKind::Unique {
-            if let Some(idx_id) = header.backing_index_id {
-                let rows =
-                    self.scan_system_table_where::<IndexRow, _>(txn, |r| r.index_id == idx_id)?;
-                rows.into_iter()
-                    .next()
-                    .map(|r| r.index_name.as_str().to_owned())
-            } else {
-                None
-            }
-        } else {
-            None
-        };
+        let header = self.fetch_constraint_header(txn, table_id, name, table.name.as_str())?;
 
         match header.constraint_kind {
             ConstraintKind::Unique => {
@@ -366,15 +373,12 @@ impl Catalog {
             ConstraintKind::Check => {
                 // Predicate lives on the header row; nothing else to delete.
             }
-            ConstraintKind::PrimaryKey => {
-                return Err(CatalogError::invalid_catalog_row(
-                    "use drop_primary_key to remove a PRIMARY KEY",
-                ));
-            }
+            ConstraintKind::PrimaryKey => unreachable!(
+                "set_primary_key never writes a ConstraintRow; \
+                 use drop_primary_key instead"
+            ),
             ConstraintKind::NotNull => {
-                return Err(CatalogError::invalid_catalog_row(
-                    "NOT NULL is a column attribute; alter the column instead",
-                ));
+                unreachable!("NOT NULL is a column attribute, never written as a ConstraintRow")
             }
         }
 
@@ -382,11 +386,69 @@ impl Catalog {
             r.table_id == table_id && r.constraint_name.as_str() == name
         })?;
 
+        self.delete_constraint_indexes(txn, &header)?;
+        self.refresh_cached_table(table);
+        Ok(())
+    }
+
+    /// Looks up the `CATALOG_CONSTRAINTS` header row for `constraint_name` on `table_id`.
+    ///
+    /// `table_name` is only used to populate [`CatalogError::ConstraintNotFound`]; it must
+    /// match the human-readable table name for that `table_id` (callers typically pass
+    /// [`TableInfo::name`]).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CatalogError::ConstraintNotFound`] when no matching header exists, or other
+    /// [`CatalogError`] values if the system table scan fails.
+    fn fetch_constraint_header(
+        &self,
+        txn: &Transaction<'_>,
+        table_id: FileId,
+        constraint_name: &str,
+        table_name: &str,
+    ) -> Result<ConstraintRow, CatalogError> {
+        self.scan_system_table_where::<ConstraintRow, _>(txn, |r| {
+            r.table_id == table_id && r.constraint_name.as_str() == constraint_name
+        })?
+        .pop()
+        .ok_or_else(|| CatalogError::ConstraintNotFound {
+            table: table_name.to_owned(),
+            constraint: constraint_name.to_owned(),
+        })
+    }
+
+    /// Drops the secondary index backing a UNIQUE constraint, if any.
+    ///
+    /// UNIQUE constraints may record a backing index id on the header row. When present, this
+    /// resolves the index name from `CATALOG_INDEXES` and calls [`Catalog::drop_index`]. Other
+    /// constraint kinds are no-ops.
+    ///
+    /// # Errors
+    ///
+    /// Propagates errors from index metadata lookup or [`Catalog::drop_index`].
+    fn delete_constraint_indexes(
+        &self,
+        txn: &Transaction<'_>,
+        header: &ConstraintRow,
+    ) -> Result<(), CatalogError> {
+        let backing_index_name = if header.constraint_kind == ConstraintKind::Unique {
+            if let Some(idx_id) = header.backing_index_id {
+                let rows =
+                    self.scan_system_table_where::<IndexRow, _>(txn, |r| r.index_id == idx_id)?;
+                rows.into_iter()
+                    .next()
+                    .map(|r| r.index_name.as_str().to_owned())
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
         if let Some(index_name) = backing_index_name {
             self.drop_index(txn, &index_name)?;
         }
-
-        self.refresh_cached_table(table);
         Ok(())
     }
 
@@ -496,54 +558,24 @@ impl Catalog {
         }
         Ok(())
     }
-}
 
-/// Returns true if `columns` (as a set) equals the table's PK or any UNIQUE
-/// constraint. FKs require the referenced column list to be the *full* key of
-/// some uniqueness constraint — a prefix is not enough.
-fn references_unique_or_pk(table: &TableInfo, columns: &[ColumnId]) -> bool {
-    let target: std::collections::HashSet<ColumnId> = columns.iter().copied().collect();
-
-    if let Some(pk) = &table.primary_key
-        && pk.len() == target.len()
-        && pk.iter().copied().collect::<std::collections::HashSet<_>>() == target
-    {
-        return true;
-    }
-
-    table.unique_constraints.iter().any(|u| {
-        u.columns.len() == target.len()
-            && u.columns
-                .iter()
-                .copied()
-                .collect::<std::collections::HashSet<_>>()
-                == target
-    })
-}
-
-/// Bounds-check every column id against the table schema.
-fn validate_columns_in_schema(
-    table: &TableInfo,
-    columns: &[ColumnId],
-    label: &str,
-) -> Result<(), CatalogError> {
-    for &col in columns {
-        if table.schema.field(usize::from(col)).is_none() {
-            return Err(CatalogError::invalid_catalog_row(format!(
-                "{label} column index {} out of bounds for table {}",
-                usize::from(col),
-                table.name.as_str()
-            )));
+    /// Bounds-check every column id against the table schema.
+    fn validate_columns_in_schema(
+        table: &TableInfo,
+        columns: &[ColumnId],
+        label: &str,
+    ) -> Result<(), CatalogError> {
+        for &col in columns {
+            if table.schema.field(usize::from(col)).is_none() {
+                return Err(CatalogError::invalid_catalog_row(format!(
+                    "{label} column index {} out of bounds for table {}",
+                    usize::from(col),
+                    table.name.as_str()
+                )));
+            }
         }
+        Ok(())
     }
-    Ok(())
-}
-
-/// Converts a `usize` ordinal to the on-disk `i32`, matching the pattern in
-/// `insert_primary_key_columns`.
-fn i32_ordinal(ordinal: usize) -> Result<i32, CatalogError> {
-    i32::try_from(ordinal)
-        .map_err(|_| CatalogError::invalid_catalog_row("constraint ordinal does not fit in i32"))
 }
 
 #[cfg(test)]
@@ -591,77 +623,13 @@ mod tests {
         ColumnId::try_from(id).unwrap()
     }
 
-    // ── autoname_unique_constraint_for ────────────────────────────────────
-
-    #[test]
-    fn autoname_single_column_produces_correct_name() {
-        let dir = tempdir().unwrap();
-        let (catalog, txn_mgr) = make_catalog_and_txn(dir.path());
-        let txn = txn_mgr.begin().unwrap();
-        let file_id = catalog
-            .create_table(&txn, "users", three_col_schema(), None)
-            .unwrap();
-        txn.commit().unwrap();
-
-        let txn2 = txn_mgr.begin().unwrap();
-        let name = catalog
-            .autoname_unique_constraint_for(&txn2, file_id, &[col(1)])
-            .unwrap();
-        txn2.commit().unwrap();
-
-        assert_eq!(name, "users_unique_email");
-    }
-
-    #[test]
-    fn autoname_composite_columns_joins_names_in_order() {
-        let dir = tempdir().unwrap();
-        let (catalog, txn_mgr) = make_catalog_and_txn(dir.path());
-        let txn = txn_mgr.begin().unwrap();
-        let file_id = catalog
-            .create_table(&txn, "users", three_col_schema(), None)
-            .unwrap();
-        txn.commit().unwrap();
-
-        let txn2 = txn_mgr.begin().unwrap();
-        let name = catalog
-            .autoname_unique_constraint_for(&txn2, file_id, &[col(1), col(2)])
-            .unwrap();
-        txn2.commit().unwrap();
-
-        assert_eq!(name, "users_unique_email_name");
-    }
-
-    #[test]
-    fn autoname_column_order_affects_name() {
-        let dir = tempdir().unwrap();
-        let (catalog, txn_mgr) = make_catalog_and_txn(dir.path());
-        let txn = txn_mgr.begin().unwrap();
-        let file_id = catalog
-            .create_table(&txn, "users", three_col_schema(), None)
-            .unwrap();
-        txn.commit().unwrap();
-
-        let txn2 = txn_mgr.begin().unwrap();
-        let ab = catalog
-            .autoname_unique_constraint_for(&txn2, file_id, &[col(1), col(2)])
-            .unwrap();
-        let ba = catalog
-            .autoname_unique_constraint_for(&txn2, file_id, &[col(2), col(1)])
-            .unwrap();
-        txn2.commit().unwrap();
-
-        assert_ne!(ab, ba);
-    }
-
-    // ── add_unique_constraint: happy paths ────────────────────────────────
-
     #[test]
     fn add_unique_single_column_visible_immediately() {
         let dir = tempdir().unwrap();
         let (catalog, txn_mgr) = make_catalog_and_txn(dir.path());
         let txn = txn_mgr.begin().unwrap();
         let file_id = catalog
-            .create_table(&txn, "users", three_col_schema(), None)
+            .create_table(&txn, "users", three_col_schema(), vec![])
             .unwrap();
         catalog
             .add_unique_constraint(&txn, file_id, "users_unique_email", &[col(1)], None)
@@ -686,7 +654,7 @@ mod tests {
         let (catalog, txn_mgr) = make_catalog_and_txn(dir.path());
         let txn = txn_mgr.begin().unwrap();
         let file_id = catalog
-            .create_table(&txn, "users", three_col_schema(), None)
+            .create_table(&txn, "users", three_col_schema(), vec![])
             .unwrap();
         catalog
             .add_unique_constraint(
@@ -712,7 +680,7 @@ mod tests {
         let (catalog, txn_mgr) = make_catalog_and_txn(dir.path());
         let txn = txn_mgr.begin().unwrap();
         let file_id = catalog
-            .create_table(&txn, "users", three_col_schema(), None)
+            .create_table(&txn, "users", three_col_schema(), vec![])
             .unwrap();
         catalog
             .add_unique_constraint(&txn, file_id, "users_unique_email", &[col(1)], None)
@@ -738,7 +706,7 @@ mod tests {
         let (catalog, txn_mgr) = make_catalog_and_txn(dir.path());
         let txn = txn_mgr.begin().unwrap();
         let file_id = catalog
-            .create_table(&txn, "users", three_col_schema(), None)
+            .create_table(&txn, "users", three_col_schema(), vec![])
             .unwrap();
         catalog
             .add_unique_constraint(&txn, file_id, "users_unique_email", &[col(1)], None)
@@ -772,7 +740,7 @@ mod tests {
         let (catalog, txn_mgr) = make_catalog_and_txn(dir.path());
         let txn = txn_mgr.begin().unwrap();
         let file_id = catalog
-            .create_table(&txn, "users", three_col_schema(), None)
+            .create_table(&txn, "users", three_col_schema(), vec![])
             .unwrap();
 
         let result = catalog.add_unique_constraint(&txn, file_id, "bad", &[], None);
@@ -790,7 +758,7 @@ mod tests {
         let (catalog, txn_mgr) = make_catalog_and_txn(dir.path());
         let txn = txn_mgr.begin().unwrap();
         let file_id = catalog
-            .create_table(&txn, "users", three_col_schema(), None)
+            .create_table(&txn, "users", three_col_schema(), vec![])
             .unwrap();
 
         let result = catalog.add_unique_constraint(&txn, file_id, "bad", &[col(99)], None);
@@ -808,7 +776,7 @@ mod tests {
         let (catalog, txn_mgr) = make_catalog_and_txn(dir.path());
         let txn = txn_mgr.begin().unwrap();
         let file_id = catalog
-            .create_table(&txn, "users", three_col_schema(), None)
+            .create_table(&txn, "users", three_col_schema(), vec![])
             .unwrap();
         catalog
             .add_unique_constraint(&txn, file_id, "my_unique", &[col(1)], None)
@@ -831,7 +799,7 @@ mod tests {
         let (catalog, txn_mgr) = make_catalog_and_txn(dir.path());
         let txn = txn_mgr.begin().unwrap();
         let file_id = catalog
-            .create_table(&txn, "users", three_col_schema(), None)
+            .create_table(&txn, "users", three_col_schema(), vec![])
             .unwrap();
         catalog
             .add_unique_constraint(&txn, file_id, "users_unique_email", &[col(1)], None)
@@ -854,7 +822,7 @@ mod tests {
         let (catalog, txn_mgr) = make_catalog_and_txn(dir.path());
         let txn = txn_mgr.begin().unwrap();
         let file_id = catalog
-            .create_table(&txn, "users", three_col_schema(), None)
+            .create_table(&txn, "users", three_col_schema(), vec![])
             .unwrap();
         catalog
             .add_unique_constraint(&txn, file_id, "users_unique_email", &[col(1)], None)
@@ -885,7 +853,7 @@ mod tests {
         let (catalog, txn_mgr) = make_catalog_and_txn(dir.path());
         let txn = txn_mgr.begin().unwrap();
         let file_id = catalog
-            .create_table(&txn, "users", three_col_schema(), None)
+            .create_table(&txn, "users", three_col_schema(), vec![])
             .unwrap();
 
         let result = catalog.drop_constraint(&txn, file_id, "ghost");
@@ -903,7 +871,7 @@ mod tests {
         let (catalog, txn_mgr) = make_catalog_and_txn(dir.path());
         let txn = txn_mgr.begin().unwrap();
         let file_id = catalog
-            .create_table(&txn, "users", three_col_schema(), None)
+            .create_table(&txn, "users", three_col_schema(), vec![])
             .unwrap();
         catalog
             .add_unique_constraint(&txn, file_id, "users_unique_email", &[col(1)], None)
@@ -924,6 +892,542 @@ mod tests {
         assert_eq!(
             info.unique_constraints[0].name.as_str(),
             "users_unique_name"
+        );
+    }
+
+    #[test]
+    fn add_foreign_key_single_column_visible_immediately() {
+        let dir = tempdir().unwrap();
+        let (catalog, txn_mgr) = make_catalog_and_txn(dir.path());
+        let txn = txn_mgr.begin().unwrap();
+        let parent_id = catalog
+            .create_table(&txn, "orders", three_col_schema(), vec![])
+            .unwrap();
+        catalog
+            .add_constraint(&txn, parent_id, ConstraintDef::PrimaryKey {
+                columns: vec![col(0)],
+            })
+            .unwrap();
+        let child_id = catalog
+            .create_table(&txn, "items", three_col_schema(), vec![])
+            .unwrap();
+        catalog
+            .add_constraint(&txn, child_id, ConstraintDef::ForeignKey {
+                name: "items_fk_order".to_owned(),
+                local_columns: vec![col(0)],
+                ref_table_id: parent_id,
+                ref_columns: vec![col(0)],
+                on_delete: None,
+                on_update: None,
+            })
+            .unwrap();
+
+        let info = catalog.get_table_info(&txn, "items").unwrap();
+        txn.commit().unwrap();
+
+        assert_eq!(info.foreign_keys.len(), 1);
+        assert_eq!(info.foreign_keys[0].name.as_str(), "items_fk_order");
+        assert_eq!(info.foreign_keys[0].local_columns, vec![col(0)]);
+        assert_eq!(info.foreign_keys[0].ref_table_id, parent_id);
+        assert_eq!(info.foreign_keys[0].ref_columns, vec![col(0)]);
+    }
+
+    #[test]
+    fn add_foreign_key_references_unique_constraint() {
+        let dir = tempdir().unwrap();
+        let (catalog, txn_mgr) = make_catalog_and_txn(dir.path());
+        let txn = txn_mgr.begin().unwrap();
+        let parent_id = catalog
+            .create_table(&txn, "users", three_col_schema(), vec![])
+            .unwrap();
+        // No PK — reference a UNIQUE constraint instead.
+        catalog
+            .add_unique_constraint(&txn, parent_id, "users_unique_email", &[col(1)], None)
+            .unwrap();
+        let child_id = catalog
+            .create_table(&txn, "profiles", three_col_schema(), vec![])
+            .unwrap();
+        catalog
+            .add_constraint(&txn, child_id, ConstraintDef::ForeignKey {
+                name: "profiles_fk_email".to_owned(),
+                local_columns: vec![col(1)],
+                ref_table_id: parent_id,
+                ref_columns: vec![col(1)],
+                on_delete: None,
+                on_update: None,
+            })
+            .unwrap();
+
+        let info = catalog.get_table_info(&txn, "profiles").unwrap();
+        txn.commit().unwrap();
+
+        assert_eq!(info.foreign_keys.len(), 1);
+        assert_eq!(info.foreign_keys[0].ref_columns, vec![col(1)]);
+    }
+
+    #[test]
+    fn add_foreign_key_composite_columns_preserved_in_order() {
+        let dir = tempdir().unwrap();
+        let (catalog, txn_mgr) = make_catalog_and_txn(dir.path());
+        let txn = txn_mgr.begin().unwrap();
+        let parent_id = catalog
+            .create_table(&txn, "orders", three_col_schema(), vec![])
+            .unwrap();
+        catalog
+            .add_constraint(&txn, parent_id, ConstraintDef::PrimaryKey {
+                columns: vec![col(1), col(2)],
+            })
+            .unwrap();
+        let child_id = catalog
+            .create_table(&txn, "items", three_col_schema(), vec![])
+            .unwrap();
+        catalog
+            .add_constraint(&txn, child_id, ConstraintDef::ForeignKey {
+                name: "items_fk_composite".to_owned(),
+                local_columns: vec![col(1), col(2)],
+                ref_table_id: parent_id,
+                ref_columns: vec![col(1), col(2)],
+                on_delete: None,
+                on_update: None,
+            })
+            .unwrap();
+
+        let info = catalog.get_table_info(&txn, "items").unwrap();
+        txn.commit().unwrap();
+
+        assert_eq!(info.foreign_keys[0].local_columns, vec![col(1), col(2)]);
+        assert_eq!(info.foreign_keys[0].ref_columns, vec![col(1), col(2)]);
+    }
+
+    #[test]
+    fn add_foreign_key_survives_cache_evict_and_reload() {
+        let dir = tempdir().unwrap();
+        let (catalog, txn_mgr) = make_catalog_and_txn(dir.path());
+        let txn = txn_mgr.begin().unwrap();
+        let parent_id = catalog
+            .create_table(&txn, "orders", three_col_schema(), vec![])
+            .unwrap();
+        catalog
+            .add_constraint(&txn, parent_id, ConstraintDef::PrimaryKey {
+                columns: vec![col(0)],
+            })
+            .unwrap();
+        let child_id = catalog
+            .create_table(&txn, "items", three_col_schema(), vec![])
+            .unwrap();
+        catalog
+            .add_constraint(&txn, child_id, ConstraintDef::ForeignKey {
+                name: "items_fk_order".to_owned(),
+                local_columns: vec![col(0)],
+                ref_table_id: parent_id,
+                ref_columns: vec![col(0)],
+                on_delete: None,
+                on_update: None,
+            })
+            .unwrap();
+        txn.commit().unwrap();
+
+        catalog.user_tables.write().remove("items");
+
+        let txn2 = txn_mgr.begin().unwrap();
+        let info = catalog.get_table_info(&txn2, "items").unwrap();
+        txn2.commit().unwrap();
+
+        assert_eq!(info.foreign_keys.len(), 1);
+        assert_eq!(info.foreign_keys[0].name.as_str(), "items_fk_order");
+    }
+
+    #[test]
+    fn add_foreign_key_empty_columns_returns_error() {
+        let dir = tempdir().unwrap();
+        let (catalog, txn_mgr) = make_catalog_and_txn(dir.path());
+        let txn = txn_mgr.begin().unwrap();
+        let parent_id = catalog
+            .create_table(&txn, "orders", three_col_schema(), vec![])
+            .unwrap();
+        catalog
+            .add_constraint(&txn, parent_id, ConstraintDef::PrimaryKey {
+                columns: vec![col(0)],
+            })
+            .unwrap();
+        let child_id = catalog
+            .create_table(&txn, "items", three_col_schema(), vec![])
+            .unwrap();
+
+        let result = catalog.add_constraint(&txn, child_id, ConstraintDef::ForeignKey {
+            name: "bad".to_owned(),
+            local_columns: vec![],
+            ref_table_id: parent_id,
+            ref_columns: vec![],
+            on_delete: None,
+            on_update: None,
+        });
+
+        assert!(
+            matches!(result, Err(CatalogError::InvalidCatalogRow { .. })),
+            "expected InvalidCatalogRow for empty column list, got: {result:?}"
+        );
+        txn.commit().unwrap();
+    }
+
+    #[test]
+    fn add_foreign_key_column_count_mismatch_returns_error() {
+        let dir = tempdir().unwrap();
+        let (catalog, txn_mgr) = make_catalog_and_txn(dir.path());
+        let txn = txn_mgr.begin().unwrap();
+        let parent_id = catalog
+            .create_table(&txn, "orders", three_col_schema(), vec![])
+            .unwrap();
+        catalog
+            .add_constraint(&txn, parent_id, ConstraintDef::PrimaryKey {
+                columns: vec![col(0)],
+            })
+            .unwrap();
+        let child_id = catalog
+            .create_table(&txn, "items", three_col_schema(), vec![])
+            .unwrap();
+
+        let result = catalog.add_constraint(&txn, child_id, ConstraintDef::ForeignKey {
+            name: "bad".to_owned(),
+            local_columns: vec![col(0), col(1)],
+            ref_table_id: parent_id,
+            ref_columns: vec![col(0)],
+            on_delete: None,
+            on_update: None,
+        });
+
+        assert!(
+            matches!(result, Err(CatalogError::InvalidCatalogRow { .. })),
+            "expected InvalidCatalogRow for column count mismatch, got: {result:?}"
+        );
+        txn.commit().unwrap();
+    }
+
+    #[test]
+    fn add_foreign_key_referenced_columns_not_unique_returns_error() {
+        let dir = tempdir().unwrap();
+        let (catalog, txn_mgr) = make_catalog_and_txn(dir.path());
+        let txn = txn_mgr.begin().unwrap();
+        let parent_id = catalog
+            .create_table(&txn, "orders", three_col_schema(), vec![])
+            .unwrap();
+        // col(1) on orders has no PK or UNIQUE — FK must be rejected.
+        let child_id = catalog
+            .create_table(&txn, "items", three_col_schema(), vec![])
+            .unwrap();
+
+        let result = catalog.add_constraint(&txn, child_id, ConstraintDef::ForeignKey {
+            name: "bad".to_owned(),
+            local_columns: vec![col(1)],
+            ref_table_id: parent_id,
+            ref_columns: vec![col(1)],
+            on_delete: None,
+            on_update: None,
+        });
+
+        assert!(
+            matches!(result, Err(CatalogError::InvalidCatalogRow { .. })),
+            "expected InvalidCatalogRow when referenced columns are not PK/UNIQUE, got: {result:?}"
+        );
+        txn.commit().unwrap();
+    }
+
+    #[test]
+    fn add_foreign_key_duplicate_name_returns_error() {
+        let dir = tempdir().unwrap();
+        let (catalog, txn_mgr) = make_catalog_and_txn(dir.path());
+        let txn = txn_mgr.begin().unwrap();
+        let parent_id = catalog
+            .create_table(&txn, "orders", three_col_schema(), vec![])
+            .unwrap();
+        catalog
+            .add_constraint(&txn, parent_id, ConstraintDef::PrimaryKey {
+                columns: vec![col(0)],
+            })
+            .unwrap();
+        let child_id = catalog
+            .create_table(&txn, "items", three_col_schema(), vec![])
+            .unwrap();
+        catalog
+            .add_constraint(&txn, child_id, ConstraintDef::ForeignKey {
+                name: "my_fk".to_owned(),
+                local_columns: vec![col(0)],
+                ref_table_id: parent_id,
+                ref_columns: vec![col(0)],
+                on_delete: None,
+                on_update: None,
+            })
+            .unwrap();
+
+        let result = catalog.add_constraint(&txn, child_id, ConstraintDef::ForeignKey {
+            name: "my_fk".to_owned(),
+            local_columns: vec![col(1)],
+            ref_table_id: parent_id,
+            ref_columns: vec![col(0)],
+            on_delete: None,
+            on_update: None,
+        });
+
+        assert!(
+            matches!(result, Err(CatalogError::InvalidCatalogRow { .. })),
+            "expected InvalidCatalogRow for duplicate FK name, got: {result:?}"
+        );
+        txn.commit().unwrap();
+    }
+
+    #[test]
+    fn find_referencing_fks_returns_child_fk() {
+        let dir = tempdir().unwrap();
+        let (catalog, txn_mgr) = make_catalog_and_txn(dir.path());
+        let txn = txn_mgr.begin().unwrap();
+        let parent_id = catalog
+            .create_table(&txn, "orders", three_col_schema(), vec![])
+            .unwrap();
+        catalog
+            .add_constraint(&txn, parent_id, ConstraintDef::PrimaryKey {
+                columns: vec![col(0)],
+            })
+            .unwrap();
+        let child_id = catalog
+            .create_table(&txn, "items", three_col_schema(), vec![])
+            .unwrap();
+        catalog
+            .add_constraint(&txn, child_id, ConstraintDef::ForeignKey {
+                name: "items_fk_order".to_owned(),
+                local_columns: vec![col(0)],
+                ref_table_id: parent_id,
+                ref_columns: vec![col(0)],
+                on_delete: None,
+                on_update: None,
+            })
+            .unwrap();
+
+        let refs = catalog.find_referencing_fks(&txn, parent_id).unwrap();
+        txn.commit().unwrap();
+
+        assert_eq!(refs.len(), 1);
+        assert_eq!(refs[0].constraint_name, "items_fk_order");
+        assert_eq!(refs[0].child_table_id, child_id);
+        assert_eq!(refs[0].column_pairs, vec![(col(0), col(0))]);
+    }
+
+    #[test]
+    fn find_referencing_fks_empty_when_no_references() {
+        let dir = tempdir().unwrap();
+        let (catalog, txn_mgr) = make_catalog_and_txn(dir.path());
+        let txn = txn_mgr.begin().unwrap();
+        let table_id = catalog
+            .create_table(&txn, "orders", three_col_schema(), vec![])
+            .unwrap();
+
+        let refs = catalog.find_referencing_fks(&txn, table_id).unwrap();
+        txn.commit().unwrap();
+
+        assert!(refs.is_empty());
+    }
+
+    #[test]
+    fn find_referencing_fks_groups_composite_columns_into_single_entry() {
+        let dir = tempdir().unwrap();
+        let (catalog, txn_mgr) = make_catalog_and_txn(dir.path());
+        let txn = txn_mgr.begin().unwrap();
+        let parent_id = catalog
+            .create_table(&txn, "orders", three_col_schema(), vec![])
+            .unwrap();
+        catalog
+            .add_constraint(&txn, parent_id, ConstraintDef::PrimaryKey {
+                columns: vec![col(1), col(2)],
+            })
+            .unwrap();
+        let child_id = catalog
+            .create_table(&txn, "items", three_col_schema(), vec![])
+            .unwrap();
+        catalog
+            .add_constraint(&txn, child_id, ConstraintDef::ForeignKey {
+                name: "items_fk_composite".to_owned(),
+                local_columns: vec![col(1), col(2)],
+                ref_table_id: parent_id,
+                ref_columns: vec![col(1), col(2)],
+                on_delete: None,
+                on_update: None,
+            })
+            .unwrap();
+
+        let refs = catalog.find_referencing_fks(&txn, parent_id).unwrap();
+        txn.commit().unwrap();
+
+        assert_eq!(
+            refs.len(),
+            1,
+            "two FK rows must fold into one ReferencingFk"
+        );
+        assert_eq!(refs[0].column_pairs, vec![
+            (col(1), col(1)),
+            (col(2), col(2))
+        ]);
+    }
+
+    // ── drop_constraint (FK) ──────────────────────────────────────────────
+
+    #[test]
+    fn drop_fk_constraint_removes_from_foreign_keys() {
+        let dir = tempdir().unwrap();
+        let (catalog, txn_mgr) = make_catalog_and_txn(dir.path());
+        let txn = txn_mgr.begin().unwrap();
+        let parent_id = catalog
+            .create_table(&txn, "orders", three_col_schema(), vec![])
+            .unwrap();
+        catalog
+            .add_constraint(&txn, parent_id, ConstraintDef::PrimaryKey {
+                columns: vec![col(0)],
+            })
+            .unwrap();
+        let child_id = catalog
+            .create_table(&txn, "items", three_col_schema(), vec![])
+            .unwrap();
+        catalog
+            .add_constraint(&txn, child_id, ConstraintDef::ForeignKey {
+                name: "items_fk_order".to_owned(),
+                local_columns: vec![col(0)],
+                ref_table_id: parent_id,
+                ref_columns: vec![col(0)],
+                on_delete: None,
+                on_update: None,
+            })
+            .unwrap();
+        txn.commit().unwrap();
+
+        let txn2 = txn_mgr.begin().unwrap();
+        catalog
+            .drop_constraint(&txn2, child_id, "items_fk_order")
+            .unwrap();
+        let info = catalog.get_table_info(&txn2, "items").unwrap();
+        txn2.commit().unwrap();
+
+        assert!(info.foreign_keys.is_empty());
+    }
+
+    #[test]
+    fn drop_fk_constraint_survives_cache_evict_and_reload() {
+        let dir = tempdir().unwrap();
+        let (catalog, txn_mgr) = make_catalog_and_txn(dir.path());
+        let txn = txn_mgr.begin().unwrap();
+        let parent_id = catalog
+            .create_table(&txn, "orders", three_col_schema(), vec![])
+            .unwrap();
+        catalog
+            .add_constraint(&txn, parent_id, ConstraintDef::PrimaryKey {
+                columns: vec![col(0)],
+            })
+            .unwrap();
+        let child_id = catalog
+            .create_table(&txn, "items", three_col_schema(), vec![])
+            .unwrap();
+        catalog
+            .add_constraint(&txn, child_id, ConstraintDef::ForeignKey {
+                name: "items_fk_order".to_owned(),
+                local_columns: vec![col(0)],
+                ref_table_id: parent_id,
+                ref_columns: vec![col(0)],
+                on_delete: None,
+                on_update: None,
+            })
+            .unwrap();
+        txn.commit().unwrap();
+
+        let txn2 = txn_mgr.begin().unwrap();
+        catalog
+            .drop_constraint(&txn2, child_id, "items_fk_order")
+            .unwrap();
+        txn2.commit().unwrap();
+
+        catalog.user_tables.write().remove("items");
+
+        let txn3 = txn_mgr.begin().unwrap();
+        let info = catalog.get_table_info(&txn3, "items").unwrap();
+        txn3.commit().unwrap();
+
+        assert!(
+            info.foreign_keys.is_empty(),
+            "dropped FK must not reappear after reload"
+        );
+    }
+
+    // ── add_constraint: Check dispatch ────────────────────────────────────
+
+    #[test]
+    fn add_constraint_check_stored_without_error() {
+        let dir = tempdir().unwrap();
+        let (catalog, txn_mgr) = make_catalog_and_txn(dir.path());
+        let txn = txn_mgr.begin().unwrap();
+        let file_id = catalog
+            .create_table(&txn, "users", three_col_schema(), vec![])
+            .unwrap();
+
+        let result = catalog.add_constraint(&txn, file_id, ConstraintDef::Check {
+            name: "age_positive".to_owned(),
+            expr: "age > 0".to_owned(),
+        });
+        txn.commit().unwrap();
+
+        assert!(
+            result.is_ok(),
+            "add_constraint Check should succeed, got: {result:?}"
+        );
+    }
+
+    #[test]
+    fn add_constraint_check_duplicate_name_returns_error() {
+        let dir = tempdir().unwrap();
+        let (catalog, txn_mgr) = make_catalog_and_txn(dir.path());
+        let txn = txn_mgr.begin().unwrap();
+        let file_id = catalog
+            .create_table(&txn, "users", three_col_schema(), vec![])
+            .unwrap();
+        catalog
+            .add_constraint(&txn, file_id, ConstraintDef::Check {
+                name: "chk".to_owned(),
+                expr: "id > 0".to_owned(),
+            })
+            .unwrap();
+
+        let result = catalog.add_constraint(&txn, file_id, ConstraintDef::Check {
+            name: "chk".to_owned(),
+            expr: "id > 1".to_owned(),
+        });
+
+        assert!(
+            matches!(result, Err(CatalogError::InvalidCatalogRow { .. })),
+            "expected error for duplicate Check name, got: {result:?}"
+        );
+        txn.commit().unwrap();
+    }
+
+    #[test]
+    fn build_constraints_fk_header_with_no_detail_rows_returns_error() {
+        let dir = tempdir().unwrap();
+        let (catalog, txn_mgr) = make_catalog_and_txn(dir.path());
+        let txn = txn_mgr.begin().unwrap();
+        let file_id = catalog
+            .create_table(&txn, "t", three_col_schema(), vec![])
+            .unwrap();
+        let mut table = catalog.get_table_info(&txn, "t").unwrap();
+        txn.commit().unwrap();
+
+        let orphan_header = ConstraintRow {
+            constraint_name: NonEmptyString::try_from("orphan_fk").unwrap(),
+            table_id: file_id,
+            constraint_kind: ConstraintKind::ForeignKey,
+            expr: None,
+            backing_index_id: None,
+        };
+
+        let result =
+            Catalog::build_constraints_for_table(&mut table, vec![orphan_header], vec![], vec![]);
+
+        assert!(
+            matches!(result, Err(CatalogError::InvalidCatalogRow { .. })),
+            "expected error for FK header with no detail rows, got: {result:?}"
         );
     }
 }

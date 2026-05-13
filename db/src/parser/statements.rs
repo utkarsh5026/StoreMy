@@ -609,8 +609,8 @@ impl Display for ColumnDef {
 /// is stored as non-nullable regardless of the `nullable` flag, matching SQL semantics.
 /// `auto_increment`, `default`, and table-level primary keys are not part of [`Field`]
 /// and are ignored here.
-impl From<Vec<&ColumnDef>> for TupleSchema {
-    fn from(columns: Vec<&ColumnDef>) -> Self {
+impl From<&[ColumnDef]> for TupleSchema {
+    fn from(columns: &[ColumnDef]) -> Self {
         TupleSchema::new(
             columns
                 .into_iter()

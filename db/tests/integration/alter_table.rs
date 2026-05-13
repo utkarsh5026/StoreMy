@@ -53,10 +53,9 @@ fn add_duplicate_column_is_an_error() {
     db.run_ok("CREATE TABLE t (id INT, name STRING)");
 
     let err = db.run("ALTER TABLE t ADD COLUMN name INT").unwrap_err();
-    // The binder catches the duplicate before the catalog does.
     assert!(
-        matches!(err, EngineError::Bind(_)),
-        "expected a Bind error for duplicate column name, got {err:?}"
+        matches!(err, EngineError::DuplicateColumn { .. }),
+        "expected DuplicateColumn for duplicate column name, got {err:?}"
     );
 }
 
@@ -73,8 +72,8 @@ fn insert_after_add_column_requires_new_column_value() {
     // Two values is now too few.
     let err = db.run("INSERT INTO t VALUES (2, 'bob')").unwrap_err();
     assert!(
-        matches!(err, EngineError::Bind(_)),
-        "expected WrongColumnCount bind error, got {err:?}"
+        matches!(err, EngineError::WrongColumnCount { .. }),
+        "expected WrongColumnCount, got {err:?}"
     );
 }
 
@@ -127,8 +126,8 @@ fn insert_too_many_values_after_drop_column_errors() {
     // Still supplying three values (as if name were not dropped) must fail.
     let err = db.run("INSERT INTO t VALUES (1, 'alice', 30)").unwrap_err();
     assert!(
-        matches!(err, EngineError::Bind(_)),
-        "expected WrongColumnCount bind error, got {err:?}"
+        matches!(err, EngineError::WrongColumnCount { .. }),
+        "expected WrongColumnCount, got {err:?}"
     );
 }
 
@@ -154,7 +153,10 @@ fn drop_missing_column_without_if_exists_errors() {
     // The binder resolves the column against the schema before calling the catalog,
     // so it surfaces UnknownColumn rather than catalog's ColumnNotFound.
     assert!(
-        matches!(err, EngineError::Bind(_) | EngineError::Catalog(_)),
+        matches!(
+            err,
+            EngineError::UnknownColumn { .. } | EngineError::Catalog(_)
+        ),
         "expected an error for missing column, got {err:?}"
     );
 }
@@ -256,8 +258,8 @@ fn alter_missing_table_without_if_exists_errors() {
 
     let err = db.run("ALTER TABLE ghost ADD COLUMN x INT").unwrap_err();
     assert!(
-        matches!(err, EngineError::Bind(_)),
-        "expected Bind(UnknownTable), got {err:?}"
+        matches!(err, EngineError::TableNotFound(_) | EngineError::Catalog(_)),
+        "expected TableNotFound for missing table, got {err:?}"
     );
 }
 

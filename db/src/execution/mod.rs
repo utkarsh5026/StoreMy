@@ -152,6 +152,14 @@ impl<'a> PlanNode<'a> {
         )?))
     }
 
+    pub fn nested_loop_join(left: Self, right: Self, predicate: BooleanExpression) -> Self {
+        Self::NestedLoopJoin(join::NestedLoopJoin::new(left, right, predicate))
+    }
+
+    pub fn hash_join(left: Self, right: Self, predicate: join::JoinPredicate) -> Self {
+        Self::HashJoin(join::HashJoin::new(left, right, predicate))
+    }
+
     pub fn aggregate(
         child: Self,
         group_by: &[ColumnId],

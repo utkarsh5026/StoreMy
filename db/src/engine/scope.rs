@@ -1,6 +1,6 @@
+use super::{ConstraintViolation, EngineError};
 use crate::{
     FileId, Value,
-    binder::BindError,
     catalog::TableInfo,
     execution::expression::BooleanExpression,
     parser::statements::{BinOp, ColumnRef, Expr, UnOp},
@@ -57,14 +57,14 @@ pub(super) trait ColumnResolver {
     /// Returns `(global_column_index, field, owning_table_name)` so the
     /// caller can build a column-vs-literal predicate and report errors
     /// against the correct table.
-    fn resolve<'a>(&'a self, col: &ColumnRef) -> Result<(usize, &'a Field, &'a str), BindError>;
+    fn resolve<'a>(&'a self, col: &ColumnRef) -> Result<(usize, &'a Field, &'a str), EngineError>;
 
     /// Binds a parsed boolean [`Expr`] tree into a [`BooleanExpression`].
     ///
     /// Default implementation recursively binds `And`/`Or` and uses
     /// [`Self::resolve`] + [`bind_value_for`] at each leaf — so a
     /// single-table and multi-table scope share this code unchanged.
-    fn bind_where(&self, w: &Expr) -> Result<BooleanExpression, BindError> {
+    fn bind_where(&self, w: &Expr) -> Result<BooleanExpression, EngineError> {
         match w {
             Expr::BinaryOp { lhs, op, rhs } => match op {
                 BinOp::And => Ok(BooleanExpression::And(
@@ -83,21 +83,14 @@ pub(super) trait ColumnResolver {
                 op: UnOp::Not,
                 operand,
             } => Ok(BooleanExpression::Not(Box::new(self.bind_where(operand)?))),
-            other => Err(BindError::Unsupported(format!(
+            other => Err(EngineError::Unsupported(format!(
                 "unsupported boolean expression in WHERE/HAVING/ON: {other}"
             ))),
         }
     }
 
     /// Resolves an optional boolean [`Expr`] into an optional [`BooleanExpression`].
-    ///
-    /// If the input is `None`, returns `Ok(None)`. If the input is `Some(condition)`,
-    /// attempts to bind it using [`Self::bind_where`] and returns `Ok(Some(expr))`
-    /// on success, or an error if binding fails.
-    ///
-    /// This is intended for binding the `WHERE` or `HAVING` clauses, which may or may not be
-    /// present.
-    fn resolve_where(&self, w: Option<&Expr>) -> Result<Option<BooleanExpression>, BindError> {
+    fn resolve_where(&self, w: Option<&Expr>) -> Result<Option<BooleanExpression>, EngineError> {
         w.map(|w| self.bind_where(w)).transpose()
     }
 
@@ -106,9 +99,9 @@ pub(super) trait ColumnResolver {
         lhs: &Expr,
         op: BinOp,
         rhs: &Expr,
-    ) -> Result<BooleanExpression, BindError> {
+    ) -> Result<BooleanExpression, EngineError> {
         let pred = binop_to_predicate(op).ok_or_else(|| {
-            BindError::Unsupported(format!("unsupported comparison operator in WHERE: {op:?}"))
+            EngineError::Unsupported(format!("unsupported comparison operator in WHERE: {op:?}"))
         })?;
 
         match (lhs, rhs) {
@@ -131,7 +124,7 @@ pub(super) trait ColumnResolver {
                 let (r_idx, _r_fld, _r_table) = self.resolve(rc)?;
                 Ok(BooleanExpression::col_op_col(l_idx, pred, r_idx))
             }
-            _ => Err(BindError::Unsupported(format!(
+            _ => Err(EngineError::Unsupported(format!(
                 "unsupported comparison operands in WHERE/HAVING/ON: {lhs} {op} {rhs}"
             ))),
         }
@@ -164,10 +157,7 @@ fn flip_predicate(p: Predicate) -> Predicate {
 ///
 /// Built up incrementally as the binder walks the `FROM` clause: each
 /// table (or join right-hand side) is `push`ed in, after which predicates
-/// and expressions can be resolved against the accumulated set. Used by
-/// every place in `SELECT` binding that needs to turn a `ColumnRef` into
-/// a global column index — `ON`, `WHERE`, projection list, `GROUP BY`,
-/// `ORDER BY`.
+/// and expressions can be resolved against the accumulated set.
 pub(super) struct Scope {
     tables: Vec<BoundTable>,
 }
@@ -183,18 +173,7 @@ impl Scope {
 }
 
 impl ColumnResolver for Scope {
-    /// Resolves a [`ColumnRef`] against the accumulated multi-table scope.
-    ///
-    /// Qualifiers narrow resolution to tables whose qualifier label matches
-    /// (`alias` when present, otherwise the table name). Without a qualifier,
-    /// the column must exist in exactly one in-scope table.
-    ///
-    /// Returns `(global_column_index, field, owning_table_name)` where:
-    /// - `global_column_index` is the offset of the owning table plus the local column index (used
-    ///   by the executor),
-    /// - `field` borrows from the owning table's schema,
-    /// - `owning_table_name` is the owning table's `name.as_str()`.
-    fn resolve<'a>(&'a self, col: &ColumnRef) -> Result<(usize, &'a Field, &'a str), BindError> {
+    fn resolve<'a>(&'a self, col: &ColumnRef) -> Result<(usize, &'a Field, &'a str), EngineError> {
         let candidates: Vec<&BoundTable> = match &col.qualifier {
             Some(q) => self
                 .tables
@@ -206,10 +185,15 @@ impl ColumnResolver for Scope {
 
         if let Some(q) = &col.qualifier {
             if candidates.is_empty() {
-                return Err(BindError::unknown_column(q.as_str(), col.name.as_str()));
+                return Err(EngineError::UnknownColumn {
+                    table: q.to_string(),
+                    column: col.name.to_string(),
+                });
             }
             if candidates.len() > 1 {
-                return Err(BindError::ambiguous_column(q.as_str()));
+                return Err(EngineError::AmbiguousColumn {
+                    column: q.to_string(),
+                });
             }
         }
 
@@ -231,10 +215,13 @@ impl ColumnResolver for Scope {
                     .or_else(|| self.tables.first().map(|t| t.name.clone()))
                     .unwrap_or_default();
 
-                Err(BindError::unknown_column(table, col.name.as_str()))
+                Err(EngineError::UnknownColumn {
+                    table,
+                    column: col.name.to_string(),
+                })
             }
             1 => Ok(matches[0]),
-            _ => Err(BindError::AmbiguousColumn {
+            _ => Err(EngineError::AmbiguousColumn {
                 column: col.name.to_string(),
             }),
         }
@@ -245,10 +232,6 @@ impl ColumnResolver for Scope {
 ///
 /// DML's write target is exactly one table, so the qualifier
 /// disambiguation a multi-table [`Scope`] needs is dead weight here.
-/// This type exposes flat field access (`name`, `file_id`, `schema`)
-/// for the binder and a small `bind_where` API. When DML grows
-/// `UPDATE … FROM` / subquery support, it will keep this as the
-/// *target* and gain a separate [`Scope`] field for resolution.
 pub(super) struct SingleTableScope {
     pub name: NonEmptyString,
     pub alias: Option<NonEmptyString>,
@@ -272,18 +255,7 @@ impl SingleTableScope {
 }
 
 impl ColumnResolver for SingleTableScope {
-    /// Resolves a [`ColumnRef`] against this single DML target table.
-    ///
-    /// Since DML operates on exactly one table, column resolution is
-    /// unambiguous:
-    /// - With a qualifier (`t.col`), it must match this table's qualifier label (alias if present,
-    ///   otherwise the table name).
-    /// - Without a qualifier (`col`), the column must exist in this table's schema.
-    ///
-    /// Returns `(local_column_index, field, owning_table_name)`, where:
-    /// - `field` borrows from `self.schema`,
-    /// - `owning_table_name` is `self.name.as_str()`.
-    fn resolve<'a>(&'a self, col: &ColumnRef) -> Result<(usize, &'a Field, &'a str), BindError> {
+    fn resolve<'a>(&'a self, col: &ColumnRef) -> Result<(usize, &'a Field, &'a str), EngineError> {
         let ColumnRef {
             name: col_name,
             qualifier,
@@ -291,38 +263,41 @@ impl ColumnResolver for SingleTableScope {
         if let Some(q) = qualifier
             && q != self.qualifier_label()
         {
-            return Err(BindError::unknown_column(q.clone(), col_name.clone()));
+            return Err(EngineError::UnknownColumn {
+                table: q.to_string(),
+                column: col_name.to_string(),
+            });
         }
 
-        let (local, fld) = self
-            .schema
-            .field_by_name(col_name)
-            .ok_or_else(|| BindError::unknown_column(self.name.clone(), col_name.clone()))?;
+        let (local, fld) =
+            self.schema
+                .field_by_name(col_name)
+                .ok_or_else(|| EngineError::UnknownColumn {
+                    table: self.name.to_string(),
+                    column: col_name.to_string(),
+                })?;
 
         Ok((usize::from(local), fld, self.name.as_str()))
     }
 }
 
 /// Coerces a literal to a column's declared type, honoring nullability.
-///
-/// Shared between [`Scope`] and [`SingleTableScope`]: the rule is the
-/// same in both — `NULL` is allowed iff the column is nullable, and
-/// every other value must be coercible to the declared type.
 pub(super) fn bind_value_for(
     value: &Value,
     field: &Field,
     table: &str,
-) -> Result<Value, BindError> {
+) -> Result<Value, EngineError> {
     if matches!(value, Value::Null) {
         if !field.nullable {
-            return Err(BindError::NullViolation {
+            return Err(ConstraintViolation::NullViolation {
                 table: table.into(),
                 column: field.name.to_string(),
-            });
+            }
+            .into());
         }
         return Ok(Value::Null);
     }
-    Value::try_from((value, field.field_type)).map_err(|e| BindError::TypeMismatch {
+    Value::try_from((value, field.field_type)).map_err(|e| EngineError::TypeMismatch {
         column: field.name.to_string(),
         expected: field.field_type.to_string(),
         got: e.to_string(),

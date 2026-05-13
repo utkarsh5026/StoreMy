@@ -13,7 +13,7 @@
 //!   6. Trying to add a UNIQUE constraint on a table that already has duplicate data fails.
 
 use storemy::{
-    engine::{EngineError, StatementResult},
+    engine::{ConstraintViolation, EngineError, StatementResult},
     index::IndexKind,
     primitives::ColumnId,
 };
@@ -323,7 +323,12 @@ fn insert_duplicate_into_unique_column_is_rejected() {
     let result = db.run("INSERT INTO users VALUES (2, 'a@example.com')");
 
     assert!(
-        matches!(result, Err(EngineError::UniqueViolation { .. })),
+        matches!(
+            result,
+            Err(EngineError::Constraint(
+                ConstraintViolation::UniqueViolation { .. }
+            ))
+        ),
         "expected UniqueViolation, got: {result:?}"
     );
 }
@@ -338,7 +343,7 @@ fn insert_unique_violation_names_the_constraint() {
         .run("INSERT INTO users VALUES (2, 'a@example.com')")
         .unwrap_err();
 
-    let EngineError::UniqueViolation { constraint } = err else {
+    let EngineError::Constraint(ConstraintViolation::UniqueViolation { constraint }) = err else {
         panic!("expected UniqueViolation, got {err:?}");
     };
     assert_eq!(constraint, "users_unique_email");
@@ -363,7 +368,12 @@ fn multi_row_insert_with_internal_duplicate_is_rejected() {
     let result = db.run("INSERT INTO users VALUES (1, 'x@y.com'), (2, 'x@y.com')");
 
     assert!(
-        matches!(result, Err(EngineError::UniqueViolation { .. })),
+        matches!(
+            result,
+            Err(EngineError::Constraint(
+                ConstraintViolation::UniqueViolation { .. }
+            ))
+        ),
         "expected UniqueViolation for duplicate within same INSERT, got: {result:?}"
     );
 }
@@ -376,7 +386,12 @@ fn unique_violation_on_multi_row_insert_stops_at_duplicate() {
     // First row is unique, second is a duplicate — the statement errors.
     let result = db.run("INSERT INTO users VALUES (1, 'a@b.com'), (2, 'a@b.com')");
     assert!(
-        matches!(result, Err(EngineError::UniqueViolation { .. })),
+        matches!(
+            result,
+            Err(EngineError::Constraint(
+                ConstraintViolation::UniqueViolation { .. }
+            ))
+        ),
         "expected UniqueViolation, got: {result:?}"
     );
 
@@ -416,7 +431,12 @@ fn unique_enforcement_works_after_alter_add_constraint() {
     let result = db.run("INSERT INTO users VALUES (2, 'a@example.com')");
 
     assert!(
-        matches!(result, Err(EngineError::UniqueViolation { .. })),
+        matches!(
+            result,
+            Err(EngineError::Constraint(
+                ConstraintViolation::UniqueViolation { .. }
+            ))
+        ),
         "UNIQUE constraint added via ALTER TABLE must be enforced on subsequent INSERTs"
     );
 }
@@ -433,7 +453,12 @@ fn update_duplicate_value_into_unique_column_is_rejected() {
     let result = db.run("UPDATE users SET email = 'a@example.com' WHERE id = 2");
 
     assert!(
-        matches!(result, Err(EngineError::UniqueViolation { .. })),
+        matches!(
+            result,
+            Err(EngineError::Constraint(
+                ConstraintViolation::UniqueViolation { .. }
+            ))
+        ),
         "expected UniqueViolation when UPDATE introduces a duplicate, got: {result:?}"
     );
 }
@@ -449,7 +474,7 @@ fn update_unique_violation_names_the_constraint() {
         .run("UPDATE users SET email = 'a@example.com' WHERE id = 2")
         .unwrap_err();
 
-    let EngineError::UniqueViolation { constraint } = err else {
+    let EngineError::Constraint(ConstraintViolation::UniqueViolation { constraint }) = err else {
         panic!("expected UniqueViolation, got {err:?}");
     };
     assert_eq!(constraint, "users_unique_email");

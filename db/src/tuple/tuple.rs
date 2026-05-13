@@ -112,6 +112,28 @@ impl Tuple {
         self.values.get(index)
     }
 
+    /// Retrieves the value at the column specified by [`ColumnId`], or `None` if
+    /// the column index is out of bounds.
+    ///
+    /// # Arguments
+    ///
+    /// * `col` - The [`ColumnId`] representing the column to access.
+    ///
+    /// # Returns
+    ///
+    /// `Some(&Value)` if the column exists, or `None` if the column index is invalid.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// let tuple = Tuple::new(vec![Value::Int32(1), Value::String("test".into())]);
+    /// let col_id = ColumnId::from(1);
+    /// assert_eq!(tuple.get_col(col_id), Some(&Value::String("test".into())));
+    /// ```
+    pub fn get_col(&self, col: ColumnId) -> Option<&Value> {
+        self.values.get(usize::from(col))
+    }
+
     /// Returns the number of values in this row - the arity. Should equal
     /// the matching schema's [`TupleSchema::physical_num_fields`] once validation
     /// passes.

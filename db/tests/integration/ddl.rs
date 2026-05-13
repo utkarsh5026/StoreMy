@@ -47,8 +47,8 @@ fn create_table_duplicate_without_if_not_exists_errors() {
 
     let err = db.run("CREATE TABLE dup (id INT)").unwrap_err();
     assert!(
-        matches!(err, EngineError::Bind(_)),
-        "expected Bind(TableAlreadyExists), got {err:?}"
+        matches!(err, EngineError::TableAlreadyExists(_)),
+        "expected TableAlreadyExists, got {err:?}"
     );
 }
 
@@ -57,8 +57,8 @@ fn drop_missing_table_errors_without_if_exists() {
     let db = TestDb::new();
     let err = db.run("DROP TABLE ghost").unwrap_err();
     assert!(
-        matches!(err, EngineError::Bind(_)),
-        "expected Bind(UnknownTable), got {err:?}"
+        matches!(err, EngineError::TableNotFound(_) | EngineError::Catalog(_)),
+        "expected TableNotFound, got {err:?}"
     );
 }
 
