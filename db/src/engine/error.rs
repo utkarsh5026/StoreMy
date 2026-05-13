@@ -72,6 +72,9 @@ pub enum EngineError {
     #[error("table '{0}' already has a primary key")]
     PrimaryKeyAlreadyExists(String),
 
+    #[error("table '{table}' declares AUTO_INCREMENT on {count} columns; only one is allowed")]
+    MultipleAutoIncrementColumns { table: String, count: usize },
+
     // ── Column resolution ─────────────────────────────────────────────────────
     #[error("column '{column}' not found in table '{table}'")]
     UnknownColumn { table: String, column: String },
