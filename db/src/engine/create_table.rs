@@ -3,7 +3,7 @@ use crate::{
     engine::{Engine, EngineError, StatementResult},
     index::IndexKind,
     parser::statements::{ColumnDef, CreateTableStatement, Uniqueness},
-    primitives::NonEmptyString,
+    primitives::{ColumnId, NonEmptyString},
     transaction::Transaction,
     tuple::TupleSchema,
 };
@@ -122,6 +122,17 @@ impl Engine<'_> {
             .partition(|d| matches!(d, ConstraintDef::Unique { .. }));
 
         let file_id = catalog.create_table(txn, table_name.as_str(), schema, other_defs)?;
+
+        // If one column declared AUTO_INCREMENT, persist its column id so the
+        // counter survives restarts and is visible to the insert path.
+        if let Some(ai_col_id) = columns
+            .iter()
+            .enumerate()
+            .find(|(_, c)| c.auto_increment)
+            .and_then(|(i, _)| ColumnId::try_from(i).ok())
+        {
+            catalog.register_auto_increment(txn, file_id, ai_col_id)?;
+        }
 
         for def in unique_defs {
             let ConstraintDef::Unique { name, columns, .. } = def else {

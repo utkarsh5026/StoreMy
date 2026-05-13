@@ -30,7 +30,7 @@ use crate::{
     catalog::{LiveIndex, manager::Catalog},
     engine::{ConstraintViolation, Engine, EngineError, StatementResult},
     parser::statements::{InsertSource, InsertStatement},
-    primitives::NonEmptyString,
+    primitives::{ColumnId, NonEmptyString},
     transaction::Transaction,
     tuple::{Tuple, TupleSchema},
 };
@@ -64,6 +64,15 @@ impl Engine<'_> {
         let name = info.name.as_str().to_owned();
         let file_id = info.file_id;
         let schema = info.schema.clone();
+
+        if let Some(ai_col_id) = info.auto_increment_column {
+            Self::reject_auto_increment_in_insert(
+                stmt.columns.as_deref(),
+                &schema,
+                &name,
+                ai_col_id,
+            )?;
+        }
 
         let projection = Self::build_projection(stmt.columns.as_deref(), &schema, &name)?;
 
@@ -444,6 +453,51 @@ impl Engine<'_> {
                 constraint: constraint.clone(),
             }
             .into());
+        }
+        Ok(())
+    }
+
+    /// Rejects an INSERT that explicitly names an `AUTO_INCREMENT` column.
+    ///
+    /// For a **named INSERT** (`INSERT INTO t (a, b) VALUES …`), the column list
+    /// is checked for the auto-increment column by name. For a **positional
+    /// INSERT** (`INSERT INTO t VALUES …`) with no column list, the user has no
+    /// way to omit the auto-increment slot, so positional inserts are rejected
+    /// entirely when the table has an auto-increment column.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`EngineError::InsertIntoAutoIncrementColumn`] when the column
+    /// would be set by the INSERT.
+    fn reject_auto_increment_in_insert(
+        cols: Option<&[NonEmptyString]>,
+        schema: &TupleSchema,
+        table: &str,
+        ai_col_id: ColumnId,
+    ) -> Result<(), EngineError> {
+        let ai_name = schema
+            .field(usize::from(ai_col_id))
+            .map(|f| f.name.as_str().to_owned())
+            .unwrap_or_default();
+
+        match cols {
+            // Named INSERT: error only if the auto-increment column is listed.
+            Some(named) => {
+                if named.iter().any(|c| c.as_str() == ai_name) {
+                    return Err(EngineError::InsertIntoAutoIncrementColumn {
+                        table: table.to_owned(),
+                        column: ai_name,
+                    });
+                }
+            }
+            // Positional INSERT: all logical columns must be supplied, so the
+            // auto-increment column cannot be omitted — reject unconditionally.
+            None => {
+                return Err(EngineError::InsertIntoAutoIncrementColumn {
+                    table: table.to_owned(),
+                    column: ai_name,
+                });
+            }
         }
         Ok(())
     }

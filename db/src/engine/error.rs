@@ -56,7 +56,6 @@ pub enum EngineError {
     #[error(transparent)]
     Execution(#[from] ExecutionError),
 
-    // ── Schema / DDL ──────────────────────────────────────────────────────────
     #[error("table '{0}' not found")]
     TableNotFound(String),
 
@@ -75,7 +74,12 @@ pub enum EngineError {
     #[error("table '{table}' declares AUTO_INCREMENT on {count} columns; only one is allowed")]
     MultipleAutoIncrementColumns { table: String, count: usize },
 
-    // ── Column resolution ─────────────────────────────────────────────────────
+    #[error("column '{column}' in table '{table}' is AUTO_INCREMENT and cannot be set by INSERT")]
+    InsertIntoAutoIncrementColumn { table: String, column: String },
+
+    #[error("column '{column}' in table '{table}' is AUTO_INCREMENT and cannot be set by UPDATE")]
+    UpdateAutoIncrementColumn { table: String, column: String },
+
     #[error("column '{column}' not found in table '{table}'")]
     UnknownColumn { table: String, column: String },
 
@@ -85,7 +89,6 @@ pub enum EngineError {
     #[error("column '{column}' is ambiguous: exists in multiple tables")]
     AmbiguousColumn { column: String },
 
-    // ── DML / row validation ──────────────────────────────────────────────────
     #[error("column '{column}' appears more than once in INSERT into '{table}'")]
     DuplicateInsertColumn { table: String, column: String },
 

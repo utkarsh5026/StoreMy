@@ -96,14 +96,15 @@ impl Engine<'_> {
             where_clause,
         } = stmt;
 
-        let scope =
-            SingleTableScope::from_info(catalog.get_table_info(txn, table_name.as_str())?, alias);
+        let info = catalog.get_table_info(txn, table_name.as_str())?;
+        let ai_col = info.auto_increment_column;
+        let scope = SingleTableScope::from_info(info, alias);
         let heap_file = catalog.get_table_heap(scope.file_id)?;
 
         let filter = where_clause.map(|w| scope.bind_where(&w)).transpose()?;
         let rows = Self::collect_matching_rows(&heap_file, txn.transaction_id(), filter.as_ref())?;
 
-        let assignments = Self::bind_assignments(&scope, assignments)?;
+        let assignments = Self::bind_assignments(&scope, assignments, ai_col)?;
         let affected_indexes =
             Self::get_affected_indices(assignments.as_slice(), catalog, scope.file_id);
         let unique_checks = if affected_indexes.is_empty() {
@@ -214,6 +215,7 @@ impl Engine<'_> {
     fn bind_assignments(
         scope: &SingleTableScope,
         assignments: Vec<Assignment>,
+        ai_col: Option<ColumnId>,
     ) -> Result<Vec<(ColumnId, Value)>, EngineError> {
         let mut seen: HashSet<ColumnId> = HashSet::with_capacity(assignments.len());
         let table_name = scope.name.as_str();
@@ -224,6 +226,14 @@ impl Engine<'_> {
                 let column = ass.column.into_inner();
 
                 let (col_id, field) = Self::require_column(&scope.schema, table_name, &column)?;
+
+                if ai_col == Some(col_id) {
+                    return Err(EngineError::UpdateAutoIncrementColumn {
+                        table: table_name.to_owned(),
+                        column,
+                    });
+                }
+
                 if seen.contains(&col_id) {
                     return Err(EngineError::DuplicateColumn {
                         table: table_name.to_string(),
