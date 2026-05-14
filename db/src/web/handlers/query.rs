@@ -1,6 +1,9 @@
-//! `POST /api/query` — run a single SQL string through the engine.
+//! `POST /api/:db/query` — run a single SQL string through the engine.
 
-use axum::{Json, extract::State};
+use axum::{
+    Json,
+    extract::{Path, State},
+};
 use serde::Deserialize;
 
 use crate::web::{AppState, dto::QueryResultDto, error::ApiError};
@@ -16,11 +19,16 @@ pub struct QueryRequest {
 /// `recv` it on a blocking task so the async runtime stays responsive.
 pub async fn run_query(
     State(state): State<AppState>,
+    Path(db): Path<String>,
     Json(req): Json<QueryRequest>,
 ) -> Result<Json<QueryResultDto>, ApiError> {
-    let db = state.db.clone();
+    let db_handle = state
+        .registry
+        .get(&db)
+        .ok_or(ApiError::DatabaseNotFound(db))?;
+
     let result = tokio::task::spawn_blocking(move || {
-        let rx = db.execute(req.sql);
+        let rx = db_handle.execute(req.sql);
         rx.recv()
     })
     .await

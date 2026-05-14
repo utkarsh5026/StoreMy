@@ -1,8 +1,9 @@
 //! `storemy-server` — Axum HTTP front-end for the engine.
 //!
-//! Runs the same boot sequence as the REPL binary ([`crate::main`](../main.rs))
-//! — same WAL, buffer pool, catalog, transaction manager, [`Database`] —
-//! but instead of starting an interactive prompt it binds an HTTP server.
+//! On startup it initialises a [`DatabaseRegistry`] that scans the root data
+//! directory for existing database subdirectories. Each named database lives
+//! in its own folder (`DATA_DIR/<name>/`) and gets its own WAL, buffer pool,
+//! catalog, and transaction manager.
 //!
 //! # Usage
 //!
@@ -14,15 +15,9 @@
 
 use std::{path::PathBuf, sync::Arc};
 
-use storemy::{
-    buffer_pool::page_store::PageStore, catalog::manager::Catalog, database::Database,
-    observability, transaction::TransactionManager, wal::writer::Wal, web,
-};
+use storemy::{observability, registry::DatabaseRegistry, web};
 use tracing::{error, info};
 
-const WAL_FILE_NAME: &str = "wal.log";
-const BUFFER_POOL_PAGES: usize = 1028;
-const WORKER_THREADS: usize = 4;
 const DEFAULT_BIND_ADDR: &str = "127.0.0.1:7878";
 
 #[tokio::main]
@@ -36,29 +31,22 @@ async fn main() {
 
     let data_dir =
         std::env::var("DATA_DIR").map_or_else(|_| PathBuf::from("./data"), PathBuf::from);
-    if let Err(e) = std::fs::create_dir_all(&data_dir) {
-        error!(error = %e, dir = %data_dir.display(), "failed to create data dir");
-        std::process::exit(1);
-    }
 
-    let wal = Arc::new(
-        Wal::new(&data_dir.join(WAL_FILE_NAME), 0).unwrap_or_else(|e| {
-            error!(error = %e, "failed to create WAL");
+    let registry = match DatabaseRegistry::initialize(&data_dir) {
+        Ok(r) => {
+            let dbs = r.list();
+            info!(
+                data_dir = %data_dir.display(),
+                databases = ?dbs,
+                "registry initialized"
+            );
+            Arc::new(r)
+        }
+        Err(e) => {
+            error!(error = %e, dir = %data_dir.display(), "failed to initialize database registry");
             std::process::exit(1);
-        }),
-    );
-
-    let buffer_pool = Arc::new(PageStore::new(BUFFER_POOL_PAGES, wal.clone()));
-    let catalog = Catalog::initialize(&buffer_pool, &wal, &data_dir).unwrap_or_else(|e| {
-        error!(error = %e, "failed to initialize catalog");
-        std::process::exit(1);
-    });
-    let txn_mgr = TransactionManager::new(wal, buffer_pool);
-    let db = Arc::new(Database::new(
-        Arc::new(catalog),
-        Arc::new(txn_mgr),
-        WORKER_THREADS,
-    ));
+        }
+    };
 
     let bind = std::env::var("BIND_ADDR").unwrap_or_else(|_| DEFAULT_BIND_ADDR.to_string());
     let listener = match tokio::net::TcpListener::bind(&bind).await {
@@ -69,9 +57,8 @@ async fn main() {
         }
     };
 
-    let app = web::router(db);
+    let app = web::router(registry);
     info!(%bind, "HTTP server ready");
-    println!("StoreMy server listening on http://{bind}");
 
     if let Err(e) = axum::serve(listener, app)
         .with_graceful_shutdown(shutdown_signal())

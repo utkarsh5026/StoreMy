@@ -1,4 +1,5 @@
 var _a;
+import path from "path";
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 // Dev server proxies /api → the Rust backend on :7878 so the browser
@@ -8,6 +9,11 @@ import react from "@vitejs/plugin-react";
 var backend = (_a = process.env.STOREMY_API_URL) !== null && _a !== void 0 ? _a : "http://127.0.0.1:7878";
 export default defineConfig({
     plugins: [react()],
+    resolve: {
+        alias: {
+            "@": path.resolve(__dirname, "./src"),
+        },
+    },
     server: {
         port: 5173,
         proxy: {

@@ -111,8 +111,9 @@ impl Lexer {
 
     /// Reads and returns the next token from the input, or `None` at end-of-input.
     ///
-    /// Leading whitespace is consumed silently before each token.  The lexer
-    /// dispatches on the first character to decide which production to apply:
+    /// Leading whitespace and SQL comments are consumed silently before each
+    /// token.  The lexer dispatches on the first character to decide which
+    /// production to apply:
     ///
     /// - `=`, `<`, `>`, `!` → operator (possibly two characters, e.g. `<=`)
     /// - `'` or `"` → quoted string literal
@@ -124,9 +125,9 @@ impl Lexer {
     ///
     /// Returns [`LexError::InvalidCharacter`] if the current character does not
     /// start any recognized token.  Returns [`LexError::UnexpectedEof`] if a
-    /// quoted string is never closed.
+    /// quoted string or block comment is never closed.
     pub fn next_token(&mut self) -> Result<Option<Token>, LexError> {
-        self.read_while(char::is_whitespace, false);
+        self.skip_whitespace_and_comments()?;
         if self.exhausted() {
             return Ok(None);
         }
@@ -193,6 +194,58 @@ impl Lexer {
                 Ok(())
             }
             None => Err(LexError::BackTrack),
+        }
+    }
+
+    /// Skips whitespace and SQL comments, leaving `position` at the first
+    /// character that belongs to a real token (or at EOF).
+    ///
+    /// Handles two comment styles:
+    /// - `--` line comments: skip from `--` to end of line (or EOF).
+    /// - `/* … */` block comments: skip everything between the delimiters. Block comments do
+    ///   **not** nest (standard SQL behaviour).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`LexError::UnexpectedEof`] if a `/*` block comment is never
+    /// closed before the end of the input.
+    fn skip_whitespace_and_comments(&mut self) -> Result<(), LexError> {
+        loop {
+            self.read_while(char::is_whitespace, false);
+            if self.exhausted() {
+                return Ok(());
+            }
+
+            let ch = self.curr_char();
+
+            // `--` line comment: skip to end of line
+            if ch == '-' && self.input.get(self.position + 1) == Some(&'-') {
+                self.read_while(|c| c != '\n', false);
+                continue;
+            }
+
+            // `/* ... */` block comment
+            if ch == '/' && self.input.get(self.position + 1) == Some(&'*') {
+                self.advance_pos(); // consume '/'
+                self.advance_pos(); // consume '*'
+                loop {
+                    if self.exhausted() {
+                        return Err(LexError::UnexpectedEof {
+                            expected: "closing '*/'".to_string(),
+                            span: Span::point(self.length),
+                        });
+                    }
+                    if self.curr_char() == '*' && self.input.get(self.position + 1) == Some(&'/') {
+                        self.advance_pos(); // consume '*'
+                        self.advance_pos(); // consume '/'
+                        break;
+                    }
+                    self.advance_pos();
+                }
+                continue;
+            }
+
+            return Ok(());
         }
     }
 
@@ -753,5 +806,71 @@ mod tests {
         let results: Vec<_> = Lexer::new("SELECT @bad").collect();
         assert!(results[0].is_ok()); // SELECT
         assert!(results[1].is_err()); // @
+    }
+
+    // --- comment handling ---
+
+    #[test]
+    fn line_comment_only_yields_no_tokens() {
+        assert!(lex("-- this is a comment").is_empty());
+    }
+
+    #[test]
+    fn line_comment_with_newline_and_token_after() {
+        assert_eq!(lex("-- ignore me\nSELECT"), vec![tok(
+            TokenType::Select,
+            "SELECT",
+            13
+        )]);
+    }
+
+    #[test]
+    fn line_comment_between_tokens() {
+        let tokens = lex("SELECT -- pick columns\n* FROM t");
+        assert_eq!(tokens[0].kind, TokenType::Select);
+        assert_eq!(tokens[1].kind, TokenType::Asterisk);
+        assert_eq!(tokens[2].kind, TokenType::From);
+    }
+
+    #[test]
+    fn block_comment_only_yields_no_tokens() {
+        assert!(lex("/* nothing here */").is_empty());
+    }
+
+    #[test]
+    fn block_comment_inline_between_tokens() {
+        let tokens = lex("SELECT /* inline */ * FROM t");
+        assert_eq!(tokens.len(), 4);
+        assert_eq!(tokens[0].kind, TokenType::Select);
+        assert_eq!(tokens[1].kind, TokenType::Asterisk);
+        assert_eq!(tokens[2].kind, TokenType::From);
+        assert_eq!(tokens[3].kind, TokenType::Identifier);
+    }
+
+    #[test]
+    fn block_comment_spanning_multiple_lines() {
+        let tokens = lex("SELECT /*\n  multi\n  line\n*/ 1");
+        assert_eq!(tokens.len(), 2);
+        assert_eq!(tokens[0].kind, TokenType::Select);
+        assert_eq!(tokens[1].kind, TokenType::Int);
+    }
+
+    #[test]
+    fn multiple_comments_of_both_kinds() {
+        let sql = "-- first\n/* second */ SELECT -- third\n*";
+        let tokens = lex(sql);
+        assert_eq!(tokens[0].kind, TokenType::Select);
+        assert_eq!(tokens[1].kind, TokenType::Asterisk);
+    }
+
+    #[test]
+    fn unterminated_block_comment_errors() {
+        assert!(try_lex("/* oops").is_err());
+    }
+
+    #[test]
+    fn line_comment_at_end_of_input_no_newline() {
+        // No trailing newline — the comment runs to EOF without error.
+        assert!(lex("-- eof comment").is_empty());
     }
 }

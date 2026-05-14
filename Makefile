@@ -10,6 +10,7 @@
 	lint \
 	check \
 	install-tools help \
+	server web dev \
 	docker-demo docker-test docker-build docker-clean docker-stop quickstart
 
 # ----- Rust (default; workspace root = repository root) -----
@@ -80,6 +81,24 @@ rust-build-release:
 rust-clean:
 	cargo clean
 
+# ----- Dev servers -----
+
+server:
+	cargo run --bin storemy-server
+
+web:
+	cd web && bun run dev
+
+dev:
+	@echo "Starting backend (127.0.0.1:7878) and frontend (localhost:5173)…"
+	@cargo run --bin storemy-server & \
+	BACKEND_PID=$$!; \
+	echo "Waiting for backend on :7878…"; \
+	until bash -c 'echo > /dev/tcp/127.0.0.1/7878' 2>/dev/null; do sleep 0.5; done; \
+	echo "Backend ready. Starting Vite…"; \
+	cd web && bun run dev; \
+	kill $$BACKEND_PID 2>/dev/null; wait
+
 # Default developer targets
 fmt: rust-fmt
 clippy: rust-clippy
@@ -149,6 +168,11 @@ help:
 	@echo "  rust-clean           - cargo clean"
 	@echo ""
 	@echo "  install-tools, help"
+	@echo ""
+	@echo "Dev servers:"
+	@echo "  server               - cargo run --bin storemy-server (port 7878)"
+	@echo "  web                  - bun run dev in web/ (port 5173)"
+	@echo "  dev                  - both servers together (Ctrl+C stops both)"
 
 # ============================================
 # Docker

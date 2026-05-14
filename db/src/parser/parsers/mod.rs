@@ -58,7 +58,9 @@ impl Parser {
     /// Parses a complete SQL statement from the token stream.
     ///
     /// Peeks at the first token to decide which sub-parser to call, then
-    /// rewinds so the sub-parser can consume it normally.
+    /// rewinds so the sub-parser can consume it normally.  Requires the token
+    /// stream to be exhausted (modulo an optional trailing `;`) after the
+    /// statement — use [`Parser::parse_all`] for multi-statement input.
     ///
     /// # Errors
     ///
@@ -70,6 +72,43 @@ impl Parser {
         err(Debug)
     )]
     pub fn parse(&mut self) -> Result<Statement, ParserError> {
+        let stmt = self.parse_one()?;
+        self.expect_end()?;
+        debug!(
+            statement_kind = statement_kind(&stmt),
+            "statement parsed successfully"
+        );
+        Ok(stmt)
+    }
+
+    /// Parses every statement in the token stream, separated by `;`.
+    ///
+    /// Returns an empty `Vec` if the input is blank or contains only
+    /// semicolons.  Stops and returns an error on the first parse failure.
+    ///
+    /// # Errors
+    ///
+    /// Returns `ParserError` if any statement fails to parse.
+    pub fn parse_all(&mut self) -> Result<Vec<Statement>, ParserError> {
+        let mut stmts = Vec::new();
+        loop {
+            while self.if_peek_then_consume(TokenType::Semicolon)? {}
+            match self.lexer.next() {
+                None => break,
+                Some(Err(e)) => return Err(e.into()),
+                Some(Ok(_)) => self.lexer.backtrack()?,
+            }
+            stmts.push(self.parse_one()?);
+        }
+        Ok(stmts)
+    }
+
+    /// Dispatches to the right sub-parser based on the leading keyword.
+    ///
+    /// Does **not** consume a trailing `;` or check for EOF — callers
+    /// ([`parse`](Self::parse) and [`parse_all`](Self::parse_all)) are
+    /// responsible for that.
+    fn parse_one(&mut self) -> Result<Statement, ParserError> {
         let tok = self.bump()?;
         self.lexer.backtrack()?;
         trace!(start_token = ?tok.kind, start_value = %tok.value, "dispatching parser");
@@ -138,11 +177,6 @@ impl Parser {
             }
         };
 
-        self.expect_end()?;
-        debug!(
-            statement_kind = statement_kind(&stmt),
-            "statement parsed successfully"
-        );
         Ok(stmt)
     }
 

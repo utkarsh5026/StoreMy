@@ -12,6 +12,6 @@ mod query;
 
 pub use heap::{HeapDumpDto, HeapPageDto, HeapSlotDto};
 pub use query::{
-    ColumnDto, QueryResultDto, QueryRowsDto, ShownIndexDto, TableInfoDto, TableSummaryDto,
-    columns_from_schema, value_to_json,
+    ColumnDto, DatabaseSummaryDto, QueryResultDto, QueryRowsDto, ShownIndexDto, TableInfoDto,
+    TableSummaryDto, columns_from_schema, value_to_json,
 };

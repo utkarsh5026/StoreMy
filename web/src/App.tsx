@@ -3,6 +3,20 @@ import { SqlEditor } from "./components/SqlEditor";
 import { ResultsTable } from "./components/ResultsTable";
 import { TableList } from "./components/TableList";
 import { HeapInspector } from "./components/HeapInspector";
+import { TableContentPreview } from "./components/TableContentPreview";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "./components/ui/table";
+import {
+  DatabasePicker,
+  type DatabaseSelection,
+} from "./components/DatabasePicker";
+import { CreateTableWizard } from "./components/CreateTableWizard";
 import { listTables, runQuery, StoremyError } from "./api/client";
 import type { ApiError, QueryResult, TableSummary } from "./types/api";
 
@@ -22,59 +36,104 @@ type RunState =
 type Tab = "results" | "heap";
 
 export default function App() {
-  const [sql, setSql] = useState(SAMPLE_SQL);
+  const [selectedDb, setSelectedDb] = useState<DatabaseSelection | null>(null);
+
+  if (!selectedDb) {
+    return <DatabasePicker onSelect={setSelectedDb} />;
+  }
+
+  return (
+    <Workspace
+      db={selectedDb.name}
+      initialSql={selectedDb.initialSql}
+      onExit={() => setSelectedDb(null)}
+    />
+  );
+}
+
+function Workspace({
+  db,
+  initialSql,
+  onExit,
+}: {
+  db: string;
+  initialSql?: string;
+  onExit: () => void;
+}) {
+  const [sql, setSql] = useState(initialSql ?? SAMPLE_SQL);
   const [tables, setTables] = useState<TableSummary[]>([]);
   const [selected, setSelected] = useState<string | null>(null);
   const [runState, setRunState] = useState<RunState>({ status: "idle" });
   const [tab, setTab] = useState<Tab>("results");
-  // Bumped on every successful run so HeapInspector knows to re-fetch and
-  // pick up newly-inserted/deleted rows.
   const [heapTick, setHeapTick] = useState(0);
+  const [wizardOpen, setWizardOpen] = useState(false);
 
   const refreshTables = useCallback(async () => {
     try {
-      setTables(await listTables());
+      setTables(await listTables(db));
     } catch {
       // Ignore — sidebar will just show empty if the server is down.
     }
-  }, []);
+  }, [db]);
 
   useEffect(() => {
     refreshTables();
   }, [refreshTables]);
 
-  const onRun = useCallback(async () => {
-    // The engine accepts one statement at a time. If the editor holds
-    // a selection, run that; otherwise treat the whole editor as one
-    // statement (the parser will reject multi-statement input — surfaced
-    // as a parse error, which is fine for v1).
-    const input = sql.trim();
-    if (input === "") return;
-    setRunState({ status: "running" });
-    const t0 = performance.now();
-    try {
-      const result = await runQuery(input);
-      const ms = Math.round(performance.now() - t0);
-      setRunState({ status: "ok", result, ms });
-      setTab("results");
-      setHeapTick((t) => t + 1);
-      // Any DDL/DML may have changed the catalog — refresh.
-      await refreshTables();
-    } catch (e) {
-      const ms = Math.round(performance.now() - t0);
-      const error: ApiError =
-        e instanceof StoremyError
-          ? { kind: e.kind, message: e.message }
-          : { kind: "internal", message: String(e) };
-      setRunState({ status: "err", error, ms });
-    }
-  }, [sql, refreshTables]);
+  const runSql = useCallback(
+    async (input: string) => {
+      if (!input.trim()) return;
+      setRunState({ status: "running" });
+      const t0 = performance.now();
+      try {
+        const result = await runQuery(db, input);
+        const ms = Math.round(performance.now() - t0);
+        setRunState({ status: "ok", result, ms });
+        setTab("results");
+        setHeapTick((t) => t + 1);
+        await refreshTables();
+      } catch (e) {
+        const ms = Math.round(performance.now() - t0);
+        const error: ApiError =
+          e instanceof StoremyError
+            ? { kind: e.kind, message: e.message }
+            : { kind: "internal", message: String(e) };
+        setRunState({ status: "err", error, ms });
+      }
+    },
+    [db, refreshTables],
+  );
+
+  const onRun = useCallback(() => runSql(sql), [sql, runSql]);
+
+  const onWizardCreate = useCallback(
+    (generatedSql: string) => {
+      setWizardOpen(false);
+      setSql(generatedSql);
+      runSql(generatedSql);
+    },
+    [runSql],
+  );
 
   return (
-    <div className="app">
-      <div className="header">
-        StoreMy <span className="dim">/ web v0.1</span>
+    <div
+      className="grid h-full grid-cols-[240px_1fr] grid-rows-[40px_1fr]"
+      style={{ gridTemplateAreas: '"header header" "sidebar main"' }}
+    >
+      {/* Header */}
+      <div className="[grid-area:header] flex items-center gap-2.5 px-4 border-b border-line bg-panel font-semibold tracking-[0.04em]">
+        <button
+          className="btn-ghost text-xs px-2.5 py-1"
+          onClick={onExit}
+          title="Switch database"
+        >
+          ← Databases
+        </button>
+        <span className="font-mono text-accent text-[13px]">{db}</span>
+        <span className="text-dim font-normal text-xs ml-0.5">/ StoreMy</span>
       </div>
+
+      {/* Sidebar */}
       <TableList
         tables={tables}
         selected={selected}
@@ -82,55 +141,133 @@ export default function App() {
           setSelected(name);
           setTab("heap");
         }}
+        onNewTable={() => setWizardOpen(true)}
       />
-      <div className="main">
-        <div className="editor-pane">
-          <div className="editor-toolbar">
-            <button onClick={onRun} disabled={runState.status === "running"}>
+
+      {/* Main area */}
+      <div
+        className="[grid-area:main] grid min-h-0"
+        style={{ gridTemplateRows: "40% 60%" }}
+      >
+        {/* Editor pane */}
+        <div className="flex flex-col min-h-0">
+          <div className="flex items-center gap-3 px-3 py-2 border-b border-line bg-panel shrink-0">
+            <button
+              className="btn"
+              onClick={onRun}
+              disabled={runState.status === "running"}
+            >
               {runState.status === "running" ? "Running…" : "Run"}
             </button>
-            <span className="hint">Cmd/Ctrl + Enter</span>
+            <span className="text-dim text-xs">Cmd/Ctrl + Enter</span>
           </div>
           <SqlEditor value={sql} onChange={setSql} onRun={onRun} />
         </div>
-        <div className="results-pane">
-          <div className="results-toolbar">
-            <div className="tabs">
-              <button
-                className={`tab ${tab === "results" ? "active" : ""}`}
+
+        {/* Results pane */}
+        <div className="flex flex-col min-h-0 border-t border-line">
+          {/* Tabs + status bar */}
+          <div className="flex flex-col shrink-0 border-b border-line bg-panel text-xs text-dim">
+            <div className="flex px-2">
+              <TabButton
+                active={tab === "results"}
                 onClick={() => setTab("results")}
               >
                 Results
-              </button>
-              <button
-                className={`tab ${tab === "heap" ? "active" : ""}`}
+              </TabButton>
+              <TabButton
+                active={tab === "heap"}
                 onClick={() => setTab("heap")}
                 disabled={!selected}
                 title={selected ? "" : "select a table from the sidebar"}
               >
                 Heap{selected ? ` · ${selected}` : ""}
-              </button>
+              </TabButton>
             </div>
-            <div className="toolbar-status">
+            <div className="flex gap-4 px-3 py-1.5">
               {tab === "results" ? (
                 <ResultsHeader state={runState} />
               ) : (
-                <span className="dim">live page bytes — refreshes after each run</span>
+                <span className="text-dim">
+                  live page bytes — refreshes after each run
+                </span>
               )}
             </div>
           </div>
-          <div className="results-body">
+
+          {/* Results body */}
+          <div className="flex-1 overflow-auto p-3">
             {tab === "results" ? (
               <ResultsBody state={runState} />
             ) : selected ? (
-              <HeapInspector table={selected} refreshTick={heapTick} />
+              <HeapTabBody db={db} table={selected} refreshTick={heapTick} />
             ) : (
-              <div className="status-msg">select a table from the sidebar</div>
+              <span className="font-mono text-[13px]">
+                select a table from the sidebar
+              </span>
             )}
           </div>
         </div>
       </div>
+
+      {/* Create Table Wizard */}
+      {wizardOpen && (
+        <CreateTableWizard
+          onClose={() => setWizardOpen(false)}
+          onCreate={onWizardCreate}
+        />
+      )}
     </div>
+  );
+}
+
+function HeapTabBody({
+  db,
+  table,
+  refreshTick,
+}: {
+  db: string;
+  table: string;
+  refreshTick: number;
+}) {
+  return (
+    <div className="grid min-h-full gap-3 xl:grid-cols-[minmax(320px,0.85fr)_minmax(480px,1.15fr)]">
+      <TableContentPreview db={db} table={table} refreshTick={refreshTick} />
+      <section className="min-h-0 rounded border border-line bg-panel/50 p-3">
+        <HeapInspector db={db} table={table} refreshTick={refreshTick} />
+      </section>
+    </div>
+  );
+}
+
+function TabButton({
+  active,
+  onClick,
+  disabled,
+  title,
+  children,
+}: {
+  active: boolean;
+  onClick: () => void;
+  disabled?: boolean;
+  title?: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <button
+      onClick={onClick}
+      disabled={disabled}
+      title={title}
+      className={[
+        "bg-transparent border-0 border-b-2 px-3.5 py-1.5 cursor-pointer font-medium text-xs rounded-none",
+        active ? "text-fg border-accent" : "text-dim border-transparent",
+        disabled ? "cursor-not-allowed text-[#555]" : "",
+      ]
+        .filter(Boolean)
+        .join(" ")}
+    >
+      {children}
+    </button>
   );
 }
 
@@ -143,7 +280,7 @@ function ResultsHeader({ state }: { state: RunState }) {
     case "ok":
       return (
         <>
-          <span className="ok">OK</span>
+          <span className="text-good">OK</span>
           <span>{summariseResult(state.result)}</span>
           <span>{state.ms} ms</span>
         </>
@@ -151,7 +288,7 @@ function ResultsHeader({ state }: { state: RunState }) {
     case "err":
       return (
         <>
-          <span className="err">ERROR ({state.error.kind})</span>
+          <span className="text-danger">ERROR ({state.error.kind})</span>
           <span>{state.ms} ms</span>
         </>
       );
@@ -162,8 +299,10 @@ function ResultsBody({ state }: { state: RunState }) {
   if (state.status === "idle" || state.status === "running") return null;
   if (state.status === "err") {
     return (
-      <div className="error-box">
-        <span className="kind">{state.error.kind}</span>
+      <div className="font-mono whitespace-pre-wrap bg-danger/8 border border-danger/30 rounded p-2.5 text-danger text-[13px]">
+        <span className="inline-block px-1.5 py-0.5 rounded-sm bg-danger/20 mr-2 text-[11px] uppercase tracking-wider">
+          {state.error.kind}
+        </span>
         {state.error.message}
       </div>
     );
@@ -174,30 +313,41 @@ function ResultsBody({ state }: { state: RunState }) {
   }
   if (r.kind === "indexes_shown") {
     return (
-      <table className="results">
-        <thead>
-          <tr>
-            <th>name</th>
-            <th>table</th>
-            <th>columns</th>
-            <th>kind</th>
-          </tr>
-        </thead>
-        <tbody>
+      <Table className="font-mono text-[13px]">
+        <TableHeader>
+          <TableRow>
+            {["name", "table", "columns", "kind"].map((h) => (
+              <TableHead
+                key={h}
+                className="border border-line bg-panel2 px-2.5 py-1 font-semibold text-fg"
+              >
+                {h}
+              </TableHead>
+            ))}
+          </TableRow>
+        </TableHeader>
+        <TableBody>
           {r.rows.map((row) => (
-            <tr key={row.name}>
-              <td>{row.name}</td>
-              <td>{row.table}</td>
-              <td>{row.columns.join(", ")}</td>
-              <td>{row.kind}</td>
-            </tr>
+            <TableRow key={row.name}>
+              <TableCell className="border border-line px-2.5 py-1">
+                {row.name}
+              </TableCell>
+              <TableCell className="border border-line px-2.5 py-1">
+                {row.table}
+              </TableCell>
+              <TableCell className="border border-line px-2.5 py-1">
+                {row.columns.join(", ")}
+              </TableCell>
+              <TableCell className="border border-line px-2.5 py-1">
+                {row.kind}
+              </TableCell>
+            </TableRow>
           ))}
-        </tbody>
-      </table>
+        </TableBody>
+      </Table>
     );
   }
-  // Non-row results (created/inserted/updated/etc.) — render the summary.
-  return <div className="status-msg">{summariseResult(r)}</div>;
+  return <div className="font-mono text-[13px]">{summariseResult(r)}</div>;
 }
 
 function summariseResult(r: QueryResult): string {
@@ -215,7 +365,9 @@ function summariseResult(r: QueryResult): string {
     case "index_dropped":
       return `dropped index '${r.name}'`;
     case "indexes_shown":
-      return r.scope ? `${r.rows.length} index(es) on '${r.scope}'` : `${r.rows.length} index(es)`;
+      return r.scope
+        ? `${r.rows.length} index(es) on '${r.scope}'`
+        : `${r.rows.length} index(es)`;
     case "inserted":
       return `inserted ${r.rows} row(s) into '${r.table}'`;
     case "deleted":
@@ -224,5 +376,7 @@ function summariseResult(r: QueryResult): string {
       return `updated ${r.rows} row(s) in '${r.table}'`;
     case "selected":
       return `${r.rows.length} row(s) from '${r.table}'`;
+    default:
+      return "";
   }
 }

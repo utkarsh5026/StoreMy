@@ -196,10 +196,21 @@ fn execute_sql(
     txn_manager: &crate::transaction::TransactionManager,
     sql: &str,
 ) -> QueryResult {
-    let mut parser = Parser::new(sql);
-    let statement = parser
-        .parse()
+    let stmts = Parser::new(sql)
+        .parse_all()
         .map_err(|e| EngineError::Parse(e.to_string()))?;
 
-    Engine::new(catalog, txn_manager).execute_statement(statement)
+    if stmts.is_empty() {
+        return Err(EngineError::Parse("empty input".to_string()));
+    }
+
+    let engine = Engine::new(catalog, txn_manager);
+    let mut last = Err(EngineError::Parse("empty input".to_string()));
+    for stmt in stmts {
+        last = engine.execute_statement(stmt);
+        if last.is_err() {
+            break;
+        }
+    }
+    last
 }
