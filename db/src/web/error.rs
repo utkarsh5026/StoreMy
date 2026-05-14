@@ -92,6 +92,9 @@ fn engine_error_to_http(e: &EngineError) -> (StatusCode, &'static str, String) {
             ConstraintViolation::FkParentViolation { .. } => {
                 (StatusCode::CONFLICT, "fk_parent_violation")
             }
+            ConstraintViolation::CheckViolation { .. } => {
+                (StatusCode::BAD_REQUEST, "check_violation")
+            }
         },
         E::Catalog(_)
         | E::Transaction(_)

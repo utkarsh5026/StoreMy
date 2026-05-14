@@ -28,6 +28,9 @@ pub enum ConstraintViolation {
          child rows still reference the old key"
     )]
     FkParentViolation { constraint: String },
+
+    #[error("new row violates CHECK constraint '{constraint}' on table '{table}'")]
+    CheckViolation { table: String, constraint: String },
 }
 
 #[derive(Debug, Error)]

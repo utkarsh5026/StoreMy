@@ -27,7 +27,7 @@ use std::{
 
 use crate::{
     FileId, IndexId, TransactionId, Type, Value,
-    catalog::{LiveIndex, manager::Catalog},
+    catalog::{CachedCheckConstraint, LiveIndex, manager::Catalog},
     engine::{ConstraintViolation, Engine, EngineError, StatementResult},
     parser::statements::{InsertSource, InsertStatement},
     primitives::{ColumnId, NonEmptyString},
@@ -78,6 +78,7 @@ impl Engine<'_> {
                     &table.schema,
                     &table.name,
                     table.auto_increment_column,
+                    &table.check_constraints,
                     catalog,
                     txn,
                     table.file_id,
@@ -110,6 +111,16 @@ impl Engine<'_> {
         if let Some(ai_col_id) = table.auto_increment_column {
             let start = catalog.allocate_auto_increment(txn, table.file_id, tuples.len())?;
             Self::fill_auto_increment_values(&mut tuples, &table.schema, ai_col_id, start);
+        }
+
+        // Evaluate CHECK constraints now that every slot (including AI) is filled.
+        for tuple in &tuples {
+            Self::check_tuple_constraints(
+                tuple,
+                &table.schema,
+                &table.check_constraints,
+                table.name.as_str(),
+            )?;
         }
 
         let count = Self::insert_rows_and_indexes(catalog, txn, table.file_id, tuples)?;
@@ -276,6 +287,7 @@ impl Engine<'_> {
         schema: &TupleSchema,
         table_name: &str,
         ai_col: Option<ColumnId>,
+        check_constraints: &[CachedCheckConstraint],
         catalog: &Catalog,
         txn: &Transaction<'_>,
         file_id: FileId,
@@ -313,6 +325,7 @@ impl Engine<'_> {
             let start = catalog.allocate_auto_increment(txn, file_id, 1)?;
             Self::fill_auto_increment_values(&mut tuples, schema, ai_col_id, start);
         }
+        Self::check_tuple_constraints(&tuples[0], schema, check_constraints, table_name)?;
         let count = Self::insert_rows_and_indexes(catalog, txn, file_id, tuples)?;
         Ok(StatementResult::inserted(table_name.to_string(), count))
     }

@@ -4,9 +4,12 @@ use fallible_iterator::FallibleIterator;
 
 use crate::{
     TransactionId, Value,
-    catalog::{CatalogError, ConstraintDef, TableInfo, manager::Catalog, systable::FkAction},
+    catalog::{
+        CachedCheckConstraint, CatalogError, ConstraintDef, TableInfo, manager::Catalog,
+        systable::FkAction,
+    },
     engine::{ConstraintViolation, Engine, EngineError},
-    execution::expression::BooleanExpression,
+    execution::{ExecutionError, eval::eval_expr, expression::BooleanExpression},
     heap::file::HeapFile,
     parser::statements::TableConstraint,
     primitives::{ColumnId, NonEmptyString, RecordId},
@@ -329,7 +332,8 @@ impl Engine<'_> {
             .into());
         }
 
-        // TODO: CHECK constraints — evaluate field.check_expr against `value` here.
+        // Table-level CHECK constraints are evaluated separately: iterate
+        // TableInfo::check_constraints and call eval_expr on the full new tuple.
 
         Ok(())
     }
@@ -360,5 +364,51 @@ impl Engine<'_> {
             expected: field.field_type.to_string(),
             got: e.to_string(),
         })
+    }
+
+    /// Evaluates every CHECK constraint on a table against a fully-assembled tuple.
+    ///
+    /// Call this after building the new/updated tuple (i.e., after all
+    /// [`Self::fit_value_to_field`] calls) but before writing it to the heap.
+    ///
+    /// # SQL NULL semantics
+    ///
+    /// A CHECK that evaluates to `NULL` **passes** — SQL only rejects an
+    /// explicit `false`. This matches `eval_expr`'s three-valued logic.
+    ///
+    /// # Errors
+    ///
+    /// - [`ConstraintViolation::CheckViolation`] if any expression evaluates to `Bool(false)`.
+    /// - [`EngineError::TypeError`] if the expression returns a non-Bool, non-Null value — this
+    ///   indicates a malformed CHECK body that slipped past the binder.
+    pub(super) fn check_tuple_constraints(
+        tuple: &Tuple,
+        schema: &TupleSchema,
+        check_constraints: &[CachedCheckConstraint],
+        table: &str,
+    ) -> Result<(), EngineError> {
+        for constraint in check_constraints {
+            let result = eval_expr(&constraint.expr, tuple, schema)
+                .map_err(|e: ExecutionError| EngineError::TypeError(e.to_string()))?;
+
+            match result {
+                // NULL means the check is indeterminate — SQL treats this as passing.
+                Value::Null | Value::Bool(true) => {}
+                Value::Bool(false) => {
+                    return Err(ConstraintViolation::CheckViolation {
+                        table: table.to_owned(),
+                        constraint: constraint.name.clone(),
+                    }
+                    .into());
+                }
+                other => {
+                    return Err(EngineError::TypeError(format!(
+                        "CHECK constraint '{}' returned non-boolean value: {other}",
+                        constraint.name
+                    )));
+                }
+            }
+        }
+        Ok(())
     }
 }
