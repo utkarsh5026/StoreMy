@@ -71,6 +71,27 @@ export async function runQuery(db: string, sql: string): Promise<QueryResult> {
   return jsonOrThrow<QueryResult>(res);
 }
 
+export interface ApplyTemplateProgress {
+  current: number;
+  total: number;
+  statement: string;
+}
+
+export async function applyTemplate(
+  db: string,
+  statements: string[],
+  onProgress?: (progress: ApplyTemplateProgress) => void,
+): Promise<void> {
+  for (const [index, statement] of statements.entries()) {
+    onProgress?.({
+      current: index + 1,
+      total: statements.length,
+      statement,
+    });
+    await runQuery(db, statement);
+  }
+}
+
 export async function listTables(db: string): Promise<TableSummary[]> {
   const res = await fetch(`/api/${encodeURIComponent(db)}/tables`);
   return jsonOrThrow<TableSummary[]>(res);

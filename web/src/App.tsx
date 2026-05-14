@@ -3,7 +3,19 @@ import { SqlEditor } from "./components/SqlEditor";
 import { ResultsTable } from "./components/ResultsTable";
 import { TableList } from "./components/TableList";
 import { HeapInspector } from "./components/HeapInspector";
-import { DatabasePicker } from "./components/DatabasePicker";
+import { TableContentPreview } from "./components/TableContentPreview";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "./components/ui/table";
+import {
+  DatabasePicker,
+  type DatabaseSelection,
+} from "./components/DatabasePicker";
 import { CreateTableWizard } from "./components/CreateTableWizard";
 import { listTables, runQuery, StoremyError } from "./api/client";
 import type { ApiError, QueryResult, TableSummary } from "./types/api";
@@ -24,17 +36,31 @@ type RunState =
 type Tab = "results" | "heap";
 
 export default function App() {
-  const [selectedDb, setSelectedDb] = useState<string | null>(null);
+  const [selectedDb, setSelectedDb] = useState<DatabaseSelection | null>(null);
 
   if (!selectedDb) {
     return <DatabasePicker onSelect={setSelectedDb} />;
   }
 
-  return <Workspace db={selectedDb} onExit={() => setSelectedDb(null)} />;
+  return (
+    <Workspace
+      db={selectedDb.name}
+      initialSql={selectedDb.initialSql}
+      onExit={() => setSelectedDb(null)}
+    />
+  );
 }
 
-function Workspace({ db, onExit }: { db: string; onExit: () => void }) {
-  const [sql, setSql] = useState(SAMPLE_SQL);
+function Workspace({
+  db,
+  initialSql,
+  onExit,
+}: {
+  db: string;
+  initialSql?: string;
+  onExit: () => void;
+}) {
+  const [sql, setSql] = useState(initialSql ?? SAMPLE_SQL);
   const [tables, setTables] = useState<TableSummary[]>([]);
   const [selected, setSelected] = useState<string | null>(null);
   const [runState, setRunState] = useState<RunState>({ status: "idle" });
@@ -75,7 +101,7 @@ function Workspace({ db, onExit }: { db: string; onExit: () => void }) {
         setRunState({ status: "err", error, ms });
       }
     },
-    [db, refreshTables]
+    [db, refreshTables],
   );
 
   const onRun = useCallback(() => runSql(sql), [sql, runSql]);
@@ -86,17 +112,21 @@ function Workspace({ db, onExit }: { db: string; onExit: () => void }) {
       setSql(generatedSql);
       runSql(generatedSql);
     },
-    [runSql]
+    [runSql],
   );
 
   return (
     <div
-      className="grid h-full [grid-template-columns:240px_1fr] [grid-template-rows:40px_1fr]"
+      className="grid h-full grid-cols-[240px_1fr] grid-rows-[40px_1fr]"
       style={{ gridTemplateAreas: '"header header" "sidebar main"' }}
     >
       {/* Header */}
       <div className="[grid-area:header] flex items-center gap-2.5 px-4 border-b border-line bg-panel font-semibold tracking-[0.04em]">
-        <button className="btn-ghost text-xs px-2.5 py-1" onClick={onExit} title="Switch database">
+        <button
+          className="btn-ghost text-xs px-2.5 py-1"
+          onClick={onExit}
+          title="Switch database"
+        >
           ← Databases
         </button>
         <span className="font-mono text-accent text-[13px]">{db}</span>
@@ -139,7 +169,10 @@ function Workspace({ db, onExit }: { db: string; onExit: () => void }) {
           {/* Tabs + status bar */}
           <div className="flex flex-col shrink-0 border-b border-line bg-panel text-xs text-dim">
             <div className="flex px-2">
-              <TabButton active={tab === "results"} onClick={() => setTab("results")}>
+              <TabButton
+                active={tab === "results"}
+                onClick={() => setTab("results")}
+              >
                 Results
               </TabButton>
               <TabButton
@@ -167,9 +200,11 @@ function Workspace({ db, onExit }: { db: string; onExit: () => void }) {
             {tab === "results" ? (
               <ResultsBody state={runState} />
             ) : selected ? (
-              <HeapInspector db={db} table={selected} refreshTick={heapTick} />
+              <HeapTabBody db={db} table={selected} refreshTick={heapTick} />
             ) : (
-              <span className="font-mono text-[13px]">select a table from the sidebar</span>
+              <span className="font-mono text-[13px]">
+                select a table from the sidebar
+              </span>
             )}
           </div>
         </div>
@@ -182,6 +217,25 @@ function Workspace({ db, onExit }: { db: string; onExit: () => void }) {
           onCreate={onWizardCreate}
         />
       )}
+    </div>
+  );
+}
+
+function HeapTabBody({
+  db,
+  table,
+  refreshTick,
+}: {
+  db: string;
+  table: string;
+  refreshTick: number;
+}) {
+  return (
+    <div className="grid min-h-full gap-3 xl:grid-cols-[minmax(320px,0.85fr)_minmax(480px,1.15fr)]">
+      <TableContentPreview db={db} table={table} refreshTick={refreshTick} />
+      <section className="min-h-0 rounded border border-line bg-panel/50 p-3">
+        <HeapInspector db={db} table={table} refreshTick={refreshTick} />
+      </section>
     </div>
   );
 }
@@ -206,9 +260,7 @@ function TabButton({
       title={title}
       className={[
         "bg-transparent border-0 border-b-2 px-3.5 py-1.5 cursor-pointer font-medium text-xs rounded-none",
-        active
-          ? "text-fg border-accent"
-          : "text-dim border-transparent",
+        active ? "text-fg border-accent" : "text-dim border-transparent",
         disabled ? "cursor-not-allowed text-[#555]" : "",
       ]
         .filter(Boolean)
@@ -247,7 +299,7 @@ function ResultsBody({ state }: { state: RunState }) {
   if (state.status === "idle" || state.status === "running") return null;
   if (state.status === "err") {
     return (
-      <div className="font-mono whitespace-pre-wrap bg-danger/[0.08] border border-danger/30 rounded p-2.5 text-danger text-[13px]">
+      <div className="font-mono whitespace-pre-wrap bg-danger/8 border border-danger/30 rounded p-2.5 text-danger text-[13px]">
         <span className="inline-block px-1.5 py-0.5 rounded-sm bg-danger/20 mr-2 text-[11px] uppercase tracking-wider">
           {state.error.kind}
         </span>
@@ -261,27 +313,38 @@ function ResultsBody({ state }: { state: RunState }) {
   }
   if (r.kind === "indexes_shown") {
     return (
-      <table className="border-collapse font-mono text-[13px]">
-        <thead>
-          <tr>
+      <Table className="font-mono text-[13px]">
+        <TableHeader>
+          <TableRow>
             {["name", "table", "columns", "kind"].map((h) => (
-              <th key={h} className="border border-line px-2.5 py-1 text-left bg-panel2 font-semibold">
+              <TableHead
+                key={h}
+                className="border border-line bg-panel2 px-2.5 py-1 font-semibold text-fg"
+              >
                 {h}
-              </th>
+              </TableHead>
             ))}
-          </tr>
-        </thead>
-        <tbody>
+          </TableRow>
+        </TableHeader>
+        <TableBody>
           {r.rows.map((row) => (
-            <tr key={row.name}>
-              <td className="border border-line px-2.5 py-1">{row.name}</td>
-              <td className="border border-line px-2.5 py-1">{row.table}</td>
-              <td className="border border-line px-2.5 py-1">{row.columns.join(", ")}</td>
-              <td className="border border-line px-2.5 py-1">{row.kind}</td>
-            </tr>
+            <TableRow key={row.name}>
+              <TableCell className="border border-line px-2.5 py-1">
+                {row.name}
+              </TableCell>
+              <TableCell className="border border-line px-2.5 py-1">
+                {row.table}
+              </TableCell>
+              <TableCell className="border border-line px-2.5 py-1">
+                {row.columns.join(", ")}
+              </TableCell>
+              <TableCell className="border border-line px-2.5 py-1">
+                {row.kind}
+              </TableCell>
+            </TableRow>
           ))}
-        </tbody>
-      </table>
+        </TableBody>
+      </Table>
     );
   }
   return <div className="font-mono text-[13px]">{summariseResult(r)}</div>;

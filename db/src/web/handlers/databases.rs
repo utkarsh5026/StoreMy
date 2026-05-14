@@ -5,15 +5,27 @@ use serde::Deserialize;
 
 use crate::web::{AppState, dto::DatabaseSummaryDto, error::ApiError};
 
-/// `GET /api/databases` — list all known databases.
+/// `GET /api/databases` — list all known databases, each with their table names.
 pub async fn list_databases(State(state): State<AppState>) -> Json<Vec<DatabaseSummaryDto>> {
     let names = state.registry.list();
-    Json(
-        names
-            .into_iter()
-            .map(|name| DatabaseSummaryDto { name })
-            .collect(),
-    )
+    let summaries = names
+        .into_iter()
+        .map(|name| {
+            let tables = state
+                .registry
+                .get(&name)
+                .map(|db| {
+                    db.list_user_tables()
+                        .unwrap_or_default()
+                        .iter()
+                        .map(|t| t.name.to_string())
+                        .collect()
+                })
+                .unwrap_or_default();
+            DatabaseSummaryDto { name, tables }
+        })
+        .collect();
+    Json(summaries)
 }
 
 #[derive(Debug, Deserialize)]
@@ -38,6 +50,9 @@ pub async fn create_database(
 
     Ok((
         StatusCode::CREATED,
-        Json(DatabaseSummaryDto { name: req.name }),
+        Json(DatabaseSummaryDto {
+            name: req.name,
+            tables: vec![],
+        }),
     ))
 }

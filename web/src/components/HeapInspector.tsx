@@ -1,6 +1,14 @@
 import { useEffect, useMemo, useState } from "react";
 import type { HeapDump, HeapPage, HeapSlot } from "../types/api";
 import { fetchHeap, StoremyError } from "../api/client";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "./ui/table";
 
 interface Props {
   db: string;
@@ -280,24 +288,24 @@ function SlotTable({
     return <p className="font-mono text-[13px]">no slots on this page</p>;
   }
   return (
-    <table className="border-collapse w-full max-w-180">
-      <thead>
-        <tr>
+    <Table className="w-full max-w-180">
+      <TableHeader>
+        <TableRow>
           {["slot", "status", "offset", "length", "preview"].map((h) => (
-            <th
+            <TableHead
               key={h}
-              className="border border-line px-2.5 py-1 text-left text-[13px] bg-panel2 font-semibold"
+              className="border border-line bg-panel2 px-2.5 py-1 text-[13px] font-semibold text-fg"
             >
               {h}
-            </th>
+            </TableHead>
           ))}
-        </tr>
-      </thead>
-      <tbody>
+        </TableRow>
+      </TableHeader>
+      <TableBody>
         {page.slots.map((s) => {
           const sel = s.slot_id === selectedSlot;
           return (
-            <tr
+            <TableRow
               key={s.slot_id}
               onClick={() => onPick(sel ? null : s.slot_id)}
               className={[
@@ -309,26 +317,26 @@ function SlotTable({
                 .filter(Boolean)
                 .join(" ")}
             >
-              <td className="border border-line px-2.5 py-1 text-[13px]">
+              <TableCell className="border border-line px-2.5 py-1 text-[13px]">
                 {s.slot_id}
-              </td>
-              <td className="border border-line px-2.5 py-1 text-[13px]">
+              </TableCell>
+              <TableCell className="border border-line px-2.5 py-1 text-[13px]">
                 {s.status}
-              </td>
-              <td className="border border-line px-2.5 py-1 text-[13px]">
+              </TableCell>
+              <TableCell className="border border-line px-2.5 py-1 text-[13px]">
                 {s.offset}
-              </td>
-              <td className="border border-line px-2.5 py-1 text-[13px]">
+              </TableCell>
+              <TableCell className="border border-line px-2.5 py-1 text-[13px]">
                 {s.length}
-              </td>
-              <td className="border border-line px-2.5 py-1 text-[13px]">
+              </TableCell>
+              <TableCell className="border border-line px-2.5 py-1 text-[13px]">
                 {slotPreview(s)}
-              </td>
-            </tr>
+              </TableCell>
+            </TableRow>
           );
         })}
-      </tbody>
-    </table>
+      </TableBody>
+    </Table>
   );
 }
 
@@ -434,42 +442,42 @@ function FieldsTable({
   return (
     <>
       <span className="text-dim text-[11px]">{title}</span>
-      <table className="border-collapse">
-        <thead>
-          <tr>
+      <Table>
+        <TableHeader>
+          <TableRow>
             {["#", "name", "type", "value"].map((h) => (
-              <th
+              <TableHead
                 key={h}
-                className="border border-line px-2 py-0.75 text-[13px] text-left bg-panel font-semibold"
+                className="border border-line bg-panel px-2 py-0.75 text-[13px] font-semibold text-fg"
               >
                 {h}
-              </th>
+              </TableHead>
             ))}
-          </tr>
-        </thead>
-        <tbody>
+          </TableRow>
+        </TableHeader>
+        <TableBody>
           {fields.map((f) => (
-            <tr key={f.index}>
-              <td className="border border-line px-2 py-0.75 text-[13px]">
+            <TableRow key={f.index}>
+              <TableCell className="border border-line px-2 py-0.75 text-[13px]">
                 {f.index}
-              </td>
-              <td className="border border-line px-2 py-0.75 text-[13px]">
+              </TableCell>
+              <TableCell className="border border-line px-2 py-0.75 text-[13px]">
                 {f.name}
-              </td>
-              <td className="border border-line px-2 py-0.75 text-[13px]">
+              </TableCell>
+              <TableCell className="border border-line px-2 py-0.75 text-[13px]">
                 {f.type}
-              </td>
-              <td className="border border-line px-2 py-0.75 text-[13px]">
+              </TableCell>
+              <TableCell className="border border-line px-2 py-0.75 text-[13px]">
                 {f.value === null ? (
                   <span className="text-dim italic">NULL</span>
                 ) : (
                   String(f.value)
                 )}
-              </td>
-            </tr>
+              </TableCell>
+            </TableRow>
           ))}
-        </tbody>
-      </table>
+        </TableBody>
+      </Table>
     </>
   );
 }

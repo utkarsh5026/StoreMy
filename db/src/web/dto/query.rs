@@ -342,6 +342,7 @@ impl From<&StatementResult> for QueryResultDto {
 #[derive(Debug, Serialize)]
 pub struct DatabaseSummaryDto {
     pub name: String,
+    pub tables: Vec<String>,
 }
 
 /// One entry in `GET /api/tables`.

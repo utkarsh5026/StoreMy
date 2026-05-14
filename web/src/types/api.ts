@@ -36,6 +36,7 @@ export type Cell = string | number | boolean | null;
 
 export interface DatabaseSummary {
   name: string;
+  tables: string[];
 }
 
 export interface TableSummary {
