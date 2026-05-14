@@ -28,6 +28,7 @@
 //!   operators
 
 pub mod aggregate;
+pub mod eval;
 pub mod expression;
 pub mod join;
 pub mod scan;
