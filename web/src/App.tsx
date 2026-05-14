@@ -13,6 +13,12 @@ import {
   TableRow,
 } from "./components/ui/table";
 import {
+  Tabs,
+  TabsList,
+  TabsTrigger,
+  TabsContent,
+} from "./components/ui/tabs";
+import {
   DatabasePicker,
   type DatabaseSelection,
 } from "./components/DatabasePicker";
@@ -231,12 +237,21 @@ function HeapTabBody({
   refreshTick: number;
 }) {
   return (
-    <div className="grid min-h-full gap-3 xl:grid-cols-[minmax(320px,0.85fr)_minmax(480px,1.15fr)]">
-      <TableContentPreview db={db} table={table} refreshTick={refreshTick} />
-      <section className="min-h-0 rounded border border-line bg-panel/50 p-3">
+    <Tabs defaultValue="table" className="flex h-full flex-col">
+      <TabsList variant="line" className="shrink-0 self-start">
+        <TabsTrigger value="table">Table</TabsTrigger>
+        <TabsTrigger value="heap">Heap Inspector</TabsTrigger>
+      </TabsList>
+      <TabsContent value="table" className="min-h-0 flex-1 overflow-auto pt-2">
+        <TableContentPreview db={db} table={table} refreshTick={refreshTick} />
+      </TabsContent>
+      <TabsContent
+        value="heap"
+        className="min-h-0 flex-1 overflow-auto rounded border border-line bg-panel/50 p-3 pt-2"
+      >
         <HeapInspector db={db} table={table} refreshTick={refreshTick} />
-      </section>
-    </div>
+      </TabsContent>
+    </Tabs>
   );
 }
 
