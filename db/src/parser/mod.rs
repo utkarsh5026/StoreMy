@@ -442,4 +442,27 @@ mod tests {
         assert!(matches!(stmts[1], Statement::CreateIndex(_)));
         assert!(matches!(stmts[2], Statement::Delete(_)));
     }
+
+    #[test]
+    fn parse_all_ui_sample_sql_with_leading_comments() {
+        // Mirrors the SAMPLE_SQL constant shown in the browser editor.
+        let sql = "\
+-- Welcome to StoreMy.\n\
+-- Cmd/Ctrl + Enter to run the highlighted block (or all of it).\n\
+\n\
+CREATE TABLE users (id INT, name VARCHAR);\n\
+INSERT INTO users VALUES (1, 'alice'), (2, 'bob');\n\
+SELECT * FROM users;";
+        let stmts = parse_all(sql);
+        assert_eq!(stmts.len(), 3);
+        assert!(matches!(stmts[0], Statement::CreateTable(_)));
+        assert!(matches!(stmts[1], Statement::Insert(_)));
+        assert!(matches!(stmts[2], Statement::Select(_)));
+    }
+
+    #[test]
+    fn parse_single_statement_with_inline_block_comment() {
+        let stmt = parse("SELECT /* pick all */ * FROM users");
+        assert!(matches!(stmt, Statement::Select(_)));
+    }
 }
