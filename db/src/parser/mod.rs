@@ -354,4 +354,92 @@ mod tests {
                 .is_err()
         );
     }
+
+    fn parse_all(sql: &str) -> Vec<Statement> {
+        Parser::new(sql)
+            .parse_all()
+            .unwrap_or_else(|e| panic!("parse_all failed for {sql:?}: {e:?}"))
+    }
+
+    #[test]
+    fn parse_all_empty_input_returns_empty_vec() {
+        assert!(parse_all("").is_empty());
+    }
+
+    #[test]
+    fn parse_all_whitespace_only_returns_empty_vec() {
+        assert!(parse_all("   \t\n  ").is_empty());
+    }
+
+    #[test]
+    fn parse_all_semicolons_only_returns_empty_vec() {
+        assert!(parse_all(";;;").is_empty());
+    }
+
+    #[test]
+    fn parse_all_single_statement_no_semicolon() {
+        let stmts = parse_all("SELECT * FROM users");
+        assert_eq!(stmts.len(), 1);
+        assert!(matches!(stmts[0], Statement::Select(_)));
+    }
+
+    #[test]
+    fn parse_all_single_statement_with_trailing_semicolon() {
+        let stmts = parse_all("SELECT * FROM users;");
+        assert_eq!(stmts.len(), 1);
+        assert!(matches!(stmts[0], Statement::Select(_)));
+    }
+
+    #[test]
+    fn parse_all_two_statements() {
+        let stmts = parse_all("CREATE TABLE t (id INT); INSERT INTO t VALUES (1)");
+        assert_eq!(stmts.len(), 2);
+        assert!(matches!(stmts[0], Statement::CreateTable(_)));
+        assert!(matches!(stmts[1], Statement::Insert(_)));
+    }
+
+    #[test]
+    fn parse_all_three_statements_frontend_use_case() {
+        // This is the exact input the UI's sample SQL sends.
+        let sql = "CREATE TABLE users (id INT, name VARCHAR);\nINSERT INTO users VALUES (1, 'alice'), (2, 'bob');\nSELECT * FROM users;";
+        let stmts = parse_all(sql);
+        assert_eq!(stmts.len(), 3);
+        assert!(matches!(stmts[0], Statement::CreateTable(_)));
+        assert!(matches!(stmts[1], Statement::Insert(_)));
+        assert!(matches!(stmts[2], Statement::Select(_)));
+    }
+
+    #[test]
+    fn parse_all_multiple_semicolons_between_statements() {
+        let stmts = parse_all("SELECT * FROM a;;;SELECT * FROM b");
+        assert_eq!(stmts.len(), 2);
+    }
+
+    #[test]
+    fn parse_all_leading_semicolons_ignored() {
+        let stmts = parse_all(";;SELECT * FROM t");
+        assert_eq!(stmts.len(), 1);
+        assert!(matches!(stmts[0], Statement::Select(_)));
+    }
+
+    #[test]
+    fn parse_all_stops_and_errors_on_bad_first_statement() {
+        assert!(Parser::new("GARBAGE; SELECT * FROM t").parse_all().is_err());
+    }
+
+    #[test]
+    fn parse_all_stops_and_errors_on_bad_second_statement() {
+        assert!(Parser::new("SELECT * FROM t; GARBAGE").parse_all().is_err());
+    }
+
+    #[test]
+    fn parse_all_statement_kinds_are_preserved() {
+        let stmts = parse_all(
+            "DROP TABLE t; CREATE INDEX i ON t (id) USING BTREE; DELETE FROM t WHERE id = 1",
+        );
+        assert_eq!(stmts.len(), 3);
+        assert!(matches!(stmts[0], Statement::Drop(_)));
+        assert!(matches!(stmts[1], Statement::CreateIndex(_)));
+        assert!(matches!(stmts[2], Statement::Delete(_)));
+    }
 }
