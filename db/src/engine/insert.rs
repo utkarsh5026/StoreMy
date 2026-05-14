@@ -29,7 +29,8 @@ use crate::{
     FileId, IndexId, TransactionId, Type, Value,
     catalog::{CachedCheckConstraint, LiveIndex, manager::Catalog},
     engine::{ConstraintViolation, Engine, EngineError, StatementResult},
-    parser::statements::{InsertSource, InsertStatement},
+    execution::eval::eval_expr,
+    parser::statements::{Expr, InsertSource, InsertStatement},
     primitives::{ColumnId, NonEmptyString},
     transaction::Transaction,
     tuple::{Tuple, TupleSchema},
@@ -71,7 +72,7 @@ impl Engine<'_> {
             )?;
         }
 
-        let values = match stmt.source {
+        let expr_rows = match stmt.source {
             InsertSource::Values(rows) => rows,
             InsertSource::DefaultValues => {
                 return Self::insert_default_values(
@@ -90,6 +91,11 @@ impl Engine<'_> {
                 ));
             }
         };
+
+        // Evaluate each expression in VALUES rows against an empty context — INSERT
+        // source expressions have no "current row", so column references are not
+        // permitted and will surface as EngineError::Unsupported.
+        let values = Self::eval_value_rows(expr_rows)?;
 
         let projection = Self::build_projection(
             stmt.columns.as_deref(),
@@ -620,6 +626,29 @@ impl Engine<'_> {
                 .get_mut(phys_idx)
                 .expect("ai column index is within physical schema bounds") = value;
         }
+    }
+
+    /// Evaluate a batch of expression rows (the right-hand side of `VALUES (…), …`)
+    /// into concrete `Value`s.
+    ///
+    /// Each expression is evaluated against an empty tuple with an empty schema —
+    /// INSERT source expressions have no row context, so only literals and
+    /// constant-foldable operations are permitted. A column reference will surface
+    /// as [`EngineError::Unsupported`].
+    fn eval_value_rows(rows: Vec<Vec<Expr>>) -> Result<Vec<Vec<Value>>, EngineError> {
+        let empty_tuple = Tuple::new(vec![]);
+        let empty_schema = TupleSchema::new(vec![]);
+        rows.into_iter()
+            .map(|row| {
+                row.into_iter()
+                    .map(|expr| {
+                        eval_expr(&expr, &empty_tuple, &empty_schema).map_err(|e| {
+                            EngineError::Unsupported(format!("INSERT expression error: {e}"))
+                        })
+                    })
+                    .collect()
+            })
+            .collect()
     }
 }
 
@@ -1221,5 +1250,105 @@ mod tests {
             matches!(err, EngineError::InsertIntoAutoIncrementColumn { .. }),
             "expected InsertIntoAutoIncrementColumn, got {err:?}"
         );
+    }
+
+    // ── Expression evaluation in VALUES ───────────────────────────────────────
+
+    #[test]
+    fn values_unary_not_expression_is_evaluated() {
+        // `NOT false` must be reduced to Bool(true) before the row is stored.
+        let dir = tempdir().unwrap();
+        let (catalog, txn_mgr) = make_infra(dir.path());
+
+        let engine = Engine::new(&catalog, &txn_mgr);
+        run(&engine, "CREATE TABLE t (flag BOOLEAN NOT NULL)");
+        run(&engine, "INSERT INTO t (flag) VALUES (NOT false)");
+
+        let rows = scan_rows(&catalog, &txn_mgr, "t");
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].get(0), Some(&Value::Bool(true)));
+    }
+
+    #[test]
+    fn values_comparison_expression_is_evaluated() {
+        // `1 < 2` evaluates to Bool(true), which lands in a BOOLEAN column.
+        let dir = tempdir().unwrap();
+        let (catalog, txn_mgr) = make_infra(dir.path());
+
+        let engine = Engine::new(&catalog, &txn_mgr);
+        run(&engine, "CREATE TABLE t (flag BOOLEAN NOT NULL)");
+        run(&engine, "INSERT INTO t (flag) VALUES (1 < 2)");
+
+        let rows = scan_rows(&catalog, &txn_mgr, "t");
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].get(0), Some(&Value::Bool(true)));
+    }
+
+    #[test]
+    fn values_logical_and_expression_is_evaluated() {
+        // `true AND false` must fold to Bool(false).
+        let dir = tempdir().unwrap();
+        let (catalog, txn_mgr) = make_infra(dir.path());
+
+        let engine = Engine::new(&catalog, &txn_mgr);
+        run(&engine, "CREATE TABLE t (flag BOOLEAN NOT NULL)");
+        run(&engine, "INSERT INTO t (flag) VALUES (true AND false)");
+
+        let rows = scan_rows(&catalog, &txn_mgr, "t");
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].get(0), Some(&Value::Bool(false)));
+    }
+
+    #[test]
+    fn values_null_comparison_stores_null() {
+        // `NULL = 1` propagates NULL per SQL three-valued logic.
+        // The column must be nullable to accept it.
+        let dir = tempdir().unwrap();
+        let (catalog, txn_mgr) = make_infra(dir.path());
+
+        let engine = Engine::new(&catalog, &txn_mgr);
+        run(&engine, "CREATE TABLE t (flag BOOLEAN)");
+        run(&engine, "INSERT INTO t (flag) VALUES (NULL = 1)");
+
+        let rows = scan_rows(&catalog, &txn_mgr, "t");
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].get(0), Some(&Value::Null));
+    }
+
+    #[test]
+    fn values_column_ref_errors() {
+        // Column references in VALUES have no row context — they must be rejected
+        // at execution time with EngineError::Unsupported.
+        let dir = tempdir().unwrap();
+        let (catalog, txn_mgr) = make_infra(dir.path());
+
+        let engine = Engine::new(&catalog, &txn_mgr);
+        run(&engine, "CREATE TABLE t (x INT NOT NULL)");
+        let err = try_run(&engine, "INSERT INTO t (x) VALUES (x)").unwrap_err();
+
+        assert!(
+            matches!(err, EngineError::Unsupported(_)),
+            "expected Unsupported for column ref in VALUES, got {err:?}"
+        );
+    }
+
+    #[test]
+    fn values_expressions_evaluated_per_row_independently() {
+        // Each row in a multi-row insert is evaluated separately.
+        let dir = tempdir().unwrap();
+        let (catalog, txn_mgr) = make_infra(dir.path());
+
+        let engine = Engine::new(&catalog, &txn_mgr);
+        run(&engine, "CREATE TABLE t (flag BOOLEAN NOT NULL)");
+        run(
+            &engine,
+            "INSERT INTO t (flag) VALUES (true AND true), (NOT true), (1 = 1)",
+        );
+
+        let rows = scan_rows(&catalog, &txn_mgr, "t");
+        assert_eq!(rows.len(), 3);
+        assert_eq!(rows[0].get(0), Some(&Value::Bool(true)));
+        assert_eq!(rows[1].get(0), Some(&Value::Bool(false)));
+        assert_eq!(rows[2].get(0), Some(&Value::Bool(true)));
     }
 }

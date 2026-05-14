@@ -1,15 +1,12 @@
 use tracing::{debug, instrument, trace, warn};
 
 use super::ParserError;
-use crate::{
-    Value,
-    parser::{
-        Parser,
-        statements::{
-            Assignment, DeleteStatement, InsertSource, InsertStatement, Statement, UpdateStatement,
-        },
-        token::TokenType,
+use crate::parser::{
+    Parser,
+    statements::{
+        Assignment, DeleteStatement, InsertSource, InsertStatement, Statement, UpdateStatement,
     },
+    token::TokenType,
 };
 
 impl Parser {
@@ -142,20 +139,7 @@ impl Parser {
             self.expect(TokenType::Values)?;
             let mut rows = Vec::new();
             loop {
-                let row = self.paren_list(|p| {
-                    let t = p.bump()?;
-                    let value_kind = t.kind;
-                    let value_position = t.span.start;
-                    Value::try_from(t).map_err(|msg| {
-                        warn!(
-                            value_token_kind = ?value_kind,
-                            value_position,
-                            reason = %msg,
-                            "invalid INSERT literal"
-                        );
-                        ParserError::ParsingError(msg)
-                    })
-                })?;
+                let row = self.paren_list(super::super::Parser::parse_expression)?;
 
                 rows.push(row);
                 if self.if_peek_then_consume(TokenType::Comma)? {
@@ -238,7 +222,7 @@ mod tests {
         primitives::NonEmptyString,
     };
 
-    fn insert_rows(src: &InsertSource) -> &Vec<Vec<Value>> {
+    fn insert_rows(src: &InsertSource) -> &Vec<Vec<Expr>> {
         match src {
             InsertSource::Values(rows) => rows,
             other => panic!("expected InsertSource::Values, got {other:?}"),
@@ -287,7 +271,7 @@ mod tests {
         assert!(i.columns.is_none());
         let rows = insert_rows(&i.source);
         assert_eq!(rows.len(), 1);
-        assert_eq!(rows[0], vec![Value::Int64(42)]);
+        assert_eq!(rows[0], vec![Expr::Literal(Value::Int64(42))]);
     }
 
     #[test]
@@ -298,8 +282,8 @@ mod tests {
         assert_eq!(column_names(i.columns.as_deref()), Some(vec!["a", "b"]));
         let rows = insert_rows(&i.source);
         assert_eq!(rows.len(), 2);
-        assert_eq!(rows[0][0], Value::Int64(1));
-        assert_eq!(rows[1][1], Value::String("y".into()));
+        assert_eq!(rows[0][0], Expr::Literal(Value::Int64(1)));
+        assert_eq!(rows[1][1], Expr::Literal(Value::String("y".into())));
     }
 
     #[test]
@@ -334,7 +318,9 @@ mod tests {
         let mut p = Parser::new("INSERT INTO t (k) VALUES (0)");
         let i = p.parse_insert().unwrap();
         assert_eq!(i.columns.as_ref().unwrap().as_slice(), ["k"]);
-        assert_eq!(insert_rows(&i.source)[0], vec![Value::Int64(0)]);
+        assert_eq!(insert_rows(&i.source)[0], vec![Expr::Literal(
+            Value::Int64(0)
+        )]);
     }
 
     #[test]
@@ -382,8 +368,8 @@ mod tests {
     fn test_parse_insert_row_with_only_string_literal() {
         let mut p = Parser::new("INSERT INTO t VALUES ('only')");
         let i = p.parse_insert().unwrap();
-        assert_eq!(insert_rows(&i.source)[0], vec![Value::String(
-            "only".into()
+        assert_eq!(insert_rows(&i.source)[0], vec![Expr::Literal(
+            Value::String("only".into())
         )]);
     }
 
@@ -710,5 +696,59 @@ mod tests {
             panic!("expected AND group on right");
         };
         assert_eq!(r_op, &BinOp::And);
+    }
+
+    // ── INSERT VALUES expression parsing ─────────────────────────────────────
+
+    #[test]
+    fn test_parse_insert_values_unary_not_expression() {
+        // `NOT false` must parse as UnaryOp — not rejected by the parser.
+        let mut p = Parser::new("INSERT INTO t (flag) VALUES (NOT false)");
+        let i = p.parse_insert().unwrap();
+        let rows = insert_rows(&i.source);
+        assert_eq!(rows.len(), 1);
+        assert!(
+            matches!(rows[0][0], Expr::UnaryOp { .. }),
+            "expected UnaryOp, got {:?}",
+            rows[0][0]
+        );
+    }
+
+    #[test]
+    fn test_parse_insert_values_comparison_expression() {
+        // `1 < 2` parses as a BinaryOp Lt, not a literal.
+        let mut p = Parser::new("INSERT INTO t (flag) VALUES (1 < 2)");
+        let i = p.parse_insert().unwrap();
+        let rows = insert_rows(&i.source);
+        assert!(
+            matches!(&rows[0][0], Expr::BinaryOp { op: BinOp::Lt, .. }),
+            "expected BinaryOp(Lt), got {:?}",
+            rows[0][0]
+        );
+    }
+
+    #[test]
+    fn test_parse_insert_values_column_ref_expression() {
+        // Column references parse fine — they are rejected later at eval time,
+        // not at parse time.
+        let mut p = Parser::new("INSERT INTO t (x) VALUES (some_col)");
+        let i = p.parse_insert().unwrap();
+        let rows = insert_rows(&i.source);
+        assert!(
+            matches!(&rows[0][0], Expr::Column(_)),
+            "expected Column expr, got {:?}",
+            rows[0][0]
+        );
+    }
+
+    #[test]
+    fn test_parse_insert_values_multi_row_mixed_expressions() {
+        // Rows can mix literals and expressions.
+        let mut p = Parser::new("INSERT INTO t (x) VALUES (1), (NOT false)");
+        let i = p.parse_insert().unwrap();
+        let rows = insert_rows(&i.source);
+        assert_eq!(rows.len(), 2);
+        assert!(matches!(rows[0][0], Expr::Literal(_)));
+        assert!(matches!(rows[1][0], Expr::UnaryOp { .. }));
     }
 }
