@@ -60,29 +60,28 @@ impl Engine<'_> {
         txn: &Transaction<'_>,
         stmt: InsertStatement,
     ) -> Result<StatementResult, EngineError> {
-        let info = catalog.get_table_info(txn, &stmt.table_name)?;
-        let name = info.name.as_str().to_owned();
-        let file_id = info.file_id;
-        let schema = info.schema.clone();
-        let ai_col = info.auto_increment_column;
+        let table = catalog.get_table_info(txn, &stmt.table_name)?;
 
-        if let Some(ai_col_id) = ai_col {
+        if let Some(ai_col_id) = table.auto_increment_column {
             Self::reject_auto_increment_in_insert(
                 stmt.columns.as_deref(),
-                &schema,
-                &name,
+                &table.schema,
+                &table.name,
                 ai_col_id,
             )?;
         }
 
-        let projection = Self::build_projection(stmt.columns.as_deref(), &schema, &name, ai_col)?;
-
         let values = match stmt.source {
             InsertSource::Values(rows) => rows,
             InsertSource::DefaultValues => {
-                return Err(EngineError::Unsupported(
-                    "INSERT … DEFAULT VALUES is not yet supported".into(),
-                ));
+                return Self::insert_default_values(
+                    &table.schema,
+                    &table.name,
+                    table.auto_increment_column,
+                    catalog,
+                    txn,
+                    table.file_id,
+                );
             }
             InsertSource::Select(_) => {
                 return Err(EngineError::Unsupported(
@@ -91,23 +90,30 @@ impl Engine<'_> {
             }
         };
 
+        let projection = Self::build_projection(
+            stmt.columns.as_deref(),
+            &table.schema,
+            &table.name,
+            table.auto_increment_column,
+        )?;
+
         let mut tuples = values
             .into_iter()
             .map(|row| {
-                let fields = Self::bind_row(&row, &schema, &projection, &name, ai_col)?;
+                let fields = Self::bind_row(&row, &table.schema, &projection, &table.name)?;
                 Ok(Tuple::new(fields))
             })
             .collect::<Result<Vec<_>, EngineError>>()?;
 
         // Allocate the whole counter range in one catalog write so multiple rows
         // in a single statement get contiguous IDs.
-        if let Some(ai_col_id) = ai_col {
-            let start = catalog.allocate_auto_increment(txn, file_id, tuples.len())?;
-            Self::fill_auto_increment_values(&mut tuples, &schema, ai_col_id, start);
+        if let Some(ai_col_id) = table.auto_increment_column {
+            let start = catalog.allocate_auto_increment(txn, table.file_id, tuples.len())?;
+            Self::fill_auto_increment_values(&mut tuples, &table.schema, ai_col_id, start);
         }
 
-        let count = Self::insert_rows_and_indexes(catalog, txn, file_id, tuples)?;
-        Ok(StatementResult::inserted(name, count))
+        let count = Self::insert_rows_and_indexes(catalog, txn, table.file_id, tuples)?;
+        Ok(StatementResult::inserted(table.name, count))
     }
 
     /// Write `tuples` into the heap for `file_id` and keep all indexes in sync.
@@ -212,17 +218,16 @@ impl Engine<'_> {
     /// after validation passes — this would indicate a bug in
     /// [`validate_named_insert_columns`].
     fn build_projection(
-        cols: Option<&[NonEmptyString]>,
+        column_names: Option<&[NonEmptyString]>,
         schema: &TupleSchema,
         table: &str,
         ai_col: Option<ColumnId>,
     ) -> Result<Vec<Option<usize>>, EngineError> {
-        let logical_n = schema.logical_num_fields();
         let physical_n = schema.physical_num_fields();
 
         // Positional INSERT — AI tables are rejected before this point, so the
         // positional path never needs to handle the AI slot specially.
-        let Some(cols) = cols else {
+        let Some(column_names) = column_names else {
             let mut perm = vec![None; physical_n];
             let mut logical_idx = 0usize;
             for (phys_i, field) in schema.physical_iter().enumerate() {
@@ -234,49 +239,103 @@ impl Engine<'_> {
             return Ok(perm);
         };
 
-        Self::validate_named_insert_columns(cols, schema, table, logical_n, ai_col)?;
+        Self::validate_named_insert_columns(column_names, schema, table, ai_col)?;
 
         let mut perm = vec![None; physical_n];
         for (phys_i, field) in schema.physical_iter().enumerate() {
             if field.is_dropped {
                 continue;
             }
-            // AI column: user is not allowed to name it (already rejected by
+            // An AUTO_INCREMENT column: user is not allowed to name it (already rejected by
             // reject_auto_increment_in_insert). Leave perm[phys_i] = None so
             // bind_row produces a placeholder Null that exec_insert overwrites.
             if ai_col.map(usize::from) == Some(phys_i) {
                 continue;
             }
-            let pos = cols
+            // Omitted columns stay None — bind_row will fill them from
+            // missing_default_value or NULL (validated by validate_named_insert_columns).
+            let column_pos = column_names
                 .iter()
-                .position(|c| c.as_str() == field.name.as_str())
-                .expect("all required columns are covered by the column list");
-            perm[phys_i] = Some(pos);
+                .position(|c| c.as_str() == field.name.as_str());
+            if let Some(pos) = column_pos {
+                perm[phys_i] = Some(pos);
+            }
         }
         Ok(perm)
     }
 
+    /// Execute `INSERT … DEFAULT VALUES`.
+    ///
+    /// Unlike `INSERT … VALUES (…)`, there are no user-supplied values to map
+    /// to physical slots, so the projection machinery (`build_projection` /
+    /// `bind_row`) is not needed here. We read each slot's value directly from
+    /// the schema — `missing_default_value` if one was declared, `NULL`
+    /// otherwise. The only pre-flight check is that no `NOT NULL` column is
+    /// left without a default.
+    fn insert_default_values(
+        schema: &TupleSchema,
+        table_name: &str,
+        ai_col: Option<ColumnId>,
+        catalog: &Catalog,
+        txn: &Transaction<'_>,
+        file_id: FileId,
+    ) -> Result<StatementResult, EngineError> {
+        for field in schema.logical_iter() {
+            if field.is_dropped {
+                continue;
+            }
+            if let Some(ai_id) = ai_col
+                && schema.field_by_name(&field.name).map(|(i, _)| i) == Some(ai_id)
+            {
+                continue;
+            }
+
+            if !field.nullable && field.missing_default_value.is_none() {
+                return Err(EngineError::MissingColumnDefault {
+                    table: table_name.to_string(),
+                    column: field.name.as_str().to_string(),
+                });
+            }
+        }
+        // Coerce each default through fit_value_to_field so the stored Value type
+        // matches the column's declared type (e.g. DEFAULT 0 on a FLOAT column
+        // is parsed as Int64 but must be stored as Float64).
+        let fields = schema
+            .physical_iter()
+            .map(|field| {
+                let v = field.missing_default_value.clone().unwrap_or(Value::Null);
+                Self::fit_value_to_field(&v, field, table_name)
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+
+        let mut tuples = vec![Tuple::new(fields)];
+        if let Some(ai_col_id) = ai_col {
+            let start = catalog.allocate_auto_increment(txn, file_id, 1)?;
+            Self::fill_auto_increment_values(&mut tuples, schema, ai_col_id, start);
+        }
+        let count = Self::insert_rows_and_indexes(catalog, txn, file_id, tuples)?;
+        Ok(StatementResult::inserted(table_name.to_string(), count))
+    }
+
     /// Check that a named-column INSERT list is valid for the given schema.
     ///
-    /// Enforces three rules in one pass over `cols`:
+    /// Enforces three rules:
     ///
     /// 1. Every name must exist in `schema` and must not refer to a dropped column.
     /// 2. No name may appear more than once.
-    /// 3. The list must cover all `logical_n` columns — partial column lists are not supported
-    ///    (callers that need defaults should supply them explicitly).
+    /// 3. Every omitted column must either be nullable or have a `missing_default_value`. A `NOT
+    ///    NULL` column with no default cannot be silently skipped.
     ///
     /// # Errors
     ///
     /// - [`EngineError::UnknownColumn`] if a name is absent from the schema or names a dropped
     ///   column.
     /// - [`EngineError::DuplicateInsertColumn`] if a name appears more than once in `cols`.
-    /// - [`EngineError::WrongColumnCount`] if `cols.len()` differs from `logical_n` after
-    ///   deduplication.
+    /// - [`EngineError::MissingColumnDefault`] if a `NOT NULL` column with no default is omitted.
     fn validate_named_insert_columns(
         cols: &[NonEmptyString],
         schema: &TupleSchema,
         table: &str,
-        logical_n: usize,
         ai_col: Option<ColumnId>,
     ) -> Result<(), EngineError> {
         let table = table.to_string();
@@ -300,31 +359,36 @@ impl Engine<'_> {
             }
         }
 
-        // The AUTO_INCREMENT column may be omitted — the engine fills it in.
-        let required_n = if ai_col.is_some() {
-            logical_n - 1
-        } else {
-            logical_n
-        };
-        if seen.len() != required_n {
-            return Err(EngineError::WrongColumnCount {
-                table,
-                expected: required_n,
-                got: seen.len(),
-            });
+        // Every logical column not in `column_names` must have a way to produce a value:
+        // nullable columns fall back to NULL; columns with a stored default use
+        // that default. AUTO_INCREMENT columns are always filled by the engine.
+        for field in schema.logical_iter() {
+            let name = field.name.as_str();
+            if seen.contains(name) {
+                continue;
+            }
+            if ai_col == schema.field_by_name(&field.name).map(|(i, _)| i) {
+                continue;
+            }
+            if !field.nullable && field.missing_default_value.is_none() {
+                return Err(EngineError::MissingColumnDefault {
+                    table,
+                    column: name.to_string(),
+                });
+            }
         }
         Ok(())
     }
 
     /// Convert a single `VALUES` row into a physical-length `Vec<Value>`.
     ///
-    /// `row` contains one [`Value`] per *logical* column — exactly what the user
-    /// wrote in `VALUES (…)`. This function stretches it to cover every
-    /// *physical* slot using `projection`:
+    /// `row` contains one [`Value`] per user-supplied column — the columns named
+    /// (or all logical columns for a positional insert). This function stretches
+    /// it to cover every *physical* slot using `projection`:
     ///
     /// - `Some(user_idx)` → coerce `row[user_idx]` to the field's declared type via
-    ///   [`bind_value_for`].
-    /// - `None` → the physical slot is a dropped column; fill it with the field's
+    ///   [`fit_value_to_field`].
+    /// - `None` → dropped column, omitted column, or `AUTO_INCREMENT`; fill it with the field's
     ///   `missing_default_value` or [`Value::Null`].
     ///
     /// The returned `Vec` is ready to be wrapped in a [`Tuple`] and written to
@@ -332,23 +396,18 @@ impl Engine<'_> {
     ///
     /// # Errors
     ///
-    /// - [`EngineError::WrongColumnCount`] if `row.len()` does not equal
-    ///   `schema.logical_num_fields()`.
-    /// - [`EngineError::TypeMismatch`] (or similar) from [`bind_value_for`] if a value cannot be
-    ///   coerced to the column's declared type.
+    /// - [`EngineError::WrongColumnCount`] if `row.len()` does not equal the number of `Some`
+    ///   entries in `projection` (i.e. the user-supplied columns).
+    /// - [`EngineError::TypeMismatch`] (or similar) from [`fit_value_to_field`] if a value cannot
+    ///   be coerced to the column's declared type.
     fn bind_row(
         row: &[Value],
         schema: &TupleSchema,
         projection: &[Option<usize>],
         table: &str,
-        ai_col: Option<ColumnId>,
     ) -> Result<Vec<Value>, EngineError> {
-        let logical_n = schema.logical_num_fields();
-        let expected_n = if ai_col.is_some() {
-            logical_n - 1
-        } else {
-            logical_n
-        };
+        // Count how many slots the user actually supplied values for.
+        let expected_n = projection.iter().filter(|p| p.is_some()).count();
         if row.len() != expected_n {
             return Err(EngineError::WrongColumnCount {
                 table: table.into(),
@@ -358,7 +417,7 @@ impl Engine<'_> {
         }
 
         // For each physical column, if it is not dropped, we bind the value from the user-supplied
-        // value position using `bind_value_for`. If it is dropped, we fill it with the column's
+        // value position using `fit_value_to_field`. If it is dropped, we fill it with the column's
         // stored default or `NULL`.
         schema
             .physical_iter()
@@ -366,7 +425,7 @@ impl Engine<'_> {
             .map(|(field, proj)| {
                 if let Some(user_idx) = proj {
                     let value = &row[*user_idx];
-                    Self::bind_value_for(value, field, table)
+                    Self::fit_value_to_field(value, field, table)
                 } else {
                     Ok(field.missing_default_value.clone().unwrap_or(Value::Null))
                 }
@@ -830,7 +889,7 @@ mod tests {
     }
 
     #[test]
-    fn named_insert_column_list_too_short_returns_error() {
+    fn named_insert_omitting_not_null_column_with_no_default_returns_error() {
         let dir = tempdir().unwrap();
         let (catalog, txn_mgr) = make_infra(dir.path());
 
@@ -848,17 +907,13 @@ mod tests {
             .unwrap();
         txn.commit().unwrap();
 
-        // Column list names only 1 of the 2 logical columns.
+        // "name" is NOT NULL with no default — omitting it must be an error.
         let engine = Engine::new(&catalog, &txn_mgr);
         let err = try_run(&engine, "INSERT INTO t (id) VALUES (1)").unwrap_err();
 
         assert!(
-            matches!(err, EngineError::WrongColumnCount {
-                expected: 2,
-                got: 1,
-                ..
-            }),
-            "expected WrongColumnCount {{expected:2, got:1}}, got {err:?}"
+            matches!(err, EngineError::MissingColumnDefault { ref column, .. } if column == "name"),
+            "expected MissingColumnDefault for 'name', got {err:?}"
         );
     }
 
@@ -1042,6 +1097,99 @@ mod tests {
             matches!(err, EngineError::InsertIntoAutoIncrementColumn { .. }),
             "expected InsertIntoAutoIncrementColumn, got {err:?}"
         );
+    }
+
+    // --- DEFAULT VALUES tests ---
+
+    #[test]
+    fn default_values_inserts_one_row_from_schema_defaults() {
+        let dir = tempdir().unwrap();
+        let (catalog, txn_mgr) = make_infra(dir.path());
+
+        let engine = Engine::new(&catalog, &txn_mgr);
+        run(
+            &engine,
+            "CREATE TABLE settings (theme STRING DEFAULT 'dark', font_size INT DEFAULT 14)",
+        );
+        run(&engine, "INSERT INTO settings DEFAULT VALUES");
+
+        let rows = scan_rows(&catalog, &txn_mgr, "settings");
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].get(0), Some(&Value::String("dark".into())));
+        assert_eq!(rows[0].get(1), Some(&Value::Int64(14)));
+    }
+
+    #[test]
+    fn default_values_uses_null_for_nullable_column_with_no_default() {
+        let dir = tempdir().unwrap();
+        let (catalog, txn_mgr) = make_infra(dir.path());
+
+        let engine = Engine::new(&catalog, &txn_mgr);
+        // `label` is nullable and has no DEFAULT — should become NULL.
+        run(
+            &engine,
+            "CREATE TABLE t (score INT DEFAULT 0, label STRING)",
+        );
+        run(&engine, "INSERT INTO t DEFAULT VALUES");
+
+        let rows = scan_rows(&catalog, &txn_mgr, "t");
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].get(0), Some(&Value::Int64(0)));
+        assert_eq!(rows[0].get(1), Some(&Value::Null));
+    }
+
+    #[test]
+    fn default_values_rejects_not_null_column_without_default() {
+        let dir = tempdir().unwrap();
+        let (catalog, txn_mgr) = make_infra(dir.path());
+
+        let engine = Engine::new(&catalog, &txn_mgr);
+        run(
+            &engine,
+            "CREATE TABLE t (id INT NOT NULL, name STRING DEFAULT 'x')",
+        );
+        let err = try_run(&engine, "INSERT INTO t DEFAULT VALUES").unwrap_err();
+
+        assert!(
+            matches!(err, EngineError::MissingColumnDefault { ref column, .. } if column == "id"),
+            "expected MissingColumnDefault for 'id', got {err:?}"
+        );
+    }
+
+    // --- Partial named-column INSERT with defaults ---
+
+    #[test]
+    fn named_insert_omitting_column_with_default_uses_that_default() {
+        let dir = tempdir().unwrap();
+        let (catalog, txn_mgr) = make_infra(dir.path());
+
+        let engine = Engine::new(&catalog, &txn_mgr);
+        run(
+            &engine,
+            "CREATE TABLE users (id INT NOT NULL, role STRING DEFAULT 'viewer', active BOOLEAN DEFAULT true)",
+        );
+        run(&engine, "INSERT INTO users (id) VALUES (1)");
+
+        let rows = scan_rows(&catalog, &txn_mgr, "users");
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].get(0), Some(&Value::Int64(1)));
+        assert_eq!(rows[0].get(1), Some(&Value::String("viewer".into())));
+        assert_eq!(rows[0].get(2), Some(&Value::Bool(true)));
+    }
+
+    #[test]
+    fn named_insert_omitting_nullable_column_without_default_uses_null() {
+        let dir = tempdir().unwrap();
+        let (catalog, txn_mgr) = make_infra(dir.path());
+
+        let engine = Engine::new(&catalog, &txn_mgr);
+        run(&engine, "CREATE TABLE t (id INT NOT NULL, notes STRING)");
+        run(&engine, "INSERT INTO t (id) VALUES (7)");
+
+        let rows = scan_rows(&catalog, &txn_mgr, "t");
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].get(0), Some(&Value::Int64(7)));
+        assert_eq!(rows[0].get(1), Some(&Value::Null));
     }
 
     #[test]

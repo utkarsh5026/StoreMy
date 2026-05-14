@@ -204,7 +204,7 @@ impl Engine<'_> {
     /// Walks each `SET col = expr` item and:
     /// - Resolves `col` against the table schema, returning an error if it does not exist.
     /// - Rejects the same column appearing twice (`SET a = 1, a = 2` is illegal).
-    /// - Coerces the literal to the column's declared type via [`bind_value_for`].
+    /// - Coerces the literal to the column's declared type via [`fit_value_to_field`].
     ///
     /// # Errors
     ///
@@ -248,7 +248,7 @@ impl Engine<'_> {
                             .into(),
                     ));
                 };
-                Ok((col_id, Self::bind_value_for(&lit, field, table_name)?))
+                Ok((col_id, Self::fit_value_to_field(&lit, field, table_name)?))
             })
             .collect::<Result<Vec<(ColumnId, Value)>, EngineError>>()?;
         Ok(bound)

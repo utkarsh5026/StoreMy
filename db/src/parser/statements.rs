@@ -620,6 +620,9 @@ impl From<&[ColumnDef]> for TupleSchema {
                     if !field_nullable {
                         field = field.not_null();
                     }
+                    if let Some(default) = col.default.clone() {
+                        let _ = field.set_missing_default_value(default);
+                    }
                     field
                 })
                 .collect(),

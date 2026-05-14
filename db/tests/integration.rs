@@ -24,3 +24,5 @@ mod ddl;
 mod dml;
 #[path = "integration/errors.rs"]
 mod errors;
+#[path = "integration/insert_defaults.rs"]
+mod insert_defaults;
