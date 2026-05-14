@@ -810,4 +810,34 @@ mod tests {
         // Missing `)` should produce a parse error.
         assert!(expr("(age = 1").is_err());
     }
+
+    #[test]
+    fn parse_expr_parses_simple_comparison() {
+        let e = Parser::parse_expr("age > 0").expect("should parse");
+        assert_eq!(
+            e,
+            Expr::binary(
+                Expr::Column("age".into()),
+                BinOp::Gt,
+                Expr::Literal(Value::Int64(0))
+            )
+        );
+    }
+
+    #[test]
+    fn parse_expr_parses_compound_expression() {
+        // (price > 0) AND (stock >= 1) — typical CHECK body
+        let e = Parser::parse_expr("price > 0 AND stock >= 1").expect("should parse");
+        assert!(matches!(e, Expr::BinaryOp { op: BinOp::And, .. }));
+    }
+
+    #[test]
+    fn parse_expr_incomplete_expression_errors() {
+        assert!(Parser::parse_expr("age >").is_err());
+    }
+
+    #[test]
+    fn parse_expr_empty_input_errors() {
+        assert!(Parser::parse_expr("").is_err());
+    }
 }

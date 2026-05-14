@@ -1083,7 +1083,7 @@ impl Display for AlterAction {
 /// the compiler to handle every case.
 #[derive(Debug, Clone)]
 pub enum InsertSource {
-    Values(Vec<Vec<Value>>),
+    Values(Vec<Vec<Expr>>),
     DefaultValues,
     Select(Box<SelectStatement>),
 }
@@ -1109,8 +1109,8 @@ impl Display for InsertStatement {
                 let rendered: Vec<String> = rows
                     .iter()
                     .map(|row| {
-                        let vals: Vec<String> = row.iter().map(ToString::to_string).collect();
-                        format!("({})", vals.join(", "))
+                        let exprs: Vec<String> = row.iter().map(ToString::to_string).collect();
+                        format!("({})", exprs.join(", "))
                     })
                     .collect();
                 write!(f, " VALUES {}", rendered.join(", "))

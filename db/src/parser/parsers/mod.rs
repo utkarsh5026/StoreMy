@@ -146,6 +146,18 @@ impl Parser {
         Ok(stmt)
     }
 
+    /// Parses `sql` as a standalone scalar expression (no surrounding statement).
+    ///
+    /// Intended for stored expression strings such as CHECK constraint bodies.
+    /// All operators bind at their normal precedence.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ParserError`] if `sql` is not a valid expression.
+    pub fn parse_expr(sql: &str) -> Result<Expr, ParserError> {
+        Parser::new(sql).parse_expression()
+    }
+
     /// Consumes an optional trailing `;` and asserts the token stream is exhausted.
     ///
     /// Used at the end of [`Parser::parse`] to reject extra tokens after a

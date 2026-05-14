@@ -16,12 +16,14 @@ use std::collections::{HashMap, HashSet};
 use crate::{
     FileId,
     catalog::{
-        CatalogError, ForeignKey, ReferencingFk, TableInfo, UniqueConstraint,
+        CachedCheckConstraint, CatalogError, ForeignKey, ReferencingFk, TableInfo,
+        UniqueConstraint,
         manager::Catalog,
         systable::{
             ConstraintColumnRow, ConstraintKind, ConstraintRow, FkAction, FkConstraintRow, IndexRow,
         },
     },
+    parser::Parser,
     primitives::{ColumnId, IndexId, NonEmptyString},
     transaction::Transaction,
 };
@@ -519,10 +521,27 @@ impl Catalog {
                         on_update,
                     });
                 }
+                ConstraintKind::Check => {
+                    let expr_str = header.expr.ok_or_else(|| {
+                        CatalogError::invalid_catalog_row(format!(
+                            "CHECK constraint '{}' has no expression stored",
+                            header.constraint_name.as_str()
+                        ))
+                    })?;
+                    let expr = Parser::parse_expr(expr_str.as_str()).map_err(|e| {
+                        CatalogError::invalid_catalog_row(format!(
+                            "CHECK constraint '{}' has unparseable expression: {e}",
+                            header.constraint_name.as_str()
+                        ))
+                    })?;
+                    table.check_constraints.push(CachedCheckConstraint {
+                        name: header.constraint_name.as_str().to_owned(),
+                        expr,
+                    });
+                }
                 // PrimaryKey is reconstructed from CATALOG_PRIMARY_KEY_COLUMNS,
-                // not from these rows. Check has no detail rows. NotNull is a
-                // column attribute. Drop them silently here.
-                ConstraintKind::PrimaryKey | ConstraintKind::Check | ConstraintKind::NotNull => {}
+                // not from these rows. NotNull is a column attribute.
+                ConstraintKind::PrimaryKey | ConstraintKind::NotNull => {}
             }
         }
 
@@ -1428,6 +1447,136 @@ mod tests {
         assert!(
             matches!(result, Err(CatalogError::InvalidCatalogRow { .. })),
             "expected error for FK header with no detail rows, got: {result:?}"
+        );
+    }
+
+    // ── CHECK constraint caching ──────────────────────────────────────────────
+
+    fn check_row(name: &str, expr: &str) -> ConstraintRow {
+        ConstraintRow {
+            constraint_name: NonEmptyString::try_from(name).unwrap(),
+            table_id: FileId::from(0u64),
+            constraint_kind: ConstraintKind::Check,
+            expr: Some(NonEmptyString::try_from(expr).unwrap()),
+            backing_index_id: None,
+        }
+    }
+
+    #[test]
+    fn build_constraints_check_row_is_parsed_and_cached() {
+        let dir = tempdir().unwrap();
+        let (catalog, txn_mgr) = make_catalog_and_txn(dir.path());
+        let txn = txn_mgr.begin().unwrap();
+        let _file_id = catalog
+            .create_table(&txn, "products", three_col_schema(), vec![])
+            .unwrap();
+        let mut info = catalog.get_table_info(&txn, "products").unwrap();
+        txn.commit().unwrap();
+
+        Catalog::build_constraints_for_table(
+            &mut info,
+            vec![check_row("price_positive", "id > 0")],
+            vec![],
+            vec![],
+        )
+        .unwrap();
+
+        assert_eq!(info.check_constraints.len(), 1);
+        assert_eq!(info.check_constraints[0].name, "price_positive");
+        assert!(
+            matches!(
+                &info.check_constraints[0].expr,
+                crate::parser::statements::Expr::BinaryOp {
+                    op: crate::parser::statements::BinOp::Gt,
+                    ..
+                }
+            ),
+            "expected Gt binary op, got: {:?}",
+            info.check_constraints[0].expr
+        );
+    }
+
+    #[test]
+    fn build_constraints_multiple_check_rows_all_cached() {
+        let dir = tempdir().unwrap();
+        let (catalog, txn_mgr) = make_catalog_and_txn(dir.path());
+        let txn = txn_mgr.begin().unwrap();
+        let _file_id = catalog
+            .create_table(&txn, "orders", three_col_schema(), vec![])
+            .unwrap();
+        let mut info = catalog.get_table_info(&txn, "orders").unwrap();
+        txn.commit().unwrap();
+
+        Catalog::build_constraints_for_table(
+            &mut info,
+            vec![
+                check_row("chk_a", "id > 0"),
+                check_row("chk_b", "id < 1000"),
+            ],
+            vec![],
+            vec![],
+        )
+        .unwrap();
+
+        assert_eq!(info.check_constraints.len(), 2);
+        let names: Vec<&str> = info
+            .check_constraints
+            .iter()
+            .map(|c| c.name.as_str())
+            .collect();
+        assert!(names.contains(&"chk_a"));
+        assert!(names.contains(&"chk_b"));
+    }
+
+    #[test]
+    fn build_constraints_check_with_null_expr_returns_error() {
+        let dir = tempdir().unwrap();
+        let (catalog, txn_mgr) = make_catalog_and_txn(dir.path());
+        let txn = txn_mgr.begin().unwrap();
+        let _file_id = catalog
+            .create_table(&txn, "t", three_col_schema(), vec![])
+            .unwrap();
+        let mut info = catalog.get_table_info(&txn, "t").unwrap();
+        txn.commit().unwrap();
+
+        let bad_row = ConstraintRow {
+            constraint_name: NonEmptyString::try_from("chk_missing").unwrap(),
+            table_id: FileId::from(0u64),
+            constraint_kind: ConstraintKind::Check,
+            expr: None,
+            backing_index_id: None,
+        };
+
+        let result = Catalog::build_constraints_for_table(&mut info, vec![bad_row], vec![], vec![]);
+
+        assert!(
+            matches!(result, Err(CatalogError::InvalidCatalogRow { .. })),
+            "expected InvalidCatalogRow for missing expr, got: {result:?}"
+        );
+    }
+
+    #[test]
+    fn build_constraints_check_with_unparseable_expr_returns_error() {
+        let dir = tempdir().unwrap();
+        let (catalog, txn_mgr) = make_catalog_and_txn(dir.path());
+        let txn = txn_mgr.begin().unwrap();
+        let _file_id = catalog
+            .create_table(&txn, "t", three_col_schema(), vec![])
+            .unwrap();
+        let mut info = catalog.get_table_info(&txn, "t").unwrap();
+        txn.commit().unwrap();
+
+        // "age >" is incomplete — parser cannot produce an Expr from it.
+        let result = Catalog::build_constraints_for_table(
+            &mut info,
+            vec![check_row("chk_bad", "age >")],
+            vec![],
+            vec![],
+        );
+
+        assert!(
+            matches!(result, Err(CatalogError::InvalidCatalogRow { .. })),
+            "expected InvalidCatalogRow for malformed expr, got: {result:?}"
         );
     }
 }

@@ -3,6 +3,7 @@ use crate::parser::lexer::Lexer;
 mod lexer;
 mod parsers;
 pub mod statements;
+pub use parsers::ParserError;
 mod token;
 
 pub struct Parser {
