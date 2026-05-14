@@ -47,16 +47,18 @@ use std::{
 
 use super::fk::{ParentFkCheck, RowChange};
 use crate::{
-    FileId, IndexId, TransactionId, Value,
+    FileId, IndexId, TransactionId,
     catalog::{LiveIndex, manager::Catalog},
     engine::{
         ConstraintViolation, Engine, EngineError, StatementResult,
         fk::InboundParentFkCheck,
         scope::{ColumnResolver, SingleTableScope},
     },
+    execution::eval,
     parser::statements::{Assignment, Expr, UpdateStatement},
     primitives::ColumnId,
     transaction::Transaction,
+    tuple::{Tuple, TupleSchema},
 };
 
 impl Engine<'_> {
@@ -98,6 +100,7 @@ impl Engine<'_> {
 
         let info = catalog.get_table_info(txn, table_name.as_str())?;
         let ai_col = info.auto_increment_column;
+        let check_constraints = info.check_constraints.clone();
         let scope = SingleTableScope::from_info(info, alias);
         let heap_file = catalog.get_table_heap(scope.file_id)?;
 
@@ -121,49 +124,32 @@ impl Engine<'_> {
         let (outbound_fk_checks, inbound_checks) =
             Self::prepare_fk_checks_for_update(catalog, txn, scope.file_id, &assignment_cols)?;
 
-        let needs_old = !affected_indexes.is_empty()
-            || !outbound_fk_checks.is_empty()
-            || !inbound_checks.is_empty();
-
         let txn_id = txn.transaction_id();
         let mut updated = 0;
-        for (rid, mut tuple) in rows {
-            let old_tuple = needs_old.then(|| tuple.clone());
+        for (rid, old_tuple) in rows {
+            let new_tuple = Self::build_updated_tuple(
+                &old_tuple,
+                &assignments,
+                &scope.schema,
+                scope.name.as_str(),
+            )?;
+            Self::check_tuple_constraints(
+                &new_tuple,
+                &scope.schema,
+                &check_constraints,
+                scope.name.as_str(),
+            )?;
 
-            // Apply the assignments to the tuple in-place.
-            // This is more efficient than building a new tuple and applying the assignments one by
-            // one.
-            for (col_id, value) in &assignments {
-                let col_id = usize::from(*col_id);
-                tuple
-                    .set_field(col_id, value.clone(), &scope.schema)
-                    .map_err(|e| EngineError::TypeError(e.to_string()))?;
-            }
+            let change = RowChange {
+                before: &old_tuple,
+                after: &new_tuple,
+            };
+            Self::check_unique_for_update(&affected_indexes, &unique_checks, txn_id, change)?;
+            Self::check_outbound_fks_for_update(&outbound_fk_checks, change, txn_id)?;
+            Self::enforce_referential_actions_on_update(&inbound_checks, change, txn_id)?;
 
-            // If an old tuple was captured before assignment, perform all
-            // necessary checks for data integrity constraints on the updated values.
-            //
-            // This includes:
-            // - Checking unique constraints in affected indexes using the old and new tuple
-            // - Validating outgoing foreign key constraints (where this table is the origin)
-            // - Enforcing inbound foreign key referential actions (where this table is referenced)
-            if let Some(old) = &old_tuple {
-                let change = RowChange {
-                    before: old,
-                    after: &tuple,
-                };
-                Self::check_unique_for_update(&affected_indexes, &unique_checks, txn_id, change)?;
-                Self::check_outbound_fks_for_update(&outbound_fk_checks, change, txn_id)?;
-                Self::enforce_referential_actions_on_update(&inbound_checks, change, txn_id)?;
-            }
-
-            heap_file.update_tuple(txn_id, rid, &tuple)?;
-            if let Some(old) = &old_tuple {
-                Self::sync_indexes_after_fk_action(&affected_indexes, txn_id, rid, RowChange {
-                    before: old,
-                    after: &tuple,
-                })?;
-            }
+            heap_file.update_tuple(txn_id, rid, &new_tuple)?;
+            Self::sync_indexes_after_fk_action(&affected_indexes, txn_id, rid, change)?;
             updated += 1;
         }
 
@@ -177,7 +163,7 @@ impl Engine<'_> {
     /// are excluded so the per-row loop never performs unnecessary key compares
     /// or index writes.
     fn get_affected_indices(
-        assignments: &[(ColumnId, Value)],
+        assignments: &[(ColumnId, Expr)],
         catalog: &Catalog,
         file_id: FileId,
     ) -> Vec<Arc<LiveIndex>> {
@@ -199,33 +185,34 @@ impl Engine<'_> {
             .collect()
     }
 
-    /// Validates and coerces a raw `SET` assignment list into resolved `(ColumnId, Value)` pairs.
+    /// Validates a raw `SET` assignment list into `(ColumnId, Expr)` pairs.
     ///
     /// Walks each `SET col = expr` item and:
     /// - Resolves `col` against the table schema, returning an error if it does not exist.
     /// - Rejects the same column appearing twice (`SET a = 1, a = 2` is illegal).
-    /// - Coerces the literal to the column's declared type via [`fit_value_to_field`].
+    /// - Rejects updates to auto-increment columns.
+    ///
+    /// The RHS expression is kept unevaluated — type coercion and evaluation happen
+    /// per-row at execution time against the pre-mutation tuple via [`eval_expr`].
     ///
     /// # Errors
     ///
     /// - [`EngineError::UnknownColumn`] if a column name is not found in the schema.
     /// - [`EngineError::DuplicateColumn`] if a column is targeted more than once.
-    /// - [`EngineError::Unsupported`] if an assignment uses a non-literal expression.
-    /// - [`EngineError::TypeError`] if the literal cannot be coerced to the column type.
+    /// - [`EngineError::UpdateAutoIncrementColumn`] if an AI column is targeted.
     fn bind_assignments(
         scope: &SingleTableScope,
         assignments: Vec<Assignment>,
         ai_col: Option<ColumnId>,
-    ) -> Result<Vec<(ColumnId, Value)>, EngineError> {
+    ) -> Result<Vec<(ColumnId, Expr)>, EngineError> {
         let mut seen: HashSet<ColumnId> = HashSet::with_capacity(assignments.len());
         let table_name = scope.name.as_str();
 
-        let bound = assignments
+        assignments
             .into_iter()
             .map(|ass| {
                 let column = ass.column.into_inner();
-
-                let (col_id, field) = Self::require_column(&scope.schema, table_name, &column)?;
+                let (col_id, _field) = Self::require_column(&scope.schema, table_name, &column)?;
 
                 if ai_col == Some(col_id) {
                     return Err(EngineError::UpdateAutoIncrementColumn {
@@ -242,16 +229,50 @@ impl Engine<'_> {
                 }
 
                 seen.insert(col_id);
-                let Expr::Literal(lit) = ass.value else {
-                    return Err(EngineError::Unsupported(
-                        "UPDATE assignment expressions are not yet supported (literals only)"
-                            .into(),
-                    ));
-                };
-                Ok((col_id, Self::fit_value_to_field(&lit, field, table_name)?))
+                Ok((col_id, ass.value))
             })
-            .collect::<Result<Vec<(ColumnId, Value)>, EngineError>>()?;
-        Ok(bound)
+            .collect()
+    }
+
+    /// Evaluates every SET expression against `old_tuple` and returns a new
+    /// tuple with all assignments applied.
+    ///
+    /// All RHS expressions are evaluated first (against the pre-mutation row),
+    /// then every value is written into the clone. This two-step approach is
+    /// what makes `SET a = b, b = a` a correct swap — both reads see the old
+    /// values regardless of the order the assignments appear in the statement.
+    ///
+    /// # Errors
+    ///
+    /// - [`EngineError::TypeError`] if expression evaluation fails or the computed value cannot be
+    ///   coerced to the column's declared type.
+    fn build_updated_tuple(
+        old_tuple: &Tuple,
+        assignments: &[(ColumnId, Expr)],
+        schema: &TupleSchema,
+        table_name: &str,
+    ) -> Result<Tuple, EngineError> {
+        let computed = assignments
+            .iter()
+            .map(|(col_id, expr)| {
+                let raw = eval::eval_expr(expr, old_tuple, schema)
+                    .map_err(|e| EngineError::TypeError(e.to_string()))?;
+
+                let field = schema
+                    .field_of(*col_id)
+                    .map_err(|e| EngineError::TypeError(e.to_string()))?;
+
+                Self::fit_value_to_field(&raw, field, table_name)
+            })
+            .collect::<Result<Vec<_>, EngineError>>()?;
+
+        let mut new_tuple = old_tuple.clone();
+        for ((col_id, _), value) in assignments.iter().zip(&computed) {
+            new_tuple
+                .set_field(usize::from(*col_id), value.clone(), schema)
+                .map_err(|e| EngineError::TypeError(e.to_string()))?;
+        }
+        Ok(new_tuple)
     }
 
     /// Builds the outbound and inbound FK check descriptors for this UPDATE,
@@ -758,5 +779,137 @@ mod tests {
             .unwrap();
         probe_txn.commit().unwrap();
         assert_eq!(new_name_hits.len(), 1, "new name key must hit");
+    }
+
+    /// Runs a SELECT and returns every row as a flat `Vec<Vec<Value>>`.
+    fn select_rows(engine: &Engine<'_>, sql: &str) -> Vec<Vec<Value>> {
+        use crate::engine::StatementResult;
+        let stmt = Parser::new(sql).parse().expect("parse");
+        match engine.execute_statement(stmt).expect("execute") {
+            StatementResult::Selected { rows, .. } => rows
+                .into_iter()
+                .map(|t| (0..t.len()).map(|i| t.get(i).unwrap().clone()).collect())
+                .collect(),
+            other => panic!("expected Selected, got {other:?}"),
+        }
+    }
+
+    fn make_pair_table(dir: &Path) -> (Catalog, TransactionManager) {
+        let (catalog, txn_mgr) = make_infra(dir);
+        let txn = txn_mgr.begin().unwrap();
+        catalog
+            .create_table(
+                &txn,
+                "t",
+                TupleSchema::new(vec![
+                    field("a", Type::Int64).not_null(),
+                    field("b", Type::Int64).not_null(),
+                ]),
+                vec![],
+            )
+            .unwrap();
+        txn.commit().unwrap();
+        (catalog, txn_mgr)
+    }
+
+    #[test]
+    fn update_set_column_reference_copies_value() {
+        let dir = tempdir().unwrap();
+        let (catalog, txn_mgr) = make_pair_table(dir.path());
+        let engine = Engine::new(&catalog, &txn_mgr);
+
+        run(&engine, "INSERT INTO t (a, b) VALUES (5, 99);");
+        run(&engine, "UPDATE t SET a = b;");
+
+        let rows = select_rows(&engine, "SELECT a, b FROM t");
+        assert_eq!(rows.len(), 1);
+        assert_eq!(
+            rows[0],
+            vec![Value::Int64(99), Value::Int64(99)],
+            "a should take b's original value"
+        );
+    }
+
+    #[test]
+    fn update_swap_reads_pre_mutation_values() {
+        // SET a = b, b = a must read both columns before any write happens.
+        // With single-phase apply this would set both columns to old_b.
+        let dir = tempdir().unwrap();
+        let (catalog, txn_mgr) = make_pair_table(dir.path());
+        let engine = Engine::new(&catalog, &txn_mgr);
+
+        run(&engine, "INSERT INTO t (a, b) VALUES (10, 20);");
+        run(&engine, "UPDATE t SET a = b, b = a;");
+
+        let rows = select_rows(&engine, "SELECT a, b FROM t");
+        assert_eq!(rows.len(), 1);
+        assert_eq!(
+            rows[0],
+            vec![Value::Int64(20), Value::Int64(10)],
+            "columns must be swapped using pre-mutation values"
+        );
+    }
+
+    #[test]
+    fn update_set_column_ref_applies_per_row() {
+        // Each row evaluates the expression against its own pre-mutation values.
+        let dir = tempdir().unwrap();
+        let (catalog, txn_mgr) = make_pair_table(dir.path());
+        let engine = Engine::new(&catalog, &txn_mgr);
+
+        run(
+            &engine,
+            "INSERT INTO t (a, b) VALUES (1, 100), (2, 200), (3, 300);",
+        );
+        run(&engine, "UPDATE t SET a = b;");
+
+        let mut rows = select_rows(&engine, "SELECT a, b FROM t");
+        rows.sort_by_key(|r| match r[1] {
+            Value::Int64(v) => v,
+            _ => 0,
+        });
+        assert_eq!(rows[0], vec![Value::Int64(100), Value::Int64(100)]);
+        assert_eq!(rows[1], vec![Value::Int64(200), Value::Int64(200)]);
+        assert_eq!(rows[2], vec![Value::Int64(300), Value::Int64(300)]);
+    }
+
+    #[test]
+    fn update_literal_still_works_after_refactor() {
+        // Regression: plain literal SET must still work correctly.
+        let dir = tempdir().unwrap();
+        let (catalog, txn_mgr) = make_pair_table(dir.path());
+        let engine = Engine::new(&catalog, &txn_mgr);
+
+        run(&engine, "INSERT INTO t (a, b) VALUES (1, 2);");
+        run(&engine, "UPDATE t SET a = 42;");
+
+        let rows = select_rows(&engine, "SELECT a, b FROM t");
+        assert_eq!(rows[0], vec![Value::Int64(42), Value::Int64(2)]);
+    }
+
+    #[test]
+    fn update_column_ref_with_where_only_touches_matching_rows() {
+        let dir = tempdir().unwrap();
+        let (catalog, txn_mgr) = make_pair_table(dir.path());
+        let engine = Engine::new(&catalog, &txn_mgr);
+
+        run(&engine, "INSERT INTO t (a, b) VALUES (1, 10), (2, 20);");
+        run(&engine, "UPDATE t SET a = b WHERE a = 1;");
+
+        let mut rows = select_rows(&engine, "SELECT a, b FROM t");
+        rows.sort_by_key(|r| match r[1] {
+            Value::Int64(v) => v,
+            _ => 0,
+        });
+        assert_eq!(
+            rows[0],
+            vec![Value::Int64(10), Value::Int64(10)],
+            "matched row: a takes b's value"
+        );
+        assert_eq!(
+            rows[1],
+            vec![Value::Int64(2), Value::Int64(20)],
+            "unmatched row: unchanged"
+        );
     }
 }

@@ -2,7 +2,7 @@
 //!
 //! The entry point is [`eval_expr`], which walks an [`Expr`] tree and returns
 //! the resulting [`Value`]. It is the counterpart to
-//! [`expression::BooleanExpression::eval`]: where that function returns `bool`
+//! [`crate::execution::expression::BooleanExpression::eval`]: where that function returns `bool`
 //! and is purpose-built for filter predicates, this one returns a full [`Value`]
 //! and is suitable anywhere a scalar result is needed — `SET` assignment
 //! right-hand sides, `CHECK` constraint bodies, computed default values, and so on.
@@ -31,7 +31,7 @@
 //! filter treats it as non-matching). Logical `AND` and `OR` propagate `NULL`
 //! too, matching the SQL standard.
 //!
-//! This is intentionally different from [`expression::BooleanExpression::eval`],
+//! This is intentionally different from [`crate::execution::expression::BooleanExpression::eval`],
 //! which collapses `NULL` to `false` for simplicity in the filter/join operators.
 
 use std::cmp::Ordering;
