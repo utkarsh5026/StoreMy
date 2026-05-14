@@ -56,42 +56,62 @@ export function DatabasePicker({ onSelect }: Props) {
   };
 
   return (
-    <div className="db-picker">
-      <div className="db-picker-header">
-        <span className="db-picker-logo">StoreMy</span>
-        <span className="db-picker-sub">Select a database to continue</span>
+    <div className="flex flex-col items-center justify-center min-h-full bg-bg px-4 py-10">
+      {/* Logo / heading */}
+      <div className="text-center mb-9">
+        <span className="block text-[28px] font-bold tracking-[0.06em] text-fg mb-1.5">
+          StoreMy
+        </span>
+        <span className="text-dim text-sm">Select a database to continue</span>
       </div>
 
-      <div className="db-picker-body">
-        <div className="db-list-section">
+      {/* Card */}
+      <div className="w-full max-w-105 flex flex-col gap-6">
+        {/* Database list */}
+        <div className="bg-panel border border-line rounded-[6px] overflow-hidden min-h-15 flex flex-col justify-center">
           {load.status === "loading" && (
-            <div className="db-empty">Loading…</div>
+            <p className="text-dim text-[13px] italic px-4 py-4 text-center">
+              Loading…
+            </p>
           )}
           {load.status === "err" && (
-            <div className="error-box">{load.message}</div>
+            <div className="font-mono whitespace-pre-wrap bg-danger/8 border-b border-danger/30 p-3 text-danger text-[13px]">
+              {load.message}
+            </div>
           )}
           {load.status === "ok" && load.databases.length === 0 && (
-            <div className="db-empty">No databases yet. Create one below.</div>
+            <p className="text-dim text-[13px] italic px-4 py-4 text-center">
+              No databases yet. Create one below.
+            </p>
           )}
           {load.status === "ok" && load.databases.length > 0 && (
-            <ul className="db-list">
+            <ul className="list-none m-0 p-0">
               {load.databases.map((db) => (
-                <li key={db.name} onClick={() => onSelect(db.name)}>
-                  <span className="db-icon">⬡</span>
-                  <span className="db-name">{db.name}</span>
-                  <span className="db-arrow">→</span>
+                <li
+                  key={db.name}
+                  onClick={() => onSelect(db.name)}
+                  className="flex items-center gap-2.5 px-4 py-3 cursor-pointer border-b border-line last:border-b-0 hover:bg-panel2 transition-colors"
+                >
+                  <span className="text-accent text-sm">⬡</span>
+                  <span className="font-mono text-sm font-semibold flex-1">
+                    {db.name}
+                  </span>
+                  <span className="text-dim text-[13px]">→</span>
                 </li>
               ))}
             </ul>
           )}
         </div>
 
-        <div className="db-create-section">
-          <div className="db-create-label">New database</div>
-          <div className="db-create-row">
+        {/* Create new database */}
+        <div className="flex flex-col gap-2">
+          <p className="text-[11px] uppercase tracking-[0.08em] text-dim">
+            New database
+          </p>
+          <div className="flex gap-2">
             <input
               ref={inputRef}
-              className="db-name-input"
+              className="input-field flex-1"
               type="text"
               placeholder="my_database"
               value={newName}
@@ -103,6 +123,7 @@ export function DatabasePicker({ onSelect }: Props) {
               disabled={create.status === "creating"}
             />
             <button
+              className="btn"
               onClick={handleCreate}
               disabled={!newName.trim() || create.status === "creating"}
             >
@@ -110,11 +131,11 @@ export function DatabasePicker({ onSelect }: Props) {
             </button>
           </div>
           {create.status === "err" && (
-            <div className="db-create-error">{create.message}</div>
+            <p className="text-danger text-xs font-mono">{create.message}</p>
           )}
-          <div className="db-name-hint">
+          <p className="text-dim text-[11px]">
             Letters, digits, and underscores only. Must start with a letter.
-          </div>
+          </p>
         </div>
       </div>
     </div>

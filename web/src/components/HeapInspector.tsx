@@ -1,7 +1,3 @@
-// Visualises a single heap page: header, slot directory, free region, tuple
-// region, and per-slot decoded fields. The point is to make the slotted-page
-// layout LITERAL — slots grow forward from byte PAGE_HDR_SIZE, tuples grow
-// backward from PAGE_SIZE. Pick a slot to see its raw bytes and decode.
 import { useEffect, useMemo, useState } from "react";
 import type { HeapDump, HeapPage, HeapSlot } from "../types/api";
 import { fetchHeap, StoremyError } from "../api/client";
@@ -9,7 +5,6 @@ import { fetchHeap, StoremyError } from "../api/client";
 interface Props {
   db: string;
   table: string;
-  /** Bumped when a query succeeds, so we re-fetch and reflect new tuples. */
   refreshTick: number;
 }
 
@@ -43,36 +38,45 @@ export function HeapInspector({ db, table, refreshTick }: Props) {
     };
   }, [db, table, refreshTick]);
 
-  // Reset selection when the visible page changes.
   useEffect(() => {
     setSelectedSlot(null);
   }, [pageIdx, table]);
 
   if (state.status === "loading") {
-    return <div className="status-msg">loading heap …</div>;
+    return <p className="font-mono text-[13px]">loading heap …</p>;
   }
   if (state.status === "err") {
-    return <div className="error-box">{state.message}</div>;
+    return (
+      <div className="font-mono whitespace-pre-wrap bg-danger/8 border border-danger/30 rounded p-2.5 text-danger text-[13px]">
+        {state.message}
+      </div>
+    );
   }
 
   const dump = state.dump;
   if (dump.pages.length === 0) {
-    return <div className="status-msg">no pages allocated yet for '{table}'</div>;
+    return (
+      <p className="font-mono text-[13px]">
+        no pages allocated yet for '{table}'
+      </p>
+    );
   }
   const page = dump.pages[Math.min(pageIdx, dump.pages.length - 1)];
 
   return (
-    <div className="heap-inspector">
-      <div className="heap-toolbar">
+    <div className="flex flex-col gap-3.5 font-mono text-[13px]">
+      {/* Toolbar */}
+      <div className="flex items-center gap-3 flex-wrap">
         <strong>{dump.table}</strong>
-        <span className="dim">
+        <span className="text-dim text-xs">
           {dump.field_names.join(", ")} · {dump.page_count} page
           {dump.page_count === 1 ? "" : "s"} · page_size={dump.page_size}
         </span>
         {dump.pages.length > 1 && (
-          <span className="page-picker">
+          <span className="flex items-center gap-1">
             page&nbsp;
             <select
+              className="bg-panel2 text-fg border border-line rounded-[3px] px-1.5 py-0.5 font-mono text-[13px] outline-none focus:border-accent"
               value={pageIdx}
               onChange={(e) => setPageIdx(Number(e.target.value))}
             >
@@ -85,6 +89,7 @@ export function HeapInspector({ db, table, refreshTick }: Props) {
           </span>
         )}
       </div>
+
       <PageView
         page={page}
         pageSize={dump.page_size}
@@ -108,25 +113,22 @@ function PageView({
 }) {
   if (page.blank) {
     return (
-      <div className="page-view">
-        <div className="status-msg">
-          page {page.page_no}: empty (never written) — {page.free_bytes} free bytes
-        </div>
-      </div>
+      <p className="font-mono text-[13px]">
+        page {page.page_no}: empty (never written) — {page.free_bytes} free
+        bytes
+      </p>
     );
   }
   return (
-    <div className="page-view">
+    <div className="flex flex-col gap-3.5">
       {page.page_error && (
-        <div className="error-box">page error: {page.page_error}</div>
+        <div className="font-mono whitespace-pre-wrap bg-danger/8 border border-danger/30 rounded p-2.5 text-danger text-[13px]">
+          page error: {page.page_error}
+        </div>
       )}
       <PageHeaderRow page={page} />
       <PageMap page={page} pageSize={pageSize} selectedSlot={selectedSlot} />
-      <SlotTable
-        page={page}
-        selectedSlot={selectedSlot}
-        onPick={onPickSlot}
-      />
+      <SlotTable page={page} selectedSlot={selectedSlot} onPick={onPickSlot} />
       <SlotDetail page={page} selectedSlot={selectedSlot} />
     </div>
   );
@@ -134,7 +136,7 @@ function PageView({
 
 function PageHeaderRow({ page }: { page: HeapPage }) {
   return (
-    <div className="page-header">
+    <div className="flex flex-wrap gap-4 px-3 py-2 bg-panel2 border border-line rounded">
       <Stat label="num_slots" value={page.header.num_slots} />
       <Stat label="tuple_start" value={page.header.tuple_start} />
       <Stat label="slot_array_end" value={page.slot_array_end} />
@@ -159,15 +161,19 @@ function Stat({
   mono?: boolean;
 }) {
   return (
-    <div className="stat">
-      <span className="stat-label">{label}</span>
-      <span className={mono ? "stat-value mono" : "stat-value"}>{value}</span>
+    <div className="flex flex-col gap-0.5">
+      <span className="text-[11px] uppercase text-dim tracking-[0.04em]">
+        {label}
+      </span>
+      <span className={`font-semibold${mono ? " font-mono font-normal" : ""}`}>
+        {value}
+      </span>
     </div>
   );
 }
 
-// Visual map of the page: header | slot pointers → free region ← tuple region.
-// Width is proportional to byte ranges so the eye can see how full the page is.
+// Visual memory map: header | slots → free ← tuples.
+// Widths are data-driven percentages so they stay as style props.
 function PageMap({
   page,
   pageSize,
@@ -182,7 +188,6 @@ function PageMap({
   const freeW = (page.free_bytes / pageSize) * 100;
   const tuplesW = (page.used_bytes / pageSize) * 100;
 
-  // Highlight the selected slot's tuple region inside the tuple band.
   const highlight = (() => {
     if (selectedSlot == null) return null;
     const s = page.slots.find(
@@ -195,39 +200,68 @@ function PageMap({
     };
   })();
 
+  const bandBase =
+    "flex items-center justify-center text-[11px] whitespace-nowrap overflow-hidden border-r border-black/30 text-[#0d1117]";
+
   return (
-    <div className="page-map">
-      <div className="page-map-bar">
-        <div className="band header" style={{ width: `${headerW}%` }}>
+    <div className="flex flex-col gap-1">
+      {/* Bar */}
+      <div className="relative flex h-9.5 border border-line rounded-[3px] overflow-hidden bg-panel2">
+        <div
+          className={bandBase}
+          style={{ width: `${headerW}%`, background: "#e0a458" }}
+        >
           hdr
         </div>
-        <div className="band slots" style={{ width: `${slotsW}%` }}>
+        <div
+          className={bandBase}
+          style={{ width: `${slotsW}%`, background: "#79c0ff" }}
+        >
           slot dir
         </div>
-        <div className="band free" style={{ width: `${freeW}%` }}>
+        <div
+          className="flex items-center justify-center text-[11px] whitespace-nowrap overflow-hidden border-r border-black/30 text-dim"
+          style={{ width: `${freeW}%`, background: "#2d333b" }}
+        >
           free
         </div>
-        <div className="band tuples" style={{ width: `${tuplesW}%` }}>
+        <div
+          className={bandBase}
+          style={{ width: `${tuplesW}%`, background: "#56d364" }}
+        >
           tuples
         </div>
         {highlight && (
           <div
-            className="band-highlight"
+            className="absolute -top-0.5 -bottom-0.5 border-2 border-accent pointer-events-none"
             style={{ left: `${highlight.left}%`, width: `${highlight.width}%` }}
-            title={`selected slot bytes`}
+            title="selected slot bytes"
           />
         )}
       </div>
-      <div className="page-map-axis">
-        <span>0</span>
-        <span style={{ left: `${headerW}%` }}>{PAGE_HDR_SIZE}</span>
-        <span style={{ left: `${headerW + slotsW}%` }}>
+
+      {/* Axis */}
+      <div className="relative h-4 text-[10px] text-dim">
+        <span className="absolute left-0">0</span>
+        <span
+          className="absolute -translate-x-1/2"
+          style={{ left: `${headerW}%` }}
+        >
+          {PAGE_HDR_SIZE}
+        </span>
+        <span
+          className="absolute -translate-x-1/2"
+          style={{ left: `${headerW + slotsW}%` }}
+        >
           {page.slot_array_end}
         </span>
-        <span style={{ left: `${headerW + slotsW + freeW}%` }}>
+        <span
+          className="absolute -translate-x-1/2"
+          style={{ left: `${headerW + slotsW + freeW}%` }}
+        >
           {page.header.tuple_start}
         </span>
-        <span style={{ right: 0 }}>{pageSize}</span>
+        <span className="absolute right-0">{pageSize}</span>
       </div>
     </div>
   );
@@ -243,17 +277,20 @@ function SlotTable({
   onPick: (id: number | null) => void;
 }) {
   if (page.slots.length === 0) {
-    return <div className="status-msg">no slots on this page</div>;
+    return <p className="font-mono text-[13px]">no slots on this page</p>;
   }
   return (
-    <table className="slots">
+    <table className="border-collapse w-full max-w-180">
       <thead>
         <tr>
-          <th>slot</th>
-          <th>status</th>
-          <th>offset</th>
-          <th>length</th>
-          <th>preview</th>
+          {["slot", "status", "offset", "length", "preview"].map((h) => (
+            <th
+              key={h}
+              className="border border-line px-2.5 py-1 text-left text-[13px] bg-panel2 font-semibold"
+            >
+              {h}
+            </th>
+          ))}
         </tr>
       </thead>
       <tbody>
@@ -262,14 +299,31 @@ function SlotTable({
           return (
             <tr
               key={s.slot_id}
-              className={`slot-row ${s.status} ${sel ? "selected" : ""}`}
               onClick={() => onPick(sel ? null : s.slot_id)}
+              className={[
+                "cursor-pointer",
+                s.status === "tombstone" ? "text-dim" : "",
+                s.status === "out_of_range" ? "text-danger" : "",
+                sel ? "bg-accent/20" : "hover:bg-accent/8",
+              ]
+                .filter(Boolean)
+                .join(" ")}
             >
-              <td>{s.slot_id}</td>
-              <td>{s.status}</td>
-              <td>{s.offset}</td>
-              <td>{s.length}</td>
-              <td>{slotPreview(s)}</td>
+              <td className="border border-line px-2.5 py-1 text-[13px]">
+                {s.slot_id}
+              </td>
+              <td className="border border-line px-2.5 py-1 text-[13px]">
+                {s.status}
+              </td>
+              <td className="border border-line px-2.5 py-1 text-[13px]">
+                {s.offset}
+              </td>
+              <td className="border border-line px-2.5 py-1 text-[13px]">
+                {s.length}
+              </td>
+              <td className="border border-line px-2.5 py-1 text-[13px]">
+                {slotPreview(s)}
+              </td>
             </tr>
           );
         })}
@@ -280,13 +334,13 @@ function SlotTable({
 
 function slotPreview(s: HeapSlot): React.ReactNode {
   if (s.status === "tombstone") {
-    return <span className="dim">— deleted —</span>;
+    return <span className="text-dim italic">— deleted —</span>;
   }
   if (s.status === "out_of_range") {
-    return <span className="err">{s.error}</span>;
+    return <span className="text-danger">{s.error}</span>;
   }
   if (s.decode.ok === "false") {
-    return <span className="err">decode failed</span>;
+    return <span className="text-danger">decode failed</span>;
   }
   return s.decode.fields
     .map((f) => (f.value === null ? "NULL" : String(f.value)))
@@ -302,7 +356,7 @@ function SlotDetail({
 }) {
   if (selectedSlot == null) {
     return (
-      <div className="slot-detail empty">
+      <div className="p-2.5 border border-dashed border-line rounded text-dim italic bg-transparent">
         click a slot to see its raw bytes and decoded fields
       </div>
     );
@@ -310,11 +364,16 @@ function SlotDetail({
   const s = page.slots.find((sl) => sl.slot_id === selectedSlot);
   if (!s) return null;
 
+  const detailClass =
+    "flex flex-col gap-2 p-2.5 border border-line rounded bg-panel2";
+
   if (s.status === "tombstone") {
     return (
-      <div className="slot-detail">
-        <h4>slot {s.slot_id} — tombstone</h4>
-        <p className="dim">
+      <div className={detailClass}>
+        <h4 className="m-0 text-[13px] font-semibold">
+          slot {s.slot_id} — tombstone
+        </h4>
+        <p className="text-dim text-xs m-0">
           (offset, length) = (0, 0) means this slot was deleted or never used,
           and its slot pointer is reusable by a future insert.
         </p>
@@ -323,20 +382,26 @@ function SlotDetail({
   }
   if (s.status === "out_of_range") {
     return (
-      <div className="slot-detail">
-        <h4>slot {s.slot_id} — out of range</h4>
-        <div className="error-box">{s.error}</div>
+      <div className={detailClass}>
+        <h4 className="m-0 text-[13px] font-semibold">
+          slot {s.slot_id} — out of range
+        </h4>
+        <div className="font-mono text-danger text-[13px] bg-danger/8 border border-danger/30 rounded p-2">
+          {s.error}
+        </div>
       </div>
     );
   }
   return (
-    <div className="slot-detail">
-      <h4>
+    <div className={detailClass}>
+      <h4 className="m-0 text-[13px] font-semibold">
         slot {s.slot_id} — bytes [{s.offset}..{s.offset + s.length})
       </h4>
       {s.decode.ok === "false" ? (
         <>
-          <div className="error-box">decode failed: {s.decode.error}</div>
+          <div className="font-mono text-danger text-[13px] bg-danger/8 border border-danger/30 rounded p-2">
+            decode failed: {s.decode.error}
+          </div>
           <FieldsTable
             title="fields decoded so far"
             fields={s.decode.fields_so_far}
@@ -344,9 +409,11 @@ function SlotDetail({
         </>
       ) : (
         <>
-          <div className="kv">
-            <span className="dim">null bitmap:</span>
-            <code>{s.decode.null_bitmap_hex}</code>
+          <div className="flex gap-2 items-baseline">
+            <span className="text-dim text-xs">null bitmap:</span>
+            <code className="font-mono text-[13px]">
+              {s.decode.null_bitmap_hex}
+            </code>
           </div>
           <FieldsTable title="fields" fields={s.decode.fields} />
         </>
@@ -366,24 +433,38 @@ function FieldsTable({
   if (fields.length === 0) return null;
   return (
     <>
-      <div className="dim small">{title}</div>
-      <table className="fields">
+      <span className="text-dim text-[11px]">{title}</span>
+      <table className="border-collapse">
         <thead>
           <tr>
-            <th>#</th>
-            <th>name</th>
-            <th>type</th>
-            <th>value</th>
+            {["#", "name", "type", "value"].map((h) => (
+              <th
+                key={h}
+                className="border border-line px-2 py-0.75 text-[13px] text-left bg-panel font-semibold"
+              >
+                {h}
+              </th>
+            ))}
           </tr>
         </thead>
         <tbody>
           {fields.map((f) => (
             <tr key={f.index}>
-              <td>{f.index}</td>
-              <td>{f.name}</td>
-              <td>{f.type}</td>
-              <td>
-                {f.value === null ? <span className="dim">NULL</span> : String(f.value)}
+              <td className="border border-line px-2 py-0.75 text-[13px]">
+                {f.index}
+              </td>
+              <td className="border border-line px-2 py-0.75 text-[13px]">
+                {f.name}
+              </td>
+              <td className="border border-line px-2 py-0.75 text-[13px]">
+                {f.type}
+              </td>
+              <td className="border border-line px-2 py-0.75 text-[13px]">
+                {f.value === null ? (
+                  <span className="text-dim italic">NULL</span>
+                ) : (
+                  String(f.value)
+                )}
               </td>
             </tr>
           ))}
@@ -393,9 +474,6 @@ function FieldsTable({
   );
 }
 
-// Hex bytes display, 32 bytes per row with row offsets. We collapse very long
-// runs of trailing zeros (which happen because string fields are padded to
-// STRING_MAX_SIZE on disk) so the panel doesn't dominate the screen.
 function RawBytesView({ hex }: { hex: string }) {
   const fullBytes = useMemo(() => hexToBytes(hex), [hex]);
   const trimmed = useMemo(() => trimTrailingZeros(fullBytes), [fullBytes]);
@@ -410,20 +488,20 @@ function RawBytesView({ hex }: { hex: string }) {
     );
   }
   return (
-    <div className="raw-bytes">
-      <div className="dim small">
+    <div className="flex flex-col gap-1">
+      <span className="text-dim text-[11px]">
         raw bytes ({fullBytes.length} total
         {skipped > 0 ? `, last ${skipped} omitted (zero padding)` : ""})
-      </div>
-      <pre className="hex">
+      </span>
+      <pre className="m-0 p-2 bg-panel border border-line rounded-[3px] text-xs leading-relaxed overflow-x-auto max-h-60 overflow-y-auto">
         {rows.map((row, i) => (
           <div key={i}>
-            <span className="hex-offset">
+            <span className="text-dim">
               {(i * 32).toString(16).padStart(4, "0")}
             </span>
             <span> </span>
             {row.map((b, j) => (
-              <span key={j} className={b === "00" ? "zero" : ""}>
+              <span key={j} className={b === "00" ? "text-[#444]" : ""}>
                 {b}
                 {j === 15 ? "  " : " "}
               </span>
@@ -446,8 +524,6 @@ function hexToBytes(hex: string): Uint8Array {
 function trimTrailingZeros(bytes: Uint8Array): Uint8Array {
   let end = bytes.length;
   while (end > 16 && bytes[end - 1] === 0) end -= 1;
-  // Keep up to 16 trailing zeros visible so the run is obvious without
-  // scrolling forever.
   end = Math.min(bytes.length, end + 16);
   return bytes.subarray(0, end);
 }

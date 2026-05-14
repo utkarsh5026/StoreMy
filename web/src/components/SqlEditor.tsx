@@ -7,9 +7,6 @@ interface Props {
   onRun: () => void;
 }
 
-// Monaco-backed SQL editor. Cmd/Ctrl+Enter triggers Run via the parent's
-// onRun callback so the same shortcut works whether or not the textarea
-// has focus.
 export function SqlEditor({ value, onChange, onRun }: Props) {
   const onRunRef = useRef(onRun);
   onRunRef.current = onRun;
@@ -21,7 +18,7 @@ export function SqlEditor({ value, onChange, onRun }: Props) {
   };
 
   return (
-    <div className="editor-host">
+    <div className="flex-1 min-h-0">
       <Editor
         height="100%"
         language="sql"
