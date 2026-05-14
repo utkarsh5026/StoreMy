@@ -15,6 +15,7 @@ use thiserror::Error;
 use crate::{
     FileId,
     catalog::systable::FkAction,
+    parser::statements::Expr,
     primitives::{ColumnId, IndexId, NonEmptyString},
     tuple::TupleSchema,
 };
@@ -150,6 +151,18 @@ impl CatalogError {
     }
 }
 
+/// A CHECK constraint with its body pre-parsed into an [`Expr`] tree.
+///
+/// Stored on [`TableInfo`] so the expression is parsed once (at catalog load
+/// time) and reused on every INSERT/UPDATE, rather than re-parsed per row.
+#[derive(Clone, Debug)]
+pub struct CachedCheckConstraint {
+    /// The constraint name as stored in the catalog.
+    pub name: String,
+    /// The pre-parsed expression. Evaluated against the full new tuple on DML.
+    pub expr: Expr,
+}
+
 /// Metadata for a single user table held in the catalog's in-memory cache.
 #[derive(Clone, Debug)]
 pub struct TableInfo {
@@ -183,6 +196,12 @@ pub struct TableInfo {
     /// There can be at most one such column per table (enforced at `CREATE TABLE`
     /// time). `None` means this table has no auto-increment column.
     pub auto_increment_column: Option<ColumnId>,
+    /// CHECK constraints on this table with their bodies pre-parsed.
+    ///
+    /// Populated at cache-load time when the catalog entry is built.
+    /// Evaluate each entry's `expr` against the full new tuple before committing
+    /// an INSERT or UPDATE.
+    pub check_constraints: Vec<CachedCheckConstraint>,
 }
 
 /// In-memory shape of one UNIQUE constraint.
@@ -252,6 +271,7 @@ impl TableInfo {
             unique_constraints: Vec::new(),
             foreign_keys: Vec::new(),
             auto_increment_column: None,
+            check_constraints: Vec::new(),
         }
     }
 }
