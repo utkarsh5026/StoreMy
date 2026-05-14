@@ -1,4 +1,5 @@
 import { useEffect } from "react";
+import { Routes, Route, useNavigate, useParams } from "react-router-dom";
 import { SqlEditor } from "./components/SqlEditor";
 import { ResultsTable } from "./components/ResultsTable";
 import { TableList } from "./components/TableList";
@@ -27,13 +28,38 @@ import { useDatabaseStore, useQueryStore, useUiStore, type RunState } from "./st
 import type { QueryResult } from "./types/api";
 
 export default function App() {
+  return (
+    <Routes>
+      <Route path="/" element={<DatabasePickerPage />} />
+      <Route path="/:dbName" element={<WorkspacePage />} />
+    </Routes>
+  );
+}
+
+function DatabasePickerPage() {
+  const navigate = useNavigate();
+  const setDb = useDatabaseStore((s) => s.setDb);
+
+  const handleSelect = (sel: DatabaseSelection) => {
+    setDb(sel);
+    navigate(`/${sel.name}`);
+  };
+
+  return <DatabasePicker onSelect={handleSelect} />;
+}
+
+function WorkspacePage() {
+  const { dbName } = useParams<{ dbName: string }>();
   const db = useDatabaseStore((s) => s.db);
   const setDb = useDatabaseStore((s) => s.setDb);
 
-  if (!db) {
-    return <DatabasePicker onSelect={(sel: DatabaseSelection) => setDb(sel)} />;
-  }
+  useEffect(() => {
+    if (dbName && (!db || db.name !== dbName)) {
+      setDb({ name: dbName });
+    }
+  }, [dbName]);
 
+  if (!db) return null;
   return <Workspace />;
 }
 
@@ -59,6 +85,7 @@ function Workspace() {
   const resetUi = useUiStore((s) => s.reset);
 
   const setDb = useDatabaseStore((s) => s.setDb);
+  const navigate = useNavigate();
 
   useEffect(() => {
     resetSql(db.initialSql);
@@ -69,6 +96,7 @@ function Workspace() {
   const onExit = () => {
     resetUi();
     setDb(null);
+    navigate("/");
   };
 
   const onWizardCreate = (generatedSql: string) => {
