@@ -54,6 +54,7 @@ pub mod index;
 pub mod observability;
 pub mod parser;
 pub mod primitives;
+pub mod registry;
 pub mod repl;
 pub mod storage;
 pub mod transaction;

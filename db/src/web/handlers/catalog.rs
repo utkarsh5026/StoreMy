@@ -11,25 +11,34 @@ use crate::web::{
     error::ApiError,
 };
 
-/// `GET /api/tables` — list every user table.
+/// `GET /api/:db/tables` — list every user table in the named database.
 pub async fn list_tables(
     State(state): State<AppState>,
+    Path(db): Path<String>,
 ) -> Result<Json<Vec<TableSummaryDto>>, ApiError> {
-    let db = state.db.clone();
-    let tables = tokio::task::spawn_blocking(move || db.list_user_tables())
+    let db_handle = state
+        .registry
+        .get(&db)
+        .ok_or(ApiError::DatabaseNotFound(db))?;
+
+    let tables = tokio::task::spawn_blocking(move || db_handle.list_user_tables())
         .await
         .map_err(|e| ApiError::JoinError(e.to_string()))??;
 
     Ok(Json(tables.iter().map(TableSummaryDto::from).collect()))
 }
 
-/// `GET /api/tables/{name}` — describe one table.
+/// `GET /api/:db/tables/:name` — describe one table in the named database.
 pub async fn describe_table(
     State(state): State<AppState>,
-    Path(name): Path<String>,
+    Path((db, name)): Path<(String, String)>,
 ) -> Result<Json<TableInfoDto>, ApiError> {
-    let db = state.db.clone();
-    let info = tokio::task::spawn_blocking(move || db.describe_table(&name))
+    let db_handle = state
+        .registry
+        .get(&db)
+        .ok_or(ApiError::DatabaseNotFound(db))?;
+
+    let info = tokio::task::spawn_blocking(move || db_handle.describe_table(&name))
         .await
         .map_err(|e| ApiError::JoinError(e.to_string()))??;
 

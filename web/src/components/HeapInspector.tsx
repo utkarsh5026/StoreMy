@@ -7,6 +7,7 @@ import type { HeapDump, HeapPage, HeapSlot } from "../types/api";
 import { fetchHeap, StoremyError } from "../api/client";
 
 interface Props {
+  db: string;
   table: string;
   /** Bumped when a query succeeds, so we re-fetch and reflect new tuples. */
   refreshTick: number;
@@ -19,7 +20,7 @@ type State =
   | { status: "ok"; dump: HeapDump }
   | { status: "err"; message: string };
 
-export function HeapInspector({ table, refreshTick }: Props) {
+export function HeapInspector({ db, table, refreshTick }: Props) {
   const [state, setState] = useState<State>({ status: "loading" });
   const [pageIdx, setPageIdx] = useState(0);
   const [selectedSlot, setSelectedSlot] = useState<number | null>(null);
@@ -27,7 +28,7 @@ export function HeapInspector({ table, refreshTick }: Props) {
   useEffect(() => {
     let alive = true;
     setState({ status: "loading" });
-    fetchHeap(table)
+    fetchHeap(db, table)
       .then((dump) => {
         if (!alive) return;
         setState({ status: "ok", dump });
@@ -40,7 +41,7 @@ export function HeapInspector({ table, refreshTick }: Props) {
     return () => {
       alive = false;
     };
-  }, [table, refreshTick]);
+  }, [db, table, refreshTick]);
 
   // Reset selection when the visible page changes.
   useEffect(() => {

@@ -14,6 +14,9 @@ export type ApiErrorKind =
   | "bind"
   | "engine"
   | "worker_gone"
+  | "database_not_found"
+  | "database_exists"
+  | "invalid_database_name"
   | "internal";
 
 export interface ApiError {
@@ -30,6 +33,10 @@ export interface Column {
 
 /** Cell type — large i64/u64 values arrive as strings to avoid JS number truncation. */
 export type Cell = string | number | boolean | null;
+
+export interface DatabaseSummary {
+  name: string;
+}
 
 export interface TableSummary {
   name: string;

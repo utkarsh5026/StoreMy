@@ -10,7 +10,10 @@ use axum::{
 };
 use serde::Serialize;
 
-use crate::engine::{ConstraintViolation, EngineError};
+use crate::{
+    engine::{ConstraintViolation, EngineError},
+    registry::RegistryError,
+};
 
 #[derive(Debug, Serialize)]
 pub struct ErrorBody {
@@ -22,6 +25,9 @@ pub struct ErrorBody {
 #[derive(Debug)]
 pub enum ApiError {
     Engine(EngineError),
+    Registry(RegistryError),
+    /// Requested database name does not exist in the registry.
+    DatabaseNotFound(String),
     /// Worker pool dropped the reply channel before sending — should not
     /// happen in practice. Surfaced as 500.
     WorkerGone,
@@ -39,6 +45,12 @@ impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
         let (status, kind, message) = match self {
             ApiError::Engine(e) => engine_error_to_http(&e),
+            ApiError::Registry(e) => registry_error_to_http(&e),
+            ApiError::DatabaseNotFound(name) => (
+                StatusCode::NOT_FOUND,
+                "database_not_found",
+                format!("database '{name}' not found"),
+            ),
             ApiError::WorkerGone => (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 "worker_gone",
@@ -52,6 +64,17 @@ impl IntoResponse for ApiError {
         };
         (status, Json(ErrorBody { kind, message })).into_response()
     }
+}
+
+fn registry_error_to_http(e: &RegistryError) -> (StatusCode, &'static str, String) {
+    use RegistryError as R;
+    let (status, kind) = match e {
+        R::AlreadyExists(_) => (StatusCode::CONFLICT, "database_exists"),
+        R::NotFound(_) => (StatusCode::NOT_FOUND, "database_not_found"),
+        R::InvalidName(_) => (StatusCode::BAD_REQUEST, "invalid_database_name"),
+        R::Io(_) | R::Wal(_) | R::Catalog(_) => (StatusCode::INTERNAL_SERVER_ERROR, "internal"),
+    };
+    (status, kind, e.to_string())
 }
 
 /// Map engine errors to HTTP status + a stable string tag.

@@ -3,6 +3,7 @@ import { SqlEditor } from "./components/SqlEditor";
 import { ResultsTable } from "./components/ResultsTable";
 import { TableList } from "./components/TableList";
 import { HeapInspector } from "./components/HeapInspector";
+import { DatabasePicker } from "./components/DatabasePicker";
 import { listTables, runQuery, StoremyError } from "./api/client";
 import type { ApiError, QueryResult, TableSummary } from "./types/api";
 
@@ -22,43 +23,46 @@ type RunState =
 type Tab = "results" | "heap";
 
 export default function App() {
+  const [selectedDb, setSelectedDb] = useState<string | null>(null);
+
+  if (!selectedDb) {
+    return <DatabasePicker onSelect={setSelectedDb} />;
+  }
+
+  return <Workspace db={selectedDb} onExit={() => setSelectedDb(null)} />;
+}
+
+function Workspace({ db, onExit }: { db: string; onExit: () => void }) {
   const [sql, setSql] = useState(SAMPLE_SQL);
   const [tables, setTables] = useState<TableSummary[]>([]);
   const [selected, setSelected] = useState<string | null>(null);
   const [runState, setRunState] = useState<RunState>({ status: "idle" });
   const [tab, setTab] = useState<Tab>("results");
-  // Bumped on every successful run so HeapInspector knows to re-fetch and
-  // pick up newly-inserted/deleted rows.
   const [heapTick, setHeapTick] = useState(0);
 
   const refreshTables = useCallback(async () => {
     try {
-      setTables(await listTables());
+      setTables(await listTables(db));
     } catch {
       // Ignore — sidebar will just show empty if the server is down.
     }
-  }, []);
+  }, [db]);
 
   useEffect(() => {
     refreshTables();
   }, [refreshTables]);
 
   const onRun = useCallback(async () => {
-    // The engine accepts one statement at a time. If the editor holds
-    // a selection, run that; otherwise treat the whole editor as one
-    // statement (the parser will reject multi-statement input — surfaced
-    // as a parse error, which is fine for v1).
     const input = sql.trim();
     if (input === "") return;
     setRunState({ status: "running" });
     const t0 = performance.now();
     try {
-      const result = await runQuery(input);
+      const result = await runQuery(db, input);
       const ms = Math.round(performance.now() - t0);
       setRunState({ status: "ok", result, ms });
       setTab("results");
       setHeapTick((t) => t + 1);
-      // Any DDL/DML may have changed the catalog — refresh.
       await refreshTables();
     } catch (e) {
       const ms = Math.round(performance.now() - t0);
@@ -68,12 +72,16 @@ export default function App() {
           : { kind: "internal", message: String(e) };
       setRunState({ status: "err", error, ms });
     }
-  }, [sql, refreshTables]);
+  }, [sql, db, refreshTables]);
 
   return (
     <div className="app">
       <div className="header">
-        StoreMy <span className="dim">/ web v0.1</span>
+        <button className="ghost back-btn" onClick={onExit} title="Switch database">
+          ← Databases
+        </button>
+        <span className="header-db">{db}</span>
+        <span className="dim">/ StoreMy</span>
       </div>
       <TableList
         tables={tables}
@@ -123,7 +131,7 @@ export default function App() {
             {tab === "results" ? (
               <ResultsBody state={runState} />
             ) : selected ? (
-              <HeapInspector table={selected} refreshTick={heapTick} />
+              <HeapInspector db={db} table={selected} refreshTick={heapTick} />
             ) : (
               <div className="status-msg">select a table from the sidebar</div>
             )}
@@ -196,7 +204,6 @@ function ResultsBody({ state }: { state: RunState }) {
       </table>
     );
   }
-  // Non-row results (created/inserted/updated/etc.) — render the summary.
   return <div className="status-msg">{summariseResult(r)}</div>;
 }
 
@@ -224,5 +231,7 @@ function summariseResult(r: QueryResult): string {
       return `updated ${r.rows} row(s) in '${r.table}'`;
     case "selected":
       return `${r.rows.length} row(s) from '${r.table}'`;
+    default:
+      return "";
   }
 }

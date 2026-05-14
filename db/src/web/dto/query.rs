@@ -338,6 +338,12 @@ impl From<&StatementResult> for QueryResultDto {
     }
 }
 
+/// One entry in `GET /api/databases`.
+#[derive(Debug, Serialize)]
+pub struct DatabaseSummaryDto {
+    pub name: String,
+}
+
 /// One entry in `GET /api/tables`.
 #[derive(Debug, Serialize)]
 pub struct TableSummaryDto {

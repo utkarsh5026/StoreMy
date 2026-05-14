@@ -13,11 +13,15 @@ use crate::web::{AppState, dto::HeapDumpDto, error::ApiError};
 
 pub async fn dump_heap(
     State(state): State<AppState>,
-    Path(name): Path<String>,
+    Path((db, name)): Path<(String, String)>,
 ) -> Result<Json<HeapDumpDto>, ApiError> {
-    let db = state.db.clone();
+    let db_handle = state
+        .registry
+        .get(&db)
+        .ok_or(ApiError::DatabaseNotFound(db))?;
+
     let dump = tokio::task::spawn_blocking(move || {
-        let (info, pages) = db.read_heap_pages(&name)?;
+        let (info, pages) = db_handle.read_heap_pages(&name)?;
         Ok::<HeapDumpDto, crate::engine::EngineError>(HeapDumpDto::build_full(
             &info.name,
             &info.schema,
