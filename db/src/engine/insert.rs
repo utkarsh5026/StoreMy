@@ -297,10 +297,16 @@ impl Engine<'_> {
                 });
             }
         }
+        // Coerce each default through fit_value_to_field so the stored Value type
+        // matches the column's declared type (e.g. DEFAULT 0 on a FLOAT column
+        // is parsed as Int64 but must be stored as Float64).
         let fields = schema
             .physical_iter()
-            .map(|field| field.missing_default_value.clone().unwrap_or(Value::Null))
-            .collect();
+            .map(|field| {
+                let v = field.missing_default_value.clone().unwrap_or(Value::Null);
+                Self::fit_value_to_field(&v, field, table_name)
+            })
+            .collect::<Result<Vec<_>, _>>()?;
 
         let mut tuples = vec![Tuple::new(fields)];
         if let Some(ai_col_id) = ai_col {
@@ -381,7 +387,7 @@ impl Engine<'_> {
     /// it to cover every *physical* slot using `projection`:
     ///
     /// - `Some(user_idx)` → coerce `row[user_idx]` to the field's declared type via
-    ///   [`bind_value_for`].
+    ///   [`fit_value_to_field`].
     /// - `None` → dropped column, omitted column, or `AUTO_INCREMENT`; fill it with the field's
     ///   `missing_default_value` or [`Value::Null`].
     ///
@@ -392,8 +398,8 @@ impl Engine<'_> {
     ///
     /// - [`EngineError::WrongColumnCount`] if `row.len()` does not equal the number of `Some`
     ///   entries in `projection` (i.e. the user-supplied columns).
-    /// - [`EngineError::TypeMismatch`] (or similar) from [`bind_value_for`] if a value cannot be
-    ///   coerced to the column's declared type.
+    /// - [`EngineError::TypeMismatch`] (or similar) from [`fit_value_to_field`] if a value cannot
+    ///   be coerced to the column's declared type.
     fn bind_row(
         row: &[Value],
         schema: &TupleSchema,
@@ -411,7 +417,7 @@ impl Engine<'_> {
         }
 
         // For each physical column, if it is not dropped, we bind the value from the user-supplied
-        // value position using `bind_value_for`. If it is dropped, we fill it with the column's
+        // value position using `fit_value_to_field`. If it is dropped, we fill it with the column's
         // stored default or `NULL`.
         schema
             .physical_iter()
@@ -419,7 +425,7 @@ impl Engine<'_> {
             .map(|(field, proj)| {
                 if let Some(user_idx) = proj {
                     let value = &row[*user_idx];
-                    Self::bind_value_for(value, field, table)
+                    Self::fit_value_to_field(value, field, table)
                 } else {
                     Ok(field.missing_default_value.clone().unwrap_or(Value::Null))
                 }

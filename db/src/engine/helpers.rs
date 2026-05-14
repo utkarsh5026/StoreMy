@@ -344,7 +344,7 @@ impl Engine<'_> {
     ///
     /// - [`ConstraintViolation::NullViolation`] if a null value is bound to a non-nullable column.
     /// - [`EngineError::TypeMismatch`] if the value cannot be coerced to the column type.
-    pub(super) fn bind_value_for(
+    pub(super) fn fit_value_to_field(
         value: &Value,
         field: &Field,
         table: &str,

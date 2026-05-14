@@ -62,7 +62,7 @@ pub(super) trait ColumnResolver {
     /// Binds a parsed boolean [`Expr`] tree into a [`BooleanExpression`].
     ///
     /// Default implementation recursively binds `And`/`Or` and uses
-    /// [`Self::resolve`] + [`bind_value_for`] at each leaf — so a
+    /// [`Self::resolve`] + [`fit_value_to_field`] at each leaf — so a
     /// single-table and multi-table scope share this code unchanged.
     fn bind_where(&self, w: &Expr) -> Result<BooleanExpression, EngineError> {
         match w {
@@ -107,12 +107,12 @@ pub(super) trait ColumnResolver {
         match (lhs, rhs) {
             (Expr::Column(lc), Expr::Literal(rv)) => {
                 let (l_idx, l_fld, l_table) = self.resolve(lc)?;
-                let lit = bind_value_for(rv, l_fld, l_table)?;
+                let lit = fit_value_to_field(rv, l_fld, l_table)?;
                 Ok(BooleanExpression::col_op_lit(l_idx, pred, lit))
             }
             (Expr::Literal(lv), Expr::Column(rc)) => {
                 let (r_idx, r_fld, r_table) = self.resolve(rc)?;
-                let lit = bind_value_for(lv, r_fld, r_table)?;
+                let lit = fit_value_to_field(lv, r_fld, r_table)?;
                 Ok(BooleanExpression::col_op_lit(
                     r_idx,
                     flip_predicate(pred),
@@ -282,7 +282,7 @@ impl ColumnResolver for SingleTableScope {
 }
 
 /// Coerces a literal to a column's declared type, honoring nullability.
-pub(super) fn bind_value_for(
+pub(super) fn fit_value_to_field(
     value: &Value,
     field: &Field,
     table: &str,
