@@ -206,10 +206,10 @@ impl Parser {
             })?;
             let col_tok = p.expect(TokenType::Identifier)?;
             p.expect(TokenType::Rparen)?;
-            Ok(Expr::agg(
-                agg,
-                Expr::Column(ColumnRef::from(col_tok.value.as_str())),
-            ))
+            Ok(Expr::Agg {
+                func: agg,
+                arg: Box::new(Expr::Column(ColumnRef::from(col_tok.value.as_str()))),
+            })
         } else {
             // Identifiers in ColumnRef are stored as NonEmptyString.
             let first = NonEmptyString::try_from(name_tok.value)?;
@@ -509,10 +509,10 @@ mod tests {
         let SelectColumns::Exprs(v) = &s.columns else {
             panic!("expected Exprs");
         };
-        assert_eq!(v, &vec![SelectItem::bare(Expr::agg(
-            AggFunc::Count,
-            Expr::Column("user_id".into())
-        ))]);
+        assert_eq!(v, &vec![SelectItem::bare(Expr::Agg {
+            func: AggFunc::Count,
+            arg: Box::new(Expr::Column("user_id".into())),
+        })]);
     }
 
     #[test]
@@ -521,10 +521,10 @@ mod tests {
         let SelectColumns::Exprs(v) = &s.columns else {
             panic!("expected Exprs");
         };
-        assert_eq!(v, &vec![SelectItem::bare(Expr::agg(
-            AggFunc::Sum,
-            Expr::Column("amount".into())
-        ))]);
+        assert_eq!(v, &vec![SelectItem::bare(Expr::Agg {
+            func: AggFunc::Sum,
+            arg: Box::new(Expr::Column("amount".into())),
+        })]);
     }
 
     #[test]
@@ -536,10 +536,22 @@ mod tests {
         };
         assert_eq!(v.len(), 4);
         let x = || Expr::Column("x".into());
-        assert_eq!(v[0].expr, Expr::agg(AggFunc::Sum, x()));
-        assert_eq!(v[1].expr, Expr::agg(AggFunc::Avg, x()));
-        assert_eq!(v[2].expr, Expr::agg(AggFunc::Min, x()));
-        assert_eq!(v[3].expr, Expr::agg(AggFunc::Max, x()));
+        assert_eq!(v[0].expr, Expr::Agg {
+            func: AggFunc::Sum,
+            arg: Box::new(x()),
+        });
+        assert_eq!(v[1].expr, Expr::Agg {
+            func: AggFunc::Avg,
+            arg: Box::new(x()),
+        });
+        assert_eq!(v[2].expr, Expr::Agg {
+            func: AggFunc::Min,
+            arg: Box::new(x()),
+        });
+        assert_eq!(v[3].expr, Expr::Agg {
+            func: AggFunc::Max,
+            arg: Box::new(x()),
+        });
         assert!(v.iter().all(|item| item.alias.is_none()));
     }
 
@@ -928,10 +940,10 @@ mod tests {
         let SelectColumns::Exprs(v) = &s.columns else {
             panic!("expected Exprs");
         };
-        assert_eq!(
-            v[0].expr,
-            Expr::agg(AggFunc::Sum, Expr::Column("amt".into()))
-        );
+        assert_eq!(v[0].expr, Expr::Agg {
+            func: AggFunc::Sum,
+            arg: Box::new(Expr::Column("amt".into())),
+        });
         assert_eq!(v[0].alias.as_deref(), Some("total"));
     }
 

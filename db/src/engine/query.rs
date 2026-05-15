@@ -418,10 +418,11 @@ impl BoundSelect {
                     .clone()
                     .unwrap_or_else(|| "COUNT(*)".try_into().unwrap()),
             }),
-            Expr::Agg(func, arg) => Self::bind_agg(scope, &func, *arg, alias.as_ref())?,
-            Expr::BinaryOp { .. } | Expr::UnaryOp { .. } => {
+            Expr::Agg { func, arg } => Self::bind_agg(scope, &func, *arg, alias.as_ref())?,
+            Expr::BinaryOp { .. } | Expr::UnaryOp { .. } | Expr::IsNull { .. } => {
                 return Err(EngineError::Unsupported(
-                    "binary/unary expressions in SELECT projections are not yet supported".into(),
+                    "binary/unary/is null expressions in SELECT projections are not yet supported"
+                        .into(),
                 ));
             }
         };
@@ -1605,7 +1606,11 @@ mod tests {
             Predicate::GreaterThanOrEqual => BinOp::GtEq,
             Predicate::Like => panic!("test helper `pred`: LIKE is not an Expr::BinaryOp"),
         };
-        Expr::binary(Expr::Column(ColumnRef::from(c)), bin_op, Expr::Literal(v))
+        Expr::BinaryOp {
+            lhs: Box::new(Expr::Column(ColumnRef::from(c))),
+            op: bin_op,
+            rhs: Box::new(Expr::Literal(v)),
+        }
     }
 
     fn expect_err<T, E>(r: Result<T, E>) -> E {
@@ -1782,7 +1787,13 @@ mod tests {
     fn bind_projection_aggregate_resolves_col_id() {
         let bound = bind_with_users(|| {
             select_stmt(
-                exprs(vec![item(Expr::agg(AggFunc::Sum, col_expr("age")), None)]),
+                exprs(vec![item(
+                    Expr::Agg {
+                        func: AggFunc::Sum,
+                        arg: Box::new(col_expr("age")),
+                    },
+                    None,
+                )]),
                 vec![just("users")],
             )
         })
@@ -1804,7 +1815,10 @@ mod tests {
         let err = expect_err(bind_with_users(|| {
             select_stmt(
                 exprs(vec![item(
-                    Expr::agg(AggFunc::Sum, Expr::Literal(Value::Int64(1))),
+                    Expr::Agg {
+                        func: AggFunc::Sum,
+                        arg: Box::new(Expr::Literal(Value::Int64(1))),
+                    },
                     None,
                 )]),
                 vec![just("users")],

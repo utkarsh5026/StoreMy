@@ -89,9 +89,18 @@ pub fn eval_expr(
             eval_unary(*op, &v)
         }
 
+        Expr::IsNull { expr, negated } => {
+            let v = eval_expr(expr, tuple, schema)?;
+            Ok(Value::Bool(if *negated {
+                !v.is_null()
+            } else {
+                v.is_null()
+            }))
+        }
+
         // Aggregates operate over many rows and cannot produce a single value
         // from one tuple. The planner should never route them here.
-        Expr::Agg(..) | Expr::CountStar => Err(ExecutionError::TypeError(
+        Expr::Agg { .. } | Expr::CountStar => Err(ExecutionError::TypeError(
             "aggregate expressions cannot be evaluated as scalar expressions".to_string(),
         )),
     }
@@ -198,14 +207,23 @@ mod tests {
     }
 
     fn binop(lhs: Expr, op: BinOp, rhs: Expr) -> Expr {
-        Expr::binary(lhs, op, rhs)
+        Expr::BinaryOp {
+            lhs: Box::new(lhs),
+            op,
+            rhs: Box::new(rhs),
+        }
+    }
+
+    fn is_null(inner: Expr, negated: bool) -> Expr {
+        Expr::IsNull {
+            expr: Box::new(inner),
+            negated,
+        }
     }
 
     fn eval(expr: &Expr, t: &Tuple, s: &TupleSchema) -> Value {
         eval_expr(expr, t, s).expect("eval failed")
     }
-
-    // ── literal ──────────────────────────────────────────────────────────────
 
     #[test]
     fn literal_returns_its_value() {
@@ -218,8 +236,6 @@ mod tests {
             Value::String("hi".into())
         );
     }
-
-    // ── column ───────────────────────────────────────────────────────────────
 
     #[test]
     fn column_resolves_by_name() {
@@ -236,8 +252,6 @@ mod tests {
         let err = eval_expr(&col("nope"), &t, &s).unwrap_err();
         assert!(matches!(err, ExecutionError::TypeError(_)));
     }
-
-    // ── comparisons ──────────────────────────────────────────────────────────
 
     #[test]
     fn eq_returns_bool() {
@@ -315,7 +329,10 @@ mod tests {
     fn not_flips_bool() {
         let s = schema(&[("active", Type::Bool)]);
         let t = tuple(vec![Value::Bool(true)]);
-        let expr = Expr::unary(UnOp::Not, col("active"));
+        let expr = Expr::UnaryOp {
+            op: UnOp::Not,
+            operand: Box::new(col("active")),
+        };
         assert_eq!(eval(&expr, &t, &s), Value::Bool(false));
     }
 
@@ -323,7 +340,10 @@ mod tests {
     fn not_null_yields_null() {
         let s = schema(&[("active", Type::Bool)]);
         let t = tuple(vec![Value::Null]);
-        let expr = Expr::unary(UnOp::Not, col("active"));
+        let expr = Expr::UnaryOp {
+            op: UnOp::Not,
+            operand: Box::new(col("active")),
+        };
         assert_eq!(eval(&expr, &t, &s), Value::Null);
     }
 
@@ -331,14 +351,15 @@ mod tests {
     fn not_non_bool_errors() {
         let s = schema(&[("x", Type::Int64)]);
         let t = tuple(vec![Value::Int64(1)]);
-        let expr = Expr::unary(UnOp::Not, col("x"));
+        let expr = Expr::UnaryOp {
+            op: UnOp::Not,
+            operand: Box::new(col("x")),
+        };
         assert!(matches!(
             eval_expr(&expr, &t, &s),
             Err(ExecutionError::TypeError(_))
         ));
     }
-
-    // ── aggregate guard ───────────────────────────────────────────────────────
 
     #[test]
     fn aggregate_expr_returns_error() {
@@ -348,7 +369,66 @@ mod tests {
         assert!(matches!(err, ExecutionError::TypeError(_)));
     }
 
-    // ── nested expression ─────────────────────────────────────────────────────
+    #[test]
+    fn is_null_on_null_column() {
+        let s = schema(&[("email", Type::String)]);
+        let t = tuple(vec![Value::Null]);
+        assert_eq!(
+            eval(&is_null(col("email"), false), &t, &s),
+            Value::Bool(true)
+        );
+    }
+
+    #[test]
+    fn is_not_null_on_null_column() {
+        let s = schema(&[("email", Type::String)]);
+        let t = tuple(vec![Value::Null]);
+        assert_eq!(
+            eval(&is_null(col("email"), true), &t, &s),
+            Value::Bool(false)
+        );
+    }
+
+    #[test]
+    fn is_null_on_non_null_column() {
+        let s = schema(&[("email", Type::String)]);
+        let t = tuple(vec![Value::String("a@b.c".into())]);
+        assert_eq!(
+            eval(&is_null(col("email"), false), &t, &s),
+            Value::Bool(false)
+        );
+    }
+
+    #[test]
+    fn is_not_null_on_non_null_column() {
+        let s = schema(&[("email", Type::String)]);
+        let t = tuple(vec![Value::String("a@b.c".into())]);
+        assert_eq!(
+            eval(&is_null(col("email"), true), &t, &s),
+            Value::Bool(true)
+        );
+    }
+
+    #[test]
+    fn literal_null_is_null() {
+        let s = schema(&[("x", Type::Int64)]);
+        let t = tuple(vec![Value::Int64(0)]);
+        assert_eq!(
+            eval(&is_null(lit(Value::Null), false), &t, &s),
+            Value::Bool(true)
+        );
+    }
+
+    #[test]
+    fn is_null_differs_from_eq_null() {
+        let s = schema(&[("x", Type::Int64)]);
+        let t = tuple(vec![Value::Null]);
+        assert_eq!(
+            eval(&binop(col("x"), BinOp::Eq, lit(Value::Null)), &t, &s),
+            Value::Null
+        );
+        assert_eq!(eval(&is_null(col("x"), false), &t, &s), Value::Bool(true));
+    }
 
     #[test]
     fn nested_and_of_two_comparisons() {

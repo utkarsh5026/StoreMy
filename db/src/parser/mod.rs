@@ -287,8 +287,14 @@ mod tests {
             panic!("expected explicit select list");
         };
         assert_eq!(exprs.len(), 2);
-        assert!(matches!(exprs[0].expr, Expr::Agg(AggFunc::Sum, _)));
-        assert!(matches!(exprs[1].expr, Expr::Agg(AggFunc::Avg, _)));
+        assert!(matches!(exprs[0].expr, Expr::Agg {
+            func: AggFunc::Sum,
+            ..
+        }));
+        assert!(matches!(exprs[1].expr, Expr::Agg {
+            func: AggFunc::Avg,
+            ..
+        }));
     }
 
     #[test]

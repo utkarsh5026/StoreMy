@@ -16,10 +16,10 @@
 //!
 //! # How it works
 //!
-//! `Parser::parse_expression` runs precedence climbing: parse one primary, then
-//! while the peeked binary operator’s left binding power is high enough, consume
-//! it and parse the right side with that operator’s right binding power. Primary
-//! forms (`NOT`, `( … )`, literals, identifiers) live in `Parser::parse_primary`.
+//! `Parser::parse_expression` runs precedence climbing: parse one atom with
+//! [`Parser::parse_atom`], attach postfix suffixes (`IS NULL`, future `IN`, …) via
+//! [`Parser::apply_postfix_suffixes`], then while the peeked infix operator’s left
+//! binding power is high enough, consume it and parse the right side.
 //!
 //! # NULL semantics
 //!
@@ -106,14 +106,30 @@ impl Precedence {
 #[derive(Debug, Clone, PartialEq)]
 pub enum Expr {
     /// A column reference, possibly qualified (`t.c`).
+    /// SQL examples:
+    ///   name → `Column(ColumnRef { qualifier: None, name: "name" })`
+    ///   users.age → `Column(ColumnRef { qualifier: Some("users"), name: "age" })`
     Column(ColumnRef),
+
     /// A constant value: number, string, boolean, or `NULL`.
+    /// SQL examples:
+    ///   42 → `Literal(Value::Int64(42))`
+    ///   'hello' → `Literal(Value::String("hello"))`
+    ///   true → `Literal(Value::Bool(true))`
+    ///   false → `Literal(Value::Bool(false))`
+    ///   NULL → `Literal(Value::Null)`
     Literal(Value),
+
     /// An aggregate call, e.g. `SUM(amount)`. The argument is recursively an
     /// `Expr` so that future syntax like `SUM(a + 1)` requires no AST change.
-    Agg(AggFunc, Box<Expr>),
+    /// SQL examples:
+    ///   SUM(amount) → `Agg` { func: `AggFunc::Sum`, arg: `Expr::Column("amount")` }
+    ///   COUNT(name) → `Agg` { func: `AggFunc::Count`, arg: `Expr::Column("name")` }
+    Agg { func: AggFunc, arg: Box<Expr> },
+
     /// The special `COUNT(*)` form that counts all rows.
     CountStar,
+
     /// A binary operator applied to two sub-expressions, e.g. `age > 25`,
     /// `a AND b`, `x = y`. Boolean connectives (`AND`, `OR`) and comparisons
     /// share this shape — they differ only by the [`BinOp`] tag and the
@@ -123,9 +139,21 @@ pub enum Expr {
         op: BinOp,
         rhs: Box<Expr>,
     },
+
     /// A unary operator applied to a sub-expression, e.g. `NOT (age > 25)`.
     /// The binder enforces the operand's type (e.g. `NOT` requires boolean).
     UnaryOp { op: UnOp, operand: Box<Expr> },
+
+    /// `expr IS [NOT] NULL`
+    ///
+    /// Unlike comparisons, IS NULL never propagates NULL — it always returns a
+    /// definite Bool. That is precisely why it exists: `col = NULL` yields NULL,
+    /// but `col IS NULL` yields true/false.
+    ///
+    /// SQL examples:
+    ///   email IS NULL       →  `IsNull` { expr: Column("email"), negated: false }
+    ///   phone IS NOT NULL   →  `IsNull` { expr: Column("phone"), negated: true }
+    IsNull { expr: Box<Expr>, negated: bool },
 }
 
 impl Display for Expr {
@@ -133,10 +161,17 @@ impl Display for Expr {
         match self {
             Expr::Column(col) => write!(f, "{col}"),
             Expr::Literal(v) => write!(f, "{v}"),
-            Expr::Agg(func, arg) => write!(f, "{func}({arg})"),
+            Expr::Agg { func, arg } => write!(f, "{func}({arg})"),
             Expr::CountStar => write!(f, "COUNT(*)"),
             Expr::BinaryOp { lhs, op, rhs } => write!(f, "({lhs} {op} {rhs})"),
             Expr::UnaryOp { op, operand } => write!(f, "({op} {operand})"),
+            Expr::IsNull { expr, negated } => {
+                if *negated {
+                    write!(f, "{expr} IS NOT NULL")
+                } else {
+                    write!(f, "{expr} IS NULL")
+                }
+            }
         }
     }
 }
@@ -200,78 +235,6 @@ impl Display for UnOp {
     }
 }
 
-impl Expr {
-    /// Wraps a single aggregate argument in [`Expr::Agg`].
-    ///
-    /// # SQL examples
-    ///
-    /// ```sql
-    /// -- SELECT COUNT(name) FROM users u;
-    /// --   Expr::agg(AggFunc::Count, Expr::Column(ColumnRef { qualifier: None, name: "name" }))
-    ///
-    /// -- SELECT SUM(u.age) FROM users u;
-    /// --   Expr::agg(AggFunc::Sum, Expr::Column(ColumnRef { qualifier: Some("u"), name: "age" }))
-    /// ```
-    ///
-    /// # Errors
-    ///
-    /// This helper does not fail; unknown aggregate *names* are rejected in
-    /// `Parser::parse_fn_call` when building `AggFunc` from the function name.
-    pub fn agg(func: AggFunc, arg: Expr) -> Self {
-        Expr::Agg(func, Box::new(arg))
-    }
-
-    /// Builds an [`Expr::BinaryOp`] without manual `Box` allocation.
-    ///
-    /// # SQL examples
-    ///
-    /// ```sql
-    /// -- WHERE u.age = 30
-    /// --   Expr::binary(Expr::Column(...), BinOp::Eq, Expr::Literal(Value::Int64(30)))
-    ///
-    /// -- WHERE u.age >= 18 AND u.name = 'alice'
-    /// --   Expr::binary( Expr::binary(..., BinOp::LtEq, ...), BinOp::And,
-    /// --                 Expr::binary(..., BinOp::Eq, ...) )
-    ///
-    /// -- ON u.id = o.user_id   (same tree shape before column indices are resolved)
-    /// --   Expr::binary(Expr::Column(...), BinOp::Eq, Expr::Column(...))
-    /// ```
-    ///
-    /// # Errors
-    ///
-    /// Does not error; malformed input is rejected while parsing tokens into
-    /// [`Expr`] subtrees.
-    pub fn binary(lhs: Expr, op: BinOp, rhs: Expr) -> Self {
-        Expr::BinaryOp {
-            lhs: Box::new(lhs),
-            op,
-            rhs: Box::new(rhs),
-        }
-    }
-
-    /// Builds an [`Expr::UnaryOp`] without manual `Box` allocation.
-    ///
-    /// # SQL examples
-    ///
-    /// ```sql
-    /// -- WHERE NOT (u.age < 18)
-    /// --   Expr::unary(UnOp::Not, Expr::BinaryOp { ... Lt, ... })
-    ///
-    /// -- WHERE NOT u.active   (once `active` binds to a boolean column)
-    /// --   Expr::unary(UnOp::Not, Expr::Column(...))
-    /// ```
-    ///
-    /// # Errors
-    ///
-    /// Does not error; operand parsing happens in `Parser::parse_primary`.
-    pub fn unary(op: UnOp, operand: Expr) -> Self {
-        Expr::UnaryOp {
-            op,
-            operand: Box::new(operand),
-        }
-    }
-}
-
 impl Parser {
     /// Parses a full SQL expression using the loosest (lowest) precedence level.
     ///
@@ -317,9 +280,10 @@ impl Parser {
         &mut self,
         min_precedence: u8,
     ) -> Result<Expr, ParserError> {
-        let mut left = self.parse_primary()?;
+        let mut left = self.parse_atom()?;
 
         loop {
+            left = self.apply_postfix_suffixes(left)?;
             let Some((op, l_bp, r_bp)) = self.peek_binary_op()? else {
                 break;
             };
@@ -330,20 +294,60 @@ impl Parser {
 
             self.bump()?;
             let rhs = self.parse_expression_with_precedence(r_bp)?;
-            left = Expr::binary(left, op, rhs);
+            left = Expr::BinaryOp {
+                lhs: Box::new(left),
+                op,
+                rhs: Box::new(rhs),
+            };
         }
 
         Ok(left)
     }
 
-    /// Parses a primary expression: unary `NOT`, parenthesized sub-expression, literal
-    /// token, boolean/`NULL` identifier spellings, or a bare identifier (column or call).
+    /// Applies at most one postfix suffix to `left`, if the next tokens start one.
+    ///
+    /// Postfix operators come **after** the expression they test (`email IS NULL`),
+    /// unlike prefix `NOT` in [`Self::parse_atom`]. Called from
+    /// [`Self::parse_expression_with_precedence`] after each atom and again after each
+    /// infix step, so `a = 1 OR b IS NULL` attaches `IS NULL` only to `b`.
+    ///
+    /// SQL does not chain multiple suffixes on the same expression (`email IS NULL IN (1)`
+    /// is invalid), so this handles a single suffix per call.
+    ///
+    /// # SQL examples
+    ///
+    /// ```sql
+    /// -- email IS NULL  →  IsNull { expr: Column("email"), negated: false }
+    /// -- phone IS NOT NULL  →  IsNull { expr: Column("phone"), negated: true }
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ParserError`] if `IS` is present but `NULL` is missing after optional `NOT`.
+    fn apply_postfix_suffixes(&mut self, left: Expr) -> Result<Expr, ParserError> {
+        if self.if_peek_then_consume(TokenType::Is)? {
+            let negated = self.if_peek_then_consume(TokenType::Not)?;
+            self.expect(TokenType::Null)?;
+            return Ok(Expr::IsNull {
+                expr: Box::new(left),
+                negated,
+            });
+        }
+        Ok(left)
+    }
+
+    /// Parses one expression atom — the base unit before infix/postfix operators attach.
+    ///
+    /// An atom is either a prefix form (`NOT …`, `( … )`) or a leaf (literal,
+    /// column reference, aggregate call). The precedence loop in
+    /// [`Self::parse_expression_with_precedence`] then applies postfix suffixes and
+    /// infix operators (`AND`, `OR`, comparisons).
     ///
     /// # Errors
     ///
     /// Same as [`Self::parse_expression`], plus [`ParserError::ParsingError`] when
     /// a token cannot convert to [`Value`] for literals.
-    fn parse_primary(&mut self) -> Result<Expr, ParserError> {
+    fn parse_atom(&mut self) -> Result<Expr, ParserError> {
         if self.if_peek_then_consume(TokenType::Not)? {
             let operand =
                 self.parse_expression_with_precedence(Precedence::PrefixNot.prefix_bp())?;
@@ -435,10 +439,10 @@ impl Parser {
 
         let arg = self.parse_expression_with_precedence(Precedence::LOOSEST)?;
         self.expect(TokenType::Rparen)?;
-        Ok(Expr::Agg(
-            AggFunc::try_from(name.as_str()).map_err(ParserError::ParsingError)?,
-            Box::new(arg),
-        ))
+        Ok(Expr::Agg {
+            func: AggFunc::try_from(name.as_str()).map_err(ParserError::ParsingError)?,
+            arg: Box::new(arg),
+        })
     }
 
     /// If the next token starts a binary operator, returns [`BinOp`] plus left/right
@@ -586,7 +590,7 @@ mod tests {
     #[test]
     fn agg_count_column() {
         let e = ok("COUNT(id)");
-        let Expr::Agg(func, arg) = e else {
+        let Expr::Agg { func, arg } = e else {
             panic!("expected Agg");
         };
         assert_eq!(func, AggFunc::Count);
@@ -595,7 +599,7 @@ mod tests {
 
     #[test]
     fn agg_sum() {
-        let Expr::Agg(func, arg) = ok("SUM(amount)") else {
+        let Expr::Agg { func, arg } = ok("SUM(amount)") else {
             panic!("expected Agg");
         };
         assert_eq!(func, AggFunc::Sum);
@@ -604,7 +608,7 @@ mod tests {
 
     #[test]
     fn agg_avg() {
-        let Expr::Agg(func, _) = ok("AVG(score)") else {
+        let Expr::Agg { func, .. } = ok("AVG(score)") else {
             panic!("expected Agg");
         };
         assert_eq!(func, AggFunc::Avg);
@@ -612,7 +616,7 @@ mod tests {
 
     #[test]
     fn agg_min() {
-        let Expr::Agg(func, _) = ok("MIN(price)") else {
+        let Expr::Agg { func, .. } = ok("MIN(price)") else {
             panic!("expected Agg");
         };
         assert_eq!(func, AggFunc::Min);
@@ -620,7 +624,7 @@ mod tests {
 
     #[test]
     fn agg_max() {
-        let Expr::Agg(func, _) = ok("MAX(price)") else {
+        let Expr::Agg { func, .. } = ok("MAX(price)") else {
             panic!("expected Agg");
         };
         assert_eq!(func, AggFunc::Max);
@@ -814,14 +818,11 @@ mod tests {
     #[test]
     fn parse_expr_parses_simple_comparison() {
         let e = Parser::parse_expr("age > 0").expect("should parse");
-        assert_eq!(
-            e,
-            Expr::binary(
-                Expr::Column("age".into()),
-                BinOp::Gt,
-                Expr::Literal(Value::Int64(0))
-            )
-        );
+        assert_eq!(e, Expr::BinaryOp {
+            lhs: Box::new(Expr::Column("age".into())),
+            op: BinOp::Gt,
+            rhs: Box::new(Expr::Literal(Value::Int64(0))),
+        });
     }
 
     #[test]
@@ -839,5 +840,57 @@ mod tests {
     #[test]
     fn parse_expr_empty_input_errors() {
         assert!(Parser::parse_expr("").is_err());
+    }
+
+    #[test]
+    fn is_null_column() {
+        let Expr::IsNull { expr, negated } = ok("email IS NULL") else {
+            panic!("expected IsNull");
+        };
+        assert!(!negated);
+        assert_eq!(*expr, Expr::Column("email".into()));
+    }
+
+    #[test]
+    fn is_not_null_column() {
+        let Expr::IsNull { expr, negated } = ok("phone IS NOT NULL") else {
+            panic!("expected IsNull");
+        };
+        assert!(negated);
+        assert_eq!(*expr, Expr::Column("phone".into()));
+    }
+
+    #[test]
+    fn null_literal_is_null() {
+        let Expr::IsNull { expr, negated } = ok("NULL IS NULL") else {
+            panic!("expected IsNull");
+        };
+        assert!(!negated);
+        assert_eq!(*expr, Expr::Literal(Value::Null));
+    }
+
+    #[test]
+    fn is_null_binds_before_and() {
+        // `email IS NULL AND active = true` → (email IS NULL) AND (active = true)
+        let Expr::BinaryOp { op, lhs, .. } = ok("email IS NULL AND active = true") else {
+            panic!("expected BinaryOp");
+        };
+        assert_eq!(op, BinOp::And);
+        assert!(matches!(*lhs, Expr::IsNull { negated: false, .. }));
+    }
+
+    #[test]
+    fn is_null_on_rhs_of_or() {
+        let Expr::BinaryOp { op, rhs, .. } = ok("a = 1 OR b IS NULL") else {
+            panic!("expected BinaryOp");
+        };
+        assert_eq!(op, BinOp::Or);
+        assert!(matches!(*rhs, Expr::IsNull { negated: false, .. }));
+    }
+
+    #[test]
+    fn display_is_null() {
+        assert_eq!(ok("email IS NULL").to_string(), "email IS NULL");
+        assert_eq!(ok("phone IS NOT NULL").to_string(), "phone IS NOT NULL");
     }
 }
