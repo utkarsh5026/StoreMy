@@ -1,5 +1,7 @@
 use std::{collections::HashMap, sync::Arc};
 
+use tracing;
+
 use crate::{
     FileId, IndexId, PAGE_SIZE, TransactionId, Type,
     catalog::{
@@ -419,6 +421,14 @@ impl Catalog {
         column_indices: &[ColumnId],
         kind: IndexKind,
     ) -> Result<IndexId, CatalogError> {
+        tracing::debug!(
+            index = %index_name,
+            table = %table_name,
+            kind = ?kind,
+            columns = column_indices.len(),
+            "creating index"
+        );
+
         let TableInfo { schema, .. } = self.get_table_info(txn, table_name)?;
         let (column_names, key_types) =
             Self::resolve_index_key_columns(&schema, table_name, column_indices)?;
@@ -479,6 +489,8 @@ impl Catalog {
             index,
             column_indices.to_vec(),
         )?;
+
+        tracing::debug!(index = %index_name, index_id = ?index_id, "index created");
         Ok(index_id)
     }
 
@@ -557,6 +569,8 @@ impl Catalog {
     /// - [`CatalogError::IndexNameNotFound`] if no `IndexRow` matches `index_name`.
     /// - Propagates system-table delete and filesystem errors.
     pub fn drop_index(&self, txn: &Transaction<'_>, index_name: &str) -> Result<(), CatalogError> {
+        tracing::debug!(index = %index_name, "dropping index");
+
         let index_file_id = self
             .scan_system_table_where::<IndexRow, _>(txn, |r| r.index_name == index_name)?
             .first()
@@ -604,6 +618,12 @@ impl Catalog {
         let auto_increment_rows = self.scan_system_table_with_tid::<AutoIncrementRow>(tid)?;
         let index_rows = self.scan_system_table_with_tid::<IndexRow>(tid)?;
 
+        tracing::debug!(
+            tables = tables.len(),
+            indexes = index_rows.len(),
+            "replaying user objects from catalog"
+        );
+
         let max_file_id: u64 = {
             tables
                 .iter()
@@ -645,6 +665,8 @@ impl Catalog {
             fk_constraints,
             auto_increment_rows,
         )?;
+        tracing::debug!("user tables replayed");
+
         if index_rows.is_empty() {
             return Ok(());
         }
@@ -662,6 +684,7 @@ impl Catalog {
             })?;
             let (table_columns, key_types) = Self::resolve_index_columns(&info, cols)?;
             self.replay_one_index(&info, &table_columns, &key_types)?;
+            tracing::debug!(index = %info.name, table_id = ?info.table_id, "index replayed");
         }
         Ok(())
     }
@@ -685,6 +708,13 @@ impl Catalog {
         let bytes = std::fs::metadata(&path)?.len();
         let pages = u32::try_from(bytes.div_ceil(PAGE_SIZE as u64))
             .map_err(|_| CatalogError::FileTooLarge)?;
+
+        tracing::debug!(
+            index = %info.name,
+            path = %path.display(),
+            pages,
+            "replaying index from disk"
+        );
 
         self.buffer_pool()
             .register_file(info.index_file_id, &path)

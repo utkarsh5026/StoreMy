@@ -13,6 +13,8 @@
 
 use std::collections::{HashMap, HashSet};
 
+use tracing;
+
 use crate::{
     FileId,
     catalog::{
@@ -128,6 +130,13 @@ impl Catalog {
         columns: &[ColumnId],
         backing_index_id: Option<IndexId>,
     ) -> Result<(), CatalogError> {
+        tracing::debug!(
+            constraint = %name,
+            table_id = ?table_id,
+            columns = columns.len(),
+            "adding UNIQUE constraint"
+        );
+
         if columns.is_empty() {
             return Err(CatalogError::invalid_catalog_row(
                 "UNIQUE constraint must list at least one column",
@@ -188,6 +197,14 @@ impl Catalog {
         on_delete: Option<FkAction>,
         on_update: Option<FkAction>,
     ) -> Result<(), CatalogError> {
+        tracing::debug!(
+            constraint = %name,
+            table_id = ?table_id,
+            ref_table_id = ?ref_table_id,
+            columns = local_columns.len(),
+            "adding FOREIGN KEY constraint"
+        );
+
         if local_columns.is_empty() {
             return Err(CatalogError::invalid_catalog_row(
                 "FOREIGN KEY must list at least one column",

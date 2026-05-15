@@ -7,6 +7,8 @@
 
 use std::{collections::HashMap, sync::Arc};
 
+use tracing;
+
 use crate::{
     FileId,
     catalog::{
@@ -187,6 +189,13 @@ impl Catalog {
         schema: TupleSchema,
         constraints: Vec<ConstraintDef>,
     ) -> Result<FileId, CatalogError> {
+        tracing::debug!(
+            table = %name,
+            columns = schema.fields().count(),
+            constraints = constraints.len(),
+            "creating table"
+        );
+
         if self.user_tables.read().contains_key(name) {
             return Err(CatalogError::table_already_exists(name));
         }
@@ -241,6 +250,7 @@ impl Catalog {
             }
         }
 
+        tracing::debug!(table = %name, file_id = ?file_id, "table created");
         Ok(file_id)
     }
 
@@ -597,6 +607,8 @@ impl Catalog {
     /// Returns [`CatalogError::Io`] if the backing file cannot be removed.
     /// Propagates system table deletion errors.
     pub fn drop_table(&self, txn: &Transaction<'_>, name: &str) -> Result<(), CatalogError> {
+        tracing::debug!(table = %name, "dropping table");
+
         let TableInfo {
             file_id, file_path, ..
         } = self.get_table_info(txn, name)?;
