@@ -100,6 +100,41 @@ pub fn execute_one_shot(db: &Database, sql: &str) {
     execute_and_print(db, sql, &state);
 }
 
+/// Runs every SQL statement in `content` and prints each result.
+///
+/// Statements are split on `;`. Comment-only lines (`--`) are stripped before
+/// running each fragment. Timing is shown after each statement so it's easy to
+/// spot which step is slow.
+///
+/// Note: `;` inside string literals will be mis-parsed as a statement
+/// boundary — that's an acceptable limitation for a test/script runner.
+pub fn execute_script(db: &Database, content: &str) {
+    let state = ReplState {
+        show_timing: true,
+        explain: false,
+    };
+    let mut count = 0usize;
+    for raw in content.split(';') {
+        // Strip comment lines, then re-join and trim.
+        let sql: String = raw
+            .lines()
+            .filter(|l| !l.trim_start().starts_with("--"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let sql = sql.trim();
+        if sql.is_empty() {
+            continue;
+        }
+        count += 1;
+        let preview = truncate(sql, 72);
+        println!("\n[{count}] {preview}");
+        execute_and_print(db, sql, &state);
+    }
+    if count == 0 {
+        println!("(empty script — nothing to run)");
+    }
+}
+
 /// Truncate a string to at most `max` chars for use in span fields.
 ///
 /// The full SQL is logged at the boundary; the span field is just an identifier

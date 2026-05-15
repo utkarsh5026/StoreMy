@@ -96,6 +96,17 @@ fn main() {
             &data_dir,
             BUFFER_POOL_PAGES,
         ),
+        Some("--file") => {
+            let path = args.next().unwrap_or_else(|| {
+                eprintln!("usage: storemy --file <path.sql>");
+                std::process::exit(1);
+            });
+            let content = std::fs::read_to_string(&path).unwrap_or_else(|e| {
+                error!(path = %path, error = %e, "cannot read SQL file");
+                std::process::exit(1);
+            });
+            repl::execute_script(&db, &content);
+        }
         Some(first) => {
             let mut sql = String::from(first);
             for part in args {
