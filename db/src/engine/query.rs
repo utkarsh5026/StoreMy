@@ -53,14 +53,13 @@ use crate::{
     execution::{
         Executor, PlanNode,
         aggregate::{AggregateExpr, AggregateFunc},
-        expression::{BooleanExpression, Operand},
         join::JoinPredicate,
         unary::{ProjectItem, SortKey},
     },
     heap::file::HeapFile,
     parser::statements::{
-        AggFunc, ColumnRef, Expr, JoinKind, LimitClause, OrderBy, OrderDirection, SelectColumns,
-        SelectItem, SelectStatement, Statement, TableRef, TableWithJoins,
+        AggFunc, BinOp, ColumnRef, Expr, JoinKind, LimitClause, OrderBy, OrderDirection,
+        SelectColumns, SelectItem, SelectStatement, Statement, TableRef, TableWithJoins,
     },
     primitives::{ColumnId, NonEmptyString, Predicate},
     transaction::Transaction,
@@ -118,12 +117,12 @@ enum BoundFrom {
         file_id: FileId,
         schema: TupleSchema,
     },
-    /// A SQL `JOIN ... ON ...` input with its join predicate already bound.
+    /// A SQL `JOIN ... ON ...` input with its join predicate.
     Join {
         kind: JoinKind,
         left: Box<BoundFrom>,
         right: Box<BoundFrom>,
-        on: BooleanExpression,
+        on: Expr,
         schema: TupleSchema,
     },
     /// `FROM a, b` or `CROSS JOIN` — no predicate; emits the cartesian product.
@@ -153,7 +152,7 @@ impl BoundFrom {
         }
     }
 
-    fn join(kind: JoinKind, left: BoundFrom, right: BoundFrom, on: BooleanExpression) -> Self {
+    fn join(kind: JoinKind, left: BoundFrom, right: BoundFrom, on: Expr) -> Self {
         let schema = left.schema().merge(right.schema());
         Self::Join {
             kind,
@@ -275,9 +274,9 @@ enum BoundSelectList {
 struct BoundSelect {
     from: BoundFrom,
     select_list: BoundSelectList,
-    filter: Option<BooleanExpression>,
+    filter: Option<Expr>,
     group_by: Vec<ColumnId>,
-    having: Option<BooleanExpression>,
+    having: Option<Expr>,
     distinct: bool,
     order_by: Vec<(ColumnId, OrderDirection)>,
     limit: Option<LimitClause>,
@@ -319,8 +318,8 @@ impl BoundSelect {
         let select_list = Self::resolve_select_list(&scope, stmt.columns)?;
         let order_by = Self::resolve_order_by(&scope, stmt.order_by)?;
         let group_by = Self::resolve_group_by(&scope, stmt.group_by)?;
-        let filter = scope.resolve_where(stmt.where_clause.as_ref())?;
-        let having = scope.resolve_where(stmt.having.as_ref())?;
+        let filter = stmt.where_clause;
+        let having = stmt.having;
 
         Ok(Self {
             from,
@@ -375,7 +374,7 @@ impl BoundSelect {
             scope.push(right_table);
 
             let right = BoundFrom::table(right_info, j.table);
-            left = BoundFrom::join(j.kind, left, right, scope.bind_where(&j.on)?);
+            left = BoundFrom::join(j.kind, left, right, j.on);
         }
 
         Ok((left, scope))
@@ -658,7 +657,8 @@ impl Engine<'_> {
         let mut node = Self::build_from(&bound.from, heaps, txn)?;
 
         if let Some(pred) = &bound.filter {
-            node = PlanNode::filter(node, pred.clone());
+            let schema = node.schema().clone();
+            node = PlanNode::filter(node, pred.clone(), schema);
         }
 
         // ORDER BY and HAVING are still bound against the FROM scope, so their
@@ -755,7 +755,7 @@ impl Engine<'_> {
                 Ok(PlanNode::nested_loop_join(
                     left_node,
                     right_node,
-                    BooleanExpression::Always,
+                    Expr::Literal(Value::Bool(true)),
                 ))
             }
         }
@@ -763,18 +763,13 @@ impl Engine<'_> {
 
     /// Picks `HashJoin` when the `ON` clause is a single column-equality between
     /// the two sides; falls back to `NestedLoopJoin` for everything else.
-    ///
-    /// `HashJoin` requires the predicate to be split into per-side column
-    /// indices (`left_col` within the left input, `right_col` within the right
-    /// input). `NestedLoopJoin` evaluates the expression over the concatenated
-    /// tuple so it needs no conversion.
     fn build_join<'a>(
         left: PlanNode<'a>,
         right: PlanNode<'a>,
-        on: &BooleanExpression,
+        on: &Expr,
         left_width: usize,
     ) -> PlanNode<'a> {
-        if let Some(pred) = Self::try_extract_equi(on, left_width) {
+        if let Some(pred) = Self::try_extract_equi(on, left.schema(), right.schema(), left_width) {
             tracing::debug!(algorithm = "hash_join", "join selected");
             PlanNode::hash_join(left, right, pred)
         } else {
@@ -783,33 +778,62 @@ impl Engine<'_> {
         }
     }
 
-    /// Tries to extract an equi-join key from a `BooleanExpression`.
+    /// Tries to extract an equi-join key from an `Expr`.
     ///
-    /// Returns `Some(JoinPredicate)` only when `expr` is a single equality leaf
-    /// `Column(l) = Column(r)` where one index is in the left input and the
-    /// other is in the right input. `right_col` in the returned predicate is
-    /// adjusted to be relative to the right input (i.e. `global_r - left_width`).
-    fn try_extract_equi(expr: &BooleanExpression, left_width: usize) -> Option<JoinPredicate> {
-        let BooleanExpression::Leaf {
-            left: Operand::Column(l),
-            op: Predicate::Equals,
-            right: Operand::Column(r),
+    /// Returns `Some(JoinPredicate)` only when `expr` is `lhs = rhs` where both
+    /// sides are column references that resolve to different inputs (one in the
+    /// left schema, one in the right). The returned right-side index is relative
+    /// to the right input (i.e. global index minus `left_width`).
+    fn try_extract_equi(
+        expr: &Expr,
+        left_schema: &TupleSchema,
+        right_schema: &TupleSchema,
+        left_width: usize,
+    ) -> Option<JoinPredicate> {
+        let Expr::BinaryOp {
+            lhs,
+            op: BinOp::Eq,
+            rhs,
         } = expr
         else {
             return None;
         };
+        let (Expr::Column(lc), Expr::Column(rc)) = (lhs.as_ref(), rhs.as_ref()) else {
+            return None;
+        };
 
-        let (lc, rc) = if *l < left_width && *r >= left_width {
-            (*l, *r - left_width)
-        } else if *r < left_width && *l >= left_width {
-            (*r, *l - left_width)
+        // Resolve each column against left then right schema.
+        let l_in_left = left_schema
+            .field_by_name(lc.name.as_str())
+            .map(|(id, _)| usize::from(id));
+        let l_in_right = right_schema
+            .field_by_name(lc.name.as_str())
+            .map(|(id, _)| usize::from(id) + left_width);
+        let r_in_left = left_schema
+            .field_by_name(rc.name.as_str())
+            .map(|(id, _)| usize::from(id));
+        let r_in_right = right_schema
+            .field_by_name(rc.name.as_str())
+            .map(|(id, _)| usize::from(id) + left_width);
+
+        // We need one column from each side.
+        let (global_l, global_r) = match (l_in_left, l_in_right, r_in_left, r_in_right) {
+            (Some(l), None, None, Some(r)) => (l, r),
+            (None, Some(l), Some(r), None) => (r, l),
+            _ => return None,
+        };
+
+        let (lc_idx, rc_idx) = if global_l < left_width && global_r >= left_width {
+            (global_l, global_r - left_width)
+        } else if global_r < left_width && global_l >= left_width {
+            (global_r, global_l - left_width)
         } else {
             return None;
         };
 
         Some(JoinPredicate::new(
-            ColumnId::try_from(lc).ok()?,
-            ColumnId::try_from(rc).ok()?,
+            ColumnId::try_from(lc_idx).ok()?,
+            ColumnId::try_from(rc_idx).ok()?,
             Predicate::Equals,
         ))
     }
@@ -1881,7 +1905,9 @@ mod tests {
     }
 
     #[test]
-    fn bind_join_unqualified_shared_column_is_ambiguous() {
+    fn bind_join_unqualified_shared_column_where_clause_passes_bind() {
+        // WHERE column validation is deferred to eval time — bind now succeeds even
+        // when the column name exists in multiple tables. Ambiguity is a runtime concern.
         let mut stmt = star_from(with_join(
             just("users"),
             inner_join(
@@ -1891,8 +1917,7 @@ mod tests {
             ),
         ));
         stmt.where_clause = Some(pred("id", Predicate::Equals, Value::Uint64(0)));
-        let err = expect_err(bind_with_users_and_orders(|| stmt));
-        assert!(matches!(err, EngineError::AmbiguousColumn { ref column } if column == "id"));
+        assert!(bind_with_users_and_orders(|| stmt).is_ok());
     }
 
     #[test]
@@ -1929,13 +1954,15 @@ mod tests {
     }
 
     #[test]
-    fn bind_unknown_qualifier_errors() {
-        let err = expect_err(bind_with_users(|| {
+    fn bind_unknown_qualifier_in_where_passes_bind() {
+        // WHERE column references are no longer validated at bind time — they are
+        // resolved lazily by eval_expr when rows are actually produced.
+        let bound = bind_with_users(|| {
             let mut s = star_from(just("users"));
             s.where_clause = Some(pred("x.id", Predicate::Equals, Value::Uint64(0)));
             s
-        }));
-        assert!(matches!(err, EngineError::UnknownColumn { ref table, .. } if table == "x"));
+        });
+        assert!(bound.is_ok());
     }
 
     #[test]

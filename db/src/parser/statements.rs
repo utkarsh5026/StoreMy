@@ -53,9 +53,9 @@
 //! # NULL semantics
 //!
 //! The AST itself is value-neutral — `NULL` literals are stored as
-//! [`Value::Null`]. Three-valued logic in `WHERE` is
-//! the executor's concern; see [`crate::execution::expression`] for how
-//! predicates collapse `NULL` to `false`.
+//! [`Value::Null`]. Three-valued logic in `WHERE` is the executor's concern;
+//! see [`eval_expr`](crate::execution::eval::eval_expr) for how predicates are
+//! evaluated and how `NULL` is treated as non-matching in filters.
 //!
 //! # File layout
 //!
@@ -1635,9 +1635,9 @@ impl Display for LimitClause {
 ///
 /// # NULL semantics
 ///
-/// `NULL` literals in `WHERE`/`HAVING` predicates collapse to `false` per the
-/// executor's two-valued model — see [`crate::execution::expression`]. The
-/// AST itself just carries [`Value::Null`].
+/// `NULL` in `WHERE`/`HAVING` predicates does not match rows — see
+/// [`eval_expr`](crate::execution::eval::eval_expr). The AST itself just
+/// carries [`Value::Null`].
 #[derive(Debug, Clone)]
 pub struct SelectStatement {
     pub distinct: bool,

@@ -24,9 +24,9 @@
 //!
 //! # NULL semantics
 //!
-//! `Filter` delegates to [`BooleanExpression`]: a `NULL` on either side of a
-//! comparison makes that predicate `false`, rather than modeling full SQL
-//! three-valued logic. `Project` copies `NULL` values unchanged and can emit
+//! `Filter` delegates to [`eval_expr`]: only
+//! `Value::Bool(true)` passes; `NULL` and `false` are dropped. `Project` copies
+//! `NULL` values unchanged and can emit
 //! literal `NULL`s. `Sort` orders `NULL` before non-`NULL` in ascending order
 //! and after non-`NULL` in descending order because the per-key comparison is
 //! reversed. `Limit` is row-count based and does not inspect values.
@@ -35,19 +35,21 @@ use std::cmp::Ordering;
 
 use fallible_iterator::FallibleIterator;
 
-use super::{ExecutionError, Executor, expression::BooleanExpression};
+use super::{ExecutionError, Executor};
 use crate::{
-    execution::PlanNode,
+    Value,
+    execution::{PlanNode, eval::eval_expr},
+    parser::statements::Expr,
     primitives::{self, NonEmptyString},
     tuple::{Field, Tuple, TupleSchema},
-    types::{Type, Value},
+    types::Type,
 };
 
 /// Applies a SQL `WHERE` predicate to rows from one child plan.
 ///
-/// Each input tuple is tested with a [`BooleanExpression`]. Rows that evaluate
-/// to `true` pass through unchanged; rows that evaluate to `false` are skipped.
-/// The output tuple layout is exactly the child layout because filtering never
+/// Each input tuple is tested with [`eval_expr`]. Rows that evaluate to
+/// `Value::Bool(true)` pass through unchanged; all other results (false, NULL)
+/// are skipped. The output tuple layout is exactly the child layout because filtering never
 /// adds, removes, or reorders columns.
 ///
 /// # SQL examples
@@ -113,37 +115,26 @@ use crate::{
 /// let projected = Project::new(Box::new(PlanNode::Filter(filtered)), &[col(0), col(1)])?;
 /// ```
 ///
-/// `NULL` in a comparison filters the row out: `WHERE age = NULL` evaluates to
-/// `false` for every row in this executor.
+/// `NULL` propagates correctly: `WHERE age = NULL` evaluates to `Value::Null`
+/// which is treated as non-matching, so the row is filtered out.
 #[derive(Debug)]
 pub struct Filter<'a> {
     child: Box<PlanNode<'a>>,
-    predicate: BooleanExpression,
+    predicate: Expr,
+    schema: TupleSchema,
 }
 
 impl<'a> Filter<'a> {
     /// Builds a `WHERE` operator over an already-planned child.
     ///
-    /// # SQL examples
-    ///
-    /// ```sql
-    /// -- WHERE age = 30
-    /// --   Filter::new(child, BooleanExpression::col_op_lit(2, Predicate::Equals, Value::Int64(30)))
-    ///
-    /// -- WHERE name LIKE 'a%'
-    /// --   Filter::new(child, BooleanExpression::col_op_lit(1, Predicate::Like, Value::String("a%".into())))
-    ///
-    /// -- WHERE age > id
-    /// --   Filter::new(child, BooleanExpression::col_op_col(2, Predicate::GreaterThan, 0))
-    /// ```
-    ///
-    /// # Errors
-    ///
-    /// Does not validate eagerly. Column resolution errors surface later as
-    /// [`ExecutionError::TypeError`] from [`FallibleIterator::next`] when the
-    /// predicate references a tuple position outside the child's output.
-    pub fn new(child: Box<PlanNode<'a>>, predicate: BooleanExpression) -> Self {
-        Self { child, predicate }
+    /// `schema` must match the tuple layout produced by `child` — it is used
+    /// by `eval_expr` to resolve column names to physical indices at eval time.
+    pub fn new(child: Box<PlanNode<'a>>, predicate: Expr, schema: TupleSchema) -> Self {
+        Self {
+            child,
+            predicate,
+            schema,
+        }
     }
 }
 
@@ -153,18 +144,20 @@ impl FallibleIterator for Filter<'_> {
 
     /// Returns the next row that qualifies for the SQL `WHERE` predicate.
     ///
-    /// Pulls child rows until the predicate evaluates to `true` or the child is
-    /// exhausted. `And` / `Or` expressions use Rust's short-circuiting `&&` and
-    /// `||`; `NULL` comparisons and non-string `LIKE` checks evaluate to
-    /// `false`.
+    /// Pulls child rows until the predicate evaluates to `Value::Bool(true)` or
+    /// the child is exhausted. `Value::Null` and `Value::Bool(false)` both cause
+    /// the row to be skipped, matching SQL semantics for `WHERE` clauses.
     ///
     /// # Errors
     ///
     /// Propagates child errors and returns [`ExecutionError::TypeError`] when
-    /// the predicate references an out-of-bounds column.
+    /// the predicate references an unknown column name.
     fn next(&mut self) -> Result<Option<Tuple>, ExecutionError> {
         while let Some(tuple) = self.child.next()? {
-            if self.predicate.eval(&tuple)? {
+            if matches!(
+                eval_expr(&self.predicate, &tuple, &self.schema)?,
+                Value::Bool(true)
+            ) {
                 return Ok(Some(tuple));
             }
         }
@@ -981,11 +974,20 @@ mod tests {
         buffer_pool::page_store::PageStore,
         execution::{PlanNode, scan::SeqScan},
         heap::file::HeapFile,
-        primitives::{ColumnId, Predicate},
+        parser::statements::{BinOp, Expr},
+        primitives::ColumnId,
         tuple::{Field, Tuple, TupleSchema},
         types::{Type, Value},
         wal::writer::Wal,
     };
+
+    fn eq_expr(col_name: &str, val: Value) -> Expr {
+        Expr::BinaryOp {
+            lhs: Box::new(Expr::Column(col_name.into())),
+            op: BinOp::Eq,
+            rhs: Box::new(Expr::Literal(val)),
+        }
+    }
 
     fn field(name: &str, field_type: Type) -> Field {
         Field::new(name, field_type).unwrap()
@@ -1044,8 +1046,12 @@ mod tests {
         heap.insert_tuple(txn, &make_scan_tuple(2, false)).unwrap();
         heap.insert_tuple(txn, &make_scan_tuple(3, true)).unwrap();
 
-        let pred = BooleanExpression::col_op_lit(1, Predicate::Equals, Value::Bool(true));
-        let mut filter = Filter::new(Box::new(PlanNode::SeqScan(SeqScan::new(&heap, txn))), pred);
+        let pred = eq_expr("flag", Value::Bool(true));
+        let mut filter = Filter::new(
+            Box::new(PlanNode::SeqScan(SeqScan::new(&heap, txn))),
+            pred,
+            scan_schema(),
+        );
 
         let mut out = Vec::new();
         while let Some(t) = filter.next().unwrap() {
@@ -1190,7 +1196,8 @@ mod tests {
         let txn = begin_txn(&wal, 1);
         let mut filter = Filter::new(
             Box::new(PlanNode::SeqScan(SeqScan::new(&heap, txn))),
-            BooleanExpression::col_op_lit(0, Predicate::Equals, Value::Int32(0)),
+            eq_expr("id", Value::Int32(0)),
+            scan_schema(),
         );
         assert_eq!(filter.next().unwrap(), None);
     }
@@ -1247,7 +1254,8 @@ mod tests {
 
         let mut filter = Filter::new(
             Box::new(PlanNode::SeqScan(SeqScan::new(&heap, txn))),
-            BooleanExpression::col_op_lit(0, Predicate::Equals, Value::Int32(7)),
+            eq_expr("id", Value::Int32(7)),
+            scan_schema(),
         );
         assert_eq!(filter.next().unwrap(), Some(make_scan_tuple(7, true)));
         filter.rewind().unwrap();

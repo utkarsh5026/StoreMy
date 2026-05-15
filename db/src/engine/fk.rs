@@ -42,12 +42,12 @@ use crate::{
     FileId, TransactionId, Value,
     catalog::{LiveIndex, ReferencingFk, manager::Catalog, systable::FkAction},
     engine::{ConstraintViolation, Engine, EngineError},
-    execution::expression::BooleanExpression,
     heap::file::HeapFile,
     index::CompositeKey,
-    primitives::{ColumnId, Predicate, RecordId},
+    parser::statements::{BinOp, Expr},
+    primitives::{ColumnId, RecordId},
     transaction::Transaction,
-    tuple::Tuple,
+    tuple::{Tuple, TupleSchema},
 };
 
 /// Precomputed data for one outgoing FK constraint, built once per INSERT/UPDATE statement.
@@ -114,6 +114,9 @@ pub(super) struct InboundParentFkCheck {
     /// Every index on the child table, kept for synchronization after a `CASCADE` update or
     /// `SET NULL` operation modifies child rows.
     pub maintenance_indexes: Vec<Arc<LiveIndex>>,
+    /// Schema of the child table, used by `eval_expr` to resolve column names when building
+    /// the heap-scan fallback predicate.
+    pub child_schema: TupleSchema,
 }
 
 /// A before/after tuple pair for a single-row mutation (UPDATE, CASCADE, SET NULL).
@@ -316,6 +319,7 @@ impl Engine<'_> {
                      on_update,
                  }| {
                     let child_heap = catalog.get_table_heap(child_table_id)?;
+                    let child_schema = child_heap.schema().clone();
                     let maintenance_indexes = catalog.indexes_for(child_table_id);
 
                     let child_to_ref = column_pairs
@@ -335,6 +339,7 @@ impl Engine<'_> {
                         on_update: on_update.unwrap_or(FkAction::NoAction),
                         fk_lookup_index,
                         maintenance_indexes,
+                        child_schema,
                     })
                 },
             )
@@ -375,31 +380,42 @@ impl Engine<'_> {
             return Ok(rows);
         }
 
-        let predicate = Self::build_ref_match_predicate(&fk.col_pairs, parent_row);
-        Self::collect_matching_rows(&fk.child_heap, tid, predicate.as_ref())
+        let predicate =
+            Self::build_ref_match_predicate(&fk.col_pairs, parent_row, &fk.child_schema);
+        Self::collect_matching_rows(&fk.child_heap, tid, predicate.as_ref(), &fk.child_schema)
     }
 
     /// Builds a `WHERE child_col = <parent_value> AND …` predicate for the heap-scan fallback.
     ///
-    /// Iterates over `col_pairs` and, for each `(child_col, ref_col)` pair, reads the current
-    /// value of `ref_col` from `parent_row` and creates a column-equals-literal leaf expression.
-    /// Multiple leaves are combined with `AND`.  Returns `None` only when `col_pairs` is empty,
-    /// which should not happen for a well-formed FK definition.
+    /// Uses column names from `child_schema` so the resulting `Expr` can be evaluated with
+    /// `eval_expr`. Returns `None` only when `col_pairs` is empty.
     fn build_ref_match_predicate(
         col_pairs: &[(ColumnId, ColumnId)],
         parent_row: &Tuple,
-    ) -> Option<BooleanExpression> {
-        let mut predicate: Option<BooleanExpression> = None;
+        child_schema: &TupleSchema,
+    ) -> Option<Expr> {
+        let mut predicate: Option<Expr> = None;
         for &(child_col, ref_col) in col_pairs {
             let value = parent_row
                 .get(usize::from(ref_col))
                 .cloned()
                 .unwrap_or(Value::Null);
-            let leaf =
-                BooleanExpression::col_op_lit(usize::from(child_col), Predicate::Equals, value);
+            let col_name = child_schema
+                .field(usize::from(child_col))
+                .map(|f| f.name.to_string())
+                .unwrap_or_default();
+            let leaf = Expr::BinaryOp {
+                lhs: Box::new(Expr::Column(col_name.as_str().into())),
+                op: BinOp::Eq,
+                rhs: Box::new(Expr::Literal(value)),
+            };
             predicate = Some(match predicate {
                 None => leaf,
-                Some(p) => BooleanExpression::And(Box::new(p), Box::new(leaf)),
+                Some(p) => Expr::BinaryOp {
+                    lhs: Box::new(p),
+                    op: BinOp::And,
+                    rhs: Box::new(leaf),
+                },
             });
         }
         predicate
@@ -445,7 +461,11 @@ impl Engine<'_> {
                     .into());
                 }
                 FkAction::Cascade => {
-                    let predicate = Self::build_ref_match_predicate(&fk.col_pairs, parent_row);
+                    let predicate = Self::build_ref_match_predicate(
+                        &fk.col_pairs,
+                        parent_row,
+                        &fk.child_schema,
+                    );
                     Self::delete_rows_and_indexes(
                         catalog,
                         txn,

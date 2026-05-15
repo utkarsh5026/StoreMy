@@ -50,9 +50,8 @@ use crate::{
     FileId, IndexId, TransactionId,
     catalog::{LiveIndex, manager::Catalog},
     engine::{
-        ConstraintViolation, Engine, EngineError, StatementResult,
-        fk::InboundParentFkCheck,
-        scope::{ColumnResolver, SingleTableScope},
+        ConstraintViolation, Engine, EngineError, StatementResult, fk::InboundParentFkCheck,
+        scope::SingleTableScope,
     },
     execution::eval,
     parser::statements::{Assignment, Expr, UpdateStatement},
@@ -104,9 +103,14 @@ impl Engine<'_> {
         let check_constraints = info.check_constraints.clone();
         let scope = SingleTableScope::from_info(info, alias);
         let heap_file = catalog.get_table_heap(scope.file_id)?;
+        let schema = heap_file.schema().clone();
 
-        let filter = where_clause.map(|w| scope.bind_where(&w)).transpose()?;
-        let rows = Self::collect_matching_rows(&heap_file, txn.transaction_id(), filter.as_ref())?;
+        let rows = Self::collect_matching_rows(
+            &heap_file,
+            txn.transaction_id(),
+            where_clause.as_ref(),
+            &schema,
+        )?;
 
         let assignments = Self::bind_assignments(&scope, assignments, ai_col)?;
         let affected_indexes =

@@ -1,11 +1,11 @@
 //! Scalar expression evaluator — maps a parsed [`Expr`] over a single tuple row.
 //!
 //! The entry point is [`eval_expr`], which walks an [`Expr`] tree and returns
-//! the resulting [`Value`]. It is the counterpart to
-//! [`crate::execution::expression::BooleanExpression::eval`]: where that function returns `bool`
-//! and is purpose-built for filter predicates, this one returns a full [`Value`]
-//! and is suitable anywhere a scalar result is needed — `SET` assignment
-//! right-hand sides, `CHECK` constraint bodies, computed default values, and so on.
+//! the resulting [`Value`]. Filter and join operators treat only
+//! `Value::Bool(true)` as a match; any other result
+//! (including `false` and `NULL`) is rejected. The same evaluator is used
+//! wherever a scalar result is needed — `SET` assignment right-hand sides,
+//! `CHECK` constraint bodies, computed default values, and so on.
 //!
 //! # What it handles
 //!
@@ -35,8 +35,8 @@
 //! filter treats it as non-matching). Logical `AND` and `OR` propagate `NULL`
 //! too, matching the SQL standard.
 //!
-//! This is intentionally different from [`crate::execution::expression::BooleanExpression::eval`],
-//! which collapses `NULL` to `false` for simplicity in the filter/join operators.
+//! Filter and join operators apply this three-valued logic explicitly: only
+//! `Value::Bool(true)` passes; `NULL` and `false` both fail to match.
 
 use std::cmp::Ordering;
 

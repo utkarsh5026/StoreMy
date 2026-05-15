@@ -23,29 +23,19 @@
 use crate::{
     FileId,
     catalog::manager::Catalog,
-    engine::{
-        Engine, EngineError, StatementResult,
-        scope::{ColumnResolver, SingleTableScope},
-    },
-    execution::expression::BooleanExpression,
-    parser::statements::DeleteStatement,
+    engine::{Engine, EngineError, StatementResult},
+    parser::statements::{DeleteStatement, Expr},
     transaction::Transaction,
 };
 
 impl Engine<'_> {
     /// Execute a `DELETE` statement and return the number of rows removed.
     ///
-    /// Resolves the target table from the catalog, builds a [`SingleTableScope`]
-    /// (honouring any `AS alias`), binds the optional `WHERE` clause into a
-    /// [`BooleanExpression`], then calls [`Self::delete_rows_and_indexes`] to
-    /// perform the actual deletion.
-    ///
     /// When no `WHERE` clause is present every row in the table is deleted.
     ///
     /// # Errors
     ///
     /// - [`EngineError::TableNotFound`] if `stmt.table_name` does not exist in the catalog.
-    /// - Any bind error from the `WHERE` clause (unknown column, type mismatch, etc.).
     /// - Constraint and storage errors propagated from [`Self::delete_rows_and_indexes`].
     pub(super) fn exec_delete(
         catalog: &Catalog,
@@ -54,20 +44,15 @@ impl Engine<'_> {
     ) -> Result<StatementResult, EngineError> {
         let DeleteStatement {
             table_name,
-            alias,
             where_clause,
+            ..
         } = stmt;
 
         let table_info = catalog.get_table_info(txn, table_name.as_str())?;
         tracing::debug!(table = %table_name, "exec delete");
         let file_id = table_info.file_id;
-        let table_scope = SingleTableScope::from_info(table_info, alias);
 
-        let predicate = where_clause
-            .map(|w| table_scope.bind_where(&w))
-            .transpose()?;
-
-        let deleted = Self::delete_rows_and_indexes(catalog, txn, file_id, predicate.as_ref())?;
+        let deleted = Self::delete_rows_and_indexes(catalog, txn, file_id, where_clause.as_ref())?;
         tracing::debug!(table = %table_name, rows_deleted = deleted, "delete complete");
         Ok(StatementResult::deleted(
             table_name.as_str().to_string(),
@@ -82,7 +67,7 @@ impl Engine<'_> {
     /// matched row:
     ///
     /// 1. **Inbound FK actions** — calls [`Self::enforce_referential_actions_on_delete`] for every
-    ///    child table that has a foreign key pointing at this table. The behaviour depends on the
+    ///    child table that has a foreign key pointing at this table. The behaviors depends on the
     ///    child's declared referential action:
     ///    - `RESTRICT` / `NO ACTION` — returns a [`ConstraintViolation`] error.
     ///    - `CASCADE` — recursively deletes matching rows in the child table.
@@ -104,11 +89,12 @@ impl Engine<'_> {
         catalog: &Catalog,
         txn: &Transaction<'_>,
         file_id: FileId,
-        predicate: Option<&BooleanExpression>,
+        predicate: Option<&Expr>,
     ) -> Result<usize, EngineError> {
         let tid = txn.transaction_id();
         let heap = catalog.get_table_heap(file_id)?;
-        let rows = Self::collect_matching_rows(&heap, tid, predicate)?;
+        let schema = heap.schema().clone();
+        let rows = Self::collect_matching_rows(&heap, tid, predicate, &schema)?;
         let inbound_checks = Self::prepare_inbound_ref_checks(catalog, txn, file_id)?;
         let indexes = catalog.indexes_for(file_id);
 
