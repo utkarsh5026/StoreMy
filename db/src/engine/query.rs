@@ -419,7 +419,10 @@ impl BoundSelect {
                     .unwrap_or_else(|| "COUNT(*)".try_into().unwrap()),
             }),
             Expr::Agg { func, arg } => Self::bind_agg(scope, &func, *arg, alias.as_ref())?,
-            Expr::BinaryOp { .. } | Expr::UnaryOp { .. } | Expr::IsNull { .. } => {
+            Expr::BinaryOp { .. }
+            | Expr::In { .. }
+            | Expr::UnaryOp { .. }
+            | Expr::IsNull { .. } => {
                 return Err(EngineError::Unsupported(
                     "binary/unary/is null expressions in SELECT projections are not yet supported"
                         .into(),

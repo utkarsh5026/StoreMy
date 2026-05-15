@@ -100,7 +100,7 @@ pub fn eval_expr(
 
         // Aggregates operate over many rows and cannot produce a single value
         // from one tuple. The planner should never route them here.
-        Expr::Agg { .. } | Expr::CountStar => Err(ExecutionError::TypeError(
+        Expr::Agg { .. } | Expr::CountStar | Expr::In { .. } => Err(ExecutionError::TypeError(
             "aggregate expressions cannot be evaluated as scalar expressions".to_string(),
         )),
     }

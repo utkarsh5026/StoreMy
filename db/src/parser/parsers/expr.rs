@@ -154,6 +154,21 @@ pub enum Expr {
     ///   email IS NULL       →  `IsNull` { expr: Column("email"), negated: false }
     ///   phone IS NOT NULL   →  `IsNull` { expr: Column("phone"), negated: true }
     IsNull { expr: Box<Expr>, negated: bool },
+
+    /// `expr [NOT] IN (val, val, ...)`
+    ///
+    /// `list` holds the expressions inside the parentheses. Each element is
+    /// typically a literal but the grammar allows any scalar expression.
+    ///
+    /// SQL examples:
+    ///   id IN (1, 2, 3) → `In` { expr: Column("id"), list: [Lit(1), Lit(2), Lit(3)], negated:
+    /// false }   status NOT IN ('a', 'b') → `In` { expr: Column("status"), list: [Lit("a"),
+    /// Lit("b")], negated: true }
+    In {
+        expr: Box<Expr>,
+        list: Vec<Expr>,
+        negated: bool,
+    },
 }
 
 impl Display for Expr {
@@ -170,6 +185,17 @@ impl Display for Expr {
                     write!(f, "{expr} IS NOT NULL")
                 } else {
                     write!(f, "{expr} IS NULL")
+                }
+            }
+            Expr::In {
+                expr,
+                list,
+                negated,
+            } => {
+                if *negated {
+                    write!(f, "{expr} NOT IN ({list:?})")
+                } else {
+                    write!(f, "{expr} IN ({list:?})")
                 }
             }
         }
@@ -325,6 +351,9 @@ impl Parser {
     ///
     /// Returns [`ParserError`] if `IS` is present but `NULL` is missing after optional `NOT`.
     fn apply_postfix_suffixes(&mut self, left: Expr) -> Result<Expr, ParserError> {
+        // We check for IS [NOT] NULL here, rather than in the precedence loop,
+        // because IS NULL is a postfix operator that comes after the expression
+        // it tests (`email IS NULL`).
         if self.if_peek_then_consume(TokenType::Is)? {
             let negated = self.if_peek_then_consume(TokenType::Not)?;
             self.expect(TokenType::Null)?;
@@ -333,6 +362,30 @@ impl Parser {
                 negated,
             });
         }
+
+        // Handle the `IN` and `NOT IN` postfix operators, e.g.:
+        //   email IN ('a', 'b')
+        //   age NOT IN (1, 2, 3)
+        //
+        // We first check for the sequence `NOT IN` as a unit,
+        // then for the bare `IN`. Only one is accepted per SQL rules.
+        //
+        // - `not_in` is true if both NOT and IN are present.
+        // - If just IN is present, negated will be false.
+        //
+        // The following parenthesized list becomes the expression list.
+        let not_in = self.if_peek_then_consume(TokenType::Not)?
+            && self.if_peek_then_consume(TokenType::In)?;
+
+        if not_in || self.if_peek_then_consume(TokenType::In)? {
+            let list = self.paren_list(Parser::parse_expression)?;
+            return Ok(Expr::In {
+                expr: Box::new(left),
+                list,
+                negated: not_in,
+            });
+        }
+
         Ok(left)
     }
 
@@ -892,5 +945,92 @@ mod tests {
     fn display_is_null() {
         assert_eq!(ok("email IS NULL").to_string(), "email IS NULL");
         assert_eq!(ok("phone IS NOT NULL").to_string(), "phone IS NOT NULL");
+    }
+
+    #[test]
+    fn in_integer_list() {
+        let Expr::In {
+            expr,
+            list,
+            negated,
+        } = ok("id IN (1, 2, 3)")
+        else {
+            panic!("expected In");
+        };
+        assert!(!negated);
+        assert_eq!(*expr, Expr::Column("id".into()));
+        assert_eq!(list, vec![
+            Expr::Literal(Value::Int64(1)),
+            Expr::Literal(Value::Int64(2)),
+            Expr::Literal(Value::Int64(3)),
+        ]);
+    }
+
+    #[test]
+    fn not_in_string_list() {
+        let Expr::In {
+            expr,
+            list,
+            negated,
+        } = ok("status NOT IN ('a', 'b')")
+        else {
+            panic!("expected In");
+        };
+        assert!(negated);
+        assert_eq!(*expr, Expr::Column("status".into()));
+        assert_eq!(list, vec![
+            Expr::Literal(Value::String("a".to_string())),
+            Expr::Literal(Value::String("b".to_string())),
+        ]);
+    }
+
+    #[test]
+    fn in_single_value() {
+        let Expr::In { list, negated, .. } = ok("x IN (42)") else {
+            panic!("expected In");
+        };
+        assert!(!negated);
+        assert_eq!(list, vec![Expr::Literal(Value::Int64(42))]);
+    }
+
+    #[test]
+    fn in_binds_before_and() {
+        // `id IN (1, 2) AND active = true` → (id IN (1, 2)) AND (active = true)
+        let Expr::BinaryOp { op, lhs, .. } = ok("id IN (1, 2) AND active = true") else {
+            panic!("expected BinaryOp");
+        };
+        assert_eq!(op, BinOp::And);
+        assert!(matches!(*lhs, Expr::In { negated: false, .. }));
+    }
+
+    #[test]
+    fn in_on_rhs_of_or() {
+        let Expr::BinaryOp { op, rhs, .. } = ok("a = 1 OR b IN (1, 2)") else {
+            panic!("expected BinaryOp");
+        };
+        assert_eq!(op, BinOp::Or);
+        assert!(matches!(*rhs, Expr::In { negated: false, .. }));
+    }
+
+    #[test]
+    fn not_in_on_lhs_of_and() {
+        let Expr::BinaryOp { op, lhs, .. } = ok("x NOT IN (1, 2) AND y = 3") else {
+            panic!("expected BinaryOp");
+        };
+        assert_eq!(op, BinOp::And);
+        assert!(matches!(*lhs, Expr::In { negated: true, .. }));
+    }
+
+    #[test]
+    fn in_qualified_column() {
+        let Expr::In { expr, negated, .. } = ok("u.id IN (1, 2)") else {
+            panic!("expected In");
+        };
+        assert!(!negated);
+        let Expr::Column(col) = *expr else {
+            panic!("expected Column inside In");
+        };
+        assert_eq!(col.qualifier.as_deref(), Some("u"));
+        assert_eq!(col.name.as_str(), "id");
     }
 }
