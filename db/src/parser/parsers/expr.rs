@@ -169,6 +169,22 @@ pub enum Expr {
         list: Vec<Expr>,
         negated: bool,
     },
+
+    /// `expr [NOT] BETWEEN low AND high`
+    ///
+    /// Both bounds are inclusive. The `AND` between bounds is syntactic, not [`BinOp::And`].
+    ///
+    /// SQL examples:
+    ///   total BETWEEN 100 AND 500
+    ///     → `Between` { expr: Column("total"), low: Lit(100), high: Lit(500), negated: false }
+    ///   price NOT BETWEEN 10 AND 50
+    ///     → `Between` { …, negated: true }
+    Between {
+        expr: Box<Expr>,
+        low: Box<Expr>,
+        high: Box<Expr>,
+        negated: bool,
+    },
 }
 
 impl Display for Expr {
@@ -196,6 +212,18 @@ impl Display for Expr {
                     write!(f, "{expr} NOT IN ({list:?})")
                 } else {
                     write!(f, "{expr} IN ({list:?})")
+                }
+            }
+            Expr::Between {
+                expr,
+                low,
+                high,
+                negated,
+            } => {
+                if *negated {
+                    write!(f, "{expr} NOT BETWEEN {low} AND {high}")
+                } else {
+                    write!(f, "{expr} BETWEEN {low} AND {high}")
                 }
             }
         }
@@ -351,9 +379,6 @@ impl Parser {
     ///
     /// Returns [`ParserError`] if `IS` is present but `NULL` is missing after optional `NOT`.
     fn apply_postfix_suffixes(&mut self, left: Expr) -> Result<Expr, ParserError> {
-        // We check for IS [NOT] NULL here, rather than in the precedence loop,
-        // because IS NULL is a postfix operator that comes after the expression
-        // it tests (`email IS NULL`).
         if self.if_peek_then_consume(TokenType::Is)? {
             let negated = self.if_peek_then_consume(TokenType::Not)?;
             self.expect(TokenType::Null)?;
@@ -363,21 +388,8 @@ impl Parser {
             });
         }
 
-        // Handle the `IN` and `NOT IN` postfix operators, e.g.:
-        //   email IN ('a', 'b')
-        //   age NOT IN (1, 2, 3)
-        //
-        // We first check for the sequence `NOT IN` as a unit,
-        // then for the bare `IN`. Only one is accepted per SQL rules.
-        //
-        // - `not_in` is true if both NOT and IN are present.
-        // - If just IN is present, negated will be false.
-        //
-        // The following parenthesized list becomes the expression list.
-        let not_in = self.if_peek_then_consume(TokenType::Not)?
-            && self.if_peek_then_consume(TokenType::In)?;
-
-        if not_in || self.if_peek_then_consume(TokenType::In)? {
+        let not_in = self.consume_not_if_followed_by(TokenType::In)?;
+        if self.if_peek_then_consume(TokenType::In)? {
             let list = self.paren_list(Parser::parse_expression)?;
             return Ok(Expr::In {
                 expr: Box::new(left),
@@ -386,7 +398,36 @@ impl Parser {
             });
         }
 
+        let not_between = self.consume_not_if_followed_by(TokenType::Between)?;
+        if self.if_peek_then_consume(TokenType::Between)? {
+            let low = self.parse_atom()?;
+            self.expect(TokenType::And)?;
+            let high = self.parse_atom()?;
+            return Ok(Expr::Between {
+                expr: Box::new(left),
+                low: Box::new(low),
+                high: Box::new(high),
+                negated: not_between,
+            });
+        }
+
         Ok(left)
+    }
+
+    /// Consumes `NOT` only when the next token after it is `after`.
+    ///
+    /// Used for `NOT IN` and `NOT BETWEEN` so prefix `NOT` in [`Self::parse_atom`] does not
+    /// steal the `NOT` from those postfix forms.
+    fn consume_not_if_followed_by(&mut self, after: TokenType) -> Result<bool, ParserError> {
+        if !self.peek_is(TokenType::Not)? {
+            return Ok(false);
+        }
+        self.bump()?;
+        if self.peek_is(after)? {
+            return Ok(true);
+        }
+        self.lexer.backtrack().map_err(ParserError::from)?;
+        Ok(false)
     }
 
     /// Parses one expression atom — the base unit before infix/postfix operators attach.
@@ -1032,5 +1073,76 @@ mod tests {
         };
         assert_eq!(col.qualifier.as_deref(), Some("u"));
         assert_eq!(col.name.as_str(), "id");
+    }
+
+    #[test]
+    fn between_numeric() {
+        let Expr::Between {
+            expr,
+            low,
+            high,
+            negated,
+        } = ok("total BETWEEN 100 AND 500")
+        else {
+            panic!("expected Between");
+        };
+        assert!(!negated);
+        assert_eq!(*expr, Expr::Column("total".into()));
+        assert_eq!(*low, Expr::Literal(Value::Int64(100)));
+        assert_eq!(*high, Expr::Literal(Value::Int64(500)));
+    }
+
+    #[test]
+    fn not_between_numeric() {
+        let Expr::Between { negated, .. } = ok("price NOT BETWEEN 10 AND 50") else {
+            panic!("expected Between");
+        };
+        assert!(negated);
+    }
+
+    #[test]
+    fn between_binds_before_and() {
+        let Expr::BinaryOp { op, lhs, .. } = ok("age BETWEEN 25 AND 40 AND active = true") else {
+            panic!("expected BinaryOp");
+        };
+        assert_eq!(op, BinOp::And);
+        assert!(matches!(*lhs, Expr::Between { negated: false, .. }));
+    }
+
+    #[test]
+    fn between_on_rhs_of_or() {
+        let Expr::BinaryOp { op, rhs, .. } = ok("a = 1 OR x BETWEEN 1 AND 2") else {
+            panic!("expected BinaryOp");
+        };
+        assert_eq!(op, BinOp::Or);
+        assert!(matches!(*rhs, Expr::Between { negated: false, .. }));
+    }
+
+    #[test]
+    fn not_between_on_lhs_of_and() {
+        let Expr::BinaryOp { op, lhs, .. } = ok("x NOT BETWEEN 1 AND 2 AND y = 3") else {
+            panic!("expected BinaryOp");
+        };
+        assert_eq!(op, BinOp::And);
+        assert!(matches!(*lhs, Expr::Between { negated: true, .. }));
+    }
+
+    #[test]
+    fn display_between() {
+        assert_eq!(
+            ok("total BETWEEN 100 AND 500").to_string(),
+            "total BETWEEN 100 AND 500"
+        );
+        assert_eq!(
+            ok("price NOT BETWEEN 10 AND 50").to_string(),
+            "price NOT BETWEEN 10 AND 50"
+        );
+    }
+
+    #[test]
+    fn not_between_does_not_consume_bare_not() {
+        let Expr::UnaryOp { .. } = ok("NOT true") else {
+            panic!("expected UnaryOp");
+        };
     }
 }

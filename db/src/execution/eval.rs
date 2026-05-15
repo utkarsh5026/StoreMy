@@ -108,6 +108,13 @@ pub fn eval_expr(
             negated,
         } => eval_in(expr, tuple, schema, list, *negated),
 
+        Expr::Between {
+            expr,
+            low,
+            high,
+            negated,
+        } => eval_between(expr, tuple, schema, low, high, *negated),
+
         // Aggregates operate over many rows and cannot produce a single value
         // from one tuple. The planner should never route them here.
         Expr::Agg { .. } | Expr::CountStar => Err(ExecutionError::TypeError(
@@ -218,6 +225,36 @@ fn eval_in(
     }
 }
 
+/// Evaluates `expr [NOT] BETWEEN low AND high` for a single row.
+///
+/// Equivalent to `low <= expr AND expr <= high`. Both bounds are inclusive.
+/// Any NULL operand (expr, low, or high) propagates as NULL. Incomparable
+/// types (mismatched, e.g. Int64 vs String) also yield NULL.
+fn eval_between(
+    expr: &Expr,
+    tuple: &Tuple,
+    schema: &TupleSchema,
+    low: &Expr,
+    high: &Expr,
+    negated: bool,
+) -> Result<Value, ExecutionError> {
+    let v = eval_expr(expr, tuple, schema)?;
+    let lo = eval_expr(low, tuple, schema)?;
+    let hi = eval_expr(high, tuple, schema)?;
+
+    if v.is_null() || lo.is_null() || hi.is_null() {
+        return Ok(Value::Null);
+    }
+
+    match (lo.partial_cmp(&v), v.partial_cmp(&hi)) {
+        (Some(lo_ord), Some(hi_ord)) => {
+            let in_range = lo_ord.is_le() && hi_ord.is_le();
+            Ok(Value::Bool(if negated { !in_range } else { in_range }))
+        }
+        _ => Ok(Value::Null),
+    }
+}
+
 /// Converts an `Option<Ordering>` from `PartialOrd::partial_cmp` to a
 /// `Value::Bool` using a predicate on the ordering, or `Value::Null` when
 /// the values are incomparable (e.g. `NaN`, or cross-type comparison).
@@ -287,6 +324,15 @@ mod tests {
         Expr::In {
             expr: Box::new(inner),
             list,
+            negated,
+        }
+    }
+
+    fn between(inner: Expr, low: Expr, high: Expr, negated: bool) -> Expr {
+        Expr::Between {
+            expr: Box::new(inner),
+            low: Box::new(low),
+            high: Box::new(high),
             negated,
         }
     }
@@ -623,5 +669,133 @@ mod tests {
             binop(col("active"), BinOp::Eq, lit(Value::Bool(true))),
         );
         assert_eq!(eval(&expr, &t, &s), Value::Bool(true));
+    }
+
+    #[test]
+    fn between_value_in_range() {
+        let s = schema(&[("age", Type::Int64)]);
+        let t = tuple(vec![Value::Int64(25)]);
+        let e = between(
+            col("age"),
+            lit(Value::Int64(18)),
+            lit(Value::Int64(65)),
+            false,
+        );
+        assert_eq!(eval(&e, &t, &s), Value::Bool(true));
+    }
+
+    #[test]
+    fn between_value_below_range() {
+        let s = schema(&[("age", Type::Int64)]);
+        let t = tuple(vec![Value::Int64(10)]);
+        let e = between(
+            col("age"),
+            lit(Value::Int64(18)),
+            lit(Value::Int64(65)),
+            false,
+        );
+        assert_eq!(eval(&e, &t, &s), Value::Bool(false));
+    }
+
+    #[test]
+    fn between_value_above_range() {
+        let s = schema(&[("age", Type::Int64)]);
+        let t = tuple(vec![Value::Int64(100)]);
+        let e = between(
+            col("age"),
+            lit(Value::Int64(18)),
+            lit(Value::Int64(65)),
+            false,
+        );
+        assert_eq!(eval(&e, &t, &s), Value::Bool(false));
+    }
+
+    #[test]
+    fn between_lower_bound_inclusive() {
+        let s = schema(&[("x", Type::Int64)]);
+        let t = tuple(vec![Value::Int64(10)]);
+        let e = between(
+            col("x"),
+            lit(Value::Int64(10)),
+            lit(Value::Int64(20)),
+            false,
+        );
+        assert_eq!(eval(&e, &t, &s), Value::Bool(true));
+    }
+
+    #[test]
+    fn between_upper_bound_inclusive() {
+        let s = schema(&[("x", Type::Int64)]);
+        let t = tuple(vec![Value::Int64(20)]);
+        let e = between(
+            col("x"),
+            lit(Value::Int64(10)),
+            lit(Value::Int64(20)),
+            false,
+        );
+        assert_eq!(eval(&e, &t, &s), Value::Bool(true));
+    }
+
+    #[test]
+    fn not_between_value_in_range() {
+        let s = schema(&[("age", Type::Int64)]);
+        let t = tuple(vec![Value::Int64(25)]);
+        let e = between(
+            col("age"),
+            lit(Value::Int64(18)),
+            lit(Value::Int64(65)),
+            true,
+        );
+        assert_eq!(eval(&e, &t, &s), Value::Bool(false));
+    }
+
+    #[test]
+    fn not_between_value_outside_range() {
+        let s = schema(&[("age", Type::Int64)]);
+        let t = tuple(vec![Value::Int64(5)]);
+        let e = between(
+            col("age"),
+            lit(Value::Int64(18)),
+            lit(Value::Int64(65)),
+            true,
+        );
+        assert_eq!(eval(&e, &t, &s), Value::Bool(true));
+    }
+
+    #[test]
+    fn between_null_expr_yields_null() {
+        let s = schema(&[("x", Type::Int64)]);
+        let t = tuple(vec![Value::Null]);
+        let e = between(col("x"), lit(Value::Int64(1)), lit(Value::Int64(10)), false);
+        assert_eq!(eval(&e, &t, &s), Value::Null);
+    }
+
+    #[test]
+    fn between_null_low_yields_null() {
+        let s = schema(&[("x", Type::Int64)]);
+        let t = tuple(vec![Value::Int64(5)]);
+        let e = between(col("x"), lit(Value::Null), lit(Value::Int64(10)), false);
+        assert_eq!(eval(&e, &t, &s), Value::Null);
+    }
+
+    #[test]
+    fn between_null_high_yields_null() {
+        let s = schema(&[("x", Type::Int64)]);
+        let t = tuple(vec![Value::Int64(5)]);
+        let e = between(col("x"), lit(Value::Int64(1)), lit(Value::Null), false);
+        assert_eq!(eval(&e, &t, &s), Value::Null);
+    }
+
+    #[test]
+    fn between_string_values() {
+        let s = schema(&[("name", Type::String)]);
+        let t = tuple(vec![Value::String("m".into())]);
+        let e = between(
+            col("name"),
+            lit(Value::String("a".into())),
+            lit(Value::String("z".into())),
+            false,
+        );
+        assert_eq!(eval(&e, &t, &s), Value::Bool(true));
     }
 }

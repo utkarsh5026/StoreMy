@@ -254,15 +254,7 @@ impl Parser {
     /// Returns [`ParserError::LexError`] if the lexer encounters an invalid
     /// token sequence while peeking.
     fn peek_is(&mut self, kind: TokenType) -> Result<bool, ParserError> {
-        match self.lexer.next() {
-            None => Ok(false),
-            Some(Err(e)) => Err(ParserError::from(e)),
-            Some(Ok(tok)) => {
-                let matches = tok.is(kind);
-                self.lexer.backtrack().map_err(ParserError::from)?;
-                Ok(matches)
-            }
-        }
+        Ok(self.lexer.peek_next_kind().map_err(ParserError::from)? == Some(kind))
     }
 
     /// Checks whether the next token has the given `kind` and consumes it if it does.

@@ -421,6 +421,7 @@ impl BoundSelect {
             Expr::Agg { func, arg } => Self::bind_agg(scope, &func, *arg, alias.as_ref())?,
             Expr::BinaryOp { .. }
             | Expr::In { .. }
+            | Expr::Between { .. }
             | Expr::UnaryOp { .. }
             | Expr::IsNull { .. } => {
                 return Err(EngineError::Unsupported(
