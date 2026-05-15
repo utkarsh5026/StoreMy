@@ -16,6 +16,7 @@ use std::{
 };
 
 use parking_lot::RwLock;
+use tracing;
 
 use crate::{
     FileId, PAGE_SIZE, TransactionId, Value,
@@ -130,6 +131,8 @@ impl Catalog {
         wal: &Arc<Wal>,
         data_dir: &Path,
     ) -> Result<Self, CatalogError> {
+        tracing::debug!(data_dir = %data_dir.display(), "initializing catalog");
+
         let mut tables = HashMap::new();
         let mut system = SystemHeaps::default();
 
@@ -155,6 +158,8 @@ impl Catalog {
             system.insert(*table, file);
         }
 
+        tracing::debug!("all system tables verified");
+
         let catalog = Self {
             wal: wal.clone(),
             buffer_pool: buffer_pool.clone(),
@@ -168,6 +173,7 @@ impl Catalog {
             system,
         };
         catalog.replay_user_objects()?;
+        tracing::debug!("catalog ready");
         Ok(catalog)
     }
 
@@ -213,6 +219,14 @@ impl Catalog {
             p.max(1)
         };
 
+        tracing::debug!(
+            path = %file_path.display(),
+            file_id = ?file_id,
+            fresh,
+            pages,
+            "heap file opened"
+        );
+
         Ok(HeapFile::new(
             file_id,
             schema,
@@ -257,6 +271,14 @@ impl Catalog {
                 .map_err(|_| CatalogError::Io(std::io::Error::other("failed to register file")))?;
         }
 
+        tracing::debug!(
+            table = %table_name,
+            path = %file_path.display(),
+            file_id = ?file_id,
+            pages,
+            "existing heap opened"
+        );
+
         Ok(HeapFile::new(
             file_id,
             schema,
@@ -278,10 +300,17 @@ impl Catalog {
             .scan(TransactionId::new(1))
             .map_err(|e| CatalogError::corruption(table.table_name(), e.to_string()))?;
 
+        let mut count = 0usize;
         for (_, tuple) in scan {
             table.validate_row(&tuple)?;
+            count += 1;
         }
 
+        tracing::trace!(
+            table = table.table_name(),
+            tuples = count,
+            "system heap verified"
+        );
         Ok(())
     }
 
