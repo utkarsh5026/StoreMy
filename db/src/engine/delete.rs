@@ -59,6 +59,7 @@ impl Engine<'_> {
         } = stmt;
 
         let table_info = catalog.get_table_info(txn, table_name.as_str())?;
+        tracing::debug!(table = %table_name, "exec delete");
         let file_id = table_info.file_id;
         let table_scope = SingleTableScope::from_info(table_info, alias);
 
@@ -67,6 +68,7 @@ impl Engine<'_> {
             .transpose()?;
 
         let deleted = Self::delete_rows_and_indexes(catalog, txn, file_id, predicate.as_ref())?;
+        tracing::debug!(table = %table_name, rows_deleted = deleted, "delete complete");
         Ok(StatementResult::deleted(
             table_name.as_str().to_string(),
             deleted,

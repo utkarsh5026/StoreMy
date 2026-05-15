@@ -99,6 +99,7 @@ impl Engine<'_> {
         } = stmt;
 
         let info = catalog.get_table_info(txn, table_name.as_str())?;
+        tracing::debug!(table = %table_name, "exec update");
         let ai_col = info.auto_increment_column;
         let check_constraints = info.check_constraints.clone();
         let scope = SingleTableScope::from_info(info, alias);
@@ -125,6 +126,7 @@ impl Engine<'_> {
             Self::prepare_fk_checks_for_update(catalog, txn, scope.file_id, &assignment_cols)?;
 
         let txn_id = txn.transaction_id();
+        let rows_matched = rows.len();
         let mut updated = 0;
         for (rid, old_tuple) in rows {
             let new_tuple = Self::build_updated_tuple(
@@ -153,6 +155,12 @@ impl Engine<'_> {
             updated += 1;
         }
 
+        tracing::debug!(
+            table = %scope.name,
+            rows_matched,
+            rows_updated = updated,
+            "update complete"
+        );
         Ok(StatementResult::updated(scope.name.as_str(), updated))
     }
 

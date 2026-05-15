@@ -312,6 +312,9 @@ impl BoundSelect {
             return Err(EngineError::Unsupported("multi-table FROM".to_string()));
         }
 
+        let root = stmt.from.first().unwrap();
+        tracing::debug!(table = %root.table.name, joins = root.joins.len(), "binding SELECT");
+
         let (from, scope) = Self::resolve_from(stmt.from.first().unwrap().clone(), catalog, txn)?;
         let select_list = Self::resolve_select_list(&scope, stmt.columns)?;
         let order_by = Self::resolve_order_by(&scope, stmt.order_by)?;
@@ -638,13 +641,18 @@ impl Engine<'_> {
         heaps: &'a [(FileId, Arc<HeapFile>)],
         txn: TransactionId,
     ) -> Result<PlanNode<'a>, EngineError> {
+        let aggregating = !bound.group_by.is_empty() || Self::has_aggregate(&bound.select_list);
+        tracing::debug!(
+            root_table = %bound.from.root_table_name(),
+            aggregating,
+            order_by = bound.order_by.len(),
+            "building plan"
+        );
         let mut node = Self::build_from(&bound.from, heaps, txn)?;
 
         if let Some(pred) = &bound.filter {
             node = PlanNode::filter(node, pred.clone());
         }
-
-        let aggregating = !bound.group_by.is_empty() || Self::has_aggregate(&bound.select_list);
 
         // ORDER BY and HAVING are still bound against the FROM scope, so their
         // column ids would be wrong above an Aggregate. Reject until the binder
@@ -760,8 +768,10 @@ impl Engine<'_> {
         left_width: usize,
     ) -> PlanNode<'a> {
         if let Some(pred) = Self::try_extract_equi(on, left_width) {
+            tracing::debug!(algorithm = "hash_join", "join selected");
             PlanNode::hash_join(left, right, pred)
         } else {
+            tracing::debug!(algorithm = "nested_loop_join", "join selected");
             PlanNode::nested_loop_join(left, right, on.clone())
         }
     }
@@ -868,6 +878,7 @@ impl Engine<'_> {
         select_list: &BoundSelectList,
         group_by_cols: &[ColumnId],
     ) -> Result<PlanNode<'a>, EngineError> {
+        tracing::debug!(group_by_cols = group_by_cols.len(), "building aggregate");
         let projections = match select_list {
             BoundSelectList::Items(items) => items,
             BoundSelectList::Star => {

@@ -78,6 +78,13 @@ impl Engine<'_> {
 
         let schema = TupleSchema::from(columns.as_slice());
 
+        tracing::debug!(
+            table = %table_name,
+            columns = columns.len(),
+            constraints = table_constraints.len(),
+            "create table"
+        );
+
         Self::resolve_column_ids(
             &schema,
             table_name.as_str(),

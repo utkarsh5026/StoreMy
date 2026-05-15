@@ -63,6 +63,21 @@ impl Engine<'_> {
             file_id, schema, ..
         } = table_info;
 
+        let operation = match &stmt.action {
+            AlterAction::RenameTable { .. } => "rename_table",
+            AlterAction::RenameColumn { .. } => "rename_column",
+            AlterAction::AddColumn(_) => "add_column",
+            AlterAction::DropColumn { .. } => "drop_column",
+            AlterAction::SetDefault { .. } => "set_default",
+            AlterAction::DropDefault { .. } => "drop_default",
+            AlterAction::DropNotNull { .. } => "drop_not_null",
+            AlterAction::AddPrimaryKey { .. } => "add_primary_key",
+            AlterAction::DropPrimaryKey => "drop_primary_key",
+            AlterAction::DropConstraint { .. } => "drop_constraint",
+            AlterAction::AddConstraint { .. } => "add_constraint",
+        };
+        tracing::debug!(table = %table_name, operation, "alter table");
+
         match stmt.action {
             // ALTER TABLE users RENAME TO accounts;
             AlterAction::RenameTable { to } => {

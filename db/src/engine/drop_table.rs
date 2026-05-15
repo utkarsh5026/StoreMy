@@ -35,6 +35,7 @@ impl Engine<'_> {
         statement: DropStatement,
     ) -> Result<StatementResult, EngineError> {
         let table_name = statement.table_name.into_inner();
+        tracing::debug!(table = %table_name, "drop table");
         let result = match Self::check_table(catalog, txn, &table_name, statement.if_exists)? {
             Some(TableInfo { name, .. }) => {
                 catalog.drop_table(txn, &name)?;

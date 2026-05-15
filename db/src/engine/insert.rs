@@ -62,6 +62,7 @@ impl Engine<'_> {
         stmt: InsertStatement,
     ) -> Result<StatementResult, EngineError> {
         let table = catalog.get_table_info(txn, &stmt.table_name)?;
+        tracing::debug!(table = %table.name, "exec insert");
 
         if let Some(ai_col_id) = table.auto_increment_column {
             Self::reject_auto_increment_in_insert(
@@ -130,6 +131,7 @@ impl Engine<'_> {
         }
 
         let count = Self::insert_rows_and_indexes(catalog, txn, table.file_id, tuples)?;
+        tracing::debug!(table = %table.name, rows = count, "rows inserted");
         Ok(StatementResult::inserted(table.name, count))
     }
 
@@ -187,6 +189,11 @@ impl Engine<'_> {
         // We collect the unique index checks first to avoid making multiple catalog round-trips.
         let unique_checks = Self::collect_unique_index_checks(&indexes, catalog, txn, file_id)?;
 
+        tracing::debug!(
+            indexes = indexes.len(),
+            fk_checks = fk_checks.len(),
+            "checking constraints before insert"
+        );
         let mut count = 0;
         for tuple in tuples {
             Self::check_fk_constraints(&fk_checks, &tuple, tid)?;

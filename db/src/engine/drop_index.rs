@@ -38,6 +38,7 @@ impl Engine<'_> {
         stmt: DropIndexStatement,
     ) -> Result<StatementResult, EngineError> {
         let index_name = stmt.index_name.into_inner();
+        tracing::debug!(index = %index_name, "drop index");
 
         if let Some(index) = catalog.get_index_by_name(&index_name) {
             let Some(table_name) = stmt.table_name.as_ref() else {

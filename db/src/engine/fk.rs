@@ -172,6 +172,12 @@ impl Engine<'_> {
         info.foreign_keys
             .iter()
             .map(|fk| {
+                tracing::debug!(
+                    constraint = %fk.name,
+                    ref_table_id = ?fk.ref_table_id,
+                    local_cols = fk.local_columns.len(),
+                    "preparing FK outbound check"
+                );
                 let ref_table_id = fk.ref_table_id;
                 let ref_heap = catalog.get_table_heap(ref_table_id)?;
                 let ref_indexes = catalog.indexes_for(ref_table_id);
@@ -256,7 +262,11 @@ impl Engine<'_> {
 
         if let Some((index, local_cols)) = &fk.index_lookup {
             let key = Self::project_key(tuple, local_cols)?;
-            return Ok(!index.access.search(tid, &key)?.is_empty());
+            let found = !index.access.search(tid, &key)?.is_empty();
+            if !found {
+                tracing::warn!(constraint = %fk.name, "FK parent row not found (index lookup)");
+            }
+            return Ok(found);
         }
 
         let mut scan = fk.ref_heap.scan(tid)?;
@@ -268,6 +278,7 @@ impl Engine<'_> {
                 return Ok(true);
             }
         }
+        tracing::warn!(constraint = %fk.name, "FK parent row not found (heap scan)");
         Ok(false)
     }
 

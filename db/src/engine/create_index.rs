@@ -51,6 +51,12 @@ impl Engine<'_> {
             .expect("if_exists=false should never yield None");
 
         let index_name = stmt.index_name.into_inner();
+        tracing::debug!(
+            index = %index_name,
+            table = %table.name,
+            key_columns = stmt.columns.len(),
+            "create index"
+        );
 
         if catalog.get_index_by_name(&index_name).is_some() {
             if stmt.if_not_exists {
