@@ -185,6 +185,17 @@ pub enum Expr {
         high: Box<Expr>,
         negated: bool,
     },
+
+    /// `CASE [operand] WHEN … THEN … [ELSE …] END`
+    ///
+    /// Searched form: `operand` is `None`; each `condition` is a boolean expression.
+    /// Simple form:   `operand` is `Some(expr)`; each `condition` is a value
+    ///                compared to `operand` with `=`.
+    Case {
+        branches: Vec<CaseBranch>,
+        else_result: Option<Box<Expr>>,
+        operand: Option<Box<Expr>>,
+    },
 }
 
 impl Display for Expr {
@@ -226,7 +237,41 @@ impl Display for Expr {
                     write!(f, "{expr} BETWEEN {low} AND {high}")
                 }
             }
+            Expr::Case {
+                branches,
+                else_result,
+                operand,
+            } => {
+                write!(f, "CASE")?;
+                if let Some(operand) = operand {
+                    write!(f, " {operand}")?;
+                }
+                for branch in branches {
+                    write!(f, " {branch}")?;
+                }
+                if let Some(else_result) = else_result {
+                    write!(f, " ELSE {else_result}")?;
+                }
+                write!(f, " END")
+            }
         }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct CaseBranch {
+    pub when: Expr,
+    pub then: Expr,
+}
+
+impl Display for CaseBranch {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "WHEN {when} THEN {then}",
+            when = self.when,
+            then = self.then
+        )
     }
 }
 
@@ -430,6 +475,48 @@ impl Parser {
         Ok(false)
     }
 
+    /// Parses `CASE [operand] WHEN … THEN … { WHEN … THEN … } [ELSE …] END`.
+    ///
+    /// Called after the `CASE` token has already been consumed by [`Self::parse_atom`].
+    ///
+    /// - If the next token is `WHEN`, it is a *searched* CASE (`operand = None`); each `WHEN`
+    ///   condition is a boolean expression.
+    /// - Otherwise the next expression becomes the *simple* operand; each `WHEN` value is compared
+    ///   to it with `=`.
+    ///
+    /// Branches are collected in a `while WHEN` loop — no parentheses or commas,
+    /// matching the SQL grammar. Parsing stops when neither `WHEN` nor `ELSE` is next,
+    /// and `END` is required to close the expression.
+    fn parse_case(&mut self) -> Result<Expr, ParserError> {
+        let operand = if self.peek_is(TokenType::When)? {
+            None
+        } else {
+            Some(self.parse_expression()?)
+        };
+
+        let mut branches = Vec::new();
+        while self.if_peek_then_consume(TokenType::When)? {
+            let when = self.parse_expression()?;
+            self.expect(TokenType::Then)?;
+            let then = self.parse_expression()?;
+            branches.push(CaseBranch { when, then });
+        }
+
+        let else_result = if self.if_peek_then_consume(TokenType::Else)? {
+            Some(self.parse_expression()?)
+        } else {
+            None
+        };
+
+        self.expect(TokenType::End)?;
+
+        Ok(Expr::Case {
+            operand: operand.map(Box::new),
+            branches,
+            else_result: else_result.map(Box::new),
+        })
+    }
+
     /// Parses one expression atom — the base unit before infix/postfix operators attach.
     ///
     /// An atom is either a prefix form (`NOT …`, `( … )`) or a leaf (literal,
@@ -449,6 +536,10 @@ impl Parser {
                 op: UnOp::Not,
                 operand: Box::new(operand),
             });
+        }
+
+        if self.if_peek_then_consume(TokenType::Case)? {
+            return self.parse_case();
         }
 
         if self.if_peek_then_consume(TokenType::Lparen)? {
@@ -1144,5 +1235,107 @@ mod tests {
         let Expr::UnaryOp { .. } = ok("NOT true") else {
             panic!("expected UnaryOp");
         };
+    }
+
+    // ── CASE WHEN ────────────────────────────────────────────────────────────
+
+    #[test]
+    fn case_searched_single_branch() {
+        // CASE WHEN x = 1 THEN 2 END
+        let Expr::Case {
+            operand,
+            branches,
+            else_result,
+        } = ok("CASE WHEN x = 1 THEN 2 END")
+        else {
+            panic!("expected Case");
+        };
+        assert!(operand.is_none());
+        assert!(else_result.is_none());
+        assert_eq!(branches.len(), 1);
+        assert!(matches!(branches[0].when, Expr::BinaryOp {
+            op: BinOp::Eq,
+            ..
+        }));
+        assert_eq!(branches[0].then, Expr::Literal(Value::Int64(2)));
+    }
+
+    #[test]
+    fn case_searched_multiple_branches() {
+        // CASE WHEN x = 1 THEN 10 WHEN x = 2 THEN 20 END
+        let Expr::Case {
+            operand,
+            branches,
+            else_result,
+        } = ok("CASE WHEN x = 1 THEN 10 WHEN x = 2 THEN 20 END")
+        else {
+            panic!("expected Case");
+        };
+        assert!(operand.is_none());
+        assert!(else_result.is_none());
+        assert_eq!(branches.len(), 2);
+    }
+
+    #[test]
+    fn case_searched_with_else() {
+        // CASE WHEN x = 1 THEN 'a' ELSE 'b' END
+        let Expr::Case {
+            operand,
+            branches,
+            else_result,
+        } = ok("CASE WHEN x = 1 THEN 'a' ELSE 'b' END")
+        else {
+            panic!("expected Case");
+        };
+        assert!(operand.is_none());
+        assert_eq!(branches.len(), 1);
+        assert_eq!(
+            else_result.as_deref(),
+            Some(&Expr::Literal(Value::String("b".into())))
+        );
+    }
+
+    #[test]
+    fn case_simple_single_branch() {
+        // CASE status WHEN 1 THEN 'active' END
+        let Expr::Case {
+            operand,
+            branches,
+            else_result,
+        } = ok("CASE status WHEN 1 THEN 'active' END")
+        else {
+            panic!("expected Case");
+        };
+        assert_eq!(operand.as_deref(), Some(&Expr::Column("status".into())));
+        assert_eq!(branches.len(), 1);
+        assert!(else_result.is_none());
+    }
+
+    #[test]
+    fn case_simple_with_else() {
+        // CASE status WHEN 1 THEN 'a' WHEN 2 THEN 'b' ELSE 'other' END
+        let Expr::Case {
+            operand,
+            branches,
+            else_result,
+        } = ok("CASE status WHEN 1 THEN 'a' WHEN 2 THEN 'b' ELSE 'other' END")
+        else {
+            panic!("expected Case");
+        };
+        assert!(operand.is_some());
+        assert_eq!(branches.len(), 2);
+        assert!(else_result.is_some());
+    }
+
+    #[test]
+    fn display_case_searched() {
+        let e = ok("CASE WHEN x = 1 THEN 2 END");
+        assert_eq!(e.to_string(), "CASE WHEN (x = 1) THEN 2 END");
+    }
+
+    #[test]
+    fn display_case_simple_with_else() {
+        let e = ok("CASE x WHEN 1 THEN 'a' ELSE 'b' END");
+        assert_eq!(e.to_string(), "CASE x WHEN 1 THEN 'a' ELSE 'b' END");
     }
 }

@@ -67,7 +67,7 @@
 
 use std::fmt::Display;
 
-pub use crate::parser::parsers::expr::{BinOp, Expr, UnOp};
+pub use crate::parser::parsers::expr::{BinOp, CaseBranch, Expr, UnOp};
 use crate::{
     Type,
     index::IndexKind,

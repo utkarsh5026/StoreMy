@@ -422,6 +422,7 @@ impl BoundSelect {
             Expr::BinaryOp { .. }
             | Expr::In { .. }
             | Expr::Between { .. }
+            | Expr::Case { .. }
             | Expr::UnaryOp { .. }
             | Expr::IsNull { .. } => {
                 return Err(EngineError::Unsupported(

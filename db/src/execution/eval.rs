@@ -43,7 +43,7 @@ use std::cmp::Ordering;
 use super::ExecutionError;
 use crate::{
     Value,
-    parser::statements::{BinOp, Expr, UnOp},
+    parser::statements::{BinOp, CaseBranch, Expr, UnOp},
     tuple::{Tuple, TupleSchema},
 };
 
@@ -114,6 +114,18 @@ pub fn eval_expr(
             high,
             negated,
         } => eval_between(expr, tuple, schema, low, high, *negated),
+
+        Expr::Case {
+            operand,
+            branches,
+            else_result,
+        } => eval_case(
+            operand.as_deref(),
+            tuple,
+            schema,
+            branches,
+            else_result.as_deref(),
+        ),
 
         // Aggregates operate over many rows and cannot produce a single value
         // from one tuple. The planner should never route them here.
@@ -227,9 +239,16 @@ fn eval_in(
 
 /// Evaluates `expr [NOT] BETWEEN low AND high` for a single row.
 ///
-/// Equivalent to `low <= expr AND expr <= high`. Both bounds are inclusive.
-/// Any NULL operand (expr, low, or high) propagates as NULL. Incomparable
-/// types (mismatched, e.g. Int64 vs String) also yield NULL.
+/// Semantically equivalent to `(low <= expr) AND (expr <= high)` with inclusive
+/// bounds on both ends. `NOT BETWEEN` negates the boolean result. Called from
+/// [`Expr::Between`] in [`eval_expr`].
+///
+/// # NULL and incomparable values
+///
+/// If `expr`, `low`, or `high` evaluates to [`Value::Null`], the result is
+/// [`Value::Null`] (unknown), not `false`. If any pair is incomparable under
+/// [`PartialOrd`] (cross-type, e.g. `Int64` vs `String`), the result is also
+/// [`Value::Null`], consistent with comparison operators via [`cmp_to_bool`].
 fn eval_between(
     expr: &Expr,
     tuple: &Tuple,
@@ -252,6 +271,58 @@ fn eval_between(
             Ok(Value::Bool(if negated { !in_range } else { in_range }))
         }
         _ => Ok(Value::Null),
+    }
+}
+
+/// Evaluates `CASE … END` for a single row.
+///
+/// Branches are tried in source order; the first match wins and its `THEN`
+/// expression is evaluated and returned. Called from [`Expr::Case`] in
+/// [`eval_expr`].
+///
+/// # Searched vs simple form
+///
+/// - **Searched** (`operand` is `None`): `CASE WHEN cond1 THEN … WHEN cond2 THEN …`. Each `when`
+///   must evaluate to [`Value::Bool(true)`]; `false`, [`Value::Null`], and non-boolean values do
+///   not match.
+/// - **Simple** (`operand` is `Some(expr)`): `CASE expr WHEN val1 THEN …`. Each `when` is compared
+///   to the evaluated operand with `==`. A branch matches only when both sides are non-null and
+///   equal; a [`Value::Null`] operand never matches (including `WHEN NULL`), and a null `when`
+///   never matches a non-null operand.
+///
+/// # No match
+///
+/// If no branch matches, evaluates `else_result` when present; otherwise returns
+/// [`Value::Null`].
+fn eval_case(
+    operand: Option<&Expr>,
+    tuple: &Tuple,
+    schema: &TupleSchema,
+    branches: &[CaseBranch],
+    else_result: Option<&Expr>,
+) -> Result<Value, ExecutionError> {
+    let base = operand.map(|e| eval_expr(e, tuple, schema)).transpose()?;
+
+    for CaseBranch { when, then } in branches {
+        let condition_holds = match &base {
+            None => {
+                let v = eval_expr(when, tuple, schema)?;
+                matches!(v, Value::Bool(true))
+            }
+            Some(base_val) => {
+                let v = eval_expr(when, tuple, schema)?;
+                !base_val.is_null() && !v.is_null() && *base_val == v
+            }
+        };
+
+        if condition_holds {
+            return eval_expr(then, tuple, schema);
+        }
+    }
+
+    match else_result {
+        Some(e) => eval_expr(e, tuple, schema),
+        None => Ok(Value::Null),
     }
 }
 
@@ -279,7 +350,7 @@ mod tests {
     use super::*;
     use crate::{
         Type, Value,
-        parser::statements::{BinOp, Expr, UnOp},
+        parser::statements::{BinOp, CaseBranch, Expr, UnOp},
         primitives::NonEmptyString,
         tuple::{Field, Tuple, TupleSchema},
     };
@@ -325,6 +396,17 @@ mod tests {
             expr: Box::new(inner),
             list,
             negated,
+        }
+    }
+
+    fn case(operand: Option<Expr>, branches: Vec<(Expr, Expr)>, else_result: Option<Expr>) -> Expr {
+        Expr::Case {
+            operand: operand.map(Box::new),
+            branches: branches
+                .into_iter()
+                .map(|(when, then)| CaseBranch { when, then })
+                .collect(),
+            else_result: else_result.map(Box::new),
         }
     }
 
@@ -797,5 +879,134 @@ mod tests {
             false,
         );
         assert_eq!(eval(&e, &t, &s), Value::Bool(true));
+    }
+
+    // ── CASE WHEN ────────────────────────────────────────────────────────────
+
+    #[test]
+    fn case_searched_first_branch_matches() {
+        // CASE WHEN x = 1 THEN 10 WHEN x = 2 THEN 20 END  — x is 1
+        let s = schema(&[("x", Type::Int64)]);
+        let t = tuple(vec![Value::Int64(1)]);
+        let e = case(
+            None,
+            vec![
+                (
+                    binop(col("x"), BinOp::Eq, lit(Value::Int64(1))),
+                    lit(Value::Int64(10)),
+                ),
+                (
+                    binop(col("x"), BinOp::Eq, lit(Value::Int64(2))),
+                    lit(Value::Int64(20)),
+                ),
+            ],
+            None,
+        );
+        assert_eq!(eval(&e, &t, &s), Value::Int64(10));
+    }
+
+    #[test]
+    fn case_searched_second_branch_matches() {
+        let s = schema(&[("x", Type::Int64)]);
+        let t = tuple(vec![Value::Int64(2)]);
+        let e = case(
+            None,
+            vec![
+                (
+                    binop(col("x"), BinOp::Eq, lit(Value::Int64(1))),
+                    lit(Value::Int64(10)),
+                ),
+                (
+                    binop(col("x"), BinOp::Eq, lit(Value::Int64(2))),
+                    lit(Value::Int64(20)),
+                ),
+            ],
+            None,
+        );
+        assert_eq!(eval(&e, &t, &s), Value::Int64(20));
+    }
+
+    #[test]
+    fn case_searched_no_match_no_else_yields_null() {
+        let s = schema(&[("x", Type::Int64)]);
+        let t = tuple(vec![Value::Int64(99)]);
+        let e = case(
+            None,
+            vec![(
+                binop(col("x"), BinOp::Eq, lit(Value::Int64(1))),
+                lit(Value::Int64(10)),
+            )],
+            None,
+        );
+        assert_eq!(eval(&e, &t, &s), Value::Null);
+    }
+
+    #[test]
+    fn case_searched_no_match_returns_else() {
+        let s = schema(&[("x", Type::Int64)]);
+        let t = tuple(vec![Value::Int64(99)]);
+        let e = case(
+            None,
+            vec![(
+                binop(col("x"), BinOp::Eq, lit(Value::Int64(1))),
+                lit(Value::Int64(10)),
+            )],
+            Some(lit(Value::Int64(0))),
+        );
+        assert_eq!(eval(&e, &t, &s), Value::Int64(0));
+    }
+
+    #[test]
+    fn case_simple_operand_matches_first_branch() {
+        // CASE status WHEN 1 THEN 'active' WHEN 2 THEN 'inactive' END  — status is 1
+        let s = schema(&[("status", Type::Int64)]);
+        let t = tuple(vec![Value::Int64(1)]);
+        let e = case(
+            Some(col("status")),
+            vec![
+                (lit(Value::Int64(1)), lit(Value::String("active".into()))),
+                (lit(Value::Int64(2)), lit(Value::String("inactive".into()))),
+            ],
+            None,
+        );
+        assert_eq!(eval(&e, &t, &s), Value::String("active".into()));
+    }
+
+    #[test]
+    fn case_simple_no_match_returns_else() {
+        let s = schema(&[("status", Type::Int64)]);
+        let t = tuple(vec![Value::Int64(99)]);
+        let e = case(
+            Some(col("status")),
+            vec![(lit(Value::Int64(1)), lit(Value::String("active".into())))],
+            Some(lit(Value::String("unknown".into()))),
+        );
+        assert_eq!(eval(&e, &t, &s), Value::String("unknown".into()));
+    }
+
+    #[test]
+    fn case_simple_null_operand_skips_all_branches() {
+        // NULL operand never equals a non-null WHEN value — falls through to ELSE/NULL
+        let s = schema(&[("x", Type::Int64)]);
+        let t = tuple(vec![Value::Null]);
+        let e = case(
+            Some(col("x")),
+            vec![(lit(Value::Int64(1)), lit(Value::Int64(10)))],
+            Some(lit(Value::Int64(0))),
+        );
+        assert_eq!(eval(&e, &t, &s), Value::Int64(0));
+    }
+
+    #[test]
+    fn case_simple_null_when_does_not_match() {
+        // A NULL in the WHEN list should not match even a NULL operand
+        let s = schema(&[("x", Type::Int64)]);
+        let t = tuple(vec![Value::Null]);
+        let e = case(
+            Some(col("x")),
+            vec![(lit(Value::Null), lit(Value::Int64(10)))],
+            Some(lit(Value::Int64(0))),
+        );
+        assert_eq!(eval(&e, &t, &s), Value::Int64(0));
     }
 }
