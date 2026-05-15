@@ -15,6 +15,10 @@
 //! - **Binary operators** — comparisons (`=`, `<>`, `<`, `<=`, `>`, `>=`) and logical connectives
 //!   (`AND`, `OR`) evaluated over recursively evaluated operands.
 //! - **Unary `NOT`** — logical negation of a `Bool` operand.
+//! - **`IS NULL` / `IS NOT NULL`** — always yields a definite [`Value::Bool`]; never propagates
+//!   `NULL` from the tested expression.
+//! - **`IN` / `NOT IN`** — membership over a parenthesized list; uses SQL three-valued logic (a
+//!   NULL needle or NULL in the list can yield [`Value::Null`]).
 //!
 //! # What it does NOT handle
 //!
@@ -98,9 +102,15 @@ pub fn eval_expr(
             }))
         }
 
+        Expr::In {
+            expr,
+            list,
+            negated,
+        } => eval_in(expr, tuple, schema, list, *negated),
+
         // Aggregates operate over many rows and cannot produce a single value
         // from one tuple. The planner should never route them here.
-        Expr::Agg { .. } | Expr::CountStar | Expr::In { .. } => Err(ExecutionError::TypeError(
+        Expr::Agg { .. } | Expr::CountStar => Err(ExecutionError::TypeError(
             "aggregate expressions cannot be evaluated as scalar expressions".to_string(),
         )),
     }
@@ -153,6 +163,58 @@ fn eval_unary(op: UnOp, v: &Value) -> Result<Value, ExecutionError> {
             let b = as_bool(v, "NOT")?;
             Ok(Value::Bool(!b))
         }
+    }
+}
+
+/// Evaluates `expr [NOT] IN (list…)` for a single row.
+///
+/// SQL treats `expr IN (v1, v2, …)` as `expr = v1 OR expr = v2 OR …` with the same
+/// `NULL` rules as `=`. Called from [`Expr::In`] in [`eval_expr`].
+///
+/// # NULL semantics
+///
+/// Unlike [`Expr::IsNull`], `IN` can return [`Value::Null`] (unknown):
+///
+/// - **NULL needle** (`NULL IN (1, 2)`) → `Value::Null`
+/// - **Definite match** on a non-null list element → `Value::Bool(!negated)` (`IN` → true, `NOT IN`
+///   → false)
+/// - **No match, but a NULL in the list** (`2 IN (1, NULL, 3)`) → `Value::Null` — membership cannot
+///   be proved or disproved
+/// - **No match, no NULL in the list** → `Value::Bool(negated)` (`IN` → false, `NOT IN` → true)
+fn eval_in(
+    expr: &Expr,
+    tuple: &Tuple,
+    schema: &TupleSchema,
+    list: &[Expr],
+    negated: bool,
+) -> Result<Value, ExecutionError> {
+    let v = eval_expr(expr, tuple, schema)?;
+    let values = list
+        .iter()
+        .map(|e| eval_expr(e, tuple, schema))
+        .collect::<Result<Vec<Value>, ExecutionError>>()?;
+
+    if v.is_null() {
+        return Ok(Value::Null);
+    }
+
+    // We need to check for NULLs in the list, because NULL in the list makes the result NULL.
+    // otherwise we would return a definite value.
+    let mut saw_null = false;
+    for value in values {
+        if value.is_null() {
+            saw_null = true;
+            continue;
+        }
+        if value == v {
+            return Ok(Value::Bool(!negated));
+        }
+    }
+
+    if saw_null {
+        Ok(Value::Null)
+    } else {
+        Ok(Value::Bool(negated))
     }
 }
 
@@ -217,6 +279,14 @@ mod tests {
     fn is_null(inner: Expr, negated: bool) -> Expr {
         Expr::IsNull {
             expr: Box::new(inner),
+            negated,
+        }
+    }
+
+    fn in_list(inner: Expr, list: Vec<Expr>, negated: bool) -> Expr {
+        Expr::In {
+            expr: Box::new(inner),
+            list,
             negated,
         }
     }
@@ -298,8 +368,6 @@ mod tests {
             Value::Null
         );
     }
-
-    // ── logical connectives ──────────────────────────────────────────────────
 
     #[test]
     fn and_or_over_bools() {
@@ -428,6 +496,120 @@ mod tests {
             Value::Null
         );
         assert_eq!(eval(&is_null(col("x"), false), &t, &s), Value::Bool(true));
+    }
+
+    #[test]
+    fn in_match() {
+        let s = schema(&[("id", Type::Int64)]);
+        let t = tuple(vec![Value::Int64(2)]);
+        let expr = in_list(
+            col("id"),
+            vec![
+                lit(Value::Int64(1)),
+                lit(Value::Int64(2)),
+                lit(Value::Int64(3)),
+            ],
+            false,
+        );
+        assert_eq!(eval(&expr, &t, &s), Value::Bool(true));
+    }
+
+    #[test]
+    fn in_no_match() {
+        let s = schema(&[("id", Type::Int64)]);
+        let t = tuple(vec![Value::Int64(5)]);
+        let expr = in_list(
+            col("id"),
+            vec![
+                lit(Value::Int64(1)),
+                lit(Value::Int64(2)),
+                lit(Value::Int64(3)),
+            ],
+            false,
+        );
+        assert_eq!(eval(&expr, &t, &s), Value::Bool(false));
+    }
+
+    #[test]
+    fn not_in_match() {
+        let s = schema(&[("id", Type::Int64)]);
+        let t = tuple(vec![Value::Int64(1)]);
+        let expr = in_list(
+            col("id"),
+            vec![lit(Value::Int64(1)), lit(Value::Int64(2))],
+            true,
+        );
+        assert_eq!(eval(&expr, &t, &s), Value::Bool(false));
+    }
+
+    #[test]
+    fn not_in_no_match() {
+        let s = schema(&[("id", Type::Int64)]);
+        let t = tuple(vec![Value::Int64(5)]);
+        let expr = in_list(
+            col("id"),
+            vec![lit(Value::Int64(1)), lit(Value::Int64(2))],
+            true,
+        );
+        assert_eq!(eval(&expr, &t, &s), Value::Bool(true));
+    }
+
+    #[test]
+    fn in_null_needle() {
+        let s = schema(&[("id", Type::Int64)]);
+        let t = tuple(vec![Value::Null]);
+        let expr = in_list(
+            col("id"),
+            vec![lit(Value::Int64(1)), lit(Value::Int64(2))],
+            false,
+        );
+        assert_eq!(eval(&expr, &t, &s), Value::Null);
+    }
+
+    #[test]
+    fn in_null_in_list() {
+        let s = schema(&[("id", Type::Int64)]);
+        let t = tuple(vec![Value::Int64(2)]);
+        let expr = in_list(
+            col("id"),
+            vec![lit(Value::Int64(1)), lit(Value::Null), lit(Value::Int64(3))],
+            false,
+        );
+        assert_eq!(eval(&expr, &t, &s), Value::Null);
+    }
+
+    #[test]
+    fn not_in_null_in_list() {
+        let s = schema(&[("id", Type::Int64)]);
+        let t = tuple(vec![Value::Int64(2)]);
+        let expr = in_list(
+            col("id"),
+            vec![lit(Value::Int64(1)), lit(Value::Null), lit(Value::Int64(3))],
+            true,
+        );
+        assert_eq!(eval(&expr, &t, &s), Value::Null);
+    }
+
+    #[test]
+    fn in_single_element() {
+        let s = schema(&[("id", Type::Int64)]);
+        let t = tuple(vec![Value::Int64(42)]);
+        let expr = in_list(col("id"), vec![lit(Value::Int64(42))], false);
+        assert_eq!(eval(&expr, &t, &s), Value::Bool(true));
+    }
+
+    #[test]
+    fn in_empty_list() {
+        let s = schema(&[("id", Type::Int64)]);
+        let t = tuple(vec![Value::Int64(1)]);
+        assert_eq!(
+            eval(&in_list(col("id"), vec![], false), &t, &s),
+            Value::Bool(false)
+        );
+        assert_eq!(
+            eval(&in_list(col("id"), vec![], true), &t, &s),
+            Value::Bool(true)
+        );
     }
 
     #[test]
