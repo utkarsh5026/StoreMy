@@ -16,7 +16,10 @@ mod render;
 mod state;
 mod theme;
 
-use std::path::Path;
+use std::{
+    io::{self, Write},
+    path::Path,
+};
 
 use rustyline::{Config, Editor, error::ReadlineError, history::DefaultHistory};
 
@@ -76,7 +79,7 @@ pub fn run(db: &Database, history_path: &Path, data_dir: &Path, buffer_pages: us
                 execute_and_print(db, &line, &state);
             }
             Err(ReadlineError::Interrupted) => {
-                println!("{}", theme::dim("(canceled)"));
+                let _ = writeln!(io::stdout(), "{}", theme::dim("(canceled)"));
             }
             Err(ReadlineError::Eof) => break,
             Err(e) => {
@@ -127,11 +130,11 @@ pub fn execute_script(db: &Database, content: &str) {
         }
         count += 1;
         let preview = truncate(sql, 72);
-        println!("\n[{count}] {preview}");
+        let _ = writeln!(io::stdout(), "\n[{count}] {preview}");
         execute_and_print(db, sql, &state);
     }
     if count == 0 {
-        println!("(empty script — nothing to run)");
+        let _ = writeln!(io::stdout(), "(empty script — nothing to run)");
     }
 }
 

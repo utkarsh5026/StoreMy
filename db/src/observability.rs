@@ -11,7 +11,7 @@
 //!
 //! 2. **Perfetto / Chrome trace file** (on by default). Every run writes
 //!    `./data/traces/trace-<unix_ts>.json`. Drag-and-drop the file into
-//!    <https://ui.perfetto.dev> to see a flamegraph + timeline UI. Disable
+//!    <https://ui.perfetto.dev> to see a flame graph + timeline UI. Disable
 //!    with `STOREMY_NO_TRACE_FILE=1`. Override the directory with
 //!    `STOREMY_TRACE_DIR=/some/path`.
 //!
@@ -41,7 +41,7 @@
 //! STOREMY_NO_TRACE_FILE=1 cargo run                # skip Perfetto file
 //! ```
 
-use std::{env, fs, path::PathBuf, sync::Arc, time::SystemTime};
+use std::{env, fs, io::Write as _, path::PathBuf, sync::Arc, time::SystemTime};
 
 use opentelemetry::{KeyValue, trace::TracerProvider as _};
 use opentelemetry_otlp::{SpanExporter, WithExportConfig};
@@ -54,7 +54,8 @@ use tracing_subscriber::{
 };
 use tracing_tree::HierarchicalLayer;
 
-const DEFAULT_FILTER: &str = "info,storemy=debug";
+// Default: INFO only. Set RUST_LOG=storemy=debug for parser/engine/catalog detail.
+const DEFAULT_FILTER: &str = "info";
 
 const FORMAT_ENV: &str = "STOREMY_LOG_FORMAT";
 const TRACE_DIR_ENV: &str = "STOREMY_TRACE_DIR";
@@ -102,7 +103,7 @@ impl Drop for TracingGuards {
             // `shutdown()` flushes pending spans and stops the batch worker.
             // Errors here aren't actionable at exit time.
             if let Err(e) = provider.shutdown() {
-                eprintln!("otel shutdown error: {e}");
+                let _ = writeln!(std::io::stderr(), "otel shutdown error: {e}");
             }
         }
         // _chrome_guard is dropped here automatically, flushing the file.
@@ -153,7 +154,7 @@ pub fn init() -> TracingGuards {
         .with(otel_layer)
         .try_init();
     if let Err(e) = init_result {
-        eprintln!("tracing init failed: {e}");
+        let _ = writeln!(std::io::stderr(), "tracing init failed: {e}");
     }
 
     TracingGuards {
@@ -184,11 +185,7 @@ fn build_terminal_layer() -> Box<dyn Layer<Registry> + Send + Sync> {
             .pretty()
             .with_span_events(FmtSpan::CLOSE)
             .boxed(),
-        _ => fmt::layer()
-            .compact()
-            .with_target(true)
-            .with_span_events(FmtSpan::CLOSE)
-            .boxed(),
+        _ => fmt::layer().compact().with_target(true).boxed(),
     }
 }
 
@@ -202,7 +199,11 @@ fn prepare_chrome_path() -> Option<PathBuf> {
     let dir =
         env::var(TRACE_DIR_ENV).map_or_else(|_| PathBuf::from(DEFAULT_TRACE_DIR), PathBuf::from);
     if let Err(e) = fs::create_dir_all(&dir) {
-        eprintln!("could not create trace dir {}: {e}", dir.display());
+        let _ = writeln!(
+            std::io::stderr(),
+            "could not create trace dir {}: {e}",
+            dir.display()
+        );
         return None;
     }
     let stamp = SystemTime::now()
@@ -238,7 +239,10 @@ fn build_otel_setup() -> OTelSetup {
     let runtime = match Runtime::new() {
         Ok(r) => Arc::new(r),
         Err(e) => {
-            eprintln!("could not start tokio runtime for OTel: {e}");
+            let _ = writeln!(
+                std::io::stderr(),
+                "could not start tokio runtime for OTel: {e}"
+            );
             return (None, None, None);
         }
     };
@@ -256,7 +260,10 @@ fn build_otel_setup() -> OTelSetup {
     {
         Ok(e) => e,
         Err(e) => {
-            eprintln!("could not build OTLP exporter for {endpoint}: {e}");
+            let _ = writeln!(
+                std::io::stderr(),
+                "could not build OTLP exporter for {endpoint}: {e}"
+            );
             return (None, None, Some(endpoint));
         }
     };
