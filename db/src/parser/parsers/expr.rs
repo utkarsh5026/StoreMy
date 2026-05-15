@@ -196,6 +196,20 @@ pub enum Expr {
         else_result: Option<Box<Expr>>,
         operand: Option<Box<Expr>>,
     },
+
+    /// `expr [NOT] LIKE pattern`
+    ///
+    /// Pattern uses SQL wildcards: `%` matches any sequence of characters (including
+    /// empty), `_` matches exactly one character. All other characters match literally.
+    ///
+    /// SQL examples:
+    ///   name LIKE 'A%'        →  `Like` { expr: Column("name"), pattern: Lit("A%"), negated: false
+    /// }   email NOT LIKE '%@%'  →  `Like` { …, negated: true }
+    Like {
+        expr: Box<Expr>,
+        pattern: Box<Expr>,
+        negated: bool,
+    },
 }
 
 impl Display for Expr {
@@ -253,6 +267,17 @@ impl Display for Expr {
                     write!(f, " ELSE {else_result}")?;
                 }
                 write!(f, " END")
+            }
+            Expr::Like {
+                expr,
+                pattern,
+                negated,
+            } => {
+                if *negated {
+                    write!(f, "{expr} NOT LIKE {pattern}")
+                } else {
+                    write!(f, "{expr} LIKE {pattern}")
+                }
             }
         }
     }
@@ -453,6 +478,16 @@ impl Parser {
                 low: Box::new(low),
                 high: Box::new(high),
                 negated: not_between,
+            });
+        }
+
+        let not_like = self.consume_not_if_followed_by(TokenType::Like)?;
+        if self.if_peek_then_consume(TokenType::Like)? {
+            let pattern = self.parse_atom()?;
+            return Ok(Expr::Like {
+                expr: Box::new(left),
+                pattern: Box::new(pattern),
+                negated: not_like,
             });
         }
 
@@ -1337,5 +1372,64 @@ mod tests {
     fn display_case_simple_with_else() {
         let e = ok("CASE x WHEN 1 THEN 'a' ELSE 'b' END");
         assert_eq!(e.to_string(), "CASE x WHEN 1 THEN 'a' ELSE 'b' END");
+    }
+
+    // ── LIKE ─────────────────────────────────────────────────────────────────
+
+    #[test]
+    fn like_basic() {
+        let Expr::Like {
+            expr,
+            pattern,
+            negated,
+        } = ok("name LIKE 'A%'")
+        else {
+            panic!("expected Like");
+        };
+        assert!(!negated);
+        assert_eq!(*expr, Expr::Column("name".into()));
+        assert_eq!(*pattern, Expr::Literal(Value::String("A%".into())));
+    }
+
+    #[test]
+    fn not_like_basic() {
+        let Expr::Like { negated, .. } = ok("email NOT LIKE '%@%'") else {
+            panic!("expected Like");
+        };
+        assert!(negated);
+    }
+
+    #[test]
+    fn like_binds_before_and() {
+        // `name LIKE 'A%' AND active = true` → (name LIKE 'A%') AND (active = true)
+        let Expr::BinaryOp { op, lhs, .. } = ok("name LIKE 'A%' AND active = true") else {
+            panic!("expected BinaryOp");
+        };
+        assert_eq!(op, BinOp::And);
+        assert!(matches!(*lhs, Expr::Like { negated: false, .. }));
+    }
+
+    #[test]
+    fn not_like_on_lhs_of_and() {
+        let Expr::BinaryOp { op, lhs, .. } = ok("name NOT LIKE 'A%' AND x = 1") else {
+            panic!("expected BinaryOp");
+        };
+        assert_eq!(op, BinOp::And);
+        assert!(matches!(*lhs, Expr::Like { negated: true, .. }));
+    }
+
+    #[test]
+    fn like_on_rhs_of_or() {
+        let Expr::BinaryOp { op, rhs, .. } = ok("a = 1 OR name LIKE 'B%'") else {
+            panic!("expected BinaryOp");
+        };
+        assert_eq!(op, BinOp::Or);
+        assert!(matches!(*rhs, Expr::Like { negated: false, .. }));
+    }
+
+    #[test]
+    fn display_like() {
+        assert_eq!(ok("name LIKE 'A%'").to_string(), "name LIKE 'A%'");
+        assert_eq!(ok("name NOT LIKE 'A%'").to_string(), "name NOT LIKE 'A%'");
     }
 }

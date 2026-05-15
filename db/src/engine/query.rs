@@ -423,6 +423,7 @@ impl BoundSelect {
             | Expr::In { .. }
             | Expr::Between { .. }
             | Expr::Case { .. }
+            | Expr::Like { .. }
             | Expr::UnaryOp { .. }
             | Expr::IsNull { .. } => {
                 return Err(EngineError::Unsupported(

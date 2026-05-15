@@ -127,6 +127,12 @@ pub fn eval_expr(
             else_result.as_deref(),
         ),
 
+        Expr::Like {
+            expr,
+            pattern,
+            negated,
+        } => eval_like(expr, tuple, schema, pattern, *negated),
+
         // Aggregates operate over many rows and cannot produce a single value
         // from one tuple. The planner should never route them here.
         Expr::Agg { .. } | Expr::CountStar => Err(ExecutionError::TypeError(
@@ -271,6 +277,94 @@ fn eval_between(
             Ok(Value::Bool(if negated { !in_range } else { in_range }))
         }
         _ => Ok(Value::Null),
+    }
+}
+
+/// Evaluates `expr [NOT] LIKE pattern` for a single row.
+///
+/// The pattern follows SQL wildcard rules:
+/// - `%` matches any sequence of characters, including the empty string.
+/// - `_` matches exactly one character.
+/// - All other characters match themselves literally.
+///
+/// # NULL semantics
+///
+/// If either `expr` or `pattern` evaluates to [`Value::Null`], the result is
+/// [`Value::Null`] — LIKE propagates NULL just like a comparison operator.
+fn eval_like(
+    expr: &Expr,
+    tuple: &Tuple,
+    schema: &TupleSchema,
+    pattern: &Expr,
+    negated: bool,
+) -> Result<Value, ExecutionError> {
+    let text = eval_expr(expr, tuple, schema)?;
+    let pat = eval_expr(pattern, tuple, schema)?;
+
+    if text.is_null() || pat.is_null() {
+        return Ok(Value::Null);
+    }
+
+    let Value::String(text_str) = text else {
+        return Err(ExecutionError::TypeError(
+            "LIKE requires a String left-hand side".to_string(),
+        ));
+    };
+    let Value::String(pat_str) = pat else {
+        return Err(ExecutionError::TypeError(
+            "LIKE requires a String pattern".to_string(),
+        ));
+    };
+
+    let matched = like_matches(&text_str, &pat_str);
+    Ok(Value::Bool(if negated { !matched } else { matched }))
+}
+
+/// Returns `true` when `text` matches the SQL LIKE `pattern`.
+///
+/// Implemented with recursive backtracking over the pattern characters.
+/// `%` in the pattern tries every possible split of the remaining text;
+/// `_` consumes exactly one character; any other character must match exactly.
+fn like_matches(text: &str, pattern: &str) -> bool {
+    let mut p_chars = pattern.chars();
+    let Some(p_head) = p_chars.next() else {
+        return text.is_empty(); // pattern exhausted: must also exhaust text
+    };
+    let p_tail = p_chars.as_str();
+
+    match p_head {
+        '%' => {
+            // '%' can match zero characters (skip it) or consume one character
+            // of text and stay at '%' (greedy attempt via tail-call skip).
+            // Try matching zero chars consumed by '%':
+            if like_matches(text, p_tail) {
+                return true;
+            }
+            // Try consuming one character of text and keeping '%' in pattern:
+            let mut t_chars = text.chars();
+            while t_chars.next().is_some() {
+                if like_matches(t_chars.as_str(), p_tail) {
+                    return true;
+                }
+            }
+            false
+        }
+        '_' => {
+            // '_' must consume exactly one character.
+            let mut t_chars = text.chars();
+            match t_chars.next() {
+                None => false,
+                Some(_) => like_matches(t_chars.as_str(), p_tail),
+            }
+        }
+        literal => {
+            // Literal character: text must start with this character.
+            let mut t_chars = text.chars();
+            match t_chars.next() {
+                Some(tc) if tc == literal => like_matches(t_chars.as_str(), p_tail),
+                _ => false,
+            }
+        }
     }
 }
 
@@ -995,6 +1089,98 @@ mod tests {
             Some(lit(Value::Int64(0))),
         );
         assert_eq!(eval(&e, &t, &s), Value::Int64(0));
+    }
+
+    fn like_expr(inner: Expr, pattern: Expr, negated: bool) -> Expr {
+        Expr::Like {
+            expr: Box::new(inner),
+            pattern: Box::new(pattern),
+            negated,
+        }
+    }
+
+    #[test]
+    fn like_prefix_wildcard_matches() {
+        let s = schema(&[("name", Type::String)]);
+        let t = tuple(vec![Value::String("Alice".into())]);
+        let e = like_expr(col("name"), lit(Value::String("Ali%".into())), false);
+        assert_eq!(eval(&e, &t, &s), Value::Bool(true));
+    }
+
+    #[test]
+    fn like_prefix_wildcard_no_match() {
+        let s = schema(&[("name", Type::String)]);
+        let t = tuple(vec![Value::String("Bob".into())]);
+        let e = like_expr(col("name"), lit(Value::String("Ali%".into())), false);
+        assert_eq!(eval(&e, &t, &s), Value::Bool(false));
+    }
+
+    #[test]
+    fn like_percent_matches_empty() {
+        let s = schema(&[("name", Type::String)]);
+        let t = tuple(vec![Value::String(String::new())]);
+        let e = like_expr(col("name"), lit(Value::String("%".into())), false);
+        assert_eq!(eval(&e, &t, &s), Value::Bool(true));
+    }
+
+    #[test]
+    fn like_underscore_matches_one_char() {
+        let s = schema(&[("code", Type::String)]);
+        let t = tuple(vec![Value::String("A1".into())]);
+        let e = like_expr(col("code"), lit(Value::String("__".into())), false);
+        assert_eq!(eval(&e, &t, &s), Value::Bool(true));
+    }
+
+    #[test]
+    fn like_underscore_wrong_length() {
+        let s = schema(&[("code", Type::String)]);
+        let t = tuple(vec![Value::String("A".into())]);
+        let e = like_expr(col("code"), lit(Value::String("__".into())), false);
+        assert_eq!(eval(&e, &t, &s), Value::Bool(false));
+    }
+
+    #[test]
+    fn like_exact_literal_match() {
+        let s = schema(&[("name", Type::String)]);
+        let t = tuple(vec![Value::String("hello".into())]);
+        let e = like_expr(col("name"), lit(Value::String("hello".into())), false);
+        assert_eq!(eval(&e, &t, &s), Value::Bool(true));
+    }
+
+    #[test]
+    fn like_suffix_wildcard() {
+        let s = schema(&[("email", Type::String)]);
+        let t = tuple(vec![Value::String("user@example.com".into())]);
+        let e = like_expr(
+            col("email"),
+            lit(Value::String("%@example.com".into())),
+            false,
+        );
+        assert_eq!(eval(&e, &t, &s), Value::Bool(true));
+    }
+
+    #[test]
+    fn not_like_negates() {
+        let s = schema(&[("name", Type::String)]);
+        let t = tuple(vec![Value::String("Alice".into())]);
+        let e = like_expr(col("name"), lit(Value::String("B%".into())), true);
+        assert_eq!(eval(&e, &t, &s), Value::Bool(true));
+    }
+
+    #[test]
+    fn like_null_text_yields_null() {
+        let s = schema(&[("name", Type::String)]);
+        let t = tuple(vec![Value::Null]);
+        let e = like_expr(col("name"), lit(Value::String("A%".into())), false);
+        assert_eq!(eval(&e, &t, &s), Value::Null);
+    }
+
+    #[test]
+    fn like_null_pattern_yields_null() {
+        let s = schema(&[("name", Type::String)]);
+        let t = tuple(vec![Value::String("Alice".into())]);
+        let e = like_expr(col("name"), lit(Value::Null), false);
+        assert_eq!(eval(&e, &t, &s), Value::Null);
     }
 
     #[test]
