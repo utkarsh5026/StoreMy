@@ -22,10 +22,21 @@ pub async fn run_query(
     Path(db): Path<String>,
     Json(req): Json<QueryRequest>,
 ) -> Result<Json<QueryResultDto>, ApiError> {
-    let db_handle = state
-        .registry
-        .get(&db)
-        .ok_or(ApiError::DatabaseNotFound(db))?;
+    let sql_preview: String = req
+        .sql
+        .trim()
+        .lines()
+        .next()
+        .unwrap_or("")
+        .chars()
+        .take(120)
+        .collect();
+    tracing::info!(db = %db, sql = %sql_preview, "query");
+
+    let db_handle = state.registry.get(&db).ok_or_else(|| {
+        tracing::warn!(db = %db, "database not found");
+        ApiError::DatabaseNotFound(db.clone())
+    })?;
 
     let result = tokio::task::spawn_blocking(move || {
         let rx = db_handle.execute(req.sql);
@@ -33,7 +44,16 @@ pub async fn run_query(
     })
     .await
     .map_err(|e| ApiError::JoinError(e.to_string()))?
-    .map_err(|_| ApiError::WorkerGone)??;
+    .map_err(|_| ApiError::WorkerGone)?;
 
-    Ok(Json(QueryResultDto::from(&result)))
+    match result {
+        Ok(r) => {
+            tracing::info!(kind = r.kind_name(), summary = %r.log_summary(), "query ok");
+            Ok(Json(QueryResultDto::from(&r)))
+        }
+        Err(e) => {
+            tracing::warn!(error = %e, "query error");
+            Err(ApiError::Engine(e))
+        }
+    }
 }

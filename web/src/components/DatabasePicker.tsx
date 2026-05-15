@@ -49,6 +49,7 @@ export function DatabasePicker({ onSelect }: Props) {
     status: "idle",
   });
   const [newName, setNewName] = useState("");
+  const [showTemplates, setShowTemplates] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
 
   const refresh = useCallback(async () => {
@@ -139,113 +140,51 @@ export function DatabasePicker({ onSelect }: Props) {
         <span className="text-dim text-sm">Select a database to continue</span>
       </div>
 
-      {/* Card */}
-      <div className="w-full max-w-5xl flex flex-col gap-6">
-        {/* Template choices */}
-        <div className="flex flex-col gap-3">
-          <div className="flex flex-col gap-1">
-            <p className="text-[11px] uppercase tracking-[0.08em] text-dim">
-              Start with a sample database
-            </p>
-            <p className="text-dim text-[13px]">
-              Pick a ready-made schema, then add rows or query it right away.
-            </p>
-          </div>
-          <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
-            {DATABASE_TEMPLATES.map((template) => {
-              const isActive =
-                templateState.status === "applying" &&
-                templateState.templateId === template.id;
-              const failed =
-                templateState.status === "err" &&
-                templateState.templateId === template.id;
-
-              return (
-                <div
-                  key={template.id}
-                  className="flex min-h-45 flex-col gap-3 rounded-md border border-line bg-panel p-4"
-                >
-                  <div className="flex-1">
-                    <div className="mb-1 flex items-center justify-between gap-3">
-                      <h2 className="text-base font-semibold text-fg">
-                        {template.name}
-                      </h2>
-                      <span className="font-mono text-[11px] text-accent">
-                        {template.defaultDatabaseName}
-                      </span>
-                    </div>
-                    <p className="text-[13px] leading-5 text-dim">
-                      {template.description}
-                    </p>
-                    <p className="mt-3 font-mono text-[11px] leading-5 text-dim">
-                      {template.tables.join(" · ")}
-                    </p>
-                  </div>
-                  <button
-                    className="btn"
-                    onClick={() => handleTemplateCreate(template)}
-                    disabled={isApplyingTemplate || create.status === "creating"}
+      <div className="w-full max-w-2xl flex flex-col gap-6">
+        {/* Database list — primary focus */}
+        <div className="flex flex-col gap-2">
+          <p className="text-[11px] uppercase tracking-[0.08em] text-dim">
+            Your databases
+          </p>
+          <div className="bg-panel border border-line rounded-[6px] overflow-hidden min-h-15 flex flex-col justify-center">
+            {load.status === "loading" && (
+              <p className="text-dim text-[13px] italic px-4 py-4 text-center">
+                Loading…
+              </p>
+            )}
+            {load.status === "err" && (
+              <div className="font-mono whitespace-pre-wrap bg-danger/8 border-b border-danger/30 p-3 text-danger text-[13px]">
+                {load.message}
+              </div>
+            )}
+            {load.status === "ok" && load.databases.length === 0 && (
+              <p className="text-dim text-[13px] italic px-4 py-4 text-center">
+                No databases yet — create one below or start from a template.
+              </p>
+            )}
+            {load.status === "ok" && load.databases.length > 0 && (
+              <ul className="list-none m-0 p-0">
+                {load.databases.map((db) => (
+                  <li
+                    key={db.name}
+                    onClick={() => onSelect({ name: db.name })}
+                    className="flex items-center gap-2.5 px-4 py-3 cursor-pointer border-b border-line last:border-b-0 hover:bg-panel2 transition-colors"
                   >
-                    {isActive ? "Setting up..." : "Use template"}
-                  </button>
-                  {isActive && (
-                    <p className="text-xs text-dim">
-                      {templateState.message}
-                      {templateState.current && templateState.total
-                        ? ` (${templateState.current}/${templateState.total})`
-                        : ""}
-                    </p>
-                  )}
-                  {failed && (
-                    <p className="font-mono text-xs text-danger">
-                      {templateState.databaseName}: {templateState.message}
-                    </p>
-                  )}
-                </div>
-              );
-            })}
+                    <span className="text-accent text-sm">⬡</span>
+                    <div className="flex-1 min-w-0">
+                      <span className="font-mono text-sm font-semibold">{db.name}</span>
+                      {(db.tables ?? []).length > 0 && (
+                        <p className="font-mono text-[11px] text-dim mt-0.5 truncate">
+                          {(db.tables ?? []).join(" · ")}
+                        </p>
+                      )}
+                    </div>
+                    <span className="text-dim text-[13px]">→</span>
+                  </li>
+                ))}
+              </ul>
+            )}
           </div>
-        </div>
-
-        {/* Database list */}
-        <div className="bg-panel border border-line rounded-[6px] overflow-hidden min-h-15 flex flex-col justify-center">
-          {load.status === "loading" && (
-            <p className="text-dim text-[13px] italic px-4 py-4 text-center">
-              Loading…
-            </p>
-          )}
-          {load.status === "err" && (
-            <div className="font-mono whitespace-pre-wrap bg-danger/8 border-b border-danger/30 p-3 text-danger text-[13px]">
-              {load.message}
-            </div>
-          )}
-          {load.status === "ok" && load.databases.length === 0 && (
-            <p className="text-dim text-[13px] italic px-4 py-4 text-center">
-              No databases yet. Create one below or start from a template.
-            </p>
-          )}
-          {load.status === "ok" && load.databases.length > 0 && (
-            <ul className="list-none m-0 p-0">
-              {load.databases.map((db) => (
-                <li
-                  key={db.name}
-                  onClick={() => onSelect({ name: db.name })}
-                  className="flex items-center gap-2.5 px-4 py-3 cursor-pointer border-b border-line last:border-b-0 hover:bg-panel2 transition-colors"
-                >
-                  <span className="text-accent text-sm">⬡</span>
-                  <div className="flex-1 min-w-0">
-                    <span className="font-mono text-sm font-semibold">{db.name}</span>
-                    {(db.tables ?? []).length > 0 && (
-                      <p className="font-mono text-[11px] text-dim mt-0.5 truncate">
-                        {(db.tables ?? []).join(" · ")}
-                      </p>
-                    )}
-                  </div>
-                  <span className="text-dim text-[13px]">→</span>
-                </li>
-              ))}
-            </ul>
-          )}
         </div>
 
         {/* Create new database */}
@@ -285,6 +224,84 @@ export function DatabasePicker({ onSelect }: Props) {
           <p className="text-dim text-[11px]">
             Letters, digits, and underscores only. Must start with a letter.
           </p>
+        </div>
+
+        {/* Templates — collapsed by default */}
+        <div className="flex flex-col gap-3">
+          <button
+            className="flex items-center gap-2 text-[11px] uppercase tracking-[0.08em] text-dim hover:text-fg transition-colors w-fit"
+            onClick={() => setShowTemplates((v) => !v)}
+          >
+            <span
+              className="inline-block transition-transform duration-150"
+              style={{ transform: showTemplates ? "rotate(90deg)" : "rotate(0deg)" }}
+            >
+              ▶
+            </span>
+            Start from a template
+          </button>
+
+          {showTemplates && (
+            <div className="flex flex-col gap-3">
+              <p className="text-dim text-[13px]">
+                Pick a ready-made schema, then add rows or query it right away.
+              </p>
+              <div className="grid gap-3 md:grid-cols-2">
+                {DATABASE_TEMPLATES.map((template) => {
+                  const isActive =
+                    templateState.status === "applying" &&
+                    templateState.templateId === template.id;
+                  const failed =
+                    templateState.status === "err" &&
+                    templateState.templateId === template.id;
+
+                  return (
+                    <div
+                      key={template.id}
+                      className="flex min-h-45 flex-col gap-3 rounded-md border border-line bg-panel p-4"
+                    >
+                      <div className="flex-1">
+                        <div className="mb-1 flex items-center justify-between gap-3">
+                          <h2 className="text-base font-semibold text-fg">
+                            {template.name}
+                          </h2>
+                          <span className="font-mono text-[11px] text-accent">
+                            {template.defaultDatabaseName}
+                          </span>
+                        </div>
+                        <p className="text-[13px] leading-5 text-dim">
+                          {template.description}
+                        </p>
+                        <p className="mt-3 font-mono text-[11px] leading-5 text-dim">
+                          {template.tables.join(" · ")}
+                        </p>
+                      </div>
+                      <button
+                        className="btn"
+                        onClick={() => handleTemplateCreate(template)}
+                        disabled={isApplyingTemplate || create.status === "creating"}
+                      >
+                        {isActive ? "Setting up..." : "Use template"}
+                      </button>
+                      {isActive && (
+                        <p className="text-xs text-dim">
+                          {templateState.message}
+                          {templateState.current && templateState.total
+                            ? ` (${templateState.current}/${templateState.total})`
+                            : ""}
+                        </p>
+                      )}
+                      {failed && (
+                        <p className="font-mono text-xs text-danger">
+                          {templateState.databaseName}: {templateState.message}
+                        </p>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
         </div>
       </div>
     </div>

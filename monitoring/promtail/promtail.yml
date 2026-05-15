@@ -1,0 +1,36 @@
+server:
+  http_listen_port: 9080
+  grpc_listen_port: 0
+
+positions:
+  filename: /tmp/promtail-positions.yaml
+
+clients:
+  - url: http://loki:3100/loki/api/v1/push
+
+scrape_configs:
+  - job_name: storemy-server
+    static_configs:
+      - targets:
+          - localhost
+        labels:
+          job: storemy
+          service: storemy-server
+          __path__: /var/log/storemy/*.log
+
+    pipeline_stages:
+      # Try to parse lines as JSON (STOREMY_LOG_FORMAT=json output)
+      - json:
+          expressions:
+            level: level
+            target: target
+            db: fields.db
+            kind: fields.kind
+            sql: fields.sql
+            summary: fields.summary
+      # If the line is not JSON (plain text compact format), fall through
+      - labels:
+          level:
+          target:
+          db:
+          kind:

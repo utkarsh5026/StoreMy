@@ -10,7 +10,7 @@
 	lint \
 	check \
 	install-tools help \
-	server web dev \
+	server web dev logs logs-down \
 	docker-demo docker-test docker-build docker-clean docker-stop quickstart
 
 # ----- Rust (default; workspace root = repository root) -----
@@ -89,15 +89,36 @@ server:
 web:
 	cd web && bun run dev
 
+# logs — start Loki + Grafana + Promtail (logging profile).
+# Grafana UI: http://localhost:3000  (admin / storemy)
+# Loki API:   http://localhost:3100
+logs:
+	@echo "Starting logging stack (Loki + Promtail + Grafana)…"
+	@mkdir -p data/logs
+	docker compose --profile logging up -d
+	@echo ""
+	@echo "  Grafana → http://localhost:3000  (admin / storemy)"
+	@echo "  Open the 'StoreMy — Query Logs' dashboard to watch live logs."
+
+logs-down:
+	docker compose --profile logging down
+
+# dev — backend + frontend + live logging stack.
+# Logs land in data/logs/storemy.log and are visible in Grafana.
 dev:
+	@echo "Starting logging stack…"
+	@mkdir -p data/logs
+	@docker compose --profile logging up -d
 	@echo "Starting backend (127.0.0.1:7878) and frontend (localhost:5173)…"
-	@cargo run --bin storemy-server & \
+	@echo "  Grafana → http://localhost:3000  (admin / storemy)"
+	@cargo run --bin storemy-server 2>&1 | tee data/logs/storemy.log & \
 	BACKEND_PID=$$!; \
 	echo "Waiting for backend on :7878…"; \
 	until bash -c 'echo > /dev/tcp/127.0.0.1/7878' 2>/dev/null; do sleep 0.5; done; \
 	echo "Backend ready. Starting Vite…"; \
 	cd web && bun run dev; \
-	kill $$BACKEND_PID 2>/dev/null; wait
+	kill $$BACKEND_PID 2>/dev/null; wait; \
+	docker compose --profile logging down
 
 # Default developer targets
 fmt: rust-fmt
@@ -172,7 +193,9 @@ help:
 	@echo "Dev servers:"
 	@echo "  server               - cargo run --bin storemy-server (port 7878)"
 	@echo "  web                  - bun run dev in web/ (port 5173)"
-	@echo "  dev                  - both servers together (Ctrl+C stops both)"
+	@echo "  dev                  - backend + frontend + logging stack (Ctrl+C stops all)"
+	@echo "  logs                 - start Loki + Grafana + Promtail only"
+	@echo "  logs-down            - stop the logging stack"
 
 # ============================================
 # Docker

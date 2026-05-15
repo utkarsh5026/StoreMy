@@ -86,12 +86,39 @@ services:
       - GF_USERS_ALLOW_SIGN_UP=false
     ports:
       - "3000:3000"
-    depends_on:
-      - prometheus
     networks:
       - storemy-network
     profiles:
       - monitoring
+      - logging
+
+  loki:
+    image: grafana/loki:3.0.0
+    container_name: storemy-loki
+    ports:
+      - "3100:3100"
+    volumes:
+      - ./monitoring/loki:/etc/loki:ro
+      - loki-data:/loki
+    command: -config.file=/etc/loki/loki.yml
+    networks:
+      - storemy-network
+    profiles:
+      - logging
+
+  promtail:
+    image: grafana/promtail:3.0.0
+    container_name: storemy-promtail
+    volumes:
+      - ./data/logs:/var/log/storemy:ro
+      - ./monitoring/promtail:/etc/promtail:ro
+    command: -config.file=/etc/promtail/promtail.yml
+    depends_on:
+      - loki
+    networks:
+      - storemy-network
+    profiles:
+      - logging
 
   storemy-metrics:
     build:
@@ -135,6 +162,8 @@ volumes:
   prometheus-data:
     driver: local
   grafana-data:
+    driver: local
+  loki-data:
     driver: local
 
 networks:

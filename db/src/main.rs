@@ -16,7 +16,11 @@
 //! Keeping this logic in `main.rs` helps keep the executable wiring explicit, while
 //! parser/executor/storage behavior lives in their respective modules.
 
-use std::{path::PathBuf, sync::Arc};
+use std::{
+    io::{self, Write},
+    path::PathBuf,
+    sync::Arc,
+};
 
 use storemy::{
     buffer_pool::page_store::PageStore, catalog::manager::Catalog, database::Database,
@@ -55,15 +59,23 @@ fn main() {
     let mut args = std::env::args().skip(1);
     let mode_or_sql = args.next();
 
-    println!("StoreMy Database v{}", env!("CARGO_PKG_VERSION"));
+    let _ = writeln!(
+        io::stdout(),
+        "StoreMy Database v{}",
+        env!("CARGO_PKG_VERSION")
+    );
     if let Some(path) = trace_guards.chrome_path() {
-        println!(
+        let _ = writeln!(
+            io::stdout(),
             "  perfetto trace : {} (open at https://ui.perfetto.dev)",
             path.display()
         );
     }
     if let Some(endpoint) = trace_guards.otel_endpoint() {
-        println!("  otel exporter  : {endpoint} (Jaeger UI: http://localhost:16686)");
+        let _ = writeln!(
+            io::stdout(),
+            "  otel exporter  : {endpoint} (Jaeger UI: http://localhost:16686)"
+        );
     }
     info!(version = env!("CARGO_PKG_VERSION"), "StoreMy starting");
 
@@ -96,6 +108,17 @@ fn main() {
             &data_dir,
             BUFFER_POOL_PAGES,
         ),
+        Some("--file") => {
+            let path = args.next().unwrap_or_else(|| {
+                let _ = writeln!(io::stderr(), "usage: storemy --file <path.sql>");
+                std::process::exit(1);
+            });
+            let content = std::fs::read_to_string(&path).unwrap_or_else(|e| {
+                error!(path = %path, error = %e, "cannot read SQL file");
+                std::process::exit(1);
+            });
+            repl::execute_script(&db, &content);
+        }
         Some(first) => {
             let mut sql = String::from(first);
             for part in args {

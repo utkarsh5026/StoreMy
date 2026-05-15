@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useState } from "react";
+import { useEffect } from "react";
+import { Routes, Route, useNavigate, useParams } from "react-router-dom";
 import { SqlEditor } from "./components/SqlEditor";
 import { ResultsTable } from "./components/ResultsTable";
 import { TableList } from "./components/TableList";
@@ -13,107 +14,96 @@ import {
   TableRow,
 } from "./components/ui/table";
 import {
+  Tabs,
+  TabsList,
+  TabsTrigger,
+  TabsContent,
+} from "./components/ui/tabs";
+import {
   DatabasePicker,
   type DatabaseSelection,
 } from "./components/DatabasePicker";
 import { CreateTableWizard } from "./components/CreateTableWizard";
-import { listTables, runQuery, StoremyError } from "./api/client";
-import type { ApiError, QueryResult, TableSummary } from "./types/api";
-
-const SAMPLE_SQL = `-- Welcome to StoreMy.
--- Cmd/Ctrl + Enter to run the highlighted block (or all of it).
-
-CREATE TABLE users (id INT, name VARCHAR);
-INSERT INTO users VALUES (1, 'alice'), (2, 'bob');
-SELECT * FROM users;`;
-
-type RunState =
-  | { status: "idle" }
-  | { status: "running" }
-  | { status: "ok"; result: QueryResult; ms: number }
-  | { status: "err"; error: ApiError; ms: number };
-
-type Tab = "results" | "heap";
+import { useDatabaseStore, useQueryStore, useUiStore, type RunState } from "./store";
+import type { QueryResult } from "./types/api";
 
 export default function App() {
-  const [selectedDb, setSelectedDb] = useState<DatabaseSelection | null>(null);
-
-  if (!selectedDb) {
-    return <DatabasePicker onSelect={setSelectedDb} />;
-  }
-
   return (
-    <Workspace
-      db={selectedDb.name}
-      initialSql={selectedDb.initialSql}
-      onExit={() => setSelectedDb(null)}
-    />
+    <Routes>
+      <Route path="/" element={<DatabasePickerPage />} />
+      <Route path="/:dbName" element={<WorkspacePage />} />
+    </Routes>
   );
 }
 
-function Workspace({
-  db,
-  initialSql,
-  onExit,
-}: {
-  db: string;
-  initialSql?: string;
-  onExit: () => void;
-}) {
-  const [sql, setSql] = useState(initialSql ?? SAMPLE_SQL);
-  const [tables, setTables] = useState<TableSummary[]>([]);
-  const [selected, setSelected] = useState<string | null>(null);
-  const [runState, setRunState] = useState<RunState>({ status: "idle" });
-  const [tab, setTab] = useState<Tab>("results");
-  const [heapTick, setHeapTick] = useState(0);
-  const [wizardOpen, setWizardOpen] = useState(false);
+function DatabasePickerPage() {
+  const navigate = useNavigate();
+  const setDb = useDatabaseStore((s) => s.setDb);
 
-  const refreshTables = useCallback(async () => {
-    try {
-      setTables(await listTables(db));
-    } catch {
-      // Ignore — sidebar will just show empty if the server is down.
-    }
-  }, [db]);
+  const handleSelect = (sel: DatabaseSelection) => {
+    setDb(sel);
+    navigate(`/${sel.name}`);
+  };
+
+  return <DatabasePicker onSelect={handleSelect} />;
+}
+
+function WorkspacePage() {
+  const { dbName } = useParams<{ dbName: string }>();
+  const db = useDatabaseStore((s) => s.db);
+  const setDb = useDatabaseStore((s) => s.setDb);
 
   useEffect(() => {
+    if (dbName && (!db || db.name !== dbName)) {
+      setDb({ name: dbName });
+    }
+  }, [dbName]);
+
+  if (!db) return null;
+  return <Workspace />;
+}
+
+function Workspace() {
+  const db = useDatabaseStore((s) => s.db)!;
+  const refreshTables = useDatabaseStore((s) => s.refreshTables);
+  const tables = useDatabaseStore((s) => s.tables);
+
+  const sql = useQueryStore((s) => s.sql);
+  const setSql = useQueryStore((s) => s.setSql);
+  const runState = useQueryStore((s) => s.runState);
+  const heapTick = useQueryStore((s) => s.heapTick);
+  const runSql = useQueryStore((s) => s.runSql);
+  const resetSql = useQueryStore((s) => s.resetSql);
+
+  const tab = useUiStore((s) => s.tab);
+  const setTab = useUiStore((s) => s.setTab);
+  const selectedTable = useUiStore((s) => s.selectedTable);
+  const setSelectedTable = useUiStore((s) => s.setSelectedTable);
+  const wizardOpen = useUiStore((s) => s.wizardOpen);
+  const openWizard = useUiStore((s) => s.openWizard);
+  const closeWizard = useUiStore((s) => s.closeWizard);
+  const resetUi = useUiStore((s) => s.reset);
+
+  const setDb = useDatabaseStore((s) => s.setDb);
+  const navigate = useNavigate();
+
+  useEffect(() => {
+    resetSql(db.initialSql);
+    resetUi();
     refreshTables();
-  }, [refreshTables]);
+  }, [db.name]);
 
-  const runSql = useCallback(
-    async (input: string) => {
-      if (!input.trim()) return;
-      setRunState({ status: "running" });
-      const t0 = performance.now();
-      try {
-        const result = await runQuery(db, input);
-        const ms = Math.round(performance.now() - t0);
-        setRunState({ status: "ok", result, ms });
-        setTab("results");
-        setHeapTick((t) => t + 1);
-        await refreshTables();
-      } catch (e) {
-        const ms = Math.round(performance.now() - t0);
-        const error: ApiError =
-          e instanceof StoremyError
-            ? { kind: e.kind, message: e.message }
-            : { kind: "internal", message: String(e) };
-        setRunState({ status: "err", error, ms });
-      }
-    },
-    [db, refreshTables],
-  );
+  const onExit = () => {
+    resetUi();
+    setDb(null);
+    navigate("/");
+  };
 
-  const onRun = useCallback(() => runSql(sql), [sql, runSql]);
-
-  const onWizardCreate = useCallback(
-    (generatedSql: string) => {
-      setWizardOpen(false);
-      setSql(generatedSql);
-      runSql(generatedSql);
-    },
-    [runSql],
-  );
+  const onWizardCreate = (generatedSql: string) => {
+    closeWizard();
+    setSql(generatedSql);
+    runSql(generatedSql);
+  };
 
   return (
     <div
@@ -129,19 +119,19 @@ function Workspace({
         >
           ← Databases
         </button>
-        <span className="font-mono text-accent text-[13px]">{db}</span>
+        <span className="font-mono text-accent text-[13px]">{db.name}</span>
         <span className="text-dim font-normal text-xs ml-0.5">/ StoreMy</span>
       </div>
 
       {/* Sidebar */}
       <TableList
         tables={tables}
-        selected={selected}
+        selected={selectedTable}
         onSelect={(name) => {
-          setSelected(name);
+          setSelectedTable(name);
           setTab("heap");
         }}
-        onNewTable={() => setWizardOpen(true)}
+        onNewTable={openWizard}
       />
 
       {/* Main area */}
@@ -154,34 +144,30 @@ function Workspace({
           <div className="flex items-center gap-3 px-3 py-2 border-b border-line bg-panel shrink-0">
             <button
               className="btn"
-              onClick={onRun}
+              onClick={() => runSql()}
               disabled={runState.status === "running"}
             >
               {runState.status === "running" ? "Running…" : "Run"}
             </button>
             <span className="text-dim text-xs">Cmd/Ctrl + Enter</span>
           </div>
-          <SqlEditor value={sql} onChange={setSql} onRun={onRun} />
+          <SqlEditor value={sql} onChange={setSql} onRun={() => runSql()} />
         </div>
 
         {/* Results pane */}
         <div className="flex flex-col min-h-0 border-t border-line">
-          {/* Tabs + status bar */}
           <div className="flex flex-col shrink-0 border-b border-line bg-panel text-xs text-dim">
             <div className="flex px-2">
-              <TabButton
-                active={tab === "results"}
-                onClick={() => setTab("results")}
-              >
+              <TabButton active={tab === "results"} onClick={() => setTab("results")}>
                 Results
               </TabButton>
               <TabButton
                 active={tab === "heap"}
                 onClick={() => setTab("heap")}
-                disabled={!selected}
-                title={selected ? "" : "select a table from the sidebar"}
+                disabled={!selectedTable}
+                title={selectedTable ? "" : "select a table from the sidebar"}
               >
-                Heap{selected ? ` · ${selected}` : ""}
+                Heap{selectedTable ? ` · ${selectedTable}` : ""}
               </TabButton>
             </div>
             <div className="flex gap-4 px-3 py-1.5">
@@ -195,12 +181,11 @@ function Workspace({
             </div>
           </div>
 
-          {/* Results body */}
           <div className="flex-1 overflow-auto p-3">
             {tab === "results" ? (
               <ResultsBody state={runState} />
-            ) : selected ? (
-              <HeapTabBody db={db} table={selected} refreshTick={heapTick} />
+            ) : selectedTable ? (
+              <HeapTabBody db={db.name} table={selectedTable} refreshTick={heapTick} />
             ) : (
               <span className="font-mono text-[13px]">
                 select a table from the sidebar
@@ -210,12 +195,8 @@ function Workspace({
         </div>
       </div>
 
-      {/* Create Table Wizard */}
       {wizardOpen && (
-        <CreateTableWizard
-          onClose={() => setWizardOpen(false)}
-          onCreate={onWizardCreate}
-        />
+        <CreateTableWizard onClose={closeWizard} onCreate={onWizardCreate} />
       )}
     </div>
   );
@@ -231,12 +212,21 @@ function HeapTabBody({
   refreshTick: number;
 }) {
   return (
-    <div className="grid min-h-full gap-3 xl:grid-cols-[minmax(320px,0.85fr)_minmax(480px,1.15fr)]">
-      <TableContentPreview db={db} table={table} refreshTick={refreshTick} />
-      <section className="min-h-0 rounded border border-line bg-panel/50 p-3">
+    <Tabs defaultValue="table" className="flex h-full flex-col">
+      <TabsList variant="line" className="shrink-0 self-start">
+        <TabsTrigger value="table">Table</TabsTrigger>
+        <TabsTrigger value="heap">Heap Inspector</TabsTrigger>
+      </TabsList>
+      <TabsContent value="table" className="min-h-0 flex-1 overflow-auto pt-2">
+        <TableContentPreview db={db} table={table} refreshTick={refreshTick} />
+      </TabsContent>
+      <TabsContent
+        value="heap"
+        className="min-h-0 flex-1 overflow-auto rounded border border-line bg-panel/50 p-3 pt-2"
+      >
         <HeapInspector db={db} table={table} refreshTick={refreshTick} />
-      </section>
-    </div>
+      </TabsContent>
+    </Tabs>
   );
 }
 
@@ -329,18 +319,10 @@ function ResultsBody({ state }: { state: RunState }) {
         <TableBody>
           {r.rows.map((row) => (
             <TableRow key={row.name}>
-              <TableCell className="border border-line px-2.5 py-1">
-                {row.name}
-              </TableCell>
-              <TableCell className="border border-line px-2.5 py-1">
-                {row.table}
-              </TableCell>
-              <TableCell className="border border-line px-2.5 py-1">
-                {row.columns.join(", ")}
-              </TableCell>
-              <TableCell className="border border-line px-2.5 py-1">
-                {row.kind}
-              </TableCell>
+              <TableCell className="border border-line px-2.5 py-1">{row.name}</TableCell>
+              <TableCell className="border border-line px-2.5 py-1">{row.table}</TableCell>
+              <TableCell className="border border-line px-2.5 py-1">{row.columns.join(", ")}</TableCell>
+              <TableCell className="border border-line px-2.5 py-1">{row.kind}</TableCell>
             </TableRow>
           ))}
         </TableBody>

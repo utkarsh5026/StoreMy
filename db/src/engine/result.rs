@@ -110,6 +110,54 @@ pub enum StatementResult {
 }
 
 impl StatementResult {
+    /// A short, stable lowercase label for the result kind — used in log fields.
+    pub fn kind_name(&self) -> &'static str {
+        match self {
+            Self::NoOp { .. } => "noop",
+            Self::TableCreated { .. } => "table_created",
+            Self::TableDropped { .. } => "table_dropped",
+            Self::IndexCreated { .. } => "index_created",
+            Self::IndexDropped { .. } => "index_dropped",
+            Self::IndexesShown { .. } => "indexes_shown",
+            Self::Inserted { .. } => "inserted",
+            Self::Deleted { .. } => "deleted",
+            Self::Updated { .. } => "updated",
+            Self::Selected { .. } => "selected",
+            Self::ColumnRenamed { .. } => "column_renamed",
+            Self::ColumnAdded { .. } => "column_added",
+            Self::ColumnDropped { .. } => "column_dropped",
+            Self::TableRenamed { .. } => "table_renamed",
+            Self::ColumnDefaultSet { .. } => "column_default_set",
+            Self::ColumnDefaultDropped { .. } => "column_default_dropped",
+            Self::ColumnNotNullDropped { .. } => "column_not_null_dropped",
+            Self::PrimaryKeySet { .. } => "primary_key_set",
+            Self::PrimaryKeyDropped { .. } => "primary_key_dropped",
+            Self::UniqueConstraintAdded { .. } => "unique_constraint_added",
+            Self::ConstraintDropped { .. } => "constraint_dropped",
+        }
+    }
+
+    /// A one-line human summary for log output: row counts, table names, etc.
+    pub fn log_summary(&self) -> String {
+        match self {
+            Self::Selected { table, rows, .. } => format!("{} row(s) from '{table}'", rows.len()),
+            Self::Inserted { table, rows } => format!("{rows} row(s) into '{table}'"),
+            Self::Deleted { table, rows } => format!("{rows} row(s) from '{table}'"),
+            Self::Updated { table, rows } => format!("{rows} row(s) in '{table}'"),
+            Self::TableCreated { name, file_id, .. } => format!("'{name}' file_id={file_id}"),
+            Self::TableDropped { name } | Self::IndexDropped { name } => format!("'{name}'"),
+            Self::IndexCreated { name, table, .. } => format!("'{name}' on '{table}'"),
+            Self::IndexesShown { scope, rows } => {
+                let n = rows.len();
+                match scope {
+                    Some(t) => format!("{n} index(es) on '{t}'"),
+                    None => format!("{n} index(es)"),
+                }
+            }
+            _ => String::new(),
+        }
+    }
+
     pub(super) fn table_created(
         name: impl Into<String>,
         file_id: FileId,

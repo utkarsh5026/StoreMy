@@ -1,0 +1,85 @@
+{
+  "uid": "storemy-logs",
+  "title": "StoreMy — Query Logs",
+  "tags": ["storemy", "logs"],
+  "refresh": "5s",
+  "time": { "from": "now-15m", "to": "now" },
+  "panels": [
+    {
+      "id": 1,
+      "title": "Errors & Warnings",
+      "type": "logs",
+      "gridPos": { "x": 0, "y": 0, "w": 24, "h": 6 },
+      "datasource": { "type": "loki", "uid": "loki" },
+      "targets": [
+        {
+          "expr": "{job=\"storemy\"} |= \"WARN\" or {job=\"storemy\"} |= \"ERROR\"",
+          "refId": "A"
+        }
+      ],
+      "options": {
+        "showTime": true,
+        "showLabels": false,
+        "wrapLogMessage": true,
+        "sortOrder": "Descending",
+        "dedupStrategy": "none"
+      }
+    },
+    {
+      "id": 2,
+      "title": "Query Log  (all queries — db / kind / summary)",
+      "type": "logs",
+      "gridPos": { "x": 0, "y": 6, "w": 24, "h": 8 },
+      "datasource": { "type": "loki", "uid": "loki" },
+      "targets": [
+        {
+          "expr": "{job=\"storemy\"} |= \"query\"",
+          "refId": "A"
+        }
+      ],
+      "options": {
+        "showTime": true,
+        "showLabels": true,
+        "wrapLogMessage": false,
+        "sortOrder": "Descending",
+        "dedupStrategy": "none"
+      }
+    },
+    {
+      "id": 3,
+      "title": "All Logs (live tail)",
+      "type": "logs",
+      "gridPos": { "x": 0, "y": 14, "w": 24, "h": 10 },
+      "datasource": { "type": "loki", "uid": "loki" },
+      "targets": [
+        {
+          "expr": "{job=\"storemy\"}",
+          "refId": "A"
+        }
+      ],
+      "options": {
+        "showTime": true,
+        "showLabels": false,
+        "wrapLogMessage": false,
+        "sortOrder": "Descending",
+        "dedupStrategy": "none",
+        "enableLogDetails": true
+      }
+    },
+    {
+      "id": 4,
+      "title": "Log volume",
+      "type": "timeseries",
+      "gridPos": { "x": 0, "y": 24, "w": 24, "h": 5 },
+      "datasource": { "type": "loki", "uid": "loki" },
+      "targets": [
+        {
+          "expr": "sum by (level) (rate({job=\"storemy\"}[1m]))",
+          "legendFormat": "{{level}}",
+          "refId": "A"
+        }
+      ]
+    }
+  ],
+  "schemaVersion": 36
+}

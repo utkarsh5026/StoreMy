@@ -16,7 +16,10 @@ mod render;
 mod state;
 mod theme;
 
-use std::path::Path;
+use std::{
+    io::{self, Write},
+    path::Path,
+};
 
 use rustyline::{Config, Editor, error::ReadlineError, history::DefaultHistory};
 
@@ -76,7 +79,7 @@ pub fn run(db: &Database, history_path: &Path, data_dir: &Path, buffer_pages: us
                 execute_and_print(db, &line, &state);
             }
             Err(ReadlineError::Interrupted) => {
-                println!("{}", theme::dim("(canceled)"));
+                let _ = writeln!(io::stdout(), "{}", theme::dim("(canceled)"));
             }
             Err(ReadlineError::Eof) => break,
             Err(e) => {
@@ -98,6 +101,41 @@ pub fn execute_one_shot(db: &Database, sql: &str) {
         explain: false,
     };
     execute_and_print(db, sql, &state);
+}
+
+/// Runs every SQL statement in `content` and prints each result.
+///
+/// Statements are split on `;`. Comment-only lines (`--`) are stripped before
+/// running each fragment. Timing is shown after each statement so it's easy to
+/// spot which step is slow.
+///
+/// Note: `;` inside string literals will be mis-parsed as a statement
+/// boundary — that's an acceptable limitation for a test/script runner.
+pub fn execute_script(db: &Database, content: &str) {
+    let state = ReplState {
+        show_timing: true,
+        explain: false,
+    };
+    let mut count = 0usize;
+    for raw in content.split(';') {
+        // Strip comment lines, then re-join and trim.
+        let sql: String = raw
+            .lines()
+            .filter(|l| !l.trim_start().starts_with("--"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let sql = sql.trim();
+        if sql.is_empty() {
+            continue;
+        }
+        count += 1;
+        let preview = truncate(sql, 72);
+        let _ = writeln!(io::stdout(), "\n[{count}] {preview}");
+        execute_and_print(db, sql, &state);
+    }
+    if count == 0 {
+        let _ = writeln!(io::stdout(), "(empty script — nothing to run)");
+    }
 }
 
 /// Truncate a string to at most `max` chars for use in span fields.

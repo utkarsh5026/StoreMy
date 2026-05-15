@@ -4,6 +4,7 @@ version = "0.1.0"
 edition = "2024"
 authors = ["Utkarsh Priyadarshi"]
 description = "A relational database management system built from scratch"
+default-run = "storemy"
 license = "MIT"
 repository = "https://github.com/utkarsh-priyadarshi/storemy"
 keywords = ["database", "sql", "storage-engine", "btree"]
