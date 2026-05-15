@@ -1,10 +1,9 @@
-use super::{ConstraintViolation, EngineError};
+use super::EngineError;
 use crate::{
-    FileId, Value,
+    FileId,
     catalog::TableInfo,
-    execution::expression::BooleanExpression,
-    parser::statements::{BinOp, ColumnRef, Expr, UnOp},
-    primitives::{NonEmptyString, Predicate},
+    parser::statements::ColumnRef,
+    primitives::NonEmptyString,
     tuple::{Field, TupleSchema},
 };
 
@@ -44,113 +43,14 @@ impl BoundTable {
 /// Shared name-resolution behavior for both [`Scope`] (multi-table) and
 /// [`SingleTableScope`] (DML).
 ///
-/// Implementors only need to say how to resolve a single [`ColumnRef`]
-/// against whatever tables are in scope. The default [`bind_where`]
-/// walks the predicate tree and uses [`resolve`] at every leaf, so all
-/// the recursion / value-coercion logic lives in one place.
-///
-/// [`bind_where`]: ColumnResolver::bind_where
-/// [`resolve`]: ColumnResolver::resolve
+/// Used when resolving column references in `SELECT`, `GROUP BY`, `ORDER BY`,
+/// and join-equi extraction. WHERE/HAVING/ON predicates are now passed as raw
+/// [`Expr`] and evaluated lazily via `eval_expr`.
 pub(super) trait ColumnResolver {
     /// Resolves a `ColumnRef` against the in-scope tables.
     ///
-    /// Returns `(global_column_index, field, owning_table_name)` so the
-    /// caller can build a column-vs-literal predicate and report errors
-    /// against the correct table.
+    /// Returns `(global_column_index, field, owning_table_name)`.
     fn resolve<'a>(&'a self, col: &ColumnRef) -> Result<(usize, &'a Field, &'a str), EngineError>;
-
-    /// Binds a parsed boolean [`Expr`] tree into a [`BooleanExpression`].
-    ///
-    /// Default implementation recursively binds `And`/`Or` and uses
-    /// [`Self::resolve`] + [`fit_value_to_field`] at each leaf — so a
-    /// single-table and multi-table scope share this code unchanged.
-    fn bind_where(&self, w: &Expr) -> Result<BooleanExpression, EngineError> {
-        match w {
-            Expr::BinaryOp { lhs, op, rhs } => match op {
-                BinOp::And => Ok(BooleanExpression::And(
-                    Box::new(self.bind_where(lhs)?),
-                    Box::new(self.bind_where(rhs)?),
-                )),
-                BinOp::Or => Ok(BooleanExpression::Or(
-                    Box::new(self.bind_where(lhs)?),
-                    Box::new(self.bind_where(rhs)?),
-                )),
-                BinOp::Eq | BinOp::NotEq | BinOp::Lt | BinOp::LtEq | BinOp::Gt | BinOp::GtEq => {
-                    self.bind_comparison(lhs, *op, rhs)
-                }
-            },
-            Expr::UnaryOp {
-                op: UnOp::Not,
-                operand,
-            } => Ok(BooleanExpression::Not(Box::new(self.bind_where(operand)?))),
-            other => Err(EngineError::Unsupported(format!(
-                "unsupported boolean expression in WHERE/HAVING/ON: {other}"
-            ))),
-        }
-    }
-
-    /// Resolves an optional boolean [`Expr`] into an optional [`BooleanExpression`].
-    fn resolve_where(&self, w: Option<&Expr>) -> Result<Option<BooleanExpression>, EngineError> {
-        w.map(|w| self.bind_where(w)).transpose()
-    }
-
-    fn bind_comparison(
-        &self,
-        lhs: &Expr,
-        op: BinOp,
-        rhs: &Expr,
-    ) -> Result<BooleanExpression, EngineError> {
-        let pred = binop_to_predicate(op).ok_or_else(|| {
-            EngineError::Unsupported(format!("unsupported comparison operator in WHERE: {op:?}"))
-        })?;
-
-        match (lhs, rhs) {
-            (Expr::Column(lc), Expr::Literal(rv)) => {
-                let (l_idx, l_fld, l_table) = self.resolve(lc)?;
-                let lit = fit_value_to_field(rv, l_fld, l_table)?;
-                Ok(BooleanExpression::col_op_lit(l_idx, pred, lit))
-            }
-            (Expr::Literal(lv), Expr::Column(rc)) => {
-                let (r_idx, r_fld, r_table) = self.resolve(rc)?;
-                let lit = fit_value_to_field(lv, r_fld, r_table)?;
-                Ok(BooleanExpression::col_op_lit(
-                    r_idx,
-                    flip_predicate(pred),
-                    lit,
-                ))
-            }
-            (Expr::Column(lc), Expr::Column(rc)) => {
-                let (l_idx, _l_fld, _l_table) = self.resolve(lc)?;
-                let (r_idx, _r_fld, _r_table) = self.resolve(rc)?;
-                Ok(BooleanExpression::col_op_col(l_idx, pred, r_idx))
-            }
-            _ => Err(EngineError::Unsupported(format!(
-                "unsupported comparison operands in WHERE/HAVING/ON: {lhs} {op} {rhs}"
-            ))),
-        }
-    }
-}
-
-fn binop_to_predicate(op: BinOp) -> Option<Predicate> {
-    Some(match op {
-        BinOp::Eq => Predicate::Equals,
-        BinOp::NotEq => Predicate::NotEqualBracket,
-        BinOp::Lt => Predicate::LessThan,
-        BinOp::LtEq => Predicate::LessThanOrEqual,
-        BinOp::Gt => Predicate::GreaterThan,
-        BinOp::GtEq => Predicate::GreaterThanOrEqual,
-        BinOp::And | BinOp::Or => return None,
-    })
-}
-
-fn flip_predicate(p: Predicate) -> Predicate {
-    match p {
-        Predicate::LessThan => Predicate::GreaterThan,
-        Predicate::GreaterThan => Predicate::LessThan,
-        Predicate::LessThanOrEqual => Predicate::GreaterThanOrEqual,
-        Predicate::GreaterThanOrEqual => Predicate::LessThanOrEqual,
-        other => other,
-    }
 }
 
 /// Multi-table name-resolution environment used while binding `SELECT`.
@@ -279,27 +179,4 @@ impl ColumnResolver for SingleTableScope {
 
         Ok((usize::from(local), fld, self.name.as_str()))
     }
-}
-
-/// Coerces a literal to a column's declared type, honoring nullability.
-pub(super) fn fit_value_to_field(
-    value: &Value,
-    field: &Field,
-    table: &str,
-) -> Result<Value, EngineError> {
-    if matches!(value, Value::Null) {
-        if !field.nullable {
-            return Err(ConstraintViolation::NullViolation {
-                table: table.into(),
-                column: field.name.to_string(),
-            }
-            .into());
-        }
-        return Ok(Value::Null);
-    }
-    Value::try_from((value, field.field_type)).map_err(|e| EngineError::TypeMismatch {
-        column: field.name.to_string(),
-        expected: field.field_type.to_string(),
-        got: e.to_string(),
-    })
 }

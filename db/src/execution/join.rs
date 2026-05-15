@@ -63,7 +63,8 @@ use fallible_iterator::FallibleIterator;
 use super::{ExecutionError, Executor};
 use crate::{
     Value,
-    execution::{PlanNode, expression::BooleanExpression},
+    execution::{PlanNode, eval::eval_expr},
+    parser::statements::Expr,
     primitives::{ColumnId, Predicate},
     tuple::{Tuple, TupleSchema},
 };
@@ -136,7 +137,7 @@ fn get_value(tuple: &Tuple, col: ColumnId, is_left: bool) -> Result<&Value, Exec
 /// Internal container for a pair of child inputs and their merged output schema.
 ///
 /// Used by every join executor as the common "two children + output schema" bundle.
-/// The join-specific matching logic (`JoinPredicate`, `BooleanExpression`, residual,
+/// The join-specific matching logic (`JoinPredicate`, `Expr` residual,
 /// etc.) lives on each executor itself.
 ///
 /// Not exposed outside the execution module.
@@ -194,7 +195,7 @@ fn drain_tuples(
 /// `left.concat(right)` with every buffered right tuple and evaluates `predicate` over
 /// the combined tuple, emitting pairs that satisfy it.
 ///
-/// Because the predicate is a general [`BooleanExpression`], NLJ supports arbitrary
+/// Because the predicate is a general [`Expr`] evaluated via `eval_expr`, NLJ supports arbitrary
 /// boolean combinations over both sides (e.g. `l.a = r.x AND l.b < r.y`).
 ///
 /// # SQL shape
@@ -211,7 +212,7 @@ fn drain_tuples(
 #[derive(Debug)]
 pub struct NestedLoopJoin<'a> {
     inputs: Box<JoinInputs<'a>>,
-    predicate: BooleanExpression,
+    predicate: Expr,
     right_buf: Vec<Tuple>,
     materialized: bool,
     pending: VecDeque<Tuple>,
@@ -220,13 +221,11 @@ pub struct NestedLoopJoin<'a> {
 impl<'a> NestedLoopJoin<'a> {
     /// Creates a nested-loop join executor for `left ⋈ right` using `predicate`.
     ///
-    /// `predicate` is evaluated over the concatenated `left.concat(right)` tuple. Right-side
-    /// column references must be built with an offset equal to the left input's width — use
-    /// [`left_width`](Self::left_width) on the built executor if you need it, or compute it
-    /// from `left.schema().num_fields()` before calling this constructor.
+    /// The predicate is evaluated with `eval_expr` over the concatenated `left.concat(right)`
+    /// tuple, using the merged schema built internally from `left.schema()` + `right.schema()`.
     ///
     /// The right input is read and buffered on the first call to [`FallibleIterator::next`].
-    pub fn new(left: PlanNode<'a>, right: PlanNode<'a>, predicate: BooleanExpression) -> Self {
+    pub fn new(left: PlanNode<'a>, right: PlanNode<'a>, predicate: Expr) -> Self {
         Self {
             inputs: Box::new(JoinInputs::new(left, right)),
             predicate,
@@ -291,7 +290,10 @@ impl FallibleIterator for NestedLoopJoin<'_> {
 
             for right in &self.right_buf {
                 let joined = l.concat(right);
-                if self.predicate.eval(&joined)? {
+                if matches!(
+                    eval_expr(&self.predicate, &joined, &self.inputs.schema)?,
+                    Value::Bool(true)
+                ) {
                     self.pending.push_back(joined);
                 }
             }
@@ -314,7 +316,7 @@ impl Executor for NestedLoopJoin<'_> {
 /// Joins two inputs by building a hash table on the right input.
 ///
 /// Requires an equality predicate as the hash key. An optional `residual`
-/// [`BooleanExpression`] evaluated over `left.concat(right)` can further restrict
+/// An `Expr` residual evaluated over `left.concat(right)` can further restrict
 /// matches after the key probe — useful for compound join conditions like
 /// `l.a = r.x AND l.b < r.y`, where `l.a = r.x` is the hash key and `l.b < r.y`
 /// is the residual.
@@ -339,7 +341,7 @@ impl Executor for NestedLoopJoin<'_> {
 pub struct HashJoin<'a> {
     inputs: Box<JoinInputs<'a>>,
     predicate: JoinPredicate,
-    residual: Option<BooleanExpression>,
+    residual: Option<Expr>,
     hash_table: HashMap<Value, Vec<Tuple>>,
     pending: VecDeque<Tuple>,
     materialized: bool,
@@ -377,7 +379,7 @@ impl<'a> HashJoin<'a> {
     /// hash-key match succeeds, so right-side column references must be offset by
     /// [`left_width`](Self::left_width).
     #[must_use]
-    pub fn with_residual(mut self, residual: BooleanExpression) -> Self {
+    pub fn with_residual(mut self, residual: Expr) -> Self {
         self.residual = Some(residual);
         self
     }
@@ -428,7 +430,10 @@ impl FallibleIterator for HashJoin<'_> {
                 let joined = l.concat(&r);
                 let keep = match &self.residual {
                     None => true,
-                    Some(expr) => expr.eval(&joined)?,
+                    Some(expr) => matches!(
+                        eval_expr(expr, &joined, &self.inputs.schema)?,
+                        Value::Bool(true)
+                    ),
                 };
                 if keep {
                     return Ok(Some(joined));
@@ -511,7 +516,7 @@ impl IndexMut<usize> for TupleCursor {
 /// Joins two inputs by sorting them on the join key and then merging.
 ///
 /// Requires an equality predicate as the merge key. An optional `residual`
-/// [`BooleanExpression`] evaluated over `left.concat(right)` can further restrict
+/// An `Expr` residual evaluated over `left.concat(right)` can further restrict
 /// matches after the key match succeeds.
 ///
 /// # SQL shape
@@ -528,7 +533,7 @@ impl IndexMut<usize> for TupleCursor {
 pub struct SortMergeJoin<'a> {
     inputs: Box<JoinInputs<'a>>,
     predicate: JoinPredicate,
-    residual: Option<BooleanExpression>,
+    residual: Option<Expr>,
     l_sorted: TupleCursor,
     r_sorted: TupleCursor,
     pending: VecDeque<Tuple>,
@@ -565,7 +570,7 @@ impl<'a> SortMergeJoin<'a> {
     /// equal-key match, so right-side column references must be offset by
     /// [`left_width`](Self::left_width).
     #[must_use]
-    pub fn with_residual(mut self, residual: BooleanExpression) -> Self {
+    pub fn with_residual(mut self, residual: Expr) -> Self {
         self.residual = Some(residual);
         self
     }
@@ -640,7 +645,10 @@ impl<'a> SortMergeJoin<'a> {
 
                 let keep = match &self.residual {
                     None => true,
-                    Some(expr) => expr.eval(&joined)?,
+                    Some(expr) => matches!(
+                        eval_expr(expr, &joined, &self.inputs.schema)?,
+                        Value::Bool(true)
+                    ),
                 };
                 if keep {
                     self.pending.push_back(joined);
@@ -734,6 +742,7 @@ mod tests {
         buffer_pool::page_store::PageStore,
         execution::scan::SeqScan,
         heap::file::HeapFile,
+        parser::statements::{BinOp, Expr},
         tuple::{Field, Tuple, TupleSchema},
         types::{Type, Value},
         wal::writer::Wal,
@@ -745,6 +754,11 @@ mod tests {
 
     fn schema_ab() -> TupleSchema {
         TupleSchema::new(vec![field("a", Type::Int32), field("b", Type::Int32)])
+    }
+
+    // Right-side schema for NLJ tests — distinct names avoid ambiguity in the merged schema.
+    fn schema_xy() -> TupleSchema {
+        TupleSchema::new(vec![field("x", Type::Int32), field("y", Type::Int32)])
     }
 
     fn tup(a: i32, b: i32) -> Tuple {
@@ -802,6 +816,43 @@ mod tests {
         }
     }
 
+    // Heap with schema_xy() — used for NLJ right-side to avoid name clashes with schema_ab().
+    fn build_heap_xy(id: u64, tuples: &[Tuple]) -> HeapHarness {
+        let dir = tempdir().unwrap();
+        let wal = Arc::new(Wal::new(&dir.path().join(format!("w{id}.wal")), 0).unwrap());
+        let store = Arc::new(PageStore::new(16, Arc::clone(&wal)));
+        let file_id = FileId::new(id);
+        let path = dir.path().join(format!("h{id}.db"));
+        let file = std::fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .open(&path)
+            .unwrap();
+        file.set_len((4 * crate::storage::PAGE_SIZE) as u64)
+            .unwrap();
+        drop(file);
+        store.register_file(file_id, &path).unwrap();
+        let heap = HeapFile::new(
+            file_id,
+            schema_xy(),
+            Arc::clone(&store),
+            0,
+            Arc::clone(&wal),
+        );
+        let txn = TransactionId::new(id);
+        wal.log_begin(txn).unwrap();
+        for t in tuples {
+            heap.insert_tuple(txn, t).unwrap();
+        }
+        HeapHarness {
+            heap,
+            wal,
+            _dir: dir,
+            txn,
+        }
+    }
+
     fn scan(h: &HeapHarness) -> PlanNode<'_> {
         PlanNode::SeqScan(SeqScan::new(&h.heap, h.txn))
     }
@@ -814,16 +865,19 @@ mod tests {
         JoinPredicate::new(col(l), col(r), Predicate::Equals)
     }
 
-    // Build a BooleanExpression for NLJ evaluated over the concatenated tuple.
-    // `r` is the right-side column index in the right tuple; the concatenated
-    // offset is `r + left_width`.
-    fn nlj_expr(l: usize, op: Predicate, r: usize, left_width: usize) -> BooleanExpression {
-        BooleanExpression::col_op_col(l, op, r + left_width)
+    // Build an `Expr` for NLJ over the concatenated (schema_ab ⋈ schema_xy) tuple.
+    // left column names: "a"=0, "b"=1; right column names: "x"=2, "y"=3.
+    fn nlj_col_expr(left_col: &str, op: BinOp, right_col: &str) -> Expr {
+        Expr::BinaryOp {
+            lhs: Box::new(Expr::Column(left_col.into())),
+            op,
+            rhs: Box::new(Expr::Column(right_col.into())),
+        }
     }
 
-    // Most NLJ tests use two 2-column tables, so left_width = 2 and col_l = col_r = 0.
-    fn nlj_eq_0_0_w2() -> BooleanExpression {
-        nlj_expr(0, Predicate::Equals, 0, 2)
+    // Most NLJ tests: left.a = right.x  (both at position 0 in their respective tables).
+    fn nlj_eq_0_0_w2() -> Expr {
+        nlj_col_expr("a", BinOp::Eq, "x")
     }
 
     fn drain<I: FallibleIterator<Item = Tuple, Error = ExecutionError>>(
@@ -842,8 +896,6 @@ mod tests {
             other => panic!("expected Int32 at {i}, got {other:?}"),
         }
     }
-
-    // ===== JoinPredicate::evaluate =====
 
     // happy path: equality
     #[test]
@@ -919,7 +971,7 @@ mod tests {
     #[test]
     fn test_nlj_basic_equi_join() {
         let left = build_heap(101, &[tup(1, 10), tup(2, 20), tup(3, 30)]);
-        let right = build_heap(102, &[tup(1, 100), tup(2, 200), tup(4, 400)]);
+        let right = build_heap_xy(102, &[tup(1, 100), tup(2, 200), tup(4, 400)]);
 
         let mut j = NestedLoopJoin::new(scan(&left), scan(&right), nlj_eq_0_0_w2());
         let out = drain(&mut j);
@@ -933,7 +985,7 @@ mod tests {
     #[test]
     fn test_nlj_empty_left() {
         let left = build_heap(103, &[]);
-        let right = build_heap(104, &[tup(1, 100)]);
+        let right = build_heap_xy(104, &[tup(1, 100)]);
         let mut j = NestedLoopJoin::new(scan(&left), scan(&right), nlj_eq_0_0_w2());
         assert!(j.next().unwrap().is_none());
     }
@@ -942,7 +994,7 @@ mod tests {
     #[test]
     fn test_nlj_empty_right() {
         let left = build_heap(105, &[tup(1, 10)]);
-        let right = build_heap(106, &[]);
+        let right = build_heap_xy(106, &[]);
         let mut j = NestedLoopJoin::new(scan(&left), scan(&right), nlj_eq_0_0_w2());
         assert!(j.next().unwrap().is_none());
     }
@@ -951,16 +1003,16 @@ mod tests {
     #[test]
     fn test_nlj_duplicate_keys_cartesian() {
         let left = build_heap(107, &[tup(1, 10), tup(1, 11)]);
-        let right = build_heap(108, &[tup(1, 100), tup(1, 101)]);
+        let right = build_heap_xy(108, &[tup(1, 100), tup(1, 101)]);
         let mut j = NestedLoopJoin::new(scan(&left), scan(&right), nlj_eq_0_0_w2());
         assert_eq!(drain(&mut j).len(), 4);
     }
 
-    // rows whose join key is NULL never match and are filtered at materialization
+    // rows whose join key is NULL never match
     #[test]
     fn test_nlj_skips_right_null_keys() {
         let left = build_heap(109, &[tup(1, 10)]);
-        let right = build_heap(110, &[tup_null_a(100), tup(1, 200)]);
+        let right = build_heap_xy(110, &[tup_null_a(100), tup(1, 200)]);
         let mut j = NestedLoopJoin::new(scan(&left), scan(&right), nlj_eq_0_0_w2());
         assert_eq!(drain(&mut j).len(), 1);
     }
@@ -969,9 +1021,9 @@ mod tests {
     #[test]
     fn test_nlj_less_than_predicate() {
         let left = build_heap(111, &[tup(1, 0), tup(5, 0)]);
-        let right = build_heap(112, &[tup(3, 0), tup(10, 0)]);
-        // left.col0 < right.col0, with right's col0 at concat-index 0 + left_width(2) = 2
-        let p = nlj_expr(0, Predicate::LessThan, 0, 2);
+        let right = build_heap_xy(112, &[tup(3, 0), tup(10, 0)]);
+        // left.a < right.x
+        let p = nlj_col_expr("a", BinOp::Lt, "x");
         let mut j = NestedLoopJoin::new(scan(&left), scan(&right), p);
         // (1,3), (1,10), (5,10)
         assert_eq!(drain(&mut j).len(), 3);
@@ -981,7 +1033,7 @@ mod tests {
     #[test]
     fn test_nlj_rewind_replays_output() {
         let left = build_heap(113, &[tup(1, 10), tup(2, 20)]);
-        let right = build_heap(114, &[tup(1, 100), tup(2, 200)]);
+        let right = build_heap_xy(114, &[tup(1, 100), tup(2, 200)]);
         let mut j = NestedLoopJoin::new(scan(&left), scan(&right), nlj_eq_0_0_w2());
         let first = drain(&mut j).len();
         j.rewind().unwrap();
@@ -994,7 +1046,7 @@ mod tests {
     #[test]
     fn test_nlj_schema_merged() {
         let left = build_heap(115, &[]);
-        let right = build_heap(116, &[]);
+        let right = build_heap_xy(116, &[]);
         let j = NestedLoopJoin::new(scan(&left), scan(&right), nlj_eq_0_0_w2());
         assert_eq!(j.schema().physical_num_fields(), 4);
     }
@@ -1064,16 +1116,14 @@ mod tests {
         let _ = HashJoin::new(scan(&left), scan(&right), p);
     }
 
-    // residual narrows matches after the hash-key probe: `a = x AND l.b < r.b`
+    // residual narrows matches after the hash-key probe: key match AND left.b < right.y
     #[test]
     fn test_hash_join_residual_filters_after_key_match() {
-        // left col0 is the key, col1 is b. right col0 is x, col1 is b.
-        // Expected keep-conditions: key match AND left.col1 < right.col1.
         let left = build_heap(147, &[tup(1, 10), tup(1, 50)]);
-        let right = build_heap(148, &[tup(1, 20), tup(1, 60)]);
+        let right = build_heap_xy(148, &[tup(1, 20), tup(1, 60)]);
 
-        // key = eq(0, 0); residual = col1 < col3 (left_width = 2 → right.col1 at index 3).
-        let residual = BooleanExpression::col_op_col(1, Predicate::LessThan, 3);
+        // key = a=x (col0=col0); residual = left.b < right.y
+        let residual = nlj_col_expr("b", BinOp::Lt, "y");
         let mut j = HashJoin::new(scan(&left), scan(&right), eq_pred(0, 0)).with_residual(residual);
 
         let out = drain(&mut j);
@@ -1186,13 +1236,13 @@ mod tests {
         let _ = SortMergeJoin::new(scan(&left), scan(&right), p);
     }
 
-    // residual narrows matches after equal-key merge: `a = x AND l.b < r.b`
+    // residual narrows matches after equal-key merge: key match AND left.b < right.y
     #[test]
     fn test_smj_residual_filters_after_key_match() {
         let left = build_heap(149, &[tup(1, 10), tup(1, 50)]);
-        let right = build_heap(150, &[tup(1, 20), tup(1, 60)]);
+        let right = build_heap_xy(150, &[tup(1, 20), tup(1, 60)]);
 
-        let residual = BooleanExpression::col_op_col(1, Predicate::LessThan, 3);
+        let residual = nlj_col_expr("b", BinOp::Lt, "y");
         let mut j =
             SortMergeJoin::new(scan(&left), scan(&right), eq_pred(0, 0)).with_residual(residual);
 
@@ -1200,22 +1250,23 @@ mod tests {
         assert_eq!(drain(&mut j).len(), 3);
     }
 
-    // NLJ now supports compound boolean conditions — the original question.
-    // Equi-join on col0 AND inequality on col1 of the concatenated tuple.
+    // NLJ supports compound boolean conditions.
+    // Equi-join on left.a = right.x AND left.b < right.y.
     #[test]
     fn test_nlj_compound_and_predicate() {
         let left = build_heap(151, &[tup(1, 10), tup(1, 50), tup(2, 10)]);
-        let right = build_heap(152, &[tup(1, 20), tup(2, 5)]);
+        let right = build_heap_xy(152, &[tup(1, 20), tup(2, 5)]);
 
-        // left.col0 = right.col0 AND left.col1 < right.col1
-        // right's col0 is concat-index 2, col1 is concat-index 3, left_width = 2.
-        let key_eq = BooleanExpression::col_op_col(0, Predicate::Equals, 2);
-        let b_lt = BooleanExpression::col_op_col(1, Predicate::LessThan, 3);
-        let pred = BooleanExpression::And(Box::new(key_eq), Box::new(b_lt));
+        // left.a = right.x AND left.b < right.y
+        let pred = Expr::BinaryOp {
+            lhs: Box::new(nlj_col_expr("a", BinOp::Eq, "x")),
+            op: BinOp::And,
+            rhs: Box::new(nlj_col_expr("b", BinOp::Lt, "y")),
+        };
 
         let mut j = NestedLoopJoin::new(scan(&left), scan(&right), pred);
         let out = drain(&mut j);
-        // Candidates with matching col0:
+        // Candidates with matching a=x:
         //   (1,10)·(1,20) → 10<20 ✓
         //   (1,50)·(1,20) → 50<20 ✗
         //   (2,10)·(2,5)  → 10<5  ✗

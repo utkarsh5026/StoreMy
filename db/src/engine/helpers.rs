@@ -9,9 +9,9 @@ use crate::{
         systable::FkAction,
     },
     engine::{ConstraintViolation, Engine, EngineError},
-    execution::{ExecutionError, eval::eval_expr, expression::BooleanExpression},
+    execution::{ExecutionError, eval::eval_expr},
     heap::file::HeapFile,
-    parser::statements::TableConstraint,
+    parser::statements::{Expr, TableConstraint},
     primitives::{ColumnId, NonEmptyString, RecordId},
     transaction::Transaction,
     tuple::{Field, Tuple, TupleSchema},
@@ -277,17 +277,14 @@ impl Engine<'_> {
     ///
     /// Collect only rows where the first column equals `42`:
     ///
-    /// ```ignore
-    /// use storemy::{execution::expression::BooleanExpression, primitives::Predicate, types::Value};
+    /// Scans `heap` and returns every `(RecordId, Tuple)` that satisfies `predicate`.
     ///
-    /// let predicate = BooleanExpression::col_op_lit(0, Predicate::Equals, Value::Int32(42));
-    /// let rows = collect_matching(&heap, txn_id, Some(&predicate))?;
-    /// // rows contains only tuples whose first column is 42
-    /// ```
+    /// When `predicate` is `None` every row is returned (unfiltered full scan).
     pub(super) fn collect_matching_rows(
         heap: &HeapFile,
         transaction_id: TransactionId,
-        predicate: Option<&BooleanExpression>,
+        predicate: Option<&Expr>,
+        schema: &TupleSchema,
     ) -> Result<Vec<(RecordId, Tuple)>, EngineError> {
         let mut scan = heap.scan(transaction_id)?;
         let mut out = Vec::new();
@@ -295,9 +292,11 @@ impl Engine<'_> {
         while let Some((rid, tuple)) = FallibleIterator::next(&mut scan)? {
             let keep = match predicate {
                 None => true,
-                Some(p) => p
-                    .eval(&tuple)
-                    .map_err(|e| EngineError::TypeError(e.to_string()))?,
+                Some(expr) => matches!(
+                    eval_expr(expr, &tuple, schema)
+                        .map_err(|e| EngineError::TypeError(e.to_string()))?,
+                    crate::Value::Bool(true)
+                ),
             };
             if keep {
                 out.push((rid, tuple));

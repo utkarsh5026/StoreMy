@@ -24,12 +24,11 @@
 //! - [`join`]       — nested-loop, hash, and sort-merge joins
 //! - [`setops`]     — union, intersect, except, distinct
 //! - [`aggregate`]  — grouping and aggregation
-//! - [`expression`] — `BooleanExpression`, the predicate primitive shared by filter and join
-//!   operators
+//! - [`eval`]       — `eval_expr`, the scalar expression evaluator used by filter, join, and
+//!   constraint evaluation
 
 pub mod aggregate;
 pub mod eval;
-pub mod expression;
 pub mod join;
 pub mod scan;
 pub mod setops;
@@ -40,9 +39,10 @@ use thiserror::Error;
 
 use crate::{
     TransactionId,
-    execution::{expression::BooleanExpression, setops::Distinct},
+    execution::setops::Distinct,
     heap::file::HeapFile,
     index::AnyIndex,
+    parser::statements::Expr,
     primitives::ColumnId,
     tuple::{Tuple, TupleSchema},
 };
@@ -130,8 +130,8 @@ impl<'a> PlanNode<'a> {
         Self::IndexScan(scan::IndexScan::new(heap, index, txn, spec))
     }
 
-    pub fn filter(child: Self, predicate: BooleanExpression) -> Self {
-        Self::Filter(unary::Filter::new(Box::new(child), predicate))
+    pub fn filter(child: Self, predicate: Expr, schema: TupleSchema) -> Self {
+        Self::Filter(unary::Filter::new(Box::new(child), predicate, schema))
     }
 
     pub fn distinct(child: Self) -> Self {
@@ -153,7 +153,7 @@ impl<'a> PlanNode<'a> {
         )?))
     }
 
-    pub fn nested_loop_join(left: Self, right: Self, predicate: BooleanExpression) -> Self {
+    pub fn nested_loop_join(left: Self, right: Self, predicate: Expr) -> Self {
         Self::NestedLoopJoin(join::NestedLoopJoin::new(left, right, predicate))
     }
 

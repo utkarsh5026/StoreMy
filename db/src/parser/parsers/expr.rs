@@ -16,10 +16,10 @@
 //!
 //! # How it works
 //!
-//! `Parser::parse_expression` runs precedence climbing: parse one primary, then
-//! while the peeked binary operator’s left binding power is high enough, consume
-//! it and parse the right side with that operator’s right binding power. Primary
-//! forms (`NOT`, `( … )`, literals, identifiers) live in `Parser::parse_primary`.
+//! `Parser::parse_expression` runs precedence climbing: parse one atom with
+//! [`Parser::parse_atom`], attach postfix suffixes (`IS NULL`, future `IN`, …) via
+//! [`Parser::apply_postfix_suffixes`], then while the peeked infix operator’s left
+//! binding power is high enough, consume it and parse the right side.
 //!
 //! # NULL semantics
 //!
@@ -106,14 +106,30 @@ impl Precedence {
 #[derive(Debug, Clone, PartialEq)]
 pub enum Expr {
     /// A column reference, possibly qualified (`t.c`).
+    /// SQL examples:
+    ///   name → `Column(ColumnRef { qualifier: None, name: "name" })`
+    ///   users.age → `Column(ColumnRef { qualifier: Some("users"), name: "age" })`
     Column(ColumnRef),
+
     /// A constant value: number, string, boolean, or `NULL`.
+    /// SQL examples:
+    ///   42 → `Literal(Value::Int64(42))`
+    ///   'hello' → `Literal(Value::String("hello"))`
+    ///   true → `Literal(Value::Bool(true))`
+    ///   false → `Literal(Value::Bool(false))`
+    ///   NULL → `Literal(Value::Null)`
     Literal(Value),
+
     /// An aggregate call, e.g. `SUM(amount)`. The argument is recursively an
     /// `Expr` so that future syntax like `SUM(a + 1)` requires no AST change.
-    Agg(AggFunc, Box<Expr>),
+    /// SQL examples:
+    ///   SUM(amount) → `Agg` { func: `AggFunc::Sum`, arg: `Expr::Column("amount")` }
+    ///   COUNT(name) → `Agg` { func: `AggFunc::Count`, arg: `Expr::Column("name")` }
+    Agg { func: AggFunc, arg: Box<Expr> },
+
     /// The special `COUNT(*)` form that counts all rows.
     CountStar,
+
     /// A binary operator applied to two sub-expressions, e.g. `age > 25`,
     /// `a AND b`, `x = y`. Boolean connectives (`AND`, `OR`) and comparisons
     /// share this shape — they differ only by the [`BinOp`] tag and the
@@ -123,9 +139,77 @@ pub enum Expr {
         op: BinOp,
         rhs: Box<Expr>,
     },
+
     /// A unary operator applied to a sub-expression, e.g. `NOT (age > 25)`.
     /// The binder enforces the operand's type (e.g. `NOT` requires boolean).
     UnaryOp { op: UnOp, operand: Box<Expr> },
+
+    /// `expr IS [NOT] NULL`
+    ///
+    /// Unlike comparisons, IS NULL never propagates NULL — it always returns a
+    /// definite Bool. That is precisely why it exists: `col = NULL` yields NULL,
+    /// but `col IS NULL` yields true/false.
+    ///
+    /// SQL examples:
+    ///   email IS NULL       →  `IsNull` { expr: Column("email"), negated: false }
+    ///   phone IS NOT NULL   →  `IsNull` { expr: Column("phone"), negated: true }
+    IsNull { expr: Box<Expr>, negated: bool },
+
+    /// `expr [NOT] IN (val, val, ...)`
+    ///
+    /// `list` holds the expressions inside the parentheses. Each element is
+    /// typically a literal but the grammar allows any scalar expression.
+    ///
+    /// SQL examples:
+    ///   id IN (1, 2, 3) → `In` { expr: Column("id"), list: [Lit(1), Lit(2), Lit(3)], negated:
+    /// false }   status NOT IN ('a', 'b') → `In` { expr: Column("status"), list: [Lit("a"),
+    /// Lit("b")], negated: true }
+    In {
+        expr: Box<Expr>,
+        list: Vec<Expr>,
+        negated: bool,
+    },
+
+    /// `expr [NOT] BETWEEN low AND high`
+    ///
+    /// Both bounds are inclusive. The `AND` between bounds is syntactic, not [`BinOp::And`].
+    ///
+    /// SQL examples:
+    ///   total BETWEEN 100 AND 500
+    ///     → `Between` { expr: Column("total"), low: Lit(100), high: Lit(500), negated: false }
+    ///   price NOT BETWEEN 10 AND 50
+    ///     → `Between` { …, negated: true }
+    Between {
+        expr: Box<Expr>,
+        low: Box<Expr>,
+        high: Box<Expr>,
+        negated: bool,
+    },
+
+    /// `CASE [operand] WHEN … THEN … [ELSE …] END`
+    ///
+    /// Searched form: `operand` is `None`; each `condition` is a boolean expression.
+    /// Simple form:   `operand` is `Some(expr)`; each `condition` is a value
+    ///                compared to `operand` with `=`.
+    Case {
+        branches: Vec<CaseBranch>,
+        else_result: Option<Box<Expr>>,
+        operand: Option<Box<Expr>>,
+    },
+
+    /// `expr [NOT] LIKE pattern`
+    ///
+    /// Pattern uses SQL wildcards: `%` matches any sequence of characters (including
+    /// empty), `_` matches exactly one character. All other characters match literally.
+    ///
+    /// SQL examples:
+    ///   name LIKE 'A%'        →  `Like` { expr: Column("name"), pattern: Lit("A%"), negated: false
+    /// }   email NOT LIKE '%@%'  →  `Like` { …, negated: true }
+    Like {
+        expr: Box<Expr>,
+        pattern: Box<Expr>,
+        negated: bool,
+    },
 }
 
 impl Display for Expr {
@@ -133,11 +217,86 @@ impl Display for Expr {
         match self {
             Expr::Column(col) => write!(f, "{col}"),
             Expr::Literal(v) => write!(f, "{v}"),
-            Expr::Agg(func, arg) => write!(f, "{func}({arg})"),
+            Expr::Agg { func, arg } => write!(f, "{func}({arg})"),
             Expr::CountStar => write!(f, "COUNT(*)"),
             Expr::BinaryOp { lhs, op, rhs } => write!(f, "({lhs} {op} {rhs})"),
             Expr::UnaryOp { op, operand } => write!(f, "({op} {operand})"),
+            Expr::IsNull { expr, negated } => {
+                if *negated {
+                    write!(f, "{expr} IS NOT NULL")
+                } else {
+                    write!(f, "{expr} IS NULL")
+                }
+            }
+            Expr::In {
+                expr,
+                list,
+                negated,
+            } => {
+                if *negated {
+                    write!(f, "{expr} NOT IN ({list:?})")
+                } else {
+                    write!(f, "{expr} IN ({list:?})")
+                }
+            }
+            Expr::Between {
+                expr,
+                low,
+                high,
+                negated,
+            } => {
+                if *negated {
+                    write!(f, "{expr} NOT BETWEEN {low} AND {high}")
+                } else {
+                    write!(f, "{expr} BETWEEN {low} AND {high}")
+                }
+            }
+            Expr::Case {
+                branches,
+                else_result,
+                operand,
+            } => {
+                write!(f, "CASE")?;
+                if let Some(operand) = operand {
+                    write!(f, " {operand}")?;
+                }
+                for branch in branches {
+                    write!(f, " {branch}")?;
+                }
+                if let Some(else_result) = else_result {
+                    write!(f, " ELSE {else_result}")?;
+                }
+                write!(f, " END")
+            }
+            Expr::Like {
+                expr,
+                pattern,
+                negated,
+            } => {
+                if *negated {
+                    write!(f, "{expr} NOT LIKE {pattern}")
+                } else {
+                    write!(f, "{expr} LIKE {pattern}")
+                }
+            }
         }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct CaseBranch {
+    pub when: Expr,
+    pub then: Expr,
+}
+
+impl Display for CaseBranch {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "WHEN {when} THEN {then}",
+            when = self.when,
+            then = self.then
+        )
     }
 }
 
@@ -200,78 +359,6 @@ impl Display for UnOp {
     }
 }
 
-impl Expr {
-    /// Wraps a single aggregate argument in [`Expr::Agg`].
-    ///
-    /// # SQL examples
-    ///
-    /// ```sql
-    /// -- SELECT COUNT(name) FROM users u;
-    /// --   Expr::agg(AggFunc::Count, Expr::Column(ColumnRef { qualifier: None, name: "name" }))
-    ///
-    /// -- SELECT SUM(u.age) FROM users u;
-    /// --   Expr::agg(AggFunc::Sum, Expr::Column(ColumnRef { qualifier: Some("u"), name: "age" }))
-    /// ```
-    ///
-    /// # Errors
-    ///
-    /// This helper does not fail; unknown aggregate *names* are rejected in
-    /// `Parser::parse_fn_call` when building `AggFunc` from the function name.
-    pub fn agg(func: AggFunc, arg: Expr) -> Self {
-        Expr::Agg(func, Box::new(arg))
-    }
-
-    /// Builds an [`Expr::BinaryOp`] without manual `Box` allocation.
-    ///
-    /// # SQL examples
-    ///
-    /// ```sql
-    /// -- WHERE u.age = 30
-    /// --   Expr::binary(Expr::Column(...), BinOp::Eq, Expr::Literal(Value::Int64(30)))
-    ///
-    /// -- WHERE u.age >= 18 AND u.name = 'alice'
-    /// --   Expr::binary( Expr::binary(..., BinOp::LtEq, ...), BinOp::And,
-    /// --                 Expr::binary(..., BinOp::Eq, ...) )
-    ///
-    /// -- ON u.id = o.user_id   (same tree shape before column indices are resolved)
-    /// --   Expr::binary(Expr::Column(...), BinOp::Eq, Expr::Column(...))
-    /// ```
-    ///
-    /// # Errors
-    ///
-    /// Does not error; malformed input is rejected while parsing tokens into
-    /// [`Expr`] subtrees.
-    pub fn binary(lhs: Expr, op: BinOp, rhs: Expr) -> Self {
-        Expr::BinaryOp {
-            lhs: Box::new(lhs),
-            op,
-            rhs: Box::new(rhs),
-        }
-    }
-
-    /// Builds an [`Expr::UnaryOp`] without manual `Box` allocation.
-    ///
-    /// # SQL examples
-    ///
-    /// ```sql
-    /// -- WHERE NOT (u.age < 18)
-    /// --   Expr::unary(UnOp::Not, Expr::BinaryOp { ... Lt, ... })
-    ///
-    /// -- WHERE NOT u.active   (once `active` binds to a boolean column)
-    /// --   Expr::unary(UnOp::Not, Expr::Column(...))
-    /// ```
-    ///
-    /// # Errors
-    ///
-    /// Does not error; operand parsing happens in `Parser::parse_primary`.
-    pub fn unary(op: UnOp, operand: Expr) -> Self {
-        Expr::UnaryOp {
-            op,
-            operand: Box::new(operand),
-        }
-    }
-}
-
 impl Parser {
     /// Parses a full SQL expression using the loosest (lowest) precedence level.
     ///
@@ -317,9 +404,10 @@ impl Parser {
         &mut self,
         min_precedence: u8,
     ) -> Result<Expr, ParserError> {
-        let mut left = self.parse_primary()?;
+        let mut left = self.parse_atom()?;
 
         loop {
+            left = self.apply_postfix_suffixes(left)?;
             let Some((op, l_bp, r_bp)) = self.peek_binary_op()? else {
                 break;
             };
@@ -330,20 +418,152 @@ impl Parser {
 
             self.bump()?;
             let rhs = self.parse_expression_with_precedence(r_bp)?;
-            left = Expr::binary(left, op, rhs);
+            left = Expr::BinaryOp {
+                lhs: Box::new(left),
+                op,
+                rhs: Box::new(rhs),
+            };
         }
 
         Ok(left)
     }
 
-    /// Parses a primary expression: unary `NOT`, parenthesized sub-expression, literal
-    /// token, boolean/`NULL` identifier spellings, or a bare identifier (column or call).
+    /// Applies at most one postfix suffix to `left`, if the next tokens start one.
+    ///
+    /// Postfix operators come **after** the expression they test (`email IS NULL`),
+    /// unlike prefix `NOT` in [`Self::parse_atom`]. Called from
+    /// [`Self::parse_expression_with_precedence`] after each atom and again after each
+    /// infix step, so `a = 1 OR b IS NULL` attaches `IS NULL` only to `b`.
+    ///
+    /// SQL does not chain multiple suffixes on the same expression (`email IS NULL IN (1)`
+    /// is invalid), so this handles a single suffix per call.
+    ///
+    /// # SQL examples
+    ///
+    /// ```sql
+    /// -- email IS NULL  →  IsNull { expr: Column("email"), negated: false }
+    /// -- phone IS NOT NULL  →  IsNull { expr: Column("phone"), negated: true }
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ParserError`] if `IS` is present but `NULL` is missing after optional `NOT`.
+    fn apply_postfix_suffixes(&mut self, left: Expr) -> Result<Expr, ParserError> {
+        if self.if_peek_then_consume(TokenType::Is)? {
+            let negated = self.if_peek_then_consume(TokenType::Not)?;
+            self.expect(TokenType::Null)?;
+            return Ok(Expr::IsNull {
+                expr: Box::new(left),
+                negated,
+            });
+        }
+
+        let not_in = self.consume_not_if_followed_by(TokenType::In)?;
+        if self.if_peek_then_consume(TokenType::In)? {
+            let list = self.paren_list(Parser::parse_expression)?;
+            return Ok(Expr::In {
+                expr: Box::new(left),
+                list,
+                negated: not_in,
+            });
+        }
+
+        let not_between = self.consume_not_if_followed_by(TokenType::Between)?;
+        if self.if_peek_then_consume(TokenType::Between)? {
+            let low = self.parse_atom()?;
+            self.expect(TokenType::And)?;
+            let high = self.parse_atom()?;
+            return Ok(Expr::Between {
+                expr: Box::new(left),
+                low: Box::new(low),
+                high: Box::new(high),
+                negated: not_between,
+            });
+        }
+
+        let not_like = self.consume_not_if_followed_by(TokenType::Like)?;
+        if self.if_peek_then_consume(TokenType::Like)? {
+            let pattern = self.parse_atom()?;
+            return Ok(Expr::Like {
+                expr: Box::new(left),
+                pattern: Box::new(pattern),
+                negated: not_like,
+            });
+        }
+
+        Ok(left)
+    }
+
+    /// Consumes `NOT` only when the next token after it is `after`.
+    ///
+    /// Used for `NOT IN` and `NOT BETWEEN` so prefix `NOT` in [`Self::parse_atom`] does not
+    /// steal the `NOT` from those postfix forms.
+    fn consume_not_if_followed_by(&mut self, after: TokenType) -> Result<bool, ParserError> {
+        if !self.peek_is(TokenType::Not)? {
+            return Ok(false);
+        }
+        self.bump()?;
+        if self.peek_is(after)? {
+            return Ok(true);
+        }
+        self.lexer.backtrack().map_err(ParserError::from)?;
+        Ok(false)
+    }
+
+    /// Parses `CASE [operand] WHEN … THEN … { WHEN … THEN … } [ELSE …] END`.
+    ///
+    /// Called after the `CASE` token has already been consumed by [`Self::parse_atom`].
+    ///
+    /// - If the next token is `WHEN`, it is a *searched* CASE (`operand = None`); each `WHEN`
+    ///   condition is a boolean expression.
+    /// - Otherwise the next expression becomes the *simple* operand; each `WHEN` value is compared
+    ///   to it with `=`.
+    ///
+    /// Branches are collected in a `while WHEN` loop — no parentheses or commas,
+    /// matching the SQL grammar. Parsing stops when neither `WHEN` nor `ELSE` is next,
+    /// and `END` is required to close the expression.
+    fn parse_case(&mut self) -> Result<Expr, ParserError> {
+        let operand = if self.peek_is(TokenType::When)? {
+            None
+        } else {
+            Some(self.parse_expression()?)
+        };
+
+        let mut branches = Vec::new();
+        while self.if_peek_then_consume(TokenType::When)? {
+            let when = self.parse_expression()?;
+            self.expect(TokenType::Then)?;
+            let then = self.parse_expression()?;
+            branches.push(CaseBranch { when, then });
+        }
+
+        let else_result = if self.if_peek_then_consume(TokenType::Else)? {
+            Some(self.parse_expression()?)
+        } else {
+            None
+        };
+
+        self.expect(TokenType::End)?;
+
+        Ok(Expr::Case {
+            operand: operand.map(Box::new),
+            branches,
+            else_result: else_result.map(Box::new),
+        })
+    }
+
+    /// Parses one expression atom — the base unit before infix/postfix operators attach.
+    ///
+    /// An atom is either a prefix form (`NOT …`, `( … )`) or a leaf (literal,
+    /// column reference, aggregate call). The precedence loop in
+    /// [`Self::parse_expression_with_precedence`] then applies postfix suffixes and
+    /// infix operators (`AND`, `OR`, comparisons).
     ///
     /// # Errors
     ///
     /// Same as [`Self::parse_expression`], plus [`ParserError::ParsingError`] when
     /// a token cannot convert to [`Value`] for literals.
-    fn parse_primary(&mut self) -> Result<Expr, ParserError> {
+    fn parse_atom(&mut self) -> Result<Expr, ParserError> {
         if self.if_peek_then_consume(TokenType::Not)? {
             let operand =
                 self.parse_expression_with_precedence(Precedence::PrefixNot.prefix_bp())?;
@@ -351,6 +571,10 @@ impl Parser {
                 op: UnOp::Not,
                 operand: Box::new(operand),
             });
+        }
+
+        if self.if_peek_then_consume(TokenType::Case)? {
+            return self.parse_case();
         }
 
         if self.if_peek_then_consume(TokenType::Lparen)? {
@@ -435,10 +659,10 @@ impl Parser {
 
         let arg = self.parse_expression_with_precedence(Precedence::LOOSEST)?;
         self.expect(TokenType::Rparen)?;
-        Ok(Expr::Agg(
-            AggFunc::try_from(name.as_str()).map_err(ParserError::ParsingError)?,
-            Box::new(arg),
-        ))
+        Ok(Expr::Agg {
+            func: AggFunc::try_from(name.as_str()).map_err(ParserError::ParsingError)?,
+            arg: Box::new(arg),
+        })
     }
 
     /// If the next token starts a binary operator, returns [`BinOp`] plus left/right
@@ -586,7 +810,7 @@ mod tests {
     #[test]
     fn agg_count_column() {
         let e = ok("COUNT(id)");
-        let Expr::Agg(func, arg) = e else {
+        let Expr::Agg { func, arg } = e else {
             panic!("expected Agg");
         };
         assert_eq!(func, AggFunc::Count);
@@ -595,7 +819,7 @@ mod tests {
 
     #[test]
     fn agg_sum() {
-        let Expr::Agg(func, arg) = ok("SUM(amount)") else {
+        let Expr::Agg { func, arg } = ok("SUM(amount)") else {
             panic!("expected Agg");
         };
         assert_eq!(func, AggFunc::Sum);
@@ -604,7 +828,7 @@ mod tests {
 
     #[test]
     fn agg_avg() {
-        let Expr::Agg(func, _) = ok("AVG(score)") else {
+        let Expr::Agg { func, .. } = ok("AVG(score)") else {
             panic!("expected Agg");
         };
         assert_eq!(func, AggFunc::Avg);
@@ -612,7 +836,7 @@ mod tests {
 
     #[test]
     fn agg_min() {
-        let Expr::Agg(func, _) = ok("MIN(price)") else {
+        let Expr::Agg { func, .. } = ok("MIN(price)") else {
             panic!("expected Agg");
         };
         assert_eq!(func, AggFunc::Min);
@@ -620,7 +844,7 @@ mod tests {
 
     #[test]
     fn agg_max() {
-        let Expr::Agg(func, _) = ok("MAX(price)") else {
+        let Expr::Agg { func, .. } = ok("MAX(price)") else {
             panic!("expected Agg");
         };
         assert_eq!(func, AggFunc::Max);
@@ -814,14 +1038,11 @@ mod tests {
     #[test]
     fn parse_expr_parses_simple_comparison() {
         let e = Parser::parse_expr("age > 0").expect("should parse");
-        assert_eq!(
-            e,
-            Expr::binary(
-                Expr::Column("age".into()),
-                BinOp::Gt,
-                Expr::Literal(Value::Int64(0))
-            )
-        );
+        assert_eq!(e, Expr::BinaryOp {
+            lhs: Box::new(Expr::Column("age".into())),
+            op: BinOp::Gt,
+            rhs: Box::new(Expr::Literal(Value::Int64(0))),
+        });
     }
 
     #[test]
@@ -839,5 +1060,376 @@ mod tests {
     #[test]
     fn parse_expr_empty_input_errors() {
         assert!(Parser::parse_expr("").is_err());
+    }
+
+    #[test]
+    fn is_null_column() {
+        let Expr::IsNull { expr, negated } = ok("email IS NULL") else {
+            panic!("expected IsNull");
+        };
+        assert!(!negated);
+        assert_eq!(*expr, Expr::Column("email".into()));
+    }
+
+    #[test]
+    fn is_not_null_column() {
+        let Expr::IsNull { expr, negated } = ok("phone IS NOT NULL") else {
+            panic!("expected IsNull");
+        };
+        assert!(negated);
+        assert_eq!(*expr, Expr::Column("phone".into()));
+    }
+
+    #[test]
+    fn null_literal_is_null() {
+        let Expr::IsNull { expr, negated } = ok("NULL IS NULL") else {
+            panic!("expected IsNull");
+        };
+        assert!(!negated);
+        assert_eq!(*expr, Expr::Literal(Value::Null));
+    }
+
+    #[test]
+    fn is_null_binds_before_and() {
+        // `email IS NULL AND active = true` → (email IS NULL) AND (active = true)
+        let Expr::BinaryOp { op, lhs, .. } = ok("email IS NULL AND active = true") else {
+            panic!("expected BinaryOp");
+        };
+        assert_eq!(op, BinOp::And);
+        assert!(matches!(*lhs, Expr::IsNull { negated: false, .. }));
+    }
+
+    #[test]
+    fn is_null_on_rhs_of_or() {
+        let Expr::BinaryOp { op, rhs, .. } = ok("a = 1 OR b IS NULL") else {
+            panic!("expected BinaryOp");
+        };
+        assert_eq!(op, BinOp::Or);
+        assert!(matches!(*rhs, Expr::IsNull { negated: false, .. }));
+    }
+
+    #[test]
+    fn display_is_null() {
+        assert_eq!(ok("email IS NULL").to_string(), "email IS NULL");
+        assert_eq!(ok("phone IS NOT NULL").to_string(), "phone IS NOT NULL");
+    }
+
+    #[test]
+    fn in_integer_list() {
+        let Expr::In {
+            expr,
+            list,
+            negated,
+        } = ok("id IN (1, 2, 3)")
+        else {
+            panic!("expected In");
+        };
+        assert!(!negated);
+        assert_eq!(*expr, Expr::Column("id".into()));
+        assert_eq!(list, vec![
+            Expr::Literal(Value::Int64(1)),
+            Expr::Literal(Value::Int64(2)),
+            Expr::Literal(Value::Int64(3)),
+        ]);
+    }
+
+    #[test]
+    fn not_in_string_list() {
+        let Expr::In {
+            expr,
+            list,
+            negated,
+        } = ok("status NOT IN ('a', 'b')")
+        else {
+            panic!("expected In");
+        };
+        assert!(negated);
+        assert_eq!(*expr, Expr::Column("status".into()));
+        assert_eq!(list, vec![
+            Expr::Literal(Value::String("a".to_string())),
+            Expr::Literal(Value::String("b".to_string())),
+        ]);
+    }
+
+    #[test]
+    fn in_single_value() {
+        let Expr::In { list, negated, .. } = ok("x IN (42)") else {
+            panic!("expected In");
+        };
+        assert!(!negated);
+        assert_eq!(list, vec![Expr::Literal(Value::Int64(42))]);
+    }
+
+    #[test]
+    fn in_binds_before_and() {
+        // `id IN (1, 2) AND active = true` → (id IN (1, 2)) AND (active = true)
+        let Expr::BinaryOp { op, lhs, .. } = ok("id IN (1, 2) AND active = true") else {
+            panic!("expected BinaryOp");
+        };
+        assert_eq!(op, BinOp::And);
+        assert!(matches!(*lhs, Expr::In { negated: false, .. }));
+    }
+
+    #[test]
+    fn in_on_rhs_of_or() {
+        let Expr::BinaryOp { op, rhs, .. } = ok("a = 1 OR b IN (1, 2)") else {
+            panic!("expected BinaryOp");
+        };
+        assert_eq!(op, BinOp::Or);
+        assert!(matches!(*rhs, Expr::In { negated: false, .. }));
+    }
+
+    #[test]
+    fn not_in_on_lhs_of_and() {
+        let Expr::BinaryOp { op, lhs, .. } = ok("x NOT IN (1, 2) AND y = 3") else {
+            panic!("expected BinaryOp");
+        };
+        assert_eq!(op, BinOp::And);
+        assert!(matches!(*lhs, Expr::In { negated: true, .. }));
+    }
+
+    #[test]
+    fn in_qualified_column() {
+        let Expr::In { expr, negated, .. } = ok("u.id IN (1, 2)") else {
+            panic!("expected In");
+        };
+        assert!(!negated);
+        let Expr::Column(col) = *expr else {
+            panic!("expected Column inside In");
+        };
+        assert_eq!(col.qualifier.as_deref(), Some("u"));
+        assert_eq!(col.name.as_str(), "id");
+    }
+
+    #[test]
+    fn between_numeric() {
+        let Expr::Between {
+            expr,
+            low,
+            high,
+            negated,
+        } = ok("total BETWEEN 100 AND 500")
+        else {
+            panic!("expected Between");
+        };
+        assert!(!negated);
+        assert_eq!(*expr, Expr::Column("total".into()));
+        assert_eq!(*low, Expr::Literal(Value::Int64(100)));
+        assert_eq!(*high, Expr::Literal(Value::Int64(500)));
+    }
+
+    #[test]
+    fn not_between_numeric() {
+        let Expr::Between { negated, .. } = ok("price NOT BETWEEN 10 AND 50") else {
+            panic!("expected Between");
+        };
+        assert!(negated);
+    }
+
+    #[test]
+    fn between_binds_before_and() {
+        let Expr::BinaryOp { op, lhs, .. } = ok("age BETWEEN 25 AND 40 AND active = true") else {
+            panic!("expected BinaryOp");
+        };
+        assert_eq!(op, BinOp::And);
+        assert!(matches!(*lhs, Expr::Between { negated: false, .. }));
+    }
+
+    #[test]
+    fn between_on_rhs_of_or() {
+        let Expr::BinaryOp { op, rhs, .. } = ok("a = 1 OR x BETWEEN 1 AND 2") else {
+            panic!("expected BinaryOp");
+        };
+        assert_eq!(op, BinOp::Or);
+        assert!(matches!(*rhs, Expr::Between { negated: false, .. }));
+    }
+
+    #[test]
+    fn not_between_on_lhs_of_and() {
+        let Expr::BinaryOp { op, lhs, .. } = ok("x NOT BETWEEN 1 AND 2 AND y = 3") else {
+            panic!("expected BinaryOp");
+        };
+        assert_eq!(op, BinOp::And);
+        assert!(matches!(*lhs, Expr::Between { negated: true, .. }));
+    }
+
+    #[test]
+    fn display_between() {
+        assert_eq!(
+            ok("total BETWEEN 100 AND 500").to_string(),
+            "total BETWEEN 100 AND 500"
+        );
+        assert_eq!(
+            ok("price NOT BETWEEN 10 AND 50").to_string(),
+            "price NOT BETWEEN 10 AND 50"
+        );
+    }
+
+    #[test]
+    fn not_between_does_not_consume_bare_not() {
+        let Expr::UnaryOp { .. } = ok("NOT true") else {
+            panic!("expected UnaryOp");
+        };
+    }
+
+    // ── CASE WHEN ────────────────────────────────────────────────────────────
+
+    #[test]
+    fn case_searched_single_branch() {
+        // CASE WHEN x = 1 THEN 2 END
+        let Expr::Case {
+            operand,
+            branches,
+            else_result,
+        } = ok("CASE WHEN x = 1 THEN 2 END")
+        else {
+            panic!("expected Case");
+        };
+        assert!(operand.is_none());
+        assert!(else_result.is_none());
+        assert_eq!(branches.len(), 1);
+        assert!(matches!(branches[0].when, Expr::BinaryOp {
+            op: BinOp::Eq,
+            ..
+        }));
+        assert_eq!(branches[0].then, Expr::Literal(Value::Int64(2)));
+    }
+
+    #[test]
+    fn case_searched_multiple_branches() {
+        // CASE WHEN x = 1 THEN 10 WHEN x = 2 THEN 20 END
+        let Expr::Case {
+            operand,
+            branches,
+            else_result,
+        } = ok("CASE WHEN x = 1 THEN 10 WHEN x = 2 THEN 20 END")
+        else {
+            panic!("expected Case");
+        };
+        assert!(operand.is_none());
+        assert!(else_result.is_none());
+        assert_eq!(branches.len(), 2);
+    }
+
+    #[test]
+    fn case_searched_with_else() {
+        // CASE WHEN x = 1 THEN 'a' ELSE 'b' END
+        let Expr::Case {
+            operand,
+            branches,
+            else_result,
+        } = ok("CASE WHEN x = 1 THEN 'a' ELSE 'b' END")
+        else {
+            panic!("expected Case");
+        };
+        assert!(operand.is_none());
+        assert_eq!(branches.len(), 1);
+        assert_eq!(
+            else_result.as_deref(),
+            Some(&Expr::Literal(Value::String("b".into())))
+        );
+    }
+
+    #[test]
+    fn case_simple_single_branch() {
+        // CASE status WHEN 1 THEN 'active' END
+        let Expr::Case {
+            operand,
+            branches,
+            else_result,
+        } = ok("CASE status WHEN 1 THEN 'active' END")
+        else {
+            panic!("expected Case");
+        };
+        assert_eq!(operand.as_deref(), Some(&Expr::Column("status".into())));
+        assert_eq!(branches.len(), 1);
+        assert!(else_result.is_none());
+    }
+
+    #[test]
+    fn case_simple_with_else() {
+        // CASE status WHEN 1 THEN 'a' WHEN 2 THEN 'b' ELSE 'other' END
+        let Expr::Case {
+            operand,
+            branches,
+            else_result,
+        } = ok("CASE status WHEN 1 THEN 'a' WHEN 2 THEN 'b' ELSE 'other' END")
+        else {
+            panic!("expected Case");
+        };
+        assert!(operand.is_some());
+        assert_eq!(branches.len(), 2);
+        assert!(else_result.is_some());
+    }
+
+    #[test]
+    fn display_case_searched() {
+        let e = ok("CASE WHEN x = 1 THEN 2 END");
+        assert_eq!(e.to_string(), "CASE WHEN (x = 1) THEN 2 END");
+    }
+
+    #[test]
+    fn display_case_simple_with_else() {
+        let e = ok("CASE x WHEN 1 THEN 'a' ELSE 'b' END");
+        assert_eq!(e.to_string(), "CASE x WHEN 1 THEN 'a' ELSE 'b' END");
+    }
+
+    // ── LIKE ─────────────────────────────────────────────────────────────────
+
+    #[test]
+    fn like_basic() {
+        let Expr::Like {
+            expr,
+            pattern,
+            negated,
+        } = ok("name LIKE 'A%'")
+        else {
+            panic!("expected Like");
+        };
+        assert!(!negated);
+        assert_eq!(*expr, Expr::Column("name".into()));
+        assert_eq!(*pattern, Expr::Literal(Value::String("A%".into())));
+    }
+
+    #[test]
+    fn not_like_basic() {
+        let Expr::Like { negated, .. } = ok("email NOT LIKE '%@%'") else {
+            panic!("expected Like");
+        };
+        assert!(negated);
+    }
+
+    #[test]
+    fn like_binds_before_and() {
+        // `name LIKE 'A%' AND active = true` → (name LIKE 'A%') AND (active = true)
+        let Expr::BinaryOp { op, lhs, .. } = ok("name LIKE 'A%' AND active = true") else {
+            panic!("expected BinaryOp");
+        };
+        assert_eq!(op, BinOp::And);
+        assert!(matches!(*lhs, Expr::Like { negated: false, .. }));
+    }
+
+    #[test]
+    fn not_like_on_lhs_of_and() {
+        let Expr::BinaryOp { op, lhs, .. } = ok("name NOT LIKE 'A%' AND x = 1") else {
+            panic!("expected BinaryOp");
+        };
+        assert_eq!(op, BinOp::And);
+        assert!(matches!(*lhs, Expr::Like { negated: true, .. }));
+    }
+
+    #[test]
+    fn like_on_rhs_of_or() {
+        let Expr::BinaryOp { op, rhs, .. } = ok("a = 1 OR name LIKE 'B%'") else {
+            panic!("expected BinaryOp");
+        };
+        assert_eq!(op, BinOp::Or);
+        assert!(matches!(*rhs, Expr::Like { negated: false, .. }));
+    }
+
+    #[test]
+    fn display_like() {
+        assert_eq!(ok("name LIKE 'A%'").to_string(), "name LIKE 'A%'");
+        assert_eq!(ok("name NOT LIKE 'A%'").to_string(), "name NOT LIKE 'A%'");
     }
 }

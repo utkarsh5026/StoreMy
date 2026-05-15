@@ -197,6 +197,24 @@ impl Lexer {
         }
     }
 
+    /// Peeks at the next token's kind without consuming it or disturbing `curr_token`.
+    ///
+    /// Unlike calling `next` then `backtrack`, this method restores `curr_token` after
+    /// peeking so a subsequent `backtrack` still reverts to the token emitted before
+    /// this peek — enabling two-token lookahead without a two-level backtrack.
+    pub fn peek_next_kind(&mut self) -> Result<Option<TokenType>, LexError> {
+        let saved = self.curr_token.clone();
+        let kind = match self.next_token()? {
+            None => None,
+            Some(tok) => {
+                self.backtrack()?;
+                Some(tok.kind)
+            }
+        };
+        self.curr_token = saved;
+        Ok(kind)
+    }
+
     /// Skips whitespace and SQL comments, leaving `position` at the first
     /// character that belongs to a real token (or at EOF).
     ///
