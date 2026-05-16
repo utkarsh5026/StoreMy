@@ -215,6 +215,7 @@ impl BTreeIndex {
     ) -> Result<(), IndexError> {
         let right_pn = self.allocate_page();
         let (right, sep_key) = left.split(right_pn, leaf_pn);
+        tracing::debug!(sibling_page = ?right_pn, sep_key = ?sep_key, "btree: leaf split, new sibling created");
 
         if let Some(old_next) = right.next {
             let (guard, mut old_next_leaf) = self.read_node(txn, old_next)?;
@@ -294,6 +295,7 @@ impl BTreeIndex {
             separators: vec![Separator::new(sep_key, right_pn)],
         };
         self.fetch_and_write_page(txn, new_root_pn, &BTreeNode::Internal(root_node), lsn)?;
+        tracing::debug!(root_page = ?new_root_pn, "btree: new root created, tree height grew");
 
         let new_root_pn = Some(new_root_pn);
         *self.root.write() = new_root_pn;
@@ -322,6 +324,7 @@ impl BTreeIndex {
         let (right, push_up_key) = left.split();
 
         let right_pn = self.allocate_page();
+        tracing::debug!(sibling_page = ?right_pn, push_up_key = ?push_up_key, "btree: internal node split");
         self.set_parent_pointer(txn, right.first_child, Some(right_pn), lsn)?;
 
         for Separator { child, .. } in &right.separators {
@@ -359,6 +362,7 @@ impl Index for BTreeIndex {
         }
 
         let (guard, mut leaf, leaf_pn) = self.locate_leaf_for_key(txn, key)?;
+        tracing::trace!(leaf_page = ?leaf_pn, "btree: leaf located for insert");
         let (pos, is_duplicate) = leaf.locate_insert(&index_entry)?;
         if is_duplicate {
             return Err(IndexError::DuplicateEntry);
@@ -370,6 +374,7 @@ impl Index for BTreeIndex {
             return Ok(());
         }
 
+        tracing::debug!(leaf_page = ?leaf_pn, "btree: split triggered");
         drop(guard);
         leaf.entries.insert(pos, index_entry);
         self.split_leaf_and_propagate(txn, leaf, leaf_pn, Lsn::INVALID)
@@ -396,12 +401,20 @@ impl Index for BTreeIndex {
         let pos = leaf
             .entries
             .iter()
-            .position(|e| e.key == *key && e.rid == rid)
-            .ok_or(IndexError::NotFound)?;
+            .position(|e| e.key == *key && e.rid == rid);
 
-        leaf.entries.remove(pos);
-        Self::write_node(&guard, &BTreeNode::Leaf(leaf), Lsn::INVALID)?;
-        Ok(())
+        match pos {
+            Some(i) => {
+                tracing::trace!(key = ?key, "btree: delete found key");
+                leaf.entries.remove(i);
+                Self::write_node(&guard, &BTreeNode::Leaf(leaf), Lsn::INVALID)?;
+                Ok(())
+            }
+            None => {
+                tracing::trace!(key = ?key, "btree: delete key not found");
+                Err(IndexError::NotFound)
+            }
+        }
     }
 
     /// Returns all record IDs stored under one key.
@@ -425,6 +438,7 @@ impl Index for BTreeIndex {
             .take_while(|e| &e.key == key)
             .map(|e| e.rid)
             .collect::<Vec<RecordId>>();
+        tracing::trace!(key = ?key, found = searches.len(), "btree: search");
         Ok(searches)
     }
 

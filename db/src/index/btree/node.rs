@@ -227,6 +227,7 @@ impl LeafNode {
         let mid = self.entries.len() / 2;
         let right_entries = self.entries.drain(mid..).collect::<Vec<_>>();
         let sep_key = right_entries[0].key.clone();
+        tracing::debug!(left = ?leaf_pn, right = ?right_pn, midpoint_key = ?sep_key, "btree: leaf split");
 
         let old_next = self.next;
         self.next = Some(right_pn);
@@ -398,6 +399,7 @@ impl InternalNode {
             key: push_up_key,
             child,
         } = self.separators.pop().unwrap();
+        tracing::debug!(promoted_key = ?push_up_key, "btree: internal node split");
 
         let right = Self {
             parent: self.parent,
