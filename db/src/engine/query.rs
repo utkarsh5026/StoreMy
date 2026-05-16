@@ -126,8 +126,6 @@ enum BoundFrom {
         schema: TupleSchema,
     },
     /// `FROM a, b` or `CROSS JOIN` — no predicate; emits the cartesian product.
-    /// Not yet produced by the binder (parser has no `JoinKind::Cross`).
-    #[allow(dead_code)]
     Cross {
         left: Box<BoundFrom>,
         right: Box<BoundFrom>,
@@ -159,6 +157,15 @@ impl BoundFrom {
             left: Box::new(left),
             right: Box::new(right),
             on,
+            schema,
+        }
+    }
+
+    fn cross(left: BoundFrom, right: BoundFrom) -> Self {
+        let schema = left.schema().merge(right.schema());
+        Self::Cross {
+            left: Box::new(left),
+            right: Box::new(right),
             schema,
         }
     }
@@ -374,7 +381,12 @@ impl BoundSelect {
             scope.push(right_table);
 
             let right = BoundFrom::table(right_info, j.table);
-            left = BoundFrom::join(j.kind, left, right, j.on);
+            left = if j.kind == JoinKind::Cross {
+                BoundFrom::cross(left, right)
+            } else {
+                let on = j.on.expect("non-cross join must have ON clause");
+                BoundFrom::join(j.kind, left, right, on)
+            };
         }
 
         Ok((left, scope))
@@ -1590,7 +1602,7 @@ mod tests {
         Join {
             kind: JoinKind::Inner,
             table: table_ref(name, alias),
-            on,
+            on: Some(on),
         }
     }
 

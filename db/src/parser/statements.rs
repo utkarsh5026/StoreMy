@@ -1379,6 +1379,7 @@ impl Display for OrderBy {
 /// -- a INNER JOIN b ON …      -->  JoinKind::Inner   (drop unmatched on both sides)
 /// -- a LEFT  JOIN b ON …      -->  JoinKind::Left    (keep unmatched left rows, NULL-pad right)
 /// -- a RIGHT JOIN b ON …      -->  JoinKind::Right   (keep unmatched right rows, NULL-pad left)
+/// -- a CROSS JOIN b           -->  JoinKind::Cross   (cartesian product; no ON clause)
 /// -- a JOIN b ON …            -->  JoinKind::Inner   (default when omitted)
 /// ```
 #[derive(Debug, Clone, PartialEq)]
@@ -1386,6 +1387,7 @@ pub enum JoinKind {
     Inner,
     Left,
     Right,
+    Cross,
 }
 
 impl Display for JoinKind {
@@ -1394,6 +1396,7 @@ impl Display for JoinKind {
             JoinKind::Inner => write!(f, "INNER JOIN"),
             JoinKind::Left => write!(f, "LEFT JOIN"),
             JoinKind::Right => write!(f, "RIGHT JOIN"),
+            JoinKind::Cross => write!(f, "CROSS JOIN"),
         }
     }
 }
@@ -1500,13 +1503,17 @@ impl Display for TableWithJoins {
 pub struct Join {
     pub kind: JoinKind,
     pub table: TableRef,
-    pub on: Expr,
+    /// `None` for `CROSS JOIN` (no predicate); `Some` for all other kinds.
+    pub on: Option<Expr>,
 }
 
 impl Display for Join {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{} {}", self.kind, self.table)?;
-        write!(f, " ON {}", self.on)
+        if let Some(on) = &self.on {
+            write!(f, " ON {on}")?;
+        }
+        Ok(())
     }
 }
 
