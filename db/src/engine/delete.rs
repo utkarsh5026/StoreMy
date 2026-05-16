@@ -23,8 +23,9 @@
 use crate::{
     FileId,
     catalog::manager::Catalog,
-    engine::{Engine, EngineError, StatementResult},
-    parser::statements::{DeleteStatement, Expr},
+    engine::{Engine, EngineError, StatementResult, scope::SingleTableScope},
+    execution::{ResolvedExpr, resolve_expr},
+    parser::statements::DeleteStatement,
     transaction::Transaction,
 };
 
@@ -50,9 +51,16 @@ impl Engine<'_> {
 
         let table_info = catalog.get_table_info(txn, table_name.as_str())?;
         tracing::debug!(table = %table_name, "exec delete");
-        let file_id = table_info.file_id;
+        let scope = SingleTableScope::from_info(table_info, None);
+        let file_id = scope.file_id;
 
-        let deleted = Self::delete_rows_and_indexes(catalog, txn, file_id, where_clause.as_ref())?;
+        let predicate = where_clause
+            .map(|expr| {
+                resolve_expr(&scope, expr).map_err(|e| EngineError::TypeError(e.to_string()))
+            })
+            .transpose()?;
+
+        let deleted = Self::delete_rows_and_indexes(catalog, txn, file_id, predicate.as_ref())?;
         tracing::debug!(table = %table_name, rows_deleted = deleted, "delete complete");
         Ok(StatementResult::deleted(
             table_name.as_str().to_string(),
@@ -89,12 +97,11 @@ impl Engine<'_> {
         catalog: &Catalog,
         txn: &Transaction<'_>,
         file_id: FileId,
-        predicate: Option<&Expr>,
+        predicate: Option<&ResolvedExpr>,
     ) -> Result<usize, EngineError> {
         let tid = txn.transaction_id();
         let heap = catalog.get_table_heap(file_id)?;
-        let schema = heap.schema().clone();
-        let rows = Self::collect_matching_rows(&heap, tid, predicate, &schema)?;
+        let rows = Self::collect_matching_rows(&heap, tid, predicate)?;
         let inbound_checks = Self::prepare_inbound_ref_checks(catalog, txn, file_id)?;
         let indexes = catalog.indexes_for(file_id);
 

@@ -24,13 +24,10 @@
 //! - [`join`]       — nested-loop, hash, and sort-merge joins
 //! - [`setops`]     — union, intersect, except, distinct
 //! - [`aggregate`]  — grouping and aggregation
-//! - [`eval`]       — `eval_expr`, the scalar expression evaluator used by filter, join, and
-//!   constraint evaluation
-//! - [`resolve`]    — `ColumnLookup` trait, `ResolvedExpr` type, and `resolve_expr` — lowers a
-//!   parsed `Expr` to an index-based form evaluated without schema lookups
+//! - [`resolve`]    — `ColumnLookup` trait, `ResolvedExpr` type, `resolve_expr`, and
+//!   `eval_resolved_expr` — column names resolved once, evaluated with plain index lookups
 
 pub mod aggregate;
-pub mod eval;
 pub mod join;
 pub mod resolve;
 pub mod scan;

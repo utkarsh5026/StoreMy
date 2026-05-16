@@ -53,8 +53,8 @@ use crate::{
         ConstraintViolation, Engine, EngineError, StatementResult, fk::InboundParentFkCheck,
         scope::SingleTableScope,
     },
-    execution::eval,
-    parser::statements::{Assignment, Expr, UpdateStatement},
+    execution::{ResolvedExpr, eval_resolved_expr, resolve_expr},
+    parser::statements::{Assignment, UpdateStatement},
     primitives::ColumnId,
     transaction::Transaction,
     tuple::{Tuple, TupleSchema},
@@ -103,15 +103,16 @@ impl Engine<'_> {
         let check_constraints = info.check_constraints.clone();
         let scope = SingleTableScope::from_info(info, alias);
         let heap_file = catalog.get_table_heap(scope.file_id)?;
-        let schema = heap_file.schema().clone();
 
-        let rows = Self::collect_matching_rows(
-            &heap_file,
-            txn.transaction_id(),
-            where_clause.as_ref(),
-            &schema,
-        )?;
+        let predicate = where_clause
+            .map(|expr| {
+                resolve_expr(&scope, expr).map_err(|e| EngineError::TypeError(e.to_string()))
+            })
+            .transpose()?;
+        let rows =
+            Self::collect_matching_rows(&heap_file, txn.transaction_id(), predicate.as_ref())?;
 
+        let resolved_checks = Self::resolve_check_constraints(&scope.schema, &check_constraints)?;
         let assignments = Self::bind_assignments(&scope, assignments, ai_col)?;
         let affected_indexes =
             Self::get_affected_indices(assignments.as_slice(), catalog, scope.file_id);
@@ -139,12 +140,7 @@ impl Engine<'_> {
                 &scope.schema,
                 scope.name.as_str(),
             )?;
-            Self::check_tuple_constraints(
-                &new_tuple,
-                &scope.schema,
-                &check_constraints,
-                scope.name.as_str(),
-            )?;
+            Self::check_tuple_constraints(&new_tuple, &resolved_checks, scope.name.as_str())?;
 
             let change = RowChange {
                 before: &old_tuple,
@@ -175,7 +171,7 @@ impl Engine<'_> {
     /// are excluded so the per-row loop never performs unnecessary key compares
     /// or index writes.
     fn get_affected_indices(
-        assignments: &[(ColumnId, Expr)],
+        assignments: &[(ColumnId, ResolvedExpr)],
         catalog: &Catalog,
         file_id: FileId,
     ) -> Vec<Arc<LiveIndex>> {
@@ -216,7 +212,7 @@ impl Engine<'_> {
         scope: &SingleTableScope,
         assignments: Vec<Assignment>,
         ai_col: Option<ColumnId>,
-    ) -> Result<Vec<(ColumnId, Expr)>, EngineError> {
+    ) -> Result<Vec<(ColumnId, ResolvedExpr)>, EngineError> {
         let mut seen: HashSet<ColumnId> = HashSet::with_capacity(assignments.len());
         let table_name = scope.name.as_str();
 
@@ -241,7 +237,9 @@ impl Engine<'_> {
                 }
 
                 seen.insert(col_id);
-                Ok((col_id, ass.value))
+                let resolved = resolve_expr(scope, ass.value)
+                    .map_err(|e| EngineError::TypeError(e.to_string()))?;
+                Ok((col_id, resolved))
             })
             .collect()
     }
@@ -260,14 +258,14 @@ impl Engine<'_> {
     ///   coerced to the column's declared type.
     fn build_updated_tuple(
         old_tuple: &Tuple,
-        assignments: &[(ColumnId, Expr)],
+        assignments: &[(ColumnId, ResolvedExpr)],
         schema: &TupleSchema,
         table_name: &str,
     ) -> Result<Tuple, EngineError> {
         let computed = assignments
             .iter()
             .map(|(col_id, expr)| {
-                let raw = eval::eval_expr(expr, old_tuple, schema)
+                let raw = eval_resolved_expr(expr, old_tuple)
                     .map_err(|e| EngineError::TypeError(e.to_string()))?;
 
                 let field = schema

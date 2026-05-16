@@ -27,9 +27,9 @@ use std::{
 
 use crate::{
     FileId, IndexId, TransactionId, Type, Value,
-    catalog::{CachedCheckConstraint, LiveIndex, manager::Catalog},
+    catalog::{LiveIndex, manager::Catalog},
     engine::{ConstraintViolation, Engine, EngineError, StatementResult},
-    execution::eval::eval_expr,
+    execution::{ColumnLookup, ResolvedExpr, eval_resolved_expr, resolve_expr},
     parser::statements::{Expr, InsertSource, InsertStatement},
     primitives::{ColumnId, NonEmptyString},
     transaction::Transaction,
@@ -73,6 +73,9 @@ impl Engine<'_> {
             )?;
         }
 
+        let resolved_checks =
+            Self::resolve_check_constraints(&table.schema, &table.check_constraints)?;
+
         let expr_rows = match stmt.source {
             InsertSource::Values(rows) => rows,
             InsertSource::DefaultValues => {
@@ -80,7 +83,7 @@ impl Engine<'_> {
                     &table.schema,
                     &table.name,
                     table.auto_increment_column,
-                    &table.check_constraints,
+                    &resolved_checks,
                     catalog,
                     txn,
                     table.file_id,
@@ -122,12 +125,7 @@ impl Engine<'_> {
 
         // Evaluate CHECK constraints now that every slot (including AI) is filled.
         for tuple in &tuples {
-            Self::check_tuple_constraints(
-                tuple,
-                &table.schema,
-                &table.check_constraints,
-                table.name.as_str(),
-            )?;
+            Self::check_tuple_constraints(tuple, &resolved_checks, table.name.as_str())?;
         }
 
         let count = Self::insert_rows_and_indexes(catalog, txn, table.file_id, tuples)?;
@@ -300,7 +298,7 @@ impl Engine<'_> {
         schema: &TupleSchema,
         table_name: &str,
         ai_col: Option<ColumnId>,
-        check_constraints: &[CachedCheckConstraint],
+        resolved_checks: &[(String, ResolvedExpr)],
         catalog: &Catalog,
         txn: &Transaction<'_>,
         file_id: FileId,
@@ -338,7 +336,7 @@ impl Engine<'_> {
             let start = catalog.allocate_auto_increment(txn, file_id, 1)?;
             Self::fill_auto_increment_values(&mut tuples, schema, ai_col_id, start);
         }
-        Self::check_tuple_constraints(&tuples[0], schema, check_constraints, table_name)?;
+        Self::check_tuple_constraints(&tuples[0], resolved_checks, table_name)?;
         let count = Self::insert_rows_and_indexes(catalog, txn, file_id, tuples)?;
         Ok(StatementResult::inserted(table_name.to_string(), count))
     }
@@ -643,13 +641,23 @@ impl Engine<'_> {
     /// constant-foldable operations are permitted. A column reference will surface
     /// as [`EngineError::Unsupported`].
     fn eval_value_rows(rows: Vec<Vec<Expr>>) -> Result<Vec<Vec<Value>>, EngineError> {
-        let empty_tuple = Tuple::new(vec![]);
-        let empty_schema = TupleSchema::new(vec![]);
+        // Column references are not allowed in VALUES — use a resolver that rejects them all.
+        struct NoColumns;
+        impl ColumnLookup for NoColumns {
+            fn lookup(&self, _qualifier: Option<&str>, _name: &str) -> Option<ColumnId> {
+                None
+            }
+        }
+
+        let empty = Tuple::new(vec![]);
         rows.into_iter()
             .map(|row| {
                 row.into_iter()
                     .map(|expr| {
-                        eval_expr(&expr, &empty_tuple, &empty_schema).map_err(|e| {
+                        let resolved = resolve_expr(&NoColumns, expr).map_err(|e| {
+                            EngineError::Unsupported(format!("INSERT expression error: {e}"))
+                        })?;
+                        eval_resolved_expr(&resolved, &empty).map_err(|e| {
                             EngineError::Unsupported(format!("INSERT expression error: {e}"))
                         })
                     })
