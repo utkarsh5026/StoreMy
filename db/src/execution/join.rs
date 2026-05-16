@@ -225,6 +225,7 @@ impl<'a> NestedLoopJoin<'a> {
     /// tuple, using the merged schema built internally from `left.schema()` + `right.schema()`.
     ///
     /// The right input is read and buffered on the first call to [`FallibleIterator::next`].
+    #[tracing::instrument(skip_all, fields(op = "nlj"))]
     pub fn new(left: PlanNode<'a>, right: PlanNode<'a>, predicate: Expr) -> Self {
         Self {
             inputs: Box::new(JoinInputs::new(left, right)),
@@ -258,6 +259,7 @@ impl<'a> NestedLoopJoin<'a> {
         while let Some(tuple) = right.next()? {
             self.right_buf.push(tuple);
         }
+        tracing::debug!(tuples = self.right_buf.len(), "nlj: right side buffered");
         self.materialized = true;
         Ok(())
     }
@@ -355,6 +357,7 @@ impl<'a> HashJoin<'a> {
     /// # Panics
     ///
     /// Panics if `predicate.op` is not [`Predicate::Equals`].
+    #[tracing::instrument(skip_all, fields(op = "hash_join"))]
     pub fn new(left: PlanNode<'a>, right: PlanNode<'a>, predicate: JoinPredicate) -> Self {
         assert_eq!(
             predicate.op,
@@ -400,15 +403,20 @@ impl<'a> HashJoin<'a> {
         }
 
         let right_idx = usize::from(self.predicate.right_col);
+        let mut null_keys: usize = 0;
         while let Some(t) = self.inputs.right.next()? {
             match t.get(right_idx) {
-                Some(Value::Null) | None => {}
+                Some(Value::Null) | None => {
+                    null_keys += 1;
+                }
                 Some(v) => {
                     let key = v.clone();
                     self.hash_table.entry(key).or_default().push(t);
                 }
             }
         }
+        let entries: usize = self.hash_table.values().map(Vec::len).sum();
+        tracing::debug!(entries, null_keys, "hash_join: table built");
         self.materialized = true;
         Ok(())
     }
@@ -454,6 +462,7 @@ impl FallibleIterator for HashJoin<'_> {
                 if bucket.is_empty() {
                     continue;
                 }
+                tracing::trace!(matches = bucket.len(), "hash_join: probe hit");
                 self.pending.extend(bucket.iter().cloned());
                 self.left_tuple = Some(l);
             }
@@ -538,6 +547,7 @@ pub struct SortMergeJoin<'a> {
     r_sorted: TupleCursor,
     pending: VecDeque<Tuple>,
     sorted: bool,
+    rows_produced: usize,
 }
 
 impl<'a> SortMergeJoin<'a> {
@@ -546,6 +556,7 @@ impl<'a> SortMergeJoin<'a> {
     /// # Panics
     ///
     /// Panics if the join predicate is not [`Predicate::Equals`].
+    #[tracing::instrument(skip_all, fields(op = "smj"))]
     pub fn new(left: PlanNode<'a>, right: PlanNode<'a>, predicate: JoinPredicate) -> Self {
         assert_eq!(
             predicate.op,
@@ -561,6 +572,7 @@ impl<'a> SortMergeJoin<'a> {
             r_sorted: TupleCursor::new(),
             pending: VecDeque::new(),
             sorted: false,
+            rows_produced: 0,
         }
     }
 
@@ -594,6 +606,11 @@ impl<'a> SortMergeJoin<'a> {
 
         drain_tuples(&mut self.inputs.left, &mut self.l_sorted.0, left_idx)?;
         drain_tuples(&mut self.inputs.right, &mut self.r_sorted.0, right_idx)?;
+        tracing::debug!(
+            left = self.l_sorted.0.len(),
+            right = self.r_sorted.0.len(),
+            "smj: inputs drained, sorting"
+        );
 
         Self::sort_by_column(&mut self.l_sorted.0, left_idx);
         Self::sort_by_column(&mut self.r_sorted.0, right_idx);
@@ -694,10 +711,12 @@ impl FallibleIterator for SortMergeJoin<'_> {
 
         loop {
             if let Some(tuple) = self.pending.pop_front() {
+                self.rows_produced += 1;
                 return Ok(Some(tuple));
             }
 
             if self.l_sorted.exhausted() || self.r_sorted.exhausted() {
+                tracing::debug!(rows_produced = self.rows_produced, "smj: merge complete");
                 return Ok(None);
             }
 
@@ -724,6 +743,7 @@ impl Executor for SortMergeJoin<'_> {
         self.l_sorted = TupleCursor::new();
         self.r_sorted = TupleCursor::new();
         self.sorted = false;
+        self.rows_produced = 0;
         self.inputs.left.rewind()?;
         self.inputs.right.rewind()?;
         Ok(())

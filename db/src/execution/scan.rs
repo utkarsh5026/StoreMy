@@ -54,8 +54,10 @@ impl<'a> SeqScan<'a> {
     /// The schema is cloned from the file eagerly so that `schema()` never
     /// touches the file again.  The actual page iterator is not started until
     /// the first call to `next()`.
+    #[tracing::instrument(skip_all, fields(op = "seq_scan"))]
     pub fn new(file: &'a HeapFile, txn: TransactionId) -> Self {
         let schema = file.schema().clone(); // need a pub schema() accessor on HeapFile
+        tracing::debug!(fields = schema.physical_num_fields(), "seq scan opened");
         Self {
             file,
             txn,
@@ -133,6 +135,7 @@ impl std::fmt::Debug for IndexScan<'_> {
 impl<'a> IndexScan<'a> {
     /// Builds an index scan over `heap` using `index`, under transaction `txn`, according to
     /// `spec`.
+    #[tracing::instrument(skip_all, fields(op = "index_scan"))]
     pub fn new(
         heap: &'a HeapFile,
         index: &'a AnyIndex,
@@ -168,6 +171,7 @@ impl<'a> IndexScan<'a> {
             IndexScanSpec::Range { start, end } => self.index.range_search(self.txn, start, end),
         }
         .map_err(|e| ExecutionError::Index(e.to_string()))?;
+        tracing::debug!(rids = vec.len(), "index scan: rids loaded");
         self.rids = Some(vec);
         self.next_rid = 0;
         Ok(())

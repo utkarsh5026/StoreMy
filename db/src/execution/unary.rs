@@ -129,6 +129,7 @@ impl<'a> Filter<'a> {
     ///
     /// `schema` must match the tuple layout produced by `child` — it is used
     /// by `eval_expr` to resolve column names to physical indices at eval time.
+    #[tracing::instrument(skip_all, fields(op = "filter"))]
     pub fn new(child: Box<PlanNode<'a>>, predicate: Expr, schema: TupleSchema) -> Self {
         Self {
             child,
@@ -422,6 +423,7 @@ impl<'a> Project<'a> {
     ///
     /// Returns [`ExecutionError::TypeError`] if any [`ProjectItem::Column`]
     /// refers to an out-of-range index in the child's schema.
+    #[tracing::instrument(skip_all, fields(op = "project", items = items.len()))]
     pub fn with_items(
         child: Box<PlanNode<'a>>,
         items: Vec<ProjectItem>,
@@ -683,6 +685,7 @@ impl<'a> Sort<'a> {
     ///
     /// Does not validate eagerly. Errors from the child surface from
     /// [`FallibleIterator::next`] during materialization.
+    #[tracing::instrument(skip_all, fields(op = "sort", keys = keys.len()))]
     pub fn new(keys: Vec<SortKey>, child: Box<PlanNode<'a>>) -> Self {
         Self {
             keys,
@@ -713,6 +716,7 @@ impl<'a> Sort<'a> {
         while let Some(tuple) = self.child.next()? {
             self.sorted.push(tuple);
         }
+        tracing::debug!(tuples = self.sorted.len(), "sort: input buffered");
 
         let keys = self.keys.clone();
         self.sorted.sort_by(|a, b| {
@@ -724,6 +728,7 @@ impl<'a> Sort<'a> {
             }
             Ordering::Equal
         });
+        tracing::debug!(tuples = self.sorted.len(), "sort: complete");
 
         self.materialized = true;
         Ok(())
@@ -880,6 +885,7 @@ impl<'a> Limit<'a> {
     ///
     /// Does not validate eagerly. Errors from the child surface from
     /// [`FallibleIterator::next`] while skipping the offset or returning rows.
+    #[tracing::instrument(skip_all, fields(op = "limit", limit, offset))]
     pub fn new(child: Box<PlanNode<'a>>, limit: u64, offset: u64) -> Self {
         Self {
             child,
