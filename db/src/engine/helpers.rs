@@ -9,9 +9,12 @@ use crate::{
         systable::FkAction,
     },
     engine::{ConstraintViolation, Engine, EngineError},
-    execution::{ExecutionError, eval::eval_expr},
+    execution::{
+        ColumnLookup, ExecutionError, ResolvedExpr, eval_resolved_bool, eval_resolved_expr,
+        resolve_expr,
+    },
     heap::file::HeapFile,
-    parser::statements::{Expr, TableConstraint},
+    parser::statements::TableConstraint,
     primitives::{ColumnId, NonEmptyString, RecordId},
     transaction::Transaction,
     tuple::{Field, Tuple, TupleSchema},
@@ -283,8 +286,7 @@ impl Engine<'_> {
     pub(super) fn collect_matching_rows(
         heap: &HeapFile,
         transaction_id: TransactionId,
-        predicate: Option<&Expr>,
-        schema: &TupleSchema,
+        predicate: Option<&ResolvedExpr>,
     ) -> Result<Vec<(RecordId, Tuple)>, EngineError> {
         let mut scan = heap.scan(transaction_id)?;
         let mut out = Vec::new();
@@ -292,11 +294,8 @@ impl Engine<'_> {
         while let Some((rid, tuple)) = FallibleIterator::next(&mut scan)? {
             let keep = match predicate {
                 None => true,
-                Some(expr) => matches!(
-                    eval_expr(expr, &tuple, schema)
-                        .map_err(|e| EngineError::TypeError(e.to_string()))?,
-                    crate::Value::Bool(true)
-                ),
+                Some(expr) => eval_resolved_bool(expr, &tuple)
+                    .map_err(|e| EngineError::TypeError(e.to_string()))?,
             };
             if keep {
                 out.push((rid, tuple));
@@ -382,12 +381,11 @@ impl Engine<'_> {
     ///   indicates a malformed CHECK body that slipped past the binder.
     pub(super) fn check_tuple_constraints(
         tuple: &Tuple,
-        schema: &TupleSchema,
-        check_constraints: &[CachedCheckConstraint],
+        checks: &[(String, ResolvedExpr)],
         table: &str,
     ) -> Result<(), EngineError> {
-        for constraint in check_constraints {
-            let result = eval_expr(&constraint.expr, tuple, schema)
+        for (name, expr) in checks {
+            let result = eval_resolved_expr(expr, tuple)
                 .map_err(|e: ExecutionError| EngineError::TypeError(e.to_string()))?;
 
             match result {
@@ -396,18 +394,46 @@ impl Engine<'_> {
                 Value::Bool(false) => {
                     return Err(ConstraintViolation::CheckViolation {
                         table: table.to_owned(),
-                        constraint: constraint.name.clone(),
+                        constraint: name.clone(),
                     }
                     .into());
                 }
                 other => {
                     return Err(EngineError::TypeError(format!(
-                        "CHECK constraint '{}' returned non-boolean value: {other}",
-                        constraint.name
+                        "CHECK constraint '{name}' returned non-boolean value: {other}"
                     )));
                 }
             }
         }
         Ok(())
+    }
+
+    /// Resolves each `CachedCheckConstraint` expression once per statement.
+    ///
+    /// Returns `(constraint_name, ResolvedExpr)` pairs ready to be passed to
+    /// [`Self::check_tuple_constraints`]. Column references in CHECK bodies are
+    /// resolved against `schema` using a simple name lookup with no qualifier
+    /// disambiguation (CHECK constraints cannot reference other tables).
+    pub(super) fn resolve_check_constraints(
+        schema: &TupleSchema,
+        constraints: &[CachedCheckConstraint],
+    ) -> Result<Vec<(String, ResolvedExpr)>, EngineError> {
+        struct SchemaLookup<'a>(&'a TupleSchema);
+        impl ColumnLookup for SchemaLookup<'_> {
+            fn lookup(&self, _qualifier: Option<&str>, name: &str) -> Option<ColumnId> {
+                self.0.field_by_name(name).map(|(id, _)| id)
+            }
+        }
+
+        constraints
+            .iter()
+            .map(|c| {
+                let resolved =
+                    resolve_expr(&SchemaLookup(schema), c.expr.clone()).map_err(|e| {
+                        EngineError::TypeError(format!("CHECK constraint '{}': {e}", c.name))
+                    })?;
+                Ok((c.name.clone(), resolved))
+            })
+            .collect()
     }
 }
