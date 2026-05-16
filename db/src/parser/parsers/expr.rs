@@ -660,7 +660,8 @@ impl Parser {
         let arg = self.parse_expression_with_precedence(Precedence::LOOSEST)?;
         self.expect(TokenType::Rparen)?;
         Ok(Expr::Agg {
-            func: AggFunc::try_from(name.as_str()).map_err(ParserError::ParsingError)?,
+            func: AggFunc::try_from(name.as_str().to_uppercase().as_str())
+                .map_err(ParserError::ParsingError)?,
             arg: Box::new(arg),
         })
     }

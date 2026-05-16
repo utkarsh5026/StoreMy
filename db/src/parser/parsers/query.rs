@@ -4,15 +4,13 @@ use super::ParserError;
 use crate::{
     parser::{
         Parser,
-        parsers::expr::Expr,
         statements::{
-            AggFunc, ColumnRef, Join, JoinKind, LimitClause, OrderBy, OrderDirection,
-            SelectColumns, SelectItem, SelectStatement, TableRef, TableWithJoins,
+            ColumnRef, Join, JoinKind, LimitClause, OrderBy, OrderDirection, SelectColumns,
+            SelectItem, SelectStatement, TableRef, TableWithJoins,
         },
         token::TokenType,
     },
     primitives::NonEmptyString,
-    types::Value,
 };
 
 impl Parser {
@@ -129,19 +127,16 @@ impl Parser {
     /// Parses a comma-separated `SELECT` projection list up to but not
     /// including the mandatory `FROM` keyword.
     ///
-    /// Each item is either a bare column name, `COUNT(*)`, or
-    /// `<AGG>(<column>)` where `<AGG>` is one of [`AggFunc`]'s spellings
-    /// (case-insensitive).  Function names are detected by a following `(`;
-    /// anything else is treated as a column reference.
+    /// Each item is a full expression (literal, column ref, arithmetic, aggregate, boolean, etc.)
+    /// parsed by [`Parser::parse_expr`], followed by an optional `AS alias` or implicit alias.
     ///
     /// # Errors
     ///
-    /// Returns [`ParserError`] if a projection is missing or invalid, commas
-    /// or the terminating `FROM` are wrong, parentheses or `COUNT(*)` are
-    /// malformed, or the aggregate name is not recognized.
+    /// Returns [`ParserError`] if any item expression is invalid, commas or the
+    /// terminating `FROM` are wrong, or an alias identifier is missing after `AS`.
     fn parse_select_list(&mut self) -> Result<Vec<SelectItem>, ParserError> {
         let parse_select_item = |p: &mut Parser| -> Result<SelectItem, ParserError> {
-            let expr = Self::parse_projection_expr(p)?;
+            let expr = p.parse_expression()?;
             let alias =
                 if p.if_peek_then_consume(TokenType::As)? || p.peek_is(TokenType::Identifier)? {
                     let tok = p.expect(TokenType::Identifier)?;
@@ -155,77 +150,6 @@ impl Parser {
             })
         };
         self.parse_delimited_list(TokenType::Comma, TokenType::From, parse_select_item)
-    }
-
-    /// Parses the expression part of one `SELECT` projection item.
-    ///
-    /// Supported forms are:
-    /// - integer / float / string / `NULL` literal — `SELECT 1`, `SELECT 'x'`, `SELECT NULL`
-    /// - `<column>` or `<table>.<column>`
-    /// - `COUNT(*)`
-    /// - `<AGG>(<column>)` where `<AGG>` is parsed through [`AggFunc`]
-    ///
-    /// Boolean literals (`true`/`false`) are not yet recognized here because
-    /// the lexer classifies them as identifiers and disambiguating them from
-    /// columns named `true`/`false` is the binder's job, not the parser's.
-    ///
-    /// This helper only parses the projection expression itself. Any optional
-    /// alias (`AS name` or implicit alias) is handled by [`Self::parse_select_list`].
-    ///
-    /// # Errors
-    ///
-    /// Returns [`ParserError`] when the leading token is not a literal or
-    /// identifier, when aggregate-call syntax is malformed (missing argument
-    /// or `)`), or when a function-like name is not a recognized aggregate.
-    fn parse_projection_expr(p: &mut Parser) -> Result<Expr, ParserError> {
-        for kind in [
-            TokenType::Int,
-            TokenType::FloatLit,
-            TokenType::String,
-            TokenType::Null,
-        ] {
-            if p.peek_is(kind)? {
-                let tok = p.bump()?;
-                let value = Value::try_from(tok).map_err(ParserError::ParsingError)?;
-                return Ok(Expr::Literal(value));
-            }
-        }
-
-        let name_tok = p.expect(TokenType::Identifier)?;
-        let name = name_tok.value.to_uppercase();
-
-        if p.if_peek_then_consume(TokenType::Lparen)? {
-            if name == "COUNT" && p.if_peek_then_consume(TokenType::Asterisk)? {
-                p.expect(TokenType::Rparen)?;
-                return Ok(Expr::CountStar);
-            }
-
-            let agg = AggFunc::try_from(name.as_str()).map_err(|msg| {
-                warn!(function = %name_tok.value, reason = %msg, "unknown aggregate function");
-                ParserError::ParsingError(msg)
-            })?;
-            let col_tok = p.expect(TokenType::Identifier)?;
-            p.expect(TokenType::Rparen)?;
-            Ok(Expr::Agg {
-                func: agg,
-                arg: Box::new(Expr::Column(ColumnRef::from(col_tok.value.as_str()))),
-            })
-        } else {
-            // Identifiers in ColumnRef are stored as NonEmptyString.
-            let first = NonEmptyString::try_from(name_tok.value)?;
-            let cref = if p.if_peek_then_consume(TokenType::Dot)? {
-                ColumnRef {
-                    qualifier: Some(first),
-                    name: p.expect_ident()?,
-                }
-            } else {
-                ColumnRef {
-                    qualifier: None,
-                    name: first,
-                }
-            };
-            Ok(Expr::Column(cref))
-        }
     }
 
     /// Parses an optional `ORDER BY` clause with one or more sort keys.
