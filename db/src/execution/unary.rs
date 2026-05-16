@@ -24,7 +24,7 @@
 //!
 //! # NULL semantics
 //!
-//! `Filter` delegates to [`eval_expr`]: only
+//! `Filter` delegates to [`eval_resolved_bool`]: only
 //! `Value::Bool(true)` passes; `NULL` and `false` are dropped. `Project` copies
 //! `NULL` values unchanged and can emit
 //! literal `NULL`s. `Sort` orders `NULL` before non-`NULL` in ascending order
@@ -38,8 +38,7 @@ use fallible_iterator::FallibleIterator;
 use super::{ExecutionError, Executor};
 use crate::{
     Value,
-    execution::{PlanNode, eval::eval_expr},
-    parser::statements::Expr,
+    execution::{PlanNode, ResolvedExpr, eval_resolved_bool},
     primitives::{self, NonEmptyString},
     tuple::{Field, Tuple, TupleSchema},
     types::Type,
@@ -47,7 +46,7 @@ use crate::{
 
 /// Applies a SQL `WHERE` predicate to rows from one child plan.
 ///
-/// Each input tuple is tested with [`eval_expr`]. Rows that evaluate to
+/// Each input tuple is tested with [`eval_resolved_bool`]. Rows that evaluate to
 /// `Value::Bool(true)` pass through unchanged; all other results (false, NULL)
 /// are skipped. The output tuple layout is exactly the child layout because filtering never
 /// adds, removes, or reorders columns.
@@ -120,22 +119,17 @@ use crate::{
 #[derive(Debug)]
 pub struct Filter<'a> {
     child: Box<PlanNode<'a>>,
-    predicate: Expr,
-    schema: TupleSchema,
+    predicate: ResolvedExpr,
 }
 
 impl<'a> Filter<'a> {
     /// Builds a `WHERE` operator over an already-planned child.
     ///
-    /// `schema` must match the tuple layout produced by `child` — it is used
-    /// by `eval_expr` to resolve column names to physical indices at eval time.
+    /// `predicate` must have all column references pre-resolved to [`primitives::ColumnId`]s
+    /// via [`super::resolve_expr`] — no schema is needed at eval time.
     #[tracing::instrument(skip_all, fields(op = "filter"))]
-    pub fn new(child: Box<PlanNode<'a>>, predicate: Expr, schema: TupleSchema) -> Self {
-        Self {
-            child,
-            predicate,
-            schema,
-        }
+    pub fn new(child: Box<PlanNode<'a>>, predicate: ResolvedExpr) -> Self {
+        Self { child, predicate }
     }
 }
 
@@ -155,10 +149,7 @@ impl FallibleIterator for Filter<'_> {
     /// the predicate references an unknown column name.
     fn next(&mut self) -> Result<Option<Tuple>, ExecutionError> {
         while let Some(tuple) = self.child.next()? {
-            if matches!(
-                eval_expr(&self.predicate, &tuple, &self.schema)?,
-                Value::Bool(true)
-            ) {
+            if eval_resolved_bool(&self.predicate, &tuple)? {
                 return Ok(Some(tuple));
             }
         }
@@ -240,10 +231,18 @@ impl ProjectItem {
     ///
     /// ```sql
     /// -- SELECT id FROM users
-    /// --   ProjectItem::column(col(0))
+    /// ```
     ///
+    /// ```ignore
+    /// ProjectItem::column(col(0))
+    /// ```
+    ///
+    /// ```sql
     /// -- SELECT name FROM users
-    /// --   ProjectItem::column(col(1))
+    /// ```
+    ///
+    /// ```ignore
+    /// ProjectItem::column(col(1))
     /// ```
     ///
     /// # Errors
@@ -267,13 +266,26 @@ impl ProjectItem {
     ///
     /// ```sql
     /// -- SELECT 1 AS one FROM users
-    /// --   ProjectItem::literal(Value::Int64(1), "one")
+    /// ```
     ///
+    /// ```ignore
+    /// ProjectItem::literal(Value::Int64(1), "one")
+    /// ```
+    ///
+    /// ```sql
     /// -- SELECT 'guest' AS role FROM users
-    /// --   ProjectItem::literal(Value::String("guest".into()), "role")
+    /// ```
     ///
+    /// ```ignore
+    /// ProjectItem::literal(Value::String("guest".into()), "role")
+    /// ```
+    ///
+    /// ```sql
     /// -- SELECT NULL AS missing FROM users
-    /// --   ProjectItem::literal(Value::Null, "missing")
+    /// ```
+    ///
+    /// ```ignore
+    /// ProjectItem::literal(Value::Null, "missing")
     /// ```
     ///
     /// # Errors
@@ -373,13 +385,26 @@ impl<'a> Project<'a> {
     ///
     /// ```sql
     /// -- SELECT id FROM users
-    /// --   Project::new(child, &[col(0)])?
+    /// ```
     ///
+    /// ```ignore
+    /// Project::new(child, &[col(0)])?
+    /// ```
+    ///
+    /// ```sql
     /// -- SELECT name, age FROM users
-    /// --   Project::new(child, &[col(1), col(2)])?
+    /// ```
     ///
+    /// ```ignore
+    /// Project::new(child, &[col(1), col(2)])?
+    /// ```
+    ///
+    /// ```sql
     /// -- SELECT age, id FROM users
-    /// --   Project::new(child, &[col(2), col(0)])?
+    /// ```
+    ///
+    /// ```ignore
+    /// Project::new(child, &[col(2), col(0)])?
     /// ```
     ///
     /// # Errors
@@ -407,16 +432,29 @@ impl<'a> Project<'a> {
     ///
     /// ```sql
     /// -- SELECT id AS user_id FROM users
-    /// --   Project::with_items(child, vec![ProjectItem::aliased_column(col(0), "user_id")])?
+    /// ```
     ///
+    /// ```ignore
+    /// Project::with_items(child, vec![ProjectItem::aliased_column(col(0), "user_id")])?
+    /// ```
+    ///
+    /// ```sql
     /// -- SELECT 1 AS one, name FROM users
-    /// --   Project::with_items(child, vec![
-    /// --       ProjectItem::literal(Value::Int64(1), "one"),
-    /// --       ProjectItem::column(col(1)),
-    /// --   ])?
+    /// ```
     ///
+    /// ```ignore
+    /// Project::with_items(child, vec![
+    ///     ProjectItem::literal(Value::Int64(1), "one"),
+    ///     ProjectItem::column(col(1)),
+    /// ])?
+    /// ```
+    ///
+    /// ```sql
     /// -- SELECT NULL AS missing FROM users
-    /// --   Project::with_items(child, vec![ProjectItem::literal(Value::Null, "missing")])?
+    /// ```
+    ///
+    /// ```ignore
+    /// Project::with_items(child, vec![ProjectItem::literal(Value::Null, "missing")])?
     /// ```
     ///
     /// # Errors
@@ -672,13 +710,26 @@ impl<'a> Sort<'a> {
     ///
     /// ```sql
     /// -- ORDER BY id
-    /// --   Sort::new(vec![SortKey::asc(col(0))], child)
+    /// ```
     ///
+    /// ```ignore
+    /// Sort::new(vec![SortKey::asc(col(0))], child)
+    /// ```
+    ///
+    /// ```sql
     /// -- ORDER BY age DESC
-    /// --   Sort::new(vec![SortKey::desc(col(2))], child)
+    /// ```
     ///
+    /// ```ignore
+    /// Sort::new(vec![SortKey::desc(col(2))], child)
+    /// ```
+    ///
+    /// ```sql
     /// -- ORDER BY age ASC, name DESC
-    /// --   Sort::new(vec![SortKey::asc(col(2)), SortKey::desc(col(1))], child)
+    /// ```
+    ///
+    /// ```ignore
+    /// Sort::new(vec![SortKey::asc(col(2)), SortKey::desc(col(1))], child)
     /// ```
     ///
     /// # Errors
@@ -872,13 +923,26 @@ impl<'a> Limit<'a> {
     ///
     /// ```sql
     /// -- LIMIT 10
-    /// --   Limit::new(child, 10, 0)
+    /// ```
     ///
+    /// ```ignore
+    /// Limit::new(child, 10, 0)
+    /// ```
+    ///
+    /// ```sql
     /// -- LIMIT 10 OFFSET 20
-    /// --   Limit::new(child, 10, 20)
+    /// ```
     ///
+    /// ```ignore
+    /// Limit::new(child, 10, 20)
+    /// ```
+    ///
+    /// ```sql
     /// -- LIMIT 0
-    /// --   Limit::new(child, 0, 0)
+    /// ```
+    ///
+    /// ```ignore
+    /// Limit::new(child, 0, 0)
     /// ```
     ///
     /// # Errors
@@ -978,20 +1042,23 @@ mod tests {
     use crate::{
         FileId, TransactionId,
         buffer_pool::page_store::PageStore,
-        execution::{PlanNode, scan::SeqScan},
+        execution::{PlanNode, ResolvedExpr, scan::SeqScan},
         heap::file::HeapFile,
-        parser::statements::{BinOp, Expr},
+        parser::statements::BinOp,
         primitives::ColumnId,
         tuple::{Field, Tuple, TupleSchema},
         types::{Type, Value},
         wal::writer::Wal,
     };
 
-    fn eq_expr(col_name: &str, val: Value) -> Expr {
-        Expr::BinaryOp {
-            lhs: Box::new(Expr::Column(col_name.into())),
+    // scan_schema(): id=ColumnId(0), flag=ColumnId(1)
+    fn eq_expr(col_id: u32, val: Value) -> ResolvedExpr {
+        ResolvedExpr::BinaryOp {
+            lhs: Box::new(ResolvedExpr::Column(
+                primitives::ColumnId::new(col_id).unwrap(),
+            )),
             op: BinOp::Eq,
-            rhs: Box::new(Expr::Literal(val)),
+            rhs: Box::new(ResolvedExpr::Literal(val)),
         }
     }
 
@@ -1052,12 +1119,8 @@ mod tests {
         heap.insert_tuple(txn, &make_scan_tuple(2, false)).unwrap();
         heap.insert_tuple(txn, &make_scan_tuple(3, true)).unwrap();
 
-        let pred = eq_expr("flag", Value::Bool(true));
-        let mut filter = Filter::new(
-            Box::new(PlanNode::SeqScan(SeqScan::new(&heap, txn))),
-            pred,
-            scan_schema(),
-        );
+        let pred = eq_expr(1, Value::Bool(true)); // flag = ColumnId(1)
+        let mut filter = Filter::new(Box::new(PlanNode::SeqScan(SeqScan::new(&heap, txn))), pred);
 
         let mut out = Vec::new();
         while let Some(t) = filter.next().unwrap() {
@@ -1202,8 +1265,7 @@ mod tests {
         let txn = begin_txn(&wal, 1);
         let mut filter = Filter::new(
             Box::new(PlanNode::SeqScan(SeqScan::new(&heap, txn))),
-            eq_expr("id", Value::Int32(0)),
-            scan_schema(),
+            eq_expr(0, Value::Int32(0)), // id = ColumnId(0)
         );
         assert_eq!(filter.next().unwrap(), None);
     }
@@ -1260,8 +1322,7 @@ mod tests {
 
         let mut filter = Filter::new(
             Box::new(PlanNode::SeqScan(SeqScan::new(&heap, txn))),
-            eq_expr("id", Value::Int32(7)),
-            scan_schema(),
+            eq_expr(0, Value::Int32(7)), // id = ColumnId(0)
         );
         assert_eq!(filter.next().unwrap(), Some(make_scan_tuple(7, true)));
         filter.rewind().unwrap();

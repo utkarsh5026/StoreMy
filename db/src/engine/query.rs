@@ -51,9 +51,10 @@ use crate::{
     catalog::{TableInfo, manager::Catalog},
     engine::{Engine, EngineError, StatementResult},
     execution::{
-        Executor, PlanNode,
+        Executor, PlanNode, ResolvedExpr,
         aggregate::{AggregateExpr, AggregateFunc},
         join::JoinPredicate,
+        resolve_expr,
         unary::{ProjectItem, SortKey},
     },
     heap::file::HeapFile,
@@ -65,10 +66,6 @@ use crate::{
     transaction::Transaction,
     tuple::TupleSchema,
 };
-
-// ══════════════════════════════════════════════════════════════════════════════
-// Bound SELECT types
-// ══════════════════════════════════════════════════════════════════════════════
 
 /// Bound `FROM` input for one `SELECT` query block.
 ///
@@ -117,17 +114,15 @@ enum BoundFrom {
         file_id: FileId,
         schema: TupleSchema,
     },
-    /// A SQL `JOIN ... ON ...` input with its join predicate.
+    /// A SQL `JOIN ... ON ...` input with its join predicate (pre-resolved).
     Join {
         kind: JoinKind,
         left: Box<BoundFrom>,
         right: Box<BoundFrom>,
-        on: Expr,
+        on: ResolvedExpr,
         schema: TupleSchema,
     },
     /// `FROM a, b` or `CROSS JOIN` — no predicate; emits the cartesian product.
-    /// Not yet produced by the binder (parser has no `JoinKind::Cross`).
-    #[allow(dead_code)]
     Cross {
         left: Box<BoundFrom>,
         right: Box<BoundFrom>,
@@ -152,13 +147,22 @@ impl BoundFrom {
         }
     }
 
-    fn join(kind: JoinKind, left: BoundFrom, right: BoundFrom, on: Expr) -> Self {
+    fn join(kind: JoinKind, left: BoundFrom, right: BoundFrom, on: ResolvedExpr) -> Self {
         let schema = left.schema().merge(right.schema());
         Self::Join {
             kind,
             left: Box::new(left),
             right: Box::new(right),
             on,
+            schema,
+        }
+    }
+
+    fn cross(left: BoundFrom, right: BoundFrom) -> Self {
+        let schema = left.schema().merge(right.schema());
+        Self::Cross {
+            left: Box::new(left),
+            right: Box::new(right),
             schema,
         }
     }
@@ -180,67 +184,24 @@ impl BoundFrom {
     }
 }
 
-/// One bound expression from a SQL `SELECT` projection list.
+/// One entry in a bound SQL `SELECT` list.
 ///
-/// Mirrors the executable subset of [`Expr`]: plain columns, literal constants,
-/// `COUNT(*)`, and single-column aggregates.
-///
-/// # SQL examples
-///
-/// ```sql
-/// -- SELECT age FROM users;
-/// --   BoundSelectItem::Column(ColumnId::try_from(2).unwrap())
-///
-/// -- SELECT 'guest' FROM users;
-/// --   BoundSelectItem::Literal(Value::String("guest".into()))
-///
-/// -- SELECT COUNT(*) FROM users;
-/// --   BoundSelectItem::Aggregate(AggregateExpr { func: AggregateFunc::CountStar, .. })
-/// ```
+/// `expr` is the pre-resolved expression (all column names replaced by [`ColumnId`]s).
+/// `alias` is the user-supplied `AS name`; when `None` the planner derives a default.
 #[derive(Debug)]
-enum BoundSelectItem {
-    /// A direct column reference, resolved to a global index in the
-    /// FROM-clause output schema.
-    Column(ColumnId),
-    /// A literal constant (`SELECT 1`, `SELECT 'hello'`, `SELECT NULL`).
-    Literal(Value),
-    /// An aggregate (`SUM(x)`, `COUNT(*)`, …).
-    Aggregate(AggregateExpr),
-}
-
-/// One SQL projection entry plus its optional output alias.
-///
-/// `alias` is the user-supplied `AS name`. When `None`, the executor / planner
-/// falls back to a default name derived from the item.
-///
-/// # SQL examples
-///
-/// ```sql
-/// -- SELECT age AS years FROM users;
-/// --   BoundProjection { item: BoundSelectItem::Column(ColumnId::try_from(2).unwrap()), alias: Some("years".into()) }
-/// ```
-#[derive(Debug)]
-struct BoundProjection {
-    item: BoundSelectItem,
+struct SelectProjection {
+    expr: ResolvedExpr,
     alias: Option<NonEmptyString>,
 }
 
 /// The bound SQL `SELECT` list.
 ///
-/// `Star` corresponds to `SELECT *` and means "produce the FROM-clause schema
-/// unchanged" — no Project node is built. `Items` is an explicit list in the
-/// user's order.
-///
-/// # SQL examples
-///
-/// ```sql
-/// -- SELECT * FROM users;        → BoundSelectList::Star
-/// -- SELECT id, name FROM users; → BoundSelectList::Items([Column(0), Column(1)])
-/// ```
+/// `Star` corresponds to `SELECT *` — no `Project` node is built.
+/// `Items` is an explicit list in the user's order.
 #[derive(Debug)]
 enum BoundSelectList {
     Star,
-    Items(Vec<BoundProjection>),
+    Items(Vec<SelectProjection>),
 }
 
 /// A resolved SQL `SELECT` query block.
@@ -274,17 +235,13 @@ enum BoundSelectList {
 struct BoundSelect {
     from: BoundFrom,
     select_list: BoundSelectList,
-    filter: Option<Expr>,
+    filter: Option<ResolvedExpr>,
     group_by: Vec<ColumnId>,
-    having: Option<Expr>,
+    having: Option<ResolvedExpr>,
     distinct: bool,
     order_by: Vec<(ColumnId, OrderDirection)>,
     limit: Option<LimitClause>,
 }
-
-// ══════════════════════════════════════════════════════════════════════════════
-// SELECT binding — resolves names and builds BoundSelect
-// ══════════════════════════════════════════════════════════════════════════════
 
 impl BoundSelect {
     /// Binds a parsed SQL `SELECT` into column-indexed query metadata.
@@ -315,11 +272,41 @@ impl BoundSelect {
         tracing::debug!(table = %root.table.name, joins = root.joins.len(), "binding SELECT");
 
         let (from, scope) = Self::resolve_from(stmt.from.first().unwrap().clone(), catalog, txn)?;
-        let select_list = Self::resolve_select_list(&scope, stmt.columns)?;
-        let order_by = Self::resolve_order_by(&scope, stmt.order_by)?;
-        let group_by = Self::resolve_group_by(&scope, stmt.group_by)?;
-        let filter = stmt.where_clause;
-        let having = stmt.having;
+
+        let select_list = match stmt.columns {
+            SelectColumns::All => Ok(BoundSelectList::Star),
+            SelectColumns::Exprs(items) => items
+                .into_iter()
+                .map(|it| Self::bind_select_item(&scope, it))
+                .collect::<Result<Vec<_>, _>>()
+                .map(BoundSelectList::Items),
+        }?;
+
+        let order_by = stmt
+            .order_by
+            .into_iter()
+            .map(|OrderBy(col, dir)| Self::resolve_scope_col(&scope, &col).map(|id| (id, dir)))
+            .collect::<Result<Vec<_>, _>>()?;
+
+        let group_by = stmt
+            .group_by
+            .into_iter()
+            .map(|col| Self::resolve_scope_col(&scope, &col))
+            .collect::<Result<Vec<_>, _>>()?;
+
+        let filter = stmt
+            .where_clause
+            .map(|expr| {
+                resolve_expr(&scope, expr).map_err(|e| EngineError::TypeError(e.to_string()))
+            })
+            .transpose()?;
+
+        let having = stmt
+            .having
+            .map(|expr| {
+                resolve_expr(&scope, expr).map_err(|e| EngineError::TypeError(e.to_string()))
+            })
+            .transpose()?;
 
         Ok(Self {
             from,
@@ -374,50 +361,33 @@ impl BoundSelect {
             scope.push(right_table);
 
             let right = BoundFrom::table(right_info, j.table);
-            left = BoundFrom::join(j.kind, left, right, j.on);
+            left = if j.kind == JoinKind::Cross {
+                BoundFrom::cross(left, right)
+            } else {
+                let on = j.on.expect("non-cross join must have ON clause");
+                let resolved_on =
+                    resolve_expr(&scope, on).map_err(|e| EngineError::TypeError(e.to_string()))?;
+                BoundFrom::join(j.kind, left, right, resolved_on)
+            };
         }
 
         Ok((left, scope))
     }
 
-    /// Binds the SQL `SELECT` list into a [`BoundSelectList`].
-    fn resolve_select_list(
-        scope: &Scope,
-        columns: SelectColumns,
-    ) -> Result<BoundSelectList, EngineError> {
-        match columns {
-            SelectColumns::All => Ok(BoundSelectList::Star),
-            SelectColumns::Exprs(items) => items
-                .into_iter()
-                .map(|it| Self::bind_select_item(scope, it))
-                .collect::<Result<Vec<_>, _>>()
-                .map(BoundSelectList::Items),
-        }
-    }
-
-    /// Binds one SQL projection expression into a [`BoundProjection`].
+    /// Binds one SQL projection expression into a [`SelectProjection`].
     ///
-    /// # Errors
-    ///
-    /// Returns [`EngineError::UnknownColumn`] or [`EngineError::AmbiguousColumn`]
-    /// for column projections that cannot be resolved uniquely. Returns
-    /// [`EngineError::Unsupported`] for binary/unary expressions in projections.
-    fn bind_select_item(scope: &Scope, item: SelectItem) -> Result<BoundProjection, EngineError> {
+    /// Column references are resolved to [`ColumnId`]s via `resolve_scope_col` so
+    /// that [`EngineError::UnknownColumn`] / [`EngineError::AmbiguousColumn`] are
+    /// surfaced at bind time.  Aggregate arguments are resolved the same way.
+    /// Complex expressions (`BinaryOp`, `LIKE`, etc.) are rejected until the
+    /// planner gains support for scalar expressions in projections.
+    fn bind_select_item(scope: &Scope, item: SelectItem) -> Result<SelectProjection, EngineError> {
         let SelectItem { expr, alias } = item;
-        let bound = match expr {
-            Expr::Column(col) => {
-                let col = Self::resolve_scope_col(scope, &col)?;
-                BoundSelectItem::Column(col)
-            }
-            Expr::Literal(v) => BoundSelectItem::Literal(v),
-            Expr::CountStar => BoundSelectItem::Aggregate(AggregateExpr {
-                func: AggregateFunc::CountStar,
-                col_id: ColumnId::default(),
-                output_name: alias
-                    .clone()
-                    .unwrap_or_else(|| "COUNT(*)".try_into().unwrap()),
-            }),
-            Expr::Agg { func, arg } => Self::bind_agg(scope, &func, *arg, alias.as_ref())?,
+        let resolved = match expr {
+            Expr::Column(col) => ResolvedExpr::Column(Self::resolve_scope_col(scope, &col)?),
+            Expr::Literal(v) => ResolvedExpr::Literal(v),
+            Expr::CountStar => ResolvedExpr::CountStar,
+            Expr::Agg { func, arg } => Self::bind_agg_to_resolved(scope, func, *arg)?,
             Expr::BinaryOp { .. }
             | Expr::In { .. }
             | Expr::Between { .. }
@@ -431,83 +401,31 @@ impl BoundSelect {
                 ));
             }
         };
-        Ok(BoundProjection { item: bound, alias })
+        Ok(SelectProjection {
+            expr: resolved,
+            alias,
+        })
     }
 
-    /// Binds a non-`COUNT(*)` SQL aggregate into an [`AggregateExpr`].
-    ///
-    /// # Errors
-    ///
-    /// Returns [`EngineError::Unsupported`] when the aggregate argument is not
-    /// a single column reference. Returns [`EngineError::UnknownColumn`] or
-    /// [`EngineError::AmbiguousColumn`] when the aggregate column cannot be
-    /// resolved uniquely.
-    fn bind_agg(
+    /// Resolves a non-`COUNT(*)` aggregate argument and returns the `ResolvedExpr::Agg` node.
+    fn bind_agg_to_resolved(
         scope: &Scope,
-        func: &AggFunc,
+        func: AggFunc,
         arg: Expr,
-        alias: Option<&NonEmptyString>,
-    ) -> Result<BoundSelectItem, EngineError> {
+    ) -> Result<ResolvedExpr, EngineError> {
         let Expr::Column(col) = arg else {
             return Err(EngineError::Unsupported(
                 "aggregates currently support only a single column argument".to_string(),
             ));
         };
-
-        let default_name: NonEmptyString = format!("{func}({})", col.name)
-            .try_into()
-            .map_err(|e| EngineError::Unsupported(format!("invalid aggregate output name: {e}")))?;
         let col_id = Self::resolve_scope_col(scope, &col)?;
-        let agg_func = match func {
-            AggFunc::Count => AggregateFunc::CountCol,
-            AggFunc::Sum => AggregateFunc::Sum,
-            AggFunc::Avg => AggregateFunc::Avg,
-            AggFunc::Min => AggregateFunc::Min,
-            AggFunc::Max => AggregateFunc::Max,
-        };
-        Ok(BoundSelectItem::Aggregate(AggregateExpr {
-            func: agg_func,
-            col_id,
-            output_name: alias.cloned().unwrap_or(default_name),
-        }))
+        Ok(ResolvedExpr::Agg {
+            func,
+            arg: Box::new(ResolvedExpr::Column(col_id)),
+        })
     }
 
     /// Resolves SQL `ORDER BY` columns into sort keys over the bound `FROM` row.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`EngineError::UnknownColumn`] or [`EngineError::AmbiguousColumn`]
-    /// for unresolvable names, or [`EngineError::Unsupported`] if the resolved
-    /// index cannot fit in a [`ColumnId`].
-    fn resolve_order_by(
-        scope: &Scope,
-        order_by: Vec<OrderBy>,
-    ) -> Result<Vec<(ColumnId, OrderDirection)>, EngineError> {
-        order_by
-            .into_iter()
-            .map(|order| {
-                let col_id = Self::resolve_scope_col(scope, &order.0)?;
-                Ok((col_id, order.1))
-            })
-            .collect::<Result<Vec<_>, EngineError>>()
-    }
-
-    /// Resolves SQL `GROUP BY` columns into grouping keys over the bound `FROM` row.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`EngineError::UnknownColumn`], [`EngineError::AmbiguousColumn`],
-    /// or [`EngineError::Unsupported`] if an index is out of range.
-    fn resolve_group_by(
-        scope: &Scope,
-        group_by: Vec<ColumnRef>,
-    ) -> Result<Vec<ColumnId>, EngineError> {
-        group_by
-            .into_iter()
-            .map(|col| Self::resolve_scope_col(scope, &col))
-            .collect()
-    }
-
     #[inline]
     /// Resolves one SQL column reference into a planner-facing [`ColumnId`].
     ///
@@ -657,8 +575,7 @@ impl Engine<'_> {
         let mut node = Self::build_from(&bound.from, heaps, txn)?;
 
         if let Some(pred) = &bound.filter {
-            let schema = node.schema().clone();
-            node = PlanNode::filter(node, pred.clone(), schema);
+            node = PlanNode::filter(node, pred.clone());
         }
 
         // ORDER BY and HAVING are still bound against the FROM scope, so their
@@ -755,21 +672,21 @@ impl Engine<'_> {
                 Ok(PlanNode::nested_loop_join(
                     left_node,
                     right_node,
-                    Expr::Literal(Value::Bool(true)),
+                    ResolvedExpr::Literal(Value::Bool(true)),
                 ))
             }
         }
     }
 
-    /// Picks `HashJoin` when the `ON` clause is a single column-equality between
+    /// Picks `HashJoin` when the `ON` clause is a simple column-equality between
     /// the two sides; falls back to `NestedLoopJoin` for everything else.
     fn build_join<'a>(
         left: PlanNode<'a>,
         right: PlanNode<'a>,
-        on: &Expr,
+        on: &ResolvedExpr,
         left_width: usize,
     ) -> PlanNode<'a> {
-        if let Some(pred) = Self::try_extract_equi(on, left.schema(), right.schema(), left_width) {
+        if let Some(pred) = Self::try_extract_equi(on, left_width) {
             tracing::debug!(algorithm = "hash_join", "join selected");
             PlanNode::hash_join(left, right, pred)
         } else {
@@ -778,19 +695,16 @@ impl Engine<'_> {
         }
     }
 
-    /// Tries to extract an equi-join key from an `Expr`.
+    /// Tries to extract an equi-join key from a [`ResolvedExpr`].
     ///
-    /// Returns `Some(JoinPredicate)` only when `expr` is `lhs = rhs` where both
-    /// sides are column references that resolve to different inputs (one in the
-    /// left schema, one in the right). The returned right-side index is relative
-    /// to the right input (i.e. global index minus `left_width`).
-    fn try_extract_equi(
-        expr: &Expr,
-        left_schema: &TupleSchema,
-        right_schema: &TupleSchema,
-        left_width: usize,
-    ) -> Option<JoinPredicate> {
-        let Expr::BinaryOp {
+    /// Returns `Some(JoinPredicate)` only when `expr` is `col = col` where the two
+    /// columns sit on opposite sides of the join (one index < `left_width`, the other
+    /// ≥ `left_width`). The right-side index in the returned predicate is relative to
+    /// the right input (global index minus `left_width`).
+    ///
+    /// Because columns are already resolved to [`ColumnId`]s, no schema lookup is needed.
+    fn try_extract_equi(expr: &ResolvedExpr, left_width: usize) -> Option<JoinPredicate> {
+        let ResolvedExpr::BinaryOp {
             lhs,
             op: BinOp::Eq,
             rhs,
@@ -798,35 +712,18 @@ impl Engine<'_> {
         else {
             return None;
         };
-        let (Expr::Column(lc), Expr::Column(rc)) = (lhs.as_ref(), rhs.as_ref()) else {
+        let (ResolvedExpr::Column(lc), ResolvedExpr::Column(rc)) = (lhs.as_ref(), rhs.as_ref())
+        else {
             return None;
         };
 
-        // Resolve each column against left then right schema.
-        let l_in_left = left_schema
-            .field_by_name(lc.name.as_str())
-            .map(|(id, _)| usize::from(id));
-        let l_in_right = right_schema
-            .field_by_name(lc.name.as_str())
-            .map(|(id, _)| usize::from(id) + left_width);
-        let r_in_left = left_schema
-            .field_by_name(rc.name.as_str())
-            .map(|(id, _)| usize::from(id));
-        let r_in_right = right_schema
-            .field_by_name(rc.name.as_str())
-            .map(|(id, _)| usize::from(id) + left_width);
+        let l = usize::from(*lc);
+        let r = usize::from(*rc);
 
-        // We need one column from each side.
-        let (global_l, global_r) = match (l_in_left, l_in_right, r_in_left, r_in_right) {
-            (Some(l), None, None, Some(r)) => (l, r),
-            (None, Some(l), Some(r), None) => (r, l),
-            _ => return None,
-        };
-
-        let (lc_idx, rc_idx) = if global_l < left_width && global_r >= left_width {
-            (global_l, global_r - left_width)
-        } else if global_r < left_width && global_l >= left_width {
-            (global_r, global_l - left_width)
+        let (lc_idx, rc_idx) = if l < left_width && r >= left_width {
+            (l, r - left_width)
+        } else if r < left_width && l >= left_width {
+            (r, l - left_width)
         } else {
             return None;
         };
@@ -845,7 +742,7 @@ impl Engine<'_> {
         };
         items
             .iter()
-            .any(|p| matches!(p.item, BoundSelectItem::Aggregate(_)))
+            .any(|p| matches!(p.expr, ResolvedExpr::Agg { .. } | ResolvedExpr::CountStar))
     }
 
     /// Builds the non-aggregate SQL `SELECT` list as a `Project` operator.
@@ -859,14 +756,14 @@ impl Engine<'_> {
     /// output schema shape.
     fn build_project<'a>(
         child: PlanNode<'a>,
-        projections: &[BoundProjection],
+        projections: &[SelectProjection],
     ) -> Result<PlanNode<'a>, EngineError> {
         let project_items = projections
             .iter()
             .enumerate()
-            .map(|(i, proj)| match &proj.item {
-                BoundSelectItem::Column(c) => Ok(ProjectItem::column(*c, proj.alias.clone())),
-                BoundSelectItem::Literal(v) => {
+            .map(|(i, proj)| match &proj.expr {
+                ResolvedExpr::Column(c) => Ok(ProjectItem::column(*c, proj.alias.clone())),
+                ResolvedExpr::Literal(v) => {
                     let name = if let Some(name) = &proj.alias {
                         name.clone()
                     } else {
@@ -878,8 +775,13 @@ impl Engine<'_> {
                     };
                     Ok(ProjectItem::literal(v.clone(), name))
                 }
-                BoundSelectItem::Aggregate(_) => Err(EngineError::Unsupported(
-                    "aggregate projections require the Aggregate operator".into(),
+                ResolvedExpr::Agg { .. } | ResolvedExpr::CountStar => {
+                    Err(EngineError::Unsupported(
+                        "aggregate projections require the Aggregate operator".into(),
+                    ))
+                }
+                _ => Err(EngineError::Unsupported(
+                    "complex expressions in SELECT projections are not yet supported".into(),
                 )),
             })
             .collect::<Result<Vec<_>, _>>()?;
@@ -939,7 +841,7 @@ impl Engine<'_> {
     /// Returns [`EngineError::Unsupported`] if a post-aggregate output position
     /// cannot fit in [`ColumnId`].
     fn build_aggregate_rewiring_projection_items(
-        projections: &[BoundProjection],
+        projections: &[SelectProjection],
         group_by_cols: &[ColumnId],
     ) -> Result<Vec<ProjectItem>, EngineError> {
         let mut agg_index = 0usize;
@@ -947,20 +849,20 @@ impl Engine<'_> {
             .iter()
             .enumerate()
             .map(|(i, projection)| {
-                Ok(match &projection.item {
-                    BoundSelectItem::Column(c) => {
+                Ok(match &projection.expr {
+                    ResolvedExpr::Column(c) => {
                         let pos = group_by_cols
                             .iter()
                             .position(|g| g == c)
                             .expect("GROUP BY membership validated above");
                         ProjectItem::column(Self::col_id(pos)?, projection.alias.clone())
                     }
-                    BoundSelectItem::Aggregate(_) => {
+                    ResolvedExpr::Agg { .. } | ResolvedExpr::CountStar => {
                         let pos = group_by_cols.len() + agg_index;
                         agg_index += 1;
                         ProjectItem::column(Self::col_id(pos)?, projection.alias.clone())
                     }
-                    BoundSelectItem::Literal(v) => {
+                    ResolvedExpr::Literal(v) => {
                         let name = match projection.alias.clone() {
                             Some(alias) => alias,
                             None => format!("?column?{}", i + 1).try_into().map_err(|e| {
@@ -970,6 +872,12 @@ impl Engine<'_> {
                             })?,
                         };
                         ProjectItem::literal(v.clone(), name)
+                    }
+                    _ => {
+                        return Err(EngineError::Unsupported(
+                            "complex expressions in SELECT projections are not yet supported"
+                                .into(),
+                        ));
                     }
                 })
             })
@@ -987,20 +895,16 @@ impl Engine<'_> {
     /// rejects a group key or aggregate input column.
     fn create_aggregate_plan<'a>(
         child: PlanNode<'a>,
-        projections: &[BoundProjection],
+        projections: &[SelectProjection],
         group_by_cols: &[ColumnId],
     ) -> Result<PlanNode<'a>, EngineError> {
-        let agg_exprs = projections
-            .iter()
-            .filter_map(|p| match &p.item {
-                BoundSelectItem::Aggregate(a) => Some(a.clone()),
-                _ => None,
-            })
-            .collect();
-
-        let invalid_col = projections.iter().find_map(|p| match &p.item {
-            BoundSelectItem::Column(c) if !group_by_cols.contains(c) => Some(*c),
-            _ => None,
+        let invalid_col = projections.iter().find_map(|p| {
+            if let ResolvedExpr::Column(c) = p.expr
+                && !group_by_cols.contains(&c)
+            {
+                return Some(c);
+            }
+            None
         });
 
         if let Some(col_id) = invalid_col {
@@ -1010,7 +914,66 @@ impl Engine<'_> {
             )));
         }
 
+        let schema = child.schema().clone();
+        let agg_exprs = projections
+            .iter()
+            .filter_map(|p| Self::projection_to_agg_expr(p, &schema))
+            .collect::<Result<Vec<_>, _>>()?;
+
         Ok(PlanNode::aggregate(child, group_by_cols, agg_exprs)?)
+    }
+
+    /// Converts a [`SelectProjection`] with an aggregate expression into an [`AggregateExpr`].
+    ///
+    /// Returns `None` for non-aggregate projections (they are skipped when building the
+    /// `Aggregate` operator). Returns `Some(Err)` when the aggregate argument is not a
+    /// single resolved column.
+    fn projection_to_agg_expr(
+        proj: &SelectProjection,
+        schema: &TupleSchema,
+    ) -> Option<Result<AggregateExpr, EngineError>> {
+        match &proj.expr {
+            ResolvedExpr::CountStar => {
+                let output_name = proj
+                    .alias
+                    .clone()
+                    .unwrap_or_else(|| "COUNT(*)".try_into().unwrap());
+                Some(Ok(AggregateExpr {
+                    func: AggregateFunc::CountStar,
+                    col_id: ColumnId::default(),
+                    output_name,
+                }))
+            }
+            ResolvedExpr::Agg { func, arg } => {
+                let col_id = match arg.as_ref() {
+                    ResolvedExpr::Column(id) => *id,
+                    _ => {
+                        return Some(Err(EngineError::Unsupported(
+                            "aggregates currently support only a single column argument".into(),
+                        )));
+                    }
+                };
+                let agg_func = match func {
+                    AggFunc::Count => AggregateFunc::CountCol,
+                    AggFunc::Sum => AggregateFunc::Sum,
+                    AggFunc::Avg => AggregateFunc::Avg,
+                    AggFunc::Min => AggregateFunc::Min,
+                    AggFunc::Max => AggregateFunc::Max,
+                };
+                let default_name: NonEmptyString = {
+                    let col_name = schema.col_name(col_id).unwrap_or("?");
+                    format!("{func}({col_name})")
+                        .try_into()
+                        .unwrap_or_else(|_| "agg".try_into().unwrap())
+                };
+                Some(Ok(AggregateExpr {
+                    func: agg_func,
+                    col_id,
+                    output_name: proj.alias.clone().unwrap_or(default_name),
+                }))
+            }
+            _ => None,
+        }
     }
 
     /// Converts a post-operator SQL column position into a [`ColumnId`].
@@ -1038,12 +1001,13 @@ mod tests {
 
     use tempfile::tempdir;
 
-    use super::{BoundFrom, BoundSelect, BoundSelectItem, BoundSelectList};
+    use super::{BoundFrom, BoundSelect, BoundSelectList};
     use crate::{
         Type, Value,
         buffer_pool::page_store::PageStore,
         catalog::manager::Catalog,
         engine::{Engine, EngineError, StatementResult},
+        execution::ResolvedExpr,
         parser::{
             Parser,
             statements::{
@@ -1590,7 +1554,7 @@ mod tests {
         Join {
             kind: JoinKind::Inner,
             table: table_ref(name, alias),
-            on,
+            on: Some(on),
         }
     }
 
@@ -1720,8 +1684,8 @@ mod tests {
             panic!("expected Items");
         };
         assert_eq!(list.len(), 2);
-        assert!(matches!(list[0].item, BoundSelectItem::Column(c) if u32::from(c) == 0));
-        assert!(matches!(list[1].item, BoundSelectItem::Column(c) if u32::from(c) == 1));
+        assert!(matches!(list[0].expr, ResolvedExpr::Column(c) if u32::from(c) == 0));
+        assert!(matches!(list[1].expr, ResolvedExpr::Column(c) if u32::from(c) == 1));
         assert!(list[0].alias.is_none());
     }
 
@@ -1738,7 +1702,7 @@ mod tests {
             panic!();
         };
         assert_eq!(list[0].alias.as_deref(), Some("user_id"));
-        assert!(matches!(list[0].item, BoundSelectItem::Column(_)));
+        assert!(matches!(list[0].expr, ResolvedExpr::Column(_)));
     }
 
     #[test]
@@ -1759,17 +1723,12 @@ mod tests {
             panic!();
         };
         assert!(matches!(
-            list[0].item,
-            BoundSelectItem::Literal(Value::Int64(1))
+            list[0].expr,
+            ResolvedExpr::Literal(Value::Int64(1))
         ));
-        assert!(
-            matches!(list[1].item, BoundSelectItem::Literal(Value::String(ref s)) if s == "hi")
-        );
+        assert!(matches!(&list[1].expr, ResolvedExpr::Literal(Value::String(s)) if s == "hi"));
         assert_eq!(list[1].alias.as_deref(), Some("greet"));
-        assert!(matches!(
-            list[2].item,
-            BoundSelectItem::Literal(Value::Null)
-        ));
+        assert!(matches!(list[2].expr, ResolvedExpr::Literal(Value::Null)));
     }
 
     #[test]
@@ -1784,14 +1743,7 @@ mod tests {
         let BoundSelectList::Items(list) = &bound.select_list else {
             panic!();
         };
-        let BoundSelectItem::Aggregate(agg) = &list[0].item else {
-            panic!("expected aggregate");
-        };
-        assert_eq!(
-            agg.func,
-            crate::execution::aggregate::AggregateFunc::CountStar
-        );
-        assert_eq!(agg.output_name, "COUNT(*)");
+        assert!(matches!(list[0].expr, ResolvedExpr::CountStar));
         assert!(list[0].alias.is_none());
     }
 
@@ -1806,10 +1758,7 @@ mod tests {
         let BoundSelectList::Items(list) = &bound.select_list else {
             panic!();
         };
-        let BoundSelectItem::Aggregate(agg) = &list[0].item else {
-            panic!();
-        };
-        assert_eq!(agg.output_name, "n");
+        assert!(matches!(list[0].expr, ResolvedExpr::CountStar));
         assert_eq!(list[0].alias.as_deref(), Some("n"));
     }
 
@@ -1832,12 +1781,12 @@ mod tests {
         let BoundSelectList::Items(list) = &bound.select_list else {
             panic!();
         };
-        let BoundSelectItem::Aggregate(agg) = &list[0].item else {
-            panic!();
+        let ResolvedExpr::Agg { func, arg } = &list[0].expr else {
+            panic!("expected Agg");
         };
-        assert_eq!(agg.func, crate::execution::aggregate::AggregateFunc::Sum);
-        assert_eq!(u32::from(agg.col_id), 2);
-        assert_eq!(agg.output_name, "SUM(age)");
+        assert_eq!(*func, AggFunc::Sum);
+        assert!(matches!(arg.as_ref(), ResolvedExpr::Column(c) if u32::from(*c) == 2));
+        assert!(list[0].alias.is_none());
     }
 
     #[test]
@@ -1873,9 +1822,9 @@ mod tests {
         let BoundSelectList::Items(list) = &bound.select_list else {
             panic!();
         };
-        assert!(matches!(list[0].item, BoundSelectItem::Column(_)));
-        assert!(matches!(list[1].item, BoundSelectItem::Aggregate(_)));
-        assert!(matches!(list[2].item, BoundSelectItem::Column(_)));
+        assert!(matches!(list[0].expr, ResolvedExpr::Column(_)));
+        assert!(matches!(list[1].expr, ResolvedExpr::CountStar));
+        assert!(matches!(list[2].expr, ResolvedExpr::Column(_)));
     }
 
     #[test]
@@ -1905,9 +1854,9 @@ mod tests {
     }
 
     #[test]
-    fn bind_join_unqualified_shared_column_where_clause_passes_bind() {
-        // WHERE column validation is deferred to eval time — bind now succeeds even
-        // when the column name exists in multiple tables. Ambiguity is a runtime concern.
+    fn bind_join_ambiguous_column_in_where_is_rejected() {
+        // `id` exists in both `users` and `orders` — with eager resolution this
+        // is caught at bind time rather than silently resolved at eval time.
         let mut stmt = star_from(with_join(
             just("users"),
             inner_join(
@@ -1917,7 +1866,7 @@ mod tests {
             ),
         ));
         stmt.where_clause = Some(pred("id", Predicate::Equals, Value::Uint64(0)));
-        assert!(bind_with_users_and_orders(|| stmt).is_ok());
+        assert!(bind_with_users_and_orders(|| stmt).is_err());
     }
 
     #[test]
@@ -1943,10 +1892,10 @@ mod tests {
         let BoundSelectList::Items(list) = &bound.select_list else {
             panic!();
         };
-        let BoundSelectItem::Column(left_id) = list[0].item else {
+        let ResolvedExpr::Column(left_id) = list[0].expr else {
             panic!();
         };
-        let BoundSelectItem::Column(right_id) = list[1].item else {
+        let ResolvedExpr::Column(right_id) = list[1].expr else {
             panic!();
         };
         assert_eq!(u32::from(left_id), 0);
@@ -1954,15 +1903,14 @@ mod tests {
     }
 
     #[test]
-    fn bind_unknown_qualifier_in_where_passes_bind() {
-        // WHERE column references are no longer validated at bind time — they are
-        // resolved lazily by eval_expr when rows are actually produced.
+    fn bind_unknown_qualifier_in_where_is_rejected() {
+        // With eager resolution, an unknown qualifier in WHERE is caught at bind time.
         let bound = bind_with_users(|| {
             let mut s = star_from(just("users"));
             s.where_clause = Some(pred("x.id", Predicate::Equals, Value::Uint64(0)));
             s
         });
-        assert!(bound.is_ok());
+        assert!(bound.is_err());
     }
 
     #[test]

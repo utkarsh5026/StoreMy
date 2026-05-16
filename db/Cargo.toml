@@ -49,6 +49,7 @@ parking_lot = "0.12"
 
 # Collections
 hashbrown = "0.14"
+itertools = "0.13"
 
 # Logging
 tracing = "0.1"

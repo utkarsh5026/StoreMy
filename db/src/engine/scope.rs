@@ -2,8 +2,9 @@ use super::EngineError;
 use crate::{
     FileId,
     catalog::TableInfo,
+    execution::ColumnLookup,
     parser::statements::ColumnRef,
-    primitives::NonEmptyString,
+    primitives::{ColumnId, NonEmptyString},
     tuple::{Field, TupleSchema},
 };
 
@@ -151,6 +152,44 @@ impl SingleTableScope {
 
     fn qualifier_label(&self) -> &str {
         self.alias.as_deref().unwrap_or(&self.name)
+    }
+}
+
+impl ColumnLookup for Scope {
+    fn lookup(&self, qualifier: Option<&str>, name: &str) -> Option<ColumnId> {
+        let candidates: Vec<&BoundTable> = match qualifier {
+            Some(q) => self
+                .tables
+                .iter()
+                .filter(|t| t.qualifier_label() == q)
+                .collect(),
+            None => self.tables.iter().collect(),
+        };
+
+        let matches: Vec<usize> = candidates
+            .iter()
+            .filter_map(|t| {
+                t.schema
+                    .field_by_name(name)
+                    .map(|(local, _)| t.column_offset + usize::from(local))
+            })
+            .collect();
+
+        match matches.len() {
+            1 => ColumnId::try_from(matches[0]).ok(),
+            _ => None,
+        }
+    }
+}
+
+impl ColumnLookup for SingleTableScope {
+    fn lookup(&self, qualifier: Option<&str>, name: &str) -> Option<ColumnId> {
+        if let Some(q) = qualifier
+            && q != self.qualifier_label()
+        {
+            return None;
+        }
+        self.schema.field_by_name(name).map(|(id, _)| id)
     }
 }
 

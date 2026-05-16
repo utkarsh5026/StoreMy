@@ -58,13 +58,24 @@ use std::{
     ops::{Index, IndexMut},
 };
 
+/// Specifies how non-matching rows are handled in a join.
+///
+/// - [`Inner`](JoinType::Inner): only rows that satisfy the join condition appear in the output.
+///   This is the SQL default (`JOIN` or `INNER JOIN`).
+/// - [`LeftOuter`](JoinType::LeftOuter): every left row appears at least once. When a left row has
+///   no matching right row the right columns are filled with `NULL`.  SQL: `LEFT JOIN`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum JoinType {
+    Inner,
+    LeftOuter,
+}
+
 use fallible_iterator::FallibleIterator;
 
 use super::{ExecutionError, Executor};
 use crate::{
     Value,
-    execution::{PlanNode, eval::eval_expr},
-    parser::statements::Expr,
+    execution::{PlanNode, ResolvedExpr, eval_resolved_bool},
     primitives::{ColumnId, Predicate},
     tuple::{Tuple, TupleSchema},
 };
@@ -120,6 +131,13 @@ impl JoinPredicate {
     }
 }
 
+/// Returns a tuple of `n` `NULL` values, used to pad the right side when a left row has no match
+/// in a `LEFT OUTER JOIN`.
+#[inline]
+fn null_right_tuple(n: usize) -> Tuple {
+    Tuple::new(vec![Value::Null; n])
+}
+
 /// Fetches a value by column id with a side-specific error message.
 ///
 /// This helper returns a reference into `tuple`, so the output lifetime is tied to the input
@@ -146,21 +164,24 @@ struct JoinInputs<'a> {
     left: PlanNode<'a>,
     right: PlanNode<'a>,
     schema: TupleSchema,
-    /// Number of columns in the left child's schema. This is the offset at which
-    /// the right child's columns start in any concatenated `left.concat(right)`
+    /// Number of columns in the left child's output.
     left_width: usize,
+    /// Number of columns in the right child's output.
+    right_width: usize,
 }
 
 impl<'a> JoinInputs<'a> {
     /// Constructs a new `JoinInputs` by merging the two children's schemas.
     pub fn new(left: PlanNode<'a>, right: PlanNode<'a>) -> Self {
         let left_width = left.schema().physical_num_fields();
+        let right_width = right.schema().physical_num_fields();
         let schema = left.schema().merge(right.schema());
         Self {
             left,
             right,
             schema,
             left_width,
+            right_width,
         }
     }
 }
@@ -189,14 +210,25 @@ fn drain_tuples(
     Ok(())
 }
 
+/// Drains all tuples from `node` into `buf` without any NULL filtering.
+///
+/// Used for the left side of a `LEFT OUTER JOIN` in sort-merge: every left row must appear
+/// in the output regardless of its join-key value, so NULL-key rows must not be dropped here.
+fn drain_all_tuples(node: &mut PlanNode, buf: &mut Vec<Tuple>) -> Result<(), ExecutionError> {
+    while let Some(t) = node.next()? {
+        buf.push(t);
+    }
+    Ok(())
+}
+
 /// Joins two inputs by pairing every left tuple with every right tuple.
 ///
 /// The right input is materialized once. For each left tuple, the executor concatenates
 /// `left.concat(right)` with every buffered right tuple and evaluates `predicate` over
 /// the combined tuple, emitting pairs that satisfy it.
 ///
-/// Because the predicate is a general [`Expr`] evaluated via `eval_expr`, NLJ supports arbitrary
-/// boolean combinations over both sides (e.g. `l.a = r.x AND l.b < r.y`).
+/// Because the predicate is a general [`ResolvedExpr`] evaluated via [`eval_resolved_bool`], NLJ
+/// supports arbitrary boolean combinations over both sides (e.g. `l.a = r.x AND l.b < r.y`).
 ///
 /// # SQL shape
 ///
@@ -212,7 +244,8 @@ fn drain_tuples(
 #[derive(Debug)]
 pub struct NestedLoopJoin<'a> {
     inputs: Box<JoinInputs<'a>>,
-    predicate: Expr,
+    predicate: ResolvedExpr,
+    join_type: JoinType,
     right_buf: Vec<Tuple>,
     materialized: bool,
     pending: VecDeque<Tuple>,
@@ -221,19 +254,27 @@ pub struct NestedLoopJoin<'a> {
 impl<'a> NestedLoopJoin<'a> {
     /// Creates a nested-loop join executor for `left ⋈ right` using `predicate`.
     ///
-    /// The predicate is evaluated with `eval_expr` over the concatenated `left.concat(right)`
-    /// tuple, using the merged schema built internally from `left.schema()` + `right.schema()`.
+    /// `predicate` must have all column references pre-resolved to [`ColumnId`]s.
+    /// It is evaluated over the concatenated `left.concat(right)` tuple.
     ///
     /// The right input is read and buffered on the first call to [`FallibleIterator::next`].
     #[tracing::instrument(skip_all, fields(op = "nlj"))]
-    pub fn new(left: PlanNode<'a>, right: PlanNode<'a>, predicate: Expr) -> Self {
+    pub fn new(left: PlanNode<'a>, right: PlanNode<'a>, predicate: ResolvedExpr) -> Self {
         Self {
             inputs: Box::new(JoinInputs::new(left, right)),
             predicate,
+            join_type: JoinType::Inner,
             right_buf: Vec::new(),
             materialized: false,
             pending: VecDeque::new(),
         }
+    }
+
+    /// Sets the join type. Use [`JoinType::LeftOuter`] to get `LEFT JOIN` semantics.
+    #[must_use]
+    pub fn with_join_type(mut self, join_type: JoinType) -> Self {
+        self.join_type = join_type;
+        self
     }
 
     /// Returns the number of columns in the left child — i.e. the offset at which
@@ -280,6 +321,7 @@ impl FallibleIterator for NestedLoopJoin<'_> {
 
     fn next(&mut self) -> Result<Option<Tuple>, ExecutionError> {
         self.materialize_right()?;
+        let right_width = self.inputs.right_width;
 
         loop {
             if let Some(tuple) = self.pending.pop_front() {
@@ -292,18 +334,103 @@ impl FallibleIterator for NestedLoopJoin<'_> {
 
             for right in &self.right_buf {
                 let joined = l.concat(right);
-                if matches!(
-                    eval_expr(&self.predicate, &joined, &self.inputs.schema)?,
-                    Value::Bool(true)
-                ) {
+                if eval_resolved_bool(&self.predicate, &joined)? {
                     self.pending.push_back(joined);
                 }
+            }
+
+            // LEFT OUTER: if this left row matched nothing, emit it with a NULL-padded right side.
+            if self.join_type == JoinType::LeftOuter && self.pending.is_empty() {
+                self.pending
+                    .push_back(l.concat(&null_right_tuple(right_width)));
             }
         }
     }
 }
 
 impl Executor for NestedLoopJoin<'_> {
+    fn schema(&self) -> &TupleSchema {
+        &self.inputs.schema
+    }
+
+    fn rewind(&mut self) -> Result<(), ExecutionError> {
+        self.pending.clear();
+        self.inputs.left.rewind()
+    }
+}
+
+/// Produces the Cartesian product of two inputs — every left row paired with every right row,
+/// with no predicate filtering.
+///
+/// The right input is materialized once on the first call to `next`. Each subsequent left
+/// tuple fans out to `|right|` output rows unconditionally.
+///
+/// # SQL shape
+///
+/// ```sql
+/// SELECT * FROM left_table CROSS JOIN right_table;
+/// ```
+#[derive(Debug)]
+pub struct CrossJoin<'a> {
+    inputs: Box<JoinInputs<'a>>,
+    right_buf: Vec<Tuple>,
+    materialized: bool,
+    pending: VecDeque<Tuple>,
+}
+
+impl<'a> CrossJoin<'a> {
+    /// Creates a cross-join executor for `left × right`.
+    #[tracing::instrument(skip_all, fields(op = "cross_join"))]
+    pub fn new(left: PlanNode<'a>, right: PlanNode<'a>) -> Self {
+        Self {
+            inputs: Box::new(JoinInputs::new(left, right)),
+            right_buf: Vec::new(),
+            materialized: false,
+            pending: VecDeque::new(),
+        }
+    }
+
+    fn materialize_right(&mut self) -> Result<(), ExecutionError> {
+        if self.materialized {
+            return Ok(());
+        }
+        let right = &mut self.inputs.right;
+        while let Some(tuple) = right.next()? {
+            self.right_buf.push(tuple);
+        }
+        tracing::debug!(
+            tuples = self.right_buf.len(),
+            "cross_join: right side buffered"
+        );
+        self.materialized = true;
+        Ok(())
+    }
+}
+
+impl FallibleIterator for CrossJoin<'_> {
+    type Item = Tuple;
+    type Error = ExecutionError;
+
+    fn next(&mut self) -> Result<Option<Tuple>, ExecutionError> {
+        self.materialize_right()?;
+
+        loop {
+            if let Some(tuple) = self.pending.pop_front() {
+                return Ok(Some(tuple));
+            }
+
+            let Some(l) = self.inputs.left.next()? else {
+                return Ok(None);
+            };
+
+            for right in &self.right_buf {
+                self.pending.push_back(l.concat(right));
+            }
+        }
+    }
+}
+
+impl Executor for CrossJoin<'_> {
     fn schema(&self) -> &TupleSchema {
         &self.inputs.schema
     }
@@ -322,32 +449,18 @@ impl Executor for NestedLoopJoin<'_> {
 /// matches after the key probe — useful for compound join conditions like
 /// `l.a = r.x AND l.b < r.y`, where `l.a = r.x` is the hash key and `l.b < r.y`
 /// is the residual.
-///
-/// # SQL shape
-///
-/// Hash join is used for *equi-joins* (an `=` key), optionally with an additional filter:
-///
-/// ```sql
-/// -- Pure equi-join
-/// SELECT *
-/// FROM left_table  AS l
-/// JOIN right_table AS r
-///   ON l.a = r.x;
-///
-/// -- Equi-join key + residual predicate
-/// SELECT *
-/// FROM left_table  AS l
-/// JOIN right_table AS r
-///   ON l.a = r.x AND l.b < r.y;
-/// ```
 pub struct HashJoin<'a> {
     inputs: Box<JoinInputs<'a>>,
     predicate: JoinPredicate,
-    residual: Option<Expr>,
+    join_type: JoinType,
+    residual: Option<ResolvedExpr>,
     hash_table: HashMap<Value, Vec<Tuple>>,
     pending: VecDeque<Tuple>,
     materialized: bool,
     left_tuple: Option<Tuple>,
+    /// Tracks whether the current left row has produced at least one output tuple.
+    /// Used by `LEFT OUTER JOIN` to decide whether to emit a NULL-padded row.
+    left_matched: bool,
 }
 
 impl<'a> HashJoin<'a> {
@@ -368,12 +481,21 @@ impl<'a> HashJoin<'a> {
         Self {
             inputs: Box::new(JoinInputs::new(left, right)),
             predicate,
+            join_type: JoinType::Inner,
             residual: None,
             hash_table: HashMap::new(),
             pending: VecDeque::new(),
             materialized: false,
             left_tuple: None,
+            left_matched: false,
         }
+    }
+
+    /// Sets the join type. Use [`JoinType::LeftOuter`] to get `LEFT JOIN` semantics.
+    #[must_use]
+    pub fn with_join_type(mut self, join_type: JoinType) -> Self {
+        self.join_type = join_type;
+        self
     }
 
     /// Attaches an optional residual predicate to this hash join.
@@ -382,7 +504,7 @@ impl<'a> HashJoin<'a> {
     /// hash-key match succeeds, so right-side column references must be offset by
     /// [`left_width`](Self::left_width).
     #[must_use]
-    pub fn with_residual(mut self, residual: Expr) -> Self {
+    pub fn with_residual(mut self, residual: ResolvedExpr) -> Self {
         self.residual = Some(residual);
         self
     }
@@ -428,8 +550,10 @@ impl FallibleIterator for HashJoin<'_> {
     fn next(&mut self) -> Result<Option<Tuple>, ExecutionError> {
         self.build_hash_table()?;
         let left_idx = usize::from(self.predicate.left_col);
+        let right_width = self.inputs.right_width;
 
         loop {
+            // Drain pending right-side candidates for the current left tuple.
             while let Some(r) = self.pending.pop_front() {
                 let l = self
                     .left_tuple
@@ -438,14 +562,21 @@ impl FallibleIterator for HashJoin<'_> {
                 let joined = l.concat(&r);
                 let keep = match &self.residual {
                     None => true,
-                    Some(expr) => matches!(
-                        eval_expr(expr, &joined, &self.inputs.schema)?,
-                        Value::Bool(true)
-                    ),
+                    Some(expr) => eval_resolved_bool(expr, &joined)?,
                 };
                 if keep {
+                    self.left_matched = true;
                     return Ok(Some(joined));
                 }
+            }
+
+            // pending is exhausted. For LEFT OUTER: if this left row produced no output
+            // (all candidates were rejected by the residual), emit a NULL-padded row.
+            if self.join_type == JoinType::LeftOuter
+                && let Some(l) = self.left_tuple.take()
+                && !self.left_matched
+            {
+                return Ok(Some(l.concat(&null_right_tuple(right_width))));
             }
 
             let Some(l) = self.inputs.left.next()? else {
@@ -454,17 +585,29 @@ impl FallibleIterator for HashJoin<'_> {
             };
 
             let key = match l.get(left_idx) {
-                Some(Value::Null) | None => continue,
+                Some(Value::Null) | None => {
+                    // NULL key can never match. LEFT OUTER must still emit the left row.
+                    if self.join_type == JoinType::LeftOuter {
+                        return Ok(Some(l.concat(&null_right_tuple(right_width))));
+                    }
+                    continue;
+                }
                 Some(v) => v.clone(),
             };
 
-            if let Some(bucket) = self.hash_table.get(&key) {
-                if bucket.is_empty() {
-                    continue;
+            match self.hash_table.get(&key) {
+                Some(bucket) if !bucket.is_empty() => {
+                    tracing::trace!(matches = bucket.len(), "hash_join: probe hit");
+                    self.pending.extend(bucket.iter().cloned());
+                    self.left_matched = false;
+                    self.left_tuple = Some(l);
                 }
-                tracing::trace!(matches = bucket.len(), "hash_join: probe hit");
-                self.pending.extend(bucket.iter().cloned());
-                self.left_tuple = Some(l);
+                _ => {
+                    // No match in hash table. LEFT OUTER emits a NULL-padded row.
+                    if self.join_type == JoinType::LeftOuter {
+                        return Ok(Some(l.concat(&null_right_tuple(right_width))));
+                    }
+                }
             }
         }
     }
@@ -478,6 +621,7 @@ impl Executor for HashJoin<'_> {
     fn rewind(&mut self) -> Result<(), ExecutionError> {
         self.pending.clear();
         self.left_tuple = None;
+        self.left_matched = false;
         self.inputs.left.rewind()
     }
 }
@@ -542,7 +686,8 @@ impl IndexMut<usize> for TupleCursor {
 pub struct SortMergeJoin<'a> {
     inputs: Box<JoinInputs<'a>>,
     predicate: JoinPredicate,
-    residual: Option<Expr>,
+    join_type: JoinType,
+    residual: Option<ResolvedExpr>,
     l_sorted: TupleCursor,
     r_sorted: TupleCursor,
     pending: VecDeque<Tuple>,
@@ -567,6 +712,7 @@ impl<'a> SortMergeJoin<'a> {
         Self {
             inputs: Box::new(JoinInputs::new(left, right)),
             predicate,
+            join_type: JoinType::Inner,
             residual: None,
             l_sorted: TupleCursor::new(),
             r_sorted: TupleCursor::new(),
@@ -576,13 +722,20 @@ impl<'a> SortMergeJoin<'a> {
         }
     }
 
+    /// Sets the join type. Use [`JoinType::LeftOuter`] to get `LEFT JOIN` semantics.
+    #[must_use]
+    pub fn with_join_type(mut self, join_type: JoinType) -> Self {
+        self.join_type = join_type;
+        self
+    }
+
     /// Attaches an optional residual predicate to this sort-merge join.
     ///
     /// The residual is evaluated over the concatenated `left ⋈ right` tuple *after* the
     /// equal-key match, so right-side column references must be offset by
     /// [`left_width`](Self::left_width).
     #[must_use]
-    pub fn with_residual(mut self, residual: Expr) -> Self {
+    pub fn with_residual(mut self, residual: ResolvedExpr) -> Self {
         self.residual = Some(residual);
         self
     }
@@ -604,7 +757,14 @@ impl<'a> SortMergeJoin<'a> {
         let left_idx = usize::from(self.predicate.left_col);
         let right_idx = usize::from(self.predicate.right_col);
 
-        drain_tuples(&mut self.inputs.left, &mut self.l_sorted.0, left_idx)?;
+        // For LEFT OUTER JOIN we must preserve all left rows (including NULL-key ones) because
+        // every left row must appear in the output. NULL keys sort first, so during the merge
+        // they will advance the left cursor immediately and emit NULL-padded output rows.
+        if self.join_type == JoinType::LeftOuter {
+            drain_all_tuples(&mut self.inputs.left, &mut self.l_sorted.0)?;
+        } else {
+            drain_tuples(&mut self.inputs.left, &mut self.l_sorted.0, left_idx)?;
+        }
         drain_tuples(&mut self.inputs.right, &mut self.r_sorted.0, right_idx)?;
         tracing::debug!(
             left = self.l_sorted.0.len(),
@@ -647,6 +807,7 @@ impl<'a> SortMergeJoin<'a> {
     /// or if the join key values are of incomparable types.
     fn collect_equals(&mut self) -> Result<(), ExecutionError> {
         let curr = self.get_value(true)?.clone();
+        let right_width = self.inputs.right_width;
 
         let right_start = self.r_sorted.current_idx();
         while !self.r_sorted.exhausted() && self.get_value(false)? == &curr {
@@ -656,20 +817,25 @@ impl<'a> SortMergeJoin<'a> {
 
         while !self.l_sorted.exhausted() && self.get_value(true)? == &curr {
             let l_curr = self.l_sorted.current().clone();
+            let mut row_matched = false;
             for i in right_start..right_end {
                 let r = &self.r_sorted[i];
                 let joined = l_curr.concat(r);
 
                 let keep = match &self.residual {
                     None => true,
-                    Some(expr) => matches!(
-                        eval_expr(expr, &joined, &self.inputs.schema)?,
-                        Value::Bool(true)
-                    ),
+                    Some(expr) => eval_resolved_bool(expr, &joined)?,
                 };
                 if keep {
+                    row_matched = true;
                     self.pending.push_back(joined);
                 }
+            }
+            // LEFT OUTER: if the residual rejected every right candidate for this left row,
+            // emit it with a NULL-padded right side rather than dropping it entirely.
+            if self.join_type == JoinType::LeftOuter && !row_matched {
+                self.pending
+                    .push_back(l_curr.concat(&null_right_tuple(right_width)));
             }
             self.l_sorted.forward();
         }
@@ -708,6 +874,7 @@ impl FallibleIterator for SortMergeJoin<'_> {
     type Error = ExecutionError;
     fn next(&mut self) -> Result<Option<Tuple>, ExecutionError> {
         self.sort_inputs()?;
+        let right_width = self.inputs.right_width;
 
         loop {
             if let Some(tuple) = self.pending.pop_front() {
@@ -715,7 +882,23 @@ impl FallibleIterator for SortMergeJoin<'_> {
                 return Ok(Some(tuple));
             }
 
-            if self.l_sorted.exhausted() || self.r_sorted.exhausted() {
+            if self.l_sorted.exhausted() {
+                tracing::debug!(rows_produced = self.rows_produced, "smj: merge complete");
+                return Ok(None);
+            }
+
+            if self.r_sorted.exhausted() {
+                // For LEFT OUTER: flush all remaining left rows as NULL-padded into pending,
+                // then loop back to drain them. For INNER: we're done.
+                if self.join_type == JoinType::LeftOuter {
+                    while !self.l_sorted.exhausted() {
+                        let l = self.l_sorted.current().clone();
+                        self.pending
+                            .push_back(l.concat(&null_right_tuple(right_width)));
+                        self.l_sorted.forward();
+                    }
+                    continue;
+                }
                 tracing::debug!(rows_produced = self.rows_produced, "smj: merge complete");
                 return Ok(None);
             }
@@ -724,7 +907,16 @@ impl FallibleIterator for SortMergeJoin<'_> {
             let rk = self.get_value(false)?;
 
             match lk.partial_cmp(rk) {
-                Some(Ordering::Less) => self.l_sorted.forward(),
+                Some(Ordering::Less) => {
+                    // Left key is smaller — this left row has no matching right row.
+                    // For LEFT OUTER, emit it with a NULL-padded right side.
+                    if self.join_type == JoinType::LeftOuter {
+                        let l = self.l_sorted.current().clone();
+                        self.pending
+                            .push_back(l.concat(&null_right_tuple(right_width)));
+                    }
+                    self.l_sorted.forward();
+                }
                 Some(Ordering::Greater) => self.r_sorted.forward(),
                 Some(Ordering::Equal) => self.collect_equals()?,
                 None => return Err(ExecutionError::TypeError("incomparable join keys".into())),
@@ -760,9 +952,10 @@ mod tests {
     use crate::{
         FileId, TransactionId,
         buffer_pool::page_store::PageStore,
-        execution::scan::SeqScan,
+        execution::{ResolvedExpr, scan::SeqScan},
         heap::file::HeapFile,
-        parser::statements::{BinOp, Expr},
+        parser::statements::BinOp,
+        primitives::ColumnId,
         tuple::{Field, Tuple, TupleSchema},
         types::{Type, Value},
         wal::writer::Wal,
@@ -885,19 +1078,19 @@ mod tests {
         JoinPredicate::new(col(l), col(r), Predicate::Equals)
     }
 
-    // Build an `Expr` for NLJ over the concatenated (schema_ab ⋈ schema_xy) tuple.
-    // left column names: "a"=0, "b"=1; right column names: "x"=2, "y"=3.
-    fn nlj_col_expr(left_col: &str, op: BinOp, right_col: &str) -> Expr {
-        Expr::BinaryOp {
-            lhs: Box::new(Expr::Column(left_col.into())),
+    // Build a ResolvedExpr for NLJ over the concatenated (schema_ab ⋈ schema_xy) tuple.
+    // Left columns: a=0, b=1. Right columns in concat output: x=2, y=3.
+    fn nlj_col_expr(left_id: u32, op: BinOp, right_id: u32) -> ResolvedExpr {
+        ResolvedExpr::BinaryOp {
+            lhs: Box::new(ResolvedExpr::Column(ColumnId::new(left_id).unwrap())),
             op,
-            rhs: Box::new(Expr::Column(right_col.into())),
+            rhs: Box::new(ResolvedExpr::Column(ColumnId::new(right_id).unwrap())),
         }
     }
 
-    // Most NLJ tests: left.a = right.x  (both at position 0 in their respective tables).
-    fn nlj_eq_0_0_w2() -> Expr {
-        nlj_col_expr("a", BinOp::Eq, "x")
+    // Most NLJ tests: left.a = right.x (a=0, x=2 in the concat output).
+    fn nlj_eq_0_0_w2() -> ResolvedExpr {
+        nlj_col_expr(0, BinOp::Eq, 2)
     }
 
     fn drain<I: FallibleIterator<Item = Tuple, Error = ExecutionError>>(
@@ -1042,8 +1235,8 @@ mod tests {
     fn test_nlj_less_than_predicate() {
         let left = build_heap(111, &[tup(1, 0), tup(5, 0)]);
         let right = build_heap_xy(112, &[tup(3, 0), tup(10, 0)]);
-        // left.a < right.x
-        let p = nlj_col_expr("a", BinOp::Lt, "x");
+        // left.a < right.x  (a=0, x=2 in concat)
+        let p = nlj_col_expr(0, BinOp::Lt, 2);
         let mut j = NestedLoopJoin::new(scan(&left), scan(&right), p);
         // (1,3), (1,10), (5,10)
         assert_eq!(drain(&mut j).len(), 3);
@@ -1143,7 +1336,7 @@ mod tests {
         let right = build_heap_xy(148, &[tup(1, 20), tup(1, 60)]);
 
         // key = a=x (col0=col0); residual = left.b < right.y
-        let residual = nlj_col_expr("b", BinOp::Lt, "y");
+        let residual = nlj_col_expr(1, BinOp::Lt, 3);
         let mut j = HashJoin::new(scan(&left), scan(&right), eq_pred(0, 0)).with_residual(residual);
 
         let out = drain(&mut j);
@@ -1262,12 +1455,257 @@ mod tests {
         let left = build_heap(149, &[tup(1, 10), tup(1, 50)]);
         let right = build_heap_xy(150, &[tup(1, 20), tup(1, 60)]);
 
-        let residual = nlj_col_expr("b", BinOp::Lt, "y");
+        let residual = nlj_col_expr(1, BinOp::Lt, 3);
         let mut j =
             SortMergeJoin::new(scan(&left), scan(&right), eq_pred(0, 0)).with_residual(residual);
 
         // Same selectivity as the HashJoin case: 3 rows.
         assert_eq!(drain(&mut j).len(), 3);
+    }
+
+    // ===== CrossJoin =====
+
+    // every left row pairs with every right row
+    #[test]
+    fn test_cross_join_cartesian_product() {
+        let left = build_heap(200, &[tup(1, 10), tup(2, 20)]);
+        let right = build_heap(201, &[tup(3, 30), tup(4, 40), tup(5, 50)]);
+        let mut j = CrossJoin::new(scan(&left), scan(&right));
+        assert_eq!(drain(&mut j).len(), 6, "2 left × 3 right = 6 rows");
+    }
+
+    // empty right → nothing
+    #[test]
+    fn test_cross_join_empty_right() {
+        let left = build_heap(202, &[tup(1, 10)]);
+        let right = build_heap(203, &[]);
+        let mut j = CrossJoin::new(scan(&left), scan(&right));
+        assert!(j.next().unwrap().is_none());
+    }
+
+    // empty left → nothing
+    #[test]
+    fn test_cross_join_empty_left() {
+        let left = build_heap(204, &[]);
+        let right = build_heap(205, &[tup(1, 10)]);
+        let mut j = CrossJoin::new(scan(&left), scan(&right));
+        assert!(j.next().unwrap().is_none());
+    }
+
+    // rewind replays the full Cartesian product
+    #[test]
+    fn test_cross_join_rewind() {
+        let left = build_heap(206, &[tup(1, 10), tup(2, 20)]);
+        let right = build_heap(207, &[tup(3, 30), tup(4, 40)]);
+        let mut j = CrossJoin::new(scan(&left), scan(&right));
+        let first = drain(&mut j).len();
+        j.rewind().unwrap();
+        let second = drain(&mut j).len();
+        assert_eq!(first, 4);
+        assert_eq!(first, second);
+    }
+
+    // schema is the concatenation of both sides (2+2 = 4 columns)
+    #[test]
+    fn test_cross_join_schema() {
+        let left = build_heap(208, &[]);
+        let right = build_heap(209, &[]);
+        let j = CrossJoin::new(scan(&left), scan(&right));
+        assert_eq!(j.schema().physical_num_fields(), 4);
+    }
+
+    // NULL values in rows do not affect cross join (no predicate, no filtering)
+    #[test]
+    fn test_cross_join_null_rows_included() {
+        let left = build_heap(210, &[tup_null_a(1), tup(2, 3)]);
+        let right = build_heap(211, &[tup(10, 11)]);
+        let mut j = CrossJoin::new(scan(&left), scan(&right));
+        // Both left rows (including the NULL-a one) must appear.
+        assert_eq!(drain(&mut j).len(), 2);
+    }
+
+    // ===== NLJ LEFT OUTER JOIN =====
+
+    // left rows with no matching right get NULL-padded right columns
+    #[test]
+    fn test_nlj_left_outer_unmatched_row_gets_nulls() {
+        let left = build_heap(220, &[tup(1, 10), tup(9, 90)]);
+        let right = build_heap_xy(221, &[tup(1, 100)]);
+        // left.a = right.x; row (9,90) has no match
+        let mut j = NestedLoopJoin::new(scan(&left), scan(&right), nlj_eq_0_0_w2())
+            .with_join_type(JoinType::LeftOuter);
+        let out = drain(&mut j);
+        assert_eq!(out.len(), 2);
+        // The unmatched row has NULL at index 2 (first right column).
+        let unmatched = out.iter().find(|t| int(t, 0) == 9).unwrap();
+        assert!(matches!(unmatched.get(2), Some(Value::Null)));
+    }
+
+    // when all right rows match, LEFT OUTER behaves identically to INNER
+    #[test]
+    fn test_nlj_left_outer_all_matched_same_as_inner() {
+        let left = build_heap(222, &[tup(1, 10), tup(2, 20)]);
+        let right = build_heap_xy(223, &[tup(1, 100), tup(2, 200)]);
+        let pred = nlj_eq_0_0_w2();
+        let mut inner = NestedLoopJoin::new(scan(&left), scan(&right), pred.clone());
+        let mut outer = NestedLoopJoin::new(scan(&left), scan(&right), pred)
+            .with_join_type(JoinType::LeftOuter);
+        assert_eq!(drain(&mut inner).len(), drain(&mut outer).len());
+    }
+
+    // empty right → all left rows appear with NULLs on right
+    #[test]
+    fn test_nlj_left_outer_empty_right() {
+        let left = build_heap(224, &[tup(1, 10), tup(2, 20)]);
+        let right = build_heap_xy(225, &[]);
+        let mut j = NestedLoopJoin::new(scan(&left), scan(&right), nlj_eq_0_0_w2())
+            .with_join_type(JoinType::LeftOuter);
+        let out = drain(&mut j);
+        assert_eq!(out.len(), 2);
+        assert!(out.iter().all(|t| matches!(t.get(2), Some(Value::Null))));
+    }
+
+    // ===== HashJoin LEFT OUTER JOIN =====
+
+    #[test]
+    fn test_hash_left_outer_unmatched_row_gets_nulls() {
+        let left = build_heap(230, &[tup(1, 10), tup(9, 90)]);
+        let right = build_heap(231, &[tup(1, 100)]);
+        let mut j = HashJoin::new(scan(&left), scan(&right), eq_pred(0, 0))
+            .with_join_type(JoinType::LeftOuter);
+        let out = drain(&mut j);
+        assert_eq!(out.len(), 2);
+        let unmatched = out.iter().find(|t| int(t, 0) == 9).unwrap();
+        assert!(matches!(unmatched.get(2), Some(Value::Null)));
+    }
+
+    // NULL-key left row must appear with NULL right side (not silently dropped)
+    #[test]
+    fn test_hash_left_outer_null_key_left_row_preserved() {
+        let left = build_heap(232, &[tup_null_a(10), tup(1, 11)]);
+        let right = build_heap(233, &[tup(1, 100)]);
+        let mut j = HashJoin::new(scan(&left), scan(&right), eq_pred(0, 0))
+            .with_join_type(JoinType::LeftOuter);
+        // two left rows → two output rows
+        assert_eq!(drain(&mut j).len(), 2);
+    }
+
+    // empty right → all left rows preserved with NULLs
+    #[test]
+    fn test_hash_left_outer_empty_right() {
+        let left = build_heap(234, &[tup(1, 10), tup(2, 20)]);
+        let right = build_heap(235, &[]);
+        let mut j = HashJoin::new(scan(&left), scan(&right), eq_pred(0, 0))
+            .with_join_type(JoinType::LeftOuter);
+        let out = drain(&mut j);
+        assert_eq!(out.len(), 2);
+        assert!(out.iter().all(|t| matches!(t.get(2), Some(Value::Null))));
+    }
+
+    // residual rejects all hash-key matches → still emit NULL-padded row for that left row
+    #[test]
+    fn test_hash_left_outer_residual_rejects_all_emits_null() {
+        // left.a matches right.a (key=1), but residual left.b < right.b rejects everything.
+        let left = build_heap(236, &[tup(1, 999)]);
+        let right = build_heap_xy(237, &[tup(1, 1)]);
+        // key: a=x (col0=col0); residual: left.b < right.y (col1 < col3)
+        let residual = nlj_col_expr(1, BinOp::Lt, 3);
+        let mut j = HashJoin::new(scan(&left), scan(&right), eq_pred(0, 0))
+            .with_join_type(JoinType::LeftOuter)
+            .with_residual(residual);
+        let out = drain(&mut j);
+        assert_eq!(out.len(), 1);
+        assert!(matches!(out[0].get(2), Some(Value::Null)));
+    }
+
+    // rewind after LEFT OUTER works correctly
+    #[test]
+    fn test_hash_left_outer_rewind() {
+        let left = build_heap(238, &[tup(1, 10), tup(9, 90)]);
+        let right = build_heap(239, &[tup(1, 100)]);
+        let mut j = HashJoin::new(scan(&left), scan(&right), eq_pred(0, 0))
+            .with_join_type(JoinType::LeftOuter);
+        let first = drain(&mut j).len();
+        j.rewind().unwrap();
+        let second = drain(&mut j).len();
+        assert_eq!(first, 2);
+        assert_eq!(first, second);
+    }
+
+    // ===== SortMergeJoin LEFT OUTER JOIN =====
+
+    #[test]
+    fn test_smj_left_outer_unmatched_row_gets_nulls() {
+        let left = build_heap(240, &[tup(1, 10), tup(9, 90)]);
+        let right = build_heap(241, &[tup(1, 100)]);
+        let mut j = SortMergeJoin::new(scan(&left), scan(&right), eq_pred(0, 0))
+            .with_join_type(JoinType::LeftOuter);
+        let out = drain(&mut j);
+        assert_eq!(out.len(), 2);
+        let unmatched = out.iter().find(|t| int(t, 0) == 9).unwrap();
+        assert!(matches!(unmatched.get(2), Some(Value::Null)));
+    }
+
+    // NULL-key left row must appear even though it can never match
+    #[test]
+    fn test_smj_left_outer_null_key_left_row_preserved() {
+        let left = build_heap(242, &[tup_null_a(10), tup(1, 11)]);
+        let right = build_heap(243, &[tup(1, 100)]);
+        let mut j = SortMergeJoin::new(scan(&left), scan(&right), eq_pred(0, 0))
+            .with_join_type(JoinType::LeftOuter);
+        assert_eq!(drain(&mut j).len(), 2);
+    }
+
+    // empty right → every left row emitted with NULLs
+    #[test]
+    fn test_smj_left_outer_empty_right() {
+        let left = build_heap(244, &[tup(1, 10), tup(2, 20)]);
+        let right = build_heap(245, &[]);
+        let mut j = SortMergeJoin::new(scan(&left), scan(&right), eq_pred(0, 0))
+            .with_join_type(JoinType::LeftOuter);
+        let out = drain(&mut j);
+        assert_eq!(out.len(), 2);
+        assert!(out.iter().all(|t| matches!(t.get(2), Some(Value::Null))));
+    }
+
+    // right side exhausted mid-merge: remaining left rows get NULL-padded
+    #[test]
+    fn test_smj_left_outer_right_exhausted_mid_merge() {
+        let left = build_heap(246, &[tup(1, 10), tup(5, 50), tup(9, 90)]);
+        let right = build_heap(247, &[tup(1, 100), tup(5, 500)]);
+        let mut j = SortMergeJoin::new(scan(&left), scan(&right), eq_pred(0, 0))
+            .with_join_type(JoinType::LeftOuter);
+        let out = drain(&mut j);
+        // (1,1) match, (5,5) match, (9,_) unmatched → 3 rows total
+        assert_eq!(out.len(), 3);
+    }
+
+    // residual rejects all matches for a key group → NULL-padded row emitted
+    #[test]
+    fn test_smj_left_outer_residual_rejects_all_emits_null() {
+        let left = build_heap(248, &[tup(1, 999)]);
+        let right = build_heap_xy(249, &[tup(1, 1)]);
+        let residual = nlj_col_expr(1, BinOp::Lt, 3);
+        let mut j = SortMergeJoin::new(scan(&left), scan(&right), eq_pred(0, 0))
+            .with_join_type(JoinType::LeftOuter)
+            .with_residual(residual);
+        let out = drain(&mut j);
+        assert_eq!(out.len(), 1);
+        assert!(matches!(out[0].get(2), Some(Value::Null)));
+    }
+
+    // rewind re-sorts and replays LEFT OUTER output correctly
+    #[test]
+    fn test_smj_left_outer_rewind() {
+        let left = build_heap(250, &[tup(1, 10), tup(9, 90)]);
+        let right = build_heap(251, &[tup(1, 100)]);
+        let mut j = SortMergeJoin::new(scan(&left), scan(&right), eq_pred(0, 0))
+            .with_join_type(JoinType::LeftOuter);
+        let first = drain(&mut j).len();
+        j.rewind().unwrap();
+        let second = drain(&mut j).len();
+        assert_eq!(first, 2);
+        assert_eq!(first, second);
     }
 
     // NLJ supports compound boolean conditions.
@@ -1277,11 +1715,11 @@ mod tests {
         let left = build_heap(151, &[tup(1, 10), tup(1, 50), tup(2, 10)]);
         let right = build_heap_xy(152, &[tup(1, 20), tup(2, 5)]);
 
-        // left.a = right.x AND left.b < right.y
-        let pred = Expr::BinaryOp {
-            lhs: Box::new(nlj_col_expr("a", BinOp::Eq, "x")),
+        // left.a = right.x AND left.b < right.y  (a=0, b=1, x=2, y=3 in concat)
+        let pred = ResolvedExpr::BinaryOp {
+            lhs: Box::new(nlj_col_expr(0, BinOp::Eq, 2)),
             op: BinOp::And,
-            rhs: Box::new(nlj_col_expr("b", BinOp::Lt, "y")),
+            rhs: Box::new(nlj_col_expr(1, BinOp::Lt, 3)),
         };
 
         let mut j = NestedLoopJoin::new(scan(&left), scan(&right), pred);

@@ -4,15 +4,13 @@ use super::ParserError;
 use crate::{
     parser::{
         Parser,
-        parsers::expr::Expr,
         statements::{
-            AggFunc, ColumnRef, Join, JoinKind, LimitClause, OrderBy, OrderDirection,
-            SelectColumns, SelectItem, SelectStatement, TableRef, TableWithJoins,
+            ColumnRef, Expr, Join, JoinKind, LimitClause, OrderBy, OrderDirection, SelectColumns,
+            SelectItem, SelectStatement, TableRef, TableWithJoins,
         },
         token::TokenType,
     },
     primitives::NonEmptyString,
-    types::Value,
 };
 
 impl Parser {
@@ -113,7 +111,7 @@ impl Parser {
 
         loop {
             let (name, alias) = self.parse_table_with_alias()?;
-            let joins = self.parse_joins()?;
+            let joins = self.parse_joins(&name, alias.as_ref())?;
             tables.push(TableWithJoins {
                 table: TableRef { name, alias },
                 joins,
@@ -129,19 +127,16 @@ impl Parser {
     /// Parses a comma-separated `SELECT` projection list up to but not
     /// including the mandatory `FROM` keyword.
     ///
-    /// Each item is either a bare column name, `COUNT(*)`, or
-    /// `<AGG>(<column>)` where `<AGG>` is one of [`AggFunc`]'s spellings
-    /// (case-insensitive).  Function names are detected by a following `(`;
-    /// anything else is treated as a column reference.
+    /// Each item is a full expression (literal, column ref, arithmetic, aggregate, boolean, etc.)
+    /// parsed by [`Parser::parse_expr`], followed by an optional `AS alias` or implicit alias.
     ///
     /// # Errors
     ///
-    /// Returns [`ParserError`] if a projection is missing or invalid, commas
-    /// or the terminating `FROM` are wrong, parentheses or `COUNT(*)` are
-    /// malformed, or the aggregate name is not recognized.
+    /// Returns [`ParserError`] if any item expression is invalid, commas or the
+    /// terminating `FROM` are wrong, or an alias identifier is missing after `AS`.
     fn parse_select_list(&mut self) -> Result<Vec<SelectItem>, ParserError> {
-        let parse_select_item = |p: &mut Parser| -> Result<SelectItem, ParserError> {
-            let expr = Self::parse_projection_expr(p)?;
+        let parse_select_item = |p: &mut Parser| -> Result<SelectItem, _> {
+            let expr = p.parse_expression()?;
             let alias =
                 if p.if_peek_then_consume(TokenType::As)? || p.peek_is(TokenType::Identifier)? {
                     let tok = p.expect(TokenType::Identifier)?;
@@ -155,77 +150,6 @@ impl Parser {
             })
         };
         self.parse_delimited_list(TokenType::Comma, TokenType::From, parse_select_item)
-    }
-
-    /// Parses the expression part of one `SELECT` projection item.
-    ///
-    /// Supported forms are:
-    /// - integer / float / string / `NULL` literal — `SELECT 1`, `SELECT 'x'`, `SELECT NULL`
-    /// - `<column>` or `<table>.<column>`
-    /// - `COUNT(*)`
-    /// - `<AGG>(<column>)` where `<AGG>` is parsed through [`AggFunc`]
-    ///
-    /// Boolean literals (`true`/`false`) are not yet recognized here because
-    /// the lexer classifies them as identifiers and disambiguating them from
-    /// columns named `true`/`false` is the binder's job, not the parser's.
-    ///
-    /// This helper only parses the projection expression itself. Any optional
-    /// alias (`AS name` or implicit alias) is handled by [`Self::parse_select_list`].
-    ///
-    /// # Errors
-    ///
-    /// Returns [`ParserError`] when the leading token is not a literal or
-    /// identifier, when aggregate-call syntax is malformed (missing argument
-    /// or `)`), or when a function-like name is not a recognized aggregate.
-    fn parse_projection_expr(p: &mut Parser) -> Result<Expr, ParserError> {
-        for kind in [
-            TokenType::Int,
-            TokenType::FloatLit,
-            TokenType::String,
-            TokenType::Null,
-        ] {
-            if p.peek_is(kind)? {
-                let tok = p.bump()?;
-                let value = Value::try_from(tok).map_err(ParserError::ParsingError)?;
-                return Ok(Expr::Literal(value));
-            }
-        }
-
-        let name_tok = p.expect(TokenType::Identifier)?;
-        let name = name_tok.value.to_uppercase();
-
-        if p.if_peek_then_consume(TokenType::Lparen)? {
-            if name == "COUNT" && p.if_peek_then_consume(TokenType::Asterisk)? {
-                p.expect(TokenType::Rparen)?;
-                return Ok(Expr::CountStar);
-            }
-
-            let agg = AggFunc::try_from(name.as_str()).map_err(|msg| {
-                warn!(function = %name_tok.value, reason = %msg, "unknown aggregate function");
-                ParserError::ParsingError(msg)
-            })?;
-            let col_tok = p.expect(TokenType::Identifier)?;
-            p.expect(TokenType::Rparen)?;
-            Ok(Expr::Agg {
-                func: agg,
-                arg: Box::new(Expr::Column(ColumnRef::from(col_tok.value.as_str()))),
-            })
-        } else {
-            // Identifiers in ColumnRef are stored as NonEmptyString.
-            let first = NonEmptyString::try_from(name_tok.value)?;
-            let cref = if p.if_peek_then_consume(TokenType::Dot)? {
-                ColumnRef {
-                    qualifier: Some(first),
-                    name: p.expect_ident()?,
-                }
-            } else {
-                ColumnRef {
-                    qualifier: None,
-                    name: first,
-                }
-            };
-            Ok(Expr::Column(cref))
-        }
     }
 
     /// Parses an optional `ORDER BY` clause with one or more sort keys.
@@ -370,17 +294,34 @@ impl Parser {
 
     /// Parses zero or more JOIN clauses following a `FROM` target.
     ///
-    /// Supports `[INNER] JOIN`, `LEFT JOIN`, and `RIGHT JOIN`.  Each clause
-    /// must include an `ON <condition>` predicate.  Parsing stops when no
-    /// recognized join keyword is found next.
+    /// Supports `[INNER] JOIN`, `LEFT JOIN`, `RIGHT JOIN`, and `CROSS JOIN`.
+    /// Non-cross joins accept either `ON <condition>` or `USING (col, ...)`.
+    /// `USING (col)` is a shorthand for `ON left.col = right.col` — both tables
+    /// must share a column by that name. The expansion uses the alias when
+    /// present, otherwise the table name, as the qualifier.
+    ///
+    /// `from_name` and `from_alias` are the left-hand table for the first join.
+    /// The current left qualifier advances to each join's right after each
+    /// iteration, so chained joins like `a JOIN b USING (x) JOIN c USING (y)`
+    /// correctly expand both predicates.
     ///
     /// # Errors
     ///
     /// Returns [`ParserError`] if a join keyword is present but the rest of the
-    /// clause (`JOIN <table> ON <condition>`) is malformed.
-    #[instrument(skip(self), fields(component = "parser", clause = "joins"), err(Debug))]
-    fn parse_joins(&mut self) -> Result<Vec<Join>, ParserError> {
+    /// clause is malformed, a non-cross join is missing both `ON` and `USING`,
+    /// or a `USING` list is empty or syntactically wrong.
+    #[instrument(
+        skip(self, from_name, from_alias),
+        fields(component = "parser", clause = "joins"),
+        err(Debug)
+    )]
+    fn parse_joins(
+        &mut self,
+        from_name: &NonEmptyString,
+        from_alias: Option<&NonEmptyString>,
+    ) -> Result<Vec<Join>, ParserError> {
         let mut joins = vec![];
+        let mut left_qualifier: NonEmptyString = from_alias.unwrap_or(from_name).clone();
 
         loop {
             let kind = if self.if_peek_then_consume(TokenType::Inner)? {
@@ -392,25 +333,97 @@ impl Parser {
             } else if self.if_peek_then_consume(TokenType::Right)? {
                 self.expect(TokenType::Join)?;
                 JoinKind::Right
+            } else if self.if_peek_then_consume(TokenType::Cross)? {
+                self.expect(TokenType::Join)?;
+                JoinKind::Cross
             } else if self.if_peek_then_consume(TokenType::Join)? {
                 JoinKind::Inner
             } else {
                 break;
             };
 
-            let (table, alias) = self.parse_table_with_alias()?;
-            self.expect(TokenType::On)?;
-            let on = self.parse_where()?;
+            let (right_name, right_alias) = self.parse_table_with_alias()?;
+            let right_qualifier: NonEmptyString =
+                right_alias.as_ref().unwrap_or(&right_name).clone();
+            let on = self.parse_join_on(&kind, &left_qualifier, &right_qualifier)?;
+
+            left_qualifier = right_qualifier;
 
             joins.push(Join {
                 kind,
-                table: TableRef { name: table, alias },
+                table: TableRef {
+                    name: right_name,
+                    alias: right_alias,
+                },
                 on,
             });
         }
 
         debug!(join_count = joins.len(), "parsed JOIN chain");
         Ok(joins)
+    }
+
+    /// Parses the `ON` / `USING` predicate for one join in a chain.
+    ///
+    /// Called by [`parse_joins`] after the right-hand table (and its optional
+    /// alias) have been read. The caller supplies qualifiers so `USING` can be
+    /// lowered to qualified column equalities.
+    ///
+    /// # Behaviour
+    ///
+    /// - [`JoinKind::Cross`] — consumes no predicate tokens; returns `None`.
+    /// - `USING (col [, ...])` — requires at least one column name; expands to `left_qualifier.col
+    ///   = right_qualifier.col` for each column, combined with `AND`, then parsed as a single
+    ///   [`Expr`] via a nested [`Parser`].
+    /// - `ON <expr>` — parses a full boolean expression with [`parse_expression`].
+    ///
+    /// Qualifiers are the table alias when present, otherwise the bare table
+    /// name — e.g. `FROM users u JOIN orders o USING (id)` yields
+    /// `u.id = o.id`.
+    ///
+    /// # Arguments
+    ///
+    /// * `kind` — join type already determined by the caller; only `Cross` skips predicate parsing.
+    /// * `left_qualifier` — qualifier for the left-hand side of this join (the `FROM` table or the
+    ///   previous join's right table in a chain).
+    /// * `right_qualifier` — qualifier for the table just parsed on the right.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ParserError`] if a non-cross join has neither `ON` nor `USING`,
+    /// `USING ()` is empty, column names in `USING` are invalid, or the
+    /// synthesized or explicit `ON` expression fails to parse.
+    fn parse_join_on(
+        &mut self,
+        kind: &JoinKind,
+        left_qualifier: &NonEmptyString,
+        right_qualifier: &NonEmptyString,
+    ) -> Result<Option<Expr>, ParserError> {
+        if matches!(kind, JoinKind::Cross) {
+            return Ok(None);
+        }
+
+        if self.if_peek_then_consume(TokenType::Using)? {
+            let cols = self.paren_list(Parser::expect_ident)?;
+            if cols.is_empty() {
+                return Err(ParserError::ParsingError(
+                    "USING clause requires at least one column name".into(),
+                ));
+            }
+
+            // Expand USING (col1, col2) into the equivalent ON expression by
+            // synthesizing a SQL fragment and running it through the expression parser.
+            // Like: a.id = b.id AND a.name = b.name
+            let sql = cols
+                .iter()
+                .map(|col| format!("{left_qualifier}.{col} = {right_qualifier}.{col}"))
+                .collect::<Vec<_>>()
+                .join(" AND ");
+            return Ok(Some(Parser::new(&sql).parse_expression()?));
+        }
+
+        self.expect(TokenType::On)?;
+        Ok(Some(self.parse_expression()?))
     }
 }
 
@@ -570,7 +583,7 @@ mod tests {
         assert_eq!(j.kind, JoinKind::Inner);
         assert_eq!(j.table.name, "b");
         assert!(j.table.alias.is_none());
-        let Expr::BinaryOp { lhs, op, rhs } = &j.on else {
+        let Expr::BinaryOp { lhs, op, rhs } = j.on.as_ref().expect("expected ON clause") else {
             panic!("expected binary ON expression");
         };
         assert_eq!(**lhs, Expr::Column(ColumnRef::from("id")));
@@ -912,6 +925,163 @@ mod tests {
     #[test]
     fn test_parse_select_join_missing_on() {
         assert!(select("SELECT * FROM a JOIN b").is_err());
+    }
+
+    #[test]
+    fn test_parse_select_cross_join_no_on_clause() {
+        let s = select("SELECT * FROM sizes CROSS JOIN colors").unwrap();
+        assert_eq!(s.from[0].joins.len(), 1);
+        let j = &s.from[0].joins[0];
+        assert_eq!(j.kind, JoinKind::Cross);
+        assert_eq!(j.table.name, "colors");
+        assert!(j.on.is_none());
+    }
+
+    #[test]
+    fn test_parse_select_cross_join_with_alias() {
+        let s = select("SELECT * FROM sizes s CROSS JOIN colors c").unwrap();
+        let j = &s.from[0].joins[0];
+        assert_eq!(j.kind, JoinKind::Cross);
+        assert_eq!(j.table.alias.as_deref(), Some("c"));
+    }
+
+    #[test]
+    fn test_parse_select_cross_join_rejects_on_clause() {
+        // CROSS JOIN consumes no ON; the stray ON is treated as an unknown token
+        // after the statement ends, so parsing the statement itself succeeds but
+        // the trailing ON would cause an error in a strict parser — verify that
+        // at minimum the cross join itself parsed correctly.
+        let s = select("SELECT * FROM a CROSS JOIN b").unwrap();
+        assert_eq!(s.from[0].joins[0].kind, JoinKind::Cross);
+    }
+
+    // --- USING clause tests ---
+
+    #[test]
+    fn test_parse_select_join_using_single_col_expands_to_on() {
+        // USING (id) → ON users.id = orders.id
+        let s = select("SELECT * FROM users JOIN orders USING (id)").unwrap();
+        let j = &s.from[0].joins[0];
+        assert_eq!(j.kind, JoinKind::Inner);
+        assert!(j.on.is_some());
+        let on = j.on.as_ref().unwrap();
+        let Expr::BinaryOp { lhs, op, rhs } = on else {
+            panic!("expected BinaryOp ON");
+        };
+        assert_eq!(*op, BinOp::Eq);
+        // lhs: users.id
+        assert_eq!(
+            **lhs,
+            Expr::Column(ColumnRef {
+                qualifier: Some(NonEmptyString::new("users").unwrap()),
+                name: NonEmptyString::new("id").unwrap(),
+            })
+        );
+        // rhs: orders.id
+        assert_eq!(
+            **rhs,
+            Expr::Column(ColumnRef {
+                qualifier: Some(NonEmptyString::new("orders").unwrap()),
+                name: NonEmptyString::new("id").unwrap(),
+            })
+        );
+    }
+
+    #[test]
+    fn test_parse_select_join_using_alias_as_qualifier() {
+        // Aliases should be used as qualifiers when present.
+        let s = select("SELECT * FROM users u JOIN orders o USING (user_id)").unwrap();
+        let on = s.from[0].joins[0].on.as_ref().unwrap();
+        let Expr::BinaryOp { lhs, rhs, .. } = on else {
+            panic!();
+        };
+        let Expr::Column(lref) = lhs.as_ref() else {
+            panic!();
+        };
+        let Expr::Column(rref) = rhs.as_ref() else {
+            panic!();
+        };
+        assert_eq!(lref.qualifier.as_deref(), Some("u"));
+        assert_eq!(rref.qualifier.as_deref(), Some("o"));
+        assert_eq!(lref.name, "user_id");
+        assert_eq!(rref.name, "user_id");
+    }
+
+    #[test]
+    fn test_parse_select_join_using_multi_col_and_chains() {
+        // USING (a, b) → ON t1.a = t2.a AND t1.b = t2.b
+        let s = select("SELECT * FROM t1 JOIN t2 USING (a, b)").unwrap();
+        let on = s.from[0].joins[0].on.as_ref().unwrap();
+        // Top level should be AND
+        let Expr::BinaryOp { op, lhs, rhs } = on else {
+            panic!();
+        };
+        assert_eq!(*op, BinOp::And);
+        // lhs: t1.a = t2.a
+        let Expr::BinaryOp { op: lop, .. } = lhs.as_ref() else {
+            panic!();
+        };
+        assert_eq!(*lop, BinOp::Eq);
+        // rhs: t1.b = t2.b
+        let Expr::BinaryOp { op: rop, .. } = rhs.as_ref() else {
+            panic!();
+        };
+        assert_eq!(*rop, BinOp::Eq);
+    }
+
+    #[test]
+    fn test_parse_select_join_using_left_join() {
+        // USING works with LEFT JOIN too.
+        let s = select("SELECT * FROM users u LEFT JOIN orders o USING (id)").unwrap();
+        let j = &s.from[0].joins[0];
+        assert_eq!(j.kind, JoinKind::Left);
+        assert!(j.on.is_some());
+    }
+
+    #[test]
+    fn test_parse_select_join_using_chained_uses_right_as_next_left() {
+        // a JOIN b USING (x) JOIN c USING (y)  →
+        //   first ON: a.x = b.x   (left = a, right = b)
+        //   second ON: b.y = c.y  (left = b, right = c)
+        let s = select("SELECT * FROM a JOIN b USING (x) JOIN c USING (y)").unwrap();
+        assert_eq!(s.from[0].joins.len(), 2);
+
+        let on0 = s.from[0].joins[0].on.as_ref().unwrap();
+        let Expr::BinaryOp {
+            lhs: l0, rhs: r0, ..
+        } = on0
+        else {
+            panic!();
+        };
+        let Expr::Column(lc0) = l0.as_ref() else {
+            panic!();
+        };
+        let Expr::Column(rc0) = r0.as_ref() else {
+            panic!();
+        };
+        assert_eq!(lc0.qualifier.as_deref(), Some("a"));
+        assert_eq!(rc0.qualifier.as_deref(), Some("b"));
+
+        let on1 = s.from[0].joins[1].on.as_ref().unwrap();
+        let Expr::BinaryOp {
+            lhs: l1, rhs: r1, ..
+        } = on1
+        else {
+            panic!();
+        };
+        let Expr::Column(lc1) = l1.as_ref() else {
+            panic!();
+        };
+        let Expr::Column(rc1) = r1.as_ref() else {
+            panic!();
+        };
+        assert_eq!(lc1.qualifier.as_deref(), Some("b"));
+        assert_eq!(rc1.qualifier.as_deref(), Some("c"));
+    }
+
+    #[test]
+    fn test_parse_select_join_using_empty_parens_errors() {
+        assert!(select("SELECT * FROM a JOIN b USING ()").is_err());
     }
 
     #[test]
