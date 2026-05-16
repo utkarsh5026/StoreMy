@@ -26,15 +26,22 @@
 //! - [`aggregate`]  — grouping and aggregation
 //! - [`eval`]       — `eval_expr`, the scalar expression evaluator used by filter, join, and
 //!   constraint evaluation
+//! - [`resolve`]    — `ColumnLookup` trait, `ResolvedExpr` type, and `resolve_expr` — lowers a
+//!   parsed `Expr` to an index-based form evaluated without schema lookups
 
 pub mod aggregate;
 pub mod eval;
 pub mod join;
+pub mod resolve;
 pub mod scan;
 pub mod setops;
 pub mod unary;
 
 use fallible_iterator::FallibleIterator;
+pub use resolve::{
+    ColumnLookup, ResolvedCaseBranch, ResolvedExpr, eval_resolved_bool, eval_resolved_expr,
+    resolve_expr,
+};
 use thiserror::Error;
 
 use crate::{
@@ -42,7 +49,6 @@ use crate::{
     execution::setops::Distinct,
     heap::file::HeapFile,
     index::AnyIndex,
-    parser::statements::Expr,
     primitives::ColumnId,
     tuple::{Tuple, TupleSchema},
 };
@@ -104,6 +110,7 @@ pub enum PlanNode<'a> {
     Sort(unary::Sort<'a>),
     Limit(unary::Limit<'a>),
 
+    CrossJoin(join::CrossJoin<'a>),
     NestedLoopJoin(join::NestedLoopJoin<'a>),
     HashJoin(join::HashJoin<'a>),
     SortMergeJoin(join::SortMergeJoin<'a>),
@@ -130,8 +137,8 @@ impl<'a> PlanNode<'a> {
         Self::IndexScan(scan::IndexScan::new(heap, index, txn, spec))
     }
 
-    pub fn filter(child: Self, predicate: Expr, schema: TupleSchema) -> Self {
-        Self::Filter(unary::Filter::new(Box::new(child), predicate, schema))
+    pub fn filter(child: Self, predicate: ResolvedExpr) -> Self {
+        Self::Filter(unary::Filter::new(Box::new(child), predicate))
     }
 
     pub fn distinct(child: Self) -> Self {
@@ -153,12 +160,40 @@ impl<'a> PlanNode<'a> {
         )?))
     }
 
-    pub fn nested_loop_join(left: Self, right: Self, predicate: Expr) -> Self {
+    pub fn cross_join(left: Self, right: Self) -> Self {
+        Self::CrossJoin(join::CrossJoin::new(left, right))
+    }
+
+    pub fn nested_loop_join(left: Self, right: Self, predicate: ResolvedExpr) -> Self {
         Self::NestedLoopJoin(join::NestedLoopJoin::new(left, right, predicate))
+    }
+
+    pub fn nested_loop_left_outer_join(left: Self, right: Self, predicate: ResolvedExpr) -> Self {
+        Self::NestedLoopJoin(
+            join::NestedLoopJoin::new(left, right, predicate)
+                .with_join_type(join::JoinType::LeftOuter),
+        )
     }
 
     pub fn hash_join(left: Self, right: Self, predicate: join::JoinPredicate) -> Self {
         Self::HashJoin(join::HashJoin::new(left, right, predicate))
+    }
+
+    pub fn hash_left_outer_join(left: Self, right: Self, predicate: join::JoinPredicate) -> Self {
+        Self::HashJoin(
+            join::HashJoin::new(left, right, predicate).with_join_type(join::JoinType::LeftOuter),
+        )
+    }
+
+    pub fn sort_merge_left_outer_join(
+        left: Self,
+        right: Self,
+        predicate: join::JoinPredicate,
+    ) -> Self {
+        Self::SortMergeJoin(
+            join::SortMergeJoin::new(left, right, predicate)
+                .with_join_type(join::JoinType::LeftOuter),
+        )
     }
 
     pub fn aggregate(
@@ -198,6 +233,7 @@ macro_rules! dispatch {
             PlanNode::Project(op)        => op.$method($($arg),*),
             PlanNode::Sort(op)           => op.$method($($arg),*),
             PlanNode::Limit(op)          => op.$method($($arg),*),
+            PlanNode::CrossJoin(op)      => op.$method($($arg),*),
             PlanNode::NestedLoopJoin(op) => op.$method($($arg),*),
             PlanNode::HashJoin(op)       => op.$method($($arg),*),
             PlanNode::SortMergeJoin(op)  => op.$method($($arg),*),
