@@ -74,10 +74,12 @@ pub fn eval_expr(
             // so `usize::from(col_id)` gives us the physical slot index in the tuple.
             let (col_id, _field) =
                 schema.field_by_name(col_ref.name.as_str()).ok_or_else(|| {
+                    tracing::warn!(column = %col_ref.name, "eval_expr: unknown column");
                     ExecutionError::TypeError(format!("unknown column '{}'", col_ref.name))
                 })?;
             let idx = usize::from(col_id);
             tuple.get(idx).cloned().ok_or_else(|| {
+                tracing::warn!(col_idx = idx, "eval_expr: column index out of bounds");
                 ExecutionError::TypeError(format!("column index {idx} out of bounds"))
             })
         }

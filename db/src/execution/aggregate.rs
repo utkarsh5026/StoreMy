@@ -304,6 +304,7 @@ impl<'a> Aggregate<'a> {
     ///
     /// Returns [`ExecutionError::TypeError`] if any column ID in `group_by_ids`
     /// or any `col_id` in `agg_exprs` is out of bounds for the child's schema.
+    #[tracing::instrument(skip_all, fields(op = "aggregate", group_by = group_by_ids.len(), aggs = agg_exprs.len()))]
     pub fn new(
         child: PlanNode<'a>,
         group_by_ids: &[ColumnId],
@@ -468,6 +469,7 @@ impl<'a> Aggregate<'a> {
                 Tuple::new(key)
             })
             .collect();
+        tracing::debug!(tuples = self.groups.len(), "aggregate: materialized");
 
         self.materialized = true;
         Ok(())
@@ -531,6 +533,7 @@ impl<'a> Aggregate<'a> {
                 accum.update(val);
             }
         }
+        tracing::debug!(groups = map.len(), "aggregate: groups built");
         Ok(map)
     }
 }

@@ -45,6 +45,7 @@ impl<'a> Union<'a> {
     ///
     /// Set `all` to `true` for `UNION ALL` (no deduplication) or `false` for `UNION`
     /// (duplicates suppressed).
+    #[tracing::instrument(skip_all, fields(op = "union", all))]
     pub fn new(left: Box<PlanNode<'a>>, right: Box<PlanNode<'a>>, all: bool) -> Self {
         Self {
             left,
@@ -150,6 +151,10 @@ impl<'a> MembershipFilter<'a> {
         while let Some(tuple) = self.right.next()? {
             self.right_set.insert(tuple);
         }
+        tracing::debug!(
+            set_size = self.right_set.len(),
+            "membership_filter: right side materialized"
+        );
         self.materialized = true;
         Ok(())
     }
@@ -208,6 +213,7 @@ pub struct Intersect<'a>(MembershipFilter<'a>);
 
 impl<'a> Intersect<'a> {
     /// Creates a new `Intersect` operator over `left` and `right`.
+    #[tracing::instrument(skip_all, fields(op = "intersect"))]
     pub fn new(left: Box<PlanNode<'a>>, right: Box<PlanNode<'a>>) -> Self {
         Self(MembershipFilter::new(left, right, false))
     }
@@ -252,6 +258,7 @@ pub struct Except<'a>(MembershipFilter<'a>);
 
 impl<'a> Except<'a> {
     /// Creates a new `Except` operator over `left` and `right`.
+    #[tracing::instrument(skip_all, fields(op = "except"))]
     pub fn new(left: Box<PlanNode<'a>>, right: Box<PlanNode<'a>>) -> Self {
         Self(MembershipFilter::new(left, right, true))
     }
@@ -295,14 +302,17 @@ impl Executor for Except<'_> {
 pub struct Distinct<'a> {
     child: Box<PlanNode<'a>>,
     seen: HashSet<Tuple>,
+    input_count: usize,
 }
 
 impl<'a> Distinct<'a> {
     /// Creates a new `Distinct` operator wrapping `child`.
+    #[tracing::instrument(skip_all, fields(op = "distinct"))]
     pub fn new(child: Box<PlanNode<'a>>) -> Self {
         Self {
             child,
             seen: HashSet::new(),
+            input_count: 0,
         }
     }
 }
@@ -321,10 +331,16 @@ impl FallibleIterator for Distinct<'_> {
     /// Propagates any [`ExecutionError`] returned by the child executor.
     fn next(&mut self) -> Result<Option<Tuple>, ExecutionError> {
         while let Some(tuple) = self.child.next()? {
+            self.input_count += 1;
             if self.seen.insert(tuple.clone()) {
                 return Ok(Some(tuple));
             }
         }
+        tracing::debug!(
+            unique = self.seen.len(),
+            input = self.input_count,
+            "distinct: exhausted"
+        );
         Ok(None)
     }
 }
@@ -343,6 +359,7 @@ impl Executor for Distinct<'_> {
     /// Propagates any [`ExecutionError`] returned by the child's `rewind`.
     fn rewind(&mut self) -> Result<(), ExecutionError> {
         self.seen.clear();
+        self.input_count = 0;
         self.child.rewind()
     }
 }
