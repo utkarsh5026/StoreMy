@@ -156,6 +156,15 @@ impl Lexer {
                 Ok(Some(self.create_token(token_type, ident, start)))
             }
 
+            '+' | '-' | '/' => {
+                self.advance_pos();
+                Ok(Some(self.create_token(
+                    TokenType::Operator,
+                    ch.to_string(),
+                    start,
+                )))
+            }
+
             ',' | ';' | '(' | ')' | '*' | '.' => {
                 self.advance_pos();
                 let token_type = match ch {
