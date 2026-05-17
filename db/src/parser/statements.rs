@@ -1380,6 +1380,7 @@ impl Display for OrderBy {
 /// -- a LEFT  JOIN b ON …      -->  JoinKind::Left    (keep unmatched left rows, NULL-pad right)
 /// -- a RIGHT JOIN b ON …      -->  JoinKind::Right   (keep unmatched right rows, NULL-pad left)
 /// -- a CROSS JOIN b           -->  JoinKind::Cross   (cartesian product; no ON clause)
+/// -- a FULL [OUTER] JOIN b ON --> JoinKind::Full    (keep all rows from both sides, NULL-pad the non-matching side)
 /// -- a JOIN b ON …            -->  JoinKind::Inner   (default when omitted)
 /// ```
 #[derive(Debug, Clone, PartialEq)]
@@ -1388,6 +1389,7 @@ pub enum JoinKind {
     Left,
     Right,
     Cross,
+    Full,
 }
 
 impl Display for JoinKind {
@@ -1397,6 +1399,7 @@ impl Display for JoinKind {
             JoinKind::Left => write!(f, "LEFT JOIN"),
             JoinKind::Right => write!(f, "RIGHT JOIN"),
             JoinKind::Cross => write!(f, "CROSS JOIN"),
+            JoinKind::Full => write!(f, "FULL OUTER JOIN"),
         }
     }
 }

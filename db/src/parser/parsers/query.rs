@@ -336,6 +336,10 @@ impl Parser {
             } else if self.if_peek_then_consume(TokenType::Cross)? {
                 self.expect(TokenType::Join)?;
                 JoinKind::Cross
+            } else if self.if_peek_then_consume(TokenType::Full)? {
+                self.if_peek_then_consume(TokenType::Outer)?;
+                self.expect(TokenType::Join)?;
+                JoinKind::Full
             } else if self.if_peek_then_consume(TokenType::Join)? {
                 JoinKind::Inner
             } else {
@@ -1273,6 +1277,38 @@ mod tests {
     #[test]
     fn test_parse_select_having_missing_predicate_errors() {
         assert!(select("SELECT a FROM t GROUP BY a HAVING").is_err());
+    }
+
+    // --- FULL OUTER JOIN tests ---
+
+    #[test]
+    fn test_parse_select_full_outer_join_with_outer_keyword() {
+        let s = select("SELECT * FROM a FULL OUTER JOIN b ON a.id = b.id").unwrap();
+        assert_eq!(s.from[0].joins.len(), 1);
+        let j = &s.from[0].joins[0];
+        assert_eq!(j.kind, JoinKind::Full);
+        assert_eq!(j.table.name, "b");
+        assert!(j.on.is_some());
+    }
+
+    #[test]
+    fn test_parse_select_full_join_without_outer_keyword() {
+        let s = select("SELECT * FROM a FULL JOIN b ON a.id = b.id").unwrap();
+        assert_eq!(s.from[0].joins.len(), 1);
+        assert_eq!(s.from[0].joins[0].kind, JoinKind::Full);
+    }
+
+    #[test]
+    fn test_parse_select_full_outer_join_using() {
+        let s = select("SELECT * FROM a FULL OUTER JOIN b USING (id)").unwrap();
+        let j = &s.from[0].joins[0];
+        assert_eq!(j.kind, JoinKind::Full);
+        assert!(j.on.is_some());
+    }
+
+    #[test]
+    fn test_parse_select_full_outer_join_missing_on_errors() {
+        assert!(select("SELECT * FROM a FULL OUTER JOIN b").is_err());
     }
 
     #[test]

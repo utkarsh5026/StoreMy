@@ -645,7 +645,7 @@ impl Engine<'_> {
                 let join_type = match kind {
                     JoinKind::Inner => JoinType::Inner,
                     JoinKind::Left => JoinType::LeftOuter,
-                    JoinKind::Right | JoinKind::Cross => {
+                    JoinKind::Right | JoinKind::Cross | JoinKind::Full => {
                         return Err(EngineError::Unsupported(format!(
                             "{kind} is not yet supported in the planner"
                         )));
