@@ -32,7 +32,7 @@ use fallible_iterator::FallibleIterator;
 
 use super::{ExecutionError, Executor};
 use crate::{
-    execution::PlanNode,
+    execution::{PlanNode, ResolvedExpr},
     primitives::{ColumnId, NonEmptyString},
     tuple::{Field, Tuple, TupleSchema},
     types::{Type, Value},
@@ -84,31 +84,37 @@ impl From<(&AggregateFunc, Type)> for Type {
     }
 }
 
-/// Binds an [`AggregateFunc`] to the column it operates on and names the output.
+/// Binds an [`AggregateFunc`] to the expression it operates on and names the output.
 ///
 /// Think of one `AggregateExpr` as one aggregated item in the `SELECT` list.
 /// For the query
 ///
 /// ```sql
-/// SELECT SUM(amount) AS total, COUNT(*) AS n
-/// FROM payments
-/// GROUP BY user_id;
+/// SELECT SUM(price * qty) AS total, COUNT(*) AS n
+/// FROM line_items
+/// GROUP BY order_id;
 /// ```
 ///
-/// you would build two specs — one per aggregated output column — where
-/// `col_id` points at the column in the child's schema:
+/// you would build two specs — one per aggregated output column:
 ///
 /// ```ignore
-/// // assuming `amount` is column index 2 in the child's schema
-/// AggregateExpr { func: AggregateFunc::Sum,       col_id: col(2), output_name: "total".into() };
-/// AggregateExpr { func: AggregateFunc::CountStar, col_id: col(0), output_name: "n".into()    };
+/// AggregateExpr {
+///     func: AggregateFunc::Sum,
+///     arg:  ResolvedExpr::BinaryOp { lhs: Column(price), op: Mul, rhs: Column(qty) },
+///     output_name: "total".into(),
+/// };
+/// AggregateExpr {
+///     func: AggregateFunc::CountStar,
+///     arg:  ResolvedExpr::Literal(Value::Null),  // ignored for COUNT(*)
+///     output_name: "n".into(),
+/// };
 /// ```
-///
-/// For `COUNT(*)` the `col_id` is ignored; conventionally pass column `0`.
 #[derive(Debug, Clone)]
 pub struct AggregateExpr {
     pub func: AggregateFunc,
-    pub col_id: ColumnId,
+    /// Expression evaluated per input row to obtain the value fed into the accumulator.
+    /// Ignored for [`AggregateFunc::CountStar`].
+    pub arg: ResolvedExpr,
     pub output_name: NonEmptyString,
 }
 
@@ -313,7 +319,7 @@ impl<'a> Aggregate<'a> {
         let child_schema = child.schema();
 
         let group_by_cols = Self::resolve_group_by_indices(group_by_ids, child_schema)?;
-        let output_fields = Self::build_output_fields(&group_by_cols, child_schema, &agg_exprs)?;
+        let output_fields = Self::build_output_fields(&group_by_cols, child_schema, &agg_exprs);
 
         Ok(Self {
             child: Box::new(child),
@@ -392,42 +398,27 @@ impl<'a> Aggregate<'a> {
     /// -- SELECT COUNT(*) AS n FROM users;
     /// --   output fields: [n]
     /// ```
-    ///
-    /// # Errors
-    ///
-    /// Returns [`ExecutionError::TypeError`] if any aggregate input column in
-    /// `agg_exprs` is out of bounds for `child_schema` (for example, a bound
-    /// `SUM(col)` refers to a nonexistent input column index).
     fn build_output_fields(
         group_by_cols: &[usize],
         child_schema: &TupleSchema,
         agg_exprs: &[AggregateExpr],
-    ) -> Result<Vec<Field>, ExecutionError> {
+    ) -> Vec<Field> {
         let mut output_fields = child_schema
             .project_fields(group_by_cols)
             .expect("group_by_cols already validated by resolve_group_by_indices");
 
         for AggregateExpr {
             func,
-            col_id,
+            arg,
             output_name,
         } in agg_exprs
         {
-            let col_idx = usize::from(*col_id);
-            let input_type = child_schema
-                .field_or_err(col_idx)
-                .map(|f| f.field_type)
-                .map_err(|_| {
-                    ExecutionError::TypeError(format!(
-                        "aggregate column index {col_idx} is out of bounds"
-                    ))
-                })?;
-
+            let input_type = arg.infer_type(child_schema);
             let output_type = Type::from((func, input_type));
             output_fields.push(Field::new_non_empty(output_name.clone(), output_type));
         }
 
-        Ok(output_fields)
+        output_fields
     }
 
     /// Drains the child once and materializes final `GROUP BY` result tuples.
@@ -529,8 +520,8 @@ impl<'a> Aggregate<'a> {
             });
 
             for (accum, expr) in accums.iter_mut().zip(self.agg_exprs.iter()) {
-                let val = tuple.value_at_or_null(expr.col_id);
-                accum.update(val);
+                let val = expr.arg.eval(&tuple)?;
+                accum.update(&val);
             }
         }
         tracing::debug!(groups = map.len(), "aggregate: groups built");
@@ -650,7 +641,7 @@ mod tests {
     fn spec(func: AggregateFunc, col_id: u32, name: &str) -> AggregateExpr {
         AggregateExpr {
             func,
-            col_id: col(col_id),
+            arg: ResolvedExpr::Column(col(col_id)),
             output_name: NonEmptyString::new(name).unwrap(),
         }
     }
@@ -923,13 +914,14 @@ mod tests {
         assert!(matches!(err, ExecutionError::TypeError(ref m) if m.contains("GROUP BY")));
     }
 
-    // Constructor surfaces out-of-bounds aggregate input column
+    // Out-of-bounds aggregate column: construction succeeds (infer_expr_type falls back to String),
+    // but the error surfaces when the aggregate is drained and ResolvedExpr::eval hits col 99.
     #[test]
-    fn test_new_rejects_bad_agg_column() {
-        let harness = build_heap(315, schema_gv(), &[]);
-        let err = Aggregate::new(scan(&harness), &[], vec![spec(AggregateFunc::Sum, 99, "s")])
-            .unwrap_err();
-        assert!(matches!(err, ExecutionError::TypeError(ref m) if m.contains("aggregate column")));
+    fn test_bad_agg_column_errors_on_drain() {
+        let harness = build_heap(315, schema_gv(), &[row(1, Some(10))]);
+        let mut agg =
+            Aggregate::new(scan(&harness), &[], vec![spec(AggregateFunc::Sum, 99, "s")]).unwrap();
+        assert!(agg.next().is_err());
     }
 
     // Output schema: correct field count and count/avg promotion

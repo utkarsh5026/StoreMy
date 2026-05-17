@@ -24,7 +24,7 @@
 //!
 //! # NULL semantics
 //!
-//! `Filter` delegates to [`eval_resolved_bool`]: only
+//! `Filter` delegates to [`ResolvedExpr::eval_bool`]: only
 //! `Value::Bool(true)` passes; `NULL` and `false` are dropped. `Project` copies
 //! `NULL` values unchanged and can emit
 //! literal `NULL`s. `Sort` orders `NULL` before non-`NULL` in ascending order
@@ -37,16 +37,14 @@ use fallible_iterator::FallibleIterator;
 
 use super::{ExecutionError, Executor};
 use crate::{
-    Value,
-    execution::{PlanNode, ResolvedExpr, eval_resolved_bool},
+    execution::{PlanNode, ResolvedExpr},
     primitives::{self, NonEmptyString},
     tuple::{Field, Tuple, TupleSchema},
-    types::Type,
 };
 
 /// Applies a SQL `WHERE` predicate to rows from one child plan.
 ///
-/// Each input tuple is tested with [`eval_resolved_bool`]. Rows that evaluate to
+/// Each input tuple is tested with [`ResolvedExpr::eval_bool`]. Rows that evaluate to
 /// `Value::Bool(true)` pass through unchanged; all other results (false, NULL)
 /// are skipped. The output tuple layout is exactly the child layout because filtering never
 /// adds, removes, or reorders columns.
@@ -149,7 +147,7 @@ impl FallibleIterator for Filter<'_> {
     /// the predicate references an unknown column name.
     fn next(&mut self) -> Result<Option<Tuple>, ExecutionError> {
         while let Some(tuple) = self.child.next()? {
-            if eval_resolved_bool(&self.predicate, &tuple)? {
+            if self.predicate.eval_bool(&tuple)? {
                 return Ok(Some(tuple));
             }
         }
@@ -173,201 +171,19 @@ impl Executor for Filter<'_> {
     }
 }
 
-/// One resolved SQL `SELECT` item produced by [`Project`].
+/// One item in a SQL `SELECT` list: a pre-resolved expression paired with an
+/// optional output column name.
 ///
-/// A projection item either copies a column from the child tuple by resolved
-/// index, or emits a constant value for every row. It is the bound form of
-/// SQL list items like `name`, `age AS years`, or `'guest' AS role`.
-///
-/// # SQL examples
-///
-/// Assume `users(id, name, age)` with binder-resolved indices
-/// `id → 0`, `name → 1`, `age → 2`:
-///
-/// ```sql
-/// -- SELECT id FROM users;
-/// ```
-///
-/// ```ignore
-/// ProjectItem::Column { idx: 0, alias: None }
-/// ```
-///
-/// ```sql
-/// -- SELECT name AS username FROM users;
-/// ```
-///
-/// ```ignore
-/// ProjectItem::Column {
-///     idx: 1,
-///     alias: Some("username".into()),
-/// }
-/// ```
-///
-/// ```sql
-/// -- SELECT 'active' AS status FROM users;
-/// ```
-///
-/// ```ignore
-/// ProjectItem::Literal {
-///     value: Value::String("active".into()),
-///     name: "status".into(),
-/// }
-/// ```
+/// `expr` is evaluated per row by [`ResolvedExpr::eval`]. `alias` overrides the
+/// output field name; when `None`, a [`ResolvedExpr::Column`] inherits its name
+/// from the child schema and any other expression gets a synthesised `?column?N`
+/// name.
 #[derive(Debug, Clone)]
-pub enum ProjectItem {
-    /// A resolved `SELECT col` or `SELECT col AS alias` item.
-    Column {
-        idx: usize,
-        alias: Option<NonEmptyString>,
-    },
-    /// A resolved `SELECT <literal> AS name` item repeated for every input row.
-    Literal { value: Value, name: NonEmptyString },
+pub struct ProjectItem {
+    pub expr: ResolvedExpr,
+    pub alias: Option<NonEmptyString>,
 }
 
-impl ProjectItem {
-    /// Builds a `SELECT col` item that keeps the child's field name.
-    ///
-    /// # SQL examples
-    ///
-    /// ```sql
-    /// -- SELECT id FROM users
-    /// ```
-    ///
-    /// ```ignore
-    /// ProjectItem::column(col(0))
-    /// ```
-    ///
-    /// ```sql
-    /// -- SELECT name FROM users
-    /// ```
-    ///
-    /// ```ignore
-    /// ProjectItem::column(col(1))
-    /// ```
-    ///
-    /// # Errors
-    ///
-    /// Does not validate eagerly. An out-of-bounds column becomes
-    /// [`ExecutionError::TypeError`] when [`Project::with_items`] builds the
-    /// output schema.
-    pub fn column(col_id: primitives::ColumnId, alias: Option<NonEmptyString>) -> Self {
-        Self::Column {
-            idx: usize::from(col_id),
-            alias,
-        }
-    }
-
-    /// Builds a `SELECT <literal> AS name` item repeated on each output row.
-    ///
-    /// `NULL` literals default to [`Type::String`] in the output schema because
-    /// SQL `NULL` carries no inherent type in this bound form.
-    ///
-    /// # SQL examples
-    ///
-    /// ```sql
-    /// -- SELECT 1 AS one FROM users
-    /// ```
-    ///
-    /// ```ignore
-    /// ProjectItem::literal(Value::Int64(1), "one")
-    /// ```
-    ///
-    /// ```sql
-    /// -- SELECT 'guest' AS role FROM users
-    /// ```
-    ///
-    /// ```ignore
-    /// ProjectItem::literal(Value::String("guest".into()), "role")
-    /// ```
-    ///
-    /// ```sql
-    /// -- SELECT NULL AS missing FROM users
-    /// ```
-    ///
-    /// ```ignore
-    /// ProjectItem::literal(Value::Null, "missing")
-    /// ```
-    ///
-    /// # Errors
-    ///
-    /// Does not return an error; schema type inference happens later in
-    /// [`Project::with_items`] and accepts all literal values.
-    pub fn literal(value: Value, name: NonEmptyString) -> Self {
-        Self::Literal { value, name }
-    }
-}
-
-/// Builds the SQL `SELECT` list for each row from one child plan.
-///
-/// A `Project` maps each input tuple to a new tuple by copying selected child
-/// columns and/or appending literal values. The output tuple layout is exactly
-/// the `items` order: each [`ProjectItem`] contributes one output column.
-///
-/// # SQL examples
-///
-/// Assume `users(id, name, age)` with binder-resolved indices
-/// `id → 0`, `name → 1`, `age → 2`:
-///
-/// ```sql
-/// -- SELECT id, name FROM users;
-/// ```
-///
-/// ```ignore
-/// Project::new(users_scan, &[col(0), col(1)])?
-/// ```
-///
-/// ```sql
-/// -- SELECT name AS username, age FROM users;
-/// ```
-///
-/// ```ignore
-/// Project::with_items(
-///     users_scan,
-///     vec![
-///         ProjectItem::aliased_column(col(1), "username"),
-///         ProjectItem::column(col(2)),
-///     ],
-/// )?
-/// ```
-///
-/// ```sql
-/// -- SELECT id, 'active' AS status FROM users;
-/// ```
-///
-/// ```ignore
-/// Project::with_items(
-///     users_scan,
-///     vec![
-///         ProjectItem::column(col(0)),
-///         ProjectItem::literal(Value::String("active".into()), "status"),
-///     ],
-/// )?
-/// ```
-///
-/// # SQL → operator mapping
-///
-/// ```sql
-/// -- SELECT name AS username, 1 AS one
-/// -- FROM users
-/// -- WHERE age >= 18;
-/// ```
-///
-/// ```ignore
-/// let filtered = Filter::new(
-///     users_scan,
-///     BooleanExpression::col_op_lit(2, Predicate::GreaterThanOrEqual, Value::Int64(18)),
-/// );
-/// let projected = Project::with_items(
-///     Box::new(PlanNode::Filter(filtered)),
-///     vec![
-///         ProjectItem::aliased_column(col(1), "username"),
-///         ProjectItem::literal(Value::Int64(1), "one"),
-///     ],
-/// )?;
-/// ```
-///
-/// `NULL` values copied from input columns remain `NULL`; literal `NULL`s are
-/// emitted unchanged.
 #[derive(Debug)]
 pub struct Project<'a> {
     child: Box<PlanNode<'a>>,
@@ -418,7 +234,10 @@ impl<'a> Project<'a> {
         let items: Vec<ProjectItem> = col_ids
             .iter()
             .copied()
-            .map(|c| ProjectItem::column(c, None))
+            .map(|c| ProjectItem {
+                expr: ResolvedExpr::Column(c),
+                alias: None,
+            })
             .collect();
         Self::with_items(child, items)
     }
@@ -435,7 +254,9 @@ impl<'a> Project<'a> {
     /// ```
     ///
     /// ```ignore
-    /// Project::with_items(child, vec![ProjectItem::aliased_column(col(0), "user_id")])?
+    /// Project::with_items(child, vec![
+    ///     ProjectItem { expr: ResolvedExpr::Column(col(0)), alias: Some("user_id".into()) },
+    /// ])?
     /// ```
     ///
     /// ```sql
@@ -444,8 +265,8 @@ impl<'a> Project<'a> {
     ///
     /// ```ignore
     /// Project::with_items(child, vec![
-    ///     ProjectItem::literal(Value::Int64(1), "one"),
-    ///     ProjectItem::column(col(1)),
+    ///     ProjectItem { expr: ResolvedExpr::Literal(Value::Int64(1)), alias: Some("one".into()) },
+    ///     ProjectItem { expr: ResolvedExpr::Column(col(1)), alias: None },
     /// ])?
     /// ```
     ///
@@ -454,13 +275,15 @@ impl<'a> Project<'a> {
     /// ```
     ///
     /// ```ignore
-    /// Project::with_items(child, vec![ProjectItem::literal(Value::Null, "missing")])?
+    /// Project::with_items(child, vec![
+    ///     ProjectItem { expr: ResolvedExpr::Literal(Value::Null), alias: Some("missing".into()) },
+    /// ])?
     /// ```
     ///
     /// # Errors
     ///
-    /// Returns [`ExecutionError::TypeError`] if any [`ProjectItem::Column`]
-    /// refers to an out-of-range index in the child's schema.
+    /// Returns [`ExecutionError::TypeError`] if any [`ResolvedExpr::Column`] in a
+    /// [`ProjectItem`] refers to an out-of-range index in the child's schema.
     #[tracing::instrument(skip_all, fields(op = "project", items = items.len()))]
     pub fn with_items(
         child: Box<PlanNode<'a>>,
@@ -469,7 +292,8 @@ impl<'a> Project<'a> {
         let child_schema = child.schema();
         let fields = items
             .iter()
-            .map(|item| Self::create_field_from_projection(item, child_schema))
+            .enumerate()
+            .map(|(i, item)| Self::create_field_from_projection(item, child_schema, i))
             .collect::<Result<Vec<_>, ExecutionError>>()?;
 
         Ok(Self {
@@ -479,41 +303,47 @@ impl<'a> Project<'a> {
         })
     }
 
-    /// Builds one output [`Field`] for a resolved SQL `SELECT` item.
+    /// Derives the output [`Field`] for one [`ProjectItem`] without evaluating any rows.
     ///
-    /// [`Project::with_items`] uses this helper to turn each [`ProjectItem`]
-    /// into the corresponding output schema field before any rows are pulled.
-    ///
-    /// - [`ProjectItem::Column`] — clones the child's field at `idx`, then applies an optional `AS`
-    ///   rename via [`Field::set_name`].
-    /// - [`ProjectItem::Literal`] — uses the literal's runtime type (defaulting to [`Type::String`]
-    ///   for untyped `NULL`); non-null literals use [`Field::not_null`].
+    /// - `Column(id)` — clones the child field at `id` (preserving nullability) and applies the
+    ///   alias rename when present.
+    /// - Any other expression — infers the type via [`infer_type`], synthesises `?column?{idx+1}`
+    ///   when no alias is given, and marks non-null literal values as `NOT NULL`.
     ///
     /// # Errors
     ///
-    /// Returns [`ExecutionError::TypeError`] when a [`ProjectItem::Column`] index is
-    /// out of range for `schema`.
+    /// Returns [`ExecutionError::TypeError`] when a `Column` index is out of range.
     fn create_field_from_projection(
         item: &ProjectItem,
         schema: &TupleSchema,
+        position: usize,
     ) -> Result<Field, ExecutionError> {
-        match item {
-            ProjectItem::Column { idx, alias } => {
+        match &item.expr {
+            ResolvedExpr::Column(col_id) => {
                 let mut field = schema
-                    .field_or_err(*idx)
+                    .field_or_err(usize::from(*col_id))
                     .map_err(|e| ExecutionError::TypeError(e.to_string()))?
                     .clone();
-                if let Some(name) = alias {
+                if let Some(name) = &item.alias {
                     field
                         .set_name(name.as_str())
                         .map_err(|e| ExecutionError::TypeError(e.to_string()))?;
                 }
                 Ok(field)
             }
-            ProjectItem::Literal { value, name } => {
-                let ty = value.get_type().unwrap_or(Type::String);
-                let mut field = Field::new_non_empty(name.clone(), ty);
-                if !value.is_null() {
+
+            other => {
+                let ty = other.infer_type(schema);
+                let name = match &item.alias {
+                    Some(a) => a.clone(),
+                    None => format!("?column?{}", position + 1)
+                        .try_into()
+                        .unwrap_or_else(|_| "?column?".try_into().unwrap()),
+                };
+                let mut field = Field::new_non_empty(name, ty);
+                if let ResolvedExpr::Literal(v) = other
+                    && !v.is_null()
+                {
                     field = field.not_null();
                 }
                 Ok(field)
@@ -543,15 +373,7 @@ impl FallibleIterator for Project<'_> {
         let out = self
             .items
             .iter()
-            .map(|item| match item {
-                ProjectItem::Column { idx, .. } => match input.get(*idx) {
-                    Some(v) => Ok(v.clone()),
-                    None => Err(ExecutionError::TypeError(format!(
-                        "Project: column index {idx} missing from input tuple"
-                    ))),
-                },
-                ProjectItem::Literal { value, .. } => Ok(value.clone()),
-            })
+            .map(|item| item.expr.eval(&input))
             .collect::<Result<Vec<_>, ExecutionError>>()?;
         Ok(Some(Tuple::new(out)))
     }

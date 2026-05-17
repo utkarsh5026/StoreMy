@@ -51,6 +51,8 @@ pub(super) enum Precedence {
     And,
     PrefixNot,
     Comparison,
+    AddSub,
+    MulDiv,
 }
 
 impl Precedence {
@@ -61,6 +63,8 @@ impl Precedence {
             Precedence::Or => (1, 2),
             Precedence::And => (3, 4),
             Precedence::Comparison => (6, 7),
+            Precedence::AddSub => (8, 9),
+            Precedence::MulDiv => (10, 11),
             Precedence::PrefixNot => panic!("PrefixNot has no binary bp"),
         }
     }
@@ -323,6 +327,10 @@ pub enum BinOp {
     LtEq,
     Gt,
     GtEq,
+    Add,
+    Sub,
+    Mul,
+    Div,
 }
 
 impl Display for BinOp {
@@ -336,6 +344,10 @@ impl Display for BinOp {
             BinOp::LtEq => "<=",
             BinOp::Gt => ">",
             BinOp::GtEq => ">=",
+            BinOp::Add => "+",
+            BinOp::Sub => "-",
+            BinOp::Mul => "*",
+            BinOp::Div => "/",
         };
         f.write_str(s)
     }
@@ -687,18 +699,27 @@ impl Parser {
             return Ok(Some((BinOp::And, l, r)));
         }
 
+        // `*` is tokenized as Asterisk, not Operator, so it needs its own check.
+        if self.peek_is(TokenType::Asterisk)? {
+            let (l, r) = Precedence::MulDiv.binary_bp();
+            return Ok(Some((BinOp::Mul, l, r)));
+        }
+
         if self.peek_is(TokenType::Operator)? {
-            let (l, r) = Precedence::Comparison.binary_bp();
             return Ok(self.peek_operator_value()?.and_then(|sym| {
-                let op = match sym.as_str() {
-                    "=" => BinOp::Eq,
-                    "!=" | "<>" => BinOp::NotEq,
-                    "<" => BinOp::Lt,
-                    "<=" => BinOp::LtEq,
-                    ">" => BinOp::Gt,
-                    ">=" => BinOp::GtEq,
+                let (op, prec) = match sym.as_str() {
+                    "=" => (BinOp::Eq, Precedence::Comparison),
+                    "!=" | "<>" => (BinOp::NotEq, Precedence::Comparison),
+                    "<" => (BinOp::Lt, Precedence::Comparison),
+                    "<=" => (BinOp::LtEq, Precedence::Comparison),
+                    ">" => (BinOp::Gt, Precedence::Comparison),
+                    ">=" => (BinOp::GtEq, Precedence::Comparison),
+                    "+" => (BinOp::Add, Precedence::AddSub),
+                    "-" => (BinOp::Sub, Precedence::AddSub),
+                    "/" => (BinOp::Div, Precedence::MulDiv),
                     _ => return None,
                 };
+                let (l, r) = prec.binary_bp();
                 Some((op, l, r))
             }));
         }
@@ -1432,5 +1453,114 @@ mod tests {
     fn display_like() {
         assert_eq!(ok("name LIKE 'A%'").to_string(), "name LIKE 'A%'");
         assert_eq!(ok("name NOT LIKE 'A%'").to_string(), "name NOT LIKE 'A%'");
+    }
+
+    // ── Arithmetic operators ──────────────────────────────────────────────────
+
+    #[test]
+    fn arith_add() {
+        let Expr::BinaryOp { lhs, op, rhs } = ok("a + 1") else {
+            panic!("expected BinaryOp");
+        };
+        assert_eq!(op, BinOp::Add);
+        assert_eq!(*lhs, Expr::Column("a".into()));
+        assert_eq!(*rhs, Expr::Literal(Value::Int64(1)));
+    }
+
+    #[test]
+    fn arith_sub() {
+        let Expr::BinaryOp { op, .. } = ok("x - 5") else {
+            panic!("expected BinaryOp");
+        };
+        assert_eq!(op, BinOp::Sub);
+    }
+
+    #[test]
+    fn arith_mul() {
+        let Expr::BinaryOp { op, .. } = ok("price * 2") else {
+            panic!("expected BinaryOp");
+        };
+        assert_eq!(op, BinOp::Mul);
+    }
+
+    #[test]
+    fn arith_div() {
+        let Expr::BinaryOp { op, .. } = ok("total / 4") else {
+            panic!("expected BinaryOp");
+        };
+        assert_eq!(op, BinOp::Div);
+    }
+
+    #[test]
+    fn arith_mul_over_add() {
+        // `a + b * c` must parse as `a + (b * c)`, not `(a + b) * c`.
+        let Expr::BinaryOp { op, rhs, .. } = ok("a + b * c") else {
+            panic!("expected BinaryOp");
+        };
+        assert_eq!(op, BinOp::Add, "root should be Add");
+        assert!(
+            matches!(*rhs, Expr::BinaryOp { op: BinOp::Mul, .. }),
+            "right child should be Mul"
+        );
+    }
+
+    #[test]
+    fn arith_div_over_sub() {
+        // `a - b / c` must parse as `a - (b / c)`.
+        let Expr::BinaryOp { op, rhs, .. } = ok("a - b / c") else {
+            panic!("expected BinaryOp");
+        };
+        assert_eq!(op, BinOp::Sub, "root should be Sub");
+        assert!(
+            matches!(*rhs, Expr::BinaryOp { op: BinOp::Div, .. }),
+            "right child should be Div"
+        );
+    }
+
+    #[test]
+    fn arith_left_associative_add() {
+        // `a + b + c` must parse as `(a + b) + c` (left-associative).
+        let Expr::BinaryOp { op, lhs, .. } = ok("a + b + c") else {
+            panic!("expected BinaryOp");
+        };
+        assert_eq!(op, BinOp::Add);
+        assert!(
+            matches!(*lhs, Expr::BinaryOp { op: BinOp::Add, .. }),
+            "left child should be Add (left-associative)"
+        );
+    }
+
+    #[test]
+    fn arith_parens_override_precedence() {
+        // `(a + b) * c` — parens force Add to bind first, so root is Mul.
+        let Expr::BinaryOp { op, lhs, .. } = ok("(a + b) * c") else {
+            panic!("expected BinaryOp");
+        };
+        assert_eq!(op, BinOp::Mul, "root should be Mul");
+        assert!(
+            matches!(*lhs, Expr::BinaryOp { op: BinOp::Add, .. }),
+            "left child should be Add"
+        );
+    }
+
+    #[test]
+    fn arith_inside_comparison() {
+        // `a + 1 > 0` — arithmetic binds tighter than comparison.
+        let Expr::BinaryOp { op, lhs, .. } = ok("a + 1 > 0") else {
+            panic!("expected BinaryOp");
+        };
+        assert_eq!(op, BinOp::Gt, "root should be Gt");
+        assert!(
+            matches!(*lhs, Expr::BinaryOp { op: BinOp::Add, .. }),
+            "left child should be Add"
+        );
+    }
+
+    #[test]
+    fn display_arith_ops() {
+        assert_eq!(ok("a + 1").to_string(), "(a + 1)");
+        assert_eq!(ok("x - 5").to_string(), "(x - 5)");
+        assert_eq!(ok("price * 2").to_string(), "(price * 2)");
+        assert_eq!(ok("total / 4").to_string(), "(total / 4)");
     }
 }

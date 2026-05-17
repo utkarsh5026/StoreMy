@@ -53,7 +53,7 @@ use crate::{
     execution::{
         Executor, PlanNode, ResolvedExpr,
         aggregate::{AggregateExpr, AggregateFunc},
-        join::JoinPredicate,
+        join::{JoinPredicate, JoinType},
         resolve_expr,
         unary::{ProjectItem, SortKey},
     },
@@ -383,22 +383,23 @@ impl BoundSelect {
     /// planner gains support for scalar expressions in projections.
     fn bind_select_item(scope: &Scope, item: SelectItem) -> Result<SelectProjection, EngineError> {
         let SelectItem { expr, alias } = item;
+        // Aggregate args are validated here: the Aggregate operator only handles a single
+        // resolved column, so reject anything more complex at bind time.
+        // Simple column references and aggregate args go through resolve_scope_col so that
+        // UnknownColumn / AmbiguousColumn engine errors are surfaced with the right type.
+        // Everything else (BinaryOp, UnaryOp, etc.) goes through resolve_expr.
         let resolved = match expr {
             Expr::Column(col) => ResolvedExpr::Column(Self::resolve_scope_col(scope, &col)?),
-            Expr::Literal(v) => ResolvedExpr::Literal(v),
-            Expr::CountStar => ResolvedExpr::CountStar,
-            Expr::Agg { func, arg } => Self::bind_agg_to_resolved(scope, func, *arg)?,
-            Expr::BinaryOp { .. }
-            | Expr::In { .. }
-            | Expr::Between { .. }
-            | Expr::Case { .. }
-            | Expr::Like { .. }
-            | Expr::UnaryOp { .. }
-            | Expr::IsNull { .. } => {
-                return Err(EngineError::Unsupported(
-                    "binary/unary/is null expressions in SELECT projections are not yet supported"
-                        .into(),
-                ));
+            Expr::Agg { func, arg } => {
+                let resolved_arg =
+                    resolve_expr(scope, *arg).map_err(|e| EngineError::TypeError(e.to_string()))?;
+                ResolvedExpr::Agg {
+                    func,
+                    arg: Box::new(resolved_arg),
+                }
+            }
+            other => {
+                resolve_expr(scope, other).map_err(|e| EngineError::TypeError(e.to_string()))?
             }
         };
         Ok(SelectProjection {
@@ -407,26 +408,6 @@ impl BoundSelect {
         })
     }
 
-    /// Resolves a non-`COUNT(*)` aggregate argument and returns the `ResolvedExpr::Agg` node.
-    fn bind_agg_to_resolved(
-        scope: &Scope,
-        func: AggFunc,
-        arg: Expr,
-    ) -> Result<ResolvedExpr, EngineError> {
-        let Expr::Column(col) = arg else {
-            return Err(EngineError::Unsupported(
-                "aggregates currently support only a single column argument".to_string(),
-            ));
-        };
-        let col_id = Self::resolve_scope_col(scope, &col)?;
-        Ok(ResolvedExpr::Agg {
-            func,
-            arg: Box::new(ResolvedExpr::Column(col_id)),
-        })
-    }
-
-    /// Resolves SQL `ORDER BY` columns into sort keys over the bound `FROM` row.
-    #[inline]
     /// Resolves one SQL column reference into a planner-facing [`ColumnId`].
     ///
     /// # Errors
@@ -434,6 +415,7 @@ impl BoundSelect {
     /// Propagates [`EngineError::UnknownColumn`] and [`EngineError::AmbiguousColumn`]
     /// from the scope resolver. Returns [`EngineError::Unsupported`] if the
     /// resolved `usize` index is too large for [`ColumnId`].
+    #[inline]
     fn resolve_scope_col(scope: &Scope, col: &ColumnRef) -> Result<ColumnId, EngineError> {
         let (idx, ..) = scope.resolve(col)?;
         ColumnId::try_from(idx)
@@ -461,15 +443,19 @@ impl Engine<'_> {
             return Ok(node);
         }
 
-        let items: Vec<ProjectItem> = schema
+        let items = schema
             .physical_iter()
             .enumerate()
             .filter(|(_, f)| !f.is_dropped)
-            .map(|(phys_i, _)| ProjectItem::Column {
-                idx: phys_i,
-                alias: None,
+            .map(|(phys_i, _)| {
+                ColumnId::try_from(phys_i)
+                    .map(|col_id| ProjectItem {
+                        expr: ResolvedExpr::Column(col_id),
+                        alias: None,
+                    })
+                    .map_err(|_| EngineError::Unsupported("column index out of bounds".to_string()))
             })
-            .collect();
+            .collect::<Result<Vec<_>, _>>()?;
 
         PlanNode::project(node, items).map_err(|e| EngineError::TypeError(e.to_string()))
     }
@@ -656,15 +642,21 @@ impl Engine<'_> {
                 on,
                 ..
             } => {
-                if !matches!(kind, JoinKind::Inner) {
-                    return Err(EngineError::Unsupported(format!(
-                        "{kind} is not yet supported; only INNER JOIN is implemented"
-                    )));
-                }
+                let join_type = match kind {
+                    JoinKind::Inner => JoinType::Inner,
+                    JoinKind::Left => JoinType::LeftOuter,
+                    JoinKind::Right | JoinKind::Cross | JoinKind::Full => {
+                        return Err(EngineError::Unsupported(format!(
+                            "{kind} is not yet supported in the planner"
+                        )));
+                    }
+                };
                 let left_node = Self::build_from(left, heaps, txn)?;
                 let right_node = Self::build_from(right, heaps, txn)?;
                 let left_width = left_node.schema().physical_num_fields();
-                Ok(Self::build_join(left_node, right_node, on, left_width))
+                Ok(Self::build_join(
+                    left_node, right_node, on, left_width, join_type,
+                ))
             }
             BoundFrom::Cross { left, right, .. } => {
                 let left_node = Self::build_from(left, heaps, txn)?;
@@ -679,19 +671,30 @@ impl Engine<'_> {
     }
 
     /// Picks `HashJoin` when the `ON` clause is a simple column-equality between
-    /// the two sides; falls back to `NestedLoopJoin` for everything else.
+    /// the two sides; falls back to `NestedLoopJoin` for everything else. The
+    /// `join_type` decides whether the chosen operator runs as an inner join or
+    /// a left-outer join.
     fn build_join<'a>(
         left: PlanNode<'a>,
         right: PlanNode<'a>,
         on: &ResolvedExpr,
         left_width: usize,
+        join_type: JoinType,
     ) -> PlanNode<'a> {
         if let Some(pred) = Self::try_extract_equi(on, left_width) {
-            tracing::debug!(algorithm = "hash_join", "join selected");
-            PlanNode::hash_join(left, right, pred)
+            tracing::debug!(algorithm = "hash_join", ?join_type, "join selected");
+            match join_type {
+                JoinType::Inner => PlanNode::hash_join(left, right, pred),
+                JoinType::LeftOuter => PlanNode::hash_left_outer_join(left, right, pred),
+            }
         } else {
-            tracing::debug!(algorithm = "nested_loop_join", "join selected");
-            PlanNode::nested_loop_join(left, right, on.clone())
+            tracing::debug!(algorithm = "nested_loop_join", ?join_type, "join selected");
+            match join_type {
+                JoinType::Inner => PlanNode::nested_loop_join(left, right, on.clone()),
+                JoinType::LeftOuter => {
+                    PlanNode::nested_loop_left_outer_join(left, right, on.clone())
+                }
+            }
         }
     }
 
@@ -760,29 +763,16 @@ impl Engine<'_> {
     ) -> Result<PlanNode<'a>, EngineError> {
         let project_items = projections
             .iter()
-            .enumerate()
-            .map(|(i, proj)| match &proj.expr {
-                ResolvedExpr::Column(c) => Ok(ProjectItem::column(*c, proj.alias.clone())),
-                ResolvedExpr::Literal(v) => {
-                    let name = if let Some(name) = &proj.alias {
-                        name.clone()
-                    } else {
-                        format!("?column?{}", i + 1).try_into().map_err(|e| {
-                            EngineError::TypeError(format!(
-                                "invalid synthesized literal column name: {e}"
-                            ))
-                        })?
-                    };
-                    Ok(ProjectItem::literal(v.clone(), name))
-                }
+            .map(|proj| match &proj.expr {
                 ResolvedExpr::Agg { .. } | ResolvedExpr::CountStar => {
                     Err(EngineError::Unsupported(
                         "aggregate projections require the Aggregate operator".into(),
                     ))
                 }
-                _ => Err(EngineError::Unsupported(
-                    "complex expressions in SELECT projections are not yet supported".into(),
-                )),
+                expr => Ok(ProjectItem {
+                    expr: expr.clone(),
+                    alias: proj.alias.clone(),
+                }),
             })
             .collect::<Result<Vec<_>, _>>()?;
         PlanNode::project(child, project_items).map_err(|e| EngineError::TypeError(e.to_string()))
@@ -855,12 +845,18 @@ impl Engine<'_> {
                             .iter()
                             .position(|g| g == c)
                             .expect("GROUP BY membership validated above");
-                        ProjectItem::column(Self::col_id(pos)?, projection.alias.clone())
+                        ProjectItem {
+                            expr: ResolvedExpr::Column(Self::col_id(pos)?),
+                            alias: projection.alias.clone(),
+                        }
                     }
                     ResolvedExpr::Agg { .. } | ResolvedExpr::CountStar => {
                         let pos = group_by_cols.len() + agg_index;
                         agg_index += 1;
-                        ProjectItem::column(Self::col_id(pos)?, projection.alias.clone())
+                        ProjectItem {
+                            expr: ResolvedExpr::Column(Self::col_id(pos)?),
+                            alias: projection.alias.clone(),
+                        }
                     }
                     ResolvedExpr::Literal(v) => {
                         let name = match projection.alias.clone() {
@@ -871,7 +867,10 @@ impl Engine<'_> {
                                 ))
                             })?,
                         };
-                        ProjectItem::literal(v.clone(), name)
+                        ProjectItem {
+                            expr: ResolvedExpr::Literal(v.clone()),
+                            alias: Some(name),
+                        }
                     }
                     _ => {
                         return Err(EngineError::Unsupported(
@@ -940,19 +939,11 @@ impl Engine<'_> {
                     .unwrap_or_else(|| "COUNT(*)".try_into().unwrap());
                 Some(Ok(AggregateExpr {
                     func: AggregateFunc::CountStar,
-                    col_id: ColumnId::default(),
+                    arg: ResolvedExpr::Literal(crate::Value::Null),
                     output_name,
                 }))
             }
             ResolvedExpr::Agg { func, arg } => {
-                let col_id = match arg.as_ref() {
-                    ResolvedExpr::Column(id) => *id,
-                    _ => {
-                        return Some(Err(EngineError::Unsupported(
-                            "aggregates currently support only a single column argument".into(),
-                        )));
-                    }
-                };
                 let agg_func = match func {
                     AggFunc::Count => AggregateFunc::CountCol,
                     AggFunc::Sum => AggregateFunc::Sum,
@@ -960,15 +951,16 @@ impl Engine<'_> {
                     AggFunc::Min => AggregateFunc::Min,
                     AggFunc::Max => AggregateFunc::Max,
                 };
-                let default_name: NonEmptyString = {
-                    let col_name = schema.col_name(col_id).unwrap_or("?");
-                    format!("{func}({col_name})")
-                        .try_into()
-                        .unwrap_or_else(|_| "agg".try_into().unwrap())
+                let arg_display = match arg.as_ref() {
+                    ResolvedExpr::Column(id) => schema.col_name(*id).unwrap_or("?").to_string(),
+                    _ => "expr".to_string(),
                 };
+                let default_name: NonEmptyString = format!("{func}({arg_display})")
+                    .try_into()
+                    .unwrap_or_else(|_| "agg".try_into().unwrap());
                 Some(Ok(AggregateExpr {
                     func: agg_func,
-                    col_id,
+                    arg: *arg.clone(),
                     output_name: proj.alias.clone().unwrap_or(default_name),
                 }))
             }
@@ -1490,6 +1482,452 @@ mod tests {
         assert_eq!(rows[0].get(0).unwrap(), &Value::Int64(2));
     }
 
+    // ──────────────────────── aggregate function tests ───────────────────────
+
+    /// Seeds `users` with one NULL name: `(1,'alice',30)`, `(2,NULL,25)`, `(3,'cara',30)`.
+    fn seed_users_with_null_name(dir: &Path) -> (Catalog, TransactionManager) {
+        let (catalog, txn_mgr) = make_infra(dir);
+        {
+            let txn = txn_mgr.begin().unwrap();
+            catalog
+                .create_table(
+                    &txn,
+                    "users",
+                    TupleSchema::new(vec![
+                        field("id", Type::Int64).not_null(),
+                        field("name", Type::String),
+                        field("age", Type::Int64).not_null(),
+                    ]),
+                    vec![],
+                )
+                .unwrap();
+            txn.commit().unwrap();
+        }
+        let engine = Engine::new(&catalog, &txn_mgr);
+        run_ok(
+            &engine,
+            "INSERT INTO users (id, name, age) VALUES \
+             (1, 'alice', 30), (2, NULL, 25), (3, 'cara', 30)",
+        );
+        (catalog, txn_mgr)
+    }
+
+    // expr.rs tests the parser → AST shape.
+    // resolve.rs tests resolve/eval at the unit level.
+    // These tests verify the operators work end-to-end through the engine:
+    // SQL string → parser → binder → planner → executor → rows.
+
+    #[test]
+    fn where_is_null_filters_to_null_rows() {
+        let dir = tempdir().unwrap();
+        let (catalog, txn_mgr) = seed_users_with_null_name(dir.path());
+        let engine = Engine::new(&catalog, &txn_mgr);
+
+        let (_, rows) = run_select(&engine, "SELECT id FROM users WHERE name IS NULL");
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].get(0).unwrap(), &Value::Int64(2));
+    }
+
+    #[test]
+    fn where_is_not_null_excludes_null_rows() {
+        let dir = tempdir().unwrap();
+        let (catalog, txn_mgr) = seed_users_with_null_name(dir.path());
+        let engine = Engine::new(&catalog, &txn_mgr);
+
+        let (_, rows) = run_select(&engine, "SELECT id FROM users WHERE name IS NOT NULL");
+        assert_eq!(rows.len(), 2);
+        let mut ids: Vec<i64> = rows
+            .iter()
+            .map(|r| match r.get(0).unwrap() {
+                Value::Int64(v) => *v,
+                _ => unreachable!(),
+            })
+            .collect();
+        ids.sort_unstable();
+        assert_eq!(ids, vec![1, 3]);
+    }
+
+    #[test]
+    fn where_in_list_keeps_matching_rows() {
+        let dir = tempdir().unwrap();
+        let (catalog, txn_mgr) = seed_users(dir.path());
+        let engine = Engine::new(&catalog, &txn_mgr);
+
+        let (_, rows) = run_select(&engine, "SELECT id FROM users WHERE id IN (1, 3)");
+        assert_eq!(rows.len(), 2);
+        let mut ids: Vec<i64> = rows
+            .iter()
+            .map(|r| match r.get(0).unwrap() {
+                Value::Int64(v) => *v,
+                _ => unreachable!(),
+            })
+            .collect();
+        ids.sort_unstable();
+        assert_eq!(ids, vec![1, 3]);
+    }
+
+    #[test]
+    fn where_not_in_list_excludes_matching_rows() {
+        let dir = tempdir().unwrap();
+        let (catalog, txn_mgr) = seed_users(dir.path());
+        let engine = Engine::new(&catalog, &txn_mgr);
+
+        let (_, rows) = run_select(&engine, "SELECT id FROM users WHERE id NOT IN (1, 3)");
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].get(0).unwrap(), &Value::Int64(2));
+    }
+
+    #[test]
+    fn where_between_inclusive_bounds() {
+        let dir = tempdir().unwrap();
+        let (catalog, txn_mgr) = seed_users(dir.path());
+        let engine = Engine::new(&catalog, &txn_mgr);
+
+        // age=25 is within [25, 28]; age=30 is not
+        let (_, rows) = run_select(&engine, "SELECT id FROM users WHERE age BETWEEN 25 AND 28");
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].get(0).unwrap(), &Value::Int64(2));
+    }
+
+    #[test]
+    fn where_not_between_excludes_range() {
+        let dir = tempdir().unwrap();
+        let (catalog, txn_mgr) = seed_users(dir.path());
+        let engine = Engine::new(&catalog, &txn_mgr);
+
+        // age NOT BETWEEN 26 AND 40 → only bob (age=25) passes
+        let (_, rows) = run_select(
+            &engine,
+            "SELECT id FROM users WHERE age NOT BETWEEN 26 AND 40",
+        );
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].get(0).unwrap(), &Value::Int64(2));
+    }
+
+    #[test]
+    fn where_like_prefix_matches_name() {
+        let dir = tempdir().unwrap();
+        let (catalog, txn_mgr) = seed_users(dir.path());
+        let engine = Engine::new(&catalog, &txn_mgr);
+
+        // 'a%' matches 'alice' only
+        let (_, rows) = run_select(&engine, "SELECT id FROM users WHERE name LIKE 'a%'");
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].get(0).unwrap(), &Value::Int64(1));
+    }
+
+    #[test]
+    fn where_not_like_excludes_matching_rows() {
+        let dir = tempdir().unwrap();
+        let (catalog, txn_mgr) = seed_users(dir.path());
+        let engine = Engine::new(&catalog, &txn_mgr);
+
+        // NOT LIKE 'a%' → bob and cara (2 rows)
+        let (_, rows) = run_select(&engine, "SELECT id FROM users WHERE name NOT LIKE 'a%'");
+        assert_eq!(rows.len(), 2);
+        let mut ids: Vec<i64> = rows
+            .iter()
+            .map(|r| match r.get(0).unwrap() {
+                Value::Int64(v) => *v,
+                _ => unreachable!(),
+            })
+            .collect();
+        ids.sort_unstable();
+        assert_eq!(ids, vec![2, 3]);
+    }
+
+    #[test]
+    fn where_like_underscore_wildcard_matches_one_char() {
+        let dir = tempdir().unwrap();
+        let (catalog, txn_mgr) = seed_users(dir.path());
+        let engine = Engine::new(&catalog, &txn_mgr);
+
+        // '_ob' matches 'bob': _ consumes 'b', then 'ob' matches literally
+        let (_, rows) = run_select(&engine, "SELECT id FROM users WHERE name LIKE '_ob'");
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].get(0).unwrap(), &Value::Int64(2));
+    }
+
+    #[test]
+    fn where_like_on_null_column_skips_null_rows() {
+        let dir = tempdir().unwrap();
+        let (catalog, txn_mgr) = seed_users_with_null_name(dir.path());
+        let engine = Engine::new(&catalog, &txn_mgr);
+
+        // row 2 has name=NULL; LIKE on NULL → NULL → ResolvedExpr::eval_bool returns false
+        let (_, rows) = run_select(&engine, "SELECT id FROM users WHERE name LIKE '%'");
+        assert_eq!(rows.len(), 2, "NULL name row must not be returned by LIKE");
+    }
+
+    #[test]
+    fn avg_returns_float64() {
+        let dir = tempdir().unwrap();
+        let (catalog, txn_mgr) = seed_users(dir.path());
+        let engine = Engine::new(&catalog, &txn_mgr);
+
+        let (schema, rows) = run_select(&engine, "SELECT AVG(age) FROM users");
+        assert_eq!(field_names(&schema), vec!["AVG(age)"]);
+        assert_eq!(rows.len(), 1);
+        match rows[0].get(0).unwrap() {
+            Value::Float64(f) => assert!((f - (85.0 / 3.0)).abs() < 1e-9),
+            other => panic!("expected Float64, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn min_returns_minimum_value() {
+        let dir = tempdir().unwrap();
+        let (catalog, txn_mgr) = seed_users(dir.path());
+        let engine = Engine::new(&catalog, &txn_mgr);
+
+        let (schema, rows) = run_select(&engine, "SELECT MIN(age) FROM users");
+        assert_eq!(field_names(&schema), vec!["MIN(age)"]);
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].get(0).unwrap(), &Value::Int64(25));
+    }
+
+    #[test]
+    fn max_returns_maximum_value() {
+        let dir = tempdir().unwrap();
+        let (catalog, txn_mgr) = seed_users(dir.path());
+        let engine = Engine::new(&catalog, &txn_mgr);
+
+        let (schema, rows) = run_select(&engine, "SELECT MAX(age) FROM users");
+        assert_eq!(field_names(&schema), vec!["MAX(age)"]);
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].get(0).unwrap(), &Value::Int64(30));
+    }
+
+    #[test]
+    fn count_col_skips_null_values() {
+        let dir = tempdir().unwrap();
+        let (catalog, txn_mgr) = seed_users_with_null_name(dir.path());
+        let engine = Engine::new(&catalog, &txn_mgr);
+
+        let (_, count_col_rows) = run_select(&engine, "SELECT COUNT(name) FROM users");
+        let (_, count_star_rows) = run_select(&engine, "SELECT COUNT(*) FROM users");
+
+        assert_eq!(count_col_rows[0].get(0).unwrap(), &Value::Int64(2));
+        assert_eq!(count_star_rows[0].get(0).unwrap(), &Value::Int64(3));
+    }
+
+    #[test]
+    fn multiple_aggregates_in_single_query() {
+        let dir = tempdir().unwrap();
+        let (catalog, txn_mgr) = seed_users(dir.path());
+        let engine = Engine::new(&catalog, &txn_mgr);
+
+        let (schema, rows) = run_select(
+            &engine,
+            "SELECT SUM(age) AS s, COUNT(*) AS n, AVG(age) AS a, MIN(age) AS mn, MAX(age) AS mx \
+             FROM users",
+        );
+        assert_eq!(field_names(&schema), vec!["s", "n", "a", "mn", "mx"]);
+        assert_eq!(rows.len(), 1);
+        let row = &rows[0];
+        assert_eq!(row.get(0).unwrap(), &Value::Int64(85));
+        assert_eq!(row.get(1).unwrap(), &Value::Int64(3));
+        match row.get(2).unwrap() {
+            Value::Float64(f) => assert!((f - (85.0 / 3.0)).abs() < 1e-9),
+            other => panic!("expected Float64 for AVG, got {other:?}"),
+        }
+        assert_eq!(row.get(3).unwrap(), &Value::Int64(25));
+        assert_eq!(row.get(4).unwrap(), &Value::Int64(30));
+    }
+
+    #[test]
+    fn min_max_avg_on_empty_table_return_null() {
+        let dir = tempdir().unwrap();
+        let (catalog, txn_mgr) = seed_empty_users(dir.path());
+        let engine = Engine::new(&catalog, &txn_mgr);
+
+        let (_, rows) = run_select(
+            &engine,
+            "SELECT MIN(age) AS mn, MAX(age) AS mx, AVG(age) AS a FROM users",
+        );
+        // Ungrouped aggregates on an empty table produce no rows today (same gap as COUNT(*)).
+        assert_eq!(rows.len(), 0, "empty-input ungrouped aggregate gap");
+    }
+
+    #[test]
+    fn group_by_with_min_max_per_group() {
+        let dir = tempdir().unwrap();
+        let (catalog, txn_mgr) = seed_users(dir.path());
+        let engine = Engine::new(&catalog, &txn_mgr);
+
+        // age=30 group: id values are 1 and 3 → min=1, max=3
+        // age=25 group: id value is 2 → min=2, max=2
+        let (schema, rows) = run_select(
+            &engine,
+            "SELECT age, MIN(id) AS mn, MAX(id) AS mx FROM users GROUP BY age",
+        );
+        assert_eq!(field_names(&schema), vec!["age", "mn", "mx"]);
+
+        let got = sorted_rows(rows);
+        assert_eq!(got, vec![
+            vec![Value::Int64(25), Value::Int64(2), Value::Int64(2)],
+            vec![Value::Int64(30), Value::Int64(1), Value::Int64(3)],
+        ]);
+    }
+
+    // ──────────────────────── join execution tests ───────────────────────────
+
+    /// Seeds both `users` and `orders` for join execution tests.
+    ///
+    /// users: `(1,'alice',30)`, `(2,'bob',25)`, `(3,'cara',30)`
+    /// orders: `(1, user_id=1, total=100)`, `(2, user_id=1, total=200)`, `(3, user_id=2,
+    /// total=150)`
+    ///
+    /// alice has 2 orders, bob has 1 order, cara has none — so LEFT JOIN will
+    /// null-pad cara's row and INNER JOIN will exclude her entirely.
+    fn seed_users_and_orders(dir: &Path) -> (Catalog, TransactionManager) {
+        let (catalog, txn_mgr) = make_infra(dir);
+        {
+            let txn = txn_mgr.begin().unwrap();
+            catalog
+                .create_table(
+                    &txn,
+                    "users",
+                    TupleSchema::new(vec![
+                        field("id", Type::Int64).not_null(),
+                        field("name", Type::String),
+                        field("age", Type::Int64).not_null(),
+                    ]),
+                    vec![],
+                )
+                .unwrap();
+            catalog
+                .create_table(
+                    &txn,
+                    "orders",
+                    TupleSchema::new(vec![
+                        field("id", Type::Int64).not_null(),
+                        field("user_id", Type::Int64).not_null(),
+                        field("total", Type::Int64).not_null(),
+                    ]),
+                    vec![],
+                )
+                .unwrap();
+            txn.commit().unwrap();
+        }
+        let engine = Engine::new(&catalog, &txn_mgr);
+        run_ok(
+            &engine,
+            "INSERT INTO users (id, name, age) VALUES (1, 'alice', 30), (2, 'bob', 25), (3, 'cara', 30)",
+        );
+        run_ok(
+            &engine,
+            "INSERT INTO orders (id, user_id, total) VALUES (1, 1, 100), (2, 1, 200), (3, 2, 150)",
+        );
+        (catalog, txn_mgr)
+    }
+
+    #[test]
+    fn inner_join_returns_only_matched_rows() {
+        let dir = tempdir().unwrap();
+        let (catalog, txn_mgr) = seed_users_and_orders(dir.path());
+        let engine = Engine::new(&catalog, &txn_mgr);
+
+        // The merged tuple is: users.id, users.name, users.age, orders.id, orders.user_id,
+        // orders.total alice (id=1) has 2 orders → 2 rows; bob (id=2) has 1 order → 1 row;
+        // cara has none → excluded.
+        let (schema, rows) = run_select(
+            &engine,
+            "SELECT * FROM users JOIN orders ON users.id = orders.user_id",
+        );
+        assert_eq!(schema.logical_num_fields(), 6);
+        assert_eq!(rows.len(), 3);
+
+        // cara's users.id (3) must not appear in any row's first column.
+        let user_ids: Vec<&Value> = rows.iter().map(|r| r.get(0).unwrap()).collect();
+        assert!(
+            !user_ids.contains(&&Value::Int64(3)),
+            "cara should be excluded by inner join"
+        );
+    }
+
+    #[test]
+    fn inner_join_qualified_select_projects_correct_columns() {
+        let dir = tempdir().unwrap();
+        let (catalog, txn_mgr) = seed_users_and_orders(dir.path());
+        let engine = Engine::new(&catalog, &txn_mgr);
+
+        // Qualified column references in SELECT must resolve to the right offsets.
+        // users.id is at physical index 0; orders.total is at physical index 5.
+        let (schema, rows) = run_select(
+            &engine,
+            "SELECT users.id, orders.total FROM users JOIN orders ON users.id = orders.user_id",
+        );
+        assert_eq!(field_names(&schema), vec!["id", "total"]);
+        assert_eq!(rows.len(), 3);
+
+        // totals for alice=100,200 and bob=150; sort to get a stable order
+        let got = sorted_rows(rows);
+        assert_eq!(got, vec![
+            vec![Value::Int64(1), Value::Int64(100)],
+            vec![Value::Int64(1), Value::Int64(200)],
+            vec![Value::Int64(2), Value::Int64(150)],
+        ]);
+    }
+
+    #[test]
+    fn left_join_null_pads_unmatched_left_rows() {
+        let dir = tempdir().unwrap();
+        let (catalog, txn_mgr) = seed_users_and_orders(dir.path());
+        let engine = Engine::new(&catalog, &txn_mgr);
+
+        // LEFT JOIN keeps every left row. cara (id=3) has no matching order,
+        // so the orders columns (positions 3-5 in the merged tuple) are NULL.
+        let (schema, rows) = run_select(
+            &engine,
+            "SELECT * FROM users LEFT JOIN orders ON users.id = orders.user_id",
+        );
+        assert_eq!(schema.logical_num_fields(), 6);
+        assert_eq!(rows.len(), 4, "alice×2 + bob×1 + cara×1 (null-padded)");
+
+        let null_padded: Vec<&Tuple> = rows
+            .iter()
+            .filter(|r| r.get(3).unwrap().is_null())
+            .collect();
+        assert_eq!(
+            null_padded.len(),
+            1,
+            "exactly one row should be null-padded"
+        );
+        assert_eq!(
+            null_padded[0].get(0).unwrap(),
+            &Value::Int64(3),
+            "the null-padded row must be cara (users.id = 3)"
+        );
+        // All three orders columns are NULL for that row.
+        assert!(null_padded[0].get(4).unwrap().is_null());
+        assert!(null_padded[0].get(5).unwrap().is_null());
+    }
+
+    #[test]
+    fn cross_join_produces_cartesian_product() {
+        let dir = tempdir().unwrap();
+        let (catalog, txn_mgr) = seed_users_and_orders(dir.path());
+        let engine = Engine::new(&catalog, &txn_mgr);
+
+        // 3 users × 3 orders = 9 rows, no predicate.
+        let (schema, rows) = run_select(&engine, "SELECT * FROM users CROSS JOIN orders");
+        assert_eq!(schema.logical_num_fields(), 6);
+        assert_eq!(rows.len(), 9);
+    }
+
+    #[test]
+    fn right_join_is_rejected_by_planner() {
+        let dir = tempdir().unwrap();
+        let (catalog, txn_mgr) = seed_users_and_orders(dir.path());
+        let engine = Engine::new(&catalog, &txn_mgr);
+
+        expect_unsupported(run(
+            &engine,
+            "SELECT * FROM users RIGHT JOIN orders ON users.id = orders.user_id",
+        ));
+    }
+
     // ──────────────────────── binder unit tests ──────────────────────────────
     // These call BoundSelect::bind directly to validate name resolution in
     // isolation, without going through the full Engine pipeline.
@@ -1790,8 +2228,9 @@ mod tests {
     }
 
     #[test]
-    fn bind_projection_aggregate_non_column_arg_unsupported() {
-        let err = expect_err(bind_with_users(|| {
+    fn bind_projection_aggregate_literal_arg_is_now_supported() {
+        // SUM(1) used to be rejected; arbitrary expressions in aggregate args are now valid.
+        let bound = bind_with_users(|| {
             select_stmt(
                 exprs(vec![item(
                     Expr::Agg {
@@ -1802,8 +2241,8 @@ mod tests {
                 )]),
                 vec![just("users")],
             )
-        }));
-        assert!(matches!(err, EngineError::Unsupported(_)));
+        });
+        assert!(bound.is_ok());
     }
 
     #[test]

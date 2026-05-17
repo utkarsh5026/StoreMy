@@ -54,7 +54,7 @@
 //!
 //! The AST itself is value-neutral — `NULL` literals are stored as
 //! [`Value::Null`]. Three-valued logic in `WHERE` is the executor's concern;
-//! see [`eval_resolved_bool`](crate::execution::eval_resolved_bool) for how
+//! see [`ResolvedExpr::eval_bool`](crate::execution::ResolvedExpr::eval_bool) for how
 //! predicates are evaluated and how `NULL` is treated as non-matching in filters.
 //!
 //! # File layout
@@ -1380,6 +1380,7 @@ impl Display for OrderBy {
 /// -- a LEFT  JOIN b ON …      -->  JoinKind::Left    (keep unmatched left rows, NULL-pad right)
 /// -- a RIGHT JOIN b ON …      -->  JoinKind::Right   (keep unmatched right rows, NULL-pad left)
 /// -- a CROSS JOIN b           -->  JoinKind::Cross   (cartesian product; no ON clause)
+/// -- a FULL [OUTER] JOIN b ON --> JoinKind::Full    (keep all rows from both sides, NULL-pad the non-matching side)
 /// -- a JOIN b ON …            -->  JoinKind::Inner   (default when omitted)
 /// ```
 #[derive(Debug, Clone, PartialEq)]
@@ -1388,6 +1389,7 @@ pub enum JoinKind {
     Left,
     Right,
     Cross,
+    Full,
 }
 
 impl Display for JoinKind {
@@ -1397,6 +1399,7 @@ impl Display for JoinKind {
             JoinKind::Left => write!(f, "LEFT JOIN"),
             JoinKind::Right => write!(f, "RIGHT JOIN"),
             JoinKind::Cross => write!(f, "CROSS JOIN"),
+            JoinKind::Full => write!(f, "FULL OUTER JOIN"),
         }
     }
 }
@@ -1643,7 +1646,7 @@ impl Display for LimitClause {
 /// # NULL semantics
 ///
 /// `NULL` in `WHERE`/`HAVING` predicates does not match rows — see
-/// [`eval_resolved_bool`](crate::execution::eval_resolved_bool). The AST itself just
+/// [`ResolvedExpr::eval_bool`](crate::execution::ResolvedExpr::eval_bool). The AST itself just
 /// carries [`Value::Null`].
 #[derive(Debug, Clone)]
 pub struct SelectStatement {
