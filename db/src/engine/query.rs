@@ -391,15 +391,11 @@ impl BoundSelect {
         let resolved = match expr {
             Expr::Column(col) => ResolvedExpr::Column(Self::resolve_scope_col(scope, &col)?),
             Expr::Agg { func, arg } => {
-                let Expr::Column(col) = *arg else {
-                    return Err(EngineError::Unsupported(
-                        "aggregates currently support only a single column argument".to_string(),
-                    ));
-                };
-                let col_id = Self::resolve_scope_col(scope, &col)?;
+                let resolved_arg =
+                    resolve_expr(scope, *arg).map_err(|e| EngineError::TypeError(e.to_string()))?;
                 ResolvedExpr::Agg {
                     func,
-                    arg: Box::new(ResolvedExpr::Column(col_id)),
+                    arg: Box::new(resolved_arg),
                 }
             }
             other => {
@@ -943,19 +939,11 @@ impl Engine<'_> {
                     .unwrap_or_else(|| "COUNT(*)".try_into().unwrap());
                 Some(Ok(AggregateExpr {
                     func: AggregateFunc::CountStar,
-                    col_id: ColumnId::default(),
+                    arg: ResolvedExpr::Literal(crate::Value::Null),
                     output_name,
                 }))
             }
             ResolvedExpr::Agg { func, arg } => {
-                let col_id = match arg.as_ref() {
-                    ResolvedExpr::Column(id) => *id,
-                    _ => {
-                        return Some(Err(EngineError::Unsupported(
-                            "aggregates currently support only a single column argument".into(),
-                        )));
-                    }
-                };
                 let agg_func = match func {
                     AggFunc::Count => AggregateFunc::CountCol,
                     AggFunc::Sum => AggregateFunc::Sum,
@@ -963,15 +951,16 @@ impl Engine<'_> {
                     AggFunc::Min => AggregateFunc::Min,
                     AggFunc::Max => AggregateFunc::Max,
                 };
-                let default_name: NonEmptyString = {
-                    let col_name = schema.col_name(col_id).unwrap_or("?");
-                    format!("{func}({col_name})")
-                        .try_into()
-                        .unwrap_or_else(|_| "agg".try_into().unwrap())
+                let arg_display = match arg.as_ref() {
+                    ResolvedExpr::Column(id) => schema.col_name(*id).unwrap_or("?").to_string(),
+                    _ => "expr".to_string(),
                 };
+                let default_name: NonEmptyString = format!("{func}({arg_display})")
+                    .try_into()
+                    .unwrap_or_else(|_| "agg".try_into().unwrap());
                 Some(Ok(AggregateExpr {
                     func: agg_func,
-                    col_id,
+                    arg: *arg.clone(),
                     output_name: proj.alias.clone().unwrap_or(default_name),
                 }))
             }
@@ -1665,7 +1654,7 @@ mod tests {
         let (catalog, txn_mgr) = seed_users_with_null_name(dir.path());
         let engine = Engine::new(&catalog, &txn_mgr);
 
-        // row 2 has name=NULL; LIKE on NULL → NULL → eval_resolved_bool returns false
+        // row 2 has name=NULL; LIKE on NULL → NULL → ResolvedExpr::eval_bool returns false
         let (_, rows) = run_select(&engine, "SELECT id FROM users WHERE name LIKE '%'");
         assert_eq!(rows.len(), 2, "NULL name row must not be returned by LIKE");
     }
@@ -2239,8 +2228,9 @@ mod tests {
     }
 
     #[test]
-    fn bind_projection_aggregate_non_column_arg_unsupported() {
-        let err = expect_err(bind_with_users(|| {
+    fn bind_projection_aggregate_literal_arg_is_now_supported() {
+        // SUM(1) used to be rejected; arbitrary expressions in aggregate args are now valid.
+        let bound = bind_with_users(|| {
             select_stmt(
                 exprs(vec![item(
                     Expr::Agg {
@@ -2251,8 +2241,8 @@ mod tests {
                 )]),
                 vec![just("users")],
             )
-        }));
-        assert!(matches!(err, EngineError::Unsupported(_)));
+        });
+        assert!(bound.is_ok());
     }
 
     #[test]
