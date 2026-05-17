@@ -10,9 +10,8 @@
 //!
 //! [`resolve_expr`] does that lookup *once*, at bind time, and replaces every
 //! `ColumnRef` with the numeric [`ColumnId`] it resolves to. The resulting
-//! [`ResolvedExpr`] can then be evaluated by `eval_resolved_expr` (to be added
-//! in Phase 3) with a plain index lookup — no string comparison, no `schema`
-//! argument, no allocation.
+//! [`ResolvedExpr`] can then be evaluated by [`ResolvedExpr::eval`] with a plain
+//! index lookup — no string comparison, no schema argument, no allocation.
 //!
 //! # Dependency design
 //!
@@ -35,7 +34,8 @@ use crate::{
     Value,
     parser::statements::{AggFunc, BinOp, CaseBranch, Expr, UnOp},
     primitives::ColumnId,
-    tuple::Tuple,
+    tuple::{Tuple, TupleSchema},
+    types::Type,
 };
 
 /// Minimal interface for mapping a column reference to a [`ColumnId`].
@@ -56,7 +56,7 @@ pub trait ColumnLookup {
 /// - `Column(ColumnRef)` → `Column(ColumnId)` — string name replaced by index.
 /// - [`CaseBranch`] → [`ResolvedCaseBranch`] — branches over `ResolvedExpr`.
 ///
-/// Produced by [`resolve_expr`]; evaluated by [`eval_resolved_expr`], which
+/// Produced by [`resolve_expr`]; evaluated by [`ResolvedExpr::eval`], which
 /// needs only `&Tuple` — no schema parameter, no string lookup.
 #[derive(Debug, Clone, PartialEq)]
 pub enum ResolvedExpr {
@@ -130,6 +130,198 @@ pub enum ResolvedExpr {
 pub struct ResolvedCaseBranch {
     pub when: ResolvedExpr,
     pub then: ResolvedExpr,
+}
+
+impl ResolvedExpr {
+    /// Evaluates this expression against a single tuple row.
+    ///
+    /// Every column reference is a plain index into `tuple` — no schema scan,
+    /// no string comparison.
+    ///
+    /// # Errors
+    ///
+    /// - [`ExecutionError::TypeError`] if a column index is out of bounds.
+    /// - [`ExecutionError::TypeError`] if `AND`/`OR`/`NOT` receives a non-Bool operand.
+    /// - [`ExecutionError::TypeError`] if `LIKE` receives a non-String operand.
+    /// - [`ExecutionError::TypeError`] if an aggregate node is encountered — those require many
+    ///   rows and must be handled by the `Aggregate` operator first.
+    #[allow(clippy::too_many_lines)]
+    pub fn eval(&self, tuple: &Tuple) -> Result<Value, ExecutionError> {
+        match self {
+            Self::Column(id) => {
+                let idx = usize::from(*id);
+                tuple.get(idx).cloned().ok_or_else(|| {
+                    ExecutionError::TypeError(format!("column index {idx} out of bounds"))
+                })
+            }
+
+            Self::Literal(v) => Ok(v.clone()),
+
+            Self::BinaryOp { lhs, op, rhs } => {
+                let l = lhs.eval(tuple)?;
+                let r = rhs.eval(tuple)?;
+                eval_binary(*op, &l, &r)
+            }
+
+            Self::UnaryOp { op, operand } => {
+                let v = operand.eval(tuple)?;
+                if v.is_null() {
+                    return Ok(Value::Null);
+                }
+                match op {
+                    UnOp::Not => Ok(Value::Bool(!as_bool(&v, "NOT")?)),
+                }
+            }
+
+            Self::IsNull { expr, negated } => {
+                let v = expr.eval(tuple)?;
+                Ok(Value::Bool(if *negated {
+                    !v.is_null()
+                } else {
+                    v.is_null()
+                }))
+            }
+
+            Self::In {
+                expr,
+                list,
+                negated,
+            } => {
+                let v = expr.eval(tuple)?;
+                if v.is_null() {
+                    return Ok(Value::Null);
+                }
+                let mut saw_null = false;
+                for e in list {
+                    let item = e.eval(tuple)?;
+                    if item.is_null() {
+                        saw_null = true;
+                        continue;
+                    }
+                    if item == v {
+                        return Ok(Value::Bool(!negated));
+                    }
+                }
+                if saw_null {
+                    Ok(Value::Null)
+                } else {
+                    Ok(Value::Bool(*negated))
+                }
+            }
+
+            Self::Between {
+                expr,
+                low,
+                high,
+                negated,
+            } => {
+                let v = expr.eval(tuple)?;
+                let lo = low.eval(tuple)?;
+                let hi = high.eval(tuple)?;
+                if v.is_null() || lo.is_null() || hi.is_null() {
+                    return Ok(Value::Null);
+                }
+                match (lo.partial_cmp(&v), v.partial_cmp(&hi)) {
+                    (Some(lo_ord), Some(hi_ord)) => {
+                        let in_range = lo_ord.is_le() && hi_ord.is_le();
+                        Ok(Value::Bool(if *negated { !in_range } else { in_range }))
+                    }
+                    _ => Ok(Value::Null),
+                }
+            }
+
+            Self::Like {
+                expr,
+                pattern,
+                negated,
+            } => {
+                let text = expr.eval(tuple)?;
+                let pat = pattern.eval(tuple)?;
+                if text.is_null() || pat.is_null() {
+                    return Ok(Value::Null);
+                }
+                let Value::String(text_str) = text else {
+                    return Err(ExecutionError::TypeError(
+                        "LIKE requires a String left-hand side".to_string(),
+                    ));
+                };
+                let Value::String(pat_str) = pat else {
+                    return Err(ExecutionError::TypeError(
+                        "LIKE requires a String pattern".to_string(),
+                    ));
+                };
+                let matched = like_matches(&text_str, &pat_str);
+                Ok(Value::Bool(if *negated { !matched } else { matched }))
+            }
+
+            Self::Case {
+                operand,
+                branches,
+                else_result,
+            } => {
+                let base = operand.as_deref().map(|e| e.eval(tuple)).transpose()?;
+
+                for ResolvedCaseBranch { when, then } in branches {
+                    let condition_holds = match &base {
+                        None => when.eval_bool(tuple)?,
+                        Some(base_val) => {
+                            let v = when.eval(tuple)?;
+                            !base_val.is_null() && !v.is_null() && *base_val == v
+                        }
+                    };
+                    if condition_holds {
+                        return then.eval(tuple);
+                    }
+                }
+                match else_result {
+                    Some(e) => e.eval(tuple),
+                    None => Ok(Value::Null),
+                }
+            }
+
+            Self::Agg { .. } | Self::CountStar => Err(ExecutionError::TypeError(
+                "aggregate expressions cannot be evaluated as scalar expressions".to_string(),
+            )),
+        }
+    }
+
+    /// Evaluates this expression and returns `true` iff the result is `Value::Bool(true)`.
+    ///
+    /// All other results — `false`, `NULL`, any non-boolean — return `false`.
+    /// This is the SQL predicate check used by `WHERE`, join conditions, and residual filters.
+    #[inline]
+    pub fn eval_bool(&self, tuple: &Tuple) -> Result<bool, ExecutionError> {
+        Ok(matches!(self.eval(tuple)?, Value::Bool(true)))
+    }
+
+    /// Statically infers the output [`Type`] of this expression without evaluating any rows.
+    ///
+    /// Used to build output schemas for `Project` and `Aggregate` before the first row is pulled.
+    ///
+    /// - `Column` — inherits the field type from `schema`.
+    /// - `Literal` — derives the type from the [`Value`] variant; `NULL` falls back to `String`.
+    /// - `BinaryOp` arithmetic (`+`, `-`, `*`, `/`) — follows the left operand (conservative).
+    /// - All boolean-valued operators (`=`, `<`, `AND`, `BETWEEN`, `LIKE`, …) → `Bool`.
+    /// - Aggregates and anything else fall back to `String`.
+    pub fn infer_type(&self, schema: &TupleSchema) -> Type {
+        match self {
+            Self::Column(id) => schema
+                .field_or_err(usize::from(*id))
+                .map(|f| f.field_type)
+                .unwrap_or(Type::String),
+            Self::Literal(v) => v.get_type().unwrap_or(Type::String),
+            Self::BinaryOp { lhs, op, .. } => match op {
+                BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div => lhs.infer_type(schema),
+                _ => Type::Bool,
+            },
+            Self::UnaryOp { .. }
+            | Self::IsNull { .. }
+            | Self::In { .. }
+            | Self::Between { .. }
+            | Self::Like { .. } => Type::Bool,
+            _ => Type::String,
+        }
+    }
 }
 
 /// Walks an [`Expr`] tree and replaces every `Column(ColumnRef)` node with
@@ -237,178 +429,6 @@ pub fn resolve_expr(
 
         Expr::CountStar => Ok(ResolvedExpr::CountStar),
     }
-}
-
-/// Evaluates a [`ResolvedExpr`] against a single tuple row.
-///
-/// Every column reference is a plain index into `tuple` — no schema scan,
-/// no string comparison. All other behavior (NULL propagation, three-valued
-/// logic, LIKE matching, CASE branching) is identical to `eval_expr`.
-///
-/// # Errors
-///
-/// - [`ExecutionError::TypeError`] if a column index is out of bounds.
-/// - [`ExecutionError::TypeError`] if `AND`/`OR`/`NOT` receives a non-Bool operand.
-/// - [`ExecutionError::TypeError`] if `LIKE` receives a non-String operand.
-/// - [`ExecutionError::TypeError`] if an aggregate node is encountered — those require many rows
-///   and must be handled by the `Aggregate` operator first.
-#[allow(clippy::too_many_lines)]
-pub fn eval_resolved_expr(expr: &ResolvedExpr, tuple: &Tuple) -> Result<Value, ExecutionError> {
-    match expr {
-        ResolvedExpr::Column(id) => {
-            let idx = usize::from(*id);
-            tuple.get(idx).cloned().ok_or_else(|| {
-                ExecutionError::TypeError(format!("column index {idx} out of bounds"))
-            })
-        }
-
-        ResolvedExpr::Literal(v) => Ok(v.clone()),
-
-        ResolvedExpr::BinaryOp { lhs, op, rhs } => {
-            let l = eval_resolved_expr(lhs, tuple)?;
-            let r = eval_resolved_expr(rhs, tuple)?;
-            eval_binary(*op, &l, &r)
-        }
-
-        ResolvedExpr::UnaryOp { op, operand } => {
-            let v = eval_resolved_expr(operand, tuple)?;
-            if v.is_null() {
-                return Ok(Value::Null);
-            }
-            match op {
-                UnOp::Not => Ok(Value::Bool(!as_bool(&v, "NOT")?)),
-            }
-        }
-
-        ResolvedExpr::IsNull { expr, negated } => {
-            let v = eval_resolved_expr(expr, tuple)?;
-            Ok(Value::Bool(if *negated {
-                !v.is_null()
-            } else {
-                v.is_null()
-            }))
-        }
-
-        ResolvedExpr::In {
-            expr,
-            list,
-            negated,
-        } => {
-            let v = eval_resolved_expr(expr, tuple)?;
-            if v.is_null() {
-                return Ok(Value::Null);
-            }
-            let mut saw_null = false;
-            for e in list {
-                let item = eval_resolved_expr(e, tuple)?;
-                if item.is_null() {
-                    saw_null = true;
-                    continue;
-                }
-                if item == v {
-                    return Ok(Value::Bool(!negated));
-                }
-            }
-            if saw_null {
-                Ok(Value::Null)
-            } else {
-                Ok(Value::Bool(*negated))
-            }
-        }
-
-        ResolvedExpr::Between {
-            expr,
-            low,
-            high,
-            negated,
-        } => {
-            let v = eval_resolved_expr(expr, tuple)?;
-            let lo = eval_resolved_expr(low, tuple)?;
-            let hi = eval_resolved_expr(high, tuple)?;
-            if v.is_null() || lo.is_null() || hi.is_null() {
-                return Ok(Value::Null);
-            }
-            match (lo.partial_cmp(&v), v.partial_cmp(&hi)) {
-                (Some(lo_ord), Some(hi_ord)) => {
-                    let in_range = lo_ord.is_le() && hi_ord.is_le();
-                    Ok(Value::Bool(if *negated { !in_range } else { in_range }))
-                }
-                _ => Ok(Value::Null),
-            }
-        }
-
-        ResolvedExpr::Like {
-            expr,
-            pattern,
-            negated,
-        } => {
-            let text = eval_resolved_expr(expr, tuple)?;
-            let pat = eval_resolved_expr(pattern, tuple)?;
-            if text.is_null() || pat.is_null() {
-                return Ok(Value::Null);
-            }
-            let Value::String(text_str) = text else {
-                return Err(ExecutionError::TypeError(
-                    "LIKE requires a String left-hand side".to_string(),
-                ));
-            };
-            let Value::String(pat_str) = pat else {
-                return Err(ExecutionError::TypeError(
-                    "LIKE requires a String pattern".to_string(),
-                ));
-            };
-            let matched = like_matches(&text_str, &pat_str);
-            Ok(Value::Bool(if *negated { !matched } else { matched }))
-        }
-
-        ResolvedExpr::Case {
-            operand,
-            branches,
-            else_result,
-        } => {
-            let base = operand
-                .as_deref()
-                .map(|e| eval_resolved_expr(e, tuple))
-                .transpose()?;
-
-            // Here we resolve all the when then branches and evaluate them against the tuple.
-            // If the base is None, we evaluate the when against the tuple and return true if it is
-            // true.
-            for ResolvedCaseBranch { when, then } in branches {
-                let condition_holds = match &base {
-                    None => eval_resolved_bool(when, tuple)?,
-                    Some(base_val) => {
-                        let v = eval_resolved_expr(when, tuple)?;
-                        !base_val.is_null() && !v.is_null() && *base_val == v
-                    }
-                };
-                if condition_holds {
-                    return eval_resolved_expr(then, tuple);
-                }
-            }
-            // If no branch matches, we evaluate the else result against the tuple.
-            match else_result {
-                Some(e) => eval_resolved_expr(e, tuple),
-                None => Ok(Value::Null),
-            }
-        }
-
-        ResolvedExpr::Agg { .. } | ResolvedExpr::CountStar => Err(ExecutionError::TypeError(
-            "aggregate expressions cannot be evaluated as scalar expressions".to_string(),
-        )),
-    }
-}
-
-/// Evaluates `expr` against `tuple` and returns `true` iff the result is `Value::Bool(true)`.
-///
-/// All other results — `false`, `NULL`, any non-boolean — return `false`.
-/// This is the SQL predicate check used by `WHERE`, join conditions, and residual filters.
-#[inline]
-pub fn eval_resolved_bool(expr: &ResolvedExpr, tuple: &Tuple) -> Result<bool, ExecutionError> {
-    Ok(matches!(
-        eval_resolved_expr(expr, tuple)?,
-        Value::Bool(true)
-    ))
 }
 
 fn eval_binary(op: BinOp, l: &Value, r: &Value) -> Result<Value, ExecutionError> {
@@ -728,9 +748,8 @@ mod tests {
         assert!(resolve_expr(&r, expr).is_err());
     }
 
-    // ── eval_resolved_expr ───────────────────────────────────────────────────
+    // ── ResolvedExpr::eval ───────────────────────────────────────────────────
 
-    use super::eval_resolved_expr;
     use crate::tuple::Tuple;
 
     fn tuple(values: Vec<Value>) -> Tuple {
@@ -746,7 +765,7 @@ mod tests {
     }
 
     fn eval(expr: &ResolvedExpr, t: &Tuple) -> Value {
-        eval_resolved_expr(expr, t).expect("eval_resolved_expr failed")
+        expr.eval(t).expect("eval failed")
     }
 
     #[test]
@@ -766,7 +785,7 @@ mod tests {
     #[test]
     fn eval_column_out_of_bounds_errors() {
         let t = tuple(vec![Value::Int64(1)]);
-        let err = eval_resolved_expr(&resolved_col(5), &t).unwrap_err();
+        let err = resolved_col(5).eval(&t).unwrap_err();
         assert!(matches!(err, super::super::ExecutionError::TypeError(_)));
     }
 
@@ -881,20 +900,18 @@ mod tests {
     #[test]
     fn eval_aggregate_errors() {
         let t = tuple(vec![]);
-        let err = eval_resolved_expr(&ResolvedExpr::CountStar, &t).unwrap_err();
+        let err = ResolvedExpr::CountStar.eval(&t).unwrap_err();
         assert!(matches!(err, super::super::ExecutionError::TypeError(_)));
     }
 
     fn arith(op: BinOp, l: Value, r: Value) -> Result<Value, ExecutionError> {
         let t = tuple(vec![]);
-        eval_resolved_expr(
-            &ResolvedExpr::BinaryOp {
-                lhs: Box::new(lit(l)),
-                op,
-                rhs: Box::new(lit(r)),
-            },
-            &t,
-        )
+        ResolvedExpr::BinaryOp {
+            lhs: Box::new(lit(l)),
+            op,
+            rhs: Box::new(lit(r)),
+        }
+        .eval(&t)
     }
 
     fn arith_ok(op: BinOp, l: Value, r: Value) -> Value {

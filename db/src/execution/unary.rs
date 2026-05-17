@@ -24,7 +24,7 @@
 //!
 //! # NULL semantics
 //!
-//! `Filter` delegates to [`eval_resolved_bool`]: only
+//! `Filter` delegates to [`ResolvedExpr::eval_bool`]: only
 //! `Value::Bool(true)` passes; `NULL` and `false` are dropped. `Project` copies
 //! `NULL` values unchanged and can emit
 //! literal `NULL`s. `Sort` orders `NULL` before non-`NULL` in ascending order
@@ -37,16 +37,14 @@ use fallible_iterator::FallibleIterator;
 
 use super::{ExecutionError, Executor};
 use crate::{
-    execution::{PlanNode, ResolvedExpr, eval_resolved_bool, eval_resolved_expr},
-    parser::statements::BinOp,
+    execution::{PlanNode, ResolvedExpr},
     primitives::{self, NonEmptyString},
     tuple::{Field, Tuple, TupleSchema},
-    types::Type,
 };
 
 /// Applies a SQL `WHERE` predicate to rows from one child plan.
 ///
-/// Each input tuple is tested with [`eval_resolved_bool`]. Rows that evaluate to
+/// Each input tuple is tested with [`ResolvedExpr::eval_bool`]. Rows that evaluate to
 /// `Value::Bool(true)` pass through unchanged; all other results (false, NULL)
 /// are skipped. The output tuple layout is exactly the child layout because filtering never
 /// adds, removes, or reorders columns.
@@ -149,7 +147,7 @@ impl FallibleIterator for Filter<'_> {
     /// the predicate references an unknown column name.
     fn next(&mut self) -> Result<Option<Tuple>, ExecutionError> {
         while let Some(tuple) = self.child.next()? {
-            if eval_resolved_bool(&self.predicate, &tuple)? {
+            if self.predicate.eval_bool(&tuple)? {
                 return Ok(Some(tuple));
             }
         }
@@ -176,7 +174,7 @@ impl Executor for Filter<'_> {
 /// One item in a SQL `SELECT` list: a pre-resolved expression paired with an
 /// optional output column name.
 ///
-/// `expr` is evaluated per row by [`eval_resolved_expr`]. `alias` overrides the
+/// `expr` is evaluated per row by [`ResolvedExpr::eval`]. `alias` overrides the
 /// output field name; when `None`, a [`ResolvedExpr::Column`] inherits its name
 /// from the child schema and any other expression gets a synthesised `?column?N`
 /// name.
@@ -335,7 +333,7 @@ impl<'a> Project<'a> {
             }
 
             other => {
-                let ty = Self::infer_type(other, schema);
+                let ty = other.infer_type(schema);
                 let name = match &item.alias {
                     Some(a) => a.clone(),
                     None => format!("?column?{}", position + 1)
@@ -350,103 +348,6 @@ impl<'a> Project<'a> {
                 }
                 Ok(field)
             }
-        }
-    }
-
-    /// Builds the SQL `SELECT` list for each row from one child plan.
-    ///
-    /// A `Project` maps each input tuple to a new tuple by copying selected child
-    /// columns and/or appending literal values. The output tuple layout is exactly
-    /// the `items` order: each [`ProjectItem`] contributes one output column.
-    ///
-    /// # SQL examples
-    ///
-    /// Assume `users(id, name, age)` with binder-resolved indices
-    /// `id → 0`, `name → 1`, `age → 2`:
-    ///
-    /// ```sql
-    /// -- SELECT id, name FROM users;
-    /// ```
-    ///
-    /// ```ignore
-    /// Project::new(users_scan, &[col(0), col(1)])?
-    /// ```
-    ///
-    /// ```sql
-    /// -- SELECT name AS username, age FROM users;
-    /// ```
-    ///
-    /// ```ignore
-    /// Project::with_items(
-    ///     users_scan,
-    ///     vec![
-    ///         ProjectItem { expr: ResolvedExpr::Column(col(1)), alias: Some("username".into()) },
-    ///         ProjectItem { expr: ResolvedExpr::Column(col(2)), alias: None },
-    ///     ],
-    /// )?
-    /// ```
-    ///
-    /// ```sql
-    /// -- SELECT id, 'active' AS status FROM users;
-    /// ```
-    ///
-    /// ```ignore
-    /// Project::with_items(
-    ///     users_scan,
-    ///     vec![
-    ///         ProjectItem { expr: ResolvedExpr::Column(col(0)), alias: None },
-    ///         ProjectItem { expr: ResolvedExpr::Literal(Value::String("active".into())), alias: Some("status".into()) },
-    ///     ],
-    /// )?
-    /// ```
-    ///
-    /// # SQL → operator mapping
-    ///
-    /// ```sql
-    /// -- SELECT name AS username, 1 AS one
-    /// -- FROM users
-    /// -- WHERE age >= 18;
-    /// ```
-    ///
-    /// ```ignore
-    /// let filtered = Filter::new(
-    ///     users_scan,
-    ///     BooleanExpression::col_op_lit(2, Predicate::GreaterThanOrEqual, Value::Int64(18)),
-    /// );
-    /// let projected = Project::with_items(
-    ///     Box::new(PlanNode::Filter(filtered)),
-    ///     vec![
-    ///         ProjectItem { expr: ResolvedExpr::Column(col(1)), alias: Some("username".into()) },
-    ///         ProjectItem { expr: ResolvedExpr::Literal(Value::Int64(1)), alias: Some("one".into()) },
-    ///     ],
-    /// )?;
-    /// ```
-    ///
-    /// `NULL` values copied from input columns remain `NULL`; literal `NULL`s are
-    /// emitted unchanged.
-    /// Statically infers the output [`Type`] of a [`ResolvedExpr`] without evaluating any rows.
-    ///
-    /// Used by [`Project`] to build the output schema before the first row is pulled.
-    /// For arithmetic, the output type follows the left operand (conservative). For all
-    /// boolean-valued operators the output is [`Type::Bool`]. Aggregates and anything else
-    /// fall back to [`Type::String`].
-    fn infer_type(expr: &ResolvedExpr, schema: &TupleSchema) -> Type {
-        match expr {
-            ResolvedExpr::Column(id) => schema
-                .field_or_err(usize::from(*id))
-                .map(|f| f.field_type)
-                .unwrap_or(Type::String),
-            ResolvedExpr::Literal(v) => v.get_type().unwrap_or(Type::String),
-            ResolvedExpr::BinaryOp { lhs, op, .. } => match op {
-                BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div => Self::infer_type(lhs, schema),
-                _ => Type::Bool,
-            },
-            ResolvedExpr::UnaryOp { .. }
-            | ResolvedExpr::IsNull { .. }
-            | ResolvedExpr::In { .. }
-            | ResolvedExpr::Between { .. }
-            | ResolvedExpr::Like { .. } => Type::Bool,
-            _ => Type::String,
         }
     }
 }
@@ -472,7 +373,7 @@ impl FallibleIterator for Project<'_> {
         let out = self
             .items
             .iter()
-            .map(|item| eval_resolved_expr(&item.expr, &input))
+            .map(|item| item.expr.eval(&input))
             .collect::<Result<Vec<_>, ExecutionError>>()?;
         Ok(Some(Tuple::new(out)))
     }

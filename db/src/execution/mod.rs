@@ -25,7 +25,7 @@
 //! - [`setops`]     — union, intersect, except, distinct
 //! - [`aggregate`]  — grouping and aggregation
 //! - [`resolve`]    — `ColumnLookup` trait, `ResolvedExpr` type, `resolve_expr`, and
-//!   `eval_resolved_expr` — column names resolved once, evaluated with plain index lookups
+//!   `ResolvedExpr::eval` — column names resolved once, evaluated with plain index lookups
 
 pub mod aggregate;
 pub mod join;
@@ -35,10 +35,7 @@ pub mod setops;
 pub mod unary;
 
 use fallible_iterator::FallibleIterator;
-pub use resolve::{
-    ColumnLookup, ResolvedCaseBranch, ResolvedExpr, eval_resolved_bool, eval_resolved_expr,
-    resolve_expr,
-};
+pub use resolve::{ColumnLookup, ResolvedCaseBranch, ResolvedExpr, resolve_expr};
 use thiserror::Error;
 
 use crate::{
