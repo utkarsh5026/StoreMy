@@ -9,7 +9,7 @@ use fallible_iterator::FallibleIterator;
 use super::{JoinInputs, JoinPredicate, JoinType, get_value, null_right_tuple};
 use crate::{
     Value,
-    execution::{ExecutionError, Executor, PlanNode, ResolvedExpr, eval_resolved_bool},
+    execution::{ExecutionError, Executor, PlanNode, ResolvedExpr},
     primitives::Predicate,
     tuple::{Tuple, TupleSchema},
 };
@@ -247,7 +247,7 @@ impl<'a> SortMergeJoin<'a> {
 
                 let keep = match &self.residual {
                     None => true,
-                    Some(expr) => eval_resolved_bool(expr, &joined)?,
+                    Some(expr) => expr.eval_bool(&joined)?,
                 };
                 if keep {
                     row_matched = true;

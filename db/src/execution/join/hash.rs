@@ -17,7 +17,7 @@ use fallible_iterator::FallibleIterator;
 use super::{JoinInputs, JoinPredicate, JoinType, null_right_tuple};
 use crate::{
     Value,
-    execution::{ExecutionError, Executor, PlanNode, ResolvedExpr, eval_resolved_bool},
+    execution::{ExecutionError, Executor, PlanNode, ResolvedExpr},
     primitives::Predicate,
     tuple::{Tuple, TupleSchema},
 };
@@ -213,7 +213,7 @@ impl<'a> HashJoin<'a> {
             let joined = l.concat(&r);
             let keep = match &self.residual {
                 None => true,
-                Some(expr) => eval_resolved_bool(expr, &joined)?,
+                Some(expr) => expr.eval_bool(&joined)?,
             };
             if keep {
                 self.left_matched = true;

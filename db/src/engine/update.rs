@@ -53,7 +53,7 @@ use crate::{
         ConstraintViolation, Engine, EngineError, StatementResult, fk::InboundParentFkCheck,
         scope::SingleTableScope,
     },
-    execution::{ResolvedExpr, eval_resolved_expr, resolve_expr},
+    execution::{ResolvedExpr, resolve_expr},
     parser::statements::{Assignment, UpdateStatement},
     primitives::ColumnId,
     transaction::Transaction,
@@ -265,7 +265,8 @@ impl Engine<'_> {
         let computed = assignments
             .iter()
             .map(|(col_id, expr)| {
-                let raw = eval_resolved_expr(expr, old_tuple)
+                let raw = expr
+                    .eval(old_tuple)
                     .map_err(|e| EngineError::TypeError(e.to_string()))?;
 
                 let field = schema

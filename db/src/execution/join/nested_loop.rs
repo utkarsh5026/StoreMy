@@ -4,7 +4,7 @@ use fallible_iterator::FallibleIterator;
 
 use super::{JoinInputs, JoinType, null_right_tuple};
 use crate::{
-    execution::{ExecutionError, Executor, PlanNode, ResolvedExpr, eval_resolved_bool},
+    execution::{ExecutionError, Executor, PlanNode, ResolvedExpr},
     tuple::{Tuple, TupleSchema},
 };
 
@@ -14,8 +14,8 @@ use crate::{
 /// `left.concat(right)` with every buffered right tuple and evaluates `predicate` over
 /// the combined tuple, emitting pairs that satisfy it.
 ///
-/// Because the predicate is a general [`ResolvedExpr`] evaluated via [`eval_resolved_bool`], NLJ
-/// supports arbitrary boolean combinations over both sides (e.g. `l.a = r.x AND l.b < r.y`).
+/// Because the predicate is a general [`ResolvedExpr`] evaluated via [`ResolvedExpr::eval_bool`],
+/// NLJ supports arbitrary boolean combinations over both sides (e.g. `l.a = r.x AND l.b < r.y`).
 ///
 /// # SQL shape
 ///
@@ -120,7 +120,7 @@ impl FallibleIterator for NestedLoopJoin<'_> {
 
             for right in self.right_buf.as_deref().unwrap() {
                 let joined = l.concat(right);
-                if eval_resolved_bool(&self.predicate, &joined)? {
+                if self.predicate.eval_bool(&joined)? {
                     self.row_matches.push_back(joined);
                 }
             }
