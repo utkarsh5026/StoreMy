@@ -48,7 +48,7 @@ siphasher = "1"
 parking_lot = "0.12"
 
 # Collections
-hashbrown = "0.14"
+hashbrown = "0.17"
 itertools = "0.13"
 
 # Logging
