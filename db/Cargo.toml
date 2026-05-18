@@ -54,7 +54,7 @@ itertools = "0.13"
 # Logging
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt", "json", "registry"] }
-tracing-tree = "0.3"
+tracing-tree = "0.4"
 tracing-chrome = "0.7"
 
 # Distributed tracing (OTLP → Jaeger / Tempo / etc.)
