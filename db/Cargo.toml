@@ -24,7 +24,7 @@ path = "src/bin/server.rs"
 
 [dependencies]
 # Error handling
-thiserror = "1.0"
+thiserror = "2.0"
 
 # In-house derive macros for the Encode/Decode codec traits.
 storemy-codec-derive = { path = "../storemy-codec-derive", version = "0.1.0" }
