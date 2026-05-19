@@ -53,7 +53,7 @@ use crate::{
         ConstraintViolation, Engine, EngineError, StatementResult, fk::InboundParentFkCheck,
         scope::SingleTableScope,
     },
-    execution::{ResolvedExpr, resolve_expr},
+    execution::ResolvedExpr,
     parser::statements::{Assignment, UpdateStatement},
     primitives::ColumnId,
     transaction::Transaction,
@@ -106,7 +106,8 @@ impl Engine<'_> {
 
         let predicate = where_clause
             .map(|expr| {
-                resolve_expr(&scope, expr).map_err(|e| EngineError::TypeError(e.to_string()))
+                ResolvedExpr::resolve(expr, &scope)
+                    .map_err(|e| EngineError::TypeError(e.to_string()))
             })
             .transpose()?;
         let rows =
@@ -237,7 +238,7 @@ impl Engine<'_> {
                 }
 
                 seen.insert(col_id);
-                let resolved = resolve_expr(scope, ass.value)
+                let resolved = ResolvedExpr::resolve(ass.value, scope)
                     .map_err(|e| EngineError::TypeError(e.to_string()))?;
                 Ok((col_id, resolved))
             })

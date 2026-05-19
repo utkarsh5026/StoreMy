@@ -24,8 +24,8 @@
 //! - [`join`]       — nested-loop, hash, and sort-merge joins
 //! - [`setops`]     — union, intersect, except, distinct
 //! - [`aggregate`]  — grouping and aggregation
-//! - [`resolve`]    — `ColumnLookup` trait, `ResolvedExpr` type, `resolve_expr`, and
-//!   `ResolvedExpr::eval` — column names resolved once, evaluated with plain index lookups
+//! - [`resolve`]    — `ColumnLookup` trait, `ResolvedExpr` type, and `ResolvedExpr::eval` — column
+//!   names resolved once via `ResolvedExpr::resolve`, evaluated with plain index lookups
 
 pub mod aggregate;
 pub mod join;
@@ -35,7 +35,7 @@ pub mod setops;
 pub mod unary;
 
 use fallible_iterator::FallibleIterator;
-pub use resolve::{ColumnLookup, ResolvedCaseBranch, ResolvedExpr, resolve_expr};
+pub use resolve::{ColumnLookup, ResolvedCaseBranch, ResolvedExpr};
 use thiserror::Error;
 
 use crate::{

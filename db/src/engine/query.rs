@@ -54,7 +54,6 @@ use crate::{
         Executor, PlanNode, ResolvedExpr,
         aggregate::{AggregateExpr, AggregateFunc},
         join::{JoinPredicate, JoinType},
-        resolve_expr,
         unary::{ProjectItem, SortKey},
     },
     heap::file::HeapFile,
@@ -297,14 +296,16 @@ impl BoundSelect {
         let filter = stmt
             .where_clause
             .map(|expr| {
-                resolve_expr(&scope, expr).map_err(|e| EngineError::TypeError(e.to_string()))
+                ResolvedExpr::resolve(expr, &scope)
+                    .map_err(|e| EngineError::TypeError(e.to_string()))
             })
             .transpose()?;
 
         let having = stmt
             .having
             .map(|expr| {
-                resolve_expr(&scope, expr).map_err(|e| EngineError::TypeError(e.to_string()))
+                ResolvedExpr::resolve(expr, &scope)
+                    .map_err(|e| EngineError::TypeError(e.to_string()))
             })
             .transpose()?;
 
@@ -365,8 +366,8 @@ impl BoundSelect {
                 BoundFrom::cross(left, right)
             } else {
                 let on = j.on.expect("non-cross join must have ON clause");
-                let resolved_on =
-                    resolve_expr(&scope, on).map_err(|e| EngineError::TypeError(e.to_string()))?;
+                let resolved_on = ResolvedExpr::resolve(on, &scope)
+                    .map_err(|e| EngineError::TypeError(e.to_string()))?;
                 BoundFrom::join(j.kind, left, right, resolved_on)
             };
         }
@@ -387,20 +388,19 @@ impl BoundSelect {
         // resolved column, so reject anything more complex at bind time.
         // Simple column references and aggregate args go through resolve_scope_col so that
         // UnknownColumn / AmbiguousColumn engine errors are surfaced with the right type.
-        // Everything else (BinaryOp, UnaryOp, etc.) goes through resolve_expr.
+        // Everything else (BinaryOp, UnaryOp, etc.) goes through ResolvedExpr::resolve.
         let resolved = match expr {
             Expr::Column(col) => ResolvedExpr::Column(Self::resolve_scope_col(scope, &col)?),
             Expr::Agg { func, arg } => {
-                let resolved_arg =
-                    resolve_expr(scope, *arg).map_err(|e| EngineError::TypeError(e.to_string()))?;
+                let resolved_arg = ResolvedExpr::resolve(*arg, scope)
+                    .map_err(|e| EngineError::TypeError(e.to_string()))?;
                 ResolvedExpr::Agg {
                     func,
                     arg: Box::new(resolved_arg),
                 }
             }
-            other => {
-                resolve_expr(scope, other).map_err(|e| EngineError::TypeError(e.to_string()))?
-            }
+            other => ResolvedExpr::resolve(other, scope)
+                .map_err(|e| EngineError::TypeError(e.to_string()))?,
         };
         Ok(SelectProjection {
             expr: resolved,
@@ -642,21 +642,68 @@ impl Engine<'_> {
                 on,
                 ..
             } => {
-                let join_type = match kind {
-                    JoinKind::Inner => JoinType::Inner,
-                    JoinKind::Left => JoinType::LeftOuter,
-                    JoinKind::Right | JoinKind::Cross | JoinKind::Full => {
-                        return Err(EngineError::Unsupported(format!(
-                            "{kind} is not yet supported in the planner"
-                        )));
-                    }
-                };
                 let left_node = Self::build_from(left, heaps, txn)?;
                 let right_node = Self::build_from(right, heaps, txn)?;
-                let left_width = left_node.schema().physical_num_fields();
-                Ok(Self::build_join(
-                    left_node, right_node, on, left_width, join_type,
-                ))
+
+                match kind {
+                    JoinKind::Inner | JoinKind::Left => {
+                        let join_type = if *kind == JoinKind::Inner {
+                            JoinType::Inner
+                        } else {
+                            JoinType::LeftOuter
+                        };
+                        let left_width = left_node.schema().physical_num_fields();
+                        Ok(Self::build_join(
+                            left_node, right_node, on, left_width, join_type,
+                        ))
+                    }
+                    JoinKind::Right => {
+                        // RIGHT JOIN A ON A.x = B.y  ≡  B LEFT JOIN A ON B.y = A.x.
+                        //
+                        // Step 1: swap the executor inputs so the LeftOuter path runs.
+                        // Step 2: remap column indices in the ON expression to match
+                        //         the new physical layout (old-right is now left, etc.).
+                        // Step 3: add a reorder projection to restore the binder's
+                        //         expected column order (old-left columns first). All
+                        //         column references in SELECT / WHERE / ORDER BY were
+                        //         resolved against the SQL-order layout, so the tuple
+                        //         that reaches those operators must match it.
+                        let old_left_width = left_node.schema().physical_num_fields();
+                        let old_right_width = right_node.schema().physical_num_fields();
+                        let adjusted_on = Self::swap_join_column_indices(
+                            on.clone(),
+                            old_left_width,
+                            old_right_width,
+                        );
+
+                        // After the swap the executor emits: (old-right | old-left).
+                        // We want:                           (old-left  | old-right).
+                        // Build a projection that picks columns in that order.
+                        let reorder_items: Vec<ProjectItem> = (old_right_width
+                            ..old_right_width + old_left_width)
+                            .chain(0..old_right_width)
+                            .map(|i| ProjectItem {
+                                expr: ResolvedExpr::Column(
+                                    ColumnId::try_from(i).expect("reorder index fits in ColumnId"),
+                                ),
+                                alias: None,
+                            })
+                            .collect();
+
+                        let joined = Self::build_join(
+                            right_node,
+                            left_node,
+                            &adjusted_on,
+                            old_right_width,
+                            JoinType::LeftOuter,
+                        );
+                        PlanNode::project(joined, reorder_items)
+                            .map_err(|e| EngineError::TypeError(e.to_string()))
+                    }
+                    JoinKind::Cross | JoinKind::Full => Err(EngineError::Unsupported(format!(
+                        "{kind} is not yet supported in the planner"
+                    ))),
+                }
             }
             BoundFrom::Cross { left, right, .. } => {
                 let left_node = Self::build_from(left, heaps, txn)?;
@@ -696,6 +743,33 @@ impl Engine<'_> {
                 }
             }
         }
+    }
+
+    /// Rewrites column indices in `expr` after swapping join inputs for RIGHT JOIN.
+    ///
+    /// The binder assigns indices based on the SQL-order layout:
+    ///   old left  → `0..left_width`
+    ///   old right → `left_width..left_width+right_width`
+    ///
+    /// After swapping, the new physical layout is:
+    ///   new left  (old right) → `0..right_width`
+    ///   new right (old left)  → `right_width..right_width+left_width`
+    ///
+    /// So every column index must be remapped accordingly.
+    fn swap_join_column_indices(
+        expr: ResolvedExpr,
+        left_width: usize,
+        right_width: usize,
+    ) -> ResolvedExpr {
+        expr.map_columns(|id| {
+            let i = usize::from(id);
+            let new_i = if i < left_width {
+                right_width + i
+            } else {
+                i - left_width
+            };
+            ColumnId::try_from(new_i).expect("remapped column index fits in ColumnId")
+        })
     }
 
     /// Tries to extract an equi-join key from a [`ResolvedExpr`].
@@ -1917,15 +1991,94 @@ mod tests {
     }
 
     #[test]
-    fn right_join_is_rejected_by_planner() {
+    fn right_join_column_order_matches_sql_written_order() {
         let dir = tempdir().unwrap();
         let (catalog, txn_mgr) = seed_users_and_orders(dir.path());
         let engine = Engine::new(&catalog, &txn_mgr);
 
-        expect_unsupported(run(
+        // The planner internally swaps inputs (orders LEFT JOIN users) to reuse
+        // the LeftOuter path, then adds a reorder projection to restore the
+        // SQL-written column layout: (users.id, users.name, users.age, orders.id,
+        // orders.user_id, orders.total).
+        //
+        // If the reorder projection is missing or wrong, columns bleed across the
+        // boundary — e.g. users.name at index 1 would instead show orders.user_id.
+        // This test pins every column of one specific row to catch that.
+        let (schema, rows) = run_select(
             &engine,
-            "SELECT * FROM users RIGHT JOIN orders ON users.id = orders.user_id",
-        ));
+            "SELECT users.id, users.name, orders.total \
+             FROM users RIGHT JOIN orders ON users.id = orders.user_id",
+        );
+        assert_eq!(field_names(&schema), vec!["id", "name", "total"]);
+        assert_eq!(rows.len(), 3, "all 3 orders have a matching user");
+
+        // Sort by orders.total so the assertion order is deterministic.
+        let mut got = rows
+            .iter()
+            .map(|r| {
+                (
+                    r.get(0).unwrap().clone(), // users.id
+                    r.get(1).unwrap().clone(), // users.name
+                    r.get(2).unwrap().clone(), // orders.total
+                )
+            })
+            .collect::<Vec<_>>();
+        got.sort_by_key(|(_, _, t)| match t {
+            Value::Int64(v) => *v,
+            _ => i64::MAX,
+        });
+
+        // Seed: alice(id=1) → total=100, bob(id=2) → total=150, alice(id=1) → total=200.
+        // Sorted ascending by total: 100, 150, 200.
+        assert_eq!(got, vec![
+            (
+                Value::Int64(1),
+                Value::String("alice".into()),
+                Value::Int64(100)
+            ),
+            (
+                Value::Int64(2),
+                Value::String("bob".into()),
+                Value::Int64(150)
+            ),
+            (
+                Value::Int64(1),
+                Value::String("alice".into()),
+                Value::Int64(200)
+            ),
+        ]);
+    }
+
+    #[test]
+    fn right_join_null_pads_unmatched_right_rows() {
+        let dir = tempdir().unwrap();
+        let (catalog, txn_mgr) = seed_users_and_orders(dir.path());
+        let engine = Engine::new(&catalog, &txn_mgr);
+
+        // Add an order whose user_id=999 matches nobody in the users table.
+        run_ok(
+            &engine,
+            "INSERT INTO orders (id, user_id, total) VALUES (99, 999, 500)",
+        );
+
+        let (_, rows) = run_select(
+            &engine,
+            "SELECT users.id, orders.total FROM users RIGHT JOIN orders ON users.id = orders.user_id",
+        );
+        // 3 matched orders + 1 unmatched order = 4 rows total
+        assert_eq!(rows.len(), 4);
+
+        // Exactly one row must have NULL in users.id (the unmatched order).
+        let null_rows: Vec<&Tuple> = rows
+            .iter()
+            .filter(|r| r.get(0).unwrap().is_null())
+            .collect();
+        assert_eq!(null_rows.len(), 1, "one right row has no matching user");
+        assert_eq!(
+            null_rows[0].get(1).unwrap(),
+            &Value::Int64(500),
+            "orders.total=500 for the unmatched order"
+        );
     }
 
     // ──────────────────────── binder unit tests ──────────────────────────────

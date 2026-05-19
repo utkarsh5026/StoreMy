@@ -29,7 +29,7 @@ use crate::{
     FileId, IndexId, TransactionId, Type, Value,
     catalog::{LiveIndex, manager::Catalog},
     engine::{ConstraintViolation, Engine, EngineError, StatementResult},
-    execution::{ColumnLookup, ResolvedExpr, resolve_expr},
+    execution::{ColumnLookup, ResolvedExpr},
     parser::statements::{Expr, InsertSource, InsertStatement},
     primitives::{ColumnId, NonEmptyString},
     transaction::Transaction,
@@ -654,7 +654,7 @@ impl Engine<'_> {
             .map(|row| {
                 row.into_iter()
                     .map(|expr| {
-                        let resolved = resolve_expr(&NoColumns, expr).map_err(|e| {
+                        let resolved = ResolvedExpr::resolve(expr, &NoColumns).map_err(|e| {
                             EngineError::Unsupported(format!("INSERT expression error: {e}"))
                         })?;
                         resolved.eval(&empty).map_err(|e| {

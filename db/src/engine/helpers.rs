@@ -9,7 +9,7 @@ use crate::{
         systable::FkAction,
     },
     engine::{ConstraintViolation, Engine, EngineError},
-    execution::{ColumnLookup, ExecutionError, ResolvedExpr, resolve_expr},
+    execution::{ColumnLookup, ExecutionError, ResolvedExpr},
     heap::file::HeapFile,
     parser::statements::TableConstraint,
     primitives::{ColumnId, NonEmptyString, RecordId},
@@ -427,8 +427,8 @@ impl Engine<'_> {
         constraints
             .iter()
             .map(|c| {
-                let resolved =
-                    resolve_expr(&SchemaLookup(schema), c.expr.clone()).map_err(|e| {
+                let resolved = ResolvedExpr::resolve(c.expr.clone(), &SchemaLookup(schema))
+                    .map_err(|e| {
                         EngineError::TypeError(format!("CHECK constraint '{}': {e}", c.name))
                     })?;
                 Ok((c.name.clone(), resolved))

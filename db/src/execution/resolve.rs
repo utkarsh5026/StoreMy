@@ -8,7 +8,7 @@
 //! `eval_expr` evaluates such a node it must walk the schema to find the
 //! matching field — a string comparison per column reference per row.
 //!
-//! [`resolve_expr`] does that lookup *once*, at bind time, and replaces every
+//! [`ResolvedExpr::resolve`] does that lookup *once*, at bind time, and replaces every
 //! `ColumnRef` with the numeric [`ColumnId`] it resolves to. The resulting
 //! [`ResolvedExpr`] can then be evaluated by [`ResolvedExpr::eval`] with a plain
 //! index lookup — no string comparison, no schema argument, no allocation.
@@ -40,11 +40,11 @@ use crate::{
 
 /// Minimal interface for mapping a column reference to a [`ColumnId`].
 ///
-/// Defined here in `execution` so that [`resolve_expr`] has no dependency on
+/// Defined here in `execution` so that [`ResolvedExpr::resolve`] has no dependency on
 /// the engine layer. The engine's `Scope` (multi-table SELECT) and
 /// `SingleTableScope` (single-table DML) both implement this trait.
 ///
-/// Returns `None` when the column is unknown or ambiguous — [`resolve_expr`]
+/// Returns `None` when the column is unknown or ambiguous — [`ResolvedExpr::resolve`]
 /// converts that into an [`ExecutionError`].
 pub trait ColumnLookup {
     fn lookup(&self, qualifier: Option<&str>, name: &str) -> Option<ColumnId>;
@@ -56,7 +56,7 @@ pub trait ColumnLookup {
 /// - `Column(ColumnRef)` → `Column(ColumnId)` — string name replaced by index.
 /// - [`CaseBranch`] → [`ResolvedCaseBranch`] — branches over `ResolvedExpr`.
 ///
-/// Produced by [`resolve_expr`]; evaluated by [`ResolvedExpr::eval`], which
+/// Produced by [`ResolvedExpr::resolve`]; evaluated by [`ResolvedExpr::eval`], which
 /// needs only `&Tuple` — no schema parameter, no string lookup.
 #[derive(Debug, Clone, PartialEq)]
 pub enum ResolvedExpr {
@@ -322,112 +322,186 @@ impl ResolvedExpr {
             _ => Type::String,
         }
     }
-}
 
-/// Walks an [`Expr`] tree and replaces every `Column(ColumnRef)` node with
-/// `Column(ColumnId)` using `resolver`.
-///
-/// All other nodes are reconstructed recursively — the tree shape is preserved.
-///
-/// # Errors
-///
-/// Returns [`ExecutionError::TypeError`] when `resolver` returns `None` for a
-/// column reference (unknown or ambiguous column).
-pub fn resolve_expr(
-    resolver: &impl ColumnLookup,
-    expr: Expr,
-) -> Result<ResolvedExpr, ExecutionError> {
-    match expr {
-        Expr::Column(col_ref) => {
-            let id = resolver
-                .lookup(col_ref.qualifier.as_deref(), col_ref.name.as_str())
-                .ok_or_else(|| {
-                    ExecutionError::TypeError(format!("unknown column '{}'", col_ref.name))
-                })?;
-            Ok(ResolvedExpr::Column(id))
-        }
+    /// Resolves a parsed [`Expr`] into a `ResolvedExpr` by replacing every
+    /// `ColumnRef` with the [`ColumnId`] that `resolver` returns.
+    ///
+    /// This is the entry point for bind-time column resolution.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ExecutionError::TypeError`] when `resolver` returns `None` for
+    /// any column reference (unknown or ambiguous column).
+    pub fn resolve(expr: Expr, resolver: &impl ColumnLookup) -> Result<Self, ExecutionError> {
+        match expr {
+            Expr::Column(col_ref) => {
+                let id = resolver
+                    .lookup(col_ref.qualifier.as_deref(), col_ref.name.as_str())
+                    .ok_or_else(|| {
+                        ExecutionError::TypeError(format!("unknown column '{}'", col_ref.name))
+                    })?;
+                Ok(Self::Column(id))
+            }
 
-        Expr::Literal(v) => Ok(ResolvedExpr::Literal(v)),
+            Expr::Literal(v) => Ok(Self::Literal(v)),
 
-        Expr::BinaryOp { lhs, op, rhs } => Ok(ResolvedExpr::BinaryOp {
-            lhs: Box::new(resolve_expr(resolver, *lhs)?),
-            op,
-            rhs: Box::new(resolve_expr(resolver, *rhs)?),
-        }),
+            Expr::BinaryOp { lhs, op, rhs } => Ok(Self::BinaryOp {
+                lhs: Box::new(Self::resolve(*lhs, resolver)?),
+                op,
+                rhs: Box::new(Self::resolve(*rhs, resolver)?),
+            }),
 
-        Expr::UnaryOp { op, operand } => Ok(ResolvedExpr::UnaryOp {
-            op,
-            operand: Box::new(resolve_expr(resolver, *operand)?),
-        }),
+            Expr::UnaryOp { op, operand } => Ok(Self::UnaryOp {
+                op,
+                operand: Box::new(Self::resolve(*operand, resolver)?),
+            }),
 
-        Expr::IsNull { expr, negated } => Ok(ResolvedExpr::IsNull {
-            expr: Box::new(resolve_expr(resolver, *expr)?),
-            negated,
-        }),
+            Expr::IsNull { expr, negated } => Ok(Self::IsNull {
+                expr: Box::new(Self::resolve(*expr, resolver)?),
+                negated,
+            }),
 
-        Expr::In {
-            expr,
-            list,
-            negated,
-        } => Ok(ResolvedExpr::In {
-            expr: Box::new(resolve_expr(resolver, *expr)?),
-            list: list
-                .into_iter()
-                .map(|e| resolve_expr(resolver, e))
-                .collect::<Result<Vec<_>, _>>()?,
-            negated,
-        }),
+            Expr::In {
+                expr,
+                list,
+                negated,
+            } => Ok(Self::In {
+                expr: Box::new(Self::resolve(*expr, resolver)?),
+                list: list
+                    .into_iter()
+                    .map(|e| Self::resolve(e, resolver))
+                    .collect::<Result<Vec<_>, _>>()?,
+                negated,
+            }),
 
-        Expr::Between {
-            expr,
-            low,
-            high,
-            negated,
-        } => Ok(ResolvedExpr::Between {
-            expr: Box::new(resolve_expr(resolver, *expr)?),
-            low: Box::new(resolve_expr(resolver, *low)?),
-            high: Box::new(resolve_expr(resolver, *high)?),
-            negated,
-        }),
+            Expr::Between {
+                expr,
+                low,
+                high,
+                negated,
+            } => Ok(Self::Between {
+                expr: Box::new(Self::resolve(*expr, resolver)?),
+                low: Box::new(Self::resolve(*low, resolver)?),
+                high: Box::new(Self::resolve(*high, resolver)?),
+                negated,
+            }),
 
-        Expr::Like {
-            expr,
-            pattern,
-            negated,
-        } => Ok(ResolvedExpr::Like {
-            expr: Box::new(resolve_expr(resolver, *expr)?),
-            pattern: Box::new(resolve_expr(resolver, *pattern)?),
-            negated,
-        }),
+            Expr::Like {
+                expr,
+                pattern,
+                negated,
+            } => Ok(Self::Like {
+                expr: Box::new(Self::resolve(*expr, resolver)?),
+                pattern: Box::new(Self::resolve(*pattern, resolver)?),
+                negated,
+            }),
 
-        Expr::Case {
-            operand,
-            branches,
-            else_result,
-        } => Ok(ResolvedExpr::Case {
-            operand: operand
-                .map(|e| resolve_expr(resolver, *e).map(Box::new))
-                .transpose()?,
-            branches: branches
-                .into_iter()
-                .map(|CaseBranch { when, then }| {
-                    Ok(ResolvedCaseBranch {
-                        when: resolve_expr(resolver, when)?,
-                        then: resolve_expr(resolver, then)?,
+            Expr::Case {
+                operand,
+                branches,
+                else_result,
+            } => Ok(Self::Case {
+                operand: operand
+                    .map(|e| Self::resolve(*e, resolver).map(Box::new))
+                    .transpose()?,
+                branches: branches
+                    .into_iter()
+                    .map(|CaseBranch { when, then }| {
+                        Ok(ResolvedCaseBranch {
+                            when: Self::resolve(when, resolver)?,
+                            then: Self::resolve(then, resolver)?,
+                        })
                     })
-                })
-                .collect::<Result<Vec<_>, ExecutionError>>()?,
-            else_result: else_result
-                .map(|e| resolve_expr(resolver, *e).map(Box::new))
-                .transpose()?,
-        }),
+                    .collect::<Result<Vec<_>, ExecutionError>>()?,
+                else_result: else_result
+                    .map(|e| Self::resolve(*e, resolver).map(Box::new))
+                    .transpose()?,
+            }),
 
-        Expr::Agg { func, arg } => Ok(ResolvedExpr::Agg {
-            func,
-            arg: Box::new(resolve_expr(resolver, *arg)?),
-        }),
+            Expr::Agg { func, arg } => Ok(Self::Agg {
+                func,
+                arg: Box::new(Self::resolve(*arg, resolver)?),
+            }),
 
-        Expr::CountStar => Ok(ResolvedExpr::CountStar),
+            Expr::CountStar => Ok(Self::CountStar),
+        }
+    }
+
+    /// Rewrites every `Column(id)` leaf in the expression tree by applying `f`,
+    /// leaving all other nodes structurally identical.
+    ///
+    /// `F: Copy` lets the same closure be passed into every recursive call
+    /// without cloning — the compiler copies the function pointer / small capture.
+    #[must_use]
+    pub fn map_columns<F>(self, f: F) -> Self
+    where
+        F: Fn(ColumnId) -> ColumnId + Copy,
+    {
+        match self {
+            Self::Column(id) => Self::Column(f(id)),
+            Self::Literal(_) | Self::CountStar => self,
+            Self::BinaryOp { lhs, op, rhs } => Self::BinaryOp {
+                lhs: Box::new(lhs.map_columns(f)),
+                op,
+                rhs: Box::new(rhs.map_columns(f)),
+            },
+            Self::UnaryOp { op, operand } => Self::UnaryOp {
+                op,
+                operand: Box::new(operand.map_columns(f)),
+            },
+            Self::IsNull { expr, negated } => Self::IsNull {
+                expr: Box::new(expr.map_columns(f)),
+                negated,
+            },
+            Self::In {
+                expr,
+                list,
+                negated,
+            } => Self::In {
+                expr: Box::new(expr.map_columns(f)),
+                list: list.into_iter().map(|e| e.map_columns(f)).collect(),
+                negated,
+            },
+            Self::Between {
+                expr,
+                low,
+                high,
+                negated,
+            } => Self::Between {
+                expr: Box::new(expr.map_columns(f)),
+                low: Box::new(low.map_columns(f)),
+                high: Box::new(high.map_columns(f)),
+                negated,
+            },
+            Self::Like {
+                expr,
+                pattern,
+                negated,
+            } => Self::Like {
+                expr: Box::new(expr.map_columns(f)),
+                pattern: Box::new(pattern.map_columns(f)),
+                negated,
+            },
+            Self::Case {
+                operand,
+                branches,
+                else_result,
+            } => Self::Case {
+                operand: operand.map(|e| Box::new(e.map_columns(f))),
+                branches: branches
+                    .into_iter()
+                    .map(|b| ResolvedCaseBranch {
+                        when: b.when.map_columns(f),
+                        then: b.then.map_columns(f),
+                    })
+                    .collect(),
+                else_result: else_result.map(|e| Box::new(e.map_columns(f))),
+            },
+            Self::Agg { func, arg } => Self::Agg {
+                func,
+                arg: Box::new(arg.map_columns(f)),
+            },
+        }
     }
 }
 
@@ -582,7 +656,7 @@ mod tests {
     #[test]
     fn literal_passes_through() {
         let r = schema(&[("x", Type::Int64)]);
-        let resolved = resolve_expr(&r, Expr::Literal(Value::Int64(42))).unwrap();
+        let resolved = ResolvedExpr::resolve(Expr::Literal(Value::Int64(42)), &r).unwrap();
         assert_eq!(resolved, ResolvedExpr::Literal(Value::Int64(42)));
     }
 
@@ -593,14 +667,14 @@ mod tests {
             ("name", Type::String),
             ("age", Type::Int64),
         ]);
-        let resolved = resolve_expr(&r, col("age")).unwrap();
+        let resolved = ResolvedExpr::resolve(col("age"), &r).unwrap();
         assert_eq!(resolved, ResolvedExpr::Column(col_id(2)));
     }
 
     #[test]
     fn unknown_column_errors() {
         let r = schema(&[("id", Type::Int64)]);
-        let err = resolve_expr(&r, col("nope")).unwrap_err();
+        let err = ResolvedExpr::resolve(col("nope"), &r).unwrap_err();
         assert!(matches!(err, ExecutionError::TypeError(_)));
     }
 
@@ -612,7 +686,7 @@ mod tests {
             op: BinOp::Gt,
             rhs: Box::new(Expr::Literal(Value::Int64(18))),
         };
-        let resolved = resolve_expr(&r, expr).unwrap();
+        let resolved = ResolvedExpr::resolve(expr, &r).unwrap();
         assert_eq!(resolved, ResolvedExpr::BinaryOp {
             lhs: Box::new(ResolvedExpr::Column(col_id(0))),
             op: BinOp::Gt,
@@ -631,7 +705,7 @@ mod tests {
             ],
             negated: false,
         };
-        let resolved = resolve_expr(&r, expr).unwrap();
+        let resolved = ResolvedExpr::resolve(expr, &r).unwrap();
         let ResolvedExpr::In {
             expr,
             list,
@@ -652,7 +726,7 @@ mod tests {
             expr: Box::new(col("email")),
             negated: false,
         };
-        let resolved = resolve_expr(&r, expr).unwrap();
+        let resolved = ResolvedExpr::resolve(expr, &r).unwrap();
         assert_eq!(resolved, ResolvedExpr::IsNull {
             expr: Box::new(ResolvedExpr::Column(col_id(0))),
             negated: false,
@@ -670,7 +744,7 @@ mod tests {
         };
         let ResolvedExpr::Between {
             expr, low, high, ..
-        } = resolve_expr(&r, expr).unwrap()
+        } = ResolvedExpr::resolve(expr, &r).unwrap()
         else {
             panic!("expected Between");
         };
@@ -698,7 +772,7 @@ mod tests {
             operand,
             branches,
             else_result,
-        } = resolve_expr(&r, expr).unwrap()
+        } = ResolvedExpr::resolve(expr, &r).unwrap()
         else {
             panic!("expected Case");
         };
@@ -718,7 +792,7 @@ mod tests {
     #[test]
     fn count_star_passes_through() {
         let r = schema(&[]);
-        let resolved = resolve_expr(&r, Expr::CountStar).unwrap();
+        let resolved = ResolvedExpr::resolve(Expr::CountStar, &r).unwrap();
         assert_eq!(resolved, ResolvedExpr::CountStar);
     }
 
@@ -730,7 +804,7 @@ mod tests {
             func: AggFunc::Sum,
             arg: Box::new(col("amount")),
         };
-        let ResolvedExpr::Agg { func, arg } = resolve_expr(&r, expr).unwrap() else {
+        let ResolvedExpr::Agg { func, arg } = ResolvedExpr::resolve(expr, &r).unwrap() else {
             panic!("expected Agg");
         };
         assert_eq!(func, AggFunc::Sum);
@@ -745,7 +819,7 @@ mod tests {
             op: BinOp::And,
             rhs: Box::new(col("nope")),
         };
-        assert!(resolve_expr(&r, expr).is_err());
+        assert!(ResolvedExpr::resolve(expr, &r).is_err());
     }
 
     // ── ResolvedExpr::eval ───────────────────────────────────────────────────
@@ -1051,5 +1125,48 @@ mod tests {
             rhs: Box::new(lit(Value::Int64(4))),
         };
         assert_eq!(eval(&expr, &t), Value::Int64(20));
+    }
+
+    #[test]
+    fn map_columns_remaps_column_leaf() {
+        // col[0] shifted by +3 → col[3]
+        let expr = resolved_col(0);
+        let mapped = expr.map_columns(|id| col_id(u32::try_from(usize::from(id)).unwrap() + 3));
+        assert_eq!(mapped, ResolvedExpr::Column(col_id(3)));
+    }
+
+    #[test]
+    fn map_columns_leaves_literal_unchanged() {
+        let expr = lit(Value::Int64(99));
+        let mapped = expr.clone().map_columns(|_| col_id(99));
+        assert_eq!(mapped, expr);
+    }
+
+    #[test]
+    fn map_columns_recurses_binary_op() {
+        // col[0] = col[3]  →  swap so old-left→new-right, old-right→new-left
+        // left_width=3, right_width=3
+        // col[0] (< 3) → right side: 3 + 0 = 3
+        // col[3] (≥ 3) → left  side: 3 - 3 = 0
+        let expr = ResolvedExpr::BinaryOp {
+            lhs: Box::new(resolved_col(0)),
+            op: BinOp::Eq,
+            rhs: Box::new(resolved_col(3)),
+        };
+        let left_width = 3usize;
+        let right_width = 3usize;
+        let mapped = expr.map_columns(|id| {
+            let i = usize::from(id);
+            if i < left_width {
+                col_id(u32::try_from(right_width + i).unwrap())
+            } else {
+                col_id(u32::try_from(i - left_width).unwrap())
+            }
+        });
+        assert_eq!(mapped, ResolvedExpr::BinaryOp {
+            lhs: Box::new(ResolvedExpr::Column(col_id(3))),
+            op: BinOp::Eq,
+            rhs: Box::new(ResolvedExpr::Column(col_id(0))),
+        });
     }
 }
