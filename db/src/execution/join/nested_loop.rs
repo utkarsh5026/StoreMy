@@ -32,9 +32,10 @@ use crate::{
 pub struct NestedLoopJoin<'a> {
     inputs: Box<JoinInputs<'a>>,
     predicate: ResolvedExpr,
-    join_type: JoinType,
     right_buf: Option<Vec<Tuple>>,
     row_matches: VecDeque<Tuple>,
+    left_exhausted: bool,
+    right_maches: Vec<bool>,
 }
 
 impl<'a> NestedLoopJoin<'a> {
@@ -50,16 +51,17 @@ impl<'a> NestedLoopJoin<'a> {
         Self {
             inputs: Box::new(JoinInputs::new(left, right)),
             predicate,
-            join_type: JoinType::Inner,
             right_buf: None,
             row_matches: VecDeque::new(),
+            left_exhausted: false,
+            right_maches: Vec::new(),
         }
     }
 
     /// Sets the join type. Use [`JoinType::LeftOuter`] to get `LEFT JOIN` semantics.
     #[must_use]
     pub fn with_join_type(mut self, join_type: JoinType) -> Self {
-        self.join_type = join_type;
+        self.inputs.join_type = join_type;
         self
     }
 
@@ -87,8 +89,34 @@ impl<'a> NestedLoopJoin<'a> {
             buf.push(tuple);
         }
         tracing::debug!(tuples = buf.len(), "nlj: right side buffered");
+
+        if self.inputs.join_type == JoinType::FullOuter {
+            self.right_maches.resize(buf.len(), false);
+        } else {
+            self.right_maches.clear();
+        }
+
         self.right_buf = Some(buf);
         Ok(())
+    }
+
+    /// Pushes unmatched right-side tuples (for FULL OUTER JOIN).
+    ///
+    /// For each tuple from the buffered right input that was not matched with any left tuple,
+    /// produces a joined tuple with all-NULL values for the left columns,
+    /// and the unmatched right-side tuple for the right columns. These are pushed to
+    /// `self.row_matches` for emission, ensuring the FULL OUTER JOIN contract is honored.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the right-side buffer has not yet been materialized (`self.right_buf` is None).
+    fn fill_unmatched_right_tuples(&mut self) {
+        for (idx, right) in self.right_buf.as_deref().unwrap().iter().enumerate() {
+            if !self.right_maches[idx] {
+                let joined = null_right_tuple(self.left_width()).concat(right);
+                self.row_matches.push_back(joined);
+            }
+        }
     }
 }
 
@@ -115,18 +143,30 @@ impl FallibleIterator for NestedLoopJoin<'_> {
             }
 
             let Some(l) = self.inputs.left.next()? else {
-                return Ok(None);
+                if self.inputs.join_type != JoinType::FullOuter || self.left_exhausted {
+                    return Ok(None);
+                }
+
+                self.left_exhausted = true;
+                self.fill_unmatched_right_tuples();
+                continue;
             };
 
-            for right in self.right_buf.as_deref().unwrap() {
+            for (right_idx, right) in self.right_buf.as_deref().unwrap().iter().enumerate() {
                 let joined = l.concat(right);
                 if self.predicate.eval_bool(&joined)? {
+                    if self.inputs.join_type == JoinType::FullOuter {
+                        self.right_maches[right_idx] = true;
+                    }
                     self.row_matches.push_back(joined);
                 }
             }
 
-            // LEFT OUTER: if this left row matched nothing, emit it with a NULL-padded right side.
-            if self.join_type == JoinType::LeftOuter && self.row_matches.is_empty() {
+            let is_outer = matches!(
+                self.inputs.join_type,
+                JoinType::LeftOuter | JoinType::FullOuter
+            );
+            if is_outer && self.row_matches.is_empty() {
                 self.row_matches
                     .push_back(l.concat(&null_right_tuple(right_width)));
             }
@@ -267,5 +307,130 @@ mod tests {
         };
         let mut j = NestedLoopJoin::new(scan(&left), scan(&right), pred);
         assert_eq!(drain(&mut j).len(), 1);
+    }
+
+    // Output layout per tuple: [a, b, x, y]
+    //   Matched pair:        [a_val, b_val, x_val, y_val]
+    //   Unmatched left row:  [a_val, b_val, Null,  Null ]
+    //   Unmatched right row: [Null,  Null,  x_val, y_val]
+
+    #[test]
+    fn test_nlj_full_outer_basic() {
+        // left keys {1,2}, right keys {2,3} — one match, one dangling left, one dangling right
+        let left = build_heap(300, &[tup(1, 10), tup(2, 20)]);
+        let right = build_heap_xy(301, &[tup(2, 200), tup(3, 300)]);
+        let mut j = NestedLoopJoin::new(scan(&left), scan(&right), nlj_eq_0_0_w2())
+            .with_join_type(JoinType::FullOuter);
+        let out = drain(&mut j);
+        assert_eq!(out.len(), 3);
+
+        let matched = out
+            .iter()
+            .find(|t| {
+                matches!(t.get(0), Some(Value::Int32(2)))
+                    && matches!(t.get(2), Some(Value::Int32(2)))
+            })
+            .expect("matched row (2,2) missing");
+        assert_eq!(int(matched, 0), 2);
+        assert_eq!(int(matched, 2), 2);
+
+        let unmatched_left = out
+            .iter()
+            .find(|t| matches!(t.get(0), Some(Value::Int32(1))))
+            .expect("unmatched left row missing");
+        assert!(matches!(unmatched_left.get(2), Some(Value::Null)));
+
+        let unmatched_right = out
+            .iter()
+            .find(|t| matches!(t.get(2), Some(Value::Int32(3))))
+            .expect("unmatched right row missing");
+        assert!(matches!(unmatched_right.get(0), Some(Value::Null)));
+    }
+
+    #[test]
+    fn test_nlj_full_outer_no_matches() {
+        // disjoint keys — no pairs satisfy the predicate, both sides emit dangling rows
+        let left = build_heap(302, &[tup(1, 10)]);
+        let right = build_heap_xy(303, &[tup(2, 200)]);
+        let mut j = NestedLoopJoin::new(scan(&left), scan(&right), nlj_eq_0_0_w2())
+            .with_join_type(JoinType::FullOuter);
+        let out = drain(&mut j);
+        assert_eq!(out.len(), 2);
+        assert!(
+            out.iter().any(|t| matches!(t.get(2), Some(Value::Null))),
+            "unmatched left row missing"
+        );
+        assert!(
+            out.iter().any(|t| matches!(t.get(0), Some(Value::Null))),
+            "unmatched right row missing"
+        );
+    }
+
+    #[test]
+    fn test_nlj_full_outer_empty_left() {
+        // left is empty — every right row must appear with Null left columns
+        let left = build_heap(304, &[]);
+        let right = build_heap_xy(305, &[tup(1, 100), tup(2, 200)]);
+        let mut j = NestedLoopJoin::new(scan(&left), scan(&right), nlj_eq_0_0_w2())
+            .with_join_type(JoinType::FullOuter);
+        let out = drain(&mut j);
+        assert_eq!(out.len(), 2);
+        assert!(out.iter().all(|t| matches!(t.get(0), Some(Value::Null))));
+        let mut xs: Vec<i32> = out.iter().map(|t| int(t, 2)).collect();
+        xs.sort_unstable();
+        assert_eq!(xs, vec![1, 2]);
+    }
+
+    #[test]
+    fn test_nlj_full_outer_empty_right() {
+        // right is empty — every left row must appear with Null right columns
+        let left = build_heap(306, &[tup(1, 10), tup(2, 20)]);
+        let right = build_heap_xy(307, &[]);
+        let mut j = NestedLoopJoin::new(scan(&left), scan(&right), nlj_eq_0_0_w2())
+            .with_join_type(JoinType::FullOuter);
+        let out = drain(&mut j);
+        assert_eq!(out.len(), 2);
+        assert!(out.iter().all(|t| matches!(t.get(2), Some(Value::Null))));
+    }
+
+    #[test]
+    fn test_nlj_full_outer_both_empty() {
+        let left = build_heap(308, &[]);
+        let right = build_heap_xy(309, &[]);
+        let mut j = NestedLoopJoin::new(scan(&left), scan(&right), nlj_eq_0_0_w2())
+            .with_join_type(JoinType::FullOuter);
+        assert!(j.next().unwrap().is_none());
+    }
+
+    #[test]
+    fn test_nlj_full_outer_all_match_same_count_as_inner() {
+        // when every row matches, full outer and inner produce identical row counts
+        let left = build_heap(310, &[tup(1, 10), tup(2, 20)]);
+        let right = build_heap_xy(311, &[tup(1, 100), tup(2, 200)]);
+        let pred = nlj_eq_0_0_w2();
+        let mut inner = NestedLoopJoin::new(scan(&left), scan(&right), pred.clone());
+        let mut full = NestedLoopJoin::new(scan(&left), scan(&right), pred)
+            .with_join_type(JoinType::FullOuter);
+        assert_eq!(drain(&mut inner).len(), drain(&mut full).len());
+    }
+
+    #[test]
+    fn test_nlj_full_outer_multiple_unmatched_right() {
+        // left key {2}, right keys {1,2,3} — one match, two dangling right rows
+        let left = build_heap(312, &[tup(2, 20)]);
+        let right = build_heap_xy(313, &[tup(1, 100), tup(2, 200), tup(3, 300)]);
+        let mut j = NestedLoopJoin::new(scan(&left), scan(&right), nlj_eq_0_0_w2())
+            .with_join_type(JoinType::FullOuter);
+        let out = drain(&mut j);
+        assert_eq!(out.len(), 3);
+
+        let null_left_rows: Vec<_> = out
+            .iter()
+            .filter(|t| matches!(t.get(0), Some(Value::Null)))
+            .collect();
+        assert_eq!(null_left_rows.len(), 2);
+        let mut dangling_xs: Vec<i32> = null_left_rows.iter().map(|t| int(t, 2)).collect();
+        dangling_xs.sort_unstable();
+        assert_eq!(dangling_xs, vec![1, 3]);
     }
 }

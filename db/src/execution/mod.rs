@@ -117,6 +117,21 @@ pub enum PlanNode<'a> {
     Aggregate(aggregate::Aggregate<'a>),
 }
 
+/// Selects the physical join algorithm and carries its algorithm-specific predicate.
+///
+/// Pass this to [`PlanNode::join`] together with a [`join::JoinType`] to build any join node
+/// without needing a separate factory function per algorithm × join-type combination.
+pub enum JoinAlgo {
+    /// Cartesian product — no predicate. [`join::JoinType`] is ignored.
+    Cross,
+    /// Nested-loop join evaluated against an arbitrary boolean expression.
+    NestedLoop(ResolvedExpr),
+    /// Hash join keyed on a single equality column pair.
+    Hash(join::JoinPredicate),
+    /// Sort-merge join keyed on a single equality column pair.
+    SortMerge(join::JoinPredicate),
+}
+
 impl<'a> PlanNode<'a> {
     pub fn seq_scan(file: &'a HeapFile, txn: TransactionId) -> Self {
         Self::SeqScan(scan::SeqScan::new(file, txn))
@@ -154,40 +169,23 @@ impl<'a> PlanNode<'a> {
         )?))
     }
 
-    pub fn cross_join(left: Self, right: Self) -> Self {
-        Self::CrossJoin(join::CrossJoin::new(left, right))
-    }
-
-    pub fn nested_loop_join(left: Self, right: Self, predicate: ResolvedExpr) -> Self {
-        Self::NestedLoopJoin(join::NestedLoopJoin::new(left, right, predicate))
-    }
-
-    pub fn nested_loop_left_outer_join(left: Self, right: Self, predicate: ResolvedExpr) -> Self {
-        Self::NestedLoopJoin(
-            join::NestedLoopJoin::new(left, right, predicate)
-                .with_join_type(join::JoinType::LeftOuter),
-        )
-    }
-
-    pub fn hash_join(left: Self, right: Self, predicate: join::JoinPredicate) -> Self {
-        Self::HashJoin(join::HashJoin::new(left, right, predicate))
-    }
-
-    pub fn hash_left_outer_join(left: Self, right: Self, predicate: join::JoinPredicate) -> Self {
-        Self::HashJoin(
-            join::HashJoin::new(left, right, predicate).with_join_type(join::JoinType::LeftOuter),
-        )
-    }
-
-    pub fn sort_merge_left_outer_join(
-        left: Self,
-        right: Self,
-        predicate: join::JoinPredicate,
-    ) -> Self {
-        Self::SortMergeJoin(
-            join::SortMergeJoin::new(left, right, predicate)
-                .with_join_type(join::JoinType::LeftOuter),
-        )
+    /// Builds a join node for `left ⋈ right`.
+    ///
+    /// `algo` picks the physical algorithm and carries its predicate; `join_type` controls
+    /// how unmatched rows are handled. [`JoinAlgo::Cross`] ignores `join_type`.
+    pub fn join(left: Self, right: Self, algo: JoinAlgo, join_type: join::JoinType) -> Self {
+        match algo {
+            JoinAlgo::Cross => Self::CrossJoin(join::CrossJoin::new(left, right)),
+            JoinAlgo::NestedLoop(expr) => Self::NestedLoopJoin(
+                join::NestedLoopJoin::new(left, right, expr).with_join_type(join_type),
+            ),
+            JoinAlgo::Hash(pred) => {
+                Self::HashJoin(join::HashJoin::new(left, right, pred).with_join_type(join_type))
+            }
+            JoinAlgo::SortMerge(pred) => Self::SortMergeJoin(
+                join::SortMergeJoin::new(left, right, pred).with_join_type(join_type),
+            ),
+        }
     }
 
     pub fn aggregate(

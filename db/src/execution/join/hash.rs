@@ -60,7 +60,6 @@ use crate::{
 pub struct HashJoin<'a> {
     inputs: Box<JoinInputs<'a>>,
     predicate: JoinPredicate,
-    join_type: JoinType,
     residual: Option<ResolvedExpr>,
     hash_table: Option<HashMap<Value, Vec<Tuple>>>,
     bucket_matches: VecDeque<Tuple>,
@@ -104,7 +103,6 @@ impl<'a> HashJoin<'a> {
         Self {
             inputs: Box::new(JoinInputs::new(left, right)),
             predicate,
-            join_type: JoinType::Inner,
             residual: None,
             hash_table: None,
             bucket_matches: VecDeque::new(),
@@ -119,7 +117,7 @@ impl<'a> HashJoin<'a> {
     /// with `NULL` right columns when there is no key match (or no residual match).
     #[must_use]
     pub fn with_join_type(mut self, join_type: JoinType) -> Self {
-        self.join_type = join_type;
+        self.inputs.join_type = join_type;
         self
     }
 
@@ -232,7 +230,7 @@ impl<'a> HashJoin<'a> {
     fn begin_left_probe(&mut self, l: Tuple, left_idx: usize, right_width: usize) -> Option<Tuple> {
         let key = match l.get(left_idx) {
             Some(Value::Null) | None => {
-                if self.join_type == JoinType::LeftOuter {
+                if self.inputs.join_type == JoinType::LeftOuter {
                     return Some(l.concat(&null_right_tuple(right_width)));
                 }
                 return None;
@@ -248,7 +246,7 @@ impl<'a> HashJoin<'a> {
                 self.left_tuple = Some(l);
             }
             _ => {
-                if self.join_type == JoinType::LeftOuter {
+                if self.inputs.join_type == JoinType::LeftOuter {
                     return Some(l.concat(&null_right_tuple(right_width)));
                 }
             }
@@ -289,7 +287,7 @@ impl FallibleIterator for HashJoin<'_> {
 
             // pending is exhausted. For LEFT OUTER: if this left row produced no output
             // (all candidates were rejected by the residual), emit a NULL-padded row.
-            if self.join_type == JoinType::LeftOuter
+            if self.inputs.join_type == JoinType::LeftOuter
                 && let Some(l) = self.left_tuple.take()
                 && !self.left_matched
             {
