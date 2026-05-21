@@ -385,7 +385,7 @@ impl Display for WhereCondition {
 /// -- SELECT SUM(total) FROM orders GROUP BY user_id;
 /// --                                            --> Expr::Agg(AggFunc::Sum,   "total")
 /// ```
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AggFunc {
     /// `COUNT(col)` — number of non-null values.
     Count,

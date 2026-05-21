@@ -16,10 +16,7 @@
 //! sorted before assertion. [`sort_by_int`] sorts by an integer column index;
 //! `NULL` sorts last via an `i64::MAX` sentinel.
 
-use storemy::{
-    Value,
-    engine::{EngineError, StatementResult},
-};
+use storemy::{Value, engine::StatementResult};
 
 use crate::common::TestDb;
 
@@ -295,8 +292,8 @@ fn left_join_empty_right_all_left_rows_preserved_with_nulls() {
     sort_by_int(&mut rows, 0);
 
     assert_eq!(rows.len(), 3);
-    for (i, row) in rows.iter().enumerate() {
-        assert_eq!(row[0], Value::Int64(i as i64 + 1));
+    for (expected_id, row) in [1i64, 2, 3].into_iter().zip(rows.iter()) {
+        assert_eq!(row[0], Value::Int64(expected_id));
         assert_eq!(
             row[1],
             Value::Null,
@@ -370,8 +367,6 @@ fn cross_join_produces_full_cartesian_product() {
     ]);
 }
 
-// ── three-table chain ─────────────────────────────────────────────────────────
-
 /// Chaining three tables tests that column-offset arithmetic stays correct as
 /// the join schema grows. After `a JOIN b`, the merged schema has 3 columns;
 /// the second join key from `b` must resolve to index 2 (not 1), and the
@@ -410,21 +405,32 @@ fn three_table_chain_join_resolves_column_offsets_correctly() {
 
 // ── unsupported join kinds ────────────────────────────────────────────────────
 
-/// `RIGHT JOIN` is not yet implemented. The planner must surface
-/// `EngineError::Unsupported` rather than panicking or silently returning wrong
-/// results. This test documents the current limitation and guards against
-/// accidentally un-blocking it without a proper implementation.
+/// `A RIGHT JOIN B` keeps every row from B, NULL-padding the A side when no
+/// match exists. Internally the planner rewrites it as `B LEFT JOIN A` plus a
+/// reorder projection, so this test verifies the observable result is correct.
 #[test]
-fn right_join_returns_unsupported_error() {
+fn right_join_is_symmetric_with_left_join() {
     let db = TestDb::new();
     db.run_ok("CREATE TABLE t1 (id INT)");
     db.run_ok("CREATE TABLE t2 (id INT)");
+    db.run_ok("INSERT INTO t1 (id) VALUES (1), (2)");
+    db.run_ok("INSERT INTO t2 (id) VALUES (2), (3)");
 
-    let err = db
+    // t1 RIGHT JOIN t2 keeps every t2 row.
+    // t2 has id=2 (matches t1.id=2) and id=3 (no match → t1.id is NULL).
+    let result = db
         .run("SELECT * FROM t1 RIGHT JOIN t2 ON t1.id = t2.id")
-        .unwrap_err();
-    assert!(
-        matches!(err, EngineError::Unsupported(_)),
-        "expected Unsupported for RIGHT JOIN, got {err:?}"
-    );
+        .unwrap();
+
+    let rows = match result {
+        StatementResult::Selected { rows, .. } => rows,
+        other => panic!("expected Selected, got {other:?}"),
+    };
+    assert_eq!(rows.len(), 2, "one matched row + one null-padded row");
+
+    let null_rows: Vec<_> = rows
+        .iter()
+        .filter(|r| r.get(0).unwrap().is_null())
+        .collect();
+    assert_eq!(null_rows.len(), 1, "t2.id=3 has no match in t1");
 }

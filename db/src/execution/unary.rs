@@ -184,6 +184,18 @@ pub struct ProjectItem {
     pub alias: Option<NonEmptyString>,
 }
 
+impl ProjectItem {
+    pub fn new(expr: ResolvedExpr, alias: Option<NonEmptyString>) -> Self {
+        Self { expr, alias }
+    }
+}
+
+impl From<ResolvedExpr> for ProjectItem {
+    fn from(expr: ResolvedExpr) -> Self {
+        Self::new(expr, None)
+    }
+}
+
 #[derive(Debug)]
 pub struct Project<'a> {
     child: Box<PlanNode<'a>>,

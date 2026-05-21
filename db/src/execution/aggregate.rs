@@ -60,6 +60,25 @@ pub enum AggregateFunc {
     Avg,
 }
 
+impl From<crate::parser::statements::AggFunc> for AggregateFunc {
+    /// Converts a parser-level [`AggFunc`] into an execution-level [`AggregateFunc`].
+    ///
+    /// `COUNT(*)` is never routed through this conversion — it is represented as
+    /// [`ResolvedExpr::CountStar`] in the binder before this point. So
+    /// `AggFunc::Count` always means "count non-null column values" and maps to
+    /// [`AggregateFunc::CountCol`].
+    fn from(func: crate::parser::statements::AggFunc) -> Self {
+        use crate::parser::statements::AggFunc;
+        match func {
+            AggFunc::Count => Self::CountCol,
+            AggFunc::Sum => Self::Sum,
+            AggFunc::Avg => Self::Avg,
+            AggFunc::Min => Self::Min,
+            AggFunc::Max => Self::Max,
+        }
+    }
+}
+
 /// Computes the SQL output type of an aggregate function for the given input column type.
 ///
 /// This is used to infer the output [`Type`] of each aggregate in the `SELECT` list,
@@ -115,7 +134,21 @@ pub struct AggregateExpr {
     /// Expression evaluated per input row to obtain the value fed into the accumulator.
     /// Ignored for [`AggregateFunc::CountStar`].
     pub arg: ResolvedExpr,
+    /// Name of the output column.
+    ///
+    /// This is the name of the column that will appear in the output of the
+    /// aggregate. It is used to name the column in the output schema.
     pub output_name: NonEmptyString,
+}
+
+impl AggregateExpr {
+    pub fn new(func: AggregateFunc, arg: ResolvedExpr, output_name: NonEmptyString) -> Self {
+        Self {
+            func,
+            arg,
+            output_name,
+        }
+    }
 }
 
 /// Running state for one aggregate function over one group.

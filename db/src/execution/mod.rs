@@ -83,6 +83,14 @@ pub trait Executor: FallibleIterator<Item = Tuple, Error = ExecutionError> {
     fn rewind(&mut self) -> Result<(), ExecutionError> {
         Err(ExecutionError::RewindNotSupported)
     }
+
+    /// Returns the number of physical fields in the output schema of this operator.
+    ///
+    /// This accounts for all underlying representation fields that may be used for
+    /// disk or memory layout purposes, which may differ from the logical column count.
+    fn physical_num_fields(&self) -> usize {
+        self.schema().physical_num_fields()
+    }
 }
 
 /// A node in the physical query plan.
