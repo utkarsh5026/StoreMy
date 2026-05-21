@@ -6,6 +6,7 @@
     "addgroup",
     "adduser",
     "anyhow",
+    "behaviour",
     "Bitmask",
     "bpid",
     "btreeindex",
@@ -36,6 +37,7 @@
     "Fanout",
     "Freqs",
     "functools",
+    "groupby",
     "hashbrown",
     "hashindex",
     "heapage",
@@ -100,10 +102,10 @@
     "Txns",
     "unflushed"
   ],
-
   // ── Rust Analyzer ────────────────────────────────────────────────────────
-  "rust-analyzer.linkedProjects": ["db/Cargo.toml"],
-
+  "rust-analyzer.linkedProjects": [
+    "db/Cargo.toml"
+  ],
   // Use clippy instead of cargo check — catches more issues
   "rust-analyzer.check.command": "clippy",
   "rust-analyzer.check.extraArgs": [
@@ -117,7 +119,6 @@
     "-A",
     "clippy::missing_panics_doc"
   ],
-
   // Inlay hints — show types, lifetimes, param names inline
   "rust-analyzer.inlayHints.typeHints.enable": true,
   "rust-analyzer.inlayHints.chainingHints.enable": true,
@@ -127,12 +128,10 @@
   "rust-analyzer.inlayHints.bindingModeHints.enable": true,
   "rust-analyzer.inlayHints.discriminantHints.enable": "fieldless",
   "rust-analyzer.inlayHints.expressionAdjustmentHints.enable": "reborrow",
-
   // Completions
   "rust-analyzer.completion.autoimport.enable": true,
   "rust-analyzer.completion.postfix.enable": true,
   "rust-analyzer.completion.privateEditable.enable": true,
-
   // Show documentation on hover
   "rust-analyzer.hover.documentation.enable": true,
   "rust-analyzer.hover.documentation.keywords.enable": true,
@@ -141,10 +140,8 @@
   "rust-analyzer.hover.actions.debug.enable": true,
   "rust-analyzer.hover.actions.references.enable": true,
   "rust-analyzer.hover.actions.implementations.enable": true,
-
   // Proc macro support (needed for thiserror, etc.)
   "rust-analyzer.procMacro.enable": true,
-
   // Use nightly rustfmt for format-on-save — rustfmt.toml uses unstable options
   // (imports_granularity, group_imports, wrap_comments, ...). Stable rustfmt
   // silently ignores them, so we pin the same nightly as Makefile/CI.
@@ -155,21 +152,17 @@
     "rustfmt",
     "--edition=2024"
   ],
-
   // Cargo features
   "rust-analyzer.cargo.allFeatures": true,
   "rust-analyzer.cargo.buildScripts.enable": true,
-
   // Separate target dir for rust-analyzer. Without this, RA and `cargo build`
   // from the terminal fight over target/ — each invalidates the other's cache,
   // and every save triggers a full recompile. Combined with the opt-level=2
   // deps profile in .cargo/config.toml, sharing target/ would be painful.
   "rust-analyzer.cargo.targetDir": true,
-
   // Show errors from all crates in workspace
   "rust-analyzer.diagnostics.enable": true,
   "rust-analyzer.diagnostics.experimental.enable": true,
-
   // Semantic highlighting
   "rust-analyzer.semanticHighlighting.strings.enable": true,
   "rust-analyzer.highlighting.strings": true,
@@ -177,7 +170,6 @@
   "files.associations": {
     "*.rs": "rust"
   },
-
   // ── Editor ───────────────────────────────────────────────────────────────
   "[rust]": {
     "editor.defaultFormatter": "rust-lang.rust-analyzer",
@@ -186,14 +178,15 @@
     "editor.semanticHighlighting.enabled": true,
     "editor.tabSize": 4,
     "editor.insertSpaces": true,
-    "editor.rulers": [100],
+    "editor.rulers": [
+      100
+    ],
     "editor.wordWrap": "off"
   },
   "[toml]": {
     "editor.defaultFormatter": "tamasfe.even-better-toml",
     "editor.formatOnSave": true
   },
-
   // ── Python / storemy-viz ────────────────────────────────────────────────
   "[python]": {
     "editor.defaultFormatter": "charliermarsh.ruff",
@@ -203,24 +196,24 @@
       "source.fixAll": "explicit",
       "source.fixAll.ruff": "explicit"
     },
-    "editor.rulers": [100]
+    "editor.rulers": [
+      100
+    ]
   },
-
   // Prefer ruff for linting/formatting in Python
   "ruff.enable": true,
   "ruff.organizeImports": true,
-
   // Python language server / analysis
   "python.analysis.typeCheckingMode": "basic",
   "python.analysis.autoImportCompletions": true,
   "python.analysis.inlayHints.functionReturnTypes": true,
   "python.analysis.inlayHints.variableTypes": true,
-
   // Testing (works well for tools/viz)
   "python.testing.pytestEnabled": true,
   "python.testing.unittestEnabled": false,
-  "python.testing.pytestArgs": ["-q"],
-
+  "python.testing.pytestArgs": [
+    "-q"
+  ],
   // Keep explorer/search clean
   "files.exclude": {
     "**/__pycache__": true,
@@ -233,24 +226,30 @@
     "**/build": true,
     "**/*.egg-info": true
   },
-
   // Error Lens — show errors/warnings inline at end of line
-  "errorLens.enabledDiagnosticLevels": ["error", "warning", "info"],
+  "errorLens.enabledDiagnosticLevels": [
+    "error",
+    "warning",
+    "info"
+  ],
   "errorLens.gutterIconsEnabled": true,
   "errorLens.delay": 300,
-
   // ── TypeScript / React ───────────────────────────────────────────────────
   "[typescript]": {
     "editor.defaultFormatter": "vscode.typescript-language-features",
     "editor.formatOnSave": true,
-    "editor.rulers": [100],
+    "editor.rulers": [
+      100
+    ],
     "editor.tabSize": 2,
     "editor.insertSpaces": true
   },
   "[typescriptreact]": {
     "editor.defaultFormatter": "vscode.typescript-language-features",
     "editor.formatOnSave": true,
-    "editor.rulers": [100],
+    "editor.rulers": [
+      100
+    ],
     "editor.tabSize": 2,
     "editor.insertSpaces": true
   },
@@ -264,7 +263,6 @@
     "editor.formatOnSave": true,
     "editor.tabSize": 2
   },
-
   // TypeScript language server
   "typescript.inlayHints.parameterNames.enabled": "literals",
   "typescript.inlayHints.parameterTypes.enabled": false,
@@ -275,23 +273,34 @@
   "typescript.preferences.importModuleSpecifier": "relative",
   "typescript.preferences.quoteStyle": "double",
   "javascript.preferences.quoteStyle": "double",
-
   // Tailwind CSS IntelliSense (v4 uses CSS-first config, not tailwind.config.js)
   "tailwindCSS.experimental.classRegex": [
-    ["cva\\(([^)]*)\\)", "[\"'`]([^\"'`]*).*?[\"'`]"],
-    ["cx\\(([^)]*)\\)", "(?:'|\"|`)([^']*)(?:'|\"|`)"],
-    ["cn\\(([^)]*)\\)", "(?:'|\"|`)([^']*)(?:'|\"|`)"]
+    [
+      "cva\\(([^)]*)\\)",
+      "[\"'`]([^\"'`]*).*?[\"'`]"
+    ],
+    [
+      "cx\\(([^)]*)\\)",
+      "(?:'|\"|`)([^']*)(?:'|\"|`)"
+    ],
+    [
+      "cn\\(([^)]*)\\)",
+      "(?:'|\"|`)([^']*)(?:'|\"|`)"
+    ]
   ],
   "tailwindCSS.includeLanguages": {
     "typescriptreact": "html"
   },
-
   // ── Debugger (CodeLLDB) ───────────────────────────────────────────────────
   "lldb.displayFormat": "auto",
   "lldb.showDisassembly": "never",
   "lldb.dereferencePointers": true,
-
   // ── Test Explorer ────────────────────────────────────────────────────────
-  "rust-analyzer.runnables.extraArgs": ["--", "--nocapture"],
-  "rust-analyzer.runnables.extraTestBinaryArgs": ["--nocapture"]
+  "rust-analyzer.runnables.extraArgs": [
+    "--",
+    "--nocapture"
+  ],
+  "rust-analyzer.runnables.extraTestBinaryArgs": [
+    "--nocapture"
+  ]
 }

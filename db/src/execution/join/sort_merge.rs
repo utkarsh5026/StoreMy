@@ -1,15 +1,11 @@
-use std::{
-    cmp::Ordering,
-    collections::VecDeque,
-    ops::{Index, IndexMut},
-};
+use std::{cmp::Ordering, collections::VecDeque};
 
 use fallible_iterator::FallibleIterator;
 
 use super::{JoinInputs, JoinPredicate, JoinType, get_value, null_right_tuple};
 use crate::{
     Value,
-    execution::{ExecutionError, Executor, PlanNode, ResolvedExpr},
+    execution::{ExecutionError, Executor, PlanNode, ResolvedExpr, TupleCursor},
     primitives::Predicate,
     tuple::{Tuple, TupleSchema},
 };
@@ -49,45 +45,6 @@ fn drain_all_tuples(node: &mut PlanNode, buf: &mut Vec<Tuple>) -> Result<(), Exe
     Ok(())
 }
 
-#[derive(Debug)]
-struct TupleCursor(Vec<Tuple>, usize);
-
-impl TupleCursor {
-    pub fn new() -> Self {
-        Self(Vec::new(), 0)
-    }
-
-    pub fn forward(&mut self) {
-        self.1 += 1;
-    }
-
-    pub fn exhausted(&self) -> bool {
-        self.1 >= self.0.len()
-    }
-
-    pub fn current(&self) -> &Tuple {
-        self.0.get(self.1).expect("current_idx set with pending")
-    }
-
-    pub fn current_idx(&self) -> usize {
-        self.1
-    }
-}
-
-impl Index<usize> for TupleCursor {
-    type Output = Tuple;
-
-    fn index(&self, index: usize) -> &Self::Output {
-        &self.0[index]
-    }
-}
-
-impl IndexMut<usize> for TupleCursor {
-    fn index_mut(&mut self, index: usize) -> &mut Self::Output {
-        &mut self.0[index]
-    }
-}
-
 /// Joins two inputs by sorting them on the join key and then merging.
 ///
 /// Requires an equality predicate as the merge key. An optional `residual`
@@ -109,7 +66,6 @@ impl IndexMut<usize> for TupleCursor {
 pub struct SortMergeJoin<'a> {
     inputs: Box<JoinInputs<'a>>,
     predicate: JoinPredicate,
-    join_type: JoinType,
     residual: Option<ResolvedExpr>,
     l_sorted: TupleCursor,
     r_sorted: TupleCursor,
@@ -135,7 +91,6 @@ impl<'a> SortMergeJoin<'a> {
         Self {
             inputs: Box::new(JoinInputs::new(left, right)),
             predicate,
-            join_type: JoinType::Inner,
             residual: None,
             l_sorted: TupleCursor::new(),
             r_sorted: TupleCursor::new(),
@@ -148,7 +103,7 @@ impl<'a> SortMergeJoin<'a> {
     /// Sets the join type. Use [`JoinType::LeftOuter`] to get `LEFT JOIN` semantics.
     #[must_use]
     pub fn with_join_type(mut self, join_type: JoinType) -> Self {
-        self.join_type = join_type;
+        self.inputs.join_type = join_type;
         self
     }
 
@@ -180,23 +135,30 @@ impl<'a> SortMergeJoin<'a> {
         let left_idx = usize::from(self.predicate.left_col);
         let right_idx = usize::from(self.predicate.right_col);
 
-        // For LEFT OUTER JOIN we must preserve all left rows (including NULL-key ones) because
-        // every left row must appear in the output. NULL keys sort first, so during the merge
-        // they will advance the left cursor immediately and emit NULL-padded output rows.
-        if self.join_type == JoinType::LeftOuter {
-            drain_all_tuples(&mut self.inputs.left, &mut self.l_sorted.0)?;
+        // LeftOuter and FullOuter must preserve NULL-key left rows — every left row must appear
+        // in the output regardless of its join key.
+        if matches!(
+            self.inputs.join_type,
+            JoinType::LeftOuter | JoinType::FullOuter
+        ) {
+            drain_all_tuples(&mut self.inputs.left, &mut self.l_sorted.tuples)?;
         } else {
-            drain_tuples(&mut self.inputs.left, &mut self.l_sorted.0, left_idx)?;
+            drain_tuples(&mut self.inputs.left, &mut self.l_sorted.tuples, left_idx)?;
         }
-        drain_tuples(&mut self.inputs.right, &mut self.r_sorted.0, right_idx)?;
+        // FullOuter must also preserve NULL-key right rows.
+        if self.inputs.join_type == JoinType::FullOuter {
+            drain_all_tuples(&mut self.inputs.right, &mut self.r_sorted.tuples)?;
+        } else {
+            drain_tuples(&mut self.inputs.right, &mut self.r_sorted.tuples, right_idx)?;
+        }
         tracing::debug!(
-            left = self.l_sorted.0.len(),
-            right = self.r_sorted.0.len(),
+            left = self.l_sorted.tuples.len(),
+            right = self.r_sorted.tuples.len(),
             "smj: inputs drained, sorting"
         );
 
-        Self::sort_by_column(&mut self.l_sorted.0, left_idx);
-        Self::sort_by_column(&mut self.r_sorted.0, right_idx);
+        Self::sort_by_column(&mut self.l_sorted.tuples, left_idx);
+        Self::sort_by_column(&mut self.r_sorted.tuples, right_idx);
 
         self.sorted = true;
         Ok(())
@@ -242,9 +204,7 @@ impl<'a> SortMergeJoin<'a> {
             let l_curr = self.l_sorted.current().clone();
             let mut row_matched = false;
             for i in right_start..right_end {
-                let r = &self.r_sorted[i];
-                let joined = l_curr.concat(r);
-
+                let joined = l_curr.concat(&self.r_sorted[i]);
                 let keep = match &self.residual {
                     None => true,
                     Some(expr) => expr.eval_bool(&joined)?,
@@ -254,9 +214,13 @@ impl<'a> SortMergeJoin<'a> {
                     self.pending.push_back(joined);
                 }
             }
-            // LEFT OUTER: if the residual rejected every right candidate for this left row,
-            // emit it with a NULL-padded right side rather than dropping it entirely.
-            if self.join_type == JoinType::LeftOuter && !row_matched {
+            // LeftOuter/FullOuter: if the residual rejected every right candidate for this left
+            // row, emit it with a NULL-padded right side rather than dropping it entirely.
+            if matches!(
+                self.inputs.join_type,
+                JoinType::LeftOuter | JoinType::FullOuter
+            ) && !row_matched
+            {
                 self.pending
                     .push_back(l_curr.concat(&null_right_tuple(right_width)));
             }
@@ -286,6 +250,22 @@ impl<'a> SortMergeJoin<'a> {
         };
         get_value(t.current(), col, is_left)
     }
+
+    /// Retrieves the current join key values for both the left and right inputs.
+    ///
+    /// This function fetches the value from the left tuple using the left join key column,
+    /// and the value from the right tuple using the right join key column. These are typically
+    /// used to compare and advance the cursors in a sort-merge join implementation.
+    ///
+    /// # Returns
+    ///
+    /// On success, returns a tuple of references to the left and right join key [`Value`]s,
+    /// respectively. Returns an [`ExecutionError`] if either key column is out of bounds.
+    fn current_join_key_values(&self) -> Result<(&Value, &Value), ExecutionError> {
+        let lk = get_value(self.l_sorted.current(), self.predicate.left_col, true)?;
+        let rk = get_value(self.r_sorted.current(), self.predicate.right_col, false)?;
+        Ok((lk, rk))
+    }
 }
 
 /// Produces joined tuples in key order after sorting both inputs.
@@ -299,6 +279,7 @@ impl FallibleIterator for SortMergeJoin<'_> {
     fn next(&mut self) -> Result<Option<Tuple>, ExecutionError> {
         self.sort_inputs()?;
         let right_width = self.inputs.right_width;
+        let left_width = self.inputs.left_width;
 
         loop {
             if let Some(tuple) = self.pending.pop_front() {
@@ -307,14 +288,32 @@ impl FallibleIterator for SortMergeJoin<'_> {
             }
 
             if self.l_sorted.exhausted() {
-                tracing::debug!(rows_produced = self.rows_produced, "smj: merge complete");
-                return Ok(None);
+                if self.inputs.join_type != JoinType::FullOuter {
+                    tracing::debug!(rows_produced = self.rows_produced, "smj: merge complete");
+                    return Ok(None);
+                }
+
+                while !self.r_sorted.exhausted() {
+                    let r = self.r_sorted.current().clone();
+                    self.pending
+                        .push_back(null_right_tuple(left_width).concat(&r));
+                    self.r_sorted.forward();
+                }
+                // If right was already exhausted, pending is empty and we're done.
+                if self.pending.is_empty() {
+                    tracing::debug!(rows_produced = self.rows_produced, "smj: merge complete");
+                    return Ok(None);
+                }
+                continue;
             }
 
             if self.r_sorted.exhausted() {
-                // For LEFT OUTER: flush all remaining left rows as NULL-padded into pending,
-                // then loop back to drain them. For INNER: we're done.
-                if self.join_type == JoinType::LeftOuter {
+                // For LEFT OUTER / FULL OUTER: flush all remaining left rows as NULL-padded into
+                // pending, then loop back to drain them. For INNER: we're done.
+                if matches!(
+                    self.inputs.join_type,
+                    JoinType::LeftOuter | JoinType::FullOuter
+                ) {
                     while !self.l_sorted.exhausted() {
                         let l = self.l_sorted.current().clone();
                         self.pending
@@ -327,21 +326,30 @@ impl FallibleIterator for SortMergeJoin<'_> {
                 return Ok(None);
             }
 
-            let lk = self.get_key(true)?;
-            let rk = self.get_key(false)?;
+            let (lk, rk) = self.current_join_key_values()?;
 
             match lk.partial_cmp(rk) {
                 Some(Ordering::Less) => {
                     // Left key is smaller — this left row has no matching right row.
-                    // For LEFT OUTER, emit it with a NULL-padded right side.
-                    if self.join_type == JoinType::LeftOuter {
+                    if matches!(
+                        self.inputs.join_type,
+                        JoinType::LeftOuter | JoinType::FullOuter
+                    ) {
                         let l = self.l_sorted.current().clone();
                         self.pending
                             .push_back(l.concat(&null_right_tuple(right_width)));
                     }
                     self.l_sorted.forward();
                 }
-                Some(Ordering::Greater) => self.r_sorted.forward(),
+                Some(Ordering::Greater) => {
+                    // Right key is smaller — this right row has no matching left row.
+                    if self.inputs.join_type == JoinType::FullOuter {
+                        let r = self.r_sorted.current().clone();
+                        self.pending
+                            .push_back(null_right_tuple(left_width).concat(&r));
+                    }
+                    self.r_sorted.forward();
+                }
                 Some(Ordering::Equal) => self.collect_equals()?,
                 None => return Err(ExecutionError::TypeError("incomparable join keys".into())),
             }
@@ -539,5 +547,150 @@ mod tests {
         let second = drain(&mut j).len();
         assert_eq!(first, 2);
         assert_eq!(first, second);
+    }
+
+    // ── FULL OUTER JOIN ───────────────────────────────────────────────────────
+
+    // Exercises the Greater branch (unmatched right row) and the Less branch
+    // (unmatched left row) in the same run.
+    //
+    // left:  [(1,10), (3,30)]   right: [(2,200), (3,300)]
+    // sorted merge:
+    //   L=1 < R=2 → emit (1,10,NULL,NULL)
+    //   L=3 > R=2 → emit (NULL,NULL,2,200)
+    //   L=3 = R=3 → emit (3,30,3,300)
+    #[test]
+    fn test_smj_full_outer_unmatched_on_both_sides() {
+        let left = build_heap(260, &[tup(1, 10), tup(3, 30)]);
+        let right = build_heap(261, &[tup(2, 200), tup(3, 300)]);
+        let mut j = SortMergeJoin::new(scan(&left), scan(&right), eq_pred(0, 0))
+            .with_join_type(JoinType::FullOuter);
+        let out = drain(&mut j);
+        assert_eq!(out.len(), 3);
+
+        let is_int = |t: &&Tuple, col: usize, val: i32| matches!(t.get(col), Some(Value::Int32(v)) if *v == val);
+
+        let matched = out.iter().find(|t| is_int(t, 0, 3)).unwrap();
+        assert_eq!(int(matched, 2), 3);
+
+        let left_only = out.iter().find(|t| is_int(t, 0, 1)).unwrap();
+        assert!(matches!(left_only.get(2), Some(Value::Null)));
+
+        let right_only = out.iter().find(|t| is_int(t, 2, 2)).unwrap();
+        assert!(matches!(right_only.get(0), Some(Value::Null)));
+    }
+
+    // Exercises the l_sorted.exhausted() → drain remaining right branch.
+    #[test]
+    fn test_smj_full_outer_empty_left() {
+        let left = build_heap(262, &[]);
+        let right = build_heap(263, &[tup(1, 100), tup(2, 200)]);
+        let mut j = SortMergeJoin::new(scan(&left), scan(&right), eq_pred(0, 0))
+            .with_join_type(JoinType::FullOuter);
+        let out = drain(&mut j);
+        assert_eq!(out.len(), 2, "both right rows must appear with null left");
+        assert!(out.iter().all(|t| matches!(t.get(0), Some(Value::Null))));
+    }
+
+    // Exercises the r_sorted.exhausted() → flush remaining left branch.
+    #[test]
+    fn test_smj_full_outer_empty_right() {
+        let left = build_heap(264, &[tup(1, 10), tup(2, 20)]);
+        let right = build_heap(265, &[]);
+        let mut j = SortMergeJoin::new(scan(&left), scan(&right), eq_pred(0, 0))
+            .with_join_type(JoinType::FullOuter);
+        let out = drain(&mut j);
+        assert_eq!(out.len(), 2, "both left rows must appear with null right");
+        assert!(out.iter().all(|t| matches!(t.get(2), Some(Value::Null))));
+    }
+
+    // All keys disjoint: every row from both sides must appear, none matched.
+    // Exercises the Greater branch (drains all right rows) then the
+    // r_sorted.exhausted() flush (drains remaining left rows).
+    #[test]
+    fn test_smj_full_outer_disjoint_keys() {
+        let left = build_heap(266, &[tup(1, 0), tup(2, 0)]);
+        let right = build_heap(267, &[tup(3, 0), tup(4, 0)]);
+        let mut j = SortMergeJoin::new(scan(&left), scan(&right), eq_pred(0, 0))
+            .with_join_type(JoinType::FullOuter);
+        let out = drain(&mut j);
+        assert_eq!(out.len(), 4);
+        let left_only = out
+            .iter()
+            .filter(|t| matches!(t.get(2), Some(Value::Null)))
+            .count();
+        let right_only = out
+            .iter()
+            .filter(|t| matches!(t.get(0), Some(Value::Null)))
+            .count();
+        assert_eq!(left_only, 2);
+        assert_eq!(right_only, 2);
+    }
+
+    // Exercises sort_inputs NULL preservation for the left side.
+    #[test]
+    fn test_smj_full_outer_null_key_left_row_preserved() {
+        let left = build_heap(268, &[tup_null_a(10), tup(1, 11)]);
+        let right = build_heap(269, &[tup(1, 100)]);
+        let mut j = SortMergeJoin::new(scan(&left), scan(&right), eq_pred(0, 0))
+            .with_join_type(JoinType::FullOuter);
+        let out = drain(&mut j);
+        assert_eq!(out.len(), 2, "null-key left row + matched row");
+        // null-key left row: both left key and right key are null
+        let null_key_row = out
+            .iter()
+            .find(|t| {
+                matches!(t.get(0), Some(Value::Null)) && matches!(t.get(2), Some(Value::Null))
+            })
+            .unwrap();
+        assert_eq!(int(null_key_row, 1), 10);
+    }
+
+    // Exercises sort_inputs NULL preservation for the right side.
+    #[test]
+    fn test_smj_full_outer_null_key_right_row_preserved() {
+        let left = build_heap(270, &[tup(1, 10)]);
+        let right = build_heap_xy(271, &[tup_null_a(99), tup(1, 100)]);
+        let mut j = SortMergeJoin::new(scan(&left), scan(&right), eq_pred(0, 0))
+            .with_join_type(JoinType::FullOuter);
+        let out = drain(&mut j);
+        assert_eq!(out.len(), 2, "matched row + null-key right row");
+        // null-key right row: left columns are null, right.y = 99
+        let null_key_row = out
+            .iter()
+            .find(|t| {
+                matches!(t.get(0), Some(Value::Null)) && matches!(t.get(2), Some(Value::Null))
+            })
+            .unwrap();
+        assert_eq!(int(null_key_row, 3), 99);
+    }
+
+    #[test]
+    fn test_smj_full_outer_rewind() {
+        let left = build_heap(272, &[tup(1, 10), tup(3, 30)]);
+        let right = build_heap(273, &[tup(2, 200), tup(3, 300)]);
+        let mut j = SortMergeJoin::new(scan(&left), scan(&right), eq_pred(0, 0))
+            .with_join_type(JoinType::FullOuter);
+        let first = drain(&mut j).len();
+        j.rewind().unwrap();
+        let second = drain(&mut j).len();
+        assert_eq!(first, 3);
+        assert_eq!(first, second);
+    }
+
+    // Exercises collect_equals residual-rejection with FullOuter: keys match but
+    // residual rejects all candidates → left row must still appear with null right.
+    #[test]
+    fn test_smj_full_outer_residual_rejects_all_emits_null_right() {
+        let left = build_heap(274, &[tup(1, 999)]);
+        let right = build_heap_xy(275, &[tup(1, 1)]);
+        let residual = nlj_col_expr(1, BinOp::Lt, 3); // 999 < 1 is false
+        let mut j = SortMergeJoin::new(scan(&left), scan(&right), eq_pred(0, 0))
+            .with_join_type(JoinType::FullOuter)
+            .with_residual(residual);
+        let out = drain(&mut j);
+        assert_eq!(out.len(), 1);
+        assert!(matches!(out[0].get(2), Some(Value::Null)));
+        assert_eq!(int(&out[0], 0), 1);
     }
 }

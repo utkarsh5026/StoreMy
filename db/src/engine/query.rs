@@ -51,16 +51,15 @@ use crate::{
     catalog::{TableInfo, manager::Catalog},
     engine::{Engine, EngineError, StatementResult},
     execution::{
-        Executor, PlanNode, ResolvedExpr,
+        Executor, JoinAlgo, PlanNode, ResolvedExpr,
         aggregate::{AggregateExpr, AggregateFunc},
         join::{JoinPredicate, JoinType},
-        resolve_expr,
         unary::{ProjectItem, SortKey},
     },
     heap::file::HeapFile,
     parser::statements::{
-        AggFunc, BinOp, ColumnRef, Expr, JoinKind, LimitClause, OrderBy, OrderDirection,
-        SelectColumns, SelectItem, SelectStatement, Statement, TableRef, TableWithJoins,
+        BinOp, ColumnRef, Expr, JoinKind, LimitClause, OrderBy, OrderDirection, SelectColumns,
+        SelectItem, SelectStatement, Statement, TableRef, TableWithJoins,
     },
     primitives::{ColumnId, NonEmptyString, Predicate},
     transaction::Transaction,
@@ -296,16 +295,12 @@ impl BoundSelect {
 
         let filter = stmt
             .where_clause
-            .map(|expr| {
-                resolve_expr(&scope, expr).map_err(|e| EngineError::TypeError(e.to_string()))
-            })
+            .map(|expr| ResolvedExpr::resolve(expr, &scope).map_err(EngineError::from))
             .transpose()?;
 
         let having = stmt
             .having
-            .map(|expr| {
-                resolve_expr(&scope, expr).map_err(|e| EngineError::TypeError(e.to_string()))
-            })
+            .map(|expr| ResolvedExpr::resolve(expr, &scope).map_err(EngineError::from))
             .transpose()?;
 
         Ok(Self {
@@ -365,8 +360,7 @@ impl BoundSelect {
                 BoundFrom::cross(left, right)
             } else {
                 let on = j.on.expect("non-cross join must have ON clause");
-                let resolved_on =
-                    resolve_expr(&scope, on).map_err(|e| EngineError::TypeError(e.to_string()))?;
+                let resolved_on = ResolvedExpr::resolve(on, &scope)?;
                 BoundFrom::join(j.kind, left, right, resolved_on)
             };
         }
@@ -387,20 +381,17 @@ impl BoundSelect {
         // resolved column, so reject anything more complex at bind time.
         // Simple column references and aggregate args go through resolve_scope_col so that
         // UnknownColumn / AmbiguousColumn engine errors are surfaced with the right type.
-        // Everything else (BinaryOp, UnaryOp, etc.) goes through resolve_expr.
+        // Everything else (BinaryOp, UnaryOp, etc.) goes through ResolvedExpr::resolve.
         let resolved = match expr {
             Expr::Column(col) => ResolvedExpr::Column(Self::resolve_scope_col(scope, &col)?),
             Expr::Agg { func, arg } => {
-                let resolved_arg =
-                    resolve_expr(scope, *arg).map_err(|e| EngineError::TypeError(e.to_string()))?;
+                let resolved_arg = ResolvedExpr::resolve(*arg, scope)?;
                 ResolvedExpr::Agg {
                     func,
                     arg: Box::new(resolved_arg),
                 }
             }
-            other => {
-                resolve_expr(scope, other).map_err(|e| EngineError::TypeError(e.to_string()))?
-            }
+            other => ResolvedExpr::resolve(other, scope)?,
         };
         Ok(SelectProjection {
             expr: resolved,
@@ -457,7 +448,7 @@ impl Engine<'_> {
             })
             .collect::<Result<Vec<_>, _>>()?;
 
-        PlanNode::project(node, items).map_err(|e| EngineError::TypeError(e.to_string()))
+        Ok(PlanNode::project(node, items)?)
     }
 
     /// Executes a bound SQL `SELECT` and returns the selected rows.
@@ -481,17 +472,14 @@ impl Engine<'_> {
         self.with_txn(|txn| {
             let bound = BoundSelect::bind(select_stmt, self.catalog, txn)?;
 
-            let root_table_name = bound.from.root_table_name();
+            let root_table_name = bound.from.root_table_name().to_owned();
             let mut heap_files = Vec::with_capacity(bound.from.table_count());
             Self::collect_heap_files(&bound.from, self.catalog, &mut heap_files)?;
-            let mut plan = Self::build_plan(&bound, &heap_files, txn.transaction_id())?;
+            let mut plan = Self::build_plan(bound, &heap_files, txn.transaction_id())?;
             let schema = plan.schema().to_owned();
 
             let mut rows = Vec::new();
-            while let Some(t) = plan
-                .next()
-                .map_err(|e| EngineError::TypeError(e.to_string()))?
-            {
+            while let Some(t) = plan.next()? {
                 rows.push(t);
             }
             drop(plan); // releases the &HeapFile borrows before `heaps` goes out of scope
@@ -546,33 +534,44 @@ impl Engine<'_> {
     /// Returns [`EngineError::Unsupported`] for currently unwired SQL shapes.
     /// Returns [`EngineError::TypeError`] when the underlying operators reject
     /// the bound tuple shape.
-    fn build_plan<'a>(
-        bound: &BoundSelect,
-        heaps: &'a [(FileId, Arc<HeapFile>)],
+    fn build_plan(
+        bound: BoundSelect,
+        heaps: &[(FileId, Arc<HeapFile>)],
         txn: TransactionId,
-    ) -> Result<PlanNode<'a>, EngineError> {
-        let aggregating = !bound.group_by.is_empty() || Self::has_aggregate(&bound.select_list);
+    ) -> Result<PlanNode<'_>, EngineError> {
+        let BoundSelect {
+            from,
+            select_list,
+            filter,
+            group_by,
+            having,
+            distinct,
+            order_by,
+            limit,
+        } = bound;
+
+        let aggregating = !group_by.is_empty() || Self::has_aggregate(&select_list);
         tracing::debug!(
-            root_table = %bound.from.root_table_name(),
+            root_table = %from.root_table_name(),
             aggregating,
-            order_by = bound.order_by.len(),
+            order_by = order_by.len(),
             "building plan"
         );
-        let mut node = Self::build_from(&bound.from, heaps, txn)?;
+        let mut node = Self::build_from(from, heaps, txn)?;
 
-        if let Some(pred) = &bound.filter {
-            node = PlanNode::filter(node, pred.clone());
+        if let Some(pred) = filter {
+            node = PlanNode::filter(node, pred);
         }
 
         // ORDER BY and HAVING are still bound against the FROM scope, so their
         // column ids would be wrong above an Aggregate. Reject until the binder
         // rebinds those clauses against the post-aggregate schema.
-        if aggregating && !bound.order_by.is_empty() {
+        if aggregating && !order_by.is_empty() {
             return Err(EngineError::Unsupported(
                 "ORDER BY combined with GROUP BY / aggregates is not yet supported".into(),
             ));
         }
-        if bound.having.is_some() {
+        if having.is_some() {
             return Err(EngineError::Unsupported("HAVING not yet supported".into()));
         }
 
@@ -580,9 +579,8 @@ impl Engine<'_> {
         // against the FROM scope, and Project may narrow the schema and drop
         // the columns those keys refer to. Sorting first keeps every column
         // in scope while the comparison happens.
-        if !aggregating && !bound.order_by.is_empty() {
-            let keys = bound
-                .order_by
+        if !aggregating && !order_by.is_empty() {
+            let keys = order_by
                 .iter()
                 .map(|(col, direction)| SortKey {
                     col_id: *col,
@@ -593,19 +591,19 @@ impl Engine<'_> {
         }
 
         if aggregating {
-            node = Self::build_aggregate(node, &bound.select_list, &bound.group_by)?;
-        } else if let BoundSelectList::Items(items) = &bound.select_list {
+            node = Self::build_aggregate(node, &select_list, &group_by)?;
+        } else if let BoundSelectList::Items(items) = select_list {
             node = Self::build_project(node, items)?;
         } else {
             node = Self::project_out_dropped_columns(node)?;
         }
 
-        if bound.distinct {
+        if distinct {
             node = PlanNode::distinct(node);
         }
 
-        if let Some(limit) = &bound.limit {
-            node = PlanNode::limit(node, limit.limit.unwrap_or(u64::MAX), limit.offset);
+        if let Some(LimitClause { limit, offset }) = limit {
+            node = PlanNode::limit(node, limit.unwrap_or(u64::MAX), offset);
         }
 
         Ok(node)
@@ -622,16 +620,16 @@ impl Engine<'_> {
     /// Panics if [`Self::collect_heap_files`] did not preload a heap for a
     /// `BoundFrom::Table`; that would mean the planner's preload invariant was
     /// broken, not that the SQL query is invalid.
-    fn build_from<'a>(
-        from: &BoundFrom,
-        heaps: &'a [(FileId, Arc<HeapFile>)],
+    fn build_from(
+        from: BoundFrom,
+        heaps: &[(FileId, Arc<HeapFile>)],
         txn: TransactionId,
-    ) -> Result<PlanNode<'a>, EngineError> {
+    ) -> Result<PlanNode<'_>, EngineError> {
         match from {
             BoundFrom::Table { file_id, .. } => {
                 let heap = heaps
                     .iter()
-                    .find_map(|(id, h)| (id == file_id).then_some(h))
+                    .find_map(|(id, h)| (*id == file_id).then_some(h))
                     .expect("collect_heaps preloaded every BoundFrom::Table");
                 Ok(PlanNode::seq_scan(heap.as_ref(), txn))
             }
@@ -642,29 +640,92 @@ impl Engine<'_> {
                 on,
                 ..
             } => {
-                let join_type = match kind {
-                    JoinKind::Inner => JoinType::Inner,
-                    JoinKind::Left => JoinType::LeftOuter,
-                    JoinKind::Right | JoinKind::Cross | JoinKind::Full => {
-                        return Err(EngineError::Unsupported(format!(
-                            "{kind} is not yet supported in the planner"
-                        )));
+                let left = Self::build_from(*left, heaps, txn)?;
+                let right = Self::build_from(*right, heaps, txn)?;
+
+                match kind {
+                    JoinKind::Inner | JoinKind::Left => {
+                        let join_type = if kind == JoinKind::Inner {
+                            JoinType::Inner
+                        } else {
+                            JoinType::LeftOuter
+                        };
+                        let left_width = left.physical_num_fields();
+                        Ok(Self::build_join(left, right, &on, left_width, join_type))
                     }
-                };
-                let left_node = Self::build_from(left, heaps, txn)?;
-                let right_node = Self::build_from(right, heaps, txn)?;
-                let left_width = left_node.schema().physical_num_fields();
-                Ok(Self::build_join(
-                    left_node, right_node, on, left_width, join_type,
-                ))
+                    JoinKind::Right => {
+                        // RIGHT JOIN A ON A.x = B.y  ≡  B LEFT JOIN A ON B.y = A.x.
+                        //
+                        // Step 1: swap the executor inputs so the LeftOuter path runs.
+                        // Step 2: remap column indices in the ON expression to match
+                        //         the new physical layout (old-right is now left, etc.).
+                        // Step 3: add a reorder projection to restore the binder's
+                        //         expected column order (old-left columns first). All
+                        //         column references in SELECT / WHERE / ORDER BY were
+                        //         resolved against the SQL-order layout, so the tuple
+                        //         that reaches those operators must match it.
+                        let old_left_width = left.physical_num_fields();
+                        let old_right_width = right.physical_num_fields();
+                        let adjusted_on =
+                            Self::swap_join_column_indices(on, old_left_width, old_right_width);
+
+                        // After the swap the executor emits: (old-right | old-left).
+                        // We want:                           (old-left  | old-right).
+                        // Build a projection that picks columns in that order.
+                        let reorder_items: Vec<ProjectItem> = (old_right_width
+                            ..old_right_width + old_left_width)
+                            .chain(0..old_right_width)
+                            .map(|i| ProjectItem {
+                                expr: ResolvedExpr::Column(
+                                    ColumnId::try_from(i).expect("reorder index fits in ColumnId"),
+                                ),
+                                alias: None,
+                            })
+                            .collect();
+
+                        let joined = Self::build_join(
+                            right,
+                            left,
+                            &adjusted_on,
+                            old_right_width,
+                            JoinType::LeftOuter,
+                        );
+                        Ok(PlanNode::project(joined, reorder_items)?)
+                    }
+                    JoinKind::Full => {
+                        // For Full Outer, unmatched rows on *both* sides must be emitted.
+                        //
+                        // SortMergeJoin handles this naturally: the merge cursor emits an
+                        // unmatched left row when left-key < right-key and an unmatched right
+                        // row when right-key < left-key, so no extra bookkeeping is needed.
+                        //
+                        // HashJoin cannot do this cleanly (it would need a second pass over
+                        // the hash table to find unmatched right rows), so we skip the
+                        // build_join dispatcher (which might pick HashJoin) and dispatch
+                        // directly: SortMerge for equi-predicates, NestedLoop otherwise.
+                        let left_width = left.schema().physical_num_fields();
+                        let algo = if let Some(pred) = Self::try_extract_equi(&on, left_width) {
+                            tracing::debug!(algorithm = "sort_merge_join", join_type = ?JoinType::FullOuter, "join selected");
+                            JoinAlgo::SortMerge(pred)
+                        } else {
+                            tracing::debug!(algorithm = "nested_loop_join", join_type = ?JoinType::FullOuter, "join selected");
+                            JoinAlgo::NestedLoop(on)
+                        };
+                        Ok(PlanNode::join(left, right, algo, JoinType::FullOuter))
+                    }
+                    JoinKind::Cross => Err(EngineError::Unsupported(format!(
+                        "{kind} is not yet supported in the planner"
+                    ))),
+                }
             }
             BoundFrom::Cross { left, right, .. } => {
-                let left_node = Self::build_from(left, heaps, txn)?;
-                let right_node = Self::build_from(right, heaps, txn)?;
-                Ok(PlanNode::nested_loop_join(
-                    left_node,
-                    right_node,
-                    ResolvedExpr::Literal(Value::Bool(true)),
+                let left = Self::build_from(*left, heaps, txn)?;
+                let right = Self::build_from(*right, heaps, txn)?;
+                Ok(PlanNode::join(
+                    left,
+                    right,
+                    JoinAlgo::Cross,
+                    JoinType::Inner,
                 ))
             }
         }
@@ -683,19 +744,38 @@ impl Engine<'_> {
     ) -> PlanNode<'a> {
         if let Some(pred) = Self::try_extract_equi(on, left_width) {
             tracing::debug!(algorithm = "hash_join", ?join_type, "join selected");
-            match join_type {
-                JoinType::Inner => PlanNode::hash_join(left, right, pred),
-                JoinType::LeftOuter => PlanNode::hash_left_outer_join(left, right, pred),
-            }
+            PlanNode::join(left, right, JoinAlgo::Hash(pred), join_type)
         } else {
             tracing::debug!(algorithm = "nested_loop_join", ?join_type, "join selected");
-            match join_type {
-                JoinType::Inner => PlanNode::nested_loop_join(left, right, on.clone()),
-                JoinType::LeftOuter => {
-                    PlanNode::nested_loop_left_outer_join(left, right, on.clone())
-                }
-            }
+            PlanNode::join(left, right, JoinAlgo::NestedLoop(on.clone()), join_type)
         }
+    }
+
+    /// Rewrites column indices in `expr` after swapping join inputs for RIGHT JOIN.
+    ///
+    /// The binder assigns indices based on the SQL-order layout:
+    ///   old left  → `0..left_width`
+    ///   old right → `left_width..left_width+right_width`
+    ///
+    /// After swapping, the new physical layout is:
+    ///   new left  (old right) → `0..right_width`
+    ///   new right (old left)  → `right_width..right_width+left_width`
+    ///
+    /// So every column index must be remapped accordingly.
+    fn swap_join_column_indices(
+        expr: ResolvedExpr,
+        left_width: usize,
+        right_width: usize,
+    ) -> ResolvedExpr {
+        expr.map_columns(|id| {
+            let i = usize::from(id);
+            let new_i = if i < left_width {
+                right_width + i
+            } else {
+                i - left_width
+            };
+            ColumnId::try_from(new_i).expect("remapped column index fits in ColumnId")
+        })
     }
 
     /// Tries to extract an equi-join key from a [`ResolvedExpr`].
@@ -757,25 +837,22 @@ impl Engine<'_> {
     ///
     /// Returns [`EngineError::TypeError`] if `Project` rejects a column index or
     /// output schema shape.
-    fn build_project<'a>(
-        child: PlanNode<'a>,
-        projections: &[SelectProjection],
-    ) -> Result<PlanNode<'a>, EngineError> {
+    fn build_project(
+        child: PlanNode<'_>,
+        projections: Vec<SelectProjection>,
+    ) -> Result<PlanNode<'_>, EngineError> {
         let project_items = projections
-            .iter()
-            .map(|proj| match &proj.expr {
+            .into_iter()
+            .map(|SelectProjection { expr, alias }| match expr {
                 ResolvedExpr::Agg { .. } | ResolvedExpr::CountStar => {
                     Err(EngineError::Unsupported(
                         "aggregate projections require the Aggregate operator".into(),
                     ))
                 }
-                expr => Ok(ProjectItem {
-                    expr: expr.clone(),
-                    alias: proj.alias.clone(),
-                }),
+                expr => Ok(ProjectItem { expr, alias }),
             })
             .collect::<Result<Vec<_>, _>>()?;
-        PlanNode::project(child, project_items).map_err(|e| EngineError::TypeError(e.to_string()))
+        Ok(PlanNode::project(child, project_items)?)
     }
 
     /// Wires up SQL `GROUP BY` and aggregate `SELECT` items.
@@ -811,13 +888,63 @@ impl Engine<'_> {
             }
         };
 
-        let agg_node = Self::create_aggregate_plan(child, projections, group_by_cols)?;
+        Self::reject_ungrouped_columns(&child, projections, group_by_cols)?;
+        let agg_exprs = projections
+            .iter()
+            .filter_map(|p| Self::projection_to_agg_expr(p, child.schema()))
+            .collect::<Result<Vec<_>, _>>()?;
+
+        let agg_node = PlanNode::aggregate(child, group_by_cols, agg_exprs)?;
 
         let project_items =
             Self::build_aggregate_rewiring_projection_items(projections, group_by_cols)?;
 
-        PlanNode::project(agg_node, project_items)
-            .map_err(|e| EngineError::TypeError(e.to_string()))
+        Ok(PlanNode::project(agg_node, project_items)?)
+    }
+
+    /// Ensures that all non-aggregate columns in the projections appear in the GROUP BY clause.
+    ///
+    /// This function checks each projection in the SELECT list. If a projection references a column
+    /// directly (i.e., not inside an aggregate function or expression), it ensures that this column
+    /// is present in the `group_by_cols` list. If a column is found that is not included in the
+    /// GROUP BY, and also not inside an aggregate, this function returns an error.
+    ///
+    /// # Arguments
+    ///
+    /// * `child` - The `PlanNode` representing the child of the current query operator, used for
+    ///   schema access and error reporting.
+    /// * `projections` - The list of selected projections (columns or expressions) in the query's
+    ///   SELECT clause.
+    /// * `group_by_cols` - List of `ColumnId` that appear in the GROUP BY clause.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`EngineError::Unsupported`] if a projected column is not included in GROUP BY and
+    /// is not part of an aggregate expression.
+    fn reject_ungrouped_columns(
+        child: &PlanNode<'_>,
+        projections: &[SelectProjection],
+        group_by_cols: &[ColumnId],
+    ) -> Result<(), EngineError> {
+        let invalid_col = projections
+            .iter()
+            .find_map(|SelectProjection { expr, .. }| {
+                if let ResolvedExpr::Column(c) = expr
+                    && !group_by_cols.contains(c)
+                {
+                    return Some(*c);
+                }
+                None
+            });
+
+        if let Some(col_id) = invalid_col {
+            let col_name = child.schema().col_name(col_id).unwrap_or("<unknown>");
+            return Err(EngineError::Unsupported(format!(
+                "column '{col_name}' (index {col_id}) must appear in GROUP BY or be used in an aggregate",
+            )));
+        }
+
+        Ok(())
     }
 
     /// Builds the `ProjectItem`s that restore SQL `SELECT` order above `Aggregate`.
@@ -845,18 +972,18 @@ impl Engine<'_> {
                             .iter()
                             .position(|g| g == c)
                             .expect("GROUP BY membership validated above");
-                        ProjectItem {
-                            expr: ResolvedExpr::Column(Self::col_id(pos)?),
-                            alias: projection.alias.clone(),
-                        }
+                        ProjectItem::new(
+                            ResolvedExpr::Column(Self::col_id(pos)?),
+                            projection.alias.clone(),
+                        )
                     }
                     ResolvedExpr::Agg { .. } | ResolvedExpr::CountStar => {
                         let pos = group_by_cols.len() + agg_index;
                         agg_index += 1;
-                        ProjectItem {
-                            expr: ResolvedExpr::Column(Self::col_id(pos)?),
-                            alias: projection.alias.clone(),
-                        }
+                        ProjectItem::new(
+                            ResolvedExpr::Column(Self::col_id(pos)?),
+                            projection.alias.clone(),
+                        )
                     }
                     ResolvedExpr::Literal(v) => {
                         let name = match projection.alias.clone() {
@@ -867,10 +994,7 @@ impl Engine<'_> {
                                 ))
                             })?,
                         };
-                        ProjectItem {
-                            expr: ResolvedExpr::Literal(v.clone()),
-                            alias: Some(name),
-                        }
+                        ProjectItem::new(ResolvedExpr::Literal(v.clone()), Some(name))
                     }
                     _ => {
                         return Err(EngineError::Unsupported(
@@ -881,45 +1005,6 @@ impl Engine<'_> {
                 })
             })
             .collect::<Result<Vec<_>, EngineError>>()
-    }
-
-    /// Builds the physical `Aggregate` node for SQL grouping and aggregate calls.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`EngineError::Unsupported`] when a projected bare column is not
-    /// present in the SQL `GROUP BY` list.
-    ///
-    /// Returns [`EngineError::TypeError`] if the underlying `Aggregate` operator
-    /// rejects a group key or aggregate input column.
-    fn create_aggregate_plan<'a>(
-        child: PlanNode<'a>,
-        projections: &[SelectProjection],
-        group_by_cols: &[ColumnId],
-    ) -> Result<PlanNode<'a>, EngineError> {
-        let invalid_col = projections.iter().find_map(|p| {
-            if let ResolvedExpr::Column(c) = p.expr
-                && !group_by_cols.contains(&c)
-            {
-                return Some(c);
-            }
-            None
-        });
-
-        if let Some(col_id) = invalid_col {
-            let col_name = child.schema().col_name(col_id).unwrap_or("<unknown>");
-            return Err(EngineError::Unsupported(format!(
-                "column '{col_name}' (index {col_id}) must appear in GROUP BY or be used in an aggregate",
-            )));
-        }
-
-        let schema = child.schema().clone();
-        let agg_exprs = projections
-            .iter()
-            .filter_map(|p| Self::projection_to_agg_expr(p, &schema))
-            .collect::<Result<Vec<_>, _>>()?;
-
-        Ok(PlanNode::aggregate(child, group_by_cols, agg_exprs)?)
     }
 
     /// Converts a [`SelectProjection`] with an aggregate expression into an [`AggregateExpr`].
@@ -937,20 +1022,14 @@ impl Engine<'_> {
                     .alias
                     .clone()
                     .unwrap_or_else(|| "COUNT(*)".try_into().unwrap());
-                Some(Ok(AggregateExpr {
-                    func: AggregateFunc::CountStar,
-                    arg: ResolvedExpr::Literal(crate::Value::Null),
+                let aggr = AggregateExpr::new(
+                    AggregateFunc::CountStar,
+                    ResolvedExpr::Literal(Value::Null),
                     output_name,
-                }))
+                );
+                Some(Ok(aggr))
             }
             ResolvedExpr::Agg { func, arg } => {
-                let agg_func = match func {
-                    AggFunc::Count => AggregateFunc::CountCol,
-                    AggFunc::Sum => AggregateFunc::Sum,
-                    AggFunc::Avg => AggregateFunc::Avg,
-                    AggFunc::Min => AggregateFunc::Min,
-                    AggFunc::Max => AggregateFunc::Max,
-                };
                 let arg_display = match arg.as_ref() {
                     ResolvedExpr::Column(id) => schema.col_name(*id).unwrap_or("?").to_string(),
                     _ => "expr".to_string(),
@@ -958,11 +1037,10 @@ impl Engine<'_> {
                 let default_name: NonEmptyString = format!("{func}({arg_display})")
                     .try_into()
                     .unwrap_or_else(|_| "agg".try_into().unwrap());
-                Some(Ok(AggregateExpr {
-                    func: agg_func,
-                    arg: *arg.clone(),
-                    output_name: proj.alias.clone().unwrap_or(default_name),
-                }))
+                let output_name = proj.alias.clone().unwrap_or(default_name);
+                let aggr =
+                    AggregateExpr::new(AggregateFunc::from(*func), *arg.clone(), output_name);
+                Some(Ok(aggr))
             }
             _ => None,
         }
@@ -1917,15 +1995,94 @@ mod tests {
     }
 
     #[test]
-    fn right_join_is_rejected_by_planner() {
+    fn right_join_column_order_matches_sql_written_order() {
         let dir = tempdir().unwrap();
         let (catalog, txn_mgr) = seed_users_and_orders(dir.path());
         let engine = Engine::new(&catalog, &txn_mgr);
 
-        expect_unsupported(run(
+        // The planner internally swaps inputs (orders LEFT JOIN users) to reuse
+        // the LeftOuter path, then adds a reorder projection to restore the
+        // SQL-written column layout: (users.id, users.name, users.age, orders.id,
+        // orders.user_id, orders.total).
+        //
+        // If the reorder projection is missing or wrong, columns bleed across the
+        // boundary — e.g. users.name at index 1 would instead show orders.user_id.
+        // This test pins every column of one specific row to catch that.
+        let (schema, rows) = run_select(
             &engine,
-            "SELECT * FROM users RIGHT JOIN orders ON users.id = orders.user_id",
-        ));
+            "SELECT users.id, users.name, orders.total \
+             FROM users RIGHT JOIN orders ON users.id = orders.user_id",
+        );
+        assert_eq!(field_names(&schema), vec!["id", "name", "total"]);
+        assert_eq!(rows.len(), 3, "all 3 orders have a matching user");
+
+        // Sort by orders.total so the assertion order is deterministic.
+        let mut got = rows
+            .iter()
+            .map(|r| {
+                (
+                    r.get(0).unwrap().clone(), // users.id
+                    r.get(1).unwrap().clone(), // users.name
+                    r.get(2).unwrap().clone(), // orders.total
+                )
+            })
+            .collect::<Vec<_>>();
+        got.sort_by_key(|(_, _, t)| match t {
+            Value::Int64(v) => *v,
+            _ => i64::MAX,
+        });
+
+        // Seed: alice(id=1) → total=100, bob(id=2) → total=150, alice(id=1) → total=200.
+        // Sorted ascending by total: 100, 150, 200.
+        assert_eq!(got, vec![
+            (
+                Value::Int64(1),
+                Value::String("alice".into()),
+                Value::Int64(100)
+            ),
+            (
+                Value::Int64(2),
+                Value::String("bob".into()),
+                Value::Int64(150)
+            ),
+            (
+                Value::Int64(1),
+                Value::String("alice".into()),
+                Value::Int64(200)
+            ),
+        ]);
+    }
+
+    #[test]
+    fn right_join_null_pads_unmatched_right_rows() {
+        let dir = tempdir().unwrap();
+        let (catalog, txn_mgr) = seed_users_and_orders(dir.path());
+        let engine = Engine::new(&catalog, &txn_mgr);
+
+        // Add an order whose user_id=999 matches nobody in the users table.
+        run_ok(
+            &engine,
+            "INSERT INTO orders (id, user_id, total) VALUES (99, 999, 500)",
+        );
+
+        let (_, rows) = run_select(
+            &engine,
+            "SELECT users.id, orders.total FROM users RIGHT JOIN orders ON users.id = orders.user_id",
+        );
+        // 3 matched orders + 1 unmatched order = 4 rows total
+        assert_eq!(rows.len(), 4);
+
+        // Exactly one row must have NULL in users.id (the unmatched order).
+        let null_rows: Vec<&Tuple> = rows
+            .iter()
+            .filter(|r| r.get(0).unwrap().is_null())
+            .collect();
+        assert_eq!(null_rows.len(), 1, "one right row has no matching user");
+        assert_eq!(
+            null_rows[0].get(1).unwrap(),
+            &Value::Int64(500),
+            "orders.total=500 for the unmatched order"
+        );
     }
 
     // ──────────────────────── binder unit tests ──────────────────────────────

@@ -24,8 +24,8 @@
 //! - [`join`]       — nested-loop, hash, and sort-merge joins
 //! - [`setops`]     — union, intersect, except, distinct
 //! - [`aggregate`]  — grouping and aggregation
-//! - [`resolve`]    — `ColumnLookup` trait, `ResolvedExpr` type, `resolve_expr`, and
-//!   `ResolvedExpr::eval` — column names resolved once, evaluated with plain index lookups
+//! - [`resolve`]    — `ColumnLookup` trait, `ResolvedExpr` type, and `ResolvedExpr::eval` — column
+//!   names resolved once via `ResolvedExpr::resolve`, evaluated with plain index lookups
 
 pub mod aggregate;
 pub mod join;
@@ -35,7 +35,7 @@ pub mod setops;
 pub mod unary;
 
 use fallible_iterator::FallibleIterator;
-pub use resolve::{ColumnLookup, ResolvedCaseBranch, ResolvedExpr, resolve_expr};
+pub use resolve::{ColumnLookup, ResolvedCaseBranch, ResolvedExpr};
 use thiserror::Error;
 
 use crate::{
@@ -63,6 +63,81 @@ pub enum ExecutionError {
     Index(String),
 }
 
+/// A buffer of materialized tuples with a forwarding cursor.
+///
+/// Used by any operator that must fully buffer its input before emitting output
+/// — [`Aggregate`](aggregate::Aggregate) for group finalization, and both sides
+/// of [`SortMergeJoin`](join::SortMergeJoin) for sort-then-merge.
+///
+/// The cursor advances with [`forward`](Self::forward) and resets to the start
+/// with [`reset`](Self::reset), so the same buffer can be replayed without
+/// re-materializing.
+#[derive(Debug, Default)]
+pub struct TupleCursor {
+    pub(crate) tuples: Vec<Tuple>,
+    cursor: usize,
+}
+
+impl TupleCursor {
+    /// Creates an empty cursor positioned before any tuple.
+    pub fn new() -> Self {
+        Self {
+            tuples: Vec::new(),
+            cursor: 0,
+        }
+    }
+
+    /// Creates a cursor pre-loaded with `tuples`, positioned at the first element.
+    pub fn from_vec(tuples: Vec<Tuple>) -> Self {
+        Self { tuples, cursor: 0 }
+    }
+
+    /// Advances the cursor by one position.
+    pub fn forward(&mut self) {
+        self.cursor += 1;
+    }
+
+    /// Returns `true` when the cursor has moved past the last tuple.
+    pub fn exhausted(&self) -> bool {
+        self.cursor >= self.tuples.len()
+    }
+
+    /// Returns a reference to the tuple at the current cursor position.
+    ///
+    /// # Panics
+    ///
+    /// Panics if called when [`exhausted`](Self::exhausted) is `true`.
+    pub fn current(&self) -> &Tuple {
+        self.tuples
+            .get(self.cursor)
+            .expect("cursor is not exhausted")
+    }
+
+    /// Returns the raw cursor index (0-based position of the current tuple).
+    pub fn current_idx(&self) -> usize {
+        self.cursor
+    }
+
+    /// Resets the cursor to the beginning without clearing the buffered tuples.
+    pub fn reset(&mut self) {
+        self.cursor = 0;
+    }
+}
+
+impl std::ops::Index<usize> for TupleCursor {
+    type Output = Tuple;
+
+    fn index(&self, index: usize) -> &Self::Output {
+        &self.tuples[index]
+    }
+}
+
+impl std::ops::IndexMut<usize> for TupleCursor {
+    fn index_mut(&mut self, index: usize) -> &mut Self::Output {
+        &mut self.tuples[index]
+    }
+}
+
 /// The core trait every execution operator must implement.
 ///
 /// `Executor` extends [`FallibleIterator`] — so every operator is a fallible
@@ -82,6 +157,14 @@ pub trait Executor: FallibleIterator<Item = Tuple, Error = ExecutionError> {
     /// The default returns [`ExecutionError::RewindNotSupported`].
     fn rewind(&mut self) -> Result<(), ExecutionError> {
         Err(ExecutionError::RewindNotSupported)
+    }
+
+    /// Returns the number of physical fields in the output schema of this operator.
+    ///
+    /// This accounts for all underlying representation fields that may be used for
+    /// disk or memory layout purposes, which may differ from the logical column count.
+    fn physical_num_fields(&self) -> usize {
+        self.schema().physical_num_fields()
     }
 }
 
@@ -115,6 +198,21 @@ pub enum PlanNode<'a> {
     Distinct(setops::Distinct<'a>),
 
     Aggregate(aggregate::Aggregate<'a>),
+}
+
+/// Selects the physical join algorithm and carries its algorithm-specific predicate.
+///
+/// Pass this to [`PlanNode::join`] together with a [`join::JoinType`] to build any join node
+/// without needing a separate factory function per algorithm × join-type combination.
+pub enum JoinAlgo {
+    /// Cartesian product — no predicate. [`join::JoinType`] is ignored.
+    Cross,
+    /// Nested-loop join evaluated against an arbitrary boolean expression.
+    NestedLoop(ResolvedExpr),
+    /// Hash join keyed on a single equality column pair.
+    Hash(join::JoinPredicate),
+    /// Sort-merge join keyed on a single equality column pair.
+    SortMerge(join::JoinPredicate),
 }
 
 impl<'a> PlanNode<'a> {
@@ -154,40 +252,23 @@ impl<'a> PlanNode<'a> {
         )?))
     }
 
-    pub fn cross_join(left: Self, right: Self) -> Self {
-        Self::CrossJoin(join::CrossJoin::new(left, right))
-    }
-
-    pub fn nested_loop_join(left: Self, right: Self, predicate: ResolvedExpr) -> Self {
-        Self::NestedLoopJoin(join::NestedLoopJoin::new(left, right, predicate))
-    }
-
-    pub fn nested_loop_left_outer_join(left: Self, right: Self, predicate: ResolvedExpr) -> Self {
-        Self::NestedLoopJoin(
-            join::NestedLoopJoin::new(left, right, predicate)
-                .with_join_type(join::JoinType::LeftOuter),
-        )
-    }
-
-    pub fn hash_join(left: Self, right: Self, predicate: join::JoinPredicate) -> Self {
-        Self::HashJoin(join::HashJoin::new(left, right, predicate))
-    }
-
-    pub fn hash_left_outer_join(left: Self, right: Self, predicate: join::JoinPredicate) -> Self {
-        Self::HashJoin(
-            join::HashJoin::new(left, right, predicate).with_join_type(join::JoinType::LeftOuter),
-        )
-    }
-
-    pub fn sort_merge_left_outer_join(
-        left: Self,
-        right: Self,
-        predicate: join::JoinPredicate,
-    ) -> Self {
-        Self::SortMergeJoin(
-            join::SortMergeJoin::new(left, right, predicate)
-                .with_join_type(join::JoinType::LeftOuter),
-        )
+    /// Builds a join node for `left ⋈ right`.
+    ///
+    /// `algo` picks the physical algorithm and carries its predicate; `join_type` controls
+    /// how unmatched rows are handled. [`JoinAlgo::Cross`] ignores `join_type`.
+    pub fn join(left: Self, right: Self, algo: JoinAlgo, join_type: join::JoinType) -> Self {
+        match algo {
+            JoinAlgo::Cross => Self::CrossJoin(join::CrossJoin::new(left, right)),
+            JoinAlgo::NestedLoop(expr) => Self::NestedLoopJoin(
+                join::NestedLoopJoin::new(left, right, expr).with_join_type(join_type),
+            ),
+            JoinAlgo::Hash(pred) => {
+                Self::HashJoin(join::HashJoin::new(left, right, pred).with_join_type(join_type))
+            }
+            JoinAlgo::SortMerge(pred) => Self::SortMergeJoin(
+                join::SortMergeJoin::new(left, right, pred).with_join_type(join_type),
+            ),
+        }
     }
 
     pub fn aggregate(

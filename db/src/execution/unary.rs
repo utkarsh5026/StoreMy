@@ -124,7 +124,7 @@ impl<'a> Filter<'a> {
     /// Builds a `WHERE` operator over an already-planned child.
     ///
     /// `predicate` must have all column references pre-resolved to [`primitives::ColumnId`]s
-    /// via [`super::resolve_expr`] — no schema is needed at eval time.
+    /// via [`ResolvedExpr::resolve`] — no schema is needed at eval time.
     #[tracing::instrument(skip_all, fields(op = "filter"))]
     pub fn new(child: Box<PlanNode<'a>>, predicate: ResolvedExpr) -> Self {
         Self { child, predicate }
@@ -182,6 +182,18 @@ impl Executor for Filter<'_> {
 pub struct ProjectItem {
     pub expr: ResolvedExpr,
     pub alias: Option<NonEmptyString>,
+}
+
+impl ProjectItem {
+    pub fn new(expr: ResolvedExpr, alias: Option<NonEmptyString>) -> Self {
+        Self { expr, alias }
+    }
+}
+
+impl From<ResolvedExpr> for ProjectItem {
+    fn from(expr: ResolvedExpr) -> Self {
+        Self::new(expr, None)
+    }
 }
 
 #[derive(Debug)]

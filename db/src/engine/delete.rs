@@ -24,7 +24,7 @@ use crate::{
     FileId,
     catalog::manager::Catalog,
     engine::{Engine, EngineError, StatementResult, scope::SingleTableScope},
-    execution::{ResolvedExpr, resolve_expr},
+    execution::ResolvedExpr,
     parser::statements::DeleteStatement,
     transaction::Transaction,
 };
@@ -56,7 +56,8 @@ impl Engine<'_> {
 
         let predicate = where_clause
             .map(|expr| {
-                resolve_expr(&scope, expr).map_err(|e| EngineError::TypeError(e.to_string()))
+                ResolvedExpr::resolve(expr, &scope)
+                    .map_err(|e| EngineError::TypeError(e.to_string()))
             })
             .transpose()?;
 

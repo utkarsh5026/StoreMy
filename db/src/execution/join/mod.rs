@@ -82,6 +82,7 @@ use crate::{
 pub enum JoinType {
     Inner,
     LeftOuter,
+    FullOuter,
 }
 
 /// A join predicate is a condition that must be satisfied by two tuples in order to be joined.
@@ -160,9 +161,9 @@ pub(super) fn get_value(
     })
 }
 
-/// Internal container for a pair of child inputs and their merged output schema.
+/// Internal container for a pair of child inputs, their merged output schema, and the join type.
 ///
-/// Used by every join executor as the common "two children + output schema" bundle.
+/// Used by every join executor as the common "two children + output schema + join type" bundle.
 /// The join-specific matching logic (`JoinPredicate`, `Expr` residual,
 /// etc.) lives on each executor itself.
 ///
@@ -176,10 +177,14 @@ pub(super) struct JoinInputs<'a> {
     pub(super) left_width: usize,
     /// Number of columns in the right child's output.
     pub(super) right_width: usize,
+    pub(super) join_type: JoinType,
 }
 
 impl<'a> JoinInputs<'a> {
     /// Constructs a new `JoinInputs` by merging the two children's schemas.
+    ///
+    /// `join_type` defaults to [`JoinType::Inner`]; call `with_join_type` on the
+    /// enclosing executor to override it.
     pub(super) fn new(left: PlanNode<'a>, right: PlanNode<'a>) -> Self {
         let left_width = left.schema().physical_num_fields();
         let right_width = right.schema().physical_num_fields();
@@ -190,6 +195,7 @@ impl<'a> JoinInputs<'a> {
             schema,
             left_width,
             right_width,
+            join_type: JoinType::Inner,
         }
     }
 }

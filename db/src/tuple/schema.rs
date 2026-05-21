@@ -496,10 +496,13 @@ impl TupleSchema {
     /// [`TupleError::FieldIndexOutOfBounds`] for the first index in `indices`
     /// that is past the end of the schema - usually a sign the binder
     /// produced a `GROUP BY` index that does not match the child's width.
-    pub fn project_fields(&self, indices: &[usize]) -> Result<Vec<Field>, TupleError> {
+    pub fn project_fields(
+        &self,
+        indices: impl IntoIterator<Item = usize>,
+    ) -> Result<Vec<Field>, TupleError> {
         indices
-            .iter()
-            .map(|&i| {
+            .into_iter()
+            .map(|i| {
                 self.fields
                     .get(i)
                     .cloned()
@@ -755,7 +758,7 @@ mod tests {
     #[test]
     fn schema_project_fields_keeps_order() {
         let schema = schema_id_name_age();
-        let fields = schema.project_fields(&[2, 0]).unwrap();
+        let fields = schema.project_fields([2_usize, 0]).unwrap();
         assert_eq!(fields.len(), 2);
         assert_eq!(fields[0].name, "age");
         assert_eq!(fields[1].name, "id");
@@ -764,7 +767,7 @@ mod tests {
     #[test]
     fn schema_project_fields_out_of_range() {
         let schema = schema_id_name_age();
-        let err = schema.project_fields(&[0, 99]).unwrap_err();
+        let err = schema.project_fields([0_usize, 99]).unwrap_err();
         assert!(matches!(err, TupleError::FieldIndexOutOfBounds {
             index: 99
         }));
