@@ -30,7 +30,7 @@ use std::{cmp::Ordering, collections::HashMap};
 
 use fallible_iterator::FallibleIterator;
 
-use super::{ExecutionError, Executor};
+use super::{ExecutionError, Executor, TupleCursor};
 use crate::{
     execution::{PlanNode, ResolvedExpr},
     primitives::{ColumnId, NonEmptyString},
@@ -61,7 +61,8 @@ pub enum AggregateFunc {
 }
 
 impl From<crate::parser::statements::AggFunc> for AggregateFunc {
-    /// Converts a parser-level [`AggFunc`] into an execution-level [`AggregateFunc`].
+    /// Converts a parser-level [`crate::parser::statements::AggFunc`] into an execution-level
+    /// [`AggregateFunc`].
     ///
     /// `COUNT(*)` is never routed through this conversion — it is represented as
     /// [`ResolvedExpr::CountStar`] in the binder before this point. So
@@ -298,11 +299,10 @@ impl Accumulator {
 #[derive(Debug)]
 pub struct Aggregate<'a> {
     child: Box<PlanNode<'a>>,
-    group_by_cols: Vec<usize>,
+    group_by_cols: Vec<ColumnId>,
     agg_exprs: Vec<AggregateExpr>,
     output_schema: TupleSchema,
-    groups: Vec<Tuple>,
-    cursor: usize,
+    groups: TupleCursor,
     materialized: bool,
 }
 
@@ -349,109 +349,50 @@ impl<'a> Aggregate<'a> {
         group_by_ids: &[ColumnId],
         agg_exprs: Vec<AggregateExpr>,
     ) -> Result<Self, ExecutionError> {
-        let child_schema = child.schema();
+        // First we need to make sure that our groupby columns are valid
+        // and they lie inside the child tuple schema
+        group_by_ids.iter().try_for_each(|c| {
+            let idx = usize::from(*c);
+            child.schema().field_or_err(idx).map(|_| ()).map_err(|_| {
+                ExecutionError::TypeError(format!("GROUP BY column {c} is out of bounds"))
+            })
+        })?;
+        let group_by_cols = group_by_ids.to_vec();
 
-        let group_by_cols = Self::resolve_group_by_indices(group_by_ids, child_schema)?;
-        let output_fields = Self::build_output_fields(&group_by_cols, child_schema, &agg_exprs);
+        // Then we create the output schema that will be produced finally
+        // the output schema consists of the given project cols like name, age
+        // and the aggregate functions call like COUNT(*) or SUM(price)
+        let output_schema = {
+            let n = group_by_cols.len() + agg_exprs.len();
+            let mut output_fields = Vec::with_capacity(n);
+            output_fields.extend(
+                child
+                    .schema()
+                    .project_fields(group_by_cols.iter().map(|&c| usize::from(c)))
+                    .expect("GROUP BY columns already validated by new"),
+            );
+
+            for AggregateExpr {
+                func,
+                arg,
+                output_name,
+            } in &agg_exprs
+            {
+                let input_type = arg.infer_type(child.schema());
+                let output_type = Type::from((func, input_type));
+                output_fields.push(Field::new_non_empty(output_name.clone(), output_type));
+            }
+            TupleSchema::new(output_fields)
+        };
 
         Ok(Self {
             child: Box::new(child),
             group_by_cols,
             agg_exprs,
-            output_schema: TupleSchema::new(output_fields),
-            groups: Vec::new(),
-            cursor: 0,
+            output_schema,
+            groups: TupleCursor::new(),
             materialized: false,
         })
-    }
-
-    /// Resolves bound `GROUP BY` column IDs into concrete child-schema indices.
-    ///
-    /// In SQL terms, this is the step that turns planner/binder output
-    /// (`GROUP BY` references) into positional offsets used during execution.
-    ///
-    /// # SQL examples
-    ///
-    /// Assume child schema `users(id, name, age)` with resolved indices
-    /// `id -> 0`, `name -> 1`, `age -> 2`.
-    ///
-    /// ```sql
-    /// -- SELECT age, COUNT(*) FROM users GROUP BY age;
-    /// --   group_by_ids = [col(age=2)] -> group_by_cols = [2]
-    ///
-    /// -- SELECT id, name, COUNT(*) FROM users GROUP BY id, name;
-    /// --   group_by_ids = [col(id=0), col(name=1)] -> group_by_cols = [0, 1]
-    ///
-    /// -- SELECT COUNT(*) FROM users;
-    /// --   group_by_ids = [] -> group_by_cols = []
-    /// ```
-    ///
-    /// # Errors
-    ///
-    /// Returns [`ExecutionError::TypeError`] when a `GROUP BY` column id points
-    /// outside the child schema (for example, SQL references a column position
-    /// that is not present in the bound input).
-    fn resolve_group_by_indices(
-        group_by_ids: &[ColumnId],
-        child_schema: &TupleSchema,
-    ) -> Result<Vec<usize>, ExecutionError> {
-        let group_by_cols = group_by_ids
-            .iter()
-            .map(|&c| {
-                let idx = usize::from(c);
-                child_schema.field_or_err(idx).map(|_| idx).map_err(|_| {
-                    ExecutionError::TypeError(format!(
-                        "GROUP BY column index {idx} is out of bounds"
-                    ))
-                })
-            })
-            .collect::<Result<Vec<_>, _>>()?;
-
-        Ok(group_by_cols)
-    }
-
-    /// Builds output fields for `GROUP BY + aggregate` projection shape.
-    ///
-    /// The resulting fields are:
-    /// - all `GROUP BY` columns (in order), followed by
-    /// - one field per aggregate spec, using the inferred output type for the aggregate function.
-    ///
-    /// # SQL examples
-    ///
-    /// Assume child schema `users(id, name, age)` with resolved indices
-    /// `id -> 0`, `name -> 1`, `age -> 2`.
-    ///
-    /// ```sql
-    /// -- SELECT age, COUNT(*) AS n FROM users GROUP BY age;
-    /// --   output fields: [age, n]
-    ///
-    /// -- SELECT name, SUM(age) AS total_age FROM users GROUP BY name;
-    /// --   output fields: [name, total_age]
-    ///
-    /// -- SELECT COUNT(*) AS n FROM users;
-    /// --   output fields: [n]
-    /// ```
-    fn build_output_fields(
-        group_by_cols: &[usize],
-        child_schema: &TupleSchema,
-        agg_exprs: &[AggregateExpr],
-    ) -> Vec<Field> {
-        let mut output_fields = child_schema
-            .project_fields(group_by_cols)
-            .expect("group_by_cols already validated by resolve_group_by_indices");
-
-        for AggregateExpr {
-            func,
-            arg,
-            output_name,
-        } in agg_exprs
-        {
-            let input_type = arg.infer_type(child_schema);
-            let output_type = Type::from((func, input_type));
-            output_fields.push(Field::new_non_empty(output_name.clone(), output_type));
-        }
-
-        output_fields
     }
 
     /// Drains the child once and materializes final `GROUP BY` result tuples.
@@ -486,15 +427,15 @@ impl<'a> Aggregate<'a> {
         }
 
         let map = self.build_group_accumulators()?;
-        self.groups = map
+        let tuples = map
             .into_iter()
-            .map(|(mut key, accums)| {
-                key.extend(accums.into_iter().map(Accumulator::finalize));
-                Tuple::new(key)
+            .map(|(mut group_by_cols, accums)| {
+                group_by_cols.extend(accums.into_iter().map(Accumulator::finalize));
+                Tuple::new(group_by_cols)
             })
             .collect();
-        tracing::debug!(tuples = self.groups.len(), "aggregate: materialized");
-
+        self.groups = TupleCursor::from_vec(tuples);
+        tracing::debug!(tuples = self.groups.tuples.len(), "aggregate: materialized");
         self.materialized = true;
         Ok(())
     }
@@ -537,15 +478,14 @@ impl<'a> Aggregate<'a> {
                 break;
             };
 
-            let key = self
+            let group_by_key = self
                 .group_by_cols
                 .iter()
-                .map(|&i| ColumnId::try_from(i).unwrap())
-                .map(|c| tuple.value_at_or_null(c))
+                .map(|&c| tuple.value_at_or_null(c))
                 .cloned()
-                .collect();
+                .collect::<Vec<_>>();
 
-            let accums = map.entry(key).or_insert_with(|| {
+            let accums = map.entry(group_by_key).or_insert_with(|| {
                 self.agg_exprs
                     .iter()
                     .map(|s| Accumulator::new(&s.func))
@@ -568,11 +508,11 @@ impl FallibleIterator for Aggregate<'_> {
 
     fn next(&mut self) -> Result<Option<Tuple>, ExecutionError> {
         self.materialize()?;
-        if self.cursor >= self.groups.len() {
+        if self.groups.exhausted() {
             return Ok(None);
         }
-        let tuple = self.groups[self.cursor].clone();
-        self.cursor += 1;
+        let tuple = self.groups.current().clone();
+        self.groups.forward();
         Ok(Some(tuple))
     }
 }
@@ -587,7 +527,7 @@ impl Executor for Aggregate<'_> {
     /// The child does **not** need to be rewound — the groups are already
     /// materialized in memory.
     fn rewind(&mut self) -> Result<(), ExecutionError> {
-        self.cursor = 0;
+        self.groups.reset();
         Ok(())
     }
 }
@@ -800,7 +740,7 @@ mod tests {
         assert_eq!(i64_at(&out[0], 0), 0);
     }
 
-    // ===== Coverage for neighbouring behaviour while we're here =====
+    // ===== Coverage for neighboring behaviour while we're here =====
 
     // Empty input still emits one row for ungrouped aggregation... actually no,
     // current impl produces zero groups when input is empty even without GROUP BY.

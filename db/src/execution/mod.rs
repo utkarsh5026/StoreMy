@@ -63,6 +63,81 @@ pub enum ExecutionError {
     Index(String),
 }
 
+/// A buffer of materialized tuples with a forwarding cursor.
+///
+/// Used by any operator that must fully buffer its input before emitting output
+/// — [`Aggregate`](aggregate::Aggregate) for group finalization, and both sides
+/// of [`SortMergeJoin`](join::SortMergeJoin) for sort-then-merge.
+///
+/// The cursor advances with [`forward`](Self::forward) and resets to the start
+/// with [`reset`](Self::reset), so the same buffer can be replayed without
+/// re-materializing.
+#[derive(Debug, Default)]
+pub struct TupleCursor {
+    pub(crate) tuples: Vec<Tuple>,
+    cursor: usize,
+}
+
+impl TupleCursor {
+    /// Creates an empty cursor positioned before any tuple.
+    pub fn new() -> Self {
+        Self {
+            tuples: Vec::new(),
+            cursor: 0,
+        }
+    }
+
+    /// Creates a cursor pre-loaded with `tuples`, positioned at the first element.
+    pub fn from_vec(tuples: Vec<Tuple>) -> Self {
+        Self { tuples, cursor: 0 }
+    }
+
+    /// Advances the cursor by one position.
+    pub fn forward(&mut self) {
+        self.cursor += 1;
+    }
+
+    /// Returns `true` when the cursor has moved past the last tuple.
+    pub fn exhausted(&self) -> bool {
+        self.cursor >= self.tuples.len()
+    }
+
+    /// Returns a reference to the tuple at the current cursor position.
+    ///
+    /// # Panics
+    ///
+    /// Panics if called when [`exhausted`](Self::exhausted) is `true`.
+    pub fn current(&self) -> &Tuple {
+        self.tuples
+            .get(self.cursor)
+            .expect("cursor is not exhausted")
+    }
+
+    /// Returns the raw cursor index (0-based position of the current tuple).
+    pub fn current_idx(&self) -> usize {
+        self.cursor
+    }
+
+    /// Resets the cursor to the beginning without clearing the buffered tuples.
+    pub fn reset(&mut self) {
+        self.cursor = 0;
+    }
+}
+
+impl std::ops::Index<usize> for TupleCursor {
+    type Output = Tuple;
+
+    fn index(&self, index: usize) -> &Self::Output {
+        &self.tuples[index]
+    }
+}
+
+impl std::ops::IndexMut<usize> for TupleCursor {
+    fn index_mut(&mut self, index: usize) -> &mut Self::Output {
+        &mut self.tuples[index]
+    }
+}
+
 /// The core trait every execution operator must implement.
 ///
 /// `Executor` extends [`FallibleIterator`] — so every operator is a fallible

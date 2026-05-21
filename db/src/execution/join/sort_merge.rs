@@ -1,15 +1,11 @@
-use std::{
-    cmp::Ordering,
-    collections::VecDeque,
-    ops::{Index, IndexMut},
-};
+use std::{cmp::Ordering, collections::VecDeque};
 
 use fallible_iterator::FallibleIterator;
 
 use super::{JoinInputs, JoinPredicate, JoinType, get_value, null_right_tuple};
 use crate::{
     Value,
-    execution::{ExecutionError, Executor, PlanNode, ResolvedExpr},
+    execution::{ExecutionError, Executor, PlanNode, ResolvedExpr, TupleCursor},
     primitives::Predicate,
     tuple::{Tuple, TupleSchema},
 };
@@ -47,45 +43,6 @@ fn drain_all_tuples(node: &mut PlanNode, buf: &mut Vec<Tuple>) -> Result<(), Exe
         buf.push(t);
     }
     Ok(())
-}
-
-#[derive(Debug)]
-struct TupleCursor(Vec<Tuple>, usize);
-
-impl TupleCursor {
-    pub fn new() -> Self {
-        Self(Vec::new(), 0)
-    }
-
-    pub fn forward(&mut self) {
-        self.1 += 1;
-    }
-
-    pub fn exhausted(&self) -> bool {
-        self.1 >= self.0.len()
-    }
-
-    pub fn current(&self) -> &Tuple {
-        self.0.get(self.1).expect("current_idx set with pending")
-    }
-
-    pub fn current_idx(&self) -> usize {
-        self.1
-    }
-}
-
-impl Index<usize> for TupleCursor {
-    type Output = Tuple;
-
-    fn index(&self, index: usize) -> &Self::Output {
-        &self.0[index]
-    }
-}
-
-impl IndexMut<usize> for TupleCursor {
-    fn index_mut(&mut self, index: usize) -> &mut Self::Output {
-        &mut self.0[index]
-    }
 }
 
 /// Joins two inputs by sorting them on the join key and then merging.
@@ -184,24 +141,24 @@ impl<'a> SortMergeJoin<'a> {
             self.inputs.join_type,
             JoinType::LeftOuter | JoinType::FullOuter
         ) {
-            drain_all_tuples(&mut self.inputs.left, &mut self.l_sorted.0)?;
+            drain_all_tuples(&mut self.inputs.left, &mut self.l_sorted.tuples)?;
         } else {
-            drain_tuples(&mut self.inputs.left, &mut self.l_sorted.0, left_idx)?;
+            drain_tuples(&mut self.inputs.left, &mut self.l_sorted.tuples, left_idx)?;
         }
         // FullOuter must also preserve NULL-key right rows.
         if self.inputs.join_type == JoinType::FullOuter {
-            drain_all_tuples(&mut self.inputs.right, &mut self.r_sorted.0)?;
+            drain_all_tuples(&mut self.inputs.right, &mut self.r_sorted.tuples)?;
         } else {
-            drain_tuples(&mut self.inputs.right, &mut self.r_sorted.0, right_idx)?;
+            drain_tuples(&mut self.inputs.right, &mut self.r_sorted.tuples, right_idx)?;
         }
         tracing::debug!(
-            left = self.l_sorted.0.len(),
-            right = self.r_sorted.0.len(),
+            left = self.l_sorted.tuples.len(),
+            right = self.r_sorted.tuples.len(),
             "smj: inputs drained, sorting"
         );
 
-        Self::sort_by_column(&mut self.l_sorted.0, left_idx);
-        Self::sort_by_column(&mut self.r_sorted.0, right_idx);
+        Self::sort_by_column(&mut self.l_sorted.tuples, left_idx);
+        Self::sort_by_column(&mut self.r_sorted.tuples, right_idx);
 
         self.sorted = true;
         Ok(())
