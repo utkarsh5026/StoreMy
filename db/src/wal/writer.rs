@@ -32,30 +32,21 @@ use thiserror::Error;
 use crate::{
     codec::{CodecError, Encode},
     primitives::{Lsn, PageId, TransactionId},
-    storage::Page,
     wal::log::{LogRecord, LogRecordBody},
 };
 
 /// Errors that can occur during WAL operations.
 #[derive(Debug, Error)]
 pub enum WalError {
-    /// An I/O failure while reading or writing the WAL file.
     #[error("WAL I/O error: {0}")]
     Io(#[from] std::io::Error),
 
-    /// A failure while encoding a log record into bytes.
     #[error("WAL codec error: {0}")]
     Codec(#[from] CodecError),
 
-    /// An operation was attempted on a transaction ID that has no active entry.
-    ///
-    /// This typically means the transaction was never begun, or it was already
-    /// committed or removed.
     #[error("unknown transaction: {0}")]
     UnknownTransaction(TransactionId),
 
-    /// A page-level WAL operation required a before-image but the page
-    /// returned `None` from [`Page::before_image`].
     #[error("missing before-image for page {0:?}")]
     MissingBeforeImage(PageId),
 }
@@ -117,7 +108,7 @@ pub struct Wal {
     /// The underlying WAL file. Accessed via `write_at` for positioned I/O so
     /// the file cursor does not need to be kept in sync with concurrent writes.
     file: fs::File,
-    /// All mutable state, serialised under a single lock.
+    /// All mutable state, serialized under a single lock.
     state: Mutex<WalState>,
     /// Notifies the flush loop that new data is available, and notifies waiters
     /// (e.g. callers of [`Wal::force`]) that data has been flushed.
@@ -310,56 +301,6 @@ impl Wal {
         before: Vec<u8>,
     ) -> Result<Lsn, WalError> {
         self.log_data_op(tid, page_id, LogRecordBody::Delete { page_id, before })
-    }
-
-    /// Logs an `Insert` record by reading the after-image directly from `page`.
-    ///
-    /// Equivalent to calling [`Self::log_insert`] with `page.page_data()`.
-    pub fn log_page_insert(
-        &self,
-        tid: TransactionId,
-        page_id: PageId,
-        page: &impl Page,
-    ) -> Result<Lsn, WalError> {
-        self.log_insert(tid, page_id, page.page_data().to_vec())
-    }
-
-    /// Logs a `Delete` record by reading the before-image directly from `page`.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`WalError::MissingBeforeImage`] if the page has no before-image.
-    pub fn log_page_delete(
-        &self,
-        tid: TransactionId,
-        page_id: PageId,
-        page: &impl Page,
-    ) -> Result<Lsn, WalError> {
-        let before = page
-            .before_image()
-            .ok_or(WalError::MissingBeforeImage(page_id))?
-            .to_vec();
-        self.log_delete(tid, page_id, before)
-    }
-
-    /// Logs an `Update` record by reading both images directly from `page`.
-    ///
-    /// `before_image()` provides the undo image and `page_data()` the redo image.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`WalError::MissingBeforeImage`] if the page has no before-image.
-    pub fn log_page_update(
-        &self,
-        tid: TransactionId,
-        page_id: PageId,
-        page: &impl Page,
-    ) -> Result<Lsn, WalError> {
-        let before = page
-            .before_image()
-            .ok_or(WalError::MissingBeforeImage(page_id))?
-            .to_vec();
-        self.log_update(tid, page_id, before, page.page_data().to_vec())
     }
 
     /// Blocks until all records up to (and including) `target` have been flushed

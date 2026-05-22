@@ -219,7 +219,11 @@ impl HeapFile {
 
         let mut page = self.h_page(&guard.read())?;
         page.delete_tuple(record_id.slot_id)?;
-        let lsn = self.wal.log_page_delete(transaction_id, page_id, &page)?;
+        let before = page
+            .before_image()
+            .ok_or(WalError::MissingBeforeImage(page_id))?
+            .to_vec();
+        let lsn = self.wal.log_delete(transaction_id, page_id, before)?;
         guard.write(&page.page_data(), lsn);
         Ok(())
     }
@@ -248,7 +252,13 @@ impl HeapFile {
         let mut page = self.h_page(&guard.read())?;
         page.delete_tuple(record_id.slot_id)?;
         page.insert_tuple(tuple.clone())?;
-        let lsn = self.wal.log_page_update(transaction_id, page_id, &page)?;
+        let before = page
+            .before_image()
+            .ok_or(WalError::MissingBeforeImage(page_id))?
+            .to_vec();
+        let lsn =
+            self.wal
+                .log_update(transaction_id, page_id, before, page.page_data().to_vec())?;
         guard.write(&page.page_data(), lsn);
         Ok(())
     }
@@ -374,7 +384,9 @@ impl HeapFile {
             return Ok(Vec::new());
         }
 
-        let lsn = self.wal.log_page_insert(transaction_id, page_id, &page)?;
+        let lsn = self
+            .wal
+            .log_insert(transaction_id, page_id, page.page_data().to_vec())?;
         guard.write(&page.page_data(), lsn);
         self.num_pages
             .fetch_max(page_id.page_no.0 + 1, Ordering::AcqRel);
