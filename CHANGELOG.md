@@ -1,0 +1,339 @@
+# Changelog
+
+All notable changes to StoreMy are tracked here.
+Each section corresponds to a merge into `main`.
+Older sections (before 2025-10-01) are the Go → Rust transition era.
+
+## [Unreleased]
+
+### Bug Fixes
+
+- **catalog**: Remove auto-increment rows when column or table drops
+- **docs**: Qualify UniqueConstraint intra-doc link with full crate path
+- **docs**: Add missing imports and correct ColumnId constructor in Tuple::get_col doctest
+- **engine**: Correct unique-check threshold in UPDATE from >1 to >0
+- **engine**: Repair update docs and align row-change checks with fk helpers
+- **docs**: Avoid private intra-doc links for rustdoc -D warnings
+- **parser**: Parse update set rhs as expressions
+- **codec-derive**: Avoid broken rustdoc intra-doc links
+- **ci**: Skip fuzz smoke when no fuzz workspace exists
+- **binder**: Validate primary key columns via schema lookup
+- **catalog**: Replay user_tables on init and drop dependent indexes with tables
+- **parser**: Read qualifier before dot in column references
+- **tuple**: Align set_field with validate and add tests
+- **catalog**: Update TupleReader usage in TableRow implementation
+
+### Documentation
+
+- **readme**: Overhaul README with logo, badges, and richer content
+- **engine**: Update doc comments to reference concrete error variants
+- **rustdoc**: Fix broken intra-doc links across db modules
+- **parser**: Fix doctest for nonemptystring column names
+- **execution**: Explain sql unary operator mappings
+- **binder**: Expand query binder rustdocs and examples
+- **btree**: Document btree node codec layout
+- **execution**: Add SQL-oriented docs for boolean expressions
+- **viz**: Document heap dump loaders and views
+- **db**: Expand primitives documentation and align tuple doctest imports
+- **catalog**: Add rustdoc and tests for Catalog core infrastructure
+- **catalog**: Add rustdoc and tests for table management operations
+- **execution**: Add rustdoc to all unary operators in unary.rs
+- **parser**: Add doc comments and TryFrom<Token> for Value to token.rs
+- **types**: Add full rustdoc coverage to types module
+
+### Features
+
+- **planner**: Wire FULL OUTER JOIN and unify join dispatch via JoinAlgo
+- **join**: Wire FULL OUTER JOIN through executor and planner
+- **join**: Implement right join as a swapped left join with column reorder
+- **parser**: Parse full outer join syntax
+- **aggregate**: Evaluate arbitrary expressions in aggregate args
+- **engine**: Enable left join and expression select projections
+- **expr**: Add arithmetic operators to expression parse and eval
+- **execution**: Add CrossJoin, LEFT OUTER JOIN, and migrate join predicates to ResolvedExpr
+- **execution**: Add resolved expression resolution and evaluation
+- **parser**: Parse cross join and using join clauses
+- **parser**: Route select list through full expression parser
+- **btree**: Add tracing instrumentation for splits, searches, and deletes
+- **execution**: Add tracing instrumentation throughout plan evaluation
+- **expr**: Add LIKE and NOT LIKE parsing and evaluation
+- **expr**: Add case when parse and scalar evaluation
+- **expr**: Add BETWEEN parsing, evaluation, and fix NOT BETWEEN bug
+- **eval**: Implement IN and NOT IN scalar evaluation
+- **parser**: Parse IN and NOT IN postfix expressions
+- **expr**: Add IS NULL parsing and scalar evaluation
+- **engine**: Add structured debug tracing to all statement handlers
+- **catalog**: Add structured debug tracing to catalog operations
+- **observability**: Add structured query logging, --file CLI mode, and Grafana/Loki log stack
+- **cli**: Add --file sql script mode and statement result log helpers
+- **web**: Add url-based database routing via react-router
+- **web**: Introduce zustand stores for database, query, and ui state
+- **web**: Replace side-by-side heap layout with shadcn tabs
+- **web**: Add database templates with table preview and starter queries
+- **web**: Migrate UI to Tailwind CSS v4 with shadcn/ui primitives
+- **web**: Add CreateTableWizard modal with live SQL preview
+- **lexer**: Strip -- and /* */ comments before tokenising
+- **parser**: Support multi-statement input via parse_all
+- **registry**: Introduce DatabaseRegistry for multi-database support
+- **insert**: Evaluate VALUES expressions using eval_expr
+- **engine**: Support scalar expressions in UPDATE SET clauses
+- **engine**: Enforce CHECK constraints on INSERT
+- **catalog**: Cache parsed CHECK constraint expressions on TableInfo
+- **execution**: Add scalar expression evaluator with SQL null semantics
+- **insert**: Support DEFAULT VALUES and partial named-column INSERT
+- **insert**: Support partial column lists and INSERT … DEFAULT VALUES
+- **insert**: Reserve auto-increment ranges and populate omitted columns
+- **catalog**: Reserve auto-increment ranges and unify systable cleanup
+- **engine**: Persist auto-increment metadata and guard dml writes
+- **catalog**: Track auto-increment column in table metadata
+- **catalog**: Add system table for auto-increment counters
+- **engine**: Reject CREATE TABLE with multiple AUTO_INCREMENT columns
+- **engine**: Finish select binder/planner refactor and add join always-true
+- **engine**: Create btree backing indexes for unique constraints on ddl
+- **tuple**: Add get_col for value lookup by column id
+- **engine**: Add fk module for child ref checks and parent actions
+- **engine**: Implement update execution with constraints and index sync
+- **engine**: Add delete execution module with tests
+- **engine**: Execute drop index inside catalog transactions
+- **engine**: Add create index executor and txn-wrap ddl statements
+- **engine**: Add create table executor and table constraint helpers
+- **engine**: Add ddl and schema resolution helpers
+- **engine**: Enforce foreign key constraints on INSERT, UPDATE, DELETE
+- **catalog**: Add ConstraintDef enum and find_inbound_fks for FK enforcement
+- **constraints**: Enforce unique constraints on updates
+- **constraints**: Enforce unique constraints during inserts
+- **ddl**: Execute UNIQUE constraints on create/alter with backfill
+- **alter-table**: Report unique constraint add/drop in UIs
+- **binder**: Bind column-level unique into create table constraints
+- **catalog**: Add autoname_unique_constraint_for for unique ddl names
+- **catalog**: Persist backing index id for unique constraints
+- **execution**: Implement index scan backed by heap rid fetch
+- **catalog**: Persist unique and foreign key constraints
+- **binder**: Bind ddl table constraints
+- **ddl**: Add table constraint support in create/alter
+- **catalog**: Add constraint and fk system tables with row types
+- **catalog**: Add CatalogTupleRead extension for catalog tuple fields
+- **parser**: Parse unique and foreign key constraints in ddl
+- **parser**: Add fk/unique/check ast and expr-based where clauses
+- **parser**: Add expr submodule with pratt parser and sql ast
+- **engine**: Wire catalog-only ALTER TABLE operations end-to-end
+- **binder**: Bind catalog-level alter table actions
+- **parser**: Support additional alter table action forms
+- **catalog**: Roundtrip column default values via systable encoding
+- **catalog**: Persist dropped columns in system catalog
+- **engine**: Execute alter table and surface no-op results
+- **catalog**: Implement add column and keep schema cache consistent
+- **catalog**: Support dropping non-primary-key columns
+- **catalog**: Add table/column rename catalog operations
+- **binder**: Add ALTER TABLE binding for schema changes
+- **binder**: Add shared helpers and bind alter table statement
+- **web**: Expose heap page inspection helpers
+- **engine**: Add create/insert/select statement support
+- **web**: Add http server and Vite UI for catalog/heap/query inspection
+- **engine**: Carry select output schema through results and repl
+- **db**: Merge Rust port into main
+- **catalog**: Replay user objects to restore tables and indexes
+- **catalog**: Replay user objects to restore tables and indexes
+- **executor**: Add select planning and multi-key order by sort
+- **database**: Allow configuring data directory
+- **binder**: Bind select query clauses
+- **viz**: Add on-disk format visualizer CLI
+- **types**: Add codec impls for Type
+- **engine**: Wire ddl and dml execution through Engine
+- **catalog**: Add index row constructors
+- **index**: Implement btree index access method
+- **index**: Add btree AnyIndex support and builders
+- **index**: Add file_id and shared page fetch helper
+- **codec**: Add Encode/Decode derive macros crate
+- **codec**: Add vec<T> length-prefixed codec and re-export derives
+- **btree**: Add leaf space accounting and insert split scaffolding
+- **viz**: Add hash index dump model and json loader
+- **primitives**: Add indexid and convert fileid to raw u64
+- **index**: Add anyindex create/init and unsupported btree kind
+- **repl**: Print index ddl outcomes and describe columnid primary keys
+- **binder**: Route ddl/dml through modules and typed column ids
+- **catalog**: Add secondary index catalog registry
+- **catalog**: Support composite primary key metadata
+- **binder**: Add typed ddl binders for create/drop table and index
+- **aggregate**: Add count(col) semantics and expand operator docs
+- **execution**: Support compound join predicates in join executors
+- **observability**: Add txn lifecycle logs and export new modules
+- **observability**: Add configurable tracing sinks and otlp export
+- **index**: Support composite keys in hash index
+- **index**: Add typed composite index interface and page envelope
+- **index**: Add hash index access method and tests
+- **heap**: Add page-level crc32 checksum verification
+- **parser**: Add clause-level tracing and richer select parsing
+- **parser**: Support insert source variants and new insert forms
+- **parser**: Enforce single-statement parsing and add alter dispatch
+- **parser**: Add alter table parsing with action-level coverage
+- **parser**: Extend ast for alter table and richer sql constructs
+- **parser**: Parse key lists for create table and create index
+- **database**: Add table metadata helpers and rustdocs
+- **catalog**: Add sorted user table listing api
+- **repl**: Add modular rustyline repl with meta commands and theming
+- **parser**: Support select aliases and offset-only limit clauses
+- **tuple**: Add column-oriented helpers and sql-aligned documentation
+- **execution**: Add shared boolean expression evaluator
+- **execution**: Add set operations and tests
+- **execution**: Add seq scan executor and plan node constructors
+- **execution**: Implement join executors and join predicate
+- **viz**: Add python WAL parser and transaction chain analysis
+- **types**: Coerce literal values to target column type
+- **binder**: Introduce semantic binding layer for DDL statements
+- **parser**: Introduce TableRef/TableWithJoins and support AS alias syntax
+- **hooks**: Add pre-commit hook for Rust code formatting and linting
+- **execution**: Add boolean expression filters and unary operator tests
+- **engine**: Add insert, delete, and update execution
+- **parser**: Use Value::try_from for where predicate literals
+- **lexer**: Add float literal lexing and iterator poison state
+- **heap**: Expose heap file schema and fallible heap scan iterator
+- **cli**: Add rustyline REPL with pretty output and history
+- **parser**: Add statement Display and column-to-schema conversion
+- **engine**: Add statement executor with DDL support
+- **heap**: Enhance HeapFile and HeapPage with improved tuple management and documentation
+- **catalog**: Implement table management functions in Catalog
+- **catalog**: Extend CatalogError enum with HeapError and additional error variants
+- **catalog**: Add from_schema method to ColumnRow for catalog column construction
+- **parser**: Enhance lexer and parser with comprehensive error handling and documentation
+- **wal**: Enhance Write-Ahead Log with detailed record types and encoding
+- **heap**: Add delete_if method to HeapFile for conditional tuple deletion
+- **token**: Add comprehensive tests for TokenType and Token functionality
+- **catalog**: Add validation methods for TableRow, ColumnRow, and IndexRow creation
+- **tuple**: Enhance serialization and deserialization of tuples with bitmap encoding
+- **codec**: Add NumericDoesNotFit error variant to CodecError enum
+- **catalog**: Enhance SystemTable with row validation and schema updates
+- **catalog**: Implement Catalog struct and system table initialization
+- **catalog**: Enhance system table schema and introduce row structures
+- **catalog**: Implement CatalogError and TupleReader for typed tuple extraction
+- **types**: Implement TryFrom<u32> and From<Type> for Type conversion
+- **catalog**: Add system table module for catalog management
+- **buffer_pool**: Enhance PageStore with detailed documentation and LockRequest integration
+- **heap**: Implement HeapFile and HeapPage for multi-page tuple storage
+- **transaction**: Implement transaction management with ACID support
+- **buffer_pool**: Add lock manager and page store
+- **types**: Add Add impl and TryFrom<f64> for Value
+- **aggregate**: Implement GROUP BY and aggregate functions
+- **primitives**: Add ColumnId type with encode/decode and sentinel support
+- **execution**: Implement set operators Union, Intersect, Except, and Distinct
+- **execution**: Implement Project operator with typed ColumnId input
+- **wal**: Add LogRecord type with Encode/Decode and full test coverage
+- **parser**: Implement SELECT statement parsing with JOIN support
+- **parser**: Add INSERT and UPDATE AST nodes with Display impls
+- **parser**: Add AST nodes for CREATE INDEX, DROP INDEX, and DELETE statements
+- **parser**: Add Statement enum and DropStatement AST node
+- **lexer**: Add SQL lexer with token scanning and error types
+- **parser**: Add TokenType enum and Token struct for SQL lexer
+- **storage**: Add HeapPage with slotted-page layout and StorageError
+- **primitives**: Add core database primitive types with ser/de support
+- **tuple**: Add TupleSchema and Tuple types with ser/de support
+
+### Refactor
+
+- Simplify Equals method in HeapPageID to use primitives.PageID interface
+- Replace pageIDImpl with heap.NewHeapPageID for improved deserialization
+- Simplify CombineTuples by using copyFieldsTo method for field copying
+- Replace tuple.PageID with primitives.PageID across the codebase
+
+### Refactoring
+
+- **execution**: Promote TupleCursor to shared execution primitive
+- **execution**: Migrate remaining eval call sites to methods
+- **execution**: Move resolved expr eval onto ResolvedExpr
+- **execution**: Generalize project to resolved expressions
+- **join**: Split monolithic join.rs into per-executor modules
+- **execution**: Drop eval.rs and use ResolvedExpr in engine
+- **engine**: Resolve select predicates and projections at bind time
+- **execution**: Evaluate filter predicates from resolved exprs
+- **execution**: Drop BooleanExpression, use parser Expr + eval_expr
+- **database-picker**: Promote db list above templates, collapse templates behind toggle
+- **engine**: Centralize literal binding and tighten insert checks
+- **web**: Align http mapping with engine errors and unexport binder
+- **engine**: Remove dml.rs and route insert/update/delete explicitly
+- **engine**: Streamline insert constraint checks with helpers
+- **engine**: Extract shared column resolution and where binding
+- **engine**: Extract insert execution to insert module
+- **binder**: Remove binder module
+- **engine**: Move collect_matching_rows from mod.rs to helpers.rs
+- **catalog**: Convert free functions to Catalog methods in constraints.rs
+- **catalog**: Rename InboundFk to ReferencingFk and extract constraint helpers
+- **engine**: Split errors into error.rs and dedupe table missing cases
+- **engine**: Merge DDL binder into executor, delete binder/ddl.rs
+- **catalog**: Remove duplicate unique constraint autoname API
+- **engine**: Build create-table constraints in one pre-sized vec
+- **engine**: Extract show indexes module and run via with_txn
+- **engine**: Use Option<&NonEmptyString> for constraint naming
+- **catalog**: Pass constraint defs into create_table
+- **engine**: Modularize drop table execution
+- **engine**: Route alter table through BoundAlterAction
+- **binder**: Bind where clauses as Expr; NonEmptyString table refs
+- **catalog**: Align TableInfo imports and api string names
+- **catalog**: Expose table constraint metadata
+- **binder**: Centralize column id resolution
+- **parser**: Add parse_expression entrypoint
+- **binder**: Thread nonempty identifiers through ddl binding
+- **catalog**: Store table and index names as nonempty strings
+- **engine**: Derive alter table names from file ids
+- **engine**: Derive alter table names from file ids
+- **binder**: Centralize insert column list validation
+- **tuple**: Separate physical vs logical schema width
+- **schema**: Migrate catalog and query names to nonemptystring
+- **tuple**: Split tuple module into schema and row submodules
+- **catalog**: Replace systable codec macros with explicit impls
+- **binder**: Centralize schema column lookup error handling
+- **binder**: Expose query module and simplify bound select
+- **engine**: Unify dml helpers and update ci nextest output
+- **dml**: Use columnid assignments and extract row helpers
+- **binder**: Split single-table and select name resolution
+- **parser**: Make join.table a TableRef
+- **index**: Derive hash bucket codec
+- **index**: Centralize Option<PageNumber> codec via NIL sentinel
+- **tuple**: Return ColumnId from field_by_name
+- **catalog**: Infer system table operations from row types
+- **catalog**: Normalize system table row metadata
+- **storage**: Split index kind out and tighten page errors
+- **parser**: Use IndexKind in create index AST and DDL parser
+- **index**: Centralize shared index contracts and errors
+- **parser**: Replace token positions with byte spans
+- **storage**: Flatten storage core into single module file
+- **parser**: Normalize select ast with select items and limit clause
+- **execution**: Centralize boolean expression evaluation
+- **heap**: Switch heap page to bidirectional slotted layout
+- **engine**: Route ddl/dml through binder for execution
+- **binder**: Split binders into ddl/dml and borrow row values
+- **parser**: Introduce ColumnRef for qualified column references
+- **ddl**: Split create and drop into submodules with execute
+- **dml**: Modularize engine dml and tighten insert materialization
+- **parser**: Factor select/ddl parsing and add parser tests
+- **parser**: Split monolithic parsers into ddl, dml, and query
+- **error**: Remove error module for StoreMy database
+- **transaction**: Streamline TransactionError enum and enhance Transaction struct
+- **catalog**: Expose fields in TableRow, ColumnRow, and IndexRow structs
+- **types**: Simplify equality and ordering implementations for Value
+- **primitives**: Simplify Lsn by removing redundant helper methods
+- **wal**: Split LogRecord into typed header + body variants
+- **primitives**: Replace ad-hoc serialize/deserialize with Encode/Decode traits
+- **primitives**: Widen FileId to u64, harden SlotId construction, replace PageId trait with concrete struct
+- **types**: Apply clippy suggestions for idiomatic conversions
+- **types**: Move error types into module and use idiomatic traits
+
+### Tests
+
+- **insert**: Add integration tests for DEFAULT VALUES and partial INSERT
+- **auto_increment**: Add end-to-end integration tests for AUTO_INCREMENT lifecycle
+- **integration**: Assert current engineerror shapes after binder removal
+- **catalog**: Cover fk add/drop, referencing lookup, and check constraints
+- **parser**: Update parse dispatch tests for new ddl and expr forms
+- **parser**: Cover create table unique and foreign key clauses
+- **engine**: Ensure select * hides dropped columns
+- **schema**: Validate skips dropped columns
+- **alter_table**: Add end-to-end ddl mutation coverage
+- **binder**: Add binder coverage for alter table actions
+- **integration**: Add end-to-end database facade coverage
+- **binder**: Cover select binding behavior
+- **parser**: Tighten parser coverage for eof and ast shape changes
+- **engine**: Add ddl executor tests and improve errors
+- **tuple**: Add comprehensive unit tests for Field, TupleSchema, and Tuple
+- **wal**: Update log tests to use Lsn tuple constructor
+
+
