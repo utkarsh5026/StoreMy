@@ -66,12 +66,18 @@ impl Aries {
     /// Returns [`AnalysisError::Wal`] on seek/read/decode failures, or
     /// [`AnalysisError::TornCheckpoint`] when the checkpoint record at
     /// `checkpoint_lsn` cannot be read intact.
+    #[tracing::instrument(
+        name = "aries_analysis",
+        skip(reader),
+        fields(checkpoint_lsn = ?checkpoint_lsn)
+    )]
     pub(super) fn run_analysis(
         reader: &mut WalReader,
         checkpoint_lsn: Option<Lsn>,
     ) -> Result<AnalysisResult, AnalysisError> {
         let mut active_transactions: HashMap<TransactionId, AttEntry> = HashMap::new();
         let mut dirty_pages: HashMap<PageId, DptEntry> = HashMap::new();
+        let mut records_scanned = 0usize;
 
         let scan_from_lsn = match checkpoint_lsn {
             None => Lsn(0),
@@ -85,6 +91,7 @@ impl Aries {
 
         reader.seek_to(scan_from_lsn).map_err(AnalysisError::Wal)?;
         while let Some(LogRecord { header, body }) = reader.next().map_err(AnalysisError::Wal)? {
+            records_scanned += 1;
             Self::process_record(
                 header.lsn,
                 header.tid,
@@ -96,6 +103,14 @@ impl Aries {
         }
 
         let redo_lsn = AnalysisResult::compute_redo_lsn(&dirty_pages);
+        tracing::debug!(
+            scan_from_lsn = ?scan_from_lsn,
+            records_scanned,
+            att_size = active_transactions.len(),
+            dpt_size = dirty_pages.len(),
+            redo_lsn = ?redo_lsn,
+            "analysis pass complete"
+        );
         Ok(AnalysisResult {
             att: active_transactions,
             dpt: dirty_pages,
