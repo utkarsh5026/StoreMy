@@ -27,38 +27,15 @@ use std::{
 };
 
 use parking_lot::{Condvar, Mutex};
-use thiserror::Error;
 
 use crate::{
-    codec::{CodecError, Encode},
+    codec::Encode,
     primitives::{Lsn, PageId, TransactionId},
-    storage::Page,
-    wal::log::{LogRecord, LogRecordBody},
+    wal::{
+        WalError,
+        log::{LogRecord, LogRecordBody},
+    },
 };
-
-/// Errors that can occur during WAL operations.
-#[derive(Debug, Error)]
-pub enum WalError {
-    /// An I/O failure while reading or writing the WAL file.
-    #[error("WAL I/O error: {0}")]
-    Io(#[from] std::io::Error),
-
-    /// A failure while encoding a log record into bytes.
-    #[error("WAL codec error: {0}")]
-    Codec(#[from] CodecError),
-
-    /// An operation was attempted on a transaction ID that has no active entry.
-    ///
-    /// This typically means the transaction was never begun, or it was already
-    /// committed or removed.
-    #[error("unknown transaction: {0}")]
-    UnknownTransaction(TransactionId),
-
-    /// A page-level WAL operation required a before-image but the page
-    /// returned `None` from [`Page::before_image`].
-    #[error("missing before-image for page {0:?}")]
-    MissingBeforeImage(PageId),
-}
 
 /// Per-transaction bookkeeping kept in memory while a transaction is active.
 struct TxnInfo {
@@ -117,7 +94,7 @@ pub struct Wal {
     /// The underlying WAL file. Accessed via `write_at` for positioned I/O so
     /// the file cursor does not need to be kept in sync with concurrent writes.
     file: fs::File,
-    /// All mutable state, serialised under a single lock.
+    /// All mutable state, serialized under a single lock.
     state: Mutex<WalState>,
     /// Notifies the flush loop that new data is available, and notifies waiters
     /// (e.g. callers of [`Wal::force`]) that data has been flushed.
@@ -275,7 +252,9 @@ impl Wal {
 
     /// Logs an `Insert` record for a new tuple written to `page_id`.
     ///
-    /// `after` is the encoded tuple that was inserted.
+    /// `before` is the full page image *before* the insert (used to undo the
+    /// operation during recovery).  `after` is the full page image *after* the
+    /// insert (used to redo it).
     ///
     /// The page is added to the dirty-page table if it is not already present.
     ///
@@ -287,15 +266,21 @@ impl Wal {
         &self,
         tid: TransactionId,
         page_id: PageId,
+        before: Vec<u8>,
         after: Vec<u8>,
     ) -> Result<Lsn, WalError> {
-        self.log_data_op(tid, page_id, LogRecordBody::Insert { page_id, after })
+        self.log_data_op(tid, page_id, LogRecordBody::Insert {
+            page_id,
+            before,
+            after,
+        })
     }
 
     /// Logs a `Delete` record for a tuple removed from `page_id`.
     ///
-    /// `before` is the encoded tuple that was deleted, needed to undo the
-    /// operation during recovery.
+    /// `before` is the full page image *before* the delete (used to undo the
+    /// operation).  `after` is the full page image *after* the delete (used to
+    /// redo it during recovery).
     ///
     /// The page is added to the dirty-page table if it is not already present.
     ///
@@ -308,58 +293,81 @@ impl Wal {
         tid: TransactionId,
         page_id: PageId,
         before: Vec<u8>,
+        after: Vec<u8>,
     ) -> Result<Lsn, WalError> {
-        self.log_data_op(tid, page_id, LogRecordBody::Delete { page_id, before })
+        self.log_data_op(tid, page_id, LogRecordBody::Delete {
+            page_id,
+            before,
+            after,
+        })
     }
 
-    /// Logs an `Insert` record by reading the after-image directly from `page`.
+    /// Appends a Compensation Log Record (CLR) describing one undo step.
     ///
-    /// Equivalent to calling [`Self::log_insert`] with `page.page_data()`.
-    pub fn log_page_insert(
-        &self,
-        tid: TransactionId,
-        page_id: PageId,
-        page: &impl Page,
-    ) -> Result<Lsn, WalError> {
-        self.log_insert(tid, page_id, page.page_data().to_vec())
-    }
-
-    /// Logs a `Delete` record by reading the before-image directly from `page`.
+    /// Called exclusively by the ARIES Undo pass. Unlike [`Wal::log_update`], the
+    /// caller supplies `prev_lsn` and `undo_next_lsn` explicitly because:
+    ///
+    /// - `prev_lsn` — Undo owns the loser's chain state (in the ATT inherited from Analysis);
+    ///   losers are not in `active_txns` during recovery.
+    /// - `undo_next_lsn` — set to the `prev_lsn` of the record this CLR compensates, so a future
+    ///   recovery skips past work already done.
+    ///
+    /// `after` is the page image *after* the before-image has been restored
+    /// (i.e. what the page looks like with the undone change removed). It is
+    /// used by Redo on a subsequent recovery to reapply the compensation
+    /// idempotently via the `page_lsn` check.
+    ///
+    /// Also marks `page_id` dirty in the WAL's dirty-page table so that the
+    /// next checkpoint reflects the compensation.
+    ///
+    /// Returns the LSN assigned to the CLR.
     ///
     /// # Errors
     ///
-    /// Returns [`WalError::MissingBeforeImage`] if the page has no before-image.
-    pub fn log_page_delete(
+    /// Returns [`WalError::Io`] or [`WalError::Codec`] on write failures.
+    /// Does **not** error if `tid` is not in `active_txns` — losers written
+    /// during recovery legitimately bypass that map.
+    pub fn log_clr(
         &self,
         tid: TransactionId,
+        prev_lsn: Lsn,
         page_id: PageId,
-        page: &impl Page,
+        after: Vec<u8>,
+        undo_next_lsn: Lsn,
     ) -> Result<Lsn, WalError> {
-        let before = page
-            .before_image()
-            .ok_or(WalError::MissingBeforeImage(page_id))?
-            .to_vec();
-        self.log_delete(tid, page_id, before)
+        let mut state = self.state.lock();
+        let lsn = Self::write_record(&self.file, &mut state, tid, prev_lsn, LogRecordBody::Clr {
+            page_id,
+            after,
+            undo_next_lsn,
+        })?;
+        state.dirty_pages.entry(page_id).or_insert(lsn);
+        Ok(lsn)
     }
 
-    /// Logs an `Update` record by reading both images directly from `page`.
+    /// Appends an `End` record marking a transaction as fully terminated.
     ///
-    /// `before_image()` provides the undo image and `page_data()` the redo image.
+    /// Written by:
+    /// - The Undo pass after a loser's entire chain has been compensated.
+    /// - (Future) Normal-abort completion once rollback finishes.
+    ///
+    /// `prev_lsn` is the transaction's most recent record LSN (the last CLR
+    /// for undone losers, or the abort record for cleanly-aborted txns). The
+    /// caller supplies it because the recovery path has no entry in
+    /// `active_txns`.
+    ///
+    /// Returns the LSN assigned to the `End` record. The record is **not**
+    /// forced to disk by this call — Undo is idempotent, so a crash before
+    /// flush simply means the next recovery re-undoes (harmlessly).
     ///
     /// # Errors
     ///
-    /// Returns [`WalError::MissingBeforeImage`] if the page has no before-image.
-    pub fn log_page_update(
-        &self,
-        tid: TransactionId,
-        page_id: PageId,
-        page: &impl Page,
-    ) -> Result<Lsn, WalError> {
-        let before = page
-            .before_image()
-            .ok_or(WalError::MissingBeforeImage(page_id))?
-            .to_vec();
-        self.log_update(tid, page_id, before, page.page_data().to_vec())
+    /// Returns [`WalError::Io`] or [`WalError::Codec`] on write failures.
+    pub fn log_end(&self, tid: TransactionId, prev_lsn: Lsn) -> Result<Lsn, WalError> {
+        let mut state = self.state.lock();
+        let lsn = Self::write_record(&self.file, &mut state, tid, prev_lsn, LogRecordBody::End)?;
+        state.active_txns.remove(&tid);
+        Ok(lsn)
     }
 
     /// Blocks until all records up to (and including) `target` have been flushed
@@ -571,7 +579,7 @@ mod tests {
         let p = page(1, 1);
 
         let lsn1 = wal.log_begin(tid).unwrap();
-        let lsn2 = wal.log_insert(tid, p, vec![1, 2, 3]).unwrap();
+        let lsn2 = wal.log_insert(tid, p, vec![], vec![1, 2, 3]).unwrap();
         let lsn3 = wal.log_commit(tid).unwrap();
 
         assert!(lsn1 < lsn2, "begin < insert");
@@ -631,7 +639,7 @@ mod tests {
         let p = page(1, 1);
 
         wal.log_begin(tid).unwrap();
-        let after_insert = wal.log_insert(tid, p, vec![1]).unwrap();
+        let after_insert = wal.log_insert(tid, p, vec![], vec![1]).unwrap();
         assert_eq!(txn_last_lsn(&wal, tid), after_insert);
 
         let after_update = wal.log_update(tid, p, vec![1], vec![2]).unwrap();
@@ -644,7 +652,7 @@ mod tests {
         let tid = TransactionId::new(1);
         let p = page(1, 1);
         wal.log_begin(tid).unwrap();
-        let lsn = wal.log_insert(tid, p, vec![1, 2, 3]).unwrap();
+        let lsn = wal.log_insert(tid, p, vec![], vec![1, 2, 3]).unwrap();
         assert_eq!(dirty_pages(&wal).get(&p), Some(&lsn));
     }
 
@@ -664,7 +672,7 @@ mod tests {
         let tid = TransactionId::new(1);
         let p = page(1, 3);
         wal.log_begin(tid).unwrap();
-        let lsn = wal.log_delete(tid, p, vec![9, 8, 7]).unwrap();
+        let lsn = wal.log_delete(tid, p, vec![9, 8, 7], vec![]).unwrap();
         assert_eq!(dirty_pages(&wal).get(&p), Some(&lsn));
     }
 
@@ -677,7 +685,7 @@ mod tests {
         let tid = TransactionId::new(1);
         let p = page(1, 1);
         wal.log_begin(tid).unwrap();
-        let first = wal.log_insert(tid, p, vec![1]).unwrap();
+        let first = wal.log_insert(tid, p, vec![], vec![1]).unwrap();
         let _second = wal.log_update(tid, p, vec![1], vec![2]).unwrap();
         assert_eq!(dirty_pages(&wal).get(&p), Some(&first));
     }
@@ -689,8 +697,8 @@ mod tests {
         let p1 = page(1, 1);
         let p2 = page(1, 2);
         wal.log_begin(tid).unwrap();
-        let lsn1 = wal.log_insert(tid, p1, vec![1]).unwrap();
-        let lsn2 = wal.log_insert(tid, p2, vec![2]).unwrap();
+        let lsn1 = wal.log_insert(tid, p1, vec![], vec![1]).unwrap();
+        let lsn2 = wal.log_insert(tid, p2, vec![], vec![2]).unwrap();
         let dirty = dirty_pages(&wal);
         assert_eq!(dirty.get(&p1), Some(&lsn1));
         assert_eq!(dirty.get(&p2), Some(&lsn2));
@@ -716,7 +724,7 @@ mod tests {
     fn insert_unknown_transaction_errors() {
         let (wal, _dir) = make_wal(NO_BUF);
         let err = wal
-            .log_insert(TransactionId::new(99), page(1, 1), vec![])
+            .log_insert(TransactionId::new(99), page(1, 1), vec![], vec![])
             .unwrap_err();
         assert!(matches!(err, WalError::UnknownTransaction(_)));
     }
@@ -734,7 +742,7 @@ mod tests {
     fn delete_unknown_transaction_errors() {
         let (wal, _dir) = make_wal(NO_BUF);
         let err = wal
-            .log_delete(TransactionId::new(99), page(1, 1), vec![])
+            .log_delete(TransactionId::new(99), page(1, 1), vec![], vec![])
             .unwrap_err();
         assert!(matches!(err, WalError::UnknownTransaction(_)));
     }
@@ -750,7 +758,7 @@ mod tests {
         wal.log_begin(t2).unwrap();
         assert_eq!(active_txns(&wal).len(), 2);
 
-        wal.log_insert(t1, p, vec![1]).unwrap();
+        wal.log_insert(t1, p, vec![], vec![1]).unwrap();
         wal.log_update(t2, p, vec![1], vec![2]).unwrap();
 
         wal.log_commit(t1).unwrap();
@@ -779,7 +787,10 @@ mod tests {
         let (wal, _dir) = make_wal(16);
         let tid = TransactionId::new(1);
         wal.log_begin(tid).unwrap();
-        assert!(wal.log_insert(tid, page(1, 1), vec![0u8; 512]).is_ok());
+        assert!(
+            wal.log_insert(tid, page(1, 1), vec![], vec![0u8; 512])
+                .is_ok()
+        );
     }
 
     #[test]
@@ -805,5 +816,94 @@ mod tests {
         let tid = TransactionId::new(1);
         wal.log_begin(tid).unwrap();
         assert!(wal.close().is_ok());
+    }
+
+    // ── log_clr ──────────────────────────────────────────────────────────────
+
+    #[test]
+    fn clr_marks_page_dirty() {
+        // The Undo pass writes a CLR then restores the before-image to the page;
+        // the WAL must record that page as dirty so the next checkpoint sees it.
+        let (wal, _dir) = make_wal(NO_BUF);
+        let tid = TransactionId::new(1);
+        let p = page(1, 5);
+        let lsn = wal
+            .log_clr(tid, Lsn::INVALID, p, vec![9, 8, 7], Lsn::INVALID)
+            .unwrap();
+        assert_eq!(dirty_pages(&wal).get(&p), Some(&lsn));
+    }
+
+    #[test]
+    fn clr_does_not_require_active_transaction() {
+        // During recovery, losers are NOT in active_txns — log_clr must succeed
+        // anyway because it bypasses the active-txn lookup entirely.
+        let (wal, _dir) = make_wal(NO_BUF);
+        let loser = TransactionId::new(42);
+        let p = page(2, 1);
+        assert!(
+            wal.log_clr(loser, Lsn::INVALID, p, vec![], Lsn::INVALID)
+                .is_ok()
+        );
+    }
+
+    #[test]
+    fn clr_lsn_is_after_compensated_record() {
+        // The CLR is written *after* the original operation record, so its LSN
+        // must be strictly greater.
+        let (wal, _dir) = make_wal(NO_BUF);
+        let tid = TransactionId::new(1);
+        let p = page(1, 1);
+        wal.log_begin(tid).unwrap();
+        let insert_lsn = wal.log_insert(tid, p, vec![], vec![1, 2]).unwrap();
+        let clr_lsn = wal
+            .log_clr(tid, insert_lsn, p, vec![], Lsn::INVALID)
+            .unwrap();
+        assert!(clr_lsn > insert_lsn);
+    }
+
+    #[test]
+    fn clr_does_not_overwrite_earlier_dirty_entry() {
+        // dirty_pages records the *first* LSN that dirtied a page.  A CLR for
+        // the same page must not overwrite that entry.
+        let (wal, _dir) = make_wal(NO_BUF);
+        let tid = TransactionId::new(1);
+        let p = page(1, 9);
+        wal.log_begin(tid).unwrap();
+        let first = wal.log_insert(tid, p, vec![], vec![1]).unwrap();
+        wal.log_clr(tid, first, p, vec![], Lsn::INVALID).unwrap();
+        assert_eq!(dirty_pages(&wal).get(&p), Some(&first));
+    }
+
+    #[test]
+    fn end_removes_active_transaction() {
+        // Normal abort path: Begin → data ops → Abort → (undo) → End.
+        // After log_end the transaction must leave active_txns.
+        let (wal, _dir) = make_wal(NO_BUF);
+        let tid = TransactionId::new(1);
+        wal.log_begin(tid).unwrap();
+        let abort_lsn = wal.log_abort(tid).unwrap();
+        wal.log_end(tid, abort_lsn).unwrap();
+        assert!(!active_txns(&wal).contains(&tid));
+    }
+
+    #[test]
+    fn end_tolerates_absent_transaction() {
+        // Recovery path: losers were never re-inserted into active_txns, so
+        // log_end must tolerate the absence without returning an error.
+        let (wal, _dir) = make_wal(NO_BUF);
+        let loser = TransactionId::new(99);
+        assert!(wal.log_end(loser, Lsn::INVALID).is_ok());
+    }
+
+    #[test]
+    fn end_lsn_is_after_prev_lsn() {
+        // The End record is written after the final CLR (or Abort), so its LSN
+        // must be strictly greater than the prev_lsn handed in.
+        let (wal, _dir) = make_wal(NO_BUF);
+        let tid = TransactionId::new(1);
+        wal.log_begin(tid).unwrap();
+        let abort_lsn = wal.log_abort(tid).unwrap();
+        let end_lsn = wal.log_end(tid, abort_lsn).unwrap();
+        assert!(end_lsn > abort_lsn);
     }
 }

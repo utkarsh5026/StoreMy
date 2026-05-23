@@ -35,7 +35,7 @@ use crate::{
     FileId, Lsn, PAGE_SIZE, TransactionId,
     buffer_pool::lock::{LockError, LockManager, LockRequest},
     primitives::PageId,
-    wal::writer::{Wal, WalError},
+    wal::{WalError, writer::Wal},
 };
 
 /// Errors that can arise from [`PageStore`] operations.
@@ -180,6 +180,54 @@ impl PageStore {
         }
 
         tracing::debug!(page_id = ?page_id, "buffer miss");
+
+        let frame_idx = match pool_ref.frames.iter().position(|f| f.page_id.is_none()) {
+            Some(idx) => idx,
+            None => self
+                .evict_frame(pool_ref)?
+                .ok_or(PageStoreError::PoolExhausted)?,
+        };
+
+        self.read_from_disk(page_id, pool_ref, frame_idx)?;
+
+        let frame = &mut pool_ref.frames[frame_idx];
+        frame.page_id = Some(page_id);
+        frame.pin_count = 1;
+        frame.dirty = false;
+        frame.last_lsn = Lsn::INVALID;
+        frame.ref_bit = true;
+
+        pool_ref.page_table.insert(page_id, frame_idx);
+        Ok(PageGuard {
+            store: self,
+            frame_idx,
+        })
+    }
+
+    /// Fetches a page for the ARIES Redo/Undo passes, bypassing the lock manager.
+    ///
+    /// Recovery runs before any normal transactions are active so there is no
+    /// need for lock arbitration.  Otherwise the behaviour is identical to
+    /// [`PageStore::fetch_page`]: a cache hit returns immediately; a miss reads from disk.
+    ///
+    /// # Errors
+    ///
+    /// - [`PageStoreError::FileNotRegistered`] if the page's file has not been opened yet (the
+    ///   catalog registers files after recovery).
+    /// - [`PageStoreError::PoolExhausted`] if every frame is pinned.
+    /// - [`PageStoreError::Io`] if reading from disk fails.
+    pub fn fetch_for_recovery(&self, page_id: PageId) -> Result<PageGuard<'_>, PageStoreError> {
+        let mut pool = self.pool.lock();
+        let pool_ref = &mut *pool;
+
+        if let Some(&frame_idx) = pool_ref.page_table.get(&page_id) {
+            pool_ref.frames[frame_idx].pin_count += 1;
+            pool_ref.frames[frame_idx].ref_bit = true;
+            return Ok(PageGuard {
+                store: self,
+                frame_idx,
+            });
+        }
 
         let frame_idx = match pool_ref.frames.iter().position(|f| f.page_id.is_none()) {
             Some(idx) => idx,
@@ -742,6 +790,99 @@ mod tests {
             result.is_ok(),
             "expected eviction to free a frame: {:?}",
             result.err()
+        );
+    }
+
+    // ── fetch_for_recovery ──────────────────────────────────────────────────
+
+    /// Cache miss: a page not yet in the buffer pool is read from disk and
+    /// returned as all zeros (the file was pre-extended with zeros).
+    #[test]
+    fn fetch_for_recovery_cache_miss_returns_zeroed_page() {
+        let (store, dir) = make_store(4);
+        register_data_file(&store, fid(1), &dir, "data.db");
+
+        let guard = store.fetch_for_recovery(pid(1, 0)).unwrap();
+        assert_eq!(guard.read(), [0u8; PAGE_SIZE]);
+    }
+
+    /// Cache hit: after writing through `fetch_for_recovery` the frame stays
+    /// in the pool; a second call must return that same frame with the new data.
+    #[test]
+    fn fetch_for_recovery_cache_hit_sees_prior_write() {
+        let (store, dir) = make_store(4);
+        register_data_file(&store, fid(1), &dir, "data.db");
+
+        let mut data = [0u8; PAGE_SIZE];
+        data[0] = 0xAB;
+        {
+            let guard = store.fetch_for_recovery(pid(1, 0)).unwrap();
+            guard.write(&data, Lsn(1));
+        }
+
+        let guard = store.fetch_for_recovery(pid(1, 0)).unwrap();
+        assert_eq!(
+            guard.read()[0],
+            0xAB,
+            "cache hit must return the written byte"
+        );
+    }
+
+    /// `fetch_for_recovery` must NOT acquire any lock.  If it did, a later
+    /// exclusive `fetch_page` from a different transaction would be denied;
+    /// since it bypasses the lock manager, no `release_all` is needed and the
+    /// exclusive request succeeds immediately.
+    #[test]
+    fn fetch_for_recovery_does_not_acquire_locks() {
+        let (store, dir) = make_store(4);
+        register_data_file(&store, fid(1), &dir, "data.db");
+
+        {
+            let _g = store.fetch_for_recovery(pid(1, 0)).unwrap();
+        }
+
+        // No release_all needed: the lock manager was never involved.
+        assert!(
+            store
+                .fetch_page(LockRequest::exclusive(tid(1), pid(1, 0)))
+                .is_ok(),
+            "fetch_for_recovery must not leave a phantom lock in the lock manager"
+        );
+    }
+
+    /// Fetching a page whose file was never registered must return
+    /// `FileNotRegistered` — the same contract as `fetch_page`.
+    #[test]
+    fn fetch_for_recovery_returns_file_not_registered() {
+        let (store, _dir) = make_store(4);
+
+        let err = store
+            .fetch_for_recovery(pid(99, 0))
+            .err()
+            .expect("expected an error for unregistered file");
+        assert!(
+            matches!(err, PageStoreError::FileNotRegistered(_)),
+            "expected FileNotRegistered, got {err:?}"
+        );
+    }
+
+    /// With a pool of capacity 1 and that single frame still pinned, a second
+    /// call for a different page must fail with `PoolExhausted`.
+    #[test]
+    fn fetch_for_recovery_returns_pool_exhausted_when_all_frames_pinned() {
+        let (store, dir) = make_store(1);
+        register_data_file(&store, fid(1), &dir, "data.db");
+
+        // Pin the only frame — keep _guard alive so pin_count stays at 1.
+        let _guard = store.fetch_for_recovery(pid(1, 0)).unwrap();
+
+        let err = store
+            .fetch_for_recovery(pid(1, 1))
+            .err()
+            .expect("expected an error when pool is full");
+        assert!(
+            matches!(err, PageStoreError::PoolExhausted),
+            "expected PoolExhausted, got {err:?}"
         );
     }
 

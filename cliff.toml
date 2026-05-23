@@ -1,0 +1,59 @@
+# git-cliff configuration for StoreMy
+# Docs: https://git-cliff.org/docs/configuration
+
+[changelog]
+# The header text of the changelog
+header = """
+# Changelog
+
+All notable changes to StoreMy are tracked here.
+Each section corresponds to a merge into `main`.
+Older sections (before 2025-10-01) are the Go → Rust transition era.\n
+"""
+# The template used for each tag/group section
+body = """
+{% if version %}\
+## {{ version }} — {{ timestamp | date(format="%Y-%m-%d") }}
+{% else %}\
+## [Unreleased]
+{% endif %}\
+{% for group, commits in commits | group_by(attribute="group") %}
+### {{ group | upper_first }}
+{% for commit in commits %}
+- {% if commit.scope %}**{{ commit.scope }}**: {% endif %}{{ commit.message | upper_first }}\
+{% if commit.breaking %} ⚠️ BREAKING{% endif %}
+{%- endfor %}
+{% endfor %}\n
+"""
+footer = ""
+# Remove leading/trailing whitespace
+trim = true
+
+[git]
+# Parse conventional commits (feat:, fix:, refactor:, etc.)
+conventional_commits = true
+# Skip commits that don't match the conventional format
+filter_unconventional = true
+# Don't include merge commits themselves (just their contents)
+filter_commits = false
+# How to group commits in each section
+commit_parsers = [
+    { message = "^feat", group = "Features" },
+    { message = "^fix", group = "Bug Fixes" },
+    { message = "^refactor", group = "Refactoring" },
+    { message = "^perf", group = "Performance" },
+    { message = "^test", group = "Tests" },
+    { message = "^docs", group = "Documentation" },
+    { message = "^chore\\(deps", group = "Dependencies", skip = true },
+    { message = "^chore", group = "Miscellaneous", skip = true },
+    { message = "^ci", group = "CI/CD", skip = true },
+    { message = "^style", skip = true },
+    { message = "^Merge", skip = true },
+]
+# Use git tags as version boundaries; without tags → everything is "Unreleased"
+tag_pattern = "v[0-9].*"
+# Don't skip tags that don't match a regex
+skip_tags = ""
+ignore_tags = ""
+# Sort commits within a section newest-first
+sort_commits = "newest"

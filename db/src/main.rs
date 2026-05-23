@@ -24,11 +24,12 @@ use std::{
 
 use storemy::{
     buffer_pool::page_store::PageStore, catalog::manager::Catalog, database::Database,
-    observability, repl, transaction::TransactionManager, wal::writer::Wal,
+    observability, recovery::Aries, repl, transaction::TransactionManager, wal::writer::Wal,
 };
 use tracing::{error, info};
 
 const WAL_FILE_NAME: &str = "wal.log";
+const MASTER_RECORD_FILE_NAME: &str = "master.rec";
 const REPL_HISTORY_FILE_NAME: &str = ".repl_history";
 const BUFFER_POOL_PAGES: usize = 1028;
 const WORKER_THREADS: usize = 4;
@@ -94,6 +95,24 @@ fn main() {
     );
 
     let buffer_pool = Arc::new(PageStore::new(BUFFER_POOL_PAGES, wal.clone()));
+
+    // Run crash recovery before the catalog or any transaction touches data pages.
+    // Analysis → Redo → Undo.
+    let recovery = Aries::new(
+        data_dir.join(WAL_FILE_NAME),
+        data_dir.join(MASTER_RECORD_FILE_NAME),
+    )
+    .recover(&buffer_pool, &wal)
+    .unwrap_or_else(|e| {
+        error!(error = %e, "crash recovery failed — database may be corrupt");
+        std::process::exit(1);
+    });
+    info!(
+        losers_undone = recovery.att.len(),
+        dirty_pages   = recovery.dpt.len(),
+        redo_lsn      = ?recovery.redo_lsn,
+        "ARIES recovery complete"
+    );
     let catalog = Catalog::initialize(&buffer_pool, &wal, &data_dir).unwrap_or_else(|e| {
         error!(error = %e, "failed to initialize catalog");
         std::process::exit(1);

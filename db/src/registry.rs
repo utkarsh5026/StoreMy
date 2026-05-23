@@ -9,7 +9,7 @@ use crate::{
     catalog::{CatalogError, manager::Catalog},
     database::Database,
     transaction::TransactionManager,
-    wal::writer::{Wal, WalError},
+    wal::{WalError, writer::Wal},
 };
 
 const WAL_FILE_NAME: &str = "wal.log";

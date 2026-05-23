@@ -35,7 +35,7 @@ use thiserror::Error;
 use crate::{
     buffer_pool::page_store::{PageStore, PageStoreError},
     primitives::TransactionId,
-    wal::writer::{Wal, WalError},
+    wal::{WalError, writer::Wal},
 };
 
 #[derive(Debug, Error)]
