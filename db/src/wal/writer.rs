@@ -266,7 +266,9 @@ impl Wal {
 
     /// Logs an `Insert` record for a new tuple written to `page_id`.
     ///
-    /// `after` is the encoded tuple that was inserted.
+    /// `before` is the full page image *before* the insert (used to undo the
+    /// operation during recovery).  `after` is the full page image *after* the
+    /// insert (used to redo it).
     ///
     /// The page is added to the dirty-page table if it is not already present.
     ///
@@ -278,15 +280,21 @@ impl Wal {
         &self,
         tid: TransactionId,
         page_id: PageId,
+        before: Vec<u8>,
         after: Vec<u8>,
     ) -> Result<Lsn, WalError> {
-        self.log_data_op(tid, page_id, LogRecordBody::Insert { page_id, after })
+        self.log_data_op(tid, page_id, LogRecordBody::Insert {
+            page_id,
+            before,
+            after,
+        })
     }
 
     /// Logs a `Delete` record for a tuple removed from `page_id`.
     ///
-    /// `before` is the encoded tuple that was deleted, needed to undo the
-    /// operation during recovery.
+    /// `before` is the full page image *before* the delete (used to undo the
+    /// operation).  `after` is the full page image *after* the delete (used to
+    /// redo it during recovery).
     ///
     /// The page is added to the dirty-page table if it is not already present.
     ///
@@ -299,8 +307,13 @@ impl Wal {
         tid: TransactionId,
         page_id: PageId,
         before: Vec<u8>,
+        after: Vec<u8>,
     ) -> Result<Lsn, WalError> {
-        self.log_data_op(tid, page_id, LogRecordBody::Delete { page_id, before })
+        self.log_data_op(tid, page_id, LogRecordBody::Delete {
+            page_id,
+            before,
+            after,
+        })
     }
 
     /// Blocks until all records up to (and including) `target` have been flushed
@@ -512,7 +525,7 @@ mod tests {
         let p = page(1, 1);
 
         let lsn1 = wal.log_begin(tid).unwrap();
-        let lsn2 = wal.log_insert(tid, p, vec![1, 2, 3]).unwrap();
+        let lsn2 = wal.log_insert(tid, p, vec![], vec![1, 2, 3]).unwrap();
         let lsn3 = wal.log_commit(tid).unwrap();
 
         assert!(lsn1 < lsn2, "begin < insert");
@@ -572,7 +585,7 @@ mod tests {
         let p = page(1, 1);
 
         wal.log_begin(tid).unwrap();
-        let after_insert = wal.log_insert(tid, p, vec![1]).unwrap();
+        let after_insert = wal.log_insert(tid, p, vec![], vec![1]).unwrap();
         assert_eq!(txn_last_lsn(&wal, tid), after_insert);
 
         let after_update = wal.log_update(tid, p, vec![1], vec![2]).unwrap();
@@ -585,7 +598,7 @@ mod tests {
         let tid = TransactionId::new(1);
         let p = page(1, 1);
         wal.log_begin(tid).unwrap();
-        let lsn = wal.log_insert(tid, p, vec![1, 2, 3]).unwrap();
+        let lsn = wal.log_insert(tid, p, vec![], vec![1, 2, 3]).unwrap();
         assert_eq!(dirty_pages(&wal).get(&p), Some(&lsn));
     }
 
@@ -605,7 +618,7 @@ mod tests {
         let tid = TransactionId::new(1);
         let p = page(1, 3);
         wal.log_begin(tid).unwrap();
-        let lsn = wal.log_delete(tid, p, vec![9, 8, 7]).unwrap();
+        let lsn = wal.log_delete(tid, p, vec![9, 8, 7], vec![]).unwrap();
         assert_eq!(dirty_pages(&wal).get(&p), Some(&lsn));
     }
 
@@ -618,7 +631,7 @@ mod tests {
         let tid = TransactionId::new(1);
         let p = page(1, 1);
         wal.log_begin(tid).unwrap();
-        let first = wal.log_insert(tid, p, vec![1]).unwrap();
+        let first = wal.log_insert(tid, p, vec![], vec![1]).unwrap();
         let _second = wal.log_update(tid, p, vec![1], vec![2]).unwrap();
         assert_eq!(dirty_pages(&wal).get(&p), Some(&first));
     }
@@ -630,8 +643,8 @@ mod tests {
         let p1 = page(1, 1);
         let p2 = page(1, 2);
         wal.log_begin(tid).unwrap();
-        let lsn1 = wal.log_insert(tid, p1, vec![1]).unwrap();
-        let lsn2 = wal.log_insert(tid, p2, vec![2]).unwrap();
+        let lsn1 = wal.log_insert(tid, p1, vec![], vec![1]).unwrap();
+        let lsn2 = wal.log_insert(tid, p2, vec![], vec![2]).unwrap();
         let dirty = dirty_pages(&wal);
         assert_eq!(dirty.get(&p1), Some(&lsn1));
         assert_eq!(dirty.get(&p2), Some(&lsn2));
@@ -657,7 +670,7 @@ mod tests {
     fn insert_unknown_transaction_errors() {
         let (wal, _dir) = make_wal(NO_BUF);
         let err = wal
-            .log_insert(TransactionId::new(99), page(1, 1), vec![])
+            .log_insert(TransactionId::new(99), page(1, 1), vec![], vec![])
             .unwrap_err();
         assert!(matches!(err, WalError::UnknownTransaction(_)));
     }
@@ -675,7 +688,7 @@ mod tests {
     fn delete_unknown_transaction_errors() {
         let (wal, _dir) = make_wal(NO_BUF);
         let err = wal
-            .log_delete(TransactionId::new(99), page(1, 1), vec![])
+            .log_delete(TransactionId::new(99), page(1, 1), vec![], vec![])
             .unwrap_err();
         assert!(matches!(err, WalError::UnknownTransaction(_)));
     }
@@ -691,7 +704,7 @@ mod tests {
         wal.log_begin(t2).unwrap();
         assert_eq!(active_txns(&wal).len(), 2);
 
-        wal.log_insert(t1, p, vec![1]).unwrap();
+        wal.log_insert(t1, p, vec![], vec![1]).unwrap();
         wal.log_update(t2, p, vec![1], vec![2]).unwrap();
 
         wal.log_commit(t1).unwrap();
@@ -720,7 +733,10 @@ mod tests {
         let (wal, _dir) = make_wal(16);
         let tid = TransactionId::new(1);
         wal.log_begin(tid).unwrap();
-        assert!(wal.log_insert(tid, page(1, 1), vec![0u8; 512]).is_ok());
+        assert!(
+            wal.log_insert(tid, page(1, 1), vec![], vec![0u8; 512])
+                .is_ok()
+        );
     }
 
     #[test]

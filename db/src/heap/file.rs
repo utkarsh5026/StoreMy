@@ -223,7 +223,10 @@ impl HeapFile {
             .before_image()
             .ok_or(WalError::MissingBeforeImage(page_id))?
             .to_vec();
-        let lsn = self.wal.log_delete(transaction_id, page_id, before)?;
+        let after = page.page_data().to_vec();
+        let lsn = self
+            .wal
+            .log_delete(transaction_id, page_id, before, after)?;
         page.set_page_lsn(lsn);
         guard.write(&page.page_data(), lsn);
         Ok(())
@@ -386,9 +389,14 @@ impl HeapFile {
             return Ok(Vec::new());
         }
 
+        let before = page
+            .before_image()
+            .ok_or(WalError::MissingBeforeImage(page_id))?
+            .to_vec();
+        let after = page.page_data().to_vec();
         let lsn = self
             .wal
-            .log_insert(transaction_id, page_id, page.page_data().to_vec())?;
+            .log_insert(transaction_id, page_id, before, after)?;
         page.set_page_lsn(lsn);
         guard.write(&page.page_data(), lsn);
         self.num_pages

@@ -51,6 +51,13 @@ pub enum LogRecordType {
     CheckpointEnd = 7,
     /// Compensation Log Record — written during undo to record a compensating action.
     Clr = 8,
+    /// Marks a transaction that has been fully rolled back.
+    ///
+    /// Written by the Undo pass after every record in a loser transaction has
+    /// been compensated.  Analysis removes the transaction from the ATT when it
+    /// sees this record, so a crash during undo does not re-undo already-done
+    /// steps.
+    End = 9,
 }
 
 /// Converts a raw `u8` discriminant back into a [`LogRecordType`].
@@ -73,6 +80,34 @@ impl TryFrom<u8> for LogRecordType {
             6 => Ok(Self::CheckpointBegin),
             7 => Ok(Self::CheckpointEnd),
             8 => Ok(Self::Clr),
+            9 => Ok(Self::End),
+            other => Err(other),
+        }
+    }
+}
+
+/// Whether a transaction was running normally or had already started rolling
+/// back at the time a checkpoint was taken.
+///
+/// Stored as a `u8` in the `CheckpointEnd` ATT snapshot.  Analysis uses this
+/// to initialise each entry's status correctly without re-scanning earlier
+/// records.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u8)]
+pub enum TxnStatus {
+    /// Transaction is progressing normally.
+    Running = 0,
+    /// Transaction has been aborted and its undo is in progress.
+    Aborting = 1,
+}
+
+impl TryFrom<u8> for TxnStatus {
+    type Error = u8;
+
+    fn try_from(value: u8) -> Result<Self, Self::Error> {
+        match value {
+            0 => Ok(Self::Running),
+            1 => Ok(Self::Aborting),
             other => Err(other),
         }
     }
@@ -200,6 +235,8 @@ pub enum LogRecordBody {
     Insert {
         /// The page that received the new row.
         page_id: PageId,
+        /// The page image before the insert (used for undo).
+        before: Vec<u8>,
         /// The page image after the insert (used for redo).
         after: Vec<u8>,
     },
@@ -209,6 +246,8 @@ pub enum LogRecordBody {
         page_id: PageId,
         /// The page image before the delete (used for undo).
         before: Vec<u8>,
+        /// The page image after the delete (used for redo).
+        after: Vec<u8>,
     },
     /// Compensation Log Record written during undo of an `Update` or `Insert`.
     Clr {
@@ -222,8 +261,25 @@ pub enum LogRecordBody {
     },
     /// Fuzzy checkpoint start — no payload.
     CheckpointBegin,
-    /// Fuzzy checkpoint end — no payload.
-    CheckpointEnd,
+    /// Fuzzy checkpoint end — carries ATT and DPT snapshots.
+    ///
+    /// Analysis initialises its in-memory tables from these snapshots so it
+    /// only needs to scan records written *after* the checkpoint, not from
+    /// LSN 0.
+    CheckpointEnd {
+        /// Snapshot of the active-transaction table at checkpoint time.
+        /// Each entry is `(tid, last_lsn, status)`.
+        att_snapshot: Vec<(TransactionId, Lsn, TxnStatus)>,
+        /// Snapshot of the dirty-page table at checkpoint time.
+        /// Each entry is `(page_id, rec_lsn)` where `rec_lsn` is the oldest
+        /// LSN that made the page dirty.
+        dpt_snapshot: Vec<(PageId, Lsn)>,
+    },
+    /// Transaction fully rolled back — no payload.
+    ///
+    /// Written by the Undo pass after every record in a loser transaction has
+    /// been compensated.  Mirrors [`LogRecordType::End`].
+    End,
 }
 
 impl LogRecordBody {
@@ -241,7 +297,8 @@ impl LogRecordBody {
             Self::Delete { .. } => LogRecordType::Delete,
             Self::Clr { .. } => LogRecordType::Clr,
             Self::CheckpointBegin => LogRecordType::CheckpointBegin,
-            Self::CheckpointEnd => LogRecordType::CheckpointEnd,
+            Self::CheckpointEnd { .. } => LogRecordType::CheckpointEnd,
+            Self::End => LogRecordType::End,
         }
     }
 }
@@ -258,11 +315,7 @@ impl LogRecordBody {
 impl Encode for LogRecordBody {
     fn encode<W: Write>(&self, writer: &mut W) -> Result<(), CodecError> {
         match self {
-            Self::Begin
-            | Self::Commit
-            | Self::Abort
-            | Self::CheckpointBegin
-            | Self::CheckpointEnd => {}
+            Self::Begin | Self::Commit | Self::Abort | Self::CheckpointBegin | Self::End => {}
 
             Self::Update {
                 page_id,
@@ -270,18 +323,45 @@ impl Encode for LogRecordBody {
                 after,
             } => {
                 page_id.encode(writer)?;
-                encode_image(writer, Some(before))?;
-                encode_image(writer, Some(after))?;
+                Self::encode_image(writer, Some(before))?;
+                Self::encode_image(writer, Some(after))?;
             }
 
-            Self::Insert { page_id, after } => {
+            Self::Insert {
+                page_id,
+                before,
+                after,
+            } => {
                 page_id.encode(writer)?;
-                encode_image(writer, Some(after))?;
+                Self::encode_image(writer, Some(before))?;
+                Self::encode_image(writer, Some(after))?;
             }
 
-            Self::Delete { page_id, before } => {
+            Self::Delete {
+                page_id,
+                before,
+                after,
+            } => {
                 page_id.encode(writer)?;
-                encode_image(writer, Some(before))?;
+                Self::encode_image(writer, Some(before))?;
+                Self::encode_image(writer, Some(after))?;
+            }
+
+            Self::CheckpointEnd {
+                att_snapshot,
+                dpt_snapshot,
+            } => {
+                writer.write_u32::<LittleEndian>(Self::encoded_len_u32(att_snapshot.len())?)?;
+                for (tid, lsn, status) in att_snapshot {
+                    tid.encode(writer)?;
+                    lsn.encode(writer)?;
+                    writer.write_u8(*status as u8)?;
+                }
+                writer.write_u32::<LittleEndian>(Self::encoded_len_u32(dpt_snapshot.len())?)?;
+                for (page_id, rec_lsn) in dpt_snapshot {
+                    page_id.encode(writer)?;
+                    rec_lsn.encode(writer)?;
+                }
             }
 
             Self::Clr {
@@ -290,7 +370,7 @@ impl Encode for LogRecordBody {
                 undo_next_lsn,
             } => {
                 page_id.encode(writer)?;
-                encode_image(writer, Some(after))?;
+                Self::encode_image(writer, Some(after))?;
                 undo_next_lsn.encode(writer)?;
             }
         }
@@ -299,6 +379,50 @@ impl Encode for LogRecordBody {
 }
 
 impl LogRecordBody {
+    /// Converts a `usize` length to `u32`, returning an error if it doesn't fit.
+    ///
+    /// All length prefixes in the WAL encoding are `u32 LE`. This helper makes
+    /// every size-check a single `?` instead of an inline `try_from` block.
+    fn encoded_len_u32(n: usize) -> Result<u32, CodecError> {
+        u32::try_from(n).map_err(|_| {
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "encoded length exceeds u32::MAX",
+            )
+            .into()
+        })
+    }
+
+    /// Writes a length-prefixed byte image to `writer`.
+    ///
+    /// The on-disk format is: `u32 LE length`, then `length` raw bytes.
+    /// If `image` is `None` a zero-length prefix is written and no bytes follow —
+    /// this is used for variants that have no payload image.
+    fn encode_image<W: Write>(writer: &mut W, image: Option<&[u8]>) -> Result<(), CodecError> {
+        match image {
+            Some(img) => {
+                writer.write_u32::<LittleEndian>(Self::encoded_len_u32(img.len())?)?;
+                writer.write_all(img)?;
+            }
+            None => writer.write_u32::<LittleEndian>(0)?,
+        }
+        Ok(())
+    }
+
+    /// Reads a length-prefixed byte image from `reader`.
+    ///
+    /// Returns `None` when the stored length prefix is zero (the counterpart of
+    /// writing `None` via [`encode_image`]), or `Some(bytes)` otherwise.
+    fn decode_image<R: Read>(reader: &mut R) -> Result<Option<Vec<u8>>, CodecError> {
+        let len = reader.read_u32::<LittleEndian>()? as usize;
+        if len == 0 {
+            return Ok(None);
+        }
+        let mut buf = vec![0u8; len];
+        reader.read_exact(&mut buf)?;
+        Ok(Some(buf))
+    }
+
     /// Reads a body from `reader` using `record_type` to select the right layout.
     ///
     /// This is called by [`LogRecord`]'s [`Decode`] impl after the header has
@@ -316,35 +440,58 @@ impl LogRecordBody {
             LogRecordType::Begin => Ok(Self::Begin),
             LogRecordType::Commit => Ok(Self::Commit),
             LogRecordType::Abort => Ok(Self::Abort),
+            LogRecordType::End => Ok(Self::End),
             LogRecordType::CheckpointBegin => Ok(Self::CheckpointBegin),
-            LogRecordType::CheckpointEnd => Ok(Self::CheckpointEnd),
 
             LogRecordType::Update => Ok(Self::Update {
                 page_id: PageId::decode(reader)?,
-                before: decode_image(reader)?.unwrap_or_default(),
-                after: decode_image(reader)?.unwrap_or_default(),
+                before: Self::decode_image(reader)?.unwrap_or_default(),
+                after: Self::decode_image(reader)?.unwrap_or_default(),
             }),
 
             LogRecordType::Insert => Ok(Self::Insert {
                 page_id: PageId::decode(reader)?,
-                after: decode_image(reader)?.unwrap_or_default(),
+                before: Self::decode_image(reader)?.unwrap_or_default(),
+                after: Self::decode_image(reader)?.unwrap_or_default(),
             }),
 
             LogRecordType::Delete => Ok(Self::Delete {
                 page_id: PageId::decode(reader)?,
-                before: decode_image(reader)?.unwrap_or_default(),
+                before: Self::decode_image(reader)?.unwrap_or_default(),
+                after: Self::decode_image(reader)?.unwrap_or_default(),
             }),
 
             LogRecordType::Clr => Ok(Self::Clr {
                 page_id: PageId::decode(reader)?,
-                after: decode_image(reader)?.unwrap_or_default(),
+                after: Self::decode_image(reader)?.unwrap_or_default(),
                 undo_next_lsn: Lsn::decode(reader)?,
             }),
+
+            LogRecordType::CheckpointEnd => {
+                let att_count = reader.read_u32::<LittleEndian>()? as usize;
+                let mut att_snapshot = Vec::with_capacity(att_count);
+                for _ in 0..att_count {
+                    let tid = TransactionId::decode(reader)?;
+                    let lsn = Lsn::decode(reader)?;
+                    let status = TxnStatus::try_from(reader.read_u8()?)
+                        .map_err(CodecError::UnknownDiscriminant)?;
+                    att_snapshot.push((tid, lsn, status));
+                }
+                let dpt_count = reader.read_u32::<LittleEndian>()? as usize;
+                let mut dpt_snapshot = Vec::with_capacity(dpt_count);
+                for _ in 0..dpt_count {
+                    let page_id = PageId::decode(reader)?;
+                    let rec_lsn = Lsn::decode(reader)?;
+                    dpt_snapshot.push((page_id, rec_lsn));
+                }
+                Ok(Self::CheckpointEnd {
+                    att_snapshot,
+                    dpt_snapshot,
+                })
+            }
         }
     }
 }
-
-// ── LogRecord ────────────────────────────────────────────────────────────────
 
 /// A complete WAL record: a fixed-size header followed by a variable-size body.
 ///
@@ -396,7 +543,7 @@ impl LogRecord {
             tid,
             record_type: body.record_type(),
             timestamp,
-            body_len: encoded_len_u32(body_bytes.len())?,
+            body_len: LogRecordBody::encoded_len_u32(body_bytes.len())?,
             checksum: crc32fast::hash(&body_bytes),
         };
         Ok(Self { header, body })
@@ -428,46 +575,6 @@ impl Decode for LogRecord {
         let body = LogRecordBody::decode_for_type(header.record_type, reader)?;
         Ok(Self { header, body })
     }
-}
-
-/// WAL and framing use `u32` length prefixes; returns an error if `n` does not fit.
-fn encoded_len_u32(n: usize) -> Result<u32, CodecError> {
-    u32::try_from(n).map_err(|_| {
-        std::io::Error::new(
-            std::io::ErrorKind::InvalidInput,
-            "encoded length exceeds u32::MAX",
-        )
-        .into()
-    })
-}
-
-/// Writes a length-prefixed byte image to `writer`.
-///
-/// A `u32` little-endian length is written first, followed by the image bytes.
-/// If `image` is `None`, a zero-length prefix is written and no payload bytes follow.
-fn encode_image<W: Write>(writer: &mut W, image: Option<&[u8]>) -> Result<(), CodecError> {
-    match image {
-        Some(img) => {
-            writer.write_u32::<LittleEndian>(encoded_len_u32(img.len())?)?;
-            writer.write_all(img)?;
-        }
-        None => writer.write_u32::<LittleEndian>(0)?,
-    }
-    Ok(())
-}
-
-/// Reads a length-prefixed byte image from `reader`.
-///
-/// Returns `None` when the length prefix is zero (matching what [`encode_image`]
-/// writes for `None`), or `Some(bytes)` otherwise.
-fn decode_image<R: Read>(reader: &mut R) -> Result<Option<Vec<u8>>, CodecError> {
-    let len = reader.read_u32::<LittleEndian>()? as usize;
-    if len == 0 {
-        return Ok(None);
-    }
-    let mut buf = vec![0u8; len];
-    reader.read_exact(&mut buf)?;
-    Ok(Some(buf))
 }
 
 #[cfg(test)]
@@ -502,6 +609,7 @@ mod tests {
             LogRecordType::CheckpointBegin,
             LogRecordType::CheckpointEnd,
             LogRecordType::Clr,
+            LogRecordType::End,
         ];
         for v in variants {
             assert_eq!(LogRecordType::try_from(v as u8).unwrap(), v);
@@ -510,7 +618,8 @@ mod tests {
 
     #[test]
     fn record_type_rejects_unknown_discriminant() {
-        assert_eq!(LogRecordType::try_from(9u8), Err(9u8));
+        // 9 is now End, so the first unknown byte is 10.
+        assert_eq!(LogRecordType::try_from(10u8), Err(10u8));
         assert_eq!(LogRecordType::try_from(255u8), Err(255u8));
     }
 
@@ -637,13 +746,17 @@ mod tests {
             UNIX_EPOCH,
             LogRecordBody::Insert {
                 page_id: make_page_id(),
+                before: vec![0x00, 0x00],
                 after: vec![1, 2, 3, 4],
             },
         )
         .unwrap();
         let decoded = roundtrip(&rec);
         match decoded.body {
-            LogRecordBody::Insert { after, .. } => assert_eq!(after, vec![1, 2, 3, 4]),
+            LogRecordBody::Insert { before, after, .. } => {
+                assert_eq!(before, vec![0x00, 0x00]);
+                assert_eq!(after, vec![1, 2, 3, 4]);
+            }
             _ => panic!("wrong body variant"),
         }
     }
@@ -658,12 +771,16 @@ mod tests {
             LogRecordBody::Delete {
                 page_id: make_page_id(),
                 before: vec![9, 8, 7],
+                after: vec![0x00, 0x00],
             },
         )
         .unwrap();
         let decoded = roundtrip(&rec);
         match decoded.body {
-            LogRecordBody::Delete { before, .. } => assert_eq!(before, vec![9, 8, 7]),
+            LogRecordBody::Delete { before, after, .. } => {
+                assert_eq!(before, vec![9, 8, 7]);
+                assert_eq!(after, vec![0x00, 0x00]);
+            }
             _ => panic!("wrong body variant"),
         }
     }
@@ -706,18 +823,66 @@ mod tests {
     }
 
     #[test]
-    fn checkpoint_end_roundtrip() {
+    fn checkpoint_end_empty_snapshots_roundtrip() {
         let rec = LogRecord::new(
             Lsn(101),
             Lsn(100),
             TransactionId::INVALID,
             UNIX_EPOCH,
-            LogRecordBody::CheckpointEnd,
+            LogRecordBody::CheckpointEnd {
+                att_snapshot: vec![],
+                dpt_snapshot: vec![],
+            },
         )
         .unwrap();
         let decoded = roundtrip(&rec);
         assert_eq!(decoded.header.prev_lsn, Lsn(100));
-        assert!(matches!(decoded.body, LogRecordBody::CheckpointEnd));
+        match decoded.body {
+            LogRecordBody::CheckpointEnd {
+                att_snapshot,
+                dpt_snapshot,
+            } => {
+                assert!(att_snapshot.is_empty());
+                assert!(dpt_snapshot.is_empty());
+            }
+            _ => panic!("wrong body variant"),
+        }
+    }
+
+    #[test]
+    fn checkpoint_end_with_snapshots_roundtrip() {
+        let tid1 = TransactionId::new(1);
+        let tid2 = TransactionId::new(2);
+        let page1 = make_page_id();
+
+        let rec = LogRecord::new(
+            Lsn(200),
+            Lsn(199),
+            TransactionId::INVALID,
+            UNIX_EPOCH,
+            LogRecordBody::CheckpointEnd {
+                att_snapshot: vec![
+                    (tid1, Lsn(50), TxnStatus::Running),
+                    (tid2, Lsn(80), TxnStatus::Aborting),
+                ],
+                dpt_snapshot: vec![(page1, Lsn(30))],
+            },
+        )
+        .unwrap();
+        let decoded = roundtrip(&rec);
+        match decoded.body {
+            LogRecordBody::CheckpointEnd {
+                att_snapshot,
+                dpt_snapshot,
+            } => {
+                assert_eq!(att_snapshot.len(), 2);
+                assert_eq!(att_snapshot[0], (tid1, Lsn(50), TxnStatus::Running));
+                assert_eq!(att_snapshot[1], (tid2, Lsn(80), TxnStatus::Aborting));
+                assert_eq!(dpt_snapshot.len(), 1);
+                assert_eq!(dpt_snapshot[0], (page1, Lsn(30)));
+            }
+            _ => panic!("wrong body variant"),
+        }
     }
 
     #[test]
@@ -729,6 +894,7 @@ mod tests {
             UNIX_EPOCH,
             LogRecordBody::Insert {
                 page_id: make_page_id(),
+                before: vec![0xFF],
                 after: vec![1, 2, 3],
             },
         )
@@ -771,8 +937,8 @@ mod tests {
     #[test]
     fn encode_decode_image_empty() {
         let mut buf = Vec::new();
-        encode_image(&mut buf, None).unwrap();
-        let result = decode_image(&mut Cursor::new(buf)).unwrap();
+        LogRecordBody::encode_image(&mut buf, None).unwrap();
+        let result = LogRecordBody::decode_image(&mut Cursor::new(buf)).unwrap();
         assert!(result.is_none());
     }
 
@@ -780,8 +946,8 @@ mod tests {
     fn encode_decode_image_nonempty() {
         let data = vec![1u8, 2, 3, 255];
         let mut buf = Vec::new();
-        encode_image(&mut buf, Some(&data)).unwrap();
-        let result = decode_image(&mut Cursor::new(buf)).unwrap();
+        LogRecordBody::encode_image(&mut buf, Some(&data)).unwrap();
+        let result = LogRecordBody::decode_image(&mut Cursor::new(buf)).unwrap();
         assert_eq!(result, Some(data));
     }
 
@@ -800,6 +966,59 @@ mod tests {
         buf[0] = 99; // corrupt record_type (first byte of header)
         let err = LogRecord::decode(&mut Cursor::new(buf));
         assert!(matches!(err, Err(CodecError::UnknownDiscriminant(99))));
+    }
+
+    #[test]
+    fn end_record_roundtrip() {
+        let rec = LogRecord::new(
+            Lsn(99),
+            Lsn(70),
+            TransactionId::new(5),
+            UNIX_EPOCH,
+            LogRecordBody::End,
+        )
+        .unwrap();
+        let decoded = roundtrip(&rec);
+        assert_eq!(decoded.header.record_type, LogRecordType::End);
+        assert_eq!(decoded.header.lsn, Lsn(99));
+        assert!(matches!(decoded.body, LogRecordBody::End));
+        // End carries no payload so body_len must be zero.
+        assert_eq!(decoded.header.body_len, 0);
+    }
+
+    #[test]
+    fn txn_status_try_from() {
+        assert_eq!(TxnStatus::try_from(0u8), Ok(TxnStatus::Running));
+        assert_eq!(TxnStatus::try_from(1u8), Ok(TxnStatus::Aborting));
+        assert_eq!(TxnStatus::try_from(2u8), Err(2u8));
+        assert_eq!(TxnStatus::try_from(255u8), Err(255u8));
+    }
+
+    // Verify that before/after in Insert are stored independently — corrupt one
+    // and the other must survive the roundtrip intact.
+    #[test]
+    fn insert_before_and_after_are_independent() {
+        let rec = LogRecord::new(
+            Lsn(300),
+            Lsn(250),
+            TransactionId::new(11),
+            UNIX_EPOCH,
+            LogRecordBody::Insert {
+                page_id: make_page_id(),
+                before: vec![0xAA, 0xBB],
+                after: vec![0x11, 0x22, 0x33],
+            },
+        )
+        .unwrap();
+        let decoded = roundtrip(&rec);
+        match decoded.body {
+            LogRecordBody::Insert { before, after, .. } => {
+                assert_eq!(before, vec![0xAA, 0xBB]);
+                assert_eq!(after, vec![0x11, 0x22, 0x33]);
+                assert_ne!(before, after);
+            }
+            _ => panic!("wrong body variant"),
+        }
     }
 
     #[test]
