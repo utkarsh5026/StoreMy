@@ -12,7 +12,7 @@
 
 use thiserror::Error;
 
-use crate::primitives::SlotId;
+use crate::primitives::{Lsn, SlotId};
 
 /// Size in bytes of a single on-disk page.
 ///
@@ -58,6 +58,22 @@ pub trait Page: Send + Sync {
     /// Called once at the start of a transaction's first write to a page,
     /// so a later abort can restore exactly this state.
     fn set_before_image(&mut self);
+
+    /// Returns the LSN of the last WAL record applied to this page.
+    ///
+    /// Returns `Lsn::INVALID` (0) for a freshly zeroed page that has never
+    /// been written by a transaction. The Redo pass uses this to decide
+    /// whether a record has already been applied: if `page.page_lsn() >= record.lsn`
+    /// the record is skipped, making redo idempotent.
+    fn page_lsn(&self) -> Lsn;
+
+    /// Stamps `lsn` into the page header.
+    ///
+    /// **Must** be called immediately *after* the WAL write for this change
+    /// succeeds, never before. Stamping before the WAL call would leave the
+    /// page header pointing to an LSN that doesn't exist in the log yet; a
+    /// crash at that instant creates an unrecoverable state.
+    fn set_page_lsn(&mut self, lsn: Lsn);
 }
 
 /// Errors that storage-layer operations can return.

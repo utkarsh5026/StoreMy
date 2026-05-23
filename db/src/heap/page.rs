@@ -17,19 +17,20 @@
 //!  0    PAGE_HDR_SIZE   slot_array_end          tuple_start            PAGE_SIZE
 //!
 //!
-//!  Fixed header (first PAGE_HDR_SIZE bytes):
+//!  Fixed header (first PAGE_HDR_SIZE = 16 bytes):
 //!
-//!  +---- byte 0 ----+---- byte 2 ----+--------- byte 4 ---------+
-//!  | num_slots (u16)| tuple_start(u16)|     checksum (u32 LE)   |
-//!  +----------------+-----------------+-------------------------+
-//!        |                  |                    |
-//!        |                  |                    +-- CRC32 over the entire
-//!        |                  |                        page with these 4 bytes
-//!        |                  |                        treated as zero. Verified
-//!        |                  |                        on every read from disk.
-//!        |                  +-- left edge of the tuple region; tuples
-//!        |                      occupy [tuple_start .. PAGE_SIZE)
-//!        +-- number of slot pointers that follow the header
+//!  +------ byte 0 ------+---- byte 8 ----+---- byte 10 ---+------ byte 12 ------+
+//!  |  page_lsn (u64 LE) | num_slots (u16)| tuple_start(u16)|  checksum (u32 LE) |
+//!  +--------------------+----------------+----------------+---------------------+
+//!        |                    |                  |                   |
+//!        |                    |                  |                   +-- CRC32 over the entire
+//!        |                    |                  |                       page with these 4 bytes
+//!        |                    |                  |                       treated as zero. Verified
+//!        |                    |                  |                       on every read from disk.
+//!        |                    |                  +-- left edge of the tuple region; tuples
+//!        |                    |                      occupy [tuple_start .. PAGE_SIZE)
+//!        |                    +-- number of slot pointers that follow the header
+//!        +-- LSN of the last WAL record applied to this page; 0 = never written
 //!
 //!
 //!  Slot i occupies bytes [PAGE_HDR_SIZE + i*4 .. PAGE_HDR_SIZE + i*4 + 4):
@@ -59,17 +60,26 @@ use std::vec;
 use byteorder::{ByteOrder, LittleEndian};
 
 use crate::{
-    primitives::SlotId,
+    primitives::{Lsn, SlotId},
     storage::{MAX_TUPLE_SIZE, PAGE_SIZE, Page, StorageError},
     tuple::{Tuple, TupleSchema},
 };
 
 /// Size of the fixed page header:
-/// `num_slots` (u16) + `tuple_start` (u16) + `checksum` (u32).
-const PAGE_HDR_SIZE: usize = 8;
+/// `page_lsn` (u64) + `num_slots` (u16) + `tuple_start` (u16) + `checksum` (u32).
+const PAGE_HDR_SIZE: usize = 16;
+
+/// Byte offset of the 8-byte `page_lsn` field.
+const PAGE_LSN_OFFSET: usize = 0;
+
+/// Byte offset of the 2-byte `num_slots` field.
+const NUM_SLOTS_OFFSET: usize = 8;
+
+/// Byte offset of the 2-byte `tuple_start` field.
+const TUPLE_START_OFFSET: usize = 10;
 
 /// Byte offset within the page where the 4-byte CRC32 checksum lives.
-const CHECKSUM_OFFSET: usize = 4;
+const CHECKSUM_OFFSET: usize = 12;
 
 /// Size of the stored checksum field, in bytes.
 const CHECKSUM_SIZE: usize = 4;
@@ -131,6 +141,13 @@ pub struct HeapPage<'a> {
     /// a future compaction rewrites the page).
     tuple_start: usize,
     old_data: [u8; PAGE_SIZE],
+    /// LSN of the last WAL record applied to this page, persisted at
+    /// [`PAGE_LSN_OFFSET`] in the on-disk header.
+    ///
+    /// `Lsn::INVALID` (0) means the page has never been written by a
+    /// transaction. The Redo pass interprets 0 as "apply everything" because
+    /// every real LSN is greater than zero.
+    page_lsn: Lsn,
 }
 
 impl<'a> HeapPage<'a> {
@@ -169,8 +186,9 @@ impl<'a> HeapPage<'a> {
             }
         }
 
-        let num_slots = LittleEndian::read_u16(&data[0..]) as usize;
-        let stored_tuple_start = LittleEndian::read_u16(&data[2..]) as usize;
+        let page_lsn = Lsn(LittleEndian::read_u64(&data[PAGE_LSN_OFFSET..]));
+        let num_slots = LittleEndian::read_u16(&data[NUM_SLOTS_OFFSET..]) as usize;
+        let stored_tuple_start = LittleEndian::read_u16(&data[TUPLE_START_OFFSET..]) as usize;
 
         let tuple_start = if num_slots == 0 && stored_tuple_start == 0 {
             PAGE_SIZE
@@ -191,6 +209,7 @@ impl<'a> HeapPage<'a> {
             tuples: vec![None; num_slots],
             slot_pointers: vec![SlotPointer::default(); num_slots],
             tuple_start,
+            page_lsn,
         };
 
         hp.parse_data(data)?;
@@ -559,13 +578,19 @@ impl Page for HeapPage<'_> {
     /// tuples that were already validated on insert.
     fn page_data(&self) -> [u8; PAGE_SIZE] {
         let mut bytes = [0u8; PAGE_SIZE];
+
+        // page_lsn must be written before the write_u16 closure is defined, because
+        // that closure borrows `bytes` mutably for its lifetime, and the borrow
+        // checker would reject a second mutable borrow inside the same scope.
+        LittleEndian::write_u64(&mut bytes[PAGE_LSN_OFFSET..], u64::from(self.page_lsn));
+
         let mut write_u16 = |offset: usize, values: &[u16]| {
             for (i, value) in values.iter().enumerate() {
                 LittleEndian::write_u16(&mut bytes[offset + i * 2..], *value);
             }
         };
 
-        write_u16(0, &[
+        write_u16(NUM_SLOTS_OFFSET, &[
             self.num_slots(),
             u16::try_from(self.tuple_start).expect("tuple_start <= PAGE_SIZE <= u16::MAX"),
         ]);
@@ -600,6 +625,14 @@ impl Page for HeapPage<'_> {
     /// Updates the before-image to the current page state.
     fn set_before_image(&mut self) {
         self.old_data = self.page_data();
+    }
+
+    fn page_lsn(&self) -> Lsn {
+        self.page_lsn
+    }
+
+    fn set_page_lsn(&mut self, lsn: Lsn) {
+        self.page_lsn = lsn;
     }
 }
 
@@ -1419,6 +1452,119 @@ mod tests {
         // skips checksum verification.
         let page = HeapPage::new(&[0u8; PAGE_SIZE], &s).unwrap();
         assert_eq!(page.live_tuples().count(), 0);
+    }
+
+    // --- page_lsn ---
+
+    #[test]
+    fn fresh_page_has_invalid_page_lsn() {
+        // A zeroed buffer means the page has never been touched by a WAL record.
+        // page_lsn must read back as Lsn::INVALID (0) so the Redo pass knows
+        // every record from that LSN onward needs to be applied.
+        let s = schema();
+        let page = empty_page(&s);
+        assert_eq!(page.page_lsn(), Lsn::INVALID);
+    }
+
+    #[test]
+    fn set_page_lsn_is_visible_through_getter() {
+        let s = schema();
+        let mut page = empty_page(&s);
+        let lsn = Lsn(42);
+        page.set_page_lsn(lsn);
+        assert_eq!(page.page_lsn(), lsn);
+    }
+
+    #[test]
+    fn page_lsn_survives_serialise_deserialise_roundtrip() {
+        // The lsn must be written to bytes 0..8 in page_data() and read back
+        // correctly in new(), so on-disk state is durable across restarts.
+        let s = schema();
+        let mut page = empty_page(&s);
+        page.insert_tuple(make_tuple(1, true)).unwrap();
+
+        let lsn = Lsn(999);
+        page.set_page_lsn(lsn);
+
+        let bytes = page.page_data();
+        let restored = HeapPage::new(&bytes, &s).unwrap();
+        assert_eq!(restored.page_lsn(), lsn);
+    }
+
+    #[test]
+    fn page_lsn_zero_on_fresh_page_survives_roundtrip() {
+        // A zero page_lsn must also round-trip correctly; the blank-page path
+        // skips checksum verification, so this exercises the raw read path.
+        let s = schema();
+        let mut page = empty_page(&s);
+        page.insert_tuple(make_tuple(7, false)).unwrap();
+        // intentionally leave page_lsn at Lsn::INVALID
+
+        let bytes = page.page_data();
+        let restored = HeapPage::new(&bytes, &s).unwrap();
+        assert_eq!(restored.page_lsn(), Lsn::INVALID);
+    }
+
+    #[test]
+    fn page_lsn_is_covered_by_checksum() {
+        // Flipping any bit inside the page_lsn region (bytes 0..8) must
+        // invalidate the checksum, proving the lsn is included in the hash.
+        let s = schema();
+        let mut page = empty_page(&s);
+        page.insert_tuple(make_tuple(1, true)).unwrap();
+        page.set_page_lsn(Lsn(1)); // non-zero so the blank-page shortcut doesn't fire
+
+        let mut bytes = page.page_data();
+        bytes[PAGE_LSN_OFFSET] ^= 0x01; // flip the lowest bit of the lsn bytes
+        assert!(
+            matches!(
+                HeapPage::new(&bytes, &s),
+                Err(StorageError::ChecksumMismatch { .. })
+            ),
+            "mutating page_lsn bytes must break checksum verification"
+        );
+    }
+
+    #[test]
+    fn page_lsn_increases_monotonically_across_mutations() {
+        // After each mutation in a heap file the page carries the lsn of the
+        // most recent WAL record — later lsns are strictly larger.
+        let s = schema();
+        let mut page = empty_page(&s);
+
+        let lsn_a = Lsn(10);
+        let lsn_b = Lsn(20);
+        let lsn_c = Lsn(30);
+
+        page.set_page_lsn(lsn_a);
+        assert_eq!(page.page_lsn(), lsn_a);
+
+        page.set_page_lsn(lsn_b);
+        assert_eq!(page.page_lsn(), lsn_b);
+        assert!(page.page_lsn() > lsn_a);
+
+        page.set_page_lsn(lsn_c);
+        assert!(page.page_lsn() > lsn_b);
+    }
+
+    #[test]
+    fn set_page_lsn_does_not_disturb_tuple_data() {
+        // Stamping the lsn must only touch the first 8 bytes of the header;
+        // all slot pointers and tuple bytes must be byte-identical before and
+        // after the stamp.
+        let s = schema();
+        let mut page = empty_page(&s);
+        page.insert_tuple(make_tuple(99, true)).unwrap();
+        page.insert_tuple(make_tuple(100, false)).unwrap();
+
+        let before = page.page_data();
+        page.set_page_lsn(Lsn(512));
+        let after = page.page_data();
+
+        // Only the first PAGE_HDR_SIZE bytes differ (lsn changed, checksum re-computed).
+        // Slot pointers and tuple region must be identical.
+        let slot_start = PAGE_HDR_SIZE;
+        assert_eq!(before[slot_start..], after[slot_start..]);
     }
 
     #[test]

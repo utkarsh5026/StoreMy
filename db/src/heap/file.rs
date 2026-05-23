@@ -224,6 +224,7 @@ impl HeapFile {
             .ok_or(WalError::MissingBeforeImage(page_id))?
             .to_vec();
         let lsn = self.wal.log_delete(transaction_id, page_id, before)?;
+        page.set_page_lsn(lsn);
         guard.write(&page.page_data(), lsn);
         Ok(())
     }
@@ -259,6 +260,7 @@ impl HeapFile {
         let lsn =
             self.wal
                 .log_update(transaction_id, page_id, before, page.page_data().to_vec())?;
+        page.set_page_lsn(lsn);
         guard.write(&page.page_data(), lsn);
         Ok(())
     }
@@ -387,6 +389,7 @@ impl HeapFile {
         let lsn = self
             .wal
             .log_insert(transaction_id, page_id, page.page_data().to_vec())?;
+        page.set_page_lsn(lsn);
         guard.write(&page.page_data(), lsn);
         self.num_pages
             .fetch_max(page_id.page_no.0 + 1, Ordering::AcqRel);
