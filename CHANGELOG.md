@@ -43,6 +43,15 @@ Older sections (before 2025-10-01) are the Go → Rust transition era.
 
 ### Features
 
+- **recovery**: Implement aries undo pass and wire full recovery
+- **recovery**: Implement aries redo pass
+- **wal**: Add log_clr and log_end for aries undo
+- **recovery**: Add tracing to analysis pass
+- **buffer_pool**: Add fetch_for_recovery bypassing lock manager
+- **recovery**: Implement ARIES analysis pass at startup
+- **wal**: Add WalReader with torn-tail detection
+- **wal**: Add End record, TxnStatus, and full before/after images for Insert/Delete
+- **heap**: Stamp page_lsn after every WAL write (ARIES step 1)
 - **planner**: Wire FULL OUTER JOIN and unify join dispatch via JoinAlgo
 - **join**: Wire FULL OUTER JOIN through executor and planner
 - **join**: Implement right join as a swapped left join with column reorder
@@ -237,6 +246,7 @@ Older sections (before 2025-10-01) are the Go → Rust transition era.
 
 ### Refactoring
 
+- **wal**: Remove page-wrapper logging helpers, inline before-image extraction
 - **execution**: Promote TupleCursor to shared execution primitive
 - **execution**: Migrate remaining eval call sites to methods
 - **execution**: Move resolved expr eval onto ResolvedExpr
