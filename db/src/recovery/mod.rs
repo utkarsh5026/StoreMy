@@ -12,14 +12,17 @@
 //! The public entry point is [`Aries::recover`].
 
 mod analysis;
+mod redo;
+mod undo;
 
-use std::{collections::HashMap, path::PathBuf};
+use std::{collections::HashMap, path::PathBuf, sync::Arc};
 
 use thiserror::Error;
 
 use crate::{
+    buffer_pool::page_store::PageStore,
     primitives::{Lsn, PageId, TransactionId},
-    wal::{WalError, log::TxnStatus, reader::WalReader},
+    wal::{WalError, log::TxnStatus, reader::WalReader, writer::Wal},
 };
 
 /// Top-level error for any failure during crash recovery.
@@ -30,6 +33,12 @@ pub enum RecoveryError {
 
     #[error("analysis failed: {0}")]
     Analysis(#[from] analysis::AnalysisError),
+
+    #[error("redo failed: {0}")]
+    Redo(#[from] redo::RedoError),
+
+    #[error("undo failed: {0}")]
+    Undo(#[from] undo::UndoError),
 }
 
 /// One row in the Active Transactions Table.
@@ -105,7 +114,7 @@ pub struct DptEntry {
 }
 
 /// Everything the Analysis pass produces, consumed by Redo and Undo.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct AnalysisResult {
     /// Active Transactions Table after the forward scan.
     ///
@@ -168,17 +177,29 @@ impl Aries {
 
     /// Runs all three ARIES passes and returns when the database is consistent.
     ///
-    /// Call this once at startup, before the buffer pool or transaction manager
-    /// begin accepting work.
+    /// Call this once at startup, before the transaction manager begins
+    /// accepting work.  `buffer_pool` must already be created; Redo uses it to
+    /// fetch and rewrite pages.
     ///
     /// # Errors
     ///
     /// Returns [`RecoveryError`] if the WAL cannot be opened or any pass fails.
-    pub fn recover(&self) -> Result<AnalysisResult, RecoveryError> {
+    #[tracing::instrument(name = "aries_recover", skip(self, buffer_pool, wal))]
+    pub fn recover(
+        &self,
+        buffer_pool: &Arc<PageStore>,
+        wal: &Arc<Wal>,
+    ) -> Result<AnalysisResult, RecoveryError> {
         let checkpoint_lsn = self.read_master()?;
         let mut reader = WalReader::open(&self.wal_path)?;
         let result = Self::run_analysis(&mut reader, checkpoint_lsn)?;
-        Ok(result)
+        Self::run_redo(&mut reader, &result, buffer_pool)?;
+
+        // Snapshot before Undo consumes the ATT — callers (e.g. main.rs) log
+        // loser counts and we'd lose the information once it drains to empty.
+        let snapshot = result.clone();
+        Self::run_undo(&mut reader, wal, buffer_pool, result)?;
+        Ok(snapshot)
     }
 
     /// Reads the LSN of the last completed checkpoint from the master record file.

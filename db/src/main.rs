@@ -94,26 +94,25 @@ fn main() {
         }),
     );
 
+    let buffer_pool = Arc::new(PageStore::new(BUFFER_POOL_PAGES, wal.clone()));
+
     // Run crash recovery before the catalog or any transaction touches data pages.
-    // Analysis rebuilds the ATT and DPT from the WAL; Redo and Undo will be
-    // wired in here as those passes are implemented.
+    // Analysis → Redo → Undo.
     let recovery = Aries::new(
         data_dir.join(WAL_FILE_NAME),
         data_dir.join(MASTER_RECORD_FILE_NAME),
     )
-    .recover()
+    .recover(&buffer_pool, &wal)
     .unwrap_or_else(|e| {
         error!(error = %e, "crash recovery failed — database may be corrupt");
         std::process::exit(1);
     });
     info!(
-        losers      = recovery.att.len(),
-        dirty_pages = recovery.dpt.len(),
-        redo_lsn    = ?recovery.redo_lsn,
-        "ARIES analysis complete"
+        losers_undone = recovery.att.len(),
+        dirty_pages   = recovery.dpt.len(),
+        redo_lsn      = ?recovery.redo_lsn,
+        "ARIES recovery complete"
     );
-
-    let buffer_pool = Arc::new(PageStore::new(BUFFER_POOL_PAGES, wal.clone()));
     let catalog = Catalog::initialize(&buffer_pool, &wal, &data_dir).unwrap_or_else(|e| {
         error!(error = %e, "failed to initialize catalog");
         std::process::exit(1);
