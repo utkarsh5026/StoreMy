@@ -302,6 +302,74 @@ impl Wal {
         })
     }
 
+    /// Appends a Compensation Log Record (CLR) describing one undo step.
+    ///
+    /// Called exclusively by the ARIES Undo pass. Unlike [`Wal::log_update`], the
+    /// caller supplies `prev_lsn` and `undo_next_lsn` explicitly because:
+    ///
+    /// - `prev_lsn` — Undo owns the loser's chain state (in the ATT inherited from Analysis);
+    ///   losers are not in `active_txns` during recovery.
+    /// - `undo_next_lsn` — set to the `prev_lsn` of the record this CLR compensates, so a future
+    ///   recovery skips past work already done.
+    ///
+    /// `after` is the page image *after* the before-image has been restored
+    /// (i.e. what the page looks like with the undone change removed). It is
+    /// used by Redo on a subsequent recovery to reapply the compensation
+    /// idempotently via the `page_lsn` check.
+    ///
+    /// Also marks `page_id` dirty in the WAL's dirty-page table so that the
+    /// next checkpoint reflects the compensation.
+    ///
+    /// Returns the LSN assigned to the CLR.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`WalError::Io`] or [`WalError::Codec`] on write failures.
+    /// Does **not** error if `tid` is not in `active_txns` — losers written
+    /// during recovery legitimately bypass that map.
+    pub fn log_clr(
+        &self,
+        tid: TransactionId,
+        prev_lsn: Lsn,
+        page_id: PageId,
+        after: Vec<u8>,
+        undo_next_lsn: Lsn,
+    ) -> Result<Lsn, WalError> {
+        let mut state = self.state.lock();
+        let lsn = Self::write_record(&self.file, &mut state, tid, prev_lsn, LogRecordBody::Clr {
+            page_id,
+            after,
+            undo_next_lsn,
+        })?;
+        state.dirty_pages.entry(page_id).or_insert(lsn);
+        Ok(lsn)
+    }
+
+    /// Appends an `End` record marking a transaction as fully terminated.
+    ///
+    /// Written by:
+    /// - The Undo pass after a loser's entire chain has been compensated.
+    /// - (Future) Normal-abort completion once rollback finishes.
+    ///
+    /// `prev_lsn` is the transaction's most recent record LSN (the last CLR
+    /// for undone losers, or the abort record for cleanly-aborted txns). The
+    /// caller supplies it because the recovery path has no entry in
+    /// `active_txns`.
+    ///
+    /// Returns the LSN assigned to the `End` record. The record is **not**
+    /// forced to disk by this call — Undo is idempotent, so a crash before
+    /// flush simply means the next recovery re-undoes (harmlessly).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`WalError::Io`] or [`WalError::Codec`] on write failures.
+    pub fn log_end(&self, tid: TransactionId, prev_lsn: Lsn) -> Result<Lsn, WalError> {
+        let mut state = self.state.lock();
+        let lsn = Self::write_record(&self.file, &mut state, tid, prev_lsn, LogRecordBody::End)?;
+        state.active_txns.remove(&tid);
+        Ok(lsn)
+    }
+
     /// Blocks until all records up to (and including) `target` have been flushed
     /// to stable storage.
     ///
@@ -748,5 +816,94 @@ mod tests {
         let tid = TransactionId::new(1);
         wal.log_begin(tid).unwrap();
         assert!(wal.close().is_ok());
+    }
+
+    // ── log_clr ──────────────────────────────────────────────────────────────
+
+    #[test]
+    fn clr_marks_page_dirty() {
+        // The Undo pass writes a CLR then restores the before-image to the page;
+        // the WAL must record that page as dirty so the next checkpoint sees it.
+        let (wal, _dir) = make_wal(NO_BUF);
+        let tid = TransactionId::new(1);
+        let p = page(1, 5);
+        let lsn = wal
+            .log_clr(tid, Lsn::INVALID, p, vec![9, 8, 7], Lsn::INVALID)
+            .unwrap();
+        assert_eq!(dirty_pages(&wal).get(&p), Some(&lsn));
+    }
+
+    #[test]
+    fn clr_does_not_require_active_transaction() {
+        // During recovery, losers are NOT in active_txns — log_clr must succeed
+        // anyway because it bypasses the active-txn lookup entirely.
+        let (wal, _dir) = make_wal(NO_BUF);
+        let loser = TransactionId::new(42);
+        let p = page(2, 1);
+        assert!(
+            wal.log_clr(loser, Lsn::INVALID, p, vec![], Lsn::INVALID)
+                .is_ok()
+        );
+    }
+
+    #[test]
+    fn clr_lsn_is_after_compensated_record() {
+        // The CLR is written *after* the original operation record, so its LSN
+        // must be strictly greater.
+        let (wal, _dir) = make_wal(NO_BUF);
+        let tid = TransactionId::new(1);
+        let p = page(1, 1);
+        wal.log_begin(tid).unwrap();
+        let insert_lsn = wal.log_insert(tid, p, vec![], vec![1, 2]).unwrap();
+        let clr_lsn = wal
+            .log_clr(tid, insert_lsn, p, vec![], Lsn::INVALID)
+            .unwrap();
+        assert!(clr_lsn > insert_lsn);
+    }
+
+    #[test]
+    fn clr_does_not_overwrite_earlier_dirty_entry() {
+        // dirty_pages records the *first* LSN that dirtied a page.  A CLR for
+        // the same page must not overwrite that entry.
+        let (wal, _dir) = make_wal(NO_BUF);
+        let tid = TransactionId::new(1);
+        let p = page(1, 9);
+        wal.log_begin(tid).unwrap();
+        let first = wal.log_insert(tid, p, vec![], vec![1]).unwrap();
+        wal.log_clr(tid, first, p, vec![], Lsn::INVALID).unwrap();
+        assert_eq!(dirty_pages(&wal).get(&p), Some(&first));
+    }
+
+    #[test]
+    fn end_removes_active_transaction() {
+        // Normal abort path: Begin → data ops → Abort → (undo) → End.
+        // After log_end the transaction must leave active_txns.
+        let (wal, _dir) = make_wal(NO_BUF);
+        let tid = TransactionId::new(1);
+        wal.log_begin(tid).unwrap();
+        let abort_lsn = wal.log_abort(tid).unwrap();
+        wal.log_end(tid, abort_lsn).unwrap();
+        assert!(!active_txns(&wal).contains(&tid));
+    }
+
+    #[test]
+    fn end_tolerates_absent_transaction() {
+        // Recovery path: losers were never re-inserted into active_txns, so
+        // log_end must tolerate the absence without returning an error.
+        let (wal, _dir) = make_wal(NO_BUF);
+        let loser = TransactionId::new(99);
+        assert!(wal.log_end(loser, Lsn::INVALID).is_ok());
+    }
+
+    #[test]
+    fn end_lsn_is_after_prev_lsn() {
+        // The End record is written after the final CLR (or Abort), so its LSN
+        // must be strictly greater than the prev_lsn handed in.
+        let (wal, _dir) = make_wal(NO_BUF);
+        let tid = TransactionId::new(1);
+        wal.log_begin(tid).unwrap();
+        let abort_lsn = wal.log_abort(tid).unwrap();
+        let end_lsn = wal.log_end(tid, abort_lsn).unwrap();
+        assert!(end_lsn > abort_lsn);
     }
 }
