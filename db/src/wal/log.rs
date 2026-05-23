@@ -121,6 +121,7 @@ impl TryFrom<u8> for TxnStatus {
 ///
 /// `checksum` covers only the body bytes. This avoids the circularity of
 /// checksumming a field that is itself part of the checksum region.
+#[derive(Debug)]
 pub struct LogRecordHeader {
     /// The log sequence number assigned to this record.
     pub lsn: Lsn,
@@ -215,6 +216,7 @@ impl Decode for LogRecordHeader {
 ///
 /// Each variant holds exactly the fields that record type requires — no
 /// `Option` fields that are only meaningful for some types.
+#[derive(Debug)]
 pub enum LogRecordBody {
     /// Transaction begin — no payload.
     Begin,
@@ -508,6 +510,7 @@ impl LogRecordBody {
 /// The header's `checksum` field is a CRC32 computed over the body bytes only.
 /// Framing (writing the header then body, verifying the checksum) is the
 /// responsibility of `WalWriter`/`WalReader`, not of this type's codec impls.
+#[derive(Debug)]
 pub struct LogRecord {
     /// The fixed-size prefix describing this record.
     pub header: LogRecordHeader,

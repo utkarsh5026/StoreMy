@@ -27,29 +27,15 @@ use std::{
 };
 
 use parking_lot::{Condvar, Mutex};
-use thiserror::Error;
 
 use crate::{
-    codec::{CodecError, Encode},
+    codec::Encode,
     primitives::{Lsn, PageId, TransactionId},
-    wal::log::{LogRecord, LogRecordBody},
+    wal::{
+        WalError,
+        log::{LogRecord, LogRecordBody},
+    },
 };
-
-/// Errors that can occur during WAL operations.
-#[derive(Debug, Error)]
-pub enum WalError {
-    #[error("WAL I/O error: {0}")]
-    Io(#[from] std::io::Error),
-
-    #[error("WAL codec error: {0}")]
-    Codec(#[from] CodecError),
-
-    #[error("unknown transaction: {0}")]
-    UnknownTransaction(TransactionId),
-
-    #[error("missing before-image for page {0:?}")]
-    MissingBeforeImage(PageId),
-}
 
 /// Per-transaction bookkeeping kept in memory while a transaction is active.
 struct TxnInfo {

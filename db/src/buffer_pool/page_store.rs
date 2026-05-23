@@ -35,7 +35,7 @@ use crate::{
     FileId, Lsn, PAGE_SIZE, TransactionId,
     buffer_pool::lock::{LockError, LockManager, LockRequest},
     primitives::PageId,
-    wal::writer::{Wal, WalError},
+    wal::{WalError, writer::Wal},
 };
 
 /// Errors that can arise from [`PageStore`] operations.

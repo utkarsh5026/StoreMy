@@ -46,7 +46,7 @@ use crate::{
     primitives::{PageId, RecordId, SlotId},
     storage::{PAGE_SIZE, Page, StorageError},
     tuple::{Tuple, TupleSchema},
-    wal::writer::{Wal, WalError},
+    wal::{WalError, writer::Wal},
 };
 
 /// Errors that can occur during heap file operations.
