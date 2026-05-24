@@ -32,9 +32,10 @@ echo "pre-commit: staged Rust files detected, running checks…" >&2
 # ── 1. Banned macros ────────────────────────────────────────────────────────
 # Catches debug leftovers before they reach the repo.
 # Skips paths under tests/ or ending in _test.rs — debug prints in test code are fine.
+# Skips db/src/repl/ — terminal output is that module's job.
 
 banned_pattern='dbg!\|eprintln!\|println!'
-lib_staged=$(echo "$staged_rs" | grep -v '/tests/' | grep -v '_test\.rs' || true)
+lib_staged=$(echo "$staged_rs" | grep -v '/tests/' | grep -v '_test\.rs' | grep -v '/repl/' || true)
 
 if [[ -n "$lib_staged" ]]; then
   hits=$(echo "$lib_staged" | xargs grep -n "$banned_pattern" 2>/dev/null || true)
