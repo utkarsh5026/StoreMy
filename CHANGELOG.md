@@ -43,6 +43,9 @@ Older sections (before 2025-10-01) are the Go → Rust transition era.
 
 ### Features
 
+- **engine**: Support alter table check not valid and validate constraint
+- **catalog**: Add validated flag for check constraint not valid workflow
+- **parser**: Parse NOT VALID and VALIDATE CONSTRAINT in ALTER TABLE
 - **buffer_pool**: Wire double-write buffer into flush and startup
 - **buffer_pool**: Add double-write buffer module
 - **recovery**: Implement aries undo pass and wire full recovery
@@ -248,6 +251,8 @@ Older sections (before 2025-10-01) are the Go → Rust transition era.
 
 ### Refactoring
 
+- **catalog**: Use update_systable_row for systable mutations
+- **catalog**: Use update_systable_row for systable mutations
 - **storage**: Unify page envelope across all page types
 - **storage**: Extract open_persistent_file helper
 - **wal**: Remove page-wrapper logging helpers, inline before-image extraction
