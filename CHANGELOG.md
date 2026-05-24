@@ -43,6 +43,8 @@ Older sections (before 2025-10-01) are the Go → Rust transition era.
 
 ### Features
 
+- **buffer_pool**: Wire double-write buffer into flush and startup
+- **buffer_pool**: Add double-write buffer module
 - **recovery**: Implement aries undo pass and wire full recovery
 - **recovery**: Implement aries redo pass
 - **wal**: Add log_clr and log_end for aries undo
@@ -246,6 +248,8 @@ Older sections (before 2025-10-01) are the Go → Rust transition era.
 
 ### Refactoring
 
+- **storage**: Unify page envelope across all page types
+- **storage**: Extract open_persistent_file helper
 - **wal**: Remove page-wrapper logging helpers, inline before-image extraction
 - **execution**: Promote TupleCursor to shared execution primitive
 - **execution**: Migrate remaining eval call sites to methods
