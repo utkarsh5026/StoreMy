@@ -31,6 +31,7 @@ use parking_lot::{Condvar, Mutex};
 use crate::{
     codec::Encode,
     primitives::{Lsn, PageId, TransactionId},
+    storage::open_persistent_file,
     wal::{
         WalError,
         log::{LogRecord, LogRecordBody},
@@ -118,12 +119,7 @@ impl Wal {
     /// Returns [`WalError::Io`] if the file cannot be opened or its length
     /// cannot be determined.
     pub fn new(path: &Path, buf_size: usize) -> Result<Self, WalError> {
-        let mut file = fs::OpenOptions::new()
-            .read(true)
-            .write(true)
-            .create(true)
-            .truncate(false)
-            .open(path)?;
+        let mut file = open_persistent_file(path)?;
 
         let end = file.seek(std::io::SeekFrom::End(0))?;
         let start_lsn = Lsn(end);

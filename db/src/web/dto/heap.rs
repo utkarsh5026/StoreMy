@@ -1,12 +1,14 @@
 //! Heap-page dumps for the visualization endpoint.
 //!
-//! Produces the JSON shape consumed by the React `HeapInspector` panel. The
-//! shape stays close to the spec in `tools/viz/FORMAT.md`, with one
-//! deliberate difference: that doc lists a 5-byte header ending in
-//! `format_version`, but the code in [`crate::heap::page`] currently writes
-//! an 8-byte header (`num_slots: u16` | `tuple_start: u16` | `checksum: u32`)
-//! with no version byte. We emit what the code actually writes; the schema
-//! version below is for the *dump*, not the page format.
+//! Produces the JSON shape consumed by the React `HeapInspector` panel.
+//!
+//! Heap page on-disk layout (17-byte header):
+//!   byte  0:     `PageKind::Heap` (0x10)
+//!   bytes 1..5:  CRC32 (u32 LE)
+//!   bytes 5..13: `page_lsn` (u64 LE)
+//!   bytes 13..15: `num_slots` (u16 LE)
+//!   bytes 15..17: `tuple_start` (u16 LE)
+//!   bytes 17..:  slot-pointer array then tuple data
 //!
 //! All multi-byte integers in the page bytes are little-endian.
 
@@ -18,7 +20,9 @@ use crate::{
     PAGE_SIZE, codec::Decode, tuple::TupleSchema, types::Value, web::dto::query::value_to_json,
 };
 
-const PAGE_HDR_SIZE: usize = 8;
+/// Standard page envelope prelude: kind(1) + CRC32(4) + `page_lsn(8)` +
+/// `num_slots(2)` + `tuple_start(2)` = 17 bytes.
+const PAGE_HDR_SIZE: usize = 17;
 const SLOT_POINTER_SIZE: usize = 4;
 
 /// Top-level `GET /api/heap/{table}` response.
@@ -163,9 +167,9 @@ impl HeapPageDto {
             return HeapPageDto::blank(page_no);
         }
 
-        let num_slots = LittleEndian::read_u16(&bytes[0..2]);
-        let tuple_start = LittleEndian::read_u16(&bytes[2..4]);
-        let checksum = LittleEndian::read_u32(&bytes[4..8]);
+        let checksum = LittleEndian::read_u32(&bytes[1..5]);
+        let num_slots = LittleEndian::read_u16(&bytes[13..15]);
+        let tuple_start = LittleEndian::read_u16(&bytes[15..17]);
         let header = PageHeaderDto {
             num_slots,
             tuple_start,

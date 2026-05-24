@@ -86,6 +86,24 @@ impl From<u32> for PageNumber {
     }
 }
 
+impl From<PageNumber> for u32 {
+    fn from(p: PageNumber) -> u32 {
+        p.0
+    }
+}
+
+impl From<PageNumber> for u64 {
+    fn from(p: PageNumber) -> u64 {
+        u64::from(p.0)
+    }
+}
+
+impl From<PageNumber> for usize {
+    fn from(p: PageNumber) -> usize {
+        p.0 as usize
+    }
+}
+
 impl Encode for PageNumber {
     fn encode<W: Write>(&self, writer: &mut W) -> Result<(), CodecError> {
         writer.write_u32::<LittleEndian>(self.0)?;
@@ -237,6 +255,12 @@ impl From<u64> for TransactionId {
     }
 }
 
+impl From<TransactionId> for u64 {
+    fn from(t: TransactionId) -> u64 {
+        t.0
+    }
+}
+
 impl Encode for TransactionId {
     fn encode<W: Write>(&self, writer: &mut W) -> Result<(), CodecError> {
         writer.write_u64::<LittleEndian>(self.0)?;
@@ -359,6 +383,18 @@ impl From<SlotId> for u16 {
     }
 }
 
+impl From<SlotId> for u32 {
+    fn from(s: SlotId) -> u32 {
+        u32::from(s.0)
+    }
+}
+
+impl From<SlotId> for u64 {
+    fn from(s: SlotId) -> u64 {
+        u64::from(s.0)
+    }
+}
+
 impl From<SlotId> for usize {
     fn from(value: SlotId) -> Self {
         usize::from(value.0)
@@ -452,6 +488,12 @@ impl TryFrom<u32> for ColumnId {
 impl From<ColumnId> for u32 {
     fn from(col: ColumnId) -> Self {
         col.0
+    }
+}
+
+impl From<ColumnId> for u64 {
+    fn from(col: ColumnId) -> u64 {
+        u64::from(col.0)
     }
 }
 
