@@ -218,6 +218,15 @@ pub enum QueryResultDto {
         table: String,
         constraint: String,
     },
+    CheckConstraintAdded {
+        table: String,
+        constraint: String,
+        not_valid: bool,
+    },
+    ConstraintValidated {
+        table: String,
+        constraint: String,
+    },
 }
 
 impl From<&StatementResult> for QueryResultDto {
@@ -330,6 +339,21 @@ impl From<&StatementResult> for QueryResultDto {
             },
             StatementResult::ConstraintDropped { table, constraint } => {
                 QueryResultDto::ConstraintDropped {
+                    table: table.clone(),
+                    constraint: constraint.clone(),
+                }
+            }
+            StatementResult::CheckConstraintAdded {
+                table,
+                constraint,
+                not_valid,
+            } => QueryResultDto::CheckConstraintAdded {
+                table: table.clone(),
+                constraint: constraint.clone(),
+                not_valid: *not_valid,
+            },
+            StatementResult::ConstraintValidated { table, constraint } => {
+                QueryResultDto::ConstraintValidated {
                     table: table.clone(),
                     constraint: constraint.clone(),
                 }

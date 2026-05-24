@@ -183,6 +183,8 @@ impl Engine<'_> {
             TableConstraint::Check { expr } => ConstraintDef::Check {
                 name: Self::resolve_constraint_name(opt_name.as_ref(), table_name, constraint),
                 expr: expr.to_string(),
+                // Table is empty at CREATE TABLE time, so there are no rows to validate.
+                validated: true,
             },
             TableConstraint::ForeignKey {
                 local_cols,
