@@ -229,6 +229,21 @@ pub struct TableInfo {
     pub check_constraints: Vec<CachedCheckConstraint>,
 }
 
+impl TableInfo {
+    pub fn get_check_constraint(
+        &self,
+        constraint_name: &str,
+    ) -> Result<CachedCheckConstraint, CatalogError> {
+        self.check_constraints
+            .iter()
+            .find(|c| c.name == constraint_name)
+            .cloned()
+            .ok_or_else(|| CatalogError::ConstraintNotFound {
+                table: self.name.as_str().to_owned(),
+                constraint: constraint_name.to_owned(),
+            })
+    }
+}
 /// In-memory shape of one UNIQUE constraint.
 #[derive(Clone, Debug)]
 pub struct UniqueConstraint {

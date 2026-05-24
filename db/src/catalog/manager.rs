@@ -434,6 +434,45 @@ impl Catalog {
         .map_err(CatalogError::from)
     }
 
+    /// Finds the unique row of type `T` for which `predicate` returns `true`,
+    /// applies `mutate` to produce a replacement, deletes the original, and
+    /// inserts the replacement — all within `txn`.
+    ///
+    /// `predicate` must be `Fn` (not `FnOnce`) because it is called twice:
+    /// once to locate the row and once inside `delete_systable_rows` to
+    /// identify the physical tuple for deletion.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CatalogError::InvalidCatalogRow`] if no matching row is found.
+    /// Propagates heap scan and write errors.
+    pub(super) fn update_systable_row<T, P, F>(
+        &self,
+        txn: &Transaction<'_>,
+        predicate: P,
+        mutate: F,
+    ) -> Result<(), CatalogError>
+    where
+        T: CatalogRow,
+        for<'a> &'a T: Into<Tuple>,
+        P: Fn(&T) -> bool,
+        F: FnOnce(T) -> T,
+    {
+        let row = self
+            .scan_system_table_where::<T, _>(txn, |r| predicate(r))?
+            .into_iter()
+            .next()
+            .ok_or_else(|| {
+                CatalogError::invalid_catalog_row(format!(
+                    "no {} row found to update",
+                    T::TABLE.table_name()
+                ))
+            })?;
+
+        self.delete_systable_rows::<T, _>(txn, |r| predicate(r))?;
+        self.insert_systable_tuple(txn, &mutate(row))
+    }
+
     /// Deletes every row in `table` whose `table_id` field equals `target_id`.
     ///
     /// Works at the raw [`Tuple`] level — no typed row deserialization — so it

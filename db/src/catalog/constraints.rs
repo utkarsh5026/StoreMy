@@ -406,13 +406,14 @@ impl Catalog {
             )));
         }
 
-        self.delete_systable_rows::<ConstraintRow, _>(txn, |r| {
-            r.table_id == table_id && r.constraint_name.as_str() == name
-        })?;
-        self.insert_systable_tuple(txn, &ConstraintRow {
-            validated: true,
-            ..header
-        })?;
+        self.update_systable_row(
+            txn,
+            |r: &ConstraintRow| r.table_id == table_id && r.constraint_name.as_str() == name,
+            |row| ConstraintRow {
+                validated: true,
+                ..row
+            },
+        )?;
 
         for chk in &mut table.check_constraints {
             if chk.name == name {

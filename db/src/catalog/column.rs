@@ -46,21 +46,21 @@ impl Catalog {
         new_name: &str,
     ) -> Result<(), CatalogError> {
         let table = self.get_table_info_by_id(txn, table_id)?;
-        let column = self.get_table_col(txn, &table.name, table_id, old_name)?;
+        self.get_table_col(txn, &table.name, table_id, old_name)?;
 
-        self.delete_column(txn, table_id, old_name)?;
+        let new_col_name = NonEmptyString::new(new_name)
+            .map_err(|e| CatalogError::invalid_catalog_row(e.to_string()))?;
 
-        let new_column = ColumnRow {
-            table_id,
-            column_name: NonEmptyString::new(new_name)
-                .map_err(|e| CatalogError::invalid_catalog_row(e.to_string()))?,
-            column_type: column.column_type,
-            position: column.position,
-            nullable: column.nullable,
-            is_dropped: false,
-            missing_default_value: column.missing_default_value,
-        };
-        self.insert_systable_tuple(txn, &new_column)?;
+        self.update_systable_row(
+            txn,
+            |r: &ColumnRow| {
+                r.table_id == table_id && r.column_name.as_str() == old_name && !r.is_dropped
+            },
+            |row| ColumnRow {
+                column_name: new_col_name,
+                ..row
+            },
+        )?;
         self.refresh_table_schema(txn, table)
     }
 
@@ -109,12 +109,16 @@ impl Catalog {
             table.auto_increment_column = None;
         }
 
-        self.delete_column(txn, table_id, column_name)?;
-        let tombstone = ColumnRow {
-            is_dropped: true,
-            ..col
-        };
-        self.insert_systable_tuple(txn, &tombstone)?;
+        self.update_systable_row(
+            txn,
+            |r: &ColumnRow| {
+                r.table_id == table_id && r.column_name.as_str() == column_name && !r.is_dropped
+            },
+            |row| ColumnRow {
+                is_dropped: true,
+                ..row
+            },
+        )?;
         self.refresh_table_schema(txn, table)
     }
 
@@ -193,13 +197,17 @@ impl Catalog {
         value: Value,
     ) -> Result<(), CatalogError> {
         let table = self.get_table_info_by_id(txn, table_id)?;
-        let column = self.get_table_col(txn, &table.name, table_id, column_name)?;
-        self.delete_column(txn, table_id, column_name)?;
-        let updated = ColumnRow {
-            missing_default_value: Some(value),
-            ..column
-        };
-        self.insert_systable_tuple(txn, &updated)?;
+        self.get_table_col(txn, &table.name, table_id, column_name)?;
+        self.update_systable_row(
+            txn,
+            |r: &ColumnRow| {
+                r.table_id == table_id && r.column_name.as_str() == column_name && !r.is_dropped
+            },
+            |row| ColumnRow {
+                missing_default_value: Some(value),
+                ..row
+            },
+        )?;
         self.refresh_table_schema(txn, table)
     }
 
@@ -221,13 +229,17 @@ impl Catalog {
         column_name: &str,
     ) -> Result<(), CatalogError> {
         let table = self.get_table_info_by_id(txn, table_id)?;
-        let column = self.get_table_col(txn, &table.name, table_id, column_name)?;
-        self.delete_column(txn, table_id, column_name)?;
-        let updated = ColumnRow {
-            missing_default_value: None,
-            ..column
-        };
-        self.insert_systable_tuple(txn, &updated)?;
+        self.get_table_col(txn, &table.name, table_id, column_name)?;
+        self.update_systable_row(
+            txn,
+            |r: &ColumnRow| {
+                r.table_id == table_id && r.column_name.as_str() == column_name && !r.is_dropped
+            },
+            |row| ColumnRow {
+                missing_default_value: None,
+                ..row
+            },
+        )?;
         self.refresh_table_schema(txn, table)
     }
 
@@ -249,41 +261,18 @@ impl Catalog {
         column_name: &str,
     ) -> Result<(), CatalogError> {
         let table = self.get_table_info_by_id(txn, table_id)?;
-        let column = self.get_table_col(txn, &table.name, table_id, column_name)?;
-        self.delete_column(txn, table_id, column_name)?;
-        let updated = ColumnRow {
-            nullable: true,
-            ..column
-        };
-        self.insert_systable_tuple(txn, &updated)?;
+        self.get_table_col(txn, &table.name, table_id, column_name)?;
+        self.update_systable_row(
+            txn,
+            |r: &ColumnRow| {
+                r.table_id == table_id && r.column_name.as_str() == column_name && !r.is_dropped
+            },
+            |row| ColumnRow {
+                nullable: true,
+                ..row
+            },
+        )?;
         self.refresh_table_schema(txn, table)
-    }
-
-    /// Deletes a column definition from the system catalog's columns table.
-    ///
-    /// Removes all entries in the system `ColumnRow` table for the column named `column_name`
-    /// in the table identified by `table_id`. This does not update any in-memory cache or
-    /// table schema; the caller is responsible for evicting/reloading the in-memory metadata.
-    ///
-    /// # Arguments
-    ///
-    /// * `txn` - The active catalog transaction.
-    /// * `table_id` - The ID of the table whose column should be deleted.
-    /// * `column_name` - The name of the column to delete.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the underlying system table row deletion fails.
-    fn delete_column(
-        &self,
-        txn: &Transaction<'_>,
-        table_id: FileId,
-        column_name: &str,
-    ) -> Result<(), CatalogError> {
-        self.delete_systable_rows::<ColumnRow, _>(txn, |r| {
-            r.table_id == table_id && r.column_name.as_str() == column_name
-        })?;
-        Ok(())
     }
 
     /// Looks up a column definition by name and table in the catalog.
