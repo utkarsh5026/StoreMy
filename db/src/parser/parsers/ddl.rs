@@ -121,9 +121,16 @@ impl Parser {
                     let name = self.expect_ident()?;
                     let current_tok = self.bump()?;
                     let constraint = self.parse_table_contraint(&current_tok)?;
+                    let not_valid = if self.if_peek_then_consume(TokenType::Not)? {
+                        self.expect(TokenType::Valid)?;
+                        true
+                    } else {
+                        false
+                    };
                     AlterAction::AddConstraint {
                         name: Some(name),
                         constraint,
+                        not_valid,
                     }
                 } else {
                     let current_tok = self.bump()?;
@@ -132,9 +139,16 @@ impl Parser {
                         other => return Err(ParserError::unexpected(TokenType::Column, other)),
                     }
                     let tc = self.parse_table_contraint(&current_tok)?;
+                    let not_valid = if self.if_peek_then_consume(TokenType::Not)? {
+                        self.expect(TokenType::Valid)?;
+                        true
+                    } else {
+                        false
+                    };
                     AlterAction::AddConstraint {
                         name: None,
                         constraint: tc,
+                        not_valid,
                     }
                 }
             }
@@ -212,6 +226,13 @@ impl Parser {
                 }
             }
 
+            // VALIDATE CONSTRAINT <name>
+            TokenType::Validate => {
+                self.expect(TokenType::Constraint)?;
+                let name = self.expect_ident()?;
+                AlterAction::ValidateConstraint { name }
+            }
+
             _ => {
                 warn!(
                     found = ?action_token.kind,
@@ -219,7 +240,7 @@ impl Parser {
                     "invalid ALTER TABLE action"
                 );
                 return Err(ParserError::ParsingError(format!(
-                    "expected ADD, DROP, RENAME, or ALTER COLUMN, got {}",
+                    "expected ADD, DROP, RENAME, ALTER COLUMN, or VALIDATE CONSTRAINT, got {}",
                     action_token.value
                 )));
             }
@@ -1586,7 +1607,10 @@ mod tests {
         let Statement::AlterTable(a) = stmt else {
             panic!("expected AlterTable");
         };
-        let AlterAction::AddConstraint { name, constraint } = a.action else {
+        let AlterAction::AddConstraint {
+            name, constraint, ..
+        } = a.action
+        else {
             panic!("expected AddConstraint");
         };
         assert_eq!(name.as_deref(), Some("uq_email"));
@@ -1609,7 +1633,10 @@ mod tests {
         let Statement::AlterTable(a) = stmt else {
             panic!("expected AlterTable");
         };
-        let AlterAction::AddConstraint { name, constraint } = a.action else {
+        let AlterAction::AddConstraint {
+            name, constraint, ..
+        } = a.action
+        else {
             panic!("expected AddConstraint");
         };
         assert_eq!(name.as_deref(), Some("fk_parent"));
@@ -1644,7 +1671,10 @@ mod tests {
         let Statement::AlterTable(a) = stmt else {
             panic!("expected AlterTable");
         };
-        let AlterAction::AddConstraint { name, constraint } = a.action else {
+        let AlterAction::AddConstraint {
+            name, constraint, ..
+        } = a.action
+        else {
             panic!("expected AddConstraint");
         };
         assert!(name.is_none());
@@ -1660,7 +1690,10 @@ mod tests {
         let Statement::AlterTable(a) = stmt else {
             panic!("expected AlterTable");
         };
-        let AlterAction::AddConstraint { name, constraint } = a.action else {
+        let AlterAction::AddConstraint {
+            name, constraint, ..
+        } = a.action
+        else {
             panic!("expected AddConstraint");
         };
         assert!(name.is_none());
@@ -1676,7 +1709,10 @@ mod tests {
         let Statement::AlterTable(a) = stmt else {
             panic!("expected AlterTable");
         };
-        let AlterAction::AddConstraint { name, constraint } = a.action else {
+        let AlterAction::AddConstraint {
+            name, constraint, ..
+        } = a.action
+        else {
             panic!("expected AddConstraint");
         };
         assert!(name.is_none());
@@ -1775,5 +1811,114 @@ mod tests {
             panic!("expected ParsingError");
         };
         assert!(msg.contains("SET DEFAULT") || msg.contains("DROP"));
+    }
+
+    // ADD CONSTRAINT … NOT VALID sets not_valid = true.
+    #[test]
+    fn test_parse_alter_add_constraint_check_not_valid() {
+        let stmt =
+            parse("ALTER TABLE t ADD CONSTRAINT chk_price CHECK (price > 0) NOT VALID").unwrap();
+        let Statement::AlterTable(a) = stmt else {
+            panic!("expected AlterTable");
+        };
+        let AlterAction::AddConstraint {
+            name,
+            constraint,
+            not_valid,
+        } = a.action
+        else {
+            panic!("expected AddConstraint");
+        };
+        assert_eq!(name.as_deref(), Some("chk_price"));
+        assert!(matches!(constraint, TableConstraint::Check { .. }));
+        assert!(not_valid, "expected not_valid = true");
+    }
+
+    // ADD CONSTRAINT without NOT VALID keeps not_valid = false (the default).
+    #[test]
+    fn test_parse_alter_add_constraint_check_default_is_valid() {
+        let stmt = parse("ALTER TABLE t ADD CONSTRAINT chk_price CHECK (price > 0)").unwrap();
+        let Statement::AlterTable(a) = stmt else {
+            panic!("expected AlterTable");
+        };
+        let AlterAction::AddConstraint { not_valid, .. } = a.action else {
+            panic!("expected AddConstraint");
+        };
+        assert!(
+            !not_valid,
+            "expected not_valid = false when clause is absent"
+        );
+    }
+
+    // Unnamed CHECK with NOT VALID also works.
+    #[test]
+    fn test_parse_alter_add_unnamed_check_not_valid() {
+        let stmt = parse("ALTER TABLE t ADD CHECK (x > 0) NOT VALID").unwrap();
+        let Statement::AlterTable(a) = stmt else {
+            panic!("expected AlterTable");
+        };
+        let AlterAction::AddConstraint {
+            name, not_valid, ..
+        } = a.action
+        else {
+            panic!("expected AddConstraint");
+        };
+        assert!(name.is_none());
+        assert!(not_valid);
+    }
+
+    // NOT VALID on a non-CHECK constraint is accepted by the parser (the engine
+    // will reject it at execution time — the parser stays syntax-only).
+    #[test]
+    fn test_parse_alter_add_constraint_unique_not_valid_parsed() {
+        let stmt = parse("ALTER TABLE t ADD CONSTRAINT uq_email UNIQUE (email) NOT VALID").unwrap();
+        let Statement::AlterTable(a) = stmt else {
+            panic!("expected AlterTable");
+        };
+        let AlterAction::AddConstraint { not_valid, .. } = a.action else {
+            panic!("expected AddConstraint");
+        };
+        assert!(not_valid);
+    }
+
+    // ── VALIDATE CONSTRAINT ───────────────────────────────────────────────────
+
+    // Basic round-trip: VALIDATE CONSTRAINT <name> parses to ValidateConstraint.
+    #[test]
+    fn test_parse_alter_validate_constraint() {
+        let stmt = parse("ALTER TABLE products VALIDATE CONSTRAINT chk_price").unwrap();
+        let Statement::AlterTable(a) = stmt else {
+            panic!("expected AlterTable");
+        };
+        assert_eq!(a.table_name, "products");
+        let AlterAction::ValidateConstraint { name } = a.action else {
+            panic!("expected ValidateConstraint, got: {:?}", a.action);
+        };
+        assert_eq!(name, "chk_price");
+    }
+
+    // Display round-trip: rendered form re-parses to the same AST.
+    #[test]
+    fn test_parse_alter_validate_constraint_display_round_trip() {
+        let original = parse("ALTER TABLE t VALIDATE CONSTRAINT my_chk").unwrap();
+        let reparsed = parse(&original.to_string()).unwrap();
+        assert_eq!(original.to_string(), reparsed.to_string());
+    }
+
+    // Missing constraint name after VALIDATE CONSTRAINT is a parse error.
+    #[test]
+    fn test_parse_alter_validate_constraint_missing_name_errors() {
+        assert!(matches!(
+            parse("ALTER TABLE t VALIDATE CONSTRAINT"),
+            Err(ParserError::WantedToken)
+        ));
+    }
+
+    // NOT VALID display round-trip: rendered form re-parses identically.
+    #[test]
+    fn test_parse_alter_add_constraint_not_valid_display_round_trip() {
+        let original = parse("ALTER TABLE t ADD CONSTRAINT chk CHECK (x > 0) NOT VALID").unwrap();
+        let reparsed = parse(&original.to_string()).unwrap();
+        assert_eq!(original.to_string(), reparsed.to_string());
     }
 }
