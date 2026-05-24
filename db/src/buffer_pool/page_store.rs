@@ -26,15 +26,25 @@
 //! [`LockRequest`] (shared or exclusive) when fetching a page; locks are held for
 //! the lifetime of the transaction and released in bulk via [`PageStore::release_all`].
 
-use std::{collections::HashMap, fs::File, os::unix::fs::FileExt, path::Path, sync::Arc};
+use std::{
+    collections::HashMap,
+    fs::File,
+    os::unix::fs::FileExt,
+    path::{Path, PathBuf},
+    sync::Arc,
+};
 
 use parking_lot::{Mutex, RwLock};
 use thiserror::Error;
 
 use crate::{
     FileId, Lsn, PAGE_SIZE, TransactionId,
-    buffer_pool::lock::{LockError, LockManager, LockRequest},
+    buffer_pool::{
+        double_write::{DoubleWriteBuffer, DwbError},
+        lock::{LockError, LockManager, LockRequest},
+    },
     primitives::PageId,
+    storage,
     wal::{WalError, writer::Wal},
 };
 
@@ -49,6 +59,9 @@ pub enum PageStoreError {
 
     #[error("lock error: {0}")]
     Lock(#[from] LockError),
+
+    #[error("double-write buffer error: {0}")]
+    Dwb(#[from] DwbError),
 
     #[error("file {0} not registered")]
     FileNotRegistered(FileId),
@@ -76,22 +89,48 @@ struct FramePool {
     clock_hand: usize,
 }
 
+impl FramePool {
+    /// Creates a new `FramePool` with the given frames.
+    ///
+    /// # Arguments
+    ///
+    /// * `frames` - A vector of [`Frame`] instances which will be managed by the pool.
+    ///
+    /// The page table will be initialized empty, and the clock hand will start at position 0.
+    fn new(frames: Vec<Frame>) -> Self {
+        Self {
+            frames,
+            page_table: HashMap::new(),
+            clock_hand: 0,
+        }
+    }
+}
+
 /// Shared, thread-safe buffer pool that maps disk pages to in-memory frames.
 ///
-/// `PageStore` combines four concerns:
+/// `PageStore` combines five concerns:
 /// 1. **Frame management** — allocating and evicting frames via clock-sweep.
 /// 2. **File registry** — tracking which [`FileId`]s are open and where on disk they live.
 /// 3. **Page-level locking** — forwarding lock requests to a `LockManager`.
 /// 4. **WAL integration** — forcing log records before flushing dirty pages.
+/// 5. **Double-write buffer** — writing a redundant page copy before the real write so that torn
+///    pages caused by power loss can be repaired at the next startup. The DWB is optional: when
+///    absent (e.g. in tests) pages are written directly.
 ///
 /// The pool lock (`pool`) and the file lock (`files`) are intentionally separate
 /// so that I/O-heavy operations (reading/writing pages) do not block file
 /// registration and vice-versa.
+///
+/// ## Lock ordering
+///
+/// To avoid deadlocks, locks are always acquired in this order:
+/// `pool` → `files` → `dwb`
 pub struct PageStore {
     pool: Mutex<FramePool>,
-    files: RwLock<HashMap<FileId, File>>,
+    files: RwLock<HashMap<FileId, (File, PathBuf)>>,
     lock_manager: LockManager,
     wal: Arc<Wal>,
+    dwb: Option<Mutex<DoubleWriteBuffer>>,
 }
 
 /// One slot in the frame pool — holds a single page worth of raw bytes plus
@@ -115,6 +154,37 @@ struct Frame {
     ref_bit: bool,
 }
 
+impl Frame {
+    /// Returns `true` if the frame contains a loaded page and has been modified
+    /// since it was last written to disk (i.e., if the page is dirty).
+    pub(super) fn has_dirty_page(&self) -> bool {
+        self.dirty && self.page_id.is_some()
+    }
+
+    /// Marks the frame as clean, indicating it has no unsaved modifications,
+    /// and resets the associated WAL log sequence number to invalid.
+    pub(super) fn mark_clean(&mut self) {
+        self.dirty = false;
+        self.last_lsn = Lsn::INVALID;
+    }
+
+    /// Returns `true` if this frame is currently pinned (has a nonzero
+    /// pin count) and contains a page from the specified `file_id`.
+    ///
+    /// # Arguments
+    ///
+    /// * `file_id` - The file identifier to check against the loaded page's file.
+    ///
+    /// # Returns
+    ///
+    /// `true` if the frame contains a page from `file_id` and its pin count is greater than zero,
+    /// indicating that the page is currently in use and not eligible for eviction.
+    pub(super) fn is_pinned(&self, file_id: FileId) -> bool {
+        self.page_id
+            .is_some_and(|pid| pid.file_id == file_id && self.pin_count > 0)
+    }
+}
+
 impl Default for Frame {
     fn default() -> Self {
         Self {
@@ -132,18 +202,27 @@ impl PageStore {
     /// Creates a new `PageStore` with `cap` frames backed by the given WAL.
     ///
     /// All frames start empty (no page loaded, not dirty, pin count zero).
+    /// The double-write buffer is disabled by default; call
+    /// [`PageStore::set_double_write_buffer`] after construction to enable it.
     pub fn new(cap: usize, wal: Arc<Wal>) -> Self {
         let frames = (0..cap).map(|_| Frame::default()).collect::<Vec<Frame>>();
         Self {
-            pool: Mutex::new(FramePool {
-                frames,
-                page_table: HashMap::new(),
-                clock_hand: 0,
-            }),
+            pool: Mutex::new(FramePool::new(frames)),
             files: RwLock::new(HashMap::new()),
             lock_manager: LockManager::new(),
             wal,
+            dwb: None,
         }
+    }
+
+    /// Attaches a double-write buffer to this store.
+    ///
+    /// Once set, every dirty page is written to the DWB and fsynced before
+    /// being written to its real heap-file location.  Call this at startup
+    /// **after** [`DoubleWriteBuffer::recover_torn_pages`] and **before** any
+    /// transactions begin.
+    pub fn set_double_write_buffer(&mut self, dwb: DoubleWriteBuffer) {
+        self.dwb = Some(Mutex::new(dwb));
     }
 
     /// Brings a page into the buffer pool and returns a guard that pins it.
@@ -292,13 +371,9 @@ impl PageStore {
             return Err(PageStoreError::FileAlreadyRegistered(file_id));
         }
 
-        let file = File::options()
-            .read(true)
-            .write(true)
-            .create(true)
-            .truncate(false)
-            .open(path)?;
-        files.insert(file_id, file);
+        let path = path.as_ref();
+        let file = storage::open_persistent_file(path)?;
+        files.insert(file_id, (file, path.to_path_buf()));
         Ok(())
     }
 
@@ -317,17 +392,12 @@ impl PageStore {
     /// - [`PageStoreError::Wal`] or [`PageStoreError::Io`] if flushing dirty pages fails.
     pub fn unregister_file(&self, file_id: FileId) -> Result<(), PageStoreError> {
         let mut pool = self.pool.lock();
-        let has_pinned = pool.frames.iter().any(|f| {
-            f.page_id
-                .is_some_and(|page_id| page_id.file_id == file_id && f.pin_count > 0)
-        });
-
-        if has_pinned {
+        if pool.frames.iter().any(|f| f.is_pinned(file_id)) {
             return Err(PageStoreError::FileInUse(file_id));
         }
 
         let files = self.files.read();
-        let file = files
+        let (file, path) = files
             .get(&file_id)
             .ok_or(PageStoreError::FileNotRegistered(file_id))?;
 
@@ -341,7 +411,7 @@ impl PageStore {
                     continue;
                 }
 
-                self.flush_frame_to_file(file, pid, frame)?;
+                self.flush_frame_to_file(file, path, pid, frame)?;
 
                 to_remove.push(pid);
                 *frame = Frame::default();
@@ -369,12 +439,13 @@ impl PageStore {
         pool: &mut FramePool,
         frame_idx: usize,
     ) -> Result<(), PageStoreError> {
+        let PageId { file_id, page_no } = page_id;
         let files = self.files.read();
-        let file = files
-            .get(&page_id.file_id)
-            .ok_or(PageStoreError::FileNotRegistered(page_id.file_id))?;
+        let (file, _) = files
+            .get(&file_id)
+            .ok_or(PageStoreError::FileNotRegistered(file_id))?;
 
-        let offset = u64::from(page_id.page_no.0) * PAGE_SIZE as u64;
+        let offset = u64::from(page_no.0) * PAGE_SIZE as u64;
         file.read_at(&mut pool.frames[frame_idx].data, offset)?;
         Ok(())
     }
@@ -410,8 +481,8 @@ impl PageStore {
             let was_dirty = frame.dirty;
             {
                 let files = self.files.read();
-                if let Some(file) = files.get(&victim_pid.file_id) {
-                    self.flush_frame_to_file(file, victim_pid, &pool.frames[idx])?;
+                if let Some((file, path)) = files.get(&victim_pid.file_id) {
+                    self.flush_frame_to_file(file, path, victim_pid, &pool.frames[idx])?;
                 }
             }
 
@@ -426,19 +497,40 @@ impl PageStore {
     /// Writes `frame` to `file` at the byte offset corresponding to `page_id`,
     /// but only when the frame is dirty.
     ///
-    /// Before writing, [`Wal::force`] is called with `frame.last_lsn` to ensure
-    /// the relevant log records are on stable storage first (WAL protocol).
+    /// The write follows this sequence (WAL rule first, then double-write buffer,
+    /// then the real write):
+    ///
+    /// 1. [`Wal::force`] — log records are durable before any page hits disk.
+    /// 2. If a DWB is configured: write the page into a DWB slot and fsync the DWB file.  This
+    ///    creates the redundant copy.
+    /// 3. Write the page to its real heap-file location.
+    /// 4. If a DWB slot was taken: release it (clears the occupied byte).
+    ///
+    /// If the process crashes between steps 2 and 4, the occupied DWB slot is
+    /// found at startup and the torn real page is repaired from it.
     fn flush_frame_to_file(
         &self,
         file: &File,
+        path: &Path,
         page_id: PageId,
         frame: &Frame,
     ) -> Result<(), PageStoreError> {
-        if frame.dirty {
-            self.wal.force(frame.last_lsn)?;
-            let offset = u64::from(page_id.page_no.0) * PAGE_SIZE as u64;
+        if !frame.dirty {
+            return Ok(());
+        }
+
+        self.wal.force(frame.last_lsn)?;
+        let offset = u64::from(page_id.page_no.0) * PAGE_SIZE as u64;
+
+        if let Some(dwb_mutex) = &self.dwb {
+            let mut dwb = dwb_mutex.lock();
+            let slot = dwb.write_page(&frame.data, page_id, path)?;
+            file.write_at(&frame.data, offset)?;
+            dwb.release(slot)?;
+        } else {
             file.write_at(&frame.data, offset)?;
         }
+
         Ok(())
     }
 
@@ -461,15 +553,15 @@ impl PageStore {
 
         {
             let files = self.files.read();
-            let file = files
+            let (file, path) = files
                 .get(&page_id.file_id)
                 .ok_or(PageStoreError::FileNotRegistered(page_id.file_id))?;
-            self.flush_frame_to_file(file, page_id, &pool.frames[frame_idx])?;
+            let frame = &pool.frames[frame_idx];
+            self.flush_frame_to_file(file, path, page_id, frame)?;
         }
 
         let frame = &mut pool.frames[frame_idx];
-        frame.dirty = false;
-        frame.last_lsn = Lsn::INVALID;
+        frame.mark_clean();
         Ok(())
     }
 
@@ -487,25 +579,27 @@ impl PageStore {
     pub fn flush_all(&self) -> Result<(), PageStoreError> {
         let mut pool = self.pool.lock();
         let files = self.files.read();
-        let mut flushed = 0usize;
 
-        for frame in &mut pool.frames {
-            let Some(pid) = frame.page_id else { continue };
-            if !frame.dirty {
-                continue;
-            }
+        let flushed_count = pool
+            .frames
+            .iter_mut()
+            .filter(|f| f.has_dirty_page())
+            .map(|f| -> Result<(), PageStoreError> {
+                let pid = f.page_id.expect(
+                    "It has a dirty page, so it must have a page ID and we have checked for that",
+                );
 
-            let file = files
-                .get(&pid.file_id)
-                .ok_or(PageStoreError::FileNotRegistered(pid.file_id))?;
-            self.flush_frame_to_file(file, pid, frame)?;
+                let (file, path) = files
+                    .get(&pid.file_id)
+                    .ok_or(PageStoreError::FileNotRegistered(pid.file_id))?;
 
-            frame.dirty = false;
-            frame.last_lsn = Lsn::INVALID;
-            flushed += 1;
-        }
+                self.flush_frame_to_file(file, path, pid, f)?;
+                f.mark_clean();
+                Ok(())
+            })
+            .count();
 
-        tracing::debug!(pages = flushed, "buffer flush all");
+        tracing::debug!(pages = flushed_count, "buffer flush all");
         Ok(())
     }
 
@@ -593,6 +687,23 @@ mod tests {
         PageId::new(FileId::new(file), PageNumber::new(page))
     }
 
+    fn fetch_shared(store: &PageStore, tx: TransactionId, page: PageId) -> PageGuard<'_> {
+        store.fetch_page(LockRequest::shared(tx, page)).unwrap()
+    }
+
+    fn fetch_exclusive(store: &PageStore, tx: TransactionId, page: PageId) -> PageGuard<'_> {
+        store.fetch_page(LockRequest::exclusive(tx, page)).unwrap()
+    }
+
+    fn with_exclusive_page(
+        store: &PageStore,
+        tx: TransactionId,
+        page: PageId,
+        f: impl FnOnce(PageGuard<'_>),
+    ) {
+        f(fetch_exclusive(store, tx, page));
+    }
+
     fn register_data_file(
         store: &PageStore,
         file_id: FileId,
@@ -634,9 +745,7 @@ mod tests {
         let (store, dir) = make_store(4);
         register_data_file(&store, fid(1), &dir, "data.db");
 
-        let guard = store
-            .fetch_page(LockRequest::shared(tid(1), pid(1, 0)))
-            .unwrap();
+        let guard = fetch_shared(&store, tid(1), pid(1, 0));
         assert_eq!(guard.read(), [0u8; PAGE_SIZE]);
     }
 
@@ -646,19 +755,14 @@ mod tests {
         register_data_file(&store, fid(1), &dir, "data.db");
 
         // cache miss → write
-        {
-            let guard = store
-                .fetch_page(LockRequest::exclusive(tid(1), pid(1, 0)))
-                .unwrap();
+        with_exclusive_page(&store, tid(1), pid(1, 0), |guard| {
             let mut data = [0u8; PAGE_SIZE];
             data[0] = 42;
             guard.write(&data, Lsn(1));
-        }
+        });
 
         // cache hit → should see the written byte
-        let guard = store
-            .fetch_page(LockRequest::shared(tid(1), pid(1, 0)))
-            .unwrap();
+        let guard = fetch_shared(&store, tid(1), pid(1, 0));
         assert_eq!(guard.read()[0], 42);
     }
 
@@ -671,12 +775,9 @@ mod tests {
         expected[0] = 0xAB;
         expected[PAGE_SIZE - 1] = 0xCD;
 
-        {
-            let guard = store
-                .fetch_page(LockRequest::exclusive(tid(1), pid(1, 0)))
-                .unwrap();
+        with_exclusive_page(&store, tid(1), pid(1, 0), |guard| {
             guard.write(&expected, Lsn::INVALID);
-        }
+        });
         store.flush_page(pid(1, 0)).unwrap();
 
         let mut on_disk = [0u8; PAGE_SIZE];
@@ -692,22 +793,16 @@ mod tests {
         let (store, dir) = make_store(4);
         let path = register_data_file(&store, fid(1), &dir, "data.db");
 
-        {
-            let g = store
-                .fetch_page(LockRequest::exclusive(tid(1), pid(1, 0)))
-                .unwrap();
+        with_exclusive_page(&store, tid(1), pid(1, 0), |g| {
             let mut d = [0u8; PAGE_SIZE];
             d[0] = 1;
             g.write(&d, Lsn::INVALID);
-        }
-        {
-            let g = store
-                .fetch_page(LockRequest::exclusive(tid(1), pid(1, 1)))
-                .unwrap();
+        });
+        with_exclusive_page(&store, tid(1), pid(1, 1), |g| {
             let mut d = [0u8; PAGE_SIZE];
             d[0] = 2;
             g.write(&d, Lsn::INVALID);
-        }
+        });
 
         store.flush_all().unwrap();
 
@@ -727,9 +822,7 @@ mod tests {
         register_data_file(&store, fid(1), &dir, "data.db");
 
         {
-            let _g = store
-                .fetch_page(LockRequest::shared(tid(1), pid(1, 0)))
-                .unwrap();
+            let _g = fetch_shared(&store, tid(1), pid(1, 0));
         }
 
         assert!(store.unregister_file(fid(1)).is_ok());
@@ -740,9 +833,7 @@ mod tests {
         let (store, dir) = make_store(4);
         register_data_file(&store, fid(1), &dir, "data.db");
 
-        let _guard = store
-            .fetch_page(LockRequest::shared(tid(1), pid(1, 0)))
-            .unwrap();
+        let _guard = fetch_shared(&store, tid(1), pid(1, 0));
 
         assert!(matches!(
             store.unregister_file(fid(1)),
@@ -775,14 +866,10 @@ mod tests {
         store.register_file(fid(1), &path).unwrap();
 
         {
-            let _g = store
-                .fetch_page(LockRequest::shared(tid(1), pid(1, 0)))
-                .unwrap();
+            let _g = fetch_shared(&store, tid(1), pid(1, 0));
         }
         {
-            let _g = store
-                .fetch_page(LockRequest::shared(tid(1), pid(1, 1)))
-                .unwrap();
+            let _g = fetch_shared(&store, tid(1), pid(1, 1));
         }
 
         let result = store.fetch_page(LockRequest::shared(tid(1), pid(1, 2)));
@@ -792,8 +879,6 @@ mod tests {
             result.err()
         );
     }
-
-    // ── fetch_for_recovery ──────────────────────────────────────────────────
 
     /// Cache miss: a page not yet in the buffer pool is read from disk and
     /// returned as all zeros (the file was pre-extended with zeros).
@@ -893,25 +978,17 @@ mod tests {
 
         // First fetch is a cache miss — no lock recorded yet.
         {
-            let _g = store
-                .fetch_page(LockRequest::shared(tid(1), pid(1, 0)))
-                .unwrap();
+            let _g = fetch_shared(&store, tid(1), pid(1, 0));
         }
 
         {
-            let _g = store
-                .fetch_page(LockRequest::exclusive(tid(1), pid(1, 0)))
-                .unwrap();
+            let _g = fetch_exclusive(&store, tid(1), pid(1, 0));
         }
         // guard dropped: pin → 0, but lock still held by tid(1)
 
         store.release_all(tid(1));
 
         // tid(2) can now acquire a shared lock on the same page
-        assert!(
-            store
-                .fetch_page(LockRequest::shared(tid(2), pid(1, 0)))
-                .is_ok()
-        );
+        let _g = fetch_shared(&store, tid(2), pid(1, 0));
     }
 }
