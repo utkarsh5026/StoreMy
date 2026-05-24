@@ -8,11 +8,30 @@
 //! - The upper bound [`MAX_TUPLE_SIZE`] on a single tuple's serialized form.
 //! - The [`Page`] trait, the minimum interface a page type must expose so the buffer pool and
 //!   recovery code can work with it generically.
+//! - [`open_persistent_file`], the shared convention for opening data files.
 //! - [`StorageError`], the unified error type returned by storage operations.
+
+use std::{fs::File, path::Path};
 
 use thiserror::Error;
 
 use crate::primitives::{Lsn, SlotId};
+
+/// Opens a persistent database file for read/write access.
+///
+/// Creates the file if it does not exist. Never truncates an existing file.
+///
+/// # Errors
+///
+/// Returns [`std::io::Error`] if the file cannot be opened.
+pub fn open_persistent_file(path: impl AsRef<Path>) -> std::io::Result<File> {
+    File::options()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(path)
+}
 
 /// Size in bytes of a single on-disk page.
 ///
