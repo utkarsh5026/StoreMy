@@ -139,6 +139,7 @@ impl SystemTable {
                 field("constraint_kind", Uint32).not_null(),
                 field("expr", String),
                 field("backing_index_id", Int64),
+                field("validated", Bool).not_null(),
             ],
             SystemTable::ConstraintColumns => vec![
                 field("constraint_name", String).not_null(),
@@ -776,6 +777,11 @@ pub(super) struct ConstraintRow {
     pub(super) expr: Option<NonEmptyString>,
     pub(super) constraint_kind: ConstraintKind,
     pub(super) backing_index_id: Option<IndexId>,
+    /// Whether every existing row in the table has been confirmed to satisfy
+    /// this constraint. `false` means the constraint was added with `NOT VALID`
+    /// — new writes are still enforced, but old rows are unverified.
+    /// Flipped to `true` by `VALIDATE CONSTRAINT`.
+    pub(super) validated: bool,
 }
 
 impl From<&ConstraintRow> for Tuple {
@@ -789,6 +795,7 @@ impl From<&ConstraintRow> for Tuple {
                 .map_or(Value::Null, |e| e.as_str().to_owned().into()),
             c.backing_index_id
                 .map_or(Value::Null, |id| Value::Int64(id.0)),
+            Value::Bool(c.validated),
         ])
     }
 }
@@ -803,12 +810,14 @@ impl TryFrom<&Tuple> for ConstraintRow {
             catalog_row_try(ConstraintKind::try_from(tuple.read_field::<u32>(2)?))?;
         let expr: Option<String> = tuple.read_field(3)?;
         let backing_index_id: Option<i64> = tuple.read_field(4)?;
+        let validated: bool = tuple.read_field(5)?;
         Ok(Self {
             constraint_name,
             table_id,
             constraint_kind,
             expr: expr.map(NonEmptyString::new).transpose()?,
             backing_index_id: backing_index_id.map(IndexId::from),
+            validated,
         })
     }
 }
@@ -1040,8 +1049,9 @@ mod tests {
             Value::String("pk_orders".into()),
             Value::Uint64(10),
             Value::Uint32(u32::from(ConstraintKind::PrimaryKey)),
-            Value::Null, // expr
-            Value::Null, // backing_index_id
+            Value::Null,       // expr
+            Value::Null,       // backing_index_id
+            Value::Bool(true), // validated
         ])
     }
 
@@ -1333,6 +1343,7 @@ mod tests {
                 Value::Uint32(u32::from(kind)),
                 Value::Null,
                 Value::Null,
+                Value::Bool(true),
             ]);
             assert!(
                 SystemTable::Constraints.validate_row(&tuple).is_ok(),
@@ -1349,6 +1360,7 @@ mod tests {
             Value::Uint32(99),
             Value::Null,
             Value::Null,
+            Value::Bool(true),
         ]);
         let err = SystemTable::Constraints.validate_row(&tuple).unwrap_err();
         assert!(
@@ -1564,6 +1576,7 @@ mod tests {
             expr: None,
             constraint_kind: ConstraintKind::PrimaryKey,
             backing_index_id: None,
+            validated: true,
         };
         let tuple = Tuple::from(&row);
         let got = ConstraintRow::try_from(&tuple).unwrap();
@@ -1572,6 +1585,23 @@ mod tests {
         assert_eq!(got.expr, row.expr);
         assert_eq!(got.constraint_kind, row.constraint_kind);
         assert_eq!(got.backing_index_id, row.backing_index_id);
+        assert!(got.validated);
+    }
+
+    #[test]
+    fn test_constraint_row_validated_false_round_trips() {
+        let row = ConstraintRow {
+            table_id: FileId(1),
+            constraint_name: NonEmptyString::new("chk_not_valid").unwrap(),
+            expr: Some(NonEmptyString::new("price > 0").unwrap()),
+            constraint_kind: ConstraintKind::Check,
+            backing_index_id: None,
+            validated: false,
+        };
+        let tuple = Tuple::from(&row);
+        let got = ConstraintRow::try_from(&tuple).unwrap();
+        assert!(!got.validated);
+        assert_eq!(got.constraint_kind, ConstraintKind::Check);
     }
 
     #[test]
@@ -1583,6 +1613,7 @@ mod tests {
             expr: Some(expr.clone()),
             constraint_kind: ConstraintKind::Check,
             backing_index_id: None,
+            validated: false,
         };
         let tuple = Tuple::from(&row);
         let got = ConstraintRow::try_from(&tuple).unwrap();
@@ -1603,6 +1634,7 @@ mod tests {
             expr: None,
             constraint_kind: ConstraintKind::Unique,
             backing_index_id: Some(IndexId::new(7)),
+            validated: true,
         };
         let tuple = Tuple::from(&row);
         let got = ConstraintRow::try_from(&tuple).unwrap();

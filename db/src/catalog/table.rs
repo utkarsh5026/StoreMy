@@ -20,7 +20,7 @@ use crate::{
         },
     },
     heap::file::HeapFile,
-    primitives::ColumnId,
+    primitives::{ColumnId, NonEmptyString},
     transaction::Transaction,
     tuple::TupleSchema,
 };
@@ -680,16 +680,21 @@ impl Catalog {
         }
         let mut table = self.get_table_info(txn, old_name)?;
 
-        self.delete_systable_rows::<TableRow, _>(txn, |r| r.table_name == old_name)?;
-        self.insert_systable_tuple(
+        let new_table_name: NonEmptyString = new_name.try_into()?;
+
+        self.update_systable_row(
             txn,
-            &TableRow::new(table.file_id, new_name.to_string(), table.file_path.clone())?,
+            |r: &TableRow| r.table_name == old_name,
+            |row| TableRow {
+                table_name: new_table_name.clone(),
+                ..row
+            },
         )?;
 
-        table.name = new_name.try_into()?;
+        table.name = new_table_name.clone();
         let mut cache = self.user_tables.write();
         cache.remove(old_name);
-        cache.insert(new_name.try_into()?, table);
+        cache.insert(new_table_name, table);
         Ok(())
     }
 }

@@ -882,6 +882,8 @@ pub struct AlterTableStatement {
 /// - [`AlterAction::DropNotNull`] — drop a column's NOT NULL constraint.
 /// - [`AlterAction::AddPrimaryKey`] — add a primary key to one or more columns.
 /// - [`AlterAction::DropPrimaryKey`] — drop the table's primary key.
+/// - [`AlterAction::ValidateConstraint`] — scan every existing row and confirm it satisfies a
+///   previously-added `NOT VALID` constraint; flips the constraint to `validated = true`.
 #[derive(Debug, Clone)]
 pub enum AlterAction {
     AddColumn(ColumnDef),
@@ -913,10 +915,19 @@ pub enum AlterAction {
     AddConstraint {
         name: Option<NonEmptyString>,
         constraint: TableConstraint,
+        /// When `true` the constraint is stored as `validated = false`: existing
+        /// rows are not scanned. New writes are still enforced immediately.
+        /// Run `ALTER TABLE … VALIDATE CONSTRAINT` later to promote it.
+        not_valid: bool,
     },
     DropConstraint {
         name: NonEmptyString,
         if_exists: bool,
+    },
+    /// Scans every existing row and verifies it satisfies a `NOT VALID`
+    /// constraint, then marks it as `validated = true` in the catalog.
+    ValidateConstraint {
+        name: NonEmptyString,
     },
 }
 
@@ -1023,12 +1034,20 @@ impl Display for AlterAction {
                 write!(f, "ADD PRIMARY KEY ({})", columns.join(", "))
             }
             AlterAction::DropPrimaryKey => write!(f, "DROP PRIMARY KEY"),
-            AlterAction::AddConstraint { name, constraint } => {
+            AlterAction::AddConstraint {
+                name,
+                constraint,
+                not_valid,
+            } => {
                 write!(f, "ADD")?;
                 if let Some(name) = name {
                     write!(f, " CONSTRAINT {name}")?;
                 }
-                write!(f, " {constraint}")
+                write!(f, " {constraint}")?;
+                if *not_valid {
+                    write!(f, " NOT VALID")?;
+                }
+                Ok(())
             }
             AlterAction::DropConstraint { name, if_exists } => {
                 write!(f, "DROP CONSTRAINT")?;
@@ -1036,6 +1055,9 @@ impl Display for AlterAction {
                     write!(f, " IF EXISTS")?;
                 }
                 write!(f, " {name}")
+            }
+            AlterAction::ValidateConstraint { name } => {
+                write!(f, "VALIDATE CONSTRAINT {name}")
             }
         }
     }

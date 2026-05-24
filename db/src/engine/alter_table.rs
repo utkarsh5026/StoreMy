@@ -1,6 +1,6 @@
 use crate::{
     FileId,
-    catalog::{CatalogError, ConstraintDef, TableInfo, manager::Catalog},
+    catalog::{CachedCheckConstraint, CatalogError, ConstraintDef, TableInfo, manager::Catalog},
     engine::{Engine, EngineError, StatementResult},
     index::IndexKind,
     parser::statements::{AlterAction, AlterTableStatement, TableConstraint},
@@ -60,7 +60,9 @@ impl Engine<'_> {
         };
 
         let TableInfo {
-            file_id, schema, ..
+            file_id,
+            ref schema,
+            ..
         } = table_info;
 
         let operation = match &stmt.action {
@@ -75,6 +77,7 @@ impl Engine<'_> {
             AlterAction::DropPrimaryKey => "drop_primary_key",
             AlterAction::DropConstraint { .. } => "drop_constraint",
             AlterAction::AddConstraint { .. } => "add_constraint",
+            AlterAction::ValidateConstraint { .. } => "validate_constraint",
         };
         tracing::debug!(table = %table_name, operation, "alter table");
 
@@ -97,8 +100,8 @@ impl Engine<'_> {
                 let old_name = from.into_inner();
                 let new_name = to.into_inner();
 
-                Self::require_column(&schema, &table_name, old_name.as_str())?;
-                Self::assure_no_duplicate_col(&schema, &table_name, new_name.as_str())?;
+                Self::require_column(schema, &table_name, old_name.as_str())?;
+                Self::assure_no_duplicate_col(schema, &table_name, new_name.as_str())?;
 
                 catalog.rename_column(txn, file_id, &old_name, &new_name)?;
                 Ok(StatementResult::ColumnRenamed {
@@ -111,7 +114,7 @@ impl Engine<'_> {
             // ALTER TABLE users ADD COLUMN email TEXT NOT NULL;
             AlterAction::AddColumn(col_def) => {
                 let column_name = col_def.name.as_str().to_owned();
-                Self::assure_no_duplicate_col(&schema, &table_name, &column_name)?;
+                Self::assure_no_duplicate_col(schema, &table_name, &column_name)?;
                 catalog.add_column(txn, file_id, col_def)?;
                 Ok(StatementResult::ColumnAdded {
                     table: table_name,
@@ -150,7 +153,7 @@ impl Engine<'_> {
             AlterAction::SetDefault { column, value } => {
                 let column_name = column.into_inner();
 
-                Self::require_column(&schema, &table_name, &column_name)?;
+                Self::require_column(schema, &table_name, &column_name)?;
                 catalog.set_column_default(txn, file_id, &column_name, value)?;
                 Ok(StatementResult::ColumnDefaultSet {
                     table: table_name,
@@ -161,7 +164,7 @@ impl Engine<'_> {
             // ALTER TABLE users ALTER COLUMN name DROP DEFAULT;
             AlterAction::DropDefault { column } => {
                 let column_name = column.into_inner();
-                Self::require_column(&schema, &table_name, &column_name)?;
+                Self::require_column(schema, &table_name, &column_name)?;
                 catalog.drop_column_default(txn, file_id, &column_name)?;
                 Ok(StatementResult::ColumnDefaultDropped {
                     table: table_name,
@@ -172,7 +175,7 @@ impl Engine<'_> {
             // ALTER TABLE users ALTER COLUMN name DROP NOT NULL;
             AlterAction::DropNotNull { column } => {
                 let column_name = column.into_inner();
-                Self::require_column(&schema, &table_name, &column_name)?;
+                Self::require_column(schema, &table_name, &column_name)?;
                 catalog.drop_column_not_null(txn, file_id, &column_name)?;
                 Ok(StatementResult::ColumnNotNullDropped {
                     table: table_name,
@@ -186,7 +189,7 @@ impl Engine<'_> {
                     return Err(EngineError::PrimaryKeyAlreadyExists(table_name));
                 }
 
-                let column_ids = Self::resolve_column_ids(&schema, &table_name, columns.iter())?;
+                let column_ids = Self::resolve_column_ids(schema, &table_name, columns.iter())?;
                 catalog.set_primary_key(txn, file_id, column_ids)?;
                 Ok(StatementResult::PrimaryKeySet { table: table_name })
             }
@@ -217,43 +220,118 @@ impl Engine<'_> {
             // ALTER TABLE users ADD CONSTRAINT uq_email UNIQUE (email);
             // ALTER TABLE orders ADD CONSTRAINT fk_user FOREIGN KEY (user_id) REFERENCES users
             // (id);
-            AlterAction::AddConstraint { name, constraint } => match &constraint {
-                TableConstraint::Unique { columns } => {
-                    let column_ids =
-                        Self::resolve_column_ids(&schema, &table_name, columns.iter())?;
-                    let constraint_name =
-                        Self::resolve_constraint_name(name.as_ref(), &table_name, &constraint);
-                    let index_name = format!("{table_name}_{constraint_name}_idx");
+            AlterAction::AddConstraint {
+                name,
+                constraint,
+                not_valid,
+            } => {
+                let constraint_name =
+                    Self::resolve_constraint_name(name.as_ref(), &table_name, &constraint);
+                match constraint {
+                    TableConstraint::Unique { columns } => {
+                        let column_ids =
+                            Self::resolve_column_ids(schema, &table_name, columns.iter())?;
+                        let index_name = format!("{table_name}_{constraint_name}_idx");
 
-                    let index_id = catalog.create_index(
-                        txn,
-                        &index_name,
-                        &table_name,
-                        file_id,
-                        &column_ids,
-                        IndexKind::Btree,
-                    )?;
-                    catalog.add_constraint(txn, file_id, ConstraintDef::Unique {
-                        name: constraint_name.clone(),
-                        columns: column_ids,
-                        backing_index_id: Some(index_id),
-                    })?;
-                    Self::populate_index_from_heap(catalog, txn, file_id, &index_name)?;
+                        let index_id = catalog.create_index(
+                            txn,
+                            &index_name,
+                            &table_name,
+                            file_id,
+                            &column_ids,
+                            IndexKind::Btree,
+                        )?;
+                        catalog.add_constraint(txn, file_id, ConstraintDef::Unique {
+                            name: constraint_name.clone(),
+                            columns: column_ids,
+                            backing_index_id: Some(index_id),
+                        })?;
+                        Self::populate_index_from_heap(catalog, txn, file_id, &index_name)?;
 
-                    Ok(StatementResult::unique_constraint_added(
-                        table_name,
-                        constraint_name,
-                        index_name,
-                    ))
+                        Ok(StatementResult::unique_constraint_added(
+                            table_name,
+                            constraint_name,
+                            index_name,
+                        ))
+                    }
+
+                    TableConstraint::Check { expr } => {
+                        if not_valid {
+                            catalog.add_constraint(txn, file_id, ConstraintDef::Check {
+                                name: constraint_name.clone(),
+                                expr: expr.to_string(),
+                                validated: false,
+                            })?;
+                        } else {
+                            let cached =
+                                CachedCheckConstraint::new(constraint_name.clone(), expr, true);
+                            let resolved = Self::resolve_check_constraints(
+                                schema,
+                                std::slice::from_ref(&cached),
+                            )?;
+
+                            let heap = catalog.get_table_heap(file_id)?;
+                            let tid = txn.transaction_id();
+                            let mut scan = heap.scan(tid)?;
+                            while let Some((_rid, tuple)) =
+                                fallible_iterator::FallibleIterator::next(&mut scan)?
+                            {
+                                Self::check_tuple_constraints(&tuple, &resolved, &table_name)?;
+                            }
+
+                            catalog.add_constraint(txn, file_id, ConstraintDef::Check {
+                                name: constraint_name.clone(),
+                                expr: cached.expr.to_string(),
+                                validated: true,
+                            })?;
+                        }
+
+                        Ok(StatementResult::check_constraint_added(
+                            table_name,
+                            constraint_name,
+                            not_valid,
+                        ))
+                    }
+
+                    TableConstraint::ForeignKey { .. } => Err(EngineError::Unsupported(
+                        "ALTER TABLE ADD CONSTRAINT: only UNIQUE and CHECK are supported"
+                            .to_string(),
+                    )),
                 }
-                _ => Err(EngineError::Unsupported(
-                    "ALTER TABLE ADD CONSTRAINT: only UNIQUE is supported for execution"
-                        .to_string(),
-                )),
-            },
+            }
+
+            AlterAction::ValidateConstraint { name } => {
+                let constraint_name = name.as_str();
+
+                let cached = table_info.get_check_constraint(constraint_name)?;
+
+                let resolved = Self::resolve_check_constraints(schema, &[cached])?;
+                let heap = catalog.get_table_heap(file_id)?;
+                let mut scan = heap.scan(txn.transaction_id())?;
+                while let Some((_rid, tuple)) =
+                    fallible_iterator::FallibleIterator::next(&mut scan)?
+                {
+                    Self::check_tuple_constraints(&tuple, &resolved, &table_name)?;
+                }
+
+                catalog.mark_constraint_validated(txn, file_id, constraint_name)?;
+                Ok(StatementResult::constraint_validated(
+                    table_name,
+                    constraint_name,
+                ))
+            }
         }
     }
 
+    /// Rejects `ALTER TABLE` column operations that would introduce a duplicate name.
+    ///
+    /// Used before `ADD COLUMN` and `RENAME COLUMN ... TO ...` to ensure the target
+    /// name is not already present in the table's logical schema.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`EngineError::DuplicateColumn`] when `column_name` already exists on
+    /// `table_name`.
     fn assure_no_duplicate_col(
         schema: &TupleSchema,
         table_name: &str,
@@ -268,10 +346,18 @@ impl Engine<'_> {
         Ok(())
     }
 
-    /// Inserts one secondary-index entry per live heap row for `index_name`.
+    /// Backfills a newly created UNIQUE backing index from every live heap row.
     ///
-    /// Called after [`Catalog::create_index`] when enforcing UNIQUE on existing
-    /// data. Duplicate keys are rejected before insert.
+    /// After `ALTER TABLE ... ADD CONSTRAINT ... UNIQUE`, the engine creates an empty
+    /// btree index and then calls this to scan the table once. Each tuple is keyed and
+    /// inserted; if the index already holds that key, the scan stops — two existing rows
+    /// with the same key means the constraint cannot be added.
+    ///
+    /// # Errors
+    ///
+    /// - [`CatalogError::IndexNameNotFound`] if `index_name` is not in the catalog.
+    /// - [`CatalogError::InvalidCatalogRow`] when existing data contains duplicate keys.
+    /// - Other [`CatalogError`] variants from heap or index access during the scan.
     fn populate_index_from_heap(
         catalog: &Catalog,
         txn: &Transaction<'_>,
@@ -311,7 +397,13 @@ mod tests {
         buffer_pool::page_store::PageStore,
         catalog::manager::Catalog,
         engine::{Engine, EngineError, StatementResult},
-        parser::statements::{AlterAction, AlterTableStatement, ColumnDef, Statement, Uniqueness},
+        parser::{
+            Parser,
+            statements::{
+                AlterAction, AlterTableStatement, ColumnDef, Expr, Statement, TableConstraint,
+                Uniqueness,
+            },
+        },
         primitives::NonEmptyString,
         transaction::TransactionManager,
         tuple::{Field, TupleSchema},
@@ -751,6 +843,275 @@ mod tests {
         assert!(
             matches!(result, StatementResult::NoOp { .. }),
             "expected NoOp, got: {result:?}"
+        );
+    }
+
+    /// Parse and execute a SQL statement, panicking on parse or engine error.
+    fn run(engine: &Engine<'_>, sql: &str) {
+        let stmt = Parser::new(sql).parse().expect("parse");
+        engine.execute_statement(stmt).expect("execute");
+    }
+
+    /// Parse and execute a SQL statement, returning the engine result.
+    fn try_run(engine: &Engine<'_>, sql: &str) -> Result<StatementResult, EngineError> {
+        let stmt = Parser::new(sql).parse().expect("parse");
+        engine.execute_statement(stmt)
+    }
+
+    /// Build an `AlterTableStatement` for `ADD CONSTRAINT … CHECK`.
+    fn add_check_stmt(
+        table: &str,
+        constraint_name: &str,
+        expr: Expr,
+        not_valid: bool,
+    ) -> Statement {
+        Statement::AlterTable(AlterTableStatement {
+            table_name: NonEmptyString::new(table).unwrap(),
+            if_exists: false,
+            action: AlterAction::AddConstraint {
+                name: Some(NonEmptyString::new(constraint_name).unwrap()),
+                constraint: TableConstraint::Check { expr },
+                not_valid,
+            },
+        })
+    }
+
+    /// Build an `AlterTableStatement` for `VALIDATE CONSTRAINT`.
+    fn validate_stmt(table: &str, constraint_name: &str) -> Statement {
+        Statement::AlterTable(AlterTableStatement {
+            table_name: NonEmptyString::new(table).unwrap(),
+            if_exists: false,
+            action: AlterAction::ValidateConstraint {
+                name: NonEmptyString::new(constraint_name).unwrap(),
+            },
+        })
+    }
+
+    // ── ADD CONSTRAINT CHECK — strict path ────────────────────────────────────
+
+    // A violating row must block the constraint from being added.
+    #[test]
+    fn test_add_check_constraint_blocks_when_existing_row_violates() {
+        let dir = tempdir().unwrap();
+        let (catalog, txn_mgr) = make_catalog_and_txn(dir.path());
+        make_users_table(&catalog, &txn_mgr);
+        let engine = Engine::new(&catalog, &txn_mgr);
+
+        // Insert a row with age = 5 before the constraint exists.
+        run(&engine, "INSERT INTO users VALUES (1, 'alice', 5)");
+
+        // The constraint requires age > 10 — row with age=5 must be rejected.
+        let expr = Parser::parse_expr("age > 10").unwrap();
+        let err = engine
+            .execute_statement(add_check_stmt("users", "chk_age", expr, false))
+            .unwrap_err();
+
+        assert!(
+            matches!(err, EngineError::Constraint(_)),
+            "expected ConstraintViolation, got: {err:?}"
+        );
+
+        // The constraint must not have been stored in the catalog.
+        let txn = txn_mgr.begin().unwrap();
+        let info = catalog.get_table_info(&txn, "users").unwrap();
+        txn.commit().unwrap();
+        assert!(
+            info.check_constraints.is_empty(),
+            "constraint must not be persisted after a violation"
+        );
+    }
+
+    // A clean table: constraint is added; a subsequent violating INSERT must fail.
+    #[test]
+    fn test_add_check_constraint_succeeds_on_clean_table_and_enforces_inserts() {
+        let dir = tempdir().unwrap();
+        let (catalog, txn_mgr) = make_catalog_and_txn(dir.path());
+        make_users_table(&catalog, &txn_mgr);
+        let engine = Engine::new(&catalog, &txn_mgr);
+
+        run(&engine, "INSERT INTO users VALUES (1, 'alice', 25)");
+
+        // Constraint: age > 10. Existing row (25) passes; inserting age=5 must fail.
+        let expr = Parser::parse_expr("age > 10").unwrap();
+        let result = engine
+            .execute_statement(add_check_stmt("users", "chk_age", expr, false))
+            .unwrap();
+
+        assert!(
+            matches!(result, StatementResult::CheckConstraintAdded {
+                not_valid: false,
+                ..
+            }),
+            "expected CheckConstraintAdded (validated), got: {result:?}"
+        );
+
+        // Violating insert must now be rejected.
+        let err = try_run(&engine, "INSERT INTO users VALUES (2, 'bob', 5)").unwrap_err();
+        assert!(
+            matches!(err, EngineError::Constraint(_)),
+            "expected ConstraintViolation on subsequent bad insert, got: {err:?}"
+        );
+    }
+
+    // Empty table: always succeeds regardless of the expression.
+    #[test]
+    fn test_add_check_constraint_succeeds_on_empty_table() {
+        let dir = tempdir().unwrap();
+        let (catalog, txn_mgr) = make_catalog_and_txn(dir.path());
+        make_users_table(&catalog, &txn_mgr);
+        let engine = Engine::new(&catalog, &txn_mgr);
+
+        let expr = Parser::parse_expr("age > 10").unwrap();
+        let result = engine
+            .execute_statement(add_check_stmt("users", "chk_age", expr, false))
+            .unwrap();
+
+        assert!(
+            matches!(result, StatementResult::CheckConstraintAdded {
+                not_valid: false,
+                ..
+            }),
+            "expected CheckConstraintAdded, got: {result:?}"
+        );
+    }
+
+    // ── ADD CONSTRAINT CHECK NOT VALID ─────────────────────────────────────────
+
+    // NOT VALID with a violating row: succeeds (no scan), stored as unverified.
+    #[test]
+    fn test_add_check_not_valid_skips_scan_and_stores_unvalidated() {
+        let dir = tempdir().unwrap();
+        let (catalog, txn_mgr) = make_catalog_and_txn(dir.path());
+        make_users_table(&catalog, &txn_mgr);
+        let engine = Engine::new(&catalog, &txn_mgr);
+
+        // Row with age=5 violates `age > 10` — must NOT block the NOT VALID constraint.
+        run(&engine, "INSERT INTO users VALUES (1, 'alice', 5)");
+
+        let expr = Parser::parse_expr("age > 10").unwrap();
+        let result = engine
+            .execute_statement(add_check_stmt("users", "chk_age", expr, true))
+            .unwrap();
+
+        assert!(
+            matches!(result, StatementResult::CheckConstraintAdded {
+                not_valid: true,
+                ..
+            }),
+            "expected CheckConstraintAdded (not_valid=true), got: {result:?}"
+        );
+
+        // The catalog must hold the constraint as unvalidated.
+        let txn = txn_mgr.begin().unwrap();
+        let info = catalog.get_table_info(&txn, "users").unwrap();
+        txn.commit().unwrap();
+        let chk = info
+            .check_constraints
+            .iter()
+            .find(|c| c.name == "chk_age")
+            .expect("constraint must exist in catalog");
+        assert!(!chk.validated, "constraint must be stored as not validated");
+    }
+
+    // NOT VALID constraint still enforces new writes after being added.
+    #[test]
+    fn test_add_check_not_valid_still_enforces_new_inserts() {
+        let dir = tempdir().unwrap();
+        let (catalog, txn_mgr) = make_catalog_and_txn(dir.path());
+        make_users_table(&catalog, &txn_mgr);
+        let engine = Engine::new(&catalog, &txn_mgr);
+
+        let expr = Parser::parse_expr("age > 10").unwrap();
+        engine
+            .execute_statement(add_check_stmt("users", "chk_age", expr, true))
+            .unwrap();
+
+        // age=5 violates `age > 10` — must still be rejected even with NOT VALID.
+        let err = try_run(&engine, "INSERT INTO users VALUES (1, 'alice', 5)").unwrap_err();
+        assert!(
+            matches!(err, EngineError::Constraint(_)),
+            "NOT VALID constraint must still reject new bad inserts, got: {err:?}"
+        );
+    }
+
+    // ── VALIDATE CONSTRAINT ────────────────────────────────────────────────────
+
+    // After fixing the violating row, VALIDATE CONSTRAINT succeeds and marks it validated.
+    #[test]
+    fn test_validate_constraint_succeeds_when_all_rows_pass() {
+        let dir = tempdir().unwrap();
+        let (catalog, txn_mgr) = make_catalog_and_txn(dir.path());
+        make_users_table(&catalog, &txn_mgr);
+        let engine = Engine::new(&catalog, &txn_mgr);
+
+        // age=30 satisfies `age > 10` — VALIDATE must succeed.
+        run(&engine, "INSERT INTO users VALUES (1, 'alice', 30)");
+        let expr = Parser::parse_expr("age > 10").unwrap();
+        engine
+            .execute_statement(add_check_stmt("users", "chk_age", expr, true))
+            .unwrap();
+
+        // Validate: all rows pass.
+        let result = engine
+            .execute_statement(validate_stmt("users", "chk_age"))
+            .unwrap();
+
+        assert!(
+            matches!(result, StatementResult::ConstraintValidated { .. }),
+            "expected ConstraintValidated, got: {result:?}"
+        );
+
+        // The catalog must now show validated = true.
+        let txn = txn_mgr.begin().unwrap();
+        let info = catalog.get_table_info(&txn, "users").unwrap();
+        txn.commit().unwrap();
+        let chk = info
+            .check_constraints
+            .iter()
+            .find(|c| c.name == "chk_age")
+            .expect("constraint must still exist");
+        assert!(
+            chk.validated,
+            "constraint must be marked validated after VALIDATE CONSTRAINT"
+        );
+    }
+
+    // VALIDATE CONSTRAINT fails when a violating row still exists.
+    #[test]
+    fn test_validate_constraint_fails_when_row_violates() {
+        let dir = tempdir().unwrap();
+        let (catalog, txn_mgr) = make_catalog_and_txn(dir.path());
+        make_users_table(&catalog, &txn_mgr);
+        let engine = Engine::new(&catalog, &txn_mgr);
+
+        // age=5 violates `age > 10`.
+        run(&engine, "INSERT INTO users VALUES (1, 'alice', 5)");
+        let expr = Parser::parse_expr("age > 10").unwrap();
+        engine
+            .execute_statement(add_check_stmt("users", "chk_age", expr, true))
+            .unwrap();
+
+        let err = engine
+            .execute_statement(validate_stmt("users", "chk_age"))
+            .unwrap_err();
+
+        assert!(
+            matches!(err, EngineError::Constraint(_)),
+            "expected ConstraintViolation from VALIDATE CONSTRAINT, got: {err:?}"
+        );
+
+        // The constraint must remain unvalidated after a failed VALIDATE.
+        let txn = txn_mgr.begin().unwrap();
+        let info = catalog.get_table_info(&txn, "users").unwrap();
+        txn.commit().unwrap();
+        let chk = info
+            .check_constraints
+            .iter()
+            .find(|c| c.name == "chk_age")
+            .expect("constraint must still exist");
+        assert!(
+            !chk.validated,
+            "constraint must stay unvalidated after a failed VALIDATE"
         );
     }
 }

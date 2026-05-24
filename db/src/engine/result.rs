@@ -107,6 +107,21 @@ pub enum StatementResult {
         table: String,
         constraint: String,
     },
+    /// `ALTER TABLE ... ADD CONSTRAINT ... CHECK` registered a CHECK constraint.
+    ///
+    /// `not_valid = true` means the constraint was added without scanning
+    /// existing rows; run `VALIDATE CONSTRAINT` to promote it.
+    CheckConstraintAdded {
+        table: String,
+        constraint: String,
+        not_valid: bool,
+    },
+    /// `ALTER TABLE ... VALIDATE CONSTRAINT` confirmed every existing row
+    /// satisfies the constraint and marked it as `validated = true`.
+    ConstraintValidated {
+        table: String,
+        constraint: String,
+    },
 }
 
 impl StatementResult {
@@ -134,6 +149,8 @@ impl StatementResult {
             Self::PrimaryKeyDropped { .. } => "primary_key_dropped",
             Self::UniqueConstraintAdded { .. } => "unique_constraint_added",
             Self::ConstraintDropped { .. } => "constraint_dropped",
+            Self::CheckConstraintAdded { .. } => "check_constraint_added",
+            Self::ConstraintValidated { .. } => "constraint_validated",
         }
     }
 
@@ -232,6 +249,28 @@ impl StatementResult {
         constraint: impl Into<String>,
     ) -> Self {
         Self::ConstraintDropped {
+            table: table.into(),
+            constraint: constraint.into(),
+        }
+    }
+
+    pub(super) fn check_constraint_added(
+        table: impl Into<String>,
+        constraint: impl Into<String>,
+        not_valid: bool,
+    ) -> Self {
+        Self::CheckConstraintAdded {
+            table: table.into(),
+            constraint: constraint.into(),
+            not_valid,
+        }
+    }
+
+    pub(super) fn constraint_validated(
+        table: impl Into<String>,
+        constraint: impl Into<String>,
+    ) -> Self {
+        Self::ConstraintValidated {
             table: table.into(),
             constraint: constraint.into(),
         }
@@ -405,6 +444,29 @@ impl fmt::Display for StatementResult {
                 write!(
                     f,
                     "ALTER TABLE completed: dropped constraint '{constraint}' from table '{table}'"
+                )
+            }
+            StatementResult::CheckConstraintAdded {
+                table,
+                constraint,
+                not_valid,
+            } => {
+                if *not_valid {
+                    write!(
+                        f,
+                        "ALTER TABLE completed: added CHECK constraint '{constraint}' on '{table}' (NOT VALID — existing rows not scanned)"
+                    )
+                } else {
+                    write!(
+                        f,
+                        "ALTER TABLE completed: added CHECK constraint '{constraint}' on '{table}'"
+                    )
+                }
+            }
+            StatementResult::ConstraintValidated { table, constraint } => {
+                write!(
+                    f,
+                    "ALTER TABLE completed: validated constraint '{constraint}' on '{table}'"
                 )
             }
         }

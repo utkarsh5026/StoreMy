@@ -199,6 +199,31 @@ fn print_result(r: &StatementResult) {
                 ),
             );
         }
+        StatementResult::CheckConstraintAdded {
+            table,
+            constraint,
+            not_valid,
+        } => {
+            let suffix = if *not_valid { " (NOT VALID)" } else { "" };
+            theme::ok(
+                "ALTER TABLE",
+                &format!(
+                    "added CHECK constraint {}{suffix} on {}",
+                    constraint.cyan(),
+                    table.cyan()
+                ),
+            );
+        }
+        StatementResult::ConstraintValidated { table, constraint } => {
+            theme::ok(
+                "ALTER TABLE",
+                &format!(
+                    "validated constraint {} on {}",
+                    constraint.cyan(),
+                    table.cyan()
+                ),
+            );
+        }
     }
 }
 
