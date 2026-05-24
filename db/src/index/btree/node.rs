@@ -105,8 +105,8 @@ impl BTreeNode {
         match kind {
             PageKind::BTreeLeaf => Ok(BTreeNode::Leaf(LeafNode::decode(&mut reader)?)),
             PageKind::BTreeInternal => Ok(BTreeNode::Internal(InternalNode::decode(&mut reader)?)),
-            PageKind::HashBucket => Err(IndexError::CorruptIndex(
-                "expected BTree page, found HashBucket",
+            PageKind::HashBucket | PageKind::Heap => Err(IndexError::CorruptIndex(
+                "expected BTree page, found non-BTree page kind",
             )),
         }
     }

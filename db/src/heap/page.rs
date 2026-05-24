@@ -5,7 +5,7 @@
 //! growing from the low end, and tuple data growing from the high end toward
 //! the middle.
 //!
-//! ## In-memory layout  (one `PAGE_SIZE`-byte buffer)
+//! ## On-disk layout  (one `PAGE_SIZE`-byte buffer)
 //!
 //! ```text
 //!  byte 0                                                          PAGE_SIZE
@@ -17,20 +17,20 @@
 //!  0    PAGE_HDR_SIZE   slot_array_end          tuple_start            PAGE_SIZE
 //!
 //!
-//!  Fixed header (first PAGE_HDR_SIZE = 16 bytes):
+//!  Fixed header (first PAGE_HDR_SIZE = 17 bytes):
 //!
-//!  +------ byte 0 ------+---- byte 8 ----+---- byte 10 ---+------ byte 12 ------+
-//!  |  page_lsn (u64 LE) | num_slots (u16)| tuple_start(u16)|  checksum (u32 LE) |
-//!  +--------------------+----------------+----------------+---------------------+
-//!        |                    |                  |                   |
-//!        |                    |                  |                   +-- CRC32 over the entire
-//!        |                    |                  |                       page with these 4 bytes
-//!        |                    |                  |                       treated as zero. Verified
-//!        |                    |                  |                       on every read from disk.
-//!        |                    |                  +-- left edge of the tuple region; tuples
-//!        |                    |                      occupy [tuple_start .. PAGE_SIZE)
-//!        |                    +-- number of slot pointers that follow the header
-//!        +-- LSN of the last WAL record applied to this page; 0 = never written
+//!  byte 0       byte 1..5          byte 5..13        byte 13..15     byte 15..17
+//!  +------------+------------------+-----------------+---------------+---------------+
+//!  | kind (u8)  | CRC32 (u32 LE)   | page_lsn (u64)  | num_slots(u16)| tuple_start(u16)|
+//!  +------------+------------------+-----------------+---------------+---------------+
+//!        |             |                  |                   |                  |
+//!        |             |                  |                   |                  +-- left edge of
+//!        |             |                  |                   |                      the tuple region
+//!        |             |                  |                   +-- number of slot pointers
+//!        |             |                  +-- LSN of the last WAL record applied; 0 = never written
+//!        |             +-- CRC32 over the entire page with bytes 1..5 treated as zero.
+//!        |                 Verified on every read from disk.
+//!        +-- PageKind::Heap (0x10) — identifies this as a heap page
 //!
 //!
 //!  Slot i occupies bytes [PAGE_HDR_SIZE + i*4 .. PAGE_HDR_SIZE + i*4 + 4):
@@ -61,28 +61,24 @@ use byteorder::{ByteOrder, LittleEndian};
 
 use crate::{
     primitives::{Lsn, SlotId},
-    storage::{MAX_TUPLE_SIZE, PAGE_SIZE, Page, StorageError},
+    storage::{
+        MAX_TUPLE_SIZE, PAGE_SIZE, Page, PageKind, StorageError, compute_page_crc, stamp_page_crc,
+    },
     tuple::{Tuple, TupleSchema},
 };
 
 /// Size of the fixed page header:
-/// `page_lsn` (u64) + `num_slots` (u16) + `tuple_start` (u16) + `checksum` (u32).
-const PAGE_HDR_SIZE: usize = 16;
+/// `kind` (u8) + `crc32` (u32) + `page_lsn` (u64) + `num_slots` (u16) + `tuple_start` (u16).
+const PAGE_HDR_SIZE: usize = 17;
 
-/// Byte offset of the 8-byte `page_lsn` field.
-const PAGE_LSN_OFFSET: usize = 0;
+/// Byte offset of the 8-byte `page_lsn` field (after the 5-byte envelope prelude).
+const PAGE_LSN_OFFSET: usize = 5;
 
 /// Byte offset of the 2-byte `num_slots` field.
-const NUM_SLOTS_OFFSET: usize = 8;
+const NUM_SLOTS_OFFSET: usize = 13;
 
 /// Byte offset of the 2-byte `tuple_start` field.
-const TUPLE_START_OFFSET: usize = 10;
-
-/// Byte offset within the page where the 4-byte CRC32 checksum lives.
-const CHECKSUM_OFFSET: usize = 12;
-
-/// Size of the stored checksum field, in bytes.
-const CHECKSUM_SIZE: usize = 4;
+const TUPLE_START_OFFSET: usize = 15;
 
 /// Number of bytes occupied by one slot pointer.
 ///
@@ -179,8 +175,8 @@ impl<'a> HeapPage<'a> {
         // `[0u8; PAGE_SIZE]` constructs an empty page without verification.
         let is_blank = bytes.iter().all(|&b| b == 0);
         if !is_blank {
-            let stored = LittleEndian::read_u32(&bytes[CHECKSUM_OFFSET..]);
-            let computed = Self::compute_checksum(bytes);
+            let stored = u32::from_le_bytes(bytes[1..5].try_into().unwrap());
+            let computed = compute_page_crc(bytes);
             if stored != computed {
                 return Err(StorageError::ChecksumMismatch { stored, computed });
             }
@@ -220,18 +216,6 @@ impl<'a> HeapPage<'a> {
     #[inline]
     fn slot_array_end(n_slots: usize) -> usize {
         PAGE_HDR_SIZE + n_slots * SLOT_POINTER_SIZE
-    }
-
-    /// Computes CRC32 over the entire page with the 4 checksum bytes treated as zero.
-    ///
-    /// The checksum field must be excluded from its own input, otherwise the
-    /// stored value would depend on itself and verification would be impossible.
-    fn compute_checksum(bytes: &[u8; PAGE_SIZE]) -> u32 {
-        let mut hasher = crc32fast::Hasher::new();
-        hasher.update(&bytes[..CHECKSUM_OFFSET]);
-        hasher.update(&[0u8; CHECKSUM_SIZE]);
-        hasher.update(&bytes[CHECKSUM_OFFSET + CHECKSUM_SIZE..]);
-        hasher.finalize()
     }
 
     /// Bytes currently free between the end of the slot array and the start
@@ -579,6 +563,9 @@ impl Page for HeapPage<'_> {
     fn page_data(&self) -> [u8; PAGE_SIZE] {
         let mut bytes = [0u8; PAGE_SIZE];
 
+        // Kind byte at offset 0 — must be set before stamp_page_crc is called.
+        bytes[0] = PageKind::Heap as u8;
+
         // page_lsn must be written before the write_u16 closure is defined, because
         // that closure borrows `bytes` mutably for its lifetime, and the borrow
         // checker would reject a second mutable borrow inside the same scope.
@@ -610,8 +597,8 @@ impl Page for HeapPage<'_> {
             }
         }
 
-        let checksum = Self::compute_checksum(&bytes);
-        LittleEndian::write_u32(&mut bytes[CHECKSUM_OFFSET..], checksum);
+        // Stamp the CRC32 at bytes 1..5 over the fully assembled page.
+        stamp_page_crc(&mut bytes);
         bytes
     }
 
@@ -1438,7 +1425,7 @@ mod tests {
         let mut page = empty_page(&s);
         page.insert_tuple(make_tuple(1, true)).unwrap();
         let mut bytes = page.page_data();
-        bytes[CHECKSUM_OFFSET] ^= 0xFF;
+        bytes[1] ^= 0xFF; // flip a byte in the CRC field (offset 1..5)
         assert!(matches!(
             HeapPage::new(&bytes, &s),
             Err(StorageError::ChecksumMismatch { .. })
@@ -1549,9 +1536,8 @@ mod tests {
 
     #[test]
     fn set_page_lsn_does_not_disturb_tuple_data() {
-        // Stamping the lsn must only touch the first 8 bytes of the header;
-        // all slot pointers and tuple bytes must be byte-identical before and
-        // after the stamp.
+        // Stamping the lsn touches bytes 5..13 of the header plus the CRC slot
+        // (bytes 1..5, re-stamped); slot pointers and tuple bytes are unchanged.
         let s = schema();
         let mut page = empty_page(&s);
         page.insert_tuple(make_tuple(99, true)).unwrap();

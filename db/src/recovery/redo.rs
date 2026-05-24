@@ -24,6 +24,7 @@ use crate::{
     PAGE_SIZE,
     buffer_pool::page_store::{PageStore, PageStoreError},
     primitives::{Lsn, PageId},
+    storage::read_page_lsn,
     wal::{WalError, log::LogRecordBody, reader::WalReader},
 };
 
@@ -186,11 +187,7 @@ impl Aries {
         };
 
         let page_bytes = guard.read();
-        let page_lsn = Lsn(u64::from_le_bytes(
-            page_bytes[..8]
-                .try_into()
-                .expect("page buffer is always at least 8 bytes"),
-        ));
+        let page_lsn = read_page_lsn(&page_bytes);
 
         if page_lsn >= lsn {
             stats.skipped_already_on_disk += 1;
@@ -222,10 +219,9 @@ mod tests {
         codec::Encode,
         primitives::{FileId, PageNumber, TransactionId},
         recovery::{AttEntry, DptEntry},
+        storage::envelope::{PAGE_LSN_END, PAGE_LSN_OFFSET, read_page_lsn},
         wal::{log::LogRecord, writer::Wal},
     };
-
-    // ── helpers ─────────────────────────────────────────────────────────────
 
     fn tid(n: u64) -> TransactionId {
         TransactionId::new(n)
@@ -239,12 +235,12 @@ mod tests {
         SystemTime::UNIX_EPOCH
     }
 
-    /// Builds a `PAGE_SIZE`-byte page image whose first 8 bytes encode `page_lsn`
-    /// (so the page parses back to the expected LSN through `from_le_bytes`) and
-    /// whose remaining bytes are filled with `tag` for easy identity checks.
+    /// Builds a `PAGE_SIZE`-byte page image whose bytes 5..13 encode `page_lsn`
+    /// (matching the standard envelope layout: kind(1) + crc(4) + lsn(8) + …)
+    /// and whose remaining bytes are filled with `tag` for easy identity checks.
     fn page_image(page_lsn: Lsn, tag: u8) -> Vec<u8> {
         let mut v = vec![tag; PAGE_SIZE];
-        v[..8].copy_from_slice(&page_lsn.0.to_le_bytes());
+        v[PAGE_LSN_OFFSET..PAGE_LSN_END].copy_from_slice(&page_lsn.0.to_le_bytes());
         v
     }
 
@@ -333,9 +329,10 @@ mod tests {
         g.read()
     }
 
-    /// Decodes the `page_lsn` (first 8 bytes) from a fetched page.
+    /// Decodes the `page_lsn` from bytes 5..13 of a fetched page
+    /// (standard envelope: kind(1) + crc(4) + lsn(8)).
     fn page_lsn_of(bytes: &[u8; PAGE_SIZE]) -> Lsn {
-        Lsn(u64::from_le_bytes(bytes[..8].try_into().unwrap()))
+        read_page_lsn(bytes)
     }
 
     /// A `Begin` record placed first in the log so subsequent data records land
@@ -376,7 +373,10 @@ mod tests {
         Aries::run_redo(&mut reader, &analysis, &store).unwrap();
 
         let bytes = page_bytes(&store, target);
-        assert_eq!(bytes[8], 0xAA, "after-image bytes must land in the frame");
+        assert_eq!(
+            bytes[PAGE_LSN_END], 0xAA,
+            "after-image bytes must land in the frame"
+        );
         assert!(record_lsn.0 > 0, "sanity: record lsn is non-zero");
     }
 
@@ -478,7 +478,10 @@ mod tests {
         // Redo loaded the page (for the check), but must NOT have overwritten
         // its bytes with the 0xEE after-image.
         let bytes = page_bytes(&store, target);
-        assert_eq!(bytes[8], 0x77, "page contents must NOT be overwritten");
+        assert_eq!(
+            bytes[PAGE_LSN_END], 0x77,
+            "page contents must NOT be overwritten"
+        );
         assert_eq!(
             page_lsn_of(&bytes).0,
             record_lsn.0 + 100,
@@ -538,7 +541,7 @@ mod tests {
         Aries::run_redo(&mut reader, &analysis, &store).unwrap();
 
         let bytes = page_bytes(&store, target);
-        assert_eq!(bytes[8], 0xBB, "CLR after-image must be applied");
+        assert_eq!(bytes[PAGE_LSN_END], 0xBB, "CLR after-image must be applied");
     }
 
     /// If a page belongs to a file we have not registered yet (today, the
@@ -642,7 +645,10 @@ mod tests {
         let mut reader = WalReader::open(wal.path()).unwrap();
         Aries::run_redo(&mut reader, &analysis, &store).unwrap();
         let after_first = page_bytes(&store, target);
-        assert_eq!(after_first[8], 0xA5, "first run applied the after-image");
+        assert_eq!(
+            after_first[PAGE_LSN_END], 0xA5,
+            "first run applied the after-image"
+        );
         assert_eq!(page_lsn_of(&after_first), insert_lsn);
 
         // Second run: check 3 trips because page_lsn (= insert_lsn) is no
@@ -704,6 +710,6 @@ mod tests {
             "record before redo_lsn must not be applied"
         );
         // Page 1 must show the 0xBB after-image.
-        assert_eq!(page_bytes(&store, second)[8], 0xBB);
+        assert_eq!(page_bytes(&store, second)[PAGE_LSN_END], 0xBB);
     }
 }

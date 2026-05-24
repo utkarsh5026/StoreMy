@@ -6,11 +6,13 @@
 //! `IndexManager` talk to; each family ([`crate::index::btree`],
 //! [`crate::index::hash`], …) provides its own impl.
 //!
-//! This file also holds the **on-disk envelope** every index page wears:
-//! a [`PageKind`] tag plus a CRC, written by [`encode_index_page`] and
-//! verified by [`decode_index_page`]. Heap pages predate this convention
-//! and are *not* envelope pages — they live in their own format.
+//! This file also holds the **on-disk envelope** shared by every page type:
+//! a [`PageKind`] tag plus a CRC32 at the start of every page buffer.
+//! Index pages encode their payload with [`encode_index_page`] / [`decode_index_page`];
+//! heap pages write the same 5-byte prelude but manage their own payload.
 
+// Re-export from storage so existing callers of `index::access` don't break.
+pub use crate::storage::{ENVELOPE_HEADER_SIZE, PageKind};
 use crate::{
     FileId, PageNumber, TransactionId, Type,
     buffer_pool::{
@@ -20,7 +22,7 @@ use crate::{
     codec::CodecError,
     index::{CompositeKey, IndexError, IndexKind},
     primitives::{PageId, RecordId},
-    storage::{PAGE_SIZE, StorageError},
+    storage::{PAGE_SIZE, StorageError, compute_page_crc, stamp_page_crc},
 };
 
 /// A trait representing a secondary index over a table.
@@ -230,62 +232,19 @@ pub trait Index: Send + Sync {
     }
 }
 
-// Every index page (hash bucket, B-tree node, …) shares a uniform 5-byte
-// prelude so one set of helpers can stamp/verify the CRC and dispatch on
-// kind. Heap pages are *not* envelope pages — they predate this convention
-// and live in their own file with their own header.
+// Every page (heap, hash bucket, B-tree node, …) shares the same 5-byte
+// envelope prelude defined in `crate::storage`:
 //
-// On-disk layout of a single envelope page (PAGE_SIZE bytes, zero-padded):
+//   offset 0:    PageKind byte
+//   offset 1..5: CRC32 (CRC slot treated as zero during computation)
+//   offset 5..:  page-specific payload
 //
-//   offset 0:    kind byte (see PageKind)
-//   offset 1..5: CRC32 over the whole page (CRC slot read as zero)
-//   offset 5..:  page-specific payload, zero-padded to PAGE_SIZE
-//
-// CRC32 is computed via crc32fast over the entire PAGE_SIZE buffer with the
-// CRC slot itself treated as four zero bytes — that's the standard chicken-
-// and-egg dodge.
+// `encode_index_page` / `decode_index_page` below are the index-specific
+// helpers that pack/unpack a payload behind that envelope. Heap pages write
+// the prelude themselves and manage their own payload layout.
 
-/// Tag identifying which kind of index page this is.
-///
-/// Stored at byte 0 of every envelope page. Reserved ranges, by family:
-///
-///   `0xA0..=0xAF` — hash family
-///   `0xB0..=0xBF` — B-tree family
-///   (others reserved for future families)
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-#[repr(u8)]
-pub enum PageKind {
-    HashBucket = 0xA0,
-    BTreeLeaf = 0xB0,
-    BTreeInternal = 0xB1,
-}
-
-impl TryFrom<u8> for PageKind {
-    type Error = StorageError;
-
-    fn try_from(value: u8) -> Result<Self, Self::Error> {
-        match value {
-            0xA0 => Ok(Self::HashBucket),
-            0xB0 => Ok(Self::BTreeLeaf),
-            0xB1 => Ok(Self::BTreeInternal),
-            other => Err(StorageError::UnknownPageKind(other)),
-        }
-    }
-}
-
-pub const ENVELOPE_HEADER_SIZE: usize = 5;
-
+/// Byte offset of the `PageKind` discriminant within every page buffer.
 const KIND_OFFSET: usize = 0;
-const CRC_OFFSET: usize = 1;
-
-/// Compute CRC32 over `bytes`, treating the 4-byte CRC slot as zero.
-fn compute_page_crc(bytes: &[u8; PAGE_SIZE]) -> u32 {
-    let mut h = crc32fast::Hasher::new();
-    h.update(&bytes[..CRC_OFFSET]);
-    h.update(&[0u8; 4]);
-    h.update(&bytes[CRC_OFFSET + 4..]);
-    h.finalize()
-}
 
 /// Encode an index page: stamps the kind byte, calls `payload` to fill the
 /// body, then computes and stamps the CRC over the whole buffer.
@@ -304,8 +263,7 @@ where
     let mut buf = [0u8; PAGE_SIZE];
     buf[KIND_OFFSET] = kind as u8;
     payload(&mut buf[ENVELOPE_HEADER_SIZE..])?;
-    let crc = compute_page_crc(&buf);
-    buf[CRC_OFFSET..=4].copy_from_slice(&crc.to_le_bytes());
+    stamp_page_crc(&mut buf);
     Ok(buf)
 }
 
@@ -319,7 +277,7 @@ where
 /// - [`StorageError::UnknownPageKind`] if byte 0 isn't a recognized [`PageKind`] discriminant —
 ///   this catches uninitialized (all-zero) pages too, since their kind byte is `0x00`.
 pub fn decode_index_page(bytes: &[u8; PAGE_SIZE]) -> Result<(PageKind, &[u8]), StorageError> {
-    let stored = u32::from_le_bytes(bytes[CRC_OFFSET..=4].try_into().unwrap());
+    let stored = u32::from_le_bytes(bytes[1..ENVELOPE_HEADER_SIZE].try_into().unwrap());
     let computed = compute_page_crc(bytes);
     if stored != computed {
         return Err(StorageError::ChecksumMismatch { stored, computed });
@@ -367,7 +325,7 @@ mod envelope_tests {
     #[test]
     fn flipped_byte_in_kind_fails_checksum() {
         let mut buf = encode_index_page(PageKind::HashBucket, |_| Ok(())).unwrap();
-        buf[0] = PageKind::BTreeLeaf as u8;
+        buf[KIND_OFFSET] = PageKind::BTreeLeaf as u8;
         match decode_index_page(&buf).unwrap_err() {
             StorageError::ChecksumMismatch { .. } => {}
             e => panic!("expected ChecksumMismatch, got {e:?}"),
@@ -390,9 +348,8 @@ mod envelope_tests {
     #[test]
     fn unknown_kind_byte_is_rejected() {
         let mut buf = encode_index_page(PageKind::HashBucket, |_| Ok(())).unwrap();
-        buf[0] = 0xFF;
-        let crc = compute_page_crc(&buf);
-        buf[CRC_OFFSET..=4].copy_from_slice(&crc.to_le_bytes());
+        buf[KIND_OFFSET] = 0xFF;
+        stamp_page_crc(&mut buf);
 
         match decode_index_page(&buf).unwrap_err() {
             StorageError::UnknownPageKind(0xFF) => {}
@@ -403,6 +360,7 @@ mod envelope_tests {
     #[test]
     fn kind_try_from_round_trips() {
         for k in [
+            PageKind::Heap,
             PageKind::HashBucket,
             PageKind::BTreeLeaf,
             PageKind::BTreeInternal,
