@@ -161,6 +161,31 @@ pub struct CachedCheckConstraint {
     pub name: String,
     /// The pre-parsed expression. Evaluated against the full new tuple on DML.
     pub expr: Expr,
+    /// Whether every existing row has been confirmed to satisfy this constraint.
+    /// `false` means the constraint was added `NOT VALID` — old rows are
+    /// unverified but new writes are still enforced.
+    pub validated: bool,
+}
+
+impl CachedCheckConstraint {
+    /// Creates a CHECK constraint added with `NOT VALID` — existing rows are
+    /// unverified but new writes are still enforced.
+    pub(super) fn new_not_valid(name: String, expr: Expr) -> Self {
+        Self {
+            name,
+            expr,
+            validated: false,
+        }
+    }
+
+    /// Creates a CHECK constraint with an explicit validation state.
+    pub(super) fn new(name: String, expr: Expr, validated: bool) -> Self {
+        Self {
+            name,
+            expr,
+            validated,
+        }
+    }
 }
 
 /// Metadata for a single user table held in the catalog's in-memory cache.

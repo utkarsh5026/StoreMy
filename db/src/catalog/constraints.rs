@@ -49,9 +49,17 @@ pub enum ConstraintDef {
         on_delete: Option<FkAction>,
         on_update: Option<FkAction>,
     },
-    /// Registers a CHECK expression in the catalog. Enforcement is not yet
-    /// implemented — the expression is stored but never evaluated at DML time.
-    Check { name: String, expr: String },
+    /// Registers a CHECK expression in the catalog.
+    ///
+    /// When `validated` is `true`, every existing row has been confirmed to
+    /// satisfy `expr` before writing to the catalog. When `false`, the
+    /// constraint was added with `NOT VALID` — new writes are enforced but old
+    /// rows are unverified until `VALIDATE CONSTRAINT` is run.
+    Check {
+        name: String,
+        expr: String,
+        validated: bool,
+    },
     /// Sets the primary key via the dedicated PK system table. Unlike the other
     /// variants there is no constraint name — PKs are identified by table only.
     PrimaryKey { columns: Vec<ColumnId> },
@@ -88,7 +96,11 @@ impl Catalog {
                 on_delete,
                 on_update,
             ),
-            ConstraintDef::Check { name, expr } => {
+            ConstraintDef::Check {
+                name,
+                expr,
+                validated,
+            } => {
                 let constraint_name = NonEmptyString::try_from(name.as_str())?;
                 self.reject_duplicate_constraint_name(txn, table_id, &name)?;
                 self.insert_systable_tuple(txn, &ConstraintRow {
@@ -97,7 +109,21 @@ impl Catalog {
                     constraint_kind: ConstraintKind::Check,
                     expr: Some(NonEmptyString::try_from(expr.as_str())?),
                     backing_index_id: None,
+                    validated,
                 })?;
+                let parsed_expr = Parser::parse_expr(&expr).map_err(|e| {
+                    CatalogError::invalid_catalog_row(format!(
+                        "CHECK constraint '{name}' has unparseable expression: {e}"
+                    ))
+                })?;
+                let mut table = self.get_table_info_by_id(txn, table_id)?;
+                let cached = if validated {
+                    CachedCheckConstraint::new(name, parsed_expr, true)
+                } else {
+                    CachedCheckConstraint::new_not_valid(name, parsed_expr)
+                };
+                table.check_constraints.push(cached);
+                self.refresh_cached_table(table);
                 Ok(())
             }
             ConstraintDef::PrimaryKey { columns } => self.set_primary_key(txn, table_id, columns),
@@ -155,6 +181,7 @@ impl Catalog {
             constraint_kind: ConstraintKind::Unique,
             expr: None,
             backing_index_id,
+            validated: true, // UNIQUE always scans existing data via populate_index_from_heap
         };
         self.insert_systable_tuple(txn, &constraint_row)?;
 
@@ -240,6 +267,7 @@ impl Catalog {
             constraint_kind: ConstraintKind::ForeignKey,
             expr: None,
             backing_index_id: None,
+            validated: true, // FK currently validated at write time
         })?;
 
         for (ordinal, (&local, &referenced)) in
@@ -347,6 +375,53 @@ impl Catalog {
                 }
             })
             .collect())
+    }
+
+    /// Flips the `validated` flag to `true` for a named CHECK constraint.
+    ///
+    /// Uses the same delete-then-reinsert pattern as column updates: the old
+    /// `ConstraintRow` is removed and a new one with `validated: true` is written
+    /// in its place. The in-memory `TableInfo` cache is refreshed so subsequent
+    /// DML sees the updated flag without a cache miss.
+    ///
+    /// # Errors
+    ///
+    /// - [`CatalogError::ConstraintNotFound`] if no constraint named `name` exists on `table_id`.
+    /// - [`CatalogError::InvalidCatalogRow`] if the constraint is not a CHECK (only CHECK
+    ///   constraints go through the `NOT VALID` / validate lifecycle).
+    /// - Other [`CatalogError`] variants from system-table writes or cache refresh.
+    pub fn mark_constraint_validated(
+        &self,
+        txn: &Transaction<'_>,
+        table_id: FileId,
+        name: &str,
+    ) -> Result<(), CatalogError> {
+        let mut table = self.get_table_info_by_id(txn, table_id)?;
+        let header = self.fetch_constraint_header(txn, table_id, name, table.name.as_str())?;
+
+        if header.constraint_kind != ConstraintKind::Check {
+            return Err(CatalogError::invalid_catalog_row(format!(
+                "VALIDATE CONSTRAINT is only supported for CHECK constraints; '{name}' is {:?}",
+                header.constraint_kind
+            )));
+        }
+
+        self.delete_systable_rows::<ConstraintRow, _>(txn, |r| {
+            r.table_id == table_id && r.constraint_name.as_str() == name
+        })?;
+        self.insert_systable_tuple(txn, &ConstraintRow {
+            validated: true,
+            ..header
+        })?;
+
+        for chk in &mut table.check_constraints {
+            if chk.name == name {
+                chk.validated = true;
+                break;
+            }
+        }
+        self.refresh_cached_table(table);
+        Ok(())
     }
 
     /// Drops a named constraint on `table_id` inside `txn`.
@@ -547,14 +622,15 @@ impl Catalog {
                     })?;
                     let expr = Parser::parse_expr(expr_str.as_str()).map_err(|e| {
                         CatalogError::invalid_catalog_row(format!(
-                            "CHECK constraint '{}' has unparseable expression: {e}",
+                            "CHECK constraint '{}' has unparsable expression: {e}",
                             header.constraint_name.as_str()
                         ))
                     })?;
-                    table.check_constraints.push(CachedCheckConstraint {
-                        name: header.constraint_name.as_str().to_owned(),
+                    table.check_constraints.push(CachedCheckConstraint::new(
+                        header.constraint_name.as_str().to_owned(),
                         expr,
-                    });
+                        header.validated,
+                    ));
                 }
                 // PrimaryKey is reconstructed from CATALOG_PRIMARY_KEY_COLUMNS,
                 // not from these rows. NotNull is a column attribute.
@@ -1403,6 +1479,7 @@ mod tests {
         let result = catalog.add_constraint(&txn, file_id, ConstraintDef::Check {
             name: "age_positive".to_owned(),
             expr: "age > 0".to_owned(),
+            validated: true,
         });
         txn.commit().unwrap();
 
@@ -1424,12 +1501,14 @@ mod tests {
             .add_constraint(&txn, file_id, ConstraintDef::Check {
                 name: "chk".to_owned(),
                 expr: "id > 0".to_owned(),
+                validated: true,
             })
             .unwrap();
 
         let result = catalog.add_constraint(&txn, file_id, ConstraintDef::Check {
             name: "chk".to_owned(),
             expr: "id > 1".to_owned(),
+            validated: true,
         });
 
         assert!(
@@ -1456,6 +1535,7 @@ mod tests {
             constraint_kind: ConstraintKind::ForeignKey,
             expr: None,
             backing_index_id: None,
+            validated: true,
         };
 
         let result =
@@ -1467,8 +1547,6 @@ mod tests {
         );
     }
 
-    // ── CHECK constraint caching ──────────────────────────────────────────────
-
     fn check_row(name: &str, expr: &str) -> ConstraintRow {
         ConstraintRow {
             constraint_name: NonEmptyString::try_from(name).unwrap(),
@@ -1476,6 +1554,7 @@ mod tests {
             constraint_kind: ConstraintKind::Check,
             expr: Some(NonEmptyString::try_from(expr).unwrap()),
             backing_index_id: None,
+            validated: true,
         }
     }
 
@@ -1562,6 +1641,7 @@ mod tests {
             constraint_kind: ConstraintKind::Check,
             expr: None,
             backing_index_id: None,
+            validated: true,
         };
 
         let result = Catalog::build_constraints_for_table(&mut info, vec![bad_row], vec![], vec![]);
