@@ -15,7 +15,7 @@ mod analysis;
 mod redo;
 mod undo;
 
-use std::{collections::HashMap, path::PathBuf, sync::Arc};
+use std::{collections::HashMap, fs, io, path::PathBuf, sync::Arc, time::Duration};
 
 use thiserror::Error;
 
@@ -24,6 +24,9 @@ use crate::{
     primitives::{Lsn, PageId, TransactionId},
     wal::{WalError, log::TxnStatus, reader::WalReader, writer::Wal},
 };
+
+/// File extension used for the master record's write-then-rename staging file.
+const MASTER_RECORD_TMP_EXT: &str = "tmp";
 
 /// Top-level error for any failure during crash recovery.
 #[derive(Debug, Error)]
@@ -212,7 +215,7 @@ impl Aries {
     /// Returns [`RecoveryError::Wal`] on an I/O error other than "not found".
     fn read_master(&self) -> Result<Option<Lsn>, RecoveryError> {
         match std::fs::read(&self.master_path) {
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+            Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(None),
             Err(e) => Err(RecoveryError::Wal(WalError::Io(e))),
             Ok(bytes) => {
                 if bytes.len() < 8 {
@@ -222,5 +225,231 @@ impl Aries {
                 Ok(Some(Lsn(raw)))
             }
         }
+    }
+
+    /// Runs fuzzy checkpoints on a fixed interval until the thread is killed.
+    ///
+    /// Intended to be spawned on a background thread (e.g. via
+    /// [`std::thread::spawn`]).  Each iteration sleeps for `interval`, then calls
+    /// [`Self::take_checkpoint`].  Failures are logged and retried on the next
+    /// tick — the loop never exits on error.
+    pub fn checkpoint_loop(&self, wal: &Arc<Wal>, interval: Duration) {
+        loop {
+            std::thread::sleep(interval);
+            match self.take_checkpoint(wal) {
+                Ok(lsn) => tracing::debug!(?lsn, "fuzzy checkpoint completed"),
+                Err(e) => tracing::error!("checkpoint failed, will retry next interval: {e}"),
+            }
+        }
+    }
+
+    /// Performs one full fuzzy checkpoint and persists its end LSN to the master record.
+    ///
+    /// This is the coordinator step that ties together WAL checkpointing and the
+    /// on-disk master record:
+    ///
+    /// 1. [`Wal::checkpoint`] writes `CheckpointBegin` / `CheckpointEnd` (with ATT and DPT
+    ///    snapshots) and forces them to disk.
+    /// 2. The returned `CheckpointEnd` LSN is written to the master record file via
+    ///    write-then-rename (`.tmp` → final path) so the update is atomic.
+    ///
+    /// On the next startup, the master record supplies this LSN to Analysis so
+    /// the forward scan can begin from the latest completed checkpoint rather than
+    /// LSN 0.  If the process crashes after step 1 but before step 2 completes, the
+    /// checkpoint records remain in the WAL but are ignored until a later
+    /// checkpoint updates the master record.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RecoveryError::Wal`] if checkpointing or master-record I/O fails.
+    #[tracing::instrument(name = "aries_checkpoint", skip(self, wal), err)]
+    pub fn take_checkpoint(&self, wal: &Arc<Wal>) -> Result<Lsn, RecoveryError> {
+        let end_lsn = wal.checkpoint().map_err(RecoveryError::Wal)?;
+        let bytes = u64::from(end_lsn).to_le_bytes();
+        let tmp = self.master_path.with_extension(MASTER_RECORD_TMP_EXT);
+        fs::write(&tmp, bytes).map_err(|e| RecoveryError::Wal(WalError::Io(e)))?;
+        fs::rename(&tmp, &self.master_path).map_err(|e| RecoveryError::Wal(WalError::Io(e)))?;
+        Ok(end_lsn)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use tempfile::tempdir;
+
+    use super::*;
+    use crate::{
+        primitives::{FileId, PageId, PageNumber},
+        wal::{reader::WalReader, writer::Wal},
+    };
+
+    const NO_BUF: usize = 0;
+
+    fn tid(n: u64) -> TransactionId {
+        TransactionId::new(n)
+    }
+
+    fn page(n: u32) -> PageId {
+        PageId::new(FileId::new(1), PageNumber::new(n))
+    }
+
+    /// Creates a WAL and an `Aries` instance sharing the same temp directory.
+    fn setup(dir: &tempfile::TempDir) -> (Arc<Wal>, Aries) {
+        let wal_path = dir.path().join("wal");
+        let master_path = dir.path().join("master");
+        let wal = Arc::new(Wal::new(&wal_path, NO_BUF).unwrap());
+        let aries = Aries::new(wal_path, master_path);
+        (wal, aries)
+    }
+
+    /// Reads the raw LSN from the master record file, bypassing `read_master`.
+    /// Used to verify the file contents independently of the code under test.
+    fn read_master_file(dir: &tempfile::TempDir) -> Option<Lsn> {
+        let bytes = std::fs::read(dir.path().join("master")).ok()?;
+        if bytes.len() < 8 {
+            return None;
+        }
+        Some(Lsn(u64::from_le_bytes(bytes[..8].try_into().unwrap())))
+    }
+
+    // ── master record ────────────────────────────────────────────────────────
+
+    #[test]
+    fn take_checkpoint_creates_master_record_file() {
+        let dir = tempdir().unwrap();
+        let (wal, aries) = setup(&dir);
+
+        aries.take_checkpoint(&wal).unwrap();
+
+        assert!(
+            dir.path().join("master").exists(),
+            "master record file must be created after the first checkpoint"
+        );
+    }
+
+    #[test]
+    fn master_record_contains_the_returned_lsn() {
+        // The 8 bytes written to disk must decode to exactly the LSN that
+        // take_checkpoint returned — this is what Analysis reads on the next boot.
+        let dir = tempdir().unwrap();
+        let (wal, aries) = setup(&dir);
+
+        let end_lsn = aries.take_checkpoint(&wal).unwrap();
+
+        let stored = read_master_file(&dir).expect("master record must exist");
+        assert_eq!(stored, end_lsn);
+    }
+
+    #[test]
+    fn second_checkpoint_overwrites_master_with_newer_lsn() {
+        // After two checkpoints the master must point at the most recent one,
+        // not the first. Recovery would be unnecessarily long otherwise.
+        let dir = tempdir().unwrap();
+        let (wal, aries) = setup(&dir);
+
+        let first = aries.take_checkpoint(&wal).unwrap();
+        let second = aries.take_checkpoint(&wal).unwrap();
+
+        assert!(second > first, "second checkpoint LSN must be greater");
+        let stored = read_master_file(&dir).unwrap();
+        assert_eq!(
+            stored, second,
+            "master must point at the most recent checkpoint"
+        );
+    }
+
+    #[test]
+    fn read_master_returns_none_when_file_absent() {
+        // A brand-new database has no master record; Analysis must scan from LSN 0.
+        let dir = tempdir().unwrap();
+        let (_, aries) = setup(&dir);
+
+        let result = aries.read_master().unwrap();
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn read_master_returns_lsn_after_checkpoint() {
+        let dir = tempdir().unwrap();
+        let (wal, aries) = setup(&dir);
+
+        let end_lsn = aries.take_checkpoint(&wal).unwrap();
+
+        let read_back = aries.read_master().unwrap();
+        assert_eq!(read_back, Some(end_lsn));
+    }
+
+    // ── analysis seeding ─────────────────────────────────────────────────────
+
+    #[test]
+    fn analysis_seeds_from_checkpoint_and_catches_post_checkpoint_records() {
+        // Scenario:
+        //   T1: Begin → Insert(page1) → Commit     ← winner, before checkpoint
+        //   T2: Begin → Insert(page2)               ← loser,  before checkpoint
+        //   [checkpoint]
+        //   T3: Begin → Insert(page3)               ← loser,  after  checkpoint
+        //
+        // Analysis seeded from the checkpoint must:
+        //   - exclude T1 (winner — committed before checkpoint)
+        //   - include T2 (loser  — was in the ATT snapshot)
+        //   - include T3 (loser  — picked up by the forward scan from CheckpointBegin)
+        //   - have all three pages in the DPT
+        let dir = tempdir().unwrap();
+        let (wal, aries) = setup(&dir);
+
+        wal.log_begin(tid(1)).unwrap();
+        wal.log_insert(tid(1), page(1), vec![], vec![1]).unwrap();
+        wal.log_commit(tid(1)).unwrap();
+
+        wal.log_begin(tid(2)).unwrap();
+        wal.log_insert(tid(2), page(2), vec![], vec![2]).unwrap();
+
+        let checkpoint_end_lsn = aries.take_checkpoint(&wal).unwrap();
+
+        wal.log_begin(tid(3)).unwrap();
+        wal.log_insert(tid(3), page(3), vec![], vec![3]).unwrap();
+
+        let mut reader = WalReader::open(&dir.path().join("wal")).unwrap();
+        let result = Aries::run_analysis(&mut reader, Some(checkpoint_end_lsn)).unwrap();
+
+        assert!(
+            !result.att.contains_key(&tid(1)),
+            "T1 committed — must not be a loser"
+        );
+        assert!(
+            result.att.contains_key(&tid(2)),
+            "T2 never committed — must be a loser"
+        );
+        assert!(
+            result.att.contains_key(&tid(3)),
+            "T3 never committed — must be a loser"
+        );
+
+        assert!(result.dpt.contains_key(&page(1)), "page1 must be in DPT");
+        assert!(result.dpt.contains_key(&page(2)), "page2 must be in DPT");
+        assert!(result.dpt.contains_key(&page(3)), "page3 must be in DPT");
+    }
+
+    #[test]
+    fn analysis_without_checkpoint_scans_from_lsn_zero() {
+        // When no checkpoint exists (None passed), Analysis must still correctly
+        // identify all losers by scanning the whole log from LSN 0.
+        let dir = tempdir().unwrap();
+        let (wal, _aries) = setup(&dir);
+
+        wal.log_begin(tid(1)).unwrap();
+        wal.log_insert(tid(1), page(1), vec![], vec![1]).unwrap();
+        // no commit — T1 is a loser
+
+        let mut reader = WalReader::open(&dir.path().join("wal")).unwrap();
+        let result = Aries::run_analysis(&mut reader, None).unwrap();
+
+        assert!(
+            result.att.contains_key(&tid(1)),
+            "T1 must be identified as a loser"
+        );
+        assert!(result.dpt.contains_key(&page(1)));
     }
 }
