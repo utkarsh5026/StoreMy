@@ -22,6 +22,7 @@ use thiserror::Error;
 use crate::{
     buffer_pool::page_store::PageStore,
     primitives::{Lsn, PageId, TransactionId},
+    recovery::{analysis::Analysis, redo::Redo, undo::Undo},
     wal::{WalError, log::TxnStatus, reader::WalReader, writer::Wal},
 };
 
@@ -195,13 +196,25 @@ impl Aries {
     ) -> Result<AnalysisResult, RecoveryError> {
         let checkpoint_lsn = self.read_master()?;
         let mut reader = WalReader::open(&self.wal_path)?;
-        let result = Self::run_analysis(&mut reader, checkpoint_lsn)?;
-        Self::run_redo(&mut reader, &result, buffer_pool)?;
+        let result = Analysis::default().run(&mut reader, checkpoint_lsn)?;
+
+        // After Analysis, `reader.pos()` is the byte offset of the first torn
+        // or absent record — the true end of the valid log prefix.
+        //
+        // Any bytes between this position and the physical end of the file are
+        // garbage from a partial record that was in flight when the system
+        // crashed.  We truncate them away now, before the Undo pass writes CLRs
+        // and End records, so that a subsequent Analysis scan can always reach
+        // those new records without hitting a false torn-tail in the middle.
+        let valid_end = Lsn(reader.pos());
+        wal.trim_to(valid_end).map_err(RecoveryError::Wal)?;
+
+        Redo::new(&result, buffer_pool).run(&mut reader)?;
 
         // Snapshot before Undo consumes the ATT — callers (e.g. main.rs) log
         // loser counts and we'd lose the information once it drains to empty.
         let snapshot = result.clone();
-        Self::run_undo(&mut reader, wal, buffer_pool, result)?;
+        Undo::new(wal, buffer_pool, result).run(&mut reader)?;
         Ok(snapshot)
     }
 
@@ -279,7 +292,7 @@ mod tests {
 
     use tempfile::tempdir;
 
-    use super::*;
+    use super::{analysis::Analysis, *};
     use crate::{
         primitives::{FileId, PageId, PageNumber},
         wal::{reader::WalReader, writer::Wal},
@@ -412,7 +425,9 @@ mod tests {
         wal.log_insert(tid(3), page(3), vec![], vec![3]).unwrap();
 
         let mut reader = WalReader::open(&dir.path().join("wal")).unwrap();
-        let result = Aries::run_analysis(&mut reader, Some(checkpoint_end_lsn)).unwrap();
+        let result = Analysis::default()
+            .run(&mut reader, Some(checkpoint_end_lsn))
+            .unwrap();
 
         assert!(
             !result.att.contains_key(&tid(1)),
@@ -444,7 +459,7 @@ mod tests {
         // no commit — T1 is a loser
 
         let mut reader = WalReader::open(&dir.path().join("wal")).unwrap();
-        let result = Aries::run_analysis(&mut reader, None).unwrap();
+        let result = Analysis::default().run(&mut reader, None).unwrap();
 
         assert!(
             result.att.contains_key(&tid(1)),

@@ -11,7 +11,7 @@
 //!
 //! When a fuzzy checkpoint exists, the scan can start from the checkpoint's
 //! `CheckpointEnd` snapshot instead of LSN 0. The master record points at that
-//! record; [`Aries::run_analysis`] loads the snapshot, then continues forward
+//! record; [`Analysis::run`] loads the snapshot, then continues forward
 //! from the matching `CheckpointBegin` so records written during the checkpoint
 //! window are not missed.
 
@@ -20,12 +20,12 @@ use std::collections::HashMap;
 use fallible_iterator::FallibleIterator;
 use thiserror::Error;
 
-use super::{AnalysisResult, Aries, AttEntry, DptEntry};
+use super::{AnalysisResult, AttEntry, DptEntry};
 use crate::{
     primitives::{Lsn, PageId, TransactionId},
     wal::{
         WalError,
-        log::{LogRecord, LogRecordBody, TxnStatus},
+        log::{LogRecord, LogRecordBody, LogRecordHeader, TxnStatus},
         reader::WalReader,
     },
 };
@@ -50,7 +50,13 @@ pub enum AnalysisError {
     TornCheckpoint(Lsn),
 }
 
-impl Aries {
+#[derive(Debug, Default)]
+pub(in crate::recovery) struct Analysis {
+    active_transactions: HashMap<TransactionId, AttEntry>,
+    dirty_pages: HashMap<PageId, DptEntry>,
+}
+
+impl Analysis {
     /// Runs the Analysis pass over `reader` and returns the rebuilt tables.
     ///
     /// If `checkpoint_lsn` is `None`, scanning starts at LSN 0 (no prior
@@ -71,49 +77,34 @@ impl Aries {
         skip(reader),
         fields(checkpoint_lsn = ?checkpoint_lsn)
     )]
-    pub(super) fn run_analysis(
+    pub(in crate::recovery) fn run(
+        mut self,
         reader: &mut WalReader,
         checkpoint_lsn: Option<Lsn>,
     ) -> Result<AnalysisResult, AnalysisError> {
-        let mut active_transactions: HashMap<TransactionId, AttEntry> = HashMap::new();
-        let mut dirty_pages: HashMap<PageId, DptEntry> = HashMap::new();
+        let scan_from_lsn = match checkpoint_lsn {
+            None => Lsn::INVALID,
+            Some(ckpt_lsn) => self.load_checkpoint_snapshot(reader, ckpt_lsn)?,
+        };
         let mut records_scanned = 0usize;
 
-        let scan_from_lsn = match checkpoint_lsn {
-            None => Lsn(0),
-            Some(ckpt_lsn) => Self::load_checkpoint_snapshot(
-                reader,
-                ckpt_lsn,
-                &mut active_transactions,
-                &mut dirty_pages,
-            )?,
-        };
-
         reader.seek_to(scan_from_lsn).map_err(AnalysisError::Wal)?;
-        while let Some(LogRecord { header, body }) = reader.next().map_err(AnalysisError::Wal)? {
+        while let Some(record) = reader.next().map_err(AnalysisError::Wal)? {
             records_scanned += 1;
-            Self::process_record(
-                header.lsn,
-                header.tid,
-                header.prev_lsn,
-                &body,
-                &mut active_transactions,
-                &mut dirty_pages,
-            );
+            self.process_record(record);
         }
-
-        let redo_lsn = AnalysisResult::compute_redo_lsn(&dirty_pages);
+        let redo_lsn = AnalysisResult::compute_redo_lsn(&self.dirty_pages);
         tracing::debug!(
             scan_from_lsn = ?scan_from_lsn,
             records_scanned,
-            att_size = active_transactions.len(),
-            dpt_size = dirty_pages.len(),
+            att_size = self.active_transactions.len(),
+            dpt_size = self.dirty_pages.len(),
             redo_lsn = ?redo_lsn,
             "analysis pass complete"
         );
         Ok(AnalysisResult {
-            att: active_transactions,
-            dpt: dirty_pages,
+            att: self.active_transactions,
+            dpt: self.dirty_pages,
             redo_lsn,
         })
     }
@@ -123,7 +114,7 @@ impl Aries {
     /// Reads the record at `ckpt_lsn`. On success, copies `att_snapshot` and
     /// `dpt_snapshot` into the tables and returns `prev_lsn` from that record
     /// (the LSN of the matching `CheckpointBegin`). If the record is missing,
-    /// torn, or not a `CheckpointEnd`, returns `Ok(Lsn(0))` so analysis restarts
+    /// torn, or not a `CheckpointEnd`, returns `Ok(Lsn::INVALID)` so analysis restarts
     /// from the beginning of the log (except when `read_at` fails outright, which
     /// yields [`AnalysisError::TornCheckpoint`]).
     ///
@@ -131,12 +122,11 @@ impl Aries {
     ///
     /// Returns [`AnalysisError::TornCheckpoint`] when `read_at(ckpt_lsn)` fails.
     fn load_checkpoint_snapshot(
+        &mut self,
         reader: &mut WalReader,
         ckpt_lsn: Lsn,
-        active_transactions: &mut HashMap<TransactionId, AttEntry>,
-        dirty_pages: &mut HashMap<PageId, DptEntry>,
     ) -> Result<Lsn, AnalysisError> {
-        let record = reader
+        let checkpoint_end = reader
             .read_at(ckpt_lsn)
             .map_err(|_| AnalysisError::TornCheckpoint(ckpt_lsn))?;
 
@@ -145,13 +135,13 @@ impl Aries {
         let LogRecordBody::CheckpointEnd {
             att_snapshot,
             dpt_snapshot,
-        } = record.body
+        } = checkpoint_end.body
         else {
-            return Ok(Lsn(0));
+            return Ok(Lsn::INVALID);
         };
 
         for (tid, last_lsn, status) in att_snapshot {
-            active_transactions.insert(tid, AttEntry {
+            self.active_transactions.insert(tid, AttEntry {
                 status,
                 last_lsn,
                 undo_next_lsn: last_lsn,
@@ -159,12 +149,46 @@ impl Aries {
         }
 
         for (page_id, rec_lsn) in dpt_snapshot {
-            dirty_pages.insert(page_id, DptEntry { rec_lsn });
+            self.dirty_pages.insert(page_id, DptEntry { rec_lsn });
         }
 
         // prev_lsn on the CheckpointEnd points at the matching CheckpointBegin.
         // Scan must start there so we don't miss records written during the window.
-        Ok(record.header.prev_lsn)
+        Ok(checkpoint_end.header.prev_lsn)
+    }
+
+    /// Ensures there is an entry for the given transaction (`tid`) in the
+    /// Active Transaction Table (ATT). If the entry does not exist, it is
+    /// created with a running status and the given `lsn` set as its LSN fields.
+    ///
+    /// Returns a mutable reference to the corresponding `AttEntry`, allowing
+    /// the caller to update the transaction's analysis state.
+    ///
+    /// # Arguments
+    ///
+    /// * `tid` - The transaction ID to ensure in the ATT.
+    /// * `lsn` - The log sequence number associated with this operation.
+    fn ensure_att_entry(&mut self, tid: TransactionId, lsn: Lsn) -> &mut AttEntry {
+        self.active_transactions
+            .entry(tid)
+            .or_insert_with(|| AttEntry::new_running(lsn))
+    }
+
+    /// Ensures there is an entry for the given page in the Dirty Page Table (DPT).
+    ///
+    /// If the page is not yet tracked, inserts a row with `rec_lsn` — the earliest
+    /// LSN that dirtied this page during the scan. If the page is already present,
+    /// the existing `rec_lsn` is left unchanged (later records may advance the
+    /// txn's ATT pointers but never move `rec_lsn` forward).
+    ///
+    /// # Arguments
+    ///
+    /// * `page_id` - The page to ensure in the DPT.
+    /// * `rec_lsn` - The LSN to record when the page is first seen as dirty.
+    fn ensure_dpt_entry(&mut self, page_id: PageId, rec_lsn: Lsn) -> &mut DptEntry {
+        self.dirty_pages
+            .entry(page_id)
+            .or_insert_with(|| DptEntry { rec_lsn })
     }
 
     /// Updates the ATT and DPT for one log record.
@@ -174,26 +198,26 @@ impl Aries {
     /// CLRs advance LSN pointers and mark pages dirty, and checkpoint markers are
     /// no-ops during the forward scan (snapshots are handled in
     /// [`load_checkpoint_snapshot`]).
-    fn process_record(
-        lsn: Lsn,
-        tid: TransactionId,
-        prev_lsn: Lsn,
-        body: &LogRecordBody,
-        active_transactions: &mut HashMap<TransactionId, AttEntry>,
-        dirty_pages: &mut HashMap<PageId, DptEntry>,
-    ) {
+    fn process_record(&mut self, record: LogRecord) {
+        let LogRecord {
+            header: LogRecordHeader {
+                lsn, tid, prev_lsn, ..
+            },
+            body,
+        } = record;
+
         match body {
             // A new transaction started: we add it to the ATT as Running.
             // Both LSN fields start at the Begin record — that's where Undo would
             // begin walking backward if this txn turns out to be a loser.
             LogRecordBody::Begin => {
-                active_transactions.insert(tid, AttEntry::new_running(lsn));
+                self.ensure_att_entry(tid, lsn);
             }
 
             // Commit: winner — durable on the log, nothing to undo.
             // End: Undo finished rolling back a loser — drop it so it isn't undone again.
             LogRecordBody::Commit | LogRecordBody::End => {
-                active_transactions.remove(&tid);
+                self.active_transactions.remove(&tid);
             }
 
             // An aborted transaction is still a loser — its changes may have
@@ -201,9 +225,7 @@ impl Aries {
             // Mark it Aborting and record the current position so Undo knows where
             // to start.
             LogRecordBody::Abort => {
-                let entry = active_transactions
-                    .entry(tid)
-                    .or_insert_with(|| AttEntry::new_running(lsn));
+                let entry = self.ensure_att_entry(tid, lsn);
                 entry.status = TxnStatus::Aborting;
                 entry.update_lsn(lsn, prev_lsn);
             }
@@ -213,14 +235,8 @@ impl Aries {
             LogRecordBody::Update { page_id, .. }
             | LogRecordBody::Insert { page_id, .. }
             | LogRecordBody::Delete { page_id, .. } => {
-                let entry = active_transactions
-                    .entry(tid)
-                    .or_insert_with(|| AttEntry::new_running(lsn));
-                entry.update_lsn(lsn, lsn);
-
-                dirty_pages
-                    .entry(*page_id)
-                    .or_insert(DptEntry { rec_lsn: lsn });
+                self.ensure_att_entry(tid, lsn).update_lsn(lsn, lsn);
+                self.ensure_dpt_entry(page_id, lsn);
             }
 
             // A CLR was written by a previous (crashed) Undo pass.
@@ -233,14 +249,9 @@ impl Aries {
                 undo_next_lsn: clr_undo_next,
                 ..
             } => {
-                let entry = active_transactions
-                    .entry(tid)
-                    .or_insert_with(|| AttEntry::new_running(lsn));
-                entry.update_lsn(lsn, *clr_undo_next);
-
-                dirty_pages
-                    .entry(*page_id)
-                    .or_insert(DptEntry { rec_lsn: lsn });
+                self.ensure_att_entry(tid, lsn)
+                    .update_lsn(lsn, clr_undo_next);
+                self.ensure_dpt_entry(page_id, lsn);
             }
 
             // Checkpoint markers: already accounted for via the master record and
@@ -254,8 +265,6 @@ impl Aries {
 
 #[cfg(test)]
 mod tests {
-    use std::time::SystemTime;
-
     use tempfile::NamedTempFile;
 
     use super::*;
@@ -283,10 +292,6 @@ mod tests {
         f
     }
 
-    fn ts() -> SystemTime {
-        SystemTime::UNIX_EPOCH
-    }
-
     /// When every transaction commits, ATT must be empty after Analysis.
     /// A committed txn's pages still appear in the DPT (they may not have been
     /// flushed), and `redo_lsn` reflects the earliest of those.
@@ -297,19 +302,19 @@ mod tests {
         // 24 bytes → total body 24, record 65 bytes. Commit is 41 bytes.
         // We don't assert exact LSN values here — just structural results.
         let records = vec![
-            LogRecord::new(Lsn(0), Lsn::INVALID, tid(1), ts(), LogRecordBody::Begin).unwrap(),
-            LogRecord::new(Lsn(41), Lsn(0), tid(1), ts(), LogRecordBody::Insert {
+            LogRecord::new(Lsn(0), Lsn::INVALID, tid(1), LogRecordBody::Begin).unwrap(),
+            LogRecord::new(Lsn(41), Lsn(0), tid(1), LogRecordBody::Insert {
                 page_id: page(5),
                 before: vec![0u8; 4],
                 after: vec![1u8; 4],
             })
             .unwrap(),
-            LogRecord::new(Lsn(110), Lsn(41), tid(1), ts(), LogRecordBody::Commit).unwrap(),
+            LogRecord::new(Lsn(110), Lsn(41), tid(1), LogRecordBody::Commit).unwrap(),
         ];
 
         let f = write_log(&records);
         let mut reader = WalReader::open(f.path()).unwrap();
-        let result = Aries::run_analysis(&mut reader, None).unwrap();
+        let result = Analysis::default().run(&mut reader, None).unwrap();
 
         assert!(result.att.is_empty(), "no losers expected");
         assert!(result.dpt.contains_key(&page(5)), "page 5 should be in DPT");
@@ -319,8 +324,8 @@ mod tests {
     #[test]
     fn uncommitted_txn_is_a_loser() {
         let records = vec![
-            LogRecord::new(Lsn(0), Lsn::INVALID, tid(2), ts(), LogRecordBody::Begin).unwrap(),
-            LogRecord::new(Lsn(41), Lsn(0), tid(2), ts(), LogRecordBody::Update {
+            LogRecord::new(Lsn(0), Lsn::INVALID, tid(2), LogRecordBody::Begin).unwrap(),
+            LogRecord::new(Lsn(41), Lsn(0), tid(2), LogRecordBody::Update {
                 page_id: page(7),
                 before: vec![0u8; 4],
                 after: vec![1u8; 4],
@@ -331,7 +336,7 @@ mod tests {
 
         let f = write_log(&records);
         let mut reader = WalReader::open(f.path()).unwrap();
-        let result = Aries::run_analysis(&mut reader, None).unwrap();
+        let result = Analysis::default().run(&mut reader, None).unwrap();
 
         assert!(result.att.contains_key(&tid(2)), "T2 must be a loser");
         let entry = &result.att[&tid(2)];
@@ -346,19 +351,19 @@ mod tests {
     #[test]
     fn aborted_txn_stays_in_att_as_aborting() {
         let records = vec![
-            LogRecord::new(Lsn(0), Lsn::INVALID, tid(3), ts(), LogRecordBody::Begin).unwrap(),
-            LogRecord::new(Lsn(41), Lsn(0), tid(3), ts(), LogRecordBody::Insert {
+            LogRecord::new(Lsn(0), Lsn::INVALID, tid(3), LogRecordBody::Begin).unwrap(),
+            LogRecord::new(Lsn(41), Lsn(0), tid(3), LogRecordBody::Insert {
                 page_id: page(9),
                 before: vec![0u8; 4],
                 after: vec![1u8; 4],
             })
             .unwrap(),
-            LogRecord::new(Lsn(110), Lsn(41), tid(3), ts(), LogRecordBody::Abort).unwrap(),
+            LogRecord::new(Lsn(110), Lsn(41), tid(3), LogRecordBody::Abort).unwrap(),
         ];
 
         let f = write_log(&records);
         let mut reader = WalReader::open(f.path()).unwrap();
-        let result = Aries::run_analysis(&mut reader, None).unwrap();
+        let result = Analysis::default().run(&mut reader, None).unwrap();
 
         assert!(
             result.att.contains_key(&tid(3)),
@@ -377,8 +382,8 @@ mod tests {
         // Analysis should see T4 with undo_next_lsn = Lsn(0) (the Begin),
         // not Lsn(110) (the CLR itself).
         let records = vec![
-            LogRecord::new(Lsn(0), Lsn::INVALID, tid(4), ts(), LogRecordBody::Begin).unwrap(),
-            LogRecord::new(Lsn(41), Lsn(0), tid(4), ts(), LogRecordBody::Insert {
+            LogRecord::new(Lsn(0), Lsn::INVALID, tid(4), LogRecordBody::Begin).unwrap(),
+            LogRecord::new(Lsn(41), Lsn(0), tid(4), LogRecordBody::Insert {
                 page_id: page(3),
                 before: vec![0u8; 4],
                 after: vec![1u8; 4],
@@ -386,7 +391,7 @@ mod tests {
             .unwrap(),
             // CLR written by a previous Undo run; compensates the Insert at
             // LSN 41, so undo_next skips back to its prev_lsn = Lsn(0).
-            LogRecord::new(Lsn(110), Lsn(41), tid(4), ts(), LogRecordBody::Clr {
+            LogRecord::new(Lsn(110), Lsn(41), tid(4), LogRecordBody::Clr {
                 page_id: page(3),
                 after: vec![0u8; 4],
                 undo_next_lsn: Lsn(0), // ← points at Begin
@@ -396,7 +401,7 @@ mod tests {
 
         let f = write_log(&records);
         let mut reader = WalReader::open(f.path()).unwrap();
-        let result = Aries::run_analysis(&mut reader, None).unwrap();
+        let result = Analysis::default().run(&mut reader, None).unwrap();
 
         let entry = result.att.get(&tid(4)).expect("T4 must still be a loser");
         assert_eq!(entry.last_lsn, Lsn(110), "last_lsn advances to the CLR");
@@ -412,27 +417,27 @@ mod tests {
     #[test]
     fn end_record_removes_txn_from_att() {
         let records = vec![
-            LogRecord::new(Lsn(0), Lsn::INVALID, tid(5), ts(), LogRecordBody::Begin).unwrap(),
-            LogRecord::new(Lsn(41), Lsn(0), tid(5), ts(), LogRecordBody::Insert {
+            LogRecord::new(Lsn(0), Lsn::INVALID, tid(5), LogRecordBody::Begin).unwrap(),
+            LogRecord::new(Lsn(41), Lsn(0), tid(5), LogRecordBody::Insert {
                 page_id: page(2),
                 before: vec![0u8; 4],
                 after: vec![1u8; 4],
             })
             .unwrap(),
             // CLR written during a previous Undo run.
-            LogRecord::new(Lsn(110), Lsn(41), tid(5), ts(), LogRecordBody::Clr {
+            LogRecord::new(Lsn(110), Lsn(41), tid(5), LogRecordBody::Clr {
                 page_id: page(2),
                 after: vec![0u8; 4],
                 undo_next_lsn: Lsn(0),
             })
             .unwrap(),
             // End: the previous Undo run finished before the crash.
-            LogRecord::new(Lsn(159), Lsn(110), tid(5), ts(), LogRecordBody::End).unwrap(),
+            LogRecord::new(Lsn(159), Lsn(110), tid(5), LogRecordBody::End).unwrap(),
         ];
 
         let f = write_log(&records);
         let mut reader = WalReader::open(f.path()).unwrap();
-        let result = Aries::run_analysis(&mut reader, None).unwrap();
+        let result = Analysis::default().run(&mut reader, None).unwrap();
 
         assert!(
             !result.att.contains_key(&tid(5)),
@@ -446,15 +451,15 @@ mod tests {
         // Page 5 first dirtied at LSN 41, page 7 first dirtied at LSN 110.
         // redo_lsn must be 41.
         let records = vec![
-            LogRecord::new(Lsn(0), Lsn::INVALID, tid(6), ts(), LogRecordBody::Begin).unwrap(),
-            LogRecord::new(Lsn(41), Lsn(0), tid(6), ts(), LogRecordBody::Insert {
+            LogRecord::new(Lsn(0), Lsn::INVALID, tid(6), LogRecordBody::Begin).unwrap(),
+            LogRecord::new(Lsn(41), Lsn(0), tid(6), LogRecordBody::Insert {
                 page_id: page(5),
                 before: vec![0u8; 4],
                 after: vec![1u8; 4],
             })
             .unwrap(),
-            LogRecord::new(Lsn(110), Lsn::INVALID, tid(7), ts(), LogRecordBody::Begin).unwrap(),
-            LogRecord::new(Lsn(151), Lsn(110), tid(7), ts(), LogRecordBody::Update {
+            LogRecord::new(Lsn(110), Lsn::INVALID, tid(7), LogRecordBody::Begin).unwrap(),
+            LogRecord::new(Lsn(151), Lsn(110), tid(7), LogRecordBody::Update {
                 page_id: page(7),
                 before: vec![0u8; 4],
                 after: vec![1u8; 4],
@@ -464,7 +469,7 @@ mod tests {
 
         let f = write_log(&records);
         let mut reader = WalReader::open(f.path()).unwrap();
-        let result = Aries::run_analysis(&mut reader, None).unwrap();
+        let result = Analysis::default().run(&mut reader, None).unwrap();
 
         assert_eq!(result.redo_lsn, Lsn(41));
     }

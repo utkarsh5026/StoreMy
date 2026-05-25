@@ -22,9 +22,7 @@
 //! between callers that need durability guarantees (e.g. [`Wal::log_commit`]) and
 //! the background flush thread.
 
-use std::{
-    collections::HashMap, fs, io::Seek, os::unix::fs::FileExt, path::Path, time::SystemTime,
-};
+use std::{collections::HashMap, fs, io::Seek, os::unix::fs::FileExt, path::Path};
 
 use parking_lot::{Condvar, Mutex};
 
@@ -136,6 +134,29 @@ impl Wal {
             }),
             flush_cond: Condvar::new(),
         })
+    }
+
+    /// Truncates the WAL file to `lsn` and resets the write position.
+    ///
+    /// Called by [`crate::recovery::Aries::recover`] after the Analysis pass, using the reader's
+    /// final cursor position (the byte offset of the first torn/unreadable record).
+    /// This discards any partial record bytes that survived the crash, so CLRs
+    /// and End records written by the Undo pass land immediately after the last
+    /// complete valid record with no garbage bytes in between.
+    ///
+    /// Without this, a second recovery's forward scan would hit the garbage bytes,
+    /// treat them as a torn tail, and stop — never reaching the End records that
+    /// the first Undo pass wrote, violating the idempotency guarantee.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`WalError::Io`] if the file truncation fails.
+    pub fn trim_to(&self, lsn: Lsn) -> Result<(), WalError> {
+        self.file.set_len(lsn.0)?;
+        let mut state = self.state.lock();
+        state.current_at = lsn;
+        state.flushed_till = lsn;
+        Ok(())
     }
 
     /// Logs a `Begin` record for `tid` and registers it as an active transaction.
@@ -445,7 +466,7 @@ impl Wal {
     ) -> Result<Lsn, WalError> {
         let assigned_lsn = state.current_at;
 
-        let rec = LogRecord::new(assigned_lsn, prev_lsn, tid, SystemTime::now(), body)?;
+        let rec = LogRecord::new(assigned_lsn, prev_lsn, tid, body)?;
         let mut data = Vec::with_capacity(4096);
         rec.encode(&mut data)?;
 
@@ -629,12 +650,20 @@ mod tests {
 
     fn make_wal(buf_size: usize) -> (Wal, tempfile::TempDir) {
         let dir = tempdir().unwrap();
-        let wal = Wal::new(&dir.path().join("test.wal"), buf_size).unwrap();
+        let wal = Wal::new(&wal_path(&dir), buf_size).unwrap();
         (wal, dir)
+    }
+
+    fn wal_path(dir: &tempfile::TempDir) -> std::path::PathBuf {
+        dir.path().join("test.wal")
     }
 
     fn page(file: u64, p: u32) -> PageId {
         PageId::new(FileId::new(file), PageNumber::new(p))
+    }
+
+    fn tid(i: u64) -> TransactionId {
+        TransactionId::new(i)
     }
 
     // Access private state from tests in the same module.
@@ -657,7 +686,7 @@ mod tests {
     #[test]
     fn lsns_are_monotonically_increasing() {
         let (wal, _dir) = make_wal(NO_BUF);
-        let tid = TransactionId::new(1);
+        let tid = tid(1);
         let p = page(1, 1);
 
         let lsn1 = wal.log_begin(tid).unwrap();
@@ -671,8 +700,8 @@ mod tests {
     #[test]
     fn each_record_advances_lsn() {
         let (wal, _dir) = make_wal(NO_BUF);
-        let t1 = TransactionId::new(1);
-        let t2 = TransactionId::new(2);
+        let t1 = tid(1);
+        let t2 = tid(2);
 
         let a = wal.log_begin(t1).unwrap();
         let b = wal.log_begin(t2).unwrap();
@@ -682,7 +711,7 @@ mod tests {
     #[test]
     fn begin_registers_transaction() {
         let (wal, _dir) = make_wal(NO_BUF);
-        let tid = TransactionId::new(1);
+        let tid = tid(1);
         wal.log_begin(tid).unwrap();
         assert!(active_txns(&wal).contains(&tid));
     }
@@ -690,7 +719,7 @@ mod tests {
     #[test]
     fn commit_removes_transaction() {
         let (wal, _dir) = make_wal(NO_BUF);
-        let tid = TransactionId::new(1);
+        let tid = tid(1);
         wal.log_begin(tid).unwrap();
         wal.log_commit(tid).unwrap();
         assert!(!active_txns(&wal).contains(&tid));
@@ -699,7 +728,7 @@ mod tests {
     #[test]
     fn abort_keeps_transaction_for_undo_processing() {
         let (wal, _dir) = make_wal(NO_BUF);
-        let tid = TransactionId::new(1);
+        let tid = tid(1);
         wal.log_begin(tid).unwrap();
         wal.log_abort(tid).unwrap();
         assert!(active_txns(&wal).contains(&tid));
@@ -708,7 +737,7 @@ mod tests {
     #[test]
     fn abort_sets_undo_next_lsn() {
         let (wal, _dir) = make_wal(NO_BUF);
-        let tid = TransactionId::new(1);
+        let tid = tid(1);
         wal.log_begin(tid).unwrap();
         let abort_lsn = wal.log_abort(tid).unwrap();
         assert_eq!(txn_undo_next(&wal, tid), abort_lsn);
@@ -717,7 +746,7 @@ mod tests {
     #[test]
     fn last_lsn_advances_with_each_record() {
         let (wal, _dir) = make_wal(NO_BUF);
-        let tid = TransactionId::new(1);
+        let tid = tid(1);
         let p = page(1, 1);
 
         wal.log_begin(tid).unwrap();
@@ -731,7 +760,7 @@ mod tests {
     #[test]
     fn insert_marks_page_dirty() {
         let (wal, _dir) = make_wal(NO_BUF);
-        let tid = TransactionId::new(1);
+        let tid = tid(1);
         let p = page(1, 1);
         wal.log_begin(tid).unwrap();
         let lsn = wal.log_insert(tid, p, vec![], vec![1, 2, 3]).unwrap();
@@ -741,7 +770,7 @@ mod tests {
     #[test]
     fn update_marks_page_dirty() {
         let (wal, _dir) = make_wal(NO_BUF);
-        let tid = TransactionId::new(1);
+        let tid = tid(1);
         let p = page(1, 2);
         wal.log_begin(tid).unwrap();
         let lsn = wal.log_update(tid, p, vec![0], vec![1]).unwrap();
@@ -751,7 +780,7 @@ mod tests {
     #[test]
     fn delete_marks_page_dirty() {
         let (wal, _dir) = make_wal(NO_BUF);
-        let tid = TransactionId::new(1);
+        let tid = tid(1);
         let p = page(1, 3);
         wal.log_begin(tid).unwrap();
         let lsn = wal.log_delete(tid, p, vec![9, 8, 7], vec![]).unwrap();
@@ -764,7 +793,7 @@ mod tests {
         // do not overwrite the LSN. The buffer pool needs the earliest LSN
         // that requires this page to be flushed before a checkpoint.
         let (wal, _dir) = make_wal(NO_BUF);
-        let tid = TransactionId::new(1);
+        let tid = tid(1);
         let p = page(1, 1);
         wal.log_begin(tid).unwrap();
         let first = wal.log_insert(tid, p, vec![], vec![1]).unwrap();
@@ -775,7 +804,7 @@ mod tests {
     #[test]
     fn multiple_pages_tracked_independently() {
         let (wal, _dir) = make_wal(NO_BUF);
-        let tid = TransactionId::new(1);
+        let tid = tid(1);
         let p1 = page(1, 1);
         let p2 = page(1, 2);
         wal.log_begin(tid).unwrap();
@@ -789,7 +818,7 @@ mod tests {
     #[test]
     fn commit_unknown_transaction_errors() {
         let (wal, _dir) = make_wal(NO_BUF);
-        let tid = TransactionId::new(99);
+        let tid = tid(99);
         let err = wal.log_commit(tid).unwrap_err();
         assert!(matches!(err, WalError::UnknownTransaction(t) if t == tid));
     }
@@ -797,7 +826,7 @@ mod tests {
     #[test]
     fn abort_unknown_transaction_errors() {
         let (wal, _dir) = make_wal(NO_BUF);
-        let tid = TransactionId::new(99);
+        let tid = tid(99);
         let err = wal.log_abort(tid).unwrap_err();
         assert!(matches!(err, WalError::UnknownTransaction(t) if t == tid));
     }
@@ -806,7 +835,7 @@ mod tests {
     fn insert_unknown_transaction_errors() {
         let (wal, _dir) = make_wal(NO_BUF);
         let err = wal
-            .log_insert(TransactionId::new(99), page(1, 1), vec![], vec![])
+            .log_insert(tid(99), page(1, 1), vec![], vec![])
             .unwrap_err();
         assert!(matches!(err, WalError::UnknownTransaction(_)));
     }
@@ -815,7 +844,7 @@ mod tests {
     fn update_unknown_transaction_errors() {
         let (wal, _dir) = make_wal(NO_BUF);
         let err = wal
-            .log_update(TransactionId::new(99), page(1, 1), vec![], vec![])
+            .log_update(tid(99), page(1, 1), vec![], vec![])
             .unwrap_err();
         assert!(matches!(err, WalError::UnknownTransaction(_)));
     }
@@ -824,7 +853,7 @@ mod tests {
     fn delete_unknown_transaction_errors() {
         let (wal, _dir) = make_wal(NO_BUF);
         let err = wal
-            .log_delete(TransactionId::new(99), page(1, 1), vec![], vec![])
+            .log_delete(tid(99), page(1, 1), vec![], vec![])
             .unwrap_err();
         assert!(matches!(err, WalError::UnknownTransaction(_)));
     }
@@ -832,8 +861,8 @@ mod tests {
     #[test]
     fn multiple_transactions_interleaved() {
         let (wal, _dir) = make_wal(NO_BUF);
-        let t1 = TransactionId::new(1);
-        let t2 = TransactionId::new(2);
+        let t1 = tid(1);
+        let t2 = tid(2);
         let p = page(1, 1);
 
         wal.log_begin(t1).unwrap();
@@ -856,7 +885,7 @@ mod tests {
         // With NO_BUF every record is written directly, so flushed_till is
         // already past commit_lsn when force() is called the second time.
         let (wal, _dir) = make_wal(NO_BUF);
-        let tid = TransactionId::new(1);
+        let tid = tid(1);
         let lsn = wal.log_begin(tid).unwrap();
         wal.log_commit(tid).unwrap();
         assert!(wal.force(lsn).is_ok());
@@ -867,7 +896,7 @@ mod tests {
         // buf_size=16: every record (header alone = 41 bytes) exceeds the buffer
         // and must take the direct write_at path instead of being buffered.
         let (wal, _dir) = make_wal(16);
-        let tid = TransactionId::new(1);
+        let tid = tid(1);
         wal.log_begin(tid).unwrap();
         assert!(
             wal.log_insert(tid, page(1, 1), vec![], vec![0u8; 512])
@@ -885,7 +914,7 @@ mod tests {
         let wal_bg = Arc::clone(&wal);
         std::thread::spawn(move || wal_bg.flush_loop());
 
-        let tid = TransactionId::new(1);
+        let tid = tid(1);
         wal.log_begin(tid).unwrap();
         assert!(wal.log_commit(tid).is_ok());
     }
@@ -895,19 +924,17 @@ mod tests {
         // With a large buffer, begin record sits in memory unflushed.
         // close() must flush it synchronously without needing flush_loop.
         let (wal, _dir) = make_wal(4096);
-        let tid = TransactionId::new(1);
+        let tid = tid(1);
         wal.log_begin(tid).unwrap();
         assert!(wal.close().is_ok());
     }
-
-    // ── log_clr ──────────────────────────────────────────────────────────────
 
     #[test]
     fn clr_marks_page_dirty() {
         // The Undo pass writes a CLR then restores the before-image to the page;
         // the WAL must record that page as dirty so the next checkpoint sees it.
         let (wal, _dir) = make_wal(NO_BUF);
-        let tid = TransactionId::new(1);
+        let tid = tid(1);
         let p = page(1, 5);
         let lsn = wal
             .log_clr(tid, Lsn::INVALID, p, vec![9, 8, 7], Lsn::INVALID)
@@ -920,7 +947,7 @@ mod tests {
         // During recovery, losers are NOT in active_txns — log_clr must succeed
         // anyway because it bypasses the active-txn lookup entirely.
         let (wal, _dir) = make_wal(NO_BUF);
-        let loser = TransactionId::new(42);
+        let loser = tid(42);
         let p = page(2, 1);
         assert!(
             wal.log_clr(loser, Lsn::INVALID, p, vec![], Lsn::INVALID)
@@ -933,7 +960,7 @@ mod tests {
         // The CLR is written *after* the original operation record, so its LSN
         // must be strictly greater.
         let (wal, _dir) = make_wal(NO_BUF);
-        let tid = TransactionId::new(1);
+        let tid = tid(1);
         let p = page(1, 1);
         wal.log_begin(tid).unwrap();
         let insert_lsn = wal.log_insert(tid, p, vec![], vec![1, 2]).unwrap();
@@ -948,7 +975,7 @@ mod tests {
         // dirty_pages records the *first* LSN that dirtied a page.  A CLR for
         // the same page must not overwrite that entry.
         let (wal, _dir) = make_wal(NO_BUF);
-        let tid = TransactionId::new(1);
+        let tid = tid(1);
         let p = page(1, 9);
         wal.log_begin(tid).unwrap();
         let first = wal.log_insert(tid, p, vec![], vec![1]).unwrap();
@@ -961,7 +988,7 @@ mod tests {
         // Normal abort path: Begin → data ops → Abort → (undo) → End.
         // After log_end the transaction must leave active_txns.
         let (wal, _dir) = make_wal(NO_BUF);
-        let tid = TransactionId::new(1);
+        let tid = tid(1);
         wal.log_begin(tid).unwrap();
         let abort_lsn = wal.log_abort(tid).unwrap();
         wal.log_end(tid, abort_lsn).unwrap();
@@ -973,7 +1000,7 @@ mod tests {
         // Recovery path: losers were never re-inserted into active_txns, so
         // log_end must tolerate the absence without returning an error.
         let (wal, _dir) = make_wal(NO_BUF);
-        let loser = TransactionId::new(99);
+        let loser = tid(99);
         assert!(wal.log_end(loser, Lsn::INVALID).is_ok());
     }
 
@@ -982,7 +1009,7 @@ mod tests {
         // The End record is written after the final CLR (or Abort), so its LSN
         // must be strictly greater than the prev_lsn handed in.
         let (wal, _dir) = make_wal(NO_BUF);
-        let tid = TransactionId::new(1);
+        let tid = tid(1);
         wal.log_begin(tid).unwrap();
         let abort_lsn = wal.log_abort(tid).unwrap();
         let end_lsn = wal.log_end(tid, abort_lsn).unwrap();
@@ -1006,9 +1033,8 @@ mod tests {
     #[test]
     fn checkpoint_writes_begin_then_end_record() {
         // A checkpoint must produce exactly two records in order: Begin then End.
-        let dir = tempdir().unwrap();
-        let path = dir.path().join("wal");
-        let wal = Wal::new(&path, NO_BUF).unwrap();
+        let (wal, dir) = make_wal(NO_BUF);
+        let path = wal_path(&dir);
 
         wal.checkpoint().unwrap();
 
@@ -1026,9 +1052,8 @@ mod tests {
         // Analysis uses CheckpointEnd.prev_lsn to find CheckpointBegin and
         // resume the forward scan from that point. If this link is wrong,
         // records written during the checkpoint window will be missed.
-        let dir = tempdir().unwrap();
-        let path = dir.path().join("wal");
-        let wal = Wal::new(&path, NO_BUF).unwrap();
+        let (wal, dir) = make_wal(NO_BUF);
+        let path = wal_path(&dir);
 
         wal.checkpoint().unwrap();
 
@@ -1044,9 +1069,8 @@ mod tests {
     #[test]
     fn checkpoint_records_use_invalid_tid() {
         // Checkpoint records do not belong to any user transaction.
-        let dir = tempdir().unwrap();
-        let path = dir.path().join("wal");
-        let wal = Wal::new(&path, NO_BUF).unwrap();
+        let (wal, dir) = make_wal(NO_BUF);
+        let path = wal_path(&dir);
 
         wal.checkpoint().unwrap();
 
@@ -1064,11 +1088,10 @@ mod tests {
     fn checkpoint_captures_active_txn_in_att_snapshot() {
         // An uncommitted transaction must appear in the ATT snapshot with its
         // correct last_lsn and TxnStatus::Running.
-        let dir = tempdir().unwrap();
-        let path = dir.path().join("wal");
-        let wal = Wal::new(&path, NO_BUF).unwrap();
+        let (wal, dir) = make_wal(NO_BUF);
+        let path = wal_path(&dir);
 
-        let tid = TransactionId::new(1);
+        let tid = tid(1);
         let p = page(1, 1);
         wal.log_begin(tid).unwrap();
         let insert_lsn = wal.log_insert(tid, p, vec![], vec![1]).unwrap();
@@ -1097,11 +1120,10 @@ mod tests {
     fn checkpoint_captures_dirty_page_in_dpt_snapshot() {
         // An insert marks a page dirty with the LSN of that insert.
         // The DPT snapshot must carry that (page_id, rec_lsn) pair.
-        let dir = tempdir().unwrap();
-        let path = dir.path().join("wal");
-        let wal = Wal::new(&path, NO_BUF).unwrap();
+        let (wal, dir) = make_wal(NO_BUF);
+        let path = wal_path(&dir);
 
-        let tid = TransactionId::new(1);
+        let tid = tid(1);
         let p = page(1, 7);
         wal.log_begin(tid).unwrap();
         let insert_lsn = wal.log_insert(tid, p, vec![], vec![1]).unwrap();
@@ -1127,11 +1149,10 @@ mod tests {
     fn committed_txn_absent_from_att_snapshot() {
         // A committed transaction leaves active_txns, so it must not appear
         // in the ATT snapshot — it is a winner and needs no undo.
-        let dir = tempdir().unwrap();
-        let path = dir.path().join("wal");
-        let wal = Wal::new(&path, NO_BUF).unwrap();
+        let (wal, dir) = make_wal(NO_BUF);
+        let path = wal_path(&dir);
 
-        let tid = TransactionId::new(1);
+        let tid = tid(1);
         wal.log_begin(tid).unwrap();
         wal.log_insert(tid, page(1, 1), vec![], vec![1]).unwrap();
         wal.log_commit(tid).unwrap();
@@ -1159,9 +1180,8 @@ mod tests {
     fn second_checkpoint_lsn_greater_than_first() {
         // Each checkpoint appends two records, so the second end_lsn must be
         // strictly greater than the first.
-        let dir = tempdir().unwrap();
-        let path = dir.path().join("wal");
-        let wal = Wal::new(&path, NO_BUF).unwrap();
+        let (wal, dir) = make_wal(NO_BUF);
+        let _ = wal_path(&dir);
 
         let first = wal.checkpoint().unwrap();
         let second = wal.checkpoint().unwrap();
@@ -1173,9 +1193,8 @@ mod tests {
         // With NO_BUF every write goes direct, so flushed_till must reach
         // end_lsn by the time checkpoint() returns — force() is a no-op but
         // the invariant must hold regardless.
-        let dir = tempdir().unwrap();
-        let path = dir.path().join("wal");
-        let wal = Wal::new(&path, NO_BUF).unwrap();
+        let (wal, dir) = make_wal(NO_BUF);
+        let _ = wal_path(&dir);
 
         let end_lsn = wal.checkpoint().unwrap();
         assert!(flushed_till(&wal) >= end_lsn);

@@ -3,7 +3,7 @@
 //! Redo scans the log forward from [`AnalysisResult::redo_lsn`] and, for each
 //! data record (Update, Insert, Delete, CLR), decides whether the logged
 //! after-image still needs to be applied to the page in the buffer pool. The
-//! decision uses ARIES's four-check rule implemented in [`maybe_redo`]:
+//! decision uses ARIES's four-check rule implemented in [`Redo::maybe_redo`]:
 //!
 //! 1. Page must appear in the DPT from Analysis.
 //! 2. Record LSN must be at or after that page's `rec_lsn`.
@@ -19,7 +19,7 @@ use std::sync::Arc;
 use fallible_iterator::FallibleIterator;
 use thiserror::Error;
 
-use super::{AnalysisResult, Aries};
+use super::AnalysisResult;
 use crate::{
     PAGE_SIZE,
     buffer_pool::page_store::{PageStore, PageStoreError},
@@ -67,12 +67,39 @@ struct RedoStats {
     skipped_unregistered: usize,
 }
 
-impl Aries {
+/// Executor for the ARIES Redo pass.
+///
+/// Constructed with the Analysis output and a handle to the buffer pool, then
+/// driven by [`Redo::run`]. Consuming `self` on `run` enforces that the pass
+/// executes exactly once — re-running on an exhausted reader would be a silent
+/// no-op and is never correct.
+pub(in crate::recovery) struct Redo<'a> {
+    analysis: &'a AnalysisResult,
+    buffer_pool: &'a Arc<PageStore>,
+    stats: RedoStats,
+}
+
+impl<'a> Redo<'a> {
+    /// Creates a new Redo pass executor.
+    ///
+    /// `analysis` supplies the DPT and `redo_lsn`; `buffer_pool` is where
+    /// after-images are written when the four-check rule says they are needed.
+    pub(in crate::recovery) fn new(
+        analysis: &'a AnalysisResult,
+        buffer_pool: &'a Arc<PageStore>,
+    ) -> Self {
+        Self {
+            analysis,
+            buffer_pool,
+            stats: RedoStats::default(),
+        }
+    }
+
     /// Runs the Redo pass: replay WAL records from `analysis.redo_lsn` forward.
     ///
     /// Only records with an after-image (Update, Insert, Delete, CLR) are
     /// candidates. Lifecycle and checkpoint records are ignored. Each candidate
-    /// is handed to [`maybe_redo`] for the four-check decision.
+    /// is handed to [`Self::maybe_redo`] for the four-check decision.
     ///
     /// # Errors
     ///
@@ -81,17 +108,14 @@ impl Aries {
     /// and [`RedoError::ImageSizeMismatch`] when an after-image length is wrong.
     #[tracing::instrument(
         name = "aries_redo",
-        skip(reader, analysis, buffer_pool),
-        fields(redo_lsn = ?analysis.redo_lsn)
+        skip(self, reader),
+        fields(redo_lsn = ?self.analysis.redo_lsn)
     )]
-    pub(super) fn run_redo(
-        reader: &mut WalReader,
-        analysis: &AnalysisResult,
-        buffer_pool: &Arc<PageStore>,
-    ) -> Result<(), RedoError> {
-        reader.seek_to(analysis.redo_lsn).map_err(RedoError::Wal)?;
+    pub(in crate::recovery) fn run(mut self, reader: &mut WalReader) -> Result<(), RedoError> {
+        reader
+            .seek_to(self.analysis.redo_lsn)
+            .map_err(RedoError::Wal)?;
 
-        let mut stats = RedoStats::default();
         while let Some(record) = reader.next().map_err(RedoError::Wal)? {
             let lsn = record.header.lsn;
 
@@ -103,21 +127,20 @@ impl Aries {
                 | LogRecordBody::Insert { page_id, after, .. }
                 | LogRecordBody::Delete { page_id, after, .. }
                 | LogRecordBody::Clr { page_id, after, .. } => {
-                    stats.records_examined += 1;
-                    Self::maybe_redo(lsn, page_id, &after, analysis, buffer_pool, &mut stats)?;
+                    self.stats.records_examined += 1;
+                    self.maybe_redo(lsn, page_id, &after)?;
                 }
-
                 _ => {}
             }
         }
 
         tracing::debug!(
-            records_examined = stats.records_examined,
-            pages_applied = stats.pages_applied,
-            skipped_not_in_dpt = stats.skipped_not_in_dpt,
-            skipped_before_rec_lsn = stats.skipped_before_rec_lsn,
-            skipped_already_on_disk = stats.skipped_already_on_disk,
-            skipped_unregistered = stats.skipped_unregistered,
+            records_examined = self.stats.records_examined,
+            pages_applied = self.stats.pages_applied,
+            skipped_not_in_dpt = self.stats.skipped_not_in_dpt,
+            skipped_before_rec_lsn = self.stats.skipped_before_rec_lsn,
+            skipped_already_on_disk = self.stats.skipped_already_on_disk,
+            skipped_unregistered = self.stats.skipped_unregistered,
             "redo pass complete"
         );
         Ok(())
@@ -138,25 +161,15 @@ impl Aries {
     ///
     /// Panics if a fetched page buffer is shorter than 8 bytes (should never
     /// happen for a valid frame).
-    fn maybe_redo(
-        lsn: Lsn,
-        page_id: PageId,
-        after: &[u8],
-        analysis: &AnalysisResult,
-        buffer_pool: &Arc<PageStore>,
-        stats: &mut RedoStats,
-    ) -> Result<(), RedoError> {
-        let AnalysisResult {
-            dpt: dirty_pages, ..
-        } = analysis;
+    fn maybe_redo(&mut self, lsn: Lsn, page_id: PageId, after: &[u8]) -> Result<(), RedoError> {
         // Is page_id in the DPT?
         //
         // The DPT only contains pages that were dirty at (or after) the last
         // checkpoint.  If a page is absent, it was clean throughout — the
-        // on-disk copy is guaranteed to include this change. We Skip immediately,
+        // on-disk copy is guaranteed to include this change. We skip immediately,
         // no I/O required.
-        let Some(dpt_entry) = dirty_pages.get(&page_id) else {
-            stats.skipped_not_in_dpt += 1;
+        let Some(dpt_entry) = self.analysis.dpt.get(&page_id) else {
+            self.stats.skipped_not_in_dpt += 1;
             return Ok(());
         };
 
@@ -166,14 +179,14 @@ impl Aries {
         // checkpoint.  Any log record with lsn < rec_lsn was already flushed
         // to disk by the buffer pool before the crash — skip it.
         if dpt_entry.rec_lsn > lsn {
-            stats.skipped_before_rec_lsn += 1;
+            self.stats.skipped_before_rec_lsn += 1;
             return Ok(());
         }
 
-        let guard = match buffer_pool.fetch_for_recovery(page_id) {
+        let guard = match self.buffer_pool.fetch_for_recovery(page_id) {
             Ok(g) => g,
             Err(PageStoreError::FileNotRegistered(fid)) => {
-                stats.skipped_unregistered += 1;
+                self.stats.skipped_unregistered += 1;
                 tracing::warn!(
                     file_id = ?fid,
                     ?page_id,
@@ -190,7 +203,7 @@ impl Aries {
         let page_lsn = read_page_lsn(&page_bytes);
 
         if page_lsn >= lsn {
-            stats.skipped_already_on_disk += 1;
+            self.stats.skipped_already_on_disk += 1;
             return Ok(());
         }
 
@@ -202,7 +215,7 @@ impl Aries {
             })?;
 
         guard.write(&page_data, lsn);
-        stats.pages_applied += 1;
+        self.stats.pages_applied += 1;
         tracing::trace!(?page_id, ?lsn, "redo applied after-image");
         Ok(())
     }
@@ -210,7 +223,7 @@ impl Aries {
 
 #[cfg(test)]
 mod tests {
-    use std::{collections::HashMap, os::unix::fs::FileExt, path::Path, time::SystemTime};
+    use std::{collections::HashMap, os::unix::fs::FileExt, path::Path};
 
     use tempfile::{NamedTempFile, TempDir, tempdir};
 
@@ -229,10 +242,6 @@ mod tests {
 
     fn pid(file: u64, page: u32) -> PageId {
         PageId::new(FileId::new(file), PageNumber::new(page))
-    }
-
-    fn ts() -> SystemTime {
-        SystemTime::UNIX_EPOCH
     }
 
     /// Builds a `PAGE_SIZE`-byte page image whose bytes 5..13 encode `page_lsn`
@@ -258,7 +267,7 @@ mod tests {
         for (t, body) in bodies {
             let offset = f.as_file().metadata().unwrap().len();
             let lsn = Lsn(offset);
-            let rec = LogRecord::new(lsn, prev, t, ts(), body).unwrap();
+            let rec = LogRecord::new(lsn, prev, t, body).unwrap();
             rec.encode(f.as_file_mut()).unwrap();
             lsns.push(lsn);
             prev = lsn;
@@ -370,7 +379,7 @@ mod tests {
         let analysis = analysis_with(&[(target, Lsn(0))]);
 
         let mut reader = WalReader::open(wal.path()).unwrap();
-        Aries::run_redo(&mut reader, &analysis, &store).unwrap();
+        Redo::new(&analysis, &store).run(&mut reader).unwrap();
 
         let bytes = page_bytes(&store, target);
         assert_eq!(
@@ -400,7 +409,7 @@ mod tests {
         let analysis = analysis_with(&[]);
 
         let mut reader = WalReader::open(wal.path()).unwrap();
-        Aries::run_redo(&mut reader, &analysis, &store).unwrap();
+        Redo::new(&analysis, &store).run(&mut reader).unwrap();
 
         // Page is still the all-zero original (Redo never even fetched it, but
         // this fetch loads it fresh from disk).  If Redo had applied the
@@ -440,7 +449,7 @@ mod tests {
         };
 
         let mut reader = WalReader::open(wal.path()).unwrap();
-        Aries::run_redo(&mut reader, &analysis, &store).unwrap();
+        Redo::new(&analysis, &store).run(&mut reader).unwrap();
 
         assert_eq!(page_bytes(&store, target), [0u8; PAGE_SIZE]);
     }
@@ -473,7 +482,7 @@ mod tests {
         let analysis = analysis_with(&[(target, Lsn(0))]);
 
         let mut reader = WalReader::open(wal.path()).unwrap();
-        Aries::run_redo(&mut reader, &analysis, &store).unwrap();
+        Redo::new(&analysis, &store).run(&mut reader).unwrap();
 
         // Redo loaded the page (for the check), but must NOT have overwritten
         // its bytes with the 0xEE after-image.
@@ -513,7 +522,7 @@ mod tests {
         let analysis = analysis_with(&[(target, Lsn(0))]);
 
         let mut reader = WalReader::open(wal.path()).unwrap();
-        Aries::run_redo(&mut reader, &analysis, &store).unwrap();
+        Redo::new(&analysis, &store).run(&mut reader).unwrap();
 
         // Page is fresh zeros — none of the records carried page bytes.
         assert_eq!(page_bytes(&store, target), [0u8; PAGE_SIZE]);
@@ -538,7 +547,7 @@ mod tests {
         let analysis = analysis_with(&[(target, Lsn(0))]);
 
         let mut reader = WalReader::open(wal.path()).unwrap();
-        Aries::run_redo(&mut reader, &analysis, &store).unwrap();
+        Redo::new(&analysis, &store).run(&mut reader).unwrap();
 
         let bytes = page_bytes(&store, target);
         assert_eq!(bytes[PAGE_LSN_END], 0xBB, "CLR after-image must be applied");
@@ -565,7 +574,7 @@ mod tests {
         let analysis = analysis_with(&[(unknown, Lsn(0))]);
 
         let mut reader = WalReader::open(wal.path()).unwrap();
-        let result = Aries::run_redo(&mut reader, &analysis, &store);
+        let result = Redo::new(&analysis, &store).run(&mut reader);
         assert!(
             result.is_ok(),
             "unregistered file must NOT bubble up as an error: {:?}",
@@ -592,7 +601,7 @@ mod tests {
         let analysis = analysis_with(&[(target, Lsn(0))]);
 
         let mut reader = WalReader::open(wal.path()).unwrap();
-        let err = Aries::run_redo(&mut reader, &analysis, &store).unwrap_err();
+        let err = Redo::new(&analysis, &store).run(&mut reader).unwrap_err();
         assert!(
             matches!(err, RedoError::ImageSizeMismatch {
                 expected_size: PAGE_SIZE,
@@ -643,7 +652,7 @@ mod tests {
         // First run: applies the after-image.  Frame bytes now start with
         // insert_lsn (encoded into the after-image we just wrote).
         let mut reader = WalReader::open(wal.path()).unwrap();
-        Aries::run_redo(&mut reader, &analysis, &store).unwrap();
+        Redo::new(&analysis, &store).run(&mut reader).unwrap();
         let after_first = page_bytes(&store, target);
         assert_eq!(
             after_first[PAGE_LSN_END], 0xA5,
@@ -654,7 +663,7 @@ mod tests {
         // Second run: check 3 trips because page_lsn (= insert_lsn) is no
         // longer less than the record's LSN, so the frame is left alone.
         let mut reader = WalReader::open(wal.path()).unwrap();
-        Aries::run_redo(&mut reader, &analysis, &store).unwrap();
+        Redo::new(&analysis, &store).run(&mut reader).unwrap();
         let after_second = page_bytes(&store, target);
         assert_eq!(
             after_first, after_second,
@@ -701,7 +710,7 @@ mod tests {
         };
 
         let mut reader = WalReader::open(wal.path()).unwrap();
-        Aries::run_redo(&mut reader, &analysis, &store).unwrap();
+        Redo::new(&analysis, &store).run(&mut reader).unwrap();
 
         // Page 0 was never visited — buffer pool fetches it fresh from disk.
         assert_eq!(

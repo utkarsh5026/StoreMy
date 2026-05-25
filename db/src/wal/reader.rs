@@ -59,6 +59,16 @@ impl WalReader {
         })
     }
 
+    /// Returns the current cursor position.
+    ///
+    /// After a completed forward scan this equals the byte offset of the first
+    /// unreadable (torn or absent) record — the end of the valid log prefix.
+    /// `Aries::recover` reads this after Analysis to know where to truncate the
+    /// WAL before the Undo pass writes CLRs and End records.
+    pub fn pos(&self) -> u64 {
+        self.pos
+    }
+
     /// Moves the cursor to `lsn`.
     ///
     /// In ARIES the LSN *is* the byte offset of the record in the log file, so
@@ -149,10 +159,7 @@ impl FallibleIterator for WalReader {
 
 #[cfg(test)]
 mod tests {
-    use std::{
-        io::{Seek, SeekFrom, Write},
-        time::SystemTime,
-    };
+    use std::io::{Seek, SeekFrom, Write};
 
     use fallible_iterator::FallibleIterator;
     use tempfile::NamedTempFile;
@@ -190,44 +197,42 @@ mod tests {
     fn make_records() -> Vec<LogRecord> {
         let tid = TransactionId::new(42);
         vec![
-            LogRecord::new(
-                Lsn(1000),
-                Lsn::INVALID,
-                tid,
-                SystemTime::UNIX_EPOCH,
-                LogRecordBody::Begin,
-            )
+            LogRecord::new(Lsn(1000), Lsn::INVALID, tid, LogRecordBody::Begin).unwrap(),
+            LogRecord::new(Lsn(2000), Lsn(1000), tid, LogRecordBody::Insert {
+                page_id: page_id(),
+                before: vec![0u8; 4],
+                after: vec![1u8; 4],
+            })
             .unwrap(),
-            LogRecord::new(
-                Lsn(2000),
-                Lsn(1000),
-                tid,
-                SystemTime::UNIX_EPOCH,
-                LogRecordBody::Insert {
-                    page_id: page_id(),
-                    before: vec![0u8; 4],
-                    after: vec![1u8; 4],
-                },
-            )
-            .unwrap(),
-            LogRecord::new(
-                Lsn(3000),
-                Lsn(2000),
-                tid,
-                SystemTime::UNIX_EPOCH,
-                LogRecordBody::Commit,
-            )
-            .unwrap(),
+            LogRecord::new(Lsn(3000), Lsn(2000), tid, LogRecordBody::Commit).unwrap(),
         ]
     }
 
-    // ── happy path ──────────────────────────────────────────────────────────
+    /// Writes [`make_records`] to a temp WAL file.
+    fn default_wal_file() -> (Vec<LogRecord>, NamedTempFile) {
+        let records = make_records();
+        let file = write_records(&records);
+        (records, file)
+    }
+
+    /// [`default_wal_file`] plus a [`WalReader`] positioned at the start.
+    fn default_reader() -> (Vec<LogRecord>, NamedTempFile, WalReader) {
+        let (records, file) = default_wal_file();
+        let reader = WalReader::open(file.path()).unwrap();
+        (records, file, reader)
+    }
+
+    fn seek_to_offset(reader: &mut WalReader, offset: u64) {
+        reader.seek_to(Lsn(offset)).unwrap();
+    }
+
+    fn read_at_offset(reader: &mut WalReader, offset: u64) -> LogRecord {
+        reader.read_at(Lsn(offset)).unwrap()
+    }
 
     #[test]
     fn reads_all_records_in_order() {
-        let records = make_records();
-        let f = write_records(&records);
-        let mut reader = WalReader::open(f.path()).unwrap();
+        let (records, _file, mut reader) = default_reader();
 
         for expected in &records {
             let got = reader.next().unwrap().expect("expected a record");
@@ -235,7 +240,6 @@ mod tests {
             assert_eq!(got.header.record_type, expected.header.record_type);
             assert_eq!(got.header.tid, expected.header.tid);
         }
-        // One more call should signal clean EOF.
         assert!(
             reader.next().unwrap().is_none(),
             "expected EOF after last record"
@@ -244,36 +248,30 @@ mod tests {
 
     #[test]
     fn seek_to_jumps_to_correct_record() {
-        let records = make_records();
-        let f = write_records(&records);
-        let mut reader = WalReader::open(f.path()).unwrap();
+        let (records, _, mut reader) = default_reader();
 
         // Seek past the first record and confirm we read the second.
-        reader.seek_to(Lsn(OFFSET_R2)).unwrap();
+        seek_to_offset(&mut reader, OFFSET_R2);
         let got = reader.next().unwrap().expect("expected Insert record");
-        assert_eq!(got.header.lsn, records[1].header.lsn); // Lsn(2000)
+        assert_eq!(got.header.lsn, records[1].header.lsn);
         assert_eq!(got.header.record_type, records[1].header.record_type);
     }
 
     #[test]
     fn read_at_returns_correct_record() {
-        let records = make_records();
-        let f = write_records(&records);
-        let mut reader = WalReader::open(f.path()).unwrap();
+        let (records, _file, mut reader) = default_reader();
 
         // Jump directly to the Commit record.
-        let got = reader.read_at(Lsn(OFFSET_R3)).unwrap();
+        let got = read_at_offset(&mut reader, OFFSET_R3);
         assert_eq!(got.header.lsn, records[2].header.lsn); // Lsn(3000)
         assert_eq!(got.header.record_type, records[2].header.record_type);
     }
 
     #[test]
     fn insert_body_survives_roundtrip() {
-        let records = make_records();
-        let f = write_records(&records);
-        let mut reader = WalReader::open(f.path()).unwrap();
+        let (_records, _file, mut reader) = default_reader();
 
-        reader.seek_to(Lsn(OFFSET_R2)).unwrap();
+        seek_to_offset(&mut reader, OFFSET_R2);
         let got = reader.next().unwrap().unwrap();
 
         match got.body {
@@ -285,17 +283,13 @@ mod tests {
         }
     }
 
-    // ── torn-tail cases ─────────────────────────────────────────────────────
-
     /// Only 10 bytes of record 3's header are present — caught by step 1.
     #[test]
     fn torn_header_returns_none() {
-        let records = make_records();
-        let f = write_records(&records);
+        let (_records, file) = default_wal_file();
         // Record 3 starts at byte 110; keep only 10 bytes of its header.
-        f.as_file().set_len(OFFSET_R3 + 10).unwrap();
-
-        let mut reader = WalReader::open(f.path()).unwrap();
+        file.as_file().set_len(OFFSET_R3 + 10).unwrap();
+        let mut reader = WalReader::open(file.path()).unwrap();
         reader.next().unwrap(); // record 1 — complete
         reader.next().unwrap(); // record 2 — complete
         assert!(
@@ -307,13 +301,11 @@ mod tests {
     /// Reco's header is intact but its body is truncated — caught by step 5.
     #[test]
     fn torn_body_returns_none() {
-        let records = make_records();
-        let f = write_records(&records);
+        let (_records, file) = default_wal_file();
         // Truncate mid-body of the Insert record: keep header (41 B) + half
         // the body (14 B) = 55 B past the start of record 2.
-        f.as_file().set_len(OFFSET_R2 + 41 + 14).unwrap();
-
-        let mut reader = WalReader::open(f.path()).unwrap();
+        file.as_file().set_len(OFFSET_R2 + 41 + 14).unwrap();
+        let mut reader = WalReader::open(file.path()).unwrap();
         reader.next().unwrap(); // record 1 — complete
         assert!(
             reader.next().unwrap().is_none(),
@@ -324,15 +316,15 @@ mod tests {
     /// Flipping a byte in the Insert body causes a CRC mismatch — caught by step 7.
     #[test]
     fn crc_mismatch_returns_none() {
-        let records = make_records();
-        let f = write_records(&records);
+        let (_records, file) = default_wal_file();
 
         // First body byte of record 2 = OFFSET_R2 + header size = 41 + 41 = 82.
-        f.as_file().seek(SeekFrom::Start(OFFSET_R2 + 41)).unwrap();
-        f.as_file().write_all(&[0xFF]).unwrap();
-        f.as_file().sync_all().unwrap();
-
-        let mut reader = WalReader::open(f.path()).unwrap();
+        file.as_file()
+            .seek(SeekFrom::Start(OFFSET_R2 + 41))
+            .unwrap();
+        file.as_file().write_all(&[0xFF]).unwrap();
+        file.as_file().sync_all().unwrap();
+        let mut reader = WalReader::open(file.path()).unwrap();
         reader.next().unwrap(); // record 1 is unaffected
         assert!(
             reader.next().unwrap().is_none(),
@@ -343,12 +335,10 @@ mod tests {
     /// `read_at` converts Ok(None) into `WalError::TornRecord`.
     #[test]
     fn read_at_torn_lsn_returns_torn_record_error() {
-        let records = make_records();
-        let f = write_records(&records);
+        let (_records, file) = default_wal_file();
         // Keep only 10 bytes of record 3's header.
-        f.as_file().set_len(OFFSET_R3 + 10).unwrap();
-
-        let mut reader = WalReader::open(f.path()).unwrap();
+        file.as_file().set_len(OFFSET_R3 + 10).unwrap();
+        let mut reader = WalReader::open(file.path()).unwrap();
         let err = reader.read_at(Lsn(OFFSET_R3)).unwrap_err();
         assert!(
             matches!(err, WalError::TornRecord(_)),
@@ -367,15 +357,12 @@ mod tests {
     /// Multiple `seek_to` calls interleave correctly.
     #[test]
     fn multiple_seeks_are_independent() {
-        let records = make_records();
-        let f = write_records(&records);
-        let mut reader = WalReader::open(f.path()).unwrap();
+        let (records, _file, mut reader) = default_reader();
 
-        // Read record 3, then seek back to record 1.
-        let r3 = reader.read_at(Lsn(OFFSET_R3)).unwrap();
+        let r3 = read_at_offset(&mut reader, OFFSET_R3);
         assert_eq!(r3.header.lsn, records[2].header.lsn);
 
-        let r1 = reader.read_at(Lsn(OFFSET_R1)).unwrap();
+        let r1 = read_at_offset(&mut reader, OFFSET_R1);
         assert_eq!(r1.header.lsn, records[0].header.lsn);
     }
 }

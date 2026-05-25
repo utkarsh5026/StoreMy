@@ -16,7 +16,7 @@
 //! common case of working with raw byte slices without requiring the caller to
 //! manage a writer or cursor manually.
 
-use std::io::{Read, Write};
+use std::io::{self, Read, Write};
 
 use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
 /// Re-export the derive macros so callers `use storemy::codec::{Encode, Decode};`
@@ -155,6 +155,82 @@ pub trait Decode: Sized {
     }
 }
 
+/// Convenience wrappers for little-endian reads from any [`io::Read`] source.
+///
+/// A blanket impl covers every `R: Read`, so `use crate::codec::ReadLeExt` is
+/// all that is needed at call sites — no more turbofish on every byte-order
+/// read.  The byteorder crate remains an implementation detail of this module.
+pub trait ReadLeExt: Read {
+    fn read_u8(&mut self) -> io::Result<u8>;
+    fn read_le_u16(&mut self) -> io::Result<u16>;
+    fn read_le_u32(&mut self) -> io::Result<u32>;
+    fn read_le_u64(&mut self) -> io::Result<u64>;
+    fn read_le_i32(&mut self) -> io::Result<i32>;
+    fn read_le_i64(&mut self) -> io::Result<i64>;
+    fn read_le_f64(&mut self) -> io::Result<f64>;
+}
+
+impl<R: Read> ReadLeExt for R {
+    fn read_u8(&mut self) -> io::Result<u8> {
+        ReadBytesExt::read_u8(self)
+    }
+    fn read_le_u16(&mut self) -> io::Result<u16> {
+        ReadBytesExt::read_u16::<LittleEndian>(self)
+    }
+    fn read_le_u32(&mut self) -> io::Result<u32> {
+        ReadBytesExt::read_u32::<LittleEndian>(self)
+    }
+    fn read_le_u64(&mut self) -> io::Result<u64> {
+        ReadBytesExt::read_u64::<LittleEndian>(self)
+    }
+    fn read_le_i32(&mut self) -> io::Result<i32> {
+        ReadBytesExt::read_i32::<LittleEndian>(self)
+    }
+    fn read_le_i64(&mut self) -> io::Result<i64> {
+        ReadBytesExt::read_i64::<LittleEndian>(self)
+    }
+    fn read_le_f64(&mut self) -> io::Result<f64> {
+        ReadBytesExt::read_f64::<LittleEndian>(self)
+    }
+}
+
+/// Convenience wrappers for little-endian writes to any [`io::Write`] sink.
+///
+/// Symmetric counterpart to [`ReadLeExt`].
+pub trait WriteLeExt: Write {
+    fn write_u8(&mut self, v: u8) -> io::Result<()>;
+    fn write_le_u16(&mut self, v: u16) -> io::Result<()>;
+    fn write_le_u32(&mut self, v: u32) -> io::Result<()>;
+    fn write_le_u64(&mut self, v: u64) -> io::Result<()>;
+    fn write_le_i32(&mut self, v: i32) -> io::Result<()>;
+    fn write_le_i64(&mut self, v: i64) -> io::Result<()>;
+    fn write_le_f64(&mut self, v: f64) -> io::Result<()>;
+}
+
+impl<W: Write> WriteLeExt for W {
+    fn write_u8(&mut self, v: u8) -> io::Result<()> {
+        WriteBytesExt::write_u8(self, v)
+    }
+    fn write_le_u16(&mut self, v: u16) -> io::Result<()> {
+        WriteBytesExt::write_u16::<LittleEndian>(self, v)
+    }
+    fn write_le_u32(&mut self, v: u32) -> io::Result<()> {
+        WriteBytesExt::write_u32::<LittleEndian>(self, v)
+    }
+    fn write_le_u64(&mut self, v: u64) -> io::Result<()> {
+        WriteBytesExt::write_u64::<LittleEndian>(self, v)
+    }
+    fn write_le_i32(&mut self, v: i32) -> io::Result<()> {
+        WriteBytesExt::write_i32::<LittleEndian>(self, v)
+    }
+    fn write_le_i64(&mut self, v: i64) -> io::Result<()> {
+        WriteBytesExt::write_i64::<LittleEndian>(self, v)
+    }
+    fn write_le_f64(&mut self, v: f64) -> io::Result<()> {
+        WriteBytesExt::write_f64::<LittleEndian>(self, v)
+    }
+}
+
 /// Length-prefixed list codec: `u32` count followed by each element in order.
 ///
 /// One blanket impl serves every `Vec<T>` whose element type implements [`Encode`]:
@@ -167,7 +243,7 @@ impl<T: Encode> Encode for Vec<T> {
             value: u64::try_from(self.len()).unwrap_or(u64::MAX),
             target: "u32",
         })?;
-        writer.write_u32::<LittleEndian>(n)?;
+        writer.write_le_u32(n)?;
         for item in self {
             item.encode(writer)?;
         }
@@ -177,7 +253,7 @@ impl<T: Encode> Encode for Vec<T> {
 
 impl<T: Decode> Decode for Vec<T> {
     fn decode<R: Read>(reader: &mut R) -> Result<Self, CodecError> {
-        let n = reader.read_u32::<LittleEndian>()?;
+        let n = reader.read_le_u32()?;
         (0..n).map(|_| T::decode(reader)).collect()
     }
 }

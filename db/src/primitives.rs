@@ -29,9 +29,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
-
-use crate::codec::{CodecError, Decode, Encode};
+use crate::codec::{CodecError, Decode, Encode, ReadLeExt, WriteLeExt};
 
 /// Index of a page inside a database file.
 ///
@@ -106,14 +104,14 @@ impl From<PageNumber> for usize {
 
 impl Encode for PageNumber {
     fn encode<W: Write>(&self, writer: &mut W) -> Result<(), CodecError> {
-        writer.write_u32::<LittleEndian>(self.0)?;
+        writer.write_le_u32(self.0)?;
         Ok(())
     }
 }
 
 impl Decode for PageNumber {
     fn decode<R: Read>(reader: &mut R) -> Result<Self, CodecError> {
-        Ok(Self(reader.read_u32::<LittleEndian>()?))
+        Ok(Self(reader.read_le_u32()?))
     }
 }
 
@@ -164,14 +162,14 @@ impl From<&Path> for FileId {
 
 impl Encode for FileId {
     fn encode<W: Write>(&self, writer: &mut W) -> Result<(), CodecError> {
-        writer.write_u64::<LittleEndian>(self.0)?;
+        writer.write_le_u64(self.0)?;
         Ok(())
     }
 }
 
 impl Decode for FileId {
     fn decode<R: Read>(reader: &mut R) -> Result<Self, CodecError> {
-        Ok(Self(reader.read_u64::<LittleEndian>()?))
+        Ok(Self(reader.read_le_u64()?))
     }
 }
 
@@ -263,14 +261,14 @@ impl From<TransactionId> for u64 {
 
 impl Encode for TransactionId {
     fn encode<W: Write>(&self, writer: &mut W) -> Result<(), CodecError> {
-        writer.write_u64::<LittleEndian>(self.0)?;
+        writer.write_le_u64(self.0)?;
         Ok(())
     }
 }
 
 impl Decode for TransactionId {
     fn decode<R: Read>(reader: &mut R) -> Result<Self, CodecError> {
-        Ok(Self(reader.read_u64::<LittleEndian>()?))
+        Ok(Self(reader.read_le_u64()?))
     }
 }
 
@@ -308,14 +306,14 @@ impl From<Lsn> for u64 {
 
 impl Encode for Lsn {
     fn encode<W: Write>(&self, writer: &mut W) -> Result<(), CodecError> {
-        writer.write_u64::<LittleEndian>(self.0)?;
+        writer.write_le_u64(self.0)?;
         Ok(())
     }
 }
 
 impl Decode for Lsn {
     fn decode<R: Read>(reader: &mut R) -> Result<Self, CodecError> {
-        Ok(Self(reader.read_u64::<LittleEndian>()?))
+        Ok(Self(reader.read_le_u64()?))
     }
 }
 
@@ -416,14 +414,14 @@ impl TryFrom<usize> for SlotId {
 
 impl Encode for SlotId {
     fn encode<W: Write>(&self, writer: &mut W) -> Result<(), CodecError> {
-        writer.write_u16::<LittleEndian>(self.0)?;
+        writer.write_le_u16(self.0)?;
         Ok(())
     }
 }
 
 impl Decode for SlotId {
     fn decode<R: Read>(reader: &mut R) -> Result<Self, CodecError> {
-        Ok(Self(reader.read_u16::<LittleEndian>()?))
+        Ok(Self(reader.read_le_u16()?))
     }
 }
 
@@ -518,14 +516,14 @@ impl TryFrom<usize> for ColumnId {
 
 impl Encode for ColumnId {
     fn encode<W: Write>(&self, writer: &mut W) -> Result<(), CodecError> {
-        writer.write_u32::<LittleEndian>(self.0)?;
+        writer.write_le_u32(self.0)?;
         Ok(())
     }
 }
 
 impl Decode for ColumnId {
     fn decode<R: Read>(reader: &mut R) -> Result<Self, CodecError> {
-        Ok(Self(reader.read_u32::<LittleEndian>()?))
+        Ok(Self(reader.read_le_u32()?))
     }
 }
 
@@ -574,14 +572,14 @@ impl fmt::Display for HashCode {
 
 impl Encode for HashCode {
     fn encode<W: Write>(&self, writer: &mut W) -> Result<(), CodecError> {
-        writer.write_u64::<LittleEndian>(self.0)?;
+        writer.write_le_u64(self.0)?;
         Ok(())
     }
 }
 
 impl Decode for HashCode {
     fn decode<R: Read>(reader: &mut R) -> Result<Self, CodecError> {
-        Ok(Self(reader.read_u64::<LittleEndian>()?))
+        Ok(Self(reader.read_le_u64()?))
     }
 }
 

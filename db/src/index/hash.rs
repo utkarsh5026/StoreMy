@@ -83,7 +83,6 @@ use std::{
     },
 };
 
-use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
 use siphasher::sip::SipHasher13;
 
 use crate::{
@@ -92,7 +91,7 @@ use crate::{
         LockRequest,
         page_store::{PageGuard, PageStore},
     },
-    codec::{CodecError, Decode, Encode},
+    codec::{CodecError, Decode, Encode, ReadLeExt, WriteLeExt},
     index::{
         CompositeKey, ENVELOPE_HEADER_SIZE, Index, IndexEntry, IndexError, IndexKind, PageKind,
         decode_index_page, encode_index_page,
@@ -135,14 +134,14 @@ impl From<BucketNumber> for PageNumber {
 /// length prefix, no discriminant.
 impl Encode for BucketNumber {
     fn encode<W: std::io::Write>(&self, writer: &mut W) -> Result<(), CodecError> {
-        writer.write_u32::<LittleEndian>(self.0)?;
+        writer.write_le_u32(self.0)?;
         Ok(())
     }
 }
 
 impl Decode for BucketNumber {
     fn decode<R: std::io::Read>(reader: &mut R) -> Result<Self, CodecError> {
-        Ok(Self(reader.read_u32::<LittleEndian>()?))
+        Ok(Self(reader.read_le_u32()?))
     }
 }
 

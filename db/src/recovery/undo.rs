@@ -28,7 +28,7 @@ use std::{
 
 use thiserror::Error;
 
-use super::{AnalysisResult, Aries, AttEntry};
+use super::{AnalysisResult, AttEntry};
 use crate::{
     PAGE_SIZE,
     buffer_pool::page_store::{PageStore, PageStoreError},
@@ -79,11 +79,58 @@ struct UndoStats {
     skipped_unregistered: usize,
 }
 
-impl Aries {
+/// Executor for the ARIES Undo pass.
+///
+/// Constructed from the Analysis output and the two external dependencies
+/// (`wal` and `buffer_pool`), then driven by [`Undo::run`].
+///
+/// The ATT and heap are owned by the struct and are fully drained by the end
+/// of a successful run. Consuming `self` on `run` enforces that the pass
+/// executes exactly once — an exhausted ATT on a second call would silently
+/// skip all losers, which is never correct.
+pub(in crate::recovery) struct Undo<'a> {
+    wal: &'a Arc<Wal>,
+    buffer_pool: &'a Arc<PageStore>,
+    /// Loser table, drained as each transaction is fully rolled back.
+    att: HashMap<TransactionId, AttEntry>,
+    /// Max-heap of (`undo_next_lsn`, tid) across all remaining losers.
+    heap: BinaryHeap<(Lsn, TransactionId)>,
+    stats: UndoStats,
+}
+
+impl<'a> Undo<'a> {
+    /// Creates a new Undo pass executor.
+    ///
+    /// Moves the ATT out of `analysis` and seeds the max-heap from it.
+    /// Losers whose `undo_next_lsn` is [`Lsn::INVALID`] are excluded from the
+    /// heap — they were fully compensated by a prior (crashed) Undo run and
+    /// need no further work.
+    pub(in crate::recovery) fn new(
+        wal: &'a Arc<Wal>,
+        buffer_pool: &'a Arc<PageStore>,
+        analysis: AnalysisResult,
+    ) -> Self {
+        let heap = analysis
+            .att
+            .iter()
+            .map(|(tid, e)| (e.undo_next_lsn, *tid))
+            .collect::<BinaryHeap<(Lsn, TransactionId)>>();
+
+        Self {
+            wal,
+            buffer_pool,
+            att: analysis.att,
+            heap,
+            stats: UndoStats::default(),
+        }
+    }
+
     /// Runs the Undo pass: rolls back every loser transaction left in the ATT.
     ///
-    /// Consumes `analysis` because the ATT is fully drained as losers finalize
-    /// and nothing downstream needs it.
+    /// Pops the globally-latest unprocessed record from the heap on each
+    /// iteration. Data records get their before-image restored and a CLR
+    /// written; CLRs are followed without writing; `Begin` records finalize
+    /// the loser with an `End` record and remove it from the ATT.
     ///
     /// # Errors
     ///
@@ -92,33 +139,18 @@ impl Aries {
     /// [`UndoError::ImageSizeMismatch`] when a before-image length is wrong,
     /// and [`UndoError::UnexpectedRecord`] when the loser's chain points at a
     /// record type that should never appear there.
-    #[tracing::instrument(name = "aries_undo", skip(reader, wal, buffer_pool, analysis))]
-    pub(super) fn run_undo(
-        reader: &mut WalReader,
-        wal: &Arc<Wal>,
-        buffer_pool: &Arc<PageStore>,
-        analysis: AnalysisResult,
-    ) -> Result<(), UndoError> {
-        let AnalysisResult { mut att, .. } = analysis;
-        let losers_started = att.len();
-        let mut stats = UndoStats::default();
+    #[tracing::instrument(name = "aries_undo", skip(self, reader))]
+    pub(in crate::recovery) fn run(mut self, reader: &mut WalReader) -> Result<(), UndoError> {
+        let losers_started = self.att.len();
 
-        // Max-heap of (Lsn, TransactionId). Tuples order by LSN first; the
-        // tid never matters as a tiebreaker because LSNs are unique.
-        let mut heap: BinaryHeap<(Lsn, TransactionId)> = att
-            .iter()
-            .filter(|(_, e)| e.undo_next_lsn != Lsn::INVALID)
-            .map(|(tid, e)| (e.undo_next_lsn, *tid))
-            .collect();
-
-        while let Some((lsn, tid)) = heap.pop() {
+        while let Some((lsn, tid)) = self.heap.pop() {
             let record = reader.read_at(lsn)?;
             match record.body {
                 LogRecordBody::Clr { undo_next_lsn, .. } => {
-                    stats.clrs_followed += 1;
+                    self.stats.clrs_followed += 1;
                     // CLRs are never undone — they ARE the undo. Just follow
                     // the pointer to the next record in the chain.
-                    Self::advance_or_end(tid, undo_next_lsn, &mut att, wal, &mut heap, &mut stats)?;
+                    self.advance_or_end(tid, undo_next_lsn)?;
                 }
                 LogRecordBody::Update {
                     page_id, before, ..
@@ -129,20 +161,10 @@ impl Aries {
                 | LogRecordBody::Delete {
                     page_id, before, ..
                 } => {
-                    Self::undo_data_record(
-                        tid,
-                        page_id,
-                        &before,
-                        record.header.prev_lsn,
-                        &mut att,
-                        wal,
-                        buffer_pool,
-                        &mut heap,
-                        &mut stats,
-                    )?;
+                    self.undo_data_record(tid, page_id, &before, record.header.prev_lsn)?;
                 }
                 LogRecordBody::Begin => {
-                    Self::finalize_loser(tid, &mut att, wal, &mut stats)?;
+                    self.finalize_loser(tid)?;
                 }
                 _ => return Err(UndoError::UnexpectedRecord { tid, lsn }),
             }
@@ -150,11 +172,11 @@ impl Aries {
 
         tracing::debug!(
             losers_started,
-            clrs_followed = stats.clrs_followed,
-            records_undone = stats.records_undone,
-            clrs_written = stats.clrs_written,
-            losers_finalized = stats.losers_finalized,
-            skipped_unregistered = stats.skipped_unregistered,
+            clrs_followed = self.stats.clrs_followed,
+            records_undone = self.stats.records_undone,
+            clrs_written = self.stats.clrs_written,
+            losers_finalized = self.stats.losers_finalized,
+            skipped_unregistered = self.stats.skipped_unregistered,
             "undo pass complete"
         );
         Ok(())
@@ -172,21 +194,14 @@ impl Aries {
     ///
     /// `before` must be exactly [`PAGE_SIZE`] bytes; otherwise the log record
     /// is corrupt and we return [`UndoError::ImageSizeMismatch`].
-    ///
-    /// [`PAGE_SIZE`]: crate::PAGE_SIZE
-    #[allow(clippy::too_many_arguments)]
     fn undo_data_record(
+        &mut self,
         tid: TransactionId,
         page_id: PageId,
         before: &[u8],
         rec_prev_lsn: Lsn,
-        att: &mut HashMap<TransactionId, AttEntry>,
-        wal: &Arc<Wal>,
-        buffer_pool: &Arc<PageStore>,
-        heap: &mut BinaryHeap<(Lsn, TransactionId)>,
-        stats: &mut UndoStats,
     ) -> Result<(), UndoError> {
-        stats.records_undone += 1;
+        self.stats.records_undone += 1;
         let before_array: [u8; PAGE_SIZE] =
             before
                 .try_into()
@@ -199,16 +214,16 @@ impl Aries {
         // The page may belong to a file the catalog hasn't registered yet
         // (same convention as Redo). If so we can't write the page, but we
         // still need to advance the chain so the loser eventually finalizes.
-        let guard = match buffer_pool.fetch_for_recovery(page_id) {
+        let guard = match self.buffer_pool.fetch_for_recovery(page_id) {
             Ok(g) => g,
             Err(PageStoreError::FileNotRegistered(fid)) => {
-                stats.skipped_unregistered += 1;
+                self.stats.skipped_unregistered += 1;
                 tracing::warn!(
                     file_id = ?fid,
                     ?page_id,
                     "file not registered during undo — chain advanced without page write"
                 );
-                return Self::advance_or_end(tid, rec_prev_lsn, att, wal, heap, stats);
+                return self.advance_or_end(tid, rec_prev_lsn);
             }
             Err(e) => return Err(UndoError::Page(e)),
         };
@@ -216,38 +231,36 @@ impl Aries {
         // The CLR's prev_lsn continues the loser's per-txn chain from its
         // current tail (which may be the original record OR a previous CLR
         // we just wrote for an earlier undo step).
-        let clr_prev = att.get(&tid).expect("loser missing from ATT").last_lsn;
-        let clr_lsn = wal.log_clr(tid, clr_prev, page_id, before.to_vec(), rec_prev_lsn)?;
-        stats.clrs_written += 1;
+        let clr_prev = self.att.get(&tid).expect("loser missing from ATT").last_lsn;
+        let clr_lsn = self
+            .wal
+            .log_clr(tid, clr_prev, page_id, before.to_vec(), rec_prev_lsn)?;
+        self.stats.clrs_written += 1;
 
         // Stamping page_lsn = clr_lsn is what makes Redo idempotent on
         // re-run: the page_lsn >= record_lsn check will skip this CLR.
         guard.write(&before_array, clr_lsn);
-        att.get_mut(&tid).expect("loser missing from ATT").last_lsn = clr_lsn;
+        self.att
+            .get_mut(&tid)
+            .expect("loser missing from ATT")
+            .last_lsn = clr_lsn;
 
-        Self::advance_or_end(tid, rec_prev_lsn, att, wal, heap, stats)
+        self.advance_or_end(tid, rec_prev_lsn)
     }
 
-    /// Advances the loser's undo chain one step, or finalizes it if the chain
-    /// is exhausted (`next_lsn == Lsn::INVALID`).
+    /// Advances the loser's undo chain one step, or finalizes it if exhausted.
     ///
     /// Used both after undoing a data record (where `next_lsn = rec.prev_lsn`)
     /// and when following a CLR (where `next_lsn = clr.undo_next_lsn`).
-    fn advance_or_end(
-        tid: TransactionId,
-        next_lsn: Lsn,
-        att: &mut HashMap<TransactionId, AttEntry>,
-        wal: &Arc<Wal>,
-        heap: &mut BinaryHeap<(Lsn, TransactionId)>,
-        stats: &mut UndoStats,
-    ) -> Result<(), UndoError> {
+    fn advance_or_end(&mut self, tid: TransactionId, next_lsn: Lsn) -> Result<(), UndoError> {
         if next_lsn == Lsn::INVALID {
-            Self::finalize_loser(tid, att, wal, stats)
+            self.finalize_loser(tid)
         } else {
-            att.get_mut(&tid)
+            self.att
+                .get_mut(&tid)
                 .expect("loser missing from ATT")
                 .undo_next_lsn = next_lsn;
-            heap.push((next_lsn, tid));
+            self.heap.push((next_lsn, tid));
             Ok(())
         }
     }
@@ -258,16 +271,11 @@ impl Aries {
     /// `Begin` record or `Lsn::INVALID` via the chain pointers). The `End`
     /// record is the durable signal that this loser is done; on re-crash
     /// Analysis will see it and not put `tid` back in the ATT.
-    fn finalize_loser(
-        tid: TransactionId,
-        att: &mut HashMap<TransactionId, AttEntry>,
-        wal: &Arc<Wal>,
-        stats: &mut UndoStats,
-    ) -> Result<(), UndoError> {
-        stats.losers_finalized += 1;
-        let prev = att.get(&tid).expect("loser missing from ATT").last_lsn;
-        wal.log_end(tid, prev)?;
-        att.remove(&tid);
+    fn finalize_loser(&mut self, tid: TransactionId) -> Result<(), UndoError> {
+        self.stats.losers_finalized += 1;
+        let prev = self.att.get(&tid).expect("loser missing from ATT").last_lsn;
+        self.wal.log_end(tid, prev)?;
+        self.att.remove(&tid);
         Ok(())
     }
 }
@@ -321,7 +329,8 @@ mod tests {
             .truncate(true)
             .open(&data_path)
             .unwrap();
-        f.set_len(num_pages as u64 * PAGE_SIZE as u64).unwrap();
+        f.set_len(u64::from(num_pages) * u64::try_from(PAGE_SIZE).expect("PAGE_SIZE fits in u64"))
+            .unwrap();
         store.register_file(FileId::new(1), &data_path).unwrap();
 
         (wal, store, dir)
@@ -357,7 +366,7 @@ mod tests {
     fn test_run_undo_empty_att_is_noop() {
         let (wal, store, dir) = make_env(0);
         let mut reader = WalReader::open(&dir.path().join("wal")).unwrap();
-        let result = Aries::run_undo(&mut reader, &wal, &store, analysis(vec![]));
+        let result = Undo::new(&wal, &store, analysis(vec![])).run(&mut reader);
         assert!(
             result.is_ok(),
             "empty ATT must not error: {:?}",
@@ -382,8 +391,7 @@ mod tests {
         seed_page(&store, page_id, &after, insert);
 
         let mut reader = WalReader::open(&dir.path().join("wal")).unwrap();
-        Aries::run_undo(
-            &mut reader,
+        Undo::new(
             &wal,
             &store,
             analysis(vec![(t1, AttEntry {
@@ -392,6 +400,7 @@ mod tests {
                 undo_next_lsn: insert,
             })]),
         )
+        .run(&mut reader)
         .unwrap();
 
         assert_eq!(
@@ -417,8 +426,7 @@ mod tests {
         seed_page(&store, page_id, &after, update);
 
         let mut reader = WalReader::open(&dir.path().join("wal")).unwrap();
-        Aries::run_undo(
-            &mut reader,
+        Undo::new(
             &wal,
             &store,
             analysis(vec![(t1, AttEntry {
@@ -427,6 +435,7 @@ mod tests {
                 undo_next_lsn: update,
             })]),
         )
+        .run(&mut reader)
         .unwrap();
 
         assert_eq!(
@@ -452,8 +461,7 @@ mod tests {
         seed_page(&store, page_id, &after, delete);
 
         let mut reader = WalReader::open(&dir.path().join("wal")).unwrap();
-        Aries::run_undo(
-            &mut reader,
+        Undo::new(
             &wal,
             &store,
             analysis(vec![(t1, AttEntry {
@@ -462,6 +470,7 @@ mod tests {
                 undo_next_lsn: delete,
             })]),
         )
+        .run(&mut reader)
         .unwrap();
 
         assert_eq!(
@@ -491,8 +500,7 @@ mod tests {
         seed_page(&store, page_id, &after, insert);
 
         let mut reader = WalReader::open(&dir.path().join("wal")).unwrap();
-        Aries::run_undo(
-            &mut reader,
+        Undo::new(
             &wal,
             &store,
             analysis(vec![(t1, AttEntry {
@@ -501,6 +509,7 @@ mod tests {
                 undo_next_lsn: insert,
             })]),
         )
+        .run(&mut reader)
         .unwrap();
 
         assert_eq!(
@@ -520,15 +529,12 @@ mod tests {
         let p1 = pid(1, 1);
 
         let _begin = wal.log_begin(t1).unwrap();
-        // op1: Insert on p0
         let _op1 = wal
             .log_insert(t1, p0, page_image(0xA0), page_image(0xA1))
             .unwrap();
-        // op2: Update on p1
         let op2 = wal
             .log_update(t1, p1, page_image(0xB0), page_image(0xB1))
             .unwrap();
-        // op3: Update on p0 — its before-image must be the state after op1
         let op3 = wal
             .log_update(t1, p0, page_image(0xA1), page_image(0xA2))
             .unwrap();
@@ -537,8 +543,7 @@ mod tests {
         seed_page(&store, p1, &page_image(0xB1), op2);
 
         let mut reader = WalReader::open(&dir.path().join("wal")).unwrap();
-        Aries::run_undo(
-            &mut reader,
+        Undo::new(
             &wal,
             &store,
             analysis(vec![(t1, AttEntry {
@@ -547,15 +552,14 @@ mod tests {
                 undo_next_lsn: op3,
             })]),
         )
+        .run(&mut reader)
         .unwrap();
 
-        // p0: op3 undone (→ 0xA1), then op1 undone (→ 0xA0).
         assert_eq!(
             read_page(&store, p0)[0],
             0xA0,
             "p0 must be at T1's initial before-image"
         );
-        // p1: op2 undone (→ 0xB0).
         assert_eq!(
             read_page(&store, p1)[0],
             0xB0,
@@ -585,8 +589,7 @@ mod tests {
         seed_page(&store, p1, &page_image(0xDD), i2);
 
         let mut reader = WalReader::open(&dir.path().join("wal")).unwrap();
-        Aries::run_undo(
-            &mut reader,
+        Undo::new(
             &wal,
             &store,
             analysis(vec![
@@ -602,6 +605,7 @@ mod tests {
                 }),
             ]),
         )
+        .run(&mut reader)
         .unwrap();
 
         assert_eq!(read_page(&store, p0)[0], 0xAA, "T1's page must be restored");
@@ -618,23 +622,19 @@ mod tests {
         let t2 = tid(2);
         let page_id = pid(1, 0);
 
-        // T1 wrote first; T2 wrote on top of T1.
         let _b1 = wal.log_begin(t1).unwrap();
         let i1 = wal
             .log_insert(t1, page_id, page_image(0x10), page_image(0x20))
             .unwrap();
         let _b2 = wal.log_begin(t2).unwrap();
-        // T2's before-image is T1's after-image; after T2 the page
         let i2 = wal
             .log_insert(t2, page_id, page_image(0x20), page_image(0x30))
             .unwrap();
 
-        // Page is at T2's after-state at the start of Undo.
         seed_page(&store, page_id, &page_image(0x30), i2);
 
         let mut reader = WalReader::open(&dir.path().join("wal")).unwrap();
-        Aries::run_undo(
-            &mut reader,
+        Undo::new(
             &wal,
             &store,
             analysis(vec![
@@ -650,9 +650,9 @@ mod tests {
                 }),
             ]),
         )
+        .run(&mut reader)
         .unwrap();
 
-        // T2 undone first (0x30 → 0x20), then T1 (0x20 → 0x10).
         assert_eq!(
             read_page(&store, page_id)[0],
             0x10,
@@ -677,8 +677,7 @@ mod tests {
         seed_page(&store, page_id, &after, insert);
 
         let mut reader = WalReader::open(&dir.path().join("wal")).unwrap();
-        Aries::run_undo(
-            &mut reader,
+        Undo::new(
             &wal,
             &store,
             analysis(vec![(t1, AttEntry {
@@ -687,16 +686,15 @@ mod tests {
                 undo_next_lsn: insert,
             })]),
         )
+        .run(&mut reader)
         .unwrap();
 
-        // Re-scan the WAL file and collect record types in order.
         let mut reader2 = WalReader::open(&dir.path().join("wal")).unwrap();
         let mut types = Vec::new();
         while let Some(rec) = reader2.next().unwrap() {
             types.push(rec.header.record_type);
         }
 
-        // Expected sequence: Begin, Insert, CLR (undo of Insert), End (loser finalized).
         assert_eq!(types.len(), 4, "expected 4 records but got {types:?}");
         assert!(
             matches!(types[2], LogRecordType::Clr),
@@ -715,11 +713,6 @@ mod tests {
     /// If `undo_next_lsn` in the ATT points directly at a CLR (which Analysis
     /// would set after seeing a CLR in the log), Undo must follow the CLR's
     /// `undo_next_lsn` and NOT write the before-image again.
-    ///
-    /// We seed the page with a sentinel (0xFF) that is different from both the
-    /// CLR's `after` field (0xAA) and the Insert's `after` field (0xBB).
-    /// If the CLR arm incorrectly tries to "undo the CLR," it would write 0xAA
-    /// to the page; the 0xFF sentinel lets us catch that.
     #[test]
     fn test_run_undo_clr_in_chain_is_followed_not_re_undone() {
         let (wal, store, dir) = make_env(2);
@@ -732,29 +725,23 @@ mod tests {
         let insert_lsn = wal
             .log_insert(t1, page_id, before.clone(), after.clone())
             .unwrap();
-
-        // A CLR was written during a prior partial-undo pass.
-        // Its undo_next_lsn = begin_lsn (points past the Insert to Begin).
-        // `after` = before-image of the Insert (the page state after undo was applied).
         let clr_lsn = wal
             .log_clr(t1, insert_lsn, page_id, before.clone(), begin_lsn)
             .unwrap();
 
-        // Seed with a sentinel that is neither 0xAA (CLR.after) nor 0xBB (Insert.after).
-        // If the CLR arm wrongly writes to the page we'll see 0xAA, not 0xFF.
         seed_page(&store, page_id, &page_image(0xFF), clr_lsn);
 
         let mut reader = WalReader::open(&dir.path().join("wal")).unwrap();
-        Aries::run_undo(
-            &mut reader,
+        Undo::new(
             &wal,
             &store,
             analysis(vec![(t1, AttEntry {
                 status: TxnStatus::Running,
                 last_lsn: clr_lsn,
-                undo_next_lsn: clr_lsn, // ATT points AT the CLR itself
+                undo_next_lsn: clr_lsn,
             })]),
         )
+        .run(&mut reader)
         .unwrap();
 
         assert_eq!(
@@ -764,12 +751,13 @@ mod tests {
         );
     }
 
-    /// A loser whose `undo_next_lsn == Lsn::INVALID` is filtered out of the
-    /// heap entirely: no records are read, no page is written, no End is emitted.
-    /// This covers the `filter(|e| e.undo_next_lsn != INVALID)` branch in
-    /// `run_undo`.
+    /// A loser whose `undo_next_lsn == Lsn::INVALID` (byte 0) still gets an
+    /// End record written.  This simulates the "crash-during-undo" case where
+    /// a prior Undo run wrote all CLRs (the last one with `undo_next_lsn` = 0,
+    /// pointing at the Begin) but crashed before writing the End.  The loser
+    /// must be finalised so a second recovery sees the End and finds an empty ATT.
     #[test]
-    fn test_run_undo_loser_with_invalid_undo_next_is_skipped() {
+    fn test_run_undo_loser_with_invalid_undo_next_is_finalized() {
         let (wal, store, dir) = make_env(2);
         let t1 = tid(1);
         let page_id = pid(1, 0);
@@ -784,40 +772,42 @@ mod tests {
             .log_clr(t1, insert, page_id, before.clone(), Lsn::INVALID)
             .unwrap();
 
-        // Seed with 0xAA — if Undo wrongly processes the loser it would write
-        // the before-image again (still 0xAA), making the test vacuous; but the
-        // real check is that run_undo returns Ok and doesn't panic.
         seed_page(&store, page_id, &before, clr);
 
         let mut reader = WalReader::open(&dir.path().join("wal")).unwrap();
-        let result = Aries::run_undo(
-            &mut reader,
+        let result = Undo::new(
             &wal,
             &store,
             analysis(vec![(t1, AttEntry {
                 status: TxnStatus::Running,
                 last_lsn: clr,
-                undo_next_lsn: Lsn::INVALID, // fully compensated — nothing to undo
+                undo_next_lsn: Lsn::INVALID,
             })]),
-        );
+        )
+        .run(&mut reader);
         assert!(
             result.is_ok(),
             "loser with INVALID undo_next_lsn must not cause an error: {:?}",
             result.err()
         );
 
-        // WAL must NOT have grown with a new End record (the loser was skipped).
         let mut reader2 = WalReader::open(&dir.path().join("wal")).unwrap();
-        let count = {
-            let mut n = 0usize;
-            while reader2.next().unwrap().is_some() {
-                n += 1;
+        let types: Vec<_> = {
+            let mut v = Vec::new();
+            while let Some(rec) = reader2.next().unwrap() {
+                v.push(rec.header.record_type);
             }
-            n
+            v
         };
         assert_eq!(
-            count, 3,
-            "no End record should be appended for a skipped loser"
+            types.len(),
+            4,
+            "expected Begin, Insert, CLR, End; got {types:?}"
+        );
+        assert!(
+            matches!(types[3], LogRecordType::End),
+            "fourth record must be End so idempotency holds; got {:?}",
+            types[3]
         );
     }
 
@@ -829,7 +819,7 @@ mod tests {
         let t1 = tid(1);
         let page_id = pid(1, 0);
 
-        let bad_before = vec![0xAA_u8; 16]; // intentionally too short
+        let bad_before = vec![0xAA_u8; 16];
         let after = page_image(0xBB);
 
         let _begin = wal.log_begin(t1).unwrap();
@@ -838,8 +828,7 @@ mod tests {
             .unwrap();
 
         let mut reader = WalReader::open(&dir.path().join("wal")).unwrap();
-        let err = Aries::run_undo(
-            &mut reader,
+        let err = Undo::new(
             &wal,
             &store,
             analysis(vec![(t1, AttEntry {
@@ -848,6 +837,7 @@ mod tests {
                 undo_next_lsn: insert,
             })]),
         )
+        .run(&mut reader)
         .unwrap_err();
 
         assert!(
@@ -868,13 +858,10 @@ mod tests {
         let t1 = tid(1);
 
         let _begin = wal.log_begin(t1).unwrap();
-        let commit = wal.log_commit(t1).unwrap(); // Commit is unexpected in an undo chain
+        let commit = wal.log_commit(t1).unwrap();
 
-        // Manually craft an ATT entry whose undo_next_lsn points at the Commit.
-        // This simulates a corrupt ATT or an as-yet unimplemented abort path.
         let mut reader = WalReader::open(&dir.path().join("wal")).unwrap();
-        let err = Aries::run_undo(
-            &mut reader,
+        let err = Undo::new(
             &wal,
             &store,
             analysis(vec![(t1, AttEntry {
@@ -883,6 +870,7 @@ mod tests {
                 undo_next_lsn: commit,
             })]),
         )
+        .run(&mut reader)
         .unwrap_err();
 
         assert!(
@@ -891,14 +879,14 @@ mod tests {
         );
     }
 
-    /// If a page's file is not registered (catalog hasn't opened it yet),
-    /// `undo_data_record` must skip the page write, advance the loser's chain,
-    /// and eventually finalize the loser — returning `Ok(())`.
+    /// If a page's file is not registered, `undo_data_record` must skip the
+    /// page write, advance the loser's chain, and eventually finalize the
+    /// loser — returning `Ok(())`.
     #[test]
     fn test_run_undo_unregistered_file_skips_page_write_and_finalizes() {
-        let (wal, store, dir) = make_env(0); // FileId(1) has 0 pages; FileId(99) not registered
+        let (wal, store, dir) = make_env(0);
         let t1 = tid(1);
-        let unknown = pid(99, 0); // FileId(99) never registered
+        let unknown = pid(99, 0);
         let before = page_image(0xAA);
         let after = page_image(0xBB);
 
@@ -908,8 +896,7 @@ mod tests {
             .unwrap();
 
         let mut reader = WalReader::open(&dir.path().join("wal")).unwrap();
-        let result = Aries::run_undo(
-            &mut reader,
+        let result = Undo::new(
             &wal,
             &store,
             analysis(vec![(t1, AttEntry {
@@ -917,7 +904,8 @@ mod tests {
                 last_lsn: insert,
                 undo_next_lsn: insert,
             })]),
-        );
+        )
+        .run(&mut reader);
 
         assert!(
             result.is_ok(),
@@ -925,8 +913,6 @@ mod tests {
             result.err()
         );
 
-        // The loser must still have been finalized: a CLR (chain advanced) and
-        // an End record should have been appended.
         let mut reader2 = WalReader::open(&dir.path().join("wal")).unwrap();
         let types: Vec<_> = {
             let mut v = Vec::new();
