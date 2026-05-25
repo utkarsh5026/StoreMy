@@ -8,6 +8,7 @@ Older sections (before 2025-10-01) are the Go → Rust transition era.
 
 ### Bug Fixes
 
+- **recovery**: Fix ARIES idempotency — trim WAL torn tail before undo and remove bad loser filter
 - **catalog**: Remove auto-increment rows when column or table drops
 - **docs**: Qualify UniqueConstraint intra-doc link with full crate path
 - **docs**: Add missing imports and correct ColumnId constructor in Tuple::get_col doctest
@@ -253,6 +254,12 @@ Older sections (before 2025-10-01) are the Go → Rust transition era.
 
 ### Refactoring
 
+- **wal**: Extract wal test setup helpers
+- **codec**: Add little-endian read/write extension traits
+- **recovery**: Extract Redo and Undo pass executors
+- **recovery**: Tidy analysis process_record and att/dpt helpers
+- **recovery**: Extract Analysis struct for aries pass
+- **wal**: Stamp LogRecord timestamp inside new()
 - **catalog**: Use update_systable_row for systable mutations
 - **catalog**: Use update_systable_row for systable mutations
 - **storage**: Unify page envelope across all page types
@@ -340,6 +347,7 @@ Older sections (before 2025-10-01) are the Go → Rust transition era.
 
 ### Tests
 
+- **recovery**: Add property-based crash-kill proptests
 - **wal**: Cover fuzzy checkpoint record shape and snapshots
 - **insert**: Add integration tests for DEFAULT VALUES and partial INSERT
 - **auto_increment**: Add end-to-end integration tests for AUTO_INCREMENT lifecycle
