@@ -14,7 +14,7 @@ use crate::{
     },
     index::{AnyIndex, CompositeKey, IndexError, IndexKind},
     primitives::{ColumnId, NonEmptyString, RecordId},
-    transaction::Transaction,
+    transaction::ActiveTransaction,
     tuple::{Field, Tuple, TupleSchema},
 };
 
@@ -369,7 +369,10 @@ impl Catalog {
     ///
     /// Used by `SHOW INDEXES` (no `FROM` clause). Folds raw `IndexRow`
     /// records into the merged view per index.
-    pub fn list_indexes(&self, txn: &Transaction<'_>) -> Result<Vec<IndexInfo>, CatalogError> {
+    pub fn list_indexes(
+        &self,
+        txn: &ActiveTransaction<'_>,
+    ) -> Result<Vec<IndexInfo>, CatalogError> {
         let rows = self.scan_system_table::<IndexRow>(txn)?;
         if rows.is_empty() {
             return Ok(Vec::new());
@@ -384,7 +387,7 @@ impl Catalog {
     /// Counterpart of [`Self::list_indexes`] for `SHOW INDEXES FROM <table>`.
     pub fn list_indexes_for(
         &self,
-        txn: &Transaction<'_>,
+        txn: &ActiveTransaction<'_>,
         file_id: FileId,
     ) -> Result<Vec<IndexInfo>, CatalogError> {
         let rows = self.scan_system_table_where::<IndexRow, _>(txn, |r| r.table_id == file_id)?;
@@ -414,7 +417,7 @@ impl Catalog {
     /// - Propagates buffer-pool registration, index init, and system-table insert errors.
     pub fn create_index(
         &self,
-        txn: &Transaction<'_>,
+        txn: &ActiveTransaction<'_>,
         index_name: &str,
         table_name: &str,
         table_file_id: FileId,
@@ -568,7 +571,11 @@ impl Catalog {
     ///
     /// - [`CatalogError::IndexNameNotFound`] if no `IndexRow` matches `index_name`.
     /// - Propagates system-table delete and filesystem errors.
-    pub fn drop_index(&self, txn: &Transaction<'_>, index_name: &str) -> Result<(), CatalogError> {
+    pub fn drop_index(
+        &self,
+        txn: &ActiveTransaction<'_>,
+        index_name: &str,
+    ) -> Result<(), CatalogError> {
         tracing::debug!(index = %index_name, "dropping index");
 
         let index_file_id = self

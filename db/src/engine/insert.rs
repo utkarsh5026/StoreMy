@@ -32,7 +32,7 @@ use crate::{
     execution::{ColumnLookup, ResolvedExpr},
     parser::statements::{Expr, InsertSource, InsertStatement},
     primitives::{ColumnId, NonEmptyString},
-    transaction::Transaction,
+    transaction::ActiveTransaction,
     tuple::{Tuple, TupleSchema},
 };
 
@@ -58,7 +58,7 @@ impl Engine<'_> {
     /// - Constraint errors (FK, UNIQUE) propagated from [`Self::insert_rows_and_indexes`].
     pub(super) fn exec_insert(
         catalog: &Catalog,
-        txn: &Transaction<'_>,
+        txn: &ActiveTransaction<'_>,
         stmt: InsertStatement,
     ) -> Result<StatementResult, EngineError> {
         let table = catalog.get_table_info(txn, &stmt.table_name)?;
@@ -165,7 +165,7 @@ impl Engine<'_> {
     ///   or [`ConstraintViolation::UniqueViolation`] when a constraint is breached.
     pub(super) fn insert_rows_and_indexes(
         catalog: &Catalog,
-        txn: &Transaction<'_>,
+        txn: &ActiveTransaction<'_>,
         file_id: FileId,
         tuples: Vec<Tuple>,
     ) -> Result<usize, EngineError> {
@@ -300,7 +300,7 @@ impl Engine<'_> {
         ai_col: Option<ColumnId>,
         resolved_checks: &[(String, ResolvedExpr)],
         catalog: &Catalog,
-        txn: &Transaction<'_>,
+        txn: &ActiveTransaction<'_>,
         file_id: FileId,
     ) -> Result<StatementResult, EngineError> {
         for field in schema.logical_iter() {
@@ -465,7 +465,7 @@ impl Engine<'_> {
     fn collect_unique_index_checks(
         indexes: &[Arc<LiveIndex>],
         catalog: &Catalog,
-        txn: &Transaction<'_>,
+        txn: &ActiveTransaction<'_>,
         file_id: FileId,
     ) -> Result<Vec<(String, Arc<LiveIndex>)>, EngineError> {
         if indexes.is_empty() {

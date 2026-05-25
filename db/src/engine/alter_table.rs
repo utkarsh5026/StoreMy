@@ -4,7 +4,7 @@ use crate::{
     engine::{Engine, EngineError, StatementResult},
     index::IndexKind,
     parser::statements::{AlterAction, AlterTableStatement, TableConstraint},
-    transaction::Transaction,
+    transaction::ActiveTransaction,
     tuple::TupleSchema,
 };
 
@@ -47,7 +47,7 @@ impl Engine<'_> {
     /// Returns [`EngineError::Catalog`] on catalog write failures.
     #[allow(clippy::too_many_lines)]
     pub(super) fn exec_alter_table(
-        txn: &Transaction<'_>,
+        txn: &ActiveTransaction<'_>,
         catalog: &Catalog,
         stmt: AlterTableStatement,
     ) -> Result<StatementResult, EngineError> {
@@ -360,7 +360,7 @@ impl Engine<'_> {
     /// - Other [`CatalogError`] variants from heap or index access during the scan.
     fn populate_index_from_heap(
         catalog: &Catalog,
-        txn: &Transaction<'_>,
+        txn: &ActiveTransaction<'_>,
         table_file_id: FileId,
         index_name: &str,
     ) -> Result<(), CatalogError> {

@@ -23,6 +23,7 @@
 
 use std::{
     fmt,
+    marker::PhantomData,
     sync::{
         Arc,
         atomic::{AtomicU64, Ordering},
@@ -52,6 +53,10 @@ pub enum TransactionError {
     #[error("transaction {0} already committed or aborted")]
     AlreadyFinished(TransactionId),
 }
+
+pub struct Active;
+pub struct Committed;
+pub struct Aborted;
 
 /// Central coordinator for starting and finishing transactions.
 ///
@@ -87,7 +92,7 @@ impl TransactionManager {
     /// # Errors
     ///
     /// Returns [`TransactionError::Wal`] if the BEGIN record cannot be written.
-    pub fn begin(&self) -> Result<Transaction<'_>, TransactionError> {
+    pub fn begin(&self) -> Result<ActiveTransaction<'_>, TransactionError> {
         let id = self.next_txn_id.fetch_add(1, Ordering::AcqRel);
         let txn_id = TransactionId::new(id);
         self.wal.log_begin(txn_id)?;
@@ -146,24 +151,30 @@ impl fmt::Display for TransactionState {
 ///
 /// Dropping a `Transaction` while it is still [`TransactionState::Active`]
 /// automatically triggers an abort so that no locks are left dangling.
-pub struct Transaction<'a> {
-    state: TransactionState,
+pub struct Transaction<'a, S> {
+    _state: PhantomData<S>,
     manager: &'a TransactionManager,
     id: TransactionId,
     start_time: time::Instant,
+    needs_abort: bool,
 }
 
-impl<'a> Transaction<'a> {
+pub type ActiveTransaction<'a> = Transaction<'a, Active>;
+pub type CommittedTransaction<'a> = Transaction<'a, Committed>;
+pub type AbortedTransaction<'a> = Transaction<'a, Aborted>;
+
+impl<'a> Transaction<'a, Active> {
     /// Creates a new `Transaction` in the [`TransactionState::Active`] state.
     ///
     /// Callers should prefer [`TransactionManager::begin`], which allocates the
     /// ID and writes the WAL record before constructing the handle.
     pub fn new(manager: &'a TransactionManager, id: TransactionId) -> Self {
         Self {
-            state: TransactionState::Active,
+            _state: PhantomData,
             manager,
             id,
             start_time: time::Instant::now(),
+            needs_abort: true,
         }
     }
 
@@ -178,8 +189,9 @@ impl<'a> Transaction<'a> {
     /// Returns [`TransactionError::Wal`] if the COMMIT record cannot be written.
     /// In that case the transaction is effectively lost and the caller should
     /// treat the operation as failed.
-    pub fn commit(self) -> Result<CompletedTransaction, TransactionError> {
+    pub fn commit(mut self) -> Result<CompletedTransaction, TransactionError> {
         self.manager.commit(self.id)?;
+        self.needs_abort = false;
         Ok(CompletedTransaction {
             id: self.id,
             state: TransactionState::Committed,
@@ -216,14 +228,14 @@ impl<'a> Transaction<'a> {
     }
 }
 
-impl Drop for Transaction<'_> {
+impl<S> Drop for Transaction<'_, S> {
     /// Aborts the transaction if it is still active when dropped.
     ///
     /// This is a safety net for early returns and panics; prefer calling
     /// [`Transaction::abort`] explicitly so that WAL errors are not silently
     /// swallowed.
     fn drop(&mut self) {
-        if self.state == TransactionState::Active {
+        if self.needs_abort {
             let _ = self.manager.abort(self.id);
         }
     }

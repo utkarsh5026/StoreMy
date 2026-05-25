@@ -28,7 +28,7 @@ use crate::{
     },
     heap::file::HeapFile,
     primitives::{IndexId, NonEmptyString},
-    transaction::Transaction,
+    transaction::ActiveTransaction,
     tuple::{Tuple, TupleSchema},
     wal::writer::Wal,
 };
@@ -83,7 +83,7 @@ impl SystemHeaps {
 ///
 /// `Catalog` is `Send + Sync` — all mutable state is guarded by [`RwLock`] or
 /// [`AtomicU64`]. Callers hold a shared `&Catalog` reference and pass a
-/// [`Transaction`] into each write operation so that changes are durable and
+/// [`crate::transaction::Transaction`] into each write operation so that changes are durable and
 /// recoverable via the WAL.
 pub struct Catalog {
     pub(super) wal: Arc<Wal>,
@@ -328,7 +328,7 @@ impl Catalog {
     /// `T::try_from`.
     pub(super) fn scan_system_table<T: CatalogRow>(
         &self,
-        txn: &Transaction<'_>,
+        txn: &ActiveTransaction<'_>,
     ) -> Result<Vec<T>, CatalogError> {
         self.scan_system_table_with_tid(txn.transaction_id())
     }
@@ -361,7 +361,7 @@ impl Catalog {
     /// `T::try_from`.
     pub(super) fn scan_system_table_where<T, F>(
         &self,
-        txn: &Transaction<'_>,
+        txn: &ActiveTransaction<'_>,
         keep: F,
     ) -> Result<Vec<T>, CatalogError>
     where
@@ -395,7 +395,7 @@ impl Catalog {
     /// open. Propagates heap insertion errors as [`CatalogError`].
     pub(super) fn insert_systable_tuple<T>(
         &self,
-        txn: &Transaction<'_>,
+        txn: &ActiveTransaction<'_>,
         row: &T,
     ) -> Result<(), CatalogError>
     where
@@ -418,7 +418,7 @@ impl Catalog {
     /// transaction aborts.
     pub(super) fn delete_systable_rows<T, F>(
         &self,
-        txn: &Transaction<'_>,
+        txn: &ActiveTransaction<'_>,
         predicate: F,
     ) -> Result<(), CatalogError>
     where
@@ -448,7 +448,7 @@ impl Catalog {
     /// Propagates heap scan and write errors.
     pub(super) fn update_systable_row<T, P, F>(
         &self,
-        txn: &Transaction<'_>,
+        txn: &ActiveTransaction<'_>,
         predicate: P,
         mutate: F,
     ) -> Result<(), CatalogError>
@@ -480,7 +480,7 @@ impl Catalog {
     /// cleaning up multiple system tables in one step.
     pub(super) fn delete_rows_by_table_id(
         &self,
-        txn: &Transaction<'_>,
+        txn: &ActiveTransaction<'_>,
         table: SystemTable,
         target_id: FileId,
     ) -> Result<(), CatalogError> {

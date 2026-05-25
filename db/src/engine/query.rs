@@ -62,7 +62,7 @@ use crate::{
         SelectItem, SelectStatement, Statement, TableRef, TableWithJoins,
     },
     primitives::{ColumnId, NonEmptyString, Predicate},
-    transaction::Transaction,
+    transaction::ActiveTransaction,
     tuple::TupleSchema,
 };
 
@@ -258,7 +258,7 @@ impl BoundSelect {
     pub fn bind(
         stmt: SelectStatement,
         catalog: &Catalog,
-        txn: &Transaction<'_>,
+        txn: &ActiveTransaction<'_>,
     ) -> Result<Self, EngineError> {
         if stmt.from.is_empty() {
             return Err(EngineError::Unsupported("no FROM clause".to_string()));
@@ -330,7 +330,7 @@ impl BoundSelect {
     fn resolve_from(
         from: TableWithJoins,
         catalog: &Catalog,
-        txn: &Transaction<'_>,
+        txn: &ActiveTransaction<'_>,
     ) -> Result<(BoundFrom, Scope), EngineError> {
         let TableWithJoins { table, joins } = from;
 

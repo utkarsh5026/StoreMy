@@ -2,7 +2,7 @@ use crate::{
     catalog::manager::Catalog,
     engine::{Engine, EngineError, StatementResult},
     parser::statements::DropIndexStatement,
-    transaction::Transaction,
+    transaction::ActiveTransaction,
 };
 
 impl Engine<'_> {
@@ -33,7 +33,7 @@ impl Engine<'_> {
     /// Returns [`EngineError::Catalog`] when the catalog cannot remove the
     /// index metadata.
     pub(super) fn exec_drop_index(
-        txn: &Transaction<'_>,
+        txn: &ActiveTransaction<'_>,
         catalog: &Catalog,
         stmt: DropIndexStatement,
     ) -> Result<StatementResult, EngineError> {

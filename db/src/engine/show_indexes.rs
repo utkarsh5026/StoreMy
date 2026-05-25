@@ -2,7 +2,7 @@ use crate::{
     catalog::manager::Catalog,
     engine::{Engine, EngineError, ShownIndex, StatementResult},
     parser::statements::ShowIndexesStatement,
-    transaction::Transaction,
+    transaction::ActiveTransaction,
 };
 
 impl Engine<'_> {
@@ -39,7 +39,7 @@ impl Engine<'_> {
     /// Returns [`EngineError::Catalog`] when the catalog cannot list index
     /// metadata.
     pub(super) fn exec_show_indexes(
-        txn: &Transaction<'_>,
+        txn: &ActiveTransaction<'_>,
         catalog: &Catalog,
         stmt: ShowIndexesStatement,
     ) -> Result<StatementResult, EngineError> {

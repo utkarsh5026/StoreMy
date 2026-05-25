@@ -21,7 +21,7 @@ use crate::{
     },
     heap::file::HeapFile,
     primitives::{ColumnId, NonEmptyString},
-    transaction::Transaction,
+    transaction::ActiveTransaction,
     tuple::TupleSchema,
 };
 
@@ -50,7 +50,7 @@ impl Catalog {
     /// the system table scan.
     pub fn get_table_info(
         &self,
-        txn: &Transaction<'_>,
+        txn: &ActiveTransaction<'_>,
         name: &str,
     ) -> Result<TableInfo, CatalogError> {
         if let Some(info) = self.user_tables.read().get(name).cloned() {
@@ -77,7 +77,7 @@ impl Catalog {
     /// heap-open errors from the slow path.
     pub fn get_table_info_by_id(
         &self,
-        txn: &Transaction<'_>,
+        txn: &ActiveTransaction<'_>,
         file_id: FileId,
     ) -> Result<TableInfo, CatalogError> {
         if let Some(info) = self
@@ -141,7 +141,7 @@ impl Catalog {
     ///
     /// The returned vector is sorted by table name for stable, user-friendly
     /// listings — `\dt` and similar tools rely on a deterministic order.
-    pub fn list_tables(&self, txn: &Transaction<'_>) -> Result<Vec<TableInfo>, CatalogError> {
+    pub fn list_tables(&self, txn: &ActiveTransaction<'_>) -> Result<Vec<TableInfo>, CatalogError> {
         let rows = self.scan_system_table::<TableRow>(txn)?;
         let mut out = Vec::with_capacity(rows.len());
         for row in rows {
@@ -184,7 +184,7 @@ impl Catalog {
     /// - Propagates heap creation and system table insertion errors.
     pub fn create_table(
         &self,
-        txn: &Transaction<'_>,
+        txn: &ActiveTransaction<'_>,
         name: &str,
         schema: TupleSchema,
         constraints: Vec<ConstraintDef>,
@@ -269,7 +269,7 @@ impl Catalog {
     /// errors from [`Self::insert_systable_tuple`].
     fn insert_primary_key_columns(
         &self,
-        txn: &Transaction<'_>,
+        txn: &ActiveTransaction<'_>,
         file_id: FileId,
         schema: &TupleSchema,
         pk_cols: &[ColumnId],
@@ -305,7 +305,7 @@ impl Catalog {
     /// - Propagates system-table write errors.
     pub fn set_primary_key(
         &self,
-        txn: &Transaction<'_>,
+        txn: &ActiveTransaction<'_>,
         table_id: FileId,
         column_ids: Vec<ColumnId>,
     ) -> Result<(), CatalogError> {
@@ -331,7 +331,7 @@ impl Catalog {
     /// - Propagates system-table write errors.
     pub fn drop_primary_key(
         &self,
-        txn: &Transaction<'_>,
+        txn: &ActiveTransaction<'_>,
         table_id: FileId,
     ) -> Result<(), CatalogError> {
         let mut table = self.get_table_info_by_id(txn, table_id)?;
@@ -358,7 +358,7 @@ impl Catalog {
     /// open errors.
     fn load_table_from_disk(
         &self,
-        txn: &Transaction<'_>,
+        txn: &ActiveTransaction<'_>,
         name: &str,
     ) -> Result<TableInfo, CatalogError> {
         let table = self
@@ -537,7 +537,7 @@ impl Catalog {
     /// Propagates system-table write errors and cache-reload errors.
     pub fn register_auto_increment(
         &self,
-        txn: &Transaction<'_>,
+        txn: &ActiveTransaction<'_>,
         file_id: FileId,
         col_id: ColumnId,
     ) -> Result<(), CatalogError> {
@@ -569,7 +569,7 @@ impl Catalog {
     /// - Propagates system-table read/write errors.
     pub fn allocate_auto_increment(
         &self,
-        txn: &Transaction<'_>,
+        txn: &ActiveTransaction<'_>,
         file_id: FileId,
         count: usize,
     ) -> Result<u64, CatalogError> {
@@ -606,7 +606,7 @@ impl Catalog {
     /// Returns [`CatalogError::TableNotFound`] if the table does not exist.
     /// Returns [`CatalogError::Io`] if the backing file cannot be removed.
     /// Propagates system table deletion errors.
-    pub fn drop_table(&self, txn: &Transaction<'_>, name: &str) -> Result<(), CatalogError> {
+    pub fn drop_table(&self, txn: &ActiveTransaction<'_>, name: &str) -> Result<(), CatalogError> {
         tracing::debug!(table = %name, "dropping table");
 
         let TableInfo {
@@ -671,7 +671,7 @@ impl Catalog {
     /// - Returns [`CatalogError::TableNotFound`] if `old_name` does not exist.
     pub fn rename_table(
         &self,
-        txn: &Transaction<'_>,
+        txn: &ActiveTransaction<'_>,
         old_name: &str,
         new_name: &str,
     ) -> Result<(), CatalogError> {
