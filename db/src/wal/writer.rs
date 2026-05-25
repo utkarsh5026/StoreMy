@@ -34,7 +34,7 @@ use crate::{
     storage::open_persistent_file,
     wal::{
         WalError,
-        log::{LogRecord, LogRecordBody},
+        log::{LogRecord, LogRecordBody, TxnStatus},
     },
 };
 
@@ -524,6 +524,88 @@ impl Wal {
             state.buf_offset = remaining;
             self.flush_cond.notify_all();
         }
+    }
+
+    /// Performs a fuzzy checkpoint and returns the LSN of the `CheckpointEnd` record.
+    ///
+    /// A fuzzy checkpoint does **not** pause transactions or flush dirty pages.
+    /// Instead it snapshots the current ATT and DPT in memory, writes that snapshot
+    /// to the log, and forces both records to disk.  The database continues accepting
+    /// writes throughout.
+    ///
+    /// # What gets written
+    ///
+    /// Two records are appended:
+    ///
+    /// 1. `CheckpointBegin` — marks the start of the snapshot window.
+    /// 2. `CheckpointEnd`   — carries the ATT and DPT snapshots.  Its `prev_lsn` points at the
+    ///    `CheckpointBegin` so that Analysis can find the start of the window and replay any
+    ///    records written between the two markers.
+    ///
+    /// # Snapshot semantics
+    ///
+    /// The ATT and DPT are snapped **under the same lock hold** as the
+    /// `CheckpointBegin` write, giving a view consistent with that exact moment.
+    /// All active transactions are recorded as [`TxnStatus::Running`]; if any of
+    /// them had already called [`Wal::log_abort`] the forward scan that Analysis
+    /// performs from `CheckpointBegin` will encounter their `Abort` records and
+    /// correct the status.
+    ///
+    /// # Caller responsibility
+    ///
+    /// This method only writes and flushes the WAL records.  The returned
+    /// `end_lsn` must be persisted to the master record file (via
+    /// `Aries::take_checkpoint`) so that the next startup knows where to begin
+    /// the Analysis scan.  If the process crashes before the master record is
+    /// updated, the checkpoint is silently ignored on recovery and Analysis falls
+    /// back to the previous checkpoint (or LSN 0).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`WalError::Io`] or [`WalError::Codec`] if writing or flushing
+    /// either record fails.
+    pub fn checkpoint(&self) -> Result<Lsn, WalError> {
+        let (begin_lsn, att_snapshot, dpt_snapshot) = {
+            let mut state = self.state.lock();
+            let begin_lsn = Self::write_record(
+                &self.file,
+                &mut state,
+                TransactionId::INVALID,
+                Lsn::INVALID,
+                LogRecordBody::CheckpointBegin,
+            )?;
+
+            let att_snapshot = state
+                .active_txns
+                .iter()
+                .map(|(tid, info)| (*tid, info.last, TxnStatus::Running))
+                .collect::<Vec<_>>();
+
+            let dpt_snapshot = state
+                .dirty_pages
+                .iter()
+                .map(|(page_id, lsn)| (*page_id, *lsn))
+                .collect::<Vec<_>>();
+
+            (begin_lsn, att_snapshot, dpt_snapshot)
+        };
+
+        let end_lsn = {
+            let mut state = self.state.lock();
+            Self::write_record(
+                &self.file,
+                &mut state,
+                TransactionId::INVALID,
+                begin_lsn,
+                LogRecordBody::CheckpointEnd {
+                    att_snapshot,
+                    dpt_snapshot,
+                },
+            )?
+        };
+
+        self.force(end_lsn)?;
+        Ok(end_lsn)
     }
 }
 
