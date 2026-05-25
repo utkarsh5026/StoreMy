@@ -160,8 +160,32 @@ pub struct Transaction<S> {
 }
 
 pub type ActiveTransaction = Transaction<Active>;
-pub type CommittedTransaction = Transaction<Committed>;
-pub type AbortedTransaction = Transaction<Aborted>;
+
+/// Whether the session is in autocommit mode or inside an explicit transaction.
+pub enum TxnContext {
+    /// Every statement gets its own auto-committed transaction.
+    Autocommit,
+
+    /// User issued BEGIN; an explicit transaction is open.
+    Explicit(ActiveTransaction),
+
+    /// A statement inside the explicit transaction failed.
+    /// Only ROLLBACK is accepted until the user cleans up.
+    Aborted(ActiveTransaction),
+}
+
+/// Per-connection session state, including transaction mode.
+pub struct Session {
+    pub ctx: TxnContext,
+}
+
+impl Default for Session {
+    fn default() -> Self {
+        Self {
+            ctx: TxnContext::Autocommit,
+        }
+    }
+}
 
 impl Transaction<Active> {
     /// Creates a new `Transaction` in the [`TransactionState::Active`] state.
