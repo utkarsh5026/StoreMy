@@ -2,7 +2,7 @@ use crate::{
     catalog::{TableInfo, manager::Catalog},
     engine::{Engine, EngineError, StatementResult},
     parser::statements::DropStatement,
-    transaction::Transaction,
+    transaction::ActiveTransaction,
 };
 
 impl Engine<'_> {
@@ -30,7 +30,7 @@ impl Engine<'_> {
     /// Returns [`EngineError::Catalog`] when the catalog cannot remove the table
     /// metadata or associated storage.
     pub(super) fn exec_drop_table(
-        txn: &Transaction<'_>,
+        txn: &ActiveTransaction<'_>,
         catalog: &Catalog,
         statement: DropStatement,
     ) -> Result<StatementResult, EngineError> {

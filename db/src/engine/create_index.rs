@@ -2,7 +2,7 @@ use crate::{
     catalog::manager::Catalog,
     engine::{Engine, EngineError, StatementResult},
     parser::statements::CreateIndexStatement,
-    transaction::Transaction,
+    transaction::ActiveTransaction,
 };
 
 impl Engine<'_> {
@@ -43,7 +43,7 @@ impl Engine<'_> {
     /// Returns [`EngineError::Catalog`] when the catalog cannot persist the index
     /// metadata.
     pub(super) fn exec_create_index(
-        txn: &Transaction<'_>,
+        txn: &ActiveTransaction<'_>,
         catalog: &Catalog,
         stmt: CreateIndexStatement,
     ) -> Result<StatementResult, EngineError> {

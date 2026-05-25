@@ -47,7 +47,7 @@ use crate::{
     index::CompositeKey,
     parser::statements::BinOp,
     primitives::{ColumnId, RecordId},
-    transaction::Transaction,
+    transaction::ActiveTransaction,
     tuple::Tuple,
 };
 
@@ -165,7 +165,7 @@ impl Engine<'_> {
     /// [`Catalog::get_table_info_by_id`] and [`Catalog::get_table_heap`].
     pub(super) fn prepare_outbound_ref_checks(
         catalog: &Catalog,
-        txn: &Transaction<'_>,
+        txn: &ActiveTransaction<'_>,
         file_id: FileId,
     ) -> Result<Vec<ParentFkCheck>, EngineError> {
         let info = catalog.get_table_info_by_id(txn, file_id)?;
@@ -298,7 +298,7 @@ impl Engine<'_> {
     /// [`Catalog::get_table_heap`].
     pub(super) fn prepare_inbound_ref_checks(
         catalog: &Catalog,
-        txn: &Transaction<'_>,
+        txn: &ActiveTransaction<'_>,
         file_id: FileId,
     ) -> Result<Vec<InboundParentFkCheck>, EngineError> {
         let referencing = catalog.find_referencing_fks(txn, file_id)?;
@@ -434,7 +434,7 @@ impl Engine<'_> {
     ///   [`Self::nullify_fk_columns`].
     pub(super) fn enforce_referential_actions_on_delete(
         catalog: &Catalog,
-        txn: &Transaction<'_>,
+        txn: &ActiveTransaction<'_>,
         inbound_checks: &[InboundParentFkCheck],
         parent_row: &Tuple,
         tid: TransactionId,

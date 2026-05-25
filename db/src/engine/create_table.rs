@@ -4,7 +4,7 @@ use crate::{
     index::IndexKind,
     parser::statements::{ColumnDef, CreateTableStatement, Uniqueness},
     primitives::{ColumnId, NonEmptyString},
-    transaction::Transaction,
+    transaction::ActiveTransaction,
     tuple::TupleSchema,
 };
 
@@ -53,7 +53,7 @@ impl Engine<'_> {
     /// or heap file fails.
     pub(super) fn exec_create_table(
         stmt: CreateTableStatement,
-        txn: &Transaction<'_>,
+        txn: &ActiveTransaction<'_>,
         catalog: &Catalog,
     ) -> Result<StatementResult, EngineError> {
         if catalog.table_exists(&stmt.table_name) {
@@ -181,7 +181,7 @@ impl Engine<'_> {
     ///   read table metadata (should be rare right after [`Catalog::table_exists`] reported true).
     fn handle_table_already_exists(
         statement: CreateTableStatement,
-        txn: &Transaction<'_>,
+        txn: &ActiveTransaction<'_>,
         catalog: &Catalog,
     ) -> Result<StatementResult, EngineError> {
         let table_name = statement.table_name.into_inner();
@@ -265,7 +265,7 @@ impl Engine<'_> {
         schema: &TupleSchema,
         table_name: &str,
         catalog: &Catalog,
-        txn: &Transaction<'_>,
+        txn: &ActiveTransaction<'_>,
         defs: &mut Vec<ConstraintDef>,
     ) -> Result<(), EngineError> {
         for col in columns {

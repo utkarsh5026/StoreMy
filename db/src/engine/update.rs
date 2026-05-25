@@ -56,7 +56,7 @@ use crate::{
     execution::ResolvedExpr,
     parser::statements::{Assignment, UpdateStatement},
     primitives::ColumnId,
-    transaction::Transaction,
+    transaction::ActiveTransaction,
     tuple::{Tuple, TupleSchema},
 };
 
@@ -87,7 +87,7 @@ impl Engine<'_> {
     /// Propagates catalog and I/O errors from lower layers.
     pub(super) fn exec_update(
         catalog: &Catalog,
-        txn: &Transaction<'_>,
+        txn: &ActiveTransaction<'_>,
         stmt: UpdateStatement,
     ) -> Result<StatementResult, EngineError> {
         let UpdateStatement {
@@ -302,7 +302,7 @@ impl Engine<'_> {
     /// Filtering here avoids spurious catalog/heap work in the per-row loop.
     fn prepare_fk_checks_for_update(
         catalog: &Catalog,
-        txn: &Transaction<'_>,
+        txn: &ActiveTransaction<'_>,
         file_id: FileId,
         assignment_cols: &HashSet<ColumnId>,
     ) -> Result<(Vec<ParentFkCheck>, Vec<InboundParentFkCheck>), EngineError> {
@@ -348,7 +348,7 @@ impl Engine<'_> {
     /// human-readable constraint name in the error message.
     fn build_unique_check_map(
         catalog: &Catalog,
-        txn: &Transaction<'_>,
+        txn: &ActiveTransaction<'_>,
         file_id: FileId,
     ) -> Result<HashMap<IndexId, String>, EngineError> {
         let table = catalog.get_table_info_by_id(txn, file_id)?;

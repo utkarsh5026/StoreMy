@@ -1,7 +1,7 @@
 use crate::{
     catalog::manager::Catalog,
     parser::statements::Statement,
-    transaction::{Transaction, TransactionManager},
+    transaction::{ActiveTransaction, TransactionManager},
 };
 
 mod error;
@@ -80,7 +80,7 @@ impl<'a> Engine<'a> {
 
     pub(super) fn with_txn<F>(&self, run: F) -> Result<StatementResult, EngineError>
     where
-        F: FnOnce(&Transaction<'_>) -> Result<StatementResult, EngineError>,
+        F: FnOnce(&ActiveTransaction<'_>) -> Result<StatementResult, EngineError>,
     {
         let txn = self.txn_manager.begin()?;
         let result = run(&txn)?;

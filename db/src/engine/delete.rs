@@ -26,7 +26,7 @@ use crate::{
     engine::{Engine, EngineError, StatementResult, scope::SingleTableScope},
     execution::ResolvedExpr,
     parser::statements::DeleteStatement,
-    transaction::Transaction,
+    transaction::ActiveTransaction,
 };
 
 impl Engine<'_> {
@@ -40,7 +40,7 @@ impl Engine<'_> {
     /// - Constraint and storage errors propagated from [`Self::delete_rows_and_indexes`].
     pub(super) fn exec_delete(
         catalog: &Catalog,
-        txn: &Transaction<'_>,
+        txn: &ActiveTransaction<'_>,
         stmt: DeleteStatement,
     ) -> Result<StatementResult, EngineError> {
         let DeleteStatement {
@@ -96,7 +96,7 @@ impl Engine<'_> {
     ///   when a child table uses `RESTRICT` and a matching child row exists.
     pub(super) fn delete_rows_and_indexes(
         catalog: &Catalog,
-        txn: &Transaction<'_>,
+        txn: &ActiveTransaction<'_>,
         file_id: FileId,
         predicate: Option<&ResolvedExpr>,
     ) -> Result<usize, EngineError> {
