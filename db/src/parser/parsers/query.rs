@@ -461,6 +461,13 @@ mod tests {
             Statement::CreateIndex(_) => panic!("expected Statement::Select, got CreateIndex"),
             Statement::CreateTable(_) => panic!("expected Statement::Select, got CreateTable"),
             Statement::AlterTable(_) => panic!("expected Statement::Select, got AlterTable"),
+            Statement::Begin(_) => panic!("expected Statement::Select, got Begin"),
+            Statement::Commit(_) => panic!("expected Statement::Select, got Commit"),
+            Statement::Rollback(_) => panic!("expected Statement::Select, got Rollback"),
+            Statement::Savepoint(_) => panic!("expected Statement::Select, got Savepoint"),
+            Statement::ReleaseSavepoint(_) => {
+                panic!("expected Statement::Select, got ReleaseSavepoint")
+            }
         }
     }
 
