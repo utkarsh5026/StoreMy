@@ -25,7 +25,7 @@ use crate::{
     primitives::{Lsn, PageId, TransactionId},
     wal::{
         WalError,
-        log::{LogRecord, LogRecordBody, TxnStatus},
+        log::{LogRecord, LogRecordBody, LogRecordHeader, TxnStatus},
         reader::WalReader,
     },
 };
@@ -89,9 +89,9 @@ impl Analysis {
         let mut records_scanned = 0usize;
 
         reader.seek_to(scan_from_lsn).map_err(AnalysisError::Wal)?;
-        while let Some(LogRecord { header, body }) = reader.next().map_err(AnalysisError::Wal)? {
+        while let Some(record) = reader.next().map_err(AnalysisError::Wal)? {
             records_scanned += 1;
-            self.process_record(header.lsn, header.tid, header.prev_lsn, &body);
+            self.process_record(record);
         }
         let redo_lsn = AnalysisResult::compute_redo_lsn(&self.dirty_pages);
         tracing::debug!(
@@ -157,6 +157,40 @@ impl Analysis {
         Ok(checkpoint_end.header.prev_lsn)
     }
 
+    /// Ensures there is an entry for the given transaction (`tid`) in the
+    /// Active Transaction Table (ATT). If the entry does not exist, it is
+    /// created with a running status and the given `lsn` set as its LSN fields.
+    ///
+    /// Returns a mutable reference to the corresponding `AttEntry`, allowing
+    /// the caller to update the transaction's analysis state.
+    ///
+    /// # Arguments
+    ///
+    /// * `tid` - The transaction ID to ensure in the ATT.
+    /// * `lsn` - The log sequence number associated with this operation.
+    fn ensure_att_entry(&mut self, tid: TransactionId, lsn: Lsn) -> &mut AttEntry {
+        self.active_transactions
+            .entry(tid)
+            .or_insert_with(|| AttEntry::new_running(lsn))
+    }
+
+    /// Ensures there is an entry for the given page in the Dirty Page Table (DPT).
+    ///
+    /// If the page is not yet tracked, inserts a row with `rec_lsn` — the earliest
+    /// LSN that dirtied this page during the scan. If the page is already present,
+    /// the existing `rec_lsn` is left unchanged (later records may advance the
+    /// txn's ATT pointers but never move `rec_lsn` forward).
+    ///
+    /// # Arguments
+    ///
+    /// * `page_id` - The page to ensure in the DPT.
+    /// * `rec_lsn` - The LSN to record when the page is first seen as dirty.
+    fn ensure_dpt_entry(&mut self, page_id: PageId, rec_lsn: Lsn) -> &mut DptEntry {
+        self.dirty_pages
+            .entry(page_id)
+            .or_insert_with(|| DptEntry { rec_lsn })
+    }
+
     /// Updates the ATT and DPT for one log record.
     ///
     /// Each [`LogRecordBody`] variant has a fixed effect: `Begin` adds a running
@@ -164,20 +198,20 @@ impl Analysis {
     /// CLRs advance LSN pointers and mark pages dirty, and checkpoint markers are
     /// no-ops during the forward scan (snapshots are handled in
     /// [`load_checkpoint_snapshot`]).
-    fn process_record(
-        &mut self,
-        lsn: Lsn,
-        tid: TransactionId,
-        prev_lsn: Lsn,
-        body: &LogRecordBody,
-    ) {
+    fn process_record(&mut self, record: LogRecord) {
+        let LogRecord {
+            header: LogRecordHeader {
+                lsn, tid, prev_lsn, ..
+            },
+            body,
+        } = record;
+
         match body {
             // A new transaction started: we add it to the ATT as Running.
             // Both LSN fields start at the Begin record — that's where Undo would
             // begin walking backward if this txn turns out to be a loser.
             LogRecordBody::Begin => {
-                self.active_transactions
-                    .insert(tid, AttEntry::new_running(lsn));
+                self.ensure_att_entry(tid, lsn);
             }
 
             // Commit: winner — durable on the log, nothing to undo.
@@ -191,10 +225,7 @@ impl Analysis {
             // Mark it Aborting and record the current position so Undo knows where
             // to start.
             LogRecordBody::Abort => {
-                let entry = self
-                    .active_transactions
-                    .entry(tid)
-                    .or_insert_with(|| AttEntry::new_running(lsn));
+                let entry = self.ensure_att_entry(tid, lsn);
                 entry.status = TxnStatus::Aborting;
                 entry.update_lsn(lsn, prev_lsn);
             }
@@ -204,15 +235,8 @@ impl Analysis {
             LogRecordBody::Update { page_id, .. }
             | LogRecordBody::Insert { page_id, .. }
             | LogRecordBody::Delete { page_id, .. } => {
-                let entry = self
-                    .active_transactions
-                    .entry(tid)
-                    .or_insert_with(|| AttEntry::new_running(lsn));
-                entry.update_lsn(lsn, lsn);
-
-                self.dirty_pages
-                    .entry(*page_id)
-                    .or_insert(DptEntry { rec_lsn: lsn });
+                self.ensure_att_entry(tid, lsn).update_lsn(lsn, lsn);
+                self.ensure_dpt_entry(page_id, lsn);
             }
 
             // A CLR was written by a previous (crashed) Undo pass.
@@ -225,15 +249,9 @@ impl Analysis {
                 undo_next_lsn: clr_undo_next,
                 ..
             } => {
-                let entry = self
-                    .active_transactions
-                    .entry(tid)
-                    .or_insert_with(|| AttEntry::new_running(lsn));
-                entry.update_lsn(lsn, *clr_undo_next);
-
-                self.dirty_pages
-                    .entry(*page_id)
-                    .or_insert(DptEntry { rec_lsn: lsn });
+                self.ensure_att_entry(tid, lsn)
+                    .update_lsn(lsn, clr_undo_next);
+                self.ensure_dpt_entry(page_id, lsn);
             }
 
             // Checkpoint markers: already accounted for via the master record and
