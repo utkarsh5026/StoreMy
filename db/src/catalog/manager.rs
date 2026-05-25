@@ -328,7 +328,7 @@ impl Catalog {
     /// `T::try_from`.
     pub(super) fn scan_system_table<T: CatalogRow>(
         &self,
-        txn: &ActiveTransaction<'_>,
+        txn: &ActiveTransaction,
     ) -> Result<Vec<T>, CatalogError> {
         self.scan_system_table_with_tid(txn.transaction_id())
     }
@@ -361,7 +361,7 @@ impl Catalog {
     /// `T::try_from`.
     pub(super) fn scan_system_table_where<T, F>(
         &self,
-        txn: &ActiveTransaction<'_>,
+        txn: &ActiveTransaction,
         keep: F,
     ) -> Result<Vec<T>, CatalogError>
     where
@@ -395,7 +395,7 @@ impl Catalog {
     /// open. Propagates heap insertion errors as [`CatalogError`].
     pub(super) fn insert_systable_tuple<T>(
         &self,
-        txn: &ActiveTransaction<'_>,
+        txn: &ActiveTransaction,
         row: &T,
     ) -> Result<(), CatalogError>
     where
@@ -418,7 +418,7 @@ impl Catalog {
     /// transaction aborts.
     pub(super) fn delete_systable_rows<T, F>(
         &self,
-        txn: &ActiveTransaction<'_>,
+        txn: &ActiveTransaction,
         predicate: F,
     ) -> Result<(), CatalogError>
     where
@@ -448,7 +448,7 @@ impl Catalog {
     /// Propagates heap scan and write errors.
     pub(super) fn update_systable_row<T, P, F>(
         &self,
-        txn: &ActiveTransaction<'_>,
+        txn: &ActiveTransaction,
         predicate: P,
         mutate: F,
     ) -> Result<(), CatalogError>
@@ -480,7 +480,7 @@ impl Catalog {
     /// cleaning up multiple system tables in one step.
     pub(super) fn delete_rows_by_table_id(
         &self,
-        txn: &ActiveTransaction<'_>,
+        txn: &ActiveTransaction,
         table: SystemTable,
         target_id: FileId,
     ) -> Result<(), CatalogError> {
@@ -751,10 +751,10 @@ mod tests {
         assert!(heap.is_ok());
     }
 
-    fn make_catalog_and_txn_mgr(dir: &Path) -> (Catalog, TransactionManager) {
+    fn make_catalog_and_txn_mgr(dir: &Path) -> (Catalog, Arc<TransactionManager>) {
         let (wal, bp) = make_infra(dir);
         let catalog = Catalog::initialize(&bp, &wal, dir).unwrap();
-        let txn_mgr = TransactionManager::new(wal, bp);
+        let txn_mgr = Arc::new(TransactionManager::new(wal, bp));
         (catalog, txn_mgr)
     }
 

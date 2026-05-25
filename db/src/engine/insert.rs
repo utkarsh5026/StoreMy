@@ -58,7 +58,7 @@ impl Engine<'_> {
     /// - Constraint errors (FK, UNIQUE) propagated from [`Self::insert_rows_and_indexes`].
     pub(super) fn exec_insert(
         catalog: &Catalog,
-        txn: &ActiveTransaction<'_>,
+        txn: &ActiveTransaction,
         stmt: InsertStatement,
     ) -> Result<StatementResult, EngineError> {
         let table = catalog.get_table_info(txn, &stmt.table_name)?;
@@ -165,7 +165,7 @@ impl Engine<'_> {
     ///   or [`ConstraintViolation::UniqueViolation`] when a constraint is breached.
     pub(super) fn insert_rows_and_indexes(
         catalog: &Catalog,
-        txn: &ActiveTransaction<'_>,
+        txn: &ActiveTransaction,
         file_id: FileId,
         tuples: Vec<Tuple>,
     ) -> Result<usize, EngineError> {
@@ -300,7 +300,7 @@ impl Engine<'_> {
         ai_col: Option<ColumnId>,
         resolved_checks: &[(String, ResolvedExpr)],
         catalog: &Catalog,
-        txn: &ActiveTransaction<'_>,
+        txn: &ActiveTransaction,
         file_id: FileId,
     ) -> Result<StatementResult, EngineError> {
         for field in schema.logical_iter() {
@@ -465,7 +465,7 @@ impl Engine<'_> {
     fn collect_unique_index_checks(
         indexes: &[Arc<LiveIndex>],
         catalog: &Catalog,
-        txn: &ActiveTransaction<'_>,
+        txn: &ActiveTransaction,
         file_id: FileId,
     ) -> Result<Vec<(String, Arc<LiveIndex>)>, EngineError> {
         if indexes.is_empty() {
@@ -686,11 +686,11 @@ mod tests {
         wal::writer::Wal,
     };
 
-    fn make_infra(dir: &Path) -> (Catalog, TransactionManager) {
+    fn make_infra(dir: &Path) -> (Catalog, Arc<TransactionManager>) {
         let wal = Arc::new(Wal::new(&dir.join("wal.log"), 0).unwrap());
         let bp = Arc::new(PageStore::new(64, wal.clone()));
         let catalog = Catalog::initialize(&bp, &wal, dir).unwrap();
-        let txn_mgr = TransactionManager::new(wal, bp);
+        let txn_mgr = Arc::new(TransactionManager::new(wal, bp));
         (catalog, txn_mgr)
     }
 
@@ -708,7 +708,7 @@ mod tests {
         engine.execute_statement(stmt)
     }
 
-    fn scan_rows(catalog: &Catalog, txn_mgr: &TransactionManager, table: &str) -> Vec<Tuple> {
+    fn scan_rows(catalog: &Catalog, txn_mgr: &Arc<TransactionManager>, table: &str) -> Vec<Tuple> {
         let txn = txn_mgr.begin().unwrap();
         let info = catalog.get_table_info(&txn, table).unwrap();
         let heap = catalog.get_table_heap(info.file_id).unwrap();

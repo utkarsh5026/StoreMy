@@ -66,7 +66,7 @@ impl Engine<'_> {
     /// - [`EngineError::Catalog`] — other catalog read failures.
     pub(super) fn check_table(
         catalog: &Catalog,
-        txn: &ActiveTransaction<'_>,
+        txn: &ActiveTransaction,
         table_name: &str,
         if_exists: bool,
     ) -> Result<Option<TableInfo>, EngineError> {
@@ -165,7 +165,7 @@ impl Engine<'_> {
     /// - [`EngineError::Unsupported`] — foreign key local/ref column counts differ.
     pub(super) fn resolve_table_constraint(
         catalog: &Catalog,
-        txn: &ActiveTransaction<'_>,
+        txn: &ActiveTransaction,
         constraint: &(Option<NonEmptyString>, TableConstraint),
         schema: &TupleSchema,
         table_name: &str,

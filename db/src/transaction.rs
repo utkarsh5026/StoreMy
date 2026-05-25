@@ -84,20 +84,20 @@ impl TransactionManager {
 
     /// Starts a new transaction and writes a BEGIN record to the WAL.
     ///
-    /// The returned [`Transaction`] borrows `self`, so the manager must outlive
-    /// the transaction. The transaction starts in the [`TransactionState::Active`]
-    /// state and will abort automatically if dropped without an explicit commit
-    /// or abort call.
+    /// The returned [`Transaction`] holds a shared reference to this manager via
+    /// [`Arc`]. The transaction starts in the [`TransactionState::Active`] state
+    /// and will abort automatically if dropped without an explicit commit or
+    /// abort call.
     ///
     /// # Errors
     ///
     /// Returns [`TransactionError::Wal`] if the BEGIN record cannot be written.
-    pub fn begin(&self) -> Result<ActiveTransaction<'_>, TransactionError> {
+    pub fn begin(self: &Arc<Self>) -> Result<ActiveTransaction, TransactionError> {
         let id = self.next_txn_id.fetch_add(1, Ordering::AcqRel);
         let txn_id = TransactionId::new(id);
         self.wal.log_begin(txn_id)?;
         tracing::debug!(txn_id = %txn_id, "txn begin");
-        Ok(Transaction::new(self, txn_id))
+        Ok(Transaction::new(Arc::clone(self), txn_id))
     }
 
     /// Writes a COMMIT record to the WAL and releases all page locks held by `id`.
@@ -146,29 +146,29 @@ impl fmt::Display for TransactionState {
 /// An in-progress transaction handle.
 ///
 /// A `Transaction` is obtained from [`TransactionManager::begin`] and
-/// represents a single active unit of work. It holds a shared reference to its
-/// manager for the duration of its lifetime, so the manager must outlive it.
+/// represents a single active unit of work. It holds a shared [`Arc`] to its
+/// manager so the handle is not tied to a borrow of the caller's stack frame.
 ///
 /// Dropping a `Transaction` while it is still [`TransactionState::Active`]
 /// automatically triggers an abort so that no locks are left dangling.
-pub struct Transaction<'a, S> {
+pub struct Transaction<S> {
     _state: PhantomData<S>,
-    manager: &'a TransactionManager,
+    manager: Arc<TransactionManager>,
     id: TransactionId,
     start_time: time::Instant,
     needs_abort: bool,
 }
 
-pub type ActiveTransaction<'a> = Transaction<'a, Active>;
-pub type CommittedTransaction<'a> = Transaction<'a, Committed>;
-pub type AbortedTransaction<'a> = Transaction<'a, Aborted>;
+pub type ActiveTransaction = Transaction<Active>;
+pub type CommittedTransaction = Transaction<Committed>;
+pub type AbortedTransaction = Transaction<Aborted>;
 
-impl<'a> Transaction<'a, Active> {
+impl Transaction<Active> {
     /// Creates a new `Transaction` in the [`TransactionState::Active`] state.
     ///
     /// Callers should prefer [`TransactionManager::begin`], which allocates the
     /// ID and writes the WAL record before constructing the handle.
-    pub fn new(manager: &'a TransactionManager, id: TransactionId) -> Self {
+    pub fn new(manager: Arc<TransactionManager>, id: TransactionId) -> Self {
         Self {
             _state: PhantomData,
             manager,
@@ -228,7 +228,7 @@ impl<'a> Transaction<'a, Active> {
     }
 }
 
-impl<S> Drop for Transaction<'_, S> {
+impl<S> Drop for Transaction<S> {
     /// Aborts the transaction if it is still active when dropped.
     ///
     /// This is a safety net for early returns and panics; prefer calling

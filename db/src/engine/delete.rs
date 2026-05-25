@@ -40,7 +40,7 @@ impl Engine<'_> {
     /// - Constraint and storage errors propagated from [`Self::delete_rows_and_indexes`].
     pub(super) fn exec_delete(
         catalog: &Catalog,
-        txn: &ActiveTransaction<'_>,
+        txn: &ActiveTransaction,
         stmt: DeleteStatement,
     ) -> Result<StatementResult, EngineError> {
         let DeleteStatement {
@@ -96,7 +96,7 @@ impl Engine<'_> {
     ///   when a child table uses `RESTRICT` and a matching child row exists.
     pub(super) fn delete_rows_and_indexes(
         catalog: &Catalog,
-        txn: &ActiveTransaction<'_>,
+        txn: &ActiveTransaction,
         file_id: FileId,
         predicate: Option<&ResolvedExpr>,
     ) -> Result<usize, EngineError> {
@@ -144,11 +144,11 @@ mod tests {
         wal::writer::Wal,
     };
 
-    fn make_infra(dir: &Path) -> (Catalog, TransactionManager) {
+    fn make_infra(dir: &Path) -> (Catalog, Arc<TransactionManager>) {
         let wal = Arc::new(Wal::new(&dir.join("wal.log"), 0).unwrap());
         let bp = Arc::new(PageStore::new(64, wal.clone()));
         let catalog = Catalog::initialize(&bp, &wal, dir).unwrap();
-        let txn_mgr = TransactionManager::new(wal, bp);
+        let txn_mgr = Arc::new(TransactionManager::new(wal, bp));
         (catalog, txn_mgr)
     }
 

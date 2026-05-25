@@ -258,7 +258,7 @@ impl BoundSelect {
     pub fn bind(
         stmt: SelectStatement,
         catalog: &Catalog,
-        txn: &ActiveTransaction<'_>,
+        txn: &ActiveTransaction,
     ) -> Result<Self, EngineError> {
         if stmt.from.is_empty() {
             return Err(EngineError::Unsupported("no FROM clause".to_string()));
@@ -330,7 +330,7 @@ impl BoundSelect {
     fn resolve_from(
         from: TableWithJoins,
         catalog: &Catalog,
-        txn: &ActiveTransaction<'_>,
+        txn: &ActiveTransaction,
     ) -> Result<(BoundFrom, Scope), EngineError> {
         let TableWithJoins { table, joins } = from;
 
@@ -1094,11 +1094,11 @@ mod tests {
 
     // ─────────────────────── shared infrastructure ───────────────────────────
 
-    fn make_infra(dir: &Path) -> (Catalog, TransactionManager) {
+    fn make_infra(dir: &Path) -> (Catalog, Arc<TransactionManager>) {
         let wal = Arc::new(Wal::new(&dir.join("wal.log"), 0).unwrap());
         let bp = Arc::new(PageStore::new(64, wal.clone()));
         let catalog = Catalog::initialize(&bp, &wal, dir).unwrap();
-        let txn_mgr = TransactionManager::new(wal, bp);
+        let txn_mgr = Arc::new(TransactionManager::new(wal, bp));
         (catalog, txn_mgr)
     }
 
@@ -1136,7 +1136,7 @@ mod tests {
 
     /// Creates `users(id Int64 NN, name String, age Int64 NN)` and inserts
     /// three rows: `(1, 'alice', 30)`, `(2, 'bob', 25)`, `(3, 'cara', 30)`.
-    fn seed_users(dir: &Path) -> (Catalog, TransactionManager) {
+    fn seed_users(dir: &Path) -> (Catalog, Arc<TransactionManager>) {
         let (catalog, txn_mgr) = make_infra(dir);
         {
             let txn = txn_mgr.begin().unwrap();
@@ -1164,7 +1164,7 @@ mod tests {
     }
 
     /// Same shape as [`seed_users`] but inserts no rows.
-    fn seed_empty_users(dir: &Path) -> (Catalog, TransactionManager) {
+    fn seed_empty_users(dir: &Path) -> (Catalog, Arc<TransactionManager>) {
         let (catalog, txn_mgr) = make_infra(dir);
         let txn = txn_mgr.begin().unwrap();
         catalog
@@ -1563,7 +1563,7 @@ mod tests {
     // ──────────────────────── aggregate function tests ───────────────────────
 
     /// Seeds `users` with one NULL name: `(1,'alice',30)`, `(2,NULL,25)`, `(3,'cara',30)`.
-    fn seed_users_with_null_name(dir: &Path) -> (Catalog, TransactionManager) {
+    fn seed_users_with_null_name(dir: &Path) -> (Catalog, Arc<TransactionManager>) {
         let (catalog, txn_mgr) = make_infra(dir);
         {
             let txn = txn_mgr.begin().unwrap();
@@ -1858,7 +1858,7 @@ mod tests {
     ///
     /// alice has 2 orders, bob has 1 order, cara has none — so LEFT JOIN will
     /// null-pad cara's row and INNER JOIN will exclude her entirely.
-    fn seed_users_and_orders(dir: &Path) -> (Catalog, TransactionManager) {
+    fn seed_users_and_orders(dir: &Path) -> (Catalog, Arc<TransactionManager>) {
         let (catalog, txn_mgr) = make_infra(dir);
         {
             let txn = txn_mgr.begin().unwrap();
@@ -2110,7 +2110,7 @@ mod tests {
 
     fn create_table_direct(
         catalog: &Catalog,
-        txn_mgr: &TransactionManager,
+        txn_mgr: &Arc<TransactionManager>,
         name: &str,
         schema: TupleSchema,
     ) {

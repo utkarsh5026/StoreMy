@@ -30,7 +30,7 @@ impl Engine<'_> {
     /// Returns [`EngineError::Catalog`] when the catalog cannot remove the table
     /// metadata or associated storage.
     pub(super) fn exec_drop_table(
-        txn: &ActiveTransaction<'_>,
+        txn: &ActiveTransaction,
         catalog: &Catalog,
         statement: DropStatement,
     ) -> Result<StatementResult, EngineError> {
@@ -73,10 +73,10 @@ mod tests {
         (wal, bp)
     }
 
-    fn make_catalog_and_txn(dir: &Path) -> (Catalog, TransactionManager) {
+    fn make_catalog_and_txn(dir: &Path) -> (Catalog, Arc<TransactionManager>) {
         let (wal, bp) = make_infra(dir);
         let catalog = Catalog::initialize(&bp, &wal, dir).expect("catalog init failed");
-        let txn_mgr = TransactionManager::new(wal, bp);
+        let txn_mgr = Arc::new(TransactionManager::new(wal, bp));
         (catalog, txn_mgr)
     }
 

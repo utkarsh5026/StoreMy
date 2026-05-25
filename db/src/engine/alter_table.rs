@@ -47,7 +47,7 @@ impl Engine<'_> {
     /// Returns [`EngineError::Catalog`] on catalog write failures.
     #[allow(clippy::too_many_lines)]
     pub(super) fn exec_alter_table(
-        txn: &ActiveTransaction<'_>,
+        txn: &ActiveTransaction,
         catalog: &Catalog,
         stmt: AlterTableStatement,
     ) -> Result<StatementResult, EngineError> {
@@ -360,7 +360,7 @@ impl Engine<'_> {
     /// - Other [`CatalogError`] variants from heap or index access during the scan.
     fn populate_index_from_heap(
         catalog: &Catalog,
-        txn: &ActiveTransaction<'_>,
+        txn: &ActiveTransaction,
         table_file_id: FileId,
         index_name: &str,
     ) -> Result<(), CatalogError> {
@@ -416,10 +416,10 @@ mod tests {
         (wal, bp)
     }
 
-    fn make_catalog_and_txn(dir: &Path) -> (Catalog, TransactionManager) {
+    fn make_catalog_and_txn(dir: &Path) -> (Catalog, Arc<TransactionManager>) {
         let (wal, bp) = make_infra(dir);
         let catalog = Catalog::initialize(&bp, &wal, dir).expect("catalog init failed");
-        let txn_mgr = TransactionManager::new(wal, bp);
+        let txn_mgr = Arc::new(TransactionManager::new(wal, bp));
         (catalog, txn_mgr)
     }
 
@@ -427,7 +427,7 @@ mod tests {
         Field::new_non_empty(NonEmptyString::new(name).unwrap(), col_type)
     }
 
-    fn make_users_table(catalog: &Catalog, txn_mgr: &TransactionManager) {
+    fn make_users_table(catalog: &Catalog, txn_mgr: &Arc<TransactionManager>) {
         let txn = txn_mgr.begin().unwrap();
         catalog
             .create_table(

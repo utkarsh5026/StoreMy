@@ -17,6 +17,7 @@ use crate::{
     catalog::{TableInfo, manager::Catalog},
     engine::{Engine, EngineError, StatementResult},
     parser::Parser,
+    transaction::TransactionManager,
 };
 
 /// Alias for the result type returned by SQL execution.
@@ -191,11 +192,7 @@ impl Database {
     }
 }
 
-fn execute_sql(
-    catalog: &Catalog,
-    txn_manager: &crate::transaction::TransactionManager,
-    sql: &str,
-) -> QueryResult {
+fn execute_sql(catalog: &Catalog, txn_manager: &Arc<TransactionManager>, sql: &str) -> QueryResult {
     let stmts = Parser::new(sql)
         .parse_all()
         .map_err(|e| EngineError::Parse(e.to_string()))?;

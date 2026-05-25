@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use crate::{
     catalog::manager::Catalog,
     parser::statements::Statement,
@@ -31,11 +33,11 @@ mod update;
 /// threading dependencies through every call.
 pub struct Engine<'a> {
     catalog: &'a Catalog,
-    txn_manager: &'a TransactionManager,
+    txn_manager: &'a Arc<TransactionManager>,
 }
 
 impl<'a> Engine<'a> {
-    pub fn new(catalog: &'a Catalog, txn_manager: &'a TransactionManager) -> Self {
+    pub fn new(catalog: &'a Catalog, txn_manager: &'a Arc<TransactionManager>) -> Self {
         Self {
             catalog,
             txn_manager,
@@ -71,6 +73,13 @@ impl<'a> Engine<'a> {
             Statement::AlterTable(s) => {
                 self.with_txn(|txn| Engine::exec_alter_table(txn, self.catalog, s))
             }
+            Statement::Begin(_)
+            | Statement::Commit(_)
+            | Statement::Rollback(_)
+            | Statement::Savepoint(_)
+            | Statement::ReleaseSavepoint(_) => Err(EngineError::Unsupported(
+                "explicit transaction control is not implemented yet".into(),
+            )),
         };
         if let Err(e) = &result {
             tracing::warn!(error = %e, "statement failed");
@@ -80,7 +89,7 @@ impl<'a> Engine<'a> {
 
     pub(super) fn with_txn<F>(&self, run: F) -> Result<StatementResult, EngineError>
     where
-        F: FnOnce(&ActiveTransaction<'_>) -> Result<StatementResult, EngineError>,
+        F: FnOnce(&ActiveTransaction) -> Result<StatementResult, EngineError>,
     {
         let txn = self.txn_manager.begin()?;
         let result = run(&txn)?;

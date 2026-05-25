@@ -53,7 +53,7 @@ impl Engine<'_> {
     /// or heap file fails.
     pub(super) fn exec_create_table(
         stmt: CreateTableStatement,
-        txn: &ActiveTransaction<'_>,
+        txn: &ActiveTransaction,
         catalog: &Catalog,
     ) -> Result<StatementResult, EngineError> {
         if catalog.table_exists(&stmt.table_name) {
@@ -181,7 +181,7 @@ impl Engine<'_> {
     ///   read table metadata (should be rare right after [`Catalog::table_exists`] reported true).
     fn handle_table_already_exists(
         statement: CreateTableStatement,
-        txn: &ActiveTransaction<'_>,
+        txn: &ActiveTransaction,
         catalog: &Catalog,
     ) -> Result<StatementResult, EngineError> {
         let table_name = statement.table_name.into_inner();
@@ -265,7 +265,7 @@ impl Engine<'_> {
         schema: &TupleSchema,
         table_name: &str,
         catalog: &Catalog,
-        txn: &ActiveTransaction<'_>,
+        txn: &ActiveTransaction,
         defs: &mut Vec<ConstraintDef>,
     ) -> Result<(), EngineError> {
         for col in columns {
@@ -328,10 +328,10 @@ mod tests {
         (wal, bp)
     }
 
-    fn make_catalog_and_txn(dir: &Path) -> (Catalog, TransactionManager) {
+    fn make_catalog_and_txn(dir: &Path) -> (Catalog, Arc<TransactionManager>) {
         let (wal, bp) = make_infra(dir);
         let catalog = Catalog::initialize(&bp, &wal, dir).expect("catalog init failed");
-        let txn_mgr = TransactionManager::new(wal, bp);
+        let txn_mgr = Arc::new(TransactionManager::new(wal, bp));
         (catalog, txn_mgr)
     }
 

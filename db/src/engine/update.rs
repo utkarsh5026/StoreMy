@@ -87,7 +87,7 @@ impl Engine<'_> {
     /// Propagates catalog and I/O errors from lower layers.
     pub(super) fn exec_update(
         catalog: &Catalog,
-        txn: &ActiveTransaction<'_>,
+        txn: &ActiveTransaction,
         stmt: UpdateStatement,
     ) -> Result<StatementResult, EngineError> {
         let UpdateStatement {
@@ -302,7 +302,7 @@ impl Engine<'_> {
     /// Filtering here avoids spurious catalog/heap work in the per-row loop.
     fn prepare_fk_checks_for_update(
         catalog: &Catalog,
-        txn: &ActiveTransaction<'_>,
+        txn: &ActiveTransaction,
         file_id: FileId,
         assignment_cols: &HashSet<ColumnId>,
     ) -> Result<(Vec<ParentFkCheck>, Vec<InboundParentFkCheck>), EngineError> {
@@ -348,7 +348,7 @@ impl Engine<'_> {
     /// human-readable constraint name in the error message.
     fn build_unique_check_map(
         catalog: &Catalog,
-        txn: &ActiveTransaction<'_>,
+        txn: &ActiveTransaction,
         file_id: FileId,
     ) -> Result<HashMap<IndexId, String>, EngineError> {
         let table = catalog.get_table_info_by_id(txn, file_id)?;
@@ -453,11 +453,11 @@ mod tests {
         wal::writer::Wal,
     };
 
-    fn make_infra(dir: &Path) -> (Catalog, TransactionManager) {
+    fn make_infra(dir: &Path) -> (Catalog, Arc<TransactionManager>) {
         let wal = Arc::new(Wal::new(&dir.join("wal.log"), 0).unwrap());
         let bp = Arc::new(PageStore::new(64, wal.clone()));
         let catalog = Catalog::initialize(&bp, &wal, dir).unwrap();
-        let txn_mgr = TransactionManager::new(wal, bp);
+        let txn_mgr = Arc::new(TransactionManager::new(wal, bp));
         (catalog, txn_mgr)
     }
 
@@ -806,7 +806,7 @@ mod tests {
         }
     }
 
-    fn make_pair_table(dir: &Path) -> (Catalog, TransactionManager) {
+    fn make_pair_table(dir: &Path) -> (Catalog, Arc<TransactionManager>) {
         let (catalog, txn_mgr) = make_infra(dir);
         let txn = txn_mgr.begin().unwrap();
         catalog

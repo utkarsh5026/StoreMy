@@ -69,7 +69,7 @@ impl Catalog {
     /// Single entry point for adding any constraint to a table.
     pub fn add_constraint(
         &self,
-        txn: &ActiveTransaction<'_>,
+        txn: &ActiveTransaction,
         table_id: FileId,
         def: ConstraintDef,
     ) -> Result<(), CatalogError> {
@@ -150,7 +150,7 @@ impl Catalog {
     ///   fail.
     fn add_unique_constraint(
         &self,
-        txn: &ActiveTransaction<'_>,
+        txn: &ActiveTransaction,
         table_id: FileId,
         name: &str,
         columns: &[ColumnId],
@@ -215,7 +215,7 @@ impl Catalog {
     #[allow(clippy::too_many_arguments)]
     fn add_foreign_key(
         &self,
-        txn: &ActiveTransaction<'_>,
+        txn: &ActiveTransaction,
         table_id: FileId,
         name: &str,
         local_columns: &[ColumnId],
@@ -340,7 +340,7 @@ impl Catalog {
     /// Returns [`CatalogError`] if the system table scan fails.
     pub fn find_referencing_fks(
         &self,
-        txn: &ActiveTransaction<'_>,
+        txn: &ActiveTransaction,
         ref_table_id: FileId,
     ) -> Result<Vec<ReferencingFk>, CatalogError> {
         let fk_rows = self.scan_system_table_where::<FkConstraintRow, _>(txn, |r| {
@@ -392,7 +392,7 @@ impl Catalog {
     /// - Other [`CatalogError`] variants from system-table writes or cache refresh.
     pub fn mark_constraint_validated(
         &self,
-        txn: &ActiveTransaction<'_>,
+        txn: &ActiveTransaction,
         table_id: FileId,
         name: &str,
     ) -> Result<(), CatalogError> {
@@ -445,7 +445,7 @@ impl Catalog {
     /// - Other [`CatalogError`] variants from system-table deletes, index drop, or cache refresh.
     pub fn drop_constraint(
         &self,
-        txn: &ActiveTransaction<'_>,
+        txn: &ActiveTransaction,
         table_id: FileId,
         name: &str,
     ) -> Result<(), CatalogError> {
@@ -498,7 +498,7 @@ impl Catalog {
     /// [`CatalogError`] values if the system table scan fails.
     fn fetch_constraint_header(
         &self,
-        txn: &ActiveTransaction<'_>,
+        txn: &ActiveTransaction,
         table_id: FileId,
         constraint_name: &str,
         table_name: &str,
@@ -524,7 +524,7 @@ impl Catalog {
     /// Propagates errors from index metadata lookup or [`Catalog::drop_index`].
     fn delete_constraint_indexes(
         &self,
-        txn: &ActiveTransaction<'_>,
+        txn: &ActiveTransaction,
         header: &ConstraintRow,
     ) -> Result<(), CatalogError> {
         let backing_index_name = if header.constraint_kind == ConstraintKind::Unique {
@@ -657,7 +657,7 @@ impl Catalog {
     /// Errors if a constraint named `name` already exists on `table_id`.
     fn reject_duplicate_constraint_name(
         &self,
-        txn: &ActiveTransaction<'_>,
+        txn: &ActiveTransaction,
         table_id: FileId,
         name: &str,
     ) -> Result<(), CatalogError> {
@@ -712,10 +712,10 @@ mod tests {
         (wal, bp)
     }
 
-    fn make_catalog_and_txn(dir: &Path) -> (Catalog, TransactionManager) {
+    fn make_catalog_and_txn(dir: &Path) -> (Catalog, Arc<TransactionManager>) {
         let (wal, bp) = make_infra(dir);
         let catalog = Catalog::initialize(&bp, &wal, dir).expect("catalog init failed");
-        let txn_mgr = TransactionManager::new(wal, bp);
+        let txn_mgr = Arc::new(TransactionManager::new(wal, bp));
         (catalog, txn_mgr)
     }
 

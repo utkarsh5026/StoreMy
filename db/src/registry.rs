@@ -182,10 +182,6 @@ pub fn boot_database(dir: &Path) -> Result<Database, RegistryError> {
         .expect("failed to spawn checkpoint thread");
 
     let catalog = Catalog::initialize(&buffer_pool, &wal, dir)?;
-    let txn_mgr = TransactionManager::new(wal, buffer_pool);
-    Ok(Database::new(
-        Arc::new(catalog),
-        Arc::new(txn_mgr),
-        WORKER_THREADS,
-    ))
+    let txn_mgr = Arc::new(TransactionManager::new(wal, buffer_pool));
+    Ok(Database::new(Arc::new(catalog), txn_mgr, WORKER_THREADS))
 }

@@ -369,10 +369,7 @@ impl Catalog {
     ///
     /// Used by `SHOW INDEXES` (no `FROM` clause). Folds raw `IndexRow`
     /// records into the merged view per index.
-    pub fn list_indexes(
-        &self,
-        txn: &ActiveTransaction<'_>,
-    ) -> Result<Vec<IndexInfo>, CatalogError> {
+    pub fn list_indexes(&self, txn: &ActiveTransaction) -> Result<Vec<IndexInfo>, CatalogError> {
         let rows = self.scan_system_table::<IndexRow>(txn)?;
         if rows.is_empty() {
             return Ok(Vec::new());
@@ -387,7 +384,7 @@ impl Catalog {
     /// Counterpart of [`Self::list_indexes`] for `SHOW INDEXES FROM <table>`.
     pub fn list_indexes_for(
         &self,
-        txn: &ActiveTransaction<'_>,
+        txn: &ActiveTransaction,
         file_id: FileId,
     ) -> Result<Vec<IndexInfo>, CatalogError> {
         let rows = self.scan_system_table_where::<IndexRow, _>(txn, |r| r.table_id == file_id)?;
@@ -417,7 +414,7 @@ impl Catalog {
     /// - Propagates buffer-pool registration, index init, and system-table insert errors.
     pub fn create_index(
         &self,
-        txn: &ActiveTransaction<'_>,
+        txn: &ActiveTransaction,
         index_name: &str,
         table_name: &str,
         table_file_id: FileId,
@@ -573,7 +570,7 @@ impl Catalog {
     /// - Propagates system-table delete and filesystem errors.
     pub fn drop_index(
         &self,
-        txn: &ActiveTransaction<'_>,
+        txn: &ActiveTransaction,
         index_name: &str,
     ) -> Result<(), CatalogError> {
         tracing::debug!(index = %index_name, "dropping index");
@@ -1107,16 +1104,16 @@ mod tests {
         ColumnId::try_from(idx).unwrap()
     }
 
-    fn make_full_infra(dir: &Path) -> (Catalog, TransactionManager, Arc<PageStore>, Arc<Wal>) {
+    fn make_full_infra(dir: &Path) -> (Catalog, Arc<TransactionManager>, Arc<PageStore>, Arc<Wal>) {
         let (wal, bp) = make_infra(dir);
         let catalog = Catalog::initialize(&bp, &wal, dir).expect("catalog init failed");
-        let txn_mgr = TransactionManager::new(Arc::clone(&wal), Arc::clone(&bp));
+        let txn_mgr = Arc::new(TransactionManager::new(Arc::clone(&wal), Arc::clone(&bp)));
         (catalog, txn_mgr, bp, wal)
     }
 
     /// Two-column user table — created inside its own transaction so each
     /// caller can start a fresh txn for the index work that follows.
-    fn make_users_table(catalog: &Catalog, txn_mgr: &TransactionManager) -> FileId {
+    fn make_users_table(catalog: &Catalog, txn_mgr: &Arc<TransactionManager>) -> FileId {
         let schema = TupleSchema::new(vec![
             field("id", Type::Int64).not_null(),
             field("email", Type::String).not_null(),
@@ -1128,7 +1125,7 @@ mod tests {
     }
 
     /// Three-column variant for composite-index tests.
-    fn make_three_col_table(catalog: &Catalog, txn_mgr: &TransactionManager) -> FileId {
+    fn make_three_col_table(catalog: &Catalog, txn_mgr: &Arc<TransactionManager>) -> FileId {
         let schema = TupleSchema::new(vec![
             field("a", Type::Int64).not_null(),
             field("b", Type::Int64).not_null(),
