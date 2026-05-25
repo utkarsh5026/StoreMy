@@ -22,7 +22,7 @@ use thiserror::Error;
 use crate::{
     buffer_pool::page_store::PageStore,
     primitives::{Lsn, PageId, TransactionId},
-    recovery::analysis::Analysis,
+    recovery::{analysis::Analysis, redo::Redo, undo::Undo},
     wal::{WalError, log::TxnStatus, reader::WalReader, writer::Wal},
 };
 
@@ -197,12 +197,12 @@ impl Aries {
         let checkpoint_lsn = self.read_master()?;
         let mut reader = WalReader::open(&self.wal_path)?;
         let result = Analysis::default().run(&mut reader, checkpoint_lsn)?;
-        Self::run_redo(&mut reader, &result, buffer_pool)?;
+        Redo::new(&result, buffer_pool).run(&mut reader)?;
 
         // Snapshot before Undo consumes the ATT — callers (e.g. main.rs) log
         // loser counts and we'd lose the information once it drains to empty.
         let snapshot = result.clone();
-        Self::run_undo(&mut reader, wal, buffer_pool, result)?;
+        Undo::new(wal, buffer_pool, result).run(&mut reader)?;
         Ok(snapshot)
     }
 
