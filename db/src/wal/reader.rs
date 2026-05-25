@@ -149,10 +149,7 @@ impl FallibleIterator for WalReader {
 
 #[cfg(test)]
 mod tests {
-    use std::{
-        io::{Seek, SeekFrom, Write},
-        time::SystemTime,
-    };
+    use std::io::{Seek, SeekFrom, Write};
 
     use fallible_iterator::FallibleIterator;
     use tempfile::NamedTempFile;
@@ -190,34 +187,14 @@ mod tests {
     fn make_records() -> Vec<LogRecord> {
         let tid = TransactionId::new(42);
         vec![
-            LogRecord::new(
-                Lsn(1000),
-                Lsn::INVALID,
-                tid,
-                SystemTime::UNIX_EPOCH,
-                LogRecordBody::Begin,
-            )
+            LogRecord::new(Lsn(1000), Lsn::INVALID, tid, LogRecordBody::Begin).unwrap(),
+            LogRecord::new(Lsn(2000), Lsn(1000), tid, LogRecordBody::Insert {
+                page_id: page_id(),
+                before: vec![0u8; 4],
+                after: vec![1u8; 4],
+            })
             .unwrap(),
-            LogRecord::new(
-                Lsn(2000),
-                Lsn(1000),
-                tid,
-                SystemTime::UNIX_EPOCH,
-                LogRecordBody::Insert {
-                    page_id: page_id(),
-                    before: vec![0u8; 4],
-                    after: vec![1u8; 4],
-                },
-            )
-            .unwrap(),
-            LogRecord::new(
-                Lsn(3000),
-                Lsn(2000),
-                tid,
-                SystemTime::UNIX_EPOCH,
-                LogRecordBody::Commit,
-            )
-            .unwrap(),
+            LogRecord::new(Lsn(3000), Lsn(2000), tid, LogRecordBody::Commit).unwrap(),
         ]
     }
 

@@ -254,8 +254,6 @@ impl Aries {
 
 #[cfg(test)]
 mod tests {
-    use std::time::SystemTime;
-
     use tempfile::NamedTempFile;
 
     use super::*;
@@ -283,10 +281,6 @@ mod tests {
         f
     }
 
-    fn ts() -> SystemTime {
-        SystemTime::UNIX_EPOCH
-    }
-
     /// When every transaction commits, ATT must be empty after Analysis.
     /// A committed txn's pages still appear in the DPT (they may not have been
     /// flushed), and `redo_lsn` reflects the earliest of those.
@@ -297,14 +291,14 @@ mod tests {
         // 24 bytes → total body 24, record 65 bytes. Commit is 41 bytes.
         // We don't assert exact LSN values here — just structural results.
         let records = vec![
-            LogRecord::new(Lsn(0), Lsn::INVALID, tid(1), ts(), LogRecordBody::Begin).unwrap(),
-            LogRecord::new(Lsn(41), Lsn(0), tid(1), ts(), LogRecordBody::Insert {
+            LogRecord::new(Lsn(0), Lsn::INVALID, tid(1), LogRecordBody::Begin).unwrap(),
+            LogRecord::new(Lsn(41), Lsn(0), tid(1), LogRecordBody::Insert {
                 page_id: page(5),
                 before: vec![0u8; 4],
                 after: vec![1u8; 4],
             })
             .unwrap(),
-            LogRecord::new(Lsn(110), Lsn(41), tid(1), ts(), LogRecordBody::Commit).unwrap(),
+            LogRecord::new(Lsn(110), Lsn(41), tid(1), LogRecordBody::Commit).unwrap(),
         ];
 
         let f = write_log(&records);
@@ -319,8 +313,8 @@ mod tests {
     #[test]
     fn uncommitted_txn_is_a_loser() {
         let records = vec![
-            LogRecord::new(Lsn(0), Lsn::INVALID, tid(2), ts(), LogRecordBody::Begin).unwrap(),
-            LogRecord::new(Lsn(41), Lsn(0), tid(2), ts(), LogRecordBody::Update {
+            LogRecord::new(Lsn(0), Lsn::INVALID, tid(2), LogRecordBody::Begin).unwrap(),
+            LogRecord::new(Lsn(41), Lsn(0), tid(2), LogRecordBody::Update {
                 page_id: page(7),
                 before: vec![0u8; 4],
                 after: vec![1u8; 4],
@@ -346,14 +340,14 @@ mod tests {
     #[test]
     fn aborted_txn_stays_in_att_as_aborting() {
         let records = vec![
-            LogRecord::new(Lsn(0), Lsn::INVALID, tid(3), ts(), LogRecordBody::Begin).unwrap(),
-            LogRecord::new(Lsn(41), Lsn(0), tid(3), ts(), LogRecordBody::Insert {
+            LogRecord::new(Lsn(0), Lsn::INVALID, tid(3), LogRecordBody::Begin).unwrap(),
+            LogRecord::new(Lsn(41), Lsn(0), tid(3), LogRecordBody::Insert {
                 page_id: page(9),
                 before: vec![0u8; 4],
                 after: vec![1u8; 4],
             })
             .unwrap(),
-            LogRecord::new(Lsn(110), Lsn(41), tid(3), ts(), LogRecordBody::Abort).unwrap(),
+            LogRecord::new(Lsn(110), Lsn(41), tid(3), LogRecordBody::Abort).unwrap(),
         ];
 
         let f = write_log(&records);
@@ -377,8 +371,8 @@ mod tests {
         // Analysis should see T4 with undo_next_lsn = Lsn(0) (the Begin),
         // not Lsn(110) (the CLR itself).
         let records = vec![
-            LogRecord::new(Lsn(0), Lsn::INVALID, tid(4), ts(), LogRecordBody::Begin).unwrap(),
-            LogRecord::new(Lsn(41), Lsn(0), tid(4), ts(), LogRecordBody::Insert {
+            LogRecord::new(Lsn(0), Lsn::INVALID, tid(4), LogRecordBody::Begin).unwrap(),
+            LogRecord::new(Lsn(41), Lsn(0), tid(4), LogRecordBody::Insert {
                 page_id: page(3),
                 before: vec![0u8; 4],
                 after: vec![1u8; 4],
@@ -386,7 +380,7 @@ mod tests {
             .unwrap(),
             // CLR written by a previous Undo run; compensates the Insert at
             // LSN 41, so undo_next skips back to its prev_lsn = Lsn(0).
-            LogRecord::new(Lsn(110), Lsn(41), tid(4), ts(), LogRecordBody::Clr {
+            LogRecord::new(Lsn(110), Lsn(41), tid(4), LogRecordBody::Clr {
                 page_id: page(3),
                 after: vec![0u8; 4],
                 undo_next_lsn: Lsn(0), // ← points at Begin
@@ -412,22 +406,22 @@ mod tests {
     #[test]
     fn end_record_removes_txn_from_att() {
         let records = vec![
-            LogRecord::new(Lsn(0), Lsn::INVALID, tid(5), ts(), LogRecordBody::Begin).unwrap(),
-            LogRecord::new(Lsn(41), Lsn(0), tid(5), ts(), LogRecordBody::Insert {
+            LogRecord::new(Lsn(0), Lsn::INVALID, tid(5), LogRecordBody::Begin).unwrap(),
+            LogRecord::new(Lsn(41), Lsn(0), tid(5), LogRecordBody::Insert {
                 page_id: page(2),
                 before: vec![0u8; 4],
                 after: vec![1u8; 4],
             })
             .unwrap(),
             // CLR written during a previous Undo run.
-            LogRecord::new(Lsn(110), Lsn(41), tid(5), ts(), LogRecordBody::Clr {
+            LogRecord::new(Lsn(110), Lsn(41), tid(5), LogRecordBody::Clr {
                 page_id: page(2),
                 after: vec![0u8; 4],
                 undo_next_lsn: Lsn(0),
             })
             .unwrap(),
             // End: the previous Undo run finished before the crash.
-            LogRecord::new(Lsn(159), Lsn(110), tid(5), ts(), LogRecordBody::End).unwrap(),
+            LogRecord::new(Lsn(159), Lsn(110), tid(5), LogRecordBody::End).unwrap(),
         ];
 
         let f = write_log(&records);
@@ -446,15 +440,15 @@ mod tests {
         // Page 5 first dirtied at LSN 41, page 7 first dirtied at LSN 110.
         // redo_lsn must be 41.
         let records = vec![
-            LogRecord::new(Lsn(0), Lsn::INVALID, tid(6), ts(), LogRecordBody::Begin).unwrap(),
-            LogRecord::new(Lsn(41), Lsn(0), tid(6), ts(), LogRecordBody::Insert {
+            LogRecord::new(Lsn(0), Lsn::INVALID, tid(6), LogRecordBody::Begin).unwrap(),
+            LogRecord::new(Lsn(41), Lsn(0), tid(6), LogRecordBody::Insert {
                 page_id: page(5),
                 before: vec![0u8; 4],
                 after: vec![1u8; 4],
             })
             .unwrap(),
-            LogRecord::new(Lsn(110), Lsn::INVALID, tid(7), ts(), LogRecordBody::Begin).unwrap(),
-            LogRecord::new(Lsn(151), Lsn(110), tid(7), ts(), LogRecordBody::Update {
+            LogRecord::new(Lsn(110), Lsn::INVALID, tid(7), LogRecordBody::Begin).unwrap(),
+            LogRecord::new(Lsn(151), Lsn(110), tid(7), LogRecordBody::Update {
                 page_id: page(7),
                 before: vec![0u8; 4],
                 after: vec![1u8; 4],

@@ -522,8 +522,9 @@ impl LogRecord {
     /// Builds a complete [`LogRecord`], filling in `body_len` and `checksum` automatically.
     ///
     /// The body is encoded into a temporary buffer so that its length and CRC32
-    /// can be computed before the header is constructed.  The caller only needs
-    /// to supply the LSN, previous LSN, transaction ID, timestamp, and body.
+    /// can be computed before the header is constructed.  The caller supplies
+    /// the LSN, previous LSN, transaction ID, and body; the timestamp is set to
+    /// [`SystemTime::now`] at construction time.
     ///
     /// # Errors
     ///
@@ -532,7 +533,6 @@ impl LogRecord {
         lsn: Lsn,
         prev_lsn: Lsn,
         tid: TransactionId,
-        timestamp: SystemTime,
         body: LogRecordBody,
     ) -> Result<Self, CodecError> {
         let body_bytes = {
@@ -545,7 +545,7 @@ impl LogRecord {
             prev_lsn,
             tid,
             record_type: body.record_type(),
-            timestamp,
+            timestamp: SystemTime::now(),
             body_len: LogRecordBody::encoded_len_u32(body_bytes.len())?,
             checksum: crc32fast::hash(&body_bytes),
         };
@@ -670,7 +670,6 @@ mod tests {
             Lsn(1),
             Lsn::INVALID,
             TransactionId::new(10),
-            UNIX_EPOCH,
             LogRecordBody::Begin,
         )
         .unwrap();
@@ -683,14 +682,8 @@ mod tests {
 
     #[test]
     fn commit_record_roundtrip() {
-        let rec = LogRecord::new(
-            Lsn(5),
-            Lsn(2),
-            TransactionId::new(3),
-            UNIX_EPOCH,
-            LogRecordBody::Commit,
-        )
-        .unwrap();
+        let rec =
+            LogRecord::new(Lsn(5), Lsn(2), TransactionId::new(3), LogRecordBody::Commit).unwrap();
         let decoded = roundtrip(&rec);
         assert_eq!(decoded.header.record_type, LogRecordType::Commit);
         assert!(matches!(decoded.body, LogRecordBody::Commit));
@@ -698,14 +691,8 @@ mod tests {
 
     #[test]
     fn abort_record_roundtrip() {
-        let rec = LogRecord::new(
-            Lsn(7),
-            Lsn(6),
-            TransactionId::new(99),
-            UNIX_EPOCH,
-            LogRecordBody::Abort,
-        )
-        .unwrap();
+        let rec =
+            LogRecord::new(Lsn(7), Lsn(6), TransactionId::new(99), LogRecordBody::Abort).unwrap();
         let decoded = roundtrip(&rec);
         assert!(matches!(decoded.body, LogRecordBody::Abort));
     }
@@ -716,7 +703,6 @@ mod tests {
             Lsn(20),
             Lsn(15),
             TransactionId::new(5),
-            UNIX_EPOCH,
             LogRecordBody::Update {
                 page_id: make_page_id(),
                 before: vec![0xDE, 0xAD],
@@ -746,7 +732,6 @@ mod tests {
             Lsn(30),
             Lsn(25),
             TransactionId::new(7),
-            UNIX_EPOCH,
             LogRecordBody::Insert {
                 page_id: make_page_id(),
                 before: vec![0x00, 0x00],
@@ -770,7 +755,6 @@ mod tests {
             Lsn(40),
             Lsn(35),
             TransactionId::new(8),
-            UNIX_EPOCH,
             LogRecordBody::Delete {
                 page_id: make_page_id(),
                 before: vec![9, 8, 7],
@@ -794,7 +778,6 @@ mod tests {
             Lsn(50),
             Lsn(45),
             TransactionId::new(12),
-            UNIX_EPOCH,
             LogRecordBody::Clr {
                 page_id: make_page_id(),
                 after: vec![0xAA],
@@ -817,7 +800,6 @@ mod tests {
             Lsn(100),
             Lsn::INVALID,
             TransactionId::INVALID,
-            UNIX_EPOCH,
             LogRecordBody::CheckpointBegin,
         )
         .unwrap();
@@ -831,7 +813,6 @@ mod tests {
             Lsn(101),
             Lsn(100),
             TransactionId::INVALID,
-            UNIX_EPOCH,
             LogRecordBody::CheckpointEnd {
                 att_snapshot: vec![],
                 dpt_snapshot: vec![],
@@ -862,7 +843,6 @@ mod tests {
             Lsn(200),
             Lsn(199),
             TransactionId::INVALID,
-            UNIX_EPOCH,
             LogRecordBody::CheckpointEnd {
                 att_snapshot: vec![
                     (tid1, Lsn(50), TxnStatus::Running),
@@ -894,7 +874,6 @@ mod tests {
             Lsn(1),
             Lsn::INVALID,
             TransactionId::new(1),
-            UNIX_EPOCH,
             LogRecordBody::Insert {
                 page_id: make_page_id(),
                 before: vec![0xFF],
@@ -913,28 +892,6 @@ mod tests {
 
         // checksum must match a freshly computed CRC over those bytes
         assert_eq!(rec.header.checksum, crc32fast::hash(&body_buf));
-    }
-
-    #[test]
-    fn timestamp_preserved_at_second_precision() {
-        let ts = UNIX_EPOCH + std::time::Duration::from_secs(1_700_000_000);
-        let rec = LogRecord::new(
-            Lsn(1),
-            Lsn::INVALID,
-            TransactionId::new(1),
-            ts,
-            LogRecordBody::Begin,
-        )
-        .unwrap();
-        let decoded = roundtrip(&rec);
-        let expected = ts.duration_since(UNIX_EPOCH).unwrap().as_secs();
-        let got = decoded
-            .header
-            .timestamp
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_secs();
-        assert_eq!(got, expected);
     }
 
     #[test]
@@ -960,7 +917,6 @@ mod tests {
             Lsn(1),
             Lsn::INVALID,
             TransactionId::new(1),
-            UNIX_EPOCH,
             LogRecordBody::Begin,
         )
         .unwrap();
@@ -973,14 +929,8 @@ mod tests {
 
     #[test]
     fn end_record_roundtrip() {
-        let rec = LogRecord::new(
-            Lsn(99),
-            Lsn(70),
-            TransactionId::new(5),
-            UNIX_EPOCH,
-            LogRecordBody::End,
-        )
-        .unwrap();
+        let rec =
+            LogRecord::new(Lsn(99), Lsn(70), TransactionId::new(5), LogRecordBody::End).unwrap();
         let decoded = roundtrip(&rec);
         assert_eq!(decoded.header.record_type, LogRecordType::End);
         assert_eq!(decoded.header.lsn, Lsn(99));
@@ -1005,7 +955,6 @@ mod tests {
             Lsn(300),
             Lsn(250),
             TransactionId::new(11),
-            UNIX_EPOCH,
             LogRecordBody::Insert {
                 page_id: make_page_id(),
                 before: vec![0xAA, 0xBB],
@@ -1030,7 +979,6 @@ mod tests {
             Lsn(1),
             Lsn::INVALID,
             TransactionId::new(1),
-            UNIX_EPOCH,
             LogRecordBody::Commit,
         )
         .unwrap();

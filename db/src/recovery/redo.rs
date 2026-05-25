@@ -210,7 +210,7 @@ impl Aries {
 
 #[cfg(test)]
 mod tests {
-    use std::{collections::HashMap, os::unix::fs::FileExt, path::Path, time::SystemTime};
+    use std::{collections::HashMap, os::unix::fs::FileExt, path::Path};
 
     use tempfile::{NamedTempFile, TempDir, tempdir};
 
@@ -229,10 +229,6 @@ mod tests {
 
     fn pid(file: u64, page: u32) -> PageId {
         PageId::new(FileId::new(file), PageNumber::new(page))
-    }
-
-    fn ts() -> SystemTime {
-        SystemTime::UNIX_EPOCH
     }
 
     /// Builds a `PAGE_SIZE`-byte page image whose bytes 5..13 encode `page_lsn`
@@ -258,7 +254,7 @@ mod tests {
         for (t, body) in bodies {
             let offset = f.as_file().metadata().unwrap().len();
             let lsn = Lsn(offset);
-            let rec = LogRecord::new(lsn, prev, t, ts(), body).unwrap();
+            let rec = LogRecord::new(lsn, prev, t, body).unwrap();
             rec.encode(f.as_file_mut()).unwrap();
             lsns.push(lsn);
             prev = lsn;

@@ -22,9 +22,7 @@
 //! between callers that need durability guarantees (e.g. [`Wal::log_commit`]) and
 //! the background flush thread.
 
-use std::{
-    collections::HashMap, fs, io::Seek, os::unix::fs::FileExt, path::Path, time::SystemTime,
-};
+use std::{collections::HashMap, fs, io::Seek, os::unix::fs::FileExt, path::Path};
 
 use parking_lot::{Condvar, Mutex};
 
@@ -445,7 +443,7 @@ impl Wal {
     ) -> Result<Lsn, WalError> {
         let assigned_lsn = state.current_at;
 
-        let rec = LogRecord::new(assigned_lsn, prev_lsn, tid, SystemTime::now(), body)?;
+        let rec = LogRecord::new(assigned_lsn, prev_lsn, tid, body)?;
         let mut data = Vec::with_capacity(4096);
         rec.encode(&mut data)?;
 
