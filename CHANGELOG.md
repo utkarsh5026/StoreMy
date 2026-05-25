@@ -43,6 +43,8 @@ Older sections (before 2025-10-01) are the Go → Rust transition era.
 
 ### Features
 
+- **recovery**: Wire fuzzy checkpoints and unify database boot
+- **wal**: Add fuzzy checkpoint writer
 - **engine**: Support alter table check not valid and validate constraint
 - **catalog**: Add validated flag for check constraint not valid workflow
 - **parser**: Parse NOT VALID and VALIDATE CONSTRAINT in ALTER TABLE
@@ -338,6 +340,7 @@ Older sections (before 2025-10-01) are the Go → Rust transition era.
 
 ### Tests
 
+- **wal**: Cover fuzzy checkpoint record shape and snapshots
 - **insert**: Add integration tests for DEFAULT VALUES and partial INSERT
 - **auto_increment**: Add end-to-end integration tests for AUTO_INCREMENT lifecycle
 - **integration**: Assert current engineerror shapes after binder removal
