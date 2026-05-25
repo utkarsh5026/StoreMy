@@ -613,10 +613,14 @@ impl Wal {
 mod tests {
     use std::sync::Arc;
 
+    use fallible_iterator::FallibleIterator;
     use tempfile::tempdir;
 
     use super::*;
-    use crate::primitives::{FileId, PageNumber};
+    use crate::{
+        primitives::{FileId, PageNumber},
+        wal::{log::LogRecordType, reader::WalReader},
+    };
 
     /// `buf_size=0` forces every record through the direct-write path,
     /// advancing `flushed_till` immediately. `force()` returns without waiting,
@@ -983,5 +987,197 @@ mod tests {
         let abort_lsn = wal.log_abort(tid).unwrap();
         let end_lsn = wal.log_end(tid, abort_lsn).unwrap();
         assert!(end_lsn > abort_lsn);
+    }
+
+    /// Opens the WAL file at `path` and collects every readable record into a Vec.
+    fn read_all_records(path: &std::path::Path) -> Vec<LogRecord> {
+        let mut reader = WalReader::open(path).unwrap();
+        let mut out = Vec::new();
+        while let Some(r) = reader.next().unwrap() {
+            out.push(r);
+        }
+        out
+    }
+
+    fn flushed_till(wal: &Wal) -> Lsn {
+        wal.state.lock().flushed_till
+    }
+
+    #[test]
+    fn checkpoint_writes_begin_then_end_record() {
+        // A checkpoint must produce exactly two records in order: Begin then End.
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("wal");
+        let wal = Wal::new(&path, NO_BUF).unwrap();
+
+        wal.checkpoint().unwrap();
+
+        let records = read_all_records(&path);
+        assert_eq!(records.len(), 2);
+        assert_eq!(
+            records[0].header.record_type,
+            LogRecordType::CheckpointBegin
+        );
+        assert_eq!(records[1].header.record_type, LogRecordType::CheckpointEnd);
+    }
+
+    #[test]
+    fn checkpoint_end_prev_lsn_points_at_begin() {
+        // Analysis uses CheckpointEnd.prev_lsn to find CheckpointBegin and
+        // resume the forward scan from that point. If this link is wrong,
+        // records written during the checkpoint window will be missed.
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("wal");
+        let wal = Wal::new(&path, NO_BUF).unwrap();
+
+        wal.checkpoint().unwrap();
+
+        let records = read_all_records(&path);
+        let begin_lsn = records[0].header.lsn;
+        let end_prev_lsn = records[1].header.prev_lsn;
+        assert_eq!(
+            end_prev_lsn, begin_lsn,
+            "CheckpointEnd.prev_lsn must equal CheckpointBegin.lsn"
+        );
+    }
+
+    #[test]
+    fn checkpoint_records_use_invalid_tid() {
+        // Checkpoint records do not belong to any user transaction.
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("wal");
+        let wal = Wal::new(&path, NO_BUF).unwrap();
+
+        wal.checkpoint().unwrap();
+
+        for r in read_all_records(&path) {
+            assert_eq!(
+                r.header.tid,
+                TransactionId::INVALID,
+                "{:?} must carry INVALID tid",
+                r.header.record_type
+            );
+        }
+    }
+
+    #[test]
+    fn checkpoint_captures_active_txn_in_att_snapshot() {
+        // An uncommitted transaction must appear in the ATT snapshot with its
+        // correct last_lsn and TxnStatus::Running.
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("wal");
+        let wal = Wal::new(&path, NO_BUF).unwrap();
+
+        let tid = TransactionId::new(1);
+        let p = page(1, 1);
+        wal.log_begin(tid).unwrap();
+        let insert_lsn = wal.log_insert(tid, p, vec![], vec![1]).unwrap();
+
+        wal.checkpoint().unwrap();
+
+        let records = read_all_records(&path);
+        let end = records
+            .iter()
+            .find(|r| r.header.record_type == LogRecordType::CheckpointEnd)
+            .unwrap();
+
+        match &end.body {
+            LogRecordBody::CheckpointEnd { att_snapshot, .. } => {
+                assert_eq!(att_snapshot.len(), 1);
+                let (snap_tid, snap_lsn, snap_status) = att_snapshot[0];
+                assert_eq!(snap_tid, tid);
+                assert_eq!(snap_lsn, insert_lsn);
+                assert_eq!(snap_status, TxnStatus::Running);
+            }
+            _ => panic!("expected CheckpointEnd body"),
+        }
+    }
+
+    #[test]
+    fn checkpoint_captures_dirty_page_in_dpt_snapshot() {
+        // An insert marks a page dirty with the LSN of that insert.
+        // The DPT snapshot must carry that (page_id, rec_lsn) pair.
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("wal");
+        let wal = Wal::new(&path, NO_BUF).unwrap();
+
+        let tid = TransactionId::new(1);
+        let p = page(1, 7);
+        wal.log_begin(tid).unwrap();
+        let insert_lsn = wal.log_insert(tid, p, vec![], vec![1]).unwrap();
+
+        wal.checkpoint().unwrap();
+
+        let records = read_all_records(&path);
+        let end = records
+            .iter()
+            .find(|r| r.header.record_type == LogRecordType::CheckpointEnd)
+            .unwrap();
+
+        match &end.body {
+            LogRecordBody::CheckpointEnd { dpt_snapshot, .. } => {
+                assert_eq!(dpt_snapshot.len(), 1);
+                assert_eq!(dpt_snapshot[0], (p, insert_lsn));
+            }
+            _ => panic!("expected CheckpointEnd body"),
+        }
+    }
+
+    #[test]
+    fn committed_txn_absent_from_att_snapshot() {
+        // A committed transaction leaves active_txns, so it must not appear
+        // in the ATT snapshot — it is a winner and needs no undo.
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("wal");
+        let wal = Wal::new(&path, NO_BUF).unwrap();
+
+        let tid = TransactionId::new(1);
+        wal.log_begin(tid).unwrap();
+        wal.log_insert(tid, page(1, 1), vec![], vec![1]).unwrap();
+        wal.log_commit(tid).unwrap();
+
+        wal.checkpoint().unwrap();
+
+        let records = read_all_records(&path);
+        let end = records
+            .iter()
+            .find(|r| r.header.record_type == LogRecordType::CheckpointEnd)
+            .unwrap();
+
+        match &end.body {
+            LogRecordBody::CheckpointEnd { att_snapshot, .. } => {
+                assert!(
+                    att_snapshot.is_empty(),
+                    "committed txn must not appear in ATT snapshot"
+                );
+            }
+            _ => panic!("expected CheckpointEnd body"),
+        }
+    }
+
+    #[test]
+    fn second_checkpoint_lsn_greater_than_first() {
+        // Each checkpoint appends two records, so the second end_lsn must be
+        // strictly greater than the first.
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("wal");
+        let wal = Wal::new(&path, NO_BUF).unwrap();
+
+        let first = wal.checkpoint().unwrap();
+        let second = wal.checkpoint().unwrap();
+        assert!(second > first);
+    }
+
+    #[test]
+    fn checkpoint_is_durable_after_return() {
+        // With NO_BUF every write goes direct, so flushed_till must reach
+        // end_lsn by the time checkpoint() returns — force() is a no-op but
+        // the invariant must hold regardless.
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("wal");
+        let wal = Wal::new(&path, NO_BUF).unwrap();
+
+        let end_lsn = wal.checkpoint().unwrap();
+        assert!(flushed_till(&wal) >= end_lsn);
     }
 }
