@@ -6,19 +6,78 @@
 //! SQL without managing parser and execution wiring directly.
 
 use std::{
+    path::Path,
     sync::{Arc, mpsc},
     thread,
+    time::Duration,
 };
 
 use parking_lot::Mutex;
 
 use crate::{
     PAGE_SIZE,
-    catalog::{TableInfo, manager::Catalog},
+    buffer_pool::{double_write::DoubleWriteBuffer, page_store::PageStore},
+    catalog::{CatalogError, TableInfo, manager::Catalog},
     engine::{Engine, EngineError, StatementResult},
     parser::Parser,
+    recovery::{Aries, RecoveryError},
     transaction::TransactionManager,
+    wal::{WalError, writer::Wal},
 };
+
+const WAL_FILE_NAME: &str = "wal.log";
+const MASTER_RECORD_FILE_NAME: &str = "master.rec";
+const DOUBLE_WRITE_FILE_NAME: &str = "double_write.bin";
+
+/// Error returned when opening (booting) a database directory.
+#[derive(Debug, thiserror::Error)]
+pub enum DatabaseOpenError {
+    #[error("I/O error: {0}")]
+    Io(#[from] std::io::Error),
+    #[error("WAL error: {0}")]
+    Wal(#[from] WalError),
+    #[error("catalog error: {0}")]
+    Catalog(#[from] CatalogError),
+    #[error("double-write buffer error: {0}")]
+    Dwb(#[from] crate::buffer_pool::double_write::DwbError),
+    #[error("crash recovery failed: {0}")]
+    Recovery(#[from] RecoveryError),
+}
+
+/// Tunable parameters for booting a [`Database`].
+///
+/// All fields have sensible defaults via [`Default`]; use struct update syntax to
+/// override only what you need:
+///
+/// ```rust
+/// # use storemy::database::DatabaseConfig;
+/// let config = DatabaseConfig {
+///     buffer_pool_pages: 4096,
+///     ..DatabaseConfig::default()
+/// };
+/// ```
+#[derive(Debug, Clone)]
+pub struct DatabaseConfig {
+    /// Number of pages held in the buffer pool.
+    pub buffer_pool_pages: usize,
+    /// Number of SQL worker threads.
+    pub worker_threads: usize,
+    /// How often the checkpoint thread fires.
+    pub checkpoint_interval: Duration,
+    /// Number of double-write buffer slots (each slot ≈ one page + 512 B header).
+    pub dwb_slots: usize,
+}
+
+impl Default for DatabaseConfig {
+    fn default() -> Self {
+        Self {
+            buffer_pool_pages: 1028,
+            worker_threads: 4,
+            checkpoint_interval: Duration::from_secs(30),
+            dwb_slots: 128,
+        }
+    }
+}
 
 /// Alias for the result type returned by SQL execution.
 pub type QueryResult = Result<StatementResult, EngineError>;
@@ -44,6 +103,57 @@ pub struct Database {
 }
 
 impl Database {
+    /// Opens (or creates on first boot) a database at `dir` using the given `config`.
+    ///
+    /// Startup order: WAL → double-write buffer (torn-page recovery) → buffer pool
+    /// → ARIES crash recovery → checkpoint thread → catalog → transaction manager.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`DatabaseOpenError`] if any subsystem fails to initialise.
+    pub fn open(dir: &Path, config: &DatabaseConfig) -> Result<Self, DatabaseOpenError> {
+        let &DatabaseConfig {
+            buffer_pool_pages,
+            worker_threads,
+            checkpoint_interval,
+            dwb_slots,
+        } = config;
+
+        let wal = Arc::new(Wal::new(&dir.join(WAL_FILE_NAME), 0)?);
+
+        let mut dwb = DoubleWriteBuffer::open(dir.join(DOUBLE_WRITE_FILE_NAME), dwb_slots)?;
+        dwb.recover_torn_pages()?;
+        tracing::info!(db_dir = %dir.display(), "double-write buffer recovery complete");
+
+        let mut buffer_pool = PageStore::new(buffer_pool_pages, wal.clone());
+        buffer_pool.set_double_write_buffer(dwb);
+        let buffer_pool = Arc::new(buffer_pool);
+
+        let aries = Arc::new(Aries::new(
+            dir.join(WAL_FILE_NAME),
+            dir.join(MASTER_RECORD_FILE_NAME),
+        ));
+        let recovery = aries.recover(&buffer_pool, &wal)?;
+        tracing::info!(
+            db_dir        = %dir.display(),
+            losers_undone = recovery.att.len(),
+            dirty_pages   = recovery.dpt.len(),
+            redo_lsn      = ?recovery.redo_lsn,
+            "ARIES recovery complete"
+        );
+
+        let aries_bg = Arc::clone(&aries);
+        let wal_bg = Arc::clone(&wal);
+        thread::Builder::new()
+            .name(format!("storemy-checkpoint-{}", dir.display()))
+            .spawn(move || aries_bg.checkpoint_loop(&wal_bg, checkpoint_interval))
+            .expect("failed to spawn checkpoint thread");
+
+        let catalog = Catalog::initialize(&buffer_pool, &wal, dir)?;
+        let txn_mgr = Arc::new(TransactionManager::new(wal, buffer_pool));
+        Ok(Self::new(Arc::new(catalog), txn_mgr, worker_threads))
+    }
+
     /// Creates a new `Database` with `workers` background worker threads.
     ///
     /// # Panics
@@ -88,7 +198,7 @@ impl Database {
                             break; // channel closed => shutdown
                         };
 
-                        let out = execute_sql(&inner.catalog, &inner.txn_manager, &job.sql);
+                        let out = Self::execute_sql(&inner.catalog, &inner.txn_manager, &job.sql);
                         let _ = job.reply.send(out);
                     }
                 })
@@ -190,24 +300,37 @@ impl Database {
         txn.commit()?;
         Ok((info, pages))
     }
-}
 
-fn execute_sql(catalog: &Catalog, txn_manager: &Arc<TransactionManager>, sql: &str) -> QueryResult {
-    let stmts = Parser::new(sql)
-        .parse_all()
-        .map_err(|e| EngineError::Parse(e.to_string()))?;
+    /// Parses and runs `sql` on a worker thread.
+    ///
+    /// Semicolon-separated statements are executed in order; execution stops at
+    /// the first error. On success, returns the result of the last statement.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`EngineError::Parse`] for empty or invalid SQL, or any error
+    /// produced while executing a statement.
+    fn execute_sql(
+        catalog: &Catalog,
+        txn_manager: &Arc<TransactionManager>,
+        sql: &str,
+    ) -> QueryResult {
+        let stmts = Parser::new(sql)
+            .parse_all()
+            .map_err(|e| EngineError::Parse(e.to_string()))?;
 
-    if stmts.is_empty() {
-        return Err(EngineError::Parse("empty input".to_string()));
-    }
-
-    let engine = Engine::new(catalog, txn_manager);
-    let mut last = Err(EngineError::Parse("empty input".to_string()));
-    for stmt in stmts {
-        last = engine.execute_statement(stmt);
-        if last.is_err() {
-            break;
+        if stmts.is_empty() {
+            return Err(EngineError::Parse("empty input".to_string()));
         }
+
+        let engine = Engine::new(catalog, txn_manager);
+        let mut last = Err(EngineError::Parse("empty input".to_string()));
+        for stmt in stmts {
+            last = engine.execute_statement(stmt);
+            if last.is_err() {
+                break;
+            }
+        }
+        last
     }
-    last
 }

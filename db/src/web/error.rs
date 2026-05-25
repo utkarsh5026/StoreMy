@@ -72,9 +72,7 @@ fn registry_error_to_http(e: &RegistryError) -> (StatusCode, &'static str, Strin
         R::AlreadyExists(_) => (StatusCode::CONFLICT, "database_exists"),
         R::NotFound(_) => (StatusCode::NOT_FOUND, "database_not_found"),
         R::InvalidName(_) => (StatusCode::BAD_REQUEST, "invalid_database_name"),
-        R::Io(_) | R::Wal(_) | R::Catalog(_) | R::Dwb(_) | R::Recovery(_) => {
-            (StatusCode::INTERNAL_SERVER_ERROR, "internal")
-        }
+        R::Io(_) | R::Open(_) => (StatusCode::INTERNAL_SERVER_ERROR, "internal"),
     };
     (status, kind, e.to_string())
 }

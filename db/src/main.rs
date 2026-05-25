@@ -3,7 +3,7 @@
 //! This module is intentionally small and does only process bootstrapping:
 //! - initialize logging/tracing via [`observability::init`]
 //! - parse CLI arguments to choose REPL vs one-shot execution
-//! - delegate database startup to [`storemy::registry::boot_database`]
+//! - delegate database startup to [`storemy::database::Database::open`]
 //! - hand off control to [`repl`]
 //!
 //! # CLI modes
@@ -24,9 +24,8 @@ use std::{
 };
 
 use storemy::{
-    observability,
-    registry::{BUFFER_POOL_PAGES, boot_database},
-    repl,
+    database::{Database, DatabaseConfig},
+    observability, repl,
 };
 use tracing::error;
 
@@ -47,7 +46,7 @@ fn exit_on_err<T, E: std::fmt::Display>(result: Result<T, E>, message: &str) -> 
 /// - Parses CLI arguments to determine execution mode: either REPL mode (interactive shell) or
 ///   one-shot mode (execute a SQL query and exit).
 /// - Ensures the on-disk data directory exists, exiting with an error if not.
-/// - Delegates all database subsystem construction to [`boot_database`] (WAL, double-write buffer,
+/// - Delegates all database subsystem construction to [`Database::open`] (WAL, double-write buffer,
 ///   buffer pool, ARIES recovery, catalog, transaction manager).
 /// - Dispatches control to the selected CLI mode:
 ///     - REPL: launches an interactive prompt (history file persisted in data dir).
@@ -88,14 +87,18 @@ fn main() {
         process::exit(1);
     }
 
-    let db = exit_on_err(boot_database(&data_dir), "failed to boot database");
+    let config = DatabaseConfig::default();
+    let db = exit_on_err(
+        Database::open(&data_dir, &config),
+        "failed to boot database",
+    );
 
     match mode_or_sql.as_deref() {
         None | Some("repl") => repl::run(
             &db,
             &data_dir.join(REPL_HISTORY_FILE_NAME),
             &data_dir,
-            BUFFER_POOL_PAGES,
+            config.buffer_pool_pages,
         ),
         Some("--file") => {
             let path = args.next().unwrap_or_else(|| {
