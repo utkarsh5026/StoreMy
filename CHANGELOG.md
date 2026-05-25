@@ -254,6 +254,7 @@ Older sections (before 2025-10-01) are the Go → Rust transition era.
 
 ### Refactoring
 
+- **transaction**: Encode lifecycle state in transaction handles
 - **wal**: Extract wal test setup helpers
 - **codec**: Add little-endian read/write extension traits
 - **recovery**: Extract Redo and Undo pass executors
