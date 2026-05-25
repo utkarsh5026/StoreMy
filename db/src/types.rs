@@ -19,12 +19,11 @@ use std::{
     io::{Read, Write},
 };
 
-use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
 use thiserror::Error;
 
 use crate::{
     STRING_MAX_SIZE,
-    codec::{CodecError, Decode, Encode},
+    codec::{CodecError, Decode, Encode, ReadLeExt, WriteLeExt},
 };
 
 /// Errors related to the type system and value conversions.
@@ -102,7 +101,7 @@ impl From<Type> for u32 {
 /// Returns any underlying I/O error from the writer.
 impl Encode for Type {
     fn encode<W: Write>(&self, writer: &mut W) -> Result<(), CodecError> {
-        writer.write_u32::<LittleEndian>(u32::from(*self))?;
+        writer.write_le_u32(u32::from(*self))?;
         Ok(())
     }
 }
@@ -120,7 +119,7 @@ impl Encode for Type {
 /// - Any I/O error returned by the reader.
 impl Decode for Type {
     fn decode<R: Read>(reader: &mut R) -> Result<Self, CodecError> {
-        let tag = reader.read_u32::<LittleEndian>()?;
+        let tag = reader.read_le_u32()?;
         Type::try_from(tag).map_err(|_| match u8::try_from(tag) {
             Ok(tag_u8) => CodecError::UnknownDiscriminant(tag_u8),
             Err(_) => CodecError::NumericDoesNotFit {
@@ -590,23 +589,23 @@ impl Encode for Value {
             Value::Null => writer.write_u8(0)?,
             Value::Int32(v) => {
                 writer.write_u8(1)?;
-                writer.write_i32::<LittleEndian>(*v)?;
+                writer.write_le_i32(*v)?;
             }
             Value::Int64(v) => {
                 writer.write_u8(2)?;
-                writer.write_i64::<LittleEndian>(*v)?;
+                writer.write_le_i64(*v)?;
             }
             Value::Uint32(v) => {
                 writer.write_u8(3)?;
-                writer.write_u32::<LittleEndian>(*v)?;
+                writer.write_le_u32(*v)?;
             }
             Value::Uint64(v) => {
                 writer.write_u8(4)?;
-                writer.write_u64::<LittleEndian>(*v)?;
+                writer.write_le_u64(*v)?;
             }
             Value::Float64(v) => {
                 writer.write_u8(5)?;
-                writer.write_f64::<LittleEndian>(*v)?;
+                writer.write_le_f64(*v)?;
             }
             Value::Bool(v) => {
                 writer.write_u8(6)?;
@@ -620,7 +619,7 @@ impl Encode for Value {
                     value: len as u64,
                     target: "u32",
                 })?;
-                writer.write_u32::<LittleEndian>(len_u32)?;
+                writer.write_le_u32(len_u32)?;
                 writer.write_all(&bytes[..len])?;
             }
         }
@@ -636,14 +635,14 @@ impl Decode for Value {
     fn decode<R: Read>(reader: &mut R) -> Result<Self, CodecError> {
         match reader.read_u8()? {
             0 => Ok(Value::Null),
-            1 => Ok(Value::Int32(reader.read_i32::<LittleEndian>()?)),
-            2 => Ok(Value::Int64(reader.read_i64::<LittleEndian>()?)),
-            3 => Ok(Value::Uint32(reader.read_u32::<LittleEndian>()?)),
-            4 => Ok(Value::Uint64(reader.read_u64::<LittleEndian>()?)),
-            5 => Ok(Value::Float64(reader.read_f64::<LittleEndian>()?)),
+            1 => Ok(Value::Int32(reader.read_le_i32()?)),
+            2 => Ok(Value::Int64(reader.read_le_i64()?)),
+            3 => Ok(Value::Uint32(reader.read_le_u32()?)),
+            4 => Ok(Value::Uint64(reader.read_le_u64()?)),
+            5 => Ok(Value::Float64(reader.read_le_f64()?)),
             6 => Ok(Value::Bool(reader.read_u8()? != 0)),
             7 => {
-                let len = reader.read_u32::<LittleEndian>()? as usize;
+                let len = reader.read_le_u32()? as usize;
                 let mut buf = vec![0u8; len];
                 reader.read_exact(&mut buf)?;
                 Ok(Value::String(std::str::from_utf8(&buf)?.to_string()))

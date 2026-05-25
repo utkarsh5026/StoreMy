@@ -10,11 +10,9 @@
 
 use std::io::{Read, Write};
 
-use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
-
 use crate::{
     Value,
-    codec::{CodecError, Decode, Encode},
+    codec::{CodecError, Decode, Encode, ReadLeExt, WriteLeExt},
     primitives::RecordId,
 };
 
@@ -76,7 +74,7 @@ impl Encode for CompositeKey {
             value: u64::try_from(self.0.len()).unwrap_or(u64::MAX),
             target: "u32",
         })?;
-        w.write_u32::<LittleEndian>(n)?;
+        w.write_le_u32(n)?;
         for v in &self.0 {
             v.encode(w)?;
         }
@@ -92,7 +90,7 @@ impl Encode for CompositeKey {
 /// - Propagates errors from reading or decoding any individual value
 impl Decode for CompositeKey {
     fn decode<R: Read>(r: &mut R) -> Result<Self, CodecError> {
-        let n = r.read_u32::<LittleEndian>()? as usize;
+        let n = r.read_le_u32()? as usize;
         let mut values = Vec::with_capacity(n);
         for _ in 0..n {
             values.push(Value::decode(r)?);

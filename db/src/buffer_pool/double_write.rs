@@ -59,12 +59,11 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
 use thiserror::Error;
 
 use crate::{
     PAGE_SIZE,
-    codec::{CodecError, Decode, Encode},
+    codec::{CodecError, Decode, Encode, ReadLeExt, WriteLeExt},
     primitives::PageId,
     storage::{self, page_crc_valid},
 };
@@ -152,7 +151,7 @@ impl Encode for SlotHeader {
             value: u64::try_from(path_len).unwrap_or(u64::MAX),
             target: "u32",
         })?;
-        writer.write_u32::<LittleEndian>(path_len_u32)?;
+        writer.write_le_u32(path_len_u32)?;
 
         let mut path_buf = [0u8; Self::MAX_PATH_BYTES];
         path_buf[..path_len].copy_from_slice(&path_bytes[..path_len]);
@@ -172,7 +171,7 @@ impl Decode for SlotHeader {
 
         let page_id = PageId::decode(reader)?;
 
-        let path_len = (reader.read_u32::<LittleEndian>()? as usize).min(Self::MAX_PATH_BYTES);
+        let path_len = (reader.read_le_u32()? as usize).min(Self::MAX_PATH_BYTES);
         let mut path_buf = [0u8; Self::MAX_PATH_BYTES];
         reader.read_exact(&mut path_buf)?;
         let path_str = std::str::from_utf8(&path_buf[..path_len])?;

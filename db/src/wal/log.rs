@@ -20,10 +20,8 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
-use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
-
 use crate::{
-    codec::{CodecError, Decode, Encode},
+    codec::{CodecError, Decode, Encode, ReadLeExt, WriteLeExt},
     primitives::{Lsn, PageId, TransactionId},
 };
 
@@ -176,9 +174,9 @@ impl Encode for LogRecordHeader {
             .duration_since(UNIX_EPOCH)
             .unwrap_or_default()
             .as_secs();
-        writer.write_u64::<LittleEndian>(secs)?;
-        writer.write_u32::<LittleEndian>(self.body_len)?;
-        writer.write_u32::<LittleEndian>(self.checksum)?;
+        writer.write_le_u64(secs)?;
+        writer.write_le_u32(self.body_len)?;
+        writer.write_le_u32(self.checksum)?;
         Ok(())
     }
 }
@@ -196,10 +194,10 @@ impl Decode for LogRecordHeader {
         let lsn = Lsn::decode(reader)?;
         let prev_lsn = Lsn::decode(reader)?;
         let tid = TransactionId::decode(reader)?;
-        let secs = reader.read_u64::<LittleEndian>()?;
+        let secs = reader.read_le_u64()?;
         let timestamp = UNIX_EPOCH + std::time::Duration::from_secs(secs);
-        let body_len = reader.read_u32::<LittleEndian>()?;
-        let checksum = reader.read_u32::<LittleEndian>()?;
+        let body_len = reader.read_le_u32()?;
+        let checksum = reader.read_le_u32()?;
         Ok(Self {
             lsn,
             prev_lsn,
@@ -353,13 +351,13 @@ impl Encode for LogRecordBody {
                 att_snapshot,
                 dpt_snapshot,
             } => {
-                writer.write_u32::<LittleEndian>(Self::encoded_len_u32(att_snapshot.len())?)?;
+                writer.write_le_u32(Self::encoded_len_u32(att_snapshot.len())?)?;
                 for (tid, lsn, status) in att_snapshot {
                     tid.encode(writer)?;
                     lsn.encode(writer)?;
                     writer.write_u8(*status as u8)?;
                 }
-                writer.write_u32::<LittleEndian>(Self::encoded_len_u32(dpt_snapshot.len())?)?;
+                writer.write_le_u32(Self::encoded_len_u32(dpt_snapshot.len())?)?;
                 for (page_id, rec_lsn) in dpt_snapshot {
                     page_id.encode(writer)?;
                     rec_lsn.encode(writer)?;
@@ -403,10 +401,10 @@ impl LogRecordBody {
     fn encode_image<W: Write>(writer: &mut W, image: Option<&[u8]>) -> Result<(), CodecError> {
         match image {
             Some(img) => {
-                writer.write_u32::<LittleEndian>(Self::encoded_len_u32(img.len())?)?;
+                writer.write_le_u32(Self::encoded_len_u32(img.len())?)?;
                 writer.write_all(img)?;
             }
-            None => writer.write_u32::<LittleEndian>(0)?,
+            None => writer.write_le_u32(0)?,
         }
         Ok(())
     }
@@ -416,7 +414,7 @@ impl LogRecordBody {
     /// Returns `None` when the stored length prefix is zero (the counterpart of
     /// writing `None` via [`encode_image`]), or `Some(bytes)` otherwise.
     fn decode_image<R: Read>(reader: &mut R) -> Result<Option<Vec<u8>>, CodecError> {
-        let len = reader.read_u32::<LittleEndian>()? as usize;
+        let len = reader.read_le_u32()? as usize;
         if len == 0 {
             return Ok(None);
         }
@@ -470,7 +468,7 @@ impl LogRecordBody {
             }),
 
             LogRecordType::CheckpointEnd => {
-                let att_count = reader.read_u32::<LittleEndian>()? as usize;
+                let att_count = reader.read_le_u32()? as usize;
                 let mut att_snapshot = Vec::with_capacity(att_count);
                 for _ in 0..att_count {
                     let tid = TransactionId::decode(reader)?;
@@ -479,7 +477,7 @@ impl LogRecordBody {
                         .map_err(CodecError::UnknownDiscriminant)?;
                     att_snapshot.push((tid, lsn, status));
                 }
-                let dpt_count = reader.read_u32::<LittleEndian>()? as usize;
+                let dpt_count = reader.read_le_u32()? as usize;
                 let mut dpt_snapshot = Vec::with_capacity(dpt_count);
                 for _ in 0..dpt_count {
                     let page_id = PageId::decode(reader)?;
