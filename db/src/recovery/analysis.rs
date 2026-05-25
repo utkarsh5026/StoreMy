@@ -11,7 +11,7 @@
 //!
 //! When a fuzzy checkpoint exists, the scan can start from the checkpoint's
 //! `CheckpointEnd` snapshot instead of LSN 0. The master record points at that
-//! record; [`Aries::run_analysis`] loads the snapshot, then continues forward
+//! record; [`Analysis::run`] loads the snapshot, then continues forward
 //! from the matching `CheckpointBegin` so records written during the checkpoint
 //! window are not missed.
 
@@ -20,7 +20,7 @@ use std::collections::HashMap;
 use fallible_iterator::FallibleIterator;
 use thiserror::Error;
 
-use super::{AnalysisResult, Aries, AttEntry, DptEntry};
+use super::{AnalysisResult, AttEntry, DptEntry};
 use crate::{
     primitives::{Lsn, PageId, TransactionId},
     wal::{
@@ -50,7 +50,13 @@ pub enum AnalysisError {
     TornCheckpoint(Lsn),
 }
 
-impl Aries {
+#[derive(Debug, Default)]
+pub(in crate::recovery) struct Analysis {
+    active_transactions: HashMap<TransactionId, AttEntry>,
+    dirty_pages: HashMap<PageId, DptEntry>,
+}
+
+impl Analysis {
     /// Runs the Analysis pass over `reader` and returns the rebuilt tables.
     ///
     /// If `checkpoint_lsn` is `None`, scanning starts at LSN 0 (no prior
@@ -71,49 +77,34 @@ impl Aries {
         skip(reader),
         fields(checkpoint_lsn = ?checkpoint_lsn)
     )]
-    pub(super) fn run_analysis(
+    pub(in crate::recovery) fn run(
+        mut self,
         reader: &mut WalReader,
         checkpoint_lsn: Option<Lsn>,
     ) -> Result<AnalysisResult, AnalysisError> {
-        let mut active_transactions: HashMap<TransactionId, AttEntry> = HashMap::new();
-        let mut dirty_pages: HashMap<PageId, DptEntry> = HashMap::new();
-        let mut records_scanned = 0usize;
-
         let scan_from_lsn = match checkpoint_lsn {
-            None => Lsn(0),
-            Some(ckpt_lsn) => Self::load_checkpoint_snapshot(
-                reader,
-                ckpt_lsn,
-                &mut active_transactions,
-                &mut dirty_pages,
-            )?,
+            None => Lsn::INVALID,
+            Some(ckpt_lsn) => self.load_checkpoint_snapshot(reader, ckpt_lsn)?,
         };
+        let mut records_scanned = 0usize;
 
         reader.seek_to(scan_from_lsn).map_err(AnalysisError::Wal)?;
         while let Some(LogRecord { header, body }) = reader.next().map_err(AnalysisError::Wal)? {
             records_scanned += 1;
-            Self::process_record(
-                header.lsn,
-                header.tid,
-                header.prev_lsn,
-                &body,
-                &mut active_transactions,
-                &mut dirty_pages,
-            );
+            self.process_record(header.lsn, header.tid, header.prev_lsn, &body);
         }
-
-        let redo_lsn = AnalysisResult::compute_redo_lsn(&dirty_pages);
+        let redo_lsn = AnalysisResult::compute_redo_lsn(&self.dirty_pages);
         tracing::debug!(
             scan_from_lsn = ?scan_from_lsn,
             records_scanned,
-            att_size = active_transactions.len(),
-            dpt_size = dirty_pages.len(),
+            att_size = self.active_transactions.len(),
+            dpt_size = self.dirty_pages.len(),
             redo_lsn = ?redo_lsn,
             "analysis pass complete"
         );
         Ok(AnalysisResult {
-            att: active_transactions,
-            dpt: dirty_pages,
+            att: self.active_transactions,
+            dpt: self.dirty_pages,
             redo_lsn,
         })
     }
@@ -123,7 +114,7 @@ impl Aries {
     /// Reads the record at `ckpt_lsn`. On success, copies `att_snapshot` and
     /// `dpt_snapshot` into the tables and returns `prev_lsn` from that record
     /// (the LSN of the matching `CheckpointBegin`). If the record is missing,
-    /// torn, or not a `CheckpointEnd`, returns `Ok(Lsn(0))` so analysis restarts
+    /// torn, or not a `CheckpointEnd`, returns `Ok(Lsn::INVALID)` so analysis restarts
     /// from the beginning of the log (except when `read_at` fails outright, which
     /// yields [`AnalysisError::TornCheckpoint`]).
     ///
@@ -131,12 +122,11 @@ impl Aries {
     ///
     /// Returns [`AnalysisError::TornCheckpoint`] when `read_at(ckpt_lsn)` fails.
     fn load_checkpoint_snapshot(
+        &mut self,
         reader: &mut WalReader,
         ckpt_lsn: Lsn,
-        active_transactions: &mut HashMap<TransactionId, AttEntry>,
-        dirty_pages: &mut HashMap<PageId, DptEntry>,
     ) -> Result<Lsn, AnalysisError> {
-        let record = reader
+        let checkpoint_end = reader
             .read_at(ckpt_lsn)
             .map_err(|_| AnalysisError::TornCheckpoint(ckpt_lsn))?;
 
@@ -145,13 +135,13 @@ impl Aries {
         let LogRecordBody::CheckpointEnd {
             att_snapshot,
             dpt_snapshot,
-        } = record.body
+        } = checkpoint_end.body
         else {
-            return Ok(Lsn(0));
+            return Ok(Lsn::INVALID);
         };
 
         for (tid, last_lsn, status) in att_snapshot {
-            active_transactions.insert(tid, AttEntry {
+            self.active_transactions.insert(tid, AttEntry {
                 status,
                 last_lsn,
                 undo_next_lsn: last_lsn,
@@ -159,12 +149,12 @@ impl Aries {
         }
 
         for (page_id, rec_lsn) in dpt_snapshot {
-            dirty_pages.insert(page_id, DptEntry { rec_lsn });
+            self.dirty_pages.insert(page_id, DptEntry { rec_lsn });
         }
 
         // prev_lsn on the CheckpointEnd points at the matching CheckpointBegin.
         // Scan must start there so we don't miss records written during the window.
-        Ok(record.header.prev_lsn)
+        Ok(checkpoint_end.header.prev_lsn)
     }
 
     /// Updates the ATT and DPT for one log record.
@@ -175,25 +165,25 @@ impl Aries {
     /// no-ops during the forward scan (snapshots are handled in
     /// [`load_checkpoint_snapshot`]).
     fn process_record(
+        &mut self,
         lsn: Lsn,
         tid: TransactionId,
         prev_lsn: Lsn,
         body: &LogRecordBody,
-        active_transactions: &mut HashMap<TransactionId, AttEntry>,
-        dirty_pages: &mut HashMap<PageId, DptEntry>,
     ) {
         match body {
             // A new transaction started: we add it to the ATT as Running.
             // Both LSN fields start at the Begin record — that's where Undo would
             // begin walking backward if this txn turns out to be a loser.
             LogRecordBody::Begin => {
-                active_transactions.insert(tid, AttEntry::new_running(lsn));
+                self.active_transactions
+                    .insert(tid, AttEntry::new_running(lsn));
             }
 
             // Commit: winner — durable on the log, nothing to undo.
             // End: Undo finished rolling back a loser — drop it so it isn't undone again.
             LogRecordBody::Commit | LogRecordBody::End => {
-                active_transactions.remove(&tid);
+                self.active_transactions.remove(&tid);
             }
 
             // An aborted transaction is still a loser — its changes may have
@@ -201,7 +191,8 @@ impl Aries {
             // Mark it Aborting and record the current position so Undo knows where
             // to start.
             LogRecordBody::Abort => {
-                let entry = active_transactions
+                let entry = self
+                    .active_transactions
                     .entry(tid)
                     .or_insert_with(|| AttEntry::new_running(lsn));
                 entry.status = TxnStatus::Aborting;
@@ -213,12 +204,13 @@ impl Aries {
             LogRecordBody::Update { page_id, .. }
             | LogRecordBody::Insert { page_id, .. }
             | LogRecordBody::Delete { page_id, .. } => {
-                let entry = active_transactions
+                let entry = self
+                    .active_transactions
                     .entry(tid)
                     .or_insert_with(|| AttEntry::new_running(lsn));
                 entry.update_lsn(lsn, lsn);
 
-                dirty_pages
+                self.dirty_pages
                     .entry(*page_id)
                     .or_insert(DptEntry { rec_lsn: lsn });
             }
@@ -233,12 +225,13 @@ impl Aries {
                 undo_next_lsn: clr_undo_next,
                 ..
             } => {
-                let entry = active_transactions
+                let entry = self
+                    .active_transactions
                     .entry(tid)
                     .or_insert_with(|| AttEntry::new_running(lsn));
                 entry.update_lsn(lsn, *clr_undo_next);
 
-                dirty_pages
+                self.dirty_pages
                     .entry(*page_id)
                     .or_insert(DptEntry { rec_lsn: lsn });
             }
@@ -303,7 +296,7 @@ mod tests {
 
         let f = write_log(&records);
         let mut reader = WalReader::open(f.path()).unwrap();
-        let result = Aries::run_analysis(&mut reader, None).unwrap();
+        let result = Analysis::default().run(&mut reader, None).unwrap();
 
         assert!(result.att.is_empty(), "no losers expected");
         assert!(result.dpt.contains_key(&page(5)), "page 5 should be in DPT");
@@ -325,7 +318,7 @@ mod tests {
 
         let f = write_log(&records);
         let mut reader = WalReader::open(f.path()).unwrap();
-        let result = Aries::run_analysis(&mut reader, None).unwrap();
+        let result = Analysis::default().run(&mut reader, None).unwrap();
 
         assert!(result.att.contains_key(&tid(2)), "T2 must be a loser");
         let entry = &result.att[&tid(2)];
@@ -352,7 +345,7 @@ mod tests {
 
         let f = write_log(&records);
         let mut reader = WalReader::open(f.path()).unwrap();
-        let result = Aries::run_analysis(&mut reader, None).unwrap();
+        let result = Analysis::default().run(&mut reader, None).unwrap();
 
         assert!(
             result.att.contains_key(&tid(3)),
@@ -390,7 +383,7 @@ mod tests {
 
         let f = write_log(&records);
         let mut reader = WalReader::open(f.path()).unwrap();
-        let result = Aries::run_analysis(&mut reader, None).unwrap();
+        let result = Analysis::default().run(&mut reader, None).unwrap();
 
         let entry = result.att.get(&tid(4)).expect("T4 must still be a loser");
         assert_eq!(entry.last_lsn, Lsn(110), "last_lsn advances to the CLR");
@@ -426,7 +419,7 @@ mod tests {
 
         let f = write_log(&records);
         let mut reader = WalReader::open(f.path()).unwrap();
-        let result = Aries::run_analysis(&mut reader, None).unwrap();
+        let result = Analysis::default().run(&mut reader, None).unwrap();
 
         assert!(
             !result.att.contains_key(&tid(5)),
@@ -458,7 +451,7 @@ mod tests {
 
         let f = write_log(&records);
         let mut reader = WalReader::open(f.path()).unwrap();
-        let result = Aries::run_analysis(&mut reader, None).unwrap();
+        let result = Analysis::default().run(&mut reader, None).unwrap();
 
         assert_eq!(result.redo_lsn, Lsn(41));
     }

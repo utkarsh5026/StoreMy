@@ -22,6 +22,7 @@ use thiserror::Error;
 use crate::{
     buffer_pool::page_store::PageStore,
     primitives::{Lsn, PageId, TransactionId},
+    recovery::analysis::Analysis,
     wal::{WalError, log::TxnStatus, reader::WalReader, writer::Wal},
 };
 
@@ -195,7 +196,7 @@ impl Aries {
     ) -> Result<AnalysisResult, RecoveryError> {
         let checkpoint_lsn = self.read_master()?;
         let mut reader = WalReader::open(&self.wal_path)?;
-        let result = Self::run_analysis(&mut reader, checkpoint_lsn)?;
+        let result = Analysis::default().run(&mut reader, checkpoint_lsn)?;
         Self::run_redo(&mut reader, &result, buffer_pool)?;
 
         // Snapshot before Undo consumes the ATT — callers (e.g. main.rs) log
@@ -279,7 +280,7 @@ mod tests {
 
     use tempfile::tempdir;
 
-    use super::*;
+    use super::{analysis::Analysis, *};
     use crate::{
         primitives::{FileId, PageId, PageNumber},
         wal::{reader::WalReader, writer::Wal},
@@ -412,7 +413,9 @@ mod tests {
         wal.log_insert(tid(3), page(3), vec![], vec![3]).unwrap();
 
         let mut reader = WalReader::open(&dir.path().join("wal")).unwrap();
-        let result = Aries::run_analysis(&mut reader, Some(checkpoint_end_lsn)).unwrap();
+        let result = Analysis::default()
+            .run(&mut reader, Some(checkpoint_end_lsn))
+            .unwrap();
 
         assert!(
             !result.att.contains_key(&tid(1)),
@@ -444,7 +447,7 @@ mod tests {
         // no commit — T1 is a loser
 
         let mut reader = WalReader::open(&dir.path().join("wal")).unwrap();
-        let result = Aries::run_analysis(&mut reader, None).unwrap();
+        let result = Analysis::default().run(&mut reader, None).unwrap();
 
         assert!(
             result.att.contains_key(&tid(1)),
