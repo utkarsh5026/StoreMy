@@ -136,6 +136,29 @@ impl Wal {
         })
     }
 
+    /// Truncates the WAL file to `lsn` and resets the write position.
+    ///
+    /// Called by [`crate::recovery::Aries::recover`] after the Analysis pass, using the reader's
+    /// final cursor position (the byte offset of the first torn/unreadable record).
+    /// This discards any partial record bytes that survived the crash, so CLRs
+    /// and End records written by the Undo pass land immediately after the last
+    /// complete valid record with no garbage bytes in between.
+    ///
+    /// Without this, a second recovery's forward scan would hit the garbage bytes,
+    /// treat them as a torn tail, and stop — never reaching the End records that
+    /// the first Undo pass wrote, violating the idempotency guarantee.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`WalError::Io`] if the file truncation fails.
+    pub fn trim_to(&self, lsn: Lsn) -> Result<(), WalError> {
+        self.file.set_len(lsn.0)?;
+        let mut state = self.state.lock();
+        state.current_at = lsn;
+        state.flushed_till = lsn;
+        Ok(())
+    }
+
     /// Logs a `Begin` record for `tid` and registers it as an active transaction.
     ///
     /// This must be called before any data-modification records (`log_insert`,

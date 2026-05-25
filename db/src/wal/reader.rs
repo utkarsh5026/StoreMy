@@ -59,6 +59,16 @@ impl WalReader {
         })
     }
 
+    /// Returns the current cursor position.
+    ///
+    /// After a completed forward scan this equals the byte offset of the first
+    /// unreadable (torn or absent) record — the end of the valid log prefix.
+    /// `Aries::recover` reads this after Analysis to know where to truncate the
+    /// WAL before the Undo pass writes CLRs and End records.
+    pub fn pos(&self) -> u64 {
+        self.pos
+    }
+
     /// Moves the cursor to `lsn`.
     ///
     /// In ARIES the LSN *is* the byte offset of the record in the log file, so

@@ -277,18 +277,13 @@ impl Decode for TransactionId {
 /// Values increase over time and uniquely identify log records.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Default)]
 pub struct Lsn(
-    /// Raw LSN value. [`Lsn::INVALID`] (`u64::MAX`) is the sentinel for
-    /// “no LSN” — it can never be a real byte offset in a WAL file.
+    /// Raw LSN value; zero is reserved (see [`Lsn::INVALID`]).
     pub u64,
 );
 
 impl Lsn {
-    /// Sentinel meaning “no LSN” or “no previous record in chain”.
-    ///
-    /// Set to `u64::MAX` so it can never collide with a real byte offset.
-    /// Using `0` would conflict with the first record in the WAL, which
-    /// legitimately lives at byte 0.
-    pub const INVALID: Self = Self(u64::MAX);
+    /// Sentinel meaning “no LSN” or “invalid”.
+    pub const INVALID: Self = Self(0);
 }
 
 impl fmt::Display for Lsn {

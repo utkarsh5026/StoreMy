@@ -197,6 +197,18 @@ impl Aries {
         let checkpoint_lsn = self.read_master()?;
         let mut reader = WalReader::open(&self.wal_path)?;
         let result = Analysis::default().run(&mut reader, checkpoint_lsn)?;
+
+        // After Analysis, `reader.pos()` is the byte offset of the first torn
+        // or absent record — the true end of the valid log prefix.
+        //
+        // Any bytes between this position and the physical end of the file are
+        // garbage from a partial record that was in flight when the system
+        // crashed.  We truncate them away now, before the Undo pass writes CLRs
+        // and End records, so that a subsequent Analysis scan can always reach
+        // those new records without hitting a false torn-tail in the middle.
+        let valid_end = Lsn(reader.pos());
+        wal.trim_to(valid_end).map_err(RecoveryError::Wal)?;
+
         Redo::new(&result, buffer_pool).run(&mut reader)?;
 
         // Snapshot before Undo consumes the ATT — callers (e.g. main.rs) log

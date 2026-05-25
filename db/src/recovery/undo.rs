@@ -93,7 +93,7 @@ pub(in crate::recovery) struct Undo<'a> {
     buffer_pool: &'a Arc<PageStore>,
     /// Loser table, drained as each transaction is fully rolled back.
     att: HashMap<TransactionId, AttEntry>,
-    /// Max-heap of (undo_next_lsn, tid) across all remaining losers.
+    /// Max-heap of (`undo_next_lsn`, tid) across all remaining losers.
     heap: BinaryHeap<(Lsn, TransactionId)>,
     stats: UndoStats,
 }
@@ -110,16 +110,16 @@ impl<'a> Undo<'a> {
         buffer_pool: &'a Arc<PageStore>,
         analysis: AnalysisResult,
     ) -> Self {
-        let att = analysis.att;
-        let heap = att
+        let heap = analysis
+            .att
             .iter()
-            .filter(|(_, e)| e.undo_next_lsn != Lsn::INVALID)
             .map(|(tid, e)| (e.undo_next_lsn, *tid))
-            .collect();
+            .collect::<BinaryHeap<(Lsn, TransactionId)>>();
+
         Self {
             wal,
             buffer_pool,
-            att,
+            att: analysis.att,
             heap,
             stats: UndoStats::default(),
         }
@@ -751,10 +751,13 @@ mod tests {
         );
     }
 
-    /// A loser whose `undo_next_lsn == Lsn::INVALID` is filtered out of the
-    /// heap entirely: no records are read, no page is written, no End is emitted.
+    /// A loser whose `undo_next_lsn == Lsn::INVALID` (byte 0) still gets an
+    /// End record written.  This simulates the "crash-during-undo" case where
+    /// a prior Undo run wrote all CLRs (the last one with `undo_next_lsn` = 0,
+    /// pointing at the Begin) but crashed before writing the End.  The loser
+    /// must be finalised so a second recovery sees the End and finds an empty ATT.
     #[test]
-    fn test_run_undo_loser_with_invalid_undo_next_is_skipped() {
+    fn test_run_undo_loser_with_invalid_undo_next_is_finalized() {
         let (wal, store, dir) = make_env(2);
         let t1 = tid(1);
         let page_id = pid(1, 0);
@@ -789,16 +792,22 @@ mod tests {
         );
 
         let mut reader2 = WalReader::open(&dir.path().join("wal")).unwrap();
-        let count = {
-            let mut n = 0usize;
-            while reader2.next().unwrap().is_some() {
-                n += 1;
+        let types: Vec<_> = {
+            let mut v = Vec::new();
+            while let Some(rec) = reader2.next().unwrap() {
+                v.push(rec.header.record_type);
             }
-            n
+            v
         };
         assert_eq!(
-            count, 3,
-            "no End record should be appended for a skipped loser"
+            types.len(),
+            4,
+            "expected Begin, Insert, CLR, End; got {types:?}"
+        );
+        assert!(
+            matches!(types[3], LogRecordType::End),
+            "fourth record must be End so idempotency holds; got {:?}",
+            types[3]
         );
     }
 
