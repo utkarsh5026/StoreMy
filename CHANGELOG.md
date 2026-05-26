@@ -44,6 +44,14 @@ Older sections (before 2025-10-01) are the Go → Rust transition era.
 
 ### Features
 
+- **transaction**: Implement partial_undo for ROLLBACK TO SAVEPOINT
+- **tcl**: Wire release savepoint through session executor
+- **tcl**: Execute savepoint in explicit transactions
+- **wal**: Add savepoint log records and writer support
+- **transaction**: Add savepoint stack and wal markers
+- **engine**: Add session-aware begin/commit/rollback execution
+- **transaction**: Add session and txn context types
+- **parser**: Add transaction control statement parsing
 - **recovery**: Wire fuzzy checkpoints and unify database boot
 - **wal**: Add fuzzy checkpoint writer
 - **engine**: Support alter table check not valid and validate constraint
@@ -254,6 +262,9 @@ Older sections (before 2025-10-01) are the Go → Rust transition era.
 
 ### Refactoring
 
+- **engine**: Unify exec handlers to txn, catalog, stmt
+- **database**: Move boot logic into Database::open
+- **transaction**: Drop transaction lifetime via Arc manager
 - **transaction**: Encode lifecycle state in transaction handles
 - **wal**: Extract wal test setup helpers
 - **codec**: Add little-endian read/write extension traits
@@ -348,6 +359,7 @@ Older sections (before 2025-10-01) are the Go → Rust transition era.
 
 ### Tests
 
+- **tcl**: Add unit tests for TCL session state machine
 - **recovery**: Add property-based crash-kill proptests
 - **wal**: Cover fuzzy checkpoint record shape and snapshots
 - **insert**: Add integration tests for DEFAULT VALUES and partial INSERT
