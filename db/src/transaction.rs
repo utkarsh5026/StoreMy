@@ -35,7 +35,7 @@ use thiserror::Error;
 
 use crate::{
     buffer_pool::page_store::{PageStore, PageStoreError},
-    primitives::TransactionId,
+    primitives::{Lsn, NonEmptyString, TransactionId},
     wal::{WalError, writer::Wal},
 };
 
@@ -52,6 +52,9 @@ pub enum TransactionError {
 
     #[error("transaction {0} already committed or aborted")]
     AlreadyFinished(TransactionId),
+
+    #[error("savepoint '{0}' does not exist")]
+    SavepointNotFound(String),
 }
 
 pub struct Active;
@@ -123,6 +126,14 @@ impl TransactionManager {
         tracing::warn!(txn_id = %id, "txn abort");
         Ok(())
     }
+
+    /// Writes a `Savepoint` WAL record for `id` and returns the tail LSN
+    /// captured immediately before that record was appended.
+    fn savepoint(&self, id: TransactionId, name: &str) -> Result<Lsn, TransactionError> {
+        let marker_lsn = self.wal.current_lsn();
+        self.wal.log_savepoint(id, name)?;
+        Ok(marker_lsn)
+    }
 }
 
 /// The current lifecycle state of a transaction.
@@ -143,6 +154,20 @@ impl fmt::Display for TransactionState {
     }
 }
 
+/// A named WAL position recorded inside an active transaction.
+///
+/// Created by `SAVEPOINT <name>` and stored in the owning [`Transaction`].
+/// The `lsn` field marks the point in the WAL that a subsequent
+/// `ROLLBACK TO SAVEPOINT` must undo back to.
+pub struct Savepoint {
+    /// The user-visible name (`SAVEPOINT s1` → `"s1"`).
+    pub name: NonEmptyString,
+    /// WAL byte offset at the moment this savepoint was created.
+    /// All log records with LSN > this value belong to work done after
+    /// the savepoint and will be undone by `ROLLBACK TO SAVEPOINT`.
+    pub lsn: Lsn,
+}
+
 /// An in-progress transaction handle.
 ///
 /// A `Transaction` is obtained from [`TransactionManager::begin`] and
@@ -157,6 +182,7 @@ pub struct Transaction<S> {
     id: TransactionId,
     start_time: time::Instant,
     needs_abort: bool,
+    savepoints: Vec<Savepoint>,
 }
 
 pub type ActiveTransaction = Transaction<Active>;
@@ -199,6 +225,7 @@ impl Transaction<Active> {
             id,
             start_time: time::Instant::now(),
             needs_abort: true,
+            savepoints: Vec::new(),
         }
     }
 
@@ -249,6 +276,76 @@ impl Transaction<Active> {
     /// and can be used for logging, tracking, and isolation purposes.
     pub fn transaction_id(&self) -> TransactionId {
         self.id
+    }
+
+    /// Records `SAVEPOINT <name>` for this transaction.
+    ///
+    /// Captures the current WAL tail LSN, appends a savepoint log record, and
+    /// pushes the marker onto the in-memory stack. Redefining an existing name
+    /// drops any nested savepoints created after it. A later
+    /// `ROLLBACK TO SAVEPOINT` will undo all log records with LSN strictly
+    /// greater than the captured value.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`TransactionError::Wal`] if the savepoint record cannot be written.
+    pub fn savepoint(&mut self, name: NonEmptyString) -> Result<(), TransactionError> {
+        let lsn = self.manager.savepoint(self.id, name.as_str())?;
+        if let Some(pos) = self.savepoints.iter().rposition(|s| s.name == name) {
+            self.savepoints.truncate(pos);
+        }
+        self.savepoints.push(Savepoint { name, lsn });
+        Ok(())
+    }
+
+    /// Discards a savepoint without rolling back (`RELEASE SAVEPOINT`).
+    ///
+    /// Removes the named entry and every savepoint pushed after it. Work logged
+    /// since the savepoint is kept.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`TransactionError::SavepointNotFound`] when no savepoint with
+    /// `name` exists on this transaction.
+    pub fn release_savepoint(&mut self, name: &str) -> Result<(), TransactionError> {
+        let pos = self.find_savepoint(name)?;
+        self.savepoints.truncate(pos);
+        Ok(())
+    }
+
+    /// Prepares `ROLLBACK TO SAVEPOINT` by locating the marker and trimming the stack.
+    ///
+    /// Returns the WAL LSN recorded when `name` was created. The caller is
+    /// responsible for undoing all log records with LSN greater than this value,
+    /// then leaving the stack truncated to include `name` and any savepoints
+    /// created before it.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`TransactionError::SavepointNotFound`] when no savepoint with
+    /// `name` exists on this transaction.
+    pub fn truncate_to_savepoint(&mut self, name: &str) -> Result<Lsn, TransactionError> {
+        let pos = self.find_savepoint(name)?;
+        let lsn = self.savepoints[pos].lsn;
+        self.savepoints.truncate(pos + 1);
+        Ok(lsn)
+    }
+
+    /// Locates `name` on this transaction's savepoint stack.
+    ///
+    /// Shared by [`Self::release_savepoint`] and [`Self::truncate_to_savepoint`].
+    /// The stack may contain the same name more than once if it was redefined;
+    /// SQL resolves names to the **latest** definition, so this scans from the
+    /// back ([`Iterator::rposition`]) and returns that index.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`TransactionError::SavepointNotFound`] if `name` is not on the stack.
+    fn find_savepoint(&self, name: &str) -> Result<usize, TransactionError> {
+        self.savepoints
+            .iter()
+            .rposition(|s| s.name == name)
+            .ok_or_else(|| TransactionError::SavepointNotFound(name.to_owned()))
     }
 }
 
