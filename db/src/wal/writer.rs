@@ -277,6 +277,32 @@ impl Wal {
         self.state.lock().current_at
     }
 
+    /// Returns the most-recent LSN written for `tid`, or `None` if `tid` is not
+    /// currently active.
+    ///
+    /// Used during savepoint rollback to seed the backward walk before restoring
+    /// page images to a savepoint boundary.
+    pub fn txn_last_lsn(&self, tid: TransactionId) -> Option<Lsn> {
+        self.state
+            .lock()
+            .active_txns
+            .get(&tid)
+            .map(|info| info.last)
+    }
+
+    /// Replaces the recorded `last_lsn` for `tid` with `lsn`.
+    ///
+    /// Called after a partial undo (savepoint rollback) writes CLRs so that
+    /// the next data record appended by `tid` chains correctly off the last CLR
+    /// rather than off the stale pre-undo tail.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`WalError::UnknownTransaction`] if `tid` is not active.
+    pub fn set_txn_last_lsn(&self, tid: TransactionId, lsn: Lsn) -> Result<(), WalError> {
+        self.state.lock().set_last_lsn(tid, lsn)
+    }
+
     /// Logs a `Savepoint` record for `tid` with the given `name`.
     ///
     /// Callers should capture [`Self::current_lsn`] *before* this call when

@@ -24,6 +24,7 @@
 use std::{
     fmt,
     marker::PhantomData,
+    path::PathBuf,
     sync::{
         Arc,
         atomic::{AtomicU64, Ordering},
@@ -34,9 +35,10 @@ use std::{
 use thiserror::Error;
 
 use crate::{
+    PAGE_SIZE,
     buffer_pool::page_store::{PageStore, PageStoreError},
-    primitives::{Lsn, NonEmptyString, TransactionId},
-    wal::{WalError, writer::Wal},
+    primitives::{Lsn, NonEmptyString, PageId, TransactionId},
+    wal::{WalError, log::LogRecordBody, reader::WalReader, writer::Wal},
 };
 
 #[derive(Debug, Error)]
@@ -55,6 +57,9 @@ pub enum TransactionError {
 
     #[error("savepoint '{0}' does not exist")]
     SavepointNotFound(String),
+
+    #[error("savepoint rollback: before-image for page {0:?} has wrong size")]
+    PartialUndoImageSize(PageId),
 }
 
 pub struct Active;
@@ -73,15 +78,23 @@ pub struct TransactionManager {
     next_txn_id: AtomicU64,
     wal: Arc<Wal>,
     store: Arc<PageStore>,
+    /// Path to the WAL file, used to open a [`WalReader`] for partial undo
+    /// (savepoint rollback) without needing a second writer reference.
+    wal_path: PathBuf,
 }
 
 impl TransactionManager {
     /// Creates a new `TransactionManager` backed by the given WAL and page store.
-    pub fn new(wal: Arc<Wal>, store: Arc<PageStore>) -> Self {
+    ///
+    /// `wal_path` must be the same path that was passed to [`Wal::new`]; it is
+    /// stored so that savepoint rollback can open a read-only [`WalReader`]
+    /// to walk the log backwards during a `ROLLBACK TO SAVEPOINT`.
+    pub fn new(wal: Arc<Wal>, store: Arc<PageStore>, wal_path: PathBuf) -> Self {
         Self {
             next_txn_id: AtomicU64::new(1),
             wal,
             store,
+            wal_path,
         }
     }
 
@@ -133,6 +146,130 @@ impl TransactionManager {
         let marker_lsn = self.wal.current_lsn();
         self.wal.log_savepoint(id, name)?;
         Ok(marker_lsn)
+    }
+
+    /// Undoes all WAL records for `id` with LSN strictly greater than
+    /// `target_lsn`, stopping at the savepoint boundary without writing an
+    /// `End` record — the transaction stays open.
+    ///
+    /// This is the physical side of `ROLLBACK TO SAVEPOINT`. For each data
+    /// record (Insert / Update / Delete) in the chain with LSN > `target_lsn`,
+    /// the before-image is written back to the page and a CLR is appended to
+    /// the WAL. CLR records in the chain are followed via their `undo_next_lsn`
+    /// without writing new CLRs. The walk stops when the cursor reaches a
+    /// record whose LSN is ≤ `target_lsn`.
+    ///
+    /// After the loop, the transaction's `last_lsn` in the WAL's active-txn
+    /// table is updated to the most-recently-written CLR so that the next data
+    /// record chains off the right position.
+    ///
+    /// # Errors
+    ///
+    /// - [`TransactionError::NotActive`] — `id` is not in the WAL's active set.
+    /// - [`TransactionError::Wal`] — WAL read or CLR write failed.
+    /// - [`TransactionError::Store`] — buffer-pool I/O failed.
+    /// - [`TransactionError::PartialUndoImageSize`] — before-image is not exactly [`PAGE_SIZE`]
+    ///   bytes (corrupt log record).
+    pub(self) fn partial_undo(
+        &self,
+        id: TransactionId,
+        target_lsn: Lsn,
+    ) -> Result<(), TransactionError> {
+        let start_lsn = self
+            .wal
+            .txn_last_lsn(id)
+            .ok_or(TransactionError::NotActive(id))?;
+
+        let mut reader = WalReader::open(&self.wal_path)?;
+
+        // `cursor_lsn` walks the per-txn chain backwards.
+        // `chain_last` is the `prev_lsn` supplied to the next CLR we write —
+        // it starts at the current tail and advances with every CLR.
+        let mut cursor_lsn = start_lsn;
+        let mut chain_last = start_lsn;
+
+        loop {
+            if cursor_lsn <= target_lsn {
+                break;
+            }
+
+            let record = reader.read_at(cursor_lsn)?;
+
+            match record.body {
+                LogRecordBody::Clr { undo_next_lsn, .. } => {
+                    cursor_lsn = undo_next_lsn;
+                }
+
+                LogRecordBody::Update {
+                    page_id, before, ..
+                }
+                | LogRecordBody::Insert {
+                    page_id, before, ..
+                }
+                | LogRecordBody::Delete {
+                    page_id, before, ..
+                } => {
+                    let rec_prev = record.header.prev_lsn;
+
+                    let before_arr: [u8; PAGE_SIZE] = before
+                        .as_slice()
+                        .try_into()
+                        .map_err(|_| TransactionError::PartialUndoImageSize(page_id))?;
+
+                    let clr_lsn = match self.store.fetch_for_recovery(page_id) {
+                        Ok(guard) => {
+                            let clr = self
+                                .wal
+                                .log_clr(id, chain_last, page_id, before, rec_prev)?;
+                            guard.write(&before_arr, clr);
+                            clr
+                        }
+                        Err(PageStoreError::FileNotRegistered(_)) => {
+                            tracing::warn!(
+                                txn_id = %id,
+                                ?page_id,
+                                "file not registered during partial undo — CLR written, page write skipped"
+                            );
+                            self.wal
+                                .log_clr(id, chain_last, page_id, before, rec_prev)?
+                        }
+                        Err(e) => return Err(TransactionError::Store(e)),
+                    };
+
+                    chain_last = clr_lsn;
+                    cursor_lsn = rec_prev;
+                }
+
+                // Savepoint and Begin records are hard stops — we never undo
+                // work that predates the target savepoint.
+                LogRecordBody::Savepoint { .. } | LogRecordBody::Begin => break,
+
+                _ => {
+                    tracing::warn!(
+                        txn_id = %id,
+                        lsn = ?cursor_lsn,
+                        "unexpected record type encountered during partial undo — stopping"
+                    );
+                    break;
+                }
+            }
+        }
+
+        // Patch the WAL's per-txn last_lsn so that the next record appended by
+        // this transaction chains off the last CLR we just wrote rather than
+        // off the now-stale data record.
+        if chain_last != start_lsn {
+            self.wal.set_txn_last_lsn(id, chain_last)?;
+        }
+
+        tracing::debug!(
+            txn_id = %id,
+            ?target_lsn,
+            ?start_lsn,
+            "savepoint partial undo complete"
+        );
+
+        Ok(())
     }
 }
 
@@ -276,6 +413,24 @@ impl Transaction<Active> {
     /// and can be used for logging, tracking, and isolation purposes.
     pub fn transaction_id(&self) -> TransactionId {
         self.id
+    }
+
+    /// Physically undoes all WAL records for this transaction that were written
+    /// after `target_lsn`, stopping at the savepoint boundary.
+    ///
+    /// This is called after [`Self::truncate_to_savepoint`] to restore page
+    /// images to the state they were in when the savepoint was created. The
+    /// transaction remains open; work logged up to `target_lsn` is kept.
+    ///
+    /// # Errors
+    ///
+    /// - [`TransactionError::NotActive`] — this transaction is not in the WAL's active set.
+    /// - [`TransactionError::Wal`] — WAL read or CLR write failed.
+    /// - [`TransactionError::Store`] — buffer-pool I/O failed.
+    /// - [`TransactionError::PartialUndoImageSize`] — before-image is not exactly [`PAGE_SIZE`]
+    ///   bytes (corrupt log record).
+    pub fn partial_undo(&self, target_lsn: Lsn) -> Result<(), TransactionError> {
+        self.manager.partial_undo(self.id, target_lsn)
     }
 
     /// Records `SAVEPOINT <name>` for this transaction.

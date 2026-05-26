@@ -150,7 +150,11 @@ impl Database {
             .expect("failed to spawn checkpoint thread");
 
         let catalog = Catalog::initialize(&buffer_pool, &wal, dir)?;
-        let txn_mgr = Arc::new(TransactionManager::new(wal, buffer_pool));
+        let txn_mgr = Arc::new(TransactionManager::new(
+            wal,
+            buffer_pool,
+            dir.join(WAL_FILE_NAME),
+        ));
         Ok(Self::new(Arc::new(catalog), txn_mgr, worker_threads))
     }
 

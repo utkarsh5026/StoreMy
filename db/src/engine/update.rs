@@ -457,7 +457,7 @@ mod tests {
         let wal = Arc::new(Wal::new(&dir.join("wal.log"), 0).unwrap());
         let bp = Arc::new(PageStore::new(64, wal.clone()));
         let catalog = Catalog::initialize(&bp, &wal, dir).unwrap();
-        let txn_mgr = Arc::new(TransactionManager::new(wal, bp));
+        let txn_mgr = Arc::new(TransactionManager::new(wal, bp, dir.join("wal.log")));
         (catalog, txn_mgr)
     }
 

@@ -754,7 +754,7 @@ mod tests {
     fn make_catalog_and_txn_mgr(dir: &Path) -> (Catalog, Arc<TransactionManager>) {
         let (wal, bp) = make_infra(dir);
         let catalog = Catalog::initialize(&bp, &wal, dir).unwrap();
-        let txn_mgr = Arc::new(TransactionManager::new(wal, bp));
+        let txn_mgr = Arc::new(TransactionManager::new(wal, bp, dir.join("wal.log")));
         (catalog, txn_mgr)
     }
 

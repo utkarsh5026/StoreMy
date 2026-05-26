@@ -127,17 +127,68 @@ impl Engine<'_> {
     }
 
     fn exec_rollback(
-        _stmt: RollbackStatement,
+        stmt: RollbackStatement,
         session: &mut Session,
     ) -> Result<StatementResult, EngineError> {
-        let old = mem::replace(&mut session.ctx, TxnContext::Autocommit);
-        match old {
-            TxnContext::Autocommit => Ok(StatementResult::Notice {
-                message: "there is no transaction in progress".into(),
-            }),
-            TxnContext::Explicit(txn) | TxnContext::Aborted(txn) => {
-                txn.abort()?;
-                Ok(StatementResult::TransactionRolledBack)
+        match stmt {
+            // Plain ROLLBACK — abort the whole transaction.
+            RollbackStatement::Transaction { .. } => {
+                let old = mem::replace(&mut session.ctx, TxnContext::Autocommit);
+                match old {
+                    TxnContext::Autocommit => Ok(StatementResult::Notice {
+                        message: "there is no transaction in progress".into(),
+                    }),
+                    TxnContext::Explicit(txn) | TxnContext::Aborted(txn) => {
+                        txn.abort()?;
+                        Ok(StatementResult::TransactionRolledBack)
+                    }
+                }
+            }
+            // ROLLBACK TO [SAVEPOINT] <name> — partial undo back to a marker.
+            RollbackStatement::Savepoint { name } => {
+                if matches!(session.ctx, TxnContext::Autocommit) {
+                    return Ok(StatementResult::Notice {
+                        message: "ROLLBACK TO SAVEPOINT: there is no transaction in progress"
+                            .into(),
+                    });
+                }
+
+                // Remember whether we started in Aborted so we can restore it on error.
+                let was_aborted = matches!(session.ctx, TxnContext::Aborted(_));
+
+                // Take ownership of the transaction so we can call &mut methods on it.
+                let old = mem::replace(&mut session.ctx, TxnContext::Autocommit);
+                let mut txn = match old {
+                    TxnContext::Explicit(t) | TxnContext::Aborted(t) => t,
+                    TxnContext::Autocommit => unreachable!(),
+                };
+
+                // Locate the savepoint and trim the in-memory stack.
+                // If the name is unknown, put the transaction back unchanged.
+                let target_lsn = match txn.truncate_to_savepoint(name.as_str()) {
+                    Ok(lsn) => lsn,
+                    Err(e) => {
+                        session.ctx = if was_aborted {
+                            TxnContext::Aborted(txn)
+                        } else {
+                            TxnContext::Explicit(txn)
+                        };
+                        return Err(EngineError::Transaction(e));
+                    }
+                };
+
+                match txn.partial_undo(target_lsn) {
+                    Ok(()) => {
+                        session.ctx = TxnContext::Explicit(txn);
+                        Ok(StatementResult::NoOp {
+                            statement: format!("ROLLBACK TO SAVEPOINT {name}"),
+                        })
+                    }
+                    Err(e) => {
+                        session.ctx = TxnContext::Aborted(txn);
+                        Err(EngineError::Transaction(e))
+                    }
+                }
             }
         }
     }

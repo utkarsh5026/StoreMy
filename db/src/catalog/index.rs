@@ -1107,7 +1107,11 @@ mod tests {
     fn make_full_infra(dir: &Path) -> (Catalog, Arc<TransactionManager>, Arc<PageStore>, Arc<Wal>) {
         let (wal, bp) = make_infra(dir);
         let catalog = Catalog::initialize(&bp, &wal, dir).expect("catalog init failed");
-        let txn_mgr = Arc::new(TransactionManager::new(Arc::clone(&wal), Arc::clone(&bp)));
+        let txn_mgr = Arc::new(TransactionManager::new(
+            Arc::clone(&wal),
+            Arc::clone(&bp),
+            dir.join("wal.log"),
+        ));
         (catalog, txn_mgr, bp, wal)
     }
 
