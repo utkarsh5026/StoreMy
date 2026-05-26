@@ -125,6 +125,7 @@ fn engine_error_to_http(e: &EngineError) -> (StatusCode, &'static str, String) {
         | E::BufferPool(_)
         | E::Index(_)
         | E::Execution(_) => (StatusCode::INTERNAL_SERVER_ERROR, "engine"),
+        E::TransactionAborted => (StatusCode::BAD_REQUEST, "transaction_aborted"),
     };
     (status, kind, e.to_string())
 }

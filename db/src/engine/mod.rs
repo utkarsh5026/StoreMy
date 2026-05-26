@@ -24,6 +24,7 @@ mod helpers;
 mod insert;
 mod scope;
 mod show_indexes;
+mod tcl;
 mod update;
 
 /// SQL execution entrypoint.
@@ -44,6 +45,20 @@ impl<'a> Engine<'a> {
         }
     }
 
+    /// Dispatches a parsed statement in autocommit mode.
+    ///
+    /// Each mutating statement runs inside its own implicit transaction via
+    /// `with_txn`. `SELECT` is routed to `exec_select`, which uses the same
+    /// begin/commit wrapper internally.
+    ///
+    /// Transaction-control statements (`BEGIN`, `COMMIT`, `ROLLBACK`, savepoints)
+    /// are rejected here; session-aware callers should use
+    /// [`execute_statement_in_session`](Self::execute_statement_in_session) instead.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`EngineError::Unsupported`] for TCL statements, or any error
+    /// from parsing, catalog I/O, constraint checks, or transaction management.
     #[tracing::instrument(
         name = "execute_statement",
         skip_all,

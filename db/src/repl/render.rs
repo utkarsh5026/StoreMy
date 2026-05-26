@@ -224,6 +224,18 @@ fn print_result(r: &StatementResult) {
                 ),
             );
         }
+        StatementResult::TransactionStarted => {
+            theme::ok("BEGIN", "");
+        }
+        StatementResult::TransactionCommitted => {
+            theme::ok("COMMIT", "");
+        }
+        StatementResult::TransactionRolledBack => {
+            theme::ok("ROLLBACK", "");
+        }
+        StatementResult::Notice { message } => {
+            theme::notice("NOTICE", message);
+        }
     }
 }
 

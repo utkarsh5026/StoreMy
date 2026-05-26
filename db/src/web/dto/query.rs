@@ -358,6 +358,20 @@ impl From<&StatementResult> for QueryResultDto {
                     constraint: constraint.clone(),
                 }
             }
+            // TCL results have no meaningful HTTP DTO shape yet — map them to a
+            // generic NoOp so the web layer doesn't need to know about sessions.
+            StatementResult::TransactionStarted => QueryResultDto::NoOp {
+                statement: "BEGIN".into(),
+            },
+            StatementResult::TransactionCommitted => QueryResultDto::NoOp {
+                statement: "COMMIT".into(),
+            },
+            StatementResult::TransactionRolledBack => QueryResultDto::NoOp {
+                statement: "ROLLBACK".into(),
+            },
+            StatementResult::Notice { message } => QueryResultDto::NoOp {
+                statement: message.clone(),
+            },
         }
     }
 }

@@ -120,4 +120,10 @@ pub enum EngineError {
 
     #[error(transparent)]
     Constraint(#[from] ConstraintViolation),
+
+    #[error(
+        "current transaction is aborted, \
+         commands ignored until end of transaction block"
+    )]
+    TransactionAborted,
 }
