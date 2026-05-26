@@ -190,8 +190,8 @@ impl BTreeIndex {
     ) -> Result<(), IndexError> {
         let (g, mut node) = self.read_node(txn, child_pn)?;
         match &mut node {
-            BTreeNode::Leaf(l) => l.parent = parent,
-            BTreeNode::Internal(i) => i.parent = parent,
+            BTreeNode::Leaf(l) => l.header.parent = parent,
+            BTreeNode::Internal(i) => i.page.header.parent = parent,
         }
         Self::write_node(&g, &node, lsn)
     }
@@ -217,17 +217,17 @@ impl BTreeIndex {
         let (right, sep_key) = left.split(right_pn, leaf_pn);
         tracing::debug!(sibling_page = ?right_pn, sep_key = ?sep_key, "btree: leaf split, new sibling created");
 
-        if let Some(old_next) = right.next {
+        if let Some(old_next) = right.header.next {
             let (guard, mut old_next_leaf) = self.read_node(txn, old_next)?;
             if let BTreeNode::Leaf(l) = &mut old_next_leaf {
-                l.prev = Some(right_pn);
+                l.header.prev = Some(right_pn);
                 Self::write_node(&guard, &old_next_leaf, lsn)?;
             } else {
                 return Err(IndexError::CorruptIndex("next pointer to non-leaf"));
             }
         }
 
-        let left_parent = left.parent;
+        let left_parent = left.header.parent;
         self.fetch_and_write_page(txn, leaf_pn, &BTreeNode::Leaf(left), lsn)?;
         self.fetch_and_write_page(txn, right_pn, &BTreeNode::Leaf(right), lsn)?;
         self.insert_into_parent(txn, leaf_pn, sep_key, right_pn, left_parent, lsn)
@@ -288,12 +288,10 @@ impl BTreeIndex {
         lsn: Lsn,
     ) -> Result<(), IndexError> {
         let new_root_pn = self.allocate_page();
-        let root_node = InternalNode {
-            parent: None,
-            key_types: self.key_types.clone(),
-            first_child: left_pn,
-            separators: vec![Separator::new(sep_key, right_pn)],
-        };
+        let root_node =
+            InternalNode::new(None, self.key_types.clone(), left_pn, vec![Separator::new(
+                sep_key, right_pn,
+            )]);
         self.fetch_and_write_page(txn, new_root_pn, &BTreeNode::Internal(root_node), lsn)?;
         tracing::debug!(root_page = ?new_root_pn, "btree: new root created, tree height grew");
 
@@ -325,13 +323,13 @@ impl BTreeIndex {
 
         let right_pn = self.allocate_page();
         tracing::debug!(sibling_page = ?right_pn, push_up_key = ?push_up_key, "btree: internal node split");
-        self.set_parent_pointer(txn, right.first_child, Some(right_pn), lsn)?;
+        self.set_parent_pointer(txn, right.page.header.first_child, Some(right_pn), lsn)?;
 
-        for Separator { child, .. } in &right.separators {
+        for Separator { child, .. } in &right.page.body {
             self.set_parent_pointer(txn, *child, Some(right_pn), lsn)?;
         }
 
-        let left_parent = left.parent;
+        let left_parent = left.page.header.parent;
         self.fetch_and_write_page(txn, left_pn, &BTreeNode::Internal(left.clone()), lsn)?;
         self.fetch_and_write_page(txn, right_pn, &BTreeNode::Internal(right), lsn)?;
         self.insert_into_parent(txn, left_pn, push_up_key, right_pn, left_parent, lsn)
@@ -369,14 +367,14 @@ impl Index for BTreeIndex {
         }
 
         if leaf.has_space_for(&index_entry) {
-            leaf.entries.insert(pos, index_entry);
+            leaf.body.insert(pos, index_entry);
             Self::write_node(&guard, &BTreeNode::Leaf(leaf), Lsn::INVALID)?;
             return Ok(());
         }
 
         tracing::debug!(leaf_page = ?leaf_pn, "btree: split triggered");
         drop(guard);
-        leaf.entries.insert(pos, index_entry);
+        leaf.body.insert(pos, index_entry);
         self.split_leaf_and_propagate(txn, leaf, leaf_pn, Lsn::INVALID)
     }
 
@@ -398,22 +396,16 @@ impl Index for BTreeIndex {
         }
 
         let (guard, mut leaf, _) = self.locate_leaf_for_key(txn, key)?;
-        let pos = leaf
-            .entries
-            .iter()
-            .position(|e| e.key == *key && e.rid == rid);
+        let pos = leaf.body.iter().position(|e| e.key == *key && e.rid == rid);
 
-        match pos {
-            Some(i) => {
-                tracing::trace!(key = ?key, "btree: delete found key");
-                leaf.entries.remove(i);
-                Self::write_node(&guard, &BTreeNode::Leaf(leaf), Lsn::INVALID)?;
-                Ok(())
-            }
-            None => {
-                tracing::trace!(key = ?key, "btree: delete key not found");
-                Err(IndexError::NotFound)
-            }
+        if let Some(i) = pos {
+            tracing::trace!(key = ?key, "btree: delete found key");
+            leaf.body.remove(i);
+            Self::write_node(&guard, &BTreeNode::Leaf(leaf), Lsn::INVALID)?;
+            Ok(())
+        } else {
+            tracing::trace!(key = ?key, "btree: delete key not found");
+            Err(IndexError::NotFound)
         }
     }
 
@@ -432,8 +424,8 @@ impl Index for BTreeIndex {
         // Lower-bound: first index whose key is >= *key. Entries are sorted
         // ascending, so all matches (if any) sit in a contiguous run starting
         // at `start`. Walk forward while the key still matches.
-        let start = l.entries.partition_point(|e| e.key < *key);
-        let searches = l.entries[start..]
+        let start = l.body.partition_point(|e| e.key < *key);
+        let searches = l.body[start..]
             .iter()
             .take_while(|e| &e.key == key)
             .map(|e| e.rid)
@@ -460,7 +452,7 @@ impl Index for BTreeIndex {
         let (mut guard, mut leaf, _) = self.locate_leaf_for_key(txn, start)?;
 
         loop {
-            for IndexEntry { key, rid } in leaf.entries {
+            for IndexEntry { key, rid } in leaf.body {
                 let ord_lo = key.partial_cmp(start).unwrap();
                 let ord_hi = key.partial_cmp(end).unwrap();
                 if ord_lo.is_ge() && ord_hi.is_le() {
@@ -472,7 +464,7 @@ impl Index for BTreeIndex {
                 }
             }
 
-            let Some(next) = leaf.next else {
+            let Some(next) = leaf.header.next else {
                 return Ok(results);
             };
             drop(guard);
