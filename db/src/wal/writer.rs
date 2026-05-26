@@ -27,6 +27,7 @@ use std::{collections::HashMap, fs, io::Seek, os::unix::fs::FileExt, path::Path}
 use parking_lot::{Condvar, Mutex};
 
 use crate::{
+    PAGE_SIZE,
     codec::Encode,
     primitives::{Lsn, PageId, TransactionId},
     storage::open_persistent_file,
@@ -35,6 +36,11 @@ use crate::{
         log::{LogRecord, LogRecordBody, TxnStatus},
     },
 };
+
+/// Initial capacity for the scratch buffer that encodes one log record before append.
+///
+/// Lifecycle records are small; data records often carry at least one full page image.
+const LOG_RECORD_ENCODE_CAPACITY: usize = PAGE_SIZE;
 
 /// Per-transaction bookkeeping kept in memory while a transaction is active.
 struct TxnInfo {
@@ -75,6 +81,33 @@ impl WalState {
     /// Returns the total capacity of the write buffer in bytes.
     pub(super) const fn len(&self) -> usize {
         self.buffer.len()
+    }
+
+    /// Returns the LSN of the most recent record written for `tid`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`WalError::UnknownTransaction`] if `tid` is not in the active set.
+    fn prev_lsn(&self, tid: TransactionId) -> Result<Lsn, WalError> {
+        self.active_txns
+            .get(&tid)
+            .map(|info| info.last)
+            .ok_or(WalError::UnknownTransaction(tid))
+    }
+
+    /// Records `lsn` as the latest WAL position for `tid`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`WalError::UnknownTransaction`] if `tid` is not in the active set.
+    fn set_last_lsn(&mut self, tid: TransactionId, lsn: Lsn) -> Result<(), WalError> {
+        match self.active_txns.get_mut(&tid) {
+            Some(info) => {
+                info.last = lsn;
+                Ok(())
+            }
+            None => Err(WalError::UnknownTransaction(tid)),
+        }
     }
 }
 
@@ -200,13 +233,9 @@ impl Wal {
     pub fn log_commit(&self, tid: TransactionId) -> Result<Lsn, WalError> {
         let lsn = {
             let mut state = self.state.lock();
-            let prev = state
-                .active_txns
-                .get(&tid)
-                .ok_or(WalError::UnknownTransaction(tid))?
-                .last;
+            let prev = state.prev_lsn(tid)?;
             let lsn = Self::write_record(&self.file, &mut state, tid, prev, LogRecordBody::Commit)?;
-            state.active_txns.get_mut(&tid).unwrap().last = lsn;
+            state.set_last_lsn(tid, lsn)?;
             lsn
         };
         self.force(lsn)?;
@@ -229,15 +258,42 @@ impl Wal {
     /// Returns [`WalError::Io`] or [`WalError::Codec`] on write failures.
     pub fn log_abort(&self, tid: TransactionId) -> Result<Lsn, WalError> {
         let mut state = self.state.lock();
-        let prev = state
-            .active_txns
-            .get(&tid)
-            .ok_or(WalError::UnknownTransaction(tid))?
-            .last;
+        let prev = state.prev_lsn(tid)?;
         let lsn = Self::write_record(&self.file, &mut state, tid, prev, LogRecordBody::Abort)?;
-        let info = state.active_txns.get_mut(&tid).unwrap();
+        let info = state
+            .active_txns
+            .get_mut(&tid)
+            .ok_or(WalError::UnknownTransaction(tid))?;
         info.last = lsn;
         info.undo_next = lsn;
+        Ok(lsn)
+    }
+
+    /// Returns the LSN where the next WAL record will be written.
+    ///
+    /// This is the current tail of the log: all complete records have LSNs
+    /// strictly less than this value (byte offset of the next append).
+    pub fn current_lsn(&self) -> Lsn {
+        self.state.lock().current_at
+    }
+
+    /// Logs a `Savepoint` record for `tid` with the given `name`.
+    ///
+    /// Callers should capture [`Self::current_lsn`] *before* this call when
+    /// recording the rollback marker in the in-memory savepoint stack.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`WalError::UnknownTransaction`] if `tid` is not active.
+    /// Returns [`WalError::Io`] or [`WalError::Codec`] on write failures.
+    pub fn log_savepoint(&self, tid: TransactionId, name: &str) -> Result<Lsn, WalError> {
+        let mut state = self.state.lock();
+        let prev = state.prev_lsn(tid)?;
+        let savepoint = LogRecordBody::Savepoint {
+            name: name.to_owned(),
+        };
+        let lsn = Self::write_record(&self.file, &mut state, tid, prev, savepoint)?;
+        state.set_last_lsn(tid, lsn)?;
         Ok(lsn)
     }
 
@@ -437,13 +493,9 @@ impl Wal {
         body: LogRecordBody,
     ) -> Result<Lsn, WalError> {
         let mut state = self.state.lock();
-        let prev = state
-            .active_txns
-            .get(&tid)
-            .ok_or(WalError::UnknownTransaction(tid))?
-            .last;
+        let prev = state.prev_lsn(tid)?;
         let lsn = Self::write_record(&self.file, &mut state, tid, prev, body)?;
-        state.active_txns.get_mut(&tid).unwrap().last = lsn;
+        state.set_last_lsn(tid, lsn)?;
         state.dirty_pages.entry(page_id).or_insert(lsn);
         Ok(lsn)
     }
@@ -467,7 +519,7 @@ impl Wal {
         let assigned_lsn = state.current_at;
 
         let rec = LogRecord::new(assigned_lsn, prev_lsn, tid, body)?;
-        let mut data = Vec::with_capacity(4096);
+        let mut data = Vec::with_capacity(LOG_RECORD_ENCODE_CAPACITY);
         rec.encode(&mut data)?;
 
         if data.len() > state.len() {
@@ -495,7 +547,8 @@ impl Wal {
             return Ok(());
         }
 
-        file.write_at(&state.buffer[..state.buf_offset], state.flushed_till.into())?;
+        let offset = u64::from(state.flushed_till);
+        file.write_at(&state.buffer[..state.buf_offset], offset)?;
         state.flushed_till = state.current_at;
         state.buf_offset = 0;
         Ok(())
@@ -511,16 +564,7 @@ impl Wal {
     /// After each flush all waiters blocked in [`Wal::force`] are notified via the
     /// condvar.
     ///
-    /// This method runs forever and should be spawned as a background thread:
-    ///
-    /// ```no_run
-    /// # use std::sync::Arc;
-    /// # use std::path::Path;
-    /// # use storemy::wal::writer::Wal;
-    /// let wal = Arc::new(Wal::new(Path::new("wal.log"), 65536).unwrap());
-    /// let wal_bg = Arc::clone(&wal);
-    /// std::thread::spawn(move || wal_bg.flush_loop());
-    /// ```
+    /// This method runs forever and should be spawned as a background thread.
     pub fn flush_loop(&self) {
         loop {
             let mut state = self.state.lock();
@@ -732,6 +776,18 @@ mod tests {
         wal.log_begin(tid).unwrap();
         wal.log_abort(tid).unwrap();
         assert!(active_txns(&wal).contains(&tid));
+    }
+
+    #[test]
+    fn savepoint_advances_txn_last_lsn() {
+        let (wal, _dir) = make_wal(NO_BUF);
+        let tid = tid(1);
+        let begin_lsn = wal.log_begin(tid).unwrap();
+        let marker = wal.current_lsn();
+        let sp_lsn = wal.log_savepoint(tid, "s1").unwrap();
+        assert!(marker > begin_lsn, "tail advances after BEGIN");
+        assert_eq!(sp_lsn, marker, "savepoint record starts at pre-write tail");
+        assert_eq!(txn_last_lsn(&wal, tid), sp_lsn);
     }
 
     #[test]
