@@ -2,7 +2,7 @@ use std::mem;
 
 use super::{Engine, EngineError, StatementResult};
 use crate::{
-    parser::statements::{RollbackStatement, Statement},
+    parser::statements::{RollbackStatement, SavepointStatement, Statement},
     transaction::{Session, TxnContext},
 };
 
@@ -34,9 +34,10 @@ impl Engine<'_> {
             Statement::Commit(_) => Self::exec_commit(session),
             Statement::Rollback(s) => Self::exec_rollback(s, session),
 
-            Statement::Savepoint(_) | Statement::ReleaseSavepoint(_) => Err(
-                EngineError::Unsupported("savepoints not yet implemented".into()),
-            ),
+            Statement::Savepoint(s) => Self::exec_savepoint(s, session),
+            Statement::ReleaseSavepoint(_) => Err(EngineError::Unsupported(
+                "RELEASE SAVEPOINT is not yet implemented".into(),
+            )),
 
             stmt => match &session.ctx {
                 TxnContext::Autocommit => self.execute_statement(stmt),
@@ -87,6 +88,25 @@ impl Engine<'_> {
     /// Works identically for both `Explicit` and `Aborted` contexts — the
     /// `ActiveTransaction`'s drop guard would abort anyway, but calling
     /// `abort()` explicitly lets the WAL error surface to the caller.
+    fn exec_savepoint(
+        stmt: SavepointStatement,
+        session: &mut Session,
+    ) -> Result<StatementResult, EngineError> {
+        match &mut session.ctx {
+            TxnContext::Explicit(txn) => {
+                let name = stmt.name;
+                txn.savepoint(name.clone())?;
+                Ok(StatementResult::NoOp {
+                    statement: format!("SAVEPOINT {name}"),
+                })
+            }
+            TxnContext::Autocommit => Ok(StatementResult::Notice {
+                message: "SAVEPOINT can only be used inside a transaction".into(),
+            }),
+            TxnContext::Aborted(_) => Err(EngineError::TransactionAborted),
+        }
+    }
+
     fn exec_rollback(
         _stmt: RollbackStatement,
         session: &mut Session,
