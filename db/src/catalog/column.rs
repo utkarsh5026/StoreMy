@@ -40,7 +40,7 @@ impl Catalog {
     ///   fails.
     pub fn rename_column(
         &self,
-        txn: &ActiveTransaction<'_>,
+        txn: &ActiveTransaction,
         table_id: FileId,
         old_name: &str,
         new_name: &str,
@@ -86,7 +86,7 @@ impl Catalog {
     /// - Propagates system-table scan and write errors.
     pub fn drop_column(
         &self,
-        txn: &ActiveTransaction<'_>,
+        txn: &ActiveTransaction,
         table_id: FileId,
         column_name: &str,
     ) -> Result<(), CatalogError> {
@@ -143,7 +143,7 @@ impl Catalog {
     /// - Propagates system-table read/write and validation errors.
     pub fn add_column(
         &self,
-        txn: &ActiveTransaction<'_>,
+        txn: &ActiveTransaction,
         table_id: FileId,
         column: ColumnDef,
     ) -> Result<(), CatalogError> {
@@ -191,7 +191,7 @@ impl Catalog {
     /// - Propagates system-table write errors.
     pub fn set_column_default(
         &self,
-        txn: &ActiveTransaction<'_>,
+        txn: &ActiveTransaction,
         table_id: FileId,
         column_name: &str,
         value: Value,
@@ -224,7 +224,7 @@ impl Catalog {
     /// - Propagates system-table write errors.
     pub fn drop_column_default(
         &self,
-        txn: &ActiveTransaction<'_>,
+        txn: &ActiveTransaction,
         table_id: FileId,
         column_name: &str,
     ) -> Result<(), CatalogError> {
@@ -256,7 +256,7 @@ impl Catalog {
     /// - Propagates system-table write errors.
     pub fn drop_column_not_null(
         &self,
-        txn: &ActiveTransaction<'_>,
+        txn: &ActiveTransaction,
         table_id: FileId,
         column_name: &str,
     ) -> Result<(), CatalogError> {
@@ -293,7 +293,7 @@ impl Catalog {
     /// Returns [`CatalogError::column_not_found`] if the column does not exist in the catalog.
     fn get_table_col(
         &self,
-        txn: &ActiveTransaction<'_>,
+        txn: &ActiveTransaction,
         table_name: &str,
         table_id: FileId,
         column_name: &str,
@@ -316,7 +316,7 @@ impl Catalog {
     /// full evict-and-reload cycle.
     fn refresh_table_schema(
         &self,
-        txn: &ActiveTransaction<'_>,
+        txn: &ActiveTransaction,
         mut table: TableInfo,
     ) -> Result<(), CatalogError> {
         let cols =
@@ -368,10 +368,10 @@ mod tests {
         (wal, bp)
     }
 
-    fn make_catalog_and_txn(dir: &Path) -> (Catalog, TransactionManager) {
+    fn make_catalog_and_txn(dir: &Path) -> (Catalog, Arc<TransactionManager>) {
         let (wal, bp) = make_infra(dir);
         let catalog = Catalog::initialize(&bp, &wal, dir).expect("catalog init failed");
-        let txn_mgr = TransactionManager::new(wal, bp);
+        let txn_mgr = Arc::new(TransactionManager::new(wal, bp, dir.join("wal.log")));
         (catalog, txn_mgr)
     }
 

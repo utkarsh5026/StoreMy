@@ -165,7 +165,7 @@ impl Engine<'_> {
     /// [`Catalog::get_table_info_by_id`] and [`Catalog::get_table_heap`].
     pub(super) fn prepare_outbound_ref_checks(
         catalog: &Catalog,
-        txn: &ActiveTransaction<'_>,
+        txn: &ActiveTransaction,
         file_id: FileId,
     ) -> Result<Vec<ParentFkCheck>, EngineError> {
         let info = catalog.get_table_info_by_id(txn, file_id)?;
@@ -298,7 +298,7 @@ impl Engine<'_> {
     /// [`Catalog::get_table_heap`].
     pub(super) fn prepare_inbound_ref_checks(
         catalog: &Catalog,
-        txn: &ActiveTransaction<'_>,
+        txn: &ActiveTransaction,
         file_id: FileId,
     ) -> Result<Vec<InboundParentFkCheck>, EngineError> {
         let referencing = catalog.find_referencing_fks(txn, file_id)?;
@@ -434,7 +434,7 @@ impl Engine<'_> {
     ///   [`Self::nullify_fk_columns`].
     pub(super) fn enforce_referential_actions_on_delete(
         catalog: &Catalog,
-        txn: &ActiveTransaction<'_>,
+        txn: &ActiveTransaction,
         inbound_checks: &[InboundParentFkCheck],
         parent_row: &Tuple,
         tid: TransactionId,
@@ -671,11 +671,11 @@ mod tests {
         wal::writer::Wal,
     };
 
-    fn make_infra(dir: &Path) -> (Catalog, TransactionManager) {
+    fn make_infra(dir: &Path) -> (Catalog, Arc<TransactionManager>) {
         let wal = Arc::new(Wal::new(&dir.join("wal.log"), 0).unwrap());
         let bp = Arc::new(PageStore::new(64, wal.clone()));
         let catalog = Catalog::initialize(&bp, &wal, dir).unwrap();
-        let txn_mgr = TransactionManager::new(wal, bp);
+        let txn_mgr = Arc::new(TransactionManager::new(wal, bp, dir.join("wal.log")));
         (catalog, txn_mgr)
     }
 
@@ -710,7 +710,7 @@ mod tests {
     /// amount INT64 NOT NULL)` with a FK `user_id → users.id`.
     fn setup_schema(
         catalog: &Catalog,
-        txn_mgr: &TransactionManager,
+        txn_mgr: &Arc<TransactionManager>,
         on_delete: Option<FkAction>,
         on_update: Option<FkAction>,
     ) -> (FileId, FileId) {

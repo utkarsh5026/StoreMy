@@ -254,6 +254,13 @@ impl Analysis {
                 self.ensure_dpt_entry(page_id, lsn);
             }
 
+            // Savepoint: advances last_lsn only; no page changes.
+            LogRecordBody::Savepoint { .. } => {
+                let entry = self.ensure_att_entry(tid, lsn);
+                let undo_next = entry.undo_next_lsn;
+                entry.update_lsn(lsn, undo_next);
+            }
+
             // Checkpoint markers: already accounted for via the master record and
             // load_checkpoint_snapshot.  Seeing them during the scan is normal
             // (they sit between CheckpointBegin and CheckpointEnd in the log);

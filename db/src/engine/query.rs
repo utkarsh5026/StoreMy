@@ -59,7 +59,7 @@ use crate::{
     heap::file::HeapFile,
     parser::statements::{
         BinOp, ColumnRef, Expr, JoinKind, LimitClause, OrderBy, OrderDirection, SelectColumns,
-        SelectItem, SelectStatement, Statement, TableRef, TableWithJoins,
+        SelectItem, SelectStatement, TableRef, TableWithJoins,
     },
     primitives::{ColumnId, NonEmptyString, Predicate},
     transaction::ActiveTransaction,
@@ -258,7 +258,7 @@ impl BoundSelect {
     pub fn bind(
         stmt: SelectStatement,
         catalog: &Catalog,
-        txn: &ActiveTransaction<'_>,
+        txn: &ActiveTransaction,
     ) -> Result<Self, EngineError> {
         if stmt.from.is_empty() {
             return Err(EngineError::Unsupported("no FROM clause".to_string()));
@@ -330,7 +330,7 @@ impl BoundSelect {
     fn resolve_from(
         from: TableWithJoins,
         catalog: &Catalog,
-        txn: &ActiveTransaction<'_>,
+        txn: &ActiveTransaction,
     ) -> Result<(BoundFrom, Scope), EngineError> {
         let TableWithJoins { table, joins } = from;
 
@@ -465,30 +465,29 @@ impl Engine<'_> {
     ///
     /// Returns [`EngineError::TypeError`] when an executor reports a type or
     /// tuple-shape error while building or draining the plan.
-    pub(super) fn exec_select(&self, statement: Statement) -> Result<StatementResult, EngineError> {
-        let Statement::Select(select_stmt) = statement else {
-            unreachable!("exec_select called with non-Select statement");
-        };
-        self.with_txn(|txn| {
-            let bound = BoundSelect::bind(select_stmt, self.catalog, txn)?;
+    pub(super) fn exec_select(
+        txn: &ActiveTransaction,
+        catalog: &Catalog,
+        select_stmt: SelectStatement,
+    ) -> Result<StatementResult, EngineError> {
+        let bound = BoundSelect::bind(select_stmt, catalog, txn)?;
 
-            let root_table_name = bound.from.root_table_name().to_owned();
-            let mut heap_files = Vec::with_capacity(bound.from.table_count());
-            Self::collect_heap_files(&bound.from, self.catalog, &mut heap_files)?;
-            let mut plan = Self::build_plan(bound, &heap_files, txn.transaction_id())?;
-            let schema = plan.schema().to_owned();
+        let root_table_name = bound.from.root_table_name().to_owned();
+        let mut heap_files = Vec::with_capacity(bound.from.table_count());
+        Self::collect_heap_files(&bound.from, catalog, &mut heap_files)?;
+        let mut plan = Self::build_plan(bound, &heap_files, txn.transaction_id())?;
+        let schema = plan.schema().to_owned();
 
-            let mut rows = Vec::new();
-            while let Some(t) = plan.next()? {
-                rows.push(t);
-            }
-            drop(plan); // releases the &HeapFile borrows before `heaps` goes out of scope
+        let mut rows = Vec::new();
+        while let Some(t) = plan.next()? {
+            rows.push(t);
+        }
+        drop(plan); // releases the &HeapFile borrows before `heaps` goes out of scope
 
-            Ok(StatementResult::Selected {
-                table: root_table_name.to_string(),
-                schema,
-                rows,
-            })
+        Ok(StatementResult::Selected {
+            table: root_table_name.to_string(),
+            schema,
+            rows,
         })
     }
 
@@ -1094,11 +1093,11 @@ mod tests {
 
     // ─────────────────────── shared infrastructure ───────────────────────────
 
-    fn make_infra(dir: &Path) -> (Catalog, TransactionManager) {
+    fn make_infra(dir: &Path) -> (Catalog, Arc<TransactionManager>) {
         let wal = Arc::new(Wal::new(&dir.join("wal.log"), 0).unwrap());
         let bp = Arc::new(PageStore::new(64, wal.clone()));
         let catalog = Catalog::initialize(&bp, &wal, dir).unwrap();
-        let txn_mgr = TransactionManager::new(wal, bp);
+        let txn_mgr = Arc::new(TransactionManager::new(wal, bp, dir.join("wal.log")));
         (catalog, txn_mgr)
     }
 
@@ -1136,7 +1135,7 @@ mod tests {
 
     /// Creates `users(id Int64 NN, name String, age Int64 NN)` and inserts
     /// three rows: `(1, 'alice', 30)`, `(2, 'bob', 25)`, `(3, 'cara', 30)`.
-    fn seed_users(dir: &Path) -> (Catalog, TransactionManager) {
+    fn seed_users(dir: &Path) -> (Catalog, Arc<TransactionManager>) {
         let (catalog, txn_mgr) = make_infra(dir);
         {
             let txn = txn_mgr.begin().unwrap();
@@ -1164,7 +1163,7 @@ mod tests {
     }
 
     /// Same shape as [`seed_users`] but inserts no rows.
-    fn seed_empty_users(dir: &Path) -> (Catalog, TransactionManager) {
+    fn seed_empty_users(dir: &Path) -> (Catalog, Arc<TransactionManager>) {
         let (catalog, txn_mgr) = make_infra(dir);
         let txn = txn_mgr.begin().unwrap();
         catalog
@@ -1563,7 +1562,7 @@ mod tests {
     // ──────────────────────── aggregate function tests ───────────────────────
 
     /// Seeds `users` with one NULL name: `(1,'alice',30)`, `(2,NULL,25)`, `(3,'cara',30)`.
-    fn seed_users_with_null_name(dir: &Path) -> (Catalog, TransactionManager) {
+    fn seed_users_with_null_name(dir: &Path) -> (Catalog, Arc<TransactionManager>) {
         let (catalog, txn_mgr) = make_infra(dir);
         {
             let txn = txn_mgr.begin().unwrap();
@@ -1858,7 +1857,7 @@ mod tests {
     ///
     /// alice has 2 orders, bob has 1 order, cara has none — so LEFT JOIN will
     /// null-pad cara's row and INNER JOIN will exclude her entirely.
-    fn seed_users_and_orders(dir: &Path) -> (Catalog, TransactionManager) {
+    fn seed_users_and_orders(dir: &Path) -> (Catalog, Arc<TransactionManager>) {
         let (catalog, txn_mgr) = make_infra(dir);
         {
             let txn = txn_mgr.begin().unwrap();
@@ -2110,7 +2109,7 @@ mod tests {
 
     fn create_table_direct(
         catalog: &Catalog,
-        txn_mgr: &TransactionManager,
+        txn_mgr: &Arc<TransactionManager>,
         name: &str,
         schema: TupleSchema,
     ) {

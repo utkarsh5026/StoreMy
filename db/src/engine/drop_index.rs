@@ -33,7 +33,7 @@ impl Engine<'_> {
     /// Returns [`EngineError::Catalog`] when the catalog cannot remove the
     /// index metadata.
     pub(super) fn exec_drop_index(
-        txn: &ActiveTransaction<'_>,
+        txn: &ActiveTransaction,
         catalog: &Catalog,
         stmt: DropIndexStatement,
     ) -> Result<StatementResult, EngineError> {
@@ -91,10 +91,10 @@ mod tests {
         (wal, bp)
     }
 
-    fn make_catalog_and_txn(dir: &Path) -> (Catalog, TransactionManager) {
+    fn make_catalog_and_txn(dir: &Path) -> (Catalog, Arc<TransactionManager>) {
         let (wal, bp) = make_infra(dir);
         let catalog = Catalog::initialize(&bp, &wal, dir).expect("catalog init failed");
-        let txn_mgr = TransactionManager::new(wal, bp);
+        let txn_mgr = Arc::new(TransactionManager::new(wal, bp, dir.join("wal.log")));
         (catalog, txn_mgr)
     }
 
@@ -102,7 +102,7 @@ mod tests {
         Field::new_non_empty(NonEmptyString::new(name).unwrap(), col_type)
     }
 
-    fn make_users_table(catalog: &Catalog, txn_mgr: &TransactionManager) {
+    fn make_users_table(catalog: &Catalog, txn_mgr: &Arc<TransactionManager>) {
         let txn = txn_mgr.begin().unwrap();
         catalog
             .create_table(

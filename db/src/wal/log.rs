@@ -56,6 +56,8 @@ pub enum LogRecordType {
     /// sees this record, so a crash during undo does not re-undo already-done
     /// steps.
     End = 9,
+    /// Marks a named rollback point within an active transaction.
+    Savepoint = 10,
 }
 
 /// Converts a raw `u8` discriminant back into a [`LogRecordType`].
@@ -79,6 +81,7 @@ impl TryFrom<u8> for LogRecordType {
             7 => Ok(Self::CheckpointEnd),
             8 => Ok(Self::Clr),
             9 => Ok(Self::End),
+            10 => Ok(Self::Savepoint),
             other => Err(other),
         }
     }
@@ -280,6 +283,8 @@ pub enum LogRecordBody {
     /// Written by the Undo pass after every record in a loser transaction has
     /// been compensated.  Mirrors [`LogRecordType::End`].
     End,
+    /// Named savepoint within an active transaction (`SAVEPOINT <name>`).
+    Savepoint { name: String },
 }
 
 impl LogRecordBody {
@@ -299,6 +304,7 @@ impl LogRecordBody {
             Self::CheckpointBegin => LogRecordType::CheckpointBegin,
             Self::CheckpointEnd { .. } => LogRecordType::CheckpointEnd,
             Self::End => LogRecordType::End,
+            Self::Savepoint { .. } => LogRecordType::Savepoint,
         }
     }
 }
@@ -316,6 +322,12 @@ impl Encode for LogRecordBody {
     fn encode<W: Write>(&self, writer: &mut W) -> Result<(), CodecError> {
         match self {
             Self::Begin | Self::Commit | Self::Abort | Self::CheckpointBegin | Self::End => {}
+
+            Self::Savepoint { name } => {
+                let bytes = name.as_bytes();
+                writer.write_le_u32(Self::encoded_len_u32(bytes.len())?)?;
+                writer.write_all(bytes)?;
+            }
 
             Self::Update {
                 page_id,
@@ -441,6 +453,14 @@ impl LogRecordBody {
             LogRecordType::Commit => Ok(Self::Commit),
             LogRecordType::Abort => Ok(Self::Abort),
             LogRecordType::End => Ok(Self::End),
+            LogRecordType::Savepoint => {
+                let len = reader.read_le_u32()? as usize;
+                let mut buf = vec![0u8; len];
+                reader.read_exact(&mut buf)?;
+                Ok(Self::Savepoint {
+                    name: std::str::from_utf8(&buf)?.to_owned(),
+                })
+            }
             LogRecordType::CheckpointBegin => Ok(Self::CheckpointBegin),
 
             LogRecordType::Update => Ok(Self::Update {
@@ -611,6 +631,7 @@ mod tests {
             LogRecordType::CheckpointEnd,
             LogRecordType::Clr,
             LogRecordType::End,
+            LogRecordType::Savepoint,
         ];
         for v in variants {
             assert_eq!(LogRecordType::try_from(v as u8).unwrap(), v);
@@ -619,8 +640,7 @@ mod tests {
 
     #[test]
     fn record_type_rejects_unknown_discriminant() {
-        // 9 is now End, so the first unknown byte is 10.
-        assert_eq!(LogRecordType::try_from(10u8), Err(10u8));
+        assert_eq!(LogRecordType::try_from(11u8), Err(11u8));
         assert_eq!(LogRecordType::try_from(255u8), Err(255u8));
     }
 
@@ -935,6 +955,25 @@ mod tests {
         assert!(matches!(decoded.body, LogRecordBody::End));
         // End carries no payload so body_len must be zero.
         assert_eq!(decoded.header.body_len, 0);
+    }
+
+    #[test]
+    fn savepoint_record_roundtrip() {
+        let rec = LogRecord::new(
+            Lsn(200),
+            Lsn(150),
+            TransactionId::new(7),
+            LogRecordBody::Savepoint {
+                name: "s1".to_owned(),
+            },
+        )
+        .unwrap();
+        let decoded = roundtrip(&rec);
+        assert_eq!(decoded.header.record_type, LogRecordType::Savepoint);
+        assert!(matches!(
+            decoded.body,
+            LogRecordBody::Savepoint { ref name } if name == "s1"
+        ));
     }
 
     #[test]

@@ -122,6 +122,24 @@ pub enum StatementResult {
         table: String,
         constraint: String,
     },
+
+    /// A `BEGIN` statement opened an explicit multi-statement transaction.
+    TransactionStarted,
+
+    /// A `COMMIT` statement committed the explicit transaction successfully.
+    TransactionCommitted,
+
+    /// A `ROLLBACK` statement (or a `COMMIT` on an aborted transaction) undid
+    /// all work since the last `BEGIN`.
+    TransactionRolledBack,
+
+    /// An advisory notice — not an error, but surfaced to the user.
+    ///
+    /// Issued for: `BEGIN` inside an already-open transaction, `COMMIT` with
+    /// no transaction in progress, etc.
+    Notice {
+        message: String,
+    },
 }
 
 impl StatementResult {
@@ -151,6 +169,10 @@ impl StatementResult {
             Self::ConstraintDropped { .. } => "constraint_dropped",
             Self::CheckConstraintAdded { .. } => "check_constraint_added",
             Self::ConstraintValidated { .. } => "constraint_validated",
+            Self::TransactionStarted => "transaction_started",
+            Self::TransactionCommitted => "transaction_committed",
+            Self::TransactionRolledBack => "transaction_rolled_back",
+            Self::Notice { .. } => "notice",
         }
     }
 
@@ -469,6 +491,10 @@ impl fmt::Display for StatementResult {
                     "ALTER TABLE completed: validated constraint '{constraint}' on '{table}'"
                 )
             }
+            StatementResult::TransactionStarted => write!(f, "BEGIN"),
+            StatementResult::TransactionCommitted => write!(f, "COMMIT"),
+            StatementResult::TransactionRolledBack => write!(f, "ROLLBACK"),
+            StatementResult::Notice { message } => write!(f, "NOTICE: {message}"),
         }
     }
 }

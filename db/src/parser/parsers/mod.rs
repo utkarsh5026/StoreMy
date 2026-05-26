@@ -10,6 +10,7 @@
 mod ddl;
 mod dml;
 mod query;
+mod txn;
 
 pub mod expr;
 use thiserror::Error;
@@ -19,7 +20,7 @@ use super::Parser;
 use crate::{
     parser::{
         lexer::LexError,
-        statements::{ColumnRef, Expr, Statement},
+        statements::{ColumnRef, Expr, RollbackStatement, Statement},
         token::{Token, TokenType},
     },
     primitives::{NameError, NonEmptyString},
@@ -164,6 +165,11 @@ impl Parser {
                 }
             }
             TokenType::Alter => Statement::AlterTable(self.parse_alter_table()?),
+            TokenType::Begin => Statement::Begin(self.parse_begin()?),
+            TokenType::Commit => Statement::Commit(self.parse_commit()?),
+            TokenType::Rollback => Statement::Rollback(self.parse_rollback()?),
+            TokenType::Savepoint => Statement::Savepoint(self.parse_savepoint()?),
+            TokenType::Release => Statement::ReleaseSavepoint(self.parse_release_savepoint()?),
             _ => {
                 warn!(
                     start_token = ?tok.kind,
@@ -538,5 +544,13 @@ fn statement_kind(stmt: &Statement) -> &'static str {
         Statement::CreateIndex(_) => "create_index",
         Statement::CreateTable(_) => "create_table",
         Statement::AlterTable(_) => "alter_table",
+        Statement::Begin(_) => "begin",
+        Statement::Commit(_) => "commit",
+        Statement::Rollback(rollback) => match rollback {
+            RollbackStatement::Transaction { .. } => "rollback",
+            RollbackStatement::Savepoint { .. } => "rollback_to_savepoint",
+        },
+        Statement::Savepoint(_) => "savepoint",
+        Statement::ReleaseSavepoint(_) => "release_savepoint",
     }
 }

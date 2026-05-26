@@ -123,6 +123,11 @@ pub enum Statement {
     Update(UpdateStatement),
     Select(SelectStatement),
     ShowIndexes(ShowIndexesStatement),
+    Begin(BeginStatement),
+    Commit(CommitStatement),
+    Rollback(RollbackStatement),
+    Savepoint(SavepointStatement),
+    ReleaseSavepoint(ReleaseSavepointStatement),
 }
 
 /// Pretty-prints the statement as a SQL-like string.
@@ -173,6 +178,11 @@ impl Display for Statement {
             Statement::Update(statement) => write!(f, "{statement}"),
             Statement::Select(statement) => write!(f, "{statement}"),
             Statement::ShowIndexes(statement) => write!(f, "{statement}"),
+            Statement::Begin(statement) => write!(f, "{statement}"),
+            Statement::Commit(statement) => write!(f, "{statement}"),
+            Statement::Rollback(statement) => write!(f, "{statement}"),
+            Statement::Savepoint(statement) => write!(f, "{statement}"),
+            Statement::ReleaseSavepoint(statement) => write!(f, "{statement}"),
         }
     }
 }
@@ -192,6 +202,14 @@ impl Statement {
             Statement::Update(_) => "Update",
             Statement::Select(_) => "Select",
             Statement::ShowIndexes(_) => "ShowIndexes",
+            Statement::Begin(_) => "Begin",
+            Statement::Commit(_) => "Commit",
+            Statement::Rollback(rollback) => match rollback {
+                RollbackStatement::Transaction { .. } => "Rollback",
+                RollbackStatement::Savepoint { .. } => "RollbackToSavepoint",
+            },
+            Statement::Savepoint(_) => "Savepoint",
+            Statement::ReleaseSavepoint(_) => "ReleaseSavepoint",
         }
     }
 
@@ -813,6 +831,156 @@ impl Display for ShowIndexesStatement {
             write!(f, " FROM {table}")?;
         }
         Ok(())
+    }
+}
+
+/// Parsed `BEGIN [TRANSACTION]`.
+///
+/// Opens an explicit transaction that later statements run inside until
+/// [`CommitStatement`] or [`RollbackStatement`].
+///
+/// # SQL examples
+///
+/// ```sql
+/// -- BEGIN;
+/// --   BeginStatement { transaction: false }
+///
+/// -- BEGIN TRANSACTION;
+/// --   BeginStatement { transaction: true }
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct BeginStatement {
+    /// `true` when the statement was written as `BEGIN TRANSACTION`.
+    pub transaction: bool,
+}
+
+impl Display for BeginStatement {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "BEGIN")?;
+        if self.transaction {
+            write!(f, " TRANSACTION")?;
+        }
+        Ok(())
+    }
+}
+
+/// Parsed `COMMIT [TRANSACTION]`.
+///
+/// Makes the current explicit transaction durable and closes it.
+///
+/// # SQL examples
+///
+/// ```sql
+/// -- COMMIT;
+/// --   CommitStatement { transaction: false }
+///
+/// -- COMMIT TRANSACTION;
+/// --   CommitStatement { transaction: true }
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CommitStatement {
+    /// `true` when the statement was written as `COMMIT TRANSACTION`.
+    pub transaction: bool,
+}
+
+impl Display for CommitStatement {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "COMMIT")?;
+        if self.transaction {
+            write!(f, " TRANSACTION")?;
+        }
+        Ok(())
+    }
+}
+
+/// Parsed `ROLLBACK` — either a full transaction abort or a partial undo to a
+/// savepoint.
+///
+/// # SQL examples
+///
+/// ```sql
+/// -- ROLLBACK;
+/// --   RollbackStatement::Transaction { transaction: false }
+///
+/// -- ROLLBACK TRANSACTION;
+/// --   RollbackStatement::Transaction { transaction: true }
+///
+/// -- ROLLBACK TO SAVEPOINT s1;
+/// --   RollbackStatement::Savepoint { name: "s1" }
+///
+/// -- ROLLBACK TO s1;
+/// --   RollbackStatement::Savepoint { name: "s1" }
+/// ```
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RollbackStatement {
+    /// Aborts the entire current explicit transaction.
+    Transaction {
+        /// `true` when the statement was written as `ROLLBACK TRANSACTION`.
+        transaction: bool,
+    },
+    /// Undoes all work after the named savepoint while keeping earlier changes.
+    Savepoint { name: NonEmptyString },
+}
+
+impl Display for RollbackStatement {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Transaction { transaction } => {
+                write!(f, "ROLLBACK")?;
+                if *transaction {
+                    write!(f, " TRANSACTION")?;
+                }
+                Ok(())
+            }
+            Self::Savepoint { name } => write!(f, "ROLLBACK TO SAVEPOINT {name}"),
+        }
+    }
+}
+
+/// Parsed `SAVEPOINT <name>`.
+///
+/// Marks a rollback point within the current transaction. Everything written
+/// after this statement can be undone with [`RollbackStatement::Savepoint`]
+/// without aborting the whole transaction.
+///
+/// # SQL examples
+///
+/// ```sql
+/// -- SAVEPOINT s1;
+/// --   SavepointStatement { name: "s1" }
+/// ```
+#[derive(Debug, Clone)]
+pub struct SavepointStatement {
+    pub name: NonEmptyString,
+}
+
+impl Display for SavepointStatement {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "SAVEPOINT {}", self.name)
+    }
+}
+
+/// Parsed `RELEASE [SAVEPOINT] <name>`.
+///
+/// Discards a savepoint mark without rolling back any work.
+///
+/// # SQL examples
+///
+/// ```sql
+/// -- RELEASE SAVEPOINT s1;
+/// --   ReleaseSavepointStatement { name: "s1" }
+///
+/// -- RELEASE s1;
+/// --   ReleaseSavepointStatement { name: "s1" }
+/// ```
+#[derive(Debug, Clone)]
+pub struct ReleaseSavepointStatement {
+    pub name: NonEmptyString,
+}
+
+impl Display for ReleaseSavepointStatement {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "RELEASE SAVEPOINT {}", self.name)
     }
 }
 
