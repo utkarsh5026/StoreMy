@@ -35,7 +35,7 @@ use crate::{
     parser::statements::{AggFunc, BinOp, CaseBranch, Expr, UnOp},
     primitives::ColumnId,
     tuple::{Tuple, TupleSchema},
-    types::Type,
+    types::{ArithmeticError, Type},
 };
 
 /// Minimal interface for mapping a column reference to a [`ColumnId`].
@@ -526,46 +526,37 @@ fn eval_binary(op: BinOp, l: &Value, r: &Value) -> Result<Value, ExecutionError>
         BinOp::LtEq => Ok(cmp_to_bool(l.partial_cmp(r), Ordering::is_le)),
         BinOp::Gt => Ok(cmp_to_bool(l.partial_cmp(r), Ordering::is_gt)),
         BinOp::GtEq => Ok(cmp_to_bool(l.partial_cmp(r), Ordering::is_ge)),
-        BinOp::Add => match (l, r) {
-            (Value::Int64(a), Value::Int64(b)) => Ok(Value::Int64(a.wrapping_add(*b))),
-            (Value::Uint64(a), Value::Uint64(b)) => Ok(Value::Uint64(a.wrapping_add(*b))),
-            (Value::Float64(a), Value::Float64(b)) => Ok(Value::Float64(a + b)),
-            _ => Err(ExecutionError::TypeError(format!("cannot add {l} and {r}"))),
-        },
-        BinOp::Sub => match (l, r) {
-            (Value::Int64(a), Value::Int64(b)) => Ok(Value::Int64(a.wrapping_sub(*b))),
-            (Value::Uint64(a), Value::Uint64(b)) => Ok(Value::Uint64(a.wrapping_sub(*b))),
-            (Value::Float64(a), Value::Float64(b)) => Ok(Value::Float64(a - b)),
-            _ => Err(ExecutionError::TypeError(format!(
-                "cannot subtract {r} from {l}"
-            ))),
-        },
-        BinOp::Mul => match (l, r) {
-            (Value::Int64(a), Value::Int64(b)) => Ok(Value::Int64(a.wrapping_mul(*b))),
-            (Value::Uint64(a), Value::Uint64(b)) => Ok(Value::Uint64(a.wrapping_mul(*b))),
-            (Value::Float64(a), Value::Float64(b)) => Ok(Value::Float64(a * b)),
-            _ => Err(ExecutionError::TypeError(format!(
-                "cannot multiply {l} and {r}"
-            ))),
-        },
-        BinOp::Div => match (l, r) {
-            (Value::Int64(a), Value::Int64(b)) => {
-                if *b == 0 {
-                    return Err(ExecutionError::TypeError("division by zero".to_string()));
-                }
-                Ok(Value::Int64(a / b))
+        BinOp::Add => l
+            .checked_add(r)
+            .map_err(|_| ExecutionError::TypeError(format!("cannot add {l} and {r}"))),
+        BinOp::Sub => {
+            let out = l.clone() - r;
+            if out.is_null() {
+                Err(ExecutionError::TypeError(format!(
+                    "cannot subtract {r} from {l}"
+                )))
+            } else {
+                Ok(out)
             }
-            (Value::Uint64(a), Value::Uint64(b)) => {
-                if *b == 0 {
-                    return Err(ExecutionError::TypeError("division by zero".to_string()));
-                }
-                Ok(Value::Uint64(a / b))
+        }
+        BinOp::Mul => {
+            let out = l.clone() * r;
+            if out.is_null() {
+                Err(ExecutionError::TypeError(format!(
+                    "cannot multiply {l} and {r}"
+                )))
+            } else {
+                Ok(out)
             }
-            (Value::Float64(a), Value::Float64(b)) => Ok(Value::Float64(a / b)),
-            _ => Err(ExecutionError::TypeError(format!(
-                "cannot divide {l} by {r}"
-            ))),
-        },
+        }
+        BinOp::Div => l.checked_div(r).map_err(|e| match e {
+            ArithmeticError::DivisionByZero => {
+                ExecutionError::TypeError("division by zero".to_string())
+            }
+            ArithmeticError::TypeMismatch => {
+                ExecutionError::TypeError(format!("cannot divide {l} by {r}"))
+            }
+        }),
     }
 }
 

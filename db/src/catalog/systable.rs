@@ -366,7 +366,7 @@ fn encode_default(v: &Value) -> String {
         Value::Uint64(n) => format!("u64:{n}"),
         Value::Float64(f) => format!("f64:{f}"),
         Value::Bool(b) => format!("bool:{b}"),
-        Value::String(s) => format!("str:{s}"),
+        Value::String(s) | Value::Text(s) => format!("str:{s}"),
         Value::Null => "null".to_owned(),
     }
 }

@@ -8,15 +8,17 @@
 //! - [`Type`] — a compile-time descriptor of what *kind* of value a column holds.
 //! - [`Value`] — an owned runtime value that carries actual data, including [`Value::Null`].
 //!
-//! Both types support serialization to and from raw byte slices using little-endian
-//! encoding (via the `byteorder` crate). Strings are stored as a 4-byte length prefix
-//! followed by the UTF-8 bytes, capped at [`crate::STRING_MAX_SIZE`].
+//! Both types support serialization using little-endian encoding (via the
+//! `byteorder` crate). Each [`Value`] is written as its [`Type`] tag (4 bytes)
+//! followed by the payload; strings use a 4-byte length prefix plus UTF-8 bytes,
+//! capped at [`crate::STRING_MAX_SIZE`] for [`Type::String`].
 
 use std::{
     cmp::Ordering,
     fmt,
     hash::{Hash, Hasher},
     io::{Read, Write},
+    ops::{Add, Mul, Sub},
 };
 
 use thiserror::Error;
@@ -25,6 +27,9 @@ use crate::{
     STRING_MAX_SIZE,
     codec::{CodecError, Decode, Encode, ReadLeExt, WriteLeExt},
 };
+
+/// Wire tag for [`Value::Null`]; not a [`Type`] variant.
+const NULL_VALUE_TAG: u32 = u32::MAX;
 
 /// Errors related to the type system and value conversions.
 #[derive(Error, Debug)]
@@ -42,6 +47,30 @@ pub enum TypeError {
     UnsupportedType { message: String },
 }
 
+/// Errors from [`Value::checked_add`] and [`Value::checked_div`].
+///
+/// Subtraction and multiplication use [`Sub`] and [`Mul`]; those operators return
+/// [`Value::Null`] on type mismatch, which is enough because neither can fail with
+/// division-by-zero.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ArithmeticError {
+    TypeMismatch,
+    DivisionByZero,
+}
+
+impl TypeError {
+    fn invalid_conversion<F, T>(from: F, to: T) -> Self
+    where
+        F: fmt::Display,
+        T: fmt::Display,
+    {
+        Self::InvalidConversion {
+            from: from.to_string(),
+            to: to.to_string(),
+        }
+    }
+}
+
 /// The data type of a column or expression.
 ///
 /// `Type` is a lightweight, `Copy` descriptor used in schema definitions and
@@ -55,6 +84,7 @@ pub enum Type {
     Float64,
     String,
     Bool,
+    Text,
 }
 
 /// Converts a `u32` to a [`Type`] by matching a numeric tag to the corresponding variant.
@@ -65,13 +95,14 @@ impl TryFrom<u32> for Type {
 
     fn try_from(value: u32) -> Result<Self, Self::Error> {
         match value {
-            0 => Ok(Type::Int32),
-            1 => Ok(Type::Int64),
-            2 => Ok(Type::Uint32),
-            3 => Ok(Type::Uint64),
-            4 => Ok(Type::Float64),
-            5 => Ok(Type::String),
-            6 => Ok(Type::Bool),
+            0 => Ok(Self::Int32),
+            1 => Ok(Self::Int64),
+            2 => Ok(Self::Uint32),
+            3 => Ok(Self::Uint64),
+            4 => Ok(Self::Float64),
+            5 => Ok(Self::String),
+            6 => Ok(Self::Bool),
+            7 => Ok(Self::Text),
             _ => Err(TypeError::UnsupportedType {
                 message: format!("Unsupported type: {value}"),
             }),
@@ -89,6 +120,7 @@ impl From<Type> for u32 {
             Type::Float64 => 4,
             Type::String => 5,
             Type::Bool => 6,
+            Type::Text => 7,
         }
     }
 }
@@ -131,46 +163,13 @@ impl Decode for Type {
 }
 
 impl Type {
-    /// Returns the on-disk size of this type in bytes.
-    ///
-    /// For all fixed-width types this is the exact byte count. For [`Type::String`]
-    /// it is the *maximum* possible size: a 4-byte length prefix plus
-    /// [`crate::STRING_MAX_SIZE`] payload bytes. Use [`Value::encoded_size`] when
-    /// you need the actual size of a specific string value.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use storemy::types::Type;
-    ///
-    /// assert_eq!(Type::Int32.size(), 4);
-    /// assert_eq!(Type::Float64.size(), 8);
-    /// assert_eq!(Type::Bool.size(), 1);
-    /// ```
-    pub const fn size(&self) -> usize {
-        match self {
-            Type::Int32 | Type::Uint32 => 4,
-            Type::Int64 | Type::Uint64 | Type::Float64 => 8,
-            Type::Bool => 1,
-            Type::String => 4 + STRING_MAX_SIZE, // 4-byte length prefix
-        }
-    }
-
     /// Returns `true` if values of this type always occupy the same number of bytes.
     ///
-    /// Every type except [`Type::String`] is fixed-size. Fixed-size columns can be
-    /// accessed by direct offset arithmetic without scanning a length prefix.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use storemy::types::Type;
-    ///
-    /// assert!(Type::Int64.is_fixed_size());
-    /// assert!(!Type::String.is_fixed_size());
-    /// ```
+    /// [`Type::String`] and [`Type::Text`] are variable-length (length-prefixed UTF-8).
+    /// Fixed-size columns can be accessed by direct offset arithmetic without
+    /// scanning a length prefix.
     pub const fn is_fixed_size(&self) -> bool {
-        !matches!(self, Type::String)
+        !matches!(self, Type::String | Type::Text)
     }
 }
 
@@ -185,22 +184,14 @@ impl Type {
 /// | `Uint32`  | `UINT`, `UINT32` |
 /// | `Uint64`  | `UBIGINT`, `UINT64` |
 /// | `Float64` | `FLOAT`, `DOUBLE`, `REAL`, `FLOAT64` |
-/// | `String`  | `VARCHAR`, `TEXT`, `STRING` |
+/// | `String`  | `VARCHAR`, `STRING` |
+/// | `Text`    | `TEXT` |
 /// | `Bool`    | `BOOL`, `BOOLEAN` |
 ///
 /// # Errors
 ///
 /// Returns [`TypeError::UnsupportedType`] when `value` does not match any
 /// of the accepted strings (unrecognized name).
-///
-/// # Examples
-///
-/// ```
-/// use storemy::types::Type;
-///
-/// assert_eq!(Type::try_from("bigint").unwrap(), Type::Int64);
-/// assert!(Type::try_from("uuid").is_err());
-/// ```
 impl TryFrom<&str> for Type {
     type Error = TypeError;
 
@@ -211,7 +202,8 @@ impl TryFrom<&str> for Type {
             "UINT" | "UINT32" => Ok(Type::Uint32),
             "UBIGINT" | "UINT64" => Ok(Type::Uint64),
             "FLOAT" | "DOUBLE" | "REAL" | "FLOAT64" => Ok(Type::Float64),
-            "VARCHAR" | "TEXT" | "STRING" => Ok(Type::String),
+            "VARCHAR" | "STRING" => Ok(Type::String),
+            "TEXT" => Ok(Type::Text),
             "BOOL" | "BOOLEAN" => Ok(Type::Bool),
             _ => Err(TypeError::UnsupportedType {
                 message: format!("Unsupported type name: {value}"),
@@ -220,10 +212,6 @@ impl TryFrom<&str> for Type {
     }
 }
 
-/// Formats the type as a standard SQL type name.
-///
-/// The output matches the primary SQL keyword for each variant:
-/// `INT`, `BIGINT`, `INT UNSIGNED`, `BIGINT UNSIGNED`, `DOUBLE`, `VARCHAR`, `BOOLEAN`.
 impl fmt::Display for Type {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let name = match self {
@@ -233,6 +221,7 @@ impl fmt::Display for Type {
             Type::Uint64 => "BIGINT UNSIGNED",
             Type::Float64 => "DOUBLE",
             Type::String => "VARCHAR",
+            Type::Text => "TEXT",
             Type::Bool => "BOOLEAN",
         };
         write!(f, "{name}")
@@ -255,6 +244,7 @@ pub enum Value {
     Uint64(u64),
     Float64(f64),
     String(String),
+    Text(String),
     Bool(bool),
     Null,
 }
@@ -279,6 +269,7 @@ impl Value {
             Value::Float64(_) => Some(Type::Float64),
             Value::String(_) => Some(Type::String),
             Value::Bool(_) => Some(Type::Bool),
+            Value::Text(_) => Some(Type::Text),
             Value::Null => None,
         }
     }
@@ -314,65 +305,71 @@ impl Value {
     /// mirrors a branch there. The `String` arm applies the same
     /// [`STRING_MAX_SIZE`] truncation the encoder does.
     pub fn encoded_size(&self) -> usize {
-        1 + match self {
+        4 + match self {
             Value::Null => 0,
             Value::Bool(_) => 1,
             Value::Int32(_) | Value::Uint32(_) => 4,
             Value::Int64(_) | Value::Uint64(_) | Value::Float64(_) => 8,
-            Value::String(s) => 4 + s.len().min(STRING_MAX_SIZE),
+            Value::String(s) | Value::Text(s) => 4 + s.len().min(STRING_MAX_SIZE),
+        }
+    }
+
+    /// SQL expression `+` on two non-null operands of the same numeric kind.
+    ///
+    /// Integer pairs use wrapping arithmetic; [`Value::Float64`] uses IEEE addition.
+    /// The [`Add`] operator uses different (widening) rules for aggregate `SUM`.
+    pub fn checked_add(&self, rhs: &Value) -> Result<Value, ArithmeticError> {
+        match (self, rhs) {
+            (Value::Int64(a), Value::Int64(b)) => Ok(Value::Int64(a.wrapping_add(*b))),
+            (Value::Uint64(a), Value::Uint64(b)) => Ok(Value::Uint64(a.wrapping_add(*b))),
+            (Value::Float64(a), Value::Float64(b)) => Ok(Value::Float64(a + b)),
+            _ => Err(ArithmeticError::TypeMismatch),
+        }
+    }
+
+    /// SQL expression `/` on two non-null operands of the same numeric kind.
+    ///
+    /// Integer division returns [`ArithmeticError::DivisionByZero`] when the
+    /// divisor is zero; float division follows IEEE rules.
+    pub fn checked_div(&self, rhs: &Self) -> Result<Self, ArithmeticError> {
+        match (self, rhs) {
+            (Self::Int64(a), Self::Int64(b)) => {
+                if *b == 0 {
+                    return Err(ArithmeticError::DivisionByZero);
+                }
+                Ok(Self::Int64(a / b))
+            }
+            (Self::Uint64(a), Self::Uint64(b)) => {
+                if *b == 0 {
+                    return Err(ArithmeticError::DivisionByZero);
+                }
+                Ok(Self::Uint64(a / b))
+            }
+            (Self::Float64(a), Self::Float64(b)) => Ok(Self::Float64(a / b)),
+            _ => Err(ArithmeticError::TypeMismatch),
         }
     }
 }
 
-/// Coerces a literal (for example from a parsed `WHERE` constant) into a value of
-/// `target`, which is typically a column’s declared type.
-///
-/// Integer literals are parsed as [`Value::Int64`]; this conversion narrows or
-/// reinterprets them when the column is a smaller integer or unsigned type.
-/// When the value’s [`Value::get_type`] already equals `target`, the value is
-/// cloned unchanged.
-///
-/// # Errors
-///
-/// Returns [`TypeError::InvalidConversion`] when the value cannot be represented
-/// in `target` (including out-of-range integers and unsupported combinations such
-/// as comparing a string literal to a numeric column without a conversion rule).
 impl TryFrom<(&Value, Type)> for Value {
     type Error = TypeError;
 
-    fn try_from((v, target): (&Value, Type)) -> Result<Self, Self::Error> {
+    fn try_from((v, target): (&Self, Type)) -> Result<Self, Self::Error> {
         match (v, target) {
-            (Value::Int64(n), Type::Int32) => {
-                i32::try_from(*n)
-                    .map(Value::Int32)
-                    .map_err(|_| TypeError::InvalidConversion {
-                        from: n.to_string(),
-                        to: Type::Int32.to_string(),
-                    })
-            }
-            (Value::Int64(n), Type::Int64) => Ok(Value::Int64(*n)),
-            (Value::Int64(n), Type::Uint32) => {
-                u32::try_from(*n)
-                    .map(Value::Uint32)
-                    .map_err(|_| TypeError::InvalidConversion {
-                        from: n.to_string(),
-                        to: Type::Uint32.to_string(),
-                    })
-            }
-            (Value::Int64(n), Type::Uint64) => {
-                u64::try_from(*n)
-                    .map(Value::Uint64)
-                    .map_err(|_| TypeError::InvalidConversion {
-                        from: n.to_string(),
-                        to: Type::Uint64.to_string(),
-                    })
-            }
-            (Value::String(s), Type::String) => Ok(Value::String(s.clone())),
+            (Self::Int64(n), Type::Int32) => i32::try_from(*n)
+                .map(Self::Int32)
+                .map_err(|_| TypeError::invalid_conversion(*n, Type::Int32)),
+            (Self::Int64(n), Type::Int64) => Ok(Self::Int64(*n)),
+            (Self::Int64(n), Type::Uint32) => u32::try_from(*n)
+                .map(Self::Uint32)
+                .map_err(|_| TypeError::invalid_conversion(*n, Type::Uint32)),
+            (Self::Int64(n), Type::Uint64) => u64::try_from(*n)
+                .map(Self::Uint64)
+                .map_err(|_| TypeError::invalid_conversion(*n, Type::Uint64)),
+            (Self::String(s), Type::String) => Ok(Self::String(s.clone())),
+            (Self::Text(s), Type::Text) => Ok(Self::Text(s.clone())),
             (v, ty) if v.get_type() == Some(ty) => Ok(v.clone()),
-            (v, ty) => Err(TypeError::InvalidConversion {
-                from: v.to_string(),
-                to: ty.to_string(),
-            }),
+            (v, ty) => Err(TypeError::invalid_conversion(v, ty)),
         }
     }
 }
@@ -414,67 +411,44 @@ macro_rules! impl_value_cmp {
     };
 }
 
-impl_value_cmp! { Int32, Int64, Uint32, Uint64, Float64, String, Bool }
+impl_value_cmp! { Int32, Int64, Uint32, Uint64, Float64, String, Text, Bool }
 
 impl Eq for Value {}
 
-macro_rules! impl_value_hash_display {
-    (
-        hash_default { $( $hd_variant:ident ),* $(,)? }
-        hash_custom { $( $hc_variant:ident => |$hc_v:ident, $hc_state:ident| $hc_body:expr ),* $(,)? }
-        display_default { $( $dd_variant:ident ),* $(,)? }
-        display_custom { $( $dc_variant:ident => |$dc_v:ident, $dc_f:ident| $dc_body:expr ),* $(,)? }
-    ) => {
-        /// Hashes a value consistently with its [`PartialEq`] implementation.
-        ///
-        /// `Float64` is hashed by its bit pattern (`f64::to_bits`), so two `NaN`
-        /// values with the same bit pattern hash equal, even though `NaN != NaN`
-        /// under IEEE 754. The discriminant is always mixed in first so that, e.g.,
-        /// `Int32(1)` and `Int64(1)` produce different hashes.
-        impl Hash for Value {
-            fn hash<H: Hasher>(&self, state: &mut H) {
-                std::mem::discriminant(self).hash(state);
-                match self {
-                    $(
-                        Value::$hd_variant(v) => v.hash(state),
-                    )*
-                    $(
-                        Value::$hc_variant($hc_v) => { let $hc_state = state; $hc_body }
-                    ),*
-                    Value::Null => {}
-                }
-            }
+/// Hashes a value consistently with its [`PartialEq`] implementation.
+///
+/// `Float64` is hashed by its bit pattern (`f64::to_bits`), so two `NaN`
+/// values with the same bit pattern hash equal, even though `NaN != NaN`
+/// under IEEE 754. The discriminant is always mixed in first so that, e.g.,
+/// `Int32(1)` and `Int64(1)` produce different hashes.
+impl Hash for Value {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        std::mem::discriminant(self).hash(state);
+        match self {
+            Self::Int32(v) => v.hash(state),
+            Self::Int64(v) => v.hash(state),
+            Self::Uint32(v) => v.hash(state),
+            Self::Uint64(v) => v.hash(state),
+            Self::Float64(v) => v.to_bits().hash(state),
+            Self::String(v) | Self::Text(v) => v.hash(state),
+            Self::Bool(v) => v.hash(state),
+            Self::Null => {}
         }
-
-        /// Formats the value in a SQL-like representation.
-        ///
-        /// Strings are wrapped in single quotes (`'hello'`). `NULL` is printed as
-        /// the literal `NULL`. All numeric and boolean variants use their standard
-        /// Rust `Display` format.
-        impl fmt::Display for Value {
-            fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-                match self {
-                    $(
-                        Value::$dd_variant(v) => write!(f, "{v}"),
-                    )*
-                    $(
-                        Value::$dc_variant($dc_v) => { let $dc_f = f; $dc_body }
-                    ),*
-                    Value::Null => write!(f, "NULL"),
-                }
-            }
-        }
-    };
+    }
 }
 
-impl_value_hash_display! {
-    hash_default { Int32, Int64, Uint32, Uint64, String, Bool }
-    hash_custom {
-        Float64 => |v, state| v.to_bits().hash(state),
-    }
-    display_default { Int32, Int64, Uint32, Uint64, Float64, Bool }
-    display_custom {
-        String => |v, f| write!(f, "'{v}'"),
+impl fmt::Display for Value {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Int32(v) => write!(f, "{v}"),
+            Self::Int64(v) => write!(f, "{v}"),
+            Self::Uint32(v) => write!(f, "{v}"),
+            Self::Uint64(v) => write!(f, "{v}"),
+            Self::Float64(v) => write!(f, "{v}"),
+            Self::Bool(v) => write!(f, "{v}"),
+            Self::String(v) | Self::Text(v) => write!(f, "'{v}'"),
+            Self::Null => write!(f, "NULL"),
+        }
     }
 }
 
@@ -504,32 +478,50 @@ impl_from_value! {
     bool  => Bool,
 }
 
-/// Adds two values, widening integers to `Int64` and floats to `Float64`.
-///
-/// Mixed integer/float combinations widen to `Float64`. Any unsupported
-/// combination (e.g. adding a string to a number) returns [`Value::Null`].
-///
-/// Note: `NULL + anything` returns `NULL`. Callers that want SQL NULL-skip
-/// behavior (like `SUM`) should check [`Value::is_null`] before calling `+`.
-impl std::ops::Add<&Value> for Value {
-    type Output = Value;
+/// Widening add for aggregate `SUM`. SQL expression `+` uses [`Value::checked_add`].
+impl Add<&Value> for Value {
+    type Output = Self;
 
-    fn add(self, rhs: &Value) -> Value {
-        match (self, rhs) {
-            (Value::Int32(x), Value::Int32(y)) => Value::Int64(i64::from(x) + i64::from(*y)),
-            (Value::Int64(x), Value::Int32(y)) => Value::Int64(x + i64::from(*y)),
-            (Value::Int32(x), Value::Int64(y)) => Value::Int64(i64::from(x) + y),
-            (Value::Int64(x), Value::Int64(y)) => Value::Int64(x + y),
-            (Value::Uint32(x), Value::Uint32(y)) => Value::Int64(i64::from(x) + i64::from(*y)),
+    fn add(self, rhs: &Self) -> Self {
+        match (&self, rhs) {
+            (Self::Int32(x), Self::Int32(y)) => Self::Int64(i64::from(*x) + i64::from(*y)),
+            (Self::Int64(x), Self::Int32(y)) => Self::Int64(*x + i64::from(*y)),
+            (Self::Int32(x), Self::Int64(y)) => Self::Int64(i64::from(*x) + *y),
+            (Self::Int64(x), Self::Int64(y)) => Self::Int64(*x + *y),
+            (Self::Uint32(x), Self::Uint32(y)) => Self::Int64(i64::from(*x) + i64::from(*y)),
             #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-            (Value::Uint64(x), Value::Uint64(y)) => {
-                Value::Int64(x.cast_signed() + (*y).cast_signed())
-            }
-            (Value::Float64(x), Value::Float64(y)) => Value::Float64(x + y),
-            (Value::Float64(x), Value::Int32(y)) => Value::Float64(x + f64::from(*y)),
+            (Self::Uint64(x), Self::Uint64(y)) => Self::Int64(x.cast_signed() + y.cast_signed()),
+            (Self::Float64(x), Self::Float64(y)) => Self::Float64(*x + *y),
+            (Self::Float64(x), Self::Int32(y)) => Self::Float64(*x + f64::from(*y)),
             #[allow(clippy::cast_precision_loss)]
-            (Value::Float64(x), Value::Int64(y)) => Value::Float64(x + *y as f64),
-            _ => Value::Null,
+            (Self::Float64(x), Self::Int64(y)) => Self::Float64(*x + *y as f64),
+            _ => Self::Null,
+        }
+    }
+}
+
+impl Sub<&Value> for Value {
+    type Output = Self;
+
+    fn sub(self, rhs: &Self) -> Self {
+        match (&self, rhs) {
+            (Self::Int64(a), Self::Int64(b)) => Self::Int64(a.wrapping_sub(*b)),
+            (Self::Uint64(a), Self::Uint64(b)) => Self::Uint64(a.wrapping_sub(*b)),
+            (Self::Float64(a), Self::Float64(b)) => Self::Float64(a - b),
+            _ => Self::Null,
+        }
+    }
+}
+
+impl Mul<&Value> for Value {
+    type Output = Self;
+
+    fn mul(self, rhs: &Self) -> Self {
+        match (&self, rhs) {
+            (Self::Int64(a), Self::Int64(b)) => Self::Int64(a.wrapping_mul(*b)),
+            (Self::Uint64(a), Self::Uint64(b)) => Self::Uint64(a.wrapping_mul(*b)),
+            (Self::Float64(a), Self::Float64(b)) => Self::Float64(a * b),
+            _ => Self::Null,
         }
     }
 }
@@ -562,92 +554,72 @@ impl<T: Into<Value>> From<Option<T>> for Value {
     fn from(v: Option<T>) -> Self {
         match v {
             Some(val) => val.into(),
-            None => Value::Null,
+            None => Self::Null,
         }
     }
 }
 
-/// Encodes a [`Value`] in a self-describing binary format.
-///
-/// The encoding is a 1-byte discriminant followed by the payload:
-///
-/// | Discriminant | Variant   | Payload                              |
-/// |:---:|-----------|--------------------------------------|
-/// | 0   | `Null`    | *(none)*                             |
-/// | 1   | `Int32`   | 4 bytes, little-endian `i32`         |
-/// | 2   | `Int64`   | 8 bytes, little-endian `i64`         |
-/// | 3   | `Uint32`  | 4 bytes, little-endian `u32`         |
-/// | 4   | `Uint64`  | 8 bytes, little-endian `u64`         |
-/// | 5   | `Float64` | 8 bytes, little-endian `f64`         |
-/// | 6   | `Bool`    | 1 byte (`0` = false, `1` = true)     |
-/// | 7   | `String`  | 4-byte LE length + UTF-8 bytes       |
-///
-/// Strings are silently truncated to [`crate::STRING_MAX_SIZE`] bytes.
 impl Encode for Value {
-    fn encode<W: Write>(&self, writer: &mut W) -> Result<(), CodecError> {
+    fn encode<W: Write>(&self, w: &mut W) -> Result<(), CodecError> {
+        let Some(value_type) = self.get_type() else {
+            w.write_le_u32(NULL_VALUE_TAG)?;
+            return Ok(());
+        };
+
+        value_type.encode(w)?;
+
         match self {
-            Value::Null => writer.write_u8(0)?,
-            Value::Int32(v) => {
-                writer.write_u8(1)?;
-                writer.write_le_i32(*v)?;
-            }
-            Value::Int64(v) => {
-                writer.write_u8(2)?;
-                writer.write_le_i64(*v)?;
-            }
-            Value::Uint32(v) => {
-                writer.write_u8(3)?;
-                writer.write_le_u32(*v)?;
-            }
-            Value::Uint64(v) => {
-                writer.write_u8(4)?;
-                writer.write_le_u64(*v)?;
-            }
-            Value::Float64(v) => {
-                writer.write_u8(5)?;
-                writer.write_le_f64(*v)?;
-            }
-            Value::Bool(v) => {
-                writer.write_u8(6)?;
-                writer.write_u8(u8::from(*v))?;
-            }
-            Value::String(s) => {
+            Self::Int32(v) => w.write_le_i32(*v)?,
+            Self::Int64(v) => w.write_le_i64(*v)?,
+            Self::Uint32(v) => w.write_le_u32(*v)?,
+            Self::Uint64(v) => w.write_le_u64(*v)?,
+            Self::Float64(v) => w.write_le_f64(*v)?,
+            Self::Bool(v) => w.write_u8(u8::from(*v))?,
+            Self::String(s) | Self::Text(s) => {
                 let bytes = s.as_bytes();
                 let len = bytes.len().min(STRING_MAX_SIZE);
-                writer.write_u8(7)?;
-                let len_u32 = u32::try_from(len).map_err(|_| CodecError::NumericDoesNotFit {
-                    value: len as u64,
-                    target: "u32",
-                })?;
-                writer.write_le_u32(len_u32)?;
-                writer.write_all(&bytes[..len])?;
+                let len_u32 = u32::try_from(len)
+                    .map_err(|_| CodecError::numeric_does_not_fit(len as u64, "u32"))?;
+                w.write_le_u32(len_u32)?;
+                w.write_all(&bytes[..len])?;
             }
+            Self::Null => unreachable!(),
         }
         Ok(())
     }
 }
 
-/// Decodes a [`Value`] written by [`Encode for Value`].
-///
-/// Reads the 1-byte discriminant and then the corresponding payload.
-/// Returns [`CodecError::UnknownDiscriminant`] for any unrecognized byte.
 impl Decode for Value {
-    fn decode<R: Read>(reader: &mut R) -> Result<Self, CodecError> {
-        match reader.read_u8()? {
-            0 => Ok(Value::Null),
-            1 => Ok(Value::Int32(reader.read_le_i32()?)),
-            2 => Ok(Value::Int64(reader.read_le_i64()?)),
-            3 => Ok(Value::Uint32(reader.read_le_u32()?)),
-            4 => Ok(Value::Uint64(reader.read_le_u64()?)),
-            5 => Ok(Value::Float64(reader.read_le_f64()?)),
-            6 => Ok(Value::Bool(reader.read_u8()? != 0)),
-            7 => {
-                let len = reader.read_le_u32()? as usize;
+    fn decode<R: Read>(r: &mut R) -> Result<Self, CodecError> {
+        let tag = r.read_le_u32()?;
+        if tag == NULL_VALUE_TAG {
+            return Ok(Value::Null);
+        }
+
+        let value_type = Type::try_from(tag).map_err(|_| match u8::try_from(tag) {
+            Ok(tag_u8) => CodecError::UnknownDiscriminant(tag_u8),
+            Err(_) => CodecError::numeric_does_not_fit(u64::from(tag), "u8"),
+        })?;
+
+        match value_type {
+            Type::Int32 => Ok(Self::Int32(r.read_le_i32()?)),
+            Type::Int64 => Ok(Self::Int64(r.read_le_i64()?)),
+            Type::Uint32 => Ok(Self::Uint32(r.read_le_u32()?)),
+            Type::Uint64 => Ok(Self::Uint64(r.read_le_u64()?)),
+            Type::Float64 => Ok(Self::Float64(r.read_le_f64()?)),
+            Type::Bool => Ok(Self::Bool(r.read_u8()? != 0)),
+            Type::String | Type::Text => {
+                let len = r.read_le_u32()? as usize;
                 let mut buf = vec![0u8; len];
-                reader.read_exact(&mut buf)?;
-                Ok(Value::String(std::str::from_utf8(&buf)?.to_string()))
+                r.read_exact(&mut buf)?;
+                let s = std::str::from_utf8(&buf)?.to_string();
+
+                if matches!(value_type, Type::String) {
+                    Ok(Self::String(s))
+                } else {
+                    Ok(Self::Text(s))
+                }
             }
-            other => Err(CodecError::UnknownDiscriminant(other)),
         }
     }
 }

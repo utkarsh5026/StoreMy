@@ -57,6 +57,32 @@ pub enum CodecError {
     NumericDoesNotFit { value: u64, target: &'static str },
 }
 
+impl CodecError {
+    /// Convenience method for constructing a [`CodecError::NumericDoesNotFit`] error.
+    ///
+    /// Use this when a numeric value cannot be safely represented in a target type,
+    /// for example when a `u64` does not fit into a `u32`.
+    ///
+    /// # Arguments
+    ///
+    /// * `value` - The offending value which failed the conversion or exceeds the target's range.
+    /// * `target` - The name or description of the target type (e.g., `"u32"`, `"i16"`).
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use crate::codec::CodecError;
+    /// let err = CodecError::numeric_does_not_fit(500, "u8");
+    /// assert!(matches!(err, CodecError::NumericDoesNotFit {
+    ///     value: 500,
+    ///     target: "u8"
+    /// }));
+    /// ```
+    pub fn numeric_does_not_fit(value: u64, target: &'static str) -> Self {
+        Self::NumericDoesNotFit { value, target }
+    }
+}
+
 /// Encodes a value into a binary format.
 ///
 /// Implement this trait for any type that needs to be written to disk or sent

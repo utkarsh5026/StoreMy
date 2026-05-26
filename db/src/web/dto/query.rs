@@ -78,7 +78,7 @@ pub fn value_to_json(v: &Value) -> JsonValue {
                 JsonValue::Null
             }
         }
-        Value::String(s) => JsonValue::String(s.clone()),
+        Value::String(s) | Value::Text(s) => JsonValue::String(s.clone()),
         Value::Bool(b) => JsonValue::Bool(*b),
     }
 }
