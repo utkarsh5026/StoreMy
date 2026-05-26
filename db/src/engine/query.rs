@@ -59,7 +59,7 @@ use crate::{
     heap::file::HeapFile,
     parser::statements::{
         BinOp, ColumnRef, Expr, JoinKind, LimitClause, OrderBy, OrderDirection, SelectColumns,
-        SelectItem, SelectStatement, Statement, TableRef, TableWithJoins,
+        SelectItem, SelectStatement, TableRef, TableWithJoins,
     },
     primitives::{ColumnId, NonEmptyString, Predicate},
     transaction::ActiveTransaction,
@@ -465,30 +465,29 @@ impl Engine<'_> {
     ///
     /// Returns [`EngineError::TypeError`] when an executor reports a type or
     /// tuple-shape error while building or draining the plan.
-    pub(super) fn exec_select(&self, statement: Statement) -> Result<StatementResult, EngineError> {
-        let Statement::Select(select_stmt) = statement else {
-            unreachable!("exec_select called with non-Select statement");
-        };
-        self.with_txn(|txn| {
-            let bound = BoundSelect::bind(select_stmt, self.catalog, txn)?;
+    pub(super) fn exec_select(
+        txn: &ActiveTransaction,
+        catalog: &Catalog,
+        select_stmt: SelectStatement,
+    ) -> Result<StatementResult, EngineError> {
+        let bound = BoundSelect::bind(select_stmt, catalog, txn)?;
 
-            let root_table_name = bound.from.root_table_name().to_owned();
-            let mut heap_files = Vec::with_capacity(bound.from.table_count());
-            Self::collect_heap_files(&bound.from, self.catalog, &mut heap_files)?;
-            let mut plan = Self::build_plan(bound, &heap_files, txn.transaction_id())?;
-            let schema = plan.schema().to_owned();
+        let root_table_name = bound.from.root_table_name().to_owned();
+        let mut heap_files = Vec::with_capacity(bound.from.table_count());
+        Self::collect_heap_files(&bound.from, catalog, &mut heap_files)?;
+        let mut plan = Self::build_plan(bound, &heap_files, txn.transaction_id())?;
+        let schema = plan.schema().to_owned();
 
-            let mut rows = Vec::new();
-            while let Some(t) = plan.next()? {
-                rows.push(t);
-            }
-            drop(plan); // releases the &HeapFile borrows before `heaps` goes out of scope
+        let mut rows = Vec::new();
+        while let Some(t) = plan.next()? {
+            rows.push(t);
+        }
+        drop(plan); // releases the &HeapFile borrows before `heaps` goes out of scope
 
-            Ok(StatementResult::Selected {
-                table: root_table_name.to_string(),
-                schema,
-                rows,
-            })
+        Ok(StatementResult::Selected {
+            table: root_table_name.to_string(),
+            schema,
+            rows,
         })
     }
 

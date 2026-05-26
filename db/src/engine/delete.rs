@@ -39,8 +39,8 @@ impl Engine<'_> {
     /// - [`EngineError::TableNotFound`] if `stmt.table_name` does not exist in the catalog.
     /// - Constraint and storage errors propagated from [`Self::delete_rows_and_indexes`].
     pub(super) fn exec_delete(
-        catalog: &Catalog,
         txn: &ActiveTransaction,
+        catalog: &Catalog,
         stmt: DeleteStatement,
     ) -> Result<StatementResult, EngineError> {
         let DeleteStatement {

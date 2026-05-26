@@ -48,8 +48,7 @@ impl<'a> Engine<'a> {
     /// Dispatches a parsed statement in autocommit mode.
     ///
     /// Each mutating statement runs inside its own implicit transaction via
-    /// `with_txn`. `SELECT` is routed to `exec_select`, which uses the same
-    /// begin/commit wrapper internally.
+    /// `with_txn`. `SELECT` is routed to `exec_select`, wrapped the same way.
     ///
     /// Transaction-control statements (`BEGIN`, `COMMIT`, `ROLLBACK`, savepoints)
     /// are rejected here; session-aware callers should use
@@ -67,7 +66,7 @@ impl<'a> Engine<'a> {
     pub fn execute_statement(&self, stmt: Statement) -> Result<StatementResult, EngineError> {
         let result = match stmt {
             Statement::CreateTable(s) => {
-                self.with_txn(|txn| Engine::exec_create_table(s, txn, self.catalog))
+                self.with_txn(|txn| Engine::exec_create_table(txn, self.catalog, s))
             }
             Statement::Drop(s) => {
                 self.with_txn(|txn| Engine::exec_drop_table(txn, self.catalog, s))
@@ -81,10 +80,10 @@ impl<'a> Engine<'a> {
             Statement::ShowIndexes(s) => {
                 self.with_txn(|txn| Engine::exec_show_indexes(txn, self.catalog, s))
             }
-            Statement::Insert(s) => self.with_txn(|txn| Engine::exec_insert(self.catalog, txn, s)),
-            Statement::Delete(s) => self.with_txn(|txn| Engine::exec_delete(self.catalog, txn, s)),
-            Statement::Update(s) => self.with_txn(|txn| Engine::exec_update(self.catalog, txn, s)),
-            Statement::Select(_) => self.exec_select(stmt),
+            Statement::Insert(s) => self.with_txn(|txn| Engine::exec_insert(txn, self.catalog, s)),
+            Statement::Delete(s) => self.with_txn(|txn| Engine::exec_delete(txn, self.catalog, s)),
+            Statement::Update(s) => self.with_txn(|txn| Engine::exec_update(txn, self.catalog, s)),
+            Statement::Select(s) => self.with_txn(|txn| Engine::exec_select(txn, self.catalog, s)),
             Statement::AlterTable(s) => {
                 self.with_txn(|txn| Engine::exec_alter_table(txn, self.catalog, s))
             }

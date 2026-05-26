@@ -86,8 +86,8 @@ impl Engine<'_> {
     /// Returns `EngineError::Constraint` for UNIQUE or FK violations.
     /// Propagates catalog and I/O errors from lower layers.
     pub(super) fn exec_update(
-        catalog: &Catalog,
         txn: &ActiveTransaction,
+        catalog: &Catalog,
         stmt: UpdateStatement,
     ) -> Result<StatementResult, EngineError> {
         let UpdateStatement {

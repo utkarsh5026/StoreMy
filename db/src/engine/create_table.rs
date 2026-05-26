@@ -52,12 +52,12 @@ impl Engine<'_> {
     /// Returns [`EngineError::Catalog`] when creating the table's catalog entry
     /// or heap file fails.
     pub(super) fn exec_create_table(
-        stmt: CreateTableStatement,
         txn: &ActiveTransaction,
         catalog: &Catalog,
+        stmt: CreateTableStatement,
     ) -> Result<StatementResult, EngineError> {
         if catalog.table_exists(&stmt.table_name) {
-            return Self::handle_table_already_exists(stmt, txn, catalog);
+            return Self::handle_table_already_exists(txn, catalog, stmt);
         }
 
         let ai_count = stmt.columns.iter().filter(|c| c.auto_increment).count();
@@ -180,9 +180,9 @@ impl Engine<'_> {
     /// - [`EngineError::Catalog`] — propagated from [`Engine::check_table`] if the catalog cannot
     ///   read table metadata (should be rare right after [`Catalog::table_exists`] reported true).
     fn handle_table_already_exists(
-        statement: CreateTableStatement,
         txn: &ActiveTransaction,
         catalog: &Catalog,
+        statement: CreateTableStatement,
     ) -> Result<StatementResult, EngineError> {
         let table_name = statement.table_name.into_inner();
         if !statement.if_not_exists {

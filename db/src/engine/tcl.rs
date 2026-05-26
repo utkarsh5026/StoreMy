@@ -112,13 +112,6 @@ impl Engine<'_> {
     /// The result is returned **without** `?`-propagating before the state is
     /// restored — if we propagated early the transaction would be left in an
     /// inconsistent position.
-    ///
-    /// # Note on `SELECT`
-    ///
-    /// `exec_select` internally opens its own read transaction via `with_txn`,
-    /// so a `SELECT` inside an explicit block cannot see that block's
-    /// uncommitted writes. This is a known limitation to be fixed when
-    /// `exec_select` is refactored to accept a caller-supplied transaction.
     fn exec_dml_in_explicit(
         &self,
         stmt: Statement,
@@ -131,17 +124,18 @@ impl Engine<'_> {
             unreachable!("exec_dml_in_explicit must only be called in Explicit state")
         };
 
+        let c = self.catalog;
         let result = match stmt {
-            Statement::Insert(s) => Self::exec_insert(self.catalog, &txn, s),
-            Statement::Delete(s) => Self::exec_delete(self.catalog, &txn, s),
-            Statement::Update(s) => Self::exec_update(self.catalog, &txn, s),
-            Statement::Select(_) => self.exec_select(stmt),
-            Statement::CreateTable(s) => Self::exec_create_table(s, &txn, self.catalog),
-            Statement::Drop(s) => Self::exec_drop_table(&txn, self.catalog, s),
-            Statement::CreateIndex(s) => Self::exec_create_index(&txn, self.catalog, s),
-            Statement::DropIndex(s) => Self::exec_drop_index(&txn, self.catalog, s),
-            Statement::ShowIndexes(s) => Self::exec_show_indexes(&txn, self.catalog, s),
-            Statement::AlterTable(s) => Self::exec_alter_table(&txn, self.catalog, s),
+            Statement::Insert(s) => Self::exec_insert(&txn, c, s),
+            Statement::Delete(s) => Self::exec_delete(&txn, c, s),
+            Statement::Update(s) => Self::exec_update(&txn, c, s),
+            Statement::Select(s) => Self::exec_select(&txn, c, s),
+            Statement::CreateTable(s) => Self::exec_create_table(&txn, c, s),
+            Statement::Drop(s) => Self::exec_drop_table(&txn, c, s),
+            Statement::CreateIndex(s) => Self::exec_create_index(&txn, c, s),
+            Statement::DropIndex(s) => Self::exec_drop_index(&txn, c, s),
+            Statement::ShowIndexes(s) => Self::exec_show_indexes(&txn, c, s),
+            Statement::AlterTable(s) => Self::exec_alter_table(&txn, c, s),
             Statement::Begin(_)
             | Statement::Commit(_)
             | Statement::Rollback(_)

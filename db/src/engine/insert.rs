@@ -57,8 +57,8 @@ impl Engine<'_> {
     /// - [`EngineError::TypeMismatch`] if a value cannot be coerced to the declared column type.
     /// - Constraint errors (FK, UNIQUE) propagated from [`Self::insert_rows_and_indexes`].
     pub(super) fn exec_insert(
-        catalog: &Catalog,
         txn: &ActiveTransaction,
+        catalog: &Catalog,
         stmt: InsertStatement,
     ) -> Result<StatementResult, EngineError> {
         let table = catalog.get_table_info(txn, &stmt.table_name)?;
