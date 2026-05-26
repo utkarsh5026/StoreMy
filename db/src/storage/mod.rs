@@ -14,12 +14,14 @@
 //! - [`StorageError`], the unified error type returned by storage operations.
 
 pub mod envelope;
+pub mod typed_page;
 
 use std::{fs::File, path::Path};
 
 pub use envelope::{ENVELOPE_HEADER_SIZE, PageKind};
 pub(crate) use envelope::{compute_page_crc, page_crc_valid, read_page_lsn, stamp_page_crc};
 use thiserror::Error;
+pub use typed_page::{TypedPage, UNIVERSAL_HEADER_SIZE};
 
 use crate::primitives::{Lsn, SlotId};
 

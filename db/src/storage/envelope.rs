@@ -66,6 +66,10 @@ pub(crate) fn read_page_lsn(bytes: &[u8; PAGE_SIZE]) -> Lsn {
 pub enum PageKind {
     /// A heap file page holding table rows.
     Heap = 0x10,
+    /// A heap overflow page holding tuple data that does not fit in a single
+    /// heap page. Overflow pages are chained: each carries a pointer to the
+    /// next overflow page in the sequence.
+    HeapOverflow = 0x11,
     /// A hash-index bucket page.
     HashBucket = 0xA0,
     /// A B-tree leaf node page.
@@ -96,6 +100,7 @@ impl TryFrom<u8> for PageKind {
     fn try_from(value: u8) -> Result<Self, Self::Error> {
         match value {
             0x10 => Ok(Self::Heap),
+            0x11 => Ok(Self::HeapOverflow),
             0xA0 => Ok(Self::HashBucket),
             0xB0 => Ok(Self::BTreeLeaf),
             0xB1 => Ok(Self::BTreeInternal),
@@ -243,6 +248,7 @@ mod tests {
     fn test_page_kind_try_from_accepts_all_known_discriminants() {
         for kind in [
             PageKind::Heap,
+            PageKind::HeapOverflow,
             PageKind::HashBucket,
             PageKind::BTreeLeaf,
             PageKind::BTreeInternal,
@@ -269,7 +275,7 @@ mod tests {
 
     #[test]
     fn test_page_kind_try_from_rejects_reserved_but_unassigned_bytes() {
-        for byte in [0x11, 0xA1, 0xB2] {
+        for byte in [0xA1, 0xB2] {
             match PageKind::try_from(byte).unwrap_err() {
                 StorageError::UnknownPageKind(b) => assert_eq!(b, byte),
                 other => panic!("expected UnknownPageKind({byte:#04x}), got {other:?}"),
@@ -305,6 +311,7 @@ mod tests {
     #[test]
     fn test_page_kind_discriminants_match_repr_u8() {
         assert_eq!(PageKind::Heap as u8, 0x10);
+        assert_eq!(PageKind::HeapOverflow as u8, 0x11);
         assert_eq!(PageKind::HashBucket as u8, 0xA0);
         assert_eq!(PageKind::BTreeLeaf as u8, 0xB0);
         assert_eq!(PageKind::BTreeInternal as u8, 0xB1);
