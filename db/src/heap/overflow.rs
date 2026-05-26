@@ -11,7 +11,7 @@
 //! offset  0       : PageKind::HeapOverflow (0x11)
 //! offset  1..5    : CRC32 (u32 LE)
 //! offset  5..13   : page_lsn (u64 LE)
-//! offset 13..17   : next_page (u32 LE) — PageNumber::INVALID if last in chain
+//! offset 13..17   : next_page (u32 LE) — `None` encodes as NIL sentinel (`u32::MAX`)
 //! offset 17..21   : payload_len (u32 LE)
 //! offset 21..     : payload bytes (up to OVERFLOW_PAYLOAD_SIZE)
 //! ```
@@ -44,11 +44,10 @@ pub const OVERFLOW_PAYLOAD_SIZE: usize = PAGE_SIZE - OVERFLOW_HDR_SIZE - BODY_LE
 /// Page-type-specific header for an overflow page.
 ///
 /// Contains a single field: the page number of the next overflow page in the
-/// chain. Set to [`PageNumber::INVALID`] when this is the last (or only)
-/// overflow page for a given tuple.
+/// chain. `None` marks the last (or only) overflow page for a given tuple.
 #[derive(Debug, Clone, PartialEq, Eq, Copy)]
 pub struct OverflowHeader {
-    pub next_page: PageNumber,
+    pub next_page: Option<PageNumber>,
 }
 
 impl Encode for OverflowHeader {
@@ -60,7 +59,7 @@ impl Encode for OverflowHeader {
 impl Decode for OverflowHeader {
     fn decode<R: Read>(reader: &mut R) -> Result<Self, CodecError> {
         Ok(Self {
-            next_page: PageNumber::decode(reader)?,
+            next_page: Option::<PageNumber>::decode(reader)?,
         })
     }
 }
@@ -102,13 +101,16 @@ impl TypedPage<OverflowHeader, OverflowBody> {
     /// Creates a new overflow page holding `payload` bytes.
     ///
     /// `next_page` is the page number of the next overflow page in the chain,
-    /// or [`PageNumber::INVALID`] if this is the last (or only) segment.
+    /// or `None` if this is the last (or only) segment.
     ///
     /// # Errors
     ///
     /// Returns [`StorageError::TupleTooLarge`] if `payload` exceeds
     /// [`OVERFLOW_PAYLOAD_SIZE`] bytes.
-    pub fn overflow_new(next_page: PageNumber, payload: Vec<u8>) -> Result<Self, StorageError> {
+    pub fn overflow_new(
+        next_page: Option<PageNumber>,
+        payload: Vec<u8>,
+    ) -> Result<Self, StorageError> {
         if payload.len() > OVERFLOW_PAYLOAD_SIZE {
             return Err(StorageError::TupleTooLarge {
                 size: payload.len(),
@@ -124,14 +126,14 @@ impl TypedPage<OverflowHeader, OverflowBody> {
     }
 
     /// Returns the page number of the next overflow page in the chain, or
-    /// [`PageNumber::INVALID`] if this is the last segment.
-    pub fn next_page(&self) -> PageNumber {
+    /// `None` if this is the last segment.
+    pub fn next_page(&self) -> Option<PageNumber> {
         self.header.next_page
     }
 
     /// Returns `true` if there is no further overflow page after this one.
     pub fn is_last(&self) -> bool {
-        self.header.next_page.is_invalid()
+        self.header.next_page.is_none()
     }
 
     /// Returns a slice over the raw payload bytes stored in this page.
@@ -145,13 +147,13 @@ mod tests {
     use super::*;
     use crate::storage::page_crc_valid;
 
-    fn make_page(next: u32, data: &[u8]) -> OverflowPage {
-        OverflowPage::overflow_new(PageNumber::new(next), data.to_vec()).unwrap()
+    fn make_page(next: Option<u32>, data: &[u8]) -> OverflowPage {
+        OverflowPage::overflow_new(next.map(PageNumber::new), data.to_vec()).unwrap()
     }
 
     #[test]
     fn new_page_has_correct_kind_and_lsn() {
-        let page = make_page(0, b"hello");
+        let page = make_page(Some(0), b"hello");
         assert_eq!(page.kind, PageKind::HeapOverflow);
         assert_eq!(page.page_lsn, Lsn::INVALID);
     }
@@ -159,42 +161,42 @@ mod tests {
     #[test]
     fn payload_too_large_returns_error() {
         let big = vec![0u8; OVERFLOW_PAYLOAD_SIZE + 1];
-        assert!(OverflowPage::overflow_new(PageNumber::INVALID, big).is_err());
+        assert!(OverflowPage::overflow_new(None, big).is_err());
     }
 
     #[test]
     fn max_payload_fits() {
         let exact = vec![0xAAu8; OVERFLOW_PAYLOAD_SIZE];
-        assert!(OverflowPage::overflow_new(PageNumber::INVALID, exact).is_ok());
+        assert!(OverflowPage::overflow_new(None, exact).is_ok());
     }
 
     #[test]
     fn is_last_when_next_is_invalid() {
-        let page = make_page(u32::MAX, b"x");
+        let page = make_page(None, b"x");
         assert!(page.is_last());
     }
 
     #[test]
     fn is_not_last_when_next_is_valid() {
-        let page = make_page(7, b"x");
+        let page = make_page(Some(7), b"x");
         assert!(!page.is_last());
-        assert_eq!(page.next_page(), PageNumber::new(7));
+        assert_eq!(page.next_page(), Some(PageNumber::new(7)));
     }
 
     #[test]
     fn roundtrip_preserves_all_fields() {
-        let page = make_page(42, b"overflow payload");
+        let page = make_page(Some(42), b"overflow payload");
         let bytes = page.to_page_bytes().unwrap();
 
         let decoded = OverflowPage::from_page_bytes(&bytes).unwrap();
         assert_eq!(decoded.kind, PageKind::HeapOverflow);
-        assert_eq!(decoded.header.next_page, PageNumber::new(42));
+        assert_eq!(decoded.header.next_page, Some(PageNumber::new(42)));
         assert_eq!(decoded.body.data, b"overflow payload");
     }
 
     #[test]
     fn encode_then_decode_via_traits() {
-        let page = make_page(99, b"trait roundtrip");
+        let page = make_page(Some(99), b"trait roundtrip");
 
         let mut buf = Vec::new();
         page.encode(&mut buf).unwrap();
@@ -207,7 +209,7 @@ mod tests {
 
     #[test]
     fn to_page_bytes_stamps_valid_crc() {
-        let bytes = make_page(0, b"crc check").to_page_bytes().unwrap();
+        let bytes = make_page(Some(0), b"crc check").to_page_bytes().unwrap();
         assert!(page_crc_valid(&bytes));
     }
 
