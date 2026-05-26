@@ -201,13 +201,14 @@ impl Catalog {
         }
 
         let file_id = self.next_file_id();
+        let schema = Arc::new(schema);
         let file_path = self.file_name(name);
         self.register_heap(
             file_id,
             Self::create_heap_file(
                 file_id,
                 &file_path,
-                schema.clone(),
+                Arc::clone(&schema),
                 self.buffer_pool(),
                 self.wal(),
             )?,
@@ -218,7 +219,7 @@ impl Catalog {
             &TableRow::new(file_id, name.to_string(), file_path.clone())?,
         )?;
 
-        ColumnRow::from_schema(file_id, &schema).and_then(|cols| {
+        ColumnRow::from_schema(file_id, schema.as_ref()).and_then(|cols| {
             for col in cols {
                 self.insert_systable_tuple(txn, &col)?;
             }
@@ -236,7 +237,7 @@ impl Catalog {
             }
         });
         if let Some(ref pk) = pk_cols {
-            self.insert_primary_key_columns(txn, file_id, &schema, pk)?;
+            self.insert_primary_key_columns(txn, file_id, schema.as_ref(), pk)?;
         }
 
         let table_info = TableInfo::new(name.try_into()?, schema, file_id, file_path, pk_cols);
@@ -311,7 +312,7 @@ impl Catalog {
     ) -> Result<(), CatalogError> {
         let mut table = self.get_table_info_by_id(txn, table_id)?;
         self.delete_rows_by_table_id(txn, SystemTable::PrimaryKeyColumns, table_id)?;
-        self.insert_primary_key_columns(txn, table_id, &table.schema, &column_ids)?;
+        self.insert_primary_key_columns(txn, table_id, table.schema.as_ref(), &column_ids)?;
         table.primary_key = Some(column_ids);
         let mut cache = self.user_tables.write();
         cache.remove(&table.name);
@@ -415,7 +416,7 @@ impl Catalog {
         fk_rows: Vec<FkConstraintRow>,
         ai_row: Option<AutoIncrementRow>,
     ) -> Result<TableInfo, CatalogError> {
-        let schema = TupleSchema::from(columns);
+        let schema = Arc::new(TupleSchema::from(columns));
 
         let pk = if pk_rows.is_empty() {
             None
@@ -429,7 +430,7 @@ impl Catalog {
             table.table_id,
             &table.file_path,
             &table.table_name,
-            schema.clone(),
+            Arc::clone(&schema),
         )?;
         self.register_heap(table.table_id, heap);
 

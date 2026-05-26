@@ -6,7 +6,7 @@ pub mod systable;
 pub mod table;
 mod tuple;
 
-use std::path::PathBuf;
+use std::{path::PathBuf, sync::Arc};
 
 pub use constraints::ConstraintDef;
 pub use index::{IndexInfo, LiveIndex};
@@ -194,7 +194,7 @@ pub struct TableInfo {
     /// Logical name of the table (matches the key in the `tables` map).
     pub name: NonEmptyString,
     /// Column layout used to encode and decode tuples in this table's heap.
-    pub schema: TupleSchema,
+    pub schema: Arc<TupleSchema>,
     /// Stable numeric identifier for the backing heap file.
     pub file_id: FileId,
     /// Absolute path to the `.dat` file on disk.
@@ -297,7 +297,7 @@ impl TableInfo {
     /// Constructs a [`TableInfo`] from its component parts.
     pub(super) fn new(
         name: NonEmptyString,
-        schema: TupleSchema,
+        schema: Arc<TupleSchema>,
         file_id: FileId,
         file_path: PathBuf,
         primary_key: Option<Vec<ColumnId>>,

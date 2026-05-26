@@ -421,7 +421,7 @@ mod tests {
 
         let heap = HeapFile::new(
             file_id,
-            schema_ab(),
+            Arc::new(schema_ab()),
             Arc::clone(&store),
             0,
             Arc::clone(&wal),

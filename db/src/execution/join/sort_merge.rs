@@ -359,7 +359,7 @@ impl FallibleIterator for SortMergeJoin<'_> {
 
 impl Executor for SortMergeJoin<'_> {
     fn schema(&self) -> &TupleSchema {
-        &self.inputs.schema
+        self.inputs.schema.as_ref()
     }
 
     fn rewind(&mut self) -> Result<(), ExecutionError> {

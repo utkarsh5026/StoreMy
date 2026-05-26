@@ -31,7 +31,7 @@
 //! and after non-`NULL` in descending order because the per-key comparison is
 //! reversed. `Limit` is row-count based and does not inspect values.
 
-use std::cmp::Ordering;
+use std::{cmp::Ordering, sync::Arc};
 
 use fallible_iterator::FallibleIterator;
 
@@ -200,7 +200,7 @@ impl From<ResolvedExpr> for ProjectItem {
 pub struct Project<'a> {
     child: Box<PlanNode<'a>>,
     items: Vec<ProjectItem>,
-    output_schema: TupleSchema,
+    output_schema: Arc<TupleSchema>,
 }
 
 impl<'a> Project<'a> {
@@ -311,7 +311,7 @@ impl<'a> Project<'a> {
         Ok(Self {
             child,
             items,
-            output_schema: TupleSchema::new(fields),
+            output_schema: Arc::new(TupleSchema::new(fields)),
         })
     }
 
@@ -394,7 +394,7 @@ impl FallibleIterator for Project<'_> {
 impl Executor for Project<'_> {
     /// Exposes the schema produced by the SQL `SELECT` list.
     fn schema(&self) -> &TupleSchema {
-        &self.output_schema
+        self.output_schema.as_ref()
     }
 
     /// Rewinds the child so the same projection can be emitted again.
@@ -937,7 +937,7 @@ mod tests {
 
         let heap = HeapFile::new(
             file_id,
-            scan_schema(),
+            Arc::new(scan_schema()),
             Arc::clone(&store),
             existing_pages,
             Arc::clone(&wal),

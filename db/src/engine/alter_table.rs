@@ -64,6 +64,7 @@ impl Engine<'_> {
             ref schema,
             ..
         } = table_info;
+        let schema = schema.as_ref();
 
         let operation = match &stmt.action {
             AlterAction::RenameTable { .. } => "rename_table",

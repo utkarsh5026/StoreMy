@@ -79,7 +79,7 @@ pub fn build_heap(id: u64, tuples: &[Tuple]) -> HeapHarness {
     store.register_file(file_id, &path).unwrap();
     let heap = HeapFile::new(
         file_id,
-        schema_ab(),
+        Arc::new(schema_ab()),
         Arc::clone(&store),
         0,
         Arc::clone(&wal),
@@ -116,7 +116,7 @@ pub fn build_heap_xy(id: u64, tuples: &[Tuple]) -> HeapHarness {
     store.register_file(file_id, &path).unwrap();
     let heap = HeapFile::new(
         file_id,
-        schema_xy(),
+        Arc::new(schema_xy()),
         Arc::clone(&store),
         0,
         Arc::clone(&wal),

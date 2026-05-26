@@ -176,7 +176,7 @@ impl FallibleIterator for NestedLoopJoin<'_> {
 
 impl Executor for NestedLoopJoin<'_> {
     fn schema(&self) -> &TupleSchema {
-        &self.inputs.schema
+        self.inputs.schema.as_ref()
     }
 
     fn rewind(&mut self) -> Result<(), ExecutionError> {

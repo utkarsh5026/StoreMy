@@ -57,7 +57,7 @@ mod hash;
 mod nested_loop;
 mod sort_merge;
 
-use std::cmp::Ordering;
+use std::{cmp::Ordering, sync::Arc};
 
 pub use cross::CrossJoin;
 pub use hash::HashJoin;
@@ -172,7 +172,7 @@ pub(super) fn get_value(
 pub(super) struct JoinInputs<'a> {
     pub(super) left: PlanNode<'a>,
     pub(super) right: PlanNode<'a>,
-    pub(super) schema: TupleSchema,
+    pub(super) schema: Arc<TupleSchema>,
     /// Number of columns in the left child's output.
     pub(super) left_width: usize,
     /// Number of columns in the right child's output.
@@ -188,7 +188,7 @@ impl<'a> JoinInputs<'a> {
     pub(super) fn new(left: PlanNode<'a>, right: PlanNode<'a>) -> Self {
         let left_width = left.schema().physical_num_fields();
         let right_width = right.schema().physical_num_fields();
-        let schema = left.schema().merge(right.schema());
+        let schema = Arc::new(left.schema().merge(right.schema()));
         Self {
             left,
             right,

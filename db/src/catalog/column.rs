@@ -321,7 +321,7 @@ impl Catalog {
     ) -> Result<(), CatalogError> {
         let cols =
             self.scan_system_table_where::<ColumnRow, _>(txn, |r| r.table_id == table.file_id)?;
-        table.schema = TupleSchema::from(cols);
+        table.schema = Arc::new(TupleSchema::from(cols));
 
         // Re-register the heap with the new schema so that INSERT/scan sees
         // the updated physical layout.  We rebuild rather than mutating
@@ -330,7 +330,7 @@ impl Catalog {
         if let Some(old_heap) = self.get_heap(file_id) {
             let new_heap = crate::heap::file::HeapFile::new(
                 file_id,
-                table.schema.clone(),
+                Arc::clone(&table.schema),
                 Arc::clone(&self.buffer_pool),
                 old_heap.page_count(),
                 Arc::clone(&self.wal),

@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use super::EngineError;
 use crate::{
     FileId,
@@ -17,7 +19,7 @@ use crate::{
 pub(super) struct BoundTable {
     pub name: String,
     pub alias: Option<String>,
-    pub schema: TupleSchema,
+    pub schema: Arc<TupleSchema>,
     pub column_offset: usize,
 }
 
@@ -25,7 +27,7 @@ impl BoundTable {
     pub fn new(
         name: String,
         alias: Option<String>,
-        schema: TupleSchema,
+        schema: Arc<TupleSchema>,
         column_offset: usize,
     ) -> Self {
         Self {
@@ -137,7 +139,7 @@ pub(super) struct SingleTableScope {
     pub name: NonEmptyString,
     pub alias: Option<NonEmptyString>,
     pub file_id: FileId,
-    pub schema: TupleSchema,
+    pub schema: Arc<TupleSchema>,
 }
 
 impl SingleTableScope {
@@ -146,7 +148,7 @@ impl SingleTableScope {
             name: info.name,
             alias,
             file_id: info.file_id,
-            schema: info.schema,
+            schema: Arc::clone(&info.schema),
         }
     }
 

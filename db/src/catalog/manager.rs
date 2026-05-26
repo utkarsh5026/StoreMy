@@ -137,7 +137,7 @@ impl Catalog {
         let mut system = SystemHeaps::default();
 
         for table in SystemTable::ALL {
-            let schema = table.schema();
+            let schema = Arc::new(table.schema());
             let file_path = data_dir.join(table.file_name());
             let file_id = table.file_id();
 
@@ -148,7 +148,7 @@ impl Catalog {
 
             let table_info = TableInfo::new(
                 table.table_name().try_into()?,
-                schema,
+                Arc::clone(&schema),
                 file_id,
                 file_path.clone(),
                 None,
@@ -194,7 +194,7 @@ impl Catalog {
     pub(super) fn create_heap_file(
         file_id: FileId,
         file_path: &Path,
-        schema: TupleSchema,
+        schema: Arc<TupleSchema>,
         buffer_pool: &Arc<PageStore>,
         wal: &Arc<Wal>,
     ) -> Result<HeapFile, CatalogError> {
@@ -252,7 +252,7 @@ impl Catalog {
         file_id: FileId,
         file_path: &Path,
         table_name: &str,
-        schema: TupleSchema,
+        schema: Arc<TupleSchema>,
     ) -> Result<HeapFile, CatalogError> {
         if !file_path.exists() {
             return Err(CatalogError::corruption(
@@ -683,7 +683,7 @@ mod tests {
         let schema = SystemTable::Tables.schema();
 
         assert!(!path.exists());
-        let heap = Catalog::create_heap_file(FileId(100), &path, schema, &bp, &wal);
+        let heap = Catalog::create_heap_file(FileId(100), &path, Arc::new(schema), &bp, &wal);
         assert!(heap.is_ok());
         assert!(path.exists());
     }
@@ -698,7 +698,7 @@ mod tests {
 
         File::create(&path).unwrap();
         assert!(path.exists());
-        let heap = Catalog::create_heap_file(FileId(100), &path, schema, &bp, &wal);
+        let heap = Catalog::create_heap_file(FileId(100), &path, Arc::new(schema), &bp, &wal);
         assert!(heap.is_ok());
     }
 
@@ -710,7 +710,7 @@ mod tests {
         let path = dir.path().join("no_such_dir").join("table.dat");
         let schema = SystemTable::Tables.schema();
 
-        let result = Catalog::create_heap_file(FileId(100), &path, schema, &bp, &wal);
+        let result = Catalog::create_heap_file(FileId(100), &path, Arc::new(schema), &bp, &wal);
         assert!(result.is_err(), "expected Io error for bad parent dir");
         match result.err().unwrap() {
             CatalogError::Io(_) => {}
@@ -728,7 +728,8 @@ mod tests {
         let ghost = dir.path().join("ghost.dat");
         let schema = SystemTable::Tables.schema();
 
-        let result = catalog.open_existing_heap(FileId(100), &ghost, "ghost_table", schema);
+        let result =
+            catalog.open_existing_heap(FileId(100), &ghost, "ghost_table", Arc::new(schema));
         assert!(result.is_err(), "expected Corruption for missing file");
         match result.err().unwrap() {
             CatalogError::Corruption { .. } => {}
@@ -747,7 +748,7 @@ mod tests {
         File::create(&path).unwrap();
         let schema = SystemTable::Tables.schema();
 
-        let heap = catalog.open_existing_heap(FileId(100), &path, "users", schema);
+        let heap = catalog.open_existing_heap(FileId(100), &path, "users", Arc::new(schema));
         assert!(heap.is_ok());
     }
 

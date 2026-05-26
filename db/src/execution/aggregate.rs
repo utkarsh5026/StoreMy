@@ -26,7 +26,7 @@
 //! for a group is `NULL`, the aggregate result is `NULL` (except `COUNT`, which
 //! returns `0`).
 
-use std::{cmp::Ordering, collections::HashMap};
+use std::{cmp::Ordering, collections::HashMap, sync::Arc};
 
 use fallible_iterator::FallibleIterator;
 
@@ -301,7 +301,7 @@ pub struct Aggregate<'a> {
     child: Box<PlanNode<'a>>,
     group_by_cols: Vec<ColumnId>,
     agg_exprs: Vec<AggregateExpr>,
-    output_schema: TupleSchema,
+    output_schema: Arc<TupleSchema>,
     groups: TupleCursor,
     materialized: bool,
 }
@@ -382,7 +382,7 @@ impl<'a> Aggregate<'a> {
                 let output_type = Type::from((func, input_type));
                 output_fields.push(Field::new_non_empty(output_name.clone(), output_type));
             }
-            TupleSchema::new(output_fields)
+            Arc::new(TupleSchema::new(output_fields))
         };
 
         Ok(Self {
@@ -519,7 +519,7 @@ impl FallibleIterator for Aggregate<'_> {
 
 impl Executor for Aggregate<'_> {
     fn schema(&self) -> &TupleSchema {
-        &self.output_schema
+        self.output_schema.as_ref()
     }
 
     /// Resets the cursor so the finalized groups can be iterated again.
@@ -588,7 +588,13 @@ mod tests {
         drop(file);
         store.register_file(file_id, &path).unwrap();
 
-        let heap = HeapFile::new(file_id, schema, Arc::clone(&store), 0, Arc::clone(&wal));
+        let heap = HeapFile::new(
+            file_id,
+            Arc::new(schema),
+            Arc::clone(&store),
+            0,
+            Arc::clone(&wal),
+        );
 
         let txn = TransactionId::new(id);
         wal.log_begin(txn).unwrap();

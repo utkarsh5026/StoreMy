@@ -327,7 +327,7 @@ fn format_value_cell(v: &Value) -> Cell {
         | Value::Uint32(_)
         | Value::Uint64(_)
         | Value::Float64(_) => Cell::new(v.to_string()).fg(comfy_table::Color::Yellow),
-        Value::String(_) => Cell::new(v.to_string()).fg(comfy_table::Color::Green),
+        Value::String(_) | Value::Text(_) => Cell::new(v.to_string()).fg(comfy_table::Color::Green),
         Value::Bool(_) => Cell::new(v.to_string()).fg(comfy_table::Color::Magenta),
     }
 }

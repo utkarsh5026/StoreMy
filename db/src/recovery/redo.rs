@@ -232,7 +232,7 @@ mod tests {
         codec::Encode,
         primitives::{FileId, PageNumber, TransactionId},
         recovery::{AttEntry, DptEntry},
-        storage::envelope::{PAGE_LSN_END, PAGE_LSN_OFFSET, read_page_lsn},
+        storage::typed_page::{PAGE_LSN_END, PAGE_LSN_OFFSET, read_page_lsn},
         wal::{log::LogRecord, writer::Wal},
     };
 

@@ -94,7 +94,7 @@ pub enum HeapError {
 /// an atomic counter; the underlying data lives in the shared `PageStore`.
 pub struct HeapFile {
     file_id: FileId,
-    schema: TupleSchema,
+    schema: Arc<TupleSchema>,
     buffer_pool: Arc<PageStore>,
     wal: Arc<Wal>,
     num_pages: AtomicU32,
@@ -108,7 +108,7 @@ impl HeapFile {
     /// brand-new, empty file.
     pub fn new(
         file_id: FileId,
-        schema: TupleSchema,
+        schema: Arc<TupleSchema>,
         buffer_pool: Arc<PageStore>,
         existing_pages: u32,
         wal: Arc<Wal>,
@@ -160,7 +160,12 @@ impl HeapFile {
     ///
     /// The schema of the file.
     pub fn schema(&self) -> &TupleSchema {
-        &self.schema
+        self.schema.as_ref()
+    }
+
+    /// Returns a shared schema handle for callers that cache schema ownership.
+    pub fn schema_arc(&self) -> Arc<TupleSchema> {
+        Arc::clone(&self.schema)
     }
 
     /// Inserts `tuple` into the first page that has room, allocating a new page if necessary.
@@ -486,8 +491,8 @@ impl HeapFile {
 
     /// Wraps raw page `data` in a [`HeapPage`] view bound to this file's schema.
     #[inline]
-    fn h_page(&self, data: &[u8]) -> Result<HeapPage<'_>, StorageError> {
-        HeapPage::new(data, &self.schema)
+    fn h_page(&self, data: &[u8]) -> Result<HeapPage, StorageError> {
+        HeapPage::new(data, Arc::clone(&self.schema))
     }
 
     /// Creates a new `PageId` for the given page number.
@@ -690,7 +695,7 @@ mod tests {
 
         let heap = HeapFile::new(
             file_id,
-            schema(),
+            Arc::new(schema()),
             Arc::clone(&store),
             existing_pages,
             Arc::clone(&wal),
@@ -962,7 +967,13 @@ mod tests {
         let wal = Arc::new(Wal::new(&dir.path().join("test.wal"), 0).unwrap());
         let store = Arc::new(PageStore::new(4, Arc::clone(&wal)));
         // Deliberately NOT registering any file
-        let heap = HeapFile::new(FileId::new(42), schema(), store, 0, Arc::clone(&wal));
+        let heap = HeapFile::new(
+            FileId::new(42),
+            Arc::new(schema()),
+            store,
+            0,
+            Arc::clone(&wal),
+        );
 
         let txn = begin_txn(&wal, 1);
         let result = heap.insert_tuple(txn, &make_tuple(1, true));

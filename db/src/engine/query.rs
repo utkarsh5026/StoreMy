@@ -111,7 +111,7 @@ enum BoundFrom {
     Table {
         table: TableRef,
         file_id: FileId,
-        schema: TupleSchema,
+        schema: Arc<TupleSchema>,
     },
     /// A SQL `JOIN ... ON ...` input with its join predicate (pre-resolved).
     Join {
@@ -119,22 +119,22 @@ enum BoundFrom {
         left: Box<BoundFrom>,
         right: Box<BoundFrom>,
         on: ResolvedExpr,
-        schema: TupleSchema,
+        schema: Arc<TupleSchema>,
     },
     /// `FROM a, b` or `CROSS JOIN` — no predicate; emits the cartesian product.
     Cross {
         left: Box<BoundFrom>,
         right: Box<BoundFrom>,
-        schema: TupleSchema,
+        schema: Arc<TupleSchema>,
     },
 }
 
 impl BoundFrom {
-    fn table(table_info: TableInfo, table: TableRef) -> Self {
+    fn table(table_info: &TableInfo, table: &TableRef) -> Self {
         Self::Table {
-            table,
+            table: table.clone(),
             file_id: table_info.file_id,
-            schema: table_info.schema,
+            schema: Arc::clone(&table_info.schema),
         }
     }
 
@@ -147,7 +147,7 @@ impl BoundFrom {
     }
 
     fn join(kind: JoinKind, left: BoundFrom, right: BoundFrom, on: ResolvedExpr) -> Self {
-        let schema = left.schema().merge(right.schema());
+        let schema = Arc::new(left.schema().merge(right.schema()));
         Self::Join {
             kind,
             left: Box::new(left),
@@ -158,7 +158,7 @@ impl BoundFrom {
     }
 
     fn cross(left: BoundFrom, right: BoundFrom) -> Self {
-        let schema = left.schema().merge(right.schema());
+        let schema = Arc::new(left.schema().merge(right.schema()));
         Self::Cross {
             left: Box::new(left),
             right: Box::new(right),
@@ -339,10 +339,10 @@ impl BoundSelect {
         scope.push(BoundTable::new(
             info.name.to_string(),
             table.alias.as_ref().map(ToString::to_string),
-            info.schema.clone(),
+            Arc::clone(&info.schema),
             0,
         ));
-        let mut left = BoundFrom::table(info, table);
+        let mut left = BoundFrom::table(&info, &table);
 
         for j in joins {
             let right_offset = left.schema().physical_num_fields();
@@ -350,12 +350,12 @@ impl BoundSelect {
             let right_table = BoundTable {
                 name: right_info.name.to_string(),
                 alias: j.table.alias.as_ref().map(ToString::to_string),
-                schema: right_info.schema.clone(),
+                schema: Arc::clone(&right_info.schema),
                 column_offset: right_offset,
             };
             scope.push(right_table);
 
-            let right = BoundFrom::table(right_info, j.table);
+            let right = BoundFrom::table(&right_info, &j.table);
             left = if j.kind == JoinKind::Cross {
                 BoundFrom::cross(left, right)
             } else {
