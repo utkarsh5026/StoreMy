@@ -2,7 +2,9 @@ use std::mem;
 
 use super::{Engine, EngineError, StatementResult};
 use crate::{
-    parser::statements::{RollbackStatement, SavepointStatement, Statement},
+    parser::statements::{
+        ReleaseSavepointStatement, RollbackStatement, SavepointStatement, Statement,
+    },
     transaction::{Session, TxnContext},
 };
 
@@ -35,9 +37,7 @@ impl Engine<'_> {
             Statement::Rollback(s) => Self::exec_rollback(s, session),
 
             Statement::Savepoint(s) => Self::exec_savepoint(s, session),
-            Statement::ReleaseSavepoint(_) => Err(EngineError::Unsupported(
-                "RELEASE SAVEPOINT is not yet implemented".into(),
-            )),
+            Statement::ReleaseSavepoint(s) => Self::exec_release_savepoint(s, session),
 
             stmt => match &session.ctx {
                 TxnContext::Autocommit => self.execute_statement(stmt),
@@ -102,6 +102,25 @@ impl Engine<'_> {
             }
             TxnContext::Autocommit => Ok(StatementResult::Notice {
                 message: "SAVEPOINT can only be used inside a transaction".into(),
+            }),
+            TxnContext::Aborted(_) => Err(EngineError::TransactionAborted),
+        }
+    }
+
+    fn exec_release_savepoint(
+        stmt: ReleaseSavepointStatement,
+        session: &mut Session,
+    ) -> Result<StatementResult, EngineError> {
+        match &mut session.ctx {
+            TxnContext::Explicit(txn) => {
+                let name = stmt.name;
+                txn.release_savepoint(name.as_str())?;
+                Ok(StatementResult::NoOp {
+                    statement: format!("RELEASE SAVEPOINT {name}"),
+                })
+            }
+            TxnContext::Autocommit => Ok(StatementResult::Notice {
+                message: "RELEASE SAVEPOINT can only be used inside a transaction".into(),
             }),
             TxnContext::Aborted(_) => Err(EngineError::TransactionAborted),
         }
