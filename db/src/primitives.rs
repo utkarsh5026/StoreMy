@@ -44,10 +44,20 @@ impl PageNumber {
     /// Size of the on-disk encoding in bytes (`u32` little-endian).
     pub const SIZE: usize = 4;
 
+    /// Sentinel value meaning "no page" — used by overflow pages to signal
+    /// that there is no next page in the chain.
+    pub const INVALID: Self = Self(u32::MAX);
+
     /// Wraps a raw page index.
     #[inline]
     pub const fn new(n: u32) -> Self {
         Self(n)
+    }
+
+    /// Returns `true` if this is the [`INVALID`](Self::INVALID) sentinel.
+    #[inline]
+    pub const fn is_invalid(self) -> bool {
+        self.0 == u32::MAX
     }
 
     /// Returns the raw page index.

@@ -181,6 +181,21 @@ pub trait Decode: Sized {
     }
 }
 
+impl Encode for u8 {
+    fn encode<W: Write>(&self, writer: &mut W) -> Result<(), CodecError> {
+        writer.write_all(std::slice::from_ref(self))?;
+        Ok(())
+    }
+}
+
+impl Decode for u8 {
+    fn decode<R: Read>(reader: &mut R) -> Result<Self, CodecError> {
+        let mut byte = [0u8; 1];
+        reader.read_exact(&mut byte)?;
+        Ok(byte[0])
+    }
+}
+
 /// Convenience wrappers for little-endian reads from any [`io::Read`] source.
 ///
 /// A blanket impl covers every `R: Read`, so `use crate::codec::ReadLeExt` is
@@ -257,12 +272,6 @@ impl<W: Write> WriteLeExt for W {
     }
 }
 
-/// Length-prefixed list codec: `u32` count followed by each element in order.
-///
-/// One blanket impl serves every `Vec<T>` whose element type implements [`Encode`]:
-/// `Vec<IndexEntry>`, `Vec<Type>`, `Vec<(CompositeKey, PageNumber)>`, etc. all use this.
-/// Allowed by Rust's orphan rule because `Encode` is local to this crate even though
-/// `Vec<T>` is not.
 impl<T: Encode> Encode for Vec<T> {
     fn encode<W: Write>(&self, writer: &mut W) -> Result<(), CodecError> {
         let n = u32::try_from(self.len()).map_err(|_| CodecError::NumericDoesNotFit {
