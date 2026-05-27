@@ -173,6 +173,7 @@ pub enum TokenType {
     Indexes,
 
     Int,
+    Bigint,
     Varchar,
     Text,
     Boolean,
@@ -288,6 +289,7 @@ impl TokenType {
             TokenType::Show => "SHOW",
             TokenType::Indexes => "INDEXES",
             TokenType::Int => "INT",
+            TokenType::Bigint => "BIGINT",
             TokenType::Varchar => "VARCHAR",
             TokenType::Text => "TEXT",
             TokenType::Boolean => "BOOLEAN",
@@ -374,7 +376,8 @@ impl From<&Token> for String {
 ///
 /// | `TokenType`            | `Type`          |
 /// |------------------------|-----------------|
-/// | `Int`                  | `Type::Int64`   |
+/// | `Int`                  | `Type::Int32`   |
+/// | `Bigint`               | `Type::Int64`   |
 /// | `Varchar`              | `Type::String`  |
 /// | `Text`                 | `Type::Text`    |
 /// | `Boolean`              | `Type::Bool`    |
@@ -387,7 +390,8 @@ impl TryFrom<Token> for Type {
     type Error = String;
     fn try_from(value: Token) -> Result<Self, Self::Error> {
         match value.kind {
-            TokenType::Int => Ok(Type::Int64),
+            TokenType::Int => Ok(Type::Int32),
+            TokenType::Bigint => Ok(Type::Int64),
             TokenType::Varchar => Ok(Type::String),
             TokenType::Text => Ok(Type::Text),
             TokenType::Boolean => Ok(Type::Bool),
@@ -552,6 +556,7 @@ impl std::str::FromStr for TokenType {
             "INDEXES" => Ok(TokenType::Indexes),
 
             "INT" | "INTEGER" => Ok(TokenType::Int),
+            "BIGINT" | "INT64" => Ok(TokenType::Bigint),
             "VARCHAR" | "STRING" => Ok(TokenType::Varchar),
             "TEXT" => Ok(TokenType::Text),
             "BOOLEAN" | "BOOL" => Ok(TokenType::Boolean),
@@ -746,6 +751,7 @@ mod tests {
     #[test]
     fn test_token_type_display_type_and_sentinel_variants() {
         assert_eq!(TokenType::Int.to_string(), "INT");
+        assert_eq!(TokenType::Bigint.to_string(), "BIGINT");
         assert_eq!(TokenType::Varchar.to_string(), "VARCHAR");
         assert_eq!(TokenType::Text.to_string(), "TEXT");
         assert_eq!(TokenType::Boolean.to_string(), "BOOLEAN");
@@ -799,6 +805,8 @@ mod tests {
     #[test]
     fn test_from_str_aliases() {
         assert_eq!(TokenType::from_str("INTEGER").unwrap(), TokenType::Int);
+        assert_eq!(TokenType::from_str("BIGINT").unwrap(), TokenType::Bigint);
+        assert_eq!(TokenType::from_str("INT64").unwrap(), TokenType::Bigint);
         assert_eq!(TokenType::from_str("BOOL").unwrap(), TokenType::Boolean);
         assert_eq!(TokenType::from_str("REAL").unwrap(), TokenType::Float);
         assert_eq!(TokenType::from_str("DOUBLE").unwrap(), TokenType::Float);
@@ -895,6 +903,10 @@ mod tests {
     fn test_try_from_token_for_type_happy() {
         assert_eq!(
             Type::try_from(make_token(TokenType::Int, "INT")).unwrap(),
+            Type::Int32
+        );
+        assert_eq!(
+            Type::try_from(make_token(TokenType::Bigint, "BIGINT")).unwrap(),
             Type::Int64
         );
         assert_eq!(

@@ -19,7 +19,7 @@ fn default_values_fills_every_column_from_schema_defaults() {
     let rows = db.scan_all("settings");
     assert_eq!(rows.len(), 1);
     assert_eq!(rows[0].get(0), Some(&Value::varchar("dark".into())));
-    assert_eq!(rows[0].get(1), Some(&Value::int64(14)));
+    assert_eq!(rows[0].get(1), Some(&Value::int32(14)));
 }
 
 #[test]
@@ -32,7 +32,7 @@ fn default_values_uses_null_for_nullable_column_without_default() {
 
     let rows = db.scan_all("t");
     assert_eq!(rows.len(), 1);
-    assert_eq!(rows[0].get(0), Some(&Value::int64(0)));
+    assert_eq!(rows[0].get(0), Some(&Value::int32(0)));
     assert_eq!(rows[0].get(1), Some(&Value::Null));
 }
 
@@ -99,7 +99,7 @@ fn partial_insert_omitting_defaulted_columns_uses_their_defaults() {
 
     let rows = db.scan_all("users");
     assert_eq!(rows.len(), 1);
-    assert_eq!(rows[0].get(0), Some(&Value::int64(42)));
+    assert_eq!(rows[0].get(0), Some(&Value::int32(42)));
     assert_eq!(rows[0].get(1), Some(&Value::varchar("viewer".into())));
     assert_eq!(rows[0].get(2), Some(&Value::bool(true)));
 }
@@ -113,7 +113,7 @@ fn partial_insert_omitting_nullable_column_stores_null() {
 
     let rows = db.scan_all("t");
     assert_eq!(rows.len(), 1);
-    assert_eq!(rows[0].get(0), Some(&Value::int64(7)));
+    assert_eq!(rows[0].get(0), Some(&Value::int32(7)));
     assert_eq!(rows[0].get(1), Some(&Value::Null));
 }
 

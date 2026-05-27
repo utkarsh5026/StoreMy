@@ -64,15 +64,15 @@ fn inner_join_equi_matches_correct_rows() {
     assert_eq!(rows.len(), 2);
     // Output columns: employees.id | employees.name | departments.dept_id | departments.dept
     assert_eq!(rows[0], vec![
-        Value::int64(1),
+        Value::int32(1),
         Value::varchar("Alice".into()),
-        Value::int64(1),
+        Value::int32(1),
         Value::varchar("Eng".into()),
     ]);
     assert_eq!(rows[1], vec![
-        Value::int64(2),
+        Value::int32(2),
         Value::varchar("Bob".into()),
-        Value::int64(2),
+        Value::int32(2),
         Value::varchar("Mkt".into()),
     ]);
 }
@@ -137,19 +137,19 @@ fn inner_join_one_left_key_matches_multiple_right_rows() {
 
     assert_eq!(rows.len(), 3);
     assert_eq!(rows[0], vec![
-        Value::int64(1),
-        Value::int64(1),
-        Value::int64(100)
+        Value::int32(1),
+        Value::int32(1),
+        Value::int32(100)
     ]);
     assert_eq!(rows[1], vec![
-        Value::int64(1),
-        Value::int64(1),
-        Value::int64(200)
+        Value::int32(1),
+        Value::int32(1),
+        Value::int32(200)
     ]);
     assert_eq!(rows[2], vec![
-        Value::int64(1),
-        Value::int64(1),
-        Value::int64(300)
+        Value::int32(1),
+        Value::int32(1),
+        Value::int32(300)
     ]);
 }
 
@@ -168,8 +168,8 @@ fn inner_join_non_equi_predicate_falls_back_to_nested_loop() {
     sort_by_int(&mut rows, 1);
 
     assert_eq!(rows.len(), 2);
-    assert_eq!(rows[0], vec![Value::int64(3), Value::int64(4)]);
-    assert_eq!(rows[1], vec![Value::int64(3), Value::int64(5)]);
+    assert_eq!(rows[0], vec![Value::int32(3), Value::int32(4)]);
+    assert_eq!(rows[1], vec![Value::int32(3), Value::int32(5)]);
 }
 
 /// `NULL` on either join key side must never match — SQL three-valued logic says
@@ -186,7 +186,7 @@ fn inner_join_null_keys_never_produce_output() {
     let rows = select_rows(&db, "SELECT * FROM t1 JOIN t2 ON t1.id = t2.id");
     // Only (1, 1) is a valid match; NULL = NULL is false
     assert_eq!(rows.len(), 1);
-    assert_eq!(rows[0], vec![Value::int64(1), Value::int64(1)]);
+    assert_eq!(rows[0], vec![Value::int32(1), Value::int32(1)]);
 }
 
 /// Compound `AND` predicate — `try_extract_equi` cannot decompose this, so the
@@ -211,7 +211,7 @@ fn inner_join_compound_and_predicate_applies_both_conditions() {
     // Output: t1.id | t1.threshold | t2.id | t2.value
     assert_eq!(
         rows[0][3],
-        Value::int64(70),
+        Value::int32(70),
         "only value=70 clears the threshold"
     );
 }
@@ -261,18 +261,18 @@ fn left_join_unmatched_left_rows_get_null_right_side() {
     assert_eq!(rows.len(), 3);
     // Alice — matched
     assert_eq!(rows[0], vec![
-        Value::int64(1),
+        Value::int32(1),
         Value::varchar("Alice".into()),
-        Value::int64(1),
+        Value::int32(1),
         Value::varchar("Eng".into()),
     ]);
     // Bob — no match, right columns are NULL
-    assert_eq!(rows[1][0], Value::int64(2));
+    assert_eq!(rows[1][0], Value::int32(2));
     assert_eq!(rows[1][1], Value::varchar("Bob".into()));
     assert_eq!(rows[1][2], Value::Null, "unmatched dept_id must be NULL");
     assert_eq!(rows[1][3], Value::Null, "unmatched dept must be NULL");
     // Carol — no match
-    assert_eq!(rows[2][0], Value::int64(3));
+    assert_eq!(rows[2][0], Value::int32(3));
     assert_eq!(rows[2][2], Value::Null);
     assert_eq!(rows[2][3], Value::Null);
 }
@@ -291,8 +291,8 @@ fn left_join_empty_right_all_left_rows_preserved_with_nulls() {
     sort_by_int(&mut rows, 0);
 
     assert_eq!(rows.len(), 3);
-    for (expected_id, row) in [1i64, 2, 3].into_iter().zip(rows.iter()) {
-        assert_eq!(row[0], Value::int64(expected_id));
+    for (expected_id, row) in [1i32, 2, 3].into_iter().zip(rows.iter()) {
+        assert_eq!(row[0], Value::int32(expected_id));
         assert_eq!(
             row[1],
             Value::Null,
@@ -318,8 +318,8 @@ fn left_join_null_key_on_left_never_matches_but_row_is_preserved() {
 
     assert_eq!(rows.len(), 2);
     // id=1 matches
-    assert_eq!(rows[0][0], Value::int64(1));
-    assert_eq!(rows[0][1], Value::int64(1));
+    assert_eq!(rows[0][0], Value::int32(1));
+    assert_eq!(rows[0][1], Value::int32(1));
     // NULL id on left — right side must also be NULL
     assert_eq!(rows[1][0], Value::Null);
     assert_eq!(rows[1][1], Value::Null);
@@ -391,16 +391,16 @@ fn three_table_chain_join_resolves_column_offsets_correctly() {
     // Output columns: a.a_id | b.a_id | b.b_id | c.b_id
     assert_eq!(rows.len(), 2);
     assert_eq!(rows[0], vec![
-        Value::int64(1),
-        Value::int64(1),
-        Value::int64(10),
-        Value::int64(10),
+        Value::int32(1),
+        Value::int32(1),
+        Value::int32(10),
+        Value::int32(10),
     ]);
     assert_eq!(rows[1], vec![
-        Value::int64(2),
-        Value::int64(2),
-        Value::int64(20),
-        Value::int64(20),
+        Value::int32(2),
+        Value::int32(2),
+        Value::int32(20),
+        Value::int32(20),
     ]);
 }
 

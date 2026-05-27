@@ -804,7 +804,7 @@ mod tests {
         assert!(!t.if_not_exists);
         assert_eq!(t.columns.len(), 1);
         assert_eq!(t.columns[0].name, "id");
-        assert_eq!(t.columns[0].col_type, Type::Int64);
+        assert_eq!(t.columns[0].col_type, Type::Int32);
         assert!(t.columns[0].nullable);
         assert!(!t.columns[0].primary_key);
         assert!(!t.columns[0].auto_increment);
@@ -876,8 +876,18 @@ mod tests {
         let Statement::CreateTable(t) = stmt else {
             panic!("expected CreateTable");
         };
-        assert_eq!(t.columns[0].col_type, Type::Int64);
+        assert_eq!(t.columns[0].col_type, Type::Int32);
         assert_eq!(t.columns[1].col_type, Type::Text);
+    }
+
+    #[test]
+    fn test_parse_create_bigint_column() {
+        let stmt = parse("CREATE TABLE events (id BIGINT, ts INT)").unwrap();
+        let Statement::CreateTable(t) = stmt else {
+            panic!("expected CreateTable");
+        };
+        assert_eq!(t.columns[0].col_type, Type::Int64, "BIGINT → Int64");
+        assert_eq!(t.columns[1].col_type, Type::Int32, "INT → Int32");
     }
 
     #[test]
@@ -1351,7 +1361,7 @@ mod tests {
             panic!("expected AddColumn");
         };
         assert_eq!(col.name, "age");
-        assert_eq!(col.col_type, Type::Int64);
+        assert_eq!(col.col_type, Type::Int32);
         assert!(col.nullable);
         assert!(!col.primary_key);
         assert!(col.default.is_none());

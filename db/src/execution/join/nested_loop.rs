@@ -339,7 +339,7 @@ mod tests {
 
         let unmatched_right = out
             .iter()
-            .find(|t| int(t, 2) == 3)
+            .find(|t| matches!(t.get(0), Some(Value::Null)) && int(t, 2) == 3)
             .expect("unmatched right row missing");
         assert!(matches!(unmatched_right.get(0), Some(Value::Null)));
     }

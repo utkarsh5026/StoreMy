@@ -505,6 +505,39 @@ impl ResolvedExpr {
     }
 }
 
+/// Equality that widens signed integers before comparing.
+///
+/// SQL treats `INT(2) = BIGINT(2)` as `true`. This avoids changing
+/// `Value::PartialEq` (which must stay strict for hash-index correctness)
+/// while still giving WHERE clauses the expected SQL semantics.
+fn numeric_eq(l: &Value, r: &Value) -> bool {
+    use crate::types::FixedValue;
+    match (l, r) {
+        (Value::Fixed(FixedValue::Int32(a)), Value::Fixed(FixedValue::Int64(b))) => {
+            i64::from(*a) == *b
+        }
+        (Value::Fixed(FixedValue::Int64(a)), Value::Fixed(FixedValue::Int32(b))) => {
+            *a == i64::from(*b)
+        }
+        _ => l == r,
+    }
+}
+
+/// Ordering that widens signed integers before comparing (same motivation as
+/// [`numeric_eq`]).
+fn numeric_cmp(l: &Value, r: &Value) -> Option<std::cmp::Ordering> {
+    use crate::types::FixedValue;
+    match (l, r) {
+        (Value::Fixed(FixedValue::Int32(a)), Value::Fixed(FixedValue::Int64(b))) => {
+            i64::from(*a).partial_cmp(b)
+        }
+        (Value::Fixed(FixedValue::Int64(a)), Value::Fixed(FixedValue::Int32(b))) => {
+            a.partial_cmp(&i64::from(*b))
+        }
+        _ => l.partial_cmp(r),
+    }
+}
+
 fn eval_binary(op: BinOp, l: &Value, r: &Value) -> Result<Value, ExecutionError> {
     if l.is_null() || r.is_null() {
         return Ok(Value::Null);
@@ -520,12 +553,12 @@ fn eval_binary(op: BinOp, l: &Value, r: &Value) -> Result<Value, ExecutionError>
             let rb = as_bool(r, "OR")?;
             Ok(Value::bool(lb || rb))
         }
-        BinOp::Eq => Ok(Value::bool(l == r)),
-        BinOp::NotEq => Ok(Value::bool(l != r)),
-        BinOp::Lt => Ok(cmp_to_bool(l.partial_cmp(r), Ordering::is_lt)),
-        BinOp::LtEq => Ok(cmp_to_bool(l.partial_cmp(r), Ordering::is_le)),
-        BinOp::Gt => Ok(cmp_to_bool(l.partial_cmp(r), Ordering::is_gt)),
-        BinOp::GtEq => Ok(cmp_to_bool(l.partial_cmp(r), Ordering::is_ge)),
+        BinOp::Eq => Ok(Value::bool(numeric_eq(l, r))),
+        BinOp::NotEq => Ok(Value::bool(!numeric_eq(l, r))),
+        BinOp::Lt => Ok(cmp_to_bool(numeric_cmp(l, r), Ordering::is_lt)),
+        BinOp::LtEq => Ok(cmp_to_bool(numeric_cmp(l, r), Ordering::is_le)),
+        BinOp::Gt => Ok(cmp_to_bool(numeric_cmp(l, r), Ordering::is_gt)),
+        BinOp::GtEq => Ok(cmp_to_bool(numeric_cmp(l, r), Ordering::is_ge)),
         BinOp::Add => l
             .checked_add(r)
             .map_err(|_| ExecutionError::TypeError(format!("cannot add {l} and {r}"))),

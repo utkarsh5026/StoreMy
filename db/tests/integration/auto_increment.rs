@@ -21,17 +21,17 @@ fn auto_increment_assigns_sequential_ids_starting_at_one() {
     assert_eq!(rows.len(), 3);
     assert_eq!(
         rows[0].get(0),
-        Some(&Value::int64(1)),
+        Some(&Value::int32(1)),
         "first row id must be 1"
     );
     assert_eq!(
         rows[1].get(0),
-        Some(&Value::int64(2)),
+        Some(&Value::int32(2)),
         "second row id must be 2"
     );
     assert_eq!(
         rows[2].get(0),
-        Some(&Value::int64(3)),
+        Some(&Value::int32(3)),
         "third row id must be 3"
     );
 }
@@ -46,9 +46,9 @@ fn auto_increment_batch_insert_assigns_contiguous_ids() {
 
     let rows = db.scan_all("t");
     assert_eq!(rows.len(), 3);
-    assert_eq!(rows[0].get(0), Some(&Value::int64(1)));
-    assert_eq!(rows[1].get(0), Some(&Value::int64(2)));
-    assert_eq!(rows[2].get(0), Some(&Value::int64(3)));
+    assert_eq!(rows[0].get(0), Some(&Value::int32(1)));
+    assert_eq!(rows[1].get(0), Some(&Value::int32(2)));
+    assert_eq!(rows[2].get(0), Some(&Value::int32(3)));
 }
 
 #[test]
@@ -64,10 +64,10 @@ fn auto_increment_counter_continues_across_separate_inserts() {
     assert_eq!(rows.len(), 4);
     let ids: Vec<_> = rows.iter().map(|r| r.get(0).cloned().unwrap()).collect();
     assert_eq!(ids, vec![
-        Value::int64(1),
-        Value::int64(2),
-        Value::int64(3),
-        Value::int64(4),
+        Value::int32(1),
+        Value::int32(2),
+        Value::int32(3),
+        Value::int32(4),
     ]);
 }
 
@@ -97,9 +97,9 @@ fn auto_increment_works_when_ai_column_is_not_first() {
     assert_eq!(rows.len(), 2);
     // name is slot 0, id is slot 1.
     assert_eq!(rows[0].get(0), Some(&Value::varchar("alice".into())));
-    assert_eq!(rows[0].get(1), Some(&Value::int64(1)));
+    assert_eq!(rows[0].get(1), Some(&Value::int32(1)));
     assert_eq!(rows[1].get(0), Some(&Value::varchar("bob".into())));
-    assert_eq!(rows[1].get(1), Some(&Value::int64(2)));
+    assert_eq!(rows[1].get(1), Some(&Value::int32(2)));
 }
 
 // ── constraint enforcement ────────────────────────────────────────────────────

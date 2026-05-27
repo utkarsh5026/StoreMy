@@ -120,7 +120,7 @@ impl Engine<'_> {
         // in a single statement get contiguous IDs.
         if let Some(ai_col_id) = table.auto_increment_column {
             let start = catalog.allocate_auto_increment(txn, table.file_id, tuples.len())?;
-            Self::fill_auto_increment_values(&mut tuples, &table.schema, ai_col_id, start);
+            Self::fill_auto_increment_values(&mut tuples, &table.schema, ai_col_id, start)?;
         }
 
         // Evaluate CHECK constraints now that every slot (including AI) is filled.
@@ -334,7 +334,7 @@ impl Engine<'_> {
         let mut tuples = vec![Tuple::new(fields)];
         if let Some(ai_col_id) = ai_col {
             let start = catalog.allocate_auto_increment(txn, file_id, 1)?;
-            Self::fill_auto_increment_values(&mut tuples, schema, ai_col_id, start);
+            Self::fill_auto_increment_values(&mut tuples, schema, ai_col_id, start)?;
         }
         Self::check_tuple_constraints(&tuples[0], resolved_checks, table_name)?;
         let count = Self::insert_rows_and_indexes(catalog, txn, file_id, tuples)?;
@@ -609,28 +609,48 @@ impl Engine<'_> {
     /// Stamp each tuple's auto-increment slot with its assigned counter value.
     ///
     /// `start` is the first counter in the allocated range (inclusive). Each
-    /// tuple at index `i` receives `start + i`. The value is cast to the
+    /// tuple at index `i` receives `start + i`. The value is narrowed to the
     /// column's declared type: signed (`Int64`/`Int32`) or unsigned (`Uint64`).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`EngineError::TypeError`] when a counter does not fit the
+    /// column's declared integer width.
     fn fill_auto_increment_values(
         tuples: &mut [Tuple],
         schema: &TupleSchema,
         ai_col_id: ColumnId,
         start: u64,
-    ) {
+    ) -> Result<(), EngineError> {
         let phys_idx = usize::from(ai_col_id);
         let ai_type = schema.field(phys_idx).map(|f| f.field_type);
 
         for (i, tuple) in tuples.iter_mut().enumerate() {
             let counter = start + i as u64;
-            #[allow(clippy::cast_possible_wrap)]
             let value = match ai_type {
-                Some(Type::Int64 | Type::Int32) => Value::int64(counter as i64),
+                Some(Type::Int64) => {
+                    let n = i64::try_from(counter).map_err(|_| {
+                        EngineError::TypeError(format!(
+                            "auto-increment value {counter} does not fit in INT64"
+                        ))
+                    })?;
+                    Value::int64(n)
+                }
+                Some(Type::Int32) => {
+                    let n = i32::try_from(counter).map_err(|_| {
+                        EngineError::TypeError(format!(
+                            "auto-increment value {counter} does not fit in INT32"
+                        ))
+                    })?;
+                    Value::int32(n)
+                }
                 _ => Value::uint64(counter),
             };
             *tuple
                 .get_mut(phys_idx)
                 .expect("ai column index is within physical schema bounds") = value;
         }
+        Ok(())
     }
 
     /// Evaluate a batch of expression rows (the right-hand side of `VALUES (…), …`)
@@ -1031,7 +1051,7 @@ mod tests {
         // Physical slot 0: id = 42
         assert_eq!(
             tuple.get(0),
-            Some(&Value::int64(42)),
+            Some(&Value::int32(42)),
             "slot 0 must be id=42"
         );
         // Physical slot 1: dropped tag column — must be NULL
@@ -1043,7 +1063,7 @@ mod tests {
         // Physical slot 2: score = 99
         assert_eq!(
             tuple.get(2),
-            Some(&Value::int64(99)),
+            Some(&Value::int32(99)),
             "slot 2 must be score=99"
         );
     }
@@ -1116,7 +1136,7 @@ mod tests {
         assert_eq!(rows.len(), 3);
 
         let ids: Vec<_> = rows.iter().map(|r| r.get(0).cloned().unwrap()).collect();
-        assert_eq!(ids, vec![Value::int64(1), Value::int64(2), Value::int64(3)]);
+        assert_eq!(ids, vec![Value::int32(1), Value::int32(2), Value::int32(3)]);
     }
 
     #[test]
@@ -1135,7 +1155,7 @@ mod tests {
 
         let rows = scan_rows(&catalog, &txn_mgr, "t");
         let ids: Vec<_> = rows.iter().map(|r| r.get(0).cloned().unwrap()).collect();
-        assert_eq!(ids, vec![Value::int64(1), Value::int64(2), Value::int64(3)]);
+        assert_eq!(ids, vec![Value::int32(1), Value::int32(2), Value::int32(3)]);
     }
 
     #[test]
@@ -1173,7 +1193,7 @@ mod tests {
         let rows = scan_rows(&catalog, &txn_mgr, "settings");
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].get(0), Some(&Value::varchar("dark".into())));
-        assert_eq!(rows[0].get(1), Some(&Value::int64(14)));
+        assert_eq!(rows[0].get(1), Some(&Value::int32(14)));
     }
 
     #[test]
@@ -1191,7 +1211,7 @@ mod tests {
 
         let rows = scan_rows(&catalog, &txn_mgr, "t");
         assert_eq!(rows.len(), 1);
-        assert_eq!(rows[0].get(0), Some(&Value::int64(0)));
+        assert_eq!(rows[0].get(0), Some(&Value::int32(0)));
         assert_eq!(rows[0].get(1), Some(&Value::Null));
     }
 
@@ -1229,7 +1249,7 @@ mod tests {
 
         let rows = scan_rows(&catalog, &txn_mgr, "users");
         assert_eq!(rows.len(), 1);
-        assert_eq!(rows[0].get(0), Some(&Value::int64(1)));
+        assert_eq!(rows[0].get(0), Some(&Value::int32(1)));
         assert_eq!(rows[0].get(1), Some(&Value::varchar("viewer".into())));
         assert_eq!(rows[0].get(2), Some(&Value::bool(true)));
     }
@@ -1245,7 +1265,7 @@ mod tests {
 
         let rows = scan_rows(&catalog, &txn_mgr, "t");
         assert_eq!(rows.len(), 1);
-        assert_eq!(rows[0].get(0), Some(&Value::int64(7)));
+        assert_eq!(rows[0].get(0), Some(&Value::int32(7)));
         assert_eq!(rows[0].get(1), Some(&Value::Null));
     }
 

@@ -426,7 +426,7 @@ fn add_column_with_default_new_rows_use_supplied_value() {
 
     assert_eq!(
         *rows[0].get(2).unwrap(),
-        Value::int64(7),
+        Value::int32(7),
         "supplied value must win over default"
     );
 }

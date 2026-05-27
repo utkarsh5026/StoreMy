@@ -2,7 +2,7 @@ use std::{collections::HashMap, fmt};
 
 use super::{Tuple, TupleError};
 use crate::{
-    Value,
+    STRING_MAX_SIZE, Value,
     primitives::{ColumnId, NameError, NonEmptyString},
     types::Type,
 };
@@ -113,7 +113,7 @@ impl Field {
     ///
     /// ```sql
     /// -- ALTER TABLE users ADD COLUMN is_active BOOLEAN DEFAULT TRUE;
-    /// --   field.set_missing_default_value(Value::Bool(true))
+    /// --   field.set_missing_default_value(Value::bool(true))
     /// ```
     #[must_use]
     pub fn set_missing_default_value(&mut self, value: Value) -> &mut Self {
@@ -181,6 +181,18 @@ impl fmt::Display for Field {
 pub struct TupleSchema {
     fields: Vec<Field>,
     field_indices: HashMap<NonEmptyString, usize>,
+}
+
+/// Fixed-width payload bytes for schema sizing; variable-length types return 0
+/// ([`Type::Text`]) or a capped worst case ([`Type::String`]).
+const fn fixed_type_payload_size(ty: Type) -> usize {
+    match ty {
+        Type::Int32 | Type::Uint32 => 4,
+        Type::Int64 | Type::Uint64 | Type::Float64 => 8,
+        Type::Bool => 1,
+        Type::String => 4 + STRING_MAX_SIZE,
+        Type::Text => 0,
+    }
 }
 
 impl TupleSchema {
@@ -287,23 +299,55 @@ impl TupleSchema {
         self.fields.iter()
     }
 
-    /// Sum of [`Type::size`] for every column - the raw payload size of a
-    /// fully non-null row, before the null bitmap and per-value discriminants
-    /// that [`Tuple::serialize`] also writes.
+    /// Sum of fixed-width payload bytes plus the worst-case [`Type::String`]
+    /// contribution for every column — the raw payload size of a fully non-null
+    /// row, before the null bitmap and per-value discriminants that
+    /// [`Tuple::serialize`] also writes.
+    ///
+    /// [`Type::Text`] columns are omitted: their length is unbounded, so use
+    /// [`Value::encoded_size`] on the actual row when sizing a buffer.
     ///
     /// Use [`TupleSchema::serialized_size`] when sizing a heap-page slot;
     /// this method exists mainly to compose that calculation.
     pub fn tuple_size(&self) -> usize {
-        self.fields.iter().map(|f| f.field_type.size()).sum()
+        self.fields
+            .iter()
+            .map(|f| fixed_type_payload_size(f.field_type))
+            .sum()
+    }
+
+    /// The exact number of bytes [`Tuple::serialize`] will write for `tuple`.
+    ///
+    /// Unlike [`TupleSchema::serialized_size`], which is a schema-level
+    /// worst-case that assumes all columns are non-null and uses fixed maximum
+    /// sizes, this method walks the actual values so it accounts for:
+    ///
+    /// - **Null compression** — null slots contribute nothing to the payload, only a bit in the
+    ///   bitmap.
+    /// - **TEXT columns** — [`Type::Text`] has no fixed maximum size, so the only accurate
+    ///   measurement is the real string length.
+    ///
+    /// Use this in [`crate::heap`] code paths that need to know how large a
+    /// slot to allocate before writing a tuple that contains TEXT columns.
+    pub fn actual_serialized_size(&self, tuple: &Tuple) -> usize {
+        let n = self.physical_num_fields();
+        let bitmap_size = n.div_ceil(8);
+        let payload: usize = tuple
+            .values
+            .iter()
+            .filter(|v| !v.is_null())
+            .map(Value::encoded_size)
+            .sum();
+        2 + bitmap_size + payload
     }
 
     /// The exact number of bytes [`Tuple::serialize`] writes for this schema
     /// in the worst case (all columns non-null) - i.e. how big a heap-page
     /// slot must be to hold one row produced by `INSERT`.
     ///
-    /// Layout: null bitmap (`ceil(n/8)` bytes) + one 1-byte discriminant per
-    /// column + raw payload bytes for every column type. Use this - not
-    /// [`TupleSchema::tuple_size`] - when sizing an on-disk buffer.
+    /// Layout: null bitmap (`ceil(n/8)` bytes) + one encoded [`Value`] per
+    /// non-null column (4-byte [`Type`] tag + payload via [`Value::encoded_size`]).
+    /// Use this - not [`TupleSchema::tuple_size`] - when sizing an on-disk buffer.
     ///
     /// # Examples
     ///
@@ -315,15 +359,20 @@ impl TupleSchema {
     ///
     /// // CREATE TABLE t (id INT, ok BOOLEAN);
     /// let schema = TupleSchema::new(vec![
-    ///     Field::new("id", Type::Int32).unwrap(), // 1 disc + 4 bytes
-    ///     Field::new("ok", Type::Bool).unwrap(),  // 1 disc + 1 byte
+    ///     Field::new("id", Type::Int32).unwrap(), // Type tag + 4 bytes
+    ///     Field::new("ok", Type::Bool).unwrap(),  // Type tag + 1 byte
     /// ]);
-    /// // 2 columns -> 2-byte n_fields + 1-byte bitmap + 2 discriminants + 5 payload = 10 total
-    /// assert_eq!(schema.serialized_size(), 10);
+    /// // 2-byte n_fields + 1-byte bitmap + 2 values (4+4 each + 4+1) = 19 total
+    /// assert_eq!(schema.serialized_size(), 19);
     /// ```
     pub fn serialized_size(&self) -> usize {
         let n = self.physical_num_fields();
-        2 + n.div_ceil(8) + n + self.tuple_size()
+        2 + n.div_ceil(8)
+            + self
+                .fields
+                .iter()
+                .map(|f| 4 + fixed_type_payload_size(f.field_type))
+                .sum::<usize>()
     }
 
     /// Concatenates two schemas - the schema-level counterpart to
@@ -548,9 +597,9 @@ mod tests {
 
     fn tuple_42_alice_30() -> Tuple {
         Tuple::new(vec![
-            Value::Int32(42),
-            Value::String("alice".into()),
-            Value::Int32(30),
+            Value::int32(42),
+            Value::varchar("alice".into()),
+            Value::int32(30),
         ])
     }
 
@@ -629,7 +678,8 @@ mod tests {
     #[test]
     fn schema_serialized_size() {
         let schema = schema_id_name_age();
-        assert_eq!(schema.serialized_size(), 2 + 1 + 3 + schema.tuple_size());
+        // 2-byte header + 1-byte bitmap + three encoded values (4-byte Type tag each)
+        assert_eq!(schema.serialized_size(), 2 + 1 + (8 + 263 + 8));
     }
 
     #[test]
@@ -638,7 +688,7 @@ mod tests {
             .map(|i| field(format!("c{i}").as_str(), Type::Bool))
             .collect();
         let schema = TupleSchema::new(fields);
-        assert_eq!(schema.serialized_size(), 2 + 2 + 9 + 9);
+        assert_eq!(schema.serialized_size(), 2 + 2 + 9 * (4 + 1));
     }
 
     #[test]
@@ -688,14 +738,14 @@ mod tests {
     #[test]
     fn validate_null_in_nullable_column_ok() {
         let schema = schema_id_name_age();
-        let tuple = Tuple::new(vec![Value::Int32(1), Value::Null, Value::Null]);
+        let tuple = Tuple::new(vec![Value::int32(1), Value::Null, Value::Null]);
         assert!(schema.validate(&tuple).is_ok());
     }
 
     #[test]
     fn validate_field_count_mismatch() {
         let schema = schema_id_name_age();
-        let tuple = Tuple::new(vec![Value::Int32(1)]);
+        let tuple = Tuple::new(vec![Value::int32(1)]);
         let err = schema.validate(&tuple).unwrap_err();
         assert!(matches!(err, TupleError::FieldCountMismatch {
             expected: 3,
@@ -714,7 +764,7 @@ mod tests {
     #[test]
     fn validate_type_mismatch() {
         let schema = schema_id_name_age();
-        let tuple = Tuple::new(vec![Value::Bool(true), Value::Null, Value::Null]);
+        let tuple = Tuple::new(vec![Value::bool(true), Value::Null, Value::Null]);
         let err = schema.validate(&tuple).unwrap_err();
         assert!(matches!(
             err,
@@ -788,7 +838,7 @@ mod tests {
         ]);
 
         // Slot 1 is NULL (the dropped column's placeholder) — must not error.
-        let tuple = Tuple::new(vec![Value::Int32(1), Value::Null, Value::Int32(30)]);
+        let tuple = Tuple::new(vec![Value::int32(1), Value::Null, Value::int32(30)]);
         assert!(schema.validate(&tuple).is_ok());
     }
 
@@ -805,7 +855,7 @@ mod tests {
 
         // Value::Bool in a STRING slot would normally be a TypeMismatch,
         // but the column is dropped so it must be ignored.
-        let tuple = Tuple::new(vec![Value::Int32(1), Value::Bool(true)]);
+        let tuple = Tuple::new(vec![Value::int32(1), Value::bool(true)]);
         assert!(schema.validate(&tuple).is_ok());
     }
 
