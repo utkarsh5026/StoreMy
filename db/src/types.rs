@@ -22,7 +22,7 @@ use std::{
     ops::{Add, Mul, Sub},
 };
 
-use chrono::{NaiveDate, NaiveDateTime, NaiveTime};
+use chrono::{DateTime, NaiveDate, NaiveDateTime, NaiveTime};
 use thiserror::Error;
 
 use crate::{
@@ -342,7 +342,13 @@ impl FixedValue {
         }
     }
 
-    /// Parses `YYYY-MM-DD` into [`FixedValue::Date`] (days since Unix epoch).
+    /// Parses a SQL-style date literal into [`FixedValue::Date`].
+    ///
+    /// Accepts `YYYY-MM-DD` (leading/trailing whitespace is trimmed). The stored
+    /// payload is an `i32` count of whole days since the Unix epoch (`1970-01-01`).
+    ///
+    /// Returns `None` if the string does not match the format or the day count
+    /// does not fit in `i32`.
     pub fn parse_date(s: &str) -> Option<Self> {
         let d = NaiveDate::parse_from_str(s.trim(), "%Y-%m-%d").ok()?;
         let epoch = NaiveDate::from_ymd_opt(1970, 1, 1)?;
@@ -350,7 +356,14 @@ impl FixedValue {
         Some(Self::Date(days))
     }
 
-    /// Parses `HH:MM:SS` or `HH:MM:SS.fff` into [`FixedValue::Time`] (microseconds since midnight).
+    /// Parses a SQL-style time literal into [`FixedValue::Time`].
+    ///
+    /// Accepts `HH:MM:SS` and `HH:MM:SS.fff` (fractional seconds; whitespace
+    /// trimmed). The stored payload is an `i64` count of microseconds since
+    /// midnight.
+    ///
+    /// Returns `None` if the string does not match either format or the duration
+    /// cannot be represented as microseconds.
     pub fn parse_time(s: &str) -> Option<Self> {
         let t = NaiveTime::parse_from_str(s.trim(), "%H:%M:%S")
             .or_else(|_| NaiveTime::parse_from_str(s.trim(), "%H:%M:%S%.f"))
@@ -361,15 +374,70 @@ impl FixedValue {
         ))
     }
 
-    /// Parses a datetime string into [`FixedValue::Timestamp`] (microseconds since Unix epoch).
+    /// Parses a SQL-style timestamp literal into [`FixedValue::Timestamp`].
     ///
-    /// Accepts `YYYY-MM-DD HH:MM:SS`, `YYYY-MM-DDTHH:MM:SS`, and fractional-second forms.
+    /// Accepts (whitespace trimmed):
+    ///
+    /// - `YYYY-MM-DD HH:MM:SS`
+    /// - `YYYY-MM-DDTHH:MM:SS`
+    /// - `YYYY-MM-DD HH:MM:SS.fff` (fractional seconds with a space separator)
+    ///
+    /// The parsed naive datetime is interpreted as UTC. The stored payload is an
+    /// `i64` count of microseconds since the Unix epoch.
+    ///
+    /// Returns `None` if the string does not match any accepted format.
     pub fn parse_timestamp(s: &str) -> Option<Self> {
-        let dt = NaiveDateTime::parse_from_str(s.trim(), "%Y-%m-%d %H:%M:%S")
-            .or_else(|_| NaiveDateTime::parse_from_str(s.trim(), "%Y-%m-%dT%H:%M:%S"))
-            .or_else(|_| NaiveDateTime::parse_from_str(s.trim(), "%Y-%m-%d %H:%M:%S%.f"))
+        let s = s.trim();
+        let f = |format: &'static str| NaiveDateTime::parse_from_str(s, format);
+
+        let dt = f("%Y-%m-%d %H:%M:%S")
+            .or_else(|_| f("%Y-%m-%dT%H:%M:%S"))
+            .or_else(|_| f("%Y-%m-%d %H:%M:%S%.f"))
             .ok()?;
         Some(Self::Timestamp(dt.and_utc().timestamp_micros()))
+    }
+
+    /// Formats [`FixedValue::Date`] storage for [`fmt::Display`].
+    ///
+    /// Inverse of [`Self::parse_date`]: writes `YYYY-MM-DD` from the `i32` day
+    /// count since the Unix epoch.
+    fn write_date(days: i32, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let epoch = NaiveDate::from_ymd_opt(1970, 1, 1).expect("1970-01-01 is valid");
+        let date = epoch + chrono::Duration::days(i64::from(days));
+        write!(f, "{}", date.format("%Y-%m-%d"))
+    }
+
+    /// Formats [`FixedValue::Time`] storage for [`fmt::Display`].
+    ///
+    /// Inverse of [`Self::parse_time`]: writes `HH:MM:SS` when the payload is a
+    /// whole number of seconds; otherwise `HH:MM:SS.fff` with trimmed fractional
+    /// digits.
+    fn write_time(micros: i64, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let midnight = NaiveTime::from_hms_opt(0, 0, 0).expect("midnight is valid");
+        let time = midnight + chrono::Duration::microseconds(micros);
+        if micros % 1_000_000 == 0 {
+            write!(f, "{}", time.format("%H:%M:%S"))
+        } else {
+            write!(f, "{}", time.format("%H:%M:%S%.f"))
+        }
+    }
+
+    /// Formats [`FixedValue::Timestamp`] storage for [`fmt::Display`].
+    ///
+    /// Inverse of [`Self::parse_timestamp`]: writes `YYYY-MM-DD HH:MM:SS` in UTC,
+    /// or `YYYY-MM-DD HH:MM:SS.fff` when sub-second precision is present. If the
+    /// microsecond count is outside the range representable as a UTC datetime,
+    /// falls back to printing the raw count.
+    fn write_timestamp(micros: i64, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let Some(dt) = DateTime::from_timestamp_micros(micros) else {
+            return write!(f, "{micros}");
+        };
+        let naive = dt.naive_utc();
+        if micros % 1_000_000 == 0 {
+            write!(f, "{}", naive.format("%Y-%m-%d %H:%M:%S"))
+        } else {
+            write!(f, "{}", naive.format("%Y-%m-%d %H:%M:%S%.f"))
+        }
     }
 
     /// Parses `s` into a fixed-width [`FixedValue`] of kind `ty`.
@@ -426,23 +494,16 @@ impl Hash for FixedValue {
 
 impl fmt::Display for FixedValue {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self.size() {
-            BOOL_PAYLOAD_SIZE => {
-                let Self::Bool(v) = self else { unreachable!() };
-                write!(f, "{v}")
-            }
-            I32_PAYLOAD_SIZE => match self {
-                Self::Int32(v) | Self::Date(v) => write!(f, "{v}"),
-                Self::Uint32(v) => write!(f, "{v}"),
-                _ => unreachable!(),
-            },
-            I64_PAYLOAD_SIZE => match self {
-                Self::Int64(v) | Self::Time(v) | Self::Timestamp(v) => write!(f, "{v}"),
-                Self::Uint64(v) => write!(f, "{v}"),
-                Self::Float64(v) => write!(f, "{v}"),
-                _ => unreachable!(),
-            },
-            _ => unreachable!(),
+        match self {
+            Self::Bool(v) => write!(f, "{v}"),
+            Self::Int32(v) => write!(f, "{v}"),
+            Self::Uint32(v) => write!(f, "{v}"),
+            Self::Int64(v) => write!(f, "{v}"),
+            Self::Uint64(v) => write!(f, "{v}"),
+            Self::Float64(v) => write!(f, "{v}"),
+            Self::Date(v) => Self::write_date(*v, f),
+            Self::Time(v) => Self::write_time(*v, f),
+            Self::Timestamp(v) => Self::write_timestamp(*v, f),
         }
     }
 }
@@ -455,7 +516,9 @@ impl PartialOrd for FixedValue {
             (Self::Float64(a), Self::Float64(b)) => a.partial_cmp(b),
             (Self::Bool(a), Self::Bool(b)) => a.partial_cmp(b),
             (Self::Int32(a), Self::Int32(b)) | (Self::Date(a), Self::Date(b)) => a.partial_cmp(b),
-            (Self::Timestamp(a), Self::Timestamp(b)) => a.partial_cmp(b),
+            (Self::Int64(a), Self::Int64(b))
+            | (Self::Time(a), Self::Time(b))
+            | (Self::Timestamp(a), Self::Timestamp(b)) => a.partial_cmp(b),
             _ => None,
         }
     }
@@ -1025,6 +1088,46 @@ impl Decode for Value {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod fixed_value_temporal_tests {
+    use std::cmp::Ordering;
+
+    use super::FixedValue;
+
+    #[test]
+    fn time_partial_ord() {
+        let early = FixedValue::parse_time("10:00:00").unwrap();
+        let late = FixedValue::parse_time("16:00:00").unwrap();
+        assert_eq!(early.partial_cmp(&late), Some(Ordering::Less));
+    }
+
+    #[test]
+    fn int64_partial_ord() {
+        assert_eq!(
+            FixedValue::Int64(1).partial_cmp(&FixedValue::Int64(2)),
+            Some(Ordering::Less)
+        );
+    }
+
+    #[test]
+    fn temporal_display_is_human_readable() {
+        assert_eq!(
+            FixedValue::parse_date("2024-01-15").unwrap().to_string(),
+            "2024-01-15"
+        );
+        assert_eq!(
+            FixedValue::parse_time("16:00:00").unwrap().to_string(),
+            "16:00:00"
+        );
+        assert_eq!(
+            FixedValue::parse_timestamp("2024-01-15 16:00:00")
+                .unwrap()
+                .to_string(),
+            "2024-01-15 16:00:00"
+        );
     }
 }
 
