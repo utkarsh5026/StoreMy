@@ -8,6 +8,7 @@ Older sections (before 2025-10-01) are the Go → Rust transition era.
 
 ### Bug Fixes
 
+- **types**: Map INT→Int32/BIGINT→Int64 and add widening comparisons
 - **recovery**: Fix ARIES idempotency — trim WAL torn tail before undo and remove bad loser filter
 - **catalog**: Remove auto-increment rows when column or table drops
 - **docs**: Qualify UniqueConstraint intra-doc link with full crate path
@@ -44,6 +45,11 @@ Older sections (before 2025-10-01) are the Go → Rust transition era.
 
 ### Features
 
+- **heap**: Spill oversized TEXT values to overflow page chains
+- **types**: Add Value::coerce_to and distinguish TEXT from VARCHAR
+- **heap**: Add overflow page type and byte-vector codec support
+- **storage**: Introduce TypedPage<H, B> generic page abstraction
+- **types**: Add Text type and refactor Value arithmetic
 - **transaction**: Implement partial_undo for ROLLBACK TO SAVEPOINT
 - **tcl**: Wire release savepoint through session executor
 - **tcl**: Execute savepoint in explicit transactions
@@ -262,6 +268,15 @@ Older sections (before 2025-10-01) are the Go → Rust transition era.
 
 ### Refactoring
 
+- **engine**: Centralize constraint default naming
+- **storage**: Extract try_as_page_image for WAL page validation
+- **types**: Split Value into FixedValue/DynValue and add TextOverflow + PageDescriptor
+- **heap**: Migrate HeapPage to TypedPage<HeapTypedHeader, HeapTypedBody>
+- **heap**: Replace PageNumber::INVALID sentinel with Option<PageNumber> in OverflowHeader
+- **btree**: Migrate LeafNode and InternalNode to TypedPage<H, B>
+- **schema**: Wrap TupleSchema in Arc throughout storage and execution
+- **storage**: Inline page envelope logic into typed_page
+- **index**: Split hash module and adopt TypedPage for buckets
 - **engine**: Unify exec handlers to txn, catalog, stmt
 - **database**: Move boot logic into Database::open
 - **transaction**: Drop transaction lifetime via Arc manager
