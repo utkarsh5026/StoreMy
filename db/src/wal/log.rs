@@ -21,7 +21,7 @@ use std::{
 };
 
 use crate::{
-    codec::{CodecError, Decode, Encode, ReadLeExt, WriteLeExt},
+    codec::{CodecError, Decode, Encode},
     primitives::{Lsn, PageId, TransactionId},
 };
 
@@ -102,6 +102,18 @@ pub enum TxnStatus {
     Aborting = 1,
 }
 
+impl Encode for TxnStatus {
+    fn encode<W: Write>(&self, w: &mut W) -> Result<(), CodecError> {
+        (*self as u8).encode(w)
+    }
+}
+
+impl Decode for TxnStatus {
+    fn decode<R: Read>(r: &mut R) -> Result<Self, CodecError> {
+        TxnStatus::try_from(u8::decode(r)?).map_err(CodecError::UnknownDiscriminant)
+    }
+}
+
 impl TryFrom<u8> for TxnStatus {
     type Error = u8;
 
@@ -168,18 +180,17 @@ impl LogRecordHeader {
 /// Propagates any I/O error from `writer`.
 impl Encode for LogRecordHeader {
     fn encode<W: Write>(&self, writer: &mut W) -> Result<(), CodecError> {
-        writer.write_u8(self.record_type as u8)?;
+        (self.record_type as u8).encode(writer)?;
         self.lsn.encode(writer)?;
         self.prev_lsn.encode(writer)?;
         self.tid.encode(writer)?;
-        let secs = self
-            .timestamp
+        self.timestamp
             .duration_since(UNIX_EPOCH)
             .unwrap_or_default()
-            .as_secs();
-        writer.write_le_u64(secs)?;
-        writer.write_le_u32(self.body_len)?;
-        writer.write_le_u32(self.checksum)?;
+            .as_secs()
+            .encode(writer)?;
+        self.body_len.encode(writer)?;
+        self.checksum.encode(writer)?;
         Ok(())
     }
 }
@@ -191,24 +202,16 @@ impl Encode for LogRecordHeader {
 /// Returns [`CodecError::UnknownDiscriminant`] if the `record_type` byte does
 /// not match any [`LogRecordType`] variant.  Propagates any other I/O error.
 impl Decode for LogRecordHeader {
-    fn decode<R: Read>(reader: &mut R) -> Result<Self, CodecError> {
-        let record_type =
-            LogRecordType::try_from(reader.read_u8()?).map_err(CodecError::UnknownDiscriminant)?;
-        let lsn = Lsn::decode(reader)?;
-        let prev_lsn = Lsn::decode(reader)?;
-        let tid = TransactionId::decode(reader)?;
-        let secs = reader.read_le_u64()?;
-        let timestamp = UNIX_EPOCH + std::time::Duration::from_secs(secs);
-        let body_len = reader.read_le_u32()?;
-        let checksum = reader.read_le_u32()?;
+    fn decode<R: Read>(r: &mut R) -> Result<Self, CodecError> {
         Ok(Self {
-            lsn,
-            prev_lsn,
-            tid,
-            record_type,
-            timestamp,
-            body_len,
-            checksum,
+            record_type: LogRecordType::try_from(u8::decode(r)?)
+                .map_err(CodecError::UnknownDiscriminant)?,
+            lsn: Lsn::decode(r)?,
+            prev_lsn: Lsn::decode(r)?,
+            tid: TransactionId::decode(r)?,
+            timestamp: UNIX_EPOCH + std::time::Duration::from_secs(u64::decode(r)?),
+            body_len: u32::decode(r)?,
+            checksum: u32::decode(r)?,
         })
     }
 }
@@ -319,61 +322,40 @@ impl LogRecordBody {
 ///
 /// Propagates any I/O error from `writer`.
 impl Encode for LogRecordBody {
-    fn encode<W: Write>(&self, writer: &mut W) -> Result<(), CodecError> {
+    fn encode<W: Write>(&self, w: &mut W) -> Result<(), CodecError> {
         match self {
             Self::Begin | Self::Commit | Self::Abort | Self::CheckpointBegin | Self::End => {}
 
             Self::Savepoint { name } => {
-                let bytes = name.as_bytes();
-                writer.write_le_u32(Self::encoded_len_u32(bytes.len())?)?;
-                writer.write_all(bytes)?;
+                name.encode(w)?;
             }
 
             Self::Update {
                 page_id,
                 before,
                 after,
-            } => {
-                page_id.encode(writer)?;
-                Self::encode_image(writer, Some(before))?;
-                Self::encode_image(writer, Some(after))?;
             }
-
-            Self::Insert {
+            | Self::Insert {
+                page_id,
+                before,
+                after,
+            }
+            | Self::Delete {
                 page_id,
                 before,
                 after,
             } => {
-                page_id.encode(writer)?;
-                Self::encode_image(writer, Some(before))?;
-                Self::encode_image(writer, Some(after))?;
-            }
-
-            Self::Delete {
-                page_id,
-                before,
-                after,
-            } => {
-                page_id.encode(writer)?;
-                Self::encode_image(writer, Some(before))?;
-                Self::encode_image(writer, Some(after))?;
+                page_id.encode(w)?;
+                before.encode(w)?;
+                after.encode(w)?;
             }
 
             Self::CheckpointEnd {
                 att_snapshot,
                 dpt_snapshot,
             } => {
-                writer.write_le_u32(Self::encoded_len_u32(att_snapshot.len())?)?;
-                for (tid, lsn, status) in att_snapshot {
-                    tid.encode(writer)?;
-                    lsn.encode(writer)?;
-                    writer.write_u8(*status as u8)?;
-                }
-                writer.write_le_u32(Self::encoded_len_u32(dpt_snapshot.len())?)?;
-                for (page_id, rec_lsn) in dpt_snapshot {
-                    page_id.encode(writer)?;
-                    rec_lsn.encode(writer)?;
-                }
+                att_snapshot.encode(w)?;
+                dpt_snapshot.encode(w)?;
             }
 
             Self::Clr {
@@ -381,9 +363,9 @@ impl Encode for LogRecordBody {
                 after,
                 undo_next_lsn,
             } => {
-                page_id.encode(writer)?;
-                Self::encode_image(writer, Some(after))?;
-                undo_next_lsn.encode(writer)?;
+                page_id.encode(w)?;
+                after.encode(w)?;
+                undo_next_lsn.encode(w)?;
             }
         }
         Ok(())
@@ -391,50 +373,6 @@ impl Encode for LogRecordBody {
 }
 
 impl LogRecordBody {
-    /// Converts a `usize` length to `u32`, returning an error if it doesn't fit.
-    ///
-    /// All length prefixes in the WAL encoding are `u32 LE`. This helper makes
-    /// every size-check a single `?` instead of an inline `try_from` block.
-    fn encoded_len_u32(n: usize) -> Result<u32, CodecError> {
-        u32::try_from(n).map_err(|_| {
-            std::io::Error::new(
-                std::io::ErrorKind::InvalidInput,
-                "encoded length exceeds u32::MAX",
-            )
-            .into()
-        })
-    }
-
-    /// Writes a length-prefixed byte image to `writer`.
-    ///
-    /// The on-disk format is: `u32 LE length`, then `length` raw bytes.
-    /// If `image` is `None` a zero-length prefix is written and no bytes follow —
-    /// this is used for variants that have no payload image.
-    fn encode_image<W: Write>(writer: &mut W, image: Option<&[u8]>) -> Result<(), CodecError> {
-        match image {
-            Some(img) => {
-                writer.write_le_u32(Self::encoded_len_u32(img.len())?)?;
-                writer.write_all(img)?;
-            }
-            None => writer.write_le_u32(0)?,
-        }
-        Ok(())
-    }
-
-    /// Reads a length-prefixed byte image from `reader`.
-    ///
-    /// Returns `None` when the stored length prefix is zero (the counterpart of
-    /// writing `None` via [`encode_image`]), or `Some(bytes)` otherwise.
-    fn decode_image<R: Read>(reader: &mut R) -> Result<Option<Vec<u8>>, CodecError> {
-        let len = reader.read_le_u32()? as usize;
-        if len == 0 {
-            return Ok(None);
-        }
-        let mut buf = vec![0u8; len];
-        reader.read_exact(&mut buf)?;
-        Ok(Some(buf))
-    }
-
     /// Reads a body from `reader` using `record_type` to select the right layout.
     ///
     /// This is called by [`LogRecord`]'s [`Decode`] impl after the header has
@@ -444,72 +382,52 @@ impl LogRecordBody {
     /// # Errors
     ///
     /// Propagates any I/O error from `reader`.
-    fn decode_for_type<R: Read>(
-        record_type: LogRecordType,
-        reader: &mut R,
-    ) -> Result<Self, CodecError> {
-        match record_type {
-            LogRecordType::Begin => Ok(Self::Begin),
-            LogRecordType::Commit => Ok(Self::Commit),
-            LogRecordType::Abort => Ok(Self::Abort),
-            LogRecordType::End => Ok(Self::End),
-            LogRecordType::Savepoint => {
-                let len = reader.read_le_u32()? as usize;
-                let mut buf = vec![0u8; len];
-                reader.read_exact(&mut buf)?;
-                Ok(Self::Savepoint {
-                    name: std::str::from_utf8(&buf)?.to_owned(),
-                })
-            }
-            LogRecordType::CheckpointBegin => Ok(Self::CheckpointBegin),
+    fn decode_for_type<R: Read>(record_type: LogRecordType, r: &mut R) -> Result<Self, CodecError> {
+        Ok(match record_type {
+            LogRecordType::Begin => Self::Begin,
+            LogRecordType::Commit => Self::Commit,
+            LogRecordType::Abort => Self::Abort,
+            LogRecordType::End => Self::End,
+            LogRecordType::Savepoint => Self::Savepoint {
+                name: String::decode(r)?,
+            },
+            LogRecordType::CheckpointBegin => Self::CheckpointBegin,
 
-            LogRecordType::Update => Ok(Self::Update {
-                page_id: PageId::decode(reader)?,
-                before: Self::decode_image(reader)?.unwrap_or_default(),
-                after: Self::decode_image(reader)?.unwrap_or_default(),
-            }),
-
-            LogRecordType::Insert => Ok(Self::Insert {
-                page_id: PageId::decode(reader)?,
-                before: Self::decode_image(reader)?.unwrap_or_default(),
-                after: Self::decode_image(reader)?.unwrap_or_default(),
-            }),
-
-            LogRecordType::Delete => Ok(Self::Delete {
-                page_id: PageId::decode(reader)?,
-                before: Self::decode_image(reader)?.unwrap_or_default(),
-                after: Self::decode_image(reader)?.unwrap_or_default(),
-            }),
-
-            LogRecordType::Clr => Ok(Self::Clr {
-                page_id: PageId::decode(reader)?,
-                after: Self::decode_image(reader)?.unwrap_or_default(),
-                undo_next_lsn: Lsn::decode(reader)?,
-            }),
-
-            LogRecordType::CheckpointEnd => {
-                let att_count = reader.read_le_u32()? as usize;
-                let mut att_snapshot = Vec::with_capacity(att_count);
-                for _ in 0..att_count {
-                    let tid = TransactionId::decode(reader)?;
-                    let lsn = Lsn::decode(reader)?;
-                    let status = TxnStatus::try_from(reader.read_u8()?)
-                        .map_err(CodecError::UnknownDiscriminant)?;
-                    att_snapshot.push((tid, lsn, status));
+            LogRecordType::Update | LogRecordType::Insert | LogRecordType::Delete => {
+                let page_id = PageId::decode(r)?;
+                let before = Vec::<u8>::decode(r)?;
+                let after = Vec::<u8>::decode(r)?;
+                match record_type {
+                    LogRecordType::Update => Self::Update {
+                        page_id,
+                        before,
+                        after,
+                    },
+                    LogRecordType::Insert => Self::Insert {
+                        page_id,
+                        before,
+                        after,
+                    },
+                    LogRecordType::Delete => Self::Delete {
+                        page_id,
+                        before,
+                        after,
+                    },
+                    _ => unreachable!(),
                 }
-                let dpt_count = reader.read_le_u32()? as usize;
-                let mut dpt_snapshot = Vec::with_capacity(dpt_count);
-                for _ in 0..dpt_count {
-                    let page_id = PageId::decode(reader)?;
-                    let rec_lsn = Lsn::decode(reader)?;
-                    dpt_snapshot.push((page_id, rec_lsn));
-                }
-                Ok(Self::CheckpointEnd {
-                    att_snapshot,
-                    dpt_snapshot,
-                })
             }
-        }
+
+            LogRecordType::Clr => Self::Clr {
+                page_id: PageId::decode(r)?,
+                after: Vec::<u8>::decode(r)?,
+                undo_next_lsn: Lsn::decode(r)?,
+            },
+
+            LogRecordType::CheckpointEnd => Self::CheckpointEnd {
+                att_snapshot: Vec::<(TransactionId, Lsn, TxnStatus)>::decode(r)?,
+                dpt_snapshot: Vec::<(PageId, Lsn)>::decode(r)?,
+            },
+        })
     }
 }
 
@@ -558,13 +476,16 @@ impl LogRecord {
             body.encode(&mut buf)?;
             buf
         };
+        let body_len = u32::try_from(body_bytes.len())
+            .map_err(|_| CodecError::numeric_does_not_fit(body_bytes.len(), "u32"))?;
+
         let header = LogRecordHeader {
             lsn,
             prev_lsn,
             tid,
             record_type: body.record_type(),
             timestamp: SystemTime::now(),
-            body_len: LogRecordBody::encoded_len_u32(body_bytes.len())?,
+            body_len,
             checksum: crc32fast::hash(&body_bytes),
         };
         Ok(Self { header, body })
@@ -584,16 +505,16 @@ impl Encode for LogRecord {
     }
 }
 
-/// Reads a full record (header then body) from `reader`.
+/// Reads a full record (header then body) from `r`.
 ///
 /// # Errors
 ///
 /// Returns [`CodecError::UnknownDiscriminant`] if the header's `record_type`
 /// byte is unrecognized.  Propagates any other I/O error.
 impl Decode for LogRecord {
-    fn decode<R: Read>(reader: &mut R) -> Result<Self, CodecError> {
-        let header = LogRecordHeader::decode(reader)?;
-        let body = LogRecordBody::decode_for_type(header.record_type, reader)?;
+    fn decode<R: Read>(r: &mut R) -> Result<Self, CodecError> {
+        let header = LogRecordHeader::decode(r)?;
+        let body = LogRecordBody::decode_for_type(header.record_type, r)?;
         Ok(Self { header, body })
     }
 }
@@ -910,23 +831,6 @@ mod tests {
 
         // checksum must match a freshly computed CRC over those bytes
         assert_eq!(rec.header.checksum, crc32fast::hash(&body_buf));
-    }
-
-    #[test]
-    fn encode_decode_image_empty() {
-        let mut buf = Vec::new();
-        LogRecordBody::encode_image(&mut buf, None).unwrap();
-        let result = LogRecordBody::decode_image(&mut Cursor::new(buf)).unwrap();
-        assert!(result.is_none());
-    }
-
-    #[test]
-    fn encode_decode_image_nonempty() {
-        let data = vec![1u8, 2, 3, 255];
-        let mut buf = Vec::new();
-        LogRecordBody::encode_image(&mut buf, Some(&data)).unwrap();
-        let result = LogRecordBody::decode_image(&mut Cursor::new(buf)).unwrap();
-        assert_eq!(result, Some(data));
     }
 
     #[test]

@@ -430,13 +430,13 @@ mod tests {
     }
 
     fn entry(k: i32, slot: u16) -> IndexEntry {
-        IndexEntry::new(CompositeKey::single(Value::Int32(k)), rid(1, 0, slot))
+        IndexEntry::new(CompositeKey::single(Value::int32(k)), rid(1, 0, slot))
     }
 
     fn name_key(last: &str, first: &str) -> CompositeKey {
         CompositeKey::new(vec![
-            Value::String(last.into()),
-            Value::String(first.into()),
+            Value::varchar(last.into()),
+            Value::varchar(first.into()),
         ])
     }
 
@@ -531,8 +531,8 @@ mod tests {
     #[test]
     fn internal_page_roundtrips_with_separators() {
         let separators = vec![
-            Separator::new(CompositeKey::single(Value::Int32(40)), PageNumber::new(11)),
-            Separator::new(CompositeKey::single(Value::Int32(70)), PageNumber::new(12)),
+            Separator::new(CompositeKey::single(Value::int32(40)), PageNumber::new(11)),
+            Separator::new(CompositeKey::single(Value::int32(70)), PageNumber::new(12)),
         ];
         let internal = InternalNode::new(
             Some(PageNumber::new(1)),
@@ -591,7 +591,7 @@ mod tests {
             vec![Type::Int32],
             PageNumber::new(10),
             vec![Separator::new(
-                CompositeKey::single(Value::Int32(40)),
+                CompositeKey::single(Value::int32(40)),
                 PageNumber::new(11),
             )],
         ));
@@ -696,8 +696,8 @@ mod tests {
     #[test]
     fn internal_used_bytes_matches_actual_encoded_length() {
         let internal = InternalNode::new(None, vec![Type::Int32], PageNumber::new(10), vec![
-            Separator::new(CompositeKey::single(Value::Int32(40)), PageNumber::new(11)),
-            Separator::new(CompositeKey::single(Value::Int32(70)), PageNumber::new(12)),
+            Separator::new(CompositeKey::single(Value::int32(40)), PageNumber::new(11)),
+            Separator::new(CompositeKey::single(Value::int32(70)), PageNumber::new(12)),
         ]);
         let mut h_buf = Vec::new();
         internal.page.header.encode(&mut h_buf).unwrap();
@@ -712,7 +712,7 @@ mod tests {
     #[test]
     fn internal_has_space_for_separator_until_full() {
         let mut internal = InternalNode::new(None, vec![Type::Int32], PageNumber::new(0), vec![]);
-        let sep = CompositeKey::single(Value::Int32(0));
+        let sep = CompositeKey::single(Value::int32(0));
         let mut count = 0;
         while internal.has_space_for_separator(&sep) {
             internal

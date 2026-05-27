@@ -866,8 +866,8 @@ mod tests {
         assert!(id.default.is_none());
 
         assert_eq!(t.columns[1].col_type, Type::Text);
-        assert_eq!(t.columns[2].default, Some(Value::Int64(0)));
-        assert_eq!(t.columns[3].default, Some(Value::Bool(true)));
+        assert_eq!(t.columns[2].default, Some(Value::int64(0)));
+        assert_eq!(t.columns[3].default, Some(Value::bool(true)));
     }
 
     #[test]
@@ -1071,7 +1071,7 @@ mod tests {
         let Statement::CreateTable(t) = stmt else {
             panic!("expected CreateTable");
         };
-        assert_eq!(t.columns[0].default, Some(Value::String("hi".to_string())));
+        assert_eq!(t.columns[0].default, Some(Value::varchar("hi".to_string())));
     }
 
     #[test]
@@ -1080,7 +1080,7 @@ mod tests {
         let Statement::CreateTable(t) = stmt else {
             panic!("expected CreateTable");
         };
-        assert_eq!(t.columns[0].default, Some(Value::Null));
+        assert_eq!(t.columns[0].default, Some(Value::null()));
     }
 
     // --- error paths: parse_create ---
@@ -1368,7 +1368,7 @@ mod tests {
         };
         assert_eq!(col.name, "age");
         assert!(!col.nullable);
-        assert_eq!(col.default, Some(Value::Int64(0)));
+        assert_eq!(col.default, Some(Value::int64(0)));
     }
 
     #[test]
@@ -1561,7 +1561,7 @@ mod tests {
             panic!("expected SetDefault");
         };
         assert_eq!(column, "age");
-        assert_eq!(value, Value::Int64(0));
+        assert_eq!(value, Value::int64(0));
     }
 
     #[test]
@@ -1574,7 +1574,7 @@ mod tests {
             panic!("expected SetDefault");
         };
         assert_eq!(column, "status");
-        assert_eq!(value, Value::String("active".to_string()));
+        assert_eq!(value, Value::varchar("active".to_string()));
     }
 
     #[test]

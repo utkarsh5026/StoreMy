@@ -377,7 +377,7 @@ mod tests {
         execution::scan::SeqScan,
         heap::file::HeapFile,
         tuple::{Field, Tuple, TupleSchema},
-        types::{Type, Value},
+        types::{FixedValue, Type, Value},
         wal::writer::Wal,
     };
 
@@ -390,7 +390,7 @@ mod tests {
     }
 
     fn tup(a: i32, b: i32) -> Tuple {
-        Tuple::new(vec![Value::Int32(a), Value::Int32(b)])
+        Tuple::new(vec![Value::int32(a), Value::int32(b)])
     }
 
     struct HeapHarness {
@@ -458,7 +458,10 @@ mod tests {
         let mut v: Vec<(i32, i32)> = tuples
             .iter()
             .map(|t| match (t.get(0), t.get(1)) {
-                (Some(Value::Int32(a)), Some(Value::Int32(b))) => (*a, *b),
+                (
+                    Some(Value::Fixed(FixedValue::Int32(a))),
+                    Some(Value::Fixed(FixedValue::Int32(b))),
+                ) => (*a, *b),
                 other => panic!("unexpected tuple contents: {other:?}"),
             })
             .collect();

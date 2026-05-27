@@ -5,7 +5,7 @@
 
 use crate::{
     Lsn, PageNumber,
-    codec::{CodecError, Decode, Encode, ReadLeExt, WriteLeExt},
+    codec::{CodecError, Decode, Encode},
     index::{CompositeKey, IndexEntry, PageKind},
     primitives::RecordId,
     storage::{PAGE_SIZE, TypedPage, UNIVERSAL_HEADER_SIZE},
@@ -45,14 +45,13 @@ impl From<BucketNumber> for PageNumber {
 /// length prefix, no discriminant.
 impl Encode for BucketNumber {
     fn encode<W: std::io::Write>(&self, writer: &mut W) -> Result<(), CodecError> {
-        writer.write_le_u32(self.0)?;
-        Ok(())
+        self.0.encode(writer)
     }
 }
 
 impl Decode for BucketNumber {
     fn decode<R: std::io::Read>(reader: &mut R) -> Result<Self, CodecError> {
-        Ok(Self(reader.read_le_u32()?))
+        Ok(Self(u32::decode(reader)?))
     }
 }
 
@@ -181,8 +180,8 @@ mod tests {
 
     fn name_key(last: &str, first: &str) -> CompositeKey {
         CompositeKey::new(vec![
-            Value::String(last.into()),
-            Value::String(first.into()),
+            Value::varchar(last.into()),
+            Value::varchar(first.into()),
         ])
     }
 
@@ -203,7 +202,7 @@ mod tests {
     #[test]
     fn used_bytes_grows_with_each_entry() {
         let mut b = HashBucket::new_bucket(BucketNumber(0));
-        let entry = IndexEntry::new(k(Value::Int32(7)), rid(1, 0, 0));
+        let entry = IndexEntry::new(k(Value::int32(7)), rid(1, 0, 0));
         let before = b.used_bytes();
         b.push(entry.clone());
         assert_eq!(b.used_bytes(), before + entry.encoded_size());
@@ -212,7 +211,7 @@ mod tests {
     #[test]
     fn has_space_for_returns_false_when_full() {
         let mut b = HashBucket::new_bucket(BucketNumber(0));
-        let entry = IndexEntry::new(k(Value::Int32(0)), rid(1, 0, 0));
+        let entry = IndexEntry::new(k(Value::int32(0)), rid(1, 0, 0));
         let per_entry = entry.encoded_size();
 
         // Pack the bucket until adding one more entry would overflow.
@@ -241,9 +240,9 @@ mod tests {
     fn page_codec_roundtrip_with_entries_and_overflow() {
         let mut b = HashBucket::new_bucket(BucketNumber(3));
         b.header.overflow = Some(PageNumber::new(99));
-        b.push(IndexEntry::new(k(Value::Int32(1)), rid(1, 0, 0)));
+        b.push(IndexEntry::new(k(Value::int32(1)), rid(1, 0, 0)));
         b.push(IndexEntry::new(
-            k(Value::String("hello".into())),
+            k(Value::varchar("hello".into())),
             rid(1, 2, 5),
         ));
 
@@ -254,8 +253,8 @@ mod tests {
         assert_eq!(decoded.header.bucket, BucketNumber(3));
         assert_eq!(decoded.header.overflow, Some(PageNumber::new(99)));
         assert_eq!(decoded.body.len(), 2);
-        assert_eq!(decoded.body[0].key, k(Value::Int32(1)));
-        assert_eq!(decoded.body[1].key, k(Value::String("hello".into())));
+        assert_eq!(decoded.body[0].key, k(Value::int32(1)));
+        assert_eq!(decoded.body[1].key, k(Value::varchar("hello".into())));
     }
 
     #[test]
@@ -265,7 +264,7 @@ mod tests {
         let mut b = HashBucket::new_bucket(BucketNumber(0));
         b.push(IndexEntry::new(name_key("Smith", "Ada"), rid(1, 0, 0)));
         b.push(IndexEntry::new(
-            CompositeKey::new(vec![Value::Int32(7), Value::String("x".into())]),
+            CompositeKey::new(vec![Value::int32(7), Value::varchar("x".into())]),
             rid(1, 0, 1),
         ));
 

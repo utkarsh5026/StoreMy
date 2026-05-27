@@ -751,7 +751,7 @@ mod tests {
                 false,
                 AlterAction::SetDefault {
                     column: "name".try_into().unwrap(),
-                    value: Value::String("anon".to_string()),
+                    value: Value::varchar("anon".to_string()),
                 },
             )))
             .unwrap();

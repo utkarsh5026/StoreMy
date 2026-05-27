@@ -485,7 +485,7 @@ impl Catalog {
         target_id: FileId,
     ) -> Result<(), CatalogError> {
         let field = table.table_id_field();
-        let target = Value::Uint64(u64::from(target_id));
+        let target = Value::uint64(u64::from(target_id));
         let heap = self.get_system_heap(table)?;
         let tid = txn.transaction_id();
         heap.delete_if(tid, |t| t.get(field).is_some_and(|v| v == &target))
@@ -780,9 +780,9 @@ mod tests {
 
         let heap = catalog.system.get(SystemTable::Tables).unwrap();
         let tuple = Tuple::new(vec![
-            Value::Uint64(42),
-            Value::String("users".into()),
-            Value::String("/data/users.dat".into()),
+            Value::uint64(42),
+            Value::varchar("users".into()),
+            Value::varchar("/data/users.dat".into()),
         ]);
 
         let insert_txn = txn_mgr.begin().unwrap();
@@ -809,21 +809,21 @@ mod tests {
         let heap = catalog.system.get(SystemTable::Columns).unwrap();
         let tuples = vec![
             Tuple::new(vec![
-                Value::Uint64(1),
-                Value::String("id".into()),
-                Value::Uint32(3), // Type::Int64
-                Value::Uint32(0),
-                Value::Bool(false),
-                Value::Bool(false), // is_dropped
+                Value::uint64(1),
+                Value::varchar("id".into()),
+                Value::uint32(3), // Type::Int64
+                Value::uint32(0),
+                Value::bool(false),
+                Value::bool(false), // is_dropped
                 Value::Null,        // missing_default_value
             ]),
             Tuple::new(vec![
-                Value::Uint64(1),
-                Value::String("name".into()),
-                Value::Uint32(5), // Type::String
-                Value::Uint32(1),
-                Value::Bool(true),
-                Value::Bool(false), // is_dropped
+                Value::uint64(1),
+                Value::varchar("name".into()),
+                Value::uint32(5), // Type::String
+                Value::uint32(1),
+                Value::bool(true),
+                Value::bool(false), // is_dropped
                 Value::Null,        // missing_default_value
             ]),
         ];
@@ -854,12 +854,12 @@ mod tests {
         let heap = catalog.system.get(SystemTable::Columns).unwrap();
         // Invalid: column_type 999 has no Type variant
         let bad_tuple = Tuple::new(vec![
-            Value::Uint64(1),
-            Value::String("col".into()),
-            Value::Uint32(999), // no such Type variant
-            Value::Uint32(0),
-            Value::Bool(false),
-            Value::Bool(false),
+            Value::uint64(1),
+            Value::varchar("col".into()),
+            Value::uint32(999), // no such Type variant
+            Value::uint32(0),
+            Value::bool(false),
+            Value::bool(false),
             Value::Null,
         ]);
 

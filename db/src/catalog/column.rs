@@ -903,7 +903,7 @@ mod tests {
 
         let txn2 = txn_mgr.begin().unwrap();
         catalog
-            .set_column_default(&txn2, file_id, "name", Value::String("anon".into()))
+            .set_column_default(&txn2, file_id, "name", Value::varchar("anon".into()))
             .unwrap();
         let info = catalog.get_table_info(&txn2, "t").unwrap();
         txn2.commit().unwrap();
@@ -915,7 +915,7 @@ mod tests {
             .expect("column 'name' must still exist");
         assert_eq!(
             field.missing_default_value,
-            Some(Value::String("anon".into())),
+            Some(Value::varchar("anon".into())),
             "default must be visible immediately, got: {:?}",
             field.missing_default_value
         );
@@ -949,7 +949,7 @@ mod tests {
 
         let txn = txn_mgr.begin().unwrap();
         let mut name_field = Field::new("name", Type::String).unwrap();
-        let _ = name_field.set_missing_default_value(Value::String("anon".into()));
+        let _ = name_field.set_missing_default_value(Value::varchar("anon".into()));
         let schema = TupleSchema::new(vec![
             Field::new("id", Type::Uint64).unwrap().not_null(),
             name_field,

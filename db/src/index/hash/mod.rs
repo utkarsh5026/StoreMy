@@ -516,9 +516,9 @@ mod tests {
         let fx = make_index(4, vec![Type::Int32]);
         let txn = begin(&fx.wal, 1);
         let r = rid(1, 10, 3);
-        fx.index.insert(txn, &k(Value::Int32(42)), r).unwrap();
+        fx.index.insert(txn, &k(Value::int32(42)), r).unwrap();
 
-        let found = fx.index.search(txn, &k(Value::Int32(42))).unwrap();
+        let found = fx.index.search(txn, &k(Value::int32(42))).unwrap();
         assert_eq!(found, vec![r]);
     }
 
@@ -526,7 +526,7 @@ mod tests {
     fn search_missing_key_returns_empty() {
         let fx = make_index(4, vec![Type::Int32]);
         let txn = begin(&fx.wal, 1);
-        let found = fx.index.search(txn, &k(Value::Int32(999))).unwrap();
+        let found = fx.index.search(txn, &k(Value::int32(999))).unwrap();
         assert!(found.is_empty());
     }
 
@@ -535,9 +535,9 @@ mod tests {
         let fx = make_index(4, vec![Type::Int32]);
         let txn = begin(&fx.wal, 1);
         let r = rid(1, 0, 0);
-        fx.index.insert(txn, &k(Value::Int32(1)), r).unwrap();
+        fx.index.insert(txn, &k(Value::int32(1)), r).unwrap();
 
-        let err = fx.index.insert(txn, &k(Value::Int32(1)), r).unwrap_err();
+        let err = fx.index.insert(txn, &k(Value::int32(1)), r).unwrap_err();
         assert!(matches!(err, IndexError::DuplicateEntry));
     }
 
@@ -547,10 +547,10 @@ mod tests {
         let txn = begin(&fx.wal, 1);
         let rids = [rid(1, 0, 0), rid(1, 0, 1), rid(1, 1, 0)];
         for r in &rids {
-            fx.index.insert(txn, &k(Value::Int32(7)), *r).unwrap();
+            fx.index.insert(txn, &k(Value::int32(7)), *r).unwrap();
         }
 
-        let mut found = fx.index.search(txn, &k(Value::Int32(7))).unwrap();
+        let mut found = fx.index.search(txn, &k(Value::int32(7))).unwrap();
         found.sort_by_key(|r| (r.page_no.0, r.slot_id.0));
         assert_eq!(found, rids);
     }
@@ -560,11 +560,11 @@ mod tests {
         let fx = make_index(4, vec![Type::Int32]);
         let txn = begin(&fx.wal, 1);
         let r = rid(1, 0, 0);
-        fx.index.insert(txn, &k(Value::Int32(5)), r).unwrap();
-        fx.index.delete(txn, &k(Value::Int32(5)), r).unwrap();
+        fx.index.insert(txn, &k(Value::int32(5)), r).unwrap();
+        fx.index.delete(txn, &k(Value::int32(5)), r).unwrap();
         assert!(
             fx.index
-                .search(txn, &k(Value::Int32(5)))
+                .search(txn, &k(Value::int32(5)))
                 .unwrap()
                 .is_empty()
         );
@@ -576,7 +576,7 @@ mod tests {
         let txn = begin(&fx.wal, 1);
         let err = fx
             .index
-            .delete(txn, &k(Value::Int32(123)), rid(1, 0, 0))
+            .delete(txn, &k(Value::int32(123)), rid(1, 0, 0))
             .unwrap_err();
         assert!(matches!(err, IndexError::NotFound));
     }
@@ -587,11 +587,11 @@ mod tests {
         let txn = begin(&fx.wal, 1);
         let r1 = rid(1, 0, 0);
         let r2 = rid(1, 0, 1);
-        fx.index.insert(txn, &k(Value::Int32(9)), r1).unwrap();
-        fx.index.insert(txn, &k(Value::Int32(9)), r2).unwrap();
+        fx.index.insert(txn, &k(Value::int32(9)), r1).unwrap();
+        fx.index.insert(txn, &k(Value::int32(9)), r2).unwrap();
 
-        fx.index.delete(txn, &k(Value::Int32(9)), r1).unwrap();
-        let remaining = fx.index.search(txn, &k(Value::Int32(9))).unwrap();
+        fx.index.delete(txn, &k(Value::int32(9)), r1).unwrap();
+        let remaining = fx.index.search(txn, &k(Value::int32(9))).unwrap();
         assert_eq!(remaining, vec![r2]);
     }
 
@@ -601,7 +601,7 @@ mod tests {
         let txn = begin(&fx.wal, 1);
         let err = fx
             .index
-            .insert(txn, &k(Value::String("nope".into())), rid(1, 0, 0))
+            .insert(txn, &k(Value::varchar("nope".into())), rid(1, 0, 0))
             .unwrap_err();
         assert!(matches!(err, IndexError::KeyTypeMismatch { .. }));
     }
@@ -612,7 +612,7 @@ mod tests {
         let txn = begin(&fx.wal, 1);
         let err = fx
             .index
-            .search(txn, &k(Value::String("nope".into())))
+            .search(txn, &k(Value::varchar("nope".into())))
             .unwrap_err();
         assert!(matches!(err, IndexError::KeyTypeMismatch { .. }));
     }
@@ -708,7 +708,7 @@ mod tests {
         for i in 0..n {
             let slot = u16::try_from(i).expect("test key must fit into RID slot");
             fx.index
-                .insert(txn, &k(Value::Int32(i)), rid(1, 0, slot))
+                .insert(txn, &k(Value::int32(i)), rid(1, 0, slot))
                 .unwrap();
         }
 
@@ -720,7 +720,7 @@ mod tests {
         // Spot-check that entries from both ends of the chain are findable.
         for i in [0, 100, 250, n - 1] {
             let slot = u16::try_from(i).expect("test key must fit into RID slot");
-            let found = fx.index.search(txn, &k(Value::Int32(i))).unwrap();
+            let found = fx.index.search(txn, &k(Value::int32(i))).unwrap();
             assert_eq!(found, vec![rid(1, 0, slot)], "missing key {i}");
         }
     }
@@ -732,16 +732,16 @@ mod tests {
         for i in 0..300 {
             let slot = u16::try_from(i).expect("test key must fit into RID slot");
             fx.index
-                .insert(txn, &k(Value::Int32(i)), rid(1, 0, slot))
+                .insert(txn, &k(Value::int32(i)), rid(1, 0, slot))
                 .unwrap();
         }
         // A late key will live on an overflow page.
         fx.index
-            .delete(txn, &k(Value::Int32(290)), rid(1, 0, 290))
+            .delete(txn, &k(Value::int32(290)), rid(1, 0, 290))
             .unwrap();
         assert!(
             fx.index
-                .search(txn, &k(Value::Int32(290)))
+                .search(txn, &k(Value::int32(290)))
                 .unwrap()
                 .is_empty()
         );
@@ -754,20 +754,20 @@ mod tests {
         for i in 0..20 {
             let slot = u16::try_from(i).expect("test key must fit into RID slot");
             fx.index
-                .insert(txn, &k(Value::Int32(i)), rid(1, 0, slot))
+                .insert(txn, &k(Value::int32(i)), rid(1, 0, slot))
                 .unwrap();
         }
         let found = fx
             .index
-            .range_search(txn, &k(Value::Int32(5)), &k(Value::Int32(10)))
+            .range_search(txn, &k(Value::int32(5)), &k(Value::int32(10)))
             .unwrap();
         assert_eq!(found.len(), 6, "expected keys 5..=10 inclusive");
     }
 
     fn name_key(last: &str, first: &str) -> CompositeKey {
         CompositeKey::new(vec![
-            Value::String(last.into()),
-            Value::String(first.into()),
+            Value::varchar(last.into()),
+            Value::varchar(first.into()),
         ])
     }
 
@@ -794,7 +794,7 @@ mod tests {
         let fx = make_index(4, vec![Type::String, Type::String]);
         let txn = begin(&fx.wal, 1);
 
-        let single = CompositeKey::single(Value::String("Smith".into()));
+        let single = CompositeKey::single(Value::varchar("Smith".into()));
         let err = fx.index.search(txn, &single).unwrap_err();
         assert!(matches!(err, IndexError::KeyArityMismatch {
             expected: 2,
@@ -809,8 +809,8 @@ mod tests {
 
         // Right arity (2), wrong type at position 1: String where Int32 expected.
         let bad = CompositeKey::new(vec![
-            Value::String("Smith".into()),
-            Value::String("not-an-int".into()),
+            Value::varchar("Smith".into()),
+            Value::varchar("not-an-int".into()),
         ]);
         let err = fx.index.insert(txn, &bad, rid(1, 0, 0)).unwrap_err();
         match err {
@@ -825,8 +825,8 @@ mod tests {
 
     #[test]
     fn composite_key_column_order_matters() {
-        let ab = CompositeKey::new(vec![Value::String("a".into()), Value::String("b".into())]);
-        let ba = CompositeKey::new(vec![Value::String("b".into()), Value::String("a".into())]);
+        let ab = CompositeKey::new(vec![Value::varchar("a".into()), Value::varchar("b".into())]);
+        let ba = CompositeKey::new(vec![Value::varchar("b".into()), Value::varchar("a".into())]);
         assert_ne!(ab, ba);
 
         // And end-to-end: insert (a,b), search (b,a), get nothing.

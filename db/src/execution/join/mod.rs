@@ -208,11 +208,11 @@ mod tests {
     use super::test_utils::*;
 
     fn tup(a: i32, b: i32) -> Tuple {
-        Tuple::new(vec![Value::Int32(a), Value::Int32(b)])
+        Tuple::new(vec![Value::int32(a), Value::int32(b)])
     }
 
     fn tup_null_a(b: i32) -> Tuple {
-        Tuple::new(vec![Value::Null, Value::Int32(b)])
+        Tuple::new(vec![Value::Null, Value::int32(b)])
     }
 
     #[test]

@@ -18,8 +18,8 @@ fn default_values_fills_every_column_from_schema_defaults() {
 
     let rows = db.scan_all("settings");
     assert_eq!(rows.len(), 1);
-    assert_eq!(rows[0].get(0), Some(&Value::String("dark".into())));
-    assert_eq!(rows[0].get(1), Some(&Value::Int64(14)));
+    assert_eq!(rows[0].get(0), Some(&Value::varchar("dark".into())));
+    assert_eq!(rows[0].get(1), Some(&Value::int64(14)));
 }
 
 #[test]
@@ -32,7 +32,7 @@ fn default_values_uses_null_for_nullable_column_without_default() {
 
     let rows = db.scan_all("t");
     assert_eq!(rows.len(), 1);
-    assert_eq!(rows[0].get(0), Some(&Value::Int64(0)));
+    assert_eq!(rows[0].get(0), Some(&Value::int64(0)));
     assert_eq!(rows[0].get(1), Some(&Value::Null));
 }
 
@@ -76,9 +76,9 @@ fn default_values_works_with_mixed_types() {
 
     let rows = db.scan_all("profile");
     assert_eq!(rows.len(), 1);
-    assert_eq!(rows[0].get(0), Some(&Value::Bool(true)));
-    assert_eq!(rows[0].get(1), Some(&Value::Float64(1.5)));
-    assert_eq!(rows[0].get(2), Some(&Value::String("anon".into())));
+    assert_eq!(rows[0].get(0), Some(&Value::bool(true)));
+    assert_eq!(rows[0].get(1), Some(&Value::float64(1.5)));
+    assert_eq!(rows[0].get(2), Some(&Value::varchar("anon".into())));
 }
 
 // ── Partial named-column INSERT ───────────────────────────────────────────────
@@ -99,9 +99,9 @@ fn partial_insert_omitting_defaulted_columns_uses_their_defaults() {
 
     let rows = db.scan_all("users");
     assert_eq!(rows.len(), 1);
-    assert_eq!(rows[0].get(0), Some(&Value::Int64(42)));
-    assert_eq!(rows[0].get(1), Some(&Value::String("viewer".into())));
-    assert_eq!(rows[0].get(2), Some(&Value::Bool(true)));
+    assert_eq!(rows[0].get(0), Some(&Value::int64(42)));
+    assert_eq!(rows[0].get(1), Some(&Value::varchar("viewer".into())));
+    assert_eq!(rows[0].get(2), Some(&Value::bool(true)));
 }
 
 #[test]
@@ -113,7 +113,7 @@ fn partial_insert_omitting_nullable_column_stores_null() {
 
     let rows = db.scan_all("t");
     assert_eq!(rows.len(), 1);
-    assert_eq!(rows[0].get(0), Some(&Value::Int64(7)));
+    assert_eq!(rows[0].get(0), Some(&Value::int64(7)));
     assert_eq!(rows[0].get(1), Some(&Value::Null));
 }
 
@@ -126,7 +126,7 @@ fn partial_insert_explicitly_supplied_value_overrides_default() {
     db.run_ok("INSERT INTO t (id, role) VALUES (1, 'admin')");
 
     let rows = db.scan_all("t");
-    assert_eq!(rows[0].get(1), Some(&Value::String("admin".into())));
+    assert_eq!(rows[0].get(1), Some(&Value::varchar("admin".into())));
 }
 
 #[test]
@@ -152,6 +152,6 @@ fn partial_insert_multiple_rows_all_use_defaults() {
     let rows = db.scan_all("t");
     assert_eq!(rows.len(), 3);
     for row in &rows {
-        assert_eq!(row.get(1), Some(&Value::String("new".into())));
+        assert_eq!(row.get(1), Some(&Value::varchar("new".into())));
     }
 }

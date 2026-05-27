@@ -15,6 +15,7 @@ use crate::{
     primitives::{ColumnId, NonEmptyString, RecordId},
     transaction::ActiveTransaction,
     tuple::{Field, Tuple, TupleSchema},
+    types::FixedValue,
 };
 
 impl Engine<'_> {
@@ -392,9 +393,8 @@ impl Engine<'_> {
                 .map_err(|e: ExecutionError| EngineError::TypeError(e.to_string()))?;
 
             match result {
-                // NULL means the check is indeterminate — SQL treats this as passing.
-                Value::Null | Value::Bool(true) => {}
-                Value::Bool(false) => {
+                Value::Null | Value::Fixed(FixedValue::Bool(true)) => {}
+                Value::Fixed(FixedValue::Bool(false)) => {
                     return Err(ConstraintViolation::CheckViolation {
                         table: table.to_owned(),
                         constraint: name.clone(),

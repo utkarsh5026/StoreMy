@@ -377,6 +377,7 @@ impl Executor for SortMergeJoin<'_> {
 #[cfg(test)]
 mod tests {
     use super::{super::test_utils::*, SortMergeJoin};
+    use crate::types::FixedValue;
 
     #[test]
     fn test_smj_basic_equi_join() {
@@ -568,7 +569,7 @@ mod tests {
         let out = drain(&mut j);
         assert_eq!(out.len(), 3);
 
-        let is_int = |t: &&Tuple, col: usize, val: i32| matches!(t.get(col), Some(Value::Int32(v)) if *v == val);
+        let is_int = |t: &&Tuple, col: usize, val: i32| matches!(t.get(col), Some(Value::Fixed(FixedValue::Int32(v))) if *v == val);
 
         let matched = out.iter().find(|t| is_int(t, 0, 3)).unwrap();
         assert_eq!(int(matched, 2), 3);

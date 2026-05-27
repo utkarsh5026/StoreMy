@@ -3,7 +3,11 @@
 //! `SELECT` is not yet implemented in the engine, so we verify row state by
 //! scanning the underlying heap directly via [`TestDb::scan_all`].
 
-use storemy::{Value, engine::StatementResult};
+use storemy::{
+    Value,
+    engine::StatementResult,
+    types::{DynValue, FixedValue},
+};
 
 use crate::common::TestDb;
 
@@ -37,8 +41,8 @@ fn insert_single_row_is_visible_in_heap_scan() {
 
     let rows = db.scan_all("users");
     assert_eq!(rows.len(), 1);
-    assert_eq!(rows[0].get(0), Some(&Value::Int64(1)));
-    assert_eq!(rows[0].get(1), Some(&Value::String("Alice".into())));
+    assert_eq!(rows[0].get(0), Some(&Value::int32(1)));
+    assert_eq!(rows[0].get(1), Some(&Value::varchar("Alice".into())));
 }
 
 #[test]
@@ -64,8 +68,8 @@ fn insert_with_explicit_column_list() {
     );
 
     let rows = db.scan_all("t");
-    assert_eq!(rows[0].get(0), Some(&Value::Int64(42)));
-    assert_eq!(rows[0].get(1), Some(&Value::String("answer".into())));
+    assert_eq!(rows[0].get(0), Some(&Value::int32(42)));
+    assert_eq!(rows[0].get(1), Some(&Value::varchar("answer".into())));
 }
 
 #[test]
@@ -90,8 +94,8 @@ fn delete_with_where_removes_only_matching_rows() {
         .scan_all("t")
         .iter()
         .map(|t| match t.get(0) {
-            Some(Value::Int64(v)) => *v,
-            other => panic!("expected Int64, got {other:?}"),
+            Some(Value::Fixed(FixedValue::Int32(v))) => i64::from(*v),
+            other => panic!("expected Int32, got {other:?}"),
         })
         .collect();
     remaining.sort_unstable();
@@ -124,7 +128,7 @@ fn update_without_where_rewrites_all_rows() {
     assert!(
         names
             .iter()
-            .all(|v| matches!(v, Value::String(s) if s == "z"))
+            .all(|v| matches!(v, Value::Dyn(DynValue::Varchar(s)) if s == "z"))
     );
 }
 
@@ -142,11 +146,11 @@ fn update_with_where_only_touches_matching_rows() {
         .iter()
         .map(|t| {
             let id = match t.get(0) {
-                Some(Value::Int64(v)) => *v,
-                other => panic!("expected Int64, got {other:?}"),
+                Some(Value::Fixed(FixedValue::Int32(v))) => i64::from(*v),
+                other => panic!("expected Int32, got {other:?}"),
             };
             let name = match t.get(1) {
-                Some(Value::String(s)) => s.clone(),
+                Some(Value::Dyn(DynValue::Varchar(s))) => s.clone(),
                 other => panic!("expected String, got {other:?}"),
             };
             (id, name)
@@ -174,8 +178,8 @@ fn insert_then_delete_then_reinsert_keeps_consistent_state() {
         .scan_all("t")
         .iter()
         .map(|t| match t.get(0) {
-            Some(Value::Int64(v)) => *v,
-            other => panic!("expected Int64, got {other:?}"),
+            Some(Value::Fixed(FixedValue::Int32(v))) => i64::from(*v),
+            other => panic!("expected Int32, got {other:?}"),
         })
         .collect();
     ids.sort_unstable();

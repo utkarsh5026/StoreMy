@@ -529,11 +529,11 @@ mod tests {
     }
 
     fn k(v: i32) -> CompositeKey {
-        CompositeKey::single(Value::Int32(v))
+        CompositeKey::single(Value::int32(v))
     }
 
     fn ks(s: &str) -> CompositeKey {
-        CompositeKey::single(Value::String(s.into()))
+        CompositeKey::single(Value::varchar(s.into()))
     }
 
     fn make_index(key_types: Vec<Type>) -> Fixture {

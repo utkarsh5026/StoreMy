@@ -385,7 +385,7 @@ fn add_column_with_default_old_rows_see_default_value() {
     let score = rows[0].get(2).expect("index 2 must exist");
     assert_eq!(
         *score,
-        Value::Int64(42),
+        Value::int64(42),
         "old row must show the declared DEFAULT, got {score:?}"
     );
 }
@@ -426,7 +426,7 @@ fn add_column_with_default_new_rows_use_supplied_value() {
 
     assert_eq!(
         *rows[0].get(2).unwrap(),
-        Value::Int64(7),
+        Value::int64(7),
         "supplied value must win over default"
     );
 }
@@ -449,7 +449,7 @@ fn add_column_default_survives_catalog_reconstruction() {
 
     assert_eq!(
         bonus_field.missing_default_value,
-        Some(Value::Int64(100)),
+        Some(Value::int64(100)),
         "default must be stored in Field after catalog roundtrip"
     );
 }

@@ -10,6 +10,7 @@ use crate::{
     parser::statements::ReferentialAction,
     primitives::{ColumnId, NonEmptyString},
     tuple::{Field, Tuple, TupleSchema},
+    types::{DynValue, FixedValue},
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -360,14 +361,17 @@ impl ColumnRow {
 /// `None` is stored as `Value::Null`.
 fn encode_default(v: &Value) -> String {
     match v {
-        Value::Int32(n) => format!("i32:{n}"),
-        Value::Int64(n) => format!("i64:{n}"),
-        Value::Uint32(n) => format!("u32:{n}"),
-        Value::Uint64(n) => format!("u64:{n}"),
-        Value::Float64(f) => format!("f64:{f}"),
-        Value::Bool(b) => format!("bool:{b}"),
-        Value::String(s) | Value::Text(s) => format!("str:{s}"),
+        Value::Fixed(FixedValue::Int32(n)) => format!("i32:{n}"),
+        Value::Fixed(FixedValue::Int64(n)) => format!("i64:{n}"),
+        Value::Fixed(FixedValue::Uint32(n)) => format!("u32:{n}"),
+        Value::Fixed(FixedValue::Uint64(n)) => format!("u64:{n}"),
+        Value::Fixed(FixedValue::Float64(f)) => format!("f64:{f}"),
+        Value::Fixed(FixedValue::Bool(b)) => format!("bool:{b}"),
+        Value::Dyn(DynValue::Varchar(s) | DynValue::Text(s)) => format!("str:{s}"),
         Value::Null => "null".to_owned(),
+        Value::Dyn(DynValue::TextOverflow { .. }) => {
+            unreachable!("TextOverflow must be resolved before reaching catalog encoding")
+        }
     }
 }
 
@@ -384,17 +388,17 @@ fn decode_default(s: &str) -> Option<Value> {
     }
     let (tag, rest) = s.split_once(':')?;
     match tag {
-        "i32" => rest.parse::<i32>().ok().map(Value::Int32),
-        "i64" => rest.parse::<i64>().ok().map(Value::Int64),
-        "u32" => rest.parse::<u32>().ok().map(Value::Uint32),
-        "u64" => rest.parse::<u64>().ok().map(Value::Uint64),
-        "f64" => rest.parse::<f64>().ok().map(Value::Float64),
+        "i32" => rest.parse::<i32>().ok().map(Value::int32),
+        "i64" => rest.parse::<i64>().ok().map(Value::int64),
+        "u32" => rest.parse::<u32>().ok().map(Value::uint32),
+        "u64" => rest.parse::<u64>().ok().map(Value::uint64),
+        "f64" => rest.parse::<f64>().ok().map(Value::float64),
         "bool" => match rest {
-            "true" => Some(Value::Bool(true)),
-            "false" => Some(Value::Bool(false)),
+            "true" => Some(Value::bool(true)),
+            "false" => Some(Value::bool(false)),
             _ => None,
         },
-        "str" => Some(Value::String(rest.to_owned())),
+        "str" => Some(Value::varchar(rest.to_owned())),
         _ => None,
     }
 }
@@ -403,7 +407,7 @@ impl From<&ColumnRow> for Tuple {
     fn from(row: &ColumnRow) -> Tuple {
         let default_val = match &row.missing_default_value {
             None => Value::Null,
-            Some(v) => Value::String(encode_default(v)),
+            Some(v) => Value::varchar(encode_default(v)),
         };
         Tuple::new(vec![
             u64::from(row.table_id).into(),
@@ -794,8 +798,8 @@ impl From<&ConstraintRow> for Tuple {
                 .clone()
                 .map_or(Value::Null, |e| e.as_str().to_owned().into()),
             c.backing_index_id
-                .map_or(Value::Null, |id| Value::Int64(id.0)),
-            Value::Bool(c.validated),
+                .map_or(Value::Null, |id| Value::int64(id.0)),
+            Value::bool(c.validated),
         ])
     }
 }
@@ -909,8 +913,8 @@ impl From<&FkConstraintRow> for Tuple {
             f.ordinal.into(),
             f.ref_table_id.0.into(),
             u32::from(f.ref_column_id).into(),
-            Value::Uint32(u32::from(f.on_delete.unwrap_or(FkAction::NoAction))),
-            Value::Uint32(u32::from(f.on_update.unwrap_or(FkAction::NoAction))),
+            Value::uint32(u32::from(f.on_delete.unwrap_or(FkAction::NoAction))),
+            Value::uint32(u32::from(f.on_update.unwrap_or(FkAction::NoAction))),
         ])
     }
 }
@@ -1026,54 +1030,54 @@ mod tests {
         // table_id (Uint64 NOT NULL), table_name (String NOT NULL),
         // file_path (String NOT NULL).
         Tuple::new(vec![
-            Value::Uint64(1),
-            Value::String("users".into()),
-            Value::String("/data/users.dat".into()),
+            Value::uint64(1),
+            Value::varchar("users".into()),
+            Value::varchar("/data/users.dat".into()),
         ])
     }
 
     fn valid_columns_tuple() -> Tuple {
         Tuple::new(vec![
-            Value::Uint64(1),
-            Value::String("email".into()),
-            Value::Uint32(5),   // column_type = Type::String
-            Value::Uint32(0),   // position
-            Value::Bool(true),  // nullable
-            Value::Bool(false), // is_dropped
+            Value::uint64(1),
+            Value::varchar("email".into()),
+            Value::uint32(5),   // column_type = Type::String
+            Value::uint32(0),   // position
+            Value::bool(true),  // nullable
+            Value::bool(false), // is_dropped
             Value::Null,        // missing_default_value
         ])
     }
 
     fn valid_constraints_tuple() -> Tuple {
         Tuple::new(vec![
-            Value::String("pk_orders".into()),
-            Value::Uint64(10),
-            Value::Uint32(u32::from(ConstraintKind::PrimaryKey)),
+            Value::varchar("pk_orders".into()),
+            Value::uint64(10),
+            Value::uint32(u32::from(ConstraintKind::PrimaryKey)),
             Value::Null,       // expr
             Value::Null,       // backing_index_id
-            Value::Bool(true), // validated
+            Value::bool(true), // validated
         ])
     }
 
     fn valid_constraint_columns_tuple() -> Tuple {
         Tuple::new(vec![
-            Value::String("pk_orders".into()),
-            Value::Uint64(10),
-            Value::Uint32(0),
-            Value::Int32(0),
+            Value::varchar("pk_orders".into()),
+            Value::uint64(10),
+            Value::uint32(0),
+            Value::int32(0),
         ])
     }
 
     fn valid_fk_constraints_tuple() -> Tuple {
         Tuple::new(vec![
-            Value::String("fk_orders_users".into()),
-            Value::Uint64(10),
-            Value::Uint32(0),
-            Value::Int32(0),
-            Value::Uint64(20),
-            Value::Uint32(1),
-            Value::Uint32(FkAction::NoAction as u32),
-            Value::Uint32(FkAction::Restrict as u32),
+            Value::varchar("fk_orders_users".into()),
+            Value::uint64(10),
+            Value::uint32(0),
+            Value::int32(0),
+            Value::uint64(20),
+            Value::uint32(1),
+            Value::uint32(FkAction::NoAction as u32),
+            Value::uint32(FkAction::Restrict as u32),
         ])
     }
 
@@ -1093,10 +1097,10 @@ mod tests {
     #[test]
     fn test_validate_tables_row_with_extra_pk_field_yields_corruption() {
         let tuple = Tuple::new(vec![
-            Value::Uint64(2),
-            Value::String("orders".into()),
-            Value::String("/data/orders.dat".into()),
-            Value::String("order_id".into()), // legacy field — no longer in schema
+            Value::uint64(2),
+            Value::varchar("orders".into()),
+            Value::varchar("/data/orders.dat".into()),
+            Value::varchar("order_id".into()), // legacy field — no longer in schema
         ]);
         let err = SystemTable::Tables.validate_row(&tuple).unwrap_err();
         assert!(matches!(err, CatalogError::Corruption { .. }));
@@ -1105,7 +1109,7 @@ mod tests {
     // Wrong number of fields must yield Corruption.
     #[test]
     fn test_validate_tables_row_wrong_field_count_yields_corruption() {
-        let tuple = Tuple::new(vec![Value::Uint64(1), Value::String("users".into())]);
+        let tuple = Tuple::new(vec![Value::uint64(1), Value::varchar("users".into())]);
         let err = SystemTable::Tables.validate_row(&tuple).unwrap_err();
         assert!(
             matches!(err, CatalogError::Corruption { .. }),
@@ -1118,8 +1122,8 @@ mod tests {
     fn test_validate_tables_row_null_in_not_null_col_yields_corruption() {
         let tuple = Tuple::new(vec![
             Value::Null, // table_id is NOT NULL
-            Value::String("users".into()),
-            Value::String("/data/users.dat".into()),
+            Value::varchar("users".into()),
+            Value::varchar("/data/users.dat".into()),
         ]);
         let err = SystemTable::Tables.validate_row(&tuple).unwrap_err();
         assert!(matches!(err, CatalogError::Corruption { .. }));
@@ -1129,9 +1133,9 @@ mod tests {
     #[test]
     fn test_validate_tables_row_type_mismatch_yields_corruption() {
         let tuple = Tuple::new(vec![
-            Value::Int32(1), // declared Uint64
-            Value::String("users".into()),
-            Value::String("/data/users.dat".into()),
+            Value::int32(1), // declared Uint64
+            Value::varchar("users".into()),
+            Value::varchar("/data/users.dat".into()),
         ]);
         let err = SystemTable::Tables.validate_row(&tuple).unwrap_err();
         assert!(matches!(err, CatalogError::Corruption { .. }));
@@ -1152,12 +1156,12 @@ mod tests {
     fn test_validate_columns_row_all_valid_type_discriminants() {
         for disc in 0u32..=6 {
             let tuple = Tuple::new(vec![
-                Value::Uint64(1),
-                Value::String(format!("col_{disc}")),
-                Value::Uint32(disc),
-                Value::Uint32(0),
-                Value::Bool(false),
-                Value::Bool(false), // is_dropped
+                Value::uint64(1),
+                Value::varchar(format!("col_{disc}")),
+                Value::uint32(disc),
+                Value::uint32(0),
+                Value::bool(false),
+                Value::bool(false), // is_dropped
                 Value::Null,        // missing_default_value
             ]);
             assert!(
@@ -1170,7 +1174,7 @@ mod tests {
     // Wrong field count must yield Corruption.
     #[test]
     fn test_validate_columns_row_wrong_field_count_yields_corruption() {
-        let tuple = Tuple::new(vec![Value::Uint64(1), Value::String("col".into())]);
+        let tuple = Tuple::new(vec![Value::uint64(1), Value::varchar("col".into())]);
         let err = SystemTable::Columns.validate_row(&tuple).unwrap_err();
         assert!(matches!(err, CatalogError::Corruption { .. }));
     }
@@ -1179,12 +1183,12 @@ mod tests {
     #[test]
     fn test_validate_columns_row_null_in_not_null_col_yields_corruption() {
         let tuple = Tuple::new(vec![
-            Value::Uint64(1),
+            Value::uint64(1),
             Value::Null, // column_name is NOT NULL
-            Value::Uint32(0),
-            Value::Uint32(0),
-            Value::Bool(false),
-            Value::Bool(false),
+            Value::uint32(0),
+            Value::uint32(0),
+            Value::bool(false),
+            Value::bool(false),
             Value::Null,
         ]);
         let err = SystemTable::Columns.validate_row(&tuple).unwrap_err();
@@ -1195,12 +1199,12 @@ mod tests {
     #[test]
     fn test_validate_columns_row_invalid_type_discriminant_yields_invalid_row() {
         let tuple = Tuple::new(vec![
-            Value::Uint64(1),
-            Value::String("col".into()),
-            Value::Uint32(999), // no such Type variant
-            Value::Uint32(0),
-            Value::Bool(false),
-            Value::Bool(false),
+            Value::uint64(1),
+            Value::varchar("col".into()),
+            Value::uint32(999), // no such Type variant
+            Value::uint32(0),
+            Value::bool(false),
+            Value::bool(false),
             Value::Null,
         ]);
         let err = SystemTable::Columns.validate_row(&tuple).unwrap_err();
@@ -1215,14 +1219,14 @@ mod tests {
         // column_position (Uint32), index_type (Uint32 = IndexKind::Hash),
         // index_file_id (Uint64), num_buckets (Uint32).
         Tuple::new(vec![
-            Value::Int64(1),
-            Value::String("idx_email".into()),
-            Value::Uint64(7),
-            Value::String("email".into()),
-            Value::Uint32(0),
-            Value::Uint32(0), // 0 = IndexKind::Hash
-            Value::Uint64(42),
-            Value::Uint32(64),
+            Value::int64(1),
+            Value::varchar("idx_email".into()),
+            Value::uint64(7),
+            Value::varchar("email".into()),
+            Value::uint32(0),
+            Value::uint32(0), // 0 = IndexKind::Hash
+            Value::uint64(42),
+            Value::uint32(64),
         ])
     }
 
@@ -1239,14 +1243,14 @@ mod tests {
     #[test]
     fn test_validate_indexes_row_composite_position_ok() {
         let t = Tuple::new(vec![
-            Value::Int64(1),
-            Value::String("idx_email".into()),
-            Value::Uint64(7),
-            Value::String("created_at".into()),
-            Value::Uint32(1), // second column of a composite index
-            Value::Uint32(0),
-            Value::Uint64(42),
-            Value::Uint32(64),
+            Value::int64(1),
+            Value::varchar("idx_email".into()),
+            Value::uint64(7),
+            Value::varchar("created_at".into()),
+            Value::uint32(1), // second column of a composite index
+            Value::uint32(0),
+            Value::uint64(42),
+            Value::uint32(64),
         ]);
         assert!(SystemTable::Indexes.validate_row(&t).is_ok());
     }
@@ -1258,14 +1262,14 @@ mod tests {
     #[test]
     fn test_validate_indexes_row_int32_position_yields_corruption() {
         let t = Tuple::new(vec![
-            Value::Int64(1),
-            Value::String("idx".into()),
-            Value::Uint64(1),
-            Value::String("c".into()),
-            Value::Int32(0), // wrong: schema declares Uint32
-            Value::Uint32(0),
-            Value::Uint64(42),
-            Value::Uint32(64),
+            Value::int64(1),
+            Value::varchar("idx".into()),
+            Value::uint64(1),
+            Value::varchar("c".into()),
+            Value::int32(0), // wrong: schema declares Uint32
+            Value::uint32(0),
+            Value::uint64(42),
+            Value::uint32(64),
         ]);
         let err = SystemTable::Indexes.validate_row(&t).unwrap_err();
         assert!(matches!(err, CatalogError::Corruption { .. }));
@@ -1276,14 +1280,14 @@ mod tests {
     #[test]
     fn test_validate_indexes_row_hash_zero_buckets_yields_invalid_row() {
         let t = Tuple::new(vec![
-            Value::Int64(1),
-            Value::String("idx".into()),
-            Value::Uint64(1),
-            Value::String("c".into()),
-            Value::Uint32(0),
-            Value::Uint32(0), // hash
-            Value::Uint64(42),
-            Value::Uint32(0), // zero — invalid for hash
+            Value::int64(1),
+            Value::varchar("idx".into()),
+            Value::uint64(1),
+            Value::varchar("c".into()),
+            Value::uint32(0),
+            Value::uint32(0), // hash
+            Value::uint64(42),
+            Value::uint32(0), // zero — invalid for hash
         ]);
         let err = SystemTable::Indexes.validate_row(&t).unwrap_err();
         assert!(matches!(err, CatalogError::InvalidCatalogRow { .. }));
@@ -1295,14 +1299,14 @@ mod tests {
     #[test]
     fn test_validate_indexes_row_int32_index_type_yields_corruption() {
         let t = Tuple::new(vec![
-            Value::Int64(1),
-            Value::String("idx".into()),
-            Value::Uint64(1),
-            Value::String("c".into()),
-            Value::Uint32(0),
-            Value::Int32(0), // wrong: schema declares Uint32
-            Value::Uint64(42),
-            Value::Uint32(64),
+            Value::int64(1),
+            Value::varchar("idx".into()),
+            Value::uint64(1),
+            Value::varchar("c".into()),
+            Value::uint32(0),
+            Value::int32(0), // wrong: schema declares Uint32
+            Value::uint64(42),
+            Value::uint32(64),
         ]);
         let err = SystemTable::Indexes.validate_row(&t).unwrap_err();
         assert!(
@@ -1314,7 +1318,7 @@ mod tests {
     // Wrong field count for Indexes must yield Corruption.
     #[test]
     fn test_validate_indexes_row_wrong_field_count_yields_corruption() {
-        let tuple = Tuple::new(vec![Value::Int64(1), Value::String("idx".into())]);
+        let tuple = Tuple::new(vec![Value::int64(1), Value::varchar("idx".into())]);
         let err = SystemTable::Indexes.validate_row(&tuple).unwrap_err();
         assert!(matches!(err, CatalogError::Corruption { .. }));
     }
@@ -1338,12 +1342,12 @@ mod tests {
             ConstraintKind::ForeignKey,
         ] {
             let tuple = Tuple::new(vec![
-                Value::String("c_name".into()),
-                Value::Uint64(1),
-                Value::Uint32(u32::from(kind)),
+                Value::varchar("c_name".into()),
+                Value::uint64(1),
+                Value::uint32(u32::from(kind)),
                 Value::Null,
                 Value::Null,
-                Value::Bool(true),
+                Value::bool(true),
             ]);
             assert!(
                 SystemTable::Constraints.validate_row(&tuple).is_ok(),
@@ -1355,12 +1359,12 @@ mod tests {
     #[test]
     fn test_validate_constraints_row_unknown_kind_yields_invalid_row() {
         let tuple = Tuple::new(vec![
-            Value::String("bad".into()),
-            Value::Uint64(1),
-            Value::Uint32(99),
+            Value::varchar("bad".into()),
+            Value::uint64(1),
+            Value::uint32(99),
             Value::Null,
             Value::Null,
-            Value::Bool(true),
+            Value::bool(true),
         ]);
         let err = SystemTable::Constraints.validate_row(&tuple).unwrap_err();
         assert!(
@@ -1372,9 +1376,9 @@ mod tests {
     #[test]
     fn test_validate_constraints_row_wrong_field_count_yields_corruption() {
         let tuple = Tuple::new(vec![
-            Value::String("c".into()),
-            Value::Uint64(1),
-            Value::Uint32(0),
+            Value::varchar("c".into()),
+            Value::uint64(1),
+            Value::uint32(0),
         ]);
         let err = SystemTable::Constraints.validate_row(&tuple).unwrap_err();
         assert!(matches!(err, CatalogError::Corruption { .. }));
@@ -1384,8 +1388,8 @@ mod tests {
     fn test_validate_constraints_row_null_constraint_name_yields_corruption() {
         let tuple = Tuple::new(vec![
             Value::Null,
-            Value::Uint64(1),
-            Value::Uint32(0),
+            Value::uint64(1),
+            Value::uint32(0),
             Value::Null,
             Value::Null,
         ]);
@@ -1405,9 +1409,9 @@ mod tests {
     #[test]
     fn test_validate_constraint_columns_row_wrong_field_count_yields_corruption() {
         let tuple = Tuple::new(vec![
-            Value::String("pk".into()),
-            Value::Uint64(1),
-            Value::Uint32(0),
+            Value::varchar("pk".into()),
+            Value::uint64(1),
+            Value::uint32(0),
         ]);
         let err = SystemTable::ConstraintColumns
             .validate_row(&tuple)
@@ -1419,9 +1423,9 @@ mod tests {
     fn test_validate_constraint_columns_row_null_constraint_name_yields_corruption() {
         let tuple = Tuple::new(vec![
             Value::Null,
-            Value::Uint64(1),
-            Value::Uint32(0),
-            Value::Int32(0),
+            Value::uint64(1),
+            Value::uint32(0),
+            Value::int32(0),
         ]);
         let err = SystemTable::ConstraintColumns
             .validate_row(&tuple)
@@ -1432,10 +1436,10 @@ mod tests {
     #[test]
     fn test_validate_constraint_columns_row_negative_ordinal_yields_invalid_row() {
         let tuple = Tuple::new(vec![
-            Value::String("pk".into()),
-            Value::Uint64(1),
-            Value::Uint32(0),
-            Value::Int32(-1),
+            Value::varchar("pk".into()),
+            Value::uint64(1),
+            Value::uint32(0),
+            Value::int32(-1),
         ]);
         let err = SystemTable::ConstraintColumns
             .validate_row(&tuple)
@@ -1449,10 +1453,10 @@ mod tests {
     #[test]
     fn test_validate_constraint_columns_row_column_id_max_yields_invalid_row() {
         let tuple = Tuple::new(vec![
-            Value::String("pk".into()),
-            Value::Uint64(1),
-            Value::Uint32(u32::MAX),
-            Value::Int32(0),
+            Value::varchar("pk".into()),
+            Value::uint64(1),
+            Value::uint32(u32::MAX),
+            Value::int32(0),
         ]);
         let err = SystemTable::ConstraintColumns
             .validate_row(&tuple)
@@ -1475,12 +1479,12 @@ mod tests {
     #[test]
     fn test_validate_fk_constraints_row_wrong_field_count_yields_corruption() {
         let tuple = Tuple::new(vec![
-            Value::String("fk".into()),
-            Value::Uint64(1),
-            Value::Uint32(0),
-            Value::Int32(0),
-            Value::Uint64(2),
-            Value::Uint32(0),
+            Value::varchar("fk".into()),
+            Value::uint64(1),
+            Value::uint32(0),
+            Value::int32(0),
+            Value::uint64(2),
+            Value::uint32(0),
         ]);
         let err = SystemTable::FkConstraints.validate_row(&tuple).unwrap_err();
         assert!(matches!(err, CatalogError::Corruption { .. }));
@@ -1490,13 +1494,13 @@ mod tests {
     fn test_validate_fk_constraints_row_null_constraint_name_yields_corruption() {
         let tuple = Tuple::new(vec![
             Value::Null,
-            Value::Uint64(1),
-            Value::Uint32(0),
-            Value::Int32(0),
-            Value::Uint64(2),
-            Value::Uint32(0),
-            Value::Uint32(0),
-            Value::Uint32(0),
+            Value::uint64(1),
+            Value::uint32(0),
+            Value::int32(0),
+            Value::uint64(2),
+            Value::uint32(0),
+            Value::uint32(0),
+            Value::uint32(0),
         ]);
         let err = SystemTable::FkConstraints.validate_row(&tuple).unwrap_err();
         assert!(matches!(err, CatalogError::Corruption { .. }));
@@ -1505,14 +1509,14 @@ mod tests {
     #[test]
     fn test_validate_fk_constraints_row_unknown_on_delete_yields_invalid_row() {
         let tuple = Tuple::new(vec![
-            Value::String("fk".into()),
-            Value::Uint64(1),
-            Value::Uint32(0),
-            Value::Int32(0),
-            Value::Uint64(2),
-            Value::Uint32(0),
-            Value::Uint32(99),
-            Value::Uint32(0),
+            Value::varchar("fk".into()),
+            Value::uint64(1),
+            Value::uint32(0),
+            Value::int32(0),
+            Value::uint64(2),
+            Value::uint32(0),
+            Value::uint32(99),
+            Value::uint32(0),
         ]);
         let err = SystemTable::FkConstraints.validate_row(&tuple).unwrap_err();
         assert!(
@@ -1524,14 +1528,14 @@ mod tests {
     #[test]
     fn test_validate_fk_constraints_row_negative_ordinal_yields_invalid_row() {
         let tuple = Tuple::new(vec![
-            Value::String("fk".into()),
-            Value::Uint64(1),
-            Value::Uint32(0),
-            Value::Int32(-1),
-            Value::Uint64(2),
-            Value::Uint32(0),
-            Value::Uint32(0),
-            Value::Uint32(0),
+            Value::varchar("fk".into()),
+            Value::uint64(1),
+            Value::uint32(0),
+            Value::int32(-1),
+            Value::uint64(2),
+            Value::uint32(0),
+            Value::uint32(0),
+            Value::uint32(0),
         ]);
         let err = SystemTable::FkConstraints.validate_row(&tuple).unwrap_err();
         assert!(
@@ -1543,14 +1547,14 @@ mod tests {
     #[test]
     fn test_validate_fk_constraints_row_null_on_delete_yields_corruption() {
         let tuple = Tuple::new(vec![
-            Value::String("fk".into()),
-            Value::Uint64(1),
-            Value::Uint32(0),
-            Value::Int32(0),
-            Value::Uint64(2),
-            Value::Uint32(0),
+            Value::varchar("fk".into()),
+            Value::uint64(1),
+            Value::uint32(0),
+            Value::int32(0),
+            Value::uint64(2),
+            Value::uint32(0),
             Value::Null, // on_delete is NOT NULL in schema
-            Value::Uint32(0),
+            Value::uint32(0),
         ]);
         let err = SystemTable::FkConstraints.validate_row(&tuple).unwrap_err();
         assert!(matches!(err, CatalogError::Corruption { .. }), "got {err}");

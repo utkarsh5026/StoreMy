@@ -624,8 +624,8 @@ impl Engine<'_> {
             let counter = start + i as u64;
             #[allow(clippy::cast_possible_wrap)]
             let value = match ai_type {
-                Some(Type::Int64 | Type::Int32) => Value::Int64(counter as i64),
-                _ => Value::Uint64(counter),
+                Some(Type::Int64 | Type::Int32) => Value::int64(counter as i64),
+                _ => Value::uint64(counter),
             };
             *tuple
                 .get_mut(phys_idx)
@@ -761,7 +761,7 @@ mod tests {
 
         let live = catalog.get_index_by_name("users_email_idx").unwrap();
         let probe_txn = txn_mgr.begin().unwrap();
-        let key = CompositeKey::single(Value::String("a@b.com".to_string()));
+        let key = CompositeKey::single(Value::varchar("a@b.com".to_string()));
         let hits = live
             .access
             .search(probe_txn.transaction_id(), &key)
@@ -806,14 +806,14 @@ mod tests {
         let live = catalog.get_index_by_name("t_ba_idx").unwrap();
         let probe_txn = txn_mgr.begin().unwrap();
 
-        let key_ok = CompositeKey::new(vec![Value::Int64(20), Value::Int64(10)]);
+        let key_ok = CompositeKey::new(vec![Value::int64(20), Value::int64(10)]);
         let hits = live
             .access
             .search(probe_txn.transaction_id(), &key_ok)
             .unwrap();
         assert_eq!(hits.len(), 1);
 
-        let key_swapped = CompositeKey::new(vec![Value::Int64(10), Value::Int64(20)]);
+        let key_swapped = CompositeKey::new(vec![Value::int64(10), Value::int64(20)]);
         let miss = live
             .access
             .search(probe_txn.transaction_id(), &key_swapped)
@@ -875,14 +875,14 @@ mod tests {
         // 20 is in y — must hit.
         let hits = live
             .access
-            .search(tid, &CompositeKey::single(Value::Int64(20)))
+            .search(tid, &CompositeKey::single(Value::int64(20)))
             .unwrap();
         assert_eq!(hits.len(), 1, "value 20 must land in the y slot");
 
         // 10 is in x, not indexed — must miss.
         let miss = live
             .access
-            .search(tid, &CompositeKey::single(Value::Int64(10)))
+            .search(tid, &CompositeKey::single(Value::int64(10)))
             .unwrap();
         assert!(miss.is_empty(), "value 10 is in x, not y");
 
@@ -1031,7 +1031,7 @@ mod tests {
         // Physical slot 0: id = 42
         assert_eq!(
             tuple.get(0),
-            Some(&Value::Int64(42)),
+            Some(&Value::int64(42)),
             "slot 0 must be id=42"
         );
         // Physical slot 1: dropped tag column — must be NULL
@@ -1043,7 +1043,7 @@ mod tests {
         // Physical slot 2: score = 99
         assert_eq!(
             tuple.get(2),
-            Some(&Value::Int64(99)),
+            Some(&Value::int64(99)),
             "slot 2 must be score=99"
         );
     }
@@ -1116,7 +1116,7 @@ mod tests {
         assert_eq!(rows.len(), 3);
 
         let ids: Vec<_> = rows.iter().map(|r| r.get(0).cloned().unwrap()).collect();
-        assert_eq!(ids, vec![Value::Int64(1), Value::Int64(2), Value::Int64(3)]);
+        assert_eq!(ids, vec![Value::int64(1), Value::int64(2), Value::int64(3)]);
     }
 
     #[test]
@@ -1135,7 +1135,7 @@ mod tests {
 
         let rows = scan_rows(&catalog, &txn_mgr, "t");
         let ids: Vec<_> = rows.iter().map(|r| r.get(0).cloned().unwrap()).collect();
-        assert_eq!(ids, vec![Value::Int64(1), Value::Int64(2), Value::Int64(3)]);
+        assert_eq!(ids, vec![Value::int64(1), Value::int64(2), Value::int64(3)]);
     }
 
     #[test]
@@ -1172,8 +1172,8 @@ mod tests {
 
         let rows = scan_rows(&catalog, &txn_mgr, "settings");
         assert_eq!(rows.len(), 1);
-        assert_eq!(rows[0].get(0), Some(&Value::String("dark".into())));
-        assert_eq!(rows[0].get(1), Some(&Value::Int64(14)));
+        assert_eq!(rows[0].get(0), Some(&Value::varchar("dark".into())));
+        assert_eq!(rows[0].get(1), Some(&Value::int64(14)));
     }
 
     #[test]
@@ -1191,7 +1191,7 @@ mod tests {
 
         let rows = scan_rows(&catalog, &txn_mgr, "t");
         assert_eq!(rows.len(), 1);
-        assert_eq!(rows[0].get(0), Some(&Value::Int64(0)));
+        assert_eq!(rows[0].get(0), Some(&Value::int64(0)));
         assert_eq!(rows[0].get(1), Some(&Value::Null));
     }
 
@@ -1229,9 +1229,9 @@ mod tests {
 
         let rows = scan_rows(&catalog, &txn_mgr, "users");
         assert_eq!(rows.len(), 1);
-        assert_eq!(rows[0].get(0), Some(&Value::Int64(1)));
-        assert_eq!(rows[0].get(1), Some(&Value::String("viewer".into())));
-        assert_eq!(rows[0].get(2), Some(&Value::Bool(true)));
+        assert_eq!(rows[0].get(0), Some(&Value::int64(1)));
+        assert_eq!(rows[0].get(1), Some(&Value::varchar("viewer".into())));
+        assert_eq!(rows[0].get(2), Some(&Value::bool(true)));
     }
 
     #[test]
@@ -1245,7 +1245,7 @@ mod tests {
 
         let rows = scan_rows(&catalog, &txn_mgr, "t");
         assert_eq!(rows.len(), 1);
-        assert_eq!(rows[0].get(0), Some(&Value::Int64(7)));
+        assert_eq!(rows[0].get(0), Some(&Value::int64(7)));
         assert_eq!(rows[0].get(1), Some(&Value::Null));
     }
 
@@ -1281,7 +1281,7 @@ mod tests {
 
         let rows = scan_rows(&catalog, &txn_mgr, "t");
         assert_eq!(rows.len(), 1);
-        assert_eq!(rows[0].get(0), Some(&Value::Bool(true)));
+        assert_eq!(rows[0].get(0), Some(&Value::bool(true)));
     }
 
     #[test]
@@ -1296,7 +1296,7 @@ mod tests {
 
         let rows = scan_rows(&catalog, &txn_mgr, "t");
         assert_eq!(rows.len(), 1);
-        assert_eq!(rows[0].get(0), Some(&Value::Bool(true)));
+        assert_eq!(rows[0].get(0), Some(&Value::bool(true)));
     }
 
     #[test]
@@ -1311,7 +1311,7 @@ mod tests {
 
         let rows = scan_rows(&catalog, &txn_mgr, "t");
         assert_eq!(rows.len(), 1);
-        assert_eq!(rows[0].get(0), Some(&Value::Bool(false)));
+        assert_eq!(rows[0].get(0), Some(&Value::bool(false)));
     }
 
     #[test]
@@ -1362,8 +1362,8 @@ mod tests {
 
         let rows = scan_rows(&catalog, &txn_mgr, "t");
         assert_eq!(rows.len(), 3);
-        assert_eq!(rows[0].get(0), Some(&Value::Bool(true)));
-        assert_eq!(rows[1].get(0), Some(&Value::Bool(false)));
-        assert_eq!(rows[2].get(0), Some(&Value::Bool(true)));
+        assert_eq!(rows[0].get(0), Some(&Value::bool(true)));
+        assert_eq!(rows[1].get(0), Some(&Value::bool(false)));
+        assert_eq!(rows[2].get(0), Some(&Value::bool(true)));
     }
 }

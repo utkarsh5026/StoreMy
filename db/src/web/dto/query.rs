@@ -9,7 +9,7 @@ use crate::{
     catalog::TableInfo,
     engine::{ShownIndex, StatementResult},
     tuple::{Field, Tuple, TupleSchema},
-    types::Value,
+    types::{DynValue, FixedValue, Value},
 };
 
 /// One column header in a result set or table description.
@@ -55,31 +55,38 @@ pub fn value_to_json(v: &Value) -> JsonValue {
     const JS_SAFE_MIN: i64 = -(1i64 << 53);
     match v {
         Value::Null => JsonValue::Null,
-        Value::Int32(n) => JsonValue::from(*n),
-        Value::Int64(n) => {
-            if (JS_SAFE_MIN..=JS_SAFE_MAX).contains(n) {
-                JsonValue::from(*n)
-            } else {
-                JsonValue::String(n.to_string())
+        Value::Fixed(f) => match f {
+            FixedValue::Int32(n) => JsonValue::from(*n),
+            FixedValue::Int64(n) => {
+                if (JS_SAFE_MIN..=JS_SAFE_MAX).contains(n) {
+                    JsonValue::from(*n)
+                } else {
+                    JsonValue::String(n.to_string())
+                }
             }
-        }
-        Value::Uint32(n) => JsonValue::from(*n),
-        Value::Uint64(n) => {
-            if *n <= (JS_SAFE_MAX as u64) {
-                JsonValue::from(*n)
-            } else {
-                JsonValue::String(n.to_string())
+            FixedValue::Uint32(n) => JsonValue::from(*n),
+            FixedValue::Uint64(n) => {
+                if *n <= JS_SAFE_MAX as u64 {
+                    JsonValue::from(*n)
+                } else {
+                    JsonValue::String(n.to_string())
+                }
             }
-        }
-        Value::Float64(f) => {
-            if f.is_finite() {
-                serde_json::Number::from_f64(*f).map_or(JsonValue::Null, JsonValue::Number)
-            } else {
-                JsonValue::Null
+            FixedValue::Float64(f) => {
+                if f.is_finite() {
+                    serde_json::Number::from_f64(*f).map_or(JsonValue::Null, JsonValue::Number)
+                } else {
+                    JsonValue::Null
+                }
             }
-        }
-        Value::String(s) | Value::Text(s) => JsonValue::String(s.clone()),
-        Value::Bool(b) => JsonValue::Bool(*b),
+            FixedValue::Bool(b) => JsonValue::Bool(*b),
+        },
+        Value::Dyn(d) => match d {
+            DynValue::Varchar(s) | DynValue::Text(s) => JsonValue::String(s.clone()),
+            DynValue::TextOverflow { .. } => {
+                unreachable!("TextOverflow must be resolved before JSON serialization")
+            }
+        },
     }
 }
 

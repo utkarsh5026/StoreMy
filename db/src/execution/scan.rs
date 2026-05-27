@@ -253,7 +253,7 @@ mod tests {
         index::{AnyIndex, CompositeKey},
         primitives::{PageNumber, RecordId, SlotId},
         tuple::{Field, Tuple, TupleSchema},
-        types::{Type, Value},
+        types::{FixedValue, Type, Value},
         wal::writer::Wal,
     };
 
@@ -266,7 +266,7 @@ mod tests {
     }
 
     fn make_tuple(id: i32, flag: bool) -> Tuple {
-        Tuple::new(vec![Value::Int32(id), Value::Bool(flag)])
+        Tuple::new(vec![Value::int32(id), Value::bool(flag)])
     }
 
     fn begin_txn(wal: &Wal, id: u64) -> TransactionId {
@@ -504,7 +504,7 @@ mod tests {
 
         let row = make_tuple(42, true);
         let rid = heap.insert_tuple(txn, &row).unwrap();
-        let key = CompositeKey::single(Value::Int32(42));
+        let key = CompositeKey::single(Value::int32(42));
         index.insert(txn, &key, rid).unwrap();
 
         let mut scan = IndexScan::new(&heap, &index, txn, IndexScanSpec::Search(key.clone()));
@@ -523,18 +523,18 @@ mod tests {
         let r20 = heap.insert_tuple(txn, &make_tuple(20, false)).unwrap();
         let r30 = heap.insert_tuple(txn, &make_tuple(30, true)).unwrap();
         index
-            .insert(txn, &CompositeKey::single(Value::Int32(10)), r10)
+            .insert(txn, &CompositeKey::single(Value::int32(10)), r10)
             .unwrap();
         index
-            .insert(txn, &CompositeKey::single(Value::Int32(20)), r20)
+            .insert(txn, &CompositeKey::single(Value::int32(20)), r20)
             .unwrap();
         index
-            .insert(txn, &CompositeKey::single(Value::Int32(30)), r30)
+            .insert(txn, &CompositeKey::single(Value::int32(30)), r30)
             .unwrap();
 
         let mut scan = IndexScan::new(&heap, &index, txn, IndexScanSpec::Range {
-            start: CompositeKey::single(Value::Int32(15)),
-            end: CompositeKey::single(Value::Int32(25)),
+            start: CompositeKey::single(Value::int32(15)),
+            end: CompositeKey::single(Value::int32(25)),
         });
 
         let mut out = Vec::new();
@@ -542,7 +542,7 @@ mod tests {
             out.push(t);
         }
         out.sort_by_key(|t| match t.get(0).unwrap() {
-            Value::Int32(v) => *v,
+            Value::Fixed(FixedValue::Int32(v)) => *v,
             _ => 0,
         });
         assert_eq!(out, vec![make_tuple(20, false)]);
@@ -555,7 +555,7 @@ mod tests {
 
         let row = make_tuple(7, false);
         let rid = heap.insert_tuple(txn, &row).unwrap();
-        let key = CompositeKey::single(Value::Int32(7));
+        let key = CompositeKey::single(Value::int32(7));
         index.insert(txn, &key, rid).unwrap();
 
         let mut scan = IndexScan::new(&heap, &index, txn, IndexScanSpec::Search(key));
@@ -574,7 +574,7 @@ mod tests {
 
         let row = make_tuple(99, true);
         let rid = heap.insert_tuple(txn, &row).unwrap();
-        let key = CompositeKey::single(Value::Int32(99));
+        let key = CompositeKey::single(Value::int32(99));
         index.insert(txn, &key, rid).unwrap();
         heap.delete_tuple(txn, rid).unwrap();
 

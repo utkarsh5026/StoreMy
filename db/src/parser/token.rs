@@ -406,7 +406,7 @@ impl TryFrom<Token> for Type {
 /// | `Int`        | `Value::Int64` — the value string parsed as `i64`    |
 /// | `String`     | `Value::String` — the raw (unquoted) value string    |
 /// | `Null`       | `Value::Null`                                         |
-/// | `Identifier` | `Value::Bool(true/false)` when the text is `"true"` or `"false"` (case-insensitive) |
+/// | `Identifier` | `Value::bool(true/false)` when the text is `"true"` or `"false"` (case-insensitive) |
 ///
 /// # Errors
 ///
@@ -422,22 +422,22 @@ impl TryFrom<Token> for Value {
             TokenType::Int => token
                 .value
                 .parse::<i64>()
-                .map(Value::Int64)
+                .map(Value::int64)
                 .map_err(|e| format!("invalid integer literal '{}': {e}", token.value)),
 
             TokenType::FloatLit => token
                 .value
                 .parse::<f64>()
-                .map(Value::Float64)
+                .map(Value::float64)
                 .map_err(|e| format!("invalid float literal '{}': {e}", token.value)),
 
-            TokenType::String => Ok(Value::String(token.value)),
+            TokenType::String => Ok(Value::varchar(token.value)),
 
             TokenType::Null => Ok(Value::Null),
 
             TokenType::Identifier => match token.value.to_ascii_lowercase().as_str() {
-                "true" => Ok(Value::Bool(true)),
-                "false" => Ok(Value::Bool(false)),
+                "true" => Ok(Value::bool(true)),
+                "false" => Ok(Value::bool(false)),
                 _ => Err(format!(
                     "identifier '{}' is not a literal value",
                     token.value
@@ -943,19 +943,19 @@ mod tests {
     #[test]
     fn test_try_from_token_for_value_int_positive() {
         let result = Value::try_from(make_token(TokenType::Int, "42")).unwrap();
-        assert_eq!(result, Value::Int64(42));
+        assert_eq!(result, Value::int64(42));
     }
 
     #[test]
     fn test_try_from_token_for_value_int_negative() {
         let result = Value::try_from(make_token(TokenType::Int, "-7")).unwrap();
-        assert_eq!(result, Value::Int64(-7));
+        assert_eq!(result, Value::int64(-7));
     }
 
     #[test]
     fn test_try_from_token_for_value_int_zero() {
         let result = Value::try_from(make_token(TokenType::Int, "0")).unwrap();
-        assert_eq!(result, Value::Int64(0));
+        assert_eq!(result, Value::int64(0));
     }
 
     // i64::MAX and i64::MIN are valid
@@ -965,11 +965,11 @@ mod tests {
         let min = i64::MIN.to_string();
         assert_eq!(
             Value::try_from(make_token(TokenType::Int, &max)).unwrap(),
-            Value::Int64(i64::MAX)
+            Value::int64(i64::MAX)
         );
         assert_eq!(
             Value::try_from(make_token(TokenType::Int, &min)).unwrap(),
-            Value::Int64(i64::MIN)
+            Value::int64(i64::MIN)
         );
     }
 
@@ -977,13 +977,13 @@ mod tests {
     #[test]
     fn test_try_from_token_for_value_float_positive() {
         let result = Value::try_from(make_token(TokenType::FloatLit, "2.5")).unwrap();
-        assert_eq!(result, Value::Float64(2.5));
+        assert_eq!(result, Value::float64(2.5));
     }
 
     #[test]
     fn test_try_from_token_for_value_float_zero() {
         let result = Value::try_from(make_token(TokenType::FloatLit, "0.0")).unwrap();
-        assert_eq!(result, Value::Float64(0.0));
+        assert_eq!(result, Value::float64(0.0));
     }
 
     #[test]
@@ -1001,14 +1001,14 @@ mod tests {
     #[test]
     fn test_try_from_token_for_value_string() {
         let result = Value::try_from(make_token(TokenType::String, "hello world")).unwrap();
-        assert_eq!(result, Value::String("hello world".to_string()));
+        assert_eq!(result, Value::varchar("hello world".to_string()));
     }
 
     // Empty string is a valid String token
     #[test]
     fn test_try_from_token_for_value_string_empty() {
         let result = Value::try_from(make_token(TokenType::String, "")).unwrap();
-        assert_eq!(result, Value::String(String::new()));
+        assert_eq!(result, Value::varchar(String::new()));
     }
 
     // Null token always produces Value::Null regardless of value text
@@ -1023,24 +1023,24 @@ mod tests {
     fn test_try_from_token_for_value_bool_lowercase() {
         let t = Value::try_from(make_token(TokenType::Identifier, "true")).unwrap();
         let f = Value::try_from(make_token(TokenType::Identifier, "false")).unwrap();
-        assert_eq!(t, Value::Bool(true));
-        assert_eq!(f, Value::Bool(false));
+        assert_eq!(t, Value::bool(true));
+        assert_eq!(f, Value::bool(false));
     }
 
     #[test]
     fn test_try_from_token_for_value_bool_uppercase() {
         let t = Value::try_from(make_token(TokenType::Identifier, "TRUE")).unwrap();
         let f = Value::try_from(make_token(TokenType::Identifier, "FALSE")).unwrap();
-        assert_eq!(t, Value::Bool(true));
-        assert_eq!(f, Value::Bool(false));
+        assert_eq!(t, Value::bool(true));
+        assert_eq!(f, Value::bool(false));
     }
 
     #[test]
     fn test_try_from_token_for_value_bool_mixed_case() {
         let t = Value::try_from(make_token(TokenType::Identifier, "True")).unwrap();
         let f = Value::try_from(make_token(TokenType::Identifier, "FaLsE")).unwrap();
-        assert_eq!(t, Value::Bool(true));
-        assert_eq!(f, Value::Bool(false));
+        assert_eq!(t, Value::bool(true));
+        assert_eq!(f, Value::bool(false));
     }
 
     // Int token with non-numeric text produces a parse error

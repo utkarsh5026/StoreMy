@@ -599,7 +599,7 @@ mod tests {
         };
         assert_eq!(**lhs, Expr::Column(ColumnRef::from("id")));
         assert_eq!(*op, BinOp::Eq);
-        assert_eq!(**rhs, Expr::Literal(Value::Int64(1)));
+        assert_eq!(**rhs, Expr::Literal(Value::int64(1)));
     }
 
     #[test]
@@ -637,7 +637,7 @@ mod tests {
         };
         assert_eq!(**lhs, Expr::Column(ColumnRef::from("status")));
         assert_eq!(*op, BinOp::Eq);
-        assert_eq!(**rhs, Expr::Literal(Value::Int64(1)));
+        assert_eq!(**rhs, Expr::Literal(Value::int64(1)));
     }
 
     #[test]
@@ -649,7 +649,7 @@ mod tests {
         };
         assert_eq!(**lhs, Expr::Column(ColumnRef::from("price")));
         assert_eq!(*op, BinOp::Eq);
-        assert_eq!(**rhs, Expr::Literal(Value::Float64(2.5)));
+        assert_eq!(**rhs, Expr::Literal(Value::float64(2.5)));
     }
 
     #[test]
@@ -660,7 +660,7 @@ mod tests {
             panic!("expected binary WHERE expression");
         };
         assert_eq!(*op, BinOp::Eq);
-        assert_eq!(**rhs, Expr::Literal(Value::String("alice".to_string())));
+        assert_eq!(**rhs, Expr::Literal(Value::varchar("alice".to_string())));
     }
 
     #[test]
@@ -682,7 +682,7 @@ mod tests {
             panic!("expected binary WHERE expression");
         };
         assert_eq!(*op, BinOp::Eq);
-        assert_eq!(**rhs, Expr::Literal(Value::Bool(true)));
+        assert_eq!(**rhs, Expr::Literal(Value::bool(true)));
     }
 
     #[test]
@@ -797,7 +797,7 @@ mod tests {
         let SelectColumns::Exprs(v) = &s.columns else {
             panic!("expected Exprs");
         };
-        assert_eq!(v[0].expr, Expr::Literal(Value::Int64(1)));
+        assert_eq!(v[0].expr, Expr::Literal(Value::int64(1)));
         assert!(v[0].alias.is_none());
     }
 
@@ -807,7 +807,7 @@ mod tests {
         let SelectColumns::Exprs(v) = &s.columns else {
             panic!("expected Exprs");
         };
-        assert_eq!(v[0].expr, Expr::Literal(Value::String("hello".into())));
+        assert_eq!(v[0].expr, Expr::Literal(Value::varchar("hello".into())));
     }
 
     #[test]
@@ -825,7 +825,7 @@ mod tests {
         let SelectColumns::Exprs(v) = &s.columns else {
             panic!("expected Exprs");
         };
-        assert_eq!(v[0].expr, Expr::Literal(Value::Float64(3.12)));
+        assert_eq!(v[0].expr, Expr::Literal(Value::float64(3.12)));
     }
 
     #[test]
@@ -835,9 +835,9 @@ mod tests {
             panic!("expected Exprs");
         };
         assert_eq!(v.len(), 2);
-        assert_eq!(v[0].expr, Expr::Literal(Value::Int64(1)));
+        assert_eq!(v[0].expr, Expr::Literal(Value::int64(1)));
         assert_eq!(v[0].alias.as_deref(), Some("one"));
-        assert_eq!(v[1].expr, Expr::Literal(Value::String("hi".into())));
+        assert_eq!(v[1].expr, Expr::Literal(Value::varchar("hi".into())));
         assert_eq!(v[1].alias.as_deref(), Some("greeting"));
     }
 
@@ -849,7 +849,7 @@ mod tests {
         };
         assert_eq!(v.len(), 3);
         assert_eq!(v[0].expr, Expr::Column("id".into()));
-        assert_eq!(v[1].expr, Expr::Literal(Value::Int64(1)));
+        assert_eq!(v[1].expr, Expr::Literal(Value::int64(1)));
         assert_eq!(v[2].expr, Expr::Column("name".into()));
     }
 
@@ -1241,7 +1241,7 @@ mod tests {
         };
         assert_eq!(lhs.as_ref(), &Expr::Column(ColumnRef::from("a")));
         assert_eq!(*op, BinOp::Eq);
-        assert_eq!(rhs.as_ref(), &Expr::Literal(Value::Int64(1)));
+        assert_eq!(rhs.as_ref(), &Expr::Literal(Value::int64(1)));
     }
 
     #[test]

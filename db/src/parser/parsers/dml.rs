@@ -260,7 +260,7 @@ mod tests {
         };
         assert_eq!(op, BinOp::Eq);
         assert_eq!(*lhs, Expr::Column(ColumnRef::from("id")));
-        assert_eq!(*rhs, Expr::Literal(Value::Int64(7)));
+        assert_eq!(*rhs, Expr::Literal(Value::int64(7)));
     }
 
     #[test]
@@ -271,7 +271,7 @@ mod tests {
         assert!(i.columns.is_none());
         let rows = insert_rows(&i.source);
         assert_eq!(rows.len(), 1);
-        assert_eq!(rows[0], vec![Expr::Literal(Value::Int64(42))]);
+        assert_eq!(rows[0], vec![Expr::Literal(Value::int64(42))]);
     }
 
     #[test]
@@ -282,8 +282,8 @@ mod tests {
         assert_eq!(column_names(i.columns.as_deref()), Some(vec!["a", "b"]));
         let rows = insert_rows(&i.source);
         assert_eq!(rows.len(), 2);
-        assert_eq!(rows[0][0], Expr::Literal(Value::Int64(1)));
-        assert_eq!(rows[1][1], Expr::Literal(Value::String("y".into())));
+        assert_eq!(rows[0][0], Expr::Literal(Value::int64(1)));
+        assert_eq!(rows[1][1], Expr::Literal(Value::varchar("y".into())));
     }
 
     #[test]
@@ -294,7 +294,7 @@ mod tests {
         assert!(u.alias.is_none());
         assert_eq!(u.assignments.len(), 1);
         assert_eq!(u.assignments[0].column, "active");
-        assert_eq!(u.assignments[0].value, Expr::Literal(Value::Bool(false)));
+        assert_eq!(u.assignments[0].value, Expr::Literal(Value::bool(false)));
         assert!(u.where_clause.is_none());
     }
 
@@ -310,7 +310,7 @@ mod tests {
         };
         assert_eq!(op, BinOp::Eq);
         assert_eq!(*lhs, Expr::Column(ColumnRef::from("id")));
-        assert_eq!(*rhs, Expr::Literal(Value::Int64(2)));
+        assert_eq!(*rhs, Expr::Literal(Value::int64(2)));
     }
 
     #[test]
@@ -319,7 +319,7 @@ mod tests {
         let i = p.parse_insert().unwrap();
         assert_eq!(i.columns.as_ref().unwrap().as_slice(), ["k"]);
         assert_eq!(insert_rows(&i.source)[0], vec![Expr::Literal(
-            Value::Int64(0)
+            Value::int64(0)
         )]);
     }
 
@@ -327,7 +327,7 @@ mod tests {
     fn test_parse_update_int_assignment_parses_as_int64() {
         let mut p = Parser::new("UPDATE counters SET n = 99");
         let u = p.parse_update().unwrap();
-        assert_eq!(u.assignments[0].value, Expr::Literal(Value::Int64(99)));
+        assert_eq!(u.assignments[0].value, Expr::Literal(Value::int64(99)));
     }
 
     #[test]
@@ -369,7 +369,7 @@ mod tests {
         let mut p = Parser::new("INSERT INTO t VALUES ('only')");
         let i = p.parse_insert().unwrap();
         assert_eq!(insert_rows(&i.source)[0], vec![Expr::Literal(
-            Value::String("only".into())
+            Value::varchar("only".into())
         )]);
     }
 

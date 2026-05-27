@@ -25,7 +25,7 @@
 //! # NULL semantics
 //!
 //! `Filter` delegates to [`ResolvedExpr::eval_bool`]: only
-//! `Value::Bool(true)` passes; `NULL` and `false` are dropped. `Project` copies
+//! `Value::bool(true)` passes; `NULL` and `false` are dropped. `Project` copies
 //! `NULL` values unchanged and can emit
 //! literal `NULL`s. `Sort` orders `NULL` before non-`NULL` in ascending order
 //! and after non-`NULL` in descending order because the per-key comparison is
@@ -45,7 +45,7 @@ use crate::{
 /// Applies a SQL `WHERE` predicate to rows from one child plan.
 ///
 /// Each input tuple is tested with [`ResolvedExpr::eval_bool`]. Rows that evaluate to
-/// `Value::Bool(true)` pass through unchanged; all other results (false, NULL)
+/// `Value::bool(true)` pass through unchanged; all other results (false, NULL)
 /// are skipped. The output tuple layout is exactly the child layout because filtering never
 /// adds, removes, or reorders columns.
 ///
@@ -61,7 +61,7 @@ use crate::{
 /// ```ignore
 /// Filter::new(
 ///     users_scan,
-///     BooleanExpression::col_op_lit(2, Predicate::GreaterThanOrEqual, Value::Int64(18)),
+///     BooleanExpression::col_op_lit(2, Predicate::GreaterThanOrEqual, Value::int64(18)),
 /// )
 /// ```
 ///
@@ -72,7 +72,7 @@ use crate::{
 /// ```ignore
 /// Filter::new(
 ///     users_scan,
-///     BooleanExpression::col_op_lit(1, Predicate::Like, Value::String("a%".into())),
+///     BooleanExpression::col_op_lit(1, Predicate::Like, Value::varchar("a%".into())),
 /// )
 /// ```
 ///
@@ -87,12 +87,12 @@ use crate::{
 ///         Box::new(BooleanExpression::col_op_lit(
 ///             2,
 ///             Predicate::GreaterThanOrEqual,
-///             Value::Int64(18),
+///             Value::int64(18),
 ///         )),
 ///         Box::new(BooleanExpression::col_op_lit(
 ///             1,
 ///             Predicate::NotEqual,
-///             Value::String("guest".into()),
+///             Value::varchar("guest".into()),
 ///         )),
 ///     ),
 /// )
@@ -107,7 +107,7 @@ use crate::{
 /// ```ignore
 /// let filtered = Filter::new(
 ///     users_scan,
-///     BooleanExpression::col_op_lit(2, Predicate::LessThan, Value::Int64(30)),
+///     BooleanExpression::col_op_lit(2, Predicate::LessThan, Value::int64(30)),
 /// );
 /// let projected = Project::new(Box::new(PlanNode::Filter(filtered)), &[col(0), col(1)])?;
 /// ```
@@ -137,8 +137,8 @@ impl FallibleIterator for Filter<'_> {
 
     /// Returns the next row that qualifies for the SQL `WHERE` predicate.
     ///
-    /// Pulls child rows until the predicate evaluates to `Value::Bool(true)` or
-    /// the child is exhausted. `Value::Null` and `Value::Bool(false)` both cause
+    /// Pulls child rows until the predicate evaluates to `Value::bool(true)` or
+    /// the child is exhausted. `Value::Null` and `Value::bool(false)` both cause
     /// the row to be skipped, matching SQL semantics for `WHERE` clauses.
     ///
     /// # Errors
@@ -277,7 +277,7 @@ impl<'a> Project<'a> {
     ///
     /// ```ignore
     /// Project::with_items(child, vec![
-    ///     ProjectItem { expr: ResolvedExpr::Literal(Value::Int64(1)), alias: Some("one".into()) },
+    ///     ProjectItem { expr: ResolvedExpr::Literal(Value::int64(1)), alias: Some("one".into()) },
     ///     ProjectItem { expr: ResolvedExpr::Column(col(1)), alias: None },
     /// ])?
     /// ```
@@ -515,7 +515,7 @@ impl SortKey {
 /// ```ignore
 /// let filtered = Filter::new(
 ///     users_scan,
-///     BooleanExpression::col_op_lit(2, Predicate::GreaterThanOrEqual, Value::Int64(18)),
+///     BooleanExpression::col_op_lit(2, Predicate::GreaterThanOrEqual, Value::int64(18)),
 /// );
 /// let sorted = Sort::new(
 ///     vec![SortKey::desc(col(1))],
@@ -733,7 +733,7 @@ impl Executor for Sort<'_> {
 /// ```ignore
 /// let filtered = Filter::new(
 ///     users_scan,
-///     BooleanExpression::col_op_lit(2, Predicate::GreaterThanOrEqual, Value::Int64(18)),
+///     BooleanExpression::col_op_lit(2, Predicate::GreaterThanOrEqual, Value::int64(18)),
 /// );
 /// let limited = Limit::new(Box::new(PlanNode::Filter(filtered)), 2, 1);
 /// ```
@@ -905,7 +905,7 @@ mod tests {
     }
 
     fn make_scan_tuple(id: i32, flag: bool) -> Tuple {
-        Tuple::new(vec![Value::Int32(id), Value::Bool(flag)])
+        Tuple::new(vec![Value::int32(id), Value::bool(flag)])
     }
 
     fn begin_txn(wal: &Wal, id: u64) -> TransactionId {
@@ -953,7 +953,7 @@ mod tests {
         heap.insert_tuple(txn, &make_scan_tuple(2, false)).unwrap();
         heap.insert_tuple(txn, &make_scan_tuple(3, true)).unwrap();
 
-        let pred = eq_expr(1, Value::Bool(true)); // flag = ColumnId(1)
+        let pred = eq_expr(1, Value::bool(true)); // flag = ColumnId(1)
         let mut filter = Filter::new(Box::new(PlanNode::SeqScan(SeqScan::new(&heap, txn))), pred);
 
         let mut out = Vec::new();
@@ -981,7 +981,7 @@ mod tests {
         assert_eq!(proj.schema().field(1).unwrap().name, "id");
 
         let row = proj.next().unwrap().unwrap();
-        assert_eq!(row, Tuple::new(vec![Value::Bool(false), Value::Int32(42)]));
+        assert_eq!(row, Tuple::new(vec![Value::bool(false), Value::int32(42)]));
     }
 
     #[test]
@@ -1008,7 +1008,7 @@ mod tests {
                     .into_iter()
                     .map(|t| t.get(0).unwrap().clone())
                     .collect::<Vec<_>>(),
-                vec![Value::Int32(1), Value::Int32(2), Value::Int32(3)]
+                vec![Value::int32(1), Value::int32(2), Value::int32(3)]
             );
         }
 
@@ -1027,7 +1027,7 @@ mod tests {
                 .into_iter()
                 .map(|t| t.get(0).unwrap().clone())
                 .collect::<Vec<_>>(),
-            vec![Value::Int32(3), Value::Int32(2), Value::Int32(1)]
+            vec![Value::int32(3), Value::int32(2), Value::int32(1)]
         );
     }
 
@@ -1063,9 +1063,9 @@ mod tests {
     fn test_sort_null_sorts_before_non_null() {
         let (heap, wal, _dir) = make_registered_heap_file(0);
         let txn = begin_txn(&wal, 1);
-        heap.insert_tuple(txn, &Tuple::new(vec![Value::Int32(10), Value::Bool(true)]))
+        heap.insert_tuple(txn, &Tuple::new(vec![Value::int32(10), Value::bool(true)]))
             .unwrap();
-        heap.insert_tuple(txn, &Tuple::new(vec![Value::Null, Value::Bool(false)]))
+        heap.insert_tuple(txn, &Tuple::new(vec![Value::Null, Value::bool(false)]))
             .unwrap();
 
         let mut sort = Sort::new(
@@ -1075,7 +1075,7 @@ mod tests {
         let first = sort.next().unwrap().unwrap();
         assert_eq!(first.get(0), Some(&Value::Null));
         let second = sort.next().unwrap().unwrap();
-        assert_eq!(second.get(0), Some(&Value::Int32(10)));
+        assert_eq!(second.get(0), Some(&Value::int32(10)));
     }
 
     #[test]
@@ -1099,7 +1099,7 @@ mod tests {
         let txn = begin_txn(&wal, 1);
         let mut filter = Filter::new(
             Box::new(PlanNode::SeqScan(SeqScan::new(&heap, txn))),
-            eq_expr(0, Value::Int32(0)), // id = ColumnId(0)
+            eq_expr(0, Value::int32(0)), // id = ColumnId(0)
         );
         assert_eq!(filter.next().unwrap(), None);
     }
@@ -1156,7 +1156,7 @@ mod tests {
 
         let mut filter = Filter::new(
             Box::new(PlanNode::SeqScan(SeqScan::new(&heap, txn))),
-            eq_expr(0, Value::Int32(7)), // id = ColumnId(0)
+            eq_expr(0, Value::int32(7)), // id = ColumnId(0)
         );
         assert_eq!(filter.next().unwrap(), Some(make_scan_tuple(7, true)));
         filter.rewind().unwrap();
@@ -1175,12 +1175,12 @@ mod tests {
         .unwrap();
         assert_eq!(
             proj.next().unwrap(),
-            Some(Tuple::new(vec![Value::Int32(1)]))
+            Some(Tuple::new(vec![Value::int32(1)]))
         );
         proj.rewind().unwrap();
         assert_eq!(
             proj.next().unwrap(),
-            Some(Tuple::new(vec![Value::Int32(1)]))
+            Some(Tuple::new(vec![Value::int32(1)]))
         );
     }
 

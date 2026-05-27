@@ -450,6 +450,7 @@ mod tests {
         primitives::{ColumnId, NonEmptyString},
         transaction::TransactionManager,
         tuple::{Field, TupleSchema},
+        types::FixedValue,
         wal::writer::Wal,
     };
 
@@ -516,14 +517,14 @@ mod tests {
         let live = catalog.get_index_by_name("users_email_idx").unwrap();
         let probe_txn = txn_mgr.begin().unwrap();
 
-        let old_key = CompositeKey::single(Value::String("old@b.com".to_string()));
+        let old_key = CompositeKey::single(Value::varchar("old@b.com".to_string()));
         let miss = live
             .access
             .search(probe_txn.transaction_id(), &old_key)
             .unwrap();
         assert!(miss.is_empty(), "old key must no longer resolve");
 
-        let new_key = CompositeKey::single(Value::String("new@b.com".to_string()));
+        let new_key = CompositeKey::single(Value::varchar("new@b.com".to_string()));
         let hits = live
             .access
             .search(probe_txn.transaction_id(), &new_key)
@@ -570,7 +571,7 @@ mod tests {
 
         let live = catalog.get_index_by_name("users_email_idx").unwrap();
         let probe_txn = txn_mgr.begin().unwrap();
-        let key = CompositeKey::single(Value::String("a@b.com".to_string()));
+        let key = CompositeKey::single(Value::varchar("a@b.com".to_string()));
         let hits = live
             .access
             .search(probe_txn.transaction_id(), &key)
@@ -643,14 +644,14 @@ mod tests {
         let live = catalog.get_index_by_name("t_ab_idx").unwrap();
         let probe_txn = txn_mgr.begin().unwrap();
 
-        let old_key = CompositeKey::new(vec![Value::Int64(10), Value::Int64(20)]);
+        let old_key = CompositeKey::new(vec![Value::int64(10), Value::int64(20)]);
         let miss = live
             .access
             .search(probe_txn.transaction_id(), &old_key)
             .unwrap();
         assert!(miss.is_empty(), "old composite key must no longer resolve");
 
-        let new_key = CompositeKey::new(vec![Value::Int64(10), Value::Int64(99)]);
+        let new_key = CompositeKey::new(vec![Value::int64(10), Value::int64(99)]);
         let hits = live
             .access
             .search(probe_txn.transaction_id(), &new_key)
@@ -697,7 +698,7 @@ mod tests {
 
         let live = catalog.get_index_by_name("users_email_idx").unwrap();
         let probe_txn = txn_mgr.begin().unwrap();
-        let key = CompositeKey::single(Value::String("a@b.com".to_string()));
+        let key = CompositeKey::single(Value::varchar("a@b.com".to_string()));
         let hits = live
             .access
             .search(probe_txn.transaction_id(), &key)
@@ -764,7 +765,7 @@ mod tests {
             .access
             .search(
                 probe_txn.transaction_id(),
-                &CompositeKey::single(Value::String("a@b.com".to_string())),
+                &CompositeKey::single(Value::varchar("a@b.com".to_string())),
             )
             .unwrap();
         assert_eq!(
@@ -778,7 +779,7 @@ mod tests {
             .access
             .search(
                 probe_txn.transaction_id(),
-                &CompositeKey::single(Value::String("Ada".to_string())),
+                &CompositeKey::single(Value::varchar("Ada".to_string())),
             )
             .unwrap();
         assert!(old_name_miss.is_empty(), "old name key must miss");
@@ -786,7 +787,7 @@ mod tests {
             .access
             .search(
                 probe_txn.transaction_id(),
-                &CompositeKey::single(Value::String("Grace".to_string())),
+                &CompositeKey::single(Value::varchar("Grace".to_string())),
             )
             .unwrap();
         probe_txn.commit().unwrap();
@@ -803,6 +804,13 @@ mod tests {
                 .map(|t| (0..t.len()).map(|i| t.get(i).unwrap().clone()).collect())
                 .collect(),
             other => panic!("expected Selected, got {other:?}"),
+        }
+    }
+
+    fn i64_val(v: &Value) -> i64 {
+        match v {
+            Value::Fixed(FixedValue::Int64(n)) => *n,
+            other => panic!("expected Int64, got {other:?}"),
         }
     }
 
@@ -837,7 +845,7 @@ mod tests {
         assert_eq!(rows.len(), 1);
         assert_eq!(
             rows[0],
-            vec![Value::Int64(99), Value::Int64(99)],
+            vec![Value::int64(99), Value::int64(99)],
             "a should take b's original value"
         );
     }
@@ -857,7 +865,7 @@ mod tests {
         assert_eq!(rows.len(), 1);
         assert_eq!(
             rows[0],
-            vec![Value::Int64(20), Value::Int64(10)],
+            vec![Value::int64(20), Value::int64(10)],
             "columns must be swapped using pre-mutation values"
         );
     }
@@ -876,13 +884,10 @@ mod tests {
         run(&engine, "UPDATE t SET a = b;");
 
         let mut rows = select_rows(&engine, "SELECT a, b FROM t");
-        rows.sort_by_key(|r| match r[1] {
-            Value::Int64(v) => v,
-            _ => 0,
-        });
-        assert_eq!(rows[0], vec![Value::Int64(100), Value::Int64(100)]);
-        assert_eq!(rows[1], vec![Value::Int64(200), Value::Int64(200)]);
-        assert_eq!(rows[2], vec![Value::Int64(300), Value::Int64(300)]);
+        rows.sort_by_key(|r| i64_val(&r[1]));
+        assert_eq!(rows[0], vec![Value::int64(100), Value::int64(100)]);
+        assert_eq!(rows[1], vec![Value::int64(200), Value::int64(200)]);
+        assert_eq!(rows[2], vec![Value::int64(300), Value::int64(300)]);
     }
 
     #[test]
@@ -896,7 +901,7 @@ mod tests {
         run(&engine, "UPDATE t SET a = 42;");
 
         let rows = select_rows(&engine, "SELECT a, b FROM t");
-        assert_eq!(rows[0], vec![Value::Int64(42), Value::Int64(2)]);
+        assert_eq!(rows[0], vec![Value::int64(42), Value::int64(2)]);
     }
 
     #[test]
@@ -909,18 +914,15 @@ mod tests {
         run(&engine, "UPDATE t SET a = b WHERE a = 1;");
 
         let mut rows = select_rows(&engine, "SELECT a, b FROM t");
-        rows.sort_by_key(|r| match r[1] {
-            Value::Int64(v) => v,
-            _ => 0,
-        });
+        rows.sort_by_key(|r| i64_val(&r[1]));
         assert_eq!(
             rows[0],
-            vec![Value::Int64(10), Value::Int64(10)],
+            vec![Value::int64(10), Value::int64(10)],
             "matched row: a takes b's value"
         );
         assert_eq!(
             rows[1],
-            vec![Value::Int64(2), Value::Int64(20)],
+            vec![Value::int64(2), Value::int64(20)],
             "unmatched row: unchanged"
         );
     }

@@ -16,7 +16,10 @@
 //! common case of working with raw byte slices without requiring the caller to
 //! manage a writer or cursor manually.
 
-use std::io::{self, Read, Write};
+use std::{
+    io::{Read, Write},
+    path::PathBuf,
+};
 
 use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
 /// Re-export the derive macros so callers `use storemy::codec::{Encode, Decode};`
@@ -67,19 +70,11 @@ impl CodecError {
     ///
     /// * `value` - The offending value which failed the conversion or exceeds the target's range.
     /// * `target` - The name or description of the target type (e.g., `"u32"`, `"i16"`).
-    ///
-    /// # Example
-    ///
-    /// ```
-    /// use crate::codec::CodecError;
-    /// let err = CodecError::numeric_does_not_fit(500, "u8");
-    /// assert!(matches!(err, CodecError::NumericDoesNotFit {
-    ///     value: 500,
-    ///     target: "u8"
-    /// }));
-    /// ```
-    pub fn numeric_does_not_fit(value: u64, target: &'static str) -> Self {
-        Self::NumericDoesNotFit { value, target }
+    pub fn numeric_does_not_fit(value: usize, target: &'static str) -> Self {
+        Self::NumericDoesNotFit {
+            value: u64::try_from(value).unwrap_or(u64::MAX),
+            target,
+        }
     }
 }
 
@@ -196,81 +191,190 @@ impl Decode for u8 {
     }
 }
 
-/// Convenience wrappers for little-endian reads from any [`io::Read`] source.
+impl Encode for i8 {
+    fn encode<W: Write>(&self, writer: &mut W) -> Result<(), CodecError> {
+        WriteBytesExt::write_u8(writer, self.cast_unsigned())?;
+        Ok(())
+    }
+}
+
+impl Decode for i8 {
+    fn decode<R: Read>(reader: &mut R) -> Result<Self, CodecError> {
+        Ok(ReadBytesExt::read_u8(reader)?.cast_signed())
+    }
+}
+
+impl Encode for u16 {
+    fn encode<W: Write>(&self, writer: &mut W) -> Result<(), CodecError> {
+        WriteBytesExt::write_u16::<LittleEndian>(writer, *self)?;
+        Ok(())
+    }
+}
+
+impl Decode for u16 {
+    fn decode<R: Read>(reader: &mut R) -> Result<Self, CodecError> {
+        Ok(ReadBytesExt::read_u16::<LittleEndian>(reader)?)
+    }
+}
+
+impl Encode for i16 {
+    fn encode<W: Write>(&self, writer: &mut W) -> Result<(), CodecError> {
+        WriteBytesExt::write_i16::<LittleEndian>(writer, *self)?;
+        Ok(())
+    }
+}
+
+impl Decode for i16 {
+    fn decode<R: Read>(reader: &mut R) -> Result<Self, CodecError> {
+        Ok(ReadBytesExt::read_i16::<LittleEndian>(reader)?)
+    }
+}
+
+impl Encode for u32 {
+    fn encode<W: Write>(&self, writer: &mut W) -> Result<(), CodecError> {
+        WriteBytesExt::write_u32::<LittleEndian>(writer, *self)?;
+        Ok(())
+    }
+}
+
+impl Decode for u32 {
+    fn decode<R: Read>(reader: &mut R) -> Result<Self, CodecError> {
+        Ok(ReadBytesExt::read_u32::<LittleEndian>(reader)?)
+    }
+}
+
+impl Encode for i32 {
+    fn encode<W: Write>(&self, writer: &mut W) -> Result<(), CodecError> {
+        WriteBytesExt::write_i32::<LittleEndian>(writer, *self)?;
+        Ok(())
+    }
+}
+
+impl Decode for i32 {
+    fn decode<R: Read>(reader: &mut R) -> Result<Self, CodecError> {
+        Ok(ReadBytesExt::read_i32::<LittleEndian>(reader)?)
+    }
+}
+
+impl Encode for u64 {
+    fn encode<W: Write>(&self, writer: &mut W) -> Result<(), CodecError> {
+        WriteBytesExt::write_u64::<LittleEndian>(writer, *self)?;
+        Ok(())
+    }
+}
+
+impl Decode for u64 {
+    fn decode<R: Read>(reader: &mut R) -> Result<Self, CodecError> {
+        Ok(ReadBytesExt::read_u64::<LittleEndian>(reader)?)
+    }
+}
+
+impl Encode for i64 {
+    fn encode<W: Write>(&self, writer: &mut W) -> Result<(), CodecError> {
+        WriteBytesExt::write_i64::<LittleEndian>(writer, *self)?;
+        Ok(())
+    }
+}
+
+impl Decode for i64 {
+    fn decode<R: Read>(reader: &mut R) -> Result<Self, CodecError> {
+        Ok(ReadBytesExt::read_i64::<LittleEndian>(reader)?)
+    }
+}
+
+impl Encode for f64 {
+    fn encode<W: Write>(&self, writer: &mut W) -> Result<(), CodecError> {
+        WriteBytesExt::write_f64::<LittleEndian>(writer, *self)?;
+        Ok(())
+    }
+}
+
+impl Decode for f64 {
+    fn decode<R: Read>(reader: &mut R) -> Result<Self, CodecError> {
+        Ok(ReadBytesExt::read_f64::<LittleEndian>(reader)?)
+    }
+}
+
+impl Encode for String {
+    fn encode<W: Write>(&self, writer: &mut W) -> Result<(), CodecError> {
+        let len = u32::try_from(self.len())
+            .map_err(|_| CodecError::numeric_does_not_fit(self.len(), "u32"))?;
+        WriteBytesExt::write_u32::<LittleEndian>(writer, len)?;
+        writer.write_all(self.as_bytes())?;
+        Ok(())
+    }
+}
+
+impl Decode for String {
+    fn decode<R: Read>(reader: &mut R) -> Result<Self, CodecError> {
+        let len = ReadBytesExt::read_u32::<LittleEndian>(reader)? as usize;
+        let mut buf = vec![0u8; len];
+        reader.read_exact(&mut buf)?;
+        String::from_utf8(buf).map_err(|e| CodecError::InvalidUtf8(e.utf8_error()))
+    }
+}
+
+impl Encode for bool {
+    fn encode<W: Write>(&self, writer: &mut W) -> Result<(), CodecError> {
+        WriteBytesExt::write_u8(writer, u8::from(*self))?;
+        Ok(())
+    }
+}
+
+impl Decode for bool {
+    fn decode<R: Read>(reader: &mut R) -> Result<Self, CodecError> {
+        Ok(ReadBytesExt::read_u8(reader)? != 0)
+    }
+}
+
+impl Encode for PathBuf {
+    fn encode<W: Write>(&self, writer: &mut W) -> Result<(), CodecError> {
+        let bytes = self.as_os_str().as_encoded_bytes();
+        let len = u32::try_from(bytes.len())
+            .map_err(|_| CodecError::numeric_does_not_fit(bytes.len(), "u32"))?;
+        WriteBytesExt::write_u32::<LittleEndian>(writer, len)?;
+        writer.write_all(bytes)?;
+        Ok(())
+    }
+}
+
+impl Decode for PathBuf {
+    fn decode<R: Read>(reader: &mut R) -> Result<Self, CodecError> {
+        Ok(PathBuf::from(String::decode(reader)?))
+    }
+}
+
+/// Generates `Encode` and `Decode` impls for tuple types.
 ///
-/// A blanket impl covers every `R: Read`, so `use crate::codec::ReadLeExt` is
-/// all that is needed at call sites — no more turbofish on every byte-order
-/// read.  The byteorder crate remains an implementation detail of this module.
-pub trait ReadLeExt: Read {
-    fn read_u8(&mut self) -> io::Result<u8>;
-    fn read_le_u16(&mut self) -> io::Result<u16>;
-    fn read_le_u32(&mut self) -> io::Result<u32>;
-    fn read_le_u64(&mut self) -> io::Result<u64>;
-    fn read_le_i32(&mut self) -> io::Result<i32>;
-    fn read_le_i64(&mut self) -> io::Result<i64>;
-    fn read_le_f64(&mut self) -> io::Result<f64>;
-}
-
-impl<R: Read> ReadLeExt for R {
-    fn read_u8(&mut self) -> io::Result<u8> {
-        ReadBytesExt::read_u8(self)
-    }
-    fn read_le_u16(&mut self) -> io::Result<u16> {
-        ReadBytesExt::read_u16::<LittleEndian>(self)
-    }
-    fn read_le_u32(&mut self) -> io::Result<u32> {
-        ReadBytesExt::read_u32::<LittleEndian>(self)
-    }
-    fn read_le_u64(&mut self) -> io::Result<u64> {
-        ReadBytesExt::read_u64::<LittleEndian>(self)
-    }
-    fn read_le_i32(&mut self) -> io::Result<i32> {
-        ReadBytesExt::read_i32::<LittleEndian>(self)
-    }
-    fn read_le_i64(&mut self) -> io::Result<i64> {
-        ReadBytesExt::read_i64::<LittleEndian>(self)
-    }
-    fn read_le_f64(&mut self) -> io::Result<f64> {
-        ReadBytesExt::read_f64::<LittleEndian>(self)
-    }
-}
-
-/// Convenience wrappers for little-endian writes to any [`io::Write`] sink.
+/// Each invocation receives a list of `(index, TypeParam)` pairs — the index
+/// becomes the tuple field accessor (`self.0`, `self.1`, …) and the type param
+/// names the generic bound.  Both traits are emitted in a single call so the
+/// arity list only needs to be written once.
 ///
-/// Symmetric counterpart to [`ReadLeExt`].
-pub trait WriteLeExt: Write {
-    fn write_u8(&mut self, v: u8) -> io::Result<()>;
-    fn write_le_u16(&mut self, v: u16) -> io::Result<()>;
-    fn write_le_u32(&mut self, v: u32) -> io::Result<()>;
-    fn write_le_u64(&mut self, v: u64) -> io::Result<()>;
-    fn write_le_i32(&mut self, v: i32) -> io::Result<()>;
-    fn write_le_i64(&mut self, v: i64) -> io::Result<()>;
-    fn write_le_f64(&mut self, v: f64) -> io::Result<()>;
+/// ```ignore
+/// impl_codec_tuple!((0, A), (1, B));           // (A, B)
+/// impl_codec_tuple!((0, A), (1, B), (2, C));   // (A, B, C)
+/// ```
+macro_rules! impl_codec_tuple {
+    ( $( ($idx:tt, $T:ident) ),+ ) => {
+        impl<$( $T: Encode ),+> Encode for ($( $T, )+) {
+            fn encode<W: Write>(&self, writer: &mut W) -> Result<(), CodecError> {
+                $( self.$idx.encode(writer)?; )+
+                Ok(())
+            }
+        }
+
+        impl<$( $T: Decode ),+> Decode for ($( $T, )+) {
+            fn decode<R: Read>(reader: &mut R) -> Result<Self, CodecError> {
+                Ok(( $( $T::decode(reader)?, )+ ))
+            }
+        }
+    };
 }
 
-impl<W: Write> WriteLeExt for W {
-    fn write_u8(&mut self, v: u8) -> io::Result<()> {
-        WriteBytesExt::write_u8(self, v)
-    }
-    fn write_le_u16(&mut self, v: u16) -> io::Result<()> {
-        WriteBytesExt::write_u16::<LittleEndian>(self, v)
-    }
-    fn write_le_u32(&mut self, v: u32) -> io::Result<()> {
-        WriteBytesExt::write_u32::<LittleEndian>(self, v)
-    }
-    fn write_le_u64(&mut self, v: u64) -> io::Result<()> {
-        WriteBytesExt::write_u64::<LittleEndian>(self, v)
-    }
-    fn write_le_i32(&mut self, v: i32) -> io::Result<()> {
-        WriteBytesExt::write_i32::<LittleEndian>(self, v)
-    }
-    fn write_le_i64(&mut self, v: i64) -> io::Result<()> {
-        WriteBytesExt::write_i64::<LittleEndian>(self, v)
-    }
-    fn write_le_f64(&mut self, v: f64) -> io::Result<()> {
-        WriteBytesExt::write_f64::<LittleEndian>(self, v)
-    }
-}
+impl_codec_tuple!((0, A), (1, B));
+impl_codec_tuple!((0, A), (1, B), (2, C));
+impl_codec_tuple!((0, A), (1, B), (2, C), (3, D));
 
 impl<T: Encode> Encode for Vec<T> {
     fn encode<W: Write>(&self, writer: &mut W) -> Result<(), CodecError> {
@@ -278,7 +382,7 @@ impl<T: Encode> Encode for Vec<T> {
             value: u64::try_from(self.len()).unwrap_or(u64::MAX),
             target: "u32",
         })?;
-        writer.write_le_u32(n)?;
+        n.encode(writer)?;
         for item in self {
             item.encode(writer)?;
         }
@@ -288,7 +392,7 @@ impl<T: Encode> Encode for Vec<T> {
 
 impl<T: Decode> Decode for Vec<T> {
     fn decode<R: Read>(reader: &mut R) -> Result<Self, CodecError> {
-        let n = reader.read_le_u32()?;
+        let n = u32::decode(reader)?;
         (0..n).map(|_| T::decode(reader)).collect()
     }
 }

@@ -330,7 +330,7 @@ impl Display for ColumnRef {
 /// --   WhereCondition::Predicate {
 /// --       field: ColumnRef { qualifier: None, name: "age" },
 /// --       op:    Predicate::Equals,
-/// --       value: Value::Int32(30),
+/// --       value: Value::int32(30),
 /// --   }
 ///
 /// -- WHERE age >= 18 AND name = 'alice'
@@ -366,10 +366,10 @@ impl WhereCondition {
     ///
     /// ```sql
     /// -- WHERE age = 30
-    /// --   WhereCondition::predicate("age".into(), Predicate::Equals, Value::Int32(30))
+    /// --   WhereCondition::predicate("age".into(), Predicate::Equals, Value::int32(30))
     ///
     /// -- WHERE name <> 'guest'
-    /// --   WhereCondition::predicate("name".into(), Predicate::NotEqual, Value::String("guest".into()))
+    /// --   WhereCondition::predicate("name".into(), Predicate::NotEqual, Value::varchar("guest".into()))
     /// ```
     pub fn predicate(field: ColumnRef, op: Predicate, value: Value) -> Self {
         Self::Predicate { field, op, value }
@@ -551,7 +551,7 @@ impl Display for Reference {
 /// --   ColumnDef { name: "age", col_type: Type::Int32,
 /// --               nullable: true, primary_key: false,
 /// --               auto_increment: false,
-/// --               default: Some(Value::Int32(0)) }
+/// --               default: Some(Value::int32(0)) }
 /// ```
 #[derive(Debug, Clone)]
 pub struct ColumnDef {
@@ -1318,10 +1318,10 @@ impl Display for InsertStatement {
 ///
 /// ```sql
 /// -- SET age = 31
-/// --   Assignment { column: "age",  value: Value::Int32(31) }
+/// --   Assignment { column: "age",  value: Value::int32(31) }
 ///
 /// -- SET name = 'alice'
-/// --   Assignment { column: "name", value: Value::String("alice".into()) }
+/// --   Assignment { column: "name", value: Value::varchar("alice".into()) }
 /// ```
 #[derive(Debug, Clone)]
 pub struct Assignment {
@@ -1439,7 +1439,7 @@ impl Display for DeleteStatement {
 /// --   SelectItem { expr: Expr::Column("name".into()), alias: None }
 ///
 /// -- SELECT 1 AS one
-/// --   SelectItem { expr: Expr::Literal(Value::Int64(1)), alias: Some("one") }
+/// --   SelectItem { expr: Expr::Literal(Value::int64(1)), alias: Some("one") }
 ///
 /// -- SELECT COUNT(*) AS n
 /// --   SelectItem { expr: Expr::CountStar, alias: Some("n") }

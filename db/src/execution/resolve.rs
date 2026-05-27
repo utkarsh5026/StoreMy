@@ -169,13 +169,13 @@ impl ResolvedExpr {
                     return Ok(Value::Null);
                 }
                 match op {
-                    UnOp::Not => Ok(Value::Bool(!as_bool(&v, "NOT")?)),
+                    UnOp::Not => Ok(Value::bool(!as_bool(&v, "NOT")?)),
                 }
             }
 
             Self::IsNull { expr, negated } => {
                 let v = expr.eval(tuple)?;
-                Ok(Value::Bool(if *negated {
+                Ok(Value::bool(if *negated {
                     !v.is_null()
                 } else {
                     v.is_null()
@@ -199,13 +199,13 @@ impl ResolvedExpr {
                         continue;
                     }
                     if item == v {
-                        return Ok(Value::Bool(!negated));
+                        return Ok(Value::bool(!negated));
                     }
                 }
                 if saw_null {
                     Ok(Value::Null)
                 } else {
-                    Ok(Value::Bool(*negated))
+                    Ok(Value::bool(*negated))
                 }
             }
 
@@ -224,7 +224,7 @@ impl ResolvedExpr {
                 match (lo.partial_cmp(&v), v.partial_cmp(&hi)) {
                     (Some(lo_ord), Some(hi_ord)) => {
                         let in_range = lo_ord.is_le() && hi_ord.is_le();
-                        Ok(Value::Bool(if *negated { !in_range } else { in_range }))
+                        Ok(Value::bool(if *negated { !in_range } else { in_range }))
                     }
                     _ => Ok(Value::Null),
                 }
@@ -240,18 +240,18 @@ impl ResolvedExpr {
                 if text.is_null() || pat.is_null() {
                     return Ok(Value::Null);
                 }
-                let Value::String(text_str) = text else {
+                let Some(text_str) = text.as_str() else {
                     return Err(ExecutionError::TypeError(
                         "LIKE requires a String left-hand side".to_string(),
                     ));
                 };
-                let Value::String(pat_str) = pat else {
+                let Some(pat_str) = pat.as_str() else {
                     return Err(ExecutionError::TypeError(
                         "LIKE requires a String pattern".to_string(),
                     ));
                 };
-                let matched = like_matches(&text_str, &pat_str);
-                Ok(Value::Bool(if *negated { !matched } else { matched }))
+                let matched = like_matches(text_str, pat_str);
+                Ok(Value::bool(if *negated { !matched } else { matched }))
             }
 
             Self::Case {
@@ -285,13 +285,13 @@ impl ResolvedExpr {
         }
     }
 
-    /// Evaluates this expression and returns `true` iff the result is `Value::Bool(true)`.
+    /// Evaluates this expression and returns `true` iff the result is `Value::bool(true)`.
     ///
     /// All other results — `false`, `NULL`, any non-boolean — return `false`.
     /// This is the SQL predicate check used by `WHERE`, join conditions, and residual filters.
     #[inline]
     pub fn eval_bool(&self, tuple: &Tuple) -> Result<bool, ExecutionError> {
-        Ok(matches!(self.eval(tuple)?, Value::Bool(true)))
+        Ok(self.eval(tuple)?.as_bool() == Some(true))
     }
 
     /// Statically infers the output [`Type`] of this expression without evaluating any rows.
@@ -513,15 +513,15 @@ fn eval_binary(op: BinOp, l: &Value, r: &Value) -> Result<Value, ExecutionError>
         BinOp::And => {
             let lb = as_bool(l, "AND")?;
             let rb = as_bool(r, "AND")?;
-            Ok(Value::Bool(lb && rb))
+            Ok(Value::bool(lb && rb))
         }
         BinOp::Or => {
             let lb = as_bool(l, "OR")?;
             let rb = as_bool(r, "OR")?;
-            Ok(Value::Bool(lb || rb))
+            Ok(Value::bool(lb || rb))
         }
-        BinOp::Eq => Ok(Value::Bool(l == r)),
-        BinOp::NotEq => Ok(Value::Bool(l != r)),
+        BinOp::Eq => Ok(Value::bool(l == r)),
+        BinOp::NotEq => Ok(Value::bool(l != r)),
         BinOp::Lt => Ok(cmp_to_bool(l.partial_cmp(r), Ordering::is_lt)),
         BinOp::LtEq => Ok(cmp_to_bool(l.partial_cmp(r), Ordering::is_le)),
         BinOp::Gt => Ok(cmp_to_bool(l.partial_cmp(r), Ordering::is_gt)),
@@ -562,7 +562,7 @@ fn eval_binary(op: BinOp, l: &Value, r: &Value) -> Result<Value, ExecutionError>
 
 fn cmp_to_bool(ord: Option<Ordering>, pred: fn(Ordering) -> bool) -> Value {
     match ord {
-        Some(o) => Value::Bool(pred(o)),
+        Some(o) => Value::bool(pred(o)),
         None => Value::Null,
     }
 }
@@ -647,8 +647,8 @@ mod tests {
     #[test]
     fn literal_passes_through() {
         let r = schema(&[("x", Type::Int64)]);
-        let resolved = ResolvedExpr::resolve(Expr::Literal(Value::Int64(42)), &r).unwrap();
-        assert_eq!(resolved, ResolvedExpr::Literal(Value::Int64(42)));
+        let resolved = ResolvedExpr::resolve(Expr::Literal(Value::int64(42)), &r).unwrap();
+        assert_eq!(resolved, ResolvedExpr::Literal(Value::int64(42)));
     }
 
     #[test]
@@ -675,13 +675,13 @@ mod tests {
         let expr = Expr::BinaryOp {
             lhs: Box::new(col("age")),
             op: BinOp::Gt,
-            rhs: Box::new(Expr::Literal(Value::Int64(18))),
+            rhs: Box::new(Expr::Literal(Value::int64(18))),
         };
         let resolved = ResolvedExpr::resolve(expr, &r).unwrap();
         assert_eq!(resolved, ResolvedExpr::BinaryOp {
             lhs: Box::new(ResolvedExpr::Column(col_id(0))),
             op: BinOp::Gt,
-            rhs: Box::new(ResolvedExpr::Literal(Value::Int64(18))),
+            rhs: Box::new(ResolvedExpr::Literal(Value::int64(18))),
         });
     }
 
@@ -691,8 +691,8 @@ mod tests {
         let expr = Expr::In {
             expr: Box::new(col("id")),
             list: vec![
-                Expr::Literal(Value::Int64(1)),
-                Expr::Literal(Value::Int64(2)),
+                Expr::Literal(Value::int64(1)),
+                Expr::Literal(Value::int64(2)),
             ],
             negated: false,
         };
@@ -729,8 +729,8 @@ mod tests {
         let r = schema(&[("age", Type::Int64)]);
         let expr = Expr::Between {
             expr: Box::new(col("age")),
-            low: Box::new(Expr::Literal(Value::Int64(18))),
-            high: Box::new(Expr::Literal(Value::Int64(65))),
+            low: Box::new(Expr::Literal(Value::int64(18))),
+            high: Box::new(Expr::Literal(Value::int64(65))),
             negated: false,
         };
         let ResolvedExpr::Between {
@@ -740,8 +740,8 @@ mod tests {
             panic!("expected Between");
         };
         assert_eq!(*expr, ResolvedExpr::Column(col_id(0)));
-        assert_eq!(*low, ResolvedExpr::Literal(Value::Int64(18)));
-        assert_eq!(*high, ResolvedExpr::Literal(Value::Int64(65)));
+        assert_eq!(*low, ResolvedExpr::Literal(Value::int64(18)));
+        assert_eq!(*high, ResolvedExpr::Literal(Value::int64(65)));
     }
 
     #[test]
@@ -753,11 +753,11 @@ mod tests {
                 when: Expr::BinaryOp {
                     lhs: Box::new(col("x")),
                     op: BinOp::Eq,
-                    rhs: Box::new(Expr::Literal(Value::Int64(1))),
+                    rhs: Box::new(Expr::Literal(Value::int64(1))),
                 },
-                then: Expr::Literal(Value::Int64(10)),
+                then: Expr::Literal(Value::int64(10)),
             }],
-            else_result: Some(Box::new(Expr::Literal(Value::Int64(0)))),
+            else_result: Some(Box::new(Expr::Literal(Value::int64(0)))),
         };
         let ResolvedExpr::Case {
             operand,
@@ -773,10 +773,10 @@ mod tests {
             op: BinOp::Eq,
             ..
         }));
-        assert_eq!(branches[0].then, ResolvedExpr::Literal(Value::Int64(10)));
+        assert_eq!(branches[0].then, ResolvedExpr::Literal(Value::int64(10)));
         assert_eq!(
             else_result.as_deref(),
-            Some(&ResolvedExpr::Literal(Value::Int64(0)))
+            Some(&ResolvedExpr::Literal(Value::int64(0)))
         );
     }
 
@@ -836,33 +836,33 @@ mod tests {
     #[test]
     fn eval_literal_returns_value() {
         let t = tuple(vec![]);
-        assert_eq!(eval(&lit(Value::Int64(42)), &t), Value::Int64(42));
+        assert_eq!(eval(&lit(Value::int64(42)), &t), Value::int64(42));
         assert_eq!(eval(&lit(Value::Null), &t), Value::Null);
     }
 
     #[test]
     fn eval_column_fetches_by_index() {
-        let t = tuple(vec![Value::Int64(7), Value::String("alice".into())]);
-        assert_eq!(eval(&resolved_col(0), &t), Value::Int64(7));
-        assert_eq!(eval(&resolved_col(1), &t), Value::String("alice".into()));
+        let t = tuple(vec![Value::int64(7), Value::varchar("alice".into())]);
+        assert_eq!(eval(&resolved_col(0), &t), Value::int64(7));
+        assert_eq!(eval(&resolved_col(1), &t), Value::varchar("alice".into()));
     }
 
     #[test]
     fn eval_column_out_of_bounds_errors() {
-        let t = tuple(vec![Value::Int64(1)]);
+        let t = tuple(vec![Value::int64(1)]);
         let err = resolved_col(5).eval(&t).unwrap_err();
         assert!(matches!(err, super::super::ExecutionError::TypeError(_)));
     }
 
     #[test]
     fn eval_binary_eq() {
-        let t = tuple(vec![Value::Int64(5)]);
+        let t = tuple(vec![Value::int64(5)]);
         let expr = ResolvedExpr::BinaryOp {
             lhs: Box::new(resolved_col(0)),
             op: BinOp::Eq,
-            rhs: Box::new(lit(Value::Int64(5))),
+            rhs: Box::new(lit(Value::int64(5))),
         };
-        assert_eq!(eval(&expr, &t), Value::Bool(true));
+        assert_eq!(eval(&expr, &t), Value::bool(true));
     }
 
     #[test]
@@ -871,7 +871,7 @@ mod tests {
         let expr = ResolvedExpr::BinaryOp {
             lhs: Box::new(resolved_col(0)),
             op: BinOp::Eq,
-            rhs: Box::new(lit(Value::Int64(1))),
+            rhs: Box::new(lit(Value::int64(1))),
         };
         assert_eq!(eval(&expr, &t), Value::Null);
     }
@@ -883,60 +883,60 @@ mod tests {
             expr: Box::new(resolved_col(0)),
             negated: false,
         };
-        assert_eq!(eval(&expr, &t), Value::Bool(true));
+        assert_eq!(eval(&expr, &t), Value::bool(true));
     }
 
     #[test]
     fn eval_is_not_null_on_value() {
-        let t = tuple(vec![Value::Int64(1)]);
+        let t = tuple(vec![Value::int64(1)]);
         let expr = ResolvedExpr::IsNull {
             expr: Box::new(resolved_col(0)),
             negated: true,
         };
-        assert_eq!(eval(&expr, &t), Value::Bool(true));
+        assert_eq!(eval(&expr, &t), Value::bool(true));
     }
 
     #[test]
     fn eval_in_match() {
-        let t = tuple(vec![Value::Int64(2)]);
+        let t = tuple(vec![Value::int64(2)]);
         let expr = ResolvedExpr::In {
             expr: Box::new(resolved_col(0)),
             list: vec![
-                lit(Value::Int64(1)),
-                lit(Value::Int64(2)),
-                lit(Value::Int64(3)),
+                lit(Value::int64(1)),
+                lit(Value::int64(2)),
+                lit(Value::int64(3)),
             ],
             negated: false,
         };
-        assert_eq!(eval(&expr, &t), Value::Bool(true));
+        assert_eq!(eval(&expr, &t), Value::bool(true));
     }
 
     #[test]
     fn eval_between_in_range() {
-        let t = tuple(vec![Value::Int64(25)]);
+        let t = tuple(vec![Value::int64(25)]);
         let expr = ResolvedExpr::Between {
             expr: Box::new(resolved_col(0)),
-            low: Box::new(lit(Value::Int64(18))),
-            high: Box::new(lit(Value::Int64(65))),
+            low: Box::new(lit(Value::int64(18))),
+            high: Box::new(lit(Value::int64(65))),
             negated: false,
         };
-        assert_eq!(eval(&expr, &t), Value::Bool(true));
+        assert_eq!(eval(&expr, &t), Value::bool(true));
     }
 
     #[test]
     fn eval_like_matches() {
-        let t = tuple(vec![Value::String("alice".into())]);
+        let t = tuple(vec![Value::varchar("alice".into())]);
         let expr = ResolvedExpr::Like {
             expr: Box::new(resolved_col(0)),
-            pattern: Box::new(lit(Value::String("ali%".into()))),
+            pattern: Box::new(lit(Value::varchar("ali%".into()))),
             negated: false,
         };
-        assert_eq!(eval(&expr, &t), Value::Bool(true));
+        assert_eq!(eval(&expr, &t), Value::bool(true));
     }
 
     #[test]
     fn eval_case_searched_first_match() {
-        let t = tuple(vec![Value::Int64(1)]);
+        let t = tuple(vec![Value::int64(1)]);
         let expr = ResolvedExpr::Case {
             operand: None,
             branches: vec![
@@ -944,22 +944,22 @@ mod tests {
                     when: ResolvedExpr::BinaryOp {
                         lhs: Box::new(resolved_col(0)),
                         op: BinOp::Eq,
-                        rhs: Box::new(lit(Value::Int64(1))),
+                        rhs: Box::new(lit(Value::int64(1))),
                     },
-                    then: lit(Value::Int64(10)),
+                    then: lit(Value::int64(10)),
                 },
                 ResolvedCaseBranch {
                     when: ResolvedExpr::BinaryOp {
                         lhs: Box::new(resolved_col(0)),
                         op: BinOp::Eq,
-                        rhs: Box::new(lit(Value::Int64(2))),
+                        rhs: Box::new(lit(Value::int64(2))),
                     },
-                    then: lit(Value::Int64(20)),
+                    then: lit(Value::int64(20)),
                 },
             ],
             else_result: None,
         };
-        assert_eq!(eval(&expr, &t), Value::Int64(10));
+        assert_eq!(eval(&expr, &t), Value::int64(10));
     }
 
     #[test]
@@ -986,97 +986,97 @@ mod tests {
     #[test]
     fn eval_add_int64() {
         assert_eq!(
-            arith_ok(BinOp::Add, Value::Int64(3), Value::Int64(4)),
-            Value::Int64(7)
+            arith_ok(BinOp::Add, Value::int64(3), Value::int64(4)),
+            Value::int64(7)
         );
     }
 
     #[test]
     fn eval_sub_int64() {
         assert_eq!(
-            arith_ok(BinOp::Sub, Value::Int64(10), Value::Int64(3)),
-            Value::Int64(7)
+            arith_ok(BinOp::Sub, Value::int64(10), Value::int64(3)),
+            Value::int64(7)
         );
     }
 
     #[test]
     fn eval_mul_int64() {
         assert_eq!(
-            arith_ok(BinOp::Mul, Value::Int64(6), Value::Int64(7)),
-            Value::Int64(42)
+            arith_ok(BinOp::Mul, Value::int64(6), Value::int64(7)),
+            Value::int64(42)
         );
     }
 
     #[test]
     fn eval_div_int64() {
         assert_eq!(
-            arith_ok(BinOp::Div, Value::Int64(20), Value::Int64(4)),
-            Value::Int64(5)
+            arith_ok(BinOp::Div, Value::int64(20), Value::int64(4)),
+            Value::int64(5)
         );
     }
 
     #[test]
     fn eval_add_float64() {
         assert_eq!(
-            arith_ok(BinOp::Add, Value::Float64(1.5), Value::Float64(2.5)),
-            Value::Float64(4.0)
+            arith_ok(BinOp::Add, Value::float64(1.5), Value::float64(2.5)),
+            Value::float64(4.0)
         );
     }
 
     #[test]
     fn eval_sub_float64() {
         assert_eq!(
-            arith_ok(BinOp::Sub, Value::Float64(5.0), Value::Float64(1.5)),
-            Value::Float64(3.5)
+            arith_ok(BinOp::Sub, Value::float64(5.0), Value::float64(1.5)),
+            Value::float64(3.5)
         );
     }
 
     #[test]
     fn eval_mul_float64() {
         assert_eq!(
-            arith_ok(BinOp::Mul, Value::Float64(2.0), Value::Float64(3.5)),
-            Value::Float64(7.0)
+            arith_ok(BinOp::Mul, Value::float64(2.0), Value::float64(3.5)),
+            Value::float64(7.0)
         );
     }
 
     #[test]
     fn eval_div_float64() {
         assert_eq!(
-            arith_ok(BinOp::Div, Value::Float64(7.0), Value::Float64(2.0)),
-            Value::Float64(3.5)
+            arith_ok(BinOp::Div, Value::float64(7.0), Value::float64(2.0)),
+            Value::float64(3.5)
         );
     }
 
     #[test]
     fn eval_add_uint64() {
         assert_eq!(
-            arith_ok(BinOp::Add, Value::Uint64(10), Value::Uint64(5)),
-            Value::Uint64(15)
+            arith_ok(BinOp::Add, Value::uint64(10), Value::uint64(5)),
+            Value::uint64(15)
         );
     }
 
     #[test]
     fn eval_div_by_zero_int64_errors() {
-        let err = arith(BinOp::Div, Value::Int64(5), Value::Int64(0)).unwrap_err();
+        let err = arith(BinOp::Div, Value::int64(5), Value::int64(0)).unwrap_err();
         assert!(matches!(err, ExecutionError::TypeError(_)));
     }
 
     #[test]
     fn eval_div_by_zero_uint64_errors() {
-        let err = arith(BinOp::Div, Value::Uint64(5), Value::Uint64(0)).unwrap_err();
+        let err = arith(BinOp::Div, Value::uint64(5), Value::uint64(0)).unwrap_err();
         assert!(matches!(err, ExecutionError::TypeError(_)));
     }
 
     #[test]
     fn eval_arith_type_mismatch_errors() {
-        let err = arith(BinOp::Add, Value::Int64(1), Value::String("x".into())).unwrap_err();
+        let err = arith(BinOp::Add, Value::int64(1), Value::varchar("x".into())).unwrap_err();
         assert!(matches!(err, ExecutionError::TypeError(_)));
     }
 
     #[test]
     fn eval_arith_null_left_propagates() {
         assert_eq!(
-            arith_ok(BinOp::Add, Value::Null, Value::Int64(1)),
+            arith_ok(BinOp::Add, Value::Null, Value::int64(1)),
             Value::Null
         );
     }
@@ -1084,7 +1084,7 @@ mod tests {
     #[test]
     fn eval_arith_null_right_propagates() {
         assert_eq!(
-            arith_ok(BinOp::Mul, Value::Int64(5), Value::Null),
+            arith_ok(BinOp::Mul, Value::int64(5), Value::Null),
             Value::Null
         );
     }
@@ -1092,13 +1092,13 @@ mod tests {
     #[test]
     fn eval_arith_column_plus_literal() {
         // col(0) + 10 where col(0) = 32  →  42
-        let t = tuple(vec![Value::Int64(32)]);
+        let t = tuple(vec![Value::int64(32)]);
         let expr = ResolvedExpr::BinaryOp {
             lhs: Box::new(resolved_col(0)),
             op: BinOp::Add,
-            rhs: Box::new(lit(Value::Int64(10))),
+            rhs: Box::new(lit(Value::int64(10))),
         };
-        assert_eq!(eval(&expr, &t), Value::Int64(42));
+        assert_eq!(eval(&expr, &t), Value::int64(42));
     }
 
     #[test]
@@ -1106,16 +1106,16 @@ mod tests {
         // (2 + 3) * 4 = 20 — verifies nested BinaryOp eval
         let t = tuple(vec![]);
         let inner = ResolvedExpr::BinaryOp {
-            lhs: Box::new(lit(Value::Int64(2))),
+            lhs: Box::new(lit(Value::int64(2))),
             op: BinOp::Add,
-            rhs: Box::new(lit(Value::Int64(3))),
+            rhs: Box::new(lit(Value::int64(3))),
         };
         let expr = ResolvedExpr::BinaryOp {
             lhs: Box::new(inner),
             op: BinOp::Mul,
-            rhs: Box::new(lit(Value::Int64(4))),
+            rhs: Box::new(lit(Value::int64(4))),
         };
-        assert_eq!(eval(&expr, &t), Value::Int64(20));
+        assert_eq!(eval(&expr, &t), Value::int64(20));
     }
 
     #[test]
@@ -1128,7 +1128,7 @@ mod tests {
 
     #[test]
     fn map_columns_leaves_literal_unchanged() {
-        let expr = lit(Value::Int64(99));
+        let expr = lit(Value::int64(99));
         let mapped = expr.clone().map_columns(|_| col_id(99));
         assert_eq!(mapped, expr);
     }

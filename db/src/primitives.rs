@@ -16,7 +16,8 @@
 //! - [`ColumnId`] — column index in a table schema
 //! - [`HashCode`] — hash value used for hash indexes
 //! - [`RecordId`] — full tuple address (`file`, `page`, `slot`)
-//! - [`PageId`] — page address without a slot (`file`, `page`)
+//! - [`PageId`] — page address without a slot (`file`, `page`), for buffer-pool APIs
+//! - [`PageDescriptor`] — on-disk page pointer embedded inside records (`file`, `page`)
 //! - [`Predicate`] — comparison operators used in `WHERE` / join conditions
 //! - [`Filepath`] — type alias for [`PathBuf`] in APIs
 
@@ -29,7 +30,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use crate::codec::{CodecError, Decode, Encode, ReadLeExt, WriteLeExt};
+use crate::codec::{CodecError, Decode, Encode};
 
 /// Index of a page inside a database file.
 ///
@@ -114,14 +115,13 @@ impl From<PageNumber> for usize {
 
 impl Encode for PageNumber {
     fn encode<W: Write>(&self, writer: &mut W) -> Result<(), CodecError> {
-        writer.write_le_u32(self.0)?;
-        Ok(())
+        self.0.encode(writer)
     }
 }
 
 impl Decode for PageNumber {
     fn decode<R: Read>(reader: &mut R) -> Result<Self, CodecError> {
-        Ok(Self(reader.read_le_u32()?))
+        Ok(Self(u32::decode(reader)?))
     }
 }
 
@@ -172,14 +172,13 @@ impl From<&Path> for FileId {
 
 impl Encode for FileId {
     fn encode<W: Write>(&self, writer: &mut W) -> Result<(), CodecError> {
-        writer.write_le_u64(self.0)?;
-        Ok(())
+        self.0.encode(writer)
     }
 }
 
 impl Decode for FileId {
     fn decode<R: Read>(reader: &mut R) -> Result<Self, CodecError> {
-        Ok(Self(reader.read_le_u64()?))
+        Ok(Self(u64::decode(reader)?))
     }
 }
 
@@ -271,14 +270,13 @@ impl From<TransactionId> for u64 {
 
 impl Encode for TransactionId {
     fn encode<W: Write>(&self, writer: &mut W) -> Result<(), CodecError> {
-        writer.write_le_u64(self.0)?;
-        Ok(())
+        self.0.encode(writer)
     }
 }
 
 impl Decode for TransactionId {
     fn decode<R: Read>(reader: &mut R) -> Result<Self, CodecError> {
-        Ok(Self(reader.read_le_u64()?))
+        Ok(Self(u64::decode(reader)?))
     }
 }
 
@@ -316,14 +314,13 @@ impl From<Lsn> for u64 {
 
 impl Encode for Lsn {
     fn encode<W: Write>(&self, writer: &mut W) -> Result<(), CodecError> {
-        writer.write_le_u64(self.0)?;
-        Ok(())
+        self.0.encode(writer)
     }
 }
 
 impl Decode for Lsn {
     fn decode<R: Read>(reader: &mut R) -> Result<Self, CodecError> {
-        Ok(Self(reader.read_le_u64()?))
+        Ok(Self(u64::decode(reader)?))
     }
 }
 
@@ -424,14 +421,13 @@ impl TryFrom<usize> for SlotId {
 
 impl Encode for SlotId {
     fn encode<W: Write>(&self, writer: &mut W) -> Result<(), CodecError> {
-        writer.write_le_u16(self.0)?;
-        Ok(())
+        self.0.encode(writer)
     }
 }
 
 impl Decode for SlotId {
     fn decode<R: Read>(reader: &mut R) -> Result<Self, CodecError> {
-        Ok(Self(reader.read_le_u16()?))
+        Ok(Self(u16::decode(reader)?))
     }
 }
 
@@ -526,14 +522,13 @@ impl TryFrom<usize> for ColumnId {
 
 impl Encode for ColumnId {
     fn encode<W: Write>(&self, writer: &mut W) -> Result<(), CodecError> {
-        writer.write_le_u32(self.0)?;
-        Ok(())
+        self.0.encode(writer)
     }
 }
 
 impl Decode for ColumnId {
     fn decode<R: Read>(reader: &mut R) -> Result<Self, CodecError> {
-        Ok(Self(reader.read_le_u32()?))
+        Ok(Self(u32::decode(reader)?))
     }
 }
 
@@ -582,14 +577,13 @@ impl fmt::Display for HashCode {
 
 impl Encode for HashCode {
     fn encode<W: Write>(&self, writer: &mut W) -> Result<(), CodecError> {
-        writer.write_le_u64(self.0)?;
-        Ok(())
+        self.0.encode(writer)
     }
 }
 
 impl Decode for HashCode {
     fn decode<R: Read>(reader: &mut R) -> Result<Self, CodecError> {
-        Ok(Self(reader.read_le_u64()?))
+        Ok(Self(u64::decode(reader)?))
     }
 }
 
@@ -691,6 +685,80 @@ impl Decode for PageId {
     }
 }
 
+/// An on-disk page pointer: the minimal address needed to locate a specific page.
+///
+/// `PageDescriptor` is the primitive you embed *inside* an on-disk record when
+/// one page needs to reference another — for example, a TEXT overflow pointer
+/// stored in a tuple slot, or any future cross-page link.
+///
+/// It is structurally identical to [`PageId`] (`file_id + page_no`) but serves
+/// a different role: [`PageId`] is the currency of buffer-pool and I/O APIs
+/// (you hand it to the buffer manager to fix or flush a frame), while
+/// `PageDescriptor` is a **value** — something you encode into bytes, ship
+/// across page boundaries, and decode back when reading.  Keeping them distinct
+/// prevents accidentally passing a decoded page pointer directly to the buffer
+/// pool as if it were a live frame reference.
+///
+/// On disk: `[file_id: u64 LE][page_no: u32 LE]` = 12 bytes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct PageDescriptor {
+    /// The file that contains the referenced page.
+    pub file_id: FileId,
+    /// The page index within that file.
+    pub page_no: PageNumber,
+}
+
+impl PageDescriptor {
+    /// On-disk byte size: 8 bytes (`FileId` u64) + 4 bytes (`PageNumber` u32).
+    pub const SIZE: usize = 8 + PageNumber::SIZE;
+
+    /// Constructs a descriptor from a file id and page number.
+    pub fn new(file_id: FileId, page_no: PageNumber) -> Self {
+        Self { file_id, page_no }
+    }
+}
+
+impl fmt::Display for PageDescriptor {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "PageDesc({}, {})", self.file_id.0, self.page_no.0)
+    }
+}
+
+impl From<PageId> for PageDescriptor {
+    fn from(p: PageId) -> Self {
+        Self {
+            file_id: p.file_id,
+            page_no: p.page_no,
+        }
+    }
+}
+
+impl From<PageDescriptor> for PageId {
+    fn from(d: PageDescriptor) -> Self {
+        Self {
+            file_id: d.file_id,
+            page_no: d.page_no,
+        }
+    }
+}
+
+impl Encode for PageDescriptor {
+    fn encode<W: Write>(&self, writer: &mut W) -> Result<(), CodecError> {
+        self.file_id.encode(writer)?;
+        self.page_no.encode(writer)?;
+        Ok(())
+    }
+}
+
+impl Decode for PageDescriptor {
+    fn decode<R: Read>(reader: &mut R) -> Result<Self, CodecError> {
+        Ok(Self {
+            file_id: FileId::decode(reader)?,
+            page_no: PageNumber::decode(reader)?,
+        })
+    }
+}
+
 /// SQL-style comparison operator (equality, ordering, pattern match).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Predicate {
@@ -774,8 +842,7 @@ impl Encode for Predicate {
             Predicate::NotEqualBracket => 6,
             Predicate::Like => 7,
         };
-        writer.write_u8(discriminant)?;
-        Ok(())
+        discriminant.encode(writer)
     }
 }
 
@@ -785,7 +852,7 @@ impl Decode for Predicate {
     /// Returns [`CodecError::UnknownDiscriminant`]
     /// when the stored discriminant is not in `0..=7`.
     fn decode<R: Read>(reader: &mut R) -> Result<Self, CodecError> {
-        match reader.read_u8()? {
+        match u8::decode(reader)? {
             0 => Ok(Predicate::Equals),
             1 => Ok(Predicate::LessThan),
             2 => Ok(Predicate::GreaterThan),
