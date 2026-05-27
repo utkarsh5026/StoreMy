@@ -37,15 +37,19 @@ use std::sync::{
 use thiserror::Error;
 
 use crate::{
-    FileId, PageNumber, TransactionId,
+    FileId, PageNumber, TEXT_MAX_INLINE_SIZE, TransactionId,
     buffer_pool::{
         LockRequest,
         page_store::{PageGuard, PageStore, PageStoreError},
     },
-    heap::page::HeapPage,
-    primitives::{PageId, RecordId, SlotId},
+    heap::{
+        overflow::{OVERFLOW_PAYLOAD_SIZE, OverflowPage},
+        page::HeapPage,
+    },
+    primitives::{PageDescriptor, PageId, RecordId, SlotId},
     storage::{PAGE_SIZE, Page, StorageError},
     tuple::{Tuple, TupleSchema},
+    types::{DynValue, Value},
     wal::{WalError, writer::Wal},
 };
 
@@ -186,16 +190,21 @@ impl HeapFile {
         transaction_id: TransactionId,
         tuple: &Tuple,
     ) -> Result<RecordId, HeapError> {
+        // Spill any TEXT values that exceed TEXT_MAX_INLINE_SIZE to overflow
+        // pages, replacing them with Value::TextOverflow pointers so the
+        // tuple slots stay small and bounded.
+        let tuple = self.spill_text_overflow(transaction_id, tuple)?;
+
         for page_no in 0..=self.num_pages() {
             let page_id = self.page_id(page_no);
-            if let Some(record_id) = self.insert_into_page(transaction_id, page_id, tuple)? {
+            if let Some(record_id) = self.insert_into_page(transaction_id, page_id, &tuple)? {
                 return Ok(record_id);
             }
         }
 
         let new_page_no = self.num_pages.fetch_add(1, Ordering::AcqRel);
         let page_id = self.page_id(new_page_no);
-        if let Some(record_id) = self.insert_into_page(transaction_id, page_id, tuple)? {
+        if let Some(record_id) = self.insert_into_page(transaction_id, page_id, &tuple)? {
             return Ok(record_id);
         }
 
@@ -489,6 +498,133 @@ impl HeapFile {
         Ok(count)
     }
 
+    /// Writes `data` to one or more overflow pages and returns a pointer to the
+    /// first page in the chain.
+    ///
+    /// The bytes are split into chunks of at most [`OVERFLOW_PAYLOAD_SIZE`].
+    /// Each chunk is stored on a newly allocated page; pages are linked via
+    /// [`OverflowPage::next_page`] so [`Self::read_overflow`] can reconstruct
+    /// the full payload by walking the chain.
+    ///
+    /// Chunks are written in reverse order so each page can record its
+    /// successor's page number before that successor exists. The returned
+    /// [`PageDescriptor`] therefore points at the first chunk — the entry
+    /// point stored in a tuple slot.
+    ///
+    /// Every allocated page is WAL-logged (guard → log → write) before the
+    /// in-memory frame is updated, matching other mutating heap paths.
+    ///
+    /// # Errors
+    ///
+    /// - [`HeapError::Store`] — a page could not be fetched or locked.
+    /// - [`HeapError::Storage`] — a chunk exceeds [`OVERFLOW_PAYLOAD_SIZE`].
+    /// - [`HeapError::Wal`] — an INSERT WAL record could not be written.
+    pub fn write_overflow(
+        &self,
+        txn: TransactionId,
+        data: &[u8],
+    ) -> Result<PageDescriptor, HeapError> {
+        let chunks: Vec<&[u8]> = data.chunks(OVERFLOW_PAYLOAD_SIZE).collect();
+
+        // We write chunks in reverse so that each page can record its successor's
+        // page number.  After the loop `first_page_no` holds the page number of
+        // the first chunk (the one the tuple slot will point at).
+        let mut next_page: Option<PageNumber> = None;
+        let mut first_page_no = PageNumber::new(0); // overwritten on every iteration
+
+        for chunk in chunks.iter().rev() {
+            let page_no = self.num_pages.fetch_add(1, Ordering::AcqRel);
+            let page_no = PageNumber::new(page_no);
+            let page_id = self.page_id(page_no);
+
+            let page = OverflowPage::overflow_new(next_page, chunk.to_vec())?;
+            // to_page_bytes stamps the CRC; map CodecError → StorageError since
+            // HeapError has no direct From<CodecError> impl.
+            let bytes = page
+                .to_page_bytes()
+                .map_err(|e| StorageError::ParseError(e.to_string()))?;
+
+            // Acquire the exclusive guard, then WAL-log before writing, following
+            // the same guard → log → write order used by every other mutating path.
+            let guard = self.guard(page_id, txn, true)?;
+            let before = vec![0u8; PAGE_SIZE]; // page did not exist before
+            let lsn = self.wal.log_insert(txn, page_id, before, bytes.to_vec())?;
+            guard.write(&bytes, lsn);
+
+            next_page = Some(page_no);
+            first_page_no = page_no;
+        }
+
+        Ok(PageDescriptor::new(self.file_id, first_page_no))
+    }
+
+    /// Reads the full byte payload stored in an overflow page chain.
+    ///
+    /// Starts at `overflow_ptr.page_no`, appends each page's payload in order,
+    /// and follows [`OverflowPage::next_page`] until the chain ends. The caller
+    /// is responsible for checking that the reconstructed length matches any
+    /// stored metadata (e.g. the `total_len` field on [`DynValue::TextOverflow`]).
+    ///
+    /// # Errors
+    ///
+    /// - [`HeapError::Store`] — a page in the chain could not be fetched or locked.
+    /// - [`HeapError::Storage`] — page bytes could not be parsed as an overflow page.
+    pub fn read_overflow(
+        &self,
+        txn: TransactionId,
+        overflow_ptr: PageDescriptor,
+    ) -> Result<Vec<u8>, HeapError> {
+        let mut result = Vec::new();
+        let mut page_no = overflow_ptr.page_no;
+
+        loop {
+            let page_id = self.page_id(page_no);
+            let guard = self.guard(page_id, txn, false)?;
+            let page = OverflowPage::from_page_bytes(&guard.read())
+                .map_err(|e| StorageError::ParseError(e.to_string()))?;
+            result.extend_from_slice(page.payload());
+
+            match page.next_page() {
+                None => break,
+                Some(next) => page_no = next,
+            }
+        }
+
+        Ok(result)
+    }
+
+    /// Replaces inline TEXT values that exceed [`TEXT_MAX_INLINE_SIZE`] with
+    /// [`DynValue::TextOverflow`] pointers.
+    ///
+    /// Called by [`Self::insert_tuple`] before size calculation and slot
+    /// encoding so long strings are spilled to overflow pages and the tuple
+    /// slot stays bounded. Values within the inline limit and all non-TEXT
+    /// columns are copied unchanged.
+    ///
+    /// # Errors
+    ///
+    /// - Propagates any [`HeapError`] from [`Self::write_overflow`].
+    /// - [`HeapError::Storage`] — a TEXT value's byte length exceeds `u32::MAX`.
+    fn spill_text_overflow(&self, txn: TransactionId, tuple: &Tuple) -> Result<Tuple, HeapError> {
+        let new_values: Result<Vec<Value>, HeapError> = tuple
+            .iter()
+            .map(|v| match v {
+                Value::Dyn(DynValue::Text(s)) if s.len() > TEXT_MAX_INLINE_SIZE => {
+                    let ptr = self.write_overflow(txn, s.as_bytes())?;
+                    let total_len =
+                        u32::try_from(s.len()).map_err(|_| StorageError::TupleTooLarge {
+                            size: s.len(),
+                            max: u32::MAX as usize,
+                        })?;
+                    Ok(Value::Dyn(DynValue::TextOverflow { total_len, ptr }))
+                }
+                other => Ok(other.clone()),
+            })
+            .collect();
+
+        Ok(Tuple::new(new_values?))
+    }
+
     /// Wraps raw page `data` in a [`HeapPage`] view bound to this file's schema.
     #[inline]
     fn h_page(&self, data: &[u8]) -> Result<HeapPage, StorageError> {
@@ -670,7 +806,7 @@ mod tests {
     }
 
     fn make_tuple(id: i32, flag: bool) -> Tuple {
-        Tuple::new(vec![Value::Int32(id), Value::Bool(flag)])
+        Tuple::new(vec![Value::int32(id), Value::bool(flag)])
     }
 
     fn make_heap_file(existing_pages: u32) -> (HeapFile, Arc<Wal>, tempfile::TempDir) {
@@ -1086,14 +1222,14 @@ mod tests {
             heap.insert_tuple(txn, &make_tuple(i, i % 2 == 0)).unwrap();
         }
         let count = heap
-            .bulk_delete(txn, |t| matches!(t.get(1), Some(Value::Bool(true))))
+            .bulk_delete(txn, |t| t.get(1).is_some_and(|v| v.as_bool() == Some(true)))
             .unwrap();
         assert_eq!(count, 5);
 
         let remaining: Vec<Tuple> = heap.scan(txn).unwrap().map(|(_, t)| t).collect();
         assert_eq!(remaining.len(), 5);
         for t in &remaining {
-            assert!(matches!(t.get(1), Some(Value::Bool(false))));
+            assert!(t.get(1).is_some_and(|v| v.as_bool() == Some(false)));
         }
     }
 

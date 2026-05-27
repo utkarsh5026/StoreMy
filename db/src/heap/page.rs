@@ -56,12 +56,14 @@ use std::{
 use byteorder::{ByteOrder, LittleEndian};
 
 use crate::{
+    TEXT_MAX_INLINE_SIZE,
     codec::{CodecError, Decode, Encode},
     primitives::{Lsn, SlotId},
     storage::{
         MAX_TUPLE_SIZE, PAGE_SIZE, Page, PageKind, StorageError, TypedPage, UNIVERSAL_HEADER_SIZE,
     },
     tuple::{Tuple, TupleSchema},
+    types::{DynValue, Type, Value},
 };
 
 /// Number of bytes before the slot array.
@@ -420,8 +422,19 @@ impl TypedPage<HeapTypedHeader, HeapTypedBody> {
             .count()
     }
 
-    /// Returns the number of tuples that can still be inserted before the page
-    /// is full.
+    /// Returns how many more tuples of this page's schema can fit before insert would fail.
+    ///
+    /// Assumes every tuple has the fixed size [`TupleSchema::serialized_size`] returns for
+    /// this page. The count combines two sources:
+    ///
+    /// 1. **Reuse** — up to [`Self::empty_slots`], but only while the gap between the slot array
+    ///    and tuple region can still hold that many tuple payloads (reused slots do not grow the
+    ///    slot array).
+    /// 2. **Grow** — any remaining gap is divided by `tuple_size + slot_pointer_size`, because each
+    ///    brand-new slot costs both payload bytes and one 4-byte slot entry.
+    ///
+    /// [`Self::insert_many`] uses this as an upper bound so it can batch inserts without
+    /// probing each tuple individually. Returns `0` when the schema serializes to zero bytes.
     pub fn remaining_capacity(&self) -> usize {
         let tup = self.body.schema().serialized_size();
         if tup == 0 {
@@ -448,12 +461,25 @@ impl TypedPage<HeapTypedHeader, HeapTypedBody> {
             .validate(&tuple)
             .map_err(|_| StorageError::SchemaMismatch)?;
 
-        let tup_size = schema.serialized_size();
+        let has_text = schema.fields().any(|f| f.field_type == Type::Text);
+        let tup_size = if has_text {
+            for value in tuple.iter() {
+                if let Value::Dyn(DynValue::Text(s)) = value
+                    && s.len() > TEXT_MAX_INLINE_SIZE
+                {
+                    return Err(StorageError::TupleTooLarge {
+                        size: s.len(),
+                        max: TEXT_MAX_INLINE_SIZE,
+                    });
+                }
+            }
+            schema.actual_serialized_size(&tuple)
+        } else {
+            schema.serialized_size()
+        };
+
         if tup_size > MAX_TUPLE_SIZE {
-            return Err(StorageError::TupleTooLarge {
-                size: tup_size,
-                max: MAX_TUPLE_SIZE,
-            });
+            return Err(StorageError::tuple_too_large(tup_size));
         }
 
         let reused = self
@@ -461,8 +487,11 @@ impl TypedPage<HeapTypedHeader, HeapTypedBody> {
             .slot_pointers
             .iter()
             .position(|sp| sp.is_tombstone());
-        let needs_new_slot = reused.is_none();
-        let slot_growth = if needs_new_slot { SLOT_POINTER_SIZE } else { 0 };
+        let slot_growth = if reused.is_none() {
+            SLOT_POINTER_SIZE
+        } else {
+            0
+        };
         let new_slot_end = Self::slot_array_end(self.body.slot_pointers.len()) + slot_growth;
         let new_tuple_start = self
             .body
@@ -601,7 +630,7 @@ mod tests {
     }
 
     fn make_tuple(id: i32, flag: bool) -> Tuple {
-        Tuple::new(vec![Value::Int32(id), Value::Bool(flag)])
+        Tuple::new(vec![Value::int32(id), Value::bool(flag)])
     }
 
     fn empty_page(schema: &TupleSchema) -> HeapPage {
@@ -681,7 +710,7 @@ mod tests {
     fn insert_schema_mismatch_is_rejected() {
         let s = schema();
         let mut page = empty_page(&s);
-        let wrong = Tuple::new(vec![Value::Int32(1)]);
+        let wrong = Tuple::new(vec![Value::int32(1)]);
         assert!(matches!(
             page.insert_tuple(wrong),
             Err(StorageError::SchemaMismatch)
@@ -999,7 +1028,7 @@ mod tests {
     fn insert_many_schema_mismatch_returns_error() {
         let s = schema();
         let mut page = empty_page(&s);
-        let mut bad = vec![Tuple::new(vec![Value::Int32(1)])].into_iter();
+        let mut bad = vec![Tuple::new(vec![Value::int32(1)])].into_iter();
         assert!(matches!(
             page.insert_many(&mut bad),
             Err(StorageError::SchemaMismatch)
@@ -1013,7 +1042,7 @@ mod tests {
 
         let good1 = make_tuple(1, true);
         let good2 = make_tuple(2, false);
-        let bad = Tuple::new(vec![Value::Int32(99)]);
+        let bad = Tuple::new(vec![Value::int32(99)]);
 
         let mut batch = vec![good1, good2, bad].into_iter();
         let result = page.insert_many(&mut batch);
