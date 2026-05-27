@@ -1,4 +1,4 @@
-use std::{collections::HashMap, fmt};
+use std::{collections::HashMap, fmt, mem::size_of};
 
 use super::{Tuple, TupleError};
 use crate::{
@@ -65,17 +65,14 @@ impl Field {
         }
     }
 
-    /// Tightens this column to `NOT NULL`, consuming and returning `self`.
+    /// Marks this field (column) as `NOT NULL`, meaning it cannot store NULL values.
     ///
-    /// # SQL examples
+    /// The default for columns is nullable (`NULL`). Calling `not_null` changes
+    /// the field such that it enforces non-nullability.
     ///
-    /// ```sql
-    /// -- id INT NOT NULL
-    /// --   Field::new("id", Type::Int32).not_null()
+    /// # Returns
     ///
-    /// -- email VARCHAR NOT NULL
-    /// --   Field::new("email", Type::String).not_null()
-    /// ```
+    /// Returns a new [`Field`] with `nullable` set to `false` (not null constraint).
     #[must_use]
     pub fn not_null(mut self) -> Self {
         self.nullable = false;
@@ -168,9 +165,6 @@ impl fmt::Display for Field {
 /// --       Field::new("age",  Type::Int32),
 /// --   ])
 ///
-/// -- SELECT age, id FROM users
-/// --   schema.project(&[2, 0])             -- output schema of the projection
-///
 /// -- SELECT * FROM users CROSS JOIN orders
 /// --   left_schema.merge(&right_schema)    -- output schema of the join
 ///
@@ -190,9 +184,29 @@ const fn fixed_type_payload_size(ty: Type) -> usize {
         Type::Int32 | Type::Uint32 => 4,
         Type::Int64 | Type::Uint64 | Type::Float64 | Type::Date | Type::Time | Type::Timestamp => 8,
         Type::Bool => 1,
-        Type::String => 4 + STRING_MAX_SIZE,
+        Type::String => STRING_LENGTH_PREFIX_SIZE + STRING_MAX_SIZE,
         Type::Text => 0,
     }
+}
+
+/// Little-endian `u16` field count at the start of every serialized tuple.
+const TUPLE_FIELD_COUNT_SIZE: usize = size_of::<u16>();
+
+/// One null bit per column in the bitmap that follows the field count.
+const NULL_BITMAP_BITS_PER_BYTE: usize = 8;
+
+/// Little-endian `u32` [`Type`] tag before each non-null [`Value`] payload.
+const VALUE_TYPE_TAG_SIZE: usize = size_of::<u32>();
+
+/// u32 length prefix before inline UTF-8 in [`Type::String`] worst-case sizing.
+const STRING_LENGTH_PREFIX_SIZE: usize = size_of::<u32>();
+
+const fn null_bitmap_size(num_fields: usize) -> usize {
+    num_fields.div_ceil(NULL_BITMAP_BITS_PER_BYTE)
+}
+
+const fn worst_case_encoded_value_size(field_type: Type) -> usize {
+    VALUE_TYPE_TAG_SIZE + fixed_type_payload_size(field_type)
 }
 
 impl TupleSchema {
@@ -245,13 +259,6 @@ impl TupleSchema {
         self.fields.iter().filter(|f| !f.is_dropped).count()
     }
 
-    /// Returns `true` if the schema has no columns - `CREATE TABLE t ()` in
-    /// shape. Mostly useful as the identity for [`TupleSchema::merge`].
-    #[inline]
-    pub fn is_empty(&self) -> bool {
-        self.fields.is_empty()
-    }
-
     pub fn col_name(&self, col_id: ColumnId) -> Option<&str> {
         self.field(usize::from(col_id)).map(|f| f.name.as_str())
     }
@@ -299,23 +306,6 @@ impl TupleSchema {
         self.fields.iter()
     }
 
-    /// Sum of fixed-width payload bytes plus the worst-case [`Type::String`]
-    /// contribution for every column — the raw payload size of a fully non-null
-    /// row, before the null bitmap and per-value discriminants that
-    /// [`Tuple::serialize`] also writes.
-    ///
-    /// [`Type::Text`] columns are omitted: their length is unbounded, so use
-    /// [`Value::encoded_size`] on the actual row when sizing a buffer.
-    ///
-    /// Use [`TupleSchema::serialized_size`] when sizing a heap-page slot;
-    /// this method exists mainly to compose that calculation.
-    pub fn tuple_size(&self) -> usize {
-        self.fields
-            .iter()
-            .map(|f| fixed_type_payload_size(f.field_type))
-            .sum()
-    }
-
     /// The exact number of bytes [`Tuple::serialize`] will write for `tuple`.
     ///
     /// Unlike [`TupleSchema::serialized_size`], which is a schema-level
@@ -330,48 +320,28 @@ impl TupleSchema {
     /// Use this in [`crate::heap`] code paths that need to know how large a
     /// slot to allocate before writing a tuple that contains TEXT columns.
     pub fn actual_serialized_size(&self, tuple: &Tuple) -> usize {
-        let n = self.physical_num_fields();
-        let bitmap_size = n.div_ceil(8);
         let payload: usize = tuple
             .values
             .iter()
             .filter(|v| !v.is_null())
             .map(Value::encoded_size)
             .sum();
-        2 + bitmap_size + payload
+        TUPLE_FIELD_COUNT_SIZE + null_bitmap_size(self.physical_num_fields()) + payload
     }
 
     /// The exact number of bytes [`Tuple::serialize`] writes for this schema
     /// in the worst case (all columns non-null) - i.e. how big a heap-page
     /// slot must be to hold one row produced by `INSERT`.
     ///
-    /// Layout: null bitmap (`ceil(n/8)` bytes) + one encoded [`Value`] per
-    /// non-null column (4-byte [`Type`] tag + payload via [`Value::encoded_size`]).
-    /// Use this - not [`TupleSchema::tuple_size`] - when sizing an on-disk buffer.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use storemy::{
-    ///     tuple::{Field, TupleSchema},
-    ///     types::Type,
-    /// };
-    ///
-    /// // CREATE TABLE t (id INT, ok BOOLEAN);
-    /// let schema = TupleSchema::new(vec![
-    ///     Field::new("id", Type::Int32).unwrap(), // Type tag + 4 bytes
-    ///     Field::new("ok", Type::Bool).unwrap(),  // Type tag + 1 byte
-    /// ]);
-    /// // 2-byte n_fields + 1-byte bitmap + 2 values (4+4 each + 4+1) = 19 total
-    /// assert_eq!(schema.serialized_size(), 19);
-    /// ```
+    /// Layout: 2-byte field count + null bitmap (`ceil(n/8)` bytes) + one encoded
+    /// [`Value`] per non-null column (4-byte [`Type`] tag + payload).
     pub fn serialized_size(&self) -> usize {
-        let n = self.physical_num_fields();
-        2 + n.div_ceil(8)
+        TUPLE_FIELD_COUNT_SIZE
+            + null_bitmap_size(self.physical_num_fields())
             + self
                 .fields
                 .iter()
-                .map(|f| 4 + fixed_type_payload_size(f.field_type))
+                .map(|f| worst_case_encoded_value_size(f.field_type))
                 .sum::<usize>()
     }
 
@@ -394,43 +364,6 @@ impl TupleSchema {
         let mut fields = self.fields.clone();
         fields.extend(other.fields.iter().cloned());
         Self::new(fields)
-    }
-
-    /// Builds the output schema of a `SELECT cols FROM ...` projection.
-    ///
-    /// Output columns appear in the order specified by `indices`, so
-    /// projecting reorders columns as well as drops them.
-    ///
-    /// # SQL examples
-    ///
-    /// Schema: `users(id, name, age)` resolved to indices `0, 1, 2`.
-    ///
-    /// ```sql
-    /// -- SELECT age, id FROM users
-    /// --   schema.project(&[2, 0])
-    /// --     -> TupleSchema(age INT, id INT NOT NULL)
-    ///
-    /// -- SELECT name FROM users
-    /// --   schema.project(&[1])
-    /// --     -> TupleSchema(name VARCHAR)
-    /// ```
-    ///
-    /// # Errors
-    ///
-    /// Returns [`TupleError::FieldIndexOutOfBounds`] if any index points past
-    /// the end of this schema - typically a sign the binder produced an
-    /// index the schema does not actually carry.
-    pub fn project(&self, indices: &[usize]) -> Result<Self, TupleError> {
-        let fields = indices
-            .iter()
-            .map(|&i| {
-                self.fields
-                    .get(i)
-                    .cloned()
-                    .ok_or(TupleError::FieldIndexOutOfBounds { index: i })
-            })
-            .collect::<Result<Vec<_>, TupleError>>()?;
-        Ok(Self::new(fields))
     }
 
     /// Checks that a row honours every column constraint - the gate `INSERT`
@@ -486,12 +419,6 @@ impl TupleSchema {
         Ok(())
     }
 
-    /// Borrows the name -> index map the binder uses to resolve qualified
-    /// column references (e.g. `users.id`) to positional column indices.
-    pub fn field_indices(&self) -> &HashMap<NonEmptyString, usize> {
-        &self.field_indices
-    }
-
     /// Like [`TupleSchema::field`], but returns
     /// [`TupleError::FieldIndexOutOfBounds`] instead of `None`.
     ///
@@ -526,19 +453,11 @@ impl TupleSchema {
         self.field_or_err(usize::from(col))
     }
 
-    /// Returns `true` if a column named `name` exists - what the binder uses
-    /// to reject `SELECT missing FROM users` early, before any executor runs.
+    /// Selects a subset of columns by physical index, returning their
+    /// [`Field`] definitions in the requested order.
     ///
-    /// Reads better than `schema.field_by_name(name).is_some()` when the
-    /// caller only needs a yes/no answer.
-    pub fn contains(&self, name: &str) -> bool {
-        self.field_indices.contains_key(name)
-    }
-
-    /// Like [`TupleSchema::project`], but returns a bare `Vec<Field>` instead
-    /// of wrapping it in a new schema. Useful for operators that build their
-    /// output schema by concatenating a projection of the child with extra
-    /// columns of their own.
+    /// Useful for operators that build their output schema by concatenating a
+    /// projection of the child with extra columns of their own.
     ///
     /// # Errors
     ///
@@ -634,14 +553,9 @@ mod tests {
     }
 
     #[test]
-    fn schema_num_fields_and_is_empty() {
-        let empty = TupleSchema::new(vec![]);
-        assert!(empty.is_empty());
-        assert_eq!(empty.physical_num_fields(), 0);
-
-        let schema = schema_id_name_age();
-        assert!(!schema.is_empty());
-        assert_eq!(schema.physical_num_fields(), 3);
+    fn schema_physical_num_fields() {
+        assert_eq!(TupleSchema::new(vec![]).physical_num_fields(), 0);
+        assert_eq!(schema_id_name_age().physical_num_fields(), 3);
     }
 
     #[test]
@@ -670,16 +584,15 @@ mod tests {
     }
 
     #[test]
-    fn schema_tuple_size() {
-        let schema = schema_id_name_age();
-        assert_eq!(schema.tuple_size(), 4 + (4 + 255) + 4);
-    }
-
-    #[test]
     fn schema_serialized_size() {
         let schema = schema_id_name_age();
-        // 2-byte header + 1-byte bitmap + three encoded values (4-byte Type tag each)
-        assert_eq!(schema.serialized_size(), 2 + 1 + (8 + 263 + 8));
+        // field-count header + null bitmap + three encoded values (type tag + payload each)
+        assert_eq!(
+            schema.serialized_size(),
+            TUPLE_FIELD_COUNT_SIZE
+                + null_bitmap_size(3)
+                + (8 + (VALUE_TYPE_TAG_SIZE + STRING_LENGTH_PREFIX_SIZE + STRING_MAX_SIZE) + 8)
+        );
     }
 
     #[test]
@@ -688,7 +601,12 @@ mod tests {
             .map(|i| field(format!("c{i}").as_str(), Type::Bool))
             .collect();
         let schema = TupleSchema::new(fields);
-        assert_eq!(schema.serialized_size(), 2 + 2 + 9 * (4 + 1));
+        assert_eq!(
+            schema.serialized_size(),
+            TUPLE_FIELD_COUNT_SIZE
+                + null_bitmap_size(9)
+                + 9 * worst_case_encoded_value_size(Type::Bool)
+        );
     }
 
     #[test]
@@ -699,24 +617,6 @@ mod tests {
         assert_eq!(merged.physical_num_fields(), 2);
         assert_eq!(merged.field(0).unwrap().name, "a");
         assert_eq!(merged.field(1).unwrap().name, "b");
-    }
-
-    #[test]
-    fn schema_project_valid_indices() {
-        let schema = schema_id_name_age();
-        let projected = schema.project(&[2, 0]).unwrap();
-        assert_eq!(projected.physical_num_fields(), 2);
-        assert_eq!(projected.field(0).unwrap().name, "age");
-        assert_eq!(projected.field(1).unwrap().name, "id");
-    }
-
-    #[test]
-    fn schema_project_out_of_bounds_returns_error() {
-        let schema = schema_id_name_age();
-        let err = schema.project(&[0, 99]).unwrap_err();
-        assert!(matches!(err, TupleError::FieldIndexOutOfBounds {
-            index: 99
-        }));
     }
 
     #[test]
@@ -796,13 +696,6 @@ mod tests {
         let schema = schema_id_name_age();
         let col = ColumnId::try_from(1u32).unwrap();
         assert_eq!(schema.field_of(col).unwrap().name, "name");
-    }
-
-    #[test]
-    fn schema_contains() {
-        let schema = schema_id_name_age();
-        assert!(schema.contains("name"));
-        assert!(!schema.contains("missing"));
     }
 
     #[test]

@@ -431,12 +431,29 @@ impl TryFrom<TokenType> for Type {
 /// - An `Identifier` token's value is not `"true"` or `"false"`.
 /// - Any other token kind is passed.
 impl TryFrom<Token> for Value {
-    type Error = String; // or a proper error type
+    type Error = String;
 
     fn try_from(token: Token) -> Result<Self, Self::Error> {
-        let ty = Type::try_from(token.kind)?;
-        let value = token.value;
-        Value::parse_as(&value, ty).map_err(|e| format!("invalid literal '{value}': {e}"))
+        let v = token.value;
+        match token.kind {
+            TokenType::Int => v
+                .parse::<i64>()
+                .map(Value::int64)
+                .map_err(|e| format!("invalid integer '{v}': {e}")),
+            TokenType::FloatLit => v
+                .parse::<f64>()
+                .map(Value::float64)
+                .map_err(|e| format!("invalid float '{v}': {e}")),
+            TokenType::String => Ok(Value::varchar(v)),
+            TokenType::Null => Ok(Value::null()),
+            TokenType::Identifier => match v.to_ascii_lowercase().as_str() {
+                "true" => Ok(Value::bool(true)),
+                "false" => Ok(Value::bool(false)),
+                "null" => Ok(Value::null()),
+                _ => Err(format!("expected literal value, got identifier '{v}'")),
+            },
+            other => Err(format!("expected literal value, got token {other:?}")),
+        }
     }
 }
 
