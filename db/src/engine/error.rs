@@ -57,7 +57,7 @@ pub enum EngineError {
     Index(#[from] crate::index::IndexError),
 
     #[error(transparent)]
-    Execution(#[from] ExecutionError),
+    Execution(ExecutionError),
 
     #[error("table '{0}' not found")]
     TableNotFound(String),
@@ -126,4 +126,23 @@ pub enum EngineError {
          commands ignored until end of transaction block"
     )]
     TransactionAborted,
+}
+
+/// Maps execution-layer failures into engine errors.
+///
+/// [`ExecutionError::TypeError`] becomes [`EngineError::TypeError`] with the
+/// inner message (avoiding a doubled `"type error:"` prefix from stringifying
+/// the whole [`ExecutionError`]). All other variants are wrapped in
+/// [`EngineError::Execution`].
+pub(super) fn map_execution_error(err: ExecutionError) -> EngineError {
+    match err {
+        ExecutionError::TypeError(msg) => EngineError::TypeError(msg),
+        other => EngineError::Execution(other),
+    }
+}
+
+impl From<ExecutionError> for EngineError {
+    fn from(err: ExecutionError) -> Self {
+        map_execution_error(err)
+    }
 }

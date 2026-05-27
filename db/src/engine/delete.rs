@@ -55,10 +55,7 @@ impl Engine<'_> {
         let file_id = scope.file_id;
 
         let predicate = where_clause
-            .map(|expr| {
-                ResolvedExpr::resolve(expr, &scope)
-                    .map_err(|e| EngineError::TypeError(e.to_string()))
-            })
+            .map(|expr| ResolvedExpr::resolve(expr, &scope))
             .transpose()?;
 
         let deleted = Self::delete_rows_and_indexes(catalog, txn, file_id, predicate.as_ref())?;

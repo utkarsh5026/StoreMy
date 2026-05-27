@@ -9,7 +9,7 @@ use crate::{
         systable::FkAction,
     },
     engine::{ConstraintDefaultKind, ConstraintViolation, Engine, EngineError},
-    execution::{ColumnLookup, ExecutionError, ResolvedExpr},
+    execution::{ColumnLookup, ResolvedExpr},
     heap::file::HeapFile,
     parser::statements::TableConstraint,
     primitives::{ColumnId, NonEmptyString, RecordId},
@@ -337,9 +337,7 @@ impl Engine<'_> {
         while let Some((rid, tuple)) = FallibleIterator::next(&mut scan)? {
             let keep = match predicate {
                 None => true,
-                Some(expr) => expr
-                    .eval_bool(&tuple)
-                    .map_err(|e| EngineError::TypeError(e.to_string()))?,
+                Some(expr) => expr.eval_bool(&tuple)?,
             };
             if keep {
                 out.push((rid, tuple));
@@ -431,9 +429,7 @@ impl Engine<'_> {
         table: &str,
     ) -> Result<(), EngineError> {
         for (name, expr) in checks {
-            let result = expr
-                .eval(tuple)
-                .map_err(|e: ExecutionError| EngineError::TypeError(e.to_string()))?;
+            let result = expr.eval(tuple)?;
 
             match result {
                 Value::Null | Value::Fixed(FixedValue::Bool(true)) => {}

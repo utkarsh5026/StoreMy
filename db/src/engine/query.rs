@@ -295,12 +295,12 @@ impl BoundSelect {
 
         let filter = stmt
             .where_clause
-            .map(|expr| ResolvedExpr::resolve(expr, &scope).map_err(EngineError::from))
+            .map(|expr| ResolvedExpr::resolve(expr, &scope))
             .transpose()?;
 
         let having = stmt
             .having
-            .map(|expr| ResolvedExpr::resolve(expr, &scope).map_err(EngineError::from))
+            .map(|expr| ResolvedExpr::resolve(expr, &scope))
             .transpose()?;
 
         Ok(Self {
