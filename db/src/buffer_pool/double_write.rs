@@ -63,7 +63,7 @@ use thiserror::Error;
 
 use crate::{
     PAGE_SIZE,
-    codec::{CodecError, Decode, Encode, ReadLeExt, WriteLeExt},
+    codec::{CodecError, Decode, Encode},
     primitives::PageId,
     storage::{self, page_crc_valid},
 };
@@ -134,52 +134,33 @@ impl SlotHeader {
 }
 
 impl Encode for SlotHeader {
-    fn encode<W: Write>(&self, writer: &mut W) -> Result<(), CodecError> {
-        writer.write_u8(if self.occupied {
+    fn encode<W: Write>(&self, w: &mut W) -> Result<(), CodecError> {
+        let occupied = if self.occupied {
             Self::OCCUPIED_SET
         } else {
             Self::OCCUPIED_FREE
-        })?;
-        writer.write_all(&[0u8; 7])?;
-
-        self.page_id.encode(writer)?;
-
-        // path_len (4) + zero-padded path bytes (256)
-        let path_bytes = self.path.as_os_str().as_encoded_bytes();
-        let path_len = path_bytes.len().min(Self::MAX_PATH_BYTES);
-        let path_len_u32 = u32::try_from(path_len).map_err(|_| CodecError::NumericDoesNotFit {
-            value: u64::try_from(path_len).unwrap_or(u64::MAX),
-            target: "u32",
-        })?;
-        writer.write_le_u32(path_len_u32)?;
-
-        let mut path_buf = [0u8; Self::MAX_PATH_BYTES];
-        path_buf[..path_len].copy_from_slice(&path_bytes[..path_len]);
-        writer.write_all(&path_buf)?;
-
-        writer.write_all(&[0u8; Self::RESERVED])?;
+        };
+        occupied.encode(w)?;
+        w.write_all(&[0u8; 7])?;
+        self.page_id.encode(w)?;
+        self.path.encode(w)?;
+        w.write_all(&[0u8; Self::RESERVED])?;
         Ok(())
     }
 }
 
 impl Decode for SlotHeader {
-    fn decode<R: Read>(reader: &mut R) -> Result<Self, CodecError> {
+    fn decode<R: Read>(r: &mut R) -> Result<Self, CodecError> {
         // occupied (1) + alignment pad (7)
-        let occupied = reader.read_u8()? == Self::OCCUPIED_SET;
+        let occupied = u8::decode(r)? == Self::OCCUPIED_SET;
         let mut pad = [0u8; 7];
-        reader.read_exact(&mut pad)?;
+        r.read_exact(&mut pad)?;
 
-        let page_id = PageId::decode(reader)?;
+        let page_id = PageId::decode(r)?;
+        let path = PathBuf::decode(r)?;
 
-        let path_len = (reader.read_le_u32()? as usize).min(Self::MAX_PATH_BYTES);
-        let mut path_buf = [0u8; Self::MAX_PATH_BYTES];
-        reader.read_exact(&mut path_buf)?;
-        let path_str = std::str::from_utf8(&path_buf[..path_len])?;
-        let path = PathBuf::from(path_str);
-
-        // skip reserved tail
         let mut reserved = [0u8; Self::RESERVED];
-        reader.read_exact(&mut reserved)?;
+        r.read_exact(&mut reserved)?;
 
         Ok(Self {
             occupied,

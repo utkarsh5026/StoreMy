@@ -8,13 +8,14 @@ use crate::{
         CachedCheckConstraint, CatalogError, ConstraintDef, TableInfo, manager::Catalog,
         systable::FkAction,
     },
-    engine::{ConstraintViolation, Engine, EngineError},
+    engine::{ConstraintDefaultKind, ConstraintViolation, Engine, EngineError},
     execution::{ColumnLookup, ExecutionError, ResolvedExpr},
     heap::file::HeapFile,
     parser::statements::TableConstraint,
     primitives::{ColumnId, NonEmptyString, RecordId},
     transaction::ActiveTransaction,
     tuple::{Field, Tuple, TupleSchema},
+    types::FixedValue,
 };
 
 impl Engine<'_> {
@@ -150,11 +151,8 @@ impl Engine<'_> {
     /// It validates that all referenced columns exist in the provided `schema` (for local
     /// columns) and, for foreign keys, in the referenced table's schema fetched from `catalog`.
     ///
-    /// If the SQL did not provide an explicit constraint name, a stable default is generated:
-    ///
-    /// - `UNIQUE (a, b)` → `{table}_unique_a_b`
-    /// - `CHECK (...)` → `{table}_check`
-    /// - `FOREIGN KEY (a, b) ...` → `{table}_fk_a_b`
+    /// If the SQL did not provide an explicit constraint name, [`Self::constraint_default_name`]
+    /// supplies a stable default (see that function for the naming rules).
     ///
     /// # Errors
     ///
@@ -226,17 +224,38 @@ impl Engine<'_> {
         Ok(def)
     }
 
-    /// Picks a catalog constraint name for a table-level constraint.
-    ///
-    /// If the user provided a name (via `CONSTRAINT name ...`), that name is returned.
-    /// Otherwise, a deterministic default is derived from the table name and constraint kind:
+    /// Builds the deterministic default catalog name when SQL omits `CONSTRAINT name`.
     ///
     /// - `UNIQUE (a, b)` → `{table}_unique_a_b`
     /// - `CHECK (...)` → `{table}_check`
     /// - `FOREIGN KEY (a, b) ...` → `{table}_fk_a_b`
     ///
-    /// Note: these generated names are stable but not guaranteed globally unique (e.g. two
-    /// separate `CHECK` constraints on the same table both default to `{table}_check`).
+    /// Generated names are stable but not guaranteed globally unique (e.g. two separate
+    /// `CHECK` constraints on the same table both default to `{table}_check`).
+    pub(super) fn constraint_default_name(
+        table_name: &str,
+        kind: ConstraintDefaultKind,
+        columns: &[&str],
+    ) -> String {
+        match kind {
+            ConstraintDefaultKind::Check => format!("{table_name}_check"),
+            ConstraintDefaultKind::Unique | ConstraintDefaultKind::ForeignKey => {
+                let tag = match kind {
+                    ConstraintDefaultKind::Unique => "unique",
+                    ConstraintDefaultKind::ForeignKey => "fk",
+                    ConstraintDefaultKind::Check => unreachable!(),
+                };
+                let cols = columns.join("_");
+                format!("{table_name}_{tag}_{cols}")
+            }
+        }
+    }
+
+    /// Picks a catalog constraint name for a table-level constraint.
+    ///
+    /// If the user provided a name (via `CONSTRAINT name ...`), that name is returned.
+    /// Otherwise, [`Self::constraint_default_name`] derives a deterministic default from
+    /// the table name, constraint kind, and participating columns.
     pub(super) fn resolve_constraint_name(
         opt_name: Option<&NonEmptyString>,
         table_name: &str,
@@ -248,13 +267,19 @@ impl Engine<'_> {
 
         match constraint {
             TableConstraint::Unique { columns } => {
-                let cols = columns.join("_");
-                format!("{table_name}_unique_{cols}")
+                let col_names: Vec<&str> = columns.iter().map(NonEmptyString::as_str).collect();
+                Self::constraint_default_name(table_name, ConstraintDefaultKind::Unique, &col_names)
             }
-            TableConstraint::Check { .. } => format!("{table_name}_check"),
+            TableConstraint::Check { .. } => {
+                Self::constraint_default_name(table_name, ConstraintDefaultKind::Check, &[])
+            }
             TableConstraint::ForeignKey { local_cols, .. } => {
-                let cols = local_cols.join("_");
-                format!("{table_name}_fk_{cols}")
+                let col_names: Vec<&str> = local_cols.iter().map(NonEmptyString::as_str).collect();
+                Self::constraint_default_name(
+                    table_name,
+                    ConstraintDefaultKind::ForeignKey,
+                    &col_names,
+                )
             }
         }
     }
@@ -357,11 +382,13 @@ impl Engine<'_> {
             return Ok(Value::Null);
         }
 
-        Value::try_from((value, field.field_type)).map_err(|e| EngineError::TypeMismatch {
-            column: field.name.to_string(),
-            expected: field.field_type.to_string(),
-            got: e.to_string(),
-        })
+        value
+            .coerce_to(field.field_type)
+            .map_err(|e| EngineError::TypeMismatch {
+                column: field.name.to_string(),
+                expected: field.field_type.to_string(),
+                got: e.to_string(),
+            })
     }
 
     /// Evaluates every CHECK constraint on a table against a fully-assembled tuple.
@@ -390,9 +417,8 @@ impl Engine<'_> {
                 .map_err(|e: ExecutionError| EngineError::TypeError(e.to_string()))?;
 
             match result {
-                // NULL means the check is indeterminate — SQL treats this as passing.
-                Value::Null | Value::Bool(true) => {}
-                Value::Bool(false) => {
+                Value::Null | Value::Fixed(FixedValue::Bool(true)) => {}
+                Value::Fixed(FixedValue::Bool(false)) => {
                     return Err(ConstraintViolation::CheckViolation {
                         table: table.to_owned(),
                         constraint: name.clone(),

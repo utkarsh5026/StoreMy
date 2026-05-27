@@ -24,7 +24,7 @@ use crate::{
     PAGE_SIZE,
     buffer_pool::page_store::{PageStore, PageStoreError},
     primitives::{Lsn, PageId},
-    storage::read_page_lsn,
+    storage::{read_page_lsn, try_as_page_image},
     wal::{WalError, log::LogRecordBody, reader::WalReader},
 };
 
@@ -207,11 +207,11 @@ impl<'a> Redo<'a> {
             return Ok(());
         }
 
-        let page_data: [u8; PAGE_SIZE] =
-            after.try_into().map_err(|_| RedoError::ImageSizeMismatch {
+        let page_data =
+            try_as_page_image(after).map_err(|got_size| RedoError::ImageSizeMismatch {
                 page_id,
                 expected_size: PAGE_SIZE,
-                got_size: after.len(),
+                got_size,
             })?;
 
         guard.write(&page_data, lsn);
@@ -232,7 +232,7 @@ mod tests {
         codec::Encode,
         primitives::{FileId, PageNumber, TransactionId},
         recovery::{AttEntry, DptEntry},
-        storage::envelope::{PAGE_LSN_END, PAGE_LSN_OFFSET, read_page_lsn},
+        storage::typed_page::{PAGE_LSN_END, PAGE_LSN_OFFSET, read_page_lsn},
         wal::{log::LogRecord, writer::Wal},
     };
 

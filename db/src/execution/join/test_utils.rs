@@ -20,7 +20,7 @@ pub use crate::{
     parser::statements::BinOp,
     primitives::{ColumnId, Predicate},
     tuple::{Field, Tuple, TupleSchema},
-    types::{Type, Value},
+    types::{FixedValue, Type, Value},
 };
 
 // ── schema helpers ────────────────────────────────────────────────────────────
@@ -43,11 +43,11 @@ pub fn schema_xy() -> TupleSchema {
 // ── tuple constructors ────────────────────────────────────────────────────────
 
 pub fn tup(a: i32, b: i32) -> Tuple {
-    Tuple::new(vec![Value::Int32(a), Value::Int32(b)])
+    Tuple::new(vec![Value::int32(a), Value::int32(b)])
 }
 
 pub fn tup_null_a(b: i32) -> Tuple {
-    Tuple::new(vec![Value::Null, Value::Int32(b)])
+    Tuple::new(vec![Value::Null, Value::int32(b)])
 }
 
 // ── heap harness ──────────────────────────────────────────────────────────────
@@ -79,7 +79,7 @@ pub fn build_heap(id: u64, tuples: &[Tuple]) -> HeapHarness {
     store.register_file(file_id, &path).unwrap();
     let heap = HeapFile::new(
         file_id,
-        schema_ab(),
+        Arc::new(schema_ab()),
         Arc::clone(&store),
         0,
         Arc::clone(&wal),
@@ -116,7 +116,7 @@ pub fn build_heap_xy(id: u64, tuples: &[Tuple]) -> HeapHarness {
     store.register_file(file_id, &path).unwrap();
     let heap = HeapFile::new(
         file_id,
-        schema_xy(),
+        Arc::new(schema_xy()),
         Arc::clone(&store),
         0,
         Arc::clone(&wal),
@@ -179,7 +179,7 @@ pub fn drain<I: FallibleIterator<Item = Tuple, Error = ExecutionError>>(
 
 pub fn int(t: &Tuple, i: usize) -> i32 {
     match t.get(i) {
-        Some(Value::Int32(v)) => *v,
+        Some(Value::Fixed(FixedValue::Int32(v))) => *v,
         other => panic!("expected Int32 at {i}, got {other:?}"),
     }
 }

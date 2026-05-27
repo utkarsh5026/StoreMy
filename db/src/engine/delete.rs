@@ -204,7 +204,7 @@ mod tests {
         let live = catalog.get_index_by_name("users_email_idx").unwrap();
         let probe_txn = txn_mgr.begin().unwrap();
 
-        let deleted_key = CompositeKey::single(Value::String("a@b.com".to_string()));
+        let deleted_key = CompositeKey::single(Value::varchar("a@b.com".to_string()));
         let miss = live
             .access
             .search(probe_txn.transaction_id(), &deleted_key)
@@ -214,7 +214,7 @@ mod tests {
             "index entry for deleted row should be gone, got {miss:?}"
         );
 
-        let live_key = CompositeKey::single(Value::String("c@d.com".to_string()));
+        let live_key = CompositeKey::single(Value::varchar("c@d.com".to_string()));
         let hits = live
             .access
             .search(probe_txn.transaction_id(), &live_key)
@@ -256,7 +256,7 @@ mod tests {
         let live = catalog.get_index_by_name("t_k_idx").unwrap();
         let probe_txn = txn_mgr.begin().unwrap();
         for k in [10i64, 20, 30] {
-            let key = CompositeKey::single(Value::Int64(k));
+            let key = CompositeKey::single(Value::int64(k));
             let hits = live
                 .access
                 .search(probe_txn.transaction_id(), &key)

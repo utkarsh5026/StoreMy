@@ -35,9 +35,9 @@ use std::{
 use thiserror::Error;
 
 use crate::{
-    PAGE_SIZE,
     buffer_pool::page_store::{PageStore, PageStoreError},
     primitives::{Lsn, NonEmptyString, PageId, TransactionId},
+    storage::try_as_page_image,
     wal::{WalError, log::LogRecordBody, reader::WalReader, writer::Wal},
 };
 
@@ -168,8 +168,8 @@ impl TransactionManager {
     /// - [`TransactionError::NotActive`] — `id` is not in the WAL's active set.
     /// - [`TransactionError::Wal`] — WAL read or CLR write failed.
     /// - [`TransactionError::Store`] — buffer-pool I/O failed.
-    /// - [`TransactionError::PartialUndoImageSize`] — before-image is not exactly [`PAGE_SIZE`]
-    ///   bytes (corrupt log record).
+    /// - [`TransactionError::PartialUndoImageSize`] — before-image is not exactly
+    ///   [`crate::PAGE_SIZE`] bytes (corrupt log record).
     pub(self) fn partial_undo(
         &self,
         id: TransactionId,
@@ -211,9 +211,7 @@ impl TransactionManager {
                 } => {
                     let rec_prev = record.header.prev_lsn;
 
-                    let before_arr: [u8; PAGE_SIZE] = before
-                        .as_slice()
-                        .try_into()
+                    let before_arr = try_as_page_image(before.as_slice())
                         .map_err(|_| TransactionError::PartialUndoImageSize(page_id))?;
 
                     let clr_lsn = match self.store.fetch_for_recovery(page_id) {
@@ -427,8 +425,8 @@ impl Transaction<Active> {
     /// - [`TransactionError::NotActive`] — this transaction is not in the WAL's active set.
     /// - [`TransactionError::Wal`] — WAL read or CLR write failed.
     /// - [`TransactionError::Store`] — buffer-pool I/O failed.
-    /// - [`TransactionError::PartialUndoImageSize`] — before-image is not exactly [`PAGE_SIZE`]
-    ///   bytes (corrupt log record).
+    /// - [`TransactionError::PartialUndoImageSize`] — before-image is not exactly
+    ///   [`crate::PAGE_SIZE`] bytes (corrupt log record).
     pub fn partial_undo(&self, target_lsn: Lsn) -> Result<(), TransactionError> {
         self.manager.partial_undo(self.id, target_lsn)
     }

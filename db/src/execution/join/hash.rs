@@ -309,7 +309,7 @@ impl FallibleIterator for HashJoin<'_> {
 
 impl Executor for HashJoin<'_> {
     fn schema(&self) -> &TupleSchema {
-        &self.inputs.schema
+        self.inputs.schema.as_ref()
     }
 
     /// Clears probe state and rewinds only the left child.

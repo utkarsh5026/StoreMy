@@ -973,7 +973,7 @@ mod tests {
         );
         assert_eq!(
             rows[0].get(0),
-            Some(&Value::Int64(11)),
+            Some(&Value::int64(11)),
             "surviving order must be id=11"
         );
     }
@@ -1057,7 +1057,7 @@ mod tests {
         assert_eq!(rows.len(), 1);
         assert_eq!(
             rows[0].get(1),
-            Some(&Value::Int64(42)),
+            Some(&Value::int64(42)),
             "cascade update must propagate new parent key to child"
         );
     }

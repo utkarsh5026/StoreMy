@@ -804,7 +804,7 @@ mod tests {
         assert!(!t.if_not_exists);
         assert_eq!(t.columns.len(), 1);
         assert_eq!(t.columns[0].name, "id");
-        assert_eq!(t.columns[0].col_type, Type::Int64);
+        assert_eq!(t.columns[0].col_type, Type::Int32);
         assert!(t.columns[0].nullable);
         assert!(!t.columns[0].primary_key);
         assert!(!t.columns[0].auto_increment);
@@ -865,9 +865,9 @@ mod tests {
         assert!(id.auto_increment);
         assert!(id.default.is_none());
 
-        assert_eq!(t.columns[1].col_type, Type::String);
-        assert_eq!(t.columns[2].default, Some(Value::Int64(0)));
-        assert_eq!(t.columns[3].default, Some(Value::Bool(true)));
+        assert_eq!(t.columns[1].col_type, Type::Text);
+        assert_eq!(t.columns[2].default, Some(Value::int64(0)));
+        assert_eq!(t.columns[3].default, Some(Value::bool(true)));
     }
 
     #[test]
@@ -876,8 +876,18 @@ mod tests {
         let Statement::CreateTable(t) = stmt else {
             panic!("expected CreateTable");
         };
-        assert_eq!(t.columns[0].col_type, Type::Int64);
-        assert_eq!(t.columns[1].col_type, Type::String);
+        assert_eq!(t.columns[0].col_type, Type::Int32);
+        assert_eq!(t.columns[1].col_type, Type::Text);
+    }
+
+    #[test]
+    fn test_parse_create_bigint_column() {
+        let stmt = parse("CREATE TABLE events (id BIGINT, ts INT)").unwrap();
+        let Statement::CreateTable(t) = stmt else {
+            panic!("expected CreateTable");
+        };
+        assert_eq!(t.columns[0].col_type, Type::Int64, "BIGINT → Int64");
+        assert_eq!(t.columns[1].col_type, Type::Int32, "INT → Int32");
     }
 
     #[test]
@@ -1071,7 +1081,7 @@ mod tests {
         let Statement::CreateTable(t) = stmt else {
             panic!("expected CreateTable");
         };
-        assert_eq!(t.columns[0].default, Some(Value::String("hi".to_string())));
+        assert_eq!(t.columns[0].default, Some(Value::varchar("hi".to_string())));
     }
 
     #[test]
@@ -1080,7 +1090,7 @@ mod tests {
         let Statement::CreateTable(t) = stmt else {
             panic!("expected CreateTable");
         };
-        assert_eq!(t.columns[0].default, Some(Value::Null));
+        assert_eq!(t.columns[0].default, Some(Value::null()));
     }
 
     // --- error paths: parse_create ---
@@ -1351,7 +1361,7 @@ mod tests {
             panic!("expected AddColumn");
         };
         assert_eq!(col.name, "age");
-        assert_eq!(col.col_type, Type::Int64);
+        assert_eq!(col.col_type, Type::Int32);
         assert!(col.nullable);
         assert!(!col.primary_key);
         assert!(col.default.is_none());
@@ -1368,7 +1378,7 @@ mod tests {
         };
         assert_eq!(col.name, "age");
         assert!(!col.nullable);
-        assert_eq!(col.default, Some(Value::Int64(0)));
+        assert_eq!(col.default, Some(Value::int64(0)));
     }
 
     #[test]
@@ -1561,7 +1571,7 @@ mod tests {
             panic!("expected SetDefault");
         };
         assert_eq!(column, "age");
-        assert_eq!(value, Value::Int64(0));
+        assert_eq!(value, Value::int64(0));
     }
 
     #[test]
@@ -1574,7 +1584,7 @@ mod tests {
             panic!("expected SetDefault");
         };
         assert_eq!(column, "status");
-        assert_eq!(value, Value::String("active".to_string()));
+        assert_eq!(value, Value::varchar("active".to_string()));
     }
 
     #[test]

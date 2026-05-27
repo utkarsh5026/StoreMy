@@ -137,7 +137,7 @@ impl Catalog {
         let mut system = SystemHeaps::default();
 
         for table in SystemTable::ALL {
-            let schema = table.schema();
+            let schema = Arc::new(table.schema());
             let file_path = data_dir.join(table.file_name());
             let file_id = table.file_id();
 
@@ -148,7 +148,7 @@ impl Catalog {
 
             let table_info = TableInfo::new(
                 table.table_name().try_into()?,
-                schema,
+                Arc::clone(&schema),
                 file_id,
                 file_path.clone(),
                 None,
@@ -194,7 +194,7 @@ impl Catalog {
     pub(super) fn create_heap_file(
         file_id: FileId,
         file_path: &Path,
-        schema: TupleSchema,
+        schema: Arc<TupleSchema>,
         buffer_pool: &Arc<PageStore>,
         wal: &Arc<Wal>,
     ) -> Result<HeapFile, CatalogError> {
@@ -252,7 +252,7 @@ impl Catalog {
         file_id: FileId,
         file_path: &Path,
         table_name: &str,
-        schema: TupleSchema,
+        schema: Arc<TupleSchema>,
     ) -> Result<HeapFile, CatalogError> {
         if !file_path.exists() {
             return Err(CatalogError::corruption(
@@ -485,7 +485,7 @@ impl Catalog {
         target_id: FileId,
     ) -> Result<(), CatalogError> {
         let field = table.table_id_field();
-        let target = Value::Uint64(u64::from(target_id));
+        let target = Value::uint64(u64::from(target_id));
         let heap = self.get_system_heap(table)?;
         let tid = txn.transaction_id();
         heap.delete_if(tid, |t| t.get(field).is_some_and(|v| v == &target))
@@ -683,7 +683,7 @@ mod tests {
         let schema = SystemTable::Tables.schema();
 
         assert!(!path.exists());
-        let heap = Catalog::create_heap_file(FileId(100), &path, schema, &bp, &wal);
+        let heap = Catalog::create_heap_file(FileId(100), &path, Arc::new(schema), &bp, &wal);
         assert!(heap.is_ok());
         assert!(path.exists());
     }
@@ -698,7 +698,7 @@ mod tests {
 
         File::create(&path).unwrap();
         assert!(path.exists());
-        let heap = Catalog::create_heap_file(FileId(100), &path, schema, &bp, &wal);
+        let heap = Catalog::create_heap_file(FileId(100), &path, Arc::new(schema), &bp, &wal);
         assert!(heap.is_ok());
     }
 
@@ -710,7 +710,7 @@ mod tests {
         let path = dir.path().join("no_such_dir").join("table.dat");
         let schema = SystemTable::Tables.schema();
 
-        let result = Catalog::create_heap_file(FileId(100), &path, schema, &bp, &wal);
+        let result = Catalog::create_heap_file(FileId(100), &path, Arc::new(schema), &bp, &wal);
         assert!(result.is_err(), "expected Io error for bad parent dir");
         match result.err().unwrap() {
             CatalogError::Io(_) => {}
@@ -728,7 +728,8 @@ mod tests {
         let ghost = dir.path().join("ghost.dat");
         let schema = SystemTable::Tables.schema();
 
-        let result = catalog.open_existing_heap(FileId(100), &ghost, "ghost_table", schema);
+        let result =
+            catalog.open_existing_heap(FileId(100), &ghost, "ghost_table", Arc::new(schema));
         assert!(result.is_err(), "expected Corruption for missing file");
         match result.err().unwrap() {
             CatalogError::Corruption { .. } => {}
@@ -747,7 +748,7 @@ mod tests {
         File::create(&path).unwrap();
         let schema = SystemTable::Tables.schema();
 
-        let heap = catalog.open_existing_heap(FileId(100), &path, "users", schema);
+        let heap = catalog.open_existing_heap(FileId(100), &path, "users", Arc::new(schema));
         assert!(heap.is_ok());
     }
 
@@ -779,9 +780,9 @@ mod tests {
 
         let heap = catalog.system.get(SystemTable::Tables).unwrap();
         let tuple = Tuple::new(vec![
-            Value::Uint64(42),
-            Value::String("users".into()),
-            Value::String("/data/users.dat".into()),
+            Value::uint64(42),
+            Value::varchar("users".into()),
+            Value::varchar("/data/users.dat".into()),
         ]);
 
         let insert_txn = txn_mgr.begin().unwrap();
@@ -808,21 +809,21 @@ mod tests {
         let heap = catalog.system.get(SystemTable::Columns).unwrap();
         let tuples = vec![
             Tuple::new(vec![
-                Value::Uint64(1),
-                Value::String("id".into()),
-                Value::Uint32(3), // Type::Int64
-                Value::Uint32(0),
-                Value::Bool(false),
-                Value::Bool(false), // is_dropped
+                Value::uint64(1),
+                Value::varchar("id".into()),
+                Value::uint32(3), // Type::Int64
+                Value::uint32(0),
+                Value::bool(false),
+                Value::bool(false), // is_dropped
                 Value::Null,        // missing_default_value
             ]),
             Tuple::new(vec![
-                Value::Uint64(1),
-                Value::String("name".into()),
-                Value::Uint32(5), // Type::String
-                Value::Uint32(1),
-                Value::Bool(true),
-                Value::Bool(false), // is_dropped
+                Value::uint64(1),
+                Value::varchar("name".into()),
+                Value::uint32(5), // Type::String
+                Value::uint32(1),
+                Value::bool(true),
+                Value::bool(false), // is_dropped
                 Value::Null,        // missing_default_value
             ]),
         ];
@@ -853,12 +854,12 @@ mod tests {
         let heap = catalog.system.get(SystemTable::Columns).unwrap();
         // Invalid: column_type 999 has no Type variant
         let bad_tuple = Tuple::new(vec![
-            Value::Uint64(1),
-            Value::String("col".into()),
-            Value::Uint32(999), // no such Type variant
-            Value::Uint32(0),
-            Value::Bool(false),
-            Value::Bool(false),
+            Value::uint64(1),
+            Value::varchar("col".into()),
+            Value::uint32(999), // no such Type variant
+            Value::uint32(0),
+            Value::bool(false),
+            Value::bool(false),
             Value::Null,
         ]);
 

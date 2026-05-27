@@ -12,7 +12,7 @@ use std::io::{Read, Write};
 
 use crate::{
     Value,
-    codec::{CodecError, Decode, Encode, ReadLeExt, WriteLeExt},
+    codec::{CodecError, Decode, Encode},
     primitives::RecordId,
 };
 
@@ -60,42 +60,15 @@ impl CompositeKey {
     }
 }
 
-/// Encodes a `CompositeKey` into a writer. The encoding consists of:
-/// - a 4-byte little-endian u32 representing the number of columns (`arity`)
-/// - then each `Value` encoded in declaration order
-///
-/// # Errors
-/// - Returns [`CodecError::NumericDoesNotFit`] if the arity does not fit into a u32 (should not
-///   happen in practice)
-/// - Propagates errors from writing or encoding any individual value
 impl Encode for CompositeKey {
     fn encode<W: Write>(&self, w: &mut W) -> Result<(), CodecError> {
-        let n = u32::try_from(self.0.len()).map_err(|_| CodecError::NumericDoesNotFit {
-            value: u64::try_from(self.0.len()).unwrap_or(u64::MAX),
-            target: "u32",
-        })?;
-        w.write_le_u32(n)?;
-        for v in &self.0 {
-            v.encode(w)?;
-        }
-        Ok(())
+        self.0.encode(w)
     }
 }
 
-/// Decodes a `CompositeKey` from a reader, expecting:
-/// - a 4-byte little-endian u32 arity prefix
-/// - then that many `Value`s, in order
-///
-/// # Errors
-/// - Propagates errors from reading or decoding any individual value
 impl Decode for CompositeKey {
     fn decode<R: Read>(r: &mut R) -> Result<Self, CodecError> {
-        let n = r.read_le_u32()? as usize;
-        let mut values = Vec::with_capacity(n);
-        for _ in 0..n {
-            values.push(Value::decode(r)?);
-        }
-        Ok(Self(values))
+        Ok(Self(Vec::decode(r)?))
     }
 }
 
@@ -128,24 +101,13 @@ impl IndexEntry {
     }
 }
 
-/// Encodes an [`IndexEntry`] as `CompositeKey` bytes followed by `RecordId`
-/// bytes.
-///
-/// # Errors
-/// - Propagates any write or codec error from encoding the key or record id
 impl Encode for IndexEntry {
     fn encode<W: Write>(&self, w: &mut W) -> Result<(), CodecError> {
         self.key.encode(w)?;
-        self.rid.encode(w)?;
-        Ok(())
+        self.rid.encode(w)
     }
 }
 
-/// Decodes an [`IndexEntry`] by reading a [`CompositeKey`] and then a
-/// [`RecordId`] from the input stream.
-///
-/// # Errors
-/// - Propagates any read or codec error while decoding either component
 impl Decode for IndexEntry {
     fn decode<R: Read>(r: &mut R) -> Result<Self, CodecError> {
         let key = CompositeKey::decode(r)?;
@@ -188,16 +150,16 @@ mod tests {
 
     #[test]
     fn single_column_key_roundtrips() {
-        roundtrip_key(&CompositeKey::single(Value::Int32(42)));
-        roundtrip_key(&CompositeKey::single(Value::String("hello".into())));
+        roundtrip_key(&CompositeKey::single(Value::int32(42)));
+        roundtrip_key(&CompositeKey::single(Value::varchar("hello".into())));
     }
 
     #[test]
     fn multi_column_key_roundtrips() {
         let key = CompositeKey::new(vec![
-            Value::Int32(7),
-            Value::String("ada".into()),
-            Value::Int32(-1),
+            Value::int32(7),
+            Value::varchar("ada".into()),
+            Value::int32(-1),
         ]);
         roundtrip_key(&key);
     }
@@ -207,7 +169,7 @@ mod tests {
         // Pin the on-disk shape: the first four bytes must be a u32 LE
         // arity. Index pages depend on this — if the prefix ever changes
         // size or endianness, every existing index file becomes unreadable.
-        let key = CompositeKey::new(vec![Value::Int32(0); 3]);
+        let key = CompositeKey::new(vec![Value::int32(0); 3]);
         let mut buf = Vec::new();
         key.encode(&mut buf).unwrap();
         assert_eq!(&buf[..4], &[3, 0, 0, 0]);
@@ -217,7 +179,7 @@ mod tests {
     fn entry_roundtrips() {
         let rid = RecordId::new(FileId::new(1), PageNumber::new(2), SlotId::new(3).unwrap());
         let entry = IndexEntry::new(
-            CompositeKey::new(vec![Value::Int32(99), Value::String("x".into())]),
+            CompositeKey::new(vec![Value::int32(99), Value::varchar("x".into())]),
             rid,
         );
 

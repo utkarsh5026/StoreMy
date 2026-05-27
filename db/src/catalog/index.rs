@@ -1089,7 +1089,7 @@ mod tests {
         wal.log_begin(txn).unwrap();
 
         let live = catalog.get_index_by_name("idx").unwrap();
-        let key = CompositeKey::single(Value::Int32(7));
+        let key = CompositeKey::single(Value::int32(7));
         let r = RecordId::new(FileId::new(1), PageNumber::new(0), SlotId(0));
         live.access.insert(txn, &key, r).unwrap();
         assert_eq!(live.access.search(txn, &key).unwrap(), vec![r]);
@@ -1846,7 +1846,7 @@ mod tests {
                 .unwrap();
 
             inserted_key =
-                CompositeKey::single(crate::Value::String("persisted@x.com".to_string()));
+                CompositeKey::single(crate::Value::varchar("persisted@x.com".to_string()));
             bp.flush_all().unwrap();
         }
 

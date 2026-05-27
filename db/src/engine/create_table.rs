@@ -246,10 +246,11 @@ impl Engine<'_> {
     ///
     /// For each [`ColumnDef`]:
     ///
-    /// - `UNIQUE` → [`ConstraintDef::Unique`] with a generated name `{table}_unique_{col}` and
-    ///   `backing_index_id: None` (indexes may be created separately).
+    /// - `UNIQUE` → [`ConstraintDef::Unique`] with a name from [`Self::constraint_default_name`]
+    ///   and `backing_index_id: None` (indexes may be created separately).
     /// - `REFERENCES ...` → [`ConstraintDef::ForeignKey`] for the single referenced column, with a
-    ///   generated name `{table}_fk_{col}` and referential actions copied from the parse tree.
+    ///   name from [`Self::constraint_default_name`] and referential actions copied from the parse
+    ///   tree.
     ///
     /// Table-level `UNIQUE (...)`, `FOREIGN KEY (...)`, and `CHECK` constraints are handled by
     /// [`Engine::resolve_table_constraint`], not here.
@@ -272,7 +273,11 @@ impl Engine<'_> {
             if col.unique == Uniqueness::Unique {
                 let (col_id, _) = Self::require_column(schema, table_name, col.name.as_str())?;
                 defs.push(ConstraintDef::Unique {
-                    name: format!("{table_name}_unique_{}", col.name.as_str()),
+                    name: Self::constraint_default_name(
+                        table_name,
+                        super::ConstraintDefaultKind::Unique,
+                        &[col.name.as_str()],
+                    ),
                     columns: vec![col_id],
                     backing_index_id: None,
                 });
@@ -290,7 +295,11 @@ impl Engine<'_> {
                 )?;
 
                 defs.push(ConstraintDef::ForeignKey {
-                    name: format!("{table_name}_fk_{}", col.name.as_str()),
+                    name: Self::constraint_default_name(
+                        table_name,
+                        super::ConstraintDefaultKind::ForeignKey,
+                        &[col.name.as_str()],
+                    ),
                     local_columns: vec![local_id],
                     ref_table_id: ref_info.file_id,
                     ref_columns: vec![ref_id],

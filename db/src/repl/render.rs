@@ -11,6 +11,7 @@ use crate::{
     engine::{EngineError, StatementResult},
     repl::{state::ReplState, theme},
     tuple::{Tuple, TupleSchema},
+    types::{DynValue, FixedValue},
 };
 
 /// Submits `sql` to the engine, waits for the result, and pretty-prints it.
@@ -322,13 +323,22 @@ fn print_select(table_name: &str, schema: &TupleSchema, rows: &[Tuple]) {
 fn format_value_cell(v: &Value) -> Cell {
     match v {
         Value::Null => Cell::new("NULL").fg(comfy_table::Color::DarkGrey),
-        Value::Int32(_)
-        | Value::Int64(_)
-        | Value::Uint32(_)
-        | Value::Uint64(_)
-        | Value::Float64(_) => Cell::new(v.to_string()).fg(comfy_table::Color::Yellow),
-        Value::String(_) => Cell::new(v.to_string()).fg(comfy_table::Color::Green),
-        Value::Bool(_) => Cell::new(v.to_string()).fg(comfy_table::Color::Magenta),
+        Value::Fixed(f) => match f {
+            FixedValue::Int32(_)
+            | FixedValue::Int64(_)
+            | FixedValue::Uint32(_)
+            | FixedValue::Uint64(_)
+            | FixedValue::Float64(_) => Cell::new(v.to_string()).fg(comfy_table::Color::Yellow),
+            FixedValue::Bool(_) => Cell::new(v.to_string()).fg(comfy_table::Color::Magenta),
+        },
+        Value::Dyn(d) => match d {
+            DynValue::Varchar(_) | DynValue::Text(_) => {
+                Cell::new(v.to_string()).fg(comfy_table::Color::Green)
+            }
+            DynValue::TextOverflow { .. } => {
+                unreachable!("TextOverflow must be resolved before rendering")
+            }
+        },
     }
 }
 

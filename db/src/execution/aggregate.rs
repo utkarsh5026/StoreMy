@@ -26,7 +26,7 @@
 //! for a group is `NULL`, the aggregate result is `NULL` (except `COUNT`, which
 //! returns `0`).
 
-use std::{cmp::Ordering, collections::HashMap};
+use std::{cmp::Ordering, collections::HashMap, sync::Arc};
 
 use fallible_iterator::FallibleIterator;
 
@@ -246,12 +246,12 @@ impl Accumulator {
     /// was seen. For `AVG`, this returns `NULL` when `count == 0`.
     fn finalize(self) -> Value {
         match self {
-            Self::CountStar(n) | Self::CountCol(n) => Value::Int64(n.cast_signed()),
+            Self::CountStar(n) | Self::CountCol(n) => Value::int64(n.cast_signed()),
             Self::Sum(v) | Self::Min(v) | Self::Max(v) => v.unwrap_or(Value::Null),
             Self::Avg { sum, count } => {
                 if count > 0 {
                     #[allow(clippy::cast_precision_loss)]
-                    Value::Float64(sum / count as f64)
+                    Value::float64(sum / count as f64)
                 } else {
                     Value::Null
                 }
@@ -301,7 +301,7 @@ pub struct Aggregate<'a> {
     child: Box<PlanNode<'a>>,
     group_by_cols: Vec<ColumnId>,
     agg_exprs: Vec<AggregateExpr>,
-    output_schema: TupleSchema,
+    output_schema: Arc<TupleSchema>,
     groups: TupleCursor,
     materialized: bool,
 }
@@ -382,7 +382,7 @@ impl<'a> Aggregate<'a> {
                 let output_type = Type::from((func, input_type));
                 output_fields.push(Field::new_non_empty(output_name.clone(), output_type));
             }
-            TupleSchema::new(output_fields)
+            Arc::new(TupleSchema::new(output_fields))
         };
 
         Ok(Self {
@@ -519,7 +519,7 @@ impl FallibleIterator for Aggregate<'_> {
 
 impl Executor for Aggregate<'_> {
     fn schema(&self) -> &TupleSchema {
-        &self.output_schema
+        self.output_schema.as_ref()
     }
 
     /// Resets the cursor so the finalized groups can be iterated again.
@@ -545,7 +545,7 @@ mod tests {
         execution::scan::SeqScan,
         heap::file::HeapFile,
         tuple::{Field, Tuple, TupleSchema},
-        types::{Type, Value},
+        types::{FixedValue, Type, Value},
         wal::writer::Wal,
     };
 
@@ -559,7 +559,7 @@ mod tests {
     }
 
     fn row(g: i32, v: Option<i32>) -> Tuple {
-        Tuple::new(vec![Value::Int32(g), v.map_or(Value::Null, Value::Int32)])
+        Tuple::new(vec![Value::int32(g), v.map_or(Value::Null, Value::int32)])
     }
 
     struct HeapHarness {
@@ -588,7 +588,13 @@ mod tests {
         drop(file);
         store.register_file(file_id, &path).unwrap();
 
-        let heap = HeapFile::new(file_id, schema, Arc::clone(&store), 0, Arc::clone(&wal));
+        let heap = HeapFile::new(
+            file_id,
+            Arc::new(schema),
+            Arc::clone(&store),
+            0,
+            Arc::clone(&wal),
+        );
 
         let txn = TransactionId::new(id);
         wal.log_begin(txn).unwrap();
@@ -631,14 +637,14 @@ mod tests {
 
     fn i32_at(t: &Tuple, i: usize) -> i32 {
         match t.get(i) {
-            Some(Value::Int32(v)) => *v,
+            Some(Value::Fixed(FixedValue::Int32(v))) => *v,
             other => panic!("expected Int32 at {i}, got {other:?}"),
         }
     }
 
     fn i64_at(t: &Tuple, i: usize) -> i64 {
         match t.get(i) {
-            Some(Value::Int64(v)) => *v,
+            Some(Value::Fixed(FixedValue::Int64(v))) => *v,
             other => panic!("expected Int64 at {i}, got {other:?}"),
         }
     }
@@ -771,7 +777,7 @@ mod tests {
         assert_eq!(out.len(), 1);
         // Note: Value::Add widens Int32+Int32 -> Int64, so multi-row SUM returns Int64
         // even though the input column is Int32. See aggregate-analysis bug #2.
-        assert!(matches!(out[0].get(0), Some(Value::Int64(30))));
+        assert_eq!(out[0].get(0), Some(&Value::int64(30)));
     }
 
     // AVG of all-null column -> Null (not 0/0)
@@ -796,7 +802,7 @@ mod tests {
             Aggregate::new(scan(&harness), &[], vec![spec(AggregateFunc::Avg, 1, "a")]).unwrap();
         let out = drain(&mut agg);
         match out[0].get(0) {
-            Some(Value::Float64(f)) => assert!((f - 4.0).abs() < 1e-9),
+            Some(Value::Fixed(FixedValue::Float64(f))) => assert!((f - 4.0).abs() < 1e-9),
             other => panic!("expected Float64, got {other:?}"),
         }
     }
@@ -816,8 +822,8 @@ mod tests {
         ])
         .unwrap();
         let out = drain(&mut agg);
-        assert!(matches!(out[0].get(0), Some(Value::Int32(2))));
-        assert!(matches!(out[0].get(1), Some(Value::Int32(5))));
+        assert_eq!(out[0].get(0), Some(&Value::int32(2)));
+        assert_eq!(out[0].get(1), Some(&Value::int32(5)));
     }
 
     // MIN of all-null column -> Null
@@ -849,11 +855,11 @@ mod tests {
         // layout: (group, sum, count)
         assert_eq!(i32_at(&out[0], 0), 1);
         // group 1 has two rows: Int32+Int32 widens to Int64 via Value::Add
-        assert!(matches!(out[0].get(1), Some(Value::Int64(40))));
+        assert_eq!(out[0].get(1), Some(&Value::int64(40)));
         assert_eq!(i64_at(&out[0], 2), 2);
         assert_eq!(i32_at(&out[1], 0), 2);
         // group 2 has one row: Sum just clones the single value, stays Int32
-        assert!(matches!(out[1].get(1), Some(Value::Int32(20))));
+        assert_eq!(out[1].get(1), Some(&Value::int32(20)));
         assert_eq!(i64_at(&out[1], 2), 1);
     }
 

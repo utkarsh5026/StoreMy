@@ -176,7 +176,7 @@ impl FallibleIterator for NestedLoopJoin<'_> {
 
 impl Executor for NestedLoopJoin<'_> {
     fn schema(&self) -> &TupleSchema {
-        &self.inputs.schema
+        self.inputs.schema.as_ref()
     }
 
     fn rewind(&mut self) -> Result<(), ExecutionError> {
@@ -326,23 +326,20 @@ mod tests {
 
         let matched = out
             .iter()
-            .find(|t| {
-                matches!(t.get(0), Some(Value::Int32(2)))
-                    && matches!(t.get(2), Some(Value::Int32(2)))
-            })
+            .find(|t| int(t, 0) == 2 && int(t, 2) == 2)
             .expect("matched row (2,2) missing");
         assert_eq!(int(matched, 0), 2);
         assert_eq!(int(matched, 2), 2);
 
         let unmatched_left = out
             .iter()
-            .find(|t| matches!(t.get(0), Some(Value::Int32(1))))
+            .find(|t| int(t, 0) == 1)
             .expect("unmatched left row missing");
         assert!(matches!(unmatched_left.get(2), Some(Value::Null)));
 
         let unmatched_right = out
             .iter()
-            .find(|t| matches!(t.get(2), Some(Value::Int32(3))))
+            .find(|t| matches!(t.get(0), Some(Value::Null)) && int(t, 2) == 3)
             .expect("unmatched right row missing");
         assert!(matches!(unmatched_right.get(0), Some(Value::Null)));
     }

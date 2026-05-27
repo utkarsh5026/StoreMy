@@ -529,7 +529,7 @@ fn update_does_not_touch_heap_when_unique_check_fails() {
     let rows = db.scan_all("users");
     let emails: Vec<_> = rows.iter().map(|t| t.get(1).cloned().unwrap()).collect();
     assert!(
-        emails.contains(&storemy::Value::String("b@example.com".into())),
+        emails.contains(&storemy::Value::varchar("b@example.com".into())),
         "row 2 must still have original email after rejected UPDATE"
     );
 }

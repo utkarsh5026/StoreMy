@@ -496,7 +496,7 @@ mod any_index_tests {
     fn forwarded_insert_search_delete_roundtrip() {
         let fx = make_any_hash(4, vec![Type::Int32]);
         let txn = begin(&fx.wal, 1);
-        let key = CompositeKey::single(Value::Int32(42));
+        let key = CompositeKey::single(Value::int32(42));
         let r = rid(1, 0, 0);
 
         fx.any.insert(txn, &key, r).unwrap();
@@ -512,7 +512,7 @@ mod any_index_tests {
         // accidentally short-circuit validation in the forwarding layer.
         let fx = make_any_hash(4, vec![Type::Int32, Type::Int32]);
         let txn = begin(&fx.wal, 1);
-        let single = CompositeKey::single(Value::Int32(1));
+        let single = CompositeKey::single(Value::int32(1));
         let err = fx.any.search(txn, &single).unwrap_err();
         assert!(matches!(err, IndexError::KeyArityMismatch {
             expected: 2,

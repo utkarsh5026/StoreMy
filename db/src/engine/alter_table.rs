@@ -64,6 +64,7 @@ impl Engine<'_> {
             ref schema,
             ..
         } = table_info;
+        let schema = schema.as_ref();
 
         let operation = match &stmt.action {
             AlterAction::RenameTable { .. } => "rename_table",
@@ -750,7 +751,7 @@ mod tests {
                 false,
                 AlterAction::SetDefault {
                     column: "name".try_into().unwrap(),
-                    value: Value::String("anon".to_string()),
+                    value: Value::varchar("anon".to_string()),
                 },
             )))
             .unwrap();

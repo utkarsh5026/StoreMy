@@ -11,6 +11,8 @@
 //! * [`IndexScan`] resolves [`RecordId`]s from an [`AnyIndex`] (`search` / `range_search`) and
 //!   materializes table tuples via [`HeapFile::fetch_tuple`].
 
+use std::sync::Arc;
+
 use fallible_iterator::FallibleIterator;
 
 use super::{ExecutionError, Executor};
@@ -34,7 +36,7 @@ use crate::{
 pub struct SeqScan<'a> {
     file: &'a HeapFile,
     txn: TransactionId,
-    schema: TupleSchema,
+    schema: Arc<TupleSchema>,
     inner: Option<HeapScan<'a>>,
 }
 
@@ -56,7 +58,7 @@ impl<'a> SeqScan<'a> {
     /// the first call to `next()`.
     #[tracing::instrument(skip_all, fields(op = "seq_scan"))]
     pub fn new(file: &'a HeapFile, txn: TransactionId) -> Self {
-        let schema = file.schema().clone(); // need a pub schema() accessor on HeapFile
+        let schema = file.schema_arc();
         tracing::debug!(fields = schema.physical_num_fields(), "seq scan opened");
         Self {
             file,
@@ -113,7 +115,7 @@ pub struct IndexScan<'a> {
     heap: &'a HeapFile,
     index: &'a AnyIndex,
     txn: TransactionId,
-    schema: TupleSchema,
+    schema: Arc<TupleSchema>,
     spec: IndexScanSpec,
     /// Filled on first [`FallibleIterator::next`]; cleared by [`Executor::rewind`].
     rids: Option<Vec<RecordId>>,
@@ -146,7 +148,7 @@ impl<'a> IndexScan<'a> {
             heap,
             index,
             txn,
-            schema: heap.schema().clone(),
+            schema: heap.schema_arc(),
             spec,
             rids: None,
             next_rid: 0,
@@ -184,7 +186,7 @@ impl Executor for SeqScan<'_> {
     /// The schema is cloned once at construction time and remains stable for
     /// the entire lifetime of the scan, including across `rewind()` calls.
     fn schema(&self) -> &TupleSchema {
-        &self.schema
+        self.schema.as_ref()
     }
 
     /// Resets the scan so the next call to `next()` returns the first tuple
@@ -227,7 +229,7 @@ impl FallibleIterator for IndexScan<'_> {
 
 impl Executor for IndexScan<'_> {
     fn schema(&self) -> &TupleSchema {
-        &self.schema
+        self.schema.as_ref()
     }
 
     fn rewind(&mut self) -> Result<(), ExecutionError> {
@@ -251,7 +253,7 @@ mod tests {
         index::{AnyIndex, CompositeKey},
         primitives::{PageNumber, RecordId, SlotId},
         tuple::{Field, Tuple, TupleSchema},
-        types::{Type, Value},
+        types::{FixedValue, Type, Value},
         wal::writer::Wal,
     };
 
@@ -264,7 +266,7 @@ mod tests {
     }
 
     fn make_tuple(id: i32, flag: bool) -> Tuple {
-        Tuple::new(vec![Value::Int32(id), Value::Bool(flag)])
+        Tuple::new(vec![Value::int32(id), Value::bool(flag)])
     }
 
     fn begin_txn(wal: &Wal, id: u64) -> TransactionId {
@@ -296,7 +298,7 @@ mod tests {
 
         let heap = HeapFile::new(
             file_id,
-            schema(),
+            Arc::new(schema()),
             Arc::clone(&store),
             existing_pages,
             Arc::clone(&wal),
@@ -320,7 +322,13 @@ mod tests {
         hf.set_len(4 * crate::storage::PAGE_SIZE as u64).unwrap();
         drop(hf);
         store.register_file(heap_fid, &heap_path).unwrap();
-        let heap = HeapFile::new(heap_fid, schema(), Arc::clone(&store), 0, Arc::clone(&wal));
+        let heap = HeapFile::new(
+            heap_fid,
+            Arc::new(schema()),
+            Arc::clone(&store),
+            0,
+            Arc::clone(&wal),
+        );
 
         let idx_fid = FileId::new(2);
         let idx_path = dir.path().join("btree_idx.db");
@@ -496,7 +504,7 @@ mod tests {
 
         let row = make_tuple(42, true);
         let rid = heap.insert_tuple(txn, &row).unwrap();
-        let key = CompositeKey::single(Value::Int32(42));
+        let key = CompositeKey::single(Value::int32(42));
         index.insert(txn, &key, rid).unwrap();
 
         let mut scan = IndexScan::new(&heap, &index, txn, IndexScanSpec::Search(key.clone()));
@@ -515,18 +523,18 @@ mod tests {
         let r20 = heap.insert_tuple(txn, &make_tuple(20, false)).unwrap();
         let r30 = heap.insert_tuple(txn, &make_tuple(30, true)).unwrap();
         index
-            .insert(txn, &CompositeKey::single(Value::Int32(10)), r10)
+            .insert(txn, &CompositeKey::single(Value::int32(10)), r10)
             .unwrap();
         index
-            .insert(txn, &CompositeKey::single(Value::Int32(20)), r20)
+            .insert(txn, &CompositeKey::single(Value::int32(20)), r20)
             .unwrap();
         index
-            .insert(txn, &CompositeKey::single(Value::Int32(30)), r30)
+            .insert(txn, &CompositeKey::single(Value::int32(30)), r30)
             .unwrap();
 
         let mut scan = IndexScan::new(&heap, &index, txn, IndexScanSpec::Range {
-            start: CompositeKey::single(Value::Int32(15)),
-            end: CompositeKey::single(Value::Int32(25)),
+            start: CompositeKey::single(Value::int32(15)),
+            end: CompositeKey::single(Value::int32(25)),
         });
 
         let mut out = Vec::new();
@@ -534,7 +542,7 @@ mod tests {
             out.push(t);
         }
         out.sort_by_key(|t| match t.get(0).unwrap() {
-            Value::Int32(v) => *v,
+            Value::Fixed(FixedValue::Int32(v)) => *v,
             _ => 0,
         });
         assert_eq!(out, vec![make_tuple(20, false)]);
@@ -547,7 +555,7 @@ mod tests {
 
         let row = make_tuple(7, false);
         let rid = heap.insert_tuple(txn, &row).unwrap();
-        let key = CompositeKey::single(Value::Int32(7));
+        let key = CompositeKey::single(Value::int32(7));
         index.insert(txn, &key, rid).unwrap();
 
         let mut scan = IndexScan::new(&heap, &index, txn, IndexScanSpec::Search(key));
@@ -566,7 +574,7 @@ mod tests {
 
         let row = make_tuple(99, true);
         let rid = heap.insert_tuple(txn, &row).unwrap();
-        let key = CompositeKey::single(Value::Int32(99));
+        let key = CompositeKey::single(Value::int32(99));
         index.insert(txn, &key, rid).unwrap();
         heap.delete_tuple(txn, rid).unwrap();
 

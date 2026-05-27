@@ -33,6 +33,7 @@ use crate::{
     PAGE_SIZE,
     buffer_pool::page_store::{PageStore, PageStoreError},
     primitives::{Lsn, PageId, TransactionId},
+    storage::try_as_page_image,
     wal::{WalError, log::LogRecordBody, reader::WalReader, writer::Wal},
 };
 
@@ -202,14 +203,12 @@ impl<'a> Undo<'a> {
         rec_prev_lsn: Lsn,
     ) -> Result<(), UndoError> {
         self.stats.records_undone += 1;
-        let before_array: [u8; PAGE_SIZE] =
-            before
-                .try_into()
-                .map_err(|_| UndoError::ImageSizeMismatch {
-                    page_id,
-                    expected_size: PAGE_SIZE,
-                    got_size: before.len(),
-                })?;
+        let before_array =
+            try_as_page_image(before).map_err(|got_size| UndoError::ImageSizeMismatch {
+                page_id,
+                expected_size: PAGE_SIZE,
+                got_size,
+            })?;
 
         // The page may belong to a file the catalog hasn't registered yet
         // (same convention as Redo). If so we can't write the page, but we

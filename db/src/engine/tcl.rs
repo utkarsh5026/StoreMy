@@ -523,8 +523,6 @@ mod tests {
         );
     }
 
-    /// A second `BEGIN` while a transaction is already open returns a notice
-    /// instead of nesting transactions (PostgreSQL behaviour).
     #[test]
     fn begin_while_explicit_returns_notice_and_keeps_session_explicit() {
         let dir = tempdir().unwrap();
@@ -612,8 +610,6 @@ mod tests {
         assert!(matches!(session.ctx, TxnContext::Autocommit));
     }
 
-    /// `COMMIT` on an aborted transaction silently rolls it back (PostgreSQL
-    /// "error recovery" semantics: you cannot commit a failed block).
     #[test]
     fn commit_aborted_transaction_acts_as_rollback_and_resets_to_autocommit() {
         let dir = tempdir().unwrap();

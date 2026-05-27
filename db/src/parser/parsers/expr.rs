@@ -100,9 +100,9 @@ impl Precedence {
 /// ```sql
 /// -- SELECT name        -->  Expr::Column(ColumnRef { None, "name" })
 /// -- SELECT u.age       -->  Expr::Column(ColumnRef { Some("u"), "age" })
-/// -- SELECT 1           -->  Expr::Literal(Value::Int64(1))
-/// -- SELECT 'hello'     -->  Expr::Literal(Value::String("hello"))
-/// -- SELECT NULL        -->  Expr::Literal(Value::Null)
+/// -- SELECT 1           -->  Expr::Literal(Value::int64(1))
+/// -- SELECT 'hello'     -->  Expr::Literal(Value::varchar("hello".into()))
+/// -- SELECT NULL        -->  Expr::Literal(Value::null())
 /// -- SELECT COUNT(*)    -->  Expr::CountStar
 /// -- SELECT COUNT(name) -->  Expr::Agg(AggFunc::Count, Box::new(Expr::Column("name".into())))
 /// -- SELECT AVG(age)    -->  Expr::Agg(AggFunc::Avg,   Box::new(Expr::Column("age".into())))
@@ -117,11 +117,11 @@ pub enum Expr {
 
     /// A constant value: number, string, boolean, or `NULL`.
     /// SQL examples:
-    ///   42 → `Literal(Value::Int64(42))`
-    ///   'hello' → `Literal(Value::String("hello"))`
-    ///   true → `Literal(Value::Bool(true))`
-    ///   false → `Literal(Value::Bool(false))`
-    ///   NULL → `Literal(Value::Null)`
+    ///   42 → `Literal(Value::int64(42))`
+    ///   'hello' → `Literal(Value::varchar("hello".into()))`
+    ///   true → `Literal(Value::bool(true))`
+    ///   false → `Literal(Value::bool(false))`
+    ///   NULL → `Literal(Value::null())`
     Literal(Value),
 
     /// An aggregate call, e.g. `SUM(amount)`. The argument is recursively an
@@ -772,7 +772,7 @@ mod tests {
 
     #[test]
     fn literal_integer() {
-        assert_eq!(ok("42"), Expr::Literal(Value::Int64(42)));
+        assert_eq!(ok("42"), Expr::Literal(Value::int64(42)));
     }
 
     #[test]
@@ -780,25 +780,25 @@ mod tests {
         // The lexer produces the minus as an Operator token, so bare `-1` is
         // not a literal — it would need unary-minus support in the parser.
         // A positive integer literal should round-trip cleanly.
-        assert_eq!(ok("0"), Expr::Literal(Value::Int64(0)));
+        assert_eq!(ok("0"), Expr::Literal(Value::int64(0)));
     }
 
     #[test]
     fn literal_string() {
         assert_eq!(
             ok("'hello'"),
-            Expr::Literal(Value::String("hello".to_string()))
+            Expr::Literal(Value::varchar("hello".to_string()))
         );
     }
 
     #[test]
     fn literal_boolean_true() {
-        assert_eq!(ok("true"), Expr::Literal(Value::Bool(true)));
+        assert_eq!(ok("true"), Expr::Literal(Value::bool(true)));
     }
 
     #[test]
     fn literal_boolean_false() {
-        assert_eq!(ok("false"), Expr::Literal(Value::Bool(false)));
+        assert_eq!(ok("false"), Expr::Literal(Value::bool(false)));
     }
 
     #[test]
@@ -953,7 +953,7 @@ mod tests {
             panic!("expected UnaryOp");
         };
         assert_eq!(op, UnOp::Not);
-        assert_eq!(*operand, Expr::Literal(Value::Bool(true)));
+        assert_eq!(*operand, Expr::Literal(Value::bool(true)));
     }
 
     #[test]
@@ -969,7 +969,7 @@ mod tests {
     #[test]
     fn parenthesized_literal() {
         // Parens are transparent — the result is the inner expression.
-        assert_eq!(ok("(42)"), Expr::Literal(Value::Int64(42)));
+        assert_eq!(ok("(42)"), Expr::Literal(Value::int64(42)));
     }
 
     #[test]
@@ -1063,7 +1063,7 @@ mod tests {
         assert_eq!(e, Expr::BinaryOp {
             lhs: Box::new(Expr::Column("age".into())),
             op: BinOp::Gt,
-            rhs: Box::new(Expr::Literal(Value::Int64(0))),
+            rhs: Box::new(Expr::Literal(Value::int64(0))),
         });
     }
 
@@ -1149,9 +1149,9 @@ mod tests {
         assert!(!negated);
         assert_eq!(*expr, Expr::Column("id".into()));
         assert_eq!(list, vec![
-            Expr::Literal(Value::Int64(1)),
-            Expr::Literal(Value::Int64(2)),
-            Expr::Literal(Value::Int64(3)),
+            Expr::Literal(Value::int64(1)),
+            Expr::Literal(Value::int64(2)),
+            Expr::Literal(Value::int64(3)),
         ]);
     }
 
@@ -1168,8 +1168,8 @@ mod tests {
         assert!(negated);
         assert_eq!(*expr, Expr::Column("status".into()));
         assert_eq!(list, vec![
-            Expr::Literal(Value::String("a".to_string())),
-            Expr::Literal(Value::String("b".to_string())),
+            Expr::Literal(Value::varchar("a".to_string())),
+            Expr::Literal(Value::varchar("b".to_string())),
         ]);
     }
 
@@ -1179,7 +1179,7 @@ mod tests {
             panic!("expected In");
         };
         assert!(!negated);
-        assert_eq!(list, vec![Expr::Literal(Value::Int64(42))]);
+        assert_eq!(list, vec![Expr::Literal(Value::int64(42))]);
     }
 
     #[test]
@@ -1236,8 +1236,8 @@ mod tests {
         };
         assert!(!negated);
         assert_eq!(*expr, Expr::Column("total".into()));
-        assert_eq!(*low, Expr::Literal(Value::Int64(100)));
-        assert_eq!(*high, Expr::Literal(Value::Int64(500)));
+        assert_eq!(*low, Expr::Literal(Value::int64(100)));
+        assert_eq!(*high, Expr::Literal(Value::int64(500)));
     }
 
     #[test]
@@ -1314,7 +1314,7 @@ mod tests {
             op: BinOp::Eq,
             ..
         }));
-        assert_eq!(branches[0].then, Expr::Literal(Value::Int64(2)));
+        assert_eq!(branches[0].then, Expr::Literal(Value::int64(2)));
     }
 
     #[test]
@@ -1348,7 +1348,7 @@ mod tests {
         assert_eq!(branches.len(), 1);
         assert_eq!(
             else_result.as_deref(),
-            Some(&Expr::Literal(Value::String("b".into())))
+            Some(&Expr::Literal(Value::varchar("b".into())))
         );
     }
 
@@ -1410,7 +1410,7 @@ mod tests {
         };
         assert!(!negated);
         assert_eq!(*expr, Expr::Column("name".into()));
-        assert_eq!(*pattern, Expr::Literal(Value::String("A%".into())));
+        assert_eq!(*pattern, Expr::Literal(Value::varchar("A%".into())));
     }
 
     #[test]
@@ -1464,7 +1464,7 @@ mod tests {
         };
         assert_eq!(op, BinOp::Add);
         assert_eq!(*lhs, Expr::Column("a".into()));
-        assert_eq!(*rhs, Expr::Literal(Value::Int64(1)));
+        assert_eq!(*rhs, Expr::Literal(Value::int64(1)));
     }
 
     #[test]

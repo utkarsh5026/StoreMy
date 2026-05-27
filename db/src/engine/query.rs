@@ -111,7 +111,7 @@ enum BoundFrom {
     Table {
         table: TableRef,
         file_id: FileId,
-        schema: TupleSchema,
+        schema: Arc<TupleSchema>,
     },
     /// A SQL `JOIN ... ON ...` input with its join predicate (pre-resolved).
     Join {
@@ -119,22 +119,22 @@ enum BoundFrom {
         left: Box<BoundFrom>,
         right: Box<BoundFrom>,
         on: ResolvedExpr,
-        schema: TupleSchema,
+        schema: Arc<TupleSchema>,
     },
     /// `FROM a, b` or `CROSS JOIN` — no predicate; emits the cartesian product.
     Cross {
         left: Box<BoundFrom>,
         right: Box<BoundFrom>,
-        schema: TupleSchema,
+        schema: Arc<TupleSchema>,
     },
 }
 
 impl BoundFrom {
-    fn table(table_info: TableInfo, table: TableRef) -> Self {
+    fn table(table_info: &TableInfo, table: &TableRef) -> Self {
         Self::Table {
-            table,
+            table: table.clone(),
             file_id: table_info.file_id,
-            schema: table_info.schema,
+            schema: Arc::clone(&table_info.schema),
         }
     }
 
@@ -147,7 +147,7 @@ impl BoundFrom {
     }
 
     fn join(kind: JoinKind, left: BoundFrom, right: BoundFrom, on: ResolvedExpr) -> Self {
-        let schema = left.schema().merge(right.schema());
+        let schema = Arc::new(left.schema().merge(right.schema()));
         Self::Join {
             kind,
             left: Box::new(left),
@@ -158,7 +158,7 @@ impl BoundFrom {
     }
 
     fn cross(left: BoundFrom, right: BoundFrom) -> Self {
-        let schema = left.schema().merge(right.schema());
+        let schema = Arc::new(left.schema().merge(right.schema()));
         Self::Cross {
             left: Box::new(left),
             right: Box::new(right),
@@ -222,7 +222,7 @@ enum BoundSelectList {
 ///     filter: Some(BooleanExpression::col_op_lit(
 ///         2,
 ///         Predicate::GreaterThanOrEqual,
-///         Value::Int64(18),
+///         Value::int64(18),
 ///     )),
 ///     group_by: vec![],
 ///     having: None,
@@ -339,10 +339,10 @@ impl BoundSelect {
         scope.push(BoundTable::new(
             info.name.to_string(),
             table.alias.as_ref().map(ToString::to_string),
-            info.schema.clone(),
+            Arc::clone(&info.schema),
             0,
         ));
-        let mut left = BoundFrom::table(info, table);
+        let mut left = BoundFrom::table(&info, &table);
 
         for j in joins {
             let right_offset = left.schema().physical_num_fields();
@@ -350,12 +350,12 @@ impl BoundSelect {
             let right_table = BoundTable {
                 name: right_info.name.to_string(),
                 alias: j.table.alias.as_ref().map(ToString::to_string),
-                schema: right_info.schema.clone(),
+                schema: Arc::clone(&right_info.schema),
                 column_offset: right_offset,
             };
             scope.push(right_table);
 
-            let right = BoundFrom::table(right_info, j.table);
+            let right = BoundFrom::table(&right_info, &j.table);
             left = if j.kind == JoinKind::Cross {
                 BoundFrom::cross(left, right)
             } else {
@@ -1088,6 +1088,7 @@ mod tests {
         primitives::{NonEmptyString, Predicate},
         transaction::TransactionManager,
         tuple::{Field, Tuple, TupleSchema},
+        types::FixedValue,
         wal::writer::Wal,
     };
 
@@ -1198,6 +1199,13 @@ mod tests {
             .collect()
     }
 
+    fn i64_at(v: &Value) -> i64 {
+        match v {
+            Value::Fixed(FixedValue::Int64(n)) => *n,
+            other => panic!("expected Int64, got {other:?}"),
+        }
+    }
+
     // ──────────────────────── execution tests ────────────────────────────────
 
     #[test]
@@ -1243,7 +1251,7 @@ mod tests {
         assert_eq!(field_names(&schema), vec!["role", "name"]);
         assert_eq!(rows.len(), 3);
         for row in &rows {
-            assert_eq!(row.get(0).unwrap(), &Value::String("guest".into()));
+            assert_eq!(row.get(0).unwrap(), &Value::varchar("guest".into()));
         }
     }
 
@@ -1288,13 +1296,7 @@ mod tests {
         let engine = Engine::new(&catalog, &txn_mgr);
 
         let (_, rows) = run_select(&engine, "SELECT id FROM users ORDER BY age");
-        let ids: Vec<i64> = rows
-            .iter()
-            .map(|r| match r.get(0).unwrap() {
-                Value::Int64(v) => *v,
-                other => panic!("expected Int64, got {other:?}"),
-            })
-            .collect();
+        let ids: Vec<i64> = rows.iter().map(|r| i64_at(r.get(0).unwrap())).collect();
         assert_eq!(ids, vec![2, 1, 3]);
     }
 
@@ -1305,13 +1307,7 @@ mod tests {
         let engine = Engine::new(&catalog, &txn_mgr);
 
         let (_, rows) = run_select(&engine, "SELECT id FROM users ORDER BY id DESC");
-        let ids: Vec<i64> = rows
-            .iter()
-            .map(|r| match r.get(0).unwrap() {
-                Value::Int64(v) => *v,
-                _ => unreachable!(),
-            })
-            .collect();
+        let ids: Vec<i64> = rows.iter().map(|r| i64_at(r.get(0).unwrap())).collect();
         assert_eq!(ids, vec![3, 2, 1]);
     }
 
@@ -1322,13 +1318,7 @@ mod tests {
         let engine = Engine::new(&catalog, &txn_mgr);
 
         let (_, rows) = run_select(&engine, "SELECT id FROM users ORDER BY age, id DESC");
-        let ids: Vec<i64> = rows
-            .iter()
-            .map(|r| match r.get(0).unwrap() {
-                Value::Int64(v) => *v,
-                _ => unreachable!(),
-            })
-            .collect();
+        let ids: Vec<i64> = rows.iter().map(|r| i64_at(r.get(0).unwrap())).collect();
         assert_eq!(ids, vec![2, 3, 1]);
     }
 
@@ -1350,7 +1340,7 @@ mod tests {
 
         let (_, rows) = run_select(&engine, "SELECT id FROM users ORDER BY id LIMIT 1 OFFSET 1");
         assert_eq!(rows.len(), 1);
-        assert_eq!(rows[0].get(0).unwrap(), &Value::Int64(2));
+        assert_eq!(rows[0].get(0).unwrap(), &Value::int64(2));
     }
 
     #[test]
@@ -1360,13 +1350,7 @@ mod tests {
         let engine = Engine::new(&catalog, &txn_mgr);
 
         let (_, rows) = run_select(&engine, "SELECT DISTINCT age FROM users");
-        let mut ages: Vec<i64> = rows
-            .iter()
-            .map(|r| match r.get(0).unwrap() {
-                Value::Int64(v) => *v,
-                _ => unreachable!(),
-            })
-            .collect();
+        let mut ages: Vec<i64> = rows.iter().map(|r| i64_at(r.get(0).unwrap())).collect();
         ages.sort_unstable();
         assert_eq!(ages, vec![25, 30]);
     }
@@ -1406,7 +1390,7 @@ mod tests {
         let (schema, rows) = run_select(&engine, "SELECT COUNT(*) AS n FROM users");
         assert_eq!(field_names(&schema), vec!["n"]);
         assert_eq!(rows.len(), 1);
-        assert_eq!(rows[0].get(0).unwrap(), &Value::Int64(3));
+        assert_eq!(rows[0].get(0).unwrap(), &Value::int64(3));
     }
 
     #[test]
@@ -1417,7 +1401,7 @@ mod tests {
 
         let (_, rows) = run_select(&engine, "SELECT SUM(age) FROM users");
         assert_eq!(rows.len(), 1);
-        assert_eq!(rows[0].get(0).unwrap(), &Value::Int64(85));
+        assert_eq!(rows[0].get(0).unwrap(), &Value::int64(85));
     }
 
     #[test]
@@ -1430,9 +1414,9 @@ mod tests {
         assert_eq!(field_names(&schema), vec!["age", "COUNT(*)"]);
 
         let got = sorted_rows(rows);
-        assert_eq!(got, vec![vec![Value::Int64(25), Value::Int64(1)], vec![
-            Value::Int64(30),
-            Value::Int64(2)
+        assert_eq!(got, vec![vec![Value::int64(25), Value::int64(1)], vec![
+            Value::int64(30),
+            Value::int64(2)
         ],]);
     }
 
@@ -1446,9 +1430,9 @@ mod tests {
         assert_eq!(field_names(&schema), vec!["COUNT(*)", "age"]);
 
         let got = sorted_rows(rows);
-        assert_eq!(got, vec![vec![Value::Int64(1), Value::Int64(25)], vec![
-            Value::Int64(2),
-            Value::Int64(30)
+        assert_eq!(got, vec![vec![Value::int64(1), Value::int64(25)], vec![
+            Value::int64(2),
+            Value::int64(30)
         ],]);
     }
 
@@ -1477,7 +1461,7 @@ mod tests {
         );
         assert_eq!(field_names(&schema), vec!["label", "age", "n"]);
         for row in &rows {
-            assert_eq!(row.get(0).unwrap(), &Value::String("group:".into()));
+            assert_eq!(row.get(0).unwrap(), &Value::varchar("group:".into()));
         }
     }
 
@@ -1545,7 +1529,7 @@ mod tests {
         assert_eq!(field_names(&schema), vec!["name"]);
         assert_eq!(rows.len(), 1);
         let name = vals(&rows[0]).remove(0);
-        assert!(matches!(&name, Value::String(s) if s == "alice" || s == "cara"));
+        assert!(matches!(name.as_str(), Some(s) if s == "alice" || s == "cara"));
     }
 
     #[test]
@@ -1556,7 +1540,7 @@ mod tests {
 
         let (_, rows) = run_select(&engine, "SELECT COUNT(*) FROM users WHERE age = 30");
         assert_eq!(rows.len(), 1);
-        assert_eq!(rows[0].get(0).unwrap(), &Value::Int64(2));
+        assert_eq!(rows[0].get(0).unwrap(), &Value::int64(2));
     }
 
     // ──────────────────────── aggregate function tests ───────────────────────
@@ -1602,7 +1586,7 @@ mod tests {
 
         let (_, rows) = run_select(&engine, "SELECT id FROM users WHERE name IS NULL");
         assert_eq!(rows.len(), 1);
-        assert_eq!(rows[0].get(0).unwrap(), &Value::Int64(2));
+        assert_eq!(rows[0].get(0).unwrap(), &Value::int64(2));
     }
 
     #[test]
@@ -1613,13 +1597,7 @@ mod tests {
 
         let (_, rows) = run_select(&engine, "SELECT id FROM users WHERE name IS NOT NULL");
         assert_eq!(rows.len(), 2);
-        let mut ids: Vec<i64> = rows
-            .iter()
-            .map(|r| match r.get(0).unwrap() {
-                Value::Int64(v) => *v,
-                _ => unreachable!(),
-            })
-            .collect();
+        let mut ids: Vec<i64> = rows.iter().map(|r| i64_at(r.get(0).unwrap())).collect();
         ids.sort_unstable();
         assert_eq!(ids, vec![1, 3]);
     }
@@ -1632,13 +1610,7 @@ mod tests {
 
         let (_, rows) = run_select(&engine, "SELECT id FROM users WHERE id IN (1, 3)");
         assert_eq!(rows.len(), 2);
-        let mut ids: Vec<i64> = rows
-            .iter()
-            .map(|r| match r.get(0).unwrap() {
-                Value::Int64(v) => *v,
-                _ => unreachable!(),
-            })
-            .collect();
+        let mut ids: Vec<i64> = rows.iter().map(|r| i64_at(r.get(0).unwrap())).collect();
         ids.sort_unstable();
         assert_eq!(ids, vec![1, 3]);
     }
@@ -1651,7 +1623,7 @@ mod tests {
 
         let (_, rows) = run_select(&engine, "SELECT id FROM users WHERE id NOT IN (1, 3)");
         assert_eq!(rows.len(), 1);
-        assert_eq!(rows[0].get(0).unwrap(), &Value::Int64(2));
+        assert_eq!(rows[0].get(0).unwrap(), &Value::int64(2));
     }
 
     #[test]
@@ -1663,7 +1635,7 @@ mod tests {
         // age=25 is within [25, 28]; age=30 is not
         let (_, rows) = run_select(&engine, "SELECT id FROM users WHERE age BETWEEN 25 AND 28");
         assert_eq!(rows.len(), 1);
-        assert_eq!(rows[0].get(0).unwrap(), &Value::Int64(2));
+        assert_eq!(rows[0].get(0).unwrap(), &Value::int64(2));
     }
 
     #[test]
@@ -1678,7 +1650,7 @@ mod tests {
             "SELECT id FROM users WHERE age NOT BETWEEN 26 AND 40",
         );
         assert_eq!(rows.len(), 1);
-        assert_eq!(rows[0].get(0).unwrap(), &Value::Int64(2));
+        assert_eq!(rows[0].get(0).unwrap(), &Value::int64(2));
     }
 
     #[test]
@@ -1690,7 +1662,7 @@ mod tests {
         // 'a%' matches 'alice' only
         let (_, rows) = run_select(&engine, "SELECT id FROM users WHERE name LIKE 'a%'");
         assert_eq!(rows.len(), 1);
-        assert_eq!(rows[0].get(0).unwrap(), &Value::Int64(1));
+        assert_eq!(rows[0].get(0).unwrap(), &Value::int64(1));
     }
 
     #[test]
@@ -1702,13 +1674,7 @@ mod tests {
         // NOT LIKE 'a%' → bob and cara (2 rows)
         let (_, rows) = run_select(&engine, "SELECT id FROM users WHERE name NOT LIKE 'a%'");
         assert_eq!(rows.len(), 2);
-        let mut ids: Vec<i64> = rows
-            .iter()
-            .map(|r| match r.get(0).unwrap() {
-                Value::Int64(v) => *v,
-                _ => unreachable!(),
-            })
-            .collect();
+        let mut ids: Vec<i64> = rows.iter().map(|r| i64_at(r.get(0).unwrap())).collect();
         ids.sort_unstable();
         assert_eq!(ids, vec![2, 3]);
     }
@@ -1722,7 +1688,7 @@ mod tests {
         // '_ob' matches 'bob': _ consumes 'b', then 'ob' matches literally
         let (_, rows) = run_select(&engine, "SELECT id FROM users WHERE name LIKE '_ob'");
         assert_eq!(rows.len(), 1);
-        assert_eq!(rows[0].get(0).unwrap(), &Value::Int64(2));
+        assert_eq!(rows[0].get(0).unwrap(), &Value::int64(2));
     }
 
     #[test]
@@ -1746,7 +1712,7 @@ mod tests {
         assert_eq!(field_names(&schema), vec!["AVG(age)"]);
         assert_eq!(rows.len(), 1);
         match rows[0].get(0).unwrap() {
-            Value::Float64(f) => assert!((f - (85.0 / 3.0)).abs() < 1e-9),
+            Value::Fixed(FixedValue::Float64(f)) => assert!((f - (85.0 / 3.0)).abs() < 1e-9),
             other => panic!("expected Float64, got {other:?}"),
         }
     }
@@ -1760,7 +1726,7 @@ mod tests {
         let (schema, rows) = run_select(&engine, "SELECT MIN(age) FROM users");
         assert_eq!(field_names(&schema), vec!["MIN(age)"]);
         assert_eq!(rows.len(), 1);
-        assert_eq!(rows[0].get(0).unwrap(), &Value::Int64(25));
+        assert_eq!(rows[0].get(0).unwrap(), &Value::int64(25));
     }
 
     #[test]
@@ -1772,7 +1738,7 @@ mod tests {
         let (schema, rows) = run_select(&engine, "SELECT MAX(age) FROM users");
         assert_eq!(field_names(&schema), vec!["MAX(age)"]);
         assert_eq!(rows.len(), 1);
-        assert_eq!(rows[0].get(0).unwrap(), &Value::Int64(30));
+        assert_eq!(rows[0].get(0).unwrap(), &Value::int64(30));
     }
 
     #[test]
@@ -1784,8 +1750,8 @@ mod tests {
         let (_, count_col_rows) = run_select(&engine, "SELECT COUNT(name) FROM users");
         let (_, count_star_rows) = run_select(&engine, "SELECT COUNT(*) FROM users");
 
-        assert_eq!(count_col_rows[0].get(0).unwrap(), &Value::Int64(2));
-        assert_eq!(count_star_rows[0].get(0).unwrap(), &Value::Int64(3));
+        assert_eq!(count_col_rows[0].get(0).unwrap(), &Value::int64(2));
+        assert_eq!(count_star_rows[0].get(0).unwrap(), &Value::int64(3));
     }
 
     #[test]
@@ -1802,14 +1768,14 @@ mod tests {
         assert_eq!(field_names(&schema), vec!["s", "n", "a", "mn", "mx"]);
         assert_eq!(rows.len(), 1);
         let row = &rows[0];
-        assert_eq!(row.get(0).unwrap(), &Value::Int64(85));
-        assert_eq!(row.get(1).unwrap(), &Value::Int64(3));
+        assert_eq!(row.get(0).unwrap(), &Value::int64(85));
+        assert_eq!(row.get(1).unwrap(), &Value::int64(3));
         match row.get(2).unwrap() {
-            Value::Float64(f) => assert!((f - (85.0 / 3.0)).abs() < 1e-9),
+            Value::Fixed(FixedValue::Float64(f)) => assert!((f - (85.0 / 3.0)).abs() < 1e-9),
             other => panic!("expected Float64 for AVG, got {other:?}"),
         }
-        assert_eq!(row.get(3).unwrap(), &Value::Int64(25));
-        assert_eq!(row.get(4).unwrap(), &Value::Int64(30));
+        assert_eq!(row.get(3).unwrap(), &Value::int64(25));
+        assert_eq!(row.get(4).unwrap(), &Value::int64(30));
     }
 
     #[test]
@@ -1842,8 +1808,8 @@ mod tests {
 
         let got = sorted_rows(rows);
         assert_eq!(got, vec![
-            vec![Value::Int64(25), Value::Int64(2), Value::Int64(2)],
-            vec![Value::Int64(30), Value::Int64(1), Value::Int64(3)],
+            vec![Value::int64(25), Value::int64(2), Value::int64(2)],
+            vec![Value::int64(30), Value::int64(1), Value::int64(3)],
         ]);
     }
 
@@ -1918,7 +1884,7 @@ mod tests {
         // cara's users.id (3) must not appear in any row's first column.
         let user_ids: Vec<&Value> = rows.iter().map(|r| r.get(0).unwrap()).collect();
         assert!(
-            !user_ids.contains(&&Value::Int64(3)),
+            !user_ids.contains(&&Value::int64(3)),
             "cara should be excluded by inner join"
         );
     }
@@ -1941,9 +1907,9 @@ mod tests {
         // totals for alice=100,200 and bob=150; sort to get a stable order
         let got = sorted_rows(rows);
         assert_eq!(got, vec![
-            vec![Value::Int64(1), Value::Int64(100)],
-            vec![Value::Int64(1), Value::Int64(200)],
-            vec![Value::Int64(2), Value::Int64(150)],
+            vec![Value::int64(1), Value::int64(100)],
+            vec![Value::int64(1), Value::int64(200)],
+            vec![Value::int64(2), Value::int64(150)],
         ]);
     }
 
@@ -1973,7 +1939,7 @@ mod tests {
         );
         assert_eq!(
             null_padded[0].get(0).unwrap(),
-            &Value::Int64(3),
+            &Value::int64(3),
             "the null-padded row must be cara (users.id = 3)"
         );
         // All three orders columns are NULL for that row.
@@ -2026,28 +1992,25 @@ mod tests {
                 )
             })
             .collect::<Vec<_>>();
-        got.sort_by_key(|(_, _, t)| match t {
-            Value::Int64(v) => *v,
-            _ => i64::MAX,
-        });
+        got.sort_by_key(|(_, _, t)| i64_at(t));
 
         // Seed: alice(id=1) → total=100, bob(id=2) → total=150, alice(id=1) → total=200.
         // Sorted ascending by total: 100, 150, 200.
         assert_eq!(got, vec![
             (
-                Value::Int64(1),
-                Value::String("alice".into()),
-                Value::Int64(100)
+                Value::int64(1),
+                Value::varchar("alice".into()),
+                Value::int64(100)
             ),
             (
-                Value::Int64(2),
-                Value::String("bob".into()),
-                Value::Int64(150)
+                Value::int64(2),
+                Value::varchar("bob".into()),
+                Value::int64(150)
             ),
             (
-                Value::Int64(1),
-                Value::String("alice".into()),
-                Value::Int64(200)
+                Value::int64(1),
+                Value::varchar("alice".into()),
+                Value::int64(200)
             ),
         ]);
     }
@@ -2079,7 +2042,7 @@ mod tests {
         assert_eq!(null_rows.len(), 1, "one right row has no matching user");
         assert_eq!(
             null_rows[0].get(1).unwrap(),
-            &Value::Int64(500),
+            &Value::int64(500),
             "orders.total=500 for the unmatched order"
         );
     }
@@ -2304,8 +2267,8 @@ mod tests {
         let bound = bind_with_users(|| {
             select_stmt(
                 exprs(vec![
-                    item(Expr::Literal(Value::Int64(1)), None),
-                    item(Expr::Literal(Value::String("hi".into())), Some("greet")),
+                    item(Expr::Literal(Value::int64(1)), None),
+                    item(Expr::Literal(Value::varchar("hi".into())), Some("greet")),
                     item(Expr::Literal(Value::Null), None),
                 ]),
                 vec![just("users")],
@@ -2317,10 +2280,13 @@ mod tests {
             panic!();
         };
         assert!(matches!(
-            list[0].expr,
-            ResolvedExpr::Literal(Value::Int64(1))
+            &list[0].expr,
+            ResolvedExpr::Literal(v) if *v == Value::int64(1)
         ));
-        assert!(matches!(&list[1].expr, ResolvedExpr::Literal(Value::String(s)) if s == "hi"));
+        assert!(matches!(
+            &list[1].expr,
+            ResolvedExpr::Literal(v) if v.as_str() == Some("hi")
+        ));
         assert_eq!(list[1].alias.as_deref(), Some("greet"));
         assert!(matches!(list[2].expr, ResolvedExpr::Literal(Value::Null)));
     }
@@ -2391,7 +2357,7 @@ mod tests {
                 exprs(vec![item(
                     Expr::Agg {
                         func: AggFunc::Sum,
-                        arg: Box::new(Expr::Literal(Value::Int64(1))),
+                        arg: Box::new(Expr::Literal(Value::int64(1))),
                     },
                     None,
                 )]),
@@ -2440,7 +2406,7 @@ mod tests {
                 inner_join(
                     "orders",
                     Some("o"),
-                    pred("u.id", Predicate::Equals, Value::Uint64(0)),
+                    pred("u.id", Predicate::Equals, Value::uint64(0)),
                 ),
             ))
         })
@@ -2457,10 +2423,10 @@ mod tests {
             inner_join(
                 "orders",
                 None,
-                pred("user_id", Predicate::Equals, Value::Uint64(0)),
+                pred("user_id", Predicate::Equals, Value::uint64(0)),
             ),
         ));
-        stmt.where_clause = Some(pred("id", Predicate::Equals, Value::Uint64(0)));
+        stmt.where_clause = Some(pred("id", Predicate::Equals, Value::uint64(0)));
         assert!(bind_with_users_and_orders(|| stmt).is_err());
     }
 
@@ -2477,7 +2443,7 @@ mod tests {
                     inner_join(
                         "orders",
                         None,
-                        pred("user_id", Predicate::Equals, Value::Uint64(0)),
+                        pred("user_id", Predicate::Equals, Value::uint64(0)),
                     ),
                 )],
             )
@@ -2502,7 +2468,7 @@ mod tests {
         // With eager resolution, an unknown qualifier in WHERE is caught at bind time.
         let bound = bind_with_users(|| {
             let mut s = star_from(just("users"));
-            s.where_clause = Some(pred("x.id", Predicate::Equals, Value::Uint64(0)));
+            s.where_clause = Some(pred("x.id", Predicate::Equals, Value::uint64(0)));
             s
         });
         assert!(bound.is_err());
@@ -2538,7 +2504,7 @@ mod tests {
     fn bind_having_resolves() {
         let bound = bind_with_users(|| {
             let mut s = star_from(just("users"));
-            s.having = Some(pred("age", Predicate::GreaterThan, Value::Int64(0)));
+            s.having = Some(pred("age", Predicate::GreaterThan, Value::int64(0)));
             s
         })
         .unwrap();

@@ -8,18 +8,18 @@
 //! - The upper bound [`MAX_TUPLE_SIZE`] on a single tuple's serialized form.
 //! - The [`Page`] trait, the minimum interface a page type must expose so the buffer pool and
 //!   recovery code can work with it generically.
-//! - The **page envelope format** in [`envelope`]: the 5-byte prelude every page begins with
+//! - The **page envelope format** in [`typed_page`]: the 5-byte prelude every page begins with
 //!   (`PageKind` byte + CRC32), along with `stamp_page_crc` and `page_crc_valid`.
 //! - [`open_persistent_file`], the shared convention for opening data files.
 //! - [`StorageError`], the unified error type returned by storage operations.
 
-pub mod envelope;
+pub mod typed_page;
 
 use std::{fs::File, path::Path};
 
-pub use envelope::{ENVELOPE_HEADER_SIZE, PageKind};
-pub(crate) use envelope::{compute_page_crc, page_crc_valid, read_page_lsn, stamp_page_crc};
 use thiserror::Error;
+pub use typed_page::{ENVELOPE_HEADER_SIZE, PageKind, TypedPage, UNIVERSAL_HEADER_SIZE};
+pub(crate) use typed_page::{compute_page_crc, page_crc_valid, read_page_lsn, stamp_page_crc};
 
 use crate::primitives::{Lsn, SlotId};
 
@@ -46,6 +46,18 @@ pub fn open_persistent_file(path: impl AsRef<Path>) -> std::io::Result<File> {
 /// pages as interchangeable slots and makes file offsets a simple
 /// `page_number * PAGE_SIZE`.
 pub const PAGE_SIZE: usize = 4096;
+
+/// Validates that `bytes` is exactly [`PAGE_SIZE`] and returns a fixed-size page image.
+///
+/// WAL before/after images and recovery paths use this to reject corrupt log
+/// records whose payload length does not match a full page.
+///
+/// # Errors
+///
+/// Returns the actual byte length when `bytes.len() != PAGE_SIZE`.
+pub fn try_as_page_image(bytes: &[u8]) -> Result<[u8; PAGE_SIZE], usize> {
+    bytes.try_into().map_err(|_| bytes.len())
+}
 
 /// Largest serialized tuple, in bytes, that the storage layer will accept.
 ///

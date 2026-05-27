@@ -123,7 +123,7 @@ impl FallibleIterator for CrossJoin<'_> {
 
 impl Executor for CrossJoin<'_> {
     fn schema(&self) -> &TupleSchema {
-        &self.inputs.schema
+        self.inputs.schema.as_ref()
     }
 
     /// Clears buffered output and rewinds only the left child.
