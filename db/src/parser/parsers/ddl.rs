@@ -409,7 +409,7 @@ impl Parser {
         col_name: NonEmptyString,
     ) -> Result<ColumnDef, ParserError> {
         let type_tok = self.bump()?;
-        let col_type = Type::try_from(type_tok).map_err(|msg| {
+        let col_type = Type::try_from(type_tok.kind).map_err(|msg| {
             warn!(column = %col_name, reason = %msg, "invalid column type");
             ParserError::ParsingError(msg)
         })?;

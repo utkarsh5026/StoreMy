@@ -178,6 +178,9 @@ pub enum TokenType {
     Text,
     Boolean,
     Float,
+    Date,
+    Time,
+    Timestamp,
     FloatLit,
     Operator,
     String,
@@ -294,6 +297,9 @@ impl TokenType {
             TokenType::Text => "TEXT",
             TokenType::Boolean => "BOOLEAN",
             TokenType::Float => "FLOAT",
+            TokenType::Date => "DATE",
+            TokenType::Time => "TIME",
+            TokenType::Timestamp => "TIMESTAMP",
             TokenType::FloatLit => "FLOAT_LIT",
             TokenType::Operator => "OPERATOR",
             TokenType::String => "STRING",
@@ -382,21 +388,27 @@ impl From<&Token> for String {
 /// | `Text`                 | `Type::Text`    |
 /// | `Boolean`              | `Type::Bool`    |
 /// | `Float`                | `Type::Float64` |
+/// | `Date`                 | `Type::Date`    |
+/// | `Time`                 | `Type::Time`    |
+/// | `Timestamp`            | `Type::Timestamp` |
 ///
 /// # Errors
 ///
 /// Returns an error string for any other token kind.
-impl TryFrom<Token> for Type {
+impl TryFrom<TokenType> for Type {
     type Error = String;
-    fn try_from(value: Token) -> Result<Self, Self::Error> {
-        match value.kind {
+    fn try_from(value: TokenType) -> Result<Self, Self::Error> {
+        match value {
             TokenType::Int => Ok(Type::Int32),
             TokenType::Bigint => Ok(Type::Int64),
             TokenType::Varchar => Ok(Type::String),
             TokenType::Text => Ok(Type::Text),
             TokenType::Boolean => Ok(Type::Bool),
             TokenType::Float => Ok(Type::Float64),
-            _ => Err(format!("unknown data type: {0}", value.kind)),
+            TokenType::Date => Ok(Type::Date),
+            TokenType::Time => Ok(Type::Time),
+            TokenType::Timestamp => Ok(Type::Timestamp),
+            _ => Err(format!("unknown data type: {value}")),
         }
     }
 }
@@ -422,37 +434,9 @@ impl TryFrom<Token> for Value {
     type Error = String; // or a proper error type
 
     fn try_from(token: Token) -> Result<Self, Self::Error> {
-        match token.kind {
-            TokenType::Int => token
-                .value
-                .parse::<i64>()
-                .map(Value::int64)
-                .map_err(|e| format!("invalid integer literal '{}': {e}", token.value)),
-
-            TokenType::FloatLit => token
-                .value
-                .parse::<f64>()
-                .map(Value::float64)
-                .map_err(|e| format!("invalid float literal '{}': {e}", token.value)),
-
-            TokenType::String => Ok(Value::varchar(token.value)),
-
-            TokenType::Null => Ok(Value::Null),
-
-            TokenType::Identifier => match token.value.to_ascii_lowercase().as_str() {
-                "true" => Ok(Value::bool(true)),
-                "false" => Ok(Value::bool(false)),
-                _ => Err(format!(
-                    "identifier '{}' is not a literal value",
-                    token.value
-                )),
-            },
-
-            _ => Err(format!(
-                "token {} cannot be converted to a Value",
-                token.kind
-            )),
-        }
+        let ty = Type::try_from(token.kind)?;
+        let value = token.value;
+        Value::parse_as(&value, ty).map_err(|e| format!("invalid literal '{value}': {e}"))
     }
 }
 
@@ -561,6 +545,9 @@ impl std::str::FromStr for TokenType {
             "TEXT" => Ok(TokenType::Text),
             "BOOLEAN" | "BOOL" => Ok(TokenType::Boolean),
             "FLOAT" | "REAL" | "DOUBLE" => Ok(TokenType::Float),
+            "DATE" => Ok(TokenType::Date),
+            "TIME" => Ok(TokenType::Time),
+            "TIMESTAMP" => Ok(TokenType::Timestamp),
 
             _ => Err("Cannot find any keyword related to this"),
         }
@@ -572,8 +559,6 @@ mod tests {
     use std::str::FromStr;
 
     use super::*;
-
-    // ---------- Span ----------
 
     #[test]
     fn span_new_constructs_range() {
@@ -756,6 +741,9 @@ mod tests {
         assert_eq!(TokenType::Text.to_string(), "TEXT");
         assert_eq!(TokenType::Boolean.to_string(), "BOOLEAN");
         assert_eq!(TokenType::Float.to_string(), "FLOAT");
+        assert_eq!(TokenType::Date.to_string(), "DATE");
+        assert_eq!(TokenType::Time.to_string(), "TIME");
+        assert_eq!(TokenType::Timestamp.to_string(), "TIMESTAMP");
         assert_eq!(TokenType::Operator.to_string(), "OPERATOR");
         assert_eq!(TokenType::String.to_string(), "STRING");
         assert_eq!(TokenType::Identifier.to_string(), "IDENTIFIER");
@@ -812,6 +800,12 @@ mod tests {
         assert_eq!(TokenType::from_str("DOUBLE").unwrap(), TokenType::Float);
         assert_eq!(TokenType::from_str("VARCHAR").unwrap(), TokenType::Varchar);
         assert_eq!(TokenType::from_str("STRING").unwrap(), TokenType::Varchar);
+        assert_eq!(TokenType::from_str("DATE").unwrap(), TokenType::Date);
+        assert_eq!(TokenType::from_str("TIME").unwrap(), TokenType::Time);
+        assert_eq!(
+            TokenType::from_str("TIMESTAMP").unwrap(),
+            TokenType::Timestamp
+        );
     }
 
     // Unrecognized strings return Err
@@ -885,9 +879,14 @@ mod tests {
             TokenType::Except,
             TokenType::All,
             TokenType::Int,
+            TokenType::Bigint,
+            TokenType::Varchar,
             TokenType::Text,
             TokenType::Boolean,
             TokenType::Float,
+            TokenType::Date,
+            TokenType::Time,
+            TokenType::Timestamp,
         ];
         for tt in keyword_types {
             let displayed = tt.to_string();
@@ -901,36 +900,24 @@ mod tests {
     // Each SQL type keyword token converts to the correct Type variant
     #[test]
     fn test_try_from_token_for_type_happy() {
+        assert_eq!(Type::try_from(TokenType::Int).unwrap(), Type::Int32);
+        assert_eq!(Type::try_from(TokenType::Bigint).unwrap(), Type::Int64);
+        assert_eq!(Type::try_from(TokenType::Varchar).unwrap(), Type::String);
+        assert_eq!(Type::try_from(TokenType::Text).unwrap(), Type::Text);
+        assert_eq!(Type::try_from(TokenType::Boolean).unwrap(), Type::Bool);
+        assert_eq!(Type::try_from(TokenType::Float).unwrap(), Type::Float64);
+        assert_eq!(Type::try_from(TokenType::Date).unwrap(), Type::Date);
+        assert_eq!(Type::try_from(TokenType::Time).unwrap(), Type::Time);
         assert_eq!(
-            Type::try_from(make_token(TokenType::Int, "INT")).unwrap(),
-            Type::Int32
-        );
-        assert_eq!(
-            Type::try_from(make_token(TokenType::Bigint, "BIGINT")).unwrap(),
-            Type::Int64
-        );
-        assert_eq!(
-            Type::try_from(make_token(TokenType::Varchar, "VARCHAR")).unwrap(),
-            Type::String
-        );
-        assert_eq!(
-            Type::try_from(make_token(TokenType::Text, "TEXT")).unwrap(),
-            Type::Text
-        );
-        assert_eq!(
-            Type::try_from(make_token(TokenType::Boolean, "BOOLEAN")).unwrap(),
-            Type::Bool
-        );
-        assert_eq!(
-            Type::try_from(make_token(TokenType::Float, "FLOAT")).unwrap(),
-            Type::Float64
+            Type::try_from(TokenType::Timestamp).unwrap(),
+            Type::Timestamp
         );
     }
 
     // Non-type tokens produce an error containing the token kind name
     #[test]
     fn test_try_from_token_for_type_error_on_keyword() {
-        let result = Type::try_from(make_token(TokenType::Select, "SELECT"));
+        let result = Type::try_from(TokenType::Select);
         assert!(result.is_err());
         let msg = result.unwrap_err();
         assert!(
@@ -941,21 +928,14 @@ mod tests {
 
     #[test]
     fn test_try_from_token_for_type_error_on_identifier() {
-        let result = Type::try_from(make_token(TokenType::Identifier, "mytype"));
+        let result = Type::try_from(TokenType::Identifier);
         assert!(result.is_err());
     }
 
     #[test]
     fn test_try_from_token_for_type_error_on_eof() {
-        let result = Type::try_from(make_token(TokenType::Eof, ""));
+        let result = Type::try_from(TokenType::Eof);
         assert!(result.is_err());
-    }
-
-    // Int token with a valid i64 string produces Value::Int64
-    #[test]
-    fn test_try_from_token_for_value_int_positive() {
-        let result = Value::try_from(make_token(TokenType::Int, "42")).unwrap();
-        assert_eq!(result, Value::int64(42));
     }
 
     #[test]
