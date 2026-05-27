@@ -751,4 +751,60 @@ mod tests {
         assert!(matches!(rows[0][0], Expr::Literal(_)));
         assert!(matches!(rows[1][0], Expr::UnaryOp { .. }));
     }
+
+    #[test]
+    fn test_parse_update_temporal_column_set_from_another_column() {
+        // Assigning one date column to another — column refs, no literal parsing needed.
+        let mut p = Parser::new("UPDATE events SET end_date = start_date WHERE id = some_id");
+        let u = p.parse_update().unwrap();
+        assert_eq!(u.assignments.len(), 1);
+        assert_eq!(u.assignments[0].column, "end_date");
+        assert_eq!(
+            u.assignments[0].value,
+            Expr::Column(ColumnRef::from("start_date"))
+        );
+    }
+
+    #[test]
+    fn test_parse_delete_with_temporal_column_in_where() {
+        // Deleting rows filtered on a temporal column name — purely structural, no literals.
+        let mut p = Parser::new("DELETE FROM logs WHERE created_at = archived_at");
+        let d = p.parse_delete().unwrap();
+        let wc = d.where_clause.expect("where clause");
+        let Expr::BinaryOp { lhs, op, rhs } = wc else {
+            panic!("expected BinaryOp");
+        };
+        assert_eq!(op, BinOp::Eq);
+        assert_eq!(*lhs, Expr::Column(ColumnRef::from("created_at")));
+        assert_eq!(*rhs, Expr::Column(ColumnRef::from("archived_at")));
+    }
+
+    #[test]
+    fn test_parse_update_multiple_temporal_column_assignments() {
+        let mut p =
+            Parser::new("UPDATE appointments SET start_time = open_time, end_time = close_time");
+        let u = p.parse_update().unwrap();
+        assert_eq!(u.assignments.len(), 2);
+        assert_eq!(u.assignments[0].column, "start_time");
+        assert_eq!(u.assignments[1].column, "end_time");
+        assert_eq!(
+            u.assignments[0].value,
+            Expr::Column(ColumnRef::from("open_time"))
+        );
+    }
+
+    #[test]
+    fn test_parse_insert_temporal_column_list_is_parsed() {
+        // Confirms the column list with temporal-named columns parses without error.
+        // Source is SELECT so no literal parsing is needed.
+        let mut p = Parser::new(
+            "INSERT INTO archive (id, created_at, event_date) SELECT id, ts, d FROM events",
+        );
+        let i = p.parse_insert().unwrap();
+        assert_eq!(
+            column_names(i.columns.as_deref()),
+            Some(vec!["id", "created_at", "event_date"])
+        );
+        assert!(matches!(i.source, InsertSource::Select(_)));
+    }
 }
