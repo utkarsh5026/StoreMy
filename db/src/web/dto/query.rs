@@ -56,14 +56,6 @@ pub fn value_to_json(v: &Value) -> JsonValue {
     match v {
         Value::Null => JsonValue::Null,
         Value::Fixed(f) => match f {
-            FixedValue::Int32(n) => JsonValue::from(*n),
-            FixedValue::Int64(n) => {
-                if (JS_SAFE_MIN..=JS_SAFE_MAX).contains(n) {
-                    JsonValue::from(*n)
-                } else {
-                    JsonValue::String(n.to_string())
-                }
-            }
             FixedValue::Uint32(n) => JsonValue::from(*n),
             FixedValue::Uint64(n) => {
                 if *n <= JS_SAFE_MAX as u64 {
@@ -80,6 +72,15 @@ pub fn value_to_json(v: &Value) -> JsonValue {
                 }
             }
             FixedValue::Bool(b) => JsonValue::Bool(*b),
+            FixedValue::Int32(n) | FixedValue::Date(n) => JsonValue::from(*n),
+            FixedValue::Time(n) => JsonValue::from(*n),
+            FixedValue::Int64(n) | FixedValue::Timestamp(n) => {
+                if (JS_SAFE_MIN..=JS_SAFE_MAX).contains(n) {
+                    JsonValue::from(*n)
+                } else {
+                    JsonValue::String(n.to_string())
+                }
+            }
         },
         Value::Dyn(d) => match d {
             DynValue::Varchar(s) | DynValue::Text(s) => JsonValue::String(s.clone()),

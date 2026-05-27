@@ -328,7 +328,10 @@ fn format_value_cell(v: &Value) -> Cell {
             | FixedValue::Int64(_)
             | FixedValue::Uint32(_)
             | FixedValue::Uint64(_)
-            | FixedValue::Float64(_) => Cell::new(v.to_string()).fg(comfy_table::Color::Yellow),
+            | FixedValue::Float64(_)
+            | FixedValue::Date(_)
+            | FixedValue::Time(_)
+            | FixedValue::Timestamp(_) => Cell::new(v.to_string()).fg(comfy_table::Color::Yellow),
             FixedValue::Bool(_) => Cell::new(v.to_string()).fg(comfy_table::Color::Magenta),
         },
         Value::Dyn(d) => match d {

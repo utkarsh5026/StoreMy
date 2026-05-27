@@ -188,7 +188,7 @@ pub struct TupleSchema {
 const fn fixed_type_payload_size(ty: Type) -> usize {
     match ty {
         Type::Int32 | Type::Uint32 => 4,
-        Type::Int64 | Type::Uint64 | Type::Float64 => 8,
+        Type::Int64 | Type::Uint64 | Type::Float64 | Type::Date | Type::Time | Type::Timestamp => 8,
         Type::Bool => 1,
         Type::String => 4 + STRING_MAX_SIZE,
         Type::Text => 0,
