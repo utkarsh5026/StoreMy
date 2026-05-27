@@ -375,7 +375,8 @@ impl From<&Token> for String {
 /// | `TokenType`            | `Type`          |
 /// |------------------------|-----------------|
 /// | `Int`                  | `Type::Int64`   |
-/// | `Varchar` \| `Text`    | `Type::String`  |
+/// | `Varchar`              | `Type::String`  |
+/// | `Text`                 | `Type::Text`    |
 /// | `Boolean`              | `Type::Bool`    |
 /// | `Float`                | `Type::Float64` |
 ///
@@ -387,7 +388,8 @@ impl TryFrom<Token> for Type {
     fn try_from(value: Token) -> Result<Self, Self::Error> {
         match value.kind {
             TokenType::Int => Ok(Type::Int64),
-            TokenType::Varchar | TokenType::Text => Ok(Type::String),
+            TokenType::Varchar => Ok(Type::String),
+            TokenType::Text => Ok(Type::Text),
             TokenType::Boolean => Ok(Type::Bool),
             TokenType::Float => Ok(Type::Float64),
             _ => Err(format!("unknown data type: {0}", value.kind)),
@@ -901,7 +903,7 @@ mod tests {
         );
         assert_eq!(
             Type::try_from(make_token(TokenType::Text, "TEXT")).unwrap(),
-            Type::String
+            Type::Text
         );
         assert_eq!(
             Type::try_from(make_token(TokenType::Boolean, "BOOLEAN")).unwrap(),

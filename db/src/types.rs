@@ -349,13 +349,48 @@ impl Value {
             _ => Err(ArithmeticError::TypeMismatch),
         }
     }
-}
 
-impl TryFrom<(&Value, Type)> for Value {
-    type Error = TypeError;
-
-    fn try_from((v, target): (&Self, Type)) -> Result<Self, Self::Error> {
-        match (v, target) {
+    /// Coerces this value to match a column's declared [`Type`].
+    ///
+    /// After parsing, runtime values often arrive in a generic form — every
+    /// integer literal is [`Value::Int64`], every quoted string is
+    /// [`Value::String`] — while the target column may declare a narrower or
+    /// distinct type. The engine uses this when binding literals to columns
+    /// during `INSERT`, `UPDATE`, and similar statements.
+    ///
+    /// Supported conversions:
+    ///
+    /// - [`Value::Int64`] → [`Type::Int32`], [`Type::Uint32`], or [`Type::Uint64`] when the number
+    ///   fits in the target range.
+    /// - [`Value::String`] → [`Type::String`] or [`Type::Text`].
+    /// - Any value whose [`Self::get_type`] already equals `target` → returned unchanged.
+    ///
+    /// All other `(value, target)` pairs return [`TypeError::InvalidConversion`].
+    ///
+    ///
+    /// # Errors
+    ///
+    /// Returns [`TypeError::InvalidConversion`] when `self` cannot be represented
+    /// as `target` (out-of-range integer, string into a numeric column, etc.).
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use storemy::types::{Type, Value};
+    ///
+    /// // Parser integer literals are Int64; columns may declare Int32.
+    /// let literal = Value::Int64(42);
+    /// assert_eq!(literal.coerce_to(Type::Int32).unwrap(), Value::Int32(42));
+    ///
+    /// // Quoted strings parse as String; TEXT columns store Value::Text.
+    /// let text = Value::String("hi".to_string());
+    /// assert_eq!(
+    ///     text.coerce_to(Type::Text).unwrap(),
+    ///     Value::Text("hi".to_string())
+    /// );
+    /// ```
+    pub fn coerce_to(&self, target: Type) -> Result<Self, TypeError> {
+        match (self, target) {
             (Self::Int64(n), Type::Int32) => i32::try_from(*n)
                 .map(Self::Int32)
                 .map_err(|_| TypeError::invalid_conversion(*n, Type::Int32)),
@@ -367,7 +402,7 @@ impl TryFrom<(&Value, Type)> for Value {
                 .map(Self::Uint64)
                 .map_err(|_| TypeError::invalid_conversion(*n, Type::Uint64)),
             (Self::String(s), Type::String) => Ok(Self::String(s.clone())),
-            (Self::Text(s), Type::Text) => Ok(Self::Text(s.clone())),
+            (Self::String(s), Type::Text) => Ok(Self::Text(s.clone())),
             (v, ty) if v.get_type() == Some(ty) => Ok(v.clone()),
             (v, ty) => Err(TypeError::invalid_conversion(v, ty)),
         }
@@ -625,53 +660,56 @@ impl Decode for Value {
 }
 
 #[cfg(test)]
-mod coerce_to_type_tests {
+mod coerce_to_tests {
     use super::{Type, TypeError, Value};
 
     #[test]
     fn int64_literal_to_int32() {
         let v = Value::Int64(42);
-        assert_eq!(
-            Value::try_from((&v, Type::Int32)).unwrap(),
-            Value::Int32(42)
-        );
+        assert_eq!(v.coerce_to(Type::Int32).unwrap(), Value::Int32(42));
     }
 
     #[test]
     fn int64_out_of_range_for_int32() {
         let v = Value::Int64(i64::from(i32::MAX) + 1);
-        let err = Value::try_from((&v, Type::Int32)).unwrap_err();
+        let err = v.coerce_to(Type::Int32).unwrap_err();
         assert!(matches!(err, TypeError::InvalidConversion { .. }));
     }
 
     #[test]
     fn negative_int64_to_uint64_fails() {
         let v = Value::Int64(-1);
-        assert!(Value::try_from((&v, Type::Uint64)).is_err());
+        assert!(v.coerce_to(Type::Uint64).is_err());
     }
 
     #[test]
     fn string_to_varchar_column() {
         let v = Value::String("x".to_string());
         assert_eq!(
-            Value::try_from((&v, Type::String)).unwrap(),
+            v.coerce_to(Type::String).unwrap(),
             Value::String("x".to_string())
+        );
+    }
+
+    #[test]
+    fn string_to_text_column() {
+        let v = Value::String("hello".to_string());
+        assert_eq!(
+            v.coerce_to(Type::Text).unwrap(),
+            Value::Text("hello".to_string())
         );
     }
 
     #[test]
     fn bool_same_type_unchanged() {
         let v = Value::Bool(true);
-        assert_eq!(
-            Value::try_from((&v, Type::Bool)).unwrap(),
-            Value::Bool(true)
-        );
+        assert_eq!(v.coerce_to(Type::Bool).unwrap(), Value::Bool(true));
     }
 
     #[test]
     fn string_literal_to_int_column_fails() {
         let v = Value::String("1".to_string());
-        assert!(Value::try_from((&v, Type::Int32)).is_err());
+        assert!(v.coerce_to(Type::Int32).is_err());
     }
 }
 

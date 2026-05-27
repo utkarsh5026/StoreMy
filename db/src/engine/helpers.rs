@@ -357,11 +357,13 @@ impl Engine<'_> {
             return Ok(Value::Null);
         }
 
-        Value::try_from((value, field.field_type)).map_err(|e| EngineError::TypeMismatch {
-            column: field.name.to_string(),
-            expected: field.field_type.to_string(),
-            got: e.to_string(),
-        })
+        value
+            .coerce_to(field.field_type)
+            .map_err(|e| EngineError::TypeMismatch {
+                column: field.name.to_string(),
+                expected: field.field_type.to_string(),
+                got: e.to_string(),
+            })
     }
 
     /// Evaluates every CHECK constraint on a table against a fully-assembled tuple.

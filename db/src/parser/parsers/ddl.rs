@@ -865,7 +865,7 @@ mod tests {
         assert!(id.auto_increment);
         assert!(id.default.is_none());
 
-        assert_eq!(t.columns[1].col_type, Type::String);
+        assert_eq!(t.columns[1].col_type, Type::Text);
         assert_eq!(t.columns[2].default, Some(Value::Int64(0)));
         assert_eq!(t.columns[3].default, Some(Value::Bool(true)));
     }
@@ -877,7 +877,7 @@ mod tests {
             panic!("expected CreateTable");
         };
         assert_eq!(t.columns[0].col_type, Type::Int64);
-        assert_eq!(t.columns[1].col_type, Type::String);
+        assert_eq!(t.columns[1].col_type, Type::Text);
     }
 
     #[test]
