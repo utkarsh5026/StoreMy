@@ -27,6 +27,14 @@ mod show_indexes;
 mod tcl;
 mod update;
 
+/// Kind tag used when generating a default catalog constraint name.
+#[derive(Clone, Copy)]
+pub(super) enum ConstraintDefaultKind {
+    Unique,
+    Check,
+    ForeignKey,
+}
+
 /// SQL execution entrypoint.
 ///
 /// The engine holds references to the catalog and transaction manager so
