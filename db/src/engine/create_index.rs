@@ -47,8 +47,7 @@ impl Engine<'_> {
         catalog: &Catalog,
         stmt: CreateIndexStatement,
     ) -> Result<StatementResult, EngineError> {
-        let table = Self::check_table(catalog, txn, &stmt.table_name, false)?
-            .expect("if_exists=false should never yield None");
+        let table = Self::require_table(catalog, txn, &stmt.table_name)?;
 
         let index_name = stmt.index_name.into_inner();
         tracing::debug!(

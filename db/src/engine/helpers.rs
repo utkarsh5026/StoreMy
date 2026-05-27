@@ -71,18 +71,38 @@ impl Engine<'_> {
         table_name: &str,
         if_exists: bool,
     ) -> Result<Option<TableInfo>, EngineError> {
-        let info = match catalog.get_table_info(txn, table_name) {
-            Ok(info) => info,
+        match catalog.get_table_info(txn, table_name) {
+            Ok(info) => Ok(Some(info)),
+            Err(CatalogError::TableNotFound { table_name: _ }) if if_exists => Ok(None),
             Err(CatalogError::TableNotFound { table_name }) => {
-                return if if_exists {
-                    Ok(None)
-                } else {
-                    Err(EngineError::TableNotFound(table_name.to_string()))
-                };
+                Err(EngineError::TableNotFound(table_name.to_string()))
             }
-            Err(other) => return Err(other.into()),
-        };
-        Ok(Some(info))
+            Err(other) => Err(other.into()),
+        }
+    }
+
+    /// Catalog lookup when the table must exist (no `IF EXISTS` / `IF NOT EXISTS` soft-fail).
+    ///
+    /// Same error mapping as [`Self::check_table`] with `if_exists = false`, but returns
+    /// [`TableInfo`] directly instead of `Option<TableInfo>`.
+    ///
+    /// # Errors
+    ///
+    /// - [`EngineError::TableNotFound`] — no such table.
+    /// - [`EngineError::Catalog`] — other catalog read failures.
+    pub(super) fn require_table(
+        catalog: &Catalog,
+        txn: &ActiveTransaction,
+        table_name: &str,
+    ) -> Result<TableInfo, EngineError> {
+        catalog
+            .get_table_info(txn, table_name)
+            .map_err(|e| match e {
+                CatalogError::TableNotFound { table_name } => {
+                    EngineError::TableNotFound(table_name.to_string())
+                }
+                other => other.into(),
+            })
     }
 
     /// Resolves a list of column names to their corresponding column IDs in a given table schema.
@@ -194,8 +214,7 @@ impl Engine<'_> {
                 let local_columns =
                     Self::resolve_column_ids(schema, table_name, local_cols.as_slice())?;
 
-                let ref_info = Self::check_table(catalog, txn, ref_table.as_str(), false)?
-                    .expect("if_exists=false never yields None");
+                let ref_info = Self::require_table(catalog, txn, ref_table.as_str())?;
 
                 let ref_ids = Self::resolve_column_ids(
                     &ref_info.schema,

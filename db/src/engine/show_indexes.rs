@@ -46,8 +46,7 @@ impl Engine<'_> {
         let (scope, infos) = match stmt.0 {
             None => (None, catalog.list_indexes(txn)?),
             Some(name) => {
-                let table = Self::check_table(catalog, txn, name.as_str(), false)?
-                    .expect("if_exists=false should never yield None");
+                let table = Self::require_table(catalog, txn, name.as_str())?;
                 (
                     Some(table.name.as_str().to_string()),
                     catalog.list_indexes_for(txn, table.file_id)?,

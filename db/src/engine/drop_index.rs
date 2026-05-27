@@ -45,8 +45,7 @@ impl Engine<'_> {
                 return Err(EngineError::UnknownIndex(index_name));
             };
 
-            let table = Self::check_table(catalog, txn, table_name.as_str(), false)?
-                .expect("if_exists=false should never yield None");
+            let table = Self::require_table(catalog, txn, table_name.as_str())?;
 
             if catalog.index_belongs_to_table(table.file_id, &index) {
                 catalog.drop_index(txn, &index_name)?;

@@ -286,8 +286,7 @@ impl Engine<'_> {
             if let Some(reference) = &col.references {
                 let (local_id, _) = Self::require_column(schema, table_name, col.name.as_str())?;
 
-                let ref_info = Self::check_table(catalog, txn, reference.table.as_str(), false)?
-                    .expect("if_exists=false never yields None");
+                let ref_info = Self::require_table(catalog, txn, reference.table.as_str())?;
                 let (ref_id, _) = Self::require_column(
                     &ref_info.schema,
                     ref_info.name.as_str(),
@@ -627,6 +626,47 @@ mod tests {
             }),
             "expected MultipleAutoIncrementColumns, got: {err:?}"
         );
+    }
+
+    // --- temporal type tests ---
+    #[test]
+    fn test_create_table_temporal_column_types_are_stored_correctly() {
+        let dir = tempdir().unwrap();
+        let (catalog, txn_mgr) = make_catalog_and_txn(dir.path());
+
+        let cols = vec![
+            col("id", Type::Uint64, false, false),
+            col("birthday", Type::Date, true, false),
+            col("alarm", Type::Time, true, false),
+            col("created_at", Type::Timestamp, false, false),
+        ];
+
+        let engine = Engine::new(&catalog, &txn_mgr);
+        engine
+            .execute_statement(Statement::CreateTable(statement_create(
+                "temporal_test",
+                false,
+                cols,
+                None,
+            )))
+            .unwrap();
+
+        let txn = txn_mgr.begin().unwrap();
+        let info = catalog.get_table_info(&txn, "temporal_test").unwrap();
+        txn.commit().unwrap();
+
+        let fields: Vec<_> = info.schema.fields().collect();
+        assert_eq!(fields.len(), 4);
+        assert_eq!(fields[0].field_type, Type::Uint64);
+        assert_eq!(fields[1].field_type, Type::Date);
+        assert_eq!(fields[2].field_type, Type::Time);
+        assert_eq!(fields[3].field_type, Type::Timestamp);
+
+        // nullability is preserved
+        assert!(!fields[0].nullable);
+        assert!(fields[1].nullable);
+        assert!(fields[2].nullable);
+        assert!(!fields[3].nullable);
     }
 
     // --- property / invariant tests ---
