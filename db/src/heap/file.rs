@@ -492,7 +492,7 @@ impl HeapFile {
     /// Wraps raw page `data` in a [`HeapPage`] view bound to this file's schema.
     #[inline]
     fn h_page(&self, data: &[u8]) -> Result<HeapPage, StorageError> {
-        HeapPage::new(data, Arc::clone(&self.schema))
+        HeapPage::heap_new(data, Arc::clone(&self.schema))
     }
 
     /// Creates a new `PageId` for the given page number.

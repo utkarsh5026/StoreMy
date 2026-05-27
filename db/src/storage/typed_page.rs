@@ -360,8 +360,8 @@ where
 
 impl<H, B> Page for TypedPage<H, B>
 where
-    H: Encode + Decode + Send + Sync,
-    B: Encode + Decode + Send + Sync,
+    H: Encode + Send + Sync,
+    B: Encode + Send + Sync,
 {
     fn page_data(&self) -> [u8; PAGE_SIZE] {
         self.to_page_bytes()
