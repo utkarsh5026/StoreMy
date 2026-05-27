@@ -47,6 +47,18 @@ pub fn open_persistent_file(path: impl AsRef<Path>) -> std::io::Result<File> {
 /// `page_number * PAGE_SIZE`.
 pub const PAGE_SIZE: usize = 4096;
 
+/// Validates that `bytes` is exactly [`PAGE_SIZE`] and returns a fixed-size page image.
+///
+/// WAL before/after images and recovery paths use this to reject corrupt log
+/// records whose payload length does not match a full page.
+///
+/// # Errors
+///
+/// Returns the actual byte length when `bytes.len() != PAGE_SIZE`.
+pub fn try_as_page_image(bytes: &[u8]) -> Result<[u8; PAGE_SIZE], usize> {
+    bytes.try_into().map_err(|_| bytes.len())
+}
+
 /// Largest serialized tuple, in bytes, that the storage layer will accept.
 ///
 /// Tuples bigger than this are rejected with
