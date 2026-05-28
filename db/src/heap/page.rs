@@ -461,8 +461,10 @@ impl TypedPage<HeapTypedHeader, HeapTypedBody> {
             .validate(&tuple)
             .map_err(|_| StorageError::SchemaMismatch)?;
 
-        let has_text = schema.fields().any(|f| f.field_type == Type::Text);
-        let tup_size = if has_text {
+        let has_varlen = schema
+            .fields()
+            .any(|f| matches!(f.field_type, Type::Text | Type::Json));
+        let tup_size = if has_varlen {
             for value in tuple.iter() {
                 if let Value::Dyn(DynValue::Text(s)) = value
                     && s.len() > TEXT_MAX_INLINE_SIZE

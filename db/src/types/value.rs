@@ -408,7 +408,7 @@ impl Hash for DynValue {
         std::mem::discriminant(self).hash(state);
         match self {
             Self::Varchar(s) | Self::Text(s) => s.hash(state),
-            Self::TextOverflow(_) | Self::JsonOverflow { .. } => (),
+            Self::TextOverflow(_) | Self::JsonOverflow(_) => (),
             Self::Json(v) => v.hash(state),
         }
     }
@@ -849,7 +849,10 @@ impl Encode for DynValue {
     fn encode<W: Write>(&self, w: &mut W) -> Result<(), CodecError> {
         match self {
             Self::Varchar(s) | Self::Text(s) => s.encode(w),
-            Self::TextOverflow(o) | Self::JsonOverflow(o) => o.encode(w),
+            Self::TextOverflow(o) | Self::JsonOverflow(o) => {
+                u32::MAX.encode(w)?;
+                o.encode(w)
+            }
             Self::Json(v) => v.encode(w),
         }
     }
@@ -900,17 +903,25 @@ impl Decode for Value {
                 Self::varchar(std::str::from_utf8(&buf)?.to_string())
             }
             Type::Text | Type::Json => {
-                let first = u32::decode(r)?;
-                if first == u32::MAX {
+                let length = u32::decode(r)?;
+                if length == u32::MAX {
                     if value_type == Type::Text {
                         Self::Dyn(DynValue::TextOverflow(OverflowPointer::decode(r)?))
                     } else {
                         Self::Dyn(DynValue::JsonOverflow(OverflowPointer::decode(r)?))
                     }
-                } else if value_type == Type::Text {
-                    Self::text(String::decode(r)?)
                 } else {
-                    Self::Dyn(DynValue::Json(serde_json::Value::decode(r)?))
+                    let mut buf = vec![0u8; length as usize];
+                    r.read_exact(&mut buf)?;
+                    let s = std::str::from_utf8(&buf).map_err(CodecError::InvalidUtf8)?;
+                    if value_type == Type::Text {
+                        Self::text(s.to_owned())
+                    } else {
+                        let v = serde_json::from_str(s).map_err(|e| {
+                            CodecError::Io(std::io::Error::new(std::io::ErrorKind::InvalidData, e))
+                        })?;
+                        Self::Dyn(DynValue::Json(v))
+                    }
                 }
             }
         })

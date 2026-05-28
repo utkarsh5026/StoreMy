@@ -172,6 +172,7 @@ pub enum TokenType {
     Show,
     Indexes,
 
+    Json,
     Int,
     Bigint,
     Varchar,
@@ -291,6 +292,7 @@ impl TokenType {
             TokenType::Format => "FORMAT",
             TokenType::Show => "SHOW",
             TokenType::Indexes => "INDEXES",
+            TokenType::Json => "JSON",
             TokenType::Int => "INT",
             TokenType::Bigint => "BIGINT",
             TokenType::Varchar => "VARCHAR",
@@ -391,6 +393,7 @@ impl From<&Token> for String {
 /// | `Date`                 | `Type::Date`    |
 /// | `Time`                 | `Type::Time`    |
 /// | `Timestamp`            | `Type::Timestamp` |
+/// | `Json`                 | `Type::Json`    |
 ///
 /// # Errors
 ///
@@ -408,6 +411,7 @@ impl TryFrom<TokenType> for Type {
             TokenType::Date => Ok(Type::Date),
             TokenType::Time => Ok(Type::Time),
             TokenType::Timestamp => Ok(Type::Timestamp),
+            TokenType::Json => Ok(Type::Json),
             _ => Err(format!("unknown data type: {value}")),
         }
     }
@@ -565,6 +569,7 @@ impl std::str::FromStr for TokenType {
             "DATE" => Ok(TokenType::Date),
             "TIME" => Ok(TokenType::Time),
             "TIMESTAMP" => Ok(TokenType::Timestamp),
+            "JSON" => Ok(TokenType::Json),
 
             _ => Err("Cannot find any keyword related to this"),
         }
@@ -761,6 +766,7 @@ mod tests {
         assert_eq!(TokenType::Date.to_string(), "DATE");
         assert_eq!(TokenType::Time.to_string(), "TIME");
         assert_eq!(TokenType::Timestamp.to_string(), "TIMESTAMP");
+        assert_eq!(TokenType::Json.to_string(), "JSON");
         assert_eq!(TokenType::Operator.to_string(), "OPERATOR");
         assert_eq!(TokenType::String.to_string(), "STRING");
         assert_eq!(TokenType::Identifier.to_string(), "IDENTIFIER");
@@ -823,6 +829,7 @@ mod tests {
             TokenType::from_str("TIMESTAMP").unwrap(),
             TokenType::Timestamp
         );
+        assert_eq!(TokenType::from_str("JSON").unwrap(), TokenType::Json);
     }
 
     // Unrecognized strings return Err
@@ -904,6 +911,7 @@ mod tests {
             TokenType::Date,
             TokenType::Time,
             TokenType::Timestamp,
+            TokenType::Json,
         ];
         for tt in keyword_types {
             let displayed = tt.to_string();
@@ -929,6 +937,7 @@ mod tests {
             Type::try_from(TokenType::Timestamp).unwrap(),
             Type::Timestamp
         );
+        assert_eq!(Type::try_from(TokenType::Json).unwrap(), Type::Json);
     }
 
     // Non-type tokens produce an error containing the token kind name
