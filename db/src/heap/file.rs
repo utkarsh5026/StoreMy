@@ -46,7 +46,7 @@ use crate::{
     primitives::{PageId, RecordId, SlotId},
     storage::{PAGE_SIZE, PageKind, StorageError},
     tuple::{Tuple, TupleSchema},
-    types::{DynValue, Value},
+    types::{DynValue, OverflowPointer, Value},
     wal::{PageLogOp, PageMutation, WalError},
 };
 
@@ -545,7 +545,7 @@ impl HeapFile {
                             size: s.len(),
                             max: u32::MAX as usize,
                         })?;
-                    Ok(Value::Dyn(DynValue::TextOverflow { total_len, ptr }))
+                    Ok(Value::text_overflow(total_len, ptr))
                 }
                 other => Ok(other.clone()),
             })
@@ -573,7 +573,7 @@ impl HeapFile {
             .iter()
             .zip(self.schema.fields())
             .map(|(v, field)| match v {
-                Value::Dyn(DynValue::TextOverflow { ptr, total_len }) => {
+                Value::Dyn(DynValue::TextOverflow(OverflowPointer { ptr, total_len })) => {
                     let bytes = self.overflow_file.read_overflow(txn, *ptr)?;
                     tracing::debug!(
                         file_id = ?self.file_id,

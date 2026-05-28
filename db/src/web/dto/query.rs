@@ -84,9 +84,13 @@ pub fn value_to_json(v: &Value) -> JsonValue {
         },
         Value::Dyn(d) => match d {
             DynValue::Varchar(s) | DynValue::Text(s) => JsonValue::String(s.clone()),
-            DynValue::TextOverflow { .. } => {
+            DynValue::TextOverflow(_) => {
                 unreachable!("TextOverflow must be resolved before JSON serialization")
             }
+            DynValue::JsonOverflow(_) => {
+                unreachable!("JsonOverflow must be resolved before JSON serialization")
+            }
+            DynValue::Json(v) => JsonValue::String(v.to_string()),
         },
     }
 }

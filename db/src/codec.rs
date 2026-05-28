@@ -396,3 +396,19 @@ impl<T: Decode> Decode for Vec<T> {
         (0..n).map(|_| T::decode(reader)).collect()
     }
 }
+
+impl Encode for serde_json::Value {
+    fn encode<W: Write>(&self, writer: &mut W) -> Result<(), CodecError> {
+        let s = serde_json::to_string(self)
+            .map_err(|e| CodecError::Io(std::io::Error::new(std::io::ErrorKind::InvalidData, e)))?;
+        s.encode(writer)
+    }
+}
+
+impl Decode for serde_json::Value {
+    fn decode<R: Read>(reader: &mut R) -> Result<Self, CodecError> {
+        let s = String::decode(reader)?;
+        serde_json::from_str(&s)
+            .map_err(|e| CodecError::Io(std::io::Error::new(std::io::ErrorKind::InvalidData, e)))
+    }
+}

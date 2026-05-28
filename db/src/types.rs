@@ -106,6 +106,7 @@ pub enum Type {
     Date,
     Time,
     Timestamp,
+    Json,
 }
 
 /// Converts a `u32` to a [`Type`] by matching a numeric tag to the corresponding variant.
@@ -127,6 +128,7 @@ impl TryFrom<u32> for Type {
             8 => Ok(Self::Date),
             9 => Ok(Self::Time),
             10 => Ok(Self::Timestamp),
+            11 => Ok(Self::Json),
             _ => Err(TypeError::UnsupportedType {
                 message: format!("Unsupported type: {value}"),
             }),
@@ -148,6 +150,7 @@ impl From<Type> for u32 {
             Type::Date => 8,
             Type::Time => 9,
             Type::Timestamp => 10,
+            Type::Json => 11,
         }
     }
 }
@@ -182,11 +185,11 @@ impl Decode for Type {
 impl Type {
     /// Returns `true` if values of this type always occupy the same number of bytes.
     ///
-    /// [`Type::String`] and [`Type::Text`] are variable-length (length-prefixed UTF-8).
-    /// Fixed-size columns can be accessed by direct offset arithmetic without
-    /// scanning a length prefix.
+    /// [`Type::String`], [`Type::Text`], and [`Type::Json`] are variable-length
+    /// (length-prefixed UTF-8). Fixed-size columns can be accessed by direct
+    /// offset arithmetic without scanning a length prefix.
     pub const fn is_fixed_size(&self) -> bool {
-        !matches!(self, Type::String | Type::Text)
+        !matches!(self, Type::String | Type::Text | Type::Json)
     }
 }
 
@@ -206,6 +209,7 @@ impl TryFrom<&str> for Type {
             "DATE" => Ok(Self::Date),
             "TIME" => Ok(Self::Time),
             "TIMESTAMP" => Ok(Self::Timestamp),
+            "JSON" => Ok(Self::Json),
             _ => Err(TypeError::UnsupportedType {
                 message: format!("Unsupported type name: {value}"),
             }),
@@ -227,6 +231,7 @@ impl fmt::Display for Type {
             Type::Date => "DATE",
             Type::Time => "TIME",
             Type::Timestamp => "TIMESTAMP",
+            Type::Json => "JSON",
         };
         write!(f, "{name}")
     }
@@ -446,8 +451,8 @@ impl FixedValue {
     /// temporal types use [`Self::parse_date`], [`Self::parse_time`], and
     /// [`Self::parse_timestamp`].
     ///
-    /// Returns `None` for [`Type::String`] and [`Type::Text`] — callers must build [`DynValue`]
-    /// via [`Value::parse_as`].
+    /// Returns `None` for [`Type::String`], [`Type::Text`], and [`Type::Json`] — callers must
+    /// build [`DynValue`] via [`Value::parse_as`].
     pub fn parse_as(s: &str, ty: Type) -> Option<Self> {
         match ty {
             Type::Int32 => s.parse().ok().map(Self::Int32),
@@ -463,7 +468,7 @@ impl FixedValue {
             Type::Date => Self::parse_date(s),
             Type::Time => Self::parse_time(s),
             Type::Timestamp => Self::parse_timestamp(s),
-            Type::String | Type::Text => None,
+            Type::String | Type::Text | Type::Json => None,
         }
     }
 }
@@ -530,19 +535,28 @@ impl Encode for FixedValue {
     }
 }
 
+#[derive(Debug, Clone, Copy, Encode, Decode)]
+pub struct OverflowPointer {
+    pub total_len: u32,
+    pub ptr: PageDescriptor,
+}
+
 /// A variable-width value — size depends on runtime content.
 #[derive(Debug, Clone)]
 pub enum DynValue {
     Varchar(String),
     Text(String),
-    TextOverflow { total_len: u32, ptr: PageDescriptor },
+    TextOverflow(OverflowPointer),
+    JsonOverflow(OverflowPointer),
+    Json(serde_json::Value),
 }
 
 impl DynValue {
     pub fn get_type(&self) -> Type {
         match self {
             Self::Varchar(_) => Type::String,
-            Self::Text(_) | Self::TextOverflow { .. } => Type::Text,
+            Self::Text(_) | Self::TextOverflow(_) => Type::Text,
+            Self::Json(_) | Self::JsonOverflow(_) => Type::Json,
         }
     }
 }
@@ -551,7 +565,9 @@ impl PartialEq for DynValue {
     fn eq(&self, other: &Self) -> bool {
         match (self, other) {
             (Self::Varchar(a), Self::Varchar(b)) | (Self::Text(a), Self::Text(b)) => a == b,
-            // TextOverflow is a storage artifact — never compared in user-visible contexts.
+            (Self::Json(a), Self::Json(b)) => a == b,
+            // TextOverflow/JsonOverflow are storage artifacts — never compared in user-visible
+            // contexts.
             _ => false,
         }
     }
@@ -572,7 +588,9 @@ impl fmt::Display for DynValue {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Varchar(s) | Self::Text(s) => write!(f, "'{s}'"),
-            Self::TextOverflow { .. } => write!(f, "<TEXT overflow>"),
+            Self::TextOverflow(_) => write!(f, "<TEXT overflow>"),
+            Self::JsonOverflow(_) => write!(f, "<JSON overflow>"),
+            Self::Json(v) => write!(f, "{v}"),
         }
     }
 }
@@ -582,7 +600,8 @@ impl Hash for DynValue {
         std::mem::discriminant(self).hash(state);
         match self {
             Self::Varchar(s) | Self::Text(s) => s.hash(state),
-            Self::TextOverflow { .. } => (),
+            Self::TextOverflow(_) | Self::JsonOverflow { .. } => (),
+            Self::Json(v) => v.hash(state),
         }
     }
 }
@@ -646,7 +665,10 @@ impl Value {
                     STRING_LENGTH_PREFIX_SIZE + s.len().min(STRING_MAX_SIZE)
                 }
                 Value::Dyn(DynValue::Text(s)) => STRING_LENGTH_PREFIX_SIZE + s.len(),
-                Value::Dyn(DynValue::TextOverflow { .. }) => TEXT_OVERFLOW_PAYLOAD_SIZE,
+                Value::Dyn(DynValue::TextOverflow(_) | DynValue::JsonOverflow(_)) => {
+                    TEXT_OVERFLOW_PAYLOAD_SIZE
+                }
+                Value::Dyn(DynValue::Json(v)) => STRING_LENGTH_PREFIX_SIZE + v.to_string().len(),
             }
     }
 
@@ -684,7 +706,8 @@ impl Value {
     ///
     /// - [`FixedValue::Int64`] → [`Type::Int32`], [`Type::Uint32`], or [`Type::Uint64`] when the
     ///   number fits in the target range.
-    /// - [`DynValue::Varchar`] → [`Type::String`] or [`Type::Text`].
+    /// - [`DynValue::Varchar`] → [`Type::String`], [`Type::Text`], [`Type::Date`], [`Type::Time`],
+    ///   [`Type::Timestamp`], or [`Type::Json`] when the string parses.
     /// - Any value whose [`Self::get_type`] already equals `target` → returned unchanged.
     ///
     /// All other `(value, target)` pairs return [`TypeError::InvalidConversion`].
@@ -721,6 +744,9 @@ impl Value {
                     .ok_or_else(|| TypeError::invalid_conversion(s.as_str(), ty))
             }
 
+            (Self::Dyn(DynValue::Varchar(s)), Type::Json) => Self::json(s.as_str())
+                .map_err(|_| TypeError::invalid_conversion(s.as_str(), Type::Json)),
+
             (v, ty) if v.get_type() == Some(ty) => Ok(v.clone()),
             (v, ty) => Err(TypeError::invalid_conversion(v, ty)),
         }
@@ -733,6 +759,7 @@ impl Value {
     /// - **Fixed-width types** (`Int32`, `Bool`, `Date`, …) delegate to [`FixedValue::parse_as`].
     /// - **`String` / `Text`** accept the input as-is — the string is just wrapped, not
     ///   interpreted. There is no ambiguity for these two variants.
+    /// - **`Json`** parses `s` as JSON via [`Self::json`].
     ///
     /// Leading and trailing whitespace is trimmed before any conversion.
     ///
@@ -745,6 +772,7 @@ impl Value {
         match ty {
             Type::String => Ok(Self::varchar(s.to_owned())),
             Type::Text => Ok(Self::text(s.to_owned())),
+            Type::Json => Self::json(s).map_err(|_| TypeError::invalid_conversion(s, ty)),
             _ => FixedValue::parse_as(s, ty)
                 .map(Self::Fixed)
                 .ok_or_else(|| TypeError::invalid_conversion(s, ty)),
@@ -809,6 +837,21 @@ impl Value {
     /// Builds a [`Type::Timestamp`] value.
     pub fn timestamp(t: i64) -> Self {
         Self::Fixed(FixedValue::Timestamp(t))
+    }
+
+    /// Builds a [`Type::Json`] value with overflow pointer.
+    pub fn json_overflow(total_len: u32, ptr: PageDescriptor) -> Self {
+        Self::Dyn(DynValue::JsonOverflow(OverflowPointer { total_len, ptr }))
+    }
+
+    /// Builds a [`Type::Json`] value from a JSON text literal.
+    pub fn json(v: &str) -> Result<Self, serde_json::Error> {
+        Ok(Self::Dyn(DynValue::Json(serde_json::from_str(v)?)))
+    }
+
+    /// Builds a [`Type::Text`] value with overflow pointer.
+    pub fn text_overflow(total_len: u32, ptr: PageDescriptor) -> Self {
+        Self::Dyn(DynValue::TextOverflow(OverflowPointer { total_len, ptr }))
     }
 }
 
@@ -998,11 +1041,8 @@ impl Encode for DynValue {
     fn encode<W: Write>(&self, w: &mut W) -> Result<(), CodecError> {
         match self {
             Self::Varchar(s) | Self::Text(s) => s.encode(w),
-            Self::TextOverflow { total_len, ptr } => {
-                u32::MAX.encode(w)?;
-                total_len.encode(w)?;
-                ptr.encode(w)
-            }
+            Self::TextOverflow(o) | Self::JsonOverflow(o) => o.encode(w),
+            Self::Json(v) => v.encode(w),
         }
     }
 }
@@ -1035,39 +1075,99 @@ impl Decode for Value {
             Err(_) => CodecError::numeric_does_not_fit(tag as usize, "u8"),
         })?;
 
-        match value_type {
-            Type::Int32 => Ok(Self::int32(i32::decode(r)?)),
-            Type::Int64 => Ok(Self::int64(i64::decode(r)?)),
-            Type::Uint32 => Ok(Self::uint32(u32::decode(r)?)),
-            Type::Uint64 => Ok(Self::uint64(u64::decode(r)?)),
-            Type::Float64 => Ok(Self::float64(f64::decode(r)?)),
-            Type::Bool => Ok(Self::bool(u8::decode(r)? != 0)),
-            Type::Date => Ok(Self::date(i32::decode(r)?)),
-            Type::Time => Ok(Self::time(i64::decode(r)?)),
-            Type::Timestamp => Ok(Self::timestamp(i64::decode(r)?)),
+        Ok(match value_type {
+            Type::Int32 => Self::int32(i32::decode(r)?),
+            Type::Int64 => Self::int64(i64::decode(r)?),
+            Type::Uint32 => Self::uint32(u32::decode(r)?),
+            Type::Uint64 => Self::uint64(u64::decode(r)?),
+            Type::Float64 => Self::float64(f64::decode(r)?),
+            Type::Bool => Self::bool(u8::decode(r)? != 0),
+            Type::Date => Self::date(i32::decode(r)?),
+            Type::Time => Self::time(i64::decode(r)?),
+            Type::Timestamp => Self::timestamp(i64::decode(r)?),
             Type::String => {
                 let len = u32::decode(r)? as usize;
                 let mut buf = vec![0u8; len];
                 r.read_exact(&mut buf)?;
-                Ok(Self::varchar(std::str::from_utf8(&buf)?.to_string()))
+                Self::varchar(std::str::from_utf8(&buf)?.to_string())
             }
-            Type::Text => {
+            Type::Text | Type::Json => {
                 let first = u32::decode(r)?;
                 if first == u32::MAX {
-                    let total_len = u32::decode(r)?;
-                    let ptr = PageDescriptor::decode(r)?;
-                    Ok(Self::Dyn(DynValue::TextOverflow { total_len, ptr }))
+                    if value_type == Type::Text {
+                        Self::Dyn(DynValue::TextOverflow(OverflowPointer::decode(r)?))
+                    } else {
+                        Self::Dyn(DynValue::JsonOverflow(OverflowPointer::decode(r)?))
+                    }
+                } else if value_type == Type::Text {
+                    Self::text(String::decode(r)?)
                 } else {
-                    // `first` is the byte length of the inline string.
-                    // Do NOT call String::decode here — that would read a second length prefix.
-                    let mut buf = vec![0u8; first as usize];
-                    r.read_exact(&mut buf)?;
-                    std::str::from_utf8(&buf)
-                        .map(|s| Self::text(s.to_owned()))
-                        .map_err(CodecError::InvalidUtf8)
+                    Self::Dyn(DynValue::Json(serde_json::Value::decode(r)?))
                 }
             }
-        }
+        })
+    }
+}
+
+#[cfg(test)]
+mod parse_as_tests {
+    use super::{Type, TypeError, Value};
+
+    #[test]
+    fn parse_json_object() {
+        let v = Value::parse_as(r#"{"x": 1}"#, Type::Json).unwrap();
+        assert_eq!(v, Value::json(r#"{"x": 1}"#).unwrap());
+    }
+
+    #[test]
+    fn parse_json_trims_whitespace() {
+        let v = Value::parse_as("  true  ", Type::Json).unwrap();
+        assert_eq!(v, Value::json("true").unwrap());
+    }
+
+    #[test]
+    fn parse_json_invalid() {
+        let err = Value::parse_as("{not json", Type::Json).unwrap_err();
+        assert!(matches!(err, TypeError::InvalidConversion { .. }));
+    }
+}
+
+#[cfg(test)]
+mod dyn_value_eq_tests {
+    use super::DynValue;
+
+    #[test]
+    fn json_values_compare_equal() {
+        let a = DynValue::Json(serde_json::json!({"x": 1}));
+        let b = DynValue::Json(serde_json::json!({"x": 1}));
+        assert_eq!(a, b);
+    }
+
+    #[test]
+    fn json_values_compare_unequal() {
+        let a = DynValue::Json(serde_json::json!(1));
+        let b = DynValue::Json(serde_json::json!(2));
+        assert_ne!(a, b);
+    }
+}
+
+#[cfg(test)]
+mod type_fixed_size_tests {
+    use super::Type;
+
+    #[test]
+    fn variable_length_types_are_not_fixed_size() {
+        assert!(!Type::String.is_fixed_size());
+        assert!(!Type::Text.is_fixed_size());
+        assert!(!Type::Json.is_fixed_size());
+    }
+
+    #[test]
+    fn scalar_types_are_fixed_size() {
+        assert!(Type::Int32.is_fixed_size());
+        assert!(Type::Int64.is_fixed_size());
+        assert!(Type::Bool.is_fixed_size());
+        assert!(Type::Timestamp.is_fixed_size());
     }
 }
 
@@ -1156,6 +1256,21 @@ mod coerce_to_tests {
     fn bool_same_type_unchanged() {
         let v = Value::bool(true);
         assert_eq!(v.coerce_to(Type::Bool).unwrap(), Value::bool(true));
+    }
+
+    #[test]
+    fn varchar_literal_to_json_column() {
+        let v = Value::varchar(r#"{"x": 1}"#.to_string());
+        assert_eq!(
+            v.coerce_to(Type::Json).unwrap(),
+            Value::json(r#"{"x": 1}"#).unwrap()
+        );
+    }
+
+    #[test]
+    fn varchar_literal_invalid_json_fails() {
+        let v = Value::varchar("{not json".to_string());
+        assert!(v.coerce_to(Type::Json).is_err());
     }
 
     #[test]

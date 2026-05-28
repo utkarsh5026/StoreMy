@@ -379,6 +379,10 @@ fn encode_default(v: &Value) -> String {
         Value::Dyn(DynValue::TextOverflow { .. }) => {
             unreachable!("TextOverflow must be resolved before reaching catalog encoding")
         }
+        Value::Dyn(DynValue::JsonOverflow(_)) => {
+            unreachable!("JsonOverflow must be resolved before reaching catalog encoding")
+        }
+        Value::Dyn(DynValue::Json(v)) => tagged_default("json", v.to_string()),
     }
 }
 
