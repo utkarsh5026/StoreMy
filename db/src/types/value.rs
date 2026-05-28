@@ -350,13 +350,17 @@ pub struct OverflowPointer {
 }
 
 /// A variable-width value — size depends on runtime content.
+///
+/// [`DynValue::Json`] stores the raw validated JSON string rather than a parsed
+/// tree. Parsing is deferred to the expression evaluator, which only pays the
+/// cost when a JSON-specific operation is actually requested.
 #[derive(Debug, Clone)]
 pub enum DynValue {
     Varchar(String),
     Text(String),
     TextOverflow(OverflowPointer),
     JsonOverflow(OverflowPointer),
-    Json(serde_json::Value),
+    Json(String),
 }
 
 impl DynValue {
@@ -372,8 +376,9 @@ impl DynValue {
 impl PartialEq for DynValue {
     fn eq(&self, other: &Self) -> bool {
         match (self, other) {
-            (Self::Varchar(a), Self::Varchar(b)) | (Self::Text(a), Self::Text(b)) => a == b,
-            (Self::Json(a), Self::Json(b)) => a == b,
+            (Self::Varchar(a), Self::Varchar(b))
+            | (Self::Text(a), Self::Text(b))
+            | (Self::Json(a), Self::Json(b)) => a == b,
             // TextOverflow/JsonOverflow are storage artifacts — never compared in user-visible
             // contexts.
             _ => false,
@@ -395,10 +400,9 @@ impl PartialOrd for DynValue {
 impl fmt::Display for DynValue {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Varchar(s) | Self::Text(s) => write!(f, "'{s}'"),
+            Self::Varchar(s) | Self::Text(s) | Self::Json(s) => write!(f, "'{s}'"),
             Self::TextOverflow(_) => write!(f, "<TEXT overflow>"),
             Self::JsonOverflow(_) => write!(f, "<JSON overflow>"),
-            Self::Json(v) => write!(f, "{v}"),
         }
     }
 }
@@ -407,9 +411,8 @@ impl Hash for DynValue {
     fn hash<H: Hasher>(&self, state: &mut H) {
         std::mem::discriminant(self).hash(state);
         match self {
-            Self::Varchar(s) | Self::Text(s) => s.hash(state),
+            Self::Varchar(s) | Self::Text(s) | Self::Json(s) => s.hash(state),
             Self::TextOverflow(_) | Self::JsonOverflow(_) => (),
-            Self::Json(v) => v.hash(state),
         }
     }
 }
@@ -476,7 +479,7 @@ impl Value {
                 Value::Dyn(DynValue::TextOverflow(_) | DynValue::JsonOverflow(_)) => {
                     TEXT_OVERFLOW_PAYLOAD_SIZE
                 }
-                Value::Dyn(DynValue::Json(v)) => STRING_LENGTH_PREFIX_SIZE + v.to_string().len(),
+                Value::Dyn(DynValue::Json(s)) => STRING_LENGTH_PREFIX_SIZE + s.len(),
             }
     }
 
@@ -653,8 +656,13 @@ impl Value {
     }
 
     /// Builds a [`Type::Json`] value from a JSON text literal.
+    ///
+    /// Validates that `v` is well-formed JSON, then stores the raw string.
+    /// The parsed tree is discarded immediately — parsing is deferred to the
+    /// expression evaluator when a JSON-specific operation is actually needed.
     pub fn json(v: &str) -> Result<Self, serde_json::Error> {
-        Ok(Self::Dyn(DynValue::Json(serde_json::from_str(v)?)))
+        serde_json::from_str::<serde_json::Value>(v)?;
+        Ok(Self::Dyn(DynValue::Json(v.to_owned())))
     }
 
     /// Builds a [`Type::Text`] value with overflow pointer.
@@ -848,12 +856,11 @@ impl<T: Into<Value>> From<Option<T>> for Value {
 impl Encode for DynValue {
     fn encode<W: Write>(&self, w: &mut W) -> Result<(), CodecError> {
         match self {
-            Self::Varchar(s) | Self::Text(s) => s.encode(w),
+            Self::Varchar(s) | Self::Text(s) | Self::Json(s) => s.encode(w),
             Self::TextOverflow(o) | Self::JsonOverflow(o) => {
                 u32::MAX.encode(w)?;
                 o.encode(w)
             }
-            Self::Json(v) => v.encode(w),
         }
     }
 }
@@ -917,10 +924,7 @@ impl Decode for Value {
                     if value_type == Type::Text {
                         Self::text(s.to_owned())
                     } else {
-                        let v = serde_json::from_str(s).map_err(|e| {
-                            CodecError::Io(std::io::Error::new(std::io::ErrorKind::InvalidData, e))
-                        })?;
-                        Self::Dyn(DynValue::Json(v))
+                        Self::Dyn(DynValue::Json(s.to_owned()))
                     }
                 }
             }
@@ -953,20 +957,29 @@ mod parse_as_tests {
 
 #[cfg(test)]
 mod dyn_value_eq_tests {
-    use super::DynValue;
+    use super::{DynValue, Value};
 
     #[test]
     fn json_values_compare_equal() {
-        let a = DynValue::Json(serde_json::json!({"x": 1}));
-        let b = DynValue::Json(serde_json::json!({"x": 1}));
+        let a = Value::json(r#"{"x": 1}"#).unwrap();
+        let b = Value::json(r#"{"x": 1}"#).unwrap();
         assert_eq!(a, b);
     }
 
     #[test]
     fn json_values_compare_unequal() {
-        let a = DynValue::Json(serde_json::json!(1));
-        let b = DynValue::Json(serde_json::json!(2));
+        let a = Value::json("1").unwrap();
+        let b = Value::json("2").unwrap();
         assert_ne!(a, b);
+    }
+
+    #[test]
+    fn json_raw_string_is_stored_verbatim() {
+        let raw = r#"{"x": 1}"#;
+        let Value::Dyn(DynValue::Json(s)) = Value::json(raw).unwrap() else {
+            panic!("expected Json variant");
+        };
+        assert_eq!(s, raw);
     }
 }
 

@@ -90,7 +90,9 @@ pub fn value_to_json(v: &Value) -> JsonValue {
             DynValue::JsonOverflow(_) => {
                 unreachable!("JsonOverflow must be resolved before JSON serialization")
             }
-            DynValue::Json(v) => JsonValue::String(v.to_string()),
+            DynValue::Json(s) => {
+                serde_json::from_str(s).unwrap_or_else(|_| JsonValue::String(s.clone()))
+            }
         },
     }
 }

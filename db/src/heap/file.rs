@@ -558,18 +558,18 @@ impl HeapFile {
         Ok(count)
     }
 
-    /// Replaces inline TEXT values that exceed [`TEXT_MAX_INLINE_SIZE`] with
-    /// [`DynValue::TextOverflow`] pointers.
+    /// Replaces inline TEXT and JSON values that exceed [`TEXT_MAX_INLINE_SIZE`] with
+    /// overflow pointers ([`DynValue::TextOverflow`] / [`DynValue::JsonOverflow`]).
     ///
     /// Called by [`Self::insert_tuple`] before size calculation and slot
     /// encoding so long strings are spilled to overflow pages and the tuple
-    /// slot stays bounded. Values within the inline limit and all non-TEXT
+    /// slot stays bounded. Values within the inline limit and all other
     /// columns are copied unchanged.
     ///
     /// # Errors
     ///
     /// - Propagates any [`HeapError`] from [`Self::write_overflow`].
-    /// - [`HeapError::Storage`] — a TEXT value's byte length exceeds `u32::MAX`.
+    /// - [`HeapError::Storage`] — a value's byte length exceeds `u32::MAX`.
     fn spill_text_overflow(&self, txn: TransactionId, tuple: &Tuple) -> Result<Tuple, HeapError> {
         let new_values = tuple
             .iter()
@@ -591,6 +591,22 @@ impl HeapFile {
                         })?;
                     Ok(Value::text_overflow(total_len, ptr))
                 }
+                Value::Dyn(DynValue::Json(s)) if s.len() > TEXT_MAX_INLINE_SIZE => {
+                    let ptr = self.overflow_file.write_overflow(txn, s.as_bytes())?;
+                    tracing::debug!(
+                        file_id = ?self.file_id,
+                        column = %field.name,
+                        bytes = s.len(),
+                        overflow_page = ?ptr.page_no,
+                        "json spilled to overflow"
+                    );
+                    let total_len =
+                        u32::try_from(s.len()).map_err(|_| StorageError::TupleTooLarge {
+                            size: s.len(),
+                            max: u32::MAX as usize,
+                        })?;
+                    Ok(Value::json_overflow(total_len, ptr))
+                }
                 other => Ok(other.clone()),
             })
             .collect::<Result<Vec<Value>, HeapError>>()?;
@@ -598,15 +614,14 @@ impl HeapFile {
         Ok(Tuple::new(new_values))
     }
 
-    /// Resolves all [`DynValue::TextOverflow`] pointers in `tuple` to their full
-    /// string content.
+    /// Resolves all overflow pointers in `tuple` to their full string content.
     ///
     /// This is the read-side inverse of [`Self::spill_text_overflow`]: on insert,
-    /// large TEXT values are written to overflow pages and replaced with pointer
+    /// large TEXT/JSON values are written to overflow pages and replaced with pointer
     /// slots; on read, those pointers are followed here so every value that leaves
-    /// the heap layer is a fully materialised [`DynValue::Text`].
+    /// the heap layer is a fully materialised [`DynValue::Text`] or [`DynValue::Json`].
     ///
-    /// Non-TEXT and inline TEXT values are cloned unchanged.
+    /// Non-overflow values are cloned unchanged.
     ///
     /// # Errors
     ///
@@ -629,6 +644,19 @@ impl HeapFile {
                     let s = String::from_utf8(bytes)
                         .map_err(|e| StorageError::ParseError(e.to_string()))?;
                     Ok(Value::Dyn(DynValue::Text(s)))
+                }
+                Value::Dyn(DynValue::JsonOverflow(OverflowPointer { ptr, total_len })) => {
+                    let bytes = self.overflow_file.read_overflow(txn, *ptr)?;
+                    tracing::debug!(
+                        file_id = ?self.file_id,
+                        column = %field.name,
+                        bytes = *total_len,
+                        overflow_page = ?ptr.page_no,
+                        "json resolved from overflow"
+                    );
+                    let s = String::from_utf8(bytes)
+                        .map_err(|e| StorageError::ParseError(e.to_string()))?;
+                    Ok(Value::Dyn(DynValue::Json(s)))
                 }
                 other => Ok(other.clone()),
             })
