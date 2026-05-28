@@ -44,8 +44,8 @@ use crate::{
         lock::{LockError, LockManager, LockRequest},
     },
     primitives::PageId,
-    storage,
-    wal::{WalError, writer::Wal},
+    storage::{self, Page},
+    wal::{PageLogOp, PageMutation, WalError, writer::Wal},
 };
 
 /// Errors that can arise from [`PageStore`] operations.
@@ -281,6 +281,181 @@ impl PageStore {
             store: self,
             frame_idx,
         })
+    }
+
+    /// Brings `page_id` into the buffer pool under an **exclusive** page lock.
+    ///
+    /// Shorthand for [`Self::fetch_page`] with
+    /// [`LockRequest::exclusive`]. Use this when the caller will mutate the page
+    /// (via [`PageGuard::write`]). Other transactions cannot acquire a conflicting
+    /// lock on the same page until [`Self::release_all`] is called for
+    /// `transaction_id` at commit or abort.
+    ///
+    /// Dropping the returned [`PageGuard`] only unpins the frame; it does **not**
+    /// release the page lock. See the module-level concurrency notes.
+    ///
+    /// # Errors
+    ///
+    /// Same as [`Self::fetch_page`].
+    pub fn fetch_exclusive(
+        &'_ self,
+        transaction_id: TransactionId,
+        page_id: PageId,
+    ) -> Result<PageGuard<'_>, PageStoreError> {
+        let req = LockRequest::exclusive(transaction_id, page_id);
+        self.fetch_page(req)
+    }
+
+    /// Brings `page_id` into the buffer pool under a **shared** page lock.
+    ///
+    /// Shorthand for [`Self::fetch_page`] with
+    /// [`LockRequest::shared`]. Use this for read-only access (via
+    /// [`PageGuard::read`]). Multiple transactions may hold shared locks on the
+    /// same page concurrently; an exclusive fetch from another transaction blocks
+    /// until all holders call [`Self::release_all`].
+    ///
+    /// Dropping the returned [`PageGuard`] only unpins the frame; it does **not**
+    /// release the page lock. See the module-level concurrency notes.
+    ///
+    /// # Errors
+    ///
+    /// Same as [`Self::fetch_page`].
+    pub fn fetch_shared(
+        &'_ self,
+        transaction_id: TransactionId,
+        page_id: PageId,
+    ) -> Result<PageGuard<'_>, PageStoreError> {
+        let req = LockRequest::shared(transaction_id, page_id);
+        self.fetch_page(req)
+    }
+
+    /// Mutates one page under an exclusive lock, with optional WAL logging and write-back.
+    ///
+    /// This is the page-agnostic entry point for DML-style page updates. It
+    /// orchestrates the full lifecycle that every mutating access method must
+    /// follow:
+    ///
+    /// 1. [`Self::fetch_exclusive`] — pin the frame and take an exclusive page lock.
+    /// 2. `decode` — turn the raw frame bytes into a typed [`Page`] value.
+    /// 3. `mutate` — run caller-specific logic on that value.
+    /// 4. When [`PageMutation::Changed`], [`Wal::log_page_operation`] then [`PageGuard::write`] —
+    ///    **always in that order** (log before data).
+    ///
+    /// Any page type that implements [`Page`] (heap [`TypedPage`](crate::storage::TypedPage),
+    /// index pages once they adopt the trait, etc.) can plug in via `decode` and
+    /// `mutate`; this method does not know about heap vs index layout.
+    ///
+    /// # Return value
+    ///
+    /// - `Ok(None)` — `decode` returned `Ok(None)`: the page was not applicable (for example, raw
+    ///   bytes were not the expected kind). The guard is dropped without WAL or write.
+    /// - `Ok(Some(t))` — `decode` and `mutate` both succeeded. When `mutate` returned
+    ///   [`PageMutation::Unchanged`], `t` is still returned but no WAL record is written and the
+    ///   frame is left clean.
+    ///
+    /// # Type parameters
+    ///
+    /// - `P` — decoded in-memory page; must implement [`Page`] so WAL can read before/after images
+    ///   and stamp `page_lsn`.
+    /// - `T` — caller-defined result produced by `mutate` (for example slot ids from a batch
+    ///   insert, or `()` for delete/update).
+    /// - `E` — error type for `decode` and `mutate`; must convert from [`PageStoreError`] and
+    ///   [`WalError`] so fetch and logging failures propagate cleanly.
+    ///
+    /// # Errors
+    ///
+    /// - [`PageStoreError`] if the page cannot be fetched or locked.
+    /// - [`WalError`] if logging fails when the page changed (including
+    ///   [`WalError::MissingBeforeImage`] when `P` has no before-image set).
+    /// - Any error returned by `decode` or `mutate`.
+    pub fn exclusive_mutate<P, T, E>(
+        &self,
+        txn: TransactionId,
+        page_id: PageId,
+        op: PageLogOp,
+        decode: impl FnOnce([u8; PAGE_SIZE]) -> Result<Option<P>, E>,
+        mutate: impl FnOnce(&mut P) -> Result<(PageMutation, T), E>,
+    ) -> Result<Option<T>, E>
+    where
+        P: Page,
+        E: From<PageStoreError> + From<WalError>,
+    {
+        let guard = self.fetch_exclusive(txn, page_id)?;
+        let Some(mut page) = decode(guard.read())? else {
+            return Ok(None);
+        };
+        let (outcome, value) = mutate(&mut page)?;
+        if outcome == PageMutation::Changed {
+            let lsn = self.wal.log_page_operation(txn, page_id, &mut page, op)?;
+            guard.write(&page.page_data(), lsn);
+        }
+        Ok(Some(value))
+    }
+
+    /// Reads a page under a shared lock and extracts a value from it.
+    ///
+    /// Acquires a shared lock on `page_id`, decodes the raw frame bytes into a
+    /// typed `P` via `decode`, then passes an immutable reference to `read`.
+    ///
+    /// `decode` may return `Ok(None)` to signal that the page bytes are not the
+    /// expected kind; in that case `Ok(None)` is returned without calling `read`.
+    ///
+    /// Because no write occurs, no WAL interaction is needed and `E` only needs
+    /// to convert from [`PageStoreError`] — not from [`WalError`].
+    ///
+    /// # Errors
+    ///
+    /// - [`PageStoreError`] if the page cannot be fetched or locked.
+    /// - Any error returned by `decode` or `read`.
+    pub fn shared_read<P, T, E>(
+        &self,
+        txn: TransactionId,
+        page_id: PageId,
+        decode: impl FnOnce([u8; PAGE_SIZE]) -> Result<Option<P>, E>,
+        read: impl FnOnce(&P) -> Result<T, E>,
+    ) -> Result<Option<T>, E>
+    where
+        P: Page,
+        E: From<PageStoreError>,
+    {
+        let guard = self.fetch_shared(txn, page_id)?;
+        let Some(page) = decode(guard.read())? else {
+            return Ok(None);
+        };
+        read(&page).map(Some)
+    }
+
+    /// Writes a brand-new page into a freshly allocated frame under an exclusive lock.
+    ///
+    /// Use this when a frame has just been allocated and its on-disk bytes are
+    /// meaningless — the caller constructs the page from scratch via `build`
+    /// rather than decoding any existing content.
+    ///
+    /// Because this is always an insertion of new data, the WAL operation is
+    /// unconditionally [`PageLogOp::Insert`]; no `op` parameter is needed.
+    ///
+    /// # Errors
+    ///
+    /// - [`PageStoreError`] if the page cannot be fetched or locked.
+    /// - [`WalError`] if writing the INSERT log record fails.
+    /// - Any error returned by `build`.
+    pub fn exclusive_create<P, E>(
+        &self,
+        txn: TransactionId,
+        page_id: PageId,
+        build: impl FnOnce() -> Result<P, E>,
+    ) -> Result<(), E>
+    where
+        P: Page,
+        E: From<PageStoreError> + From<WalError>,
+    {
+        let guard = self.fetch_exclusive(txn, page_id)?;
+        let mut page = build()?;
+        let lsn = self
+            .wal
+            .log_page_operation(txn, page_id, &mut page, PageLogOp::Insert)?;
+        guard.write(&page.page_data(), lsn);
+        Ok(())
     }
 
     /// Fetches a page for the ARIES Redo/Undo passes, bypassing the lock manager.
