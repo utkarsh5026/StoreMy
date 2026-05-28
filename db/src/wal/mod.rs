@@ -31,3 +31,23 @@ pub enum WalError {
     #[error("torn record at LSN {0}")]
     TornRecord(Lsn),
 }
+
+/// Data-modification WAL record kind for [`crate::wal::writer::Wal::log_page_operation`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PageLogOp {
+    // A new row was inserted into a page.
+    Insert,
+    // An existing row was updated in a page.
+    Update,
+    // A row was deleted from a page.
+    Delete,
+}
+
+/// Outcome of a page mutation — whether the page should be logged and written back.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PageMutation {
+    /// The closure made no durable change; drop the guard without WAL or write.
+    Unchanged,
+    /// The page was modified; log `op` then [`crate::buffer_pool::page_store::PageGuard::write`].
+    Changed,
+}

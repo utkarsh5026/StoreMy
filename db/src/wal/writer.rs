@@ -30,9 +30,9 @@ use crate::{
     PAGE_SIZE,
     codec::Encode,
     primitives::{Lsn, PageId, TransactionId},
-    storage::open_persistent_file,
+    storage::{Page, open_persistent_file},
     wal::{
-        WalError,
+        PageLogOp, WalError,
         log::{LogRecord, LogRecordBody, TxnStatus},
     },
 };
@@ -194,8 +194,8 @@ impl Wal {
 
     /// Logs a `Begin` record for `tid` and registers it as an active transaction.
     ///
-    /// This must be called before any data-modification records (`log_insert`,
-    /// `log_update`, `log_delete`) for the given transaction ID.
+    /// This must be called before any data-modification records via
+    /// [`Wal::log_page_operation`] for the given transaction ID.
     ///
     /// Returns the LSN assigned to the `Begin` record.
     ///
@@ -323,87 +323,9 @@ impl Wal {
         Ok(lsn)
     }
 
-    /// Logs an `Update` record describing an in-place change to a page.
-    ///
-    /// `before` is the page image before the change; `after` is the image after.
-    /// Both images are needed so that the record can be used for both redo and
-    /// undo during recovery.
-    ///
-    /// The page is added to the dirty-page table if it is not already present.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`WalError::UnknownTransaction`] if `tid` is not active.
-    /// Returns [`WalError::Io`] or [`WalError::Codec`] on write failures.
-    pub fn log_update(
-        &self,
-        tid: TransactionId,
-        page_id: PageId,
-        before: Vec<u8>,
-        after: Vec<u8>,
-    ) -> Result<Lsn, WalError> {
-        self.log_data_op(tid, page_id, LogRecordBody::Update {
-            page_id,
-            before,
-            after,
-        })
-    }
-
-    /// Logs an `Insert` record for a new tuple written to `page_id`.
-    ///
-    /// `before` is the full page image *before* the insert (used to undo the
-    /// operation during recovery).  `after` is the full page image *after* the
-    /// insert (used to redo it).
-    ///
-    /// The page is added to the dirty-page table if it is not already present.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`WalError::UnknownTransaction`] if `tid` is not active.
-    /// Returns [`WalError::Io`] or [`WalError::Codec`] on write failures.
-    pub fn log_insert(
-        &self,
-        tid: TransactionId,
-        page_id: PageId,
-        before: Vec<u8>,
-        after: Vec<u8>,
-    ) -> Result<Lsn, WalError> {
-        self.log_data_op(tid, page_id, LogRecordBody::Insert {
-            page_id,
-            before,
-            after,
-        })
-    }
-
-    /// Logs a `Delete` record for a tuple removed from `page_id`.
-    ///
-    /// `before` is the full page image *before* the delete (used to undo the
-    /// operation).  `after` is the full page image *after* the delete (used to
-    /// redo it during recovery).
-    ///
-    /// The page is added to the dirty-page table if it is not already present.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`WalError::UnknownTransaction`] if `tid` is not active.
-    /// Returns [`WalError::Io`] or [`WalError::Codec`] on write failures.
-    pub fn log_delete(
-        &self,
-        tid: TransactionId,
-        page_id: PageId,
-        before: Vec<u8>,
-        after: Vec<u8>,
-    ) -> Result<Lsn, WalError> {
-        self.log_data_op(tid, page_id, LogRecordBody::Delete {
-            page_id,
-            before,
-            after,
-        })
-    }
-
     /// Appends a Compensation Log Record (CLR) describing one undo step.
     ///
-    /// Called exclusively by the ARIES Undo pass. Unlike [`Wal::log_update`], the
+    /// Called exclusively by the ARIES Undo pass. Unlike [`Wal::log_page_operation`], the
     /// caller supplies `prev_lsn` and `undo_next_lsn` explicitly because:
     ///
     /// - `prev_lsn` — Undo owns the loser's chain state (in the ATT inherited from Analysis);
@@ -509,20 +431,43 @@ impl Wal {
 
     /// Writes a data-modification record and updates transaction and dirty-page state.
     ///
-    /// Shared implementation used by [`log_insert`], [`log_update`], and [`log_delete`].
-    /// Looks up the previous LSN for `tid`, delegates to [`write_record`], then
-    /// records the page as dirty using the LSN of the *first* write to that page.
-    fn log_data_op(
+    /// Extracts before/after images from `page`, logs the record, then stamps `page_lsn`.
+    pub fn log_page_operation<P: Page>(
         &self,
         tid: TransactionId,
         page_id: PageId,
-        body: LogRecordBody,
+        page: &mut P,
+        op: PageLogOp,
     ) -> Result<Lsn, WalError> {
+        let before = page
+            .before_image()
+            .ok_or(WalError::MissingBeforeImage(page_id))?
+            .to_vec();
+        let after = page.page_data().to_vec();
+        let body = match op {
+            PageLogOp::Insert => LogRecordBody::Insert {
+                page_id,
+                before,
+                after,
+            },
+            PageLogOp::Update => LogRecordBody::Update {
+                page_id,
+                before,
+                after,
+            },
+            PageLogOp::Delete => LogRecordBody::Delete {
+                page_id,
+                before,
+                after,
+            },
+        };
+
         let mut state = self.state.lock();
         let prev = state.prev_lsn(tid)?;
         let lsn = Self::write_record(&self.file, &mut state, tid, prev, body)?;
         state.set_last_lsn(tid, lsn)?;
         state.dirty_pages.entry(page_id).or_insert(lsn);
+        page.set_page_lsn(lsn);
         Ok(lsn)
     }
 
@@ -753,6 +698,38 @@ mod tests {
         wal.state.lock().active_txns[&tid].undo_next
     }
 
+    struct TestPage {
+        before: Vec<u8>,
+        after: Vec<u8>,
+        page_lsn: Lsn,
+    }
+
+    impl Page for TestPage {
+        fn page_data(&self) -> [u8; PAGE_SIZE] {
+            let mut page = [0; PAGE_SIZE];
+            page[..self.after.len()].copy_from_slice(&self.after);
+            page
+        }
+
+        fn before_image(&self) -> Option<[u8; PAGE_SIZE]> {
+            let mut page = [0; PAGE_SIZE];
+            page[..self.before.len()].copy_from_slice(&self.before);
+            Some(page)
+        }
+
+        fn set_before_image(&mut self) {
+            self.before = self.after.clone();
+        }
+
+        fn page_lsn(&self) -> Lsn {
+            self.page_lsn
+        }
+
+        fn set_page_lsn(&mut self, lsn: Lsn) {
+            self.page_lsn = lsn;
+        }
+    }
+
     #[test]
     fn lsns_are_monotonically_increasing() {
         let (wal, _dir) = make_wal(NO_BUF);
@@ -760,7 +737,18 @@ mod tests {
         let p = page(1, 1);
 
         let lsn1 = wal.log_begin(tid).unwrap();
-        let lsn2 = wal.log_insert(tid, p, vec![], vec![1, 2, 3]).unwrap();
+        let lsn2 = wal
+            .log_page_operation(
+                tid,
+                p,
+                &mut TestPage {
+                    before: vec![],
+                    after: vec![1, 2, 3],
+                    page_lsn: Lsn::INVALID,
+                },
+                PageLogOp::Insert,
+            )
+            .unwrap();
         let lsn3 = wal.log_commit(tid).unwrap();
 
         assert!(lsn1 < lsn2, "begin < insert");
@@ -832,10 +820,32 @@ mod tests {
         let p = page(1, 1);
 
         wal.log_begin(tid).unwrap();
-        let after_insert = wal.log_insert(tid, p, vec![], vec![1]).unwrap();
+        let after_insert = wal
+            .log_page_operation(
+                tid,
+                p,
+                &mut TestPage {
+                    before: vec![],
+                    after: vec![1],
+                    page_lsn: Lsn::INVALID,
+                },
+                PageLogOp::Insert,
+            )
+            .unwrap();
         assert_eq!(txn_last_lsn(&wal, tid), after_insert);
 
-        let after_update = wal.log_update(tid, p, vec![1], vec![2]).unwrap();
+        let after_update = wal
+            .log_page_operation(
+                tid,
+                p,
+                &mut TestPage {
+                    before: vec![1],
+                    after: vec![2],
+                    page_lsn: Lsn::INVALID,
+                },
+                PageLogOp::Update,
+            )
+            .unwrap();
         assert_eq!(txn_last_lsn(&wal, tid), after_update);
     }
 
@@ -845,7 +855,18 @@ mod tests {
         let tid = tid(1);
         let p = page(1, 1);
         wal.log_begin(tid).unwrap();
-        let lsn = wal.log_insert(tid, p, vec![], vec![1, 2, 3]).unwrap();
+        let lsn = wal
+            .log_page_operation(
+                tid,
+                p,
+                &mut TestPage {
+                    before: vec![],
+                    after: vec![1, 2, 3],
+                    page_lsn: Lsn::INVALID,
+                },
+                PageLogOp::Insert,
+            )
+            .unwrap();
         assert_eq!(dirty_pages(&wal).get(&p), Some(&lsn));
     }
 
@@ -855,7 +876,18 @@ mod tests {
         let tid = tid(1);
         let p = page(1, 2);
         wal.log_begin(tid).unwrap();
-        let lsn = wal.log_update(tid, p, vec![0], vec![1]).unwrap();
+        let lsn = wal
+            .log_page_operation(
+                tid,
+                p,
+                &mut TestPage {
+                    before: vec![0],
+                    after: vec![1],
+                    page_lsn: Lsn::INVALID,
+                },
+                PageLogOp::Update,
+            )
+            .unwrap();
         assert_eq!(dirty_pages(&wal).get(&p), Some(&lsn));
     }
 
@@ -865,7 +897,18 @@ mod tests {
         let tid = tid(1);
         let p = page(1, 3);
         wal.log_begin(tid).unwrap();
-        let lsn = wal.log_delete(tid, p, vec![9, 8, 7], vec![]).unwrap();
+        let lsn = wal
+            .log_page_operation(
+                tid,
+                p,
+                &mut TestPage {
+                    before: vec![9, 8, 7],
+                    after: vec![],
+                    page_lsn: Lsn::INVALID,
+                },
+                PageLogOp::Delete,
+            )
+            .unwrap();
         assert_eq!(dirty_pages(&wal).get(&p), Some(&lsn));
     }
 
@@ -878,8 +921,30 @@ mod tests {
         let tid = tid(1);
         let p = page(1, 1);
         wal.log_begin(tid).unwrap();
-        let first = wal.log_insert(tid, p, vec![], vec![1]).unwrap();
-        let _second = wal.log_update(tid, p, vec![1], vec![2]).unwrap();
+        let first = wal
+            .log_page_operation(
+                tid,
+                p,
+                &mut TestPage {
+                    before: vec![],
+                    after: vec![1],
+                    page_lsn: Lsn::INVALID,
+                },
+                PageLogOp::Insert,
+            )
+            .unwrap();
+        let _second = wal
+            .log_page_operation(
+                tid,
+                p,
+                &mut TestPage {
+                    before: vec![1],
+                    after: vec![2],
+                    page_lsn: Lsn::INVALID,
+                },
+                PageLogOp::Update,
+            )
+            .unwrap();
         assert_eq!(dirty_pages(&wal).get(&p), Some(&first));
     }
 
@@ -890,8 +955,30 @@ mod tests {
         let p1 = page(1, 1);
         let p2 = page(1, 2);
         wal.log_begin(tid).unwrap();
-        let lsn1 = wal.log_insert(tid, p1, vec![], vec![1]).unwrap();
-        let lsn2 = wal.log_insert(tid, p2, vec![], vec![2]).unwrap();
+        let lsn1 = wal
+            .log_page_operation(
+                tid,
+                p1,
+                &mut TestPage {
+                    before: vec![],
+                    after: vec![1],
+                    page_lsn: Lsn::INVALID,
+                },
+                PageLogOp::Insert,
+            )
+            .unwrap();
+        let lsn2 = wal
+            .log_page_operation(
+                tid,
+                p2,
+                &mut TestPage {
+                    before: vec![],
+                    after: vec![2],
+                    page_lsn: Lsn::INVALID,
+                },
+                PageLogOp::Insert,
+            )
+            .unwrap();
         let dirty = dirty_pages(&wal);
         assert_eq!(dirty.get(&p1), Some(&lsn1));
         assert_eq!(dirty.get(&p2), Some(&lsn2));
@@ -917,7 +1004,16 @@ mod tests {
     fn insert_unknown_transaction_errors() {
         let (wal, _dir) = make_wal(NO_BUF);
         let err = wal
-            .log_insert(tid(99), page(1, 1), vec![], vec![])
+            .log_page_operation(
+                tid(99),
+                page(1, 1),
+                &mut TestPage {
+                    before: vec![],
+                    after: vec![],
+                    page_lsn: Lsn::INVALID,
+                },
+                PageLogOp::Insert,
+            )
             .unwrap_err();
         assert!(matches!(err, WalError::UnknownTransaction(_)));
     }
@@ -926,7 +1022,16 @@ mod tests {
     fn update_unknown_transaction_errors() {
         let (wal, _dir) = make_wal(NO_BUF);
         let err = wal
-            .log_update(tid(99), page(1, 1), vec![], vec![])
+            .log_page_operation(
+                tid(99),
+                page(1, 1),
+                &mut TestPage {
+                    before: vec![],
+                    after: vec![],
+                    page_lsn: Lsn::INVALID,
+                },
+                PageLogOp::Update,
+            )
             .unwrap_err();
         assert!(matches!(err, WalError::UnknownTransaction(_)));
     }
@@ -935,7 +1040,16 @@ mod tests {
     fn delete_unknown_transaction_errors() {
         let (wal, _dir) = make_wal(NO_BUF);
         let err = wal
-            .log_delete(tid(99), page(1, 1), vec![], vec![])
+            .log_page_operation(
+                tid(99),
+                page(1, 1),
+                &mut TestPage {
+                    before: vec![],
+                    after: vec![],
+                    page_lsn: Lsn::INVALID,
+                },
+                PageLogOp::Delete,
+            )
             .unwrap_err();
         assert!(matches!(err, WalError::UnknownTransaction(_)));
     }
@@ -951,8 +1065,28 @@ mod tests {
         wal.log_begin(t2).unwrap();
         assert_eq!(active_txns(&wal).len(), 2);
 
-        wal.log_insert(t1, p, vec![], vec![1]).unwrap();
-        wal.log_update(t2, p, vec![1], vec![2]).unwrap();
+        wal.log_page_operation(
+            t1,
+            p,
+            &mut TestPage {
+                before: vec![],
+                after: vec![1],
+                page_lsn: Lsn::INVALID,
+            },
+            PageLogOp::Insert,
+        )
+        .unwrap();
+        wal.log_page_operation(
+            t2,
+            p,
+            &mut TestPage {
+                before: vec![1],
+                after: vec![2],
+                page_lsn: Lsn::INVALID,
+            },
+            PageLogOp::Update,
+        )
+        .unwrap();
 
         wal.log_commit(t1).unwrap();
         assert!(!active_txns(&wal).contains(&t1));
@@ -981,8 +1115,17 @@ mod tests {
         let tid = tid(1);
         wal.log_begin(tid).unwrap();
         assert!(
-            wal.log_insert(tid, page(1, 1), vec![], vec![0u8; 512])
-                .is_ok()
+            wal.log_page_operation(
+                tid,
+                page(1, 1),
+                &mut TestPage {
+                    before: vec![],
+                    after: vec![0u8; 512],
+                    page_lsn: Lsn::INVALID,
+                },
+                PageLogOp::Insert,
+            )
+            .is_ok()
         );
     }
 
@@ -1045,7 +1188,18 @@ mod tests {
         let tid = tid(1);
         let p = page(1, 1);
         wal.log_begin(tid).unwrap();
-        let insert_lsn = wal.log_insert(tid, p, vec![], vec![1, 2]).unwrap();
+        let insert_lsn = wal
+            .log_page_operation(
+                tid,
+                p,
+                &mut TestPage {
+                    before: vec![],
+                    after: vec![1, 2],
+                    page_lsn: Lsn::INVALID,
+                },
+                PageLogOp::Insert,
+            )
+            .unwrap();
         let clr_lsn = wal
             .log_clr(tid, insert_lsn, p, vec![], Lsn::INVALID)
             .unwrap();
@@ -1060,7 +1214,18 @@ mod tests {
         let tid = tid(1);
         let p = page(1, 9);
         wal.log_begin(tid).unwrap();
-        let first = wal.log_insert(tid, p, vec![], vec![1]).unwrap();
+        let first = wal
+            .log_page_operation(
+                tid,
+                p,
+                &mut TestPage {
+                    before: vec![],
+                    after: vec![1],
+                    page_lsn: Lsn::INVALID,
+                },
+                PageLogOp::Insert,
+            )
+            .unwrap();
         wal.log_clr(tid, first, p, vec![], Lsn::INVALID).unwrap();
         assert_eq!(dirty_pages(&wal).get(&p), Some(&first));
     }
@@ -1176,7 +1341,18 @@ mod tests {
         let tid = tid(1);
         let p = page(1, 1);
         wal.log_begin(tid).unwrap();
-        let insert_lsn = wal.log_insert(tid, p, vec![], vec![1]).unwrap();
+        let insert_lsn = wal
+            .log_page_operation(
+                tid,
+                p,
+                &mut TestPage {
+                    before: vec![],
+                    after: vec![1],
+                    page_lsn: Lsn::INVALID,
+                },
+                PageLogOp::Insert,
+            )
+            .unwrap();
 
         wal.checkpoint().unwrap();
 
@@ -1208,7 +1384,18 @@ mod tests {
         let tid = tid(1);
         let p = page(1, 7);
         wal.log_begin(tid).unwrap();
-        let insert_lsn = wal.log_insert(tid, p, vec![], vec![1]).unwrap();
+        let insert_lsn = wal
+            .log_page_operation(
+                tid,
+                p,
+                &mut TestPage {
+                    before: vec![],
+                    after: vec![1],
+                    page_lsn: Lsn::INVALID,
+                },
+                PageLogOp::Insert,
+            )
+            .unwrap();
 
         wal.checkpoint().unwrap();
 
@@ -1236,7 +1423,17 @@ mod tests {
 
         let tid = tid(1);
         wal.log_begin(tid).unwrap();
-        wal.log_insert(tid, page(1, 1), vec![], vec![1]).unwrap();
+        wal.log_page_operation(
+            tid,
+            page(1, 1),
+            &mut TestPage {
+                before: vec![],
+                after: vec![1],
+                page_lsn: Lsn::INVALID,
+            },
+            PageLogOp::Insert,
+        )
+        .unwrap();
         wal.log_commit(tid).unwrap();
 
         wal.checkpoint().unwrap();
