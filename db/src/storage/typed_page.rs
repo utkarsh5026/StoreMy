@@ -192,19 +192,23 @@ pub struct TypedPage<H, B> {
 }
 
 impl<H, B> TypedPage<H, B> {
-    /// Creates a new `TypedPage` with no before-image set.
+    /// Creates a new `TypedPage` for a freshly allocated page.
     ///
-    /// Use this when constructing a brand-new page that has never been on disk
-    /// (e.g. a freshly allocated page), rather than parsing raw bytes read from
-    /// a file. Call [`TypedPage::from_page_bytes`] to reconstruct an existing
-    /// page.
+    /// The before-image is initialised to all zeros — the true on-disk state
+    /// before any transaction writes to a newly allocated page. This lets the
+    /// WAL log an Insert record immediately without a separate
+    /// `set_before_image` call, and ensures that undo restores the page to
+    /// blank rather than leaving stale data behind.
+    ///
+    /// Use [`TypedPage::from_page_bytes`] to reconstruct a page that already
+    /// exists on disk.
     pub fn new(kind: PageKind, page_lsn: Lsn, header: H, body: B) -> Self {
         Self {
             kind,
             page_lsn,
             header,
             body,
-            before_image: None,
+            before_image: Some([0u8; PAGE_SIZE]),
         }
     }
 }
@@ -536,8 +540,8 @@ mod tests {
     }
 
     #[test]
-    fn before_image_is_none_on_construction() {
-        assert!(make_page(1, b"z").before_image().is_none());
+    fn before_image_is_zeros_on_construction() {
+        assert_eq!(make_page(1, b"z").before_image(), Some([0u8; PAGE_SIZE]));
     }
 
     #[test]

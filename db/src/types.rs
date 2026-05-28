@@ -997,37 +997,11 @@ impl<T: Into<Value>> From<Option<T>> for Value {
 impl Encode for DynValue {
     fn encode<W: Write>(&self, w: &mut W) -> Result<(), CodecError> {
         match self {
-            // VARCHAR: silently truncates at STRING_MAX_SIZE (255). Callers
-            // that need to preserve the full string must use TEXT instead.
-            Self::Varchar(s) => {
-                let bytes = s.as_bytes();
-                let len = bytes.len().min(STRING_MAX_SIZE);
-                u32::try_from(len)
-                    .map_err(|_| CodecError::numeric_does_not_fit(len, "u32"))?
-                    .encode(w)?;
-                w.write_all(&bytes[..len])?;
-                Ok(())
-            }
-            // TEXT: encodes the full string with no length cap.
-            // Values exceeding TEXT_MAX_INLINE_SIZE must be routed through the
-            // heap layer's overflow path before Value::encode is called; this
-            // arm handles only the inline (short) case.
-            Self::Text(s) => {
-                let bytes = s.as_bytes();
-                u32::try_from(bytes.len())
-                    .map_err(|_| CodecError::numeric_does_not_fit(bytes.len(), "u32"))?
-                    .encode(w)?;
-                w.write_all(bytes)?;
-                Ok(())
-            }
-            // Wire format (the type tag `7` is already written by `Value::encode`):
-            //   [u32::MAX  — sentinel: overflow pointer, not a length]
-            //   [total_len — u32 LE, true byte count of the reconstructed text]
-            //   [ptr       — PageDescriptor: file_id (u64 LE) + page_no (u32 LE)]
-            //
-            // TODO: implement this arm.
+            Self::Varchar(s) | Self::Text(s) => s.encode(w),
             Self::TextOverflow { total_len, ptr } => {
-                todo!("write u32::MAX sentinel, then total_len {total_len}, then ptr {ptr:?}")
+                u32::MAX.encode(w)?;
+                total_len.encode(w)?;
+                ptr.encode(w)
             }
         }
     }
@@ -1084,7 +1058,13 @@ impl Decode for Value {
                     let ptr = PageDescriptor::decode(r)?;
                     Ok(Self::Dyn(DynValue::TextOverflow { total_len, ptr }))
                 } else {
-                    Ok(Self::text(String::decode(r)?))
+                    // `first` is the byte length of the inline string.
+                    // Do NOT call String::decode here — that would read a second length prefix.
+                    let mut buf = vec![0u8; first as usize];
+                    r.read_exact(&mut buf)?;
+                    std::str::from_utf8(&buf)
+                        .map(|s| Self::text(s.to_owned()))
+                        .map_err(CodecError::InvalidUtf8)
                 }
             }
         }
