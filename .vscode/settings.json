@@ -296,6 +296,11 @@
   "lldb.showDisassembly": "never",
   "lldb.dereferencePointers": true,
   // ── Test Explorer ────────────────────────────────────────────────────────
+  // extraEnv applies to every runnable (single test AND run-all via VS Code).
+  // For a clean no-log run-all, use `make test` from the terminal instead.
+  "rust-analyzer.runnables.extraEnv": {
+    "RUST_LOG": "storemy=debug"
+  },
   "rust-analyzer.runnables.extraArgs": [
     "--",
     "--nocapture"
