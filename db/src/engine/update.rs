@@ -105,10 +105,7 @@ impl Engine<'_> {
         let heap_file = catalog.get_table_heap(scope.file_id)?;
 
         let predicate = where_clause
-            .map(|expr| {
-                ResolvedExpr::resolve(expr, &scope)
-                    .map_err(|e| EngineError::TypeError(e.to_string()))
-            })
+            .map(|expr| ResolvedExpr::resolve(expr, &scope))
             .transpose()?;
         let rows =
             Self::collect_matching_rows(&heap_file, txn.transaction_id(), predicate.as_ref())?;
@@ -238,8 +235,7 @@ impl Engine<'_> {
                 }
 
                 seen.insert(col_id);
-                let resolved = ResolvedExpr::resolve(ass.value, scope)
-                    .map_err(|e| EngineError::TypeError(e.to_string()))?;
+                let resolved = ResolvedExpr::resolve(ass.value, scope)?;
                 Ok((col_id, resolved))
             })
             .collect()
@@ -266,9 +262,7 @@ impl Engine<'_> {
         let computed = assignments
             .iter()
             .map(|(col_id, expr)| {
-                let raw = expr
-                    .eval(old_tuple)
-                    .map_err(|e| EngineError::TypeError(e.to_string()))?;
+                let raw = expr.eval(old_tuple)?;
 
                 let field = schema
                     .field_of(*col_id)
@@ -457,7 +451,7 @@ mod tests {
     fn make_infra(dir: &Path) -> (Catalog, Arc<TransactionManager>) {
         let wal = Arc::new(Wal::new(&dir.join("wal.log"), 0).unwrap());
         let bp = Arc::new(PageStore::new(64, wal.clone()));
-        let catalog = Catalog::initialize(&bp, &wal, dir).unwrap();
+        let catalog = Catalog::initialize(&bp, dir).unwrap();
         let txn_mgr = Arc::new(TransactionManager::new(wal, bp, dir.join("wal.log")));
         (catalog, txn_mgr)
     }

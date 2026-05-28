@@ -22,6 +22,7 @@ use std::{
     ops::{Add, Mul, Sub},
 };
 
+use chrono::{DateTime, NaiveDate, NaiveDateTime, NaiveTime};
 use thiserror::Error;
 
 use crate::{
@@ -102,6 +103,9 @@ pub enum Type {
     String,
     Bool,
     Text,
+    Date,
+    Time,
+    Timestamp,
 }
 
 /// Converts a `u32` to a [`Type`] by matching a numeric tag to the corresponding variant.
@@ -120,6 +124,9 @@ impl TryFrom<u32> for Type {
             5 => Ok(Self::String),
             6 => Ok(Self::Bool),
             7 => Ok(Self::Text),
+            8 => Ok(Self::Date),
+            9 => Ok(Self::Time),
+            10 => Ok(Self::Timestamp),
             _ => Err(TypeError::UnsupportedType {
                 message: format!("Unsupported type: {value}"),
             }),
@@ -138,6 +145,9 @@ impl From<Type> for u32 {
             Type::String => 5,
             Type::Bool => 6,
             Type::Text => 7,
+            Type::Date => 8,
+            Type::Time => 9,
+            Type::Timestamp => 10,
         }
     }
 }
@@ -193,6 +203,9 @@ impl TryFrom<&str> for Type {
             "VARCHAR" | "STRING" => Ok(Self::String),
             "TEXT" => Ok(Self::Text),
             "BOOL" | "BOOLEAN" => Ok(Self::Bool),
+            "DATE" => Ok(Self::Date),
+            "TIME" => Ok(Self::Time),
+            "TIMESTAMP" => Ok(Self::Timestamp),
             _ => Err(TypeError::UnsupportedType {
                 message: format!("Unsupported type name: {value}"),
             }),
@@ -211,6 +224,9 @@ impl fmt::Display for Type {
             Type::String => "VARCHAR",
             Type::Text => "TEXT",
             Type::Bool => "BOOLEAN",
+            Type::Date => "DATE",
+            Type::Time => "TIME",
+            Type::Timestamp => "TIMESTAMP",
         };
         write!(f, "{name}")
     }
@@ -225,18 +241,25 @@ pub enum FixedValue {
     Uint64(u64),
     Float64(f64),
     Bool(bool),
+    Date(i32),
+    Time(i64),
+    Timestamp(i64),
 }
 
 impl FixedValue {
     /// Returns the byte size of the value represented by this variant.
     ///
-    /// - `Int32`, `Uint32`: 4 bytes
-    /// - `Int64`, `Uint64`, `Float64`: 8 bytes
+    /// - `Int32`, `Uint32`, `Date`: 4 bytes
+    /// - `Int64`, `Uint64`, `Float64`, `Time`, `Timestamp`: 8 bytes
     /// - `Bool`: 1 byte
     pub const fn size(&self) -> usize {
         match self {
-            Self::Int32(_) | Self::Uint32(_) => I32_PAYLOAD_SIZE,
-            Self::Int64(_) | Self::Uint64(_) | Self::Float64(_) => I64_PAYLOAD_SIZE,
+            Self::Int32(_) | Self::Uint32(_) | Self::Date(_) => I32_PAYLOAD_SIZE,
+            Self::Int64(_)
+            | Self::Uint64(_)
+            | Self::Float64(_)
+            | Self::Time(_)
+            | Self::Timestamp(_) => I64_PAYLOAD_SIZE,
             Self::Bool(_) => BOOL_PAYLOAD_SIZE,
         }
     }
@@ -249,6 +272,41 @@ impl FixedValue {
             Self::Uint64(_) => Type::Uint64,
             Self::Float64(_) => Type::Float64,
             Self::Bool(_) => Type::Bool,
+            Self::Date(_) => Type::Date,
+            Self::Time(_) => Type::Time,
+            Self::Timestamp(_) => Type::Timestamp,
+        }
+    }
+
+    /// Writes the little-endian scalar payload for this variant (no [`Type`] tag).
+    ///
+    /// Used by [`Encode for FixedValue`]. Tagged [`Value`] serialization writes the
+    /// 4-byte type tag first, then calls this for the payload.
+    ///
+    /// Dispatches on [`Self::size`], then encodes the inner scalar with [`Encode`]:
+    ///
+    /// - 1 byte — `Bool`
+    /// - 4 bytes — `Int32`, `Uint32`, `Date` (`i32` days since Unix epoch)
+    /// - 8 bytes — `Int64`, `Uint64`, `Float64`, `Time`, `Timestamp` (`i64` micros since midnight
+    ///   or Unix epoch)
+    fn encode_payload<W: Write>(&self, w: &mut W) -> Result<(), CodecError> {
+        match self.size() {
+            BOOL_PAYLOAD_SIZE => {
+                let Self::Bool(v) = self else { unreachable!() };
+                v.encode(w)
+            }
+            I32_PAYLOAD_SIZE => match self {
+                Self::Int32(v) | Self::Date(v) => v.encode(w),
+                Self::Uint32(v) => v.encode(w),
+                _ => unreachable!(),
+            },
+            I64_PAYLOAD_SIZE => match self {
+                Self::Int64(v) | Self::Time(v) | Self::Timestamp(v) => v.encode(w),
+                Self::Uint64(v) => v.encode(w),
+                Self::Float64(v) => v.encode(w),
+                _ => unreachable!(),
+            },
+            _ => unreachable!(),
         }
     }
 
@@ -283,18 +341,153 @@ impl FixedValue {
             _ => Err(ArithmeticError::TypeMismatch),
         }
     }
+
+    /// Parses a SQL-style date literal into [`FixedValue::Date`].
+    ///
+    /// Accepts `YYYY-MM-DD` (leading/trailing whitespace is trimmed). The stored
+    /// payload is an `i32` count of whole days since the Unix epoch (`1970-01-01`).
+    ///
+    /// Returns `None` if the string does not match the format or the day count
+    /// does not fit in `i32`.
+    pub fn parse_date(s: &str) -> Option<Self> {
+        let d = NaiveDate::parse_from_str(s.trim(), "%Y-%m-%d").ok()?;
+        let epoch = NaiveDate::from_ymd_opt(1970, 1, 1)?;
+        let days = i32::try_from(d.signed_duration_since(epoch).num_days()).ok()?;
+        Some(Self::Date(days))
+    }
+
+    /// Parses a SQL-style time literal into [`FixedValue::Time`].
+    ///
+    /// Accepts `HH:MM:SS` and `HH:MM:SS.fff` (fractional seconds; whitespace
+    /// trimmed). The stored payload is an `i64` count of microseconds since
+    /// midnight.
+    ///
+    /// Returns `None` if the string does not match either format or the duration
+    /// cannot be represented as microseconds.
+    pub fn parse_time(s: &str) -> Option<Self> {
+        let t = NaiveTime::parse_from_str(s.trim(), "%H:%M:%S")
+            .or_else(|_| NaiveTime::parse_from_str(s.trim(), "%H:%M:%S%.f"))
+            .ok()?;
+        let midnight = NaiveTime::from_hms_opt(0, 0, 0)?;
+        Some(Self::Time(
+            t.signed_duration_since(midnight).num_microseconds()?,
+        ))
+    }
+
+    /// Parses a SQL-style timestamp literal into [`FixedValue::Timestamp`].
+    ///
+    /// Accepts (whitespace trimmed):
+    ///
+    /// - `YYYY-MM-DD HH:MM:SS`
+    /// - `YYYY-MM-DDTHH:MM:SS`
+    /// - `YYYY-MM-DD HH:MM:SS.fff` (fractional seconds with a space separator)
+    ///
+    /// The parsed naive datetime is interpreted as UTC. The stored payload is an
+    /// `i64` count of microseconds since the Unix epoch.
+    ///
+    /// Returns `None` if the string does not match any accepted format.
+    pub fn parse_timestamp(s: &str) -> Option<Self> {
+        let s = s.trim();
+        let f = |format: &'static str| NaiveDateTime::parse_from_str(s, format);
+
+        let dt = f("%Y-%m-%d %H:%M:%S")
+            .or_else(|_| f("%Y-%m-%dT%H:%M:%S"))
+            .or_else(|_| f("%Y-%m-%d %H:%M:%S%.f"))
+            .ok()?;
+        Some(Self::Timestamp(dt.and_utc().timestamp_micros()))
+    }
+
+    /// Formats [`FixedValue::Date`] storage for [`fmt::Display`].
+    ///
+    /// Inverse of [`Self::parse_date`]: writes `YYYY-MM-DD` from the `i32` day
+    /// count since the Unix epoch.
+    fn write_date(days: i32, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let epoch = NaiveDate::from_ymd_opt(1970, 1, 1).expect("1970-01-01 is valid");
+        let date = epoch + chrono::Duration::days(i64::from(days));
+        write!(f, "{}", date.format("%Y-%m-%d"))
+    }
+
+    /// Formats [`FixedValue::Time`] storage for [`fmt::Display`].
+    ///
+    /// Inverse of [`Self::parse_time`]: writes `HH:MM:SS` when the payload is a
+    /// whole number of seconds; otherwise `HH:MM:SS.fff` with trimmed fractional
+    /// digits.
+    fn write_time(micros: i64, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let midnight = NaiveTime::from_hms_opt(0, 0, 0).expect("midnight is valid");
+        let time = midnight + chrono::Duration::microseconds(micros);
+        if micros % 1_000_000 == 0 {
+            write!(f, "{}", time.format("%H:%M:%S"))
+        } else {
+            write!(f, "{}", time.format("%H:%M:%S%.f"))
+        }
+    }
+
+    /// Formats [`FixedValue::Timestamp`] storage for [`fmt::Display`].
+    ///
+    /// Inverse of [`Self::parse_timestamp`]: writes `YYYY-MM-DD HH:MM:SS` in UTC,
+    /// or `YYYY-MM-DD HH:MM:SS.fff` when sub-second precision is present. If the
+    /// microsecond count is outside the range representable as a UTC datetime,
+    /// falls back to printing the raw count.
+    fn write_timestamp(micros: i64, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let Some(dt) = DateTime::from_timestamp_micros(micros) else {
+            return write!(f, "{micros}");
+        };
+        let naive = dt.naive_utc();
+        if micros % 1_000_000 == 0 {
+            write!(f, "{}", naive.format("%Y-%m-%d %H:%M:%S"))
+        } else {
+            write!(f, "{}", naive.format("%Y-%m-%d %H:%M:%S%.f"))
+        }
+    }
+
+    /// Parses `s` into a fixed-width [`FixedValue`] of kind `ty`.
+    ///
+    /// Numeric types use [`str::parse`]; [`Type::Bool`] accepts `true`/`false`/`1`/`0`;
+    /// temporal types use [`Self::parse_date`], [`Self::parse_time`], and
+    /// [`Self::parse_timestamp`].
+    ///
+    /// Returns `None` for [`Type::String`] and [`Type::Text`] — callers must build [`DynValue`]
+    /// via [`Value::parse_as`].
+    pub fn parse_as(s: &str, ty: Type) -> Option<Self> {
+        match ty {
+            Type::Int32 => s.parse().ok().map(Self::Int32),
+            Type::Int64 => s.parse().ok().map(Self::Int64),
+            Type::Uint32 => s.parse().ok().map(Self::Uint32),
+            Type::Uint64 => s.parse().ok().map(Self::Uint64),
+            Type::Float64 => s.parse().ok().map(Self::Float64),
+            Type::Bool => match s.to_ascii_lowercase().as_str() {
+                "true" | "1" => Some(Self::Bool(true)),
+                "false" | "0" => Some(Self::Bool(false)),
+                _ => None,
+            },
+            Type::Date => Self::parse_date(s),
+            Type::Time => Self::parse_time(s),
+            Type::Timestamp => Self::parse_timestamp(s),
+            Type::String | Type::Text => None,
+        }
+    }
 }
 
 impl Hash for FixedValue {
     fn hash<H: Hasher>(&self, state: &mut H) {
         std::mem::discriminant(self).hash(state);
-        match self {
-            Self::Int32(v) => v.hash(state),
-            Self::Int64(v) => v.hash(state),
-            Self::Uint32(v) => v.hash(state),
-            Self::Uint64(v) => v.hash(state),
-            Self::Float64(v) => v.to_bits().hash(state),
-            Self::Bool(v) => v.hash(state),
+        match self.size() {
+            BOOL_PAYLOAD_SIZE => {
+                let Self::Bool(v) = self else { unreachable!() };
+                v.hash(state);
+            }
+            I32_PAYLOAD_SIZE => match self {
+                Self::Int32(v) | Self::Date(v) => v.hash(state),
+                Self::Uint32(v) => v.hash(state),
+                _ => unreachable!(),
+            },
+            I64_PAYLOAD_SIZE => match self {
+                Self::Int64(v) | Self::Time(v) | Self::Timestamp(v) => v.hash(state),
+                Self::Uint64(v) => v.hash(state),
+                Self::Float64(v) => v.to_bits().hash(state),
+                _ => unreachable!(),
+            },
+            _ => unreachable!(),
         }
     }
 }
@@ -302,12 +495,15 @@ impl Hash for FixedValue {
 impl fmt::Display for FixedValue {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::Bool(v) => write!(f, "{v}"),
             Self::Int32(v) => write!(f, "{v}"),
-            Self::Int64(v) => write!(f, "{v}"),
             Self::Uint32(v) => write!(f, "{v}"),
+            Self::Int64(v) => write!(f, "{v}"),
             Self::Uint64(v) => write!(f, "{v}"),
             Self::Float64(v) => write!(f, "{v}"),
-            Self::Bool(v) => write!(f, "{v}"),
+            Self::Date(v) => Self::write_date(*v, f),
+            Self::Time(v) => Self::write_time(*v, f),
+            Self::Timestamp(v) => Self::write_timestamp(*v, f),
         }
     }
 }
@@ -315,12 +511,14 @@ impl fmt::Display for FixedValue {
 impl PartialOrd for FixedValue {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         match (self, other) {
-            (Self::Int32(a), Self::Int32(b)) => a.partial_cmp(b),
-            (Self::Int64(a), Self::Int64(b)) => a.partial_cmp(b),
             (Self::Uint32(a), Self::Uint32(b)) => a.partial_cmp(b),
             (Self::Uint64(a), Self::Uint64(b)) => a.partial_cmp(b),
             (Self::Float64(a), Self::Float64(b)) => a.partial_cmp(b),
             (Self::Bool(a), Self::Bool(b)) => a.partial_cmp(b),
+            (Self::Int32(a), Self::Int32(b)) | (Self::Date(a), Self::Date(b)) => a.partial_cmp(b),
+            (Self::Int64(a), Self::Int64(b))
+            | (Self::Time(a), Self::Time(b))
+            | (Self::Timestamp(a), Self::Timestamp(b)) => a.partial_cmp(b),
             _ => None,
         }
     }
@@ -328,14 +526,7 @@ impl PartialOrd for FixedValue {
 
 impl Encode for FixedValue {
     fn encode<W: Write>(&self, w: &mut W) -> Result<(), CodecError> {
-        match self {
-            Self::Int32(v) => v.encode(w),
-            Self::Int64(v) => v.encode(w),
-            Self::Uint32(v) => v.encode(w),
-            Self::Uint64(v) => v.encode(w),
-            Self::Float64(v) => v.encode(w),
-            Self::Bool(v) => v.encode(w),
-        }
+        self.encode_payload(w)
     }
 }
 
@@ -524,8 +715,39 @@ impl Value {
                 Ok(Self::text(s.clone()))
             }
 
+            (Self::Dyn(DynValue::Varchar(s)), ty @ (Type::Date | Type::Time | Type::Timestamp)) => {
+                FixedValue::parse_as(s, ty)
+                    .map(Self::Fixed)
+                    .ok_or_else(|| TypeError::invalid_conversion(s.as_str(), ty))
+            }
+
             (v, ty) if v.get_type() == Some(ty) => Ok(v.clone()),
             (v, ty) => Err(TypeError::invalid_conversion(v, ty)),
+        }
+    }
+
+    /// Parses a string representation into a [`Value`] of the requested [`Type`].
+    ///
+    /// The string is interpreted differently depending on `ty`:
+    ///
+    /// - **Fixed-width types** (`Int32`, `Bool`, `Date`, …) delegate to [`FixedValue::parse_as`].
+    /// - **`String` / `Text`** accept the input as-is — the string is just wrapped, not
+    ///   interpreted. There is no ambiguity for these two variants.
+    ///
+    /// Leading and trailing whitespace is trimmed before any conversion.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`TypeError::InvalidConversion`] when the string cannot be
+    /// interpreted as `ty`.
+    pub fn parse_as(s: &str, ty: Type) -> Result<Self, TypeError> {
+        let s = s.trim();
+        match ty {
+            Type::String => Ok(Self::varchar(s.to_owned())),
+            Type::Text => Ok(Self::text(s.to_owned())),
+            _ => FixedValue::parse_as(s, ty)
+                .map(Self::Fixed)
+                .ok_or_else(|| TypeError::invalid_conversion(s, ty)),
         }
     }
 
@@ -572,6 +794,21 @@ impl Value {
     /// Builds SQL `NULL`.
     pub fn null() -> Self {
         Self::Null
+    }
+
+    /// Builds a [`Type::Date`] value.
+    pub fn date(d: i32) -> Self {
+        Self::Fixed(FixedValue::Date(d))
+    }
+
+    /// Builds a [`Type::Time`] value.
+    pub fn time(t: i64) -> Self {
+        Self::Fixed(FixedValue::Time(t))
+    }
+
+    /// Builds a [`Type::Timestamp`] value.
+    pub fn timestamp(t: i64) -> Self {
+        Self::Fixed(FixedValue::Timestamp(t))
     }
 }
 
@@ -760,37 +997,11 @@ impl<T: Into<Value>> From<Option<T>> for Value {
 impl Encode for DynValue {
     fn encode<W: Write>(&self, w: &mut W) -> Result<(), CodecError> {
         match self {
-            // VARCHAR: silently truncates at STRING_MAX_SIZE (255). Callers
-            // that need to preserve the full string must use TEXT instead.
-            Self::Varchar(s) => {
-                let bytes = s.as_bytes();
-                let len = bytes.len().min(STRING_MAX_SIZE);
-                u32::try_from(len)
-                    .map_err(|_| CodecError::numeric_does_not_fit(len, "u32"))?
-                    .encode(w)?;
-                w.write_all(&bytes[..len])?;
-                Ok(())
-            }
-            // TEXT: encodes the full string with no length cap.
-            // Values exceeding TEXT_MAX_INLINE_SIZE must be routed through the
-            // heap layer's overflow path before Value::encode is called; this
-            // arm handles only the inline (short) case.
-            Self::Text(s) => {
-                let bytes = s.as_bytes();
-                u32::try_from(bytes.len())
-                    .map_err(|_| CodecError::numeric_does_not_fit(bytes.len(), "u32"))?
-                    .encode(w)?;
-                w.write_all(bytes)?;
-                Ok(())
-            }
-            // Wire format (the type tag `7` is already written by `Value::encode`):
-            //   [u32::MAX  — sentinel: overflow pointer, not a length]
-            //   [total_len — u32 LE, true byte count of the reconstructed text]
-            //   [ptr       — PageDescriptor: file_id (u64 LE) + page_no (u32 LE)]
-            //
-            // TODO: implement this arm.
+            Self::Varchar(s) | Self::Text(s) => s.encode(w),
             Self::TextOverflow { total_len, ptr } => {
-                todo!("write u32::MAX sentinel, then total_len {total_len}, then ptr {ptr:?}")
+                u32::MAX.encode(w)?;
+                total_len.encode(w)?;
+                ptr.encode(w)
             }
         }
     }
@@ -831,29 +1042,72 @@ impl Decode for Value {
             Type::Uint64 => Ok(Self::uint64(u64::decode(r)?)),
             Type::Float64 => Ok(Self::float64(f64::decode(r)?)),
             Type::Bool => Ok(Self::bool(u8::decode(r)? != 0)),
+            Type::Date => Ok(Self::date(i32::decode(r)?)),
+            Type::Time => Ok(Self::time(i64::decode(r)?)),
+            Type::Timestamp => Ok(Self::timestamp(i64::decode(r)?)),
             Type::String => {
                 let len = u32::decode(r)? as usize;
                 let mut buf = vec![0u8; len];
                 r.read_exact(&mut buf)?;
                 Ok(Self::varchar(std::str::from_utf8(&buf)?.to_string()))
             }
-            // TEXT has two on-disk forms distinguished by the first u32:
-            //   - Normal length (0 ..= TEXT_MAX_INLINE_SIZE): inline bytes follow.
-            //   - u32::MAX sentinel: this is an overflow pointer, not a length.
-            //
-            // TODO: implement this arm.
-            //   Step 1 — read the first u32 into a variable (call it `first`).
-            //   Step 2 — if first == u32::MAX:
-            //       read total_len: u32
-            //       read ptr: PageDescriptor::decode(r)?
-            //       return Ok(Self::Dyn(DynValue::TextOverflow { total_len, ptr }))
-            //   Step 3 — else (first is the real length):
-            //       read `first` bytes into a buffer, decode as UTF-8
-            //       return Ok(Self::text(s))
             Type::Text => {
-                todo!("decode TEXT: check u32::MAX sentinel for overflow vs inline bytes")
+                let first = u32::decode(r)?;
+                if first == u32::MAX {
+                    let total_len = u32::decode(r)?;
+                    let ptr = PageDescriptor::decode(r)?;
+                    Ok(Self::Dyn(DynValue::TextOverflow { total_len, ptr }))
+                } else {
+                    // `first` is the byte length of the inline string.
+                    // Do NOT call String::decode here — that would read a second length prefix.
+                    let mut buf = vec![0u8; first as usize];
+                    r.read_exact(&mut buf)?;
+                    std::str::from_utf8(&buf)
+                        .map(|s| Self::text(s.to_owned()))
+                        .map_err(CodecError::InvalidUtf8)
+                }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod fixed_value_temporal_tests {
+    use std::cmp::Ordering;
+
+    use super::FixedValue;
+
+    #[test]
+    fn time_partial_ord() {
+        let early = FixedValue::parse_time("10:00:00").unwrap();
+        let late = FixedValue::parse_time("16:00:00").unwrap();
+        assert_eq!(early.partial_cmp(&late), Some(Ordering::Less));
+    }
+
+    #[test]
+    fn int64_partial_ord() {
+        assert_eq!(
+            FixedValue::Int64(1).partial_cmp(&FixedValue::Int64(2)),
+            Some(Ordering::Less)
+        );
+    }
+
+    #[test]
+    fn temporal_display_is_human_readable() {
+        assert_eq!(
+            FixedValue::parse_date("2024-01-15").unwrap().to_string(),
+            "2024-01-15"
+        );
+        assert_eq!(
+            FixedValue::parse_time("16:00:00").unwrap().to_string(),
+            "16:00:00"
+        );
+        assert_eq!(
+            FixedValue::parse_timestamp("2024-01-15 16:00:00")
+                .unwrap()
+                .to_string(),
+            "2024-01-15 16:00:00"
+        );
     }
 }
 

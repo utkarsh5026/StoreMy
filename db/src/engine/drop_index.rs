@@ -45,8 +45,7 @@ impl Engine<'_> {
                 return Err(EngineError::UnknownIndex(index_name));
             };
 
-            let table = Self::check_table(catalog, txn, table_name.as_str(), false)?
-                .expect("if_exists=false should never yield None");
+            let table = Self::require_table(catalog, txn, table_name.as_str())?;
 
             if catalog.index_belongs_to_table(table.file_id, &index) {
                 catalog.drop_index(txn, &index_name)?;
@@ -93,7 +92,7 @@ mod tests {
 
     fn make_catalog_and_txn(dir: &Path) -> (Catalog, Arc<TransactionManager>) {
         let (wal, bp) = make_infra(dir);
-        let catalog = Catalog::initialize(&bp, &wal, dir).expect("catalog init failed");
+        let catalog = Catalog::initialize(&bp, dir).expect("catalog init failed");
         let txn_mgr = Arc::new(TransactionManager::new(wal, bp, dir.join("wal.log")));
         (catalog, txn_mgr)
     }

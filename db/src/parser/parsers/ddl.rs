@@ -409,7 +409,7 @@ impl Parser {
         col_name: NonEmptyString,
     ) -> Result<ColumnDef, ParserError> {
         let type_tok = self.bump()?;
-        let col_type = Type::try_from(type_tok).map_err(|msg| {
+        let col_type = Type::try_from(type_tok.kind).map_err(|msg| {
             warn!(column = %col_name, reason = %msg, "invalid column type");
             ParserError::ParsingError(msg)
         })?;
@@ -1928,6 +1928,97 @@ mod tests {
     #[test]
     fn test_parse_alter_add_constraint_not_valid_display_round_trip() {
         let original = parse("ALTER TABLE t ADD CONSTRAINT chk CHECK (x > 0) NOT VALID").unwrap();
+        let reparsed = parse(&original.to_string()).unwrap();
+        assert_eq!(original.to_string(), reparsed.to_string());
+    }
+
+    #[test]
+    fn test_parse_create_date_column() {
+        let stmt = parse("CREATE TABLE events (d DATE)").unwrap();
+        let Statement::CreateTable(t) = stmt else {
+            panic!("expected CreateTable");
+        };
+        assert_eq!(t.columns[0].col_type, Type::Date);
+    }
+
+    #[test]
+    fn test_parse_create_time_column() {
+        let stmt = parse("CREATE TABLE slots (t TIME)").unwrap();
+        let Statement::CreateTable(t) = stmt else {
+            panic!("expected CreateTable");
+        };
+        assert_eq!(t.columns[0].col_type, Type::Time);
+    }
+
+    #[test]
+    fn test_parse_create_timestamp_column() {
+        let stmt = parse("CREATE TABLE logs (created_at TIMESTAMP)").unwrap();
+        let Statement::CreateTable(t) = stmt else {
+            panic!("expected CreateTable");
+        };
+        assert_eq!(t.columns[0].col_type, Type::Timestamp);
+    }
+
+    #[test]
+    fn test_parse_create_all_temporal_columns() {
+        let stmt = parse(concat!(
+            "CREATE TABLE appointments (",
+            "id INT, ",
+            "appt_date DATE NOT NULL, ",
+            "start_time TIME, ",
+            "created_at TIMESTAMP",
+            ")",
+        ))
+        .unwrap();
+        let Statement::CreateTable(t) = stmt else {
+            panic!("expected CreateTable");
+        };
+        assert_eq!(t.columns.len(), 4);
+        assert_eq!(t.columns[1].col_type, Type::Date);
+        assert!(!t.columns[1].nullable);
+        assert_eq!(t.columns[2].col_type, Type::Time);
+        assert_eq!(t.columns[3].col_type, Type::Timestamp);
+    }
+
+    #[test]
+    fn test_parse_create_text_column() {
+        let stmt = parse("CREATE TABLE posts (body TEXT)").unwrap();
+        let Statement::CreateTable(t) = stmt else {
+            panic!("expected CreateTable");
+        };
+        assert_eq!(t.columns[0].col_type, Type::Text);
+    }
+
+    #[test]
+    fn test_parse_alter_add_date_column() {
+        let stmt = parse("ALTER TABLE users ADD COLUMN birth_date DATE").unwrap();
+        let Statement::AlterTable(a) = stmt else {
+            panic!("expected AlterTable");
+        };
+        let AlterAction::AddColumn(col) = a.action else {
+            panic!("expected AddColumn");
+        };
+        assert_eq!(col.name, "birth_date");
+        assert_eq!(col.col_type, Type::Date);
+        assert!(col.nullable);
+    }
+
+    #[test]
+    fn test_parse_alter_add_timestamp_column_not_null() {
+        let stmt = parse("ALTER TABLE events ADD COLUMN created_at TIMESTAMP NOT NULL").unwrap();
+        let Statement::AlterTable(a) = stmt else {
+            panic!("expected AlterTable");
+        };
+        let AlterAction::AddColumn(col) = a.action else {
+            panic!("expected AddColumn");
+        };
+        assert_eq!(col.col_type, Type::Timestamp);
+        assert!(!col.nullable);
+    }
+
+    #[test]
+    fn test_parse_create_temporal_display_round_trip() {
+        let original = parse("CREATE TABLE t (d DATE NOT NULL, ts TIMESTAMP)").unwrap();
         let reparsed = parse(&original.to_string()).unwrap();
         assert_eq!(original.to_string(), reparsed.to_string());
     }

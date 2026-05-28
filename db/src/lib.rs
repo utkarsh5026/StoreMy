@@ -71,3 +71,6 @@ pub use types::{Type, Value};
 pub const PAGE_SIZE: usize = 4096;
 pub const STRING_MAX_SIZE: usize = 255;
 pub const TEXT_MAX_INLINE_SIZE: usize = 255;
+
+#[cfg(test)]
+pub mod test_utils;

@@ -354,6 +354,10 @@ impl ColumnRow {
     }
 }
 
+fn tagged_default(tag: &str, payload: impl fmt::Display) -> String {
+    format!("{tag}:{payload}")
+}
+
 /// Encodes an optional default `Value` as a tagged string for catalog storage.
 ///
 /// The catalog's `missing_default_value` column has type `String`, so all
@@ -361,13 +365,16 @@ impl ColumnRow {
 /// `None` is stored as `Value::Null`.
 fn encode_default(v: &Value) -> String {
     match v {
-        Value::Fixed(FixedValue::Int32(n)) => format!("i32:{n}"),
-        Value::Fixed(FixedValue::Int64(n)) => format!("i64:{n}"),
-        Value::Fixed(FixedValue::Uint32(n)) => format!("u32:{n}"),
-        Value::Fixed(FixedValue::Uint64(n)) => format!("u64:{n}"),
-        Value::Fixed(FixedValue::Float64(f)) => format!("f64:{f}"),
-        Value::Fixed(FixedValue::Bool(b)) => format!("bool:{b}"),
-        Value::Dyn(DynValue::Varchar(s) | DynValue::Text(s)) => format!("str:{s}"),
+        Value::Fixed(FixedValue::Int32(n)) => tagged_default("i32", n),
+        Value::Fixed(FixedValue::Int64(n)) => tagged_default("i64", n),
+        Value::Fixed(FixedValue::Uint32(n)) => tagged_default("u32", n),
+        Value::Fixed(FixedValue::Uint64(n)) => tagged_default("u64", n),
+        Value::Fixed(FixedValue::Float64(f)) => tagged_default("f64", f),
+        Value::Fixed(FixedValue::Bool(b)) => tagged_default("bool", b),
+        Value::Fixed(FixedValue::Date(d)) => tagged_default("date", d),
+        Value::Fixed(FixedValue::Time(t)) => tagged_default("time", t),
+        Value::Fixed(FixedValue::Timestamp(t)) => tagged_default("timestamp", t),
+        Value::Dyn(DynValue::Varchar(s) | DynValue::Text(s)) => tagged_default("str", s),
         Value::Null => "null".to_owned(),
         Value::Dyn(DynValue::TextOverflow { .. }) => {
             unreachable!("TextOverflow must be resolved before reaching catalog encoding")

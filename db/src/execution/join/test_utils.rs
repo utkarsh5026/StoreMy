@@ -77,12 +77,13 @@ pub fn build_heap(id: u64, tuples: &[Tuple]) -> HeapHarness {
         .unwrap();
     drop(file);
     store.register_file(file_id, &path).unwrap();
+    let overflow_file = HeapFile::make_overflow_file(file_id, Arc::clone(&store), 0);
     let heap = HeapFile::new(
         file_id,
         Arc::new(schema_ab()),
         Arc::clone(&store),
         0,
-        Arc::clone(&wal),
+        overflow_file,
     );
     let txn = TransactionId::new(id);
     wal.log_begin(txn).unwrap();
@@ -114,12 +115,13 @@ pub fn build_heap_xy(id: u64, tuples: &[Tuple]) -> HeapHarness {
         .unwrap();
     drop(file);
     store.register_file(file_id, &path).unwrap();
+    let overflow_file = HeapFile::make_overflow_file(file_id, Arc::clone(&store), 0);
     let heap = HeapFile::new(
         file_id,
         Arc::new(schema_xy()),
         Arc::clone(&store),
         0,
-        Arc::clone(&wal),
+        overflow_file,
     );
     let txn = TransactionId::new(id);
     wal.log_begin(txn).unwrap();

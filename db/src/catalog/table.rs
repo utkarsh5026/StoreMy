@@ -210,7 +210,7 @@ impl Catalog {
                 &file_path,
                 Arc::clone(&schema),
                 self.buffer_pool(),
-                self.wal(),
+                self.overflow.clone(),
             )?,
         );
 
@@ -729,7 +729,7 @@ mod tests {
 
     fn make_catalog_and_txn(dir: &Path) -> (Catalog, Arc<TransactionManager>) {
         let (wal, bp) = make_infra(dir);
-        let catalog = Catalog::initialize(&bp, &wal, dir).expect("catalog init failed");
+        let catalog = Catalog::initialize(&bp, dir).expect("catalog init failed");
         let txn_mgr = Arc::new(TransactionManager::new(wal, bp, dir.join("wal.log")));
         (catalog, txn_mgr)
     }

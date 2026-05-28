@@ -2,7 +2,7 @@
 
 .DEFAULT_GOAL := help
 
-.PHONY: test quick-test ci-test cargo-test test-watch test-watch-rust test-coverage \
+.PHONY: test quick-test ci-test cargo-test test-log test-log-one test-watch test-watch-rust test-coverage \
 	clean rust-clean \
 	build \
 	fmt rust-fmt rust-fmt-check rust-fmt-install install-hooks uninstall-hooks \
@@ -62,6 +62,16 @@ rust-test:
 
 rust-nextest:
 	cargo nextest run --workspace
+
+# Run all tests with tracing output.
+# Override the filter: make test-log RUST_LOG=storemy=trace
+test-log:
+	RUST_LOG=$${RUST_LOG:-storemy=debug} cargo nextest run --workspace --no-capture
+
+# Run one test with tracing output.
+# Usage: make test-log-one TEST=write_and_read_single_chunk
+test-log-one:
+	RUST_LOG=$${RUST_LOG:-storemy=debug} cargo nextest run --workspace --no-capture -E 'test($(TEST))'
 
 quick-test:
 	cargo nextest run -p storemy --lib
@@ -172,6 +182,8 @@ help:
 	@echo "  quick-test           - cargo nextest run -p storemy --lib"
 	@echo "  ci-test              - cargo nextest run --workspace --profile ci"
 	@echo "  cargo-test           - cargo test --workspace"
+	@echo "  test-log             - run all tests with tracing (RUST_LOG=storemy=debug)"
+	@echo "  test-log-one         - run one test: make test-log-one TEST=<name>"
 	@echo "  fmt / rust-fmt       - cargo +nightly fmt --all (uses pinned nightly)"
 	@echo "  rust-fmt-check       - fmt --check (same nightly)"
 	@echo "  rust-fmt-install     - install pinned nightly + rustfmt component"

@@ -296,12 +296,14 @@ mod tests {
 
         store.register_file(file_id, &path).unwrap();
 
+        let overflow_file =
+            HeapFile::make_overflow_file(file_id, Arc::clone(&store), existing_pages);
         let heap = HeapFile::new(
             file_id,
             Arc::new(schema()),
             Arc::clone(&store),
             existing_pages,
-            Arc::clone(&wal),
+            overflow_file,
         );
         (heap, wal, dir)
     }
@@ -322,12 +324,13 @@ mod tests {
         hf.set_len(4 * crate::storage::PAGE_SIZE as u64).unwrap();
         drop(hf);
         store.register_file(heap_fid, &heap_path).unwrap();
+        let overflow_file = HeapFile::make_overflow_file(heap_fid, Arc::clone(&store), 0);
         let heap = HeapFile::new(
             heap_fid,
             Arc::new(schema()),
             Arc::clone(&store),
             0,
-            Arc::clone(&wal),
+            overflow_file,
         );
 
         let idx_fid = FileId::new(2);

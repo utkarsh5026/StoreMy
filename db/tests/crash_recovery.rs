@@ -43,7 +43,8 @@ use storemy::{
     buffer_pool::page_store::PageStore,
     primitives::{FileId, PageId, PageNumber, TransactionId},
     recovery::Aries,
-    wal::{log::LogRecordBody, reader::WalReader, writer::Wal},
+    storage::Page,
+    wal::{PageLogOp, log::LogRecordBody, reader::WalReader, writer::Wal},
 };
 use tempfile::tempdir;
 
@@ -69,6 +70,38 @@ fn image(tag: u8) -> Vec<u8> {
     vec![tag; PAGE_SIZE]
 }
 
+struct TestPage {
+    before: Vec<u8>,
+    after: Vec<u8>,
+    page_lsn: storemy::Lsn,
+}
+
+impl Page for TestPage {
+    fn page_data(&self) -> [u8; PAGE_SIZE] {
+        let mut page = [0; PAGE_SIZE];
+        page[..self.after.len()].copy_from_slice(&self.after);
+        page
+    }
+
+    fn before_image(&self) -> Option<[u8; PAGE_SIZE]> {
+        let mut page = [0; PAGE_SIZE];
+        page[..self.before.len()].copy_from_slice(&self.before);
+        Some(page)
+    }
+
+    fn set_before_image(&mut self) {
+        self.before = self.after.clone();
+    }
+
+    fn page_lsn(&self) -> storemy::Lsn {
+        self.page_lsn
+    }
+
+    fn set_page_lsn(&mut self, lsn: storemy::Lsn) {
+        self.page_lsn = lsn;
+    }
+}
+
 /// Writes a deterministic workload to `wal` and returns every
 /// `(TransactionId, commit_lsn)` pair for transactions that committed.
 ///
@@ -91,7 +124,17 @@ fn run_workload(wal: &Wal, n_txns: usize, seed: u64) -> Vec<(TransactionId, u64)
         // before = tag i (original page state); after = tag i+100 (post-insert state)
         let tag = u8::try_from(i).expect("txn index fits in u8");
         let after_tag = u8::try_from(i + 100).expect("txn tag offset fits in u8");
-        wal.log_insert(t, p, image(tag), image(after_tag)).unwrap();
+        wal.log_page_operation(
+            t,
+            p,
+            &mut TestPage {
+                before: image(tag),
+                after: image(after_tag),
+                page_lsn: storemy::Lsn::INVALID,
+            },
+            PageLogOp::Insert,
+        )
+        .unwrap();
 
         if (i as u64 + seed) % 3 != 0 {
             let commit_lsn = wal.log_commit(t).unwrap();

@@ -47,8 +47,7 @@ impl Engine<'_> {
         catalog: &Catalog,
         stmt: CreateIndexStatement,
     ) -> Result<StatementResult, EngineError> {
-        let table = Self::check_table(catalog, txn, &stmt.table_name, false)?
-            .expect("if_exists=false should never yield None");
+        let table = Self::require_table(catalog, txn, &stmt.table_name)?;
 
         let index_name = stmt.index_name.into_inner();
         tracing::debug!(
@@ -110,7 +109,7 @@ mod tests {
 
     fn make_catalog_and_txn(dir: &Path) -> (Catalog, Arc<TransactionManager>) {
         let (wal, bp) = make_infra(dir);
-        let catalog = Catalog::initialize(&bp, &wal, dir).expect("catalog init failed");
+        let catalog = Catalog::initialize(&bp, dir).expect("catalog init failed");
         let txn_mgr = Arc::new(TransactionManager::new(wal, bp, dir.join("wal.log")));
         (catalog, txn_mgr)
     }

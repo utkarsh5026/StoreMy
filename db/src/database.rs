@@ -34,12 +34,16 @@ const DOUBLE_WRITE_FILE_NAME: &str = "double_write.bin";
 pub enum DatabaseOpenError {
     #[error("I/O error: {0}")]
     Io(#[from] std::io::Error),
+
     #[error("WAL error: {0}")]
     Wal(#[from] WalError),
+
     #[error("catalog error: {0}")]
     Catalog(#[from] CatalogError),
+
     #[error("double-write buffer error: {0}")]
     Dwb(#[from] crate::buffer_pool::double_write::DwbError),
+
     #[error("crash recovery failed: {0}")]
     Recovery(#[from] RecoveryError),
 }
@@ -149,7 +153,7 @@ impl Database {
             .spawn(move || aries_bg.checkpoint_loop(&wal_bg, checkpoint_interval))
             .expect("failed to spawn checkpoint thread");
 
-        let catalog = Catalog::initialize(&buffer_pool, &wal, dir)?;
+        let catalog = Catalog::initialize(&buffer_pool, dir)?;
         let txn_mgr = Arc::new(TransactionManager::new(
             wal,
             buffer_pool,

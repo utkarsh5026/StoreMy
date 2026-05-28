@@ -294,8 +294,10 @@ mod tests {
 
     use super::{analysis::Analysis, *};
     use crate::{
+        PAGE_SIZE,
         primitives::{FileId, PageId, PageNumber},
-        wal::{reader::WalReader, writer::Wal},
+        storage::Page,
+        wal::{PageLogOp, reader::WalReader, writer::Wal},
     };
 
     const NO_BUF: usize = 0;
@@ -327,7 +329,37 @@ mod tests {
         Some(Lsn(u64::from_le_bytes(bytes[..8].try_into().unwrap())))
     }
 
-    // ── master record ────────────────────────────────────────────────────────
+    struct TestPage {
+        before: Vec<u8>,
+        after: Vec<u8>,
+        page_lsn: Lsn,
+    }
+
+    impl Page for TestPage {
+        fn page_data(&self) -> [u8; PAGE_SIZE] {
+            let mut page = [0; PAGE_SIZE];
+            page[..self.after.len()].copy_from_slice(&self.after);
+            page
+        }
+
+        fn before_image(&self) -> Option<[u8; PAGE_SIZE]> {
+            let mut page = [0; PAGE_SIZE];
+            page[..self.before.len()].copy_from_slice(&self.before);
+            Some(page)
+        }
+
+        fn set_before_image(&mut self) {
+            self.before = self.after.clone();
+        }
+
+        fn page_lsn(&self) -> Lsn {
+            self.page_lsn
+        }
+
+        fn set_page_lsn(&mut self, lsn: Lsn) {
+            self.page_lsn = lsn;
+        }
+    }
 
     #[test]
     fn take_checkpoint_creates_master_record_file() {
@@ -413,16 +445,46 @@ mod tests {
         let (wal, aries) = setup(&dir);
 
         wal.log_begin(tid(1)).unwrap();
-        wal.log_insert(tid(1), page(1), vec![], vec![1]).unwrap();
+        wal.log_page_operation(
+            tid(1),
+            page(1),
+            &mut TestPage {
+                before: vec![],
+                after: vec![1],
+                page_lsn: Lsn::INVALID,
+            },
+            PageLogOp::Insert,
+        )
+        .unwrap();
         wal.log_commit(tid(1)).unwrap();
 
         wal.log_begin(tid(2)).unwrap();
-        wal.log_insert(tid(2), page(2), vec![], vec![2]).unwrap();
+        wal.log_page_operation(
+            tid(2),
+            page(2),
+            &mut TestPage {
+                before: vec![],
+                after: vec![2],
+                page_lsn: Lsn::INVALID,
+            },
+            PageLogOp::Insert,
+        )
+        .unwrap();
 
         let checkpoint_end_lsn = aries.take_checkpoint(&wal).unwrap();
 
         wal.log_begin(tid(3)).unwrap();
-        wal.log_insert(tid(3), page(3), vec![], vec![3]).unwrap();
+        wal.log_page_operation(
+            tid(3),
+            page(3),
+            &mut TestPage {
+                before: vec![],
+                after: vec![3],
+                page_lsn: Lsn::INVALID,
+            },
+            PageLogOp::Insert,
+        )
+        .unwrap();
 
         let mut reader = WalReader::open(&dir.path().join("wal")).unwrap();
         let result = Analysis::default()
@@ -455,7 +517,17 @@ mod tests {
         let (wal, _aries) = setup(&dir);
 
         wal.log_begin(tid(1)).unwrap();
-        wal.log_insert(tid(1), page(1), vec![], vec![1]).unwrap();
+        wal.log_page_operation(
+            tid(1),
+            page(1),
+            &mut TestPage {
+                before: vec![],
+                after: vec![1],
+                page_lsn: Lsn::INVALID,
+            },
+            PageLogOp::Insert,
+        )
+        .unwrap();
         // no commit — T1 is a loser
 
         let mut reader = WalReader::open(&dir.path().join("wal")).unwrap();

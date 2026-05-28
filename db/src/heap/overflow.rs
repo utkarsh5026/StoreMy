@@ -20,13 +20,36 @@
 //! so it inherits [`TypedPage::to_page_bytes`], [`TypedPage::from_page_bytes`],
 //! and the [`Encode`] / [`Decode`] / [`crate::storage::Page`] trait impls for free.
 
-use std::io::{Read, Write};
+use std::{
+    io::{Read, Write},
+    sync::{
+        Arc,
+        atomic::{AtomicU32, Ordering},
+    },
+};
+
+use thiserror::Error;
 
 use crate::{
+    FileId, TransactionId,
+    buffer_pool::page_store::{PageStore, PageStoreError},
     codec::{CodecError, Decode, Encode},
-    primitives::{Lsn, PageNumber},
+    primitives::{Lsn, PageDescriptor, PageId, PageNumber},
     storage::{PAGE_SIZE, PageKind, StorageError, TypedPage, UNIVERSAL_HEADER_SIZE},
+    wal::WalError,
 };
+
+#[derive(Debug, Error)]
+pub enum OverflowError {
+    #[error("page store: {0}")]
+    Store(#[from] PageStoreError),
+
+    #[error("storage: {0}")]
+    Storage(#[from] StorageError),
+
+    #[error("wal: {0}")]
+    Wal(#[from] WalError),
+}
 
 /// Bytes consumed by the fixed header of an overflow page:
 /// universal header (13) + `next_page` field (4) = 17.
@@ -142,10 +165,203 @@ impl TypedPage<OverflowHeader, OverflowBody> {
     }
 }
 
+pub struct OverflowFile {
+    file_id: FileId,
+    buffer_pool: Arc<PageStore>,
+    num_pages: AtomicU32,
+}
+
+impl OverflowFile {
+    /// Creates a new `OverflowFile` instance.
+    ///
+    /// # Arguments
+    ///
+    /// * `file_id` - The identifier of the overflow file.
+    /// * `buffer_pool` - A shared reference to the buffer pool for page storage.
+    /// * `existing_pages` - The number of overflow pages that already exist in the file.
+    ///
+    /// # Returns
+    ///
+    /// An initialized `OverflowFile` with the provided file ID, buffer pool, and page count.
+    pub fn new(file_id: FileId, buffer_pool: Arc<PageStore>, existing_pages: u32) -> Self {
+        Self {
+            file_id,
+            buffer_pool,
+            num_pages: AtomicU32::new(existing_pages),
+        }
+    }
+
+    /// Reconstructs an overflowed tuple payload by following its page chain.
+    ///
+    /// `overflow_ptr` points at the first overflow page. Each page contributes
+    /// its payload bytes and optionally names the next page in the chain. The
+    /// returned vector is the concatenation of those chunks in logical tuple
+    /// order.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`OverflowError`] if any page cannot be read from the page store
+    /// or decoded as an [`OverflowPage`].
+    pub(in crate::heap) fn read_overflow(
+        &self,
+        txn: TransactionId,
+        overflow_ptr: PageDescriptor,
+    ) -> Result<Vec<u8>, OverflowError> {
+        let mut result = Vec::new();
+        let mut page_no = overflow_ptr.page_no;
+
+        loop {
+            let page_id = PageId::new(self.file_id, page_no);
+            let (chunk, next) = self
+                .buffer_pool
+                .shared_read(
+                    txn,
+                    page_id,
+                    |raw| -> Result<_, OverflowError> {
+                        OverflowPage::from_page_bytes(&raw)
+                            .map(Some)
+                            .map_err(|e| StorageError::ParseError(e.to_string()).into())
+                    },
+                    |page| Ok((page.payload().to_vec(), page.next_page())),
+                )?
+                .expect("overflow page must be parseable; decode never returns None");
+
+            result.extend_from_slice(&chunk);
+            match next {
+                None => break,
+                Some(next_no) => page_no = next_no,
+            }
+        }
+
+        Ok(result)
+    }
+
+    /// Stores `data` across one or more newly allocated overflow pages.
+    ///
+    /// The returned [`PageDescriptor`] points at the first page in the chain,
+    /// which is the pointer stored by the owning tuple slot. Pages are created
+    /// from the final chunk backward so each newly written page already knows
+    /// the page number of its logical successor.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`OverflowError`] if allocating or writing any overflow page
+    /// fails.
+    pub(in crate::heap) fn write_overflow(
+        &self,
+        txn: TransactionId,
+        data: &[u8],
+    ) -> Result<PageDescriptor, OverflowError> {
+        let chunks: Vec<&[u8]> = data.chunks(OVERFLOW_PAYLOAD_SIZE).collect();
+        let file_id = self.file_id;
+        let mut next_page: Option<PageNumber> = None;
+        let mut first_page_no = PageNumber::new(0);
+
+        for chunk in chunks.iter().rev() {
+            let page_no = self.num_pages.fetch_add(1, Ordering::AcqRel);
+            let page_no = PageNumber::new(page_no);
+            let page_id = PageId::new(file_id, page_no);
+
+            self.buffer_pool.exclusive_create(txn, page_id, || {
+                let payload = chunk.to_vec();
+                OverflowPage::overflow_new(next_page, payload).map_err(OverflowError::from)
+            })?;
+
+            next_page = Some(page_no);
+            first_page_no = page_no;
+        }
+
+        Ok(PageDescriptor::new(file_id, first_page_no))
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
+    use tempfile::tempdir;
+
     use super::*;
-    use crate::storage::page_crc_valid;
+    use crate::{FileId, storage::page_crc_valid, wal::writer::Wal};
+
+    fn make_overflow_file(num_pages: u32) -> (OverflowFile, Arc<Wal>, tempfile::TempDir) {
+        crate::test_utils::init_tracing();
+        let dir = tempdir().unwrap();
+        let wal = Arc::new(Wal::new(&dir.path().join("wal.log"), 0).unwrap());
+        let store = Arc::new(crate::buffer_pool::page_store::PageStore::new(
+            64,
+            Arc::clone(&wal),
+        ));
+
+        let file_id = FileId::new(1);
+        let path = dir.path().join("overflow.dat");
+        let f = std::fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .open(&path)
+            .unwrap();
+        f.set_len(PAGE_SIZE as u64 * u64::from(num_pages.max(1)))
+            .unwrap();
+        store.register_file(file_id, &path).unwrap();
+
+        let of = OverflowFile::new(file_id, store, 0);
+        (of, wal, dir)
+    }
+
+    fn txn(n: u64) -> TransactionId {
+        TransactionId::new(n)
+    }
+
+    #[test]
+    fn write_and_read_single_chunk() {
+        let (of, wal, _dir) = make_overflow_file(1);
+        let t = txn(1);
+        wal.log_begin(t).unwrap();
+        let data = b"hello overflow".to_vec();
+        let ptr = of.write_overflow(t, &data).unwrap();
+        let got = of.read_overflow(t, ptr).unwrap();
+        assert_eq!(got, data);
+    }
+
+    #[test]
+    fn write_and_read_exact_boundary() {
+        // Exactly OVERFLOW_PAYLOAD_SIZE bytes must fit in one page with no spill.
+        let (of, wal, _dir) = make_overflow_file(1);
+        let t = txn(1);
+        wal.log_begin(t).unwrap();
+        let data = vec![0x5Au8; OVERFLOW_PAYLOAD_SIZE];
+        let ptr = of.write_overflow(t, &data).unwrap();
+        let got = of.read_overflow(t, ptr).unwrap();
+        assert_eq!(got, data);
+    }
+
+    #[test]
+    fn write_and_read_one_byte_over_boundary() {
+        // One extra byte forces a second overflow page.
+        let (of, wal, _dir) = make_overflow_file(2);
+        let t = txn(1);
+        wal.log_begin(t).unwrap();
+        let data = vec![0xBBu8; OVERFLOW_PAYLOAD_SIZE + 1];
+        let ptr = of.write_overflow(t, &data).unwrap();
+        let got = of.read_overflow(t, ptr).unwrap();
+        assert_eq!(got, data);
+    }
+
+    #[test]
+    fn write_and_read_multi_chunk_order_preserved() {
+        // Three full pages worth of data; verify the reconstruction order is correct.
+        let (of, wal, _dir) = make_overflow_file(3);
+        let t = txn(1);
+        wal.log_begin(t).unwrap();
+        let mut data = Vec::with_capacity(OVERFLOW_PAYLOAD_SIZE * 3);
+        for i in 0..3u8 {
+            data.extend(vec![i; OVERFLOW_PAYLOAD_SIZE]);
+        }
+        let ptr = of.write_overflow(t, &data).unwrap();
+        let got = of.read_overflow(t, ptr).unwrap();
+        assert_eq!(got, data);
+    }
 
     fn make_page(next: Option<u32>, data: &[u8]) -> OverflowPage {
         OverflowPage::overflow_new(next.map(PageNumber::new), data.to_vec()).unwrap()

@@ -281,7 +281,7 @@ impl<'a> Undo<'a> {
 
 #[cfg(test)]
 mod tests {
-    use std::{collections::HashMap, sync::Arc};
+    use std::{collections::HashMap, fs::OpenOptions, os::unix::fs::FileExt, sync::Arc};
 
     use fallible_iterator::FallibleIterator;
     use tempfile::{TempDir, tempdir};
@@ -290,10 +290,13 @@ mod tests {
     use crate::{
         PAGE_SIZE,
         buffer_pool::page_store::PageStore,
+        codec::Encode,
         primitives::{FileId, Lsn, PageId, PageNumber, TransactionId},
         recovery::{AnalysisResult, AttEntry},
+        storage::Page,
         wal::{
-            log::{LogRecordType, TxnStatus},
+            PageLogOp,
+            log::{LogRecord, LogRecordBody, LogRecordType, TxnStatus},
             reader::WalReader,
             writer::Wal,
         },
@@ -358,6 +361,38 @@ mod tests {
         }
     }
 
+    struct TestPage {
+        before: Vec<u8>,
+        after: Vec<u8>,
+        page_lsn: Lsn,
+    }
+
+    impl Page for TestPage {
+        fn page_data(&self) -> [u8; PAGE_SIZE] {
+            let mut page = [0; PAGE_SIZE];
+            page[..self.after.len()].copy_from_slice(&self.after);
+            page
+        }
+
+        fn before_image(&self) -> Option<[u8; PAGE_SIZE]> {
+            let mut page = [0; PAGE_SIZE];
+            page[..self.before.len()].copy_from_slice(&self.before);
+            Some(page)
+        }
+
+        fn set_before_image(&mut self) {
+            self.before = self.after.clone();
+        }
+
+        fn page_lsn(&self) -> Lsn {
+            self.page_lsn
+        }
+
+        fn set_page_lsn(&mut self, lsn: Lsn) {
+            self.page_lsn = lsn;
+        }
+    }
+
     // ── happy path ────────────────────────────────────────────────────────────
 
     /// An empty ATT means no losers — Undo must return Ok without doing anything.
@@ -385,7 +420,16 @@ mod tests {
 
         let _begin = wal.log_begin(t1).unwrap();
         let insert = wal
-            .log_insert(t1, page_id, before.clone(), after.clone())
+            .log_page_operation(
+                t1,
+                page_id,
+                &mut TestPage {
+                    before: before.clone(),
+                    after: after.clone(),
+                    page_lsn: Lsn::INVALID,
+                },
+                PageLogOp::Insert,
+            )
             .unwrap();
         seed_page(&store, page_id, &after, insert);
 
@@ -420,7 +464,16 @@ mod tests {
 
         let _begin = wal.log_begin(t1).unwrap();
         let update = wal
-            .log_update(t1, page_id, before.clone(), after.clone())
+            .log_page_operation(
+                t1,
+                page_id,
+                &mut TestPage {
+                    before: before.clone(),
+                    after: after.clone(),
+                    page_lsn: Lsn::INVALID,
+                },
+                PageLogOp::Update,
+            )
             .unwrap();
         seed_page(&store, page_id, &after, update);
 
@@ -455,7 +508,16 @@ mod tests {
 
         let _begin = wal.log_begin(t1).unwrap();
         let delete = wal
-            .log_delete(t1, page_id, before.clone(), after.clone())
+            .log_page_operation(
+                t1,
+                page_id,
+                &mut TestPage {
+                    before: before.clone(),
+                    after: after.clone(),
+                    page_lsn: Lsn::INVALID,
+                },
+                PageLogOp::Delete,
+            )
             .unwrap();
         seed_page(&store, page_id, &after, delete);
 
@@ -494,7 +556,16 @@ mod tests {
 
         let _begin = wal.log_begin(t1).unwrap();
         let insert = wal
-            .log_insert(t1, page_id, before.to_vec(), after.to_vec())
+            .log_page_operation(
+                t1,
+                page_id,
+                &mut TestPage {
+                    before: before.to_vec(),
+                    after: after.to_vec(),
+                    page_lsn: Lsn::INVALID,
+                },
+                PageLogOp::Insert,
+            )
             .unwrap();
         seed_page(&store, page_id, &after, insert);
 
@@ -529,13 +600,40 @@ mod tests {
 
         let _begin = wal.log_begin(t1).unwrap();
         let _op1 = wal
-            .log_insert(t1, p0, page_image(0xA0), page_image(0xA1))
+            .log_page_operation(
+                t1,
+                p0,
+                &mut TestPage {
+                    before: page_image(0xA0),
+                    after: page_image(0xA1),
+                    page_lsn: Lsn::INVALID,
+                },
+                PageLogOp::Insert,
+            )
             .unwrap();
         let op2 = wal
-            .log_update(t1, p1, page_image(0xB0), page_image(0xB1))
+            .log_page_operation(
+                t1,
+                p1,
+                &mut TestPage {
+                    before: page_image(0xB0),
+                    after: page_image(0xB1),
+                    page_lsn: Lsn::INVALID,
+                },
+                PageLogOp::Update,
+            )
             .unwrap();
         let op3 = wal
-            .log_update(t1, p0, page_image(0xA1), page_image(0xA2))
+            .log_page_operation(
+                t1,
+                p0,
+                &mut TestPage {
+                    before: page_image(0xA1),
+                    after: page_image(0xA2),
+                    page_lsn: Lsn::INVALID,
+                },
+                PageLogOp::Update,
+            )
             .unwrap();
 
         seed_page(&store, p0, &page_image(0xA2), op3);
@@ -577,11 +675,29 @@ mod tests {
 
         let _b1 = wal.log_begin(t1).unwrap();
         let i1 = wal
-            .log_insert(t1, p0, page_image(0xAA), page_image(0xBB))
+            .log_page_operation(
+                t1,
+                p0,
+                &mut TestPage {
+                    before: page_image(0xAA),
+                    after: page_image(0xBB),
+                    page_lsn: Lsn::INVALID,
+                },
+                PageLogOp::Insert,
+            )
             .unwrap();
         let _b2 = wal.log_begin(t2).unwrap();
         let i2 = wal
-            .log_insert(t2, p1, page_image(0xCC), page_image(0xDD))
+            .log_page_operation(
+                t2,
+                p1,
+                &mut TestPage {
+                    before: page_image(0xCC),
+                    after: page_image(0xDD),
+                    page_lsn: Lsn::INVALID,
+                },
+                PageLogOp::Insert,
+            )
             .unwrap();
 
         seed_page(&store, p0, &page_image(0xBB), i1);
@@ -623,11 +739,29 @@ mod tests {
 
         let _b1 = wal.log_begin(t1).unwrap();
         let i1 = wal
-            .log_insert(t1, page_id, page_image(0x10), page_image(0x20))
+            .log_page_operation(
+                t1,
+                page_id,
+                &mut TestPage {
+                    before: page_image(0x10),
+                    after: page_image(0x20),
+                    page_lsn: Lsn::INVALID,
+                },
+                PageLogOp::Insert,
+            )
             .unwrap();
         let _b2 = wal.log_begin(t2).unwrap();
         let i2 = wal
-            .log_insert(t2, page_id, page_image(0x20), page_image(0x30))
+            .log_page_operation(
+                t2,
+                page_id,
+                &mut TestPage {
+                    before: page_image(0x20),
+                    after: page_image(0x30),
+                    page_lsn: Lsn::INVALID,
+                },
+                PageLogOp::Insert,
+            )
             .unwrap();
 
         seed_page(&store, page_id, &page_image(0x30), i2);
@@ -671,7 +805,16 @@ mod tests {
 
         let _begin = wal.log_begin(t1).unwrap();
         let insert = wal
-            .log_insert(t1, page_id, before.clone(), after.clone())
+            .log_page_operation(
+                t1,
+                page_id,
+                &mut TestPage {
+                    before: before.clone(),
+                    after: after.clone(),
+                    page_lsn: Lsn::INVALID,
+                },
+                PageLogOp::Insert,
+            )
             .unwrap();
         seed_page(&store, page_id, &after, insert);
 
@@ -722,7 +865,16 @@ mod tests {
 
         let begin_lsn = wal.log_begin(t1).unwrap();
         let insert_lsn = wal
-            .log_insert(t1, page_id, before.clone(), after.clone())
+            .log_page_operation(
+                t1,
+                page_id,
+                &mut TestPage {
+                    before: before.clone(),
+                    after: after.clone(),
+                    page_lsn: Lsn::INVALID,
+                },
+                PageLogOp::Insert,
+            )
             .unwrap();
         let clr_lsn = wal
             .log_clr(t1, insert_lsn, page_id, before.clone(), begin_lsn)
@@ -765,7 +917,16 @@ mod tests {
 
         let _begin = wal.log_begin(t1).unwrap();
         let insert = wal
-            .log_insert(t1, page_id, before.clone(), after.clone())
+            .log_page_operation(
+                t1,
+                page_id,
+                &mut TestPage {
+                    before: before.clone(),
+                    after: after.clone(),
+                    page_lsn: Lsn::INVALID,
+                },
+                PageLogOp::Insert,
+            )
             .unwrap();
         let clr = wal
             .log_clr(t1, insert, page_id, before.clone(), Lsn::INVALID)
@@ -821,10 +982,21 @@ mod tests {
         let bad_before = vec![0xAA_u8; 16];
         let after = page_image(0xBB);
 
-        let _begin = wal.log_begin(t1).unwrap();
-        let insert = wal
-            .log_insert(t1, page_id, bad_before.clone(), after.clone())
+        let begin = wal.log_begin(t1).unwrap();
+        let insert = wal.current_lsn();
+        let corrupt_record = LogRecord::new(insert, begin, t1, LogRecordBody::Insert {
+            page_id,
+            before: bad_before.clone(),
+            after: after.clone(),
+        })
+        .unwrap();
+        let mut encoded = Vec::new();
+        corrupt_record.encode(&mut encoded).unwrap();
+        let file = OpenOptions::new()
+            .write(true)
+            .open(dir.path().join("wal"))
             .unwrap();
+        file.write_all_at(&encoded, u64::from(insert)).unwrap();
 
         let mut reader = WalReader::open(&dir.path().join("wal")).unwrap();
         let err = Undo::new(
@@ -891,7 +1063,16 @@ mod tests {
 
         let _begin = wal.log_begin(t1).unwrap();
         let insert = wal
-            .log_insert(t1, unknown, before.clone(), after.clone())
+            .log_page_operation(
+                t1,
+                unknown,
+                &mut TestPage {
+                    before: before.clone(),
+                    after: after.clone(),
+                    page_lsn: Lsn::INVALID,
+                },
+                PageLogOp::Insert,
+            )
             .unwrap();
 
         let mut reader = WalReader::open(&dir.path().join("wal")).unwrap();

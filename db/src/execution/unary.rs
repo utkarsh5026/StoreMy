@@ -935,12 +935,14 @@ mod tests {
 
         store.register_file(file_id, &path).unwrap();
 
+        let overflow_file =
+            HeapFile::make_overflow_file(file_id, Arc::clone(&store), existing_pages);
         let heap = HeapFile::new(
             file_id,
             Arc::new(scan_schema()),
             Arc::clone(&store),
             existing_pages,
-            Arc::clone(&wal),
+            overflow_file,
         );
         (heap, wal, dir)
     }

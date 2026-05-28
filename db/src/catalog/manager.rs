@@ -26,11 +26,10 @@ use crate::{
         index::LiveIndex,
         systable::{CatalogRow, SystemTable},
     },
-    heap::file::HeapFile,
+    heap::{file::HeapFile, overflow::OverflowFile},
     primitives::{IndexId, NonEmptyString},
     transaction::ActiveTransaction,
     tuple::{Tuple, TupleSchema},
-    wal::writer::Wal,
 };
 
 /// Holds the three open system-table heap files used by the catalog.
@@ -79,6 +78,12 @@ impl SystemHeaps {
     }
 }
 
+/// Reserved [`FileId`] for the shared overflow segment.
+///
+/// System tables use IDs 1–8; user tables start at 100. This value sits in
+/// the gap and is never handed out by `next_file_id`.
+pub(super) const OVERFLOW_FILE_ID: FileId = FileId(9);
+
 /// The system catalog: the single source of truth for table metadata and open heap files.
 ///
 /// `Catalog` is `Send + Sync` — all mutable state is guarded by [`RwLock`] or
@@ -86,11 +91,16 @@ impl SystemHeaps {
 /// [`crate::transaction::Transaction`] into each write operation so that changes are durable and
 /// recoverable via the WAL.
 pub struct Catalog {
-    pub(super) wal: Arc<Wal>,
     pub(super) buffer_pool: Arc<PageStore>,
     data_dir: PathBuf,
     next_file_id: AtomicU64,
     next_index_id: AtomicI64,
+    /// The single shared overflow segment for all tables.
+    ///
+    /// Every [`HeapFile`] holds an `Arc` clone of this. Overflow pages from
+    /// all tables accumulate in one on-disk file (`overflow.dat`), so there is
+    /// no per-heap overflow counter that can collide with heap page numbers.
+    pub(super) overflow: Arc<OverflowFile>,
     /// Cache of user-table metadata, keyed by table name.
     pub(super) user_tables: RwLock<HashMap<NonEmptyString, TableInfo>>,
     pub(super) open_heaps: RwLock<HashMap<FileId, Arc<HeapFile>>>,
@@ -126,12 +136,12 @@ impl Catalog {
     /// Returns [`CatalogError::Io`] if any heap file cannot be created or read.
     /// Returns [`CatalogError::Corruption`] or [`CatalogError::InvalidCatalogRow`]
     /// if an existing system table contains malformed tuples.
-    pub fn initialize(
-        buffer_pool: &Arc<PageStore>,
-        wal: &Arc<Wal>,
-        data_dir: &Path,
-    ) -> Result<Self, CatalogError> {
+    pub fn initialize(buffer_pool: &Arc<PageStore>, data_dir: &Path) -> Result<Self, CatalogError> {
         tracing::debug!(data_dir = %data_dir.display(), "initializing catalog");
+
+        // Open (or create) the single shared overflow segment before building
+        // any HeapFile so every heap can receive an Arc clone of it.
+        let overflow = Self::open_overflow_file(buffer_pool, data_dir)?;
 
         let mut tables = HashMap::new();
         let mut system = SystemHeaps::default();
@@ -141,8 +151,13 @@ impl Catalog {
             let file_path = data_dir.join(table.file_name());
             let file_id = table.file_id();
 
-            let file =
-                Self::create_heap_file(file_id, &file_path, schema.clone(), buffer_pool, wal)?;
+            let file = Self::create_heap_file(
+                file_id,
+                &file_path,
+                schema.clone(),
+                buffer_pool,
+                overflow.clone(),
+            )?;
 
             Self::verify_system_heap(*table, &file)?;
 
@@ -161,11 +176,11 @@ impl Catalog {
         tracing::debug!("all system tables verified");
 
         let catalog = Self {
-            wal: wal.clone(),
             buffer_pool: buffer_pool.clone(),
             data_dir: data_dir.to_path_buf(),
             next_file_id: AtomicU64::new(100),
             next_index_id: AtomicI64::new(1),
+            overflow,
             user_tables: RwLock::new(tables),
             open_heaps: RwLock::new(HashMap::new()),
             open_indexes: RwLock::new(HashMap::new()),
@@ -175,6 +190,50 @@ impl Catalog {
         catalog.replay_user_objects()?;
         tracing::debug!("catalog ready");
         Ok(catalog)
+    }
+
+    /// Opens (or creates) the shared overflow segment and registers it with the buffer pool.
+    ///
+    /// The overflow file lives at `<data_dir>/overflow.dat` and is identified by
+    /// [`OVERFLOW_FILE_ID`]. Its page count is derived from the file size on
+    /// disk so the atomic counter resumes correctly after a restart.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CatalogError::Io`] if the file cannot be created or its
+    /// metadata cannot be read. Returns [`CatalogError::FileTooLarge`] if the
+    /// file size overflows `u32` pages.
+    fn open_overflow_file(
+        buffer_pool: &Arc<PageStore>,
+        data_dir: &Path,
+    ) -> Result<Arc<OverflowFile>, CatalogError> {
+        let path = data_dir.join("overflow.dat");
+        let fresh = !path.exists();
+        if fresh {
+            File::create(&path)?;
+        }
+
+        buffer_pool
+            .register_file(OVERFLOW_FILE_ID, &path)
+            .map_err(|_| {
+                CatalogError::Io(std::io::Error::other("failed to register overflow file"))
+            })?;
+
+        let pages = if fresh {
+            0u32
+        } else {
+            let bytes = std::fs::metadata(&path)?.len();
+            u32::try_from(bytes.div_ceil(PAGE_SIZE as u64))
+                .map_err(|_| CatalogError::FileTooLarge)?
+        };
+
+        tracing::debug!(path = %path.display(), pages, "overflow file opened");
+
+        Ok(Arc::new(OverflowFile::new(
+            OVERFLOW_FILE_ID,
+            buffer_pool.clone(),
+            pages,
+        )))
     }
 
     /// Creates a heap file at `file_path` and registers it with the buffer pool.
@@ -196,7 +255,7 @@ impl Catalog {
         file_path: &Path,
         schema: Arc<TupleSchema>,
         buffer_pool: &Arc<PageStore>,
-        wal: &Arc<Wal>,
+        overflow: Arc<OverflowFile>,
     ) -> Result<HeapFile, CatalogError> {
         let fresh = !file_path.exists();
         if fresh {
@@ -232,7 +291,7 @@ impl Catalog {
             schema,
             buffer_pool.clone(),
             pages,
-            wal.clone(),
+            overflow,
         ))
     }
 
@@ -284,7 +343,7 @@ impl Catalog {
             schema,
             self.buffer_pool.clone(),
             pages,
-            self.wal.clone(),
+            self.overflow.clone(),
         ))
     }
 
@@ -517,11 +576,6 @@ impl Catalog {
         &self.buffer_pool
     }
 
-    /// Returns a reference to the shared write-ahead log.
-    pub(super) fn wal(&self) -> &Arc<Wal> {
-        &self.wal
-    }
-
     /// Atomically allocates and returns the next unique [`FileId`].
     ///
     /// Uses relaxed ordering — callers must not assume any happens-before
@@ -598,20 +652,24 @@ mod tests {
         (wal, bp)
     }
 
+    fn make_overflow(bp: &Arc<PageStore>, dir: &Path) -> Arc<OverflowFile> {
+        Catalog::open_overflow_file(bp, dir).expect("overflow file")
+    }
+
     // Fresh directory with no prior state must succeed.
     #[test]
     fn test_initialize_fresh_dir_succeeds() {
         let dir = tempdir().unwrap();
-        let (wal, bp) = make_infra(dir.path());
-        assert!(Catalog::initialize(&bp, &wal, dir.path()).is_ok());
+        let (_, bp) = make_infra(dir.path());
+        assert!(Catalog::initialize(&bp, dir.path()).is_ok());
     }
 
     // After initialization all three catalog data files must exist on disk.
     #[test]
     fn test_initialize_creates_all_catalog_files() {
         let dir = tempdir().unwrap();
-        let (wal, bp) = make_infra(dir.path());
-        Catalog::initialize(&bp, &wal, dir.path()).unwrap();
+        let (_wal, bp) = make_infra(dir.path());
+        Catalog::initialize(&bp, dir.path()).unwrap();
 
         for table in SystemTable::ALL {
             let path = dir.path().join(table.file_name());
@@ -623,8 +681,8 @@ mod tests {
     #[test]
     fn test_initialize_data_dir_matches_input() {
         let dir = tempdir().unwrap();
-        let (wal, bp) = make_infra(dir.path());
-        let catalog = Catalog::initialize(&bp, &wal, dir.path()).unwrap();
+        let (_, bp) = make_infra(dir.path());
+        let catalog = Catalog::initialize(&bp, dir.path()).unwrap();
         assert_eq!(catalog.data_dir(), dir.path());
     }
 
@@ -635,14 +693,14 @@ mod tests {
     fn test_initialize_reopen_existing_dir_succeeds() {
         let dir = tempdir().unwrap();
 
-        let (wal1, bp1) = make_infra(dir.path());
-        Catalog::initialize(&bp1, &wal1, dir.path()).unwrap();
+        let (_, bp1) = make_infra(dir.path());
+        Catalog::initialize(&bp1, dir.path()).unwrap();
 
         // Second pass: fresh WAL file and PageStore, same data directory.
         let wal2 = Arc::new(Wal::new(&dir.path().join("wal2.log"), 0).unwrap());
         let bp2 = Arc::new(PageStore::new(64, wal2.clone()));
         assert!(
-            Catalog::initialize(&bp2, &wal2, dir.path()).is_ok(),
+            Catalog::initialize(&bp2, dir.path()).is_ok(),
             "re-opening an existing catalog must succeed"
         );
     }
@@ -651,12 +709,12 @@ mod tests {
     #[test]
     fn test_initialize_reopen_data_dir_matches() {
         let dir = tempdir().unwrap();
-        let (wal1, bp1) = make_infra(dir.path());
-        Catalog::initialize(&bp1, &wal1, dir.path()).unwrap();
+        let (_, bp1) = make_infra(dir.path());
+        Catalog::initialize(&bp1, dir.path()).unwrap();
 
         let wal2 = Arc::new(Wal::new(&dir.path().join("wal2.log"), 0).unwrap());
         let bp2 = Arc::new(PageStore::new(64, wal2.clone()));
-        let catalog = Catalog::initialize(&bp2, &wal2, dir.path()).unwrap();
+        let catalog = Catalog::initialize(&bp2, dir.path()).unwrap();
         assert_eq!(catalog.data_dir(), dir.path());
     }
 
@@ -665,9 +723,9 @@ mod tests {
     fn test_initialize_nonexistent_dir_returns_io_error() {
         let dir = tempdir().unwrap();
         let ghost = dir.path().join("no_such_subdir");
-        let (wal, bp) = make_infra(dir.path());
+        let (_, bp) = make_infra(dir.path());
 
-        match Catalog::initialize(&bp, &wal, &ghost) {
+        match Catalog::initialize(&bp, &ghost) {
             Ok(_) => panic!("expected an error for a nonexistent directory, got Ok"),
             Err(CatalogError::Io(_)) => {}
             Err(e) => panic!("expected CatalogError::Io, got: {e}"),
@@ -678,12 +736,13 @@ mod tests {
     #[test]
     fn test_create_heap_file_creates_file() {
         let dir = tempdir().unwrap();
-        let (wal, bp) = make_infra(dir.path());
+        let (_, bp) = make_infra(dir.path());
+        let overflow = make_overflow(&bp, dir.path());
         let path = dir.path().join("test_table.dat");
         let schema = SystemTable::Tables.schema();
 
         assert!(!path.exists());
-        let heap = Catalog::create_heap_file(FileId(100), &path, Arc::new(schema), &bp, &wal);
+        let heap = Catalog::create_heap_file(FileId(100), &path, Arc::new(schema), &bp, overflow);
         assert!(heap.is_ok());
         assert!(path.exists());
     }
@@ -692,13 +751,14 @@ mod tests {
     #[test]
     fn test_create_heap_file_existing_file_ok() {
         let dir = tempdir().unwrap();
-        let (wal, bp) = make_infra(dir.path());
+        let (_wal, bp) = make_infra(dir.path());
+        let overflow = make_overflow(&bp, dir.path());
         let path = dir.path().join("test_table.dat");
         let schema = SystemTable::Tables.schema();
 
         File::create(&path).unwrap();
         assert!(path.exists());
-        let heap = Catalog::create_heap_file(FileId(100), &path, Arc::new(schema), &bp, &wal);
+        let heap = Catalog::create_heap_file(FileId(100), &path, Arc::new(schema), &bp, overflow);
         assert!(heap.is_ok());
     }
 
@@ -706,11 +766,12 @@ mod tests {
     #[test]
     fn test_create_heap_file_bad_parent_returns_io_error() {
         let dir = tempdir().unwrap();
-        let (wal, bp) = make_infra(dir.path());
+        let (_, bp) = make_infra(dir.path());
+        let overflow = make_overflow(&bp, dir.path());
         let path = dir.path().join("no_such_dir").join("table.dat");
         let schema = SystemTable::Tables.schema();
 
-        let result = Catalog::create_heap_file(FileId(100), &path, Arc::new(schema), &bp, &wal);
+        let result = Catalog::create_heap_file(FileId(100), &path, Arc::new(schema), &bp, overflow);
         assert!(result.is_err(), "expected Io error for bad parent dir");
         match result.err().unwrap() {
             CatalogError::Io(_) => {}
@@ -722,8 +783,8 @@ mod tests {
     #[test]
     fn test_open_existing_heap_missing_file_yields_corruption() {
         let dir = tempdir().unwrap();
-        let (wal, bp) = make_infra(dir.path());
-        let catalog = Catalog::initialize(&bp, &wal, dir.path()).unwrap();
+        let (_, bp) = make_infra(dir.path());
+        let catalog = Catalog::initialize(&bp, dir.path()).unwrap();
 
         let ghost = dir.path().join("ghost.dat");
         let schema = SystemTable::Tables.schema();
@@ -741,8 +802,8 @@ mod tests {
     #[test]
     fn test_open_existing_heap_valid_file_succeeds() {
         let dir = tempdir().unwrap();
-        let (wal, bp) = make_infra(dir.path());
-        let catalog = Catalog::initialize(&bp, &wal, dir.path()).unwrap();
+        let (_, bp) = make_infra(dir.path());
+        let catalog = Catalog::initialize(&bp, dir.path()).unwrap();
 
         let path = dir.path().join("users.dat");
         File::create(&path).unwrap();
@@ -754,7 +815,7 @@ mod tests {
 
     fn make_catalog_and_txn_mgr(dir: &Path) -> (Catalog, Arc<TransactionManager>) {
         let (wal, bp) = make_infra(dir);
-        let catalog = Catalog::initialize(&bp, &wal, dir).unwrap();
+        let catalog = Catalog::initialize(&bp, dir).unwrap();
         let txn_mgr = Arc::new(TransactionManager::new(wal, bp, dir.join("wal.log")));
         (catalog, txn_mgr)
     }

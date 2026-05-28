@@ -55,10 +55,7 @@ impl Engine<'_> {
         let file_id = scope.file_id;
 
         let predicate = where_clause
-            .map(|expr| {
-                ResolvedExpr::resolve(expr, &scope)
-                    .map_err(|e| EngineError::TypeError(e.to_string()))
-            })
+            .map(|expr| ResolvedExpr::resolve(expr, &scope))
             .transpose()?;
 
         let deleted = Self::delete_rows_and_indexes(catalog, txn, file_id, predicate.as_ref())?;
@@ -147,7 +144,7 @@ mod tests {
     fn make_infra(dir: &Path) -> (Catalog, Arc<TransactionManager>) {
         let wal = Arc::new(Wal::new(&dir.join("wal.log"), 0).unwrap());
         let bp = Arc::new(PageStore::new(64, wal.clone()));
-        let catalog = Catalog::initialize(&bp, &wal, dir).unwrap();
+        let catalog = Catalog::initialize(&bp, dir).unwrap();
         let txn_mgr = Arc::new(TransactionManager::new(wal, bp, dir.join("wal.log")));
         (catalog, txn_mgr)
     }

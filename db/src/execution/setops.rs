@@ -419,12 +419,13 @@ mod tests {
         drop(file);
         store.register_file(file_id, &path).unwrap();
 
+        let overflow_file = HeapFile::make_overflow_file(file_id, Arc::clone(&store), 0);
         let heap = HeapFile::new(
             file_id,
             Arc::new(schema_ab()),
             Arc::clone(&store),
             0,
-            Arc::clone(&wal),
+            overflow_file,
         );
 
         let txn = TransactionId::new(id);
