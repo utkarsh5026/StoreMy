@@ -13,6 +13,7 @@ use crate::{
         manager::Catalog,
         systable::{ColumnRow, PrimaryKeyColumnRow, SystemTable},
     },
+    heap::file::HeapFile,
     parser::statements::ColumnDef,
     primitives::{ColumnId, NonEmptyString},
     transaction::ActiveTransaction,
@@ -328,12 +329,12 @@ impl Catalog {
         // in-place because HeapFile.schema is not behind a lock.
         let file_id = table.file_id;
         if let Some(old_heap) = self.get_heap(file_id) {
-            let new_heap = crate::heap::file::HeapFile::new(
+            let new_heap = HeapFile::new(
                 file_id,
                 Arc::clone(&table.schema),
                 Arc::clone(&self.buffer_pool),
                 old_heap.page_count(),
-                Arc::clone(&self.wal),
+                self.overflow.clone(),
             );
             self.register_heap(file_id, new_heap);
         }
@@ -370,7 +371,7 @@ mod tests {
 
     fn make_catalog_and_txn(dir: &Path) -> (Catalog, Arc<TransactionManager>) {
         let (wal, bp) = make_infra(dir);
-        let catalog = Catalog::initialize(&bp, &wal, dir).expect("catalog init failed");
+        let catalog = Catalog::initialize(&bp, dir).expect("catalog init failed");
         let txn_mgr = Arc::new(TransactionManager::new(wal, bp, dir.join("wal.log")));
         (catalog, txn_mgr)
     }

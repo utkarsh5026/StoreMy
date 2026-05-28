@@ -454,7 +454,7 @@ mod tests {
     fn make_setup(dir: &Path) -> (Catalog, Arc<TransactionManager>) {
         let wal = Arc::new(Wal::new(&dir.join("wal.log"), 0).expect("WAL creation failed"));
         let bp = Arc::new(PageStore::new(64, wal.clone()));
-        let catalog = Catalog::initialize(&bp, &wal, dir).expect("catalog init failed");
+        let catalog = Catalog::initialize(&bp, dir).expect("catalog init failed");
         let txn_mgr = Arc::new(TransactionManager::new(wal, bp, dir.join("wal.log")));
         (catalog, txn_mgr)
     }

@@ -929,8 +929,8 @@ mod tests {
     #[test]
     fn empty_catalog_has_no_indexes() {
         let dir = tempdir().unwrap();
-        let (wal, bp) = make_infra(dir.path());
-        let catalog = Catalog::initialize(&bp, &wal, dir.path()).unwrap();
+        let (_, bp) = make_infra(dir.path());
+        let catalog = Catalog::initialize(&bp, dir.path()).unwrap();
         assert!(catalog.indexes_for(FileId::new(42)).is_empty());
         assert!(catalog.get_index_by_name("missing").is_none());
     }
@@ -939,7 +939,7 @@ mod tests {
     fn register_index_then_lookup_by_name_and_by_table() {
         let dir = tempdir().unwrap();
         let (wal, bp) = make_infra(dir.path());
-        let catalog = Catalog::initialize(&bp, &wal, dir.path()).unwrap();
+        let catalog = Catalog::initialize(&bp, dir.path()).unwrap();
 
         let table_file_id = FileId::new(7);
         let hash = fresh_hash(&catalog, &bp, &wal, dir.path(), 4, vec![Type::Int32]);
@@ -965,7 +965,7 @@ mod tests {
     fn register_index_duplicate_name_rejected() {
         let dir = tempdir().unwrap();
         let (wal, bp) = make_infra(dir.path());
-        let catalog = Catalog::initialize(&bp, &wal, dir.path()).unwrap();
+        let catalog = Catalog::initialize(&bp, dir.path()).unwrap();
         let table_file_id = FileId::new(7);
 
         let h1 = fresh_hash(&catalog, &bp, &wal, dir.path(), 4, vec![Type::Int32]);
@@ -995,7 +995,7 @@ mod tests {
     fn unregister_index_removes_from_both_views() {
         let dir = tempdir().unwrap();
         let (wal, bp) = make_infra(dir.path());
-        let catalog = Catalog::initialize(&bp, &wal, dir.path()).unwrap();
+        let catalog = Catalog::initialize(&bp, dir.path()).unwrap();
         let table_file_id = FileId::new(7);
 
         let hash = fresh_hash(&catalog, &bp, &wal, dir.path(), 4, vec![Type::Int32]);
@@ -1014,8 +1014,8 @@ mod tests {
     #[test]
     fn unregister_index_missing_returns_none() {
         let dir = tempdir().unwrap();
-        let (wal, bp) = make_infra(dir.path());
-        let catalog = Catalog::initialize(&bp, &wal, dir.path()).unwrap();
+        let (_, bp) = make_infra(dir.path());
+        let catalog = Catalog::initialize(&bp, dir.path()).unwrap();
         assert!(catalog.unregister_index("never-registered").is_none());
     }
 
@@ -1023,7 +1023,7 @@ mod tests {
     fn indexes_for_groups_multiple_indexes_on_same_table() {
         let dir = tempdir().unwrap();
         let (wal, bp) = make_infra(dir.path());
-        let catalog = Catalog::initialize(&bp, &wal, dir.path()).unwrap();
+        let catalog = Catalog::initialize(&bp, dir.path()).unwrap();
         let table_file_id = FileId::new(7);
 
         let h1 = fresh_hash(&catalog, &bp, &wal, dir.path(), 4, vec![Type::Int32]);
@@ -1049,7 +1049,7 @@ mod tests {
     fn indexes_for_isolates_different_tables() {
         let dir = tempdir().unwrap();
         let (wal, bp) = make_infra(dir.path());
-        let catalog = Catalog::initialize(&bp, &wal, dir.path()).unwrap();
+        let catalog = Catalog::initialize(&bp, dir.path()).unwrap();
         let table_a = FileId::new(7);
         let table_b = FileId::new(8);
 
@@ -1075,7 +1075,7 @@ mod tests {
     fn registered_index_actually_works_end_to_end() {
         let dir = tempdir().unwrap();
         let (wal, bp) = make_infra(dir.path());
-        let catalog = Catalog::initialize(&bp, &wal, dir.path()).unwrap();
+        let catalog = Catalog::initialize(&bp, dir.path()).unwrap();
         let table_file_id = FileId::new(7);
 
         let hash = fresh_hash(&catalog, &bp, &wal, dir.path(), 4, vec![Type::Int32]);
@@ -1106,7 +1106,7 @@ mod tests {
 
     fn make_full_infra(dir: &Path) -> (Catalog, Arc<TransactionManager>, Arc<PageStore>, Arc<Wal>) {
         let (wal, bp) = make_infra(dir);
-        let catalog = Catalog::initialize(&bp, &wal, dir).expect("catalog init failed");
+        let catalog = Catalog::initialize(&bp, dir).expect("catalog init failed");
         let txn_mgr = Arc::new(TransactionManager::new(
             Arc::clone(&wal),
             Arc::clone(&bp),
