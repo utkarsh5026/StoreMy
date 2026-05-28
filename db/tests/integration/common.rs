@@ -39,8 +39,7 @@ impl TestDb {
         let dir = tempfile::tempdir().expect("create tempdir");
         let wal = Arc::new(Wal::new(&dir.path().join("wal.log"), 0).expect("create wal"));
         let bp = Arc::new(PageStore::new(64, wal.clone()));
-        let catalog =
-            Arc::new(Catalog::initialize(&bp, &wal, dir.path()).expect("initialize catalog"));
+        let catalog = Arc::new(Catalog::initialize(&bp, dir.path()).expect("initialize catalog"));
         let txn_manager = Arc::new(TransactionManager::new(wal, bp, dir.path().join("wal.log")));
         let db = Database::new(catalog.clone(), txn_manager.clone(), workers);
 
