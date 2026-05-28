@@ -12,8 +12,11 @@ use tempfile::tempdir;
 pub use super::{JoinPredicate, JoinType};
 // ── private imports used only inside this file ────────────────────────────────
 use crate::{
-    FileId, TransactionId, buffer_pool::page_store::PageStore, execution::scan::SeqScan,
-    heap::file::HeapFile, wal::writer::Wal,
+    FileId, TransactionId,
+    buffer_pool::page_store::PageStore,
+    execution::scan::SeqScan,
+    heap::{file::HeapFile, overflow::OverflowFile},
+    wal::writer::Wal,
 };
 pub use crate::{
     execution::{ExecutionError, Executor, PlanNode, ResolvedExpr},
@@ -77,7 +80,7 @@ pub fn build_heap(id: u64, tuples: &[Tuple]) -> HeapHarness {
         .unwrap();
     drop(file);
     store.register_file(file_id, &path).unwrap();
-    let overflow_file = HeapFile::make_overflow_file(file_id, Arc::clone(&store), 0);
+    let overflow_file = Arc::new(OverflowFile::new(file_id, Arc::clone(&store), 0));
     let heap = HeapFile::new(
         file_id,
         Arc::new(schema_ab()),
@@ -115,7 +118,7 @@ pub fn build_heap_xy(id: u64, tuples: &[Tuple]) -> HeapHarness {
         .unwrap();
     drop(file);
     store.register_file(file_id, &path).unwrap();
-    let overflow_file = HeapFile::make_overflow_file(file_id, Arc::clone(&store), 0);
+    let overflow_file = Arc::new(OverflowFile::new(file_id, Arc::clone(&store), 0));
     let heap = HeapFile::new(
         file_id,
         Arc::new(schema_xy()),

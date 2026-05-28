@@ -44,7 +44,7 @@ use crate::{
         page::HeapPage,
     },
     primitives::{PageId, RecordId, SlotId},
-    storage::{PAGE_SIZE, PageKind, StorageError},
+    storage::{PAGE_SIZE, Page, PageKind, StorageError, is_page_of_kind},
     tuple::{Tuple, TupleSchema},
     types::{DynValue, OverflowPointer, Value},
     wal::{PageLogOp, PageMutation, WalError},
@@ -128,16 +128,14 @@ impl HeapFile {
 
     /// Returns the current page count with acquire ordering so the caller
     /// sees all pages initialized by prior atomic stores.
-    fn num_pages(&self) -> u32 {
+    pub fn page_count(&self) -> u32 {
         self.num_pages.load(Ordering::Acquire)
     }
 
-    /// Public view of the current page count, for tooling/visualization.
-    ///
-    /// Equivalent to the internal `Self::num_pages` but exposed so the HTTP
-    /// layer can iterate every page of a file without going through a scan.
-    pub fn page_count(&self) -> u32 {
-        self.num_pages()
+    /// Atomically claims the next page number and returns the number assigned
+    /// to the newly allocated page.
+    fn claim_page_no(&self) -> u32 {
+        self.num_pages.fetch_add(1, Ordering::AcqRel)
     }
 
     /// Reads page `page_no` and returns its raw bytes.
@@ -154,9 +152,9 @@ impl HeapFile {
         page_no: u32,
         transaction_id: TransactionId,
     ) -> Result<[u8; PAGE_SIZE], HeapError> {
-        let page_id = self.page_id(page_no);
-        let guard = self.buffer_pool.fetch_shared(transaction_id, page_id)?;
-        Ok(guard.read())
+        Ok(self
+            .read_page(transaction_id, page_no, |page| Ok(page.page_data()))?
+            .unwrap_or([0u8; PAGE_SIZE]))
     }
 
     /// Returns the schema of the file.
@@ -170,17 +168,6 @@ impl HeapFile {
     /// Returns a shared schema handle for callers that cache schema ownership.
     pub fn schema_arc(&self) -> Arc<TupleSchema> {
         Arc::clone(&self.schema)
-    }
-
-    /// Builds a standalone [`OverflowFile`] for test helpers that construct
-    /// heap files without going through the catalog.
-    #[cfg(test)]
-    pub(crate) fn make_overflow_file(
-        file_id: FileId,
-        buffer_pool: Arc<PageStore>,
-        existing_pages: u32,
-    ) -> Arc<OverflowFile> {
-        Arc::new(OverflowFile::new(file_id, buffer_pool, existing_pages))
     }
 
     /// Inserts `tuple` into the first page that has room, allocating a new page if necessary.
@@ -203,14 +190,14 @@ impl HeapFile {
     ) -> Result<RecordId, HeapError> {
         let tuple = self.spill_text_overflow(transaction_id, tuple)?;
 
-        for page_no in 0..=self.num_pages() {
+        for page_no in 0..=self.page_count() {
             let page_id = self.page_id(page_no);
             if let Some(record_id) = self.insert_into_page(transaction_id, page_id, &tuple)? {
                 return Ok(record_id);
             }
         }
 
-        let new_page_no = self.num_pages.fetch_add(1, Ordering::AcqRel);
+        let new_page_no = self.claim_page_no();
         let page_id = self.page_id(new_page_no);
         if let Some(record_id) = self.insert_into_page(transaction_id, page_id, &tuple)? {
             return Ok(record_id);
@@ -232,25 +219,11 @@ impl HeapFile {
     /// - [`HeapError::NotFound`] — the slot had no before-image (already deleted).
     /// - [`HeapError::Wal`] — the DELETE WAL record could not be written.
     pub fn delete_tuple(&self, tid: TransactionId, record_id: RecordId) -> Result<(), HeapError> {
-        let RecordId {
-            page_no, slot_id, ..
-        } = record_id;
-        let page_id = PageId {
-            file_id: self.file_id,
-            page_no,
-        };
-        self.buffer_pool
-            .exclusive_mutate(
-                tid,
-                page_id,
-                PageLogOp::Delete,
-                |raw| Ok(Some(self.h_page(&raw)?)),
-                |page| {
-                    page.delete_tuple(slot_id)?;
-                    Ok((PageMutation::Changed, ()))
-                },
-            )
-            .map(|_| ())
+        self.write_page(tid, record_id.page_no, PageLogOp::Delete, |page| {
+            page.delete_tuple(record_id.slot_id)?;
+            Ok((PageMutation::Changed, ()))
+        })?
+        .ok_or(HeapError::NotFound(record_id))
     }
 
     /// Replaces the tuple at `record_id` with `tuple`.
@@ -272,20 +245,17 @@ impl HeapFile {
         record_id: RecordId,
         tuple: &Tuple,
     ) -> Result<(), HeapError> {
-        let page_id = self.page_id(record_id.page_no);
-        self.buffer_pool
-            .exclusive_mutate(
-                transaction_id,
-                page_id,
-                PageLogOp::Update,
-                |raw| Ok(Some(self.h_page(&raw)?)),
-                |page| {
-                    page.delete_tuple(record_id.slot_id)?;
-                    page.insert_tuple(tuple.clone())?;
-                    Ok((PageMutation::Changed, ()))
-                },
-            )
-            .map(|_| ())
+        self.write_page(
+            transaction_id,
+            record_id.page_no,
+            PageLogOp::Update,
+            |page| {
+                page.delete_tuple(record_id.slot_id)?;
+                page.insert_tuple(tuple.clone())?;
+                Ok((PageMutation::Changed, ()))
+            },
+        )?
+        .ok_or(HeapError::NotFound(record_id))
     }
 
     /// Tries to insert `tuple` into `page_id`, returning `None` if the page is full.
@@ -344,15 +314,17 @@ impl HeapFile {
         if rid.file_id != self.file_id {
             return Err(HeapError::BadRecordId);
         }
-        let page_id = self.page_id(rid.page_no);
-        let raw = {
-            let guard = self.buffer_pool.fetch_shared(transaction_id, page_id)?;
-            let page = self.h_page(&guard.read())?;
-            match page.tuple_at(rid.slot_id)? {
-                None => return Ok(None),
-                Some(t) => t.clone(),
-            }
+        let Some(raw) = self
+            .read_page(transaction_id, rid.page_no, |page| {
+                page.tuple_at(rid.slot_id)
+                    .map_err(HeapError::Storage)
+                    .map(<Option<&Tuple>>::cloned)
+            })?
+            .flatten()
+        else {
+            return Ok(None);
         };
+
         self.resolve_text_overflow(transaction_id, &raw).map(Some)
     }
 
@@ -405,25 +377,13 @@ impl HeapFile {
         I: Iterator<Item = Tuple>,
     {
         let inserted = self
-            .buffer_pool
-            .exclusive_mutate(
-                transaction_id,
-                page_id,
-                PageLogOp::Insert,
-                |raw| -> Result<Option<HeapPage>, HeapError> {
-                    if !Self::is_heap_data_page(&raw) {
-                        return Ok(None);
-                    }
-                    Ok(Some(self.h_page(&raw)?))
-                },
-                |page| {
-                    let inserted = page.insert_many(tuples)?;
-                    if inserted.is_empty() {
-                        return Ok((PageMutation::Unchanged, Vec::new()));
-                    }
-                    Ok((PageMutation::Changed, inserted))
-                },
-            )?
+            .write_page(transaction_id, page_id.page_no, PageLogOp::Insert, |page| {
+                let inserted = page.insert_many(tuples)?;
+                if inserted.is_empty() {
+                    return Ok((PageMutation::Unchanged, Vec::new()));
+                }
+                Ok((PageMutation::Changed, inserted))
+            })?
             .unwrap_or_default();
         if inserted.is_empty() {
             return Ok(Vec::new());
@@ -437,6 +397,92 @@ impl HeapFile {
             .into_iter()
             .map(|slot_id| self.record_id(page_no, slot_id))
             .collect())
+    }
+
+    /// Shared-read helper for a single heap data page.
+    ///
+    /// Acquires a shared page lock via [`PageStore::shared_read`], decodes the
+    /// raw bytes as a [`HeapPage`] when [`is_page_of_kind`] reports
+    /// [`PageKind::Heap`] (including blank/zeroed slots), and runs `read` on the
+    /// decoded page while the lock is held.
+    ///
+    /// Pages stamped for another subsystem in the same page-number space
+    /// (overflow chains, B-tree nodes, hash buckets) are skipped and yield
+    /// [`Ok(None)`] without error.
+    ///
+    /// # Returns
+    ///
+    /// - [`Ok(Some(r))`] — `page_no` is a heap data page and `read` succeeded.
+    /// - [`Ok(None)`] — the slot is blank or not a heap data page.
+    ///
+    /// # Errors
+    ///
+    /// - [`HeapError::Store`] — the page could not be fetched or locked.
+    /// - [`HeapError::Storage`] — the bytes could not be decoded as a [`HeapPage`].
+    /// - Any error returned by `read`.
+    fn read_page<R>(
+        &self,
+        transaction_id: TransactionId,
+        page_no: impl Into<PageNumber>,
+        read: impl FnOnce(&HeapPage) -> Result<R, HeapError>,
+    ) -> Result<Option<R>, HeapError> {
+        let page_id = self.page_id(page_no);
+        self.buffer_pool.shared_read(
+            transaction_id,
+            page_id,
+            |data| {
+                if !is_page_of_kind(&data, PageKind::Heap) {
+                    return Ok(None);
+                }
+                Ok(Some(self.heap_page(&data)?))
+            },
+            read,
+        )
+    }
+
+    /// Exclusive-write helper for a single heap data page.
+    ///
+    /// Acquires an exclusive page lock via [`PageStore::exclusive_mutate`],
+    /// decodes the raw bytes as a [`HeapPage`] when [`is_page_of_kind`] reports
+    /// [`PageKind::Heap`] (including blank/zeroed slots), and runs `write` on the
+    /// decoded page while the lock is held. When `write` returns
+    /// [`PageMutation::Changed`], a WAL record is logged and the frame is marked
+    /// dirty.
+    ///
+    /// Pages stamped for another subsystem in the same page-number space are
+    /// skipped and yield [`Ok(None)`] without error.
+    ///
+    /// # Returns
+    ///
+    /// - [`Ok(Some(w))`] — `page_no` is a heap data page and `write` succeeded.
+    /// - [`Ok(None)`] — the slot is blank or not a heap data page.
+    ///
+    /// # Errors
+    ///
+    /// - [`HeapError::Store`] — the page could not be fetched or locked.
+    /// - [`HeapError::Storage`] — the bytes could not be decoded as a [`HeapPage`].
+    /// - [`HeapError::Wal`] — logging failed after a mutation.
+    /// - Any error returned by `write`.
+    fn write_page<W>(
+        &self,
+        transaction_id: TransactionId,
+        page_no: impl Into<PageNumber>,
+        log_op: PageLogOp,
+        write: impl FnOnce(&mut HeapPage) -> Result<(PageMutation, W), HeapError>,
+    ) -> Result<Option<W>, HeapError> {
+        let page_id = self.page_id(page_no);
+        self.buffer_pool.exclusive_mutate(
+            transaction_id,
+            page_id,
+            log_op,
+            |raw| {
+                if !is_page_of_kind(&raw, PageKind::Heap) {
+                    return Ok(None);
+                }
+                Ok(Some(self.heap_page(&raw)?))
+            },
+            write,
+        )
     }
 
     /// Inserts a batch of tuples as efficiently as possible, filling existing
@@ -459,23 +505,24 @@ impl HeapFile {
         I: IntoIterator<Item = Tuple>,
     {
         let mut iter = tuples.into_iter().peekable();
-        let mut record_ids = Vec::new();
+        let mut inserted_rids = Vec::new();
 
-        for page_no in 0..=self.num_pages() {
+        for page_no in 0..=self.page_count() {
             if iter.peek().is_none() {
                 break;
             }
             let page_id = self.page_id(page_no);
-            record_ids.extend(self.fill_page(txn, page_id, &mut iter)?);
+            let rids = self.fill_page(txn, page_id, &mut iter)?;
+            inserted_rids.extend(rids);
         }
 
         while iter.peek().is_some() {
-            let page_no = self.num_pages.fetch_add(1, Ordering::AcqRel);
-            let page_id = self.page_id(page_no);
-            record_ids.extend(self.fill_page(txn, page_id, &mut iter)?);
+            let page_id = self.page_id(self.claim_page_no());
+            let rids = self.fill_page(txn, page_id, &mut iter)?;
+            inserted_rids.extend(rids);
         }
 
-        Ok(record_ids)
+        Ok(inserted_rids)
     }
 
     /// Deletes every tuple for which `predicate` returns `true` and returns
@@ -500,17 +547,14 @@ impl HeapFile {
     where
         F: Fn(&Tuple) -> bool,
     {
-        let to_delete: Vec<RecordId> = self
-            .scan(transaction_id)?
-            .filter(|(_, tuple)| predicate(tuple))
-            .map(|(record_id, _)| record_id)
-            .collect();
-
         let mut count: u32 = 0;
-        for record_id in to_delete {
-            self.delete_tuple(transaction_id, record_id)?;
-            count += 1;
-        }
+        self.scan(transaction_id)?
+            .filter(|(_, tuple)| predicate(tuple))
+            .try_for_each(|(record_id, _)| {
+                self.delete_tuple(transaction_id, record_id)
+                    .map(|()| count += 1)
+            })?;
+
         Ok(count)
     }
 
@@ -527,7 +571,7 @@ impl HeapFile {
     /// - Propagates any [`HeapError`] from [`Self::write_overflow`].
     /// - [`HeapError::Storage`] — a TEXT value's byte length exceeds `u32::MAX`.
     fn spill_text_overflow(&self, txn: TransactionId, tuple: &Tuple) -> Result<Tuple, HeapError> {
-        let new_values: Result<Vec<Value>, HeapError> = tuple
+        let new_values = tuple
             .iter()
             .zip(self.schema.fields())
             .map(|(v, field)| match v {
@@ -549,9 +593,9 @@ impl HeapFile {
                 }
                 other => Ok(other.clone()),
             })
-            .collect();
+            .collect::<Result<Vec<Value>, HeapError>>()?;
 
-        Ok(Tuple::new(new_values?))
+        Ok(Tuple::new(new_values))
     }
 
     /// Resolves all [`DynValue::TextOverflow`] pointers in `tuple` to their full
@@ -592,20 +636,9 @@ impl HeapFile {
         Ok(Tuple::new(new_values))
     }
 
-    /// Returns `true` if the raw page bytes belong to a heap data page (or are
-    /// blank/zeroed, which [`HeapPage::heap_new`] treats as an empty data page).
-    ///
-    /// Overflow pages, B-tree nodes, and index bucket pages all live in the same
-    /// physical page-number space as data pages, so the heap scan and insert path
-    /// must skip them rather than trying to parse them as heap rows.
-    #[inline]
-    fn is_heap_data_page(bytes: &[u8; PAGE_SIZE]) -> bool {
-        bytes[0] == 0x00 || bytes[0] == PageKind::Heap as u8
-    }
-
     /// Wraps raw page `data` in a [`HeapPage`] view bound to this file's schema.
     #[inline]
-    fn h_page(&self, data: &[u8]) -> Result<HeapPage, StorageError> {
+    fn heap_page(&self, data: &[u8]) -> Result<HeapPage, StorageError> {
         HeapPage::heap_new(data, Arc::clone(&self.schema))
     }
 
@@ -634,25 +667,21 @@ impl HeapFile {
     pub(super) fn read_live_tuples(
         &self,
         page_no: impl Into<PageNumber> + Copy,
-        transaction_id: TransactionId,
+        tid: TransactionId,
     ) -> Result<Vec<(RecordId, Tuple)>, HeapError> {
-        // Release the page lock before chasing overflow pointers so we never hold
-        // a shared data-page lock while acquiring shared overflow-page locks.
-        let raw: Vec<(RecordId, Tuple)> = {
-            let page_id = self.page_id(page_no);
-            let guard = self.buffer_pool.fetch_shared(transaction_id, page_id)?;
-            let page_bytes = guard.read();
-            if !Self::is_heap_data_page(&page_bytes) {
-                return Ok(vec![]);
-            }
-            let page = self.h_page(&page_bytes)?;
-            page.live_tuples()
-                .map(|(slot_id, tuple)| (self.record_id(page_no, slot_id), tuple.clone()))
-                .collect()
-        };
-        raw.into_iter()
+        let entries: Vec<_> = self
+            .read_page(tid, page_no, |page| {
+                Ok(page
+                    .live_tuples()
+                    .map(|(slot_id, tuple)| (self.record_id(page_no, slot_id), tuple.clone()))
+                    .collect())
+            })?
+            .unwrap_or_default();
+
+        entries
+            .into_iter()
             .map(|(rid, tuple)| {
-                self.resolve_text_overflow(transaction_id, &tuple)
+                self.resolve_text_overflow(tid, &tuple)
                     .map(|resolved| (rid, resolved))
             })
             .collect()
@@ -725,7 +754,7 @@ impl Iterator for HeapScan<'_> {
                 return Some(item);
             }
 
-            if self.current_page >= self.file.num_pages() || self.load_page().is_err() {
+            if self.current_page >= self.file.page_count() || self.load_page().is_err() {
                 return None;
             }
 
@@ -744,7 +773,7 @@ impl fallible_iterator::FallibleIterator for HeapScan<'_> {
                 self.tuple_idx += 1;
                 return Ok(Some(item));
             }
-            if self.current_page >= self.file.num_pages() {
+            if self.current_page >= self.file.page_count() {
                 return Ok(None);
             }
             self.load_page()?;
@@ -1008,19 +1037,19 @@ mod tests {
     #[test]
     fn test_num_pages_reflects_highest_written_page() {
         let (heap, wal, _dir) = make_heap_file(0);
-        assert_eq!(heap.num_pages(), 0);
+        assert_eq!(heap.page_count(), 0);
         let txn = begin_txn(&wal, 1);
         heap.insert_tuple(txn, &make_tuple(1, true)).unwrap();
         // Insert landed on page 0 via the for-loop path; counter must bump to 1
         // so HeapScan visits page 0.
-        assert_eq!(heap.num_pages(), 1);
+        assert_eq!(heap.page_count(), 1);
     }
 
-    // Constructing with existing_pages > 0 reflects in num_pages()
+    // Constructing with existing_pages > 0 reflects in page_count()
     #[test]
     fn test_new_with_existing_pages_reflects_in_counter() {
         let (heap, _wal, _dir) = make_heap_file(2);
-        assert_eq!(heap.num_pages(), 2);
+        assert_eq!(heap.page_count(), 2);
     }
 
     // delete_tuple with an out-of-bounds slot_id returns HeapError::Storage.
@@ -1116,13 +1145,13 @@ mod tests {
         let (heap, wal, _dir) = make_heap_file(0);
         let txn = begin_txn(&wal, 1);
         heap.insert_tuple(txn, &make_tuple(1, true)).unwrap();
-        let before_pages = heap.num_pages();
+        let before_pages = heap.page_count();
 
         heap.bulk_insert(txn, vec![make_tuple(2, false), make_tuple(3, true)])
             .unwrap();
 
         // A couple of small tuples should fit on page 0, not force a new page.
-        assert_eq!(heap.num_pages(), before_pages);
+        assert_eq!(heap.page_count(), before_pages);
         assert_eq!(heap.scan(txn).unwrap().count(), 3);
     }
 

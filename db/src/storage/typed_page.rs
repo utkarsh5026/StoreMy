@@ -110,6 +110,18 @@ impl TryFrom<u8> for PageKind {
     }
 }
 
+/// Returns `true` when `bytes` belong to a page of `kind`, or are blank/zeroed.
+///
+/// A freshly allocated page slot is all zeros before first use. Callers that
+/// decode blank buffers as empty pages of the expected kind (for example
+/// [`crate::heap::page::HeapPage::heap_new`]) use this to accept those slots
+/// while skipping pages stamped for another subsystem in the same page-number
+/// space (overflow chains, B-tree nodes, hash buckets).
+#[inline]
+pub fn is_page_of_kind(bytes: &[u8; PAGE_SIZE], kind: PageKind) -> bool {
+    bytes[KIND_OFFSET] == 0x00 || bytes[KIND_OFFSET] == kind as u8
+}
+
 /// Computes the CRC32 checksum for a full page buffer.
 ///
 /// The four-byte CRC slot at bytes 1..5 is treated as zero during the hash.
@@ -628,6 +640,27 @@ mod tests {
             CodecError::UnknownDiscriminant(0xFF) => {}
             other => panic!("expected UnknownDiscriminant(0xFF), got {other:?}"),
         }
+    }
+
+    #[test]
+    fn is_page_of_kind_accepts_blank_and_matching_kind() {
+        let blank = blank_page();
+        assert!(is_page_of_kind(&blank, PageKind::Heap));
+        assert!(is_page_of_kind(&blank, PageKind::BTreeLeaf));
+
+        let heap = stamped_heap_page(0x00);
+        assert!(is_page_of_kind(&heap, PageKind::Heap));
+        assert!(!is_page_of_kind(&heap, PageKind::BTreeLeaf));
+    }
+
+    #[test]
+    fn is_page_of_kind_rejects_other_subsystem_pages() {
+        let mut btree = stamped_heap_page(0x00);
+        btree[0] = PageKind::BTreeLeaf as u8;
+        stamp_page_crc(&mut btree);
+
+        assert!(!is_page_of_kind(&btree, PageKind::Heap));
+        assert!(is_page_of_kind(&btree, PageKind::BTreeLeaf));
     }
 
     fn blank_page() -> [u8; PAGE_SIZE] {

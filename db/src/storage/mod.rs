@@ -18,7 +18,9 @@ pub mod typed_page;
 use std::{fs::File, path::Path};
 
 use thiserror::Error;
-pub use typed_page::{ENVELOPE_HEADER_SIZE, PageKind, TypedPage, UNIVERSAL_HEADER_SIZE};
+pub use typed_page::{
+    ENVELOPE_HEADER_SIZE, PageKind, TypedPage, UNIVERSAL_HEADER_SIZE, is_page_of_kind,
+};
 pub(crate) use typed_page::{compute_page_crc, page_crc_valid, read_page_lsn, stamp_page_crc};
 
 use crate::primitives::{Lsn, SlotId};

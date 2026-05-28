@@ -250,6 +250,7 @@ mod tests {
     use crate::{
         FileId, TransactionId,
         buffer_pool::page_store::PageStore,
+        heap::overflow::OverflowFile,
         index::{AnyIndex, CompositeKey},
         primitives::{PageNumber, RecordId, SlotId},
         tuple::{Field, Tuple, TupleSchema},
@@ -296,8 +297,11 @@ mod tests {
 
         store.register_file(file_id, &path).unwrap();
 
-        let overflow_file =
-            HeapFile::make_overflow_file(file_id, Arc::clone(&store), existing_pages);
+        let overflow_file = Arc::new(OverflowFile::new(
+            file_id,
+            Arc::clone(&store),
+            existing_pages,
+        ));
         let heap = HeapFile::new(
             file_id,
             Arc::new(schema()),
@@ -324,7 +328,7 @@ mod tests {
         hf.set_len(4 * crate::storage::PAGE_SIZE as u64).unwrap();
         drop(hf);
         store.register_file(heap_fid, &heap_path).unwrap();
-        let overflow_file = HeapFile::make_overflow_file(heap_fid, Arc::clone(&store), 0);
+        let overflow_file = Arc::new(OverflowFile::new(heap_fid, Arc::clone(&store), 0));
         let heap = HeapFile::new(
             heap_fid,
             Arc::new(schema()),
