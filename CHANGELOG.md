@@ -8,6 +8,7 @@ Older sections (before 2025-10-01) are the Go → Rust transition era.
 
 ### Bug Fixes
 
+- **tests**: Align fixtures with log_page_operation and catalog init
 - **types**: Map INT→Int32/BIGINT→Int64 and add widening comparisons
 - **recovery**: Fix ARIES idempotency — trim WAL torn tail before undo and remove bad loser filter
 - **catalog**: Remove auto-increment rows when column or table drops
@@ -45,6 +46,11 @@ Older sections (before 2025-10-01) are the Go → Rust transition era.
 
 ### Features
 
+- **buffer_pool**: Add typed page access helpers to PageStore
+- **types**: Human-readable Display for temporal FixedValues
+- **parser**: Add DATE/TIME/TIMESTAMP token types and wire temporal type conversion
+- **types**: Wire temporal types through catalog, schema, and export
+- **types**: Add Date, Time, and Timestamp scalar types
 - **heap**: Spill oversized TEXT values to overflow page chains
 - **types**: Add Value::coerce_to and distinguish TEXT from VARCHAR
 - **heap**: Add overflow page type and byte-vector codec support
@@ -268,6 +274,12 @@ Older sections (before 2025-10-01) are the Go → Rust transition era.
 
 ### Refactoring
 
+- **heap**: Move overflow I/O to OverflowFile; wire heap to page_store helpers
+- **wal**: Unify page logging into log_page_operation
+- **catalog**: Centralize overflow into a single shared segment
+- **engine**: Unify ExecutionError to EngineError mapping
+- **engine**: Add require_table for mandatory table lookups
+- **tuple**: Trim schema API and parse literals by token
 - **engine**: Centralize constraint default naming
 - **storage**: Extract try_as_page_image for WAL page validation
 - **types**: Split Value into FixedValue/DynValue and add TextOverflow + PageDescriptor
@@ -374,6 +386,8 @@ Older sections (before 2025-10-01) are the Go → Rust transition era.
 
 ### Tests
 
+- **test_utils**: Add shared tracing init for unit tests
+- **parser**: Cover temporal columns in ddl and dml parsing
 - **tcl**: Add unit tests for TCL session state machine
 - **recovery**: Add property-based crash-kill proptests
 - **wal**: Cover fuzzy checkpoint record shape and snapshots
