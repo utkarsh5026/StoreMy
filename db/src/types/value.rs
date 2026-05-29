@@ -475,11 +475,12 @@ impl Value {
                 Value::Dyn(DynValue::Varchar(s)) => {
                     STRING_LENGTH_PREFIX_SIZE + s.len().min(STRING_MAX_SIZE)
                 }
-                Value::Dyn(DynValue::Text(s)) => STRING_LENGTH_PREFIX_SIZE + s.len(),
+                Value::Dyn(DynValue::Text(s) | DynValue::Json(s)) => {
+                    STRING_LENGTH_PREFIX_SIZE + s.len()
+                }
                 Value::Dyn(DynValue::TextOverflow(_) | DynValue::JsonOverflow(_)) => {
                     TEXT_OVERFLOW_PAYLOAD_SIZE
                 }
-                Value::Dyn(DynValue::Json(s)) => STRING_LENGTH_PREFIX_SIZE + s.len(),
             }
     }
 

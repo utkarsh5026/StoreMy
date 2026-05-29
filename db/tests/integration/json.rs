@@ -193,6 +193,71 @@ fn where_arrow_with_null_json_column_does_not_crash() {
     assert_eq!(rows[0][0], Value::int32(2));
 }
 
+#[test]
+fn question_key_exists_in_object_returns_true() {
+    let db = TestDb::new();
+    db.run_ok("CREATE TABLE t (id INT, payload JSON)");
+    db.run_ok(r#"INSERT INTO t VALUES (1, '{"type":"click","x":1}')"#);
+
+    let rows = select_rows(&db, "SELECT payload ? 'type' FROM t");
+    assert_eq!(rows[0][0], Value::bool(true));
+}
+
+#[test]
+fn question_missing_key_returns_false() {
+    let db = TestDb::new();
+    db.run_ok("CREATE TABLE t (id INT, payload JSON)");
+    db.run_ok(r#"INSERT INTO t VALUES (1, '{"type":"click"}')"#);
+
+    let rows = select_rows(&db, "SELECT payload ? 'missing' FROM t");
+    assert_eq!(rows[0][0], Value::bool(false));
+}
+
+#[test]
+fn question_filters_rows_in_where_clause() {
+    let db = TestDb::new();
+    db.run_ok("CREATE TABLE t (id INT, payload JSON)");
+    db.run_ok(
+        r#"INSERT INTO t VALUES
+        (1, '{"type":"click"}'),
+        (2, '{"x":1}'),
+        (3, '{"type":"hover"}')"#,
+    );
+
+    let rows = select_rows(&db, "SELECT id FROM t WHERE payload ? 'type'");
+    assert_eq!(rows.len(), 2);
+}
+
+#[test]
+fn question_on_string_array_element_returns_true() {
+    let db = TestDb::new();
+    db.run_ok("CREATE TABLE t (id INT, tags JSON)");
+    db.run_ok(r#"INSERT INTO t VALUES (1, '["rust","sql","json"]')"#);
+
+    let rows = select_rows(&db, "SELECT tags ? 'sql' FROM t");
+    assert_eq!(rows[0][0], Value::bool(true));
+}
+
+#[test]
+fn question_nested_key_not_visible_at_top_level() {
+    let db = TestDb::new();
+    db.run_ok("CREATE TABLE t (id INT, payload JSON)");
+    db.run_ok(r#"INSERT INTO t VALUES (1, '{"outer":{"inner":1}}')"#);
+
+    let rows = select_rows(&db, "SELECT payload ? 'inner' FROM t");
+    assert_eq!(rows[0][0], Value::bool(false));
+}
+
+#[test]
+fn question_null_json_column_propagates_null() {
+    let db = TestDb::new();
+    db.run_ok("CREATE TABLE t (id INT, data JSON)");
+    db.run_ok("INSERT INTO t (id) VALUES (1)");
+
+    let rows = select_rows(&db, "SELECT id FROM t WHERE data ? 'k'");
+    assert_eq!(rows.len(), 0, "NULL ? key should not match");
+}
+
 // ── Overflow (JSON > 255 bytes) ───────────────────────────────────────────────
 
 /// Build a valid JSON object whose byte length exceeds `TEXT_MAX_INLINE_SIZE`

@@ -79,6 +79,18 @@ impl Precedence {
     }
 }
 
+/// Single-token infix operators for [`Parser::peek_binary_op`].
+///
+/// Multi-character comparisons and arithmetic use [`TokenType::Operator`] instead.
+const PEEK_TOKEN_BINOPS: &[(TokenType, BinOp, Precedence)] = &[
+    (TokenType::Or, BinOp::Or, Precedence::Or),
+    (TokenType::And, BinOp::And, Precedence::And),
+    (TokenType::Asterisk, BinOp::Mul, Precedence::MulDiv),
+    (TokenType::Arrow, BinOp::Arrow, Precedence::JsonPath),
+    (TokenType::ArrowText, BinOp::ArrowText, Precedence::JsonPath),
+    (TokenType::Question, BinOp::KeyExists, Precedence::JsonPath),
+];
+
 /// A single expression inside a `SELECT` list.
 ///
 /// `Column` is a plain projection; `Agg` is `f(col)` for any non-`*` aggregate;
@@ -321,41 +333,56 @@ impl Display for CaseBranch {
 /// parser and the runtime evaluator.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BinOp {
+    /// Logical AND.
     And,
+    /// Logical OR.
     Or,
+    /// Equality (=).
     Eq,
+    /// Inequality (<>).
     NotEq,
+    /// Less than (<).
     Lt,
+    /// Less than or equal to (<=).
     LtEq,
+    /// Greater than (>)
     Gt,
+    /// Greater than or equal to (>=).
     GtEq,
+    /// Addition (+).
     Add,
+    /// Subtraction (-).
     Sub,
+    /// Multiplication (*).
     Mul,
+    /// Division (/).
     Div,
     /// JSON path extraction returning JSON (`->`).
     Arrow,
     /// JSON path extraction returning TEXT (`->>`).
     ArrowText,
+    /// Key exists (`?`).
+    KeyExists,
 }
 
 impl Display for BinOp {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let s = match self {
-            BinOp::And => "AND",
-            BinOp::Or => "OR",
-            BinOp::Eq => "=",
-            BinOp::NotEq => "<>",
-            BinOp::Lt => "<",
-            BinOp::LtEq => "<=",
-            BinOp::Gt => ">",
-            BinOp::GtEq => ">=",
-            BinOp::Add => "+",
-            BinOp::Sub => "-",
-            BinOp::Mul => "*",
-            BinOp::Div => "/",
-            BinOp::Arrow => "->",
-            BinOp::ArrowText => "->>",
+            Self::And => "AND",
+            Self::Or => "OR",
+            Self::Eq => "=",
+            Self::NotEq => "<>",
+            Self::Lt => "<",
+            Self::LtEq => "<=",
+            Self::Gt => ">",
+            Self::GtEq => ">=",
+            Self::Add => "+",
+            Self::Sub => "-",
+            Self::Mul => "*",
+            Self::Div => "/",
+            Self::Arrow => "->",
+            Self::ArrowText => "->>",
+            Self::KeyExists => "?",
         };
         f.write_str(s)
     }
@@ -697,30 +724,11 @@ impl Parser {
     ///
     /// Propagates lexer failures while peeking operator text.
     fn peek_binary_op(&mut self) -> Result<Option<(BinOp, u8, u8)>, ParserError> {
-        if self.peek_is(TokenType::Or)? {
-            let (l, r) = Precedence::Or.binary_bp();
-            return Ok(Some((BinOp::Or, l, r)));
-        }
-
-        if self.peek_is(TokenType::And)? {
-            let (l, r) = Precedence::And.binary_bp();
-            return Ok(Some((BinOp::And, l, r)));
-        }
-
-        // `*` is tokenized as Asterisk, not Operator, so it needs its own check.
-        if self.peek_is(TokenType::Asterisk)? {
-            let (l, r) = Precedence::MulDiv.binary_bp();
-            return Ok(Some((BinOp::Mul, l, r)));
-        }
-
-        if self.peek_is(TokenType::Arrow)? {
-            let (l, r) = Precedence::JsonPath.binary_bp();
-            return Ok(Some((BinOp::Arrow, l, r)));
-        }
-
-        if self.peek_is(TokenType::ArrowText)? {
-            let (l, r) = Precedence::JsonPath.binary_bp();
-            return Ok(Some((BinOp::ArrowText, l, r)));
+        for &(tok, op, prec) in PEEK_TOKEN_BINOPS {
+            if self.peek_is(tok)? {
+                let (l, r) = prec.binary_bp();
+                return Ok(Some((op, l, r)));
+            }
         }
 
         if self.peek_is(TokenType::Operator)? {

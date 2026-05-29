@@ -194,6 +194,7 @@ pub enum TokenType {
     Dot,
     Arrow,
     ArrowText,
+    Question,
     Invalid,
     Eof,
 }
@@ -316,6 +317,7 @@ impl TokenType {
             TokenType::Dot => "DOT",
             TokenType::Arrow => "ARROW",
             TokenType::ArrowText => "ARROW_TEXT",
+            TokenType::Question => "QUESTION",
             TokenType::Invalid => "INVALID",
             TokenType::Eof => "EOF",
             _ => unreachable!("only called for non-keyword token types"),
@@ -779,6 +781,7 @@ mod tests {
         assert_eq!(TokenType::Dot.to_string(), "DOT");
         assert_eq!(TokenType::Arrow.to_string(), "ARROW");
         assert_eq!(TokenType::ArrowText.to_string(), "ARROW_TEXT");
+        assert_eq!(TokenType::Question.to_string(), "QUESTION");
         assert_eq!(TokenType::Invalid.to_string(), "INVALID");
         assert_eq!(TokenType::Eof.to_string(), "EOF");
     }
