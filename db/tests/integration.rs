@@ -30,3 +30,5 @@ mod insert_defaults;
 mod join;
 #[path = "integration/json.rs"]
 mod json;
+#[path = "integration/select_expressions.rs"]
+mod select_expressions;
