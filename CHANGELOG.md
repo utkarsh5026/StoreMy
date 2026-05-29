@@ -46,6 +46,13 @@ Older sections (before 2025-10-01) are the Go → Rust transition era.
 
 ### Features
 
+- **json**: Implement @> and <@ containment operators
+- **parser**: Parse json key-exists (?) operator
+- **execution**: Implement JSON path operators -> and ->>
+- **parser**: Lex and parse json path operators -> and ->>
+- **engine**: Add InvalidJson error variant and validate JSON on DML
+- **parser**: Wire JSON type keyword and fix text/json codec
+- **types**: Add JSON type with inline and overflow value support
 - **buffer_pool**: Add typed page access helpers to PageStore
 - **types**: Human-readable Display for temporal FixedValues
 - **parser**: Add DATE/TIME/TIMESTAMP token types and wire temporal type conversion
@@ -274,6 +281,10 @@ Older sections (before 2025-10-01) are the Go → Rust transition era.
 
 ### Refactoring
 
+- **execution**: Rename resolve to eval and extract json ops
+- **types**: Store JSON as raw string instead of parsed serde_json::Value
+- **heap**: Extract read_page/write_page helpers and is_page_of_kind predicate
+- **types**: Split types.rs into mod.rs + value submodule
 - **heap**: Move overflow I/O to OverflowFile; wire heap to page_store helpers
 - **wal**: Unify page logging into log_page_operation
 - **catalog**: Centralize overflow into a single shared segment
@@ -386,6 +397,8 @@ Older sections (before 2025-10-01) are the Go → Rust transition era.
 
 ### Tests
 
+- **integration**: Add end-to-end select expression coverage
+- **json**: Refactor integration tests with per-operator ExprCase/FilterCase harness
 - **test_utils**: Add shared tracing init for unit tests
 - **parser**: Cover temporal columns in ddl and dml parsing
 - **tcl**: Add unit tests for TCL session state machine
