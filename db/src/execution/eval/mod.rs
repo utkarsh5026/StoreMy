@@ -1,5 +1,4 @@
-//! Expression resolution — lowers a parsed [`Expr`] into a [`ResolvedExpr`]
-//! where every column reference has been replaced by a [`ColumnId`].
+//! Expression resolution and evaluation.
 //!
 //! # Why this exists
 //!
@@ -26,6 +25,12 @@
 //! are carried through structurally — their column arguments are resolved, but
 //! they cannot be evaluated row-by-row. The planner is responsible for routing
 //! them to the `Aggregate` operator before any row-level evaluation occurs.
+//!
+//! # Submodules
+//!
+//! - [`json`] — evaluation of JSON operators (`->`, `->>`, `?`).
+
+pub mod json;
 
 use std::cmp::Ordering;
 
@@ -35,7 +40,7 @@ use crate::{
     parser::statements::{AggFunc, BinOp, CaseBranch, Expr, UnOp},
     primitives::ColumnId,
     tuple::{Tuple, TupleSchema},
-    types::{ArithmeticError, DynValue, FixedValue, Type},
+    types::{ArithmeticError, FixedValue, Type},
 };
 
 /// Minimal interface for mapping a column reference to a [`ColumnId`].
@@ -506,82 +511,6 @@ impl ResolvedExpr {
         }
     }
 
-    /// Evaluates one step of PostgreSQL-style JSON arrow extraction (`->` / `->>`).
-    ///
-    /// `l` must be a [`Type::Json`] document; `r` is one path segment — a [`Type::Text`]
-    /// object key or any integer variant for array indexing. Chains such as
-    /// `payload->'user'->>'name'` are left-associative in the parser, so each segment is
-    /// evaluated by a separate call with the previous result as `l`.
-    ///
-    /// String keys use object lookup; integer keys use zero-based array indexing (via
-    /// [`lookup_json_value`]). A missing key or out-of-range index yields [`Value::Null`].
-    ///
-    /// - `as_text == false` (`->`): re-encode the matched sub-value as JSON and return
-    ///   [`Type::Json`].
-    /// - `as_text == true` (`->>`): return [`Type::Text`] — JSON strings without quotes, other
-    ///   scalars via `Display`, and [`Value::Null`] when the path does not match.
-    ///
-    /// Callers must short-circuit on NULL operands before invoking this function.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`ExecutionError::TypeError`] when `l` is not JSON, `r` is not a valid path
-    /// key, the document fails to parse, or the extracted sub-value cannot be encoded.
-    fn eval_json_arrow(l: &Value, r: &Value, as_text: bool) -> Result<Value, ExecutionError> {
-        let key: serde_json::Value = match r {
-            Value::Dyn(DynValue::Text(s) | DynValue::Varchar(s)) => {
-                serde_json::Value::String(s.clone())
-            }
-            Value::Fixed(FixedValue::Int32(n)) => serde_json::Value::from(*n),
-            Value::Fixed(FixedValue::Int64(n)) => serde_json::Value::from(*n),
-            Value::Fixed(FixedValue::Uint32(n)) => serde_json::Value::from(*n),
-            Value::Fixed(FixedValue::Uint64(n)) => serde_json::Value::from(*n),
-            other => {
-                return Err(ExecutionError::TypeError(format!(
-                    "JSON path key must be text or integer, got {other}"
-                )));
-            }
-        };
-
-        let parsed: serde_json::Value = match l {
-            Value::Dyn(DynValue::Json(s)) => serde_json::from_str(s.as_str())
-                .map_err(|e| ExecutionError::TypeError(format!("invalid JSON document: {e}")))?,
-            other => {
-                return Err(ExecutionError::TypeError(format!(
-                    "JSON path operator requires JSON operand, got {other}"
-                )));
-            }
-        };
-
-        let found: serde_json::Value = match key {
-            serde_json::Value::String(s) => parsed.get(s).cloned(),
-            serde_json::Value::Number(n) => n
-                .as_u64()
-                .and_then(|i| parsed.get(usize::try_from(i).ok()?))
-                .cloned(),
-            _ => None,
-        }
-        .unwrap_or(serde_json::Value::Null);
-        if found.is_null() {
-            return Ok(Value::Null);
-        }
-
-        if as_text {
-            let text = match found {
-                serde_json::Value::String(s) => s.clone(),
-                serde_json::Value::Null => String::new(),
-                other => other.to_string(),
-            };
-            return Ok(Value::varchar(text));
-        }
-
-        let json = serde_json::to_string(&found).map_err(|e| {
-            ExecutionError::TypeError(format!("failed to encode JSON sub-value: {e}"))
-        })?;
-        Value::json(&json)
-            .map_err(|e| ExecutionError::TypeError(format!("invalid JSON sub-value: {e}")))
-    }
-
     /// Evaluates a [`BinOp`] on two already-resolved operand values.
     ///
     /// Called from [`Self::eval`] after both sub-expressions have been evaluated against
@@ -596,14 +525,13 @@ impl ResolvedExpr {
     /// - **Comparison** (`=`, `<>`, `<`, `<=`, `>`, `>=`) — [`numeric_eq`] / [`numeric_cmp`];
     ///   incomparable pairs yield NULL, not an error.
     /// - **Arithmetic** (`+`, `-`, `*`, `/`) — type-checked; mismatches and division by zero are
-    ///   errors. Subtraction and multiplication use [`Sub`] / [`Mul`] and treat a NULL output as a
-    ///   type error.
-    /// - **JSON arrow** (`->`, `->>`) — delegated to [`Self::eval_json_arrow`].
+    ///   errors.
+    /// - **JSON** (`->`, `->>`) — delegated to [`json::eval_arrow`].
     ///
     /// # Errors
     ///
     /// Returns [`ExecutionError::TypeError`] for non-boolean `AND`/`OR` operands, invalid
-    /// arithmetic, or JSON arrow failures.
+    /// arithmetic, or JSON failures.
     fn eval_binary(op: BinOp, l: &Value, r: &Value) -> Result<Value, ExecutionError> {
         if l.is_null() || r.is_null() {
             return Ok(Value::Null);
@@ -656,8 +584,9 @@ impl ResolvedExpr {
                     ExecutionError::TypeError(format!("cannot divide {l} by {r}"))
                 }
             }),
-            BinOp::Arrow => Self::eval_json_arrow(l, r, false),
-            BinOp::ArrowText => Self::eval_json_arrow(l, r, true),
+            BinOp::Arrow => json::eval_arrow(l, r, json::JsonArrowMode::AsJson),
+            BinOp::ArrowText => json::eval_arrow(l, r, json::JsonArrowMode::AsText),
+            BinOp::KeyExists => json::eval_key_exists(l, r),
         }
     }
 }
@@ -946,8 +875,6 @@ mod tests {
         assert!(ResolvedExpr::resolve(expr, &r).is_err());
     }
 
-    // ── ResolvedExpr::eval ───────────────────────────────────────────────────
-
     use crate::tuple::Tuple;
 
     fn tuple(values: Vec<Value>) -> Tuple {
@@ -1224,7 +1151,6 @@ mod tests {
 
     #[test]
     fn eval_arith_column_plus_literal() {
-        // col(0) + 10 where col(0) = 32  →  42
         let t = tuple(vec![Value::int64(32)]);
         let expr = ResolvedExpr::BinaryOp {
             lhs: Box::new(resolved_col(0)),
@@ -1236,7 +1162,6 @@ mod tests {
 
     #[test]
     fn eval_arith_nested_mul_add() {
-        // (2 + 3) * 4 = 20 — verifies nested BinaryOp eval
         let t = tuple(vec![]);
         let inner = ResolvedExpr::BinaryOp {
             lhs: Box::new(lit(Value::int64(2))),
@@ -1253,7 +1178,6 @@ mod tests {
 
     #[test]
     fn map_columns_remaps_column_leaf() {
-        // col[0] shifted by +3 → col[3]
         let expr = resolved_col(0);
         let mapped = expr.map_columns(|id| col_id(u32::try_from(usize::from(id)).unwrap() + 3));
         assert_eq!(mapped, ResolvedExpr::Column(col_id(3)));
@@ -1268,10 +1192,6 @@ mod tests {
 
     #[test]
     fn map_columns_recurses_binary_op() {
-        // col[0] = col[3]  →  swap so old-left→new-right, old-right→new-left
-        // left_width=3, right_width=3
-        // col[0] (< 3) → right side: 3 + 0 = 3
-        // col[3] (≥ 3) → left  side: 3 - 3 = 0
         let expr = ResolvedExpr::BinaryOp {
             lhs: Box::new(resolved_col(0)),
             op: BinOp::Eq,
@@ -1300,7 +1220,6 @@ mod tests {
 
     #[test]
     fn eval_arrow_extracts_object_key_as_json() {
-        // -> re-encodes the matched sub-value as JSON, so a string gets quotes
         let t = tuple(vec![json(r#"{"type":"click"}"#)]);
         let expr = ResolvedExpr::BinaryOp {
             lhs: Box::new(resolved_col(0)),
@@ -1312,7 +1231,6 @@ mod tests {
 
     #[test]
     fn eval_arrow_text_extracts_string_without_quotes() {
-        // ->> strips JSON quoting — the returned value is plain text
         let t = tuple(vec![json(r#"{"type":"click"}"#)]);
         let expr = ResolvedExpr::BinaryOp {
             lhs: Box::new(resolved_col(0)),
@@ -1324,7 +1242,6 @@ mod tests {
 
     #[test]
     fn eval_arrow_text_numeric_value_as_string() {
-        // ->> on a JSON number returns the decimal digits as text, not a quoted string
         let t = tuple(vec![json(r#"{"count":42}"#)]);
         let expr = ResolvedExpr::BinaryOp {
             lhs: Box::new(resolved_col(0)),
