@@ -1386,4 +1386,100 @@ mod tests {
         assert_eq!(rows[1].get(0), Some(&Value::bool(false)));
         assert_eq!(rows[2].get(0), Some(&Value::bool(true)));
     }
+
+    #[test]
+    fn json_column_accepts_valid_object() {
+        let dir = tempdir().unwrap();
+        let (catalog, txn_mgr) = make_infra(dir.path());
+
+        let engine = Engine::new(&catalog, &txn_mgr);
+        run(
+            &engine,
+            "CREATE TABLE t (id INT NOT NULL, data JSON NOT NULL)",
+        );
+        run(
+            &engine,
+            r#"INSERT INTO t (id, data) VALUES (1, '{"key": "value", "n": 42}')"#,
+        );
+
+        let rows = scan_rows(&catalog, &txn_mgr, "t");
+        assert_eq!(rows.len(), 1);
+    }
+
+    #[test]
+    fn json_column_accepts_valid_array() {
+        let dir = tempdir().unwrap();
+        let (catalog, txn_mgr) = make_infra(dir.path());
+
+        let engine = Engine::new(&catalog, &txn_mgr);
+        run(
+            &engine,
+            "CREATE TABLE t (id INT NOT NULL, tags JSON NOT NULL)",
+        );
+        run(&engine, r"INSERT INTO t (id, tags) VALUES (1, '[1, 2, 3]')");
+
+        let rows = scan_rows(&catalog, &txn_mgr, "t");
+        assert_eq!(rows.len(), 1);
+    }
+
+    #[test]
+    fn json_column_rejects_invalid_json_on_insert() {
+        let dir = tempdir().unwrap();
+        let (catalog, txn_mgr) = make_infra(dir.path());
+
+        let engine = Engine::new(&catalog, &txn_mgr);
+        run(
+            &engine,
+            "CREATE TABLE t (id INT NOT NULL, data JSON NOT NULL)",
+        );
+        let err =
+            try_run(&engine, "INSERT INTO t (id, data) VALUES (1, '{bad json}')").unwrap_err();
+
+        assert!(
+            matches!(err, EngineError::InvalidJson { ref column, .. } if column == "data"),
+            "expected InvalidJson for 'data', got {err:?}"
+        );
+    }
+
+    #[test]
+    fn json_column_rejects_plain_string_on_insert() {
+        let dir = tempdir().unwrap();
+        let (catalog, txn_mgr) = make_infra(dir.path());
+
+        let engine = Engine::new(&catalog, &txn_mgr);
+        run(
+            &engine,
+            "CREATE TABLE t (id INT NOT NULL, meta JSON NOT NULL)",
+        );
+        // A bare word without JSON structure is not valid JSON.
+        let err = try_run(
+            &engine,
+            "INSERT INTO t (id, meta) VALUES (1, 'not-json-at-all')",
+        )
+        .unwrap_err();
+
+        assert!(
+            matches!(err, EngineError::InvalidJson { ref column, .. } if column == "meta"),
+            "expected InvalidJson for 'meta', got {err:?}"
+        );
+    }
+
+    #[test]
+    fn json_column_invalid_insert_leaves_table_empty() {
+        // A failed insert must not write any rows.
+        let dir = tempdir().unwrap();
+        let (catalog, txn_mgr) = make_infra(dir.path());
+
+        let engine = Engine::new(&catalog, &txn_mgr);
+        run(
+            &engine,
+            "CREATE TABLE t (id INT NOT NULL, data JSON NOT NULL)",
+        );
+        let _ = try_run(&engine, "INSERT INTO t (id, data) VALUES (1, '{oops}')");
+
+        assert!(
+            scan_rows(&catalog, &txn_mgr, "t").is_empty(),
+            "no rows should be written when JSON validation fails"
+        );
+    }
 }

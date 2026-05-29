@@ -15,7 +15,7 @@ use crate::{
     primitives::{ColumnId, NonEmptyString, RecordId},
     transaction::ActiveTransaction,
     tuple::{Field, Tuple, TupleSchema},
-    types::FixedValue,
+    types::{DynValue, FixedValue, Type},
 };
 
 impl Engine<'_> {
@@ -397,6 +397,16 @@ impl Engine<'_> {
 
         if matches!(value, Value::Null) {
             return Ok(Value::Null);
+        }
+
+        if field.field_type == Type::Json
+            && let Value::Dyn(DynValue::Varchar(s)) = value
+        {
+            return Value::json(s).map_err(|e| EngineError::InvalidJson {
+                table: table.to_owned(),
+                column: field.name.to_string(),
+                reason: e.to_string(),
+            });
         }
 
         value
