@@ -181,6 +181,8 @@ impl Lexer {
 
             '-' => Ok(Some(self.read_minus_or_arrow(start))),
 
+            '#' => Ok(Some(self.read_hash_arrow(start))),
+
             ',' | ';' | '(' | ')' | '*' | '.' | '?' => {
                 self.advance_pos();
                 let token_type = match ch {
@@ -291,6 +293,22 @@ impl Lexer {
 
             return Ok(());
         }
+    }
+
+    /// Disambiguates `#` into a PostgreSQL-style JSON path operator.
+    ///
+    /// `#>>` yields [`TokenType::HashArrowText`], `#>` yields [`TokenType::HashArrow`].
+    /// A bare `#` (no following `>`) is an [`LexError::InvalidCharacter`] in SQL — callers
+    /// should not reach this path without a `>` following.
+    fn read_hash_arrow(&mut self, start: usize) -> Token {
+        self.advance_pos(); // consume '#'
+        if self.if_peek_then_consume('>') {
+            if self.if_peek_then_consume('>') {
+                return self.create_token(TokenType::HashArrowText, "#>>", start);
+            }
+            return self.create_token(TokenType::HashArrow, "#>", start);
+        }
+        self.create_token(TokenType::Invalid, "#", start)
     }
 
     /// Disambiguates `-` from PostgreSQL-style JSON path operators.

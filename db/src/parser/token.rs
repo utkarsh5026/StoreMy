@@ -194,6 +194,10 @@ pub enum TokenType {
     Dot,
     Arrow,
     ArrowText,
+    /// `#>` — JSON path extraction returning JSON.
+    HashArrow,
+    /// `#>>` — JSON path extraction returning text.
+    HashArrowText,
     Question,
     /// `@>` — JSON containment (left contains right).
     AtGreater,

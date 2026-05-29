@@ -1,12 +1,14 @@
-//! Evaluation of PostgreSQL-style JSON operators: `->`, `->>`, and `?`.
+//! Evaluation of PostgreSQL-style JSON operators: `->`, `->>`, `#>`, `#>>`, and `?`.
 //!
 //! Three operators are covered:
 //!
 //! | Operator | Meaning |
 //! |----------|---------|
-//! | `doc -> key` | Extract a sub-value and return it as a JSON string. |
-//! | `doc ->> key` | Extract a sub-value and return it as plain text (strips quotes from strings). |
-//! | `doc ? key` | Return `true` if `key` exists at the top level of the JSON object, or as a string element in a JSON array. |
+//! | `doc -> key`       | Extract a sub-value and return it as a JSON string. |
+//! | `doc ->> key`      | Extract a sub-value and return it as plain text (strips quotes from strings). |
+//! | `doc #> '{a,b}'`   | Walk a multi-level path and return the result as JSON. |
+//! | `doc #>> '{a,b}'`  | Walk a multi-level path and return the result as plain text. |
+//! | `doc ? key`        | Return `true` if `key` exists at the top level of the JSON object, or as a string element in a JSON array. |
 //!
 //! All entry points receive already-evaluated [`Value`]s. NULL short-circuiting
 //! is handled by the caller (`eval_binary` in `mod.rs`) before any of these
@@ -129,6 +131,124 @@ pub(super) fn eval_arrow(
             Ok(Value::varchar(text))
         }
     }
+}
+
+/// Evaluates one step of a JSON path extraction — `#>` or `#>>`.
+///
+/// Unlike [`eval_arrow`] which takes a single key, these operators accept a
+/// `PostgreSQL` text-array path on the right-hand side: `payload #> '{user,name}'`.
+///
+/// ## Path format
+///
+/// `r` must hold a `Varchar` or `Text` value whose content is a `PostgreSQL`
+/// text-array literal — curly-brace delimited, comma-separated:
+///
+/// ```text
+/// '{key1,key2,...}'      →  walk key1, then key2, …
+/// '{0,items,name}'       →  integer segments → array index; string segments → object field
+/// ```
+///
+/// Segments that parse as non-negative integers are treated as zero-based array
+/// indices. All other segments are treated as object field names.
+///
+/// ## Return value
+///
+/// - Intermediate `null` / missing-key / out-of-bounds → `Value::Null`.
+/// - [`JsonArrowMode::AsJson`]: re-encodes the final sub-value as a `Json` [`Value`].
+/// - [`JsonArrowMode::AsText`]: returns a `Varchar` [`Value`] (strings lose quotes, scalars use
+///   `Display`).
+///
+/// # Errors
+///
+/// Returns [`ExecutionError::TypeError`] when:
+/// - `l` is not a `Json` value.
+/// - `r` is not a text value holding a well-formed `{…}` path.
+/// - The stored JSON string is malformed.
+pub(super) fn eval_path_arrow(
+    l: &Value,
+    r: &Value,
+    mode: JsonArrowMode,
+) -> Result<Value, ExecutionError> {
+    let raw = match r {
+        Value::Dyn(DynValue::Text(s) | DynValue::Varchar(s)) => s.as_str(),
+        other => {
+            return Err(ExecutionError::TypeError(format!(
+                "#> path must be a text array literal like '{{key,subkey}}', got {other}"
+            )));
+        }
+    };
+    let segments = parse_path(raw);
+    match mode {
+        JsonArrowMode::AsJson => eval_path_json(l, &segments),
+        JsonArrowMode::AsText => eval_path_text(l, &segments),
+    }
+}
+
+/// Evaluates `doc #> segments` — walks a pre-parsed path and returns the result as JSON.
+///
+/// Takes `&[String]` directly so callers that resolved the path at bind time pay no
+/// per-row parsing cost.  The dynamic fallback ([`eval_path_arrow`]) parses first,
+/// then delegates here.
+pub(super) fn eval_path_json(l: &Value, segments: &[String]) -> Result<Value, ExecutionError> {
+    if segments.is_empty() {
+        return Ok(Value::Null);
+    }
+    let current = parse_json(l)?;
+    let Some(found) = walk_path(current, segments) else {
+        return Ok(Value::Null);
+    };
+    let s = serde_json::to_string(&found)
+        .map_err(|e| ExecutionError::TypeError(format!("failed to encode JSON sub-value: {e}")))?;
+    Value::json(&s).map_err(|e| ExecutionError::TypeError(format!("invalid JSON sub-value: {e}")))
+}
+
+/// Evaluates `doc #>> segments` — walks a pre-parsed path and returns the result as text.
+///
+/// See [`eval_path_json`] for the pre-parsed design rationale.
+pub(super) fn eval_path_text(l: &Value, segments: &[String]) -> Result<Value, ExecutionError> {
+    if segments.is_empty() {
+        return Ok(Value::Null);
+    }
+    let current = parse_json(l)?;
+    let Some(found) = walk_path(current, segments) else {
+        return Ok(Value::Null);
+    };
+    let text = match found {
+        serde_json::Value::String(s) => s,
+        other => other.to_string(),
+    };
+    Ok(Value::varchar(text))
+}
+
+/// Parses a `PostgreSQL` text-array path literal into path segments.
+///
+/// Strips optional `{` / `}` delimiters and splits on commas.
+/// An empty path (`{}`) returns an empty `Vec`.
+pub(super) fn parse_path(raw: &str) -> Vec<String> {
+    let inner = raw.trim();
+    let inner = inner.strip_prefix('{').unwrap_or(inner);
+    let inner = inner.strip_suffix('}').unwrap_or(inner);
+    if inner.is_empty() {
+        return Vec::new();
+    }
+    inner.split(',').map(|s| s.trim().to_owned()).collect()
+}
+
+/// Walks `segments` through a parsed JSON document.
+///
+/// Returns `None` if any step is missing or resolves to JSON null.
+fn walk_path(mut current: serde_json::Value, segments: &[String]) -> Option<serde_json::Value> {
+    for segment in segments {
+        let key = match segment.parse::<u64>() {
+            Ok(n) => serde_json::Value::from(n),
+            Err(_) => serde_json::Value::String(segment.clone()),
+        };
+        match lookup(&current, &key) {
+            None | Some(serde_json::Value::Null) => return None,
+            Some(found) => current = found,
+        }
+    }
+    Some(current)
 }
 
 /// Evaluates `doc ? key` — checks whether `key` exists in the JSON document `l`.
@@ -419,5 +539,228 @@ mod tests {
     fn non_json_lhs_errors_for_contains() {
         let err = eval_contains(&Value::varchar("not json".into()), &json("1")).unwrap_err();
         assert!(matches!(err, ExecutionError::TypeError(_)));
+    }
+
+    // ── #> / #>> (path extraction) ────────────────────────────────────────────
+
+    fn path_json(doc: &str, path: &str) -> Value {
+        eval_path_arrow(
+            &json(doc),
+            &Value::varchar(path.into()),
+            JsonArrowMode::AsJson,
+        )
+        .expect("eval failed")
+    }
+
+    fn path_text(doc: &str, path: &str) -> Value {
+        eval_path_arrow(
+            &json(doc),
+            &Value::varchar(path.into()),
+            JsonArrowMode::AsText,
+        )
+        .expect("eval failed")
+    }
+
+    #[test]
+    fn path_arrow_single_key_as_json() {
+        assert_eq!(
+            path_json(r#"{"user":{"name":"alice"}}"#, "{user}"),
+            json(r#"{"name":"alice"}"#)
+        );
+    }
+
+    #[test]
+    fn path_arrow_two_levels_as_json() {
+        assert_eq!(
+            path_json(r#"{"user":{"name":"alice"}}"#, "{user,name}"),
+            json(r#""alice""#)
+        );
+    }
+
+    #[test]
+    fn path_arrow_text_strips_string_quotes() {
+        assert_eq!(
+            path_text(r#"{"user":{"name":"alice"}}"#, "{user,name}"),
+            Value::varchar("alice".into())
+        );
+    }
+
+    #[test]
+    fn path_arrow_integer_index_into_array() {
+        assert_eq!(
+            path_json(r#"{"items":["a","b","c"]}"#, "{items,1}"),
+            json(r#""b""#)
+        );
+    }
+
+    #[test]
+    fn path_arrow_missing_intermediate_key_returns_null() {
+        assert_eq!(path_json(r#"{"a":1}"#, "{missing,nested}"), Value::Null);
+    }
+
+    #[test]
+    fn path_arrow_missing_leaf_returns_null() {
+        assert_eq!(
+            path_json(r#"{"user":{"name":"alice"}}"#, "{user,age}"),
+            Value::Null
+        );
+    }
+
+    #[test]
+    fn path_arrow_empty_path_returns_null() {
+        assert_eq!(path_json(r#"{"a":1}"#, "{}"), Value::Null);
+    }
+
+    #[test]
+    fn path_arrow_non_text_rhs_errors() {
+        let err = eval_path_arrow(&json(r#"{"a":1}"#), &Value::int64(1), JsonArrowMode::AsJson)
+            .unwrap_err();
+        assert!(matches!(err, ExecutionError::TypeError(_)));
+    }
+
+    #[test]
+    fn path_arrow_three_levels_deep() {
+        assert_eq!(
+            path_text(r#"{"a":{"b":{"c":"deep"}}}"#, "{a,b,c}"),
+            Value::varchar("deep".into())
+        );
+    }
+
+    #[test]
+    fn parse_path_strips_braces() {
+        assert_eq!(parse_path("{user,name}"), vec!["user", "name"]);
+    }
+
+    #[test]
+    fn parse_path_bare_no_braces() {
+        assert_eq!(parse_path("a,b,c"), vec!["a", "b", "c"]);
+    }
+
+    #[test]
+    fn parse_path_single_segment() {
+        assert_eq!(parse_path("{user}"), vec!["user"]);
+    }
+
+    #[test]
+    fn parse_path_empty_returns_empty() {
+        assert!(parse_path("{}").is_empty());
+        assert!(parse_path("").is_empty());
+    }
+
+    #[test]
+    fn parse_path_trims_whitespace_around_commas() {
+        assert_eq!(parse_path("{ a , b , c }"), vec!["a", "b", "c"]);
+    }
+
+    #[test]
+    fn parse_path_integer_segment_preserved_as_string() {
+        // parse_path just returns strings; the int→index conversion happens in walk_path
+        assert_eq!(parse_path("{items,0}"), vec!["items", "0"]);
+    }
+
+    #[test]
+    fn eval_path_json_single_key() {
+        let segs = vec!["user".to_owned()];
+        assert_eq!(
+            eval_path_json(&json(r#"{"user":{"name":"alice"}}"#), &segs).unwrap(),
+            json(r#"{"name":"alice"}"#)
+        );
+    }
+
+    #[test]
+    fn eval_path_json_two_levels() {
+        let segs = vec!["user".to_owned(), "name".to_owned()];
+        assert_eq!(
+            eval_path_json(&json(r#"{"user":{"name":"alice"}}"#), &segs).unwrap(),
+            json(r#""alice""#)
+        );
+    }
+
+    #[test]
+    fn eval_path_json_integer_segment_indexes_array() {
+        let segs = vec!["items".to_owned(), "1".to_owned()];
+        assert_eq!(
+            eval_path_json(&json(r#"{"items":["a","b","c"]}"#), &segs).unwrap(),
+            json(r#""b""#)
+        );
+    }
+
+    #[test]
+    fn eval_path_json_missing_key_returns_null() {
+        let segs = vec!["missing".to_owned()];
+        assert_eq!(
+            eval_path_json(&json(r#"{"a":1}"#), &segs).unwrap(),
+            Value::Null
+        );
+    }
+
+    #[test]
+    fn eval_path_json_missing_intermediate_returns_null() {
+        let segs = vec!["a".to_owned(), "b".to_owned()];
+        assert_eq!(
+            eval_path_json(&json(r#"{"x":1}"#), &segs).unwrap(),
+            Value::Null
+        );
+    }
+
+    #[test]
+    fn eval_path_json_empty_segments_returns_null() {
+        assert_eq!(
+            eval_path_json(&json(r#"{"a":1}"#), &[]).unwrap(),
+            Value::Null
+        );
+    }
+
+    #[test]
+    fn eval_path_json_non_json_lhs_errors() {
+        let segs = vec!["k".to_owned()];
+        let err = eval_path_json(&Value::varchar("not json".into()), &segs).unwrap_err();
+        assert!(matches!(err, ExecutionError::TypeError(_)));
+    }
+
+    // ── eval_path_text (pre-parsed segments) ─────────────────────────────────
+
+    #[test]
+    fn eval_path_text_string_strips_quotes() {
+        let segs = vec!["user".to_owned(), "name".to_owned()];
+        assert_eq!(
+            eval_path_text(&json(r#"{"user":{"name":"alice"}}"#), &segs).unwrap(),
+            Value::varchar("alice".into())
+        );
+    }
+
+    #[test]
+    fn eval_path_text_integer_rendered_as_digits() {
+        let segs = vec!["meta".to_owned(), "count".to_owned()];
+        assert_eq!(
+            eval_path_text(&json(r#"{"meta":{"count":42}}"#), &segs).unwrap(),
+            Value::varchar("42".into())
+        );
+    }
+
+    #[test]
+    fn eval_path_text_bool_rendered_as_text() {
+        let segs = vec!["flags".to_owned(), "active".to_owned()];
+        assert_eq!(
+            eval_path_text(&json(r#"{"flags":{"active":true}}"#), &segs).unwrap(),
+            Value::varchar("true".into())
+        );
+    }
+
+    #[test]
+    fn eval_path_text_missing_returns_null() {
+        let segs = vec!["a".to_owned(), "b".to_owned()];
+        assert_eq!(
+            eval_path_text(&json(r#"{"a":1}"#), &segs).unwrap(),
+            Value::Null
+        );
+    }
+
+    #[test]
+    fn eval_path_text_empty_segments_returns_null() {
+        assert_eq!(
+            eval_path_text(&json(r#"{"a":1}"#), &[]).unwrap(),
+            Value::Null
+        );
     }
 }

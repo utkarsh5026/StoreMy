@@ -799,6 +799,146 @@ fn contained_by_is_inverse_of_contains() {
     );
 }
 
+fn hash_arrow_json_cases() -> Vec<ExprCase> {
+    vec![
+        ExprCase {
+            name: "single key as json",
+            doc: r#"{"user":{"name":"alice"}}"#,
+            expr: "payload #> '{user}'",
+            expected: Value::json(r#"{"name":"alice"}"#).unwrap(),
+        },
+        ExprCase {
+            name: "two-level path as json",
+            doc: r#"{"user":{"name":"alice"}}"#,
+            expr: "payload #> '{user,name}'",
+            expected: Value::json(r#""alice""#).unwrap(),
+        },
+        ExprCase {
+            name: "array index via integer segment",
+            doc: r#"{"items":["a","b","c"]}"#,
+            expr: "payload #> '{items,1}'",
+            expected: Value::json(r#""b""#).unwrap(),
+        },
+        ExprCase {
+            name: "missing intermediate key returns null",
+            doc: r#"{"a":1}"#,
+            expr: "payload #> '{missing,nested}'",
+            expected: Value::Null,
+        },
+        ExprCase {
+            name: "missing leaf returns null",
+            doc: r#"{"user":{"name":"alice"}}"#,
+            expr: "payload #> '{user,age}'",
+            expected: Value::Null,
+        },
+        ExprCase {
+            name: "empty path returns null",
+            doc: r#"{"a":1}"#,
+            expr: "payload #> '{}'",
+            expected: Value::Null,
+        },
+        ExprCase {
+            name: "NULL column returns null",
+            doc: NULL_DOC,
+            expr: "payload #> '{user}'",
+            expected: Value::Null,
+        },
+    ]
+}
+
+fn hash_arrow_text_cases() -> Vec<ExprCase> {
+    vec![
+        ExprCase {
+            name: "string leaf strips quotes",
+            doc: r#"{"user":{"name":"alice"}}"#,
+            expr: "payload #>> '{user,name}'",
+            expected: Value::varchar("alice".to_string()),
+        },
+        ExprCase {
+            name: "integer leaf rendered as digits",
+            doc: r#"{"meta":{"count":42}}"#,
+            expr: "payload #>> '{meta,count}'",
+            expected: Value::varchar("42".to_string()),
+        },
+        ExprCase {
+            name: "bool leaf rendered as text",
+            doc: r#"{"flags":{"active":true}}"#,
+            expr: "payload #>> '{flags,active}'",
+            expected: Value::varchar("true".to_string()),
+        },
+        ExprCase {
+            name: "three levels deep",
+            doc: r#"{"a":{"b":{"c":"deep"}}}"#,
+            expr: "payload #>> '{a,b,c}'",
+            expected: Value::varchar("deep".to_string()),
+        },
+        ExprCase {
+            name: "missing path returns null",
+            doc: r#"{"a":1}"#,
+            expr: "payload #>> '{a,b}'",
+            expected: Value::Null,
+        },
+        ExprCase {
+            name: "NULL column returns null",
+            doc: NULL_DOC,
+            expr: "payload #>> '{user,name}'",
+            expected: Value::Null,
+        },
+    ]
+}
+
+fn hash_arrow_filter_cases() -> Vec<FilterCase> {
+    vec![
+        FilterCase {
+            name: "filter by nested field via #>>",
+            docs: vec![
+                r#"{"user":{"role":"admin"}}"#,
+                r#"{"user":{"role":"viewer"}}"#,
+                r#"{"user":{"role":"admin"}}"#,
+            ],
+            predicate: "payload #>> '{user,role}' = 'admin'",
+            expected_ids: vec![1, 3],
+        },
+        FilterCase {
+            name: "filter by deeply nested number-as-text",
+            docs: vec![
+                r#"{"meta":{"score":100}}"#,
+                r#"{"meta":{"score":200}}"#,
+                r#"{"meta":{"score":100}}"#,
+            ],
+            predicate: "payload #>> '{meta,score}' = '100'",
+            expected_ids: vec![1, 3],
+        },
+        FilterCase {
+            name: "missing path does not match",
+            docs: vec![r#"{"a":{"b":1}}"#, r#"{"x":1}"#],
+            predicate: "payload #>> '{a,b}' = '1'",
+            expected_ids: vec![1],
+        },
+        FilterCase {
+            name: "NULL column skipped in filter",
+            docs: vec![NULL_DOC, r#"{"user":{"name":"alice"}}"#],
+            predicate: "payload #>> '{user,name}' = 'alice'",
+            expected_ids: vec![2],
+        },
+    ]
+}
+
+#[test]
+fn hash_arrow_json_value_types() {
+    run_expr_cases(&hash_arrow_json_cases());
+}
+
+#[test]
+fn hash_arrow_text_value_types() {
+    run_expr_cases(&hash_arrow_text_cases());
+}
+
+#[test]
+fn hash_arrow_filter() {
+    run_filter_cases(&hash_arrow_filter_cases());
+}
+
 // ── overflow (JSON > 255 bytes) ───────────────────────────────────────────────
 
 #[test]

@@ -40,7 +40,7 @@ use crate::{
     parser::statements::{AggFunc, BinOp, CaseBranch, Expr, UnOp},
     primitives::ColumnId,
     tuple::{Tuple, TupleSchema},
-    types::{ArithmeticError, FixedValue, Type},
+    types::{ArithmeticError, DynValue, FixedValue, Type},
 };
 
 /// Minimal interface for mapping a column reference to a [`ColumnId`].
@@ -128,6 +128,24 @@ pub enum ResolvedExpr {
 
     /// `COUNT(*)` — counts every row. Cannot be evaluated row-by-row.
     CountStar,
+
+    /// `doc #> '{a,b,...}'` with a statically-known path, pre-parsed at bind time.
+    ///
+    /// Using a dedicated variant (rather than `BinaryOp { HashArrow, rhs: Literal }`) avoids
+    /// re-splitting the path string on every row.  The dynamic fallback — when the RHS is a
+    /// column reference — remains as `BinaryOp { HashArrow }`.
+    PathArrowJson {
+        doc: Box<ResolvedExpr>,
+        segments: Vec<String>,
+    },
+
+    /// `doc #>> '{a,b,...}'` with a statically-known path, pre-parsed at bind time.
+    ///
+    /// Same motivation as [`Self::PathArrowJson`]; returns text instead of JSON.
+    PathArrowText {
+        doc: Box<ResolvedExpr>,
+        segments: Vec<String>,
+    },
 }
 
 /// One `WHEN … THEN …` branch inside a [`ResolvedExpr::Case`].
@@ -284,6 +302,22 @@ impl ResolvedExpr {
                 }
             }
 
+            Self::PathArrowJson { doc, segments } => {
+                let v = doc.eval(tuple)?;
+                if v.is_null() {
+                    return Ok(Value::Null);
+                }
+                json::eval_path_json(&v, segments)
+            }
+
+            Self::PathArrowText { doc, segments } => {
+                let v = doc.eval(tuple)?;
+                if v.is_null() {
+                    return Ok(Value::Null);
+                }
+                json::eval_path_text(&v, segments)
+            }
+
             Self::Agg { .. } | Self::CountStar => Err(ExecutionError::TypeError(
                 "aggregate expressions cannot be evaluated as scalar expressions".to_string(),
             )),
@@ -317,8 +351,8 @@ impl ResolvedExpr {
             Self::Literal(v) => v.get_type().unwrap_or(Type::String),
             Self::BinaryOp { lhs, op, .. } => match op {
                 BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div => lhs.infer_type(schema),
-                BinOp::Arrow => Type::Json,
-                BinOp::ArrowText => Type::Text,
+                BinOp::Arrow | BinOp::HashArrow => Type::Json,
+                BinOp::ArrowText | BinOp::HashArrowText => Type::Text,
                 _ => Type::Bool,
             },
             Self::UnaryOp { .. }
@@ -326,6 +360,8 @@ impl ResolvedExpr {
             | Self::In { .. }
             | Self::Between { .. }
             | Self::Like { .. } => Type::Bool,
+            Self::PathArrowJson { .. } => Type::Json,
+            Self::PathArrowText { .. } => Type::Text,
             _ => Type::String,
         }
     }
@@ -339,6 +375,7 @@ impl ResolvedExpr {
     ///
     /// Returns [`ExecutionError::TypeError`] when `resolver` returns `None` for
     /// any column reference (unknown or ambiguous column).
+    #[allow(clippy::too_many_lines)]
     pub fn resolve(expr: Expr, resolver: &impl ColumnLookup) -> Result<Self, ExecutionError> {
         match expr {
             Expr::Column(col_ref) => {
@@ -352,11 +389,33 @@ impl ResolvedExpr {
 
             Expr::Literal(v) => Ok(Self::Literal(v)),
 
-            Expr::BinaryOp { lhs, op, rhs } => Ok(Self::BinaryOp {
-                lhs: Box::new(Self::resolve(*lhs, resolver)?),
-                op,
-                rhs: Box::new(Self::resolve(*rhs, resolver)?),
-            }),
+            Expr::BinaryOp { lhs, op, rhs } => match op {
+                BinOp::HashArrow | BinOp::HashArrowText => {
+                    let doc = Box::new(Self::resolve(*lhs, resolver)?);
+                    match *rhs {
+                        Expr::Literal(Value::Dyn(
+                            DynValue::Varchar(ref s) | DynValue::Text(ref s),
+                        )) => {
+                            let segments = json::parse_path(s.as_str());
+                            Ok(if op == BinOp::HashArrow {
+                                Self::PathArrowJson { doc, segments }
+                            } else {
+                                Self::PathArrowText { doc, segments }
+                            })
+                        }
+                        other => Ok(Self::BinaryOp {
+                            lhs: doc,
+                            op,
+                            rhs: Box::new(Self::resolve(other, resolver)?),
+                        }),
+                    }
+                }
+                _ => Ok(Self::BinaryOp {
+                    lhs: Box::new(Self::resolve(*lhs, resolver)?),
+                    op,
+                    rhs: Box::new(Self::resolve(*rhs, resolver)?),
+                }),
+            },
 
             Expr::UnaryOp { op, operand } => Ok(Self::UnaryOp {
                 op,
@@ -504,6 +563,14 @@ impl ResolvedExpr {
                     .collect(),
                 else_result: else_result.map(|e| Box::new(e.map_columns(f))),
             },
+            Self::PathArrowJson { doc, segments } => Self::PathArrowJson {
+                doc: Box::new(doc.map_columns(f)),
+                segments,
+            },
+            Self::PathArrowText { doc, segments } => Self::PathArrowText {
+                doc: Box::new(doc.map_columns(f)),
+                segments,
+            },
             Self::Agg { func, arg } => Self::Agg {
                 func,
                 arg: Box::new(arg.map_columns(f)),
@@ -586,6 +653,8 @@ impl ResolvedExpr {
             }),
             BinOp::Arrow => json::eval_arrow(l, r, json::JsonArrowMode::AsJson),
             BinOp::ArrowText => json::eval_arrow(l, r, json::JsonArrowMode::AsText),
+            BinOp::HashArrow => json::eval_path_arrow(l, r, json::JsonArrowMode::AsJson),
+            BinOp::HashArrowText => json::eval_path_arrow(l, r, json::JsonArrowMode::AsText),
             BinOp::KeyExists => json::eval_key_exists(l, r),
             BinOp::Contains => json::eval_contains(l, r),
             BinOp::ContainedBy => json::eval_contains(r, l),
@@ -1364,6 +1433,100 @@ mod tests {
             lhs: Box::new(resolved_col(0)),
             op: BinOp::ArrowText,
             rhs: Box::new(lit(Value::varchar("key".into()))),
+        };
+        assert_eq!(expr.infer_type(&s.0), Type::Text);
+    }
+
+    // ── #> / #>> resolve and eval ─────────────────────────────────────────────
+
+    #[test]
+    fn resolve_hash_arrow_literal_produces_path_arrow_json() {
+        let r = schema(&[("payload", Type::Json)]);
+        let expr = Expr::BinaryOp {
+            lhs: Box::new(col("payload")),
+            op: BinOp::HashArrow,
+            rhs: Box::new(Expr::Literal(Value::varchar("{user,name}".into()))),
+        };
+        let resolved = ResolvedExpr::resolve(expr, &r).unwrap();
+        assert!(
+            matches!(resolved, ResolvedExpr::PathArrowJson { ref segments, .. }
+                if segments == &["user", "name"]),
+            "expected PathArrowJson with pre-parsed segments, got {resolved:?}"
+        );
+    }
+
+    #[test]
+    fn resolve_hash_arrow_text_literal_produces_path_arrow_text() {
+        let r = schema(&[("payload", Type::Json)]);
+        let expr = Expr::BinaryOp {
+            lhs: Box::new(col("payload")),
+            op: BinOp::HashArrowText,
+            rhs: Box::new(Expr::Literal(Value::varchar("{a,b,c}".into()))),
+        };
+        let resolved = ResolvedExpr::resolve(expr, &r).unwrap();
+        assert!(
+            matches!(resolved, ResolvedExpr::PathArrowText { ref segments, .. }
+                if segments == &["a", "b", "c"]),
+            "expected PathArrowText with pre-parsed segments, got {resolved:?}"
+        );
+    }
+
+    #[test]
+    fn eval_path_arrow_json_two_levels() {
+        let t = tuple(vec![json(r#"{"user":{"name":"alice"}}"#)]);
+        let expr = ResolvedExpr::PathArrowJson {
+            doc: Box::new(resolved_col(0)),
+            segments: vec!["user".into(), "name".into()],
+        };
+        assert_eq!(eval(&expr, &t), json(r#""alice""#));
+    }
+
+    #[test]
+    fn eval_path_arrow_text_two_levels() {
+        let t = tuple(vec![json(r#"{"user":{"name":"alice"}}"#)]);
+        let expr = ResolvedExpr::PathArrowText {
+            doc: Box::new(resolved_col(0)),
+            segments: vec!["user".into(), "name".into()],
+        };
+        assert_eq!(eval(&expr, &t), Value::varchar("alice".into()));
+    }
+
+    #[test]
+    fn eval_path_arrow_missing_returns_null() {
+        let t = tuple(vec![json(r#"{"a":1}"#)]);
+        let expr = ResolvedExpr::PathArrowJson {
+            doc: Box::new(resolved_col(0)),
+            segments: vec!["missing".into()],
+        };
+        assert_eq!(eval(&expr, &t), Value::Null);
+    }
+
+    #[test]
+    fn eval_path_arrow_null_column_propagates() {
+        let t = tuple(vec![Value::Null]);
+        let expr = ResolvedExpr::PathArrowJson {
+            doc: Box::new(resolved_col(0)),
+            segments: vec!["user".into()],
+        };
+        assert_eq!(eval(&expr, &t), Value::Null);
+    }
+
+    #[test]
+    fn infer_type_path_arrow_json_returns_json() {
+        let s = schema(&[("payload", Type::Json)]);
+        let expr = ResolvedExpr::PathArrowJson {
+            doc: Box::new(resolved_col(0)),
+            segments: vec!["key".into()],
+        };
+        assert_eq!(expr.infer_type(&s.0), Type::Json);
+    }
+
+    #[test]
+    fn infer_type_path_arrow_text_returns_text() {
+        let s = schema(&[("payload", Type::Json)]);
+        let expr = ResolvedExpr::PathArrowText {
+            doc: Box::new(resolved_col(0)),
+            segments: vec!["key".into()],
         };
         assert_eq!(expr.infer_type(&s.0), Type::Text);
     }
