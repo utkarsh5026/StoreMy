@@ -195,6 +195,10 @@ pub enum TokenType {
     Arrow,
     ArrowText,
     Question,
+    /// `@>` — JSON containment (left contains right).
+    AtGreater,
+    /// `<@` — JSON contained-by (left is contained in right).
+    LtAt,
     Invalid,
     Eof,
 }
@@ -318,6 +322,8 @@ impl TokenType {
             TokenType::Arrow => "ARROW",
             TokenType::ArrowText => "ARROW_TEXT",
             TokenType::Question => "QUESTION",
+            TokenType::AtGreater => "AT_GREATER",
+            TokenType::LtAt => "LT_AT",
             TokenType::Invalid => "INVALID",
             TokenType::Eof => "EOF",
             _ => unreachable!("only called for non-keyword token types"),

@@ -279,6 +279,24 @@ impl FixedValue {
             Type::String | Type::Text | Type::Json => None,
         }
     }
+
+    /// Converts this fixed-width scalar to the equivalent [`serde_json::Value`].
+    ///
+    /// All numeric and boolean variants map directly. `Float64` values that are
+    /// NaN or infinite (not representable in JSON) become [`serde_json::Value::Null`].
+    /// Temporal variants (`Date`, `Time`, `Timestamp`) are represented as their
+    /// raw integer payloads.
+    pub fn to_serde_json(&self) -> serde_json::Value {
+        match self {
+            Self::Int32(n) | Self::Date(n) => serde_json::Value::from(*n),
+            Self::Int64(n) | Self::Time(n) | Self::Timestamp(n) => serde_json::Value::from(*n),
+            Self::Uint32(n) => serde_json::Value::from(*n),
+            Self::Uint64(n) => serde_json::Value::from(*n),
+            Self::Float64(n) => serde_json::Number::from_f64(*n)
+                .map_or(serde_json::Value::Null, serde_json::Value::Number),
+            Self::Bool(b) => serde_json::Value::Bool(*b),
+        }
+    }
 }
 
 impl Hash for FixedValue {
@@ -371,6 +389,27 @@ impl DynValue {
             Self::Json(_) | Self::JsonOverflow(_) => Type::Json,
         }
     }
+
+    /// Converts this dynamic value to a [`serde_json::Value`].
+    ///
+    /// - `Varchar` and `Text` become `serde_json::Value::String`.
+    /// - `Json` is parsed from its stored string.
+    /// - `TextOverflow` and `JsonOverflow` are storage artifacts that must be resolved by the heap
+    ///   layer before reaching this point.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`serde_json::Error`] if a `Json` variant contains a malformed
+    /// JSON string (should not happen in practice since JSON is validated on insert).
+    pub fn to_serde_json(&self) -> Result<serde_json::Value, serde_json::Error> {
+        match self {
+            Self::Varchar(s) | Self::Text(s) => Ok(serde_json::Value::String(s.clone())),
+            Self::Json(s) => serde_json::from_str(s),
+            Self::TextOverflow(_) | Self::JsonOverflow(_) => {
+                unreachable!("overflow values must be resolved before JSON conversion")
+            }
+        }
+    }
 }
 
 impl PartialEq for DynValue {
@@ -455,6 +494,24 @@ impl Value {
         match self {
             Value::Fixed(FixedValue::Bool(b)) => Some(*b),
             _ => None,
+        }
+    }
+
+    /// Converts this value to a [`serde_json::Value`].
+    ///
+    /// - `NULL` becomes `serde_json::Value::Null`.
+    /// - Fixed-width scalars delegate to [`FixedValue::to_serde_json`].
+    /// - Dynamic values delegate to [`DynValue::to_serde_json`].
+    ///
+    /// # Errors
+    ///
+    /// Returns [`serde_json::Error`] if a `Json` variant inside a [`DynValue`]
+    /// contains a malformed JSON string.
+    pub fn to_serde_json(&self) -> Result<serde_json::Value, serde_json::Error> {
+        match self {
+            Self::Null => Ok(serde_json::Value::Null),
+            Self::Fixed(v) => Ok(v.to_serde_json()),
+            Self::Dyn(v) => v.to_serde_json(),
         }
     }
 
@@ -1090,6 +1147,187 @@ mod coerce_to_tests {
     fn string_literal_to_int_column_fails() {
         let v = Value::varchar("1".to_string());
         assert!(v.coerce_to(Type::Int32).is_err());
+    }
+}
+
+#[cfg(test)]
+mod to_serde_json_tests {
+    use super::{DynValue, FixedValue, Value};
+
+    #[test]
+    fn fixed_bool_true() {
+        assert_eq!(
+            FixedValue::Bool(true).to_serde_json(),
+            serde_json::Value::Bool(true)
+        );
+    }
+
+    #[test]
+    fn fixed_bool_false() {
+        assert_eq!(
+            FixedValue::Bool(false).to_serde_json(),
+            serde_json::Value::Bool(false)
+        );
+    }
+
+    #[test]
+    fn fixed_int32() {
+        assert_eq!(FixedValue::Int32(42).to_serde_json(), serde_json::json!(42));
+    }
+
+    #[test]
+    fn fixed_int64() {
+        assert_eq!(
+            FixedValue::Int64(-1_000_000).to_serde_json(),
+            serde_json::json!(-1_000_000i64)
+        );
+    }
+
+    #[test]
+    fn fixed_uint32() {
+        assert_eq!(
+            FixedValue::Uint32(7).to_serde_json(),
+            serde_json::json!(7u32)
+        );
+    }
+
+    #[test]
+    fn fixed_uint64() {
+        assert_eq!(
+            FixedValue::Uint64(u64::MAX).to_serde_json(),
+            serde_json::json!(u64::MAX)
+        );
+    }
+
+    #[test]
+    fn fixed_float64_normal() {
+        assert_eq!(
+            FixedValue::Float64(2.5).to_serde_json(),
+            serde_json::json!(2.5)
+        );
+    }
+
+    #[test]
+    fn fixed_float64_nan_becomes_null() {
+        assert_eq!(
+            FixedValue::Float64(f64::NAN).to_serde_json(),
+            serde_json::Value::Null
+        );
+    }
+
+    #[test]
+    fn fixed_float64_infinite_becomes_null() {
+        assert_eq!(
+            FixedValue::Float64(f64::INFINITY).to_serde_json(),
+            serde_json::Value::Null
+        );
+        assert_eq!(
+            FixedValue::Float64(f64::NEG_INFINITY).to_serde_json(),
+            serde_json::Value::Null
+        );
+    }
+
+    #[test]
+    fn fixed_date_is_raw_i32() {
+        // Date is stored as days since Unix epoch; to_serde_json returns the raw integer.
+        assert_eq!(
+            FixedValue::Date(19737).to_serde_json(),
+            serde_json::json!(19737i32)
+        );
+    }
+
+    #[test]
+    fn fixed_time_is_raw_i64() {
+        assert_eq!(
+            FixedValue::Time(3_600_000_000).to_serde_json(),
+            serde_json::json!(3_600_000_000i64)
+        );
+    }
+
+    #[test]
+    fn fixed_timestamp_is_raw_i64() {
+        assert_eq!(
+            FixedValue::Timestamp(0).to_serde_json(),
+            serde_json::json!(0i64)
+        );
+    }
+
+    // ── DynValue ──────────────────────────────────────────────────────────────
+
+    #[test]
+    fn dyn_varchar_becomes_json_string() {
+        let v = DynValue::Varchar("hello".to_owned());
+        assert_eq!(
+            v.to_serde_json().unwrap(),
+            serde_json::Value::String("hello".to_owned())
+        );
+    }
+
+    #[test]
+    fn dyn_text_becomes_json_string() {
+        let v = DynValue::Text("world".to_owned());
+        assert_eq!(
+            v.to_serde_json().unwrap(),
+            serde_json::Value::String("world".to_owned())
+        );
+    }
+
+    #[test]
+    fn dyn_json_object_is_parsed() {
+        let v = DynValue::Json(r#"{"a":1}"#.to_owned());
+        assert_eq!(v.to_serde_json().unwrap(), serde_json::json!({"a": 1}));
+    }
+
+    #[test]
+    fn dyn_json_array_is_parsed() {
+        let v = DynValue::Json("[1,2,3]".to_owned());
+        assert_eq!(v.to_serde_json().unwrap(), serde_json::json!([1, 2, 3]));
+    }
+
+    #[test]
+    fn dyn_json_scalar_is_parsed() {
+        let v = DynValue::Json("true".to_owned());
+        assert_eq!(v.to_serde_json().unwrap(), serde_json::Value::Bool(true));
+    }
+
+    // ── Value ─────────────────────────────────────────────────────────────────
+
+    #[test]
+    fn value_null_becomes_json_null() {
+        assert_eq!(
+            Value::null().to_serde_json().unwrap(),
+            serde_json::Value::Null
+        );
+    }
+
+    #[test]
+    fn value_fixed_bool_delegates() {
+        assert_eq!(
+            Value::bool(false).to_serde_json().unwrap(),
+            serde_json::Value::Bool(false)
+        );
+    }
+
+    #[test]
+    fn value_fixed_int32_delegates() {
+        assert_eq!(
+            Value::int32(99).to_serde_json().unwrap(),
+            serde_json::json!(99i32)
+        );
+    }
+
+    #[test]
+    fn value_dyn_varchar_delegates() {
+        assert_eq!(
+            Value::varchar("test".to_owned()).to_serde_json().unwrap(),
+            serde_json::Value::String("test".to_owned()),
+        );
+    }
+
+    #[test]
+    fn value_dyn_json_delegates() {
+        let v = Value::json(r#"{"x":1}"#).unwrap();
+        assert_eq!(v.to_serde_json().unwrap(), serde_json::json!({"x": 1}));
     }
 }
 

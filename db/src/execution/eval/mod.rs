@@ -587,6 +587,8 @@ impl ResolvedExpr {
             BinOp::Arrow => json::eval_arrow(l, r, json::JsonArrowMode::AsJson),
             BinOp::ArrowText => json::eval_arrow(l, r, json::JsonArrowMode::AsText),
             BinOp::KeyExists => json::eval_key_exists(l, r),
+            BinOp::Contains => json::eval_contains(l, r),
+            BinOp::ContainedBy => json::eval_contains(r, l),
         }
     }
 }

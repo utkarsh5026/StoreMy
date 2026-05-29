@@ -143,8 +143,20 @@ impl Lexer {
 
         match ch {
             '=' | '<' | '>' | '!' => {
-                let op = self.read_operator();
-                Ok(Some(self.create_token(TokenType::Operator, op, start)))
+                let (op, kind) = self.read_operator();
+                Ok(Some(self.create_token(kind, op, start)))
+            }
+
+            '@' => {
+                self.advance_pos();
+                if self.if_peek_then_consume('>') {
+                    Ok(Some(self.create_token(TokenType::AtGreater, "@>", start)))
+                } else {
+                    Err(LexError::InvalidCharacter {
+                        ch: '@',
+                        span: Span::new(start, start + 1),
+                    })
+                }
             }
 
             '\'' | '"' => {
@@ -301,19 +313,23 @@ impl Lexer {
     ///
     /// Two-character operators (`<=`, `>=`, `!=`, `<>`) are consumed in full.
     /// All other first characters (`=`, isolated `<`, `>`, `!`) are returned as-is.
-    fn read_operator(&mut self) -> String {
+    fn read_operator(&mut self) -> (String, TokenType) {
         let first = self.consume_char();
 
         if let Some(next) = self.peek_char() {
             match (first, next) {
                 ('<' | '>' | '!', '=') | ('<', '>') => {
                     self.advance_pos();
-                    format!("{first}{next}")
+                    (format!("{first}{next}"), TokenType::Operator)
                 }
-                _ => first.to_string(),
+                ('<', '@') => {
+                    self.advance_pos();
+                    ("<@".to_string(), TokenType::LtAt)
+                }
+                _ => (first.to_string(), TokenType::Operator),
             }
         } else {
-            first.to_string()
+            (first.to_string(), TokenType::Operator)
         }
     }
 

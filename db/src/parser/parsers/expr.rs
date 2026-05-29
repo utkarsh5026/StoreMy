@@ -89,6 +89,12 @@ const PEEK_TOKEN_BINOPS: &[(TokenType, BinOp, Precedence)] = &[
     (TokenType::Arrow, BinOp::Arrow, Precedence::JsonPath),
     (TokenType::ArrowText, BinOp::ArrowText, Precedence::JsonPath),
     (TokenType::Question, BinOp::KeyExists, Precedence::JsonPath),
+    (
+        TokenType::AtGreater,
+        BinOp::Contains,
+        Precedence::Comparison,
+    ),
+    (TokenType::LtAt, BinOp::ContainedBy, Precedence::Comparison),
 ];
 
 /// A single expression inside a `SELECT` list.
@@ -363,6 +369,10 @@ pub enum BinOp {
     ArrowText,
     /// Key exists (`?`).
     KeyExists,
+    /// JSON containment — left contains right (`@>`).
+    Contains,
+    /// JSON contained-by — left is contained in right (`<@`).
+    ContainedBy,
 }
 
 impl Display for BinOp {
@@ -383,6 +393,8 @@ impl Display for BinOp {
             Self::Arrow => "->",
             Self::ArrowText => "->>",
             Self::KeyExists => "?",
+            Self::Contains => "@>",
+            Self::ContainedBy => "<@",
         };
         f.write_str(s)
     }
@@ -1636,5 +1648,48 @@ mod tests {
             }),
             "comparison should take arrow extraction as its lhs"
         );
+    }
+
+    #[test]
+    fn json_contains_parses_at_gt() {
+        let Expr::BinaryOp { op, lhs, rhs } = ok(r#"payload @> '{"type":"click"}'"#) else {
+            panic!("expected BinaryOp");
+        };
+        assert_eq!(op, BinOp::Contains);
+        assert!(matches!(*lhs, Expr::Column(_)));
+        assert!(matches!(*rhs, Expr::Literal(_)));
+    }
+
+    #[test]
+    fn json_contained_by_parses_lt_at() {
+        let Expr::BinaryOp { op, lhs, rhs } = ok(r#"'{"type":"click"}' <@ payload"#) else {
+            panic!("expected BinaryOp");
+        };
+        assert_eq!(op, BinOp::ContainedBy);
+        assert!(matches!(*lhs, Expr::Literal(_)));
+        assert!(matches!(*rhs, Expr::Column(_)));
+    }
+
+    #[test]
+    fn json_arrow_binds_tighter_than_contains() {
+        // `payload->'user' @> '{"name":"alice"}'` parses as `(payload->'user') @> ...`
+        // because -> is at JsonPath (12) and @> is at Comparison (6)
+        let Expr::BinaryOp { op, lhs, .. } = ok(r#"payload->'user' @> '{"name":"alice"}'"#) else {
+            panic!("expected BinaryOp");
+        };
+        assert_eq!(op, BinOp::Contains, "root should be @>");
+        assert!(
+            matches!(*lhs, Expr::BinaryOp {
+                op: BinOp::Arrow,
+                ..
+            }),
+            "arrow extraction should be the lhs of @>"
+        );
+    }
+
+    #[test]
+    fn json_contains_display() {
+        assert_eq!(ok(r"a @> '{}'").to_string(), r"(a @> '{}')");
+        assert_eq!(ok(r"'{}' <@ a").to_string(), r"('{}' <@ a)");
     }
 }

@@ -133,7 +133,7 @@ pub(super) fn eval_arrow(
 
 /// Evaluates `doc ? key` — checks whether `key` exists in the JSON document `l`.
 ///
-/// The semantics mirror PostgreSQL:
+/// The semantics mirror `PostgreSQL`:
 /// - When `l` is a JSON **object**, returns `true` if `key` is a top-level field name.
 /// - When `l` is a JSON **array**, returns `true` if any element equals the string `key`.
 /// - For any other JSON type (number, boolean, string, null), returns `false`.
@@ -181,16 +181,78 @@ pub(super) fn eval_key_exists(l: &Value, r: &Value) -> Result<Value, ExecutionEr
     Ok(Value::bool(exists))
 }
 
-/// Parses a `Json` [`Value`] into a `serde_json::Value` for further inspection.
+/// Evaluates `l @> r` — returns `true` if `l` contains `r`.
 ///
-/// Errors if `v` is not a `Json` variant or the stored string is not valid JSON.
+/// Both operands must be JSON values. Containment semantics follow `PostgreSQL`:
+///
+/// - **Object @> Object**: every key/value pair in `r` must exist in `l`, with values checked
+///   recursively.
+/// - **Array @> Array**: every element of `r` must appear somewhere in `l` (recursive element
+///   matching, order-independent).
+/// - **Array @> scalar**: the scalar must appear somewhere in the array.
+/// - **Scalar @> scalar**: the two scalars must be equal.
+///
+/// # Errors
+///
+/// Returns [`ExecutionError::TypeError`] when `l` is not JSON or either
+/// operand holds a malformed JSON string.
+pub(super) fn eval_contains(l: &Value, r: &Value) -> Result<Value, ExecutionError> {
+    let haystack = coerce_to_json_doc(l)?;
+    let needle = coerce_to_json_doc(r)?;
+    Ok(Value::bool(contains(&haystack, &needle)))
+}
+
+/// Recursive containment check used by [`eval_contains`].
+///
+/// Mirrors `PostgreSQL` `@>` semantics:
+///
+/// - **Object @> Object**: every key/value pair in `needle` must exist in `haystack` with a
+///   recursively contained value.
+/// - **Array @> Array**: every element of `needle` must match at least one element of `haystack`
+///   (order-independent, recursive).
+/// - **Array @> scalar**: the scalar must appear somewhere in the array.
+/// - **Scalar @> scalar**: the two scalars must be equal.
+fn contains(haystack: &serde_json::Value, needle: &serde_json::Value) -> bool {
+    use serde_json::Value::{Array, Object};
+    match (haystack, needle) {
+        (Object(h), Object(n)) => n
+            .iter()
+            .all(|(k, nv)| h.get(k).is_some_and(|hv| contains(hv, nv))),
+        (Array(h), Array(n)) => n.iter().all(|nv| h.iter().any(|hv| contains(hv, nv))),
+        (Array(h), nv) => h.iter().any(|hv| contains(hv, nv)),
+        (h, n) => h == n,
+    }
+}
+
+/// Parses a `Json` [`Value`] into a `serde_json::Value`.
+///
+/// Requires `v` to be a `Json` variant — strings, numbers, and other value
+/// types are rejected so callers get a clear error when the wrong column type
+/// is used on the left-hand side of a JSON operator.
 fn parse_json(v: &Value) -> Result<serde_json::Value, ExecutionError> {
     match v {
-        Value::Dyn(DynValue::Json(s)) => serde_json::from_str(s.as_str())
+        Value::Dyn(DynValue::Json(_)) => v
+            .to_serde_json()
             .map_err(|e| ExecutionError::TypeError(format!("invalid JSON document: {e}"))),
         other => Err(ExecutionError::TypeError(format!(
             "JSON operator requires a JSON operand, got {other}"
         ))),
+    }
+}
+
+/// Converts any [`Value`] to a `serde_json::Value`, treating `Varchar` and
+/// `Text` as JSON text to be parsed rather than as plain string scalars.
+///
+/// Used by [`eval_contains`] so that SQL string literals like `'{"type":"click"}'`
+/// are implicitly coerced to JSON documents — matching `PostgreSQL`'s behaviour
+/// where `@>` accepts a `text` literal on either side.
+fn coerce_to_json_doc(v: &Value) -> Result<serde_json::Value, ExecutionError> {
+    match v {
+        Value::Dyn(DynValue::Varchar(s) | DynValue::Text(s)) => serde_json::from_str(s.as_str())
+            .map_err(|e| ExecutionError::TypeError(format!("@> operand is not valid JSON: {e}"))),
+        _ => v
+            .to_serde_json()
+            .map_err(|e| ExecutionError::TypeError(format!("invalid JSON in @> operand: {e}"))),
     }
 }
 
@@ -295,6 +357,67 @@ mod tests {
             &Value::varchar("k".into()),
         )
         .unwrap_err();
+        assert!(matches!(err, ExecutionError::TypeError(_)));
+    }
+
+    fn contains_check(l: &str, r: &str) -> bool {
+        match eval_contains(&json(l), &json(r)).expect("eval failed") {
+            Value::Fixed(crate::types::FixedValue::Bool(b)) => b,
+            other => panic!("expected bool, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn object_contains_subset_of_keys() {
+        assert!(contains_check(r#"{"a":1,"b":2,"c":3}"#, r#"{"a":1}"#));
+        assert!(contains_check(r#"{"a":1,"b":2}"#, r#"{"a":1,"b":2}"#));
+    }
+
+    #[test]
+    fn object_missing_key_not_contained() {
+        assert!(!contains_check(r#"{"a":1}"#, r#"{"a":1,"b":2}"#));
+    }
+
+    #[test]
+    fn object_wrong_value_not_contained() {
+        assert!(!contains_check(r#"{"a":1}"#, r#"{"a":2}"#));
+    }
+
+    #[test]
+    fn object_contains_nested_subset() {
+        assert!(contains_check(
+            r#"{"user":{"name":"alice","age":30}}"#,
+            r#"{"user":{"name":"alice"}}"#
+        ));
+        assert!(!contains_check(
+            r#"{"user":{"name":"alice"}}"#,
+            r#"{"user":{"name":"alice","age":30}}"#
+        ));
+    }
+
+    #[test]
+    fn array_contains_subset_of_elements() {
+        assert!(contains_check(r"[1,2,3,4]", r"[2,4]"));
+        assert!(!contains_check(r"[1,2,3]", r"[2,5]"));
+    }
+
+    #[test]
+    fn array_contains_scalar() {
+        assert!(contains_check(r"[1,2,3]", "2"));
+        assert!(!contains_check(r"[1,2,3]", "5"));
+    }
+
+    #[test]
+    fn scalar_contains_equal_scalar() {
+        assert!(contains_check("42", "42"));
+        assert!(!contains_check("42", "43"));
+        assert!(contains_check(r#""hello""#, r#""hello""#));
+        assert!(!contains_check(r#""hello""#, r#""world""#));
+    }
+
+    #[test]
+    fn non_json_lhs_errors_for_contains() {
+        let err = eval_contains(&Value::varchar("not json".into()), &json("1")).unwrap_err();
         assert!(matches!(err, ExecutionError::TypeError(_)));
     }
 }

@@ -393,3 +393,120 @@ fn mixed_inline_and_overflow_rows_both_queryable() {
     assert_eq!(pairs[0], (1, "small"));
     assert_eq!(pairs[1], (2, "big"));
 }
+
+#[test]
+fn contains_object_subset_returns_true() {
+    let db = TestDb::new();
+    db.run_ok("CREATE TABLE t (id INT, payload JSON)");
+    db.run_ok(r#"INSERT INTO t VALUES (1, '{"type":"click","x":10,"y":20}')"#);
+
+    let rows = select_rows(&db, r#"SELECT payload @> '{"type":"click"}' FROM t"#);
+    assert_eq!(rows[0][0], Value::bool(true));
+}
+
+#[test]
+fn contains_missing_key_returns_false() {
+    let db = TestDb::new();
+    db.run_ok("CREATE TABLE t (id INT, payload JSON)");
+    db.run_ok(r#"INSERT INTO t VALUES (1, '{"type":"click"}')"#);
+
+    let rows = select_rows(&db, r#"SELECT payload @> '{"missing":"val"}' FROM t"#);
+    assert_eq!(rows[0][0], Value::bool(false));
+}
+
+#[test]
+fn contains_wrong_value_returns_false() {
+    let db = TestDb::new();
+    db.run_ok("CREATE TABLE t (id INT, payload JSON)");
+    db.run_ok(r#"INSERT INTO t VALUES (1, '{"type":"click"}')"#);
+
+    let rows = select_rows(&db, r#"SELECT payload @> '{"type":"hover"}' FROM t"#);
+    assert_eq!(rows[0][0], Value::bool(false));
+}
+
+#[test]
+fn contains_nested_object_subset() {
+    let db = TestDb::new();
+    db.run_ok("CREATE TABLE t (id INT, payload JSON)");
+    db.run_ok(r#"INSERT INTO t VALUES (1, '{"user":{"name":"alice","age":30}}')"#);
+
+    let rows = select_rows(
+        &db,
+        r#"SELECT payload @> '{"user":{"name":"alice"}}' FROM t"#,
+    );
+    assert_eq!(rows[0][0], Value::bool(true));
+
+    let rows = select_rows(&db, r#"SELECT payload @> '{"user":{"name":"bob"}}' FROM t"#);
+    assert_eq!(rows[0][0], Value::bool(false));
+}
+
+#[test]
+fn contains_filters_rows_in_where_clause() {
+    let db = TestDb::new();
+    db.run_ok("CREATE TABLE t (id INT, payload JSON)");
+    db.run_ok(
+        r#"INSERT INTO t VALUES
+        (1, '{"type":"click","x":1}'),
+        (2, '{"type":"hover"}'),
+        (3, '{"type":"click","x":2}')"#,
+    );
+
+    let rows = select_rows(
+        &db,
+        r#"SELECT id FROM t WHERE payload @> '{"type":"click"}'"#,
+    );
+    assert_eq!(rows.len(), 2);
+}
+
+#[test]
+fn contains_array_subset_returns_true() {
+    let db = TestDb::new();
+    db.run_ok("CREATE TABLE t (id INT, tags JSON)");
+    db.run_ok(r"INSERT INTO t VALUES (1, '[1,2,3,4]')");
+
+    let rows = select_rows(&db, r"SELECT tags @> '[2,4]' FROM t");
+    assert_eq!(rows[0][0], Value::bool(true));
+
+    let rows = select_rows(&db, r"SELECT tags @> '[2,5]' FROM t");
+    assert_eq!(rows[0][0], Value::bool(false));
+}
+
+#[test]
+fn contained_by_is_reverse_of_contains() {
+    let db = TestDb::new();
+    db.run_ok("CREATE TABLE t (id INT, payload JSON)");
+    db.run_ok(r#"INSERT INTO t VALUES (1, '{"type":"click","x":10}')"#);
+
+    // a <@ b  ≡  b @> a
+    let rows_contains = select_rows(&db, r#"SELECT payload @> '{"type":"click"}' FROM t"#);
+    let rows_contained_by = select_rows(&db, r#"SELECT '{"type":"click"}' <@ payload FROM t"#);
+    assert_eq!(rows_contains[0][0], rows_contained_by[0][0]);
+}
+
+#[test]
+fn contained_by_filters_rows_in_where_clause() {
+    let db = TestDb::new();
+    db.run_ok("CREATE TABLE t (id INT, payload JSON)");
+    db.run_ok(
+        r#"INSERT INTO t VALUES
+        (1, '{"type":"click"}'),
+        (2, '{"type":"hover"}')"#,
+    );
+
+    let rows = select_rows(
+        &db,
+        r#"SELECT id FROM t WHERE '{"type":"click"}' <@ payload"#,
+    );
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0][0], Value::int32(1));
+}
+
+#[test]
+fn contains_null_json_column_propagates_null() {
+    let db = TestDb::new();
+    db.run_ok("CREATE TABLE t (id INT, data JSON)");
+    db.run_ok("INSERT INTO t (id) VALUES (1)");
+
+    let rows = select_rows(&db, r"SELECT id FROM t WHERE data @> '{}'");
+    assert_eq!(rows.len(), 0, "NULL @> anything should not match");
+}
