@@ -53,6 +53,7 @@ pub(super) enum Precedence {
     Comparison,
     AddSub,
     MulDiv,
+    JsonPath,
 }
 
 impl Precedence {
@@ -65,6 +66,7 @@ impl Precedence {
             Precedence::Comparison => (6, 7),
             Precedence::AddSub => (8, 9),
             Precedence::MulDiv => (10, 11),
+            Precedence::JsonPath => (12, 13),
             Precedence::PrefixNot => panic!("PrefixNot has no binary bp"),
         }
     }
@@ -76,6 +78,24 @@ impl Precedence {
         }
     }
 }
+
+/// Single-token infix operators for [`Parser::peek_binary_op`].
+///
+/// Multi-character comparisons and arithmetic use [`TokenType::Operator`] instead.
+const PEEK_TOKEN_BINOPS: &[(TokenType, BinOp, Precedence)] = &[
+    (TokenType::Or, BinOp::Or, Precedence::Or),
+    (TokenType::And, BinOp::And, Precedence::And),
+    (TokenType::Asterisk, BinOp::Mul, Precedence::MulDiv),
+    (TokenType::Arrow, BinOp::Arrow, Precedence::JsonPath),
+    (TokenType::ArrowText, BinOp::ArrowText, Precedence::JsonPath),
+    (TokenType::Question, BinOp::KeyExists, Precedence::JsonPath),
+    (
+        TokenType::AtGreater,
+        BinOp::Contains,
+        Precedence::Comparison,
+    ),
+    (TokenType::LtAt, BinOp::ContainedBy, Precedence::Comparison),
+];
 
 /// A single expression inside a `SELECT` list.
 ///
@@ -319,35 +339,62 @@ impl Display for CaseBranch {
 /// parser and the runtime evaluator.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BinOp {
+    /// Logical AND.
     And,
+    /// Logical OR.
     Or,
+    /// Equality (=).
     Eq,
+    /// Inequality (<>).
     NotEq,
+    /// Less than (<).
     Lt,
+    /// Less than or equal to (<=).
     LtEq,
+    /// Greater than (>)
     Gt,
+    /// Greater than or equal to (>=).
     GtEq,
+    /// Addition (+).
     Add,
+    /// Subtraction (-).
     Sub,
+    /// Multiplication (*).
     Mul,
+    /// Division (/).
     Div,
+    /// JSON path extraction returning JSON (`->`).
+    Arrow,
+    /// JSON path extraction returning TEXT (`->>`).
+    ArrowText,
+    /// Key exists (`?`).
+    KeyExists,
+    /// JSON containment — left contains right (`@>`).
+    Contains,
+    /// JSON contained-by — left is contained in right (`<@`).
+    ContainedBy,
 }
 
 impl Display for BinOp {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let s = match self {
-            BinOp::And => "AND",
-            BinOp::Or => "OR",
-            BinOp::Eq => "=",
-            BinOp::NotEq => "<>",
-            BinOp::Lt => "<",
-            BinOp::LtEq => "<=",
-            BinOp::Gt => ">",
-            BinOp::GtEq => ">=",
-            BinOp::Add => "+",
-            BinOp::Sub => "-",
-            BinOp::Mul => "*",
-            BinOp::Div => "/",
+            Self::And => "AND",
+            Self::Or => "OR",
+            Self::Eq => "=",
+            Self::NotEq => "<>",
+            Self::Lt => "<",
+            Self::LtEq => "<=",
+            Self::Gt => ">",
+            Self::GtEq => ">=",
+            Self::Add => "+",
+            Self::Sub => "-",
+            Self::Mul => "*",
+            Self::Div => "/",
+            Self::Arrow => "->",
+            Self::ArrowText => "->>",
+            Self::KeyExists => "?",
+            Self::Contains => "@>",
+            Self::ContainedBy => "<@",
         };
         f.write_str(s)
     }
@@ -689,20 +736,11 @@ impl Parser {
     ///
     /// Propagates lexer failures while peeking operator text.
     fn peek_binary_op(&mut self) -> Result<Option<(BinOp, u8, u8)>, ParserError> {
-        if self.peek_is(TokenType::Or)? {
-            let (l, r) = Precedence::Or.binary_bp();
-            return Ok(Some((BinOp::Or, l, r)));
-        }
-
-        if self.peek_is(TokenType::And)? {
-            let (l, r) = Precedence::And.binary_bp();
-            return Ok(Some((BinOp::And, l, r)));
-        }
-
-        // `*` is tokenized as Asterisk, not Operator, so it needs its own check.
-        if self.peek_is(TokenType::Asterisk)? {
-            let (l, r) = Precedence::MulDiv.binary_bp();
-            return Ok(Some((BinOp::Mul, l, r)));
+        for &(tok, op, prec) in PEEK_TOKEN_BINOPS {
+            if self.peek_is(tok)? {
+                let (l, r) = prec.binary_bp();
+                return Ok(Some((op, l, r)));
+            }
         }
 
         if self.peek_is(TokenType::Operator)? {
@@ -1562,5 +1600,96 @@ mod tests {
         assert_eq!(ok("x - 5").to_string(), "(x - 5)");
         assert_eq!(ok("price * 2").to_string(), "(price * 2)");
         assert_eq!(ok("total / 4").to_string(), "(total / 4)");
+    }
+
+    #[test]
+    fn json_arrow_extracts_path() {
+        let Expr::BinaryOp { op, lhs, rhs } = ok("payload->'type'") else {
+            panic!("expected BinaryOp");
+        };
+        assert_eq!(op, BinOp::Arrow);
+        assert!(matches!(*lhs, Expr::Column { .. }));
+        assert!(matches!(*rhs, Expr::Literal(_)));
+    }
+
+    #[test]
+    fn json_arrow_text_extracts_path() {
+        let Expr::BinaryOp { op, .. } = ok("payload->>'type'") else {
+            panic!("expected BinaryOp");
+        };
+        assert_eq!(op, BinOp::ArrowText);
+    }
+
+    #[test]
+    fn json_arrow_chains_left_associatively() {
+        let Expr::BinaryOp { op, lhs, .. } = ok("payload->'user'->>'name'") else {
+            panic!("expected BinaryOp");
+        };
+        assert_eq!(op, BinOp::ArrowText);
+        assert!(
+            matches!(*lhs, Expr::BinaryOp {
+                op: BinOp::Arrow,
+                ..
+            }),
+            "nested arrow should bind left-to-right"
+        );
+    }
+
+    #[test]
+    fn json_arrow_binds_tighter_than_comparison() {
+        let Expr::BinaryOp { op, lhs, .. } = ok("payload->'type' = 'click'") else {
+            panic!("expected BinaryOp");
+        };
+        assert_eq!(op, BinOp::Eq);
+        assert!(
+            matches!(*lhs, Expr::BinaryOp {
+                op: BinOp::Arrow,
+                ..
+            }),
+            "comparison should take arrow extraction as its lhs"
+        );
+    }
+
+    #[test]
+    fn json_contains_parses_at_gt() {
+        let Expr::BinaryOp { op, lhs, rhs } = ok(r#"payload @> '{"type":"click"}'"#) else {
+            panic!("expected BinaryOp");
+        };
+        assert_eq!(op, BinOp::Contains);
+        assert!(matches!(*lhs, Expr::Column(_)));
+        assert!(matches!(*rhs, Expr::Literal(_)));
+    }
+
+    #[test]
+    fn json_contained_by_parses_lt_at() {
+        let Expr::BinaryOp { op, lhs, rhs } = ok(r#"'{"type":"click"}' <@ payload"#) else {
+            panic!("expected BinaryOp");
+        };
+        assert_eq!(op, BinOp::ContainedBy);
+        assert!(matches!(*lhs, Expr::Literal(_)));
+        assert!(matches!(*rhs, Expr::Column(_)));
+    }
+
+    #[test]
+    fn json_arrow_binds_tighter_than_contains() {
+        // `payload->'user' @> '{"name":"alice"}'` parses as `(payload->'user') @> ...`
+        // because -> is at JsonPath (12) and @> is at Comparison (6)
+        let Expr::BinaryOp { op, lhs, .. } = ok(r#"payload->'user' @> '{"name":"alice"}'"#) else {
+            panic!("expected BinaryOp");
+        };
+        assert_eq!(op, BinOp::Contains, "root should be @>");
+        assert!(
+            matches!(*lhs, Expr::BinaryOp {
+                op: BinOp::Arrow,
+                ..
+            }),
+            "arrow extraction should be the lhs of @>"
+        );
+    }
+
+    #[test]
+    fn json_contains_display() {
+        assert_eq!(ok(r"a @> '{}'").to_string(), r"(a @> '{}')");
+        assert_eq!(ok(r"'{}' <@ a").to_string(), r"('{}' <@ a)");
     }
 }

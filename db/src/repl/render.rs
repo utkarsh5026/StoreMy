@@ -341,6 +341,10 @@ fn format_value_cell(v: &Value) -> Cell {
             DynValue::TextOverflow { .. } => {
                 unreachable!("TextOverflow must be resolved before rendering")
             }
+            DynValue::JsonOverflow(_) => {
+                unreachable!("JsonOverflow must be resolved before rendering")
+            }
+            DynValue::Json(s) => Cell::new(s.as_str()).fg(comfy_table::Color::Green),
         },
     }
 }

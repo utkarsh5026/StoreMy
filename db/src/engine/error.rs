@@ -115,6 +115,13 @@ pub enum EngineError {
         got: String,
     },
 
+    #[error("invalid JSON for column '{column}' in table '{table}': {reason}")]
+    InvalidJson {
+        table: String,
+        column: String,
+        reason: String,
+    },
+
     #[error("type error: {0}")]
     TypeError(String),
 

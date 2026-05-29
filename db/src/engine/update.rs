@@ -438,7 +438,7 @@ mod tests {
         Type, Value,
         buffer_pool::page_store::PageStore,
         catalog::manager::Catalog,
-        engine::Engine,
+        engine::{Engine, EngineError},
         index::{CompositeKey, IndexKind},
         parser::Parser,
         primitives::{ColumnId, NonEmptyString},
@@ -463,6 +463,14 @@ mod tests {
     fn run(engine: &Engine<'_>, sql: &str) {
         let stmt = Parser::new(sql).parse().expect("parse");
         engine.execute_statement(stmt).expect("execute");
+    }
+
+    fn try_run(
+        engine: &Engine<'_>,
+        sql: &str,
+    ) -> Result<crate::engine::StatementResult, EngineError> {
+        let stmt = Parser::new(sql).parse().expect("parse");
+        engine.execute_statement(stmt)
     }
 
     fn field(name: &str, col_type: Type) -> Field {
@@ -918,6 +926,55 @@ mod tests {
             rows[1],
             vec![Value::int64(2), Value::int64(20)],
             "unmatched row: unchanged"
+        );
+    }
+
+    #[test]
+    fn json_column_rejects_invalid_json_on_update() {
+        let dir = tempdir().unwrap();
+        let (catalog, txn_mgr) = make_infra(dir.path());
+        let engine = Engine::new(&catalog, &txn_mgr);
+
+        run(
+            &engine,
+            "CREATE TABLE t (id INT NOT NULL, data JSON NOT NULL)",
+        );
+        run(
+            &engine,
+            r#"INSERT INTO t (id, data) VALUES (1, '{"x": 1}')"#,
+        );
+
+        let err = try_run(&engine, r"UPDATE t SET data = '{not valid}' WHERE id = 1").unwrap_err();
+
+        assert!(
+            matches!(err, EngineError::InvalidJson { ref column, .. } if column == "data"),
+            "expected InvalidJson for 'data', got {err:?}"
+        );
+    }
+
+    #[test]
+    fn json_column_update_invalid_json_leaves_row_unchanged() {
+        let dir = tempdir().unwrap();
+        let (catalog, txn_mgr) = make_infra(dir.path());
+        let engine = Engine::new(&catalog, &txn_mgr);
+
+        run(
+            &engine,
+            "CREATE TABLE t (id INT NOT NULL, data JSON NOT NULL)",
+        );
+        run(
+            &engine,
+            r#"INSERT INTO t (id, data) VALUES (1, '{"x": 1}')"#,
+        );
+
+        let _ = try_run(&engine, r"UPDATE t SET data = '{bad}' WHERE id = 1");
+
+        let rows = select_rows(&engine, "SELECT data FROM t");
+        assert_eq!(rows.len(), 1);
+        assert_eq!(
+            rows[0][0],
+            Value::json(r#"{"x": 1}"#).unwrap(),
+            "row must be unchanged after failed update"
         );
     }
 }

@@ -10,7 +10,8 @@
 //! - String literals in single or double quotes (`'hello'`, `"world"`)
 //! - Identifiers and SQL keywords (`SELECT`, `FROM`, `user_id`, …)
 //! - Comparison operators: `=`, `<`, `>`, `!`, `<=`, `>=`, `!=`, `<>`
-//! - Punctuation: `,`, `;`, `(`, `)`, `*`
+//! - JSON path operators: `->`, `->>`
+//! - Punctuation: `,`, `;`, `(`, `)`, `*`, `.`
 //!
 //! Whitespace is skipped silently between tokens.
 
@@ -103,10 +104,15 @@ impl Lexer {
     ///
     /// Every path that produces a token (except string and operator literals)
     /// goes through here so that `backtrack` always has something to restore.
-    fn create_token(&mut self, kind: TokenType, val: String, start: usize) -> Token {
+    fn create_token(&mut self, kind: TokenType, val: impl Into<String>, start: usize) -> Token {
+        let s = val.into();
         let span = Span::new(start, self.position);
-        self.curr_token = Some((kind, val.clone(), span).into());
-        (kind, val, span).into()
+        self.curr_token = Some((kind, s.clone(), span).into());
+        Token {
+            kind,
+            value: s,
+            span,
+        }
     }
 
     /// Reads and returns the next token from the input, or `None` at end-of-input.
@@ -137,8 +143,20 @@ impl Lexer {
 
         match ch {
             '=' | '<' | '>' | '!' => {
-                let op = self.read_operator();
-                Ok(Some(self.create_token(TokenType::Operator, op, start)))
+                let (op, kind) = self.read_operator();
+                Ok(Some(self.create_token(kind, op, start)))
+            }
+
+            '@' => {
+                self.advance_pos();
+                if self.if_peek_then_consume('>') {
+                    Ok(Some(self.create_token(TokenType::AtGreater, "@>", start)))
+                } else {
+                    Err(LexError::InvalidCharacter {
+                        ch: '@',
+                        span: Span::new(start, start + 1),
+                    })
+                }
             }
 
             '\'' | '"' => {
@@ -156,16 +174,14 @@ impl Lexer {
                 Ok(Some(self.create_token(token_type, ident, start)))
             }
 
-            '+' | '-' | '/' => {
+            '+' | '/' => {
                 self.advance_pos();
-                Ok(Some(self.create_token(
-                    TokenType::Operator,
-                    ch.to_string(),
-                    start,
-                )))
+                Ok(Some(self.create_token(TokenType::Operator, ch, start)))
             }
 
-            ',' | ';' | '(' | ')' | '*' | '.' => {
+            '-' => Ok(Some(self.read_minus_or_arrow(start))),
+
+            ',' | ';' | '(' | ')' | '*' | '.' | '?' => {
                 self.advance_pos();
                 let token_type = match ch {
                     ',' => TokenType::Comma,
@@ -174,9 +190,10 @@ impl Lexer {
                     ')' => TokenType::Rparen,
                     '*' => TokenType::Asterisk,
                     '.' => TokenType::Dot,
+                    '?' => TokenType::Question,
                     _ => unreachable!(),
                 };
-                Ok(Some(self.create_token(token_type, ch.to_string(), start)))
+                Ok(Some(self.create_token(token_type, ch, start)))
             }
 
             _ => Err(LexError::InvalidCharacter {
@@ -246,13 +263,13 @@ impl Lexer {
             let ch = self.curr_char();
 
             // `--` line comment: skip to end of line
-            if ch == '-' && self.input.get(self.position + 1) == Some(&'-') {
+            if ch == '-' && self.peek_char_at(1) == Some('-') {
                 self.read_while(|c| c != '\n', false);
                 continue;
             }
 
             // `/* ... */` block comment
-            if ch == '/' && self.input.get(self.position + 1) == Some(&'*') {
+            if ch == '/' && self.peek_char_at(1) == Some('*') {
                 self.advance_pos(); // consume '/'
                 self.advance_pos(); // consume '*'
                 loop {
@@ -262,7 +279,7 @@ impl Lexer {
                             span: Span::point(self.length),
                         });
                     }
-                    if self.curr_char() == '*' && self.input.get(self.position + 1) == Some(&'/') {
+                    if self.curr_char() == '*' && self.peek_char_at(1) == Some('/') {
                         self.advance_pos(); // consume '*'
                         self.advance_pos(); // consume '/'
                         break;
@@ -276,23 +293,43 @@ impl Lexer {
         }
     }
 
+    /// Disambiguates `-` from PostgreSQL-style JSON path operators.
+    ///
+    /// Consumes one or more characters starting at `start` (the offset of `-`):
+    /// `->` yields [`TokenType::Arrow`], `->>` yields [`TokenType::ArrowText`],
+    /// and a lone `-` yields [`TokenType::Operator`] for subtraction or unary minus.
+    fn read_minus_or_arrow(&mut self, start: usize) -> Token {
+        self.advance_pos(); // consume '-'
+        if self.if_peek_then_consume('>') {
+            if self.if_peek_then_consume('>') {
+                return self.create_token(TokenType::ArrowText, "->>", start);
+            }
+            return self.create_token(TokenType::Arrow, "->", start);
+        }
+        self.create_token(TokenType::Operator, "-", start)
+    }
+
     /// Reads one or two characters as a comparison operator and advances `position`.
     ///
     /// Two-character operators (`<=`, `>=`, `!=`, `<>`) are consumed in full.
     /// All other first characters (`=`, isolated `<`, `>`, `!`) are returned as-is.
-    fn read_operator(&mut self) -> String {
-        let first = self.take_char();
+    fn read_operator(&mut self) -> (String, TokenType) {
+        let first = self.consume_char();
 
-        if let Some(&next) = self.input.get(self.position) {
+        if let Some(next) = self.peek_char() {
             match (first, next) {
                 ('<' | '>' | '!', '=') | ('<', '>') => {
                     self.advance_pos();
-                    format!("{first}{next}")
+                    (format!("{first}{next}"), TokenType::Operator)
                 }
-                _ => first.to_string(),
+                ('<', '@') => {
+                    self.advance_pos();
+                    ("<@".to_string(), TokenType::LtAt)
+                }
+                _ => (first.to_string(), TokenType::Operator),
             }
         } else {
-            first.to_string()
+            (first.to_string(), TokenType::Operator)
         }
     }
 
@@ -319,10 +356,7 @@ impl Lexer {
         let mut num = self.read_while(|c| c.is_ascii_digit(), true).unwrap();
         let has_fraction = !self.exhausted()
             && self.curr_char() == '.'
-            && self
-                .input
-                .get(self.position + 1)
-                .is_some_and(char::is_ascii_digit);
+            && self.peek_char_at(1).is_some_and(|c| c.is_ascii_digit());
 
         if has_fraction {
             num.push('.');
@@ -346,12 +380,11 @@ impl Lexer {
     /// Returns [`LexError::UnexpectedEof`] if the input ends before the closing
     /// quote is found.
     fn read_string(&mut self) -> Result<String, LexError> {
-        let quote_char = self.take_char();
+        let quote_char = self.consume_char();
         let mut value = String::new();
 
         while !self.exhausted() {
-            let curr = self.take_char();
-
+            let curr = self.consume_char();
             if curr == quote_char {
                 return Ok(value);
             }
@@ -376,7 +409,7 @@ impl Lexer {
     {
         let mut result = String::new();
         while !self.exhausted() && condition(self.curr_char()) {
-            let ch = self.take_char();
+            let ch = self.consume_char();
             if collect {
                 result.push(ch);
             }
@@ -385,12 +418,40 @@ impl Lexer {
         if collect { Some(result) } else { None }
     }
 
+    /// Consumes the current character when it equals `expected`.
+    ///
+    /// Returns `true` and advances `position` by one if [`Self::peek_char`]
+    /// is `Some(expected)`; otherwise returns `false` without moving.
+    fn if_peek_then_consume(&mut self, expected: char) -> bool {
+        if self.peek_char() == Some(expected) {
+            self.consume_char();
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Returns the character at `position + offset` without advancing.
+    ///
+    /// Returns `None` when that index is past the end of the input — unlike
+    /// [`Self::curr_char`], which panics at end-of-input.
+    #[inline]
+    fn peek_char_at(&self, offset: usize) -> Option<char> {
+        self.input.get(self.position + offset).copied()
+    }
+
+    /// Shorthand for [`Self::peek_char_at`] with offset `0`.
+    #[inline]
+    fn peek_char(&self) -> Option<char> {
+        self.peek_char_at(0)
+    }
+
     /// Returns the current character without advancing the position.
     /// # Panics
     /// Panics if the position is out of bounds.
     #[inline]
     fn curr_char(&self) -> char {
-        *self.input.get(self.position).unwrap_or_else(|| {
+        self.peek_char().unwrap_or_else(|| {
             panic!("position out of bounds: {}", self.position);
         })
     }
@@ -410,7 +471,7 @@ impl Lexer {
     /// # Panics
     /// Panics if the position is out of bounds when attempting to read or advance.
     #[inline]
-    fn take_char(&mut self) -> char {
+    fn consume_char(&mut self) -> char {
         let ch = self.curr_char();
         self.advance_pos();
         ch
@@ -669,6 +730,34 @@ mod tests {
     #[test]
     fn asterisk() {
         assert_eq!(lex("*"), vec![tok(TokenType::Asterisk, "*", 0)]);
+    }
+
+    #[test]
+    fn json_arrow_operator() {
+        assert_eq!(lex("->"), vec![tok(TokenType::Arrow, "->", 0)]);
+    }
+
+    #[test]
+    fn json_arrow_text_operator() {
+        assert_eq!(lex("->>"), vec![tok(TokenType::ArrowText, "->>", 0)]);
+    }
+
+    #[test]
+    fn json_arrow_text_in_expression() {
+        assert_eq!(lex("payload->>'type'"), vec![
+            tok(TokenType::Identifier, "payload", 0),
+            tok(TokenType::ArrowText, "->>", 7),
+            str_tok("type", 10),
+        ]);
+    }
+
+    #[test]
+    fn minus_stays_single_char_when_not_arrow() {
+        assert_eq!(lex("x - 1"), vec![
+            tok(TokenType::Identifier, "x", 0),
+            tok(TokenType::Operator, "-", 2),
+            tok(TokenType::Int, "1", 4),
+        ]);
     }
 
     #[test]

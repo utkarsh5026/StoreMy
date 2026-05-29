@@ -24,18 +24,19 @@
 //! - [`join`]       — nested-loop, hash, and sort-merge joins
 //! - [`setops`]     — union, intersect, except, distinct
 //! - [`aggregate`]  — grouping and aggregation
-//! - [`resolve`]    — `ColumnLookup` trait, `ResolvedExpr` type, and `ResolvedExpr::eval` — column
-//!   names resolved once via `ResolvedExpr::resolve`, evaluated with plain index lookups
+//! - [`eval`]       — `ColumnLookup` trait, `ResolvedExpr` type, and `ResolvedExpr::eval` — column
+//!   names resolved once via `ResolvedExpr::resolve`, evaluated with plain index lookups. JSON
+//!   operator evaluation lives in [`eval::json`].
 
 pub mod aggregate;
+pub mod eval;
 pub mod join;
-pub mod resolve;
 pub mod scan;
 pub mod setops;
 pub mod unary;
 
+pub use eval::{ColumnLookup, ResolvedCaseBranch, ResolvedExpr};
 use fallible_iterator::FallibleIterator;
-pub use resolve::{ColumnLookup, ResolvedCaseBranch, ResolvedExpr};
 use thiserror::Error;
 
 use crate::{

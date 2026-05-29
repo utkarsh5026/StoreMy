@@ -1,18 +1,3 @@
-//! Type system for `StoreMy` database.
-//!
-//! This module defines the supported data types and the [`Value`] enum
-//! that represents runtime values in the database.
-//!
-//! There are two layers:
-//!
-//! - [`Type`] — a compile-time descriptor of what *kind* of value a column holds.
-//! - [`Value`] — an owned runtime value that carries actual data, including [`Value::Null`].
-//!
-//! Both types support serialization using little-endian encoding (via the
-//! `byteorder` crate). Each [`Value`] is written as its [`Type`] tag (4 bytes)
-//! followed by the payload; strings use a 4-byte length prefix plus UTF-8 bytes,
-//! capped at [`crate::STRING_MAX_SIZE`] for [`Type::String`].
-
 use std::{
     cmp::Ordering,
     fmt,
@@ -23,8 +8,8 @@ use std::{
 };
 
 use chrono::{DateTime, NaiveDate, NaiveDateTime, NaiveTime};
-use thiserror::Error;
 
+use super::{Type, TypeError};
 use crate::{
     STRING_MAX_SIZE,
     codec::{CodecError, Decode, Encode},
@@ -49,22 +34,6 @@ const I64_PAYLOAD_SIZE: usize = size_of::<i64>();
 const TEXT_OVERFLOW_PAYLOAD_SIZE: usize =
     STRING_LENGTH_PREFIX_SIZE + STRING_LENGTH_PREFIX_SIZE + PageDescriptor::SIZE;
 
-/// Errors related to the type system and value conversions.
-#[derive(Error, Debug)]
-pub enum TypeError {
-    #[error("Type mismatch: expected {expected}, got {actual}")]
-    Mismatch { expected: String, actual: String },
-
-    #[error("Cannot convert {from} to {to}")]
-    InvalidConversion { from: String, to: String },
-
-    #[error("Null value not allowed for column {column}")]
-    NullNotAllowed { column: String },
-
-    #[error("Unsupported type: {message}")]
-    UnsupportedType { message: String },
-}
-
 /// Errors from [`Value::checked_add`] and [`Value::checked_div`].
 ///
 /// Subtraction and multiplication use [`Sub`] and [`Mul`]; those operators return
@@ -74,162 +43,6 @@ pub enum TypeError {
 pub enum ArithmeticError {
     TypeMismatch,
     DivisionByZero,
-}
-
-impl TypeError {
-    fn invalid_conversion<F, T>(from: F, to: T) -> Self
-    where
-        F: fmt::Display,
-        T: fmt::Display,
-    {
-        Self::InvalidConversion {
-            from: from.to_string(),
-            to: to.to_string(),
-        }
-    }
-}
-
-/// The data type of a column or expression.
-///
-/// `Type` is a lightweight, `Copy` descriptor used in schema definitions and
-/// during serialization/deserialization to interpret raw bytes correctly.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum Type {
-    Int32,
-    Int64,
-    Uint32,
-    Uint64,
-    Float64,
-    String,
-    Bool,
-    Text,
-    Date,
-    Time,
-    Timestamp,
-}
-
-/// Converts a `u32` to a [`Type`] by matching a numeric tag to the corresponding variant.
-///
-/// Returns a [`TypeError::UnsupportedType`] if the value does not correspond to any known tag.
-impl TryFrom<u32> for Type {
-    type Error = TypeError;
-
-    fn try_from(value: u32) -> Result<Self, Self::Error> {
-        match value {
-            0 => Ok(Self::Int32),
-            1 => Ok(Self::Int64),
-            2 => Ok(Self::Uint32),
-            3 => Ok(Self::Uint64),
-            4 => Ok(Self::Float64),
-            5 => Ok(Self::String),
-            6 => Ok(Self::Bool),
-            7 => Ok(Self::Text),
-            8 => Ok(Self::Date),
-            9 => Ok(Self::Time),
-            10 => Ok(Self::Timestamp),
-            _ => Err(TypeError::UnsupportedType {
-                message: format!("Unsupported type: {value}"),
-            }),
-        }
-    }
-}
-
-impl From<Type> for u32 {
-    fn from(value: Type) -> Self {
-        match value {
-            Type::Int32 => 0,
-            Type::Int64 => 1,
-            Type::Uint32 => 2,
-            Type::Uint64 => 3,
-            Type::Float64 => 4,
-            Type::String => 5,
-            Type::Bool => 6,
-            Type::Text => 7,
-            Type::Date => 8,
-            Type::Time => 9,
-            Type::Timestamp => 10,
-        }
-    }
-}
-
-impl Encode for Type {
-    fn encode<W: Write>(&self, w: &mut W) -> Result<(), CodecError> {
-        u32::from(*self).encode(w)
-    }
-}
-
-/// Decodes a [`Type`] from a little-endian `u32` tag.
-///
-/// Validates that the tag matches a supported variant; otherwise, returns a [`CodecError`]
-/// describing the issue.
-///
-/// # Errors
-///
-/// - [`CodecError::UnknownDiscriminant`] if the tag can fit in a `u8` but does not correspond to a
-///   known [`Type`] variant.
-/// - [`CodecError::NumericDoesNotFit`] if the tag does not fit in a `u8`.
-/// - Any I/O error returned by the reader.
-impl Decode for Type {
-    fn decode<R: Read>(r: &mut R) -> Result<Self, CodecError> {
-        let tag = u32::decode(r)?;
-        Type::try_from(tag).map_err(|_| match u8::try_from(tag) {
-            Ok(tag_u8) => CodecError::UnknownDiscriminant(tag_u8),
-            Err(_) => CodecError::numeric_does_not_fit(tag as usize, "u8"),
-        })
-    }
-}
-
-impl Type {
-    /// Returns `true` if values of this type always occupy the same number of bytes.
-    ///
-    /// [`Type::String`] and [`Type::Text`] are variable-length (length-prefixed UTF-8).
-    /// Fixed-size columns can be accessed by direct offset arithmetic without
-    /// scanning a length prefix.
-    pub const fn is_fixed_size(&self) -> bool {
-        !matches!(self, Type::String | Type::Text)
-    }
-}
-
-impl TryFrom<&str> for Type {
-    type Error = TypeError;
-
-    fn try_from(value: &str) -> Result<Self, Self::Error> {
-        match value.to_uppercase().as_str() {
-            "INT" | "INTEGER" | "INT32" => Ok(Self::Int32),
-            "BIGINT" | "INT64" => Ok(Self::Int64),
-            "UINT" | "UINT32" => Ok(Self::Uint32),
-            "UBIGINT" | "UINT64" => Ok(Self::Uint64),
-            "FLOAT" | "DOUBLE" | "REAL" | "FLOAT64" => Ok(Self::Float64),
-            "VARCHAR" | "STRING" => Ok(Self::String),
-            "TEXT" => Ok(Self::Text),
-            "BOOL" | "BOOLEAN" => Ok(Self::Bool),
-            "DATE" => Ok(Self::Date),
-            "TIME" => Ok(Self::Time),
-            "TIMESTAMP" => Ok(Self::Timestamp),
-            _ => Err(TypeError::UnsupportedType {
-                message: format!("Unsupported type name: {value}"),
-            }),
-        }
-    }
-}
-
-impl fmt::Display for Type {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let name = match self {
-            Type::Int32 => "INT",
-            Type::Int64 => "BIGINT",
-            Type::Uint32 => "INT UNSIGNED",
-            Type::Uint64 => "BIGINT UNSIGNED",
-            Type::Float64 => "DOUBLE",
-            Type::String => "VARCHAR",
-            Type::Text => "TEXT",
-            Type::Bool => "BOOLEAN",
-            Type::Date => "DATE",
-            Type::Time => "TIME",
-            Type::Timestamp => "TIMESTAMP",
-        };
-        write!(f, "{name}")
-    }
 }
 
 /// A fixed-width scalar — size is statically known.
@@ -446,8 +259,8 @@ impl FixedValue {
     /// temporal types use [`Self::parse_date`], [`Self::parse_time`], and
     /// [`Self::parse_timestamp`].
     ///
-    /// Returns `None` for [`Type::String`] and [`Type::Text`] — callers must build [`DynValue`]
-    /// via [`Value::parse_as`].
+    /// Returns `None` for [`Type::String`], [`Type::Text`], and [`Type::Json`] — callers must
+    /// build [`DynValue`] via [`Value::parse_as`].
     pub fn parse_as(s: &str, ty: Type) -> Option<Self> {
         match ty {
             Type::Int32 => s.parse().ok().map(Self::Int32),
@@ -463,7 +276,25 @@ impl FixedValue {
             Type::Date => Self::parse_date(s),
             Type::Time => Self::parse_time(s),
             Type::Timestamp => Self::parse_timestamp(s),
-            Type::String | Type::Text => None,
+            Type::String | Type::Text | Type::Json => None,
+        }
+    }
+
+    /// Converts this fixed-width scalar to the equivalent [`serde_json::Value`].
+    ///
+    /// All numeric and boolean variants map directly. `Float64` values that are
+    /// NaN or infinite (not representable in JSON) become [`serde_json::Value::Null`].
+    /// Temporal variants (`Date`, `Time`, `Timestamp`) are represented as their
+    /// raw integer payloads.
+    pub fn to_serde_json(&self) -> serde_json::Value {
+        match self {
+            Self::Int32(n) | Self::Date(n) => serde_json::Value::from(*n),
+            Self::Int64(n) | Self::Time(n) | Self::Timestamp(n) => serde_json::Value::from(*n),
+            Self::Uint32(n) => serde_json::Value::from(*n),
+            Self::Uint64(n) => serde_json::Value::from(*n),
+            Self::Float64(n) => serde_json::Number::from_f64(*n)
+                .map_or(serde_json::Value::Null, serde_json::Value::Number),
+            Self::Bool(b) => serde_json::Value::Bool(*b),
         }
     }
 }
@@ -530,19 +361,53 @@ impl Encode for FixedValue {
     }
 }
 
+#[derive(Debug, Clone, Copy, Encode, Decode)]
+pub struct OverflowPointer {
+    pub total_len: u32,
+    pub ptr: PageDescriptor,
+}
+
 /// A variable-width value — size depends on runtime content.
+///
+/// [`DynValue::Json`] stores the raw validated JSON string rather than a parsed
+/// tree. Parsing is deferred to the expression evaluator, which only pays the
+/// cost when a JSON-specific operation is actually requested.
 #[derive(Debug, Clone)]
 pub enum DynValue {
     Varchar(String),
     Text(String),
-    TextOverflow { total_len: u32, ptr: PageDescriptor },
+    TextOverflow(OverflowPointer),
+    JsonOverflow(OverflowPointer),
+    Json(String),
 }
 
 impl DynValue {
     pub fn get_type(&self) -> Type {
         match self {
             Self::Varchar(_) => Type::String,
-            Self::Text(_) | Self::TextOverflow { .. } => Type::Text,
+            Self::Text(_) | Self::TextOverflow(_) => Type::Text,
+            Self::Json(_) | Self::JsonOverflow(_) => Type::Json,
+        }
+    }
+
+    /// Converts this dynamic value to a [`serde_json::Value`].
+    ///
+    /// - `Varchar` and `Text` become `serde_json::Value::String`.
+    /// - `Json` is parsed from its stored string.
+    /// - `TextOverflow` and `JsonOverflow` are storage artifacts that must be resolved by the heap
+    ///   layer before reaching this point.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`serde_json::Error`] if a `Json` variant contains a malformed
+    /// JSON string (should not happen in practice since JSON is validated on insert).
+    pub fn to_serde_json(&self) -> Result<serde_json::Value, serde_json::Error> {
+        match self {
+            Self::Varchar(s) | Self::Text(s) => Ok(serde_json::Value::String(s.clone())),
+            Self::Json(s) => serde_json::from_str(s),
+            Self::TextOverflow(_) | Self::JsonOverflow(_) => {
+                unreachable!("overflow values must be resolved before JSON conversion")
+            }
         }
     }
 }
@@ -550,8 +415,11 @@ impl DynValue {
 impl PartialEq for DynValue {
     fn eq(&self, other: &Self) -> bool {
         match (self, other) {
-            (Self::Varchar(a), Self::Varchar(b)) | (Self::Text(a), Self::Text(b)) => a == b,
-            // TextOverflow is a storage artifact — never compared in user-visible contexts.
+            (Self::Varchar(a), Self::Varchar(b))
+            | (Self::Text(a), Self::Text(b))
+            | (Self::Json(a), Self::Json(b)) => a == b,
+            // TextOverflow/JsonOverflow are storage artifacts — never compared in user-visible
+            // contexts.
             _ => false,
         }
     }
@@ -571,8 +439,9 @@ impl PartialOrd for DynValue {
 impl fmt::Display for DynValue {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Varchar(s) | Self::Text(s) => write!(f, "'{s}'"),
-            Self::TextOverflow { .. } => write!(f, "<TEXT overflow>"),
+            Self::Varchar(s) | Self::Text(s) | Self::Json(s) => write!(f, "'{s}'"),
+            Self::TextOverflow(_) => write!(f, "<TEXT overflow>"),
+            Self::JsonOverflow(_) => write!(f, "<JSON overflow>"),
         }
     }
 }
@@ -581,8 +450,8 @@ impl Hash for DynValue {
     fn hash<H: Hasher>(&self, state: &mut H) {
         std::mem::discriminant(self).hash(state);
         match self {
-            Self::Varchar(s) | Self::Text(s) => s.hash(state),
-            Self::TextOverflow { .. } => (),
+            Self::Varchar(s) | Self::Text(s) | Self::Json(s) => s.hash(state),
+            Self::TextOverflow(_) | Self::JsonOverflow(_) => (),
         }
     }
 }
@@ -628,6 +497,24 @@ impl Value {
         }
     }
 
+    /// Converts this value to a [`serde_json::Value`].
+    ///
+    /// - `NULL` becomes `serde_json::Value::Null`.
+    /// - Fixed-width scalars delegate to [`FixedValue::to_serde_json`].
+    /// - Dynamic values delegate to [`DynValue::to_serde_json`].
+    ///
+    /// # Errors
+    ///
+    /// Returns [`serde_json::Error`] if a `Json` variant inside a [`DynValue`]
+    /// contains a malformed JSON string.
+    pub fn to_serde_json(&self) -> Result<serde_json::Value, serde_json::Error> {
+        match self {
+            Self::Null => Ok(serde_json::Value::Null),
+            Self::Fixed(v) => Ok(v.to_serde_json()),
+            Self::Dyn(v) => v.to_serde_json(),
+        }
+    }
+
     /// Number of bytes [`Encode`] will write for this value.
     ///
     /// Must stay in sync with [`Encode for Value`]: every variant here mirrors
@@ -645,8 +532,12 @@ impl Value {
                 Value::Dyn(DynValue::Varchar(s)) => {
                     STRING_LENGTH_PREFIX_SIZE + s.len().min(STRING_MAX_SIZE)
                 }
-                Value::Dyn(DynValue::Text(s)) => STRING_LENGTH_PREFIX_SIZE + s.len(),
-                Value::Dyn(DynValue::TextOverflow { .. }) => TEXT_OVERFLOW_PAYLOAD_SIZE,
+                Value::Dyn(DynValue::Text(s) | DynValue::Json(s)) => {
+                    STRING_LENGTH_PREFIX_SIZE + s.len()
+                }
+                Value::Dyn(DynValue::TextOverflow(_) | DynValue::JsonOverflow(_)) => {
+                    TEXT_OVERFLOW_PAYLOAD_SIZE
+                }
             }
     }
 
@@ -684,7 +575,8 @@ impl Value {
     ///
     /// - [`FixedValue::Int64`] → [`Type::Int32`], [`Type::Uint32`], or [`Type::Uint64`] when the
     ///   number fits in the target range.
-    /// - [`DynValue::Varchar`] → [`Type::String`] or [`Type::Text`].
+    /// - [`DynValue::Varchar`] → [`Type::String`], [`Type::Text`], [`Type::Date`], [`Type::Time`],
+    ///   [`Type::Timestamp`], or [`Type::Json`] when the string parses.
     /// - Any value whose [`Self::get_type`] already equals `target` → returned unchanged.
     ///
     /// All other `(value, target)` pairs return [`TypeError::InvalidConversion`].
@@ -721,6 +613,9 @@ impl Value {
                     .ok_or_else(|| TypeError::invalid_conversion(s.as_str(), ty))
             }
 
+            (Self::Dyn(DynValue::Varchar(s)), Type::Json) => Self::json(s.as_str())
+                .map_err(|_| TypeError::invalid_conversion(s.as_str(), Type::Json)),
+
             (v, ty) if v.get_type() == Some(ty) => Ok(v.clone()),
             (v, ty) => Err(TypeError::invalid_conversion(v, ty)),
         }
@@ -733,6 +628,7 @@ impl Value {
     /// - **Fixed-width types** (`Int32`, `Bool`, `Date`, …) delegate to [`FixedValue::parse_as`].
     /// - **`String` / `Text`** accept the input as-is — the string is just wrapped, not
     ///   interpreted. There is no ambiguity for these two variants.
+    /// - **`Json`** parses `s` as JSON via [`Self::json`].
     ///
     /// Leading and trailing whitespace is trimmed before any conversion.
     ///
@@ -745,6 +641,7 @@ impl Value {
         match ty {
             Type::String => Ok(Self::varchar(s.to_owned())),
             Type::Text => Ok(Self::text(s.to_owned())),
+            Type::Json => Self::json(s).map_err(|_| TypeError::invalid_conversion(s, ty)),
             _ => FixedValue::parse_as(s, ty)
                 .map(Self::Fixed)
                 .ok_or_else(|| TypeError::invalid_conversion(s, ty)),
@@ -809,6 +706,26 @@ impl Value {
     /// Builds a [`Type::Timestamp`] value.
     pub fn timestamp(t: i64) -> Self {
         Self::Fixed(FixedValue::Timestamp(t))
+    }
+
+    /// Builds a [`Type::Json`] value with overflow pointer.
+    pub fn json_overflow(total_len: u32, ptr: PageDescriptor) -> Self {
+        Self::Dyn(DynValue::JsonOverflow(OverflowPointer { total_len, ptr }))
+    }
+
+    /// Builds a [`Type::Json`] value from a JSON text literal.
+    ///
+    /// Validates that `v` is well-formed JSON, then stores the raw string.
+    /// The parsed tree is discarded immediately — parsing is deferred to the
+    /// expression evaluator when a JSON-specific operation is actually needed.
+    pub fn json(v: &str) -> Result<Self, serde_json::Error> {
+        serde_json::from_str::<serde_json::Value>(v)?;
+        Ok(Self::Dyn(DynValue::Json(v.to_owned())))
+    }
+
+    /// Builds a [`Type::Text`] value with overflow pointer.
+    pub fn text_overflow(total_len: u32, ptr: PageDescriptor) -> Self {
+        Self::Dyn(DynValue::TextOverflow(OverflowPointer { total_len, ptr }))
     }
 }
 
@@ -997,11 +914,10 @@ impl<T: Into<Value>> From<Option<T>> for Value {
 impl Encode for DynValue {
     fn encode<W: Write>(&self, w: &mut W) -> Result<(), CodecError> {
         match self {
-            Self::Varchar(s) | Self::Text(s) => s.encode(w),
-            Self::TextOverflow { total_len, ptr } => {
+            Self::Varchar(s) | Self::Text(s) | Self::Json(s) => s.encode(w),
+            Self::TextOverflow(o) | Self::JsonOverflow(o) => {
                 u32::MAX.encode(w)?;
-                total_len.encode(w)?;
-                ptr.encode(w)
+                o.encode(w)
             }
         }
     }
@@ -1035,39 +951,93 @@ impl Decode for Value {
             Err(_) => CodecError::numeric_does_not_fit(tag as usize, "u8"),
         })?;
 
-        match value_type {
-            Type::Int32 => Ok(Self::int32(i32::decode(r)?)),
-            Type::Int64 => Ok(Self::int64(i64::decode(r)?)),
-            Type::Uint32 => Ok(Self::uint32(u32::decode(r)?)),
-            Type::Uint64 => Ok(Self::uint64(u64::decode(r)?)),
-            Type::Float64 => Ok(Self::float64(f64::decode(r)?)),
-            Type::Bool => Ok(Self::bool(u8::decode(r)? != 0)),
-            Type::Date => Ok(Self::date(i32::decode(r)?)),
-            Type::Time => Ok(Self::time(i64::decode(r)?)),
-            Type::Timestamp => Ok(Self::timestamp(i64::decode(r)?)),
+        Ok(match value_type {
+            Type::Int32 => Self::int32(i32::decode(r)?),
+            Type::Int64 => Self::int64(i64::decode(r)?),
+            Type::Uint32 => Self::uint32(u32::decode(r)?),
+            Type::Uint64 => Self::uint64(u64::decode(r)?),
+            Type::Float64 => Self::float64(f64::decode(r)?),
+            Type::Bool => Self::bool(u8::decode(r)? != 0),
+            Type::Date => Self::date(i32::decode(r)?),
+            Type::Time => Self::time(i64::decode(r)?),
+            Type::Timestamp => Self::timestamp(i64::decode(r)?),
             Type::String => {
                 let len = u32::decode(r)? as usize;
                 let mut buf = vec![0u8; len];
                 r.read_exact(&mut buf)?;
-                Ok(Self::varchar(std::str::from_utf8(&buf)?.to_string()))
+                Self::varchar(std::str::from_utf8(&buf)?.to_string())
             }
-            Type::Text => {
-                let first = u32::decode(r)?;
-                if first == u32::MAX {
-                    let total_len = u32::decode(r)?;
-                    let ptr = PageDescriptor::decode(r)?;
-                    Ok(Self::Dyn(DynValue::TextOverflow { total_len, ptr }))
+            Type::Text | Type::Json => {
+                let length = u32::decode(r)?;
+                if length == u32::MAX {
+                    if value_type == Type::Text {
+                        Self::Dyn(DynValue::TextOverflow(OverflowPointer::decode(r)?))
+                    } else {
+                        Self::Dyn(DynValue::JsonOverflow(OverflowPointer::decode(r)?))
+                    }
                 } else {
-                    // `first` is the byte length of the inline string.
-                    // Do NOT call String::decode here — that would read a second length prefix.
-                    let mut buf = vec![0u8; first as usize];
+                    let mut buf = vec![0u8; length as usize];
                     r.read_exact(&mut buf)?;
-                    std::str::from_utf8(&buf)
-                        .map(|s| Self::text(s.to_owned()))
-                        .map_err(CodecError::InvalidUtf8)
+                    let s = std::str::from_utf8(&buf).map_err(CodecError::InvalidUtf8)?;
+                    if value_type == Type::Text {
+                        Self::text(s.to_owned())
+                    } else {
+                        Self::Dyn(DynValue::Json(s.to_owned()))
+                    }
                 }
             }
-        }
+        })
+    }
+}
+
+#[cfg(test)]
+mod parse_as_tests {
+    use super::{Type, TypeError, Value};
+
+    #[test]
+    fn parse_json_object() {
+        let v = Value::parse_as(r#"{"x": 1}"#, Type::Json).unwrap();
+        assert_eq!(v, Value::json(r#"{"x": 1}"#).unwrap());
+    }
+
+    #[test]
+    fn parse_json_trims_whitespace() {
+        let v = Value::parse_as("  true  ", Type::Json).unwrap();
+        assert_eq!(v, Value::json("true").unwrap());
+    }
+
+    #[test]
+    fn parse_json_invalid() {
+        let err = Value::parse_as("{not json", Type::Json).unwrap_err();
+        assert!(matches!(err, TypeError::InvalidConversion { .. }));
+    }
+}
+
+#[cfg(test)]
+mod dyn_value_eq_tests {
+    use super::{DynValue, Value};
+
+    #[test]
+    fn json_values_compare_equal() {
+        let a = Value::json(r#"{"x": 1}"#).unwrap();
+        let b = Value::json(r#"{"x": 1}"#).unwrap();
+        assert_eq!(a, b);
+    }
+
+    #[test]
+    fn json_values_compare_unequal() {
+        let a = Value::json("1").unwrap();
+        let b = Value::json("2").unwrap();
+        assert_ne!(a, b);
+    }
+
+    #[test]
+    fn json_raw_string_is_stored_verbatim() {
+        let raw = r#"{"x": 1}"#;
+        let Value::Dyn(DynValue::Json(s)) = Value::json(raw).unwrap() else {
+            panic!("expected Json variant");
+        };
+        assert_eq!(s, raw);
     }
 }
 
@@ -1159,9 +1129,205 @@ mod coerce_to_tests {
     }
 
     #[test]
+    fn varchar_literal_to_json_column() {
+        let v = Value::varchar(r#"{"x": 1}"#.to_string());
+        assert_eq!(
+            v.coerce_to(Type::Json).unwrap(),
+            Value::json(r#"{"x": 1}"#).unwrap()
+        );
+    }
+
+    #[test]
+    fn varchar_literal_invalid_json_fails() {
+        let v = Value::varchar("{not json".to_string());
+        assert!(v.coerce_to(Type::Json).is_err());
+    }
+
+    #[test]
     fn string_literal_to_int_column_fails() {
         let v = Value::varchar("1".to_string());
         assert!(v.coerce_to(Type::Int32).is_err());
+    }
+}
+
+#[cfg(test)]
+mod to_serde_json_tests {
+    use super::{DynValue, FixedValue, Value};
+
+    #[test]
+    fn fixed_bool_true() {
+        assert_eq!(
+            FixedValue::Bool(true).to_serde_json(),
+            serde_json::Value::Bool(true)
+        );
+    }
+
+    #[test]
+    fn fixed_bool_false() {
+        assert_eq!(
+            FixedValue::Bool(false).to_serde_json(),
+            serde_json::Value::Bool(false)
+        );
+    }
+
+    #[test]
+    fn fixed_int32() {
+        assert_eq!(FixedValue::Int32(42).to_serde_json(), serde_json::json!(42));
+    }
+
+    #[test]
+    fn fixed_int64() {
+        assert_eq!(
+            FixedValue::Int64(-1_000_000).to_serde_json(),
+            serde_json::json!(-1_000_000i64)
+        );
+    }
+
+    #[test]
+    fn fixed_uint32() {
+        assert_eq!(
+            FixedValue::Uint32(7).to_serde_json(),
+            serde_json::json!(7u32)
+        );
+    }
+
+    #[test]
+    fn fixed_uint64() {
+        assert_eq!(
+            FixedValue::Uint64(u64::MAX).to_serde_json(),
+            serde_json::json!(u64::MAX)
+        );
+    }
+
+    #[test]
+    fn fixed_float64_normal() {
+        assert_eq!(
+            FixedValue::Float64(2.5).to_serde_json(),
+            serde_json::json!(2.5)
+        );
+    }
+
+    #[test]
+    fn fixed_float64_nan_becomes_null() {
+        assert_eq!(
+            FixedValue::Float64(f64::NAN).to_serde_json(),
+            serde_json::Value::Null
+        );
+    }
+
+    #[test]
+    fn fixed_float64_infinite_becomes_null() {
+        assert_eq!(
+            FixedValue::Float64(f64::INFINITY).to_serde_json(),
+            serde_json::Value::Null
+        );
+        assert_eq!(
+            FixedValue::Float64(f64::NEG_INFINITY).to_serde_json(),
+            serde_json::Value::Null
+        );
+    }
+
+    #[test]
+    fn fixed_date_is_raw_i32() {
+        // Date is stored as days since Unix epoch; to_serde_json returns the raw integer.
+        assert_eq!(
+            FixedValue::Date(19737).to_serde_json(),
+            serde_json::json!(19737i32)
+        );
+    }
+
+    #[test]
+    fn fixed_time_is_raw_i64() {
+        assert_eq!(
+            FixedValue::Time(3_600_000_000).to_serde_json(),
+            serde_json::json!(3_600_000_000i64)
+        );
+    }
+
+    #[test]
+    fn fixed_timestamp_is_raw_i64() {
+        assert_eq!(
+            FixedValue::Timestamp(0).to_serde_json(),
+            serde_json::json!(0i64)
+        );
+    }
+
+    // ── DynValue ──────────────────────────────────────────────────────────────
+
+    #[test]
+    fn dyn_varchar_becomes_json_string() {
+        let v = DynValue::Varchar("hello".to_owned());
+        assert_eq!(
+            v.to_serde_json().unwrap(),
+            serde_json::Value::String("hello".to_owned())
+        );
+    }
+
+    #[test]
+    fn dyn_text_becomes_json_string() {
+        let v = DynValue::Text("world".to_owned());
+        assert_eq!(
+            v.to_serde_json().unwrap(),
+            serde_json::Value::String("world".to_owned())
+        );
+    }
+
+    #[test]
+    fn dyn_json_object_is_parsed() {
+        let v = DynValue::Json(r#"{"a":1}"#.to_owned());
+        assert_eq!(v.to_serde_json().unwrap(), serde_json::json!({"a": 1}));
+    }
+
+    #[test]
+    fn dyn_json_array_is_parsed() {
+        let v = DynValue::Json("[1,2,3]".to_owned());
+        assert_eq!(v.to_serde_json().unwrap(), serde_json::json!([1, 2, 3]));
+    }
+
+    #[test]
+    fn dyn_json_scalar_is_parsed() {
+        let v = DynValue::Json("true".to_owned());
+        assert_eq!(v.to_serde_json().unwrap(), serde_json::Value::Bool(true));
+    }
+
+    // ── Value ─────────────────────────────────────────────────────────────────
+
+    #[test]
+    fn value_null_becomes_json_null() {
+        assert_eq!(
+            Value::null().to_serde_json().unwrap(),
+            serde_json::Value::Null
+        );
+    }
+
+    #[test]
+    fn value_fixed_bool_delegates() {
+        assert_eq!(
+            Value::bool(false).to_serde_json().unwrap(),
+            serde_json::Value::Bool(false)
+        );
+    }
+
+    #[test]
+    fn value_fixed_int32_delegates() {
+        assert_eq!(
+            Value::int32(99).to_serde_json().unwrap(),
+            serde_json::json!(99i32)
+        );
+    }
+
+    #[test]
+    fn value_dyn_varchar_delegates() {
+        assert_eq!(
+            Value::varchar("test".to_owned()).to_serde_json().unwrap(),
+            serde_json::Value::String("test".to_owned()),
+        );
+    }
+
+    #[test]
+    fn value_dyn_json_delegates() {
+        let v = Value::json(r#"{"x":1}"#).unwrap();
+        assert_eq!(v.to_serde_json().unwrap(), serde_json::json!({"x": 1}));
     }
 }
 

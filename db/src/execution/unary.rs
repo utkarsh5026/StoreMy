@@ -877,7 +877,7 @@ mod tests {
         FileId, TransactionId,
         buffer_pool::page_store::PageStore,
         execution::{PlanNode, ResolvedExpr, scan::SeqScan},
-        heap::file::HeapFile,
+        heap::{file::HeapFile, overflow::OverflowFile},
         parser::statements::BinOp,
         primitives::ColumnId,
         tuple::{Field, Tuple, TupleSchema},
@@ -935,8 +935,11 @@ mod tests {
 
         store.register_file(file_id, &path).unwrap();
 
-        let overflow_file =
-            HeapFile::make_overflow_file(file_id, Arc::clone(&store), existing_pages);
+        let overflow_file = Arc::new(OverflowFile::new(
+            file_id,
+            Arc::clone(&store),
+            existing_pages,
+        ));
         let heap = HeapFile::new(
             file_id,
             Arc::new(scan_schema()),

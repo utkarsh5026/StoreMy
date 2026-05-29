@@ -375,7 +375,7 @@ mod tests {
         FileId, TransactionId,
         buffer_pool::page_store::PageStore,
         execution::scan::SeqScan,
-        heap::file::HeapFile,
+        heap::{file::HeapFile, overflow::OverflowFile},
         tuple::{Field, Tuple, TupleSchema},
         types::{FixedValue, Type, Value},
         wal::writer::Wal,
@@ -419,7 +419,7 @@ mod tests {
         drop(file);
         store.register_file(file_id, &path).unwrap();
 
-        let overflow_file = HeapFile::make_overflow_file(file_id, Arc::clone(&store), 0);
+        let overflow_file = Arc::new(OverflowFile::new(file_id, Arc::clone(&store), 0));
         let heap = HeapFile::new(
             file_id,
             Arc::new(schema_ab()),

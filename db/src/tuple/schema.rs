@@ -1,4 +1,4 @@
-use std::{collections::HashMap, fmt, mem::size_of};
+use std::{collections::HashMap, mem::size_of};
 
 use super::{Tuple, TupleError};
 use crate::{
@@ -137,16 +137,6 @@ impl Field {
     }
 }
 
-impl fmt::Display for Field {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{} {}", self.name, self.field_type)?;
-        if !self.nullable {
-            write!(f, " NOT NULL")?;
-        }
-        Ok(())
-    }
-}
-
 /// The ordered column list of a table or operator output - what `CREATE TABLE`
 /// produces and what every executor advertises as its row layout.
 ///
@@ -185,7 +175,7 @@ const fn fixed_type_payload_size(ty: Type) -> usize {
         Type::Int64 | Type::Uint64 | Type::Float64 | Type::Date | Type::Time | Type::Timestamp => 8,
         Type::Bool => 1,
         Type::String => STRING_LENGTH_PREFIX_SIZE + STRING_MAX_SIZE,
-        Type::Text => 0,
+        Type::Text | Type::Json => 0,
     }
 }
 
@@ -488,19 +478,6 @@ impl TupleSchema {
     }
 }
 
-impl fmt::Display for TupleSchema {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "(")?;
-        for (i, field) in self.fields.iter().enumerate() {
-            if i > 0 {
-                write!(f, ", ")?;
-            }
-            write!(f, "{field}")?;
-        }
-        write!(f, ")")
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -538,18 +515,6 @@ mod tests {
     fn field_not_null_clears_flag() {
         let f = field("id", Type::Int64).not_null();
         assert!(!f.nullable);
-    }
-
-    #[test]
-    fn field_display_nullable() {
-        let f = field("score", Type::Int32);
-        assert_eq!(f.to_string(), "score INT");
-    }
-
-    #[test]
-    fn field_display_not_null() {
-        let f = field("id", Type::Int64).not_null();
-        assert_eq!(f.to_string(), "id BIGINT NOT NULL");
     }
 
     #[test]
@@ -617,15 +582,6 @@ mod tests {
         assert_eq!(merged.physical_num_fields(), 2);
         assert_eq!(merged.field(0).unwrap().name, "a");
         assert_eq!(merged.field(1).unwrap().name, "b");
-    }
-
-    #[test]
-    fn schema_display() {
-        let schema = TupleSchema::new(vec![
-            field("id", Type::Int32).not_null(),
-            field("flag", Type::Bool),
-        ]);
-        assert_eq!(schema.to_string(), "(id INT NOT NULL, flag BOOLEAN)");
     }
 
     #[test]
