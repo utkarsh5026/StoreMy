@@ -35,7 +35,7 @@ use crate::{
     parser::statements::{AggFunc, BinOp, CaseBranch, Expr, UnOp},
     primitives::ColumnId,
     tuple::{Tuple, TupleSchema},
-    types::{ArithmeticError, Type},
+    types::{ArithmeticError, DynValue, FixedValue, Type},
 };
 
 /// Minimal interface for mapping a column reference to a [`ColumnId`].
@@ -160,7 +160,7 @@ impl ResolvedExpr {
             Self::BinaryOp { lhs, op, rhs } => {
                 let l = lhs.eval(tuple)?;
                 let r = rhs.eval(tuple)?;
-                eval_binary(*op, &l, &r)
+                Self::eval_binary(*op, &l, &r)
             }
 
             Self::UnaryOp { op, operand } => {
@@ -312,6 +312,8 @@ impl ResolvedExpr {
             Self::Literal(v) => v.get_type().unwrap_or(Type::String),
             Self::BinaryOp { lhs, op, .. } => match op {
                 BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div => lhs.infer_type(schema),
+                BinOp::Arrow => Type::Json,
+                BinOp::ArrowText => Type::Text,
                 _ => Type::Bool,
             },
             Self::UnaryOp { .. }
@@ -503,6 +505,161 @@ impl ResolvedExpr {
             },
         }
     }
+
+    /// Evaluates one step of PostgreSQL-style JSON arrow extraction (`->` / `->>`).
+    ///
+    /// `l` must be a [`Type::Json`] document; `r` is one path segment — a [`Type::Text`]
+    /// object key or any integer variant for array indexing. Chains such as
+    /// `payload->'user'->>'name'` are left-associative in the parser, so each segment is
+    /// evaluated by a separate call with the previous result as `l`.
+    ///
+    /// String keys use object lookup; integer keys use zero-based array indexing (via
+    /// [`lookup_json_value`]). A missing key or out-of-range index yields [`Value::Null`].
+    ///
+    /// - `as_text == false` (`->`): re-encode the matched sub-value as JSON and return
+    ///   [`Type::Json`].
+    /// - `as_text == true` (`->>`): return [`Type::Text`] — JSON strings without quotes, other
+    ///   scalars via `Display`, and [`Value::Null`] when the path does not match.
+    ///
+    /// Callers must short-circuit on NULL operands before invoking this function.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ExecutionError::TypeError`] when `l` is not JSON, `r` is not a valid path
+    /// key, the document fails to parse, or the extracted sub-value cannot be encoded.
+    fn eval_json_arrow(l: &Value, r: &Value, as_text: bool) -> Result<Value, ExecutionError> {
+        let key: serde_json::Value = match r {
+            Value::Dyn(DynValue::Text(s) | DynValue::Varchar(s)) => {
+                serde_json::Value::String(s.clone())
+            }
+            Value::Fixed(FixedValue::Int32(n)) => serde_json::Value::from(*n),
+            Value::Fixed(FixedValue::Int64(n)) => serde_json::Value::from(*n),
+            Value::Fixed(FixedValue::Uint32(n)) => serde_json::Value::from(*n),
+            Value::Fixed(FixedValue::Uint64(n)) => serde_json::Value::from(*n),
+            other => {
+                return Err(ExecutionError::TypeError(format!(
+                    "JSON path key must be text or integer, got {other}"
+                )));
+            }
+        };
+
+        let parsed: serde_json::Value = match l {
+            Value::Dyn(DynValue::Json(s)) => serde_json::from_str(s.as_str())
+                .map_err(|e| ExecutionError::TypeError(format!("invalid JSON document: {e}")))?,
+            other => {
+                return Err(ExecutionError::TypeError(format!(
+                    "JSON path operator requires JSON operand, got {other}"
+                )));
+            }
+        };
+
+        let found: serde_json::Value = match key {
+            serde_json::Value::String(s) => parsed.get(s).cloned(),
+            serde_json::Value::Number(n) => n
+                .as_u64()
+                .and_then(|i| parsed.get(usize::try_from(i).ok()?))
+                .cloned(),
+            _ => None,
+        }
+        .unwrap_or(serde_json::Value::Null);
+        if found.is_null() {
+            return Ok(Value::Null);
+        }
+
+        if as_text {
+            let text = match found {
+                serde_json::Value::String(s) => s.clone(),
+                serde_json::Value::Null => String::new(),
+                other => other.to_string(),
+            };
+            return Ok(Value::varchar(text));
+        }
+
+        let json = serde_json::to_string(&found).map_err(|e| {
+            ExecutionError::TypeError(format!("failed to encode JSON sub-value: {e}"))
+        })?;
+        Value::json(&json)
+            .map_err(|e| ExecutionError::TypeError(format!("invalid JSON sub-value: {e}")))
+    }
+
+    /// Evaluates a [`BinOp`] on two already-resolved operand values.
+    ///
+    /// Called from [`Self::eval`] after both sub-expressions have been evaluated against
+    /// the same tuple. If either operand is SQL NULL, the result is [`Value::Null`] and
+    /// the operator is not applied (three-valued logic for comparisons and arithmetic;
+    /// short-circuit semantics for `AND`/`OR` are not modeled here — both sides are
+    /// evaluated first by the caller).
+    ///
+    /// Operator families:
+    ///
+    /// - **Boolean** (`AND`, `OR`) — operands must be [`Type::Bool`].
+    /// - **Comparison** (`=`, `<>`, `<`, `<=`, `>`, `>=`) — [`numeric_eq`] / [`numeric_cmp`];
+    ///   incomparable pairs yield NULL, not an error.
+    /// - **Arithmetic** (`+`, `-`, `*`, `/`) — type-checked; mismatches and division by zero are
+    ///   errors. Subtraction and multiplication use [`Sub`] / [`Mul`] and treat a NULL output as a
+    ///   type error.
+    /// - **JSON arrow** (`->`, `->>`) — delegated to [`Self::eval_json_arrow`].
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ExecutionError::TypeError`] for non-boolean `AND`/`OR` operands, invalid
+    /// arithmetic, or JSON arrow failures.
+    fn eval_binary(op: BinOp, l: &Value, r: &Value) -> Result<Value, ExecutionError> {
+        if l.is_null() || r.is_null() {
+            return Ok(Value::Null);
+        }
+        match op {
+            BinOp::And => {
+                let lb = as_bool(l, "AND")?;
+                let rb = as_bool(r, "AND")?;
+                Ok(Value::bool(lb && rb))
+            }
+            BinOp::Or => {
+                let lb = as_bool(l, "OR")?;
+                let rb = as_bool(r, "OR")?;
+                Ok(Value::bool(lb || rb))
+            }
+            BinOp::Eq => Ok(Value::bool(numeric_eq(l, r))),
+            BinOp::NotEq => Ok(Value::bool(!numeric_eq(l, r))),
+            BinOp::Lt => Ok(cmp_to_bool(numeric_cmp(l, r), Ordering::is_lt)),
+            BinOp::LtEq => Ok(cmp_to_bool(numeric_cmp(l, r), Ordering::is_le)),
+            BinOp::Gt => Ok(cmp_to_bool(numeric_cmp(l, r), Ordering::is_gt)),
+            BinOp::GtEq => Ok(cmp_to_bool(numeric_cmp(l, r), Ordering::is_ge)),
+            BinOp::Add => l
+                .checked_add(r)
+                .map_err(|_| ExecutionError::TypeError(format!("cannot add {l} and {r}"))),
+            BinOp::Sub => {
+                let out = l.clone() - r;
+                if out.is_null() {
+                    Err(ExecutionError::TypeError(format!(
+                        "cannot subtract {r} from {l}"
+                    )))
+                } else {
+                    Ok(out)
+                }
+            }
+            BinOp::Mul => {
+                let out = l.clone() * r;
+                if out.is_null() {
+                    Err(ExecutionError::TypeError(format!(
+                        "cannot multiply {l} and {r}"
+                    )))
+                } else {
+                    Ok(out)
+                }
+            }
+            BinOp::Div => l.checked_div(r).map_err(|e| match e {
+                ArithmeticError::DivisionByZero => {
+                    ExecutionError::TypeError("division by zero".to_string())
+                }
+                ArithmeticError::TypeMismatch => {
+                    ExecutionError::TypeError(format!("cannot divide {l} by {r}"))
+                }
+            }),
+            BinOp::Arrow => Self::eval_json_arrow(l, r, false),
+            BinOp::ArrowText => Self::eval_json_arrow(l, r, true),
+        }
+    }
 }
 
 /// Equality that widens signed integers before comparing.
@@ -511,7 +668,6 @@ impl ResolvedExpr {
 /// `Value::PartialEq` (which must stay strict for hash-index correctness)
 /// while still giving WHERE clauses the expected SQL semantics.
 fn numeric_eq(l: &Value, r: &Value) -> bool {
-    use crate::types::FixedValue;
     match (l, r) {
         (Value::Fixed(FixedValue::Int32(a)), Value::Fixed(FixedValue::Int64(b))) => {
             i64::from(*a) == *b
@@ -525,8 +681,7 @@ fn numeric_eq(l: &Value, r: &Value) -> bool {
 
 /// Ordering that widens signed integers before comparing (same motivation as
 /// [`numeric_eq`]).
-fn numeric_cmp(l: &Value, r: &Value) -> Option<std::cmp::Ordering> {
-    use crate::types::FixedValue;
+fn numeric_cmp(l: &Value, r: &Value) -> Option<Ordering> {
     match (l, r) {
         (Value::Fixed(FixedValue::Int32(a)), Value::Fixed(FixedValue::Int64(b))) => {
             i64::from(*a).partial_cmp(b)
@@ -535,61 +690,6 @@ fn numeric_cmp(l: &Value, r: &Value) -> Option<std::cmp::Ordering> {
             a.partial_cmp(&i64::from(*b))
         }
         _ => l.partial_cmp(r),
-    }
-}
-
-fn eval_binary(op: BinOp, l: &Value, r: &Value) -> Result<Value, ExecutionError> {
-    if l.is_null() || r.is_null() {
-        return Ok(Value::Null);
-    }
-    match op {
-        BinOp::And => {
-            let lb = as_bool(l, "AND")?;
-            let rb = as_bool(r, "AND")?;
-            Ok(Value::bool(lb && rb))
-        }
-        BinOp::Or => {
-            let lb = as_bool(l, "OR")?;
-            let rb = as_bool(r, "OR")?;
-            Ok(Value::bool(lb || rb))
-        }
-        BinOp::Eq => Ok(Value::bool(numeric_eq(l, r))),
-        BinOp::NotEq => Ok(Value::bool(!numeric_eq(l, r))),
-        BinOp::Lt => Ok(cmp_to_bool(numeric_cmp(l, r), Ordering::is_lt)),
-        BinOp::LtEq => Ok(cmp_to_bool(numeric_cmp(l, r), Ordering::is_le)),
-        BinOp::Gt => Ok(cmp_to_bool(numeric_cmp(l, r), Ordering::is_gt)),
-        BinOp::GtEq => Ok(cmp_to_bool(numeric_cmp(l, r), Ordering::is_ge)),
-        BinOp::Add => l
-            .checked_add(r)
-            .map_err(|_| ExecutionError::TypeError(format!("cannot add {l} and {r}"))),
-        BinOp::Sub => {
-            let out = l.clone() - r;
-            if out.is_null() {
-                Err(ExecutionError::TypeError(format!(
-                    "cannot subtract {r} from {l}"
-                )))
-            } else {
-                Ok(out)
-            }
-        }
-        BinOp::Mul => {
-            let out = l.clone() * r;
-            if out.is_null() {
-                Err(ExecutionError::TypeError(format!(
-                    "cannot multiply {l} and {r}"
-                )))
-            } else {
-                Ok(out)
-            }
-        }
-        BinOp::Div => l.checked_div(r).map_err(|e| match e {
-            ArithmeticError::DivisionByZero => {
-                ExecutionError::TypeError("division by zero".to_string())
-            }
-            ArithmeticError::TypeMismatch => {
-                ExecutionError::TypeError(format!("cannot divide {l} by {r}"))
-            }
-        }),
     }
 }
 
@@ -1192,5 +1292,160 @@ mod tests {
             op: BinOp::Eq,
             rhs: Box::new(ResolvedExpr::Column(col_id(0))),
         });
+    }
+
+    fn json(s: &str) -> Value {
+        Value::json(s).expect("valid JSON")
+    }
+
+    #[test]
+    fn eval_arrow_extracts_object_key_as_json() {
+        // -> re-encodes the matched sub-value as JSON, so a string gets quotes
+        let t = tuple(vec![json(r#"{"type":"click"}"#)]);
+        let expr = ResolvedExpr::BinaryOp {
+            lhs: Box::new(resolved_col(0)),
+            op: BinOp::Arrow,
+            rhs: Box::new(lit(Value::varchar("type".into()))),
+        };
+        assert_eq!(eval(&expr, &t), json(r#""click""#));
+    }
+
+    #[test]
+    fn eval_arrow_text_extracts_string_without_quotes() {
+        // ->> strips JSON quoting — the returned value is plain text
+        let t = tuple(vec![json(r#"{"type":"click"}"#)]);
+        let expr = ResolvedExpr::BinaryOp {
+            lhs: Box::new(resolved_col(0)),
+            op: BinOp::ArrowText,
+            rhs: Box::new(lit(Value::varchar("type".into()))),
+        };
+        assert_eq!(eval(&expr, &t), Value::varchar("click".into()));
+    }
+
+    #[test]
+    fn eval_arrow_text_numeric_value_as_string() {
+        // ->> on a JSON number returns the decimal digits as text, not a quoted string
+        let t = tuple(vec![json(r#"{"count":42}"#)]);
+        let expr = ResolvedExpr::BinaryOp {
+            lhs: Box::new(resolved_col(0)),
+            op: BinOp::ArrowText,
+            rhs: Box::new(lit(Value::varchar("count".into()))),
+        };
+        assert_eq!(eval(&expr, &t), Value::varchar("42".into()));
+    }
+
+    #[test]
+    fn eval_arrow_missing_key_returns_null() {
+        let t = tuple(vec![json(r#"{"a":1}"#)]);
+        let expr = ResolvedExpr::BinaryOp {
+            lhs: Box::new(resolved_col(0)),
+            op: BinOp::Arrow,
+            rhs: Box::new(lit(Value::varchar("missing".into()))),
+        };
+        assert_eq!(eval(&expr, &t), Value::Null);
+    }
+
+    #[test]
+    fn eval_arrow_array_index_by_int64() {
+        let t = tuple(vec![json(r#"["a","b","c"]"#)]);
+        let expr = ResolvedExpr::BinaryOp {
+            lhs: Box::new(resolved_col(0)),
+            op: BinOp::Arrow,
+            rhs: Box::new(lit(Value::int64(1))),
+        };
+        assert_eq!(eval(&expr, &t), json(r#""b""#));
+    }
+
+    #[test]
+    fn eval_arrow_text_array_index_returns_string() {
+        let t = tuple(vec![json(r#"["x","y"]"#)]);
+        let expr = ResolvedExpr::BinaryOp {
+            lhs: Box::new(resolved_col(0)),
+            op: BinOp::ArrowText,
+            rhs: Box::new(lit(Value::int64(0))),
+        };
+        assert_eq!(eval(&expr, &t), Value::varchar("x".into()));
+    }
+
+    #[test]
+    fn eval_arrow_out_of_bounds_index_returns_null() {
+        let t = tuple(vec![json(r#"["a"]"#)]);
+        let expr = ResolvedExpr::BinaryOp {
+            lhs: Box::new(resolved_col(0)),
+            op: BinOp::Arrow,
+            rhs: Box::new(lit(Value::int64(5))),
+        };
+        assert_eq!(eval(&expr, &t), Value::Null);
+    }
+
+    #[test]
+    fn eval_arrow_chained_two_levels() {
+        let t = tuple(vec![json(r#"{"user":{"name":"alice"}}"#)]);
+        let inner = ResolvedExpr::BinaryOp {
+            lhs: Box::new(resolved_col(0)),
+            op: BinOp::Arrow,
+            rhs: Box::new(lit(Value::varchar("user".into()))),
+        };
+        let expr = ResolvedExpr::BinaryOp {
+            lhs: Box::new(inner),
+            op: BinOp::ArrowText,
+            rhs: Box::new(lit(Value::varchar("name".into()))),
+        };
+        assert_eq!(eval(&expr, &t), Value::varchar("alice".into()));
+    }
+
+    #[test]
+    fn eval_arrow_null_lhs_propagates() {
+        let t = tuple(vec![Value::Null]);
+        let expr = ResolvedExpr::BinaryOp {
+            lhs: Box::new(resolved_col(0)),
+            op: BinOp::Arrow,
+            rhs: Box::new(lit(Value::varchar("key".into()))),
+        };
+        assert_eq!(eval(&expr, &t), Value::Null);
+    }
+
+    #[test]
+    fn eval_arrow_null_rhs_propagates() {
+        let t = tuple(vec![json(r#"{"key":"val"}"#)]);
+        let expr = ResolvedExpr::BinaryOp {
+            lhs: Box::new(resolved_col(0)),
+            op: BinOp::Arrow,
+            rhs: Box::new(lit(Value::Null)),
+        };
+        assert_eq!(eval(&expr, &t), Value::Null);
+    }
+
+    #[test]
+    fn eval_arrow_non_json_lhs_errors() {
+        let t = tuple(vec![Value::varchar("not json".into())]);
+        let expr = ResolvedExpr::BinaryOp {
+            lhs: Box::new(resolved_col(0)),
+            op: BinOp::Arrow,
+            rhs: Box::new(lit(Value::varchar("key".into()))),
+        };
+        assert!(expr.eval(&t).is_err());
+    }
+
+    #[test]
+    fn infer_type_arrow_returns_json() {
+        let s = schema(&[("payload", Type::Json)]);
+        let expr = ResolvedExpr::BinaryOp {
+            lhs: Box::new(resolved_col(0)),
+            op: BinOp::Arrow,
+            rhs: Box::new(lit(Value::varchar("key".into()))),
+        };
+        assert_eq!(expr.infer_type(&s.0), Type::Json);
+    }
+
+    #[test]
+    fn infer_type_arrow_text_returns_text() {
+        let s = schema(&[("payload", Type::Json)]);
+        let expr = ResolvedExpr::BinaryOp {
+            lhs: Box::new(resolved_col(0)),
+            op: BinOp::ArrowText,
+            rhs: Box::new(lit(Value::varchar("key".into()))),
+        };
+        assert_eq!(expr.infer_type(&s.0), Type::Text);
     }
 }

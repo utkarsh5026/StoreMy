@@ -28,3 +28,5 @@ mod errors;
 mod insert_defaults;
 #[path = "integration/join.rs"]
 mod join;
+#[path = "integration/json.rs"]
+mod json;
