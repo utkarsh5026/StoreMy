@@ -192,6 +192,8 @@ pub enum TokenType {
     Rparen,
     Asterisk,
     Dot,
+    Arrow,
+    ArrowText,
     Invalid,
     Eof,
 }
@@ -312,6 +314,8 @@ impl TokenType {
             TokenType::Rparen => "RPAREN",
             TokenType::Asterisk => "ASTERISK",
             TokenType::Dot => "DOT",
+            TokenType::Arrow => "ARROW",
+            TokenType::ArrowText => "ARROW_TEXT",
             TokenType::Invalid => "INVALID",
             TokenType::Eof => "EOF",
             _ => unreachable!("only called for non-keyword token types"),
@@ -625,8 +629,6 @@ mod tests {
         assert_eq!(a, b);
     }
 
-    // ---------- Token ----------
-
     fn make_token(kind: TokenType, value: &str) -> Token {
         Token {
             kind,
@@ -635,7 +637,6 @@ mod tests {
         }
     }
 
-    // From<(TokenType, String, Span)> maps fields correctly
     #[test]
     fn test_token_from_tuple_fields() {
         let span = Span::new(42, 48);
@@ -775,6 +776,9 @@ mod tests {
         assert_eq!(TokenType::Lparen.to_string(), "LPAREN");
         assert_eq!(TokenType::Rparen.to_string(), "RPAREN");
         assert_eq!(TokenType::Asterisk.to_string(), "ASTERISK");
+        assert_eq!(TokenType::Dot.to_string(), "DOT");
+        assert_eq!(TokenType::Arrow.to_string(), "ARROW");
+        assert_eq!(TokenType::ArrowText.to_string(), "ARROW_TEXT");
         assert_eq!(TokenType::Invalid.to_string(), "INVALID");
         assert_eq!(TokenType::Eof.to_string(), "EOF");
     }

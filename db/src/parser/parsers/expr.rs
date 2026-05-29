@@ -53,6 +53,7 @@ pub(super) enum Precedence {
     Comparison,
     AddSub,
     MulDiv,
+    JsonPath,
 }
 
 impl Precedence {
@@ -65,6 +66,7 @@ impl Precedence {
             Precedence::Comparison => (6, 7),
             Precedence::AddSub => (8, 9),
             Precedence::MulDiv => (10, 11),
+            Precedence::JsonPath => (12, 13),
             Precedence::PrefixNot => panic!("PrefixNot has no binary bp"),
         }
     }
@@ -331,6 +333,10 @@ pub enum BinOp {
     Sub,
     Mul,
     Div,
+    /// JSON path extraction returning JSON (`->`).
+    Arrow,
+    /// JSON path extraction returning TEXT (`->>`).
+    ArrowText,
 }
 
 impl Display for BinOp {
@@ -348,6 +354,8 @@ impl Display for BinOp {
             BinOp::Sub => "-",
             BinOp::Mul => "*",
             BinOp::Div => "/",
+            BinOp::Arrow => "->",
+            BinOp::ArrowText => "->>",
         };
         f.write_str(s)
     }
@@ -703,6 +711,16 @@ impl Parser {
         if self.peek_is(TokenType::Asterisk)? {
             let (l, r) = Precedence::MulDiv.binary_bp();
             return Ok(Some((BinOp::Mul, l, r)));
+        }
+
+        if self.peek_is(TokenType::Arrow)? {
+            let (l, r) = Precedence::JsonPath.binary_bp();
+            return Ok(Some((BinOp::Arrow, l, r)));
+        }
+
+        if self.peek_is(TokenType::ArrowText)? {
+            let (l, r) = Precedence::JsonPath.binary_bp();
+            return Ok(Some((BinOp::ArrowText, l, r)));
         }
 
         if self.peek_is(TokenType::Operator)? {
@@ -1562,5 +1580,53 @@ mod tests {
         assert_eq!(ok("x - 5").to_string(), "(x - 5)");
         assert_eq!(ok("price * 2").to_string(), "(price * 2)");
         assert_eq!(ok("total / 4").to_string(), "(total / 4)");
+    }
+
+    #[test]
+    fn json_arrow_extracts_path() {
+        let Expr::BinaryOp { op, lhs, rhs } = ok("payload->'type'") else {
+            panic!("expected BinaryOp");
+        };
+        assert_eq!(op, BinOp::Arrow);
+        assert!(matches!(*lhs, Expr::Column { .. }));
+        assert!(matches!(*rhs, Expr::Literal(_)));
+    }
+
+    #[test]
+    fn json_arrow_text_extracts_path() {
+        let Expr::BinaryOp { op, .. } = ok("payload->>'type'") else {
+            panic!("expected BinaryOp");
+        };
+        assert_eq!(op, BinOp::ArrowText);
+    }
+
+    #[test]
+    fn json_arrow_chains_left_associatively() {
+        let Expr::BinaryOp { op, lhs, .. } = ok("payload->'user'->>'name'") else {
+            panic!("expected BinaryOp");
+        };
+        assert_eq!(op, BinOp::ArrowText);
+        assert!(
+            matches!(*lhs, Expr::BinaryOp {
+                op: BinOp::Arrow,
+                ..
+            }),
+            "nested arrow should bind left-to-right"
+        );
+    }
+
+    #[test]
+    fn json_arrow_binds_tighter_than_comparison() {
+        let Expr::BinaryOp { op, lhs, .. } = ok("payload->'type' = 'click'") else {
+            panic!("expected BinaryOp");
+        };
+        assert_eq!(op, BinOp::Eq);
+        assert!(
+            matches!(*lhs, Expr::BinaryOp {
+                op: BinOp::Arrow,
+                ..
+            }),
+            "comparison should take arrow extraction as its lhs"
+        );
     }
 }
