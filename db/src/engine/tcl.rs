@@ -378,26 +378,7 @@ impl Engine<'_> {
             unreachable!("exec_dml_in_explicit must only be called in Explicit state")
         };
 
-        let c = self.catalog;
-        let result = match stmt {
-            Statement::Insert(s) => Self::exec_insert(&txn, c, s),
-            Statement::Delete(s) => Self::exec_delete(&txn, c, s),
-            Statement::Update(s) => Self::exec_update(&txn, c, s),
-            Statement::Select(s) => Self::exec_select(&txn, c, s),
-            Statement::CreateTable(s) => Self::exec_create_table(&txn, c, s),
-            Statement::Drop(s) => Self::exec_drop_table(&txn, c, s),
-            Statement::CreateIndex(s) => Self::exec_create_index(&txn, c, s),
-            Statement::DropIndex(s) => Self::exec_drop_index(&txn, c, s),
-            Statement::ShowIndexes(s) => Self::exec_show_indexes(&txn, c, s),
-            Statement::AlterTable(s) => Self::exec_alter_table(&txn, c, s),
-            Statement::Begin(_)
-            | Statement::Commit(_)
-            | Statement::Rollback(_)
-            | Statement::Savepoint(_)
-            | Statement::ReleaseSavepoint(_) => {
-                unreachable!("TCL is handled before exec_dml_in_explicit is called")
-            }
-        };
+        let result = Self::dispatch(&txn, self.catalog, stmt);
 
         session.ctx = if result.is_err() {
             TxnContext::Aborted(txn)

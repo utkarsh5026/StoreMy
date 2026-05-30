@@ -256,21 +256,21 @@ impl BoundSelect {
     /// Returns [`EngineError::UnknownColumn`] or [`EngineError::AmbiguousColumn`]
     /// when a SQL name cannot be resolved through the scope.
     pub fn bind(
-        stmt: SelectStatement,
+        mut stmt: SelectStatement,
         catalog: &Catalog,
         txn: &ActiveTransaction,
     ) -> Result<Self, EngineError> {
-        if stmt.from.is_empty() {
-            return Err(EngineError::Unsupported("no FROM clause".to_string()));
-        }
-        if stmt.from.len() != 1 {
-            return Err(EngineError::Unsupported("multi-table FROM".to_string()));
-        }
+        let [from_item] = stmt.from.as_slice() else {
+            return Err(EngineError::Unsupported(if stmt.from.is_empty() {
+                "no FROM clause".into()
+            } else {
+                "multi-table FROM not yet supported".into()
+            }));
+        };
+        tracing::debug!(table = %from_item.table.name, joins = from_item.joins.len(), "binding SELECT");
+        let from_item = stmt.from.remove(0);
 
-        let root = stmt.from.first().unwrap();
-        tracing::debug!(table = %root.table.name, joins = root.joins.len(), "binding SELECT");
-
-        let (from, scope) = Self::resolve_from(stmt.from.first().unwrap().clone(), catalog, txn)?;
+        let (from, scope) = Self::resolve_from(from_item, catalog, txn)?;
 
         let select_list = match stmt.columns {
             SelectColumns::All => Ok(BoundSelectList::Star),
@@ -1038,7 +1038,7 @@ impl Engine<'_> {
                     .unwrap_or_else(|_| "agg".try_into().unwrap());
                 let output_name = proj.alias.clone().unwrap_or(default_name);
                 let aggr =
-                    AggregateExpr::new(AggregateFunc::from(*func), *arg.clone(), output_name);
+                    AggregateExpr::new(AggregateFunc::from(*func), (**arg).clone(), output_name);
                 Some(Ok(aggr))
             }
             _ => None,

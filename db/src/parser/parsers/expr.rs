@@ -88,6 +88,12 @@ const PEEK_TOKEN_BINOPS: &[(TokenType, BinOp, Precedence)] = &[
     (TokenType::Asterisk, BinOp::Mul, Precedence::MulDiv),
     (TokenType::Arrow, BinOp::Arrow, Precedence::JsonPath),
     (TokenType::ArrowText, BinOp::ArrowText, Precedence::JsonPath),
+    (TokenType::HashArrow, BinOp::HashArrow, Precedence::JsonPath),
+    (
+        TokenType::HashArrowText,
+        BinOp::HashArrowText,
+        Precedence::JsonPath,
+    ),
     (TokenType::Question, BinOp::KeyExists, Precedence::JsonPath),
     (
         TokenType::AtGreater,
@@ -367,6 +373,10 @@ pub enum BinOp {
     Arrow,
     /// JSON path extraction returning TEXT (`->>`).
     ArrowText,
+    /// JSON path extraction at a path array returning JSON (`#>`).
+    HashArrow,
+    /// JSON path extraction at a path array returning TEXT (`#>>`).
+    HashArrowText,
     /// Key exists (`?`).
     KeyExists,
     /// JSON containment — left contains right (`@>`).
@@ -392,6 +402,8 @@ impl Display for BinOp {
             Self::Div => "/",
             Self::Arrow => "->",
             Self::ArrowText => "->>",
+            Self::HashArrow => "#>",
+            Self::HashArrowText => "#>>",
             Self::KeyExists => "?",
             Self::Contains => "@>",
             Self::ContainedBy => "<@",

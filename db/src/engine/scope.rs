@@ -77,54 +77,33 @@ impl Scope {
 
 impl ColumnResolver for Scope {
     fn resolve<'a>(&'a self, col: &ColumnRef) -> Result<(usize, &'a Field, &'a str), EngineError> {
-        let candidates: Vec<&BoundTable> = match &col.qualifier {
-            Some(q) => self
-                .tables
-                .iter()
-                .filter(|t| t.qualifier_label() == q)
-                .collect(),
-            None => self.tables.iter().collect(),
-        };
+        let candidates = self.tables.iter().filter(|t| {
+            col.qualifier
+                .as_deref()
+                .is_none_or(|q| t.qualifier_label() == q)
+        });
 
-        if let Some(q) = &col.qualifier {
-            if candidates.is_empty() {
-                return Err(EngineError::UnknownColumn {
-                    table: q.to_string(),
-                    column: col.name.to_string(),
-                });
-            }
-            if candidates.len() > 1 {
-                return Err(EngineError::AmbiguousColumn {
-                    column: q.to_string(),
-                });
-            }
-        }
+        let mut found = candidates.filter_map(|t| {
+            t.schema
+                .field_by_name(&col.name)
+                .map(|(local, fld)| (t.column_offset + usize::from(local), fld, t.name.as_str()))
+        });
 
-        let matches: Vec<(usize, &Field, &str)> = candidates
-            .iter()
-            .filter_map(|t| {
-                t.schema.field_by_name(&col.name).map(|(local, fld)| {
-                    (t.column_offset + usize::from(local), fld, t.name.as_str())
-                })
-            })
-            .collect();
-
-        match matches.len() {
-            0 => {
+        match (found.next(), found.next()) {
+            (None, _) => {
                 let table = col
                     .qualifier
-                    .as_ref()
+                    .as_deref()
                     .map(ToString::to_string)
                     .or_else(|| self.tables.first().map(|t| t.name.clone()))
                     .unwrap_or_default();
-
                 Err(EngineError::UnknownColumn {
                     table,
                     column: col.name.to_string(),
                 })
             }
-            1 => Ok(matches[0]),
-            _ => Err(EngineError::AmbiguousColumn {
+            (Some(hit), None) => Ok(hit),
+            (Some(_), Some(_)) => Err(EngineError::AmbiguousColumn {
                 column: col.name.to_string(),
             }),
         }
@@ -159,26 +138,19 @@ impl SingleTableScope {
 
 impl ColumnLookup for Scope {
     fn lookup(&self, qualifier: Option<&str>, name: &str) -> Option<ColumnId> {
-        let candidates: Vec<&BoundTable> = match qualifier {
-            Some(q) => self
-                .tables
-                .iter()
-                .filter(|t| t.qualifier_label() == q)
-                .collect(),
-            None => self.tables.iter().collect(),
-        };
-
-        let matches: Vec<usize> = candidates
+        let candidates = self
+            .tables
             .iter()
-            .filter_map(|t| {
-                t.schema
-                    .field_by_name(name)
-                    .map(|(local, _)| t.column_offset + usize::from(local))
-            })
-            .collect();
+            .filter(|t| qualifier.is_none_or(|q| t.qualifier_label() == q));
 
-        match matches.len() {
-            1 => ColumnId::try_from(matches[0]).ok(),
+        let mut found = candidates.filter_map(|t| {
+            t.schema
+                .field_by_name(name)
+                .map(|(local, _)| t.column_offset + usize::from(local))
+        });
+
+        match (found.next(), found.next()) {
+            (Some(hit), None) => ColumnId::try_from(hit).ok(),
             _ => None,
         }
     }

@@ -73,28 +73,6 @@ impl<'a> Engine<'a> {
     )]
     pub fn execute_statement(&self, stmt: Statement) -> Result<StatementResult, EngineError> {
         let result = match stmt {
-            Statement::CreateTable(s) => {
-                self.with_txn(|txn| Engine::exec_create_table(txn, self.catalog, s))
-            }
-            Statement::Drop(s) => {
-                self.with_txn(|txn| Engine::exec_drop_table(txn, self.catalog, s))
-            }
-            Statement::CreateIndex(s) => {
-                self.with_txn(|txn| Engine::exec_create_index(txn, self.catalog, s))
-            }
-            Statement::DropIndex(s) => {
-                self.with_txn(|txn| Engine::exec_drop_index(txn, self.catalog, s))
-            }
-            Statement::ShowIndexes(s) => {
-                self.with_txn(|txn| Engine::exec_show_indexes(txn, self.catalog, s))
-            }
-            Statement::Insert(s) => self.with_txn(|txn| Engine::exec_insert(txn, self.catalog, s)),
-            Statement::Delete(s) => self.with_txn(|txn| Engine::exec_delete(txn, self.catalog, s)),
-            Statement::Update(s) => self.with_txn(|txn| Engine::exec_update(txn, self.catalog, s)),
-            Statement::Select(s) => self.with_txn(|txn| Engine::exec_select(txn, self.catalog, s)),
-            Statement::AlterTable(s) => {
-                self.with_txn(|txn| Engine::exec_alter_table(txn, self.catalog, s))
-            }
             Statement::Begin(_)
             | Statement::Commit(_)
             | Statement::Rollback(_)
@@ -102,6 +80,7 @@ impl<'a> Engine<'a> {
             | Statement::ReleaseSavepoint(_) => Err(EngineError::Unsupported(
                 "explicit transaction control is not implemented yet".into(),
             )),
+            other => self.with_txn(|txn| Self::dispatch(txn, self.catalog, other)),
         };
         if let Err(e) = &result {
             tracing::warn!(error = %e, "statement failed");
@@ -109,13 +88,53 @@ impl<'a> Engine<'a> {
         result
     }
 
+    /// Routes a single DML/DDL statement to its executor under an already-open transaction.
+    ///
+    /// Both [`Self::execute_statement`] (autocommit) and
+    /// [`Self::exec_dml_in_explicit`](crate::engine::Engine::exec_dml_in_explicit)
+    /// (explicit transaction) funnel through here so statement dispatch lives in
+    /// exactly one place. TCL variants must be filtered out by callers before
+    /// reaching this method.
+    fn dispatch(
+        txn: &ActiveTransaction,
+        catalog: &Catalog,
+        stmt: Statement,
+    ) -> Result<StatementResult, EngineError> {
+        match stmt {
+            Statement::CreateTable(s) => Self::exec_create_table(txn, catalog, s),
+            Statement::Drop(s) => Self::exec_drop_table(txn, catalog, s),
+            Statement::CreateIndex(s) => Self::exec_create_index(txn, catalog, s),
+            Statement::DropIndex(s) => Self::exec_drop_index(txn, catalog, s),
+            Statement::ShowIndexes(s) => Self::exec_show_indexes(txn, catalog, s),
+            Statement::Insert(s) => Self::exec_insert(txn, catalog, s),
+            Statement::Delete(s) => Self::exec_delete(txn, catalog, s),
+            Statement::Update(s) => Self::exec_update(txn, catalog, s),
+            Statement::Select(s) => Self::exec_select(txn, catalog, s),
+            Statement::AlterTable(s) => Self::exec_alter_table(txn, catalog, s),
+            Statement::Begin(_)
+            | Statement::Commit(_)
+            | Statement::Rollback(_)
+            | Statement::Savepoint(_)
+            | Statement::ReleaseSavepoint(_) => unreachable!("TCL routed before dispatch"),
+        }
+    }
+
     pub(super) fn with_txn<F>(&self, run: F) -> Result<StatementResult, EngineError>
     where
         F: FnOnce(&ActiveTransaction) -> Result<StatementResult, EngineError>,
     {
         let txn = self.txn_manager.begin()?;
-        let result = run(&txn)?;
-        txn.commit()?;
-        Ok(result)
+        match run(&txn) {
+            Ok(result) => {
+                txn.commit()?;
+                Ok(result)
+            }
+            Err(run_err) => {
+                if let Err(abort_err) = txn.abort() {
+                    tracing::error!(error = %abort_err, "failed to write ABORT record after statement error");
+                }
+                Err(run_err)
+            }
+        }
     }
 }

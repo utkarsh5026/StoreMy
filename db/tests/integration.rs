@@ -8,6 +8,8 @@
 #[path = "integration/common.rs"]
 mod common;
 
+#[path = "integration/aggregates.rs"]
+mod aggregates;
 #[path = "integration/alter_table.rs"]
 mod alter_table;
 #[path = "integration/auto_increment.rs"]
@@ -32,3 +34,5 @@ mod join;
 mod json;
 #[path = "integration/select_expressions.rs"]
 mod select_expressions;
+#[path = "integration/transactions.rs"]
+mod transactions;

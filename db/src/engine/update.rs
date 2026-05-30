@@ -100,7 +100,8 @@ impl Engine<'_> {
         let info = catalog.get_table_info(txn, table_name.as_str())?;
         tracing::debug!(table = %table_name, "exec update");
         let ai_col = info.auto_increment_column;
-        let check_constraints = info.check_constraints.clone();
+        let resolved_checks =
+            Self::resolve_check_constraints(&info.schema, &info.check_constraints)?;
         let scope = SingleTableScope::from_info(info, alias);
         let heap_file = catalog.get_table_heap(scope.file_id)?;
 
@@ -109,8 +110,6 @@ impl Engine<'_> {
             .transpose()?;
         let rows =
             Self::collect_matching_rows(&heap_file, txn.transaction_id(), predicate.as_ref())?;
-
-        let resolved_checks = Self::resolve_check_constraints(&scope.schema, &check_constraints)?;
         let assignments = Self::bind_assignments(&scope, assignments, ai_col)?;
         let affected_indexes =
             Self::get_affected_indices(assignments.as_slice(), catalog, scope.file_id);

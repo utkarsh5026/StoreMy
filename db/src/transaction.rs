@@ -238,9 +238,17 @@ impl TransactionManager {
                     cursor_lsn = rec_prev;
                 }
 
-                // Savepoint and Begin records are hard stops — we never undo
-                // work that predates the target savepoint.
-                LogRecordBody::Savepoint { .. } | LogRecordBody::Begin => break,
+                // Savepoint markers carry no page data — skip over them and
+                // continue walking backwards. The `cursor_lsn <= target_lsn`
+                // check at the top of the loop is what actually stops the walk
+                // at the target savepoint's boundary.
+                LogRecordBody::Savepoint { .. } => {
+                    cursor_lsn = record.header.prev_lsn;
+                }
+
+                // The Begin record is the true hard stop: there is no earlier
+                // work to undo for this transaction.
+                LogRecordBody::Begin => break,
 
                 _ => {
                     tracing::warn!(
@@ -388,14 +396,25 @@ impl Transaction<Active> {
 
     /// Aborts the transaction and returns a [`CompletedTransaction`] record.
     ///
-    /// Writes an ABORT record to the WAL and releases all page locks held by
-    /// this transaction. The `Transaction` is consumed so it cannot be used
-    /// after this call.
+    /// Physically undoes all page changes written by this transaction (writes
+    /// CLRs to the WAL, restores before-images on heap pages), then writes an
+    /// ABORT record and releases all page locks. The `Transaction` is consumed
+    /// so it cannot be used after this call.
+    ///
+    /// Calling `partial_undo` with [`Lsn::INVALID`] as the target walks the
+    /// per-transaction WAL chain all the way back to the `Begin` record,
+    /// undoing every `Insert`, `Update`, and `Delete` in reverse order.
+    /// Without this step, aborted page changes would only be undone by the
+    /// ARIES undo pass on the next database restart — invisible to in-process
+    /// reads within the same run.
     ///
     /// # Errors
     ///
-    /// Returns [`TransactionError::Wal`] if the ABORT record cannot be written.
+    /// Returns [`TransactionError::Wal`] or [`TransactionError::Store`] if the
+    /// WAL read, CLR write, or page restore fails; also
+    /// [`TransactionError::Wal`] if the ABORT record cannot be written.
     pub fn abort(self) -> Result<CompletedTransaction, TransactionError> {
+        self.manager.partial_undo(self.id, Lsn::INVALID)?;
         self.manager.abort(self.id)?;
         Ok(CompletedTransaction {
             id: self.id,
