@@ -395,14 +395,12 @@ fn unique_violation_on_multi_row_insert_stops_at_duplicate() {
         "expected UniqueViolation, got: {result:?}"
     );
 
-    // NOTE: WAL undo (ARIES) is not yet implemented, so the first row written
-    // before the violation was detected is not rolled back. The table ends up
-    // with one row rather than zero. This test documents the current behavior;
-    // it should be tightened to assert len == 0 once undo is wired up.
+    // The implicit autocommit transaction rolls back via WAL undo when the
+    // unique violation is detected, so the pre-violation row must not survive.
     assert_eq!(
         db.scan_all("users").len(),
-        1,
-        "currently the pre-violation row survives because WAL undo is not yet implemented"
+        0,
+        "the entire multi-row INSERT must be rolled back — no partial write"
     );
 }
 
