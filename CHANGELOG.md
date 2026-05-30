@@ -8,6 +8,7 @@ Older sections (before 2025-10-01) are the Go → Rust transition era.
 
 ### Bug Fixes
 
+- **transaction**: Wire partial_undo into abort so in-process rollback applies immediately
 - **tests**: Align fixtures with log_page_operation and catalog init
 - **types**: Map INT→Int32/BIGINT→Int64 and add widening comparisons
 - **recovery**: Fix ARIES idempotency — trim WAL torn tail before undo and remove bad loser filter
@@ -46,6 +47,7 @@ Older sections (before 2025-10-01) are the Go → Rust transition era.
 
 ### Features
 
+- **json**: Implement #> and #>> path-extraction operators
 - **json**: Implement @> and <@ containment operators
 - **parser**: Parse json key-exists (?) operator
 - **execution**: Implement JSON path operators -> and ->>
@@ -281,6 +283,7 @@ Older sections (before 2025-10-01) are the Go → Rust transition era.
 
 ### Refactoring
 
+- **engine**: Reduce allocations and duplication in statement dispatch and column resolution
 - **execution**: Rename resolve to eval and extract json ops
 - **types**: Store JSON as raw string instead of parsed serde_json::Value
 - **heap**: Extract read_page/write_page helpers and is_page_of_kind predicate
@@ -397,6 +400,8 @@ Older sections (before 2025-10-01) are the Go → Rust transition era.
 
 ### Tests
 
+- **integration**: Add end-to-end transaction and savepoint coverage
+- **integration**: Add end-to-end group by and aggregate coverage
 - **integration**: Add end-to-end select expression coverage
 - **json**: Refactor integration tests with per-operator ExprCase/FilterCase harness
 - **test_utils**: Add shared tracing init for unit tests
