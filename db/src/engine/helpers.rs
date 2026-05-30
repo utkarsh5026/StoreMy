@@ -258,15 +258,8 @@ impl Engine<'_> {
     ) -> String {
         match kind {
             ConstraintDefaultKind::Check => format!("{table_name}_check"),
-            ConstraintDefaultKind::Unique | ConstraintDefaultKind::ForeignKey => {
-                let tag = match kind {
-                    ConstraintDefaultKind::Unique => "unique",
-                    ConstraintDefaultKind::ForeignKey => "fk",
-                    ConstraintDefaultKind::Check => unreachable!(),
-                };
-                let cols = columns.join("_");
-                format!("{table_name}_{tag}_{cols}")
-            }
+            ConstraintDefaultKind::Unique => format!("{table_name}_unique_{}", columns.join("_")),
+            ConstraintDefaultKind::ForeignKey => format!("{table_name}_fk_{}", columns.join("_")),
         }
     }
 
